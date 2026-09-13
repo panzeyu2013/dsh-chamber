@@ -22,7 +22,7 @@ import type { PluginTaskSubmitInput, PluginTaskSubmitResult, PluginTaskTasksProj
 import type { JournalOp } from '../src/plugins-journal.ts'
 import { FakeRequest, FakeResponse } from './utils.ts'
 import { buildTgz, buildPluginTgz, type TarEntrySpec } from './tgz-fixtures.ts'
-import { writeManifestFixture, scratchDir, makeSpawnHarness } from './plugins-tasks-fixtures.ts'
+import { writeManifestFixture, scratchDir, makeSpawnHarness, waitFor } from './plugins-tasks-fixtures.ts'
 
 const silent = { log() {}, warn() {}, error() {} }
 const channels = {
@@ -454,5 +454,82 @@ test('end-to-end: install through the real orchestrator → 202, journal op runs
   assert.equal(tasks.res.json().tasks[0].status, 'ok')
 
   // The surface never calls reconcile/drain/dispose — index.ts owns those.
+  await orchestrator.dispose()
+})
+
+test('end-to-end: the installed read is fenced by the REAL write window → 409, then 200 with the new manifest', async t => {
+  const stateDir = scratchDir(t, 'gateway-fence-')
+  writeManifestFixture(stateDir, {})
+  const workspace = scratchDir(t, 'gateway-fence-ws-')
+  mkdirSync(join(workspace, 'node_modules', '@deepseek-ai', 'dsh', 'lib'), { recursive: true })
+  writeFileSync(join(workspace, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'), '#!/usr/bin/env node\n')
+  let leasesHeld = 0
+  const manager = {
+    workspace,
+    beginProfileWrite() {
+      leasesHeld += 1
+      return { ok: true as const, release: () => { leasesHeld -= 1 } }
+    },
+    profileWriteInFlight: () => leasesHeld > 0,
+    mutationInFlight: () => false,
+    resolveWorkspace: () => ({ path: workspace, version: null as string | null, source: 'builtin' as const }),
+  }
+  const spawn = makeSpawnHarness()
+  const orchestrator = createChamberPluginTasks({
+    stateDir,
+    manager: () => manager,
+    statusProbe: () => 'ready',
+    logger: silent,
+    installed: createChamberInstalled(stateDir),
+    spawn: spawn.spawn,
+    timeoutMs: 2000,
+  })
+  // Teardown FIRST (the plugins-exec.test.ts harness property): a failing
+  // assertion above must fail fast — close every fake child and dispose the
+  // executor so no waiter is left behind. dispose() is idempotent, so the
+  // explicit call at the end stays harmless.
+  t.after(async () => {
+    for (const call of spawn.calls) call.child.close(null)
+    await orchestrator.dispose()
+  })
+  const host = createChamberSurface({
+    logger: silent,
+    channels,
+    plugins: createChamberPlugins(stateDir, silent),
+    installed: createChamberInstalled(stateDir),
+    tasks: orchestrator,
+    stateDir,
+  })
+
+  const before = await jsonRequest(host, 'GET', '/chamber/plugins/installed')
+  assert.equal(before.res.status, 200)
+  assert.deepEqual(before.res.json().dependencies, {})
+
+  // Open the real write window (design 21 §6.2 读与写面共享栅栏): the op is
+  // accepted, its profile-write lease is held, and the mutation child that
+  // rewrites the managed profile manifest is alive.
+  const install = await jsonRequest(host, 'PUT', '/chamber/plugins/install', { name: 'fenced-pkg', spec: 'fenced-pkg@1' })
+  assert.equal(install.res.status, 202)
+  assert.equal(leasesHeld, 1, 'the whole mutation runs under the profile-write lease')
+  await waitFor(() => spawn.calls.length === 1, 'the mutation child to spawn')
+  const live = orchestrator.tasks()
+  assert.equal(live.tasks.some(op => op.status === 'pending'), true, 'the op is journal-pending for the lease lifetime')
+
+  const during = await jsonRequest(host, 'GET', '/chamber/plugins/installed')
+  assert.equal(during.res.status, 409, 'the read never publishes a mid-write projection')
+  assert.equal(during.res.json().code, 'runtime_busy')
+  assert.match(during.res.json().error, /retry/)
+
+  // The mutation child rewrites the manifest (what `dsh plugin add` does) and
+  // exits; only then may the read publish the new projection.
+  writeManifestFixture(stateDir, { 'fenced-pkg': '^1.0.0' })
+  spawn.calls[0]!.child.close(0)
+  await waitFor(() => orchestrator.tasks().tasks.every(op => op.status !== 'pending'), 'the op to reach a terminal state')
+  assert.equal(leasesHeld, 0, 'the per-op terminal hook released the lease')
+
+  const after = await jsonRequest(host, 'GET', '/chamber/plugins/installed')
+  assert.equal(after.res.status, 200)
+  assert.deepEqual(after.res.json().dependencies, { 'fenced-pkg': '^1.0.0' })
+
   await orchestrator.dispose()
 })

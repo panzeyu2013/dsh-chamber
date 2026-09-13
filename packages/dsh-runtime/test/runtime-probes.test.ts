@@ -727,7 +727,7 @@ test('timeout options reject fractional and timer-overflow values', async () => 
 test('hostDomainNames derives the exact probe set for partial syncs (design 24 §7 C)', async () => {
   const fx = fixture()
   try {
-    // A 2-of-3 gateway sync: only the git-worktree package is seeded.
+    // A partial gateway sync: only the git-worktree package is seeded.
     const results = await runRuntimeActivationProbes({
       baseUrl: 'http://127.0.0.1:17510',
       dshHome: fx.dshHome,

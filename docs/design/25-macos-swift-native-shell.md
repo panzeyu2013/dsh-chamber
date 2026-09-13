@@ -236,11 +236,18 @@ control-plane-module.ts:5-30 同款注释）——sidecar 与 Electron 共享
 - 装配目录必须带 `package.json`（`{type:'module'}` + chamber 版本）——shell-core
   的模块级 `version` 读取（`new URL('./package.json', import.meta.url)`）与 ESM
   判定依赖它；
-- **三个 chamber host 包**（T2 包名，`packages/dsh-chamber-seed-{client-graph,
-  git-worktree,archive-cleanup}`）：拷贝进 `<out>/dist/<同名>/`，Swift 侧按
-  `--host-graph-dir/--host-git-dir/--host-archive-dir` 注入同一基名
-  （`BuildSidecar.HOST_PACKAGES` 单源；`sidecar-ctx` 的 `hostPackageSourceDir`
-  dev 兜底也按同名在 `packages/` 下探测）——三处必须同拼写，改名要一起改。
+- **四个 chamber host 包**（T2 包名，`packages/dsh-chamber-seed-{client-graph,
+  git-worktree,archive-cleanup,open-in}`）：拷贝进 `<out>/dist/<同名>/`，Swift 侧按
+  `--host-graph-dir/--host-git-dir/--host-archive-dir/--host-open-in-dir` 注入
+  同一基名（`BuildSidecar.HOST_PACKAGES` 单源；`sidecar-ctx` 的
+  `hostPackageSourceDir` dev 兜底也按同名在 `packages/` 下探测）——三处必须
+  同拼写，改名/加包要一起改。
+- **open-in 是 localOnly 行（design 20 §6）**：它随 .app 分发、**只**喂本地实例
+  播种（`sidecar-entry --host-open-in-dir` → control-plane 的
+  `hostOpenInPackageSourceDir`）。**远端（SSH）种子表永不携带它**——`sidecar-ctx`
+  的远程 `chamberHostPackageSeeds` 仍是三项（与 Electron 侧
+  `chamberHostSourceDirs` 的同款注记同源）；把 open-in 加进远端 seed 会把
+  本地形态专属域上传到别人的机器。
 - **运行期标记**：Swift Supervisor 在装配态 spawn 时注入
   `DSH_CHAMBER_SIDECAR_COMPILED=1`（`control-plane-module.isPackagedSidecarRuntime`）
   → control-plane 走相对编译入口；装配目录没有 node_modules 树，裸说明符不可解析；

@@ -4,7 +4,8 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { createHash } from 'node:crypto'
-import { basename, dirname, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
+import { homedir } from 'node:os'
 import {
   GitWorktreeCore,
   GitWorktreeError,
@@ -329,7 +330,7 @@ async function waitFor(predicate: () => boolean, what: string, timeoutMs = 2_000
   assert.fail(`${what} did not become true within ${timeoutMs}ms`)
 }
 
-function setup(options: { linked?: boolean; operationCapacity?: number } = {}) {
+function setup(options: { linked?: boolean; operationCapacity?: number; worktreesRoot?: string | null } = {}) {
   const repo = new FakeRepository()
   if (options.linked) repo.addLinked()
   const workspaces: WorkspaceFact[] = [{ workspaceId: 'ws-main', path: MAIN, sessionIds: [] }]
@@ -353,7 +354,9 @@ function setup(options: { linked?: boolean; operationCapacity?: number } = {}) {
     fs: repo.fs,
     now: () => clock,
     token: () => `token-${++token}`,
-    worktreesRoot: '/worktrees',
+    // `null` OMITS the option, so the constructor resolves the harness home
+    // itself (the `$DSH_HOME` coverage below).
+    ...(options.worktreesRoot === null ? {} : { worktreesRoot: options.worktreesRoot ?? '/worktrees' }),
     ...(options.operationCapacity === undefined ? {} : { operationCapacity: options.operationCapacity }),
   })
   return {
@@ -3343,4 +3346,124 @@ test('registered removal replay with a vanished target converges without a dirty
   assert.equal(statusProbes(repo, LINKED).length, probesBeforeReplay)
   // The replay never re-attempted the git mutation.
   assert.equal(mutationCalls(repo, 'remove').length, 1)
+})
+
+// ---------------------------------------------------------------------------
+// 2026-09 review fixes: the harness home is resolved like upstream
+// `resolveDshHome`, and the two remaining per-row agent columns (`status`,
+// `cwd`) follow the same per-row rule as `origin` — conservative reading, loud
+// diagnostic, never a whole-source darkness.
+// ---------------------------------------------------------------------------
+
+test('a blank or whitespace-only $DSH_HOME is UNSET: the default worktrees root follows upstream resolveDshHome', async () => {
+  const previousDshHome = process.env.DSH_HOME
+  try {
+    // A blank override used to be joined verbatim, so the derived root was not
+    // absolute and the constructor failed 'invalid-config' before any work.
+    for (const blank of ['', '   ']) {
+      process.env.DSH_HOME = blank
+      const preview = await previewNew(setup({ worktreesRoot: null }).core)
+      assert.equal(
+        preview.targetPath,
+        join(homedir(), '.dsh', 'worktrees', WORKTREES_KEY, 'new-worktree'),
+        `DSH_HOME=${JSON.stringify(blank)} must fall back to ~/.dsh`,
+      )
+    }
+    process.env.DSH_HOME = '/opt/dsh-home'
+    const explicit = await previewNew(setup({ worktreesRoot: null }).core)
+    assert.equal(
+      explicit.targetPath,
+      `/opt/dsh-home/worktrees/${WORKTREES_KEY}/new-worktree`,
+      'an absolute $DSH_HOME is the resolved harness home',
+    )
+    process.env.DSH_HOME = '~/elsewhere'
+    const tilded = await previewNew(setup({ worktreesRoot: null }).core)
+    assert.equal(
+      tilded.targetPath,
+      join(homedir(), 'elsewhere', 'worktrees', WORKTREES_KEY, 'new-worktree'),
+      'a ~-prefixed $DSH_HOME expands against the OS home (upstream expandHomePath)',
+    )
+  } finally {
+    if (previousDshHome === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = previousDshHome
+  }
+})
+
+test('an unrecognized agent status is read per row as RUNNING and reported loudly (never darkens the source)', async () => {
+  const { core, repo, workspaces, agents } = setup({ linked: true })
+  // `sessionIds` is readonly on the fact: replace the row instead of mutating it.
+  workspaces[1] = { ...workspaces[1]!, sessionIds: [...workspaces[1]!.sessionIds, 's-status'] }
+  agents.push({ sessionId: 's-status', status: 'paused' as unknown as 'running', cwd: LINKED })
+
+  const snapshot = await core.snapshot()
+  assert.equal(snapshot.sourceError, undefined,
+    'one drifted status must NOT erase the whole domain (AGENTS: one failed entity must not block unrelated complete entities)')
+  assert.equal(snapshot.repos.length, 1)
+  const linked = snapshot.repos[0]!.worktrees.find(worktree => worktree.path === LINKED)!
+  assert.deepEqual(linked.runningSessionIds, ['s-status'], 'an unknown status is not idle')
+  assert.deepEqual(linked.blockingRunningSessionIds, ['s-status'],
+    'fail-closed: an unreadable liveness fact keeps blocking')
+  const diagnostic = snapshot.errors.find(error => error.code === 'agent-status-unknown')
+  assert.notEqual(diagnostic, undefined, 'the drift is never silent')
+  assert.match(diagnostic!.message, /s-status/)
+  assert.match(diagnostic!.message, /paused/)
+  // The removal guard agrees with the projection (same predicate).
+  await assert.rejects(
+    core.remove({
+      operationId: 'drifted-status',
+      workspaceId: 'ws-feature',
+      expected: {
+        repoId: snapshot.repos[0]!.repoId,
+        worktreeId: linked.worktreeId,
+        branch: linked.branch!,
+        head: linked.head,
+      },
+    }),
+    error => error instanceof GitWorktreeError && error.code === 'running-agent',
+  )
+  assert.equal(mutationCalls(repo, 'remove').length, 0)
+})
+
+test('a non-absolute running cwd keeps its BLOCKING semantics and stays fail-closed on the cwd-derived guard', async () => {
+  const { core, repo, agents } = setup({ linked: true })
+  const extra = repo.addLinked({ path: '/repos/unregistered', branch: 'unreg', head: FEATURE_HEAD })
+  // UNGROUPED running row (no workspace membership) with an unusable cwd: the
+  // path leg is the ONLY guard that can refuse this removal.
+  agents.push({ sessionId: 's-cwd', status: 'running', cwd: 'relative/worktree' })
+
+  const snapshot = await core.snapshot()
+  assert.equal(snapshot.sourceError, undefined, 'one drifted cwd must NOT erase the whole domain')
+  assert.equal(snapshot.repos.length, 1)
+  const diagnostic = snapshot.errors.find(error => error.code === 'agent-cwd-unknown')
+  assert.notEqual(diagnostic, undefined, 'the drift is never silent')
+  assert.match(diagnostic!.message, /s-cwd/)
+  assert.match(diagnostic!.message, /relative\/worktree/)
+
+  const repository = snapshot.repos[0]!
+  const row = repository.worktrees.find(worktree => worktree.path === extra.path)!
+  const expected = { repoId: repository.repoId, worktreeId: row.worktreeId, branch: row.branch!, head: row.head }
+  await assert.rejects(
+    core.remove({ operationId: 'drifted-cwd', expected, path: extra.path }),
+    error => error instanceof GitWorktreeError && error.code === 'running-agent-cwd-unavailable',
+    'an unknown running location must refuse the removal rather than assume it is unrelated',
+  )
+  assert.equal(mutationCalls(repo, 'remove').length, 0)
+  // The SAME source read still serves the other removal leg: a workspace-level
+  // removal is refused by the identical cwd-derived guard instead of a
+  // source-wide failure, and nothing is mutated either.
+  const registered = repository.worktrees.find(worktree => worktree.path === LINKED)!
+  await assert.rejects(
+    core.remove({
+      operationId: 'drifted-cwd-registered',
+      workspaceId: 'ws-feature',
+      expected: {
+        repoId: repository.repoId,
+        worktreeId: registered.worktreeId,
+        branch: registered.branch!,
+        head: registered.head,
+      },
+    }),
+    error => error instanceof GitWorktreeError && error.code === 'running-agent-cwd-unavailable',
+  )
+  assert.equal(mutationCalls(repo, 'remove').length, 0)
 })

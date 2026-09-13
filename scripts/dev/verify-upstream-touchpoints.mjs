@@ -3,36 +3,50 @@
  * verify-upstream-touchpoints.mjs — 上游触点保鲜门（T4，docs/checklists/
  * upstream-touchpoints.md 的机器侧）。
  *
- * 只读、仅内置模块、exit-code 语义：
+ * 只读，唯一例外是默认模式的 C8（就地重建-还原生成物，见该条）；依赖只有 node
+ * 内置模块 + 同目录两个 helper（artifact-gate.mjs / verify-upstream-touchpoints-args.mjs）。
+ * exit-code 语义：0 全部通过（或 --help）/ 1 有门硬失败 / 2 用法错误。
  *   C1  纯文件字节恒等（fork 副本中未登记补丁的文件必须与上游锚逐字节一致）
- *   C2  --tags <old> <new>：上游两 tag 间三 fork 面的重放差异报告（advisory）
+ *       —— 对 shadow 副本与 chamber-named fork（如 seed-open-in）同等生效
+ *   C2  --tags <old> <new>：上游两 tag 间全部已登记 fork 面（FORKS 全表，含非 shadow
+ *       的 seed-open-in）的重放差异报告（advisory）
  *   C3  完整性：fork 每文件有分类（pure/patched/own），上游每文件有裁决
  *       （mirrored/dropped）；漏分类/新文件漏裁决 = 硬失败
  *   C4  roster：typert remote 装配契约 == 15（集合与顺序）、covered/factory 存在性、
  *       删包 fail-loud（存在性哨兵列表）
- *   C5  过期锚扫描：三 fork package.json 版本 == 上游同文件版本；
+ *   C5  过期锚扫描：shadow fork 的 package.json 版本 == 上游同文件版本
+ *       （versionAnchor: "chamber" 的 fork 豁免——见 FORKS 表）；
  *       submodule HEAD == harness.commit
- *   C6  EXCLUDED 上游存在性（ensure-harness-vendor 排除的三个 fork 源目录）
+ *   C6  EXCLUDED 上游存在性（ensure-harness-vendor 排除的三个 shadow fork 源目录；
+ *       非 shadow 的 fork（如 seed-open-in）必须留在 vendor 树作 C1 锚）
  *   C7  种子域锁步：gateway HOST_PACKAGE_PROBE_DOMAINS 值集 ==
  *       dsh-runtime HOST_DOMAIN_PROBE_NAMES 列表（文本双门；运行时已有 fail-loud）
- *   C8  提交态生成物 == src（确定性重建-比对，硬失败）：host dist ×3 +
+ *   C8  提交态生成物 == src（确定性重建-比对，硬失败）：host dist ×4 +
  *       mobile dist/lib 四件；重建后字节不同 = 产物陈旧。写后原样还原，
  *       `--no-artifact-rebuild` 退回 mtime advisory（fresh checkout 会误报）
  *   C9  vendor 源码补丁锚（硬失败）：`packages/renderer/scripts/vendor-patches.mjs`
  *       注册的每处 expect 必须在 pin 住的上游文件里恰好命中一次——重锚后
  *       上游文本一漂移即红，避免「补丁静默失效」
- *   C10 版本锚一致性 + 活版本字面量白名单（硬失败）：运行时版本从
- *       `packages/desktop/vendor/dsh/package.json` 单一来源读出，六锚 / 三 fork
- *       副本必须等于它；生产源码（非注释、非测试、非产物）里出现任何其他
- *       dsh 版本字面量即红——历史叙述只能留在注释里
+ *   C10 版本锚一致性 + 活版本字面量白名单（硬失败）：运行时版本从**已提交**的
+ *       `packages/desktop/vendor/dsh/pnpm-lock.yaml`（`@deepseek-ai/dsh` 的
+ *       specifier）单一来源读出，六锚 / 三 fork 副本必须等于它；同目录
+ *       `packages/desktop/vendor/dsh/package.json` 被 gitignore、属派生本地状态，
+ *       仅在其存在时与锁文件交叉校验；生产源码（非注释、非测试、非产物）里出现
+ *       任何其他 dsh 版本字面量即红——历史叙述只能留在注释里
  *
  * 登记纪律：给某个文件打 chamber 补丁 = 在 FORKS.patched 里登记（含原因）；
  * 新增 chamber 自有文件 = own；上游文件有意不镜像 = dropped。任何对 pure
  * 文件的修改都会在此硬失败——升级/重锚后同步登记表（每 tag 维护循环见文档 §7）。
  *
- * 用法：
+ * 用法（`--help` 打印权威文本；未知参数 = 用法错误 exit 2，绝不静默跑默认模式）：
  *   node scripts/dev/verify-upstream-touchpoints.mjs            # C1/C3–C10
+ *   node scripts/dev/verify-upstream-touchpoints.mjs --no-artifact-rebuild
  *   node scripts/dev/verify-upstream-touchpoints.mjs --tags <old> <new>  # +C2
+ *   node scripts/dev/verify-upstream-touchpoints.mjs --help
+ *
+ * 参数守卫（2026-12 review P2）：默认模式会**就地重建并还原**生成物（唯一写盘
+ * 路径），因此任何未知参数/位置参数都由 verify-upstream-touchpoints-args.mjs
+ * 判为用法错误并 exit 2——一个拼错的 flag 以前会被静默忽略并照跑全量写盘门。
  */
 
 import { createHash } from 'node:crypto'
@@ -45,6 +59,7 @@ import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawn, spawnSync } from 'node:child_process'
 import { artifactGateVerdict, compareOutputs, restoreDir, snapshotDir } from './artifact-gate.mjs'
+import { USAGE_EXIT_CODE, VERIFY_USAGE, parseVerifyArgs } from './verify-upstream-touchpoints-args.mjs'
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url))
 const SUBMODULE = join(ROOT, 'vendor', 'harness-checkout')
@@ -163,6 +178,45 @@ const FORKS = [
       'tsconfig.host.json': 'host 构面不镜像',
     },
   },
+  {
+    // design 20 §6 (fork & supersede, 2026-09-11): the open-in HOST half is
+    // forked into a chamber seed package that runs inside the managed
+    // instance. Unlike the three shadow copies above, this fork keeps the
+    // upstream PACKAGE NAME out of the workspace (the vendor tree must keep
+    // `packages/host/open-in-app` as this fork's diff anchor — do NOT add it
+    // to EXCLUDED_UPSTREAM_DIRS), so it lives under its own name and is
+    // versioned with chamber releases: `versionAnchor: 'chamber'` exempts it
+    // from the C5 upstream-version equality below.
+    name: 'seed-open-in',
+    rel: 'packages/dsh-chamber-seed-open-in',
+    upstream: 'packages/host/open-in-app',
+    versionAnchor: 'chamber',
+    patched: {
+      'package.json': '[patch-mod] chamber seed package（自有名字/版本/构建入口；upstream 名与发布面不复制）',
+      'tsconfig.json': '[patch-mod] chamber 构面（vendor paths + 本包 files）',
+      'src/shared.ts': '[patch-mod] wire 契约家：上游三条 webServer 路由常量 → typert Remote 方法名 + 域载体（design 20 §4.1/§6.1）',
+      'src/index.ts': '[patch-mod] typert 门面取代 webServer 路由 + Config schema + SSH 休眠门（design 20 §6.1）',
+    },
+    own: {
+      'src/core.ts': 'chamber 域核心：上游 apply() 的目录/图标/拉起状态机（去掉路由与 SSH 门）',
+      'scripts/build.mjs': 'chamber esbuild 产物构建',
+      'dist/index.js': 'chamber 提交态产物（C8 逐字节重建-比对；上游无对应文件）',
+    },
+    ownPrefix: ['test/'],
+    ownNotes: {
+      'test/': 'chamber 自有测试（域契约 + 载荷拒绝矩阵 + vendor stub loader）',
+    },
+    dropped: [
+      'README.md', 'README.zh.md', 'README.i18n.yaml',
+      'src/internals.ts', 'tsdown.config.ts', 'tests/',
+    ],
+    droppedNotes: {
+      'src/internals.ts': '上游测试接缝（本包的接缝走 OpenInAppCore 构造注入，不需要它）',
+      'README*': '上游 README 不携带（fork 描述在 package.json/源码首页）',
+      'tsdown.config.ts': '上游打包配置（本包走 scripts/build.mjs）',
+      'tests/': '上游测试不镜像（本包 test/ 覆盖域契约）',
+    },
+  },
 ]
 
 /** ensure-harness-vendor EXCLUDED（fork 影子覆盖的上游包）——C6 存在性哨兵。 */
@@ -230,6 +284,32 @@ function within(rel, prefixes) {
   return prefixes.some((p) => (p.endsWith('/') ? rel.startsWith(p) : rel === p))
 }
 
+// ---------------------------------------------------------------------------
+// 0 —— 参数守卫（在任何门、任何写盘动作之前；2026-12 review P2）
+//
+// 守卫必须最先执行：默认模式的 C8 会就地重建-还原生成物，而 `--help` 与用法
+// 错误都必须在不碰任何文件的前提下返回。判定逻辑单测在
+// verify-upstream-touchpoints-args.test.mjs（纯函数 + 子进程回归）。
+// ---------------------------------------------------------------------------
+const args = parseVerifyArgs(process.argv.slice(2))
+
+if (args.help) {
+  console.log(VERIFY_USAGE)
+  process.exit(0)
+}
+
+if (args.errors.length > 0) {
+  console.error('✗ verify-upstream-touchpoints: 参数用法错误（未执行任何门、未写盘）:')
+  for (const error of args.errors) console.error(`  - ${error}`)
+  console.error(`\n${VERIFY_USAGE}`)
+  process.exit(USAGE_EXIT_CODE)
+}
+
+/** C8 advisory 模式：绝不写盘（CI install 前那段就是靠它）。 */
+const noArtifactRebuild = args.noArtifactRebuild
+/** C2 的 tag 区间（advisory），由守卫保证「恰好两个值」。 */
+const tagRange = args.tags
+
 const pin = readPin()
 
 // C1/C3 —— 逐 fork 分类校验
@@ -281,7 +361,12 @@ for (const fork of FORKS) {
   } else {
     console.log(`✓ [${fork.name}] C1/C3: pure=${pure} patched=${patchedKeys.size} own=${forkFiles.length - pure - patchedKeys.size} dropped=${fork.dropped.length}`)
   }
-  if (upPkg.version !== forkPkg.version) {
+  // Version anchor: the three shadow copies carry the UPSTREAM version (they
+  // stand in for the upstream package of the same name). A fork that lives
+  // under its own chamber name and ships with chamber releases opts out
+  // (`versionAnchor: 'chamber'`) — its bytes/classification are still pinned
+  // by C1/C3, only the version equality is waived.
+  if ((fork.versionAnchor ?? 'upstream') === 'upstream' && upPkg.version !== forkPkg.version) {
     fail(`C5 [${fork.name}] fork 版本 ${forkPkg.version} != 上游 ${upPkg.version}（过期锚——升级/重锚后应同步）`)
   }
 }
@@ -292,7 +377,7 @@ for (const fork of FORKS) {
   if (head.status !== 0 || head.stdout.trim() !== pin) {
     fail(`C5 submodule HEAD != harness.commit（${pin.slice(0, 12)}）——请走 update-vendor.mjs`)
   } else {
-    console.log(`✓ C5 锚: harness.commit = ${pin.slice(0, 12)}，三 fork 版本与上游一致`)
+    console.log(`✓ C5 锚: harness.commit = ${pin.slice(0, 12)}，shadow fork 版本与上游一致`)
   }
 }
 
@@ -346,8 +431,12 @@ for (const fork of FORKS) {
   if (!existsSync(assemblyEntry)) {
     fail(`C4 找不到上游装配面 ${relative(ROOT, assemblyEntry)} — 该面被删除/改名时必须重审 typert 契约（不能静默跳过）`)
   } else {
+    // pathToFileURL, never a raw path: Node's ESM loader only accepts file:/
+    // data:/node: URLs, and a bare Windows path reads as the scheme 'd:' —
+    // `import('D:\\a\\…')` crashed this gate instantly on the test-windows leg
+    // (ERR_UNSUPPORTED_ESM_URL_SCHEME) while staying green on POSIX.
     const { remotePackagesFromAssembly, remoteMountPackages, EXPECTED_REMOTE_PACKAGES } = await import(
-      join(ROOT, 'packages/renderer/scripts/typert-remote-contract.mjs')
+      pathToFileURL(join(ROOT, 'packages/renderer/scripts/typert-remote-contract.mjs')).href
     )
     let remotes
     let mounted
@@ -441,6 +530,13 @@ for (const fork of FORKS) {
       outputs: ['packages/dsh-chamber-seed-archive-cleanup/dist/index.js'],
     },
     {
+      // design 20 §6: the open-in host domain (fork of upstream's open-in host
+      // half) is seeded into the local profile the same way, so its committed
+      // bundle must equal a fresh rebuild too.
+      script: 'packages/dsh-chamber-seed-open-in/scripts/build.mjs',
+      outputs: ['packages/dsh-chamber-seed-open-in/dist/index.js'],
+    },
+    {
       // The shared runtime core's committed bundle (the desktop/gateway
       // installer ships it; a stale copy is as wrong as a stale seed bundle).
       script: 'packages/dsh-runtime/scripts/build.mjs',
@@ -460,7 +556,7 @@ for (const fork of FORKS) {
       ],
     },
   ]
-  if (process.argv.includes('--no-artifact-rebuild')) {
+  if (noArtifactRebuild) {
     // Advisory fallback: mtime is unreliable on fresh checkouts — say so.
     const stale = []
     for (const group of groups) {
@@ -615,7 +711,7 @@ for (const fork of FORKS) {
 // C9 —— vendor 源码补丁锚（design 09 §3.6；硬失败）
 {
   const { VENDOR_PATCHES, checkVendorPatchSources } = await import(
-    join(ROOT, 'packages/renderer/scripts/vendor-patches.mjs')
+    pathToFileURL(join(ROOT, 'packages/renderer/scripts/vendor-patches.mjs')).href
   )
   const results = checkVendorPatchSources()
   const broken = results.filter(result => !result.ok)
@@ -874,9 +970,8 @@ for (const fork of FORKS) {
 
 // C2 —— tag 重放报告（advisory）
 {
-  const tagIndex = process.argv.indexOf('--tags')
-  if (tagIndex !== -1 && process.argv[tagIndex + 2] !== undefined) {
-    const [oldTag, newTag] = process.argv.slice(tagIndex + 1, tagIndex + 3)
+  if (tagRange !== null) {
+    const [oldTag, newTag] = tagRange
     const dirs = FORKS.map((f) => f.upstream)
     const result = spawnSync('git', ['-C', SUBMODULE, 'diff', '--stat', oldTag, newTag, '--', ...dirs], { encoding: 'utf8' })
     console.log(`\n[C2] 上游 ${oldTag} → ${newTag} 触点面差异（advisory）：`)

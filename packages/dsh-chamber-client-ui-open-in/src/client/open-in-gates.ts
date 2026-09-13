@@ -23,6 +23,11 @@ import { buildOpenInViewModel } from '../shared/open-in-view-model.ts'
  * view-model (`shared/open-in-view-model.ts`) — the single decision surface
  * the unified open-in entry consumes; the returned apps are the input objects
  * in view-model order.
+ *
+ * The `channel` field survives on the view-model entry because it still decides
+ * the LAUNCH carrier (machine host vs trusted IPC); it does not decide the mark
+ * either — that is one question about the machine catalog's answer, asked in
+ * the component (`appMark`).
  */
 export function usableAppsForSource(
   sourceId: string,
@@ -35,7 +40,7 @@ export function usableAppsForSource(
   // input hardening — no behavior change for reachable inputs.
   if (typeof sourceId !== 'string') return []
   const source = sourceFromLooseFacts(sourceId, transport)
-  const model = buildOpenInViewModel({ source, officialEntries: null, mainEntries: apps })
+  const model = buildOpenInViewModel({ source, localEntries: null, mainEntries: apps })
   const byId = new Map(apps.map(app => [app.id, app]))
   return model.entries
     .map(entry => byId.get(entry.id))
@@ -69,28 +74,6 @@ export function workspacePathForSession(
 ): string | undefined {
   const workspace = workspaces.find(item => item.sessionIds.includes(String(sessionId)))
   return workspace?.path
-}
-
-/** Which mark the header entry renders for one view-model entry. */
-export type OpenInMarkKind = 'catalog-icon' | 'vscode' | 'file-manager' | 'generic'
-
-/**
- * Mark selection (Batch 3 Phase 2): ONLY official-channel entries use the
- * host-served catalog icon (real bundle art, 404 → generic fallback); a
- * main-channel entry always keeps its chamber presentation — the VS Code
- * product mark for the IPC override, the neutral folder for file managers,
- * the generic square otherwise. Passing a catalog URL for a main entry would
- * silently swap the VS Code mark for a 404 placeholder whenever the instance's
- * catalog does not list that app.
- */
-export function markKindFor(
-  entry: { readonly channel: 'official' | 'main'; readonly displayKind: string },
-  hasCatalogIcon: boolean,
-): OpenInMarkKind {
-  if (entry.channel === 'official' && hasCatalogIcon) return 'catalog-icon'
-  if (entry.displayKind === 'vscode') return 'vscode'
-  if (entry.displayKind === 'file-manager') return 'file-manager'
-  return 'generic'
 }
 
 /**

@@ -6,7 +6,8 @@
  * The shared kernel (wire-common.ts postUnary) collects and JSON-parses the
  * answer but performs NO classification — every carrier decides locally what
  * a 503 instance_unavailable / non-ok status means for its own surface.
- * C (settings-bridge bridge-api.ts) and D (settings-connections
+ * C (settings-bridge bridge-api.ts, since deleted in the 2026-12
+ * 完整桥接修订) and D (settings-connections
  * plugin-inventory-api.ts) carried BYTE-IDENTICAL copies of both the
  * wrapWireError fold (`实例不可达：` folding of transport rejections) and the
  * 503 instance_unavailable throw (`实例未就绪：` + body.error with the

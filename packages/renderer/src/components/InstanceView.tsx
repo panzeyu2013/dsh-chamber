@@ -37,6 +37,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { bootInstanceShell, shellStateIdle, type ChamberTransport, type ShellState } from '../shell.ts'
 import { runViewTransition } from '../view-transition.ts'
+import { frameText, type FrameLocale } from '../locales.ts'
 
 export interface InstanceViewProps {
   instanceId: string
@@ -48,6 +49,12 @@ export interface InstanceViewProps {
   active: boolean
   /** 服务器显示名（骨架屏文案）。 */
   label: string
+  /**
+   * 框架文案语言（T16 2026-09-11 upstream-alignment）：框架没有 `t` 席位，
+   * App 用 locales.ts 的 typed 字典按文档语言解析后传入（本组件只渲染，
+   * 不自己读文档语言，保证同一帧内所有 chamber chrome 用同一语言）。
+   */
+  locale: FrameLocale
   /** boot settle 回调（成功或失败均触发）：App 用于预热队列推进。 */
   onSettled?: (instanceId: string) => void
   /**
@@ -69,11 +76,21 @@ export interface InstanceViewProps {
    * 静默少一片插件（`ui-chat` 会因此永久 PENDING、对话视图不注册）。
    */
   waitForServing?: (instanceId: string) => Promise<boolean>
+  /**
+   * 打开意图揭示门（2026-12，design 05 §2.2 修订；真机问题 1）：由 App 用共享纯规则
+   * `shouldHoldViewVeil` 判定后传入的**最终判定**——遮罩在干净 settle 之后继续保留，
+   * 直到该壳显示的会话就是要打开的那个为止（规则与两个输入都在 App：壳状态镜像 +
+   * 原始 runtime current；本组件只负责合成 `!settled || holdVeil`）。冷 boot 期间官方
+   * 初始导航策略会新建并打开一个 blank 会话，而排队中的 open 要等
+   * session-controller 子 fiber + 一次 400ms 重试才分发；壳失败时 App 永远传 false
+   * （失败呈现归 App 覆盖层所有），因此遮罩不会挂住。
+   */
+  holdVeil?: boolean
 }
 
 export default function InstanceView({
-  instanceId, basePath, sourceFingerprint, transport, active, label, onSettled, onStateChange, retryToken,
-  waitForServing,
+  instanceId, basePath, sourceFingerprint, transport, active, label, locale, onSettled, onStateChange,
+  retryToken, waitForServing, holdVeil,
 }: InstanceViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const startedRef = useRef(false)
@@ -104,7 +121,16 @@ export default function InstanceView({
     // 不得覆盖新尝试已经落地的健康状态。
     const bootToken = bootTokenRef.current + 1
     bootTokenRef.current = bootToken
-    void bootInstanceShell(instanceId, basePath, el, setShell, sourceFingerprint, transport, { waitForServing }).then((next) => {
+    void bootInstanceShell(instanceId, basePath, el, setShell, sourceFingerprint, transport, {
+      waitForServing,
+      // 结算后补发的事实（5s 探针判词、延迟簇失败）必须到达 **App**（2026-12
+      // BLOCKER 修复）：shell 的 onState 形参是本视图的 React setter，只发它
+      // 就只重渲染本视图（settled 已为真，DOM 无变化），App 的 shellStates 镜像
+      // ——横幅、侧栏/连接页投射、每 ready 世代一次的自愈全都读它——永远收不到。
+      // 因此单列一条 App 向的汇道，且只由这条**过栅栏的结算后路径**调用：boot
+      // 自身的结算前发布（before、被取代/阻塞的失败）仍不进 App 镜像。
+      onRepublish: onStateChange === undefined ? undefined : (id, next) => onStateChange(id, next),
+    }).then((next) => {
       // 卸载后到达的 settle 一律丢弃（视图已回收，App 已清理该视图状态；
       // 陈旧上报会污染重加视图的失败覆盖层判定）；被更新的尝试取代的迟到
       // settle 同样丢弃。
@@ -134,6 +160,11 @@ export default function InstanceView({
   }, [retryToken, instanceId, basePath, onStateChange])
 
   const settled = shell.booted || shell.error !== null
+  // 2026-12（design 05 §2.2 修订）：遮罩 = boot 期（未 settle）**或** App 判定的
+  // 打开意图揭示门。判定规则（含"壳已经显示请求的会话就不遮"与"壳失败不遮"）在
+  // sidebar 包 shared/open-intent.ts 内单测覆盖；遮罩的生命周期由 open promise
+  // 自身界定（dispatchOpen 8s 预算 + App 的 finally 释放），不会出现挂住的加载层。
+  const veilVisible = !settled || holdVeil === true
   const viewClass = active
     ? 'instance-view'
     : settled
@@ -148,12 +179,16 @@ export default function InstanceView({
           "一容器一 root" 不变量）。旧容器随 key 变更被 React 摘除，挂死尝试
           写进的是已脱离文档的节点。 */}
       <div key={retryToken ?? 0} ref={containerRef} className="instance-shell" />
-      {!settled && (
+      {veilVisible && (
         <div className="instance-loading" aria-busy="true">
           <div className="instance-loading-main">
-            <div className="instance-loading-spinner" />
-            <div className="instance-loading-title">正在加载 {label}…</div>
-            <div className="instance-loading-hint">首次打开需加载完整界面</div>
+            {/* a11y (2026-09-11 upstream-alignment nit): the spinner is pure
+                decoration — the adjacent title already announces the state, so
+                it must stay out of the accessibility tree
+                (aria-busy on the veil carries the busy fact). */}
+            <div className="instance-loading-spinner" aria-hidden="true" />
+            <div className="instance-loading-title">{frameText(locale, 'boot.loading', { label })}</div>
+            <div className="instance-loading-hint">{frameText(locale, 'boot.loadingHint')}</div>
           </div>
         </div>
       )}

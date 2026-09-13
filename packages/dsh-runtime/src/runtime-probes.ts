@@ -2,7 +2,7 @@
  * Design 18 activation probes. This module owns the real, read-only probe
  * list while keeping the control-plane wire injectable for hermetic tests.
  *
- * Wire baseline: the pinned upstream dsh tree (0.1.5-rc.1). All unary
+ * Wire baseline: the pinned upstream dsh tree (0.1.5-rc.2). All unary
  * endpoints moved from dot to slash (`session.list` → `session/list`,
  * `settings.describe` → `settings/describe`) and typert remotes require
  * `payload.args`; `host.describe` was deleted (its host-capability role is
@@ -283,8 +283,8 @@ function expectedGitValidationMiss(value: unknown): boolean {
  *  answer a well-formed domain carrier — ok:true with an object value is
  *  healthy; a well-formed ok:false (binding-pending / registry-unreadable /
  *  busy) is present-but-abnormal and fails closed with a distinct message in
- *  the probe leg itself (a business answer on empty input is never a
- *  protocol success). */
+ *  the probe leg itself (a business answer on empty input is never a protocol
+ *  success). */
 function archiveCleanupProbeShape(value: unknown): 'ok' | 'business-failure' | 'malformed' {
   if (!objectValue(value)) return 'malformed'
   const domain = value as Record<string, unknown>

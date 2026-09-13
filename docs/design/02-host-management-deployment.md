@@ -7,9 +7,10 @@
 > - **profile 形态**：`dsh --profile web --host 127.0.0.1
 >   --port <port> --trusted-host 127.0.0.1:<port>`——不生成/维护自建 profile
 >   目录、业务 patch stack 或 glue 插件；端口固定（非随机），占用时按 port+1 有界
->   退让。唯一例外是设计 08/09/24 的**宿主包 loader overlay**：它只
->   把 chamber 自带的 host 包挂入官方 web profile（三个：client-graph /
->   git-worktree / archive-cleanup，见 §2.6），不接管宿主组装权威（§2.6）。
+>   退让。唯一例外是设计 08/09/20/24 的**宿主包 loader overlay**：它只
+>   把 chamber 自带的 host 包挂入官方 web profile（四个：client-graph /
+>   git-worktree / archive-cleanup / open-in，见 §2.6），不接管
+>   宿主组装权威（§2.6）。
 > - **契约范围**：spawn 生命周期、端口占用重试、pid 记录
 >   （ownerPid/ownerInstanceId/port/binary/profile/source/startedAt）、
 >   instance-id 仲裁、readiness（TCP + 统一身份探针）、健康七态状态机、
@@ -150,26 +151,31 @@ dsh 自身 wire / vendor 源码为权威），
   `dshPort` 已属于另一活着的托管记录 → 按 P+1 继续重试或报告冲突，**不杀
   进程**（先注册先托管）。
 
-### 2.6 chamber host 包的 seed 与单一 loader overlay（设计 08/09；2026-12 起三个 host 包）
+### 2.6 chamber host 包的 seed 与单一 loader overlay（设计 08/09/20/24；2026-12 起四个 host 包）
 
 官方 web profile 仍是宿主组装权威；chamber 只追加自身拥有、边界明确的
-host package（2026-12 起为三个，第三个见 design 24）：
+host package（2026-12 起为四个：client-graph / git-worktree / archive-cleanup（design 24）/
+open-in（design 20 §6，注册表标 `localOnly`——只进本地 profile，
+远端 seed 与 gateway 上传都跳过它））：
 
 | loader id | package | 实例内职责 |
 |---|---|---|
 | `client-graph` | `@dsh-chamber/dsh-chamber-seed-client-graph` | 只读暴露该实例的 client module boot graph |
 | `git-worktree` | `@dsh-chamber/dsh-chamber-seed-git-worktree` | 在该实例进程/用户/文件系统内执行受限 Git worktree 领域操作（设计 08） |
 | `archive-cleanup` | `@dsh-chamber/dsh-chamber-seed-archive-cleanup` | 已归档会话内容清理域 `archiveCleanup/{preview,purge}`：实例进程内权威清除归档集（含 subagent 级联），只删不读（设计 24） |
+| `open-in` | `@dsh-chamber/dsh-chamber-seed-open-in` | 本机应用打开域 `openInApp/{probe,apps,icon,open}`：实例进程内权威解析/校验本机应用目录与图标并拉起（设计 20 §6，注册表标 `localOnly`） |
 
 本地托管实例的接线如下：
 
 1. `createControlPlane` 分别接收 `hostGraphPackageSourceDir`、
-   `hostGitWorktreePackageSourceDir` 与 `hostArchiveCleanupPackageSourceDir`；
+   `hostGitWorktreePackageSourceDir` 与 `hostArchiveCleanupPackageSourceDir`
+   （各自缺省落到 `DEFAULT_HOST_*_PACKAGE_SOURCE_DIR` 常量；open-in 走
+   `hostOpenInPackageSourceDir`，design 20 §6）；
    只有该源的 `dist/index.js` 实际存在时，
    才把 `package.json + dist/index.js` 以内容 hash 幂等复制到
    `<DSH_HOME>/profiles/web/node_modules/@dsh-chamber/<package>/`。
 2. 控制面只生成**一个** `<stateDir>/dsh-chamber-graph.patch.yml`。其 `insert`
-   列表只含本次确有构建产物的 package row：三包俱全则三行，只构建部分包则
+   列表只含本次确有构建产物的 package row：四包俱全则四行，只构建部分包则
    只有对应行；全部缺失时不传 `--patch`，保持原生 web profile 基线。
 3. 复制在 overlay 写入之前完成；已声明构建产物却缺少另一必需文件属于打包
    损坏，启动 fail-loud。文件与 overlay 都原子写入并保持 0600。
@@ -181,7 +187,7 @@ host package（2026-12 起为三个，第三个见 design 24）：
    Electron 会话级事实，重启 dsh 即刷新，无需重启壳。
 
 这不是旧 slim profile/业务 patch stack 的回归：控制面不知道 `clientGraph`、
-`gitWorktree` 或 `archiveCleanup` 的领域结果，只做受控文件分发与 loader
+`gitWorktree`、`archiveCleanup` 或 `openInApp` 的领域结果，只做受控文件分发与 loader
 挂载。
 
 ---
@@ -226,9 +232,9 @@ dsh --profile web [--patch <stateDir>/dsh-chamber-graph.patch.yml] \
   ① `host/directory-picker-auto` 解析 `browse`（本 pin 的目的）；② `bundle/web-app`
   关闭浏览器自启 handoff（`handoffBrowser = openBrowser && !launchedThroughSsh`，
   托管宿主不代开系统浏览器）；③ `host/open-in-app` 在 SSH 标记下不解析任何本机
-  应用（`resolveOpenInAppApps` 返回空表）——实例侧官方 open-in 应用目录因此为空
-  （本地来源的 open-in 入口由主进程 VS Code 覆盖承接，设计 20；「官方 host 行
-  dormant」为已登记项）；其余
+  应用（`resolveOpenInAppApps` 返回空表）——**自 2026-09-11 起该消费者与我们无关**：
+  本地打开面由实例进程内的 chamber host 包提供（设计 20 §2.2/§6，fork & supersede），
+  官方宿主行保持挂载但永不被调用，因此标记回到「仅目录选择 pin」的唯一目的；其余
   继承控制面环境；`DSH_HOME` **显式 pin 到 `<stateDir>/dsh-home`**
   （覆盖环境继承——控制面私有宿主 home，与系统用户 `~/.dsh` 不共享；
   首启缺省与 seedDshHomeDefaults 见下）；Electron 分支额外注入
@@ -506,7 +512,8 @@ Environment=DSH_PERMISSION_MODE=workspace-write
 # 行的远程 darwin/win32 或有显示会话的 linux 宿主会解析 native，此时
 # host.listDirectory 返回 directory-picker/unavailable、新建工作区对话框
 # 不可用（headless linux 服务器无显示会话，缺行也天然 browse）。该标记的
-# 另外两处上游消费（浏览器自启 handoff、实例侧官方 open-in 应用解析）见 §3.1。
+# 另一处上游消费（浏览器自启 handoff）见 §3.1；第三处（实例侧官方 open-in 应用
+# 解析）虽仍读该标记，但 chamber 自 2026-09-11 起不再使用官方宿主行（设计 20 §6）。
 Environment=SSH_CONNECTION=127.0.0.1 0 127.0.0.1 0
 NoNewPrivileges=true
 PrivateTmp=true
@@ -582,7 +589,7 @@ gateway 目标即其入口本身（自带认证边界，17 §5.1/§6）。该形
 | 孤儿回收安全模型 | 参考实现 `managed-process-registry.js`（记录在案 → 重验 → owner 死才杀） | 移植 + 改造：命令串含 `--profile web`、lsof 端口归属校验（§3.4） |
 | 健康监控 / 重启 / 背压 | 参考实现 `lifecycle.js`（共享失败计数、节流、单飞行重启、端口释放） | 探活载荷换统一身份方法；删"忙会话宽限"（§2.4/§3.5） |
 | 优雅退出 | dsh profile-boot（SIGTERM dispose） | SIGTERM 进程组 → SIGKILL 兜底（§3.7） |
-| chamber host 包附着 | `@dsh-chamber/dsh-chamber-seed-client-graph` + `@dsh-chamber/dsh-chamber-seed-git-worktree` + `@dsh-chamber/dsh-chamber-seed-archive-cleanup`（design 24） | 按构建产物 seed + 单一 loader overlay；只分发，不消费 graph/Git/归档清理业务（§2.6） |
+| chamber host 包附着 | `@dsh-chamber/dsh-chamber-seed-client-graph` + `@dsh-chamber/dsh-chamber-seed-git-worktree` + `@dsh-chamber/dsh-chamber-seed-archive-cleanup`（design 24）+ `@dsh-chamber/dsh-chamber-seed-open-in`（design 20 §6，仅本地形态） | 按构建产物 seed + 单一 loader overlay；只分发，不消费 graph/Git/归档清理/open-in 业务（§2.6） |
 
 ---
 

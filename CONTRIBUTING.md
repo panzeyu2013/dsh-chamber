@@ -67,6 +67,7 @@ pnpm run build:renderer                       # 渲染层构建成功
 pnpm run build:gateway                        # gateway + dsh-runtime 构建成功
 pnpm --filter @dsh-chamber/desktop run build:preload
 pnpm run verify:i18n
+pnpm run verify:styles
 ```
 
 改动涉及运行时、认证、协议或桌面壳行为时，请补充或更新聚焦测试——静态检查不能证明运行时正确性。
@@ -89,6 +90,7 @@ type(scope): subject
 - **type（类型）**——取以下之一：`feat`（新功能）、`fix`（缺陷修复）、`chore`（构建/工具/维护）、`docs`、`refactor`、`test`、`ci`、`perf`、`style`（仅格式调整）、`revert`。
 - **scope（范围）**——可选，但建议写受影响的包或领域：`control-plane`、`renderer`、`desktop`、`sidebar`、`settings-bridge`、`cli`、`ci`、`docs`、`packaging`。
 - **subject（主题）**——祈使语气、句末不加句号、≤ 72 字符（用 "fix"，不用 "fixed"；用 "add"，不用 "adds"）。
+- **语言（强制）**——**提交信息一律用英文**：subject 与 body 都必须是英文（下列示例即规范形态）。仓库历史里的中文提交是既有事实，不作为先例；从本规则起新增提交必须英文，便于上游/外部贡献者检索与引用。代码注释、设计文档与 PR 正文不受此限，仍可用中文。
 - **body（正文）**——改动非自明时，空一行后说明**做了什么、为什么**；适用时引用相关设计/进度文档或 issue 编号。
 - **破坏性变更**——在 type/scope 后加 `!`（如 `feat(desktop)!: ...`）或加 `BREAKING CHANGE:` 脚注，并在正文说明迁移影响。
 
@@ -106,7 +108,7 @@ docs: document the commit message convention
 ## 范围纪律
 
 - 凡 dsh 宿主、插件生态或复用的 dsh 前端已提供的能力，控制面只做**接入或服务，绝不重造**。
-- 被移出范围的域（walkthrough、通知中心/历史、终端渲染/输入、web 预览、MCP、薄壳聊天 UI、控制面会话运行时等）**以任何形式不得回流**。已定稿的有界例外只有：设计 08 的实例内 Git worktree 插件、设计 17 的独立 gateway（shell + host 职责 + 种子注册表）、设计 18 的共享 dsh 运行时管理核心、设计 19 的 Electron 原生通知边缘投影，以及设计 20 的可信 open-in 边缘能力；它们都不得把执行面、session 消费者、通知历史或事实权威带进 `packages/control-plane` 或 renderer。
+- 被移出范围的域（walkthrough、通知中心/历史、终端渲染/输入、web 预览、MCP、薄壳聊天 UI、控制面会话运行时等）**以任何形式不得回流**。已定稿的有界例外只有：设计 08 的实例内 Git worktree 插件、设计 17 的独立 gateway（shell + host 职责 + 种子注册表）、设计 18 的共享 dsh 运行时管理核心、设计 19 的 Electron 原生通知边缘投影、设计 20 的可信 open-in 边缘能力（含其**仅本地形态**的实例内 host 域 `openInApp`，边界见 design 20 §6.3），以及设计 24 的实例内归档清理宿主域 `archiveCleanup/{preview,purge,probe}`（只删不读、运行中整棵跳过、幂等；最窄边界见 design 24 §2）；它们都不得把执行面、session 消费者、通知历史或事实权威带进 `packages/control-plane` 或 renderer。
 - 任何新领域功能提案先回答：dsh 原生、插件生态或宿主 web 前端是否已覆盖？有 → 不开发。
 
 ## Pull Requests

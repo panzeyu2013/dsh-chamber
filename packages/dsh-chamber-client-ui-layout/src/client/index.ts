@@ -15,7 +15,7 @@
  * (`@deepseek-ai/dsh-client-ui-layout/src/client/…` — resolved to source by
  * the renderer's deepseekSource plugin) and the store to THIS fork's
  * `stores.ts` (shared + persisted sidebar width). Everything else mirrors the
- * upstream `dsh-v0.1.5-rc.1` client index — `inject: ['slots', 'theme',
+ * upstream `dsh-v0.1.5-rc.2` client index — `inject: ['slots', 'theme',
  * 'locale']`, the eager root instance shared with the registration
  * (`store: { ...handle, create: () => instance }`), the SlotMap merges
  * (`sidebar` / keyed `main` / `rightbar` / `shell.overlay`),
@@ -228,7 +228,19 @@ export function apply(ctx: ClientContext): void {
     // deployment) the patched code falls back to upstream behaviour. Plain
     // props reach every slot scope: the vendor scoped-slots merges root
     // standard sources into each scope's standard props.
-    const chamberFileApiBase = (ctx as ClientContext & { chamberBasePath?: string }).chamberBasePath
+    //
+    // 2026-12 review P2: the cordis ctx proxy THROWS for a member it does not
+    // carry, and this read sits BEFORE the frame's `ctx.slots.register('root',
+    // …)` below — unguarded, it took the whole root/frame registration down on
+    // any ctx without the chamber boot fact, contradicting the fail-open this
+    // very call implements ({} props). Same discipline as the document-theme
+    // effect below (chamberInstanceId).
+    let chamberFileApiBase: string | undefined
+    try {
+      chamberFileApiBase = (ctx as ClientContext & { chamberBasePath?: string }).chamberBasePath
+    } catch {
+      chamberFileApiBase = undefined
+    }
     const disposePanelInfo = ctx.slots.provideRoot({
       hooks: { panelInfo },
       props: chamberFileApiBase === undefined ? {} : { chamberFileApiBase },

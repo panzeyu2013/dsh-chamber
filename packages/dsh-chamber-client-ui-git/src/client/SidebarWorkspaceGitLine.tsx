@@ -18,6 +18,7 @@ import { useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import {
   IconBranchOutline16, IconPlusOutline16, IconRefreshOutline16, IconTrashOutline16,
+  RiskConfirmation, Tag,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import {
@@ -44,6 +45,24 @@ export interface WorkspaceGitContext {
   sourceId: string
   workspaceId: string
   repoKey?: string
+}
+
+/** One unregistered worktree row awaiting removal authorization. The row's
+ *  destructive action used to run a native `window.confirm`, which cannot ride
+ *  the alias tokens (the same reason `ArchiveManagerDialog.tsx:41-42` records
+ *  for this app) — it is now an in-app `RiskConfirmation`
+ *  (2026-09-11 upstream-alignment, T2c). */
+interface UnregisteredRemoveTarget {
+  repoId: string
+  worktreeId: string
+  path: string
+  branch: string | null
+  head: string
+  /** Row label substituted into the confirmation copy (`{name}`). */
+  name: string
+  /** The snapshot reported the directory as gone: the copy then explains the
+   *  leftover-record cleanup instead of a plain removal. */
+  missing: boolean
 }
 
 export interface SidebarWorkspaceGitInjected {
@@ -108,6 +127,11 @@ export function SidebarWorkspaceGitLine({
   const context = useWorkspaceGitContext()
   const [createOpen, setCreateOpen] = useState(false)
   const [removeTarget, setRemoveTarget] = useState<RemoveViewTarget | null>(null)
+  // The unregistered row's removal authorization (2026-09-11 upstream-alignment,
+  // T2c): the acknowledgement is per pending target and is reset on every
+  // close, so a second removal can never inherit a previous consent.
+  const [unregisteredRemove, setUnregisteredRemove] = useState<UnregisteredRemoveTarget | null>(null)
+  const [unregisteredAcknowledged, setUnregisteredAcknowledged] = useState(false)
 
   // The current session is per-SOURCE (this occupant renders inside every
   // source's workspace groups, not only the current instance's). The runtime
@@ -148,8 +172,9 @@ export function SidebarWorkspaceGitLine({
           // unhealthy all reject at the host — keep the button honest
           // (review P2-5). Deliberate asymmetry (review 2026-08 P2-2):
           // the REGISTERED occupant offers the discard-changes dialog for
-          // dirty worktrees, but this unregistered row's window.confirm flow
-          // cannot collect that authorization, so dirty stays hard-blocked.
+          // dirty worktrees, but this unregistered row has no discard
+          // authorization to collect (the removal runs without
+          // `discardChanges`), so dirty stays hard-blocked.
           // A MISSING path is the deliberate exception (2026-09 live report):
           // its directory is already gone, so removal is a leftover-record
           // cleanup with NOTHING to discard or protect — the host clears the
@@ -176,9 +201,13 @@ export function SidebarWorkspaceGitLine({
                 {worktree.branch ?? pathName(worktree.path)}
               </span>
               {worktree.status !== 'ready' && (
-                <span className={`${css.unregisteredStatus} ${css.unregisteredStatusWarn}`}>
+                // Upstream `Tag` (11px/17px capsule, 8 tones) instead of a
+                // hand-rolled capsule whose neutral fill equalled the row's
+                // own hover fill and vanished under the pointer
+                // (2026-09-11 upstream-alignment, T14).
+                <Tag tone="warning" className={css.unregisteredStatus}>
                   {worktree.status === 'not-a-repo' ? t('notARepo') : t(worktree.status)}
-                </span>
+                </Tag>
               )}
               <span className={css.unregisteredSpacer} />
               <button
@@ -206,17 +235,19 @@ export function SidebarWorkspaceGitLine({
                   : (blockLabel(blockedReason, status, t) ?? t('remove'))}
                 aria-label={t('remove')}
                 onClick={() => {
-                  const confirmText = (missing
-                    ? t('unregisteredMissingRemoveConfirm')
-                    : t('unregisteredRemoveConfirm')).replace('{name}', rowName)
-                  if (!window.confirm(confirmText)) return
-                  void removeUnregisteredWorktree(context.sourceId, {
+                  // The authorization is collected by the in-app
+                  // RiskConfirmation below, never by a native prompt
+                  // (2026-09-11 upstream-alignment, T2c).
+                  setUnregisteredAcknowledged(false)
+                  setUnregisteredRemove({
                     repoId: repo.repoId,
                     worktreeId: worktree.worktreeId,
                     path: worktree.path,
                     branch: worktree.branch,
                     head: worktree.head,
-                  }).catch(() => {})
+                    name: rowName,
+                    missing,
+                  })
                 }}
               >
                 <IconTrashOutline16 size={14} />
@@ -224,6 +255,43 @@ export function SidebarWorkspaceGitLine({
             </div>
           )
         })}
+        {/* The unregistered removal is destructive and irreversible, so it runs
+            only behind the official risk acknowledgement: the primary action
+            stays unavailable until the user checks the box (upstream
+            `RiskConfirmation`, 2026-09-11 upstream-alignment, T2c). */}
+        <RiskConfirmation
+          open={unregisteredRemove !== null}
+          title={t('removeTitle')}
+          description={unregisteredRemove === null
+            ? ''
+            : (unregisteredRemove.missing
+              ? t('unregisteredMissingRemoveConfirm')
+              : t('unregisteredRemoveConfirm')).replace('{name}', unregisteredRemove.name)}
+          acknowledgeLabel={t('unregisteredRemoveAck')}
+          cancelLabel={t('cancel')}
+          closeLabel={t('close')}
+          confirmLabel={t('removeConfirm')}
+          acknowledged={unregisteredAcknowledged}
+          disabled={busy || source.recovery !== undefined}
+          onAcknowledgedChange={setUnregisteredAcknowledged}
+          onCancel={() => {
+            setUnregisteredRemove(null)
+            setUnregisteredAcknowledged(false)
+          }}
+          onConfirm={() => {
+            const target = unregisteredRemove
+            setUnregisteredRemove(null)
+            setUnregisteredAcknowledged(false)
+            if (target === null) return
+            void removeUnregisteredWorktree(context.sourceId, {
+              repoId: target.repoId,
+              worktreeId: target.worktreeId,
+              path: target.path,
+              branch: target.branch,
+              head: target.head,
+            }).catch(() => {})
+          }}
+        />
       </div>
     )
   }
@@ -309,7 +377,14 @@ export function SidebarWorkspaceGitLine({
           // derived worktree workspace.
           <button
             type="button"
-            className={`${css.headerGitAction} git-ws-action`}
+            className={css.headerGitAction}
+            // The sidebar's hover-reveal hook is a `data-*` attribute, never a
+            // literal class: a global class name would be a second styling
+            // vocabulary next to the hashed module classes, and the chamber's
+            // own rule is that styling hooks are attributes
+            // (packages/dsh-chamber-client-ui-mobile/src/client/styles.ts:10-20;
+            // 2026-09-11 upstream-alignment, T3).
+            data-git-action=""
             disabled={createDisabled}
             aria-label={t('createBranchWorktree')}
             title={t('createBranchWorktree')}
@@ -321,7 +396,8 @@ export function SidebarWorkspaceGitLine({
         {!primary.isMain && canOfferRemove && (
           <button
             type="button"
-            className={`${css.headerGitAction} git-ws-action`}
+            className={css.headerGitAction}
+            data-git-action=""
             // A dirty worktree is NOT disabled: the remove dialog collects an
             // explicit discard-changes checkbox instead (design 08 §5.3
             // amendment 2026-08). A worktree with RUNNING sessions is not

@@ -24,7 +24,7 @@
 
 ## 1. 上游差异审计（只读）
 
-> **顺序约束（rc.1 实测）**：本节必须在 §2 动 pin **之前**做。`update-vendor` 的第 1 步是
+> **顺序约束（实测）**：本节必须在 §2 动 pin **之前**做。`update-vendor` 的第 1 步是
 > `git fetch --depth 1 origin tag <tag>`，它会在新 commit 处写入 shallow 嫁接——此后
 > `git log/rev-list <旧>..<新>` 只数得到 1 个 commit、`merge-base --is-ancestor` 为假
 > （对象其实都在，被嫁接截断的只是遍历）。要事后恢复完整历史：
@@ -38,9 +38,15 @@
        （改名/重构/事件改名是否被 chamber 消费）。
 - [ ] fork 副本上游改动面：`packages/client/connection`、`packages/client/web`、
        `packages/client/api-gateway` 的版本间 diff——判断「冲突需合并」vs「干净采纳」。
-- [ ] **首屏耦合审计**：上游新增/改名的官方 client 行若被复合首屏 inject，需同步
-       host-graph 额外行与 `assertRequiredExtraRowServices` 探针集合
-       （见 `upstream-touchpoints.md` §3）。
+- [ ] **首屏耦合审计**（2026-09-11 review-fix 收窄口径）：上游新增/改名的官方 client 行
+       若被复合首屏 inject，需同步
+       host-graph 额外行的降级注释；**探针集合本身是派生的**（首屏 `register(id,
+       plugin)` 记录的 `inject` 面并集，**并随每个延迟行挂载时把它自己导出的 `inject`
+       面推进同一份名单**，见 `upstream-touchpoints.md` §2/§3 与
+       design 09 §3.2），无需再往清单里加名字，但新 provider 行若不在复合覆盖集内
+       要确认探针能观测到它；另有一种派生面本身看不见的漂移须靠测试兜底——命名空间
+       **不再导出** `inject` 时两侧同时为空、不抛错，由
+       `packages/renderer/test/required-extra-rows.test.ts` 的逐 id 表测试钉住。
 
 ## 2. 双线 pin 一致性（源码线 + 运行时线）
 
@@ -53,7 +59,7 @@
       （fetch+校验 tag → 切 submodule → 更新 `harness.commit` → 差量建链 →
       重生成锁文件 → frozen 验证）；输出确认 commit 与 tag 远程解析一致。
       禁止手工改 gitlink / `harness.commit`。
-- [ ] **index 里的 gitlink 必须已指向目标 commit**（worktree / 新检出常见坑，rc.1 实测）：
+- [ ] **index 里的 gitlink 必须已指向目标 commit**（worktree / 新检出常见坑，实测）：
       `update-vendor` 只切 submodule HEAD 与 `harness.commit`，**不写 index 的 gitlink**；
       而 `ensure-harness-vendor` 的 `verifyPin` 会用 index gitlink 与 pin 对拍，于是升级在
       第 5 步（差量建链）硬失败：`submodule gitlink=<旧> != harness.commit pin=<新>`。
@@ -103,7 +109,7 @@
       而旧记录不含新依赖边 ⇒ frozen 验证以「specifiers don't match」失败。判据就是
       `update-vendor` 第 6 步的 frozen 安装；失败时按上面同一条手工补齐口径，把新依赖按
       字母序补进该成员记录（`'@deepseek-ai/<dep>': { specifier: workspace:^, version:
-      link:../<dep> }`）。**rc.1 实测**：`dsh-llm-deepseek` 新增
+      link:../<dep> }`）。**实测**：`dsh-llm-deepseek` 新增
       `@deepseek-ai/dsh-attachment-local`，本次 pnpm 未裁剪该段（restore 报「0 条」），
       记录被就地更新、frozen 通过——风险是条件性的，但每一步都以 frozen 结果为准。
 - [ ] `pnpm install --frozen-lockfile` 通过；`node scripts/dev/ensure-harness-vendor.mjs --check`
@@ -144,8 +150,9 @@
 - [ ] `CHANGELOG.md` + `docs/CHANGELOG.en-US.md` 的发布节补迁移条目
       （如「dsh 基线升级 … + 代理限额变化」），并 `node scripts/dev/verify-i18n.mjs --write`
       刷新 i18n 记录。
-- [ ] 触点表刷新：`docs/checklists/upstream-touchpoints.md` §0 基线速查 + 受影响登记行
-      （与 `scripts/dev/verify-upstream-touchpoints.mjs` 内的登记表两侧同步）。
+- [ ] 触点表刷新：`docs/checklists/upstream-touchpoints.md` 受影响的**结构登记行**
+      （与 `scripts/dev/verify-upstream-touchpoints.mjs` 内的登记表两侧同步）；**版本值不写进
+      checklist**——逐 tag 的升级叙述写 `CHANGELOG.md` 发布节，仍 open 的偏差写 `STATUS.md`。
 - [ ] 引用基线版本的文档（design 09/11、README、DEVELOPMENT、本目录 checklist）中的
       版本号更新（历史叙述保留）。
 

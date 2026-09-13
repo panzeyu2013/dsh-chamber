@@ -3,17 +3,32 @@
  * DOM. Covers the fixed chamber-global nav ids (connections / general — the
  * update status lives inside General) staying valid regardless of the
  * selected server's section ledger.
+ *
+ * 2026-09 修订：第三个固定入口 `__plugins` 已退役（其 subject 是单个来源、
+ * owner 是 chamber 壳，两组都不属于它），现由连接页在该服务器卡片内呈现；
+ * 本文件因此只守 connections/general 两个固定 id，并显式钉死「退役的 id
+ * 不再是固定项」——否则它会作为普通 ledger id 走回落分支。
+ *
+ * MUST run through the test-only vendor loader (2026-09-11 upstream-alignment
+ * A2): `section-rows.ts` now VALUE-imports upstream's exported
+ * `resolveSlotLabel` from `@deepseek-ai/dsh-client-ui-slots`, whose vendored
+ * package.json points at an unbuilt `lib/`:
+ *
+ *   node --import ./test/vendor-register.mjs test/nav-active.test.ts
+ *
+ * (the package's `test` script already does).
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   CONNECTIONS_SECTION_ID,
+  FIXED_SECTION_IDS,
   GENERAL_SECTION_ID,
-  PLUGINS_SECTION_ID,
   isFixedSectionId,
   resolveActiveSection,
   type SectionNavRow,
 } from '../src/client/nav-active.ts';
+import { sectionRows } from '../src/client/section-rows.ts';
 
 const rows: SectionNavRow[] = [
   { id: 'models', order: 10, label: 'Models' },
@@ -37,20 +52,56 @@ test('resolveActiveSection: a section id that left the ledger falls back to the 
   assert.equal(resolveActiveSection(undefined, []), undefined);
 });
 
-test('resolveActiveSection: the plugin-diagnostics page is a fixed chamber-global id too', () => {
-  assert.equal(resolveActiveSection(PLUGINS_SECTION_ID, rows), PLUGINS_SECTION_ID);
-  assert.equal(resolveActiveSection(PLUGINS_SECTION_ID, []), PLUGINS_SECTION_ID);
+test('resolveActiveSection: the retired __plugins id is no longer a fixed entry', () => {
+  // It must behave like any unknown ledger id: fall back to the first row.
+  assert.equal(resolveActiveSection('__plugins', rows), 'models');
+  assert.equal(resolveActiveSection('__plugins', []), undefined);
+  assert.equal(FIXED_SECTION_IDS.includes('__plugins'), false);
 });
 
 test('isFixedSectionId: chamber-owned pages are distinguishable from ledger sections', () => {
   assert.equal(isFixedSectionId(CONNECTIONS_SECTION_ID), true);
   assert.equal(isFixedSectionId(GENERAL_SECTION_ID), true);
-  assert.equal(isFixedSectionId(PLUGINS_SECTION_ID), true);
+  assert.equal(isFixedSectionId('__plugins'), false);
   assert.equal(isFixedSectionId('models'), false);
   assert.equal(isFixedSectionId(undefined), false);
 });
 
-test('SectionNavRow: carries the registrant stamp for provenance marking', () => {
-  const pluginRow: SectionNavRow = { id: 'x', order: 1, label: 'X', registrant: 'some-plugin' };
-  assert.equal(pluginRow.registrant, 'some-plugin');
+test('FIXED_SECTION_IDS: exactly the two chamber-global entries (design 15 contract)', () => {
+  assert.deepEqual([...FIXED_SECTION_IDS], [CONNECTIONS_SECTION_ID, GENERAL_SECTION_ID]);
+});
+
+test('nav rows carry id/order/label only — no provenance tag (upstream form)', () => {
+  const row: SectionNavRow = { id: 'x', order: 1, label: 'X' };
+  assert.deepEqual(Object.keys(row).sort(), ['id', 'label', 'order']);
+  // A ledger entry's `registrant` stamp is DIAGNOSTICS-ONLY upstream (the
+  // official shell renders `navIcon(row.id)` + the label and nothing else), so
+  // the projection drops it: a plugin-provided section must look exactly like an
+  // official one, in this panel as in the instance's own frontend. The old
+  // chamber-side「插件」provenance tag is retired (2026-09-11).
+  const entries = [
+    { options: { id: 'models', order: 20, label: '模型' }, registrant: '@deepseek-ai/dsh-client-ui-settings-models' },
+    { options: { id: 'acme', order: 40, label: 'Acme' }, registrant: '@acme/dsh-plugin-acme' },
+  ];
+  assert.deepEqual(sectionRows({ entries: () => entries }), [
+    { id: 'models', order: 20, label: '模型' },
+    { id: 'acme', order: 40, label: 'Acme' },
+  ]);
+});
+
+test('sectionRows resolves thunked labels through upstream resolveSlotLabel (A2)', () => {
+  // Official registrants declare `label: () => t('nav')` and re-register with a
+  // fresh thunk on locale change; the projection must read the thunk at row
+  // time — upstream's exported resolveSlotLabel does exactly that, and it is
+  // what this module now imports instead of a local copy.
+  const entries = [
+    { options: { id: 'models', order: 20, label: () => '模型' } },
+    { options: { id: 'acme', order: 40 } },
+  ];
+  assert.deepEqual(sectionRows({ entries: () => entries }), [
+    { id: 'models', order: 20, label: '模型' },
+    // A registrant that declared no label projects to the empty string, never
+    // to "undefined" (upstream `resolveSlotLabel(...) ?? ''`).
+    { id: 'acme', order: 40, label: '' },
+  ]);
 });

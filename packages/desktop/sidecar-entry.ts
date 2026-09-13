@@ -4,7 +4,8 @@
  *
  * 进程模型（design 25 §3.1）：Swift 壳 spawn 本进程（node sidecar-entry.ts
  * --user-data-dir <dir> [--dsh-path …] [--web-dist-dir …] [--port N]
- * [--host-graph-dir …] [--host-git-dir …] [--host-archive-dir …]）。
+ * [--host-graph-dir …] [--host-git-dir …] [--host-archive-dir …]
+ * [--host-open-in-dir …]）。
  * - stdout = B 桥协议流（NDJSON，唯一协议写面）；stderr = 日志（D2：入口把
  *   存量 console.* 重定向到 stderr）。
  * - 业务 = shell-core.installIpcHandlers（60/60 注册体，语义与 Electron 版
@@ -90,6 +91,7 @@ function parseArgs(argv: readonly string[]): {
   hostGraphDir: string | null
   hostGitDir: string | null
   hostArchiveDir: string | null
+  hostOpenInDir: string | null
   port: number | null
 } {
   const get = (flag: string): string | null => {
@@ -108,6 +110,7 @@ function parseArgs(argv: readonly string[]): {
     hostGraphDir: get('--host-graph-dir'),
     hostGitDir: get('--host-git-dir'),
     hostArchiveDir: get('--host-archive-dir'),
+    hostOpenInDir: get('--host-open-in-dir'),
     port: portRaw === null ? null : Number(portRaw),
   }
 }
@@ -330,6 +333,7 @@ async function boot(): Promise<void> {
       graph: args.hostGraphDir,
       git: args.hostGitDir,
       archive: args.hostArchiveDir,
+      openIn: args.hostOpenInDir,
     },
   })
   ctx = headless.ctx
@@ -388,6 +392,8 @@ async function boot(): Promise<void> {
     ...(args.hostGraphDir !== null ? { hostGraphPackageSourceDir: args.hostGraphDir } : {}),
     ...(args.hostGitDir !== null ? { hostGitWorktreePackageSourceDir: args.hostGitDir } : {}),
     ...(args.hostArchiveDir !== null ? { hostArchiveCleanupPackageSourceDir: args.hostArchiveDir } : {}),
+    // open-in 是 localOnly 行：只喂本地播种（远端 seed 表永不携带它）。
+    ...(args.hostOpenInDir !== null ? { hostOpenInPackageSourceDir: args.hostOpenInDir } : {}),
     getDshWorkspacePath: () => spawnGates.getDshWorkspacePath(),
     canStartLocal: () => spawnGates.canStartLocal(),
     canExposeLocal: () => spawnGates.canExposeLocal(),

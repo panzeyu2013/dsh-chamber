@@ -63,8 +63,10 @@ mount loader rows; they neither interpret Git facts nor execute Git over SSH.
 | `packages/dsh-chamber-client-ui-layout` | Self-built ui-layout shell fork (layout-store replacement persisting sidebarWidth) |
 | `packages/dsh-chamber-seed-client-graph` | Host-side package: read-only exposure of the instance's client-plugin boot graph over a Typert Remote |
 | `packages/dsh-chamber-client-ui-git` | Chamber-bundled Git worktree client: sidebar slot, per-instance topology, create/remove sagas; never executes Git directly |
-| `packages/dsh-chamber-client-ui-open-in` | Chamber-bundled open-in client plugin: session-header utilities open button (local Finder + local/remote VS Code via the main-process OpenInApp registry + `dsh-chamber://` deep link) |
+| `packages/dsh-chamber-client-ui-open-in` | Chamber-bundled open-in client plugin (a superset of the official client, whose registration it replaces): session-header utilities open button — local app catalog + local/remote VS Code via the main-process OpenInApp registry + `dsh-chamber://` deep link |
 | `packages/dsh-chamber-seed-git-worktree` | In-instance host package: authoritative workspace/agent guards plus constrained, local-only Git worktree lifecycle |
+| `packages/dsh-chamber-seed-archive-cleanup` | In-instance host package: archived-session content cleanup `archiveCleanup/{preview,purge,probe}` (delete-only, idempotent; design 24) |
+| `packages/dsh-chamber-seed-open-in` | In-instance host package (local shape only): fork of the upstream `dsh-host-open-in-app` serving the local app catalog, real bundle icons and launches over the `openInApp/*` Typert Remote (design 20 §6) |
 
 ## 2. Environment setup
 
@@ -122,7 +124,7 @@ pnpm run dev:desktop         # full window: control plane + dsh frontend + deskt
 ```bash
 pnpm run build:host-packages # build both host-graph and host-git-worktree packages
 pnpm run build:renderer      # build the dsh-frontend bundle (vite over the dsh workspace source)
-pnpm run build:desktop       # two host packages → renderer → control-plane/copy → preload → bundle:dsh
+pnpm run build:desktop       # host packages → renderer → control-plane/copy → preload → bundle:dsh
 pnpm run dist:desktop:mac    # package the macOS app (dmg + zip)
 pnpm run dist:desktop:win    # package the Windows app (nsis + zip; must run on Windows — dsh runtime bundling is platform-specific)
 ```
@@ -153,9 +155,11 @@ artifacts.
 ## 5. CI & releases
 
 - `.github/workflows/ci.yml`: runs on every push/PR — validation chain only (frozen install → root/gateway/runtime/two-host-package/client-plugin type checks → i18n → control-plane/runtime/desktop/gateway/renderer/client/host tests, including `test:git` and `test:host-git` → **workflow action-SHA gate** (`release-preflight --actions-only`, since 2026-09) → smoke [SKIPs without a bundled runtime] → renderer/host/desktop sub-builds → gateway pack-and-install smoke [`pack` → temporary prefix install → `gateway --help`]); it **does not produce release artifacts**. Desktop packaging and the real smoke run live in `release.yml` (tag/manual trigger).
-- `.github/workflows/release.yml`: produces distributable releases — push a `v*` tag (or run manually with a version without `v` and an optional dry-run). Publishable versions are limited to canonical stable `X.Y.Z` or beta `X.Y.Z-beta.N`; `alpha`, `rc`, and every other prerelease fail closed. Stable uses the default desktop build configuration and publishes only `latest.yml`/`latest-mac.yml`; beta uses the independent `packages/desktop/electron-builder.beta.yml` and publishes only `beta.yml`/`beta-mac.yml`, with mutually exclusive channel assets. A formal run creates a draft, builds macOS arm64 (v1 is Apple Silicon only) and Windows x64, and makes it public only after the fail-closed macOS checks above; dry-run performs zero Release writes. `release-preflight --versions-only` dynamically checks the root, every non-fork chamber package, and all three fork baselines; the matching `## [<version>]` section of `CHANGELOG.md` becomes the release body and is mandatory. The `validation` job self-validates gateway/runtime type checks and tests plus critical control-plane/desktop/renderer/plugin/CLI/policy gates; `build-gateway` publishes only a clean-prefix-smoked `.tgz` plus matching `.tgz.sha256` to GitHub Releases, with npm publish/dist-tags deferred.
+- `.github/workflows/release.yml`: produces distributable releases — push a `v*` tag (or run manually with a version without `v` and an optional dry-run). Publishable versions are limited to canonical stable `X.Y.Z` or beta `X.Y.Z-beta.N`; `alpha`, `rc`, and every other prerelease fail closed. Stable uses the default desktop build configuration and publishes only `latest.yml`/`latest-mac.yml`; beta uses the independent `packages/desktop/electron-builder.beta.yml` and publishes only `beta.yml`/`beta-mac.yml`, with mutually exclusive channel assets. A formal run creates a draft, builds macOS arm64 (v1 is Apple Silicon only) and Windows x64, and makes it public only after the fail-closed macOS checks above; dry-run performs zero Release writes. `release-preflight --versions-only` dynamically checks the root, every non-fork chamber package, and all three fork baselines; the matching `## [<version>]` section of `CHANGELOG.md` becomes the release body and is mandatory. The `validation` job's first step is the **release CI proof** (`scripts/dev/verify-release-ci-proof.mjs`: the commit must carry a completed, successful `ci.yml` push run on `main` with both the `test` and `test-windows` jobs green; an in-flight run is waited for with a bound, a failed run or a commit that never went through `main` fails closed), then it self-validates gateway/runtime type checks and tests plus critical control-plane/desktop/renderer/plugin/CLI/policy gates; `build-gateway` publishes only a clean-prefix-smoked `.tgz` plus matching `.tgz.sha256` to GitHub Releases, with npm publish/dist-tags deferred.
 - **Pre-release mechanical gate (since 2026-09)**: `pnpm run release:preflight <version>` (`scripts/dev/release-preflight.mjs`) — version uniformity (incl. fork copies and the installer dsh constant), changelog zh/en parity, i18n, **every workflow action SHA resolves upstream**, conflict markers, clean git status, frozen install, test:release-workflow; the release checklist §1.5/§7 mandates it before commit and again before push.
 - **Release flow (2026-09 optimization)**: local preflight + full battery on the exact release commit → commit+tag → **workflow_dispatch dry-run first** (new/modified workflows, script paths and action SHAs must pass one dry-run) → real tag push. Full steps in the release checklist.
+- **Push-path classification (2026-09)**: the linux chain in `ci.yml` now differs per event. On a branch push/PR, a **prose-only change** (`docs/**` plus the root prose allowlist, classified by `scripts/dev/classify-ci-changes.mjs`) runs only the file-only gates (workflow action SHAs, i18n, design tokens, the upstream-touchpoint registry, release-workflow policy, tooling unit tests) and skips install / type checks / unit suites / builds / the gateway pack smoke and the Windows leg; a code change runs everything as before. **Tag pushes do not trigger `ci.yml` at all** (2026-09 CI-trigger revision) — a release PROVES instead of re-running: `release.yml`'s `validation` runs `verify-release-ci-proof.mjs`, which requires that the commit already has a successful full `ci.yml` run on `main` (the linux `test` chain plus the `test-windows` leg), waiting a bounded time for a run still in flight and failing closed otherwise. The old shape (linux chain stepping aside, Windows leg re-running on the tag) not only repeated one Windows run on the identical SHA, it also left a hole: tagging a commit that never went through `main` skipped the entire linux chain. release.yml's gate alignment with ci.yml is still asserted by `release-workflow-policy.test.mjs` **derived from ci.yml** (adding a gate to ci.yml without mirroring it into release.yml turns CI red). The classifier fails safe: anything it cannot prove to be prose runs the full chain, and the prose allowlist is frozen by the policy test, so widening it takes a deliberate edit there.
+- `ci.yml` serializes pushes per ref with `concurrency: ci-${{ github.ref }}` and cancels **only superseded pull-request runs**: branch pushes queue, because a prose-only push that cancelled the run before it would leave the code commit it followed with no validation at all (the classifier spares prose the heavy chain, but there is no "zero validation" tier). `release.yml` keeps `release-publish` + `cancel-in-progress: false` so a run that may already have created a draft is never cancelled.
 - Both workflows bootstrap the vendor source tree at the `harness.commit` pin before installing.
 
 ## 6. Repository layout
@@ -182,8 +186,12 @@ packages/
                             Git worktree client (sidebar + coordinator + sagas)
   dsh-chamber-seed-git-worktree/
                             In-instance Git worktree host Remote (guards + constrained Git)
+  dsh-chamber-seed-archive-cleanup/
+                            In-instance archive-cleanup host Remote (design 24)
   dsh-chamber-client-ui-open-in/
-                            Open-in client plugin (session-header Finder/VS Code open)
+                            Open-in client plugin (session-header local app / VS Code open)
+  dsh-chamber-seed-open-in/
+                            In-instance open-in host Remote (local app catalog + icons + launches; local shape only)
 docs/
   design/                   Design documents (01 is the entry point; 05 is the surface/architecture contract (v1))
   todo/                     Unimplemented feature ideas (one file each; implemented historical design records are kept here, see todo/README.md)
@@ -203,6 +211,8 @@ vendor/
 |---|---|
 | `pnpm run dev:control-plane` | Start the control plane (management REST + static frontend) on port 17500 |
 | `pnpm run dev:desktop` | Electron shell: full window (control plane + dsh frontend + desktop shell) |
+| `pnpm run acceptance:gui` | GUI acceptance (`--live` read-only probes against the running app / `--attach` / `--dev` walkthrough); procedure in `docs/checklists/gui-acceptance-checklist.md`, toolbox boundaries in `scripts/gui-acceptance/README.md` |
+| `pnpm run test:gui-acceptance` | Unit tests for that toolbox's pure judgement layer (run in CI; the GUI-driving layer is not) |
 | `pnpm run build:renderer` | Build the dsh-frontend bundle |
 | `pnpm run build:host-graph` | Build the host-graph package (esbuild) |
 | `pnpm run build:host-git` | Build the in-instance Git worktree host package (esbuild) |
@@ -216,6 +226,7 @@ vendor/
 | `pnpm run dist:desktop:win` | Package the Windows app (nsis + zip; must run on Windows) |
 | `pnpm run cli -- <args>` | In-repo CLI thin shell (serve/status/connections/host logs) |
 | `pnpm run verify:i18n` | Fail when an EN ↔ ZH pair drifts (re-record with `-- --write`) |
+| `pnpm run verify:styles` | Upstream design-token conformance (S1 undeclared `--dsw-*` reference / S2 namespace overreach / S3 0.5px hairline / S4 literal fallback / S5 border-beside-shadow pairing / S6 dead declaration / S7 full-round radius pairing) across every chamber package and every CSS-carrying file kind |
 | `pnpm run gen:notices` | Regenerate THIRD_PARTY_NOTICES.md (Chinese root + docs/ English mirror) from the installed dependency tree |
 
 Test commands live in [CONTRIBUTING.md](../CONTRIBUTING.md) "Testing" and "Before Submitting".

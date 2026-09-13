@@ -8,12 +8,60 @@
  */
 
 import type { SettingsConnectionsKey } from '../locales.ts'
+// The settled-boot gap vocabulary is OWNED by the sidebar's shared bridge
+// contract (next to PluginGraphDiagnostic): this package imports the TYPE, not a
+// copy of the union (P4-4 — the specifier resolves to the real sidebar source
+// through the root tsconfig paths). Type-only, so the plain-node tests and the
+// tsdown bundle see no runtime dependency.
+import type { ServerBootGap } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+
+export type { ServerBootGap }
 
 /** Client-plugin runtime-loading diagnostic for one instance (design 09). */
 export interface PluginDiagnostic {
   state: 'ok' | 'not-injected' | 'graph-unreachable' | 'bundle-load-failed' | 'restart-required' | 'instance-version-conflict'
   message?: string
   pluginId?: string
+}
+
+/**
+ * Localized text for a settled-boot GAP (2026-12, design 05 §4 「降级呈现」).
+ *
+ * A SEPARATE fact from {@link PluginDiagnostic}: that diagnostic describes the
+ * host boot-GRAPH channel — its `ok` is legitimate when the graph was fetched
+ * and every row that arrived applied — while a gap says a whole surface is
+ * missing although the boot settled. The classic case (`ui-chat`'s
+ * `sidebarRight` never provided) leaves the graph channel at `ok`, which is
+ * exactly why the card renders this line INSTEAD of an `ok` diagnostic (see
+ * PluginDiagnosticLine).
+ *
+ * Exhaustive by construction: no `default` together with the declared `string`
+ * return makes a future kind a compile error; a kind whose payload is empty
+ * degrades to the generic sentence rather than rendering "缺少  ".
+ * @param gap - the structured gap fact from the bridge projection.
+ * @param t - this package's dictionary lookup.
+ * @returns the localized sentence.
+ */
+export function bootGapText(
+  gap: ServerBootGap,
+  t: (key: SettingsConnectionsKey, params?: Record<string, string | number>) => string,
+): string {
+  switch (gap.kind) {
+    case 'graph-unavailable':
+      return t('bootGapGraphUnavailable')
+    case 'required-services-missing': {
+      const services = gap.services ?? []
+      return services.length === 0
+        ? t('bootGapGeneric')
+        : t('bootGapRequiredServicesMissing', { services: services.join(', ') })
+    }
+    case 'deferred-registration-failed': {
+      const failed = (gap.failedIds ?? []).length
+      return failed === 0
+        ? t('bootGapGeneric')
+        : t('bootGapDeferredRegistrationFailed', { n: failed })
+    }
+  }
 }
 
 /** Localized text for a client-plugin diagnostic state (design 09). */

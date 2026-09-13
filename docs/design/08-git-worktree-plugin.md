@@ -80,9 +80,15 @@ session 或 delete 副作用。
   （branch/detached/unborn：unborn = porcelain 全零 HEAD + branch ref）、
   `attention`（从工作树 git-dir 的 MERGE_HEAD/REBASE_HEAD/rebase-*、
   CHERRY_PICK_HEAD/REVERT_HEAD/BISECT_LOG 探测，经注入的 fs 抽象，
-  尽力而为）、`upstream`/`ahead`/`behind`（本地 ref 事实，永不 fetch）与
-  `orphaned`（`workspace-path-failed` 标记，注册 workspace 路径已消失）。
+  尽力而为）、`upstream`/`ahead`/`behind`（本地 ref 事实，永不 fetch）。
   客户端解码强制校验这些字段（对旧 host 包 fail-closed）。
+- **孤儿 workspace（`orphaned` 是客户端投影，不是快照行字段）**：注册 workspace
+  的路径不可解析时，host 在快照 `errors` 里加一条**逐行诊断**错误项——路径消失
+  是 `path-unavailable`（`GitWorktreeError` 码），非 `GitWorktreeError` 的**兜底
+  码**是 `workspace-path-failed`，两者都带 `workspaceId`；客户端
+  （`packages/dsh-chamber-client-ui-git/src/shared/coordinator.ts`）据此把该
+  workspace 的 flags **合并**为 `orphaned: true`（保留既有 worktree 身份），
+  行显示"已消失"徽标。
 - **running 投影（加性）**：`runningSessionIds` 仍是**全部**运行中会话
   （展示事实）；`blockingRunningSessionIds` = 其中**非 INERT** 者（§5.2）。
   只读旧字段的客户端保持保守（任一运行中即阻塞）。
@@ -200,9 +206,17 @@ slot，不由 renderer App 直接 import 领域组件。
   焦点 / kebab 揭示的动作与工作区管理对话框呈现；主 checkout 也不显示 chip
   （root 组只显示项目名）。行内动作图标 16px；空 workspace 的组体显示
   "该工作区暂无会话"提示行。
-- **行内动作揭示 pointer-safe**：字面量类 `git-ws-action`（主行「分支+」创建 /
-  worktree 行删除）与**折叠字形交换**（workspace folder/branch ↔ chevron、
-  source monitor ↔ chevron、rename 期抑制）的触发是 **`:has(:focus-visible)`**
+- **行内动作揭示 pointer-safe**：动作按钮的样式钩子是 **`data-git-action` 属性**
+  （主行「分支+」创建 / worktree 行删除，`SidebarWorkspaceGitLine.tsx:387,400`），
+  由 sidebar 侧的 hover / `:has(:focus-visible)` / kebab 展开
+  （`.rowActionsVisible`）三条规则揭示（`sidebar-chamber.module.css:958-960`，禁用
+  态 `.42` 同钩子见 974-976），occupant 自身也在 `:has(:focus-visible)` 下按同一
+  钩子揭示（`SidebarGit.module.css:192`）。**不用字面量类名**：属性选择器不被
+  CSS Modules 哈希，跨包模块才能匹配同一钩子（本仓既有规则见
+  `packages/dsh-chamber-client-ui-mobile/src/client/styles.ts:10-20`；
+  2026-09-11 upstream-alignment，原 `git-ws-action` 全局类名已退役）。
+  它与**折叠字形交换**（workspace folder/branch ↔ chevron、
+  source monitor ↔ chevron、rename 期抑制）的触发都是 **`:has(:focus-visible)`**
   而非 `:focus-within`——揭示状态只有三种：hover、kebab 展开
   （`.rowActionsVisible`）、键盘焦点。原因：Chromium
   在 mousedown 时聚焦被点按钮，点击折叠钮后焦点留在行内 → `:focus-within` 持续
@@ -273,16 +287,28 @@ slot，不由 renderer App 直接 import 领域组件。
 ### 3.4 未注册工作树与孤儿 workspace（Plan A：显示全部 worktree）
 
 - **未注册工作树按仓库分散到 repo 组末尾**（名称=目录 basename、与派生
-  workspace 一致的行样式：分支图标 + 名称 + 健康徽标），无已注册 workspace
-  的仓库在列表末尾渲染其未注册块；数据经 flags 存储的每来源仓库布局
+  workspace 一致的行样式：26px 行 / r8 / 名称 14px-600-次级色 + 20px 行内动作钮
+  ——2026-09 batch 1 G1 收口，其中 20px 命中 < WCAG 2.2 2.5.8 的 24px 属模块
+  图标按钮语言的既有权衡；**2026-09 阶段 3 G1-4 起不再低于 WCAG 2.2 2.5.8**：
+  `.headerGitAction` 与 `.unregisteredAction` 视觉盒仍 20px，但用不可见 `::after
+  { inset: -2px }` 把命中区扩到 24px（`.headerGit` 的簇间距同步 2px → 4px，保证两个
+  24px 盒不相交），见 design 24 §13 第 17 条与 design 06 §7；
+  行内动作钮命中区见 `SidebarGit.module.css` 的 `.unregisteredAction`：分支图标 +
+  名称 + 健康徽标；非 ready 行的状态胶囊是
+  官方 `Tag tone="warning"`（`SidebarWorkspaceGitLine.tsx:208`，官方 11px/17px
+  胶囊词汇，本模块只保留占位类 `.unregisteredStatus`）——原先手写胶囊的中性
+  填充与行自身 hover 填充同值，指针悬停时整块消失，2026-09-11 upstream-alignment），
+  无已注册 workspace 的仓库在列表末尾渲染其未注册块；数据经 flags 存储的每来源
+  仓库布局
   （`RepoGitLayout`）发布，侧栏以 `repoKey` 上下文第三次挂载该座位，
   occupant 渲染行与动作（"新建会话"= adopt 懒注册、"删除"= 未注册删除）。
 - **未注册删除**：host `RemoveInput.workspaceId` 可选 + `path` 必填，
   git-first 移除保留身份/脏/锁/主守卫，`RemoveResult.next: 'none'` 时客户端
   跳过 workspace.delete 与归档（无会话）；operationId 幂等/重放复用。
-- **孤儿 workspace**：快照 `workspace-path-failed` 标记 `orphaned: true`，
-  行显示"已消失"徽标；删除弹专门确认（"工作树已不存在，仅删除其注册，
-  会话保留并转未分组"）后仅 `workspace.delete`。
+- **孤儿 workspace**：快照以带 `workspaceId` 的逐行诊断（路径消失是
+  `path-unavailable`，兜底 `workspace-path-failed`）报告；客户端据此投影
+  `orphaned: true`（见 §2.1），行显示"已消失"徽标；删除弹专门确认（"工作树已不
+  存在，仅删除其注册，会话保留并转未分组"）后仅 `workspace.delete`。
 - **竞态**：adopt 前 fresh 快照复核；未注册外部删除自愈消失；注册后外部删除
   进入孤儿流程。
 - **注册/删除预检的宽容度**：预检对路径不可解析的无关 workspace 宽容跳过
@@ -403,8 +429,9 @@ fresh-preflight -> git-removing -> git-removed
 工作树删除**不停、不取消、不隐式归档、也不删除任何会话**（「先归档（含子会话）」
 是删除对话框里**显式、默认关闭**的独立勾选项，§5.4）；**运行中的会话仍然阻塞
 删除，除非它已归档（或其经 subagent-origin 边链到的祖先已归档）**——归档即
-「已了结」，其运行不再挡住工作树删除，而它的停止与内容清理只属于归档管理器（design
-24 §5）。
+「已了结」，其运行不再挡住工作树删除，而它的停止与内容清理只属于归档侧（design
+24 §5：本 saga 的 pre-remove 归档**不**停止，仍由归档管理器的删除前停止兜底；
+chamber 侧边栏的归档动词自 2026-09 起**就地**终止该会话与 subagent 闭包）。
 
 - **判据（宿主侧，`assertNoRunningSessions` / `assertNoRunningAtPath` 共用；
   同一条判据作用于所有 mutation 腿——首次删除、rollbackCreate 的 path 腿
@@ -433,12 +460,15 @@ fresh-preflight -> git-removing -> git-removed
   其余守卫（main/locked/身份/expected/dirty/submodule/
   `assertNoOtherWorkspaceWithin`）一律照旧。
 - **集合读取的响亮失败**：归档集合读不到（getter 缺失/非数组
-  或读取抛错）→ `state-source-unavailable`，集合元素漂移（非字符串/空串）或
-  agent `origin` 值漂移 → `state-source-invalid`：snapshot 以响亮 `sourceError`
+  或读取抛错）→ `state-source-unavailable`，集合元素漂移（非字符串/空串）→
+  `state-source-invalid`：snapshot 以响亮 `sourceError`
   返回、mutation 腿直接抛错，**绝不当作空集合**（空集合会把每个已归档会话重新
   变成阻塞项），集合元素也**绝不 `String()` 强转**（强转会把漂移元素伪装成合法
   成员）。该判据**绝不缓存、绝不降级**：每次 `readSource` 都重新读
   `workspaceRegistry.archivedSessionIds`。
+  **agent 行的列漂移不在此列**：`origin`/`status`/`cwd` 三列都**逐行**处理
+  （`agent-origin-unknown`/`agent-status-unknown`/`agent-cwd-unknown`
+  SnapshotError），未知 `status` 按 running、不可解析的 `cwd` 保持阻塞（§6.4）。
 - **起因（保留为语义依据）**：归档是**软隐藏**（上游 `archiveSession` 只把 id
   追加进 `archivedSessionIds`），**不会**停止运行；会话卡在 `ask_user_question`
   （agent 相位持续 running）时归档反而让它从侧边栏消失、失去任何停止入口，
@@ -477,8 +507,9 @@ fresh-preflight -> git-removing -> git-removed
   绕过（linked worktree 的子模块 gitdir 位于其 admin git dir 的
   `modules/` 下，与 git 判据一致）。host 在最终变更前镜像该守卫：
   - 含子模块工作树未授权丢弃 → 确定性拒绝码 `worktree-submodules`
-    （`retryable: false` 显式标记），**不发起任何 git 变更**；对话框就地
-    呈现子模块丢弃授权（勾选后 `discardChanges: true` → `--force`）——子模块
+    （`retryable: false` 显式标记），**不发起任何 git 变更**；对话框（经官方
+    `RiskConfirmation`，§5.4）呈现子模块丢弃授权（勾选后 `discardChanges: true`
+    → `--force`）——子模块
     工作区文件与 dirty 文件同属「显式授权才丢弃」的一类（gitlink 已提交，
     内容可重新检出），分支/提交/HEAD、身份/锁/running 守卫全部不变；
   - 守卫 best-effort：`.git` 指针不可读时读作"无子模块"；git 的 index
@@ -507,13 +538,27 @@ fresh-preflight -> git-removing -> git-removed
   `false`，每次打开/换目标重置）——**不勾选即不隐式归档/不自动归档**；另可选
   「同时删除本地分支」（§5.3）。
 - **dirty**：删除图标不再禁用（仅 dirty），点击进入对话框后显示醒目警示
-  （"该工作树有未提交的更改，将被永久丢弃；分支与已提交内容不受影响"）+
-  勾选框「我了解这些更改将被丢弃，仅移除工作树（保留分支）」；未勾选时确认按钮
-  禁用，勾选后才发送 `discardChanges: true`。
+  （"该工作树有未提交的更改，将被永久丢弃；分支与已提交内容不受影响"）；
+  授权由**官方 `RiskConfirmation`** 收集（`RemoveWorktreeDialog.tsx:411`，
+  2026-09-11 upstream-alignment；单手势与撤销语义按 2026-09-11 review-fix F1 校正）：
+  对话框内不再有勾选框，点「移除」时若尚缺授权先弹出官方风险确认（警示图标 + 同上
+  说明 + 自动聚焦的勾选框「我了解这些更改将被丢弃，仅移除工作树（保留分支）」，
+  主按钮在勾选前不可用），**该门自己的 Confirm 就地执行这次删除**——一次手势即
+  `移除 → 勾选 → 确认`，确认后以 `discardChanges: true` 跑同一条删除路径，不需要
+  第二次「移除」。门本身**不**从「还缺哪个授权」推导开关（那个推导在勾选当刻即回到
+  空值，门会自灭、Confirm 成死代码）：它由点击「移除」时选定的**授权种类**
+  （`discard-gate.ts` 的 `nextDiscardGate`：先 dirty、后 submodule）持有，
+  `onConfirm`/`onCancel` 才释放（`RemoveWorktreeDialog.tsx:411-439`）。
+  **取消即撤销**：Cancel / 关闭 / 遮罩 / Escape 都会把这次门正在收集的那个授权
+  复位为未授权（`onCancel`，`RemoveWorktreeDialog.tsx:425-434`），因此退出确认
+  绝不会留下一个"已授权但没删"的脏状态——下一次「移除」重新打开同一门，用户不会
+  在事后被静默丢弃文件。授权对话框打开期间删除对话框忽略关闭（两个对话框各自在
+  document 上监听 Escape，`RemoveWorktreeDialog.tsx:215-222`）。
 - **含子模块**：行事实不含子模块信息，首次删除被 host 确定性拒绝
   （`worktree-submodules`，变更前、`retryable: false`、可关闭、不锁来源）后，
-  对话框就地显示警示 + 勾选框「我了解该工作树中的子模块检出将被丢弃，仅移除
-  工作树（保留分支）」；勾选后同一 `discardChanges` 授权重试 → host `--force`
+  对话框就地显示警示，点击「移除」重新打开同一官方 `RiskConfirmation`
+  （勾选框「丢弃该工作树中的子模块检出」）；勾选后同一 `discardChanges` 授权重试
+  → host `--force`
   一步删除（主路径）。终端备选需删除该工作树残留的子模块 git 目录——
   **实测（git 2.50.1）`git submodule deinit -f --all` 不会清空 admin `modules/`，
   守卫依旧拒绝**，文案如实提示。
@@ -541,8 +586,12 @@ fresh-preflight -> git-removing -> git-removed
   current（blank 例外）→ runtime-unknown → running → locked → unhealthy → dirty →
   status-unknown**：`current` / `runtime-unknown` 都在 `running` **之前**，因此过时
   或「仅已归档」的 running 事实无法绕过二者。
-- **未注册行删除**用 `window.confirm`，无对话框授权流：沿用 dirty 的不对称——
-  确定性拒绝 + host 英文提示（终端删除 modules 目录或 `--force`）。未注册块的
+- **未注册行删除**走**应用内官方 `RiskConfirmation`**（`SidebarWorkspaceGitLine.tsx:262`，
+  2026-09-11 upstream-alignment；该行原本用原生 `window.confirm`，无法使用 alias
+  token）：行内删除按钮只武装确认（勾选框「我了解该移除不可撤销」，主按钮在勾选前
+  不可用，每次关闭都重置），确认后才发出移除。该行**仍无对话框授权流**——dirty 沿用
+  不对称：移除不携带 `discardChanges`，确定性拒绝 + host 英文提示（终端删除 modules
+  目录或 `--force`）。未注册块的
   **missing 行**（§5.5）删除按钮不再硬禁用：行文案明示这是「残留记录清理」
   （等效该记录的 `git worktree prune`，不涉及任何文件或分支），确认文案单独
   措辞；adopt（新建会话）对 missing 行保持禁用。
@@ -661,8 +710,11 @@ fresh-preflight -> git-removing -> git-removed
   subagent-origin」处理 ⇒ 该边终止、会话照旧阻塞（fail-closed，且与上游一致：
   缺 `origin` 的上游同样无法证明是 delegation 子会话）。代价是这类历史子会话不会
   因已归档祖先而 INERT，其停止/清理需在归档管理器或会话侧处理。
-- **来源面漂移分两类**：`origin` **值**漂移**逐行**处理并留响亮诊断
-  （`agent-origin-unknown` SnapshotError），不会拖垮整个域；而**真正损坏的
+- **来源面漂移分两类**：agent **行**的列漂移**逐行**处理并留响亮诊断——
+  `origin` 值（`agent-origin-unknown`）、`status` 值（`agent-status-unknown`，
+  按 running 读取）、`cwd` 值（`agent-cwd-unknown`；该行位置未知，故在严格删除
+  腿上以 `running-agent-cwd-unavailable` 拒绝任何删除，绝不假设它不在目标内），
+  都不会拖垮整个域；而**真正损坏的
   来源面**（`archivedSessionIds` 非数组/元素非字符串、workspace 行畸形等）仍让整次
   读取以可重试的 `state-source-*` 失败告终——此时没有任何 mutation 被尝试；若同一
   删除此前已产生「未决（uncertain outcome）」恢复项，该恢复项保留到来源面修好
@@ -674,7 +726,7 @@ fresh-preflight -> git-removing -> git-removed
 
 - host 包与 client-graph 包一起进入本地 profile seed、远程 ready-time seed、
   desktop 打包资源和 loader patch；seed 继续只经已实现的受限
-  `run/write-file` 通道。两个 host 包都提交 esbuild `dist/index.js`
+  `run/write-file` 通道。四个 host 包都提交 esbuild `dist/index.js`
   （`@deepseek-ai/*` external）。
 - loader id 与 package name 在 profile 中是全局身份：单个 exact 既有 row 复用，
   同 id/异包、同包/异 id 或重复 exact row 都在写包/启动前 fail-loud，不追加出一个

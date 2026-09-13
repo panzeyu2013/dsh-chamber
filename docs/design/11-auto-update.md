@@ -16,7 +16,7 @@
 | 更新产物 | mac target = `dmg` + `zip`（dmg 留首装、不产 update-info：`writeUpdateInfo: false`）；win `nsis` `differentialPackage: false` + `useZip: false`（不发 blockmap、保 7z 高压缩） | desktop `build` 配置 |
 | 发布 feed | build 走 `--publish=always`（`GH_TOKEN`）把产物含 feed 上传进 draft release；`--publish=never` **不生成** update-info yml | `.github/workflows/release.yml` |
 | 签名 | macOS 正式发布强制 Developer ID + 公证 + stapler + spctl；Windows 未签名（SmartScreen 提示，§7 的明确让步） | release.yml、§7 |
-| 版本 | 根 `dsh-chamber` + 全部 `@dsh-chamber/*` 包一致 bump（16 个）；三个 fork 副本保持上游基线版本 | `release-preflight.mjs`、§8 |
+| 版本 | 根 `dsh-chamber` + 全部 `@dsh-chamber/*` 包一致 bump（17 个）；三个 fork 副本保持上游基线版本 | `release-preflight.mjs`、§8 |
 
 
 ## 2. 目标与边界
@@ -104,8 +104,9 @@
   idle）→ 经 preload IPC（`dsh-chamber:update-state` invoke 查询 + `update-state-changed`
   push）→ settings 壳渲染。
 - **挂载位置**：settings 壳（`packages/dsh-chamber-client-ui-settings-bridge`）
-  的**「通用」段内**（`__general` 固定入口 → `GeneralView` 底部嵌入 `UpdateSection`
-  控制组）——原独立的 `__update` 固定入口已并入「通用」，
+  的**「客户端」段内**（`__general` 固定入口 → `GeneralView` 底部嵌入 `UpdateSection`
+  控制组）——原独立的 `__update` 固定入口已并入「客户端」（2026-09-11 由「通用」
+  改名，避免与官方 `general.nav`（通用设置）同名，见 design 15），
   固定入口区结构（`__connections` / `__general`）与并入决策以**设计 15** 为权威，
   本节不重复。「更新」控制组 = `UpdateSection` 组件（`update-store.ts` 模块单例
   订阅，N-ctx 共享）。内容小、只读一个 IPC 状态 → 无需
@@ -138,7 +139,7 @@
   - 失败文案脱敏：`UpdateState.error` 以 `[path]` 替换绝对路径，完整错误只留主进程日志。
 - zh/en 文案走 `dsh-chamber.settings.bridge` 命名空间（`verify:i18n` 通过；beta 通道
   标注与安装受阻原因同样本地化）；样式用
-  普通列表行（dsh design tokens），不加高亮——与「通用」段一致采用
+  普通列表行（dsh design tokens），不加高亮——与「客户端」段一致采用
   settings-panel 控制组/胶囊按钮词汇。
 - **IPC 面**：`dsh-chamber:update-state`（invoke 查询）、`update-state-changed`
   （push）、`update-check`、`update-download`、`update-restart`、`open-release`；
@@ -203,7 +204,7 @@ electron-updater 6.x **安装成功后从不删除**下载产物（`DownloadedUp
 
 ```
 启动（延迟 15s）→ 静默检查（autoDownload: false，仅发现请求、无包下载）
-  ├─ 有新版 → settings「通用」段更新组一行状态「新版本 vY」+ [更新] 按钮
+  ├─ 有新版 → settings「客户端」段更新组一行状态「新版本 vY」+ [更新] 按钮
   │     ├─ 用户点击 → 后台自动下载（进度经 IPC → 状态行 下载中…）
   │     └─ 不点击 → 永不下载（仅状态行）
   │  下载完成 → 「已下载，退出时安装」+ [重启并安装]（仅 macOS/Windows——
@@ -214,7 +215,7 @@ electron-updater 6.x **安装成功后从不删除**下载产物（`DownloadedUp
   ├─ 无新版 → 「已是最新版本」
   └─ 失败 → 「无法检查更新」（静默写主进程日志，绝不假成功）
 用户主动点击 [检查更新] → 同一条检查路径（update-check IPC，仍不下载）
-每 6h 周期静默复查；settings「通用」段的更新组 = 唯一可见面
+每 6h 周期静默复查；settings「客户端」段的更新组 = 唯一可见面
 ```
 
 - **失败语义**：检查/下载/校验/安装任何失败 → 静默或 settings 内响亮（安装失败
@@ -304,19 +305,19 @@ electron-updater 6.x **安装成功后从不删除**下载产物（`DownloadedUp
 
 ## 8. 版本管理与数据兼容
 
-- chamber 版本分布于根 `dsh-chamber` + **16 个** `@dsh-chamber/*` 包（desktop/
-  control-plane/renderer/cli/dsh-runtime/gateway + 3 个宿主种子包 client-graph/
-  git-worktree/archive-cleanup + **7 个客户端插件包** sidebar/layout/
+- chamber 版本分布于根 `dsh-chamber` + **17 个** `@dsh-chamber/*` 包（desktop/
+  control-plane/renderer/cli/dsh-runtime/gateway + 4 个宿主种子包 client-graph/
+  git-worktree/archive-cleanup/open-in + **7 个客户端插件包** sidebar/layout/
   settings-connections/settings-bridge/git/open-in/mobile），发版时**一致 bump**（semver 比较；`main.ts`
   读 desktop package.json 的 version 并经 `dsh-chamber:info` 透传渲染层、注入
   更新控制器）。**release.yml 的 `Assert version matches package.json` 步骤复用
-  `release-preflight.mjs --versions-only` 数据驱动扫描器**：根 + 全部 16 个
+  `release-preflight.mjs --versions-only` 数据驱动扫描器**：根 + 全部 17 个
   `@dsh-chamber/*` 包必须等于目标版本，新增包自动纳入；三个 fork 副本
   （`@deepseek-ai/dsh-client-connection` / `dsh-client-web` /
   `dsh-api-gateway`）必须保持上游基线版本
-  **0.1.5-rc.1**（`release-preflight.mjs` 的 `FORK_VERSION`，随源码线 pin 移动），
+  **0.1.5-rc.2**（`release-preflight.mjs` 的 `FORK_VERSION`，随源码线 pin 移动），
   不随 chamber 发版移动。发布 checklist §1/§1.5 与该硬门同口径。
-  vendored dsh 源为 0.1.5-rc.1——插件版本只在 chamber 侧参与 workspace 解析，
+  vendored dsh 源为 0.1.5-rc.2——插件版本只在 chamber 侧参与 workspace 解析，
   从不与 dsh 源逐位对齐，也从不参与任何比较/展示。
 - 更新只替换应用本体；`userData`（`ssh-instances.json`、state、
   `ssh-passwords.json`（schema v2 endpoint binding）、`gateway-secrets.json`

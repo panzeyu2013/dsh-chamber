@@ -12,8 +12,9 @@
 > **与设计 20 的分界**：应用内按钮/桥面/IPC 均为设计 20 的 open-in 面
 > （`open-in-apps` / `open-in`；旧的 `dsh-chamber:open-vscode` /
 > `vscode-availability` 两通道与 `window.dshChamber.vscode` 桥面已随旧插件删除），
-> 本地目录探测与 launch 由实例自身官方宿主半边（`dsh-host-open-in-app`）经
-> 每实例代理 `<basePath>/open-in-app/*` 执行，主进程 open-in 注册表**收窄为
+> 本地目录探测与 launch 由**实例进程内的 chamber host 包**
+> （`@dsh-chamber/dsh-chamber-seed-open-in`——2026-09-11 起 fork 取代官方宿主半，
+> 见设计 20 §6）经实例自身的通用 RPC 通道执行，主进程 open-in 注册表**收窄为
 > vscode-only**（`finder`/`stat`/`openPath`/`showItemInFolder` 面退役）。
 > 本文 §7.2 的锁步清单与 §6 的槽位/门控纪律是两者共用的接线模板
 > （设计 20 §5/§3 为其现行形态）。
@@ -46,8 +47,8 @@
 ```text
 ┌─ 客户端插件 @dsh-chamber/dsh-chamber-client-ui-open-in（编译期打包，08 同款）─┐
 │  conversation.session.header.utilities 条目：会话头部 utilities 行内按钮      │
-│  （order -1，排在 vendor "Session log" 左侧；placement 见 §6.1）              │
-│  coordinator 单例：应用清单/可用性事实（主进程 + 实例官方目录，单飞共享）      │
+│  （order -10，排在 vendor "Session log" 左侧；placement 见 §6.1）             │
+│  coordinator 单例：应用清单/可用性事实（主进程 + 实例内 host 包，单飞共享）  │
 │  门控（§6.3）：来源可用应用集非空 ∧ 该 header 的会话属于有 path 的工作区，     │
 │  否则渲染 null；本地来源走 `vscode://file/`、远程 ssh 走 `ssh-remote+`         │
 │  零 @dsh-chamber 依赖（仅 peer 依赖 vendor 包）                               │
@@ -262,16 +263,38 @@ detectVscodeAvailability(platform): { available: boolean }
 - 槽是 session 作用域：组件直接收到**本头部所属的 `sessionId`** 与框架全局
   `useWorkspaces` 选择器钩子（同一 store，侧边栏归组同源），**不直接读 ctx 的
   sessions/workspaces**（inject 声明保持 `['slots','locale']`）；
-- 按钮 CSS：行内 32×32 图标按钮，**样式与 vendor "Session log" pill 同款复用**
-  （`1px solid var(--dsw-alias-border-l2)` 描边、`border-radius: 18px`、透明底、
-  hover 主题 tint、focus 环），与头部工具行对齐；aria-label / tooltip /
-  键盘可聚焦保持；
-- **行内排序**：条目注册带 `order: -1`——utilities 行按 `order`
-  升序排列（默认 0），因此 open-in 按钮排在 "Session log"（order 0）**左侧**，
-  session-log 保持在最右侧；
-- **图标**：VS Code 入口用**官方产品图标资源**（从安装的
-  `Visual Studio Code.app` 的 `Code.icns` 提取 32px@2x PNG → `vscode-icon.png`，
-  vite 内联为 data URL），不用手绘近似 logo；
+- 按钮 CSS：**与官方 open-in 分体按钮同规格**（2026-09-12 样式对齐轮；逐条取自
+  pin 的 `@deepseek-ai/dsh-client-ui-open-in-app/lib/client.js`
+  `OpenInAppAction.module.css`）——`.split` 容器 28px 高、`0.5px solid
+  var(--dsw-alias-border-l4)` 描边、`border-radius: 14px`、`overflow: hidden`；
+  主按钮 15px mark（`padding: 5px 6px 5px 7px`），chevron 用设计系统
+  `IconChevronDownOutline14`（size 11，`padding: 5px 6px 5px 4px`），两半之间的
+  分隔线是 chevron 自己的 `border-left`（主按钮无边框）；hover 主题 tint 只在
+  `:hover:not(:disabled)` 上生效，busy 态 `label-dimmed` + `cursor: wait`，error
+  态 `inset 0 0 0 1px var(--dsw-alias-state-error-primary)`；不使用自造 focus 环
+  （与官方一致，保留浏览器默认环）。这样按钮与头部工具行**同一 28px 控件高度**
+  （vendor `session-log-export/HeaderAction.module.css`
+  `.moreButton{width:28px;height:28px;border:none;border-radius:28px}`、
+  `ui-conversation/ConversationRoot.module.css` `.titleRow{min-height:30px}`），
+  不再比所在行高 4px；aria-label / tooltip / 键盘可聚焦保持；
+  **形态只有官方那一种**：可用集 ≥1 就渲染同一条 `.split`（主按钮 + chevron 下拉，
+  官方没有单条目形态、也不因只有一个 app 少画 chevron）；
+- **行内排序**：条目注册带 `order: -10`（**官方 `open-in-app` 行的原值**，2026-09-12
+  彻底统一）——utilities 行按 `order` 升序排列（默认 0），因此 open-in 按钮排在
+  "Session log"（order 0）**左侧**，session-log 保持在最右侧，且与任何第三方条目
+  的相对次序与官方一致；
+- **图标**：**宿主送来的真实 bundle 图标，与官方同一条管线**（选图只问一件事：机器目录
+  答过这个 id 吗——与通道、来源、应用家族都无关）——按官方 `img.icon` 的同一处理：
+  `flex: none` + `object-fit: contain`，非正方形图标被留白而不是拉伸；菜单行 18px、
+  主按钮 15px（两者都是官方尺寸）。**"装了哪些应用、图标是什么"是机器级事实**：
+  上游由承载页面的那个 host 直接回答（client 读 `location.origin` 的
+  `/open-in-app/icon/<id>`），本壳一页挂 N 个实例，于是由渲染壳对**本地实例**读一次
+  （design 20 §4.2 的页级机器目录）并注入每个 entry——所以 remote ssh 来源的 VS Code
+  条目现在画的就是本机那份真实 bundle 图，**仓库内不再有 VS Code 位图资源、也不再有
+  `VscodeMark`/`'vscode'` mark kind**（2026-09-12 删除）。本机没装 VS Code 时这个条目
+  根本不渲染（`vscodeAvailable()` 是本机探测），所以需要 mark 时真图标总能取到；真的
+  取不到（抽取失败 / 本机实例未就绪）就回落**官方那颗圆角方块**（`viewBox 0 0 24 24`、
+  `stroke-width 1.8`、`r5`，颜色继承所在槽）——chamber 不再有任何自造 mark；
 - **`shell.overlay` 槽保留在 layout fork 中**（`AppFrame.tsx` 渲染
   `<div data-shell-overlay>`，层 `position:absolute; inset:0; z-index:20`，
   `.overlayLayer > * { pointer-events: auto }`），现由 mobile 客户端插件的抽屉开关
@@ -280,7 +303,7 @@ detectVscodeAvailability(platform): { available: boolean }
 ### 6.2 coordinator（单例，git 插件同款模式）
 
 - 模块级单例：`attach()` 首/末 retain 拥有唯一订阅与探测；
-- **应用集/可用性事实**（主进程 + 实例官方目录）：单飞拉取一次，跨 N-ctx 共享；
+- **应用集/可用性事实**（主进程 + 实例内 chamber host 包）：单飞拉取一次，跨 N-ctx 共享；
 - **当前工作区路径读自身 ctx**：`ctx.chamberInstanceId` +
   header 的 session/workspaces 选择器，**不走 chamberBridge
   跨 ctx join**——本包因此零 @dsh-chamber 依赖（仅 peer 依赖 vendor 包）。

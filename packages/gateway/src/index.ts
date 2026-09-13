@@ -14,6 +14,7 @@ import { FATAL_STARTUP_BLOCK_REASONS } from '@dsh-chamber/dsh-runtime'
 import {
   CHAMBER_HOST_PACKAGES,
   DEFAULT_STATE_DIR,
+  HOST_PACKAGE_SEED_FILES,
   createControlPlane,
   defaultDshWorkspacePath,
   type Logger,
@@ -298,7 +299,7 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       options.config.mobileUaRedirect === true,
       options.config.mobileEntryPath ?? DEFAULT_MOBILE_ENTRY_PATH,
     )
-    // Chamber seed registry (2026-12): the THREE host packages are DESKTOP-
+    // Chamber seed registry (2026-12): the THREE syncable host packages are DESKTOP-
     // SYNCED — the control-plane seeds them into the managed dsh profile from
     // the chamber-plugins cache, which a connecting desktop populates through
     // PUT /chamber/plugins (Phase 3). Until the first sync the cache is
@@ -345,7 +346,12 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
           kind: 'client',
           source: 'packaged',
           sourceDir: join(gatewayHostPackagesDir, 'dsh-chamber-client-ui-mobile'),
-          seedFiles: ['package.json', 'dist/index.js', 'lib/index.js', 'lib/client.js', 'lib/client.js.map'],
+          // The base set is the SHARED seed tuple (control-plane
+          // HOST_PACKAGE_SEED_FILES — the same set the desktop PUTs into the
+          // sync cache and the control-plane seeds locally); only the client
+          // half's extra files are declared here. A base file added to the
+          // shared tuple therefore reaches this packaged seed too.
+          seedFiles: [...HOST_PACKAGE_SEED_FILES, 'lib/index.js', 'lib/client.js', 'lib/client.js.map'],
         },
       ],
       getDshWorkspacePath: () => {
@@ -400,9 +406,15 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     throw error
   }
   function syncFeatures(status: string): void {
-    // 2026-12 strip: the chamber surface is read-only and has no readiness
-    // coupling — the ready-transition subscription now only forwards the
-    // authoritative state to the runtime manager (design 18 §9.3).
+    // Readiness coupling is real here (2026-09-11 review, replacing the
+    // retired 2026-12 "the chamber surface is read-only and has no readiness
+    // coupling" claim): that surface carries the design 21 §6.2 A1
+    // third-party plugin MANAGEMENT writes (install/materialize/remove,
+    // executed through the managed dsh's own CLI — plugins-exec.ts) and the
+    // /chamber/runtime controller, so this subscription has two duties —
+    // first forward the authoritative state to the runtime manager (design
+    // 18 §9.3), then drain the deferred plugin intents below (design 21
+    // decisions 7/8: the ready/degraded edge IS the execution window).
     runtimeManager?.observeLocalState?.(status)
     // Design 21 §6.3 deferred-intent drain (plan Phase 4.4): install/
     // materialize intents persisted while the runtime was busy, the manager

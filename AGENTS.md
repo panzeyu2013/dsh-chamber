@@ -55,6 +55,12 @@ decision value and is not already owned by a design document or `CHANGELOG.md`.
 - The release workflow is policy-tested: `pnpm run test:release-workflow`.
 - `CHANGELOG.md` (with its `docs/CHANGELOG.en-US.md` mirror and the `verify:i18n` record) is written
   at RELEASE time only — never add `[Unreleased]` entries while implementing.
+- `CHANGELOG.md` records **only the difference between adjacent formal releases** (`X.Y.Z` against the
+  previous `X.Y.Z`): what someone running the previous formal release sees changed. A section still has
+  to exist for a beta (`release.yml` extracts it as the release body), but its content obeys the same
+  rule. The internal path taken to get there — intermediate dsh pins, beta-to-beta deltas, batch/round
+  codenames, gate counts, lockfile-regeneration notes, verification reports — never goes in: it belongs
+  to git history and, while still open, `docs/progress/STATUS.md`.
 
 ### Before a dsh (upstream) upgrade
 
@@ -63,6 +69,12 @@ decision value and is not already owned by a design document or `CHANGELOG.md`.
 - `docs/checklists/upstream-touchpoints.md` and `scripts/dev/verify-upstream-touchpoints.mjs`
   (gates C1–C10, run in CI) are two sides of one registry — a change to either must be mirrored in
   the other, and the pin-upgrade entry point reminds you of the freshness gate.
+- `docs/checklists/*` are **procedure only**: no version values — no pinned tags, commits, current
+  baseline snapshots or per-tag delta logs — belong in them. The current anchor's single sources are
+  `harness.commit` (source line), `packages/desktop/vendor/dsh/pnpm-lock.yaml` (runtime line) and each
+  fork's `package.json`; a tag's upgrade narrative goes to the `CHANGELOG.md` release section, and
+  still-open deviations to `docs/progress/STATUS.md`. `upstream-touchpoints.md` keeps only the
+  structural registry (file classifications, contract mirrors, artifacts, gate criteria).
 
 ### Before changing the Swift native shell (`macos/`)
 
@@ -93,12 +105,12 @@ surfaces, applicable guidance, validation, or failure/rollback considerations fr
 | `packages/dsh-chamber-client-ui-sidebar` | Self-built sidebar: multi-source session navigation, chamberBridge, the page-level client-plugin load kernel, settings-seat contract (design 05) |
 | `packages/dsh-chamber-client-ui-layout` | Self-built ui-layout shell fork: layout store persistence and the only document-level theme projection (design 06) |
 | `packages/dsh-chamber-client-ui-settings-connections` | Chamber-global connections settings page (design 05) |
-| `packages/dsh-chamber-client-ui-settings-bridge` | Self-built settings shell: server dropdown over the selected instance's graph-driven settings contributions (design 05) |
+| `packages/dsh-chamber-client-ui-settings-bridge` | Self-built settings shell: server dropdown over the SELECTED source's own boot-ctx `settings.section` ledger, rendered with that ctx's renderer-bound seats (design 05 §5, 2026-12 complete-bridge revision) |
 | `packages/dsh-chamber-client-ui-git` | Git worktree client plugin (design 08); facts and actions stay client-side and never become a control-plane execution surface |
 | `packages/dsh-chamber-client-ui-open-in` | Desktop open-in client plugin (designs 16, 20) |
 | `packages/dsh-chamber-client-ui-mobile` | Packaged mobile client served by the gateway — the single packaged plugin exception (design 17) |
 | `packages/desktop` | Electron shell: single frame over the control-plane origin, trusted domain-scoped IPC, open-in/deep-link routing, edge notifications, crash-safe credential and runtime management |
-| `packages/dsh-chamber-seed-*` | Chamber host packages seeded into the managed instance: read-only client boot graph, in-instance Git worktree, archived-session content cleanup (designs 09, 08, 24) |
+| `packages/dsh-chamber-seed-*` | Chamber host packages seeded into the managed instance: read-only client boot graph, in-instance Git worktree, archived-session content cleanup, in-instance open-in catalog/icons/launch (designs 09, 08, 24, 20) |
 | `packages/cli` | CLI thin shell (serve/status/connections/host logs) |
 | `packages/gateway` | Separately invoked server shape (design 17): authenticated-by-default public boundary, single local-dsh proxy, host duties, seed registry |
 | `macos/` | Swift native shell (design 25): WKWebView over the control-plane origin plus the packaged Node sidecar assembly, native edges (notifications, deep link, open-in, tray/hide), and the cross-flavor directory lock |
@@ -121,6 +133,10 @@ surfaces, applicable guidance, validation, or failure/rollback considerations fr
   sidecar re-verifies by reading the record and never takes a second flock.
 - Package manager is pnpm, and runtime dependencies are not added without an explicit request
   (current set: `ws`, `electron-updater`, React/Vite, Electron, the embedded pinned `pnpm`, the dsh
-  client workspace packages; `typescript` / `@types/*` are devDependencies).
-- Removed domains and the bounded exceptions (designs 08, 17, 19, 24 — narrowest boundaries in
-  design 24 §2) are stated in `docs/design/01-overview.md` §4 and §5.
+  client workspace packages; `typescript` / `@types/*` / `node-pty` are devDependencies — `node-pty`
+  is the root resolution target for `@deepseek-ai/dsh-subprocess-local`'s workspace postinstall
+  (`pnpm-workspace.yaml` allowBuilds note + `scripts/dev/ensure-harness-vendor.mjs` shim), not a
+  runtime dependency of the chamber tree; it heads the runtime tree's `ALLOW_BUILDS`).
+- Removed domains and the bounded exceptions (designs 08, 17, 19, 20, 24 — narrowest boundaries in
+  design 24 §2, and for the open-in host domain in design 20 §6.3) are stated in
+  `docs/design/01-overview.md` §4 and §5.

@@ -1,14 +1,15 @@
 /**
- * Per-source open-in adapter unit tests (Batch 3 Phase 2, plan §5.2): the
- * dual-pool selection, the base-path remapping, the per-entry channel routing
- * and the persisted choice. Pure node:test — the pools, the catalog factory and
- * the preload bridge are all injected.
+ * Per-source open-in adapter unit tests (design 20 §5): the rendered-set merge
+ * (the page's machine catalog + the page-wide main pool), the per-entry channel
+ * routing and the persisted choice. Pure node:test — the pools and the preload
+ * bridge are injected; the machine catalog is the page service the shell builds
+ * (`machine-catalog.test.ts` covers its caching).
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { createOpenInSourceAdapter, type OpenInChoiceStore, type OpenInMainPool } from '../src/client/source-adapter.ts'
-import type { OfficialCatalog } from '../src/client/official-catalog.ts'
+import type { MachineCatalog } from '../src/client/machine-catalog.ts'
 import { parseOpenInSource, type OpenInApp } from '../src/shared/capabilities.ts'
 import type { OpenInBridgeSurface, Translate } from '../src/shared/coordinator.ts'
 
@@ -42,12 +43,13 @@ function mainPool(initial: readonly OpenInApp[] | null): { pool: OpenInMainPool;
 function choiceStore(initial = ''): { store: OpenInChoiceStore; set(next: string): void } {
   let value = initial
   const listeners = new Set<() => void>()
+  const emit = (): void => { for (const listener of [...listeners]) listener() }
   return {
     store: {
       get: () => value,
       set: (next) => {
         value = next
-        for (const listener of [...listeners]) listener()
+        emit()
       },
       subscribe: (listener) => {
         listeners.add(listener)
@@ -56,34 +58,43 @@ function choiceStore(initial = ''): { store: OpenInChoiceStore; set(next: string
     },
     set(next) {
       value = next
-      for (const listener of [...listeners]) listener()
+      emit()
     },
   }
 }
 
-interface CatalogCalls {
-  load: number
-  launch: Array<{ id: string; path: string }>
-  iconUrl: string[]
-  factories: string[]
+interface MachineCalls {
+  refreshes: number
+  launches: Array<{ id: string; path: string }>
+  unsubscribed: number
 }
 
-function fakeCatalog(entries: readonly OpenInApp[]): { catalog: OfficialCatalog; calls: CatalogCalls } {
-  const calls: CatalogCalls = { load: 0, launch: [], iconUrl: [], factories: [] }
+/** The injected page service double (the shell's real one is in machine-catalog.ts). */
+function fakeMachine(
+  entries: readonly OpenInApp[] | null,
+  icons: Readonly<Record<string, string | null>> = {},
+): { machine: MachineCatalog; calls: MachineCalls; setEntries(next: readonly OpenInApp[] | null): void } {
+  const calls: MachineCalls = { refreshes: 0, launches: [], unsubscribed: 0 }
+  let current = entries
+  const listeners = new Set<() => void>()
   return {
     calls,
-    catalog: {
-      async load() {
-        calls.load += 1
-        return [...entries]
+    machine: {
+      entries: () => current,
+      iconUrl: appId => (appId in icons ? icons[appId]! : null),
+      refresh: async () => { calls.refreshes += 1 },
+      subscribe: (listener) => {
+        listeners.add(listener)
+        return () => {
+          calls.unsubscribed += 1
+          listeners.delete(listener)
+        }
       },
-      iconUrl(appId) {
-        calls.iconUrl.push(appId)
-        return `http://proxy/api/i/ssh-x/open-in-app/icon/${appId}`
-      },
-      async launch(appId, path) {
-        calls.launch.push({ id: appId, path })
-      },
+      launch: async (appId, path) => { calls.launches.push({ id: appId, path }) },
+    },
+    setEntries(next) {
+      current = next
+      for (const listener of [...listeners]) listener()
     },
   }
 }
@@ -99,44 +110,58 @@ async function settle(): Promise<void> {
   await new Promise(resolve => setTimeout(resolve, 0))
 }
 
-test('adapter / local: official catalog is created with the entry base path and merged with the main pool', async () => {
+test('adapter: the machine catalog is merged with the main pool for a local source', async () => {
   const main = mainPool([VSCODE])
-  const { catalog, calls } = fakeCatalog([FINDER, VSCODE])
+  const { machine, calls } = fakeMachine([FINDER, VSCODE], { finder: 'data:image/png;base64,FINDER' })
   const adapter = createOpenInSourceAdapter({
     source: parseOpenInSource('local', 'local')!,
     sourceFingerprint: 'local',
     translate: t,
-    basePath: '/api/i/local',
+    machineCatalog: machine,
     mainPool: main.pool,
     choice: choiceStore().store,
-    createCatalog: options => {
-      calls.factories.push(options.basePath)
-      return catalog
-    },
   })
   await settle()
-  assert.deepEqual(calls.factories, ['/api/i/local'])
-  assert.equal(calls.load, 1)
+  assert.equal(calls.refreshes, 1, 'the adapter probes the page catalog on boot')
   const model = adapter.getViewModel()
-  // The available main override owns vscode (IPC); finder stays official.
-  assert.deepEqual(model.entries.map(entry => `${entry.id}:${entry.channel}`), ['finder:official', 'vscode:main'])
-  assert.equal(adapter.iconUrl('finder'), 'http://proxy/api/i/ssh-x/open-in-app/icon/finder')
-  assert.deepEqual(calls.iconUrl, ['finder'])
+  // The available main override owns vscode (IPC); finder stays local.
+  assert.deepEqual(model.entries.map(entry => `${entry.id}:${entry.channel}`), ['finder:local', 'vscode:main'])
+  assert.equal(adapter.iconUrl('finder'), 'data:image/png;base64,FINDER')
   adapter.dispose()
 })
 
-test('adapter / local: official launches POST to the instance route, main launches ride the IPC proof', async () => {
+test('adapter / remote ssh: the machine catalog still supplies the mark for the main entry', async () => {
+  // The machine fact is what a remote source needs: its own instance cannot
+  // serve a catalog, and the only app it may launch is the machine's VS Code.
+  const main = mainPool([FINDER, VSCODE])
+  const { machine } = fakeMachine([FINDER, VSCODE], { vscode: 'data:image/png;base64,VSCODE' })
+  const adapter = createOpenInSourceAdapter({
+    source: parseOpenInSource('dsh-edge-west', 'ssh')!,
+    sourceFingerprint: 'a'.repeat(64),
+    translate: t,
+    machineCatalog: machine,
+    mainPool: main.pool,
+    choice: choiceStore().store,
+  })
+  await settle()
+  assert.deepEqual(adapter.getViewModel().entries.map(entry => `${entry.id}:${entry.channel}`), ['vscode:main'],
+    'the machine pool is filtered by the source, never merged into it')
+  assert.equal(adapter.iconUrl('vscode'), 'data:image/png;base64,VSCODE',
+    'the remote entry draws the machine-resolved icon, not a bundled snapshot')
+  adapter.dispose()
+})
+
+test('adapter: local launches call the host domain, main launches ride the IPC proof', async () => {
   const main = mainPool([VSCODE])
-  const { catalog, calls } = fakeCatalog([FINDER])
+  const { machine, calls } = fakeMachine([FINDER])
   const opened: Array<{ args: string[] }> = []
   const adapter = createOpenInSourceAdapter({
     source: parseOpenInSource('local', 'local')!,
     sourceFingerprint: 'local',
     translate: t,
-    basePath: '/api/i/local',
+    machineCatalog: machine,
     mainPool: main.pool,
     choice: choiceStore().store,
-    createCatalog: () => catalog,
     bridge: () => bridge(async (...args: string[]) => {
       opened.push({ args })
       return { ok: true }
@@ -145,23 +170,39 @@ test('adapter / local: official launches POST to the instance route, main launch
   await settle()
   const [finder, vscode] = adapter.getViewModel().entries
   assert.deepEqual(await adapter.launch(finder!, '/home/user/ws'), { ok: true })
-  assert.deepEqual(calls.launch, [{ id: 'finder', path: '/home/user/ws' }])
+  assert.deepEqual(calls.launches, [{ id: 'finder', path: '/home/user/ws' }])
   assert.deepEqual(await adapter.launch(vscode!, '/home/user/ws'), { ok: true })
   assert.deepEqual(opened, [{ args: ['vscode', 'local', '/home/user/ws', 'local'] }])
   adapter.dispose()
 })
 
-test('adapter / local: a missing or malformed bridge is a loud structured failure', async () => {
+test('adapter: a page without a machine reader keeps the local pool empty', async () => {
+  const main = mainPool([])
+  const adapter = createOpenInSourceAdapter({
+    source: parseOpenInSource('local', 'local')!,
+    sourceFingerprint: 'local',
+    translate: t,
+    mainPool: main.pool,
+    choice: choiceStore().store,
+  })
+  await settle()
+  assert.equal(adapter.getViewModel().visible, false)
+  assert.equal(adapter.iconUrl('finder'), null)
+  const entry = { id: 'finder', channel: 'local' as const, displayKind: 'file-manager', remoteCapable: false, order: 0 }
+  assert.deepEqual(await adapter.launch(entry, '/ws'), { ok: false, error: 'catalogUnavailable' })
+  adapter.dispose()
+})
+
+test('adapter: a missing or malformed bridge is a loud structured failure', async () => {
   const main = mainPool([VSCODE])
-  const { catalog } = fakeCatalog([])
+  const { machine } = fakeMachine([])
   const base = {
     source: parseOpenInSource('local', 'local')!,
     sourceFingerprint: 'local',
     translate: t,
-    basePath: '/api/i/local',
+    machineCatalog: machine,
     mainPool: main.pool,
     choice: choiceStore().store,
-    createCatalog: () => catalog,
   }
   const missing = createOpenInSourceAdapter({ ...base, bridge: () => undefined })
   await settle()
@@ -174,90 +215,71 @@ test('adapter / local: a missing or malformed bridge is a loud structured failur
   malformed.dispose()
 })
 
-test('adapter / remote ssh: no official catalog is created; only the main remote-capable entry remains', async () => {
-  const main = mainPool([FINDER, VSCODE])
-  let factories = 0
-  const adapter = createOpenInSourceAdapter({
-    source: parseOpenInSource('dsh-edge-west', 'ssh')!,
-    sourceFingerprint: 'a'.repeat(64),
-    translate: t,
-    basePath: '/api/i/edge-west',
-    mainPool: main.pool,
-    choice: choiceStore().store,
-    createCatalog: () => {
-      factories += 1
-      return fakeCatalog([]).catalog
-    },
-  })
-  await settle()
-  assert.equal(factories, 0, 'the official channel exists for LOCAL sources only')
-  assert.deepEqual(adapter.getViewModel().entries.map(entry => `${entry.id}:${entry.channel}`), ['vscode:main'])
-  assert.equal(adapter.iconUrl('vscode'), null)
-  adapter.dispose()
-})
-
 test('adapter / http transport: nothing renders', async () => {
   const main = mainPool([VSCODE])
+  const { machine } = fakeMachine([FINDER])
   const adapter = createOpenInSourceAdapter({
     source: parseOpenInSource('dsh-direct', 'http')!,
     sourceFingerprint: 'b'.repeat(64),
     translate: t,
-    basePath: '/api/i/direct',
+    machineCatalog: machine,
     mainPool: main.pool,
     choice: choiceStore().store,
-    createCatalog: () => fakeCatalog([FINDER]).catalog,
   })
   await settle()
   assert.equal(adapter.getViewModel().visible, false)
   adapter.dispose()
 })
 
-test('adapter / an unavailable main override falls back to the official entry', async () => {
+test('adapter: an unavailable main override falls back to the machine entry', async () => {
   const main = mainPool([GHOST_VSCODE])
-  const { catalog } = fakeCatalog([VSCODE])
+  const { machine } = fakeMachine([VSCODE])
   const adapter = createOpenInSourceAdapter({
     source: parseOpenInSource('local', 'local')!,
     sourceFingerprint: 'local',
     translate: t,
-    basePath: '/api/i/local',
+    machineCatalog: machine,
     mainPool: main.pool,
     choice: choiceStore().store,
-    createCatalog: () => catalog,
   })
   await settle()
-  assert.deepEqual(adapter.getViewModel().entries.map(entry => `${entry.id}:${entry.channel}`), ['vscode:official'])
+  assert.deepEqual(adapter.getViewModel().entries.map(entry => `${entry.id}:${entry.channel}`), ['vscode:local'])
   adapter.dispose()
 })
 
-test('adapter / refresh re-probes both pools; subscribe fans out pool and choice changes; dispose stops it', async () => {
+test('adapter / refresh re-probes both pools; subscribe fans out pool, machine and choice changes; dispose stops it', async () => {
   const main = mainPool([VSCODE])
-  const { catalog, calls } = fakeCatalog([FINDER])
+  const { machine, calls, setEntries } = fakeMachine([FINDER])
   const choice = choiceStore()
   const adapter = createOpenInSourceAdapter({
     source: parseOpenInSource('local', 'local')!,
     sourceFingerprint: 'local',
     translate: t,
-    basePath: '/api/i/local',
+    machineCatalog: machine,
     mainPool: main.pool,
     choice: choice.store,
-    createCatalog: () => catalog,
   })
   await settle()
   let notified = 0
   const unsubscribe = adapter.subscribe(() => { notified += 1 })
   await adapter.refresh()
-  assert.equal(calls.load, 2, 'refresh re-reads the official catalog')
+  assert.equal(calls.refreshes, 2, 'refresh re-probes the machine catalog (boot + explicit)')
   assert.equal(main.refreshes(), 2, 'refresh re-probes the main pool (initial + explicit)')
   main.set([VSCODE, FINDER])
   assert.ok(notified >= 1)
+  const afterMain = notified
+  setEntries([FINDER, VSCODE])
+  assert.ok(notified > afterMain, 'the machine catalog notifies subscribers')
   const before = notified
   adapter.choose('finder')
   assert.equal(adapter.getChoice(), 'finder')
   assert.ok(notified > before, 'the persisted choice notifies subscribers')
   unsubscribe()
   adapter.dispose()
+  assert.equal(calls.unsubscribed, 1, 'dispose releases the machine subscription')
   const after = notified
   main.set(null)
+  setEntries(null)
   choice.set('vscode')
   assert.equal(notified, after, 'dispose releases every subscription')
 })

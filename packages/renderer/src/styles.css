@@ -19,19 +19,35 @@
      兜底必须与「无属性」的浅色调色板一致——曾写死 dark 时，任一视图在投影
      缺席的窗口里就是"浅色界面 + 深色原生控件"（checkbox 深浅错位）。活动
      实例投影落地后由 `html` 内联 color-scheme 覆盖本值。 */
+  /* chamber 外壳 chrome 自有色板（深色，独立于 dsh 的 --dsw-* token 表；本页
+     是 N-ctx 连接管理壳，不随 dsh 主题切换）。只保留实际被消费的条目——
+     2026-09 死代码清扫删除了从未被 var() 引用的 --panel / --green / --yellow
+     / --gray；新增颜色前先确认消费点，verify:styles 的 S6 会拦下无人使用的声明。
+     2026-09-11 upstream-alignment（T15）：--panel-2 / --accent-dim 随自造
+     `.btn` 一并删除——失败屏按钮改用官方 Button 原子（token 化），没有别的
+     消费点。
+     2026-09 阶段 2 裁决（替代原 B-6 计划）：`index.html` 的首屏骨架**继续用这份
+     深色外壳色板**，不跟随 `prefers-color-scheme`。原因：dsh 的主题是**按实例**
+     投影的（活动实例的 ui-layout presenter 在模块图加载后才写
+     `body[data-ds-dark-theme]`），骨架期不可知；用 OS 主题猜会在"浅色 OS + 深色
+     app"时制造反方向的闪色，而外壳 chrome 本来就是恒深色（见上）。骨架内联样式
+     与本文件重复这几个值是有意的：它必须在任何样式表/token 之前绘制。 */
   color-scheme: light;
   --bg: #0f1115;
-  --panel: #161a22;
-  --panel-2: #1b2029;
   --border: #262c38;
   --text: #e6e9ef;
   --muted: #8b94a7;
   --accent: #4f8cff;
-  --accent-dim: #2b4a80;
-  --green: #3fb950;
-  --yellow: #d29922;
   --red: #f85149;
-  --gray: #6e7681;
+  /* 代码字体的**本仓兜底**：上游主题表声明 `--ds-font-family-code`，但框架自有
+     规则（下面的 .boot-gap-facts / .fatal-entry）在上游表缺席的路径里也必须能渲染，
+     所以回退值单点声明在这里，而不是两条规则各背一串九项字体链（2026-12 复查：
+     那个 token 名在本仓零声明，S1 的正则只扫 --dsw-/--dsh-，于是没人发现）。
+     刻意不直接声明 `--ds-font-family-code`：那是上游的名字，覆盖它会波及整个
+     dsh 界面的代码字体；这里只提供 `var(--ds-font-family-code, var(--chamber-…))`
+     的第二顺位。 */
+  --chamber-font-family-code: 'SF Mono', 'JetBrains Mono', 'Fira Code', Consolas,
+    'Liberation Mono', Menlo, Courier, monospace;
 }
 
 * {
@@ -48,13 +64,24 @@ body,
 body {
   background: var(--bg);
   color: var(--text);
-  font-family:
+  /* 2026-09 (P2-B, B-7): the dsh font stack wins once the theme module has
+     injected its tokens (this page paints before/while the shell chrome loads),
+     so the literal stack is the var() FALLBACK — written inside the var(),
+     exactly like the shell's other token reads (`var(--dsw-alias-bg-base,
+     var(--bg))`) and like `packages/dsh-client-web/src/base.css`. A trailing
+     `var(--dsw-font-family), system-ui, …` would instead be invalid-at-computed-
+     value-time until the token exists (var() is not a list participant: the
+     whole declaration drops), which flips the first paint to the UA serif.
+     The shell PALETTE stays chamber-owned and theme-independent by design. */
+  font-family: var(
+    --dsw-font-family,
     system-ui,
     -apple-system,
     'PingFang SC',
     'Microsoft YaHei',
     'Noto Sans CJK SC',
-    sans-serif;
+    sans-serif
+  );
   font-size: 14px;
   line-height: 1.5;
 }
@@ -186,43 +213,25 @@ body {
   }
 }
 
-/* ---------- 按钮 ---------- */
-
-.btn {
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  color: var(--text);
-  border-radius: 6px;
-  padding: 6px 12px;
-  font-size: 13px;
-  cursor: pointer;
-  transition: background 0.15s, border-color 0.15s;
-}
-
-.btn:hover:not(:disabled) {
-  background: #222834;
-  border-color: #333b4a;
-}
-
-.btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.btn.primary {
-  background: var(--accent-dim);
-  border-color: var(--accent);
-  color: #fff;
-}
-
-.btn.primary:hover:not(:disabled) {
-  background: var(--accent);
-}
+/* ---------- 按钮 ----------
+   2026-09-11 upstream-alignment（T15）：chamber 自造的 `.btn` 色板与规则全部
+   删除——框架级失败屏的重试/切换按钮改用官方 Button 原子
+  （ui-primitives/src/Button.tsx，token 化的 --dsw-alias-button-* 家族）。随
+   之删除的 --panel-2 / --accent-dim 只被 .btn 消费（S6 无死声明）。 */
 
 /* ---------- 通用 ---------- */
 
+/* 2026-09-11 review-fix（finding 2）：`.muted` 是失败/控制面覆盖层里唯一的
+   「次级标签」色，唯一消费点是失败屏的服务器切换行（App.tsx 的
+   `<span className="muted small">`）。它曾直接读 chamber 自有暗色板
+   （--muted:#8b94a7），而覆盖层的底色早已改为文档主题 token
+   （.fatal/.fatal-overlay 的 --dsw-alias-bg-base）——默认（未被任何已 boot
+   的 shell 投影 data-ds-dark-theme 时，含首启/无壳场景）该 token 是**白底**，
+   于是这行落在白底上只有约 3.0:1（旧暗底上是 6.6:1）。改用设计系统的次级标签
+   别名，与 .fatal-entry 同一写法；token 表未落地时仍回退 chamber 暗色，
+   与失败屏其余规则一致。 */
 .muted {
-  color: var(--muted);
+  color: var(--dsw-alias-label-secondary, var(--muted));
 }
 
 .small {
@@ -239,11 +248,95 @@ body {
   justify-content: center;
   gap: 10px;
   padding: 16px;
+  /* 2026-09-11 upstream-alignment（T15）：失败面改用设计系统——官方 Button
+     原子 + --dsw-alias-* 别名（upstream 自己的框架无关启动/失败页也是
+     `background: var(--dsw-alias-bg-base, …)`）。因此这一层必须跟随文档主题
+     取底色，否则浅色主题下 token 化的按钮标签会落在 chamber 暗色底上
+     （旧自造 .btn 用自有色板，正是为了在暗底上可读）。token 表未落地时回退
+     chamber 暗色，与 .instance-view / .instance-loading 同一写法。
+     2026-09-11 review-fix（finding 2）：这条规则的后果要一起读——默认（无任何
+     已 boot 的 shell 投影 data-ds-dark-theme：首启、控制面不可达、boot 失败）
+     该 token 是白底（design-platform.css:157，深色覆盖只在
+     body[data-ds-dark-theme] 下，design-platform.css:250）。因此失败/控制面
+     覆盖层里**不允许**残留 chamber 自有暗色板的颜色：本文件的 .muted 已改
+     token（见上），其余颜色全部走 --dsw-alias-*；.fatal-title/.fatal-message/
+     .fatal-entries-title/.fatal-entry 与 Button 原子本就走 token，安全。 */
+  background: var(--dsw-alias-bg-base, var(--bg));
 }
 
 .fatal-title {
   font-size: 18px;
   font-weight: 600;
+  color: var(--dsw-alias-label-primary, var(--text));
+}
+
+/* ---------- 降级提示（2026-12, 05 §4 「降级呈现」） ----------
+   boot 成功但已知缺口（会话正文这类整面缺席）时的现场说明。与失败覆盖层的
+   分工：失败覆盖层是 error 态、独占屏幕；这里是**非阻断**的顶部横幅——层
+   pointer-events:none、只有卡片自己接收命中测试，侧栏/会话头/composer/切换
+   来源全部照常可用。z-index 900 明确低于 .fatal-overlay 的 1000：失败态出现
+   时压住本提示——boot 失败态与它结构互斥（App 侧还要求 error === null），
+   **控制面不可达**那张覆盖层与壳状态无关，靠 App 侧的显式门（!controlUnreachable）
+   拦住，不是靠 z-index。
+
+   配色只用 token：边框走**状态色**（S3 对状态色边框要求 1px 恰好，且 S5 的
+   「中性边框 + 阴影」配对规则不适用于状态色），因此这里刻意不加 elevation
+   阴影——避免 S5 与"边框/阴影二选一"的取舍。 */
+.boot-gap-layer {
+  position: absolute;
+  top: 12px;
+  left: 0;
+  right: 0;
+  z-index: 900;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.boot-gap {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: flex-start;
+  max-width: min(600px, calc(100% - 24px));
+  padding: 10px 12px;
+  /* 状态色边框 = 1px（S3 对状态色的要求）；回退走本文件既有的 --muted，
+     不写颜色字面量（S4 禁止 alias 回退里出现硬编码颜色）。 */
+  border: 1px solid var(--dsw-alias-state-warn-primary, var(--muted));
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-base, var(--bg));
+}
+
+.boot-gap-title {
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary, var(--text));
+}
+
+.boot-gap-body,
+.boot-gap-action {
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary, var(--muted));
+  overflow-wrap: anywhere;
+}
+
+.boot-gap-facts {
+  font-family: var(--ds-font-family-code, var(--chamber-font-family-code));
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary, var(--muted));
+  overflow-wrap: anywhere;
+}
+
+/* 产出方的诊断原文（框架之下的文本，按跨边界诊断文案规则只作诊断行）。 */
+.boot-gap-detail {
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary, var(--muted));
+  overflow-wrap: anywhere;
 }
 
 /* 覆盖式致命屏：视图保持挂载（会话保活 + 无僵尸 ctx），控制面不可达时
@@ -252,14 +345,52 @@ body {
   position: absolute;
   inset: 0;
   z-index: 1000;
-  background: var(--bg);
+  background: var(--dsw-alias-bg-base, var(--bg));
 }
 
 .fatal-message {
-  color: var(--red);
+  color: var(--dsw-alias-state-error-primary, var(--red));
   font-size: 13px;
   max-width: 640px;
   text-align: center;
+  overflow-wrap: anywhere;
+}
+
+/* 失败插件清单（T15 2026-09-11 upstream-alignment）：upstream 的失败报告逐项
+   列出未激活的插件 id（boot-page.ts `Failed to load plugins` + 每 id 一行；
+   boot-page.module.css 里标题用正文字体、条目用等宽字体 + 次级标签色）。
+   chamber 覆盖层由 shell 的同一份 loader sweep 取到同一事实
+   （ShellState.failedEntries），因此这里复刻那份呈现：块整体居中（跟随覆盖层
+   排版），条目左对齐以免长包名反复换行难读。 */
+.fatal-entries {
+  display: flex;
+  flex-direction: column;
+  align-self: center;
+  gap: 2px;
+  margin-top: 6px;
+  max-width: 640px;
+  /* 2026-09-11 review-fix（finding 4c）：清单必须自己滚动。.fatal 是居中的
+     flex column，.app 是 overflow:hidden，覆盖层本身也没有 overflow——清单
+     一长（上游 sweep 可能给出多个未激活 id）就整块溢出视口，两端被居中裁掉：
+     标题与重试按钮一起不可见且没有滚动条。给清单一个上界 + 自身滚动，列表变长
+     时只滚动列表，重试/切换逃生通道始终留在屏幕上。 */
+  max-height: min(40vh, 320px);
+  overflow: auto;
+  text-align: left;
+}
+
+.fatal-entries-title {
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-primary, var(--text));
+}
+
+.fatal-entry {
+  font-family: var(--ds-font-family-code, var(--chamber-font-family-code));
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary, var(--muted));
   overflow-wrap: anywhere;
 }
 
@@ -275,23 +406,11 @@ body {
   margin-top: 4px;
 }
 
-.pane-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: 100%;
-  min-height: 200px;
-  color: var(--muted);
-  text-align: center;
-}
-
-.pane-empty-title {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--text);
-}
+/* 2026-09-11 review-fix（finding 2 附带 / 死代码清扫）：`.pane-empty` 与
+   `.pane-empty-title` 在此删除——全仓 grep 已无消费者（该规则在 d4d9ed1 时
+   就已经没有消费者，早于 T15 重写失败屏），并顺手移除了失败/空态面上最后一处
+   chamber 自有暗色板颜色（--muted / --text 在 token 底上同样有 finding 2 的
+   对比度隐患）。verify:styles 的 S6 会拦回无人使用的声明。 */
 
 /* ---------- 会话行渲染挂起（2026-08 perf pass，已回退） ----------
    曾在 [data-chat-flow-key]（vendor ChatView 的 .flowItem 行）上使用

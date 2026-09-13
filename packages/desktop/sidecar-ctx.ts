@@ -301,12 +301,14 @@ export interface HeadlessCtxInputs {
    *  currentVersion / 通道判定输入。 */
   chamberVersion?: string
   /** chamber host 包源目录（sidecar-entry --host-graph-dir/--host-git-dir/
-   *  --host-archive-dir；打包 Resources 布局由 Swift 侧传参——null = 用缺省
-   *  解析（见 hostPackageSourceDir 注释）。 */
+   *  --host-archive-dir/--host-open-in-dir；打包 Resources 布局由 Swift 侧
+   *  传参——null = 用缺省解析（见 hostPackageSourceDir 注释）。openIn 只喂
+   *  本地控制面播种（localOnly 行），不进下面的远端 seed 数组。 */
   hostPackageDirs: {
     graph: string | null
     git: string | null
     archive: string | null
+    openIn: string | null
   }
 }
 
@@ -721,6 +723,10 @@ export async function buildHeadlessCtx(
   const archiveCleanupHostSourceDir = hostPackageSourceDir('dsh-chamber-seed-archive-cleanup', hostDirs.archive)
   // Host 包种子数组（main 1636-1655 同参：insertId/packageName/sourceDir/label
   // 常量同源——自动 seed 路径（ready 边缘/reseed）与手动 seed 注册体共用）。
+  // 远端（SSH）seed 表：注册表里标 localOnly 的 open-in 行**故意缺席**——它
+  // 是本地实例形态专属域，绝不该被上传到别人的机器（main.ts 的
+  // chamberHostSourceDirs 同款注记；本地播种走 --host-open-in-dir → 控制面
+  // hostOpenInPackageSourceDir）。
   const chamberHostPackageSeeds: ChamberHostPackageSeed[] = [
     {
       insertId: CLIENT_GRAPH_INSERT_ID,

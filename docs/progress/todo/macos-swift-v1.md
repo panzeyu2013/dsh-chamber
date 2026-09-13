@@ -65,7 +65,7 @@ design 25。
   gen-boot-manifest 写 dist/web/manifest.json）——无人"拷进"；electron-dev.mjs:11/53
   探测 `dist/index.html` 是**陈旧路径**（实产 dist/web/index.html）→ dev 每次全量重建
   （小 bug，runbook 已修正）；build:preload→dist/preload.cjs；build:control-plane
-  →dist/control-plane/（tsconfig.control-plane.build.json）；host 包三个 →
+  →dist/control-plane/（tsconfig.control-plane.build.json）；host 包四个（含 open-in，design 20 §6）→
   dist/host-{graph,git-worktree,archive-cleanup}-package；根 typecheck 覆盖
   packages/desktop/*.ts 平铺新文件；desktop test 是 package.json 内联链 = 文件清单
   单源（新测试必须入链，ci.yml 免改）。

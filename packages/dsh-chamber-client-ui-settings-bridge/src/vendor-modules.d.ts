@@ -5,6 +5,14 @@
  * with the exact surface this package consumes; the standalone
  * `typecheck:settings-bridge` script keeps this package's own code checked.
  * Keep in sync with what the src/client modules actually import.
+ *
+ * The renderer's `src/client/bindings.tsx` (2026-09-11 upstream-alignment A3:
+ * the bridge uses the OFFICIAL `observableHook` instead of re-implementing it)
+ * is the one exception: a DEEP `./src/*` specifier resolves to the real vendor
+ * source, and that module reads host/binding faces this file's loose ui-slots
+ * mirror deliberately does not carry — so it is declared in
+ * src/ambient/renderer-bindings.d.ts and mapped through this package's tsconfig
+ * `paths` instead of being mirrored here.
  */
 
 declare module '@deepseek-ai/cordis' {
@@ -43,9 +51,7 @@ declare module '@deepseek-ai/cordis' {
 /**
  * Service base class (cordis service.ts): registering through the constructor
  * makes every method call CALLER-bound — `this.ctx` inside a method is the
- * calling plugin's context, which is how the settings bridge attributes a
- * plugin's `remote.$on(...)` subscriptions to that plugin (2026-12 capability
- * report).
+ * calling plugin's context.
  */
 declare module '@deepseek-ai/cordis' {
   export class Service<T = never> {
@@ -61,7 +67,19 @@ declare module '@deepseek-ai/dsh-client-ui-renderer/client' {
   /** Slot registry service (moved here from the dissolved dsh-client-runtime). */
   export class SlotRegistry {
     constructor(ctx: Context)
+    /**
+     * The context a service method is called through: the cordis service proxy
+     * binds it to the CALLER's context at call time.
+     */
+    ctx: Context
     register(options: Record<string, unknown>, component: unknown): () => void
+    /**
+     * Install one root standard-source contribution (upstream
+     * `RootStandardSourceContribution`: `hooks` / `keyedHooks` / `props`).
+     * The source's own renderer installs it; the bridge only reads the seats
+     * that instance's settings shell received (`settings-source-face.ts`).
+     */
+    provideRoot(contribution: Record<string, unknown>): () => void
     inject(key: string, callback: () => void | Iterable<() => void>): () => void
     entries(key: string): readonly StoredEntry[]
     entriesOfSlot(key: string): readonly StoredEntry[]
@@ -69,10 +87,9 @@ declare module '@deepseek-ai/dsh-client-ui-renderer/client' {
     subscribe(key: string, fn: () => void): () => void
     spec(key: string): { kind: string; scope: string } | undefined
     /**
-     * Entry-render supervision seam (2026-12 settings extension): observe every
-     * render-time entry failure the boundaries contain, with the entry's
-     * registrant stamp — the honest diagnostic source for a plugin whose
-     * section renders but crashes.
+     * Entry-render supervision seam: observe every render-time entry failure
+     * the boundaries contain, with the entry's registrant stamp (the seam the
+     * bridge's own `BridgeEntryBoundary` mirrors).
      */
     onEntryError(fn: (key: string, entry: StoredEntry, error: unknown, info: { abdicated: boolean }) => void): () => void
     installLocale(face: LocaleFace): void
@@ -152,11 +169,6 @@ declare module '@deepseek-ai/dsh-client-ui-theme/client' {
   import type { Context } from '@deepseek-ai/cordis'
   export const inject: string[]
   export function apply(ctx: Context): void
-}
-
-declare module '@deepseek-ai/dsh-client-ui-renderer/src/client/bind' {
-  import type { HostObservable, SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
-  export function bindSnapshotSelector<T>(source: HostObservable<T>): SnapshotSelectorHook<T>
 }
 
 declare module '@deepseek-ai/dsh-client-ui-settings/client' {
@@ -289,10 +301,41 @@ declare module '@deepseek-ai/dsh-client-ui-primitives' {
     autoFocus?: boolean
     icon?: ReactNode
     className?: string
+    title?: string
     onClick?: () => void
     children?: ReactNode
   }
   export function Button(props: ButtonProps): ReactNode
+  /**
+   * Two-state toggle, 36×20 (2026-09-11 upstream-alignment T9): track/thumb/
+   * transition/focus are the official vocabulary the chamber's hand-rolled
+   * switch copied; `label` is required, so the control cannot ship unnamed.
+   */
+  export function Switch(props: {
+    checked: boolean
+    onChange: (next: boolean) => void
+    label: string
+    disabled?: boolean
+    title?: string
+    className?: string
+  }): ReactNode
+  /**
+   * Centered, body-portaled dialog over a blurred mask (2026-09-11
+   * upstream-alignment T2: the ONE confirmation surface the dsh runtime section
+   * uses). `closeLabel` is required — the atoms own no fallback copy.
+   */
+  export function Modal(props: {
+    open: boolean
+    /** Escape, mask click and the header close button. */
+    onClose: () => void
+    title: string
+    closeLabel: string
+    description?: string
+    children?: ReactNode
+    footer?: ReactNode
+    className?: string
+    contentClassName?: string
+  }): ReactNode
   export interface IconProps {
     size?: number
     className?: string

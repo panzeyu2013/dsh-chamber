@@ -49,3 +49,20 @@ export function sessionRowWindow(params: SessionRowWindowParams): SessionRowWind
   const renderCount = Math.min(total, Math.max(visibleFirst, neededForCurrent))
   return { renderCount, hiddenCount: total - renderCount }
 }
+
+/**
+ * 展开条自己的窗口（2026-09-11 upstream-alignment T11）。
+ *
+ * 展开条的隐藏计数必须与「是否已展开」无关：展开后 `sessionRowWindow` 返回
+ * hiddenCount 0，若展开条按它决定去留，点开一次就再无收起入口（一次性展开）。
+ * 上游同构——`collapsedSessionRows` 完全不看 expanded，展开条的 `collapsed.hiddenCount > 0`
+ * 门在展开态依然成立，于是同一个控件给出 `sessions.collapse`
+ * （vendor ui-workspace WorkspaceBrowser.tsx:46-57,598-609）。
+ * @param params - 同 {@link sessionRowWindow}，但不含 expanded（本函数的语义就是「未展开的窗口」）。
+ * @returns 未展开窗口的渲染行数与隐藏行数。
+ */
+export function sessionRowDisclosure(
+  params: Omit<SessionRowWindowParams, 'expanded'>,
+): SessionRowWindowResult {
+  return sessionRowWindow({ ...params, expanded: false })
+}

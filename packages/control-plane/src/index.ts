@@ -59,6 +59,7 @@ import {
   HOST_ARCHIVE_CLEANUP_INSERT,
   HOST_GIT_WORKTREE_INSERT,
   HOST_GRAPH_INSERT,
+  HOST_OPEN_IN_INSERT,
   type SeedEntry,
 } from './host-graph-seed.ts'
 import type { Logger } from './types.ts'
@@ -114,6 +115,14 @@ export const DEFAULT_HOST_GIT_WORKTREE_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'pac
 /** Default source for the chamber in-host archived-session cleanup domain
  *  package (design 24; packaged runtimes pass the bundled location). */
 export const DEFAULT_HOST_ARCHIVE_CLEANUP_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-chamber-seed-archive-cleanup')
+
+/**
+ * Default source for the chamber in-host open-in domain package (design 20 §6;
+ * the fork of upstream's open-in host half — packaged runtimes pass the
+ * bundled location). LOCAL shape only: the row is marked `localOnly` in the
+ * registry, so no remote target and no gateway ever receives it.
+ */
+export const DEFAULT_HOST_OPEN_IN_PACKAGE_SOURCE_DIR = join(REPO_ROOT, 'packages', 'dsh-chamber-seed-open-in')
 
 /**
  * Default dsh workspace: <repo root>/ref-dsh when present, otherwise the
@@ -205,13 +214,20 @@ export interface ControlPlaneOptions {
   /**
    * Chamber in-host archived-session cleanup domain package source (design
    * 24). Same built-artifact gate and profile seed lifecycle as the other
-   * two host packages; absent source (or no committed dist) = skipped.
+   * host packages; absent source (or no committed dist) = skipped.
    */
   hostArchiveCleanupPackageSourceDir?: string
   /**
+   * Chamber in-host open-in domain package source (design 20 §6). Same
+   * built-artifact gate and profile seed lifecycle as the other host packages;
+   * absent source (or no committed dist) = skipped. This row is `localOnly`:
+   * the local profile is the only shape that ever receives it.
+   */
+  hostOpenInPackageSourceDir?: string
+  /**
    * Seed registry (2026-12 interface): additional chamber seed entries beyond
-   * the three base host packages (client-graph / git-worktree /
-   * archive-cleanup) — the seam for browser-side chamber client plugins
+   * the four base host packages (client-graph / git-worktree /
+   * archive-cleanup / open-in) — the seam for browser-side chamber client plugins
    * in hosted frontends (e.g. the gateway mobile slot). Every entry rides the
    * same built-artifact gate, profile seed lifecycle and `--patch` overlay as
    * the host packages; kind 'client' entries carry no probe coupling. A null/
@@ -474,6 +490,8 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     ?? DEFAULT_HOST_GIT_WORKTREE_PACKAGE_SOURCE_DIR
   const hostArchiveCleanupPackageSourceDir = options.hostArchiveCleanupPackageSourceDir
     ?? DEFAULT_HOST_ARCHIVE_CLEANUP_PACKAGE_SOURCE_DIR
+  const hostOpenInPackageSourceDir = options.hostOpenInPackageSourceDir
+    ?? DEFAULT_HOST_OPEN_IN_PACKAGE_SOURCE_DIR
   // Seed registry (2026-12): the base chamber host packages are DERIVED from
   // the authoritative registry (CHAMBER_HOST_PACKAGES — insert row, package
   // name and probe domain all come from that one list; a hand-written
@@ -482,8 +500,8 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   // looked up by insert id — the public option names are unchanged. Any extra
   // entry (client-plugin slots like the gateway mobile stub) is appended; an
   // extra entry that re-declares a base package's id WINS over the base entry
-  // (last-writer-wins by loader id): the gateway passes the three host
-  // packages as desktop-synced extra entries, so once its seed cache is
+  // (last-writer-wins by loader id): the gateway passes the host
+  // packages it has synced as desktop-synced extra entries, so once its seed cache is
   // populated the synced copies replace the packaged defaults — the base
   // rows exist only to preserve the legacy desktop shape (no
   // extraSeedEntries → no shadowing).
@@ -491,6 +509,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     [HOST_GRAPH_INSERT.id, hostGraphPackageSourceDir],
     [HOST_GIT_WORKTREE_INSERT.id, hostGitWorktreePackageSourceDir],
     [HOST_ARCHIVE_CLEANUP_INSERT.id, hostArchiveCleanupPackageSourceDir],
+    [HOST_OPEN_IN_INSERT.id, hostOpenInPackageSourceDir],
   ])
   /** 最近一次 seed 实际落地的探针域（seed 时刷新；见 PlaneHandle 注释）。 */
   let seededProbeDomains: readonly string[] = []
@@ -1214,10 +1233,12 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
 
 export { resolveNodeExecutable, sanitizeManagedDshEnv, spawnDsh } from './spawn-dsh.ts'
 // Unary RPC remains the ordinary control-plane client. Design 17's separately
-// invoked gateway also composes the bounded server-response and event-stream
-// helpers; exporting those helpers does not add a desktop session consumer.
-export { call, probeHostIdentity, respond, openEventStream, RpcBusinessError, RpcTransportError } from './dsh-client.ts'
-export type { ProbeHostIdentityOptions, ServerRequest } from './dsh-client.ts'
+// invoked gateway composes the same unary client (runtime-manager.ts) — the
+// retired client-response/event-stream helpers (respond/openEventStream) were
+// deleted with the control-plane session-runtime domain, not re-exported
+// (2026-09-11 review).
+export { call, probeHostIdentity, RpcBusinessError, RpcTransportError } from './dsh-client.ts'
+export type { ProbeHostIdentityOptions } from './dsh-client.ts'
 // The dsh RPC wire envelope single source (A2 cross-package protocol
 // single-sourcing): envelope construction, server-response parse/validation
 // and the raw node:http unary carrier shared with the desktop probes
@@ -1266,9 +1287,18 @@ export {
   HOST_ARCHIVE_CLEANUP_INSERT,
   HOST_GIT_WORKTREE_INSERT,
   HOST_GRAPH_INSERT,
+  // The seeded file set + the local `--patch` overlay filename: forwarded so
+  // EVERY naming of either fact (desktop remote seed / install probes /
+  // gateway upload, overlay resolution) derives from host-graph-seed.ts
+  // instead of re-typing a literal (A2 cross-package protocol
+  // single-sourcing). Cross-side equality is pinned by
+  // packages/desktop/cross-package-contract.test.ts.
+  HOST_GRAPH_PATCH_FILENAME,
+  HOST_OPEN_IN_INSERT,
+  HOST_PACKAGE_SEED_FILES,
   HOST_SEED_PACKAGE_PREFIX,
 } from './host-graph-seed.ts'
-export type { ChamberHostPackageDescriptor, HostPackageInsert } from './host-graph-seed.ts'
+export type { ChamberHostPackageDescriptor, HostPackageInsert, HostPackageSeedFile } from './host-graph-seed.ts'
 export type { ApiCorsDecision, ApiCorsEvaluator, ApiRequest, ApiResponse, ApiSurface } from './api.ts'
 // Shared forwarding core (design 17 §8, 方案 A): extracted from
 // instance-proxy.ts so `gateway-proxy.ts` reuses the same Host/Origin

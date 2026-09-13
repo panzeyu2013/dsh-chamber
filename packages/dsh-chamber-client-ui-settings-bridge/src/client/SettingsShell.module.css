@@ -6,19 +6,23 @@
    connections section view. Every color resolves through a `--dsw-alias-*`
    token. Deviation from the official shell geometry: the nav rail scrolls
    (overflow-y) with an 8px bottom pad so the last entry clears the panel's
-   24px corner radius. */
+   32px corner radius. */
 
 /* ---- sidebar trigger (official chrome rhythm) ---- */
 
+/* 2026-09-11 upstream-alignment T7: the trigger row is upstream's 42px row
+   (SettingsRoot.module.css `.triggerRow` + `.trigger`). The chamber renders the
+   button alone, so the wrapper's row metrics (100%+4px wide, 4px/-2px margin)
+   are folded into it; `.trigger.rail` below keeps upstream's railRow box. */
 .trigger {
   flex: none;
   display: flex;
   align-items: center;
   gap: 8px;
-  width: calc(100% + 8px);
-  height: 34px;
-  margin: 4px -4px 4px;
-  padding: 6px 2px 6px 10px;
+  width: calc(100% + 4px);
+  height: 42px;
+  margin: 4px -2px;
+  padding: 0 10px 0 8px;
   box-sizing: border-box;
   border: none;
   border-radius: 12px;
@@ -82,10 +86,16 @@
   width: 800px;
   height: min(800px, calc(100vh - 48px));
   max-width: calc(100vw - 48px);
-  border-radius: 24px;
+  /* 2026-09-11 upstream-alignment「small invented bits」: upstream's actual rule
+     is r32 (SettingsRoot.module.css `.panel`) — the r24 the chamber copied came
+     from that rule's stale comment (which claims the Modal treatment). The
+     panel now matches the rule, not the comment. The hairline stroke still
+     rides the shadow at the default l4 stroke color, exactly as upstream leaves
+     it — no border of its own to double-draw the outline. */
+  border-radius: 32px;
   overflow: hidden;
   background: var(--dsw-alias-bg-layer-2);
-  box-shadow: var(--dsw-shadow-lv3);
+  box-shadow: var(--dsw-elevation-prominent);
   /* Elevated surface: the scrollbar thumb takes the l2 elevation tokens. */
   --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
   --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
@@ -123,7 +133,7 @@
    connections entry. */
 .navDivider {
   flex: none;
-  border-top: 1px solid var(--dsw-alias-border-l2);
+  border-top: 0.5px solid var(--dsw-alias-border-l2);
 }
 
 .navCell {
@@ -178,7 +188,7 @@
   gap: 8px;
   width: 100%;
   padding: 6px 10px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 10px;
   background: var(--dsw-alias-bg-layer-3);
   font-size: 13px;
@@ -227,11 +237,20 @@
   /* Body-portal list: inline geometry is viewport-clamped by server-selector. */
   max-width: none;
   padding: 4px;
-  /* Official Menu float border (transparent hairline in light mode). */
-  border: 1px solid var(--dsw-alias-border-inverted);
-  border-radius: 12px;
+  /* Elevated surface, official Menu treatment (ui-primitives/Menu.module.css
+     `.list`): the hairline lives inside the elevation shadow as its 0.5px
+     first layer, so the card declares no border — pairing a neutral
+     `--dsw-alias-border-*` border with an lv/elevation shadow double-draws the
+     outline and shifts layout by the border width, which ui-theme's elevation
+     spec rejects. The stroke rebinds one step lighter than the default l4,
+     as every menu surface does. */
+  border: 0;
+  /* Official Menu `.list` radius (2026-09 batch 1, E4): 20px, closing the
+     "12px vs upstream 20px" deviation STATUS used to register. */
+  border-radius: 20px;
   background: var(--dsw-alias-bg-layer-3);
-  box-shadow: var(--dsw-shadow-lv3);
+  --dsw-elevation-stroke-color: var(--dsw-alias-border-l1);
+  box-shadow: var(--dsw-elevation-prominent);
   /* Elevated-surface scrollbar rebind (official convention). */
   --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
   --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
@@ -246,7 +265,7 @@
   height: 34px;
   margin-bottom: 4px;
   padding: 6px 9px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 8px;
   background: var(--dsw-alias-bg-layer-2);
   color: var(--dsw-alias-label-primary);
@@ -280,11 +299,19 @@
   min-width: 0;
   width: 100%;
   box-sizing: border-box;
+  /* 2026-09 menu-density decision (P2-A, A-4): the batch-1 E4 pass copied the
+     official dense item (34px / 14px-22px), which is taller and larger than the
+     chamber scale this dropdown lives in. `padding: 7px 10px` and the 13px
+     label are the v0.2.4 release values; the 18px line box is explicit here
+     (chamber's 13/18 idiom — v0.2.4 inherited 1.5, so its rows sat at ~34px and
+     these are 32px). The official chrome won by E4 stays: 10px per-row radius,
+     r20 list, bg-layer-3 + elevation. */
   padding: 7px 10px;
   border: none;
-  border-radius: 8px;
+  border-radius: 10px;
   background: transparent;
   font-size: 13px;
+  line-height: 18px;
   color: var(--dsw-alias-label-primary);
   cursor: pointer;
   text-align: left;
@@ -358,33 +385,28 @@
 .header {
   flex: none;
   display: flex;
-  align-items: center;
   justify-content: space-between;
   gap: 8px;
+  /* 2026-09 (P2-B, B-5): the official settings header is
+     `height:54px; padding:20px 14px 8px 10px; align-items:flex-start` (decoded
+     pinned module `dsh-client-ui-settings-general/SettingsRoot.module.css`),
+     i.e. a 54px box around a 26px content row. OUR content row is 28px (the
+     close control is 28x28), so the official padding would make this header
+     28 + 28 = 56px — a 2px growth the density rule forbids. We therefore take
+     the official ALIGNMENT (`flex-start`, title and close at the top edge) and
+     keep our own vertical padding: content 28px + 22px padding = 50px, still
+     held at the 54px `min-height` — i.e. the header height is unchanged. */
   min-height: 54px;
   padding: 12px 14px 10px;
+  align-items: flex-start;
   box-sizing: border-box;
 }
 
-/* Header context block: active section label + selected server (fills the
-   left side that used to sit empty for remote/unavailable states). */
-.headerText {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-}
-
-.headerTitle {
-  font-size: 14px;
-  line-height: 20px;
-  font-weight: 600;
-  color: var(--dsw-alias-label-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
+/* Header context (2026-09-11 upstream-alignment T7): upstream's header holds
+   only the `settings.action` seat + close, because each section renders its own
+   <h2> — so the chamber keeps exactly ONE page title too. What remains here is
+   the server sub-line (the N-source addition) that names the selected server
+   above server-owned content. */
 .headerSub {
   font-size: 11px;
   line-height: 16px;
@@ -438,26 +460,23 @@
 }
 
 .inlineAction {
+  /* Layout only (2026-09, P2-B B-5b): the control itself is the official
+     `Button` primitive now (`variant="outline"`, design 15 §D1), so this class
+     must not re-draw a second button chrome. */
   margin-top: 8px;
-  padding: 7px 12px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 8px;
-  background: var(--dsw-alias-bg-layer-3);
-  color: var(--dsw-alias-label-primary);
-  cursor: pointer;
-  font: inherit;
+  align-self: flex-start;
 }
 
-.inlineAction:hover,
-.inlineAction:focus-visible {
-  border-color: var(--dsw-alias-brand-primary);
-}
+/* (the former `.inlineAction:hover/:focus-visible` border repaint is gone with the
+   self-drawn button: the official `Button variant="outline"` already ships
+   `border: .5px solid var(--dsw-alias-border-l3)` + a hover background, and a
+   `border-color` override here would have repainted that official outline.) */
 
 /* Server-switch intermediate state: the content column switches to a
    dedicated loading view IMMEDIATELY (honest signal, no stale-content wait
-   on slow targets); the per-server child ctx cache makes repeat switches
-   instant (no intermediate at all). The wrapper fade (keyed per server)
-   replays on each server switch, smoothing the swap. */
+   on slow targets); a source whose shell is already mounted renders its own
+   published face at once (no intermediate at all). The wrapper fade (keyed
+   per server) replays on each server switch, smoothing the swap. */
 .contentFade {
   animation: contentFadeIn var(--ds-transition-duration) var(--ds-ease-in-out);
 }
@@ -507,9 +526,12 @@
    Settings-panel design language, OpenChamber-style control groups: section
    title + intro, group headings (the connections-section groupHead
    vocabulary), compact cards + flat rows with label + hint, capsule buttons;
-   active states take the OFFICIAL business blue (--dsw-alias-state-business-
+   active states take the dsh business blue (--dsw-alias-state-business-
    primary, deepseek-500/400) — slider thumb, switch ON track, checkbox
-   accent; every color resolves through a `--dsw-alias-*` token. */
+   accent — 2026-09 用户裁决（撤销 2026-09 阶段 2 的"统一中性色"收口：官方
+   `--dsw-alias-brand-primary` 在中性档，浅色主题下整页"开"态会发黑）；switch
+   ON track 由本文件的 `.panel [role='switch'][aria-checked='true']` 覆盖官方原语。
+   Every color resolves through a `--dsw-alias-*` token. */
 
 .generalSection {
   display: flex;
@@ -545,7 +567,7 @@
 .generalSection > .generalGroup + .updateSection,
 .generalSection > .updateSection + .generalGroup,
 .generalSection > .updateSection + .updateSection {
-  border-top: 1px solid var(--dsw-alias-border-l2);
+  border-top: 0.5px solid var(--dsw-alias-border-l2);
   padding-top: 12px;
 }
 
@@ -567,7 +589,7 @@
    12px 上内距；块间距由所在 group 的 10px gap 提供，线与上一块内容之间
    视觉居中。 */
 .generalGroupTitleBlock {
-  border-top: 1px solid var(--dsw-alias-border-l2);
+  border-top: 0.5px solid var(--dsw-alias-border-l2);
   padding-top: 12px;
 }
 
@@ -594,10 +616,13 @@
 /* ---- 通用 section 布局（紧凑卡片网格 + 全宽行）----
    行范式为「文字在左/上、控件在右/下」的紧凑卡片：短开关组用双列卡片
    网格（.generalGrid + .generalCard，auto-fit 窄面板自动降列），单选对用
-   滑块式分段控件（SegmentedControl，选中态为官方业务蓝），通知事件开关
-   用一行迷你卡片（.generalEventGrid）。卡片是官方设置面板的既有关卡词汇
-   （ModelsSection.rowCard：border-l2 + bg-layer-3 + r12）。控件形态仍为
-   原生 checkbox/radio（滑块/开关是纯装饰层）。 */
+   滑块式分段控件（SegmentedControl，选中态 = dsh 业务蓝，2026-09 用户裁决），通知事件开关
+   用一行迷你卡片（.generalEventGrid）。卡片沿用官方设置面板的卡片词汇，
+   但**不是**逐值复制：官方 `ModelsSection.rowCard` 实际是
+   `border-l4 + r16 + 无底色`（本注释 2026-09 batch 1 E1 纠错，此前写成
+   border-l2/bg-layer-3/r12 与官方不符）；chamber 保留自己的
+   `r12 + bg-layer-3` 底色（双列紧凑网格需要卡片有面），只把发丝线对齐到
+   官方 `border-l4`。控件形态仍为原生 checkbox/radio（滑块/开关是纯装饰层）。 */
 
 /* 双列紧凑卡片网格（短开关组：启动与关闭 / 运行）。min() 下限让极窄窗口
    单列时能收缩到列宽而非撑破（panel overflow:hidden 会裁切）。 */
@@ -622,7 +647,7 @@
   gap: 8px;
   min-width: 0;
   padding: 12px 14px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l4);
   border-radius: 12px;
   background: var(--dsw-alias-bg-layer-3);
 }
@@ -647,9 +672,15 @@
   margin: 0;
 }
 
-/* 卡片内的复选框（原生 checkbox + accent token）：accent 用官方业务蓝
-   （state-business-primary，deepseek-500/400），与页内滑块/开关的选中色
-   一致。 */
+/* 卡片内的复选框（原生 checkbox + accent token）：accent 取 dsh 业务蓝
+   `--dsw-alias-state-business-primary`（`--dsw-static-deepseek-500` / `-400`，
+   浅色 #4176e6、深色 #679efe）。
+   2026-09 用户裁决：撤销 2026-09 阶段 2 B-3 的「统一为官方中性 brand-primary」。
+   官方 token 表里 `--dsw-alias-brand-primary` 是**中性色**（浅色
+   `--dsw-static-neutral-bluish-1000` 近黑、深色 `--dsw-static-neutral-bluish-50`
+   近白），照它取值会让浅色主题下整页的"开/选中"态发黑，而不是 dsh 蓝。本页的
+   复选框/分段滑块/开关与侧栏选中态、Git 面板滑块同取业务蓝（design 15 §D1②
+   已按同一裁决改回）。 */
 .generalCardCheck {
   flex: none;
   width: 16px;
@@ -664,11 +695,12 @@
 }
 
 /* 分段单选（关闭窗口时 / 通知时机）为滑块式共享组件 SegmentedControl
-   （见 SegmentedControl.tsx / SegmentedControl.module.css）：轨道内蓝色
+   （见 SegmentedControl.tsx / SegmentedControl.module.css）：轨道内中性色
    滑块滑向选中项、选中文字反白。列宽按内容自适应。 */
 
 /* 通知主开关行（披露头，2026-12 边框修订）：无边框无底色——它只是子设置卡
-   的展开开关，不再是独立卡片。行布局与 .generalLine 相同（文字左、控件右；
+   的展开开关，不再是独立卡片。行布局与 .generalLinePlain 相同（文字左、控件右；
+   （2026-09 batch 1 N1 follow-up：原注释引用的 .generalLine 在本包并不存在。）
    flex-wrap 让极窄窗口下控件换行而非被 panel 裁切）。2026-12 复审：水平
    14px 内距与子设置卡（.generalNotifyCard padding 12px 14px）对齐，行高
    抬到 ~32px 与事件行同节奏；hover 填充给出「可点」暗示。 */
@@ -734,7 +766,7 @@
    内距与前一单元分割；降列布局不画竖线（首列/独行的竖线会悬空误导）。 */
 @container (min-width: 470px) {
   .generalEventRow + .generalEventRow {
-    border-left: 1px solid var(--dsw-alias-border-l2);
+    border-left: 0.5px solid var(--dsw-alias-border-l2);
     padding-left: 10px;
   }
 }
@@ -747,8 +779,9 @@
   gap: 10px;
 }
 
-/* 启用通知后展开的子设置容器（2026-12 边框修订）：通知组唯一的外边框卡片
-   （border-l2 + layer-3 + r12，与既有 .generalLine 卡同词汇）——主开关是
+/* 启用通知后展开的子设置容器（2026-12 边框修订；2026-09 batch 1 E1 follow-up
+   把描边并到 l4）：通知组唯一的外边框卡片（border-l4 + layer-3 + r12，与
+   .generalCard 同词汇）——主开关是
    无边框披露行，内部行（通知时机 / 事件开关 / 测试按钮）不再自带边框。
    挂载淡入保留。 */
 .generalNotifyCard {
@@ -756,73 +789,45 @@
   flex-direction: column;
   gap: 10px;
   padding: 12px 14px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  /* Same card hairline as .generalCard (2026-09 batch 1, E1 follow-up: this
+     card was missed on the first pass, leaving two card families on one page). */
+  border: 0.5px solid var(--dsw-alias-border-l4);
   border-radius: 12px;
   background: var(--dsw-alias-bg-layer-3);
   animation: contentFadeIn var(--ds-transition-duration) var(--ds-ease-in-out);
 }
 
-/* ---- 通知主开关（官方 switch 词汇，SubagentModelSelectionCard）----
-   36x20 轨道（关 = border-l3、开 = 官方业务蓝）+ 16px 圆形 thumb
-   （label-primary-foreground，translateX 16px，120ms）。底层仍是原生
-   checkbox（role=switch），整行 label 可点。 */
+/* ---- 通知主开关（2026-09-11 upstream-alignment T9）----
+   开关本身是官方 ui-primitives `Switch`（36x20 轨道 / 16px thumb / 120ms /
+   aria-checked 选中色由原语自绘），本文件不复制它的样式——原先的
+   .generalSwitchInput / .generalSwitch / .generalSwitchThumb 三件套（原生
+   checkbox + role=switch + 手写轨道）已删除。这里只剩布局盒子，不带任何
+   ARIA：披露关系（aria-expanded / aria-controls）由 DisclosureSwitch 写到
+   原语自己的 role=switch 按钮上（2026-09-11 review F3）。
+   唯一的例外是"开"色：原语的选中轨道仍是官方中性
+   `--dsw-alias-brand-primary`，由下方 `.panel [role='switch'][aria-checked='true']`
+   一条规则重绘为业务蓝（2026-09 用户裁决），几何与其余状态依旧是原语的。 */
 
 .generalSwitchBox {
-  position: relative;
   flex: none;
   display: inline-flex;
 }
 
-.generalSwitchInput {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  margin: 0;
-  opacity: 0;
-  cursor: pointer;
-}
-
-.generalSwitchInput:disabled {
-  cursor: default;
-}
-
-.generalSwitch {
-  box-sizing: border-box;
-  display: block;
-  width: 36px;
-  height: 20px;
-  padding: 2px;
-  border-radius: 10px;
-  background: var(--dsw-alias-border-l3);
-  transition: background 120ms ease;
-}
-
-.generalSwitchInput:checked + .generalSwitch {
+/* 官方 `Switch` 原语的"开"色覆盖（2026-09 用户裁决，理由见 .generalCardCheck）：
+   原语自己的规则是 `[aria-checked=true]{background:var(--dsw-alias-brand-primary)}`
+   ——官方 token 表里那是中性色（浅色近黑、深色近白），与同页复选框/分段滑块的
+   业务蓝冲突（2026-09 阶段 2 曾反其道行之：把 chamber 自绘控件改成中性来迁就它，
+   结果浅色主题下整页"开"态发黑）。
+   这里在**面板范围内**重绘开启轨道，特异性 `.panel`(0,1,0) + `[role]`(0,1,0) +
+   `[aria-checked]`(0,1,0) = 0,3,0，胜过原语的 0,2,0，不依赖打包顺序；原语的结构、
+   36x20 轨道、thumb 位移、过渡、禁用透明度与焦点环一概保留（thumb 仍是
+   `--dsw-alias-label-primary-foreground`，在蓝底上即浅色主题白点/深色主题近黑点）。
+   作用域取面板而不是 chamber 自己的 `.generalSwitchBox`：面板里由**来源自己 ctx**
+   渲染的官方分节若带开关，也必须同色，否则同一页又是两种"开"色。
+   已知边界：文档级弹层（如首启 `settings.onboarding`，portal 到 `#root` 之外）
+   不在本作用域内，其内若有开关仍走上游中性。 */
+.panel [role='switch'][aria-checked='true'] {
   background: var(--dsw-alias-state-business-primary);
-}
-
-.generalSwitchThumb {
-  display: block;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  corner-shape: round;
-  background: var(--dsw-alias-label-primary-foreground);
-  transition: transform 120ms ease;
-}
-
-.generalSwitchInput:checked + .generalSwitch .generalSwitchThumb {
-  transform: translateX(16px);
-}
-
-.generalSwitchInput:focus-visible + .generalSwitch {
-  outline: 2px solid var(--dsw-alias-brand-primary);
-  outline-offset: 2px;
-}
-
-.generalSwitchInput:disabled + .generalSwitch {
-  opacity: 0.5;
 }
 
 .generalDisabled {
@@ -866,6 +871,31 @@
   gap: 10px;
 }
 
+/* Action capsules (2026-09-11 upstream-alignment T9): the hand-rolled
+   `.updateButton` / `.updatePrimaryButton` rules are gone — every call site
+   renders the shared ui-primitives `Button` (`variant="outline|primary"
+   size="sm"`), whose `.sm`/`.outline`/`.primary` recipe is exactly this
+   geometry (28px capsule, 12px/18px, 0 10px, r14) at the official token
+   values. Layout-only helpers below stay. */
+
+/* Destructive-action confirmation (2026-09-11 upstream-alignment T2): the dsh
+   runtime section confirms through the official ui-primitives Modal, so this
+   file only sets the compact dialog width and the error tone of the shared
+   Button's `.outline` capsule — geometry, focus and hover stay the primitive's.
+   Same two declarations the connections section's confirm dialogs use. */
+.deleteDialog {
+  width: min(480px, 100%);
+}
+
+.deleteConfirm:not(:disabled) {
+  border-color: var(--dsw-alias-state-error-primary);
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.deleteConfirm:hover:not(:disabled) {
+  background: var(--dsw-alias-interactive-bg-hover-danger);
+}
+
 .updateRow {
   margin: 0;
   font-size: 13px;
@@ -891,60 +921,8 @@
   color: var(--dsw-alias-label-primary);
 }
 
-/* Secondary dense capsule (row-actions size). */
-.updateButton {
-  box-sizing: border-box;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 28px;
-  padding: 0 10px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 14px;
-  background: transparent;
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--dsw-alias-label-primary);
-}
-
-.updateButton:hover:not(:disabled) {
-  background: var(--dsw-alias-interactive-bg-hover);
-}
-
-.updateButton:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
-/* Primary dense capsule: the user-confirmed download action. */
-.updatePrimaryButton {
-  box-sizing: border-box;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 28px;
-  padding: 0 10px;
-  border: none;
-  border-radius: 14px;
-  background: var(--dsw-alias-button-primary-fill);
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--dsw-alias-label-primary-foreground);
-}
-
-.updatePrimaryButton:hover:not(:disabled) {
-  background: var(--dsw-alias-button-primary-hover);
-}
-
-.updatePrimaryButton:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
-
+/* Secondary dense capsule (row-actions size) — the shared Button `.outline .sm`
+   recipe; see the note above this block. */
 .updateLink {
   font-size: 12px;
   line-height: 18px;
@@ -979,7 +957,12 @@
 }
 
 /* Live install progress: label above a slim track; determinate fill when the
-   registry declared content-length, sliding stripe otherwise. */
+   registry declared content-length, sliding stripe otherwise.
+   填充取色（2026-09 用户裁决，与复选框/分段滑块/开关同一裁决）：dsh 业务蓝
+   `--dsw-alias-state-business-primary`（`--dsw-static-deepseek-500` / `-400`），
+   不是官方中性 `--dsw-alias-brand-primary`——后者浅色主题下是近黑，下载/安装
+   进度会与"开/选中"态一起发黑。6px 轨道仍是 `--dsw-alias-border-l2` 浅灰；
+   定宽（有 content-length）与滑动条纹两态同色。 */
 .runtimeProgressBlock {
   display: flex;
   flex-direction: column;
@@ -1003,7 +986,7 @@
 .runtimeProgressBar {
   height: 100%;
   border-radius: 3px;
-  background: var(--dsw-alias-brand-primary);
+  background: var(--dsw-alias-state-business-primary);
   transition: width .2s ease;
 }
 
@@ -1014,7 +997,7 @@
   height: 100%;
   width: 40%;
   border-radius: 3px;
-  background: var(--dsw-alias-brand-primary);
+  background: var(--dsw-alias-state-business-primary);
   animation: runtimeProgressSlide 1.1s ease-in-out infinite;
 }
 
@@ -1029,14 +1012,17 @@
   display: inline-flex;
   align-items: center;
   box-sizing: border-box;
-  height: 18px;
+  /* Official Tag metrics + hairline (2026-09 batch 1 F1 follow-up: the
+     connections page moved to 11px/17px + l4 and this pill stayed on 11/16 + l2,
+     so two settings pages rendered two different pills). */
+  height: 20px;
   margin-left: 8px;
   padding: 1px 8px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l4);
   border-radius: 999px;
   corner-shape: round;
   font-size: 11px;
-  line-height: 16px;
+  line-height: 17px;
   color: var(--dsw-alias-label-tertiary);
 }
 
@@ -1055,8 +1041,8 @@
 }
 
 .runtimeBadgeWarn {
-  color: var(--dsw-alias-state-warning-primary);
-  border-color: var(--dsw-alias-state-warning-primary);
+  color: var(--dsw-alias-state-warn-primary);
+  border-color: var(--dsw-alias-state-warn-primary);
 }
 
 .runtimeBadgeDanger {
@@ -1065,15 +1051,17 @@
 }
 
 /* Form-shaped select/input for the runtime section (2026-11): a boxed field
-   with border + background, deliberately DISTINCT from the capsule buttons
-   (.updateButton) so a dropdown is recognizable as an input.
-   2026-12 有意不统一：字段字号 12px vs 服务器下拉 13px/600——服务器下拉是
-   导航选择器（强调选中项），运行时字段是紧凑表单行；只统一箭头词汇。 */
+   with border + background, deliberately DISTINCT from the capsule action
+   buttons (the shared ui-primitives Button) so a dropdown is recognizable as an
+   input.
+   2026-12 有意不统一：字段字号 12px vs 服务器下拉**触发器** 13px/600——服务器
+   下拉是导航选择器（强调选中项，其菜单行已按官方 dense item 为 14/22，见 E4），
+   运行时字段是紧凑表单行；只统一箭头词汇。 */
 .runtimeField {
   box-sizing: border-box;
   height: 28px;
   padding: 0 10px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 8px;
   background: var(--dsw-alias-bg-layer-1);
   color: var(--dsw-alias-label-primary);
@@ -1094,7 +1082,7 @@
 
 /* ---- 统一下拉箭头（2026-12）----
    Chamber 的 select 一律 appearance:none + 官方 IconChevronDownOutline14
-   （与 bridge-rows 的 Menu 下拉同图标词汇）；箭头右缘 inset 与文字左缘
+   （服务器下拉/运行时段与连接表单同一图标词汇）；箭头右缘 inset 与文字左缘
    （.runtimeField padding 10px）对称，pointer-events:none 保证点击落在
    select 本体。仅作用于 select 修饰类——.runtimeField 同时用于 URL 输入框，
    不能带箭头样式。 */
@@ -1166,69 +1154,5 @@
   gap: 4px;
 }
 
-/* ---- 插件设置诊断面（2026-12，图驱动的每来源贡献集）---- */
-
-/* nav 行上的来源标记：第三方插件提供的分节（官方/自研基础集不显示）。 */
-.pluginTag {
-  flex: none;
-  margin-left: auto;
-  padding: 0 6px;
-  border-radius: 6px;
-  font-size: 11px;
-  line-height: 16px;
-  color: var(--dsw-alias-label-tertiary);
-  background: var(--dsw-alias-bg-fill-tertiary, rgba(127, 127, 127, 0.12));
-}
-
-.pluginsView {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  min-width: 0;
-}
-
-.pluginsIntro {
-  margin: 0;
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--dsw-alias-label-tertiary);
-}
-
-.pluginsToolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.pluginsCount {
-  font-size: 12px;
-  line-height: 18px;
-  font-weight: 600;
-  color: var(--dsw-alias-label-primary);
-}
-
-.noticeList {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.noticeItem {
-  padding: 8px 10px;
-  border-radius: 8px;
-  font-size: 12px;
-  line-height: 18px;
-  color: var(--dsw-alias-label-secondary);
-  background: var(--dsw-alias-bg-fill-tertiary, rgba(127, 127, 127, 0.08));
-  overflow-wrap: anywhere;
-}
-
-/* 通道级不可用（图不可达）比单插件状态更醒目。 */
-.noticeWarn {
-  color: var(--dsw-alias-label-primary);
-  border: 1px solid var(--dsw-alias-border-danger, rgba(220, 90, 90, 0.5));
-}
+/* （2026-09-11 退役：nav 行的「插件」来源标记 —— 上游只渲染图标+标签、
+   `registrant` 仅用于诊断，本仓不再自造反标。）*/

@@ -1,6 +1,8 @@
 /**
- * Chamber-global「通用」section (design 14 D7 / design 15 v1 flat form) — the
- * settings shell's `__general` fixed entry content. Organized in OpenChamber-
+ * Chamber-global「客户端」section (design 14 D7 / design 15 v1 flat form) — the
+ * settings shell's `__general` fixed entry content, titled by the same
+ * `clientNav` key as its nav cell (2026-09-11 upstream-alignment T8: the
+ * official section is the one named 通用设置/General). Organized in OpenChamber-
  * style control groups (group headings + flat rows), styled with the settings
  * panel's design language (`--dsw-alias-*` tokens).
  *
@@ -10,18 +12,19 @@
  * 运行 group is the three-column variant (.generalGridTriple — its three
  * short toggle cards stay on one row), the
  * two radio pairs (关闭窗口时 / 通知时机) render as slider-style segmented
- * controls (SegmentedControl: OFFICIAL business-blue thumb + inverted
- * selected text), the notification master toggle as the official switch
- * (36x20 track + round thumb, native checkbox with role=switch underneath),
- * and the three notification-event toggles share one line of borderless
- * rows (.generalEventRow). The notifications SUB-SETTINGS (通知时机 / 事件开关 /
- * 测试通知) stay COLLAPSED while the master switch is off — they unfold in a
- * single bordered card (.generalNotifyCard) only while notifications are
- * enabled (the configuration itself is unchanged, just hidden). The master
- * switch itself is a BORDERLESS disclosure row (.generalSwitchRow) — the
- * sub-settings card is the group's only border, so the whole group carries
- * one card instead of five. Every control stays a native checkbox/radio
- * underneath (no custom widgets).
+ * controls (SegmentedControl: dsh business-blue thumb + inverted selected text,
+ * 2026-09 user decision — see SegmentedControl.tsx), the notification master
+ * toggle as the shared `Switch`
+ * primitive (36x20 track + round thumb, role=switch, required accessible name —
+ * 2026-09-11 upstream-alignment T9), and the three notification-event toggles
+ * share one line of borderless rows (.generalEventRow). The notifications
+ * SUB-SETTINGS (通知时机 / 事件开关 / 测试通知) stay COLLAPSED while the master
+ * switch is off — they unfold in a single bordered card (.generalNotifyCard)
+ * only while notifications are enabled (the configuration itself is unchanged,
+ * just hidden). The master switch itself is a BORDERLESS disclosure row
+ * (.generalSwitchRow) — the sub-settings card is the group's only border, so
+ * the whole group carries one card instead of five. Every control stays a
+ * native checkbox/radio or the shared primitive underneath (no custom widgets).
  *
  * Groups (all chamber-GLOBAL, owned by the main process chamber-settings.json,
  * never any instance's dsh home — 01 §2 P2):
@@ -43,7 +46,8 @@
  *   low-key status (UpdateSection).
  *
  * （design 18 §3.6：dsh 运行时块已自本视图迁出——per-server「dsh 运行时」
- *  settings.section，见 runtime-section-plugin.ts。）
+ *  settings.section，现由 index.ts 的 registerRuntimeSection 注册在该实例
+ *  自己的 boot ctx 台账上。）
  *
  * Every mutation goes through the main-process settings IPC (settings-store),
  * which overlays the patch OPTIMISTICALLY — the control reflects the click in
@@ -53,8 +57,9 @@
  * (dev without tray) disables the hide-to-tray option — hiding a window the
  * user could not recover would strand the app.
  */
-import { useCallback, useId, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useId, useLayoutEffect, useRef, useState, useSyncExternalStore } from 'react'
 import clsx from 'clsx'
+import { Button, Switch } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SettingsBridgeKey } from '../locales.ts'
 import type { ChamberSettingsStatus, NotificationSurface } from '../ambient/settings-bridge.d.ts'
 import { applySettingsPatch, getSettingsStatus, subscribeSettings } from './settings-store.ts'
@@ -62,6 +67,7 @@ import { notificationsOf, notificationsPatch } from './notifications-settings.ts
 import { sessionTodoOf, sessionTodoPatch } from './session-todo-settings.ts'
 import { SegmentedControl } from './SegmentedControl.tsx'
 import { UpdateSection } from './UpdateSection.tsx'
+import { applyDisclosureAttributes } from './disclosure-attrs.ts'
 import css from './SettingsShell.module.css'
 
 /** The shell's bound translate (params supported). */
@@ -124,6 +130,47 @@ function ToggleEvent({
         onChange={(event) => onChange(event.target.checked)}
       />
     </label>
+  )
+}
+
+/**
+ * Disclosure switch row control (2026-09-11 upstream-alignment T9; the
+ * disclosure placement corrected by the 2026-09-11 review, F3): the shared
+ * `Switch` primitive — the official 36×20 track/thumb/transition/focus
+ * vocabulary this row used to hand-roll — plus the disclosure relationship the
+ * row carries, because this switch unfolds the sub-settings card below it.
+ *
+ * WHERE the pair lives: the wrapper stays a pure layout box, and
+ * `aria-expanded` / `aria-controls` are written onto the primitive's OWN control
+ * node through `applyDisclosureAttributes` (that module records why no wrapper
+ * role can carry them: the supported roles are all widgets, and a widget around
+ * the switch would nest two interactive controls). The primitive keeps ownership
+ * of `role="switch"`, `aria-checked` and the accessible name, so the control
+ * itself is untouched for pointer and keyboard users and the row stays a
+ * `<label>` (whole-row click → the labelled control, unchanged by this fix).
+ */
+function DisclosureSwitch({
+  label, checked, disabled, expanded, controls, onChange,
+}: {
+  label: string
+  checked: boolean
+  disabled?: boolean
+  expanded: boolean
+  controls: string | undefined
+  onChange: (next: boolean) => void
+}) {
+  const box = useRef<HTMLSpanElement | null>(null)
+  // Applied before paint (and re-applied whenever the disclosure state or the
+  // card id changes, and on every mount), so the control never renders a frame in
+  // which the relationship it carries is missing.
+  useLayoutEffect(() => {
+    const control = box.current?.querySelector<HTMLElement>('[role="switch"]') ?? null
+    applyDisclosureAttributes(control, expanded, controls)
+  }, [expanded, controls])
+  return (
+    <span ref={box} className={css.generalSwitchBox}>
+      <Switch checked={checked} label={label} disabled={disabled === true} onChange={onChange} />
+    </span>
   )
 }
 
@@ -212,7 +259,7 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
 
   return (
     <div className={css.generalSection}>
-      <h2 className={css.generalTitle}>{t('generalTitle')}</h2>
+      <h2 className={css.generalTitle}>{t('clientNav')}</h2>
 
       <div className={css.generalGroup}>
         <h3 className={css.generalGroupTitle}>{t('generalGroupLifecycle')}</h3>
@@ -309,21 +356,14 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
           <div className={css.generalCardText}>
             <span className={css.generalFieldLabel}>{t('generalSessionTodoEnabled')}</span>
           </div>
-          <span className={css.generalSwitchBox}>
-            <input
-              type="checkbox"
-              role="switch"
-              className={css.generalSwitchInput}
-              checked={sessionTodo.enabled === true}
-              disabled={!hydrated}
-              aria-expanded={sessionTodo.enabled === true}
-              aria-controls={sessionTodo.enabled === true ? todoBodyId : undefined}
-              onChange={(event) => save(sessionTodoPatch({ enabled: event.target.checked }))}
-            />
-            <span className={css.generalSwitch} aria-hidden="true">
-              <span className={css.generalSwitchThumb} />
-            </span>
-          </span>
+          <DisclosureSwitch
+            label={t('generalSessionTodoEnabled')}
+            checked={sessionTodo.enabled === true}
+            disabled={!hydrated}
+            expanded={sessionTodo.enabled === true}
+            controls={sessionTodo.enabled === true ? todoBodyId : undefined}
+            onChange={(next) => save(sessionTodoPatch({ enabled: next }))}
+          />
         </label>
 
         {sessionTodo.enabled === true && (
@@ -362,50 +402,41 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
       <div className={css.generalGroup}>
         <h3 className={css.generalGroupTitle}>{t('generalGroupNotifications')}</h3>
 
-        {/* 主开关: 官方 switch（原生 checkbox + role=switch），整行即 label
-            （可访问名称 + 整行可点）；未水合骨架态整行变淡。aria-controls
-            指向展开的子设置卡。 */}
+        {/* 主开关: 官方 Switch 原语（role=switch / aria-checked / 必需的可访问
+            名称），整行即 label（整行可点）；未水合骨架态整行变淡。
+            aria-expanded/aria-controls 由 DisclosureSwitch 写到原语自己的
+            role=switch 按钮上（2026-09-11 review F3：无 role 的包装 span 上
+            这两个属性对辅助技术是无效的），指向展开的子设置卡。 */}
         <label className={clsx(css.generalSwitchRow, !hydrated && css.generalDisabled)}>
           <div className={css.generalCardText}>
             <span className={css.generalFieldLabel}>{t('generalNotificationsEnabled')}</span>
           </div>
-          <span className={css.generalSwitchBox}>
-            <input
-              type="checkbox"
-              role="switch"
-              className={css.generalSwitchInput}
-              checked={notifications.enabled === true}
-              disabled={!hydrated}
-              aria-expanded={notifications.enabled === true}
-              aria-controls={notifications.enabled === true ? notifyBodyId : undefined}
-              onChange={(event) => save(notificationsPatch({ enabled: event.target.checked }))}
-            />
-            <span className={css.generalSwitch} aria-hidden="true">
-              <span className={css.generalSwitchThumb} />
-            </span>
-          </span>
+          <DisclosureSwitch
+            label={t('generalNotificationsEnabled')}
+            checked={notifications.enabled === true}
+            disabled={!hydrated}
+            expanded={notifications.enabled === true}
+            controls={notifications.enabled === true ? notifyBodyId : undefined}
+            onChange={(next) => save(notificationsPatch({ enabled: next }))}
+          />
         </label>
 
         {/* 未读徽标（design 19 §3.7）：被动指示，独立于横幅主开关——默认开启，
             Dock/任务栏应用图标上的红色数字气泡（未读会话数）。关闭时主进程
             裁决强制清零（开关一切立即清除，行为诚实）。同样用无边框披露行
-            （.generalSwitchRow），与主开关同节奏，不增加边框层数。 */}
+            （.generalSwitchRow），与主开关同节奏，不增加边框层数——本行不展开
+            任何子设置，因此用原语本身（无披露属性）。 */}
         <label className={clsx(css.generalSwitchRow, !hydrated && css.generalDisabled)}>
           <div className={css.generalCardText}>
             <span className={css.generalFieldLabel}>{t('generalNotificationsBadge')}</span>
           </div>
           <span className={css.generalSwitchBox}>
-            <input
-              type="checkbox"
-              role="switch"
-              className={css.generalSwitchInput}
+            <Switch
               checked={notifications.badgeEnabled !== false}
+              label={t('generalNotificationsBadge')}
               disabled={!hydrated}
-              onChange={(event) => save(notificationsPatch({ badgeEnabled: event.target.checked }))}
+              onChange={(next) => save(notificationsPatch({ badgeEnabled: next }))}
             />
-            <span className={css.generalSwitch} aria-hidden="true">
-              <span className={css.generalSwitchThumb} />
-            </span>
           </span>
         </label>
 
@@ -449,14 +480,11 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
             </div>
 
             <div className={css.generalTestRow}>
-              <button
-                type="button"
-                className={css.updateButton}
+              <Button variant="outline" size="sm"
                 onClick={sendTestNotification}
-                disabled={testNotifySurface() === null || notifyBusy}
-              >
+                disabled={testNotifySurface() === null || notifyBusy}>
                 {t('generalNotificationsTest')}
-              </button>
+              </Button>
               {notifyResult !== null && (
                 <p
                   className={notifyResult === 'sent' ? css.generalNotifyOk : css.generalError}

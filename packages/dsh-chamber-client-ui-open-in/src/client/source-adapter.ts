@@ -1,15 +1,23 @@
 /**
- * Per-source open-in adapter (Batch 3 Phase 2, plan §5.2) — the single owner of
+ * Per-source open-in adapter (design 20 §5) — the single owner of
  *
- *  - **per-source dual-pool selection**: the instance's official host catalog
- *    (LOCAL sources only) merged with the page-wide desktop main-process pool
- *    through the pure view-model;
- *  - **basePath remapping**: every official catalog/icon/launch URL is scoped to
- *    this entry's per-instance proxy prefix (`<basePath>/open-in-app/*`);
- *  - **per-entry channel routing**: official entries POST to the instance's own
- *    host route (the instance performs the launch); main entries ride the
- *    trusted preload IPC with the exact-boot source proof;
+ *  - **the rendered set**: the page's machine application catalog (the LOCAL
+ *    instance's `openInApp/*` host domain, read once per page by
+ *    `machine-catalog.ts` and injected into every entry) merged with the
+ *    page-wide desktop main-process pool through the pure view-model. The
+ *    machine half describes the MACHINE, so every source sees it; which of
+ *    those apps a source may use is decided by the view-model (a remote-ssh
+ *    source keeps only what the main provider declares `remoteCapable`, which
+ *    is why its VS Code mark is now the machine's real icon);
+ *  - **per-entry channel routing**: local entries call the host domain over the
+ *    machine catalog's transport (the page-level instance client for `local` —
+ *    same wire, cookie and trust fence as the local source's own entry); main
+ *    entries ride the trusted preload IPC with the exact-boot source proof;
  *  - the persisted app choice.
+ *
+ * Icons are NOT cached here any more (2026-09-12): the machine catalog owns the
+ * page-level boot cache for ids and icons, because they are machine facts — a
+ * per-source copy would re-fetch the same pixels once per attached source.
  *
  * The React entry only consumes the resulting view-model plus this face, so the
  * routing rules are unit-testable without React, the DOM or a real instance.
@@ -27,7 +35,7 @@ import {
   type OpenInViewEntry,
   type OpenInViewModel,
 } from '../shared/open-in-view-model.ts'
-import { createOfficialCatalog, type OfficialCatalog } from './official-catalog.ts'
+import type { MachineCatalog } from './machine-catalog.ts'
 import type { OpenInBridgeSurface, Translate } from '../shared/coordinator.ts'
 
 /** The page-wide desktop main-process pool (the coordinator's shared probe). */
@@ -49,13 +57,16 @@ export interface OpenInSourceAdapterDeps {
   /** Exact-boot proof sent with every main-channel launch. */
   readonly sourceFingerprint: string
   readonly translate: Translate
-  /** Per-entry proxy prefix; undefined or '' = stock origin (no official channel for non-local sources). */
-  readonly basePath: string | undefined
+  /**
+   * The page's machine catalog (`ctx.chamberMachineCatalog`, built once by the
+   * renderer shell for the LOCAL instance and shared by every entry). Absent =
+   * this page has no machine reader, so the local pool stays empty instead of
+   * the button breaking.
+   */
+  readonly machineCatalog?: MachineCatalog | null
   readonly mainPool: OpenInMainPool
   readonly choice: OpenInChoiceStore
   readonly platform?: string | null
-  /** Test seam: official catalog factory (production: {@link createOfficialCatalog}). */
-  readonly createCatalog?: (options: { basePath: string }) => OfficialCatalog
   /** Test seam: preload bridge accessor (production: the window global). */
   readonly bridge?: () => OpenInBridgeSurface['dshChamber'] | undefined
 }
@@ -68,7 +79,8 @@ export interface OpenInSourceAdapter {
   subscribe(listener: () => void): () => void
   refresh(): Promise<void>
   launch(entry: OpenInViewEntry, path: string): Promise<OpenInResult>
-  /** Host-served icon URL for an official entry; null when this source has no official channel. */
+  /** Cached machine icon `data:` URL for an app id; null while unknown or when
+   *  the host serves none (the mark then uses its own fallback). */
   iconUrl(appId: string): string | null
   getChoice(): string
   choose(appId: string): void
@@ -82,42 +94,30 @@ export interface OpenInSourceAdapter {
  * @returns the adapter face consumed by the header entry.
  */
 export function createOpenInSourceAdapter(deps: OpenInSourceAdapterDeps): OpenInSourceAdapter {
-  // The official channel exists for LOCAL sources only, and only when the
-  // entry Context carries a base path (per-instance proxy prefix).
-  const catalog = deps.source.local && typeof deps.basePath === 'string'
-    ? (deps.createCatalog ?? createOfficialCatalog)({ basePath: deps.basePath })
-    : null
+  const machine = deps.machineCatalog ?? null
 
-  let official: OpenInApp[] | null = null
-  let officialProbe: Promise<void> | null = null
   const listeners = new Set<() => void>()
   const emit = (): void => {
     for (const listener of [...listeners]) listener()
   }
 
-  const loadOfficial = (): Promise<void> => {
-    if (catalog === null) return Promise.resolve()
-    officialProbe ??= catalog.load().then((entries) => {
-      official = entries
-      emit()
-    })
-    return officialProbe
-  }
-
   const refresh = async (): Promise<void> => {
-    officialProbe = null
-    await Promise.all([deps.mainPool.refresh(), loadOfficial()])
+    await Promise.all([
+      deps.mainPool.refresh(),
+      machine === null ? Promise.resolve() : machine.refresh(),
+    ])
   }
 
   const unsubscribeMain = deps.mainPool.subscribe(emit)
   const unsubscribeChoice = deps.choice.subscribe(emit)
-  // Initial probe: both pools (the main pool's own single-flight probe may
-  // already be warm; the official read is this ctx's own).
+  const unsubscribeMachine = machine === null ? null : machine.subscribe(emit)
+  // Initial probe: the main pool's own single-flight probe may already be warm;
+  // the machine catalog's is shared by every entry and coalesced there.
   void refresh()
 
   const getViewModel = (): OpenInViewModel => buildOpenInViewModel({
     source: deps.source,
-    officialEntries: official,
+    localEntries: machine === null ? null : machine.entries(),
     mainEntries: deps.mainPool.get(),
   })
 
@@ -126,10 +126,10 @@ export function createOpenInSourceAdapter(deps: OpenInSourceAdapterDeps): OpenIn
   ).dshChamber)
 
   const launch = async (entry: OpenInViewEntry, path: string): Promise<OpenInResult> => {
-    if (entry.channel === 'official') {
-      if (catalog === null) return { ok: false, error: 'official catalog unavailable' }
+    if (entry.channel === 'local') {
+      if (machine === null) return { ok: false, error: deps.translate('catalogUnavailable') }
       try {
-        await catalog.launch(entry.id, path)
+        await machine.launch(entry.id, path)
         return { ok: true }
       } catch (error) {
         return { ok: false, error: describeOpenInError(error) }
@@ -158,12 +158,13 @@ export function createOpenInSourceAdapter(deps: OpenInSourceAdapterDeps): OpenIn
     },
     refresh,
     launch,
-    iconUrl: appId => catalog?.iconUrl(appId) ?? null,
+    iconUrl: appId => (machine === null ? null : machine.iconUrl(appId)),
     getChoice: () => deps.choice.get(),
     choose: appId => { deps.choice.set(appId) },
     dispose: () => {
       unsubscribeMain()
       unsubscribeChoice()
+      unsubscribeMachine?.()
       listeners.clear()
     },
   }

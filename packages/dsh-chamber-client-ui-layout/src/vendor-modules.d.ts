@@ -10,7 +10,7 @@
  * packages/dsh-chamber-client-ui-sidebar/src/vendor-modules.d.ts). The
  * fork's own code stays fully checked; the loose faces are the dsh seam.
  *
- * Baseline: `dsh-v0.1.5-rc.1` — the vendor columns face is the
+ * Baseline: `dsh-v0.1.5-rc.2` — the vendor columns face is the
  * rightbar/root-scope model, and the vendor service face is
  * `LayoutController(panels, hasMainPanel)` with `selectPanel`/`beginNavigation`.
  *

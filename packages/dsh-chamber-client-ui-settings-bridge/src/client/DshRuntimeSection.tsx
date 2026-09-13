@@ -17,10 +17,22 @@
  * the connections local-start gate; the gateway view consumes the gateway's
  * own `/chamber/runtime` projection through the same-origin instance proxy
  * (no token ever leaves the main process, design 17 §7.2/§12).
+ *
+ * 2026-09-11 upstream-alignment T9: every action capsule in this file is the
+ * shared ui-primitives `Button` (`variant="outline|primary" size="sm"`), the
+ * exact recipe the hand-rolled `.updateButton` / `.updatePrimaryButton` rules
+ * copied — the local rules are gone.
+ *
+ * 2026-09-11 upstream-alignment T2: every confirmation this section performs is
+ * ONE in-app dialog (RuntimeConfirmDialog, the official ui-primitives `Modal`),
+ * in both shapes. The previous split — native confirm on the desktop shape,
+ * `window.confirm` on the gateway shape — is gone: native chrome cannot ride the
+ * panel's `--dsw-alias-*` tokens, its dismiss/focus discipline or a multi-shell
+ * document, and the gateway-hosted shape has no native dialog at all.
  */
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import clsx from 'clsx'
-import { IconChevronDownOutline14 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, IconChevronDownOutline14, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SettingsBridgeKey } from '../locales.ts'
 import {
   compareSemver,
@@ -53,13 +65,29 @@ import {
   pollGatewayReady,
   pollRemoteRuntimeUntilSettled,
   remoteRuntimeAction,
-  remoteRuntimeActionGates,
+  REMOTE_STATUS_POLL_TIMEOUT_MS,
   remoteRuntimeSetRegistry,
   resetRemoteRuntimeActivityOwners,
   type RemoteRuntimeStatus,
   type RemoteVersions,
 } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import { projectRemoteRuntimeBadge, remoteRuntimeStatusView } from './gateway-runtime-api.ts'
+import {
+  acceptConfirm as acceptConfirmStep, armConfirm, cancelConfirm as cancelConfirmStep,
+  IDLE_CONFIRM, type ConfirmState,
+} from './confirm-machine.ts'
+import {
+  applyNowStillValid,
+  cleanupVersionStillValid,
+  gatewayConfirmGates,
+  preRollbackOfferable,
+  recoverMetadataStillValid,
+  restoreBuiltinStillValid,
+  restorePreRollbackStillValid,
+  retryApplyStillValid,
+  retryRestoreStillValid,
+  type GatewayConfirmFacts,
+} from './runtime-confirm-guards.ts'
 import css from './SettingsShell.module.css'
 
 type RuntimeTranslate = (key: SettingsBridgeKey, params?: Record<string, unknown>) => string
@@ -67,6 +95,25 @@ type RuntimeTranslate = (key: SettingsBridgeKey, params?: Record<string, unknown
 const NPMJS = 'https://registry.npmjs.org'
 const NPMMIRROR = 'https://registry.npmmirror.com'
 const CUSTOM_REGISTRY = '__custom__'
+
+/**
+ * Wall-clock ceiling of ONE gateway action (2026-09-11 review-fix F4b).
+ *
+ * WHY a bound at all: while the confirmed action runs, the dialog is a progress
+ * surface and cancel / Escape / mask / header-close are no-ops BY DESIGN, so an
+ * action that never settles traps the section — and the gateway hops themselves
+ * carry no timeout. The runner already owns an AbortController, so the action is
+ * bounded there instead of by a second fence.
+ *
+ * WHY this number: the longest legitimate action is a select/apply-now whose
+ * settle poll may consume its own full budget — the shared core's
+ * `REMOTE_STATUS_POLL_TIMEOUT_MS` (11 min: the installer's 10-minute wall-clock
+ * budget plus the core's one-minute delivery margin). The action ceiling is that
+ * budget plus the same one-minute margin for the hops around the poll, so a
+ * legitimate slow install is never cut short while a wedged request cannot hang
+ * the dialog forever.
+ */
+const REMOTE_ACTION_TIMEOUT_MS = REMOTE_STATUS_POLL_TIMEOUT_MS + 60_000
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -158,6 +205,90 @@ export interface DshRuntimeSectionProps {
 }
 
 /**
+ * One armed destructive-action confirmation (2026-09-11 upstream-alignment T2).
+ *
+ * WHY this section confirms in-app instead of with a native browser dialog (the
+ * module header records the removed native call sites): native chrome cannot
+ * ride the panel's `--dsw-alias-*` design tokens or its dismiss/focus
+ * discipline, it is document-global (this page mounts several instance shells at
+ * once), and one of the section's two shapes — a gateway-hosted instance — has
+ * no native dialog at all. So the SAME dialog serves every shape, and a cancel
+ * performs nothing: the request is dropped before its runner is ever called.
+ */
+interface RuntimeConfirmRequest {
+  /** Dialog heading (localized when the action is armed). */
+  title: string
+  /** Supporting sentence — the copy the native confirm used to show, verbatim. */
+  description: string
+  /** Confirm-button copy while idle. */
+  confirmLabel: string
+  /** Copy for the pending row and the busy confirm button while the action runs. */
+  pendingLabel: string
+  /**
+   * Re-validation of the armed action, consulted by the accept path immediately
+   * before the runner would launch (2026-09-11 review-fix F2). It reads the LIVE
+   * facts of its action (./runtime-confirm-guards.ts) — never the render snapshot
+   * the request was armed in — so an action whose gates closed while the dialog
+   * was open is dropped and reported instead of reaching the wire. Required: a
+   * new arm site has to say what makes its action still valid.
+   */
+  stillValid: () => boolean
+  /** The confirmed action; it owns its own failure reporting and never runs before the user confirms. */
+  run: () => Promise<void>
+}
+
+/**
+ * The section's ONE confirmation dialog: the official ui-primitives `Modal`
+ * (title + description + outline Cancel + outline destructive Confirm), with a
+ * `role="status"` row while the action runs. Cancel, mask click and Escape all
+ * route through `onCancel`, which no-ops while pending — the dialog is a
+ * progress surface then, and dismissing it must not imply a cancellation that
+ * does not exist (the connections section's restart confirm keeps the same
+ * rule).
+ * @param props.request - the armed request, or null while nothing is armed.
+ * @param props.pending - whether the confirmed action is still in flight.
+ * @param props.onCancel - dismiss without acting (ignored while pending).
+ * @param props.onConfirm - run the armed action.
+ * @param props.t - the section's bound translate.
+ * @returns the dialog, or nothing while no request is armed.
+ */
+function RuntimeConfirmDialog({
+  request, pending, onCancel, onConfirm, t,
+}: {
+  request: RuntimeConfirmRequest | null
+  pending: boolean
+  onCancel: () => void
+  onConfirm: () => void
+  t: RuntimeTranslate
+}) {
+  if (request === null) return null
+  return (
+    <Modal
+      open
+      onClose={onCancel}
+      title={request.title}
+      closeLabel={t('close')}
+      description={request.description}
+      className={css.deleteDialog}
+      footer={(
+        <>
+          <Button variant="outline" autoFocus disabled={pending} onClick={onCancel}>
+            {t('dshRuntimeRegistryCancel')}
+          </Button>
+          <Button variant="outline" className={css.deleteConfirm} disabled={pending} onClick={onConfirm}>
+            {pending ? request.pendingLabel : request.confirmLabel}
+          </Button>
+        </>
+      )}
+    >
+      {pending && (
+        <p className={css.generalHint} role="status" aria-live="polite">{request.pendingLabel}</p>
+      )}
+    </Modal>
+  )
+}
+
+/**
  * Full per-server「dsh 运行时」segment for a GATEWAY connection (design 18
  * §3.6/§9.3, design 17 §3): every fact and action goes through the instance's
  * same-origin `/api/i/gateway-<id>/chamber/runtime/*` proxy — the gateway's
@@ -171,7 +302,10 @@ export interface DshRuntimeSectionProps {
  * pollable); versions are pulled on entry and re-pulled after a status change
  * that may have altered the cached-tree list (an install finishing). Action
  * errors (409 refusals and failures) surface on the shared actionError row
- * with the server's own `error` copy passed through verbatim.
+ * with the server's own `error` copy passed through verbatim; the section's own
+ * refusals join them there — an accepted action whose guards closed while the
+ * dialog was open (2026-09-11 review-fix F2) and an action that hit its wall-clock
+ * ceiling (F4b).
  */
 function GatewayRuntimeSection({
   t,
@@ -181,14 +315,17 @@ function GatewayRuntimeSection({
   restartNote,
   actionError,
   setActionError,
+  askConfirm,
 }: {
   t: RuntimeTranslate
   chamberInstanceId: string
   restarting: boolean
-  onRestartDsh: () => Promise<void>
+  onRestartDsh: () => void
   restartNote: string | null
   actionError: string | null
   setActionError: (error: string | null) => void
+  /** Arm the section's ONE in-app confirmation (2026-09-11 upstream-alignment T2). */
+  askConfirm: (request: RuntimeConfirmRequest) => void
 }) {
   const STATUS_POLL_MS = 3_000
   // Per-instance labelledby ids (useId): N-ctx shells mount one settings panel
@@ -391,6 +528,25 @@ function GatewayRuntimeSection({
   const gatewayDirection = runtimeSelectionDirection(chosenRemote, remoteActive)
 
   const envGatedRemote = remoteStatus?.source === 'env'
+  // ---- live facts for accept-time re-validation (2026-09-11 review-fix F2) ----
+  //
+  // WHY a ref mirror: every arm site below hands the in-app dialog a request whose
+  // runner is launched on the CONFIRM click — which can land several polls later,
+  // because this section re-polls its status every ~3s. A guard read from the
+  // render scope is a snapshot of the render the dialog was ARMED in, so an
+  // accept could fire an action the CURRENT facts refuse (the probe: arm
+  // restore-builtin at `phase=idle`, the poll flips the gate to
+  // `phase=installing`, the accept still ran `restore-builtin@phase=installing`).
+  // `liveFacts` is reassigned on every render — the same discipline `tRef` above
+  // follows — and each request's `stillValid` hook reads it at accept time.
+  // `remoteGates` is then derived FROM the mirror, so arm-time guards and
+  // accept-time re-validation are the same projection of the same facts.
+  const liveFacts = useRef<GatewayConfirmFacts>({ status: null, busy: true, removableVersions: [] })
+  liveFacts.current = {
+    status: remoteStatus,
+    busy: actionBusy || registryBusy || restarting || checkingVersions,
+    removableVersions: remoteVersions?.removableVersions ?? [],
+  }
   // Pure mirror of the server fences: pending permits only restore-builtin;
   // install/apply/restart-in-flight permit no action. Registry editing is a
   // version mutation; restart stays source-independent (including env).
@@ -402,10 +558,7 @@ function GatewayRuntimeSection({
   // the restore-builtin secondary row, so the gateway hides the same rows
   // while checkingVersions (see restoreBuiltinVisible / the cleanup row
   // condition). The check button itself shows the busy copy and is disabled.
-  const remoteGates = remoteRuntimeActionGates(
-    remoteStatus,
-    actionBusy || registryBusy || restarting || checkingVersions,
-  )
+  const remoteGates = gatewayConfirmGates(liveFacts.current)
   const mutationDisabled = remoteGates.mutationDisabled
   const restoreBuiltinDisabled = remoteGates.restoreBuiltinDisabled
   const retryApplyDisabled = remoteGates.retryApplyDisabled
@@ -452,13 +605,31 @@ function GatewayRuntimeSection({
     actionInFlight.current = true
     const controller = new AbortController()
     actionController.current = controller
+    // 2026-09-11 review-fix F4b: bound the WHOLE action (its request hops and any
+    // settle poll, all of which run on this controller's signal) with the deadline
+    // whose derivation sits on REMOTE_ACTION_TIMEOUT_MS. Without it a wedged hop
+    // left the confirmation dialog pending forever — and that dialog deliberately
+    // ignores cancel, Escape, mask click and header close while pending.
+    let timedOut = false
+    const timeout = setTimeout(() => {
+      timedOut = true
+      controller.abort()
+    }, REMOTE_ACTION_TIMEOUT_MS)
     setActionBusy(true)
     setActionError(null)
     try {
       await task(controller.signal)
     } catch (error) {
-      if (!controller.signal.aborted && componentActive.current) setActionError(errorMessage(error))
+      // The abort of a SUPERSEDED action (instance switch / unmount) stays silent
+      // as before; OUR deadline is not silent — it reports itself through the
+      // section's own error row with localized copy.
+      if (timedOut) {
+        if (componentActive.current) setActionError(tRef.current('dshRuntimeActionTimeout'))
+      } else if (!controller.signal.aborted && componentActive.current) {
+        setActionError(errorMessage(error))
+      }
     } finally {
+      clearTimeout(timeout)
       if (actionController.current === controller) {
         actionController.current = null
         actionInFlight.current = false
@@ -488,76 +659,107 @@ function GatewayRuntimeSection({
     })
   }, [chamberInstanceId, chosenRemote, isActiveRemote, mutationDisabled, remoteActive, runRemoteAction])
 
+  // 确认改走应用内对话框（2026-09-11 upstream-alignment T2）：文案键不变，
+  // 原来的 confirm(message) 正文成为对话框描述；取消 = 什么都不做。
+  // 2026-09-11 review-fix F2：每个 request 带 `stillValid` —— 与 ARM 时同一
+  // 谓词、读 liveFacts 里的当前事实，accept 时再验一次（详见 liveFacts 注释）。
   const onRestoreBuiltin = useCallback(() => {
-    if (restoreBuiltinDisabled) return
-    // 2026-12 (review fix): desktop runs a native confirm for this action;
-    // the gateway mirrors the same confirmation depth with window.confirm.
-    const message = `${t('dshRuntimeRestoreBuiltinConfirmTitle')}\n\n${t('dshRuntimeRestoreBuiltinConfirmBody')}`
-    if (!window.confirm(message)) return
-    void runRemoteAction(async (signal) => {
-      await remoteRuntimeAction(chamberInstanceId, { kind: 'restore-builtin' }, { signal })
+    if (!restoreBuiltinStillValid(liveFacts.current)) return
+    askConfirm({
+      title: t('dshRuntimeRestoreBuiltinConfirmTitle'),
+      description: t('dshRuntimeRestoreBuiltinConfirmBody'),
+      confirmLabel: t('dshRuntimeResetBuiltin'),
+      pendingLabel: t('dshRuntimeRemoteApplying'),
+      stillValid: () => restoreBuiltinStillValid(liveFacts.current),
+      run: () => runRemoteAction(async (signal) => {
+        await remoteRuntimeAction(chamberInstanceId, { kind: 'restore-builtin' }, { signal })
+      }),
     })
-  }, [chamberInstanceId, restoreBuiltinDisabled, t, runRemoteAction])
+  }, [chamberInstanceId, t, runRemoteAction, askConfirm])
 
   const onRetryApply = useCallback(() => {
-    if (retryApplyDisabled) return
-    const message = `${t('dshRuntimeRetryApplyConfirmTitle')}\n\n${t('dshRuntimeRetryApplyConfirmBody')}`
-    if (!window.confirm(message)) return
-    void runRemoteAction(async (signal) => {
-      await remoteRuntimeAction(chamberInstanceId, { kind: 'retry-apply' }, { signal })
+    if (!retryApplyStillValid(liveFacts.current)) return
+    askConfirm({
+      title: t('dshRuntimeRetryApplyConfirmTitle'),
+      description: t('dshRuntimeRetryApplyConfirmBody'),
+      confirmLabel: t('dshRuntimeRetryApply'),
+      pendingLabel: t('dshRuntimeRemoteApplying'),
+      stillValid: () => retryApplyStillValid(liveFacts.current),
+      run: () => runRemoteAction(async (signal) => {
+        await remoteRuntimeAction(chamberInstanceId, { kind: 'retry-apply' }, { signal })
+      }),
     })
-  }, [chamberInstanceId, retryApplyDisabled, t, runRemoteAction])
+  }, [chamberInstanceId, t, runRemoteAction, askConfirm])
 
   const onRetryRestore = useCallback(() => {
-    if (retryRestoreDisabled) return
-    const message = `${t('dshRuntimeRetryRestoreConfirmTitle')}\n\n${t('dshRuntimeRetryRestoreConfirmBody')}`
-    if (!window.confirm(message)) return
-    void runRemoteAction(async (signal) => {
-      await remoteRuntimeAction(chamberInstanceId, { kind: 'retry-restore' }, { signal })
+    if (!retryRestoreStillValid(liveFacts.current)) return
+    askConfirm({
+      title: t('dshRuntimeRetryRestoreConfirmTitle'),
+      description: t('dshRuntimeRetryRestoreConfirmBody'),
+      confirmLabel: t('dshRuntimeRetryRestore'),
+      pendingLabel: t('dshRuntimeRemoteApplying'),
+      stillValid: () => retryRestoreStillValid(liveFacts.current),
+      run: () => runRemoteAction(async (signal) => {
+        await remoteRuntimeAction(chamberInstanceId, { kind: 'retry-restore' }, { signal })
+      }),
     })
-  }, [chamberInstanceId, retryRestoreDisabled, t, runRemoteAction])
+  }, [chamberInstanceId, t, runRemoteAction, askConfirm])
 
   // 清理已安装版本（2026-12 desktop 对齐）：候选来自服务端 removableVersions
-  // 投影；gateway 无原生对话框，用 window.confirm（与桌面原生确认同深度）。
+  // 投影；确认走应用内对话框（2026-09-11 T2）。2026-09-11 review-fix F2：目标
+  // 版本在 arm 时捕获，accept 时要求它仍在当前候选表里 —— 否则会把对话框
+  // 点名之外的版本递到路由上。
   const onCleanupRemote = useCallback((version: string) => {
-    if (mutationDisabled) return
-    const message = `${t('dshRuntimeCleanupConfirmTitle', { version })}\n\n${t('dshRuntimeCleanupConfirmBody')}`
-    if (!window.confirm(message)) return
-    void runRemoteAction(async (signal) => {
-      await remoteRuntimeAction(chamberInstanceId, { kind: 'cleanup-version', version }, { signal })
-      // The removed tree leaves the version list and the candidate list.
-      setVersionsEpoch((epoch) => epoch + 1)
+    if (!cleanupVersionStillValid(liveFacts.current, version)) return
+    askConfirm({
+      title: t('dshRuntimeCleanupConfirmTitle', { version }),
+      description: t('dshRuntimeCleanupConfirmBody'),
+      confirmLabel: t('dshRuntimeCleanupVersion'),
+      pendingLabel: t('dshRuntimeRemoteApplying'),
+      stillValid: () => cleanupVersionStillValid(liveFacts.current, version),
+      run: () => runRemoteAction(async (signal) => {
+        await remoteRuntimeAction(chamberInstanceId, { kind: 'cleanup-version', version }, { signal })
+        // The removed tree leaves the version list and the candidate list.
+        setVersionsEpoch((epoch) => epoch + 1)
+      }),
     })
-  }, [chamberInstanceId, mutationDisabled, t, runRemoteAction])
+  }, [chamberInstanceId, t, runRemoteAction, askConfirm])
 
   // 恢复回滚前数据（2026-12 desktop 对齐）：row 在 idle 且存在暂存时出现，
   // 恢复 half 会进入 restore-blocked 由 retry-restore 续作。
-  const canRestorePreRollbackRemote = remoteStatus !== null
-    && !envGatedRemote
-    && remoteStatus.phase === 'idle'
-    && remoteStatus.startupBlockedReason === null
-    && (remoteStatus.preRollbackCount ?? 0) > 0
-    && remoteStatus.preRollbackLatestName !== null
+  // 2026-09-11 review-fix F2：暂存名同样在 arm 时捕获 —— accept 时要求它仍是
+  // 当前最新暂存，路由照单恢复，陈旧名字会恢复用户没点名的快照。
+  const canRestorePreRollbackRemote = !envGatedRemote && preRollbackOfferable(remoteStatus)
   const onRestorePreRollbackRemote = useCallback(() => {
-    const stashName = remoteStatus?.preRollbackLatestName ?? null
-    if (remoteStatus === null || stashName === null || !canRestorePreRollbackRemote || mutationDisabled) return
-    const message = `${t('dshRuntimeRestorePreRollbackConfirmTitle')}\n\n${t('dshRuntimeRestorePreRollbackConfirmBody')}`
-    if (!window.confirm(message)) return
-    void runRemoteAction(async (signal) => {
-      await remoteRuntimeAction(chamberInstanceId, { kind: 'restore-pre-rollback', stashName }, { signal })
+    const stashName = liveFacts.current.status?.preRollbackLatestName ?? null
+    if (stashName === null || !restorePreRollbackStillValid(liveFacts.current, stashName)) return
+    askConfirm({
+      title: t('dshRuntimeRestorePreRollbackConfirmTitle'),
+      description: t('dshRuntimeRestorePreRollbackConfirmBody'),
+      confirmLabel: t('dshRuntimeRestorePreRollback'),
+      pendingLabel: t('dshRuntimeRemoteApplying'),
+      stillValid: () => restorePreRollbackStillValid(liveFacts.current, stashName),
+      run: () => runRemoteAction(async (signal) => {
+        await remoteRuntimeAction(chamberInstanceId, { kind: 'restore-pre-rollback', stashName }, { signal })
+      }),
     })
-  }, [remoteStatus, canRestorePreRollbackRemote, mutationDisabled, t, chamberInstanceId, runRemoteAction])
+  }, [chamberInstanceId, t, runRemoteAction, askConfirm])
 
   // 元数据救援（2026-12 desktop 对齐）：状态投影给出可救援能力时才显示。
   const canRecoverMetadataRemote = remoteStatus?.canRecoverMetadata === true
   const onRecoverMetadataRemote = useCallback(() => {
-    if (!canRecoverMetadataRemote || mutationDisabled) return
-    const message = `${t('dshRuntimeRecoverMetadataConfirmTitle')}\n\n${t('dshRuntimeRecoverMetadataConfirmBody')}`
-    if (!window.confirm(message)) return
-    void runRemoteAction(async (signal) => {
-      await remoteRuntimeAction(chamberInstanceId, { kind: 'recover-metadata' }, { signal })
+    if (!recoverMetadataStillValid(liveFacts.current)) return
+    askConfirm({
+      title: t('dshRuntimeRecoverMetadataConfirmTitle'),
+      description: t('dshRuntimeRecoverMetadataConfirmBody'),
+      confirmLabel: t('dshRuntimeRecoverMetadata'),
+      pendingLabel: t('dshRuntimeRemoteApplying'),
+      stillValid: () => recoverMetadataStillValid(liveFacts.current),
+      run: () => runRemoteAction(async (signal) => {
+        await remoteRuntimeAction(chamberInstanceId, { kind: 'recover-metadata' }, { signal })
+      }),
     })
-  }, [canRecoverMetadataRemote, mutationDisabled, t, chamberInstanceId, runRemoteAction])
+  }, [chamberInstanceId, t, runRemoteAction, askConfirm])
 
   // Metadata corruption notice rows (mirror the local branch copy; the fields
   // are absent on pre-recovery servers, so the block simply never renders).
@@ -573,23 +775,32 @@ function GatewayRuntimeSection({
   // Apply now on the gateway (design 18 addendum §5.1/§6.3): the pending
   // immediate-switch action goes through the 202 route, polls the applying
   // window to settlement, then refreshes the version list — mirroring
-  // onApplySelected. The UI owns the second confirmation here (the gateway
-  // has no native dialog): title + body in one confirm message.
+  // onApplySelected. 2026-09-11 upstream-alignment T2: this confirmation is the
+  // section's own in-app dialog like every other one (it used to be
+  // a native browser confirm, which no shape of this panel can style or scope).
   const onApplyNowRemote = useCallback(() => {
-    const target = remoteStatus?.pending
-    if (remoteStatus === null || target === null || remoteGates.applyNowDisabled) return
-    const message = `${t('dshRuntimeApplyNowConfirmTitle', { version: target })}\n\n${t('dshRuntimeApplyNowConfirmBody', { version: target })}`
-    if (!window.confirm(message)) return
-    void runRemoteAction(async (signal) => {
-      const result = await remoteRuntimeAction(chamberInstanceId, { kind: 'apply-now' }, { signal })
-      if (result.status === 202) {
-        const status = await pollRemoteRuntimeUntilSettled(chamberInstanceId, 'apply-now', { signal })
-        if (!signal.aborted) setRemoteStatus(status)
-      }
-      // The applied version may have changed the cached-tree list.
-      setVersionsEpoch((epoch) => epoch + 1)
+    const target = liveFacts.current.status?.pending ?? null
+    if (target === null || !applyNowStillValid(liveFacts.current, target)) return
+    askConfirm({
+      title: t('dshRuntimeApplyNowConfirmTitle', { version: target }),
+      description: t('dshRuntimeApplyNowConfirmBody', { version: target }),
+      confirmLabel: t('dshRuntimeApplyNowAction'),
+      pendingLabel: t('dshRuntimeRemoteApplying'),
+      // 2026-09-11 review-fix F2: the pending version is captured in the copy AND
+      // in the request, so the accept re-checks that the server still has THAT
+      // pending version (apply-now targets the server's current pending record).
+      stillValid: () => applyNowStillValid(liveFacts.current, target),
+      run: () => runRemoteAction(async (signal) => {
+        const result = await remoteRuntimeAction(chamberInstanceId, { kind: 'apply-now' }, { signal })
+        if (result.status === 202) {
+          const status = await pollRemoteRuntimeUntilSettled(chamberInstanceId, 'apply-now', { signal })
+          if (!signal.aborted) setRemoteStatus(status)
+        }
+        // The applied version may have changed the cached-tree list.
+        setVersionsEpoch((epoch) => epoch + 1)
+      }),
     })
-  }, [chamberInstanceId, remoteStatus, remoteGates.applyNowDisabled, t, runRemoteAction])
+  }, [chamberInstanceId, t, runRemoteAction, askConfirm])
 
   const registryOrigin = remoteStatus?.registry ?? ''
   const registryMode = registryOrigin === NPMJS || registryOrigin === NPMMIRROR
@@ -792,14 +1003,12 @@ function GatewayRuntimeSection({
   // 重启 dsh（2026-12 布局修订）：按钮移入版本选择行（与 select 同一行高
   // 基线）；加载/不可达分支仍单独展示。反馈行（note/error）跟随按钮位置。
   const restartButton = (
-    <button
-      type="button"
-      className={css.updateButton}
+    <Button variant="outline" size="sm"
       onClick={() => { void onRestartDsh() }}
       disabled={remoteRestartDisabled}
     >
       {restarting ? t('dshRuntimeRestarting') : t('dshRuntimeRestartAction')}
-    </button>
+    </Button>
   )
   const restartFeedback = (
     <>
@@ -948,9 +1157,7 @@ function GatewayRuntimeSection({
               方案 2 镜像：选中「内建版本」行且未装受管树时主按钮为
               「恢复内建」（回到内建锚，零下载）。 */}
           {!isActiveRemote && chosenRemote !== null && (
-            <button
-              type="button"
-              className={css.updatePrimaryButton}
+            <Button variant="primary" size="sm"
               onClick={() => { void (remoteBuiltinGuide ? onRestoreBuiltin() : onApplySelected()) }}
               disabled={remoteBuiltinGuide
                 ? (mutationDisabled || restoreBuiltinDisabled)
@@ -961,7 +1168,7 @@ function GatewayRuntimeSection({
                 : actionBusy
                   ? t('dshRuntimeRemoteApplying')
                   : `${gatewayDirection === 'rollback' ? t('dshRuntimeActionSwitch') : t('dshRuntimeActionUpdate')} v${chosenRemote}`}
-            </button>
+            </Button>
           )}
           {restartButton}
         </div>
@@ -973,14 +1180,12 @@ function GatewayRuntimeSection({
             <span className={css.generalHint} role="status">
               {t('dshRuntimeAnchorGuideHint', { version: chosenRemote ?? '' })}
             </span>
-            <button
-              type="button"
-              className={css.updateButton}
+            <Button variant="outline" size="sm"
               onClick={() => { void onApplySelected() }}
               disabled={mutationDisabled}
             >
               {t('dshRuntimeInstallBuiltinTree', { version: chosenRemote ?? '' })}
-            </button>
+            </Button>
           </div>
         )}
         {restartFeedback}
@@ -1021,13 +1226,11 @@ function GatewayRuntimeSection({
           its own block, then the pending record line with local semantics. */}
       {remoteStatus.phase === 'pending' && remoteStatus.pending !== null && !remoteGates.applyNowDisabled && (
         <div className={css.updateStatusLine}>
-          <button
-            type="button"
-            className={css.updatePrimaryButton}
+          <Button variant="primary" size="sm"
             onClick={() => { void onApplyNowRemote() }}
           >
             {t('dshRuntimeApplyNowAction')}
-          </button>
+          </Button>
         </div>
       )}
       {remoteStatus.pending !== null && remoteStatus.phase !== 'pending' && remoteStatus.phase !== 'applying' && (
@@ -1036,45 +1239,39 @@ function GatewayRuntimeSection({
 
       <div className={css.updateStatusLine}>
         {canRestorePreRollbackRemote && (
-          <button
-            type="button"
-            className={css.updateButton}
+          <Button variant="outline" size="sm"
             onClick={() => { void onRestorePreRollbackRemote() }}
             disabled={mutationDisabled}
           >
             {t('dshRuntimeRestorePreRollback')}
-          </button>
+          </Button>
         )}
         {canRecoverMetadataRemote && (
-          <button
-            type="button"
-            className={css.updateButton}
+          <Button variant="outline" size="sm"
             onClick={() => { void onRecoverMetadataRemote() }}
             disabled={recoverMetadataDisabled}
           >
             {t('dshRuntimeRecoverMetadata')}
-          </button>
+          </Button>
         )}
         {/* 恢复内建仅在与内建版本不一致（或普通 pending 逃生口）时显示（2026-12 修订 + 2026 audit R2 收窄：recovery 相位/忙碌窗不显示）。 */}
         {restoreBuiltinVisible && !remoteBuiltinGuide && (
-          <button
-            type="button"
-            className={css.updateButton}
+          <Button variant="outline" size="sm"
             onClick={() => { void onRestoreBuiltin() }}
             disabled={restoreBuiltinDisabled}
           >
             {t('dshRuntimeResetBuiltin')}
-          </button>
+          </Button>
         )}
         {canRetryApplyRemote && (
-          <button type="button" className={css.updateButton} onClick={() => { void onRetryApply() }} disabled={retryApplyDisabled}>
+          <Button variant="outline" size="sm" onClick={() => { void onRetryApply() }} disabled={retryApplyDisabled}>
             {t('dshRuntimeRetryApply')}
-          </button>
+          </Button>
         )}
         {canRetryRestoreRemote && (
-          <button type="button" className={css.updateButton} onClick={() => { void onRetryRestore() }} disabled={retryRestoreDisabled}>
+          <Button variant="outline" size="sm" onClick={() => { void onRetryRestore() }} disabled={retryRestoreDisabled}>
             {t('dshRuntimeRetryRestore')}
-          </button>
+          </Button>
         )}
       </div>
 
@@ -1086,16 +1283,14 @@ function GatewayRuntimeSection({
         <div className={css.updateStatusLine}>
           <span className={css.generalHint}>{t('dshRuntimeCleanupCandidatesLabel')}</span>
           {(remoteVersions?.removableVersions ?? []).map((version) => (
-            <button
+            <Button variant="outline" size="sm"
               key={version}
-              type="button"
-              className={css.updateButton}
               disabled={mutationDisabled}
               title={t('dshRuntimeCleanupConfirmTitle', { version })}
               onClick={() => { onCleanupRemote(version) }}
             >
               {t('dshRuntimeCleanupVersion')} v{version}
-            </button>
+            </Button>
           ))}
         </div>
       )}
@@ -1153,9 +1348,7 @@ function GatewayRuntimeSection({
                 }}
               />
             )}
-            <button
-              type="button"
-              className={css.updateButton}
+            <Button variant="outline" size="sm"
               disabled={mutationDisabled
                 || (registrySelection === CUSTOM_REGISTRY && customOrigin.trim() === '')}
               onClick={() => {
@@ -1165,10 +1358,8 @@ function GatewayRuntimeSection({
               }}
             >
               {registryBusy ? t('dshRuntimeRegistryApplying') : t('dshRuntimeRegistryApply')}
-            </button>
-            <button
-              type="button"
-              className={css.updateButton}
+            </Button>
+            <Button variant="outline" size="sm"
               disabled={registryBusy}
               onClick={() => {
                 // 2026-12 (review fix): cancel resets the controls to the
@@ -1181,29 +1372,24 @@ function GatewayRuntimeSection({
               }}
             >
               {t('dshRuntimeRegistryCancel')}
-            </button>
+            </Button>
           </div>
         ) : (
           <div className={css.updateStatusLine}>
             <span className={css.generalHint}>
               {t('dshRuntimeRegistryCurrent', { origin: registryOrigin !== '' ? registryOrigin : '—' })}
             </span>
-            <button
-              type="button"
-              className={css.updateButton}
+            <Button variant="outline" size="sm"
               disabled={registryBusy || checkingVersions || checkMachineBusy}
-              onClick={onRefreshVersions}
-            >
+              onClick={onRefreshVersions}>
               {checkingVersions ? t('dshRuntimeRegistryChecking') : t('dshRuntimeRegistryCheck')}
-            </button>
-            <button
-              type="button"
-              className={css.updateButton}
+            </Button>
+            <Button variant="outline" size="sm"
               disabled={mutationDisabled}
               onClick={() => setRegistryEditing(true)}
             >
               {t('dshRuntimeRegistryEdit')}
-            </button>
+            </Button>
           </div>
         )}
       </div>
@@ -1290,6 +1476,53 @@ export function DshRuntimeSection({
   const testInFlight = useRef(false)
   const [applyingRegistry, setApplyingRegistry] = useState(false)
 
+  // ---- the section's ONE in-app confirmation (2026-09-11 upstream-alignment T2) ----
+  //
+  // The armed request and its pending flag live above the shape branch, so the
+  // local restart and every gateway mutation share one dialog, one cancel path
+  // and one pending discipline. The transitions are the pure machine in
+  // ./confirm-machine.ts: arming runs nothing, a cancel drops the request before
+  // its runner is ever called, and an accept launches exactly one runner after
+  // re-validating the armed request (2026-09-11 review-fix F2; the synchronous ref
+  // mirrors the rest of this section's same-frame fences — React state is not a
+  // synchronous mutex).
+  const [confirmState, setConfirmState] = useState<ConfirmState<RuntimeConfirmRequest>>(IDLE_CONFIRM)
+  // The synchronous mirror of "the accepted action is running" (the machine's
+  // `pending`). The accept path, its re-entry fence and — 2026-09-11 review-fix
+  // F4a — the ARM path all read this ref, never the state: an arm that landed
+  // while an action was pending used to replace the pending request with a
+  // non-pending one, which silently downgraded the dialog (the following Confirm
+  // became a no-op, and `Modal` has no focus trap to hint that anything was off).
+  const confirmLaunchRef = useRef(false)
+  const askConfirm = useCallback((request: RuntimeConfirmRequest) => {
+    if (confirmLaunchRef.current) return
+    setConfirmState(armConfirm(request))
+  }, [])
+  const cancelConfirm = useCallback(() => {
+    setConfirmState(cancelConfirmStep)
+  }, [])
+  const acceptConfirm = useCallback(() => {
+    if (confirmLaunchRef.current) return
+    const result = acceptConfirmStep(confirmState, (run) => {
+      confirmLaunchRef.current = true
+      // The runners own their own failure reporting (the gateway ones through
+      // runRemoteAction, the restart through its own catch); the defensive catch
+      // keeps a runner that breaks that contract from vanishing as an unhandled
+      // rejection while the dialog is armed.
+      void run()
+        .catch((error: unknown) => { setActionError(errorMessage(error)) })
+        .finally(() => {
+          confirmLaunchRef.current = false
+          setConfirmState(IDLE_CONFIRM)
+        })
+    })
+    // 2026-09-11 review-fix F2: the armed request re-validated itself BEFORE the
+    // runner was launched, and it failed — the confirm click ends in an honest
+    // refusal on the section's existing error row, never in silence.
+    if (result.outcome === 'dropped') setActionError(t('dshRuntimeConfirmStale'))
+    if (result.outcome !== 'ignored') setConfirmState(result.state)
+  }, [confirmState, t])
+
   const runtime = currentRuntimeSurface()
   const hydrated = state !== null
   const active = state?.active ?? null
@@ -1367,35 +1600,51 @@ export function DshRuntimeSection({
   // 重启 dsh（design 18 §3.6 项 8）：受控进程重启刷新插件挂载；指针/版本树
   // 不动。local = 事务化 control-plane restartLocal()；gateway = 该 server 的
   // /chamber/runtime/restart（202 + status 轮询）。
-  // 确认文案（多用户中断）归口（2026-12 audit D-4）：本段用 window.confirm。
-  // gateway 源使用专用键 dshRuntimeRestartGatewayConfirm（含「其他用户的会
-  // 话将短暂断开」，与 connections 卡片受控重启确认
+  // 确认（多用户中断）走本段唯一的应用内对话框（2026-09-11 upstream-alignment
+  // T2；原先是浏览器原生确认框）：两种形态同一个 Modal，因为原生 chrome 既套不上
+  // 面板的 --dsw-alias-* 词汇，也不属于这个多壳文档。文案按形态分键：
+  // gateway 源使用 dshRuntimeRestartGatewayConfirm（含「其他用户的会话将短暂
+  // 断开」，与 connections 卡片受控重启确认
   // settings-connections locales restartManagedDshConfirmDescription 同语义；
   // CS 卡文案为准，两处改语义先改 CS 卡）；local 源用简短键
   // dshRuntimeRestartConfirm（本机实例无多用户影响）。
   const canRestartDsh = runtimeRestartAllowed(state)
-  const onRestartDsh = useCallback(async (): Promise<void> => {
+  /** The confirmed restart itself: runs only after the dialog's confirm click. */
+  const runRestartDsh = useCallback(async (): Promise<void> => {
     if (restartingRef.current) return
-    const restartConfirmKey = instanceSource === 'gateway'
-      ? 'dshRuntimeRestartGatewayConfirm'
-      : 'dshRuntimeRestartConfirm'
-    if (window.confirm(t(restartConfirmKey))) {
-      restartingRef.current = true
-      setRestarting(true)
-      setActionError(null)
-      setRestartNote(null)
-      try {
-        if (instanceSource === 'local') {
-          const surface = currentRuntimeSurface()
-          if (surface !== null) {
-            await surface.restart()
-          } else {
-            // Bridge torn down between render and click: never claim a
-            // restart that cannot run (review fix).
-            throw new Error('runtime surface unavailable')
-          }
-        } else if (instanceSource === 'gateway' && chamberInstanceId !== undefined) {
-          const response = await fetch(`/api/i/${chamberInstanceId}/chamber/runtime/restart`, { method: 'POST' })
+    restartingRef.current = true
+    setRestarting(true)
+    setActionError(null)
+    setRestartNote(null)
+    try {
+      if (instanceSource === 'local') {
+        const surface = currentRuntimeSurface()
+        if (surface !== null) {
+          await surface.restart()
+        } else {
+          // Bridge torn down between render and click: never claim a
+          // restart that cannot run (review fix).
+          throw new Error('runtime surface unavailable')
+        }
+      } else if (instanceSource === 'gateway' && chamberInstanceId !== undefined) {
+        // 2026-09-11 review-fix F4b: the readiness POST is bounded by the SAME
+        // controller that owns the readiness poll, so the whole gateway leg (POST
+        // + poll) runs under one deadline and a wedged hop cannot leave the
+        // confirmation dialog pending forever. The poll keeps its own inner
+        // budget (pollGatewayReady, 120s) inside this ceiling.
+        restartPollAbort.current?.abort()
+        const restartController = new AbortController()
+        restartPollAbort.current = restartController
+        let restartTimedOut = false
+        const restartTimeout = setTimeout(() => {
+          restartTimedOut = true
+          restartController.abort()
+        }, REMOTE_ACTION_TIMEOUT_MS)
+        try {
+          const response = await fetch(`/api/i/${chamberInstanceId}/chamber/runtime/restart`, {
+            method: 'POST',
+            signal: restartController.signal,
+          })
           if (response.status !== 202) {
             // Surface the server's own reason (round-3 fix): the route answers
             // 409 with a specific error ('managed dsh is not running (stopped)…',
@@ -1408,24 +1657,45 @@ export function DshRuntimeSection({
             } catch { /* non-JSON body — fall back to the status */ }
             throw new Error(serverReason !== '' ? `restart refused: ${serverReason}` : `restart refused (${response.status})`)
           }
-          restartPollAbort.current?.abort()
-          const pollController = new AbortController()
-          restartPollAbort.current = pollController
-          await pollGatewayReady(chamberInstanceId, pollController.signal)
-        } else {
-          // Defensive (review fix): a source/id mismatch must never fall
-          // through to the success note for a restart that cannot run.
-          throw new Error('runtime restart unavailable for this source')
+          await pollGatewayReady(chamberInstanceId, restartController.signal)
+        } catch (error) {
+          // Our own deadline reports itself in the section's copy; every other
+          // failure (including the poll's own budget) keeps its own message.
+          if (restartTimedOut) throw new Error(t('dshRuntimeActionTimeout'))
+          throw error
+        } finally {
+          clearTimeout(restartTimeout)
         }
-        setRestartNote(t('dshRuntimeRestarted'))
-      } catch (error) {
-        setActionError(errorMessage(error))
-      } finally {
-        restartingRef.current = false
-        setRestarting(false)
+      } else {
+        // Defensive (review fix): a source/id mismatch must never fall
+        // through to the success note for a restart that cannot run.
+        throw new Error('runtime restart unavailable for this source')
       }
+      setRestartNote(t('dshRuntimeRestarted'))
+    } catch (error) {
+      setActionError(errorMessage(error))
+    } finally {
+      restartingRef.current = false
+      setRestarting(false)
     }
   }, [t, instanceSource, chamberInstanceId])
+  const onRestartDsh = useCallback((): void => {
+    if (restartingRef.current) return
+    askConfirm({
+      title: t('dshRuntimeRestartAction'),
+      description: t(instanceSource === 'gateway'
+        ? 'dshRuntimeRestartGatewayConfirm'
+        : 'dshRuntimeRestartConfirm'),
+      confirmLabel: t('dshRuntimeRestartAction'),
+      pendingLabel: t('dshRuntimeRestarting'),
+      // 2026-09-11 review-fix F2: the restart runner's OWN inside-check
+      // (`runRestartDsh` re-reads restartingRef before it starts), mirrored at
+      // accept time so a restart that began while this dialog was open is
+      // refused instead of silently re-entered.
+      stillValid: () => !restartingRef.current,
+      run: runRestartDsh,
+    })
+  }, [askConfirm, t, instanceSource, runRestartDsh])
 
   const onInstall = useCallback(() => {
     if (runtime === null || chosen === null || isActive || envGated || !actions.has('install')) return
@@ -1438,13 +1708,16 @@ export function DshRuntimeSection({
   }, [runtime, envGated, actions, runRuntimeAction])
 
   // Apply now (design 18 addendum §2.1/§4.1): run the pending activation
-  // transaction in the current session. The desktop main owns the native
-  // second confirmation (confirmRuntimeMutation) and the whole transaction
-  // window (phase 'applying' + runtimeBlocked), so no renderer confirm is
-  // shown here — a UI confirm on top of the native dialog would double-prompt
-  // (§6.3: desktop = native dialog, gateway = UI window.confirm). The native
-  // dialog is async, so a synchronous ref gate prevents a same-frame
-  // double-click from stacking a second IPC/confirm (design 18 addendum §6.2).
+  // transaction in the current session. 2026-09-11 upstream-alignment T2: the
+  // local runtime surface (desktop main) still owns its own confirmation for
+  // this transaction — it is resolved INSIDE the surface call, never in this
+  // panel — so the section deliberately adds none on top of it: a second prompt
+  // here would double-ask for one action. Every confirmation the SECTION itself
+  // performs is the one in-app dialog above; which layer confirms an action is
+  // unchanged by T2 (the gateway shape's confirmations moved from
+  // a native browser confirm to that dialog). The surface confirmation is async, so a
+  // synchronous ref gate prevents a same-frame double-click from stacking a
+  // second IPC/confirm (design 18 addendum §6.2).
   const applyNowRef = useRef(false)
   const onApplyNow = useCallback(() => {
     if (applyNowRef.current) return
@@ -1705,16 +1978,26 @@ export function DshRuntimeSection({
     // keyed per server: switching the selected server remounts a fresh section
     // (never the previous server's status/versions/selection).
     return (
-      <GatewayRuntimeSection
-        key={chamberInstanceId}
-        t={t}
-        chamberInstanceId={chamberInstanceId}
-        restarting={restarting}
-        onRestartDsh={onRestartDsh}
-        restartNote={restartNote}
-        actionError={actionError}
-        setActionError={setActionError}
-      />
+      <>
+        <GatewayRuntimeSection
+          key={chamberInstanceId}
+          t={t}
+          chamberInstanceId={chamberInstanceId}
+          restarting={restarting}
+          onRestartDsh={onRestartDsh}
+          restartNote={restartNote}
+          actionError={actionError}
+          setActionError={setActionError}
+          askConfirm={askConfirm}
+        />
+        <RuntimeConfirmDialog
+          request={confirmState.request}
+          pending={confirmState.pending}
+          onCancel={cancelConfirm}
+          onConfirm={acceptConfirm}
+          t={t}
+        />
+      </>
     )
   }
 
@@ -1854,14 +2137,11 @@ export function DshRuntimeSection({
               ——按钮保留显示但禁用（与 gateway 分支对齐），忙碌副本「正在
               安装…」与进度条共同呈现操作中状态。 */}
           {!isActive && chosen !== null && (
-            <button
-              type="button"
-              className={css.updatePrimaryButton}
+            <Button variant="primary" size="sm"
               onClick={builtinGuide ? onReset : onInstall}
               disabled={builtinGuide
                 ? (mutationDisabled || !canReset)
-                : (mutationDisabled || !canInstall)}
-            >
+                : (mutationDisabled || !canInstall)}>
               {/* 方案 2（2026-12 用户决策）：选中「内建版本」行且未装受管树时，
                   主按钮是「恢复内建」（回到随应用副本，零下载）。 */}
               {builtinGuide
@@ -1873,18 +2153,16 @@ export function DshRuntimeSection({
                   // never 回滚到 (the data-restore semantics are decided
                   // server-side by the direction formula, not by the label).
                   : `${selectionDirection === 'rollback' ? t('dshRuntimeActionSwitch') : t('dshRuntimeActionUpdate')} v${chosen}`}
-            </button>
+            </Button>
           )}
           {/* 重启 dsh（design 18 §3.6 项 8）：暂态不可用（busy/pending/
               applying 等）时禁用而非隐藏——重启能力本身常驻可见。 */}
-          <button
-            type="button"
-            className={css.updateButton}
+          <Button variant="outline" size="sm"
             onClick={() => { void onRestartDsh() }}
             disabled={restarting || !canRestartDsh}
           >
             {restarting ? t('dshRuntimeRestarting') : t('dshRuntimeRestartAction')}
-          </button>
+          </Button>
         </div>
         {/* 方案 2 引导行：说明随应用副本已存在（恢复内建零下载），并把「仍
             下载并安装为受管版本」保留为显式次要动作（受管树语义：回滚/
@@ -1894,14 +2172,11 @@ export function DshRuntimeSection({
             <span className={css.generalHint} role="status">
               {t('dshRuntimeBuiltinGuideHint', { version: chosen ?? '' })}
             </span>
-            <button
-              type="button"
-              className={css.updateButton}
+            <Button variant="outline" size="sm"
               onClick={onInstall}
-              disabled={mutationDisabled || !canInstall}
-            >
+              disabled={mutationDisabled || !canInstall}>
               {t('dshRuntimeInstallBuiltinTree', { version: chosen ?? '' })}
-            </button>
+            </Button>
           </div>
         )}
         {restartNote !== null && (
@@ -1916,14 +2191,11 @@ export function DshRuntimeSection({
       {phase === 'pending' && pending !== null && canApplyNow && (
         <>
           <div className={css.updateStatusLine}>
-            <button
-              type="button"
-              className={css.updatePrimaryButton}
+            <Button variant="primary" size="sm"
               onClick={onApplyNow}
-              disabled={mutationDisabled}
-            >
+              disabled={mutationDisabled}>
               {t('dshRuntimeApplyNowActionWithVersion', { version: pending })}
-            </button>
+            </Button>
           </div>
           <p className={css.generalHint}>{t('dshRuntimeApplyNowHint')}</p>
         </>
@@ -1937,35 +2209,32 @@ export function DshRuntimeSection({
       {(canRetryApply || canRetryRestore || canRestorePreRollback || canRecoverMetadata || canResetVisible) && (
         <div className={css.updateStatusLine}>
           {canRetryApply && (
-            <button type="button" className={css.updateButton} onClick={onRetryApply} disabled={mutationDisabled}>
+            <Button variant="outline" size="sm" onClick={onRetryApply} disabled={mutationDisabled}>
               {t('dshRuntimeRetryApply')}
-            </button>
+            </Button>
           )}
           {canRetryRestore && (
-            <button type="button" className={css.updateButton} onClick={onRetryRestore} disabled={operationDisabled}>
+            <Button variant="outline" size="sm" onClick={onRetryRestore} disabled={operationDisabled}>
               {t('dshRuntimeRetryRestore')}
-            </button>
+            </Button>
           )}
           {canRestorePreRollback && (
-            <button type="button" className={css.updateButton} onClick={onRestorePreRollback} disabled={mutationDisabled}>
+            <Button variant="outline" size="sm" onClick={onRestorePreRollback} disabled={mutationDisabled}>
               {t('dshRuntimeRestorePreRollback')}
-            </button>
+            </Button>
           )}
           {canRecoverMetadata && (
-            <button
-              type="button"
-              className={css.updateButton}
+            <Button variant="outline" size="sm"
               onClick={onRecoverMetadata}
-              disabled={mutationDisabled}
-            >
+              disabled={mutationDisabled}>
               {t('dshRuntimeRecoverMetadata')}
-            </button>
+            </Button>
           )}
           {/* 恢复内建仅在与内建版本不一致（或普通 pending 逃生口）时显示（2026-12 修订 + 2026 audit R2 收窄：recovery 相位/忙碌窗不显示）。 */}
           {canResetVisible && !builtinGuide && (
-            <button type="button" className={css.updateButton} onClick={onReset} disabled={mutationDisabled}>
+            <Button variant="outline" size="sm" onClick={onReset} disabled={mutationDisabled}>
               {t('dshRuntimeResetBuiltin')}
-            </button>
+            </Button>
           )}
         </div>
       )}
@@ -1978,16 +2247,14 @@ export function DshRuntimeSection({
         <div className={css.updateStatusLine}>
           <span className={css.generalHint}>{t('dshRuntimeCleanupCandidatesLabel')}</span>
           {cleanupCandidates.map((version) => (
-            <button
+            <Button variant="outline" size="sm"
               key={version}
-              type="button"
-              className={css.updateButton}
               disabled={mutationDisabled}
               title={t('dshRuntimeCleanupConfirmTitle', { version })}
               onClick={() => { onCleanupVersionDirect(version) }}
             >
               {t('dshRuntimeCleanupVersion')} v{version}
-            </button>
+            </Button>
           ))}
         </div>
       )}
@@ -2004,14 +2271,11 @@ export function DshRuntimeSection({
               reason: state.failure.reason,
             })}
           </p>
-          <button
-            type="button"
-            className={css.updateButton}
+          <Button variant="outline" size="sm"
             disabled={operationDisabled}
-            onClick={onClearFailure}
-          >
+            onClick={onClearFailure}>
             {t('dshRuntimeClearFailure')}
-          </button>
+          </Button>
         </div>
       )}
 
@@ -2058,9 +2322,7 @@ export function DshRuntimeSection({
                 }}
               />
             )}
-            <button
-              type="button"
-              className={css.updateButton}
+            <Button variant="outline" size="sm"
               disabled={registryDisabled
                 || (registrySelection === CUSTOM_REGISTRY && customOrigin.trim() === '')}
               onClick={() => {
@@ -2071,15 +2333,13 @@ export function DshRuntimeSection({
               }}
             >
               {applyingRegistry ? t('dshRuntimeRegistryApplying') : t('dshRuntimeRegistryApply')}
-            </button>
-            <button
-              type="button"
-              className={css.updateButton}
+            </Button>
+            <Button variant="outline" size="sm"
               disabled={applyingRegistry}
               onClick={() => setRegistryEditing(false)}
             >
               {t('dshRuntimeRegistryCancel')}
-            </button>
+            </Button>
             {originError !== null && <p className={css.generalError} role="alert">{originError}</p>}
           </div>
         ) : (
@@ -2091,22 +2351,18 @@ export function DshRuntimeSection({
                 与 gateway 分支同一可见策略——gateway 以 checkMachineBusy 镜像
                 本处 canCheck 缺失的机器相位；restarting 计入禁用与 gateway
                 重启窗口同口径）。 */}
-            <button
-              type="button"
-              className={css.updateButton}
+            <Button variant="outline" size="sm"
               disabled={!canCheck || busy || testingRegistry || restarting}
               onClick={() => { void onTestRegistry() }}
             >
               {testingRegistry ? t('dshRuntimeRegistryChecking') : t('dshRuntimeRegistryCheck')}
-            </button>
-            <button
-              type="button"
-              className={css.updateButton}
+            </Button>
+            <Button variant="outline" size="sm"
               disabled={registryDisabled}
               onClick={() => setRegistryEditing(true)}
             >
               {t('dshRuntimeRegistryEdit')}
-            </button>
+            </Button>
           </div>
         )}
       </div>
@@ -2151,6 +2407,17 @@ export function DshRuntimeSection({
           )}
         </div>
       )}
+
+      {/* The local shape's confirmations (restart among them) render through the
+          same armed dialog as the gateway shape: ONE path, both shapes. The
+          Modal portals to the body, so its tree position is irrelevant. */}
+      <RuntimeConfirmDialog
+        request={confirmState.request}
+        pending={confirmState.pending}
+        onCancel={cancelConfirm}
+        onConfirm={acceptConfirm}
+        t={t}
+      />
     </div>
   )
 }

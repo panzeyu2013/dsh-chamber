@@ -24,14 +24,12 @@
  * EEXIST instead of racing a read-check-write window.
  */
 import {
-  existsSync,
   readFileSync,
   readdirSync,
 } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { createRequire as nodeCreateRequire } from 'node:module'
 import { basename, dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { call as dshCall, type Logger, type PlaneHandle } from '@dsh-chamber/control-plane'
 import { syncedHostDomainProbeNames } from './plugins.ts'
 import {
@@ -123,6 +121,7 @@ import {
   type StartupDeps,
 } from '@dsh-chamber/dsh-runtime'
 import { sanitizeRouteError } from './sanitize-route-error.ts'
+import { resolvePnpmEntry } from './pnpm-entry.ts'
 import type { GatewayConfig } from './config.ts'
 // Refusal construction + recovery-name classification single sources (audit
 // N2): every code/message this manager shares with the route pre-gates in
@@ -721,25 +720,10 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     return { usage: diskCache.usage, error: diskCache.error }
   }
 
-  const pnpmEntry = (): string => {
-    // Bundled shape first (design 18 §9.2 D1): the installer's local
-    // (default) path unpacks the gateway tarball and NEVER installs gateway
-    // dependencies, so `gatewayRequire.resolve('pnpm')` below cannot hit a
-    // real node_modules tree there. scripts/build.mjs copies the pinned pnpm
-    // into dist/pnpm (dereferenced); prefer it whenever the build carried it
-    // (desktop parity: extraResources). NOTE: dist/pnpm sits next to this
-    // bundled module, so derive the path with fileURLToPath — path.dirname
-    // over a file:// URL would mangle the path.
-    const bundledPnpm = join(dirname(fileURLToPath(import.meta.url)), 'pnpm', 'bin', 'pnpm.cjs')
-    if (existsSync(bundledPnpm)) return bundledPnpm
-    // Dev / npm-installed shape: pnpm is a real runtime dependency of
-    // @dsh-chamber/gateway; resolve from the gateway package root (pnpm itself
-    // has no install scripts). NOTE: pnpm's package.json `exports` hides
-    // `./bin/pnpm.cjs` (subpath not exported — ERR_PACKAGE_PATH_NOT_EXPORTED),
-    // so resolve the package entry (…/pnpm/package.json) and join the bin path
-    // by hand.
-    return join(dirname(gatewayRequire.resolve('pnpm')), 'bin', 'pnpm.cjs')
-  }
+  // Single source with the plugin executor's PATH shim: pnpm-entry.ts owns the
+  // bundled-vs-dev resolution (design 18 §9.2 D1); the shim it generates points
+  // at exactly this entry.
+  const pnpmEntry = (): string => resolvePnpmEntry()
 
   let transactionWorkspace: string | null = null
 

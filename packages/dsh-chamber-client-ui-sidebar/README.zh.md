@@ -7,23 +7,48 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
 插件注册进 layout 的 `sidebar` 槽，**替换官方 ui-sidebar 注册**（官方包在
 `vendor/harness-packages` 保持原样，永不进启动图）。
 
+## alpha.2 扩展孔位（品牌 + 全局面板）
+
+外壳声明并渲染 alpha.2 官方 `ui-sidebar` 新增的三个孔位，使上游/第三方的注册
+永不悬空：
+
+- `sidebar.brand.mark` / `sidebar.brand.name`——左上品牌行；chamber 字标保持
+  mark 回退，name 孔位无占用时不渲染内容（rail 同样渲染 mark 孔位）。
+- `sidebar.panellist`（list）——全局主面板行。`src/client/panel-source.ts` 把
+  槽位台账镜像为 `{id, order, label}` 元数据（label thunk 读取时解析、仅在
+  变化时通知），外壳为每条渲染一行 `PanelRow`，点击调用
+  `ctx.layout.selectPanel(id)`。上游出厂为空列表，故该区默认不可见；投影与
+  接线由 `test/panel-source.test.ts` 与 `test/panel-wiring.test.ts` 钉死。
+
 ## 结构
 
 - 来源分组 → workspace 组 → session 行。所有来源（local + 每个注册的远程
   实例）在**同一张平列表**里仅按来源分组呈现：来源组头（标签 + 连接状态
   徽标，当前来源高亮）→ workspace 组 → session 行。远程来源按来源 id 派生
-  稳定 accent 色（hue 哈希）；本地来源用默认色。rail 渲染来源色点。
+  稳定 accent 色（hue 哈希）；本地来源用默认色。rail 渲染来源色点
+  （2026-09-11 上游对齐起为每个来源一个命名的可操作按钮，见「交互」）。
 - 不属任何 workspace 的游离会话落在来源末位合成的一个**未分组**桶（仅
-  session 行，无 workspace 操作）；**blank 行在它们仍是该来源当前会话期间
-  （以 "New Session" 呈现）以及失去 current 后 450ms ghost 宽限期内会进入
-  列表**（06 §2.2 / 05 §2.1）；subagent 来源的子会话不进入导航列表
+  session 行，无 workspace 操作）；blank 行只在它们**既是该来源当前会话、
+  又真的被投影**期间进入列表（以 "New Session" 呈现）——该来源还有指向
+  **别的**会话的在途 open 时投影门整体不投影 `current`
+  （`projectableCurrent`，05 §2.2.1），运行时 boot 期间自选的 blank 会话
+  因此不入列表；失去 current 的 blank 行另有 450ms ghost 宽限期保住占位
+  （06 §2.2 / 05 §2.1）；subagent 来源的子会话不进入导航列表
   （`shared/derive.ts`）。
 - 已连接来源的聚合拉取失败时，以错误文本代替 workspace 列表呈现——绝不
   冒充"无工作区"；未连接来源只显示分组头 + 状态提示；全部来源断开时显示
   空态提示。
-- 会话行带**运行指示点**（wire `sessions.list.running`）；不渲染相对时间
-  单元格（06 §4.3——`relativeTimeBucket` 仅保留为共享工具）；状态点优先级
-  与当前会话高亮（全局单选）见下方"第三轮（设计 06）"。
+- 会话行带**运行指示点**（wire `sessions.list.running`），完成未读用**chamber
+  品牌蓝点**（`.stateCompleted`，6px 实心）——与固定待办条带同一枚标记，**不取**
+  官方 `StateDot` 的 `done` 绿：该色与来源头连接状态绿点同 token
+  （`--dsw-alias-state-success-primary`），"会话完成未读"与"服务器已连接"会同色
+  （2026-09 用户裁决；沿革：≤0.2.4 品牌蓝点 → 0.3.0-beta.1 T10 官方绿点 →
+  本轮回到蓝点，06 §4.3）；不渲染
+  相对时间单元格（06 §4.3——`relativeTimeBucket` 仅保留为共享工具）。行所属
+  会话的 `schedule` 投影非空时，标题与尾随单元格之间渲染官方 active-Schedule
+  标记（16px 闹钟字形、`role="img"`、可访问名 `schedule.active`），搜索结果行
+  同样如此；该事实稀疏，其余行的几何一字不动。状态点优先级与当前会话高亮
+  （全局单选）见下方"第三轮（设计 06）"。
 - workspace 组可**折叠**（组头 chevron + 会话数徽标）；折叠状态持久化于
   localStorage 视图偏好（`dsh-chamber.sidebar.v1`）。
 - 来源组同样可**折叠**（2026-09，设计 06 §2.4）：每个来源分组头左侧槽位为
@@ -49,10 +74,46 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
 
 - 点击会话行 → `chamberBridge.requestOpenSession(sourceId, sessionId)`；
   App 层切到该来源的 shell 并打开会话。
-- 悬停操作（v1 最小集，走该来源自己的 unary wire 客户端
-  `shared/instance-api.ts`）：会话重命名/归档；workspace 新建会话/重命名/
-  删除。失败内联呈现，绝不静默。每个成功操作后触发
+- 行操作（v1 最小集，走该来源自己的 unary wire 客户端
+  `shared/instance-api.ts`）**全部收在行菜单里**：会话 = 重命名/分叉/归档；
+  真实 workspace = 行内 `+` 新建会话（worktree 行也有）+ kebab 里的重命名/
+  删除（仅非 worktree 行——派生 worktree 刻意无 kebab，OpenChamber parity）。
+  不再有第二个悬停按钮——会话行的归档是**菜单项**且**立即执行、无确认**：
+  归档只隐藏该行、从不触及会话日志（上游把归档排除在确认家族之外的同一理由）。
+  失败内联呈现，绝不静默。每个成功操作后触发
   `chamberBridge.requestRefresh(sourceId)`——App 层立即重拉该来源快照。
+- 工作区删除由**应用内 `Modal`** 确认，绝不用原生 OS 确认框（后者骑不上
+  alias token）：上游 chrome——标题与说明句取上游字典键
+  `delete.workspace`/`delete.desc`（孤儿态用自己那句陈述文案
+  `delete.descOrphan`）、outline 取消 +
+  outline 破坏性动作、wire 调用在途时一条 `role="status"` 的 `delete.pending` 行，
+  以及**删除失败**时对话框**内**一条 `role="alert"` 行——该行未关闭前对话框不关
+  （按行的内联错误行照旧保留，但被删行已卸载后它无处可显，上游同样在对话框里报失败）。
+  打开时焦点落进对话框、
+  关闭时回到开启者；来源消失或断开即撤销已武装的确认——**除非**对话框里正显示一条已报告
+  的失败：那条 `role="alert"` 此时是仅存的解释，故随对话框保留到用户自行关闭
+  （2026-09-11 review-fix）。任何时刻最多只有**一层**
+  chamber Modal，而这条保证是加在**开启点**上的**对称闸门**、不是关于遮罩的说法：官方
+  Modal 没有焦点陷阱，nav 在每一层遮罩之后仍可 Tab 到（含始终渲染的孤儿徽标与来源头
+  控件）——因此三个开启点（武装本确认、打开归档管理器、打开添加工作区浏览器）在其余任
+  一层已打开时都被拒绝，与用户先够到哪一个无关。两层 Modal 会各自注册 document 级
+  Escape 监听、一次 Escape 关掉两层——这正是归档管理器自己拒绝第二层的理由。什么也没
+  失去：每一层都可关闭（取消 / X / 遮罩 / Escape），被拒的控件在另一层消失的那一刻立即可用。
+- 行操作的可访问名带上它作用的**那一行**
+  （`action.newSession.aria` / `action.menu.workspace` / `action.menu.session`，
+  上游的 `{name}` 参数化形式）：一排只报「更多操作」的控件对 AT 等于没说。
+  无标题会话在行内与可访问名里解析到同一个 `list.unnamed` 占位。
+- 行窗口是**双向披露**：还有隐藏行时条带给 `sessions.expand {n}`（上游文案），
+  展开后**同一个**控件给 `sessions.collapse` 并上报 `aria-expanded`——隐藏计数
+  取自与展开无关的窗口，故收起入口不会被自己的那次展开吃掉。
+- 菜单与来源头控件：交互按上游、**密度按 chamber**。三个菜单（session kebab /
+  workspace kebab / 排序）一律用原语的 `compact` 形态——这是 v0.2.4 的行为，
+  2026-09-11 对齐轮曾改成官方默认（40px 行 / 14px 标签）与 `dense`（34px），
+  比我们自己 26px 的列表行整整大一圈，故恢复；`closeOnPointerLeave` 保留。
+  来源头四个控件（排序/添加工作区/搜索/归档管理器）改骑官方
+  `Tooltip`（不再借用原生 `title`），添加工作区用官方 project-add 字形；排序
+  菜单保留 portal + `align="end"`，并由标签报出当前模式。浏览树带上可访问名
+  `section.sessions`，与搜索结果树一致。
 - 新建工作区：每个已连接来源打开同一个应用内目录浏览对话框（browse
   directory-picker 表面，设计 05 §4），按该来源的 unary client 驱动
   （`host.listDirectory`/`host.createDirectory`）；确认路径后走**该实例**的
@@ -61,6 +122,33 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
 - 点击非当前来源的分组头 → 切换活动 N-ctx 视图到该来源 shell（不打开
   会话，`chamberBridge.requestActivateSource`）；归档后会话立即从列表
   消失（`archivedSessionIds` 过滤在 `shared/derive.ts` derive 层）。
+- 折叠 rail 为每个来源渲染一个**命名的可操作按钮**（官方 `Tooltip` +
+  `aria-label`、当前来源 `aria-current`、**非当前**且不可激活的来源
+  `aria-disabled`——当前来源同样不是激活目标，但它用 `aria-current` 标记；名称取
+  来源头自己的拒绝理由），取代此前只有 `title` 的惰性色点——因此 rail 上也能
+  切换来源；彩色点与活动 accent 环一字未改（含几何）。
+
+## 打开意图闸门与工作区回声（design 05 §2.2.1，2026-12）
+
+本包持有页面级打开意图槽（`shared/open-intent.ts`——与 `pending-click.ts` 同款
+vite shared 单例纪律，因为目标实例自己的 ctx 也要读它）及其供 App 层消费的纯
+规则，以及工作区回声账本规则（`shared/workspace-echo.ts`）与上报点
+（`client/SidebarRoot.tsx`）。由此有两个用户可见面：
+
+- **意图闸门**：某来源有在途 open 时，只有它的当前会话**就是**请求的那个
+  会话才投影 `current`（`projectableCurrent`）——冷 boot 期间运行时自选的
+  blank「新建会话」行因此不会抢在请求的会话之前闪出；幂等重开保持高亮。
+  目标视图侧，boot 遮罩在干净 settle 之后继续持有的唯一情形是壳体**尚未**
+  显示请求的会话（`shouldHoldViewVeil`）——已经显示它的视图（幂等重开、或
+  boot 期早开臂 `client/early-open.ts` 已抢先）永不被遮，失败的壳也永不持有。
+- **回声工作区行**：从本侧栏新建的工作区立刻出现在列表里，不等任何挂载基线
+  带来它：该行带真实宿主 id（**不带 `synthetic`**，故工作区级动作照常可用）、
+  与同路径合成组相遇时原位替换后者，并在该来源 push 列出它后交由权威行接管
+  （05 §2.2.1）。同一通道还承载撤销/改名两半：`workspace.delete` 成功后
+  `reportWorkspaceRemoved`（没有它，未挂载来源上的 create → delete 会留下一个
+  带真 id 的幽灵行直到 TTL 到期）、`workspace.rename` 成功后
+  `reportWorkspaceRenamed` 带新标题（回声行标题是路径 basename，否则改名前
+  看起来完全没生效）——两者都由 App 施加到同一个账本。
 
 ## 数据纪律
 

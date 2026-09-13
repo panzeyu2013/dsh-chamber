@@ -17,7 +17,10 @@
  * singleton like cordis — never a host-graph row.
  *
  * C3 (2026-09 性能审计, 偏差登记): `@deepseek-ai/dsh-client-ui-primitives` is
- * REMOVED here while upstream tsdown.client.ts still externalizes it — its
+ * REMOVED here while upstream still externalizes it (at the pinned rc.1 the
+ * external set is derived FROM upstream's own `client/web/src/platform.ts` —
+ * see `packages/client/tsdown.client.ts` — so this table is the upstream source
+ * of truth, not a copy of a tsdown list) — its
  * wholesale namespace import (seed.ts) forced the whole primitives package
  * (markdown / highlight / block renderers) into the main-graph eval that
  * precedes the App mount. The word is answered by the composite's covered

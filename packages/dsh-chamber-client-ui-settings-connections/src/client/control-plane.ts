@@ -28,6 +28,7 @@ import {
   type HostLogLine,
   type HostLogsResponse,
 } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import { classifyGatewayReadFence } from './managed-restart.ts'
 import type {
   GatewayPluginApplyIpcResult, GatewayPluginApplyInput, GatewayPluginMaterializeIpcResult, GatewayPluginSyncIpcResult, LocalPluginManifest, NpmSearchPackage, PluginApplyInput, PluginApplyResult, RemotePluginManifest,
   SshExecIpcResult, SshLocalPluginExecIpcResult, SshMaterializeResult, SshPluginUndoIpcResult, SshSeedHostGraphResult,
@@ -166,10 +167,20 @@ export interface ChamberSeedCacheProjection {
 /** GET /chamber/plugins/installed projection (design 21 §6.2 readManifest —
  *  the gateway implementation of the model readManifest verb): the managed
  *  web profile's (already masked) dependency map + bundles; HTTP 404/500 map
- *  to the absent/corrupt codes, every other refusal stays a loud ApiError. */
+ *  to the absent/corrupt codes, the §6.2 read/write fence's 409 maps to the
+ *  retryable busy arm (see gatewayInstalled), every other refusal stays a
+ *  loud ApiError. */
 export type GatewayInstalledProjection =
   | { ok: true; dependencies: Record<string, string>; bundles: string[]; profileExists: true }
   | { ok: false; code: 'profile_absent' | 'profile_corrupt' }
+  /** The §6.2 读/写面共享栅栏 (2026-12 接线): a plugin mutation held the
+   *  managed-profile write lease, so the gateway withheld the projection with
+   *  409 `runtime_busy` rather than publishing a torn one. NOT a read failure
+   *  and NOT a profile state: the caller renders the dedicated busy copy
+   *  (gatewayReadFenceText) and the dialog's own reload rhythm retries.
+   *  `refusalCode` is the server's own code — null when the refusal body
+   *  carried none (gateway routes.ts answers `{error, code:'runtime_busy'}`). */
+  | { ok: false; code: 'runtime_busy'; refusalCode: string | null }
 
 /** Local plugin manifest (main reads the authoritative local profile path). */
 export function localPluginList(): Promise<LocalPluginListResult> {
@@ -255,18 +266,78 @@ export async function gatewayChamberSeedCache(id: string): Promise<{ items: Cham
   return request<{ items: ChamberSeedCacheProjection[] }>(`/api/i/gateway-${id}/chamber/plugins`)
 }
 
+/** The read fence's bounded retry budget (design 21 §6.2 fence / §7 接线): the
+ *  fence is released at the mutation's terminal edge, which can trail the 202
+ *  the caller just observed by a few hundred ms (the orchestrator writes the
+ *  journal `pending` record before the worker runs), so ONE short-backoff
+ *  re-read absorbs that window. A longer-lived fence — a real install running
+ *  for seconds to minutes, or ANOTHER client's mutation — is never polled from
+ *  here: the caller shows the busy state and the dialog's existing reload
+ *  rhythm (open / post-op / 「刷新」) retries, so no request storm can build up
+ *  behind a manual refresh or a competing writer. */
+const INSTALLED_FENCE_RETRIES = 1
+const INSTALLED_FENCE_BACKOFF_MS = 400
+
+/** Wait out the fence's backoff, cut short by the caller's signal: an aborted
+ *  read (dialog reloaded / unmounted) must not fire its pending retry. The
+ *  shared request() carries no signal (its RequestOptions is the converged
+ *  cross-package transport face), so the in-flight fetch is not abortable
+ *  here — the retry LOOP is, which is what bounds the request count. */
+function installedFenceBackoff(signal: AbortSignal | undefined): Promise<void> {
+  return new Promise(resolve => {
+    if (signal?.aborted === true) {
+      resolve()
+      return
+    }
+    const finish = (): void => {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', finish)
+      resolve()
+    }
+    const timer = setTimeout(finish, INSTALLED_FENCE_BACKOFF_MS)
+    signal?.addEventListener('abort', finish, { once: true })
+  })
+}
+
 /** GET /chamber/plugins/installed (design 21 §6.2 readManifest): 200 ok
  *  projection / 404 profile_absent / 500 profile_corrupt map to the typed
- *  union; any other refusal (network, 401/403, proxy 503 …) rethrows the
- *  shared ApiError — a failure is never folded into an ok shape. */
-export async function gatewayInstalled(id: string): Promise<GatewayInstalledProjection> {
-  try {
-    return await request<GatewayInstalledProjection>(`/api/i/gateway-${id}/chamber/plugins/installed`)
-  } catch (error) {
-    const status = (error as ApiError)?.status
-    if (status === 404) return { ok: false, code: 'profile_absent' }
-    if (status === 500) return { ok: false, code: 'profile_corrupt' }
-    throw error
+ *  union; the read/write fence's 409 becomes the `runtime_busy` arm after a
+ *  bounded re-read (it is a busy state, never a read failure — the caller
+ *  localizes it via gatewayReadFenceText); any other refusal (network,
+ *  401/403, proxy 503 …) rethrows the shared ApiError — a failure is never
+ *  folded into an ok shape.
+ * @param id - the RAW registry instance id (the proxy prefix is added here).
+ * @param options.signal - bounds the fence retry loop; an already-aborted
+ *   signal keeps the read single-shot (the first attempt still runs — the
+ *   caller asked for it). */
+export async function gatewayInstalled(
+  id: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<GatewayInstalledProjection> {
+  const path = `/api/i/gateway-${id}/chamber/plugins/installed`
+  const signal = options.signal
+  // Re-read through a call: the abort state changes across the backoff await,
+  // and an inline `signal?.aborted` read would be narrowed to a constant.
+  const readAborted = (): boolean => signal?.aborted === true
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await request<GatewayInstalledProjection>(path)
+    } catch (error) {
+      const status = (error as ApiError)?.status
+      if (status === 404) return { ok: false, code: 'profile_absent' }
+      if (status === 500) return { ok: false, code: 'profile_corrupt' }
+      // 409 = the §6.2 read/write fence, classified by the SHARED 409
+      // classifier (the /chamber/runtime lease family, managed-restart.ts):
+      // anything it does not classify is an ordinary read failure and stays
+      // loud.
+      const fence = classifyGatewayReadFence((error as ApiError)?.body, status ?? 0)
+      if (fence === null) throw error
+      if (attempt < INSTALLED_FENCE_RETRIES && !readAborted()) {
+        await installedFenceBackoff(signal)
+        if (!readAborted()) continue
+      }
+      return { ok: false, code: 'runtime_busy', refusalCode: fence.code }
+    }
   }
 }
 

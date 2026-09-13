@@ -60,8 +60,9 @@ bundle 未覆盖的 entry（方案 A，§3）。第 1、2 步在 chamber 托管�
   侧，非 vendor），注册一个 Remote 暴露 `clientModules.graph()`（宿主 ctx 上
   `clientModules` 服务现成）。控制面在本地 profile seed 该行（`--patch` overlay，
   模块 B）——先例：`seedDshHomeDefaults` 已 seed `settings.yaml`。本文的模块 A
-  为单包；同 seed 机制的 chamber 宿主包现为三个（+git-worktree（设计 08）、
-  +archive-cleanup（设计 24）），机制同构、清单以 05 §6/02 §2.6 为权威。**包分发
+  为单包；同 seed 机制的 chamber 宿主包现为四个（+git-worktree（设计 08）、
+  +archive-cleanup（设计 24）、+open-in（设计 20 §6，
+  `localOnly`）），机制同构、清单以 05 §6/02 §2.6 为权威。**包分发
   契约**：seed 时
   控制面把模块 A 包（package.json + dist/index.js）裸包拷贝进
   `profiles/web/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/`（免 pnpm 的裸包
@@ -79,7 +80,7 @@ bundle 未覆盖的 entry（方案 A，§3）。第 1、2 步在 chamber 托管�
   `ui-*` 包（`chamber-entry.ts` 静态注册），宿主图里这些 id **跳过**，只加载
   chamber 复合未覆盖的新 entry（用户新装包）。去重集 = `CHAMBER_COVERED_IDS`
   （`packages/renderer/src/chamber-covered.ts`，见 §3.5）。
-- **反向依赖（现行仅 1 条）**：覆盖集解决的是
+- **反向依赖（现行仅 1 条；名单自 2026-09-11 起为派生）**：覆盖集解决的是
   「复合行不需要宿主图」，但反向依赖仍在——复合内首屏家族的 cordis inject 成员
   里，只有 `ui-chat` ← `sidebarRight`（`ui-sidebar-right` 行提供）来自**未覆盖**
   行（`ui-conversation`/`api-session-controller` 的 `fileUpload` 依赖已随
@@ -93,19 +94,71 @@ bundle 未覆盖的 entry（方案 A，§3）。第 1、2 步在 chamber 托管�
   `SERVING_HEAL_BUDGET_MS`，App 侧门上限 60s），而不是在固定预算（10×500ms）用尽后
   丢掉整套 profile 客户端插件——冷启动与重启跨越窗口正是这样丢的；② 门也用尽、或该行
   仍不 apply 时 boot **不再静默**：发布 `graph-unreachable` 诊断 + `console.error`
-  点名 instance，并把 `ShellState.degraded`（`graph-unavailable` /
-  `required-services-missing`）交给 App，由 App 在该来源 ready 时**自动重挂一次**
+  点名 instance，并把 `ShellState.degraded`（当时两个 kind：`graph-unavailable` /
+  `required-services-missing`；2026-12 起另有 `deferred-registration-failed`，见下）
+  交给 App，由 App 在该来源 ready 时**自动重挂一次**
   （每个 ready 世代一次，纯判定在 `degraded-retry.ts`；此前只有整页 reload 能恢复）。
+  该事实自 2026-12 起**同时有用户面**：形状与呈现裁决在叶模块
+  `renderer/src/boot-gap.ts`（`Record<kind, …>` 强制每个 kind 带文案与 retryable
+  裁决），由 App 在活动视图渲染非阻断横幅，并作为**独立字段**
+  `ChamberServerAggregate.bootGap` 过既有投影通道给侧栏来源行与连接页卡片
+  （`pluginDiagnostic` 保持"图通道健康"语义不变：缺口在场时连接页抑制其 `ok` 行）
+  ——见 design 05 §4「降级呈现」。事实的投递（2026-12 修订）：结算前的判词随 settle
+  一起进 App；**结算后**的判词由 App 侧汇道投递（`bootInstanceShell` 的
+  `options.onRepublish`，InstanceView 接的就是它传给 `onStateChange` 的那个处理器）——
+  shell 的 `onState` 形参是**视图本地 setter**，只发它 App 的 `shellStates` 镜像收不到，
+  横幅/投射/自愈会一起瞎掉；尚未 settle 的判词按 boot 序号暂存、settle 时补放。
+  事实的**身份 = kind + 载荷**（同日修订）：延迟簇失败此前与探针判词共用
+  `required-services-missing`，`reportSettledDegrade` 的「同 kind 即重复」把第二条
+  判词静默丢弃；现在延迟簇有自己的 kind（`deferred-registration-failed` + 失败
+  id 集），探针载荷带结构化 `services`/`injectedBy`。
   ③ 同一道门被**设置壳**复用：`waitForSourceServing`（shared face
   `serving-gate.ts`，读 chamberBridge 投影的 `connected`）——桥的图读取在
   `instance_unavailable` / `dsh_not_ready` 这类**冷启动拒绝**上等来源并重试一次，
   不再把"实例还在启动"报成"插件图不可达"；终态来源（error/stopped/
   restart-exhausted）与未知来源**立即**失败，真实原因照旧呈现。
-  `chamber-entry.ts` 的 `assertRequiredExtraRowServices`（纯判定在
-  `required-extra-rows.ts`）在 5s 内探测、点名并把判词经 shell 的
+  `chamber-entry.ts` 的 `assertRequiredExtraRowServices`（名字不变；纯判定在
+  `required-extra-rows.ts`）在 5s 内探测**派生并集**里仍未被 provide 的服务，点名
+  「服务 + 注入它的已注册插件」，并把判词经 shell 的
   `chamberReportBootDegraded` 上报（**仍是诊断，不是启动门**：gateway/移动形态可合法
-  不加载该行）。清单变更须同步 `host-graph.ts` 的降级注释与
-  `docs/checklists/upstream-touchpoints.md` §3 登记行。
+  不加载该行）。
+  **被探测集合是派生的，不是手写清单（2026-09-11 upstream-alignment；延迟簇入名单见
+  2026-09-11 review-fix）**：首屏每个
+  挂载都经 `chamber-entry.ts` 的 `register(id, plugin)`，由各命名空间**导出的
+  `inject` 面**推导并集（`registeredInjectMembers` / `injectedServices` /
+  `missingInjectedServices`，`required-extra-rows.ts`）——这正是上游
+  `assertEntriesActive` 读的事实 `Object.keys(entry.fiber.inject)`
+  （`packages/client/web/src/boot.ts:138-158`，本仓副本
+  `packages/dsh-client-web/src/boot.ts` 另含版本容忍规则）。
+  **延迟簇的成员同样进名单并被探测**（2026-09-11 review-fix，finding 1）：
+  `registerDeferred` 在每行 chunk 装载、`ctx.plugin(...)` 之后，把该行**自己导出的**
+  `inject` 面按首屏同一套归一化推进同一份名单，并在确有行挂载时
+  `probeRearm.reArm?.()` 重新武装一轮探测（探针在"干净判词"上会停）。此前延迟簇被明确
+  排除，理由是「其 chunk 在探测开始时尚未求值，且延迟拆分不变式（模块头）已把它们的
+  inject 成员固定在首屏服务内」——但那条不变式只是**假设**，探针存在的意义正是检查它，
+  于是 **11 个只出现在延迟面里的成员无人探测**：`remote.goals` / `remote.skills` /
+  `remote.messageFeedback` / `remote.sessionFeedback` / `remote.agentPresets` /
+  `remote.credentials` / `remote.llm` / `remote.pluginInventory` /
+  `remote.fileReferences` / `remote.sessionReferenceResolver`（由首屏 api-gateway /
+  api-remotes 对提供）与 `settingsSchema`（首屏 ui-settings 提供）；某个延迟家族的
+  provider 从未激活时，该家族只会**无声 pending**。现在探它们之所以安全，正因为延迟拆分
+  不变式本身——每个延迟成员的 provider 都是**首屏复合插件**，绝不是另一个延迟家族，所以
+  重新武装的那轮不可能把"尚未求值的兄弟 chunk"误判成"服务缺失"；跨行失败隔离也不变
+  （一行坏掉只赔掉自己那一族的探针覆盖并响亮 console.error，绝不阻断后续行挂载，
+  失败行改由 id 走失败诊断）。
+  `register` 仍用挂载 fiber 的 inject 面作**见证**，但其覆盖面**窄于一整类漂移**
+  （2026-09-11 review-fix 校正了原先"命名空间不再导出 inject 面即当场抛错"的说法）：
+  cordis 解出的注入表与这里推导的是**同一个表达式**
+  （`Inject.resolve(plugin.inject)`，vendor `cordis/src/registry.ts:330`），两者只会在
+  一种声明形态上分叉——inject 对象带 cordis 的 `symbols.checkProto` 标记
+  （`registry.ts:77-81`）时成员在原型上、`Object.keys` 看不见，这一种由当场抛错兜住；
+  而"命名空间干脆不再导出 `inject`"两侧**同时**为空（`plugin.inject` 都是 undefined），
+  不抛错、名单静默变小——这一类由 CI 表测试兜底
+  （`test/required-extra-rows.test.ts` 逐个注册 id 读其 client 入口并钉住所审计的
+  `inject` 面），那也是这种漂移唯一可见的地方。
+  名单成员变更即改 `chamber-entry.ts` 的 `register(...)` 调用，
+  不维护第二张表；口径变更须同步 `host-graph.ts` 的降级注释与
+  `docs/checklists/upstream-touchpoints.md` §2/§3 登记行。
 - **覆盖集也是模块表的 factory 提供方**：被跳过的覆盖行不是
   "不存在"，而是由复合 bundle 替代——共享模块表对 fetch bundle 的**同步 require
   边**只有 seed → statics → 已物化缓存（loadCache）→ 已注册 factory 一条解析路径
@@ -168,7 +221,7 @@ bundle 未覆盖的 entry（方案 A，§3）。第 1、2 步在 chamber 托管�
 
 | 面 | 改动（现行） |
 |---|---|
-| `packages/renderer` | `host-graph.ts`（`fetchHostGraph` wire 调用 + `dedupeHostEntries` 去重 + `toExtraRows` 注入反代前缀 + `collectExtraRows`，AppWebEntry 构造前预加载额外 bundle，`loadModuleBundle` 依赖注入可测）+ `chamber-covered.ts`（去重集）+ `required-extra-rows.ts`（inject 依赖点名）；页面级一次性加载与 rev 认领由共享 kernel（shared face `client-plugin-loader.ts`）维护 |
+| `packages/renderer` | `host-graph.ts`（`fetchHostGraph` wire 调用 + `dedupeHostEntries` 去重 + `toExtraRows` 注入反代前缀 + `collectExtraRows`，AppWebEntry 构造前预加载额外 bundle，`loadModuleBundle` 依赖注入可测）+ `chamber-covered.ts`（去重集）+ `required-extra-rows.ts`（首屏 inject 并集派生 + 缺失服务点名，§3.2）；页面级一次性加载与 rev 认领由共享 kernel（shared face `client-plugin-loader.ts`）维护 |
 | `packages/dsh-client-web`（拷贝包） | `boot.ts` `AppWebEntryOptions.extraRows` seam：额外 entry id 合并进 boot rows（N-ctx 模块表共享 seam 的扩展，见 05 §6） |
 | 方案 A 附加 | host 包 `packages/dsh-chamber-seed-client-graph`（Remote `clientGraph/graph` 暴露图）+ 控制面 `host-graph-seed.ts`（seed 宿主包进 profile + 物化 `--patch` overlay，`packages/control-plane`）；打包态分发：desktop main 传 `hostGraphPackageSourceDir = pkgDir/dist/host-graph-package`（asar 内，`build-host-graph-package.mjs` 产出、electron-builder `files` 含 `dist/**/*`），开发态走 repo 源码树 |
 | 官方/宿主/vendor | 文件零改动（**唯一例外**是 §3.6 的构建期 vendor 补丁集：不改文件、只在我们自己的 vite transform 里按精确锚点改写，上游漂移即构建失败） |
@@ -176,7 +229,9 @@ bundle 未覆盖的 entry（方案 A，§3）。第 1、2 步在 chamber 托管�
 ### 3.5 加载契约（端点、seed 与去重集）
 
 - **端点契约（全局固定，其他 chamber 模块依赖）**：namespace `clientGraph`、
-  method `graph` → wire 端点 `clientGraph/graph`。调用形状与既有 bridge-api 同款：
+  method `graph` → wire 端点 `clientGraph/graph`。调用形状与既有自建载体同款
+  （如侧边栏 `instance-api.ts`；曾与之同款的 settings-bridge `bridge-api.ts` 已随
+  2026-12 完整桥接修订删除）：
   `POST {base}/api/clientGraph/graph`（`{base}` = `/api/i/<id>` 反代前缀），body =
   `{type:'client-request', rpcId: crypto.randomUUID(), method:'clientGraph/graph',
   payload:{args:{}}}`，响应 envelope `{rpcId, result:{ok, value?, error?}}`。
@@ -190,6 +245,18 @@ bundle 未覆盖的 entry（方案 A，§3）。第 1、2 步在 chamber 托管�
   每次调用直接返回 `this.ctx.clientModules.graph()`（无本地缓存——图在插件 fiber
   事件间是稳定对象，读即单一事实源）；`static inject=['clientModules']` 保证排在
   client-modules 宿主行之后启动。
+- **图的行校验照上游、解析本身刻意更宽（A4，2026-09-11 upstream-alignment）**：
+  `host-graph.ts` 的字段校验改用上游自己那两个纯 wire helper
+  （`optionalStringArray` / `stripClientSuffix`，`manifest.ts`；后者取代此前内联的
+  `endsWith('/client')` 切片），但**解析仍是本地的、且刻意比上游
+  `parseBootManifest` 松**（`manifest.ts:167-256`）：上游要把整个
+  `window.__DSH_BOOT__` manifest 解成两个消费视图，因此额外要求 `batches` 是数组
+  （:186-188）、每个 entry 必须恰好属于某个 initial-load batch（:238-253）；chamber
+  只读 `entries`（多 id combo 的 `batches` 被忽略——每行自带单 id combo url，见
+  `toExtraRows`），所以**没有 batches、或某行没被宿主排进 batch 的图，仍是可用的
+  chamber 图**，不得因此判 boot 失败（`host-graph.ts:185-198` 注释）。本地解析
+  检查的每一项就是上游检查的那一项；present-but-malformed 的可选字段现在**抛错**
+  而不再静默丢弃（丢 `external` 会藏掉延迟依赖诊断唯一要指认的那条 require 边）。
 - **--patch seed（模块 B）**：`ensureSeedPackage(dshHome, packageName, sourceDir)` 把宿主
   包（package.json + dist/index.js）幂等分发进（同一入口按控制面注册表
   `CHAMBER_HOST_PACKAGES` 逐包分发；旧单包入口 `ensureHostGraphPackage` 已删除）
@@ -340,7 +407,12 @@ fork 副本覆盖（connection / web / api-gateway）；**非载波**的官方�
 Markdown 里的本地图片，在同源壳里 origin 是控制面，于是 404（用户可见的坏图）。
 
 裁决（以上游为准 + 最小侵入）：**不为一行 URL 去 fork 整个 `ui-chat`（82 文件 /
-~11.3k 行）**，改为登记式 vendor 补丁集：
+~11.3k 行）**，改为登记式 vendor 补丁集。
+
+**本集合不含 open-in**：桌面打开面的本地目录自 2026-09-11 起改由实例进程内的
+chamber host 包提供（`dsh-chamber-seed-open-in`，设计 20 §2.2/§6 的 fork & supersede），
+既不读官方路由也无需任何同源 URL 补丁；客户端半是我们自己的插件，
+base path 从每个 entry 的私有 ctx 取。
 
 - 注册表 `packages/renderer/scripts/vendor-patches.mjs`：每条补丁 = 文件 + 理由 +
   一到多处 `expect`→`replace`，`expect` 必须**恰好命中一次**（0 次或多次 = 构建期
@@ -381,31 +453,28 @@ Markdown 里的本地图片，在同源壳里 origin 是控制面，于是 404�
   宿主 `ClientModuleRegistry` 激活即 fail-loud，chamber 侧同样报错不静默）。
 - entry id 冲突 → 显式去重（§3.3）；`inject` 边缺失 → 官方机制已有的 loud 失败，
   不降级。
-- **设置面按需装载（新增边界）**：桌面设置壳为**选中来源**装载其
-  插件图行（design 05 §5），执行面因此从「已打开 shell 的来源」扩到
-  「设置面板打开的来源」。边界约束：①插件在该来源的 settings child ctx 中实例化，
-  面板关闭 / 切换来源即 dispose（副作用被面板生命周期封顶）；②bundle 的 `<style>`
-  一旦加载即页面驻留（模块表只打标记，只有被 chamber 排除的 HMR 行会回收）——与
-  boot 路径同一事实，不假装可隔离；③页面模块表按 id **first-load-wins** 共享，
-  同一模块实例可支撑多来源/多 fiber，因此**插件必须模块级无状态**（状态进
-  `ctx.effect`/服务），跨来源共享事实在设置面板的诊断页如实报告；④未覆盖的
-  Remote 命名空间调用会在调用时失败（child ctx 的 `remote` 是手工面），由 entry
-  boundary + `slots.onEntryError` 捕获并报告，绝不静默；⑤装载走与 boot 完全相同的
-  页面级 kernel（shared face `client-plugin-loader.ts`），`host-graph.ts` 只保留
-  boot 策略（fail-loud + 一次恢复）。
+- **设置面不装载插件（2026-12 完整桥接修订）**：桌面设置壳**不再**为选中来源
+  二次装载任何插件行。设置面渲染的是该来源自己 boot ctx 的 `settings.section`
+  台账与它自己的标准座（design 05 §5），所以：①执行面回到「已打开/被面板要求挂载的
+  来源自己的 ctx」，面板只保证该 ctx **挂在屏外也保持挂载**（`chamberBridge.setSettingsTarget`），
+  关闭面板即撤除该保证；②没有第二次实例化 ⇒ 没有重复注册、没有跨来源模块共享报告、
+  没有「未激活」报告，插件作者契约回到普通插件契约（模块级无状态仍是好习惯，
+  但不再是设置面引入的额外约束）；③面板**不再**读 `clientGraph/graph`、**不再**经
+  页面级 kernel 装载 bundle，`client-plugin-loader.ts` 的每实例图缓存只服务 boot 路径；
+  ④来源自己的 `remote` 就是真 remote（WS 流在），不存在手工面与能力降级；
+  ⑤未挂载完成的来源显示「正在启动该实例的前端」中间态，绝不伪造内容。
 - **设置面贡献通道**：settings 页 `slots.inject('settings.section')` 通道**已接线**——
-  桌面设置壳对选中来源装载其客户端插件图行（扣除 covered），把第三方插件的设置贡献
-  渲染进设置面板（design 05 §5）。口径：**贡献源 = 来源自己的插件图**；未被渲染的
-  贡献（未激活/失败/壳不渲染的座位）必须在设置面板的「插件设置」诊断页可见，不得
-  静默消失。上游若要摆脱「必须实例化才知道贡献」的限制（当前 child ctx 的 `remote`
-  仍是手工 unary 面），见 T3 提案
-  `docs/progress/todo/settings-surface-upstream-contributions.md`。
+  第三方插件的设置贡献在**它自己那台实例**的 ctx 上注册（与该实例自己的前端完全同一份
+  注册），桌面设置壳渲染该台账，因此「插件设置用不上/看不到」这一类问题由构造消除
+  （design 05 §5）。上游声明式贡献描述符 / 设置面服务契约 / Remote descriptor 上行通道
+  仍是可选提案（`docs/progress/todo/settings-surface-upstream-contributions.md`），
+  不再是完整桥接的前置条件。
 - 版本漂移：宿主图 rev 与 chamber 复合 bundle 的合并是 union 语义，不要求
   两图同 rev（chamber 复合由 chamber 构建管，宿主图由实例插件集管）。壳版本
   落后/超前于后端时，多出的核心行以"特性缺席"运行（§3.5 apply 降级），绝不使
   实例 boot 失败。
 - **壳与后端必须同代（当前基线）**：受管 vendor 源以 `harness.commit` 的 pin 为
-  单一事实来源——当前 pin = dsh `0.1.5-rc.1`（`packages/desktop/vendor/dsh/
+  单一事实来源——当前 pin = dsh `0.1.5-rc.2`（`packages/desktop/vendor/dsh/
   pnpm-lock.yaml` 的 `@deepseek-ai/dsh` specifier 同值），三个 fork 副本与
   `release-preflight.mjs` 的 `FORK_VERSION` 同步；vendor 树是仓库内 git submodule
   （gitlink = pin，升级走 `scripts/dev/update-vendor.mjs <tag>`）。宿主 wire 只增

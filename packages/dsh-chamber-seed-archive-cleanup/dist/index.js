@@ -105,11 +105,7 @@ function indexChildren(states) {
   }
   return childrenOf;
 }
-function resolveDeletableTree(rootSessionId, statesBySession, childrenOf, facts, force = false) {
-  if (!statesBySession.has(rootSessionId)) return null;
-  const liveness = subtreeLiveness(rootSessionId, statesBySession, childrenOf, facts);
-  if (liveness === "running") return null;
-  if (liveness === "loaded" && !force) return null;
+function subtreeOrder(rootSessionId, statesBySession, childrenOf) {
   const order = [];
   const visited = /* @__PURE__ */ new Set();
   const stack = [
@@ -129,6 +125,14 @@ function resolveDeletableTree(rootSessionId, statesBySession, childrenOf, facts,
       stack.push({ sessionId: children[i], expanded: false });
     }
   }
+  return order;
+}
+function resolveDeletableTree(rootSessionId, statesBySession, childrenOf, facts, force = false) {
+  if (!statesBySession.has(rootSessionId)) return null;
+  const liveness = subtreeLiveness(rootSessionId, statesBySession, childrenOf, facts);
+  if (liveness === "running") return null;
+  if (liveness === "loaded" && !force) return null;
+  const order = subtreeOrder(rootSessionId, statesBySession, childrenOf);
   return {
     rootSessionId,
     order,
@@ -146,6 +150,21 @@ function orphanArchivedMembers(archivedIds, statesBySession, liveSessionIds) {
     orphans.push(id);
   }
   return orphans;
+}
+function assertSessionIdFilter(field, value) {
+  if (value === void 0) return;
+  if (!Array.isArray(value) || value.some((id) => typeof id !== "string" || id === "")) {
+    throw new ArchiveCleanupError(
+      "invalid-request",
+      `archiveCleanup: purge ${field} must be an array of non-empty session id strings`
+    );
+  }
+  if (value.length > MAX_PURGE_SESSIONS) {
+    throw new ArchiveCleanupError(
+      "invalid-request",
+      `archiveCleanup: purge ${field} exceeds ${MAX_PURGE_SESSIONS} entries`
+    );
+  }
 }
 var ArchiveCleanupCore = class {
   host;
@@ -190,34 +209,52 @@ var ArchiveCleanupCore = class {
   }
   /** Resolve the run plan: candidate roots not already covered by another
    *  deletable root's subtree, each mapped to its deletable tree (or skipped
-   *  when running, or when loaded without `force`). Candidates are the full
-   *  archived set (purge without a filter) or the requested subset ∩ archived
-   *  set (filtered purge); a root that is itself a subagent descendant of an
-   *  earlier deletable root is covered by that root's tree and skipped here
-   *  (no double deletion). Orphan candidates (no session record) are no tree
-   *  and are NOT collected here: the registry-global orphan sweep
+   *  when running, or when loaded without `force`, or when the tree closure
+   *  contains a PROTECTED id). Candidates are the full archived set (purge
+   *  without a filter) or the requested subset ∩ archived set (filtered
+   *  purge); a root that is itself a subagent descendant of an earlier
+   *  deletable root is covered by that root's tree and skipped here (no double
+   *  deletion). Orphan candidates (no session record) are no tree and are NOT
+   *  collected here: the registry-global orphan sweep
    *  (`orphanArchivedMembers`) covers them — and every other record-less
-   *  member — in one pass. */
-  resolvePlan(candidateIds, statesBySession, childrenOf, liveFacts, force) {
+   *  member — in one pass.
+   *
+   *  PROTECTION (2026-09 contract amendment): the protected set — the ids the
+   *  calling client can be viewing right now (its own `list.current`) — is
+   *  checked against the FULL subtree closure, so a protected SUBAGENT
+   *  descendant protects its whole archived ancestor tree. The check runs
+   *  before the running/loaded classification: a protected tree is skipped
+   *  whole regardless of its liveness, and the reason is reported in its own
+   *  bucket (`skippedProtected`). */
+  resolvePlan(candidateIds, statesBySession, childrenOf, liveFacts, force, protectedIds = /* @__PURE__ */ new Set()) {
     const trees = [];
     let skippedRunning = 0;
     let skippedLoaded = 0;
+    let skippedProtected = 0;
     const covered = /* @__PURE__ */ new Set();
     for (const id of candidateIds) {
       if (covered.has(id)) continue;
       if (!statesBySession.has(id)) {
         continue;
       }
-      const tree = resolveDeletableTree(id, statesBySession, childrenOf, liveFacts, force);
-      if (tree === null) {
-        if (subtreeLiveness(id, statesBySession, childrenOf, liveFacts) === "running") skippedRunning += 1;
-        else skippedLoaded += 1;
+      const order = subtreeOrder(id, statesBySession, childrenOf);
+      if (protectedIds.size > 0 && order.some((member) => protectedIds.has(member))) {
+        skippedProtected += 1;
         continue;
       }
-      for (const member of tree.order) covered.add(member);
-      trees.push(tree);
+      const liveness = subtreeLiveness(id, statesBySession, childrenOf, liveFacts);
+      if (liveness === "running") {
+        skippedRunning += 1;
+        continue;
+      }
+      if (liveness === "loaded" && !force) {
+        skippedLoaded += 1;
+        continue;
+      }
+      for (const member of order) covered.add(member);
+      trees.push({ rootSessionId: id, order, subagentCount: order.length - 1 });
     }
-    return { trees, skippedRunning, skippedLoaded };
+    return { trees, skippedRunning, skippedLoaded, skippedProtected };
   }
   /**
    * DECISIVE sweep gate (2026-12 blocker fix): keep only the candidates the
@@ -375,22 +412,23 @@ var ArchiveCleanupCore = class {
    * member is still refused unconditionally (a live writer recreates a
    * header-less artifact through `open(path,"a")`, design 24 §3). Default
    * (absent) = the historical fail-closed behavior, byte-for-byte.
+   *
+   * `protectSessionIds` (2026-09 contract amendment, replaces the retired
+   * client-side pre-flight refusal): the ids the CALLING client may be
+   * displaying right now. A candidate tree whose closure (root + subagent
+   * descendants) contains any protected id is skipped WHOLE — regardless of
+   * liveness and regardless of `force` — counted in `skippedProtected`, and
+   * its ids are additionally excluded from the orphan sweep and from the
+   * batched membership removal. Protection is authoritative over the FULL
+   * corpus this process can enumerate (including cwd-less cold records the
+   * client's `session/list` drops), which is what makes the client's own
+   * best-effort lineage walk unnecessary. The set can only SHRINK the deletion
+   * set: unknown, stale or non-archived ids are silent no-ops.
    */
-  async purge(sessionIds, force = false) {
-    if (sessionIds !== void 0) {
-      if (!Array.isArray(sessionIds) || sessionIds.some((id) => typeof id !== "string" || id === "")) {
-        throw new ArchiveCleanupError(
-          "invalid-request",
-          "archiveCleanup: purge subset filter must be an array of non-empty session id strings"
-        );
-      }
-      if (sessionIds.length > MAX_PURGE_SESSIONS) {
-        throw new ArchiveCleanupError(
-          "invalid-request",
-          `archiveCleanup: purge subset filter exceeds ${MAX_PURGE_SESSIONS} entries`
-        );
-      }
-    }
+  async purge(sessionIds, force = false, protectSessionIds) {
+    assertSessionIdFilter("subset filter", sessionIds);
+    assertSessionIdFilter("protected set", protectSessionIds);
+    const protectedIds = new Set(protectSessionIds ?? []);
     const { archivedIds, statesBySession, childrenOf, liveFacts, snapshotRecordCount } = await this.readAuthoritativeState();
     let candidates;
     if (sessionIds === void 0) {
@@ -403,8 +441,8 @@ var ArchiveCleanupCore = class {
       candidates = archivedIds.filter((id) => selected.has(id));
     }
     const archivedAtStart = new Set(archivedIds);
-    const sweepCandidates = archivedIds.length <= MAX_PURGE_SESSIONS ? orphanArchivedMembers(archivedIds, statesBySession, liveSessionIdsOf(liveFacts)) : [];
-    const plan = this.resolvePlan(candidates, statesBySession, childrenOf, liveFacts, force);
+    const sweepCandidates = archivedIds.length <= MAX_PURGE_SESSIONS ? orphanArchivedMembers(archivedIds, statesBySession, liveSessionIdsOf(liveFacts)).filter((id) => !protectedIds.has(id)) : [];
+    const plan = this.resolvePlan(candidates, statesBySession, childrenOf, liveFacts, force, protectedIds);
     let deletedSessions = 0;
     let deletedSubagents = 0;
     let forcedLoaded = 0;
@@ -420,6 +458,15 @@ var ArchiveCleanupCore = class {
     const completedRoots = [];
     const coveredArchivedMembers = [];
     for (const tree of plan.trees) {
+      if (protectedIds.size > 0 && tree.order.some((member) => protectedIds.has(member))) {
+        plan.skippedProtected += 1;
+        recordError(
+          tree.rootSessionId,
+          "archive-set",
+          `archiveCleanup: skipped ${tree.rootSessionId}: its subtree contains a protected id (invariant violation \u2014 the plan must have skipped this tree)`
+        );
+        continue;
+      }
       let nowFacts;
       try {
         const facts = await this.host.listLiveSessionFacts();
@@ -441,7 +488,7 @@ var ArchiveCleanupCore = class {
       for (const sessionId of tree.order) {
         const state = statesBySession.get(sessionId);
         try {
-          const outcome = await this.host.deleteSessionContent(sessionId, state?.cwd, force);
+          const outcome = await this.host.deleteSessionContent(sessionId, state?.cwd, force, protectedIds);
           if (sessionId === tree.rootSessionId) {
             if (outcome === "deleted") deletedSessions += 1;
           } else if (outcome === "deleted") {
@@ -499,7 +546,7 @@ var ArchiveCleanupCore = class {
         }
       }
     }
-    const clearIds = [.../* @__PURE__ */ new Set([...completedRoots, ...coveredArchivedMembers, ...sweptOrphanMembers])];
+    const clearIds = [.../* @__PURE__ */ new Set([...completedRoots, ...coveredArchivedMembers, ...sweptOrphanMembers])].filter((id) => !protectedIds.has(id));
     let clearedOrphanMembers = 0;
     if (clearIds.length > 0) {
       try {
@@ -521,6 +568,7 @@ var ArchiveCleanupCore = class {
       deletedSubagents,
       skippedRunning: plan.skippedRunning,
       skippedLoaded: plan.skippedLoaded,
+      skippedProtected: plan.skippedProtected,
       forcedLoaded,
       errors,
       ...truncated ? { truncated: true } : {},
@@ -708,8 +756,14 @@ function makeHostBinding(ctx) {
         return true;
       }
     },
-    async deleteSessionContent(sessionId, cwd, force = false) {
+    async deleteSessionContent(sessionId, cwd, force = false, protectedIds) {
       try {
+        if (protectedIds?.has(sessionId) === true) {
+          throw new ArchiveCleanupError(
+            "protected",
+            `archiveCleanup: refusing to delete ${sessionId}: it is in the run's protected set (client-displayed session)`
+          );
+        }
         const facts = liveSessionFacts(ctx);
         if (facts.running.has(sessionId)) {
           throw new ArchiveCleanupError("running", `archiveCleanup: ${sessionId} is running`);
@@ -863,18 +917,20 @@ var ArchiveCleanupGateway = class extends (_a = TypertRemoteService, _preview_de
       return value;
     }));
   }
-  purge(sessionIds, force) {
+  purge(sessionIds, force, protectSessionIds) {
     return domainResult(() => this.gate.run(async () => {
       this.logger?.info?.("[archiveCleanup] purge started", {
         ...sessionIds === void 0 ? {} : { filterCount: sessionIds.length },
-        ...force === true ? { force: true } : {}
+        ...force === true ? { force: true } : {},
+        ...protectSessionIds === void 0 ? {} : { protectCount: protectSessionIds.length }
       });
-      const value = await this.core.purge(sessionIds, force === true);
+      const value = await this.core.purge(sessionIds, force === true, protectSessionIds);
       this.logger?.info?.("[archiveCleanup] purge finished", {
         deletedSessions: value.deletedSessions,
         deletedSubagents: value.deletedSubagents,
         skippedRunning: value.skippedRunning,
         skippedLoaded: value.skippedLoaded,
+        skippedProtected: value.skippedProtected,
         forcedLoaded: value.forcedLoaded,
         errorCount: value.errors.length
       });

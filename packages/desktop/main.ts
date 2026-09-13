@@ -1262,6 +1262,13 @@ if (!gotTheLock) {
         hostArchiveCleanupPackageSourceDir: app.isPackaged
           ? path.join(pkgDir, 'dist', 'host-archive-cleanup-package')
           : path.join(repoRoot, 'packages', 'dsh-chamber-seed-archive-cleanup'),
+        // The open-in host domain (design 20 §6) is a LOCAL-shape-only seed:
+        // the local profile is the only target that ever receives it, so it is
+        // absent from `chamberHostSourceDirs` below (the remote seed list and
+        // the gateway upload both read that map).
+        hostOpenInPackageSourceDir: app.isPackaged
+          ? path.join(pkgDir, 'dist', 'host-open-in-package')
+          : path.join(repoRoot, 'packages', 'dsh-chamber-seed-open-in'),
       });
       await controlPlane.start();
     } catch (err) {
@@ -1655,6 +1662,11 @@ if (!gotTheLock) {
       [CLIENT_GRAPH_PACKAGE_NAME]: moduleASourceDir,
       [GIT_WORKTREE_PACKAGE_NAME]: gitWorktreeHostSourceDir,
       [ARCHIVE_CLEANUP_PACKAGE_NAME]: archiveCleanupHostSourceDir,
+      // Registry rows marked `localOnly` are deliberately ABSENT here: this map
+      // feeds the two REMOTE consumers (the ssh seed list and the gateway sync
+      // upload), and a local-shape-only domain must never reach another machine.
+      // Their local source dir is passed to the control plane separately
+      // (hostOpenInPackageSourceDir, design 20 §6).
     };
     const chamberHostPackageSeeds: ChamberHostPackageSeed[] = CHAMBER_HOST_PACKAGES.map(descriptor => ({
       insertId: descriptor.insert.id,
@@ -1664,6 +1676,9 @@ if (!gotTheLock) {
       // dist/index.js) instead of writing a dangling loader row.
       sourceDir: chamberHostSourceDirs[descriptor.insert.name] ?? '',
       label: descriptor.insert.id,
+      // The registry's ownership flag travels with the seed so the remote
+      // writer drops the row explicitly (never "seeded because a path appeared").
+      ...(descriptor.localOnly === true ? { localOnly: true as const } : {}),
     }));
     type RemoteTarget = {
       spec: RemoteSpec
@@ -1696,7 +1711,7 @@ if (!gotTheLock) {
       const result = await probe(descriptor);
       return ownsRemoteTarget(target) ? result : null;
     };
-    // Remote install-level fallback path shared by both chamber host packages.
+    // Remote install-level fallback path shared by the chamber host packages.
     const remoteHostPackageDir = (spec: RemoteSpec, packageName: string): string =>
       `${remoteHome(spec.remoteDshHome)}/profiles/node_modules/${packageName}`;
     const startAutomaticHostSeed = (id: string): void => {
@@ -1758,13 +1773,27 @@ if (!gotTheLock) {
       // twice — a packaged/repo path fix has to land in one place).
       return CHAMBER_HOST_PACKAGES.flatMap(descriptor => {
         const dir = chamberHostSourceDirs[descriptor.insert.name];
-        return dir === undefined
-          ? []
-          : [{
-            name: descriptor.insert.name,
-            packageJsonPath: path.join(dir, 'package.json'),
-            distIndexPath: path.join(dir, 'dist', 'index.js'),
-          }];
+        if (dir === undefined) {
+          // NEVER silent (a registry entry with no desktop source dir used to
+          // disappear here without a trace). This is the ssh seed list's
+          // graceful skip inverted: there, an empty sourceDir is a deliberate
+          // "not shipped here" that seedRemoteChamberHostPackages skips; here
+          // the omission means the package is silently MISSING from the
+          // gateway seed upload, so the gateway's seed cache never carries it,
+          // the managed instance cannot serve it (its host domain 404s) and
+          // the UI shows no hint. Loud, with the missing name and that
+          // consequence — the fix is a new entry in chamberHostSourceDirs.
+          console.warn(
+            `[dsh-chamber] chamber host package ${descriptor.insert.name} (${descriptor.insert.id}) has no desktop source dir in chamberHostSourceDirs: `
+            + 'it is NOT uploaded to the gateway seed cache, so the gateway-hosted instance cannot load it (its host domain 404s) and no UI surface reports the gap',
+          );
+          return [];
+        }
+        return [{
+          name: descriptor.insert.name,
+          packageJsonPath: path.join(dir, 'package.json'),
+          distIndexPath: path.join(dir, 'dist', 'index.js'),
+        }];
       });
     };
     // Resolves the awaited sync outcome for the caller (the manual

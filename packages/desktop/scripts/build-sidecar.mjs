@@ -74,6 +74,10 @@ export const HOST_PACKAGES = [
   { name: 'dsh-chamber-seed-client-graph', arg: 'host-graph-dir' },
   { name: 'dsh-chamber-seed-git-worktree', arg: 'host-git-dir' },
   { name: 'dsh-chamber-seed-archive-cleanup', arg: 'host-archive-dir' },
+  // open-in（design 20 §6）是注册表里的 localOnly 行：它必须随 .app 分发，
+  // 但**只**供本地实例播种——远端（SSH/gateway）种子表由 registry 驱动，
+  // 永不携带它（见 sidecar-ctx 的远程 seed 数组与 main.ts 的同类注记）。
+  { name: 'dsh-chamber-seed-open-in', arg: 'host-open-in-dir' },
 ]
 
 export function sidecarLayout(outDir) {

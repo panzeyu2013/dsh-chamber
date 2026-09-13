@@ -550,6 +550,20 @@ async function detectAttention(gitDir, fs, withinBudget) {
   }
   return [...new Set(found)];
 }
+var DSH_HOME_ENV = "DSH_HOME";
+function defaultDshHome() {
+  return join(homedir(), ".dsh");
+}
+function expandHomePath(path) {
+  if (path === "~") return homedir();
+  if (path.startsWith("~/") || path.startsWith("~\\")) return join(homedir(), path.slice(2));
+  return path;
+}
+function resolveDshHome(configured, env = process.env) {
+  const fromEnv = env[DSH_HOME_ENV];
+  const selected = configured ?? (fromEnv !== void 0 && fromEnv.trim().length > 0 ? fromEnv : defaultDshHome());
+  return resolve(expandHomePath(selected));
+}
 var GitWorktreeCore = class {
   source;
   git;
@@ -578,7 +592,7 @@ var GitWorktreeCore = class {
       fail("invalid-core-option", `operationCapacity must be between 1 and ${MAX_OPERATIONS}`);
     }
     this.snapshotWallTimeoutMs = options.snapshotWallTimeoutMs ?? SNAPSHOT_WALL_TIMEOUT_MS;
-    const worktreesRoot = options.worktreesRoot ?? join(process.env.DSH_HOME ?? join(homedir(), ".dsh"), "worktrees");
+    const worktreesRoot = options.worktreesRoot ?? join(resolveDshHome(), "worktrees");
     if (!isAbsolute(worktreesRoot)) {
       fail("invalid-config", "worktreesRoot must be an absolute path");
     }
@@ -632,6 +646,20 @@ var GitWorktreeCore = class {
         code: "agent-origin-unknown",
         operation: "associate",
         message: `session '${drift.sessionId}' has an unrecognized origin '${drift.value}'; treating it as a fork edge (its run keeps blocking)`
+      });
+    }
+    for (const drift of state.statusDrift) {
+      errors.push({
+        code: "agent-status-unknown",
+        operation: "associate",
+        message: `session '${drift.sessionId}' has an unrecognized status '${drift.value}'; treating it as running (its run keeps blocking)`
+      });
+    }
+    for (const drift of state.cwdDrift) {
+      errors.push({
+        code: "agent-cwd-unknown",
+        operation: "associate",
+        message: state.blockingRunningIds.has(drift.sessionId) ? `running session '${drift.sessionId}' cwd '${drift.value}' is not a normalized absolute path; its location is unknown, so it keeps blocking and refuses every removal` : `session '${drift.sessionId}' cwd '${drift.value}' is not a normalized absolute path; its location is unknown`
       });
     }
     const signature = state.workspaces.map((workspace) => `${workspace.workspaceId}:${workspace.path}`).sort().join("|");
@@ -1880,14 +1908,30 @@ var GitWorktreeCore = class {
     const parentBySession = /* @__PURE__ */ new Map();
     const subagentOriginSessions = /* @__PURE__ */ new Set();
     const originDrift = [];
+    const statusDrift = [];
+    const cwdDrift = [];
     for (let index = 0; index < rawAgents.length; index += 1) {
       const raw = rawAgents[index];
       assertRecord(raw, `agents[${index}]`);
       const sessionId = requiredString(raw.sessionId, `agents[${index}].sessionId`, 256);
-      if (raw.status !== "idle" && raw.status !== "running") {
-        fail("state-source-invalid", `agents[${index}].status is invalid`);
+      const unknownStatus = raw.status !== "idle" && raw.status !== "running";
+      if (unknownStatus) {
+        statusDrift.push({
+          sessionId,
+          value: typeof raw.status === "string" ? raw.status.slice(0, 64) : `(${typeof raw.status})`
+        });
       }
-      const cwd = raw.cwd === void 0 ? void 0 : absoluteExpectedPath(raw.cwd, `agents[${index}].cwd`);
+      let cwd;
+      if (raw.cwd !== void 0) {
+        try {
+          cwd = absoluteExpectedPath(raw.cwd, `agents[${index}].cwd`);
+        } catch {
+          cwdDrift.push({
+            sessionId,
+            value: typeof raw.cwd === "string" ? raw.cwd.slice(0, 128) : `(${typeof raw.cwd})`
+          });
+        }
+      }
       const parentSessionId = raw.parentSessionId === void 0 ? void 0 : requiredString(raw.parentSessionId, `agents[${index}].parentSessionId`, 256);
       if (raw.origin !== void 0 && raw.origin !== "subagent") {
         originDrift.push({
@@ -1899,7 +1943,7 @@ var GitWorktreeCore = class {
       if (parentSessionId !== void 0 && parentSessionId !== sessionId) {
         parentBySession.set(sessionId, parentSessionId);
       }
-      if (raw.status === "running") {
+      if (raw.status === "running" || unknownStatus) {
         runningSessionIds.add(sessionId);
         runningAgents.push({ sessionId, status: "running", ...cwd === void 0 ? {} : { cwd } });
       }
@@ -1920,6 +1964,8 @@ var GitWorktreeCore = class {
       parentBySession,
       subagentOriginSessions,
       originDrift,
+      statusDrift,
+      cwdDrift,
       blockingRunningIds: this.blockingRunningIds(
         runningSessionIds,
         archivedSessionIds,
@@ -2037,6 +2083,15 @@ var GitWorktreeCore = class {
   }
   async runningAtPath(target, state, strict) {
     const matches = /* @__PURE__ */ new Set();
+    if (strict) {
+      const unresolved = state.cwdDrift.find((row) => state.blockingRunningIds.has(row.sessionId));
+      if (unresolved !== void 0) {
+        fail(
+          "running-agent-cwd-unavailable",
+          `cannot safely resolve running session '${unresolved.sessionId}' cwd: this dsh build reports '${unresolved.value}'`
+        );
+      }
+    }
     for (const agent of state.runningAgents) {
       if (agent.cwd === void 0) continue;
       if (!state.blockingRunningIds.has(agent.sessionId)) continue;
@@ -2443,6 +2498,7 @@ export {
   MAX_WORKTREES_PER_REPOSITORY,
   OPERATION_TTL_MS,
   PREVIEW_TTL_MS,
+  RETRYABLE_CODES,
   SNAPSHOT_DEADLINE_MS,
   SNAPSHOT_WALL_TIMEOUT_MS,
   assertSafeGitArgv,

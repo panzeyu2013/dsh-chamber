@@ -178,8 +178,9 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   // ── settingsScope). Ids stay covered: loading any row again from the host
   // ── graph would double-register once the deferred chunk registers it.
   // ── 可观测瞬态仅「设置入口缺席 ≈1 chunk 往返」（页面首个实例首冷启一次
-  // ── 性；其后模块缓存同 tick 解析）；面板内容经所选服务器 child ctx
-  // ── 独立装载（bridge-context），不受 boot-ctx 时序影响；簇级失败面见
+  // ── 性；其后模块缓存同 tick 解析）；面板内容**就是**该来源 boot ctx 自己的
+  // ── settings.section 台账（2026-12 完整桥接修订），因此受本簇时序门控：
+  // ── 未落地时面板显示「正在启动该实例的前端」中间态；簇级失败面见
   // ── chamber-entry.ts registerDeferred 注释。
   '@deepseek-ai/dsh-client-ui-settings-general',
   '@deepseek-ai/dsh-client-ui-settings-models',
@@ -214,12 +215,16 @@ export const CHAMBER_COVERED_IDS: readonly string[] = [
   // loaded — page-own, no factory.
   '@deepseek-ai/dsh-client-hmr',
   // dsh-v0.1.3-alpha.2: the official open-in client row (ui-open-in-app).
-  // Chamber composes its own open-in surface (dsh-chamber-client-ui-open-in,
-  // designs 16/17/20) at the same conversation utility slot — an official
-  // row materialized from the host graph would add a second entry. Skipped
-  // like the other page-own official rows: the official button's availability
-  // probe fails inside the chamber shell and the entry self-hides (double
-  // guard, branch-plan T3 Phase 1). Page-own, no factory.
+  // 2026-09-11 (fork & supersede, design 20 §2.2): our
+  // dsh-chamber-client-ui-open-in is a SUPERSET of this client and REPLACES
+  // its registration at the same conversation utility slot — an official row
+  // materialized from the host graph would add a second entry. Skipped like
+  // the other page-own official rows (ui-sidebar / ui-layout), and the
+  // rationale is now replacement, not the older "the official button
+  // self-hides under the N-ctx shell" double guard: the local app catalog is
+  // served by our own instance host package
+  // (@dsh-chamber/dsh-chamber-seed-open-in), never by the official host half.
+  // Page-own, no factory.
   '@deepseek-ai/dsh-client-ui-open-in-app',
 ]
 

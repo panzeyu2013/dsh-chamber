@@ -20,8 +20,8 @@
  *  Anchor-version note: the anchors were re-audited against the vendored
  *  0.1.5-alpha.2 source at the 2026-09 re-anchor (the centre column moved to
  *  the keyed `main` slot and the right column to `rightbar`, which is what
- *  ROLE_SLOT_KEYS encodes) and re-checked at 0.1.5-rc.1, whose client delta
- *  leaves those emitters unchanged. The dsh version actually injected into a gateway
+ *  ROLE_SLOT_KEYS encodes) and re-checked at 0.1.5-rc.1 and 0.1.5-rc.2, whose
+ *  client deltas leave those emitters unchanged. The dsh version actually injected into a gateway
  *  instance is decided by the dsh-runtime on the serving desktop/gateway —
  *  anchors must be re-audited when the vendored pin moves.
  */

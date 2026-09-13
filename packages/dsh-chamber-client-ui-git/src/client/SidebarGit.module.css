@@ -8,7 +8,7 @@
   flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 2px;
+  gap: 4px;
   min-width: 0;
   max-width: 45%;
 }
@@ -35,8 +35,17 @@
   align-items: center;
   gap: 6px;
   min-width: 0;
+  /* Derived-workspace row geometry (2026-09 batch 1, G1): 26px row, 8px
+     corners. The 2px rhythm is owned by .unregisteredSection's flex gap, not by
+     a row margin — flex margins do not collapse, and a 2px margin on top of the
+     2px gap doubled the spacing the nav rows use (G1 follow-up). design 08:289
+     declares these rows match the derived workspace row, while the code drew a
+     6px-cornered improvisation. */
+  box-sizing: border-box;
+  height: 26px;
+  margin: 0;
   padding: 3px 4px;
-  border-radius: 6px;
+  border-radius: 8px;
 }
 
 .unregisteredRow:hover {
@@ -54,29 +63,50 @@
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  color: var(--dsw-alias-label-primary);
-  font-size: 13px;
-  font-weight: 500;
+  /* Same type step as a derived workspace title (design 08 §3.3「图标与字体
+     层级」: workspace 标题 14px/600 主色、派生 workspace 降级次级色): 14/18,
+     600, demoted to secondary ink because the workspace is not registered. */
+  color: var(--dsw-alias-label-secondary);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 18px;
 }
 
+/* Placement of the row's status capsule only. The capsule itself is the
+   official `Tag` primitive (11px/17px, tonal palette), which documents that a
+   render site may still position a tag with its own class. The hand-rolled
+   capsule this replaced (10px/14px, padding 0 5px,
+   `--dsw-alias-interactive-bg-hover` fill) vanished under the pointer: its
+   neutral fill equalled the row's own hover fill
+   (2026-09-11 upstream-alignment, T14). */
 .unregisteredStatus {
   flex: none;
-  padding: 0 5px;
-  border-radius: 999px;
-  corner-shape: round;
-  background: var(--dsw-alias-interactive-bg-hover);
-  color: var(--dsw-alias-label-secondary);
-  font-size: 10px;
-  line-height: 14px;
-}
-
-.unregisteredStatusWarn {
-  background: var(--dsw-alias-state-warning-bg, var(--dsw-alias-interactive-bg-hover));
-  color: var(--dsw-alias-state-warning-primary, var(--dsw-alias-label-primary));
 }
 
 .unregisteredSpacer {
   flex: none;
+}
+
+/* 2026-09 (stage 3, G1-4): WCAG 2.2 2.5.8 target size. These two 20px icon
+   buttons keep their visual box — and the rows their heights — and grow an
+   invisible 24x24 hit box instead (`inset: -2px`). `.headerGit`'s cluster gap
+   therefore goes 2px -> 4px so two adjacent 24px boxes stay distinct; the
+   unregistered row's action has no neighbour within 24px at all, so its spacing
+   alternative already held and this only widens the comfortable area. */
+.headerGitAction,
+.unregisteredAction {
+  position: relative;
+}
+.headerGitAction::after,
+.unregisteredAction::after {
+  content: '';
+  position: absolute;
+  inset: -2px;
+}
+/* Disabled buttons still hit-test: never swallow a neighbour's pointer events. */
+.headerGitAction:disabled::after,
+.unregisteredAction:disabled::after {
+  pointer-events: none;
 }
 
 .unregisteredAction {
@@ -84,11 +114,13 @@
   align-items: center;
   justify-content: center;
   flex: none;
-  width: 22px;
-  height: 22px;
+  /* Sidebar icon-button language (2026-09 batch 1, G1): the 20px box / 5px
+     corner every other in-row action uses. */
+  width: 20px;
+  height: 20px;
   padding: 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: 5px;
   background: transparent;
   color: var(--dsw-alias-label-secondary);
   cursor: pointer;
@@ -100,7 +132,7 @@
 }
 
 .unregisteredActionDanger:not(:disabled):hover {
-  background: var(--dsw-alias-state-error-bg, var(--dsw-alias-interactive-bg-hover));
+  background: var(--dsw-alias-interactive-bg-hover-danger);
   color: var(--dsw-alias-state-error-primary, var(--dsw-alias-label-primary));
 }
 
@@ -113,7 +145,7 @@
 .factsRetry {
   margin-left: 8px;
   padding: 1px 8px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 6px;
   background: transparent;
   color: var(--dsw-alias-label-primary);
@@ -129,7 +161,7 @@
 /* Directory-collision precheck note under the directory field (A3). */
 .directoryConflict {
   margin: 0;
-  color: var(--dsw-alias-state-warning-primary, var(--dsw-alias-label-secondary));
+  color: var(--dsw-alias-state-warn-primary);
   font-size: 11px;
 }
 
@@ -161,17 +193,22 @@
 
 /* OpenChamber-style row actions: hidden at rest; revealed together with the
    row's own "+"/kebab cluster when the whole workspace row is hovered (the
-   sidebar css reveals :global(.git-ws-action) on .workspaceHeader:hover /
+   sidebar css reveals the `[data-git-action]` hook on .workspaceHeader:hover /
    :has(:focus-visible) / kebab-open). Keyboard focus on the occupant also
    reveals. The reveal is pointer-safe (2026-09): it never keys on plain
    :focus-within, which Chromium's mousedown-focus would keep matched after
    a pointer click — a folded row would then keep its occupant action
    visible at rest next to the session count. */
+/* The reveal hook is a `data-*` attribute, never a literal class
+   (2026-09-11 upstream-alignment, T3: the chamber's own rule, mobile
+   styles.ts:10-20 — attribute selectors are not hashed by CSS modules, so the
+   sidebar can match the same hook from its own module, which a global class
+   name only pretended to do). */
 /* The resting state is HIDDEN — display:none lives on the button's own
    module class (specificity 0,1,0) so it can never be beaten by a later
    same-specificity rule; every reveal rule (0,3,0)+ overrides it. Also out
    of the Tab order / a11y tree, like the sidebar's own rowActions.
-   (2026-08 fix: hiding via :global(.git-ws-action) lost to
+   (2026-08 fix: hiding via the hook class lost to
    .headerGitAction's inline-flex on equal specificity — actions showed at
    rest.) */
 .headerGitAction {
@@ -189,7 +226,7 @@
   cursor: pointer;
 }
 
-.headerGit:has(:focus-visible) :global(.git-ws-action) {
+.headerGit:has(:focus-visible) [data-git-action] {
   display: inline-flex;
 }
 
@@ -231,13 +268,16 @@
   line-height: 16px;
 }
 
-/* Text inputs reuse the dsh Input atom (32px height, border-l2, bg-layer-1,
-   14px/22px, focus = brand-primary); only the radius is lifted to the
-   dialog's 12px control radius (matching the Menu list r12 and the chamber
-   settings cards) so fields do not read square against the modal's r24. The
-   atom stretches to the label's full width as a flex item of the column. */
+/* Text inputs reuse the dsh Input atom as-is: 32px height, `border-l4`,
+   bg-layer-1, 14px/22px, focus = brand-primary, and the atom's own 8px
+   corner. (The 2026-09 batch 1 G3 pass removed the old `border-radius: 12px`
+   lift AND corrected this comment, which had claimed `border-l2` — the atom
+   is l4. The select beside these fields takes the same tokens now, so the
+   stacked fields read as one control family; the dialog's own 12px language
+   stays with its tabs/cards, not with text fields.) The atom stretches to the
+   label's full width as a flex item of the column. */
 .fieldInput {
-  border-radius: 12px;
+  border-radius: 8px;
 }
 
 .formError {
@@ -300,7 +340,7 @@
   gap: 4px;
   margin-top: 2px;
   padding: 8px 10px;
-  border: 1px solid var(--dsw-alias-state-warning-primary, var(--dsw-alias-border-l2));
+  border: 1px solid var(--dsw-alias-state-warn-primary);
   border-radius: 8px;
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-primary);
@@ -319,7 +359,7 @@
   gap: 6px;
   margin: 2px 4px 4px;
   padding: 5px 7px;
-  border: 1px solid var(--dsw-alias-state-warning-primary, var(--dsw-alias-border-l2));
+  border: 1px solid var(--dsw-alias-state-warn-primary);
   border-radius: 6px;
   background: var(--dsw-alias-interactive-bg-hover);
   color: var(--dsw-alias-label-secondary);
@@ -361,7 +401,7 @@
   position: relative;
   display: inline-flex;
   padding: 2px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 12px;
   background: var(--dsw-alias-bg-layer-1);
   overflow: hidden;
@@ -425,7 +465,8 @@
 
 /* Custom select anchor (repo Menu primitive — same design language). Mirrors
    the dsh Input atom so the dropdown reads as a text field (32px, r8,
-   border-l2, bg-layer-1, 14px/22px, focus = brand-primary). */
+   border-l4, bg-layer-1, 14px/22px, focus = brand-primary) — the token name is
+   the atom's own (2026-09 batch 1, G3; it was written l2 here before). */
 .fieldSelect {
   display: flex;
   align-items: center;
@@ -435,8 +476,11 @@
   height: 32px;
   box-sizing: border-box;
   padding: 0 8px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 12px;
+  /* Official Input atom (2026-09 batch 1, G3): l4 hairline + 8px corner. The
+     inputs above it in the same dialog are the official atom; this select was
+     the odd one out (the module note above also cited the wrong token). */
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: 8px;
   background: var(--dsw-alias-bg-layer-1);
   color: var(--dsw-alias-label-primary);
   font-family: inherit;

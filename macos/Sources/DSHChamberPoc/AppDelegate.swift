@@ -165,6 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                         ("--host-graph-dir", "dsh-chamber-seed-client-graph"),
                         ("--host-git-dir", "dsh-chamber-seed-git-worktree"),
                         ("--host-archive-dir", "dsh-chamber-seed-archive-cleanup"),
+                        ("--host-open-in-dir", "dsh-chamber-seed-open-in"),
                     ]
                     for host in hostDirs {
                         let candidate = sidecarDir + "/dist/" + host.name

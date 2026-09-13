@@ -53,24 +53,54 @@ test('error propagates to every joiner and the next request retries cleanly', as
 })
 
 test('maxReruns caps the trailing chain instead of looping forever', async () => {
+  // 确定性版（2026-09-11 CI 修复）：原实现用 30 次 `sleep(1)` 制造"运行期间
+  // 持续到达"，把断言建立在 sleep 精度上。Windows runner 的定时器粒度约
+  // 15ms（= 单遍时长），风暴（30×15ms）会跑赢第一条链（3×15ms），末尾到达
+  // 各自起新链；收尾的 `refresh()` 因此可能加入**某条正在跑封顶遍**的链——
+  // 那种加入者不会触发新一遍（cap 已到），于是 `runs > stormRuns` 为假，而它
+  // 上一行 `assert.equal(await refresh(), runs)` 仍为真。CI 形态正是如此
+  // （c7f12930 的 test-windows 腿：line 72 过 / line 73 挂）。现在改为 gate
+  // 驱动：放行时机与"到达发生在第几遍"全部显式可控，不看时间，也不受平台
+  // 定时器粒度影响。
   let runs = 0
+  const gates: (() => void)[] = []
   const refresh = createCoalescedRefresher(async () => {
     runs += 1
-    await sleep(15)
+    await new Promise<void>((resolve) => { gates.push(resolve) })
     return runs
   }, { maxReruns: 3 })
-  const first = refresh()
-  // 持续到达：每次运行期间都有新请求加入 → 补跑直到封顶后链结束（不挂死）。
-  for (let i = 0; i < 30; i += 1) {
-    void refresh()
-    await sleep(1)
+  /** 等到链的下一次 compute 开始（gate 注册）；纯事件驱动，无定时器。 */
+  const nextRunInFlight = async () => {
+    for (let i = 0; i < 1000 && gates.length === 0; i += 1) await Promise.resolve()
+    assert.equal(gates.length > 0, true, '放行一遍后链应当立刻开始下一遍')
   }
-  const capped = await first
-  assert.ok(capped >= 2 && capped <= 3, `封顶链应结束于 ≤3 遍，实际 ${capped}`)
+  /** cap 失效时（无界补跑）链永不结束：绑一个宽超时，让它以具名失败而非挂死套件。 */
+  const settledWithin = async <T>(promise: Promise<T>, label: string): Promise<T> => Promise.race([
+    promise,
+    sleep(5000).then((): never => { throw new Error(`${label} 5s 内未结束——maxReruns 封顶失效（无界补跑）`) }),
+  ])
+
+  const first = refresh()          // 第 1 遍在途
+  await nextRunInFlight()
+  void refresh()                   // 第 1 遍运行期间到达 → 置位补跑
+  gates.shift()!()                 // 放行第 1 遍
+  await nextRunInFlight()          // 第 2 遍在途
+  void refresh()                   // 第 2 遍运行期间到达 → 置位补跑
+  gates.shift()!()                 // 放行第 2 遍
+  await nextRunInFlight()          // 第 3 遍 = 封顶遍在途
+  assert.equal(runs, 3, '持续到达应补跑到 maxReruns 封顶（正是 3 遍）')
+  void refresh()                   // 封顶遍期间到达：置位，但已无第 4 遍
+  gates.shift()!()                 // 放行封顶遍
+  assert.equal(await settledWithin(first, '封顶链'), 3, '封顶链结束于第 3 遍，该遍的加入者拿到它的结果')
+  assert.equal(runs, 3, '触顶后不再补跑：病态到达率不会把一次刷新拖成无限循环')
+
+  // 链已结束（风暴停止）：下一次请求开一条全新链并成功。
   const stormRuns = runs
-  // 风暴停止后，下一次请求打开全新链并成功。
-  assert.equal(await refresh(), runs)
-  assert.ok(runs > stormRuns)
+  const fresh = refresh()
+  await nextRunInFlight()
+  gates.shift()!()
+  assert.equal(await settledWithin(fresh, '新链'), stormRuns + 1, '静止后新请求必开新链，返回新一遍的结果')
+  assert.equal(runs, stormRuns + 1)
 })
 
 test('maxReruns=1 pins the whole chain to a single run (boundary semantics)', async () => {

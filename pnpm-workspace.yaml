@@ -46,9 +46,10 @@ allowBuilds:
   "fs-ext": false
   "protobufjs": false
   "@google/genai": false
-  # msgpackr-extract（0.1.5 线引入的 msgpackr 原生加速器）：store-index 重写只用
-  # msgpackr 的可移植 JS 编解码，本树不构建其原生二进制（与上游 pnpm-workspace
-  # 的裁决一致）。显式否认，避免 pnpm 报 ignored builds。
+  # msgpackr-extract（msgpackr 的原生加速器）：由上游私有桌面应用构建面引入
+  # （apps/desktop 的种子脚本用 msgpackr；上游 packages/** 无该依赖）。运行时闭包
+  # 不含它（packages/desktop/vendor/dsh/pnpm-lock.yaml 对 msgpackr* 零命中），
+  # 故这里是惰性的防御性 false；显式否认避免 pnpm 报 ignored builds。
   "msgpackr-extract": false
 
 # app-builder-lib 26.15.3 声明 @electron/get@^3.0.0，但 3.0.0 缺少其代码引用的

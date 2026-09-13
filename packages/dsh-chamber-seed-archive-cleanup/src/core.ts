@@ -3,16 +3,17 @@
  *
  * TRUST BOUNDARY: callers arrive over the instance's host wire and are
  * untrusted JSON. They never supply a path or a command, and their only
- * session-id input is purge's OPTIONAL subset filter — which can never
- * extend the deletion set: candidates are always the intersection with the
- * authoritative archived set of THIS instance read at run start
- * (registry-global, todo 12 §1). The domain never touches non-archived
- * content. The orchestration below is pure and fixture-testable; every host
- * capability it needs arrives through the `ArchiveCleanupHost` seam, which
- * the Remote facade (`index.ts`) binds to §10-verified official primitives
- * (see `host-binding-pending` below and design 24 §10 — the bindings MUST be
- * resolved against the pinned vendor before this domain is enabled; nothing
- * here guesses a storage layout).
+ * session-id inputs are purge's OPTIONAL subset filter and its OPTIONAL
+ * protected set — neither can extend the deletion set: candidates are always
+ * the intersection with the authoritative archived set of THIS instance read
+ * at run start (registry-global, todo 12 §1), and a protected id only ever
+ * REMOVES candidate trees from the run. The domain never touches
+ * non-archived content. The orchestration below is pure and
+ * fixture-testable; every host capability it needs arrives through the
+ * `ArchiveCleanupHost` seam, which the Remote facade (`index.ts`) binds to
+ * §10-verified official primitives (see `host-binding-pending` below and
+ * design 24 §10 — the bindings MUST be resolved against the pinned vendor
+ * before this domain is enabled; nothing here guesses a storage layout).
  *
  * Guarantees (design 24 §4):
  *  - children-first deletion with the archived-set member removed LAST, so a
@@ -21,6 +22,10 @@
  *  - running subtrees are skipped whole (fail-closed), never partially cut;
  *  - merely LOADED (idle) subtrees are skipped by default and deletable only
  *    under an explicit `force` purge (2026-09 revision, design 24 §3);
+ *  - PROTECTED subtrees (2026-09 contract amendment) are skipped whole,
+ *    ahead of every liveness classification and ahead of `force`: the
+ *    calling client names the ids it may be displaying, and the host never
+ *    cuts the tree that contains one — not even a descendant-only match;
  *  - per-session isolation: one failure lands in `errors` and never blocks
  *    the remaining sessions (AGENTS: one failed entity must not erase or
  *    block unrelated complete entities);
@@ -139,10 +144,19 @@ export interface ArchiveCleanupHost {
    * there is no per-member core pre-check (review F2), so a member that flips
    * live AFTER the per-tree recheck is caught here and, as the first in-tree
    * failure, aborts the remaining members of that tree (review F1, see purge).
+   * `protectedIds` (2026-09 amendment) is the run's protected set: the binding
+   * MUST refuse any member it contains with code `protected` — an invariant
+   * guard for the core's whole-tree skip (unreachable unless the core's plan
+   * is wrong, and fail-closed when it is).
    * @returns 'deleted' when content was removed, 'missing' when nothing was
    *   there (idempotent no-op — the caller still completes accounting).
    */
-  deleteSessionContent(sessionId: string, cwd?: string, force?: boolean): Promise<'deleted' | 'missing'>
+  deleteSessionContent(
+    sessionId: string,
+    cwd?: string,
+    force?: boolean,
+    protectedIds?: ReadonlySet<string>,
+  ): Promise<'deleted' | 'missing'>
   /** Remove ids from the archived set in ONE official persistence write
    *  (purge collects every completed root/orphan and commits at the end —
    *  design 24 perf: N per-tree atomic writes → 1). */
@@ -190,6 +204,12 @@ export interface PurgeResult {
   /** Roots skipped only because a member is loaded (never deleted by this
    *  run — they stay archived). */
   readonly skippedLoaded: number
+  /** Roots skipped WHOLE because a member of their subtree closure is in the
+   *  run's protected set (`protectSessionIds` — the session the calling client
+   *  is viewing). Protection outranks `force`: a protected tree is never cut,
+   *  never partially deleted, and keeps its archived membership. Counted per
+   *  candidate tree root, exactly like `skippedRunning`/`skippedLoaded`. */
+  readonly skippedProtected: number
   /** Tree roots this run deleted DESPITE a loaded member, because `force`
    *  was authorized (the caller stopped the run first). */
   readonly forcedLoaded: number
@@ -233,7 +253,7 @@ export type ArchiveCleanupDomainResult<T> =
  *    empty ids) or oversized (> MAX_PURGE_SESSIONS entries) — nothing was
  *    mutated (2026-09 revision: purge gained an optional subset filter).
  *  Per-item failures are NOT thrown: they land in `PurgeResult.errors`
- *  (item codes: `missing`, `running`, `loaded`, `storage`). Run-level failures
+ *  (item codes: `missing`, `running`, `loaded`, `protected`, `storage`). Run-level failures
  *  that must not abort completed deletions (the batched set write, the changed
  *  event, a skipped orphan sweep) use the item code `archive-set` with an
  *  empty sessionId. */
@@ -318,24 +338,17 @@ export function indexChildren(
   return childrenOf
 }
 
-/** Resolve the deletable subtree under one archived top-level id, or null
- *  when the whole subtree is skipped because a member is running (always) or
- *  merely loaded (unless `force`). Returns null for an unknown root
- *  (orphan/archived id with no session record — treated as already gone, see
- *  purge). Children-first order is produced by post-order walk
- *  (cycle-guarded). */
-export function resolveDeletableTree(
+/** Children-first post-order over one subtree (cycle-guarded, iterative — see
+ *  resolveDeletableTree). `order[0]` is the deepest-visited leaf; the root is
+ *  last. Lives on its own because `purge`'s plan needs the closure BEFORE it
+ *  applies the liveness gates: a PROTECTED tree must be recognised as such even
+ *  when it is also running/loaded (the protected bucket is the outer
+ *  classification). */
+function subtreeOrder(
   rootSessionId: string,
   statesBySession: ReadonlyMap<string, ArchivedSessionState>,
   childrenOf: ReadonlyMap<string, readonly string[]>,
-  facts: { readonly running: ReadonlySet<string>; readonly loaded: ReadonlySet<string> },
-  force = false,
-): DeletableTree | null {
-  if (!statesBySession.has(rootSessionId)) return null
-  const liveness = subtreeLiveness(rootSessionId, statesBySession, childrenOf, facts)
-  if (liveness === 'running') return null
-  if (liveness === 'loaded' && !force) return null
-
+): string[] {
   const order: string[] = []
   const visited = new Set<string>()
   // Iterative post-order (merge-round Nit N2): recursion depth equalled the
@@ -361,8 +374,30 @@ export function resolveDeletableTree(
       stack.push({ sessionId: children[i] as string, expanded: false })
     }
   }
-  // order[0] is the deepest-visited leaf; the root is last. subagentCount
-  // excludes the root itself.
+  return order
+}
+
+/** Resolve the deletable subtree under one archived top-level id, or null
+ *  when the whole subtree is skipped because a member is running (always) or
+ *  merely loaded (unless `force`). Returns null for an unknown root
+ *  (orphan/archived id with no session record — treated as already gone, see
+ *  purge). Children-first order is produced by post-order walk
+ *  (cycle-guarded). NOTE: `ArchiveCleanupCore.purge` drives the same two steps
+ *  explicitly (closure → protection → liveness) so a protected tree is
+ *  classified as protected rather than by its liveness; this helper keeps the
+ *  historical single-call shape for its consumers and tests. */
+export function resolveDeletableTree(
+  rootSessionId: string,
+  statesBySession: ReadonlyMap<string, ArchivedSessionState>,
+  childrenOf: ReadonlyMap<string, readonly string[]>,
+  facts: { readonly running: ReadonlySet<string>; readonly loaded: ReadonlySet<string> },
+  force = false,
+): DeletableTree | null {
+  if (!statesBySession.has(rootSessionId)) return null
+  const liveness = subtreeLiveness(rootSessionId, statesBySession, childrenOf, facts)
+  if (liveness === 'running') return null
+  if (liveness === 'loaded' && !force) return null
+  const order = subtreeOrder(rootSessionId, statesBySession, childrenOf)
   return {
     rootSessionId,
     order,
@@ -430,6 +465,26 @@ export function orphanArchivedMembers(
   return orphans
 }
 
+/** Shape/capacity validation shared by purge's session-id filters (the
+ *  deletion subset and the protected set). Runs before any authoritative read;
+ *  a malformed or oversized filter refuses the whole request with
+ *  `invalid-request` and mutates nothing. */
+function assertSessionIdFilter(field: string, value: readonly string[] | undefined): void {
+  if (value === undefined) return
+  if (!Array.isArray(value) || value.some(id => typeof id !== 'string' || id === '')) {
+    throw new ArchiveCleanupError(
+      'invalid-request',
+      `archiveCleanup: purge ${field} must be an array of non-empty session id strings`,
+    )
+  }
+  if (value.length > MAX_PURGE_SESSIONS) {
+    throw new ArchiveCleanupError(
+      'invalid-request',
+      `archiveCleanup: purge ${field} exceeds ${MAX_PURGE_SESSIONS} entries`,
+    )
+  }
+}
+
 /** The pure orchestration core (design 24 §4 steps 1–7). */
 export class ArchiveCleanupCore {
   private readonly host: ArchiveCleanupHost
@@ -486,24 +541,35 @@ export class ArchiveCleanupCore {
 
   /** Resolve the run plan: candidate roots not already covered by another
    *  deletable root's subtree, each mapped to its deletable tree (or skipped
-   *  when running, or when loaded without `force`). Candidates are the full
-   *  archived set (purge without a filter) or the requested subset ∩ archived
-   *  set (filtered purge); a root that is itself a subagent descendant of an
-   *  earlier deletable root is covered by that root's tree and skipped here
-   *  (no double deletion). Orphan candidates (no session record) are no tree
-   *  and are NOT collected here: the registry-global orphan sweep
+   *  when running, or when loaded without `force`, or when the tree closure
+   *  contains a PROTECTED id). Candidates are the full archived set (purge
+   *  without a filter) or the requested subset ∩ archived set (filtered
+   *  purge); a root that is itself a subagent descendant of an earlier
+   *  deletable root is covered by that root's tree and skipped here (no double
+   *  deletion). Orphan candidates (no session record) are no tree and are NOT
+   *  collected here: the registry-global orphan sweep
    *  (`orphanArchivedMembers`) covers them — and every other record-less
-   *  member — in one pass. */
+   *  member — in one pass.
+   *
+   *  PROTECTION (2026-09 contract amendment): the protected set — the ids the
+   *  calling client can be viewing right now (its own `list.current`) — is
+   *  checked against the FULL subtree closure, so a protected SUBAGENT
+   *  descendant protects its whole archived ancestor tree. The check runs
+   *  before the running/loaded classification: a protected tree is skipped
+   *  whole regardless of its liveness, and the reason is reported in its own
+   *  bucket (`skippedProtected`). */
   private resolvePlan(
     candidateIds: readonly string[],
     statesBySession: ReadonlyMap<string, ArchivedSessionState>,
     childrenOf: ReadonlyMap<string, readonly string[]>,
     liveFacts: { readonly running: ReadonlySet<string>; readonly loaded: ReadonlySet<string> },
     force: boolean,
-  ): { trees: DeletableTree[]; skippedRunning: number; skippedLoaded: number } {
+    protectedIds: ReadonlySet<string> = new Set<string>(),
+  ): { trees: DeletableTree[]; skippedRunning: number; skippedLoaded: number; skippedProtected: number } {
     const trees: DeletableTree[] = []
     let skippedRunning = 0
     let skippedLoaded = 0
+    let skippedProtected = 0
     const covered = new Set<string>()
     for (const id of candidateIds) {
       // Covered check FIRST (design 24 perf): an ancestor tree that is
@@ -515,19 +581,33 @@ export class ArchiveCleanupCore {
         // its set membership is cleared by the registry-global orphan sweep.
         continue
       }
-      const tree = resolveDeletableTree(id, statesBySession, childrenOf, liveFacts, force)
-      if (tree === null) {
-        // Split the skip reason for honest reporting (2026-09 revision): a
-        // running member is never deletable; a merely loaded one is skipped
-        // only because `force` was not authorized.
-        if (subtreeLiveness(id, statesBySession, childrenOf, liveFacts) === 'running') skippedRunning += 1
-        else skippedLoaded += 1
+      // Classification order (2026-09 protection amendment): closure FIRST,
+      // then protection, then liveness. A tree that contains a client-displayed
+      // id is reported as protected even when it is also running or loaded —
+      // the client's actionable fact is "this tree holds the session you are
+      // viewing", and protection is authoritative over `force`.
+      const order = subtreeOrder(id, statesBySession, childrenOf)
+      if (protectedIds.size > 0 && order.some(member => protectedIds.has(member))) {
+        skippedProtected += 1
         continue
       }
-      for (const member of tree.order) covered.add(member)
-      trees.push(tree)
+      const liveness = subtreeLiveness(id, statesBySession, childrenOf, liveFacts)
+      if (liveness === 'running') {
+        // A running member is never deletable (a live writer recreates a
+        // header-less artifact) — the client stops the run first.
+        skippedRunning += 1
+        continue
+      }
+      if (liveness === 'loaded' && !force) {
+        // Loaded-only skip: deletable through an explicit force purge after
+        // the caller terminated the run (2026-09 revision).
+        skippedLoaded += 1
+        continue
+      }
+      for (const member of order) covered.add(member)
+      trees.push({ rootSessionId: id, order, subagentCount: order.length - 1 })
     }
-    return { trees, skippedRunning, skippedLoaded }
+    return { trees, skippedRunning, skippedLoaded, skippedProtected }
   }
 
   /**
@@ -695,8 +775,24 @@ export class ArchiveCleanupCore {
    * member is still refused unconditionally (a live writer recreates a
    * header-less artifact through `open(path,"a")`, design 24 §3). Default
    * (absent) = the historical fail-closed behavior, byte-for-byte.
+   *
+   * `protectSessionIds` (2026-09 contract amendment, replaces the retired
+   * client-side pre-flight refusal): the ids the CALLING client may be
+   * displaying right now. A candidate tree whose closure (root + subagent
+   * descendants) contains any protected id is skipped WHOLE — regardless of
+   * liveness and regardless of `force` — counted in `skippedProtected`, and
+   * its ids are additionally excluded from the orphan sweep and from the
+   * batched membership removal. Protection is authoritative over the FULL
+   * corpus this process can enumerate (including cwd-less cold records the
+   * client's `session/list` drops), which is what makes the client's own
+   * best-effort lineage walk unnecessary. The set can only SHRINK the deletion
+   * set: unknown, stale or non-archived ids are silent no-ops.
    */
-  async purge(sessionIds?: readonly string[], force = false): Promise<PurgeResult> {
+  async purge(
+    sessionIds?: readonly string[],
+    force = false,
+    protectSessionIds?: readonly string[],
+  ): Promise<PurgeResult> {
     // Filter validation runs BEFORE the authoritative read (review round
     // 2026-09): shape/length checks depend on nothing from the corpus, so a
     // malformed/oversized request must not pay a full registry + corpus scan
@@ -705,21 +801,13 @@ export class ArchiveCleanupCore {
     // run still proceeds to the registry-global orphan sweep, which is
     // orthogonal to the filter (design 24 §4 step 5) and deletes no
     // content.
-    if (sessionIds !== undefined) {
-      if (!Array.isArray(sessionIds)
-        || sessionIds.some(id => typeof id !== 'string' || id === '')) {
-        throw new ArchiveCleanupError(
-          'invalid-request',
-          'archiveCleanup: purge subset filter must be an array of non-empty session id strings',
-        )
-      }
-      if (sessionIds.length > MAX_PURGE_SESSIONS) {
-        throw new ArchiveCleanupError(
-          'invalid-request',
-          `archiveCleanup: purge subset filter exceeds ${MAX_PURGE_SESSIONS} entries`,
-        )
-      }
-    }
+    assertSessionIdFilter('subset filter', sessionIds)
+    assertSessionIdFilter('protected set', protectSessionIds)
+    // The protected set is the calling client's own "session I am displaying"
+    // id. It can only ever SHRINK this run's deletion set (a matching subtree
+    // is skipped whole), so an unknown/stale/never-archived id is a silent
+    // no-op — the same fail-closed direction as the subset filter.
+    const protectedIds = new Set<string>(protectSessionIds ?? [])
     const { archivedIds, statesBySession, childrenOf, liveFacts, snapshotRecordCount } = await this.readAuthoritativeState()
     let candidates: readonly string[]
     if (sessionIds === undefined) {
@@ -746,11 +834,16 @@ export class ArchiveCleanupCore {
     // bounds the sweep exactly like a full-set purge: an oversized set is
     // never swept (its full-set purge already refuses with purge-capacity).
     // The "not live" exclusion unions running ∪ loaded: an attached/idle
-    // session must keep its membership exactly like a running one.
+    // session must keep its membership exactly like a running one. PROTECTED
+    // ids are excluded too: a client-displayed session's membership must never
+    // be cleared by a sweep, which would silently un-archive a row the user is
+    // still looking at (defense in depth — a live/attached protected id is
+    // already excluded by the live union).
     const sweepCandidates = archivedIds.length <= MAX_PURGE_SESSIONS
       ? orphanArchivedMembers(archivedIds, statesBySession, liveSessionIdsOf(liveFacts))
+        .filter(id => !protectedIds.has(id))
       : []
-    const plan = this.resolvePlan(candidates, statesBySession, childrenOf, liveFacts, force)
+    const plan = this.resolvePlan(candidates, statesBySession, childrenOf, liveFacts, force, protectedIds)
     let deletedSessions = 0
     let deletedSubagents = 0
     let forcedLoaded = 0
@@ -767,6 +860,22 @@ export class ArchiveCleanupCore {
     const completedRoots: string[] = []
     const coveredArchivedMembers: string[] = []
     for (const tree of plan.trees) {
+      // TREE-LEVEL protection re-check (2026-09 amendment, belt-and-braces
+      // over resolvePlan): a tree whose closure contains a protected id must
+      // not START deleting — a plan bug must never be able to cut a partially
+      // protected tree, because prefix deletions are not rolled back and the
+      // protected member's ancestors would lose content that the user is
+      // still looking at. Unreachable while resolvePlan keeps its protection
+      // rule; it is recorded as an invariant violation when it does fire.
+      if (protectedIds.size > 0 && tree.order.some(member => protectedIds.has(member))) {
+        plan.skippedProtected += 1
+        recordError(
+          tree.rootSessionId,
+          'archive-set',
+          `archiveCleanup: skipped ${tree.rootSessionId}: its subtree contains a protected id (invariant violation — the plan must have skipped this tree)`,
+        )
+        continue
+      }
       // Cheap in-memory live refresh only (design 24 perf): the durable
       // snapshot stays fixed for the run — single-flight rules out in-process
       // concurrency and deletion is idempotent. The refresh feeds the
@@ -823,7 +932,7 @@ export class ArchiveCleanupCore {
         const state = statesBySession.get(sessionId)
         try {
           // Every member except the root is a subagent-origin descendant.
-          const outcome = await this.host.deleteSessionContent(sessionId, state?.cwd, force)
+          const outcome = await this.host.deleteSessionContent(sessionId, state?.cwd, force, protectedIds)
           if (sessionId === tree.rootSessionId) {
             if (outcome === 'deleted') deletedSessions += 1
           } else if (outcome === 'deleted') {
@@ -953,6 +1062,11 @@ export class ArchiveCleanupCore {
     // completed tree — duplicates are harmless for the binding (its Set
     // filter dedupes) but the wire record must stay clean.
     const clearIds = [...new Set([...completedRoots, ...coveredArchivedMembers, ...sweptOrphanMembers])]
+      // Defensive invariant (see resolvePlan's protection rule): a protected id
+      // must never leave the archived set in this run, whatever path put it in
+      // the list. Skipping it leaves the id archived, so a later run still sees
+      // it (convergent, never a silent un-archive).
+      .filter(id => !protectedIds.has(id))
     let clearedOrphanMembers = 0
     if (clearIds.length > 0) {
       try {
@@ -985,6 +1099,7 @@ export class ArchiveCleanupCore {
       deletedSubagents,
       skippedRunning: plan.skippedRunning,
       skippedLoaded: plan.skippedLoaded,
+      skippedProtected: plan.skippedProtected,
       forcedLoaded,
       errors,
       ...(truncated ? { truncated: true } : {}),

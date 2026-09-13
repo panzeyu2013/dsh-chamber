@@ -35,6 +35,7 @@ import {
   foldLegacyHostInserts,
   GIT_WORKTREE_INSERT_ID,
   GIT_WORKTREE_PACKAGE_NAME,
+  OPEN_IN_PACKAGE_NAME,
   isAllowedLocalFileSpec,
   localPluginList,
   localPluginWriterLedgerPath,
@@ -440,6 +441,7 @@ test('localPluginList: chamber host-graph state — installed + patched', () => 
     [CLIENT_GRAPH_PACKAGE_NAME]: { installed: true, patched: true, version: null, live: null },
     [GIT_WORKTREE_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
     [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
+    [OPEN_IN_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
   })
 })
 
@@ -452,6 +454,7 @@ test('localPluginList: chamber host-graph state — absent = not injected (hones
     [CLIENT_GRAPH_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
     [GIT_WORKTREE_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
     [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
+    [OPEN_IN_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
   })
 })
 
@@ -472,6 +475,7 @@ test('localPluginList: chamber host-graph state — package.json alone is a half
     [CLIENT_GRAPH_PACKAGE_NAME]: { installed: false, patched: true, version: null, live: null },
     [GIT_WORKTREE_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
     [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
+    [OPEN_IN_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
   })
 })
 
@@ -577,6 +581,7 @@ test('remotePluginList: parses dependencies + bundles from cat output', async ()
         { insertId: 'client-graph', name: CLIENT_GRAPH_PACKAGE_NAME, probe: 'clientGraph/graph', installed: true, patched: true, version: null, live: null },
         { insertId: 'git-worktree', name: GIT_WORKTREE_PACKAGE_NAME, probe: 'gitWorktree/previewCreate', installed: true, patched: true, version: null, live: null },
         { insertId: 'archive-cleanup', name: ARCHIVE_CLEANUP_PACKAGE_NAME, probe: 'archiveCleanup/probe', installed: false, patched: false, version: null, live: null },
+        { insertId: 'open-in', name: OPEN_IN_PACKAGE_NAME, probe: 'openInApp/probe', installed: false, patched: false, version: null, live: null, localOnly: true },
       ] },
     },
   })
@@ -596,6 +601,7 @@ test('remotePluginList: ENOENT → profileExists:false, ssh failure → {ok:fals
         { insertId: 'client-graph', name: CLIENT_GRAPH_PACKAGE_NAME, probe: 'clientGraph/graph', installed: false, patched: false, version: null, live: null },
         { insertId: 'git-worktree', name: GIT_WORKTREE_PACKAGE_NAME, probe: 'gitWorktree/previewCreate', installed: false, patched: false, version: null, live: null },
         { insertId: 'archive-cleanup', name: ARCHIVE_CLEANUP_PACKAGE_NAME, probe: 'archiveCleanup/probe', installed: false, patched: false, version: null, live: null },
+        { insertId: 'open-in', name: OPEN_IN_PACKAGE_NAME, probe: 'openInApp/probe', installed: false, patched: false, version: null, live: null, localOnly: true },
       ] },
       },
     },
@@ -626,6 +632,7 @@ test('remotePluginList: a zh_CN-locale remote ENOENT ("没有那个文件或目�
         { insertId: 'client-graph', name: CLIENT_GRAPH_PACKAGE_NAME, probe: 'clientGraph/graph', installed: false, patched: false, version: null, live: null },
         { insertId: 'git-worktree', name: GIT_WORKTREE_PACKAGE_NAME, probe: 'gitWorktree/previewCreate', installed: false, patched: false, version: null, live: null },
         { insertId: 'archive-cleanup', name: ARCHIVE_CLEANUP_PACKAGE_NAME, probe: 'archiveCleanup/probe', installed: false, patched: false, version: null, live: null },
+        { insertId: 'open-in', name: OPEN_IN_PACKAGE_NAME, probe: 'openInApp/probe', installed: false, patched: false, version: null, live: null, localOnly: true },
       ] },
       },
     },
@@ -663,6 +670,7 @@ test('remotePluginList: chamber probe — installed but the boot-layer insert mi
     [CLIENT_GRAPH_PACKAGE_NAME]: { installed: true, patched: false, version: null, live: null },
     [GIT_WORKTREE_PACKAGE_NAME]: { installed: true, patched: false, version: null, live: null },
     [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
+    [OPEN_IN_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
   })
   }
 })
@@ -721,6 +729,7 @@ test('remotePluginList: chamber probe — package.json present but dist/index.js
     [CLIENT_GRAPH_PACKAGE_NAME]: { installed: false, patched: true, version: null, live: null },
     [GIT_WORKTREE_PACKAGE_NAME]: { installed: true, patched: false, version: null, live: null },
     [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
+    [OPEN_IN_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
   })
   }
 })
@@ -783,6 +792,7 @@ test('remotePluginList: a `.ssh`-named home whose probe cat ENOENTs under redact
     [CLIENT_GRAPH_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
     [GIT_WORKTREE_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
     [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
+    [OPEN_IN_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
   })
   }
 })
@@ -815,6 +825,7 @@ test('remotePluginList: chamber probe parses module A version and reports live-e
     [CLIENT_GRAPH_PACKAGE_NAME]: { installed: true, patched: true, version: '0.1.2', live: true },
     [GIT_WORKTREE_PACKAGE_NAME]: gitSeeded(true),
     [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
+    [OPEN_IN_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
   })
   }
   // live = false → injected but restart still pending (重启后生效).
@@ -825,6 +836,7 @@ test('remotePluginList: chamber probe parses module A version and reports live-e
     [CLIENT_GRAPH_PACKAGE_NAME]: { installed: true, patched: true, version: '0.1.2', live: false },
     [GIT_WORKTREE_PACKAGE_NAME]: gitSeeded(false),
     [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
+    [OPEN_IN_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
   })
   }
   // live = null → the desktop could not classify (no ready tunnel): the UI
@@ -836,6 +848,7 @@ test('remotePluginList: chamber probe parses module A version and reports live-e
     [CLIENT_GRAPH_PACKAGE_NAME]: { installed: true, patched: true, version: '0.1.2', live: null },
     [GIT_WORKTREE_PACKAGE_NAME]: gitSeeded(null),
     [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
+    [OPEN_IN_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
   })
   }
   // A version-less seeded package.json → version:null (never a guessed one).
@@ -897,6 +910,7 @@ test('remotePluginList: git-worktree live is probed SEPARATELY — host-graph li
     [CLIENT_GRAPH_PACKAGE_NAME]: { installed: true, patched: true, version: null, live: true },
     [GIT_WORKTREE_PACKAGE_NAME]: { installed: true, patched: true, version: null, live: false },
     [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
+    [OPEN_IN_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
   })
   }
   // Both live → 已生效 for both.
@@ -943,6 +957,7 @@ test('remotePluginList: the git-worktree INSERT missing from the patch is its ow
     [CLIENT_GRAPH_PACKAGE_NAME]: { installed: true, patched: true, version: null, live: true },
     [GIT_WORKTREE_PACKAGE_NAME]: { installed: true, patched: false, version: null, live: null },
     [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
+    [OPEN_IN_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
   })
   }
 })
@@ -989,6 +1004,7 @@ test('remotePluginList: liveProbe is NOT consulted when the injection is half-pr
     [CLIENT_GRAPH_PACKAGE_NAME]: { installed: false, patched: true, version: '0.1.2', live: null },
     [GIT_WORKTREE_PACKAGE_NAME]: { installed: true, patched: false, version: null, live: null },
     [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
+    [OPEN_IN_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
   })
   }
   assert.equal(probed, false, 'a half-injected module is never "live" — the probe is skipped')

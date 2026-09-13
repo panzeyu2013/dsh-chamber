@@ -8,9 +8,9 @@
 declare module 'react' {
   interface CSSProperties {
     /** Per-element source accent (05 §2 — active source/session left inset). */
-    '--dsh-source-accent'?: string | number
+    '--chamber-source-accent'?: string | number
     /** Per-workspace icon accent (2026-09 — workspace header fold toggle). */
-    '--dsh-workspace-accent'?: string | number
+    '--chamber-workspace-accent'?: string | number
   }
 }
 

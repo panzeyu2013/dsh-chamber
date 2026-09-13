@@ -69,11 +69,13 @@ import {
   GATEWAY_TOKEN_MAX_CHARS,
   GATEWAY_TOKEN_MIN_CHARS,
   GATEWAY_TOKEN_VISIBLE_ASCII_PATTERN,
+  HOST_PACKAGE_SEED_FILES,
   isDeniedPluginName,
   PLUGIN_NAME_PATTERN,
   SPKI_PIN_MISMATCH_CODE,
   SPKI_PIN_PATTERN,
   spkiPinOfPeerCertificate,
+  type HostPackageSeedFile,
 } from './control-plane-module.ts'
 import { GATEWAY_PLUGIN_VERSION_PATTERN, TARBALL_MAX_ARCHIVE_BYTES } from './plugin-tarball.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
@@ -1236,7 +1238,7 @@ export const gatewayProvider: TransportProvider = {
 
 // ---------------------------------------------------------------------------
 // Desktop-synced chamber host packages (design 17 §9.3, 2026-12 Phase 3):
-// the gateway no longer ships the two chamber host packages; a connecting
+// the gateway no longer ships the synced chamber host packages; a connecting
 // desktop uploads its own copies through the authenticated
 // `PUT /chamber/plugins` surface. The sync is best-effort and idempotent —
 // the client skips packages whose version already matches the gateway's
@@ -1256,6 +1258,40 @@ export interface LocalChamberHostPackage {
   name: string
   packageJson: string
   distIndex: string
+}
+
+/**
+ * Where each declared seed file's bytes live in the main-process source shape
+ * above. Keyed by the SHARED seed file set (control-plane
+ * `HOST_PACKAGE_SEED_FILES`, consumed through control-plane-module.ts), so a
+ * seed file added there — or removed — is a compile error here instead of a
+ * PUT payload that silently omits it (the pre-fix literal pair: the gateway
+ * answered 200/changed:true for a two-key upload, and the remote boot missed
+ * the new file with nobody reporting it).
+ */
+const SYNC_UPLOAD_BYTES: Record<HostPackageSeedFile, (pkg: LocalChamberHostPackage) => string> = {
+  'package.json': pkg => pkg.packageJson,
+  'dist/index.js': pkg => pkg.distIndex,
+}
+
+/**
+ * The `files` record of one `PUT /chamber/plugins` upload: every declared seed
+ * file, keyed by its package-relative path, in the shared tuple's order. Built
+ * BY ITERATING the shared set (never a hand-written pair) and fails loud for a
+ * declared file this build has no local byte source for, so the upload can
+ * never under-report the set the gateway cache requires.
+ */
+export function syncedPluginUploadFiles(pkg: LocalChamberHostPackage): Record<string, string> {
+  const files: Record<string, string> = {}
+  for (const relative of HOST_PACKAGE_SEED_FILES) {
+    const resolve = SYNC_UPLOAD_BYTES[relative] as ((pkg: LocalChamberHostPackage) => string) | undefined
+    const bytes = resolve?.(pkg)
+    if (typeof bytes !== 'string') {
+      throw new Error(`gateway plugin sync: no local byte source for seed file ${JSON.stringify(relative)}`)
+    }
+    files[relative] = bytes
+  }
+  return files
 }
 
 export interface GatewayPluginSyncResult {
@@ -1403,7 +1439,7 @@ export async function syncGatewayChamberPlugins(options: {
       const put = await gatewayJsonRequest(`${origin}/chamber/plugins`, {
         method: 'PUT',
         headers: requestHeaders,
-        body: { name: pkg.name, files: { 'package.json': pkg.packageJson, 'dist/index.js': pkg.distIndex } },
+        body: { name: pkg.name, files: syncedPluginUploadFiles(pkg) },
         insecure,
         spkiPin: options.spkiPin,
         timeoutMs,

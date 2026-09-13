@@ -69,6 +69,15 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   workspace（组头）→ session 行（**嵌套缩进**于 workspace 之下）。未连接
   来源只显示分组头 + 状态点（无会话数据）。
 - 会话行带**运行指示点**（相对时间列不显示——见 06 §4.3）。
+- **会话行标签 = 官方链**：`durable title → cwd 目录名 → 会话 id`，在侧边栏单点解析
+  （`packages/dsh-chamber-client-ui-sidebar/src/shared/derive.ts` 的 `sessionDisplayTitle`，
+  两个快照构造都经它接线，并作为必需字段 `SessionRow.displayTitle` 携带）；该字段进
+  **两个发布签名**（`instanceSnapshotSignature`、`serversProjectionSignature`），
+  标签单独变化也重发布。「未命名会话」只保留三处，且都是声明的例外：归档管理器的
+  durable 名列（design 24 语义）、待办条 `SessionTodoArea` 与通知体（`renderer/App.tsx`）
+  在该行完全不在投影里时的字典化兜底（后者受 frame-locale 审计 T15 约束）。
+- **`+` = 复用优先**：复用 workspace 中既有的空白成员（与上游 `connectWorkspace`
+  同谓词：存在可复用空白行即不新建），并按 workspace 维护在飞 promise 以防双击重复新建。
 - **当前来源的当前会话行高亮**（含所在 workspace 组着色）：当前会话 id 经
   运行时事实通道（`server.runtime?.current`，06 §4）——每个来源自己的 ctx
   上报自身 `sessions.list` 快照投影，任意来源均可达，组件不订阅任何 store。
@@ -100,22 +109,31 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
 - **点击来源分组头**（非当前来源）= 切换活动来源视图：
   `chamberBridge.requestActivateSource(sourceId)` → App 层仅切换该来源
   shell（N-ctx），不打开会话。
-- **归档会话确认后立即从列表消失**：`archivedSessionIds` 过滤在 derive 层
+- **归档会话立即从列表消失，且无确认**（2026-09-11 upstream-alignment T2a）：
+  归档动词在会话行的 kebab 菜单里，执行即提交（上游明确理由：归档只让该行隐藏、
+  从不触碰会话日志，故既不破坏性也无需确认，vendor ui-workspace `Rows.tsx:412-421`）；
+  `archivedSessionIds` 过滤在 derive 层
   （`shared/derive.ts` 纯函数），不等聚合轮询。
-- 会话行悬停操作（v1 最小集，走该来源自己的 API）：重命名/归档/**fork**
-  （kebab 菜单 + 独立归档按钮）——行内 fork 走 wire `sessions.fork` + 标题
+- 会话行悬停操作（v1 最小集，走该来源自己的 API）：重命名/**fork**/归档
+  （**kebab 菜单三项**；行内不再有独立归档按钮——2026-09-11 upstream-alignment
+  T2a）——行内 fork 走 wire `sessions.fork` + 标题
   递增（increaseTitle，对齐官方 ui-workspace），成功后打开子会话，递增
   rename 失败非致命（子会话仍创建并打开）；官方 conversation 回合尾部的
   `turn-tail forkAt` 常驻可用，两者并存。workspace 行：新建会话（`+` 按钮，在该
-  workspace 下创建并打开）、重命名、删除（kebab 菜单）。wire 缺失的
+  workspace 下创建并打开）、重命名、删除（kebab 菜单）。**workspace 删除用应用内
+  官方 `Modal` 确认**（2026-09-11 upstream-alignment T2b）：outline 取消 + outline
+  危险确认 + 一句说明 + `role="status"` 进行行，确认后才发 wire 调用；孤儿
+  workspace（路径已消失、只删注册）走同一确认、只换说明句——**全包不再有
+  `window.confirm`**（OS 样式弹窗无法使用 alias token）。wire 缺失的
   方法不做（如删除会话），不发明协议——**design 24 受界例外**（2026-12
   用户批准，AGENTS 已登记）：来源头 hover 簇新增「删除已归档内容」动作，
-  走 chamber 自有宿主域 `archiveCleanup/{preview,purge}`（第三个宿主包，
+  走 chamber 自有宿主域 `archiveCleanup/{preview,purge}`（design 24 引入的宿主包，
   实例进程内权威清除归档集内容含 subagent 级联；只删不读、运行中整棵
   跳过、幂等；域缺失 404 给诚实文案；host binding 已按 design 24 §10 的 vendor
   核对结论落地，见 `packages/dsh-chamber-seed-archive-cleanup/src/binding.ts`）。
   详见 design 24 与 §6 宿主包清单。
-- 已连接来源提供"新建工作区"（来源头部 `+` 按钮）：打开该来源的应用内
+- 已连接来源提供"添加工作区"（来源头部按钮，官方 project-add 字形
+  `IconProjectAddOutline16`，2026-09-11 upstream-alignment T7）：打开该来源的应用内
   目录浏览对话框（§4
   同一 browse 表面，不做手敲路径表单），确认的路径走该来源的
   workspace.create（路径须为该实例宿主上已存在的目录；远程路径 = 远端
@@ -128,6 +146,108 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   （会话行单击立即打开、二次点击进入重命名，06 §2.2）；workspace 头/会话行
   悬停显示**信息卡片**（标题/会话数/相对时间/状态点/复制标题，06 §7）。
 - New Session → 当前活动来源新建会话。
+
+#### 2.2.1 打开意图与工作区回声（2026-12 修订；两项真机反馈）
+
+> 背景：N-ctx 下"用户意图"比官方运行时的默认收敛**到得晚**，两条真实反馈都由
+> 此产生：①切到远程 server 的会话时先闪出一个"新会话"；②在某来源上新建工作区
+> 后不立刻出现，必须手动点一下那个服务器。
+
+**打开意图（open intent）= 唯一事实源**：`App.openSession` 是所有**带 sessionId** 的
+打开路径的唯一漏斗——侧栏点击、待办条、git 插件都经
+`chamberBridge.requestOpenSession` 进 App 的 `onOpenSession` 订阅，通知点击走通知
+runner，App.tsx 里恰好这两处调用点。**深链不在其中**：深链载荷没有 sessionId
+（16 §2），`settlePendingDeepLinkActivation` 只 `selectView` 激活该来源视图、不打开
+会话，故它既不 arm 意图也不受本节的闸门约束。意图在切视图**之前** arm 一条
+意图、在本次 open settle（成功或终态失败）后**按 sessionId 守卫地**释放——守卫
+保证"点 X 后马上点 Y"时 X 的迟到 `finally` 不撤掉 Y 的闸门。意图槽位是
+**跨 ctx 单例**（`packages/dsh-chamber-client-ui-sidebar/src/shared/open-intent.ts`，
+与 `pending-click.ts` 同款：目标实例自己的 ctx 内也要读它），App 经
+`useSyncExternalStore` 绑定。它同时驱动三道闸门：
+
+1. **投影门**：意图在途**且该来源的 current 不是请求的那个会话**时，该来源不投影
+   `runtimeFacts.current`（`projectableCurrent`）。否则冷 boot 期间官方初始导航策略
+   给自己选中的 blank 会话会被投影成一行高亮的"新会话"（本文件 §2.1 的 `(!blank ||
+   current)` 规则），下一次分发后又消失——正是①的可见形态。**幂等重开不受影响**：
+   `current` 已经是要打开的那个会话时投影本就正确，为一次分发把高亮摘掉再装回去是
+   纯闪烁、零信息（`pending !== current` 才抑制）。
+2. **揭示门**：壳体**显示的会话不是请求的那个**时，目标视图的 boot 遮罩在干净
+   settle 之后继续保留（`shouldHoldViewVeil`，App 判定后把布尔值交给
+   `InstanceView` 合成 `!settled || holdVeil`）。两个输入只有 App 有：壳状态镜像
+   （settled/failed）与**原始** runtime current（投影门要隐藏的正是那个值，所以绝不
+   能从投影结果反推）。三条边界：
+   - 壳失败 ⇒ 永不持有（失败呈现归 App 覆盖层；也避免一个排在永不 settle 的 boot
+     后面的 open 把遮罩按 68s 队列预算钉住）；
+   - 已经显示请求会话 ⇒ 不遮（幂等重开；或 boot 期早开臂已抢先——此时 settle 即揭幕，
+     比等 App 分发更快）；
+   - 遮罩生命周期由 open 请求自身界定（dispatch 8s 预算 + App 的 `finally` 释放），
+     不存在挂死的加载层；持有的判据是两条规则（`shouldHoldViewVeil`）：①有在途
+     open ∧ 未失败 ∧ **屏上显示的会话 ≠ 请求的会话**；②**屏上没有正当内容**（该视图
+     的 current 未定或为 blank 会话——未知按 blank 处理，冷 boot 因此照旧被遮）。
+     "屏上仍是别的那一个"是这条闸门存在的理由；而**一个已经渲染出正确内容的温壳不会
+     被盖**（与上条同源），且温壳正显示用户在读的真实会话时，切换请求不再用不透明加载
+     层把它整个盖住 8s（2026-09-11 review：原判据缺第②条，会把温暖壳连现有会话一起遮）。
+3. **boot 期早开臂**：目标 ctx 内的侧栏插件读**活**意图，在 sessions 列表可寻址
+   的瞬间调用本 ctx 的 `sessions.open`
+   （`packages/dsh-chamber-client-ui-sidebar/src/client/early-open.ts`：预算 8s、
+   50ms 节奏、按 id 探针（不物化 id 集合）、一次成功即退位、绝不自行上报终态——
+   终态报告归 App 分发）。
+   它抢的是官方 `UiWorkspaceService.watchNavigation()` 的初始导航策略：该策略
+   需要 workspace + session **两条**基线 ready 才会"复用或新建（宿主侧
+   `session.create`！）blank 会话并打开"，而本臂只需要 session 列表。
+   **诚实边界**：因此它只在 workspace follow 基线晚于 session 列表时取胜（隧道下
+   常见但**不保证**）；策略已先落地时 blank 会话已在宿主上存在，挡住可见性的
+   是上面两道闸门，而不是这条臂。
+4. **被取代的请求不得再开**（`packages/renderer/src/shell.ts` 的
+   `lastRequestedSession`）：同一来源的 open 请求是**最后意图胜出**流，而官方
+   `sessions.open` 只是一次普通 select——一个用户已经离开的旧请求会把壳**翻回**
+   旧会话。冷 boot 期两次点击同来源（X 后 Y）时两者都在队列里，settle 的 FIFO
+   flush 会先开 X，而早开臂此时已经把 Y 打开了，于是可见 Y→X→Y 抖动。分发器
+   因此丢弃被更新的请求：静默 resolve（被放弃不是失败，行内错误面归最新那次），
+   记录随来源退役清除。首请求永远照常分发（记录为空时不判定）。
+
+**工作区回声（workspace echo）**：侧栏在某来源上建好工作区后（unary
+`workspace.create` 返回宿主 workspaceId），经 `chamberBridge.reportWorkspaceCreated`
+上报，App 记入渲染端账本（不持久化 / 不轮询 / 不写宿主），并在**投影的唯一汇合点**
+（`deriveServerWorkspaces` 之前套一层 `withWorkspaceEcho`）把该行并入。同一通道也
+承载**撤销/改名回声**（见 §3）：该来源的 `workspace.delete` / `workspace.rename` 成功后，
+侧栏分别经 `reportWorkspaceRemoved` / `reportWorkspaceRenamed` 上报，App 只把事实施加
+到该账本（`removePendingWorkspace` 删条目 / `renamePendingWorkspace` 改标题）——照旧
+不新增读通道、不写宿主。为什么
+必须回声：未挂载来源只有 unary 兜底（工作区分组由会话 cwd 反推——**刚建的空
+工作区没有任何会话，结构上不可见**），已推送来源的工作区集又被
+`commitAggregatePull` 的 mounted merge 冻结、且 `planAggregateRefreshes` 根本不再
+unary 轮询它——所以新建后那次 `requestRefresh` 两条分支都刷不出这一行。回声
+**不是第二事实源**：
+
+- 权威行**按 id 胜出**，该 id 出现在挂载 push 里即从账本退休
+  （`reconcilePendingWorkspaces`，在 ready 门**之前**执行：工作区身份来自该来源
+  自己的 follow 基线，与聚合是否已提交无关）；
+- **同 path 的合成组被原位替换**（真实 id 胜出；否则该目录一旦有会话就会渲染
+  两行）；同 path 的真实行（别的 id）胜出且账本条目退休；
+- 条目随来源生命周期 / TTL（10min）收敛（TTL 挂在三处时钟上：本次 create、权威
+  push、以及未挂载来源唯一的 30s unary 兜底拉取）；回声行**不带 `synthetic`**——
+  它的 id 是真的，工作区级动作照常可用。
+- **替换的真实代价（已登记）**：换的是行的**身份**，因此按
+  `sourceId/workspaceId` 键控的 per-workspace 视图偏好（折叠态 `folded`、updated 模式的
+  `updatedOrder`/`sessionUpdatedAtByAccount`）不会跟随新 id——旧合成键留在存储里不再命中
+  （渲染侧跳过未知 id，属既有已接受残渣），该组可能一次性由折叠变展开；未分组序
+  `ungroupedOrder` 只按 sourceId 键控，不受本次替换影响。纯外观、一次性，且换来的是
+  "不会渲染同一目录两行"。
+- **与 git 行的联动（顺带生效，非新机制）**：Git 插件本就按"投影里的工作区 id 集合
+  变化"即时刷新（`workspaceKeyOf`——"新增/删除工作区必须立刻刷新，否则 git 行要等
+  30s 轮询"），而它的取数是 unary（`/api/i/<id>/api/gitWorktree/*`，未挂载来源同样
+  可用）。回声让投影的 id 集合发生变化，因此新建工作区的 **git 行也随之立即出现**，
+  而不是等用户点开该来源。
+
+**登记残余（本修订不解决）**：
+
+- 未被早开臂抢先时，宿主上仍会留下一个 blank 会话（同一工作区复用，不增长；后台
+  预热 / 基线收割 boot 本来也会各造一个）。根治需要上游把"当前会话选择"的持久化
+  按 shell 作用域拆开——见 `docs/progress/todo/client-store-scoping-upstream.md`；
+- 未挂载来源的**工作区集合**仍然只有"回声 + 挂载 push"两个来源：别处创建 / 改名 /
+  删除的工作区、以及工作区**顺序**，仍要等该来源被挂载（用户点开）才收敛——这是
+  §2.3 已登记的降级面；本修订刻意不引入"每次变更付一次后台 boot"的收敛臂。
 
 ### 2.3 数据纪律
 
@@ -211,6 +331,25 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   ——保持在线），但它一旦遇到新的收割候选必须**让位**
   （`shouldReclaimHarvestedShell`）——否则温壳会以 `autoPrewarmed` 身份长期占住
   唯一槽位，后变 ready 的来源永远拿不到基线。
+- **未挂载来源的 unary 兜底表达不了"空工作区"**（2026-12 修订，§2.2.1）：
+  `fetchInstanceSnapshot` 只调 `session.list`，工作区分组由会话 cwd 反推
+  （`__cwd__:` 合成行）——刚建好、没有任何会话的工作区在结构上不可见；已推送过的
+  来源更彻底：聚合保留 pushed 工作区集（mounted merge），且
+  `planAggregateRefreshes` 只刷新"刚 ready"或"从未推送过"的来源，对它连 unary
+  轮询都不再发生。因此"新建工作区后侧栏要等用户点开该服务器才出现"不是刷新时机
+  问题，而是**读通道缺失**：权威工作区集合只存在于挂载壳的 `workspace/follow`
+  基线（宿主把 `upsert` 广播给所有活跃 follower），chamber 侧的补法是用户自己
+  那次创建的回声（§2.2.1）——不新增 wire 读通道，也不把工作区事实搬进控制面。
+- **本修订的代码落点**：`packages/dsh-chamber-client-ui-sidebar/src/shared/open-intent.ts`
+  （意图槽 + 投影/揭示纯规则）、`.../src/shared/aggregate-store.ts`（桥接单例 +
+  回声事实通道：`WorkspaceCreatedFact`/`reportWorkspaceCreated` 等）、
+  `.../src/shared/workspace-echo.ts`（回声账本 +
+  union/去重纯规则）、`.../src/client/early-open.ts`（boot 期早开臂）、
+  `.../src/client/index.ts`（每个 ctx 挂一次早开臂）、
+  `.../src/client/SidebarRoot.tsx`（create 成功后上报回声）、
+  `packages/renderer/src/App.tsx`（arm/release、账本与退休、投影门、揭示门判定、
+  holdVeil 传入）、`packages/renderer/src/components/InstanceView.tsx`（遮罩合成）、
+  `packages/renderer/src/shell.ts`（被取代请求的丢弃：`lastRequestedSession`）。
 
 ## 3. 桥接层（chamberBridge，renderer 共享单例）
 
@@ -239,6 +378,9 @@ interface ChamberServerAggregate {
   updatedAt: number
 }
 interface OpenSessionRequest { sourceId: string; sessionId: string }
+interface WorkspaceCreatedFact { sourceId: string; workspaceId: string; path: string }
+interface WorkspaceRemovedFact { sourceId: string; workspaceId: string; path: string }  // path 尽力而为（快照未报告该行时为空串；账本同时按 workspaceId 匹配）
+interface WorkspaceRenamedFact { sourceId: string; workspaceId: string; title: string }
 interface InstanceRuntimeReport {
   current?: string                // 当前会话 id（06 §4.3 全局单选高亮）
   sessions: Record<string, {
@@ -258,6 +400,12 @@ export const chamberBridge: {
   onOpenSessionOutcome(listener: (outcome: OpenSessionOutcome) => void): () => void  // 侧边栏订阅：失败行内呈现/成功清残留
   requestRefresh(sourceId: string): void                  // 侧边栏动作成功后调用
   onRefresh(listener: (sourceId: string) => void): () => void  // App 层订阅
+  reportWorkspaceCreated(fact: WorkspaceCreatedFact): void     // 侧栏 create 成功后上报宿主 workspaceId（§2.2.1 回声事实；单向，绝不请求宿主改动）
+  onWorkspaceCreated(listener: (fact: WorkspaceCreatedFact) => void): () => void  // App 层订阅：并入回声账本
+  reportWorkspaceRemoved(fact: WorkspaceRemovedFact): void     // 侧栏 delete 成功后上报（撤销回声）
+  onWorkspaceRemoved(listener: (fact: WorkspaceRemovedFact) => void): () => void
+  reportWorkspaceRenamed(fact: WorkspaceRenamedFact): void     // 侧栏 rename 成功后上报（改名回声）
+  onWorkspaceRenamed(listener: (fact: WorkspaceRenamedFact) => void): () => void
   requestSessionListRefresh(sourceId: string): void       // design 24 §12：请求该来源挂载 ctx 重跑官方 session.list（purge 幽灵行收敛；§12 由生产端校验式收敛链处理：reject/hung 有界重试，越界一律保持抑制——resolve 不构成权威）
   onRequestSessionListRefresh(listener: (sourceId: string) => void): () => void // 各挂载 ctx 的 sidebar 插件订阅；仅 chamberInstanceId === sourceId 者动作（§12：插件自身观测到归档集收缩也会直接触发同一链，不依赖本通道送达）
   requestActivateSource(sourceId: string): void           // 点击来源分组头调用
@@ -309,6 +457,14 @@ export const chamberBridge: {
 - 订阅 `onRefresh` → 每个 live 来源无条件执行一次即时 mutation-pull（与
   §2.3 同规：mounted 来源 host-store 推送为主、requestRefresh 即时 unary
   pull 双通道并行，不是 mounted no-op）。
+- 订阅 `onWorkspaceCreated` → 记入渲染端**工作区回声账本**（只记录、不拉取：
+  侧栏自己的 create 成功后照旧 `requestRefresh`，两条通道职责不重叠；权威收敛
+  点是挂载 push 的 `reconcilePendingWorkspaces`，见 §2.2.1）。同族的
+  `onWorkspaceRemoved` / `onWorkspaceRenamed` 是**同一账本**的撤销/改名回声：
+  App 分别经 `removePendingWorkspace` / `renamePendingWorkspace` 就地删条目 /
+  改标题——没有它们，未挂载来源的 create → delete 会留下一个挂着真 id 动作的
+  幽灵行直到 TTL 到期，未挂载来源的 rename 则看起来完全没生效（回声行标题是
+  `basenameOf(path)`）。
 - 订阅 `onRuntimeReport` → 把各来源的运行时事实合并进 `server.runtime`
   （仅附加、不覆盖轮询字段；来源断连即清，06 §4）。runtime 与 snapshot 两条
   producer 均以注册时单调 token + 主进程下发的 opaque `sourceFingerprint` 认领
@@ -317,7 +473,9 @@ export const chamberBridge: {
   `retireInstanceProducers(sourceId)` 撤销 token/cache 并广播 withdraw；旧 ctx 随后的
   异步 `report/clear` 全部失效，即使 replacement 尚未注册也不能污染同 id 新代。
 - 订阅 `onInstanceSnapshot` → 以内容签名 identity-preserving 合并，并使旧 pull
-  失效；订阅 `onPluginDiagnostic` → 合并到来源标题异常标记与插件设置页详情。
+  失效；订阅 `onPluginDiagnostic` → 合并到来源标题异常标记与**连接页该来源卡片上的
+  插件状态行**（`plugin-diagnostic.tsx`；它报的是客户端插件图 boot 健康，与设置面
+  是否可渲染是不同事实面——设置壳的装配诊断块已于 2026-12 完整桥接修订退役）。
 
 ## 4. N-ctx 多实例与视图切换
 
@@ -374,7 +532,16 @@ export const chamberBridge: {
   过渡在途期间翻转时，不会出现"直通落地后被在途节的旧意图覆盖"。
   未就绪视图（首次打开/仍在 boot）进入**骨架屏**（`.instance-loading`）：全屏
   同底色 veil + 居中转圈/服务器名文案，`--dsw-alias-*` 主题 token 底色，z-index
-  盖住 shell 内 dsh 启动页——不再需要 opacity 隐藏技巧。**骨架屏无几何主张
+  盖住 shell 内 dsh 启动页——不再需要 opacity 隐藏技巧。**骨架/框架文案进 typed
+  字典（T16，2026-09-11 upstream-alignment）**：框架（App / InstanceView /
+  `index.html` 的静态首帧）自身没有 `t` 席位，其 chrome 文案集中在
+  `packages/renderer/src/locales.ts`（zh 为键集权威 + en 完整校验），按
+  **文档语言** `document.documentElement.lang` 解析——官方 locale 服务
+  `syncDocumentLanguage` 是该属性的唯一写入者；未设置时回落到**服务端 markup
+  自己的默认**（`index.html` 的 `lang="zh-CN"`）而非 OS 语言。`index.html`
+  的静态骨架文案由 `main.tsx` 在 React 挂载前用同一字典覆盖（`data-chamber-boot-hint`
+  是唯一挂钩），因此英文文档首帧即英文。转圈是纯装饰（`aria-busy` 承载忙碌事实），
+  已 `aria-hidden`。**骨架屏无几何主张
   （D1=A）**：骨架不以固定 rail 56 + sidebar 224 = 280px 占位块模仿 dsh
   布局几何——真实侧栏宽度由 layout store 持久化、用户可拖到任意值，任何占位
   几何都会在 settle 揭幕时失配（默认观感路径被 View Transition 快照遮盖，
@@ -393,7 +560,31 @@ export const chamberBridge: {
    刷新），违反「一个实体的失败不得抹除/阻断无关健康实体」不变量。dsh 壳
    内自绘的失败页（`AppWebEntry` 加载页的 fail-loud 报告）也统一经
    `AppWebEntry.bootError`（拷贝包 seam）上浮为 chamber 可见的失败态
-   （shell.ts 失败分支 dispose 该 entry，重试干净重 boot）。**模块表安装顺序**：
+   （shell.ts 失败分支 dispose 该 entry，重试干净重 boot）。**失败报告内容与官方
+   同源（T15，2026-09-11 upstream-alignment）**：覆盖层除标题 + boot 失败文本外，
+   还列出该次 boot 里**未激活的插件 id**（官方失败页 `Failed to load plugins` 的同
+   一份清单）：`shell.ts` 的 `collectFailedEntries` 在 entry 销毁**之前**读仍存活的
+   loader（上游 `assertEntriesActive` 的同一 fact，`packages/client/web/src/boot.ts:138-158`），
+   id 搭已有的 `ShellState.failedEntries` 到 App——不新开通道；被容忍的 per-instance
+   extra row 不在清单内（版本歪斜不得判 boot 失败）。失败/控制面不可达两块文案与
+   重试/切换按钮同批改为框架 typed 字典（`renderer/src/locales.ts`，按文档语言
+   解析——框架自身没有 `t` 席位）+ 官方 `Button variant="primary|outline"`，
+   控制面不可达块同样是 `role="alert"`。**框架的 `Button` 走深路径导入**
+   （`@deepseek-ai/dsh-client-ui-primitives/src/Button.tsx`，2026-09-11
+   upstream-alignment）：包 barrel 同时带 primitives 的 markdown/CodeBlock 家族，
+   T15 轮在本仓构建上实测 barrel 会把约 87 KB 带进**主图**（主图 raw
+   1,226,775 → 1,313,736，即 +86,961 B——该增量是 barrel 自身的属性，与本轮改动
+   无关），而深路径把它们留在 chamber 复合入口——主图在 App 挂载前整体
+   求值，正是 `chamber-entry.ts` 的 C3 注记要把 ui-primitives 挡在主图外的那条
+   理由。**本轮实测（2026-09-11 review-fix 树，`pnpm run build:renderer` 写入
+   `packages/desktop/dist/web/perf-sizes.json`，门值在
+   `packages/renderer/scripts/check-chunk-budgets.mjs`）**：主图 raw
+   **1,228,157**（gzip 339,212）对 `mainGraphRaw.warn = 1,350,000`，余量
+   121,843 B ≈ **9.0%**；chamber 复合入口 raw **1,989,208**（gzip 552,563）对
+   `chamberEntryRaw.warn = 2,000,000`，余量只剩 10,936 B ≈ **0.5%**（表头 CSS
+   244,059 对 warn 300,000）。即按本轮基线推算，barrel 形态的主图约 1.315 MB、
+   仍只在 warn 门内约 2.6%——深引的理由与 T15 当初一样成立；而复合入口距 warn 门
+   不足 1%，再加一个首屏家族就会触 warn（拆分需先评估）。**模块表安装顺序**：
    模块表（`window.__DSH_MODULES__` + `__ModuleLoader__`
    sink）经 boot.ts 导出的幂等 `ensureWebModuleSystem` 在**任何 bundle 脚本
    执行前**装好（shell.ts 在 collectExtraRows 预加载之前调用，run() 经同一
@@ -406,6 +597,47 @@ export const chamberBridge: {
   不依赖页面级 base-path/source 全局旋钮。
   不支持 content-visibility 的浏览器降级为保留 layout 的 visibility 方案
   （同样无闪烁）（styles.css `.instance-view.instance-hidden`）。
+  **降级呈现（2026-12 修订）**：boot **成功**但已知缺口（来源在启动窗口内没有
+  提供客户端插件图／图到了但复合首屏 inject 的服务始终没有 provide——典型是
+  `ui-chat` 等 `sidebarRight`，于是整个会话视图不注册）时，事实经
+  `ShellState.degraded`（`ShellDegradedFact`，形状在叶模块
+  `renderer/src/boot-gap.ts`）到 App——结算后的判词经 `bootInstanceShell` 的
+  `options.onRepublish`（InstanceView 转发 `onStateChange`；shell 的 `onState`
+  形参只是**视图本地 setter**，只发它 App 镜像收不到，三个座位与自愈会一起瞎掉），
+  结算前的判词按 boot 序号暂存并在 settle 时补放——由 App 在**活动视图**上渲染非阻断的
+  `.boot-gap` 横幅：标题 + 按 kind 的正文 + 结构化事实行（缺哪些服务、哪些插件
+  在等它们／哪些插件没注册）+ 下一步 + 产出方诊断原文 + 重试。三条纪律：
+  ①**归属**：文案属框架面，走 `renderer/src/locales.ts` typed 字典；产出方只发
+  kind 与结构化事实，诊断原文只作诊断行、不当文案（STATUS「跨边界诊断文案」）。
+  ②**可重试性由事实裁决**：`BOOT_GAP_POLICY` 是 `Record<kind, …>`，新增 kind
+  不带文案与 retryable 裁决即编译失败；`planDegradedRetries` 只重挂 retryable
+  的 kind（每 ready 世代一次，见 `degraded-retry.ts`）。③**不撒谎**：kind 不能
+  判定「暂时／结构性」，故文案一律"常见原因…"，且**只有在来源 ready 且本 ready
+  世代尚未重挂过**时才承诺"会自动重挂一次"（非 ready 时 self-heal 永不会来）；
+  a11y 用 `role="status"`（不是 `alert`——几秒的竞态不该打断读屏）。提示**非阻断**：
+  层 `pointer-events:none`、只有卡片接收命中；`z-index: 900` 明确低于
+  `.fatal-overlay` 的 1000，boot 失败态与它结构互斥；**控制面不可达**那张覆盖层与
+  壳状态无关，由 App 侧显式门（`!controlUnreachable`）拦住，不靠 z-index；
+  body portal（STATUS 已登记的未修
+  缺陷）仍可盖住它，属既有边界。重试与失败覆盖层**共用唯一入口** `retryView`
+  （探测 + 隧道再试 + 令牌递增），自己写一套会漏掉最后那条探测臂。
+  **降级事实的第二批座位（2026-12，同一修订）**：事实还经**既有投影通道**过桥——
+  `ChamberServerAggregate.bootGap`（结构化：`kind` + `services`/`injectedBy`/
+  `failedIds`，**不含**产出方诊断句），由 App 的 `deriveServers` 从
+  `shellStates[*].degraded` 投射，进 `serversProjectionSignature` 发布门（缺口单独
+  翻转必须重发布）。两个座位：①**侧栏来源行**（`ServerSection` 的 `sourceNote`）——
+  并入既有的**单一 live region**，按优先级 `托管不可用 > 前端能力受限 > 托管瞬态 >
+  基线未就绪` 取一句，`sourceNoteBootGap` 修饰类给警示色；**活动来源那一行**（本壳
+  自己的行）把区域降为 `aria-live="off"`——同一事实已由框架横幅播报，非活动行保持
+  `polite`（那些来源没有横幅，侧栏是唯一用户面）；②**连接页**
+  （`PluginDiagnosticLine` + 插件对话框）——与 `pluginDiagnostic` 是**两条独立事实**：
+  图通道的 `ok` 不代表服务都在（缺 `sidebarRight` 时图通道恰好是 `ok`），因此**缺口
+  在场时抑制 `ok` 那一行**（problem/info 照旧渲染），缺口行取**警示色**
+  （`pluginDiagnosticWarn`，与框架横幅、侧栏来源行同一色阶——同一事实不该三处两色），
+  并给 `bootGapHint` 行动提示
+  （与 `pluginDiagnosticVersionConflictHint` 同形）。词汇表由侧栏 shared 契约单点拥有
+  （`ServerBootGapKind`），渲染包只 import 类型、各出各的文案——即 STATUS
+  「跨边界诊断文案」那条"产出方发结构化事实、渲染方出文案"的落地形态。
 - `openInstanceSession(sourceId, sessionId)`（shell.ts）：boot 未就绪先入队，
   原调用 Promise 保持 pending；enqueue 当刻固定 **68s absolute deadline**（60s boot
   queue 预算 + 最多 8s session-list 可见性轮询），flush 不重置预算，只使用剩余时间
@@ -446,7 +678,7 @@ export const chamberBridge: {
   按 02 §3.9 部署（单元含同款 pin；headless linux 服务器无显示会话，
   缺行也天然 browse）；OS 原生选择器（native）对 chamber 用户永不出现，
   添加工作区的唯一路由 = 应用内对话框 pick 一个宿主目录（含弹窗内新建
-  文件夹）。侧边栏"新建工作区"打开的就是同一对话框，按来源分派（每来源
+  文件夹）。侧边栏"添加工作区"打开的就是同一对话框，按来源分派（每来源
   unary client 驱动，见侧边栏包 README）。
 - 官方 ui-workspace 的 hero "Add workspace…" 与 chamber 侧边栏共用同一
   browse 表面，样式与交互完全统一（上游 one-route 哲学：不做手敲路径
@@ -461,15 +693,16 @@ export const chamberBridge: {
   "第二个连接页"隐患），插件只提供该页的字典命名空间与分节组件
   （`ConnectionsSection.tsx`）。
 - 「dsh 运行时」段（design 18 §3.6/§9，per-server）：chamber 自研
-  `settings.section`（id `dsh-runtime`，order 31，由设置壳 settings-bridge 注册，
-  `runtime-section-plugin.ts`），注册在选中
-  服务器的子上下文 ledger、紧随 agent-presets 渲染；connections 是壳的
+  `settings.section`（id `dsh-runtime`，order 31，由设置壳 settings-bridge 的
+  `registerRuntimeSection` 注册），注册在**该来源自己 boot ctx 的 ledger** 上
+  （2026-12 完整桥接修订；随 `chamberBridge` roster 投影 reconcile）、紧随
+  agent-presets 渲染；connections 是壳的
   固定 nav 入口，故「dsh 运行时」在
   视觉上位于 server 段列表内 agent-presets 之后。local = 完整运行时管理面，
   gateway = 经反代触达该 gateway 的 `/chamber/runtime`，**dsh 直连（ssh/http）
   = 不挂载**（dsh 直连无 `/chamber` 面、无 ssh exec 管理通道，该来源设置段
   不渲染 dsh-runtime 分节；与 18 §3.6 / AGENTS / design 17 §3 同口径）。
-  **不再位于 chamber 全局「通用」视图**
+  **不再位于 chamber 全局「客户端」视图**
   （design 15 的 `__general` 控制组不含运行时块）。
 - **「重启 dsh」动作只在本地与 gateway 两源**（design 18 §3.6 项 8，刷新插件挂载）：
   local = 控制面事务接口
@@ -478,7 +711,18 @@ export const chamberBridge: {
   `/api/i/gateway-<id>/chamber/*` 反代，202 + status 轮询）+ `POST
   /chamber/runtime/start`（design 21 决策 12 停机恢复：stopped/error/
   restart-exhausted，卡片「启动实例」入口）。二次确认 + 状态行，与健康状态机
-  `restarting` 单飞行互斥、applying 期间禁用。ssh（dsh 直连）的 systemd
+  `restarting` 单飞行互斥、applying 期间禁用。**确认门只有一个**（2026-09-11
+  upstream-alignment T2；accept 时复验与时限见 2026-09-11 review-fix F2/F4b）：
+  本地重启与**全部** gateway 变更动作共用一个应用内官方 `Modal`
+  （`RuntimeConfirmDialog` + 纯机器 `confirm-machine.ts`）——武装不跑任何东西，
+  取消在 runner 被调用前丢请求，**accept 先按 live 事实复验**（每个 request 带
+  `stillValid`，与武装时同一个谓词、读每次渲染重写的 `liveFacts`；失败即
+  `outcome:'dropped'`，请求不落地、由本段错误行如实报「已过期」而不是静默），
+  因为对话框会跨过 `~3s` 的状态轮询；**gateway 侧动作另有一道 12 分钟墙钟上限**
+  （`REMOTE_ACTION_TIMEOUT_MS = REMOTE_STATUS_POLL_TIMEOUT_MS`(11 min) + 60s，
+  与轮询预算同源），因为 pending 期间对话框按设计忽略取消/Escape/遮罩，永不 settle
+  的动作会把人锁在里面；**本地腿（`restartLocal()` 经 IPC 到主进程事务）没有
+  abort 句柄**，该缺口登记在 STATUS。ssh（dsh 直连）的 systemd
   `restart_service` 属**连接管理面**（重启 gateway/dsh 服务本身，非插件模型动词，
   design 21 §3 目标语境差异登记），dsh（ssh/http）直连不挂载 dsh-runtime 段、无
   插件模型重启动作。（http 直连来源无任何重启动作，design 17 §3。）
@@ -492,50 +736,111 @@ export const chamberBridge: {
 - **职责划分**：连接页本地卡的 启动/停止 = 连接生命周期（开机常驻与否）；
   「dsh 运行时」段的 重启 dsh = 运行时维护（刷新插件挂载、恢复服务）——两者
   不合并、文案不混用（起停不改运行时事实，重启不改指针/版本）。
-- **每来源插件设置贡献集（权威口径）**：设置壳对「某来源自己的设置
-  贡献」改为**图驱动**——贡献源是该来源自己的客户端插件图，不再是壳里的静态清单。
+- **每来源设置面 = 该来源自己的设置面（权威口径，2026-12 完整桥接修订）**：
+  设置壳不再为选中来源装配「缩小版前端」，而是**渲染该来源自己 boot ctx 的
+  `settings.section` 台账**，条目用**该 ctx 自己的渲染器绑定的标准座**渲染。
   规则（实现见 `packages/dsh-chamber-client-ui-settings-bridge/src/client/`）：
-  - **基础集**（`bridge-context.ts` `BASE_PLUGINS`，fail-loud）：声明链 + `slots` +
-    locale + theme + 官方 settings 四段 + agent-preset + 自研 BridgeRows + 每来源
-    `dsh-runtime` 段。每个基础 id 必须 ∈ renderer `CHAMBER_COVERED_IDS`
-    （lockstep 不变量：否则扩展集会重复挂载同一包）——纯数据清单
-    `base-plugins.ts` 由 `base-plugins-lockstep.test.ts` 机械强制，装配入口另有
-    fail-loud 断言（清单与实挂集合不得漂移）。
-  - **扩展集**（`ExtensionPhase`）：经每实例代理读 `clientGraph/graph`
-    （`BridgeApiClient.clientGraph`），扣除 covered 行、拒绝非根相对 bundle URL、
-    经**页面级 union 模块表**装载（shared face `client-plugin-loader.ts`，与 shell
-    boot 的 `host-graph.ts` **同一实现**：combo 去重、first-load-wins、超时墓碑、
-    rev 冲突事实），再逐个 `ctx.plugin({...ns, name: row.id})` 挂进同一 child ctx。
-  - **归因**用 cordis 的 fiber-name 戳（`StoredEntry.registrant`）：第三方分节在 nav
-    上带「插件」来源标记，绝不与官方分节混淆。
-  - **诚实报告**（`settings-extensions.ts` + 壳内「插件设置」诊断页）：未激活
-    （列出缺失服务，含嵌套 `ctx.inject` 后代 fiber）、加载/挂载失败、非插件 bundle、
-    注册到壳不渲染的座位（`settings.trigger/header/close/onboarding`）、分节渲染崩溃
-    （`slots.onEntryError`）、跨来源模块实例共享、以及**能力降级**（插件订阅
-    `ctx.remote.$on` 而 child ctx 无事件流 → 不会自动刷新）。**任何未渲染的贡献都
-    必须可见**，不得静默消失。
+  - **台账来源**：选中来源自己的 cordis ctx（`AppWebEntry` 的 boot ctx）。官方 settings
+    全族由 chamber 复合 bundle 挂在那里（`chamber-entry.ts` 首屏 `ui-settings` +
+    deferred general/models/plugins/plugin-inventory/agent-preset），该来源自己的客户端
+    插件由 host-graph extra rows 挂在那里（design 09 §3），chamber 自研分节
+    （「dsh 运行时」）也由本包在该 ctx 上注册。**面板不挂载任何插件**，因此不存在
+    第二次挂载、没有桩 remote、没有能力降级，也没有「未激活」可报。
+  - **面（face）注册表**（`settings-source-face.ts`）：每个实例的桥接插件在该 ctx
+    `apply` 时发布 `{slots, locale, chamberSourceFingerprint}`；该实例的设置壳组件
+    （`sidebar.settings` 的 occupant，是唯一被渲染器绑定完整标准座的 chamber 条目）
+    发布渲染器给它的标准座（`useSessions` / `useWorkspaces` / `usePanelInfo` /
+    `useResource` / `useSessionPendingInteraction` / root `props`）。两半都发布齐
+    （`settingsSourceFaceReady`）才可渲染；半发布的 face 不可渲染。
+  - **渲染**（`bridge-outlet.tsx`）：面板按 `settings.section` 台账的 list/keyed 语义
+    渲染条目：标准座 + `t`（该来源 locale face 的命名空间）+ `useStore`/`actions`
+    + `renderSlot`（子座位）+ 条目 `inject` 面 + owner props。**座位来自该来源自己的
+    渲染器绑定**，绝不伪造空桩：某个座缺席是那台服务器的事实，不是可以补一个空
+    observable 的缺口。observable 管线用上游 `bindings.tsx` 导出的 `observableHook`
+    （vendor `ui-renderer/src/client/bindings.tsx:57`；不再自带 per-source 选择器
+    hook 缓存），nav 行标签用上游导出的 `resolveSlotLabel`
+    （vendor `ui-slots/src/index.ts:620`；不再内联同一规则）——2026-09-11
+    upstream-alignment。
+    **槽锚点与单元派发照上游（2026-09-11 upstream-alignment）**：每个槽渲染点外面恒有
+    `<div data-slot="<key>">`（`display:contents`，不占布局），那是官方样式表寻址的
+    稳定缝（如 `settings.general.item` 的 `> :last-child` 规则）；它挂在**出口**上而
+    不是派发结果上——胜出条目、fallback、占用但无胜出者的**死单元**、未声明槽都在这层
+    内渲染，锚点不随注册抖动闪断。死单元渲染可寻址的 `<div data-slot-error="<key>">`，
+    与「该键从未注册」的 fallback 区分开（纯判定 `cell-dispatch.ts`）。
+  - **归因不上面**：`StoredEntry.registrant`（cordis fiber-name 戳）**不渲染**——上游
+    官方壳也只渲染 `navIcon(row.id)` + 分节标签，该戳在上游是纯诊断字段（控制台
+    错误文本 + 动态 cordis 崩溃归因）。本仓因此退役了曾经的「插件」来源标记
+    （2026-09-11，用户拍板）：插件提供的分节与官方分节在 nav 上完全同形，与实例
+    自己的前端一致。
+  - **来源必须在挂载中**：面由该来源自己的壳发布，所以面板打开期间 App 层保证该来源
+    的壳**已挂载**——`chamberBridge.setSettingsTarget(sourceId)`（面板→App 单通道）
+    未挂载则后台挂载（**不切 active view**），已挂载则排除出保留策略回收候选
+    （否则隐藏 60s 后壳被拆、正在编辑的设置面消失）；面板关闭即撤除两条保证。
+    未挂载完成时面板显示「正在启动该实例的前端」中间态；离线来源显示既有不可达占位
+    并给连接管理入口（不触发挂载）。
+  - **来源化身守卫**：face 携带交付给该 ctx 的 `chamberSourceFingerprint`；面板只在
+    它与权威 roster 的同一字段相等时渲染（同 id 替换/传输字段变更后的旧 face 绝不
+    渲染一帧）。
   - **座位矩阵**：壳渲染 `settings.section` + `settings.action`（action 保持既有
     「仅本地来源」限定），子座位（`settings.general.item` / `plugins.tab` / keyed 卡片）
-    随所属分节渲染；`trigger/header/close/onboarding` 刻意不渲染 → 若有贡献则报告。
-  - **刷新**：手动「重新加载」只重取图并 **reconcile**（新增 id 挂载、消失 id 卸载、
-    已挂载且仍存在者保留 fiber 与判定），基础集永不重建（无闪烁）。安装/卸载插件后
-    仍需重启该实例（与官方前端一致），因为图的 rev 是进程级 nonce。
+    随所属分节渲染；`trigger/header/close` 属**壳 chrome**，`settings.onboarding`
+    由壳**自己协调**（2026-09-11 upstream-alignment，见下一条）。
+    壳 chrome 与上游对齐（同批）：面板圆角 **32px**（上游
+    `SettingsRoot.module.css` 的 `.panel` 规则本体，此前抄的 r24 来自该规则的过时
+    注释）、触发器行 **42px**（上游 `.triggerRow`/`.trigger`；chamber 只渲染按钮，
+    故把行距折进按钮）、关闭后把焦点还给触发器（上游 `wasOpen` effect）、头部
+    **不再重复分节标题**（每个内容分支自己渲染 `<h2>`，壳只留「选中服务器」副行——
+    chamber 的 N 来源补充）。chamber 全局入口从「通用」改名 **「客户端 / Desktop」**
+    （`clientNav`）：官方分节 `general.nav` 本身就叫「通用设置 / General」，同名会让
+    两个不同的面在 nav 上不可分辨；nav 单元与页面自己的 `<h2>` 共用这一个键，不会
+    「导航一个名字、页面另一个名字」。
+  - **`settings.onboarding` 协调器（chamber 的 N 来源适配，2026-09-11
+    upstream-alignment）**：上游 `SettingsRoot` 在**当前会话为 blank 或缺席**时挂载
+    该台账里**有序的第一个未完成步骤**，并以步骤自己的 owner props
+    （`stepId` / `complete` / `openSection`）渲染——步骤组件住在同一个 boot ctx 里，
+    自带 ctx 读取、就绪门与对话框 chrome（`#root` inert 归它），壳不为该阶段画任何
+    自己的东西。chamber 壳**就是**该实例 ctx 的 `sidebar.settings` occupant，因此只
+    协调**自己 ctx** 的台账 + 自己 ctx 的 `useSessions` 座（与上游同源的两个事实，
+    无新通道），并额外串一道 App 发布的**活动视图事实**
+    （`chamberBridge.getActiveSource`，与 ui-layout 的文档级主题投影同一道门）：本壳
+    一页挂多个实例壳，而首启对话框是文档级的（portal 到 body + 持有 `#root` inert），
+    不串门就会把另一个实例的首启弹到当前视图上；未发布（undefined）读作关闭——无理由
+    的模态比晚一帧更糟。**刻意不是"按选中来源"协调**：跨 ctx 的步骤只能靠跨 ctx 的
+    hook 驱动，且两个同选一源的壳会重复挂载同一步骤。渲染走
+    `BridgeEntryBoundary containAll slotKey="settings.onboarding"`（外来步骤崩溃也不
+    夺走 chamber 的 `sidebar.settings` 座位）。
+    **两个坐标各管一半（2026-09-11 review-fix F1）**：活动视图门只门**挂载**
+    （`onboardingStage` 的 `step` = 两个事实的合取），**完成集的重置只跟 sessions
+    事实**（上游 `SettingsRoot` 的 reset effect 原文——
+    `if (onboardingActive) return; setCompletedOnboarding(new Set())`，而
+    `onboardingActive` 就是 sessions 选择器）：早先把活动视图门折进重置，于是一次
+    普通**切视图**就会抹掉全部确认，用户刚走完（或显式推迟）的步骤在切回来时重新挂载。
+    **残留（登记偏差）**：完成集本身是组件局部的，所以壳被**重新挂载**（App 回收该实例
+    再挂起）仍会从空集重跑——运行并未结束，上游会认为该步骤已确认；收口需要一份能跨
+    挂载存活的每实例状态（新的 chamberBridge/持久化通道），不在本轮范围。
+    两个坐标另各由**自己独立的 hook 调用**读取（合取写成
+    `useOnboardingActive(...) && useActiveView(...)` 会在 sessions 事实为 false 时短路
+    掉第二个 hook，是 React 明确拒绝的钩子序列）。
+  - **`sectionsEmpty` 占位保留**：上游在空台账处渲染空的选项列（其单 ctx 壳不可能
+    「有面板无分节」）；chamber 保留这句诚实占位，因为未发布的 `settings.section`
+    台账是**可达的 N 来源状态**（该来源的设置簇尚未落到它自己的 boot ctx，或外来 dsh
+    目标的插件图部分失败），空列会被读成「这台服务器没有设置」。
+  - **错误containment**：外来条目（该来源自己的插件贡献）的渲染失败经
+    `BridgeEntryBoundary containAll` 收口成 `<div data-slot-error="…">`，绝不夺走
+    chamber 自己的 `sidebar.settings` 条目（那会回落到没有服务器下拉的官方 SettingsRoot）。
+    该崩溃面连同胜出/fallback/死单元/未声明四条派发路径都在同一 `[data-slot="<key>"]`
+    锚点内（见上「槽锚点」）。
   - **保留优先级 + 看门狗**：设置壳注册在保留 shadow 优先级（shared face
     `settings-shell.ts` `SETTINGS_SHELL_SHADOW_PRIORITY = -1000`）；chamber 侧边栏
     监视 `sidebar.settings` 的 cell winner，若有注册者低于该区间（即顶掉设置壳）则
     `console.error` 报告（检测而非改写 slot 语义）。
   - **`settings-connections` 座位**：该插件只提供字典命名空间（无 host-ctx
-    `settings.section` 注册）；固定入口 `__connections` 渲染同一组件。
-  - **信任与共享**：扩展插件代码在桌面渲染器内执行（与 design 09 §4 同一模型），
-    执行面从「已打开 shell 的来源」扩到「设置面板打开的来源」，面板关闭即 dispose；
-    页面模块表按 id first-load-wins 共享（一个模块实例可支撑多来源/多 fiber），
-    因此插件作者契约 = **模块级无状态、状态进 `ctx.effect`/服务**。
-  - **保真天花板**：child ctx 的 `remote` 是手工面（六个 unary 命名空间）+ 无事件流
-    的 `$on`；插件调用其他 Remote 命名空间会在调用时失败并被 entry boundary /
-    `onEntryError` 捕获报告。上游声明式贡献通道（`contributes.settings` / descriptor
-    上线通道）为 T3 提案：`docs/progress/todo/settings-surface-upstream-contributions.md`。
-  - **可选机制（默认关）**：依赖闭包扩展（`DEPENDENCY_CLOSURE_ENABLED`）——把扩展行
-    `inject` 声明的 covered 依赖作为 provider 先挂进同一 ctx，按实测证据逐个放行。
+    `settings.section` 注册）；固定入口 `__connections` 渲染同一组件。连接页内该来源
+    卡片上的「客户端插件状态」仍由 chamber 的 boot/extra-row 诊断通道供给
+    （`pluginDiagnostic`），与设置面是否可渲染无关。
+  - **上游可选项（非前置）**：声明式贡献描述符 / 设置面服务契约 / Remote descriptor
+    上行通道仍是上游提案（`docs/progress/todo/settings-surface-upstream-contributions.md`）；
+    完整桥接不依赖它们——它复用上游既有的「来源自己的前端」这一事实。
 - 内容：本地实例卡（/health 状态徽标 + /api/connections 行端口/label +
   启动/停止（二次确认）+ host 日志只读）+ 远程主机卡片列表（label +
   user@host:port + phase 徽标 + 隧道 localPort + serviceName + logSummary；
@@ -546,8 +851,8 @@ export const chamberBridge: {
   日志；图标去重）+ gateway 卡「重启 dsh」/「启动实例」动作（phase 门控 + 每卡
   单飞 + 共享 pollGatewayReady 轮询，多用户中断确认文案）+ **单一插件管理模型
   视图（唯一 `PluginDialog` 组件）**：统一区域 = 诊断横幅
-  （状态名 + message 去重）→ chamber 内建组件表（宿主包注册表三行
-  client-graph / git-worktree / archive-cleanup，badge 化；另有 gateway 源才出现的
+  （状态名 + message 去重）→ chamber 内建组件表（注册表驱动的宿主包行，
+  当前四行 client-graph / git-worktree / archive-cleanup / open-in，badge 化；另有 gateway 源才出现的
   移动端 client 行，随发行物注入）→ 第三方插件区（已安装列表 + 逐行卸载 + 添加：spec 输入 + npm 搜索 +
   文件夹导入）→ 恢复/动作行；gateway 添加双通道（registry spec 直装 +
   文件夹直推）已接线；「变更记录」区不渲染（后端 journal/备份保留）；恢复撤销
@@ -573,9 +878,23 @@ export const chamberBridge: {
   config Port，非空时隧道与 systemd exec 均带 `-p`）。
 - 样式遵循 dsh 设计语言：CSS modules + `--dsw-alias-*` token +
   ui-primitives（Button/Modal/Tooltip/Input/Pill/图标）。
+- **状态胶囊与告警条 = 官方 Tag tone 的淡底配方（2026-09 batch 1 F1/F2 登记，
+  含对比度实测）**：`.badgeOk/.badgeBad` 用
+  `color-mix(in srgb, var(--dsw-alias-state-{success,error}-primary) 10%, transparent)`
+  + 同色字，`.pluginKindClient` 用 warn 12%，告警条（`.recoveryBanner`/
+  `.writerBlocked`）用 warn 12% 淡底 + `state-warn-label` 字——与官方
+  `_tag_brmue_4[data-tone=success|danger|warning]` 逐字符同配方（此前是实心填充）。
+  **代价（按 pin 的 token 值用 WCAG 公式算，非浏览器实测）**：`.badgeBad` light
+  4.50→3.80、dark 4.35→3.28；`.recoveryBanner` warn 字 dark 4.99→3.99、light
+  2.79→2.55（light 侧改前即低于 AA）；`.badgeOk` dark 4.53、`.pluginKindClient`
+  dark 4.58。**本页表单字段同期对齐官方 Input 原子**（`.input`：32px / l4 /
+  r8 / 14-22，15 处；与 git 对话框的 `.fieldSelect`/`.fieldInput` 同族，
+  2026-09 batch 1 G3 follow-up）。即 **dark 侧错误胶囊与告警条跌破 4.5:1**，官方自身同款同值——
+  取"与官方一致"而接受该下降；若要 AA，把 light/dark 的字色改走
+  `state-*-label`（或在浅色主题下调深），属下一轮改动，勿当漏改收回。
 - 实例默认仍按注册表自动连接、本地自动启动；本页提供显式管理与诊断入口。
 
-## 6. 源码复用与构建链（拷贝补丁包 2 个 + 自研客户端插件 6 个 + 宿主包 3 个）
+## 6. 源码复用与构建链（拷贝补丁包 2 个 + 自研客户端插件 6 个 + 宿主包 4 个）
 
 - pnpm + `vendor/harness-packages` 符号链接（外部 dsh 源码，**永不修改**）；
   要修改的包必须拷入本仓 `packages/`。
@@ -615,10 +934,11 @@ export const chamberBridge: {
   - `packages/dsh-chamber-client-ui-settings-bridge/`——自研设置壳插件（§5 同款
     讨论，注册进 `sidebar.settings` 槽、以 `SETTINGS_SHELL_SHADOW_PRIORITY = -1000`
     shadow 官方 SettingsRoot，
-    服务器下拉 + 子 ctx 官方 settings 子集渲染）。子 ctx 缓存所有权绑定
-    `(sourceId, sourceFingerprint)`：权威 roster 删除来源或在同 id 下更换 proof 时，
-    立即退役并 dispose 所有受影响的已选/未选缓存；异步装配结果提交前再校验
-    捕获的 proof 与当前 roster，迟到的旧代结果只 dispose、不进入缓存。
+    服务器下拉 + 渲染选中来源自己 boot ctx 的 `settings.section` 台账，条目用该 ctx
+    渲染器绑定的标准座）。面的所有权绑定 `(sourceId, sourceFingerprint)`：权威 roster
+    删除来源或在同 id 下更换 proof 时，旧面立即不可渲染（面板只在 face 指纹与 roster
+    同一字段相等时渲染），来源重 boot 时由新 ctx 的 `apply` 重新发布；发布/撤除都按
+    slots/locale 身份校验，迟到的旧代撤除不会清掉新代的面。
   - `packages/dsh-chamber-client-ui-layout/`——官方 ui-layout 壳插件的 chamber
     fork（①替换 layout store：`sidebarWidth` 经侧边栏共享 view-prefs store
     播种/回写，钳位 [264,420]，覆盖 id；②**文档级主题投影的唯一写入者**：
@@ -630,12 +950,14 @@ export const chamberBridge: {
     remove saga；它不把
     Git 事实塞进 App aggregate，也不暴露任意 argv/path mutation。
   - `packages/dsh-chamber-client-ui-open-in/`——设计 16/20 的 chamber 内建桌面打开
-    插件：占用 `conversation.session.header.utilities`，
-    按当前 N-ctx 的 source 经 per-source 视图模型选择入口——**本地**来源走实例自身
-    官方宿主目录（`dsh-host-open-in-app`，经每实例代理 `<basePath>/open-in-app/*`，
-    执行在实例进程内）+ 桌面主进程的 VS Code 覆盖项；**远程 ssh** 来源只有主进程的
-    VS Code Remote（trusted IPC + 来源代 proof）；http/未知来源无入口。无 host
-    插件、无 seed、无控制面执行面（主进程亦已收窄为 vscode-only，见设计 20 §4.1/§4.3）。
+    插件（**2026-09-11 用户裁决：fork & supersede**）：占用
+    `conversation.session.header.utilities`，按当前 N-ctx 的 source 经 per-source
+    视图模型选择入口——**本地**来源走**实例进程内的 chamber host 包**
+    （`@dsh-chamber/dsh-chamber-seed-open-in`，见下「自研宿主包」）+ 桌面主进程的
+    VS Code 覆盖项；**远程 ssh** 来源只有主进程的 VS Code Remote（trusted IPC +
+    来源代 proof）；http/未知来源无入口。官方客户端行沿用 page-own 跳过纪律
+    （我们的 fork **替换**官方注册），官方宿主行保持挂载但永不被调用；无控制面执行面
+    （主进程亦已收窄为 vscode-only，见设计 20 §2.2/§4）。
 - 自研宿主包（随 chamber 分发、运行于每个 dsh 实例进程）：
   - `packages/dsh-chamber-seed-client-graph/`——设计 09 的只读 client boot graph Remote；
   - `packages/dsh-chamber-seed-git-worktree/`——设计 08 的领域限定 Git Remote，
@@ -646,6 +968,11 @@ export const chamberBridge: {
     经宿主权威状态 children-first 级联清除归档集内容（含 subagent 起源后代、
     官方事件发射），只删不读、绝不触碰运行中/未归档内容；上游 delete wire
     落地后退役。
+  - `packages/dsh-chamber-seed-open-in/`——**设计 20 §6（本地形态专用，`localOnly`）**：
+    上游 `dsh-host-open-in-app` 宿主半的 fork（本机应用目录 + 真实 bundle 图标 +
+    绝对目录校验 + 拉起，`openInApp/{probe,apps,icon,open}`），删去上游的 SSH 休眠门、
+    `webServer` 路由与连接栅栏（改走实例自身通用 RPC 通道）；不读启动标记，
+    因此与目录选择 pin 解耦。
 - 前端入口复用 `packages/renderer/`：vite 构建时把 workspace 包 alias 到源码；
   `chamber-entry.ts` 复合 entry 挂整棵 dsh 客户端树（connection→typert→
   gateway→remotes→runtime→locale→theme→**layout（chamber ui-layout fork 替换
@@ -664,12 +991,13 @@ export const chamberBridge: {
     + 页面自有 id）去重，预加载剩余 bundle
     （`/api/i/<id>/plugins/<pkg>/client.js?rev=…`），经 boot.ts `extraRows` seam
     合并进 boot rows（详见设计 09）。
-  - **三 host 包与 seed（设计 08/09/24）**：`packages/dsh-chamber-seed-client-graph`、
-    `packages/dsh-chamber-seed-git-worktree` 与 `packages/dsh-chamber-seed-archive-cleanup`
-    都提交 esbuild `dist/index.js`
+  - **host 包与 seed（设计 08/09/20/24）**：`packages/dsh-chamber-seed-client-graph`、
+    `packages/dsh-chamber-seed-git-worktree`、`packages/dsh-chamber-seed-archive-cleanup`
+    与 `packages/dsh-chamber-seed-open-in`（后者 `localOnly`：只 seed 进本地 profile，
+    不进远端 seed 也不随 gateway 上传，design 20 §6）都提交 esbuild `dist/index.js`
     （`@deepseek-ai/*` external）；控制面 `host-graph-seed.ts` 幂等 seed 所有
     已构建包进 `$DSH_HOME/profiles/web/node_modules/@dsh-chamber/*/`，并把
-    `client-graph` / `git-worktree` / `archive-cleanup` insert 合并到单一
+    `client-graph` / `git-worktree` / `archive-cleanup` / `open-in` insert 合并到单一
     `<stateDir>/dsh-chamber-graph.patch.yml`。每次 spawn 注入同一 `--patch`
     （`webProfileArgs(port, patchPath?)`）；任一产物缺失只跳过对应行，不产生
     悬空 insert。远程 ready-time seed 同样一次探测/一次 overlay 合并写，见设计 13。

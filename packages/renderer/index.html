@@ -14,6 +14,9 @@
          注意：骨架只改善 FCP/观感，不构成最终 LCP（被移除的候选会被过滤，且
          真实 UI 的元素更大），LCP 仍由真实首帧决定。 -->
     <style>
+      /* 骨架色板 = 外壳 chrome 的深色自有色板（src/styles.css 的 :root），刻意
+         不跟随 prefers-color-scheme：dsh 主题是按实例投影的、骨架期不可知，跟随
+         OS 只会在"浅色 OS + 深色 app"时制造反方向闪色。改这里的值要同步那边。 */
       html, body, #root { height: 100%; margin: 0; }
       body {
         background: #0f1115;
@@ -40,6 +43,12 @@
         width: 28px;
         height: 28px;
         border-radius: 50%;
+        /* ui-theme's corner-shape.css smooths every corner to a superellipse
+           once the dsh bundle lands, and the boot skeleton is still on screen
+           until React mounts — an unpaired 50% radius would render the ring as
+           a wobbling squircle. Every full-round radius pairs the keyword
+           (ui-theme's corner-shape spec). */
+        corner-shape: round;
         border: 2px solid #262c38;
         border-top-color: #4f8cff;
         animation: dsh-boot-spin 0.8s linear infinite;
@@ -71,7 +80,12 @@
         <div class="dsh-boot-inner">
           <div class="dsh-boot-spinner" aria-hidden="true"></div>
           <div class="dsh-boot-brand">dsh-chamber</div>
-          <div class="dsh-boot-hint">正在启动…</div>
+          <!-- T16（2026-09-11 upstream-alignment）：静态骨架的文案是「服务端 markup
+               的默认语言」那一份（本文件声明 lang="zh-CN"，与 locales.ts 的兜底
+               语言同源）——它不是框架代码，读不到 typed 字典；main.tsx 在 React
+               mount 前用字典的 'boot.starting' 覆盖它，因此英文文档立即拿到英文。
+               data-chamber-boot-hint 是该覆盖的唯一挂钩。 -->
+          <div class="dsh-boot-hint" data-chamber-boot-hint>正在启动…</div>
         </div>
       </div>
     </div>

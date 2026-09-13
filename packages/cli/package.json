@@ -1,13 +1,13 @@
 {
   "name": "@dsh-chamber/cli",
-  "version": "0.2.4",
+  "version": "0.3.0-beta.3",
   "description": "dsh-chamber control-plane CLI: serve/status/connections/host logs",
   "type": "module",
   "bin": {
     "dsh-chamber": "./src/index.ts"
   },
   "scripts": {
-    "test": "node test/follow-filter.test.ts && node test/log-line.test.ts"
+    "test": "node test/follow-filter.test.ts && node test/cli-contract.test.ts"
   },
   "license": "MIT",
   "dependencies": {

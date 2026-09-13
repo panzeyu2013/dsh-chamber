@@ -149,6 +149,49 @@ test('session-list refresh requests broadcast to every subscriber with the sourc
   assert.deepEqual(received, ['a:local', 'b:local', 'a:ssh-dev', 'b:ssh-dev', 'b:local'])
 })
 
+test('workspace-created facts fan out with their host identity and unsubscribing stops delivery', () => {
+  // 2026-12 field report problem 2: the sidebar owns the create flow, so this
+  // one-way fact is the ONLY "that workspace now exists on that host" signal
+  // the App can get without a mounted shell (an unmounted source's unary
+  // fallback cannot express an empty workspace at all).
+  const seen: string[] = []
+  const off = chamberBridge.onWorkspaceCreated(fact => {
+    seen.push(`${fact.sourceId}/${fact.workspaceId}/${fact.path}`)
+  })
+  chamberBridge.reportWorkspaceCreated({ sourceId: 'ssh-b', workspaceId: 'w1', path: '/p/a' })
+  chamberBridge.reportWorkspaceCreated({ sourceId: 'local', workspaceId: 'w2', path: '/p/b' })
+  assert.deepEqual(seen, ['ssh-b/w1//p/a', 'local/w2//p/b'])
+  off()
+  chamberBridge.reportWorkspaceCreated({ sourceId: 'ssh-b', workspaceId: 'w3', path: '/p/c' })
+  assert.deepEqual(seen, ['ssh-b/w1//p/a', 'local/w2//p/b'])
+})
+
+test('workspace-removal and workspace-rename facts fan out and unsubscribe exactly like the create fact', () => {
+  // 2026-09-11 review S3: the withdraw/patch halves of the workspace echo. The
+  // sidebar owns delete/rename too, so these one-way facts are the only way an
+  // echo row can be retired or re-titled while its source stays unmounted.
+  const removed: string[] = []
+  const renamed: string[] = []
+  const offRemoved = chamberBridge.onWorkspaceRemoved(fact => {
+    removed.push(`${fact.sourceId}/${fact.workspaceId}/${fact.path}`)
+  })
+  const offRenamed = chamberBridge.onWorkspaceRenamed(fact => {
+    renamed.push(`${fact.sourceId}/${fact.workspaceId}/${fact.title}`)
+  })
+  chamberBridge.reportWorkspaceRemoved({ sourceId: 'ssh-b', workspaceId: 'w1', path: '/p/a' })
+  // An unmounted source publishes no path: the ledger matches by id.
+  chamberBridge.reportWorkspaceRemoved({ sourceId: 'local', workspaceId: 'w2', path: '' })
+  chamberBridge.reportWorkspaceRenamed({ sourceId: 'ssh-b', workspaceId: 'w1', title: '项目 A' })
+  assert.deepEqual(removed, ['ssh-b/w1//p/a', 'local/w2/'])
+  assert.deepEqual(renamed, ['ssh-b/w1/项目 A'])
+  offRemoved()
+  offRenamed()
+  chamberBridge.reportWorkspaceRemoved({ sourceId: 'ssh-b', workspaceId: 'w3', path: '/p/c' })
+  chamberBridge.reportWorkspaceRenamed({ sourceId: 'ssh-b', workspaceId: 'w3', title: 'x' })
+  assert.deepEqual(removed, ['ssh-b/w1//p/a', 'local/w2/'])
+  assert.deepEqual(renamed, ['ssh-b/w1/项目 A'])
+})
+
 test('the active-view fact publishes on change only, and undefined is a real value', () => {
   assert.equal(chamberBridge.getActiveSource(), undefined, 'unpublished until the App writes it')
   const seen: (string | undefined)[] = []

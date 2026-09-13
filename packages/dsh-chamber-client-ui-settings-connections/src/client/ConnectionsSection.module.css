@@ -53,7 +53,7 @@
   flex-direction: column;
   gap: 8px;
   padding: 14px 16px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l4);
   border-radius: 12px;
   background: var(--dsw-alias-bg-layer-3);
   transition: border-color .16s, background .16s;
@@ -116,20 +116,25 @@
   line-height: 17px;
   white-space: nowrap;
   font-weight: 500;
-  border: 1px solid var(--dsw-alias-border-l2);
+  /* Official `Tag` outline tone (2026-09 batch 1, F1): l4 hairline. */
+  border: 0.5px solid var(--dsw-alias-border-l4);
   color: var(--dsw-alias-label-tertiary);
 }
 
 .badgeOk {
+  /* Official `Tag tone="success"`: 10% state tint + same-token ink. The solid
+     fill this replaces was the loudest element on a quiet settings page
+     (2026-09 batch 1, F1). */
   border-color: transparent;
-  background: var(--dsw-alias-state-success-primary);
-  color: var(--dsw-alias-bg-layer-3);
+  background: color-mix(in srgb, var(--dsw-alias-state-success-primary) 10%, transparent);
+  color: var(--dsw-alias-state-success-primary);
 }
 
 .badgeBad {
+  /* Official `Tag tone="danger"` (2026-09 batch 1, F1). */
   border-color: transparent;
-  background: var(--dsw-alias-state-error-primary);
-  color: var(--dsw-alias-bg-layer-3);
+  background: color-mix(in srgb, var(--dsw-alias-state-error-primary) 10%, transparent);
+  color: var(--dsw-alias-state-error-primary);
 }
 
 /* 安全姿态徽标（2026-12 配色修订）：描边 + 彩色文字，无填充——与状态
@@ -161,14 +166,20 @@
   flex-direction: column;
   gap: 6px;
   padding: 14px 16px 10px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l4);
   border-radius: 12px;
   background: var(--dsw-alias-bg-layer-3);
   transition: border-color .16s, background .16s;
 }
 
 .card:hover {
-  border-color: var(--dsw-alias-label-dimmed);
+  /* Hover keeps the l4 hairline and paints the system's interactive tint
+     (2026-09 batch 1 E1 follow-up). The previous `border-color: label-dimmed`
+     was slightly stronger than the old l2 rest state; at l4 rest it would FADE
+     the outline below rest — the inverse of a hover affordance. `.card` is an
+     interactive surface, so it uses the same hover tint as every row. */
+  border-color: var(--dsw-alias-border-l4);
+  background: var(--dsw-alias-interactive-bg-hover);
 }
 
 /* 2026-12 两行化: 身份行（名称 + 类型徽标）与徽标行（状态 + 安全姿态）
@@ -209,12 +220,14 @@
 
 .kindBadge {
   flex: none;
-  border: 1px solid var(--dsw-alias-border-l2);
+  /* Official Tag metrics (2026-09 batch 1, F1): 11px/17px, 1px 8px, l4
+     hairline — the chamber chip ran one size under the design floor. */
+  border: 0.5px solid var(--dsw-alias-border-l4);
   border-radius: 999px;
   corner-shape: round;
-  padding: 1px 7px;
-  font-size: 10px;
-  line-height: 16px;
+  padding: 1px 8px;
+  font-size: 11px;
+  line-height: 17px;
   white-space: nowrap;
   color: var(--dsw-alias-label-tertiary);
   background: var(--dsw-alias-bg-layer-2);
@@ -267,7 +280,7 @@
   gap: 2px;
   padding-top: 6px;
   margin-top: 4px;
-  border-top: 1px solid var(--dsw-alias-border-l2);
+  border-top: 0.5px solid var(--dsw-alias-border-l2);
 }
 
 .footSpacer {
@@ -457,6 +470,12 @@
   color: var(--dsw-alias-state-error-primary);
 }
 
+/* 降级缺口（2026-12 复查 NIT）：与框架横幅、侧栏来源行同一色阶——「前端能力受限」
+   是警示而非错误，此前这里借用了 problem 的错误红，同一事实在三处座位两种颜色。 */
+.pluginDiagnosticWarn {
+  color: var(--dsw-alias-state-warn-label);
+}
+
 .pluginDiagnosticInfo {
   color: var(--dsw-alias-label-secondary);
 }
@@ -526,7 +545,7 @@
   padding: 10px 12px;
   max-height: min(40vh, 320px);
   overflow: auto;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 10px;
   background: var(--dsw-alias-bg-layer-2);
   font-family: var(--dsw-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
@@ -660,12 +679,18 @@
 }
 
 .input {
+  /* Official Input atom (2026-09 batch 1 G3 follow-up: the git dialog's fields
+     were aligned to it and this page's 15 form fields stayed on the older
+     13px/r10/l2 box). 32px tall, l4 hairline, r8, 14/22 — same tokens the
+     official `_wrap_1g6ru_1` declares. */
   box-sizing: border-box;
-  padding: 9px 12px;
-  border: 1px solid var(--dsw-alias-border-l2);
-  border-radius: 10px;
+  height: 32px;
+  padding: 0 8px;
+  border: 0.5px solid var(--dsw-alias-border-l4);
+  border-radius: 8px;
   font: inherit;
-  font-size: 13px;
+  font-size: 14px;
+  line-height: 22px;
   background: var(--dsw-alias-bg-layer-1);
   color: var(--dsw-alias-label-primary);
 }
@@ -732,7 +757,7 @@
   flex-direction: column;
   gap: 6px;
   padding: 10px 12px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 10px;
   background: var(--dsw-alias-bg-layer-2);
 }
@@ -800,7 +825,7 @@
 .pluginBanner {
   margin: 0;
   padding: 8px 10px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 8px;
   background: var(--dsw-alias-bg-layer-2);
   font-size: 12px;
@@ -858,7 +883,7 @@
 
 .chamberSeedButton {
   appearance: none;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 6px;
   background: none;
   padding: 1px 8px;
@@ -905,7 +930,7 @@
 
 .pluginPill {
   appearance: none;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 999px;
   corner-shape: round;
   background: none;
@@ -921,9 +946,13 @@
   color: var(--dsw-alias-label-primary);
 }
 
+/* 选中的筛选胶囊：dsh 业务蓝填充 + 反白文字（2026-09 用户裁决：与设置页复选框/
+   分段滑块/开关的"开/选中"色统一到 `--dsw-alias-state-business-primary`，而不是
+   官方中性 `--dsw-alias-brand-primary`——后者浅色主题下是近黑，选中态会发黑）。
+   文字取 `--dsw-alias-bg-layer-3`（浅色即近白、深色为深灰），在蓝底上两档都可读。 */
 .pluginPillActive {
   border-color: transparent;
-  background: var(--dsw-alias-brand-primary);
+  background: var(--dsw-alias-state-business-primary);
   color: var(--dsw-alias-bg-layer-3);
 }
 
@@ -991,7 +1020,7 @@
   grid-template-columns: subgrid;
   align-items: center;
   padding: 8px 10px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 10px;
   background: var(--dsw-alias-bg-layer-3);
   position: relative;
@@ -1075,13 +1104,17 @@
 }
 
 .pluginKindBadge {
+  /* Official Tag metrics, same as .kindBadge (2026-09 batch 1 F1 follow-up: the
+     first pass aligned .kindBadge and left this co-rendered chip — PluginDialog
+     paints both — on the old 0 7px / border-l2 vocabulary). */
   border-radius: 999px;
   corner-shape: round;
-  padding: 0 7px;
+  padding: 1px 8px;
   font-size: 11px;
   line-height: 17px;
+  font-weight: 500;
   white-space: nowrap;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l4);
   color: var(--dsw-alias-label-tertiary);
 }
 
@@ -1092,9 +1125,10 @@
 }
 
 .pluginKindClient {
+  /* Official `Tag tone="warning"`: 12% warn tint + warn ink (2026-09 batch 1, F1). */
   border-color: transparent;
-  background: var(--dsw-alias-state-warn-primary);
-  color: var(--dsw-alias-bg-layer-3);
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);
+  color: var(--dsw-alias-state-warn-primary);
 }
 
 .pluginKindPlain {
@@ -1146,7 +1180,7 @@
   flex-direction: column;
   gap: 2px;
   padding: 6px 8px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 8px;
   font-size: 12px;
 }
@@ -1259,7 +1293,7 @@
   align-items: center;
   gap: 10px;
   padding: 7px 10px;
-  border: 1px solid var(--dsw-alias-border-l2);
+  border: 0.5px solid var(--dsw-alias-border-l2);
   border-radius: 8px;
   font-size: 12px;
 }
@@ -1332,9 +1366,13 @@
 .recoveryBanner {
   margin: 0;
   padding: 8px 10px;
-  border: 1px solid var(--dsw-alias-state-warn-primary);
+  /* Official notice language (2026-09 batch 1, F2): a tinted note, no border —
+     official warning surfaces never draw a 1px state-coloured outline.
+     NOTE: padding-block is unchanged, so removing the border costs 2px of
+     height; the block sits in a flex column that absorbs it. */
+  border: 0;
   border-radius: 8px;
-  background: var(--dsw-alias-bg-layer-2);
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);
   font-size: 12px;
   color: var(--dsw-alias-state-warn-label);
   display: flex;
@@ -1349,8 +1387,10 @@
 .writerBlocked {
   margin-top: 8px;
   padding: 8px 10px;
-  border: 1px solid var(--dsw-alias-state-warn-primary);
-  border-radius: 6px;
+  /* Same official tinted-note language as .recoveryBanner (2026-09 batch 1, F2). */
+  border: 0;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--dsw-alias-state-warn-primary) 12%, transparent);
   display: flex;
   flex-direction: column;
   gap: 6px;

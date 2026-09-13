@@ -7,7 +7,7 @@
  * Trust model: this code runs inside each dsh host process. All capability
  * views are structural over the OFFICIAL ctx services (audited at the then-pin
  * dsh-v0.1.5-alpha.2 b2e3b2a0, whose session surfaces are unchanged at the
- * current pin rc.1 183f08e9c6dd — design 24 §10); an unavailable
+ * current pin rc.2 fb2c4b9e698e — design 24 §10); an unavailable
  * surface refuses loudly with code `registry-unreadable`/`storage`, never a
  * guessed layout. Security-review dispositions (2026-12):
  *  - archived-set member removal runs INSIDE the registry's official
@@ -431,8 +431,24 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
       }
     },
 
-    async deleteSessionContent(sessionId: string, cwd?: string, force = false) {
+    async deleteSessionContent(
+      sessionId: string,
+      cwd?: string,
+      force = false,
+      protectedIds?: ReadonlySet<string>,
+    ) {
       try {
+        // INVARIANT GUARD (2026-09 protection amendment): the core's plan
+        // already skips every tree whose closure contains a protected id, so
+        // this can only fire on a core bug — and then it MUST abort, never
+        // delete. It sits on the deletion primitive itself so no future caller
+        // can route around the skip.
+        if (protectedIds?.has(sessionId) === true) {
+          throw new ArchiveCleanupError(
+            'protected',
+            `archiveCleanup: refusing to delete ${sessionId}: it is in the run's protected set (client-displayed session)`,
+          )
+        }
         // Live guard at deletion time (interface contract): never delete a
         // session that is RUNNING; a merely loaded (idle) session is refused
         // unless the caller authorized `force` (2026-09 revision — the caller

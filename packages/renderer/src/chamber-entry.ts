@@ -92,6 +92,11 @@
  * BEFORE deferring a family, grep the vendor `inject` lists for any
  * first-screen family that root-injects one of its services — such a family
  * must stay first-screen. Keep `chamber-covered.ts` in lockstep either way.
+ * A DEFERRED family lands in the same batch as one `DEFERRED_ROWS` row (its
+ * boot-graph id + chunk loader) and one id in `DEFERRED_EXTRA_ROW_IDS`
+ * (required-extra-rows.ts) — that id is what host-graph.ts matches a
+ * third-party row's `external` requests against, so a missing id turns a
+ * guaranteed require miss back into silence.
  *
  * ## Module-table factories for the covered set (design 09 union table)
  *
@@ -120,9 +125,13 @@
 import type { Context } from '@deepseek-ai/cordis'
 
 import { CHAMBER_COVERED_FACTORY_IDS, CHAMBER_COVERED_IDS } from './chamber-covered.ts'
+import type { ShellDegradedFact } from './boot-gap.ts'
 import {
-  missingRequiredServices, requiredServiceProbeMessage,
+  deferredRegistrationFailureMessage,
+  DEFERRED_EXTRA_ROW_IDS,
+  missingInjectedServices, missingServiceFact, registeredInjectMembers, requiredServiceProbeMessage,
   REQUIRED_SERVICE_PROBE_DEADLINE_MS, REQUIRED_SERVICE_PROBE_INTERVAL_MS,
+  type RegisteredPluginInject,
 } from './required-extra-rows.ts'
 import { isChamberSourceId } from './transport-source.ts'
 
@@ -238,129 +247,208 @@ import * as UiModelSelection from '@deepseek-ai/dsh-client-ui-model-selection/cl
 // (design 05 §4; the OS chooser is never surfaced to chamber users).
 import * as UiDirectoryPickerBrowse from '@deepseek-ai/dsh-client-ui-directory-picker-browse/client'
 
-// ── Deferred families (see module header): dynamic-import chunks, fetched
-// ── and registered after the boot settles. Each `import()` resolves to the
-// ── same module-namespace shape the static imports above use, so the
-// ── registrations below typecheck identically to the synchronous ones.
+// ── Deferred families (see module header): dynamic-import chunks, fetched in
+// ── parallel right away and registered after they arrive. One roster row pairs
+// ── the boot-graph ID with its chunk loader: the id is what the covered-set
+// ── lockstep and the failure diagnostic need, and a destructured import list
+// ── cannot name the chunk that failed.
+
+/**
+ * The deferred cluster's roster: `[boot-graph id, chunk loader]`, in
+ * registration order. The id set MUST equal `DEFERRED_EXTRA_ROW_IDS`
+ * (required-extra-rows.ts) — asserted by `assertDeferredRosterLockstep` in
+ * apply() — and every id is composite-covered (chamber-covered.ts), so this
+ * entry is the only thing that may load the bundle.
+ */
+const DEFERRED_ROWS: ReadonlyArray<readonly [id: string, load: () => Promise<unknown>]> = [
+  // rc.8/alpha.2 feature families: nothing first-screen injects their services.
+  ['@deepseek-ai/dsh-client-ui-jobs', () => import('@deepseek-ai/dsh-client-ui-jobs/client')],
+  ['@deepseek-ai/dsh-client-ui-goal', () => import('@deepseek-ai/dsh-client-ui-goal/client')],
+  ['@deepseek-ai/dsh-client-ui-skill', () => import('@deepseek-ai/dsh-client-ui-skill/client')],
+  // ui-tool DECLARES the `tool.call.toolview` slot (vendor
+  // ui-tool/src/client/apply.ts:38) that extra host-graph rows inject into
+  // (ui-cordis, vendor ui-cordis/src/client/index.ts:119-143): its chunk failing
+  // is the silent slot gap the failure diagnostic below names.
+  ['@deepseek-ai/dsh-client-ui-tool', () => import('@deepseek-ai/dsh-client-ui-tool/client')],
+  ['@deepseek-ai/dsh-client-ui-trajectory', () => import('@deepseek-ai/dsh-client-ui-trajectory/client')],
+  ['@deepseek-ai/dsh-client-ui-workflow-run', () => import('@deepseek-ai/dsh-client-ui-workflow-run/client')],
+  ['@deepseek-ai/dsh-client-ui-deliverables', () => import('@deepseek-ai/dsh-client-ui-deliverables/client')],
+  ['@deepseek-ai/dsh-client-ui-subagent', () => import('@deepseek-ai/dsh-client-ui-subagent/client')],
+  // 2026-09 四轮: the session-log export client is covered so its registered
+  // vendor patch can carry the per-entry base path on `/api/session.export`
+  // (the host half keeps the route + /export command).
+  ['@deepseek-ai/dsh-session-log-export', () => import('@deepseek-ai/dsh-session-log-export/client')],
+  ['@deepseek-ai/dsh-client-ui-message-feedback', () => import('@deepseek-ai/dsh-client-ui-message-feedback/client')],
+  ['@deepseek-ai/dsh-client-ui-plan', () => import('@deepseek-ai/dsh-client-ui-plan/client')],
+  ['@deepseek-ai/dsh-client-ui-user-questions', () => import('@deepseek-ai/dsh-client-ui-user-questions/client')],
+  ['@deepseek-ai/dsh-client-ui-agent-preset', () => import('@deepseek-ai/dsh-client-ui-agent-preset/client')],
+  ['@deepseek-ai/dsh-client-ui-permission-presets', () => import('@deepseek-ai/dsh-client-ui-permission-presets/client')],
+  // rc.8 deferred families (design 09 §4 baseline alignment): attachment
+  // fills the composer + message-image slots, reference registers the
+  // unified `@` source — both inject first-screen services only (slots /
+  // inputTriggers + locale + remote + the fileReferences &
+  // sessionReferenceResolver namespaces, all first-screen providers), so
+  // the deferred split stays safe; brand-official fills the official brand
+  // slots but is gated on the 'official' build profile (chamber's build
+  // defines it away — see vite.config.mjs), so it loads as a no-op.
+  ['@deepseek-ai/dsh-client-ui-attachment', () => import('@deepseek-ai/dsh-client-ui-attachment/client')],
+  ['@deepseek-ai/dsh-client-ui-brand-official', () => import('@deepseek-ai/dsh-client-ui-brand-official/client')],
+  ['@deepseek-ai/dsh-client-ui-reference', () => import('@deepseek-ai/dsh-client-ui-reference/client')],
+  // C4 settings cluster (2026-09 性能审计): official ui-settings stays
+  // FIRST-SCREEN (locale/theme root-inject its settingsScope), but its SECTION
+  // families and the chamber settings shell/connections are only reachable once
+  // the user opens settings — deferred like the rc.8 families. Inject audit:
+  // every member injects first-screen services only
+  // (slots/locale/remote.*/settingsScope/settingsSchema — all first-screen
+  // providers); no first-screen family root-injects anything this cluster
+  // provides (bridge injects only slots+locale and provides the shadowing
+  // sidebar.settings occupant — the official SettingsRoot occupant is
+  // registered by ui-settings-general, which moves here with it). Visible
+  // transients: the settings ENTRY is absent for ~one chunk roundtrip —
+  // one-time only (first instance, first cold boot; later boots resolve
+  // from the module cache, possibly before settle); there is no
+  // intermediate "official root without sections" frame (all six register
+  // in one synchronous continuation after the single load sweep). The
+  // per-source settings panel renders THIS boot ctx's own settings.section
+  // ledger (2026-12 完整桥接修订), so this boot-ctx timing IS the panel's
+  // gate: until the cluster lands, the selected source shows the honest
+  // "starting this instance's frontend" intermediate state — the panel does
+  // NOT load any content of its own (no child ctx, no bundle). Failure
+  // semantics (2026-12 review F2): the cluster is no longer
+  // all-or-nothing — each row loads in isolation, so one failed chunk costs
+  // exactly its own family (a failed bridge no longer takes the whole
+  // cluster, including the chamber-global connections surface, down with
+  // it), and the failed id SET is reported by name (never console-only)
+  // while the boot keeps settling (diagnostic, not a boot gate; recovery =
+  // shell re-boot).
+  ['@deepseek-ai/dsh-client-ui-settings-general', () => import('@deepseek-ai/dsh-client-ui-settings-general/client')],
+  ['@deepseek-ai/dsh-client-ui-settings-models', () => import('@deepseek-ai/dsh-client-ui-settings-models/client')],
+  ['@deepseek-ai/dsh-client-ui-settings-plugins', () => import('@deepseek-ai/dsh-client-ui-settings-plugins/client')],
+  ['@deepseek-ai/dsh-client-ui-settings-plugin-inventory', () => import('@deepseek-ai/dsh-client-ui-settings-plugin-inventory/client')],
+  ['@dsh-chamber/dsh-chamber-client-ui-settings-connections', () => import('@dsh-chamber/dsh-chamber-client-ui-settings-connections/client')],
+  ['@dsh-chamber/dsh-chamber-client-ui-settings-bridge', () => import('@dsh-chamber/dsh-chamber-client-ui-settings-bridge/client')],
+]
 
 /**
  * Register the non-first-screen ui-* families once their chunks arrive.
  * Fire-and-forget from apply: never awaited, so the entry (and the boot's
- * settle/sweep) does not wait for any of this. Failures (chunk load error,
- * or a registration racing the shell's teardown) are logged loud — the
- * settled UI simply misses that family, it never takes the boot down.
+ * settle/sweep) does not wait for any of this. Failures (chunk load error, or a
+ * registration racing the shell's teardown) are logged loud AND reported by id
+ * through the shared named diagnostic — the settled UI simply misses that
+ * family, it never takes the boot down.
+ *
+ * 2026-12 review F2 (silent slot gap): the cluster is loaded PER ROW. A single
+ * `Promise.all` over every chunk used to mean one rejection cancelled the whole
+ * continuation — every family after the failure never registered, and the id
+ * that failed was not even named (only `console.error`). The slot-declaring
+ * families make that a silent hole: `ui-tool` declares `tool.call.toolview`,
+ * which the extra host-graph row `ui-cordis` injects into, so a failed chunk
+ * meant the row never activated with no non-console trace. Today each row keeps
+ * its own verdict, the surviving families still register (in roster order, one
+ * synchronous continuation), and the failed id SET travels through
+ * `deferredRegistrationFailureMessage` — logged and handed to the shell's
+ * post-settle degrade seam (`chamberReportBootDegraded`, the same seam the
+ * required-service probe uses), which is what the App renders and self-heals.
+ * @param ctx - the per-entry client root context.
+ * @param degradedSeam - the shell's post-settle degrade reporter (see
+ *   {@link createDegradedSeam}).
+ * @param registered - the composite's live probe roster (see the `register`
+ *   helper): every row that mounts here ADDS its namespace's exported inject
+ *   face, so the deferred members are probed too (2026-09-11 review-fix,
+ *   finding 1) instead of pending invisibly.
+ * @param probeRearm - the probe's re-arm hand-off; called once after the
+ *   cluster registered, so the already-armed probe pass picks the new members
+ *   up even when it had stopped on a clean verdict.
  */
-async function registerDeferred(ctx: Context): Promise<void> {
-  const [
-    jobs,
-    goal,
-    skill,
-    tool,
-    trajectory,
-    workflowRun,
-    deliverables,
-    subagent,
-    sessionLogDownload,
-    messageFeedback,
-    plan,
-    userQuestions,
-    agentPreset,
-    permissionPresets,
-    attachment,
-    brandOfficial,
-    reference,
-    // C4 settings cluster (2026-09 性能审计): official ui-settings stays
-    // FIRST-SCREEN (locale/theme root-inject its settingsScope), but its
-    // SECTION families and the chamber settings shell/connections are only
-    // reachable once the user opens settings — deferred like the rc.8
-    // families. Inject audit: every member injects first-screen services only
-    // (slots/locale/remote.*/settingsScope/settingsSchema — all first-screen
-    // providers); no first-screen family root-injects anything this cluster
-    // provides (bridge injects only slots+locale and provides the shadowing
-    // sidebar.settings occupant — the official SettingsRoot occupant is
-    // registered by ui-settings-general, which moves here with it). Visible
-    // transients: the settings ENTRY is absent for ~one chunk roundtrip —
-    // one-time only (first instance, first cold boot; later boots resolve
-    // from the module cache, possibly before settle); there is no
-    // intermediate "official root without sections" frame (all six register
-    // in one synchronous continuation after the single Promise.all). The
-    // per-server panel content loads through each selected server's child ctx
-    // (bridge-context mountBridgeSession) and is unaffected by this boot-ctx
-    // timing. Failure semantics (registered): one failed import drops the
-    // WHOLE cluster for this boot (incl. the chamber-global connections
-    // surface, per-server dsh-runtime management and updates) — console loud,
-    // no retry (recovery = shell re-boot), same pattern as the other
-    // registerDeferred families; per-family allSettled independent
-    // registration is a possible future improvement (a bridge failure would
-    // then degrade to the official fallback shell instead of the whole
-    // cluster disappearing).
-    settingsGeneral,
-    settingsModels,
-    settingsPlugins,
-    settingsPluginInventory,
-    settingsConnections,
-    settingsBridge,
-  ] = await Promise.all([
-    import('@deepseek-ai/dsh-client-ui-jobs/client'),
-    import('@deepseek-ai/dsh-client-ui-goal/client'),
-    import('@deepseek-ai/dsh-client-ui-skill/client'),
-    import('@deepseek-ai/dsh-client-ui-tool/client'),
-    import('@deepseek-ai/dsh-client-ui-trajectory/client'),
-    import('@deepseek-ai/dsh-client-ui-workflow-run/client'),
-    import('@deepseek-ai/dsh-client-ui-deliverables/client'),
-    import('@deepseek-ai/dsh-client-ui-subagent/client'),
-    // 2026-09 四轮: the session-log export client is covered so its registered
-    // vendor patch can carry the per-entry base path on `/api/session.export`
-    // (the host half keeps the route + /export command).
-    import('@deepseek-ai/dsh-session-log-export/client'),
-    import('@deepseek-ai/dsh-client-ui-message-feedback/client'),
-    import('@deepseek-ai/dsh-client-ui-plan/client'),
-    import('@deepseek-ai/dsh-client-ui-user-questions/client'),
-    import('@deepseek-ai/dsh-client-ui-agent-preset/client'),
-    import('@deepseek-ai/dsh-client-ui-permission-presets/client'),
-    // rc.8 deferred families (design 09 §4 baseline alignment): attachment
-    // fills the composer + message-image slots, reference registers the
-    // unified `@` source — both inject first-screen services only (slots /
-    // inputTriggers + locale + remote + the fileReferences &
-    // sessionReferenceResolver namespaces, all first-screen providers), so
-    // the deferred split stays safe; brand-official fills the official brand
-    // slots but is gated on the 'official' build profile (chamber's build
-    // defines it away — see vite.config.mjs), so it loads as a no-op.
-    import('@deepseek-ai/dsh-client-ui-attachment/client'),
-    import('@deepseek-ai/dsh-client-ui-brand-official/client'),
-    import('@deepseek-ai/dsh-client-ui-reference/client'),
-    // C4 settings cluster (see the destructure comment): official section
-    // families + the chamber settings shell & connections section.
-    import('@deepseek-ai/dsh-client-ui-settings-general/client'),
-    import('@deepseek-ai/dsh-client-ui-settings-models/client'),
-    import('@deepseek-ai/dsh-client-ui-settings-plugins/client'),
-    import('@deepseek-ai/dsh-client-ui-settings-plugin-inventory/client'),
-    import('@dsh-chamber/dsh-chamber-client-ui-settings-connections/client'),
-    import('@dsh-chamber/dsh-chamber-client-ui-settings-bridge/client'),
-  ])
-  ctx.plugin(jobs)
-  ctx.plugin(goal)
-  ctx.plugin(skill)
-  ctx.plugin(tool)
-  ctx.plugin(trajectory)
-  ctx.plugin(workflowRun)
-  ctx.plugin(deliverables)
-  ctx.plugin(subagent)
-  ctx.plugin(sessionLogDownload)
-  ctx.plugin(messageFeedback)
-  ctx.plugin(plan)
-  ctx.plugin(userQuestions)
-  ctx.plugin(agentPreset)
-  ctx.plugin(permissionPresets)
-  ctx.plugin(attachment)
-  ctx.plugin(brandOfficial)
-  ctx.plugin(reference)
-  ctx.plugin(settingsGeneral)
-  ctx.plugin(settingsModels)
-  ctx.plugin(settingsPlugins)
-  ctx.plugin(settingsPluginInventory)
-  ctx.plugin(settingsConnections)
-  ctx.plugin(settingsBridge)
+async function registerDeferred(
+  ctx: Context,
+  degradedSeam: (fact: ShellDegradedFact) => void,
+  registered: RegisteredPluginInject[],
+  probeRearm: ProbeRearmSlot,
+): Promise<void> {
+  // Chunks are fetched in PARALLEL (one cluster, one round of requests — the
+  // LCP reason the split exists) but each row keeps its own verdict.
+  const settled = await Promise.all(DEFERRED_ROWS.map(async ([id, load]) => {
+    try {
+      return { id, ok: true as const, plugin: await load(), error: undefined }
+    } catch (error) {
+      return { id, ok: false as const, plugin: undefined, error }
+    }
+  }))
+  const failed: string[] = []
+  let mounted = 0
+  for (const outcome of settled) {
+    if (!outcome.ok) {
+      failed.push(outcome.id)
+      continue
+    }
+    // Mount with the ROW ID as the fiber name (2026-09-11): cordis gives an
+    // UNNAMED fiber the name of its nearest NAMED ancestor (`Fiber.name` walks
+    // up, else `'root'`), so mounting these rows bare made every fiber in the
+    // cluster report as `@dsh-chamber/app` — in cordis error text, in the
+    // crash-attribution index, and (until the nav provenance tag was retired)
+    // in the settings panel, which read the same stamp. The upstream web boot
+    // names every graph row by its id (`loader.create({ name: row.id })`), and
+    // the old child-ctx bridge did the same for its base set; this keeps the
+    // composite on that convention so a fiber's name is the package it belongs
+    // to. (`DEFERRED_ROWS` types each chunk as `Promise<unknown>` — the id
+    // roster is the contract, not the module shapes — so the cordis
+    // object-plugin shape is asserted here.)
+    const loaded = outcome.plugin as { apply: (ctx: Context, config?: never) => void; inject?: string[] }
+    ctx.plugin({ ...loaded, name: outcome.id })
+    // 2026-09-11 review-fix (finding 1): the row's OWN exported inject face
+    // enters the probe roster now that its namespace is materialized — the
+    // declaration the fiber above is waiting on, recorded exactly the way the
+    // first-screen `register` helper records one. Two disciplines the mount above
+    // must not inherit from that helper:
+    //  - the normalization is EAGER (the same call `register` uses), so a face
+    //    the normalizer rejects fails HERE rather than inside the probe's timer a
+    //    moment later (an uncaught throw in that callback would escape the
+    //    diagnostic entirely);
+    //  - it is guarded PER ROW: this cluster's whole point (2026-12 review F2) is
+    //    that one bad row costs exactly its own family, so an unreadable face
+    //    loses that row's probe coverage (loudly) and never the mounting of the
+    //    rows after it.
+    // A FAILED row adds nothing at all — its members are reported by id through
+    // the failure diagnostic below instead.
+    try {
+      registered.push({ id: outcome.id, inject: registeredInjectMembers(outcome.id, loaded.inject) })
+    } catch (error) {
+      console.error(
+        `[chamber-entry] deferred plugin ${outcome.id} exports an unreadable inject face; its services stay unprobed:`,
+        error,
+      )
+    }
+    mounted += 1
+  }
+  // One re-armed probe pass (review-fix finding 1): the probe stops on a clean
+  // verdict, so a roster that grew after that verdict needs an explicit nudge.
+  // Only when a row actually mounted — with an unchanged roster the re-arm would
+  // buy nothing and only re-run the same poll. The slot is empty in hosts where
+  // the probe never installed (plain-node tests), hence the optional call.
+  if (mounted > 0) probeRearm.reArm?.()
+  if (failed.length === 0) return
+  const message = deferredRegistrationFailureMessage(failed, ctx.chamberInstanceId)
+  console.error(
+    message,
+    settled.filter(outcome => !outcome.ok).map(outcome => outcome.error),
+  )
+  // The shell only accepts a degrade fact once the boot SETTLED (shell.ts
+  // reportSettledDegrade); a deferred failure is detected after apply returned,
+  // so the report rides a macrotask — the settle (microtask chain) has always
+  // won by then, and a report that a torn-down instance never sees is a no-op
+  // in the shell's entries lookup rather than a leak.
+  //
+  // Own kind since 2026-12 (design 05 §4): this verdict shares the SEAM with the
+  // required-service probe but not its meaning — the probe names unprovided
+  // services, this one names row ids whose chunk never registered. Sharing one
+  // kind made the two facts indistinguishable to the frame's copy table and let
+  // the second report be dropped as a same-kind repeat.
+  setTimeout(() => degradedSeam({
+    kind: 'deferred-registration-failed',
+    message,
+    failedIds: [...failed],
+  }), 0)
 }
 
 /**
@@ -427,6 +515,74 @@ function assertCoveredFactoryLockstep(): void {
 }
 
 /**
+ * Deferred-roster lockstep guard (2026-12 review F2): `DEFERRED_ROWS` (this
+ * file) and `DEFERRED_EXTRA_ROW_IDS` (required-extra-rows.ts, the list
+ * host-graph.ts matches a third-party row's `external` requests against) must
+ * name exactly the same ids. Without the guard a family deferred here but
+ * absent there would make the `external` diagnostic blind to it — the silent
+ * require miss the roster exists to surface.
+ *
+ * Runs inside apply() for the same attribution reason as
+ * {@link assertCoveredFactoryLockstep} (chamber-entry.ts cannot be imported by
+ * the node test runner, so this is the only drift guard for the roster).
+ */
+function assertDeferredRosterLockstep(): void {
+  const rosterIds = DEFERRED_ROWS.map(([id]) => id)
+  const unique = new Set(rosterIds)
+  if (unique.size !== rosterIds.length) {
+    throw new Error('chamber-entry: DEFERRED_ROWS contains a duplicate id')
+  }
+  const declared = new Set(DEFERRED_EXTRA_ROW_IDS)
+  if (unique.size !== declared.size) {
+    throw new Error(
+      `chamber-entry: DEFERRED_ROWS (${unique.size} ids) must match DEFERRED_EXTRA_ROW_IDS `
+      + `(${declared.size} ids) exactly — add/remove the same ids in both (see required-extra-rows.ts)`,
+    )
+  }
+  for (const id of unique) {
+    if (!declared.has(id)) {
+      throw new Error(
+        `chamber-entry: deferred id "${id}" is not in DEFERRED_EXTRA_ROW_IDS — add it there `
+        + '(or remove it here); host-graph.ts cannot see an external require of it without that entry',
+      )
+    }
+    if (!CHAMBER_COVERED_IDS.includes(id)) {
+      throw new Error(
+        `chamber-entry: deferred id "${id}" is not in CHAMBER_COVERED_IDS — add it there (or remove it here); `
+        + 'an uncovered id would load its host-graph row a second time',
+      )
+    }
+  }
+}
+
+/**
+ * The shell's post-settle degrade seam, resolved once per entry: the App
+ * re-boots the instance on the next ready transition when it receives a fact
+ * (2026-09-10 sidebarRight heal; 2026-12 the deferred-cluster report reuses the
+ * same channel) AND renders that fact as copy (design 05 §4 「降级呈现」).
+ * Absent in plain-node tests / other hosts, and a throwing seam must never break
+ * the caller, so the reporter wraps it.
+ *
+ * The fact travels WHOLE (kind + structured fields): the frame must never parse
+ * the diagnostic message to learn which service is missing. This module also
+ * never writes the fact itself — the seam is the only writer, so the shell's
+ * boot-generation fence applies to every producer.
+ * @param ctx - the per-entry client root context.
+ * @returns the reporter: logs nothing itself, never throws.
+ */
+function createDegradedSeam(ctx: Context): (fact: ShellDegradedFact) => void {
+  // Shell-provided seam (shell.ts createChamberContextSetup): reports a
+  // post-settle degrade to the App. Absent in plain-node tests / other hosts.
+  const reportBootDegraded = (ctx as { chamberReportBootDegraded?: (fact: ShellDegradedFact) => void })
+    .chamberReportBootDegraded
+  return (fact: ShellDegradedFact): void => {
+    try { reportBootDegraded?.(fact) } catch (error) {
+      console.error('[chamber-entry] failed to report a post-settle degrade fact:', error)
+    }
+  }
+}
+
+/**
  * Assemble the complete dsh client plugin tree on the per-instance ctx.
  * Sub-plugin fibers wait on their inject sets, so registration order carries
  * no activation semantics; the core assembly is listed first for readability.
@@ -436,13 +592,18 @@ function assertCoveredFactoryLockstep(): void {
  * paints — without their eval (see module header).
  */
 export function apply(ctx: Context): void {
-  // Union-table lockstep guard FIRST (see assertCoveredFactoryLockstep): a
-  // COVERED_FACTORIES drift must fail this entry before any plugin registers.
+  // Lockstep guards FIRST (see assertCoveredFactoryLockstep /
+  // assertDeferredRosterLockstep): a drift must fail this entry before any
+  // plugin registers.
   assertCoveredFactoryLockstep()
+  assertDeferredRosterLockstep()
   // chamber patch (05 §4): shell.ts installs immutable per-entry identity and
   // base-path facts through AppWebEntry.configureContext before any plugin can
   // materialize. Do not fall back to page-global knobs: a timed-out boot may
-  // settle while a later instance is also booting.
+  // settle while a later instance is also booting. Alongside those per-entry
+  // facts the shell also installs the PAGE-level machine catalog
+  // (`chamberMachineCatalog`, design 20 §4.2) — the same reader object in every
+  // entry, because the machine's installed apps are not a per-source fact.
   const chamberInstanceId = ctx.chamberInstanceId
   const chamberBasePath = ctx.chamberBasePath
   const chamberSourceFingerprint = ctx.chamberSourceFingerprint
@@ -471,10 +632,81 @@ export function apply(ctx: Context): void {
   // api-gateway: apply(ctx) → Remote stream mux route), so the prefix is bound
   // per entry through configureContext, never through plugin config or a
   // page-global knob (2026-09 Batch 2: the config-passing form was retired).
-  ctx.plugin(ConnectionPlugin)
-  ctx.plugin(TypertRegistry)
-  ctx.plugin(ApiGateway)
-  ctx.plugin(ApiRemotes)
+  //
+  // A1 (2026-09-11 upstream-alignment): every first-screen registration also
+  // RECORDS what its namespace injects, and the required-service probe below
+  // probes exactly that union — the same declaration upstream reads off
+  // `Object.keys(entry.fiber.inject)` in its post-settle sweep (vendor
+  // packages/client/web/src/boot.ts:138-158). Registration and roster are one
+  // call on purpose: a family added here is probed automatically, one removed
+  // here stops being probed, and the recorded id is the mount identity (the
+  // package / boot-graph id the fiber is named by), never a second service
+  // list.
+  //
+  // 2026-09-11 review-fix (finding 1): the deferred cluster joins the SAME
+  // roster as each of its chunks mounts (registerDeferred below), and one probe
+  // pass is re-armed when it does. Before this round those members were probed
+  // by NOTHING: the derived union carries only the first-screen declarations,
+  // and 11 members live exclusively in deferred faces — `remote.goals`,
+  // `remote.skills`, `remote.messageFeedback`, `remote.sessionFeedback`,
+  // `remote.agentPresets`, `remote.credentials`, `remote.llm`,
+  // `remote.pluginInventory`, `remote.fileReferences`,
+  // `remote.sessionReferenceResolver` (mounted by the first-screen
+  // api-gateway/api-remotes pair) and `settingsSchema` (provided by the
+  // first-screen ui-settings) — so a deferred family whose composite-provided
+  // provider never activated pended with no diagnostic at all, the exact
+  // silent-gap class this probe exists to close. The deferred-split invariant
+  // (module header) is what makes that probing safe: every deferred member's
+  // provider is a FIRST-SCREEN COMPOSITE plugin, never another deferred family,
+  // so a re-armed pass can never mistake a not-yet-evaluated sibling chunk for a
+  // missing service.
+  const registered: RegisteredPluginInject[] = []
+  /** The probe's re-arm hand-off (see {@link assertRequiredExtraRowServices});
+   *  filled in when the probe's effect installs, before the deferred cluster can
+   *  possibly finish loading its chunks. */
+  const probeRearm: ProbeRearmSlot = {}
+  const register = (id: string, plugin: object): void => {
+    // The mounted fiber's OWN normalized inject map is upstream's source of
+    // truth (`Object.keys(entry.fiber.inject)`, the sweep's fact). It is read
+    // here as a WITNESS only — never as the roster: the roster is derived from
+    // the namespace's exported `inject` face (the declaration this composite
+    // registered).
+    // 2026-09-11 review-fix (finding 3): the witness is NARROWER than the first
+    // version of this comment claimed, and the claim is corrected rather than
+    // repeated. Cordis resolves the fiber's map from the SAME expression this
+    // helper derives from (`Inject.resolve(plugin.inject)`, vendor cordis
+    // registry.ts:330), so the two can only diverge for ONE declaration form:
+    // an inject object carrying cordis's `symbols.checkProto` marker
+    // (registry.ts:63-87), where the members sit on the object's PROTOTYPE and
+    // `Object.keys(plugin.inject)` cannot see them. That case is what the throw
+    // below catches. A namespace that simply STOPS EXPORTING `inject` yields an
+    // empty roster entry AND an empty witness (`plugin.inject` is undefined on
+    // both sides) — no throw, roster silently smaller. That class is covered by
+    // the CI table test instead (test/required-extra-rows.test.ts reads every
+    // registered id's client entry and pins its audited face), which is the only
+    // place a drift is visible: this runtime check cannot know what a namespace
+    // "should" export without the hand-written roster the round retired.
+    // (`ctx.plugin` returns the fiber; a shape that carries no inject map — or a
+    // cordis that returned the context instead — yields no witness and no
+    // false alarm.)
+    const fiber = ctx.plugin(plugin) as unknown as { inject?: unknown } | undefined
+    const witness = fiber?.inject
+    const witnessKeys = witness !== null && typeof witness === 'object' && !Array.isArray(witness)
+      ? Object.keys(witness as Record<string, unknown>)
+      : []
+    const declared = registeredInjectMembers(id, (plugin as { inject?: unknown }).inject)
+    if (declared.length === 0 && witnessKeys.length > 0) {
+      throw new Error(
+        `chamber-entry: plugin ${id} mounts an inject set ${JSON.stringify(witnessKeys)} that its namespace does not export — `
+        + 'the derived required-service roster would silently lose them (see required-extra-rows.ts)',
+      )
+    }
+    registered.push({ id, inject: declared })
+  }
+  register('@deepseek-ai/dsh-client-connection', ConnectionPlugin)
+  register('@deepseek-ai/dsh-typert-registry', TypertRegistry)
+  register('@deepseek-ai/dsh-api-gateway', ApiGateway)
+  register('@deepseek-ai/dsh-api-remotes', ApiRemotes)
   // Provider group (dsh-client-runtime dissolved): the store is a platform
   // word (covered factory only, no plugin); the api controllers provide
   // ctx.sessions / ctx.workspaces; ui-session / ui-chat / ui-approval are the
@@ -482,86 +714,121 @@ export function apply(ctx: Context): void {
   // mounts the generated Remote namespaces (`remote.session` etc.) that the
   // controllers' inject lists require — cordis fibers wait on the inject
   // sets, so registration order carries no activation semantics.
-  ctx.plugin(ApiSessionController)
-  ctx.plugin(ApiWorkspaceController)
+  register('@deepseek-ai/dsh-api-session-controller', ApiSessionController)
+  register('@deepseek-ai/dsh-api-workspace-controller', ApiWorkspaceController)
   // Background file uploads (covers the host-graph row): ui-conversation and
   // api-session-controller root-inject `fileUpload`, and the composite-bundled
   // copy is the only one the vendor patch can fix (see chamber-covered.ts).
-  ctx.plugin(FileUpload)
-  ctx.plugin(Locale)
-  ctx.plugin(UiTheme)
-  ctx.plugin(UiLayout)
-  ctx.plugin(UiSidebar)
-  ctx.plugin(UiGit)
-  ctx.plugin(UiOpenIn)
-  ctx.plugin(UiSettings)
-  ctx.plugin(UiConversation)
+  register('@deepseek-ai/dsh-client-file-upload', FileUpload)
+  register('@deepseek-ai/dsh-client-locale', Locale)
+  register('@deepseek-ai/dsh-client-ui-theme', UiTheme)
+  register('@dsh-chamber/dsh-chamber-client-ui-layout', UiLayout)
+  register('@dsh-chamber/dsh-chamber-client-ui-sidebar', UiSidebar)
+  register('@dsh-chamber/dsh-chamber-client-ui-git', UiGit)
+  register('@dsh-chamber/dsh-chamber-client-ui-open-in', UiOpenIn)
+  register('@deepseek-ai/dsh-client-ui-settings', UiSettings)
+  register('@deepseek-ai/dsh-client-ui-conversation', UiConversation)
   // First-screen (2026-08 review fix): ui-model-selection's root inject
   // requires `commandUi` (commands) and commands requires `inputTriggers`
   // (input-trigger) — see the import comments above.
-  ctx.plugin(UiCommands)
-  ctx.plugin(UiInputTrigger)
-  ctx.plugin(UiWorkspace)
-  ctx.plugin(UiModelSelection)
+  register('@deepseek-ai/dsh-client-ui-commands', UiCommands)
+  register('@deepseek-ai/dsh-client-ui-input-trigger', UiInputTrigger)
+  register('@deepseek-ai/dsh-client-ui-workspace', UiWorkspace)
+  register('@deepseek-ai/dsh-client-ui-model-selection', UiModelSelection)
   // dsh-v0.1.2-alpha.1 conversation families (first-screen; see the import
   // comments above).
-  ctx.plugin(UiSession)
-  ctx.plugin(UiChat)
-  ctx.plugin(UiApproval)
+  register('@deepseek-ai/dsh-client-ui-session', UiSession)
+  register('@deepseek-ai/dsh-client-ui-chat', UiChat)
+  register('@deepseek-ai/dsh-client-ui-approval', UiApproval)
   // Directory-picker surface: the `browse` face for every instance (see the
   // import comment above) — the host pins the browse capability per spawn, so
   // the client surface and the host capability never disagree.
-  ctx.plugin(UiDirectoryPickerBrowse)
+  register('@deepseek-ai/dsh-client-ui-directory-picker-browse', UiDirectoryPickerBrowse)
   // Deferred families: fetch their chunks in the background and register them
   // once loaded — never awaited (the entry must settle with only the
-  // first-screen families evaluated; see module header).
-  void registerDeferred(ctx).catch((error) => {
+  // first-screen families evaluated; see module header). The seam is shared
+  // with the required-service probe below, so both post-settle verdicts land on
+  // the one channel the App self-heals from.
+  const degradedSeam = createDegradedSeam(ctx)
+  void registerDeferred(ctx, degradedSeam, registered, probeRearm).catch((error) => {
     console.error('[chamber-entry] deferred plugin registration failed:', error)
   })
 
-  assertRequiredExtraRowServices(ctx)
+  assertRequiredExtraRowServices(ctx, degradedSeam, registered, probeRearm)
 }
 
 /**
- * alpha.2 required extra rows: `ui-sidebar-right` provides `ctx.sidebarRight`,
- * which the composite's FIRST-SCREEN `ui-chat` declares in its cordis inject
- * set, and `client-resources` provides `ctx.resources` for the global
- * `useResource` hook. The composite registers ui-chat directly, so its fiber
- * is not part of the boot kernel's loader sweep: if the extra row never
- * applies, the fiber stays PENDING and the conversation surface disappears
- * while the boot still reports success. Probe the services after the extra
- * rows have had time to materialize and report loudly instead of failing
- * silently.
+ * The probe's re-arm hand-off (2026-09-11 review-fix, finding 1): `apply` owns
+ * the slot, the probe effect fills it, and `registerDeferred` calls it once the
+ * deferred cluster has extended the roster. Empty until the effect installs and
+ * empty again after teardown, so an optional call is the whole contract.
+ */
+interface ProbeRearmSlot {
+  /** Run one more probe pass now; absent before install / after teardown. */
+  reArm?: () => void
+}
+
+/**
+ * The post-settle required-service probe (alpha.2; roster DERIVED since the A1
+ * 2026-09-11 upstream-alignment).
+ *
+ * The concrete miss this exists for: the non-covered `ui-sidebar-right` row
+ * provides `ctx.sidebarRight`, which the composite's FIRST-SCREEN `ui-chat`
+ * declares in its cordis inject set (vendor ui-chat/src/client/apply.ts:47-50).
+ * The composite registers ui-chat directly, so its fiber is not part of the
+ * boot kernel's loader sweep: if that row never applies, the fiber stays
+ * PENDING and the conversation surface disappears while the boot still reports
+ * success. Probe the services after the extra rows have had time to materialize
+ * and report loudly instead of failing silently.
+ *
+ * The probed set is NOT a list here either: it is the union of the `inject`
+ * faces of the plugins `register()` above mounted (upstream's own fact, read
+ * per fiber in its post-settle sweep — vendor
+ * packages/client/web/src/boot.ts:138-158), and the pure union/missing/message
+ * rules live in required-extra-rows.ts, the single authority, next to the
+ * deferred-cluster diagnostic that shares this seam. Since the 2026-09-11
+ * review-fix (finding 1) the deferred cluster extends the very same roster when
+ * its chunks mount and re-arms one pass here, so a deferred family whose
+ * composite-provided service never activated is named too.
  *
  * This is a diagnostic, not a boot gate: a gateway-hosted instance may
  * legitimately run without the rows (the mobile deployment loads no sidebar
  * surface), so the boot must not fail — the operator-facing log is the signal.
  * The timer is owned by the ctx effect, so a torn-down instance stops probing.
  * @param ctx - the per-entry client root context.
+ * @param degradedSeam - the shell's post-settle degrade reporter (see
+ *   {@link createDegradedSeam}).
+ * @param registered - the first-screen plugins this apply mounted, in
+ *   registration order, EXTENDED in place by every deferred row that mounts
+ *   later (roster source; see the `register` helper and `registerDeferred`).
+ * @param probeRearm - the re-arm hand-off the deferred cluster calls once it has
+ *   extended the roster (2026-09-11 review-fix, finding 1).
  */
-function assertRequiredExtraRowServices(ctx: Context): void {
+function assertRequiredExtraRowServices(
+  ctx: Context,
+  degradedSeam: (fact: ShellDegradedFact) => void,
+  registered: readonly RegisteredPluginInject[],
+  probeRearm: ProbeRearmSlot,
+): void {
   const started = Date.now()
-  // Shell-provided seam (shell.ts createChamberContextSetup): reports a
-  // post-settle degrade to the App. Absent in plain-node tests / other hosts.
-  const reportBootDegraded = (ctx as { chamberReportBootDegraded?: (message: string) => void })
-    .chamberReportBootDegraded
-  const degradedSeam = (message: string): void => {
-    try { reportBootDegraded?.(message) } catch (error) {
-      console.error('[chamber-entry] failed to report the missing extra-row service:', error)
-    }
-  }
   const isProvided = (name: string): boolean =>
     (ctx as { get: (key: string) => unknown }).get(name) !== undefined
   const instanceId = (ctx as { chamberInstanceId?: string }).chamberInstanceId
   ctx.effect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined
+    /** The last verdict's service set: a re-armed pass must not re-report it
+     *  verbatim (one report per fact is what the App's self-heal consumes). */
+    let reportedSignature: string | undefined
     const probe = (): void => {
-      const missing = missingRequiredServices(isProvided)
+      const missing = missingInjectedServices(registered, isProvided)
       if (missing.length === 0) return
       if (Date.now() - started < REQUIRED_SERVICE_PROBE_DEADLINE_MS) {
         timer = setTimeout(probe, REQUIRED_SERVICE_PROBE_INTERVAL_MS)
         return
       }
+      const signature = missing.map(entry => entry.service).join('\u0000')
+      if (signature === reportedSignature) return
+      reportedSignature = signature
       const message = requiredServiceProbeMessage(missing, instanceId)
       console.error(message)
       // 2026-09-10: a mount whose conversation view never registers has to be
@@ -570,10 +837,32 @@ function assertRequiredExtraRowServices(ctx: Context): void {
       // it through the shell seam: the App re-boots the instance on the next
       // ready transition (a fresh boot re-fetches the graph and re-applies the
       // rows — the same effect a full page reload had).
-      degradedSeam(message)
+      //
+      // Structured since 2026-12 (design 05 §4): the fact carries the service
+      // names and their injectors so the frame's copy can name what is missing
+      // (`sidebarRight`) instead of parsing the diagnostic line.
+      degradedSeam({ kind: 'required-services-missing', message, ...missingServiceFact(missing) })
+    }
+    // Re-arm (2026-09-11 review-fix, finding 1): one extra pass over the roster
+    // the deferred cluster just extended. `started` is deliberately NOT reset —
+    // the deadline is an invariant of the BOOT ("every probed service must have
+    // materialized within 5s of apply"), and the deferred members' providers are
+    // first-screen composite plugins that mounted long before the cluster's
+    // chunks arrived, so re-armed members get exactly the same window as the
+    // first-screen ones (a verdict for the pre-cluster members is therefore
+    // never delayed either). A pass that finds the same set the last verdict
+    // already named reports nothing (`reportedSignature`), while a NEW member
+    // that is missing gets its own report — the App's self-heal is marked once
+    // per ready epoch, so that is one more fact, never one more re-boot.
+    probeRearm.reArm = () => {
+      if (timer !== undefined) clearTimeout(timer)
+      timer = setTimeout(probe, 0)
     }
     timer = setTimeout(probe, 0)
-    return () => { if (timer !== undefined) clearTimeout(timer) }
+    return () => {
+      if (timer !== undefined) clearTimeout(timer)
+      if (probeRearm.reArm !== undefined) probeRearm.reArm = undefined
+    }
   }, 'chamber-entry: required extra-row services probe')
 }
 

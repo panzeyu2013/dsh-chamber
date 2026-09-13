@@ -14,7 +14,7 @@
 
 import { createHash, randomUUID } from 'node:crypto'
 import { access, lstat, mkdir, open, realpath } from 'node:fs/promises'
-import { basename, isAbsolute, dirname, join, relative, resolve, sep } from 'node:path'
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { homedir } from 'node:os'
 import { spawn } from 'node:child_process'
 
@@ -369,7 +369,21 @@ export class GitWorktreeError extends Error {
   }
 }
 
-const RETRYABLE_CODES = new Set([
+/**
+ * Host error codes whose outcome the host could NOT verify: `domainResult`
+ * serializes an absent `retryable` flag as `true` for them, which tells the
+ * client that replaying the SAME operation is the safe route. A code that is
+ * absent here and carries no explicit flag is a definitive refusal.
+ *
+ * LOCKSTEP POINT (client classification): `DETERMINISTIC_GIT_REJECTION_CODES`
+ * in `packages/dsh-chamber-client-ui-git/src/shared/git-api.ts` decides which
+ * codes the browser refuses to replay. The two sets may overlap ONLY where
+ * that file declares a `DETERMINISTIC_HOST_RETRYABLE_OVERRIDES` entry — the
+ * cross-package test `packages/dsh-chamber-client-ui-git/test/
+ * host-client-lockstep.test.ts` fails when they drift any other way, so a code
+ * added or renamed on either side must be mirrored on the other.
+ */
+export const RETRYABLE_CODES = new Set([
   'git-timeout',
   'git-output-limit',
   'git-spawn-failed',
@@ -824,6 +838,14 @@ export function createLocalGitRunner(spawnGit: GitSpawner = spawn as unknown as 
   })
 }
 
+/** One loaded agent row whose value drifted from what upstream declares: the
+ *  row's `sessionId` plus the offending value, rendered for a loud snapshot
+ *  diagnostic (the value is already bounded and stringified). */
+interface AgentRowDrift {
+  readonly sessionId: string
+  readonly value: string
+}
+
 interface SourceSnapshot {
   readonly workspaces: readonly WorkspaceFact[]
   /** ALL running session ids (display fact; see blockingRunningIds). */
@@ -844,7 +866,19 @@ interface SourceSnapshot {
    *  (fail-closed) — while the drift is reported as a snapshot diagnostic so
    *  it is never silent and never darkens the whole domain (AGENTS: one failed
    *  entity must not erase or block unrelated complete entities). */
-  readonly originDrift: readonly { readonly sessionId: string; readonly value: string }[]
+  readonly originDrift: readonly AgentRowDrift[]
+  /** Rows whose `status` is neither `'idle'` nor `'running'` (a pinned-vendor
+   *  drift). Handled PER ROW and read CONSERVATIVELY: an unknown liveness fact
+   *  is treated as RUNNING, so the session keeps blocking a removal, and the
+   *  drift is reported as a snapshot diagnostic instead of darkening the whole
+   *  source read. */
+  readonly statusDrift: readonly AgentRowDrift[]
+  /** Rows whose `cwd` is present but cannot be used as a normalized absolute
+   *  path (a pinned-vendor drift). Handled PER ROW: the row never darkens the
+   *  source read, and a BLOCKING running row among them has an UNKNOWN
+   *  location — every removal is then refused (`runningAtPath` fail-closed)
+   *  rather than assumed to sit outside the target. */
+  readonly cwdDrift: readonly AgentRowDrift[]
   /** Running sessions that actually BLOCK a worktree removal: the non-inert
    *  ones (an archived session, or a SUBAGENT-origin descendant of an archived
    *  ancestor, is inert — design 08 §5.2 amendment 2026-09). */
@@ -1109,6 +1143,37 @@ async function detectAttention(
   return [...new Set(found)]
 }
 
+/** Environment variable naming the single DeepSeek Harness home (upstream
+ *  `@deepseek-ai/dsh-home-paths` `DSH_HOME_ENV`). */
+const DSH_HOME_ENV = 'DSH_HOME'
+
+/** The default harness home under the OS home (`~/.dsh`). */
+function defaultDshHome(): string {
+  return join(homedir(), '.dsh')
+}
+
+/** Expand `~`, `~/` and `~\` against the OS home; any other value is returned
+ *  unchanged. Mirrors upstream `expandHomePath`. */
+function expandHomePath(path: string): string {
+  if (path === '~') return homedir()
+  if (path.startsWith('~/') || path.startsWith('~\\')) return join(homedir(), path.slice(2))
+  return path
+}
+
+/** Local mirror of upstream `resolveDshHome`
+ *  (`vendor/harness-checkout/packages/util/home-paths/src/index.ts`), which this
+ *  in-instance plugin cannot import: it ships as one esbuild bundle with only
+ *  `@deepseek-ai/*` externals. Precedence, highest first: an explicit
+ *  `configured` value, `$DSH_HOME`, then `~/.dsh`. An empty or whitespace-only
+ *  `$DSH_HOME` counts as UNSET, so a blank override never resolves the home to
+ *  the process working directory. LOCKSTEP: keep this behavior identical to the
+ *  upstream function (a change there must be mirrored here). */
+function resolveDshHome(configured?: string, env: NodeJS.ProcessEnv = process.env): string {
+  const fromEnv = env[DSH_HOME_ENV]
+  const selected = configured ?? (fromEnv !== undefined && fromEnv.trim().length > 0 ? fromEnv : defaultDshHome())
+  return resolve(expandHomePath(selected))
+}
+
 /** Host-independent lifecycle implementation; tests inject both Git and state. */
 export class GitWorktreeCore {
   private readonly source: WorktreeStateSource
@@ -1145,7 +1210,7 @@ export class GitWorktreeCore {
       fail('invalid-core-option', `operationCapacity must be between 1 and ${MAX_OPERATIONS}`)
     }
     this.snapshotWallTimeoutMs = options.snapshotWallTimeoutMs ?? SNAPSHOT_WALL_TIMEOUT_MS
-    const worktreesRoot = options.worktreesRoot ?? join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'worktrees')
+    const worktreesRoot = options.worktreesRoot ?? join(resolveDshHome(), 'worktrees')
     if (!isAbsolute(worktreesRoot)) {
       fail('invalid-config', 'worktreesRoot must be an absolute path')
     }
@@ -1217,6 +1282,25 @@ export class GitWorktreeCore {
         code: 'agent-origin-unknown',
         operation: 'associate',
         message: `session '${drift.sessionId}' has an unrecognized origin '${drift.value}'; treating it as a fork edge (its run keeps blocking)`,
+      })
+    }
+    // Same per-row rule for the other two agent-column drifts (2026-09
+    // robustness fix): the conservative reading blocks the removal, and the
+    // drift itself is loud — never a whole-source failure.
+    for (const drift of state.statusDrift) {
+      errors.push({
+        code: 'agent-status-unknown',
+        operation: 'associate',
+        message: `session '${drift.sessionId}' has an unrecognized status '${drift.value}'; treating it as running (its run keeps blocking)`,
+      })
+    }
+    for (const drift of state.cwdDrift) {
+      errors.push({
+        code: 'agent-cwd-unknown',
+        operation: 'associate',
+        message: state.blockingRunningIds.has(drift.sessionId)
+          ? `running session '${drift.sessionId}' cwd '${drift.value}' is not a normalized absolute path; its location is unknown, so it keeps blocking and refuses every removal`
+          : `session '${drift.sessionId}' cwd '${drift.value}' is not a normalized absolute path; its location is unknown`,
       })
     }
     // Registry-change invalidation: any workspace id/path change clears the
@@ -2819,17 +2903,45 @@ export class GitWorktreeCore {
     const runningAgents: AgentFact[] = []
     const parentBySession = new Map<string, string>()
     const subagentOriginSessions = new Set<string>()
-    const originDrift: { sessionId: string; value: string }[] = []
+    const originDrift: AgentRowDrift[] = []
+    const statusDrift: AgentRowDrift[] = []
+    const cwdDrift: AgentRowDrift[] = []
     for (let index = 0; index < rawAgents.length; index += 1) {
       const raw = rawAgents[index]
       assertRecord(raw, `agents[${index}]`)
       const sessionId = requiredString(raw.sessionId, `agents[${index}].sessionId`, 256)
-      if (raw.status !== 'idle' && raw.status !== 'running') {
-        fail('state-source-invalid', `agents[${index}].status is invalid`)
+      // Status and cwd are handled PER ROW (2026-09 robustness fix, the same
+      // rule as `origin` below): upstream declares exactly
+      // `'idle' | 'running'` and a normalized absolute `header.cwd`, but a
+      // pinned-vendor drift on ONE row must not refuse the WHOLE source read —
+      // that darkens the entire git-worktree domain (no snapshot, no removal)
+      // for one row, which AGENTS forbids ("one failed entity must not erase or
+      // block unrelated complete entities"). Both drifts are read
+      // CONSERVATIVELY: an unrecognized status counts as RUNNING, and a cwd
+      // that cannot be used as a normalized absolute path leaves the row's
+      // location UNKNOWN, so the row keeps blocking (runningAtPath). Each drift
+      // gets a loud snapshot diagnostic, so it is never silent.
+      const unknownStatus = raw.status !== 'idle' && raw.status !== 'running'
+      if (unknownStatus) {
+        statusDrift.push({
+          sessionId,
+          value: typeof raw.status === 'string' ? raw.status.slice(0, 64) : `(${typeof raw.status})`,
+        })
       }
-      const cwd = raw.cwd === undefined
-        ? undefined
-        : absoluteExpectedPath(raw.cwd, `agents[${index}].cwd`)
+      let cwd: string | undefined
+      if (raw.cwd !== undefined) {
+        try {
+          cwd = absoluteExpectedPath(raw.cwd, `agents[${index}].cwd`)
+        } catch {
+          // `absoluteExpectedPath` accepts only a normalized absolute bounded
+          // string, so every throw here is the same drift; the diagnostic names
+          // the row and echoes the offending value (never the read failure).
+          cwdDrift.push({
+            sessionId,
+            value: typeof raw.cwd === 'string' ? raw.cwd.slice(0, 128) : `(${typeof raw.cwd})`,
+          })
+        }
+      }
       const parentSessionId = raw.parentSessionId === undefined
         ? undefined
         : requiredString(raw.parentSessionId, `agents[${index}].parentSessionId`, 256)
@@ -2854,7 +2966,11 @@ export class GitWorktreeCore {
       if (parentSessionId !== undefined && parentSessionId !== sessionId) {
         parentBySession.set(sessionId, parentSessionId)
       }
-      if (raw.status === 'running') {
+      if (raw.status === 'running' || unknownStatus) {
+        // An unrecognized status counts as running: liveness is the fact that
+        // blocks a removal, so an unreadable one must never read as idle. A
+        // drifted cwd is simply absent from the row, which keeps the session
+        // counted here (blocking) while its location stays unknown.
         runningSessionIds.add(sessionId)
         runningAgents.push({ sessionId, status: 'running', ...(cwd === undefined ? {} : { cwd }) })
       }
@@ -2880,6 +2996,8 @@ export class GitWorktreeCore {
       parentBySession,
       subagentOriginSessions,
       originDrift,
+      statusDrift,
+      cwdDrift,
       blockingRunningIds: this.blockingRunningIds(
         runningSessionIds,
         archivedSessionIds,
@@ -3033,6 +3151,21 @@ export class GitWorktreeCore {
     strict: boolean,
   ): Promise<string[]> {
     const matches = new Set<string>()
+    // A BLOCKING running session whose cwd could not be established (a drifted
+    // `header.cwd`, reported as `agent-cwd-unknown`) has an UNKNOWN location:
+    // no removal can prove the target does not contain it, so the destructive
+    // leg refuses — exactly like an existing cwd that cannot be canonicalized
+    // below. Non-strict callers still get the snapshot projection, so one
+    // drifted row never darkens the whole domain.
+    if (strict) {
+      const unresolved = state.cwdDrift.find(row => state.blockingRunningIds.has(row.sessionId))
+      if (unresolved !== undefined) {
+        fail(
+          'running-agent-cwd-unavailable',
+          `cannot safely resolve running session '${unresolved.sessionId}' cwd: this dsh build reports '${unresolved.value}'`,
+        )
+      }
+    }
     for (const agent of state.runningAgents) {
       if (agent.cwd === undefined) continue
       // Only non-inert running sessions can block (archived ones are inert).

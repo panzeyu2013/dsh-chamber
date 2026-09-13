@@ -89,7 +89,7 @@ import {
   sshPluginUndo,
   type GatewayInstalledProjection,
 } from './control-plane.ts'
-import { classifyRestartError, serverRefusalText } from './managed-restart.ts'
+import { classifyRestartError, gatewayReadFenceText, serverRefusalText } from './managed-restart.ts'
 import {
   classifyGatewayApplyResult, classifySshApplyResult, filterDeniedRows, isDeniedPluginName, partialCounts, projectTasks, undoForLatest,
   type TaskRow,
@@ -107,7 +107,7 @@ import {
   type ChamberRowDescriptor,
   type ThirdPartyLiveState,
 } from './plugin-inventory-text.ts'
-import { bannerProjection, pluginDiagnosticTone, type PluginDiagnostic } from './plugin-diagnostic.ts'
+import { bannerProjection, bootGapText, pluginDiagnosticTone, type PluginDiagnostic, type ServerBootGap } from './plugin-diagnostic.ts'
 import css from './ConnectionsSection.module.css'
 
 /** The §7.2 add-spec whitelist: `name`, `@scope/name`, or `name@<safe version>`. */
@@ -227,10 +227,13 @@ export type PluginDialogTarget =
  *   restart-exhausted} — the recovery undo surface is gated on it.
  * @param props.onClose - close (gated while nested confirms are open).
  */
-export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runtimeDown, onClose }: {
+export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnostic, runtimeDown, onClose }: {
   t: (key: SettingsConnectionsKey) => string
   target: PluginDialogTarget
   diagnostic?: PluginDiagnostic | undefined
+  /** The instance's settled-boot gap (2026-12, design 05 §4), from the bridge
+   *  projection. A DIFFERENT fact from `diagnostic` — see PluginDiagnosticLine. */
+  bootGap?: ServerBootGap | undefined
   onRecheckDiagnostic?: () => void
   runtimeDown?: boolean
   onClose: () => void
@@ -748,10 +751,14 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
   // list + the task journal load on open and re-run on every reload and
   // after every executed management op. The journal feeds ONLY the undo
   // derive (undoForLatest) — task rows are never rendered (D4-A).
+  // The installed read shares the write fence (§6.2), so it is the one read
+  // that retries: the controller aborts a pending fence re-read on reload /
+  // unmount, so a discarded read cannot issue another request.
   useEffect(() => {
     if (gatewayId === null) return
     let cancelled = false
-    gatewayInstalled(gatewayId).then(next => {
+    const controller = new AbortController()
+    gatewayInstalled(gatewayId, { signal: controller.signal }).then(next => {
       if (cancelled) return
       setInstalled(next)
       setInstalledError(null)
@@ -769,7 +776,7 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
       setTaskRows(null)
       setTasksError(errorMessage(err))
     })
-    return () => { cancelled = true }
+    return () => { cancelled = true; controller.abort() }
   }, [gatewayId, reloadNonce])
 
   /** 受控重启托管 dsh（design 21 §5.1）：POST /api/i/<sourceId>/
@@ -1586,14 +1593,27 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
                       )}
                   </>
                 )
-                : (
-                  // profile_absent / profile_corrupt — the readManifest
-                  // codes render as the zone banner and the rows hide
-                  // (nothing trustworthy to list); reload retries.
-                  <p className={css.pluginBanner} role="status">
-                    {installed.code === 'profile_absent' ? t('profileAbsentBanner') : t('profileCorruptBanner')}
-                  </p>
-                )}
+                : installed.code === 'runtime_busy'
+                  ? (
+                    // The §6.2 read/write fence: the READ is fine — the instance
+                    // is mid plugin-change, so the gateway withheld the
+                    // projection instead of publishing a torn one. A retryable
+                    // busy banner (warn-toned, role="status"), never the
+                    // read-error alert and never the profile_absent/corrupt
+                    // copy; the read already re-read once, and 刷新 / the next
+                    // executed op reload again.
+                    <p className={css.pluginBanner} role="status">
+                      {gatewayReadFenceText(installed.refusalCode, 409, 'gatewayReadFencedBusy', t)}
+                    </p>
+                  )
+                  : (
+                    // profile_absent / profile_corrupt — the readManifest
+                    // codes render as the zone banner and the rows hide
+                    // (nothing trustworthy to list); reload retries.
+                    <p className={css.pluginBanner} role="status">
+                      {installed.code === 'profile_absent' ? t('profileAbsentBanner') : t('profileCorruptBanner')}
+                    </p>
+                  )}
           {addSection}
         </div>
       )
@@ -2047,6 +2067,19 @@ export function PluginDialog({ t, target, diagnostic, onRecheckDiagnostic, runti
               <strong>{diagnosticBanner.title}</strong>
               {diagnosticBanner.detail !== null ? <span>{t('partialSep')}{diagnosticBanner.detail}</span> : null}
             </p>
+          )
+          : null}
+        {bootGap !== undefined
+          ? (
+            <>
+              <p className={clsx(css.pluginDiagnostic, css.pluginDiagnosticDetail, css.pluginDiagnosticWarn)} role="status">
+                <strong>{t('bootGapLabel')}：{bootGapText(bootGap, t)}</strong>
+                {/* Services already ride the sentence; only the failed-id list is
+                    appended (the sentence carries the count, the span the ids). */}
+                {(bootGap.failedIds ?? []).length > 0 ? <span>{t('partialSep')}{(bootGap.failedIds ?? []).join(', ')}</span> : null}
+              </p>
+              <p className={css.hint}>{t('bootGapHint')}</p>
+            </>
           )
           : null}
         {diagnostic !== undefined && diagnostic.state === 'instance-version-conflict' && (isLocal || isGateway)

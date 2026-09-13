@@ -35,7 +35,39 @@ export interface ChamberServerWorkspace {
    * (ungrouped-bucket parity).
    */
   synthetic?: boolean
-  sessions: { id: string; title: string; running?: boolean; updatedAt?: number; blank?: boolean }[]
+  sessions: {
+    id: string
+    /** Durable title projection — '' when the session has none. Rename/fork copy uses THIS. */
+    title: string
+    /**
+     * Official display label (I3): `title ?? basename(cwd) ?? id`, resolved by
+     * `derive.ts sessionDisplayTitle` and NEVER empty. This is what row labels,
+     * hover copy, aria names and todo rows render — a session whose title the
+     * host could not read shows its project directory name, never
+     * 「未命名会话」.
+     */
+    displayTitle: string
+    running?: boolean
+    updatedAt?: number
+    blank?: boolean
+    /**
+     * 2026-09-11 upstream-alignment T7: the session owns at least one active
+     * schedule — projected from the session's `schedule` projection
+     * (`derive.ts hasActiveScheduleOf`, upstream ui-workspace tree.ts:161-163)
+     * so the row can render the official active-Schedule marker. Sparse: absent
+     * means no active schedule.
+     */
+    hasActiveSchedule?: boolean
+  }[]
+  /**
+   * Official reuse-or-create resolution for this workspace's "+" (I2), computed
+   * by `derive.ts findReusableBlankSession` over the RAW snapshot: a blank,
+   * non-archived member session in the workspace's own directory that upstream
+   * `connectWorkspace` would reopen instead of creating another one. Absent
+   * means "create" — either no such row, or the archive set is unknown
+   * (unary fallback), where create is the honest degradation.
+   */
+  reusableBlankSessionId?: string
 }
 
 export interface ChamberServerAggregate {
@@ -104,7 +136,45 @@ export interface ChamberServerAggregate {
   dshVersion?: string
   /** Renderer-local client-plugin boot health for this source. */
   pluginDiagnostic?: PluginGraphDiagnostic
+  /**
+   * Settled-boot GAP of this source's mounted shell (2026-12, design 05 §4
+   * 「降级呈现」/ design 09 §3.2): the shell settled successfully while a whole
+   * surface is missing.
+   *
+   * A SEPARATE fact from {@link pluginDiagnostic} on purpose. The diagnostic
+   * channel describes the host boot-GRAPH channel (`ok` legitimately means "the
+   * graph was fetched and every row that arrived applied"); the classic gap —
+   * the graph arrived but `ui-chat`'s `sidebarRight` was never provided — leaves
+   * that channel at `ok` while the conversation view never registers. Overloading
+   * one channel with both meanings would either lie ("正常" next to an empty
+   * conversation) or make the recheck/self-heal classification ambiguous.
+   *
+   * Structured facts only (never the producer's diagnostic sentence): each
+   * rendering package writes its own copy from `kind` + the ids (STATUS
+   * 「跨边界诊断文案」). Absent = no gap reported for the current mount.
+   */
+  bootGap?: ServerBootGap
   updatedAt: number
+}
+
+/** Why a mounted shell is known to be incomplete (see {@link ChamberServerAggregate.bootGap}). */
+export type ServerBootGapKind =
+  | 'graph-unavailable'
+  | 'required-services-missing'
+  | 'deferred-registration-failed'
+
+/**
+ * The cross-package face of one settled-boot gap. Producers (the renderer's
+ * shell seam) hand these fields over; consumers render their own sentences.
+ */
+export interface ServerBootGap {
+  kind: ServerBootGapKind
+  /** `required-services-missing`: the unprovided composite services, roster order. */
+  services?: readonly string[]
+  /** `required-services-missing`: registered plugins injecting them, roster order. */
+  injectedBy?: readonly string[]
+  /** `deferred-registration-failed`: the row ids that never registered. */
+  failedIds?: readonly string[]
 }
 
 export type PluginGraphDiagnosticState =
@@ -140,6 +210,53 @@ export interface OpenSessionRequest {
 export interface OpenSessionOutcome extends OpenSessionRequest {
   /** Present only on failure: the terminal error report (App-wrapped text). */
   message?: string
+}
+
+/**
+ * One successful workspace creation issued from the sidebar for a source whose
+ * shell may not be mounted (design 05 §2.2 revision 2026-12). The sidebar owns
+ * the directory-browser flow and therefore the ONLY trustworthy "this
+ * workspace now exists on that host" fact available without a shell: the
+ * unary `workspace.create` result. It publishes that fact here so the App
+ * layer can echo the row into the projection immediately
+ * (shared/workspace-echo.ts) while the authoritative `workspace/follow`
+ * baseline converges later — for an unmounted source the unary fallback cannot
+ * express an empty workspace at all (no session carries its cwd yet).
+ */
+export interface WorkspaceCreatedFact {
+  sourceId: string
+  workspaceId: string
+  path: string
+}
+
+/**
+ * One successful sidebar-issued workspace deletion (2026-09-11 review S3) —
+ * the WITHDRAW half of the workspace echo. The sidebar owns `workspace.delete`
+ * for the same sources it can create on, and without this fact the echo has no
+ * way to be retired: for a source whose shell is not mounted there is no
+ * authoritative baseline that lists the workspace yet, so
+ * `reconcilePendingWorkspaces` cannot match it, and the deleted row survives as
+ * a GHOST with real-id actions enabled until the 10-minute TTL. `path` is
+ * best-effort (empty when the source's mounted snapshot has not reported the
+ * workspace) — the ledger matches by `workspaceId` as well.
+ */
+export interface WorkspaceRemovedFact {
+  sourceId: string
+  workspaceId: string
+  path: string
+}
+
+/**
+ * One successful sidebar-issued workspace rename (2026-09-11 review S3) — the
+ * PATCH half of the workspace echo. An echo row's title is `basenameOf(path)`,
+ * so a rename against a not-yet-mounted source looked like a no-op (the row
+ * kept the path basename until the mount push landed). The sidebar owns
+ * `workspace.rename`, so it publishes the new title here.
+ */
+export interface WorkspaceRenamedFact {
+  sourceId: string
+  workspaceId: string
+  title: string
 }
 
 /**
@@ -199,7 +316,14 @@ type RefreshListener = (sourceId: string) => void
  * service object (`ctx.sessions.refresh()` — a detached call loses `this`).
  */
 type SessionListRefreshListener = (sourceId: string) => void
+/** One successful sidebar-issued workspace creation (see WorkspaceCreatedFact). */
+type WorkspaceCreatedListener = (fact: WorkspaceCreatedFact) => void
+/** One successful sidebar-issued workspace deletion (see WorkspaceRemovedFact). */
+type WorkspaceRemovedListener = (fact: WorkspaceRemovedFact) => void
+/** One successful sidebar-issued workspace rename (see WorkspaceRenamedFact). */
+type WorkspaceRenamedListener = (fact: WorkspaceRenamedFact) => void
 type SourceListener = (sourceId: string) => void
+type SettingsTargetListener = (sourceId: string | undefined) => void
 /** Page-wide active-view fact: the source whose shell is on screen, undefined until the App publishes. */
 type ActiveSourceListener = (sourceId: string | undefined) => void
 type RuntimeReportListener = (
@@ -219,7 +343,11 @@ const openListeners = new Set<OpenListener>()
 const openOutcomeListeners = new Set<OpenOutcomeListener>()
 const refreshListeners = new Set<RefreshListener>()
 const sessionListRefreshListeners = new Set<SessionListRefreshListener>()
+const workspaceCreatedListeners = new Set<WorkspaceCreatedListener>()
+const workspaceRemovedListeners = new Set<WorkspaceRemovedListener>()
+const workspaceRenamedListeners = new Set<WorkspaceRenamedListener>()
 const activateSourceListeners = new Set<SourceListener>()
+const settingsTargetListeners = new Set<SettingsTargetListener>()
 const activeSourceListeners = new Set<ActiveSourceListener>()
 const runtimeReportListeners = new Set<RuntimeReportListener>()
 const snapshotReportListeners = new Set<SnapshotReportListener>()
@@ -338,6 +466,64 @@ export const chamberBridge = {
     }
   },
 
+  /**
+   * Sidebar call after a successful `workspace.create`: publish the host
+   * workspace identity so the App layer can echo the row into that source's
+   * projection without waiting for a mount (`withWorkspaceEcho`). The App
+   * layer remains the only owner of the projection; this channel is a
+   * one-way fact, never a request to mutate the host.
+   */
+  reportWorkspaceCreated(fact: WorkspaceCreatedFact): void {
+    for (const listener of [...workspaceCreatedListeners]) listener(fact)
+  },
+
+  /** App-layer subscription to workspace-creation facts; returns the unsubscribe. */
+  onWorkspaceCreated(listener: WorkspaceCreatedListener): () => void {
+    workspaceCreatedListeners.add(listener)
+    return () => {
+      workspaceCreatedListeners.delete(listener)
+    }
+  },
+
+  /**
+   * Sidebar call after a successful `workspace.delete`: publish the fact so the
+   * App layer can retire the echo row of that workspace
+   * (`removePendingWorkspace`). Same one-way shape as the create counterpart,
+   * and the only retirement path for an echo whose source never mounted: no
+   * authoritative baseline lists the workspace yet, so reconciliation cannot
+   * match it and the deleted row would stay visible with real-id actions
+   * enabled until the TTL.
+   */
+  reportWorkspaceRemoved(fact: WorkspaceRemovedFact): void {
+    for (const listener of [...workspaceRemovedListeners]) listener(fact)
+  },
+
+  /** App-layer subscription to workspace-removal facts; returns the unsubscribe. */
+  onWorkspaceRemoved(listener: WorkspaceRemovedListener): () => void {
+    workspaceRemovedListeners.add(listener)
+    return () => {
+      workspaceRemovedListeners.delete(listener)
+    }
+  },
+
+  /**
+   * Sidebar call after a successful `workspace.rename`: publish the new title
+   * so the App layer can patch the echo row (`renamePendingWorkspace`). An echo
+   * row's title is derived from its path, so without this fact the rename
+   * looked like a no-op on an unmounted source until the mount push arrived.
+   */
+  reportWorkspaceRenamed(fact: WorkspaceRenamedFact): void {
+    for (const listener of [...workspaceRenamedListeners]) listener(fact)
+  },
+
+  /** App-layer subscription to workspace-rename facts; returns the unsubscribe. */
+  onWorkspaceRenamed(listener: WorkspaceRenamedListener): () => void {
+    workspaceRenamedListeners.add(listener)
+    return () => {
+      workspaceRenamedListeners.delete(listener)
+    }
+  },
+
   /** Sidebar call when the user clicks a source header: ask the App layer to switch the active view. */
   requestActivateSource(sourceId: string): void {
     for (const listener of [...activateSourceListeners]) listener(sourceId)
@@ -348,6 +534,27 @@ export const chamberBridge = {
     activateSourceListeners.add(listener)
     return () => {
       activateSourceListeners.delete(listener)
+    }
+  },
+
+  /**
+   * Settings-panel call: the source whose settings surface is on screen
+   * (`undefined` when the panel closed). The App layer answers by MOUNTING
+   * that source's shell if it is not mounted yet and by holding it out of the
+   * retention harvest while it stays the target — the panel renders that
+   * source's OWN boot-ctx ledger (design 05 §5, 2026-12 完整桥接修订), so the
+   * mounted shell IS the surface. Activation is deliberately not implied: the
+   * active view keeps following the user, not the dropdown.
+   */
+  setSettingsTarget(sourceId: string | undefined): void {
+    for (const listener of [...settingsTargetListeners]) listener(sourceId)
+  },
+
+  /** App-layer subscription to settings-target changes; returns the unsubscribe. */
+  onSettingsTarget(listener: SettingsTargetListener): () => void {
+    settingsTargetListeners.add(listener)
+    return () => {
+      settingsTargetListeners.delete(listener)
     }
   },
 

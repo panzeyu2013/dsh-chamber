@@ -4,12 +4,16 @@ import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 // Type-only: pulls the SlotRegistry service merge (ctx.slots).
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
-import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type { SessionListState } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { WorkspaceSnapshot } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import { indexSubagentDescendants } from '../shared/subagent-lineage.ts'
 import type { SidebarRootInjected } from './contract/slots.ts'
 import { SidebarRoot } from './SidebarRoot.tsx'
+import { resolveInstanceListFace } from './instance-list-face.ts'
+import {
+  getOpenIntent,
+} from '../shared/open-intent.ts'
+import { startEarlyOpenArm } from './early-open.ts'
 import { en, zh, type SidebarKey } from './locales.ts'
 import { chamberBridge, isValidProducerSourceFingerprint } from '../shared/aggregate-store.ts'
 import {
@@ -89,8 +93,32 @@ export function apply(ctx: ClientContext): void {
     // directory-picker package (mounted in every boot) owns this namespace.
     directoryBrowserT: ctx.locale.bind('directory-browser'),
   })
+  // The parent declaration gate (2026-12 review P3): `'sidebar'` is declared by
+  // the layout's 'root' entry, whose apply order against this plugin is not
+  // fixed — a bare `ctx.slots.register` into it throws whenever the layout has
+  // not registered yet, and the sidebar shell would simply be missing. Upstream
+  // waits for the declaration instead (`ui-sidebar/src/client/index.ts:73`,
+  // `ui-conversation/src/client/apply.ts:388`,
+  // `ui-settings-general/src/client/index.ts:146` — all
+  // `ctx.slots.inject(key, () => ctx.slots.register(…))`), which also removes
+  // the contribution when the parent declaration collapses and re-runs it after
+  // a redeclaration (HMR). The effect keeps owning the wait.
+  // A6 (2026-09-11 upstream-alignment, audit recommendation: KEEP with this
+  // reason): the runtime children declaration below stays CHAMBER-OWNED instead
+  // of being imported from the upstream client entry. Two independent reasons:
+  // (1) the official bundle never loads in a chamber boot — the chamber
+  // composite builds this package's own entry, so upstream's `apply`/children
+  // table cannot be executed here, and importing it for its data alone would
+  // pull a whole client plugin (its apply, its inject list, its registrations)
+  // into this bundle; (2) upstream's `LocaleNamespaceMap` declares `sidebar:
+  // SidebarKey` from ITS locales module, and this package declares the same map
+  // entry from its OWN key union — the two unions are different by design (the
+  // chamber shell carries multi-source copy upstream never has), so a second
+  // declaration in one program is a type collision. The declaration is
+  // therefore duplicated here, deliberately, and the divergence is exactly the
+  // chamber list's own holes (`sidebar.workspace.git`).
   ctx.effect(
-    () => ctx.slots.register({
+    () => ctx.slots.inject('sidebar', () => ctx.slots.register({
       name: 'sidebar',
       locale: NS,
       children: {
@@ -118,7 +146,7 @@ export function apply(ctx: ClientContext): void {
         'sidebar.footer.action': { kind: 'list', scope: 'root' },
       },
       inject: injectProps,
-    }, SidebarRoot),
+    }, SidebarRoot)),
     'dsh-chamber: sidebar slot registration',
   )
   // Upstream order: publish the (possibly already populated) panel list after
@@ -172,8 +200,16 @@ export function apply(ctx: ClientContext): void {
     const chamberSourceFingerprint = (ctx as any).chamberSourceFingerprint as string | undefined
     if (typeof chamberInstanceId !== 'string'
       || !isValidProducerSourceFingerprint(chamberInstanceId, chamberSourceFingerprint)) return () => {}
-    const sessionsList = (ctx.sessions as unknown as { list: ObservableSnapshot<SessionListState> }).list
-    const workspacesList = (ctx.workspaces as unknown as { list: ObservableSnapshot<WorkspaceSnapshot> }).list
+    // 2026-12 review P2: both list faces are read through the same guarded
+    // path as the `refresh()` seam below — a ctx that carries the services
+    // without their observables (or whose proxy throws for the member) must
+    // WARN and skip the whole producer registration, never register producers
+    // that can never report or die on the first snapshot read.
+    const sessionsList = resolveInstanceListFace<SessionListState>(
+      chamberInstanceId, 'sessions', () => ctx.sessions)
+    const workspacesList = resolveInstanceListFace<WorkspaceSnapshot>(
+      chamberInstanceId, 'workspaces', () => ctx.workspaces)
+    if (sessionsList === undefined || workspacesList === undefined) return () => {}
     // 代际事实由 shell 的 configureContext 注入：页面的 producer 注册表按注册
     // 顺序授权，挂死后恢复的老 boot 会夺走生产权（2026-12 复查 BLOCKER）。
     const bootGeneration = (ctx as any).chamberBootGeneration as number | undefined
@@ -409,4 +445,52 @@ export function apply(ctx: ClientContext): void {
       runtimeProducer.clear()
     }
   }, 'dsh-chamber: sidebar runtime facts report')
+
+  // chamber patch (2026-12, design 05 §2.2 revision; 2026-12 field report
+  // problem 1): the BOOT-TIME early-open arm. The decision logic (deadline,
+  // give-up, refused-open handling, live-intent read) lives in
+  // ./early-open.ts and is unit-tested there; this effect only supplies the
+  // ctx-bound seams and ties the arm's life to the ctx.
+  ctx.effect(() => {
+    const chamberInstanceId = (ctx as any).chamberInstanceId as string | undefined
+    if (typeof chamberInstanceId !== 'string' || chamberInstanceId === '') return () => {}
+    // 2026-09-11 review F3: this arm MUTATES the host (`sessions.open`) on a
+    // page-wide, sourceId-KEYED intent, so it must prove the source identity
+    // exactly like the runtime-facts producer above (the same immutable Context
+    // proof shell.ts binds, `isValidProducerSourceFingerprint`): without the
+    // guard, an intent slot naming this source id from a previous incarnation —
+    // or from a wholly unrelated boot that happens to share the id — would be
+    // opened inside whichever shell is mounted here now.
+    const chamberSourceFingerprint = (ctx as any).chamberSourceFingerprint as string | undefined
+    if (!isValidProducerSourceFingerprint(chamberInstanceId, chamberSourceFingerprint)) return () => {}
+    return startEarlyOpenArm({
+      instanceId: chamberInstanceId,
+      readIntent: () => getOpenIntent(chamberInstanceId),
+      /** An absent/hostile face retires the arm silently: the same ctx's
+       *  runtime-facts producer already warns loudly for that defect, and this
+       *  arm is best-effort by contract. `false` (face readable, id absent)
+       *  keeps the arm polling. */
+      isAddressable: (sessionId) => {
+        try {
+          const snapshot = ctx.sessions.list.getSnapshot() as { byId?: Record<string, unknown> } | undefined
+          // 2026-09-11 review F2: an ABSENT face (no service list observable, or
+          // a snapshot without a `byId` map) ⇒ `undefined` = "retire silently",
+          // which is this arm's contract. Deliberately NOT routed through
+          // `resolveInstanceListFace`: that helper WARNS loudly, and the same
+          // ctx's runtime-facts producer already runs it (and warns) for the
+          // service-face defect, while the arm is best-effort/silent by contract
+          // — do not "fix" this into the helper. A readable-but-EMPTY face
+          // (`byId: {}`) is `false` (keep polling), handled by the next line.
+          if (snapshot?.byId === undefined) return undefined
+          return snapshot.byId[sessionId] !== undefined
+        } catch {
+          return undefined
+        }
+      },
+      // Method call on the service object, never a detached reference (same
+      // discipline as the official refresh() seam in the producer above).
+      open: (sessionId) => { ctx.sessions.open(sessionId) },
+      warn: (message) => { console.warn(`[chamber] ${message}`) },
+    })
+  }, 'dsh-chamber: boot-time session open intent')
 }

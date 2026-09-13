@@ -112,7 +112,7 @@ reaper（回收孤儿实例）→ 快照 DSH_HOME（§3.7，断言无存活写�
 ### 3.4 激活门控与回退（自由选择模型的唯一安全网）
 
 换树后、宣布生效前跑探针列表（全部复用现有设施，**全部只读、无副作用**；
-与钉住上游 0.1.5-rc.1 wire 对齐，`REQUIRED_ACTIVATION_PROBES` 七项
+与钉住上游 0.1.5-rc.2 wire 对齐，`REQUIRED_ACTIVATION_PROBES` 七项
 （4 项官方 + 3 项 chamber 宿主域，见 `activation-gate.ts`），slash
 端点；探针响应与**会话数据量彻底解耦**——会话面探针是固定小体积身份方法）：
 
@@ -147,7 +147,8 @@ reaper（回收孤儿实例）→ 快照 DSH_HOME（§3.7，断言无存活写�
   session/canOpenWorkspacePath · settings/describe · data.settings）。
 - **探针形态化（design 17 §10；design 24 §7 C 的按域派生）**：
   `clientGraph/graph`、`gitWorktree/previewCreate` 与 `archiveCleanup/probe`
-  三个 chamber 宿主域只在「种子缓存就绪」时验证——gateway 的宿主包由连接的
+  三个 chamber 宿主域只在「种子缓存就绪」时验证——
+  gateway 的宿主包由连接的
   桌面经 `/chamber/plugins` 同步（Phase 3），缓存缺包时托管 dsh 是纯 dsh。
   **期望集按本次 spawn 实际 seed 的宿主域派生**（`activationProbeNamesForDomains`
   于 dsh-runtime、`syncedHostDomainProbeNames` 于 gateway：空缓存 = 缩减
@@ -208,7 +209,7 @@ override（未失效时）→ 内建锚（`--dsh-path` ?? `findDshWorkspace`）�
   而非删除——F4「自动恢复上一 override 树」依赖记录存活；「恢复内建」仅在
   内建锚探针通过后显式删除。
 - **回落保护（F4）**：回落内建树后跑数据可读性探测——用户曾用较新运行时并迁移
-  过数据、内建 pin（`bundle-dsh` 兜底常量，当前 0.1.5-rc.1，不随壳版本自动移动）可能读不了新格式数据；探测失败
+  过数据、内建 pin（`bundle-dsh` 兜底常量，当前 0.1.5-rc.2，不随壳版本自动移动）可能读不了新格式数据；探测失败
   → **自动恢复上一 override 树（受保护类，仍在）+ 响亮提示**。「单调向前」**仅对
   壳版本成立**（§7）。
   - **中断失效自愈（gateway/desktop 启动 F4 门）**：「durable 失效
@@ -400,14 +401,17 @@ chamber-settings.json，非秘密）：
 
 - settings 壳：`SettingsShell` 服务器下拉选中任一服务器后，该服务器的设置段
   列表在 **agent-presets（agent 预设）之后**追加 chamber 自研段「dsh 运行时」
-  （子上下文 `settings.section`，id `dsh-runtime`、order 31；connections 为
-  壳的固定 nav 入口、在分隔线之下，不占 ledger order——视觉顺序即
+  （`settings.section`，id `RUNTIME_SECTION_ID = 'dsh-runtime'`、order 31；
+  connections 为壳的固定 nav 入口、在分隔线之下，不占 ledger order——视觉顺序即
   agent-presets → dsh-runtime）。**不出现在 `__general`（通用）视图**——
   `GeneralView` 只保留设计 15 的控制组（启动与关闭 / 运行 / 更新），运行时块
-  不在其中。图驱动设置面（design 05 §5）：该段按来源挂载在
-  该来源的 settings child ctx（`RUNTIME_SECTION_ID`，属基础集、参与 covered
-  lockstep）；child ctx 同时承载该来源自己的客户端插件贡献，故运行时段的
-  视觉位置不受影响，但其邻居可能包含第三方分节（带「插件」来源标记）。
+  不在其中。完整桥接设置面（design 05 §5，2026-12 修订）：该段由本包在**该来源
+  自己的 boot ctx** 上注册（`settings-bridge` 的 `apply`，随 `chamberBridge`
+  roster 投影 reconcile），因此与官方 `settings.section`、该来源自己的第三方
+  分节同处一份台账——运行时段的视觉位置不受影响，其邻居可能包含第三方分节
+  （与官方分节同形，无来源标记；见 design 05 §5）。投影不可识别时**只报告不抛错**
+  （`console.error`，
+  该 ctx 是那台实例自己的前端）。
 - 每服务器行为按来源分支（同一段、同一视觉，事实与动作随实例路由）：
   - **local**：完整管理面（本段显示规格 1–8 全量）；事实读主进程权威投影，
     动作走既有 IPC（§3.6 状态机同口径）；重启 = 控制面事务接口
@@ -451,14 +455,22 @@ chamber-settings.json，非秘密）：
   `.generalHint`（12px / tertiary）。
 - 字段行 `.generalRow` + `.runtimeField`：列向 gap 6px，field label
   `.generalFieldLabel` 14px / 500；下拉 `.runtimeField`（radius 8px / bg layer-1 /
-  12px，focus 时 border brand）。**下拉文本字号不强统一**：服务器下拉 13px/600
-  为导航选择器强调，运行时/表单字段 12px/400 为紧凑行——只统一箭头词汇。
+  12px，focus 时 border brand）。**下拉文本字号不强统一**：服务器下拉**触发器** 13px/600
+  为导航选择器强调（菜单行本身 = chamber 密度：2026-09 batch 1 的 E4 曾对齐官方
+  dense item 的 14px/22px + min-height 34px，2026-09 阶段 2 的 A-4 按其同批裁决
+  改回 v0.2.4 的 `padding:7px 10px` + 13px 字号、行框显式 18px（32px 高），
+  并保留 r10/列表 r20 —— 见 design 06 §7
+  「菜单密度 = chamber 档」），运行时/表单字段 12px/400 为紧凑行——只统一箭头词汇。
 - 下拉箭头统一 `IconChevronDownOutline14`（`.runtimeSelectChevron`，
   appearance:none + 自定义 chevron，右缘与文字左缘对称；文字↔箭头净间隙 ≥6px）。
-- 动作按钮：主按钮（更新到/切换到 vY）复用 `.updatePrimaryButton`（dense capsule
-  28px / radius 14px / `--dsw-alias-button-primary-fill` / label-primary-foreground）；
-  次按钮（恢复内建 / 重启 dsh / 清理版本 / 恢复回滚前数据等）复用 `.updateButton`
-  （透明 + border l2 / radius 14px）；禁用态 opacity .4。
+- 动作按钮：主按钮（更新到/切换到 vY）与次按钮（恢复内建 / 重启 dsh / 清理版本 /
+  恢复回滚前数据等）**一律用官方 `ui-primitives` `Button`**（2026-09-11
+  upstream-alignment T9）：主 = `variant="primary" size="sm"`（28px capsule /
+  radius 14 / `--dsw-alias-button-primary-fill` / label-primary-foreground）、
+  次 = `variant="outline" size="sm"`（透明 + border l2），禁用态 opacity .4——
+  这正是原先手写 `.updatePrimaryButton` / `.updateButton` 抄的那套配方，两条本地
+  规则已删除；本包共 36 处调用点（`DshRuntimeSection.tsx` 29 / `UpdateSection.tsx` 6 /
+  `GeneralView.tsx` 1「发送测试通知」）。
 - 状态/进度行 `.updateStatus`（block，aria-live，Chromium 不暴露 display:contents）：
   `.updateStatusText` 13px / primary；失败行 `.generalError` 12px /
   `--dsw-alias-state-error-primary`；hint 行 `.generalHint` 12px / tertiary。
@@ -555,7 +567,12 @@ chamber-settings.json，非秘密）：
   @deepseek-ai/dsh-subprocess-local；fs-ext 为 0.1.3 线 session-persistence-jsonl
   写租约 flock 引入），另以显式否认列表登记 pnpm 11 `strictDepBuilds` 下必须显式
   写 `false` 的 build-script 依赖（`msgpackr-extract`，语义 = 已评审并拒绝其在
-  安装期执行脚本）；两个生成点共用同一渲染器，漂移由测试钉死（放行 6 项）。
+  安装期执行脚本）——该条由上游**私有桌面应用**构建面引入（`apps/desktop` 的种子
+  脚本用 `msgpackr`；`msgpackr-extract` 是其可选原生加速器，上游 `packages/**`
+  无 msgpackr 依赖），运行时闭包不含它（已提交的
+  `packages/desktop/vendor/dsh/pnpm-lock.yaml` 对 `msgpackr*` 零命中）⇒ 在运行时树
+  是**惰性的防御性 false**，不是已发生的拒绝；两个生成点共用同一渲染器，漂移由测试
+  钉死（放行 6 项）。
   **work 目录必须先写 pnpm-workspace.yaml 再跑 pnpm**（完全缺失 allowBuilds
   配置实测硬失败），且
   work 目录不得位于含 pnpm-workspace.yaml 的祖先下（向上探测实测报错）；**白名单
@@ -678,7 +695,7 @@ chamber-settings.json，非秘密）：
   版本失效（用户选择）非单调向前——用户可显式选更旧版本，失效回落带数据可读性
   探测保护（§3.5）。
 - **chamber 发版版本集**：根包 + 全部非 fork
-  `@dsh-chamber/*` 包（当前 16 个）统一 bump；`release-preflight.mjs` 的数据驱动扫描与
+  `@dsh-chamber/*` 包（当前 17 个）统一 bump；`release-preflight.mjs` 的数据驱动扫描与
   release.yml 断言集是唯一权威，新增 chamber 包会自动纳入。三个 fork 副本
   （`@deepseek-ai/dsh-client-connection` / `dsh-client-web` / `dsh-api-gateway`）
   保持上游基线版本。`packages/dsh-runtime` 虽随

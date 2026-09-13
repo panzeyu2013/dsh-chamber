@@ -354,6 +354,43 @@ test('WS rejects backslash authority request targets before routing or auth', as
   assert.equal(state.upgradeProxyCalls, 0)
 })
 
+test('WS auth-boundary rejections are audited as auth_rejected (401/421/400) without the refused credential', async () => {
+  const { auth, auditFile, cleanup } = realAuth({ config: { kind: 'token', token: TOKEN } })
+  try {
+    const { dispatch } = setup(auth, undefined, auditFile)
+    const reject = async (req: FakeRequest): Promise<string> => {
+      let rejection = ''
+      const socket = { end(value: string) { rejection = value }, destroy() {} }
+      await dispatch.upgradeMiddleware(req as unknown as ApiRequest, socket as never, Buffer.alloc(0), {} as never)
+      return rejection
+    }
+    const refused = await reject(new FakeRequest('GET', '/api/remote.mux?capability=QUERY-SECRET', {
+      host: 'gateway.example:3000',
+      authorization: `Bearer ${'f'.repeat(32)}`,
+    }))
+    assert.match(refused, /401 Unauthorized/)
+    const misdirected = await reject(new FakeRequest('GET', '/api/remote.mux', { host: 'attacker.example' }))
+    assert.match(misdirected, /421 Misdirected Request/)
+    const badTarget = await reject(new FakeRequest('GET', '/\\\\attacker.example/api/remote.mux', {
+      host: 'gateway.example:3000',
+    }))
+    assert.match(badTarget, /400 Bad Request/)
+
+    // The same §13.4.4 projection as the HTTP gate: code + client + path
+    // category (the malformed target has no category to record).
+    const events = readAudit(auditFile)
+    assert.deepEqual(events.map(event => event.event), ['auth_rejected', 'auth_rejected', 'auth_rejected'])
+    assert.deepEqual(events.map(event => event.detail), [
+      'code:unauthorized,client:203.0.113.8,path:api',
+      'code:misdirected_request,client:203.0.113.8,path:api',
+      'code:bad_request,client:203.0.113.8',
+    ])
+    const raw = readFileSync(auditFile, 'utf8')
+    assert.equal(raw.includes('f'.repeat(32)), false, 'the refused bearer token never enters the audit log')
+    assert.equal(raw.includes('QUERY-SECRET'), false, 'the request query never enters the audit log')
+  } finally { cleanup() }
+})
+
 test('a saturated scrypt work gate on verify answers 503 auth_busy, never 500', async () => {
   // The login path maps auth_busy → 503; the verify path used to let the
   // rejection fall through to the shell as a generic 500 internal, so an
@@ -786,12 +823,16 @@ test('POST /auth/change-password: a bearer-token principal changes the password,
     }))
     assert.equal(oldCookie.status, 401, 'the old session cookie is invalidated by the change')
 
-    // The success audit carries ONLY the non-secret detail (S24).
+    // The success audit carries ONLY the non-secret detail (S24). The stale
+    // cookie probe above IS an authentication-face rejection and therefore
+    // records its own auth_rejected event (design 17 §13.4.4 401/403
+    // classification) — exactly one, from the gate, never from the mutation.
     const events = readAudit(auditFile)
-    assert.equal(events.length, 1)
-    assert.equal(events[0].event, 'credential_changed')
-    assert.equal(events[0].kind, 'gateway')
-    assert.equal(events[0].detail, 'password,set,runtime,principal:token,client:203.0.113.8')
+    assert.deepEqual(events.map(event => event.event), ['credential_changed', 'auth_rejected'])
+    assert.equal(events[0]!.kind, 'gateway')
+    assert.equal(events[0]!.detail, 'password,set,runtime,principal:token,client:203.0.113.8')
+    assert.equal(events[1]!.kind, 'gateway')
+    assert.equal(events[1]!.detail, 'code:unauthorized,client:203.0.113.8,path:root')
     const raw = readFileSync(auditFile, 'utf8')
     assert.equal(raw.includes(TOKEN), false, 'the bearer token never enters the audit log')
     assert.equal(raw.includes(NEW_PASSWORD), false, 'the new password never enters the audit log')

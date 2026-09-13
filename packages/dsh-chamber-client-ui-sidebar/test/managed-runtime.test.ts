@@ -125,12 +125,46 @@ test('the baseline-pending note is gated on the aggregate facts, not on the phas
 })
 
 test('the sidebar renders ONE persistent live region per source', () => {
-  // 插入即带内容的 role="status" 不会被 AT 播报；两条说明也必须互斥（managedDown
-  // ⇒ connected=false，所以同一时刻至多一条）——单一常驻区域 + 换文本才是正确形态。
+  // 插入即带内容的 role="status" 不会被 AT 播报；说明行也必须互斥（同一时刻至多
+  // 一条）——单一常驻区域 + 换文本才是正确形态。2026-12：降级说明（boot 缺口）
+  // 是这条 note 的一个分支 + 修饰类，不是第二个 live region。
   assert.match(serverSection, /const sourceNote = server\.managedRuntimeDown === true/,
     'the note text must be derived once')
-  assert.match(serverSection, /<div id=\{sourceNoteId\} className=\{cc\.sourceNote\} role="status" aria-live="polite">/,
-    'one persistent polite live region per source')
+  assert.match(
+    serverSection,
+    /<div\s+id=\{sourceNoteId\}\s+className=\{clsx\(cc\.sourceNote, noteIsBootGap && cc\.sourceNoteBootGap\)\}\s+role="status"\s+aria-live=\{noteIsBootGap && server\.id === chamberInstanceId \? 'off' : 'polite'\}\s*>/,
+    'one persistent polite live region per source (the gap note modifies it)',
+  )
+  // Comments are stripped before counting: the note's own comment NAMES the
+  // attribute, and a lock satisfied by prose is what these locks exist to prevent.
+  const noteCode = serverSection.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*\/\/.*$/gm, ' ')
+  assert.equal(
+    (noteCode.match(/aria-live=/g) ?? []).length,
+    1,
+    'exactly ONE live region per source — a second one would double-announce',
+  )
+  // …and the SAME region must actually RENDER the derived text. Counting
+  // `aria-live=` alone missed a second region written as `role="status"` (the
+  // idiomatic form elsewhere in this file) AND an emptied note
+  // (`{sourceNote}` → `{''}`), both proven green before this lock (2026-12
+  // falsification round): one render site, and it renders the cascade's result.
+  assert.equal(
+    (noteCode.match(/\{sourceNote\}/g) ?? []).length,
+    1,
+    'the note text must be rendered exactly once, in the one live region',
+  )
+  assert.match(
+    noteCode,
+    /role="status"\s*aria-live=\{noteIsBootGap && server\.id === chamberInstanceId \? 'off' : 'polite'\}\s*>\s*\{sourceNote\}\s*</,
+    'the live region must render {sourceNote} (an emptied note announces nothing, forever)',
+  )
+  // 2026-12：活动来源（本壳自己的行）的缺口事实同时由框架横幅播报，区域降为 off
+  // 以免同一件事说两遍；非活动行没有横幅，必须保持 polite。
+  assert.match(
+    serverSection,
+    /aria-live=\{noteIsBootGap && server\.id === chamberInstanceId \? 'off' : 'polite'\}/,
+    'the self row must not double-announce a gap the frame banner already announces',
+  )
   assert.match(serverSection, /aria-label=\{noteCarriesPhase \? undefined : t\(sourceStatusLabelKey\(server\)\)\}/,
     'the status dot must not double-announce a phase the note already carries')
   assert.match(serverSection, /aria-describedby=\{!headerActivatable && sourceNote !== '' \? sourceNoteId : undefined\}/,
@@ -185,10 +219,18 @@ test('the transient managed state gets its own honest note and the dot keeps its
     'the transient state must also stop promising an activation that 503s')
   assert.match(serverSection, /t\('source\.managedStarting', \{ state: t\(sourceStatusLabelKey\(server\)\) \}\)/,
     'the transient note must use the dictionary key and carry the state word')
-  assert.match(serverSection, /const noteCarriesPhase = sourceNote !== ''/,
-    'a note must take the live-region role from the dot (one live region per source)')
+  // 2026-12：两个门必须分开——`noteCarriesPhase` 只能由**胜出并且把 {state} 写进
+  // 句子**的说明行置真：managedDown，或（managedTransient 且降级说明没有抢走该分支）。
+  // 原先的 `sourceNote !== ''` 会让 baselinePending（以及新接入的降级说明）在 a11y
+  // 树里丢掉状态词；只写 managedTransient 也不行——gateway 瞬态 + 缺口的组合下，
+  // 胜出的是**不含 phase 的缺口句**（2026-12 review MAJOR）。
+  assert.match(
+    serverSection,
+    /const noteCarriesPhase = server\.managedRuntimeDown === true \|\| \(managedTransient && !noteIsBootGap\)/,
+    'only a note that both WINS and embeds the state word may take the dot\'s aria-label',
+  )
   assert.match(serverSection, /role=\{sourceNote === '' \? 'status' : undefined\}/,
-    'the dot must yield the live-region role to any note')
+    'the dot must yield the live-region role to ANY note (one live region per source)')
   assert.match(serverSection, /aria-label=\{noteCarriesPhase \? undefined : t\(sourceStatusLabelKey\(server\)\)\}/,
     'the dot must keep announcing the phase when the note does not carry it')
   assert.match(serverSection, /capsuleHeldFocus\.current && server\.connected !== true/,

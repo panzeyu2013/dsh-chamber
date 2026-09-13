@@ -2,7 +2,7 @@
  * chamber archive manager dialog (design 24 §6, revision 2026-09; delete-all
  * retirement 2026 — see the VIEW MODES note below).
  *
- * Replaces the v1 server-row preview → window.confirm → purge-everything
+ * Replaces the v1 server-row preview → native confirm → purge-everything
  * flow: the dialog LISTS what is archived (title + project label per row,
  * sourced from ChamberServerAggregate.archivedSessions — metadata of the
  * source's own snapshot, no session read of its own) and offers
@@ -36,10 +36,11 @@
  * filter (the host intersects the filter with the authoritative archived
  * set, so the dialog can never delete a non-archived session). Every
  * destructive action is confirm-gated by an IN-DIALOG two-stage confirm
- * (2026 refactor, THIS module's scope — sibling surfaces (nav delete flows)
- * still ride window.confirm per their own records): no native window.confirm
- * here (an OS-styled dialog cannot ride the alias tokens and reads as an
- * alien chrome layer over this app), and no second Modal layer
+ * (2026 refactor, THIS module's scope; the nav's workspace-delete flow carries
+ * its own in-app confirm Modal — 2026-09-11 upstream-alignment T2b): no native
+ * OS confirm dialog anywhere in this package (an OS-styled dialog cannot ride
+ * the alias tokens and reads as an alien chrome layer over this app), and no
+ * second Modal layer
  * (the official Modal registers one document-level BUBBLE Escape listener
  * per open instance, so stacking a confirm modal over this dialog would
  * close BOTH layers on a single Escape — no official nested precedent,
@@ -98,9 +99,11 @@
  * workspaceAccentStyle helper — so a group stays visually bound to its
  * workspace row in the session list.
  *
- * Error/info text is zh-hardcoded inline (the sidebar's established inline
- * rowError precedent — design 24 §5 decision); buttons and confirms ride
- * the locale dictionaries.
+ * COPY (2026-09-11 upstream-alignment, finding 11): every product-visible
+ * string in this dialog rides this package's typed locale dictionaries
+ * (upstream packages/client/AGENTS.md), including the two that used to be
+ * inline zh literals (the busy-refusal line and the in-flight 正在删除… status).
+ * Only wire error text still passes through untranslated, by policy.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { MouseEvent as ReactMouseEvent } from 'react'
@@ -119,7 +122,7 @@ import type { ChamberServerAggregate } from '../shared/aggregate-store.ts'
 import { chamberBridge } from '../shared/aggregate-store.ts'
 import { groupArchivedRows, workspaceAccentStyle, type ArchivedSessionGroup } from '../shared/derive.ts'
 import { getInstanceClient } from '../shared/instance-api.ts'
-import { archivePurgeNote, purgeRefusalReason, runArchivePurge } from '../shared/archive-purge.ts'
+import { archivePurgeNote, purgeRemovedContent, runArchivePurge } from '../shared/archive-purge.ts'
 import { getWorkspaceGitFlag, isSourceGitFlagsLoaded } from '../shared/workspace-git-flags.ts'
 import type { SidebarKey } from './locales.ts'
 
@@ -366,41 +369,36 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
    *  whole-set `undefined` path reaches this call: with delete-all retired,
    *  a purge always stems from an explicit per-row / select-all selection.
    *
-   *  2026-09 revision ("已归档的对话应该终止"): the run first STOPS the
-   *  selected sessions' running turns through the official `session/cancel`
-   *  wire, then purges with `force: true` so the host may also delete the
-   *  merely LOADED (idle, attached) content. The host still refuses a RUNNING
-   *  member (fail-closed), so the stop pass is an accelerator, never the
-   *  safety boundary. The stop pass covers the CLOSURE of the selection
-   *  (roots + transitive SUBAGENT-origin descendants) — a running descendant
-   *  has no row here, yet it blocks the whole archived tree (design 24 §5).
-   *  The session currently being viewed is excluded from the ROOTS and from
-   *  any root whose CLOSURE contains it: its live writer would recreate a
-   *  header-less artifact after deletion, and the host deletes the whole tree.
-   *  All of this is decided in the pure `runArchivePurge` flow
-   *  (`shared/archive-purge.ts`), which the node tests pin. */
+   *  2026-09 revision ("已归档的对话应该终止") + 2026-09 protection
+   *  amendment: the run STOPS the selected sessions' running turns through the
+   *  official `session/cancel` wire (closure-wide, maintenance phases
+   *  included), then purges with `force: true` so the host also deletes merely
+   *  LOADED (idle, attached) content — an archived session may be waiting on a
+   *  question or an approval and must stay deletable. The host still refuses a
+   *  RUNNING member (fail-closed), so the stop pass is an accelerator, never
+   *  the safety boundary. The session this client is displaying — the LIVE
+   *  vendor `current`, re-read from the bridge projection at request time
+   *  (`liveViewedSessionId`) — is handed to the host as the run's PROTECTED
+   *  id: its whole tree is skipped and reported, while the rest of the
+   *  selection is unaffected. All of this is decided in the
+   *  pure `runArchivePurge` flow (`shared/archive-purge.ts`), which the node
+   *  tests pin. */
   const runPurge = (sessionIds: readonly string[]): void => {
     if (busy) return
-    // RUNTIME-CHANNEL GUARD (design 24 §13 item 13): the force path may
-    // delete a merely LOADED session, and the only protection against the
-    // deleted writer recreating a header-less artifact is excluding the
-    // session this client is currently viewing. That exclusion is read from
-    // the source's runtime report; without it (producer not registered yet /
-    // source reconnecting) the manager cannot know the current session and
-    // must not use the force path at all — refuse honestly instead of
-    // guessing. The rule is the pure `purgeRefusalReason` (tested).
-    const refusalKey = purgeRefusalReason(server)
-    if (refusalKey !== null) {
-      setNote({ kind: 'error', text: t(refusalKey) })
-      return
-    }
+    // PROTECTION, NOT PERMISSION (2026-09 protection amendment): the run is
+    // never refused for an unknown current session. The LIVE current session
+    // is handed to the host as `protectSessionIds`, so its whole tree is
+    // skipped; when the client cannot name one the run still proceeds (the
+    // host's running guard and the cancel pass are the safety boundary) and
+    // the dialog states that fact in the hint line above. The pure
+    // `runArchivePurge` owns the stop-then-force orchestration and is
+    // node-tested.
     const client = getInstanceClient(server.id)
-    const currentId = server.runtime?.current
     setBusy(true)
     setNote(null)
     void (async () => {
       try {
-        const run = await runArchivePurge(client, sessionIds, currentId)
+        const run = await runArchivePurge(client, sessionIds, liveViewedSessionId())
         // UNCONDITIONAL refresh (v1 F9 parity): even if this dialog already
         // unmounted, the host purge may have completed and chamberBridge's
         // App-side consumers are global/generation-fenced.
@@ -412,17 +410,20 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
         // sidebar once the host removes their ids from the archived set.
         chamberBridge.requestSessionListRefresh(server.id)
         if (!mountedRef.current) return
-        // Every outcome line (refusal reasons, legacy-host clause, failures) is
-        // composed by the pure `archivePurgeNote` as dictionary KEYS + params
-        // and rendered here through `t()` — the module itself carries no copy.
+        // Every outcome line (stop/skip/delete counts, failures) is composed by
+        // the pure `archivePurgeNote` as dictionary KEYS + params and rendered
+        // here through `t()` — the module itself carries no copy.
         const outcome = archivePurgeNote(run)
         setNote({
           kind: outcome.kind,
           text: outcome.lines.map(line => t(line.key, line.params)).join('\n'),
         })
-        if (outcome.kind === 'info') {
+        if (outcome.kind === 'info' && purgeRemovedContent(run)) {
           // The refreshed aggregate (requestRefresh above) prunes the rows;
-          // the selection effect drops ids that no longer exist.
+          // the selection effect drops ids that no longer exist. Only a run
+          // that REMOVED something clears the selection (2026-09 review): a
+          // protected/skipped-only run leaves every row in place, and the
+          // documented retry must stay one click away.
           setSelected(new Set())
         }
       } catch (error) {
@@ -435,8 +436,11 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
         chamberBridge.requestSessionListRefresh(server.id)
         if (!mountedRef.current) return
         const message = error instanceof Error ? error.message : String(error)
+        // 2026-09-11 upstream-alignment（finding 11）：`busy:` 分支的说明文案进
+        // 字典（上游 client/AGENTS.md：产品可见文案一律在类型化字典里）；线
+        // 协议原文（非 busy 的 message）按政策原样透出，不翻译。
         const friendly = message.startsWith('busy:')
-          ? '该实例正在执行另一处清理，请稍后重试。'
+          ? t('archive.manager.busyOther')
           : message
         setNote({ kind: 'error', text: friendly })
       } finally {
@@ -497,18 +501,31 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
   const pullError = !landed && server.aggregateError !== undefined
   const listVisible = landed && !degraded && rows.length > 0
 
+  /**
+   * The PROTECTION id, resolved at REQUEST time (2026-09 review). `server` is a
+   * render snapshot from the last publish, and the vendor's `current` can move
+   * between that publish and the click; asking the bridge for the live
+   * projection keeps the protected id as fresh as the wire allows (the same
+   * discipline as the confirm copy re-reading the list before a run). The prop
+   * stays the fallback for a source that vanished from the snapshot — a retired
+   * source displays nothing, so protecting nothing is correct there anyway.
+   */
+  const liveViewedSessionId = (): string | undefined => {
+    const fresh = chamberBridge.getServers().find(entry => entry.id === server.id)
+    return (fresh ?? server).runtime?.current
+  }
+
   // Two-stage confirm derived state: while a confirm is ARMED the whole list
   // input freezes (inputLocked = busy OR armed) so the counted copy can never
   // go stale — the selection/checkboxes cannot move under the armed promise.
   const inputLocked = busy || confirming !== null
-  // PRE-CLICK GATE (C#9, design 24 §5): the delete controls are DISABLED while
-  // the force path is refused (no runtime report, or an unknown current
-  // session), with the refusal as their explanatory title — mirroring the git
-  // dialog's runtime-unknown pre-hint. `runPurge` keeps the same gate as
-  // belt-and-braces, so a disabled-state race can never reach the wire.
-  const purgeRefusalKey = purgeRefusalReason(server)
-  const purgeRefusalTitle = purgeRefusalKey === null ? undefined : t(purgeRefusalKey)
-  const purgeBlocked = purgeRefusalTitle !== undefined
+  // NO PRE-CLICK GATE (2026-09 protection amendment): the delete controls are
+  // enabled whenever the list is actionable and no run is in flight. An unknown
+  // current session is a PROTECTION degradation, never a capability loss — the
+  // host skips RUNNING trees and protects whatever id the client can name; the
+  // hint line below states the degradation honestly instead of greying the
+  // controls out.
+  const unprotected = server.runtime?.current === undefined
   // The armed confirm's message: single-row subject copy (title) or the
   // counted selected-set copy (title null). Rendered only while armed.
   const armedCountKey: SidebarKey = (confirming?.ids.length ?? 0) === 1
@@ -528,7 +545,8 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
             {busy && (
               <>
                 <IconLoadingOutline16 className={cc.statusSpinner} size={13} />
-                正在删除…
+                {/* 2026-09-11 upstream-alignment（finding 11）：内联 zh 文案进字典。 */}
+                {t('archive.manager.deleting')}
               </>
             )}
           </span>
@@ -536,8 +554,7 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
             <Button
               variant="outline"
               className={cc.archiveManagerDanger}
-              disabled={inputLocked || purgeBlocked || selected.size === 0}
-              {...(purgeBlocked ? { title: purgeRefusalTitle } : {})}
+              disabled={inputLocked || selected.size === 0}
               onClick={(event: ReactMouseEvent<HTMLButtonElement>) => { deleteSelected(event.currentTarget) }}
             >
               {t(selectedCountKey, { count: selected.size })}
@@ -587,6 +604,9 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
           <div className={cc.archiveManagerEmpty} role="status">{t('archive.manager.empty')}</div>
         ) : (
           <div className={cc.archiveManagerList}>
+            {unprotected && (
+              <div className={cc.archiveManagerNoteRow} role="status">{t('archive.manager.unprotected')}</div>
+            )}
             <div className={cc.archiveManagerRow}>
               <input
                 type="checkbox"
@@ -700,8 +720,8 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
                             type="button"
                             className={clsx(cc.actionIcon, cc.actionIconDanger)}
                             aria-label={t('archive.manager.rowDeleteAria', { title: titleText(row.title) })}
-                            title={purgeRefusalTitle ?? t('archive.manager.rowDeleteAria', { title: titleText(row.title) })}
-                            disabled={inputLocked || purgeBlocked}
+                            title={t('archive.manager.rowDeleteAria', { title: titleText(row.title) })}
+                            disabled={inputLocked}
                             onClick={(event) => {
                               event.stopPropagation()
                               deleteSingle(event.currentTarget, row.sessionId, titleText(row.title))

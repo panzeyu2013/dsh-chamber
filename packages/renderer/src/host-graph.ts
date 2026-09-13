@@ -22,10 +22,14 @@
  * missing its built `./client` bundle fails loud on the host AND here — never
  * silently dropped.
  *
- * Self-contained on purpose (no dsh package types, mirroring bridge-api.ts):
+ * Self-contained on purpose (no dsh package types, like the other self-built
+ * wire carriers such as the sidebar's instance-api.ts):
  * the wire shapes here are the fetch-carrier envelope and the graph rows
  * (vendor dsh-client-modules src/client/manifest.ts `WebBootEntry` /
- * `WebBootGraph` are the authoritative shapes). The plugin-graph diagnostic
+ * `WebBootGraph` are the authoritative shapes; the two pure WIRE HELPERS of
+ * that module — `optionalStringArray` / `stripClientSuffix` — are imported by
+ * real-source relative path, A4 2026-09-11 upstream-alignment). The
+ * plugin-graph diagnostic
  * types are the chamber shared face (sidebar shared/aggregate-store.ts, A4
  * single source) — imported below and re-exported, never re-declared.
  *
@@ -46,6 +50,21 @@
  */
 
 import { CHAMBER_COVERED_IDS } from './chamber-covered.ts'
+// A4 (2026-09-11 upstream-alignment): the boot-graph wire validators are
+// UPSTREAM's own — never a hand-rolled copy. manifest.ts is the browser-safe
+// contract face of the pinned dsh-client-modules (zero runtime imports), the
+// very module whose `parseBootManifest` consumes this same wire shape, and it
+// is imported HERE by real-source relative path for the same reason the sidebar
+// shared kernel is (below): the renderer has no install-tree copy of the dsh
+// packages, and its plain-node tests (host-graph.test.ts, no module loader)
+// must resolve the real module without a bundler. Keep the local parse LOOSER
+// than upstream's — see the fetchHostGraph comment.
+import { optionalStringArray, stripClientSuffix } from '../../../vendor/harness-packages/@deepseek-ai/dsh-client-modules/src/client/manifest.ts'
+// The deferred-covered roster (review F1): the covered ids whose module-table
+// factory exists only AFTER the boot settled — the single authority host-graph
+// shares with the composite entry (chamber-entry.ts asserts its own roster
+// against it at apply time).
+import { DEFERRED_EXTRA_ROW_IDS } from './required-extra-rows.ts'
 import type { PluginGraphDiagnostic, PluginGraphDiagnosticState } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import {
   classifyGraphChannelFailure, postUnary, type UnaryPostOutcome,
@@ -72,14 +91,10 @@ export type { PluginGraphDiagnostic, PluginGraphDiagnosticState }
 
 /** One composed client entry row of the host boot graph (mirror of WebBootEntry).
  *  rc.8+ (dsh-v0.1.2-alpha.1) adds `external?: string[]` to WebBootEntry and
- *  moves bundle urls to the combo endpoint form (`/plugins/??<id>/client.js&rev=…`);
- *  this mirror deliberately omits `external` — the chamber merge preloads every
- *  kept row wholesale (the shared module-table factory branch covers cross-row
- *  require edges, boot.ts), so the field carries no meaning here and is dropped
- *  at parse (fetchHostGraph, line ~186). The url form is the single-id combo
- *  (each row's own script); the graph's multi-id combo BATCHES are ignored by
- *  the chamber merge (host-graph fetch reads `entries` only, see the fetch
- *  comment). */
+ *  moves bundle urls to the combo endpoint form (`/plugins/??<id>/client.js&rev=…`).
+ *  The url form is the single-id combo (each row's own script); the graph's
+ *  multi-id combo BATCHES are ignored by the chamber merge (host-graph fetch
+ *  reads `entries` only, see the fetch comment). */
 export interface HostGraphRow {
   /** Entry name == package name (module-table key). */
   id: string
@@ -91,24 +106,40 @@ export interface HostGraphRow {
   rev: string
   /** Package-name dependency edges, informational. */
   inject?: string[]
+  /** Exact non-inject module requests of this row (WebBootEntry.external,
+   *  dsh-v0.1.5): the specifiers the bundle requires from the module table
+   *  beyond its `inject` edges. Preserved since the 2026-12 review fix (F1) —
+   *  the field used to be dropped at parse, which erased the ONE unsatisfiable
+   *  edge a third-party row can carry here: a request onto a covered id whose
+   *  family the composite registers only AFTER the boot settled
+   *  (`required-extra-rows.ts` DEFERRED_EXTRA_ROW_IDS → the named diagnostic in
+   *  collectExtraRows / findDeferredExternalDependencies). */
+  external?: string[]
   /** Stage-one prefetch mark (the chamber merge preloads everything it keeps). */
   immediately?: boolean
 }
 
-/** One extra module row handed to the boot kernel (shape = BootModuleRow
- *  minus `external`): dsh-v0.1.2-alpha.1 BootModuleRow requires `initialUrl`
- *  (the initial-load combo endpoint — the chamber preloads each entry's own
- *  combo, so it equals `url`) and `inject` (the chamber extras carry no
- *  package inject edges — the composite covers the whole official shell). */
+/** One extra module row handed to the boot kernel (mirror of the vendor
+ *  BootModuleRow, dsh-v0.1.5): `initialUrl` is the initial-load combo endpoint
+ *  (the chamber preloads each entry's own combo, so it equals `url`), `inject`
+ *  stays empty (the composite covers the whole official shell, so an extra has
+ *  no inject edge to arrive first) and `external` carries the row's non-inject
+ *  module requests exactly as the wire composed them ([] when the wire omitted
+ *  them). The chamber kernel adopts these rows by ID (boot.ts: it preloads the
+ *  bundles itself and has no graph row for them), so `external` is not an
+ *  arrival schedule here — it is the record of which specifiers the row's
+ *  factory will `require` from the shared module table at materialization,
+ *  which is exactly what {@link findDeferredExternalDependencies} judges. */
 export interface ExtraModuleRow {
   id: string
   url: string
   initialUrl: string
   rev: string
   inject: string[]
+  external: string[]
 }
 
-/** The fetch-carrier wire envelope (as consumed by bridge-api.ts). */
+/** The fetch-carrier wire envelope (the shape every self-built carrier sends). */
 interface HostGraphEnvelope {
   rpcId: string
   result: {
@@ -154,6 +185,19 @@ class HostGraphChannelError extends Error {
  * (the caller degrades to no extras and logs), and malformed envelopes/rows
  * throw (bad data must never be silently merged — a wrong graph is a boot
  * hazard, not a candidate for guesswork).
+ *
+ * A4 (2026-09-11 upstream-alignment) — how this parse relates to upstream's:
+ * the field validation rides upstream's own helpers (`optionalStringArray`,
+ * `stripClientSuffix`; manifest.ts, imported above), but the PARSE ITSELF stays
+ * local and is deliberately LOOSER than upstream's `parseBootManifest`
+ * (manifest.ts:167-256): upstream parses the whole `window.__DSH_BOOT__`
+ * manifest into its two consumer views and therefore also requires `batches` to
+ * be an array (:186-188) and EVERY entry to belong to exactly one initial-load
+ * batch (:238-253). The chamber reads `entries` only — the graph's multi-id
+ * combo `batches` are ignored (each row carries its own single-id combo url;
+ * see toExtraRows) — so a graph without batches, or with an entry the host did
+ * not schedule into one, is still a usable chamber graph and must not fail the
+ * boot's plugin set. Everything the local parse DOES check is upstream's check.
  */
 export async function fetchHostGraph(basePath: string): Promise<HostGraphRow[] | null> {
   // Shared transport byte (P4-2): URL join + client-request envelope + POST +
@@ -201,16 +245,33 @@ export async function fetchHostGraph(basePath: string): Promise<HostGraphRow[] |
       throw new Error('宿主启动图：entry 不是对象')
     }
     const row = raw as Record<string, unknown>
+    const where = typeof row.id === 'string' ? `"${row.id}"` : JSON.stringify(row)
     if (typeof row.id !== 'string' || typeof row.url !== 'string' || typeof row.rev !== 'string') {
-      throw new Error(`宿主启动图：entry ${JSON.stringify(row)} 必须携带 string id/url/rev`)
+      throw new Error(`宿主启动图：entry ${where} 必须携带 string id/url/rev`)
+    }
+    // A4 (2026-09-11 upstream-alignment): the optional fields are validated by
+    // UPSTREAM's helper (manifest.ts `optionalStringArray`, which upstream's own
+    // `parseBootManifest` uses for this exact wire). Present-but-malformed now
+    // THROWS instead of being dropped silently: a wrong graph is a boot hazard,
+    // not a candidate for guesswork (this module's contract), and a dropped
+    // `external` would hide the one require edge the deferred-dependency
+    // diagnostic exists to name.
+    const subject = `boot graph entry ${where}`
+    const inject = optionalStringArray(subject, 'inject', row.inject)
+    const external = optionalStringArray(subject, 'external', row.external)
+    if (row.immediately !== undefined && typeof row.immediately !== 'boolean') {
+      throw new Error(`宿主启动图：entry ${where} 的 immediately 必须是 boolean`)
     }
     rows.push({
       id: row.id,
       url: row.url,
       rev: row.rev,
-      // Optional wire fields are informational for the merge; carry them
-      // through when well-formed, drop otherwise.
-      ...(Array.isArray(row.inject) && row.inject.every(i => typeof i === 'string') ? { inject: row.inject as string[] } : {}),
+      // Optional wire fields, carried through when well-formed (same rule for
+      // all three; a malformed one throws above). `inject`/`immediately` are
+      // informational for the merge; `external` is LOAD-BEARING (2026-12 review
+      // F1): it is the field the deferred-dependency diagnostic below reads.
+      ...(inject === undefined ? {} : { inject: [...inject] }),
+      ...(external === undefined ? {} : { external: [...external] }),
       ...(typeof row.immediately === 'boolean' ? { immediately: row.immediately } : {}),
     })
   }
@@ -266,7 +327,57 @@ export function toExtraRows(rows: readonly HostGraphRow[], basePath: string): Ex
       // The composite covers the whole official shell; kept extras are
       // standalone rows with no package inject edges to arrive first.
       inject: [],
+      // The wire's own non-inject requests travel UNCHANGED (review F1): the
+      // kernel row type requires the field, and this merge is what decides
+      // which of those requests this page can never satisfy (see
+      // findDeferredExternalDependencies + the diagnostic in collectExtraRows).
+      external: [...(row.external ?? [])],
     })
+  }
+  return out
+}
+
+/**
+ * The `external` requests of the kept rows that this page can NEVER satisfy
+ * (2026-12 review F1, P2): a request naming a composite-COVERED id whose family
+ * registers after the boot settled (`DEFERRED_EXTRA_ROW_IDS`).
+ *
+ * Why it is unsatisfiable rather than merely late: the covered row is filtered
+ * out of the host graph (design 09 §3.3 — loading it would double-register the
+ * plugin), and the composite registers module-table factories for its
+ * FIRST-SCREEN families only (COVERED_FACTORIES, chamber-entry.ts). The kernel
+ * resolves a bundle's synchronous `require` through seed → loadCache →
+ * registered factories (vendor system.ts makeRequire) and throws when the table
+ * has no factory — so the consumer row's materialization fails at create time
+ * with only boot.ts's tolerant `console.error` (extra-row degrade) as a trace.
+ * The chamber merge is the only layer that knows the covered/deferred sets
+ * without a round trip, so it names the miss here instead.
+ *
+ * Requests are matched in their canonical (suffix-stripped) form, exactly as
+ * the kernel does: a `@scope/pkg/client` request and a bare `@scope/pkg`
+ * request are the same module-table key. The normalization is UPSTREAM's own
+ * `stripClientSuffix` (manifest.ts:156-158, A4 2026-09-11 upstream-alignment —
+ * this used to inline the same `endsWith('/client')` slice here). Requests onto
+ * kept peer extras (preloaded by the same call)
+ * or onto registered first-screen factories are NOT reported — this page does
+ * satisfy them.
+ * @param rows - the kept rows (the merge's output, dedupe + url rewrite done).
+ * @returns one entry per affected row, in row order, dependencies deduped and
+ *   in request order (empty array when nothing is affected).
+ */
+export function findDeferredExternalDependencies(
+  rows: readonly ExtraModuleRow[],
+): { rowId: string; dependencies: string[] }[] {
+  const deferred = new Set(DEFERRED_EXTRA_ROW_IDS)
+  const out: { rowId: string; dependencies: string[] }[] = []
+  for (const row of rows) {
+    const hits: string[] = []
+    for (const request of row.external) {
+      const id = stripClientSuffix(request)
+      if (!deferred.has(id) || hits.includes(id)) continue
+      hits.push(id)
+    }
+    if (hits.length > 0) out.push({ rowId: row.id, dependencies: hits })
   }
   return out
 }
@@ -414,20 +525,30 @@ export interface CollectExtraRowsDeps {
  *
  * Degrades to [] when the graph CHANNEL fails (fetch throws — network /
  * non-2xx / malformed graph): the boot proceeds without extra plugins. That is
- * NOT a complete shell any more (2026-09 二轮, alpha.2 sources): three inject
- * members of the composite's own first-screen families are provided by
- * non-covered official rows — `sidebarRight` (ui-sidebar-right, required by
- * ui-chat), `fileUpload` (client-file-upload, required by ui-conversation's
- * root inject), and `resources` (client-resources, the global `useResource`
- * seat). On a degrade those fibers stay PENDING, so the conversation view or
- * the whole centre column disappears while boot still reports success; the
- * `assertRequiredExtraRowServices` probe in chamber-entry.ts turns that into a
- * loud, named diagnostic (design 09 §3.2). A 503
+ * NOT a complete shell any more (2026-09 二轮, alpha.2 sources): the composite's
+ * own first-screen families inject services that a non-covered official row
+ * provides (the derived probe roster — `required-extra-rows.ts`, the single
+ * authority since the A1 2026-09-11 upstream-alignment; the motivating member
+ * is `sidebarRight`, injected by ui-chat and provided by ui-sidebar-right). On
+ * a degrade such a fiber stays
+ * PENDING, so the conversation view disappears while boot still reports
+ * success; the `assertRequiredExtraRowServices` probe in chamber-entry.ts turns
+ * that into a loud, named diagnostic (design 09 §3.2). A 503
  * `instance_unavailable` is the expected pre-ready state: the fetch is
  * retried on a bounded budget (the instance's graph appears moments after the
  * proxy stops answering 503 — see CollectExtraRowsDeps.retry) and only then
  * degrades silently, so a shell that boots inside the spawn window still gets
  * its profile plugins instead of losing them for the rest of the boot.
+ *
+ * A kept row whose `external` requests a deferred-covered id (2026-12 review
+ * F1) is reported as a NAMED diagnostic instead of the silent `ok`: the merge
+ * preserves the field (see ExtraModuleRow.external) and
+ * {@link findDeferredExternalDependencies} names the affected rows and their
+ * unsatisfiable dependencies, so the operator sees the one require edge this
+ * page can never answer — otherwise it surfaces only as boot.ts's tolerated
+ * `console.error` when the row's create-time require misses the module table.
+ * Still not a boot gate: the boot settles, the other rows keep working, and the
+ * verdict is projected onto the per-source plugin diagnostic.
  *
  * A bundle that fails to LOAD is NOT a degrade: it throws, the instance's
  * boot fails loud and shows the error — a broken extra plugin must never
@@ -662,6 +783,11 @@ export async function collectExtraRows(
       throw keptFailures[0]!.error
     }
   }
+  // Deferred-dependency verdict of the rows this boot ACTUALLY hands to the
+  // kernel (post-recovery, so a restarted instance's fresh rows are judged too).
+  // Computed once, here, because the projection below reports one diagnostic per
+  // boot (2026-12 review F1).
+  const deferredExternalMisses = findDeferredExternalDependencies(rows)
   if (versionConflict !== undefined) {
     // Cross-instance plugin version drift (design 09 §3.5): a different
     // instance first claimed this id at another rev — the page keeps the
@@ -681,6 +807,26 @@ export async function collectExtraRows(
     reportDiagnostic(instanceId, 'restart-required', {
       pluginId: restartConflict.id,
       message: `页面已加载 ${restartConflict.id} 的另一版本，重启应用后才能切换`,
+    }, deps.reportDiagnostic)
+  } else if (deferredExternalMisses.length > 0) {
+    // 2026-12 review F1 (P2): a kept row requests a covered id whose family the
+    // composite registers only after the boot settled, so the synchronous
+    // require during create can never be answered (see
+    // findDeferredExternalDependencies). This is a BOOT fact — only a different
+    // plugin set (or an upstream change to the deferred split) can change it —
+    // so it must not be reported as `ok`, and it is projected through the
+    // nearest existing state of the shared diagnostic union
+    // (`bundle-load-failed`: "this row cannot materialize"), whose class the
+    // settings-surface recheck never heals away (plugin-graph-recheck.ts heals
+    // channel facts only). The message names the rows and the dependencies.
+    const message = `额外行的模块依赖本 boot 无法满足：`
+      + deferredExternalMisses.map(miss => `${miss.rowId} → ${miss.dependencies.join(', ')}`).join('; ')
+      + ` — 该依赖已被复合入口覆盖但属延迟簇（boot 之后才注册，见 required-extra-rows.ts DEFERRED_EXTRA_ROW_IDS）；`
+      + '相关功能在本 boot 缺失（extra 行的 create 期 require 落空）'
+    console.error(`[shell] instance ${instanceId} ${message}`)
+    reportDiagnostic(instanceId, 'bundle-load-failed', {
+      pluginId: deferredExternalMisses[0]!.rowId,
+      message,
     }, deps.reportDiagnostic)
   } else {
     reportDiagnostic(instanceId, 'ok', {}, deps.reportDiagnostic)

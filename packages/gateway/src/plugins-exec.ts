@@ -69,6 +69,7 @@ import {
 import { INSTALL_ENV_WHITELIST, sanitizeInstallerOutput } from '@dsh-chamber/dsh-runtime'
 import { INSTALLED_PROFILE_DIR, INSTALLED_MANIFEST_MAX_BYTES, MANAGED_DSH_HOME_DIR } from './plugins-installed.ts'
 import { backupDirFor, thirdPartyRoot } from './plugins-journal.ts'
+import { ensurePnpmOnPath, withPnpmOnPath } from './pnpm-entry.ts'
 import type { JournalLogger, JournalOp, JournalOpKind, JournalPending, JournalTerminalPatch, PluginsJournal } from './plugins-journal.ts'
 
 /** Queue depth cap (design 21 §6.9: queue depth ≤ 8). */
@@ -688,18 +689,25 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
     try {
       ensurePrivateRunEnv()
       const thirdParty = thirdPartyRoot(stateDir)
-      env = scrubInstallEnv(process.env, {
-        DSH_HOME: join(stateDir, MANAGED_DSH_HOME_DIR),
-        XDG_CACHE_HOME: join(thirdParty, '.pnpm-cache'),
-        XDG_CONFIG_HOME: join(thirdParty, '.pnpm-xdg'),
-        // Both casings pin one empty userconfig file: pnpm 11's config reader
-        // reads `npm_config_userconfig` OR `NPM_CONFIG_USERCONFIG` (exact-case
-        // property reads, no case folding), so the empty-file displacement of
-        // the operator's real ~/.npmrc must not depend on which casing a pnpm
-        // minor honors.
-        NPM_CONFIG_USERCONFIG: join(thirdParty, '.npmrc-empty'),
-        npm_config_userconfig: join(thirdParty, '.npmrc-empty'),
-      })
+      // PATH carries the gateway's own pnpm shim (design 18 §9.2 D1): the
+      // managed `dsh plugin` CLI forwards to a literal `pnpm` on PATH, and a
+      // host provisioned with npm alone has none — the op would answer 127
+      // even though the gateway ships the pinned pnpm (2026-09 audit).
+      env = withPnpmOnPath(
+        scrubInstallEnv(process.env, {
+          DSH_HOME: join(stateDir, MANAGED_DSH_HOME_DIR),
+          XDG_CACHE_HOME: join(thirdParty, '.pnpm-cache'),
+          XDG_CONFIG_HOME: join(thirdParty, '.pnpm-xdg'),
+          // Both casings pin one empty userconfig file: pnpm 11's config reader
+          // reads `npm_config_userconfig` OR `NPM_CONFIG_USERCONFIG` (exact-case
+          // property reads, no case folding), so the empty-file displacement of
+          // the operator's real ~/.npmrc must not depend on which casing a pnpm
+          // minor honors.
+          NPM_CONFIG_USERCONFIG: join(thirdParty, '.npmrc-empty'),
+          npm_config_userconfig: join(thirdParty, '.npmrc-empty'),
+        }),
+        ensurePnpmOnPath(thirdParty),
+      )
     } catch (error) {
       complete(item, { status: 'failed', error: sanitize(`failed to prepare the private pnpm environment: ${messageOf(error)}`) })
       return

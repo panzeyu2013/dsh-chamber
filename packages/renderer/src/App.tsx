@@ -25,30 +25,46 @@
  * reportOpenSessionOutcome 回报每个侧边栏 shell——失败落在被点击的会话
  * 行内呈现，不再是单向通道的 console-only 盲区（2026-09 修订）。
  */
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import api, { type ConnectionSummary, type HealthResponse } from './api.ts'
 import {
+  armOpenIntent,
   chamberBridge,
+  clearOpenIntents,
   deriveArchivedSessions,
   deriveServerWorkspaces,
   emptyAggregate,
   fetchInstanceSnapshot,
   fetchManagedRuntimeState,
+  forgetPendingWorkspaces,
   getInstanceClient,
+  getOpenIntentsSnapshot,
   instanceSnapshotSignature,
   isInstanceUnavailable,
   managedRuntimeDown,
   managedRuntimeUnusable,
   mergeRuntimeFacts,
+  projectableCurrent,
+  reconcilePendingWorkspaces,
+  recordPendingWorkspace,
   releaseInstanceClient,
+  releaseOpenIntent,
+  // 2026-09-11 review S3: the withdraw/rewrite half of the workspace echo.
+  removePendingWorkspace,
+  renamePendingWorkspace,
   reconcileCompletedFacts,
   runtimeReportSignature,
   serversProjectionSignature,
+  shouldHoldViewVeil,
+  subscribeOpenIntent,
+  sweepPendingWorkspaces,
+  withWorkspaceEcho,
   type ChamberServerAggregate,
   type InstanceAggregate,
   type InstanceRuntimeReport,
   type InstanceSnapshot,
   type PluginGraphDiagnostic,
+  type WorkspaceEchoLedger,
 } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import { detectNotificationEdges, dedupeCompleteEdges, type SessionFacts } from './notification-edges.ts'
 import { projectBadgeCount } from './badge-count.ts'
@@ -69,8 +85,39 @@ import {
   type SourceOwnershipToken,
 } from './deep-link-activation.ts'
 import { openInstanceSession, reconnectInstanceConnection, disposeAllShells, disposeInstanceShell, type ShellState } from './shell.ts'
+// T15 (2026-09-11 upstream-alignment): the official Button atom (U
+// ui-primitives/src/Button.tsx) replaces the chamber's own `.btn` chrome in
+// every frame-level failure screen. Imported BY DEEP SOURCE PATH, the form the
+// chamber ui-layout / ui-sidebar / settings-bridge tables already use for an
+// internal module: the package BARREL also carries the primitives' markdown /
+// CodeBlock families, and the T15-round measurement on this build had the barrel
+// import move ~87 KB of them into the MAIN graph (main graph raw 1,226,775 →
+// 1,313,736 at that measurement, i.e. within 2.7% of the C6 warn gate) while the
+// deep path leaves them in the chamber entry. The main graph evaluates before App
+// mount, which is exactly what the C3 note in chamber-entry.ts keeps
+// ui-primitives out of.
+// 2026-09-11 review-fix (finding 4d): the round's notes quoted the T15-round
+// figures as if they were current. Re-measured with `pnpm run build:renderer` on
+// the final review-fix tree (all round fixes applied): main graph raw 1,228,157
+// · chamber entry raw 1,989,208. The entry therefore sits
+// 0.5% under its 2 MB warn gate, and the main graph ~9% under its 1.35 MB one
+// (check-chunk-budgets.mjs) — the deep path matters at least as much as it did
+// when T15 chose it. The ~87 KB barrel delta is a property of the barrel, not of
+// this round's edits.
+import { Button } from '@deepseek-ai/dsh-client-ui-primitives/src/Button.tsx'
+// T16 (2026-09-11 upstream-alignment): frame copy lives in ONE typed locale
+// dictionary (locales.ts); the frame reads the document language the official
+// locale service keeps in sync (see that module's header).
+import {
+  frameText, readDocumentLocale, subscribeDocumentLocale,
+  type FrameKey, type FrameLocale,
+} from './locales.ts'
 import { BOOT_TIMEOUT_MS } from './boot-budget.ts'
 import { planDegradedRetries } from './degraded-retry.ts'
+// Settled-boot gap → render decision (design 05 §4 「降级呈现」). The pure module
+// owns the copy key, the retry verdict and the "will the self-heal re-mount
+// this?" rule; the frame only maps its keys through `t`.
+import { bootGapNotice, toServerBootGap } from './boot-gap.ts'
 import { runViewTransition } from './view-transition.ts'
 import { captureSidebarScrollAnchor, restoreSidebarScroll } from './sidebar-scroll-sync.ts'
 import {
@@ -184,6 +231,9 @@ const MAX_PENDING_ROSTER_NOTIFICATION_OPENS = 64
 
 const LOCAL_INSTANCE_ID = 'local'
 
+/** Stable empty list for boots whose failure carries no loader entries (T15). */
+const NO_FAILED_ENTRIES: readonly string[] = []
+
 type DeepLinkDelivery = RendererDeliveryCoordinates & {
   /** Raw id is retained while the first authoritative v2 kind roster is unavailable. */
   rawInstanceId: string
@@ -264,7 +314,17 @@ function deriveServers(
   completedBySource: Record<string, Record<string, boolean>>,
   activeViewId: string,
   pluginDiagnostics: Record<string, PluginGraphDiagnostic | undefined>,
+  // 2026-12（05 §4「降级呈现」第二批）：降级事实要过投影给侧栏来源行与连接页，
+  // 所以 shellStates 与 pluginDiagnostics 一样是 derive 的输入——只读
+  // `degraded`，失败态（error）不进这条投影。
+  shellStates: Record<string, ShellState | undefined>,
   managedRuntime: Record<string, string | null>,
+  workspaceEcho: WorkspaceEchoLedger,
+  openIntents: Readonly<Record<string, string>>,
+  // T16 (2026-09-11 upstream-alignment): the local source's fallback label is
+  // frame copy (the connection row may carry no label), so it comes from the
+  // frame's dictionary in the locale the frame renders in.
+  locale: FrameLocale,
 ): ChamberServerAggregate[] {
   const servers: ChamberServerAggregate[] = []
   const now = Date.now()
@@ -317,7 +377,19 @@ function deriveServers(
       // 当前会话事实只给活动来源：blank（新建未首发的）会话行只在正在查看的
       // 来源投影（06 §4.3 全局单选纪律）——否则每个已挂载来源都会冒出它的
       // 空"新建会话"行。其他来源 blank 行照旧不进入导航列表。
-      const current = id === activeViewId ? runtimeFacts[id]?.current : undefined
+      //
+      // chamber (2026-12，design 05 §2.2 修订)：该来源还有在途 open、且官方运行时
+      // 当前选中的**不是**用户要打开的那个会话时，不投影 current——冷 boot 期间官方
+      // 初始导航策略会先给自己选中一个 blank 会话，此刻投影它就会渲染出一行高亮的
+      // "新会话"，下一次分发（最多 400ms 后）又消失，正是真机问题的可见形态。
+      // 幂等重开（current 已经就是要打开的那个会话）不受影响：投影本就正确，
+      // 为一次分发把高亮摘掉再装回去是纯闪烁、零信息。
+      const current = projectableCurrent(
+        activeViewId,
+        id,
+        runtimeFacts[id]?.current,
+        openIntents[id],
+      )
       // Positional contract of deriveServerWorkspaces (derive.ts): (snapshot,
       // serverId, ungroupedTitle, currentSessionId?, now?). P4-4 review (2026-
       // 09) surfaced a pre-existing mis-binding masked by the old 3-param
@@ -325,7 +397,18 @@ function deriveServers(
       // blank-row currentness branch (and the sidebar ghost-key arming on the
       // REAL source id) actually fires; the ungrouped bucket title is
       // display-only (''), overridden by the sidebar's own t('list.ungrouped').
-      workspaces = deriveServerWorkspaces(aggregate, id, '', current)
+      //
+      // chamber (2026-12, design 05 §2.2 revision): the workspace-creation echo
+      // rides the SAME projection pass — one choke point for every workspace
+      // row (derived or echoed), so the echo needs no second copy inside the
+      // aggregate. `withWorkspaceEcho` is identity-preserving for an absent or
+      // empty ledger, leaving this derive byte-identical to before.
+      workspaces = deriveServerWorkspaces(
+        withWorkspaceEcho(aggregate, workspaceEcho[id]),
+        id,
+        '',
+        current,
+      )
       // Archive-manager metadata (design 24 revision 2026-09): archived rows
       // of this source's snapshot ride the same aggregate; the manager UI
       // never issues its own session read. archiveSetKnown is the provenance
@@ -363,12 +446,23 @@ function deriveServers(
       if (merged !== undefined) entry.runtime = merged
     }
     if (aggregate !== undefined && aggregate.state === 'error') {
-      entry.aggregateError = aggregate.error ?? '未知错误'
+      // 2026-09-11 review-fix (finding 4b): this fallback is frame-owned copy —
+      // it is rendered verbatim by the sidebar's source alert and the archive
+      // dialog (ServerSection.tsx role="alert", ArchiveManagerDialog.tsx), i.e.
+      // it crosses the frame→plugin boundary as a finished string, so it must
+      // come from the frame dictionary in the frame's locale like every other
+      // audited string (the previous round's audit missed it).
+      entry.aggregateError = aggregate.error ?? frameText(locale, 'error.unknown')
     }
     if (pluginDiagnostics[id] !== undefined) entry.pluginDiagnostic = pluginDiagnostics[id]
+    // Settled-boot gap（2026-12）：结构化事实过桥，渲染方（侧栏来源行 / 连接页）
+    // 各出各的文案；生产者的诊断句子不过界。
+    const bootGap = shellStates[id]?.degraded
+    if (bootGap !== undefined && bootGap !== null) entry.bootGap = toServerBootGap(bootGap)
     servers.push(entry)
   }
-  push('local', 'local', LOCAL_INSTANCE_ID, (connections ?? [])[0]?.label ?? '本地实例', 'local')
+  push('local', 'local', LOCAL_INSTANCE_ID,
+    (connections ?? [])[0]?.label ?? frameText(locale, 'source.local'), 'local')
   for (const instance of remoteInstances) {
     // The persisted/runtime target kind is independent of the transport.
     // `ssh` is accepted only as the legacy spelling of a dsh target.
@@ -410,18 +504,25 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, Error
 
   render(): React.ReactNode {
     if (this.state.error) {
+      // T16 (2026-09-11 upstream-alignment): frame copy rides the typed locale
+      // dictionary; a class component reads the locale through the module
+      // reader (it cannot own a hook).
+      const locale = readDocumentLocale()
       return (
         <div className="fatal">
-          <div className="fatal-title">界面发生错误</div>
+          <div className="fatal-title">{frameText(locale, 'error.ui.title')}</div>
           <div className="fatal-message">{String(this.state.error?.message || this.state.error)}</div>
-          <button
-            className="btn"
+          {/* T15 (2026-09-11 upstream-alignment): the official Button atom —
+              the chamber-invented `.btn` chrome (and its own palette entry) is
+              gone. */}
+          <Button
+            variant="outline"
             onClick={() => {
               this.setState({ error: null })
             }}
           >
-            重试
-          </button>
+            {frameText(locale, 'action.retry')}
+          </Button>
         </div>
       )
     }
@@ -430,6 +531,15 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, Error
 }
 
 export default function App() {
+  // T16 (2026-09-11 upstream-alignment): the frame owns no `t` seat, so it
+  // renders its own copy from the typed dictionary in locales.ts, in the locale
+  // the DOCUMENT declares — `<html lang>` is written by the booted shell's
+  // official locale service (syncDocumentLanguage), and the subscription makes a
+  // locale change inside dsh re-render the frame chrome (the same value
+  // readDocumentLocale() reads, so out-of-render copy cannot drift from it).
+  const locale = useSyncExternalStore(subscribeDocumentLocale, readDocumentLocale)
+  const t = useCallback((key: FrameKey, params?: Readonly<Record<string, string>>) =>
+    frameText(locale, key, params), [locale])
   const [health, setHealth] = useState<HealthResponse | null>(null)
   const [healthError, setHealthError] = useState<string | null>(null)
   // 健康失败首次出现的时间戳：致命屏要求错误**持续**存在（宽容瞬时抖动/
@@ -509,6 +619,12 @@ export default function App() {
   // 点开（selectView 清除）或来源从注册表删除（retireSources 清除）——否则
   // prewarmEligible 会立刻把刚回收的源重新 boot，回收空转（见 reclaimView）。
   const prewarmSuppressedRef = useRef<Set<string>>(new Set())
+  // 设置面板目标来源（design 05 §5，2026-12 完整桥接修订）：面板渲染的是**选中
+  // 来源自己的 boot ctx 台账**，所以该来源的壳必须挂载着。面板打开期间由 App
+  // 保证两件事——未挂载则后台挂载（不切 active view），已挂载则排除出保留策略
+  // 回收候选（否则隐藏 60s 后壳被拆，面板正在编辑的设置面随之消失）。面板关闭
+  // (`undefined`) 即撤除这两条保证。
+  const settingsTargetRef = useRef<string | undefined>(undefined)
   // 首屏基线收割（design 05 §2.3 / baseline-harvest.ts）：ready 但从未挂载过的
   // 来源在后台预热槽里挂一次，拿到首个权威推送即回收——否则它稳态停留在
   // unary 兜底视图（合成分组 + 空归档集）直到用户点击。harvestStateRef 是
@@ -627,6 +743,39 @@ export default function App() {
     aggregateRetryTimersRef.current.delete(sourceId)
   }, [])
   const [pluginDiagnostics, setPluginDiagnostics] = useState<Record<string, PluginGraphDiagnostic | undefined>>({})
+  // 工作区创建回声（2026-12，design 05 §2.2 修订）：侧栏在某来源上用 unary
+  // `workspace.create` 建好工作区后，把宿主 workspaceId 上报到这里；App 在
+  // **投影那一个**汇合点（deriveServers）把该行并入，直到权威 `workspace/follow`
+  // push 覆盖它。为什么需要：未挂载来源只有 unary 兜底（工作区靠会话 cwd 反推，
+  // 新空工作区没有会话 ⇒ 结构上不可见），已推送来源的工作区集又被冻结
+  // （commitAggregatePull 的 mounted merge），所以 requestRefresh 无论哪条分支
+  // 都刷不出这一行——真机表现为"必须手动点一下那个服务器"。
+  // state 供渲染触发，ref 供事件侧同步读（与 snapshotSources/snapshotSourcesRef 同纪律）。
+  const [workspaceEcho, setWorkspaceEcho] = useState<WorkspaceEchoLedger>({})
+  const workspaceEchoRef = useRef<WorkspaceEchoLedger>({})
+  const updateWorkspaceEcho = useCallback((next: WorkspaceEchoLedger): void => {
+    workspaceEchoRef.current = next
+    setWorkspaceEcho(next)
+  }, [])
+  /**
+   * Expire echoes past their TTL. Called from every tick that can change what a
+   * source's workspace list SHOULD contain — a new creation, an authoritative
+   * mount push, and each fallback pull — because an echo whose convergence never
+   * arrives (a source that is never mounted again, a workspace deleted on the
+   * host by another client) has no other clock: sweeping only inside the create
+   * handler would let such an entry live for the rest of the session. Identity
+   * preserving, so a sweep that expires nothing costs no re-render.
+   */
+  const sweepWorkspaceEcho = useCallback((): void => {
+    const next = sweepPendingWorkspaces(workspaceEchoRef.current, Date.now())
+    if (next !== workspaceEchoRef.current) updateWorkspaceEcho(next)
+  }, [updateWorkspaceEcho])
+  // 会话打开意图（2026-12，design 05 §2.2 修订；真机问题 1）：App 是唯一写者
+  // （openSession 的 arm/release），槽位本身在 sidebar 包的 shared/open-intent.ts
+  // ——它是跨 ctx 单例，因为 boot 期早开臂要在**目标实例自己的 ctx 内**读它。
+  // 这里经 useSyncExternalStore 绑定：快照在无变化时保持同一引用，一次 arm /
+  // 一次 release 各触发一次重渲染，投影门与揭示门同时生效。
+  const openIntents = useSyncExternalStore(subscribeOpenIntent, getOpenIntentsSnapshot)
   // 每实例运行时事实（06 §4）：来自各来源 ctx 的 chamberBridge 上报，仅附加
   const [runtimeFacts, setRuntimeFacts] = useState<Record<string, InstanceRuntimeReport | undefined>>({})
   const [hostFacts, setHostFacts] = useState<Record<string, HostFacts | undefined>>({})
@@ -656,8 +805,8 @@ export default function App() {
   // chamberBridge 投影（05 §3）：health/remoteStatus/aggregates 任一变化后
   // 派生并发布；首帧（health 未就绪）即发布 connected=false 的分组。
   const servers = useMemo(
-    () => deriveServers(health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, managedRuntime),
-    [health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, managedRuntime],
+    () => deriveServers(health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, shellStates, managedRuntime, workspaceEcho, openIntents, locale),
+    [health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, shellStates, managedRuntime, workspaceEcho, openIntents, locale],
   )
   // chamberBridge publish 签名闸（2026-08 perf pass）：servers 在每次依赖变化
   // 时都会重建（含聚合快照上报/兜底、30s 注册表轮询、状态推送的恒新对象），但
@@ -683,9 +832,10 @@ export default function App() {
   useEffect(() => {
     const phases = Object.fromEntries(servers.map(server => [server.id, server.phase]))
     const plan = planDegradedRetries({
-      degraded: Object.entries(shellStates)
-        .filter(([, state]) => state.degraded !== null)
-        .map(([instanceId]) => instanceId),
+      // 只把「settled 且带缺口」的挂载送进计划，并**带上 kind**：可重试性由
+      // 事实自己的裁决表决定（boot-gap.ts），而不是由这里的调用方猜。
+      degraded: Object.entries(shellStates).flatMap(([instanceId, state]) =>
+        state.degraded === null ? [] : [{ instanceId, kind: state.degraded.kind }]),
       phaseOf: (instanceId) => phases[instanceId],
       retried: degradedRetriedRef.current,
     })
@@ -1094,6 +1244,12 @@ export default function App() {
       delete prevRuntimeFactsRef.current[sourceId]
       delete notifiedCompleteRef.current[sourceId]
     }
+    // 工作区创建回声账本随来源生命周期收敛（同纪律：同 id 重新注册 = 新来源代，
+    // 上一代的回声不得在新代里残留成幽灵工作区行）。
+    updateWorkspaceEcho(forgetPendingWorkspaces(workspaceEchoRef.current, retired))
+    // 打开意图同纪律：被删除来源的在途意图必须撤掉，否则新一代会在投影门/揭示门
+    // 上被上一代的 open 永久压住（那是两个"永远不释放"的闸门）。
+    clearOpenIntents(retired)
     const pendingDeepLink = pendingDeepLinkDeliveryRef.current
     if (
       pendingDeepLink !== null
@@ -1261,6 +1417,10 @@ export default function App() {
       if (!stillCurrent()) return
       delete aggregateFailuresRef.current[instanceId]
       clearAggregateRetry(instanceId)
+      // 工作区回声的 TTL 也挂在这条 unary 兜底链上（2026-12）：未挂载来源没有
+      // 挂载 push 可依，30s 兜底拉取是它唯一的周期时钟——否则一条永远不会被
+      // 权威列表覆盖的回声（例如工作区已在别处被删除）会一直留在投影里。
+      sweepWorkspaceEcho()
       // identity-preserving：快照内容未变（兜底/手动刷新常态）则复用旧 state 对象
       // ——避免恒新对象驱动 servers 重新派生并触发 publish 签名闸后面的全量
       // 侧边栏重渲染（2026-08 perf pass）。错误分支保持无条件覆盖（error 文本
@@ -1323,7 +1483,7 @@ export default function App() {
       // session/list cwd 事实，workspace.list 已删）。
       scheduleRetry()
     }
-  }, [clearAggregateRetry, refreshHealth])
+  }, [clearAggregateRetry, refreshHealth, sweepWorkspaceEcho])
 
   /**
    * Run a bounded refresh wave: at most AGGREGATE_POLL_CONCURRENCY concurrent
@@ -1988,6 +2148,19 @@ export default function App() {
     })
   }, [])
 
+  /**
+   * 重试一个视图（05 §4）：升格为唯一入口，失败覆盖层与降级提示共用同一套
+   * 三段式——重挂该视图 + error/degraded 隧道立即再试 + ready 但会话/远端已死
+   * 的来源立即探测一次。自己写一套会漏掉最后那条探测臂（重试会因隧道故障或
+   * 死会话原地失败）。令牌递增驱动 InstanceView 复位重 boot；来源非 ready 时
+   * 前两段是 no-op，语义仍正确。
+   */
+  const retryView = useCallback((viewId: string) => {
+    probeRemoteReady(viewId)
+    ensureRemoteConnected(viewId)
+    setRetryTokens(prev => ({ ...prev, [viewId]: (prev[viewId] ?? 0) + 1 }))
+  }, [ensureRemoteConnected, probeRemoteReady])
+
   /** 视图切换（设计 05 §4）：经 View Transition 包装（view-transition.ts）——
    * 旧视图静态快照保持到新视图渲染就绪，随后短 crossfade；reveal 重排期间
    * 无黑帧；prefers-reduced-motion/不支持时降级即时切换。未就绪目标视图
@@ -2328,7 +2501,9 @@ export default function App() {
         basePath: instanceBasePath(id),
         booted: false,
         booting: false,
-        error: `实例启动超时：挂载后 ${Math.round(HARVEST_ABANDON_MS / 1000)} 秒未收到任何响应（可重试或切换来源）`,
+        error: frameText(readDocumentLocale(), 'fatal.harvestTimeout', {
+          seconds: String(Math.round(HARVEST_ABANDON_MS / 1000)),
+        }),
         // 超时是失败态，不是降级态：自愈重挂由失败覆盖层的「重试」负责。
         degraded: null,
       },
@@ -2455,7 +2630,13 @@ export default function App() {
       prewarmOriginIds: new Set(autoPrewarmedRef.current),
       now: Date.now(),
     })
-    for (const id of candidates) reclaimView(id)
+    // 设置面板正在编辑的来源不可回收（design 05 §5，2026-12 完整桥接修订）：
+    // 面板渲染的是该来源自己 boot ctx 的台账，拆掉壳 = 正在编辑的设置面消失。
+    // 过滤而非改判定：面板关闭后该源重新成为普通保留候选。
+    for (const id of candidates) {
+      if (id === settingsTargetRef.current) continue
+      reclaimView(id)
+    }
   }, [mountedViews, reclaimView, settledViewIds])
 
   // 定时器/事件驱动的检查需要最新闭包：ref 镜像（同 pollAggregatesRef 纪律）。
@@ -2552,20 +2733,56 @@ export default function App() {
     // 在此 effect；缺该依赖会静默饿死下一次投机预热直到无关事件到来。
   }, [remoteInstances, remoteStatus, mountedViews, activeView, drainPrewarm])
 
-  /** 打开某来源的会话：切到该来源 shell（未挂载先挂载）并分发到运行时。 */
+  /** 打开某来源的会话：切到该来源 shell（未挂载先挂载）并分发到运行时。
+   *  chamber (2026-12，design 05 §2.2 修订)：进入时 arm 一条打开意图、settle 时
+   *  按 sessionId 守卫地释放——它是"这次打开还没落地"的唯一事实源，同时驱动
+   *  ①投影门（该来源在此窗口内不投影 current，blank"新会话"行不可能进列表）
+   *  ②揭示门（目标壳干净 settle 后遮罩继续留到本次 open 落定）
+   *  ③boot 期早开（目标 ctx 内的侧栏插件读活槽位，抢在运行时初始导航之前）。
+   *  守卫式释放保证"点 X 后马上点 Y"时，X 的迟到 finally 不会撤掉 Y 的闸门。 */
   const openSession = useCallback(async (instanceId: string, sessionId: string) => {
     // 用户要在这个来源上工作：error/degraded 隧道立即再试（同上）。
     ensureRemoteConnected(instanceId)
     // 与 selectView 同款注册表守卫：来源已删除时拒绝入队——否则 open 会
     // 挂进 pendingOpens 永不分发（视图不再挂载，dispose 已执行），留死键。
     if (instanceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(instanceId)) {
-      throw new Error(`打开会话失败：来源 ${instanceId} 已不在注册表`)
+      // 2026-09-11 review-fix (finding 4b): the open-failure texts are thrown
+      // across the frame→plugin boundary (the sidebar renders whatever text the
+      // rejected promise carries), so the FRAME-OWNED part is dictionary copy in
+      // the document locale; read at throw time, since no render scope owns it
+      // (locales.ts readDocumentLocale — the module's out-of-render reader).
+      throw new Error(frameText(readDocumentLocale(), 'open.failed.sourceGone', { source: instanceId }))
     }
-    selectView(instanceId)
+    // INVARIANT (2026-09-11 review F1): arm and release are ONE pair owned by
+    // this try/finally, and the arm is the FIRST statement inside the `try` —
+    // nothing may ever be inserted between them. `selectView` can throw
+    // synchronously (view-transition plumbing), so an arm placed before the
+    // `try` latches the intent for the whole generation: the source's projected
+    // `current` stays suppressed and, once the shell settles elsewhere, the
+    // loading veil is pinned forever (the finally that would release is the one
+    // statement the throw skips).
+    // Arming stays BEFORE selectView (the gates must be active the moment the
+    // view switches, or the target shell's self-selected blank session is
+    // projected for a frame). A synchronous throw from the switch now also
+    // reports through the wrapped open-failure text below — accurate, the user's
+    // session open is what failed.
     try {
+      armOpenIntent(instanceId, sessionId)
+      selectView(instanceId)
       await openInstanceSession(instanceId, sessionId)
     } catch (err) {
-      throw new Error(`打开会话失败：${errorMessage(err)}`)
+      // 2026-09-11 review-fix (finding 4b): dictionary copy around a raw cause —
+      // `{detail}` is the underlying error text, which stays whatever the
+      // crossing boundary produced. BOUNDARY (deliberate, open work for the docs
+      // lane): that text is assembled BELOW the frame — shell.ts's open-failure
+      // diagnostics (`实例 … 无法打开会话：…`, the list/open deadlines) and the
+      // dsh runtime's own errors — and none of those sites owns a locale seat, so
+      // an English document still sees a Chinese detail clause here. The frame's
+      // half is dictionary copy; translating another module's error text would be
+      // a second, drifting copy of it.
+      throw new Error(frameText(readDocumentLocale(), 'open.failed.detail', { detail: errorMessage(err) }))
+    } finally {
+      releaseOpenIntent(instanceId, sessionId)
     }
   }, [selectView, ensureRemoteConnected])
 
@@ -2595,7 +2812,10 @@ export default function App() {
       },
       open => {
         if (!sourceLifecyclesRef.current!.owns(open.sourceOwner)) {
-          throw new Error(`来源 ${open.sourceId} 已被移除并以新代重建，旧通知未打开`)
+          // 2026-09-11 review-fix (finding 4b): same dictionary rule as the two
+          // open-failure texts above — the notification runner's rejection text
+          // is surfaced by the sidebar, so the frame's half is dictionary copy.
+          throw new Error(frameText(readDocumentLocale(), 'open.failed.sourceRebuilt', { source: open.sourceId }))
         }
         return openSession(open.sourceId, open.sessionId)
       },
@@ -2665,6 +2885,26 @@ export default function App() {
       selectView(sourceId)
     })
   }, [selectView])
+
+  /**
+   * 设置面板目标来源（design 05 §5，2026-12 完整桥接修订）：面板渲染选中来源
+   * 自己的 boot ctx 台账，因此该来源的壳必须挂载。这里只做"挂载 + 保留"，绝不
+   * 切换 active view——下拉选服务器不等于把用户正在看的视图换掉（与
+   * `requestActivateSource` 的分工：后者是用户点了侧栏来源头部）。
+   * 未在权威 roster 里的 id 不挂载（已退役来源不得被重新 boot）；面板对离线
+   * 来源本就不设目标（它显示不可达占位）。
+   */
+  useEffect(() => {
+    return chamberBridge.onSettingsTarget((sourceId) => {
+      settingsTargetRef.current = sourceId
+      if (sourceId === undefined) return
+      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
+      // 曾经因闲置被回收而被抑制预热的来源，被面板显式选中 = 再次有使用意图。
+      prewarmSuppressedRef.current.delete(sourceId)
+      autoPrewarmedRef.current.delete(sourceId)
+      setMountedViews(prev => (prev.includes(sourceId) ? prev : [...prev, sourceId]))
+    })
+  }, [])
 
   /** VS Code OS 深链（design 16 §2，hold/replay）：先注册监听，再以 ready()
    *  通知主进程放行归一化 intent；冷启动/重载期间的成功启动不会丢失来源激活。
@@ -2815,6 +3055,71 @@ export default function App() {
   }, [refreshAggregate])
 
   /**
+   * 工作区创建回声（2026-12，design 05 §2.2 修订；真机问题 2）：
+   * 侧栏在建好工作区后上报宿主 workspaceId，App 记入渲染端账本并把该行并入
+   * 投影（deriveServers 的单一汇合点）。权威收敛点只有两个：
+   * - 该来源挂载壳的 push 列出同一 workspaceId / 同一路径的真实 id ⇒ 账本条目
+   *   立即清除（reconcilePendingWorkspaces，见 onInstanceSnapshot）；
+   * - 来源离开注册表 / TTL 到期 ⇒ 随生命周期收敛。
+   * 这里只记录、不拉取：侧栏在自己的 create 成功后照旧 `requestRefresh`，两条
+   * 通道职责不重叠（本通道是"我刚刚造了它"的事实，刷新是"其它行要更新"）。
+   */
+  useEffect(() => {
+    return chamberBridge.onWorkspaceCreated((fact) => {
+      const { sourceId } = fact
+      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
+      const owner = sourceLifecyclesRef.current!.capture(sourceId)
+      if (owner === null) return
+      const now = Date.now()
+      let ledger = sweepPendingWorkspaces(workspaceEchoRef.current, now)
+      ledger = recordPendingWorkspace(ledger, sourceId, { workspaceId: fact.workspaceId, path: fact.path }, now)
+      if (ledger !== workspaceEchoRef.current) updateWorkspaceEcho(ledger)
+    })
+  }, [updateWorkspaceEcho])
+  /**
+   * 回声的**撤下 / 改写**通道（2026-12，design 05 §2.2 修订；2026-09-11 review S3）：
+   * 只有 create 事实的回声没有退场机制——创建后又在侧栏删掉会留一行幽灵，且
+   * **权威挂载 push 也退不掉它**（push 只调和"它列出了什么"，列不出的行无事发生，
+   * 幽灵要挂到 10 分钟 TTL；而那一行带真实 host id，工作区级动作在宿主上
+   * fail-closed `workspace/not-found`），
+   * 重命名则因为账本只按路径生成 title 而看起来像没生效。两条通道都是单向事实，
+   * 与 onWorkspaceCreated 同栅栏（活跃来源 + 生命周期捕获），并且经**同一个**
+   * updateWorkspaceEcho 写入：App 仍是投影的唯一写者，账本之外没有第二份状态。
+   * 纯账本改写（removePendingWorkspace / renamePendingWorkspace）保持同一性——
+   * 无匹配条目时返回同一引用，不触发重渲染。
+   */
+  useEffect(() => {
+    return chamberBridge.onWorkspaceRemoved((fact) => {
+      const { sourceId } = fact
+      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
+      const owner = sourceLifecyclesRef.current!.capture(sourceId)
+      if (owner === null) return
+      // The removal is another tick that can change what that source's list
+      // SHOULD contain, so it carries the same TTL sweep as the create fact
+      // (whose doc enumerates these ticks): the retired entry itself is dropped
+      // eagerly by removePendingWorkspace, the sweep covers the entries whose
+      // convergence never came. Identity-preserving, so a no-op costs no render.
+      let ledger = sweepPendingWorkspaces(workspaceEchoRef.current, Date.now())
+      ledger = removePendingWorkspace(ledger, sourceId, { workspaceId: fact.workspaceId, path: fact.path })
+      if (ledger !== workspaceEchoRef.current) updateWorkspaceEcho(ledger)
+    })
+  }, [updateWorkspaceEcho])
+  useEffect(() => {
+    return chamberBridge.onWorkspaceRenamed((fact) => {
+      const { sourceId } = fact
+      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
+      const owner = sourceLifecyclesRef.current!.capture(sourceId)
+      if (owner === null) return
+      const next = renamePendingWorkspace(
+        workspaceEchoRef.current,
+        sourceId,
+        fact.workspaceId,
+        fact.title,
+      )
+      if (next !== workspaceEchoRef.current) updateWorkspaceEcho(next)
+    })
+  }, [updateWorkspaceEcho])
+  /**
    * Mounted source ctxs publish the same complete snapshot shape as the unary
    * fallback. A push invalidates any older in-flight pull before committing.
    * A withdrawal (`undefined`) means the source's arrival baselines have not
@@ -2861,6 +3166,18 @@ export default function App() {
         return { ...prev, [sourceId]: true }
       })
       if (snapshot === undefined) return
+      // 工作区创建回声的权威收敛点（2026-12，design 05 §2.2 修订）：挂载壳自己的
+      // follow baseline / upsert 列出了这个工作区（同 workspaceId，或同路径的真实
+      // id）⇒ 账本条目立刻退休，投影随之只剩权威行。刻意放在下面的 ready 门之前：
+      // push 里的工作区身份来自该来源自己的 follow 基线，与聚合是否已提交无关。
+      {
+        // TTL first, then retire whatever the authoritative list now covers: the
+        // mounted push is the echo's convergence signal, so an entry it lists has
+        // no job left and must not survive as a duplicate.
+        const swept = sweepPendingWorkspaces(workspaceEchoRef.current, Date.now())
+        const reconciled = reconcilePendingWorkspaces(swept, sourceId, snapshot.workspaces)
+        if (reconciled !== workspaceEchoRef.current) updateWorkspaceEcho(reconciled)
+      }
       // A mounted ctx can deliver a late store notification after its
       // transport generation died. Keep producer ownership, but never let
       // that notification overwrite the authoritative not-connected row;
@@ -3053,24 +3370,39 @@ export default function App() {
       }
       notifiedCompleteRef.current[sourceId] = deduped.notified
       if (deduped.edges.length > 0) {
-        // 事件组装（设计 19 §3.3）：固定文案（zh 字面量，沿 App.tsx 既有
-        // 风格）；label/title 取渲染期镜像（本 effect 依赖 []，拿不到
-        // state/useMemo 闭包）。桥未就绪（window.dshChamber 异步出现）静默
+        // 事件组装（设计 19 §3.3）：文案来自 App 框架的 typed 字典
+        // （locales.ts，T16 2026-09-11 upstream-alignment）；本 effect 依赖
+        // []，拿不到 render 作用域的 `t`，因此在事件组装时读取当前文档语言
+        // （与 render 侧同一个读法：readDocumentLocale）。label/title 取渲染期
+        // 镜像（同上）。桥未就绪（window.dshChamber 异步出现）静默
         // 跳过——边沿是低频事件，错过早期事件可接受，不报错刷屏。组装块
         // 与蓝点对账隔离：任何异常不得吞掉该份上报的蓝点推进（try/finally
         // 保底，主链路 notify 本身有 catch）。
         try {
           const bridge = window.dshChamber?.notifications
           if (bridge !== undefined) {
+            const copyLocale = readDocumentLocale()
             const label = serverLabelsRef.current[sourceId] ?? sourceId
             const aggregate = aggregatesRef.current[sourceId]
-            const sessionTitle = (sessionId: string) =>
-              aggregate?.sessions.find(session => session.sessionId === sessionId)?.title ?? '未命名会话'
+            // I3 (official display label): the row's resolved displayTitle first,
+            // then the durable title — a session whose title the host could not
+            // read is named by its project directory, exactly like its row. The
+            // localized untitled copy survives ONLY for the genuinely absent row
+            // (no aggregate / the session is not in the projection): there the
+            // frame truly has no label fact, and this site stays dictionary-owned
+            // (frame-locale audit T15).
+            const sessionTitle = (sessionId: string) => {
+              const row = aggregate?.sessions.find(session => session.sessionId === sessionId)
+              const display = row?.displayTitle
+              if (display !== undefined && display !== '') return display
+              if (row?.title !== undefined && row.title !== '') return row.title
+              return frameText(copyLocale, 'session.untitled')
+            }
             for (const edge of deduped.edges) {
               const title =
-                edge.kind === 'complete' ? '会话已完成'
-                : edge.kind === 'ask' ? '代理正在等待你的回答'
-                : '代理请求你的批准'
+                edge.kind === 'complete' ? frameText(copyLocale, 'notification.sessionComplete')
+                : edge.kind === 'ask' ? frameText(copyLocale, 'notification.awaitingAnswer')
+                : frameText(copyLocale, 'notification.awaitingApproval')
               const body = `${label} · ${sessionTitle(edge.sessionId)}`
               // 正在屏幕上查看的会话豁免（与 OpenChamber requireHidden 同语义；
               // 单窗口下 renderer 的 document.hasFocus() 与主进程
@@ -3241,7 +3573,30 @@ const HEALTH_ERROR_GRACE_MS = 10_000
   // 活动视图的 shell 失败报告（05 §4 失败呈现修订）：boot 失败 settle 后由
   // InstanceView 上报终态；只有失败态（error 非空）触发覆盖层——booting/
   // 成功态由骨架屏/真实 UI 呈现。
-  const activeShellError = shellStates[activeView]?.error ?? null
+  const activeShellState = shellStates[activeView]
+  const activeShellError = activeShellState?.error ?? null
+  // T15 (2026-09-11 upstream-alignment): the failed boot's plugin ids, as the
+  // official report lists them (shell.ts collectFailedEntries reads the failed
+  // boot's own loader sweep). Empty for failures that produced no loader entry
+  // (module-system/manifest), which keeps today's report-only overlay.
+  const activeShellFailedEntries = activeShellState?.failedEntries ?? NO_FAILED_ENTRIES
+  // 降级呈现（2026-12, 05 §4）：活动视图 boot 成功但已知缺口时，给出现场说明。
+  // 只有 error 为空的降级态才渲染——boot 失败覆盖层已独占失败态（结构互斥，
+  // 见 shell.ts：settled 的 degraded 蕴含 booted && error === null）。**但控制面
+  // 不可达覆盖层与壳状态无关**，上面的条件管不住它，故渲染处再加一道
+  // `!controlUnreachable`：否则横幅会被那张不透明覆盖层盖住却仍可聚焦/播报
+  // （2026-12 review MINOR）。
+  // 「会自动重挂吗」由 boot-gap.ts 的纯判定给出：来源 ready 且本 ready 世代
+  // 还没重挂过，才允许承诺自动重挂（self-heal 从不触碰非 ready 来源）。
+  const activeShellGap = activeShellState !== undefined && activeShellState.error === null
+    ? activeShellState.degraded
+    : null
+  const activeBootGap = activeShellGap === null
+    ? null
+    : bootGapNotice(activeShellGap, {
+        phase: servers.find(server => server.id === activeView)?.phase,
+        retried: degradedRetriedRef.current[activeView] === true,
+      })
 
   return (
     <ErrorBoundary>
@@ -3253,6 +3608,23 @@ const HEALTH_ERROR_GRACE_MS = 10_000
           const sourceFingerprint = sourceLifecyclesRef.current!.capture(viewId)?.fingerprint
           const transport = servers.find(server => server.id === viewId)?.transport
           if (sourceFingerprint === undefined || transport === undefined) return null
+          /**
+           * 2026-09-11 review S1: the "nothing legitimate on screen" input of the
+           * reveal gate. Read from data this view ALREADY has — the RAW runtime
+           * current (never the gated projection, which the veil itself hides) and
+           * the source's own aggregate, whose session rows carry the runtime's
+           * `blank` flag (`InstanceAggregate.sessions`, projected by
+           * projectInstanceSnapshot). No extra fetch: the mounted ctx pushes that
+           * snapshot, and the unary fallback fills it for unmounted sources.
+           * UNKNOWN ⇒ true on purpose: a session the aggregate does not list yet
+           * (cold boot, the push has not landed) must keep the veil, which is the
+           * pre-fix cold-boot behaviour. Only a KNOWN non-blank current session
+           * makes this false — the warm-shell case the veil used to cover for up
+           * to the whole 8s open budget.
+           */
+          const currentSessionId = runtimeFacts[viewId]?.current
+          const blankCurrent = currentSessionId === undefined
+            || (aggregates[viewId]?.sessions.find(session => session.sessionId === currentSessionId)?.blank ?? true)
           return (
             <InstanceView
               key={viewId}
@@ -3261,11 +3633,46 @@ const HEALTH_ERROR_GRACE_MS = 10_000
               sourceFingerprint={sourceFingerprint}
               transport={transport}
               active={activeView === viewId}
-              label={serverLabels[viewId] ?? (viewId === LOCAL_INSTANCE_ID ? '本地实例' : viewId)}
+              label={serverLabels[viewId] ?? (viewId === LOCAL_INSTANCE_ID ? t('source.local') : viewId)}
+              locale={locale}
               onSettled={handleInstanceSettled}
               onStateChange={handleShellState}
               retryToken={retryTokens[viewId]}
               waitForServing={waitForServing}
+              // chamber (2026-12, design 05 §2.2 revision): the reveal gate. The
+              // boot window is covered by the view's own `!settled` veil; this
+              // boolean extends the hold past a clean settle for exactly as long
+              // as the shell would NOT show the requested session. Every input
+              // lives in the App: the shell's settled/failed mirror, the RAW
+              // runtime current (never the gated projection value — the gate
+              // exists to hide that very value) and that view's own blank flag
+              // (blankCurrent, below).
+              //
+              // Deliberately NOT "any pending open": a view that already shows
+              // the requested session (idempotent re-open, or the boot-ctx
+              // early-open arm having preempted the runtime's initial selection)
+              // must not veil at all, and a warm visible shell that is switching
+              // between two REAL sessions resolves synchronously — holding a veil
+              // there would hide a working UI for no reason.
+              //
+              // 2026-09-11 review S1: "shows nothing legitimate" is a REQUIRED
+              // input of the shared rule (blankCurrent) — the hold is
+              // `pendingIntent && !failed && !showsRequestedSession &&
+              // blankCurrent`, i.e. the veil covers only a blank (cold "新会话")
+              // or unknown current session, never a warm shell showing a real one.
+              holdVeil={shouldHoldViewVeil({
+                failed: (shellStates[viewId]?.error ?? null) !== null,
+                pendingIntent: openIntents[viewId] !== undefined,
+                blankCurrent,
+                // `openIntents[viewId] !== undefined` is spelled out here on
+                // purpose: without it, "no current AND no intent" would read as
+                // "already showing the requested session" (undefined ===
+                // undefined). The rule short-circuits on pendingIntent today, but
+                // the comparison must not depend on that for its meaning.
+                showsRequestedSession: openIntents[viewId] !== undefined
+                  && shellStates[viewId]?.booted === true
+                  && runtimeFacts[viewId]?.current === openIntents[viewId],
+              })}
             />
           )
         })}
@@ -3277,39 +3684,91 @@ const HEALTH_ERROR_GRACE_MS = 10_000
             无关的健康实体）。仅活动视图渲染；非活动视图失败在激活时呈现。
             控制面不可达（controlUnreachable）是更高层的全局条件，渲染在其
             之上（下方 JSX 顺序在后）。 */}
+        {activeBootGap !== null && !controlUnreachable && (
+          <div className="boot-gap-layer">
+            {/* 降级呈现（2026-12, 05 §4）：boot 成功但整个面缺席时的现场说明。
+                非模态、不阻断——侧栏/会话头/composer/切换来源全部照常，命中测试
+                只落在卡片本身（层 pointer-events:none）。role="status" 而非
+                "alert"：本通知不夺焦点也不打断读屏，且 kind 并不能判定"暂时"
+                还是"结构性"（图通道竞态与结构性缺行同 kind），用 alert 会把
+                几秒的竞态当成事故播报。文案全部来自框架字典；产出方的原文只作
+                诊断行（跨边界诊断文案规则，STATUS）。 */}
+            <div className="boot-gap" role="status">
+              <div className="boot-gap-title">{t('bootGap.title')}</div>
+              <div className="boot-gap-body">{t(activeBootGap.bodyKey)}</div>
+              {activeBootGap.services.length > 0 && (
+                <div className="boot-gap-facts">
+                  {t('bootGap.services')}: {activeBootGap.services.join(', ')}
+                  {activeBootGap.injectedBy.length > 0
+                    ? ` · ${t('bootGap.injectedBy')}: ${activeBootGap.injectedBy.join(', ')}`
+                    : ''}
+                </div>
+              )}
+              {activeBootGap.failedIds.length > 0 && (
+                <div className="boot-gap-facts">
+                  {t('bootGap.failedPlugins')}: {activeBootGap.failedIds.join(', ')}
+                </div>
+              )}
+              <div className="boot-gap-action">
+                {t(activeBootGap.autoRetryArmed ? 'bootGap.action.autoRetry' : 'bootGap.action.manual')}
+              </div>
+              {activeBootGap.detail !== '' && (
+                <div className="boot-gap-detail">{t('bootGap.detail')}: {activeBootGap.detail}</div>
+              )}
+              {activeBootGap.retryable && (
+                <Button variant="outline" onClick={() => retryView(activeView)}>
+                  {t('action.retry')}
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
         {activeShellError !== null && (
           <div className="fatal fatal-overlay">
+            {/* T15 (2026-09-11 upstream-alignment): the failure report carries
+                the SAME content the official report does — a title, the boot
+                failure text, and the plugin ids that did not activate (the
+                shell reads them off the failed boot's own loader sweep and the
+                ids ride ShellState, never a new channel). The chamber cover
+                itself stays (design 05 §2.2.1 gate 2 + §4: navigation lives
+                inside the shell, so a failed boot needs this escape hatch). */}
             <div role="alert">
-              <div className="fatal-title">实例启动失败</div>
+              <div className="fatal-title">{t('fatal.boot.title')}</div>
               <div className="fatal-message">{activeShellError}</div>
+              {activeShellFailedEntries.length > 0 && (
+                <div className="fatal-entries">
+                  <div className="fatal-entries-title">{t('fatal.entries.title')}</div>
+                  {activeShellFailedEntries.map(entryId => (
+                    <div key={entryId} className="fatal-entry">{entryId}</div>
+                  ))}
+                </div>
+              )}
             </div>
-            <button
-              className="btn primary"
+            <Button
+              variant="primary"
               onClick={() => {
                 // 重试 = 重新 boot 该视图；error/degraded 隧道同时立即再试，
                 // ready 但会话/远端已死的来源立即探测一次（与 selectView
                 // 同语义——boot 失败若由隧道故障或死会话引起，不重连/不探测
-                // 则重试只会再次失败）。
-                probeRemoteReady(activeView)
-                ensureRemoteConnected(activeView)
-                setRetryTokens(prev => ({ ...prev, [activeView]: (prev[activeView] ?? 0) + 1 }))
+                // 则重试只会再次失败）。与降级提示共用唯一入口 retryView。
+                retryView(activeView)
               }}
             >
-              重试
-            </button>
+              {t('action.retry')}
+            </Button>
             {servers.length > 1 && (
               <div className="fatal-servers">
-                <span className="muted small">切换到其他服务器：</span>
+                <span className="muted small">{t('action.switchServer')}</span>
                 {servers.map(server => (
                   server.id === activeView ? null : (
-                    <button
+                    <Button
                       key={server.id}
-                      className="btn"
+                      variant="outline"
                       onClick={() => selectView(server.id)}
                     >
                       {/* 空 label 回退 id，避免出现无标签的切换按钮 */}
                       {server.label !== '' ? server.label : server.id}
-                    </button>
+                    </Button>
                   )
                 ))}
               </div>
@@ -3318,17 +3777,23 @@ const HEALTH_ERROR_GRACE_MS = 10_000
         )}
         {controlUnreachable && (
           <div className="fatal fatal-overlay">
-            <div className="fatal-title">无法连接控制面</div>
-            <div className="fatal-message">{healthError}</div>
-            <button
-              className="btn primary"
+            {/* a11y nit of the same audit (2026-09-11 upstream-alignment): the
+                fatal overlay is an alert like its boot-failure sibling — a
+                screen reader must announce the control-plane loss without a
+                focus move. */}
+            <div role="alert">
+              <div className="fatal-title">{t('fatal.controlPlane.title')}</div>
+              <div className="fatal-message">{healthError}</div>
+            </div>
+            <Button
+              variant="primary"
               onClick={() => {
                 void refreshHealth()
                 void refreshConnections()
               }}
             >
-              重试
-            </button>
+              {t('action.retry')}
+            </Button>
           </div>
         )}
       </div>

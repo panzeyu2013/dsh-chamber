@@ -1,6 +1,15 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { compareReleaseVersions, releaseChannel } from './release-semver.mjs'
+import { REQUIRED_JOBS, judgeCandidates, judgeRun, pickCandidateRuns } from './verify-release-ci-proof.mjs'
+
+
+/** Slice one job's text out of a workflow file (top-level job keys are 2-space indented). */
+function jobBlock(text, name) {
+  const match = text.match(new RegExp(`\\n  ${name}:\\n([\\s\\S]*?)(?=\\n  [a-z][a-z0-9-]*:\\n|$)`))
+  assert.ok(match, `workflow must define a ${name} job`)
+  return match[1]
+}
 
 const workflow = readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8')
 const desktopPackage = JSON.parse(
@@ -66,6 +75,19 @@ assert.doesNotMatch(workflow, /npm publish|npm dist-tag/)
 assert.match(gatewayBuild, /sha256sum/)
 assert.match(gatewayBuild, /packages\/gateway\/release\/\*\.tgz\.sha256/)
 assert.match(gatewayBuild, /Upload gateway package to the draft release/)
+// --- Swift native shell leg (design 25, W-26) -----------------------------
+// The native artifacts ship from the same tag under a -native name; the dry
+// run must be credential-free and the formal run fail-closed on the signing
+// identity (A6: missing Apple credentials block the release, never silently
+// downgrade to an ad-hoc build). The leg sits between build-linux and
+// finalize-release, so the linux slice above must stop at its boundary.
+assert.match(swiftBuild, /pnpm run build:sidecar/)
+assert.match(swiftBuild, /pnpm run build:swift-app --out macos\/release/)
+assert.match(swiftBuild, /--app-name dsh-chamber-native/)
+assert.match(swiftBuild, /-native\.(dmg|zip)|dsh-chamber-native/, 'the native artifacts must keep their -native names')
+assert.match(swiftBuild, /dry_run/, 'the native leg must branch on the dry-run input')
+assert.match(swiftBuild, /identity|notarytool/, 'the formal native leg must assert the signing identity')
+
 for (const build of [macBuild, windowsBuild, linuxBuild]) {
   assert.match(build, /electron-builder\.beta\.yml/)
   assert.match(build, /VERSION.*\*-\*/s)
@@ -81,75 +103,174 @@ assert.match(windowsBuild, /beta\.yml/)
 assert.match(windowsBuild, /latest\.yml/)
 assert.match(linuxBuild, /beta-linux\.yml/)
 assert.match(linuxBuild, /latest-linux\.yml/)
-// --- Swift native shell leg (design 25, W-26) -----------------------------
-// The native artifacts ship from the same tag under a -native name; the dry
-// run must be credential-free and the formal run fail-closed on the signing
-// identity (A6: missing Apple credentials block the release, never silently
-// downgrade to an ad-hoc build).
-assert.match(swiftBuild, /pnpm run build:sidecar/)
-assert.match(swiftBuild, /pnpm run build:swift-app --out macos\/release/)
-assert.match(swiftBuild, /--app-name dsh-chamber-native/)
-assert.match(swiftBuild, /--artifact-basename "dsh-chamber-native-\$\{VERSION\}-macos-arm64"/)
-assert.match(swiftBuild, /unset CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID GH_TOKEN/)
-assert.match(swiftBuild, /formal Swift release requires CSC_LINK/)
-assert.match(swiftBuild, /no Developer ID Application identity in CSC_LINK/)
-assert.match(swiftBuild, /notarytool submit/)
-assert.match(swiftBuild, /stapler staple/)
-assert.match(swiftBuild, /gh release upload "v\$\{VERSION\}"/)
-assert.match(swiftBuild, /--clobber/)
-assert.match(swiftBuild, /basename "\$APP\/Contents\/Resources\/sidecar\/node"/)
-assert.match(swiftBuild, /= "node"/)
-assert.match(swiftBuild, /bridge-shim\.poc\.js/)
-assert.match(swiftBuild, /dist\/web\/index\.html/)
-assert.match(swiftBuild, /ARTIFACT_ARGS=\(--no-zip --no-dmg\)/)
-// 内置 dsh 工作区必须由 bundle:dsh 在 build:sidecar 之前物化（干净 runner 上
-// vendor/dsh/package.json + node_modules 不存在；缺则 verify 的 test -f 失败）。
-assert.ok(
-  swiftBuild.indexOf('run bundle:dsh') > 0
-    && swiftBuild.indexOf('run bundle:dsh') < swiftBuild.indexOf('pnpm run build:sidecar'),
-  'build-swift must run bundle:dsh before build:sidecar',
-)
-// macOS runners default to bash 3.2: an empty array under `set -u` makes
-// "${A[@]}" an unbound-variable error, so the dry-run path (empty array) MUST
-// use the guarded expansion form.
-assert.ok(
-  swiftBuild.includes('${ARTIFACT_ARGS[@]+"${ARTIFACT_ARGS[@]}"}'),
-  'dry-run empty array must use the bash-3.2-safe guarded expansion',
-)
-assert.equal(
-  swiftBuild.split('${ARTIFACT_ARGS[').length - 1,
-  2,
-  'the guarded form is the ONLY ARTIFACT_ARGS expansion (an extra unguarded one breaks dry-run on bash 3.2)',
-)
-assert.match(swiftBuild, /notarytool submit "\$SUBMIT_ZIP"/)
-assert.match(swiftBuild, /stapler staple "\$APP"/)
-assert.ok(
-  swiftBuild.indexOf('stapler staple "$APP"') < swiftBuild.indexOf('ditto -c -k --sequesterRsrc --keepParent "$APP" "${BASE}.zip"'),
-  'final archives must be built AFTER stapling (ticket must be inside the shipped .app)',
-)
-// Notarize/Upload must stay gated on a non-dry-run (mutation steps).
-assert.match(swiftBuild, /- name: Notarize \+ staple native app \(release only\)\n        if: \$\{\{ github\.event\.inputs\.dry_run != 'true' \}\}/)
-assert.match(swiftBuild, /- name: Upload native artifacts to the draft release\n        if: \$\{\{ github\.event\.inputs\.dry_run != 'true' \}\}/)
-
 assert.match(workflow, /make_latest=false/)
 assert.match(workflow, /make_latest=true/)
 assert.match(workflow, /needs: \[create-release, build-gateway, build-macos, build-windows, build-linux, build-swift\]/)
-for (const requiredGate of [
-  'pnpm run typecheck:gateway',
-  'pnpm run typecheck:runtime',
-  'pnpm run test:gateway',
-  'pnpm run test:runtime',
-  'pnpm run test:release-workflow',
-  'pnpm run test:cli',
-  'pnpm run test:control-plane',
-  'pnpm run test:open-in',
-  'pnpm run typecheck:connection',
-]) {
+// The release path validates itself because a tag push runs ci.yml and
+// release.yml in PARALLEL — publishing an untested commit must be impossible.
+// The list below therefore has to track ci.yml's gate set: the 2026-12 review
+// P2 found gates that only ci.yml ran (design-token conformance, upgrade
+// tooling, the third-party-notices diff, the desktop packaging sub-builds, and
+// the upstream-touchpoint registry/C8 gate), so a release could ship a commit
+// that the push path would have rejected.
+// ---------------------------------------------------------------- mechanical
+// alignment contract (2026-09)
+//
+// The release validation chain and the push chain used to be two hand-written
+// lists kept aligned by a hand-written list of gate names HERE. That is how a
+// gate added to ci.yml alone slips through: `test:gui-acceptance` did exactly
+// that. So the contract is now derived FROM ci.yml — every gate command the push
+// path runs must appear in release validation, or be listed in EXEMPT with the
+// reason and where its coverage lives instead.
+const ciWorkflow = readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8')
+const ciTestJob = jobBlock(ciWorkflow, 'test')
+
+/** Every gate command a job runs: `run:` blocks, inline or multi-line. */
+function gateCommands(jobText) {
+  const commands = new Set()
+  for (const raw of jobText.split('\n')) {
+    let line = raw.trim()
+    if (line === '' || line.startsWith('#')) continue
+    line = line.replace(/^-\s+/, '').replace(/^run:\s*/, '')
+    if (['|', '>', '|-', '>-'].includes(line)) continue
+    for (const [pattern, normalize] of [
+      [/^pnpm run ([A-Za-z0-9:_-]+)/, match => `pnpm run ${match[1]}`],
+      [/^pnpm --filter (\S+) run ([A-Za-z0-9:_-]+)/, match => `pnpm --filter ${match[1]} run ${match[2]}`],
+      [/^node (scripts\/[^\s]+\.mjs)/, match => `node ${match[1]}`],
+      [/^(git diff --exit-code -- [^\s]+)/, match => match[1]],
+    ]) {
+      const match = line.match(pattern)
+      if (match) { commands.add(normalize(match)); break }
+    }
+  }
+  return [...commands].sort()
+}
+
+/**
+ * Gates the push path runs that release validation deliberately does NOT: each
+ * entry names the reason and where the coverage lives instead. A gate that is
+ * simply missing is a failure, not an exemption.
+ */
+const EXEMPT = new Map([
+  ['pnpm run smoke', 'the release path has never wired smoke (ci.yml says so at its own step): a checkout carries no bundled dsh runtime, so it would only print SKIP. Real gap — a post-bundle smoke inside the build legs — is a separate change, not a silent exemption.'],
+  ['node scripts/dev/classify-ci-changes.mjs', 'push-path plumbing, not a gate: it only decides whether the expensive chain is worth running, and release validation always runs that chain in full, so there is nothing to classify.'],
+])
+
+const missingGates = gateCommands(ciTestJob).filter(gate => !validation.includes(gate) && !EXEMPT.has(gate))
+assert.deepEqual(
+  missingGates,
+  [],
+  `release validation must run every gate the push path runs (or list it in EXEMPT with a reason). Missing: ${missingGates.join(', ')}`,
+)
+// An exemption that stops being needed must be removed, not left to rot: the
+// gate is either back in the push path or now covered by validation.
+for (const gate of EXEMPT.keys()) {
   assert.ok(
-    validation.includes(requiredGate),
-    `release validation must include the CI gate: ${requiredGate}`,
+    gateCommands(ciTestJob).includes(gate),
+    `EXEMPT lists ${gate}, but the push path no longer runs it — drop the exemption`,
+  )
+  assert.ok(
+    !validation.includes(gate),
+    `EXEMPT lists ${gate}, but release validation runs it now — drop the exemption`,
   )
 }
+
+// ---------------------------------------------------------------- T1/T2/T3
+// A release PROVES its commit passed CI instead of re-running the chain on the
+// tag (2026-09 CI-trigger revision). The old shape had the linux chain step aside
+// for tags while the windows leg re-ran the identical SHA — and tagging a commit
+// that never went through main skipped the linux chain entirely, so "no release
+// from an untested commit" rested on procedure rather than an assertion. Now
+// ci.yml has no tag path at all and release validation carries the proof. The
+// classifier must stay frozen so widening the prose allowlist (which SKIPS gates)
+// cannot happen by accident.
+assert.doesNotMatch(
+  ciWorkflow,
+  /github\.ref_type/,
+  'ci.yml must not branch on tags anymore: a release proves its commit ran this chain on main instead of re-running it',
+)
+assert.doesNotMatch(
+  ciWorkflow,
+  /^\s+tags:\s*\[[^\]]*'v\*'[^\]]*\]\s*$/m,
+  'ci.yml must not trigger on tag pushes: release.yml owns the tag path and rejects a commit main never validated',
+)
+const ciWindowsJob = jobBlock(ciWorkflow, 'test-windows')
+// The proof names every required leg explicitly, so release validation cannot pass on a
+// commit whose linux chain or windows leg never ran.
+assert.match(
+  validation,
+  /- name: Release commit passed CI on main[\s\S]{0,400}?run: node scripts\/dev\/verify-release-ci-proof\.mjs --sha/,
+  'release validation must prove the released commit passed ci.yml on main (linux + windows legs)',
+)
+assert.match(
+  validation,
+  /permissions:\n\s+contents: read\n\s+actions: read\n/,
+  'the proof lists workflow runs/jobs, so the validation job needs actions: read',
+)
+for (const manifest of ['dsh-runtime', 'control-plane', 'desktop']) {
+  assert.ok(
+    ciWindowsJob.includes(`--filter @dsh-chamber/${manifest} run test:win32`),
+    `the windows leg must keep the ${manifest} test:win32 manifest`,
+  )
+}
+assert.match(
+  ciWorkflow,
+  /^concurrency:\n  group:\s*ci-\$\{\{\s*github\.ref\s*\}\}\n  cancel-in-progress:\s*\$\{\{\s*github\.event_name\s*==\s*'pull_request'\s*\}\}$/m,
+  'the push chain must serialize per ref and cancel ONLY pull-request runs: cancelling a branch push could drop the validation of a code commit when a prose-only push follows it (the classifier spares prose the heavy chain, so nothing would re-validate that commit)',
+)
+assert.ok(
+  classifiesHeavySteps(ciTestJob) >= 15,
+  'the heavy push chain must be gated by the change classifier (steps.classify.outputs.code)',
+)
+
+/** Count the heavy steps the classifier can skip. */
+function classifiesHeavySteps(jobText) {
+  return [...jobText.matchAll(/^\s+if:\s*steps\.classify\.outputs\.code\s*==\s*'true'\s*$/gm)].length
+}
+
+// The prose allowlist decides what SKIPS the heavy chain, so freeze it here:
+// widening it must be a deliberate edit to this assertion.
+const classifier = readFileSync(new URL('./classify-ci-changes.mjs', import.meta.url), 'utf8')
+const prefixes = classifier.match(/export const PROSE_ONLY_PREFIXES = \[([^\]]*)\]/)
+const files = classifier.match(/export const PROSE_ONLY_FILES = \[([^\]]*)\]/)
+assert.ok(prefixes && files, 'the classifier must export its prose allowlist')
+assert.deepEqual(
+  [...prefixes[1].matchAll(/'([^']+)'/g)].map(match => match[1]),
+  ['docs/'],
+  'prose prefixes decide which pushes skip gates — widen deliberately, in this test',
+)
+assert.deepEqual(
+  [...files[1].matchAll(/'([^']+)'/g)].map(match => match[1]),
+  ['README.md', 'AGENTS.md', 'CONTRIBUTING.md', 'CHANGELOG.md', 'LICENSE', 'SECURITY.md', 'CODE_OF_CONDUCT.md'],
+  'prose files decide which pushes skip gates — widen deliberately, in this test',
+)
+// The upstream-touchpoint registry gate runs in TWO passes, and both are
+// load-bearing: a substring check on the script path alone would pass with
+// either one missing, so pin the exact command lines AND their order relative
+// to the install (the advisory pass is file-only and must fail fast before it;
+// the C8 rebuild pass needs esbuild from node_modules and must come after).
+const upstreamGateRuns = validation.match(/^\s+run: node scripts\/dev\/verify-upstream-touchpoints\.mjs.*$/gm) ?? []
+assert.equal(
+  upstreamGateRuns.length,
+  2,
+  `release validation must run the upstream gate exactly twice (advisory + C8 rebuild), found ${upstreamGateRuns.length}`,
+)
+const advisoryGate = validation.indexOf('run: node scripts/dev/verify-upstream-touchpoints.mjs --no-artifact-rebuild')
+const rebuildGate = validation.indexOf('run: node scripts/dev/verify-upstream-touchpoints.mjs\n')
+const installStep = validation.indexOf('run: pnpm install --frozen-lockfile')
+assert.notEqual(advisoryGate, -1, 'release validation must run the upstream gate in --no-artifact-rebuild mode')
+assert.notEqual(rebuildGate, -1, 'release validation must run the upstream gate in its default (C8 rebuild) mode')
+assert.ok(
+  advisoryGate < installStep && installStep < rebuildGate,
+  'the upstream gate must run file-only before the install and its C8 rebuild pass after it (ci.yml order)',
+)
+// Regenerating the notices file is not a gate by itself — the committed file
+// must be proven current, on both the English mirror and the canonical one.
+assert.match(
+  validation,
+  /git diff --exit-code -- THIRD_PARTY_NOTICES\.md docs\/THIRD_PARTY_NOTICES\.en-US\.md/,
+  'release validation must assert the regenerated third-party notices are committed',
+)
 assert.equal(releaseChannel('1.2.3'), 'latest')
 assert.equal(releaseChannel('1.2.3-beta.1'), 'beta')
 assert.equal(releaseChannel('1.2.3-beta.0'), 'beta')
@@ -176,6 +297,67 @@ assert.equal(
   buildRefPins.length,
   5,
   'every build-job checkout must pin ref: ${{ github.sha }} to the validated workflow SHA',
+)
+assert.match(
+  swiftBuild,
+  /ref: \$\{\{ github\.sha \}\}/,
+  'the native leg ships artifacts from the tag too: it must build the validated SHA like every other leg',
+)
+
+// --------------------------------------------------------- proof decision logic
+// The proof gate's decision surface is pure, so every arm is covered here (the
+// network poll itself only runs in release.yml): green run with both legs, a run
+// still in flight, a failed run, a failed leg, a missing leg, and "a flaky
+// failure re-run green still proves the commit".
+const GREEN_RUN = {
+  id: 1,
+  status: 'completed',
+  conclusion: 'success',
+  html_url: 'https://example.test/run/1',
+  head_sha: 'a'.repeat(40),
+  event: 'push',
+  head_branch: 'main',
+  created_at: '2026-09-13T07:00:00Z',
+}
+const job = (name, conclusion) => ({ name, conclusion })
+assert.equal(judgeRun(GREEN_RUN, [job('test', 'success'), job('test-windows', 'success'), job('test-macos', 'success')]).state, 'ok')
+assert.equal(judgeRun(GREEN_RUN, [job('test', 'success'), job('test-windows', 'skipped')]).state, 'failed',
+  'a skipped windows leg does not prove the win32 contracts')
+assert.equal(judgeRun(GREEN_RUN, [job('test', 'success')]).state, 'failed',
+  'a run without the windows job is an incomplete chain, not a proof')
+assert.equal(judgeRun({ ...GREEN_RUN, status: 'in_progress', conclusion: null }, []).state, 'pending',
+  'a run still in flight keeps the release waiting instead of failing')
+assert.equal(judgeRun({ ...GREEN_RUN, conclusion: 'failure' }, []).state, 'failed')
+assert.equal(judgeRun(null, []).state, 'failed', 'a missing run entry must fail closed')
+assert.deepEqual(
+  pickCandidateRuns([
+    GREEN_RUN,
+    { ...GREEN_RUN, id: 2, event: 'pull_request' },
+    { ...GREEN_RUN, id: 3, head_branch: 'feature' },
+    { ...GREEN_RUN, id: 4, head_sha: 'b'.repeat(40) },
+  ], { sha: GREEN_RUN.head_sha, branch: 'main' }).map(run => run.id),
+  [1],
+  'only a push run on the base branch proves a release',
+)
+assert.equal(
+  judgeCandidates([GREEN_RUN, { ...GREEN_RUN, id: 5, created_at: '2026-09-13T06:00:00Z' }], new Map([
+    [5, [job('test', 'success'), job('test-windows', 'failure'), job('test-macos', 'success')]],
+    [1, [job('test', 'success'), job('test-windows', 'success'), job('test-macos', 'success')]],
+  ])).state,
+  'ok',
+  'a flaky failure that was re-run green still proves the commit',
+)
+assert.equal(judgeCandidates([{ ...GREEN_RUN, status: 'queued', conclusion: null }], new Map()).state, 'pending')
+assert.equal(judgeCandidates([], new Map()).state, 'pending', 'no run yet is "not proven yet", never a failure')
+
+// The proof's required set is the release's platform contract: freezing it here
+// means dropping a leg has to be a deliberate edit, and adding the native leg
+// to the SHIPPED set without adding it here is exactly the hole this asserts
+// against (the native artifacts ship from the same tag).
+assert.deepEqual(
+  REQUIRED_JOBS,
+  ['test', 'test-windows', 'test-macos'],
+  'the proof must require the push chain plus both platform contract legs, including the macOS leg that validates the native artifacts',
 )
 
 console.log('release workflow policy: commit-bound, published-immutable, beta-isolated, signed, GitHub-only gateway')

@@ -107,6 +107,60 @@ var MOBILE_CSS = `
     grid-column: 3;
   }
 
+  /* Right panel: upstream presents it fullscreen only BELOW 768px
+     ('autoFullscreen = viewportWidth < 768') and otherwise pushes the centre
+     through its own track \u2014 but this tier pins the third track to 0, so at
+     769-1023px the panel drew at its normal width (313-460px, about two fifths
+     of the content column and 41-45% of the viewport) straight over the
+     transcript: no track, no fullscreen
+     covered with no way to make room (2026-09-13 review-fix, the STATUS
+     geometry residue). Give the whole touch tier the presentation upstream
+     reserves for phones: the official panel fills the frame.
+     NOT gated on the frame's shown flag: the close report lands in the same
+     commit as the slide-out (SidebarRight reports shown:false immediately when
+     the panel leaves), so a frame-gated rule would drop the fullscreen box
+     mid-animation and the panel would shrink to its normal width while sliding
+     out. The HIDDEN state needs no gate either \u2014 upstream hides the panel with
+     transform: translateX(100%) + visibility: hidden, and an inset:0 box of
+     full width sits exactly one viewport to the right, invisible and
+     untouchable. The frame attribute stays the right key for the DRAWER yield
+     below, which must follow the panel's shown state rather than its box.
+     ANCHOR: the panel is NOT the column's direct child \u2014 it sits under the
+     rightbar slot's [data-slot="rightbar"] outlet wrapper, and every outlet
+     wrapper is display:contents (ui-renderer scoped-slots ANCHOR_STYLE),
+     so a positional rule on the wrapper is a silent no-op (the first cut of
+     this very fix landed there). Target the panel's own upstream state
+     attribute instead, scoped to the column. z-40 is upstream's own
+     fullscreen layer ('[data-sidebar-right-panel=fullscreen]'), kept so the
+     official stacking order is unchanged. */
+  [data-mobile-role="details"] [data-sidebar-right-panel] {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    width: 100% !important;
+    max-width: none !important;
+    border: none;
+    /* The padding below must not add to that 100%: the panel declares no
+       box-sizing of its own and the tree has NO global border-box reset, so a
+       content-box panel with left:0 + width:100% runs the right offset over
+       and paints insets WIDER than the viewport (content cut on the notch
+       side). */
+    box-sizing: border-box;
+    /* iOS safe areas, in the SAME rule because they matter exactly while the
+       panel is fullscreen: this plugin injects viewport-fit=cover (touch
+       tier), so inset:0 runs edge to edge \u2014 on a notched iPhone in LANDSCAPE
+       the width falls in the 769-1023px band and the notch/sensor housing sits
+       over the panel's left or right edge, with the home indicator under its
+       bottom. Upstream's fullscreen presenter carries no env(safe-area-inset-*)
+       of its own (ui-sidebar-right), while every other full-bleed chamber
+       surface on this tier does (drawer, settings sheet, composer seat); the
+       surface still paints full-bleed (background covers the padding box). */
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    padding-left: env(safe-area-inset-left, 0px);
+  }
+
   /* Sidebar \u2192 fixed overlay drawer, off-canvas by default. translateX(-105%)
      keeps the shadow out of view; the open state is driven purely by the
      official frame attribute (no JS state, no React). Motion uses the
@@ -114,7 +168,12 @@ var MOBILE_CSS = `
      is disabled under prefers-reduced-motion. visibility hides the closed
      drawer from the tab order (WCAG 2.4.3 \u2014 off-canvas content must not be
      focusable) with a 0s delay so the close animation still plays. The
-     official elevation shadow separates the drawer from the conversation. */
+     official elevation shadow separates the drawer from the conversation:
+     --dsw-elevation-prominent is the raised-surface token (0.5px hairline
+     stroke + two soft shadows, ui-theme's gradient-shadow-text.css), not the
+     legacy --dsw-shadow-lv* scale upstream keeps only for Toast / HoverCard
+     / ImageLightbox. (No backticks in this template: the stylesheet IS a
+     template literal, so a quoted token name would end it.) */
   [data-mobile-role="sidebar"] {
     position: fixed !important;
     top: 0 !important;
@@ -122,7 +181,7 @@ var MOBILE_CSS = `
     left: 0 !important;
     z-index: 75;
     width: min(86vw, 280px) !important;
-    box-shadow: var(--dsw-shadow-lv3, 0 12px 32px rgba(0, 0, 0, 0.08));
+    box-shadow: var(--dsw-elevation-prominent);
     transform: translateX(-105%);
     visibility: hidden;
     transition:
@@ -152,7 +211,7 @@ var MOBILE_CSS = `
     position: fixed;
     inset: 0;
     z-index: 74;
-    background: var(--dsw-alias-bg-mask-1, rgba(0, 0, 0, 0.24));
+    background: var(--dsw-alias-bg-mask-1);
     -webkit-backdrop-filter: var(--dsw-mask-blur, blur(2px));
     backdrop-filter: var(--dsw-mask-blur, blur(2px));
     border: none;
@@ -165,8 +224,9 @@ var MOBILE_CSS = `
      [data-side] (no role), the conversation width strips carry
      [data-width-handle]; the ui-primitives Tooltip bubble also carries
      [data-side] for placement and must NOT be hidden (role="tooltip"
-     exclusion). Attribute anchors replace the legacy hashed-suffix rules
-     ([class$="_handle"]) that cannot match production class naming.
+     exclusion). Attribute anchors replace the legacy [class$="_handle"]
+     local-name rule here: the attribute seams are stable by contract, while a
+     local-name suffix match would also catch unrelated handles.
      FUTURE-FRAGILE ANCHOR NOTE (2026-12 audit): the [data-side] exclusion
      was verified safe across the whole tree at audit time \u2014 no other
      [data-side] carriers beyond the AppFrame handles / width strips /
@@ -176,10 +236,15 @@ var MOBILE_CSS = `
   [data-mobile-frame] [data-side]:not([role="tooltip"]) {
     display: none !important;
   }
-  /* Dockkit split affordances: pointer-drag chrome with no touch equivalent
-     (the right surface is fullscreen on this tier). */
-  [data-mobile-frame] [data-dockkit-divider],
-  [data-mobile-frame] [data-dockkit-split-button] {
+  /* Dockkit split affordances: the DIVIDER is pointer-drag chrome with no
+     touch equivalent (a split ratio cannot be dragged on this tier). The
+     SPLIT BUTTON is not: upstream renders it as a plain 'button' whose
+     'onClick' splits the pane and which disables ITSELF when the pane cannot
+     split, so hiding it removed a usable affordance on a false premise \u2014
+     the "the right surface is fullscreen here" half was untrue at 769-1023px
+     as well (2026-09-13 review-fix; the tier now presents that surface
+     fullscreen, see the right-panel rule above). */
+  [data-mobile-frame] [data-dockkit-divider] {
     display: none !important;
   }
 
@@ -190,7 +255,10 @@ var MOBILE_CSS = `
      display: none outside this tier kills the desktop ghost button \u2014 the
      official overlay layer renders entries unconditionally. Visual language
      follows the official icon buttons: transparent base, hover/active
-     fills from the alias tokens, focus ring in the business-primary color. */
+     fills from the alias tokens, focus ring in the business-primary color,
+     and the glyph in the official rail ink \u2014 the control IS the official
+     panel toggle glyph at the touch size (2026-09-11 upstream-alignment
+     T17a; the plugin draws no control of its own). */
   .dsh-mobile-nav-toggle {
     position: fixed;
     top: max(10px, env(safe-area-inset-top, 0px));
@@ -203,43 +271,76 @@ var MOBILE_CSS = `
     height: 44px;
     padding: 0;
     border: none;
-    border-radius: 12px;
+    /* Official rail-toggle silhouette (2026-09 batch 1, H2): the dsh sidebar's
+       own icon button is a circle (28/36px), so the phone's only way back to
+       navigation keeps that shape at the 44px touch size instead of becoming a
+       12px-cornered square. The corner-shape keyword is paired with the full
+       round radius (ui-theme smooths unpaired circles into squircles). */
+    border-radius: 50%;
+    corner-shape: round;
     background: transparent;
+    color: var(--dsw-alias-label-primary);
     cursor: pointer;
     touch-action: manipulation;
     -webkit-appearance: none;
     appearance: none;
   }
   .dsh-mobile-nav-toggle:hover {
-    background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.05));
+    background: var(--dsw-alias-interactive-bg-hover);
   }
   .dsh-mobile-nav-toggle:active {
-    background: var(--dsw-alias-interactive-bg-active, rgba(0, 0, 0, 0.08));
+    background: var(--dsw-alias-interactive-bg-active);
   }
   .dsh-mobile-nav-toggle:focus-visible {
     outline: none;
-    box-shadow: 0 0 0 2px var(--dsw-alias-state-business-primary, #4176e6);
+    box-shadow: 0 0 0 2px var(--dsw-alias-state-business-primary);
   }
-  .dsh-mobile-nav-toggle-bars,
-  .dsh-mobile-nav-toggle-bars::before,
-  .dsh-mobile-nav-toggle-bars::after {
-    display: block;
-    width: 20px;
-    height: 2px;
-    border-radius: 2px;
-    background: var(--dsw-alias-label-primary, #0f1115);
-  }
-  .dsh-mobile-nav-toggle-bars { position: relative; }
-  .dsh-mobile-nav-toggle-bars::before,
-  .dsh-mobile-nav-toggle-bars::after {
-    content: '';
-    position: absolute;
-    left: 0;
-  }
-  .dsh-mobile-nav-toggle-bars::before { top: -6px; }
-  .dsh-mobile-nav-toggle-bars::after { top: 6px; }
   [data-mobile-frame]:not([data-sidebar-collapsed]) .dsh-mobile-nav-toggle {
     display: none;
+  }
+
+  /* Right panel OPEN \u21D2 the drawer YIELDS (a shown right panel owns the screen
+     on this tier \u2014 it is presented fullscreen above): the floating toggle and
+     the backdrop stand down, and an open drawer goes 'visibility: hidden' \u2014
+     the same mechanism the closed drawer uses, which also drops it out of the
+     tab order (WCAG 2.4.3) instead of leaving nav rows and the settings seat
+     focusable behind the panel (2026-09-13 review-fix).
+     TWO ARMS, because "the panel is shown" is NOT one attribute:
+       - :not([data-rightbar-collapsed]) is upstream's TRACK flag
+         (cols.rightbar === 0, AppFrame.tsx) and the seat only asks for a
+         track at >= 768px (track = shown && !autoFullscreen,
+         SidebarRight.tsx:371) \u2014 so on the phone tier a SHOWN panel still
+         reports track=false and this arm is inert there;
+       - [data-rightbar-fullscreen] is the seat's FULLSCREEN report, set by
+         openRightbar(track, fullscreen) and cleared by closeRightbar()
+         (ui-layout stores.ts:133-141), so it is present exactly while a
+         fullscreen (i.e. every phone-tier) panel is shown.
+     Together they cover every shown state on this tier; keying on the track
+     flag alone silently left phones un-yielded.
+     ORDER MATTERS: these selectors tie on specificity with the open-drawer /
+     backdrop rules above, so this block must stay AFTER them. */
+  [data-mobile-frame]:not([data-rightbar-collapsed]) .dsh-mobile-nav-toggle,
+  [data-mobile-frame][data-rightbar-fullscreen] .dsh-mobile-nav-toggle,
+  [data-mobile-frame]:not([data-rightbar-collapsed]) .dsh-mobile-backdrop,
+  [data-mobile-frame][data-rightbar-fullscreen] .dsh-mobile-backdrop {
+    display: none;
+  }
+  [data-mobile-frame]:not([data-rightbar-collapsed]) [data-mobile-role="sidebar"],
+  [data-mobile-frame][data-rightbar-fullscreen] [data-mobile-role="sidebar"] {
+    visibility: hidden;
+  }
+
+  /* The panel's MODE control cannot change anything in the 768-1023px band any
+     more: this tier forces the fullscreen presentation above, so upstream's
+     push<->fullscreen flip (and the label it flips with it) is inert \u2014
+     pressing "exit fullscreen" would leave the panel fullscreen. It is hidden
+     exactly there. BELOW 768px it stays: upstream's autoFullscreen branch turns
+     that same click into "collapse the panel" (SidebarRight.tsx), a real
+     affordance. The separate collapse control is untouched in both bands. */
+  @media (min-width: 768px) {
+    [data-mobile-frame] [data-sidebar-right-mode] {
+      display: none !important;
+    }
   }
 
   /* Conversation session header: the floating toggle (44px, top-left) must
@@ -265,22 +366,106 @@ var MOBILE_CSS = `
     white-space: normal;
   }
 
+  /* Session-header view tabs ('role="tablist"'): 'tabs.length > 1' is the
+     NORM, not an edge case \u2014 ui-chat and ui-trajectory both register a
+     conversation view unconditionally, and both ship in the default web
+     bundle. The official tab box is 13px text on a 25px box and the strip
+     neither wraps nor scrolls, while the frame clips overflow
+     (AppFrame.module.css 'overflow: hidden') \u2014 a third view or a longer
+     (en) label would be simply unreachable. The strip WRAPS rather than
+     scrolling: a scroll container would clip the active tab's 2px bar, which
+     upstream draws 1px past the tab box to end flush with the header's bottom
+     rule (overflow-x:auto also forces overflow-y to compute to auto). The
+     44px floor grows the tab box \u2014 with box-sizing so the floor means the BOX
+     (the official tab pads 9px at the bottom, so a content-box floor would be
+     53px); the header's 'min-height: 76px' is a FLOOR, so the row follows
+     instead of clipping (its sidebar-strip alignment figure is a desktop
+     concern \u2014 on this tier the sidebar is a drawer). */
+  [data-slot="conversation.session.header"] [role="tablist"] {
+    flex-wrap: wrap;
+  }
+  [data-slot="conversation.session.header"] [role="tab"] {
+    display: inline-flex;
+    align-items: center;
+    box-sizing: border-box;
+    min-height: 44px;
+  }
+
   /* Touch targets: high-frequency controls get the 44px floor (Apple HIG;
      WCAG 2.5.8 \u226524px is exceeded). The official toolbar/sidebar buttons are
      28-36px (desktop-mouse sizes) \u2014 unusable on touch. Icon-only buttons
      also get a width floor; text buttons (composer bar) keep their natural
-     width. Menu/popup items and settings entries get the same floor. */
+     width. Menu/popup items and settings entries get the same floor.
+     The SEAT list is explicit and grows with upstream: the 2026-09-13
+     review-fix added the header's utilities + corner seats and the right
+     panel's dockkit strip, which the earlier three-seat list left at their
+     desktop sizes (28px) while the panel became a primary mobile surface.
+     The strip's CHIP-CLOSE control is excluded on purpose: upstream floats it
+     at 20px inside the chip (absolute, top-right, pointer-events gated by
+     hover/active), so the floor would inflate it into a 44px box over the
+     chip's label \u2014 the chip itself is the 44px target and closing stays
+     reachable from the chip menu. */
   [data-slot="conversation.composer.bar"] button,
   [data-slot="sidebar"] button,
   [data-slot="conversation.session.header.actions"] button,
+  [data-slot="conversation.session.header.utilities"] button,
+  [data-slot="conversation.session.header.corner"] button,
   [data-slot="settings.section"] button,
+  [data-sidebar-right-panel] [data-dockkit-strip] button:not([data-dockkit-tab-close]),
+  [data-sidebar-right-panel] [data-dockkit-strip] [role="tab"],
   [role="menuitem"], [role="option"] {
     min-height: 44px;
   }
   [data-slot="sidebar"] button,
   [data-slot="conversation.session.header.actions"] button,
+  [data-slot="conversation.session.header.utilities"] button,
+  [data-slot="conversation.session.header.corner"] button,
+  [data-sidebar-right-panel] [data-dockkit-strip] button:not([data-dockkit-tab-close]),
   [role="menuitem"], [role="option"] {
     min-width: 44px;
+  }
+  /* The strip itself is 28px tall by upstream contract: let it grow with the
+     controls instead of clipping them. (The chip row does NOT become
+     finger-pannable: upstream declares touch-action:none on the strip, the
+     chip row AND the chips to own the drag gesture, so an overflowing chip is
+     reached by ACTIVATING a neighbour \u2014 the kit scrolls the active chip into
+     view \u2014 never by panning. Anything else would fight the tab drag.)
+     box-sizing applies to the strip's BUTTONS only: their chrome icons declare
+     28px boxes WITH 6px padding, so the floor must mean the BOX \u2014 otherwise 44
+     becomes 56 and the strip grows 12px for nothing. The CHIPS stay
+     content-box on purpose: they pad horizontally only (44px is 44px either
+     way), while dockkit MEASURES the chip minimum as min-width + padding
+     under content-box (ui-dockkit/components/measure.ts chipMinimum) \u2014 forcing
+     border-box there would silently lower that measured minimum from 100px to
+     80px and make the pane-split "halves fit" rule more permissive than
+     upstream intends. Scoped to this new seat: the pre-existing
+     header-actions arm is left exactly as shipped, so the header row keeps the
+     geometry it was verified with (its floor therefore lands on the CONTENT
+     box: padded icon buttons render ~56px, and the header row grows with
+     them \u2014 a device-judged tradeoff, see STATUS). */
+  [data-sidebar-right-panel] [data-dockkit-strip] {
+    height: auto;
+    min-height: 44px;
+  }
+  [data-sidebar-right-panel] [data-dockkit-strip] button:not([data-dockkit-tab-close]) {
+    box-sizing: border-box;
+  }
+  /* The chip's close control was laid out for a 28px chip (top: 4px); the
+     44px chip leaves it hanging at the top edge, so it is centred in the box
+     it now lives in. Its 20px size, opacity and pointer-events gating stay
+     upstream's (the chip itself is the 44px target, and closing also lives in
+     the chip menu). */
+  [data-sidebar-right-panel] [data-dockkit-tab-close] {
+    top: 50%;
+    transform: translateY(-50%);
+  }
+  /* A fullscreen panel owns the whole screen on this tier, so its inner
+     scrollers must not chain their overscroll to the document behind it
+     (rubber-band + dynamic-toolbar movement under a fixed surface). Same
+     containment the conversation scrollport already declares on the phone
+     tier; Safari 16+ honours it, older WebKit ignores it harmlessly. */
+  [data-sidebar-right-panel] * {
+    overscroll-behavior: contain;
   }
 
   /* touch-action: the composer contenteditable and inputs get
@@ -311,15 +496,15 @@ var MOBILE_CSS = `
      to the keyboard top AND pads the conversation scrollport by the same
      offset, so the message tail can scroll up beside the raised seat instead
      of hiding under the keyboard. State rides the plugin's own frame stamp:
-     'data-mobile-kbd' + the '--dsh-mobile-kbd-offset' custom property on the
+     'data-mobile-kbd' + the '--chamber-mobile-kbd-offset' custom property on the
      stamped frame (never official attributes). Android Chrome WITH the token
      shrinks the layout viewport itself: covered height \u2248 0, the installer
      never arms, these rules stay inert. */
   [data-mobile-frame][data-mobile-kbd] [data-phase="active"] [data-conversation-scroll] {
-    padding-bottom: var(--dsh-mobile-kbd-offset, 0px) !important;
+    padding-bottom: var(--chamber-mobile-kbd-offset, 0px) !important;
   }
   [data-mobile-frame][data-mobile-kbd] [data-phase="active"] [data-composer-seat] {
-    bottom: var(--dsh-mobile-kbd-offset, 0px) !important;
+    bottom: var(--chamber-mobile-kbd-offset, 0px) !important;
     /* The phone-tier safe-area padding (below) is home-indicator spacing for
        the UNCOVERED state; while the keyboard is up that inset sits behind
        the keyboard and would add up to ~34px of dead space below the raised
@@ -344,14 +529,15 @@ var MOBILE_CSS = `
 @media (max-width: 768px) and (pointer: coarse) {
   /* Composer toolbar: one line. The official row wraps; force nowrap (the
      official 12px gap is kept \u2014 no gap override). */
-  /* Infix match (production names are _<local>_<hash>_<idx>): this also hits
-     sibling rows whose local name ends in "row" inside the composer bar
-     subtree (e.g. the queue dock's .row), which is harmless today \u2014 those
-     rows declare no flex-wrap and carry no _trigger_ child. */
-  [data-slot="conversation.composer.bar"] [class*="_row_"] {
+  /* Local-name SUFFIX match (production names are [hash]_[local]): the dual
+     arm covers multi-class elements. It also hits sibling rows whose local name
+     ends in "row" inside the composer bar subtree (e.g. the queue dock's
+     .row), which is harmless today \u2014 those rows declare no flex-wrap and carry
+     no _trigger child. */
+  [data-slot="conversation.composer.bar"] :is([class$="_row"], [class*="_row "]) {
     flex-wrap: nowrap !important;
   }
-  [data-slot="conversation.composer.bar"] [class*="_row_"] [class*="_trigger_"],
+  [data-slot="conversation.composer.bar"] :is([class$="_row"], [class*="_row "]) :is([class$="_trigger"], [class*="_trigger "]),
   [data-slot="conversation.input.model"] button {
     max-width: 112px !important;
     flex: 0 1 auto !important;
@@ -439,12 +625,22 @@ var MOBILE_CSS = `
     overflow-y: auto;
     overscroll-behavior: contain;
   }
-  [role="dialog"][aria-modal="true"]:has([data-slot="settings.header"]) > div:last-child > div:first-child {
+  /* Header row (actions + Close), anchored on the documented seams
+     [data-slot="settings.action"] + [data-slot="settings.close"] instead of
+     a positional div:first-child (2026-09-11 upstream-alignment T17c). Both
+     outlet wrappers are unconditional on their call sites, and the ROW is
+     the only element carrying both: the official shape is content > header >
+     (actions > action-outlet, close-button > close-outlet), so the actions
+     cell holds the action seam ALONE and the options cell holds only
+     [data-slot="settings.section"]. Descendant :has() keeps the anchor
+     insensitive to an extra wrapper level \u2014 the row stays sticky if upstream
+     nests either cell deeper, and the options cell can never match. */
+  [role="dialog"][aria-modal="true"]:has([data-slot="settings.header"]) > div:last-child > div:has([data-slot="settings.action"]):has([data-slot="settings.close"]) {
     flex: none;
     position: sticky;
     top: 0;
     z-index: 1;
-    background: var(--dsw-alias-bg-layer-2, #ffffff);
+    background: var(--dsw-alias-bg-layer-2);
   }
   [role="dialog"][aria-modal="true"]:has([data-slot="settings.header"]) > div:last-child > div:last-child {
     flex: 1;
@@ -454,32 +650,32 @@ var MOBILE_CSS = `
     padding-bottom: calc(16px + env(safe-area-inset-bottom));
     padding-left: calc(16px + env(safe-area-inset-left));
   }
-  /* Section inner grids that assume desktop width. Official inner cells
-     carry no stable attribute \u2014 the [class*="_<local>_"] local-name match
-     is the documented hash-insensitive exception (naming
-     "_<local>_<hash>_<idx>" verified on the production bundle; a naming
-     flip fails SOFT \u2014 the official grid stays).
+  /* Section inner grid that assumes desktop width. Official inner cells
+     carry no stable attribute, so the local-name SUFFIX match
+     (:is([class$="_<local>"], [class*="_<local> "]), production naming
+     [hash]_[local]) is the documented exception; a naming flip fails SOFT \u2014
+     the official grid stays.
      - Models provider row (two text inputs + chevron + trash on one
        4-column line) \u2192 TWO equal columns: the four children auto-place
        2\xD72 (inputs on the first row, the two icon actions under them).
-     - ".cards" two-column grids \u2192 single column. Only ONE settings
-       section is mounted at a time under [data-slot="settings.section"],
-       so this reaches whichever page is open: the Plugins inventory
-       (repeat(2, \u2026) card grid) and, when the agent-presets section is
-       active, its auto-fill .cards (already single-column at phone
-       widths by auto-fit; forcing one column only changes 590-768px,
-       where two ~268px cards would otherwise fit). */
-  [data-slot="settings.section"] [class*="_modelRow_"] {
+     The card grids are NOT overridden: upstream owns both of them, and they
+     are TWO grids under this very section with two DIFFERENT upstream rules
+     (2026-09-11 review-fix F3 \u2014 the deleted arm's blast radius had been
+     recorded for one grid only):
+     - PluginInventorySettingsTab.module.css collapses its .cards itself at
+       max-width: 680px, so the chamber's former arm only contradicted
+       upstream there in the 681-768px window;
+     - ui-agent-preset AgentPresetSection.module.css declares NO breakpoint at
+       all \u2014 its .cards is repeat(auto-fill, minmax(268px, 1fr)) inside a
+       .section capped at 720px, so upstream renders TWO columns from about
+       580px of viewport width (two 268px cards plus the 12px gap need 548px
+       inside the options box = viewport minus 2x(16px + safe-area)). For that
+       grid the deleted arm changed the layout across its WHOLE two-column
+       range, about 580-768px of the phone tier, not just 681-768px.
+     The arm was deleted for both grids (2026-09-11 upstream-alignment T17b) \u2014
+     upstream's geometry is the only geometry for each of them. */
+  [data-slot="settings.section"] :is([class$="_modelRow"], [class*="_modelRow "]) {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  }
-  [data-slot="settings.section"] [class*="_cards_"] {
-    grid-template-columns: minmax(0, 1fr) !important;
-  }
-  /* Other aria-modal dialogs (onboarding steps, pickers) keep their own
-     chrome but must never touch the screen edges. The settings sheet above
-     is excluded (it owns the full screen). */
-  [role="dialog"][aria-modal="true"]:not(:has([data-slot="settings.header"])) {
-    max-width: calc(100vw - 24px) !important;
   }
   /* iOS focus zoom: any editable field below 16px triggers the automatic
      page zoom on focus. The composer already carries its own rule; the
@@ -490,6 +686,17 @@ var MOBILE_CSS = `
   [role="dialog"] textarea {
     font-size: max(16px, var(--dsh-content-font-size, 16px)) !important;
   }
+  /* No dialog-width rule of this plugin's own, deliberately: dialogs other
+     than the settings sheet are NOT capped (2026-09-11 upstream-alignment
+     T6). The tree has exactly three role="dialog" aria-modal="true"
+     producers, and each owns its viewport fit: the settings panel above
+     (this sheet), the ui-primitives Modal (Modal.module.css pins its Root to
+     inset 0 with a 24px padding and caps the Dialog at min(380px, 100%)),
+     and the ui-attachment ImageLightbox (a fixed full-bleed backdrop at
+     inset 0 whose mask is an absolute inset-0 layer). A blanket max-width is
+     over-constrained against inset: 0: the lightbox backdrop would shrink to
+     100vw-24px, left-anchored, leaving a 24px undimmed click-through strip
+     on the right. The official geometries are the fit. */
 
   /* Composer seat: respect the home-indicator inset. The official seat is
      sticky inside the scroll body; the padding keeps the input above the
@@ -579,12 +786,12 @@ function shouldRestamp(mutations) {
 var COMPOSER_INPUT_SELECTOR = "[data-composer-input]";
 var TOUCH_TIER_QUERY = "(max-width: 1023px) and (pointer: coarse)";
 var PHONE_TIER_QUERY = "(max-width: 768px) and (pointer: coarse)";
-function isComposerInput(target) {
-  return target instanceof Element && target.closest(COMPOSER_INPUT_SELECTOR) !== null;
+function isEditableComposer(input) {
+  return input !== null && input !== void 0 && input.contentEditable === "true";
 }
 function hasHighlightedMenuOpen() {
   const highlighted = document.querySelector(
-    '[data-trigger-menu] [aria-activedescendant], [data-trigger-menu] [role="option"][aria-selected="true"], [role="menu"] [role="menuitem"][aria-selected="true"]'
+    '[data-trigger-menu] [aria-activedescendant], [data-trigger-menu] [role="option"][aria-selected="true"]'
   );
   return highlighted !== null;
 }
@@ -615,12 +822,13 @@ function installEnterToNewline() {
   const onKeyDown = (event) => {
     if (event.key !== "Enter" || event.shiftKey || event.isComposing || event.keyCode === 229) return;
     if (event.repeat) return;
+    if (event.ctrlKey || event.metaKey) return;
     if (composing.isComposingNow()) return;
-    if (!isComposerInput(event.target)) return;
+    const input = event.target instanceof Element ? event.target.closest(COMPOSER_INPUT_SELECTOR) : null;
+    if (!(input instanceof HTMLElement) || !isEditableComposer(input)) return;
     if (hasHighlightedMenuOpen()) return;
     event.preventDefault();
     event.stopPropagation();
-    const input = event.target instanceof Element ? event.target.closest(COMPOSER_INPUT_SELECTOR) : null;
     const fingerprint = composerFingerprint(input);
     const ok = document.execCommand("insertLineBreak");
     if (!ok) {
@@ -686,19 +894,48 @@ function revealCaretInComposerScroll(input) {
   const delta = caretRevealDelta(rect.top, rect.bottom, hostRect.top, hostRect.bottom);
   if (delta !== 0) scrollHost.scrollTop += delta;
 }
+function isEditabilityFlipToEditable(editableNow, focused, previousEditable, recordOldValues) {
+  if (!editableNow || !focused) return false;
+  return previousEditable === false || recordOldValues.includes("false");
+}
+var EDITABILITY_MUTATION_OPTIONS = {
+  attributes: true,
+  attributeFilter: ["contenteditable"],
+  subtree: true,
+  attributeOldValue: true
+};
 function installEditabilityRecovery(root = document) {
-  let lastEditable = true;
-  const observer = new MutationObserver(() => {
+  let current = null;
+  let lastEditable = null;
+  const query = () => {
     const input = root.querySelector(COMPOSER_INPUT_SELECTOR);
-    if (!(input instanceof HTMLElement)) return;
+    return input instanceof HTMLElement ? input : null;
+  };
+  const seed = (input) => {
+    current = input;
+    lastEditable = input === null ? null : input.contentEditable === "true";
+  };
+  seed(query());
+  const observer = new MutationObserver((records) => {
+    const input = query();
+    if (input === null) {
+      seed(null);
+      return;
+    }
     const editable = input.contentEditable === "true";
-    if (editable && !lastEditable && input === document.activeElement) {
+    const previous = input === current ? lastEditable : editable;
+    if (isEditabilityFlipToEditable(
+      editable,
+      input === document.activeElement,
+      previous,
+      records.map((record) => record.oldValue)
+    )) {
       input.blur();
       input.focus({ preventScroll: true });
     }
-    lastEditable = editable;
+    seed(input);
   });
-  observer.observe(root, { attributes: true, attributeFilter: ["contenteditable"], subtree: true });
+  observer.observe(root, EDITABILITY_MUTATION_OPTIONS);
   return () => observer.disconnect();
 }
 function isKeyboardOpen(layoutHeight, visualHeight) {
@@ -785,7 +1022,7 @@ function installImeLadder(root = document) {
 var KBD_OFFSET_QUANTUM_PX = 16;
 var KBD_OFFSET_HEADROOM_PX = 8;
 var MOBILE_KBD_ATTR = "data-mobile-kbd";
-var MOBILE_KBD_VAR = "--dsh-mobile-kbd-offset";
+var MOBILE_KBD_VAR = "--chamber-mobile-kbd-offset";
 var KBD_EDITABLE_FOCUS_GRACE_MS = 1200;
 var ACTIVE_SEAT_SELECTOR = '[data-phase="active"] [data-composer-seat]';
 function kbdCoveredHeight(layoutHeight, visualHeight, visualOffsetTop) {
@@ -904,33 +1141,71 @@ function installKeyboardCompensation(root = document) {
   };
 }
 var BUSY_STUCK_MS = 3e4;
+var BUSY_COMPOSER_PHASES = ["adjudicating", "submitting"];
+function isComposerSubmitBusy(phase) {
+  return phase !== null && phase !== void 0 && BUSY_COMPOSER_PHASES.includes(phase);
+}
+function isOfficiallyDisabled(input) {
+  return input.getAttribute("aria-disabled") === "true";
+}
+function lockClock(editable, busy, disabled, since, now) {
+  if (editable || !busy || disabled) return 0;
+  return since === 0 ? now : since;
+}
+function shouldRecoverStuckComposer(facts) {
+  return !facts.editable && facts.busy && !facts.disabled && facts.elapsedMs >= BUSY_STUCK_MS;
+}
+var SELF_HEAL_MUTATION_OPTIONS = {
+  attributes: true,
+  attributeFilter: ["contenteditable", "data-phase", "aria-disabled"],
+  subtree: true
+};
 function installComposerSelfHeal(root = document) {
+  let current = null;
   let lockedSince = 0;
-  const observer = new MutationObserver(() => {
+  const query = () => {
     const input = root.querySelector(COMPOSER_INPUT_SELECTOR);
-    if (!(input instanceof HTMLElement)) return;
-    const editable = input.contentEditable === "true";
-    if (!editable) {
-      if (lockedSince === 0) lockedSince = Date.now();
-    } else {
+    return input instanceof HTMLElement ? input : null;
+  };
+  const sync = (input, now = Date.now()) => {
+    if (input === null) {
+      current = null;
+      lockedSince = 0;
+      return;
+    }
+    if (input !== current) {
+      current = input;
       lockedSince = 0;
     }
-  });
+    lockedSince = lockClock(
+      input.contentEditable === "true",
+      isComposerSubmitBusy(input.dataset.phase),
+      isOfficiallyDisabled(input),
+      lockedSince,
+      now
+    );
+  };
+  sync(query());
+  const observer = new MutationObserver(() => sync(query()));
   const onPointerDown = (event) => {
     if (event.pointerType === "mouse") return;
-    const input = root.querySelector(COMPOSER_INPUT_SELECTOR);
-    if (!(input instanceof HTMLElement)) return;
-    if (!input.contains(event.target)) return;
+    const input = query();
+    if (input === null || !input.contains(event.target)) return;
+    sync(input);
     if (lockedSince === 0) return;
-    if (Date.now() - lockedSince < BUSY_STUCK_MS) return;
+    const recover = shouldRecoverStuckComposer({
+      editable: input.contentEditable === "true",
+      busy: isComposerSubmitBusy(input.dataset.phase),
+      disabled: isOfficiallyDisabled(input),
+      elapsedMs: Date.now() - lockedSince
+    });
     lockedSince = 0;
-    const editable = input.contentEditable === "true";
-    if (editable) return;
+    if (!recover) return;
     input.blur();
     input.contentEditable = "true";
     input.focus({ preventScroll: true });
   };
-  observer.observe(root, { attributes: true, attributeFilter: ["contenteditable"], subtree: true });
+  observer.observe(root, SELF_HEAL_MUTATION_OPTIONS);
   document.addEventListener("pointerdown", onPointerDown, true);
   return () => {
     observer.disconnect();
@@ -1158,6 +1433,7 @@ function installSettingsSheetScrollReset(active) {
 
 // src/client/MobileNavToggle.tsx
 var import_react = require("react");
+var import_dsh_client_ui_primitives = require("@deepseek-ai/dsh-client-ui-primitives");
 var import_jsx_runtime = require("react/jsx-runtime");
 function findFrame3(root) {
   for (const child of root.children) {
@@ -1186,9 +1462,8 @@ function MobileNavToggle({ toggleSidebar, t }) {
         className: "dsh-mobile-nav-toggle",
         "aria-label": open ? t("dsh-chamber.mobile.drawer.close") : t("dsh-chamber.mobile.drawer.open"),
         "aria-expanded": open,
-        "aria-haspopup": "true",
         onClick: () => toggleSidebar(),
-        children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { className: "dsh-mobile-nav-toggle-bars", "aria-hidden": "true" })
+        children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)(import_dsh_client_ui_primitives.IconPanelLeftOutline16, { size: 18 })
       }
     ),
     /* @__PURE__ */ (0, import_jsx_runtime.jsx)(

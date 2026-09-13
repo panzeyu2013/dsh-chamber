@@ -10,10 +10,10 @@ import type { SettingsConnectionsKey } from '../locales.ts'
 import type { PluginFiberPhase, PluginInventorySnapshot } from './plugin-inventory-api.ts'
 
 /** The chamber-injected host package names (design 09 module A + design 08 +
- *  design 24): the registry-derived expected rows the plugin view surfaces.
- *  These three constants are the CLIENT-side mirror of the control-plane
- *  registry (host-graph-seed.ts CHAMBER_HOST_PACKAGES) — a client package
- *  cannot import the Node-side module, so the drift test in
+ *  design 24 + design 20 §6): the registry-derived expected rows the plugin
+ *  view surfaces. These constants are the CLIENT-side mirror of the
+ *  control-plane registry (host-graph-seed.ts CHAMBER_HOST_PACKAGES) — a client
+ *  package cannot import the Node-side module, so the drift test in
  *  test/chamber-seed-drift.test.ts pins the NAME SET against the registry
  *  source text (a new registry row must fail there, never be silently
  *  ignored). */
@@ -21,6 +21,11 @@ export const HOST_GRAPH_PACKAGE = '@dsh-chamber/dsh-chamber-seed-client-graph'
 export const GIT_WORKTREE_PACKAGE = '@dsh-chamber/dsh-chamber-seed-git-worktree'
 /** Archived-session cleanup host domain (design 24, 2026-12). */
 export const ARCHIVE_CLEANUP_PACKAGE = '@dsh-chamber/dsh-chamber-seed-archive-cleanup'
+/** Open-in host domain (design 20 §6, 2026-09-11) — the fork of upstream's
+ *  open-in host half. It is `localOnly` in the registry: it exists for the
+ *  local instance shape alone, and the plugin view renders that fact instead of
+ *  "not injected" on remote and gateway targets. */
+export const OPEN_IN_PACKAGE = '@dsh-chamber/dsh-chamber-seed-open-in'
 
 /** The gateway-packaged mobile client entry (design 21 §6.2: the single
  *  packaged exception — mobile access is bound to the gateway and has no
@@ -44,6 +49,7 @@ export type InventoryEntryKind =
   | 'chamber-host-graph'
   | 'chamber-git-worktree'
   | 'chamber-archive-cleanup'
+  | 'chamber-open-in'
   | 'chamber-mobile'
   | 'chamber-client'
   | 'official'
@@ -80,7 +86,7 @@ export function classifyChamberClientPlugin(moduleName: string): ChamberClientKi
 /**
  * Classify one inventory entry's module specifier. The raw patch-insert
  * prefix ('cordis:include <name>') is stripped first, then the plain name
- * decides: the three chamber host packages, the chamber client plugins
+ * decides: the chamber host packages, the chamber client plugins
  * (packaged mobile entry + any other), the official `@deepseek-ai/*` scope,
  * and everything else as third-party.
  */
@@ -91,6 +97,7 @@ export function classifyInventoryEntry(moduleName: string): InventoryEntryKind {
   if (name === HOST_GRAPH_PACKAGE) return 'chamber-host-graph'
   if (name === GIT_WORKTREE_PACKAGE) return 'chamber-git-worktree'
   if (name === ARCHIVE_CLEANUP_PACKAGE) return 'chamber-archive-cleanup'
+  if (name === OPEN_IN_PACKAGE) return 'chamber-open-in'
   if (name.startsWith(OFFICIAL_SCOPE)) return 'official'
   return 'third-party'
 }
@@ -105,7 +112,7 @@ export function classifyInventoryEntry(moduleName: string): InventoryEntryKind {
  *
  * `expectedChamberNames` is the REGISTRY-DERIVED expected list of the current
  * view (deriveChamberRows' rows, i.e. the desktop manifest projection). The
- * literal constants below only classify the three names this module knows by
+ * literal constants below only classify the four names this module knows by
  * name; a future registry package outside these literals is unknown to
  * them and would otherwise leak into this zone's third-party list — the
  * caller's expected list is what keeps the zone honest (review G2-5). It
@@ -140,6 +147,7 @@ function chamberKindOf(packageName: string): InventoryEntryKind {
   if (packageName === HOST_GRAPH_PACKAGE) return 'chamber-host-graph'
   if (packageName === GIT_WORKTREE_PACKAGE) return 'chamber-git-worktree'
   if (packageName === ARCHIVE_CLEANUP_PACKAGE) return 'chamber-archive-cleanup'
+  if (packageName === OPEN_IN_PACKAGE) return 'chamber-open-in'
   return 'third-party'
 }
 
@@ -371,6 +379,11 @@ export interface ChamberPackageState {
   readonly patched: boolean
   readonly version: string | null
   readonly live: boolean | null
+  /** The registry row is meaningful for the LOCAL instance shape only (design
+   *  20 §6: the open-in host domain). Remote/gateway targets report it with
+   *  `installed:false` and no probe, and the table renders "local shape only"
+   *  rather than "not injected" — absent by design, not by fault. */
+  readonly localOnly?: boolean
 }
 
 /** The ssh remote probe result (design 13 §6), structurally. */
@@ -530,6 +543,9 @@ export interface ChamberRowsInput {
  *    expected rows); remote targets read the desktop's projection.
  *  - version: ssh reads the remote probe's version, everything else the local
  *    list's version (gateway additionally renders the seed-cache comparison).
+ *  - a `localOnly` registry row (design 20 §6) on a NON-local target renders
+ *    "local shape only" in both state columns with no version and no sync
+ *    marker: the package is absent there by design.
  *  - an EMPTY expected list yields no rows and can never claim a seed-cache
  *    state.
  * @returns the registry rows (one per expected package) plus, for the gateway,
@@ -554,12 +570,33 @@ export function deriveChamberRows(input: ChamberRowsInput): ChamberRowDescriptor
     ? chamberSeedDrift(localList, seedCache)
     : null
   const unknownBadge: ChamberBadge = { labelKey: 'chamberBadgeUnknown', tone: 'muted' }
+  /** A local-shape-only row on a target where it does not apply (design 20 §6):
+   *  "local shape only", never "not injected" — nothing is missing there. */
+  const localOnlyBadge: ChamberBadge = { labelKey: 'chamberBadgeLocalOnly', tone: 'muted' }
   const versionTextOf = (version: string | null): string | null => version === null ? null : `v${version}`
 
   const rows = expectedList.map((pkg): ChamberRowDescriptor => {
     const local = localByName.get(pkg.name)
     const remote = remoteByName.get(pkg.name)
     const cached = seedCache === null ? null : (seedCache[pkg.name] ?? null)
+    // Not applicable here: no column claims a state, no version and no sync
+    // marker (a permanent 未同步 alarm on the gateway for a row that can never
+    // be synced would be noise, not information).
+    if (pkg.localOnly === true && !isLocal) {
+      return {
+        key: pkg.insertId,
+        name: pkg.name,
+        nameLabelKey: null,
+        localBadge: localOnlyBadge,
+        remoteBadge: isSsh || isGateway || target === 'http' ? localOnlyBadge : null,
+        versionText: null,
+        versionHintKey: null,
+        cacheVersionText: null,
+        cacheNotSynced: false,
+        cacheAbsent,
+        driftState: null,
+      }
+    }
     return {
       key: pkg.insertId,
       name: pkg.name,

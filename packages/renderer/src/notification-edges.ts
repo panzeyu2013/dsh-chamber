@@ -11,7 +11,9 @@ export interface NotificationEdge { sessionId: string; kind: NotificationKind }
  * 边沿检测：prev 事实 → next 事实 的事件集。
  * - prev 为 undefined（首份上报）：只播种记忆，返回 []（不发事件）。
  * - complete：running true→false 边沿，或 vendor completed 从无到有
- *   （兜底：断连期间完成、从未观察到 running=true 的会话由此补发）。
+ *   （后者只在**边沿记忆已武装**时有意义 —— 它不是断连补发通道：断连撤回会清掉
+ *   App 侧的 prevRuntimeFactsRef/notifiedCompleteRef，重连首份上报按"prev 为
+ *   undefined"纯播种，窗口内完成/提问一律不补发，见 design 19 §3.5）。
  *   同一 session 同一 tick 两者同时成立只发一次。
  * - ask：pending 变化到 'question'（含直切：question→approval 等不经
  *   undefined 的切换，vendor 组合选择器会正常产生——每个新值都通知一次）。

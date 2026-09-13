@@ -7,9 +7,27 @@
  * the drawer (the composer send button must not be hit while the drawer is
  * open). The drawer state is read from the official frame attribute
  * (`data-sidebar-collapsed`) via a scoped observer — the stylesheet drives
- * the visuals, the component only mirrors state for aria/tap semantics.
+ * the visuals, the component only mirrors state for the accessible name.
+ *
+ * 2026-09-11 upstream-alignment T17a: the control is the OFFICIAL glyph
+ * (`IconPanelLeftOutline16`, the panel icon the official sidebar toggle
+ * draws — ui-sidebar SidebarRoot.tsx) instead of a hand-drawn CSS
+ * hamburger, and its accessible NAME is the official one: the official
+ * toggle's own `toggle.open` / `toggle.collapse` label pair. Its ARIA is not
+ * the official attribute LIST — the official control carries that label
+ * alone, because it sits inside the sidebar it collapses — so this
+ * out-of-canvas substitute adds one truthful attribute of its own:
+ * `aria-expanded`, the disclosure state of the drawer the button shows and
+ * hides (2026-09-11 review-fix F4a: the earlier "carries the official ARIA
+ * shape" wording claimed one attribute too many). `aria-haspopup="true"` is
+ * gone: it claimed an untyped popup, while the drawer is the sidebar itself
+ * rendered off-canvas — where upstream has a real popup it names the type
+ * (`aria-haspopup="dialog"` on the settings trigger). The touch tier keeps
+ * only what the official control cannot give it: the 44px floating box and
+ * the tap-absorbing backdrop.
  */
 import { useEffect, useState } from 'react'
+import { IconPanelLeftOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 
 export interface MobileNavToggleInjected {
@@ -53,11 +71,11 @@ export function MobileNavToggle({ toggleSidebar, t }: MobileNavToggleProps) {
         className="dsh-mobile-nav-toggle"
         aria-label={open ? t('dsh-chamber.mobile.drawer.close') : t('dsh-chamber.mobile.drawer.open')}
         aria-expanded={open}
-        aria-haspopup="true"
         onClick={() => toggleSidebar()}
       >
-        {/* Three-bar hamburger, pure CSS (no icon dependency). */}
-        <span className="dsh-mobile-nav-toggle-bars" aria-hidden="true" />
+        {/* The official panel glyph (18 = the official rail size; the box is
+            the 44px touch floor, styles.ts). */}
+        <IconPanelLeftOutline16 size={18} />
       </button>
       <button
         type="button"

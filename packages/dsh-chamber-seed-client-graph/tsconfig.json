@@ -52,6 +52,10 @@
       // by the lockfile), types-only, same as the @standard-schema/spec seam.
       "compression": ["../../node_modules/.pnpm/@types+compression@1.8.1/node_modules/@types/compression"],
       "negotiator": ["../../node_modules/.pnpm/@types+negotiator@0.6.5/node_modules/@types/negotiator"]
+      // 版本同步有门禁：scripts/dev/lockfile-store-path-mappings.test.mjs（跑在
+      // test:upgrade-tools）断言每条 ".pnpm/<pkg>@<ver>/" 映射的版本 == 锁文件里
+      // 某个声明该依赖的 importer 解析出的版本——pin 升级把依赖版本改掉而映射没跟
+      // 上时，会以具名报错挡住，而不是在 vendor 源码里报 TS2307。
     }
   },
   "include": ["src/**/*.ts"]

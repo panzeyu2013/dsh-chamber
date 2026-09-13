@@ -3,11 +3,12 @@
  * §3.2 union table; settings-surface extension 2026-12).
  *
  * WHY THIS MODULE EXISTS (single source): the chamber page executes a source's
- * `dsh.client` bundles in two places — the per-instance shell boot
+ * `dsh.client` bundles in the per-instance shell boot
  * (`packages/renderer/src/host-graph.ts`, which preloads every non-covered
- * graph row before the boot kernel materializes entries) and the settings
- * panel's per-source child context (`dsh-chamber-client-ui-settings-bridge`,
- * which mounts the selected source's own plugin contributions). Both need the
+ * graph row before the boot kernel materializes entries) — the settings panel
+ * used to be the second consumer through its per-source child context, which
+ * the 2026-12 完整桥接修订 deleted (the panel renders the source's own boot-ctx
+ * ledger and loads nothing). That path still needs the
  * SAME page-level bookkeeping: one script execution per combo URL, one factory
  * claim per plugin id (first-load-wins), timeout tombstones that keep observing
  * a script that outlived its request budget, and honest rev-conflict facts.
@@ -40,10 +41,10 @@ export interface ClientPluginRow {
   /** Opaque bundle revision (cache-busting consistency anchor, not a content hash). */
   rev: string
   /**
-   * Package-level dependency edges (the graph row's `inject`). Used by the
-   * settings panel's OPTIONAL dependency-closure expansion: a plugin whose
-   * declared package dependency is chamber-covered can have that provider
-   * mounted into the same child context (2026-12).
+   * Package-level dependency edges (the graph row's `inject`), carried through
+   * verbatim. The settings panel's OPTIONAL dependency-closure expansion (its
+   * only documented consumer) was retired with the 2026-12 完整桥接修订, so the
+   * boot kernel treats this as pass-through data today.
    */
   inject?: readonly string[]
 }
@@ -321,7 +322,7 @@ export interface ClientRowSignatures {
 
 /**
  * Identity of a row set for cache/reconcile decisions. The id set is the
- * REBUILD key (a different plugin set needs a different child context); the
+ * REBUILD key (a different plugin set needs a different boot graph); the
  * rev set is informational (first-load-wins already decided which factory the
  * page runs, so rev drift is reported, never rebuilt).
  * @param rows - the source's kept rows.

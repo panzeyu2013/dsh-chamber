@@ -67,6 +67,7 @@ pnpm run build:renderer                       # renderer build succeeds
 pnpm run build:gateway                        # gateway + dsh-runtime build succeeds
 pnpm --filter @dsh-chamber/desktop run build:preload
 pnpm run verify:i18n
+pnpm run verify:styles
 ```
 
 For changes that touch runtime, auth, protocol, or desktop-shell behavior, add or update focused tests — static checks alone do not prove runtime correctness.
@@ -89,6 +90,7 @@ type(scope): subject
 - **type** — one of: `feat` (new capability), `fix` (bug fix), `chore` (build/tooling/maintenance), `docs`, `refactor`, `test`, `ci`, `perf`, `style` (formatting only), `revert`.
 - **scope** — optional, but prefer the affected package or area: `control-plane`, `renderer`, `desktop`, `sidebar`, `settings-bridge`, `cli`, `ci`, `docs`, `packaging`.
 - **subject** — imperative mood, no trailing period, ≤ 72 characters ("fix", not "fixed"; "add", not "adds").
+- **language (mandatory)** — **commit messages are always written in English**: both the subject and the body (the examples below are the canonical shape). The Chinese commits in this repository's history are a fact about the past, not a precedent; every commit added from this rule onward must be English, so upstream and outside contributors can search and cite it. Code comments, design documents and PR bodies are NOT covered by this rule and may stay Chinese.
 - **body** — when the change is not self-evident, explain the *what* and *why* after a blank line; reference the relevant design/progress document or issue where applicable.
 - **breaking changes** — append `!` after type/scope (e.g. `feat(desktop)!: ...`) or add a `BREAKING CHANGE:` footer, and describe the migration impact in the body.
 
@@ -106,7 +108,7 @@ One logical change per commit; keep diffs focused. Commits bundling unrelated ch
 ## Scope Discipline
 
 - Anything the dsh host, its plugin ecosystem, or the reused dsh frontend already provides is **attached or served, never re-implemented**.
-- Domains removed from scope (walkthrough, notification center/history, terminal rendering/input, web preview, MCP, thin-shell chat UI, control-plane session runtime, …) **must not return** in any form. The only ratified bounded exceptions are Design 08's in-instance Git worktree plugin, Design 17's separately invoked gateway (shell + host duties + seed registry only), Design 18's shared dsh runtime-management core, Design 19's Electron-native notification edge projection, and Design 20's trusted open-in edge capability. None may introduce an execution surface, session consumer, notification history, or fact authority into `packages/control-plane` or the renderer.
+- Domains removed from scope (walkthrough, notification center/history, terminal rendering/input, web preview, MCP, thin-shell chat UI, control-plane session runtime, …) **must not return** in any form. The only ratified bounded exceptions are Design 08's in-instance Git worktree plugin, Design 17's separately invoked gateway (shell + host duties + seed registry only), Design 18's shared dsh runtime-management core, Design 19's Electron-native notification edge projection, Design 20's trusted open-in edge capability (including its local-shape in-instance host domain `openInApp`, boundaries in design 20 §6.3), and Design 24's in-instance archive-cleanup host domain `archiveCleanup/{preview,purge,probe}` (delete-only, whole-subtree skip while running, idempotent; narrowest boundaries in design 24 §2). None may introduce an execution surface, session consumer, notification history, or fact authority into `packages/control-plane` or the renderer.
 - For any new domain feature proposal, first ask: does dsh native, the plugin ecosystem, or the host web frontend already cover it? If yes → don't build it.
 
 ## Pull Requests

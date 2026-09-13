@@ -1,10 +1,19 @@
 /**
- * Chamber open-in client plugin (design 16 + open-in extension + Batch 3
- * Phase 2 unification): ONE header utility entry that opens the current
- * session's workspace in an installed app, over the per-source view-model —
- * the instance's own host catalog for LOCAL sources (absorbed official
- * channel) and the desktop main-process provider (VS Code, and the remote
- * deeplink carrier for SSH targets).
+ * Chamber open-in client plugin (design 16 + design 20 fork & supersede):
+ * ONE header utility entry that opens the current session's workspace in an
+ * installed app, over the per-source view-model —
+ *
+ *  - the **machine catalog** (installed apps + their real bundle icons + local
+ *    launches) is read ONCE per page from the LOCAL instance's `openInApp/*`
+ *    host domain (`packages/dsh-chamber-seed-open-in`, the fork of upstream's
+ *    open-in host half) by the renderer shell and injected into every entry as
+ *    `chamberMachineCatalog` (design 20 §5): "what is installed on this
+ *    machine" is a machine fact, exactly as it is upstream, where the page's
+ *    own host answers it;
+ *  - **this source's launch capability** selects from that catalog: a LOCAL
+ *    source launches on the machine directly, a remote ssh source keeps only
+ *    the desktop main-process provider's `remoteCapable` entries (the VS Code
+ *    Remote deeplink carrier).
  *
  * Registered into the OFFICIAL conversation header utilities slot
  * (`conversation.session.header.utilities`, the same right-aligned row as the
@@ -14,20 +23,21 @@
  * now lays out inline beside the vendor utilities instead of floating on the
  * frame layer. The slot is session-scoped, so the component receives the
  * per-header `sessionId` and the framework's global `useWorkspaces` hook —
- * no direct ctx store access (inject face stays `['slots', 'locale']`).
+ * no direct ctx store access.
  *
- * Per-entry facts ride this ctx (`chamberInstanceId`, `chamberBasePath`,
- * `chamberSourceFingerprint`, `chamberTransport`, all provided by
- * chamber-entry/shell.ts): the source id and transport decide the matrix, the
- * base path scopes the official host-catalog requests to this instance's
- * proxy prefix, and the fingerprint is the exact-boot proof the trusted main
- * process verifies before a launch.
+ * Per-entry facts ride this ctx (`chamberInstanceId`, `chamberTransport`,
+ * `chamberSourceFingerprint`, all provided by chamber-entry/shell.ts): the
+ * source id and transport decide the matrix, and the fingerprint is the
+ * exact-boot proof the trusted main process verifies before a launch. This
+ * entry owns NO connection carrier of its own any more (2026-09-12): the
+ * machine catalog's transport belongs to the page, not to a source.
  */
 import type { Context as ClientContext } from '@deepseek-ai/cordis'
 // Type-only import activates the locale service's Context merge.
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { OpenInButton, type OpenInInjected } from './OpenInButton.tsx'
 import { createOpenInSourceAdapter } from './source-adapter.ts'
+import type { MachineCatalog } from './machine-catalog.ts'
 import { getOpenInChoice, setOpenInChoice, subscribeOpenInChoice } from './choice-store.ts'
 import { en, zh, type OpenInKey } from '../locales.ts'
 import {
@@ -74,18 +84,30 @@ export function apply(ctx: ClientContext): void {
 
   const t = ctx.locale.bind(NS) as Translate
 
-  // Per-source adapter (Batch 3 Phase 2, plan §5.2): owns the dual-pool
-  // selection (official host catalog for LOCAL sources + the page-wide main
-  // pool), the per-entry base-path remapping of every official request/icon
-  // URL, the per-entry channel routing (official → instance host route; main →
-  // trusted preload IPC with the exact-boot proof) and the persisted choice.
+  // The machine catalog is a PAGE fact (built once by the renderer shell for
+  // the LOCAL instance, design 20 §5); this entry reads it from its own Context
+  // and never builds a per-source copy. Absent = no machine reader on this page
+  // (the machine pool then stays empty rather than the button breaking).
+  const machineCatalog = (ctx as { chamberMachineCatalog?: MachineCatalog }).chamberMachineCatalog ?? null
+
+  // Per-source adapter (design 20 §5): owns the rendered-set merge (the page's
+  // machine catalog + the page-wide main pool) and the per-entry channel
+  // routing (local → the machine's own host domain, main → trusted preload IPC
+  // with the exact-boot proof), plus the persisted choice.
   const adapter = createOpenInSourceAdapter({
     source,
     sourceFingerprint,
     translate: t,
-    basePath: (ctx as { chamberBasePath?: string }).chamberBasePath,
+    machineCatalog,
     mainPool: { get: getOpenInApps, subscribe: subscribeOpenIn, refresh: refreshApps },
-    choice: { get: getOpenInChoice, set: setOpenInChoice, subscribe: subscribeOpenInChoice },
+    // The remembered app is per source (design 20 §5): one page serves every
+    // source, so a shared key would let a remote target overwrite the local
+    // choice (and vice versa).
+    choice: {
+      get: () => getOpenInChoice(source.sourceId),
+      set: (appId: string) => { setOpenInChoice(source.sourceId, appId) },
+      subscribe: subscribeOpenInChoice,
+    },
     platform: bridgePlatform(),
   })
   ctx.effect(() => () => adapter.dispose(), 'dsh-chamber: open-in adapter')
@@ -97,7 +119,6 @@ export function apply(ctx: ClientContext): void {
   // (see OpenInButton props).
   const injected = (): OpenInInjected => ({
     source,
-    sourceFingerprint,
     t,
     getViewModel: adapter.getViewModel,
     subscribe: adapter.subscribe,
@@ -111,11 +132,19 @@ export function apply(ctx: ClientContext): void {
 
   ctx.slots.inject(OPEN_IN_HEADER_SLOT, () => ctx.slots.register({
     name: OPEN_IN_HEADER_SLOT,
+    // Our own id, deliberately NOT the official row's `open-in-app`: the slot
+    // registry THROWS on a duplicate `list` id at the same priority
+    // (ui-slots `register`), so a future boot graph that materializes the
+    // official row would break this surface instead of merely duplicating it.
+    // Everything else about the registration is upstream's (order -10, same
+    // slot, same right-aligned position).
     id: 'open-in',
-    // Row order is ascending by `order` (default 0): -1 keeps the vendor
-    // "Session log" entry (order 0) pinned at the row's far RIGHT and places
-    // this button to its left (2026-08 user requirement).
-    order: -1,
+    // Row order is ascending by `order` (default 0). -10 is the official
+    // `open-in-app` row's own value (2026-09-12 thorough unification), which
+    // keeps the vendor "Session log" entry (order 0) pinned at the row's far
+    // RIGHT and places this button to its left (2026-08 user requirement) with
+    // upstream's exact ordering behaviour for any third-party row in between.
+    order: -10,
     // Neutral entry label (slot registrant diagnostics — the user-facing
     // tooltip/aria-label comes from the component per app, see OpenInButton).
     label: () => t('titleOpen'),

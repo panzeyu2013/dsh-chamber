@@ -155,9 +155,14 @@ function kindStatusKey(kind: TodoAttentionKind): SidebarKey {
   }
 }
 
-/** Title fallback: unnamed copy matches the session rows. */
+/** Official display label (I3): the entry carries the resolved title, so the
+ *  unnamed copy only survives as a defensive fallback for a pre-revision entry
+ *  object — a session whose title the host could not read shows its project
+ *  directory name, exactly like the session rows. */
 function titleOf(entry: TodoAttentionEntry, t: TodoTranslate): string {
-  return entry.title !== undefined && entry.title !== '' ? entry.title : t('list.unnamed')
+  return entry.displayTitle !== undefined && entry.displayTitle !== ''
+    ? entry.displayTitle
+    : (entry.title !== undefined && entry.title !== '' ? entry.title : t('list.unnamed'))
 }
 
 function TodoRow({
@@ -232,6 +237,11 @@ function TodoRow({
           {entry.kind === 'approval' && <IconWarningOutline16 className={cc.statePendingApproval} />}
           {entry.kind === 'plan-review' && <IconChecklistOutline14 className={cc.statePendingPlan} />}
           {entry.kind === 'question' && <IconQuestionOutline14 className={cc.statePendingQuestion} />}
+          {/* 2026-09 user decision: the strip reuses the list rows' state marks,
+              so its completed entry carries the same chamber brand-blue
+              `.stateCompleted` dot as the rows (the official StateDot `done`
+              green was dropped: it equals the source header's connection dot
+              tone — see sidebar-chamber.module.css .stateCompleted). */}
           {entry.kind === 'completed' && <span className={cc.stateCompleted} />}
         </span>
       </button>

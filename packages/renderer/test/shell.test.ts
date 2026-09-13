@@ -17,21 +17,27 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { chamberBridge } from '../../dsh-chamber-client-ui-sidebar/src/shared/aggregate-store.ts'
+// The settled-boot fact the seam carries (type-only: erased at runtime, so the
+// loader hook never sees the specifier). Typing the test's ctx cast from the
+// producer's own interface keeps a payload field from drifting out of the test.
+import type { ShellDegradedFact } from '../src/boot-gap.ts'
 
 // Test knobs — same module instance shell.ts sees (the loader maps the bare
 // specifier to this URL; the relative import resolves to the same file).
 import {
+  FIBER_STATE,
   __testConfiguredContexts, __testDisposedCount, __testEventLog,
   __testEntryStates, __testOpenedSessions, __testQueueDisposeGate, __testQueueRunGate,
   __testResetConfiguredContexts, __testResetDisposed, __testResetEventLog,
   __testResetLifecycle, __testSetSessionsAvailable, __testSetSessionsListed,
   __testSetSessionsOpenError, __testSetSessionsReadError,
-  __testSetSessionsSnapshotError,
+  __testSetSessionsSnapshotError, __testSetLoaderEntries,
   __testSetBootError, __testSetChamberPrefetchError, __testSetModuleSystemError, __testSetRunError,
 } from '../test-fixtures/dsh-client-web.mjs'
 
 const shellModule = await import('../src/shell.ts')
 const {
+  collectFailedEntries,
   disposeAllShells, disposeInstanceShell, INSTANCE_TAIL_WAIT_CAP_MS, openInstanceSession,
   tailWaitRemainingMs,
 } = shellModule
@@ -124,6 +130,87 @@ test('bootInstanceShell: a resolved-but-failed run (bootError set) settles as a 
   }
 })
 
+test('bootInstanceShell: the failure report names the plugin ids that did not activate (T15)', async () => {
+  // 2026-09-11 upstream-alignment (T15): upstream's boot page lists one item per
+  // failed plugin id (boot-page.ts `Failed to load plugins`) and its post-settle
+  // sweep names the same entries. The chamber overlay replaced that in-shell
+  // page, so the shell reads the SAME live loader (ctx.loader.entries(), the
+  // sweep's own source) before teardown and projects the ids on the ShellState
+  // the App already consumes.
+  const restoreFetch = stubUnavailableGraph()
+  const restoreWindow = stubWindow()
+  __testResetDisposed()
+  __testSetBootError('web boot: 2 entries did not activate\n@deepseek-ai/dsh-client-ui-tool: pending (waiting for service: sidebarRight)')
+  __testSetRunError(undefined)
+  __testSetLoaderEntries([
+    { options: { name: '@dsh-chamber/app' }, fiber: { state: FIBER_STATE.ACTIVE } },
+    { options: { name: '@deepseek-ai/dsh-client-ui-tool' }, fiber: { state: FIBER_STATE.PENDING } },
+    // No fiber = the import failed (upstream projects exactly this as a failure).
+    { options: { name: '@scope/third-party' } },
+    { options: { name: '@scope/third-party' } },
+  ])
+  try {
+    const state = await bootInstanceShell('ssh-test-fail-ids', '/api/i/ssh-test-fail-ids', {} as HTMLElement, () => {})
+    assert.equal(state.booted, false)
+    assert.deepEqual(state.failedEntries,
+      ['@deepseek-ai/dsh-client-ui-tool', '@scope/third-party'],
+      'the non-active entry ids travel in loader order, deduped')
+  } finally {
+    __testSetLoaderEntries(undefined)
+    __testSetBootError(undefined)
+    restoreFetch()
+    restoreWindow()
+  }
+})
+
+test('bootInstanceShell: a hostile runtimeCtx read never replaces the boot failure report (T15)', async () => {
+  // The sweep is an external-boundary read: the failure report the shell
+  // already holds must survive a throwing runtimeCtx getter (same discipline as
+  // describeShellError / the dispatchOpen hostile-read arm) — otherwise the
+  // overlay would show the trap's error instead of the boot failure.
+  const restoreFetch = stubUnavailableGraph()
+  const restoreWindow = stubWindow()
+  __testResetDisposed()
+  __testSetBootError('web boot: 1 entry did not activate')
+  __testSetRunError(undefined)
+  __testSetSessionsReadError(new Error('hostile runtimeCtx trap'))
+  try {
+    const state = await bootInstanceShell('ssh-test-fail-hostile', '/api/i/ssh-test-fail-hostile', {} as HTMLElement, () => {})
+    assert.equal(state.booted, false)
+    assert.equal(state.error, 'web boot: 1 entry did not activate', 'the boot report survives')
+    assert.equal(state.failedEntries, undefined, 'no list is invented when the sweep cannot be read')
+  } finally {
+    __testSetSessionsReadError(undefined)
+    __testSetLoaderEntries(undefined)
+    __testSetBootError(undefined)
+    restoreFetch()
+    restoreWindow()
+  }
+})
+
+test('collectFailedEntries mirrors the official sweep and tolerates extra rows', () => {
+  // Pure sweep (the boot path above exercises it through the fixture): only
+  // non-active entries are reported, tolerated (per-instance extra) rows never
+  // fail a boot, and a hostile loader read can never turn a failure report into
+  // a second failure.
+  const entries = [
+    { options: { name: 'a' }, fiber: { state: FIBER_STATE.ACTIVE } },
+    { options: { name: 'b' }, fiber: { state: FIBER_STATE.PENDING } },
+    { options: { name: 'c' }, fiber: { state: FIBER_STATE.FAILED } },
+    { options: { name: 'extra' }, fiber: { state: FIBER_STATE.FAILED } },
+    { options: { name: 'd' } },
+    { options: { name: 'd' } },
+  ]
+  assert.deepEqual(
+    collectFailedEntries({ loader: { entries: () => entries } }, new Set(['extra'])),
+    ['b', 'c', 'd'],
+  )
+  assert.deepEqual(collectFailedEntries({ loader: { entries: () => entries } }), ['b', 'c', 'extra', 'd'])
+  assert.deepEqual(collectFailedEntries(undefined), [])
+  assert.deepEqual(collectFailedEntries({}), [])
+  assert.deepEqual(collectFailedEntries({ loader: { entries() { throw new Error('hostile loader') } } }), [])
+})
+
 test('bootInstanceShell: a clean run settles booted with no error and keeps the entry', async () => {
   const restoreFetch = stubUnavailableGraph()
   const restoreWindow = stubWindow()
@@ -137,7 +224,7 @@ test('bootInstanceShell: a clean run settles booted with no error and keeps the 
     assert.equal(state.error, null)
     assert.equal(__testDisposedCount(), 0)
     const [facts] = __testConfiguredContexts() as [Record<string, unknown>]
-    const { chamberReportBootDegraded, ...immutableFacts } = facts
+    const { chamberReportBootDegraded, chamberMachineCatalog, ...immutableFacts } = facts
     assert.deepEqual(immutableFacts, {
       chamberInstanceId: 'ssh-test-clean-2',
       chamberBasePath: '/api/i/ssh-test-clean-2',
@@ -149,6 +236,11 @@ test('bootInstanceShell: a clean run settles booted with no error and keeps the 
     // 降级上报缝（2026-09-10）：条目里的必需服务探针经它把「挂载已知不完整」
     // 交给 App（App 据此在该来源 ready 后自动重挂），必须随每个 boot 一起提供。
     assert.equal(typeof chamberReportBootDegraded, 'function')
+    // 页级机器目录（design 20 §5）：一次读取、注入每个条目（ssh 来源也一样），
+    // 同为运行时面而非每来源事实，因此与降级上报缝一样单独断言。
+    const machineCatalog = chamberMachineCatalog as { entries?: unknown; iconUrl?: unknown }
+    assert.equal(typeof machineCatalog.entries, 'function', 'every boot hands the entry the page machine catalog')
+    assert.equal(typeof machineCatalog.iconUrl, 'function')
   } finally {
     __testResetConfiguredContexts()
     restoreFetch()
@@ -196,7 +288,9 @@ test('bootInstanceShell: the serving gate is threaded into the host-graph fetch 
 test('bootInstanceShell: a graph-less boot settles degraded and republishes a late probe verdict', async () => {
   // 2026-09-10（sidebarRight 彻底修复）：取图在启动窗口内拿不到时，boot 仍成功但
   // 必须带上「已知不完整」这个事实（App 据此在来源 ready 后自动重挂）；条目里
-  // 5s 必需服务探针的判词晚于 settle，经同一条 onState 缝补发。
+  // 5s 必需服务探针的判词晚于 settle：经 onState 补发给**视图**，并经
+  // options.onRepublish 投给 **App 镜像**（2026-12 BLOCKER 修复——只发前者时
+  // 横幅/侧栏投射/自愈全都收不到，见下方 republished 断言）。
   const restoreFetch = stubUnavailableGraph()
   const restoreWindow = stubWindow()
   __testResetDisposed()
@@ -204,20 +298,90 @@ test('bootInstanceShell: a graph-less boot settles degraded and republishes a la
   __testSetBootError(undefined)
   __testSetRunError(undefined)
   const states: Array<{ booted: boolean; degraded: { kind: string } | null }> = []
+  // 2026-12 BLOCKER fix: the post-settle verdict must reach the APP-owned sink as
+  // well, because the `onState` argument above is the view's local setter in
+  // production — publishing only through it left the banner, the sidebar/
+  // connections projection and the self-heal blind to 2 of the 3 kinds.
+  const republished: Array<{ booted: boolean; degraded: { kind: string } | null }> = []
   try {
-    const state = await bootInstanceShell(
+    const state = await shellModule.bootInstanceShell(
       'ssh-test-degrade-7', '/api/i/ssh-test-degrade-7', {} as HTMLElement,
       (next) => states.push(next as unknown as { booted: boolean; degraded: { kind: string } | null }),
+      testSourceFingerprint('ssh-test-degrade-7'), undefined,
+      {
+        onRepublish: (_id, next) => {
+          republished.push(next as unknown as { booted: boolean; degraded: { kind: string } | null })
+        },
+      },
     )
     assert.equal(state.booted, true)
     assert.equal(state.error, null)
     assert.equal(state.degraded?.kind, 'graph-unavailable')
-    const ctx = __testConfiguredContexts().at(-1) as { chamberReportBootDegraded?: (message: string) => void }
+    const ctx = __testConfiguredContexts().at(-1) as {
+      chamberReportBootDegraded?: (fact: ShellDegradedFact) => void
+    }
     assert.equal(typeof ctx.chamberReportBootDegraded, 'function', 'the entry needs the degrade seam')
-    ctx.chamberReportBootDegraded?.('required extra-row service(s) missing after 5000ms: sidebarRight')
+    // The seam carries the STRUCTURED fact (2026-12, design 05 §4): the frame
+    // renders its own copy from the kind + the named services, so a producer
+    // must not flatten its verdict into a sentence.
+    ctx.chamberReportBootDegraded?.({
+      kind: 'required-services-missing',
+      message: 'required extra-row service(s) missing after 5000ms: sidebarRight',
+      services: ['sidebarRight'],
+      injectedBy: ['@deepseek-ai/dsh-client-ui-chat'],
+    })
     const last = states.at(-1)!
     assert.equal(last.booted, true)
     assert.equal(last.degraded?.kind, 'required-services-missing')
+    assert.equal(
+      republished.at(-1)?.degraded?.kind,
+      'required-services-missing',
+      'the App-owned sink must receive the post-settle verdict (the user surfaces read the App mirror)',
+    )
+    assert.deepEqual(
+      (last.degraded as unknown as { services?: readonly string[] }).services,
+      ['sidebarRight'],
+      'the structured services must survive the republish (the copy names them)',
+    )
+    // Identity = kind + payload: an identical repeat (even with a drifting
+    // message, which the signature deliberately ignores) must not churn the
+    // App's state …
+    const published = states.length
+    ctx.chamberReportBootDegraded?.({
+      kind: 'required-services-missing',
+      message: 'a re-worded but structurally identical verdict',
+      services: ['sidebarRight'],
+      injectedBy: ['@deepseek-ai/dsh-client-ui-chat'],
+    })
+    assert.equal(states.length, published, 'an identical fact must not republish')
+    // The load-bearing half of the signature change (2026-12 falsification
+    // round): the SAME kind with a RICHER payload must republish. A kind-only
+    // comparison — the behaviour this change replaced — silently dropped it,
+    // which is exactly how the probe's re-armed pass lost its extra service.
+    ctx.chamberReportBootDegraded?.({
+      kind: 'required-services-missing',
+      message: 'the probe re-armed and named one more service',
+      services: ['sidebarRight', 'slots'],
+      injectedBy: ['@deepseek-ai/dsh-client-ui-chat'],
+    })
+    assert.equal(states.length, published + 1, 'a richer payload of the same kind must republish')
+    assert.deepEqual(
+      (states.at(-1)!.degraded as unknown as { services?: readonly string[] }).services,
+      ['sidebarRight', 'slots'],
+      'the richer verdict must be the recorded one',
+    )
+    // … while a DIFFERENT kind replaces the single slot (the last verdict wins;
+    // both producers stay on console — the bound is registered in STATUS).
+    ctx.chamberReportBootDegraded?.({
+      kind: 'deferred-registration-failed',
+      message: 'deferred plugin registration failed for 1 id(s): ui-tool',
+      failedIds: ['ui-tool'],
+    })
+    assert.equal(
+      states.at(-1)!.degraded?.kind,
+      'deferred-registration-failed',
+      'the fact slot is single: a new kind replaces the previous verdict',
+    )
   } finally {
     __testResetConfiguredContexts()
     restoreFetch()
@@ -247,18 +411,36 @@ test('createChamberContextSetup: immutable entry facts cannot cross when boots a
   // A resumes late. Each closure must still install only its own facts.
   configureB(b.ctx)
   configureA(a.ctx)
-  assert.deepEqual(a.facts, {
+  const entryFacts = (facts: Record<string, unknown>): Record<string, unknown> => ({
+    chamberInstanceId: facts.chamberInstanceId,
+    chamberBasePath: facts.chamberBasePath,
+    chamberSourceFingerprint: facts.chamberSourceFingerprint,
+    chamberTransport: facts.chamberTransport,
+  })
+  assert.deepEqual(entryFacts(a.facts), {
     chamberInstanceId: 'ssh-instance-a',
     chamberBasePath: '/api/i/ssh-instance-a',
     chamberSourceFingerprint: testSourceFingerprint('ssh-instance-a'),
     chamberTransport: 'ssh',
   })
-  assert.deepEqual(b.facts, {
+  assert.deepEqual(entryFacts(b.facts), {
     chamberInstanceId: 'ssh-instance-b',
     chamberBasePath: '/api/i/ssh-instance-b',
     chamberSourceFingerprint: testSourceFingerprint('ssh-instance-b'),
     chamberTransport: 'ssh',
   })
+  // The machine catalog is a PAGE fact (design 20 §5): "what is installed on
+  // this machine" is read once from the LOCAL instance and every entry — a
+  // remote-ssh one included — receives the exact same reader, never a copy.
+  assert.ok(a.facts.chamberMachineCatalog !== undefined, 'every entry is handed the machine catalog')
+  assert.equal(a.facts.chamberMachineCatalog, b.facts.chamberMachineCatalog,
+    'two entries share one page-level machine reader')
+  // …and the fact set stays exactly these five: the strict whole-object check
+  // this replaced must not silently admit a new per-entry fact.
+  assert.deepEqual(Object.keys(a.facts).sort(), [
+    'chamberBasePath', 'chamberInstanceId', 'chamberMachineCatalog',
+    'chamberSourceFingerprint', 'chamberTransport',
+  ])
   assert.throws(() => createChamberContextSetup(' ', '/api/i/ '), /empty instance id/)
   for (const sourceId of [
     'remote-1', 'ssh-', 'ssh-local', 'ssh-bad/id', 'ssh-a.b', `ssh-${'a'.repeat(65)}`,
@@ -306,12 +488,24 @@ test('bootInstanceShell: a throwing run settles as a failure (legacy rejection p
   __testResetDisposed()
   __testSetBootError(undefined)
   __testSetRunError(new Error('loader exploded'))
+  // 2026-09-11 review-fix (finding 4g): this last-resort arm names the failed
+  // loader entries too — the same live-loader read the bootError arm performs,
+  // taken before teardown and filtered by the same extra-row tolerance set. The
+  // ctx is disposed further down in this same arm, so a sweep that ran after
+  // teardown (or that was forgotten entirely) shows up here as an empty list.
+  __testSetLoaderEntries([
+    { options: { name: '@dsh-chamber/app' }, fiber: { state: FIBER_STATE.ACTIVE } },
+    { options: { name: '@deepseek-ai/dsh-client-ui-tool' }, fiber: { state: FIBER_STATE.PENDING } },
+  ])
   try {
     const state = await bootInstanceShell('ssh-test-throw-3', '/api/i/ssh-test-throw-3', {} as HTMLElement, () => {})
     assert.equal(state.booted, false)
     assert.equal(state.error, 'loader exploded')
+    assert.deepEqual(state.failedEntries, ['@deepseek-ai/dsh-client-ui-tool'],
+      'the rejection arm must list the non-active entries like the bootError arm')
     assert.equal(__testDisposedCount(), 1)
   } finally {
+    __testSetLoaderEntries(undefined)
     __testSetRunError(undefined)
     restoreFetch()
     restoreWindow()
@@ -1362,5 +1556,155 @@ test('C3 gate: a chamber prefetch rejection is swallowed — the boot still sett
     __testResetEventLog()
     console.error = originalConsoleError
     restoreFetch()
+  }
+})
+
+test('openInstanceSession: a request superseded by a newer one on the same source resolves quietly and never opens', async (t) => {
+  // 2026-12 (design 05 §2.2 revision): per-source open requests are a
+  // last-intent-wins stream, and the queued (cold-boot) path is where they can
+  // actually race: both clicks land in the pending queue, the settle flush then
+  // walks them in FIFO order. The boot-ctx early-open arm has already opened the
+  // LATEST intent during boot, so dispatching the abandoned older request would
+  // visibly flip the shell back (Y→X→Y). The dispatcher must drop it: resolve
+  // quietly (it is not a failure — the row error surface belongs to the newest
+  // request) and never call sessions.open for it.
+  const instanceId = 'ssh-test-superseded-open'
+  const restoreFetch = stubReadyGraph()
+  const restoreWindow = stubWindow()
+  __testResetLifecycle()
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  try {
+    // Two clicks on a source that is still booting: both are queued.
+    const stale = openInstanceSession(instanceId, 'session-X')
+    const fresh = openInstanceSession(instanceId, 'session-Y')
+    const state = await bootInstanceShell(instanceId, `/api/i/${instanceId}`, {} as HTMLElement, () => {})
+    assert.equal(state.booted, true)
+    await Promise.all([stale, fresh])
+    // The flush dispatches the queue in order; X must be skipped and Y opened.
+    // The extra tick proves no stray poller re-opens the abandoned session later.
+    t.mock.timers.tick(1_000)
+    assert.deepEqual(
+      __testOpenedSessions(),
+      [{ label: 'entry-1', sessionId: 'session-Y' }],
+      'the superseded request must resolve without ever touching the runtime',
+    )
+
+    // A repeat of the CURRENT session stays openable (idempotent re-open): the
+    // supersession check compares against the last request, not against an
+    // "already opened once" marker.
+    await openInstanceSession(instanceId, 'session-Y')
+    assert.deepEqual(__testOpenedSessions(), [
+      { label: 'entry-1', sessionId: 'session-Y' },
+      { label: 'entry-1', sessionId: 'session-Y' },
+    ])
+
+    // With no newer request in play, a pre-boot queued open still dispatches:
+    // the check must never swallow the FIRST request of a source.
+    const third = openInstanceSession(instanceId, 'session-Z')
+    await third
+    assert.deepEqual(__testOpenedSessions().at(-1), { label: 'entry-1', sessionId: 'session-Z' })
+  } finally {
+    disposeInstanceShell(instanceId)
+    __testResetLifecycle()
+    t.mock.timers.reset()
+    restoreFetch()
+    restoreWindow()
+  }
+})
+
+test('openInstanceSession: the supersede record is PER SOURCE — an open on another source never swallows this one', async (t) => {
+  // 2026-09-11 review F4(a): the supersede rule is "last intent wins WITHIN one
+  // source" (design 05 §2.2 revision). A single page-wide "last requested
+  // session" would make two different servers interfere: clicking a session on B
+  // while A's cold-boot open is still queued would drop A's request silently at
+  // its flush (no error, no row report — the user's click just does nothing).
+  // Both requests are queued BEFORE either source boots, so the flush order is
+  // the only thing the dispatcher sees and the cross-source mistake is visible.
+  const sourceA = 'ssh-test-supersede-per-source-a'
+  const sourceB = 'ssh-test-supersede-per-source-b'
+  const restoreFetch = stubReadyGraph()
+  const restoreWindow = stubWindow()
+  __testResetLifecycle()
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  try {
+    const openA = openInstanceSession(sourceA, 'session-AX')
+    const openB = openInstanceSession(sourceB, 'session-BY')
+    const stateA = await bootInstanceShell(sourceA, `/api/i/${sourceA}`, {} as HTMLElement, () => {})
+    const stateB = await bootInstanceShell(sourceB, `/api/i/${sourceB}`, {} as HTMLElement, () => {})
+    assert.equal(stateA.booted, true)
+    assert.equal(stateB.booted, true)
+    await Promise.all([openA, openB])
+    t.mock.timers.tick(1_000)
+    assert.deepEqual(
+      __testOpenedSessions(),
+      [
+        { label: 'entry-1', sessionId: 'session-AX' },
+        { label: 'entry-2', sessionId: 'session-BY' },
+      ],
+      'each source must open its OWN requested session; a shared record would drop A as "superseded" by B',
+    )
+  } finally {
+    disposeInstanceShell(sourceA)
+    disposeInstanceShell(sourceB)
+    __testResetLifecycle()
+    t.mock.timers.reset()
+    restoreFetch()
+    restoreWindow()
+  }
+})
+
+test('openInstanceSession: the request record is dropped for a same-id re-add — the new incarnation is never judged superseded', async (t) => {
+  // 2026-09-11 review F4(b): this is the invariant disposeInstanceShell's own
+  // comment states ("a same-id re-add is a new generation, and its first open
+  // must not be judged as superseded by the previous incarnation's last
+  // request").
+  //
+  // The record is asserted DIRECTLY (`__testLastRequestedSession`), because the
+  // behavior alone cannot see it: every dispatch follows the write of its own
+  // request, so the re-added source's first open overwrites the leftover record
+  // before the supersede check can compare it. A behavioral-only version of this
+  // test passes with the retirement deleted (mutation-verified 2026-09-11) — it
+  // would be a lock that proves nothing. The user-visible half (the re-added
+  // source's first open still reaches the runtime) is asserted too.
+  const instanceId = 'ssh-test-supersede-readd'
+  const restoreFetch = stubReadyGraph()
+  const restoreWindow = stubWindow()
+  __testResetLifecycle()
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  try {
+    const first = await bootInstanceShell(instanceId, `/api/i/${instanceId}`, {} as HTMLElement, () => {})
+    assert.equal(first.booted, true)
+    await openInstanceSession(instanceId, 'session-X')
+    assert.equal(
+      shellModule.__testLastRequestedSession(instanceId),
+      'session-X',
+      'a live shell records the session it was asked to open',
+    )
+    assert.deepEqual(__testOpenedSessions(), [{ label: 'entry-1', sessionId: 'session-X' }])
+
+    // The source leaves the registry and comes back under the SAME id.
+    disposeInstanceShell(instanceId)
+    assert.equal(
+      shellModule.__testLastRequestedSession(instanceId),
+      undefined,
+      'the record retires with the source — the new incarnation must not inherit the old request',
+    )
+    const second = await bootInstanceShell(instanceId, `/api/i/${instanceId}`, {} as HTMLElement, () => {})
+    assert.equal(second.booted, true)
+    await openInstanceSession(instanceId, 'session-Y')
+    assert.deepEqual(
+      __testOpenedSessions(),
+      [
+        { label: 'entry-1', sessionId: 'session-X' },
+        { label: 'entry-2', sessionId: 'session-Y' },
+      ],
+      'the re-added source’s first open must reach the runtime, never be judged against the previous incarnation',
+    )
+  } finally {
+    disposeInstanceShell(instanceId)
+    __testResetLifecycle()
+    t.mock.timers.reset()
+    restoreFetch()
+    restoreWindow()
   }
 })

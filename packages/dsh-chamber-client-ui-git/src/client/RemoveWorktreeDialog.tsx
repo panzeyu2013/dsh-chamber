@@ -1,12 +1,14 @@
 /** Remove-worktree dialog shared by the per-workspace Git occupant. */
 import { useEffect, useState } from 'react'
-import { Button, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, Modal, RiskConfirmation } from '@deepseek-ai/dsh-client-ui-primitives'
 import { chamberBridge, fetchInstanceSnapshot, getInstanceClient } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import { gitCoordinator, removeWorktree, WorktreeDirtyError } from '../shared/coordinator.ts'
 import { GitSagaError } from '../shared/saga.ts'
 import { GitWorktreeRpcError } from '../shared/git-api.ts'
 import { collectSessionClosure } from '../shared/git-facts.ts'
 import { removeFailureCode, removeFailureCopyKey, removeRunningNotes } from '../shared/remove-notes.ts'
+import { discardAuthorized, nextDiscardGate } from '../shared/discard-gate.ts'
+import type { DiscardGateFacts, DiscardGateKind } from '../shared/discard-gate.ts'
 import type { WorkspaceGitInjected } from './injected.ts'
 import css from './SidebarGit.module.css'
 
@@ -41,9 +43,11 @@ interface RemoveSessionFacts {
 }
 /** The host refusal `worktree-submodules` is a DETERMINISTIC pre-mutation
  *  rejection (the target still exists; nothing was removed — the saga never
- *  mints a recovery for it). The dialog force-shows the submodule discard
- *  authorization so the user can retry with `discardChanges` (--force)
- *  without closing (2026-09). */
+ *  mints a recovery for it). The dialog states the submodule warning and ARMS
+ *  the submodule discard authorization; the NEXT `Remove` click opens the
+ *  acknowledgement (the refusal itself does not open it), so the user can retry
+ *  with `discardChanges` (--force) without closing (2026-09; wording corrected
+ *  2026-09-11 review-fix, F3a). */
 function isSubmoduleRefusal(error: unknown): boolean {
   const original = error instanceof GitSagaError ? error.original : error
   return original instanceof GitWorktreeRpcError && original.code === 'worktree-submodules'
@@ -74,26 +78,40 @@ export function RemoveWorktreeDialog({
   const [deleteBranch, setDeleteBranch] = useState(false)
   /** Explicit authorization to DISCARD the worktree's uncommitted files
    *  (modified/untracked). The branch and its commits are never touched —
-   *  only the working-tree files are lost (design 08 §5.3 amendment 2026-08). */
+   *  only the working-tree files are lost (design 08 §5.3 amendment 2026-08).
+   *  The acknowledgement itself is collected by the `RiskConfirmation` below
+   *  (2026-09-11 upstream-alignment, T14). */
   const [discardChanges, setDiscardChanges] = useState(false)
   /** Set when the host refused with `worktree-submodules`: the row fact
    *  cannot know submodule presence, so the refusal surfaces in-dialog and
-   *  force-shows a dedicated discard authorization (the same --force path,
-   *  which git requires to bypass its submodule guard). */
+   *  ARMS a dedicated discard authorization (the same --force path, which git
+   *  requires to bypass its submodule guard) that the next `Remove` click
+   *  opens. */
   const [submoduleBlock, setSubmoduleBlock] = useState(false)
   const [discardSubmodules, setDiscardSubmodules] = useState(false)
   const [removeError, setRemoveError] = useState<string | null>(null)
   /** Set when the removal succeeded but the optional branch delete failed. */
   const [branchDeleteFailed, setBranchDeleteFailed] = useState(false)
+  /** The discard authorization the official `RiskConfirmation` is currently
+   *  collecting — the gate's own state, holding the KIND chosen when `Remove`
+   *  opened it (`null` = no gate). It is deliberately NOT derived from
+   *  `pendingDiscardAuthorization` below: that derivation goes back to `null`
+   *  the instant the acknowledgement box is ticked, so a gate opened from it
+   *  would dismiss itself before its confirm could run — leaving `onConfirm`
+   *  dead code and forcing a second `Remove` click (2026-09-11 review-fix,
+   *  F1). `onCancel`/`onConfirm` release it. */
+  const [discardGateOpen, setDiscardGateOpen] = useState<DiscardGateKind | null>(null)
 
   const busy = source?.busy !== undefined
   const actionLocked = busy || source?.recovery !== undefined
   /** Set when the FRESH preflight inside removeWorktree reported dirty even
-   *  though the dialog's row fact was stale-clean — force-show the discard
-   *  checkbox so the user can authorize and retry without closing (review
-   *  2026-08 P2-1). */
+   *  though the dialog's row fact was stale-clean — the dialog states the
+   *  warning and ARMS the discard acknowledgement; the NEXT `Remove` click
+   *  opens it, so the user can authorize and retry without closing (review
+   *  2026-08 P2-1; wording corrected 2026-09-11 review-fix, F3a). */
   const [freshDirty, setFreshDirty] = useState(false)
-  /** A dirty worktree needs the discard checkbox before the remove is enabled. */
+  /** A dirty worktree needs the discard acknowledgement before the removal
+   *  sends `discardChanges`. */
   const needsDiscardConfirmation = target?.dirty === true || freshDirty
   /** Informational only (2026-09 user decision): running sessions are never
    *  stopped or deleted by a removal, so the note distinguishes the ARCHIVED
@@ -115,13 +133,26 @@ export function RemoveWorktreeDialog({
    *  the explanation, mirroring the row's runtime-unknown hard block, instead
    *  of only refusing after the user confirms. */
   const runtimeUnknownBlock = !runtimeKnown && target !== null && target.sessionIds.length > 0
+  /** Which discard authorization a `Remove` click still has to collect
+   *  (the pure `nextDiscardGate`): the dirty working tree (design 08 §5.3) or
+   *  the submodule checkouts Git refuses to remove without force (2026-09,
+   *  refusal code `worktree-submodules`). The dialog itself never gates the
+   *  removal on it — it states the warning in place, and clicking `Remove`
+   *  OPENS the acknowledgement dialog for the kind this answers. It is read at
+   *  CLICK time only: the gate itself renders from the held `discardGateOpen`
+   *  kind (2026-09-11 review-fix, F1). */
+  const gateFacts: DiscardGateFacts = {
+    needsDiscardConfirmation,
+    discardChanges,
+    submoduleBlock,
+    discardSubmodules,
+  }
+  const pendingDiscardAuthorization = nextDiscardGate(gateFacts)
   const confirmDisabled = actionLocked || target === null || branchDeleteFailed
     // Unknown session impact must block a destructive delete — the
     // user might unknowingly drop unarchived sessions (review P2-6).
     || sessionFactsError !== null
     || runtimeUnknownBlock
-    || (needsDiscardConfirmation && !discardChanges)
-    || (submoduleBlock && !discardSubmodules)
 
   // Enumerate the full session tree (direct + transitive subsessions) the
   // removal would orphan, for explicit confirmation copy.
@@ -133,6 +164,7 @@ export function RemoveWorktreeDialog({
     setFreshDirty(false)
     setSubmoduleBlock(false)
     setDiscardSubmodules(false)
+    setDiscardGateOpen(null)
     setSessionFacts(null)
     setSessionFactsError(null)
     setRemoveError(null)
@@ -165,8 +197,11 @@ export function RemoveWorktreeDialog({
           ? []
           : server.workspaces.flatMap(workspace => workspace.sessions)
             .filter(session => visibleRoots.includes(session.id))
-            // Session ids as keys: titles repeat constantly (P2-3).
-            .map(session => ({ id: session.id, title: session.title }))
+            // The RESOLVED label (design 05 §2.1), never the durable title alone:
+            // a session labeled by its project directory must not render an
+            // empty list item here. Session ids as keys: titles repeat
+            // constantly (P2-3).
+            .map(session => ({ id: session.id, title: session.displayTitle }))
         setSessionFacts({
           direct: visibleRoots.length,
           closure: closure.length,
@@ -182,6 +217,10 @@ export function RemoveWorktreeDialog({
 
   const close = (): void => {
     if (busy) return
+    // Both dialogs listen for Escape on the document, so without this the
+    // dismissal of the risk acknowledgement on top would also close the
+    // removal dialog behind it and lose the pending authorization.
+    if (discardGateOpen !== null) return
     onClose()
   }
 
@@ -193,12 +232,10 @@ export function RemoveWorktreeDialog({
       // host force-removes (--force) only under explicit user consent —
       // dirty files (design 08 §5.3) and/or a submodule checkout inside the
       // worktree (2026-09) are discarded; branch/commits/HEAD untouched.
-      const discardAuthorized = (needsDiscardConfirmation && discardChanges)
-        || (submoduleBlock && discardSubmodules)
       const result = await removeWorktree(sourceId, target, {
         archiveSessions,
         ...(deleteBranch && target.branch !== null ? { deleteBranch: target.branch } : {}),
-        ...(discardAuthorized ? { discardChanges: true } : {}),
+        ...(discardAuthorized(gateFacts) ? { discardChanges: true } : {}),
       })
       // Honest outcome (2026-08 client review): a failed branch delete keeps
       // the dialog open with an explanation — the worktree removal stands.
@@ -210,10 +247,11 @@ export function RemoveWorktreeDialog({
     } catch (error) {
       // Surface the failure in-dialog; recovery (ambiguous failures) also
       // renders on the per-workspace line so the source can never stay locked.
-      // A fresh-preflight dirty rejection force-shows the discard checkbox
-      // (review 2026-08 P2-1), and the deterministic `worktree-submodules`
-      // refusal force-shows the submodule discard authorization (2026-09) —
-      // both so the user can authorize and retry without closing.
+      // A fresh-preflight dirty rejection (review 2026-08 P2-1) and the
+      // deterministic `worktree-submodules` refusal (2026-09) ARM the matching
+      // discard authorization and state its warning: the NEXT `Remove` click
+      // opens the acknowledgement (the refusal itself does not open it), so the
+      // user can authorize and retry without closing.
       if (error instanceof WorktreeDirtyError) {
         setFreshDirty(true)
         setRemoveError(error instanceof Error ? error.message : String(error))
@@ -223,10 +261,10 @@ export function RemoveWorktreeDialog({
       } else {
         // Host refusals a user can hit from this dialog get LOCALIZED copy
         // (review G1-4: `running-agent` used to surface as the raw English
-        // host string). The fresh-preflight `worktree-dirty` refusal also
-        // force-shows the discard checkbox, exactly like WorktreeDirtyError —
-        // the user can authorize and retry without closing. Unmapped codes
-        // keep the host's own message (honest, if English).
+        // host string). The fresh-preflight `worktree-dirty` refusal also ARMS
+        // the discard acknowledgement, exactly like WorktreeDirtyError — the
+        // user can authorize and retry without closing. Unmapped codes keep the
+        // host's own message (honest, if English).
         const code = removeFailureCode(error)
         if (code === 'worktree-dirty') setFreshDirty(true)
         const key = removeFailureCopyKey(code)
@@ -238,128 +276,170 @@ export function RemoveWorktreeDialog({
   }
 
   return (
-    <Modal
-      open={open}
-      onClose={close}
-      title={t('removeTitle')}
-      closeLabel={t('close')}
-      className={css.dialog}
-      footer={(
-        <>
-          <Button variant="outline" disabled={busy} onClick={close}>{t('cancel')}</Button>
-          <Button variant="outline" className={css.danger} disabled={confirmDisabled} onClick={() => { void runRemove() }}>
-            {busy ? t('removing') : t('removeConfirm')}
-          </Button>
-        </>
-      )}
-    >
-      {target !== null && (
-        <div className={css.removeFacts}>
-          <code>{target.path}</code>
-          <span>{target.branch ?? t('detached')}</span>
-          {sessionFacts !== null && sessionFacts.closure > 0 && (
-            <span className={css.removeSessions}>
-              {t('removeSessions')} {sessionFacts.direct}
-              {sessionFacts.closure > sessionFacts.direct
-                && t('removeSubsessionsCount').replace('{count}', String(sessionFacts.closure - sessionFacts.direct))}
-            </span>
-          )}
-          {sessionFactsError !== null && (
-            <span className={css.formError} role="alert">
-              {sessionFactsError}
-              <button
-                type="button"
-                className={css.factsRetry}
-                onClick={() => { setFactsAttempt(attempt => attempt + 1) }}
-              >
-                {t('retry')}
-              </button>
-            </span>
-          )}
-          {sessionFacts !== null && sessionFacts.directTitles.length > 0 && (
-            <ul className={css.sessionTitles}>
-              {sessionFacts.directTitles.slice(0, 5).map(session => (
-                <li key={session.id} title={session.title}>{session.title}</li>
-              ))}
-              {sessionFacts.directTitles.length > 5 && (
-                <li className={css.sessionTitlesMore}>{t('sessionTitlesMore').replace('{n}', String(sessionFacts.directTitles.length - 5))}</li>
-              )}
-            </ul>
-          )}
-          {removeError !== null && <span className={css.formError} role="alert">{removeError}</span>}
-          {branchDeleteFailed && (
-            <span className={css.formError} role="alert">{t('branchDeleteFailedNote')}</span>
-          )}
-          {needsDiscardConfirmation && (
-            <div className={css.dirtyWarning}>
-              <span role="alert">{t('dirtyDiscardWarning')}</span>
-              <label className={css.archiveToggle}>
-                <input
-                  type="checkbox"
-                  checked={discardChanges}
-                  disabled={actionLocked}
-                  onChange={event => setDiscardChanges(event.target.checked)}
-                />
-                <span>{t('dirtyDiscardLabel')}</span>
-              </label>
-            </div>
-          )}
-          {submoduleBlock && (
-            <div className={css.dirtyWarning}>
-              <span role="alert">{t('submoduleDiscardWarning')}</span>
-              <label className={css.archiveToggle}>
-                <input
-                  type="checkbox"
-                  checked={discardSubmodules}
-                  disabled={actionLocked}
-                  onChange={event => setDiscardSubmodules(event.target.checked)}
-                />
-                <span>{t('submoduleDiscardLabel')}</span>
-              </label>
-            </div>
-          )}
-          {runtimeUnknownBlock && (
-            <div className={css.dirtyWarning}>
-              <span role="alert">{t('runtimeUnknownBlocked')}</span>
-            </div>
-          )}
-          {runningNotes.kind === 'blocking' && (
-            <div className={css.dirtyWarning}>
-              <span role="alert">{t('runningRemoveBlockNote').replace('{count}', String(runningNotes.blockingCount))}</span>
-            </div>
-          )}
-          {runningNotes.kind === 'legacy' && (
-            <div className={css.dirtyWarning}>
-              <span role="alert">{t('runningRemoveLegacyNote').replace('{count}', String(runningNotes.blockingCount))}</span>
-            </div>
-          )}
-          {runningNotes.inertCount > 0 && (
-            <div className={css.dirtyWarning}>
-              <span>{t('runningRemoveArchivedNote').replace('{count}', String(runningNotes.inertCount))}</span>
-            </div>
-          )}
-          <label className={css.archiveToggle}>
-            <input
-              type="checkbox"
-              checked={archiveSessions}
-              disabled={actionLocked}
-              onChange={event => setArchiveSessions(event.target.checked)}
-            />
-            <span>{t('archiveSessionsLabel')}</span>
-          </label>
-          {target.branch !== null && (
+    <>
+      <Modal
+        open={open}
+        onClose={close}
+        title={t('removeTitle')}
+        closeLabel={t('close')}
+        className={css.dialog}
+        footer={(
+          <>
+            <Button variant="outline" disabled={busy} onClick={close}>{t('cancel')}</Button>
+            <Button
+              variant="outline"
+              className={css.danger}
+              disabled={confirmDisabled}
+              onClick={() => {
+                // The discard authorization is the gateway's, not this dialog's:
+                // while one is still missing, `Remove` OPENS the official
+                // acknowledgement for that kind and holds it in state; the
+                // removal then runs from the gate's own confirm (2026-09-11
+                // upstream-alignment T14; review-fix F1).
+                if (pendingDiscardAuthorization !== null) {
+                  setDiscardGateOpen(pendingDiscardAuthorization)
+                  return
+                }
+                void runRemove()
+              }}
+            >
+              {busy ? t('removing') : t('removeConfirm')}
+            </Button>
+          </>
+        )}
+      >
+        {target !== null && (
+          <div className={css.removeFacts}>
+            <code>{target.path}</code>
+            <span>{target.branch ?? t('detached')}</span>
+            {sessionFacts !== null && sessionFacts.closure > 0 && (
+              <span className={css.removeSessions}>
+                {t('removeSessions')} {sessionFacts.direct}
+                {sessionFacts.closure > sessionFacts.direct
+                  && t('removeSubsessionsCount').replace('{count}', String(sessionFacts.closure - sessionFacts.direct))}
+              </span>
+            )}
+            {sessionFactsError !== null && (
+              <span className={css.formError} role="alert">
+                {sessionFactsError}
+                <button
+                  type="button"
+                  className={css.factsRetry}
+                  onClick={() => { setFactsAttempt(attempt => attempt + 1) }}
+                >
+                  {t('retry')}
+                </button>
+              </span>
+            )}
+            {sessionFacts !== null && sessionFacts.directTitles.length > 0 && (
+              <ul className={css.sessionTitles}>
+                {sessionFacts.directTitles.slice(0, 5).map(session => (
+                  <li key={session.id} title={session.title}>{session.title}</li>
+                ))}
+                {sessionFacts.directTitles.length > 5 && (
+                  <li className={css.sessionTitlesMore}>{t('sessionTitlesMore').replace('{n}', String(sessionFacts.directTitles.length - 5))}</li>
+                )}
+              </ul>
+            )}
+            {removeError !== null && <span className={css.formError} role="alert">{removeError}</span>}
+            {branchDeleteFailed && (
+              <span className={css.formError} role="alert">{t('branchDeleteFailedNote')}</span>
+            )}
+            {/* The discard FACTS stay stated in place — the gate that turns
+                them into an authorization is the RiskConfirmation below
+                (2026-09-11 upstream-alignment, T14). */}
+            {needsDiscardConfirmation && (
+              <div className={css.dirtyWarning}>
+                <span role="alert">{t('dirtyDiscardWarning')}</span>
+              </div>
+            )}
+            {submoduleBlock && (
+              <div className={css.dirtyWarning}>
+                <span role="alert">{t('submoduleDiscardWarning')}</span>
+              </div>
+            )}
+            {runtimeUnknownBlock && (
+              <div className={css.dirtyWarning}>
+                <span role="alert">{t('runtimeUnknownBlocked')}</span>
+              </div>
+            )}
+            {runningNotes.kind === 'blocking' && (
+              <div className={css.dirtyWarning}>
+                <span role="alert">{t('runningRemoveBlockNote').replace('{count}', String(runningNotes.blockingCount))}</span>
+              </div>
+            )}
+            {runningNotes.kind === 'legacy' && (
+              <div className={css.dirtyWarning}>
+                <span role="alert">{t('runningRemoveLegacyNote').replace('{count}', String(runningNotes.blockingCount))}</span>
+              </div>
+            )}
+            {runningNotes.inertCount > 0 && (
+              <div className={css.dirtyWarning}>
+                <span>{t('runningRemoveArchivedNote').replace('{count}', String(runningNotes.inertCount))}</span>
+              </div>
+            )}
             <label className={css.archiveToggle}>
               <input
                 type="checkbox"
-                checked={deleteBranch}
+                checked={archiveSessions}
                 disabled={actionLocked}
-                onChange={event => setDeleteBranch(event.target.checked)}
+                onChange={event => setArchiveSessions(event.target.checked)}
               />
-              <span>{t('deleteBranchLabel')}</span>
+              <span>{t('archiveSessionsLabel')}</span>
             </label>
-          )}
-        </div>
-      )}
-    </Modal>
+            {target.branch !== null && (
+              <label className={css.archiveToggle}>
+                <input
+                  type="checkbox"
+                  checked={deleteBranch}
+                  disabled={actionLocked}
+                  onChange={event => setDeleteBranch(event.target.checked)}
+                />
+                <span>{t('deleteBranchLabel')}</span>
+              </label>
+            )}
+          </div>
+        )}
+      </Modal>
+      {/* Official risk acknowledgement (upstream `RiskConfirmation`): warning
+          icon + description + autofocused checkbox, and a primary confirm that
+          stays unavailable until it is checked. Both discard authorizations
+          (dirty working tree, submodule checkout) ride it; the KIND held in
+          `discardGateOpen` — chosen by the `Remove` click that opened the gate
+          — decides its copy, its box and which acknowledgement it sets, and
+          confirming then retries the SAME removal through the single
+          `discardChanges` flag the host requires (`--force`). One gesture per
+          authorization: `Remove` → gate → tick → Confirm removes
+          (2026-09-11 upstream-alignment T14; review-fix F1). */}
+      <RiskConfirmation
+        open={discardGateOpen !== null}
+        title={discardGateOpen === 'submodule' ? t('submoduleDiscardTitle') : t('dirtyDiscardTitle')}
+        description={discardGateOpen === 'submodule' ? t('submoduleDiscardWarning') : t('dirtyDiscardWarning')}
+        acknowledgeLabel={discardGateOpen === 'submodule' ? t('submoduleDiscardLabel') : t('dirtyDiscardLabel')}
+        cancelLabel={t('cancel')}
+        closeLabel={t('close')}
+        confirmLabel={t('removeConfirm')}
+        acknowledged={discardGateOpen === 'submodule' ? discardSubmodules : discardChanges}
+        disabled={actionLocked}
+        onAcknowledgedChange={(acknowledged) => {
+          if (discardGateOpen === 'submodule') setDiscardSubmodules(acknowledged)
+          else setDiscardChanges(acknowledged)
+        }}
+        onCancel={() => {
+          // Cancel / close / mask / Escape revokes the acknowledgement this
+          // gate was collecting: backing out of the confirmation must leave the
+          // removal gated, so the next `Remove` click re-opens the same gate
+          // instead of removing on a box the user then declined (2026-09-11
+          // review-fix, F1).
+          if (discardGateOpen === 'submodule') setDiscardSubmodules(false)
+          else setDiscardChanges(false)
+          setDiscardGateOpen(null)
+        }}
+        onConfirm={() => {
+          setDiscardGateOpen(null)
+          void runRemove()
+        }}
+      />
+    </>
   )
 }

@@ -65,7 +65,7 @@
 - `seed`（设计 08/09 接线）：`seedRemoteChamberHostPackages` 经现有受限
   `cat/write-file` 原语，把本次**实际有 `dist/index.js` 构建产物**的 chamber
   宿主包 `@dsh-chamber/dsh-chamber-seed-client-graph`（loader id `client-graph`）、
-  `@dsh-chamber/dsh-chamber-seed-git-worktree`（loader id `git-worktree`）与
+  `@dsh-chamber/dsh-chamber-seed-git-worktree`（loader id `git-worktree`）、
   `@dsh-chamber/dsh-chamber-seed-archive-cleanup`（loader id `archive-cleanup`，design
   24）落到远端
   install-level fallback `profiles/node_modules`，再合并 web profile 的

@@ -7,9 +7,12 @@
  * (registry-global) plus its subagent-origin descendants, children-first,
  * skipping running subtrees whole. The only caller-supplied session ids are
  * purge's OPTIONAL subset filter (`purge(sessionIds?)` — 2026-09 wire
- * amendment for per-selection deletion): the domain intersects the filter
- * with the authoritative archived set at run start, so the filter can never
- * name a non-archived session (fail-closed invariant, enforced in core). The
+ * amendment for per-selection deletion) and its OPTIONAL protected set
+ * (`protectSessionIds?` — 2026-09 amendment for the session the calling client
+ * is displaying): the domain intersects the filter with the authoritative
+ * archived set at run start and only ever REMOVES protected trees from the
+ * run, so neither input can name a non-archived session nor widen the
+ * deletion set (fail-closed invariant, enforced in core). The
  * domain never RETURNS session content and never touches non-archived
  * sessions; its ONLY content read is the registry-global orphan sweep's
  * fail-closed existence probe (`sessionPersistence.stat`), consumed solely
@@ -116,25 +119,37 @@ export class ArchiveCleanupGateway extends TypertRemoteService {
 
   /** Delete the WHOLE archived set by default; with the optional `sessionIds`
    *  filter only the listed archived-set members (each as a deletable tree
-   *  root). Zero-arg calls keep working — a missing JSON field reaches the
-   *  method as undefined. `force` (2026-09 revision) additionally deletes
-   *  subtrees that are merely LOADED in this process (the caller cancels the
-   *  run first); a RUNNING member is still refused. NOTE: the generic gateway
-   *  derives accepted arg names from this method's source text, so the
-   *  signature must stay plain identifiers without defaults or rest. */
+   *  root). `force` (2026-09 revision) additionally deletes subtrees that are
+   *  merely LOADED in this process (the caller cancels the run first); a
+   *  RUNNING member is still refused. `protectSessionIds` (2026-09 protection
+   *  amendment) names the ids the CALLING client may be displaying: any tree
+   *  whose closure contains one is skipped whole, ahead of `force`, and is
+   *  reported in `skippedProtected` — this is what lets a client delete
+   *  archived content safely WITHOUT the retired pre-flight "I must know my
+   *  current session" refusal, and it covers the full corpus (including
+   *  cwd-less cold records a client-side lineage walk cannot see). NOTE: the
+   *  generic gateway derives accepted arg names from this method's source
+   *  text, so the signature must stay plain identifiers without defaults or
+   *  rest. */
   @Remote('purge')
-  purge(sessionIds?: readonly string[], force?: boolean): Promise<ArchiveCleanupDomainResult<PurgeResult>> {
+  purge(
+    sessionIds?: readonly string[],
+    force?: boolean,
+    protectSessionIds?: readonly string[],
+  ): Promise<ArchiveCleanupDomainResult<PurgeResult>> {
     return domainResult(() => this.gate.run(async () => {
       this.logger?.info?.('[archiveCleanup] purge started', {
         ...(sessionIds === undefined ? {} : { filterCount: sessionIds.length }),
         ...(force === true ? { force: true } : {}),
+        ...(protectSessionIds === undefined ? {} : { protectCount: protectSessionIds.length }),
       })
-      const value = await this.core.purge(sessionIds, force === true)
+      const value = await this.core.purge(sessionIds, force === true, protectSessionIds)
       this.logger?.info?.('[archiveCleanup] purge finished', {
         deletedSessions: value.deletedSessions,
         deletedSubagents: value.deletedSubagents,
         skippedRunning: value.skippedRunning,
         skippedLoaded: value.skippedLoaded,
+        skippedProtected: value.skippedProtected,
         forcedLoaded: value.forcedLoaded,
         errorCount: value.errors.length,
       })

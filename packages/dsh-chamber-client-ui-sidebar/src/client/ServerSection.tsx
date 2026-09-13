@@ -18,13 +18,16 @@ import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
 import clsx from 'clsx'
 import { SESSION_SEARCH_RESULT_LIMIT } from '@deepseek-ai/dsh-api-session-controller/client'
 import {
-  HoverCard, IconArchiveOutline20, IconBranchOutline16, IconChecklistOutline14, IconChevronRightOutline14,
-  IconCloseOutline16, IconEditOutline16, IconEllipsisOutline16, IconFolderOpenOutline16, IconLoadingOutline16,
-  IconPersonalizationOutline16, IconPlusOutline16, IconQuestionOutline14, IconSearchOutline16, IconTrashOutline16,
-  IconWarningOutline16, Menu, StateDot,
+  IconAlarmClockOutline16, IconArchiveOutline20, IconBranchOutline16, IconChecklistOutline14,
+  IconChevronRightOutline14, IconCloseOutline16, IconEditOutline16, IconEllipsisOutline16,
+  IconFolderOpenOutline16, IconLoadingOutline16,
+  IconPersonalizationOutline16, IconPlusOutline16, IconProjectAddOutline16, IconQuestionOutline14,
+  IconSearchOutline16, IconTrashOutline16, IconWarningOutline16, Menu, StateDot, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SidebarKey } from './locales.ts'
+import { sourceBootGapNote } from './source-boot-gap.ts'
 import { IconMonitorOutline16 } from './icons.tsx'
+import { RowHoverCard } from './RowHoverCard.tsx'
 import { chamberBridge, type ChamberServerAggregate, type ChamberServerWorkspace } from '../shared/aggregate-store.ts'
 import {
   deriveLocalSearchMatches, mergeSearchResults, orderUngroupedSessions, reconciledSessionOrder, relativeTimeBucket,
@@ -36,15 +39,39 @@ import {
   type SourceSearchState,
 } from '../shared/search-state.ts'
 import { clearPendingClick, noteSessionRowClick } from '../shared/pending-click.ts'
+import { MANAGED_RUNTIME_TRANSIENT_STATES } from '../shared/managed-runtime.ts'
 import { openErrorKey } from '../shared/open-outcome.ts'
 import { getSourceRepoLayouts, getWorkspaceGitFlag, hiddenByMainWorkspaceFold, isSourceGitFlagsLoaded } from '../shared/workspace-git-flags.ts'
 import { resolveWorkspaceDrop } from '../shared/workspace-drag-order.ts'
-import { sessionRowWindow, SESSION_ROWS_VISIBLE_FIRST } from '../shared/session-row-window.ts'
+import { sessionRowDisclosure, sessionRowWindow, SESSION_ROWS_VISIBLE_FIRST } from '../shared/session-row-window.ts'
 import { sourceAccentStyle, useSidebarSection, workspaceDropEnv } from './sidebar-context.ts'
 import cc from './sidebar-chamber.module.css'
 
 /** Connection-status visual kind: dot colors plus the connecting spinner. */
 type SourceStatusKind = 'ok' | 'busy' | 'err' | 'idle'
+
+/**
+ * Non-interactive active-Schedule marker (2026-09-11 upstream-alignment T7).
+ *
+ * Mirrors the official `ActiveScheduleIndicator` verbatim (vendor ui-workspace
+ * Rows.tsx:284-296): a `role="img"` span carrying the localized
+ * `schedule.active` copy as both its accessible name and its native title,
+ * wrapping the 16px alarm-clock glyph — the enclosing row stays the only
+ * action. Upstream keeps that component module-local (it is NOT exported from
+ * the vendor package), so this is a markup/token mirror of it, not a second
+ * behaviour: it renders only where the fact says so
+ * (`ChamberServerWorkspace.sessions[].hasActiveSchedule`, projected from the
+ * session's `schedule` projection — see `hasActiveScheduleOf`).
+ * @param props.label - the localized `schedule.active` copy.
+ * @returns the marker element.
+ */
+function SessionScheduleIndicator({ label }: { label: string }) {
+  return (
+    <span className={cc.scheduleIndicator} role="img" aria-label={label} title={label}>
+      <IconAlarmClockOutline16 size={16} />
+    </span>
+  )
+}
 
 /**
  * Rebuild an InstanceSnapshot-shaped view of ONE source aggregate for the
@@ -73,6 +100,10 @@ function projectionToLocalSearchSnapshot(server: ChamberServerAggregate): Instan
       blank: session.blank === true,
       ...(session.updatedAt === undefined ? {} : { updatedAt: session.updatedAt }),
       ...(session.title === '' ? {} : { title: session.title }),
+      // The label is what search matches on, so the resolved display title
+      // rides the local snapshot (I3): a directory-named row is searchable by
+      // the name the user actually sees.
+      displayTitle: session.displayTitle,
     }))),
     archivedSessionIds: [],
   }
@@ -96,8 +127,14 @@ function sourceStatusKind(server: ChamberServerAggregate): SourceStatusKind {
 }
 
 
-/** Header title/aria text: the managed-down reason replaces "switch to this instance". */
-function sourceHeaderTitle(
+/**
+ * Header title/aria text: the managed-down reason replaces "switch to this
+ * instance". Exported for the collapsed rail (2026-09-11 upstream-alignment
+ * T7): its per-source dot buttons are operable controls now and must carry the
+ * SAME activation contract as the wide header — one definition, no rail copy
+ * that can drift.
+ */
+export function sourceHeaderTitle(
   server: ChamberServerAggregate,
   chamberInstanceId: string | undefined,
   t: (key: SidebarKey, params?: Record<string, string | number>) => string,
@@ -113,13 +150,17 @@ function sourceHeaderTitle(
   return t('list.activate')
 }
 
-/** Whether a source header is an activation affordance (not self, not managed-down). */
-function sourceHeaderActivatable(server: ChamberServerAggregate, chamberInstanceId: string | undefined): boolean {
-  // 终态停机与瞬态 starting/restarting 都不可激活：两者的壳 boot 必然 503
+/** Whether a source header is an activation affordance (not self, not
+ *  managed-down). Exported beside {@link sourceHeaderTitle} for the rail's
+ *  named source buttons (2026-09-11 upstream-alignment T7). */
+export function sourceHeaderActivatable(server: ChamberServerAggregate, chamberInstanceId: string | undefined): boolean {  // 终态停机与瞬态 starting/restarting 都不可激活：两者的壳 boot 必然 503
   // （App 侧同样按 managedRuntimeUnusable 拒绝预热/收割），头部不应承诺切换。
   const managedUnusable = server.managedRuntimeDown === true
     || (server.kind === 'gateway'
-      && (server.phase === 'starting' || server.phase === 'restarting'))
+      // Shared constant, not a second literal set (2026-09 audit): the
+      // transient states live in managed-runtime.ts, and a set that grows
+      // there must reach this header without a second edit.
+      && (MANAGED_RUNTIME_TRANSIENT_STATES as readonly string[]).includes(server.phase))
   return server.id !== chamberInstanceId && !managedUnusable
 }
 
@@ -193,7 +234,10 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
     setRenaming,
     commitRename,
     onOpenArchiveCleanup,
-    setAddingWorkspace,
+    // 2026-09-11 review-fix finding 2 (symmetric closure): the GUARDED
+    // add-workspace opener — the shell refuses it while another chamber dialog
+    // layer is up, so this section can never stack a second Modal.
+    openWorkspaceBrowser,
     openSession,
     onNewSession,
     onArchiveSession,
@@ -304,7 +348,10 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
   // chamber (06 §4.3/§4.5): per-row STATE indicator — the leading slot is NOT
   // a server-identity marker (the source header dot owns identity). Normal
   // sessions show nothing; running sessions show the official StateDot
-  // ongoing RING; completed-but-unread sessions show a persistent DOT.
+  // ongoing RING; completed-but-unread sessions show the chamber brand-blue
+  // 6px dot (`.stateCompleted`) — 2026-09 user decision, restoring the pre-T10
+  // mark so completion never shares the connection dot's green (see the
+  // completed branch below).
   // Pending interactions (approval / plan-review / question) render a
   // distinguishable 14px icon badge INSTEAD of the running ring — a session
   // waiting for the user must be recognizable at a glance. The caller wraps
@@ -362,6 +409,12 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
       return <StateDot state="ongoing" size={10} />
     }
     if (facts?.completed === true) {
+      // 2026-09 用户裁决：完成未读回到 chamber 品牌蓝点（.stateCompleted，6px）——
+      // 撤销 2026-09-11 upstream-alignment T10 换成的官方 StateDot `done`。
+      // 理由：`done` 的取色 `--dsw-alias-state-success-primary` 与来源头连接状态
+      // 绿点（`.statusOk` 同一 token）完全相同，"会话完成未读"与"服务器已连接"
+      // 在同一侧栏里同色。蓝点与运行中的官方 ongoing 环同属品牌蓝
+      // （`--dsw-static-deepseek-450`），但静态实心点 vs 8 格动画环形状/动效不同。
       return <span className={cc.stateCompleted} />
     }
     return <StateDot state="ongoing" size={10} />
@@ -373,26 +426,54 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
   // title/aria 文案（托管 dsh 停机时改为说明原因，而不是"切换到该实例"）。
   const headerActivatable = sourceHeaderActivatable(server, chamberInstanceId)
   const headerTitle = sourceHeaderTitle(server, chamberInstanceId, t)
+  // 2026-09-11 upstream-alignment T7: the source-header controls carry the
+  // OFFICIAL Tooltip instead of the borrowed native title= (upstream wraps
+  // the same ViewOptionsMenu trigger in `<Tooltip side="bottom" delayMs={500}>`,
+  // vendor ui-workspace WorkspaceBrowser.tsx:198-203). The sort trigger names
+  // the active mode, so the bubble and the accessible name carry it.
+  const sortModeKey: SidebarKey = viewPrefs.orderBy?.[server.id] === 'updated' ? 'orderBy.updated' : 'orderBy.manual'
+  const sortLabel = `${t('action.sort')} · ${t(sortModeKey)}`
   // 来源级"数据不可信"说明：单一定居 live region（见下方 sourceNote 的渲染与
-  // CSS :empty）。两条说明互斥（managedDown ⇒ connected=false），所以一个区域
-  // 足够；内容变化时既有的 live region 才可被 AT 播报（"插入即带内容"不会播报，
+  // CSS :empty）。一个来源只应有一个 live region（2026-12 复查 NIT），所以降级
+  // 说明也**并入同一条**，按优先级取一句：托管不可用 > 前端能力受限（boot 缺口）
+  // > 托管瞬态 > 基线未就绪。前两条不互斥（来源可能既停机、壳里又留着上一次挂载
+  // 的缺口事实），故顺序即优先级；缺口事实来自本来源当前挂载的壳，仅在挂载/预热过
+  // 的来源上存在（STATUS 已登记的覆盖边界）。
+  // 内容变化时既有的 live region 才可被 AT 播报（"插入即带内容"不会播报，
   // 2026-12 复查 MINOR）。
   // 托管瞬态：必须**按 kind 限定**——本地 /health 的词表同样含 starting/
   // restarting（2026-12 复查 MAJOR），只判 phase 会给本地源挂上网关专属文案。
   const managedTransient = server.kind === 'gateway'
     && (server.phase === 'starting' || server.phase === 'restarting')
+  const bootGapNote = sourceBootGapNote(server, t)
+  // The gap branch is selected by CONSTRUCTION (a boolean), never by comparing
+  // the rendered strings: the note text is dictionary copy and comparing it
+  // would silently mis-tone the line the day two branches share a sentence.
+  const noteIsBootGap = server.managedRuntimeDown !== true && bootGapNote !== ''
   const sourceNote = server.managedRuntimeDown === true
     ? t('source.managedDown', { state: t(sourceStatusLabelKey(server)) })
-    : managedTransient
-      // 托管 dsh 正在启动：此刻 connected=false 会隐藏整棵会话子树，必须说明，
-      // 否则重启网关时侧栏整组凭空消失（2026-12 复查 MINOR）。
-      ? t('source.managedStarting', { state: t(sourceStatusLabelKey(server)) })
-      : server.connected && server.aggregateReady === true && server.archiveSetKnown !== true
-        ? t('source.baselinePending')
-        : ''
-  // 说明行是否携带了状态词（决定状态点要不要让出 live region 角色）。任何说明行
-  // 在场时点都让位：一个来源只应有一个 live region（2026-12 复查 NIT）。
-  const noteCarriesPhase = sourceNote !== ''
+    : noteIsBootGap
+      ? bootGapNote
+      : managedTransient
+        // 托管 dsh 正在启动：此刻 connected=false 会隐藏整棵会话子树，必须说明，
+        // 否则重启网关时侧栏整组凭空消失（2026-12 复查 MINOR）。
+        ? t('source.managedStarting', { state: t(sourceStatusLabelKey(server)) })
+        : server.connected && server.aggregateReady === true && server.archiveSetKnown !== true
+          ? t('source.baselinePending')
+          : ''
+  // 两个门必须分开（下方状态点注释即其判据，2026-12 复查 MINOR 的落地）：
+  // ①**live region 角色**：任何说明行在场，点就让位（一个来源只应有一个 live
+  //   region——见渲染处的 `role={sourceNote === '' ? 'status' : undefined}`）；
+  // ②**状态词的承载**：只有把 `{state}` 写进句子的说明行才接管 aria-label——
+  //   目前只有 managedDown 与 managedStarting 携带 phase；baselinePending 与
+  //   降级说明（boot 缺口）都**不含** phase，点必须继续用 aria-label 承担它。
+  // 2026-12：降级说明接入后，原来的 `sourceNote !== ''` 会让有缺口的来源在 a11y 树里
+  // 丢掉状态词（点既无 role 也无 label），故按判据改为按"是否携带 phase"取值。
+  // …but "carries the state word" depends on WHICH note won the cascade above: a
+  // gateway source that is transient (starting/restarting) AND degraded renders
+  // the GAP sentence, so the dot must keep its aria-label there — the transient
+  // branch never got to speak (2026-12 review, folded in the gap branch).
+  const noteCarriesPhase = server.managedRuntimeDown === true || (managedTransient && !noteIsBootGap)
   // 每个已挂载壳各有一份侧栏 DOM（同一来源会出现多份）：id 必须按壳限定，
   // 否则 aria-describedby 可能解析到另一份（隐藏壳）的同名节点。
   const sourceNoteId = `chamber-source-note-${chamberInstanceId ?? 'unknown'}-${server.id}`
@@ -579,18 +660,22 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                 }
                 return wire
               }
-              // Search-result titles resolve from the source aggregate (title
+              // Search-result labels resolve from the source aggregate (title
               // may lag the latest snapshot by one poll — accepted, 06 §1.2).
+              // The official display label (I3), not the durable title: a hit
+              // whose title the host could not read renders the directory name.
               const searchRowLabel = (sessionId: string): { title: string; workspaceLabel: string | undefined } => {
                 for (const workspace of server.workspaces) {
                   const session = workspace.sessions.find(candidate => candidate.id === sessionId)
                   if (session === undefined) continue
                   return {
-                    title: session.title || t('list.unnamed'),
+                    title: session.displayTitle,
                     workspaceLabel: workspace.ungrouped === true ? t('list.ungrouped') : workspace.title,
                   }
                 }
-                return { title: t('list.unnamed'), workspaceLabel: undefined }
+                // Defensive: a hit outside every projected row still has an
+                // honest label — the official ladder's last resort (id).
+                return { title: sessionId, workspaceLabel: undefined }
               }
               // 搜索结果行的 running 位来自投影（mergeSearchResults
               // 的 visibleIds 过滤保证命中行一定在投影内，查得到即用投影位；查
@@ -602,6 +687,19 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                   const session = workspace.sessions.find(candidate => candidate.id === sessionId)
                   if (session === undefined) continue
                   return session.running === true
+                }
+                return false
+              }
+              // 2026-09-11 upstream-alignment T7: the same projection lookup for
+              // the active-Schedule fact — upstream's search row renders the
+              // marker too (vendor ui-workspace Rows.tsx:351). Not found ⇒
+              // false (defensive: a hit outside the visible projection is not a
+              // claim about that session's schedules).
+              const projectedHasActiveSchedule = (sessionId: string): boolean => {
+                for (const workspace of server.workspaces) {
+                  const session = workspace.sessions.find(candidate => candidate.id === sessionId)
+                  if (session === undefined) continue
+                  return session.hasActiveSchedule === true
                 }
                 return false
               }
@@ -826,6 +924,14 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                         bookkeeping + override drop). */}
                     {server.connected && (server.aggregateError === undefined || search?.expanded === true) && (
                       <Menu
+                        // 2026-09 menu-density decision (P2-A, A-3): the
+                        // v0.2.4 release used the primitive's `compact` variant
+                        // here; T12 (2026-09-11) switched it to `dense` to copy
+                        // the ViewOptionsMenu, which made every menu row taller
+                        // than our own 26px list rows. Density is chamber's
+                        // call, so this is back to `compact` (26px rows, 12px
+                        // type) while the radius/background stay the official
+                        // ones the variant ships with.
                         compact
                         portal
                         align="end"
@@ -842,79 +948,84 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                         ]}
                         selectedIds={[viewPrefs.orderBy?.[server.id] ?? 'manual']}
                         anchor={(
-                          <button
-                            type="button"
-                            className={clsx(cc.actionIcon, viewPrefs.orderBy?.[server.id] === 'updated' && cc.sortActive)}
-                            aria-label={`${t('action.sort')} · ${t(viewPrefs.orderBy?.[server.id] === 'updated' ? 'orderBy.updated' : 'orderBy.manual')}`}
-                            aria-haspopup="menu"
-                            aria-expanded={sortMenuOpen === server.id}
-                            title={`${t('action.sort')} · ${t(viewPrefs.orderBy?.[server.id] === 'updated' ? 'orderBy.updated' : 'orderBy.manual')}`}
-                            onClick={(event) => {
-                              event.stopPropagation()
-                              if (suppressClickRef.current) return
-                              // stopPropagation also stops the NATIVE event, so
-                              // the document-level pending-click listener never
-                              // sees this click — clear the pending here like
-                              // every other row-internal button (else a pending
-                              // survives and a later click on the same session
-                              // spuriously renames).
-                              clearPendingClick()
-                              setSortMenuOpen(prev => (prev === server.id ? null : server.id))
-                            }}
-                          >
-                            <IconPersonalizationOutline16 size={14} />
-                          </button>
+                          <Tooltip label={sortLabel} side="bottom" delayMs={500}>
+                            <button
+                              type="button"
+                              className={clsx(cc.actionIcon, viewPrefs.orderBy?.[server.id] === 'updated' && cc.sortActive)}
+                              aria-label={sortLabel}
+                              aria-haspopup="menu"
+                              aria-expanded={sortMenuOpen === server.id}
+                              onClick={(event) => {
+                                event.stopPropagation()
+                                if (suppressClickRef.current) return
+                                // stopPropagation also stops the NATIVE event, so
+                                // the document-level pending-click listener never
+                                // sees this click — clear the pending here like
+                                // every other row-internal button (else a pending
+                                // survives and a later click on the same session
+                                // spuriously renames).
+                                clearPendingClick()
+                                setSortMenuOpen(prev => (prev === server.id ? null : server.id))
+                              }}
+                            >
+                              <IconPersonalizationOutline16 size={14} />
+                            </button>
+                          </Tooltip>
                         )}
                       />
                     )}
                     {server.connected && (server.aggregateError === undefined || search?.expanded === true) && (
-                      <button
-                        type="button"
-                        className={clsx(cc.actionIcon, cc.addWorkspace)}
-                        aria-label={t('action.addWorkspace')}
-                        title={t('action.addWorkspace')}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          if (suppressClickRef.current) return
-                          clearPendingClick()
-                          setAddingWorkspace(server.id)
-                        }}
-                      >
-                        <IconPlusOutline16 size={14} />
-                      </button>
+                      <Tooltip label={t('action.addWorkspace')} side="bottom" delayMs={500}>
+                        <button
+                          type="button"
+                          className={clsx(cc.actionIcon, cc.addWorkspace)}
+                          aria-label={t('action.addWorkspace')}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            if (suppressClickRef.current) return
+                            clearPendingClick()
+                            openWorkspaceBrowser(server.id)
+                          }}
+                        >
+                          {/* chamber (design 05 §2.2): adding a WORKSPACE, not a
+                              session — the official project-add glyph
+                              (2026-09-11 upstream-alignment T7:
+                              IconProjectAddOutline16, vendor ui-primitives
+                              icons/index.tsx), not the generic `+`. */}
+                          <IconProjectAddOutline16 size={14} />
+                        </button>
+                      </Tooltip>
                     )}
                     {server.connected && (server.aggregateError === undefined || search?.expanded === true) && (
-                      <button
-                        type="button"
-                        className={cc.searchButton}
-                        aria-label={t('search.sessions.aria')}
-                        // Own tooltip like the sibling
-                        // sort/add buttons — the header's inherited title
-                        // ("切换到该实例") must not show on this button.
-                        title={t('search.sessions.aria')}
-                        aria-expanded={search?.expanded === true}
-                        ref={searchButton}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          if (suppressClickRef.current) return
-                          clearPendingClick()
-                          if (search?.expanded === true) {
-                            // Toggle: an open capsule's icon collapses it (empty
-                            // query) or just blurs the input (a non-empty query
-                            // must not silently drop the in-progress filter).
-                            if (query === '') {
-                              collapseSearch(server.id)
+                      <Tooltip label={t('search.sessions.aria')} side="bottom" delayMs={500}>
+                        <button
+                          type="button"
+                          className={cc.searchButton}
+                          aria-label={t('search.sessions.aria')}
+                          aria-expanded={search?.expanded === true}
+                          ref={searchButton}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            if (suppressClickRef.current) return
+                            clearPendingClick()
+                            if (search?.expanded === true) {
+                              // Toggle: an open capsule's icon collapses it (empty
+                              // query) or just blurs the input (a non-empty query
+                              // must not silently drop the in-progress filter).
+                              if (query === '') {
+                                collapseSearch(server.id)
+                              } else {
+                                searchInput.current?.blur()
+                              }
                             } else {
-                              searchInput.current?.blur()
+                              expandSearch(server.id)
+                              focusSearchOnMount.current = true
                             }
-                          } else {
-                            expandSearch(server.id)
-                            focusSearchOnMount.current = true
-                          }
-                        }}
-                    >
-                      <IconSearchOutline16 size={14} />
-                    </button>
+                          }}
+                        >
+                          <IconSearchOutline16 size={14} />
+                        </button>
+                      </Tooltip>
                     )}
                     {/* chamber (design 24 §6, revision 2026-09): server-row
                         "archive manager" — same hover-reveal discipline and
@@ -924,20 +1035,21 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                         delete-all). All cleanup state lives INSIDE the
                         dialog. */}
                     {server.connected && (server.aggregateError === undefined || search?.expanded === true) && (
-                      <button
-                        type="button"
-                        className={cc.actionIcon}
-                        aria-label={t('action.purgeArchived')}
-                        title={t('action.purgeArchived')}
-                        onClick={(event) => {
-                          event.stopPropagation()
-                          if (suppressClickRef.current) return
-                          clearPendingClick()
-                          onOpenArchiveCleanup(server)
-                        }}
-                      >
-                        <IconTrashOutline16 size={14} />
-                      </button>
+                      <Tooltip label={t('action.purgeArchived')} side="bottom" delayMs={500}>
+                        <button
+                          type="button"
+                          className={cc.actionIcon}
+                          aria-label={t('action.purgeArchived')}
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            if (suppressClickRef.current) return
+                            clearPendingClick()
+                            onOpenArchiveCleanup(server)
+                          }}
+                        >
+                          <IconTrashOutline16 size={14} />
+                        </button>
+                      </Tooltip>
                     )}
                   </span>
                 </header>
@@ -945,7 +1057,17 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                     状态就地说明——避免托管 dsh 停机时只剩"空面板 + 红点"，
                     以及把 unary 兜底的降级列表当真实列表读。状态词复用既有
                     `status.*` 文案，不引入新词。 */}
-                <div id={sourceNoteId} className={cc.sourceNote} role="status" aria-live="polite">
+                {/* 缺口说明是这条 live region 的一个分支；但**活动来源**（本壳就是它的
+                    侧栏）的同一事实已由框架面的 `.boot-gap` 横幅以 role="status" 播报，
+                    再播一次就是同一件事说两遍。故仅对"自己这一行"的缺口说明把区域降为
+                    aria-live="off"（文本仍可被浏览/读屏逐行读到，视觉警示不变）；
+                    其它行的缺口仍要播报——那些来源没有横幅，侧栏是唯一用户面。 */}
+                <div
+                  id={sourceNoteId}
+                  className={clsx(cc.sourceNote, noteIsBootGap && cc.sourceNoteBootGap)}
+                  role="status"
+                  aria-live={noteIsBootGap && server.id === chamberInstanceId ? 'off' : 'polite'}
+                >
                   {sourceNote}
                 </div>
                 {/* chamber (打开失败可见性): with the source folded no session
@@ -1043,8 +1165,12 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                     // The browse list is one tree (official .list role="tree");
                     // an active query replaces it with the search-results tree
                     // (own role below), and the fetch-error branch renders no
-                    // tree at all.
+                    // tree at all. 2026-09-11 upstream-alignment T7: the browse
+                    // tree carries an accessible name like its search-results
+                    // sibling — upstream names this tree with `section.sessions`
+                    // (vendor ui-workspace WorkspaceBrowser.tsx:457-458).
                     role={query === '' && server.aggregateError === undefined ? 'tree' : undefined}
+                    aria-label={query === '' && server.aggregateError === undefined ? t('section.sessions') : undefined}
                   >
                     {query !== '' ? (
                       // chamber (06 §1.2): an active query replaces the whole
@@ -1094,6 +1220,25 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                       {stateDot}
                                     </span>
                                     <span className={cc.searchResultTitle}>{resolved.title}</span>
+                                    {/* 2026-09-11 upstream-alignment T7: upstream's
+                                        search row carries the marker right after
+                                        the title, inside the heading (vendor
+                                        ui-workspace Rows.tsx:351), fed by
+                                        tree.ts:161-163. 2026-09-11 review-fix
+                                        finding 5b: this row applies NO blank gate
+                                        of its own — the projection helper
+                                        (`projectedHasActiveSchedule`) is the only
+                                        gate, and it is false for a session the
+                                        projection does not list. Upstream's
+                                        SearchResultItem has no blank gate either
+                                        and SearchResultNode carries no `blank`
+                                        field: blank (provisional new-session)
+                                        rows are excluded from content search by
+                                        the query itself (vendor tree.ts:156-159),
+                                        so there is nothing to gate here. */}
+                                    {projectedHasActiveSchedule(item.sessionId) && (
+                                      <SessionScheduleIndicator label={t('schedule.active')} />
+                                    )}
                                   </span>
                                   {resolved.workspaceLabel !== undefined && (
                                     <span className={cc.searchResultWorkspace}>{resolved.workspaceLabel}</span>
@@ -1218,13 +1363,14 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                           // sessions；这里只决定渲染行数与展开条文案。当前
                           // 会话行不被藏匿（窗口自动覆盖之，见
                           // shared/session-row-window.ts）。
+                          const rowsExpanded = sessionRowsExpanded[workspaceKey] === true
                           const currentSessionIndex = currentId === undefined
                             ? -1
                             : sessions.findIndex(row => row.id === currentId)
                           const sessionWindow = sessionRowWindow({
                             total: sessions.length,
                             currentIndex: currentSessionIndex,
-                            expanded: sessionRowsExpanded[workspaceKey] === true,
+                            expanded: rowsExpanded,
                             visibleFirst: SESSION_ROWS_VISIBLE_FIRST,
                           })
                           const visibleSessions = sessionWindow.hiddenCount === 0
@@ -1237,11 +1383,23 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                           // 徽标（visibleSessionCount 已去 ghost）漂移 ±幽灵数。
                           // 窗口切片仍保留 ghost 行（占位防回流，见上），仅
                           // 对外文案减去窗口内的 ghost 数。
-                          const visibleInSlice = visibleSessions.reduce(
-                            (count, session) => count + (isGhostSession(session) ? 0 : 1),
-                            0,
-                          )
-                          const hiddenVisibleCount = Math.max(0, visibleSessionCount - visibleInSlice)
+                          //
+                          // 2026-09-11 upstream-alignment T11: the disclosure's
+                          // OWN window ignores the expansion flag (upstream's
+                          // collapsedSessionRows is expansion-independent,
+                          // vendor ui-workspace WorkspaceBrowser.tsx:46-57), so
+                          // the collapsed count stays known while expanded and
+                          // the SAME control can offer `sessions.collapse`.
+                          const disclosureWindow = sessionRowDisclosure({
+                            total: sessions.length,
+                            currentIndex: currentSessionIndex,
+                            visibleFirst: SESSION_ROWS_VISIBLE_FIRST,
+                          })
+                          const hiddenVisibleCount = disclosureWindow.hiddenCount === 0
+                            ? 0
+                            : Math.max(0, visibleSessionCount - sessions
+                              .slice(0, disclosureWindow.renderCount)
+                              .reduce((count, session) => count + (isGhostSession(session) ? 0 : 1), 0))
                           const marker = workspaceDragMarker(workspace)
                           const activeSessionDrag = sessionDrag !== null
                             && sessionDrag.sourceId === server.id
@@ -1458,20 +1616,33 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                       <button
                                         type="button"
                                         className={cc.actionIcon}
-                                        aria-label={t('action.newSession')}
-                                        title={t('action.newSession')}
+                                        // 2026-09-11 upstream-alignment T5: the row
+                                        // name rides the accessible name (upstream
+                                        // `actions.newSession.aria`, vendor
+                                        // ui-workspace Rows.tsx:179) — a bare
+                                        // "新建会话" repeated per row tells AT nothing.
+                                        aria-label={t('action.newSession.aria', { name: workspace.title })}
+                                        title={t('action.newSession.aria', { name: workspace.title })}
                                         onClick={() => {
                                           if (suppressClickRef.current) return
                                           clearPendingClick()
                                           onNewSession(server, workspace.id)
                                         }}
                                       >
-                                        <IconPlusOutline16 size={14} />
+                                        <IconPlusOutline16 size={16} />
                                       </button>
                                       {!isWorktree && (
                                       <Menu
+                                        // 2026-09 menu-density decision (P2-A, A-2):
+                                        // `closeOnPointerLeave` stays (upstream
+                                        // behaviour, vendor ui-workspace
+                                        // Rows.tsx:174), but the variant returns to
+                                        // the v0.2.4 `compact` — T12 removed it and
+                                        // the rows grew from 26px/12px to the
+                                        // official default 40px/14px.
                                         compact
                                         portal
+                                        closeOnPointerLeave
                                         align="end"
                                         open={menuOpen[workspaceKey] === true}
                                         onClose={() => closeMenu(workspaceKey)}
@@ -1496,7 +1667,10 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                           },
                                           {
                                             id: 'delete',
-                                            label: t('action.delete'),
+                                            // Upstream's workspace menu entry copy
+                                            // (T7 wording: `delete.workspace`,
+                                            // vendor ui-workspace Rows.tsx:131).
+                                            label: t('delete.workspace'),
                                             danger: true,
                                             icon: <IconTrashOutline16 size={14} />,
                                           },
@@ -1505,7 +1679,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                           <button
                                             type="button"
                                             className={cc.actionIcon}
-                                            aria-label={t('action.menu')}
+                                            aria-label={t('action.menu.workspace', { name: workspace.title })}
                                             aria-haspopup="menu"
                                             aria-expanded={menuOpen[workspaceKey] === true}
                                             onClick={(event) => {
@@ -1515,7 +1689,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                               toggleMenu(workspaceKey)
                                             }}
                                           >
-                                            <IconEllipsisOutline16 className={cc.verticalDots} size={14} />
+                                            <IconEllipsisOutline16 size={16} />
                                           </button>
                                         )}
                                       />
@@ -1569,7 +1743,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                               {workspace.ungrouped === true ? (
                                 workspaceHeader
                               ) : (
-                                <HoverCard
+                                <RowHoverCard
                                   anchor={workspaceHeader}
                                   copyLabel={t('action.copy')}
                                   copiedLabel={t('hover.copied')}
@@ -1657,6 +1831,13 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                 // listener). The row renders
                                 // data-session-id so the outside-click
                                 // containment check works across shells.
+                                // 2026-09-11 upstream-alignment T5: one row-title
+                                // resolution shared by the row label and the row
+                                // actions' accessible names (the blank label stays
+                                // rendered-only — a blank row carries no actions).
+                                // I3: the OFFICIAL display label (never empty),
+                                // so "unknown title" can never render 「未命名会话」.
+                                const sessionTitleText = session.displayTitle
                                 const sessionRow = (
                                   <div
                                     className={clsx(
@@ -1765,9 +1946,20 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                       openSession(server.id, session.id)
                                     }}
                                   >
-                                    <span className={cc.sessionTitle}>{session.blank === true ? t('session.new') : (session.title || t('list.unnamed'))}</span>
+                                    <span className={cc.sessionTitle}>{session.blank === true ? t('session.new') : sessionTitleText}</span>
+                                    {/* 2026-09-11 upstream-alignment T7: the
+                                        active-Schedule marker sits exactly where
+                                        upstream puts it — between the row title
+                                        and the trailing cells (vendor
+                                        ui-workspace Rows.tsx:468). Renders only
+                                        for rows whose projection says so, so an
+                                        ordinary row's geometry/pitch is
+                                        untouched. */}
+                                    {session.hasActiveSchedule === true && (
+                                      <SessionScheduleIndicator label={t('schedule.active')} />
+                                    )}
                                     {/* blank（新建）行是临时占位——内容
-                                        不存在，kebab（含 fork）/归档都作用于
+                                        不存在，kebab（含 fork/归档）作用于
                                         不存在的内容，隐藏整簇（官方 Rows.tsx
                                         `!row.blank && <rowActions>` L436-462）。 */}
                                     {session.blank !== true && (
@@ -1782,8 +1974,13 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                       }}
                                     >
                                       <Menu
+                                        // 2026-09 menu-density decision (P2-A, A-1):
+                                        // same as the workspace menu above —
+                                        // `closeOnPointerLeave` kept (Rows.tsx:487),
+                                        // `compact` restored from v0.2.4.
                                         compact
                                         portal
+                                        closeOnPointerLeave
                                         align="end"
                                         open={menuOpen[sessionKey] === true}
                                         onClose={() => closeMenu(sessionKey)}
@@ -1798,6 +1995,11 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                             })
                                           } else if (id === 'fork') {
                                             onForkSession(server, session)
+                                          } else if (id === 'archive') {
+                                            // 2026-09-11 review-fix finding 5d:
+                                            // no title argument — the verb runs
+                                            // immediately (T2a) and nothing reads it.
+                                            onArchiveSession(server, session.id)
                                           }
                                         }}
                                         items={[
@@ -1811,12 +2013,36 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                             label: t('menu.fork'),
                                             icon: <IconBranchOutline16 size={14} />,
                                           },
+                                          {
+                                            // 2026-09-11 upstream-alignment T2a: the
+                                            // archive verb lives HERE, in the row
+                                            // menu — upstream keeps no second hover
+                                            // button because archiving only hides the
+                                            // row (it never touches the session log),
+                                            // so it is neither destructive nor
+                                            // confirm-gated (vendor ui-workspace
+                                            // Rows.tsx:412-421). Glyph size is a
+                                            // deliberate optical exception to the
+                                            // compact slot: `compact` shrinks the
+                                            // icon slot to 14px, but the 20-native
+                                            // archive glyph stays at 16 so it keeps
+                                            // the same visual weight as the
+                                            // 16-native glyphs drawn at 14 beside
+                                            // it (the flex slot tolerates +2px).
+                                            id: 'archive',
+                                            label: t('menu.archiveSession'),
+                                            icon: <IconArchiveOutline20 size={16} />,
+                                          },
                                         ]}
                                         anchor={(
                                           <button
                                             type="button"
                                             className={cc.actionIcon}
-                                            aria-label={t('action.menu')}
+                                            // 2026-09-11 upstream-alignment T5: the row
+                                            // title is the accessible name (upstream
+                                            // `actions.session.aria`, vendor
+                                            // ui-workspace Rows.tsx:492).
+                                            aria-label={t('action.menu.session', { name: sessionTitleText })}
                                             aria-haspopup="menu"
                                             aria-expanded={menuOpen[sessionKey] === true}
                                             onClick={(event) => {
@@ -1826,28 +2052,15 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                               toggleMenu(sessionKey)
                                             }}
                                           >
-                                            <IconEllipsisOutline16 className={cc.verticalDots} size={14} />
+                                            <IconEllipsisOutline16 size={16} />
                                           </button>
                                         )}
                                       />
-                                      <button
-                                        type="button"
-                                        className={cc.actionIcon}
-                                        aria-label={t('action.archive')}
-                                        title={t('action.archive')}
-                                        onClick={() => {
-                                          if (suppressClickRef.current) return
-                                          clearPendingClick()
-                                          onArchiveSession(server, session.id, session.blank === true ? t('session.new') : session.title)
-                                        }}
-                                      >
-                                        <IconArchiveOutline20 size={14} />
-                                      </button>
                                     </span>
                                     )}
                                     {/* Trailing state slot: the ring/dot at the
                                         row's right edge. On hover the row action
-                                        cluster (kebab + archive) swaps in and this
+                                        cluster (the kebab menu) swaps in and this
                                         slot swaps out (CSS hover replace, 06 §4.3
                                         /§7) — the slot is a true replace, no
                                         placeholder. role is conditional so an
@@ -1870,11 +2083,11 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                   && renaming.kind === 'session' && renaming.id === session.id ? (
                                     renameForm(session.title, 'sessionRow')
                                   ) : (
-                                    <HoverCard
+                                    <RowHoverCard
                                       anchor={sessionRow}
                                       content={(
                                         <div className={cc.hoverContent}>
-                                          <div className={cc.hoverTitle}>{session.blank === true ? t('session.new') : (session.title || t('list.unnamed'))}</div>
+                                          <div className={cc.hoverTitle}>{session.blank === true ? t('session.new') : sessionTitleText}</div>
                                           {session.blank !== true && session.updatedAt !== undefined && session.updatedAt > 0 && (
                                             <div className={cc.hoverTime}>{hoverTimeLabel(session.updatedAt, now)}</div>
                                           )}
@@ -1889,7 +2102,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                         </div>
                                       )}
                                       disabled={menuOpen[sessionKey] === true || sessionDrag !== null || workspaceDrag !== null || serverDrag !== null}
-                                      copyText={session.blank === true ? undefined : (session.title || t('list.unnamed'))}
+                                      copyText={session.blank === true ? undefined : sessionTitleText}
                                       copyLabel={t('action.copy')}
                                       copiedLabel={t('hover.copied')}
                                     />
@@ -1907,11 +2120,18 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                 <button
                                   type="button"
                                   className={cc.sessionRowsMore}
+                                  // 2026-09-11 upstream-alignment T11: a real
+                                  // two-way disclosure (upstream
+                                  // WorkspaceBrowser.tsx:598-609) — the control
+                                  // reports its state and collapses again.
+                                  aria-expanded={rowsExpanded}
                                   onClick={() => {
-                                    setSessionRowsExpanded(prev => ({ ...prev, [workspaceKey]: true }))
+                                    setSessionRowsExpanded(prev => ({ ...prev, [workspaceKey]: !rowsExpanded }))
                                   }}
                                 >
-                                  {t('sessionRows.showMore', { n: hiddenVisibleCount })}
+                                  {rowsExpanded
+                                    ? t('sessions.collapse')
+                                    : t('sessions.expand', { n: hiddenVisibleCount })}
                                 </button>
                               )}
                             </>

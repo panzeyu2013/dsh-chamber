@@ -60,12 +60,12 @@
  * `refreshList` also resolves on a failed pull (summaries untouched) and for a
  * joined stale single-flight caller, so a resolve proves nothing — releasing
  * on it re-opened the very ghost-row bug this module exists to close (2026-09
- * closure review). The residual (a shrink that was NOT a content purge keeps a
- * row suppressed) is unreachable today: the host `clearIds` set is the only
- * in-tree removal path and the domain retires when the upstream delete wire
- * lands (design 24 §2/§12) — any future unarchive/delete wire that removes an
- * id while its content exists MUST clear these tombstones, otherwise a live
- * row would stay hidden.
+ * closure review). The residual — a shrink that was NOT a content purge
+ * leaving a row suppressed — is released by the F2 convergence probe's terminal
+ * state, which drops every tombstoned id the authoritative list still enumerates
+ * (see purged-convergence.ts). Do NOT delete that probe believing the residual
+ * is unreachable: without it a non-purge shrink keeps a LIVE row hidden, which
+ * is the 2026-09 ghost-row regression this family exists to close.
  */
 
 /** Bounded convergence attempts after one purge (the official refresh is

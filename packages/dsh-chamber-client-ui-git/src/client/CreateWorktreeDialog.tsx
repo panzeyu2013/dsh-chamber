@@ -118,6 +118,11 @@ function MenuSelect({ value, placeholder, options, disabled, onChange, ariaLabel
   const [open, setOpen] = useState(false)
   return (
     <Menu
+      // 2026-09 menu-density decision (P2-A): every chamber popup menu runs at
+      // the chamber scale, so this select-like dropdown takes the primitive's
+      // `compact` form (26px items / 12px labels) instead of the official
+      // default 40px — the dialog's own fields are chamber-scale too.
+      compact
       portal
       align="end"
       open={open}

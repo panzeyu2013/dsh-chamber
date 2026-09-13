@@ -14,11 +14,14 @@
  *    warn（无硬门：体积随上游 dsh 版本合法漂移，硬门会误伤升级）。
  *  - headCssRaw：dist/index.html 中全部 render-blocking 样式表合计——warn。
  *
- * 校准基线（2026-09 alpha.2 重锚后 dist，raw bytes，见 dist/web/perf-sizes.json）：
- * mainGraph ≈1,208,191；chamberEntry ≈1,982,358（距 warn 门 2,000,000 仅
- * ~0.9%：含 file-upload 转为 covered、vendor 补丁集与必需行探针的净增量——
- * 再加一个首屏家族就会触 warn，需先评估拆分）；headCss ≈245,227。阈值不是历史账本：结构改动落地后按新实测值回填阈值并更新本注释，
- * 防止它变成下一份过期注释。
+ * 校准基线（2026-09-11 review-fix 轮次的最终 dist，raw bytes，见
+ * dist/web/perf-sizes.json）：mainGraph 1,228,157（gzip 339,212，对
+ * `mainGraphRaw.warn = 1,350,000` 余量 ≈9.0%）；chamberEntry 1,989,208
+ * （gzip 552,563，对 warn 门 2,000,000 仅剩 10,792 B ≈ 0.5%——再加一个首屏
+ * 家族就会触 warn，需先评估拆分）；headCss 244,059（4 张，对 warn 300,000）。
+ * 该基线含 2026-12 完整桥接、v1 侧栏承载解耦、合并分支（打开意图/工作区回声）
+ * 与 2026-09-11 上游对齐轮的净增量。阈值不是历史账本：结构改动落地后按新实测值
+ * 回填阈值并更新本注释，防止它变成下一份过期注释（本轮即为此而更新）。
  *
  * 输出：每次运行打印三项实测 + 阈值；硬门超限或资产缺失/未解析 exit 1
  * （build 失败）；并把本次构建快照 perf-sizes.json 写入 dist/web（vite

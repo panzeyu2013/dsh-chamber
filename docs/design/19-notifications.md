@@ -134,15 +134,17 @@ function detectNotificationEdges(
 
 | 事件 | 边沿定义 | 说明 |
 |---|---|---|
-| `complete` | `running: true → false`，或 vendor `completed` 从无到有 | 同一 tick 两者同时成立只发一次；`completed` 兜底断连窗口内完成的补发；**父会话回合结束但子代理仍在运行（`runningSubagents > 0`）时不视为完成**（与官方 Rows / 侧边栏呈现优先级一致，抑制在去重之前、不记账） |
+| `complete` | `running: true → false`，或 vendor `completed` 从无到有 | 同一 tick 两者同时成立只发一次；`completed` 只在「该会话先前未武装 completed」时补一次边沿（**不是**断连窗口内完成的补发通道：撤回后的首份上报是纯播种，见下条与 §3.5）；**父会话回合结束但子代理仍在运行（`runningSubagents > 0`）时不视为完成**（与官方 Rows / 侧边栏呈现优先级一致，抑制在去重之前、不记账） |
 | `ask` | `pending` **值变化到 `'question'`** | 代理提问等待回答；含直切（question→approval 等不经 undefined 的切换——vendor 组合选择器会正常产生，每个新值都通知一次）；同值重放与清除（→undefined）不发 |
 | `request` | `pending` **值变化到 `'approval' \| 'plan-review'`** | 工具/计划审批请求；直切/重放/清除语义同上 |
 
 - **首次上报静默播种**（`prev === undefined`）：应用启动/来源首挂载时，已 pending /
   已完成会话不轰炸（窗口内由侧边栏徽标呈现；参考 OpenChamber 的 boot 去抖语义）。
-- **断连重连诚实补发**：断连期间完成/提问的会话在事实恢复后按边沿补触发（迟但
-  正确）；同内容重放（mux 回放重加 pending 等）不重复——边沿记忆按来源保留
-  （与 `prevRunningRef` 同生命周期纪律），主进程 claim 兜底。
+- **断连重连 = 撤回即播种（断连窗口内的完成/提问不补发）**：通道撤回（shell
+  重连 / 重 boot 窗口）时事实边沿记忆随该来源一并删除，恢复后的首份上报
+  `prev === undefined`，只播种不发事件——窗口内完成/提问的会话**不**由此补发。
+  这是**有意的取舍**（理由见 §3.5）；同内容重放（mux 回放重加 pending 等）不重复
+  ——边沿记忆按来源保留（与 `prevRunningRef` 同生命周期纪律），主进程 claim 兜底。
 - subagent 会话不产生事件（事实通道不含 subagent 行；父会话的 `runningSubagents`
   只驱动子代理计数徽标）。
 
@@ -167,11 +169,15 @@ interface NotificationRequest {
   与 OpenChamber `requireHidden && isAnyWindowFocused()` 同语义；单窗口下
   renderer 的 `document.hasFocus()` 与主进程 `isAnyWindowFocused()` 等价，主进程
   再查一次作为权威）。
-- 文案（v1 固定，renderer 组装，zh 字面量——沿 App.tsx 既有风格；i18n 列为扩展）：
-  - complete：「会话已完成」/ `{来源 label} · {会话标题}`
-  - ask：「代理正在等待你的回答」/ `{来源 label} · {会话标题}`
-  - request：「代理请求你的批准」/ `{来源 label} · {会话标题}`
-  - 会话标题查 `aggregates[sourceId]`（无标题/空白会话回落「未命名会话」）。
+- 文案（v1 固定，renderer 组装）——**2026-09-11 upstream-alignment T16：不再用
+  zh 字面量**，改取 App 框架的 typed 字典 `packages/renderer/src/locales.ts`（框架
+  自身没有 `t` 席位，按**文档语言** `<html lang>` 用 `readDocumentLocale()` 解析；
+  该 effect 依赖为 `[]`，拿不到 render 作用域的 `t`，故在事件组装时读同一事实）：
+  - complete：「会话已完成」/ `{来源 label} · {会话标题}`（`notification.sessionComplete`）
+  - ask：「代理正在等待你的回答」/ `{来源 label} · {会话标题}`（`notification.awaitingAnswer`）
+  - request：「代理请求你的批准」/ `{来源 label} · {会话标题}`（`notification.awaitingApproval`）
+  - 会话标题查 `aggregates[sourceId]`（无标题/空白会话回落「未命名会话」，
+    即 `session.untitled`）。
 - 发送：`window.dshChamber?.notifications?.notify(payload)`；桥未就绪静默跳过 +
   console.warn（与 desktopSsh 桥探测同节奏，500ms 探测已有先例）。
 - `sourceFingerprint` 来自生产该份 runtime facts 的 ctx：local 固定为 `local`，远程
@@ -290,9 +296,10 @@ interface ChamberSettings {
 
 **设置 UI**（`packages/dsh-chamber-client-ui-settings-bridge`）：
 
-- 决策（用户拍板，实现以此为准）：**并入 `__general` 通用页**，新增
+- 决策（用户拍板，实现以此为准）：**并入 `__general`（客户端 / Desktop 页；
+  2026-09-11 由「通用」改名，见 design 15 §D1）**，新增
   「通知」控制组（不新增设置壳固定入口——设计 15 平铺形态的入口数保持
-  2 个不变）；通用页各控制组之间用**分割线**（`.generalGroup + …` hairline，
+  2 个不变）；客户端页各控制组之间用**分割线**（`.generalGroup + …` hairline，
   `--dsw-alias-border-l2`）分隔，通知组插在「运行/会话待办区」与「更新」之间。
   备选（未采纳）：独立 `__notifications` 固定入口。
 - 通知组内容（settings-panel 设计语言 + `settings-store` 复用）：
@@ -314,7 +321,15 @@ interface ChamberSettings {
 - **仅已挂载来源**可检测 ask/request（实时 mux 事实只在 ctx 内存在）；未挂载且
   未预热的远程来源（预热槽 ≤3 + 用户打开过的 N-ctx 常驻之外）v1 不产生通知——
   文档化限制，后续可选「unary 完成检测」（30s 延迟、无 pending 信息）扩展。
-- 断连/重连：事实恢复后诚实补发；同内容重放不重复（边沿记忆 + 主进程 claim）。
+- **断连/重连：撤回即播种，窗口内的完成/提问不补发**（设计取舍，与实现一致）：
+  通道撤回（shell 重连 / 重 boot，来源移除的 clear 由 liveServerIds/指纹检查挡在
+  前面）时，App 同时删除该来源的 `prevRunningRef` / `prevRuntimeFactsRef` /
+  `notifiedCompleteRef` 与蓝点账本（`App.tsx` report 撤回分支），恢复后的首份上报
+  `prev === undefined` → 只播种、不发通知事件。理由：wire 只有 `running` 位，无法
+  区分「窗口内完成」与「窗口内被手动停止」，保留记忆就会把后者误报成完成通知；
+  而窗口只持续到重连完成，窗口内的完成/提问状态在 UI（正在进行 / pending 徽标 /
+  Rows 呈现）中照常可见，通知这一层不补发即不撒谎。同内容重放（mux 回放重加
+  pending 等）仍不重复（边沿记忆 + 主进程 claim）。
 - 窗口内提醒职责仍由侧边栏蓝点/pending 徽标承担，通知只在「用户看不到窗口时
   值得打扰」（hidden-only 默认）或用户显式选择 always。
 - **被裁决跳过的完成不补发**（设计取舍）：hidden-only + 窗口聚焦时主进程跳过
@@ -401,7 +416,7 @@ completedBySource（App 完成未读蓝点集，06 §4.1，只读复用——徽
   判定，win32 上 setBadgeCount 恒为 undefined，专属原因不被泛化吞掉）。
 - **设置**：`notifications.badgeEnabled`（默认 **true**——被动指示，镜像蓝点
   「始终开启」与 OpenChamber 默认开启；与横幅主开关 `enabled` 独立）。设置 UI
-  在通用页「通知」组加一条始终可见的无边框开关行（主开关下方、子设置卡上方），
+  在客户端页「通知」组加一条始终可见的无边框开关行（主开关下方、子设置卡上方），
   不增加边框层数；zh/en i18n。
 - **renderer 推送**：`[completedBySource, runtimeFacts]` effect 每次变化推当前
   计数（蓝点武装/阅读解除/来源退役/子代理计数归零自然驱动徽标增减；通道-only
@@ -425,8 +440,8 @@ completedBySource（App 完成未读蓝点集，06 §4.1，只读复用——徽
   opaque proof 校验与 same-id replacement、active-only Map churn、notification-open
   retain-until-ACK/FIFO/reload replay/旧 attempt 隔离；badge 的校验/裁决/平台门用例。
 - `test:renderer-shell`：`notification-edges` 纯函数单测（complete 边沿与
-  dedupe 去重、ask/request 值变化边沿（含直切）、首报播种、断连补发、
-  同 tick 去重）；`badge-count` 投影用例。
+  dedupe 去重、ask/request 值变化边沿（含直切）、首报播种、断连重连的重放不重复
+  ——注意**不是**「断连补发」，见 §3.5、同 tick 去重）；`badge-count` 投影用例。
 - `test:sidebar`：`projectRuntimeFacts` 的 subagent 行排除用例。
 - `test:settings-bridge`：通知设置纯函数（notifications-settings：缺省回落/
   partial patch/未知键过滤/默认值镜像）+ 既有套件（入口解析不变——通知组

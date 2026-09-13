@@ -1,7 +1,8 @@
 # todo 12 · 已归档会话管理（剩余未实现面；调研事实保留）
 
 > **状态（2026 收口）**：已实现面 = design 24 的**已归档内容清理**（宿主域
-> `archiveCleanup/{preview,purge(sessionIds?)}` + 归档管理器 UI，本地形态已实跑；
+> `archiveCleanup/{probe,preview,purge(sessionIds?, force?, protectSessionIds?)}` +
+> 归档管理器 UI，本地形态已实跑；
 > 契约见 `docs/design/24-archived-session-cleanup.md`）。本文保留的**未实现面**：
 > **A（已归档浏览区）**——design 24 的可选前置/后续，未单独排期；**B（特权层直删）**
 > ——冻结（理由见下）；**C（上游 wire）**——根治草案（§5），上游落地前 chamber 不发明。
