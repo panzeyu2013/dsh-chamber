@@ -218,11 +218,13 @@ export interface ThirdPartyLiveState {
  *   or the row cannot mount (no entry + not a bundle layer).
  */
 /**
- * Live-state for one INSTALLED row: protected composition/seed rows are part of
- * the installation baseline (host-side boot layers), so they are never expected
- * to be Loader client entries — asking for one would paint a false
- * "restart to take effect" warning on rows that are already active (2026-12
- * review; the composition rows became permanently visible with §6.11.5).
+ * Live-state for one INSTALLED row: a protected composition/seed row is part of
+ * the installation baseline (a host-side boot layer), so it is never expected
+ * to be a Loader client entry — asking for one would paint a false
+ * "restart to take effect" warning on a row that is already active (2026-12
+ * review). Such rows only reach this list when the profile itself declares them
+ * as dependencies (§6.11.5's 2026-09 row-set revision stopped projecting the
+ * B₀ ∪ S baseline into the installed list).
  */
 export function installedRowLiveState(
   snapshot: Pick<PluginInventorySnapshot, 'entries'> | null,

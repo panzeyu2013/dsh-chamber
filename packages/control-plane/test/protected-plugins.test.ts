@@ -252,22 +252,36 @@ test('ssh 保守形态：官方 scope install 一律拒；卸面按 B₀∪S；�
 // 读面行投影
 // ---------------------------------------------------------------------------
 
-test('derivePluginRows: 组合行与播种行必须在行集里（live profile 依赖表为空也要可见）', () => {
+test('derivePluginRows: 行集 = 依赖表；B₀/S 只分类，不再凭空造行（2026-09 修订）', () => {
   const set = okSet()
-  const rows = derivePluginRows({
+  // 依赖表为空 ⇒ 行集为空：安装自带组合（B₀）与 chamber 播种物（S）都不出现
+  // （chamber 组件有自己的表；官方组合是运行时基线）。
+  const empty = derivePluginRows({
     dependencies: {},
     bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'],
     protectedSet: set,
     seedNames: SEEDS,
   })
-  assert.deepEqual(rows.map(row => row.name).sort(), [...PROFILE_BUNDLES_SNAPSHOT, ...SEEDS].sort())
-  for (const row of rows) {
-    assert.equal(row.spec, null)
-    assert.equal(row.protected, true)
-  }
-  assert.equal(rows.find(row => row.name === '@deepseek-ai/dsh-base')?.role, 'composition')
-  assert.equal(rows.find(row => row.name === SEEDS[0])?.role, 'seed')
-  assert.equal(rows.find(row => row.name === SEEDS[0])?.owner, 'chamber')
+  assert.deepEqual(empty, [])
+  // 同一个名字**确实**出现在依赖表里时，role/owner/protected 照旧由分类器给出。
+  const declared = derivePluginRows({
+    dependencies: {
+      '@deepseek-ai/dsh-base': '0.1.5-rc.2',
+      [SEEDS[0]]: '0.3.0-beta.4',
+    },
+    bundles: ['@deepseek-ai/dsh-base'],
+    protectedSet: set,
+    seedNames: SEEDS,
+  })
+  const byName = new Map(declared.map(row => [row.name, row]))
+  assert.deepEqual([...byName.keys()].sort(), ['@deepseek-ai/dsh-base', SEEDS[0]].sort())
+  assert.equal(byName.get('@deepseek-ai/dsh-base')?.role, 'composition')
+  assert.equal(byName.get('@deepseek-ai/dsh-base')?.owner, 'installation')
+  assert.equal(byName.get('@deepseek-ai/dsh-base')?.protected, true)
+  assert.equal(byName.get(SEEDS[0])?.role, 'seed')
+  assert.equal(byName.get(SEEDS[0])?.owner, 'chamber')
+  assert.equal(byName.get(SEEDS[0])?.protected, true)
+  assert.equal(byName.get(SEEDS[0])?.spec, '0.3.0-beta.4')
 })
 
 test('derivePluginRows: 用户后加的层 = live bundles 里不在 B₀ 的名 ⇒ role=layer 且不被保护', () => {
@@ -464,10 +478,17 @@ test('derivePluginRows: materialize 值在行投影里也被掩码（远端本�
 })
 
 test('derivePluginRows: owner 是全枚举（installation / chamber / user），role 与 protected 不变', () => {
+  const dependencies = {
+    'third-party-pkg': '^1.0.0',
+    'layer-pkg': '^2.0.0',
+    [SEEDS[0]]: '0.3.0-beta.4',
+    '@deepseek-ai/dsh-base': '0.1.5-rc.2',
+  }
   const rows = derivePluginRows({
-    dependencies: { 'third-party-pkg': '^1.0.0', 'layer-pkg': '^2.0.0' },
+    // 组合/播种名同样要在依赖表里才成行（2026-09 行集修订）——分类器对它们照常生效。
+    dependencies,
     bundles: ['layer-pkg'],
-    protectedSet: okSet({}),
+    protectedSet: okSet(),
     seedNames: SEEDS,
   })
   const owner = (name: string): string | undefined => rows.find(row => row.name === name)?.owner
@@ -478,6 +499,10 @@ test('derivePluginRows: owner 是全枚举（installation / chamber / user），
   assert.equal(rows.find(row => row.name === 'third-party-pkg')?.role, 'third-party')
   assert.equal(rows.find(row => row.name === 'layer-pkg')?.role, 'layer')
   assert.equal(rows.every(row => row.owner !== undefined), true, 'no row may lack an owner')
+  // 锁步（S5）：行键集恒等于依赖键集。渲染端的 `actionableDependencies` 依赖
+  // "rows 覆盖 dependencies" 这一隐含前提（缺行即静默跳过 ⇒ 少动作）；producer
+  // 若哪天收窄成子集，这条会先红。
+  assert.deepEqual(rows.map(row => row.name).sort(), Object.keys(dependencies).sort())
 })
 
 test('decidePluginMutation: 空/非法名字是输入错误（invalid-name），不是事实缺失', () => {

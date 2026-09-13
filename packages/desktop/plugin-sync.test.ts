@@ -610,14 +610,7 @@ test('remotePluginList: parses dependencies + bundles from cat output', async ()
       ] },
     },
   }, [
-    // B₀ (installation-owned composition) + S (chamber seeds) + the remote's own
-    // third-party/layer row — the union the dialog must render.
-    '@deepseek-ai/dsh-base:composition:true',
-    '@deepseek-ai/dsh-web-app:composition:true',
-    `${ARCHIVE_CLEANUP_PACKAGE_NAME}:seed:true`,
-    `${CLIENT_GRAPH_PACKAGE_NAME}:seed:true`,
-    `${GIT_WORKTREE_PACKAGE_NAME}:seed:true`,
-    `${OPEN_IN_PACKAGE_NAME}:seed:true`,
+    // 行集 = 远端 profile 自己的依赖（2026-09 修订）：B₀/S 只分类，不再造行。
     'foo:layer:false:^1.0.0',
   ])
 })
@@ -688,14 +681,8 @@ test('remotePluginList: ENOENT → profileExists:false, ssh failure → {ok:fals
       ] },
       },
     },
-    [
-      '@deepseek-ai/dsh-base:composition:true',
-      '@deepseek-ai/dsh-web-app:composition:true',
-      `${ARCHIVE_CLEANUP_PACKAGE_NAME}:seed:true`,
-      `${CLIENT_GRAPH_PACKAGE_NAME}:seed:true`,
-      `${GIT_WORKTREE_PACKAGE_NAME}:seed:true`,
-      `${OPEN_IN_PACKAGE_NAME}:seed:true`,
-    ],
+    // 未初始化的远端 profile：没有依赖 ⇒ 没有行（2026-09 修订后 B₀/S 不造行）。
+    [],
   )
   const sshDown: ExecFn = async () => err('the ssh exec could not reach the host (exit 255)')
   assert.deepEqual(
@@ -727,14 +714,8 @@ test('remotePluginList: a zh_CN-locale remote ENOENT ("没有那个文件或目�
       ] },
       },
     },
-    [
-      '@deepseek-ai/dsh-base:composition:true',
-      '@deepseek-ai/dsh-web-app:composition:true',
-      `${ARCHIVE_CLEANUP_PACKAGE_NAME}:seed:true`,
-      `${CLIENT_GRAPH_PACKAGE_NAME}:seed:true`,
-      `${GIT_WORKTREE_PACKAGE_NAME}:seed:true`,
-      `${OPEN_IN_PACKAGE_NAME}:seed:true`,
-    ],
+    // 同上：ENOENT 的远端 profile 没有依赖，行集为空。
+    [],
   )
   // The ssh-provider's redaction re-attach path keeps the marker working for
   // a redacted zh_CN line too.
@@ -2480,15 +2461,21 @@ test('local plugin writer reaper kills a daemonized descendant after its group l
 // absolute paths, nor drive pack/install/remove silently).
 // ============================================================================
 
-test('localPluginList: rows union dependencies ∪ live bundles ∪ B₀ ∪ S with roles and protection', async () => {
+test('localPluginList: rows = the profile dependency table, with role/protected classification', async () => {
   const home = mkdtempSync(join(tmpdir(), 'local-list-'))
   try {
     const profileDir = join(home, 'profiles', 'web')
     mkdirSync(profileDir, { recursive: true })
     writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
       name: 'web', version: '0.0.0',
-      dependencies: { 'third-party-pkg': '^1.0.0', 'materialized-pkg': 'file:/tmp/x' },
-      dsh: { profile: { bundles: ['third-party-pkg'] } },
+      dependencies: {
+        'third-party-pkg': '^1.0.0',
+        'materialized-pkg': 'file:/tmp/x',
+        // A baseline name the profile itself declares: it stays a row (and stays
+        // protected/read-only) — the classifier half of the 2026-09 row-set rule.
+        '@deepseek-ai/dsh-base': '0.1.5-rc.2',
+      },
+      dsh: { profile: { bundles: ['third-party-pkg', '@deepseek-ai/dsh-base'] } },
     }))
     for (const name of ['third-party-pkg', 'materialized-pkg']) {
       mkdirSync(join(profileDir, 'node_modules', name), { recursive: true })
@@ -2501,21 +2488,23 @@ test('localPluginList: rows union dependencies ∪ live bundles ∪ B₀ ∪ S w
       familyComplete: true,
     } as never)
     const rows = new Map(manifests.rows.map(row => [row.name, row]))
-    // Dependency union, live bundle union, the composition snapshot and the
-    // chamber seeds must all be present (nothing silently dropped).
-    for (const name of ['third-party-pkg', 'materialized-pkg', ...PROFILE_BUNDLES_SNAPSHOT, ...CHAMBER_SEED_NAMES]) {
-      assert.ok(rows.has(name), `row missing for ${name}: ${[...rows.keys()].join(', ')}`)
+    // 行集 = 依赖表一行一条：安装自带组合（B₀）与 chamber 播种物（S）不再凭空出现
+    // （chamber 组件在「chamber 受管组件」表里，官方组合是运行时基线）。
+    assert.deepEqual([...rows.keys()].sort(),
+      ['@deepseek-ai/dsh-base', 'materialized-pkg', 'third-party-pkg'].sort())
+    for (const name of [...PROFILE_BUNDLES_SNAPSHOT, ...CHAMBER_SEED_NAMES]) {
+      if (name === '@deepseek-ai/dsh-base') continue
+      assert.equal(rows.has(name), false, `the baseline must not create a row: ${name}`)
     }
     assert.equal(rows.get('third-party-pkg')?.role, 'layer')
     assert.equal(rows.get('materialized-pkg')?.role, 'materialized')
     assert.equal(rows.get('third-party-pkg')?.protected, false)
-    assert.equal(rows.get(PROFILE_BUNDLES_SNAPSHOT[0]!)?.protected, true)
-    assert.equal(rows.get(PROFILE_BUNDLES_SNAPSHOT[0]!)?.role, 'composition')
-    assert.equal(rows.get(PROFILE_BUNDLES_SNAPSHOT[0]!)?.owner, 'installation')
-    assert.equal(rows.get(CHAMBER_SEED_NAMES[0]!)?.protected, true)
-    assert.equal(rows.get(CHAMBER_SEED_NAMES[0]!)?.owner, 'chamber')
-    // A family member that is NOT a direct dependency is protected but not a row
-    // unless it is installed; a direct family dependency is a row AND protected.
+    // 自己声明了基线的行：分类与保护照常（只读可见，写面拒绝）。
+    assert.equal(rows.get('@deepseek-ai/dsh-base')?.protected, true)
+    assert.equal(rows.get('@deepseek-ai/dsh-base')?.role, 'composition')
+    assert.equal(rows.get('@deepseek-ai/dsh-base')?.owner, 'installation')
+    // A family member that is NOT a direct dependency is not a row (rows come
+    // from the dependency table, never from F).
     assert.equal(rows.has('@deepseek-ai/dsh-session'), false)
     // Raw local values are NOT masked on this face (registered deviation: the
     // local list still passes machine paths through; see STATUS).

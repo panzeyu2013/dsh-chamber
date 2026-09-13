@@ -505,16 +505,17 @@ export function undoForLatest(rows: readonly TaskRow[]): UndoLatest {
 
 /* ---------------------------------------------------------------------------
  * 7. Protected rows: read-side projection + the diff/apply boundary
- *    (design 21 §6.11.5, 2026-12 修订)
+ *    (design 21 §6.11.5; 2026-09 行集修订)
  * ---------------------------------------------------------------------------
  * 后端三端各投影 `rows: PluginRow[]`（加性字段；`dependencies` 语义不变），
  * 渲染端只消费。本节提供三件事：
- * - projectInstalledRows：已安装列表的行投影。**行集必须是后端的并集投影**——
- *   实测 live profile 的 `dependencies` 为空而 `bundles` 非空，组合成员根本不在
- *   依赖表里；只渲染 dependencies 会让受保护行永远不可见。rows 缺失（旧
- *   gateway，§6.11.7）时回退到 dependencies 旧过滤并置 legacy 标记。
+ * - projectInstalledRows：已安装列表的行投影。**行集 = profile 的依赖表**
+ *   （2026-09 用户口径）：安装自带组合（B₀）与 chamber 播种物（S）不再造行——
+ *   chamber 组件有自己的表（探针状态 + 版本 + 手动重推），官方组合是运行时基线。
+ *   受保护名若确实出现在依赖表里，仍只读可见（无移除按钮 + 角色徽标）。rows 缺失
+ *   （旧 gateway，§6.11.7）时回退到 dependencies 旧过滤并置 legacy 标记。
  * - actionableDependencies：computePluginDiff 的输入收窄（**硬要求**）。若把
- *   组合/受保护行并进 diff 输入，`missing` 行默认勾选 ⇒ 一次普通第三方对账会把
+ *   受保护行并进 diff 输入，`missing` 行默认勾选 ⇒ 一次普通第三方对账会把
  *   `@deepseek-ai/dsh-base@…` 当 add 提交，后端整批拒绝（gateway 亦然）。
  * - isActionableRow / legacyProtectedName：上面两条共用的行判据。
  *
@@ -532,8 +533,8 @@ export type PluginRowRoleShape = 'composition' | 'seed' | 'layer' | 'third-party
  *  环境类型归 global.d.ts，纯模块读自己的孪生）。 */
 export interface PluginRowShape {
   name: string
-  /** 声明的依赖值（file: 值由后端按各自掩码纪律处理）；组合/种子行无依赖项时
-   *  为 null。 */
+  /** 声明的依赖值（后端按各自掩码纪律处理）。投影行恒来自依赖表（2026-09 行集
+   *  修订），因此除非掩码器显式返回 null，它不会是 null。 */
   spec: string | null
   /** 能从已装清单读到的版本；读不到为 null（绝不作为判据）。 */
   version: string | null
@@ -601,7 +602,11 @@ export const isRemovableRow = isActionableRow
 /** 把清单的 `dependencies` 收窄成 diff/apply 边界可操作的行（§6.11.5 硬要求）。
  *  rows 可用时：只保留「存在对应行且 isActionableRow」的依赖项——严格是**过滤**
  *  （绝不凭行新增依赖项）；rows 缺失（旧 gateway）时按 legacyProtectedName 回退。
- *  依赖表的值逐字保留（与既有显示/提交值同源）。 */
+ *  依赖表的值逐字保留（与既有显示/提交值同源）。
+ *
+ *  **隐含前提**：rows 覆盖 dependencies（三端都由同一张依赖表派生，2026-09 行集修订
+ *  后二者键集恒等；control-plane 单测有锁步断言）。缺行 = 静默跳过——失败方向是
+ *  「少动作」（安全但不响亮），所以 producer 若哪天收窄成子集，必须在这里改成响亮拒绝。 */
 export function actionableDependencies(
   dependencies: Record<string, string>,
   rows: readonly PluginRowShape[] | null,
@@ -626,7 +631,8 @@ export function actionableDependencies(
  *  （没有后端投影可消费），legacy 标记驱动「gateway 版本较低」提示。 */
 export interface InstalledRowView {
   name: string
-  /** 依赖值；组合/播种行没有依赖项时为 null（渲染端落到版本格）。 */
+  /** 依赖值（掩码后）；后端行没有依赖项且自身 spec 为 null 时为 null（2026-09 行集
+   *  修订后后端不再产出这种行，保留为防御：渲染端落到版本格）。 */
   spec: string | null
   version: string | null
   role: PluginRowRoleShape
@@ -637,16 +643,16 @@ export interface InstalledRowView {
   legacy: boolean
 }
 
-/** 把清单/已安装投影投影成列表视图。rows 可用时按后端行序（含只存在于 rows 的
- *  组合/播种行）；缺失时按 legacyProtectedName 过滤 dependencies，并按 legacy
- *  标记回报（gateway 区据此渲染旧版本提示）。 */
 /**
- * Project one zone's installed rows from a backend manifest. `rows: []` is
- * AUTHORITATIVE (an empty result renders the empty state, never the legacy
- * dependency fallback): the field is additive, so only its ABSENCE means "this
- * backend is too old to project rows" — an empty array is a real answer, and
- * re-deriving from `dependencies` would resurrect the protection mirror the
- * renderer must not own (2026-12 review note).
+ * Project one zone's installed rows from a backend manifest: the backend's
+ * `rows` (one row per declared dependency — design 21 §6.11.5, 2026-09 row-set
+ * revision) rendered in backend order. `rows: []` is AUTHORITATIVE (an empty
+ * result renders the empty state, never the legacy dependency fallback): the
+ * field is additive, so only its ABSENCE means "this backend is too old to
+ * project rows" — an empty array is a real answer, and re-deriving from
+ * `dependencies` would resurrect the protection mirror the renderer must not
+ * own (2026-12 review note). With no `rows` (old gateway, §6.11.7) the legacy
+ * dependency filter is the only fallback, reported via the `legacy` flag.
  */
 export function projectInstalledRows(
   dependencies: Record<string, string>,

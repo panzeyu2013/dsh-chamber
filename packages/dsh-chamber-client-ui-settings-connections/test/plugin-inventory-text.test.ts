@@ -144,7 +144,8 @@ test('remoteChamberBadge: the raw cordis patch-insert report of a chamber row st
 
 test('installedRowLiveState: protected composition/seed rows never claim a Loader state', () => {
   // 受保护行（安装自带基线）从不是 Loader 客户端入口：对它们要 Loader 状态会在每次
-  // 打开对话框时给出假告警（2026-12 review；组合行在 §6.11.5 之后恒可见）。
+  // 打开对话框时给出假告警（2026-12 review）。§6.11.5 的 2026-09 行集修订后，这类行只在
+  // profile 自己把该名字声明为依赖时出现，但判据本身（受保护/组合/播种 ⇒ 不索要状态）不变。
   const snapshot = { entries: [
     { moduleName: 'third-party-live', enabled: true, fiberPhase: 'active' },
   ] } as unknown as PluginInventorySnapshot

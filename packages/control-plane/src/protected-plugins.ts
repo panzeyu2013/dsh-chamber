@@ -118,7 +118,8 @@ export type ProtectedSource = 'installation' | 'chamber' | 'family'
 /** 一行已安装事实（design 21 §6.11.5 的 wire 形状）。 */
 export interface PluginRow {
   name: string
-  /** 声明的依赖值（file: 值按各后端既有掩码纪律处理）；组合/种子行无依赖值时为 null。 */
+  /** 声明的依赖值（各后端按自己的掩码纪律处理）。投影行恒来自依赖表（2026-09 行集
+   *  修订），因此除非掩码器显式返回 null，它不会是 null。 */
   spec: string | null
   /** 已装版本（能从 node_modules 清单读到才有；否则 null）。 */
   version: string | null
@@ -541,18 +542,19 @@ export function isMaterializedValue(value: string): boolean {
 }
 
 export interface DerivePluginRowsInput {
-  /** profile 声明的依赖（name → spec/value；各后端已按自己的掩码纪律处理过）。 */
+  /** profile 声明的依赖（name → spec/value；各后端已按自己的掩码纪律处理过）。
+   *  **唯一行源**：一行 = 一条依赖（见 derivePluginRows）。 */
   dependencies: Record<string, string>
-  /** live `dsh.profile.bundles`（只用于 role，不参与保护判定）。 */
+  /** live `dsh.profile.bundles`（**分类器**：role = layer；不参与保护判定，也不作行源）。 */
   bundles: readonly string[]
   /**
    * 派生好的受保护集合；null = 派生失败：行仍按事实投影（role 照算，`protected` 全 false）。
    * 写面不会因此放松——它在 `decidePluginMutation` 里对 `derivation: null` 一律拒绝。
    */
   protectedSet: ProtectedSet | null
-  /** S：播种注册表名（投影 seed 行）。 */
+  /** S：播种注册表名（**分类器**：role/owner = seed/chamber；不作行源）。 */
   seedNames?: readonly string[]
-  /** B₀（默认快照）；用于区分 composition / layer。 */
+  /** B₀（默认快照）；分类器：区分 composition / layer 与 owner=installation。 */
   installationBundles?: readonly string[]
   /** 已装版本读取（可选；按 name 返回版本或 null）。 */
   installedVersion?: (name: string) => string | null
@@ -565,11 +567,21 @@ export interface DerivePluginRowsInput {
 }
 
 /**
- * 把「依赖 + bundles + 种子」并集投影成行（design 21 §6.11.5）。
+ * 把 profile 的**依赖表**投影成「已安装」行（design 21 §6.11.5，2026-09 用户修订）。
  *
- * **注意**：`dependencies` 本身不并集——组合成员与播种物可能根本不在依赖表里（实测 live
- * profile `dependencies: {}` 而 `bundles` 非空），所以行集必须是三者的并集，否则受保护行
- * 在 UI 里永远不可见。
+ * **行集 = `dependencies` 一行一条，仅此**：`bundles` / B₀ / S 只做 `role`/`owner` 分类器与
+ * 「这个名字是否受保护」的输入，**不再凭空造行**。
+ *
+ * 为什么（2026-09 用户口径，取代原并集口径）：并集会让「安装自带」的东西出现在「已安装」
+ * 里——官方组合（B₀）是运行时基线、chamber 播种物（S）在**「chamber 受管组件」表**里已有
+ * 自己的行（探针状态 + 版本 + 手动重推），二者都不是「我们装进去的插件」。上游
+ * `reconcilePlugins`（`apps/cli/src/plugin.ts`）也只把**依赖表**里的包按 `dsh.bundle.patch`
+ * 并入 `dsh.profile.bundles`，并明说模板自带组合不是依赖、永不被触碰：所以依赖表就是「装
+ * 进去的东西」的权威事实。裸依赖表还带出过自相矛盾的行：组合成员在
+ * `profiles/web/node_modules` 里根本不存在（官方族被 hoist 到 `profiles/node_modules`），
+ * 于是版本列只能显示 `—`。保护判定不受影响：`rows[].protected`
+ * 仍由后端算，**若某个受保护名确实出现在依赖表里**（例如远端实例自己声明的官方依赖），它
+ * 照样只读可见（无移除按钮 + 角色徽标），写面也照旧拒绝装卸。
  */
 export function derivePluginRows(input: DerivePluginRowsInput): PluginRow[] {
   const installation = new Set(input.installationBundles ?? PROFILE_BUNDLES_SNAPSHOT)
@@ -578,7 +590,6 @@ export function derivePluginRows(input: DerivePluginRowsInput): PluginRow[] {
   const protectedNames = input.protectedSet?.names ?? new Set<string>()
   const versionOf = input.installedVersion ?? (() => null)
   const rows: PluginRow[] = []
-  const seen = new Set<string>()
 
   const roleOf = (name: string, spec: string | null): PluginRowRole => {
     if (seeds.has(name)) return 'seed'
@@ -599,7 +610,6 @@ export function derivePluginRows(input: DerivePluginRowsInput): PluginRow[] {
   // 条规则（后端各传自己的 maskSpec；缺省原值 = local 原样清单的语义）。role 恒按**原值**分类。
   const mask = input.maskSpec ?? ((spec: string): string | null => spec)
   for (const [name, spec] of Object.entries(input.dependencies)) {
-    seen.add(name)
     rows.push({
       name,
       spec: mask(spec),
@@ -607,34 +617,6 @@ export function derivePluginRows(input: DerivePluginRowsInput): PluginRow[] {
       role: roleOf(name, spec),
       protected: protectedNames.has(name),
       owner: ownerOf(name),
-    })
-  }
-  // 组合自带行（不在依赖表里也要可见）。行集取 **live bundles ∪ B₀**：
-  // B₀ 是安装自带的事实，live bundles 可能为空/未列出默认组合（远端 profile
-  // 尚未初始化、或 fixture/裁剪过的 manifest），但「组合成员可见且只读」不能因此消失。
-  for (const name of [...new Set([...bundles, ...(input.installationBundles ?? PROFILE_BUNDLES_SNAPSHOT)])]) {
-    if (seen.has(name)) continue
-    seen.add(name)
-    rows.push({
-      name,
-      spec: null,
-      version: versionOf(name),
-      role: roleOf(name, null),
-      protected: protectedNames.has(name),
-      owner: ownerOf(name),
-    })
-  }
-  // 播种行（extraneous，同样不在依赖表里）
-  for (const name of seeds) {
-    if (seen.has(name)) continue
-    seen.add(name)
-    rows.push({
-      name,
-      spec: null,
-      version: versionOf(name),
-      role: 'seed',
-      protected: protectedNames.has(name),
-      owner: 'chamber',
     })
   }
   rows.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))

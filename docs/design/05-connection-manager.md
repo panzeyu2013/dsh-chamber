@@ -861,7 +861,10 @@ export const chamberBridge: {
   `localOnly`：**该行只列在本地目标**，非本地目标的行集 = 该目标适用行（local 4 行 /
   ssh·gateway·http 3 行；2026-12 裁决，详见 design 21 §6.6）；另有 gateway 源才出现的
   移动端 client 行，随发行物注入）→ 第三方插件区（已安装列表 + 逐行卸载 + 添加：spec 输入 + npm 搜索 +
-  文件夹导入）→ 恢复/动作行；gateway 添加双通道（registry spec 直装 +
+  文件夹导入；**行集 = 该目标 profile 的依赖表**（local/ssh/gateway；http 直连没有 `rows` 面，只有
+  Loader 清单分类）——安装自带组合与 chamber 播种物不在此列，它们分别属于运行时基线与上面的
+  chamber 内建组件表（详见 design 21 §6.11.5 的 2026-09 行集修订））
+  → 恢复/动作行；gateway 添加双通道（registry spec 直装 +
   文件夹直推）已接线；「变更记录」区不渲染（后端 journal/备份保留）；恢复撤销
   仅 gateway（崩溃/恢复态恢复横幅）；http 直连只读不变；恢复提示 r0–r4 文案双
   后端同权；契约与余留见 design 21 §6.6/§7；**受保护集合与代耦合**（官方 opt-in 层可装可卸、

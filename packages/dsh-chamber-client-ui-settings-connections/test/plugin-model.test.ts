@@ -647,11 +647,17 @@ test('actionableDependencies: rows absent (old gateway) falls back to the legacy
   assert.deepEqual(actionableDependencies(dependencies, []), {})
 })
 
-test('projectInstalledRows: rows mode renders the backend UNION (composition/seed rows included, protected flagged)', () => {
-  const dependencies = { '@deepseek-ai/dsh-base': '^0.1.0', 'third-party-a': '^1.0.0' }
+test('projectInstalledRows: rows mode renders one row per declared dependency (protected flagged read-only)', () => {
+  // 行集口径（design 21 §6.11.5 的 2026-09 修订）：后端只按依赖表投影，所以受保护行
+  // 也**带依赖值**（`@deepseek-ai/dsh-base` 若出现，是因为该 profile 自己声明了它）。
+  const dependencies = {
+    '@deepseek-ai/dsh-base': '^0.1.0',
+    '@dsh-chamber/dsh-chamber-seed-client-graph': '0.3.0-beta.4',
+    'third-party-a': '^1.0.0',
+  }
   const rows = [
     row({ name: '@deepseek-ai/dsh-base', role: 'composition', protected: true, version: '0.1.5' }),
-    row({ name: '@dsh-chamber/dsh-chamber-seed-client-graph', role: 'seed', protected: true, spec: null, version: '0.1.5' }),
+    row({ name: '@dsh-chamber/dsh-chamber-seed-client-graph', role: 'seed', protected: true, version: '0.3.0-beta.4' }),
     row({ name: 'third-party-a' }),
   ]
   const projected = projectInstalledRows(dependencies, rows)
@@ -667,11 +673,15 @@ test('projectInstalledRows: rows mode renders the backend UNION (composition/see
   assert.equal(base.version, '0.1.5')
   assert.equal(base.spec, '^0.1.0', 'the dependency value wins for rows that have one')
   const seed = projected.rows[1]
-  assert.equal(seed.spec, null, 'a composition/seed row has no dependency entry — the cell falls back to the version')
-  assert.equal(seed.version, '0.1.5')
+  assert.equal(seed.protected, true)
   assert.equal(seed.removable, false)
   assert.equal(seed.role, 'seed')
+  assert.equal(seed.spec, '0.3.0-beta.4')
   assert.equal(projected.rows[2].removable, true)
+  // 防御性：投影是「按行」驱动的——万一某个后端给出没有依赖项的行，它照样渲染
+  // （spec null ⇒ 单元格落到版本），绝不静默丢行或抛错。
+  const orphan = projectInstalledRows({}, [row({ name: 'x', spec: null, version: '9.9.9' })])
+  assert.deepEqual(orphan.rows.map(view => [view.name, view.spec, view.version]), [['x', null, '9.9.9']])
 })
 
 test('projectInstalledRows: rows absent falls back to the legacy dependencies filter and reports legacy:true', () => {

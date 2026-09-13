@@ -92,10 +92,11 @@ export type InstalledResult =
     ok: true
     dependencies: Record<string, string>
     bundles: string[]
-    /** Read-face row projection (design 21 §6.11.5): dependencies ∪ live bundles
-     *  ∪ B₀ ∪ chamber seeds, each with role + the SERVER-computed `protected`
-     *  flag (the gateway is the authority for a gateway target — the family
-     *  facts live here, not in the desktop). */
+    /** Read-face row projection (design 21 §6.11.5, 2026-09 revision): one row per
+     *  declared dependency, each with role + the SERVER-computed `protected` flag
+     *  (the gateway is the authority for a gateway target — the family facts live
+     *  here, not in the desktop). B₀ and the seed registry only classify rows;
+     *  the managed profile's installation baseline is not part of this list. */
     rows: PluginRow[]
     profileExists: true
   }
