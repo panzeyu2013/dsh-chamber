@@ -85,6 +85,23 @@ var MOBILE_CSS = `
   button[aria-label] + [role="tooltip"][data-side] {
     display: none !important;
   }
+
+  /* Hand-rolled data-tip bubbles (chamber pages; e.g. the connections
+     settings sheet's .iconButton / .restartTip in ConnectionsSection.module
+     .css, whose ::after carries content: attr(data-tip)). Same coarse-pointer
+     artifact as the official Tooltip above: the bubble is opacity-gated on
+     :hover / :focus-visible, so a tap leaves the synthesized hover behind and
+     the bubble stays over the row it describes. Every data-tip site pairs the
+     attribute with aria-label (verified across the 13 sites at the 2026-09
+     review; that package's Button prop surface documents the pairing), so no
+     accessible name is lost, and the official bundle carries ZERO data-tip
+     attributes (grepped on the served index-*.js) \u2014 this rule cannot reach an
+     official surface. Hiding only the pseudo-element leaves the host button,
+     its box and its label untouched: pure CSS, no JS, desktop untouched
+     (media-query scoped). */
+  [data-tip]::after {
+    display: none !important;
+  }
 }
 
 /* ---- touch tier: tablet/phone touch (design 17 \xA718.4.2) ---- */
@@ -1431,6 +1448,126 @@ function installSettingsSheetScrollReset(active) {
   return () => document.removeEventListener("click", onClick, true);
 }
 
+// src/client/official-hover-card.ts
+var COARSE_NO_HOVER_QUERY = "(pointer: coarse) and (hover: none)";
+var OFFICIAL_CARD_ROOT_CLASS_TOKEN = "_root_1b2ny_";
+var OFFICIAL_CARD_CLASS_TOKEN = "_card_1b2ny_";
+var CARD_QUERY = `[class*="${OFFICIAL_CARD_CLASS_TOKEN}"]`;
+var CARD_ROOT_QUERY = `[class*="${OFFICIAL_CARD_ROOT_CLASS_TOKEN}"]`;
+var CARD_ANCHOR_GAP_PX = 8;
+var CARD_ANCHOR_TOLERANCE_PX = 2;
+var POINTER_OUTSIDE_MARGIN_PX = 2;
+var WATCHDOG_GUARD = Symbol.for("dsh-chamber.dsh-client-ui-mobile.stranded-hover-card");
+function hasModuleClassToken(classAttr, token) {
+  if (typeof classAttr !== "string" || classAttr === "") return false;
+  for (const part of classAttr.split(/\s+/)) {
+    if (part.length <= token.length || !part.startsWith(token)) continue;
+    if (/^[0-9]+$/.test(part.slice(token.length))) return true;
+  }
+  return false;
+}
+function isFiniteRect(rect) {
+  return Number.isFinite(rect.left) && Number.isFinite(rect.top) && Number.isFinite(rect.right) && Number.isFinite(rect.bottom);
+}
+function isUsableAnchorRect(rect) {
+  return isFiniteRect(rect) && rect.right > rect.left;
+}
+function matchesCardAnchor(wrapper, card, viewportHeight) {
+  if (!isUsableAnchorRect(wrapper) || !isFiniteRect(card)) return false;
+  if (Math.abs(card.left - (wrapper.right + CARD_ANCHOR_GAP_PX)) > CARD_ANCHOR_TOLERANCE_PX) return false;
+  if (Math.abs(card.top - wrapper.top) <= CARD_ANCHOR_TOLERANCE_PX) return true;
+  return Number.isFinite(viewportHeight) && Math.abs(card.bottom - (viewportHeight - CARD_ANCHOR_GAP_PX)) <= CARD_ANCHOR_TOLERANCE_PX && card.top <= wrapper.top;
+}
+function isOutsideRect(x, y, rect, margin = POINTER_OUTSIDE_MARGIN_PX) {
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !isFiniteRect(rect)) return false;
+  return x < rect.left - margin || x > rect.right + margin || y < rect.top - margin || y > rect.bottom + margin;
+}
+function isGestureOutside(facts) {
+  return !facts.targetInWrapper && !facts.targetInCard && !facts.pointInWrapper && !facts.pointInCard;
+}
+function scanStrandedCards(root, viewportHeight) {
+  const pairs = [];
+  const cards = Array.from(root.querySelectorAll(CARD_QUERY)).filter(
+    (candidate) => hasModuleClassToken(candidate.getAttribute("class"), OFFICIAL_CARD_CLASS_TOKEN)
+  );
+  if (cards.length === 0) return pairs;
+  const wrappers = Array.from(root.querySelectorAll(CARD_ROOT_QUERY)).filter(
+    (candidate) => hasModuleClassToken(candidate.getAttribute("class"), OFFICIAL_CARD_ROOT_CLASS_TOKEN)
+  );
+  for (const card of cards) {
+    const cardRect = card.getBoundingClientRect();
+    const matches = wrappers.filter(
+      (wrapper) => matchesCardAnchor(wrapper.getBoundingClientRect(), cardRect, viewportHeight)
+    );
+    if (matches.length !== 1) continue;
+    pairs.push({ card, wrapper: matches[0] });
+  }
+  return pairs;
+}
+function dispatchBoundaryLeave(wrapper) {
+  try {
+    const init = { bubbles: true, cancelable: false, composed: true, relatedTarget: null };
+    const EventCtor = typeof PointerEvent === "function" ? PointerEvent : typeof MouseEvent === "function" ? MouseEvent : Event;
+    return wrapper.dispatchEvent(new EventCtor("pointerout", init));
+  } catch {
+    return false;
+  }
+}
+function installStrandedHoverCardWatchdog(active) {
+  if (typeof document === "undefined" || typeof window === "undefined") return () => {
+  };
+  const guard = window;
+  if (guard[WATCHDOG_GUARD] !== void 0) return () => {
+  };
+  const dismissAll = () => {
+    try {
+      if (!active()) return;
+      for (const pair of scanStrandedCards(document, window.innerHeight)) dispatchBoundaryLeave(pair.wrapper);
+    } catch {
+    }
+  };
+  const onBlur = () => {
+    dismissAll();
+  };
+  const onVisibilityChange = () => {
+    if (document.visibilityState === "hidden") dismissAll();
+  };
+  const onPointerDown = (event) => {
+    try {
+      if (!active()) return;
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+      const x = event.clientX;
+      const y = event.clientY;
+      for (const pair of scanStrandedCards(document, window.innerHeight)) {
+        const facts = {
+          targetInWrapper: pair.wrapper.contains(target),
+          targetInCard: pair.card.contains(target),
+          pointInWrapper: !isOutsideRect(x, y, pair.wrapper.getBoundingClientRect()),
+          pointInCard: !isOutsideRect(x, y, pair.card.getBoundingClientRect())
+        };
+        if (!isGestureOutside(facts)) continue;
+        dispatchBoundaryLeave(pair.wrapper);
+      }
+    } catch {
+    }
+  };
+  document.addEventListener("pointerdown", onPointerDown, true);
+  document.addEventListener("visibilitychange", onVisibilityChange);
+  window.addEventListener("blur", onBlur);
+  let disposed = false;
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    document.removeEventListener("pointerdown", onPointerDown, true);
+    document.removeEventListener("visibilitychange", onVisibilityChange);
+    window.removeEventListener("blur", onBlur);
+    if (guard[WATCHDOG_GUARD] === dispose) delete guard[WATCHDOG_GUARD];
+  };
+  guard[WATCHDOG_GUARD] = dispose;
+  return dispose;
+}
+
 // src/client/MobileNavToggle.tsx
 var import_react = require("react");
 var import_dsh_client_ui_primitives = require("@deepseek-ai/dsh-client-ui-primitives");
@@ -1636,6 +1773,25 @@ function apply(ctx) {
       for (const dispose of disposers) dispose();
     };
   }, "dsh-chamber: mobile composer behavior");
+  ctx.effect(() => {
+    const coarseNoHover = window.matchMedia(COARSE_NO_HOVER_QUERY);
+    let disposeWatchdog = null;
+    const sync = () => {
+      if (coarseNoHover.matches) {
+        disposeWatchdog ??= installStrandedHoverCardWatchdog(() => coarseNoHover.matches);
+      } else {
+        disposeWatchdog?.();
+        disposeWatchdog = null;
+      }
+    };
+    sync();
+    coarseNoHover.addEventListener("change", sync);
+    return () => {
+      coarseNoHover.removeEventListener("change", sync);
+      disposeWatchdog?.();
+      disposeWatchdog = null;
+    };
+  }, "dsh-chamber: stranded official hover-card watchdog");
   const injected = () => ({
     toggleSidebar: () => ctx.layout.toggleSidebar(),
     t

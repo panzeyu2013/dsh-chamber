@@ -47,7 +47,7 @@
 | 侧栏多来源结构（`[data-chamber-section]` / `[data-chamber-row]` / `[data-session-id]`） | `W-2` | design 05 §2、06 |
 | 首启模态可关闭/可走完（非首启记 INFO） | `W-3` | design 05 §5（onboarding 阶段） |
 | 侧栏折叠/展开（`aria-expanded` 导轨开关） | `W-4` | design 06（layout 持久化） |
-| 行悬停卡片：悬停升起一张、移开消失（实例无可悬停行时 INFO） | `W-4b` | design 06 §7（悬停卡片） |
+| 行悬停卡片（`[data-chamber-hovercard]` 标记计数）：悬停升起一张、卡片文本含该行自身标题、移开消失；竞态腿**先测本机 dwell→React 提交窗口**（每 ~5ms 轮询卡片标记，取最后未见的时刻作严格下界，多次取最大），再由 `raceBandForWindow()` 在窗口内取确定性偏移、12 次试验 0 搁浅（固定 `dwell+10..60ms` 只是窗口下界，不足以判别——见 README；窗口测不到或 ≤2ms 时记"不具区分力"INFO，绝不记 PASS）；A→B 换行始终至多一张且结束为 B 的卡片；blur / `visibilitychange`（hidden）清卡（实例确无可悬停行时 INFO；有锚点形状的行却没有 `[data-chamber-hovercard-anchor]` 记 FAIL）。**INFO 只表示"这条腿没执行/没区分力"**：结束行会报出 `（N 项 INFO 未执行）`；要"必须真跑过并真的判别"就用 `--require-hover`，四条腿的 INFO 一律改记 FAIL | `W-4b`、`W-4b-race`、`W-4b-swap`、`W-4b-dismiss` | design 06 §7（悬停卡片：锚点/搁浅/互斥/失焦清卡） |
 | 设置面从侧栏座席打开、插槽渲染且**无 `[data-slot-error]`** | `W-5`、`W-6` | design 05 §5（完整桥接） |
 | 设置导航项存在、每个设置页渲染内容、页面切换真的换内容 | `W-7`…`W-9` | design 05 §5 |
 | 真实 Escape 键关闭设置面 | `W-10` | design 05 §5 |

@@ -11,7 +11,7 @@
 |---|---|
 | `run.mjs` | 单一入口：`--live` / `--attach` / `--dev` |
 | `probe.mjs` | `--live`：对**运行中的应用**做只读 HTTP/WS 探测（安装态亦可，无 CDP） |
-| `walkthrough.mjs` | CDP 界面走查：结构断言 + 截图 + 控制台/网络事实采集（含 `W-4b` 行悬停卡片的真实指针开合） |
+| `walkthrough.mjs` | CDP 界面走查：结构断言 + 截图 + 控制台/网络事实采集（含 `W-4b` 行悬停卡片四条腿：标记锚定的升起/清卡 + 标题同一性、**实测窗口内**的搁浅竞态、A→B 互斥自愈、blur/hidden 清卡） |
 | `launch.mjs` | `--dev`：一次性 dev 实例（隔离 user-data、固定控制面端口、CDP 端口） |
 | `cdp.mjs` | 零依赖 CDP 客户端（Node 内置 `WebSocket`/`fetch`） |
 | `checks.mjs` | **纯判据层**：全部 pass/fail 逻辑在此，无 IO，故可在 CI 单测 |
@@ -23,6 +23,7 @@
 pnpm run acceptance:gui                      # --live：探测运行中的应用（只读，最安全）
 pnpm run acceptance:gui -- --attach          # 对已带 CDP 的 dev 实例做界面走查
 pnpm run acceptance:gui -- --dev             # 自起 dev 实例 → 走查 → 自动关闭
+pnpm run acceptance:gui -- --dev --require-hover   # 悬停腿必须真实执行：未执行（INFO）计为 FAIL
 pnpm run acceptance:gui -- --live --sources gateway-a,gateway-b   # 显式指定要扫的远程来源
 pnpm run test:gui-acceptance                 # 纯判据单测（无需 GUI，CI 跑）
 ```
@@ -35,6 +36,13 @@ pnpm run test:gui-acceptance                 # 纯判据单测（无需 GUI，CI
 
 退出码：有 `FAIL` 即 1；`INFO`（环境不适用，或命中"已登记容忍"）不判失败。
 
+**但"无 FAIL"不等于"都跑过"**：`INFO` 的含义是"这条腿没执行、没判过任何事"。所以结束行会把 INFO 数
+一并说出来——`GUI 验收：无 FAIL（4 项 INFO 未执行）`——绿色运行不会被读成"全量覆盖"。要让"没跑过"直接
+变红，用 `--require-hover`：走查的四条悬停腿（`W-4b`、`W-4b-race`、`W-4b-swap`、`W-4b-dismiss`）只要判成
+INFO（实例确无可悬停卡片行），就在报告里改成 FAIL 并附上"本次运行要求 hover 腿必须真实执行"。退出码语义
+不变（`INFO` 默认仍不算失败），所以这是**逐次显式选择**的严格档，不是新的默认门；它只重标"未执行"，
+已经是 PASS/FAIL 的判据原样通过。
+
 ## 已登记容忍与策略（判据的例外都写在这里，不藏在代码里）
 
 | 情形 | 处置 | 依据 |
@@ -44,7 +52,10 @@ pnpm run test:gui-acceptance                 # 纯判据单测（无需 GUI，CI
 | `[cordis-client-runner] … has no active Connection` | 记为**上游噪声**（原始文本仍入报告） | 上游 `cordis-client-runner/src/client/inspect-registry.ts` 启动期日志，非 chamber 缺陷 |
 | 首启向导（`settings.onboarding`） | `--dev` 会**走完**（优先点关闭动作，最多 4 步自动推进）；`--attach` **绝不代点**，记 INFO 并跳过设置面走查 | 推进向导会写实例自身状态：只允许发生在一次性实例上 |
 | 实例未就绪（`dsh.status != ready`） | 实例面检查（`IP-*`/`IN-1`/`CP-5`）转 **INFO** 并说明隔离期 503 属预期 | design 18 §3.4 |
-| 实例没有可悬停的侧栏行（只有来源头，按设计无卡片） | `W-4b` 记 **INFO** 并写明未执行 | design 06 §7（来源头不是卡片锚点） |
+| 实例确无可悬停的卡片行（只有来源头，或只有按设计无卡片的未分组桶头 `[data-chamber-row][role="treeitem"]`） | `W-4b`/`W-4b-race`/`W-4b-swap`/`W-4b-dismiss` 记 **INFO** 并写明未执行（`--require-hover` 时改记 **FAIL**） | design 06 §7：来源头、未分组桶头都不是卡片锚点（`ServerSection.tsx:1436-1437` 有行属性但 `:1743-1746` 不套 `RowHoverCard`） |
+| 有锚点形状的行（父节点是 `RowHoverCard` 的锚点 `<span>`）却没有 `[data-chamber-hovercard-anchor]` | `W-4b` 记 **FAIL** 并点名缺失标记 | **不是环境事实**：`--attach`/`--dev` 面向本仓 dev 构建，标记由 `RowHoverCard.tsx` 落地；缺标记 = 修复没打进包，正是 `W-4b` 要拦的 |
+| 同屏凑不出两个可悬停行（视口太小/工作区折叠） | `W-4b-swap` 记 **INFO**（`--require-hover` 时改记 **FAIL**） | 互斥腿要有 A、B 两行同屏可悬停；单行无从判"至多一张" |
+| 本机 dwell→提交窗口测不到、或 ≤2ms（探针/计时器分辨率之下） | `W-4b-race` 记 **INFO**（"本次运行不具区分力"，`--require-hover` 时改记 **FAIL**） | 固定 band 只是窗口下界：窗口不可测时该腿证明不了任何事，报 PASS 就是把没区分力的运行当证据（复核 finding H5/#3） |
 | 安装态早于 2026-09-10（无 `/writers` 路由） | `CP-4` 记 INFO | 该路由由 9767853 引入 |
 
 `CP-4` 的判据是 `quiescent === true`（**不是** `writers` 为空）：扫描到的 `reclaimed` 孤儿会如实列出，只有 `kept`（无法回收）才代表有无法解释的活写者。
@@ -70,12 +81,31 @@ pnpm run test:gui-acceptance                 # 纯判据单测（无需 GUI，CI
 
 - **只用仓库已有的 DOM 契约**，不新增测试钩子、不靠文案匹配：
   `[data-instance]`（每实例壳）、`[data-chamber-section]` / `[data-chamber-row]`（多来源侧栏）、
+  `[data-chamber-hovercard]` / `[data-chamber-hovercard-anchor]`（行悬停卡片与其锚点，`RowHoverCard.tsx`）、
   `[data-slot]` / `[data-slot-error]`（设置面渲染位）、`dialog nav [class*="navList"] > button`（设置导航项）。
+- 悬停卡片的行选择与计数**只认标记**（曾经按 `position:fixed` + 244px + `z-index:100` 的几何计数，Tooltip
+  气泡或残留卡片都能满足它）；可悬停行只认 `[data-chamber-hovercard-anchor]` 之内的行，所以未分组桶头
+  不会被误选。
+- **竞态腿的 band 是量出来的，不是写死的**。搁浅要求 pointerleave 落在 **[dwell 回调已跑，React 提交 open]
+  之间**（vendored 的 `onPointerLeave` 是 `clearTimer(); if (open) armClose()`）：固定 band（历史上的
+  `dwell+10..60ms`）只是这个窗口的**下界**，在空闲快线程上整段 band 都可能落在提交之后，于是有缺陷的包也
+  会变绿（对抗性复核 finding H5/#3）。所以走查先**测本机的 dwell→提交窗口**（进卡片行后每 ~5ms 轮询一次
+  `[data-chamber-hovercard]`，取"最后一次没看到卡片"的时刻作为提交时刻的**严格下界**——宁可低估也不能高估，
+  高估正好是让坏包通过的方向；多次采样取最大，即不会越界的最紧估计），再由纯判据 `raceBandForWindow()`
+  在该窗口内取 3 个确定性偏移（窗口过大时封顶 200ms 以控时长），12 次试验轮流使用。
+  窗口测不到（没看到卡片）或 ≤2ms（低于探针分辨率，真实计时器无法投递）时，本腿报
+  **"本次运行不具区分力"（INFO）而不是 PASS**，绝不把没区分力的运行当证据；`--require-hover` 会把这条 INFO
+  改判 FAIL。搁浅一旦出现，无论窗口如何都是 FAIL。时长：测量 ~3s + 12 次试验 ~12s。
+- 该腿**不注入主线程负载**：它测量的是本次运行真实拥有的窗口，而不是人为制造慢线程。
+- **真实指针输入**：悬停腿全部走 CDP `Input.dispatchMouseEvent`（合成 DOM 事件会绕开浏览器命中测试）。
+  唯一的合成事件是 `W-4b-dismiss` 的 `blur` / `visibilitychange(hidden)` 探针——真实 OS 失焦与真实
+  标签页隐藏无法用 CDP 制造，所以那一条验的是**监听接线**（首次开卡时绑定 + 能清卡），不是 OS 交接；
+  走查会恢复 `document.visibilityState`，即使断言抛错也在 `finally` 里恢复。
 - 仅两处与语言耦合（侧栏「设置」座席、首启模态的关闭动作）走 zh/en 白名单，匹配不到就记
   `INFO` 并留下截图，交给目检——不假装通过。
 - **点击白名单**：只点设置导航项与上述两个动作，因此按不到「启动/停止/保存/删除」这类
   变更控件；整个走查不产生数据写入。
-- GUI 腿需要 display/打包态，**不进 CI**；进 CI 的只有 `checks.mjs` 的纯判据单测。
+- GUI 腿需要 display/打包态，**不进 CI**；进 CI 的是 `checks.mjs` 的纯判据单测，加上悬停行选择逻辑对假 DOM 跑的迷你用例（真页面表达式，判"未分组桶头不会被误选"这类选择缺陷）。
 
 ## 与其它工具的关系
 

@@ -148,6 +148,23 @@ export const MOBILE_CSS = `
   button[aria-label] + [role="tooltip"][data-side] {
     display: none !important;
   }
+
+  /* Hand-rolled data-tip bubbles (chamber pages; e.g. the connections
+     settings sheet's .iconButton / .restartTip in ConnectionsSection.module
+     .css, whose ::after carries content: attr(data-tip)). Same coarse-pointer
+     artifact as the official Tooltip above: the bubble is opacity-gated on
+     :hover / :focus-visible, so a tap leaves the synthesized hover behind and
+     the bubble stays over the row it describes. Every data-tip site pairs the
+     attribute with aria-label (verified across the 13 sites at the 2026-09
+     review; that package's Button prop surface documents the pairing), so no
+     accessible name is lost, and the official bundle carries ZERO data-tip
+     attributes (grepped on the served index-*.js) — this rule cannot reach an
+     official surface. Hiding only the pseudo-element leaves the host button,
+     its box and its label untouched: pure CSS, no JS, desktop untouched
+     (media-query scoped). */
+  [data-tip]::after {
+    display: none !important;
+  }
 }
 
 /* ---- touch tier: tablet/phone touch (design 17 §18.4.2) ---- */

@@ -807,28 +807,58 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   无需额外禁用条件）。
   - **实现归属（2026-09-13 修订）**：卡片由本包自己的
     `client/RowHoverCard.tsx` 渲染，不再直接用 vendor 的
-    `ui-primitives HoverCard`。卡片盒（244 宽 / r12 / pad 12-16 /
-    `--dsw-shadow-lv3` / `#2C2C2E`）、8px 右偏移、上下夹取、200ms 宽限、
-    按下即收与「点卡片复制」契约全部照搬官方实现；只有**开合状态机**
-    换成 `shared/hover-intent.ts`。原因是 vendor 版的竞态
-    （`ui-primitives/HoverCard.tsx:183-188` 以**已提交的 `open`** 决定是否
-    arm 宽限：dwell 触发到提交之间实测 502–504ms 空闲 / 501–551ms 忙，
-    落在该窗口的 leave 什么都不 arm，卡片随后挂载而指针已离开，再无事件
-    能关掉它）：本包的机器以**同步的指针在场标志**为准（dwell 触发时复查、
-    leave 无条件 arm 宽限），与 React 提交时机无关；且**开合事实只有一份**
-    ——机器即 store（`isOpen()`/`subscribe`），组件经
-    `useSyncExternalStore` 直接渲染它，不把可见性镜像进组件 state，
-    因此也不存在"press/禁用 与 dwell 的 open 错序提交、卡片挂载而机器认为
-    已关"的反向残留（React 提交后会复查快照）。
-  - **两处有意增量（相对官方原子，2026-09-13）**：①**同一文档只允许一张行卡片
-    可见**（页面级 slot，跨 N-ctx 壳共享；后开者关掉先开者）——指针只可能在一处，
-    这同时是「leave 根本没送达」的自愈路径（窗口失焦、承载该行的壳被隐藏/遮挡、
-    列表在静止指针下移动）：此后任意一张卡片打开都会清掉它，包括另一个壳的侧栏；
-    ②**窗口 blur / 文档 hidden 关闭可见卡片**——指针停在行上切走应用时，浏览器
-    不保证补发边界事件。两条都在 `shared/hover-intent.ts` 内，由 node 用例
-    （同页互斥、slot 释放）与走查 `W-4b` 覆盖。vendor 源码在仓内只读，
-    故修正落在本包；上游修掉该竞态后即可退役这次移植（登记见
-    `docs/progress/STATUS.md`）。
+    `ui-primitives HoverCard`；**开合状态机**在 `shared/hover-intent.ts`。
+    不可回避的原因是 vendor 版的竞态
+    （`ui-primitives/HoverCard.tsx:183-188`：`onPointerLeave` = `clearTimer()` +
+    `if (open) armClose()`，即是否 arm 宽限由**上一次已提交的 `open`** 决定）：
+    dwell 定时器触发到 React 提交之间落下的 pointerleave 什么都不 arm，卡片随后
+    挂载而指针已经离开——此后没有指针事件再指向该 wrapper，卡片只能靠「再悬停
+    该行并移开」清除；本仓每个实例是一个大 React root（流式会话 + 侧栏
+    poll/`now` 轮询 + N-ctx 多壳共用调度器），该提交窗口在负载下没有上界。本包的
+    机器以**同步的指针在场标志**为准（dwell 触发时复查、leave 无条件 arm 宽限），
+    与 React 提交时机无关；且**开合事实只有一份**——机器即 store
+    （`isOpen()`/`subscribe`），组件经 `useSyncExternalStore` 直接渲染它，不把
+    可见性镜像进组件 state，因此也不存在"press/禁用 与 dwell 的 open 错序提交、
+    卡片挂载而机器认为已关"的反向残留（React 提交后会复查快照）。
+    vendor 源码在仓内只读，故修正落在本包；**退役条件 = 上游修掉该竞态**，
+    机器判据 = `scripts/dev/verify-upstream-touchpoints.mjs` C11（断言竞态形状仍在、
+    时间常数逐值锁步），登记行见 `docs/checklists/upstream-touchpoints.md` §4，
+    偏差本体与剩余实机验收见 `docs/progress/STATUS.md`。
+  - **相对官方原子的有意增量（2026-09-13）**：卡片盒（244 宽 / r12 / pad 12-16 /
+    `--dsw-shadow-lv3` / `#2C2C2E`）、8px 右偏移、200ms 宽限、按下即收与
+    「点卡片复制」契约与官方等价；差异逐条如下：①**同一文档只允许一张行卡片可见**
+    （页面级 slot，跨 N-ctx 壳共享；后开者关掉先开者）——指针只可能在一处，这同时是
+    「leave 根本没送达」的自愈路径（窗口失焦、承载该行的壳被隐藏/遮挡、列表在静止
+    指针下移动）：此后任意一张卡片打开都会清掉它，包括另一个壳的侧栏；②**窗口
+    blur / 文档 hidden 关闭可见卡片**——指针停在行上切走应用时，浏览器不保证补发
+    边界事件；③**N-ctx 视图隐藏即关**：卡片 portal 到 `document.body`，不是所属视图
+    的后代，视图的 `visibility/opacity/pointer-events` 隐藏既不藏卡片也不投递指针
+    事件，故 renderer 的 view-hide 路径在同一个 commit 显式调用
+    `dismissVisibleRowCard()`（`packages/renderer/src/components/InstanceView.tsx:187-191`）；
+    ④**两轴定位 + 越界即关**：水平仍夹取（卡 244 宽、侧栏贴左缘，只按官方的右偏移
+    会出屏），垂直**不设**官方那种「贴着视口上缘钉住」的地板（上游只夹下缘：
+    `ui-primitives/HoverCard.tsx:100`），锚点整体滚出视口即关卡片，且位置在锚点/
+    容器尺寸变化时由 `ResizeObserver` 重算（上游只有 scroll/resize，
+    `HoverCard.tsx:104-105`）；⑤**复制纪元与上游对齐**：关闭路径（唯一出口
+    `open === false`，宽限关闭/按下即收/禁用三路都经过它）先自增 copyEpoch 再清理，
+    否则卡片关闭时仍在飞的剪贴板写入会在关闭→重开后在**新卡**上亮一瞬
+    `copiedLabel`；上游 `close()` 做同一件事（`HoverCard.tsx:54-58`），此前移植漏了它。
+    另有两处**内容差异（有意保留）**：⑥workspace 卡是**只读卡**——投影不带
+    path/createdAt，故上游「点卡片复制 cwd」的入口不存在（上游 `ui-workspace`
+    `Rows.tsx:201-212`，`copyText={row.cwd}`），**连同它的 a11y/键盘复制一起没有**：
+    `role="button"`/`tabIndex`/`aria-label`/Enter-Space 只在 `copyText` 存在时渲染
+    （`client/RowHoverCard.tsx:205` 与 `:220-240`）；会话行卡复制**标题**，与上游
+    一致（上游 `Rows.tsx:508` 复制 `row.title`）；⑦会话卡状态行 **0–1 行**，上游
+    **1–2 行且至少一行**——上游 `sessionStatuses` 的兜底是常驻 `status.idle` 行
+    （`Rows.tsx:268`），本包只在有状态时才渲染（`client/ServerSection.tsx:2096-2103`；
+    状态优先级模型见 §4.3）。
+  - **同形状但不搁浅的先例（勿误记为竞态）**：vendor `Menu` 的 pointerleave 是同一
+    形状（`ui-primitives/Menu.tsx:319`：`closeOnPointerLeave ? () => { if (open) armClose() } : undefined`），
+    本包两处 kebab 菜单也显式 opt-in（`client/ServerSection.tsx:1645`、`:1985`）；
+    但菜单是**点击即同步提交**的受控 `open`（没有 dwell 定时器，`Menu.tsx` 内无任何
+    开门 `setTimeout`），且另有外部 pointerdown / Escape / 窗口 blur 三条关闭路径
+    （`Menu.tsx:170-211`，`:175`/`:183`/`:200`），所以同一个 `if (open)` 不会搁浅。
+    卡片侧的 blur/hidden 与视图隐藏关闭，本质是把卡片补到菜单已有的水平。
 - **a11y**：来源分组 `role="group"`、列表 `role="tree"`（**浏览树带可访问名
   `section.sessions`**，与搜索结果树 `search.results.aria` 成对，2026-09-11
   upstream-alignment T7）、

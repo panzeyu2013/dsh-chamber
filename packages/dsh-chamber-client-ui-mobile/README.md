@@ -15,7 +15,8 @@ drawer layout, touch targets, safe areas, PWA phased.
   theme-color), frame stamping (`ROLE_SLOT_KEYS` maps the plugin's roles onto
   the alpha.2 slot keys `sidebar` / `main` / `rightbar`),
   layout-source-driven drawer scroll lock, composer behavior, drawer tap
-  self-heal, settings-sheet section-switch polish, `shell.overlay` drawer
+  self-heal, settings-sheet section-switch polish, the stranded official
+  hover-card watchdog, `shell.overlay` drawer
   toggle (the official panel glyph) + backdrop. The toggle IS the official
   control, not a look-alike (2026-09-11 upstream-alignment T17a): it renders
   `IconPanelLeftOutline16` — the glyph the official sidebar toggle draws, from
@@ -32,8 +33,8 @@ drawer layout, touch targets, safe areas, PWA phased.
 - `src/client/styles.ts` — single stylesheet (fully media-query scoped,
   desktop untouched; official `--dsw-*`/`--ds-*` tokens only);
 - `src/client/markup.ts` / `composer.ts` / `layout-facts.ts` /
-  `drawer-taps.ts` / `settings-sheet.ts` — pure logic + thin installers
-  (unit-testable);
+  `drawer-taps.ts` / `settings-sheet.ts` / `official-hover-card.ts` — pure
+  logic + thin installers (unit-testable);
 - `scripts/build.mjs` — esbuild two-half build (`dist/index.js` + `lib/client.js`).
 
 ## Session header adaptation (touch tier)
@@ -258,6 +259,70 @@ user cannot otherwise read. The tree's fifth `role="tooltip"` producer (the
 trajectory turn-rail preview, `aria-describedby`-referenced) carries no
 `data-side` and is structurally outside the rule. Desktop is untouched
 (media-query scoped).
+
+The same tier suppresses the chamber pages' **hand-rolled `data-tip`
+bubbles** (`[data-tip]::after { display: none !important }`) — e.g. the
+connections settings sheet's `.iconButton` / `.restartTip` bubbles
+(`ConnectionsSection.module.css`, `content: attr(data-tip)` on the `::after`,
+opacity-gated on `:hover` / `:focus-visible`): the same coarse-pointer artifact
+in a different vocabulary. Every one of the 13 sites pairs the attribute with
+`aria-label` (that package's `Button` prop surface documents the pairing), so
+no accessible name is lost; the official bundle carries ZERO `data-tip`
+attributes, so the rule cannot reach an official surface; and only the
+pseudo-element is hidden — the host button, its box and its label are
+untouched. Residual: on the two `.restartTip` sites whose tip carries the
+*disabled reason*, this tier loses the visible explanation (the reason still
+rides the `aria-label` and the `disabled` state) — the same trade the official
+Tooltip rule above already takes, and preferable to a bubble that sticks over
+the row after every tap.
+
+## Stranded official hover card (coarse-pointer tier)
+
+The instance's own frontend — the gateway tier, and the only tier that loads
+this package — renders the OFFICIAL `ui-primitives` `HoverCard` for session
+rows; the chamber's replacement (`RowHoverCard` + the `hover-intent` machine)
+exists only in the composite page, which never loads this plugin. The official
+atom arms its 200ms close grace from the last COMMITTED `open`, so a leave
+inside the commit window arms nothing and the card then mounts with the pointer
+already gone; on touch no leave is delivered at all. The card is portaled to
+`document.body` (`position: fixed`, 244px), so no host-side CSS can hide it
+either.
+
+`official-hover-card.ts` is a document-level watchdog for exactly that tier
+(same `(pointer: coarse) and (hover: none)` gate as the tooltip rule — a
+hover-capable pointer, and every desktop, keeps official behavior). It never
+touches the official package: for a card matched to exactly one wrapper by the
+atom's own anchoring geometry (`card.left = wrapper.right + 8`; `card.top =
+wrapper.top`, or the bottom-clamped `card.bottom = innerHeight − 8`) and the
+two CSS-module class tokens (`_card_1b2ny_*` / `_root_1b2ny_*`), it dispatches
+ONE bubbling `pointerout` on the wrapper with no related target. React's
+delegated enter/leave path reads that as "the pointer left the window" and runs
+the wrapper's `onPointerLeave`, which — with the card in the DOM, i.e. the
+atom's committed `open` true — arms the atom's own grace close; a real
+`pointerenter` inside those 200ms cancels it again, so genuine user input
+always wins. Triggers: a `pointerdown` whose target AND coordinates are
+provably outside both boxes (2px inflated), `window.blur`, and
+`visibilitychange → hidden`. The watchdog dispatches no click / pointerdown /
+key event, arms no timer of its own, fails closed on anything unexpected, is
+idempotent, and is installed/uninstalled by `ctx.effect` behind one
+`Symbol.for` window guard.
+
+**Residual reality — what this does NOT cover.**
+
+1. **The instance-origin frontend opened DIRECTLY** (e.g.
+   `http://127.0.0.1:17510` in a browser) has NO chamber client plugin at all:
+   nothing from this package is loaded there, so the stranding bug is still
+   live on that origin. It cannot be mitigated from the chamber — that tier
+   needs the upstream fix in `ui-primitives` (the same one the chamber made for
+   its own card on the composite tier).
+2. On the covered tier the two page-state triggers also close a card whose
+   pointer is physically parked on a row across a blur or tab switch; the card
+   reopens on the next leave-and-re-enter (or tap). No click, navigation or
+   focus change is involved.
+3. The class tokens are pinned to the vendored build, like every other anchor
+   in this package, and must be re-audited when the pin moves. A stale token
+   degrades the watchdog to a silent no-op (no card ever matches) — never to a
+   misfire.
 
 ## Drawer taps & keyboard (touch tier)
 

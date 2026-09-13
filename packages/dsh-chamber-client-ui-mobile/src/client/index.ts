@@ -44,6 +44,9 @@ import {
 } from './composer.ts'
 import { installDrawerTapHeal } from './drawer-taps.ts'
 import { installSettingsSheetScrollReset } from './settings-sheet.ts'
+import {
+  COARSE_NO_HOVER_QUERY, installStrandedHoverCardWatchdog,
+} from './official-hover-card.ts'
 import { MobileNavToggle, type MobileNavToggleInjected } from './MobileNavToggle.tsx'
 
 export type { MobileNavToggleInjected } from './MobileNavToggle.tsx'
@@ -288,6 +291,38 @@ export function apply(ctx: ClientContext): void {
       for (const dispose of disposers) dispose()
     }
   }, 'dsh-chamber: mobile composer behavior')
+
+  // ---- stranded OFFICIAL hover-card watchdog (design 17 §18.4.5) ----
+  // This tier loads the OFFICIAL ui-primitives HoverCard (the chamber's own
+  // `RowHoverCard` exists only in the composite page), and the atom's close
+  // grace is armed from the last COMMITTED open — a leave inside the commit
+  // window arms nothing, and on touch no leave is delivered at all, so the
+  // card strands over the row. The watchdog drives the atom's own
+  // `onPointerLeave` through one bubbling `pointerout` on the matched wrapper;
+  // see official-hover-card.ts for the mechanism and every guard. It rides its
+  // own tier — the coarse-pointer chrome tier the stylesheet's sticky-tooltip
+  // rule already uses, NOT the width-capped touch tier: a landscape tablet
+  // taps too, while attaching a mouse flips `hover` and restores the official
+  // behavior. Installed/uninstalled dynamically as the tier flips.
+  ctx.effect(() => {
+    const coarseNoHover = window.matchMedia(COARSE_NO_HOVER_QUERY)
+    let disposeWatchdog: (() => void) | null = null
+    const sync = (): void => {
+      if (coarseNoHover.matches) {
+        disposeWatchdog ??= installStrandedHoverCardWatchdog(() => coarseNoHover.matches)
+      } else {
+        disposeWatchdog?.()
+        disposeWatchdog = null
+      }
+    }
+    sync()
+    coarseNoHover.addEventListener('change', sync)
+    return () => {
+      coarseNoHover.removeEventListener('change', sync)
+      disposeWatchdog?.()
+      disposeWatchdog = null
+    }
+  }, 'dsh-chamber: stranded official hover-card watchdog')
 
   // ---- shell.overlay: the floating drawer toggle (additive list slot) ----
   const injected = (): MobileNavToggleInjected => ({

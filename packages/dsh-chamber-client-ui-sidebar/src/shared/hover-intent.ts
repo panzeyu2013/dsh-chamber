@@ -15,12 +15,18 @@
  *     pointer already gone: no later pointer event targets that wrapper, so the
  *     card stayed on screen until the row was hovered and left again.
  *
- *     Measured with a CDP probe over the real sidebar (dispatch pointerover on a
- *     row, pointerout 492-570ms later, then count portaled 244px cards): the
- *     dwell-to-paint window is 502-504ms idle and 501-551ms with the main thread
- *     busy, and the vendored atom stranded a card in 7 of 45 loaded trials —
- *     every one of them a leave in the 496-510ms band, i.e. inside that window.
- *     This module's machine stranded none (0/45) under the same probe.
+ *     Characterized during the 2026-09 review with a throwaway CDP probe over
+ *     the real sidebar (dispatch pointerover on a row, pointerout some tens of
+ *     milliseconds after the dwell, then count portaled 244px cards): the
+ *     vendored atom stranded a card on a small fraction of trials under load,
+ *     always for a leave inside the dwell-to-paint window, while this module's
+ *     machine stranded none. That probe was scratch work — its script and its
+ *     rate never shipped, so they are deliberately NOT cited as repo evidence.
+ *     The committed regression coverage is: the machine cases in
+ *     `test/hover-intent.test.ts` (a leave inside the window must still close),
+ *     the source locks in `test/hover-card-wiring.test.ts`, and the real-pointer
+ *     acceptance leg `W-4b-race` (`scripts/gui-acceptance/walkthrough.mjs`,
+ *     judged by `hoverRaceVerdict` in `checks.mjs`).
  *
  *  2. CLOSE. A state machine that keeps its own flag while React commits a
  *     separate one can diverge the other way: a press (`press`) or an owner
@@ -55,6 +61,9 @@
  *  - window blur / hidden document dismisses the visible card, because a
  *    boundary event is not guaranteed when the pointer is parked on a row while
  *    the user switches away.
+ *  - an N-ctx VIEW SWITCH dismisses it through {@link dismissVisibleRowCard}: the
+ *    card is portaled to `document.body`, so CSS-hiding the view that owns it
+ *    hides neither the card nor its hit testing.
  */
 import { assertSingletonModule } from './singleton.ts'
 
@@ -73,6 +82,31 @@ let visibleCard: (() => void) | null = null
 /** Dismiss whatever card currently holds the slot (window blur, hidden page). */
 function dismissVisibleCard(): void {
   visibleCard?.()
+}
+
+/**
+ * Close whatever row card currently holds the page-global slot.
+ *
+ * The N-ctx hidden-view closer. A card is portaled to `document.body`
+ * (`RowHoverCard`), so it is NOT a descendant of the view that owns it: hiding
+ * that view with `visibility: hidden; opacity: 0; pointer-events: none`
+ * (`packages/renderer/src/styles.css`, `.instance-hidden` / `.instance-pending`)
+ * neither hides the card nor delivers it the pointer event that would dismiss
+ * it. A card open while the pointer rests on it therefore survived a view
+ * switch, painted over the incoming view until the next pointer move (observed
+ * during the 2026-09 review with a real-Chrome harness; the lock for it is
+ * `packages/renderer/test/hover-card-view-hide-wiring.test.ts`).
+ * The renderer's view-hide path calls this explicitly, in the same frame the
+ * class lands.
+ *
+ * Reuses the slot machinery, so exactly one card can be affected and the caller
+ * needs no handle on it. Safe at any time: a no-op when no card is open, and it
+ * never touches a machine that does not hold the slot. After the call the
+ * dismissed card behaves exactly as if the pointer had left it — a fresh
+ * `enter()` opens it again.
+ */
+export function dismissVisibleRowCard(): void {
+  dismissVisibleCard()
 }
 
 /**

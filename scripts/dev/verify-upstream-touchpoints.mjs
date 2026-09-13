@@ -4,7 +4,8 @@
  * upstream-touchpoints.md 的机器侧）。
  *
  * 只读，唯一例外是默认模式的 C8（就地重建-还原生成物，见该条）；依赖只有 node
- * 内置模块 + 同目录两个 helper（artifact-gate.mjs / verify-upstream-touchpoints-args.mjs）。
+ * 内置模块 + 同目录三个 helper（artifact-gate.mjs /
+ * verify-upstream-touchpoints-args.mjs / verify-upstream-touchpoints-hover.mjs）。
  * exit-code 语义：0 全部通过（或 --help）/ 1 有门硬失败 / 2 用法错误。
  *   C1  纯文件字节恒等（fork 副本中未登记补丁的文件必须与上游锚逐字节一致）
  *       —— 对 shadow 副本与 chamber-named fork（如 seed-open-in）同等生效
@@ -33,6 +34,15 @@
  *       `packages/desktop/vendor/dsh/package.json` 被 gitignore、属派生本地状态，
  *       仅在其存在时与锁文件交叉校验；生产源码（非注释、非测试、非产物）里出现
  *       任何其他 dsh 版本字面量即红——历史叙述只能留在注释里
+ *   C11 悬停卡自持移植的上游退役门（硬失败；2026-09-13 登记）：chamber 的
+ *       `RowHoverCard` + `shared/hover-intent.ts` 取代 vendor `HoverCard`，退役
+ *       条件是「上游修掉 leave 落在 dwell→commit 窗口就残留的竞态」。本门在**冻结
+ *       pin** 上读 ① 该竞态形状仍在（HoverCard 组件内 onPointerLeave 的**每一个**
+ *       arm 调用都由已提交 open 守卫；注释与字符串/模板先中和，诱饵无法伪证）与
+ *       ② 时间常数逐值锁步（POINTER_GRACE_MS == HOVER_CLOSE_GRACE_MS、
+ *       openDelayMs 默认 == HOVER_OPEN_DELAY_MS，取值必须唯一——零命中/多值都红），
+ *       任一不成立即红——上游修掉竞态那天必须做退役/再登记裁决（判定逻辑纯函数，
+ *       单测随 args 测试同文件）
  *
  * 登记纪律：给某个文件打 chamber 补丁 = 在 FORKS.patched 里登记（含原因）；
  * 新增 chamber 自有文件 = own；上游文件有意不镜像 = dropped。任何对 pure
@@ -60,6 +70,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawn, spawnSync } from 'node:child_process'
 import { artifactGateVerdict, compareOutputs, restoreDir, snapshotDir } from './artifact-gate.mjs'
 import { USAGE_EXIT_CODE, VERIFY_USAGE, parseVerifyArgs } from './verify-upstream-touchpoints-args.mjs'
+import { HOVER_PORT_SOURCES, hoverPortVerdict } from './verify-upstream-touchpoints-hover.mjs'
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url))
 const SUBMODULE = join(ROOT, 'vendor', 'harness-checkout')
@@ -968,6 +979,44 @@ for (const fork of FORKS) {
   }
 }
 
+// C11 —— 悬停卡自持移植的上游退役门（硬失败；2026-09-13 登记，design 06 §7）
+//
+// chamber 的侧栏行卡片用自己的 `RowHoverCard` + `shared/hover-intent.ts` 取代
+// vendor 的 `ui-primitives HoverCard`：vendor 原子以**上一次已提交的 `open`**
+// 决定是否 arm 宽限关闭（`HoverCard.tsx` 的 `onPointerLeave` =
+// `clearTimer()` + `if (open) armClose()`），dwell 定时器触发到 React 提交之间
+// 落下的 pointerleave 什么都不 arm，卡片随后挂载而指针已经离开 ⇒ 再无事件能关掉
+// 它。vendor 只读，故修正落在本包；这是一条**登记在案的偏差**，退役条件只有一个
+// ——「上游修掉该竞态」。本门把该条件变成机器判据，读的是**冻结 pin**：
+//   ① 竞态形状仍在（arm 仍由已提交的 open 守卫；换成 ref/无条件 arm = 上游可能已
+//      修，硬失败要求人工裁决，绝不自动放行）；
+//   ② 两侧时间常数逐值锁步（POINTER_GRACE_MS == HOVER_CLOSE_GRACE_MS、
+//      openDelayMs 内联默认 == HOVER_OPEN_DELAY_MS）——移植声称行为等价，
+//      单侧改动即漂移；
+//   ③ 任一不成立即红：上游修掉竞态那天，维护者必须做退役/再登记裁决。
+// 判定逻辑是纯函数（verify-upstream-touchpoints-hover.mjs）；单测与 args 测试同
+// 文件（verify-upstream-touchpoints-args.test.mjs——那是 CI `test:upgrade-tools`
+// 已挂的 sibling 测试文件，新开测试文件不会进 CI）。登记行见
+// docs/checklists/upstream-touchpoints.md §4/§6。
+//
+// 防伪纪律（2026-09-13 对抗验证后的加固）：形状与常数都读**去注释 + 去字符串/
+// 模板字面量**后的代码投影（诱饵字符串/注释不能伪证）；形状判定限定在 HoverCard
+// 组件体内、并对每个 arm 调用点单独判定（同语句里无关的 `open &&` 不算守卫）；
+// 常数取值必须唯一（零命中=漂移，多值=歧义，都硬失败）。
+{
+  const readSource = (rel, base) => {
+    const full = join(base, rel)
+    return existsSync(full) ? { path: rel, text: readFileSync(full, 'utf8') } : { path: rel, text: null }
+  }
+  const verdict = hoverPortVerdict({
+    upstreamHoverCard: readSource(HOVER_PORT_SOURCES.upstreamHoverCard, SUBMODULE),
+    upstreamPointerGrace: readSource(HOVER_PORT_SOURCES.upstreamPointerGrace, SUBMODULE),
+    chamberHoverIntent: readSource(HOVER_PORT_SOURCES.chamberHoverIntent, ROOT),
+  })
+  if (verdict.ok) console.log(verdict.summary)
+  else for (const failure of verdict.failures) fail(failure)
+}
+
 // C2 —— tag 重放报告（advisory）
 {
   if (tagRange !== null) {
@@ -988,5 +1037,5 @@ if (hardFails > 0 || (process.exitCode ?? 0) !== 0) {
   process.exitCode = 1
   console.error(`\n✗ verify-upstream-touchpoints: ${hardFails} 项硬失败——见上。`)
 } else {
-  console.log('\n✓ verify-upstream-touchpoints 全部通过（C1/C3–C10）')
+  console.log('\n✓ verify-upstream-touchpoints 全部通过（C1/C3–C11）')
 }

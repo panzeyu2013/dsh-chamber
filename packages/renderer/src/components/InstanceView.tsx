@@ -34,7 +34,8 @@
  * vendor shells' measurement / IntersectionObserver machinery works during
  * boot.
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { dismissVisibleRowCard } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import { bootInstanceShell, shellStateIdle, type ChamberTransport, type ShellState } from '../shell.ts'
 import { runViewTransition } from '../view-transition.ts'
 import { frameText, type FrameLocale } from '../locales.ts'
@@ -170,6 +171,24 @@ export default function InstanceView({
     : settled
       ? 'instance-view instance-hidden'
       : 'instance-view instance-pending'
+
+  // chamber (2026-12 悬浮卡修复): 视图一离开活动态就套上 .instance-pending /
+  // .instance-hidden（上面 viewClass），而行悬浮卡被 portal 到 document.body——
+  // 它**不在**本视图 DOM 内，所以 visibility:hidden + pointer-events:none 既不会
+  // 把卡藏起来，也不会给卡送来任何指针事件：指针停在卡上时切视图，卡会一直画在
+  // 新视图之上，直到下一次指针移动（实测截图：
+  // .tmp/review/react-semantics/S12-view-hidden-card-still-visible.png）。
+  // 因此在**同一个 commit**（useLayoutEffect = 绘制前）显式关掉页级唯一那张卡。
+  // 只认 active 的 true→false 跳变：后台预热/后台 boot 的视图挂载时本就是非活动
+  // 态，若按"非活动即关"会把活动视图里用户正悬停的卡误关。
+  // dismissVisibleRowCard() 不接收句柄——它只关当前持有页级槽位的那台状态机，
+  // 没有卡打开时是 no-op（sidebar 包 shared/hover-intent.ts）。
+  const wasActiveRef = useRef(active)
+  useLayoutEffect(() => {
+    if (wasActiveRef.current === active) return
+    wasActiveRef.current = active
+    if (!active) dismissVisibleRowCard()
+  }, [active])
 
   return (
     <div className={viewClass} data-instance={instanceId}>
