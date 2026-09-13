@@ -553,10 +553,19 @@ R2 只看**直接 spec**；官方层的**依赖闭包**同样会进入实例树�
   三端因此对同一份事实投影**同一组** `protected` 值（local 与 gateway 不再分叉）。
 - 渲染端**只渲染**：删除 `plugin-model.ts` 的 `isDeniedPluginName` 手镜像、`filterDeniedRows` 与其锁步测试；
   **保留** `plugin-inventory-text.ts` 的 `OFFICIAL_SCOPE` / `CHAMBER_CLIENT_PREFIX`（Loader 清单展示分类，非安装门）。
-- **受保护行只读可见**（就是「能看到一切事实」的价值）：无移除按钮（`—` + 提示文案）+ 角色徽标；
-  `owner`（installation / chamber / user）已随行投影但 v1 **未渲染**，来源 tooltip 与"代"提示未做（§7 登记）；
-  组合自带行（B₀）必须出现在已安装列表里——**注意行集需要后端并集投影**：实测 live profile 的
-  `dependencies` 为空而 `bundles` 非空，组合成员根本不在依赖表里，仅删渲染端过滤行不会让它们出现。
+- **受保护行只读可见**（当它确实在依赖表里时）：无移除按钮（`—` + 提示文案）+ 角色徽标；
+  `owner`（installation / chamber / user）已随行投影但 v1 **未渲染**，来源 tooltip 与"代"提示未做（§7 登记）。
+- **行集 = profile 的依赖表，一行一条**（2026-09 用户修订，取代原「并集投影」口径）：`bundles` / B₀ / S
+  只作为 `role`/`owner` 分类器与保护判定的输入，**不再凭空造行**。「已安装」= 我们装进去的插件；
+  chamber 播种物在**「chamber 受管组件」表**里已有自己的行（探针状态 + 版本 + 手动重推），官方组合是
+  运行时基线，不是插件行。原并集口径的两个实际代价就此消除：组合成员在 profile 目录里根本不存在
+  （官方族被 hoist 到 `profiles/node_modules`）导致版本列只能显示 `—`；`dependencies` 为空的 profile
+  也会凭空列出 B₀ ∪ S 整组「自带」包（本机实测 6 行：2 组合 + 4 播种，随注册表增长）。受保护名若**确实**出现在依赖表里（例如远端实例自己声明的官方依赖），
+  它仍是行且只读可见——保护判定与写面拒绝不受本条影响。只存在于 live `bundles` 而不在依赖表里的条目
+  （例如手工编辑过的 profile）不成行、页内也不给移除入口：上游 `reconcilePlugins`
+  （`apps/cli/src/plugin.ts`，C12 登记表同源）**只把依赖表里的包按 `dsh.bundle.patch` 并入
+  `dsh.profile.bundles`**，且明说模板自带组合「are not dependencies and are never touched」——
+  因此「用户装的层一定在依赖表里、自带组合一定不在」正是本条行集的依据。
 - **diff/apply 边界（硬要求）**：`computePluginDiff` 的输入只吃**后端判非 `protected`** 的行
   （`protected === false`；组合/播种/线族成员天然在 P 内，故一并被排除）。若把受保护行并进 diff 输入，
   `missing` 行默认勾选 ⇒ 一次普通第三方对账会把 `@deepseek-ai/dsh-base@…` 当 add 提交，后端整批拒绝——
@@ -590,6 +599,8 @@ R2 只看**直接 spec**；官方层的**依赖闭包**同样会进入实例树�
   整行不列出**（沿用旧 gateway 的可见性口径，本地化文案已如是说），只列第三方行，并提示「gateway 版本较低」——
   绝不给一个必然 400 的按钮（旧 gateway 服务端仍按旧规则拒绝官方域）；
   旧 desktop + 新 gateway ⇒ 忽略新字段，行为不变。
+  与 §6.11.5 新口径的差异（2026-09）：新 gateway 的依赖行里若确实含受保护名，它**会**作为只读行出现；
+  回退路径按前缀整行不列，属只收紧的保守差异，随 gateway 全量升级消失。
 - 就地部署需先把 gateway 更新到本版；该兼容声明按既有先例写在 **CHANGELOG 发布时**（`CHANGELOG.md` 的
   「兼容性」条目体例），并遵守 STATUS 已确立的「版本歪斜窗口是发布说明事项」口径。
 
@@ -601,6 +612,13 @@ R2 只看**直接 spec**；官方层的**依赖闭包**同样会进入实例树�
 - **旧 gateway 无 `rows` 的回退路径**（6.11.7）：gateway 全量升级后该分支即可删除。
 - **行投影 `owner` 已投影但未渲染**：来源 tooltip（installation/chamber/user）与行级「代」提示
   v1 未做；读面事实完整、呈现不完整（见 §6.6 已知余留与 STATUS）。
+- **bundles-only 层只走 CLI**（2026-09 行集修订的必然结果，§6.11.5）：只存在于 live
+  `dsh.profile.bundles` 而不在依赖表里的层**不成行**，页内既看不到也没有移除入口
+  （CLI `dsh plugin remove` 照旧可用），而它仍会被 Loader 挂载。可达性很窄——上游
+  `reconcilePlugins` 只从依赖表补层、模板自带组合 "never touched"，因此这只可能命中
+  手工编辑过 profile 的历史条目（本机 profile 就带 3 个上一代 `@dsh-chamber/dsh-host-*`
+  遗留目录）。放开条件 = 页内补一条只读的 bundles-only 行（读面事实已经拿得到，只是
+  行集口径不含它）。
 
 ## 7. 决策遗留 / 开放项
 - **受保护集合与代耦合的剩余开放项**（§6.11；**权威清单在 `docs/progress/STATUS.md`
@@ -674,12 +692,13 @@ R2 只看**直接 spec**；官方层的**依赖闭包**同样会进入实例树�
   **入口覆盖**：local add/remove/file、gateway install/materialize/remove、ssh apply 各一条负例；
   **undo 走同一条判定**（ssh `doUndo` → `applyPlugins` → `buildSshApplyRows` → `decide`；gateway undo 经
   remove 路由 → `validateSubmission` → `decide`）——由这两条链路的既有单测覆盖，**未**单列"受保护名 undo"负例；
-- **读面投影**：`rows` 三端形状（role/protected/owner）+ 本地 `localPluginList` 的行**并集**（dependencies ∪
-  live bundles ∪ B₀ ∪ S，role/owner/保护位逐一断言）+ **掩码在 `dependencies` 与 `rows[].spec` 两个通道
+- **读面投影**：`rows` 三端形状（role/protected/owner）+ 本地 `localPluginList` 的**行集 = 依赖表**
+  （§6.11.5 的 2026-09 修订：`dependencies: {}` ⇒ 空行集，B₀/S 不再造行；自己声明的组合/播种名仍是行且
+  role/owner/保护位逐一断言）+ **掩码在 `dependencies` 与 `rows[].spec` 两个通道
   上一致**（本地红actor + gateway 投影同判据）+ wire 孪生字段集与**行类型**（producer↔preload↔renderer，
   C14 同判据含字段名 + role/owner 字面量并集负例）+ **`diff.rows` 不含受保护名**（单测断言，防默认勾选把
   组合行提交出去）+ 旧后端无 `rows` 的回退路径（golden 缺字段载荷不抛错、**官方/chamber 行整行不列出**）+
-  受保护/组合/播种行不索要 Loader 状态（不产生假「重启后生效」）；
+  受保护行（含自己声明的组合/播种名）不索要 Loader 状态（不产生假「重启后生效」）；
 - **上游保鲜门 C11–C14**：`scripts/dev/plugin-protection-gate.test.mjs`
   （真实仓库正向断言 + 改坏派生来源/契约/注册表/镜像的负例），随 `pnpm run test:upgrade-tools` 进 CI；
 - A gateway 子矩阵：spec 白名单族/**受保护集合判定（§6.11 的判定码 `protected`/`needs-version`/

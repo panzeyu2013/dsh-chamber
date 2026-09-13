@@ -189,10 +189,11 @@ export type ChamberInjectionState =
   | { ok: true; packages: ChamberHostPackageState[] }
   | { ok: false; error: string }
 /**
- * One read-face plugin row (design 21 §6.11.5): the UNION of the profile's
- * dependencies, its live `dsh.profile.bundles`, its installation-owned
- * baseline and the chamber seeds — the dialog renders from this, and
- * `protected` is computed by the BACKEND (the renderer never re-derives it).
+ * One read-face plugin row (design 21 §6.11.5, 2026-09 row-set revision): one
+ * row per profile dependency, carrying the backend-computed role and
+ * `protected` flag (the renderer never re-derives protection). The
+ * installation baseline (B₀) and the chamber seed registry (S) only classify
+ * rows; they are not projected as installed plugins.
  */
 export interface PluginRowProjection {
   name: string

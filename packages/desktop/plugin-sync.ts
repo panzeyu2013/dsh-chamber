@@ -589,9 +589,11 @@ export type ChamberInjectionState =
 export interface RemotePluginManifest {
   dependencies: Record<string, string>
   bundles: string[]
-  /** Read-face row projection (design 21 §6.11.5): the UNION of dependencies,
-   *  live bundles and chamber seeds, each with its role + backend-computed
-   *  `protected` flag. `dependencies` keeps its exact meaning (name-based
+  /** Read-face row projection (design 21 §6.11.5, 2026-09 revision): one row per
+   *  `dependencies` entry, each with its role + backend-computed `protected`
+   *  flag. The composition (B₀) and the chamber seed registry (S) classify rows
+   *  but never create them — this list is the profile's own plugin set, not the
+   *  installation baseline. `dependencies` keeps its exact meaning (name-based
    *  diff); the renderer must render from `rows` when present. */
   rows: PluginRow[]
   profileExists: boolean
@@ -728,6 +730,13 @@ export function classifyLocalDependency(pkg: unknown): LocalPluginKind {
  * syncable, never flagged). Dependency names are whitelist-checked before any
  * node_modules read (path traversal defense). Throws on an unreadable/
  * malformed profile manifest.
+ *
+ * `rows` (design 21 §6.11.5, 2026-09 revision) is the profile's DEPENDENCY
+ * table projected with the backend-computed role/protected flags. B₀ and the
+ * seed registry S only CLASSIFY rows here — they no longer create rows:
+ * 「已安装」 lists what this profile declares as plugins, the chamber host
+ * packages are shown by the chamber component table (`chamber` below), and
+ * the official composition is the runtime baseline, not a plugin row.
  */
 export function localPluginList(localDshHome: string, facts?: PluginProtectionFacts): LocalPluginManifest {
   // The projection's protected flags come from the CALLER-supplied runtime facts

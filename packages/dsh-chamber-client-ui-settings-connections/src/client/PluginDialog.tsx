@@ -1419,8 +1419,8 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
       : null
   )
 
-  /** 一行的 spec 格：依赖值优先（file: 值掩码芯片化，不直显本地路径）；只存在于
-   *  rows 的组合/播种行无依赖值 ⇒ 落到已装版本；两者都有时版本作 dim 后缀。 */
+  /** 一行的 spec 格：依赖值优先（file: 值掩码芯片化，不直显本地路径）；掩码后无可展示
+   *  值（spec null）时落到已装版本；两者都有时版本作 dim 后缀。 */
   const installedSpecCell = (row: InstalledRowView, unsyncReason?: string | undefined): ReactNode => (
     <>
       {row.spec !== null && row.spec.startsWith('file:')
@@ -1563,9 +1563,11 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
         )
       }
       if (localList === null) return null
-      // design 21 §6.11.5：行集来自后端并集投影（组合/播种行只存在于 rows——live
-      // profile 的 dependencies 可能为空而 bundles 非空）。受保护行只读可见；
-      // 旧 producer 无 rows 时回退到 dependencies 的旧过滤（§6.11.7）。
+      // design 21 §6.11.5（2026-09 行集修订）：已安装 = 本 profile 的依赖表，后端投影
+      // 只做 role/protected 标注——安装自带组合（B₀）与 chamber 播种物（S）不再造行
+      // （chamber 组件在「chamber 受管组件」表里，官方组合是运行时基线）。受保护名若
+      // 确实出现在依赖表里仍只读可见；旧 producer 无 rows 时回退到 dependencies 的旧
+      // 过滤（§6.11.7）。
       const installedRows = projectInstalledRows(localList.dependencies, pluginRowsOf(localList)).rows
       return (
         <div className={css.pluginStack}>
@@ -1613,9 +1615,9 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
                               plain/client-only dependency with no loader entry
                               never activates on restart — keep the cell neutral
                               instead of promising 重启后生效. */}
-                          {/* 受保护/组合/播种行是安装自带基线（宿主侧 boot 层），
-                              从不是 Loader 客户端入口 —— 对它们要 Loader 状态会在每次
-                              打开对话框时给出假告警（installedRowLiveState）。 */}
+                          {/* 受保护行是安装自带基线（宿主侧 boot 层），从不是 Loader
+                              客户端入口 —— 对它们要 Loader 状态会在每次打开对话框时
+                              给出假告警（installedRowLiveState）。 */}
                           {liveStateCell(installedRowLiveState(localSnapshot, row, rowCategory === 'bundle'))}
                         </span>
                         {rowActionCell(row, localRemoveBusy || applying || installing || folderBusy, () => {
@@ -1638,9 +1640,10 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   const gatewayZone = isGateway
     ? ((): ReactNode => {
       const opsBlocked = removeBusy || restarting || syncing || installing || folderBusy
-      // design 21 §6.11.5：行集 = 服务端的 rows 并集投影（受保护判定的权威在
-      // 服务端，渲染端只消费）。旧 gateway 无 rows ⇒ 回退到 dependencies 的旧过滤
-      // 并置 legacy 标记（§6.11.7），只给出服务端仍会接受的动作。
+      // design 21 §6.11.5（2026-09 行集修订）：行集 = 服务端投影的**依赖行**
+      // （受保护判定的权威在服务端，渲染端只消费；B₀/S 不再造行）。旧 gateway 无
+      // rows ⇒ 回退到 dependencies 的旧过滤并置 legacy 标记（§6.11.7），只给出服务端
+      // 仍会接受的动作。
       const projected: { rows: InstalledRowView[]; legacy: boolean } = installed !== null && installed.ok === true
         ? projectInstalledRows(installed.dependencies, pluginRowsOf(installed))
         : { rows: [], legacy: false }
@@ -2012,9 +2015,10 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   function renderRemoteList(): ReactNode {
     if (phase === 'loading' || phase === 'error') return renderSyncView()
     if (remoteManifest === null) return <p className={css.dim}>{t('pluginsLoading')}</p>
-    // design 21 §6.11.5：远端行集同样来自 desktop main 的 rows 投影（ssh 的 F 无
-    // 远端来源 ⇒ 官方 scope 一律 protected，§6.11.3 的保守形态）；旧 producer 无
-    // rows 时回退到 dependencies 的旧过滤。
+    // design 21 §6.11.5（2026-09 行集修订）：远端行集同样来自 desktop main 的投影，
+    // 但只覆盖远端 profile 自己的依赖（B₀/S 不再造行）。ssh 的 F 无远端来源 ⇒ 集合退到
+    // B₀ ∪ S，官方 scope 的**装面**由写面保守拒绝（§6.11.3），不是读面把行标 protected。
+    // 旧 producer 无 rows 时回退到 dependencies 的旧过滤。
     const rows = projectInstalledRows(remoteManifest.dependencies, pluginRowsOf(remoteManifest)).rows
     const opBusy = remoteRemoveBusy || undoBusy
     const opsBlocked = opBusy || applying || seedBusy || restartBusy || installing || folderBusy

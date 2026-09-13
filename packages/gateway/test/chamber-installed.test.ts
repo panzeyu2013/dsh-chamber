@@ -174,6 +174,26 @@ test('installed read: non-object manifest (array / null / primitive) → profile
   }
 })
 
+test('installed read: a DECLARED baseline name still classifies + stays protected', t => {
+  // B₀/S no longer create rows (2026-09 row-set revision), but when a profile
+  // itself declares such a name the backend classification and the protected
+  // flag still apply — the row renders read-only in the dialog.
+  const seed = CHAMBER_HOST_PACKAGES[0].insert.name
+  const stateDir = scratch(t)
+  writeManifest(stateDir, JSON.stringify({
+    dependencies: { '@deepseek-ai/dsh-base': '0.1.5-rc.2', [seed]: '0.3.0-beta.4' },
+    dsh: { profile: { bundles: ['@deepseek-ai/dsh-base'] } },
+  }))
+  const projection = readProjection(stateDir)
+  assert.equal(projection.ok, true)
+  if (projection.ok) {
+    assert.deepEqual(rowShape(projection.rows), [
+      '@deepseek-ai/dsh-base:composition:true',
+      `${seed}:seed:true`,
+    ].sort())
+  }
+})
+
 test('installed read: oversized manifest (> 1 MiB) → profile_corrupt; exact bound reads', t => {
   const stateDir = scratch(t)
   const base = JSON.stringify({ dependencies: { a: '^1.0.0' }, pad: '' })
@@ -191,16 +211,10 @@ test('installed read: oversized manifest (> 1 MiB) → profile_corrupt; exact bo
   if (!result.ok) assert.equal(result.code, 'profile_corrupt')
 })
 
-/** B₀ (installation-owned composition) + S (chamber seeds) — present in EVERY
- *  projection (design 21 §6.11.5: the row set is dependencies ∪ live bundles ∪
- *  B₀ ∪ S, so the baseline composition is visible even when the profile lists
- *  no bundles of its own). */
-const BOOT_ROWS: string[] = [
-  '@deepseek-ai/dsh-base:composition:true',
-  '@deepseek-ai/dsh-web-app:composition:true',
-  ...CHAMBER_HOST_PACKAGES.map(descriptor => `${descriptor.insert.name}:seed:true`),
-].sort()
-
+/** B₀ (installation-owned composition) and S (chamber seeds) are CLASSIFIERS
+ *  only (design 21 §6.11.5, 2026-09 row-set revision): the projection lists one
+ *  row per declared dependency, so a baseline composition member or a seed
+ *  shows up only when the profile itself declares it. */
 const rowShape = (rows: readonly { name: string; role: string; protected: boolean }[]): string[] =>
   rows.map(row => `${row.name}:${row.role}:${row.protected}`)
 
@@ -213,7 +227,7 @@ function assertProjection(
 ): void {
   const { rows, ...rest } = projection
   assert.deepEqual(rest, expectedRest)
-  assert.deepEqual(rowShape(rows), [...BOOT_ROWS, ...expectedRows].sort())
+  assert.deepEqual(rowShape(rows), [...expectedRows].sort())
 }
 
 test('installed read: valid minimal manifest → masked passthrough projection', t => {
@@ -230,9 +244,9 @@ test('installed read: valid minimal manifest → masked passthrough projection',
       dependencies: { a: '^1.0.0' },
       bundles: ['b'],
       profileExists: true,
-      // `a` is a plain dependency (third-party); `b` is listed in the live
-      // bundles but is not a dependency ⇒ a layer row the composition owns.
-    }, ['a:third-party:false', 'b:layer:false'])
+      // `b` is listed in the live bundles but is NOT a dependency ⇒ no row: the
+      // installed list is the profile's own plugin set (2026-09 row-set revision).
+    }, ['a:third-party:false'])
   }
 })
 

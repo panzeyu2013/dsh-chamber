@@ -1,18 +1,20 @@
 /**
  * Protected-row wiring drift (design 21 §6.11.5 读面契约 + diff/apply 边界):
- * the three installed zones must render the BACKEND row union (composition and
- * seed rows exist only in `rows`), protected rows must be read-only, and
- * computePluginDiff's inputs must be narrowed to actionable rows.
+ * the three installed zones must render the BACKEND row projection (the
+ * profile's dependency table — the 2026-09 row-set revision stopped projecting
+ * B₀ ∪ S as rows), protected rows must be read-only, and computePluginDiff's
+ * inputs must be narrowed to actionable rows.
  *
  * The dialog is a React component this DOM-free suite cannot render, so its
  * half is pinned at the SOURCE level — the same lockstep discipline as
  * installed-fence-wiring.test.ts. Each assertion is a regression that was real
  * (or would be):
  *
- * 1. local/gateway/ssh built their rows from `dependencies` only, so a live
- *    profile with `dependencies: {}` + non-empty `bundles` rendered an EMPTY
- *    installed list and its protected rows stayed invisible.
- * 2. An unfiltered diff input turns a composition row into a default-checked
+ * 1. A zone that renders `dependencies` itself (or filters by name prefix)
+ *    re-derives facts the backend owns; the projection must come from
+ *    `rows`/`pluginRowsOf`, and an ABSENT `rows` (old producer) must fall back
+ *    rather than crash or silently render an empty table.
+ * 2. An unfiltered diff input turns a protected row into a default-checked
  *    `missing` row; doApply submits it as an add spec and the backend refuses
  *    the whole batch (ordinary reconciliation breaks).
  * 3. The renderer must never re-derive protection: the former
@@ -35,13 +37,13 @@ function window(marker: string, before = 0, after = 900): string {
   return source.slice(Math.max(0, index - before), index + after)
 }
 
-test('all three installed zones project the backend rows union (composition/seed rows included)', () => {
+test('all three installed zones project the BACKEND rows (never the dependency map themselves)', () => {
   for (const call of [
     'projectInstalledRows(localList.dependencies, pluginRowsOf(localList))',
     'projectInstalledRows(installed.dependencies, pluginRowsOf(installed))',
     'projectInstalledRows(remoteManifest.dependencies, pluginRowsOf(remoteManifest))',
   ]) {
-    assert.ok(source.includes(call), `a zone no longer projects the backend rows union: ${call}`)
+    assert.ok(source.includes(call), `a zone no longer projects the backend rows: ${call}`)
   }
   // rows 缺失（旧 gateway / 旧 producer）→ 回退路径，而不是崩溃或静默空表。
   assert.equal(source.split('projectInstalledRows(').length - 1, 3,
