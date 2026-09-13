@@ -36,28 +36,38 @@ interface WireOptions {
 
 const png = (payload: string): { mime: string; dataBase64: string } => ({ mime: 'image/png', dataBase64: payload })
 
-/** The `openInApp/*` host domain at wire level (`{ok,value}|{ok,error}`). */
+/** The `openInApp/*` host domain at wire level, answering the exact two-level
+ *  envelope production carries: the page-level instance client's TRANSPORT
+ *  result (`{ok:true, value}`, `callUnary`) wrapping the host domain's own
+ *  `{ok,value}|{ok,error}` carrier (`domainResult`). `fail` refuses at the
+ *  DOMAIN level — a reachable host whose domain call failed; a transport that
+ *  never answers is covered in `local-catalog.test.ts`. */
 function wire(options: WireOptions): { call: OpenInAppRpcCall; calls: WireCalls } {
   const calls: WireCalls = { apps: 0, icons: [], opens: [] }
-  const failure = { ok: false, error: { code: 'probe-failed', message: 'the host refused' } } as const
+  /** A transport success carrying one host domain answer. */
+  const answered = (value: unknown): unknown => ({ ok: true, value: { ok: true, value } })
+  const refused: unknown = {
+    ok: true,
+    value: { ok: false, error: { code: 'probe-failed', message: 'the host refused' } },
+  }
   return {
     calls,
     call: async (endpoint, args) => {
-      if (options.fail === true) return failure
+      if (options.fail === true) return refused
       if (endpoint === OPEN_IN_APP_APPS_METHOD) {
         calls.apps += 1
-        return { ok: true, value: { apps: [...options.apps()] } }
+        return answered({ apps: [...options.apps()] })
       }
       if (endpoint === OPEN_IN_APP_ICON_METHOD) {
         const app = String(args.app)
         calls.icons.push(app)
         await options.onIcon?.(app)
         const icon = options.icons?.[app]
-        return { ok: true, value: icon === undefined ? null : icon }
+        return answered(icon === undefined ? null : icon)
       }
       if (endpoint === OPEN_IN_APP_OPEN_METHOD) {
         calls.opens.push({ app: String(args.app), path: String(args.path) })
-        return { ok: true, value: {} }
+        return answered({})
       }
       throw new Error(`unexpected endpoint ${endpoint}`)
     },
