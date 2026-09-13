@@ -212,6 +212,37 @@ test('purgeArchivedSessions carries the orphan-sweep count when the host reports
   assert.equal(malformed.clearedOrphanMembers, undefined)
 })
 
+test('purgeArchivedSessions carries the resident-retained id list (design 24 §4 step 9) and never fabricates ids', async () => {
+  // The host kept these roots archived because the instance process still
+  // serves them: the manager labels exactly those rows.
+  const client = cleanupClient({
+    deletedSessions: 2,
+    forcedLoaded: 2,
+    residentRetainedRoots: ['s1', 's2'],
+  })
+  const result = await purgeArchivedSessions(client as never, ['s1', 's2'])
+  assert.deepEqual(result.residentRetainedRoots, ['s1', 's2'])
+  // Older hosts / zero-retention runs omit the field entirely.
+  const absent = await purgeArchivedSessions(cleanupClient({ deletedSessions: 1 }) as never, ['s1'])
+  assert.equal(absent.residentRetainedRoots, undefined)
+  // Malformed shapes degrade to absent or drop the bad entries — an id list is
+  // only a row LABEL, and a fabricated one would label the wrong row.
+  assert.equal((await purgeArchivedSessions(cleanupClient({ residentRetainedRoots: 's1' }) as never, ['s1'])).residentRetainedRoots, undefined)
+  assert.equal((await purgeArchivedSessions(cleanupClient({ residentRetainedRoots: [] }) as never, ['s1'])).residentRetainedRoots, undefined)
+  const mixed = await purgeArchivedSessions(
+    cleanupClient({ residentRetainedRoots: ['s1', 7, '', null, 's2'] }) as never,
+    ['s1', 's2'],
+  )
+  assert.deepEqual(mixed.residentRetainedRoots, ['s1', 's2'])
+  // Duplicates collapse: the list feeds a count AND a label set, and a
+  // duplicated id would make the note over-count the rows it labels.
+  const dupes = await purgeArchivedSessions(
+    cleanupClient({ residentRetainedRoots: ['s1', 's1', 's2', 's1'] }) as never,
+    ['s1', 's2'],
+  )
+  assert.deepEqual(dupes.residentRetainedRoots, ['s1', 's2'])
+})
+
 test('archiveCleanup business failures decode the NESTED domain carrier (security review Major-1)', async () => {
   // Realistic two-level wire: the generic RPC layer answers ok:true and the
   // host domain carrier rides nested in `value` ({ok:false,error}). A busy

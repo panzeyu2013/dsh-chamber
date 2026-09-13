@@ -15,6 +15,7 @@ import {
   MAX_SWEEP_CONTENT_PROBES,
   type ArchivedSessionState,
   type ArchiveCleanupHost,
+  type SessionContentDeletion,
 } from '../src/core.ts'
 
 function state(id: string, running = false): ArchivedSessionState {
@@ -50,6 +51,10 @@ class FakeHost implements ArchiveCleanupHost {
    *  deterministic mid-run running-flip hook). */
   liveAddOnDeleteOf?: string
   liveAddOnDelete?: string
+  /** When set, deleting this session first ATTACHES it to the live store
+   *  (models a session another client opens after the tree-level recheck —
+   *  the mid-run residency race the plan-time snapshot cannot see). */
+  attachOnDeleteOf?: string
   failStateRead = false
   failLiveRead = false
   /** Crash simulation: throw after this many successful content deletions. */
@@ -145,7 +150,7 @@ class FakeHost implements ArchiveCleanupHost {
     _cwd?: string,
     force = false,
     protectedIds?: ReadonlySet<string>,
-  ): Promise<'deleted' | 'missing'> {
+  ): Promise<SessionContentDeletion> {
     if (protectedIds !== undefined && protectedIds.has(sessionId)) {
       for (const id of protectedIds) this.protectedSeen.add(id)
       throw new ArchiveCleanupError('protected', `fake: ${sessionId} is protected`)
@@ -154,13 +159,17 @@ class FakeHost implements ArchiveCleanupHost {
     if (injected !== null) {
       throw new ArchiveCleanupError(injected, `fake: delete failed for ${sessionId}`)
     }
+    if (this.attachOnDeleteOf === sessionId) this.loaded.add(sessionId)
     if (this.live.has(sessionId)) {
       throw new ArchiveCleanupError('running', `fake: ${sessionId} is running`)
     }
     if (!force && this.loaded.has(sessionId)) {
       throw new ArchiveCleanupError('loaded', `fake: ${sessionId} is loaded`)
     }
-    if (!this.states.has(sessionId)) return 'missing'
+    // Residency at THIS instant, exactly like the real binding (running ∪
+    // loaded): the core retains the archived membership of a resident root.
+    const resident = this.live.has(sessionId) || this.loaded.has(sessionId)
+    if (!this.states.has(sessionId)) return { outcome: 'missing', resident }
     this.states.delete(sessionId)
     this.deleteLog.push(sessionId)
     if (this.crashAfterDeleteCount !== null && this.deleteLog.length >= this.crashAfterDeleteCount) {
@@ -169,7 +178,7 @@ class FakeHost implements ArchiveCleanupHost {
     if (this.liveAddOnDeleteOf !== undefined && this.liveAddOnDelete !== undefined && sessionId === this.liveAddOnDeleteOf) {
       this.live.add(this.liveAddOnDelete)
     }
-    return 'deleted'
+    return { outcome: 'deleted', resident }
   }
 
   async removeArchivedSessionIds(ids: readonly string[]): Promise<void> {
@@ -287,7 +296,7 @@ test('purge: loaded-only subtrees are skipped by default and deleted under force
   assert.deepEqual(host.archived, new Set(['s2', 's3']))
 
   // The default run left s2 archived; force (caller already cancelled the
-  // run) deletes it — the running subtree s3 is STILL refused.
+  // run) deletes its CONTENT — the running subtree s3 is STILL refused.
   const forced = await core.purge(['s2', 's3'], true)
   assert.equal(forced.deletedSessions, 1) // s2
   assert.equal(forced.forcedLoaded, 1)
@@ -295,7 +304,85 @@ test('purge: loaded-only subtrees are skipped by default and deleted under force
   assert.equal(host.states.has('s2'), false)
   assert.equal(host.states.has('s3'), true)
   assert.equal(host.states.has('b1'), true)
-  assert.deepEqual(host.archived, new Set(['s3']))
+  // RESIDENT RETENTION (design 24 §4 step 9, 2026-13): s2 is still attached
+  // to this process, so its membership — the ONLY thing hiding its row from
+  // the live-preferred session list — is KEPT instead of un-hiding a session
+  // the user just deleted.
+  assert.deepEqual(forced.residentRetainedRoots, ['s2'])
+  assert.deepEqual(host.archived, new Set(['s2', 's3']))
+  assert.equal(host.removedFromArchived.includes('s2'), false)
+})
+
+test('purge: a resident root whose content is already gone stays archived and silent on the rerun', async () => {
+  const host = buildHost()
+  host.loaded.add('s2')
+  const core = new ArchiveCleanupCore(host)
+
+  const first = await core.purge(['s2'], true)
+  assert.equal(first.deletedSessions, 1)
+  assert.equal(first.forcedLoaded, 1)
+  assert.deepEqual(first.residentRetainedRoots, ['s2'])
+
+  // Second run: the content is gone. The id is now a LIVE RECORD-LESS archived
+  // member — the plan has no tree for it and the orphan sweep deliberately
+  // never touches a live member (fail-closed: "absent from the bulk corpus" is
+  // not proof of absent content), so nothing is deleted, nothing is reported
+  // and the membership stays (hidden) until the instance restarts.
+  const again = await core.purge(['s2'], true)
+  assert.equal(again.deletedSessions, 0)
+  assert.equal(again.forcedLoaded, 0)
+  assert.deepEqual(again.errors, [])
+  assert.equal(again.residentRetainedRoots, undefined)
+  assert.equal(host.archived.has('s2'), true)
+  assert.equal(host.removedFromArchived.includes('s2'), false)
+  assert.equal(host.states.has('s2'), false)
+})
+
+test('purge: a tree retained for residency keeps its covered archived descendants too (no partial membership)', async () => {
+  const host = buildHost()
+  // s1's subagent descendant a1 is itself an archived member (design 24 §4
+  // step 9 N1 case) and the root is resident.
+  host.archived.add('a1')
+  host.loaded.add('s1')
+  const core = new ArchiveCleanupCore(host)
+
+  const result = await core.purge(['s1'], true)
+  assert.equal(result.deletedSessions, 1)
+  assert.equal(result.deletedSubagents, 2) // a1 + a1a
+  assert.deepEqual(result.residentRetainedRoots, ['s1'])
+  // The retained tree contributes NOTHING to the batched membership removal:
+  // neither the root nor its covered archived descendant is cleared.
+  assert.equal(host.removedFromArchived.includes('s1'), false)
+  assert.equal(host.removedFromArchived.includes('a1'), false)
+  assert.equal(host.archived.has('s1'), true)
+  assert.equal(host.archived.has('a1'), true)
+})
+
+test('purge: a root that becomes resident AFTER the tree recheck is still retained (mid-run attach race)', async () => {
+  const host = buildHost()
+  // Plan-time snapshot says s2 is clear; another client attaches it while the
+  // run is deleting, so the binding reports `resident` at the deletion
+  // instant. Clearing the membership there would re-surface the row.
+  host.attachOnDeleteOf = 's2'
+  const core = new ArchiveCleanupCore(host)
+
+  const result = await core.purge(['s2'], true)
+  assert.equal(result.deletedSessions, 1)
+  assert.equal(host.loaded.has('s2'), true, 'the attach hook fired at deletion time')
+  assert.deepEqual(result.residentRetainedRoots, ['s2'])
+  assert.equal(host.archived.has('s2'), true)
+  assert.equal(host.removedFromArchived.includes('s2'), false)
+  // Force accounting follows the retained root: its content WAS removed while
+  // it was live/attached.
+  assert.equal(result.forcedLoaded, 1)
+})
+
+test('purge: a NON-resident tree is still cleared normally (retention is residency-only)', async () => {
+  const host = buildHost()
+  const core = new ArchiveCleanupCore(host)
+  const result = await core.purge()
+  assert.equal(result.residentRetainedRoots, undefined)
+  assert.deepEqual(host.removedFromArchived, ['s1', 's2', 's-orphan'])
 })
 
 test('purge: a running member is refused with force too (delete-time guard)', async () => {

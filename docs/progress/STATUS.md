@@ -162,6 +162,12 @@
   且内容未删，切换会话/稍后重试即成功（保护输入是**活** `current`，不做记忆）；
   运行中子代理后代所在归档树一次删除收敛；运行期满 3s 仍未 settle 的树如实报
   `skippedRunning`。
+  **常驻保留链（2026-13 修正后的回归门，待跑）**：归档一个**本进程打开过**的
+  会话 → 管理器删除（内容真的消失、结果行给出常驻保留文案）→ 侧栏**不得**再
+  出现该普通行、管理器仍列出并带「内容已删除，待实例重启收敛」标注 → 重启该
+  实例的 dsh → 行彻底消失、再跑一次 purge 干净（成员 tombstone 由孤儿清扫
+  收敛）；反向判据：从未打开过的归档会话删除后照旧立即从两处消失，不得出现
+  多余标注。
   **登记残余**：事件发射为文档化 no-op 直至上游 wire，域随上游 `sessions.delete`
   wire 落地后退休（上游未落地）；维护阶段（compaction/schedule）对外报 `idle`，
   force 可能删到正在追加的档（「读私有 phase 字段」为否决方案；缓解已加强：
@@ -172,6 +178,15 @@
   枚举面，已核对；design 24 §13⑭）。
   可选增强（未排期）：PluginDialog 三态行、rowError 本地化、已归档浏览区
   （todo 12 A）、`preview` 暴露孤儿计数。
+  **2026-13 收尾登记的既有缺陷（非本轮引入，未修，待裁决）**：run 级
+  `archive-set` 提示（如孤儿清扫的可信度跳过、清扫预算截断）与 per-item failure
+  共用 `errors` 通道，而 `shared/archive-purge.ts` 对任何 `errors.length > 0`
+  一律输出 `kind:'error'` ⇒ **删除成功的 run 也会出现红字错误行**（可复现：删空
+  实例后重跑，G1a「空语料不可信」跳过清扫）。证据：`core.ts` 的
+  `recordError('', 'archive-set', …)` 调用点 + G1a/G1b 用例 +
+  `test/retention-properties.test.ts` I5 对 `archive-set` 的显式过滤（随机腿里
+  必然撞到）；修法未决（note/error 分通道加字段 vs 客户端按
+  `sessionId === '' && code === 'archive-set'` 归类为 info 行）。
   **清理残留（同上验收；design 24 §13 口径，待裁决两条）**：① 单删成功后
   `storages/session_projcache/sessions/<id>.json` 仍留一份 4 KB 缓存档（该档 `title`
   已清、聚合缓存已移除）——主题档是否随清理回收未决（缓存，非权威面）：purge 只处理
@@ -179,7 +194,7 @@
   （`packages/dsh-chamber-seed-archive-cleanup/src/binding.ts:483-488` 定位、`:524-567`
   读取目录 + 白名单删除），实测该包 `src/` 对 `projcache` **零命中**，上游该域
   （`packages/session/session-projection-cache`）也没有随会话内容删除回收单档的入口。
-  ② **会话迁移在飞时 purge 可能留一代窗口（内容面，尚未登记的窗口）**：迁移不是新建
+  ② **会话迁移在飞时 purge 可能留一代窗口（内容面）**：迁移不是新建
   目录，而是在**同一会话目录内**由并发 write-open 发布后继代际
   （上游 `session-persistence-jsonl/src/index.ts:363-377` 的 claimWrite→lease→
   `publishStoredMigration`，落地点 `generation.ts:829` 的 `link(staged, currentPath)`）；
@@ -187,8 +202,10 @@
   枚举之后落地，则本次删除不覆盖它，随后的 `rmdir` 以 ENOTEMPTY 失败并被**吞掉**
   （`:556-566` 的 try/catch）却仍 `return 'deleted'`（`:567`）——归档成员关系被清除、内容
   仍可读，且成员集不再含它 ⇒ 后续 purge 不再收敛。与 §13⑨（租约面，已登记）、
-  §13⑬（force 删除后残档）同族但**是内容面**；判据 = 迁移进行中执行 purge。是否加
-  守卫（写租约删除时机 / 二次枚举 / rmdir 失败不改判）待裁决。
+  §13⑬（force 删除后残档）同族但**是内容面**；判据 = 迁移进行中执行 purge。
+  **可见症状已被 2026-13 常驻保留覆盖**：迁移在飞意味着有并发 write-open（该会话
+  必然 attached）⇒ 本次 run 判常驻 ⇒ 成员关系保留、行不回流；**磁盘泄漏本身
+  仍未裁决**（是否加守卫：写租约删除时机 / 二次枚举 / rmdir 失败不改判）。
 - **会话列表标签（客户端修复；前任记录愈合域已撤回）**：标签链为官方
   `title → basename(cwd) → 会话 id`（侧边栏单点 resolver），「未命名会话」只剩
   归档管理器 durable 名列与行不在投影时的通知回落两处；`+` 复用 workspace 既有空白

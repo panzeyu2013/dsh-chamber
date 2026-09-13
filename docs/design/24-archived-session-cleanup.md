@@ -1,6 +1,6 @@
 # 24 · 已归档会话内容清理（server 行 hover 动作 · 第三个 chamber 宿主域）
 
-> **状态：现行（archiveCleanup 宿主域 + 归档管理器 + purge 后会话列表收敛，2026-12）**——本文是
+> **状态：现行（archiveCleanup 宿主域 + 归档管理器 + purge 后会话列表收敛 + 常驻保留，2026-13）**——本文是
 > dsh-chamber「删除已归档会话内容」宿主域（wire `archiveCleanup/{probe,preview,purge}`）、
 > 归档管理器交互与 purge 后会话列表收敛的权威契约；未完成门禁见 docs/progress/STATUS.md。
 >
@@ -111,7 +111,10 @@ archiveCleanup/purge({})          → domain { ok, value: {
                                        deletedSubagents: number
                                        skippedRunning: number
                                        skippedLoaded: number   // 仅因已加载被跳过、本次未删（仍留在归档集合）
-                                       forcedLoaded: number    // 因 force 授权而「带着已加载成员」被删掉的根数
+                                       forcedLoaded: number    // 因 force 授权而「带着已加载成员」删掉**内容**的根数
+                                       residentRetainedRoots?: string[] // 2026-13 常驻保留修正：内容已删除（或本就
+                                                                 // missing）、但因会话仍常驻本进程而**保留归档成员关系**的
+                                                                 // 树根 id；仅 >0 时出现（客户端据此给管理器行加标注）
                                        skippedProtected: number // 子树闭包含 protectSessionIds（调用方正在查看的
                                                                  // 会话）而整棵跳过的根数；protect 优先于 force
                                        errors: { sessionId, code, message }[]
@@ -162,8 +165,27 @@ archiveCleanup/purge({sessionIds?, force?, protectSessionIds?}) → 同上
   菜单、且不再弹确认——见 design 05 §2.2 / 06 §7）；
   force 的改动全部落在**删除侧**，并且是「**先停止、再删除**」——不放松任何
   安全守卫的判据。结果口径按 `skippedRunning`（真 running）/`skippedLoaded`
-  （已加载未运行）/`forcedLoaded`（本次强制删除的树根）拆分，`PreviewResult`
-  同步带 `skippedLoaded`。
+  （已加载未运行）/`forcedLoaded`（本次真的删掉了内容的强制删除树根）拆分，
+  `PreviewResult` 同步带 `skippedLoaded`。
+- **常驻保留（2026-13 修正，用户报告「删完反而被重新加载回 workspace」）**：
+  会话内容删除后**只有归档集合成员关系在遮住它**，而官方会话列表是 live 优先的
+  （`sessionQuery.listSessions()` = 持久化重扫 ∪ `ctx.sessions.list()`，见 §10⑤）
+  ——本进程仍持有该会话时，行会继续被供出；此时清成员关系 = 把用户刚删掉的会话
+  以普通行重新推回侧栏（F2 权威探针也会列出它，幽灵行抑制按 §12 主动放行）。
+  因此：**删除瞬间仍常驻本进程（liveness `loaded`，或根自己在删除瞬间被 binding
+  报告 resident）的树，其归档成员关系一律保留**，整棵树（含被覆盖的 archived
+  后代）不进 `clearIds`，id 列进 `residentRetainedRoots`。判据两个来源，任一成立
+  即保留：(a) 树级 liveness 重读（force 路径的常见情形）；(b) binding 的
+  `deleteSessionContent` 返回的**删除瞬间**常驻位（覆盖「plan 时 clear、删除前被
+  别的客户端打开」的竞态）。方向单一且 fail-closed：保留只可能让行继续隐藏，
+  绝不可能让行浮出。**幂等**：重跑对已无内容的常驻成员报 `missing`，此时它已是
+  「无记录的常驻成员」——plan 无树、孤儿清扫按 fail-closed 不碰 live 成员，成员
+  关系继续保留（不可见、无用户影响）。收敛时机**分两类**（2026-13 review 的随机
+  property 检查确认）：被覆盖、但**从未 attached** 的后代在**下一次 run** 就会被
+  孤儿清扫（G3 `stat` 证明无内容）摘掉；**仍常驻的成员自身**在进程存活期间被
+  live 排除挡在清扫之外，只在**实例重启后**的某次 run 收敛。宿主侧新增记账只有
+  `residentRetainedRoots`
+  （id 标识符，非内容投影），`forcedLoaded` 收紧为「本次真的删掉内容」的根数。
 - `preview` 是**执行时快照**：只回计数（归档管理器列表来自会话快照投影，
   不调用 preview）；`purge` 开头重新读取权威状态，**不信任** preview 结果，
   两者之间状态可变化（UI 文案避免「恰好 N 个」暗示）。
@@ -236,7 +258,12 @@ vendor 源码）+ 薄 Remote 门面（`index.ts`），编排逻辑：
    调用方显式 `force` 放行（§3/§5）。运行位的事实来源见 §10。
    **运行是唯一硬底线**：`force` 也**不**放过 running（活跃 writer 会在删除后
    经 `open(path,"a")` 重建无头残档）——客户端因此在删除前先 `session/cancel`
-   停回合（§5），归档动作本身也停一次（见下条）；
+   停回合（§5），归档动作本身也停一次（见下条）。**live facts 读取面 fail-loud
+   （2026-13 review）**：agents 条目/状态、以及 live store（`ctx.sessions.list()`）
+   的**数组形状与条目 id** 任一漂移都拒绝整次读取（`registry-unreadable`，一个
+   字节都不删），与 `listSessionStates` 的「did not answer an array」同政策——
+   静默丢弃一个条目会同时把 loaded 守卫与常驻保留判据推向**不安全方向**
+   （fixture 见 binding 测试）；
 3b. **保护（2026-09 保护修正，先于 3 分类）**：候选根的**子树闭包**与运行期
    `protectSessionIds` 相交 → **整棵跳过**并计 `skippedProtected`（优先于
    running/loaded/force，见 §3 语义）。`core.resolvePlan` 先算闭包、再判保护、
@@ -298,7 +325,9 @@ vendor 源码）+ 薄 Remote 门面（`index.ts`），编排逻辑：
    （同树剩余成员的中止语义见下）；每会话删除瞬间经 binding 删除时 live 守卫
    复检（非 running 才删；`force` 只放行 loaded）——逐成员 O(1) running 预检
    是死代码（整树级 live recheck 已证非 running），**binding 删除时的 live
-   守卫是唯一 mid-window 门**并承载中止语义；幂等（内容已不在 = `missing`
+   守卫是唯一 mid-window 门**并承载中止语义；同一次读取同时产出**删除瞬间的
+   常驻位**（`SessionContentDeletion.resident`，2026-13），供步骤 9 的保留判据
+   使用；幂等（内容已不在 = `missing`
    跳过；不在 archived 集合 = 不枚举）；崩溃窗口收敛 = 遗留会话仍属 archived，
    下次 purge 续跑清掉。
    **运行窗口 —— 成员失败中止整树**：整棵跳过保证截至每成员的删除瞬间——成员
@@ -315,14 +344,21 @@ vendor 源码）+ 薄 Remote 门面（`index.ts`），编排逻辑：
    archivedSessionIds: filtered})`**，且必须**在官方 `enqueueOperation` 链内**
    （与 create/delete/insertBefore 串行，防与两阶段删除交错抹掉 marker），
    官方持久化路径、进程内（todo 12 方案 B 的进程外覆盖风险不适用）；seam 带
-   `typeof setState === 'function'` 运行时守卫并 pin 版本。**无「内容删除后保留
-   marker」策略**：完成树根、完成树覆盖的已归档后代、孤儿在同一批官方
-   setState 写中清除（clearIds 去重；core.ts `purge()` + binding
-   `removeArchivedSessionIds`，测试固化）。红线段「no unarchive」的读法 = chamber 域只在其内容删除完成后
+   `typeof setState === 'function'` 运行时守卫并 pin 版本。**收尾批量写
+   （2026-13 常驻保留修正后）**：完成树根、完成树覆盖的已归档后代、孤儿在同一批
+   官方 setState 写中清除（clearIds 去重；core.ts `purge()` + binding
+   `removeArchivedSessionIds`，测试固化）——**唯一的例外是常驻保留树**（§3
+   「常驻保留」）：该树根与它覆盖的 archived 后代**不进 clearIds**，成员关系
+   原样保留，id 列进 `residentRetainedRoots`。理由：归档集合在 vendor 的定义即
+   **隐藏集**（`dsh-workspace` `archivedSessionIds`: "sessions hidden from every
+   grouping surface"），而官方会话列表 live 优先——本进程仍持有该会话时，清掉
+   成员关系就是把刚删掉的会话以**普通行**推回侧栏（2026-13 用户报告），所以
+   「内容已删」不再构成「必须摘标记」的充分条件，「会话是否仍常驻本进程」才是
+   判据。该例外不改变红线段「no unarchive」的读法：本域只在其内容删除完成后
    清除**该已删内容自身**的集合成员，不提供任何恢复/浏览/反向操作；A-区
    （todo 12 方案 A，已归档浏览）若实现，其数据面即当前 archived 集合（仅含
-   未清理与运行中留存项）。上游 unarchive/delete wire 落地后本域退役并按官方
-   语义收敛（§11）。
+   未清理、运行中留存与常驻保留项）。上游 unarchive/delete wire 落地后本域退役
+   并按官方语义收敛（§11）。
 10. **跨进程租约**：删除租约即放弃 jsonl 的跨进程互斥（vendor lease 明确
     警告 forfeits exclusion），故本域契约要求调用方「**先停运行再清理**」；
     第二个 dsh 进程同根写入不在本域可观测范围内（§13⑨）。
@@ -370,6 +406,19 @@ vendor 源码）+ 薄 Remote 门面（`index.ts`），编排逻辑：
 - **双层域载体 + fail-loud 解码**：载体缺失/非对象、`ok` 非布尔、
   `ok:true` 无对象 `value` 一律 loud throw，不静默折算 0/空结果；404 判别体
   改**有界读取**（`decodeDomainResult` + `readNotFoundBody`）；
+- **常驻保留字段的解码与文案（2026-13）**：`purgeArchivedSessions` 额外解
+  `residentRetainedRoots`（`optionalIdList`：缺键/非数组 → 缺席；条目只收非空
+  字符串、**去重**（列表同时喂"计数"与"标注集合"），**绝不伪造 id**——它只驱动
+  行标注，计数仍是权威结果）；note 装配
+  （`archivePurgeNote`）在该字段非空时输出 `archive.purge.note.residentRetained`
+  （「其中 {count} 项内容已删除，但会话仍在本实例内存中——继续保持隐藏，重启该
+  实例后彻底消失」），**该文案取代**旧的 `archive.purge.note.forcedLoaded`
+  （「强制删除」读起来像"列表里也没了"，正是这次误解的来源）；旧宿主不发该字段
+  时（版本歪斜）回退旧键，不静默。**为什么由宿主回传 id、而不是客户端自己算**
+  （2026-13 review 记录，防止后人"化简"掉这个字段）：客户端能拿到的近似式是
+  「本次提交的根 ∩ run 后仍在归档集合」——但**中止/被保护/运行中跳过的树同样
+  留在集合里**，按那条近似式会被错误地标成"内容已删除"。只有宿主知道哪棵树是
+  **完成**的，所以 id 列表必须来自宿主；
 - **超时文案**（诚实，zh 硬编码先例）：「清理超时——可能仍在进行，请稍后
   重新预览/重试（重复执行是安全的）」；预览超时给「预览超时，请重试」；
   504/网络中断同样走诚实文案；
@@ -618,6 +667,20 @@ vendor 源码）+ 薄 Remote 门面（`index.ts`），编排逻辑：
   降级说明）的如实呈现。**错误绝不静默**；
   **成功无系统级横幅**（与「归档」动作一致——动作对象不可见），成功/空态为
   中性 `cleanupNote` 样式。
+- **常驻保留行的标注（2026-13）**：run 返回的 `residentRetainedRoots` 存进对话框
+  本地状态（`residentPurged`，在对话框生命周期内**取并集**——后一次不报告不代表
+  前一次删的内容回来了），命中行在标题后渲染 `archive.manager.residentPurged`
+  （「内容已删除，待实例重启收敛」，`role` 中性、非控件、非错误）：这类行**必然
+  继续列在这里**（宿主保留了成员关系，官方列表也还供着这一行），标注是"删掉了、
+  等重启"，而不是让用户怀疑删除失败。标注随行集合被动 prune（实例重启后行消失
+  ⇒ 标注一起消失）；标注不进任何持久层、不改选中/计数/删除语义。
+  **a11y（2026-13 review 补）**：标签是独立 `span`，只在浏览模式被读到——聚焦
+  复选框时读屏只会听到标题，因此命中的行把状态并入复选框可访问名
+  （`archive.manager.rowAriaResidentPurged`，`rowAriaLabel()` 单点生成），
+  读屏用户不会把"这行还在"误读成"没删掉"。**布局（同轮）**：列表行是 nowrap
+  flex 线，标签必须**先让位**——`.archiveManagerRowTag` 带 `max-width: 45%` +
+  ellipsis + `title` 全文，避免窄卡上把会话名挤没（§13⑰ 的窄卡残余因此不再被
+  新元素放大）；
 - **勾选清理的判据（2026-09 review）**：只有本次 run **真的移除了内容**
   （`purgeRemovedContent`：删除的会话/子代理或清扫的孤儿成员 > 0）才清空勾选。
   纯跳过/纯保护的 run 一行未动，清空勾选会把"切换会话后重试"变成"重新勾选再
@@ -632,7 +695,8 @@ vendor 源码）+ 薄 Remote 门面（`index.ts`），编排逻辑：
   注意 `verify:i18n` 只校验顶层双语文档对，与此无关）：
   `action.purgeArchived`、管理器按键（`archive.manager.*`：选择/组选
   `groupSelectAria`、`selectAllAria`、确认 `confirmDelete`/`confirmSingle`/
-  计数键、`degraded`、`listUnavailable`、`loading`）、复用既有
+  计数键、`degraded`、`listUnavailable`、`loading`、常驻保留标注
+  `residentPurged`）、复用既有
   `workspace.expand/collapse`、`list.ungrouped`、`rowCount`；行内错误/信息
   （domainMissing / 超时 / 空态 / 部分失败 / 跳过 / force 回退说明）按 §5 定稿走
   zh 硬编码，不进 locale。`archive.manager.deleteAll`/`confirmAll` 不存在
@@ -751,6 +815,12 @@ design 18 §3.4（域枚举文字，随常量同 commit）、designs 09/13/16/17
   `gateway/arguments-invalid` 整体拒绝——客户端**不做任何形状回退**（回退要么
   失去 protect 保护、要么失去 force 能力，两者都是本轮要消灭的降级），
   按错误行原样呈现并提示重启该实例的 dsh（宿主包随应用 seed，重启即同版）；
+  **结果字段方向的歪斜（2026-13）**：旧客户端 + 新宿主安全（`residentRetainedRoots`
+  是可选加字段，旧客户端忽略之，行照样保持隐藏、也不产生 shrink/墓碑）；
+  **新客户端 + 未重启的旧宿主会复现本修正前的症状**（旧宿主仍摘标记 ⇒ 已加载
+  会话的行回流，客户端按 §5 回退旧文案、F2 探针按 §12 主动放行）——这正是
+  「重启该实例」口径要覆盖的窗口，**不做客户端兜底修补**（sticky 抑制会引入
+  新的死端与客户端持久状态，见 §5/§13⑭ 的同类取舍）；
 - 无已归档内容：preview 空计数 → 空态提示，不进入确认（empty 与全被跳过
   子句的优先级见 §6）；
 - **无挂载基线的来源**：`archiveSetKnown:false` / 快照未落地的降级窗口内
@@ -771,7 +841,11 @@ design 18 §3.4（域枚举文字，随常量同 commit）、designs 09/13/16/17
   孤儿 id / 级联枚举 / 运行子树跳过 / **children-first 顺序与崩溃乱序收敛** /
   幂等重跑 / 逐项错误隔离 / 账目自愈 / archived 成员最后移除 / 每会话复检 /
   子集过滤（covered 祖先同选、archived subagent 行独选、重复 id、畸形过滤
-  零读取）/ 树中止与 rerun 收敛 / 孤儿清扫（两次批量枚举都缺但官方单 id 读
+  零读取）/ 树中止与 rerun 收敛 / **常驻保留（2026-13）**：loaded 树 force 删除
+  后成员关系保留 + `residentRetainedRoots` 如实上报、保留树覆盖的 archived 后代
+  一并保留（无部分成员）、重跑对已无内容的常驻成员保留且不误报 `forcedLoaded`、
+  **plan 时 clear、删除瞬间被 attach 的竞态仍保留**、非常驻树照旧摘除 / 孤儿清扫
+  （两次批量枚举都缺但官方单 id 读
   证明有内容 ⇒ 不清、空语料与塌缩语料门、确认读列出即不清、并发 purge 不
   重复清、probe 失败/缺失/非布尔一律 fail-closed、并集枚举保住仅 persistence
   可见的记录、预算截断注记）；
@@ -781,11 +855,22 @@ design 18 §3.4（域枚举文字，随常量同 commit）、designs 09/13/16/17
 - binding：真 binding/RunGate 单测（无装饰器直测）——`assertHeaderShape`
   通过/全缺/缺存储三态、`locate` 接收者调用（this 敏感 fake，见 §10）、
   `stat` 语义 fail-closed、running/loaded/force 三态 + status 漂移拒绝 +
-  facts 拆分、`stat`/`locate` 面缺失三态；**protect 全套**（受保护根/受保护
+  facts 拆分、`stat`/`locate` 面缺失三态、**删除瞬间常驻位报告**（idle agent /
+  attached session / 无 live facts 三态 + **真 binding×真 core 的端到端保留**
+  ——成员关系一笔不写）、**live facts 漂移 fail-loud**（`sessions.list()` 非数组 /
+  条目无字符串 id / agent 状态未知一律 `registry-unreadable`，2026-13 review）；
+  **protect 全套**（受保护根/受保护
   subagent 后代各整棵跳过、优先于 running/loaded/force 的分类、未知 id 无操作、
   受保护孤儿不清扫不摘集合、畸形与超限在权威读取前拒绝、空集合逐字节等价、
   plan 出错时删除循环前的二次保护复查不产生前缀删除、binding 删除原语
   `protected` 拒绝）；
+- `retention-properties.test.ts`（2026-13 收尾补，确定性生成：固定种子 xorshift32
+  × 2,000 轮）：在 fixture 之上覆盖**组合空间**，断言五条不变量——I1 任何"删除
+  瞬间仍常驻"的根绝不离集合（用户要求本体）、I2 上报的保留集不 phantom、I3
+  `forcedLoaded` 只计真的删了内容的保留根、I4 force 从不跳过 loaded 树、I5 重跑
+  不删内容/不报 item 失败/**绝不摘 live 成员**/只摘无记录成员；失败消息带迭代号
+  与全量状态快照，且种子固定 ⇒ 不引入 flake（同轮随机 harness 曾抓出"非 live
+  leftover 会在下一次 run 收敛"这一文档错误，已回写 §4 step 9）；
 - 探针契约：期望集**部分派生 fixture**（2-of-3、空缓存、全量三态）、
   accept 语义、dist-sync / cross-package-contract 锁步——先红后绿；
 - 接线面：host-graph-seed / cordis-inserts / desktop plugin-sync /
@@ -796,9 +881,16 @@ design 18 §3.4（域枚举文字，随常量同 commit）、designs 09/13/16/17
   404/503/超时分类、畸形双层载体 fail-loud、有界 404 判别体、wrapper 层错误
   类映射、**唯一 wire 形状**（`{sessionIds, force:true, protectSessionIds}` 恒发、
   无重试腿）、旧宿主 args 拒绝原样上抛、`session/cancel` 请求形状、
-  `stopArchivedSubtree` 的 advisory 语义；
+  `stopArchivedSubtree` 的 advisory 语义、**`residentRetainedRoots` 解码**
+  （正常列表 / 缺席 / 非数组 / 空数组 / 混入非字符串条目一律不伪造 id / **重复 id
+  收敛**）；
 - 客户端编排纯函数：`archive-purge.test.ts`（**未知 viewed 仍照删**（死端回归）、
-  已知 viewed 进 protect、lineage 读失败只跳过停止、note 键集与顺序、空态不静默）；
+  已知 viewed 进 protect、lineage 读失败只跳过停止、note 键集与顺序、空态不静默、
+  **常驻保留行文案**与**旧宿主（无该字段）回退旧键**）；
+- 常驻保留接线（2026-13 review 补）：`resident-retention-wiring.test.ts` 以源码文本
+  契约钉住对话框 glue（结果字段 → 并集标签集 → 随行 prune → 标签渲染 + 复选框
+  可访问名 + 标签 CSS 让位规则 + 双字典键存在），与 `producer-purged-wiring` 同
+  政策（守接线不守语义；渲染面仍归打包版目检）；
 - 停止回合：`stopSessionsForPurge` 的**闭包全员 cancel**（含维护相位覆盖）、
   观察到的 running 才计数、失败对 running∪listed 上报（cold 吞掉）、有界并发的
   **输入序记账**、`requireCompleteExcludeChain` 整趟闸、排除 viewed、
@@ -822,6 +914,10 @@ design 18 §3.4（域枚举文字，随常量同 commit）、designs 09/13/16/17
   `build:renderer` / `build:host-archive-cleanup`；
 - 实机 E2E（vendor 树就绪 + 打包态，§13）：本地实例归档若干会话（含 subagent）
   → hover 动作 → 管理器列示/勾选 → 确认 → 磁盘/registry/事件验证 → 再跑幂等；
+  **常驻保留链（2026-13 用户报告回归）**：归档一个**本进程打开过**的会话 →
+  管理器删除（内容真的消失）→ 侧栏**不得**出现普通行、管理器仍列出该行并带
+  「内容已删除，待实例重启收敛」标注 → 重启该实例的 dsh → 行彻底消失、再跑
+  一次 purge 干净；
   gateway 形态（桌面同步 → managed dsh 重启 → 同链）；远程 dsh（ssh）同链；
   并发（两 ctx 同时 purge → busy）；超时续跑；
 - 如实报告纪律：vendor 子模块缺失时哪些腿无法执行（build:renderer / 打包
@@ -966,6 +1062,10 @@ workspace follow `{type:'archived'}` 立即到达客户端（`api/workspace-cont
   删除成功**的树与无记录孤儿（集合写失败时 id 留在集合 ⇒ 永不布防），因此
   「离开归档集合 ⇔ 内容已不存在」。首次观测永不布防（新 boot 的 summaries
   本就干净）。过滤在签名计算**之前**完成；无过滤时返回同一数组引用。
+  **与常驻保留的关系（2026-13）**：常驻保留的根**从不离开集合** ⇒ 对它们
+  根本不发生收缩、不布防墓碑、也就没有"probe 放行"这一步——它们的行由归档
+  过滤（`sessionVisible` / 官方导航同款）继续遮住，这正是本修正要的结果；
+  F1/F2 仍然覆盖非常驻的幽灵行（清标记 + 官方 summaries 滞留）。
 - **F2 校验式收敛链**（`shared/purged-convergence.ts`）：收缩与桥请求
   都触发链——**方法调用**官方 `ctx.sessions.refresh()`，随后按
   `ctx.sessions.list.byId` 校验墓碑 id 是否已消失：
@@ -1079,6 +1179,10 @@ workspace follow `{type:'archived'}` 立即到达客户端（`api/workspace-cont
     (b) 宿主按 `protectSessionIds` 整棵跳过**正在查看**的会话所在树（2026-09
     保护修正：判定已下沉到宿主，覆盖全量语料）; (c) 已归档会话没有任何 UI 路径
     开始新回合。**running 不能裸删**的理由同此机制（`force` 也不放过 running）;
+    (d) **常驻保留（2026-13）**：这类树的成员关系不再被摘掉，所以即便残档被重建、
+    甚至迁移竞态把整份内容写回（§4 step 10 / STATUS 清理残留②），行也仍然被
+    归档集合遮住——本修正顺带封住了那条内容面残留的**可见症状**（磁盘泄漏本身
+    仍需单独裁决）；
 14. **保护的边界（两条同族残余）**：保护输入是本页各来源壳上报的**活**
     `current`，因此
     (a) **多客户端**——另一个窗口/另一个客户端正在查看的会话不在保护集内，删除
@@ -1115,3 +1219,28 @@ workspace follow `{type:'archived'}` 立即到达客户端（`api/workspace-cont
 19. **可选增强（未排期）**：PluginDialog 归档清理三态行（§7 F）、rowError 本地化
     （§5）；若上游 Modal 获得层级（stack/优先级/Escape 仲裁），确认弹层可迁官方
     `RiskConfirmation`。
+20. **常驻保留的四条残余（2026-13；均为"不可见、自愈、不影响正确性"）**：
+    (a) **无内容的归档 tombstone**——保留的成员不再有会话记录，需要孤儿清扫
+    （F4/G3 `stat` 证明无内容）才会摘除；**时点分两类**：被覆盖但从未 attached 的
+    后代在下一次 run 即可收敛，仍常驻的成员自身要等实例重启后（live 成员永不被
+    清扫）。在此之前它一直
+    留在集合里但**不可见**（管理器列"行 ∩ 集合"，行已随重启消失）——代价是集合
+    体积与一次额外的清扫候选，无用户影响；**重跑的文案面（2026-13 review 登记，
+    待目检）**：对这些已无内容的常驻成员，宿主既无树可删（plan 无记录）又按 live
+    排除清扫，run 会落到空态文案（`archive.manager.empty`）而**不报错**——行与
+    标注保持原样（幂等），但"没有可删除的已归档会话"与列表里仍有的行一起出现，
+    需打包版目检确认读起来不困惑；
+    (b) **管理器标注只在对话框生命周期内**——`residentPurged` 是对话框本地状态
+    （不持久化，遵守"客户端不新增持久状态"的纪律）：关闭再打开对话框后，那行
+    仍在列表里但没有标注（内容确已删除，只是少了说明）；若需要跨开关持久，须
+    另行设计（可能方向：宿主把"内容已清理"做成可读事实，那属于本域"无读取面"
+    边界之外的动议，需重新走 §2 例外评审）；
+    (c) **多客户端各自为政（仅标注面）**——保留发生在宿主、对所有客户端一致（这
+    正是选宿主方案的理由），但**标注**只出现在执行删除的那个客户端；另一个窗口
+    里那行同样保持隐藏，只是没有"待重启"说明；
+    (d) **`residentRetainedRoots` 无独立 cap（2026-13 收尾决定：不加）**——
+    上界由请求自身给出：数组只装**本次候选根**（⊆ 归档集合 ∩ 调用方 `sessionIds`），
+    即响应规模与调用方已提交的选择同量级；病态上界 = 手写 wire 的全集 force purge
+    × 数万同时常驻会话（≈ 每 id 47 B，65,536 时 ≈3 MB），而 UI 路径永不带全集
+    （§6 无「删除全部」）。加 cap 需要**额外的诚实计数键**（静默截断会让文案与
+    标注数量对不上），收益只在上述病态场景 ⇒ 记录为已接受的边界，不引入新字段。

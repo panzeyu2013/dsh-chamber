@@ -188,7 +188,22 @@ export function archivePurgeNote(run: ArchivePurgeFlowResult): PurgeNote {
       params: { count: result.clearedOrphanMembers ?? 0 },
     })
   }
-  if (result.forcedLoaded > 0) {
+  if (result.residentRetainedRoots !== undefined && result.residentRetainedRoots.length > 0) {
+    // RESIDENT RETENTION (design 24 §4 step 9, 2026-13): the host deleted this
+    // content but KEPT the archived membership, because the session still lives
+    // in the instance process (its row would otherwise come straight back into
+    // the workspace through the live-preferred session list). Say exactly that
+    // instead of the old "force-deleted" wording, which implied the session was
+    // gone from the list too.
+    lines.push({
+      key: 'archive.purge.note.residentRetained',
+      params: { count: result.residentRetainedRoots.length },
+    })
+  } else if (result.forcedLoaded > 0) {
+    // Version skew (new client, host without the resident-retention report):
+    // the historical wording is the honest best available — the content WAS
+    // force-deleted; that host simply does not tell us which roots stayed
+    // archived.
     lines.push({ key: 'archive.purge.note.forcedLoaded', params: { count: result.forcedLoaded } })
   }
   if (result.skippedRunning > 0) {

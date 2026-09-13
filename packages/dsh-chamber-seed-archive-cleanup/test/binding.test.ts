@@ -145,7 +145,10 @@ test('binding: deleteSessionContent refuses running (always) and loaded (unless 
     return error instanceof ArchiveCleanupError && error.code === 'loaded'
   })
   // …and only force reaches the artifact leg (missing here: no such path).
-  assert.equal(await host.deleteSessionContent('idle-1', '/work', true), 'missing')
+  // The report also carries the RESIDENCY at that instant (design 24 §4
+  // step 9): idle-1 is live in this process, so the core keeps its archived
+  // membership instead of un-hiding a row the host still serves.
+  assert.deepEqual(await host.deleteSessionContent('idle-1', '/work', true), { outcome: 'missing', resident: true })
   // Live-store membership without an agent is also `loaded`.
   const attached = makeHostBinding({
     sessions: { list: () => [{ id: 'attached-1' }] },
@@ -154,6 +157,9 @@ test('binding: deleteSessionContent refuses running (always) and loaded (unless 
   await assert.rejects(() => attached.deleteSessionContent('attached-1', '/work'), (error: unknown) => {
     return error instanceof ArchiveCleanupError && error.code === 'loaded'
   })
+  // Live-store membership ALONE is residency too: a forced delete reports it,
+  // which is what keeps the row of an attached-but-agentless session hidden.
+  assert.deepEqual(await attached.deleteSessionContent('attached-1', '/work', true), { outcome: 'missing', resident: true })
   // No header/artifact → idempotent missing (no list service mounted → the
   // cwd-less fallback must fail registry-unreadable instead of guessing).
   await assert.rejects(() => host.deleteSessionContent('unknown-1'), (error: unknown) => {
@@ -180,7 +186,7 @@ test('binding: deleteSessionContent refuses a PROTECTED id before any live/liven
     })
     assert.equal(existsSync(join(dir, 'session.jsonl')), true, 'the guard runs before any filesystem mutation')
     // A protected id outside the set is unaffected (the set only ever narrows).
-    assert.equal(await host.deleteSessionContent('other-1', dir, true, protectedIds), 'missing')
+    assert.deepEqual(await host.deleteSessionContent('other-1', dir, true, protectedIds), { outcome: 'missing', resident: false })
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -192,6 +198,27 @@ test('binding: a drifted agent status fails the live read loudly', async () => {
     sessionPersistence: { locate: () => undefined },
   })
   await assert.rejects(() => host.listLiveSessionFacts(), (error: unknown) => {
+    return error instanceof ArchiveCleanupError && error.code === 'registry-unreadable'
+  })
+})
+
+test('binding: a drifted live-store shape fails the live read loudly (fail-closed residency/guard)', async () => {
+  // sessions.list() is the LIVE LEG of the official corpus AND the source of
+  // the residency report: an entry this read silently dropped would stop
+  // counting as loaded AND let the core un-hide a session the host still
+  // serves (2026-13 review). Every drifted shape refuses instead.
+  const notAnArray = makeHostBinding({ sessions: { list: () => ({ not: 'an array' }) } } as never)
+  await assert.rejects(() => notAnArray.listLiveSessionFacts(), (error: unknown) => {
+    return error instanceof ArchiveCleanupError && error.code === 'registry-unreadable'
+      && /did not answer an array/.test(error.message)
+  })
+  const noId = makeHostBinding({ sessions: { list: () => [{ id: 'ok-1' }, {}] } } as never)
+  await assert.rejects(() => noId.listLiveSessionFacts(), (error: unknown) => {
+    return error instanceof ArchiveCleanupError && error.code === 'registry-unreadable'
+      && /live-store session entry/.test(error.message)
+  })
+  const numericId = makeHostBinding({ sessions: { list: () => [{ id: 42 }] } } as never)
+  await assert.rejects(() => numericId.listLiveSessionFacts(), (error: unknown) => {
     return error instanceof ArchiveCleanupError && error.code === 'registry-unreadable'
   })
 })
@@ -226,7 +253,9 @@ test('binding: content removal removes the official artifact and reclaims an emp
     }
     const host = makeHostBinding({ sessionPersistence: { locate } })
     const outcome = await host.deleteSessionContent('s1', join(dir, 'proj'))
-    assert.equal(outcome, 'deleted')
+    // No live facts in this ctx: the report is the non-resident deletion the
+    // core is allowed to clear from the archived set.
+    assert.deepEqual(outcome, { outcome: 'deleted', resident: false })
     assert.equal(existsSync(artifact), false, 'current generation removed')
     assert.equal(existsSync(olderGeneration), false, 'older generation removed too (no content left behind)')
     assert.equal(existsSync(lease), false, 'write lease removed')
@@ -272,7 +301,7 @@ test('binding: content removal removes the official artifact and reclaims an emp
     const tempHost = makeHostBinding({
       sessionPersistence: { locate: h => ({ kind: 'jsonl', path: join(dir, 'proj4', h.id, 'session.v3.jsonl') }) },
     })
-    assert.equal(await tempHost.deleteSessionContent('s5', join(dir, 'proj4')), 'deleted')
+    assert.equal((await tempHost.deleteSessionContent('s5', join(dir, 'proj4'))).outcome, 'deleted')
     assert.equal(existsSync(tempy), false, 'generation + leftover temp removed, dir reclaimed')
 
     // A leftover MIGRATION staging file (an interrupted vN->vM migration) is
@@ -287,7 +316,7 @@ test('binding: content removal removes the official artifact and reclaims an emp
     const migratedHost = makeHostBinding({
       sessionPersistence: { locate: h => ({ kind: 'jsonl', path: join(dir, 'proj5', h.id, 'session.v3.jsonl') }) },
     })
-    assert.equal(await migratedHost.deleteSessionContent('s6', join(dir, 'proj5')), 'deleted')
+    assert.equal((await migratedHost.deleteSessionContent('s6', join(dir, 'proj5'))).outcome, 'deleted')
     assert.equal(existsSync(migrated), false, 'generations + migration staging files removed, dir reclaimed')
 
     // The staging name is matched exactly: a 12-hex (publish-token) length or
@@ -312,7 +341,7 @@ test('binding: content removal removes the official artifact and reclaims an emp
     const legacyHost = makeHostBinding({
       sessionPersistence: { locate: h => ({ kind: 'jsonl', path: join(dir, 'proj3', h.id, 'session.jsonl.zstd') }) },
     })
-    assert.equal(await legacyHost.deleteSessionContent('s4', join(dir, 'proj3')), 'deleted')
+    assert.equal((await legacyHost.deleteSessionContent('s4', join(dir, 'proj3'))).outcome, 'deleted')
     assert.equal(existsSync(legacy), false, 'legacy generation dir reclaimed')
   } finally {
     rmSync(dir, { recursive: true, force: true })
@@ -353,7 +382,7 @@ test('binding: the purge refuses symlink/subdirectory entries and accepts every 
       writeFileSync(join(okDir, name), '{}')
     }
     const okHost = makeHostBinding({ sessionPersistence: { locate: locateFor('ok') } })
-    assert.equal(await okHost.deleteSessionContent('s3', join(dir, 'ok')), 'deleted')
+    assert.equal((await okHost.deleteSessionContent('s3', join(dir, 'ok'))).outcome, 'deleted')
     assert.equal(existsSync(okDir), false, 'all canonical generations removed, dir reclaimed')
 
     const zeroDir = join(dir, 'zero', 's4')
@@ -396,7 +425,7 @@ test('binding: the purge refuses symlink/subdirectory entries and accepts every 
         // only member and the purge reclaims the directory.
         assert.equal(readdirSync(nearDir).length, 1, 'the two spellings collapse onto one entry')
         const nearHost = makeHostBinding({ sessionPersistence: { locate: locateFor(project) } })
-        assert.equal(await nearHost.deleteSessionContent('s9', join(dir, project)), 'deleted')
+        assert.equal((await nearHost.deleteSessionContent('s9', join(dir, project))).outcome, 'deleted')
         assert.equal(existsSync(nearDir), false, 'uppercase spelling does not block the purge; dir reclaimed')
         continue
       }
@@ -413,7 +442,7 @@ test('binding: the purge refuses symlink/subdirectory entries and accepts every 
     mkdirSync(maxDir, { recursive: true })
     writeFileSync(join(maxDir, 'session.v9007199254740991.jsonl'), '{}')
     const maxHost = makeHostBinding({ sessionPersistence: { locate: locateFor('max') } })
-    assert.equal(await maxHost.deleteSessionContent('s6', join(dir, 'max')), 'deleted')
+    assert.equal((await maxHost.deleteSessionContent('s6', join(dir, 'max'))).outcome, 'deleted')
     assert.equal(existsSync(maxDir), false, 'a safe-integer version is canonical and purges')
   } finally {
     rmSync(dir, { recursive: true, force: true })
@@ -446,7 +475,8 @@ test('binding regression: locate runs AS a method on the persistence service (th
     }
     const host = makeHostBinding({ sessionPersistence: persistence } as never)
     const outcome = await host.deleteSessionContent('s9', dir)
-    assert.equal(outcome, 'deleted')
+    assert.equal(outcome.outcome, 'deleted')
+    assert.equal(outcome.resident, false)
     assert.equal(existsSync(artifact), false)
     assert.equal(existsSync(sessionDir), false, 'empty session dir reclaimed')
   } finally {
@@ -628,6 +658,47 @@ test('binding sweep: a purge clears registry-global record-less members in ONE c
     assert.equal(again.deletedSessions, 0)
     assert.equal(again.clearedOrphanMembers, undefined)
     assert.equal(registry.setStateCalls.length, 1)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('binding retention (design 24 §4 step 9): a session this process still serves keeps its archived membership after its content is deleted', async () => {
+  // End-to-end over the REAL binding + REAL core: the archived member has
+  // content and is ATTACHED to this process (live store). Deleting its content
+  // must NOT clear its membership — the live-preferred session list keeps
+  // serving the row, and the archived set is the only thing hiding it
+  // (2026-13 user report: the row came back into the workspace).
+  const dir = mkdtempSync(join(tmpdir(), 'archive-cleanup-resident-'))
+  try {
+    const projectDir = join(dir, 'proj')
+    const sessionDir = join(projectDir, 'resident-1')
+    mkdirSync(sessionDir, { recursive: true })
+    const artifact = join(sessionDir, 'session.jsonl')
+    writeFileSync(artifact, '{}')
+    const registry: RegistryFake = {
+      archived: ['resident-1'], workspaces: [{ id: 'w1' }], setStateCalls: [], chainCalls: 0,
+    }
+    const host = makeHostBinding(makeCtx({
+      sessions: { list: () => [{ id: 'resident-1' }] },
+      sessionQuery: {
+        listSessions: async () => [{ header: header('resident-1', { cwd: projectDir }) }],
+      },
+      sessionPersistence: {
+        list: async () => [],
+        locate: (h: { id: string; cwd?: string }) => ({ kind: 'jsonl', path: join(h.cwd ?? '', h.id, 'session.jsonl') }),
+        stat: async (id: string) => (existsSync(join(projectDir, id, 'session.jsonl')) ? { header: header(id) } : undefined),
+      },
+    } as never, registry))
+    const result = await new ArchiveCleanupCore(host).purge(undefined, true)
+    assert.equal(result.errors.length, 0)
+    assert.equal(result.deletedSessions, 1, 'the content WAS deleted')
+    assert.equal(existsSync(artifact), false)
+    assert.deepEqual(result.residentRetainedRoots, ['resident-1'])
+    assert.equal(result.forcedLoaded, 1)
+    assert.equal(registry.setStateCalls.length, 0, 'no membership write at all for the retained tree')
+    assert.equal(registry.chainCalls, 0)
+    assert.deepEqual(registry.archived, ['resident-1'], 'the row stays hidden until the instance restarts')
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

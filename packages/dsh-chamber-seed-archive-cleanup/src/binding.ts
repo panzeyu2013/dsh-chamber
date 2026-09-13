@@ -20,7 +20,13 @@
  *    dirs/artifacts fail closed (review Minor m2);
  *  - per-delete live guard refuses sessions that turned running (contract);
  *    a merely LOADED (idle) session is refused with code `loaded` unless the
- *    caller authorized `force` (2026-09 revision, design 24 §3);
+ *    caller authorized `force` (2026-09 revision, design 24 §3) — and every
+ *    deletion reports the session's residency at that instant
+ *    (`SessionContentDeletion.resident`, 2026-13 revision) so the core can
+ *    retain the archived membership of a session this process still serves;
+ *    the facts read refuses loudly on ANY drifted shape (agent entry, agent
+ *    status, live-store array/entry) because a silently dropped entry would
+ *    fail OPEN in both the guard and that residency report;
  *  - COMPLETENESS UNION (2026-12 blocker fix): neither official enumeration is
  *    authoritative alone — `SessionCorpus.listSessions` answers LIVE-ONLY with
  *    no error when its optional persistence binding is absent (vendor
@@ -43,6 +49,7 @@ import {
   ArchiveCleanupError,
   type ArchiveCleanupHost,
   type ArchivedSessionState,
+  type SessionContentDeletion,
 } from './core.ts'
 
 /** One purge/preview in flight (host single-flight, design 24 §3). */
@@ -248,7 +255,17 @@ export function assertHostSurface(ctx: HostCtxServices): void {
  *  (2026-09 revision): `running` = the agent is executing a turn (never
  *  deletable); `loaded` = attached but idle (deletable only under `force`).
  *  A drifted agent status fails the read loudly instead of silently
- *  reclassifying a running agent as idle. */
+ *  reclassifying a running agent as idle.
+ *
+ *  FAIL-CLOSED DRIFT POLICY (2026-13 review, extended to the live-store leg):
+ *  the same argument applies to `sessions.list()` — it is the LIVE LEG of the
+ *  official session corpus (`SessionCorpus.listSessions` merges it with the
+ *  durable scan), so an entry this read silently DROPS would (a) stop counting
+ *  as `loaded` and (b) — since the residency report below is read from this
+ *  very set — let the core clear the archived membership of a session the host
+ *  still serves, i.e. un-hide a just-deleted row. A drifted shape therefore
+ *  refuses the whole read (`registry-unreadable`, nothing deleted) exactly like
+ *  a drifted agent entry, instead of degrading in the unsafe direction. */
 function liveSessionFacts(ctx: HostCtxServices): { running: Set<string>; loaded: Set<string> } {
   const running = new Set<string>()
   const loaded = new Set<string>()
@@ -273,10 +290,21 @@ function liveSessionFacts(ctx: HostCtxServices): { running: Set<string>; loaded:
   // A session attached to the live store is never a deletion candidate by
   // default (it may be open/current even without a running agent); an
   // explicit force purge may delete it after the caller stopped the run.
-  for (const session of ctx.sessions?.list?.() ?? []) {
-    if (session !== null && typeof session === 'object' && typeof (session as { id?: unknown }).id === 'string') {
-      loaded.add(String((session as { id: string }).id))
+  const sessions = ctx.sessions?.list?.()
+  if (sessions !== undefined && !Array.isArray(sessions)) {
+    throw new ArchiveCleanupError(
+      'registry-unreadable',
+      'archiveCleanup: sessions.list() did not answer an array — refusing the read (a drifted live-store shape would hide attached sessions from the loaded guard)',
+    )
+  }
+  for (const session of sessions ?? []) {
+    if (session === null || typeof session !== 'object' || typeof (session as { id?: unknown }).id !== 'string') {
+      throw new ArchiveCleanupError(
+        'registry-unreadable',
+        'archiveCleanup: a live-store session entry has no string id — refusing the read (pinned-vendor drift)',
+      )
     }
+    loaded.add(String((session as { id: string }).id))
   }
   return { running, loaded }
 }
@@ -436,7 +464,7 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
       cwd?: string,
       force = false,
       protectedIds?: ReadonlySet<string>,
-    ) {
+    ): Promise<SessionContentDeletion> {
       try {
         // INVARIANT GUARD (2026-09 protection amendment): the core's plan
         // already skips every tree whose closure contains a protected id, so
@@ -458,6 +486,14 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
         // flip is refused HERE as an item `running` error that aborts the
         // remaining members of that tree (review F1).
         const facts = liveSessionFacts(ctx)
+        // RESIDENCY AT THE DELETION INSTANT (2026-13 resident-retention
+        // revision, design 24 §4 step 9). Read from the SAME facts the guards
+        // above use: a session the process still holds (attached store or live
+        // agent) keeps being served by the live-preferred session list after
+        // its files are gone, so the core must retain its archived membership
+        // instead of un-hiding it. Fail-closed direction: this is the union of
+        // running ∪ loaded, and running never reaches a return.
+        const resident = facts.loaded.has(sessionId)
         if (facts.running.has(sessionId)) {
           throw new ArchiveCleanupError('running', `archiveCleanup: ${sessionId} is running`)
         }
@@ -486,7 +522,7 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
           const headers = await listHeaders()
           header = headers.find(candidate => candidate.id === sessionId)
         }
-        if (header === undefined) return 'missing'
+        if (header === undefined) return { outcome: 'missing', resident }
         // CRITICAL: call locate AS A METHOD on the service object. The
         // official SessionPersistence implementations are instance-state
         // classes (`locate` reads this.root / this.compression, format.ts
@@ -499,7 +535,7 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
         const artifactPath = location?.path
         if (typeof artifactPath !== 'string' || artifactPath === '') {
           // A backend with no per-session artifact owns nothing removable.
-          return 'missing'
+          return { outcome: 'missing', resident }
         }
         const dir = dirname(artifactPath)
         // A session dir that is already gone is the idempotent 'missing'
@@ -509,7 +545,7 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
           if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
           throw error
         })
-        if (dirStat === undefined) return 'missing'
+        if (dirStat === undefined) return { outcome: 'missing', resident }
         // Fail closed on symlinked session dirs/artifacts (security review
         // m2): the artifact path is resolved by the OFFICIAL backend under a
         // root owned by the instance user; a symlink component would make a
@@ -556,7 +592,7 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
             `archiveCleanup: refusing to purge ${sessionId}: unrecognized entry ${entry.name} in the session directory (pinned-vendor layout drift — a partial purge would leave content behind)`,
           )
         }
-        if (removable.length === 0) return 'missing'
+        if (removable.length === 0) return { outcome: 'missing', resident }
         for (const path of removable) {
           try {
             await rm(path, { force: false })
@@ -580,7 +616,7 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
             // session no longer lists.
           }
         }
-        return 'deleted'
+        return { outcome: 'deleted', resident }
       } catch (error) {
         // Item isolation (security review Major-2): real filesystem/storage
         // failures must surface as item code `storage` so the core keeps

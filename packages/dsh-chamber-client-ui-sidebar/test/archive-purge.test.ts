@@ -240,6 +240,46 @@ test('archivePurgeNote: a protection-only run is never silent (the actionable fa
   assert.equal(note.kind, 'info')
 })
 
+test('archivePurgeNote: a resident-retained run says the content is gone but the session still lives in the instance (design 24 §4 step 9)', () => {
+  // 2026-13: the host kept these roots archived because the instance process
+  // still serves them — the rows stay hidden in the workspace and stay listed
+  // (labeled) in the manager until that instance restarts. The note must say
+  // exactly that, NOT the old "force-deleted" wording, which read as if the
+  // session had left the list too.
+  const run = {
+    roots: ['a', 'b'],
+    stop: stopResult(),
+    purge: purgeResult({
+      deletedSessions: 2,
+      forcedLoaded: 2,
+      residentRetainedRoots: ['a', 'b'],
+    }),
+  }
+  const note = archivePurgeNote(run)
+  assert.deepEqual(keysOf(note.lines), [
+    'archive.purge.note.deleted',
+    'archive.purge.note.residentRetained',
+  ])
+  const byKey = new Map(note.lines.map(line => [line.key, line.params]))
+  assert.deepEqual(byKey.get('archive.purge.note.residentRetained'), { count: 2 })
+  assert.equal(note.kind, 'info')
+  // The managed rows themselves are labeled from the result's id list, not
+  // from the note — pin the list the dialog reads.
+  assert.deepEqual(run.purge.residentRetainedRoots, ['a', 'b'])
+})
+
+test('archivePurgeNote: an older host without the retention report keeps the historical force wording (version skew)', () => {
+  const note = archivePurgeNote({
+    roots: ['a'],
+    stop: stopResult(),
+    purge: purgeResult({ deletedSessions: 1, forcedLoaded: 1 }),
+  })
+  assert.deepEqual(keysOf(note.lines), [
+    'archive.purge.note.deleted',
+    'archive.purge.note.forcedLoaded',
+  ])
+})
+
 test('purgeRemovedContent: only a run that actually removed something asks the dialog to drop the selection', () => {
   const base = { roots: ['a'], stop: stopResult() }
   assert.equal(purgeRemovedContent({ ...base, purge: purgeResult({ deletedSessions: 1 }) }), true)
