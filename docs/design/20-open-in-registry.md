@@ -168,9 +168,15 @@ fork & supersede 让前两条彻底消失（不再需要动 spawn 环境、不�
   只是把 base path 钉在 `local` 上——因此**插件侧不再持有 connection 载波**：
   `inject` 从 `['slots','locale','connection']` 收敛为 `['slots','locale']`（该插件现在只消费
   自己 ctx 上的事实）；
-- 载荷/响应形状校验在 `src/client/local-catalog.ts` 逐项执行：域载体必须是
-  `{ok:true,value}|{ok:false,error:{code,message}}`，`apps` 必须是字符串数组（坏条目/重复只丢
-  自己，不抹掉合法 sibling），任何形状不明的回答一律 fail-closed；本地实例未就绪时调用失败
+- 载荷/响应形状校验在 `src/client/local-catalog.ts` 逐项执行，且**两层信封都在该模块内解开**
+  （2026-09-13 修正）：`callUnary` 回答的是**传输层**结果，宿主域载体嵌在它的 `value` 里
+  （与 `archiveCleanup` 的 `decodeDomainResult`、git 客户端同一约定），所以先读
+  `{ok:true,value}` / `{ok:false,error}` 的传输结果，再读`value`里的域载体
+  `{ok:true,value}|{ok:false,error:{code,message}}`——只解一层的实现会在生产里恒得空目录
+  （单测喂的是域载体本身，因此当时全绿），页级读取锁步由
+  `packages/renderer/test/page-read-path-lockstep.test.ts` 用**真实实例客户端**兜住。域载体里的
+  `apps` 必须是字符串数组（坏条目/重复只丢自己，不抹掉合法 sibling），任何形状不明的回答
+  一律 fail-closed；本地实例未就绪时调用失败
   ⇒ 目录为空、按钮诚实隐藏（fail-closed），不阻塞 main 池，也不阻塞任何 boot；
 - 图标缓存与预取归**页级** `src/client/machine-catalog.ts` 所有（成功与失败都缓存：缺失的
   图标不会被每次渲染重复请求；跨来源只取一次，不再按来源各存一份）；`icon()` 回答的
@@ -448,8 +454,9 @@ chevron，不因只有一个 app 少画 chevron）。
 | 跨包 wire 契约 | `test/open-in-wire-lockstep.test.ts`（客户端包） | 命名空间、四个方法名与其全限定常量、`@Remote` 面、错误码集合、图标媒体类型 —— 全部读 seed 源码文本 |
 | 标签覆盖 | `test/open-in-labels.test.ts`（客户端包） | fork 的 `catalog.ts` 每个 id 都有 zh+en 标签，且标签表无多余行 |
 | 菜单归属守卫 | `test/instance-view-guard.test.ts`（客户端包） | `menuOwnerAllowsInteraction` 的 fail-closed 真值表（断连 / 隐藏 class / `hidden` / `aria-hidden` / 不可见任一不满足即关闭）；纯函数，不依赖浏览器 DOM |
-| 机器池 wire 纪律 | `test/local-catalog.test.ts`（客户端包） | 参数名（`app`/`path`）、载体解析、fail-closed、`data:` URL 允许表、拉起错误映射 |
+| 机器池 wire 纪律 | `test/local-catalog.test.ts`（客户端包） | 参数名（`app`/`path`）、**两层信封**（传输结果 → 域载体）、fail-closed、`data:` URL 允许表、拉起错误映射 |
 | 机器目录缓存 | `test/machine-catalog.test.ts`（客户端包） | boot 一次探测 + 每 id 恰好一次图标（刷新不重取）、串行批次（在途批次期间发现的 id 不丢）、单飞只包 id 读取且并发 caller 共享、通知顺序、失败 fail-closed |
+| 页级读取锁步 | `test/page-read-path-lockstep.test.ts`（renderer） | **真实实例客户端**（`getInstanceClient('local').callUnary` + 真实 URL/信封/rpcId，fetch 打桩喂宿主字节）经 `createMachineCatalog` 得到目录与真图标；并锁住 `shell.ts` 仍按此接线（注释剥离后的源码文本） |
 | 适配器行为 | `test/source-adapter.test.ts` | 机器池 × main 池合并、**远程来源用机器图标**、per-entry 通道路由、无机器目录时诚实降级、订阅释放 |
 | 页级注入契约 | `test/shell.test.ts`（renderer） | 两个 entry 拿到**同一个** `chamberMachineCatalog` 实例（页级事实，非 per-entry 副本） |
 | 记忆 | `test/choice-store.test.ts` | per-source 键、来源隔离、旧全页键只读迁移、畸形 id 不写键 |
