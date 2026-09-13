@@ -1,7 +1,7 @@
 {
   "name": "@dsh-chamber/dsh-chamber-client-ui-layout",
   "description": "Chamber-owned fork of the official @deepseek-ai/dsh-client-ui-layout shell plugin (design 06): replaces the layout STORE so the sidebar width preference is shared across every N-ctx shell boot and persisted across restarts, and owns the document-level theme projection (one page-wide ThemePresenter behind the active-view-gated document-theme.ts, §4.6). The frame itself (AppFrame, service, theme presenter, columns) is imported from the vendor source via deep subpaths — the fork never re-implements the shell.",
-  "version": "0.3.0-beta.2",
+  "version": "0.3.0-beta.3",
   "private": true,
   "type": "module",
   "main": "lib/index.js",
