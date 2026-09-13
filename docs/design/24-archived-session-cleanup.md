@@ -177,7 +177,8 @@ archiveCleanup/purge({sessionIds?, force?, protectSessionIds?}) → 同上
   后代）不进 `clearIds`，id 列进 `residentRetainedRoots`。判据两个来源，任一成立
   即保留：(a) 树级 liveness 重读（force 路径的常见情形）；(b) binding 的
   `deleteSessionContent` 返回的**删除瞬间**常驻位（覆盖「plan 时 clear、删除前被
-  别的客户端打开」的竞态）。方向单一且 fail-closed：保留只可能让行继续隐藏，
+  别的客户端打开」的竞态；**根或任一成员**的报告都成立——只看根会漏掉「后代在树级
+  重读之后才 attach」的同型竞态，2026-13 自查）。方向单一且 fail-closed：保留只可能让行继续隐藏，
   绝不可能让行浮出。**幂等**：重跑对已无内容的常驻成员报 `missing`，此时它已是
   「无记录的常驻成员」——plan 无树、孤儿清扫按 fail-closed 不碰 live 成员，成员
   关系继续保留（不可见、无用户影响）。收敛时机**分两类**（2026-13 review 的随机

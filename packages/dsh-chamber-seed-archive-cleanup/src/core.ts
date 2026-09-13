@@ -1025,11 +1025,20 @@ export class ArchiveCleanupCore {
       // available without a per-member pre-check (review F2).
       let rootResident = false
       let rootDeleted = false
+      // Residency is collected for EVERY member, not just the root (2026-13
+      // review, self-review round): a DESCENDANT attached after the tree-level
+      // recheck reports `resident` at its own deletion instant too, and
+      // ignoring that report completed the tree and cleared the membership of a
+      // subagent the process still serves — the same re-surfacing symptom one
+      // level down. `rootResident` stays separate only for the force
+      // accounting below.
+      let memberResident = false
       for (const sessionId of tree.order) {
         const state = statesBySession.get(sessionId)
         try {
           // Every member except the root is a subagent-origin descendant.
           const deletion = await this.host.deleteSessionContent(sessionId, state?.cwd, force, protectedIds)
+          if (deletion.resident) memberResident = true
           if (sessionId === tree.rootSessionId) {
             rootResident = deletion.resident
             rootDeleted = deletion.outcome === 'deleted'
@@ -1080,16 +1089,20 @@ export class ArchiveCleanupCore {
       // report). Two independent signals, either one suffices:
       //  - the tree-level liveness recheck above found a loaded member (the
       //    force path — the common case); or
-      //  - the ROOT itself reported residency at its own deletion instant (a
-      //    session attached AFTER the tree recheck, e.g. opened by another
-      //    client mid-run — the race the plan-time snapshot cannot see).
+      //  - ANY member (root or descendant) reported residency at its OWN
+      //    deletion instant (a session attached AFTER the tree recheck, e.g.
+      //    opened by another client mid-run — the race the plan-time snapshot
+      //    cannot see). The root is deleted LAST, so its report covers the
+      //    widest window, but a descendant's report is just as real: with
+      //    `force` the delete-time guard lets it through, and dropping that
+      //    report would un-hide a subagent the process still serves.
       // Retaining is fail-closed in the only direction that matters: it keeps
       // a row hidden, never exposes one. The whole tree is retained (including
       // its covered archived descendants) so a retained tree leaves NO partial
       // membership behind; the leftover members carry no content and are
       // converged by a later run's orphan sweep once the instance restarts and
       // the row is gone.
-      const retained = liveness === 'loaded' || rootResident
+      const retained = liveness === 'loaded' || memberResident
       if (retained) {
         residentRetainedRoots.push(tree.rootSessionId)
         // Force accounting (2026-09 revision, tightened 2026-13): count only a

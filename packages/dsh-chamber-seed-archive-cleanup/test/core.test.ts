@@ -377,6 +377,28 @@ test('purge: a root that becomes resident AFTER the tree recheck is still retain
   assert.equal(result.forcedLoaded, 1)
 })
 
+test('purge: a DESCENDANT that becomes resident after the tree recheck also retains the tree', async () => {
+  const host = buildHost()
+  // The ROOT stays non-resident: only a1 (a subagent member) is attached at ITS
+  // own deletion instant, i.e. after the tree-level recheck already ran (force
+  // lets the delete-time guard through). That per-member report is the only
+  // signal this subagent is still being served — reading residency off the root
+  // alone dropped it, completed the tree and cleared the membership, so the
+  // subagent row could re-surface exactly like the user-reported root case
+  // (2026-13 self-review).
+  host.attachOnDeleteOf = 'a1'
+  const core = new ArchiveCleanupCore(host)
+
+  const result = await core.purge(['s1'], true)
+  assert.equal(host.loaded.has('a1'), true, 'the attach hook fired at a1 deletion time')
+  assert.deepEqual(result.residentRetainedRoots, ['s1'], 'the member report retains the whole tree')
+  assert.equal(host.archived.has('s1'), true, 'membership retained — no partial membership for the tree')
+  assert.equal(host.removedFromArchived.includes('s1'), false)
+  // The CONTENT was still deleted, and the counts stay honest.
+  assert.equal(result.deletedSubagents, 2, 'the s1 tree is a1 + a1a')
+  assert.equal(result.deletedSessions, 1)
+})
+
 test('purge: a NON-resident tree is still cleared normally (retention is residency-only)', async () => {
   const host = buildHost()
   const core = new ArchiveCleanupCore(host)

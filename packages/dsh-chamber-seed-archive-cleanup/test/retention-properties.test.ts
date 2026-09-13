@@ -23,7 +23,8 @@
  *  I2 every reported `residentRetainedRoots` entry is archived AND had a
  *     residency signal (no phantom labels);
  *  I3 `forcedLoaded` equals the reported-retained roots whose content THIS run
- *     removed (a root whose content was already gone is retained, not counted);
+ *     removed (a root whose content was already gone is retained, not counted;
+ *     the signal may come from any member of its tree);
  *  I4 a force run never skips a loaded tree;
  *  I5 the rerun deletes no content, reports no item failure, never clears a
  *     LIVE member, and only clears members that have no record at all.
@@ -122,7 +123,11 @@ test(`retention properties: ${ITERATIONS} generated runs keep the retention inva
       else if (roll < 0.65) host.loaded.add(members[0] as string)
     }
     for (const members of perTree) {
-      if (chance(0.15)) host.attachAtDelete.add(members[0] as string)
+      // Attach a RANDOM member at ITS OWN deletion instant, not just the root:
+      // reading residency off the root alone missed a descendant that attached
+      // after the tree-level recheck, and a root-only roll could never catch
+      // that (2026-13 self-review). I1 below is already member-generic.
+      if (chance(0.2)) host.attachAtDelete.add(members[pick(members.length)] as string)
     }
 
     const roots = perTree.map(members => members[0] as string)
@@ -143,11 +148,22 @@ test(`retention properties: ${ITERATIONS} generated runs keep the retention inva
       residentAtDelete: [...host.residentAtDelete],
     })
 
-    // I1 — the requirement: a resident deletion never un-hides its row.
-    for (const [id, resident] of host.residentAtDelete) {
-      if (!resident) continue
-      assert.ok(host.archived.has(id), `I1: resident-deleted ${id} left the archived set — ${context()}`)
-      assert.ok(!host.removed.includes(id), `I1: resident-deleted ${id} was cleared — ${context()}`)
+    // I1 — the requirement: a resident deletion never un-hides a row.
+    // TREE-level, because retention is whole-tree: the residency report of ANY
+    // member (root OR descendant) has to protect every member of that tree that
+    // the archived set was hiding. Stating it per-id instead would (a) claim
+    // something false about descendants that were never archived — they are
+    // hidden by lineage, not by membership — and (b) stay green while a
+    // resident descendant's tree was partially cleared, which is precisely the
+    // hole reading residency off the root alone left (2026-13 self-review).
+    for (const members of perTree) {
+      const treeReportedResidency = members.some(id => host.residentAtDelete.get(id) === true)
+      if (!treeReportedResidency) continue
+      for (const id of members) {
+        if (!archivedBefore.has(id)) continue
+        assert.ok(host.archived.has(id), `I1: ${id} left the archived set although its tree reported residency — ${context()}`)
+        assert.ok(!host.removed.includes(id), `I1: ${id} was cleared although its tree reported residency — ${context()}`)
+      }
     }
     // I2 — reported retention is exact and never phantom.
     for (const id of retained) {
@@ -156,8 +172,13 @@ test(`retention properties: ${ITERATIONS} generated runs keep the retention inva
       assert.ok(host.residentAtDelete.get(id) === true || treeWasLoaded,
         `I2: reported-retained ${id} had no residency signal — ${context()}`)
     }
-    // I3 — honest force accounting.
-    const retainedWithDeletedContent = [...retained].filter(id => host.residentAtDelete.get(id) === true)
+    // I3 — honest force accounting: the field counts retained roots whose content
+    // THIS run actually removed (the tree needed force because a member was
+    // resident at its own deletion instant). It is NOT "roots that were
+    // themselves resident": with whole-tree retention a descendant's report
+    // retains the root too, and that root's content really was force-deleted
+    // (2026-13 self-review).
+    const retainedWithDeletedContent = [...retained].filter(id => host.deleteLog.includes(id))
     assert.equal(result.forcedLoaded, retainedWithDeletedContent.length,
       `I3: forcedLoaded must count only retained roots whose content was removed — ${context()}`)
     // I4 — force never skips a loaded tree.

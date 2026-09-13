@@ -513,10 +513,12 @@ var ArchiveCleanupCore = class {
       let treeAborted = false;
       let rootResident = false;
       let rootDeleted = false;
+      let memberResident = false;
       for (const sessionId of tree.order) {
         const state = statesBySession.get(sessionId);
         try {
           const deletion = await this.host.deleteSessionContent(sessionId, state?.cwd, force, protectedIds);
+          if (deletion.resident) memberResident = true;
           if (sessionId === tree.rootSessionId) {
             rootResident = deletion.resident;
             rootDeleted = deletion.outcome === "deleted";
@@ -542,7 +544,7 @@ var ArchiveCleanupCore = class {
       if (treeAborted) {
         continue;
       }
-      const retained = liveness === "loaded" || rootResident;
+      const retained = liveness === "loaded" || memberResident;
       if (retained) {
         residentRetainedRoots.push(tree.rootSessionId);
         if (rootDeleted) forcedLoaded += 1;
