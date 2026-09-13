@@ -78,13 +78,12 @@ decision value and is not already owned by a design document or `CHANGELOG.md`.
 
 ### Before changing the Swift native shell (`macos/`)
 
-- Assemble the sidecar payload with `pnpm run build:sidecar`, then the app with
-  `pnpm run build:swift-app` (`.app` + dmg/zip; both accept `--dry-run` / `--no-sign` / `--out`).
-  A signed build must pass the assembly's own `codesign --verify --deep --strict`, so the bundle
-  must stay free of symlinks that escape it — the sidecar payload and the bundle copy are both
-  normalized for exactly that reason.
-- `pnpm run test:macos` (darwin lock assertions plus the two packaging-script suites) is the
-  macOS-only leg, run by the ci.yml `test-macos` job and never on the ubuntu leg.
+- Assemble the sidecar payload and the app with `pnpm run build:sidecar` then
+  `pnpm run build:swift-app` (both take `--dry-run` / `--no-sign` / `--out`); the native artifacts
+  ship from the same tag as the Electron ones, so a signed build must pass the assembly's own
+  `codesign --verify --deep --strict` and the bundle must stay free of symlinks that escape it.
+- `pnpm run test:macos` is the macOS-only leg (darwin lock assertions plus the packaging-script
+  suites); it runs in the ci.yml `test-macos` job, never on the ubuntu leg.
 
 ### Before a pull request
 
@@ -113,7 +112,7 @@ surfaces, applicable guidance, validation, or failure/rollback considerations fr
 | `packages/dsh-chamber-seed-*` | Chamber host packages seeded into the managed instance: read-only client boot graph, in-instance Git worktree, archived-session content cleanup, in-instance open-in catalog/icons/launch (designs 09, 08, 24, 20) |
 | `packages/cli` | CLI thin shell (serve/status/connections/host logs) |
 | `packages/gateway` | Separately invoked server shape (design 17): authenticated-by-default public boundary, single local-dsh proxy, host duties, seed registry |
-| `macos/` | Swift native shell (design 25): WKWebView over the control-plane origin plus the packaged Node sidecar assembly, native edges (notifications, deep link, open-in, tray/hide), and the cross-flavor directory lock |
+| `macos/` | Swift native shell (design 25): WKWebView over the control-plane origin, the packaged Node sidecar, native edges (notifications, deep link, open-in, hide/restore), and the shared directory lock |
 
 ## Hard Facts
 
@@ -124,13 +123,9 @@ surfaces, applicable guidance, validation, or failure/rollback considerations fr
 - Do not run git or GitHub commands unless the user explicitly asks.
 - Credentials and connection secrets never enter the renderer, logs or any persistence layer — only
   the documented transient write-only form inputs (design 05 §8, design 17).
-- Both flavors resolve one userData root (`appData + app.getName()`, measured as
-  `~/Library/Application Support/@dsh-chamber/desktop`); `PackagedLayout.userDataDir` and the
-  Electron identity derivation are pinned together by the `chamber-lock.test.ts` lockstep
-  assertion. Design 25 §6.3's `<userData>/.dsh-chamber.lock` carries no secrets and is never an
-  arbitration authority beyond its lock: the Swift shell holds it via `flock(LOCK_EX|LOCK_NB)`, the
-  Electron main via Darwin `O_EXLOCK` (non-darwin returns an explicit unsupported marker), and the
-  sidecar re-verifies by reading the record and never takes a second flock.
+- Both flavors resolve one userData root and share one directory lock; the derivation is pinned by
+  the `chamber-lock.test.ts` lockstep assertion, and design 25 §6.3's `<userData>/.dsh-chamber.lock`
+  carries no secrets and is never an arbitration authority.
 - Package manager is pnpm, and runtime dependencies are not added without an explicit request
   (current set: `ws`, `electron-updater`, React/Vite, Electron, the embedded pinned `pnpm`, the dsh
   client workspace packages; `typescript` / `@types/*` / `node-pty` are devDependencies — `node-pty`
