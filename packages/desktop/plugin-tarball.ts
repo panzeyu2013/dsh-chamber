@@ -38,7 +38,7 @@ import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { gunzipSync, gzip } from 'node:zlib'
 import {
-  isDeniedPluginName,
+  MAX_PLUGIN_SPEC_CHARS,
   PLUGIN_NAME_PATTERN,
 } from './control-plane-module.ts'
 
@@ -194,8 +194,44 @@ function readFolderPackageJson(dirPath: string): { ok: true; text: string } | { 
   return { ok: true, text }
 }
 
-/** Full folder manifest: name (registry whitelist + reserved-domain deny) and
- *  version (the route's x-plugin-version grammar). */
+/**
+ * The picked folder's identity for the protected-set judgement (design 21
+ * §6.11): a local folder pick has no registry spec, so its name (and, when
+ * declared, its version) can only come from its own package.json.
+ *
+ * The VERSION read is intentionally PERMISSIVE (`typeof version === 'string'`)
+ * and does NOT apply the gateway's `x-plugin-version` exact-semver grammar: on
+ * this path the local dsh CLI is the authority for version semantics (design 13
+ * §5), and the ssh materialize path reads the same field permissively. The
+ * strict grammar belongs to the upload routes (buildPluginTarball), where the
+ * gateway binds the version to the archive identity. Applying it here refused
+ * folders the CLI accepts (`1.0`, `v1.0.0`, no version) — a regression fixed by
+ * the 2026-12 review.
+ */
+export function folderPluginIdentity(
+  dirPath: string,
+): { ok: true; name: string; version: string | null } | { ok: false; error: string } {
+  const raw = readFolderPackageJson(dirPath)
+  if (!raw.ok) return { ok: false, error: raw.error }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw.text)
+  } catch {
+    return { ok: false, error: `${dirPath}/package.json is not valid JSON` }
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { ok: false, error: `${dirPath}/package.json is not a JSON object` }
+  }
+  const record = parsed as Record<string, unknown>
+  const name = record.name
+  if (typeof name !== 'string' || name.length > MAX_PLUGIN_SPEC_CHARS || !PLUGIN_NAME_PATTERN.test(name)) {
+    return { ok: false, error: 'package.json name is not a safe registry package name' }
+  }
+  const version = typeof record.version === 'string' && record.version !== '' ? record.version : null
+  return { ok: true, name, version }
+}
+
+/** Full folder manifest: name (registry whitelist + version grammar). */
 function readFolderPluginManifest(dirPath: string): FolderPluginManifest {
   const raw = readFolderPackageJson(dirPath)
   if (!raw.ok) return manifestError(raw.error)
@@ -210,9 +246,6 @@ function readFolderPluginManifest(dirPath: string): FolderPluginManifest {
   if (!PLUGIN_NAME_PATTERN.test(name)) {
     return manifestError('package.json name is not a safe registry package name')
   }
-  if (isDeniedPluginName(name)) {
-    return manifestError('package.json name is in the reserved domain (@deepseek-ai/* and @dsh-chamber/* cannot be installed through the plugin model)')
-  }
   const version = typeof record?.version === 'string' ? record.version : ''
   if (!GATEWAY_PLUGIN_VERSION_PATTERN.test(version)) {
     return manifestError('package.json version is not an exact semver (the gateway x-plugin-version grammar: major.minor.patch[±prerelease/build])')
@@ -223,8 +256,13 @@ function readFolderPluginManifest(dirPath: string): FolderPluginManifest {
 /**
  * Read the `name` field of `<folder>/package.json` (≤ 64 KiB); null when the
  * file is absent/unreadable or the name fails the shared registry-name
- * whitelist. The full (name + version + reserved-domain) form is what
- * buildPluginTarball validates internally.
+ * whitelist. The full (name + version + shape) form is what buildPluginTarball
+ * validates internally; the protected-set judgement is a separate, later step.
+ *
+ * Callers today: the plugin-pick contract tests (this is the narrow NAME-ONLY
+ * read they pin the 64 KiB bound with). The add flows themselves use
+ * {@link folderPluginIdentity} / {@link classifyPluginPick}, which need the
+ * version too — kept because a name-only read is a distinct, tested contract.
  */
 export function pluginNameFromFolder(folderPath: string): string | null {
   const raw = readFolderPackageJson(folderPath)
@@ -514,9 +552,9 @@ function parseTgzManifestText(text: string): TgzPackageManifest | null {
 // `npm pack` / registry download of an already-built plugin — the exact
 // archive shape this module's builder emits and the gateway upload route
 // stages). Structural checks only: extension, archive cap, and a parseable
-// package manifest. Name/version whitelist + reserved-domain enforcement stay
-// in each flow (ssh/gateway validate before the remote install; the LOCAL dsh
-// CLI is the local authority) — the same split the folder flows already use.
+// package manifest. Name/version whitelist + the protected-set judgement stay in
+// each flow (ssh/gateway validate before the remote install; the LOCAL dsh CLI
+// is the local authority) — the same split the folder flows already use.
 // ---------------------------------------------------------------------------
 
 /** Archive filename suffix a pick must carry to be treated as a plugin

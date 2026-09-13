@@ -1771,7 +1771,9 @@ test('parseSpecArg: gateway registry add specs parse to their package names (pla
   assert.deepEqual(parseSpecArg('alpha@^1.2.3'), { name: 'alpha' })
   assert.deepEqual(parseSpecArg('@scope/name@2.0.0-beta.1'), { name: '@scope/name' })
   assert.equal(parseSpecArg('file:/tmp/x.tgz'), null, 'file: specs belong to the materialize channel')
-  assert.equal(parseSpecArg('@dsh-chamber/host-graph@1.0.0'), null, 'reserved chamber domain is refused client-side')
+  // Official/chamber scope is a SHAPE pass on the gateway client path (design
+  // 21 §6.11.5): the server's protected-set judgement decides it.
+  assert.deepEqual(parseSpecArg('@dsh-chamber/host-graph@1.0.0'), { name: '@dsh-chamber/host-graph' })
   assert.equal(parseSpecArg('not a spec'), null)
   assert.equal(parseSpecArg(''), null)
 })
@@ -2541,9 +2543,24 @@ test('gatewayChamberMaterialize: client-side header validation and the archive c
       tarball: FIXTURE_TARBALL, name: 'custom-pkg', version: 'v1.2.3',
     })
     assert.equal(badVersion.ok, false)
-    const badName = await gatewayChamberMaterialize({
+    // A well-formed OFFICIAL-SCOPE name is a shape pass (design 21 §6.11.5):
+    // the gateway's submit path owns the protected-set judgement, so the upload
+    // is allowed to leave the client.
+    const before = received
+    const officialName = await gatewayChamberMaterialize({
       id: 'gw-1', url: `http://127.0.0.1:${server.port}`, headers: {}, spkiPin: null,
       tarball: FIXTURE_TARBALL, name: '@dsh-chamber/taken', version: '1.2.3',
+    })
+    assert.equal(received, before + 1, 'a well-formed official-scope name is not refused client-side')
+    // The fixture answers 202 without an opId, so the provider reports that
+    // honestly — the point here is only that no CLIENT-SIDE refusal happened.
+    if (!officialName.ok) assert.match(officialName.error, /no opId/)
+    // Reset the counter: the tail of this test asserts that every INVALID
+    // submission is refused before any request is made.
+    received = 0
+    const badName = await gatewayChamberMaterialize({
+      id: 'gw-1', url: `http://127.0.0.1:${server.port}`, headers: {}, spkiPin: null,
+      tarball: FIXTURE_TARBALL, name: 'bad name!', version: '1.2.3',
     })
     assert.equal(badName.ok, false)
     const empty = await gatewayChamberMaterialize({

@@ -217,6 +217,22 @@ export interface ThirdPartyLiveState {
  * @returns The chip {labelKey, tone}, or null when no snapshot is available
  *   or the row cannot mount (no entry + not a bundle layer).
  */
+/**
+ * Live-state for one INSTALLED row: protected composition/seed rows are part of
+ * the installation baseline (host-side boot layers), so they are never expected
+ * to be Loader client entries — asking for one would paint a false
+ * "restart to take effect" warning on rows that are already active (2026-12
+ * review; the composition rows became permanently visible with §6.11.5).
+ */
+export function installedRowLiveState(
+  snapshot: Pick<PluginInventorySnapshot, 'entries'> | null,
+  row: { name: string; protected: boolean; role: string },
+  expectsLoaderEntry: boolean,
+): ThirdPartyLiveState | null {
+  if (row.protected || row.role === 'composition' || row.role === 'seed') return null
+  return thirdPartyLiveState(snapshot, row.name, expectsLoaderEntry)
+}
+
 export function thirdPartyLiveState(
   snapshot: Pick<PluginInventorySnapshot, 'entries'> | null,
   packageName: string,

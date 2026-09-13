@@ -7,8 +7,9 @@
  *
  * Submit contract (install/remove/materialize):
  *   ① validate FIRST (whitelist family from the shared control-plane
- *      module + reserved-name deny + per-kind spec family + — for remove —
- *      membership in the CURRENT installed projection), then
+ *      module + the shared protected-set/generation judgement (§6.11; the
+ *      old reserved-name deny is retired) + per-kind spec family + — for
+ *      remove — membership in the CURRENT installed projection), then
  *   ② acquire the managed profile-write lease via the runtime manager; a
  *      refused lease maps to the existing /chamber/runtime 409 family, and
  *   ③ only with the lease held enqueue into the executor (its duplicate/full
@@ -52,15 +53,17 @@ import { isAbsolute, join, relative } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import {
   atomicWritePrivateFileNoFollow,
+  decidePluginMutation,
   ensurePrivateDirectoryNoFollow,
   extractSpecName,
-  isDeniedPluginName,
   MAX_PLUGIN_SPEC_CHARS,
   PLUGIN_NAME_PATTERN,
   PLUGIN_SPEC_PATTERN,
   readPrivateFileNoFollow,
+  registrySpecVersion,
   resolveNodeExecutable,
 } from '@dsh-chamber/control-plane'
+import { deriveBootProtectedSet, gatewayProtectedSet } from './plugins-installed.ts'
 import { resolveDshCliEntry } from './dsh-path.ts'
 import type { SpawnFn } from './plugins-exec.ts'
 import { createPluginsExec, PLUGIN_QUEUE_CAP, type PluginExec } from './plugins-exec.ts'
@@ -89,6 +92,18 @@ export const INSTALL_SPEC_MAX_CHARS = MAX_PLUGIN_SPEC_CHARS
  * ready/degraded edge (mirrors the single-op timeout). */
 export const DRAIN_DEADLINE_MS = 10 * 60 * 1000
 
+/**
+ * Refusals that can never become acceptable by waiting: the drain drops the
+ * intent (and records a failed op) instead of retrying it on every ready edge
+ * forever. Everything else (queue/lease/runtime windows, missing manifest) is
+ * retryable and stays deferred.
+ */
+const PERMANENT_DRAIN_REFUSALS: ReadonlySet<PluginTaskRefusalCode> = new Set([
+  'protected', 'needs-version', 'needs-exact-version', 'generation-mismatch',
+  'runtime-version-unknown', 'invalid-name', 'invalid_name', 'invalid_spec',
+  'not_installed', 'protected-set-unavailable',
+])
+
 /** Durable deferred-install intent (install/materialize only; remove is
  * never deferred). */
 export interface DeferredIntent {
@@ -97,6 +112,10 @@ export interface DeferredIntent {
   kind: 'install' | 'materialize'
   name: string
   spec?: string
+  /** Declared version (see JournalOp.version): dropping it here made a deferred
+   *  official-scope materialize un-drainable — R2 answered `needs-version` on
+   *  every ready edge and the intent stayed forever, silently (2026-12 review). */
+  version?: string
   initiator?: string
 }
 
@@ -112,6 +131,13 @@ export type PluginTaskRefusalCode =
   | 'runtime_pending'
   | 'runtime_recovery_required'
   | 'reserved'
+  | 'invalid-name'
+  | 'protected'
+  | 'needs-version'
+  | 'needs-exact-version'
+  | 'generation-mismatch'
+  | 'protected-set-unavailable'
+  | 'runtime-version-unknown'
   | 'invalid_name'
   | 'invalid_spec'
   | 'not_installed'
@@ -225,20 +251,63 @@ type ValidationOutcome =
   | { kind: 'ok' }
   | { kind: 'defer-profile-absent' }
 
-function validateSubmission(stateDir: string, input: PluginTaskSubmitInput, installed: ChamberInstalled): ValidationOutcome {
+function validateSubmission(input: PluginTaskSubmitInput, deps: ChamberPluginTasksDeps): ValidationOutcome {
   const kind = input.kind
   const name = input.name
   const spec = input.spec
+  const installed = deps.installed
 
   if (typeof name !== 'string' || !PLUGIN_NAME_PATTERN.test(name)) {
     return { kind: 'refuse', code: 'invalid_name', error: 'invalid plugin name' }
   }
-  if (isDeniedPluginName(name)) {
-    return {
-      kind: 'refuse',
-      code: 'reserved',
-      error: 'plugin name is reserved (@deepseek-ai/* and @dsh-chamber/* cannot be installed or removed through the plugin model)',
+
+  /**
+   * Protected-set judgement (design 21 §6.11): the gateway is the AUTHORITY
+   * for a gateway target — the family facts live here (the desktop cannot
+   * derive them), the decision is op-phased (remove never judges a version)
+   * and an official-scope install must pin this instance's exact generation.
+   * The runtime version fact source is the same resolveWorkspace() the
+   * /chamber/runtime/status projection reports (design 18 §9.3).
+   */
+  const decide = (op: 'install' | 'remove', version: string | null): ValidationOutcome | null => {
+    const manager = deps.manager()
+    // Gateway start window (no manager yet) and corrupt runtime metadata (the
+    // resolver throws): there are no family facts to be had. Judge with the
+    // DEGRADED ladder (B₀ ∪ S + official-scope installs refused) instead of
+    // skipping the judgement — a protected name must not sit in the deferred
+    // store until some later edge silently drops it (2026-12 review).
+    // `manager.resolveWorkspace()` throws on corrupt override/pointer metadata
+    // (design 18), and that throw used to escape submit() as a 500.
+    let facts: { path: string; version: string | null } | null = null
+    if (manager !== null) {
+      try {
+        const workspace = manager.resolveWorkspace()
+        facts = { path: workspace.path, version: workspace.version }
+      } catch (error) {
+        deps.logger.warn(`plugins-tasks: runtime facts unavailable (${messageOf(error)}); judging with the conservative ladder`)
+        facts = null
+      }
     }
+    const protectedSet = facts === null ? null : gatewayProtectedSet(facts)
+    // F underivable (missing/unparseable runtime lockfile+tree) ⇒ conservative
+    // ladder, not a blanket refusal: official-scope installs are refused
+    // (stronger than the generation check), B₀ ∪ S still protects, and
+    // third-party ops keep working (design 21 §6.11.3).
+    const decision = decidePluginMutation({
+      op,
+      name,
+      version,
+      runtimeVersion: facts === null ? null : facts.version,
+      derivation: { ok: true as const, set: protectedSet ?? deriveBootProtectedSet() },
+      // The profile-absent defer is decided by the callers' own projection
+      // checks (which also carry the corrupt/absent evidence); this judgement
+      // is about the NAME, so it runs with the profile assumed initialized.
+      profileState: 'ready',
+      familySource: protectedSet === null ? 'unavailable' : 'runtime',
+    })
+    if (decision.kind === 'allow') return null
+    if (decision.kind === 'defer') return { kind: 'defer-profile-absent' }
+    return { kind: 'refuse', code: decision.code, error: decision.error }
   }
 
   if (kind === 'remove') {
@@ -257,6 +326,14 @@ function validateSubmission(stateDir: string, input: PluginTaskSubmitInput, inst
         : 'managed profile is corrupted; cannot verify installed plugins'
       return { kind: 'refuse', code: 'no_manifest', error }
     }
+    // Removal is judged by P alone (never by a version): a protected
+    // composition/seed/family name cannot be removed through the plugin model,
+    // and a mismatched-generation official row can always be removed. This runs
+    // BEFORE the membership check so the refusal is the informative one: "this
+    // name can never be removed through this surface" outranks "it is not
+    // currently installed" (which is mutable profile state).
+    const refused = decide('remove', null)
+    if (refused !== null) return refused
     if (projection.dependencies[name] === undefined) {
       return { kind: 'refuse', code: 'not_installed', error: 'plugin is not installed on the managed profile' }
     }
@@ -280,6 +357,8 @@ function validateSubmission(stateDir: string, input: PluginTaskSubmitInput, inst
     if (extractSpecName(spec) !== name) {
       return { kind: 'refuse', code: 'invalid_spec', error: 'spec must reference the submitted plugin name' }
     }
+    const refused = decide('install', registrySpecVersion(spec))
+    if (refused !== null) return refused
     // The managed profile does not exist yet (fresh gateway, dsh never
     // spawned): the mutation would fail against an absent manifest — defer
     // the intent until a ready edge has created the profile (design 21
@@ -303,11 +382,15 @@ function validateSubmission(stateDir: string, input: PluginTaskSubmitInput, inst
   // Defense in depth: only gateway-staged paths under the third-party root
   // may reach `dsh plugin add file:…` (the route stages under this root with
   // the private-file discipline; submit callers cannot smuggle other paths).
-  const root = thirdPartyRoot(stateDir)
+  const root = thirdPartyRoot(deps.stateDir)
   const check = relative(root, stagedPath)
   if (check === '' || check.startsWith('..') || isAbsolute(check)) {
     return { kind: 'refuse', code: 'invalid_spec', error: 'materialize file: spec must be under the gateway staging root' }
   }
+  // The staged archive's declared version rides the submit input (the route
+  // reads it from x-plugin-version; a `file:` spec carries no version).
+  const refused = decide('install', typeof input.version === 'string' && input.version !== '' ? input.version : null)
+  if (refused !== null) return refused
   const projection = installed.read()
   if (!projection.ok && projection.code === 'profile_absent') return { kind: 'defer-profile-absent' }
   return { kind: 'ok' }
@@ -398,9 +481,28 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
   function appendDeferredIntent(input: PluginTaskSubmitInput): DeferredIntent {
     const intent: DeferredIntent = { id: randomUUID(), ts: Date.now(), kind: input.kind as 'install' | 'materialize', name: input.name }
     if (input.spec !== undefined) intent.spec = input.spec
+    if (input.version !== undefined) intent.version = input.version
     if (input.initiator !== undefined) intent.initiator = input.initiator
     persistIntents([...loadIntents(), intent])
     return intent
+  }
+
+  function recordRefusedIntent(intent: DeferredIntent, refusal: { code: string; error: string }): void {
+    // Best effort: the journal is the operator-visible record (GET
+    // /chamber/plugins/tasks). A journal write failure is logged, never thrown
+    // into the drain loop.
+    try {
+      const opId = journal.appendPending({
+        kind: intent.kind,
+        name: intent.name,
+        ...(intent.spec === undefined ? {} : { spec: intent.spec }),
+        ...(intent.version === undefined ? {} : { version: intent.version }),
+        initiator: 'deferred-drain',
+      })
+      journal.markTerminal(opId, { status: 'failed', error: `deferred ${intent.kind} refused: ${refusal.error} [${refusal.code}]` })
+    } catch (error) {
+      warn(`plugins-tasks: could not record the refused deferred intent ${intent.id}: ${messageOf(error)}`)
+    }
   }
 
   function dropDeferredIntent(intentId: string): boolean {
@@ -507,6 +609,17 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
         const manager = deps.manager()
         return manager === null || !manager.mutationInFlight()
       },
+      // Per-op runtime facts (design 21 §6.11.3/§6.11.4): the same workspace the
+      // ops launch from, so both the execution-time re-judgement and the
+      // post-install verdict describe the tree the mutation actually touched.
+      // A throwing resolver (corrupt metadata) is the CALLER's contract to
+      // guard — plugins-exec catches it and degrades loudly.
+      runtimeFacts: () => {
+        const manager = deps.manager()
+        if (manager === null) return null
+        const workspace = manager.resolveWorkspace()
+        return { path: workspace.path, version: workspace.version }
+      },
       cliLaunch: () => {
         const manager = deps.manager()
         if (manager === null) {
@@ -570,7 +683,7 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
     allowDefer: boolean,
     onTerminal?: (status: 'ok' | 'failed' | 'blocked') => void,
   ): Promise<PluginTaskSubmitResult> {
-    const outcome = validateSubmission(stateDir, input, deps.installed)
+    const outcome = validateSubmission(input, deps)
     if (outcome.kind === 'refuse') {
       return { ok: false, code: outcome.code, error: outcome.error }
     }
@@ -811,7 +924,13 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
               // defer:false — a refused lease leaves the intent for the next
               // ready edge; success (op accepted) clears it.
               const result = await submitImpl(
-                { kind: intent.kind, name: intent.name, spec: intent.spec, initiator: intent.initiator },
+                {
+                  kind: intent.kind,
+                  name: intent.name,
+                  spec: intent.spec,
+                  version: intent.version,
+                  initiator: intent.initiator,
+                },
                 false,
                 onDrainedTerminal,
               )
@@ -820,6 +939,14 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
                 acceptedInRun += 1
               } else if (!result.ok && result.code === 'queue_full') {
                 queueFull = true
+              } else if (!result.ok && PERMANENT_DRAIN_REFUSALS.has(result.code as PluginTaskRefusalCode)) {
+                // A judgement that can never change (protected / needs-version /
+                // generation-mismatch / …) must not be retried forever in
+                // silence: drop the intent AND record the refusal as a failed op
+                // so the tasks projection tells the operator why (2026-12 review).
+                dropDeferredIntent(intent.id)
+                warn(`plugins-tasks: deferred ${intent.kind} ${intent.name} was refused (${result.code}): ${result.error}`)
+                recordRefusedIntent(intent, result)
               } else if (!result.ok && result.code === 'persistence_failed') {
                 // The executor could not journal the op — a gateway write
                 // failure, not a busy window; do not spin on it.

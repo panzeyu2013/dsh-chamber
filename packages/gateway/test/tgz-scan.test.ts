@@ -13,7 +13,37 @@ import {
   TGZ_MAX_ENTRIES,
   TGZ_MAX_UNPACKED_BYTES,
 } from '../src/tgz-scan.ts'
-import { buildTar, buildTgz } from './tgz-fixtures.ts'
+import { buildPluginTgz, buildTar, buildTgz } from './tgz-fixtures.ts'
+
+test('scan: projects the npm-pack manifest identity (bounded) or says why it cannot', async () => {
+  // Present → projected (name + version), with the tar padding stripped.
+  const ok = await scanTgzMetadata(buildPluginTgz({ name: '@scope/pkg', version: '1.2.3' }))
+  assert.equal(ok.ok, true)
+  assert.deepEqual(ok.ok ? ok.manifest : null, { name: '@scope/pkg', version: '1.2.3' })
+  assert.equal(ok.ok ? ok.manifestError : 'n/a', undefined)
+
+  // Absent → the route cannot bind the asserted identity.
+  const missing = await scanTgzMetadata(buildTgz([{ name: 'package/index.js', data: 'x' }]))
+  assert.equal(missing.ok, true)
+  assert.equal(missing.ok ? missing.manifest : null, null)
+  assert.equal(missing.ok ? missing.manifestError : null, 'missing')
+
+  // Malformed / name-less manifest → invalid, never a guess.
+  for (const data of ['{not json', JSON.stringify({ version: '1.0.0' }), JSON.stringify(['name'])]) {
+    const bad = await scanTgzMetadata(buildTgz([{ name: 'package/package.json', data }]))
+    assert.equal(bad.ok, true)
+    assert.equal(bad.ok ? bad.manifest : null, null)
+    assert.equal(bad.ok ? bad.manifestError : null, 'invalid', data)
+  }
+
+  // Oversized declared size → refused WITHOUT buffering it (the capture bound).
+  const huge = await scanTgzMetadata(buildTgz([
+    { name: 'package/package.json', data: `${' '.repeat(70 * 1024)}` },
+  ]))
+  assert.equal(huge.ok, true)
+  assert.equal(huge.ok ? huge.manifest : null, null)
+  assert.equal(huge.ok ? huge.manifestError : null, 'oversized')
+})
 
 test('scan: not gzip (plain bytes / empty buffer) → not_gzip', async () => {
   assert.deepEqual(await scanTgzMetadata(Buffer.from('plain text, not gzip')), { ok: false, error: 'not_gzip' })

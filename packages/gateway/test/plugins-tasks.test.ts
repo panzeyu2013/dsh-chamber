@@ -40,6 +40,8 @@ class FakeManager implements GatewayRuntimeManagerLike {
   refusal: { code: ProfileWriteRefusalCode; error: string } | null = null
   /** Runtime mutation execution window (canRun wiring; false = window open). */
   mutationBusy = false
+  /** Effective runtime version the protected-set generation check consumes. */
+  version: string | null = null
 
   constructor(workspace: string) {
     this.workspace = workspace
@@ -71,7 +73,7 @@ class FakeManager implements GatewayRuntimeManagerLike {
   }
 
   resolveWorkspace() {
-    return { path: this.workspace, version: null as string | null, source: 'builtin' as const }
+    return { path: this.workspace, version: this.version, source: 'builtin' as const }
   }
 }
 
@@ -92,7 +94,19 @@ function makeHarness(t: { after(fn: () => void): void }): TasksHarness {
   const workspace = scratchDir(t, 'plugins-tasks-ws-')
   mkdirSync(join(workspace, 'node_modules', '@deepseek-ai', 'dsh', 'lib'), { recursive: true })
   writeFileSync(join(workspace, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'), '#!/usr/bin/env node\n')
+  // Runtime-line family closure (F): the authoritative lockfile source the
+  // protected-set derivation reads (design 21 §6.11.1). The pinned release
+  // family contains the core names and NOTHING from the opt-in segment.
+  const familyEntries = [
+    '@deepseek-ai/dsh', '@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', '@deepseek-ai/dsh-session',
+    ...Array.from({ length: 200 }, (_, i) => `@deepseek-ai/dsh-filler-${i}`),
+  ]
+  writeFileSync(
+    join(workspace, 'pnpm-lock.yaml'),
+    ['lockfileVersion: \'9.0\'', 'packages:', ...familyEntries.map(entry => `  '${entry}@0.1.5-rc.2':`)].join('\n'),
+  )
   const manager = new FakeManager(workspace)
+  manager.version = '0.1.5-rc.2'
   const managerRef: { current: FakeManager | null } = { current: manager }
   const spawn = makeSpawnHarness()
   const tasks = createChamberPluginTasks({
@@ -136,17 +150,36 @@ function assertRefusal(result: PluginTaskSubmitResult, code: PluginTaskRefusalCo
 // Validation matrix
 // ---------------------------------------------------------------------------
 
-test('validation: denied names refuse with reserved (install/remove/materialize alike)', async t => {
+test('validation: protected names refuse across install/remove/materialize; opt-in layers install with the exact generation', async t => {
   const h = makeHarness(t)
+  // Protected by P = B₀ ∪ S ∪ F, on BOTH op directions (design 21 §6.11.3 R1).
   for (const name of ['@deepseek-ai/dsh', '@dsh-chamber/dsh-chamber-seed-client-graph']) {
-    const install = await submitResult(h.tasks, { kind: 'install', name, spec: `${name}@1.0.0` })
-    assertRefusal(install, 'reserved')
+    const install = await submitResult(h.tasks, { kind: 'install', name, spec: `${name}@0.1.5-rc.2` })
+    assertRefusal(install, 'protected')
     const remove = await submitResult(h.tasks, { kind: 'remove', name })
-    assertRefusal(remove, 'reserved')
-    const materialize = await submitResult(h.tasks, { kind: 'materialize', name, spec: `file:${join(thirdPartyRoot(h.stateDir), 'x.tgz')}` })
-    assertRefusal(materialize, 'reserved')
+    assertRefusal(remove, 'protected')
+    const materialize = await submitResult(h.tasks, {
+      kind: 'materialize', name, spec: `file:${join(thirdPartyRoot(h.stateDir), 'x.tgz')}`, version: '0.1.5-rc.2',
+    })
+    assertRefusal(materialize, 'protected')
   }
-  assert.equal(h.manager.granted, 0, 'no lease was touched for input refusals')
+
+  // An official opt-in layer (NOT in F) is installable — but only with this
+  // instance's exact generation.
+  const layer = '@deepseek-ai/dsh-experimental-agent-team-profile'
+  assertRefusal(await submitResult(h.tasks, { kind: 'install', name: layer, spec: layer }), 'needs-version')
+  assertRefusal(await submitResult(h.tasks, { kind: 'install', name: layer, spec: `${layer}@^0.1.5-rc.2` }), 'needs-exact-version')
+  assertRefusal(await submitResult(h.tasks, { kind: 'install', name: layer, spec: `${layer}@0.1.5-rc.1` }), 'generation-mismatch')
+  const okLayer = await submitResult(h.tasks, { kind: 'install', name: layer, spec: `${layer}@0.1.5-rc.2` })
+  assert.equal(okLayer.ok, true, JSON.stringify(okLayer))
+
+  // Removing an official-scope row that is NOT protected is allowed (removal is
+  // judged by P alone, never by a version) — membership is the only extra gate.
+  installedName(h.stateDir, layer)
+  const removed = await submitResult(h.tasks, { kind: 'remove', name: layer })
+  assert.equal(removed.ok, true, JSON.stringify(removed))
+
+  assert.equal(h.manager.granted, 2, 'only the two accepted ops touched the write lease')
 })
 
 test('validation: malformed names / specs refuse before any lease', async t => {
@@ -408,6 +441,82 @@ test('null manager defers install, refuses remove (runtime_pending), and the def
   assert.equal(h.tasks.deferredIntents().length, 0)
   h.spawnCalls[0]!.child.close(0)
   await waitFor(() => h.manager.held === 0, 'lease released')
+})
+
+test('degraded ladder: underivable F refuses official-scope installs with its own code, third-party/remove unaffected', async t => {
+  const h = makeHarness(t)
+  // Remove the workspace lockfile ⇒ F cannot be derived (the derivation is
+  // fail-closed) while B₀ ∪ S stays a constant.
+  rmSync(join(h.manager.workspace, 'pnpm-lock.yaml'))
+  const official = await submitResult(h.tasks, { kind: 'install', name: '@deepseek-ai/dsh-cli-extra', spec: '@deepseek-ai/dsh-cli-extra@0.1.5-rc.2' })
+  assertRefusal(official, 'protected-set-unavailable')
+  // B₀ ∪ S keeps protecting by name (a composition member is still `protected`).
+  const composition = await submitResult(h.tasks, { kind: 'install', name: '@deepseek-ai/dsh-base', spec: '@deepseek-ai/dsh-base@0.1.5-rc.2' })
+  assertRefusal(composition, 'protected')
+  // Third-party installs and every remove keep working (the ladder is
+  // conservative in ONE direction only).
+  const thirdParty = await submitResult(h.tasks, { kind: 'install', name: 'plain-pkg', spec: 'plain-pkg@1.0.0' })
+  assert.ok(thirdParty.ok, JSON.stringify(thirdParty))
+  installedName(h.stateDir, 'plain-pkg')
+  const removal = await submitResult(h.tasks, { kind: 'remove', name: 'plain-pkg' })
+  assert.ok(removal.ok, JSON.stringify(removal))
+})
+
+test('runtime version unknown: an exact official spec cannot be generation-checked ⇒ its own refusal', async t => {
+  const h = makeHarness(t)
+  h.manager.version = null
+  const official = await submitResult(h.tasks, { kind: 'install', name: '@deepseek-ai/dsh-cli-extra', spec: '@deepseek-ai/dsh-cli-extra@0.1.5-rc.2' })
+  assertRefusal(official, 'runtime-version-unknown')
+})
+
+test('a deferred materialize carries its declared version and drains once the manager is up', async t => {
+  const h = makeHarness(t)
+  h.setManagerNull()
+  const staged = join(thirdPartyRoot(h.stateDir), 'deferred-1.2.3.tgz')
+  mkdirSync(join(staged, '..'), { recursive: true })
+  writeFileSync(staged, 'fake-archive')
+  const submitted = await submitResult(h.tasks, {
+    kind: 'materialize', name: 'plain-pkg', spec: `file:${staged}`, version: '1.2.3',
+  })
+  assert.ok(submitted.ok && submitted.deferred === true, JSON.stringify(submitted))
+  // The declared version must survive the deferred store: without it the drain's
+  // R2 judgement sees no version and can never accept the intent (2026-12 review).
+  const stored = h.tasks.deferredIntents()[0]
+  assert.equal(stored?.version, '1.2.3')
+  h.managerRef.current = h.manager
+  assert.equal(await h.tasks.drainDeferred(), 1)
+  assert.equal(h.tasks.deferredIntents().length, 0)
+  assert.equal(h.spawnCalls.length, 1, 'the drained materialize reaches the executor')
+  h.spawnCalls[0]!.child.close(0)
+  await waitFor(() => h.manager.held === 0, 'lease released')
+})
+
+test('the drain drops a permanently-refused intent and records it as a failed op (no silent zombie)', async t => {
+  const h = makeHarness(t)
+  // Inject a deferred intent that the judgement can never accept (its name is part
+  // of the runtime family F of the active workspace). Before the 2026-12 review
+  // this intent was re-submitted on every ready edge forever: refused each time,
+  // never dropped, never journaled — a silent zombie holding a staged archive.
+  const deferredPath = deferredIntentsFilePath(h.stateDir)
+  mkdirSync(join(deferredPath, '..'), { recursive: true })
+  writeFileSync(deferredPath, JSON.stringify({
+    version: 1,
+    intents: [{
+      id: 'zombie-1',
+      ts: Date.now(),
+      kind: 'materialize',
+      name: '@deepseek-ai/dsh-session',
+      spec: `file:${join(thirdPartyRoot(h.stateDir), 'zombie.tgz')}`,
+      version: '0.1.5-rc.2',
+    }],
+  }))
+  assert.equal(h.tasks.deferredIntents().length, 1)
+  assert.equal(await h.tasks.drainDeferred(), 0, 'a refused intent is not a successful drain')
+  assert.equal(h.tasks.deferredIntents().length, 0, 'the permanent refusal must drop the intent')
+  const failed = h.tasks.tasks().tasks.find(op => op.name === '@deepseek-ai/dsh-session')
+  assert.ok(failed !== undefined, 'the refusal must be visible in the tasks projection')
+  assert.equal(failed?.status, 'failed')
+  assert.match(failed?.error ?? '', /protected/)
 })
 
 test('absent profile defers install/materialize even with an ok lease; remove answers no_manifest', async t => {

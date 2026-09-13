@@ -19,7 +19,6 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  isDeniedPluginName,
   MATERIALIZE_FILE_SPEC_PATTERN,
   MAX_PLUGIN_SPEC_CHARS,
   PLUGIN_NAME_PATTERN,
@@ -96,7 +95,7 @@ test('ssh-provider.ts re-exports the family through the control-plane-module fac
   const source = sshProviderSource()
   assert.match(source, /from '\.\/control-plane-module\.ts'/,
     'ssh-provider.ts must consume the family through the dual-path facade')
-  for (const name of [...MOVED_DECLARATIONS, 'isDeniedPluginName']) {
+  for (const name of MOVED_DECLARATIONS) {
     assert.match(source, new RegExp(`^\\s*${name},?$`, 'm'),
       `ssh-provider.ts must re-export ${name} from the facade`)
   }
@@ -134,17 +133,3 @@ test('the shared whitelist values ride the @dsh-chamber/control-plane export', (
   assert.equal(MATERIALIZE_FILE_SPEC_PATTERN.test('file:relative.tgz'), false)
 })
 
-test('isDeniedPluginName denies the official and chamber domains (design 21 §6.2/decision 19)', () => {
-  assert.equal(isDeniedPluginName('@deepseek-ai/dsh'), true, 'official domain is denied')
-  assert.equal(isDeniedPluginName('@dsh-chamber/dsh-chamber-seed-client-graph'), true, 'seed host package is denied')
-  assert.equal(isDeniedPluginName('@dsh-chamber/dsh-chamber-seed-git-worktree'), true, 'seed host package is denied')
-  // 真实 registry 名（mobile 是 gateway 打包的单例例外，无桌面链路）。
-  assert.equal(isDeniedPluginName('@dsh-chamber/dsh-client-ui-mobile'), true, 'mobile exception is denied')
-  assert.equal(isDeniedPluginName('@dsh-chamber/anything-else'), true, 'chamber domain is entirely chamber-managed')
-  // A versioned spec still matches by prefix when a caller forgets to extract
-  // the name first.
-  assert.equal(isDeniedPluginName('@dsh-chamber/pkg@1.0.0'), true)
-  for (const ok of ['third-party-plugin', '@scope/third-party', 'dsh-plugin-x']) {
-    assert.equal(isDeniedPluginName(ok), false, `${ok} must not be denied`)
-  }
-})

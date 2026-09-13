@@ -1305,14 +1305,14 @@ export type {
 // the desktop audit log (dedupe audit E-4/N11, 2026-09).
 export { AUDIT_TRAIL_MAX_BYTES, appendAuditTrailLine, serializeAuditEvent } from './audit-trail.ts'
 export type { AuditTrailEvent } from './audit-trail.ts'
-// The plugin spec/name whitelist family + reserved-name deny predicate
+// The plugin spec/name whitelist family (the reserved-name deny predicate is
+// retired: `protected-plugins.ts` owns the judgement, design 21 §6.11)
 // (design 21 §6.2/§6.7 — single source for the desktop main via
 // control-plane-module.ts and the gateway executor). Renderer mirrors stay
 // hand-written and are pinned by the gateway lockstep test
 // (plugin-spec-lockstep.test.ts).
 export {
   extractSpecName,
-  isDeniedPluginName,
   MATERIALIZE_FILE_SPEC_PATTERN,
   MAX_PLUGIN_SPEC_CHARS,
   PLUGIN_NAME_PATTERN,
@@ -1320,6 +1320,52 @@ export {
   RUN_STDOUT_MAX_BYTES,
   WRITE_FILE_MAX_BYTES,
 } from './plugin-spec.ts'
+// The protected-plugin set + generation coupling (design 21 §6.11, decision 19
+// 2026-12 revision): P = B₀ ∪ S ∪ F derivation, the op-phased write-face
+// decision (install/remove judge P alike; remove never judges a version;
+// official-scope installs must pin the instance's exact generation) and the
+// read-face row projection the three backends emit — single source for the
+// desktop main (control-plane-module.ts) and the gateway.
+export {
+  CHAMBER_SCOPE,
+  decidePluginMutation,
+  derivePluginRows,
+  deriveProtectedSet,
+  familyNamesFromLockfileClosure,
+  familyNamesFromRuntimeTree,
+  isExactVersion,
+  isMaterializedValue,
+  OFFICIAL_SCOPE,
+  officialScope,
+  parseExactVersion,
+  PLUGIN_MATERIALIZED_VALUE_MASK,
+  PROFILE_BUNDLES_SNAPSHOT,
+  describeFamilyFindings,
+  protectedReason,
+  readInstalledVersion,
+  registrySpecVersion,
+  resolveRuntimeFamily,
+  sameGeneration,
+  suggestExactSpec,
+  verifyProfileFamilyConsistency,
+} from './protected-plugins.ts'
+export type {
+  DecidePluginMutationInput,
+  FamilyConsistencyFinding,
+  FamilyConsistencyVerdict,
+  DerivePluginRowsInput,
+  ParsedVersion,
+  PluginMutationDecision,
+  PluginMutationOp,
+  PluginRefusalCode,
+  PluginRow,
+  PluginRowRole,
+  ProtectedDerivation,
+  ProtectedFacts,
+  ProtectedSet,
+  ProtectedSource,
+  RuntimeFamilyResolution,
+} from './protected-plugins.ts'
 // Gateway wire-protocol credential/session facts + SPKI pin helpers (design
 // 17 §7.1/§9.3/§13.4.2/S23) — the single source shared by the gateway server
 // (auth.ts/config.ts), the proxy injection gate (instance-proxy.ts) and the

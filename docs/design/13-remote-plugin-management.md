@@ -19,14 +19,21 @@
 > 流程、差异语义、状态机、文案与恢复能力全仓只有一份（ssh = 桌面主进程
 > exec 后端；gateway = 宿主 spawn 后端）；本设计各节是 ssh 后端的既有行为
 > 权威，design 21 是模型与双后端契约的收敛权威。ssh 面按模型统一要求必备：
-> 已安装列表逐行移除（consistent 行缺口修复，经 apply remove）、remove/install
-> 保留名拒绝（@deepseek-ai/* + @dsh-chamber/*，与 gateway 同集，applyPlugins
-> 整批拒绝）、撤销 journal（SSH_PLUGIN_UNDO：变更前远端 spec 快照 +
+> 已安装列表逐行移除（consistent 行缺口修复，经 apply remove）、**受保护集合判定**
+> （design 21 §6.11 / 决策 19 的 2026-12 修订口径：`P = B₀ ∪ S ∪ F`，**装面保守**——
+> 远端无 family 事实源，官方 scope 一律拒；**卸面按 `B₀ ∪ S` 判**，F 缺失只收紧不放松；
+> 两向都在 applyPlugins 整批拒绝语义内落地）、撤销 journal（SSH_PLUGIN_UNDO：变更前远端 spec 快照 +
 > 操作目标指纹绑定）、SSH_PLUGIN_LIST 掩码投影（redactRemotePluginManifest，
 > design 21 决策 18）；spec/name 白名单族单一来源在
-> `control-plane/src/plugin-spec.ts`（desktop 经 control-plane-module.ts 双路径
+> `control-plane/src/plugin-spec.ts`、受保护集合判定单一来源在同族
+> `control-plane/src/protected-plugins.ts`（desktop 经 control-plane-module.ts 双路径
 > facade 与原 ssh-provider 再导出消费、gateway 经包导出直引——§7.2 归属，
 > 常量不可再在 ssh-provider 内重声明）。
+>
+> **装/卸不对称是显式政策（2026-12）**：旧口径「ssh 与 gateway 同集」（决策 19 原文）
+> 已废止——**F 无远端来源**时，「允许装一个可能 shadow 远端锚点 release 包」的风险无法用
+> 事实界定，故装面保守；卸面的事实（B₀ 与 S）都是本仓常量/注册表，可离线判定，因此照常放行。
+> 放开装面的前提 = 给 ssh 增加远端 family 读（扩 exec 面），须按 §7.2 的 exec 白名单纪律单独评审。
 
 ## 1. 动机与范围
 
@@ -61,7 +68,9 @@
 
 - `apply`：add / remove / restart（restart 需布尔值）；spec 在主进程二次
   白名单校验（`applyPlugins` + `buildRemoteExecArgv`）——renderer 提供
-  **绝不信任**。
+  **绝不信任**；此外 `buildSshApplyRows`/`applyPlugins` 对每行名字跑
+  **受保护集合判定**（design 21 §6.11）：装面官方 scope 一律拒（`protected`）、
+  卸面按 `B₀ ∪ S` 判，命中即**整批拒绝**（不部分执行）。
 - `seed`（设计 08/09 接线）：`seedRemoteChamberHostPackages` 经现有受限
   `cat/write-file` 原语，把本次**实际有 `dist/index.js` 构建产物**的 chamber
   宿主包 `@dsh-chamber/dsh-chamber-seed-client-graph`（loader id `client-graph`）、
@@ -228,7 +237,9 @@
 ### 7.1 双侧二次校验
 
 renderer 提供的 add/remove spec 在主进程（plugin-sync）+ provider（exec argv）
-**双侧重新校验**，绝不信任单一来源。
+**双侧重新校验**，绝不信任单一来源。校验分两层：**白名单族**（§7.2，形状/注入面）
+与**受保护集合判定**（design 21 §6.11，语义面：`name ∈ P` 拒；官方 scope 的 install
+另需精确同代——ssh 装面保守已在第一层就拒掉官方 scope）。
 
 ### 7.2 白名单（权威）
 
@@ -248,6 +259,9 @@ renderer 提供的 add/remove spec 在主进程（plugin-sync）+ provider（exe
   `packages/control-plane/src/plugin-spec.ts`（desktop 经 control-plane-module.ts
   双路径 facade 与原 ssh-provider 再导出消费、gateway 经包导出直引）——常量
   不可再在 ssh-provider 内重声明。
+- **本节只管白名单（形状/注入面）**：受保护集合判定（语义面）的权威在 design 21 §6.11，
+  单一来源 `packages/control-plane/src/protected-plugins.ts`；ssh 的装面保守/卸面按 `B₀ ∪ S`
+  是该节 op 分相矩阵的 ssh 行，不在本节重述。
 
 ### 7.3 字节域校验
 

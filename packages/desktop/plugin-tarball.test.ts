@@ -4,8 +4,8 @@
  * layout (npm-pack `package/` root, dirs before files, normalized modes),
  * honest skips (symlinks, node_modules/.git), cap errors with machine codes
  * (entries / unpacked footprint / final archive size), the package.json
- * manifest projection (name + strict x-plugin-version grammar +
- * reserved-domain deny), the gzip roundtrip through listTgzManifest, and
+ * manifest projection (name + strict x-plugin-version grammar; the
+ * protected-set judgement is a separate step), the gzip roundtrip through listTgzManifest, and
  * the TEXTUAL LOCKSTEP tests pinning every cap + the version grammar to the
  * gateway route's own literals (routes.ts MATERIALIZE_MAX_BYTES /
  * PLUGIN_VERSION_PATTERN, tgz-scan.ts TGZ_MAX_ENTRIES /
@@ -308,11 +308,15 @@ test('buildPluginTarball: non-directory and missing paths are loud errors', asyn
   }
 })
 
-test('buildPluginTarball manifest validation: name/version whitelists + reserved-domain deny + JSON honesty', async () => {
+test('buildPluginTarball manifest validation: name/version whitelists + JSON honesty (shape only)', async () => {
+  // The retired domain deny (design 21 §6.11.5): building an upload is SHAPE
+  // validation only — an official/chamber-scope package may be packed, staged
+  // and uploaded; whether it may be installed is decided by the receiving
+  // backend's protected-set judgement (gateway submit / ssh apply), never here.
   const manifestTests: Array<{ pkg: unknown; manifestName: string | null; nameOnly: string | null; errorMatch: RegExp }> = [
     { pkg: { name: 'ok-pkg', version: '1.0.0' }, manifestName: 'ok-pkg', nameOnly: 'ok-pkg', errorMatch: /$/ },
-    { pkg: { name: '@dsh-chamber/taken', version: '1.0.0' }, manifestName: null, nameOnly: '@dsh-chamber/taken', errorMatch: /reserved domain/ },
-    { pkg: { name: '@deepseek-ai/taken', version: '1.0.0' }, manifestName: null, nameOnly: '@deepseek-ai/taken', errorMatch: /reserved domain/ },
+    { pkg: { name: '@dsh-chamber/taken', version: '1.0.0' }, manifestName: '@dsh-chamber/taken', nameOnly: '@dsh-chamber/taken', errorMatch: /$/ },
+    { pkg: { name: '@deepseek-ai/taken', version: '1.0.0' }, manifestName: '@deepseek-ai/taken', nameOnly: '@deepseek-ai/taken', errorMatch: /$/ },
     { pkg: { name: 'bad name!', version: '1.0.0' }, manifestName: null, nameOnly: null, errorMatch: /not a safe registry package name/ },
     { pkg: { name: 'ok-pkg', version: 'v1.0.0' }, manifestName: null, nameOnly: 'ok-pkg', errorMatch: /not an exact semver/ },
     { pkg: { name: 'ok-pkg' }, manifestName: null, nameOnly: 'ok-pkg', errorMatch: /not an exact semver/ },
@@ -328,8 +332,8 @@ test('buildPluginTarball manifest validation: name/version whitelists + reserved
       assert.equal(result.manifest.ok, entry.manifestName !== null)
       if (entry.manifestName !== null && result.manifest.ok) assert.equal(result.manifest.name, entry.manifestName)
       if (!result.manifest.ok) assert.match(result.manifest.error, entry.errorMatch)
-      // pluginNameFromFolder is the NAME-ONLY read (plan §6.5): the
-      // reserved-domain deny is full-manifest validation, not name-only.
+      // pluginNameFromFolder is the NAME-ONLY read (plan §6.5): it applies the
+      // registry name whitelist and nothing else (no version, no domain rule).
       assert.equal(pluginNameFromFolder(fixture.path), entry.nameOnly)
     } finally {
       fixture.cleanup()

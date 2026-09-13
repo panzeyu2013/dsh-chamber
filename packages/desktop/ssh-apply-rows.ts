@@ -16,19 +16,46 @@
  */
 
 import {
+  CHAMBER_HOST_PACKAGES,
+  decidePluginMutation,
+  deriveProtectedSet,
   extractSpecName,
-  isDeniedPluginName,
   PLUGIN_NAME_PATTERN,
   PLUGIN_SPEC_PATTERN,
+  registrySpecVersion,
 } from './control-plane-module.ts'
+import type { PluginMutationDecision, ProtectedSet } from './control-plane-module.ts'
 import type { SshJournalOp } from './ssh-plugin-journal.ts'
+
+/** S 分量：chamber 播种注册表名（单一来源 CHAMBER_HOST_PACKAGES）。 */
+export const SSH_SEED_NAMES: readonly string[] = CHAMBER_HOST_PACKAGES.map(descriptor => descriptor.insert.name)
+
+/**
+ * ssh 后端的判定事实（design 21 §6.11）：只有 `B₀ ∪ S`——远端没有 family 事实源，
+ * 因此 `familySource:'none'`（装面官方 scope 一律拒）且 `familyNames:null`。
+ */
+export interface SshProtectionFacts {
+  protectedSet: ProtectedSet | null
+  runtimeVersion: string | null
+  profileState: 'ready' | 'absent'
+}
+
+/** ssh 缺省事实：`B₀ ∪ S` + 无族来源 + 版本未知（装面保守、卸面按事实）。 */
+export function defaultSshProtectionFacts(): SshProtectionFacts {
+  const derived = deriveProtectedSet({ seedNames: SSH_SEED_NAMES, familyNames: null })
+  return {
+    protectedSet: derived.ok ? derived.set : null,
+    runtimeVersion: null,
+    profileState: 'ready',
+  }
+}
 
 /**
  * Extract the REGISTRY package name of a spec/name: `name`, `name@1.2.3`,
  * `@scope/name`, `@scope/name@1.2.3` → the bare name. Anything that is not a
  * whitelisted registry spec (including `file:`/`link:`/path materialize
- * values, which carry no registry name) → null. The deny paths apply the
- * reserved-name predicate to this parsed name; a file: materialize row's name
+ * values, which carry no registry name) → null. The decision paths apply the
+ * protected-set judgement to this parsed name; a file: materialize row's name
  * is only ever known from its manifest row (never from the value itself).
  */
 export function parseSpecName(spec: unknown): string | null {
@@ -36,10 +63,18 @@ export function parseSpecName(spec: unknown): string | null {
   if (!PLUGIN_NAME_PATTERN.test(spec) && !PLUGIN_SPEC_PATTERN.test(spec)) return null
   // The extraction is the control-plane extractSpecName core (the same
   // lastIndexOf('@') rule as gateway-ipc-shared's pluginSpecName); the
-  // reserved-name deny + final name re-validation below stay local.
+  // protected-set judgement + final name re-validation below stay local.
   const name = extractSpecName(spec)
   return PLUGIN_NAME_PATTERN.test(name) ? name : null
 }
+
+/**
+ * The registry VERSION VALUE a spec pins (`name@<value>` → `<value>`); null for a
+ * bare name or a non-registry value. Used by the generation check (design 21
+ * §6.11.3): an official-scope install must carry an exact version. Single
+ * source = control-plane protected-plugins.ts (the gateway reads the same one).
+ */
+export const parseSpecVersion = registrySpecVersion
 
 /** One assembled ssh apply row (kind + the name it touches + its spec). */
 export interface SshApplyRow {
@@ -50,43 +85,77 @@ export interface SshApplyRow {
   name: string | null
 }
 
+/** One refused row: the decision (code + copy + optional suggested spec). */
+export interface SshApplyRefusal {
+  name: string
+  kind: 'add' | 'remove'
+  /** ALWAYS a refusal: `buildSshApplyRows` drops `defer` (profile absent means
+   *  "let the CLI create it", design 21 §6.11.3 R0), so the type says so and the
+   *  copy can never mislabel a defer as a refusal code (2026-12 review). */
+  decision: Extract<PluginMutationDecision, { kind: 'refuse' }>
+}
+
 export interface BuildSshApplyRowsResult {
   /** Rows whose name parsed (string rows only). */
   rows: SshApplyRow[]
-  /** Unique reserved names found across ALL rows — a whole-batch refusal. */
-  refused: string[]
+  /** Refused rows across ALL rows — a whole-batch refusal (first refusal per name). */
+  refusals: SshApplyRefusal[]
 }
 
 /**
  * Assemble add/remove rows for the ssh apply surface (pure, tolerant of
  * unknown payload shapes — applyPlugins remains the authority on shape
- * validation): extract each row's name and collect the RESERVED names
- * (official `@deepseek-ai/*` + chamber `@dsh-chamber/*` domains, the same
- * deny set as the gateway install/remove routes and the local dialog row
- * filter). The caller REFUSES THE WHOLE BATCH when `refused` is non-empty —
- * before any remote change (matches the gateway same-set deny, decision 19).
+ * validation): extract each row's name/version and run the **protected-set
+ * decision** (design 21 §6.11) over every row. The caller REFUSES THE WHOLE
+ * BATCH when `refusals` is non-empty — before any remote change.
+ *
+ * ssh facts are `B₀ ∪ S` with no family source: official-scope installs are
+ * refused conservatively (an allowed install could shadow the remote anchor's
+ * own release packages in a way no local fact can bound), while removes are
+ * judged by `B₀ ∪ S` alone (removing an unexpected official-scope copy is
+ * restorative, never destructive).
  */
-export function buildSshApplyRows(addRows: unknown, removeRows: unknown): BuildSshApplyRowsResult {
+export function buildSshApplyRows(
+  addRows: unknown,
+  removeRows: unknown,
+  facts: SshProtectionFacts = defaultSshProtectionFacts(),
+): BuildSshApplyRowsResult {
   const rows: SshApplyRow[] = []
+  const refusals: SshApplyRefusal[] = []
   const refused = new Set<string>()
   const consider = (kind: 'add' | 'remove', value: unknown): void => {
     if (typeof value !== 'string' || value === '') return
     const name = parseSpecName(value)
     rows.push({ kind, spec: value, name })
-    if (name !== null && isDeniedPluginName(name)) refused.add(name)
+    if (name === null || refused.has(name)) return
+    const decision = decidePluginMutation({
+      op: kind === 'add' ? 'install' : 'remove',
+      name,
+      version: kind === 'add' ? parseSpecVersion(value) : null,
+      runtimeVersion: facts.runtimeVersion,
+      derivation: facts.protectedSet === null ? null : { ok: true, set: facts.protectedSet },
+      profileState: facts.profileState,
+      familySource: 'none',
+    })
+    // Only `refuse` counts: `defer` (profile absent) means "let the CLI create
+    // it", which is not a batch refusal (design 21 §6.11.3 R0).
+    if (decision.kind !== 'refuse') return
+    refused.add(name)
+    refusals.push({ name, kind, decision })
   }
   if (Array.isArray(addRows)) for (const value of addRows) consider('add', value)
   if (Array.isArray(removeRows)) for (const value of removeRows) consider('remove', value)
-  return { rows, refused: [...refused] }
+  return { rows, refusals }
 }
 
-/** The reserved-name whole-batch refusal copy (loud, lists the denied
- *  names). Same rationale wording as the gateway 'reserved' refusal. */
-export function describeReservedNameRefusal(names: readonly string[]): string {
-  return (
-    `reserved plugin name(s): ${names.join('、')} — ` +
-    '@deepseek-ai/* and @dsh-chamber/* cannot be installed or removed through the plugin model'
-  )
+/** The whole-batch refusal copy (loud, names each row and its refusal code). */
+export function describePluginRefusals(refusals: readonly SshApplyRefusal[]): string {
+  return refusals
+    .map(({ name, decision }) => {
+      const suggest = decision.suggest === undefined ? '' : `（建议 spec：${decision.suggest}）`
+      return `${name} [${decision.code}] ${decision.error}${suggest}`
+    })
+    .join('；')
 }
 
 /** Renderer-facing undo projection shape (design 21 §6.4): what undoing the

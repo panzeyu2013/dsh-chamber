@@ -58,7 +58,17 @@ import type { CordisInsert, InsertConflictKind } from './control-plane-module.ts
 // dist/control-plane, dev/tests → workspace source) so the orchestration-side
 // 二次校验, the exec-side argv whitelist (ssh-provider.ts re-exports the same
 // names) and the gateway executor share one source and can never drift.
-import { isDeniedPluginName, MAX_PLUGIN_SPEC_CHARS, PLUGIN_NAME_PATTERN, PLUGIN_SPEC_PATTERN } from './control-plane-module.ts'
+import {
+  decidePluginMutation,
+  derivePluginRows,
+  deriveProtectedSet,
+  MAX_PLUGIN_SPEC_CHARS,
+  PLUGIN_MATERIALIZED_VALUE_MASK,
+  PLUGIN_NAME_PATTERN,
+  PLUGIN_SPEC_PATTERN,
+  readInstalledVersion,
+} from './control-plane-module.ts'
+import type { PluginMutationDecision, PluginRow, ProtectedSet } from './control-plane-module.ts'
 // Owner-private file primitives (control-plane private-file.ts, P2-2a) —
 // consumed through the same dual-path facade for the local-plugin-writer
 // ledger (owner-only 0600 atomic replace, owner-only parent).
@@ -72,11 +82,18 @@ import {
   HOST_GRAPH_PATCH_FILENAME, HOST_OPEN_IN_INSERT, HOST_PACKAGE_SEED_FILES,
   type ChamberHostPackageDescriptor, type HostPackageInsert, type HostPackageSeedFile,
 } from './control-plane-module.ts'
-// ssh unified increments (design 21 §6.4, plan Phase 5): the reserved-name
-// deny + row assembly helpers (parseSpecName / buildSshApplyRows /
-// describeReservedNameRefusal — ssh-apply-rows.ts). Pure module, imports no
+// ssh unified increments (design 21 §6.4, plan Phase 5): the protected-set
+// row assembly helpers (parseSpecName / buildSshApplyRows / describePluginRefusals
+// — ssh-apply-rows.ts). Pure module, imports no
 // Electron and nothing from plugin-sync (no cycle).
-import { buildSshApplyRows, describeReservedNameRefusal, parseSpecName } from './ssh-apply-rows.ts'
+import {
+  buildSshApplyRows,
+  defaultSshProtectionFacts,
+  describePluginRefusals,
+  parseSpecName,
+  parseSpecVersion,
+  type SshProtectionFacts,
+} from './ssh-apply-rows.ts'
 // ENOENT_PATTERN ("absent remote file" classification) is shared the same way:
 // ssh-provider classifies the RAW stderr line against it (redaction can hide a
 // `.ssh*`-named home path), so the provider-side classification and this
@@ -97,6 +114,96 @@ export { PLUGIN_SPEC_PATTERN, PLUGIN_NAME_PATTERN }
 // probe). Re-exported so every desktop consumer/tests derive from the SAME
 // list — the plugin-management projection must never re-declare it.
 export { CHAMBER_HOST_PACKAGES }
+
+/** S 分量：chamber 播种注册表名（单一来源 = CHAMBER_HOST_PACKAGES，design 21 §6.11）。 */
+export const CHAMBER_SEED_NAMES: readonly string[] = CHAMBER_HOST_PACKAGES.map(descriptor => descriptor.insert.name)
+
+/**
+ * 写面/读面共用的判定事实（design 21 §6.11.1）。
+ * - `familySource: 'runtime'`（默认，local/gateway）：`familyNames` 应是已解析的 F；
+ *   缺席 ⇒ **降级态**（`familySource:'unavailable'`）：P 退到 B₀ ∪ S 且官方 scope 的
+ *   install 一律被拒（比 R2 的同代校验更强），第三方与 remove 面照常——只收紧不放松。
+ * - `familySource: 'none'`（ssh）：远端**没有**族事实源，同上保守形态（码为 `protected`）。
+ */
+export interface PluginProtectionFacts {
+  familyNames?: readonly string[] | null
+  runtimeVersion?: string | null
+  profileState?: 'ready' | 'absent'
+  familySource?: 'runtime' | 'none'
+}
+
+/** ssh 缺省事实（B₀ ∪ S、无族来源、版本未知）。 */
+export function sshProtectionFacts(): PluginProtectionFacts {
+  return { familyNames: null, runtimeVersion: null, familySource: 'none' }
+}
+
+/**
+ * 由事实派生受保护集合 + 是否处于**降级态**（design 21 §6.11.3）。
+ *
+ * 降级 = 本该有 F（familySource 'runtime'）但读不到：此时**不是**"没有保护"，而是
+ * 退到 `B₀ ∪ S` 并让官方 scope 的 install 一律被拒（只收紧不放松）。第三方行与
+ * remove 面（B₀∪S 事实）不受影响——这正是"绝不静默放行拆组合"的保守退化方向。
+ */
+export function protectedSetFromFacts(facts: PluginProtectionFacts): ProtectedSet | null {
+  return protectedSetState(facts).set
+}
+
+/** 派生结果 + 降级标记（写面用它选 `familySource`）。 */
+export function protectedSetState(facts: PluginProtectionFacts): { set: ProtectedSet | null; degraded: boolean } {
+  const family = facts.familyNames
+  const hasFamily = Array.isArray(family) && family.length > 0
+  const degraded = facts.familySource !== 'none' && !hasFamily
+  const derived = deriveProtectedSet({
+    seedNames: CHAMBER_SEED_NAMES,
+    familyNames: hasFamily ? family : null,
+  })
+  return { set: derived.ok ? derived.set : null, degraded }
+}
+
+/**
+ * 本地/ssh 写面的判定包装（design 21 §6.11.3）：把「事实 → P → decide」收敛成一次调用，
+ * 供 main.ts 的 IPC 前置校验、`runLocalDshPlugin` 的纵深校验与 `applyPlugins` 的整批拒绝共用。
+ */
+export function guardPluginMutation(input: {
+  op: 'install' | 'remove'
+  name: string | null
+  version?: string | null
+  facts: PluginProtectionFacts
+}): PluginMutationDecision {
+  if (input.name === null || input.name === '') {
+    return { kind: 'refuse', code: 'invalid-name', error: 'invalid plugin name' }
+  }
+  const { set, degraded } = protectedSetState(input.facts)
+  return decidePluginMutation({
+    op: input.op,
+    name: input.name,
+    version: input.version ?? null,
+    runtimeVersion: input.facts.runtimeVersion ?? null,
+    derivation: set === null ? null : { ok: true, set },
+    profileState: input.facts.profileState ?? 'ready',
+    familySource: degraded ? 'unavailable' : (input.facts.familySource ?? 'runtime'),
+  })
+}
+
+/**
+ * ssh 组装事实（ssh-apply-rows 的形状）——由共享事实派生，供 main.ts 的 IPC 前置校验
+ * 与 applyPlugins 的整批拒绝使用同一份 P。
+ */
+export function sshApplyFacts(facts: PluginProtectionFacts = sshProtectionFacts()): SshProtectionFacts {
+  return {
+    protectedSet: protectedSetFromFacts(facts),
+    runtimeVersion: facts.runtimeVersion ?? null,
+    profileState: facts.profileState ?? 'ready',
+  }
+}
+
+/** 判定 → 面向主进程调用方的错误文案（含建议 spec）。 */
+export function describePluginDecision(decision: PluginMutationDecision): string {
+  if (decision.kind === 'allow') return ''
+  if (decision.kind === 'defer') return `${decision.error} [${decision.code}]`
+  const base = `${decision.error} [${decision.code}]`
+  return decision.suggest === undefined ? base : `${base}（建议 spec：${decision.suggest}）`
+}
 
 // ============================================================================
 // Contract A types: TransportExecAction / TransportRunPayload imported from
@@ -482,6 +589,11 @@ export type ChamberInjectionState =
 export interface RemotePluginManifest {
   dependencies: Record<string, string>
   bundles: string[]
+  /** Read-face row projection (design 21 §6.11.5): the UNION of dependencies,
+   *  live bundles and chamber seeds, each with its role + backend-computed
+   *  `protected` flag. `dependencies` keeps its exact meaning (name-based
+   *  diff); the renderer must render from `rows` when present. */
+  rows: PluginRow[]
   profileExists: boolean
   error?: string
   /** Chamber-injected component state (design 09) probed over the wire —
@@ -497,6 +609,8 @@ export interface UnsyncableEntry {
 export interface LocalPluginManifest {
   dependencies: Record<string, string>
   bundles: string[]
+  /** Read-face row projection (design 21 §6.11.5) — see RemotePluginManifest.rows. */
+  rows: PluginRow[]
   clientLines: string[]
   /** Dependency names whose own package.json declares `dsh.bundle` (design 13
    *  §4.1) — the "known bundle packages" the remote apply's bundles assertion
@@ -615,7 +729,16 @@ export function classifyLocalDependency(pkg: unknown): LocalPluginKind {
  * node_modules read (path traversal defense). Throws on an unreadable/
  * malformed profile manifest.
  */
-export function localPluginList(localDshHome: string): LocalPluginManifest {
+export function localPluginList(localDshHome: string, facts?: PluginProtectionFacts): LocalPluginManifest {
+  // The projection's protected flags come from the CALLER-supplied runtime facts
+  // (main.ts resolves the active runtime). Without them F is unknown, but B₀ ∪ S
+  // is a CONSTANT and is always applied (no call path may render a composition
+  // member or a chamber seed actionable) — never "no protection" as a silent
+  // default. `protected` is exactly `name ∈ P`; the caller must pass facts to get
+  // F-derived protection (main.ts does).
+  const protectedSet = facts === undefined
+    ? protectedSetState({ familyNames: null, familySource: 'none' }).set
+    : protectedSetFromFacts(facts)
   const profileDir = join(localDshHome, 'profiles', WEB_PROFILE)
   const manifestPath = join(profileDir, 'package.json')
   let parsed: unknown
@@ -656,9 +779,26 @@ export function localPluginList(localDshHome: string): LocalPluginManifest {
     const cls = classifyDependencyValue(spec)
     if (cls.kind === 'unsyncable') unsyncable.push({ name, reason: cls.reason })
   }
+  const rows = derivePluginRows({
+    dependencies,
+    bundles,
+    protectedSet,
+    seedNames: CHAMBER_SEED_NAMES,
+    // The rows derivation asks once per dependency; memoize for this call so a
+    // 200-dependency profile does not pay 200 disk reads for one list (2026-12
+    // review optimality note). A mutation between two list calls re-reads.
+    installedVersion: (() => {
+      const cache = new Map<string, string | null>()
+      return (name: string) => {
+        if (!cache.has(name)) cache.set(name, readInstalledVersion(profileDir, name))
+        return cache.get(name) ?? null
+      }
+    })(),
+  })
   return {
     dependencies,
     bundles,
+    rows,
     clientLines,
     bundleLines,
     unsyncable,
@@ -711,7 +851,7 @@ export function localPluginList(localDshHome: string): LocalPluginManifest {
  * classify the value as materialize and the name-based diff matching
  * (plugin-diff.ts §6) keeps working unchanged.
  */
-export const MATERIALIZED_VALUE_MASK = 'file:<hidden>'
+export const MATERIALIZED_VALUE_MASK = PLUGIN_MATERIALIZED_VALUE_MASK
 
 /**
  * Project the LOCAL manifest for the renderer: dependency VALUES that are
@@ -727,7 +867,20 @@ export function redactLocalPluginManifest(manifest: LocalPluginManifest): LocalP
   for (const [name, spec] of Object.entries(manifest.dependencies)) {
     dependencies[name] = classifyDependencyValue(spec).kind === 'materialize' ? MATERIALIZED_VALUE_MASK : spec
   }
-  return { ...manifest, dependencies }
+  return { ...manifest, dependencies, rows: maskRowSpecs(manifest.rows, dependencies) }
+}
+
+/**
+ * Row specs follow the manifest's own masking rule (design 21 §6.2/§6.11.5): a
+ * masking backend must not leak a machine-local path through the `rows` channel
+ * that its `dependencies` projection masks (2026-12 review). Idempotent — a
+ * value already masked keeps its mask.
+ */
+function maskRowSpecs(rows: readonly PluginRow[], masked: Record<string, string>): PluginRow[] {
+  return rows.map(row => {
+    const spec = row.spec === null ? null : (masked[row.name] ?? row.spec)
+    return spec === row.spec ? row : { ...row, spec }
+  })
 }
 
 /** Is this dependency spec a remote-local-path `file:` value? Case-
@@ -920,7 +1073,21 @@ export async function remotePluginList(
   if (!result.ok) {
     // ENOENT = the remote profile is not initialized (not a fatal ssh error).
     if (ENOENT_PATTERN.test(result.error)) {
-      return { ok: true, manifest: { dependencies: {}, bundles: [], profileExists: false, chamber: await probeRemoteChamber(exec, spec, opts) } }
+      return {
+        ok: true,
+        manifest: {
+          dependencies: {},
+          bundles: [],
+          rows: derivePluginRows({
+            dependencies: {},
+            bundles: [],
+            protectedSet: protectedSetFromFacts(sshProtectionFacts()),
+            seedNames: CHAMBER_SEED_NAMES,
+          }),
+          profileExists: false,
+          chamber: await probeRemoteChamber(exec, spec, opts),
+        },
+      }
     }
     return { ok: false, error: result.error }
   }
@@ -930,6 +1097,24 @@ export async function remotePluginList(
     manifest: {
       dependencies: parsed.dependencies,
       bundles: parsed.bundles,
+      // ssh facts are B₀ ∪ S (no remote family source): installs of official-scope
+      // names are refused by the write face, removals are judged by those facts.
+      rows: derivePluginRows({
+        dependencies: parsed.dependencies,
+        bundles: parsed.bundles,
+        protectedSet: protectedSetFromFacts(sshProtectionFacts()),
+        seedNames: CHAMBER_SEED_NAMES,
+        // NOTE (2026-12 review): `protected` means exactly "name ∈ P" — the ssh INSTALL
+        // conservatism is a target capability, not a read-face protection fact. Marking
+        // official-scope rows protected here would hide a REMOVE the write face allows
+        // (removal is judged by B₀ ∪ S only) and would print a false "protected by the
+        // composition" hint. The reconcile batch is kept safe by the ssh transport
+        // filter instead (UI `sshSyncableDependencies`).
+        // Mirror redactRemotePluginManifest's rule (below): a remote-local
+        // `file:` path is masked in `dependencies`, so it must be masked in the
+        // rows the renderer renders too.
+        maskSpec: spec => (isRemoteFileValue(spec) ? MATERIALIZED_VALUE_MASK : spec),
+      }),
       profileExists: true,
       error: parsed.error,
       chamber: await probeRemoteChamber(exec, spec, opts),
@@ -1197,6 +1382,10 @@ export async function applyPlugins(
      *  an undo can never replay a change onto a different host that reuses
      *  the same connection id after an edit (design 21 §6.4 review P1). */
     targetFingerprint?: string | null
+    /** Protected-set facts (design 21 §6.11): ssh form by default (B₀ ∪ S, no
+     *  family source). The main process passes the facts it resolved so the
+     *  batch judgement uses the same P as the read-face projection. */
+    protection?: SshProtectionFacts
   },
 ): Promise<ApplyPluginsResult> {
   const id = spec.id
@@ -1221,17 +1410,16 @@ export async function applyPlugins(
       return { ok: false, error: `invalid remove name: ${JSON.stringify(name)}` }
     }
   }
-  // Reserved-name deny (design 21 §6.4/decision 19, same set as the gateway):
-  // @deepseek-ai/* and @dsh-chamber/* are the official/chamber domains and
-  // can never be installed or removed through the plugin model — refuse the
-  // WHOLE batch, loudly, listing the denied names, BEFORE any remote change
-  // (never a partial apply around a refused row). parseSpecName extracts the
-  // name of every add row (the rows are already whitelist-shaped above);
-  // remove rows carry their name directly. buildSshApplyRows stays the
-  // shared assembly both here and the main-process IPC preflight use.
-  const assembled = buildSshApplyRows(add, remove)
-  if (assembled.refused.length > 0) {
-    return { ok: false, error: describeReservedNameRefusal(assembled.refused) }
+  // Protected-set judgement (design 21 §6.11, decision 19 2026-12 revision —
+  // ssh form: B₀ ∪ S, no family source). Refuse the WHOLE batch, loudly,
+  // naming each refused row and its code, BEFORE any remote change (never a
+  // partial apply around a refused row). buildSshApplyRows is the shared
+  // assembly both here (defense in depth) and the main-process IPC preflight
+  // use; the *undo* path rides this same function, so a journal-derived undo
+  // is judged here too.
+  const assembled = buildSshApplyRows(add, remove, opts?.protection ?? defaultSshProtectionFacts())
+  if (assembled.refusals.length > 0) {
+    return { ok: false, error: describePluginRefusals(assembled.refusals) }
   }
   // A non-boolean `restart` (e.g. the string 'false') must never be treated
   // as truthy and trigger an unwanted restart.
@@ -2089,6 +2277,7 @@ export async function materializeAndAdd(
   pack?: (dir: string) => { bytes: Buffer } | null | Promise<{ bytes: Buffer } | null>,
 ): Promise<MaterializeResult> {
   let name: string
+  let version: string | null = null
   try {
     const pkg = JSON.parse(readFileSync(join(localDir, 'package.json'), 'utf8')) as Record<string, unknown>
     // Name-length bound: the whitelist regex has no {max}; a ≤64 KiB manifest
@@ -2099,16 +2288,17 @@ export async function materializeAndAdd(
       return { ok: false, error: 'materialize: invalid package name' }
     }
     name = pkg.name
+    version = typeof pkg.version === 'string' && pkg.version !== '' ? pkg.version : null
   } catch {
     return { ok: false, error: 'materialize: cannot read package.json' }
   }
-  // Reserved-name deny (design 21 §6.4, decision 19 — same set as the dialog
-  // row filter and the apply rows): a picked folder whose manifest claims an
-  // official/chamber domain name is refused BEFORE the pack/upload/write
-  // chain touches anything (the package.json is user-picked code, but its
-  // declared name decides what would be installed into the managed profile).
-  if (isDeniedPluginName(name)) {
-    return { ok: false, error: describeReservedNameRefusal([name]) }
+  // Protected-set judgement (design 21 §6.11, ssh form) over the manifest's
+  // declared name + version, BEFORE the pack/upload/write chain touches
+  // anything: a picked folder can never smuggle a protected name, and an
+  // official-scope pick must be same-generation.
+  const sshGuard = guardPluginMutation({ op: 'install', name, version, facts: sshProtectionFacts() })
+  if (sshGuard.kind !== 'allow') {
+    return { ok: false, error: `materialize: ${describePluginDecision(sshGuard)}` }
   }
   const packed = await (pack ?? packDirectory)(localDir)
   if (packed === null) return { ok: false, error: 'materialize: pnpm pack failed' }
@@ -2121,14 +2311,15 @@ export async function materializeAndAdd(
  * manifest already read (classifyPluginPick); the remote install tail is the
  * same as the folder flow's (write-file → remote `$HOME` → `add file:`), but
  * no local `pnpm pack` runs and no local package.json is consulted. The
- * declared name is re-validated here (PLUGIN_NAME_PATTERN + reserved-domain
- * deny) — the same single enforcement point the folder flow uses — and the
+ * declared name is re-validated here (PLUGIN_NAME_PATTERN + the shared
+ * protected-set judgement) — the same single enforcement point the folder flow
+ * uses — and the
  * archive bytes are capped at the remote write ceiling before any transfer.
  */
 export async function materializeArchiveAndAdd(
   exec: ExecFn,
   spec: RemoteSpec,
-  archive: { name: string; bytes: Buffer },
+  archive: { name: string; version?: string | null; bytes: Buffer },
 ): Promise<MaterializeResult> {
   if (typeof archive?.name !== 'string' || archive.name.length > MAX_PLUGIN_SPEC_CHARS || !PLUGIN_NAME_PATTERN.test(archive.name)) {
     return { ok: false, error: 'materialize: invalid package name' }
@@ -2136,8 +2327,14 @@ export async function materializeArchiveAndAdd(
   if (!Buffer.isBuffer(archive?.bytes) || archive.bytes.length === 0) {
     return { ok: false, error: 'materialize: the picked plugin archive is empty' }
   }
-  if (isDeniedPluginName(archive.name)) {
-    return { ok: false, error: describeReservedNameRefusal([archive.name]) }
+  const archiveGuard = guardPluginMutation({
+    op: 'install',
+    name: archive.name,
+    version: archive.version ?? null,
+    facts: sshProtectionFacts(),
+  })
+  if (archiveGuard.kind !== 'allow') {
+    return { ok: false, error: `materialize: ${describePluginDecision(archiveGuard)}` }
   }
   return installRemoteTarball(exec, spec, archive.name, archive.bytes)
 }
@@ -2221,7 +2418,7 @@ export async function runLocalDshPlugin(
   localDshHome: string,
   action: 'add' | 'remove',
   spec: string,
-  options: { allowFileSpec?: boolean } = {},
+  options: { allowFileSpec?: boolean; protection?: PluginProtectionFacts } = {},
 ): Promise<LocalPluginExecResult> {
   if (typeof spec !== 'string') return { ok: false, error: 'plugin spec must be a string' }
   const addOk = spec.length <= 4096 && (
@@ -2230,6 +2427,24 @@ export async function runLocalDshPlugin(
   )
   if (action === 'add' && !addOk) return { ok: false, error: `invalid add spec: ${JSON.stringify(spec)}` }
   if (action === 'remove' && (spec.length > MAX_PLUGIN_SPEC_CHARS || !PLUGIN_NAME_PATTERN.test(spec))) return { ok: false, error: `invalid remove name: ${JSON.stringify(spec)}` }
+  // Defense in depth (design 21 §6.11): the protected-set judgement runs here
+  // too when the caller supplies facts. Registry specs carry their own name +
+  // version; a `file:` spec has no registry name (the caller has already judged
+  // the picked manifest before reaching this function), so it is skipped here.
+  if (options.protection !== undefined && !spec.startsWith('file:')) {
+    const guarded = guardPluginMutation({
+      op: action === 'add' ? 'install' : 'remove',
+      name: parseSpecName(spec),
+      version: action === 'add' ? parseSpecVersion(spec) : null,
+      facts: options.protection,
+    })
+    // ONLY `refuse` stops the CLI. `defer` (profile absent) must fall through:
+    // the first `dsh plugin add` is exactly what creates the profile, so a
+    // deferral is not a refusal (design 21 §6.11.3 R0).
+    if (guarded.kind === 'refuse') {
+      return { ok: false, error: describePluginDecision(guarded) }
+    }
+  }
 
   const installed = join(dshWorkspace, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
   const source = join(dshWorkspace, 'apps', 'cli', 'src', 'bin.ts')

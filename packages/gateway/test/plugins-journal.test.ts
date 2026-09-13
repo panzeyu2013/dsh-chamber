@@ -46,7 +46,7 @@ test('appendPending records durable pending ops; recent is newest-first and pers
   const journal = createPluginsJournal(stateDir, silent)
   const a = journal.appendPending({ kind: 'install', name: 'pkg-a', spec: 'pkg-a@^1.0.0', initiator: 'test-desktop' })
   const b = journal.appendPending({ kind: 'remove', name: 'pkg-b' })
-  const c = journal.appendPending({ kind: 'materialize', name: 'pkg-c', spec: 'file:/tmp/pkg-c.tgz' })
+  const c = journal.appendPending({ kind: 'materialize', name: 'pkg-c', spec: 'file:/tmp/pkg-c.tgz', version: '1.2.3' })
 
   assert.equal(typeof a, 'string')
   assert.ok(a !== b && b !== c, 'op ids are unique')
@@ -59,6 +59,10 @@ test('appendPending records durable pending ops; recent is newest-first and pers
   }
   assert.equal(recent[0]!.kind, 'materialize')
   assert.equal(recent[0]!.spec, 'file:/tmp/pkg-c.tgz')
+  // The declared version must round-trip: the generation judgement (R2) reads it
+  // and the deferred drain re-submits it (2026-12 review).
+  assert.equal(recent[0]!.version, '1.2.3')
+  assert.equal(recent[1]!.version, undefined)
   assert.equal(recent[2]!.initiator, 'test-desktop')
   assert.equal(recent[2]!.spec, 'pkg-a@^1.0.0')
   assert.equal(journal.recent(2).length, 2)
@@ -71,6 +75,7 @@ test('appendPending records durable pending ops; recent is newest-first and pers
   // Durability: a reopened journal sees the same records.
   const reopened = createPluginsJournal(stateDir, silent)
   assert.deepEqual(reopened.recent().map(op => op.id), [c, b, a])
+  assert.equal(reopened.recent()[0]!.version, '1.2.3', 'the version survives a reopen')
 })
 
 test('markTerminal records ok/failed/blocked (+error/restarted) and no-ops on a missing op id', t => {

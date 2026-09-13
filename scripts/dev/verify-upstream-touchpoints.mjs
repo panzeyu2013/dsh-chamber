@@ -5,7 +5,9 @@
  *
  * 只读，唯一例外是默认模式的 C8（就地重建-还原生成物，见该条）；依赖只有 node
  * 内置模块 + 同目录三个 helper（artifact-gate.mjs /
- * verify-upstream-touchpoints-args.mjs / verify-upstream-touchpoints-hover.mjs）。
+ * 内置模块 + 同目录四个 helper（artifact-gate.mjs /
+ * verify-upstream-touchpoints-args.mjs / verify-upstream-touchpoints-hover.mjs /
+ * plugin-protection-gate.mjs）。
  * exit-code 语义：0 全部通过（或 --help）/ 1 有门硬失败 / 2 用法错误。
  *   C1  纯文件字节恒等（fork 副本中未登记补丁的文件必须与上游锚逐字节一致）
  *       —— 对 shadow 副本与 chamber-named fork（如 seed-open-in）同等生效
@@ -34,6 +36,21 @@
  *       `packages/desktop/vendor/dsh/package.json` 被 gitignore、属派生本地状态，
  *       仅在其存在时与锁文件交叉校验；生产源码（非注释、非测试、非产物）里出现
  *       任何其他 dsh 版本字面量即红——历史叙述只能留在注释里
+ *   C11 运行时线族集合（硬失败，design 21 §6.11）：受保护集合的 F 分量只有一个
+ *       权威来源——**已提交**的运行时锁文件闭包（`@deepseek-ai/*` 名字集合）。
+ *       必须含核心（dsh/dsh-base/dsh-web-app）、**不得**含官方 opt-in 层
+ *       （`dsh-experimental-*`）与 dev/test 包；实例树物化时另做等价性交叉校验
+ *       （允许差集 = 其他平台 `node-addon-system-*`）。命中即红：F 的来源选错
+ *       （如误用源码线 vendor 树）会让「能装官方 opt-in 层」当场失效
+ *   C12 profile 契约锚（硬失败）：上游源码仍以 `dsh.profile.bundles` 承载层列表、
+ *       以 `dsh.bundle.patch` 声明层、web 模板默认组合不变、profile workspace 仍是
+ *       hoisted + 不自动装 peer；任一漂移 ⇒ 停升级、改派生（B₀ 快照）
+ *   C13 播种注册表结构（硬失败）：`HOST_*_PACKAGE_NAME` 常量 ↔ `HOST_*_INSERT` 行 ↔
+ *       `CHAMBER_HOST_PACKAGES` 注册表三面一一对应（S 分量与播种机制脱节即红）
+ *   C14 manifest 三方镜像（硬失败）：`plugin-sync.ts`（producer）↔ `preload.cts` ↔
+ *       `renderer/src/global.d.ts` 的字段集一致，**且**加性读面投影 `rows` 的**元素类型**
+ *       三方一致（control-plane `PluginRow` ↔ preload/renderer `PluginRowProjection`：
+ *       字段名 + role/owner 字面量并集；ipc-surface-mirror 只覆盖后两者）
  *   C15 悬停卡自持移植的上游退役门（硬失败；2026-09-13 登记）：chamber 的
  *       `RowHoverCard` + `shared/hover-intent.ts` 取代 vendor `HoverCard`，退役
  *       条件是「上游修掉 leave 落在 dwell→commit 窗口就残留的竞态」。本门在**冻结
@@ -69,6 +86,9 @@ import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { spawn, spawnSync } from 'node:child_process'
 import { artifactGateVerdict, compareOutputs, restoreDir, snapshotDir } from './artifact-gate.mjs'
+import {
+  familyFindings, manifestMirrorFindings, profileContractFindings, runtimeFamilyNames, seedRegistryFindings,
+} from './plugin-protection-gate.mjs'
 import { USAGE_EXIT_CODE, VERIFY_USAGE, parseVerifyArgs } from './verify-upstream-touchpoints-args.mjs'
 import { HOVER_PORT_SOURCES, hoverPortVerdict } from './verify-upstream-touchpoints-hover.mjs'
 
@@ -977,6 +997,65 @@ for (const fork of FORKS) {
       console.log(`✓ C10 版本锚 = ${current}（六锚 + 3 fork 一致；生产源码无未登记版本字面量，扫描 ${candidates.length} 文件）`)
     }
   }
+}
+
+// C11–C14 —— 受保护集合与代耦合的保鲜门（design 21 §6.11；判据纯函数在
+// plugin-protection-gate.mjs，负例测试在 plugin-protection-gate.test.mjs）
+{
+  const reportFindings = (gate, label, { violations, notes }) => {
+    if (violations.length > 0) {
+      fail(`${gate} ${label}: ${violations.join('; ')}`)
+    } else {
+      console.log(`✓ ${gate} ${label}`)
+    }
+    for (const note of notes) console.log(`  · ${note}`)
+  }
+
+  // C11 —— 运行时线族集合（F 的唯一权威 = 已提交的运行时锁文件闭包）
+  const runtimeLockPath = join(ROOT, 'packages', 'desktop', 'vendor', 'dsh', 'pnpm-lock.yaml')
+  const runtimeTreePath = join(ROOT, 'packages', 'desktop', 'vendor', 'dsh', 'node_modules', '@deepseek-ai')
+  const sourceTreePath = join(ROOT, 'vendor', 'harness-packages', '@deepseek-ai')
+  const familyNames = existsSync(runtimeLockPath)
+    ? runtimeFamilyNames(readFileSync(runtimeLockPath, 'utf8'))
+    : []
+  const listScope = (dir) => (existsSync(dir)
+    ? readdirSync(dir).map((name) => `@deepseek-ai/${name}`).sort()
+    : null)
+  const c11 = familyFindings({
+    names: familyNames,
+    treeNames: listScope(runtimeTreePath),
+    sourceTreeNames: listScope(sourceTreePath),
+  })
+  reportFindings('C11', `运行时线族集合 = ${familyNames.length} 个 @deepseek-ai/*（核心在场；opt-in/dev 包不在 F 内）`, c11)
+
+  // C12 —— profile 契约锚（上游源码；子模块未物化时由 C1/C3/C5 响亮失败）
+  const profileSourcePath = join(SUBMODULE, 'packages', 'boot', 'app-boot', 'src', 'profile.ts')
+  const pluginSourcePath = join(SUBMODULE, 'apps', 'cli', 'src', 'plugin.ts')
+  const c12 = profileContractFindings({
+    profileSource: existsSync(profileSourcePath) ? readFileSync(profileSourcePath, 'utf8') : null,
+    pluginSource: existsSync(pluginSourcePath) ? readFileSync(pluginSourcePath, 'utf8') : null,
+  })
+  reportFindings('C12', 'profile 契约锚（bundles 层列表 / dsh.bundle.patch 声明 / web 模板默认 / hoisted + 不自动装 peer）', c12)
+
+  // C13 —— 播种注册表结构（S 分量与播种机制一一对应）
+  const seedSourcePath = join(ROOT, 'packages', 'control-plane', 'src', 'host-graph-seed.ts')
+  const c13 = seedRegistryFindings({
+    seedSource: existsSync(seedSourcePath) ? readFileSync(seedSourcePath, 'utf8') : '',
+  })
+  reportFindings('C13', '播种注册表（HOST_*_PACKAGE_NAME ↔ HOST_*_INSERT ↔ CHAMBER_HOST_PACKAGES）', c13)
+
+  // C14 —— manifest 三方字段集镜像（producer ↔ preload ↔ renderer）+ 嵌套行类型
+  // （`rows` 元素：control-plane `PluginRow` ↔ preload/renderer `PluginRowProjection`）
+  const manifestSources = {
+    producerSource: join(ROOT, 'packages', 'desktop', 'plugin-sync.ts'),
+    preloadSource: join(ROOT, 'packages', 'desktop', 'preload.cts'),
+    rendererSource: join(ROOT, 'packages', 'renderer', 'src', 'global.d.ts'),
+    rowProducerSource: join(ROOT, 'packages', 'control-plane', 'src', 'protected-plugins.ts'),
+  }
+  const c14 = manifestMirrorFindings(Object.fromEntries(
+    Object.entries(manifestSources).map(([key, file]) => [key, existsSync(file) ? readFileSync(file, 'utf8') : '']),
+  ))
+  reportFindings('C14', 'manifest 三方字段集镜像 + rows 行类型（plugin-sync.ts / preload.cts / renderer/global.d.ts / control-plane protected-plugins.ts）', c14)
 }
 
 // C15 —— 悬停卡自持移植的上游退役门（硬失败；2026-09-13 登记，design 06 §7）

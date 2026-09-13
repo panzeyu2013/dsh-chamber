@@ -708,8 +708,9 @@ ARCHIVE_CLEANUP 常量 + `seedRemoteChamberHostPackages` + main.ts
 `index.ts` `extraSeedEntries` 第三行（desktop-synced sourceDir）；
 `runtime-manager.ts` 探针期望走 C 的派生实现；测试数组（feature-lifecycle /
 chamber-installed / runtime-routes——真探针 fixture 需答第 7 端点 /
-plugin-spec-lockstep：新包名 `@dsh-chamber/*` 在保留名拒绝集内（scope 前缀
-判断），自动覆盖）。gateway build.mjs **不改**（宿主包已不在 gateway 内嵌，
+plugin-spec-lockstep：新包名是否受保护改由**注册表派生**（design 21 §6.11：
+`S` = `CHAMBER_HOST_PACKAGES` 名集，C13 三面一致门守住）——新增种子包
+**必须同时进注册表**才受保护；「`@dsh-chamber/*` 前缀自动覆盖」的旧口径已废止）。gateway build.mjs **不改**（宿主包已不在 gateway 内嵌，
 mobile 是唯一打包例外）。
 
 **F. settings-connections**：PluginDialog 内建组件表

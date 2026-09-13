@@ -87,11 +87,10 @@ import {
   parseServerResponse,
   postClientRequest,
 } from './control-plane-module.ts'
-// The plugin spec/name whitelist family + reserved-name deny predicate
-// (control-plane plugin-spec.ts, design 21 §6.2/§6.7 — the single source
-// shared with the gateway; re-exported below for this provider's consumers).
+// The plugin spec/name whitelist family (control-plane plugin-spec.ts, design
+// 21 §6.2/§6.7 — the single source shared with the gateway; re-exported below
+// for this provider's consumers).
 import {
-  isDeniedPluginName,
   MATERIALIZE_FILE_SPEC_PATTERN,
   MAX_PLUGIN_SPEC_CHARS,
   PLUGIN_NAME_PATTERN,
@@ -163,8 +162,9 @@ export const MAX_SERVICE_NAME_CHARS = 255
 export const MAX_REMOTE_DSH_HOME_CHARS = 1024
 export const MAX_SSH_PASSWORD_CHARS = 4096
 /**
- * Package-spec whitelist family (design 13 §7.2) + reserved-name deny
- * predicate — SINGLE-SOURCED in control-plane `plugin-spec.ts` (design 21
+ * Package-spec whitelist family (design 13 §7.2; the reserved-name deny
+ * predicate is retired — the protected set in `protected-plugins.ts` is the
+ * judgement, design 21 §6.11) — SINGLE-SOURCED in control-plane `plugin-spec.ts` (design 21
  * §6.2/§6.7: the gateway executor and the desktop share one source; the
  * renderer's ADD_SPEC stays a hand mirror pinned by the lockstep test in
  * gateway/test/plugin-spec-lockstep.test.ts). Consumed through
@@ -174,7 +174,6 @@ export const MAX_SSH_PASSWORD_CHARS = 4096
  * this provider's consumers and tests keep one unchanged import surface.
  */
 export {
-  isDeniedPluginName,
   MATERIALIZE_FILE_SPEC_PATTERN,
   MAX_PLUGIN_SPEC_CHARS,
   PLUGIN_NAME_PATTERN,

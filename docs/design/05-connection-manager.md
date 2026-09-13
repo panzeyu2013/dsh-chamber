@@ -864,7 +864,8 @@ export const chamberBridge: {
   文件夹导入）→ 恢复/动作行；gateway 添加双通道（registry spec 直装 +
   文件夹直推）已接线；「变更记录」区不渲染（后端 journal/备份保留）；恢复撤销
   仅 gateway（崩溃/恢复态恢复横幅）；http 直连只读不变；恢复提示 r0–r4 文案双
-  后端同权；契约与余留见 design 21 §6.6/§7。
+  后端同权；契约与余留见 design 21 §6.6/§7；**受保护集合与代耦合**（官方 opt-in 层可装可卸、
+  受保护行只读可见、角色徽标、代不匹配提示、旧 gateway 只读回退）见 design 21 §6.11。
 - 操作全走现有 `desktop_ssh_*` IPC 与 `/api/connections`；表单收非秘密
   元数据（id/label/kind/transport/insecureHttp/host/user/sshPort/remotePort/
   serviceName，id 白名单

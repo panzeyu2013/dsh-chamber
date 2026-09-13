@@ -216,7 +216,18 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     // Managed-profile plugin read projection (design 21 §6.2 A0 read surface):
     // readManifest's gateway implementation over <stateDir>/dsh-home/profiles/
     // web/package.json (bounded no-follow read; file: values masked).
-    const installed = createChamberInstalled(options.config.plane.stateDir)
+    // The read projection's row roles/protected flags come from the SAME
+    // runtime facts the write face judges with (design 21 §6.11): the active
+    // managed workspace path + its effective version, dereferenced lazily
+    // (this module is built before the runtime manager exists).
+    const installed = createChamberInstalled(
+      options.config.plane.stateDir,
+      () => {
+        if (runtimeManager === null) return null
+        const workspace = runtimeManager.resolveWorkspace()
+        return { path: workspace.path, version: workspace.version }
+      },
+    )
     // Design 21 §6.3 A1 mutation orchestrator (plan Phase 4.2-4.5 wiring):
     // journal + serial executor + deferred install intents behind the
     // runtime-manager profile-write lease. Status probes dereference the

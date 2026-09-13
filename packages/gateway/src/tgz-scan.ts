@@ -23,9 +23,18 @@
  * 'corrupt'; the route answers 400 with a distinct code per error so the
  * client can tell a broken upload from an archive that exceeded the caps.
  *
+ * Identity projection (2026-12 review, design 21 §6.2/§6.11): the route judges
+ * the CLIENT-ASSERTED `x-plugin-name`/`x-plugin-version` headers, so the archive's
+ * own `package/package.json` is captured (bounded, ≤ 64 KiB) here and the route
+ * requires it to AGREE with the headers. Without this, a caller could upload an
+ * archive whose real name is a protected/official one while declaring an
+ * innocent third-party name — pnpm installs the ARCHIVE's name, and that name
+ * then lands in the profile as a DIRECT dependency (exempt from the post-install
+ * verifier), i.e. the exact shadow the protected set exists to prevent.
+ *
  * Pure Node (node:zlib), no dependencies. Returns a promise (the gunzip
  * stream is inherently async); the memory held at any moment is one 512-byte
- * header buffer plus the inflater's own bounded window.
+ * header buffer, the bounded manifest capture, plus the inflater's own window.
  */
 
 import { createGunzip } from 'node:zlib'
@@ -44,9 +53,28 @@ const GZIP_MAGIC = [0x1f, 0x8b] as const
 
 export type TgzScanError = 'not_gzip' | 'corrupt' | 'too_many_entries' | 'too_large'
 
+/** The archive's own package identity (`package/package.json`, npm-pack layout). */
+export interface TgzManifestProjection {
+  name: string
+  version: string
+}
+
 export type TgzScanResult =
-  | { ok: true; entries: number; totalBytes: number; firstNames: string[] }
+  | {
+    ok: true
+    entries: number
+    totalBytes: number
+    firstNames: string[]
+    /** null when the archive carries no readable npm-pack manifest; `manifestError`
+     *  says why (the route refuses such an upload — the asserted identity cannot be
+     *  verified). */
+    manifest: TgzManifestProjection | null
+    manifestError?: 'missing' | 'invalid' | 'oversized'
+  }
   | { ok: false; error: TgzScanError }
+
+/** Manifest capture bound (the same order as the desktop manifest reader). */
+export const TGZ_MANIFEST_MAX_BYTES = 64 * 1024
 
 /** Octal size field: bytes 124-135 (12 bytes), NUL/space padded; empty
  * (all padding) means 0. Non-octal content is not a valid ustar header. */
@@ -114,12 +142,54 @@ export function scanTgzMetadata(buffer: Buffer): Promise<TgzScanResult> {
     /** Partial header accumulation across chunk boundaries. */
     const headerParts: Buffer[] = []
     let headerLength = 0
+    /** Bounded capture of `package/package.json` (see the module header). */
+    let manifestParts: Buffer[] | null = null
+    let manifestCaptured = 0
+    let manifestOversized = false
+    const manifestOf = (): { manifest: TgzManifestProjection | null; manifestError?: 'missing' | 'invalid' | 'oversized' } => {
+      if (manifestOversized) return { manifest: null, manifestError: 'oversized' }
+      if (manifestParts === null) return { manifest: null, manifestError: 'missing' }
+      try {
+        // The capture covers the entry's declared size ROUNDED UP to the 512-byte
+        // tar block, so trailing NUL padding is expected and must be stripped
+        // before parsing (2026-12 review).
+        const text = Buffer.concat(manifestParts).subarray(0, manifestCaptured).toString('utf8').replace(/[\0\s]+$/u, '')
+        const parsed: unknown = JSON.parse(text)
+        if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          return { manifest: null, manifestError: 'invalid' }
+        }
+        const record = parsed as Record<string, unknown>
+        const name = record.name
+        const version = record.version
+        if (typeof name !== 'string' || name === '' || typeof version !== 'string' || version === '') {
+          return { manifest: null, manifestError: 'invalid' }
+        }
+        return { manifest: { name, version } }
+      } catch {
+        return { manifest: null, manifestError: 'invalid' }
+      }
+    }
+    const finishOk = (): void => {
+      const identity = manifestOf()
+      finish({
+        ok: true,
+        entries,
+        totalBytes,
+        firstNames,
+        manifest: identity.manifest,
+        ...(identity.manifestError === undefined ? {} : { manifestError: identity.manifestError }),
+      })
+    }
 
     const consume = (chunk: Buffer): void => {
       let offset = 0
       while (offset < chunk.length) {
         if (skipRemaining > 0) {
           const consumed = Math.min(skipRemaining, chunk.length - offset)
+          if (manifestParts !== null) {
+            manifestParts.push(Buffer.from(chunk.subarray(offset, offset + consumed)))
+            manifestCaptured += consumed
+          }
           skipRemaining -= consumed
           offset += consumed
           continue
@@ -148,8 +218,16 @@ export function scanTgzMetadata(buffer: Buffer): Promise<TgzScanResult> {
         }
         if (header === null || header.isEnd) {
           // Classic end-of-archive marker: everything past it is padding.
-          finish({ ok: true, entries, totalBytes, firstNames })
+          finishOk()
           return
+        }
+        if (header.name === 'package/package.json' || header.name === './package/package.json') {
+          if (header.size > TGZ_MANIFEST_MAX_BYTES) {
+            manifestOversized = true
+          } else {
+            manifestParts = []
+            manifestCaptured = 0
+          }
         }
         entries += 1
         if (entries > TGZ_MAX_ENTRIES) {
@@ -186,7 +264,7 @@ export function scanTgzMetadata(buffer: Buffer): Promise<TgzScanResult> {
         finish({ ok: false, error: 'corrupt' })
         return
       }
-      finish({ ok: true, entries, totalBytes, firstNames })
+      finishOk()
     })
     gunzip.on('error', () => {
       finish({ ok: false, error: 'corrupt' })

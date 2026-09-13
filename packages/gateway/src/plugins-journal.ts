@@ -73,6 +73,11 @@ export interface JournalOp {
   name: string
   /** Registry spec / materialized file path for install-materialize ops. */
   spec?: string
+  /** Declared package version (materialize carries it in the x-plugin-version
+   *  header rather than in the `file:` spec) — the submission-time generation
+   *  judgement needs it, and a deferred intent that lost it can never drain
+   *  (design 21 §6.11.3 R2 / 2026-12 review). */
+  version?: string
   /** Reference to the pre-mutation backup dir: backups/<op-id>/ when the
    * executor successfully placed one, null otherwise. */
   preImage: string | null
@@ -96,6 +101,10 @@ export interface JournalPending {
   kind: JournalOpKind
   name: string
   spec?: string
+  /** Declared package version (materialize uploads carry it in the
+   *  x-plugin-version header, not in the `file:` spec) — the generation check
+   *  (design 21 §6.11.3 R2) needs it for official-scope installs. */
+  version?: string
   initiator?: string
 }
 
@@ -261,6 +270,7 @@ export function createPluginsJournal(stateDir: string, logger: JournalLogger): P
         status: 'pending',
       }
       if (input.spec !== undefined) op.spec = input.spec
+      if (input.version !== undefined) op.version = input.version
       if (input.initiator !== undefined) op.initiator = input.initiator
       const ops = loadOps()
       ops.push(op)

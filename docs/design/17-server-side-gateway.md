@@ -695,12 +695,15 @@ version）。每次 spawn 时控制面种子注册表从缓存注入托管 profi
 - **移动例外**：`dsh-chamber-client-ui-mobile` 不参与同步——移动访问绑定
   gateway（链路无桌面），插件随 gateway 发行物打包 seed（§3 装配矩阵）。
 
-**第三方插件管理写面（design 21 A1；契约见 design 21 §6.2/§6.3）**：托管 profile
+**第三方插件管理写面（design 21 A1；契约见 design 21 §6.2/§6.3，受保护集合与代耦合见 §6.11）**：托管 profile
 第三方插件管理——
-`GET …/installed` = readManifest 投影（file: 值掩码、profile_absent 404 /
-profile_corrupt 500）；`PUT …/install`（registry spec，202 异步/400/409/deferred）、
-`POST …/remove`（停机态可用，not_installed 409）、`PUT …/materialize`（≤32 MiB
-独立流式上传 + tgz 上限）、`GET …/tasks`（journal + deferred 投影，file: spec 掩
+`GET …/installed` = readManifest 投影（`dependencies` + `bundles` + **加性 `rows`**（role/protected）、
+file: 值掩码、profile_absent 404 / profile_corrupt 500）；`PUT …/install`（registry spec，
+202 异步/400/409/deferred；**受保护集合判定 + 官方 scope 精确同代**：`protected` /
+`needs-version` / `needs-exact-version` / `generation-mismatch`，旧码 `reserved` 退役）、
+`POST …/remove`（停机态可用，not_installed 409；只判受保护名、不判版本）、`PUT …/materialize`
+（≤32 MiB 独立流式上传 + tgz 上限；name+version 同样过判定与代校验）、`GET …/tasks`
+（journal + deferred 投影，file: spec 掩
 码）——串行队列 + 持久 journal + 单写者租约（runtime-manager profile-write
 lease）+ deferred ready 边沿排空（装完自动受控 restart 一次）；执行器 env 白名
 单、子进程 pid journal（崩溃孤儿启动对账击杀）、错误 `persistence_failed` 500 族。

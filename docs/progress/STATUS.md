@@ -131,6 +131,22 @@
   gateway 拒绝码→本地化文案映射未做（409 逐字英文）、pollGatewayReady 英文错误串
   未本地化；archive-pick file+folder 双模式对话框为 **macOS-v1**（非 macOS 保持
   文件夹对话框，随 design 22/23）。
+- **受保护集合与代耦合（design 21 §6.11，决策 19 的 2026-12 修订）**：仍留六项**登记偏差/未完成**：
+  ① ssh 装面保守（`F` 无远端来源；放开前提 = 增加远端 family 读，须按 design 13 §7.2 exec
+  纪律单独评审）；② 代不匹配默认阻断、**无**跨代 override 入口（需跨代试验时另开显式入口，
+  不得把阻断降级为静默警告）；③ 旧就地 gateway 无 `rows` 时的**回退分支**（官方/chamber 行整行不列出、
+  只列第三方行 + 「gateway 版本较低」提示，与旧 gateway 的可见性口径一致；**失效判据**：
+  gateway 全量升级到本版后删除；就地重装窗口见 CHANGELOG 发布说明，遵守本文件既有的
+  「版本歪斜窗口是发布说明事项」口径）；④ **装后复验违例的自动回滚未做**：复验本身强制且
+  响亮（违例 = op 失败 + gateway preImage 保留），但两端都还没有「还原 `package.json` +
+  lockfile 并重装」的自动回滚（gateway 侧属 r2 回滚列，local 侧无 profile 备份）——
+  在该能力落地前，处置是人工按 runbook 卸载/重装被污染的 profile（失效判据：两端任一具备
+  自动回滚，则本条改为只描述仍缺的那一端）；
+  ⑤ **本地清单原样返回**（design 21 决策 18 的既有偏差）现在也覆盖**新增的 `rows[].spec` 通道**：
+  `desktop_local_plugin_list` 直接回 `localPluginList()` 的未掩码清单（`dependencies` 与 `rows[].spec`
+  都含本机绝对路径），`redactLocalPluginManifest` 虽已同步掩 `rows` 但**无生产调用点**——
+  即遮蔽器存在、边界未接线。失效判据：本地列表接线遮蔽（或显式判定本地路径可见性无风险）时删除本条；
+  ⑥ **`owner` 已随行投影但渲染端未消费**，来源 tooltip 与行级"代"提示未做（design 21 §6.6/§7 已同步口径）。
 - **归档清理与归档管理器（design 24）**：剩余**仅测试类**——打包版实机目检（含
   幽灵行不再浮现、点击不再 `session/not-found`）、探针依赖实例就绪（fail-closed，
   行保持抑制）、语义级接线以源码契约 + 目检代证、集合 >65,536 不清扫（容量边界）；

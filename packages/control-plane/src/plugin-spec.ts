@@ -1,5 +1,7 @@
 /**
- * The plugin spec/name whitelist family + reserved-name deny predicate — the
+ * The plugin spec/name whitelist family (the former reserved-name DENY predicate
+ * lived here too; it is retired — the protected set in `protected-plugins.ts` is
+ * the single write-face judge, design 21 §6.11) — the
  * SINGLE source shared by every plugin-management backend (design 21 §6.2 /
  * §6.7, A2 cross-package single-sourcing; plan Phase 4.3):
  *
@@ -67,21 +69,6 @@ export const WRITE_FILE_MAX_BYTES = 50 * 1024 * 1024
  * remote `cat` could exhaust Electron's main-process memory. The cap also
  * admits the largest write-file read-back exactly. */
 export const RUN_STDOUT_MAX_BYTES = WRITE_FILE_MAX_BYTES
-
-/**
- * Reserved-name deny predicate (design 21 §6.2/§6.4/decision 19 — the shared
- * model-level rule for INSTALL and REMOVE alike, matching the plugin
- * dialog's third-party row filter): the official domain (`@deepseek-ai/*`)
- * and the chamber domain (`@dsh-chamber/*` — the seeded host packages, the
- * self-built client plugins and the mobile exception are all chamber-managed
- * and can never be installed/removed through the plugin model) are denied.
- * Callers apply it to the parsed package NAME (install paths extract the
- * name from the full spec first); the prefix match stays correct even if a
- * versioned `@scope/name@ver` string reaches it.
- */
-export function isDeniedPluginName(name: string): boolean {
-  return name.startsWith('@deepseek-ai/') || name.startsWith('@dsh-chamber/')
-}
 
 /**
  * The registry package NAME a spec/name value refers to — the shared

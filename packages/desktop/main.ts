@@ -45,7 +45,7 @@ import { applyWindowsAclTightening } from './win-acl.ts';
 import { configureGatewaySecretStore, configureGatewaySessionProvider, gatewayChamberApplyBatch, gatewayChamberMaterialize, gatewayPasswordValidationError, gatewayProvider, gatewaySecretStorageMode, gatewayTokenValidationError, getGatewayPassword, getGatewayToken, setGatewayPassword, setGatewayToken, setInstanceSecrets, syncGatewayChamberPlugins } from './gateway-provider.ts';
 import type { LocalChamberHostPackage } from './gateway-provider.ts';
 import { getGatewaySyncRegistration, setGatewaySyncRegistration } from './gateway-sync-registry.ts';
-import { buildPluginTarball, classifyPluginPick } from './plugin-tarball.ts';
+import { buildPluginTarball, classifyPluginPick, folderPluginIdentity } from './plugin-tarball.ts';
 import { buildApplyConfirmMessage, validateApplyPayload } from './gateway-ipc-shared.ts';
 import { createGatewaySessionManager, gatewayRegistrationAuthHeaders, gatewaySessionScopeForConnection } from './gateway-session.ts';
 import { createGatewaySessionRefresh, gatewaySessionOriginForUrl, gatewayTunnelAuthority } from './gateway-session-refresh.ts';
@@ -160,6 +160,7 @@ import {
   ARCHIVE_CLEANUP_PACKAGE_NAME,
   CLIENT_GRAPH_PACKAGE_NAME,
   ExactOwnershipRegistry,
+  describePluginDecision,
   describeLocalPluginAddConfirmation,
   describeLocalPluginRemoveConfirmation,
   GIT_WORKTREE_PACKAGE_NAME,
@@ -176,12 +177,22 @@ import {
   resolveLocalMaterializeDirectory,
   runLocalDshPlugin,
   seedRemoteChamberHostPackages,
+  WEB_PROFILE,
   disposePluginSyncChildren,
+  guardPluginMutation,
   scopeExecToOwnership,
+  sshApplyFacts,
   runWithFinalOwnership,
 } from './plugin-sync.ts';
-import type { ChamberHostPackageSeed, ExactOwnershipToken, ExecFn, StatusFn, RemoteSpec } from './plugin-sync.ts';
-import { CHAMBER_HOST_PACKAGES } from './control-plane-module.ts';
+import type {
+  ChamberHostPackageSeed, ExactOwnershipToken, ExecFn, PluginProtectionFacts, StatusFn, RemoteSpec,
+} from './plugin-sync.ts';
+import {
+  CHAMBER_HOST_PACKAGES,
+  describeFamilyFindings,
+  resolveRuntimeFamily,
+  verifyProfileFamilyConsistency,
+} from './control-plane-module.ts';
 import type { ChamberHostPackageDescriptor } from './control-plane-module.ts';
 import {
   DEFAULT_CHAMBER_SETTINGS,
@@ -216,8 +227,10 @@ import { IPC_CHANNELS } from './ipc-events.ts';
 import {
   buildSshApplyRows,
   buildSshUndoDecision,
-  describeReservedNameRefusal,
+  describePluginRefusals,
   describeSshUndoConfirmation,
+  parseSpecName,
+  parseSpecVersion,
 } from './ssh-apply-rows.ts';
 import { createSshPluginJournal } from './ssh-plugin-journal.ts';
 
@@ -360,6 +373,18 @@ function resolveBuiltinDshWorkspace(): string | null {
     if (existsSync(candidate)) return candidate;
   }
   return null;
+}
+
+/**
+ * 运行时线锚锁文件（design 21 §6.11.1 的 F 首选事实源）：随应用发布的
+ * `vendor/dsh/pnpm-lock.yaml`，也是 C11 门禁断言的那个文件。dev 形态指向仓库里的
+ * 同一份（活动树此时可能是源码线 `ref-dsh`，其闭包含 opt-in 段，不能当 F）。
+ */
+function resolvePinnedRuntimeLockfile(): string | null {
+  const candidate = app.isPackaged
+    ? path.join(process.resourcesPath, 'vendor', 'dsh', 'pnpm-lock.yaml')
+    : path.join(pkgDir, 'vendor', 'dsh', 'pnpm-lock.yaml');
+  return existsSync(candidate) ? candidate : null;
 }
 
 const builtinDshWorkspace = resolveBuiltinDshWorkspace();
@@ -1950,6 +1975,60 @@ if (!gotTheLock) {
         lease.release();
       }
     };
+    /**
+     * Protection facts for the LOCAL profile (design 21 §6.11.1): F parsed from
+     * the ACTIVE runtime's lockfile closure (platform-independent, never the
+     * source-line vendor tree), the effective runtime version, and whether the
+     * profile manifest already exists (absent ⇒ the write face defers — the
+     * first install is what creates it).
+     */
+    const localProtectionFacts = (): PluginProtectionFacts => {
+      const resolved = resolveActiveRuntime(runtimeBaseDir);
+      let familyNames: readonly string[] | null = null;
+      if (resolved.path !== null) {
+        const family = resolveRuntimeFamily(resolved.path, { pinnedLockfilePath: resolvePinnedRuntimeLockfile() });
+        familyNames = family.ok ? family.names : null;
+      }
+      const profileManifest = path.join(localDshHome, 'profiles', WEB_PROFILE, 'package.json');
+      return {
+        familyNames,
+        runtimeVersion: resolved.version,
+        profileState: existsSync(profileManifest) ? 'ready' : 'absent',
+        familySource: 'runtime',
+      };
+    };
+    /**
+     * Post-install family verification (design 21 §6.11.4): a successful
+     * install is not a success until the profile tree is proven consistent —
+     * a hoisted transitive copy of a runtime-family package that the pinned
+     * release does not provide (`outside-family`) or that sits on another
+     * generation (`generation-mismatch`) is exactly the composition split the
+     * judgement alone cannot see (R2 only sees the direct spec).
+     *
+     * v1 semantics (matching the gateway's existing preImage discipline): the
+     * finding is LOUD and the op reports failure; automatic rollback of the
+     * mutated profile is registered as open work in STATUS.
+     */
+    const verifyLocalProfileFamily = (facts: PluginProtectionFacts): { ok: true } | { ok: false; error: string } => {
+      if (!Array.isArray(facts.familyNames) || facts.familyNames.length === 0) return { ok: true };
+      const verdict = verifyProfileFamilyConsistency({
+        profileDir: path.join(localDshHome, 'profiles', WEB_PROFILE),
+        familyNames: facts.familyNames,
+        runtimeVersion: facts.runtimeVersion ?? null,
+      });
+      if (verdict.ok) {
+        // A skip is NOT a pass: record it loudly (the install itself succeeded,
+        // but the profile tree was never proven consistent).
+        if (verdict.skipped !== undefined) {
+          console.warn(`[dsh-chamber] 插件族一致性复验被跳过：${verdict.skipped}`);
+        }
+        return { ok: true };
+      }
+      return {
+        ok: false,
+        error: `installed, but the profile tree no longer matches the instance runtime: ${describeFamilyFindings(verdict.findings, facts.runtimeVersion ?? null)}`,
+      };
+    };
     const confirmPluginAction = async (
       win: BrowserWindow | null,
       copy: { message: string; detail: string },
@@ -3409,14 +3488,13 @@ if (!gotTheLock) {
       if (restart !== undefined && typeof restart !== 'boolean') {
         return { ok: false, error: 'restart must be a boolean' };
       }
-      // Reserved-name deny (design 21 §6.4/decision 19, same set as the
-      // gateway): whole-batch refusal listing the denied names BEFORE any
-      // transport work — @deepseek-ai/* and @dsh-chamber/* can never be
-      // installed or removed through the plugin model. applyPlugins re-checks
-      // (defense in depth) with the same copy.
-      const assembled = buildSshApplyRows(add, remove);
-      if (assembled.refused.length > 0) {
-        return { ok: false, error: describeReservedNameRefusal(assembled.refused) };
+      // Protected-set judgement (design 21 §6.11, ssh form = B₀ ∪ S with no
+      // family source): whole-batch refusal naming each refused row and its
+      // code BEFORE any transport work. applyPlugins re-checks with the same
+      // facts (defense in depth) and the undo path rides that same check.
+      const assembled = buildSshApplyRows(add, remove, sshApplyFacts());
+      if (assembled.refusals.length > 0) {
+        return { ok: false, error: describePluginRefusals(assembled.refusals) };
       }
       // Known bundle packages for the §4.5 ④ bundles assertion (design 13):
       // the LOCAL manifest's bundle-declaring dependency names. When the
@@ -3425,7 +3503,7 @@ if (!gotTheLock) {
       // membership is still asserted); never a silent wrong assertion.
       let knownBundles: string[] | undefined;
       try {
-        knownBundles = localPluginList(localDshHome).bundleLines;
+        knownBundles = localPluginList(localDshHome, localProtectionFacts()).bundleLines;
       } catch (localError) {
         console.warn('[dsh-chamber] 本地清单不可读，bundle 激活层断言跳过：', localError);
         knownBundles = undefined;
@@ -3442,6 +3520,7 @@ if (!gotTheLock) {
             ownershipKey: `${target.sourceToken.generation}:${target.fingerprint}`,
             journal: sshPluginJournal,
             targetFingerprint: target.fingerprint,
+            protection: sshApplyFacts(),
           },
         ),
       );
@@ -3504,6 +3583,7 @@ if (!gotTheLock) {
               ownershipKey: `${target.sourceToken.generation}:${target.fingerprint}`,
               journal: sshPluginJournal,
               targetFingerprint: target.fingerprint,
+              protection: sshApplyFacts(),
             },
           );
           if (!result.ok) return { ok: false as const, error: result.error };
@@ -3754,7 +3834,7 @@ if (!gotTheLock) {
     }));
     ipcMain.handle(IPC_CHANNELS.LOCAL_PLUGIN_LIST, trustedIpc(() => {
       try {
-        return { ok: true, manifest: localPluginList(localDshHome) };
+        return { ok: true, manifest: localPluginList(localDshHome, localProtectionFacts()) };
       } catch (error) {
         return { ok: false, error: describeUnknownError(error) };
       }
@@ -3905,11 +3985,16 @@ if (!gotTheLock) {
         );
       }
       const archiveName = source.name;
+      const archiveVersion = source.version;
       const archiveBytes = source.bytes;
       return runWithFinalOwnership(
         () => ownsRemoteTarget(target),
         () => materializeArchiveAndAdd(scopedExecForTarget(target), target.spec, {
           name: archiveName,
+          // The archive's declared version (read by classifyPluginPick) is the
+          // judgement's version input; dropping it left the parameter dead and
+          // the materialize generation check unable to see it (2026-12 review).
+          version: archiveVersion,
           bytes: archiveBytes,
         }),
       );
@@ -3932,13 +4017,35 @@ if (!gotTheLock) {
       // exactly as with folder picks.
       const classified = classifyPluginPick(picked.path);
       if (!classified.ok) return { ok: false, error: sanitizeErrorText(classified.error) };
+      // Protected-set judgement over the PICKED manifest (design 21 §6.11):
+      // a folder/archive pick is the one local path whose name is known only
+      // from the picked package.json, so it is judged here before the picker
+      // result can reach the CLI. `file:` specs carry no registry name, so
+      // runLocalDshPlugin's own guard deliberately skips them.
+      const pickedManifest = classified.source.kind === 'tgz'
+        ? { ok: true as const, name: classified.source.name, version: classified.source.version as string | null }
+        : folderPluginIdentity(classified.source.path);
+      if (!pickedManifest.ok) return { ok: false, error: sanitizeErrorText(pickedManifest.error) };
+      const localFacts = localProtectionFacts();
+      const pickedGuard = guardPluginMutation({
+        op: 'install',
+        name: pickedManifest.name,
+        version: pickedManifest.version,
+        facts: localFacts,
+      });
+      if (pickedGuard.kind === 'refuse') {
+        return { ok: false, error: describePluginDecision(pickedGuard) };
+      }
       return runLocalPluginMutation('plugin:add-file', async (dshWorkspace) => {
         // design 21 §6.5 缺陷① fix (plan 24 小项④): the main-process picker
         // IS the sanctioned file: source — pass the capability flag so
         // the picked absolute path passes runLocalDshPlugin's gate (without it
         // every file: pick was refused as an invalid add spec).
-        const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', `file:${picked.path}`, { allowFileSpec: true });
-        return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local add failed' };
+        const freshFacts = localProtectionFacts();
+        const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', `file:${picked.path}`, { allowFileSpec: true, protection: freshFacts });
+        if (!result.ok) return { ok: false, error: result.error ?? 'local add failed' };
+        const verified = verifyLocalProfileFamily(freshFacts);
+        return verified.ok ? { ok: true } : { ok: false, error: verified.error };
       });
     }));
     ipcMain.handle(IPC_CHANNELS.LOCAL_PLUGIN_ADD, trustedIpc(async ({ spec: specArg }) => {
@@ -3950,6 +4057,17 @@ if (!gotTheLock) {
       if (typeof specArg === 'string' && specArg.startsWith('file:')) {
         return { ok: false, error: 'local file imports must use the local import picker' };
       }
+      // Protected-set judgement FIRST (design 21 §6.11): never ask the user to
+      // confirm an install the write face would refuse (protected name, or an
+      // official-scope install without the instance's exact generation).
+      const addFacts = localProtectionFacts();
+      const addGuard = guardPluginMutation({
+        op: 'install',
+        name: parseSpecName(specArg),
+        version: parseSpecVersion(specArg),
+        facts: addFacts,
+      });
+      if (addGuard.kind === 'refuse') return { ok: false, error: describePluginDecision(addGuard) };
       // User confirmation (design 09 §4 v1 mitigation): installing a registry
       // package into the LOCAL profile creates a persistent execution surface
       // on the next local boot — never a silent script action.
@@ -3957,19 +4075,35 @@ if (!gotTheLock) {
       if ('cancelled' in confirm) return { ok: true, cancelled: true };
       if (!confirm.ok) return { ok: false, error: confirm.error };
       return runLocalPluginMutation('plugin:add', async (dshWorkspace) => {
-        const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', specArg);
-        return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local add failed' };
+        // Re-resolve the facts INSIDE the mutation: the guard above ran before
+        // the confirmation dialog and before this fence/lease, and a runtime
+        // switch in that window would make both the inner guard and the
+        // post-install verification describe the PREVIOUS runtime (2026-12
+        // review). The pre-dialog guard stays as the user-facing fast refusal.
+        const freshFacts = localProtectionFacts();
+        const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', specArg, { protection: freshFacts });
+        if (!result.ok) return { ok: false, error: result.error ?? 'local add failed' };
+        const verified = verifyLocalProfileFamily(freshFacts);
+        return verified.ok ? { ok: true } : { ok: false, error: verified.error };
       });
     }));
     ipcMain.handle(IPC_CHANNELS.LOCAL_PLUGIN_REMOVE, trustedIpc(async ({ name }) => {
       if (typeof name !== 'string' || name === '') return { ok: false, error: 'invalid plugin name' };
+      // Protected-set judgement first (design 21 §6.11): a composition member
+      // or chamber seed can never be removed through the plugin model — the
+      // refusal is honest and immediate, not a confirmed action that dies in
+      // the CLI. `remove` never judges a version.
+      const removeFacts = localProtectionFacts();
+      const removeGuard = guardPluginMutation({ op: 'remove', name, version: null, facts: removeFacts });
+      if (removeGuard.kind === 'refuse') return { ok: false, error: describePluginDecision(removeGuard) };
       // User confirmation (design 09 §4 v1 mitigation): removal is destructive
       // — a page script must not be able to wipe the local profile silently.
       const confirm = await confirmPluginAction(mainWindow, describeLocalPluginRemoveConfirmation(name));
       if ('cancelled' in confirm) return { ok: true, cancelled: true };
       if (!confirm.ok) return { ok: false, error: confirm.error };
       return runLocalPluginMutation('plugin:remove', async (dshWorkspace) => {
-        const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'remove', name);
+        const freshFacts = localProtectionFacts();
+        const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'remove', name, { protection: freshFacts });
         return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local remove failed' };
       });
     }));

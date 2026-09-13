@@ -22,6 +22,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { ApiRequest, ApiResponse } from '@dsh-chamber/control-plane'
+import { CHAMBER_HOST_PACKAGES, PLUGIN_MATERIALIZED_VALUE_MASK } from '@dsh-chamber/control-plane'
 import { createChamberPlugins } from '../src/plugins.ts'
 import {
   createChamberInstalled,
@@ -179,7 +180,10 @@ test('installed read: oversized manifest (> 1 MiB) → profile_corrupt; exact bo
   const exact = JSON.stringify({ dependencies: { a: '^1.0.0' }, pad: 'x'.repeat(INSTALLED_MANIFEST_MAX_BYTES - base.length) })
   writeManifest(stateDir, exact)
   const atBound = readProjection(stateDir)
-  assert.deepEqual(atBound, { ok: true, dependencies: { a: '^1.0.0' }, bundles: [], profileExists: true })
+  assert.equal(atBound.ok, true)
+  if (atBound.ok) {
+    assertProjection(atBound, { ok: true, dependencies: { a: '^1.0.0' }, bundles: [], profileExists: true }, ['a:third-party:false'])
+  }
   const over = JSON.stringify({ dependencies: { a: '^1.0.0' }, pad: 'x'.repeat(INSTALLED_MANIFEST_MAX_BYTES - base.length + 1) })
   writeManifest(stateDir, over)
   const result = readProjection(stateDir)
@@ -187,21 +191,52 @@ test('installed read: oversized manifest (> 1 MiB) → profile_corrupt; exact bo
   if (!result.ok) assert.equal(result.code, 'profile_corrupt')
 })
 
+/** B₀ (installation-owned composition) + S (chamber seeds) — present in EVERY
+ *  projection (design 21 §6.11.5: the row set is dependencies ∪ live bundles ∪
+ *  B₀ ∪ S, so the baseline composition is visible even when the profile lists
+ *  no bundles of its own). */
+const BOOT_ROWS: string[] = [
+  '@deepseek-ai/dsh-base:composition:true',
+  '@deepseek-ai/dsh-web-app:composition:true',
+  ...CHAMBER_HOST_PACKAGES.map(descriptor => `${descriptor.insert.name}:seed:true`),
+].sort()
+
+const rowShape = (rows: readonly { name: string; role: string; protected: boolean }[]): string[] =>
+  rows.map(row => `${row.name}:${row.role}:${row.protected}`)
+
+/** Split a projection into `rows` + the rest, asserting both (the manifest
+ *  fields keep their exact historical meaning — `rows` is additive). */
+function assertProjection(
+  projection: { ok: true; rows: readonly { name: string; role: string; protected: boolean }[] } & Record<string, unknown>,
+  expectedRest: Record<string, unknown>,
+  expectedRows: string[],
+): void {
+  const { rows, ...rest } = projection
+  assert.deepEqual(rest, expectedRest)
+  assert.deepEqual(rowShape(rows), [...BOOT_ROWS, ...expectedRows].sort())
+}
+
 test('installed read: valid minimal manifest → masked passthrough projection', t => {
   const stateDir = scratch(t)
   writeManifest(stateDir, JSON.stringify({
     dependencies: { a: '^1.0.0' },
     dsh: { profile: { bundles: ['b'] } },
   }))
-  assert.deepEqual(readProjection(stateDir), {
-    ok: true,
-    dependencies: { a: '^1.0.0' },
-    bundles: ['b'],
-    profileExists: true,
-  })
+  const projection = readProjection(stateDir)
+  assert.equal(projection.ok, true)
+  if (projection.ok) {
+    assertProjection(projection, {
+      ok: true,
+      dependencies: { a: '^1.0.0' },
+      bundles: ['b'],
+      profileExists: true,
+      // `a` is a plain dependency (third-party); `b` is listed in the live
+      // bundles but is not a dependency ⇒ a layer row the composition owns.
+    }, ['a:third-party:false', 'b:layer:false'])
+  }
 })
 
-test('installed read: file: values are masked (case-insensitive), registry values pass through', t => {
+test('installed read: file: values are masked (case-insensitive) in dependencies AND rows', t => {
   const stateDir = scratch(t)
   writeManifest(stateDir, JSON.stringify({
     dependencies: {
@@ -225,6 +260,16 @@ test('installed read: file: values are masked (case-insensitive), registry value
     })
     assert.deepEqual(result.bundles, [])
     assert.equal(result.profileExists, true)
+    // The row projection carries the SAME masking rule: no gateway-local path
+    // may reach the renderer through `rows[].spec` either (design 21 §6.2).
+    const byName = new Map(result.rows.map(row => [row.name, row]))
+    assert.equal(byName.get('file-pkg')?.spec, MATERIALIZED_VALUE_MASK)
+    assert.equal(byName.get('case-pkg')?.spec, MATERIALIZED_VALUE_MASK)
+    assert.equal(byName.get('file-tgz')?.spec, MATERIALIZED_VALUE_MASK)
+    assert.equal(byName.get('registry-pkg')?.spec, '^2.1.0')
+    // ...and the mask still classifies as materialize, not as third-party.
+    assert.equal(byName.get('file-pkg')?.role, 'materialized')
+    assert.equal(byName.get('registry-pkg')?.role, 'third-party')
   }
 })
 
@@ -238,12 +283,16 @@ test('installed read: missing dsh block → bundles []; non-string dependency va
       'null-spec': null,
     },
   }))
-  assert.deepEqual(readProjection(stateDir), {
-    ok: true,
-    dependencies: { good: '^1.0.0' },
-    bundles: [],
-    profileExists: true,
-  })
+  const projection = readProjection(stateDir)
+  assert.equal(projection.ok, true)
+  if (projection.ok) {
+    assertProjection(projection, {
+      ok: true,
+      dependencies: { good: '^1.0.0' },
+      bundles: [],
+      profileExists: true,
+    }, ['good:third-party:false'])
+  }
 })
 
 test('installed read: bundles keeps only string members', t => {
@@ -271,12 +320,16 @@ function desktopPluginSyncSource(): string {
   )
 }
 
-test('MATERIALIZED_VALUE_MASK is pinned to the desktop plugin-sync literal', () => {
-  assert.equal(MATERIALIZED_VALUE_MASK, 'file:<hidden>')
-  const match = /MATERIALIZED_VALUE_MASK\s*=\s*'([^']+)'/.exec(desktopPluginSyncSource())
-  if (match === null) assert.fail('desktop plugin-sync.ts must declare MATERIALIZED_VALUE_MASK as a quoted literal')
-  assert.equal(match[1], MATERIALIZED_VALUE_MASK,
-    'gateway mask literal must equal the desktop constant (centralization lands in the A1 whitelist migration, plan Phase 4.3)')
+test('MATERIALIZED_VALUE_MASK is the SHARED control-plane constant on both sides', () => {
+  // The literal was centralized into control-plane protected-plugins.ts for the
+  // protected-set work (design 21 §6.2/§6.11.5): neither side may hardcode its
+  // own copy again — the gateway's export and the desktop's export must both
+  // resolve to PLUGIN_MATERIALIZED_VALUE_MASK.
+  assert.equal(MATERIALIZED_VALUE_MASK, PLUGIN_MATERIALIZED_VALUE_MASK)
+  assert.equal(PLUGIN_MATERIALIZED_VALUE_MASK, 'file:<hidden>')
+  assert.match(desktopPluginSyncSource(),
+    /export const MATERIALIZED_VALUE_MASK = PLUGIN_MATERIALIZED_VALUE_MASK/,
+    'desktop plugin-sync.ts must re-export the shared constant, not a fresh literal')
 })
 
 test('INSTALLED_PROFILE_DIR stays on the desktop WEB_PROFILE layout (profiles/web parity)', () => {
@@ -304,12 +357,12 @@ test('route: GET /chamber/plugins/installed → 200 ok projection (trailing slas
   const host = surface(t, stateDir)
   const plain = await handle(host, 'GET', '/chamber/plugins/installed')
   assert.equal(plain.status, 200)
-  assert.deepEqual(plain.json(), {
+  assertProjection(plain.json() as never, {
     ok: true,
     dependencies: { a: '^1.0.0', 'local': MATERIALIZED_VALUE_MASK },
     bundles: ['a'],
     profileExists: true,
-  })
+  }, ['a:layer:false', 'local:materialized:false'])
   const slash = await handle(host, 'GET', '/chamber/plugins/installed/')
   assert.equal(slash.status, 200)
   assert.deepEqual(slash.json(), plain.json())
@@ -430,6 +483,7 @@ test('route: no write in flight → 200 unchanged (terminal ops, deferred intent
     bundles: ['a'],
     profileExists: true,
   }
+  const expectedRows = ['a:layer:false', 'local:materialized:false']
   const idle = [
     tasksProjection({}),
     tasksProjection({ busy: false, ops: [journalOp('ok'), journalOp('failed'), journalOp('blocked')] }),
@@ -441,7 +495,7 @@ test('route: no write in flight → 200 unchanged (terminal ops, deferred intent
   for (const tasks of idle) {
     const response = await handle(surface(t, stateDir, tasks), 'GET', '/chamber/plugins/installed')
     assert.equal(response.status, 200)
-    assert.deepEqual(response.json(), expected)
+    assertProjection(response.json() as never, expected, expectedRows)
   }
 })
 

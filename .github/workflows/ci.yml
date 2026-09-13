@@ -81,11 +81,13 @@ jobs:
       # Upstream-touchpoint registry gates (docs/checklists/upstream-touchpoints.md):
       # C1 pure fork files must stay byte-identical, C3 every fork/upstream file
       # has a ruling, C5 anchors must not go stale, C6 EXCLUDED dirs must exist,
-      # C9 vendor patch anchors must match the pin. These are file-only, so they
-      # run before the install (fail fast). C8 (committed artifacts == sources)
+      # C9 vendor patch anchors must match the pin, C11–C14 plugin protection
+      # (runtime family set / profile contract / seed registry / manifest mirror,
+      # design 21 §6.11) — all file-only, so they run before the install
+      # (fail fast). C8 (committed artifacts == sources)
       # rebuilds with esbuild and therefore needs node_modules — it runs in the
       # post-install step below; here it is explicitly advisory.
-      - name: Upstream touchpoint registry (C1/C3/C4/C5/C6/C7/C9/C10 + C15)
+      - name: Upstream touchpoint registry (C1/C3/C4/C5/C6/C7/C9/C10 + C11–C15)
         run: node scripts/dev/verify-upstream-touchpoints.mjs --no-artifact-rebuild
       - run: pnpm install --frozen-lockfile
         if: steps.classify.outputs.code == 'true'
@@ -315,8 +317,10 @@ jobs:
       # Upstream-touchpoint registry gates (docs/checklists/upstream-touchpoints.md):
       # C1 pure fork files must stay byte-identical, C3 every fork/upstream file
       # has a ruling, C5 anchors must not go stale, C6 EXCLUDED dirs must exist,
-      # C9 vendor patch anchors must match the pin (file-only, pre-install).
-      - name: Upstream touchpoint registry (C1/C3/C5/C6/C9 + C15)
+      # C9 vendor patch anchors must match the pin, C11–C14 plugin protection
+      # (design 21 §6.11), C15 the hover-port retirement gate — file-only,
+      # pre-install.
+      - name: Upstream touchpoint registry (C1/C3/C5/C6/C9 + C11–C15)
         if: steps.classify.outputs.code == 'true'
         run: node scripts/dev/verify-upstream-touchpoints.mjs --no-artifact-rebuild
       - run: pnpm install --frozen-lockfile

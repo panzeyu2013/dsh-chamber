@@ -336,6 +336,15 @@ export const zh = {
   installedTab: '已安装',
   installedEmpty: '尚未安装第三方插件',
   installedAddHint: '在下方添加区按包名搜索安装，或从本地文件夹 / .tgz 插件包导入。',
+  // design 21 §6.11.5 受保护行投影（后端 rows 驱动，渲染端只渲染不推导）：
+  // 五个角色徽标 + 受保护行只读提示 + 旧 gateway 无 rows 的回退提示（§6.11.7）。
+  pluginsRoleComposition: '安装组合',
+  pluginsRoleSeed: 'chamber 播种',
+  pluginsRoleLayer: '用户层',
+  pluginsRoleThirdParty: '第三方',
+  pluginsRoleMaterialized: '本地物化',
+  pluginsProtectedHint: '受保护：实例组合 / chamber 播种 / 运行时线族，只读',
+  pluginsLegacyGatewayHint: '该 Gateway 版本较低（未提供受保护行投影）：仅第三方行可操作，官方与 chamber 行不在此列出。',
   removeRowConfirmTitle: '移除插件？',
   removeRowConfirmDescription: '将移除 {name} 并在需要时重启实例生效。',
   removeRowConfirmUnconfiguredDescription: '将移除 {name}；该实例未配置 systemd 服务，不会自动重启——需手动重启远端后变更才生效。',
@@ -704,6 +713,16 @@ export const en: Record<SettingsConnectionsKey, string> = {
   installedTab: 'Installed',
   installedEmpty: 'No third-party plugins installed yet',
   installedAddHint: 'Install by package name in the add area below, or import a local source folder / .tgz plugin archive.',
+  // design 21 §6.11.5 protected-row projection (backend rows drive it; the
+  // renderer only renders): five role badges + the protected-row read-only hint
+  // + the old-gateway no-rows fallback hint (§6.11.7).
+  pluginsRoleComposition: 'Composition',
+  pluginsRoleSeed: 'Chamber seed',
+  pluginsRoleLayer: 'User layer',
+  pluginsRoleThirdParty: 'Third-party',
+  pluginsRoleMaterialized: 'Materialized',
+  pluginsProtectedHint: 'Protected: composition / chamber seed / runtime family \u2014 read-only',
+  pluginsLegacyGatewayHint: 'This gateway is older and provides no protected-row projection: only third-party rows are actionable; official and chamber rows are not listed here.',
   removeRowConfirmTitle: 'Remove this plugin?',
   removeRowConfirmDescription: 'Removing {name}; a restart applies the change when required.',
   removeRowConfirmUnconfiguredDescription: 'Removing {name}; no systemd service is configured on this instance, so nothing restarts automatically \u2014 restart the remote manually for the change to take effect.',
