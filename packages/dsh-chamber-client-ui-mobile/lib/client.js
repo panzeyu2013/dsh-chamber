@@ -546,15 +546,16 @@ var MOBILE_CSS = `
 @media (max-width: 768px) and (pointer: coarse) {
   /* Composer toolbar: one line. The official row wraps; force nowrap (the
      official 12px gap is kept \u2014 no gap override). */
-  /* Local-name SUFFIX match (production names are [hash]_[local]): the dual
-     arm covers multi-class elements. It also hits sibling rows whose local name
-     ends in "row" inside the composer bar subtree (e.g. the queue dock's
-     .row), which is harmless today \u2014 those rows declare no flex-wrap and carry
-     no _trigger child. */
-  [data-slot="conversation.composer.bar"] :is([class$="_row"], [class*="_row "]) {
+  /* Local-name match, BOTH production shapes (see the header): suffix for the
+     hash-first [hash]_[local] form (single- and multi-class), infix for the
+     local-first _<local>_<hash>_<idx> form the pinned bundles emit. It also
+     hits sibling rows whose local name ends in "row" inside the composer bar
+     subtree (e.g. the queue dock's .row), which is harmless today \u2014 those rows
+     declare no flex-wrap and carry no _trigger child. */
+  [data-slot="conversation.composer.bar"] :is([class$="_row"], [class*="_row "], [class*="_row_"]) {
     flex-wrap: nowrap !important;
   }
-  [data-slot="conversation.composer.bar"] :is([class$="_row"], [class*="_row "]) :is([class$="_trigger"], [class*="_trigger "]),
+  [data-slot="conversation.composer.bar"] :is([class$="_row"], [class*="_row "], [class*="_row_"]) :is([class$="_trigger"], [class*="_trigger "], [class*="_trigger_"]),
   [data-slot="conversation.input.model"] button {
     max-width: 112px !important;
     flex: 0 1 auto !important;
@@ -691,7 +692,7 @@ var MOBILE_CSS = `
        range, about 580-768px of the phone tier, not just 681-768px.
      The arm was deleted for both grids (2026-09-11 upstream-alignment T17b) \u2014
      upstream's geometry is the only geometry for each of them. */
-  [data-slot="settings.section"] :is([class$="_modelRow"], [class*="_modelRow "]) {
+  [data-slot="settings.section"] :is([class$="_modelRow"], [class*="_modelRow "], [class*="_modelRow_"]) {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
   /* iOS focus zoom: any editable field below 16px triggers the automatic

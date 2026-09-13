@@ -360,3 +360,22 @@ chrome；`[role="menu"] [role="menuitem"][aria-selected]` 高亮信号在本 pin
 （ui-primitives `Menu` 不发 `aria-selected`，且它会把焦点移入菜单，其 Enter 根本
 到不了 document 处理器）；全树仍恰好三个 `aria-modal` 产出点与三个 `data-side`
 载体（两个 AppFrame/ConversationRoot 拖拽把手 + 那颗恒为 `role="tooltip"` 的气泡）。
+
+**悬停卡 watchdog 自己的锚点（2026-09-13 review B2——它们同样是锚点，因此列在这里，
+而不只写在上面那一节）：** `official-hover-card.ts` 用三项事实匹配官方原子，pin 移动时
+一并重审：
+
+- `_root_1b2ny_3` 与 `_card_1b2ny_13`——**被服务的那份** bundle 里 ui-primitives
+  `HoverCard` 模块的 CSS-module class token。它们是 build-time 哈希：当前 pin
+  （0.1.5-rc.2）在 `@deepseek-ai/dsh-web-frontend/dist/assets/index-*.css` 里产出它们
+  （已对 `packages/desktop/vendor/dsh/` 下的随仓副本逐字节核对；该产物另有 251 个同形
+  `_<local>_<hash>_<idx>` 名字，且没有旧审计记录的 `[hash]_[local]` 形）。pin 一动哈希
+  即变，watchdog 退化为静默 no-op（fail closed，绝不误触发）——这是本包唯一没有属性形
+  兜底的锚点；
+- 锚定几何 `card.left = wrapper.right + 8`、`card.top = wrapper.top`（或贴底夹取的
+  `card.bottom = innerHeight − 8`）；
+- 卡片盒是该 wrapper 内唯一的 `[class*="_card_1b2ny_"]` 元素。
+
+`test/official-hover-card.test.ts` 钉住常数与 src↔产物锁步，C8 钉住随包字节；
+**没有任何门能看到被服务 bundle 的哈希变化**（它是仓外的派生状态），这正是本条存在的
+理由。

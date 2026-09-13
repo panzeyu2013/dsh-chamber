@@ -14,17 +14,29 @@
  * class emitted by another package is hashed per bundle and cannot be targeted
  * from here. That rule is why the sidebar's git-action hook is the
  * `data-git-action` attribute (2026-09-11 upstream-alignment) rather than the
- * global class it used to be; this header is the package that states it. Production CSS-modules naming in the
- * instance bundle is `[hash]_[local]` (upstream cssModules pattern, verified
- * on the shipped 0.1.5-rc.1 bundles: `JObwrW_row`, `zGbnIq_modelRow`,
- * `qSYn7G_cards`; the emitting packages are untouched at 0.1.5-rc.2), so a local
- * name is matched by SUFFIX through
- * `:is([class$="_<local>"], [class*="_<local> "])` — the second arm covers
- * elements that carry several classes, where the local name is not last.
- * The earlier `[class*="_<local>_"]` infix form matched NOTHING in production:
- * `_<local>_<hash>_<idx>` is the CHAMBER shell's own Vite naming, never the
- * instance bundle's, so the phone-tier composer row, the model row and the
- * settings card grids silently kept their desktop geometry (2026-09 audit).
+ * global class it used to be; this header is the package that states it.
+ *
+ * THE ONE CLASS-NAME EXCEPTION, AND BOTH NAMING SHAPES (2026-09-13 review A2):
+ * three ship-time anchors (the composer bar row + its model trigger, the
+ * settings Models row) do target a compiled local name, so the arms must cover
+ * BOTH shapes the same upstream sources can be built with:
+ *   - local-first `_<local>_<hash>_<idx>` (e.g. `_row_4qrvp_55`) — what the
+ *     PINNED bundles actually emit today. Measured, not assumed: the official
+ *     package that ships with the pin
+ *     (`node_modules/@deepseek-ai/dsh-web-frontend/dist/assets/index-*.css`,
+ *     0.1.5-rc.2) carries 251 unique names of this shape and ZERO of the other,
+ *     and the chamber's own composite build (`packages/desktop/dist/web/
+ *     assets/chamber-*.css`) is the same shape (904 unique);
+ *   - hash-first `[hash]_[local]` (e.g. `JObwrW_row`) — the shape an earlier
+ *     audit saw on the rc.1 bundles, kept as a suffix arm so a future build
+ *     that flips back does not silently lose these three rules.
+ * The dual arm is therefore `:is([class$="_<local>"], [class*="_<local> "],
+ * [class*="_<local>_"])`: suffix (single- and multi-class hash-first) plus
+ * infix (every local-first form). An earlier revision asserted the infix form
+ * "matched nothing" and dropped it — with the pinned bundles that left these
+ * three rules matching nothing at all, i.e. exactly the silent desktop-geometry
+ * regression the audit set out to fix. The watchdog's own token query
+ * (`official-hover-card.ts`) has always used the infix form for this reason.
  *
  * VISUAL LANGUAGE: everything rides the official `--dsw-*`/`--ds-*` tokens
  * (no literal colors except token fallbacks); the drawer reuses the official
@@ -609,15 +621,16 @@ export const MOBILE_CSS = `
 @media (max-width: 768px) and (pointer: coarse) {
   /* Composer toolbar: one line. The official row wraps; force nowrap (the
      official 12px gap is kept — no gap override). */
-  /* Local-name SUFFIX match (production names are [hash]_[local]): the dual
-     arm covers multi-class elements. It also hits sibling rows whose local name
-     ends in "row" inside the composer bar subtree (e.g. the queue dock's
-     .row), which is harmless today — those rows declare no flex-wrap and carry
-     no _trigger child. */
-  [data-slot="conversation.composer.bar"] :is([class$="_row"], [class*="_row "]) {
+  /* Local-name match, BOTH production shapes (see the header): suffix for the
+     hash-first [hash]_[local] form (single- and multi-class), infix for the
+     local-first _<local>_<hash>_<idx> form the pinned bundles emit. It also
+     hits sibling rows whose local name ends in "row" inside the composer bar
+     subtree (e.g. the queue dock's .row), which is harmless today — those rows
+     declare no flex-wrap and carry no _trigger child. */
+  [data-slot="conversation.composer.bar"] :is([class$="_row"], [class*="_row "], [class*="_row_"]) {
     flex-wrap: nowrap !important;
   }
-  [data-slot="conversation.composer.bar"] :is([class$="_row"], [class*="_row "]) :is([class$="_trigger"], [class*="_trigger "]),
+  [data-slot="conversation.composer.bar"] :is([class$="_row"], [class*="_row "], [class*="_row_"]) :is([class$="_trigger"], [class*="_trigger "], [class*="_trigger_"]),
   [data-slot="conversation.input.model"] button {
     max-width: 112px !important;
     flex: 0 1 auto !important;
@@ -754,7 +767,7 @@ export const MOBILE_CSS = `
        range, about 580-768px of the phone tier, not just 681-768px.
      The arm was deleted for both grids (2026-09-11 upstream-alignment T17b) —
      upstream's geometry is the only geometry for each of them. */
-  [data-slot="settings.section"] :is([class$="_modelRow"], [class*="_modelRow "]) {
+  [data-slot="settings.section"] :is([class$="_modelRow"], [class*="_modelRow "], [class*="_modelRow_"]) {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
   /* iOS focus zoom: any editable field below 16px triggers the automatic

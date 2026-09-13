@@ -475,3 +475,27 @@ menu, so its Enter never reaches a document handler); and the tree still has
 exactly three `aria-modal` producers and exactly three `data-side` carriers
 (the two AppFrame/ConversationRoot drag handles and the always-`role="tooltip"`
 bubble).
+
+**The hover-card watchdog's own anchors (2026-09-13 review B2 — these are anchors
+too, so they are listed here rather than only in the feature section above):**
+`official-hover-card.ts` matches the official atom by three facts, all re-audited
+when the pin moves:
+
+- `_root_1b2ny_3` and `_card_1b2ny_13` — the ui-primitives `HoverCard` module's
+  CSS-module class tokens in the SERVED bundle. They are build-time hashes: the
+  current pin (0.1.5-rc.2) emits them in
+  `@deepseek-ai/dsh-web-frontend/dist/assets/index-*.css` (verified byte-for-byte
+  on the bundled copy under `packages/desktop/vendor/dsh/`, which also carries
+  251 unique names of the same `_<local>_<hash>_<idx>` shape and none of the
+  `[hash]_[local]` shape the older audit recorded). A pin move changes the hash
+  and the watchdog degrades to a silent no-op (fail closed, never a misfire), so
+  this is the one anchor in the package with no attribute-shaped fallback;
+- the anchoring geometry `card.left = wrapper.right + 8`, `card.top =
+  wrapper.top` (or the bottom-clamped `card.bottom = innerHeight − 8`);
+- the card box being the only `[class*="_card_1b2ny_"]` element inside that
+  wrapper.
+
+`test/official-hover-card.test.ts` pins the constants and the src↔artifact
+lockstep, and C8 pins the shipped bytes; **no gate can see the served bundle's
+hash change** (it is derived state outside the repo), which is exactly why this
+entry exists.

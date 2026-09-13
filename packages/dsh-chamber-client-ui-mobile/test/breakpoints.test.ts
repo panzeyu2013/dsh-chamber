@@ -198,15 +198,23 @@ test('the retired mechanisms leave no trace in the stylesheet', () => {
   assert.ok(MOBILE_CSS.includes('[data-dockkit-divider]'))
   assert.ok(!stripComments(MOBILE_CSS).includes('[data-dockkit-split-button]'),
     'the split button must not be hidden')
-  // The composer-bar row rules use the production class-name shape:
-  // `[hash]_[local]` (upstream cssModules pattern), matched by SUFFIX with a
-  // multi-class arm. The old infix form `[class*="_row_"]` matched nothing in
-  // the instance bundle — `_<local>_<hash>_<idx>` is the chamber shell's Vite
-  // naming, never the served bundle's (2026-09 audit, P1).
+  // The composer-bar row rules must cover BOTH production class-name shapes
+  // (2026-09-13 review A2). Measured on the pinned artifacts: the official
+  // package the pin ships (@deepseek-ai/dsh-web-frontend 0.1.5-rc.2
+  // dist/assets/index-*.css) carries 251 unique local-first
+  // `_<local>_<hash>_<idx>` names and ZERO hash-first ones — so a suffix-only
+  // `:is(...)` matches no row at all, which is the silent desktop-geometry
+  // regression these rules exist to prevent. The infix arm is what makes them
+  // apply today; the suffix arms stay for a build that flips back.
   const phone = normalizePhoneTier()
-  assert.ok(phone.includes(':is([class$="_row"], [class*="_row "])'))
-  assert.ok(phone.includes(':is([class$="_trigger"], [class*="_trigger "])'))
-  assert.ok(!/\[class\*="_[A-Za-z]+_"\]/.test(phone), 'no infix local-name selectors remain in the phone tier')
+  const armsOf = (local) => {
+    const group = new RegExp(`:is\\(([^)]*\\[class\\*="_${local}_"\\][^)]*)\\)`).exec(phone)
+    assert.ok(group !== null, `the phone tier must cover the local-first _${local}_ shape`)
+    assert.ok(group[1].includes(`[class$="_${local}"]`), `the hash-first _${local} arm must stay`)
+    return group[1]
+  }
+  armsOf('row')
+  armsOf('trigger')
   // 2026-09-11 upstream-alignment T17a: the CSS hamburger is retired with the
   // official panel glyph; no self-drawn control may come back.
   assert.ok(!MOBILE_CSS.includes('dsh-mobile-nav-toggle-bars'), 'the CSS hamburger must be gone')
@@ -332,11 +340,14 @@ test('settings sheet stacks vertically with a pinned header and scrolling option
 })
 
 test('settings section inner grids: only the Models provider row degrades (cards stay upstream-owned)', () => {
-  // Suffix match on the production name shape `[hash]_[local]` (plus the
-  // multi-class arm) — see the composer-tier case above for why the infix
-  // form was dead (2026-09 audit, P1).
+  // Local-name match on BOTH production shapes (suffix for hash-first, infix
+  // for the local-first names the pin actually emits) — see the composer-tier
+  // case above (2026-09-13 review A2).
   const phone = normalizePhoneTier()
-  const modelRow = cssBlock(phone, '[data-slot="settings.section"] :is([class$="_modelRow"], [class*="_modelRow "])')
+  const modelRow = cssBlock(
+    phone,
+    '[data-slot="settings.section"] :is([class$="_modelRow"], [class*="_modelRow "], [class*="_modelRow_"])',
+  )
   assert.ok(modelRow !== null && modelRow.includes('grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);'))
   // 2026-09-11 upstream-alignment T17b: the ".cards" arm is DELETED. TWO card
   // grids live under this section, on two different upstream rules: the
