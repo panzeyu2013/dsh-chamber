@@ -19,6 +19,7 @@ import {
   GIT_WORKTREE_PACKAGE,
   HOST_GRAPH_PACKAGE,
   MOBILE_PACKAGE,
+  OPEN_IN_PACKAGE,
   classifyChamberClientPlugin,
   deriveChamberRows,
   type ChamberPackageState,
@@ -356,4 +357,94 @@ test('every target: an empty expected list yields no REGISTRY rows', () => {
     // registry list: with no inventory it is the single unknown-state row.
     assert.equal(rows.filter(row => row.name === null).length, target === 'gateway' ? 1 : 0)
   }
+})
+
+/* ---- localOnly registry rows (design 20 §6; 2026-12 user decision): listed
+ * for the LOCAL target only, OMITTED on every remote target. The earlier rule
+ * rendered the row on remote targets with a "local shape only" badge in both
+ * state columns; asking "why is a local plugin in my remote plugin list?" is
+ * what retired it — a per-target table must not list a row that no action on
+ * that target could ever produce. ---- */
+
+/** The registry's four rows as the desktop projects them (open-in flagged). */
+const FOUR_ROWS = [
+  ...LOCAL_MANIFEST,
+  pkg(OPEN_IN_PACKAGE, { ...INJECTED, localOnly: true }),
+]
+
+test('local: a localOnly registry row is an ORDINARY row there — its state is real on the one shape it applies to', () => {
+  const rows = deriveChamberRows({
+    target: 'local',
+    expected: FOUR_ROWS,
+    localManifestChamber: POISON,
+    remoteChamber: null,
+    inventory: null,
+    seedCache: null,
+    localSideFailed: false,
+  })
+  assert.deepEqual(rows.map(row => row.name),
+    [HOST_GRAPH_PACKAGE, GIT_WORKTREE_PACKAGE, ARCHIVE_CLEANUP_PACKAGE, OPEN_IN_PACKAGE],
+    'the local target lists all four registry rows')
+  assert.deepEqual(byName(rows, OPEN_IN_PACKAGE).localBadge, { labelKey: 'chamberBadgeInjected', tone: 'ok' })
+  assert.equal(byName(rows, OPEN_IN_PACKAGE).versionText, 'v1.2.3')
+})
+
+test('ssh/gateway/http: a localOnly registry row is OMITTED, never badged — no state, no version, no sync marker', () => {
+  // Both sources carry the row on purpose: the desktop projection (expected /
+  // localManifestChamber) and the ssh probe's synthesized installed:false row.
+  // Neither may turn it into a table row on a target that can never seed it.
+  const localOnlyProbe = pkg(OPEN_IN_PACKAGE, { installed: false, patched: false, live: null, localOnly: true })
+  for (const target of ['ssh', 'gateway', 'http'] as const) {
+    const rows = deriveChamberRows({
+      target,
+      expected: FOUR_ROWS,
+      localManifestChamber: FOUR_ROWS,
+      remoteChamber: target === 'ssh' ? { ok: true, packages: [...LOCAL_MANIFEST, localOnlyProbe] } : null,
+      inventory: null,
+      seedCache: null,
+      localSideFailed: false,
+    })
+    const registryRows = rows.filter(row => row.name !== null)
+    assert.deepEqual(registryRows.map(row => row.name),
+      [HOST_GRAPH_PACKAGE, GIT_WORKTREE_PACKAGE, ARCHIVE_CLEANUP_PACKAGE],
+      `${target}: the applicable registry rows only (design 20 §6: 3)`)
+    assert.equal(rows.some(row => row.name === OPEN_IN_PACKAGE), false,
+      `${target}: a row that cannot exist here is not rendered as a state`)
+  }
+})
+
+test('ssh: the synthesized localOnly probe row speaks for nothing — the probed rows keep their own states', () => {
+  const rows = deriveChamberRows({
+    target: 'ssh',
+    expected: FOUR_ROWS,
+    localManifestChamber: FOUR_ROWS,
+    remoteChamber: {
+      ok: true,
+      packages: [
+        pkg(HOST_GRAPH_PACKAGE, INJECTED),
+        pkg(GIT_WORKTREE_PACKAGE, HALF),
+        pkg(OPEN_IN_PACKAGE, { localOnly: true }),
+      ],
+    },
+    inventory: null,
+    seedCache: null,
+    localSideFailed: false,
+  })
+  assert.deepEqual(rows.map(row => row.name), [HOST_GRAPH_PACKAGE, GIT_WORKTREE_PACKAGE])
+  assert.deepEqual(byName(rows, HOST_GRAPH_PACKAGE).remoteBadge, { labelKey: 'chamberBadgeLive', tone: 'ok' })
+  assert.deepEqual(byName(rows, GIT_WORKTREE_PACKAGE).remoteBadge, { labelKey: 'chamberBadgeInjected', tone: 'warn' },
+    'the half-injected warn belongs to the probed row, not to the omitted one')
+})
+
+test('gateway: the omitted localOnly row is outside the cache accounting too', () => {
+  const rows = gatewayRows({
+    expected: FOUR_ROWS,
+    localManifestChamber: FOUR_ROWS,
+    seedCache: { [HOST_GRAPH_PACKAGE]: '1.2.3', [GIT_WORKTREE_PACKAGE]: '1.2.3', [ARCHIVE_CLEANUP_PACKAGE]: '1.2.3' },
+  })
+  assert.equal(rows.some(row => row.name === OPEN_IN_PACKAGE), false)
+  const row = byName(rows, HOST_GRAPH_PACKAGE)
+  assert.equal(row.cacheAbsent, false, 'three applicable packages cached is never "nothing synced"')
+  assert.equal(row.cacheNotSynced, false)
+  assert.equal(row.driftState, 'match')
 })

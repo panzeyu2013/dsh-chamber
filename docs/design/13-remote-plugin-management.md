@@ -141,18 +141,32 @@
   （`packages/control-plane/src/host-graph-seed.ts`：insert id + 包名 + 存活探测
   Remote）是唯一权威清单，desktop 的本地/远端注入态投影为**逐包列表**
   （`ChamberHostPackageState[]`，含 `insertId/name/probe/installed/patched/
-  version/live`），UI 直接映射该列表渲染行；本地探测、ssh 探测、gateway
+  version/live/localOnly`），UI 直接映射该列表渲染行；本地探测、ssh 探测、gateway
   seed-cache 漂移、gateway 同步包表、远端 seed 清单全部由同一清单派生。
   新增宿主包 = 在注册表加一行（页面、探测、同步自动覆盖）；任何写死包名的行集
   都会让已 seed 的包在页面上不可见，并让 `remoteNeedsSeed` 误报「已注入」。
+- **按目标适用性列行（`localOnly`，design 20 §6；2026-12 裁决）**：标 `localOnly` 的注册表行
+  只为本地形态存在，**非本地目标（ssh/gateway/http）的行集 = 该目标适用行**（不再渲染已退役的
+  「本地形态专用」badge）；判据是注册表标志而非观测状态——适用但尚未注入的行必须保留（它是
+  「注入」动作的判据）。同一个过滤（`applicableChamberPackages`）同时供给 ssh 的两个目标级门
+  （`sshChamberGates`：needs-seed / restart-pending），因为远端探针对 `localOnly` 行合成的是
+  `installed:false`（**一次远端调用都不发**，"没问"不等于"远端没有"）；main 进程侧凡判定
+  「那台机器上该有什么」的路径（手动注入预检、ready-time 注入日志、桌面侧 gateway 上传**源清单**
+  `main.ts` 的 `localChamberHostPackageSources`）一律读 `portableChamberHostPackageSeeds`，绝不读
+  完整注册表投影（`sourceDir` 为空的 localOnly 行会被误判为"构建产物缺失"；出货判定另用
+  `builtChamberHostPackageSeeds`，空 `sourceDir` 先被拒——否则 `join('','dist','index.js')` 会
+  落到进程 CWD 上）；此处与**网关侧**由注册表派生的 `SYNCABLE_HOST_PACKAGES` 白名单区分：后者按
+  设计仍含该行（design 20 §9 / design 17 §10.2）。
 - **行派生为纯函数**：「chamber 内置（注入）」表的**行派生**是纯函数 `deriveChamberRows`
   （`plugin-inventory-text.ts`，locale-free：只回 label KEY 与版本 STRING，
   绝不回 JSX/本地化文本），由 `test/chamber-rows.test.ts` 表驱动覆盖完整输入
   矩阵（local/ssh/gateway/http × 清单有/无 × installed/patched/live ×
   seed-cache 漂移/缺项/整盘缺/未读 × 空 expected）。**数据源矩阵是契约**：
   LOCAL 目标的 expected 与本地列都读**它自己的 profile 清单**
-  （`localList.chamber`），gateway/http/ssh 读桌面本机清单投影，ssh 在远端探测
-  成功时优先远端清单；**空 expected 列表不得声称「seed cache 不存在」**。
+  （`localList.chamber`），gateway/http/ssh 读桌面本机清单投影（ssh 一份来自
+  `loadSync` 已取的本地清单，gateway/http 一份来自专用的本地清单读取；
+  2026-12 review 前 ssh 的本地列恒为「未知」、探测失败还会清空表格），
+  ssh 在远端探测成功时优先远端清单；**空 expected 列表不得声称「seed cache 不存在」**。
   gateway 的**客户端插件行**（移动端入口）由 Loader inventory 中
   `classifyChamberClientPlugin` 的分类派生（`@dsh-chamber/dsh-client-ui-*`
   前缀，不是包名字面量）；inventory 不可用时渲染 unknown 行，

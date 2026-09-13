@@ -166,6 +166,8 @@ import {
   localPluginList,
   materializeAndAdd,
   materializeArchiveAndAdd,
+  builtChamberHostPackageSeeds,
+  portableChamberHostPackageSeeds,
   redactRemotePluginManifest,
   remoteHome,
   remotePluginList,
@@ -2340,14 +2342,25 @@ if (!gotTheLock) {
       insertId: descriptor.insert.id,
       packageName: descriptor.insert.name,
       // A registry package with no desktop source dir is "not shipped here":
-      // seedRemoteChamberHostPackages skips it (an empty dir never resolves a
-      // dist/index.js) instead of writing a dangling loader row.
+      // the shipped-artifact gate (builtChamberHostPackageSeeds) rejects an
+      // empty dir before any existsSync, so it can never resolve the process
+      // CWD's own dist/index.js; seedRemoteChamberHostPackages then skips it
+      // instead of writing a dangling loader row.
       sourceDir: chamberHostSourceDirs[descriptor.insert.name] ?? '',
       label: descriptor.insert.id,
       // The registry's ownership flag travels with the seed so the remote
       // writer drops the row explicitly (never "seeded because a path appeared").
       ...(descriptor.localOnly === true ? { localOnly: true as const } : {}),
     }));
+    // Everything that judges "what should be on that OTHER host" reads the
+    // portable list, never the full registry projection: a `localOnly` row has
+    // an empty sourceDir by design (`chamberHostSourceDirs` above), so counting
+    // it as a seedable package made the manual 注入 action fail with a
+    // "构建产物缺失" error naming the one package that must never be seeded, and
+    // appended a false gap to the REMOTE instance's log on every ready
+    // transition (design 20 §6, 2026-12 review). The writer re-applies the same
+    // rule internally (portableChamberHostPackageSeeds).
+    const portableHostSeeds = portableChamberHostPackageSeeds(chamberHostPackageSeeds);
     type RemoteTarget = {
       spec: RemoteSpec
       fingerprint: string
@@ -2394,20 +2407,20 @@ if (!gotTheLock) {
       };
       void (async () => {
         try {
-          const builtSeeds = chamberHostPackageSeeds.filter(seed => existsSync(path.join(seed.sourceDir, 'dist', 'index.js')));
+          const builtSeeds = builtChamberHostPackageSeeds(portableHostSeeds);
           if (builtSeeds.length === 0) {
             if (ownsSeed()) console.log(`[dsh-chamber] chamber host seed skipped for ${id}: no built host package artifacts`);
             appendSeedLog('info', 'chamber host 包未注入：构建产物缺失；远端相关客户端能力不可用');
             return;
           }
-          const missingSeeds = chamberHostPackageSeeds.filter(seed => !builtSeeds.includes(seed));
+          const missingSeeds = portableHostSeeds.filter(seed => !builtSeeds.includes(seed));
           if (missingSeeds.length > 0) {
             appendSeedLog('info', `chamber host 包部分未注入（构建产物缺失）：${missingSeeds.map(seed => seed.label).join(', ')}`);
           }
           const result = await seedRemoteChamberHostPackages(
             scopedExecForTarget(target, ownsSeed),
             target.spec,
-            chamberHostPackageSeeds,
+            portableHostSeeds,
           );
           if (!ownsSeed()) return;
           if (result.ok) {
@@ -2435,12 +2448,14 @@ if (!gotTheLock) {
     // control-plane seed uses; the sync uploads them into the gateway seed
     // cache after every gateway ready registration.
     const localChamberHostPackageSources = (): Array<{ name: string; packageJsonPath: string; distIndexPath: string }> => {
-      // Registry-driven: one entry per chamber host package, reusing the
-      // single per-package source-dir map declared with the seed list above
-      // (2026-09 P2 round: the two consumers must not maintain the paths
-      // twice — a packaged/repo path fix has to land in one place).
-      return CHAMBER_HOST_PACKAGES.flatMap(descriptor => {
-        const dir = chamberHostSourceDirs[descriptor.insert.name];
+      // Registry-driven AND portability-driven: this iterates the SAME portable
+      // list the ssh seed/preflight paths read (`portableHostSeeds`), so the
+      // local-shape-only rule has exactly one implementation and a future
+      // portability dimension cannot leak a row into the gateway seed cache by
+      // forgetting this site. The per-package source dirs still come from the
+      // single map declared with the seed list above (2026-09 P2 round).
+      return portableHostSeeds.flatMap(seed => {
+        const dir = chamberHostSourceDirs[seed.packageName];
         if (dir === undefined) {
           // NEVER silent (a registry entry with no desktop source dir used to
           // disappear here without a trace). This is the ssh seed list's
@@ -2452,13 +2467,13 @@ if (!gotTheLock) {
           // the UI shows no hint. Loud, with the missing name and that
           // consequence — the fix is a new entry in chamberHostSourceDirs.
           console.warn(
-            `[dsh-chamber] chamber host package ${descriptor.insert.name} (${descriptor.insert.id}) has no desktop source dir in chamberHostSourceDirs: `
+            `[dsh-chamber] chamber host package ${seed.packageName} (${seed.insertId}) has no desktop source dir in chamberHostSourceDirs: `
             + 'it is NOT uploaded to the gateway seed cache, so the gateway-hosted instance cannot load it (its host domain 404s) and no UI surface reports the gap',
           );
           return [];
         }
         return [{
-          name: descriptor.insert.name,
+          name: seed.packageName,
           packageJsonPath: path.join(dir, 'package.json'),
           distIndexPath: path.join(dir, 'dist', 'index.js'),
         }];
@@ -3743,7 +3758,8 @@ if (!gotTheLock) {
       // packages (host-graph + git-worktree): a remote connected before the
       // git package existed only picks it up through this path or the next
       // ready transition.
-      const missing = chamberHostPackageSeeds.filter(seed => !existsSync(path.join(seed.sourceDir, 'dist', 'index.js')));
+      const built = builtChamberHostPackageSeeds(portableHostSeeds);
+      const missing = portableHostSeeds.filter(seed => !built.includes(seed));
       if (missing.length > 0) {
         return { ok: false, error: `chamber host 包未打包：${missing.map(seed => seed.label).join('、')} 的 dist/index.js 缺失——请先构建（pnpm run build:host-packages）` };
       }
@@ -3755,7 +3771,7 @@ if (!gotTheLock) {
         const result = await seedRemoteChamberHostPackages(
           scopedExecForTarget(target, ownsSeed),
           target.spec,
-          chamberHostPackageSeeds,
+          portableHostSeeds,
         );
         if (!ownsSeed()) return { ok: false, error: 'ssh instance changed while host seed was in progress' };
         // Surface the outcome in the instance's ring-buffer log (the connections

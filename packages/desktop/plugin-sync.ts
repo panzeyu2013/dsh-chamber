@@ -454,10 +454,13 @@ export interface ChamberHostPackageState {
   live: boolean | null
   /**
    * The registry row is meaningful for the LOCAL instance shape only (design
-   * 20 §6). On a remote target the row is reported with `installed:false` /
-   * `patched:false` WITHOUT any remote call, and the plugin view renders
-   * "local shape only" from this flag instead of "not injected": the package
-   * is absent by design there, never missing by fault.
+   * 20 §6). The ssh PROBE reports it with `installed:false`/`patched:false`
+   * WITHOUT any remote call — those values mean "not asked", never "the target
+   * lacks it" — while the desktop's LOCAL projection (localPluginList) carries
+   * its real state; the plugin view reads this flag to OMIT the row on every
+   * non-local target (it is listed for the local shape alone, where the state
+   * is real). The synthesized probe row must therefore never feed a
+   * target-level gate such as the ssh needs-seed/restart decision.
    */
   localOnly?: boolean
 }
@@ -685,7 +688,7 @@ export function localPluginList(localDshHome: string): LocalPluginManifest {
         live: null,
         // The local profile is exactly where a local-shape-only row IS
         // meaningful, so the flag is reported as the registry declares it and
-        // the view distinguishes it from a missing package on remote targets
+        // the view lists the row here while omitting it on every remote target
         // (design 20 §6). Absent = an ordinary row: the field is only written
         // when it is true, so a normal row's shape stays byte-identical to the
         // pre-open-in projection (the desktop tests pin these objects whole).
@@ -990,7 +993,10 @@ async function probeRemoteChamber(
     // Local-shape-only rows (design 20 §6) are not part of a remote instance's
     // contract: report the row with the flag and make NO remote call. Probing
     // would cost three exec round-trips per row to learn nothing, and the
-    // result would read "not injected" for a rule rather than a fault.
+    // result would read "not injected" for a rule rather than a fault. The
+    // page drops such a row from every non-local target, so these synthesized
+    // values are a record that nothing was asked — never a probe result other
+    // consumers may fold into a target-level gate.
     if (descriptor.localOnly === true) {
       packages.push({
         insertId: descriptor.insert.id,
@@ -1354,6 +1360,46 @@ export interface ChamberHostPackageSeedState {
   wrote: boolean
 }
 
+/**
+ * The seeds that may exist on ANOTHER host (design 20 §6): a `localOnly`
+ * registry row serves the machine the user is sitting at, so it never travels
+ * to a remote instance or a gateway.
+ *
+ * THE single source for that rule. `seedRemoteChamberHostPackages` drops the
+ * rows here before its own validation/preflight/write, and every desktop-side
+ * path that inspects "what should be on that other machine" must read THIS
+ * list rather than the full registry projection: a `localOnly` row carries an
+ * empty `sourceDir` by design, so counting it as a missing artifact failed the
+ * manual 注入 action with "…的 dist/index.js 缺失", appended a false
+ * "构建产物缺失" gap to the REMOTE instance's log on every ready transition,
+ * and warned on every gateway sync (2026-12 review).
+ * @param seeds - the registry projection, in registry order.
+ * @returns the seeds whose package may live on another host, input order.
+ */
+export function portableChamberHostPackageSeeds(
+  seeds: readonly ChamberHostPackageSeed[],
+): readonly ChamberHostPackageSeed[] {
+  return seeds.filter(seed => seed.localOnly !== true)
+}
+
+/**
+ * The seeds that are actually SHIPPED here (design 09 §3.5): a real source dir
+ * whose built entry exists. The `sourceDir !== ''` guard is load bearing, not
+ * defensive noise — an unmapped registry row carries an empty `sourceDir`, and
+ * `existsSync(join('', 'dist', 'index.js'))` resolves against the process CWD,
+ * so a shell whose working directory happens to contain `dist/index.js` would
+ * stage the CWD's OWN bytes as that package's seed and report success
+ * (2026-12 review). An empty dir means "not shipped here", never "the artifact
+ * is somewhere else".
+ * @param seeds - portable seeds (or any registry projection), input order.
+ * @returns the shipped seeds, input order.
+ */
+export function builtChamberHostPackageSeeds(
+  seeds: readonly ChamberHostPackageSeed[],
+): readonly ChamberHostPackageSeed[] {
+  return seeds.filter(seed => seed.sourceDir !== '' && existsSync(join(seed.sourceDir, 'dist', 'index.js')))
+}
+
 type ChamberHostInsert = Pick<ChamberHostPackageSeed, 'insertId' | 'packageName'>
 
 /**
@@ -1532,9 +1578,11 @@ export async function seedRemoteChamberHostPackages(
   // Local-shape-only rows never travel (design 20 §6): the open-in host domain
   // launches applications on the machine the user is sitting at, so a remote
   // instance must not receive it. Dropping them here — before validation,
-  // preflight and every remote call — keeps the rule in one place; the caller
-  // also passes no source dir for them (`chamberHostSourceDirs`).
-  const portable = seeds.filter(seed => seed.localOnly !== true)
+  // preflight and every remote call — keeps the rule in one place
+  // (portableChamberHostPackageSeeds, shared with the desktop's preflight/log/
+  // upload paths, which must not count an absent-by-design row as a gap); the
+  // caller also passes no source dir for them (`chamberHostSourceDirs`).
+  const portable = portableChamberHostPackageSeeds(seeds)
   for (const seed of portable) {
     if (!/^[a-zA-Z0-9._-]+$/.test(seed.insertId)
       || !/^@dsh-chamber\/[a-zA-Z0-9._-]+$/.test(seed.packageName)) {
@@ -1549,8 +1597,10 @@ export async function seedRemoteChamberHostPackages(
 
   // Only a built dist/index.js makes a package available. A checkout may have
   // the source directory without its artifact; that is "not shipped", so it
-  // must not create a dangling loader row.
-  const available = portable.filter(seed => existsSync(join(seed.sourceDir, 'dist', 'index.js')))
+  // must not create a dangling loader row. `builtChamberHostPackageSeeds` also
+  // rejects an empty sourceDir outright, so the CWD can never be mistaken for
+  // a package directory.
+  const available = builtChamberHostPackageSeeds(portable)
   if (available.length === 0) return { ok: true, wrote: false, patched: false, packages: [] }
 
   // Preflight every local byte before touching the remote. In particular, a

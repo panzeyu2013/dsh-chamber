@@ -324,8 +324,10 @@ provider（本地目录不再是主进程的事，也不再是"官方宿主行"�
 4. `packages/gateway/src/plugins.ts`：**无需手写映射**——`SYNCABLE_HOST_PACKAGES`（`plugins.ts:48`）
    与 `HOST_PACKAGE_PROBE_DOMAINS`（`:60`）都由 `CHAMBER_HOST_PACKAGES.map(...)` **派生**，
    load-time 断言（`:73-80`）比对"派生值集 == `HOST_DOMAIN_PROBE_NAMES`"⇒ 两侧同步新增即保持绿。
-   **`localOnly` 的过滤不能放在派生处**（会当场让该断言失败）：它只作用于"不上传/不缓存到
-   远端与 gateway"的**同步点**与插件页呈现。gateway **不需要额外代码**：它的 seed 条目同样由
+   **`localOnly` 的过滤不能放在 gateway 的注册表派生处**（`plugins.ts` 的 `SYNCABLE_HOST_PACKAGES` /
+   `HOST_PACKAGE_PROBE_DOMAINS`：会当场让该断言失败）：它只作用于"不上传/不缓存到远端与 gateway"的
+   **同步点**（桌面侧预检/日志/上传源清单，§6.2 第 6 条）与**插件页的行派生**
+   （`applicableChamberPackages`，design 13 §6）。gateway **不需要额外代码**：它的 seed 条目同样由
    注册表派生、`sourceDir` 指向同步缓存目录（`gateway/src/index.ts:333-343`），而未同步 ⇒ 目录为空
    ⇒ 按既有"缺产物优雅跳过、不写悬挂 loader 行"规则处理；
 5. `scripts/dev/verify-upstream-touchpoints.mjs`：**C7** 文本哨兵（gateway 域值集 ↔ runtime 列表）；
@@ -338,14 +340,22 @@ provider（本地目录不再是主进程的事，也不再是"官方宿主行"�
    `chamberHostSourceDirs`（不进远端 seed）与 `plugin-sync.ts:965` 的远端同步循环——
    **本包标 `localOnly`**：远端不 seed/不 probe。`localOnly?: true` 加到
    `ChamberHostPackageDescriptor`，**并透出到 `ChamberHostPackageState`**（`plugin-sync.ts:427-441`
-   的投影形状）以便页面如实显示"本地形态专用"而不是"未注入"。
+   的投影形状）以便页面按该标志把这一行**只列在本地目标**（2026-12 用户裁决：远端/gateway/http
+   目标的行集 = 该目标适用行，故为 3 行；此前"两列都渲染『本地形态专用』"的 badge 方案已退役——
+   一张按目标的表不该列出该目标上任何动作都产生不出的行）。
    客户端包**不能 import** Node 侧注册表，因此还有三处镜像锁步：`plugin-inventory-text.ts`
    的包名常量表（`OPEN_IN_PACKAGE`）与 `InventoryEntryKind`/`chamberKindOf` 分类、
    `packages/renderer/src/global.d.ts` 与 `packages/desktop/preload.cts` 的
    `ChamberHostPackageState`（两处都加 `localOnly?: boolean`——四份声明由 §9 的字段集门钉在一起）、
    `test/chamber-seed-drift.test.ts`（读 `host-graph-seed.ts` 断言名字集合与注册表行一一对应
-   ——**新包不加进去，该门直接红**）；远端探针在该行上**一次远端调用都不发**，
-   插件页对非本地目标渲染 `chamberBadgeLocalOnly`（本地形态专用），而不是"未注入"；
+   ——**新包不加进去，该门直接红**）；远端探针在该行上**一次远端调用都不发**（其合成状态里的
+   `installed:false` 因此只表示"没问"，页面据注册表标志**不列**该行，绝不据此渲染"未注入"，
+   也绝不让它参与 ssh 的两个目标级门 `sshChamberGates`）；main 进程侧凡判定"那台机器上该有什么"
+   的路径（手动注入预检、ready-time 注入日志、桌面侧 gateway 上传**源清单**——`main.ts` 的
+   `localChamberHostPackageSources`）一律读 `portableChamberHostPackageSeeds`，绝不读完整注册表投影
+   （注意与**网关侧**由注册表派生的 `SYNCABLE_HOST_PACKAGES` 白名单区分：后者按设计仍含该行，
+   见 §9「网关派生白名单」/ design 17 §10.2）——该行的 `sourceDir` 按设计为空，
+   被当成"构建产物缺失"会让「注入」按钮直接失败、并在远端实例日志里留下假缺口（2026-12 review）；
 7. 打包闭包：根 `build:host-open-in` / `typecheck:host-open-in` / `test:host-open-in`，
    `build:host-packages` 聚合，desktop 的 `HOST_PACKAGE_BUILD_ROWS` 加 `open-in` 行
    （`scripts/build-host-graph-package.mjs` → `dist/host-open-in-package`，打包态
@@ -441,8 +451,8 @@ chevron，不因只有一个 app 少画 chevron）。
   `ctx.provide('chamberMachineCatalog', …)`；传输复用
   `packages/dsh-chamber-client-ui-sidebar/src/shared/instance-api.ts` 的公开
   `getInstanceClient('local').callUnary(...)`（同一信封/路由/栅栏，零新增传输面）；
-- 接线面：§6.2 的八处 + 插件页的 `localOnly` 呈现（`plugin-inventory-text.ts` +
-  `global.d.ts` + 设置页文案 `chamberBadgeLocalOnly`）。
+- 接线面：§6.2 的八处 + 插件页的 `localOnly` 行集过滤（`plugin-inventory-text.ts` 的
+  `applicableChamberPackages` + `global.d.ts`/`preload.cts` 的投影字段；该行只列在本地目标）。
 
 ## 9. 验证门
 
@@ -460,10 +470,11 @@ chevron，不因只有一个 app 少画 chevron）。
 | 适配器行为 | `test/source-adapter.test.ts` | 机器池 × main 池合并、**远程来源用机器图标**、per-entry 通道路由、无机器目录时诚实降级、订阅释放 |
 | 页级注入契约 | `test/shell.test.ts`（renderer） | 两个 entry 拿到**同一个** `chamberMachineCatalog` 实例（页级事实，非 per-entry 副本） |
 | 记忆 | `test/choice-store.test.ts` | per-source 键、来源隔离、旧全页键只读迁移、畸形 id 不写键 |
-| 桌面投影 | `test:desktop`（plugin-sync/open-in/cross-package-contract/renderer-trust） | 远端 seed 丢弃 `localOnly` 行、远端探针对该行零调用、本地投影携带 `localOnly`、打包行集 |
+| 桌面投影 | `test:desktop`（plugin-sync / chamber-seed-portability-wiring / open-in / cross-package-contract / renderer-trust） | 远端 seed 丢弃 `localOnly` 行、远端探针对该行零调用、本地投影携带 `localOnly`、打包行集；**portability 接线门**：main.ts 的注入预检 / ready-time 缺口日志 / gateway 上传源清单全部读 portable 列表，且"出货"判定用 `builtChamberHostPackageSeeds`（空 `sourceDir` 先被拒，绝不让 `join('','dist/index.js')` 落到进程 CWD） |
+| 插件页行集 | `test/chamber-rows.test.ts` + `test/chamber-table-wiring.test.ts`（connections 包） | local 4 行 / ssh·gateway·http 3 行（`applicableChamberPackages` 按注册表标志过滤，不做硬编码包名）；ssh 的两个目标级门（needs-seed / restart-pending）与表格共用该过滤后的列表，合成探测行不参与；loadSync 在读远端之前先提交本机投影（错误相位下表格不为空）；退役的 `chamberBadgeLocalOnly` 不得复活 |
 | 状态对象字段集 | `cross-package-contract.test.ts`（新增门）+ `ipc-surface-mirror.test.ts`（L3） | 同一个 wire 状态对象有**四份声明**（`plugin-sync.ts` 投影 / `renderer/global.d.ts` / `preload.cts` / 客户端 `ChamberPackageState`）：前两者与 client 由新门三向比对（client 允许只少 `probe`），preload ↔ renderer 由既有 L3 门覆盖 ⇒ 四向全闭合。**加 `localOnly` 时正是 renderer 与 preload 两处漏了**，两道门各抓一处 |
-| 网关派生白名单 | `test:gateway`（feature-lifecycle / chamber-installed / runtime-routes） | `/chamber/plugins` 投影与上传白名单由注册表派生 ⇒ 该 localOnly 行自动出现（本地形态专用行 `version` 恒 null）；gateway load 断言的域集 == `HOST_DOMAIN_PROBE_NAMES`（本机实测：该断言在 shim 解析到旧 runtime 时当场抛错，正是它应有的行为） |
-| 注册表锁步 | `test:chamber-seed-drift.test.ts`（connections 包） | 客户端名字镜像 == `CHAMBER_HOST_PACKAGES` 行集 |
+| 网关派生白名单 | `test:gateway`（feature-lifecycle / chamber-installed / runtime-routes） | **网关侧**的 `/chamber/plugins` 投影与 PUT 名单由注册表派生 ⇒ 该 localOnly 行自动出现（只要只有桌面在上传，该行 `version` 恒 null；这是 API 投影，插件页不在非本地目标列出它——桌面侧的上传**源清单**是另一回事，见 §6.2 第 6 条）；gateway load 断言的域集 == `HOST_DOMAIN_PROBE_NAMES`（本机实测：该断言在 shim 解析到旧 runtime 时当场抛错，正是它应有的行为） |
+| 注册表锁步 | `test:chamber-seed-drift.test.ts`（connections 包） | 客户端名字镜像 == `CHAMBER_HOST_PACKAGES` 行集，且每个注册表包必须被 `classifyInventoryEntry` 归为 chamber 行（2026-12：非本地目标不再列 localOnly 行后，第三方区对该行只余分类这一道网，故把分类也钉进同一门） |
 | 文案 | `pnpm run verify:i18n` | 新文案 zh/en 双份与记录一致 |
 | 触点门 | `verify-upstream-touchpoints.mjs` | C7（四域锁步）+ C8（含新 seed dist，重建-比对 6 组）+ C9（vendor 补丁集不变：open-in 不新增补丁）+ 新 fork 的 C1/C3/C5（`FORKS` 行 + `versionAnchor: 'chamber'` 豁免，见 §10） |
 

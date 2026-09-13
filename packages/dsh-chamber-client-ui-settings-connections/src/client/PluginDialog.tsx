@@ -6,14 +6,16 @@
  * action dispatch (design 21 §3 single-model matrix). Unified zones:
  *   ① diagnostic banner (bannerProjection — state name + message, never the
  *     state/pluginId/message triple repetition);
- *   ② chamber built-in component table — one row per registry host package
- *     (CHAMBER_HOST_PACKAGES projection), plus the gateway's chamber CLIENT
- *     rows derived from the Loader inventory (the packaged mobile entry today;
- *     never a hardcoded package name) — columns package | local badge |
+ *   ② chamber built-in component table — one row per TARGET-APPLICABLE registry
+ *     host package (`applicableChamberPackages`: a `localOnly` row is listed for
+ *     the local target alone; the CHAMBER_HOST_PACKAGES projection is the row
+ *     source), plus the gateway's chamber CLIENT rows derived from the Loader
+ *     inventory (the packaged mobile entry today; never a hardcoded package
+ *     name) — columns package | local badge |
  *     remote/gateway badge | version. The rows themselves come from the pure,
  *     tested `deriveChamberRows` (plugin-inventory-text.ts); this component
  *     only maps descriptors to elements. Version drift chips and the
- *     「重新同步 chamber 组件」action live in this zone;
+ *     「重新同步 chamber 组件」action (GATEWAY-only) live in this zone;
  *   ③ third-party plugin zone (installed list + per-row remove + add: spec
  *     input + npm search + local import — a plugin source folder OR a ready
  *     .tgz archive, design 21 §6.5 archive-pick; the macOS picker offers
@@ -101,6 +103,7 @@ import {
 } from './plugin-diff.ts'
 import {
   deriveChamberRows,
+  sshChamberGates,
   thirdPartyEntries,
   thirdPartyLiveState,
   type ChamberBadgeTone,
@@ -447,12 +450,24 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
         setPhase('error')
         return
       }
+      // Commit the desktop projection the moment it is read. The chamber table
+      // reads it as the 本地 column AND as the fallback row source when the
+      // remote read fails, so a later failure must not discard it: on an ssh
+      // exec failure or an unparseable remote profile the table used to render
+      // with ZERO rows (the zone is phase-independent) even though the desktop
+      // side was already known (2026-12 review).
+      setLocalManifest(localRes.manifest)
       const remoteRes = await pluginList(sshSpec.id)
       if ('error' in remoteRes) {
         setLoadError(remoteRes.error)
         setPhase('error')
         return
       }
+      // Same for the remote answer: the chamber block is probed independently
+      // of package.json, so a corrupt remote manifest must not throw away rows
+      // and gates the probe DID answer (the error phase renders neither the
+      // dependency list nor the diff, so the early commit is inert elsewhere).
+      setRemoteManifest(remoteRes.manifest)
       // cat succeeded but package.json failed to parse: the manifest carries a
       // loud error with an empty dependency set — surface it, never show a
       // silent "manifests match" against the empty projection.
@@ -461,8 +476,6 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
         setPhase('error')
         return
       }
-      setLocalManifest(localRes.manifest)
-      setRemoteManifest(remoteRes.manifest)
       setProfileNotInit(!remoteRes.manifest.profileExists)
       const d = computePluginDiff(localRes.manifest, remoteRes.manifest)
       setDiff(d)
@@ -1175,20 +1188,31 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
    *  plugin-inventory-text.ts (deriveChamberRows) — this component only maps
    *  descriptors to elements. Data sources per target (design 13 §6 / 21
    *  §6.2 / 24 §7): the LOCAL target's expected AND local list come from its
-   *  OWN profile manifest (`localList.chamber`), gateway/http/ssh read the
-   *  desktop's local manifest projection (`localChamberPackages`), and ssh
-   *  prefers the remote probe's list when it succeeded. An unreadable local
-   *  manifest leaves the list empty; the ssh arm still renders the remote
-   *  probe's own list, so a remote-only read failure is never invisible. */
+   *  OWN profile manifest (`localList.chamber`); every remote target's expected
+   *  list and local column come from the desktop's own projection, and ssh
+   *  prefers the remote probe's list when it succeeded — on a probe FAILURE the
+   *  desktop projection is the fallback row source, so a remote-only read
+   *  failure stays visible instead of emptying the table.
+   *  `localOnly` registry rows (design 20 §6) never appear here on a non-local
+   *  target — the derivation drops them before any state is read, so this
+   *  component's row set is already the target's applicable registry rows. */
   /** The ssh remote probe (design 13 §6): the remote profile manifest's own
    *  chamber projection, loaded by loadSync. */
   const sshRemoteChamber = isSsh ? remoteManifest?.chamber : undefined
+  /** The desktop's own chamber projection. The dedicated
+   *  `localChamberPackages` read is gated on a gateway/http `sourceId`, so it
+   *  never runs for ssh; that arm reads the same projection from the local
+   *  manifest `loadSync` already fetched (2026-12 review: the ssh 本地 column
+   *  used to sit on 未知 forever, and a failed probe left the table empty). */
+  const desktopChamberPackages = isSsh && localManifest !== null && localManifest.chamber.ok === true
+    ? localManifest.chamber.packages
+    : localChamberPackages
   const chamberRows: ChamberRowDescriptor[] = deriveChamberRows({
     target: target.kind,
     expected: isLocal
       ? (localList !== null && localList.chamber.ok === true ? localList.chamber.packages : null)
-      : localChamberPackages,
-    localManifestChamber: localChamberPackages,
+      : desktopChamberPackages,
+    localManifestChamber: desktopChamberPackages,
     remoteChamber: isSsh ? (sshRemoteChamber ?? null) : null,
     inventory: snapshot,
     seedCache: isGateway ? seedCache : null,
@@ -1196,14 +1220,16 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   })
   const chamberCacheAbsent = chamberRows.some(row => row.cacheAbsent)
 
-  // BOTH boot rows of EVERY registry package must be present for the chamber
-  // host layer to be complete — derived over the whole list, so a package
-  // added to the registry can never be silently exempt.
-  const remoteNeedsSeed = isSsh && sshRemoteChamber !== undefined
-    && (sshRemoteChamber.ok !== true
-      || sshRemoteChamber.packages.some(pkg => !(pkg.installed && pkg.patched)))
-  const remoteInjectedNotLive = isSsh && sshRemoteChamber?.ok === true
-    && sshRemoteChamber.packages.some(pkg => pkg.installed && pkg.patched && pkg.live === false)
+  // BOTH boot rows of EVERY APPLICABLE registry package must be present for the
+  // chamber host layer to be complete — derived over the whole registry-driven
+  // list, so a package added to the registry can never be silently exempt. Both
+  // gates come from the pure projection (sshChamberGates), which filters
+  // `localOnly` rows first: the remote probe reports such a row as a
+  // synthesized installed:false WITHOUT ever asking the remote, so counting it
+  // pinned 「注入」 true forever and the restart branch was unreachable.
+  const sshGates = sshChamberGates(sshRemoteChamber)
+  const remoteNeedsSeed = isSsh && sshGates.needsSeed
+  const remoteInjectedNotLive = isSsh && sshGates.injectedNotLive
   const restartPending = remoteInjectedNotLive || pendingRestart
 
   /** One row's version cell: the derived version text plus the gateway

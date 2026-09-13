@@ -348,7 +348,12 @@
   `resolvePnpmBinDir` 对 PATH/nvm/volta/homebrew 的 best-effort 探测——需打包态实机。
   剩余实机验收：本地/ssh/gateway/http 四来源的 chamber 表行数（注册表现有 **4 行**：
   client-graph / git-worktree / archive-cleanup / open-in；open-in 为
-  `localOnly`，只出现在本地目标，远程/gateway 目标为 3 行）、archive-cleanup 的
+  `localOnly`，只列在本地目标 ⇒ 本地 4 行、远程/gateway/http 的**注册表行 3 行**
+  （gateway 另有 Loader 派生的移动客户端行），且该行不参与 ssh 的
+  needs-seed/restart 门、也不进入注入预检/远端注入日志/桌面侧 gateway 上传源清单
+  （`portableChamberHostPackageSeeds` 唯一判定；网关自有派生白名单 `SYNCABLE_HOST_PACKAGES`
+  按设计仍含该行，design 20 §9 / design 17 §10.2；缺行时「注入」可成功）、
+  远端已注入未生效时出现「重启生效」而非「注入」、ssh 的本地列不再是恒「未知」）、archive-cleanup 的
   installed/patched/live 三态与「注入/重启」按钮行为、
   gateway seed-cache 漂移列。
 - **会话创建/fork 侧边栏收敛延迟修复**：剩余本地 + 远程 SSH 实例实机验收（行出现
@@ -1073,3 +1078,15 @@
   （含 connections CRUD、dsh-runtime 管理与更新），console loud 无重试、
   靠 shell 重 boot——与既有 deferred 家族同模式；按家族 allSettled 独立
   注册为候选改进（bridge 失败可落官方降级面）。
+- **插件页不检测「远端真的带了 `localOnly` 包」这一偏差（2026-12，偏差：接受不检测）**：
+  chamber 受管组件表按**目标适用性**列行（`applicableChamberPackages`：`localOnly` 行只列在
+  本地目标 ⇒ local 4 行、ssh/gateway/http 3 行），判据是注册表标志而非观测状态。因此若某台
+  远端/gateway 实例因旧构建或人工安装**真的**带着 `@dsh-chamber/dsh-chamber-seed-open-in`，
+  该表不会显示它（它仍出现在那台实例自己的插件页——实例 Loader 的自我呈现；
+  `classifyInventoryEntry` 保证它也不会漏进第三方区）。要做到"只有确实存在时才列"须在远端
+  探针加一次 overlay 检查 + 偏差分支（该 overlay 文本 `plugin-sync.ts` 已读到，成本近零，
+  但为一个不可达状态新增呈现路径）；该门与包同期落地、无已发布的播种路径
+  （`main.ts` 的 `chamberHostSourceDirs` + `plugin-sync.ts` 的 `portable` 过滤），故不做。
+  证据：`docs/design/20-open-in-registry.md` §6.2/§9（插件页行集门）、
+  `packages/dsh-chamber-client-ui-settings-connections/test/chamber-rows.test.ts` +
+  `test/chamber-table-wiring.test.ts`（分类兜底由 `test/chamber-seed-drift.test.ts` 钉住）。

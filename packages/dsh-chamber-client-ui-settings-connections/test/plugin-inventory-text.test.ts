@@ -19,9 +19,12 @@ import {
   GIT_WORKTREE_PACKAGE,
   HOST_GRAPH_PACKAGE,
   MOBILE_PACKAGE,
+  OPEN_IN_PACKAGE,
+  applicableChamberPackages,
   classifyInventoryEntry,
   localChamberBadge,
   remoteChamberBadge,
+  sshChamberGates,
   thirdPartyEntries,
   thirdPartyLiveState,
 } from '../src/client/plugin-inventory-text.ts'
@@ -30,6 +33,7 @@ test('classifyInventoryEntry: plain module names map to their package class', ()
   assert.equal(classifyInventoryEntry(HOST_GRAPH_PACKAGE), 'chamber-host-graph')
   assert.equal(classifyInventoryEntry(GIT_WORKTREE_PACKAGE), 'chamber-git-worktree')
   assert.equal(classifyInventoryEntry(ARCHIVE_CLEANUP_PACKAGE), 'chamber-archive-cleanup')
+  assert.equal(classifyInventoryEntry(OPEN_IN_PACKAGE), 'chamber-open-in')
   assert.equal(classifyInventoryEntry(MOBILE_PACKAGE), 'chamber-mobile')
   assert.equal(classifyInventoryEntry('@deepseek-ai/dsh-demo'), 'official')
   assert.equal(classifyInventoryEntry('@dsh-chamber/user-tool'), 'third-party')
@@ -49,7 +53,7 @@ test('classifyInventoryEntry: the raw cordis patch-insert prefix is stripped bef
   assert.equal(classifyInventoryEntry('cordis:include'), 'third-party')
 })
 
-test('thirdPartyEntries: the three chamber host packages and the mobile entry are excluded in both their raw patch-syntax and plain forms', () => {
+test('thirdPartyEntries: the chamber host packages and the mobile entry are excluded in both their raw patch-syntax and plain forms', () => {
   const snapshot: PluginInventorySnapshot = {
     entries: [
       { entryId: 'p1', moduleName: HOST_GRAPH_PACKAGE, enabled: true, fiberPhase: 'active' },
@@ -63,6 +67,11 @@ test('thirdPartyEntries: the three chamber host packages and the mobile entry ar
       // report forms, never third-party.
       { entryId: 'p8', moduleName: ARCHIVE_CLEANUP_PACKAGE, enabled: true, fiberPhase: 'active' },
       { entryId: 'p9', moduleName: `cordis:include ${ARCHIVE_CLEANUP_PACKAGE}`, enabled: true, fiberPhase: 'active' },
+      // The local-shape-only open-in row is no longer LISTED on a non-local
+      // target (applicableChamberPackages), so this zone must exclude it by
+      // CLASSIFICATION alone: an instance that somehow carries it (legacy seed
+      // / manual install) is never reclassified as a third-party plugin.
+      { entryId: 'p10', moduleName: OPEN_IN_PACKAGE, enabled: true, fiberPhase: 'active' },
     ],
   }
   const rows = thirdPartyEntries(snapshot)
@@ -182,4 +191,101 @@ test('thirdPartyLiveState: a bundle-layer row without a matching entry claims a 
 test('thirdPartyLiveState: a null snapshot (instance not running / read failed) stays neutral — never a claim', () => {
   assert.equal(thirdPartyLiveState(null, 'any-plugin', true), null)
   assert.equal(thirdPartyLiveState(null, 'plain-lib-dep', false), null)
+})
+
+/* ---- sshChamberGates (design 13 §6 / design 20 §6, 2026-12 review): the two
+ * ssh target-level gates read the APPLICABLE probe rows only, so a localOnly
+ * row can never decide them. ---- */
+
+/** One probe package row (`ChamberPackageState`-shaped). */
+function probePkg(name: string, over: Record<string, unknown> = {}) {
+  return { insertId: `insert:${name}`, name, probe: `${name}/probe`, installed: false, patched: false, version: null, live: null, ...over }
+}
+
+test('sshChamberGates: an unanswered probe (not ssh / still loading) asserts nothing', () => {
+  assert.deepEqual(sshChamberGates(undefined), { needsSeed: false, injectedNotLive: false })
+  assert.deepEqual(sshChamberGates(null), { needsSeed: false, injectedNotLive: false })
+})
+
+test('sshChamberGates: a failed probe asks for a re-seed and never claims a pending restart', () => {
+  // The probe ANSWERED (loud `ok:false`): a re-seed may repair it, and nothing
+  // proves a restart is pending — the exact pre-existing semantics.
+  assert.deepEqual(sshChamberGates({ ok: false, error: 'ssh exec failed' }),
+    { needsSeed: true, injectedNotLive: false })
+})
+
+test('sshChamberGates: the applicable rows decide both gates', () => {
+  const injected = { installed: true, patched: true, live: true }
+  const live = probePkg(HOST_GRAPH_PACKAGE, injected)
+  const restartPending = probePkg(GIT_WORKTREE_PACKAGE, { installed: true, patched: true, live: false })
+  const half = probePkg(ARCHIVE_CLEANUP_PACKAGE, { installed: true, patched: false, live: null })
+  assert.deepEqual(sshChamberGates({ ok: true, packages: [live, restartPending, probePkg(OPEN_IN_PACKAGE, { localOnly: true })] }),
+    { needsSeed: false, injectedNotLive: true },
+    'all applicable rows injected + one not live = restart, never a re-seed')
+  assert.deepEqual(sshChamberGates({ ok: true, packages: [live, restartPending, half] }),
+    { needsSeed: true, injectedNotLive: false },
+    'a half-injected applicable row is a seed request; the restart hint must NOT ride along (the pair is a partition)')
+  assert.deepEqual(sshChamberGates({ ok: true, packages: [live, probePkg(GIT_WORKTREE_PACKAGE, injected), probePkg(ARCHIVE_CLEANUP_PACKAGE, injected)] }),
+    { needsSeed: false, injectedNotLive: false },
+    'a fully seeded, fully live remote asks for nothing')
+  assert.deepEqual(sshChamberGates({ ok: true, packages: [] }),
+    { needsSeed: false, injectedNotLive: false },
+    'an empty probe list is not a missing package')
+})
+
+test('sshChamberGates: the synthesized localOnly row cannot pin 「注入」 true (the regression this exists for)', () => {
+  // The probe answers with three APPLICABLE rows fully injected, plus the
+  // localOnly row it never asked the remote about (installed:false/patched:false
+  // by construction, plugin-sync.ts). Before the applicability filter, that row
+  // made `needsSeed` true whenever the probe loaded: 注入 showed over a fully
+  // seeded remote and the restart branch could never appear.
+  const injected = { installed: true, patched: true, live: false }
+  const probe = {
+    ok: true as const,
+    packages: [
+      probePkg(HOST_GRAPH_PACKAGE, injected),
+      probePkg(GIT_WORKTREE_PACKAGE, injected),
+      probePkg(ARCHIVE_CLEANUP_PACKAGE, injected),
+      probePkg(OPEN_IN_PACKAGE, { localOnly: true }),
+    ],
+  }
+  assert.deepEqual(sshChamberGates(probe),
+    { needsSeed: false, injectedNotLive: true },
+    'the localOnly row speaks for nothing; the three probed rows decide')
+})
+
+/* ---- applicableChamberPackages (design 20 §6, 2026-12 user decision): a
+ * `localOnly` registry row is listed for the LOCAL target only. ---- */
+
+test('applicableChamberPackages: the local target keeps every registry row (including a localOnly one)', () => {
+  const rows = [
+    { name: HOST_GRAPH_PACKAGE },
+    { name: OPEN_IN_PACKAGE, localOnly: true as const },
+  ]
+  assert.equal(applicableChamberPackages('local', rows), rows,
+    'the local target is the one shape where a localOnly row applies — identity, same array')
+})
+
+test('applicableChamberPackages: every remote target drops localOnly rows and keeps the rest in order', () => {
+  const rows = [
+    { name: HOST_GRAPH_PACKAGE },
+    { name: GIT_WORKTREE_PACKAGE },
+    { name: OPEN_IN_PACKAGE, localOnly: true as const },
+    { name: ARCHIVE_CLEANUP_PACKAGE },
+  ]
+  for (const target of ['ssh', 'gateway', 'http'] as const) {
+    assert.deepEqual(applicableChamberPackages(target, rows).map(row => row.name),
+      [HOST_GRAPH_PACKAGE, GIT_WORKTREE_PACKAGE, ARCHIVE_CLEANUP_PACKAGE],
+      `${target}: only the applicable registry rows`)
+  }
+})
+
+test('applicableChamberPackages: an explicit false / absent flag is an ordinary row, and an empty list stays empty', () => {
+  // Only the registry's `true` marks a row local-shape-only: the four client
+  // node-state declarations carry the field as optional, and `false` must never
+  // be read as "local" (a truthiness check would flip the meaning).
+  const rows = [{ name: 'a', localOnly: false }, { name: 'b' }]
+  assert.deepEqual(applicableChamberPackages('ssh', rows).map(row => row.name), ['a', 'b'])
+  assert.deepEqual(applicableChamberPackages('ssh', []), [])
+  assert.deepEqual(applicableChamberPackages('gateway', []), [])
 })

@@ -23,8 +23,9 @@ export const GIT_WORKTREE_PACKAGE = '@dsh-chamber/dsh-chamber-seed-git-worktree'
 export const ARCHIVE_CLEANUP_PACKAGE = '@dsh-chamber/dsh-chamber-seed-archive-cleanup'
 /** Open-in host domain (design 20 §6, 2026-09-11) — the fork of upstream's
  *  open-in host half. It is `localOnly` in the registry: it exists for the
- *  local instance shape alone, and the plugin view renders that fact instead of
- *  "not injected" on remote and gateway targets. */
+ *  local instance shape alone, so every non-local target's chamber table omits
+ *  its row outright (`applicableChamberPackages`) — never a "not injected"
+ *  claim for a package that can never be seeded there. */
 export const OPEN_IN_PACKAGE = '@dsh-chamber/dsh-chamber-seed-open-in'
 
 /** The gateway-packaged mobile client entry (design 21 §6.2: the single
@@ -380,9 +381,12 @@ export interface ChamberPackageState {
   readonly version: string | null
   readonly live: boolean | null
   /** The registry row is meaningful for the LOCAL instance shape only (design
-   *  20 §6: the open-in host domain). Remote/gateway targets report it with
-   *  `installed:false` and no probe, and the table renders "local shape only"
-   *  rather than "not injected" — absent by design, not by fault. */
+   *  20 §6: the open-in host domain). The ssh PROBE reports it as
+   *  `installed:false`/`patched:false` without ever asking the remote ("not
+   *  asked", never "the target lacks it"), while the desktop's own projection
+   *  carries the real local state; whichever projection delivered the row,
+   *  every non-local chamber table omits it rather than rendering "not
+   *  injected" (see `applicableChamberPackages`). */
   readonly localOnly?: boolean
 }
 
@@ -510,6 +514,85 @@ function chamberClientRows(entries: readonly ChamberInventoryEntry[] | null): Ch
   return rows
 }
 
+/**
+ * The registry rows that APPLY to one target shape: a `localOnly` row (design
+ * 20 §6: the open-in host domain) exists for the local instance alone, so a
+ * remote/gateway/http target's chamber table does not list it at all — its rows
+ * are the registry rows that can actually be seeded, probed and synced there
+ * (row counts: local 4, ssh/gateway/http 3).
+ *
+ * Why DROP instead of badge ("local shape only" was the earlier rule): the
+ * table answers what THIS target has and what it can be given. A row that can
+ * never exist there is not a state — rendering it forced the reader to
+ * interpret a per-target table for a package that is simply not part of that
+ * target's contract (2026-12 user decision after asking exactly that question
+ * on a remote target).
+ *
+ * The filter reads the REGISTRY flag, never the observed state: a not-yet-seeded
+ * target must still list the rows it is missing — that 未注入 row IS the sync
+ * action's justification. Applicability only ever removes rows that no action
+ * could produce.
+ *
+ * Generic over the row shape on purpose: the rule needs nothing but the
+ * registry's `localOnly` flag, so the desktop projection rows (and any future
+ * row shape carrying the same flag) pass through it without a cast.
+ * @param target - the dialog's backend.
+ * @param packages - the target's expected registry rows (or the ssh probe's).
+ * @returns the same list for the local target (identity, same array), or the
+ *   non-`localOnly` rows in input order for every remote target.
+ */
+export function applicableChamberPackages<T extends { readonly localOnly?: boolean }>(
+  target: ChamberTarget,
+  packages: readonly T[],
+): readonly T[] {
+  return target === 'local' ? packages : packages.filter(pkg => pkg.localOnly !== true)
+}
+
+/** The two ssh target-level gates derived from the remote probe (design 13
+ *  §6, design 20 §6). The pair is a partition: a target either needs a seed or
+ *  it is fully injected (some rows possibly not live yet). */
+export interface ChamberProbeGates {
+  /** At least one APPLICABLE registry row is not fully injected (or the probe
+   *  could not be read) — the 「注入」 action's justification. */
+  readonly needsSeed: boolean
+  /** Every applicable row IS injected and at least one is not live yet — the
+   *  restart-to-apply state. Never true together with `needsSeed`: a
+   *  half-injected target asks for a seed (restarting alone cannot add a
+   *  missing row), so a caller reading this flag ALONE can never show 重启生效
+   *  on a target that is missing a package. */
+  readonly injectedNotLive: boolean
+}
+
+/**
+ * Derive the two ssh gates from the remote probe in ONE place.
+ *
+ * Both are target-level decisions, so they read exactly the rows the chamber
+ * table lists (`applicableChamberPackages`). A `localOnly` row is not part of a
+ * remote instance's contract, and the probe reports it as a synthesized
+ * `installed:false` WITHOUT ever asking the remote — folding it in pinned
+ * `needsSeed` true forever, so 「注入」 showed over a fully seeded remote and the
+ * restart branch was unreachable (2026-12 review).
+ *
+ * null/undefined = the probe has not answered (not an ssh target, still
+ * loading, or the read has not happened): both gates stay false. `ok:false` is
+ * an ANSWERED probe that could not be read — a re-seed may repair it, so that
+ * arm asks for the seed and never claims a pending restart.
+ * @param probe - the ssh remote probe state (null/undefined = unanswered).
+ * @returns the two gate booleans — never a claim beyond the probe's own.
+ */
+export function sshChamberGates(probe: ChamberProbeState | null | undefined): ChamberProbeGates {
+  if (probe === null || probe === undefined) return { needsSeed: false, injectedNotLive: false }
+  if (probe.ok !== true) return { needsSeed: true, injectedNotLive: false }
+  const applicable = applicableChamberPackages('ssh', probe.packages)
+  const needsSeed = applicable.some(pkg => !(pkg.installed && pkg.patched))
+  return {
+    needsSeed,
+    // Strict on purpose (see ChamberProbeGates.injectedNotLive): the restart
+    // hint owns only the state where nothing is missing.
+    injectedNotLive: !needsSeed && applicable.some(pkg => pkg.installed && pkg.patched && pkg.live === false),
+  }
+}
+
 /** The full input matrix of the chamber table (see deriveChamberRows). */
 export interface ChamberRowsInput {
   readonly target: ChamberTarget
@@ -543,9 +626,10 @@ export interface ChamberRowsInput {
  *    expected rows); remote targets read the desktop's projection.
  *  - version: ssh reads the remote probe's version, everything else the local
  *    list's version (gateway additionally renders the seed-cache comparison).
- *  - a `localOnly` registry row (design 20 §6) on a NON-local target renders
- *    "local shape only" in both state columns with no version and no sync
- *    marker: the package is absent there by design.
+ *  - a `localOnly` registry row (design 20 §6) is DROPPED on every non-local
+ *    target before any state is derived (`applicableChamberPackages`): the row
+ *    is not part of that target's contract, so no column, version or sync
+ *    marker may speak about it there.
  *  - an EMPTY expected list yields no rows and can never claim a seed-cache
  *    state.
  * @returns the registry rows (one per expected package) plus, for the gateway,
@@ -557,46 +641,39 @@ export function deriveChamberRows(input: ChamberRowsInput): ChamberRowDescriptor
   const isSsh = target === 'ssh'
   const isGateway = target === 'gateway'
   const remoteExpected = isSsh && remoteChamber?.ok === true ? remoteChamber.packages : null
-  const expectedList = remoteExpected ?? expected ?? []
-  const localList = isLocal ? expected : localManifestChamber
+  // Applicability filter FIRST, so neither the row set nor any target-level
+  // state below can be influenced by a row that does not apply here (the ssh
+  // probe reports the local-only row as a synthesized installed:false WITHOUT
+  // asking the remote — counting it would read as "the remote is missing it").
+  const expectedList = applicableChamberPackages(target, remoteExpected ?? expected ?? [])
+  // The LOCAL column of a remote target reads the desktop's projection through
+  // the same filter (the gateway drift map is keyed by name); null keeps its
+  // meaning — the local manifest was unreadable.
+  const localList = isLocal
+    ? expectedList
+    : localManifestChamber === null
+      ? null
+      : applicableChamberPackages(target, localManifestChamber)
   const localByName = new Map((localList ?? []).map(pkg => [pkg.name, pkg]))
   const remoteByName = new Map((remoteExpected ?? []).map(pkg => [pkg.name, pkg]))
   const entries = inventory === null ? null : inventory.entries
   // A KNOWN, non-empty expected set is a precondition: an unreadable manifest
-  // (empty list) must never claim "the gateway has nothing synced".
+  // (empty list) must never claim "the gateway has nothing synced". Read over
+  // the APPLICABLE rows: a local-only row is never cached (the desktop uploads
+  // portable rows only), so a stray cache entry for one must not suppress this
+  // claim for the packages that do belong to the gateway.
   const cacheAbsent = isGateway && seedCache !== null && expectedList.length > 0
     && expectedList.every(pkg => (seedCache[pkg.name] ?? null) === null)
   const driftStates = isGateway && seedCache !== null && localList !== null
     ? chamberSeedDrift(localList, seedCache)
     : null
   const unknownBadge: ChamberBadge = { labelKey: 'chamberBadgeUnknown', tone: 'muted' }
-  /** A local-shape-only row on a target where it does not apply (design 20 §6):
-   *  "local shape only", never "not injected" — nothing is missing there. */
-  const localOnlyBadge: ChamberBadge = { labelKey: 'chamberBadgeLocalOnly', tone: 'muted' }
   const versionTextOf = (version: string | null): string | null => version === null ? null : `v${version}`
 
   const rows = expectedList.map((pkg): ChamberRowDescriptor => {
     const local = localByName.get(pkg.name)
     const remote = remoteByName.get(pkg.name)
     const cached = seedCache === null ? null : (seedCache[pkg.name] ?? null)
-    // Not applicable here: no column claims a state, no version and no sync
-    // marker (a permanent 未同步 alarm on the gateway for a row that can never
-    // be synced would be noise, not information).
-    if (pkg.localOnly === true && !isLocal) {
-      return {
-        key: pkg.insertId,
-        name: pkg.name,
-        nameLabelKey: null,
-        localBadge: localOnlyBadge,
-        remoteBadge: isSsh || isGateway || target === 'http' ? localOnlyBadge : null,
-        versionText: null,
-        versionHintKey: null,
-        cacheVersionText: null,
-        cacheNotSynced: false,
-        cacheAbsent,
-        driftState: null,
-      }
-    }
     return {
       key: pkg.insertId,
       name: pkg.name,

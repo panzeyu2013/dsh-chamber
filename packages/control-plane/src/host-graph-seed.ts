@@ -126,8 +126,10 @@ export interface ChamberHostPackageDescriptor {
    * to serve on a remote server, and seeding it there would put an unused
    * launcher surface on someone else's host. Honoured at the SYNC points (the
    * desktop's remote upload/probe and, thereby, every gateway's synced cache)
-   * and by the plugin-management page, which shows "local shape only" instead
-   * of claiming the package is missing; the derived probe maps and
+   * and by the plugin-management page, which lists such a row for the LOCAL
+   * target only — a non-local target's table omits it outright rather than
+   * claiming the package is missing (the client projection reads this flag
+   * through `ChamberHostPackageState.localOnly`); the derived probe maps and
    * `HOST_DOMAIN_PROBE_NAMES` stay COMPLETE, because the gateway's load-time
    * set-equality pin compares them wholesale.
    */

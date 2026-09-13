@@ -852,7 +852,9 @@ export const chamberBridge: {
   单飞 + 共享 pollGatewayReady 轮询，多用户中断确认文案）+ **单一插件管理模型
   视图（唯一 `PluginDialog` 组件）**：统一区域 = 诊断横幅
   （状态名 + message 去重）→ chamber 内建组件表（注册表驱动的宿主包行，
-  当前四行 client-graph / git-worktree / archive-cleanup / open-in，badge 化；另有 gateway 源才出现的
+  注册表现有四行 client-graph / git-worktree / archive-cleanup / open-in，其中 open-in 标
+  `localOnly`：**该行只列在本地目标**，非本地目标的行集 = 该目标适用行（local 4 行 /
+  ssh·gateway·http 3 行；2026-12 裁决，详见 design 21 §6.6）；另有 gateway 源才出现的
   移动端 client 行，随发行物注入）→ 第三方插件区（已安装列表 + 逐行卸载 + 添加：spec 输入 + npm 搜索 +
   文件夹导入）→ 恢复/动作行；gateway 添加双通道（registry spec 直装 +
   文件夹直推）已接线；「变更记录」区不渲染（后端 journal/备份保留）；恢复撤销
@@ -994,7 +996,8 @@ export const chamberBridge: {
   - **host 包与 seed（设计 08/09/20/24）**：`packages/dsh-chamber-seed-client-graph`、
     `packages/dsh-chamber-seed-git-worktree`、`packages/dsh-chamber-seed-archive-cleanup`
     与 `packages/dsh-chamber-seed-open-in`（后者 `localOnly`：只 seed 进本地 profile，
-    不进远端 seed 也不随 gateway 上传，design 20 §6）都提交 esbuild `dist/index.js`
+    不进远端 seed 也不随 gateway 上传，插件页亦只在本地目标列出该行——非本地目标的行集 =
+    该目标适用行，design 20 §6）都提交 esbuild `dist/index.js`
     （`@deepseek-ai/*` external）；控制面 `host-graph-seed.ts` 幂等 seed 所有
     已构建包进 `$DSH_HOME/profiles/web/node_modules/@dsh-chamber/*/`，并把
     `client-graph` / `git-worktree` / `archive-cleanup` / `open-in` insert 合并到单一

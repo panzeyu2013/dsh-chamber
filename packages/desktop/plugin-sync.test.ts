@@ -45,6 +45,8 @@ import {
   materializeArchiveAndAdd,
   materializePluginsDir,
   packageNameFromSpec,
+  builtChamberHostPackageSeeds,
+  portableChamberHostPackageSeeds,
   redactLocalPluginManifest,
   redactRemotePluginManifest,
   remoteManifestPath,
@@ -1893,6 +1895,102 @@ test('seedRemoteChamberHostPackages: second-package read failure happens before 
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /git-worktree seed read/)
   assert.deepEqual(remote.written, [], 'all remote probes finish before the first write')
+})
+
+test('portableChamberHostPackageSeeds: localOnly rows never travel, the rest keep registry order', () => {
+  const seeds: ChamberHostPackageSeed[] = [
+    { insertId: 'client-graph', packageName: CLIENT_GRAPH_PACKAGE_NAME, sourceDir: '/tmp/graph', label: 'client-graph' },
+    { insertId: 'open-in', packageName: OPEN_IN_PACKAGE_NAME, sourceDir: '', label: 'open-in', localOnly: true },
+    { insertId: 'archive-cleanup', packageName: ARCHIVE_CLEANUP_PACKAGE_NAME, sourceDir: '/tmp/archive', label: 'archive-cleanup' },
+  ]
+  const snapshot = structuredClone(seeds)
+  assert.deepEqual(portableChamberHostPackageSeeds(seeds).map(seed => seed.insertId),
+    ['client-graph', 'archive-cleanup'],
+    'a localOnly row is dropped; everything else keeps input order')
+  assert.deepEqual(seeds, snapshot, 'the input list is never mutated')
+  assert.deepEqual(portableChamberHostPackageSeeds([]), [])
+  assert.deepEqual(
+    portableChamberHostPackageSeeds([seeds[1]!]),
+    [],
+    'an all-localOnly list is empty, never a seed with an empty sourceDir',
+  )
+})
+
+test('builtChamberHostPackageSeeds: an empty sourceDir is never resolved (the CWD is not a package)', () => {
+  const root = tempDir()
+  const built = dualHostSeeds(root)
+  const seeds: ChamberHostPackageSeed[] = [
+    ...built,
+    // An unmapped registry row: `join('', 'dist', 'index.js')` would resolve
+    // against the process CWD. This checkout/repo root is the test's CWD, and
+    // the gate must refuse the empty dir BEFORE any filesystem probe — proven
+    // here by asserting the result set, not by relying on the CWD's content.
+    { insertId: 'unmapped', packageName: '@dsh-chamber/dsh-chamber-seed-unmapped', sourceDir: '', label: 'unmapped' },
+    // A directory that exists but has no built entry (source checkout).
+    { insertId: 'unbuilt', packageName: '@dsh-chamber/dsh-chamber-seed-unbuilt', sourceDir: join(root, 'not-built'), label: 'unbuilt' },
+  ]
+  assert.deepEqual(builtChamberHostPackageSeeds(seeds).map(seed => seed.insertId),
+    [CLIENT_GRAPH_INSERT_ID, GIT_WORKTREE_INSERT_ID],
+    'only real source dirs with a built dist/index.js are shipped here')
+  assert.deepEqual(builtChamberHostPackageSeeds([]), [])
+})
+
+test('builtChamberHostPackageSeeds: an empty sourceDir stays refused even when the CWD LOOKS like a built package', () => {
+  // This is the only test that can kill the `sourceDir !== ''` guard: the
+  // CWD-independent case above passes with or without it (this checkout has no
+  // packages/desktop/dist/index.js). The guard exists because
+  // `existsSync(join('', 'dist', 'index.js'))` resolves the process CWD, so a
+  // shell whose working directory contains a built entry would otherwise stage
+  // ITS OWN bytes as that package's seed (2026-12 review; verification gap G1).
+  const root = tempDir()
+  const built = dualHostSeeds(root)
+  const emptyDirSeed: ChamberHostPackageSeed = {
+    insertId: 'unmapped',
+    packageName: '@dsh-chamber/dsh-chamber-seed-unmapped',
+    sourceDir: '',
+    label: 'unmapped',
+  }
+  const cwd = mkdtempSync(join(tmpdir(), 'chamber-cwd-'))
+  mkdirSync(join(cwd, 'dist'))
+  writeFileSync(join(cwd, 'dist', 'index.js'), '// a CWD that looks like a built package\n')
+  const previous = process.cwd()
+  process.chdir(cwd)
+  try {
+    assert.ok(existsSync(join('', 'dist', 'index.js')),
+      'the fixture CWD must resolve a dist/index.js, or this test cannot bite')
+    assert.deepEqual(builtChamberHostPackageSeeds([...built, emptyDirSeed]).map(seed => seed.insertId),
+      [CLIENT_GRAPH_INSERT_ID, GIT_WORKTREE_INSERT_ID],
+      'an empty sourceDir is never resolved, whatever the CWD happens to contain')
+  } finally {
+    process.chdir(previous)
+  }
+})
+
+test('seedRemoteChamberHostPackages: a localOnly row with a REAL source dir is neither probed nor written (design 20 §6)', async () => {
+  // The seed must carry a real populated dir: with `sourceDir: ''` the writer's
+  // shipped-artifact gate would skip the row anyway and the test would pass
+  // even with the portability filter deleted (2026-12 review — the first
+  // version of this test was vacuous for exactly that reason).
+  const root = tempDir()
+  const seeds: ChamberHostPackageSeed[] = [
+    ...dualHostSeeds(root),
+    {
+      insertId: 'open-in',
+      packageName: OPEN_IN_PACKAGE_NAME,
+      sourceDir: writeHostSeedPackage(root, 'open-in', OPEN_IN_PACKAGE_NAME, 'export const openIn = 1\n'),
+      label: 'open-in',
+      localOnly: true,
+    },
+  ]
+  const remote = makeSeedExec({ patchContent: TEMPLATE })
+  const result = await seedRemoteChamberHostPackages(remote.exec, SEED_SPEC, seeds)
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  assert.deepEqual(result.packages.map(entry => entry.insertId), [CLIENT_GRAPH_INSERT_ID, GIT_WORKTREE_INSERT_ID])
+  assert.equal(remote.calls.some(call => call.includes(OPEN_IN_PACKAGE_NAME)), false,
+    'no remote call ever mentions the local-shape-only package')
+  const patch = remote.written.find(entry => entry.path.endsWith('/cordis.patch.yml'))?.bytes.toString('utf8') ?? ''
+  assert.equal(patch.includes('open-in'), false, 'not even a dangling loader row')
 })
 
 test('seedRemoteChamberHostPackages: an unbuilt package is omitted from files and loader rows', async () => {

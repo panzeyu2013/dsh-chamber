@@ -206,10 +206,12 @@ export interface ChamberHostPackageState {
   version: string | null
   live: boolean | null
   /** The registry row is meaningful for the LOCAL instance shape only (design
-   *  20 §6: the open-in host domain). Remote/gateway/http targets report it
-   *  with `installed:false` and no probe; the plugin table renders "local
-   *  shape only" from this flag instead of "not injected" — absent by design
-   *  there, not by fault. Absent = an ordinary row. */
+   *  20 §6: the open-in host domain). The ssh PROBE reports it as
+   *  `installed:false`/`patched:false` without ever asking the remote ("not
+   *  asked", never "the target lacks it"), while the desktop's own projection
+   *  carries the real local state; whichever projection delivered the row, the
+   *  plugin table OMITS it on every non-local target (it is listed for the
+   *  local shape alone). Absent = an ordinary row. */
   localOnly?: boolean
 }
 

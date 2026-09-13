@@ -22,6 +22,7 @@ import {
   HOST_GRAPH_PACKAGE,
   MOBILE_PACKAGE,
   chamberSeedDrift,
+  classifyInventoryEntry,
   type ChamberSeedDriftState,
 } from '../src/client/plugin-inventory-text.ts'
 
@@ -188,6 +189,17 @@ test('chamber package names mirror the control-plane registry (lockstep guard)',
     'registry probe methods must stay unique (control-plane assertChamberHostRegistry pins this at load)')
   for (const name of [HOST_GRAPH_PACKAGE, GIT_WORKTREE_PACKAGE, ARCHIVE_CLEANUP_PACKAGE, OPEN_IN_PACKAGE]) {
     assert.ok(seed.includes(`'${name}'`), `control-plane host-graph-seed.ts no longer declares ${name}`)
+  }
+  // CLASSIFICATION lockstep (2026-12): the third-party zone excludes a chamber
+  // package by CLASSIFICATION (classifyInventoryEntry), and on a non-local
+  // target the localOnly rows are no longer part of the caller's expected-name
+  // list — so a registry row missing from the classifier would be reclassified
+  // third-party there. The constants alone are not enough: every DECLARED
+  // registry package must map to a chamber kind.
+  for (const name of declaredNames) {
+    assert.notEqual(classifyInventoryEntry(name), 'third-party',
+      `registry host package ${name} must classify as a chamber row (plugin-inventory-text.ts), `
+        + 'or a non-local target would list a chamber package as third-party')
   }
   assert.equal(HOST_GRAPH_PACKAGE, '@dsh-chamber/dsh-chamber-seed-client-graph')
   assert.equal(GIT_WORKTREE_PACKAGE, '@dsh-chamber/dsh-chamber-seed-git-worktree')
