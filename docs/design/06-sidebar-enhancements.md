@@ -728,16 +728,22 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   官方 16px 横排三点 kebab 菜单（重命名/删除，`Menu` primitive portal 模式；
   **2026-09 batch 1 A8 修订**：此前把 primitives 的横排省略号旋转 90° 成竖排
   14px，现按官方原样渲染 16px 横排，`.actionIcon` 20×20 命中盒不变；
-  同簇的 `+` 同期由 14px 提到官方 16px，动作簇间距同步为官方
-  `Rows .rowActions` 的 12px，A8b），
+  同簇的 `+` 同期由 14px 提到官方 16px，动作簇间距一度取官方
+  `Rows .rowActions` 的 12px，A8b；**2026-09-13 修订（用户报告）**：该 12px 描述的
+  是没有 git occupant 的两项簇，而 workspace 头部行尾的可见簇实际是三项——
+  occupant 的揭示态动作（`.headerGit`，同一行的兄弟 flex 子项，08 §3.2）是簇的
+  最左成员、落在头部自身的 4px 间距上，12px 因此落进**簇内部**、把一簇切成
+  4px + 12px（「`+` 与省略号之间的间隔明显更大」）。簇统一改走头部/本表的图标
+  节奏 **4px**（= G1-4 两个 24px 命中盒相邻所需的 ≥4px 下限，与 `.headerGit` /
+  `.sourceActions` 同值；session 行的簇只有单个 kebab，间距无观感影响），
   悬停时替换会话数徽标；session 行 = **三点 kebab 菜单三项（重命名/分叉/归档，
   归档不再有独立图标按钮）**（悬停替换行尾状态槽；**session 不显示相对时间**）；
   **添加工作区**
   = 来源头部按钮（官方 project-add 字形，与搜索/排序图标
   并排成簇，悬停替换连接状态槽，胶囊展开时簇保持可见；文案在 aria 与**官方
   `Tooltip`**——同批把来源头四个动作（排序/添加工作区/搜索/归档清理）从原生
-  `title` 换成设计系统 Tooltip（`ServerSection.tsx` 的四个 Tooltip 包装的头部按钮，
-  2026-09 起在 :921/:948/:970/:1008），行与
+  `title` 换成设计系统 Tooltip（`ServerSection.tsx` 里这四处——四个
+  `<Tooltip side="bottom" delayMs={500}>` 包装的头部按钮；按形状锚定，行号会漂移），行与
   状态槽仍用原生 title，无列表行）。替换为真正 display 交换（静止不占位，状态图标
   真正居行/头末尾）。kebab
   展开期间该行操作保持可见（`.rowActionsVisible`）。行内图标按钮全量
@@ -767,15 +773,20 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   13/18 惯用，与列表标题同规格；v0.2.4 无显式行框、靠继承 1.5≈19.5px，故该项当时
   约 34px、现在 32px——本批统一的是字号/内距语言，不追像素），圆角/背景 = 官方
   （item r10、列表 r20 + `bg-layer-3` + elevation）。
-- **图标钮命中区（2026-09 阶段 3 G1-4）**：本页所有小于 24px 的图标按钮——行内
-  `.actionIcon`（20px）、来源头 `.searchButton`（20px）、搜索框 `.searchClear`（18px）、
-  折叠 `.foldToggle` / `.sourceFoldToggle`（16px）、轨道 `.railDotButton`（16px）——
-  **视觉盒与行高一律不变**，各自加一层不可见命中盒（`::after` 的 `inset` 分别
-  -2/-2/-3/-4/-4/-4px ⇒ 24×24），`disabled` 时 `pointer-events: none`。簇间距规则：
-  两个 24px 盒需相邻 ≥4px，故 `.sourceActions` 由 2px 提到 4px（`.rowActions` 12px 与
-  `.railDots` 12px 本就够）；16px 控件旁边是宽邻居（workspace 标题 / 来源名）时，
-  其中心距远超 24px，2.5.8 的 spacing 备选同样成立。锁见
-  `test/batch2-visual-locks.test.ts` 的 G1-4 一例。
+- **图标钮命中区（2026-09 阶段 3 G1-4；2026-09-13 簇间距审计修订）**：本页所有小于
+  24px 的图标按钮——行内 `.actionIcon`（20px）、来源头 `.searchButton`（20px）、搜索框
+  `.searchClear`（18px）、折叠 `.foldToggle` / `.sourceFoldToggle`（16px）、轨道
+  `.railDotButton`（16px）——**视觉盒与行高一律不变**，各自加一层不可见命中盒
+  （`::after` 的 `inset` 分别 -2/-2/-3/-4/-4/-4px ⇒ 24×24），`disabled` 时
+  `pointer-events: none`。簇间距规则按**边框盒**表述（真正的不变量）：相邻两盒间距
+  ≥ 2×`inset`，否则两个 24px 命中盒重叠——20px 盒（rim 2px）需 ≥4px，16px 盒
+  （rim 4px）需 ≥8px；**列 gap 不等于盒间距**：子项自带 margin 时会被吃掉。据此：
+  `.sourceActions` 由 2px 提到 4px；`.rowActions` 自 2026-09-13 簇节奏修订起取 4px；
+  `.railDots` 由 12px 提到 **16px**——其子项 `margin: -4px 0`，边框盒间距
+  16 − 8 = 8px，原先的 12px 只剩 4px，两点的命中盒互相重叠 4px（可见节奏随之成为
+  8px 点 + 16px 间隙）。16px 控件旁边是宽邻居（workspace 标题 / 来源名）时，其中心距
+  远超 24px，2.5.8 的 spacing 备选同样成立。锁见 `test/batch2-visual-locks.test.ts`
+  的 G1-4 一例（含 rail 的 16px gap 与 `-4px 0` margin 两半算式）。
 - **会话行窗口与展开条（2026-09-11 upstream-alignment T11；2026-09 batch 1 A10
   补几何）**：每个 workspace 只
   展开前 N 行（`sessionRowWindow`），其余由展开条揭示。展开条采用官方

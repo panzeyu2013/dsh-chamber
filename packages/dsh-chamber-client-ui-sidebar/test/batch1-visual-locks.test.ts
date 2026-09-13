@@ -196,7 +196,7 @@ test('A1: session titles carry the official primary ink, and the hover override 
   )
 })
 
-test('A8/A8b: the kebab is the official horizontal 16px glyph, cluster gap 12px', () => {
+test('A8/A8b: the kebab is the official horizontal 16px glyph, cluster gap = the header rhythm', () => {
   // Official Rows: `<IconEllipsisOutline16/>` (default 16, no rotation) inside a
   // 16px `.iconButton`; the chamber keeps its 20px hit box (option C).
   const sites = section.match(/<IconEllipsisOutline16 size=\{16\} \/>/g) ?? []
@@ -214,7 +214,17 @@ test('A8/A8b: the kebab is the official horizontal 16px glyph, cluster gap 12px'
   for (const selector of rotationSelectors()) {
     assert.ok(ROTATION_ALLOWLIST.has(selector), `only chevrons/keyframes may transform, found: ${selector}`)
   }
-  pin('A8b', '.rowActions', { gap: '12px' })
+  // A8b (2026-09-13 revision): the workspace header's trailing cluster spans TWO
+  // containers — the git occupant's revealed action (`.headerGit`, that row's own
+  // sibling flex child, design 08 §3.2) and this span — so it only reads as ONE
+  // cluster while both gaps agree. The copied official `Rows .rowActions` 12px
+  // described a two-item cluster with no git occupant; with the occupant as the
+  // cluster's leftmost member it landed INSIDE the cluster and split it
+  // 4px + 12px (user report: the kebab read as detached). Both sides now ride the
+  // header's 4px icon rhythm — also the G1-4 floor two 24px hit boxes need, and
+  // the value `.headerGit` / `.sourceActions` already carry.
+  pin('A8b', '.rowActions', { gap: '4px' })
+  pin('A8b cluster boundary', '.workspaceHeader', { gap: '4px' })
   pin('A8 (option C)', '.actionIcon', { width: '20px' })
 })
 

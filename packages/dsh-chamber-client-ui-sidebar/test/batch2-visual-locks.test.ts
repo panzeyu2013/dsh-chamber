@@ -144,6 +144,7 @@ function pin(item: string, flat: string, selector: string, wanted: Record<string
 }
 
 const css = sheet('../src/client/sidebar-chamber.module.css')
+const rootCss = sheet('../src/client/SidebarRoot.module.css')
 const section = stripComments(readFileSync(new URL('../src/client/ServerSection.tsx', import.meta.url), 'utf8'))
 const root = stripComments(readFileSync(new URL('../src/client/SidebarRoot.tsx', import.meta.url), 'utf8'))
 
@@ -195,11 +196,31 @@ test('P2-B B-2 / G1-4: icon buttons keep their box and row, and carry a 24px hit
     '.foldToggle:disabled::after', '.railDotButton:disabled::after']) {
     pin(`G1-4 ${selector}`, css, selector, { 'pointer-events': 'none' })
   }
-  // 24px boxes need a >=4px cluster gap to stay distinct.
+  // The invariant behind G1-4, stated as the BORDER-box gap it really is: two
+  // adjacent boxes must sit >= 2 x their rim apart, or their 24px hit boxes
+  // overlap. A 20px box with a -2px rim therefore needs >= 4px, and a 16px box
+  // with a -4px rim >= 8px — the column gap alone is NOT the box gap whenever the
+  // children carry margins of their own.
   const clusterGap = Number.parseInt(
     decls(rule(css, '.sourceActions')).find(([name]) => name === 'gap')?.[1] ?? '0', 10)
   assert.ok(clusterGap >= 4,
     `the source-header cluster needs >= 4px between two 24px hit boxes (got ${clusterGap}px)`)
+  // 2026-09-13 audit: the rail's dots were the counter-example — 16px buttons
+  // with a -4px rim in a 12px column gap leave only 12 - 4 - 4 = 4px between
+  // boxes, i.e. overlapping hit boxes, and each dot stole 4px of its neighbour's
+  // target band. The gap is now 16px (16 - 8 = 8 = 2 x 4). Both halves of that
+  // arithmetic are pinned, so neither can drift back on its own.
+  pin('G1-4 rail cluster', css, '.railDots', { gap: '16px' })
+  pin('G1-4 rail button margin', css, '.railDotButton', { margin: '-4px 0' })
+  const railGap = Number.parseInt(
+    decls(rule(css, '.railDots')).find(([name]) => name === 'gap')?.[1] ?? '0', 10)
+  assert.ok(railGap - 8 >= 8,
+    `the rail's 16px dots need >= 8px between their boxes, i.e. a >= 16px column gap (got ${railGap}px)`)
+  // The footer-action hole is a LIST seat: several occupants share this one flex
+  // row, so the row — not the occupants — owns the space between them (each
+  // occupant owns only its own box; the settings trigger carries its own
+  // vertical margins). 4px is the sheet's icon-cluster rhythm and the G1-4 floor.
+  pin('G1-4 footer action row', rootCss, '.footerActions', { gap: '4px' })
   // The row geometry the hit-area overlay must NOT be allowed to change: the row
   // stays content-sized (this 20px button + 5px + 5px padding = 30px), so a later
   // box-growing "fix" has to show up as an explicit height here and fail.

@@ -92,7 +92,12 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
 - 已连接来源的聚合拉取失败时以错误行呈现（不冒充"无工作区"）；全部来源
   断开时显示空态提示。
 - 保留官方侧边栏的：logo 行、New Session（作用于当前活动来源）、折叠
-  （wide/rail）状态机、foot（footer.action + settings 孔位）。
+  （wide/rail）状态机、foot（footer.action + settings 孔位）。foot 的座位契约
+  （2026-09-13 审计补记）：`sidebar.footer.action` 是 **list 座**（`contract/slots.ts`），
+  多个注册项共用同一行 ⇒ 这一行由 chamber 补 4px 间距（官方块本身无 gap，两个 occupant
+  会零间距相接；4px 同时是 G1-4 两个 24px 命中盒的下限）；纵向（footer.action 行 ↔
+  settings 座）仍按官方契约由 occupant 自己的 margin 承担（settings 触发器
+  `margin: 4px -2px` / rail `8px 0 10px` 即该契约的既有先例）。
 - 当前活动来源以视觉强调（如行高亮/侧边标记），与其余来源同列表呈现。
 - 来源分组头可**点击**（非当前来源）→ 切到该来源 shell（不打开会话；见 §2.2）。
 

@@ -205,13 +205,21 @@ slot，不由 renderer App 直接 import 领域组件。
   分支 chip**：worktree 行 rest 态行尾只保留计数徽标，分支身份随行 hover / 键盘
   焦点 / kebab 揭示的动作与工作区管理对话框呈现；主 checkout 也不显示 chip
   （root 组只显示项目名）。行内动作图标 16px；空 workspace 的组体显示
-  "该工作区暂无会话"提示行。
+  "该工作区暂无会话"提示行。**揭示态下 occupant 是行尾动作簇的最左成员**：它与
+  `rowActions` 之间只有头部自身的 4px 间距，故簇内（`+` ↔ kebab）与之一致，同为
+  4px（2026-09-13 修订——此前该段用官方 `Rows .rowActions` 的 12px，一簇被切成
+  4px + 12px；见 06 §7「行内操作」条与 `batch1-visual-locks` 的 A8b 锁）。
 - **行内动作揭示 pointer-safe**：动作按钮的样式钩子是 **`data-git-action` 属性**
   （主行「分支+」创建 / worktree 行删除，`SidebarWorkspaceGitLine.tsx:387,400`），
   由 sidebar 侧的 hover / `:has(:focus-visible)` / kebab 展开
-  （`.rowActionsVisible`）三条规则揭示（`sidebar-chamber.module.css:958-960`，禁用
-  态 `.42` 同钩子见 974-976），occupant 自身也在 `:has(:focus-visible)` 下按同一
-  钩子揭示（`SidebarGit.module.css:192`）。**不用字面量类名**：属性选择器不被
+  （`.rowActionsVisible`）三条规则揭示（`sidebar-chamber.module.css` 的
+  `.workspaceHeader:hover [data-git-action]`、
+  `.workspaceHeader:has(:focus-visible) [data-git-action]`、
+  `.workspaceHeader:has(.rowActionsVisible) [data-git-action]` 三条，禁用态 `.42` 走
+  同钩子的 `[data-git-action]:disabled`；按选择器锚定——行号随文件增长漂移，
+  2026-09-13 复核时旧引用的 958-960 / 974-976 已不对），occupant 自身也在
+  `:has(:focus-visible)` 下按同一钩子揭示（`SidebarGit.module.css` 的
+  `.headerGit:has(:focus-visible) [data-git-action]`）。**不用字面量类名**：属性选择器不被
   CSS Modules 哈希，跨包模块才能匹配同一钩子（本仓既有规则见
   `packages/dsh-chamber-client-ui-mobile/src/client/styles.ts:10-20`；
   2026-09-11 upstream-alignment，原 `git-ws-action` 全局类名已退役）。
