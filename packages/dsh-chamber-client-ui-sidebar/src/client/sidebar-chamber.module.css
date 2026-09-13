@@ -1753,10 +1753,19 @@
   border-radius: 8px;
 }
 
+/* 归档管理器的行勾选/全选（原生 checkbox + accent token）：取 dsh 业务蓝
+   `--dsw-alias-state-business-primary`（`--dsw-static-deepseek-500` / `-400`，
+   浅色 #4176e6、深色 #679efe）。
+   2026-09 用户裁决：与设置页的"开/选中"态（复选框 accent / 分段滑块 / 开关轨道）
+   统一到业务蓝，不用官方中性 `--dsw-alias-brand-primary`——官方 token 表里它是
+   中性档（浅色 `--dsw-static-neutral-bluish-1000` 近黑、深色
+   `--dsw-static-neutral-bluish-50` 近白），浅色主题下勾选态会发黑；与侧栏既有语言
+   一致——选中/拖拽指示同取 `--dsw-alias-state-business-primary`，完成未读蓝点取
+   同一蓝族的 `--dsw-static-deepseek-450`（`.stateCompleted`）。 */
 .archiveManagerCheck {
   flex: none;
   margin: 0;
-  accent-color: var(--dsw-alias-brand-primary);
+  accent-color: var(--dsw-alias-state-business-primary);
   cursor: pointer;
 }
 

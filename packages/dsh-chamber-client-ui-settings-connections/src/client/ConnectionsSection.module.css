@@ -946,9 +946,13 @@
   color: var(--dsw-alias-label-primary);
 }
 
+/* 选中的筛选胶囊：dsh 业务蓝填充 + 反白文字（2026-09 用户裁决：与设置页复选框/
+   分段滑块/开关的"开/选中"色统一到 `--dsw-alias-state-business-primary`，而不是
+   官方中性 `--dsw-alias-brand-primary`——后者浅色主题下是近黑，选中态会发黑）。
+   文字取 `--dsw-alias-bg-layer-3`（浅色即近白、深色为深灰），在蓝底上两档都可读。 */
 .pluginPillActive {
   border-color: transparent;
-  background: var(--dsw-alias-brand-primary);
+  background: var(--dsw-alias-state-business-primary);
   color: var(--dsw-alias-bg-layer-3);
 }
 

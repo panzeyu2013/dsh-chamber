@@ -773,6 +773,31 @@
     包装 `<span>` 现在不带任何 ARIA。收口仍需上游给原语加透传（届时删掉该模块）；
     原语根节点即 `role="switch"` 按钮这一前提由
     `test/upstream-alignment-locks.test.ts` 的 vendor 源文本 tripwire 钉住。
+  - **chamber 的"开/选中"色与进度色回到 dsh 业务蓝（2026-09 用户裁决；撤销同轮
+    阶段 2 的"统一中性色"收口）**：取 `--dsw-alias-state-business-primary`
+    （`--dsw-static-deepseek-500` / `-400`，浅色 #4176e6 / 深色 #679efe），不再取
+    官方 `--dsw-alias-brand-primary`——后者在官方 token 表里是**中性档**（浅色
+    `--dsw-static-neutral-bluish-1000` 近黑、深色 `--dsw-static-neutral-bluish-50`
+    近白），浅色主题下"开/选中"态发黑而不是 dsh 蓝，也与侧栏选中态、Git 面板
+    滑块的既有业务蓝语言不一致。落点六处：`SettingsShell.module.css` 的
+    `.generalCardCheck`（`accent-color`）、`SegmentedControl.module.css` 的
+    `.thumb`、官方 `Switch` 的开启轨道（`SettingsShell.module.css` 的
+    `.panel [role='switch'][aria-checked='true']` 覆盖：特异性 0,3,0 胜过原语
+    0,2,0，故不依赖打包顺序，面板内**来源自己 ctx** 渲染的官方分节一并覆盖）、
+    连接页 `.pluginPillActive`、同文件的运行时进度填充两态
+    （`.runtimeProgressBar` / `.runtimeProgressBarIndeterminate`；6px 轨道仍是
+    `--dsw-alias-border-l2` 浅灰）、侧栏归档管理器行勾选/全选
+    （`sidebar-chamber.module.css .archiveManagerCheck`，design 24 §6）。
+    **已知边界（2026-09 裁决有意不改）**：官方 `RiskConfirmation` 的确认勾选框
+    （`accent-color` 走 `--dsw-alias-button-primary-fill`；全权限/权限预设确认）
+    与官方 `Button variant="primary"` 填充仍是官方中性——该确认框由官方组件渲染并
+    `createPortal` 到 `body`，chamber 只能以文档级规则、锚在上游 CSS module 名上
+    覆盖，且同框主按钮仍是官方黑、只改勾选会半蓝半黑；面板外的文档级弹层（首启
+    `settings.onboarding`）同理不在作用域内。
+    判据：`dsh-chamber-client-ui-settings-bridge/test/batch2-visual-locks.test.ts`
+    的 B-3/B-4（含开关覆盖规则本身）与进度填充两条、
+    `dsh-chamber-client-ui-sidebar/test/batch2-visual-locks.test.ts` 的 archive
+    checkbox 条；沿革与理由见 design 15 §D1② 与 design 24 §6。
   - **侧栏行没有 schedule 事实，标记靠 chamber 自己把 `projectionValues.schedule`
     带过去**：上游行类型直接带 `hasActiveSchedule`（`vendor/harness-checkout/packages/client/ui-workspace/src/client/tree.ts:161-163`
     读同一个 `projectionValues.schedule`，消费点 `rows/Rows.tsx:468`（行内）与

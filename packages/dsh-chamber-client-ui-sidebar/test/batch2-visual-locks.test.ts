@@ -208,4 +208,10 @@ test('P2-B B-2 / G1-4: icon buttons keep their box and row, and carry a 24px hit
   assert.equal(/(?<![\w-])(?:min-|max-)?height\s*:/.test(row), false, 'the archive row must stay content-sized')
   assertSoleDeclaration(css, '.archiveManagerRow', ['height', 'min-height'])
   assertSoleDeclaration(css, '.archiveManagerRow .actionIconDanger::after', ['inset'])
+  // 2026-09 user decision: the row/select-all checkbox carries the dsh business
+  // blue, not the official neutral `--dsw-alias-brand-primary` (near-black in the
+  // light theme) — the same ruling as the settings page's on/selected states.
+  pin('archive checkbox', css, '.archiveManagerCheck', {
+    'accent-color': 'var(--dsw-alias-state-business-primary)',
+  })
 })
