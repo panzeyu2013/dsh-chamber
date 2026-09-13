@@ -307,7 +307,7 @@ jobs:
         run: node scripts/dev/ensure-harness-vendor.mjs
       # Upstream-touchpoint registry gates (docs/checklists/upstream-touchpoints.md),
       # exactly as ci.yml runs them — in TWO passes, both required:
-      #   1. here, before the install: C1/C3–C10 are file-only, so a drift fails
+      #   1. here, before the install: C1/C3–C14 are file-only, so a drift fails
       #      fast without node_modules (`--no-artifact-rebuild` = C8 mtime
       #      advisory, and nothing is written);
       #   2. below, after the install: the default mode re-runs everything AND
@@ -315,7 +315,7 @@ jobs:
       #      and byte-compare, hard failure, then restore). C8 is the gate most
       #      easily defeated by "edited src, forgot to rebuild the artifact", so
       #      a release must never be the first place it runs (2026-12 review P2).
-      - name: Upstream touchpoint registry (C1/C3/C4/C5/C6/C7/C9/C10)
+      - name: Upstream touchpoint registry (C1/C3/C4/C5/C6/C7/C9/C10 + C11–C14)
         run: node scripts/dev/verify-upstream-touchpoints.mjs --no-artifact-rebuild
       - run: pnpm install --frozen-lockfile
       # C8 deterministic artifact gate (see the step above): rebuilds in place,

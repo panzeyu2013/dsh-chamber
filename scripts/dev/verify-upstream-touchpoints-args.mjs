@@ -4,7 +4,7 @@
  * on its own; the gate script itself is a top-level program and cannot be
  * imported by a test).
  *
- * WHY THIS EXISTS: the gate runs C1/C3–C10 on EVERY invocation, and its default
+ * WHY THIS EXISTS: the gate runs C1/C3–C14 on EVERY invocation, and its default
  * (non-`--no-artifact-rebuild`) mode rebuilds the committed host/mobile bundles
  * IN PLACE and then restores them. Before this module, any argument the script
  * did not recognize (`--no-artifact-rebuid` — one missing letter, a `--tag`
@@ -23,7 +23,7 @@
 export const USAGE_EXIT_CODE = 2
 
 /** The single source of the script's usage text (`--help` and usage errors). */
-export const VERIFY_USAGE = `verify-upstream-touchpoints — 上游触点保鲜门（C1/C3–C10；docs/checklists/upstream-touchpoints.md 的机器侧）
+export const VERIFY_USAGE = `verify-upstream-touchpoints — 上游触点保鲜门（C1/C3–C14；docs/checklists/upstream-touchpoints.md 的机器侧）
 
 用法：
   node scripts/dev/verify-upstream-touchpoints.mjs [--no-artifact-rebuild]
@@ -38,7 +38,7 @@ export const VERIFY_USAGE = `verify-upstream-touchpoints — 上游触点保鲜�
                           （advisory；需要 vendor/harness-checkout 子模块）。
   --help, -h              打印本用法并 exit 0（不跑任何门、不写盘）。
 
-默认模式（无参数）：跑 C1/C3–C10，其中 C8 会**就地重建并原样还原**提交态生成物
+默认模式（无参数）：跑 C1/C3–C14，其中 C8 会**就地重建并原样还原**提交态生成物
 （host dist ×3 + dsh-runtime dist + mobile dist/lib 四件）——这是唯一会写盘的路径。
 
 退出码：

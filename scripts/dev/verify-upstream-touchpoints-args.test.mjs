@@ -4,7 +4,7 @@
  * Two halves, because they answer two different questions:
  *   1. PURE: `parseVerifyArgs` pins the accepted surface and every rejection
  *      reason (the gate script itself is a top-level program — importing it
- *      would run C1/C3–C10, so the decision logic lives in its own module, the
+ *      would run C1/C3–C14, so the decision logic lives in its own module, the
  *      same split artifact-gate.mjs uses).
  *   2. WIRING (subprocess): the script must actually consult the guard BEFORE
  *      any gate runs. That matters more than the parse result: the default mode
