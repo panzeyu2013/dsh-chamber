@@ -98,6 +98,10 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
   `will-quit` cleanup single-flight：先阻止新的 runtime 启动并中止在途 runtime
   operation，再并行等待 plugin-sync/本地插件子进程、transport、control-plane、
   runtime installer 与在途 runtime transaction；有界超时 fail-loud，不留下孤儿进程。
+  **更新退出腿例外（design 11 §3.1，2026-12）**：`quitAndInstall` 在 macOS 上
+  **先关闭全部窗口、再退出**（`before-quit` 晚于关窗），因此关窗裁决还接收
+  `updateRestartArmed`——更新重启已武装时 `shouldHideToTray` 恒 false，关窗必须
+  真正关闭；被 hide 吞掉会截断安装/重启链，留下「无窗口仍在运行」的进程。
 - 设置 = `quit` 时关窗仍受 D2 退出确认保护（本地实例运行中先确认再退出；
   远程隧道/连接不影响关闭——D2），
   非 darwin 行为与现状一致（关窗即退出）。

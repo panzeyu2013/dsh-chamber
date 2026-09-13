@@ -716,12 +716,80 @@ function enqueueNotificationOpen(sourceToken: NotificationSourceToken, sessionId
  *  ~1-2s 完成；5s 硬顶仅为异常路径（如残留连接使 server.close 不回调）兜底
  *  （2026-08 排查；2026-08 提速，15s → 5s）。 */
 const QUIT_CLEANUP_TIMEOUT_MS = 5_000;
+/** 更新退出兜底的宽限期（armNativeUpdaterQuit）：原生更新器已发出
+ *  `before-quit-for-update` 后，正常腿应当立即 app.quit()（win: setImmediate；
+ *  mac: 原生终止）。超过这个窗口仍未进入退出序列，就由主进程接管退出——
+ *  取 5s 与退出清理上限同量级，绝不会等到 60s 的重启停滞 watchdog。 */
+const UPDATER_QUIT_FALLBACK_MS = 5_000;
 /** Cap on the npm search JSON body (registry search responses are ~KB-scale;
  * 256 KiB bounds a hostile or misbehaving registry). */
 const NPM_SEARCH_MAX_BODY_BYTES = 256 * 1024;
 // Update controller ref (created in whenReady): the quit-confirmation exemption
 // (design 14 D2) reads its state at will-quit time.
 let updateController: { state(): { phase: string; installBlockedReason: string | null } } | null = null;
+// 「重启并安装」在途标志（2026-12 review：macOS 实机缺陷）。electron-updater 的
+// quitAndInstall 在 macOS 上「先关闭全部窗口、再退出」（Electron 43.4.0 typings
+// AutoUpdater#before-quit-for-update 明文：before-quit 不会在窗口关闭前发出；本机
+// 对 43.4.0/darwin 的探针亦证实 autoUpdater 的 before-quit-for-update 与窗口
+// close 都发生在 quitAndInstall() 调用内部、远早于 before-quit），而 main.ts 的
+// 关窗到托盘（design 14 D1，默认 hide-to-tray）只在 quitRequested（由 before-quit
+// 置位）后才放行关窗——更新退出腿的关窗因此被 hide 吞掉：窗口消失、进程（连同本地
+// dsh 与隧道）永久留存、更新永不安装（用户实测症状）。
+// 该标志由控制器的 onQuitAndInstallArmed 回调在**调用 quitAndInstall 之前**置位
+// （关窗发生在调用内部，返回后再置位就晚了）；原生退出每次到达都会重新武装
+// （armNativeUpdaterQuit），失败/停滞时由 updater 状态订阅撤回。
+let updaterQuitArmed = false;
+// 原生更新器退出兜底计时器（见 armNativeUpdaterQuit）：原生 macOS 退出腿只关窗、
+// 不保证走到 app.quit()，宽限期内未退出即由主进程接管退出。
+let updaterQuitFallback: ReturnType<typeof setTimeout> | null = null;
+
+/** 武装「更新退出腿」：期间关窗一律真正关闭，绝不 hide 到托盘。 */
+function armUpdaterQuit(): void {
+  if (updaterQuitArmed) return;
+  updaterQuitArmed = true;
+  console.log('[dsh-chamber] 更新重启已武装：更新退出腿的关窗不再隐藏到托盘');
+}
+
+/** 撤回武装（重启失败/停滞，或本次调用什么都没武装）：恢复正常关窗语义。 */
+function disarmUpdaterQuit(reason: string): void {
+  if (updaterQuitFallback !== null) {
+    clearTimeout(updaterQuitFallback);
+    updaterQuitFallback = null;
+  }
+  if (!updaterQuitArmed) return;
+  updaterQuitArmed = false;
+  console.warn(`[dsh-chamber] 更新重启未成立（${reason}），恢复关窗到托盘语义`);
+  // 更新退出腿已经把窗口关掉、重启却没走完时，唯一能如实显示失败/停滞文案的
+  // 入口就是主窗口——把它拉回来（无窗口常驻绝不能是「更新卡住」的表现形式）。
+  if (mainWindow === null || mainWindow.isDestroyed()) showMainWindow();
+}
+
+/** 原生更新器正在关窗退出（Electron autoUpdater `before-quit-for-update`，
+ *  在 quitAndInstall 内部、关窗之前发出——43.4.0/darwin 实测）。两件事：
+ *  1) 武装关窗豁免：这一次关窗属于安装退出腿，绝不能被 hide 吞掉（也覆盖
+ *     「首次武装已被停滞 watchdog 撤回、原生退出迟到」的窗口）；
+ *  2) 兜底自退：macOS 原生腿只关窗、不保证走到 app.quit()（实测关窗后
+ *     before-quit 从未到达），进程会以「无窗口仍在运行」滞留。这里在宽限期后
+ *     仍未退出就由主进程 app.quit() 走正常 before-quit/will-quit 清理路径。
+ *     此刻退出是安全的：该事件只在 Squirrel 已完成 staging 后发出
+ *     （MacUpdater 仅在 squirrelDownloadedUpdate / 原生 update-downloaded 之后
+ *     才调原生 quitAndInstall），退出即安装。 */
+function armNativeUpdaterQuit(): void {
+  armUpdaterQuit();
+  if (updaterQuitFallback !== null) return;
+  updaterQuitFallback = setTimeout(() => {
+    updaterQuitFallback = null;
+    // 真退出已在途（before-quit 已置位）或失败路径已撤回武装：什么都不做。
+    if (quitRequested || !updaterQuitArmed) return;
+    // 只在「窗口确已被更新退出腿关掉」时接管退出：原生腿没走到关窗（或用户又从
+    // Dock 拉回了窗口）就绝不能在用户眼皮底下把应用拽下去——那种情况交给 60s
+    // 停滞 watchdog 如实呈现与恢复，而不是制造一次无预警退出。
+    if (mainWindow !== null && !mainWindow.isDestroyed()) return;
+    console.warn('[dsh-chamber] 原生更新退出腿未完成退出：进程仍在，改由主进程 app.quit()（已 staged 的更新随退出安装）');
+    app.quit();
+  }, UPDATER_QUIT_FALLBACK_MS);
+  updaterQuitFallback.unref?.();
+}
 // dsh runtime version controller (design 18 M2): module-level ref so the
 // settings「dsh 运行时」block's install/check/reset always reach the same
 // instance; state pushes go to the (single) main window.
@@ -1425,9 +1493,11 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
   // 需托盘；macOS Dock 常驻）且非真正退出在途 → hide（不 destroy），控制面/
   // 传输层/dsh 子进程继续运行。托盘缺失时回退现状（关窗即退，受 D2 确认保护）
   // ——绝不允许窗口被隐藏后无任何恢复入口。
+  // 更新退出腿（updaterQuitArmed）例外：关窗是更新安装的前置步骤，hide 会截断
+  // quitAndInstall 的退出链（见 armUpdaterQuit 的注释与该函数的契约）。
   win.on('close', (event) => {
     const recoveryAvailable = process.platform === 'darwin' || tray !== null;
-    if (shouldHideToTray(chamberSettings.windowCloseBehavior, recoveryAvailable, quitRequested)) {
+    if (shouldHideToTray(chamberSettings.windowCloseBehavior, recoveryAvailable, quitRequested, updaterQuitArmed)) {
       event.preventDefault();
       win.hide();
     }
@@ -4016,11 +4086,29 @@ if (!gotTheLock) {
         warn: (...args) => console.warn('[updater]', ...args),
         error: (...args) => console.error('[updater]', ...args),
       },
+      // 更新退出腿的关窗豁免（2026-12 macOS 实机缺陷修复）：控制器恰好在调用
+      // electron-updater quitAndInstall **之前**同步回调这里——macOS 上该调用
+      // 先关闭全部窗口、再退出（Electron 43.4.0 typings/探针，见
+      // shouldHideToTray），关窗一旦被 hide 吞掉，安装+重启链就地中断。回调只在
+      // 真正武装的路径上触发（拒绝路径不回调），失败/停滞由状态订阅撤回。
+      onQuitAndInstallArmed: armUpdaterQuit,
+      // 原生更新器开始关窗退出（Electron autoUpdater before-quit-for-update）：
+      // 关窗豁免 + 原生退出腿的兜底自退（见 armNativeUpdaterQuit）。
+      onNativeUpdaterQuitting: armNativeUpdaterQuit,
     });
     // Module-level ref so will-quit can read the update state for the quit-
     // confirmation exemption (design 14 D2).
     updateController = updater;
     updater.subscribe((updateState) => {
+      // 更新重启的失败/停滞回收（2026-12 review）：武装期间唯一可能出现的 push
+      // 就是重启失败（一次性 restartFailureText；phase 保持 downloaded，见
+      // updater.ts 的 'error' 分支）或相位离开 downloaded。两者都证明退出腿没有
+      // 发生 —— 撤回武装（恢复正常关窗语义），并在窗口已被更新退出腿关掉时拉回
+      // 主窗口，让设置页如实呈现失败文案与就地重试。
+      if (updaterQuitArmed
+        && (updateState.restartFailureText !== undefined || updateState.phase !== 'downloaded')) {
+        disarmUpdaterQuit(updateState.restartFailureText !== undefined ? 'restart failed' : `phase=${updateState.phase}`);
+      }
       const updateWindow = mainWindow;
       if (updateWindow !== null) {
         const pushed = attemptCommittedRegistryPush(() => {
@@ -4042,6 +4130,10 @@ if (!gotTheLock) {
     // rendered state (phase downloaded + no install block) — not just UI
     // hiding; quitAndInstall then quits through before-quit (the
     // update-downloaded exemption) and will-quit (cleanup first).
+    // The close-to-tray exception for this leg is armed from the controller's
+    // onQuitAndInstallArmed hook (see createUpdateController above) — the only
+    // point that proves the native quit was really armed, and the last
+    // synchronous instruction before the updater starts closing windows.
     ipcMain.handle(IPC_CHANNELS.UPDATE_RESTART, trustedIpc(() => updater.restartAndInstall()));
     // The settings update section's「前往下载页」link: popups are denied and
     // navigation is pinned to the control-plane origin, so opening a release

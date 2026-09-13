@@ -25,6 +25,21 @@
  *   electron-updater swaps the file and spawns the new instance BEFORE this
  *   process quits, which structurally cannot survive the single-instance
  *   lock — Linux keeps the quit-install leg and no restart button.
+ *   WINDOW-CLOSE ORDER (2026-12 real-machine defect): quitAndInstall does NOT
+ *   go through the app's normal quit sequence first — it CLOSES EVERY WINDOW
+ *   FIRST and only quits once they are all closed (Electron 43.4.0 typings,
+ *   AutoUpdater#before-quit-for-update: "the `before-quit` event is not
+ *   emitted before all windows are closed"; a 43.4.0/darwin probe confirmed
+ *   the autoUpdater `before-quit-for-update` event and the window `close`
+ *   both happen INSIDE the quitAndInstall() call). Two host duties ride on
+ *   that signal, both wired from here: options.onQuitAndInstallArmed (fired
+ *   synchronously right before the call → main.ts arms its close-to-tray
+ *   exception; a close hidden instead of closed aborts the whole
+ *   install/relaunch and strands the process) and
+ *   options.onNativeUpdaterQuitting (Electron's native updater is closing the
+ *   windows right now → main.ts re-arms on every occurrence and bounds the
+ *   quit itself, because the native macOS leg does not reliably reach
+ *   app.quit() after closing the windows).
  * - macOS: Squirrel.Mac (electron-updater's mac installer) requires a valid
  *   Developer ID signature. Without it the INSTALL step is blocked — that is
  *   a hard prerequisite, not a UX fork (design 11 §3.1/§6): the state
@@ -83,6 +98,10 @@ const require = createRequire(import.meta.url)
 let realAutoUpdater: AutoUpdaterLike | null = null
 function getRealAutoUpdater(): AutoUpdaterLike {
   if (realAutoUpdater === null) {
+    // Same hard guard as getRealApp: electron-updater's main reads the real
+    // electron app at load time, so loading it outside the Electron runtime
+    // can only go wrong (see realElectronUnavailable).
+    if (process.versions.electron === undefined) throw realElectronUnavailable('electron-updater autoUpdater')
     realAutoUpdater = (require('electron-updater') as typeof import('electron-updater')).autoUpdater
   }
   return realAutoUpdater
@@ -95,12 +114,56 @@ function getRealAutoUpdater(): AutoUpdaterLike {
 // Electron runtime and the path string under plain node (`app` → undefined)
 // — either way it never throws. Also resolved LAZILY: an injected test never
 // touches the real app.
+//
+// HARD GUARD (2026-12): the `electron` SPECIFIER must never be required
+// outside the Electron runtime. Under plain node it resolves to the npm
+// package, whose index.js — when its `dist/` is absent, exactly the shape of
+// a git worktree sharing one platform dist — SPAWNS A ~100MB BINARY DOWNLOAD
+// on load (verified: a unit-test run that reached this path printed
+// "Downloading Electron binary..." and hung). Tests always inject these deps;
+// reaching the real branch outside Electron is a wiring bug, so it fails
+// loudly instead of downloading.
+function realElectronUnavailable(what: string): Error {
+  return new Error(`the real ${what} is unavailable outside the Electron runtime; inject UpdateControllerDeps instead`)
+}
+
 let realApp: ElectronAppLike | null = null
 function getRealApp(): ElectronAppLike {
   if (realApp === null) {
+    if (process.versions.electron === undefined) throw realElectronUnavailable('electron app')
     realApp = (require('electron') as typeof import('electron')).app
   }
   return realApp
+}
+
+/** The slice of Electron's NATIVE `autoUpdater` this module subscribes to
+ *  (mac/win binding; electron-updater drives the same instance internally).
+ *  Only the quit-order signal is read — never a download/install action. */
+export interface NativeAutoUpdaterLike {
+  on(event: string, listener: (...args: unknown[]) => void): unknown
+}
+
+// Electron's native autoUpdater is not available on every platform shape
+// (Linux has no native updater at all) and the access can throw — resolved
+// LAZILY, defensively, and at most once: a missing binding (or a non-Electron
+// runtime) is a permanent null (no retry storms, no binary download), never a
+// startup failure. Injected tests never reach this path.
+let realNativeAutoUpdater: NativeAutoUpdaterLike | null = null
+let realNativeAutoUpdaterResolved = false
+function getRealNativeAutoUpdater(): NativeAutoUpdaterLike | null {
+  if (realNativeAutoUpdaterResolved) return realNativeAutoUpdater
+  realNativeAutoUpdaterResolved = true
+  if (process.versions.electron === undefined) return null
+  try {
+    const candidate = (require('electron') as { autoUpdater?: unknown }).autoUpdater
+    if (candidate !== null && typeof candidate === 'object'
+      && typeof (candidate as NativeAutoUpdaterLike).on === 'function') {
+      realNativeAutoUpdater = candidate as NativeAutoUpdaterLike
+    }
+  } catch {
+    realNativeAutoUpdater = null
+  }
+  return realNativeAutoUpdater
 }
 
 /** Update lifecycle phase (design 11 §3.2). `up-to-date` = a check ran and
@@ -548,6 +611,12 @@ export interface UpdateControllerDeps {
    *  app binary — without the seam a packaged-darwin restart arm (and with
    *  it the darwin stall-retry path, round-2 review A2) is untestable. */
   probeMacSignature?: () => Promise<boolean>
+  /** Electron's NATIVE `autoUpdater` (the mac/win binding electron-updater
+   *  drives internally), read only for its `before-quit-for-update` signal —
+   *  see onNativeUpdaterQuitting. Default: resolved lazily and defensively
+   *  (the binding is absent on shapes without a native updater, e.g. Linux);
+   *  tests inject a fake EventEmitter so no real electron is touched. */
+  nativeAutoUpdater?: NativeAutoUpdaterLike | null
 }
 
 /** Controller surface wired into main.ts (IPC handlers) and started at boot. */
@@ -737,6 +806,38 @@ export interface UpdateControllerOptions {
     warn: (...args: unknown[]) => void
     error: (...args: unknown[]) => void
   }
+  /** User-triggered「重启并安装」arming hook (2026-12 macOS quit-order fix):
+   *  called SYNCHRONOUSLY by restartAndInstall() immediately BEFORE it invokes
+   *  electron-updater's quitAndInstall() — the exact moment the updater starts
+   *  shutting the app down. On macOS that call CLOSES EVERY WINDOW FIRST and
+   *  only quits once they are all closed (Electron 43.4.0 typings,
+   *  AutoUpdater#before-quit-for-update: `before-quit` is not emitted before
+   *  all windows are closed; verified on 43.4.0/darwin: the autoUpdater
+   *  'before-quit-for-update' event and the window 'close' both arrive inside
+   *  the call, before it returns). The host uses this to arm its close-to-tray
+   *  exception so those closes can never be swallowed/hidden — a hidden close
+   *  aborts the install+relaunch and strands the process with no window.
+   *  Never called on a refusal path (nothing armed), so the host never has to
+   *  roll an arming back; failures after arming are published as the one-shot
+   *  restartFailureText carry, which releases it. */
+  onQuitAndInstallArmed?: () => void
+  /** Electron's NATIVE updater is shutting the app down right now (its
+   *  `before-quit-for-update` event, emitted inside `quitAndInstall()` before
+   *  it closes every window — verified on Electron 43.4.0/darwin). Two host
+   *  duties ride on it (2026-12 macOS fix, both sides of the same defect):
+   *  1. the close-to-tray exception must be armed for THIS close too, even if
+   *     an earlier arming was released (a stall, or a restart armed long
+   *     before a late staging completion) — the windows are being closed for
+   *     an install and must not be hidden;
+   *  2. the host may bound the quit itself: the native macOS leg closes the
+   *     windows and does NOT reliably reach `app.quit()` (43.4.0 probe: no
+   *     `before-quit` ever followed the window close), so a process left with
+   *     no windows must be driven to a real quit — safe to do here, because
+   *     this event only fires once Squirrel has the update STAGED (MacUpdater
+   *     calls the native quitAndInstall either right after `update-downloaded`
+   *     or from that listener), so terminating installs it.
+   *  Called on every occurrence — never gated on a prior click. */
+  onNativeUpdaterQuitting?: () => void
 }
 
 export function createUpdateController(options: UpdateControllerOptions, deps?: UpdateControllerDeps): UpdateController {
@@ -753,6 +854,31 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
   const channel = resolveChannel(version)
   const resolveBetaFeed = deps?.resolveBetaFeed ?? resolveRuntimeBetaFeed
   const probeMacSignature = deps?.probeMacSignature ?? probeMacDeveloperIdSignature
+  // Resolved ONLY when the host asked for the native quit bridge: a controller
+  // without that callback must not touch electron at all (see
+  // getRealNativeAutoUpdater — outside the Electron runtime the `electron`
+  // specifier is a package whose load can trigger a binary download).
+  const nativeAutoUpdater = options.onNativeUpdaterQuitting === undefined
+    ? null
+    : deps?.nativeAutoUpdater !== undefined ? deps.nativeAutoUpdater : getRealNativeAutoUpdater()
+
+  // Native quit-order bridge (2026-12 macOS fix): Electron's native updater
+  // emits `before-quit-for-update` INSIDE `quitAndInstall()` — before it closes
+  // every window, and long before any `before-quit` (which on this path only
+  // runs once all windows are closed). The host needs that instant to (a) keep
+  // those closes from being hidden to tray and (b) drive a real quit when the
+  // native leg stops after closing the windows. On Windows electron-updater
+  // emits the same event on the same native object right before its own
+  // app.quit(), so the bridge is platform-honest there too. Subscription
+  // failures are loud-but-harmless: the arming hook still covers the click.
+  if (nativeAutoUpdater !== null) {
+    try {
+      nativeAutoUpdater.on('before-quit-for-update', () => options.onNativeUpdaterQuitting?.())
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      logger.warn('[updater] 无法订阅原生更新器退出事件（本次重启只能依赖 arming hook）：', sanitizeErrorText(message))
+    }
+  }
 
   let state: UpdateState = {
     phase: 'idle',
@@ -1161,11 +1287,21 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
         // Whether the native termination sequence runs through Electron's
         // before-quit/will-quit cleanup (so transports/dsh are disposed before
         // the swap) is a REAL-MACHINE gate, not statically provable here —
-        // design 11 §9 lists the assertion checklist. Also: when the click
-        // lands before Squirrel finished its own staging fetch, the mac call
-        // only registers a listener and returns — the quit happens later when
-        // the native download completes (ok:true then means "armed", with a
-        // seconds-long window until the actual quit).
+        // design 11 §9 lists the assertion checklist.
+        // VERIFIED WINDOW ORDER (2026-12, Electron 43.4.0/darwin probe): the
+        // native call emits autoUpdater 'before-quit-for-update', then closes
+        // every window, and only quits once all of them are closed — the
+        // window 'close' event therefore arrives INSIDE this call, before it
+        // returns and long before 'before-quit'. The caller's close handling
+        // must already know the quit is in flight at that moment: the arming
+        // hook above fires right before this call, and main.ts arms
+        // updaterQuitArmed there (a hide-to-tray close here strands the
+        // process with no window and no install — the defect this invariant
+        // exists to prevent).
+        // Also: when the click lands before Squirrel finished its own staging
+        // fetch, the mac call only registers a listener and returns — the quit
+        // happens later when the native download completes (ok:true then means
+        // "armed", with a seconds-long window until the actual quit).
         // REAL 6.8.9 SYNC-FAILURE SHAPE (2026-12 review round F3 — the older
         // comment assumed "a synchronous throw means nothing was armed"): a
         // sync quit/install failure does NOT throw — BaseUpdater.install()
@@ -1188,6 +1324,21 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
         // value alone. The win32 restartStalled gate refuses that retry
         // BEFORE this call, so this proof can never read the latch refusal as
         // an arm; mac re-entry never hits the latch (no install() there).
+        // THE ARMING HOOK (2026-12 macOS quit-order fix) runs here, not in the
+        // caller: it fires SYNCHRONOUSLY immediately before quitAndInstall and
+        // only on the path that really arms — gate refusals (no downloaded
+        // update, blocked platform, linux, an already-armed restart) never
+        // reach it, so the host's close-to-tray exception can never be armed
+        // for a restart that does not happen, and never has to be rolled back.
+        // Every refusal/failure AFTER this point is published as a
+        // restartFailureText push (not-armed text, dispatched error, stall
+        // watchdog), which is what tells the host to release it again.
+        options.onQuitAndInstallArmed?.()
+        // Snapshot for the not-armed proof below: a mid-call 'error' dispatch
+        // REPLACES this carry, and that replacement is what distinguishes "the
+        // failure was already published" from "this result still owes the host
+        // a push".
+        const carryBeforeCall = state.restartFailureText
         const armed = autoUpdater.quitAndInstall(true, true)
         if (restartInFlight && armed !== false) {
           // Armed — the quit is on its way (win: setImmediate app.quit; mac:
@@ -1211,8 +1362,14 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
         // before it ever reaches this proof) synthesizes the same surface.
         // Either way the flight is released and the phase stays `downloaded`
         // — the user retries the restart in place.
+        // The comparison is against the pre-call carry, NOT `undefined`: the
+        // hook already fired on this path, so the host armed its close-to-tray
+        // exception and only a restartFailureText PUSH can release it — a
+        // stale carry left over from an earlier attempt must not swallow this
+        // push (the mid-call dispatch is preserved because it replaced the
+        // carry during the call).
         releaseRestartFlight()
-        if (state.restartFailureText === undefined) {
+        if (state.restartFailureText === carryBeforeCall) {
           setState({ restartFailureText: RESTART_NOT_ARMED_TEXT })
         }
         return { ok: false, error: state.restartFailureText ?? RESTART_NOT_ARMED_TEXT }
