@@ -75,6 +75,23 @@ function readText(absolute) {
   try { return readFileSync(absolute, 'utf8') } catch { return null }
 }
 
+/**
+ * 锚点树与仓内 pin 是否同一个上游：读锚点树 `dsh-web-frontend` 的版本，与
+ * `packages/desktop/vendor/dsh/pnpm-lock.yaml`（运行时线的单一来源）里解析到的版本比。
+ * 拿不到任一侧时返回 null（调用方只打印，不当成不符——CI/裸 clone 上两侧都可能缺）。
+ * @returns {{anchor: string, pinned: string, same: boolean} | null}
+ */
+function compareAnchorPin(anchorRoot) {
+  const anchorManifest = readText(join(anchorRoot, 'node_modules', '@deepseek-ai', 'dsh-web-frontend', 'package.json'))
+  const lockfile = readText(join(ROOT, 'packages', 'desktop', 'vendor', 'dsh', 'pnpm-lock.yaml'))
+  if (anchorManifest === null || lockfile === null) return null
+  let anchorVersion = null
+  try { anchorVersion = JSON.parse(anchorManifest).version ?? null } catch { return null }
+  const pinned = lockfile.match(/^\s{2}'@deepseek-ai\/dsh-web-frontend@([^']+)':/m)?.[1] ?? null
+  if (typeof anchorVersion !== 'string' || pinned === null) return null
+  return { anchor: anchorVersion, pinned, same: anchorVersion === pinned }
+}
+
 /** 本包源码 `src/**` 下的 TS/TSX（注释里的锚点不算声明，抽取时统一去注释）。 */
 function readMobileSources() {
   return walkFiles(join(MOBILE_PACKAGE, 'src'), name => name.endsWith('.ts') || name.endsWith('.tsx'))
@@ -160,20 +177,47 @@ function main() {
 
   const { root, tried } = resolveAnchorRoot(parsed.anchorRoot)
   if (root === null) {
-    console.log('[SKIP] 上游锚点根不存在或不含 node_modules/@deepseek-ai——本机/CI 未物化上游树，fail-soft 跳过（exit 0）')
-    for (const candidate of tried) console.log(`        尝试过：${candidate}${existsSync(candidate) ? '（存在，但无 @deepseek-ai）' : '（不存在）'}`)
-    console.log('        需要什么：一个含 `node_modules/@deepseek-ai/**/lib/*.js` 与')
-    console.log('        `node_modules/@deepseek-ai/dsh-web-frontend/dist/assets/index-*.css` 的目录，')
-    console.log('        用 --anchor-root <dir> 或 DSH_MOBILE_ANCHOR_ROOT=<dir> 指过来。')
-    console.log('        （本门不依赖 vendor/harness-checkout 子模块，未初始化也不影响。）')
+    const detail = [
+      '[SKIP] 上游锚点根不存在或不含 node_modules/@deepseek-ai——本机/CI 未物化上游树，fail-soft 跳过',
+      ...tried.map(candidate => `        尝试过：${candidate}${existsSync(candidate) ? '（存在，但无 @deepseek-ai）' : '（不存在）'}`),
+      '        需要什么：一个含 `node_modules/@deepseek-ai/**/lib/*.js` 与',
+      '        `node_modules/@deepseek-ai/dsh-web-frontend/dist/assets/index-*.css` 的目录，',
+      '        用 --anchor-root <dir> 或 DSH_MOBILE_ANCHOR_ROOT=<dir> 指过来。',
+      '        （本门不依赖 vendor/harness-checkout 子模块，未初始化也不影响。）',
+      '        升级流程请加 --require-anchor-root：严格模式下这里 exit 1，',
+      '        把「本机/CI 正常跳过」和「其实什么都没查」区分开。',
+    ]
+    // 严格模式：调用者（升级流程）明确要求「必须真的查过」——静默 exit 0 就是漏洞。
+    if (parsed.requireAnchorRoot) {
+      console.error(detail.join('\n'))
+      console.error('\n移动锚点门：--require-anchor-root 下找不到可用锚点根（exit 1）')
+      process.exit(1)
+    }
+    for (const line of detail) console.log(line)
     process.exit(0)
   }
 
   const rawFiles = readUpstreamFiles(root)
   const rawCss = readShellCssFiles(root)
   if (rawFiles === null || rawFiles.clientHalves.length === 0) {
-    console.log(`[SKIP] 锚点根 ${root} 下没有 client 产物（node_modules/@deepseek-ai/**/lib/*.js）——fail-soft 跳过（exit 0）`)
+    const detail = `[SKIP] 锚点根 ${root} 下没有 client 产物（node_modules/@deepseek-ai/**/lib/*.js）——fail-soft 跳过`
+    if (parsed.requireAnchorRoot) {
+      console.error(detail)
+      console.error('\n移动锚点门：--require-anchor-root 下锚点树没有 client 产物（exit 1）')
+      process.exit(1)
+    }
+    console.log(`${detail}（exit 0）`)
     process.exit(0)
+  }
+  // pin 身份：锚点树与仓内 pin 不是同一个上游时，这个门证明的是另一个版本。
+  const pin = compareAnchorPin(root)
+  if (pin !== null) {
+    if (!pin.same && parsed.requireAnchorRoot) {
+      console.error(`[FAIL] 锚点树 dsh-web-frontend@${pin.anchor} != 仓内 pin @${pin.pinned}（packages/desktop/vendor/dsh/pnpm-lock.yaml）——查的不是这个 pin，先物化正确的树再跑`)
+      console.error('\n移动锚点门：--require-anchor-root 下锚点树版本与 pin 不符（exit 1）')
+      process.exit(1)
+    }
+    console.log(`# pin 身份：锚点树 dsh-web-frontend@${pin.anchor}${pin.same ? ' == ' : ' != '}仓内 pin @${pin.pinned}${pin.same ? '' : '（前移或换树时按 §7 重锚）'}`)
   }
   if (rawCss.length === 0) {
     console.log(`[note] 锚点根 ${root} 下没有 shell CSS（dsh-web-frontend/dist/assets/index-*.css）：哈希 token 只按 JS 产物判定`)

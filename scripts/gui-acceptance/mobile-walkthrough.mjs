@@ -137,24 +137,27 @@ function collectWebSocketFrames(session, { cap = DEFAULT_FRAME_CAP } = {}) {
  *
  * @returns {Promise<object|null>}
  */
-async function discoverMobileTarget(cdpPort, url) {
+async function discoverMobileTarget(cdpPort, url, secrets = []) {
+  // Logged URLs go through the same scrub as the persisted ones: a launch token
+  // can ride the query string, and stdout is a log too.
+  const scrub = value => redactSecrets(String(value), secrets)
   if (url !== null) {
     const escaped = url.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
     try {
       const target = await discoverPageTarget(cdpPort, { urlPattern: new RegExp(`^${escaped}`), timeoutMs: 8_000 })
-      console.log(`# CDP 目标（--url 前缀命中）：${target.url}`)
+      console.log(`# CDP 目标（--url 前缀命中）：${scrub(target.url)}`)
       return target
     } catch { /* 回落到下一级 */ }
   }
   try {
     const target = await discoverPageTarget(cdpPort, { timeoutMs: 8_000 })
-    console.log(`# CDP 目标（回环 http 约定命中）：${target.url}`)
+    console.log(`# CDP 目标（回环 http 约定命中）：${scrub(target.url)}`)
     return target
   } catch { /* 回落到下一级 */ }
   try {
     const list = await (await fetch(`http://127.0.0.1:${cdpPort}/json/list`)).json()
     const target = list.find(entry => entry.type === 'page' && entry.webSocketDebuggerUrl !== undefined) ?? null
-    if (target !== null) console.warn(`# 警告：未命中 --url 前缀/回环约定，改用第一个 page 目标 ${target.url}（随后按 --url 导航）`)
+    if (target !== null) console.warn(`# 警告：未命中 --url 前缀/回环约定，改用第一个 page 目标 ${scrub(target.url)}（随后按 --url 导航）`)
     return target
   } catch {
     return null
@@ -199,7 +202,7 @@ export async function runMobileWalkthrough({
   let target = null
   let connectError = null
   try {
-    target = await discoverMobileTarget(cdpPort, url)
+    target = await discoverMobileTarget(cdpPort, url, credentials.secrets)
   } catch (error) {
     connectError = error
   }
@@ -225,7 +228,7 @@ export async function runMobileWalkthrough({
     }
   }
 
-  console.log(`# CDP 移动走查目标 ${target.url}（${target.title}）`)
+  console.log(`# CDP 移动走查目标 ${redactSecrets(target.url, credentials.secrets)}（${target.title}）`)
   const session = await CdpSession.connect(target.webSocketDebuggerUrl)
   const ws = collectWebSocketFrames(session, { cap: frameCap })
   await session.enableObservation()
@@ -245,35 +248,50 @@ export async function runMobileWalkthrough({
     await session.reload()
     await sleep(3_000)
     session.beginObservationWindow()
-    await session.waitFor(ROOT_MOUNTED, 'shell mounted', { timeoutMs: 30_000 }).catch(() => {})
+    // The mount wait used to be swallowed (`.catch(() => {})`): a 500/login page
+    // then produced a fully green walkthrough, because the emulation and
+    // overflow legs pass on ANY page. Record it — INFO by default (the
+    // walkthrough is also used to inspect a page mid-load), FAIL under
+    // --require-run.
+    const mounted = await session.waitFor(ROOT_MOUNTED, 'shell mounted', { timeoutMs: 30_000 })
+      .then(() => true)
+      .catch(() => false)
+    rec.add('M-1', '壳挂载成功（会话/插件面的前提）', mounted ? true : (requireRun ? false : null),
+      mounted
+        ? 'shell mounted 标记在 30s 内出现'
+        : `30s 内未观察到挂载标记 ${ROOT_MOUNTED}——其后每条几何/插件判据的 INFO 都不能当成通过`)
     await sleep(settleMs)
 
     const deviceFacts = await session.evaluate(DEVICE_FACTS_EXPRESSION)
     await shot('M1-device')
     const emulation = deviceEmulationVerdict(deviceFacts, device)
-    rec.add('M-1', '设备模拟生效（390×844@3x + 触控 ⇒ pointer:coarse / hover:none）', emulation.ok, emulation.evidence)
+    rec.add('M-2', '设备模拟生效（390×844@3x + 触控 ⇒ pointer:coarse / hover:none）', emulation.ok, emulation.evidence)
 
     const overflow = overflowVerdict(deviceFacts, device)
-    rec.add('M-2', '无横向溢出（设备宽基准；task 的 innerWidth 断言一并报告）', overflow.ok, overflow.evidence)
+    rec.add('M-3', '无横向溢出（设备宽基准；task 的 innerWidth 断言一并报告）', overflow.ok, overflow.evidence)
 
     const activation = pluginActivationVerdict(deviceFacts)
-    rec.add('M-6', '移动插件激活（观察项：[data-mobile-frame] 打标）', activation.ok, activation.evidence)
+    rec.add('M-4', '移动插件激活（观察项：[data-mobile-frame] 打标）', activation.ok, activation.evidence)
 
-    // ---- 会话头几何（无会话 ⇒ INFO，不冒充通过） ----
+    // ---- 会话头几何（无会话 ⇒ INFO；--require-run 下「没有会话」正是它要拦的
+    //      情形，USAGE 承诺过 ⇒ 计 FAIL） ----
+    const requireSession = ok => (ok === null && requireRun ? false : ok)
     const headerFacts = await session.evaluate(HEADER_FACTS_EXPRESSION)
     await shot('M2-header')
     const firstRow = headerFirstRowVerdict(headerFacts)
-    rec.add('M-3', `会话头首行高度 ≤ 48px（实测，无会话则 INFO）`, firstRow.ok, firstRow.evidence)
+    rec.add('M-5', `会话头首行高度 ≤ 48px（实测，无会话则 INFO）`, requireSession(firstRow.ok), firstRow.evidence)
     const wrap = headerWrapVerdict(headerFacts)
-    rec.add('M-4', '会话头内无「单字换行」（行盒数 + 高度启发式）', wrap.ok, wrap.evidence)
+    rec.add('M-6', '会话头内无「单字换行」（行盒数 + 高度启发式）', requireSession(wrap.ok), wrap.evidence)
     const hitBox = hitBoxVerdict(headerFacts)
-    rec.add('M-5', '会话头内所有 button 命中盒 ≥ 44px', hitBox.ok, hitBox.evidence)
+    rec.add('M-7', '会话头内所有 button 命中盒 ≥ 44px', requireSession(hitBox.ok), hitBox.evidence)
 
     // ---- 观察项：帧 + 控制台/网络（沿用桌面走查的容忍表） ----
     await sleep(1_000)
     const frameSummary = summarizeWebSocketFrames(ws.frames)
-    rec.add('M-7', 'WebSocket 帧捕获（会话打开停滞的证据来源）', null,
-      `${frameSummary.summary}\n（帧自 CDP 连接起累计——含 reload 前的那一次连接；完整帧见报告旁 mobile-ws-frames.json，已脱敏；--ws-frames full 可逐帧打印）`)
+    rec.add('M-8', 'WebSocket 帧捕获（会话打开停滞的证据来源）', null,
+      wsFrames === 'off'
+        ? '--ws-frames off：本档不采集、不落盘帧（其余判据不受影响）'
+        : `${frameSummary.summary}\n（帧自 CDP 连接起累计——含 reload 前的那一次连接；完整帧见报告旁 mobile-ws-frames.json，payload/URL 均已脱敏；--ws-frames full 可逐帧打印）`)
     if (wsFrames === 'full') {
       for (const frame of ws.frames) {
         console.log(`[WS] ${frame.direction} opcode=${frame.opcode ?? '-'} len=${frame.payloadLength ?? '-'} ${redactSecrets(frame.payload ?? frame.url ?? frame.error ?? '', credentials.secrets).slice(0, 300)}`)
@@ -282,55 +300,69 @@ export async function runMobileWalkthrough({
 
     const net = partitionFailures([...session.netFailures.keys()], TOLERATED_REQUEST_FAILURES)
     const consolePartition = partitionFailures(session.consoleErrors, KNOWN_UPSTREAM_BOOT_NOISE)
-    rec.add('M-8', '走查期间的 ≥400 请求与渲染层 error（观察项）', null,
-      [`未预期网络：${net.unexpected.slice(0, 5).join(' | ') || '（无）'}`,
-        `已登记容忍：${net.tolerated.slice(0, 3).join(' | ') || '（无）'}`,
+    rec.add('M-9', '走查期间的 ≥400 请求与渲染层 error（观察项）', null,
+      [`未预期网络：${redactSecrets(net.unexpected.slice(0, 5).join(' | '), credentials.secrets) || '（无）'}`,
+        `已登记容忍：${redactSecrets(net.tolerated.slice(0, 3).join(' | '), credentials.secrets) || '（无）'}`,
         `未预期 console error：${consolePartition.unexpected.slice(0, 3).join(' | ') || '（无）'}`,
         `已登记上游噪声：${consolePartition.tolerated.slice(0, 2).join(' | ') || '（无）'}`].join('\n'))
 
-    // ---- 帧落盘（脱敏后） ----
-    const framesPath = path.join(outDir, 'mobile-ws-frames.json')
-    writeFileSync(framesPath, JSON.stringify({
-      meta: { target: target.url, cdpPort, at: new Date().toISOString() },
-      counts: frameSummary.counts,
-      frames: ws.frames.map(frame => ({ ...frame, payload: frame.payload === undefined ? undefined : redactSecrets(frame.payload, credentials.secrets) })),
-    }, null, 2))
+    // ---- 帧落盘（脱敏后；--ws-frames off 不落盘） ----
+    // 凭据可以出现在 URL 查询串里（`?token=…`），不只出现在帧载荷里：每个要落盘的
+    // 字符串都过一遍 redactSecrets（2026-12 review：旧版只脱敏了 payload，url /
+    // meta.target / netFailures 原样写盘，等于把凭据写进了持久层）。
+    const framesPath = wsFrames === 'off' ? null : path.join(outDir, 'mobile-ws-frames.json')
+    if (framesPath !== null) {
+      writeFileSync(framesPath, JSON.stringify({
+        meta: { target: redactSecrets(target.url, credentials.secrets), cdpPort, at: new Date().toISOString() },
+        counts: frameSummary.counts,
+        frames: ws.frames.map(frame => ({
+          ...frame,
+          url: frame.url === undefined ? undefined : redactSecrets(frame.url, credentials.secrets),
+          error: frame.error === undefined ? undefined : redactSecrets(frame.error, credentials.secrets),
+          payload: frame.payload === undefined ? undefined : redactSecrets(frame.payload, credentials.secrets),
+        })),
+      }, null, 2))
+    }
 
     const reportPath = writeReport({
-      outDir, target, cdpPort, url, device,
+      outDir, target, cdpPort, url, device, secrets: credentials.secrets,
       results: rec.results,
-      frames: { summary: frameSummary.summary, counts: frameSummary.counts, file: framesPath },
+      frames: framesPath === null ? null : { summary: frameSummary.summary, counts: frameSummary.counts, file: framesPath },
       netFailures: summarizeNetFailures(session.netFailures),
       consoleErrors: session.consoleErrors.map(error => redactSecrets(error, credentials.secrets)),
       consoleWarnings: session.consoleWarnings.map(warning => redactSecrets(warning, credentials.secrets)),
       notes: credentials.notes,
     })
     const counts = summarize(rec.results)
-    console.log(`\n=== 移动走查：${counts.passed} pass / ${counts.failed} fail / ${counts.info} info / ${rec.results.length} checks ===\nreport: ${reportPath}\nws frames: ${framesPath}\nscreenshots: ${shots}`)
+    console.log(`\n=== 移动走查：${counts.passed} pass / ${counts.failed} fail / ${counts.info} info / ${rec.results.length} checks ===\nreport: ${reportPath}\nws frames: ${framesPath ?? '(off)'}\nscreenshots: ${shots}`)
     return { results: rec.results, reportPath, framesPath, shots, skipped: false, ...counts }
   } finally {
     session.close()
   }
 }
 
-/** 写 markdown + json 报告（与桌面走查同形，便于同一套人读/机读流程）。 */
-function writeReport({ outDir, target, cdpPort, url, device = MOBILE_DEVICE, results, frames, netFailures = [], consoleErrors = [], consoleWarnings = [], notes = [] }) {
+/** 写 markdown + json 报告（与桌面走查同形，便于同一套人读/机读流程）。
+ *  `secrets` 里的每个值、以及 token/authorization/cookie 形态的键值，都在落盘前抹掉：
+ *  报告是持久层，URL 查询串同样可能带凭据。 */
+function writeReport({ outDir, target, cdpPort, url, device = MOBILE_DEVICE, results, frames, netFailures = [], consoleErrors = [], consoleWarnings = [], notes = [], secrets = [] }) {
+  const scrub = text => redactSecrets(String(text), secrets)
   const meta = {
-    目标: target === null ? '(无 CDP 目标)' : target.url,
+    目标: target === null ? '(无 CDP 目标)' : scrub(target.url),
     CDP端口: cdpPort,
-    导航: url ?? '(未导航，走当前页面)',
+    导航: url === null ? '(未导航，走当前页面)' : scrub(url),
     设备: `${device.width}×${device.height} @${device.deviceScaleFactor}x mobile=${device.mobile}`,
     时间: new Date().toISOString(),
     截图目录: path.join(outDir, 'shots'),
   }
-  const report = renderMarkdown({ title: 'GUI 验收（移动档：CDP 设备模拟走查）', meta, results, netFailures, consoleErrors, consoleWarnings })
+  const safeNetFailures = netFailures.map(scrub)
+  const report = renderMarkdown({ title: 'GUI 验收（移动档：CDP 设备模拟走查）', meta, results, netFailures: safeNetFailures, consoleErrors, consoleWarnings })
   const withFrames = frames === null ? report
     : `${report}\n\n## WebSocket 帧\n\n\`\`\`\n${frames.summary}\n\`\`\`\n\n完整帧文件：\`${frames.file}\`（计数 ${JSON.stringify(frames.counts)}）\n`
   const withNotes = notes.length === 0 ? withFrames : `${withFrames}\n\n## 凭据与环境\n\n${notes.map(note => `- ${note}`).join('\n')}\n`
   const reportPath = path.join(outDir, 'gui-mobile-walkthrough-report.md')
   writeFileSync(reportPath, withNotes)
   writeFileSync(path.join(outDir, 'gui-mobile-walkthrough-report.json'), JSON.stringify({
-    meta, results, frames, netFailures, consoleErrors, consoleWarnings, notes,
+    meta, results, frames, netFailures: safeNetFailures, consoleErrors, consoleWarnings, notes,
   }, null, 2))
   return reportPath
 }

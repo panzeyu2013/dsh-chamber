@@ -7,7 +7,8 @@
  * 表达式**。于是判定逻辑可以用合成事实做负例测试（mobile-checks.test.mjs），
  * 而驱动层（mobile-walkthrough.mjs）只负责连 CDP、装模拟、测量、落盘。
  *
- * 设备模拟的实证结论（Electron 41 / Chromium，2026-09 本机实测，见报告）：
+ * 设备模拟的实证结论（Electron 41 / Chromium，2026-09 本机实测；这三条是**测量
+ * 边界**，移动档的任何模拟结论都要按它们打折）：
  *   1. `Emulation.setTouchEmulationEnabled({enabled:true})` 是**唯一**能让
  *      `(pointer:coarse)` / `(hover:none)` / `(any-pointer:coarse)` 成立的手段
  *      （maxTouchPoints > 0 ⇒ Blink 的触摸设备判定）；
@@ -348,9 +349,12 @@ export function summarizeWebSocketFrames(frames) {
 }
 
 /**
- * 凭据脱敏：帧载荷里任何等于凭据的值、以及 `token`/`authorization`/`cookie`
- * 这类键的值，都替换成 `***`。凭据只从环境变量来、永不打印——WS 帧是唯一会
- * 把凭据**间接**带出来的通道（握手/首帧可能带上它），所以落盘前必须过这一层。
+ * 凭据脱敏：帧载荷/URL/网络记录里任何等于凭据的值、URL 查询串里的
+ * `token|authorization|cookie|password|secret=`，以及 `"token": …` 这类键值，
+ * 都替换成 `***`。凭据只从环境变量来、永不打印——WS 帧与 URL 是唯一会把凭据
+ * **间接**带出来的通道（握手/首帧/查询串可能带上它），所以任何落盘路径都必须过
+ * 这一层（2026-12 review：旧版只脱敏 payload，且键值规则要求 ≥4 字符，`?token=1`
+ * 这种短值会原样留下）。
  *
  * @param {string} text
  * @param {string[]} secrets - 需要完全抹掉的值（去重、忽略空串）。
@@ -362,5 +366,10 @@ export function redactSecrets(text, secrets) {
     if (typeof secret !== 'string' || secret.length === 0) continue
     out = out.split(secret).join('***')
   }
-  return out.replace(/("?(?:token|authorization|cookie|password|secret)"?\s*[:=]\s*"?)([^"',;\s}]{4,})/gi, '$1***')
+  return out
+    // URL 查询串：长度不限（短 token 同样是凭据）。
+    .replace(/([?&](?:token|authorization|cookie|password|secret)=)[^&\s"'<>]*/gi, '$1***')
+    // 键值形态（JSON / 对象字面量 / 头字段）：值至少 4 字符才足以判定为凭据；
+    // `&` 排除在外，免得把 `token=***&keep=1` 的后半截一并吃掉。
+    .replace(/("?(?:token|authorization|cookie|password|secret)"?\s*[:=]\s*"?)([^"',;\s}&]{4,})/gi, '$1***')
 }

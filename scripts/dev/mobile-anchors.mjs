@@ -17,11 +17,16 @@
  *     `data-slot` key 都必须能在上游 client 产物 / shell CSS 里找到发射点。
  *     零命中 = **硬失败**（该规则已经静默 no-op，正是要拦的漂移）。
  *     例外两类，各自有明确的替代指向：
- *       - `data-mobile-*` / `data-plugin` / `data-tip` 是本插件**自己打标**的
- *         （markup.ts stampFrame / index.ts `<style>` / chamber 页面的气泡），
- *         上游本来就没有——登记为 chamber-own，不查上游；
+ *       - `data-mobile-*` / `data-plugin` 是本插件**自己打标**的
+ *         （markup.ts stampFrame / index.ts `<style>`），上游本来就没有——
+ *         登记为 chamber-own，不查上游；
  *       - `data-git-action` 是 **chamber 跨包钩子**（由
  *         `packages/dsh-chamber-client-ui-git` 发射），查本仓发射方而不是上游。
+ *     `data-tip` **不**属于上面两类（2026-12 review 更正）：上游
+ *     `dsh-client-ui-agent-preset` 的 client 行自己在按钮上设置该属性（其打包 CSS
+ *     用 `content:attr(data-tip)` 消费），所以它按普通上游锚点查；本插件侧发射方在
+ *     `dsh-chamber-client-ui-settings-connections`，那条契约由该包与移动包的
+ *     lockstep 测试钉住（`test/official-hover-card.test.ts`）。
  *   direction B（上游 → 声明）：对上游全量做反向差集是不可能的（上游发射数百个
  *     锚点，插件只用其一）。所以方向 B 收窄到**门禁要求的最小断言集**
  *     {@link REQUIRED_ANCHORS}：其中每一项都必须（1）在本插件源码里被声明、
@@ -44,7 +49,6 @@ export const HARD_KINDS = new Set(['attribute', 'role', 'slot'])
 const OWN_ATTRIBUTE_PATTERNS = [
   /^data-mobile-/, // markup.ts MOBILE_FRAME_ATTR/MOBILE_ROLE_ATTR + composer.ts MOBILE_KBD_ATTR
   /^data-plugin$/, // index.ts 注入的 <style data-plugin="…">
-  /^data-tip$/, // chamber 页面自己的气泡（connections 页等）
 ]
 
 /**
@@ -237,17 +241,28 @@ export function anchorCategory(anchor) {
 }
 
 /**
- * 属性锚点的边界形态：前界必须是引号或属性选择器左括号，后界必须是引号、
- * `]`、`=`（`[data-x=…]`）、`~^$*|`（CSS 选择器算子）或反引号（模板里的选择器）。
- * 用 `String.raw` 写，避免 `\\]` 在字符类里提前闭合——这个坑在首版里让三个
- * dockkit 锚点假红过一次。
+ * 属性锚点在上游产物里的发射形态。只认**结构形**，不认「裸提及」：
+ *   1. CSS 属性选择器：`[data-x]`、`[data-x=…]`、`[data-x~=…]` 等；
+ *   2. 对象键 / JSX 编译产物：`"data-x":`、`'data-x':`；
+ *   3. 属性写入：`setAttribute("data-x"`，以及 JSX/HTML 模板里的 `data-x=`；
+ *   4. CSS 消费：`attr(data-x)`（`content: attr(data-tip)` 这类）。
+ *
+ * 为什么收紧（2026-12 review）：旧边界只要求「前后是引号/括号」，于是
+ * `// upstream emits "data-x"` 这样的注释、或 `["data-x"]` 这样的数组，都能充当
+ * 「上游仍在发射」的证据——上游真把发射点删掉、只留一句提及，门禁照样绿。C15 对
+ * 形状检查用的是「去注释 + 去字符串」投影，这里用「只认结构形」达到同样的防伪
+ * 效果，且不需要写 JS 词法分析器。用 `String.raw` 写，避免 `\\]` 在字符类里提前
+ * 闭合——这个坑在首版里让三个 dockkit 锚点假红过一次。
  */
-const ATTR_BOUNDARY_BEFORE = String.raw`["'\`\[]`
-const ATTR_BOUNDARY_AFTER = String.raw`["'\`\]=~^$*|]`
-
-/** 属性锚点在上游产物里的发射形态：`"data-x":`、`[data-x]`、`[data-x=…]`。 */
 function attributePattern(token) {
-  return new RegExp(`${ATTR_BOUNDARY_BEFORE}${escapeRe(token)}(?=${ATTR_BOUNDARY_AFTER})`)
+  const escaped = escapeRe(token)
+  return new RegExp([
+    String.raw`\[${escaped}(?=[\]~^$*|=])`,
+    String.raw`["']${escaped}["']\s*:`,
+    String.raw`setAttribute\(\s*["']${escaped}["']`,
+    String.raw`(?<![\w-])${escaped}\s*=`,
+    String.raw`attr\(\s*${escaped}\s*\)`,
+  ].join('|'))
 }
 
 /** role 锚点在上游产物里的发射形态：`role:"dialog"`、`"role":"dialog"`、`[role="dialog"]`。 */
@@ -291,6 +306,12 @@ export function anchorEvidence(files, anchor) {
 /**
  * 双向差集判定。
  *
+ * 语料在匹配前统一过一遍**去注释投影**（`stripCommentsKeepingLines`，字符串感知、
+ * 保留行号）：注释里写着 `[data-x]` 或 `"data-x"` 不构成「上游仍在发射」的证据——
+ * 上游删掉真实发射点后，残留注释不能让门禁继续绿（2026-12 review；与 C15 的
+ * 「去注释 + 去字符串」同一防伪纪律，这里字符串必须保留，因为发射形态本身就是
+ * 字符串/选择器）。
+ *
  * @param {object} input
  * @param {Array<{kind: string, token: string, path: string, line: number}>} input.anchors - 插件声明的锚点。
  * @param {Array<{path: string, text: string}>} input.upstream - 上游 client 产物 + shell CSS。
@@ -299,6 +320,9 @@ export function anchorEvidence(files, anchor) {
  * @returns {{violations: string[], advisories: string[], notes: string[], rows: Array<object>}}
  */
 export function anchorFindings({ anchors, upstream, chamber, required = REQUIRED_ANCHORS }) {
+  const project = files => files.map(file => ({ path: file.path, text: stripCommentsKeepingLines(file.text) }))
+  upstream = project(upstream)
+  chamber = project(chamber)
   const violations = []
   const advisories = []
   const notes = []
@@ -371,18 +395,6 @@ export function anchorFindings({ anchors, upstream, chamber, required = REQUIRED
     + `哈希 token ${hashRows.length} 个（advisory：零命中 ${hashRows.filter(row => row.verdict !== 'ok').length} 个）`)
   notes.push(`方向 B：最小断言集 ${required.length} 项（external ${required.filter(item => item.declared === 'external').length} 项免声明侧检查）`)
   return { violations, advisories, notes, rows }
-}
-
-/**
- * `--simulate-rename <old>=<new>` 的纯解析（自测开关：证明门禁会因锚点改名而红）。
- *
- * @param {string} spec - `old=new` 形；两侧都不得为空。
- * @returns {{from: string, to: string} | null} 非法返回 null。
- */
-export function parseRenameSpec(spec) {
-  const at = spec.indexOf('=')
-  if (at <= 0 || at === spec.length - 1) return null
-  return { from: spec.slice(0, at), to: spec.slice(at + 1) }
 }
 
 /**

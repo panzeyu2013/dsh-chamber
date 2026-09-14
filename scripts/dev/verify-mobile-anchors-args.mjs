@@ -25,7 +25,7 @@ export const DEFAULT_ANCHOR_ROOTS = [
 export const VERIFY_MOBILE_ANCHORS_USAGE = `verify-mobile-anchors — 移动插件锚点上游保鲜门（docs/checklists/upstream-touchpoints.md §4）
 
 用法：
-  node scripts/dev/verify-mobile-anchors.mjs [--anchor-root <dir>] [--list]
+  node scripts/dev/verify-mobile-anchors.mjs [--anchor-root <dir>] [--require-anchor-root] [--list]
   node scripts/dev/verify-mobile-anchors.mjs --simulate-rename <old>=<new> [--simulate-rename …]
   node scripts/dev/verify-mobile-anchors.mjs --help
 
@@ -37,12 +37,17 @@ export const VERIFY_MOBILE_ANCHORS_USAGE = `verify-mobile-anchors — 移动插�
                              取第一个存在者。
   --simulate-rename <a>=<b>  自测开关：把上游产物里的 token a 在**内存里**改成 b
                              （不写盘），用于证明门禁会因锚点改名而 exit 1。可重复。
+  --require-anchor-root      严格模式：把本可 fail-soft 的两种情形（锚点根缺失 / 无 client
+                             产物）改为 exit 1，并要求锚点树的 dsh-web-frontend 版本与
+                             仓内 pin 一致。升级流程（docs/checklists/upstream-touchpoints.md
+                             §7）必须带它跑：不带时「CI 上正常跳过」与「其实什么都没查」
+                             无法区分。
   --list                     打印从本包源码抽到的锚点表（含分类与证据计数）。
   --help, -h                 打印本用法并 exit 0。
 
 退出码：
-  0  全部通过（或 fail-soft 跳过 / --help）
-  1  data-* / role / slot 锚点零命中，或最小断言集缺口
+  0  全部通过（或非严格模式下的 fail-soft 跳过 / --help）
+  1  data-* / role / slot 锚点零命中、最小断言集缺口，或严格模式下缺根 / 版本不符
   2  用法错误（未知参数 / --simulate-rename 缺 '=' 等）
 `
 
@@ -56,29 +61,36 @@ export function parseRenameSpec(spec) {
 /**
  * 解析 argv（`process.argv.slice(2)`）。
  *
- * 参数面故意很小且闭合：`--anchor-root`、`--simulate-rename`（可重复）、`--list`、
- * `--help`/`-h`。`--help` 优先于一切（标准 CLI 行为）；其余任何未知参数/位置参数/
- * 重复 flag/缺值都进 `errors`，调用方打印用法并 exit 2。
+ * 参数面故意很小且闭合：`--anchor-root`、`--simulate-rename`（可重复）、
+ * `--require-anchor-root`、`--list`、`--help`/`-h`。`--help` 优先于一切（标准 CLI
+ * 行为）；其余任何未知参数/位置参数/重复 flag/缺值都进 `errors`，调用方打印用法并
+ * exit 2。
  *
  * @param {string[]} argv
  * @param {Record<string, string|undefined>} env - 只用 `DSH_MOBILE_ANCHOR_ROOT`。
- * @returns {{help: boolean, list: boolean, anchorRoot: string|null, renames: Array<{from: string, to: string}>, errors: string[]}}
+ * @returns {{help: boolean, list: boolean, anchorRoot: string|null, requireAnchorRoot: boolean, renames: Array<{from: string, to: string}>, errors: string[]}}
  */
 export function parseVerifyMobileAnchorsArgs(argv, env = {}) {
   const errors = []
   let help = false
   let list = false
+  let requireAnchorRoot = false
   let anchorRoot = typeof env.DSH_MOBILE_ANCHOR_ROOT === 'string' && env.DSH_MOBILE_ANCHOR_ROOT !== ''
     ? env.DSH_MOBILE_ANCHOR_ROOT
     : null
   let sawAnchorRoot = false
   const renames = []
-  if (argv.includes('--help') || argv.includes('-h')) return { help: true, list, anchorRoot, renames, errors }
+  if (argv.includes('--help') || argv.includes('-h')) return { help: true, list, anchorRoot, requireAnchorRoot, renames, errors }
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index]
     if (argument === '--list') {
       if (list) errors.push(`重复的 --list（第 ${index + 1} 个参数）`)
       list = true
+      continue
+    }
+    if (argument === '--require-anchor-root') {
+      if (requireAnchorRoot) errors.push(`重复的 --require-anchor-root（第 ${index + 1} 个参数）`)
+      requireAnchorRoot = true
       continue
     }
     if (argument === '--anchor-root') {
@@ -100,8 +112,8 @@ export function parseVerifyMobileAnchorsArgs(argv, env = {}) {
       continue
     }
     errors.push(argument.startsWith('-')
-      ? `未知参数 ${argument}（已知：--anchor-root, --simulate-rename, --list, --help）`
+      ? `未知参数 ${argument}（已知：--anchor-root, --simulate-rename, --require-anchor-root, --list, --help）`
       : `不接受位置参数 ${argument}`)
   }
-  return { help, list, anchorRoot, renames, errors }
+  return { help, list, anchorRoot, requireAnchorRoot, renames, errors }
 }

@@ -16,6 +16,15 @@
 | `cdp.mjs` | 零依赖 CDP 客户端（Node 内置 `WebSocket`/`fetch`） |
 | `checks.mjs` | **纯判据层**：全部 pass/fail 逻辑在此，无 IO，故可在 CI 单测 |
 | `gui-acceptance.test.mjs` | `checks.mjs` 的单测（`pnpm run test:gui-acceptance`，CI 跑） |
+| `mobile-walkthrough.mjs` | 移动档 CDP 走查（独立 CLI）：设备尺寸/触控模拟 + 几何断言 + WS 帧采集（`--ws-frames off\|summary\|full`，落盘前脱敏）；`--require-run` 把「没目标/没会话」的 INFO 改判 FAIL |
+| `mobile-checks.mjs` | 移动档的**纯判据层**（含脱敏）：判据全部是纯函数，无 IO |
+| `mobile-checks.test.mjs` | `mobile-checks.mjs` 的单测（`pnpm run test:gui-acceptance` 一并跑） |
+
+移动档的两层与桌面档同构：`mobile-walkthrough.mjs` 只采集事实（CDP + DOM 表达式），
+判定与脱敏都在 `mobile-checks.mjs`。真机抽检不可省（见 `docs/progress/STATUS.md`
+的移动验收项）：模拟层有三条实测边界（`Emulation.setEmulatedMedia` 的
+`pointer`/`hover` 被 Chromium 忽略、`mobile:true` 的收缩适配让
+`scrollWidth <= innerWidth` 恒真、iOS/WebKit 语义造不出来）。
 
 ## 命令
 

@@ -4,8 +4,8 @@
  *
  * 为什么需要：走查的判定最容易写成「看着截图说没问题」。这里把每一条断言喂
  * 合成事实（好/坏两档），要求判定**必须**在坏档变红、在无法判定时给 INFO 而不是
- * PASS。真实浏览器侧的证明在报告里（Electron + 两个 fixture 的实际输出），
- * 这里只锁判定语义。
+ * PASS。真实浏览器侧只能由 `mobile-walkthrough.mjs` 对活页面跑出来（需要 CDP 目标，
+ * 不在 CI）；这里只锁判定语义，不代替那次运行。
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -149,4 +149,16 @@ test('脱敏：环境变量凭据值被抹掉，token/authorization/cookie 键�
   assert.ok(!redacted.includes('abc12345'))
   assert.ok(!redacted.includes('xyz9876'))
   assert.match(redacted, /\*\*\*/)
+})
+
+test('脱敏：URL 查询串里的凭据也抹掉（长度不限——短 token 同样是凭据）', () => {
+  // 2026-12 review：帧的 url / 报告 meta / 网络记录都会落盘，只脱敏 payload
+  // 等于把 `?token=…` 写进持久层；键值规则要求 ≥4 字符，`token=1` 会漏。
+  const redacted = redactSecrets('ws://127.0.0.1:17510/api/remote.mux?token=1&keep=1', [])
+  assert.ok(!redacted.includes('token=1'), redacted)
+  assert.match(redacted, /token=\*\*\*/)
+  assert.match(redacted, /keep=1/, 'unrelated query parameters stay readable')
+  const headers = redactSecrets('https://h/p?password=pw&cookie=session-abc', [])
+  assert.ok(!headers.includes('password=pw'), headers)
+  assert.ok(!headers.includes('cookie=session-abc'), headers)
 })

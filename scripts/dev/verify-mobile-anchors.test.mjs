@@ -35,19 +35,31 @@ import {
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url))
 
-/** 合成上游产物：一个 slot key、一个属性、一个 role、一个哈希 token、一个跨包钩子。 */
+/** 合成上游产物：覆盖本包声明的**全部**上游锚点形态（slot key / 属性 / role /
+ *  哈希 token）。语料里**不得**混入插件源码——那会让每条锚点用自己的声明文本自证
+ *  （2026-12 review：旧版正是这样，上游删掉发射点也照样绿）。 */
 const UPSTREAM_TEXT = [
   'const x = renderSlot("main", {}, { entryKey: "conversation" })',
   'renderSlot("sidebar", {}); renderSlot("rightbar", {}); renderSlot("root", {})',
   'renderSlot("conversation.session.header", {}); renderSlot("conversation.session.header.actions", {})',
   'renderSlot("conversation.session.header.utilities", {}); renderSlot("conversation.session.header.corner", {})',
   'renderSlot("conversation.session.header.lineage", {}); renderSlot("shell.overlay", {})',
+  'renderSlot("conversation.composer.bar", {}); renderSlot("conversation.input.model", {})',
+  'renderSlot("settings.section", {}); renderSlot("settings.header", {}); renderSlot("settings.action", {}); renderSlot("settings.close", {})',
   'jsx("div", { "data-slot": "root", "data-conversation-scroll": "", "data-composer-seat": "", "data-composer-input": true })',
   'jsx("div", { "data-chat-flow": "", "data-chat-anchor-key": routedNode.key, "data-phase": phase })',
   'jsx("div", { "data-sidebar-collapsed": v, "data-rightbar-collapsed": v, "data-sidebar-right-panel": m })',
-  'jsx("div", { "role": "tablist" })',
+  'jsx("div", { "data-sidebar-right-mode": m, "data-rightbar-fullscreen": f, "data-conversation-header-corner": "" })',
+  'jsx("div", { "data-dockkit-strip": "", "data-dockkit-divider": "" })',
+  'jsx("button", { "data-dockkit-tab-close": "", "data-trigger-menu": "", "data-input-scroll": true })',
+  'jsx("div", { "data-width-handle": "", "data-side": side, "data-ds-dark-theme": "" })',
+  'jsx("button", { "data-tip": t("view") })',
+  'jsx("div", { "role": "tablist" }); jsx("button", { "role": "tab" })',
+  'jsx("div", { "role": "dialog" }); jsx("div", { "role": "tooltip" })',
+  'jsx("div", { "role": "menu" }); jsx("div", { "role": "menuitem" }); jsx("div", { "role": "listbox" }); jsx("div", { "role": "option" })',
   'const stamped = { "data-slot": slotKey }',
   'const cls = "_root_1b2ny_3"',
+  'const cls2 = "_card_1b2ny_4"',
 ].join('\n')
 
 /** 合成插件源码：声明同一批锚点（形态与真实源码一致）。 */
@@ -168,17 +180,96 @@ test('去注释投影：注释里写着的锚点不算声明（但行号保留�
   assert.equal(stripCommentsKeepingLines(text).split('\n').length, 2)
 })
 
-test('真语料：本包源码抽出的锚点全部能在上游产物/仓内发射方里找到', () => {
+test('真语料：本包源码抽出的每一条上游锚点，都能被「只含合成发射形态」的语料证明', () => {
+  // 2026-12 review：旧版把**插件源码本身**拼进「上游语料」，于是每条锚点都在
+  // 自己的声明文本里命中——上游删掉发射点也照样绿（自证）。这里改成：语料只由
+  // 合成发射件（UPSTREAM_TEXT，形态与真实产物一致）与仓内跨包发射方组成，
+  // 插件源码只用于**抽锚点**，绝不参与证据。
   const clientDir = join(ROOT, 'packages', 'dsh-chamber-client-ui-mobile', 'src', 'client')
-  const files = ['markup.ts', 'index.ts', 'styles.ts', 'composer.ts', 'MobileNavToggle.tsx', 'official-hover-card.ts']
+  const files = ['markup.ts', 'index.ts', 'styles.ts', 'composer.ts', 'MobileNavToggle.tsx', 'official-hover-card.ts', 'session-stall.ts']
   const realSources = files.map(name => ({ path: `packages/dsh-chamber-client-ui-mobile/src/client/${name}`, text: readFileSync(join(clientDir, name), 'utf8') }))
   const extracted = extractDeclaredAnchors(realSources)
-  // 上游语料用最小合成件替身：只保留本测试已覆盖的形态，避免依赖机器上的上游树。
-  const fakeUpstream = [{ path: 'upstream/all.js', text: `${UPSTREAM_TEXT}\n${realSources.map(s => s.text).join('\n')}` }]
-  const findings = anchorFindings({ anchors: extracted.anchors, upstream: fakeUpstream, chamber, required: [] })
+  const syntheticUpstream = [{ path: 'upstream/all.js', text: UPSTREAM_TEXT }]
+  const findings = anchorFindings({ anchors: extracted.anchors, upstream: syntheticUpstream, chamber, required: REQUIRED_ANCHORS })
   const upstreamRows = findings.rows.filter(row => row.category === 'upstream')
   assert.ok(upstreamRows.length > 30, `抽到的上游锚点太少：${upstreamRows.length}`)
+  // 每一条上游锚点都必须命中合成语料；任何一条不命中就说明抽取器抽出了语料没
+  // 覆盖的形态（那时要么补语料形态，要么修抽取器——不允许放宽判定）。
   assert.deepEqual(upstreamRows.filter(row => row.verdict !== 'ok').map(row => row.token), [])
+  // 方向 B 也必须在同一份合成语料上成立（旧版用 required: [] 把这一半关掉了）。
+  assert.deepEqual(findings.violations, [])
+})
+
+test('防伪：注释、数组字面量、错误文案都不算上游发射证据', () => {
+  // 2026-12 review 的诱饵族：旧边界（前引号/后引号）会把这些当成「上游还在发射」。
+  const decoys = [
+    '// upstream still emits "data-chat-flow" somewhere',
+    '/* [data-chat-anchor-key] was removed upstream */',
+    'const legacy = ["data-chat-flow", "data-chat-anchor-key"]',
+    'throw new Error("data-phase is gone")',
+  ].join('\n')
+  const findings = anchorFindings({
+    anchors: [
+      { kind: 'attribute', token: 'data-chat-flow', path: 'x.ts', line: 1 },
+      { kind: 'attribute', token: 'data-chat-anchor-key', path: 'x.ts', line: 1 },
+      { kind: 'attribute', token: 'data-phase', path: 'x.ts', line: 1 },
+      { kind: 'attribute', token: 'data-sidebar-right-panel', path: 'x.ts', line: 1 },
+    ],
+    upstream: [{ path: 'upstream/all.js', text: decoys }],
+    chamber: [],
+    required: [],
+  })
+  assert.deepEqual(findings.rows.map(row => row.verdict), ['missing', 'missing', 'missing', 'missing'],
+    'a bare mention is not an emission')
+  // 边界（有意保留，不是漏判）：**字符串字面量**里出现结构形仍算证据——真实发射
+  // 形态本身就是字符串（`jsx("div", { "data-x": … })`、`css("[data-x]{…}")`），把
+  // 字符串内容一并剥掉会删掉证据类本身。上面被拒的是「注释/数组/文案里的裸提及」。
+  const literal = anchorFindings({
+    anchors: [{ kind: 'attribute', token: 'data-sidebar-right-panel', path: 'x.ts', line: 1 }],
+    upstream: [{ path: 'upstream/all.js', text: 'const s = "[data-sidebar-right-panel]"' }],
+    chamber: [],
+    required: [],
+  })
+  assert.deepEqual(literal.rows.map(row => row.verdict), ['ok'])
+  // 结构形是同一条判定的正例：选择器、对象键、setAttribute、attr()。
+  const real = anchorFindings({
+    anchors: [
+      { kind: 'attribute', token: 'data-chat-flow', path: 'x.ts', line: 1 },
+      { kind: 'attribute', token: 'data-chat-anchor-key', path: 'x.ts', line: 1 },
+      { kind: 'attribute', token: 'data-phase', path: 'x.ts', line: 1 },
+      { kind: 'attribute', token: 'data-tip', path: 'x.ts', line: 1 },
+    ],
+    upstream: [{
+      path: 'upstream/all.js',
+      text: [
+        'css("[data-chat-flow]{display:flex}")',
+        'jsx("div", { "data-chat-anchor-key": key })',
+        'node.setAttribute("data-phase", phase)',
+        'css(":after{content:attr(data-tip)}")',
+      ].join('\n'),
+    }],
+    chamber: [],
+    required: [],
+  })
+  assert.deepEqual(real.rows.map(row => row.verdict), ['ok', 'ok', 'ok', 'ok'])
+})
+
+test('data-tip 是上游锚点（不是本插件自打标）：上游零命中时必须硬失败', () => {
+  const findings = anchorFindings({
+    anchors: [{ kind: 'attribute', token: 'data-tip', path: 'x.ts', line: 1 }],
+    upstream: [{ path: 'upstream/all.js', text: 'jsx("div", { "data-tip": t("view") })' }],
+    chamber: [],
+    required: [],
+  })
+  assert.deepEqual(findings.rows.map(row => row.category), ['upstream'])
+  const gone = anchorFindings({
+    anchors: [{ kind: 'attribute', token: 'data-tip', path: 'x.ts', line: 1 }],
+    upstream: [{ path: 'upstream/all.js', text: 'jsx("div", {})' }],
+    chamber: [],
+    required: [],
+  })
+  assert.equal(gone.violations.filter(violation => violation.includes('data-tip')).length, 1,
+    'an upstream rename of data-tip is now a hard failure')
 })
 
 test('最小断言集本身：19 项、无重复、kind 合法', () => {
@@ -201,6 +292,19 @@ test('参数契约：未知参数/位置参数/缺值都是用法错误（绝不
   assert.match(parseVerifyMobileAnchorsArgs(['--simulate-rename', 'main']).errors[0], /形态非法/)
   assert.match(parseVerifyMobileAnchorsArgs(['--list', '--list']).errors[0], /重复的 --list/)
   assert.match(parseVerifyMobileAnchorsArgs(['--anchor-root', '/a', '--anchor-root', '/b']).errors[0], /重复的 --anchor-root/)
+  assert.match(parseVerifyMobileAnchorsArgs(['--require-anchor-root', '--require-anchor-root']).errors[0], /重复的 --require-anchor-root/)
+})
+
+test('参数契约：--require-anchor-root 是严格的「必须真的查过」开关', () => {
+  // 默认（CI/裸 clone）允许 fail-soft；严格模式由升级流程显式打开，把「正常跳过」
+  // 与「其实什么都没查」区分开（2026-12 review：默认路径是静默 exit 0）。
+  assert.equal(parseVerifyMobileAnchorsArgs([]).requireAnchorRoot, false)
+  const strict = parseVerifyMobileAnchorsArgs(['--require-anchor-root'])
+  assert.deepEqual(strict.errors, [])
+  assert.equal(strict.requireAnchorRoot, true)
+  // 与其它参数可组合，且不影响 --help 的优先级。
+  assert.equal(parseVerifyMobileAnchorsArgs(['--require-anchor-root', '--list']).requireAnchorRoot, true)
+  assert.equal(parseVerifyMobileAnchorsArgs(['--help', '--require-anchor-root']).help, true)
 })
 
 test('参数契约：合法形态与 --help 优先、env 兜底', () => {
