@@ -236,12 +236,15 @@ export const STRIPPED_REQUEST_HEADERS = new Set([
   'x-forwarded-proto',
   'x-forwarded-port',
   'x-real-ip',
-  // Compression negotiation must not cross the proxy (2026 audit M3b):
-  // accept-encoding is stripped upstream so the upstream answers identity;
-  // any upstream that still compresses is labeled correctly via the
-  // content-encoding response whitelist, so the browser never misparses a
-  // compressed body as raw bytes.
-  'accept-encoding',
+  // NOTE (M3-2', revising the 2026 audit M3b verdict): accept-encoding is NOT
+  // in this always-strip set any more. Only the requests that must stay
+  // identity keep it off the wire — HTML document navigations (S0 injection
+  // precondition) and text/event-stream streams (transport insurance); see
+  // requiresIdentityUpstreamEncoding + the strip site in forwardHttp. Every
+  // other request forwards the client's negotiation so the upstream gzip
+  // middleware (dsh-host-webserver createGzipMiddleware) can compress it, and
+  // a compressed reply stays parseable because content-encoding/vary ride back
+  // through RESPONSE_HEADER_WHITELIST above.
 ])
 
 /** Only headers required to complete a WebSocket 101 may cross downstream. */
@@ -252,6 +255,116 @@ export const WS_RESPONSE_HEADER_WHITELIST = new Set([
   'sec-websocket-protocol',
   'sec-websocket-extensions',
 ])
+
+/**
+ * Whether one request is an HTML *document navigation* (M3-2', the only
+ * request class whose accept-encoding must stay identity).
+ *
+ * Why this class: the S0 trust injection (gateway html-inject.ts) is the
+ * precondition for the proxied official dsh frontend declaring itself
+ * host-owned, and it only runs on an upstream `text/html` response that is
+ * NOT content-encoded (forwardHttp's `htmlInjectable` below). A browser
+ * document load is the only request that must produce that injectable
+ * document, so it must never negotiate compression; nothing else has to.
+ *
+ * Semantics follow the predicate the gateway uses to decide that a GET/HEAD is
+ * a browser navigation (dispatch.ts shouldRedirectToLogin): GET/HEAD + an
+ * `Accept` advertising `text/html` + a path outside the JSON/SSE surfaces —
+ * `/api`, `/plugins`, `/auth/…` and the `/chamber/<subpath>` endpoints.
+ * Document navigations are `/`, `/index.html`, `/chamber`, `/chamber/` and the
+ * like. It is duplicated here on purpose: proxy-forward.ts is the shared
+ * control-plane module and must not import gateway code.
+ *
+ * `pathname` is the RESOLVED target pathname (the `/api/i/<id>` prefix is
+ * stripped before forwarding, see forwardHttp), i.e. the path the UPSTREAM
+ * routes — the exclusion prefixes are the upstream's own surface taxonomy.
+ * Bare `/auth` is not excluded, exactly like dispatch.ts (only `/auth/…` is).
+ *
+ * One deliberate refinement over the dispatch predicate: a content-addressed
+ * asset path (isHashedStaticAssetPath) is NEVER a document navigation. The
+ * upstream static host serves such a path from disk or 404s it (no SPA
+ * fallback — dsh-host-frontend-static serveStatic renders HTML only for the
+ * dist root/index), so no compression setting on it can ever cost the S0
+ * injection, and a browser that opens the asset URL directly (`Accept:
+ * text/html`) must not switch the build tree back to identity. Pure and
+ * total: no timers, no I/O.
+ */
+export function isHtmlDocumentNavigation(method: string | undefined, pathname: string, accept: string | string[] | undefined): boolean {
+  const verb = (method ?? '').toUpperCase()
+  if (verb !== 'GET' && verb !== 'HEAD') return false
+  const acceptValue = Array.isArray(accept) ? accept.join(',') : accept ?? ''
+  if (!acceptValue.toLowerCase().includes('text/html')) return false
+  if (isHashedStaticAssetPath(pathname)) return false
+  return pathname !== '/api' && !pathname.startsWith('/api/')
+    && pathname !== '/plugins' && !pathname.startsWith('/plugins/')
+    && !pathname.startsWith('/auth/')
+    && !(pathname.startsWith('/chamber/') && pathname !== '/chamber/')
+}
+
+/**
+ * Content-addressed static asset path (M3-3 seam contract): Vite's
+ * `[name]-[hash][extname]` output under `/assets/`, hash = exactly 8 base64url
+ * characters (Vite's default hash width — every measured upstream name has 8),
+ * extension exactly `js | css | woff2 | woff | svg`.
+ *
+ * Measured 2026-12 upstream names: `index-BKQ_L1z6.js`, `cpp-DIPi6g--.js`,
+ * `KaTeX_AMS-Regular-BQhdFMY1.woff2`. Deliberately NOT matched: unhashed root
+ * files (`favicon.svg`, `manifest.webmanifest`, `index.html`) — they carry no
+ * `-<hash>` segment and/or an extension outside the set. The EXACT width is
+ * what keeps an ordinary hyphenated name out: `/assets/my-super-long-file.js`
+ * has no 8-character tail after a `-` (`long-file` is 9, `file` is 4), whereas
+ * a `{8,}` class would read `long-file` as a hash because real hashes may
+ * contain `-` (`DIPi6g--`). A build configured with a different hash width
+ * must widen this deliberately.
+ *
+ * Still a heuristic over the path alone: the caller decides status/caching
+ * policy (this module never caches anything itself). Exported as the shared
+ * naming rule for the M3-3 response-header seam's owner-side implementation.
+ */
+const HASHED_STATIC_ASSET_PATTERN = /^\/assets\/[^/]+-[A-Za-z0-9_-]{8}\.(?:js|css|woff2?|svg)$/
+
+export function isHashedStaticAssetPath(pathname: string): boolean {
+  return HASHED_STATIC_ASSET_PATTERN.test(pathname)
+}
+
+/**
+ * Whether a request advertises a server-sent-event stream (M3-2′ follow-up).
+ * This is NOT a document-navigation rule — it is TRANSPORT-LAYER INSURANCE:
+ * a conformant EventSource sends `Accept: text/event-stream`, and letting an
+ * upstream compress that long-lived, latency-critical text stream turns it
+ * into a buffered one. The pinned upstream's gzip middleware refuses
+ * `text/event-stream` and `content-range` responses (dsh-host-webserver
+ * createGzipMiddleware), but this shared core also serves remote/older dsh
+ * instances whose webserver may carry no such filter, so the proxy keeps the
+ * stream class itself on identity instead of trusting every upstream. A
+ * fetch-based stream that advertises only a generic wildcard `Accept` cannot
+ * be recognized here and stays with the upstream filter, exactly like `/api`.
+ * Pure and total.
+ */
+export function acceptsEventStream(accept: string | string[] | undefined): boolean {
+  const acceptValue = Array.isArray(accept) ? accept.join(',') : accept ?? ''
+  return acceptValue.toLowerCase().includes('text/event-stream')
+}
+
+/**
+ * The ONE decision the accept-encoding strip consumes (M3-2′): which requests
+ * must reach the upstream with NO compression negotiation. Two disjoint
+ * identity-only classes — everything else forwards the client's negotiation to
+ * the upstream gzip middleware:
+ *
+ *   1. HTML document navigations (isHtmlDocumentNavigation): the upstream
+ *      `text/html` reply must stay unencoded for S0 trust injection;
+ *   2. SSE requests (acceptsEventStream): transport insurance for long-lived
+ *      streams, independent of the path and of the method (a POST can stream
+ *      too), and not a statement about the document.
+ *
+ * Both are documented where they are decided; forwardHttp calls only this
+ * predicate, so the strip site and the tests can never disagree about which
+ * requests are exempt. Pure and total.
+ */
+export function requiresIdentityUpstreamEncoding(method: string | undefined, pathname: string, accept: string | string[] | undefined): boolean {
+  return isHtmlDocumentNavigation(method, pathname, accept) || acceptsEventStream(accept)
+}
 
 export const STATUS_TEXT: Record<number, string> = {
   404: 'Not Found',
@@ -422,6 +535,29 @@ export interface ProxyForwardDeps {
    * passthrough byte for byte.
    */
   readonly injectHtmlDocument?: (html: string) => string | null
+  /**
+   * Optional upstream-response header seam (M3-3): called exactly once per
+   * upstream HTTP response — SSE included — after the response whitelist and
+   * the Location rewrite assembled the browser-facing header map, and before
+   * `writeHead`. It exists so an owner can attach representation metadata the
+   * upstream omitted: the gateway uses it to give content-addressed
+   * `/assets/<name>-<hash>.<ext>` responses (isHashedStaticAssetPath) an
+   * immutable Cache-Control, because the upstream static host writes only
+   * `content-type` and the shell would otherwise be re-downloaded on every
+   * navigation.
+   *
+   * Contract: `pathname` is the RESOLVED target pathname (target.pathname —
+   * the `/api/i/<id>` prefix is already stripped; for the root-mounted gateway
+   * it equals the public path), `status` the upstream status, `headers` the
+   * mutable whitelisted map (`Record<string, string | string[]>`). Mutate it in
+   * place; the return value is ignored. Framing stays the proxy's: hop-by-hop
+   * and credential headers are already gone (RESPONSE_HEADER_WHITELIST), the
+   * content-length is re-derived from the upstream declaration AFTER this call,
+   * and a throwing callback is fail-soft (logged, upstream headers forwarded
+   * untouched) because it runs inside an event listener. `undefined` (the
+   * control-plane default) is a zero-change passthrough.
+   */
+  readonly onUpstreamResponseHeaders?: (pathname: string, status: number, headers: Record<string, string | string[]>) => void
   /**
    * Live spliced WS streams (downstream browser leg + upstream host leg),
    * shared with the owner so its stop() can force-close them: an upgraded
@@ -737,9 +873,27 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
   // same-origin shape.
   const effectiveHost = authority ?? target.host
   const headers: Record<string, string> = { host: effectiveHost }
+  // Compression negotiation (M3-2', revising the 2026 audit M3b verdict): the
+  // audit stripped accept-encoding on EVERY request, which forced the whole
+  // proxied surface (the 10.65 MiB Vite shell included) to identity. Keep the
+  // strip for the two identity-only classes only (see
+  // requiresIdentityUpstreamEncoding): HTML document navigations — their
+  // upstream reply must stay unencoded so S0 trust injection can rewrite it
+  // (htmlInjectable below; gateway html-inject.ts) — and text/event-stream
+  // requests, which stay identity as transport insurance for long-lived
+  // streams (a remote/older upstream need not carry the pinned filter). Every
+  // other request — /api, /plugins, /auth, /chamber/<subpath>, assets,
+  // XHR/fetch — forwards the client's negotiation to the upstream gzip
+  // middleware, which itself refuses text/event-stream and content-range
+  // responses (dsh-host-webserver createGzipMiddleware), so the mux/SSE
+  // streams are never compressed mid-flight. The decision is the upstream's
+  // resolved pathname, matching the surface taxonomy isHtmlDocumentNavigation
+  // encodes.
+  const identityEncoding = requiresIdentityUpstreamEncoding(method, target.pathname, req.headers.accept)
   for (const [name, value] of Object.entries(req.headers)) {
     const lower = name.toLowerCase()
     if (STRIPPED_REQUEST_HEADERS.has(lower)) continue
+    if (lower === 'accept-encoding' && identityEncoding) continue
     if (value === undefined) continue
     // Same-origin proxy honesty (design 03 §3.1): the browser's page origin
     // is the CONTROL PLANE (127.0.0.1:17500), but the instance's browser
@@ -900,11 +1054,24 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
       }
       headers[name] = value as string | string[]
     }
+    // M3-3 response-header seam: the owner may add representation metadata the
+    // upstream omitted (see ProxyForwardDeps.onUpstreamResponseHeaders). It
+    // runs before the content-length is re-derived below, so even a faulty
+    // callback cannot corrupt the framing of the body the proxy streams, and
+    // it is fail-soft because this is an event listener (an escaping throw
+    // would be an uncaught exception). `undefined` = zero-change passthrough.
+    const responseStatus = upstreamRes.statusCode ?? 502
+    if (deps.onUpstreamResponseHeaders !== undefined) {
+      try {
+        deps.onUpstreamResponseHeaders(target.pathname, responseStatus, headers)
+      } catch (seamError) {
+        logger.warn(`${deps.logPrefix}: upstream response header seam failed: ${String(seamError)}`)
+      }
+    }
     if (!isSse && Number.isFinite(declaredBytes)) headers['content-length'] = String(declaredBytes)
     const corsHeaders = { ...(res._corsHeaders ?? {}) }
     mergeVary(headers, corsHeaders)
     const responseHeaders = { ...headers, ...corsHeaders }
-    const responseStatus = upstreamRes.statusCode ?? 502
     // HTML trust-injection seam (S0, gateway html-inject.ts): when the owner
     // configured an injector, a small unencoded text/html response is
     // buffered whole so the document can be rewritten before it reaches the
@@ -1070,6 +1237,11 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
   // The upstream request stays on http(s) — node's http.request performs
   // the upgrade handshake internally (it never accepts a ws: URL).
   const headers: Record<string, string> = { host: authority ?? target.host }
+  // The handshake allowlist is NOT the HTTP strip set: accept-encoding simply
+  // never rides an upgrade. M3-2' leaves that as-is — a 101 has no body to
+  // compress, and a non-101 reply is drained and replaced by rejectUpgrade, so
+  // there is no representation to negotiate; isHtmlDocumentNavigation is an
+  // HTTP document-navigation decision and an upgrade is never one.
   const take = new Set(['upgrade', 'connection', 'sec-websocket-key', 'sec-websocket-version', 'sec-websocket-protocol', 'sec-websocket-extensions'])
   for (const [name, value] of Object.entries(req.headers)) {
     if (!take.has(name.toLowerCase())) continue

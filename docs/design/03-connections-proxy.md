@@ -290,9 +290,13 @@ WS   /api/i/<id>/api/remote.mux    → 实例 WS  /api/remote.mux
   30s → 408 并取消底层请求 iterator，不能用慢速上传长期占用代理槽位。
 - **请求头收敛**：剥离 cookie、authorization、proxy authentication、客户端
   `content-length` 与 hop-by-hop framing；代理完成有界缓冲后，仅按实际接收字节
-  重建 `content-length`。**压缩协商不跨代理**：请求侧剥离
-  `accept-encoding`（上游恒 identity），响应白名单放行 `content-encoding`
-  ——压缩标签必须随行，浏览器才能正确解码；反代不经手压缩字节。
+  重建 `content-length`。**压缩协商边界（2026-12，修订原「压缩协商不跨代理」）**：
+  请求侧只对两类必须 identity 的请求剥离 `accept-encoding` —— HTML 文档导航
+  （`proxy-forward.ts` `isHtmlDocumentNavigation`；S0 注入前提）与
+  `Accept: text/event-stream` 的 SSE 请求（`acceptsEventStream`；传输层保险，避免
+  远端/旧版上游压缩长流），判定入口 `requiresIdentityUpstreamEncoding`，取舍细节见
+  设计 17 §8；其余请求把协商交给上游 gzip 中间件（响应白名单放行
+  `content-encoding` ——压缩标签必须随行，浏览器才能正确解码；反代不经手压缩字节）。
 - **进程级资源预算**：并发 HTTP ≤ 64、活动 WS ≤ 64、待完成 WS 握手 ≤ 16、
   所有 proxy owner 共享的进程级缓冲请求体预算 ≤ 300MiB；健康 SSE ≤ 32。超额统一 503
   `resource_exhausted`，计数在断连/超时/错误/完成时幂等释放；HTTP server 在

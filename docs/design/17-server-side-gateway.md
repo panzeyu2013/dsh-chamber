@@ -493,6 +493,20 @@ Gateway proxy 与 per-instance proxy 共用 `proxy-forward.ts`，从而保持相
 - 上游 Host 固定改写为目标 origin；浏览器 Origin 改写为目标同源；
 - 请求剥离 cookie、authorization、hop-by-hop、`Forwarded`、`Via`、全部
   `X-Forwarded-*` 和 `X-Real-IP`；只有注册 transport 的受控 extra header 可重新注入；
+- `accept-encoding` 只对**必须 identity 的两类请求**剥离（判定 `proxy-forward.ts`
+  `requiresIdentityUpstreamEncoding` = `isHtmlDocumentNavigation` ∨ `acceptsEventStream`）：
+  ① HTML 文档导航（GET/HEAD + `Accept` 含 `text/html`，路径不在 `/api`、`/plugins`、`/auth/…`、
+  `/chamber/<subpath>`，且不是内容寻址的 `/assets/<name>-<hash>.<ext>`）——这是 S0 注入的前提：
+  `htmlInjectable` 要求上游 `text/html` 未被编码，gateway `html-inject.ts` 依赖它写入
+  `__DSH_TRANSPORT__`；② `Accept` 含 `text/event-stream` 的 SSE 请求——**不是文档导航，而是传输层
+  保险**（远端/旧版实例未必带 pinned 的 gzip filter，长流被压缩即被缓冲）。其余请求把压缩协商交给
+  上游 gzip 中间件（dsh-host-webserver `createGzipMiddleware` 自身拒绝 `text/event-stream` 与
+  `content-range`），回程 `content-encoding`/`vary` 已在响应白名单内 —— 该取舍修订 2026 audit M3b
+  的「一律剥离」（2026-12）；
+- 响应头组装提供窄 seam `ProxyForwardDeps.onUpstreamResponseHeaders(pathname, status, headers)`
+  （`forwardHttp`，默认 `undefined` = 零变化）：owner 可补上游缺失的表示元数据，gateway 用它给
+  内容寻址静态资源加 immutable `cache-control`（上游 dsh-host-frontend-static 只写 `content-type`；
+  命名判定 `isHashedStaticAssetPath`，绝不匹配 `favicon.svg`/`manifest.webmanifest`/`index.html`）；
 - WS 只转发握手白名单；30 秒 ping/pong，漏一次 pong 即回收；
 - 响应保留 content encoding、location、vary 等表示/跳转元数据，并重写同源 redirect；
 - 45 秒为 idle timeout；响应 chunk 会重置 timer；SSE/WS 是长流；
