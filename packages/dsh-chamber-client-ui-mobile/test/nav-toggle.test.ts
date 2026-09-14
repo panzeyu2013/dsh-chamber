@@ -81,6 +81,23 @@ test('the touch tier keeps what the official control cannot give it: 44px box + 
   assert.ok(MOBILE_CSS.includes('.dsh-mobile-backdrop'), 'the tap-absorbing backdrop stays')
 })
 
+test('the toggle and the backdrop only render when the drawer can actually work', () => {
+  // The all-or-nothing probe (markup.ts stampFrame) refuses to stamp a frame
+  // whose conversation column is missing, and data-mobile-roles can legitimately
+  // lack the sidebar role. In both cases every drawer rule is inert, so the
+  // floating toggle must not stand there as a dead control and the backdrop must
+  // not scrim the transcript (2026-09-14 review-fix).
+  assert.match(MOBILE_CSS,
+    /\[data-mobile-frame\]\[data-mobile-roles~="sidebar"\] \.dsh-mobile-nav-toggle \{\s*display: inline-flex;/,
+    'the display switch is gated on the stamped frame AND the found sidebar role')
+  assert.match(MOBILE_CSS,
+    /\[data-mobile-frame\]:not\(\[data-mobile-roles~="sidebar"\]\) \.dsh-mobile-backdrop \{\s*display: none;/,
+    'no sidebar role means no drawer, so no tap-absorbing scrim either')
+  const base = cssBlock(MOBILE_CSS, '.dsh-mobile-nav-toggle')
+  assert.ok(base !== null && !base.includes('display: inline-flex'),
+    'the base block must not switch display on its own (the gate owns that)')
+})
+
 /** The `selector { … }` block from the (already whitespace-normalized) sheet. */
 function cssBlock(css: string, selector: string): string | null {
   const at = css.indexOf(`${selector} {`)

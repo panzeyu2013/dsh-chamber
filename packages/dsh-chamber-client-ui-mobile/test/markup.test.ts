@@ -130,6 +130,36 @@ test('stampFrame stamps the frame and all three columns (idempotent)', () => {
   assert.equal(frame.children[0].getAttribute('data-mobile-role'), 'sidebar')
 })
 
+test('stampFrame records the roles it actually found', () => {
+  const { root, frame } = fullFrame()
+  stampFrame(root)
+  assert.equal(frame.getAttribute('data-mobile-roles'), 'sidebar conversation details')
+  // The alpha.2 boot shape: the details shell is resident but EMPTY, so only
+  // two roles are stamped — the diagnostic must not over-report.
+  const boot = bootFrame()
+  stampFrame(boot.root)
+  assert.equal(boot.frame.getAttribute('data-mobile-roles'), 'sidebar conversation')
+  assert.equal(boot.detailsCol.getAttribute('data-mobile-role'), null)
+})
+
+test('stampFrame refuses to adapt a frame without the conversation column', () => {
+  // The 0px-track brake (2026-09-14): the grid lock plus a fixed drawer are
+  // only sound while the conversation column is pinned by its own role
+  // attribute. A vendor rename of the centre key must leave the page in the
+  // official narrow layout, not in a clipped 0px transcript.
+  const root = new FakeElement('div')
+  root.setAttribute('data-slot', 'root')
+  const frame = new FakeElement('div')
+  attach(root, frame)
+  const sidebar = attach(frame, columnShell(ROLE_SLOT_KEYS.sidebar))
+  const details = attach(frame, columnShell(ROLE_SLOT_KEYS.details))
+  assert.equal(stampFrame(root), null)
+  assert.equal(frame.hasAttribute('data-mobile-frame'), false)
+  assert.equal(frame.hasAttribute('data-mobile-roles'), false)
+  assert.equal(sidebar.getAttribute('data-mobile-role'), null)
+  assert.equal(details.getAttribute('data-mobile-role'), null)
+})
+
 // ---------------------------------------------------------------------------
 // Re-stamp predicate (alpha.2 anchor audit): a slot outlet mounting inside a
 // resident column shell must count as structural, while deep content stays
@@ -165,14 +195,23 @@ test('isStructuralTarget: the same late-outlet shape works for sidebar/conversat
   const frame = new FakeElement('div')
   attach(root, frame)
   stampFrame(root)
-  for (const role of ['sidebar', 'conversation'] as const) {
-    const shell = new FakeElement('div')
-    attach(frame, shell)
-    const mounted = attach(shell, outlet(ROLE_SLOT_KEYS[role]))
-    assert.equal(isStructuralTarget(mounted), true, `${role} outlet mount must be structural`)
-    stampFrame(root)
-    assert.equal(shell.getAttribute('data-mobile-role'), role)
-  }
+  // The sidebar arrives first: its outlet mount is structural (the observer
+  // must re-stamp), but the all-or-nothing rule refuses to adapt the frame
+  // until the conversation column exists.
+  const sidebarShell = new FakeElement('div')
+  attach(frame, sidebarShell)
+  assert.equal(isStructuralTarget(attach(sidebarShell, outlet(ROLE_SLOT_KEYS.sidebar))), true,
+    'sidebar outlet mount must be structural')
+  assert.equal(stampFrame(root), null)
+  assert.equal(sidebarShell.getAttribute('data-mobile-role'), null)
+  // The conversation column lands: the same pass stamps BOTH columns.
+  const conversationShell = new FakeElement('div')
+  attach(frame, conversationShell)
+  assert.equal(isStructuralTarget(attach(conversationShell, outlet(ROLE_SLOT_KEYS.conversation))), true,
+    'conversation outlet mount must be structural')
+  assert.equal(stampFrame(root), frame)
+  assert.equal(sidebarShell.getAttribute('data-mobile-role'), 'sidebar')
+  assert.equal(conversationShell.getAttribute('data-mobile-role'), 'conversation')
 })
 
 test('isStructuralTarget: streaming content under the scroll body is NOT structural (streaming filter)', () => {

@@ -370,7 +370,6 @@ export const MOBILE_CSS = `
     top: max(10px, env(safe-area-inset-top, 0px));
     left: max(10px, env(safe-area-inset-left, 0px));
     z-index: 76;
-    display: inline-flex;
     align-items: center;
     justify-content: center;
     width: 44px;
@@ -390,6 +389,26 @@ export const MOBILE_CSS = `
     touch-action: manipulation;
     -webkit-appearance: none;
     appearance: none;
+  }
+  /* The toggle is the DRAWER's entry point, so it may only be VISIBLE when the
+     drawer can actually work: the frame must be stamped AND the sidebar column
+     must have been found (markup.ts writes data-mobile-roles from the same
+     all-or-nothing probe that gates the frame, see stampFrame). Without this
+     gate a vendor rename of the centre key would leave a floating button whose
+     only effect is flipping a frame attribute nothing responds to — a dead
+     control is worse than an absent one. The display switch lives in its own
+     rule (not in the block above) so the artifact/test pins on that block stay
+     valid; the stylesheet's media-query-free default already hides it. */
+  [data-mobile-frame][data-mobile-roles~="sidebar"] .dsh-mobile-nav-toggle {
+    display: inline-flex;
+  }
+  /* Same gate for the tap-absorbing backdrop: it exists only to close the
+     drawer, so with no sidebar role found it must not cover the transcript.
+     A separate rule (rather than editing the pinned backdrop rule) keeps the
+     existing selector/declaration pins intact; equal specificity + later
+     position means this one wins exactly when the sidebar role is absent. */
+  [data-mobile-frame]:not([data-mobile-roles~="sidebar"]) .dsh-mobile-backdrop {
+    display: none;
   }
   .dsh-mobile-nav-toggle:hover {
     background: var(--dsw-alias-interactive-bg-hover);
@@ -460,16 +479,30 @@ export const MOBILE_CSS = `
     padding-left: calc(62px + env(safe-area-inset-left, 0px)) !important;
   }
 
-  /* Crumbs/lineage chain: wrap instead of clip. The official .crumbs row is
-     nowrap + overflow hidden (desktop-width assumption): on a phone a long
-     title chain or the lineage chips ("N 个子代理" catalog triggers) get
-     silently CUT (the observed truncated/collapsed header labels). Wrapping
-     keeps every crumb segment and chip on its own line; per-crumb ellipsis
-     (official .crumb max-width) still bounds single titles. */
+  /* Crumbs/lineage chain: KEEP the official single-line contract and pan the
+     strip instead of wrapping it. Upstream .crumbs is white-space:nowrap +
+     overflow:hidden + min-width:0; the previous wrap rule (2026-09 review-fix)
+     overrode the inherited nowrap to normal, which is a REGRESSION for the
+     lineage chip: its count text is a bare span with NO class of its own (the
+     upstream SubagentHeaderLineage class dictionary omits the count key it
+     references), so the ONLY thing keeping "31 个子代理" on one line was the
+     nowrap it inherited from this row. With normal, CJK broke per character
+     and the badge rendered as a five-line vertical column (5 x 18px = 90px),
+     inflating the title row from 30px to ~96px and squeezing the title.
+     overflow-x:auto replaces the upstream clip so long ancestry chains stay
+     reachable; the lineage chip is kept out of the shrink race in the phone
+     tier below, so panning is the last resort rather than the mechanism. The
+     scrollbar is hidden because the strip is a gesture surface, not a widget. */
   [data-mobile-frame] [data-slot="conversation.session.header"] nav {
-    flex-wrap: wrap;
-    overflow: visible;
-    white-space: normal;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    white-space: nowrap;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  [data-mobile-frame] [data-slot="conversation.session.header"] nav::-webkit-scrollbar {
+    display: none;
   }
 
   /* Session-header view tabs ('role="tablist"'): 'tabs.length > 1' is the
@@ -633,6 +666,82 @@ export const MOBILE_CSS = `
 
 /* ---- phone tier (design 17 §18.4.2/§18.4.3) ---- */
 @media (max-width: 768px) and (pointer: coarse) {
+  /* Session header: one bounded row (2026-09-14 review-fix). The touch tier
+     restored the official nowrap contract on the crumb strip; this tier
+     decides WHAT gives up width. Upstream ConversationSessionHeader shape:
+       header
+         > div.titleRow
+             > div.titleCluster > [nav.crumbs, div.headerActions]
+             > div.headerUtilities
+             > div.headerCorner[data-conversation-header-corner]
+         > div.tabs[role=tablist]
+     The lineage chip renders INSIDE nav.crumbs (inside its crumbSeg), so it
+     sits at the END of the strip and must never be the element that is
+     squeezed — that is exactly how the five-line vertical badge happened. The
+     CURRENT crumb absorbs instead, which it can do textually: upstream .crumb
+     already carries max-width:220px + text-overflow:ellipsis.
+     NOTE the :has() arm is a DESCENDANT match on purpose — the nav is
+     titleRow > titleCluster > nav, so a child combinator (> nav) would be a
+     silent no-op. The :has() invalidation cost stays inside the header
+     subtree, never the streaming transcript. */
+  [data-mobile-frame] [data-slot="conversation.session.header"] > header {
+    padding-top: calc(10px + env(safe-area-inset-top, 0px)) !important;
+    padding-right: calc(12px + env(safe-area-inset-right, 0px)) !important;
+  }
+  [data-mobile-frame] [data-slot="conversation.session.header"] > header > div:has(nav) {
+    flex-wrap: nowrap;
+    min-height: 48px;
+  }
+  /* The corner seat ships margin-right:-16px against upstream's 28px header
+     padding. This tier narrows that padding to 12px, so the negative margin
+     now only buys overlap risk. */
+  [data-mobile-frame] [data-slot="conversation.session.header"] > header > div:has(nav) > div:last-child {
+    margin-right: 0 !important;
+  }
+  /* Shrink order, crumb strip: the CURRENT crumb (the one upstream renders
+     with the disabled attribute) takes the remaining width and ellipsises;
+     every other crumb keeps its intrinsic width and is panned by the strip. */
+  [data-mobile-frame] [data-slot="conversation.session.header"] nav > span {
+    min-width: 0;
+  }
+  [data-mobile-frame] [data-slot="conversation.session.header"] nav > span > button {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+  [data-mobile-frame] [data-slot="conversation.session.header"] nav > span > button:disabled {
+    flex: 1 1 auto;
+    min-width: 4em;
+  }
+  /* Lineage chip: flex:0 0 auto so it is never in the shrink race, a 44px
+     touch floor (upstream ships a 28px box) and a bounded, single-line count
+     label. The count span is CLIPPED, never removed, so the accessible name
+     keeps the full text. */
+  [data-mobile-frame] [data-slot="conversation.session.header.lineage"] button {
+    flex: 0 0 auto;
+    min-width: 0;
+    min-height: 44px;
+    max-width: 100%;
+    white-space: nowrap;
+  }
+  [data-mobile-frame] [data-slot="conversation.session.header.lineage"] button > svg {
+    flex: none;
+  }
+  [data-mobile-frame] [data-slot="conversation.session.header.lineage"] button > span:last-of-type {
+    min-width: 0;
+    max-width: 8em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* The two icon seats: the 44px floor must mean the BOX (the same decision
+     the tab strip and the dockkit chips already carry). Without border-box a
+     28px button with 6px padding renders ~56px and thickens the row for
+     nothing. */
+  [data-mobile-frame] [data-slot="conversation.session.header.utilities"] button,
+  [data-mobile-frame] [data-slot="conversation.session.header.corner"] button {
+    box-sizing: border-box;
+  }
+
   /* Composer toolbar: one line. The official row wraps; force nowrap (the
      official 12px gap is kept — no gap override). */
   /* Local-name match, BOTH production shapes (see the header): suffix for the
@@ -835,6 +944,58 @@ export const MOBILE_CSS = `
      column (16px), neither of which this rule touches. */
   [data-conversation-scroll] {
     overscroll-behavior-y: contain;
+  }
+}
+
+/* ---- narrow phone tier: 480px and below (2026-09-14 review-fix) ----
+   The session header's width budget at 390px is ~78px of title after the
+   floating toggle gutter, the two 44px icon seats, the mode chip and the
+   lineage chip. Below 480px the mode chip's LABEL is the cheapest thing to
+   drop: the chip is still the same interactive menu trigger, and clipping the
+   span (rather than removing it) keeps the accessible name intact. The
+   lineage chip keeps its digits — it is the only entry point to the subagent
+   catalog. */
+@media (max-width: 480px) and (pointer: coarse) {
+  /* The headerActions seat's ONLY text-bearing direct child is upstream's
+     agent-preset cell, and it is a bare span (AgentPresetLabel) — the schedule
+     and job cells are div wrappers whose triggers are nested, so a
+     "> button > span" selector matches nothing at all. 2026-09-14 second-pass
+     review: the rule that used to sit here was dead code written against the
+     HERO seat's button[aria-haspopup=menu], which upstream registers into
+     conversation.hero.agentPreset — not into the header. Upstream already
+     bounds that label itself (max-width 180px + nowrap + overflow hidden), so
+     this tier only takes width BACK from it: the icon stays, the text clips,
+     and the crumb strip keeps usable room on a narrow row instead of losing it
+     to a label the user has already read. */
+  [data-mobile-frame] [data-slot="conversation.session.header.actions"] > span {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 8em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+/* ---- narrowest tier: 360px and below ----
+   Content width is ~246px here: the crumb strip keeps the digits and the
+   chevron, the unit text and the crumb separator are the next things to go,
+   and the current crumb's floor drops so the title does not collapse to an
+   ellipsis-only box. Everything stays attribute-anchored: the count variant
+   is the only lineage shape whose root carries a leading separator span. */
+@media (max-width: 360px) and (pointer: coarse) {
+  /* One more step for the narrowest row: the same agent-preset label. */
+  [data-mobile-frame] [data-slot="conversation.session.header.actions"] > span {
+    max-width: 5em;
+  }
+  [data-mobile-frame] [data-slot="conversation.session.header.lineage"] > div > span:first-child {
+    display: none;
+  }
+  [data-mobile-frame] [data-slot="conversation.session.header.lineage"] button > span:last-of-type {
+    max-width: 2.4em;
+  }
+  [data-mobile-frame] [data-slot="conversation.session.header"] nav > span > button:disabled {
+    min-width: 3em;
   }
 }
 `
