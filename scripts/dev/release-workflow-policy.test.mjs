@@ -204,9 +204,21 @@ assert.match(
   /^concurrency:\n  group:\s*ci-\$\{\{\s*github\.ref\s*\}\}\n  cancel-in-progress:\s*\$\{\{\s*github\.event_name\s*==\s*'pull_request'\s*\}\}$/m,
   'the push chain must serialize per ref and cancel ONLY pull-request runs: cancelling a branch push could drop the validation of a code commit when a prose-only push follows it (the classifier spares prose the heavy chain, so nothing would re-validate that commit)',
 )
+// 2026-12 single-entry collapse: the package test set and the client typecheck
+// set are each invoked through `scripts/dev/run-checks.mjs`, so the number of
+// conditioned steps is no longer a proxy for how much heavy work the classifier
+// gates. Pin both facts: the concentrated entries themselves must be gated, and
+// the gated step count must not fall below the post-collapse floor.
+for (const entry of ['node scripts/dev/run-checks.mjs tests', 'node scripts/dev/run-checks.mjs typecheck']) {
+  assert.match(
+    ciTestJob,
+    new RegExp(`if:\\s*steps\\.classify\\.outputs\\.code\\s*==\\s*'true'\\n\\s+run:\\s*${entry.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}`),
+    `the classifier must gate the heavy single entry: ${entry}`,
+  )
+}
 assert.ok(
-  classifiesHeavySteps(ciTestJob) >= 15,
-  'the heavy push chain must be gated by the change classifier (steps.classify.outputs.code)',
+  classifiesHeavySteps(ciTestJob) >= 10,
+  'the heavy push chain must stay classified by the change classifier (floor 10 after the 2026-12 single-entry collapse)',
 )
 
 /** Count the heavy steps the classifier can skip. */

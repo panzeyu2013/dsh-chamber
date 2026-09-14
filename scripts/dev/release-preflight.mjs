@@ -47,7 +47,7 @@ const SELF_PATH = relative(REPO_ROOT, fileURLToPath(import.meta.url)).split(sep)
 // ---------------------------------------------------------------------------
 
 const args = process.argv.slice(2)
-const flags = { actionsOnly: false, versionsOnly: false, offline: false, skipInstall: false, forkVersion: undefined }
+const flags = { actionsOnly: false, versionsOnly: false, offline: false, skipInstall: false, allowFixme: false, forkVersion: undefined }
 const positional = []
 for (let i = 0; i < args.length; i++) {
   const arg = args[i]
@@ -55,6 +55,7 @@ for (let i = 0; i < args.length; i++) {
   else if (arg === '--versions-only') flags.versionsOnly = true
   else if (arg === '--offline') flags.offline = true
   else if (arg === '--skip-install') flags.skipInstall = true
+  else if (arg === '--allow-fixme') flags.allowFixme = true
   else if (arg === '--fork-version') {
     const next = args[i + 1]
     if (next === undefined || next.startsWith('--')) {
@@ -327,6 +328,44 @@ function checkConflictMarkers() {
   ok(c, 'clean')
 }
 
+/** (g) 发布阻塞标记：`FIXME` 表示"应当阻塞发布"，因此发布前必须为零——
+ *  除非调用者用 `--allow-fixme` 显式放行（AGENTS.md「Release-blocking
+ *  markers」把放行定义为一个被记录的决定，而不是疏漏）。`TODO`/`XXX` 只是
+ *  待办分级，不进门禁；扫描面与冲突标记一致（packages/ scripts/）。 */
+function checkFixmeMarkers() {
+  const c = check('no release-blocking FIXME markers in packages/ scripts/')
+  const hits = []
+  const TEXT_EXT = new Set(['.ts', '.cts', '.mts', '.tsx', '.js', '.mjs', '.cjs', '.json', '.sh', '.yml', '.yaml'])
+  // This checker names the marker it looks for, so it would always find itself.
+  const selfPath = fileURLToPath(import.meta.url)
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (SKIP_DIRS.has(entry.name)) continue
+      const full = join(dir, entry.name)
+      if (entry.isDirectory()) walk(full)
+      else if (entry.isFile() && full !== selfPath && TEXT_EXT.has(entry.name.slice(entry.name.lastIndexOf('.')))) {
+        const buf = readFileSync(full)
+        if (buf.includes(0)) continue // binary
+        const text = buf.toString('utf8')
+        for (const [index, line] of text.split('\n').entries()) {
+          if (line.includes('FIXME')) hits.push(`${relative(REPO_ROOT, full)}:${index + 1}`)
+        }
+      }
+    }
+  }
+  walk(join(REPO_ROOT, 'packages'))
+  walk(join(REPO_ROOT, 'scripts'))
+  if (hits.length === 0) {
+    ok(c, 'none')
+    return
+  }
+  if (flags.allowFixme) {
+    console.log(`⚠ ${c.name} — ALLOWED by --allow-fixme: ${hits.length} marker(s) (${hits.slice(0, 5).join(', ')}${hits.length > 5 ? ', …' : ''})`)
+    return
+  }
+  fail(c, `${hits.length} FIXME marker(s) must be resolved before a release: ${hits.slice(0, 5).join(', ')}${hits.length > 5 ? ', …' : ''} — fix them, or re-run with --allow-fixme to record the decision`)
+}
+
 /** (f) git 工作区健康：无已修改/未跟踪（排除本脚本自身路径），stash 为空。 */
 function checkGitStatus() {
   const c = check('git status clean + no untracked + empty stash')
@@ -442,6 +481,7 @@ async function runPreflight() {
   }
   ran.push('action SHAs')
   checkConflictMarkers(); ran.push('conflict markers')
+  checkFixmeMarkers(); ran.push('release-blocking markers')
   checkGitStatus(); ran.push('git status')
   checkFrozenInstall(); ran.push('frozen install')
   checkReleaseWorkflow(); ran.push('release workflow')

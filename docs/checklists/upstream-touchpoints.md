@@ -182,7 +182,7 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
 | 上游属主 | chamber 契约镜像点 | 保鲜 |
 |---|---|---|
 | dsh-api-remotes（client） | typert remote 装配（15）/ message-feedback、session-reference、subagent 等 wire 面 | gen-typert-remotes + C4 |
-| dsh-api-session-controller | api-gateway fork journal-stream 帧（无游标 notification） | fork 重放 + 升级复验 |
+| dsh-api-session-controller | api-gateway fork journal-stream 帧（无游标 notification） | **形状锁步 = C1**：帧词表与帧形状都在 `packages/dsh-api-gateway/src/stream-protocol.ts`（纯文件集内），C1 逐字节比对 pin，词表/键名漂移即硬失败；**行为复验 = fork 重放**：升级时人工跑一次 journal-stream 通路（C1 只证明形状未变，不证明重放语义） |
 | client/connection（recovery） | recovery-config 共享 schema（`DEFAULT_MIN_RESTART_INTERVAL_MS` 10_000 == schema 默认 backoffMaxMs） | liveness-triggers 钉值 + C1 |
 | dsh-runtime（激活探针域） | `HOST_DOMAIN_PROBE_NAMES` ↔ gateway `HOST_PACKAGE_PROBE_DOMAINS` | C7 + gateway 运行时 fail-loud |
 | interaction/commands（`commands/execute` 第三参数） | 激活探针载荷的键名 == 上游 `execute(agent, line, submittedAttachments, signal)` 的参数名（现行各代皆为 `submittedAttachments`；历史线曾用 `images`，`attachments` 从不是上游线名） | `runtime-probes.test.ts`：读 vendor 签名逐字比对 + 夹具按真实 typert gateway 校验参数键集（**2026-09 实机：一次升级中写错的 `attachments` 使每条激活探针失败、每次首装本地实例被隔离，直至验收轮才发现**） |
