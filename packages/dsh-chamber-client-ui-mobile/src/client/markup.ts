@@ -30,6 +30,11 @@
 export const ROOT_SLOT_SELECTOR = '[data-slot="root"]'
 export const MOBILE_FRAME_ATTR = 'data-mobile-frame'
 export const MOBILE_ROLE_ATTR = 'data-mobile-role'
+/** The roles the probe actually found on the stamped frame (space-separated,
+ *  in the sidebar/conversation/details order). Diagnostics + the emergency
+ *  brake for the grid lock: a frame carrying this attribute is guaranteed to
+ *  carry the conversation role (see stampFrame). */
+export const MOBILE_ROLES_ATTR = 'data-mobile-roles'
 
 export type MobileColumnRole = 'sidebar' | 'conversation' | 'details'
 
@@ -95,15 +100,38 @@ export function findColumn(frame: ElementLike, slot: string): ElementLike | null
   return null
 }
 
-/** Stamp the frame and columns (idempotent; returns the stamped frame). */
+/**
+ * Stamp the frame and columns (idempotent; returns the stamped frame, or null
+ * when the frame is not adapted).
+ *
+ * ALL-OR-NOTHING (2026-09-14): the mobile tier is an adaptation of the
+ * CONVERSATION column, and the stylesheet's grid lock
+ * (`grid-template-columns: 0 minmax(0,1fr) 0`) plus the fixed drawer are only
+ * sound while that column is also pinned by its own `data-mobile-role`
+ * attribute. If upstream ever renames the centre key (ROLE_SLOT_KEYS
+ * .conversation) the lock would still apply, the column would lose its
+ * `grid-column: 2` pin, and CSS Grid auto-placement would drop the whole
+ * transcript into the 0px first track with the frame clipping it — a blank
+ * conversation, silently. Refusing to stamp ANYTHING in that case degrades to
+ * the official narrow layout instead (sidebar rail, squeezed but visible),
+ * and the re-stamp predicate still converges: the added column shell matches
+ * the root slot within its ancestor window.
+ */
 export function stampFrame(root: ElementLike): ElementLike | null {
   const frame = findFrame(root)
   if (frame === null) return null
-  frame.setAttribute(MOBILE_FRAME_ATTR, '')
+  const columns = new Map<MobileColumnRole, ElementLike>()
   for (const role of ['sidebar', 'conversation', 'details'] as const) {
     const column = findColumn(frame, ROLE_SLOT_KEYS[role])
-    if (column !== null) column.setAttribute(MOBILE_ROLE_ATTR, role)
+    if (column !== null) columns.set(role, column)
   }
+  if (!columns.has('conversation')) return null
+  for (const [role, column] of columns) column.setAttribute(MOBILE_ROLE_ATTR, role)
+  frame.setAttribute(MOBILE_FRAME_ATTR, '')
+  // Recorded for real-device triage: which of the three probe targets the
+  // running vendor DOM actually exposed (the details shell is legitimately
+  // absent until its docking surface registers).
+  frame.setAttribute(MOBILE_ROLES_ATTR, [...columns.keys()].join(' '))
   return frame
 }
 

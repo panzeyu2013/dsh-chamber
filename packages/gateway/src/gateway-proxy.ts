@@ -32,6 +32,7 @@ import {
   createPendingUpgradeTracker,
   forwardHttp,
   forwardUpgrade,
+  isHashedStaticAssetPath,
   rejectUpgrade,
   writeError,
   type Logger,
@@ -129,6 +130,21 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
     injectHtmlDocument: html => {
       const result = injectTrustDeclaration(html)
       return result.injected ? result.html : null
+    },
+    // Hashed static-asset caching (M3-3): the official frontend is served by
+    // @deepseek-ai/dsh-host-frontend-static, which writes ONLY content-type —
+    // no Cache-Control/ETag/Last-Modified — so the 1.24 MiB Vite shell was
+    // re-downloaded on every visit even though every asset name carries a
+    // Vite content hash. Re-add the immutable contract for exactly those
+    // names (the shared predicate is anchored on an EXACT 8-char hash so
+    // favicon.svg / manifest.webmanifest / index.html can never match), and
+    // only for a plain 200: a 206/304 or any range response keeps the
+    // upstream framing. The seam runs BEFORE the proxy recomputes
+    // content-length, so this cannot corrupt framing.
+    onUpstreamResponseHeaders: (pathname, status, headers) => {
+      if (status !== 200 || !isHashedStaticAssetPath(pathname)) return
+      if (headers['content-range'] !== undefined) return
+      headers['cache-control'] = 'public, max-age=31536000, immutable'
     },
   }
 

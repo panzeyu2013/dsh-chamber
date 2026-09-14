@@ -26,8 +26,8 @@ gateway 访问）真正可用——窄屏抽屉化布局、触控目标、安全
 - `src/client/styles.ts` —— 单文件样式（全部媒体查询作用域，桌面零影响；
   只用官方 `--dsw-*`/`--ds-*` token）；
 - `src/client/markup.ts` / `composer.ts` / `layout-facts.ts` /
-  `drawer-taps.ts` / `settings-sheet.ts` / `official-hover-card.ts` ——
-  纯逻辑 + 薄安装器（可单测）；
+  `drawer-taps.ts` / `settings-sheet.ts` / `official-hover-card.ts` /
+  `session-stall.ts` —— 纯逻辑 + 薄安装器（可单测）；
 - `scripts/build.mjs` —— esbuild 两半构建（`dist/index.js` + `lib/client.js`）。
 
 ## 会话头部适配（触屏档）
@@ -37,14 +37,33 @@ gateway 访问）真正可用——窄屏抽屉化布局、触控目标、安全
 
 - **开关重叠**：浮动抽屉开关（左上 44px）压在头部内容上——头部预留左侧 gutter
   （`padding-left`）；
-- **面包屑被裁**：官方 crumbs 行 nowrap + overflow hidden，长标题链与
-  谱系 chip（「N 个子代理」目录触发器）会被静默截断——改为换行而非裁切
-  （单段省略号保留）；
+- **面包屑被裁**：官方 crumbs 行是 `nowrap + overflow hidden`，长标题链与
+  谱系 chip（「N 个子代理」目录触发器）会被静默截断。本条改为**保持官方单行契约 +
+  横向平移**（`overflow-x: auto`、隐藏滚动条），不再换行：谱系 chip 渲染在
+  crumbs 行**内部**（在当前 crumb 自己的 `span.crumbSeg` 里），而它的计数文本是
+  一个**上游没有 class 的裸 span**（`SubagentHeaderLineage` 的类字典里没有组件
+  引用的 `count` 键），所以「继承来的 nowrap」是它唯一的保护——把 nowrap 覆盖成
+  `normal` 后 CJK 逐字可断，徽标渲染成五行竖排（5 × 18px = 90px），把标题行从
+  30px 撑到 ~96px（2026-09-14 review-fix；**之前那条换行规则本身就是回归源**）；
+- **会话头首行（phone 档）**：单行、48px 上限，并吃顶部/右侧安全区。收缩顺序是
+  显式的——**当前 crumb**（上游用 `disabled` 渲染的那一个）吸收剩余宽度并省略号；
+  **谱系 chip 不参与收缩竞争**（`flex: 0 0 auto`、44px 触控底线〔上游只有 28px
+  盒〕、计数文本有界），因为它是子代理目录的唯一入口；agent-preset 座席——上游的
+  `AgentPresetLabel`，是**裸 `span[icon][name]`**，也是 `headerActions` list 座席里
+  唯一承载文字的直接子节点——从 480px 起把宽度还给面包屑条（8em），360px 再让一档
+  （5em）；上游自己已把该标签限在 180px，本插件只是**收回**宽度（`overflow: hidden`，
+  绝不 `display: none`），图标与可访问名因此保留；两个图标座席取
+  `box-sizing: border-box`，让共享的 44px 底线
+  落在**盒**上（否则 28px 按钮 + 6px 内边距会渲染成 ~56px，白白加厚整行）；
 - **「Session 日志」导出胶囊**：alpha.2 重锚时**退役**——上游已把该控件改为
   会话头 more-actions 菜单里的 28×28 图标按钮，插件不再按文案打标。右列保留第三轨
   的网格锁、不自绘覆盖层——面板的呈现仍是官方那一套，只是在整档触屏宽度上重新按
   **全屏**呈现（只加网格锁会让 769–1023px 档被常规宽度的面板盖住；见下节
   「右栏与抽屉的共存」）。
+- **抽屉入口门控**：浮动开关与遮罩只在抽屉真的可用时才渲染——frame 必须已打标，且
+  `data-mobile-roles` 必须含 sidebar 角色。`stampFrame` 是全或无的（缺 conversation
+  列的 frame 绝不适配），因此没有这道门控时，上游一旦改掉中心列 key，就会留下一个
+  可见但点了没反应的按钮，以及盖住会话区的全屏遮罩。
 - **视图 tab**：`tabs.length > 1` 是**常态**而非边角——`ui-chat` 与
   `ui-trajectory` 都无条件注册 `conversation.view`，且都在默认 web bundle 里。
   官方 tab 是 13px 文字 + 25px 盒，而 tab 条既不换行也不滚动、frame 又裁掉溢出
@@ -54,6 +73,28 @@ gateway 访问）真正可用——窄屏抽屉化布局、触控目标、安全
   `min-height: 76px` 是**下限**，行高随内容增长），并让 tab 条**换行**。
   选择换行而非滚动是刻意的：滚动容器会把另一轴强制算成 `auto`，从而裁掉活动
   tab 那条 2px 指示条——上游特意把它画到 tab 盒外 1px，好与头部底线齐平。
+
+## 会话打开停滞提示（触屏档）
+
+官方会话视图在日志流打开期间会渲染 `chat.loadingHistory` 提示，而**客户端与宿主都没有
+首帧超时**——因此当 `session/follow`（乘 `/api/remote.mux` WebSocket mux 的 remote 流）
+停滞时，会话区会永远停在那句提示上，且官方 UI **没有任何恢复入口**。
+`session-stall.ts` 只为这一状态补一个非阻断提示。判据**全部是属性锚点**——本包的锚点
+纪律禁止按哈希类名或文案匹配那句提示：
+
+- 存在 `[data-chat-flow]` 列，且其最近的 `[data-phase]` 祖先进相为 `active`
+  （上游 conversationPhase() 的取值空间恰为 active / engaging / blank；blank 永不成立，空会话因此不会误报）；
+- flow 子树内**没有任何** `[data-chat-anchor-key]` 行；
+- `conversation.session.header` 的 `<header>` 存在且确实被渲染（空会话上游会隐藏它）；
+- 该状态已连续持续 **45s 可见页面时间**——后台时间**丢弃而不累计**，因为被冻结的
+  移动端定时器在恢复时不得按过期时间戳一次性补算；
+- 定位锚为 `[data-slot="conversation.session.header"] > header`。
+
+提示是 `role="status"` / `aria-live="polite"`，锚在会话头下方，除唯一按钮外
+`pointer-events: none`，从不抢焦点，唯一动作是**用户主动**的页面重载。它绝不自动
+重载或自动重开会话：合法但缓慢的打开（大会话 + 慢链路）不应被打断。它自带极小的
+`data-plugin="dsh-chamber-mobile-stall"` style 标签，只在触屏档安装，dispose 时连同
+定时器、监听、DOM 与自建样式一并清理。
 
 ## 右栏与抽屉的共存（触屏档）
 
@@ -360,6 +401,32 @@ chrome；`[role="menu"] [role="menuitem"][aria-selected]` 高亮信号在本 pin
 （ui-primitives `Menu` 不发 `aria-selected`，且它会把焦点移入菜单，其 Enter 根本
 到不了 document 处理器）；全树仍恰好三个 `aria-modal` 产出点与三个 `data-side`
 载体（两个 AppFrame/ConversationRoot 拖拽把手 + 那颗恒为 `role="tooltip"` 的气泡）。
+
+**会话头锚点（2026-09-14 review-fix）**，全部为属性形或结构形，已在 rc.2 树中核对：
+
+- `conversation.session.header.lineage`——会话头出口的**第四个**座席，与
+  `actions` / `utilities` / `corner` 并列注册，但它渲染在 **`nav.crumbs` 内部**
+  （当前 crumb 的 `span.crumbSeg` 里），这正是它会被面包屑条挤压的原因；
+- 该座席自身的形状：根 `div` 的首个子节点是 `/` 分隔 `span`（仅 count 变体），随后是
+  `button`，内含 `[span.activitySlot][span(count，无 class)][IconChevronDownOutline14]`；
+- phone 档选择器依赖的 DOM 层级：
+  `header > div.titleRow > div.titleCluster > [nav.crumbs, div.headerActions]`，
+  `div.headerUtilities` 与 `div.headerCorner[data-conversation-header-corner]` 是
+  `titleRow` 的另两个子节点，`div.tabs[role=tablist]` 是 `header` 的第二个子节点——
+  因此写在行上的 `> nav` 子代组合器是**静默 no-op**（`:has()` 必须是后代匹配）；
+- 当前 crumb 是 `button.crumb:disabled`（上游以 `disabled: last` 渲染），收缩顺序
+  就挂在它上面；
+- `headerActions` 出口是 **list 座席**，本 pin 的三个注册者**都不渲染直接子
+  `button`**：`agent-preset`（order −10）是 `AgentPresetLabel`，裸
+  `span[icon][name]`（上游自己限 `max-width: 180px` + `overflow: hidden`，且非交互，
+  只带 `title`）；`schedule-catalog`（10）与 `job-list`（20）是 `div` 包裹、触发器内嵌
+  ——因此该座席的命中盒规则必须用后代 `button` 选择器，任何 `> button` 臂都是死代码；
+  而 hero chip 的交互式 `button[aria-haspopup=menu]` 在**另一个座席**
+  （`conversation.hero.agentPreset`）；出口本身是 `display: contents`；
+- `data-mobile-roles`（插件自有，非上游）：探针在 frame 上实际找到的角色，空格分隔。
+  `stampFrame` 是**全或无**的——conversation 列缺失时它拒绝适配该 frame，于是样式表里
+  的 `grid-template-columns: 0 minmax(0,1fr) 0` 锁不可能在上游改掉中心列 key 之后把
+  会话内容困在 0px 第一轨（此时页面退化为官方窄窗布局）。
 
 **悬停卡 watchdog 自己的锚点（2026-09-13 review B2——它们同样是锚点，因此列在这里，
 而不只写在上面那一节）：** `official-hover-card.ts` 用三项事实匹配官方原子，pin 移动时

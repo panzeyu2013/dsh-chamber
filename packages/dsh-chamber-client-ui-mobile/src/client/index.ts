@@ -47,6 +47,7 @@ import { installSettingsSheetScrollReset } from './settings-sheet.ts'
 import {
   COARSE_NO_HOVER_QUERY, installStrandedHoverCardWatchdog,
 } from './official-hover-card.ts'
+import { installSessionStallNotice } from './session-stall.ts'
 import { MobileNavToggle, type MobileNavToggleInjected } from './MobileNavToggle.tsx'
 
 export type { MobileNavToggleInjected } from './MobileNavToggle.tsx'
@@ -323,6 +324,35 @@ export function apply(ctx: ClientContext): void {
       disposeWatchdog = null
     }
   }, 'dsh-chamber: stranded official hover-card watchdog')
+
+  // ---- session-load stall notice (design 17 §18) ----
+  // The official chat view can park on its loading-history face forever (no
+  // deadline on either side of the wire) and the official UI offers no way
+  // out; this plugin's notice is the page's only recovery lever. It rides the
+  // TOUCH tier (the same tier the mobile surface lives on) and, like the
+  // watchdog above, is installed/uninstalled dynamically as the tier flips —
+  // nothing is created at apply time. It only ever SHOWS a notice whose one
+  // action is a user-initiated reload; see session-stall.ts for the shape,
+  // the threshold and every guard.
+  ctx.effect(() => {
+    const touchTier = window.matchMedia(TOUCH_TIER_QUERY)
+    let disposeNotice: (() => void) | null = null
+    const sync = (): void => {
+      if (touchTier.matches) {
+        disposeNotice ??= installSessionStallNotice(t)
+      } else {
+        disposeNotice?.()
+        disposeNotice = null
+      }
+    }
+    sync()
+    touchTier.addEventListener('change', sync)
+    return () => {
+      touchTier.removeEventListener('change', sync)
+      disposeNotice?.()
+      disposeNotice = null
+    }
+  }, 'dsh-chamber: session-load stall notice')
 
   // ---- shell.overlay: the floating drawer toggle (additive list slot) ----
   const injected = (): MobileNavToggleInjected => ({

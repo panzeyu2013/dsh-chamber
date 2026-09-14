@@ -22,8 +22,11 @@
  * 400/403/421 request-policy refusals and the 401 verdicts of the gate itself,
  * on HTTP and on WS upgrades alike — appends one non-secret `auth_rejected`
  * event (code + client + path CATEGORY; the login surface keeps its own
- * login_* classification). The deliberate exclusions are listed on
- * `auditAuthRejection` below.
+ * login_* classification). Every append costs one synchronous fsync, so
+ * identical refusals inside a short window collapse into one counted record
+ * (`AUTH_REJECTION_DEBOUNCE_MS`; the window's first refusal still lands
+ * immediately). The deliberate exclusions are listed on `auditAuthRejection`
+ * below.
  */
 
 import {
@@ -68,6 +71,28 @@ function auditPathCategory(pathname: string): string {
   return 'root'
 }
 
+/** M3-5: debounce window (ms) for repeated IDENTICAL auth-boundary rejections.
+ * Every `appendAuditEvent` is an append + fsync of the audit file (≈3.3 ms
+ * measured), so a credential-less burst of one surface's sub-resources
+ * (manifest/icon family, all `path:root`) would pin the single-threaded event
+ * loop on synchronous disk I/O. Named + exported so the tests drive exactly the
+ * window production uses. */
+export const AUTH_REJECTION_DEBOUNCE_MS = 1000
+
+/** Test seam for the auth-rejection debounce (M3-5). The window state belongs
+ * to ONE `createGatewayDispatch` instance — never a module-global singleton —
+ * so independent dispatches (and tests) cannot pollute each other. */
+export interface AuthRejectionDebounce {
+  /** Milliseconds since epoch (default `Date.now`). */
+  now?: () => number
+  /** Window override; defaults to `AUTH_REJECTION_DEBOUNCE_MS`. */
+  windowMs?: number
+  /** One-shot window-end scheduler returning its cancel handle; defaults to an
+   * unref'd `setTimeout` (an audit flush timer must never keep the process
+   * alive — `quiesce()` drains whatever is still open at shutdown). */
+  schedule?: (flush: () => void, ms: number) => () => void
+}
+
 /** The non-secret client identifier the login/credential events use: the
  * boundary-derived client address, falling back to the socket peer (both are
  * IPs, never a header value the client fully controls beyond XFF on trusted
@@ -102,9 +127,18 @@ function shouldRedirectToLogin(req: ApiRequest, pathname: string, auth: AuthProv
  * proxy path relaxes script-src to `unsafe-inline` — the frontend is dsh's own
  * and already behind the auth gate. The anonymous desktop shape never sees
  * this header: it serves the chamber composite through the control-plane
- * nonce CSP. Every other directive stays identical.
+ * nonce CSP.
+ *
+ * M2-4a: `base-uri` is relaxed from `'none'` to `'self'` for the same reason.
+ * `@deepseek-ai/dsh-host-frontend-static` re-injects `<base href="/">` on every
+ * renderIndex (its SPA deep-link fix), and `base-uri 'none'` makes the browser
+ * refuse that element, so a deep link resolves its relative `./assets/…`
+ * against the deep-link document URL, 404s, and white-screens. The proxy
+ * cannot rewrite the streamed HTML any more than it can backfill the nonce,
+ * so the directive follows script-src onto the same-origin allowance. Every
+ * OTHER directive stays identical.
  */
-const GATEWAY_PROXY_CSP = "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:"
+const GATEWAY_PROXY_CSP = "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:"
 
 /** A browser *document* rejection (GET/HEAD/POST advertising HTML) is
  * answered with the rendered boundary error page instead of a bare JSON body
@@ -269,6 +303,8 @@ export function createGatewayDispatch(
   mobileUaRedirect = false,
   /** Origin-form redirect target (validated at config time). */
   mobileEntryPath = DEFAULT_MOBILE_ENTRY_PATH,
+  /** M3-5 auth-rejection debounce seam; defaults are production behavior. */
+  rejectionDebounce: AuthRejectionDebounce = {},
 ): GatewayDispatch {
   // Every request/socket admitted by one credential generation stays tracked
   // until its downstream leg ends. Rotation closes the old generation at the
@@ -344,6 +380,9 @@ export function createGatewayDispatch(
     while (activeCredentialMutations.size > 0) {
       await Promise.allSettled([...activeCredentialMutations])
     }
+    // M3-5: the debounce counts live in memory — publish every open window
+    // before ownership is released, or a mid-window stop loses them.
+    flushRejectionWindows()
   }
   function rejectStaleHttp(res: ApiResponse, principal: AuthPrincipal | null): boolean {
     if (principal === null || principalIsCurrent(principal)) return false
@@ -354,6 +393,43 @@ export function createGatewayDispatch(
     return true
   }
 
+  const rejectionWindowMs = rejectionDebounce.windowMs ?? AUTH_REJECTION_DEBOUNCE_MS
+  const rejectionNow = rejectionDebounce.now ?? Date.now
+  const scheduleRejectionFlush = rejectionDebounce.schedule ?? ((flush: () => void, ms: number) => {
+    const timer = setTimeout(flush, ms)
+    timer.unref?.()
+    return (): void => { clearTimeout(timer) }
+  })
+  /** One open debounce window: when it opened, how many identical refusals it
+   * has seen, the detail its records carry, and its cancel handle. */
+  interface RejectionWindow { start: number; count: number; detail: string; cancel: () => void }
+  /** Open windows keyed by client + code + path category: identical refusals
+   * coalesce, different clients/codes/categories never do. */
+  const rejectionWindows = new Map<string, RejectionWindow>()
+
+  /** Close one window, appending its coalesced record when refusals beyond the
+   * immediately written opening one were suppressed. `expected` pins the entry
+   * identity so a late timer can never flush a successor window's state. */
+  function closeRejectionWindow(key: string, expected: RejectionWindow): void {
+    const open = rejectionWindows.get(key)
+    if (open === undefined || open !== expected) return
+    rejectionWindows.delete(key)
+    open.cancel()
+    if (open.count < 2 || auditFile === undefined || auditFile === null) return
+    appendAuditEvent(auditFile, {
+      ts: new Date(rejectionNow()).toISOString(),
+      event: 'auth_rejected',
+      kind: 'gateway',
+      detail: `${open.detail},count:${open.count}`,
+    })
+  }
+
+  /** Close every still-open window. `quiesce()` drains these before ownership
+   * release: the counts live in memory, so a mid-window stop would lose them. */
+  function flushRejectionWindows(): void {
+    for (const [key, open] of [...rejectionWindows]) closeRejectionWindow(key, open)
+  }
+
   /**
    * S24 authentication-face audit (design 17 §13.4.4: 认证成功/失败（401/403
    * 分类）): one NON-SECRET event per rejection at the gateway's auth boundary.
@@ -362,6 +438,19 @@ export function createGatewayDispatch(
    * Authorization/Cookie header value, never the concrete path or its query
    * string (the serializer whitelist enforces the field set; this function
    * keeps the VALUES clean).
+   *
+   * M3-5 debounce: each append is one synchronous fsync, so refusals identical
+   * in (client, code, path category) coalesce inside
+   * `AUTH_REJECTION_DEBOUNCE_MS`. The window's FIRST refusal is appended
+   * immediately — an incident is never delayed to the window end; the rest are
+   * counted in memory and, when the window closes, ONE aggregate record carries
+   * `count:<n>`, the window's TOTAL number of identical refusals (the opening
+   * record included). A burst of N therefore writes 2 lines — the immediate
+   * opening anchor plus the window aggregate — instead of N; `count` is read
+   * per window rather than summed over its lines. The debounce never changes
+   * the verdict the client receives (still 401/403/421/400) and never touches
+   * the login_* / credential_* classifications, which keep appending one
+   * record per event.
    *
    * Deliberately NOT audited, so the gap is a decision and not an oversight:
    *   - the 302 to the login page for an anonymous document navigation (a
@@ -383,12 +472,30 @@ export function createGatewayDispatch(
   ): void {
     if (auditFile === undefined || auditFile === null) return
     const client = `client:${clientIdent(clientAddress, socketAddr)}`
+    const category = pathname === undefined ? '' : auditPathCategory(pathname)
+    const detail = category === '' ? `code:${code},${client}` : `code:${code},${client},path:${category}`
+    const key = `${client}\u0000${code}\u0000${category}`
+    const at = rejectionNow()
+    const open = rejectionWindows.get(key)
+    if (open !== undefined) {
+      if (at - open.start < rejectionWindowMs) {
+        // In-window duplicate: coalesced into the window's count, no append.
+        open.count += 1
+        return
+      }
+      // The window elapsed but its timer has not run yet: publish its count
+      // first, so opening the next window cannot swallow it.
+      closeRejectionWindow(key, open)
+    }
     appendAuditEvent(auditFile, {
-      ts: new Date().toISOString(),
+      ts: new Date(at).toISOString(),
       event: 'auth_rejected',
       kind: 'gateway',
-      detail: pathname === undefined ? `code:${code},${client}` : `code:${code},${client},path:${auditPathCategory(pathname)}`,
+      detail,
     })
+    const entry: RejectionWindow = { start: at, count: 1, detail, cancel: () => {} }
+    rejectionWindows.set(key, entry)
+    entry.cancel = scheduleRejectionFlush(() => closeRejectionWindow(key, entry), rejectionWindowMs)
   }
 
   const middleware: GatewayDispatch['middleware'] = async (req, res, url, ctx) => {

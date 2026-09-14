@@ -547,6 +547,85 @@ test('the drawer fields carry the 16px floor (no iOS focus zoom from the drawer)
   )
 })
 
+test('session header keeps a single-line crumb strip (no per-character wrap)', () => {
+  // Regression lock (2026-09-14): overriding the crumbs row to
+  // white-space:normal let the CLASS-LESS lineage count span break per CJK
+  // character, rendering "31 个子代理" as a five-line vertical column (5 x
+  // 18px) that inflated the title row from 30px to ~96px and squeezed the
+  // session title. The strip must stay nowrap and pan instead of wrapping.
+  const tier = normalizeTouchTier()
+  const nav = cssBlock(tier, '[data-mobile-frame] [data-slot="conversation.session.header"] nav')
+  assert.ok(nav !== null, 'the crumb strip rule lives in the touch tier')
+  assert.ok(nav.includes('flex-wrap: nowrap'), 'the crumb strip must not wrap')
+  assert.ok(nav.includes('white-space: nowrap'),
+    'the strip must keep nowrap: it is the only protection the class-less count span has')
+  assert.ok(nav.includes('overflow-x: auto'), 'panning replaces the upstream clip')
+  assert.ok(nav.includes('scrollbar-width: none'), 'the strip is a gesture surface, not a widget')
+  const code = stripComments(MOBILE_CSS)
+  assert.ok(!/\[data-slot="conversation\.session\.header"\] nav \{[^}]*white-space: normal/.test(code),
+    'no session-header nav rule may restore white-space: normal')
+})
+
+test('phone tier bounds the session header row and fixes the shrink order', () => {
+  const phone = normalizePhoneTier()
+  const row = cssBlock(phone, '[data-mobile-frame] [data-slot="conversation.session.header"] > header > div:has(nav)')
+  assert.ok(row !== null, 'the title row rule exists (descendant :has(), not a child combinator)')
+  assert.ok(row.includes('min-height: 48px'), 'the title row is a 48px touch row')
+  // The lineage chip sits at the END of the crumb strip and must never be the
+  // element that gives up width — that is what produced the vertical badge.
+  const lineage = cssBlock(phone, '[data-mobile-frame] [data-slot="conversation.session.header.lineage"] button')
+  assert.ok(lineage !== null, 'the lineage chip has a phone-tier rule')
+  assert.ok(lineage.includes('flex: 0 0 auto'), 'the lineage chip stays out of the shrink race')
+  assert.ok(lineage.includes('min-height: 44px'), 'the lineage trigger is a 44px touch target (upstream ships 28px)')
+  const lineageText = cssBlock(phone, '[data-mobile-frame] [data-slot="conversation.session.header.lineage"] button > span:last-of-type')
+  assert.ok(lineageText !== null && lineageText.includes('text-overflow: ellipsis'),
+    'the count label clips textually instead of pushing the row')
+  const currentCrumb = cssBlock(phone, '[data-mobile-frame] [data-slot="conversation.session.header"] nav > span > button:disabled')
+  assert.ok(currentCrumb !== null && currentCrumb.includes('flex: 1 1 auto'),
+    'the current crumb absorbs the remaining width and ellipsises')
+})
+
+test('the header actions seat is bounded on the element that really exists', () => {
+  // The outlet is a LIST seat whose pinned-upstream registrants are
+  // AgentPresetLabel (a bare `span`, the only text-bearing direct child),
+  // ScheduleCatalogAction and JobListAction (each a `div` wrapper with a nested
+  // trigger). A `> button > span` rule therefore matches NOTHING — the
+  // 2026-09-14 second-pass review found the previous phone-tier rule was dead
+  // code written against the HERO seat's `button[aria-haspopup=menu]`
+  // (`conversation.hero.agentPreset`), so the narrow tiers now bound the span
+  // that is actually rendered.
+  const code = stripComments(MOBILE_CSS)
+  assert.ok(!code.includes('[data-slot="conversation.session.header.actions"] > button'),
+    'no rule may target a direct-child button: the seat has none')
+  const label = cssBlock(MOBILE_CSS, '[data-mobile-frame] [data-slot="conversation.session.header.actions"] > span')
+  assert.ok(label !== null, 'the 480px tier bounds the agent-preset label')
+  assert.ok(label.includes('max-width: 8em') && label.includes('min-width: 0'),
+    'the 480px tier lets the label shrink, then caps it')
+  assert.ok(!label.includes('display: none'), 'the label is clipped, never removed')
+  assert.match(code,
+    /@media \(max-width: 360px\) and \(pointer: coarse\) \{\s*[^}]*?\[data-mobile-frame\] \[data-slot="conversation\.session\.header\.actions"\] > span \{\s*max-width: 5em;/,
+    'the narrowest tier takes one more step back')
+  // The 44px touch floor has to mean the box, or a 28px button with 6px
+  // padding renders ~56px and thickens the row for nothing.
+  assert.match(code,
+    /\[data-slot="conversation\.session\.header\.utilities"\] button,\s*\[data-mobile-frame\] \[data-slot="conversation\.session\.header\.corner"\] button \{\s*box-sizing: border-box;/,
+    'both icon seats declare border-box')
+  // The nested triggers still get their 44px floor through the descendant
+  // selector (which is why that one is not a `>` child combinator).
+  assert.match(code, /\[data-slot="conversation\.session\.header\.actions"\] button,/)
+})
+
+test('the narrow phone tiers exist and only degrade text, never controls', () => {
+  assert.ok(MOBILE_CSS.includes('@media (max-width: 480px) and (pointer: coarse)'),
+    'a 480px tier carries the mode-chip label degradation')
+  assert.ok(MOBILE_CSS.includes('@media (max-width: 360px) and (pointer: coarse)'),
+    'a 360px tier carries the narrowest crumb degradation')
+  const code = stripComments(MOBILE_CSS)
+  assert.match(code,
+    /@media \(max-width: 480px\) and \(pointer: coarse\) \{\s*\[data-mobile-frame\] \[data-slot="conversation\.session\.header\.actions"\] > span \{\s*flex: 0 1 auto;\s*min-width: 0;\s*max-width: 8em;/,
+    'the 480px tier caps only the label width, on the span that exists')
+})
+
 /** The sheet with comments stripped: selector/declaration assertions must not
  *  be satisfiable by prose that quotes them. */
 function stripComments(css: string): string {

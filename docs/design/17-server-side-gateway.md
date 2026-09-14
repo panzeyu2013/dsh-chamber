@@ -373,6 +373,12 @@ trusted proxy 缺失、重复、含逗号或非法的 XFF 时，client identity 
 - 登录过载返回 503，限流返回 429；登录 body 上限为 16 KiB，超限返回 413 并
   **销毁请求 socket**（不排空、不继续消费，防止慢速匿名上传钉住连接；login 与
   change 路由同纪律）；凭据和内部错误不进入日志或响应。
+- 代理到 dsh 前端的响应头取自 `packages/gateway/src/dispatch.ts` 的
+  `GATEWAY_PROXY_CSP`（gateway-only 放宽）：`script-src` 放开 inline（代理无法给上游
+  流式 HTML 回填 nonce），`base-uri` 取 `'self'` 而非 `'none'`——上游
+  `@deepseek-ai/dsh-host-frontend-static` 每次 renderIndex 都注入 `<base href="/">`
+  （SPA 深链修复），`'none'` 会让浏览器拒绝该元素，深链下相对 `./assets/…` 按深链
+  URL 解析成 404/白屏；其余指令与 shell 的 nonce CSP 逐字一致。
 
 桌面端对 401 的**可行动三态分类**（探针层，非秘密 detail）：
 
@@ -493,6 +499,20 @@ Gateway proxy 与 per-instance proxy 共用 `proxy-forward.ts`，从而保持相
 - 上游 Host 固定改写为目标 origin；浏览器 Origin 改写为目标同源；
 - 请求剥离 cookie、authorization、hop-by-hop、`Forwarded`、`Via`、全部
   `X-Forwarded-*` 和 `X-Real-IP`；只有注册 transport 的受控 extra header 可重新注入；
+- `accept-encoding` 只对**必须 identity 的两类请求**剥离（判定 `proxy-forward.ts`
+  `requiresIdentityUpstreamEncoding` = `isHtmlDocumentNavigation` ∨ `acceptsEventStream`）：
+  ① HTML 文档导航（GET/HEAD + `Accept` 含 `text/html`，路径不在 `/api`、`/plugins`、`/auth/…`、
+  `/chamber/<subpath>`，且不是内容寻址的 `/assets/<name>-<hash>.<ext>`）——这是 S0 注入的前提：
+  `htmlInjectable` 要求上游 `text/html` 未被编码，gateway `html-inject.ts` 依赖它写入
+  `__DSH_TRANSPORT__`；② `Accept` 含 `text/event-stream` 的 SSE 请求——**不是文档导航，而是传输层
+  保险**（远端/旧版实例未必带 pinned 的 gzip filter，长流被压缩即被缓冲）。其余请求把压缩协商交给
+  上游 gzip 中间件（dsh-host-webserver `createGzipMiddleware` 自身拒绝 `text/event-stream` 与
+  `content-range`），回程 `content-encoding`/`vary` 已在响应白名单内 —— 该取舍修订 2026 audit M3b
+  的「一律剥离」（2026-12）；
+- 响应头组装提供窄 seam `ProxyForwardDeps.onUpstreamResponseHeaders(pathname, status, headers)`
+  （`forwardHttp`，默认 `undefined` = 零变化）：owner 可补上游缺失的表示元数据，gateway 用它给
+  内容寻址静态资源加 immutable `cache-control`（上游 dsh-host-frontend-static 只写 `content-type`；
+  命名判定 `isHashedStaticAssetPath`，绝不匹配 `favicon.svg`/`manifest.webmanifest`/`index.html`）；
 - WS 只转发握手白名单；30 秒 ping/pong，漏一次 pong 即回收；
 - 响应保留 content encoding、location、vary 等表示/跳转元数据，并重写同源 redirect；
 - 45 秒为 idle timeout；响应 chunk 会重置 timer；SSE/WS 是长流；
@@ -995,6 +1015,13 @@ fail-closed）并响亮失败。不可读的锁文件（非普通文件/symlink/
 - **落点**：桌面主进程本地审计日志（`<userData>/audit-log.jsonl`，0600 JSONL
   追加文件）+ gateway 服务器侧登录事件投影（成功/失败/限流，与既有限流器
   同源）；控制面仍无审计路由（不回流匿名控制面）；
+- **去抖**（`packages/gateway/src/dispatch.ts` 的 `AUTH_REJECTION_DEBOUNCE_MS`）：
+  认证边界拒绝按 (客户端, code, 路径类别) 做 1 s 短窗口去抖——窗口内**首条立即落盘**
+  （事件不延迟到窗口结束），其后同类重复只累加内存计数，窗口结束时落一条带
+  `count:<n>`（该窗口同类总数）的合并记录；不同客户端/code/路径类别永不合并，
+  拒绝码本身不变，`login_*`/`credential_*` 不经该路径；停机 drain（`quiesce`）会先
+  把未闭合窗口的计数落盘。动机：每次 append 含一次同步 fsync（实测 ≈3.3 ms），
+  无凭据的根类子资源洪峰（manifest/图标族）会把单线程事件循环钉在磁盘 I/O 上；
 - **消费**：CLI/日志查询即可；不进入设置 UI（v1）；
 - **价值**：可信网络 + 无认证模式下，接入事实可追溯——「谁在什么时候连过、
   认证结果如何」的责任记录。
@@ -1626,8 +1653,16 @@ PWA / Web Push 社区实现机制（dsh-ui-mobile，jasondu，npm 0.1.8，MIT，
   UA 路由测试（含伪造 UA 负例）、插件 PWA 资产经 gateway 透传后的 HEAD/GET
   测试（`/pwa/*`、`/sw.js` 可达且内容正确、未注入形态下 gateway 占位不注册
   SW）；
-- 实机（移动视口清单，CDP 设备模拟 + 真机抽检；设备模拟部分**尚无工具**，见
-  STATUS 的 2026-09-13 开放项 ⑤）：
+- 实机（移动视口清单，CDP 设备模拟 + 真机抽检）：**设备模拟部分已有工具**
+  （2026-09-14）——`scripts/gui-acceptance/mobile-walkthrough.mjs`（设备尺寸 +
+  触控模拟 ⇒ 真实 `pointer:coarse`；结构化断言：无横向溢出、会话头首行高度、
+  「单字换行」行盒、命中盒；**并抓 WebSocket 帧**，是会话打开停滞取证的入口；
+  判定语义由 `mobile-checks.test.mjs` 以合成事实锁定，含已知边界：
+  `Emulation.setEmulatedMedia` 的 `pointer/hover` 被 Chromium 忽略、`mobile:true`
+  的收缩适配会让 `scrollWidth <= innerWidth` 恒真因而判定以 `clientWidth` 为准）
+  与 `scripts/dev/verify-mobile-anchors.mjs`（锚点新鲜度门）。**真机抽检仍不可省**
+  （iOS 键盘/安全区/`100dvh`/聚焦缩放、惯性滚动与 hover 观感；当前走查只读，
+  抽屉/设置/键盘补偿尚未断言）：
   - 触控目标 ≥44px 比例（**座席清单**：composer bar / sidebar / 会话头
     actions+utilities+corner / settings.section / 右栏 dockkit 条 chips+按钮 /
     menuitem+option）、无横向溢出、抽屉开合、弹层不出屏、设置全屏可滚动、

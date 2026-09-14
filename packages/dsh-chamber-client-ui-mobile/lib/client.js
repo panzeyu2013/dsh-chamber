@@ -31,12 +31,16 @@ module.exports = __toCommonJS(index_exports);
 var zh = {
   "dsh-chamber.mobile.title": "\u79FB\u52A8\u89C6\u56FE",
   "dsh-chamber.mobile.drawer.open": "\u6253\u5F00\u4FA7\u8FB9\u680F",
-  "dsh-chamber.mobile.drawer.close": "\u6536\u8D77\u4FA7\u8FB9\u680F"
+  "dsh-chamber.mobile.drawer.close": "\u6536\u8D77\u4FA7\u8FB9\u680F",
+  "dsh-chamber.mobile.stall.message": "\u4F1A\u8BDD\u8F7D\u5165\u4F3C\u4E4E\u505C\u6EDE\u4E86",
+  "dsh-chamber.mobile.stall.action": "\u91CD\u65B0\u52A0\u8F7D\u9875\u9762"
 };
 var en = {
   "dsh-chamber.mobile.title": "Mobile view",
   "dsh-chamber.mobile.drawer.open": "Open sidebar",
-  "dsh-chamber.mobile.drawer.close": "Close sidebar"
+  "dsh-chamber.mobile.drawer.close": "Close sidebar",
+  "dsh-chamber.mobile.stall.message": "Session loading appears stalled",
+  "dsh-chamber.mobile.stall.action": "Reload page"
 };
 
 // src/client/styles.ts
@@ -281,7 +285,6 @@ var MOBILE_CSS = `
     top: max(10px, env(safe-area-inset-top, 0px));
     left: max(10px, env(safe-area-inset-left, 0px));
     z-index: 76;
-    display: inline-flex;
     align-items: center;
     justify-content: center;
     width: 44px;
@@ -301,6 +304,26 @@ var MOBILE_CSS = `
     touch-action: manipulation;
     -webkit-appearance: none;
     appearance: none;
+  }
+  /* The toggle is the DRAWER's entry point, so it may only be VISIBLE when the
+     drawer can actually work: the frame must be stamped AND the sidebar column
+     must have been found (markup.ts writes data-mobile-roles from the same
+     all-or-nothing probe that gates the frame, see stampFrame). Without this
+     gate a vendor rename of the centre key would leave a floating button whose
+     only effect is flipping a frame attribute nothing responds to \u2014 a dead
+     control is worse than an absent one. The display switch lives in its own
+     rule (not in the block above) so the artifact/test pins on that block stay
+     valid; the stylesheet's media-query-free default already hides it. */
+  [data-mobile-frame][data-mobile-roles~="sidebar"] .dsh-mobile-nav-toggle {
+    display: inline-flex;
+  }
+  /* Same gate for the tap-absorbing backdrop: it exists only to close the
+     drawer, so with no sidebar role found it must not cover the transcript.
+     A separate rule (rather than editing the pinned backdrop rule) keeps the
+     existing selector/declaration pins intact; equal specificity + later
+     position means this one wins exactly when the sidebar role is absent. */
+  [data-mobile-frame]:not([data-mobile-roles~="sidebar"]) .dsh-mobile-backdrop {
+    display: none;
   }
   .dsh-mobile-nav-toggle:hover {
     background: var(--dsw-alias-interactive-bg-hover);
@@ -371,16 +394,30 @@ var MOBILE_CSS = `
     padding-left: calc(62px + env(safe-area-inset-left, 0px)) !important;
   }
 
-  /* Crumbs/lineage chain: wrap instead of clip. The official .crumbs row is
-     nowrap + overflow hidden (desktop-width assumption): on a phone a long
-     title chain or the lineage chips ("N \u4E2A\u5B50\u4EE3\u7406" catalog triggers) get
-     silently CUT (the observed truncated/collapsed header labels). Wrapping
-     keeps every crumb segment and chip on its own line; per-crumb ellipsis
-     (official .crumb max-width) still bounds single titles. */
+  /* Crumbs/lineage chain: KEEP the official single-line contract and pan the
+     strip instead of wrapping it. Upstream .crumbs is white-space:nowrap +
+     overflow:hidden + min-width:0; the previous wrap rule (2026-09 review-fix)
+     overrode the inherited nowrap to normal, which is a REGRESSION for the
+     lineage chip: its count text is a bare span with NO class of its own (the
+     upstream SubagentHeaderLineage class dictionary omits the count key it
+     references), so the ONLY thing keeping "31 \u4E2A\u5B50\u4EE3\u7406" on one line was the
+     nowrap it inherited from this row. With normal, CJK broke per character
+     and the badge rendered as a five-line vertical column (5 x 18px = 90px),
+     inflating the title row from 30px to ~96px and squeezing the title.
+     overflow-x:auto replaces the upstream clip so long ancestry chains stay
+     reachable; the lineage chip is kept out of the shrink race in the phone
+     tier below, so panning is the last resort rather than the mechanism. The
+     scrollbar is hidden because the strip is a gesture surface, not a widget. */
   [data-mobile-frame] [data-slot="conversation.session.header"] nav {
-    flex-wrap: wrap;
-    overflow: visible;
-    white-space: normal;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    white-space: nowrap;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  [data-mobile-frame] [data-slot="conversation.session.header"] nav::-webkit-scrollbar {
+    display: none;
   }
 
   /* Session-header view tabs ('role="tablist"'): 'tabs.length > 1' is the
@@ -544,6 +581,82 @@ var MOBILE_CSS = `
 
 /* ---- phone tier (design 17 \xA718.4.2/\xA718.4.3) ---- */
 @media (max-width: 768px) and (pointer: coarse) {
+  /* Session header: one bounded row (2026-09-14 review-fix). The touch tier
+     restored the official nowrap contract on the crumb strip; this tier
+     decides WHAT gives up width. Upstream ConversationSessionHeader shape:
+       header
+         > div.titleRow
+             > div.titleCluster > [nav.crumbs, div.headerActions]
+             > div.headerUtilities
+             > div.headerCorner[data-conversation-header-corner]
+         > div.tabs[role=tablist]
+     The lineage chip renders INSIDE nav.crumbs (inside its crumbSeg), so it
+     sits at the END of the strip and must never be the element that is
+     squeezed \u2014 that is exactly how the five-line vertical badge happened. The
+     CURRENT crumb absorbs instead, which it can do textually: upstream .crumb
+     already carries max-width:220px + text-overflow:ellipsis.
+     NOTE the :has() arm is a DESCENDANT match on purpose \u2014 the nav is
+     titleRow > titleCluster > nav, so a child combinator (> nav) would be a
+     silent no-op. The :has() invalidation cost stays inside the header
+     subtree, never the streaming transcript. */
+  [data-mobile-frame] [data-slot="conversation.session.header"] > header {
+    padding-top: calc(10px + env(safe-area-inset-top, 0px)) !important;
+    padding-right: calc(12px + env(safe-area-inset-right, 0px)) !important;
+  }
+  [data-mobile-frame] [data-slot="conversation.session.header"] > header > div:has(nav) {
+    flex-wrap: nowrap;
+    min-height: 48px;
+  }
+  /* The corner seat ships margin-right:-16px against upstream's 28px header
+     padding. This tier narrows that padding to 12px, so the negative margin
+     now only buys overlap risk. */
+  [data-mobile-frame] [data-slot="conversation.session.header"] > header > div:has(nav) > div:last-child {
+    margin-right: 0 !important;
+  }
+  /* Shrink order, crumb strip: the CURRENT crumb (the one upstream renders
+     with the disabled attribute) takes the remaining width and ellipsises;
+     every other crumb keeps its intrinsic width and is panned by the strip. */
+  [data-mobile-frame] [data-slot="conversation.session.header"] nav > span {
+    min-width: 0;
+  }
+  [data-mobile-frame] [data-slot="conversation.session.header"] nav > span > button {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+  [data-mobile-frame] [data-slot="conversation.session.header"] nav > span > button:disabled {
+    flex: 1 1 auto;
+    min-width: 4em;
+  }
+  /* Lineage chip: flex:0 0 auto so it is never in the shrink race, a 44px
+     touch floor (upstream ships a 28px box) and a bounded, single-line count
+     label. The count span is CLIPPED, never removed, so the accessible name
+     keeps the full text. */
+  [data-mobile-frame] [data-slot="conversation.session.header.lineage"] button {
+    flex: 0 0 auto;
+    min-width: 0;
+    min-height: 44px;
+    max-width: 100%;
+    white-space: nowrap;
+  }
+  [data-mobile-frame] [data-slot="conversation.session.header.lineage"] button > svg {
+    flex: none;
+  }
+  [data-mobile-frame] [data-slot="conversation.session.header.lineage"] button > span:last-of-type {
+    min-width: 0;
+    max-width: 8em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* The two icon seats: the 44px floor must mean the BOX (the same decision
+     the tab strip and the dockkit chips already carry). Without border-box a
+     28px button with 6px padding renders ~56px and thickens the row for
+     nothing. */
+  [data-mobile-frame] [data-slot="conversation.session.header.utilities"] button,
+  [data-mobile-frame] [data-slot="conversation.session.header.corner"] button {
+    box-sizing: border-box;
+  }
+
   /* Composer toolbar: one line. The official row wraps; force nowrap (the
      official 12px gap is kept \u2014 no gap override). */
   /* Local-name match, BOTH production shapes (see the header): suffix for the
@@ -748,6 +861,58 @@ var MOBILE_CSS = `
     overscroll-behavior-y: contain;
   }
 }
+
+/* ---- narrow phone tier: 480px and below (2026-09-14 review-fix) ----
+   The session header's width budget at 390px is ~78px of title after the
+   floating toggle gutter, the two 44px icon seats, the mode chip and the
+   lineage chip. Below 480px the mode chip's LABEL is the cheapest thing to
+   drop: the chip is still the same interactive menu trigger, and clipping the
+   span (rather than removing it) keeps the accessible name intact. The
+   lineage chip keeps its digits \u2014 it is the only entry point to the subagent
+   catalog. */
+@media (max-width: 480px) and (pointer: coarse) {
+  /* The headerActions seat's ONLY text-bearing direct child is upstream's
+     agent-preset cell, and it is a bare span (AgentPresetLabel) \u2014 the schedule
+     and job cells are div wrappers whose triggers are nested, so a
+     "> button > span" selector matches nothing at all. 2026-09-14 second-pass
+     review: the rule that used to sit here was dead code written against the
+     HERO seat's button[aria-haspopup=menu], which upstream registers into
+     conversation.hero.agentPreset \u2014 not into the header. Upstream already
+     bounds that label itself (max-width 180px + nowrap + overflow hidden), so
+     this tier only takes width BACK from it: the icon stays, the text clips,
+     and the crumb strip keeps usable room on a narrow row instead of losing it
+     to a label the user has already read. */
+  [data-mobile-frame] [data-slot="conversation.session.header.actions"] > span {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 8em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+/* ---- narrowest tier: 360px and below ----
+   Content width is ~246px here: the crumb strip keeps the digits and the
+   chevron, the unit text and the crumb separator are the next things to go,
+   and the current crumb's floor drops so the title does not collapse to an
+   ellipsis-only box. Everything stays attribute-anchored: the count variant
+   is the only lineage shape whose root carries a leading separator span. */
+@media (max-width: 360px) and (pointer: coarse) {
+  /* One more step for the narrowest row: the same agent-preset label. */
+  [data-mobile-frame] [data-slot="conversation.session.header.actions"] > span {
+    max-width: 5em;
+  }
+  [data-mobile-frame] [data-slot="conversation.session.header.lineage"] > div > span:first-child {
+    display: none;
+  }
+  [data-mobile-frame] [data-slot="conversation.session.header.lineage"] button > span:last-of-type {
+    max-width: 2.4em;
+  }
+  [data-mobile-frame] [data-slot="conversation.session.header"] nav > span > button:disabled {
+    min-width: 3em;
+  }
+}
 `;
 var VIEWPORT_TOKENS = ["viewport-fit=cover", "interactive-widget=resizes-content"];
 var PLUGIN_STYLE_TAG = "dsh-chamber-client-ui-mobile";
@@ -756,6 +921,7 @@ var PLUGIN_STYLE_TAG = "dsh-chamber-client-ui-mobile";
 var ROOT_SLOT_SELECTOR = '[data-slot="root"]';
 var MOBILE_FRAME_ATTR = "data-mobile-frame";
 var MOBILE_ROLE_ATTR = "data-mobile-role";
+var MOBILE_ROLES_ATTR = "data-mobile-roles";
 var ROLE_SLOT_KEYS = {
   sidebar: "sidebar",
   conversation: "main",
@@ -778,11 +944,15 @@ function findColumn(frame, slot) {
 function stampFrame(root) {
   const frame = findFrame(root);
   if (frame === null) return null;
-  frame.setAttribute(MOBILE_FRAME_ATTR, "");
+  const columns = /* @__PURE__ */ new Map();
   for (const role of ["sidebar", "conversation", "details"]) {
     const column = findColumn(frame, ROLE_SLOT_KEYS[role]);
-    if (column !== null) column.setAttribute(MOBILE_ROLE_ATTR, role);
+    if (column !== null) columns.set(role, column);
   }
+  if (!columns.has("conversation")) return null;
+  for (const [role, column] of columns) column.setAttribute(MOBILE_ROLE_ATTR, role);
+  frame.setAttribute(MOBILE_FRAME_ATTR, "");
+  frame.setAttribute(MOBILE_ROLES_ATTR, [...columns.keys()].join(" "));
   return frame;
 }
 function isStructuralTarget(target) {
@@ -1578,6 +1748,245 @@ function installStrandedHoverCardWatchdog(active) {
   return dispose;
 }
 
+// src/client/session-stall.ts
+var STALL_THRESHOLD_MS = 45e3;
+var STALL_POLL_MS = 3e3;
+var CONVERSATION_PHASE_QUERY = "[data-phase]";
+var STALL_PHASES = ["active", "engaging"];
+function isStallPhase(value) {
+  return value !== null && value !== void 0 && STALL_PHASES.includes(value);
+}
+var CHAT_FLOW_QUERY = "[data-chat-flow]";
+var CHAT_ROW_QUERY = "[data-chat-anchor-key]";
+var SESSION_HEADER_QUERY = '[data-slot="conversation.session.header"] > header';
+var STALL_STYLE_TAG = "dsh-chamber-mobile-stall";
+var STALL_NOTICE_CLASS = "dsh-mobile-stall";
+var STALL_NOTICE_MESSAGE_CLASS = "dsh-mobile-stall-message";
+var STALL_NOTICE_ACTION_CLASS = "dsh-mobile-stall-action";
+var STALL_NOTICE_GAP_PX = 8;
+var STALL_NOTICE_MIN_VISIBLE_PX = 96;
+var STALL_GUARD = Symbol.for("dsh-chamber.dsh-client-ui-mobile.session-stall");
+var STALL_NOTICE_CSS = `
+/* Mobile-only surface: invisible outside the touch tier, the same default the
+   nav toggle and backdrop carry (the official shell.overlay layer renders
+   entries unconditionally; here the element is only ever mounted while the
+   tier matches, so this is the second, declarative half of that guard). */
+.dsh-mobile-stall {
+  display: none;
+}
+
+@media ${TOUCH_TIER_QUERY} {
+  .dsh-mobile-stall {
+    position: fixed;
+    /* Fallback anchor: clear of the floating nav toggle band. The installer
+       overwrites this with the session header's measured bottom whenever that
+       rect is usable. */
+    top: calc(env(safe-area-inset-top, 0px) + 56px);
+    left: 50%;
+    transform: translateX(-50%);
+    /* Above the conversation content, BELOW the official shell.overlay layer
+       (z-index 20 at body level: drawer, floating toggle, right panel). */
+    z-index: 19;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    max-width: min(92vw, 26rem);
+    padding: 8px 8px 8px 12px;
+    border-radius: 12px;
+    background: var(--dsw-alias-bg-layer-2, #ffffff);
+    color: var(--dsw-alias-label-primary, #1f1f1f);
+    box-shadow: 0 4px 16px rgb(0 0 0 / 18%);
+    font-size: 13px;
+    line-height: 18px;
+    /* The notice never blocks the page: only its action takes taps. */
+    pointer-events: none;
+  }
+  .dsh-mobile-stall-message {
+    flex: 1;
+    min-width: 0;
+  }
+  .dsh-mobile-stall-action {
+    flex: none;
+    pointer-events: auto;
+    padding: 6px 10px;
+    border: none;
+    border-radius: 8px;
+    background: var(--dsw-alias-interactive-bg-hover);
+    color: var(--dsw-alias-label-primary);
+    font: inherit;
+    white-space: nowrap;
+    cursor: pointer;
+    touch-action: manipulation;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  .dsh-mobile-stall-action:active {
+    background: var(--dsw-alias-interactive-bg-active);
+  }
+  .dsh-mobile-stall-action:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--dsw-alias-state-business-primary);
+  }
+}
+`;
+function isStallShape(facts) {
+  return facts.activeConversation && facts.headerVisible && facts.flowPresent && !facts.hasRows;
+}
+function decideStallNotice(input) {
+  if (!input.shape || !input.pageVisible) return { since: 0, show: false };
+  const since = input.since === 0 ? input.now : input.since;
+  return { since, show: input.now - since >= STALL_THRESHOLD_MS };
+}
+function isRendered(node, styleOf) {
+  if (node.isConnected === false) return false;
+  for (let current = node; current !== null; current = current.parentElement) {
+    if (current.getAttribute("hidden") !== null) return false;
+    const style = styleOf(current);
+    if (style.display === "none" || style.visibility === "hidden") return false;
+  }
+  return true;
+}
+function isVisibleElement(element) {
+  return isRendered(element, (node) => {
+    const style = getComputedStyle(node);
+    return { display: style.display, visibility: style.visibility };
+  });
+}
+function probeStall(root, options) {
+  const flow = root.querySelector(CHAT_FLOW_QUERY);
+  if (flow === null) {
+    return {
+      activeRoot: null,
+      header: null,
+      activeConversation: false,
+      headerVisible: false,
+      flowPresent: false,
+      hasRows: false
+    };
+  }
+  const phaseNode = flow.closest(CONVERSATION_PHASE_QUERY);
+  const activeRoot = isStallPhase(phaseNode?.getAttribute("data-phase")) ? phaseNode : null;
+  const candidate = root.querySelector(SESSION_HEADER_QUERY);
+  const headerVisible = candidate !== null && options.isVisible(candidate);
+  return {
+    activeRoot,
+    header: headerVisible ? candidate : null,
+    activeConversation: activeRoot !== null,
+    headerVisible,
+    flowPresent: true,
+    hasRows: flow.querySelector(CHAT_ROW_QUERY) !== null
+  };
+}
+function noticeTopFor(rect, viewportHeight) {
+  if (rect === null || !Number.isFinite(rect.bottom) || rect.bottom <= 0) return null;
+  const top = rect.bottom + STALL_NOTICE_GAP_PX;
+  if (!Number.isFinite(viewportHeight)) return top;
+  return Math.max(0, Math.min(top, viewportHeight - STALL_NOTICE_MIN_VISIBLE_PX));
+}
+function installSessionStallNotice(t) {
+  if (typeof document === "undefined" || typeof window === "undefined") return () => {
+  };
+  const guard = window;
+  if (guard[STALL_GUARD] !== void 0) return () => {
+  };
+  let since = 0;
+  let activeRoot = null;
+  let notice = null;
+  let noticeMessage = null;
+  let noticeAction = null;
+  let ownedStyle = null;
+  if (document.querySelector(`style[data-plugin="${STALL_STYLE_TAG}"]`) === null) {
+    ownedStyle = document.createElement("style");
+    ownedStyle.setAttribute("data-plugin", STALL_STYLE_TAG);
+    ownedStyle.textContent = STALL_NOTICE_CSS;
+    document.head.appendChild(ownedStyle);
+  }
+  const reload = () => {
+    try {
+      window.location.reload();
+    } catch {
+    }
+  };
+  const unmount = () => {
+    if (notice === null) return;
+    notice.remove();
+    notice = null;
+    noticeMessage = null;
+    noticeAction = null;
+  };
+  const setText = (element, value) => {
+    if (element.textContent !== value) element.textContent = value;
+  };
+  const mount = (header) => {
+    if (notice === null) {
+      const body = document.body;
+      if (body === null) return;
+      const root = document.createElement("div");
+      root.className = STALL_NOTICE_CLASS;
+      root.setAttribute("role", "status");
+      root.setAttribute("aria-live", "polite");
+      const message = document.createElement("span");
+      message.className = STALL_NOTICE_MESSAGE_CLASS;
+      const action = document.createElement("button");
+      action.type = "button";
+      action.className = STALL_NOTICE_ACTION_CLASS;
+      action.addEventListener("click", reload);
+      root.append(message, action);
+      body.appendChild(root);
+      notice = root;
+      noticeMessage = message;
+      noticeAction = action;
+    }
+    if (noticeMessage !== null) setText(noticeMessage, t("dsh-chamber.mobile.stall.message"));
+    if (noticeAction !== null) setText(noticeAction, t("dsh-chamber.mobile.stall.action"));
+    const top = noticeTopFor(header?.getBoundingClientRect?.() ?? null, window.innerHeight);
+    if (top === null) notice.style.removeProperty("top");
+    else notice.style.top = `${top}px`;
+  };
+  const evaluate = () => {
+    try {
+      const probe = probeStall(document, {
+        isVisible: (node) => isVisibleElement(node)
+      });
+      if (probe.activeRoot !== activeRoot) {
+        activeRoot = probe.activeRoot;
+        since = 0;
+        unmount();
+      }
+      const shape = isStallShape(probe);
+      const decision = decideStallNotice({
+        shape,
+        pageVisible: document.visibilityState === "visible",
+        since,
+        now: Date.now()
+      });
+      since = decision.since;
+      if (decision.show || shape && notice !== null) mount(probe.header);
+      else unmount();
+    } catch {
+    }
+  };
+  const onVisibilityChange = () => {
+    evaluate();
+  };
+  document.addEventListener("visibilitychange", onVisibilityChange);
+  const interval = window.setInterval(evaluate, STALL_POLL_MS);
+  evaluate();
+  let disposed = false;
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    window.clearInterval(interval);
+    document.removeEventListener("visibilitychange", onVisibilityChange);
+    unmount();
+    ownedStyle?.remove();
+    if (guard[STALL_GUARD] === dispose) delete guard[STALL_GUARD];
+  };
+  guard[STALL_GUARD] = dispose;
+  return dispose;
+}
+
 // src/client/MobileNavToggle.tsx
 var import_react = require("react");
 var import_dsh_client_ui_primitives = require("@deepseek-ai/dsh-client-ui-primitives");
@@ -1802,6 +2211,25 @@ function apply(ctx) {
       disposeWatchdog = null;
     };
   }, "dsh-chamber: stranded official hover-card watchdog");
+  ctx.effect(() => {
+    const touchTier = window.matchMedia(TOUCH_TIER_QUERY);
+    let disposeNotice = null;
+    const sync = () => {
+      if (touchTier.matches) {
+        disposeNotice ??= installSessionStallNotice(t);
+      } else {
+        disposeNotice?.();
+        disposeNotice = null;
+      }
+    };
+    sync();
+    touchTier.addEventListener("change", sync);
+    return () => {
+      touchTier.removeEventListener("change", sync);
+      disposeNotice?.();
+      disposeNotice = null;
+    };
+  }, "dsh-chamber: session-load stall notice");
   const injected = () => ({
     toggleSidebar: () => ctx.layout.toggleSidebar(),
     t

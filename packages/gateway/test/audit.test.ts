@@ -25,8 +25,12 @@ import { join } from 'node:path'
 import type { ApiRequest, ApiResponse } from '@dsh-chamber/control-plane'
 import type { AuthProvider } from '../src/auth.ts'
 import { appendAuditEvent, AUDIT_LOG_MAX_BYTES, type AuditEvent } from '../src/audit.ts'
-import { parseGatewayConfig } from '../src/config.ts'
-import { createGatewayDispatch } from '../src/dispatch.ts'
+import { parseGatewayConfig, DEFAULT_MOBILE_ENTRY_PATH } from '../src/config.ts'
+import {
+  AUTH_REJECTION_DEBOUNCE_MS,
+  createGatewayDispatch,
+  type AuthRejectionDebounce,
+} from '../src/dispatch.ts'
 import { createGatewayRequestPolicy } from '../src/middleware.ts'
 import { FakeRequest, FakeResponse } from './utils.ts'
 
@@ -200,7 +204,7 @@ test('the exported gateway cap is 5 MiB per the design contract', _t => {
 
 const silentLogger = { log() {}, warn() {}, error() {} }
 
-function setup(auth: AuthProvider, auditFile: string) {
+function setup(auth: AuthProvider, auditFile: string, debounce: AuthRejectionDebounce = {}) {
   const config = parseGatewayConfig({
     host: '0.0.0.0',
     port: 3000,
@@ -219,7 +223,18 @@ function setup(auth: AuthProvider, auditFile: string) {
     start() {},
     stop() {},
   }
-  const dispatch = createGatewayDispatch(auth, () => proxy as never, () => features as never, (() => ({ async handle() { return false } })) as never, silentLogger, policy, auditFile)
+  const dispatch = createGatewayDispatch(
+    auth,
+    () => proxy as never,
+    () => features as never,
+    (() => ({ async handle() { return false } })) as never,
+    silentLogger,
+    policy,
+    auditFile,
+    false,
+    DEFAULT_MOBILE_ENTRY_PATH,
+    debounce,
+  )
   return { dispatch }
 }
 
@@ -378,8 +393,9 @@ async function runRequest(
   path: string,
   headers: Record<string, string> = {},
   body?: string,
+  remoteAddress = '203.0.113.8',
 ): Promise<FakeResponse> {
-  const req = new FakeRequest(method, path, { host: 'gateway.example:3000', ...headers })
+  const req = new FakeRequest(method, path, { host: 'gateway.example:3000', ...headers }, remoteAddress)
   const res = new FakeResponse()
   const pending = dispatch.middleware(req as unknown as ApiRequest, res as unknown as ApiResponse, new URL(req.url, 'http://localhost'), {} as never)
   queueMicrotask(() => {
@@ -388,6 +404,35 @@ async function runRequest(
   })
   await pending
   return res
+}
+
+/** Deterministic clock + window-end scheduler for the M3-5 rejection debounce:
+ * no real timers, so a window closes exactly when the test says so. */
+function debounceHarness(): {
+  options: AuthRejectionDebounce
+  advance(ms: number): void
+  fire(): void
+} {
+  let at = 1_700_000_000_000
+  const scheduled: Array<{ flush: () => void }> = []
+  return {
+    options: {
+      now: () => at,
+      windowMs: AUTH_REJECTION_DEBOUNCE_MS,
+      schedule: (flush) => {
+        const entry = { flush }
+        scheduled.push(entry)
+        return () => {
+          const index = scheduled.indexOf(entry)
+          if (index !== -1) scheduled.splice(index, 1)
+        }
+      },
+    },
+    advance: (ms) => { at += ms },
+    fire: () => {
+      while (scheduled.length > 0) scheduled.shift()!.flush()
+    },
+  }
 }
 
 test('auth-gate rejections are audited once each: 400/401/403/421 with code + client + path category only', async t => {
@@ -455,7 +500,8 @@ test('a rejected request writes exactly one event; a successful login adds no ga
     async verify() { return null },
     async login() { return { setCookie: 'dsh_gateway_session=abc; Path=/; HttpOnly' } },
   }
-  const { dispatch } = setup(auth, file)
+  const clock = debounceHarness()
+  const { dispatch } = setup(auth, file, clock.options)
 
   const rejected = await runRequest(dispatch, 'GET', '/api/connections')
   assert.equal(rejected.status, 401)
@@ -467,11 +513,118 @@ test('a rejected request writes exactly one event; a successful login adds no ga
   assert.equal(login.status, 302)
   assert.deepEqual(readEvents(file).map(event => event.event), ['auth_rejected', 'login_success'])
 
-  // A repeated refusal is one event per refusal (no coalescing, no duplicates
-  // from the same request): two refusals → two events.
+  // A repeated refusal is still ONE event per window (M3-5 coalescing, not a
+  // duplicate from the same request): nothing is appended for the in-window
+  // repeat, and the login event above is untouched.
   const second = await runRequest(dispatch, 'GET', '/api/connections')
   assert.equal(second.status, 401)
-  assert.deepEqual(readEvents(file).map(event => event.event), ['auth_rejected', 'login_success', 'auth_rejected'])
+  assert.deepEqual(readEvents(file).map(event => event.event), ['auth_rejected', 'login_success'])
+
+  // The window closes with exactly one counted record for the two refusals.
+  clock.fire()
+  const events = readEvents(file)
+  assert.deepEqual(events.map(event => event.event), ['auth_rejected', 'login_success', 'auth_rejected'])
+  assert.equal(events[2]!.detail, 'code:unauthorized,client:203.0.113.8,path:api,count:2')
+})
+
+test('in-window duplicate refusals coalesce into one record with count:N; the first lands immediately (M3-5)', async t => {
+  const dir = tmpDir('gateway-audit-debounce-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const file = join(dir, 'audit.log')
+  const auth: AuthProvider = { kind: 'password', async verify() { return null } }
+  const clock = debounceHarness()
+  const { dispatch } = setup(auth, file, clock.options)
+
+  // The named window constant is the window the dispatch actually uses.
+  assert.equal(AUTH_REJECTION_DEBOUNCE_MS, 1000)
+
+  // N identical refusals (same client, code and path category) inside ONE
+  // window: every one still answers 401 — the debounce changes the audit
+  // write count, never the verdict.
+  const N = 5
+  for (let attempt = 0; attempt < N; attempt += 1) {
+    const res = await runRequest(dispatch, 'GET', '/api/connections')
+    assert.equal(res.status, 401)
+    clock.advance(100)
+  }
+
+  // ③ The FIRST refusal is already on disk — never deferred to the window end.
+  const immediate = readEvents(file)
+  assert.equal(immediate.length, 1, 'the opening refusal is appended before the window closes')
+  assert.equal(immediate[0]!.event, 'auth_rejected')
+  assert.equal(immediate[0]!.kind, 'gateway')
+  assert.equal(immediate[0]!.detail, 'code:unauthorized,client:203.0.113.8,path:api')
+
+  // ② The window's duplicates collapse into ONE aggregate record whose count is
+  // N — a burst of N writes 2 lines (immediate anchor + aggregate), never N.
+  clock.fire()
+  const events = readEvents(file)
+  assert.equal(events.length, 2, 'the in-window duplicates never append per request')
+  assert.equal(events[1]!.event, 'auth_rejected')
+  assert.equal(events[1]!.kind, 'gateway')
+  assert.equal(events[1]!.detail, 'code:unauthorized,client:203.0.113.8,path:api,count:5')
+  // The whitelist field set is unchanged and the concrete path never appears.
+  assert.deepEqual(Object.keys(events[1]!).sort(), ['detail', 'event', 'kind', 'ts'])
+  const raw = readFileSync(file, 'utf8')
+  assert.equal(raw.includes('/api/connections'), false, 'the path category stays the only path evidence')
+
+  // The window closes the BURST, not the class: a later identical refusal opens
+  // a new window and is again written immediately.
+  clock.advance(AUTH_REJECTION_DEBOUNCE_MS)
+  const after = await runRequest(dispatch, 'GET', '/api/connections')
+  assert.equal(after.status, 401)
+  assert.equal(readEvents(file).length, 3, 'a new window starts with its own immediate record')
+})
+
+test('the rejection debounce never merges different clients, codes or path categories (M3-5)', async t => {
+  const dir = tmpDir('gateway-audit-debounce-keys-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const file = join(dir, 'audit.log')
+  const auth: AuthProvider = { kind: 'password', async verify() { return null } }
+  const clock = debounceHarness()
+  const { dispatch } = setup(auth, file, clock.options)
+
+  // Same client + code, a DIFFERENT path category.
+  assert.equal((await runRequest(dispatch, 'GET', '/api/connections')).status, 401)
+  assert.equal((await runRequest(dispatch, 'GET', '/')).status, 401)
+  // Same code + category, a DIFFERENT client address.
+  assert.equal((await runRequest(dispatch, 'GET', '/api/connections', {}, undefined, '203.0.113.9')).status, 401)
+  // Same client + category, a DIFFERENT code.
+  const forbidden = await runRequest(dispatch, 'POST', '/api/i/local/chamber/plugins/installed', { origin: 'https://evil.example' })
+  assert.equal(forbidden.status, 403)
+  clock.advance(50)
+
+  assert.deepEqual(readEvents(file).map(event => event.detail), [
+    'code:unauthorized,client:203.0.113.8,path:api',
+    'code:unauthorized,client:203.0.113.8,path:root',
+    'code:unauthorized,client:203.0.113.9,path:api',
+    'code:origin_forbidden,client:203.0.113.8,path:api',
+  ])
+  // Every window held a single refusal: the window-end flush appends nothing —
+  // no false merge across keys and no empty aggregate records.
+  clock.fire()
+  assert.equal(readEvents(file).length, 4)
+})
+
+test('dispatch quiesce drains an open debounce window so its count is not lost (M3-5)', async t => {
+  const dir = tmpDir('gateway-audit-debounce-quiesce-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const file = join(dir, 'audit.log')
+  const auth: AuthProvider = { kind: 'password', async verify() { return null } }
+  const clock = debounceHarness()
+  const { dispatch } = setup(auth, file, clock.options)
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    assert.equal((await runRequest(dispatch, 'GET', '/api/connections')).status, 401)
+    clock.advance(10)
+  }
+  assert.equal(readEvents(file).length, 1, 'the burst is still open: only the anchor is on disk')
+
+  // Shutdown publishes the counts held in memory before ownership is released.
+  await dispatch.quiesce()
+  const events = readEvents(file)
+  assert.equal(events.length, 2)
+  assert.equal(events[1]!.detail, 'code:unauthorized,client:203.0.113.8,path:api,count:3')
 })
 
 test('no audit file configured → gate rejections still answer without writing', async t => {
