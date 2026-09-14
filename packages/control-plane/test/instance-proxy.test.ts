@@ -814,6 +814,9 @@ test("isHtmlDocumentNavigation: decision table (mirrors gateway dispatch.ts sema
   assert.equal(isHtmlDocumentNavigation('get', '/chamber', html), true)
   assert.equal(isHtmlDocumentNavigation('GET', '/chamber/', html), true)
   assert.equal(isHtmlDocumentNavigation('GET', '/assets/index-BKQ_L1z6.js', html), false) // content-addressed asset: never the document
+  // ...including the nested asset directories the pinned dist actually ships.
+  assert.equal(isHtmlDocumentNavigation('GET', '/assets/fonts/KaTeX_AMS-Regular-BQhdFMY1.woff2', html), false)
+  assert.equal(isHtmlDocumentNavigation('GET', '/assets/langs/cpp-DIPi6g--.js', html), false)
   assert.equal(isHtmlDocumentNavigation('GET', '/assets/foo.js', html), true) // not content-addressed → conservative identity
   assert.equal(isHtmlDocumentNavigation('GET', '/favicon.svg', html), true) // conservative: unhashed root file
   assert.equal(isHtmlDocumentNavigation('GET', '/index.html', html), true) // the injectable document itself
@@ -888,6 +891,9 @@ test('isHashedStaticAssetPath: content-addressed Vite output only (never favicon
   // guard lives in the predicate precisely so all three callers agree).
   assert.equal(isHashedStaticAssetPath('/assets/..%2f..%2fsec-12345678.js'), false)
   assert.equal(isHashedStaticAssetPath('/assets/sec%2Fret-12345678.js'), false)
+  // This one is the guard's real discriminator: the pattern alone ACCEPTS it
+  // (`../` is the optional nested segment), so only the `..` refusal makes it false.
+  assert.equal(isHashedStaticAssetPath('/assets/../ok-12345678.js'), false)
   assert.equal(isHashedStaticAssetPath('/assets/../assets/ok-12345678.js'), false)
 })
 

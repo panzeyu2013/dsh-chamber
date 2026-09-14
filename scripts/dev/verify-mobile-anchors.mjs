@@ -16,13 +16,15 @@
  *   - C1/C3/C5 只覆盖 `FORKS` 表里的 shadow fork，mobile 不在表内；
  *   - 本门只盯**上游发射点是否还在**，是 C8 的正交补充（§4 登记行写明）。
  *
- * fail-soft（**不把 CI 弄红**）：上游锚点根不存在（别的机器/CI、未物化、
- * submodule 未初始化）或找不到任何 client 产物时，打印明确的跳过原因并 exit 0；
- * 只有「根在、产物在、锚点零命中」才是硬失败。
+ * 硬失败 = 锚点没有**写入形**发射点 / 最小断言集缺口；默认模式下根、产物、插件源码
+ * 或 pin 身份缺失都是 fail-soft 跳过并在输出里说明（别的机器、CI 上没有上游树是常态）。
+ * `--require-anchor-root` 把四条「其实什么都没查」的路径全部改判 exit 1：① 锚点根缺失
+ * ② 无 client 产物 ③ 插件源码抽不到 ④ pin 身份不可判定；缺 shell 产物与版本不符同样红。
+ * 该开关与 `--simulate-rename` 互斥（后者能在内存里伪造发射证据）。
  *
  * exit-code 语义（与 verify-upstream-touchpoints.mjs 同约定）：
  *   0 全部通过 / fail-soft 跳过 / --help
- *   1 有锚点硬失败（data-* / role / slot 零命中，或最小断言集缺口）
+ *   1 有锚点硬失败（没有写入形发射点，或最小断言集缺口）/ 严格模式下的缺失与不符
  *   2 用法错误（未知参数、--simulate-rename 形态非法等；不会先跑门）
  *
  * 用法：
@@ -30,6 +32,7 @@
  *   node scripts/dev/verify-mobile-anchors.mjs --anchor-root <dir>      # 指定上游锚点根
  *   node scripts/dev/verify-mobile-anchors.mjs --simulate-rename main=center   # 自测负例（只在内存里改名）
  *   node scripts/dev/verify-mobile-anchors.mjs --list                   # 打印抽到的锚点表
+ *   node scripts/dev/verify-mobile-anchors.mjs --require-anchor-root    # 严格模式（见 --help）
  *   node scripts/dev/verify-mobile-anchors.mjs --help
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
@@ -115,12 +118,14 @@ function readMobileSources() {
 function readUpstreamFiles(anchorRoot) {
   const packagesDir = join(anchorRoot, 'node_modules', '@deepseek-ai')
   if (!existsSync(packagesDir)) return null
-  const all = walkFiles(packagesDir, name => name.endsWith('.js'), [])
+  // `.mjs`/`.cjs` 一并读：真实树里已各有若干（第三轮复核），未来某个 client 半只发 ESM
+  // 时不能成为盲区；`.js.map` 不在其列（它不能作为发射证据，读了只会引入噪声）。
+  const all = walkFiles(packagesDir, name => /\.(?:js|mjs|cjs)$/.test(name), [])
   const read = files => files.map(absolute => ({ path: repoRel(absolute), text: readText(absolute) }))
     .filter(file => file.text !== null)
   return {
     clientHalves: read(all.filter(absolute => absolute.split(sep).includes('lib'))),
-    shellBundles: read(all.filter(absolute => /dsh-web-frontend[\\/]dist[\\/]assets[\\/][^\\/]+\.js$/.test(absolute))),
+    shellBundles: read(all.filter(absolute => /dsh-web-frontend[\\/]dist[\\/]assets[\\/][^\\/]+\.(?:js|mjs|cjs)$/.test(absolute))),
   }
 }
 
@@ -221,7 +226,15 @@ function main() {
     console.log(`${detail}（exit 0）`)
     process.exit(0)
   }
+  if (parsed.requireAnchorRoot && rawFiles.shellBundles.length === 0 && rawCss.length === 0) {
+    console.error(`[FAIL] 锚点根 ${root} 只有 client 半、没有 shell 产物（dsh-web-frontend/dist/assets 下的 js 与 index-*.css）——`
+      + '语料不完整：ui-dockkit 这类未单独发布的 client 包只在 shell bundle 里，缺了会假红')
+    console.error('\n移动锚点门：--require-anchor-root 下语料不完整（exit 1）')
+    process.exit(1)
+  }
   // pin 身份：锚点树与仓内 pin 不是同一个上游时，这个门证明的是另一个版本。
+  // 注意身份是**版本级**的：同版本的本地重打树同样通过；内容级摘要需要仓内快照，
+  // 见 docs/progress/STATUS.md 的登记项（2026-12 第三轮复核）。
   const pin = compareAnchorPin(root)
   if (pin === null) {
     const detail = `[note] pin 身份无法判定：读不到 ${join(ROOT, 'packages', 'desktop', 'vendor', 'dsh', 'pnpm-lock.yaml')}`

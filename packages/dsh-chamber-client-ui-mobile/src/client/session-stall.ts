@@ -533,9 +533,9 @@ export function installSessionStallNotice(t: (key: MobileKey) => string): () => 
 
   let since = 0
   let dismissed = false
-  // The session identity: the displayed header when there is one, else the
-  // conversation root. See the module header — the phase node alone survives a
-  // session switch, the header node does not.
+  // The session identity: the displayed header, and ONLY it (the phase node is
+  // keyed by entry and survives a session switch — see the module header; when no
+  // header is displayed the shape is false anyway, so nothing is being timed).
   let sessionAnchor: StallNodeFace | null = null
   let notice: HTMLElement | null = null
   let noticeMessage: HTMLElement | null = null

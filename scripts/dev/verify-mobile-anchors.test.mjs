@@ -320,6 +320,37 @@ test('防伪：role 的「文案」不算发射，只有对象键/选择器形�
   assert.deepEqual(selectorOnly.rows.map(row => row.verdict), ['missing'])
 })
 
+test('防伪：slot 也只有写入形算发射（注册 API / 选择器不算）', () => {
+  // 2026-12 第三轮复核：这一层原先没有分级，于是「上游删掉 renderSlot、只留
+  // slots.inject 或选择器」在 16 个 slot 锚点（含最小断言集里的一半）上照样绿。
+  const anchors = [{ kind: 'slot', token: 'main', path: 'x.ts', line: 1 }]
+  const verdict = text => anchorFindings({ anchors, upstream: [{ path: 'upstream/all.js', text }], chamber: [], required: [] })
+  for (const text of [
+    'slots.inject("main", () => {})',
+    'registry.subscribe("main")',
+    'css("[data-slot=\\"main\\"]{display:flex}")',
+    'document.querySelector("[data-slot=\\"main\\"]")',
+  ]) {
+    const findings = verdict(text)
+    assert.deepEqual(findings.rows.map(row => row.verdict), ['missing'], text)
+    assert.match(findings.violations.join(' '), /消费方/, text)
+  }
+  for (const text of [
+    'renderSlot("main", {}, { entryKey: "conversation" })',
+    'jsx("div", { "data-slot": "main" })',
+    'node.setAttribute("data-slot", "main")',
+  ]) {
+    assert.deepEqual(verdict(text).rows.map(row => row.verdict), ['ok'], text)
+  }
+  // 结构性前提（data-slot 属性名本身）同样只认写入形：只有选择器时必须红。
+  const structuralOnlySelectors = anchorFindings({
+    anchors: [],
+    upstream: [{ path: 'upstream/all.js', text: 'body[data-slot]{display:contents}' }],
+    chamber: [], required: [],
+  })
+  assert.equal(structuralOnlySelectors.violations.filter(v => v.includes('结构性锚点')).length, 1)
+})
+
 test('data-tip 是上游锚点（不是本插件自打标）：上游零命中时必须硬失败', () => {
   const findings = anchorFindings({
     anchors: [{ kind: 'attribute', token: 'data-tip', path: 'x.ts', line: 1 }],
@@ -373,6 +404,12 @@ test('严格模式的 pin 身份：读不到 lockfile ⇒ 明说「无法判定�
     const anchor = join(root, 'anchor')
     mkdirSync(join(anchor, 'node_modules', '@deepseek-ai', 'fake', 'lib'), { recursive: true })
     writeFileSync(join(anchor, 'node_modules', '@deepseek-ai', 'fake', 'lib', 'client.js'), UPSTREAM_TEXT)
+    // The corpus must look COMPLETE, or the newer strict corpus check fires first
+    // and this test would pass for the wrong reason (2026-12 third review).
+    const frontend = join(anchor, 'node_modules', '@deepseek-ai', 'dsh-web-frontend', 'dist', 'assets')
+    mkdirSync(frontend, { recursive: true })
+    writeFileSync(join(frontend, 'index-ABCDEFGH.js'), UPSTREAM_TEXT)
+    writeFileSync(join(frontend, 'index-ABCDEFGH.css'), 'body[data-slot]{display:contents}')
     const run = args => spawnSync(process.execPath, ['scripts/dev/verify-mobile-anchors.mjs', ...args], { cwd: root, encoding: 'utf8' })
     const fallback = run(['--anchor-root', anchor])
     assert.equal(fallback.status, 0, `the anchors themselves must pass on this corpus: ${fallback.stdout}${fallback.stderr}`)
@@ -380,6 +417,80 @@ test('严格模式的 pin 身份：读不到 lockfile ⇒ 明说「无法判定�
     const strict = run(['--require-anchor-root', '--anchor-root', anchor])
     assert.equal(strict.status, 1, `strict must fail when the pin cannot be read: ${strict.stdout}`)
     assert.match(strict.stderr + strict.stdout, /pin 身份无法判定/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+/** The version the committed runtime pin carries for the web frontend. */
+function pinnedFrontendVersion() {
+  const lockfile = readFileSync(join(ROOT, 'packages', 'desktop', 'vendor', 'dsh', 'pnpm-lock.yaml'), 'utf8')
+  const match = lockfile.match(/@deepseek-ai\/dsh-web-frontend@([^'(:\s]+)/)
+  assert.ok(match !== null, 'the committed lockfile must pin @deepseek-ai/dsh-web-frontend')
+  return match[1]
+}
+
+/**
+ * A temp root whose corpus SATISFIES every declared anchor, so only the property
+ * under test can fail the run. `shell: false` leaves out the shell bundle/CSS;
+ * `frontendVersion` stamps the tree's identity.
+ */
+function makeStrictRoot(t, { frontendVersion, shell = false }) {
+  const root = mkdtempSync(join(tmpdir(), 'anchors-strict-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  mkdirSync(join(root, 'scripts', 'dev'), { recursive: true })
+  for (const name of ['verify-mobile-anchors.mjs', 'verify-mobile-anchors-args.mjs', 'mobile-anchors.mjs']) {
+    copyFileSync(join(ROOT, 'scripts', 'dev', name), join(root, 'scripts', 'dev', name))
+  }
+  cpSync(join(ROOT, 'packages', 'dsh-chamber-client-ui-mobile', 'src'), join(root, 'packages', 'dsh-chamber-client-ui-mobile', 'src'), { recursive: true })
+  mkdirSync(join(root, 'packages', 'desktop', 'vendor', 'dsh'), { recursive: true })
+  copyFileSync(join(ROOT, 'packages', 'desktop', 'vendor', 'dsh', 'pnpm-lock.yaml'), join(root, 'packages', 'desktop', 'vendor', 'dsh', 'pnpm-lock.yaml'))
+  const anchor = join(root, 'anchor')
+  const frontend = join(anchor, 'node_modules', '@deepseek-ai', 'dsh-web-frontend')
+  mkdirSync(join(frontend, 'dist', 'assets'), { recursive: true })
+  writeFileSync(join(frontend, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-web-frontend', version: frontendVersion }))
+  if (shell) {
+    writeFileSync(join(frontend, 'dist', 'assets', 'index-ABCDEFGH.js'), UPSTREAM_TEXT)
+    writeFileSync(join(frontend, 'dist', 'assets', 'index-ABCDEFGH.css'), 'body[data-slot]{display:contents}')
+  }
+  mkdirSync(join(anchor, 'node_modules', '@deepseek-ai', 'fake', 'lib'), { recursive: true })
+  writeFileSync(join(anchor, 'node_modules', '@deepseek-ai', 'fake', 'lib', 'client.js'), UPSTREAM_TEXT)
+  return { root, anchor }
+}
+
+test('严格模式的语料完整性：只有 client 半、没有 shell 产物 ⇒ exit 1', () => {
+  // 2026-12 第三轮复核：这两条严格分支当时没有任何反例（把分支还原，21 个测试仍全绿）。
+  const t = { after: () => {} }
+  const { root, anchor } = makeStrictRoot(t, { frontendVersion: pinnedFrontendVersion(), shell: false })
+  const run = args => spawnSync(process.execPath, ['scripts/dev/verify-mobile-anchors.mjs', ...args], { cwd: root, encoding: 'utf8' })
+  try {
+    const fallback = run(['--anchor-root', anchor])
+    assert.equal(fallback.status, 0, `default stays fail-soft: ${fallback.stdout}${fallback.stderr}`)
+    const strict = run(['--require-anchor-root', '--anchor-root', anchor])
+    assert.equal(strict.status, 1, `strict must fail on a client-halves-only corpus: ${strict.stdout}`)
+    assert.match(strict.stdout + strict.stderr, /语料不完整/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('严格模式的 pin 一致性：树版本与仓内 pin 不符 ⇒ exit 1', () => {
+  const t = { after: () => {} }
+  const { root, anchor } = makeStrictRoot(t, { frontendVersion: '0.0.0-not-the-pin', shell: true })
+  const run = args => spawnSync(process.execPath, ['scripts/dev/verify-mobile-anchors.mjs', ...args], { cwd: root, encoding: 'utf8' })
+  try {
+    const strict = run(['--require-anchor-root', '--anchor-root', anchor])
+    assert.equal(strict.status, 1, `strict must fail on a version mismatch: ${strict.stdout}`)
+    assert.match(strict.stdout + strict.stderr, /与 pin 不符/)
+    // ...and the matching version passes, so the failure above is the version and
+    // not something else in this synthetic root.
+    const ok = makeStrictRoot({ after: () => {} }, { frontendVersion: pinnedFrontendVersion(), shell: true })
+    try {
+      const green = run(['--require-anchor-root', '--anchor-root', ok.anchor])
+      assert.equal(green.status, 0, `a matching tree must pass: ${green.stdout}${green.stderr}`)
+    } finally {
+      rmSync(ok.root, { recursive: true, force: true })
+    }
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -398,8 +509,13 @@ test('最小断言集本身：无重复、kind 合法，且与 §4 登记行逐�
   // registry row is the human half of this gate, so every required token must
   // still be named there.
   const registry = readFileSync(join(ROOT, 'docs/checklists/upstream-touchpoints.md'), 'utf8')
-  const row = registry.split('\n').find(line => line.includes('verify-mobile-anchors.mjs')) ?? ''
-  assert.ok(row.length > 0, 'the §4 row for the mobile anchor gate must exist')
+  // Pick the LONGEST line that names the gate: a positional `find` would silently
+  // retarget to any earlier passing mention (§7 names it too) and then assert
+  // against the wrong text (2026-12 third review).
+  const candidates = registry.split('\n').filter(line => line.includes('verify-mobile-anchors.mjs'))
+  const row = [...candidates].sort((a, b) => b.length - a.length)[0] ?? ''
+  assert.ok(row.length > 200, 'the §4 registry row for the mobile anchor gate must exist')
+  assert.ok(candidates.length >= 2, 'both the §4 row and the §7 procedure name the gate')
   for (const item of REQUIRED_ANCHORS) {
     // Slot anchors may be named compactly in the row ("conversation.session.header
     // 及其 actions/utilities/corner/lineage 四座"), so the tail segment counts.

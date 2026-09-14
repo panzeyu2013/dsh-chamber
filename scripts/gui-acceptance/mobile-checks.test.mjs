@@ -179,7 +179,6 @@ test('脱敏：Bearer/Basic/Cookie 的**值**整段抹掉（只抹方案词等�
     ['cookie', `Cookie: sid=${secret}; other=1`],
     ['escaped', `{"payload":"{\\"Authorization\\":\\"Bearer ${secret}\\"}"}`],
     ['escaped token', '{"payload":"{\\"token\\":\\"abc12345\\"}"}'],
-    ['fragment', `https://h/#token=${secret}`],
   ]) {
     const out = redactSecrets(input, [])
     assert.ok(!out.includes(secret), `${name}: ${out}`)
@@ -226,4 +225,11 @@ test('脱敏：URL 查询串里的凭据也抹掉（长度不限——短 token 
   assert.ok(!comma.includes('def'), comma)
   assert.match(comma, /token=\*\*\*&keep=1/)
   assert.ok(!redactSecrets('ws://h/x?token=a;b', []).includes(';b'))
+  // The FRAGMENT half needs its own case: a `?`-query one cannot fail when the
+  // fragment support is removed (2026-12 self-review: the old `#token=SECRET`
+  // case was caught by the bare-value rule, and the `?token=abc,def` case by the
+  // query rule — neither pinned `#`).
+  const fragment = redactSecrets('https://h/#token=abc,def', [])
+  assert.ok(!fragment.includes('def'), fragment)
+  assert.match(fragment, /#token=\*\*\*/)
 })

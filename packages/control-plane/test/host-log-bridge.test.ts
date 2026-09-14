@@ -346,48 +346,48 @@ class FakeHostLogger {
   }
 }
 
-/** An injected Cordis-like context that models the PINNED host contract exactly
- *  (vendor/harness-checkout/vendor/cordis/src/logger.ts, asserted by the
- *  cordis-contract test below):
- *    - `exporters` is a public `Map<number, sink>`;
- *    - `exporter(sink)` registers under an incrementing counter and returns
- *      `() => exporters.delete(this._snExporter)` — the CURRENT counter, NOT the
- *      registration's own id, so that disposer removes whichever exporter
- *      registered LAST (the upstream identity bug the bridge works around);
- *    - `ctx.effect()` owns whatever the plugin returns for its fiber's lifetime.
- *  `unmount()` plays the fiber unload; `remount()` plays a same-fiber reload
- *  (`Fiber.update` → the effect disposes, then the body re-runs with the SAME
- *  ctx) — the case that used to leave the bridge silently dead. */
-function fakeHostContext(): { ctx: unknown; sinks: () => any[]; unmount: () => void } {
+/**
+ * A host model that matches the PINNED contract (vendor/harness-checkout/vendor/
+ * cordis/src/logger.ts, asserted by the cordis-contract test below):
+ *   - `exporters` is a PUBLIC `Map<number, sink>` shared by every fiber;
+ *   - `exporter(sink)` is itself `ctx.effect(...)` and its disposer deletes
+ *     `exporters.delete(++counter)` — the CURRENT counter, NOT its own id, so it
+ *     removes whichever exporter registered LAST (the upstream bug the bridge
+ *     works around by registering a Symbol key directly);
+ *   - `ctx.effect` collects whatever the callback returns for that fiber.
+ * `fiber()` mints an independent plugin fiber over the shared logger; `sinks()`
+ * is a live view. `dispose()` plays the fiber unload.
+ */
+function fakeHost(): { fiber: () => { ctx: unknown; dispose: () => void }; sinks: () => any[] } {
   const exporters = new Map<number, unknown>()
-  const disposers: Array<() => void> = []
   let counter = 0
-  const list = () => [...exporters.values()]
-  const logger = Object.assign(
-    (_name?: string) => new FakeHostLogger(),
-    {
-      exporters,
-      exporter: (exporter: unknown) => {
-        exporters.set(++counter, exporter)
-        return () => { exporters.delete(counter) }
+  const fiber = () => {
+    const disposers: Array<() => void> = []
+    let ctx: { logger: unknown; effect: (execute: () => (() => void) | undefined) => (() => void) | undefined }
+    const logger = Object.assign(
+      (_name?: string) => new FakeHostLogger(),
+      {
+        exporters,
+        exporter: (sink: unknown) => {
+          const off = ctx.effect(() => {
+            exporters.set(++counter, sink)
+            return () => { exporters.delete(counter) }
+          })
+          return off
+        },
       },
-    },
-  )
-  const ctx = {
-    logger,
-    effect: (execute: () => (() => void) | undefined) => {
-      const off = execute()
-      if (typeof off === 'function') disposers.push(off)
-      return off
-    },
+    )
+    ctx = {
+      logger,
+      effect: (execute: () => (() => void) | undefined) => {
+        const off = execute()
+        if (typeof off === 'function') disposers.push(off)
+        return off
+      },
+    }
+    return { ctx, dispose: () => { for (const off of disposers.splice(0).reverse()) off() } }
   }
-  return {
-    ctx,
-    sinks: list,
-    // Plays the fiber unload (and, called twice, a same-fiber reload: the effect
-    // disposes, then the plugin body re-runs with the SAME ctx).
-    unmount: () => { for (const off of disposers.splice(0).reverse()) off() },
-  }
+  return { fiber, sinks: () => [...exporters.values()] }
 }
 
 /** Run `fn` with process.stderr.write captured; returns everything written. */
@@ -413,76 +413,86 @@ async function loadGeneratedPlugin(levelName: 'error' | 'info' | 'warn' | 'debug
 test('plugin: mounting registers one exporter at the baked level and announces itself on stderr', async t => {
   const dir = tempDir(t)
   const plugin = await loadGeneratedPlugin('warn', dir)
-  const host = fakeHostContext()
+  const host = fakeHost()
+  const first = host.fiber()
   const announce = withStderrCapture(() => {
-    plugin(host.ctx)
-    plugin(host.ctx) // a double mount (HMR remount / duplicate row) must not duplicate lines
+    plugin(first.ctx)
+    plugin(first.ctx) // a double mount (HMR remount / duplicate row) must not duplicate lines
   })
   const mounted = host.sinks()
   assert.equal(mounted.length, 1)
-  assert.equal(mounted[0].levels.default, HOST_LOG_BRIDGE_LEVELS.warn)
-  assert.equal(mounted[0].colors, 0)
+  assert.equal((mounted[0] as any).levels.default, HOST_LOG_BRIDGE_LEVELS.warn)
+  assert.equal((mounted[0] as any).colors, 0)
   assert.match(announce, /\[chamber\] host log bridge active \(level=warn\)\n/)
 })
 
 test('plugin: a loader remount replaces the exporter instead of stacking a second one', async t => {
   const dir = tempDir(t)
   const plugin = await loadGeneratedPlugin('warn', dir)
-  const first = fakeHostContext()
+  const host = fakeHost()
+  const first = host.fiber()
   withStderrCapture(() => plugin(first.ctx))
-  assert.equal(first.sinks().length, 1)
-  // The managed profile runs `patchReload: 'live'`: the loader disposes the old
-  // fiber and mounts the plugin again on a NEW context. LoggerService.exporter()
-  // registers its effect on the ROOT context, so only the plugin's own effect
-  // can remove that registration — without it the previous exporter keeps
-  // writing, and every application line reaches stderr twice.
-  first.unmount()
-  assert.equal(first.sinks().length, 0, 'unloading the plugin fiber removes its exporter')
-  const second = fakeHostContext()
+  assert.equal(host.sinks().length, 1)
+  // The managed profile runs patchReload: 'live': the loader disposes the old
+  // fiber and mounts the plugin again on a NEW context. The registration is owned
+  // by the plugin's own effect, so unloading removes it.
+  first.dispose()
+  assert.equal(host.sinks().length, 0, 'unloading the plugin fiber removes its exporter')
+  const second = host.fiber()
   withStderrCapture(() => plugin(second.ctx))
-  assert.equal(second.sinks().length, 1, 'exactly one exporter per live mount')
+  assert.equal(host.sinks().length, 1, 'exactly one exporter per live mount')
 })
 
 test('plugin: a SAME-FIBER reload re-mounts the exporter (Fiber.update re-runs the body)', async t => {
   const dir = tempDir(t)
   const plugin = await loadGeneratedPlugin('warn', dir)
-  const host = fakeHostContext()
-  withStderrCapture(() => plugin(host.ctx))
+  const host = fakeHost()
+  const fiber = host.fiber()
+  withStderrCapture(() => plugin(fiber.ctx))
   assert.equal(host.sinks().length, 1)
   // A same-fiber reload disposes the effect and then re-runs the plugin body with
   // the SAME ctx (loader entry.ts on a config-only diff). Marking ownership
-  // OUTSIDE the effect used to suppress the re-mount, silently killing the
-  // bridge: the effect's own disposer clears the mark.
-  host.unmount()
+  // OUTSIDE the effect used to suppress the re-mount, silently killing the bridge.
+  fiber.dispose()
   assert.equal(host.sinks().length, 0)
-  withStderrCapture(() => plugin(host.ctx))
+  withStderrCapture(() => plugin(fiber.ctx))
   assert.equal(host.sinks().length, 1, 'the re-mount must not be suppressed by a stale guard')
 })
 
-test('plugin: unloading removes OUR exporter even when another one registered later', async t => {
+test('plugin: the bridge shares the exporter registry without ever killing another fiber\'s entry', async t => {
   const dir = tempDir(t)
   const plugin = await loadGeneratedPlugin('warn', dir)
-  const host = fakeHostContext()
-  withStderrCapture(() => plugin(host.ctx))
-  const ours = host.sinks()[0]
-  // The pinned cordis disposer deletes the CURRENT counter entry, so it would
-  // remove the LATER exporter and leave ours installed (double lines on the next
-  // mount). The bridge removes its own entry by identity instead.
-  const later = { export() {} }
-  ;(host.ctx as { logger: { exporter: (sink: unknown) => unknown } }).logger.exporter(later)
+  const host = fakeHost()
+  // Our bridge first, then an UNRELATED exporter on its own fiber (the pinned
+  // disposer deletes the CURRENT counter entry, so a naive identity/returned-
+  // disposer approach loses one of the two).
+  const ours = host.fiber()
+  withStderrCapture(() => plugin(ours.ctx))
+  const other = host.fiber()
+  const otherSink = { export() {} }
+  ;(other.ctx as { logger: { exporter: (sink: unknown) => unknown } }).logger.exporter(otherSink)
   assert.equal(host.sinks().length, 2)
-  host.unmount()
+  ours.dispose()
+  assert.deepEqual(host.sinks(), [otherSink], 'unloading the bridge must not take the other exporter with it')
+  // And the reverse: the other fiber unloading must not kill the bridge (the
+  // upstream disposer would delete the newest entry, which used to be ours).
+  const restarted = host.fiber()
+  withStderrCapture(() => plugin(restarted.ctx))
+  assert.equal(host.sinks().length, 2)
+  other.dispose()
   const left = host.sinks()
-  assert.equal(left.length, 1, 'exactly the other exporter must survive')
-  assert.equal(left[0], later, 'our identity-based removal must not take the later exporter')
-  assert.ok(!left.includes(ours), 'our exporter must be gone')
+  assert.equal(left.length, 1, 'the bridge must survive the other fiber\'s unload')
+  assert.notEqual(left[0], otherSink)
+  restarted.dispose()
+  assert.equal(host.sinks().length, 0)
 })
 
 test('plugin: exported messages are rendered by the host formatter and written per line', async t => {
   const dir = tempDir(t)
   const plugin = await loadGeneratedPlugin('debug', dir)
-  const host = fakeHostContext()
-  withStderrCapture(() => plugin(host.ctx))
+  const host = fakeHost()
+  const fiber = host.fiber()
+  withStderrCapture(() => plugin(fiber.ctx))
   const out = withStderrCapture(() => {
     host.sinks()[0].export({ name: 'session', args: ['session opened', 'id=7'], level: 1 })
     host.sinks()[0].export({ name: 'remote', args: ['first\nsecond'], level: 3 })
@@ -496,8 +506,9 @@ test('plugin: exported messages are rendered by the host formatter and written p
 test('plugin: an error argument renders its stack instead of an object dump', async t => {
   const dir = tempDir(t)
   const plugin = await loadGeneratedPlugin('error', dir)
-  const host = fakeHostContext()
-  withStderrCapture(() => plugin(host.ctx))
+  const host = fakeHost()
+  const fiber = host.fiber()
+  withStderrCapture(() => plugin(fiber.ctx))
   const out = withStderrCapture(() => {
     host.sinks()[0].export({ name: 'app', args: [new Error('boom')], level: 0 })
   })
@@ -516,6 +527,56 @@ test('plugin: a host without the Logger formatter still forwards (fallback rende
     exporters[0].export({ name: 'app', args: ['plain', { k: 1 }], level: 1 })
   })
   assert.equal(out, '[chamber] host log bridge active (level=info)\nplain {"k":1}\n')
+})
+
+test('plugin: a mount that THROWS does not poison the SAME ctx (a retry can mount)', async t => {
+  const dir = tempDir(t)
+  const plugin = await loadGeneratedPlugin('warn', dir)
+  // One ctx whose exporter registry rejects the FIRST registration and accepts
+  // the next: the failed attempt must leave no mount mark, or the second apply
+  // would return early and the bridge would be silently dead forever.
+  let attempts = 0
+  const entries = new Map<unknown, unknown>()
+  const flakyMap = {
+    get size() { return entries.size },
+    get: (key: unknown) => entries.get(key),
+    has: (key: unknown) => entries.has(key),
+    set: (key: unknown, value: unknown) => {
+      attempts += 1
+      if (attempts === 1) throw new Error('registry closed')
+      entries.set(key, value)
+      return flakyMap
+    },
+    delete: (key: unknown) => entries.delete(key),
+    [Symbol.iterator]: () => entries[Symbol.iterator](),
+  }
+  const flaky = Object.assign(() => new FakeHostLogger(), { exporters: flakyMap })
+  const ctx = {
+    logger: flaky,
+    effect: (execute: () => (() => void) | undefined) => execute(),
+  }
+  withStderrCapture(() => plugin(ctx))
+  assert.equal(attempts, 1, 'the first attempt reached the registry and failed')
+  assert.equal(entries.size, 0)
+  withStderrCapture(() => plugin(ctx))
+  assert.equal(entries.size, 1, 'the retry must mount on the same ctx (no stale mount mark)')
+  assert.equal(attempts, 2)
+})
+
+test('source lock: the generated-module template contains no stray backtick', () => {
+  // The module body is a TS template literal; a backtick inside it (easy to
+  // write in a comment that quotes an identifier) terminates the literal and
+  // breaks the parse — this happened three times during review. Cheaper to pin
+  // than to re-learn: the ONLY backticks allowed are the literal's own
+  // delimiters.
+  const source = readFileSync(new URL('../src/host-log-bridge.ts', import.meta.url), 'utf8')
+  const marker = 'export default function chamberHostLogBridge(ctx)'
+  const start = source.indexOf(marker)
+  assert.ok(start !== -1, 'the generated module body must still exist')
+  const body = source.slice(start)
+  const end = body.indexOf('\n`\n')
+  assert.ok(end !== -1, 'the generated module template must be closed with a line-level backtick')
+  assert.ok(!body.slice(0, end).includes('`'), 'no backtick may appear inside the generated module template')
 })
 
 test('plugin: a broken host context never throws out of the mount', async t => {
@@ -547,19 +608,30 @@ test('plugin: a broken host context never throws out of the mount', async t => {
  * (`packages/dsh-runtime/test/runtime-probes.test.ts`).
  */
 test('cordis contract: the pinned LoggerService still matches what the generated plugin calls', () => {
-  const source = readFileSync(
-    join(repoRoot, 'vendor', 'harness-checkout', 'vendor', 'cordis', 'src', 'logger.ts'),
-    'utf8',
-  )
-  // (1) exporter() registers through the SERVICE's own ctx.effect and returns
-  // that disposer. The service ctx is the app root (`self.ctx = ctx` in the
-  // constructor), NOT the calling plugin's fiber — which is exactly why the
-  // generated plugin re-owns the registration through its own ctx.effect.
-  assert.match(source, /self\.ctx = ctx/, 'the logger service must still bind the ctx it was constructed with')
+  const cordisLogger = join(repoRoot, 'vendor', 'harness-checkout', 'vendor', 'cordis', 'src', 'logger.ts')
+  let source: string
+  try {
+    source = readFileSync(cordisLogger, 'utf8')
+  } catch (error) {
+    // This leg must FAIL when the pinned source is absent (a skip would let the
+    // API bet go unchecked), but a raw ENOENT says nothing about what to do.
+    assert.fail(`the pinned Cordis source is required by this contract test (${cordisLogger}): ${String(error)}`
+      + ' — initialize the vendor submodule (node scripts/dev/ensure-harness-vendor.mjs)')
+  }
+  // (1) the two facts that make `logger.exporter()` unusable for the bridge:
+  // it registers through `this.ctx.effect(...)` (so the disposer IS collected by
+  // the calling fiber), and that disposer deletes the CURRENT counter entry —
+  // `exporters.delete(this._snExporter)` — not its own id. Unloading any exporter
+  // fiber therefore removes whichever exporter registered last. The generated
+  // plugin registers a Symbol key straight into `exporters` instead, which needs
+  // that field to stay public and iteration to be values-only.
+  assert.match(source, /exporters = new Map<number, Exporter>\(\)/, 'exporters must stay a public Map the plugin can write to')
+  assert.match(source, /this\.service\.exporters\.values\(\)/, 'the logger must iterate VALUES only (a Symbol key must stay harmless)')
   const exporterBody = source.match(/exporter\(exporter: Exporter\)\s*\{([\s\S]*?)\n {2}\}/)
   assert.ok(exporterBody !== null, 'LoggerService.exporter(exporter) must still exist')
   assert.match(exporterBody![1]!, /return this\.ctx\.effect\(/, 'exporter() must register through this.ctx.effect and return its disposer')
-  assert.match(exporterBody![1]!, /exporters\.delete\(/, 'the returned disposer must remove the registration')
+  assert.match(exporterBody![1]!, /exporters\.delete\(this\._snExporter\)/,
+    'the disposer must still delete the CURRENT counter entry (this is the bug the bridge bypasses)')
   // (2) the generated plugin renders through the facade's static formatter and
   // passes `{ colors: 0, maxLength }`; both options must stay supported.
   assert.match(source, /static format\(exporter: Exporter, message: Message\): string \{/, 'Logger.format(exporter, message) must stay a static method')
@@ -632,8 +704,9 @@ test('real cordis (optional leg): the host LoggerService honors the baked level'
 test('pipeline: bridge output is redacted and lands in host-logs as {"ts","stream","line"}', async t => {
   const dir = tempDir(t)
   const plugin = await loadGeneratedPlugin('info', dir)
-  const host = fakeHostContext()
-  withStderrCapture(() => plugin(host.ctx))
+  const host = fakeHost()
+  const fiber = host.fiber()
+  withStderrCapture(() => plugin(fiber.ctx))
   const leaked = withStderrCapture(() => {
     host.sinks()[0].export({
       name: 'connection',

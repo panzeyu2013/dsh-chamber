@@ -37,18 +37,23 @@ export const VERIFY_MOBILE_ANCHORS_USAGE = `verify-mobile-anchors — 移动插�
                              取第一个存在者。
   --simulate-rename <a>=<b>  自测开关：把上游产物里的 token a 在**内存里**改成 b
                              （不写盘），用于证明门禁会因锚点改名而 exit 1。可重复。
-  --require-anchor-root      严格模式：把本可 fail-soft 的两种情形（锚点根缺失 / 无 client
-                             产物）改为 exit 1，并要求锚点树的 dsh-web-frontend 版本与
-                             仓内 pin 一致。升级流程（docs/checklists/upstream-touchpoints.md
-                             §7）必须带它跑：不带时「CI 上正常跳过」与「其实什么都没查」
-                             无法区分。
+  --require-anchor-root      严格模式：把所有「其实什么都没查」的路径改为 exit 1——
+                             ① 锚点根缺失 ② 无 client 产物 ③ 插件源码抽不到
+                             ④ pin 身份不可判定（仓内 lockfile 或锚点树 package.json 读不到）；
+                             并要求锚点树的 dsh-web-frontend 版本与仓内 pin 一致（不一致同样
+                             exit 1，lockfile 的 peer 后缀会被剥掉）。缺 shell 产物
+                             （bundle/CSS）同样算语料不完整。升级流程
+                             （docs/checklists/upstream-touchpoints.md §7 第 7 步之后）必须带它跑：
+                             不带时「CI 上正常跳过」与「其实什么都没查」无法区分。
+                             与 --simulate-rename 互斥（后者能凭空造证据）。
   --list                     打印从本包源码抽到的锚点表（含分类与证据计数）。
   --help, -h                 打印本用法并 exit 0。
 
 退出码：
   0  全部通过（或非严格模式下的 fail-soft 跳过 / --help）
-  1  data-* / role / slot 锚点零命中、最小断言集缺口，或严格模式下缺根 / 版本不符
-  2  用法错误（未知参数 / --simulate-rename 缺 '=' 等）
+  1  data-* / role / slot 锚点没有**写入形**发射点、最小断言集缺口，或严格模式下的
+     四条「什么都没查」路径 + 版本不符
+  2  用法错误（未知参数 / --simulate-rename 缺 '=' / 它与 --require-anchor-root 同用等）
 `
 
 /** `--simulate-rename <old>=<new>` 的纯解析（两侧都不得为空）。 */
@@ -114,6 +119,14 @@ export function parseVerifyMobileAnchorsArgs(argv, env = {}) {
     errors.push(argument.startsWith('-')
       ? `未知参数 ${argument}（已知：--anchor-root, --simulate-rename, --require-anchor-root, --list, --help）`
       : `不接受位置参数 ${argument}`)
+  }
+  // 自测开关与严格模式互斥：`--simulate-rename a=b` 能把产物里被改掉的名字**改回来**，
+  // 于是在严格模式下能凭空造出「上游仍在发射」的证据（2026-12 第三轮复核实测：
+  // 改名后的树 + `--simulate-rename <新名>=<原名>` ⇒ 严格模式 exit 0）。严格模式必须
+  // 只对真实产物下判断，因此这个组合是用法错误（exit 2）。
+  if (requireAnchorRoot && renames.length > 0) {
+    errors.push('--simulate-rename 不能与 --require-anchor-root 同时使用：自测开关会在内存里改写产物，'
+      + '严格模式必须只判真实产物（要自测请单跑不带 --require-anchor-root 的那条）')
   }
   return { help, list, anchorRoot, requireAnchorRoot, renames, errors }
 }

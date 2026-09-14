@@ -455,6 +455,15 @@ chrome；`[role="menu"] [role="menuitem"][aria-selected]` 高亮信号在本 pin
   子节点，同时是**会话身份**：该出口是会话作用域槽，渲染器按会话重挂；keyed 的
   root 作用域 `[data-phase]` 节点则会跨会话复用。
 
+**主题观察器的锚点（2026-12）**：`data-ds-dark-theme`——`index.ts` 用
+`MutationObserver.observe(document.body, { attributeFilter: ['data-ds-dark-theme', …] })`
+观察它。该 pin 上上游**唯一**的写入点是
+`document.body.toggleAttribute('data-ds-dark-theme', dark)`（`dsh-client-ui-theme` 的
+client 半）；其余引用全是 CSS 规则（`body[data-ds-dark-theme]{…}`），属消费形——
+`scripts/dev/verify-mobile-anchors.mjs` 刻意**不**把它当作「上游仍在发射」的证据。
+若未来 pin 把写入改成 `dataset` API，属性名字面量会消失、门禁按 fail-closed 变红：
+那时应针对新的写入点重锚，而不是盲目放宽判定。
+
 **悬停卡 watchdog 自己的锚点（2026-09-13 review B2——它们同样是锚点，因此列在这里，
 而不只写在上面那一节）：** `official-hover-card.ts` 用三项事实匹配官方原子，pin 移动时
 一并重审：

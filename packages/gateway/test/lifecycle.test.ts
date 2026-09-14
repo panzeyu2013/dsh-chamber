@@ -845,9 +845,10 @@ test('stop() drains the audit windows the fence-time drain could not see (wiring
   // method itself, so it cannot see the WIRING — a 2026-12 mutation battery
   // deleted the production call and every test stayed green, which is the exact
   // false-green shape this file exists to prevent. Pin the call site and its
-  // order instead: the drain must follow the plane stop (by then the listener is
-  // closed, so no further rejection can open a window), and there must be
-  // exactly one call.
+  // order instead: the drain must follow the plane stop (the listener is closed by
+  // then, so no NEW request can open a window — a handler already inside
+  // `await auth.verify()` still can, which is what the drain comment in index.ts
+  // records), and there must be exactly one call.
   const source = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
   const stops = [...source.matchAll(/await createdPlane\.stop\(\)/g)].map(match => match.index)
   const drain = source.indexOf('dispatch.flushAuditWindows()')

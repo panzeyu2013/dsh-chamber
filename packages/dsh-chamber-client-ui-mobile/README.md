@@ -611,6 +611,17 @@ structure-shaped and verified in the rc.2 tree:
   a session-scoped slot the renderer remounts per session, unlike the keyed
   root-scope `[data-phase]` node.
 
+**The theme observer's anchor (2026-12)**: `data-ds-dark-theme` — observed through
+`MutationObserver.observe(document.body, { attributeFilter: ['data-ds-dark-theme', …] })`
+in `index.ts`. Upstream's only WRITE at the pin is
+`document.body.toggleAttribute('data-ds-dark-theme', dark)` (`dsh-client-ui-theme`'s
+client half); every other reference is a CSS rule
+(`body[data-ds-dark-theme]{…}`), i.e. consumption — which
+`scripts/dev/verify-mobile-anchors.mjs` deliberately does NOT accept as proof that
+the attribute is still emitted. A pin that moves the writer to the `dataset` API
+would stop the literal name from appearing and fail the gate closed; re-anchor
+against the new writer rather than widening the matcher blindly.
+
 **The hover-card watchdog's own anchors (2026-09-13 review B2 — these are anchors
 too, so they are listed here rather than only in the feature section above):**
 `official-hover-card.ts` matches the official atom by three facts, all re-audited

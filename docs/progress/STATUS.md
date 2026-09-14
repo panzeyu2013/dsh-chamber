@@ -323,9 +323,11 @@
   （抽屉/设置/键盘补偿与其余 44px 座席未断言），以及**会话打开停滞的 WS 帧证据**；
   **锚点门在 CI 无上游树时 fail-soft 跳过**（`packages/desktop/vendor/dsh` 只有
   lockfile）⇒ 默认那条腿只保护装有 anchor 的开发机；需要「必须真的查过」的场合
-  （升级流程 §7）加 `--require-anchor-root`：缺根、无 client 产物、或锚点树版本与
-  仓内 pin 不一致都 exit 1。要在 CI 常态生效仍需把已知良好 pin 的发射集存成生成式
-  快照；⑥ **pin 前瞻**：上游 npm `next`
+  （升级流程 §7）加 `--require-anchor-root`：缺根、无 client 产物、插件源码抽不到、
+  语料不完整（只有 client 半没有 shell 产物）、pin 身份不可判定、锚点树版本与仓内 pin
+  不一致都 exit 1（该开关与 `--simulate-rename` 互斥）。**pin 身份目前只是版本级**：
+  同一版本号的本地重打树同样会被放过，要把它变成内容级需要仓内快照；要在 CI 常态生效
+  同样需要把已知良好 pin 的发射集存成生成式快照；⑥ **pin 前瞻**：上游 npm `next`
   已是 `0.1.5-rc.2`（client 包已发布，`latest` 仍为 `0.1.5-rc.1`）——pin 前移须按
   `packages/dsh-chamber-client-ui-mobile/README.md`「Anchor baseline」重审锚点
   （风险集中在 ui-layout frame 与 settings/composer 结构）；⑦ **iOS 键盘补偿期

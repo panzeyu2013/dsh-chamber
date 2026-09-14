@@ -170,6 +170,12 @@ test('hashed-asset caching: the immutable stamp is bounded by response type and 
   assert.equal(await stamp('/assets/fonts/KaTeX_AMS-Regular-BQhdFMY1.woff2', { 'content-type': 'font/woff2' }), 'public, max-age=31536000, immutable')
   assert.equal(await stamp('/assets/langs/cpp-DIPi6g--.js', { 'content-type': 'text/javascript' }), 'public, max-age=31536000, immutable')
   assert.equal(await stamp('/assets/fonts/KaTeX_Math-Italic-DA0__PXp.ttf', { 'content-type': 'font/ttf' }), 'public, max-age=31536000, immutable')
+  // The pinned frontend-static MIME table has NO font entries, so a real font
+  // response carries `application/octet-stream` — that arm is the one in
+  // production, and dropping it would silently stop stamping all 59 font files
+  // (2026-12 third review).
+  assert.equal(await stamp('/assets/fonts/KaTeX_AMS-Regular-BQhdFMY1.woff2', { 'content-type': 'application/octet-stream' }), 'public, max-age=31536000, immutable')
+  assert.equal(await stamp('/assets/fonts/KaTeX_Math-Italic-DA0__PXp.ttf', { 'content-type': 'application/octet-stream' }), 'public, max-age=31536000, immutable')
 })
 
 test('an origin-form request target is accepted (no 400 before forwarding)', async () => {

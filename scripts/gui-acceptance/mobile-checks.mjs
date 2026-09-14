@@ -399,18 +399,32 @@ export function redactSecrets(text, secrets) {
     if (typeof secret !== 'string' || secret.length === 0) continue
     out = out.split(secret).join('***')
   }
+  // JSON escapes one quote as `\u0022`, so an embedded payload can spell the same
+  // shape the rules below match — normalize that spelling first (2026-12 third
+  // review: `{"payload":"{\u0022Authorization\u0022:…}"}` went through untouched).
+  out = out.replace(/\\u0022/g, '"')
+  // The key names that carry credentials. A prefix is allowed so the real-world
+  // spellings match too: `access_token`, `refreshToken`, `x-api-key`,
+  // `sessionId`, `apiKey` (2026-12 third review: `apiKey`/`x-api-key`/`credential`
+  // /`sid`/`jwt` values rode through to disk).
+  const key = '[A-Za-z0-9_.-]*(?:authorization|cookie|password|passwd|pwd|secret|credential|token|api[-_]?key|session|jwt|sid)'
   return out
     // URL query / fragment: length is irrelevant (a short token is a credential)
     // and an unrelated `&param` must survive.
-    .replace(/([?&#](?:token|authorization|cookie|password|secret)=)[^&\s"'<>]*/gi, '$1***')
-    // QUOTED values — JSON, JS object literals, and the escaped-quote form you
-    // get when a JSON payload is embedded inside another JSON string. The WHOLE
-    // value is consumed: matching only up to the first space redacted the scheme
-    // word and left the credential itself on disk
-    // (`"Authorization":"Bearer SECRET"` → `"Authorization":"*** SECRET"`).
-    .replace(/((?:token|authorization|cookie|password|secret)(?:\\?")?\s*[:=]\s*)(\\?")[^"\\]*(\\?")/gi, '$1$2***$3')
-    // BARE values — header-dump shapes (`Authorization: Bearer X`,
-    // `Cookie: a=1; b=2`). Run to the end of the record, never past a query
-    // separator or into the next JSON member.
-    .replace(/((?:token|authorization|cookie|password|secret)(?:\\?")?\s*[:=]\s*)(?!\\?")([^\r\n},&]*)/gi, '$1***')
+    .replace(new RegExp(`([?&#]${key}=)[^&\\s"'<>]*`, 'gi'), '$1***')
+    // QUOTED values — JSON, JS object literals, and the escaped-quote form you get
+    // when a JSON payload is embedded inside another JSON string. The WHOLE value
+    // is consumed: matching only up to the first space redacted the scheme word
+    // and left the credential itself on disk.
+    .replace(new RegExp(`(${key}(?:\\\\?")?\\s*[:=]\\s*)(\\\\?")[^"\\\\]*(\\\\?")`, 'gi'), '$1$2***$3')
+    // COOKIE headers: the whole header value is credentials, however many
+    // `a=1; b=2` pairs it has.
+    .replace(/((?:set-)?cookie(?:\\?")?\s*[:=]\s*)(?!\\?")([^\r\n}]*)/gi, '$1***')
+    // Every other BARE value (header-dump shapes: `Authorization: Bearer X`):
+    // one value token, optionally after an auth scheme. Deliberately does NOT run
+    // to the end of the line — `"token":{"kind":"opaque","ttl":30}` is a token
+    // DESCRIPTOR and redacting into it produced unbalanced JSON in the very
+    // evidence a human reads (2026-12 third review), while prose after `token:`
+    // lost its tail.
+    .replace(new RegExp(`(${key}(?:\\\\?")?\\s*[:=]\\s*)(?!\\\\?")(?:(?:Bearer|Basic|Digest|Token)\\s+)?[^\\s,}&{\\[]+`, 'gi'), '$1***')
 }

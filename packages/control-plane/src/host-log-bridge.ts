@@ -26,14 +26,19 @@
  * breaks (the launch token is captured in memory by the stdout scanner, never
  * re-read from the log), but a post-hoc log read may no longer contain it.
  *
- * The exporter is mounted through the plugin's OWN `ctx.effect`: Cordis's
- * `LoggerService.exporter()` registers its effect on the service's context (the
- * app root) and returns that disposer, so a registration made directly from the
- * plugin would survive the plugin's unload — a loader remount (`patchReload:
- * 'live'`) would then stack a second exporter and write every application line
- * twice. The generated module re-owns the registration so unloading removes it;
- * the vendor contract it depends on is pinned by a test that reads the pinned
- * Cordis source, not by an import that self-skips in CI.
+ * The exporter is NOT mounted through `LoggerService.exporter()`. That helper is
+ * itself `this.ctx.effect(...)`, and its disposer deletes
+ * `exporters.delete(this._snExporter)` — the CURRENT counter, not its own id
+ * (pinned logger.ts:232-237). Two consequences, both verified against the pinned
+ * source (2026-12 third review): unloading ANY exporter's fiber removes whichever
+ * exporter registered last, and unloading THIS plugin would remove an unrelated
+ * exporter while possibly leaving ours installed. The generated module therefore
+ * registers straight into the public `exporters` Map under a Symbol key (counter
+ * keys are numbers, so neither side can touch the other's entry) and removes
+ * exactly its own key on unload. `ctx.logger.exporter()` remains the fallback for
+ * a host without that public Map. The vendor contract this depends on is pinned
+ * by a test that reads the pinned Cordis source, not by an import that self-skips
+ * in CI.
  *
  * THE SWITCH: `DSH_CHAMBER_HOST_LOG_LEVEL` (HOST_LOG_BRIDGE_ENV). Unset/empty/
  * off/0/false/no ⇒ NO bridge row, NO generated file: the overlay is
@@ -257,37 +262,42 @@ export default function chamberHostLogBridge(ctx) {
           } catch { /* diagnostics must never break the host */ }
         },
       }
+      const exporters = ctx.logger && ctx.logger.exporters
+      if (exporters !== null && exporters !== undefined && typeof exporters.set === 'function') {
+        // Register DIRECTLY: logger.exporter() would arm the counter disposer
+        // described above, which removes the newest registration whenever ANY
+        // exporter fiber unloads (including ours). A Symbol key never collides
+        // with the numeric counter keys, so the upstream bug cannot reach our
+        // entry and our removal cannot reach anyone else's.
+        const key = Symbol('chamber-host-log-bridge')
+        // Deliberately NOT wrapped: a throwing registration must propagate so the
+        // caller's mount mark stays unset and a later apply can retry (the outer
+        // try/catch keeps the host boot alive either way).
+        exporters.set(key, sink)
+        return function () {
+          try { exporters.delete(key) } catch { /* ignore */ }
+        }
+      }
+      // Host without the public exporter map: the documented API is all there is.
       const returned = ctx.logger.exporter(sink)
-      // The pinned cordis disposer deletes the CURRENT counter entry
-      // (exporters.delete(this._snExporter), logger.ts:232-237), not this
-      // registration's own id. It therefore removes whichever exporter
-      // registered LAST: with another exporter mounted after ours it would kill
-      // THAT one and leave ours installed, so the next mount would double every
-      // application line. Remove our own entry by identity instead (exporters is
-      // a public Map on the service); the returned disposer is deliberately
-      // unused.
-      void returned
       return function () {
-        try {
-          for (const entry of ctx.logger.exporters) {
-            if (entry[1] === sink) ctx.logger.exporters.delete(entry[0])
-          }
-        } catch { /* ignore */ }
+        try { if (typeof returned === 'function') returned() } catch { /* ignore */ }
       }
     }
-    // LoggerService.exporter() registers its effect on the ROOT context (the
-    // service's own ctx), so an exporter mounted directly here would outlive
-    // this plugin's fiber: a loader remount would leave the previous exporter
-    // installed and every application line would reach stderr twice (N times
-    // after N remounts). Re-own the registration through THIS fiber's effect,
-    // whose disposer (ours, identity-based) removes the exporter when the plugin
-    // unloads. MOUNTED is cleared by that same disposer: a same-fiber reload
-    // (Fiber.update re-runs the plugin with the SAME ctx) disposes the effect
-    // first, so marking ownership outside the effect would suppress the
-    // re-mount and silently stop the bridge.
+    // The registration is owned by THIS fiber's effect: a loader remount
+    // (patchReload: 'live') disposes the effect and re-runs the body, and the
+    // effect's disposer removes exactly our own exporter key, so no run can
+    // leave a second exporter behind. MOUNTED is cleared by that same disposer:
+    // a same-fiber reload (Fiber.update re-runs the plugin with the SAME ctx)
+    // disposes the effect first, so marking ownership outside the effect would
+    // suppress the re-mount and silently stop the bridge.
     const run = function () {
-      MOUNTED.add(ctx)
+      // Mark ONLY after a successful mount: effect() asserts the fiber is active
+      // BEFORE it runs this callback (fiber.ts), so a throw here means nothing
+      // was registered — and marking first would leave the ctx poisoned, so a
+      // later apply could never retry and the bridge would be silently dead.
       const dispose = mount()
+      MOUNTED.add(ctx)
       return function () {
         MOUNTED.delete(ctx)
         dispose()

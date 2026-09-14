@@ -263,11 +263,39 @@ export function anchorCategory(anchor) {
  */
 const SOURCE_SYNTAX_PATH = /\.(?:ts|tsx|mts|cts)$/
 
-function attributeEmissionPatterns(token, { sourceSyntax = false } = {}) {
+/**
+ * `data-chat-anchor-key` → `chatAnchorKey`（`dataset` 的键形）。写入
+ * `el.dataset.chatAnchorKey = …` 与 `setAttribute` 等效，是正常重构；只接受**赋值**
+ * 形，读取形仍属消费形。
+ */
+function datasetKeyFor(token) {
+  return token.replace(/^data-/, '').replace(/-(\w)/g, (_match, ch) => ch.toUpperCase())
+}
+
+/**
+ * 同一文件里 `const ID = "data-x"` 这类**常量别名**：真实上游已经这么写
+ * （`dsh-client-ui-layout/lib/client.js` 的 `DARK_ATTRIBUTE`），只认字面量的判定会
+ * 把它算成「没有写入点」——假红。别名只在同一文件内生效，且仍必须出现在
+ * set/toggle/removeAttribute 调用里。
+ */
+function aliasesFor(text, token) {
+  const found = []
+  for (const match of text.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*["']([^"']+)["']/g)) {
+    if (match[2] === token) found.push(match[1])
+  }
+  return found
+}
+
+function attributeEmissionPatterns(token, { fileText = '', path = '' } = {}) {
   const escaped = escapeRe(token)
+  const sourceSyntax = SOURCE_SYNTAX_PATH.test(path)
+  const aliasPatterns = aliasesFor(fileText, token)
+    .map(alias => new RegExp(String.raw`(?:set|toggle|remove)Attribute\(\s*${escapeRe(alias)}\b`))
   return [
     new RegExp(String.raw`["']${escaped}["']\s*:`),
     new RegExp(String.raw`(?:set|toggle|remove)Attribute\(\s*["']${escaped}["']`),
+    ...aliasPatterns,
+    new RegExp(String.raw`\.dataset\.${datasetKeyFor(escaped)}\s*=(?!=)`),
     ...(sourceSyntax ? [new RegExp(String.raw`(?<![\w-])${escaped}\s*=`, 'i')] : []),
   ]
 }
@@ -318,7 +346,7 @@ function evidenceByStrength(files, emissionPatternsFor, selectorPatterns) {
 export function attributeEvidence(files, token) {
   return evidenceByStrength(
     files,
-    file => attributeEmissionPatterns(token, { sourceSyntax: SOURCE_SYNTAX_PATH.test(file.path) }),
+    file => attributeEmissionPatterns(token, { fileText: file.text, path: file.path }),
     attributeSelectorPatterns(token),
   )
 }
@@ -329,18 +357,39 @@ export function roleEvidence(files, role) {
 }
 
 /**
- * slot key 在上游产物里的发射形态。`renderSlot("<key>"` 是 **key 发射点**
- * （renderer 的槽渲染器把 key 直接写成 `data-slot` 属性值），其余几种是同一
- * key 的 API/选择器形。任何一条命中即视为「上游仍发射该 slot」。
+ * slot key 的**写入形**：渲染器把 key 变成 DOM 的两环
+ *   1. `renderSlot("<key>"` —— key 发射点（ui-renderer 的槽渲染器）；
+ *   2. `"data-slot": "<key>"` / `setAttribute("data-slot", "<key>")` —— 值投影的字面量形。
+ * **消费形**：`slots.inject|subscribe|entries("<key>")`（客户端注册/查询 API）与
+ * `[data-slot="<key>"]` 选择器——它们证明页面**用**这个槽，不证明渲染器还在**发射**它。
+ * 2026-12 第三轮复核：这一层原先没有分级，于是「上游删掉 renderSlot、只留注册 API 或
+ * 选择器」这条漂移在 16 个 slot 锚点（含 19 项最小断言集里的一半）上照样绿。
  */
-export function slotEvidencePatterns(slot) {
+export function slotEmissionPatterns(slot) {
   const escaped = escapeRe(slot)
   return [
     new RegExp(`renderSlot\\(\\s*["']${escaped}["']`),
-    new RegExp(`slots\\.(?:inject|subscribe|entries)\\(\\s*["']${escaped}["']`),
     new RegExp(`["']data-slot["']\\s*:\\s*["']${escaped}["']`),
+    new RegExp(`(?:set|toggle|remove)Attribute\\(\\s*["']data-slot["']\\s*,\\s*["']${escaped}["']`),
+  ]
+}
+
+export function slotSelectorPatterns(slot) {
+  const escaped = escapeRe(slot)
+  return [
+    new RegExp(`slots\\.(?:inject|subscribe|entries)\\(\\s*["']${escaped}["']`),
     new RegExp(`\\[data-slot=["']${escaped}["']\\]`),
   ]
+}
+
+/** 全形态并集（保留导出面：调用方要「有没有提到」时用它；判定走上面两级）。 */
+export function slotEvidencePatterns(slot) {
+  return [...slotEmissionPatterns(slot), ...slotSelectorPatterns(slot)]
+}
+
+/** slot 锚点：写入形 / 消费形两份证据。 */
+export function slotEvidence(files, slot) {
+  return evidenceByStrength(files, () => slotEmissionPatterns(slot), slotSelectorPatterns(slot))
 }
 
 /**
@@ -351,7 +400,8 @@ export function slotEvidencePatterns(slot) {
  * @returns {string[]} 命中的文件路径（去重，稳定顺序）。
  */
 export function anchorEvidence(files, anchor) {
-  // attribute/role 走「写入形优先」的两级判定；slot / hash 仍是单一形态集。
+  // attribute / role / slot 走同一套「写入形优先」的两级判定；hash token 只有
+  // 字面量一种形态（它本就是 advisory：pin 一动必变）。
   if (anchor.kind === 'attribute') {
     const { emissions, selectors } = attributeEvidence(files, anchor.token)
     return emissions.length > 0 ? emissions : selectors
@@ -360,10 +410,11 @@ export function anchorEvidence(files, anchor) {
     const { emissions, selectors } = roleEvidence(files, anchor.token)
     return emissions.length > 0 ? emissions : selectors
   }
-  const patterns = anchor.kind === 'slot'
-    ? slotEvidencePatterns(anchor.token)
-    : [new RegExp(escapeRe(anchor.token))]
-  return files.filter(file => patterns.some(pattern => pattern.test(file.text))).map(file => file.path)
+  if (anchor.kind === 'slot') {
+    const { emissions, selectors } = slotEvidence(files, anchor.token)
+    return emissions.length > 0 ? emissions : selectors
+  }
+  return files.filter(file => new RegExp(escapeRe(anchor.token)).test(file.text)).map(file => file.path)
 }
 
 /** 一个锚点的证据强度：attribute/role 分写入形与消费形，其余 kind 只有一种形态
@@ -371,6 +422,7 @@ export function anchorEvidence(files, anchor) {
 function strengthOf(files, anchor) {
   if (anchor.kind === 'attribute') return attributeEvidence(files, anchor.token)
   if (anchor.kind === 'role') return roleEvidence(files, anchor.token)
+  if (anchor.kind === 'slot') return slotEvidence(files, anchor.token)
   return { emissions: anchorEvidence(files, anchor), selectors: [] }
 }
 
@@ -422,7 +474,9 @@ export function anchorFindings({ anchors, upstream, chamber, required = REQUIRED
   const declaredKeys = new Set(anchors.map(anchor => `${anchor.kind}:${anchor.token}`))
 
   // ---- 结构性前提：data-slot 属性名本身 ----
-  const structural = anchorEvidence(upstream, { kind: 'attribute', token: STRUCTURAL_ATTRIBUTE })
+  // 结构性前提同样只认写入形：选择器里的 `[data-slot=…]` 是消费方证据，上游把
+  // 属性投影删掉、只留选择器时这里也必须红（第三轮复核的 F1）。
+  const structural = attributeEvidence(upstream, STRUCTURAL_ATTRIBUTE).emissions
   if (structural.length === 0) {
     violations.push(`结构性锚点 ${STRUCTURAL_ATTRIBUTE} 在上游产物零命中——所有 slot 判据都失去前提（渲染器不再发射 data-slot）`)
   } else {

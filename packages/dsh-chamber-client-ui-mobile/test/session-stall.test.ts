@@ -321,7 +321,7 @@ test('stall shape: an active conversation with a displayed header and no rows is
   assert.equal(probe.headerVisible, true)
   assert.equal(probe.flowPresent, true)
   assert.equal(probe.hasRows, false)
-  assert.equal(probe.activeRoot, tree.phase, 'the phase node is the session identity')
+  assert.equal(probe.activeRoot, tree.phase, 'the active conversation root is the phase node')
   assert.equal(probe.header, tree.header, 'the displayed header is the position anchor')
   assert.equal(isStallShape(probe), true)
 })

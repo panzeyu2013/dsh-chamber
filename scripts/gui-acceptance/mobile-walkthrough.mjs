@@ -25,6 +25,13 @@
  *   M-8 WebSocket 帧捕获（`Network.webSocketFrameSent/Received`，落盘 JSON）
  *   M-9 走查期间的控制台/网络观察（观察项，判定沿用桌面走查的容忍表）
  *
+ * 脱敏的**已知边界**（2026-12 第三轮复核）：能识别五种键名族（…token / …key /
+ * authorization / cookie / password / secret / credential / session / sid / jwt）与
+ * URL 查询串、JSON 转义形、`\u0022` 形；但**跨帧拼接**的凭据、URL **路径段/矩阵参数**里的
+ * 值、以及 `webSocketFrameError.errorMessage` 里的自由文本，只有在值本身来自环境变量
+ * （`--auth-token-env`/`--cookie-env`）时才一定能抹掉。不要把本工具的输出当成
+ * 「一定不含凭据」的证明。
+ *
  * 凭据：**没有任何硬编码**。要访问认证过的 gateway 时只从环境变量读：
  *   --auth-token-env <NAME>（默认 DSH_MOBILE_AUTH_TOKEN）→ `Authorization: Bearer <值>`
  *   --cookie-env <NAME>     （默认 DSH_MOBILE_COOKIE）    → `Cookie: <值>`
@@ -192,6 +199,12 @@ export async function runMobileWalkthrough({
   settleMs = 2_000,
   frameCap = DEFAULT_FRAME_CAP,
   env = process.env,
+  // Test seams (defaults are the real CDP paths). Injectable so the whole run —
+  // every sink the credentials could reach — is covered by a hermetic test
+  // instead of only by a live browser (2026-12 third review: the wiring fixes had
+  // no automated coverage at all).
+  discover = discoverMobileTarget,
+  connect = (webSocketDebuggerUrl) => CdpSession.connect(webSocketDebuggerUrl),
 } = {}) {
   const rec = createRecorder()
   const shots = path.join(outDir, 'shots')
@@ -204,7 +217,7 @@ export async function runMobileWalkthrough({
   let target = null
   let connectError = null
   try {
-    target = await discoverMobileTarget(cdpPort, url, credentials.secrets)
+    target = await discover(cdpPort, url, credentials.secrets)
   } catch (error) {
     connectError = error
   }
@@ -233,8 +246,9 @@ export async function runMobileWalkthrough({
     }
   }
 
-  console.log(`# CDP 移动走查目标 ${redactSecrets(target.url, credentials.secrets)}（${target.title}）`)
-  const session = await CdpSession.connect(target.webSocketDebuggerUrl)
+  console.log(`# CDP 移动走查目标 ${redactSecrets(target.url, credentials.secrets)}`
+    + `（${redactSecrets(target.title, credentials.secrets)}）`)
+  const session = await connect(target.webSocketDebuggerUrl)
   // `--ws-frames off` means off: no listener, no accumulation. (The summary is
   // the only place raw frame bytes leave this module, so not collecting is both
   // the honest reading of the flag and one less credential-bearing buffer.)
@@ -273,13 +287,17 @@ export async function runMobileWalkthrough({
     rec.add('M-1', '壳挂载成功（会话/插件面的前提）', mountVerdict.ok, mountVerdict.evidence)
     await sleep(settleMs)
 
+    /** Record a judged leg through the pure --require-run gate. */
+    const addGated = (id, title, verdict) => {
+      const gated = applyRequireRun(verdict, requireRun)
+      rec.add(id, title, gated.ok, gated.evidence)
+    }
     const deviceFacts = await session.evaluate(DEVICE_FACTS_EXPRESSION)
     await shot('M1-device')
     const emulation = deviceEmulationVerdict(deviceFacts, device)
     rec.add('M-2', '设备模拟生效（390×844@3x + 触控 ⇒ pointer:coarse / hover:none）', emulation.ok, emulation.evidence)
 
-    const overflow = overflowVerdict(deviceFacts, device)
-    rec.add('M-3', '无横向溢出（设备宽基准；task 的 innerWidth 断言一并报告）', overflow.ok, overflow.evidence)
+    addGated('M-3', '无横向溢出（设备宽基准；task 的 innerWidth 断言一并报告）', overflowVerdict(deviceFacts, device))
 
     const activation = pluginActivationVerdict(deviceFacts)
     rec.add('M-4', '移动插件激活（观察项：[data-mobile-frame] 打标）', activation.ok, activation.evidence)
@@ -288,10 +306,6 @@ export async function runMobileWalkthrough({
     //      情形，USAGE 承诺过 ⇒ applyRequireRun 把它改判 FAIL） ----
     const headerFacts = await session.evaluate(HEADER_FACTS_EXPRESSION)
     await shot('M2-header')
-    const addGated = (id, title, verdict) => {
-      const gated = applyRequireRun(verdict, requireRun)
-      rec.add(id, title, gated.ok, gated.evidence)
-    }
     addGated('M-5', `会话头首行高度 ≤ 48px（实测，无会话则 INFO）`, headerFirstRowVerdict(headerFacts))
     addGated('M-6', '会话头内无「单字换行」（行盒数 + 高度启发式）', headerWrapVerdict(headerFacts))
     addGated('M-7', '会话头内所有 button 命中盒 ≥ 44px', hitBoxVerdict(headerFacts))
