@@ -1940,6 +1940,44 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     }
   }
 
+  /** Consume an app-update invalidation stamp when the user makes a FRESH
+   * selection under the CURRENT shell. `shouldInvalidate` reads the ACTIVE
+   * `invalidatedAt`/`invalidatedReason` pair, so carrying it into a new record
+   * (the spread this replaces) makes that selection born-invalidated: pending
+   * is then permanently ignored by effectivePending/persistedPendingVersion,
+   * apply-now refuses it as `no_selection`, and the leftover intent journal
+   * next to the still-stamped record is classified `selection-corrupt` by the
+   * semantic-mismatch detector — the runtime can never switch again.
+   *
+   * Desktop parity: dsh-runtime-controller.ts writes a clean literal record on
+   * install, so the desktop's post-update re-selection does take effect. The
+   * historical `lastInvalidated*` fields are deliberately KEPT (design 18 F4:
+   * they are the durable user-visible "original selection retained" history and
+   * must survive); only the active stamp is cleared.
+   *
+   * Deliberately mirrors runtime-startup.ts's F4 reactivation (the core's other
+   * clear-the-stamp site): null the active pair rather than dropping the keys,
+   * and fold the stamp into `lastInvalidated*` first so a record carrying a
+   * stamp but no history does not lose its only "when/why" evidence.
+   * `lastInvalidationRecovered` is intentionally NOT set: it means "F4
+   * automatically restored the previous tree after a failed builtin probe"
+   * (the desktop reads it for that message), which a user re-selection is not. */
+  function reactivateSelection(record: OverrideRecord): OverrideRecord {
+    if (record.invalidatedAt == null && record.invalidatedReason == null) return record
+    const invalidatedAt = record.invalidatedAt ?? null
+    const invalidatedReason = record.invalidatedReason ?? null
+    return {
+      ...record,
+      invalidatedAt: null,
+      invalidatedReason: null,
+      lastInvalidatedAt: record.lastInvalidatedAt ?? invalidatedAt ?? new Date().toISOString(),
+      lastInvalidatedReason: record.lastInvalidatedReason ?? invalidatedReason ?? 'shell-version-changed',
+      lastInvalidatedFromVersion: record.lastInvalidatedFromVersion
+        ?? record.resolvedVersion
+        ?? record.chosenVersion,
+    }
+  }
+
   function currentPointerVersion(): string | null {
     return readCurrentPointer(baseDir)
   }
@@ -1975,7 +2013,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
         }
         clearStaleIntent()
         writeOverride(baseDir, {
-          ...previous,
+          ...reactivateSelection(previous),
           shellVersion,
           chosenVersion: version,
           resolvedVersion: version,
@@ -2054,7 +2092,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       }
       clearStaleIntent()
       writeOverride(baseDir, {
-        ...previous,
+        ...reactivateSelection(previous),
         shellVersion,
         chosenVersion: version,
         resolvedVersion: result.resolvedVersion,
@@ -2094,6 +2132,20 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       swapAttempted: false,
     }
     if (record.chosenVersion === null) throw Object.assign(new Error('no runtime version selected'), { code: 'no_selection' })
+    // Symmetric with applyNowPreflight's no_selection gate: a record invalidated
+    // by an app update must NOT be armed. Writing pending on it would return an
+    // honest-looking 200 for a switch that effectivePending/persistedPendingVersion
+    // then ignore forever, and the stranded intent journal beside the still-
+    // stamped record is what the metadata health detector later reports as
+    // selection-corrupt. The user must re-select under the current shell first
+    // (select() consumes the stamp) — F4 deliberately does not trust a choice
+    // made by the previous shell.
+    if (shouldInvalidate(record, shellVersion)) {
+      throw Object.assign(
+        new Error('the stored runtime selection was invalidated by a gateway update; re-select the version before applying it'),
+        { code: 'no_selection' },
+      )
+    }
     // Round-4 fix: the activation intent must agree with the pending target —
     // a stale intent journal (e.g. from an earlier rollback) would otherwise
     // FATAL-block the next boot on journal-mismatch. writeActivationIntent
@@ -2183,8 +2235,13 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       manualRollback: true,
       intentKind: 'version-switch' as ActivationIntentKind,
     })
+    // A manual rollback is likewise a FRESH user choice under the current
+    // shell, so it consumes an app-update stamp exactly like select() does —
+    // without this, arming the rollback would write a pending that
+    // effectivePending/persistedPendingVersion ignore, stranding the same
+    // journal-next-to-a-stamped-record state that reads as selection-corrupt.
     writeOverride(baseDir, {
-      ...record,
+      ...reactivateSelection(record),
       shellVersion,
       chosenVersion: version,
       pending: version,

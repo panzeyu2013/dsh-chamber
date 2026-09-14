@@ -2688,6 +2688,143 @@ test('builtin-active cached selection stays staged across restart without weaken
   }
 })
 
+test('a post-update re-selection consumes the invalidation stamp instead of stranding a dead pending (2026-09 gateway switch regression)', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-reactivate-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    // The exact durable precondition observed on the dsh-test gateway after its
+    // 0.2.4 shell update: the retained choice still carries the ACTIVE
+    // invalidation stamp (with shellVersion already refreshed to the current
+    // shell, which is what made the pair self-contradictory), plus the F4
+    // history fields the UI echoes.
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion,
+      chosenVersion: '0.5.0',
+      resolvedVersion: '0.5.0',
+      pending: null,
+      swapAttempted: false,
+      invalidatedAt: '2026-09-10T15:45:50.948Z',
+      invalidatedReason: `gateway shell updated to ${gatewayPackageVersion}`,
+      lastInvalidatedAt: '2026-09-10T15:45:50.948Z',
+      lastInvalidatedReason: `gateway shell updated to ${gatewayPackageVersion}`,
+      lastInvalidatedFromVersion: '0.5.0',
+      lastInvalidationRecovered: false,
+      lastOutcome: null,
+      lastError: null,
+    })
+    const plane = fakePlane()
+    plane._state.connectionState = 'ready'
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane,
+      logger: silentLogger,
+      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
+    })
+    const routes = createRuntimeRoutes(() => manager, silentLogger)
+
+    // apply() on an invalidated record must refuse honestly instead of arming a
+    // pending the core permanently ignores (pre-fix: 200 + dead pending, then
+    // the stranded intent journal tripped the selection-corrupt detector).
+    const refused = await runRoute(routes, 'POST', '/chamber/runtime/apply')
+    assert.equal(refused.status, 409, 'an invalidated selection must not be armed')
+    assert.equal((refused.json as { code: string }).code, 'no_selection')
+    assert.equal(readOverride(stateDir)?.pending, null, 'the refused apply must not rewrite pending')
+    assert.equal(readActivationJournalState(stateDir).kind, 'missing', 'the refused apply must not strand an intent journal')
+
+    // Re-selecting under the CURRENT shell is the user re-expressing intent: it
+    // consumes the ACTIVE stamp (desktop parity) and keeps the F4 history.
+    assert.equal((await manager.select('1.0.0')).accepted, true)
+    const reselected = readOverride(stateDir)
+    assert.equal(reselected?.chosenVersion, '1.0.0')
+    assert.equal(reselected?.invalidatedAt, null, 'the active invalidation stamp is consumed')
+    assert.equal(reselected?.invalidatedReason, null, 'the active invalidation reason is consumed')
+    assert.equal(reselected?.lastInvalidatedAt, '2026-09-10T15:45:50.948Z', 'F4 history survives the re-selection')
+    assert.equal(reselected?.lastInvalidatedFromVersion, '0.5.0', 'the retained original selection stays visible')
+
+    // The switch now arms for real and actually commits.
+    const applied = await runRoute(routes, 'POST', '/chamber/runtime/apply')
+    assert.equal(applied.status, 200)
+    assert.equal(readOverride(stateDir)?.pending, '1.0.0')
+    const now = await runRoute(routes, 'POST', '/chamber/runtime/apply-now')
+    assert.equal(now.status, 202)
+    await waitForSettle(manager)
+    assert.equal(readCurrentPointer(stateDir), '1.0.0', 'the re-selected switch commits')
+    const settled = await manager.status()
+    assert.equal(settled.activeVersion, '1.0.0')
+    assert.equal(settled.metadataHealth, 'healthy', 'a completed switch must never project selection-corrupt')
+    assert.equal(settled.canRecoverMetadata, false, 'no recovery surface is advertised for healthy metadata')
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('an instance already stranded in post-update selection-corrupt metadata heals through the ordinary select+apply path', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-heal-stranded-'))
+  try {
+    makeValidTree(stateDir, '1.0.0')
+    // The literal durable state the dsh-test gateway was found in after its rc.2
+    // switch attempt: a version-switch intent journal + armed pending written by
+    // apply(), sitting next to an override that still carries the app-update
+    // stamp — and NO lastInvalidated* history (the backfill case).
+    writeActivationIntent(stateDir, {
+      targetVersion: '1.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
+    })
+    writeOverride(stateDir, {
+      shellVersion: gatewayPackageVersion,
+      chosenVersion: '1.0.0',
+      resolvedVersion: '1.0.0',
+      pending: '1.0.0',
+      swapAttempted: false,
+      selectedOnly: false,
+      invalidatedAt: '2026-09-10T15:45:50.948Z',
+      invalidatedReason: `gateway shell updated to ${gatewayPackageVersion}`,
+    })
+    const plane = fakePlane()
+    plane._state.connectionState = 'ready'
+    const manager = createGatewayRuntimeManager({
+      config: config(stateDir),
+      plane,
+      logger: silentLogger,
+      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
+    })
+    const routes = createRuntimeRoutes(() => manager, silentLogger)
+
+    // Faithful reproduction of the reported symptom: semantic-mismatch
+    // selection-corrupt, and the component classifier contributes NO id — which
+    // is what the settings UI renders as「未知组件」. If the classifier ever
+    // learns to name journal-mismatch, update this expectation (it would be an
+    // improvement, not a regression).
+    const broken = await manager.status()
+    assert.equal(broken.metadataHealth, 'selection-corrupt', 'the stranded state is reported corrupt')
+    assert.deepEqual(broken.metadataComponents, [], 'the reported 未知组件 symptom: no component id is classified')
+    assert.equal(broken.canRecoverMetadata, true, 'recover-metadata is advertised')
+    assert.equal(broken.startupBlockedReason, null, 'the startup gate never blocked — hence 已隔离 was not actually true')
+    assert.equal(broken.pending, null, 'the armed pending is invisible while the record is invalidated')
+
+    // The ordinary UI path must heal it without recover-metadata or operator
+    // surgery: select consumes the stamp (and clears the stale intent journal),
+    // apply then arms for real, apply-now commits.
+    assert.equal((await manager.select('1.0.0')).accepted, true)
+    const healed = readOverride(stateDir)
+    assert.equal(healed?.invalidatedAt, null)
+    assert.equal(healed?.lastInvalidatedAt, '2026-09-10T15:45:50.948Z',
+      'the stamp is folded into history instead of being lost')
+    assert.equal(healed?.lastInvalidatedFromVersion, '1.0.0', 'the pre-selection choice is recorded')
+    const applied = await runRoute(routes, 'POST', '/chamber/runtime/apply')
+    assert.equal(applied.status, 200, 'apply is admitted again once the stamp is consumed')
+    assert.equal((await runRoute(routes, 'POST', '/chamber/runtime/apply-now')).status, 202)
+    await waitForSettle(manager)
+    assert.equal(readCurrentPointer(stateDir), '1.0.0', 'the healed instance actually switched')
+    const settled = await manager.status()
+    assert.equal(settled.activeVersion, '1.0.0')
+    assert.equal(settled.metadataHealth, 'healthy', 'the stranded metadata is fully cleared')
+    await manager.dispose()
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
 test('staging v2 from active user v1 never authorizes builtin if v1 current pointer disappears', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-stage-from-user-'))
   try {
