@@ -56,11 +56,15 @@ decision value and is not already owned by a design document or `CHANGELOG.md`.
 - `CHANGELOG.md` (with its `docs/CHANGELOG.en-US.md` mirror and the `verify:i18n` record) is written
   at RELEASE time only — never add `[Unreleased]` entries while implementing.
 - `CHANGELOG.md` records **only the difference between adjacent formal releases** (`X.Y.Z` against the
-  previous `X.Y.Z`): what someone running the previous formal release sees changed. A section still has
-  to exist for a beta (`release.yml` extracts it as the release body), but its content obeys the same
-  rule. The internal path taken to get there — intermediate dsh pins, beta-to-beta deltas, batch/round
-  codenames, gate counts, lockfile-regeneration notes, verification reports — never goes in: it belongs
-  to git history and, while still open, `docs/progress/STATUS.md`.
+  previous `X.Y.Z`): what someone running the previous formal release sees changed. A formal release
+  whose name was preceded by a beta series is therefore **never** the delta from the last beta
+  (`X.Y.Z` against `X.Y.Z-beta.N`): it aggregates that whole series into one release-level delta,
+  expressed once, with the beta-to-beta steps left out. A beta section obeys the same rule (it too is
+  written against the previous formal release), so a reader of the previous formal release can use
+  either section; a section still has to exist for a beta because `release.yml` extracts it as the
+  release body. The internal path taken to get there — intermediate dsh pins, beta-to-beta deltas,
+  batch/round codenames, gate counts, lockfile-regeneration notes, verification reports — never goes in:
+  it belongs to git history and, while still open, `docs/progress/STATUS.md`.
 
 ### Before a dsh (upstream) upgrade
 
