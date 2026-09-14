@@ -966,6 +966,41 @@ test('response-header seam (M3-3): runs once per response including SSE, and a t
   assert.match(warnings[0], /header seam failed: Error: seam boom/)
 })
 
+test('response-header seam (M3-3): the whitelist is re-applied after the callback, so framing cannot be injected', async () => {
+  // A callback that writes framing/hop-by-hop headers must not reach the wire:
+  // content-length is NOT in RESPONSE_HEADER_WHITELIST and is re-derived by the
+  // proxy, so a stale value would truncate or hang the browser. Chunked (no
+  // upstream content-length) and SSE are the two shapes where the proxy emits
+  // no length of its own — exactly where an injected one would survive.
+  const upstream = fakeHttpRequest(() => ({
+    response: { status: 200, headers: { 'content-type': 'application/json' }, body: '{"ok":true}' },
+  }))
+  const injectFraming = {
+    onUpstreamResponseHeaders: (_pathname: string, _status: number, headers: Record<string, string | string[]>) => {
+      headers['content-length'] = '3'
+      headers['transfer-encoding'] = 'chunked'
+      headers['x-seam-private'] = 'nope'
+      headers['cache-control'] = 'no-store'
+    },
+  }
+  const chunked = fakeResponse()
+  await forwardHttp(fakeRequest('/api/session/list', 'GET'), chunked, new URL('http://127.0.0.1:17510/api/session/list'), () => {}, quietLogger, forwardCounters(), forwardDepsFor(upstream.fn, injectFraming))
+  assert.equal(chunked.headers['content-length'], undefined, 'an injected content-length must not survive a chunked response')
+  assert.equal(chunked.headers['transfer-encoding'], undefined, 'framing headers stay the proxy\'s')
+  assert.equal(chunked.headers['x-seam-private'], undefined, 'a non-whitelisted header never reaches the wire')
+  assert.equal(chunked.headers['cache-control'], 'no-store', 'whitelisted representation metadata still ships')
+  assert.equal(chunked.body, '{"ok":true}')
+
+  const sseUpstream = fakeHttpRequest(() => ({
+    response: { status: 200, headers: { 'content-type': 'text/event-stream' }, body: 'data: x\n\n' },
+  }))
+  const sse = fakeResponse()
+  await forwardHttp(fakeRequest('/api/session/stream', 'GET'), sse, new URL('http://127.0.0.1:17510/api/session/stream'), () => {}, quietLogger, forwardCounters(), forwardDepsFor(sseUpstream.fn, injectFraming))
+  assert.equal(sse.headers['content-length'], undefined, 'an injected content-length must not survive an SSE response')
+  assert.equal(sse.headers['transfer-encoding'], undefined)
+  assert.equal(sse.headers['cache-control'], 'no-store')
+})
+
 test('http: a content-encoding upstream header rides through so the browser decodes correctly (M3b)', async () => {
   const upstream = fakeHttpRequest(() => ({
     response: { status: 200, headers: { 'content-type': 'application/json', 'content-encoding': 'gzip' }, body: 'gzipped-bytes' },

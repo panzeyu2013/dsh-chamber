@@ -19,6 +19,7 @@
 import { extname, join, resolve, sep } from 'node:path'
 import { readFileSync, statSync } from 'node:fs'
 import { gzipSync } from 'node:zlib'
+import { isHashedStaticAssetPath } from './proxy-forward.ts'
 import type { Logger } from './types.ts'
 import type { ApiRequest, ApiResponse } from './api.ts'
 
@@ -230,9 +231,13 @@ export function createStaticServing({ webDistDir, logger }: StaticServingOptions
     // docs/progress/performance-baseline.md). index.html
     // keeps no-cache (the __DSH_BOOT__ manifest moves every build). Other
     // paths (e.g. /manifest.json) keep their previous no-header behavior.
+    // The predicate is the SAME one the gateway's response-header seam uses
+    // (proxy-forward.ts `isHashedStaticAssetPath`): a bare `/assets/` prefix
+    // would pin a future UNhashed entry for a year, which is exactly the
+    // staleness the shared rule exists to prevent.
     if (candidate === '/index.html') {
       headers['cache-control'] = 'no-cache'
-    } else if (candidate.startsWith('/assets/')) {
+    } else if (isHashedStaticAssetPath(candidate)) {
       headers['cache-control'] = 'public, max-age=31536000, immutable'
     }
     // On-the-fly gzip for text-like types (only when the client accepts it).

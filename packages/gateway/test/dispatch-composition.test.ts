@@ -964,21 +964,45 @@ test('the proxied frontend CSP keeps base-uri on self so the upstream <base href
     assert.equal(res.status, 200)
     assert.equal(res.body, 'proxied')
     const csp = String(res.headers['content-security-policy'])
-    // @deepseek-ai/dsh-host-frontend-static re-injects <base href="/"> on every
-    // renderIndex (its SPA deep-link fix). `base-uri 'none'` makes the browser
-    // refuse that element, so a deep link resolves its relative ./assets/…
-    // against the deep-link document URL → 404 → white screen. The proxy cannot
-    // rewrite the streamed HTML any more than it can backfill the nonce for
-    // script-src, so base-uri follows script-src onto the same-origin
-    // allowance. Regression locked here (GATEWAY_PROXY_CSP in
-    // packages/gateway/src/dispatch.ts).
+    // @deepseek-ai/dsh-host-frontend-static injects <base href="/"> into every
+    // document it renders from index.html; `base-uri 'none'` makes the browser
+    // refuse that element. Whether that costs a white screen is version-
+    // dependent (in the pinned tree serveStatic renders the index only for the
+    // dist root and the index path, where relative asset URLs already resolve),
+    // so the allowance is recorded as "the element must stay effective", not as
+    // "a deep link was once broken". Regression locked here (GATEWAY_PROXY_CSP
+    // in packages/gateway/src/dispatch.ts).
     assert.match(csp, /base-uri 'self'/)
     assert.doesNotMatch(csp, /base-uri 'none'/)
-    // Every OTHER directive stays byte-identical to the gateway-only relaxation.
     assert.equal(
       csp,
       "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:",
     )
+
+    // Cross-package lockstep (2026-12 review): the design claims "every other
+    // directive is word-for-word the shell's nonce CSP". The literal above
+    // cannot see that — it only restates the gateway constant. Compare against
+    // the SHELL CSP the control plane actually emits (read from its source, the
+    // same peer-source discipline the other lockstep tests use) and require the
+    // two to differ in exactly `base-uri` and `script-src`.
+    const shellSource = readFileSync(new URL('../../control-plane/src/index.ts', import.meta.url), 'utf8')
+    const shellCsp: string | undefined = shellSource.match(/`(default-src 'self'; base-uri 'none';[^`]*?)`/)?.[1]
+    assert.ok(shellCsp !== undefined, 'the control-plane shell CSP template must stay greppable')
+    const directives = (value: string): Map<string, string> => new Map(value.split(';').map(part => {
+      const [name = '', ...rest] = part.trim().split(/\s+/)
+      return [name, rest.join(' ')] as const
+    }))
+    const shell = directives(shellCsp.replace(/\$\{cspNonce\}/g, 'NONCE'))
+    const gateway = directives(csp)
+    assert.deepEqual([...gateway.keys()], [...shell.keys()], 'the directive SETS must match')
+    const differing = [...gateway.keys()].filter(name => gateway.get(name) !== shell.get(name))
+    assert.deepEqual(differing, ['base-uri', 'script-src'],
+      'only the two documented directives may differ from the shell CSP')
+    assert.equal(shell.get('base-uri'), "'none'")
+    assert.equal(gateway.get('base-uri'), "'self'")
+    // script-src keeps every shell source and trades the per-response nonce for
+    // 'unsafe-inline' in place (the placeholder compares equal on both sides).
+    assert.equal(gateway.get('script-src'), shell.get('script-src')?.replace("'nonce-NONCE'", "'unsafe-inline'"))
   } finally { cleanup() }
 })
 

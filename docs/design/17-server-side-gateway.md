@@ -374,11 +374,15 @@ trusted proxy 缺失、重复、含逗号或非法的 XFF 时，client identity 
   **销毁请求 socket**（不排空、不继续消费，防止慢速匿名上传钉住连接；login 与
   change 路由同纪律）；凭据和内部错误不进入日志或响应。
 - 代理到 dsh 前端的响应头取自 `packages/gateway/src/dispatch.ts` 的
-  `GATEWAY_PROXY_CSP`（gateway-only 放宽）：`script-src` 放开 inline（代理无法给上游
-  流式 HTML 回填 nonce），`base-uri` 取 `'self'` 而非 `'none'`——上游
-  `@deepseek-ai/dsh-host-frontend-static` 每次 renderIndex 都注入 `<base href="/">`
-  （SPA 深链修复），`'none'` 会让浏览器拒绝该元素，深链下相对 `./assets/…` 按深链
-  URL 解析成 404/白屏；其余指令与 shell 的 nonce CSP 逐字一致。
+  `GATEWAY_PROXY_CSP`（gateway-only 放宽）：`script-src` 放开 inline（被代理的文档是
+  上游自己的 render 产物，其内联 `__DSH_BOOT__`/loader 脚本不带 nonce，而本进程只往该
+  文档插入 S0 信任声明、并不为不属于自己的脚本铸发/回填 nonce）；`base-uri` 取 `'self'`
+  而非 `'none'`——上游 `@deepseek-ai/dsh-host-frontend-static` 每个 renderIndex 出来的
+  文档都注入 `<base href="/">`，`'none'` 会让浏览器拒绝该元素。该放宽按「元素必须生效」
+  而非按「某个已复现的白屏」记账：固定 pin 下 `serveStatic` 只在 dist 根与 index 路径本身
+  渲染 HTML（其余路径是文件读取，miss 即 404），相对资源 URL 本就解析正确；只有当前移到的
+  上游真的用 index 回答深链（其注释所称的 "SPA-fallback paths"）时，该元素才决定 `./assets/…`
+  是否按站点根解析。其余指令与 shell 的 nonce CSP 逐字一致。
 
 桌面端对 401 的**可行动三态分类**（探针层，非秘密 detail）：
 
@@ -512,7 +516,13 @@ Gateway proxy 与 per-instance proxy 共用 `proxy-forward.ts`，从而保持相
 - 响应头组装提供窄 seam `ProxyForwardDeps.onUpstreamResponseHeaders(pathname, status, headers)`
   （`forwardHttp`，默认 `undefined` = 零变化）：owner 可补上游缺失的表示元数据，gateway 用它给
   内容寻址静态资源加 immutable `cache-control`（上游 dsh-host-frontend-static 只写 `content-type`；
-  命名判定 `isHashedStaticAssetPath`，绝不匹配 `favicon.svg`/`manifest.webmanifest`/`index.html`）；
+  命名判定 `isHashedStaticAssetPath`，绝不匹配 `favicon.svg`/`manifest.webmanifest`/`index.html`）。
+  **seam 的两条硬边界**：其一，回调返回后响应头映射会被 `RESPONSE_HEADER_WHITELIST` 再过滤一次，
+  因此回调写入的 `content-length`/`transfer-encoding` 或任何非表示元数据都到不了线上，framing
+  始终是代理自己的（`content-length` 在过滤后按上游声明重算）；其二，gateway 侧只在「200 + 命名
+  命中 + 上游未给 `cache-control`/`etag`/`expires` + `content-type` 与该扩展名相符」时才盖章——
+  路径本身不是载荷证明：一个把 miss 回退成 index 的 dsh（旧版 frontend-static 就是）会用
+  `text/html` 200 回答资源 URL，给它 immutable 等于把 HTML 按脚本 URL 缓存一年并跨版本回滚存活；
 - WS 只转发握手白名单；30 秒 ping/pong，漏一次 pong 即回收；
 - 响应保留 content encoding、location、vary 等表示/跳转元数据，并重写同源 redirect；
 - 45 秒为 idle timeout；响应 chunk 会重置 timer；SSE/WS 是长流；
@@ -1752,3 +1762,33 @@ PWA / Web Push 社区实现机制（dsh-ui-mobile，jasondu，npm 0.1.8，MIT，
 - `18-dsh-runtime-version.md`：dsh 运行时版本管理的权威行为契约；§3.6 = per-server
   设置分节（local/gateway/ssh 三态挂载差异）、§9 = gateway 宿主实现设计；
 - `docs/progress/STATUS.md`：当前验证证据和剩余实机门禁。
+
+## 20. 已否决的替代方案（2026-12 review 补记）
+
+改动触及既有契约或已交付行为时，按 `AGENTS.md` 的 PR 纪律记下「还考虑过什么、为什么落选」：
+
+- **移动停滞提示的控制面**（实现与锚点见 `packages/dsh-chamber-client-ui-mobile/README.md`）：
+  - 只留「重载」一个按钮（review 前的形态）——**否决**：45s 阈值未经真机校准，健康但缓慢的
+    打开与停滞同形，误报时用户只能在「无视提示」与「中断一次合法加载」之间二选一；补一个
+    「继续等待」把误报代价降到零，代价是提示多一个控件。
+  - 超时后自动重载或自动重开会话——**否决**：违反本插件「只观察、不代替用户决定」的边界，
+    慢链路下会把可完成的一次加载变成永久循环。
+  - 用 `conversationPhase()` 的内部名字（`blank`/`engaging`）当判据——**否决**：这些名字从不到达
+    `[data-phase]`，按它们匹配等于写死一条永不成立（或永不恢复）的规则；DOM 值空间
+    （`settling`/`hero`/`active`）才是可锚定的事实。
+  - 只用 `[data-phase]` 节点当会话身份——**否决**：该节点属于按条目 key 的 root 作用域槽，切会话
+    时原地复用，于是计时、提示与「继续等待」都会被带进下一个会话；会话作用域的 header 子树
+    才是上游实际重挂的边界。
+- **网关的不可变缓存标记**（§8 附近的资产缓存段）：只按路径形状（`-<hash>.<ext>`）打标——
+  **否决**：实测 0.1.0-rc.5 的 frontend-static 会把 miss SPA 回退到渲染后的 index（`text/html`
+  200），那样一个「JS URL 上的一年期 HTML」会跨版本回滚长期驻留；标记必须同时看内容类型与
+  上游自己的缓存元数据。反过来「只在上游声明长缓存时打标」——**否决**：上游对资产不发任何
+  缓存头，那样等于这个优化永远不生效。
+- **宿主日志导出器的卸载归属**（`packages/control-plane/src/host-log-bridge.ts`）：保持直接注册、
+  靠模块释放或「同 ctx 二次挂载」自证——**否决**：cordis 的 `LoggerService.exporter()` 把 effect
+  注册在**服务**的上下文（应用根）上，插件卸载不会移除它；重新物化 loader 会叠加第二个导出器
+  并把每行应用日志写两遍。挂到插件自己的 `ctx.effect` 是唯一由插件生命周期管辖的位置。
+- **锚点保鲜门的 fail-soft 默认**（`scripts/dev/verify-mobile-anchors.mjs`）：让缺锚点树直接 exit 1
+  ——**否决**：CI 与裸 clone 上没有上游树（`packages/desktop/vendor/dsh` 只提交 lockfile），
+  常态红会把门变成噪声；改为默认 fail-soft + 升级流程 §7 显式 `--require-anchor-root`（缺根、
+  无 client 产物、锚点树版本与 pin 不符都 exit 1），让「真的查过」成为可断言的事实。

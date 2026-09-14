@@ -46,6 +46,37 @@ import {
 } from '@dsh-chamber/control-plane'
 import { injectTrustDeclaration } from './html-inject.ts'
 
+/**
+ * Content types a content-addressed asset of one extension may carry. The path
+ * alone is not proof of the payload: an SPA fallback answers an asset URL with
+ * the rendered `text/html` index, and an immutable stamp on that answer would
+ * cache HTML under a script URL for a year (the M3-3 review's poisoning case).
+ * Each entry accepts the types a static host realistically sends for that
+ * extension — including `application/octet-stream` for fonts — and nothing else.
+ */
+const HASHED_ASSET_CONTENT_TYPES: ReadonlyArray<{ readonly extension: string; readonly pattern: RegExp }> = [
+  { extension: '.js', pattern: /^(?:text|application)\/(?:javascript|ecmascript)\b/i },
+  { extension: '.css', pattern: /^text\/css\b/i },
+  { extension: '.woff2', pattern: /^(?:font\/woff2|application\/(?:font-woff2|octet-stream))\b/i },
+  { extension: '.woff', pattern: /^(?:font\/woff|application\/(?:font-woff|octet-stream))\b/i },
+  { extension: '.svg', pattern: /^image\/svg\+xml\b/i },
+]
+
+/**
+ * Whether a 200 response for a content-addressed asset path carries a content
+ * type the extension can actually produce. Pure; exported so the cache-stamp
+ * guard is testable without an upstream.
+ * @param pathname - the resolved upstream pathname (already hash-matched).
+ * @param contentType - the upstream `content-type` header value.
+ * @returns true only for a matching extension/type pair.
+ */
+export function hashedAssetContentTypeMatches(pathname: string, contentType: string | string[] | undefined): boolean {
+  const value = Array.isArray(contentType) ? contentType[0] : contentType
+  if (typeof value !== 'string') return false
+  const entry = HASHED_ASSET_CONTENT_TYPES.find(candidate => pathname.endsWith(candidate.extension))
+  return entry !== undefined && entry.pattern.test(value.trim())
+}
+
 export interface GatewayProxyDeps {
   logger: Logger
   /** The managed local dsh port; null = not ready (503 instance_unavailable). */
@@ -135,15 +166,30 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
     // @deepseek-ai/dsh-host-frontend-static, which writes ONLY content-type —
     // no Cache-Control/ETag/Last-Modified — so the 1.24 MiB Vite shell was
     // re-downloaded on every visit even though every asset name carries a
-    // Vite content hash. Re-add the immutable contract for exactly those
-    // names (the shared predicate is anchored on an EXACT 8-char hash so
+    // Vite content hash. Re-add the immutable contract for exactly those names
+    // (the shared predicate is anchored on an EXACT 8-char hash so
     // favicon.svg / manifest.webmanifest / index.html can never match), and
-    // only for a plain 200: a 206/304 or any range response keeps the
-    // upstream framing. The seam runs BEFORE the proxy recomputes
-    // content-length, so this cannot corrupt framing.
+    // only for a plain 200: a 206/304 or any range response keeps the upstream
+    // framing.
+    //
+    // Three guards keep the stamp from outliving its evidence (2026-12 review):
+    // the upstream's own cache metadata wins (a `no-store`/ETag policy is the
+    // owner's statement, not ours); the response must actually BE an asset of
+    // that extension (a dsh whose frontend-static SPA-fell-back a miss to the
+    // rendered index — 0.1.0-rc.5 did exactly that — answers an asset URL with
+    // `text/html` 200, and caching that immutably poisons the URL for a year,
+    // across rollbacks); and a range response never gets it at all. The seam
+    // itself re-applies the response whitelist after this callback, so framing
+    // is untouchable from here.
     onUpstreamResponseHeaders: (pathname, status, headers) => {
       if (status !== 200 || !isHashedStaticAssetPath(pathname)) return
+      // A Vite asset name needs no decoding and has no dot-segments; the
+      // upstream DOES decode before resolving, so `/assets/..%2f..%2fsec-12345678.js`
+      // matches the hash pattern while naming a different file. Never pin those.
+      if (pathname.includes('%') || pathname.includes('..')) return
       if (headers['content-range'] !== undefined) return
+      if (headers['cache-control'] !== undefined || headers['etag'] !== undefined || headers['expires'] !== undefined) return
+      if (!hashedAssetContentTypeMatches(pathname, headers['content-type'])) return
       headers['cache-control'] = 'public, max-age=31536000, immutable'
     },
   }

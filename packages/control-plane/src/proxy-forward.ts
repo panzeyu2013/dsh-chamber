@@ -281,13 +281,16 @@ export const WS_RESPONSE_HEADER_WHITELIST = new Set([
  * Bare `/auth` is not excluded, exactly like dispatch.ts (only `/auth/…` is).
  *
  * One deliberate refinement over the dispatch predicate: a content-addressed
- * asset path (isHashedStaticAssetPath) is NEVER a document navigation. The
- * upstream static host serves such a path from disk or 404s it (no SPA
- * fallback — dsh-host-frontend-static serveStatic renders HTML only for the
- * dist root/index), so no compression setting on it can ever cost the S0
- * injection, and a browser that opens the asset URL directly (`Accept:
- * text/html`) must not switch the build tree back to identity. Pure and
- * total: no timers, no I/O.
+ * asset path (isHashedStaticAssetPath) is NEVER a document navigation. In the
+ * PINNED upstream the static host serves such a path from disk or 404s it
+ * (dsh-host-frontend-static `serveStatic` renders the index only for the dist
+ * root and the index path; every other path is a file read), so no compression
+ * setting on it can cost the S0 injection, and a browser that opens the asset
+ * URL directly (`Accept: text/html`) must not switch the build tree back to
+ * identity. A pin whose static host answered a deep path with the rendered
+ * index would invalidate that premise and must revisit this exclusion together
+ * with the gateway's cache-stamp guard (gateway-proxy.ts
+ * `hashedAssetContentTypeMatches`). Pure and total: no timers, no I/O.
  */
 export function isHtmlDocumentNavigation(method: string | undefined, pathname: string, accept: string | string[] | undefined): boolean {
   const verb = (method ?? '').toUpperCase()
@@ -550,12 +553,15 @@ export interface ProxyForwardDeps {
    * the `/api/i/<id>` prefix is already stripped; for the root-mounted gateway
    * it equals the public path), `status` the upstream status, `headers` the
    * mutable whitelisted map (`Record<string, string | string[]>`). Mutate it in
-   * place; the return value is ignored. Framing stays the proxy's: hop-by-hop
-   * and credential headers are already gone (RESPONSE_HEADER_WHITELIST), the
-   * content-length is re-derived from the upstream declaration AFTER this call,
-   * and a throwing callback is fail-soft (logged, upstream headers forwarded
-   * untouched) because it runs inside an event listener. `undefined` (the
-   * control-plane default) is a zero-change passthrough.
+   * place; the return value is ignored. Framing stays the proxy's, and this is
+   * ENFORCED, not merely asked for: the map is re-filtered against
+   * RESPONSE_HEADER_WHITELIST after the callback returns, so a header the
+   * callback adds outside that set (notably `content-length` /
+   * `transfer-encoding`) never reaches the wire, and the content-length is
+   * re-derived from the upstream declaration after the filter. A throwing
+   * callback is fail-soft (logged, the upstream headers forwarded as filtered)
+   * because it runs inside an event listener. `undefined` (the control-plane
+   * default) is a zero-change passthrough.
    */
   readonly onUpstreamResponseHeaders?: (pathname: string, status: number, headers: Record<string, string | string[]>) => void
   /**
@@ -1055,17 +1061,24 @@ export async function forwardHttp(req: ProxyRequest, res: ProxyResponse, target:
       headers[name] = value as string | string[]
     }
     // M3-3 response-header seam: the owner may add representation metadata the
-    // upstream omitted (see ProxyForwardDeps.onUpstreamResponseHeaders). It
-    // runs before the content-length is re-derived below, so even a faulty
-    // callback cannot corrupt the framing of the body the proxy streams, and
-    // it is fail-soft because this is an event listener (an escaping throw
-    // would be an uncaught exception). `undefined` = zero-change passthrough.
+    // upstream omitted (see ProxyForwardDeps.onUpstreamResponseHeaders). It is
+    // fail-soft because this is an event listener (an escaping throw would be
+    // an uncaught exception), and WHITELIST-BOUNDED: the map is re-filtered
+    // after the callback, so a callback that writes `content-length`,
+    // `transfer-encoding` or any other non-representation header changes
+    // nothing on the wire. Framing stays the proxy's — the content-length is
+    // re-derived below from the upstream declaration, and a chunked or SSE
+    // response carries no length at all. `undefined` = zero-change passthrough.
     const responseStatus = upstreamRes.statusCode ?? 502
     if (deps.onUpstreamResponseHeaders !== undefined) {
       try {
         deps.onUpstreamResponseHeaders(target.pathname, responseStatus, headers)
       } catch (seamError) {
         logger.warn(`${deps.logPrefix}: upstream response header seam failed: ${String(seamError)}`)
+      }
+      // Case-insensitive: the map keeps the upstream's original header casing.
+      for (const name of Object.keys(headers)) {
+        if (!RESPONSE_HEADER_WHITELIST.has(name.toLowerCase())) delete headers[name]
       }
     }
     if (!isSse && Number.isFinite(declaredBytes)) headers['content-length'] = String(declaredBytes)

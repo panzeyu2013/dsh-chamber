@@ -35,25 +35,32 @@ interface Fixture {
   indexHtml: string
   asset: Buffer
   assetUrl: string
+  /** An `/assets/` entry WITHOUT a content hash (Vite never emits one, but the
+   *  cache rule must not pin it for a year if it ever does). */
+  plainAssetUrl: string
   manifestRev: string
 }
 
 /** Build a fixture dist in a fresh temp dir (index.html + one hash asset +
- * manifest.json — the real dist is never touched). */
+ * one unhashed asset + manifest.json — the real dist is never touched). */
 function fixtureDist(): Fixture {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-chamber-static-dist-'))
   mkdirSync(join(dir, 'assets'))
   const indexHtml = '<!doctype html><html><head><title>chamber</title></head><body><div id="root"></div></body></html>'
   writeFileSync(join(dir, 'index.html'), indexHtml)
   const asset = Buffer.from(`console.log("chamber asset ${Date.now()}");\n`.repeat(500))
-  const assetUrl = '/assets/chamber-abc123.js'
-  writeFileSync(join(dir, 'assets', 'chamber-abc123.js'), asset)
+  // Vite's default output name: `<name>-<8 base64url chars>.<ext>` — the shape
+  // the shared isHashedStaticAssetPath predicate keys on.
+  const assetUrl = '/assets/chamber-BKQ_L1z6.js'
+  writeFileSync(join(dir, 'assets', 'chamber-BKQ_L1z6.js'), asset)
+  const plainAssetUrl = '/assets/chamber.js'
+  writeFileSync(join(dir, 'assets', 'chamber.js'), 'console.log("unhashed");\n')
   const manifestRev = 'abc123'
   writeFileSync(join(dir, 'manifest.json'), JSON.stringify({
     rev: manifestRev,
     entries: [{ id: '@dsh-chamber/app', url: `${assetUrl}?rev=${manifestRev}`, rev: manifestRev, immediately: true }],
   }))
-  return { dir, indexHtml, asset, assetUrl, manifestRev }
+  return { dir, indexHtml, asset, assetUrl, plainAssetUrl, manifestRev }
 }
 
 interface StaticHolder {
@@ -202,6 +209,11 @@ test('static: /assets/* immutable cache policy; index.html no-cache; manifest.js
     const asset = await rawRequest(holder.plane.port!, 'GET', holder.fixture.assetUrl, { 'accept-encoding': 'gzip' })
     assert.equal(asset.status, 200)
     assert.equal(asset.headers['cache-control'], 'public, max-age=31536000, immutable')
+    // The rule is the SHARED hash predicate, not a bare `/assets/` prefix: an
+    // unhashed entry under /assets/ must not be pinned for a year.
+    const plain = await rawRequest(holder.plane.port!, 'GET', holder.fixture.plainAssetUrl, { 'accept-encoding': 'gzip' })
+    assert.equal(plain.status, 200)
+    assert.equal(plain.headers['cache-control'], undefined, 'an unhashed /assets/ entry is not immutable')
 
     const html = await rawRequest(holder.plane.port!, 'GET', '/', { 'accept-encoding': 'identity' })
     assert.equal(html.status, 200)

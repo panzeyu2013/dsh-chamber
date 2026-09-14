@@ -19,7 +19,21 @@
  * from the stdout-only `dsh web:` launch-token scanner (spawn-dsh.ts). Each
  * line therefore rides the EXISTING pipeline: line-buffered split →
  * `?token=` redaction → `{"ts","stream","line"}` JSONL in host-logs/<port>.log
- * (host-logs.ts, bounded by MAX_LOG_LINES/COMPACT_KEEP_LINES).
+ * (host-logs.ts, bounded by MAX_LOG_LINES/COMPACT_KEEP_LINES). That ring is
+ * SHARED with the spawn diagnostics: enabling the bridge at the conservative
+ * `warn` threshold exports error+info+warn, so ordinary application INFO traffic
+ * evicts the `dsh web: <url>?token=…` readiness line from disk sooner. Nothing
+ * breaks (the launch token is captured in memory by the stdout scanner, never
+ * re-read from the log), but a post-hoc log read may no longer contain it.
+ *
+ * The exporter is mounted through the plugin's OWN `ctx.effect`: Cordis's
+ * `LoggerService.exporter()` registers its effect on the service's context (the
+ * app root) and returns that disposer, so a registration made directly from the
+ * plugin would survive the plugin's unload — a loader remount (`patchReload:
+ * 'live'`) would then stack a second exporter and write every application line
+ * twice. The generated module re-owns the registration so unloading removes it;
+ * the vendor contract it depends on is pinned by a test that reads the pinned
+ * Cordis source, not by an import that self-skips in CI.
  *
  * THE SWITCH: `DSH_CHAMBER_HOST_LOG_LEVEL` (HOST_LOG_BRIDGE_ENV). Unset/empty/
  * off/0/false/no ⇒ NO bridge row, NO generated file: the overlay is
@@ -232,17 +246,27 @@ export default function chamberHostLogBridge(ctx) {
     // A closed pipe (control plane gone) must not turn a diagnostic write into
     // an uncaught stream error that takes the host down with it.
     try { process.stderr.on('error', function () {}) } catch { /* ignore */ }
-    ctx.logger.exporter({
-      colors: 0,
-      maxLength: MAX_LINE_CHARS,
-      levels: { default: LEVEL },
-      export(message) {
-        try {
-          const lines = String(render(message)).split('\\n')
-          for (const line of lines) process.stderr.write(line.slice(0, MAX_LINE_CHARS) + '\\n')
-        } catch { /* diagnostics must never break the host */ }
-      },
-    })
+    const mount = function () {
+      return ctx.logger.exporter({
+        colors: 0,
+        maxLength: MAX_LINE_CHARS,
+        levels: { default: LEVEL },
+        export(message) {
+          try {
+            const lines = String(render(message)).split('\\n')
+            for (const line of lines) process.stderr.write(line.slice(0, MAX_LINE_CHARS) + '\\n')
+          } catch { /* diagnostics must never break the host */ }
+        },
+      })
+    }
+    // LoggerService.exporter() registers its effect on the ROOT context (the
+    // service's own ctx), so an exporter mounted directly here would outlive
+    // this plugin's fiber: a loader remount would leave the previous exporter
+    // installed and every application line would reach stderr twice (N times
+    // after N remounts). Re-own the registration through THIS fiber's effect,
+    // whose disposer removes the exporter when the plugin unloads.
+    if (typeof ctx.effect === 'function') ctx.effect(mount, 'chamber host log bridge exporter')
+    else mount()
     process.stderr.write('[chamber] host log bridge active (level=' + LEVEL_NAME + ')\\n')
   } catch { /* a broken bridge must never fail the host boot */ }
 }

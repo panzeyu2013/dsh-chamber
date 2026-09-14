@@ -22,8 +22,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { dirname, join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { tempDir } from './utils.ts'
 import {
   DEFAULT_HOST_LOG_BRIDGE_LEVEL,
@@ -45,6 +45,9 @@ import {
 import { resolveLocalHostGraphOverlay } from '../src/index.ts'
 import { redactChildOutputLine } from '../src/spawn-dsh.ts'
 import { createHostLogWriter, logPathFor, readLogTail } from '../src/host-logs.ts'
+
+/** Repository root: `packages/control-plane/test` → three levels up. */
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..')
 
 /** The pre-bridge overlay for the single host-graph row (byte-exact mirror of
  *  host-graph-seed.test.ts's EXPECTED_OVERLAY): what a disabled switch must
@@ -343,14 +346,36 @@ class FakeHostLogger {
   }
 }
 
-/** An injected Cordis-like context: a callable logger service + exporter sink. */
-function fakeHostContext(): { ctx: unknown; exporters: any[] } {
+/** An injected Cordis-like context: a callable logger service, an exporter sink
+ *  and a fiber-effect ledger. Models the two host facts the generated plugin
+ *  relies on: `exporter()` returns the disposer that removes its registration,
+ *  and `ctx.effect()` owns that disposer for the plugin's own fiber — in the
+ *  real host the exporter registers on the ROOT context, so unloading the
+ *  plugin fiber removes it only through this effect. */
+function fakeHostContext(): { ctx: unknown; exporters: any[]; unmount: () => void } {
   const exporters: any[] = []
+  const disposers: Array<() => void> = []
   const logger = Object.assign(
     (_name?: string) => new FakeHostLogger(),
-    { exporter: (exporter: unknown) => { exporters.push(exporter); return () => {} } },
+    {
+      exporter: (exporter: unknown) => {
+        exporters.push(exporter)
+        return () => {
+          const index = exporters.indexOf(exporter)
+          if (index >= 0) exporters.splice(index, 1)
+        }
+      },
+    },
   )
-  return { ctx: { logger }, exporters }
+  const ctx = {
+    logger,
+    effect: (execute: () => (() => void) | undefined) => {
+      const off = execute()
+      if (typeof off === 'function') disposers.push(off)
+      return off
+    },
+  }
+  return { ctx, exporters, unmount: () => { for (const off of disposers.splice(0).reverse()) off() } }
 }
 
 /** Run `fn` with process.stderr.write captured; returns everything written. */
@@ -385,6 +410,24 @@ test('plugin: mounting registers one exporter at the baked level and announces i
   assert.equal(exporters[0].levels.default, HOST_LOG_BRIDGE_LEVELS.warn)
   assert.equal(exporters[0].colors, 0)
   assert.match(announce, /\[chamber\] host log bridge active \(level=warn\)\n/)
+})
+
+test('plugin: a loader remount replaces the exporter instead of stacking a second one', async t => {
+  const dir = tempDir(t)
+  const plugin = await loadGeneratedPlugin('warn', dir)
+  const first = fakeHostContext()
+  withStderrCapture(() => plugin(first.ctx))
+  assert.equal(first.exporters.length, 1)
+  // The managed profile runs `patchReload: 'live'`: the loader disposes the old
+  // fiber and mounts the plugin again on a NEW context. LoggerService.exporter()
+  // registers its effect on the ROOT context, so only the plugin's own effect
+  // can remove that registration — without it the previous exporter keeps
+  // writing, and every application line reaches stderr twice.
+  first.unmount()
+  assert.equal(first.exporters.length, 0, 'unloading the plugin fiber removes its exporter')
+  const second = fakeHostContext()
+  withStderrCapture(() => plugin(second.ctx))
+  assert.equal(second.exporters.length, 1, 'exactly one exporter per live mount')
 })
 
 test('plugin: exported messages are rendered by the host formatter and written per line', async t => {
@@ -446,7 +489,40 @@ test('plugin: a broken host context never throws out of the mount', async t => {
  * tree is a preinstall-linked workspace member; a bare control-plane checkout
  * without it must not fail here).
  */
-test('real cordis: the host LoggerService honors the baked level', async t => {
+/**
+ * The three Cordis logger facts the generated plugin is written against, read
+ * from the PINNED vendor source. This half cannot skip: `@deepseek-ai/cordis`
+ * is deliberately not a dependency of this package (the managed host resolves
+ * it from its own profile), so an import-based check self-skips in every CI
+ * tree and would leave the API bet unenforced (2026-12 review). Reading the
+ * vendored signature is the same discipline the activation-probe lockstep uses
+ * (`packages/dsh-runtime/test/runtime-probes.test.ts`).
+ */
+test('cordis contract: the pinned LoggerService still matches what the generated plugin calls', () => {
+  const source = readFileSync(
+    join(repoRoot, 'vendor', 'harness-checkout', 'vendor', 'cordis', 'src', 'logger.ts'),
+    'utf8',
+  )
+  // (1) exporter() registers through the SERVICE's own ctx.effect and returns
+  // that disposer. The service ctx is the app root (`self.ctx = ctx` in the
+  // constructor), NOT the calling plugin's fiber — which is exactly why the
+  // generated plugin re-owns the registration through its own ctx.effect.
+  assert.match(source, /self\.ctx = ctx/, 'the logger service must still bind the ctx it was constructed with')
+  const exporterBody = source.match(/exporter\(exporter: Exporter\)\s*\{([\s\S]*?)\n {2}\}/)
+  assert.ok(exporterBody !== null, 'LoggerService.exporter(exporter) must still exist')
+  assert.match(exporterBody![1]!, /return this\.ctx\.effect\(/, 'exporter() must register through this.ctx.effect and return its disposer')
+  assert.match(exporterBody![1]!, /exporters\.delete\(/, 'the returned disposer must remove the registration')
+  // (2) the generated plugin renders through the facade's static formatter and
+  // passes `{ colors: 0, maxLength }`; both options must stay supported.
+  assert.match(source, /static format\(exporter: Exporter, message: Message\): string \{/, 'Logger.format(exporter, message) must stay a static method')
+  assert.match(source, /const \{ maxLength = \d+ \} = exporter/, 'the exporter maxLength option must still bound each line')
+  // (3) the baked threshold is read from `levels.default` and a message is
+  // exported when its level is at or below the threshold.
+  assert.match(source, /exporter\.levels\?\.\[this\.name\] \?\? exporter\.levels\?\.default/, 'the per-exporter threshold must still fall back to levels.default')
+  assert.match(source, /if \(targetLevel < level\) continue/, 'the threshold must still mean "export when level <= targetLevel"')
+})
+
+test('real cordis (optional leg): the host LoggerService honors the baked level', async t => {
   let Context: new () => any
   let LoggerService: any
   try {
@@ -456,7 +532,8 @@ test('real cordis: the host LoggerService honors the baked level', async t => {
     // so the members visible here depend on which surface resolves in a given
     // tree (bare checkout vs materialized vendor). Reading them through the
     // declared module type would make the file typecheck only in one of them;
-    // the runtime shape is asserted below instead.
+    // the runtime shape is asserted below instead. The contract half above is
+    // the leg CI enforces — this one only adds a live mount where resolvable.
     const cordis = (await import('@deepseek-ai/cordis')) as unknown as {
       Context?: new () => any
       LoggerService?: unknown
@@ -464,7 +541,7 @@ test('real cordis: the host LoggerService honors the baked level', async t => {
     Context = cordis.Context as never
     LoggerService = cordis.LoggerService
   } catch {
-    t.skip('@deepseek-ai/cordis is not resolvable in this tree')
+    t.skip('@deepseek-ai/cordis is not resolvable in this tree (the contract test above still ran)')
     return
   }
   assert.equal(typeof LoggerService, 'function', 'the pinned runtime still ships the built-in logger')

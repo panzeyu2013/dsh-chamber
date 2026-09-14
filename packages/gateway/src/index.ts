@@ -679,6 +679,11 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       } catch (error) {
         planeStopError = error
       }
+      // The listener is closed now, so no further rejection can open a debounce
+      // window: publish whatever the fence-time drain could not see (a refusal
+      // accepted between the fence and this point). Idempotent, and cheap when
+      // nothing is open.
+      dispatch.flushAuditWindows()
       started = false
       if (runtimeDisposalError === null && runtimeManager === managerAtStop) runtimeManager = null
       // A plane-listener failure alone does not imply a surviving runtime writer,

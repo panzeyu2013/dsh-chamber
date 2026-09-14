@@ -124,6 +124,36 @@ test('HTTP forward carries the 0.1.2 browser-auth cookie for the managed dsh', a
   }
 })
 
+test('hashed-asset caching: the immutable stamp is bounded by response type and the upstream metadata', async () => {
+  // M3-3 review: the stamp used to key on status + path alone. A dsh whose
+  // frontend-static SPA-fell-back a miss to the rendered index answers an
+  // asset URL with `text/html` 200, and caching that immutably poisons the URL
+  // for a year (across rollbacks); an upstream `no-store` was overwritten the
+  // same way. The seam now stamps only a real asset representation.
+  const stamp = async (path: string, headers: Record<string, string>): Promise<string | undefined> => {
+    const { upstreamRes, proxy } = htmlUpstreamFixture({ 'content-type': 'text/javascript', ...headers })
+    const res = new FakeResponse()
+    await proxy.handleHttp(new FakeRequest('GET', path), res)
+    upstreamRes.emit('data', Buffer.from('body'))
+    upstreamRes.emit('end')
+    return res.headers['cache-control'] as string | undefined
+  }
+  // A real hashed asset of a matching type is stamped.
+  assert.equal(await stamp('/assets/index-BKQ_L1z6.js', {}), 'public, max-age=31536000, immutable')
+  assert.equal(await stamp('/assets/KaTeX_AMS-Regular-BQhdFMY1.woff2', { 'content-type': 'font/woff2' }), 'public, max-age=31536000, immutable')
+  // An SPA fallback (HTML under an asset path) is NOT.
+  assert.equal(await stamp('/assets/index-BKQ_L1z6.js', { 'content-type': 'text/html' }), undefined, 'an HTML fallback must never be cached immutably')
+  // A type the extension cannot produce is NOT.
+  assert.equal(await stamp('/assets/index-BKQ_L1z6.js', { 'content-type': 'application/octet-stream' }), undefined)
+  // The upstream's own cache policy wins.
+  assert.equal(await stamp('/assets/index-BKQ_L1z6.js', { 'cache-control': 'no-store' }), 'no-store', 'an upstream cache-control is never overwritten')
+  // A non-hashed path never matches the shared predicate.
+  assert.equal(await stamp('/favicon.svg', { 'content-type': 'image/svg+xml' }), undefined)
+  // A percent-encoded / dot-segment path can END in a hash-shaped name while the
+  // upstream (which decodes) resolves a different file: never pinned.
+  assert.equal(await stamp('/assets/..%2f..%2fsec-12345678.js', {}), undefined)
+})
+
 test('an origin-form request target is accepted (no 400 before forwarding)', async () => {
   const proxy = createGatewayProxy({ logger: quietLogger, getLocalDshPort: () => 17510, getLocalState: () => 'ready' })
   const res = fakeResponse()

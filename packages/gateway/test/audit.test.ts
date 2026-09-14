@@ -11,6 +11,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   chmodSync,
+  existsSync,
   linkSync,
   lstatSync,
   mkdtempSync,
@@ -28,6 +29,7 @@ import { appendAuditEvent, AUDIT_LOG_MAX_BYTES, type AuditEvent } from '../src/a
 import { parseGatewayConfig, DEFAULT_MOBILE_ENTRY_PATH } from '../src/config.ts'
 import {
   AUTH_REJECTION_DEBOUNCE_MS,
+  MAX_AUTH_REJECTION_WINDOWS,
   createGatewayDispatch,
   type AuthRejectionDebounce,
 } from '../src/dispatch.ts'
@@ -625,6 +627,95 @@ test('dispatch quiesce drains an open debounce window so its count is not lost (
   const events = readEvents(file)
   assert.equal(events.length, 2)
   assert.equal(events[1]!.detail, 'code:unauthorized,client:203.0.113.8,path:api,count:3')
+})
+
+test('a refusal after the window elapsed but before its timer publishes the old count first (M3-5)', async t => {
+  const dir = tmpDir('gateway-audit-debounce-elapsed-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const file = join(dir, 'audit.log')
+  const auth: AuthProvider = { kind: 'password', async verify() { return null } }
+  const clock = debounceHarness()
+  const { dispatch } = setup(auth, file, clock.options)
+
+  assert.equal((await runRequest(dispatch, 'GET', '/api/connections')).status, 401)
+  clock.advance(10)
+  assert.equal((await runRequest(dispatch, 'GET', '/api/connections')).status, 401)
+  // The window is over, but its end-of-window timer has NOT run (the fake
+  // scheduler only fires when the test says so). The next identical refusal
+  // must publish the open count BEFORE it opens the successor window —
+  // otherwise the successor would swallow the first window's total.
+  clock.advance(AUTH_REJECTION_DEBOUNCE_MS)
+  assert.equal((await runRequest(dispatch, 'GET', '/api/connections')).status, 401)
+  const events = readEvents(file)
+  assert.deepEqual(events.map(event => event.detail), [
+    'code:unauthorized,client:203.0.113.8,path:api',
+    'code:unauthorized,client:203.0.113.8,path:api,count:2',
+    'code:unauthorized,client:203.0.113.8,path:api',
+  ])
+  // The successor window is still open; the late timer for the closed one must
+  // not touch it (entry identity is pinned).
+  clock.fire()
+  assert.equal(readEvents(file).length, 3)
+})
+
+test('flushAuditWindows publishes a window opened after the fence-time drain (M3-5)', async t => {
+  const dir = tmpDir('gateway-audit-debounce-post-close-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const file = join(dir, 'audit.log')
+  const auth: AuthProvider = { kind: 'password', async verify() { return null } }
+  const clock = debounceHarness()
+  const { dispatch } = setup(auth, file, clock.options)
+
+  // Nothing open at the fence: no window existed, so no audit file was written.
+  await dispatch.quiesce()
+  assert.equal(existsSync(file), false, 'a drain with no open window writes nothing')
+  // A refusal accepted between the fence and the listener close still reaches
+  // the audit path and opens a window the fence-time drain could not see.
+  assert.equal((await runRequest(dispatch, 'GET', '/api/connections')).status, 401)
+  clock.advance(10)
+  assert.equal((await runRequest(dispatch, 'GET', '/api/connections')).status, 401)
+  assert.equal(readEvents(file).length, 1, 'only the anchor is on disk while the window is open')
+  // The gateway calls this once the listener is closed; the count lands.
+  dispatch.flushAuditWindows()
+  const events = readEvents(file)
+  assert.equal(events.length, 2)
+  assert.equal(events[1]!.detail, 'code:unauthorized,client:203.0.113.8,path:api,count:2')
+  // Idempotent: a second call has nothing left to publish.
+  dispatch.flushAuditWindows()
+  assert.equal(readEvents(file).length, 2)
+})
+
+test('the window map is bounded: at the cap the oldest window is published early (M3-5)', async t => {
+  const dir = tmpDir('gateway-audit-debounce-cap-')
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const file = join(dir, 'audit.log')
+  const auth: AuthProvider = { kind: 'password', async verify() { return null } }
+  const clock = debounceHarness()
+  const { dispatch } = setup(auth, file, clock.options)
+
+  // The oldest key carries two refusals, so its early publication is visible.
+  assert.equal((await runRequest(dispatch, 'GET', '/api/connections')).status, 401)
+  assert.equal((await runRequest(dispatch, 'GET', '/api/connections')).status, 401)
+  assert.equal(readEvents(file).length, 1)
+  // Distinct client identities are unbounded in production; fill the map to the
+  // cap and then open one more window.
+  for (let index = 0; index < MAX_AUTH_REJECTION_WINDOWS; index += 1) {
+    const address = `10.0.${Math.floor(index / 250)}.${index % 250}`
+    assert.equal((await runRequest(dispatch, 'GET', '/api/connections', {}, undefined, address)).status, 401)
+  }
+  const events = readEvents(file)
+  // Every distinct key wrote its opening anchor; the FIRST key additionally got
+  // its aggregate published early, when the cap was reached and the oldest
+  // window had to make room (it lands mid-loop, before the newest anchor).
+  // Without the cap that aggregate would only land at shutdown — asserting its
+  // presence here, before any drain, is the cap's observable effect.
+  assert.equal(events.length, MAX_AUTH_REJECTION_WINDOWS + 2)
+  const aggregates = events.filter(event => event.detail.includes('count:'))
+  assert.deepEqual(aggregates.map(event => event.detail), ['code:unauthorized,client:203.0.113.8,path:api,count:2'])
+  // Every remaining window held a single refusal, and the newest key is still
+  // open: draining at shutdown publishes nothing more.
+  await dispatch.quiesce()
+  assert.equal(readEvents(file).length, MAX_AUTH_REJECTION_WINDOWS + 2)
 })
 
 test('no audit file configured → gate rejections still answer without writing', async t => {
