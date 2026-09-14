@@ -1284,9 +1284,8 @@
   单独配置一次（同一 clone 的多个 worktree 共享一份，但新 clone / 新机器仍要重装）；而钩子本要
   跑的检查都已是有 CI 背书的普通门禁，`pnpm run check:static` 一条命令即可本地跑全（i18n 配对、
   样式 token、action pin、工作流 YAML、测试接线、文档链接、发布/工具链策略测试）。故本仓
-  **不提供也不安装任何钩子**，也不引入 husky/lefthook 之类的托管层；规范
-  `docs/progress/todo/upstream-engineering-practices.md` §7.7 登记了这一打折项。
-- **推迟：规范里尚未落地的 P2 项（2026-12 登记，来源同上）**：观察型 CI job（非阻塞、只报数）、
+  **不提供也不安装任何钩子**，也不引入 husky/lefthook 之类的托管层。
+- **推迟：工程门禁的 P2 项（2026-12 登记）**：观察型 CI job（非阻塞、只报数）、
   术语表、文档字数预算、把 `docs/checklists/*` 过程文件转为可调用动作、`packages/*/README.i18n.yaml`
   三元组的译文一致性门（现状只有哈希记录，无校验）——均未排期。
 - **上游纯镜像 README 的失效链接被链接门显式跳过（2026-12 登记）**：`packages/dsh-client-connection/`
