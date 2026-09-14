@@ -542,6 +542,123 @@ test('post-install family verification: a cross-generation shadow promoted into 
   assert.equal(op.preImage, op.id)
 })
 
+/** A runtime workspace whose facts come from the TREE enumeration (no lockfile):
+ *  a name with `null` gets NO package.json, so the resolution has no version
+ *  fact for it (the generation-arm fallback case). */
+function writeTreeRuntimeWorkspace(
+  t: { after(fn: () => void): void },
+  tree: Record<string, string | null>,
+): string {
+  const workspace = mkdtempSync(join(tmpdir(), 'plugins-exec-tree-'))
+  t.after(() => rmSync(workspace, { recursive: true, force: true }))
+  for (const [name, version] of Object.entries(tree)) {
+    const dir = join(workspace, 'node_modules', name)
+    mkdirSync(dir, { recursive: true })
+    if (version !== null) writeFileSync(join(dir, 'package.json'), JSON.stringify({ name, version }))
+  }
+  return workspace
+}
+
+/** A runtime workspace whose LOCKFILE pins the core trio at `generation` plus
+ *  `extra` (name → pinned version); the version facts come from the closure. */
+function writeLockfileRuntimeWorkspace(
+  t: { after(fn: () => void): void },
+  generation: string,
+  extra: Record<string, string> = {},
+): string {
+  const workspace = mkdtempSync(join(tmpdir(), 'plugins-exec-lock-'))
+  t.after(() => rmSync(workspace, { recursive: true, force: true }))
+  writeFileSync(join(workspace, 'pnpm-lock.yaml'),
+    ['lockfileVersion: \'9.0\'', 'packages:',
+      ...['@deepseek-ai/dsh', '@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app']
+        .map(entry => `  '${entry}@${generation}':`),
+      ...Object.entries(extra).map(([name, version]) => `  '${name}@${version}':`),
+    ].join('\n'))
+  return workspace
+}
+
+/** Promote one family copy into the profile's top-level node_modules. */
+function promoteIntoProfile(profileDir: string, name: string, version: string): void {
+  mkdirSync(join(profileDir, 'node_modules', name), { recursive: true })
+  writeFileSync(join(profileDir, 'node_modules', name, 'package.json'), JSON.stringify({ name, version }))
+}
+
+test('post-install family verification: the runtime version fact clears a re-scoped vendored copy the generation arm would flag', async t => {
+  // The runtime pins @deepseek-ai/cosmokit at its own upstream version 1.8.3
+  // while the instance GENERATION is 0.5.0. sameGeneration('1.8.3','0.5.0') is
+  // false, so a generation-only comparison would fail this install; the version
+  // fact (design 21 §6.11.3) is what makes the shipped copy legal.
+  const workspace = writeLockfileRuntimeWorkspace(t, '0.5.0', { '@deepseek-ai/cosmokit': '1.8.3' })
+  const h = makeExecHarness(t, { runtimeFacts: () => ({ path: workspace, version: '0.5.0' }) })
+  promoteIntoProfile(h.profileDir, '@deepseek-ai/cosmokit', '1.8.3')
+  await enqueueOk(h.exec, { kind: 'install', name: 'vendor-pkg', spec: 'vendor-pkg@1' })
+  await waitFor(() => h.harness.calls.length === 1, 'spawn happened')
+  h.harness.calls[0]!.child.close(0)
+  await waitFor(() => h.journal.recent()[0]?.status !== 'pending', 'op terminal')
+  assert.equal(h.journal.recent()[0]?.status, 'ok',
+    `the freshly pinned version is not drift: ${h.journal.recent()[0]?.error ?? ''}`)
+})
+
+test('post-install family verification: the version fact outranks a coincidental generation match and names the expected version', async t => {
+  // The instance generation is 1.9.9 and the promoted copy is 1.9.9 too, so a
+  // generation-only comparison would PASS — but the runtime provides 1.8.3 for
+  // this name. Version first, then closure (design 21 §6.11.3): drift, loudly,
+  // with the version-arm wording.
+  const workspace = writeLockfileRuntimeWorkspace(t, '0.5.0', { '@deepseek-ai/cosmokit': '1.8.3' })
+  const h = makeExecHarness(t, { runtimeFacts: () => ({ path: workspace, version: '1.9.9' }) })
+  promoteIntoProfile(h.profileDir, '@deepseek-ai/cosmokit', '1.9.9')
+  await enqueueOk(h.exec, { kind: 'install', name: 'vendor-shadow', spec: 'vendor-shadow@1' })
+  await waitFor(() => h.harness.calls.length === 1, 'spawn happened')
+  h.harness.calls[0]!.child.close(0)
+  await waitFor(() => h.journal.recent()[0]?.status !== 'pending', 'op terminal')
+  const op = h.journal.recent()[0]!
+  assert.equal(op.status, 'failed', 'a version-fact mismatch fails the op even when the generation matches')
+  const failureText = op.error ?? ''
+  assert.match(failureText, new RegExp(ERROR_FAMILY_DRIFT))
+  assert.match(failureText, /@deepseek-ai\/cosmokit/)
+  assert.match(failureText, /is not the version this instance runtime provides \(expected 1\.8\.3\)/,
+    `the version-arm wording carries the runtime's version: ${failureText}`)
+})
+
+test('post-install family verification: a name with NO version fact falls back to the generation comparison', async t => {
+  // Tree-sourced facts: the core trio is present but dsh-web-app ships no
+  // version, so the resolution has no version fact for it. The same-generation
+  // copy must still pass (the fallback is not a false positive).
+  const workspace = writeTreeRuntimeWorkspace(t, {
+    '@deepseek-ai/dsh': '0.5.0',
+    '@deepseek-ai/dsh-base': '0.5.0',
+    '@deepseek-ai/dsh-web-app': null,
+  })
+  const h = makeExecHarness(t, { runtimeFacts: () => ({ path: workspace, version: '0.5.0' }) })
+  promoteIntoProfile(h.profileDir, '@deepseek-ai/dsh-web-app', '0.5.0')
+  await enqueueOk(h.exec, { kind: 'install', name: 'fallback-pkg', spec: 'fallback-pkg@1' })
+  await waitFor(() => h.harness.calls.length === 1, 'spawn happened')
+  h.harness.calls[0]!.child.close(0)
+  await waitFor(() => h.journal.recent()[0]?.status !== 'pending', 'op terminal')
+  assert.equal(h.journal.recent()[0]?.status, 'ok',
+    `the same-generation copy is legal on the fallback arm: ${h.journal.recent()[0]?.error ?? ''}`)
+})
+
+test('post-install family verification: the generation fallback still fails a cross-generation copy and keeps its wording', async t => {
+  const workspace = writeTreeRuntimeWorkspace(t, {
+    '@deepseek-ai/dsh': '0.6.0',
+    '@deepseek-ai/dsh-base': '0.6.0',
+    '@deepseek-ai/dsh-web-app': null,
+  })
+  const h = makeExecHarness(t, { runtimeFacts: () => ({ path: workspace, version: '0.6.0' }) })
+  promoteIntoProfile(h.profileDir, '@deepseek-ai/dsh-web-app', '0.5.0')
+  await enqueueOk(h.exec, { kind: 'install', name: 'generation-shadow', spec: 'generation-shadow@1' })
+  await waitFor(() => h.harness.calls.length === 1, 'spawn happened')
+  h.harness.calls[0]!.child.close(0)
+  await waitFor(() => h.journal.recent()[0]?.status !== 'pending', 'op terminal')
+  const op = h.journal.recent()[0]!
+  assert.equal(op.status, 'failed')
+  const failureText = op.error ?? ''
+  assert.match(failureText, new RegExp(ERROR_FAMILY_DRIFT))
+  assert.match(failureText, /does not match the instance runtime generation \(0\.6\.0\)/,
+    `the no-version-fact branch keeps the generation wording: ${failureText}`)
+})
+
 test('post-mutation re-check: instance (re)started during the mutation is failed, never recorded ok', async t => {
   let state = 'ready'
   const h = makeExecHarness(t, { statusProbe: () => state })

@@ -68,7 +68,7 @@ import {
   PLUGIN_SPEC_PATTERN,
   readInstalledVersion,
 } from './control-plane-module.ts'
-import type { PluginMutationDecision, PluginRow, ProtectedSet } from './control-plane-module.ts'
+import type { FamilyVersions, PluginMutationDecision, PluginRow, ProtectedSet } from './control-plane-module.ts'
 // Owner-private file primitives (control-plane private-file.ts, P2-2a) —
 // consumed through the same dual-path facade for the local-plugin-writer
 // ledger (owner-only 0600 atomic replace, owner-only parent).
@@ -127,6 +127,9 @@ export const CHAMBER_SEED_NAMES: readonly string[] = CHAMBER_HOST_PACKAGES.map(d
  */
 export interface PluginProtectionFacts {
   familyNames?: readonly string[] | null
+  /** F 内名字由运行时线提供的版本集合（design 21 §6.11.3 的版本事实）。缺席 ⇒ 复验退回
+   *  世代比较——写面判定不需要它，只有装后复验用。 */
+  familyVersions?: FamilyVersions | null
   runtimeVersion?: string | null
   profileState?: 'ready' | 'absent'
   familySource?: 'runtime' | 'none'
@@ -134,7 +137,29 @@ export interface PluginProtectionFacts {
 
 /** ssh 缺省事实（B₀ ∪ S、无族来源、版本未知）。 */
 export function sshProtectionFacts(): PluginProtectionFacts {
-  return { familyNames: null, runtimeVersion: null, familySource: 'none' }
+  return { familyNames: null, familyVersions: null, runtimeVersion: null, familySource: 'none' }
+}
+
+/**
+ * 是否该把**内建运行时线**的锚锁文件当成本次 F 的来源（design 21 §6.11.1）。
+ *
+ * 锚锁文件描述的是**随包发布的那条运行时线**；用户选装的运行时（design 18 §3.6）与
+ * `DSH_CHAMBER_DSH_PATH` 指向的树都可能是**另一条线**。把内建锚交给另一条线，装后复验
+ * 就会拿那份 profile 里的副本去比它从未有过的版本——一致的树被响亮误判成跨代副本
+ * （2026-12 复核实测：活动运行时 `0.1.5-rc.3` 的合法 profile 在内建 pin=`rc.2` 下判
+ * `generation-mismatch`；同一棵树按 gateway 形态（不带 pin）判 ok）。
+ *
+ * 判据用**版本相等**而不是"来源是 bundled"：dev/env 形态的活动树与内建同版时，锚仍是
+ * 更好的来源——源码线的活动锁文件含 opt-in 段，会被可信性判据拒掉，而锚不会。
+ * @param activeVersion - 活动运行时的 dsh 世代串（读不到时 null）。
+ * @param pinnedVersion - 内建运行时线的 dsh 世代串（读不到时 null）。
+ * @returns true = 可以把内建锚锁文件交给 `resolveRuntimeFamily`。
+ */
+export function shouldPreferPinnedRuntimeLockfile(
+  activeVersion: string | null,
+  pinnedVersion: string | null,
+): boolean {
+  return activeVersion !== null && pinnedVersion !== null && activeVersion === pinnedVersion
 }
 
 /**

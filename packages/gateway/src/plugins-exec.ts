@@ -83,7 +83,7 @@ import {
 import { backupDirFor, thirdPartyRoot } from './plugins-journal.ts'
 import { ensurePnpmOnPath, withPnpmOnPath } from './pnpm-entry.ts'
 import type { JournalLogger, JournalOp, JournalOpKind, JournalPending, JournalTerminalPatch, PluginsJournal } from './plugins-journal.ts'
-import type { PluginRefusalCode } from '@dsh-chamber/control-plane'
+import type { FamilyVersions, PluginRefusalCode } from '@dsh-chamber/control-plane'
 
 /** Queue depth cap (design 21 §6.9: queue depth ≤ 8). */
 export const PLUGIN_QUEUE_CAP = 8
@@ -686,12 +686,17 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
     }
   }
 
-  /** The active family closure (F) for the post-install verification, or null. */
-  function activeFamilyNames(): readonly string[] | null {
+  /**
+   * The active family closure (F) **and** the versions this runtime provides
+   * for its names (design 21 §6.11.3) — the post-install verification judges a
+   * family member on the runtime's version facts when present, and only falls
+   * back to the generation comparison for names without one. null = no facts.
+   */
+  function activeFamilyFacts(): { names: readonly string[]; versions: FamilyVersions } | null {
     const facts = readRuntimeFacts()
     if (facts === null) return null
     const family = resolveRuntimeFamily(facts.path)
-    return family.ok ? family.names : null
+    return family.ok ? { names: family.names, versions: family.versions } : null
   }
 
   /**
@@ -822,7 +827,9 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
     // op's error carries the finding (design 21 §6.3 verification/rollback
     // discipline — v1 runbook; the r2 automatic rollback column is unchanged).
     if (kind !== 'remove') {
-      const familyNames = readRuntimeFacts() === null ? null : activeFamilyNames()
+      const family = readRuntimeFacts() === null ? null : activeFamilyFacts()
+      const familyNames = family?.names ?? null
+      const familyVersions = family?.versions ?? null
       // An EMPTY family is a fact too (the runtime provides no official-scope
       // packages): the verification still runs and then flags every non-direct
       // official copy as outside-family — the tight direction. Only an
@@ -839,6 +846,7 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
               profileDir: join(deps.stateDir, MANAGED_DSH_HOME_DIR, INSTALLED_PROFILE_DIR),
               familyNames,
               runtimeVersion: execRuntimeVersion,
+              familyVersions,
             })
           } catch (error) {
             return { ok: false as const, findings: [], crash: messageOf(error) }
@@ -853,7 +861,7 @@ export function createPluginsExec(deps: PluginExecDeps): PluginExec {
         if (!verdict.ok) {
           const detail = 'crash' in verdict && verdict.crash !== undefined
             ? `verification could not run: ${verdict.crash}`
-            : describeFamilyFindings(verdict.findings, execRuntimeVersion)
+            : describeFamilyFindings(verdict.findings, execRuntimeVersion, familyVersions)
           // The finding NAMES are the actionable fact; a scoped package name is
           // path-shaped and the generic sanitizer would redact it to `[path]`,
           // erasing exactly that fact. Keep them explicitly (the same

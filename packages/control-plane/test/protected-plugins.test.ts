@@ -18,6 +18,7 @@ import {
   deriveProtectedSet,
   familyNamesFromLockfileClosure,
   familyNamesFromRuntimeTree,
+  familyVersionsFromLockfileClosure,
   isExactVersion,
   isMaterializedValue,
   officialScope,
@@ -560,6 +561,367 @@ test('verifyProfileFamilyConsistency: 传递副本必须 ∈ F 且同代；直�
     }
   } finally {
     rmSync(profileDir, { recursive: true, force: true })
+  }
+})
+
+test('familyVersionsFromLockfileClosure: v9/v6 键形、peer 后缀与多版本（名字集合仍由 familyNamesFromLockfileClosure 单独权威）', () => {
+  const text = [
+    "lockfileVersion: '9.0'",
+    'packages:',
+    "  '@deepseek-ai/dsh@0.1.5-rc.2':",
+    "  '@deepseek-ai/cosmokit@1.8.3':",
+    "  '@deepseek-ai/schemastery@3.18.2':",
+    "  '@deepseek-ai/schemastery@3.17.0(peer@1.0.0)':",
+    'snapshots:',
+    "  '@deepseek-ai/cosmokit@1.8.3':",
+    '  /@deepseek-ai/legacy/2.0.0:',
+  ].join('\n')
+  const versions = familyVersionsFromLockfileClosure(text)
+  assert.deepEqual(versions.get('@deepseek-ai/dsh'), ['0.1.5-rc.2'])
+  assert.deepEqual(versions.get('@deepseek-ai/cosmokit'), ['1.8.3'])
+  // Peer suffixes are truncated at `(` (the real runtime lockfile carries 234
+  // such keys, with nested parens), and both pinned versions of one name are
+  // retained (sorted) — the profile copy must match one of them, not an
+  // arbitrary single value.
+  assert.deepEqual(versions.get('@deepseek-ai/schemastery'), ['3.17.0', '3.18.2'])
+  assert.deepEqual(versions.get('@deepseek-ai/legacy'), ['2.0.0'])
+  // The names authority is untouched: same input, same name set, twice.
+  assert.deepEqual(familyNamesFromLockfileClosure(text), familyNamesFromLockfileClosure(text))
+})
+
+test('verifyProfileFamilyConsistency: 真实安装树形状 —— opt-in 层的传递实现包由闭包豁免，改域 vendored 包按运行时提供的版本放行', () => {
+  const profileDir = mkdtempSync(join(tmpdir(), 'dsh-verify-team-'))
+  const put = (name: string, manifest: Record<string, unknown>) => {
+    const dir = join(profileDir, 'node_modules', name)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name, ...manifest }))
+  }
+  try {
+    // 实测形状（~/Library/Application Support/@dsh-chamber/desktop/state/dsh-home/profiles/web）：
+    // 两个 bundle 是直接依赖，其余 6 个条目由 pnpm 提升上来。
+    writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
+      dependencies: {
+        '@deepseek-ai/dsh-experimental-agent-team-profile': '0.1.5-rc.2',
+        '@deepseek-ai/dsh-experimental-agent-team-web-profile': '0.1.5-rc.2',
+      },
+    }))
+    put('@deepseek-ai/dsh-experimental-agent-team-profile', {
+      version: '0.1.5-rc.2',
+      dependencies: {
+        '@deepseek-ai/dsh-experimental-agent-team': '0.1.5-rc.2',
+        '@deepseek-ai/dsh-experimental-tool-agent-team': '0.1.5-rc.2',
+      },
+    })
+    put('@deepseek-ai/dsh-experimental-agent-team-web-profile', {
+      version: '0.1.5-rc.2',
+      dependencies: { '@deepseek-ai/dsh-experimental-client-ui-agent-team': '0.1.5-rc.2' },
+    })
+    put('@deepseek-ai/dsh-experimental-agent-team', {
+      version: '0.1.5-rc.2',
+      dependencies: { '@deepseek-ai/dsh-brand': '0.1.5-rc.2', '@deepseek-ai/schemastery': '^3.18.2' },
+    })
+    put('@deepseek-ai/dsh-experimental-tool-agent-team', { version: '0.1.5-rc.2' })
+    put('@deepseek-ai/dsh-experimental-client-ui-agent-team', { version: '0.1.5-rc.2' })
+    put('@deepseek-ai/dsh-brand', { version: '0.1.5-rc.2' })
+    put('@deepseek-ai/schemastery', { version: '3.18.2', dependencies: { '@deepseek-ai/cosmokit': '^1.8.3' } })
+    put('@deepseek-ai/cosmokit', { version: '1.8.3' })
+
+    const verdict = verifyProfileFamilyConsistency({
+      profileDir,
+      familyNames: [
+        '@deepseek-ai/dsh-brand', '@deepseek-ai/schemastery', '@deepseek-ai/cosmokit',
+        ...PROFILE_BUNDLES_SNAPSHOT,
+      ],
+      runtimeVersion: '0.1.5-rc.2',
+      // Rescoped vendored packages keep upstream versions ⇒ the generation
+      // string is the wrong scale; the runtime-provided version is the right one.
+      familyVersions: new Map([
+        ['@deepseek-ai/dsh-brand', ['0.1.5-rc.2']],
+        ['@deepseek-ai/schemastery', ['3.18.2']],
+        ['@deepseek-ai/cosmokit', ['1.8.3']],
+      ]),
+    })
+    // 8 entries − 2 direct dependencies = 6 checked; nothing is a finding.
+    assert.deepEqual(verdict, { ok: true, checked: 6 })
+  } finally {
+    rmSync(profileDir, { recursive: true, force: true })
+  }
+})
+
+test('verifyProfileFamilyConsistency: 闭包豁免不得掩盖版本歪斜（先版本、后闭包）', () => {
+  const profileDir = mkdtempSync(join(tmpdir(), 'dsh-verify-skew-'))
+  const put = (name: string, manifest: Record<string, unknown>) => {
+    const dir = join(profileDir, 'node_modules', name)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name, ...manifest }))
+  }
+  try {
+    writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
+      dependencies: { 'third-party-layer': '1.0.0' },
+    }))
+    put('third-party-layer', { version: '1.0.0', dependencies: { '@deepseek-ai/schemastery': '^3.17.0' } })
+    // Reachable from the user's own layer (so the closure would exempt it) AND
+    // runtime-provided at another version ⇒ version skew still reports.
+    put('@deepseek-ai/schemastery', { version: '3.17.0' })
+    const skewed = verifyProfileFamilyConsistency({
+      profileDir,
+      familyNames: ['@deepseek-ai/schemastery'],
+      runtimeVersion: '0.1.5-rc.2',
+      familyVersions: new Map([['@deepseek-ai/schemastery', ['3.18.2']]]),
+    })
+    assert.equal(skewed.ok, false)
+    if (!skewed.ok) {
+      assert.deepEqual(skewed.findings, [
+        { name: '@deepseek-ai/schemastery', version: '3.17.0', kind: 'generation-mismatch' },
+      ])
+      assert.match(
+        describeFamilyFindings(skewed.findings, '0.1.5-rc.2', new Map([['@deepseek-ai/schemastery', ['3.18.2']]])),
+        /is not the version this instance runtime provides \(expected 3\.18\.2\)/,
+      )
+    }
+  } finally {
+    rmSync(profileDir, { recursive: true, force: true })
+  }
+})
+
+test('verifyProfileFamilyConsistency: 无版本事实时回退世代比较（闭包豁免仍独立生效）', () => {
+  const profileDir = mkdtempSync(join(tmpdir(), 'dsh-verify-fallback-'))
+  const put = (name: string, manifest: Record<string, unknown>) => {
+    const dir = join(profileDir, 'node_modules', name)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name, ...manifest }))
+  }
+  try {
+    writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
+      dependencies: { '@deepseek-ai/dsh-experimental-agent-team-profile': '0.1.5-rc.2' },
+    }))
+    put('@deepseek-ai/dsh-experimental-agent-team-profile', {
+      version: '0.1.5-rc.2',
+      dependencies: { '@deepseek-ai/dsh-experimental-agent-team': '0.1.5-rc.2' },
+    })
+    put('@deepseek-ai/dsh-experimental-agent-team', { version: '0.1.5-rc.2' })
+    // A family member WITHOUT a version fact falls back to the generation arm
+    // (the pre-2026-12 behaviour), so the vendored package is still flagged —
+    // the fix is the fact, not a blanket exemption.
+    put('@deepseek-ai/cosmokit', { version: '1.8.3' })
+    const verdict = verifyProfileFamilyConsistency({
+      profileDir,
+      familyNames: ['@deepseek-ai/cosmokit', ...PROFILE_BUNDLES_SNAPSHOT],
+      runtimeVersion: '0.1.5-rc.2',
+    })
+    assert.equal(verdict.ok, false)
+    if (!verdict.ok) {
+      assert.deepEqual(verdict.findings, [
+        { name: '@deepseek-ai/cosmokit', version: '1.8.3', kind: 'generation-mismatch' },
+      ])
+      assert.match(describeFamilyFindings(verdict.findings, '0.1.5-rc.2'), /does not match the instance runtime generation/)
+    }
+    // The closure-owned experimental package stays exempt in the same run.
+    assert.equal(verdict.ok === false && verdict.findings.some(finding => finding.name.includes('experimental')), false)
+  } finally {
+    rmSync(profileDir, { recursive: true, force: true })
+  }
+})
+
+test('verifyProfileFamilyConsistency: 部分族名字一次臂都没跑成时如实报 skipped（绝不聚合成无声通过）', () => {
+  const profileDir = mkdtempSync(join(tmpdir(), 'dsh-verify-partial-'))
+  const put = (name: string, manifest: Record<string, unknown>) => {
+    const dir = join(profileDir, 'node_modules', name)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name, ...manifest }))
+  }
+  try {
+    writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
+      dependencies: { 'third-party-layer': '1.0.0' },
+    }))
+    put('third-party-layer', { version: '1.0.0' })
+    put('@deepseek-ai/schemastery', { version: '3.18.2' })
+    // Obviously skewed, but neither a version fact nor a runtime generation
+    // exists for it ⇒ this name's arm NEVER runs.
+    put('@deepseek-ai/cosmokit', { version: '9.9.9' })
+    const facts = {
+      profileDir,
+      familyNames: ['@deepseek-ai/schemastery', '@deepseek-ai/cosmokit'],
+      runtimeVersion: null,
+    }
+    const partial = verifyProfileFamilyConsistency({
+      ...facts,
+      familyVersions: new Map([['@deepseek-ai/schemastery', ['3.18.2']]]),
+    })
+    assert.deepEqual(partial, {
+      ok: true,
+      checked: 2,
+      skipped: 'no runtime-provided version fact exists and the instance runtime version is unknown for @deepseek-ai/cosmokit; the generation arm of the verification could not run for them',
+    }, 'a name that entered no arm must never be folded into a silent pass')
+
+    // No name ran any arm at all ⇒ the historic aggregate wording is preserved.
+    const none = verifyProfileFamilyConsistency(facts)
+    assert.deepEqual(none, {
+      ok: true,
+      checked: 2,
+      skipped: 'the instance runtime version is unknown; the generation arm of the verification could not run',
+    })
+  } finally {
+    rmSync(profileDir, { recursive: true, force: true })
+  }
+})
+
+test('verifyProfileFamilyConsistency: 树里没有任何 F 名字 ⇒ 不是跳过（空族 + 合法世代）', () => {
+  const profileDir = mkdtempSync(join(tmpdir(), 'dsh-verify-nofamily-'))
+  try {
+    // The gateway's empty-family fact is legitimate: the runtime provides no
+    // official-scope packages, and the only top-level entry is the user's own
+    // direct layer. There is nothing to compare ⇒ a clean pass, NOT a skip
+    // (the 0 === 0 trap the earlier per-name refactor introduced).
+    writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
+      dependencies: { '@deepseek-ai/dsh-experimental-agent-team': '0.1.5-rc.2' },
+    }))
+    const dir = join(profileDir, 'node_modules', '@deepseek-ai', 'dsh-experimental-agent-team')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-experimental-agent-team', version: '0.1.5-rc.2' }))
+    assert.deepEqual(
+      verifyProfileFamilyConsistency({ profileDir, familyNames: [], runtimeVersion: '0.1.5-rc.2' }),
+      { ok: true, checked: 0 },
+    )
+  } finally {
+    rmSync(profileDir, { recursive: true, force: true })
+  }
+})
+
+test('resolveRuntimeFamily: 两条来源都产出 name→version（锁文件取 pinned 版本，树取各包清单）', () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'dsh-family-versions-'))
+  try {
+    writeFileSync(join(workspace, 'pnpm-lock.yaml'), [
+      "lockfileVersion: '9.0'",
+      'packages:',
+      "  '@deepseek-ai/dsh@0.1.5-rc.2':",
+      "  '@deepseek-ai/dsh-base@0.1.5-rc.2':",
+      "  '@deepseek-ai/dsh-web-app@0.1.5-rc.2':",
+      "  '@deepseek-ai/cosmokit@1.8.3':",
+    ].join('\n'))
+    const fromLock = resolveRuntimeFamily(workspace)
+    assert.equal(fromLock.ok, true)
+    assert.deepEqual(fromLock.ok ? fromLock.versions.get('@deepseek-ai/cosmokit') : null, ['1.8.3'])
+
+    // No lockfile ⇒ tree enumeration supplies names AND versions.
+    rmSync(join(workspace, 'pnpm-lock.yaml'))
+    for (const [name, version] of [
+      ['dsh', '0.1.5-rc.2'], ['dsh-base', '0.1.5-rc.2'], ['dsh-web-app', '0.1.5-rc.2'], ['cosmokit', '1.8.3'],
+    ]) {
+      const dir = join(workspace, 'node_modules', '@deepseek-ai', name as string)
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: `@deepseek-ai/${name}`, version }))
+    }
+    const fromTree = resolveRuntimeFamily(workspace)
+    assert.equal(fromTree.ok, true)
+    assert.equal(fromTree.ok ? fromTree.source : null, 'runtime-tree')
+    assert.deepEqual(fromTree.ok ? fromTree.versions.get('@deepseek-ai/cosmokit') : null, ['1.8.3'])
+  } finally {
+    rmSync(workspace, { recursive: true, force: true })
+  }
+})
+
+test('verifyProfileFamilyConsistency: 第三方层夹带官方 scope 名字不再被闭包豁免（2026-12 review 收紧）', () => {
+  const profileDir = mkdtempSync(join(tmpdir(), 'dsh-verify-carry-'))
+  const put = (name: string, manifest: Record<string, unknown>) => {
+    const dir = join(profileDir, 'node_modules', name)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name, ...manifest }))
+  }
+  try {
+    // A plain third-party layer whose closure carries an official-scope name the
+    // runtime line does not provide. Only the closure of an OFFICIAL direct
+    // layer may explain such a name; otherwise any published package could
+    // smuggle one in silently (the runtime resolves inserted rows by name).
+    writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
+      dependencies: { 'evil-layer': '1.0.0' },
+    }))
+    put('evil-layer', { version: '1.0.0', dependencies: { '@deepseek-ai/dsh-session-helper': '0.1.5-rc.2' } })
+    put('@deepseek-ai/dsh-session-helper', { version: '0.1.5-rc.2' })
+    const carried = verifyProfileFamilyConsistency({
+      profileDir,
+      familyNames: [...PROFILE_BUNDLES_SNAPSHOT],
+      runtimeVersion: '0.1.5-rc.2',
+      familyVersions: new Map(),
+    })
+    assert.equal(carried.ok, false, 'a third-party layer must not be able to smuggle an official-scope name')
+    if (!carried.ok) {
+      assert.deepEqual(carried.findings, [
+        { name: '@deepseek-ai/dsh-session-helper', version: '0.1.5-rc.2', kind: 'outside-family' },
+      ])
+    }
+
+    // Control: the very same name reached through OFFICIAL layers only stays
+    // exempt — the walk may cross official hops, never a third-party one.
+    writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
+      dependencies: { '@deepseek-ai/dsh-experimental-agent-team-profile': '0.1.5-rc.2' },
+    }))
+    put('@deepseek-ai/dsh-experimental-agent-team-profile', {
+      version: '0.1.5-rc.2',
+      dependencies: { '@deepseek-ai/dsh-experimental-agent-team': '0.1.5-rc.2' },
+    })
+    put('@deepseek-ai/dsh-experimental-agent-team', {
+      version: '0.1.5-rc.2',
+      dependencies: { '@deepseek-ai/dsh-session-helper': '0.1.5-rc.2' },
+    })
+    assert.deepEqual(verifyProfileFamilyConsistency({
+      profileDir,
+      familyNames: [...PROFILE_BUNDLES_SNAPSHOT],
+      runtimeVersion: '0.1.5-rc.2',
+      familyVersions: new Map(),
+    }), { ok: true, checked: 2 })
+
+    // ...but a THIRD-PARTY intermediary inside an official layer's closure must
+    // not be able to explain an official name (real closures carry zod/react).
+    put('@deepseek-ai/dsh-experimental-agent-team', {
+      version: '0.1.5-rc.2',
+      dependencies: { zod: '4.6.4' },
+    })
+    put('zod', { version: '4.6.4', dependencies: { '@deepseek-ai/dsh-session-helper': '0.1.5-rc.2' } })
+    const deep = verifyProfileFamilyConsistency({
+      profileDir,
+      familyNames: [...PROFILE_BUNDLES_SNAPSHOT],
+      runtimeVersion: '0.1.5-rc.2',
+      familyVersions: new Map(),
+    })
+    assert.equal(deep.ok, false, 'a third-party hop must not explain an official-scope name')
+    if (!deep.ok) {
+      assert.deepEqual(deep.findings, [
+        { name: '@deepseek-ai/dsh-session-helper', version: '0.1.5-rc.2', kind: 'outside-family' },
+      ])
+    }
+  } finally {
+    rmSync(profileDir, { recursive: true, force: true })
+  }
+})
+
+test('resolveRuntimeFamily: 名字可解析而版本一个都解析不出 ⇒ 拒绝该来源（两个解析器自相矛盾时宁可不放行）', () => {
+  const workspace = mkdtempSync(join(tmpdir(), 'dsh-family-disagree-'))
+  try {
+    const lockfile = (versionCell: string) => [
+      "lockfileVersion: '9.0'",
+      'packages:',
+      `  '@deepseek-ai/dsh@${versionCell}':`,
+      `  '@deepseek-ai/dsh-base@${versionCell}':`,
+      `  '@deepseek-ai/dsh-web-app@${versionCell}':`,
+      `  '@deepseek-ai/cosmokit@${versionCell}':`,
+    ].join('\n')
+    // A range-form key (no pinned version) keeps the NAME parser happy but leaves
+    // the version fact empty. Letting it through would silently push every
+    // family member back to the generation arm — the exact false-positive path
+    // this module was fixed for — so the source must be refused instead.
+    writeFileSync(join(workspace, 'pnpm-lock.yaml'), lockfile('^0.1.5'))
+    const refused = resolveRuntimeFamily(workspace)
+    assert.equal(refused.ok, false, 'a self-contradicting fact source must not become F')
+    assert.match(refused.ok ? '' : refused.reason, /no parseable versions/)
+    // Positive control: the same file with pinned versions stays usable.
+    writeFileSync(join(workspace, 'pnpm-lock.yaml'), lockfile('0.1.5-rc.2'))
+    const ok = resolveRuntimeFamily(workspace)
+    assert.equal(ok.ok, true)
+    assert.deepEqual(ok.ok ? ok.names.length : 0, 4)
+    assert.deepEqual(ok.ok ? ok.versions.get('@deepseek-ai/cosmokit') : null, ['0.1.5-rc.2'])
+  } finally {
+    rmSync(workspace, { recursive: true, force: true })
   }
 })
 

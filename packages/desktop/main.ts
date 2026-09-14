@@ -181,6 +181,7 @@ import {
   disposePluginSyncChildren,
   guardPluginMutation,
   scopeExecToOwnership,
+  shouldPreferPinnedRuntimeLockfile,
   sshApplyFacts,
   runWithFinalOwnership,
 } from './plugin-sync.ts';
@@ -1985,13 +1986,43 @@ if (!gotTheLock) {
     const localProtectionFacts = (): PluginProtectionFacts => {
       const resolved = resolveActiveRuntime(runtimeBaseDir);
       let familyNames: readonly string[] | null = null;
+      // The version half of the SAME resolution (design 21 §6.11.3): the
+      // post-install verification compares an installed family member against
+      // the versions this runtime actually provides, so a re-scoped vendored
+      // package (which keeps its upstream version, never the generation string)
+      // is judged on its own scale. Absent key = no version fact ⇒ generation arm.
+      let familyVersions: PluginProtectionFacts['familyVersions'] = null;
       if (resolved.path !== null) {
-        const family = resolveRuntimeFamily(resolved.path, { pinnedLockfilePath: resolvePinnedRuntimeLockfile() });
+        // The built-in anchor describes the BUILT-IN runtime line only. A
+        // user-selected runtime (design 18 §3.6) — or an env-provided tree — is
+        // another line whose own lockfile is the right fact source; handing it
+        // the pin would judge a consistent profile against versions it never
+        // had (2026-12 review: a legitimate 0.1.5-rc.3 profile failed loudly
+        // when the pin sat at rc.2). Same-version trees still prefer the pin,
+        // because a source-line lockfile carries the opt-in segment and gets
+        // refused by the trust criterion.
+        const usePinned = shouldPreferPinnedRuntimeLockfile(resolved.version, readDshVersion(builtinDshWorkspace));
+        const pinnedLockfilePath = resolvePinnedRuntimeLockfile();
+        let family = resolveRuntimeFamily(resolved.path, {
+          pinnedLockfilePath: usePinned ? pinnedLockfilePath : null,
+        });
+        // A dev/env tree (DSH_CHAMBER_DSH_PATH) at another generation normally
+        // carries a source-line lockfile (opt-in segment ⇒ refused) and a
+        // source-line tree (forbidden names ⇒ refused), so it would resolve to NO
+        // family facts and degrade the write face to "official installs refused".
+        // For an explicit developer override the built-in anchor is still the
+        // closest usable source; a user-SELECTED released runtime never gets this
+        // stand-in (that is exactly the cross-line misjudgement this gate fixes).
+        if (!family.ok && !usePinned && resolved.source === 'env') {
+          family = resolveRuntimeFamily(resolved.path, { pinnedLockfilePath });
+        }
         familyNames = family.ok ? family.names : null;
+        familyVersions = family.ok ? family.versions : null;
       }
       const profileManifest = path.join(localDshHome, 'profiles', WEB_PROFILE, 'package.json');
       return {
         familyNames,
+        familyVersions,
         runtimeVersion: resolved.version,
         profileState: existsSync(profileManifest) ? 'ready' : 'absent',
         familySource: 'runtime',
@@ -2011,10 +2042,12 @@ if (!gotTheLock) {
      */
     const verifyLocalProfileFamily = (facts: PluginProtectionFacts): { ok: true } | { ok: false; error: string } => {
       if (!Array.isArray(facts.familyNames) || facts.familyNames.length === 0) return { ok: true };
+      const familyVersions = facts.familyVersions ?? null;
       const verdict = verifyProfileFamilyConsistency({
         profileDir: path.join(localDshHome, 'profiles', WEB_PROFILE),
         familyNames: facts.familyNames,
         runtimeVersion: facts.runtimeVersion ?? null,
+        familyVersions,
       });
       if (verdict.ok) {
         // A skip is NOT a pass: record it loudly (the install itself succeeded,
@@ -2026,7 +2059,7 @@ if (!gotTheLock) {
       }
       return {
         ok: false,
-        error: `installed, but the profile tree no longer matches the instance runtime: ${describeFamilyFindings(verdict.findings, facts.runtimeVersion ?? null)}`,
+        error: `installed, but the profile tree no longer matches the instance runtime: ${describeFamilyFindings(verdict.findings, facts.runtimeVersion ?? null, familyVersions)}`,
       };
     };
     const confirmPluginAction = async (

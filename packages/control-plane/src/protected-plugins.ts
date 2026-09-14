@@ -22,6 +22,7 @@
  */
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import type { Dirent } from 'node:fs'
 import { join } from 'node:path'
 import { MAX_PLUGIN_SPEC_CHARS } from './plugin-spec.ts'
 
@@ -419,11 +420,29 @@ export function decidePluginMutation(input: DecidePluginMutationInput): PluginMu
 // 事实源：运行时线族集合
 // ---------------------------------------------------------------------------
 
+/**
+ * 运行时线为某个名字提供的**版本集合**（design 21 §6.11.3 的版本事实）。
+ *
+ * 名字集合 F 与版本事实是同一份来源的两面：F 决定"这个名字由运行时拥有"，版本集合决定
+ * "运行时给它的版本是什么"。没有这一半，复验只能拿 installedVersion 去比 dsh **世代串**，
+ * 而改域后的 vendored 包（`@deepseek-ai/cosmokit`、`@deepseek-ai/schemastery` 等保留上游
+ * 版本号）永远不可能等于世代串 —— 它们会被判成跨代副本，尽管版本恰恰是运行时 pin 的那个。
+ *
+ * 键缺席或空数组 = 该来源没给出版本（回退世代比较，绝不猜）。
+ * 锁文件可能同时 pin 同一名字的多个版本（同仓多消费方），故是集合而非单值。
+ */
+export type FamilyVersions = ReadonlyMap<string, readonly string[]>
+
+/** 安全的包名字面量（闭包遍历用；`readInstalledVersion` 共用同一判据）。 */
+const SAFE_PACKAGE_NAME = /^(@[a-zA-Z0-9][a-zA-Z0-9._-]*\/)?[a-zA-Z0-9][a-zA-Z0-9._-]*$/
+
 /** 运行时线族集合的解析结果（`lockfilePath` 是实际采用的锁文件，证据用）。 */
 export type RuntimeFamilyResolution =
   | {
     ok: true
     names: readonly string[]
+    /** 每个族名字由运行时线提供的版本集合；键缺席 = 该来源没有版本事实。 */
+    versions: FamilyVersions
     /** pinned-lockfile = 已提交的运行时线锚（首选）；lockfile-closure = 活动树的锁文件；
      *  runtime-tree = 无锁文件时的树枚举兜底。 */
     source: 'pinned-lockfile' | 'lockfile-closure' | 'runtime-tree'
@@ -448,15 +467,75 @@ export function familyNamesFromLockfileClosure(lockfileText: string): string[] {
   return [...names].sort()
 }
 
+/**
+ * 同一个锁文件的**版本事实**：族名字 → 该名字被 pin 的版本集合。
+ *
+ * 名字抽取刻意与 {@link familyNamesFromLockfileClosure} 分离（后者是 C11 门禁与 `P` 的
+ * 唯一权威，逐字不变）：本函数只补充版本维度，正则单独写，键形兼容 pnpm v9
+ * （`'@scope/name@version':`）与 v6（`/@scope/name/version:`）。**不在版本后锚定** `'`/`:`：
+ * pnpm 的 snapshot 键会把 peer 解析结果缀在版本后（实测本仓运行时线有 234 个这类键，
+ * 且括号可嵌套，如 `'@x/y@1.0.17(@z/w@1.1.4(@z/c@4.0.2))(...)'`），因此版本用严格字符集
+ * 截断（以数字开头，遇 `'` / `:` / 空白 / `(` 即停），既不吞 peer 后缀也不会把后续键吃进来。
+ * @param lockfileText - `pnpm-lock.yaml` 全文。
+ * @returns 每个族名字的版本集合（去重并排序）。
+ */
+export function familyVersionsFromLockfileClosure(lockfileText: string): Map<string, string[]> {
+  const versions = new Map<string, string[]>()
+  const add = (name: string, version: string): void => {
+    const list = versions.get(name)
+    if (list === undefined) versions.set(name, [version])
+    else if (!list.includes(version)) list.push(version)
+  }
+  const v9 = /^ {2}'?(@deepseek-ai\/[a-z0-9._-]+)@([0-9][^':\s()]*)/gm
+  const v6 = /^ {2}\/(@deepseek-ai\/[a-z0-9._-]+)\/([0-9][^':\s()]*)/gm
+  for (const re of [v9, v6]) {
+    for (const match of lockfileText.matchAll(re)) add(match[1], match[2])
+  }
+  for (const list of versions.values()) list.sort()
+  return versions
+}
+
 /** 枚举一棵运行时树的 `node_modules/@deepseek-ai/*`（目录或 symlink 都算）。 */
 export function familyNamesFromRuntimeTree(workspacePath: string): string[] | null {
+  const facts = familyFactsFromRuntimeTree(workspacePath)
+  return facts === null ? null : facts.names
+}
+
+/**
+ * 树枚举的名字 + 版本事实：目录名给名字，各包自己的 `package.json` 给版本（读不到就
+ * **不登记**该名字的版本，回退世代比较 —— 绝不猜）。树是锁文件缺席时的兜底来源，所以
+ * 只有这条路径额外花读清单的成本。
+ * @param workspacePath - 活动运行时树的根。
+ * @returns 名字（已排序）与版本集合；目录不存在或列不出时 null。
+ */
+function familyFactsFromRuntimeTree(workspacePath: string): { names: string[]; versions: Map<string, string[]> } | null {
   const dir = join(workspacePath, 'node_modules', '@deepseek-ai')
   if (!existsSync(dir)) return null
+  let entries: Dirent[]
   try {
-    return readdirSync(dir, { withFileTypes: true })
-      .filter(entry => entry.isDirectory() || entry.isSymbolicLink())
-      .map(entry => `${OFFICIAL_SCOPE}${entry.name}`)
-      .sort()
+    entries = readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return null
+  }
+  const names: string[] = []
+  const versions = new Map<string, string[]>()
+  for (const entry of entries) {
+    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue
+    const name = `${OFFICIAL_SCOPE}${entry.name}`
+    names.push(name)
+    const manifest = readPackageManifest(join(dir, entry.name, 'package.json'))
+    const version = manifest?.version
+    if (typeof version === 'string' && version !== '') versions.set(name, [version])
+  }
+  return { names: names.sort(), versions }
+}
+
+/** 读一个包的 `package.json`（只读、容错；任何失败都返回 null）。 */
+function readPackageManifest(path: string): Record<string, unknown> | null {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    return parsed as Record<string, unknown>
   } catch {
     return null
   }
@@ -487,21 +566,54 @@ export function resolveRuntimeFamily(
   for (const candidate of candidates) {
     if (!existsSync(candidate.path)) continue
     try {
-      const names = familyNamesFromLockfileClosure(readFileSync(candidate.path, 'utf8'))
+      const lockfileText = readFileSync(candidate.path, 'utf8')
+      const names = familyNamesFromLockfileClosure(lockfileText)
+      const versions = familyVersionsFromLockfileClosure(lockfileText)
       // 可信性判据（与 C11 同源）：核心锚缺失或含禁名 ⇒ 这个闭包**不是**运行时线的 F
       // （源码线/裁剪树/外来锁文件），拒绝它并继续找；全被拒则 ok:false（保守降级）。
       const findings = runtimeFamilyFindings(names)
-      if (findings.length === 0) return { ok: true, names, source: candidate.source, lockfilePath: candidate.path, treeNames: null }
-      rejected.push(`${candidate.path}: ${findings.join('; ')}`)
+      // 第二条判据（2026-12）：名字解析得出来、版本一个都解析不出来 ⇒ 两个解析器对**同一批
+      // 键**互相矛盾（同一个键既给出名字也给出版本）。放行它就意味着 F 里每个名字都缺版本
+      // 事实、静默退回世代比较——正是改域 vendored 包被误判的那条老路。宁可拒绝该来源、
+      // 让树兜底（树直接读各包清单），也不接受一份自相矛盾的事实。
+      const parserDisagreement = names.length > 0 && versions.size === 0
+      if (findings.length > 0) {
+        rejected.push(`${candidate.path}: ${findings.join('; ')}`)
+      } else if (parserDisagreement) {
+        rejected.push(`${candidate.path}: the closure yielded ${names.length} names but no parseable versions (the name and version parsers disagree about the same keys)`)
+      } else {
+        return {
+          ok: true,
+          names,
+          versions,
+          source: candidate.source,
+          lockfilePath: candidate.path,
+          treeNames: null,
+        }
+      }
     } catch {
       /* 读失败（EACCES/损坏）→ 下一个候选 */
     }
   }
   // 只有在没有可用锁文件时才枚举实例树（每次 IPC 都 readdir 不值得）；树同样过可信性判据。
-  const treeNames = familyNamesFromRuntimeTree(workspacePath)
-  if (treeNames !== null && treeNames.length > 0) {
-    const findings = runtimeFamilyFindings(treeNames)
-    if (findings.length === 0) return { ok: true, names: treeNames, source: 'runtime-tree', lockfilePath: null, treeNames }
+  //
+  // 树来源刻意**不**要求版本事实：枚举目录名本身就是这条兜底路径的用途（design 21 §6.11.1
+  // 的实例侧等价性交叉校验只吃名字），而清单读不出的名字会退回世代比较——方向是"响亮误报"
+  // 而非静默放行。反过来在这里拒绝，会让 `familyNames` 变成 null、写面进 `protected-set-unavailable`
+  // 降级态（官方 scope install 一律拒），把这条兜底路径的用户挡在门外，代价大于它要防的问题。
+  const tree = familyFactsFromRuntimeTree(workspacePath)
+  if (tree !== null && tree.names.length > 0) {
+    const findings = runtimeFamilyFindings(tree.names)
+    if (findings.length === 0) {
+      return {
+        ok: true,
+        names: tree.names,
+        versions: tree.versions,
+        source: 'runtime-tree',
+        lockfilePath: null,
+        treeNames: tree.names,
+      }
+    }
     rejected.push(`${workspacePath}/node_modules/@deepseek-ai: ${findings.join('; ')}`)
   }
   return {
@@ -654,8 +766,14 @@ export type FamilyConsistencyVerdict =
  *
  * - **直接依赖**（profile manifest 的 `dependencies` 里的名字）= 用户显式请求的安装，
  *   已由 R2 判定 ⇒ 跳过（层自己通常就是 `@deepseek-ai/dsh-experimental-*`，不在 F 内）；
- * - **其余**（被 pnpm 提升上来的传递副本）必须 ∈ F 且与实例同代，否则：
- *   `outside-family` = 引入了族外的官方 scope 影子副本；`generation-mismatch` = 跨代副本。
+ * - **F 提供的名字**（运行时线族成员）⇒ 必须与**运行时为该名字提供的版本**一致
+ *   （`familyVersions`；该名字没有版本事实时退回与实例世代的 `sameGeneration` 比较）：
+ *   不一致 = 异版本/跨代副本，会 shadow 运行时自己那一份；
+ * - **F 不提供的官方 scope 名字** ⇒ 若属于**用户显式安装层的依赖闭包**，那是该层自己的
+ *   实现（运行时并不提供这个名字，它无从 shadow 任何东西），豁免；否则 = 族外官方 scope
+ *   影子副本。
+ *
+ * 判定顺序是"先版本、后闭包"：闭包归属不得掩盖真实版本歪斜。
  *
  * 只读；失败返回 findings（调用方决定回滚/响亮报错）。profile 树不存在 ⇒ ok。
  */
@@ -663,6 +781,8 @@ export function verifyProfileFamilyConsistency(input: {
   profileDir: string
   familyNames: readonly string[]
   runtimeVersion: string | null
+  /** F 内名字由运行时线提供的版本集合；缺省/空 = 该名字没有版本事实（回退世代比较）。 */
+  familyVersions?: FamilyVersions | null
 }): FamilyConsistencyVerdict {
   const modulesDir = join(input.profileDir, 'node_modules', '@deepseek-ai')
   const manifestPath = join(input.profileDir, 'package.json')
@@ -695,30 +815,114 @@ export function verifyProfileFamilyConsistency(input: {
   } catch (error) {
     return { ok: true, checked: 0, skipped: `the profile node_modules tree could not be listed (${messageOfUnknown(error)})` }
   }
+  const owned = profileLayerClosure(input.profileDir, direct)
   let checked = 0
-  let generationChecked = false
   let familyEntries = 0
+  /**
+   * 族名字里**一次臂都没跑成**的（既无版本事实、实例世代也未知）。按名字收集而不是
+   * 只记一个总布尔：否则"部分名字比对过、剩下的从未被比较"会聚合成一个无声的通过
+   * （2026-12 review：跳过永远不等于通过）。
+   */
+  const unverified: string[] = []
   for (const name of entries) {
     if (direct.has(name)) continue
     checked += 1
     const version = readInstalledVersion(input.profileDir, name)
-    if (!family.has(name)) {
-      findings.push({ name, version, kind: 'outside-family' })
+    if (family.has(name)) {
+      familyEntries += 1
+      const provided = input.familyVersions?.get(name)
+      if (provided !== undefined && provided.length > 0) {
+        if (version === null || !provided.includes(version)) {
+          findings.push({ name, version, kind: 'generation-mismatch' })
+        }
+        continue
+      }
+      if (input.runtimeVersion === null) {
+        unverified.push(name)
+        continue
+      }
+      if (!sameGeneration(version, input.runtimeVersion)) {
+        findings.push({ name, version, kind: 'generation-mismatch' })
+      }
       continue
     }
-    familyEntries += 1
-    if (input.runtimeVersion === null) continue
-    generationChecked = true
-    if (!sameGeneration(version, input.runtimeVersion)) {
-      findings.push({ name, version, kind: 'generation-mismatch' })
-    }
+    // Not a runtime-provided name: harmless only when the user's own layer
+    // brought it in. Anything else is an unexplained official-scope shadow.
+    if (owned.has(name)) continue
+    findings.push({ name, version, kind: 'outside-family' })
   }
   if (findings.length > 0) return { ok: false, findings }
-  // 有族成员却读不到实例版本 ⇒ 代臂**没能跑**：如实报 skipped（响亮），绝不谎报"通过"
-  // （2026-12 review：R2 在同一状态下是拒装，复验不能反而放行）。
-  return familyEntries > 0 && !generationChecked
-    ? { ok: true, checked, skipped: 'the instance runtime version is unknown; the generation arm of the verification could not run' }
-    : { ok: true, checked }
+  // 有族成员没能比对 ⇒ 如实报 skipped（响亮），绝不谎报"通过"。
+  // （2026-12 review：R2 在同一状态下是拒装，复验不能反而放行。）
+  // 只有 runtimeVersion 未知才会进这里（代臂压根跑不成），所以 `unverified ⊆ family entries`
+  // 蕴含 `familyEntries ≥ 1` —— 不存在"0===0 空真"把空族树误报成跳过那条老路。
+  //
+  // 注意**不能**把"调用方给了版本事实表、但这个名字不在表里"也改成 skipped（2026-12 复核曾
+  // 建议，实测被否）：那会让"没有版本事实的跨代副本"从**响亮失败**退化成**跳过放行**，
+  // 方向正是设计禁止的"静默放行拆组合"。缺事实时退回世代比较仍是设计口径（§6.11.4），
+  // 代价是改域 vendored 包在极窄的"树来源 + 清单读不出"场景下会响亮误报——保守方向可接受。
+  if (unverified.length > 0) {
+    const names = unverified.join(', ')
+    return unverified.length === familyEntries
+      ? { ok: true, checked, skipped: 'the instance runtime version is unknown; the generation arm of the verification could not run' }
+      : { ok: true, checked, skipped: `no runtime-provided version fact exists and the instance runtime version is unknown for ${names}; the generation arm of the verification could not run for them` }
+  }
+  return { ok: true, checked }
+}
+
+/** 闭包遍历的清单读取上限：profile 树是有限集，超限说明树畸形 → 停止扩展（只收窄豁免面）。 */
+const MAX_PROFILE_CLOSURE_MANIFESTS = 4096
+
+/**
+ * 用户显式安装层的**依赖闭包**（design 21 §6.11.4）：沿
+ * `node_modules/<name>/package.json` 的 `dependencies` ∪ `optionalDependencies` 递归。
+ *
+ * **只从官方 scope 的直接依赖起步**（2026-12 review 收紧）：闭包豁免的唯一用途是解释
+ * 「官方 scope 但运行时线不提供」的名字（循环只遍历 `node_modules/@deepseek-ai/*`），而
+ * 这类名字的合法来源就是**用户显式安装的官方层**（bundle / opt-in 层）。若从**任意**直接
+ * 依赖起步，一个普通第三方包只要在自己的 `dependencies` 里写一个官方 scope 名字，就能把
+ * 它带进 profile 且**静默**通过复验——实测源线官方包 284 个、运行时线 F 244 个，差集 42
+ * 里有 33 个连 opt-in 段的借口都没有（`dsh-tool-terminal`、`dsh-lsp`、`dsh-subagent-codex`
+ * …）。第三方层夹带官方名属**未解释**，应当照旧报 `outside-family`。
+ *
+ * `peerDependencies` 同样**不纳入**：profile 的 workspace 固定为 `autoInstallPeers: false`
+ * （design 21 §6.11.4 第 3 条既有前提，C12 守），peer 不会被物化，因此它既不会出现在顶层
+ * 目录里，也不构成"这一层带来了它"的证据；把 peer 算进来只会无端放宽豁免面。
+ *
+ * 名字先过 {@link SAFE_PACKAGE_NAME}：清单里的名字来自任意包的 package.json，未过滤时
+ * `../` 之类会逃出 `node_modules` 目录。
+ * @param profileDir - 受管 profile 目录。
+ * @param direct - manifest `dependencies` 里的名字（用户显式安装面）。
+ * @returns 闭包内所有官方的、可解析的名字（含官方直接依赖自身）。
+ */
+function profileLayerClosure(profileDir: string, direct: ReadonlySet<string>): Set<string> {
+  const seen = new Set<string>()
+  const queue = [...direct].filter(name => officialScope(name))
+  let reads = 0
+  while (queue.length > 0 && reads < MAX_PROFILE_CLOSURE_MANIFESTS) {
+    const name = queue.pop() as string
+    if (seen.has(name)) continue
+    seen.add(name)
+    // Only OFFICIAL nodes expand the walk (2026-12 review, deep-chain finding):
+    // the real closures carry third-party packages (zod, react), and letting one
+    // of them declare an official-scope dependency would explain an arbitrary
+    // official name — a third-party layer one hop further out would silently
+    // pass. The name itself stays in `seen` (the layer did bring it in), its
+    // manifest is simply not consulted.
+    if (!officialScope(name)) continue
+    if (!SAFE_PACKAGE_NAME.test(name)) continue
+    const manifest = readPackageManifest(join(profileDir, 'node_modules', name, 'package.json'))
+    if (manifest === null) continue
+    reads += 1
+    for (const field of ['dependencies', 'optionalDependencies'] as const) {
+      const block = manifest[field]
+      if (block === null || typeof block !== 'object' || Array.isArray(block)) continue
+      for (const dependency of Object.keys(block as Record<string, unknown>)) {
+        if (!seen.has(dependency)) queue.push(dependency)
+      }
+    }
+  }
+  return seen
 }
 
 /** 一个未知错误的简短文案（复验跳过理由用；不引入额外依赖）。 */
@@ -726,11 +930,29 @@ function messageOfUnknown(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-/** 违例 → 面向操作者的响亮文案（两端共用）。 */
-export function describeFamilyFindings(findings: readonly FamilyConsistencyFinding[], runtimeVersion: string | null): string {
-  return findings.map((finding) => (finding.kind === 'outside-family'
-    ? `${finding.name}@${finding.version ?? '?'} is a runtime-family copy that the pinned release does not provide`
-    : `${finding.name}@${finding.version ?? '?'} does not match the instance runtime generation (${runtimeVersion ?? 'unknown'})`)).join('；')
+/**
+ * 违例 → 面向操作者的响亮文案（两端共用）。
+ * @param findings - 复验产出的违例项。
+ * @param runtimeVersion - 目标实例的运行时世代（无版本事实时的世代臂文案用）。
+ * @param familyVersions - 可选版本事实；命中该名字时改述为"不是本实例运行时代为提供的版本"，
+ *   因为对改域 vendored 包来说世代串本身就不是它的版本尺度。
+ * @returns 分号连接的单行文案。
+ */
+export function describeFamilyFindings(
+  findings: readonly FamilyConsistencyFinding[],
+  runtimeVersion: string | null,
+  familyVersions?: FamilyVersions | null,
+): string {
+  return findings.map((finding) => {
+    if (finding.kind === 'outside-family') {
+      return `${finding.name}@${finding.version ?? '?'} is a runtime-family copy that the pinned release does not provide`
+    }
+    const provided = familyVersions?.get(finding.name)
+    if (provided !== undefined && provided.length > 0) {
+      return `${finding.name}@${finding.version ?? '?'} is not the version this instance runtime provides (expected ${provided.join(' | ')})`
+    }
+    return `${finding.name}@${finding.version ?? '?'} does not match the instance runtime generation (${runtimeVersion ?? 'unknown'})`
+  }).join('；')
 }
 
 /**
@@ -738,7 +960,7 @@ export function describeFamilyFindings(findings: readonly FamilyConsistencyFindi
  * 返回 null 表示读不到（未装/无清单/读失败）——投影里就是 `version: null`，绝不让它成为判据。
  */
 export function readInstalledVersion(profileDir: string, name: string): string | null {
-  if (!/^(@[a-zA-Z0-9][a-zA-Z0-9._-]*\/)?[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(name)) return null
+  if (!SAFE_PACKAGE_NAME.test(name)) return null
   const manifestPath = join(profileDir, 'node_modules', name, 'package.json')
   if (!existsSync(manifestPath)) return null
   try {

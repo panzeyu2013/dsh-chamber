@@ -20,6 +20,7 @@ import {
   CHAMBER_SEED_NAMES,
   applyPlugins,
   guardPluginMutation,
+  shouldPreferPinnedRuntimeLockfile,
   sshProtectionFacts,
   ARCHIVE_CLEANUP_INSERT_ID,
   ARCHIVE_CLEANUP_PACKAGE_NAME,
@@ -2746,4 +2747,21 @@ test('runLocalDshPlugin: a file: pick is refused without allowFileSpec and passe
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
+})
+
+test('shouldPreferPinnedRuntimeLockfile: 只在活动运行时与内建线同版时才用内建锚（design 18 §3.6 / 21 §6.11.1）', () => {
+  // The pin describes the built-in line. A user-selected runtime — or an
+  // env-provided tree — is another dsh version whose own lockfile is the right
+  // fact source: judging its profile against the pin's versions fails a
+  // consistent tree loudly (2026-12 review fixture: rc.3 profile vs rc.2 pin).
+  assert.equal(shouldPreferPinnedRuntimeLockfile('0.1.5-rc.2', '0.1.5-rc.2'), true)
+  assert.equal(shouldPreferPinnedRuntimeLockfile('0.1.5-rc.3', '0.1.5-rc.2'), false,
+    'another runtime line must use its own lockfile closure')
+  assert.equal(shouldPreferPinnedRuntimeLockfile('0.1.5-rc.1', '0.1.5-rc.2'), false,
+    'a prerelease difference is a different line (string equality, like sameGeneration)')
+  assert.equal(shouldPreferPinnedRuntimeLockfile(null, '0.1.5-rc.2'), false,
+    'an unreadable active generation must not guess')
+  assert.equal(shouldPreferPinnedRuntimeLockfile('0.1.5-rc.2', null), false,
+    'an unreadable pinned generation must not guess')
+  assert.equal(shouldPreferPinnedRuntimeLockfile(null, null), false)
 })

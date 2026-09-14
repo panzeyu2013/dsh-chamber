@@ -1353,6 +1353,7 @@ export type {
   DecidePluginMutationInput,
   FamilyConsistencyFinding,
   FamilyConsistencyVerdict,
+  FamilyVersions,
   DerivePluginRowsInput,
   ParsedVersion,
   PluginMutationDecision,

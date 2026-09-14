@@ -218,6 +218,7 @@ export type {
   DerivePluginRowsInput,
   FamilyConsistencyFinding,
   FamilyConsistencyVerdict,
+  FamilyVersions,
   HostPackageInsert,
   HostPackageSeedFile,
   InsertConflictKind,

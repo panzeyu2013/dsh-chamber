@@ -1,13 +1,13 @@
 /**
  * `pnpm run test:control-plane` (root) → `pnpm --filter @dsh-chamber/control-plane
- * run test` — the control-plane unit-test set, exactly the authoritative list
- * in AGENTS.md (Validation). Each file runs as its own `node <file>.ts` child
- * with inherited stdio (the same semantics as the former inline CI chain: a
- * failure in one file stops the run non-zero).
+ * run test` — the control-plane unit-test set (release-checklist §3 names this
+ * script as the authoritative list). Each file runs as its own `node <file>.ts`
+ * child with inherited stdio (the same semantics as the former inline CI chain:
+ * a failure in one file stops the run non-zero).
  *
  * Every listed file is required: silently skipping a deleted/renamed test
- * would make the aggregate command pass with less coverage than AGENTS.md and
- * CI claim.
+ * would make the aggregate command pass with less coverage than the checklist
+ * and CI claim.
  *
  * Platform split (2026-09, structural — no file lists in workflow YAML): the
  * POSIX-semantics suites (private-fs O_NOFOLLOW/0700 etc., fail-closed on
@@ -60,6 +60,11 @@ const FILES = [
   // CI leg (design 02 §5.1 parity work, M1).
   'win-probes.test.ts',
   'win32-lifecycle.integration.test.ts',
+  // 受保护集合 / 代耦合 / 装后复验的完整判定面（design 21 §6.11，决策 19）。
+  // 本文件此前只靠手动 `node <path>` 运行，所以 §6.11 的全部 pin 与
+  // familyNamesFromLockfileClosure（C11 同源解析器）从未进入 CI —— 而它正是
+  // 「官方 opt-in 层可装可卸」这条契约唯一的单测锚点。
+  'protected-plugins.test.ts',
 ]
 
 /** Windows CI leg set (`test:win32` / `--win32`): win32-real or
@@ -68,6 +73,10 @@ const FILES = [
 const WIN32_FILES = [
   'win-probes.test.ts',
   'win32-lifecycle.integration.test.ts',
+  // The §6.11 judgement face is platform-neutral (join/mkdtemp/tmpdir only) and
+  // runs in ~25 ms, so the Windows leg gets the same pins as the POSIX legs —
+  // including symlink/junction semantics of readInstalledVersion.
+  'protected-plugins.test.ts',
 ]
 
 const win32 = process.argv.includes('--win32')

@@ -116,3 +116,90 @@ test('main.ts: a refused judgement returns before the mutation, and the CLI guar
   assert.match(mainCode, /runLocalDshPlugin\([^)]*protection:/s,
     'the local CLI runner must receive the protection facts (defence in depth)')
 })
+
+/** `main.ts` slice from `start` up to (excluding) `end`; both must exist. */
+function sliceBetween(start: string, end: string, what: string): string {
+  const from = mainCode.indexOf(start)
+  assert.notEqual(from, -1, `${what}: main.ts no longer contains ${start}`)
+  const to = mainCode.indexOf(end, from)
+  assert.notEqual(to, -1, `${what}: no ${end} after ${start}, so the block cannot be delimited`)
+  return mainCode.slice(from, to)
+}
+
+test('main.ts: the local protection facts carry the runtime version facts from the SAME resolution as F', () => {
+  // design 21 §6.11.3: the post-install verification judges a family member on
+  // the versions the runtime provides; main.ts is the only desktop producer of
+  // those facts, and it must read them off the SAME resolveRuntimeFamily result
+  // as F — a second resolution could observe a runtime swap in between.
+  const facts = sliceBetween('const localProtectionFacts = (): PluginProtectionFacts => {',
+    'const verifyLocalProfileFamily', 'localProtectionFacts')
+  // Exactly one primary resolution, plus the env-only stand-in retry (asserted by
+  // its own test below). Both F and the version facts must still come off the
+  // SAME (final) result — never two independent reads that could span a swap.
+  const resolutions = facts.match(/resolveRuntimeFamily\(/g) ?? []
+  assert.equal(resolutions.length, 2,
+    `localProtectionFacts must resolve the runtime family once plus the env stand-in retry, found ${resolutions.length}`)
+  assert.match(facts, /familyVersions = family\.ok \? family\.versions : null;/,
+    'the ok branch must take `versions` off the same resolution (null when unresolvable)')
+  assert.match(facts, /return \{\s*familyNames,\s*familyVersions,/s,
+    'the returned facts must carry familyVersions alongside familyNames')
+})
+
+test('main.ts: the post-install verification passes the version facts to the verdict AND the message', () => {
+  const verify = sliceBetween('const verifyLocalProfileFamily = (facts: PluginProtectionFacts)',
+    'const confirmPluginAction', 'verifyLocalProfileFamily')
+  // The early return is the "no F ⇒ nothing to verify" contract and must stay:
+  // familyVersions can never make a factless ssh/degraded path verify.
+  assert.match(verify,
+    /if \(!Array\.isArray\(facts\.familyNames\) \|\| facts\.familyNames\.length === 0\) return \{ ok: true \};/,
+    'the empty-family early return must be preserved')
+  assert.match(verify, /const familyVersions = facts\.familyVersions \?\? null;/,
+    'the facts field must be normalized to null before use')
+  assert.match(verify, /verifyProfileFamilyConsistency\(\{[^}]*familyVersions,/s,
+    'verifyProfileFamilyConsistency must receive familyVersions (version arm, not only generation)')
+  assert.match(verify,
+    /describeFamilyFindings\(verdict\.findings, facts\.runtimeVersion \?\? null, familyVersions\)/,
+    'describeFamilyFindings must receive the same familyVersions so the message names the expected version')
+})
+
+test('main.ts / plugin-sync.ts: the ssh conservative shape still carries NO version facts', () => {
+  // ssh has no runtime family source at all (familySource 'none', fails closed);
+  // its facts must not silently acquire a version arm.
+  const syncSource = readFileSync(join(import.meta.dirname, 'plugin-sync.ts'), 'utf8')
+  assert.match(syncSource,
+    /return \{ familyNames: null, familyVersions: null, runtimeVersion: null, familySource: 'none' \}/,
+    'sshProtectionFacts must stay version-factless (conservative ssh shape)')
+})
+
+test('main.ts: the built-in runtime pin is only used when it IS the active runtime line', () => {
+  // design 21 §6.11.1 + design 18 §3.6: a user-selected runtime (or an
+  // env-provided tree) is another dsh version whose own lockfile is the right
+  // fact source. Handing it the built-in pin judges a consistent profile
+  // against versions it never had — the 2026-12 review fixture failed a
+  // legitimate 0.1.5-rc.3 profile loudly while the pin sat at rc.2. Same-version
+  // trees still prefer the pin (a source-line lockfile carries the opt-in
+  // segment and is refused by the trust criterion).
+  const facts = sliceBetween('const localProtectionFacts = (): PluginProtectionFacts => {',
+    'const verifyLocalProfileFamily', 'localProtectionFacts')
+  assert.match(facts,
+    /const usePinned = shouldPreferPinnedRuntimeLockfile\(resolved\.version, readDshVersion\(builtinDshWorkspace\)\)/,
+    'the pin must be gated on the active runtime version matching the built-in line')
+  assert.match(facts, /const pinnedLockfilePath = resolvePinnedRuntimeLockfile\(\);/,
+    'the built-in anchor path is resolved once')
+  assert.match(facts, /pinnedLockfilePath: usePinned \? pinnedLockfilePath : null/,
+    'an unmatched active runtime must NOT receive the built-in pin')
+})
+
+test('main.ts: a dev/env tree at another generation may still fall back to the built-in anchor', () => {
+  // A source-line dev tree carries an opt-in lockfile and forbidden tree names,
+  // so both of its own fact sources are refused. Without a stand-in the local
+  // write face degrades to "official installs refused" for the repo's own
+  // `DSH_CHAMBER_DSH_PATH` flow. The stand-in is env-only: a user-SELECTED
+  // released runtime is NEVER judged by another line's anchor (W2).
+  const facts = sliceBetween('const localProtectionFacts = (): PluginProtectionFacts => {',
+    'const verifyLocalProfileFamily', 'localProtectionFacts')
+  assert.match(facts, /if \(!family\.ok && !usePinned && resolved\.source === 'env'\) \{/,
+    'the built-in anchor stand-in must be gated on an env-provided runtime that could not resolve its own facts')
+  assert.match(facts, /family = resolveRuntimeFamily\(resolved\.path, \{ pinnedLockfilePath \}\)/,
+    'the stand-in must retry the same resolution WITH the built-in anchor')
+})
