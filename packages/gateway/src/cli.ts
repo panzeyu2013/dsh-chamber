@@ -60,6 +60,15 @@ Options:
   -v, --version       show the installed gateway package version
   -h, --help          show this help
 
+Environment:
+  DSH_CHAMBER_HOST_LOG_LEVEL
+                      opt-in managed-dsh application-log bridge: mount a Cordis
+                      logger exporter at error|info|warn|debug (unset = off; a
+                      value that is not a level name uses the conservative
+                      'warn'); application lines then reach
+                      <state-dir>/host-logs/<port>.log. Read at the next
+                      managed-dsh spawn.
+
 TLS terminates at a reverse proxy. Configure --public-origin and one or more
 exact --trusted-proxy peers; this process intentionally serves HTTP only.
 

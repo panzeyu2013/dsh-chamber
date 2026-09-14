@@ -63,6 +63,7 @@ import {
   HOST_OPEN_IN_INSERT,
   type SeedEntry,
 } from './host-graph-seed.ts'
+import { planHostLogBridge } from './host-log-bridge.ts'
 import type { Logger } from './types.ts'
 import type { ApiCorsEvaluator, ApiRequest, ApiResponse, ApiSurface } from './api.ts'
 
@@ -363,6 +364,14 @@ export interface LocalHostGraphOverlayInput {
   readonly log?: (message: string) => void
   /** Warning sink (absent/stub seed sources). */
   readonly warn?: (message: string) => void
+  /**
+   * Environment that decides the opt-in host-log bridge
+   * (DSH_CHAMBER_HOST_LOG_LEVEL — host-log-bridge.ts). Defaults to an EMPTY
+   * environment (bridge off), so a synthetic/test caller can never pick up the
+   * ambient shell by accident; the production spawn-thunk wiring passes
+   * `process.env` explicitly.
+   */
+  readonly env?: NodeJS.ProcessEnv
 }
 
 /**
@@ -384,9 +393,16 @@ export interface LocalHostGraphOverlayInput {
  * @returns the `--patch` overlay path, or null (no overlay passed).
  */
 export function resolveLocalHostGraphOverlay(input: LocalHostGraphOverlayInput): string | null {
-  const { stateDir, dshHome, entries } = input
+  const { stateDir, dshHome, entries: baseEntries } = input
   const log = input.log ?? (() => {})
   const warn = input.warn ?? (() => {})
+  // Opt-in managed-dsh application-log bridge (host-log-bridge.ts): ONE extra
+  // seed entry while DSH_CHAMBER_HOST_LOG_LEVEL is set for this spawn, carrying
+  // the generated logger-exporter plugin. With the switch absent the entry list
+  // (and therefore every write, row and overlay byte below) is exactly what it
+  // was before the bridge existed.
+  const bridgeEntry = planHostLogBridge({ stateDir, env: input.env ?? {}, warn })
+  const entries = bridgeEntry === null ? baseEntries : [...baseEntries, bridgeEntry]
   // An extra entry with no packaged source is warned, never fatal — but the
   // wording distinguishes a true stub (packaged entry whose package has not
   // shipped yet, e.g. the gateway mobile slot) from a desktop-synced entry
@@ -698,6 +714,11 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       entries: seedEntries(),
       log: message => logger.log(message),
       warn: message => logger.warn(message),
+      // The opt-in host-log bridge switch is read from the plane's own
+      // environment at each spawn (the managed host inherits it, and the
+      // generated plugin needs nothing from the child env). Passing it here is
+      // the only production wiring; the resolver's own default stays "off".
+      env: process.env,
     })
   }
 

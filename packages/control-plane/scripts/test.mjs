@@ -41,6 +41,10 @@ const FILES = [
   'ws-frames.test.ts',
   'static-serving.test.ts',
   'host-graph-seed.test.ts',
+  // Opt-in managed-dsh application-log bridge (host-log-bridge.ts): the
+  // generated Cordis logger exporter, its seed entry, and the off-path
+  // byte-identity of the `--patch` overlay.
+  'host-log-bridge.test.ts',
   'restart-local.test.ts',
   // A2 cross-package protocol single-sourcing: the shared RPC envelope and
   // cordis insert modules (also consumed by the desktop through
