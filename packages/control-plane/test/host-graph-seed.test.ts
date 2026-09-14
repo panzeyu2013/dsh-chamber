@@ -38,7 +38,7 @@ import {
 } from '../src/host-graph-seed.ts'
 import { webProfileArgs, DEFAULT_DSH_START_PORT } from '../src/spawn-dsh.ts'
 import { createLocalConnection } from '../src/local-connection.ts'
-import { createControlPlane } from '../src/index.ts'
+import { createControlPlane, resolveLocalHostGraphOverlay } from '../src/index.ts'
 import type { SpawnedDsh } from '../src/local-connection.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
@@ -508,6 +508,94 @@ test('createLocalConnection re-resolves the patchPath thunk on the restart path'
   } finally {
     await connection.stop()
   }
+})
+
+// ---------------------------------------------------------------------------
+// resolveLocalHostGraphOverlay: the overlay FILE must exist exactly when the
+// spawn passes it as `--patch`. The install probe in packages/desktop reads it
+// as "this row is mounted", so a leftover file from an earlier spawn that did
+// pass it would report a row the current spawn does NOT mount (T20).
+// ---------------------------------------------------------------------------
+
+/** A managed profile whose own user patch layer carries `patchContent`. */
+function writeLocalProfileFixture(dir: string, patchContent: string | null): string {
+  const dshHome = join(dir, 'dsh-home')
+  const profileDir = join(dshHome, 'profiles', 'web')
+  mkdirSync(profileDir, { recursive: true })
+  writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
+    name: 'dsh-profile-web',
+    private: true,
+    dependencies: {},
+    dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'], patchReload: 'live' } },
+  }))
+  if (patchContent !== null) writeFileSync(join(profileDir, 'cordis.patch.yml'), patchContent)
+  return dshHome
+}
+
+/** A built host-graph source dir (package.json + dist/index.js). */
+function writeBuiltSeedSource(dir: string, built: boolean): string {
+  const sourceDir = join(dir, 'built-seed-source')
+  mkdirSync(join(sourceDir, built ? 'dist' : 'lib'), { recursive: true })
+  writeFileSync(join(sourceDir, 'package.json'), JSON.stringify({ name: HOST_GRAPH_PACKAGE_NAME }))
+  if (built) writeFileSync(join(sourceDir, 'dist', 'index.js'), 'export const graph = 1\n')
+  return sourceDir
+}
+
+test('resolveLocalHostGraphOverlay: a built artifact + an empty profile patch writes the overlay', t => {
+  const dir = tempDir(t)
+  const dshHome = writeLocalProfileFixture(dir, '# user layer\n[]\n')
+  const sourceDir = writeBuiltSeedSource(dir, true)
+  const overlay = resolveLocalHostGraphOverlay({
+    stateDir: dir,
+    dshHome,
+    entries: [{ insert: HOST_GRAPH_INSERT, kind: 'host', source: 'packaged', sourceDir, probeDomains: [] }],
+    log() {},
+    warn() {},
+  })
+  assert.equal(overlay, join(dir, HOST_GRAPH_PATCH_FILENAME))
+  assert.equal(readFileSync(overlay as string, 'utf8'), EXPECTED_OVERLAY)
+})
+
+test('resolveLocalHostGraphOverlay: a row already owned by the profile patch yields no overlay AND clears the leftover file', t => {
+  const dir = tempDir(t)
+  // A previous spawn DID pass the overlay: its row is still on disk while the
+  // user's own patch layer has since taken the row over (the production path
+  // omits it from the overlay — duplicate loader identities would fail boot).
+  const stale = join(dir, HOST_GRAPH_PATCH_FILENAME)
+  writeFileSync(stale, EXPECTED_OVERLAY)
+  const dshHome = writeLocalProfileFixture(dir, EXPECTED_OVERLAY)
+  const sourceDir = writeBuiltSeedSource(dir, true)
+  const overlay = resolveLocalHostGraphOverlay({
+    stateDir: dir,
+    dshHome,
+    entries: [{ insert: HOST_GRAPH_INSERT, kind: 'host', source: 'packaged', sourceDir, probeDomains: [] }],
+    log() {},
+    warn() {},
+  })
+  assert.equal(overlay, null, 'no --patch is passed when every row is already user-owned')
+  assert.equal(existsSync(stale), false,
+    'a leftover overlay file must not survive the spawn that passes no --patch — the install probe reads it as a mount fact')
+  // The package files are still seeded (the row resolves from the profile patch).
+  assert.equal(existsSync(join(seedTarget(dshHome), 'dist', 'index.js')), true)
+})
+
+test('resolveLocalHostGraphOverlay: no built artifact yields no overlay AND clears the leftover file', t => {
+  const dir = tempDir(t)
+  const stale = join(dir, HOST_GRAPH_PATCH_FILENAME)
+  writeFileSync(stale, EXPECTED_OVERLAY)
+  const dshHome = writeLocalProfileFixture(dir, '# user layer\n[]\n')
+  const sourceDir = writeBuiltSeedSource(dir, false)
+  const overlay = resolveLocalHostGraphOverlay({
+    stateDir: dir,
+    dshHome,
+    entries: [{ insert: HOST_GRAPH_INSERT, kind: 'host', source: 'packaged', sourceDir, probeDomains: [] }],
+    log() {},
+    warn() {},
+  })
+  assert.equal(overlay, null, 'the v4 baseline spawn passes no --patch')
+  assert.equal(existsSync(stale), false,
+    'the stale overlay records a mount this spawn does not perform')
+  assert.equal(existsSync(join(seedTarget(dshHome), 'package.json')), false, 'nothing is seeded without the artifact')
 })
 
 // ---------------------------------------------------------------------------

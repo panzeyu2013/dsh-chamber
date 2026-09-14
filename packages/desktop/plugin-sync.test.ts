@@ -562,6 +562,65 @@ test('localPluginList: git-worktree patched is CONTENT-aware — a stale overlay
   }
 })
 
+/** Seed one chamber host package's two files into a profile's node_modules. */
+function seedChamberPackage(profileDir: string, name: string): void {
+  const pkgDir = join(profileDir, 'node_modules', name)
+  mkdirSync(join(pkgDir, 'dist'), { recursive: true })
+  writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name }))
+  writeFileSync(join(pkgDir, 'dist', 'index.js'), 'export const x = 1\n')
+}
+
+/** The canonical client-graph insert row (overlay file and profile patch alike). */
+const CLIENT_GRAPH_ROW = "- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-chamber-seed-client-graph'\n"
+
+test('localPluginList: chamber patched reads BOTH mount sources — the profile patch layer is one (T20 regression)', () => {
+  // The probe used to read ONLY the spawn `--patch` overlay file, but app-boot
+  // composes the profile's OWN `<profile>/cordis.patch.yml` as the user layer
+  // over the empty root, and the control plane deliberately OMITS a row already
+  // carried there from the overlay (duplicate loader identities would fail the
+  // boot). A machine whose chamber rows live in the profile patch therefore
+  // reported patched:false — a permanent false 未注入 for a row that IS in the
+  // composed tree.
+  const base = tempDir()
+  const home = join(base, 'home')
+  const profileDir = writeLocalProfile(home, {}, [])
+  seedChamberPackage(profileDir, CLIENT_GRAPH_PACKAGE_NAME)
+  // The user layer carries the exact insert row; no --patch overlay file exists.
+  writeFileSync(join(profileDir, 'cordis.patch.yml'), CLIENT_GRAPH_ROW)
+
+  const manifest = localPluginList(home)
+  assert.equal(chamberStateOf(manifest.chamber, CLIENT_GRAPH_PACKAGE_NAME).patched, true,
+    'a row carried by the profile patch layer IS mounted — the probe must not require the overlay file')
+})
+
+test('localPluginList: chamber patched covers the four mount-source combinations', () => {
+  // Mount sources: the profile's own cordis.patch.yml (user layer) and the
+  // `--patch` overlay the control plane passes at spawn. The overlay file
+  // exists exactly when that spawn passes it — the control plane CLEARS a
+  // leftover file when it resolves no overlay (no built artifact, or every row
+  // already user-owned in the profile patch), so a stale file can never claim
+  // a row the tree does not carry.
+  const scenarios = [
+    { label: 'profile patch only', profilePatch: true, overlay: false, patched: true },
+    { label: 'overlay only (this spawn passes --patch)', profilePatch: false, overlay: true, patched: true },
+    { label: 'no overlay passed (the leftover file is cleared by the control plane)', profilePatch: false, overlay: false, patched: false },
+    { label: 'both sources carry the row', profilePatch: true, overlay: true, patched: true },
+  ] as const
+  for (const scenario of scenarios) {
+    const base = tempDir()
+    const home = join(base, 'home')
+    const profileDir = writeLocalProfile(home, {}, [])
+    seedChamberPackage(profileDir, CLIENT_GRAPH_PACKAGE_NAME)
+    if (scenario.profilePatch) writeFileSync(join(profileDir, 'cordis.patch.yml'), CLIENT_GRAPH_ROW)
+    if (scenario.overlay) writeFileSync(join(base, 'dsh-chamber-graph.patch.yml'), CLIENT_GRAPH_ROW)
+    assert.equal(
+      chamberStateOf(localPluginList(home).chamber, CLIENT_GRAPH_PACKAGE_NAME).patched,
+      scenario.patched,
+      scenario.label,
+    )
+  }
+})
+
 // ============================================================================
 // remotePluginList
 // ============================================================================

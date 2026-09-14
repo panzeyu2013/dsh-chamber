@@ -31,7 +31,7 @@ import { randomBytes } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync, statSync } from 'node:fs'
 import type { ConnectionRowView } from './api.ts'
 import { createCatalog } from './catalog.ts'
 import { createLocalConnection } from './local-connection.ts'
@@ -59,6 +59,7 @@ import {
   HOST_ARCHIVE_CLEANUP_INSERT,
   HOST_GIT_WORKTREE_INSERT,
   HOST_GRAPH_INSERT,
+  HOST_GRAPH_PATCH_FILENAME,
   HOST_OPEN_IN_INSERT,
   type SeedEntry,
 } from './host-graph-seed.ts'
@@ -337,6 +338,111 @@ export interface PlaneHandle {
 }
 
 /**
+ * Drop the local `--patch` overlay file. Called by every resolution that passes
+ * NO overlay, so the file's presence keeps meaning exactly "the last spawn
+ * passed it": the desktop's chamber probe reads that file as a mount fact
+ * (`packages/desktop/plugin-sync.ts` localOverlayCarriesInsert), and a leftover
+ * from an earlier spawn would report a row the current tree does not carry.
+ * An undeletable file is a broken state root (this plane's own layout) — fail
+ * loud, never a silent skip that leaves the false fact in place.
+ * @param stateDir - the control-plane state root.
+ */
+function clearHostGraphPatchOverlay(stateDir: string): void {
+  rmSync(join(stateDir, HOST_GRAPH_PATCH_FILENAME), { force: true })
+}
+
+/** Inputs of one local host-graph overlay resolution (see {@link resolveLocalHostGraphOverlay}). */
+export interface LocalHostGraphOverlayInput {
+  /** The control-plane state root (the overlay lives directly under it). */
+  readonly stateDir: string
+  /** The managed dsh home (the profile's own patch layer is read from under it). */
+  readonly dshHome: string
+  /** The resolved seed registry entries (the four base host packages + extras). */
+  readonly entries: readonly SeedEntry[]
+  /** Informational sink (the plane's logger in production; tests pass no-ops). */
+  readonly log?: (message: string) => void
+  /** Warning sink (absent/stub seed sources). */
+  readonly warn?: (message: string) => void
+}
+
+/**
+ * Resolve one local spawn's `--patch` overlay (design 09 module B), or null
+ * when that spawn passes none.
+ *
+ * Returned path = the overlay this spawn hands the launcher, carrying ONLY the
+ * rows the profile's own `cordis.patch.yml` does not already own (loader
+ * identities are global across both layers: a duplicated id/name pair is a
+ * boot failure, so an already user-owned row is reused, never repeated).
+ *
+ * The no-overlay paths (no built `dist/index.js` artifact; every row already
+ * user-owned in the profile patch) REMOVE a leftover overlay file. That keeps
+ * one invariant the desktop probe relies on: the file exists exactly when the
+ * spawn about to run passes it, so reading it is reading this spawn's mount
+ * set — never a previous spawn's (T20).
+ *
+ * @param input - state root, managed dsh home, resolved seed entries, sinks.
+ * @returns the `--patch` overlay path, or null (no overlay passed).
+ */
+export function resolveLocalHostGraphOverlay(input: LocalHostGraphOverlayInput): string | null {
+  const { stateDir, dshHome, entries } = input
+  const log = input.log ?? (() => {})
+  const warn = input.warn ?? (() => {})
+  // An extra entry with no packaged source is warned, never fatal — but the
+  // wording distinguishes a true stub (packaged entry whose package has not
+  // shipped yet, e.g. the gateway mobile slot) from a desktop-synced entry
+  // merely awaiting its first sync (an expected pre-sync state, logged once
+  // per spawn as informational). The base packaged dirs keep their documented
+  // silent-skip behavior (absent source or dist = no row, no overlay).
+  for (const entry of entries) {
+    if (entry.sourceDir === null || !existsSync(entry.sourceDir)) {
+      const message = `seed entry '${entry.insert.id}' (${entry.insert.name}): source absent; skipped`
+      if (entry.source === 'desktop-synced') log(`${message} (awaiting the first desktop sync)`)
+      else warn(`${message} (stub: package not shipped in this runtime)`)
+    }
+  }
+  const available = entries
+    .filter(entry => entry.sourceDir !== null && existsSync(join(entry.sourceDir, 'dist', 'index.js')))
+    .map(entry => ({
+      label: entry.insert.id,
+      sourceDir: entry.sourceDir as string,
+      seedFiles: entry.seedFiles,
+      insert: entry.insert,
+      packageName: entry.insert.name,
+    }))
+
+  if (available.length === 0) {
+    clearHostGraphPatchOverlay(stateDir)
+    return null
+  }
+  // Preflight every declared package before writing any of them. A damaged
+  // second artifact must not leave the first package partially refreshed.
+  for (const entry of available) {
+    const manifest = join(entry.sourceDir, 'package.json')
+    if (!existsSync(manifest)) {
+      throw new Error(`${entry.label}: built seed package is missing ${manifest}`)
+    }
+  }
+  // Loader identities are global across the profile patch and this external
+  // overlay. Reuse an exact user-owned row, but fail before any package write
+  // when an id/name is duplicated or bound differently.
+  const profilePatchPath = join(dshHome, 'profiles', 'web', 'cordis.patch.yml')
+  const overlayInserts = missingHostPackageInserts(
+    existsSync(profilePatchPath) ? readFileSync(profilePatchPath, 'utf8') : null,
+    available.map(entry => entry.insert),
+  )
+  for (const entry of available) {
+    if (ensureSeedPackage(dshHome, entry.packageName, entry.sourceDir, entry.seedFiles)) {
+      log(`${entry.label}: seeded ${entry.packageName} into the local web profile`)
+    }
+  }
+  if (overlayInserts.length === 0) {
+    clearHostGraphPatchOverlay(stateDir)
+    return null
+  }
+  return buildPatchOverlay(stateDir, overlayInserts)
+}
+
+/**
  * Create the control plane.
  * @param options - {port?, host?, stateDir?, dshWorkspacePath?, webDistDir?,
  *   logger?, corsOrigins?}.
@@ -574,62 +680,25 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
    * would boot with a --patch row that cannot resolve and fail loudly, the
    * only self-heal being a desktop-app restart. This thunk is idempotent
    * (content-hash skip in ensureSeedPackage, content-compare in
-   * buildPatchOverlay). Returns the --patch overlay path, or null when
-   * module A's built artifact is absent (v4 baseline command line, nothing
-   * to mount). Failure semantics: a seed throw on the initial-spawn path
-   * lands the instance in error state (the next local start retries); on the
-   * restart path it rides the connection's existing bounded backoff loop and
-   * ends in restart-exhausted — the same fail-loud surface as any spawn
-   * failure (a broken shipped module A is a packaging bug, never silent).
+   * buildPatchOverlay). Returns the --patch overlay path, or null when this
+   * spawn passes none (no built artifact, or every row already user-owned in
+   * the profile patch) — a leftover overlay file is removed on those paths so
+   * the file's presence keeps meaning "this spawn passes it", the invariant
+   * the desktop install probe reads (resolveLocalHostGraphOverlay). Failure
+   * semantics: a seed throw on the initial-spawn path lands the instance in
+   * error state (the next local start retries); on the restart path it rides
+   * the connection's existing bounded backoff loop and ends in
+   * restart-exhausted — the same fail-loud surface as any spawn failure (a
+   * broken shipped module A is a packaging bug, never silent).
    */
   function resolveHostGraphPatch(): string | null {
-    // An extra entry with no packaged source is warned, never fatal — but the
-    // wording distinguishes a true stub (packaged entry whose package has not
-    // shipped yet, e.g. the gateway mobile slot) from a desktop-synced entry
-    // merely awaiting its first sync (an expected pre-sync state, logged once
-    // per spawn as informational). The base packaged dirs keep their
-    // documented silent-skip behavior (absent source or dist = no row, no
-    // overlay).
-    for (const entry of options.extraSeedEntries ?? []) {
-      if (entry.sourceDir === null || !existsSync(entry.sourceDir)) {
-        const message = `seed entry '${entry.insert.id}' (${entry.insert.name}): source absent; skipped`
-        if (entry.source === 'desktop-synced') logger.log(`${message} (awaiting the first desktop sync)`)
-        else logger.warn(`${message} (stub: package not shipped in this runtime)`)
-      }
-    }
-    const available = seedEntries()
-      .filter(entry => entry.sourceDir !== null && existsSync(join(entry.sourceDir, 'dist', 'index.js')))
-      .map(entry => ({
-        label: entry.insert.id,
-        sourceDir: entry.sourceDir as string,
-        seedFiles: entry.seedFiles,
-        insert: entry.insert,
-        packageName: entry.insert.name,
-      }))
-
-    if (available.length === 0) return null
-    // Preflight every declared package before writing any of them. A damaged
-    // second artifact must not leave the first package partially refreshed.
-    for (const entry of available) {
-      const manifest = join(entry.sourceDir, 'package.json')
-      if (!existsSync(manifest)) {
-        throw new Error(`${entry.label}: built seed package is missing ${manifest}`)
-      }
-    }
-    // Loader identities are global across the profile patch and this
-    // external overlay. Reuse an exact user-owned row, but fail before any
-    // package write when an id/name is duplicated or bound differently.
-    const profilePatchPath = join(dshHome, 'profiles', 'web', 'cordis.patch.yml')
-    const overlayInserts = missingHostPackageInserts(
-      existsSync(profilePatchPath) ? readFileSync(profilePatchPath, 'utf8') : null,
-      available.map(entry => entry.insert),
-    )
-    for (const entry of available) {
-      if (ensureSeedPackage(dshHome, entry.packageName, entry.sourceDir, entry.seedFiles)) {
-        logger.log(`${entry.label}: seeded ${entry.packageName} into the local web profile`)
-      }
-    }
-    return overlayInserts.length === 0 ? null : buildPatchOverlay(stateDir, overlayInserts)
+    return resolveLocalHostGraphOverlay({
+      stateDir,
+      dshHome,
+      entries: seedEntries(),
+      log: message => logger.log(message),
+      warn: message => logger.warn(message),
+    })
   }
 
   // The managed local connection adapter (design 02): spawn/health/reaper

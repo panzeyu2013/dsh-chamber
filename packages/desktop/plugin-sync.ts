@@ -838,12 +838,13 @@ export function localPluginList(localDshHome: string, facts?: PluginProtectionFa
     unsyncable,
     // Chamber host packages (design 09 module B / 08 §11 / 24 §7): each
     // registry row is probed for the SAME two facts the remote probe uses —
-    // both seed files present in the profile node_modules, and the `--patch`
-    // overlay beside the dsh home carrying that exact insert row (one overlay
-    // file, per-package row presence: a machine seeded before a package
-    // existed carries the older rows only, and must report that package as
-    // half-injected rather than "done"). `live` stays null locally: the local
-    // instance IS the chamber page, whose own boot proves the channels.
+    // both seed files present in the profile node_modules, and the exact
+    // insert row present in one of the LOCAL mount sources (the profile's own
+    // `cordis.patch.yml` user layer OR the `--patch` overlay this spawn
+    // passes; `localChamberRowPatched`) — judged per package, so a machine
+    // seeded before a package existed reports that package as half-injected
+    // rather than "done". `live` stays null locally: the local instance IS the
+    // chamber page, whose own boot proves the channels.
     chamber: {
       ok: true,
       packages: CHAMBER_HOST_PACKAGES.map((descriptor): ChamberHostPackageState => ({
@@ -857,7 +858,7 @@ export function localPluginList(localDshHome: string, facts?: PluginProtectionFa
         // report 未注入, never "done".
         installed: SEED_FILES.every(relative =>
           existsSync(join(profileDir, 'node_modules', descriptor.insert.name, relative))),
-        patched: localOverlayCarriesInsert(localDshHome, descriptor.insert),
+        patched: localChamberRowPatched(localDshHome, descriptor.insert),
         version: readManifestVersion(readDependencyManifest(profileDir, descriptor.insert.name)),
         live: null,
         // The local profile is exactly where a local-shape-only row IS
@@ -1019,13 +1020,15 @@ export function describePluginApplyConfirmation(info: {
  * where the managed dsh home is `<stateDir>/dsh-home`), so
  * `dirname(localDshHome)` locates it.
  *
- * Presence of the overlay file alone does not prove the row is mounted: the
- * overlay is regenerated per spawn with only the rows whose built artifacts
- * exist, so a stale overlay can predate a package. Unreadable/absent → false
- * (never a guessed "patched"). The overlay is a single file for every chamber
- * host package, so presence is judged per package (a stale overlay from before
- * a package existed carries the older rows only — the same half-injected state
- * the remote probe's per-package insert check detects).
+ * The file's presence is the control plane's own invariant: it writes the
+ * overlay exactly when the spawn passes it as `--patch` and REMOVES a leftover
+ * one on the resolutions that pass none (`resolveLocalHostGraphOverlay`, index.ts
+ * — no built artifact, or every row already user-owned in the profile patch).
+ * Reading it therefore reads the mount set of the spawn that produced it. It is
+ * still judged per package: one overlay file carries every chamber row, so a
+ * row seeded later is absent from an earlier file (the half-injected state the
+ * remote probe's per-package insert check detects). Unreadable/absent → false
+ * (never a guessed "patched").
  */
 function localOverlayCarriesInsert(localDshHome: string, insert: HostPackageInsert): boolean {
   const overlayPath = join(dirname(localDshHome), HOST_GRAPH_PATCH_FILENAME)
@@ -1035,6 +1038,42 @@ function localOverlayCarriesInsert(localDshHome: string, insert: HostPackageInse
   } catch {
     return false
   }
+}
+
+/**
+ * Whether the LOCAL profile's own user patch layer carries one chamber loader
+ * row: `<profile>/cordis.patch.yml`, the file app-boot composes over the empty
+ * root entry list after every bundle layer (vendor app-boot profile.ts
+ * loadProfileDirectory). This is the SECOND mount source of a local chamber
+ * row: the control plane reuses an exact row already present here instead of
+ * repeating it in the `--patch` overlay (loader identities are global across
+ * both layers — a duplicate id/name pair fails the boot), so an overlay-only
+ * check reported a mounted row as 未注入 (T20). Unreadable/absent → false,
+ * never a guessed "patched".
+ */
+function localProfilePatchCarriesInsert(localDshHome: string, insert: HostPackageInsert): boolean {
+  const patchPath = join(localDshHome, 'profiles', WEB_PROFILE, 'cordis.patch.yml')
+  if (!existsSync(patchPath)) return false
+  try {
+    return hasExactInsert(readFileSync(patchPath, 'utf8'), registryInsertToCordis(insert))
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Whether one chamber loader row is actually in the LOCAL instance's composed
+ * tree: the profile's own patch layer OR the `--patch` overlay the spawn
+ * passes. Both are exact-insert checks against the two files app-boot composes
+ * (root `cordis.yml` + bundle layers + `<profile>/cordis.patch.yml` + the
+ * `--patch` overlays); neither file alone is the whole mount set, and the
+ * overlay file's presence is maintained by the control plane so it cannot
+ * outlive the spawn that passed it. No other source is consulted — the probe
+ * never infers from time or mere file presence.
+ */
+function localChamberRowPatched(localDshHome: string, insert: HostPackageInsert): boolean {
+  return localProfilePatchCarriesInsert(localDshHome, insert)
+    || localOverlayCarriesInsert(localDshHome, insert)
 }
 
 /**
