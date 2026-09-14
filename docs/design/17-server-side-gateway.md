@@ -373,6 +373,12 @@ trusted proxy 缺失、重复、含逗号或非法的 XFF 时，client identity 
 - 登录过载返回 503，限流返回 429；登录 body 上限为 16 KiB，超限返回 413 并
   **销毁请求 socket**（不排空、不继续消费，防止慢速匿名上传钉住连接；login 与
   change 路由同纪律）；凭据和内部错误不进入日志或响应。
+- 代理到 dsh 前端的响应头取自 `packages/gateway/src/dispatch.ts` 的
+  `GATEWAY_PROXY_CSP`（gateway-only 放宽）：`script-src` 放开 inline（代理无法给上游
+  流式 HTML 回填 nonce），`base-uri` 取 `'self'` 而非 `'none'`——上游
+  `@deepseek-ai/dsh-host-frontend-static` 每次 renderIndex 都注入 `<base href="/">`
+  （SPA 深链修复），`'none'` 会让浏览器拒绝该元素，深链下相对 `./assets/…` 按深链
+  URL 解析成 404/白屏；其余指令与 shell 的 nonce CSP 逐字一致。
 
 桌面端对 401 的**可行动三态分类**（探针层，非秘密 detail）：
 

@@ -102,9 +102,18 @@ function shouldRedirectToLogin(req: ApiRequest, pathname: string, auth: AuthProv
  * proxy path relaxes script-src to `unsafe-inline` — the frontend is dsh's own
  * and already behind the auth gate. The anonymous desktop shape never sees
  * this header: it serves the chamber composite through the control-plane
- * nonce CSP. Every other directive stays identical.
+ * nonce CSP.
+ *
+ * M2-4a: `base-uri` is relaxed from `'none'` to `'self'` for the same reason.
+ * `@deepseek-ai/dsh-host-frontend-static` re-injects `<base href="/">` on every
+ * renderIndex (its SPA deep-link fix), and `base-uri 'none'` makes the browser
+ * refuse that element, so a deep link resolves its relative `./assets/…`
+ * against the deep-link document URL, 404s, and white-screens. The proxy
+ * cannot rewrite the streamed HTML any more than it can backfill the nonce,
+ * so the directive follows script-src onto the same-origin allowance. Every
+ * OTHER directive stays identical.
  */
-const GATEWAY_PROXY_CSP = "default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:"
+const GATEWAY_PROXY_CSP = "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:"
 
 /** A browser *document* rejection (GET/HEAD/POST advertising HTML) is
  * answered with the rendered boundary error page instead of a bare JSON body

@@ -951,6 +951,37 @@ test('oversized credential-change bodies are 413 and destroy the request socket'
   assert.equal(changeCalls, 0, 'the change never runs against an oversized body')
 })
 
+// ── Proxied dsh frontend CSP (M2-4a) ──
+
+test('the proxied frontend CSP keeps base-uri on self so the upstream <base href="/"> survives', async () => {
+  const { auth, cleanup } = realAuth({ config: { kind: 'token', token: TOKEN } })
+  try {
+    const { dispatch } = setup(auth)
+    const res = await runHttp(dispatch, new FakeRequest('GET', '/', {
+      host: 'gateway.example:3000',
+      authorization: `Bearer ${TOKEN}`,
+    }))
+    assert.equal(res.status, 200)
+    assert.equal(res.body, 'proxied')
+    const csp = String(res.headers['content-security-policy'])
+    // @deepseek-ai/dsh-host-frontend-static re-injects <base href="/"> on every
+    // renderIndex (its SPA deep-link fix). `base-uri 'none'` makes the browser
+    // refuse that element, so a deep link resolves its relative ./assets/…
+    // against the deep-link document URL → 404 → white screen. The proxy cannot
+    // rewrite the streamed HTML any more than it can backfill the nonce for
+    // script-src, so base-uri follows script-src onto the same-origin
+    // allowance. Regression locked here (GATEWAY_PROXY_CSP in
+    // packages/gateway/src/dispatch.ts).
+    assert.match(csp, /base-uri 'self'/)
+    assert.doesNotMatch(csp, /base-uri 'none'/)
+    // Every OTHER directive stays byte-identical to the gateway-only relaxation.
+    assert.equal(
+      csp,
+      "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:",
+    )
+  } finally { cleanup() }
+})
+
 // ── Gateway login-page behavior (rendered by src/login-page.ts) ──
 
 /** Every HTML login response must carry the full header set: the no-script
