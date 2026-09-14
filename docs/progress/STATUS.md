@@ -131,6 +131,55 @@
   gateway 拒绝码→本地化文案映射未做（409 逐字英文）、pollGatewayReady 英文错误串
   未本地化；archive-pick file+folder 双模式对话框为 **macOS-v1**（非 macOS 保持
   文件夹对话框，随 design 22/23）。
+- **产物新鲜度守卫只覆盖两个产物（2026-12 §6.11 漂移复盘）**：`packages/desktop/dist/control-plane/**`
+  （`packages/desktop/scripts/control-plane-freshness.test.mjs`）与 `packages/gateway/dist/**`
+  （`packages/gateway/test/build-smoke.test.ts`）已有"**存在但缺当前标记 ⇒ 失败**"的守卫（缺失才按需构建，
+  绝不静默自愈，失败信息给出重建命令）；其余产物陈旧时**没有任何测试会变红**（2026-12 A5 普查口径）——
+  `packages/desktop/dist/web/**`（renderer 产物；`electron-shared.test.mjs` 只断言路径契约文本）、
+  `dist/preload.cjs`、`dist/host-{graph,git-worktree,archive-cleanup,open-in}-package/**`
+  （`build-host-graph-package.test.mjs` 只断言行序/outDir；C8 守的是各 seed 包**已提交**的
+  `dist/index.js`，不是 desktop 里的拷贝）、`packages/gateway/host-packages/**`（只有存在性断言）、
+  vendor `allowBuilds` 锁步（`pnpm-workspace.yaml` ↔ `packages/dsh-runtime/src/allow-builds.mjs`）、
+  `packages/renderer/src/generated/**`。最小守卫建议（G1–G8，P0/P1/P2）见
+  `docs/progress/todo/product-freshness-guards.md`（A5 逐条状态见
+  `docs/progress/todo/audit-2026-12-findings.md` §A5），design 21 §7 已登记。失效判据：上述每个产物有一条
+  "陈旧 ⇒ 红"的守卫，或进入显式豁免表（G8）——二者任一覆盖即删除对应半条。
+- **CI 没有任何腿能证明 SMOKE PASS**：`packages/control-plane/test/smoke.test.ts` 在 CI 恒 SKIP
+  （workflow 从不设 `DSH_CHAMBER_DSH_PATH`，checkout 也不带 `ref-dsh` 或 vendor 运行时安装），
+  release.yml 同样没有 smoke——`ci.yml` 的 smoke 步骤只接受显式 `SMOKE PASS` 或显式 `SKIP: …`
+  （静默 exit 0 会红），所以绿灯从未代表真跑过一次安装链。失效判据：至少一条 CI/发布腿在真实 dsh
+  运行时上跑出 `SMOKE PASS`（或明确改判"不做"并在发布说明登记缺席理由）时删除本条。
+- **A1 状态呈现面（2026-12 普查：7 条确证 + 6 条疑似）**：一类「判定键不等于事实来源、把命令/重启成功
+  当成已生效」的状态呈现缺陷（本地 chamber 行、安装结果文案、跨实例冲突、sidebar 图 recheck）——逐条
+  file:line/证据/建议见 `docs/progress/todo/audit-2026-12-findings.md`。**最高爆炸半径 = F1 本地 chamber 行
+  `patched` 双向假状态**（探针只读 overlay 文件 `plugin-sync.ts:1030-1038`，而挂载源是 profile
+  `cordis.patch.yml` ∪ spawn `--patch` 两处；已实跑双向复现，**已派修 task-20**）。失效判据：F1 的四种
+  组合（只在 profile patch / 只在 overlay 且会传 `--patch` / 只在 overlay 但不传 / 都无）各由回归测试钉住
+  且探针不再读单一文件；其余 A1 项在清单里逐条勾销或明确裁决。
+- **A2 尺度错配（2026-12 普查：7 条确证）**：跨量纲比较类缺陷（字节 vs UTF-16 单元、原始字节 vs utf8 串、
+  哨兵 token vs semver、raw vs effective）——A2-1/A2-2/A2-3（插件归档完整性）**已派修 task-17**。
+  **潜伏项 A2-6**（`host-graph-seed.ts:478` 原始字节 vs utf8 串）已裁决为**潜伏而非现网缺陷**：当前
+  `HOST_PACKAGE_SEED_FILES` 只含文本（`package.json` + `dist/index.js`）、open-in 图标不进种子，且
+  `readPrivateFileNoFollow` 自身对非 UTF-8 响亮失败；一旦加入二进制种子文件即踩中。失效判据：A2 各条
+  要么修复、要么在清单里显式豁免；A2-6 = 种子集出现二进制文件前改为字节级比较并加"非 UTF-8 种子文件"
+  回归。
+- **A3 聚合吞掉未检项 / 读失败当确定结论（2026-12 普查：15 条确证 + 13 条疑似）**：凡是「该项从未被检查」
+  与「检查通过」不可区分的聚合（`every`/`some`/flag、读失败当空集）类缺陷，覆盖保鲜门 C7/C8/C10/C12、
+  restore-lockfile `--check`、release-preflight、desktop family 空事实、gateway 写面与 dsh-runtime/store
+  读面（清单另含同类高危 A3-14：known-good 的 `.corrupt` 无人读 ⇒ 保护版本可被删）。**最高爆炸半径 =
+  A3-8（manifest 读失败把合法 staged `.tgz` 当孤儿删）与 A3-9（journal 损坏当空 ⇒ childPid 不 reap、
+  preImage 被清）**，**已派修 task-18**。失效判据：读失败必须与「确认无引用 / 空 journal」可区分——
+  不删任何东西、preImage 保留、原始字节留证，且由回归测试钉住；其余 A3 项与疑似项在清单里逐条勾销或
+  补证据后升级。
+- **bundle 层行拿不到「是否已生效」的诚实信号（design 21 §6.6）**：生效状态格按 Loader 快照
+  `moduleName===包名` 精确匹配，未命中一律中性（`plugin-inventory-text.ts:252` 的 `thirdPartyLiveState`）；
+  bundle 包名从不是 Loader 行（树 = 空 entry 根上叠各 bundle `dsh.bundle.patch` 的 `insert:` 行），
+  因此用户后加的 `dsh.bundle` 层**刚安装未重启与已生效同呈现**，页面上没有区分两者的既有事实。
+  闭合路径 = 新增宿主事实：`Local/RemotePluginManifest` 增
+  `bundleLayers?: Array<{ name, patchRows: string[] }>`（`patchRows` 取该 bundle `dsh.bundle.patch` 的
+  `insert[].name` 去重保序）；渲染端按 `patchRows` 与 Loader 快照求交后才有
+  「生效中 / 加载中 / 重启后生效」可判——属**新宿主面**，需单独评审（design 21 §7 已登记）。失效判据：
+  该事实落地并被渲染端消费，bundle 层行在"已重启已生效"与"刚装未重启"两种真实状态下呈现不同且正确。
 - **受保护集合与代耦合（design 21 §6.11，决策 19 的 2026-12 修订）**：仍留六项**登记偏差/未完成**：
   ① ssh 装面保守（`F` 无远端来源；放开前提 = 增加远端 family 读，须按 design 13 §7.2 exec
   纪律单独评审）；② 代不匹配默认阻断、**无**跨代 override 入口（需跨代试验时另开显式入口，

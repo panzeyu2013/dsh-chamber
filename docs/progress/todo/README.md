@@ -15,6 +15,8 @@
 | 4 | [settings-surface-upstream-contributions.md](settings-surface-upstream-contributions.md) | 设置面的上游声明式贡献通道（T3 提案：`dsh.client.contributes.settings` / 设置面服务契约 / descriptor 上线通道）；chamber 侧**不再需要**它们——2026-12 完整桥接修订后设置面直接渲染来源自己 boot ctx 的台账（design 05 §5 / 09 §4），三条降级为「通用宿主复用」提案 | 上游提案，未排期；已非 chamber 前置 |
 | 5 | [open-in-ownership-and-enhancements.md](open-in-ownership-and-enhancements.md) | open-in **实机验收与超集分批**（fork & supersede 已落地，契约见 design 20）：真机验收九项、`ctx.subprocess` 旧 runtime 探针等开放项、分批结论（S1/S2 待排期；S3 收窄为「复制路径」；S4 不做）+ §5 附录留档的完整形态 | 实施已完成；本表剩真机 + S1/S2 + 可选小批次 |
 | 6 | [client-store-scoping-upstream.md](client-store-scoping-upstream.md) | 上游：N-壳宿主下持久化 selection（`dsh.sessions.current`）需按 shell/入口作用域——它是"每次冷 boot 都新建空白会话"的根因；chamber 侧无法根治（vendor store 不在 fork 副本内，逐入口 localStorage 代理不安全），已用本地回显缓解（design 05 §2.2.1 修订） | 上游提案，未排期 |
+| 7 | [product-freshness-guards.md](product-freshness-guards.md) | 产物新鲜度守卫：2026-12 产物普查（9 行清单）+ G1–G8 最小守卫建议（P0/P1/P2，含适用产物/成本/收益） | 想法，未排期；缺口现状登记在 STATUS |
+| 8 | [audit-2026-12-findings.md](audit-2026-12-findings.md) | 2026-12 四路审计发现台账：A1 状态呈现 7+6 疑似 / A2 尺度错配 7 / A3 聚合吞未检 15+13 疑似 / A4 无 / A5 守卫缺口；逐条 file:line + 证据来源 + 严重度 + 建议 + 状态（已修/已派修/未动/需产品裁决） | 台账：task-17/18/20 在修；其余未动或待裁决 |
 
 ## 纪律
 
