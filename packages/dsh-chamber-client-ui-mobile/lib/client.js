@@ -1794,8 +1794,8 @@ var STALL_NOTICE_CSS = `
     max-width: min(92vw, 26rem);
     padding: 8px 8px 8px 12px;
     border-radius: 12px;
-    background: var(--dsw-alias-bg-layer-2, #ffffff);
-    color: var(--dsw-alias-label-primary, #1f1f1f);
+    background: var(--dsw-alias-bg-layer-2);
+    color: var(--dsw-alias-label-primary);
     box-shadow: 0 4px 16px rgb(0 0 0 / 18%);
     font-size: 13px;
     line-height: 18px;
