@@ -298,7 +298,12 @@
   border-box 让 44 指盒尺寸——chips 保持 content-box，否则会把 dockkit 实测的 chip
   最小值从 100px 降到 80px 而放宽分屏判定）随控件长高后的观感；会话头座席的底线
   仍落在**内容盒**上（既有臂保持出厂几何 ⇒ 带内边距图标按钮约 56px、头部行较高），
-  若真机读作过厚可把三条头部臂一起改 border-box；③ **未适配的官方浮面**
+  若真机读作过厚可把三条头部臂一起改 border-box——当前取法（utilities/corner 两条
+  **图标**臂 `box-sizing: border-box`、actions 臂只对上游 agent-preset 的裸 `span`
+  标签在 ≤480/≤360 收回宽度、会话头首行 48px 单行 + 顶部/右侧安全区、面包屑条保持
+  官方 nowrap 改横向平移）**只有静态判据**。**仍待真机判**：48px 行在刘海机上的观感、
+  ≤480/≤360 两档的实际排布、横滑与谱系 hover-open 是否互扰、横向平移对抽屉边缘手势的
+  影响（判据仍落在 ⑤ 的设备模拟与真机抽检上）；③ **未适配的官方浮面**
   （本次只登记、未改代码）：dockkit 浮动面板出生矩形 380×300 @ (160,120)、
   无视图夹取、宿主 z-60 高于本插件所有层
   （`vendor/harness-checkout/packages/client/ui-dockkit/src/engine/constraints.ts`），
@@ -307,11 +312,18 @@
   窄屏余量未实测；④ **上游 `touch-action: none` 与 chips 横滚的冲突**：dockkit
   条与其 chips 行都声明 `touch-action: none`（为 chip 拖拽保留），chips 溢出时
   手指无法滚动该行——属上游行为，是否需要 chamber 补丁（会与拖拽手势争用同一
-  手势）待设计决策；⑤ **CDP 设备模拟验收缺失**（design §18.6 明确要求
-  「CDP 设备模拟 + 真机抽检」，而 `scripts/gui-acceptance/` 只有桌面 walkthrough，
-  无 `Emulation.setDeviceMetricsOverride` / touch 模拟）⇒ 上述几何只能靠真机发现，
-  建议加 mobile 走查模式（设备尺寸 + `pointer:coarse` + 触控模拟，断言抽屉开合/
-  设置手机档/无横向溢出/composer 不被键盘遮挡——**含** phone 档三条 local-name 规则（composer 行 nowrap、model seat 截断、Models 行）在 2026-09-13 修复后**首次真正命中元素**，而 2026-09-13 又把 model 截断从共享的 `_trigger_` 类名收窄到 model seat 锚点（该局部名在复合构建里有四个模块），收窄后的实际排布同样只在真机上可见）；⑥ **pin 前瞻**：上游 npm `next`
+  手势）待设计决策；⑤ **真机抽检与设备模拟的已知边界**：design §18.6 的
+  「CDP 设备模拟 + 真机抽检」现由 `scripts/gui-acceptance/mobile-walkthrough.mjs`
+  （判定层 `mobile-checks.test.mjs`）与 `scripts/dev/verify-mobile-anchors.mjs` 承担，
+  但**模拟层有三条实测边界不能被当成真机结论**：`Emulation.setEmulatedMedia` 的
+  `pointer/hover` 被 Chromium 忽略（只能靠 touch 模拟）、`mobile:true` 的收缩适配让
+  `scrollWidth <= innerWidth` 恒真（判定须以 `clientWidth` 为准）、iOS/WebKit 语义
+  （键盘、安全区、`100dvh`、聚焦缩放）造不出来。**仍开放**：一次真实手机/打包态抽检
+  （几何观感、横滑与谱系 hover-open 互扰、横向平移与抽屉边缘手势）、该走查目前**只读**
+  （抽屉/设置/键盘补偿与其余 44px 座席未断言），以及**会话打开停滞的 WS 帧证据**；
+  **锚点门在 CI 无上游树时 fail-soft 跳过**（`packages/desktop/vendor/dsh` 只有
+  lockfile）⇒ 目前只保护装有 anchor 的开发机，若要 CI 生效需把已知良好 pin 的发射集
+  存成生成式快照；⑥ **pin 前瞻**：上游 npm `next`
   已是 `0.1.5-rc.2`（client 包已发布，`latest` 仍为 `0.1.5-rc.1`）——pin 前移须按
   `packages/dsh-chamber-client-ui-mobile/README.md`「Anchor baseline」重审锚点
   （风险集中在 ui-layout frame 与 settings/composer 结构）；⑦ **iOS 键盘补偿期
@@ -346,7 +358,9 @@
   剩余——**实机门禁**（§18.6：真机触控目标比例/抽屉开合/键盘遮挡
   （含新补偿层的 iOS 时序与 Android WebView 盲区、**聚焦缩放后的打字正例**、
   缩放态平移不得引起抖动、捏合缩放负例、提交窗口不闪落、重挂 re-arm、
-  死区 ≤23px）/安全区/抽屉开关不重叠/crumbs 换行/iOS 单击
+  死区 ≤23px）/安全区/抽屉开关不重叠/crumbs 单行平移（**已由 2026-09-14 review-fix
+  从「换行」改为「保持官方 nowrap + 横向平移」**；原换行规则会让无 class 的谱系计数
+  span 逐字竖排，即用户截图的「31 个子代理」竖排五行）/iOS 单击
   切换/设置手机档走查（含分区切换重置）/刘海横屏/深层谱系高度等；
   **移动端 git 侧边栏**（桌面链 chamber sidebar + `sidebar.workspace.git`
   座席为桌面专有形态，gateway 链官方 sidebar 无该座席；接入需装配矩阵第二
@@ -383,6 +397,34 @@
     阈值表 `aggregate-refresh.ts:119-123`：http 120s / ssh 300s / local 与未知
     跳过），**gateway 目标（dsh 与 gateway 两种 kind 同为 direct-http）也吃
     ~2min 一次的连接 bounce**——「桌面也发生」若指桌面 chamber App，此即现成解释。
+- **会话打开停滞（「载入历史…」永久停留，2026-09-14 实机现象）**：手机经 gateway
+  打开一个大会话（`session-28e9eb86`「评审 dsh Electron 桌面版架构」，31 个后代
+  子代理）时会话区只显示 `chat.loadingHistory`。**根因未证实**——已排除：插件锚点
+  （41 条在 rc.2 全部命中且插件不触碰 fetch/WS/store）、shell 装载失败（官方
+  `assertEntriesActive` 任一行非 ACTIVE 即整页失败，与「骨架已挂载」不符）、鉴权
+  （gateway 日志有 `browser-auth cookie minted`）、WS 被拒（无 non-101 且手机那条
+  splice 存活 186s）、`/api` RPC（审计无 `path:api`）、宿主冷读慢（该会话 724 事件 /
+  3.73 MiB 解码 / 本机 18ms）。唯一与症状同构的状态 = **mux 物理 socket 正常而
+  `session/follow` 逻辑流永久无首帧**，而客户端与宿主**都没有首帧超时**。收口需要
+  **设备侧帧证据**（CDP WS Frames 或抓包），见 `scripts/gui-acceptance/` 的移动走查；
+  插件侧已有全属性判据的「停滞提示 + 一键重载」兜底（`session-stall.ts`），
+  **其 45s 阈值与 `active|engaging` 取值都未经真机校准**——真机对照前不得当成已验收。
+- **上游装载面的三项待办（本仓只登记，不改 upstream）**：① `dsh-client-modules`
+  的 `compose()` 把**全部非 bootstrap 行**打进一个 application 批次、只按 URL 3 KiB
+  切分（不按字节）⇒ 首屏一个 ~10.65 MiB 响应，其中 `ui-sidebar-documentpreview`
+  内嵌的完整 PDF.js（`pdfjs-dist`）占 6.57 MiB；懒加载需要**连带 chunk 供给方案**
+  （客户端包经合成 combo URL 下发，相对动态 chunk 会 404；届时 chamber 的 `seedFiles`
+  也要带 chunk）——已按用户决定列为**低优先级**，不裁功能；② `ui-subagent` 的
+  `SubagentHeaderLineage` 类字典缺 `count` 键（组件却引用它）⇒ 计数 span 无 class、
+  只能靠继承 `nowrap`，应补 class/`nowrap`；③ 会话打开流应加**首帧超时**并把失败落成
+  可见错误态（现为永久 loading）。
+- **受管 dsh 应用日志取证（opt-in，默认关闭；启用方式见 `gateway --help` 与
+  `host-log-bridge.ts` 头部）**：上游无日志开关、无 exporter，故由 chamber 注入自有
+  Cordis exporter（应用日志 → 子进程 stderr → 既有脱敏/环形轮转管线）。**仍开放**：
+  真机启用验收（未对运行中的网关实例做端到端，含"加载失败即 spawn 失败"这一 boot
+  耦合——profile 多一行 loader row）；隐私代价（应用日志可能含会话内容/prompt/路径，
+  现有脱敏只覆盖 `?token=`/`&token=`，共享主机不得长期开启）；`warn ⊃ info` 的单调阈值
+  语义易误读；只覆盖本地 web-profile spawn，不含 desktop 远程 SSH 实例路径。
 - **Windows 首版（design 23）**：剩余全为**外部门禁**，台账见 `docs/progress/todo/windows-v1.md`  （已剪为剩余项清单；windows-baseline.md 首跑数据待填）：真实 Windows runner
   首跑绿（test-windows 腿，含 submodule 物化 + junction 建链）；M0.5 上游 dsh
   win32/NSIS protocols/Defender/原生依赖实证；M2a runner 事务矩阵；**M2b UI 翻转
