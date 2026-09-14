@@ -181,7 +181,7 @@ test('installed read: a DECLARED baseline name still classifies + stays protecte
   const seed = CHAMBER_HOST_PACKAGES[0].insert.name
   const stateDir = scratch(t)
   writeManifest(stateDir, JSON.stringify({
-    dependencies: { '@deepseek-ai/dsh-base': '0.1.5-rc.2', [seed]: '0.3.0-beta.4' },
+    dependencies: { '@deepseek-ai/dsh-base': '0.1.5-rc.2', [seed]: '0.3.0' },
     dsh: { profile: { bundles: ['@deepseek-ai/dsh-base'] } },
   }))
   const projection = readProjection(stateDir)
