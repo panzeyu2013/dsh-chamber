@@ -1653,8 +1653,16 @@ PWA / Web Push 社区实现机制（dsh-ui-mobile，jasondu，npm 0.1.8，MIT，
   UA 路由测试（含伪造 UA 负例）、插件 PWA 资产经 gateway 透传后的 HEAD/GET
   测试（`/pwa/*`、`/sw.js` 可达且内容正确、未注入形态下 gateway 占位不注册
   SW）；
-- 实机（移动视口清单，CDP 设备模拟 + 真机抽检；设备模拟部分**尚无工具**，见
-  STATUS 的 2026-09-13 开放项 ⑤）：
+- 实机（移动视口清单，CDP 设备模拟 + 真机抽检）：**设备模拟部分已有工具**
+  （2026-09-14）——`scripts/gui-acceptance/mobile-walkthrough.mjs`（设备尺寸 +
+  触控模拟 ⇒ 真实 `pointer:coarse`；结构化断言：无横向溢出、会话头首行高度、
+  「单字换行」行盒、命中盒；**并抓 WebSocket 帧**，是会话打开停滞取证的入口；
+  判定语义由 `mobile-checks.test.mjs` 以合成事实锁定，含已知边界：
+  `Emulation.setEmulatedMedia` 的 `pointer/hover` 被 Chromium 忽略、`mobile:true`
+  的收缩适配会让 `scrollWidth <= innerWidth` 恒真因而判定以 `clientWidth` 为准）
+  与 `scripts/dev/verify-mobile-anchors.mjs`（锚点新鲜度门）。**真机抽检仍不可省**
+  （iOS 键盘/安全区/`100dvh`/聚焦缩放、惯性滚动与 hover 观感；当前走查只读，
+  抽屉/设置/键盘补偿尚未断言）：
   - 触控目标 ≥44px 比例（**座席清单**：composer bar / sidebar / 会话头
     actions+utilities+corner / settings.section / 右栏 dockkit 条 chips+按钮 /
     menuitem+option）、无横向溢出、抽屉开合、弹层不出屏、设置全屏可滚动、
