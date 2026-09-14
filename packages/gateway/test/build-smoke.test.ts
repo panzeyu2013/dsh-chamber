@@ -92,3 +92,44 @@ test('host-packages carries the mobile seed set, aligned with exports and seedFi
   assert.equal(dot.default, './lib/index.js', 'exports["."] must resolve to a seeded file')
   assert.equal(manifest.exports?.['./client'], './lib/client.js', 'exports["./client"] must resolve to a seeded file')
 })
+
+// ---- protected-set verifier freshness (design 21 §6.11, 2026-12) ----
+
+test('dist carries the CURRENT protected-set verifier (a stale bundle silently re-enables the composition-split false positives)', async () => {
+  // Every other check in this file survives a stale dist: the banner, the
+  // bundled pnpm pin and the public API all look identical in an OLD build —
+  // and the gateway's behaviour tests import `src/`, never this bundle — so a
+  // stale dist stays invisible until an operator runs the packaged gateway
+  // (exactly the 2026-12 drift: an older round of the verifier shipped in
+  // dist/index.js while src/ carried the closure exemption and the
+  // runtime-provided version arm). These markers are operator-facing copy,
+  // which minification preserves; reword the copy ⇒ move the marker with it.
+  const markers = [
+    // §6.11.4 version arm: a family member is judged against the version this
+    // runtime line provides (rescoped vendored packages keep upstream versions
+    // and can never equal the generation string).
+    'is not the version this instance runtime provides',
+    // §6.11.4 per-name honesty: a name that entered no arm is named, never
+    // folded into a silent aggregate pass.
+    'no runtime-provided version fact exists and the instance runtime version is unknown for',
+    // §6.11.1 second trust criterion: a fact source whose name and version
+    // parsers disagree about the same keys is refused.
+    'the name and version parsers disagree about the same keys',
+    // §6.11.4 closure walk (dependencies ∪ optionalDependencies).
+    'optionalDependencies',
+  ]
+  // A MISSING dist (clean checkout) is built on demand — that is not staleness.
+  // An EXISTING dist without the current markers IS staleness and must fail
+  // loudly: silently rebuilding it would let an operator (or CI) believe the
+  // shipped artifact was checked when the guard actually healed it. The first
+  // version of this guard rebuilt-and-passed, i.e. it could not catch the very
+  // drift it was written for (2026-12 review, reproduced with a stub build).
+  if (!existsSync(distIndex)) {
+    execFileSync(process.execPath, ['scripts/build.mjs'], { cwd: packageDir, stdio: 'ignore' })
+  }
+  const source = await readFile(distIndex, 'utf8')
+  for (const marker of markers) {
+    assert.ok(source.includes(marker),
+      `the gateway bundle in dist/ is stale: missing ${JSON.stringify(marker)} — rebuild with \`pnpm run build:gateway\``)
+  }
+})
