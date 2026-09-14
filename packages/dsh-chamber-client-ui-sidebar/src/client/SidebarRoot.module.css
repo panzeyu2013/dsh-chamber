@@ -253,7 +253,8 @@
    occupants share ONE row: that row holds the sheet's 4px icon-cluster rhythm
    (chamber addition to the copied block; the seat ships empty, so the row has no
    occupant to space today and the gap stays invisible — the shipped layout is
-   unchanged, while two adjacent 24px hit boxes keep the G1-4 >=4px floor). */
+   unchanged; the value is the sheet's icon-cluster rhythm, not the 2026-09 G1-4
+   hit-rim floor, which the 2026-09-14 v0.2.4 rollback removed). */
 .footArea {
   flex: none;
   display: flex;

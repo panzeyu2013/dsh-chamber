@@ -705,12 +705,17 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   动作照常可用；与同路径的合成组相遇时**原位替换**后者（绝不重复渲染同一目录）。
   来源挂载壳的权威 push 列出该 id（或同路径真实行）后，回声行由权威行接管。
 - **排版**：字号下限 12px；会话标题 13/18——官方行 14px，13/18 是 chamber
-  多来源密度的刻意折中；**墨色照官方**（2026-09 batch 1 A1）：**会话行标题**常驻
-  `label-primary`（此前静止次级、hover 才转主色——官方 `.title` 从不降级；
-  待办条带行同期跟随，§8）。**搜索结果标题同期跟随**（2026-09 batch 1 A1
-  follow-up：`.searchResultTitle` 也改为常驻 `label-primary` 并删掉 hover 覆盖——
-  结果行承载的同样是会话标题）；仍归 §1.2/B2 待决的只剩**字号与结果行几何**
-  （12/18 与结果行内距），墨色不再是例外；来源身份点 8px（**仅 rail**——来源头
+  多来源密度的刻意折中。**墨色 = v0.2.4 的静止/hover 两级**（2026-09 batch 1 A1 曾
+  照官方改成"常驻 `label-primary` 且无 hover 覆盖"；**2026-09-14 按用户指令恢复
+  v0.2.4**）：**会话行标题**静止 `label-secondary`、行 hover 转 `label-primary`
+  （`.sessionRow:hover .sessionTitle`），**搜索结果标题**同规则
+  （`.searchResultRow:hover .searchResultTitle`），**待办条带**同语言（`.todoRow`
+  自带次级墨色、hover 转主色；行标题 `.todoRowTitle` 不自带墨色，与 v0.2.4 一样随行
+  两级）。恢复的理由：A1 删除该步后，行 hover 只剩极低对比度的底色 wash，在
+  500ms 卡片出现之前眼睛读不到任何反馈。这一条是**对官方的有意偏离**（官方
+  `.title` 继承行墨、从不降级），与 A1 的字号结论分开记：**字号仍是 chamber 的
+  折中，墨色回 v0.2.4**；搜索结果与结果行的 **12/18 字号、结果行几何**仍归
+  §1.2/B2 待决。来源身份点 8px（**仅 rail**——来源头
   身份圆点已移除，见 §7 来源 accent 条），session 行首为
   固定 10px 状态槽（常态空）。
 - **行几何**：圆角 8px（来源头/workspace 头/会话行一致）；密度为多来源
@@ -734,8 +739,10 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   occupant 的揭示态动作（`.headerGit`，同一行的兄弟 flex 子项，08 §3.2）是簇的
   最左成员、落在头部自身的 4px 间距上，12px 因此落进**簇内部**、把一簇切成
   4px + 12px（「`+` 与省略号之间的间隔明显更大」）。簇统一改走头部/本表的图标
-  节奏 **4px**（= G1-4 两个 24px 命中盒相邻所需的 ≥4px 下限，与 `.headerGit` /
-  `.sourceActions` 同值；session 行的簇只有单个 kebab，间距无观感影响），
+  节奏 **4px**（`.rowActions` 与 workspace 头部自身的 4px——2026-09-13 用户报告
+  「`+` 与省略号之间的间隔明显更大」的修订；`.headerGit` / `.sourceActions` 不在此
+  列：它们的 4px 出自 2026-09 的命中盒 pass，2026-09-14 已随该 pass 回退到 v0.2.4 的
+  2px，见下方命中区条）；session 行的簇只有单个 kebab，间距无观感影响），
   悬停时替换会话数徽标；session 行 = **三点 kebab 菜单三项（重命名/分叉/归档，
   归档不再有独立图标按钮）**（悬停替换行尾状态槽；**session 不显示相对时间**）；
   **添加工作区**
@@ -774,20 +781,26 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   13/18 惯用，与列表标题同规格；v0.2.4 无显式行框、靠继承 1.5≈19.5px，故该项当时
   约 34px、现在 32px——本批统一的是字号/内距语言，不追像素），圆角/背景 = 官方
   （item r10、列表 r20 + `bg-layer-3` + elevation）。
-- **图标钮命中区（2026-09 阶段 3 G1-4；2026-09-13 簇间距审计修订）**：本页所有小于
-  24px 的图标按钮——行内 `.actionIcon`（20px）、来源头 `.searchButton`（20px）、搜索框
-  `.searchClear`（18px）、折叠 `.foldToggle` / `.sourceFoldToggle`（16px）、轨道
-  `.railDotButton`（16px）——**视觉盒与行高一律不变**，各自加一层不可见命中盒
-  （`::after` 的 `inset` 分别 -2/-2/-3/-4/-4/-4px ⇒ 24×24），`disabled` 时
-  `pointer-events: none`。簇间距规则按**边框盒**表述（真正的不变量）：相邻两盒间距
-  ≥ 2×`inset`，否则两个 24px 命中盒重叠——20px 盒（rim 2px）需 ≥4px，16px 盒
-  （rim 4px）需 ≥8px；**列 gap 不等于盒间距**：子项自带 margin 时会被吃掉。据此：
-  `.sourceActions` 由 2px 提到 4px；`.rowActions` 自 2026-09-13 簇节奏修订起取 4px；
-  `.railDots` 由 12px 提到 **16px**——其子项 `margin: -4px 0`，边框盒间距
-  16 − 8 = 8px，原先的 12px 只剩 4px，两点的命中盒互相重叠 4px（可见节奏随之成为
-  8px 点 + 16px 间隙）。16px 控件旁边是宽邻居（workspace 标题 / 来源名）时，其中心距
-  远超 24px，2.5.8 的 spacing 备选同样成立。锁见 `test/batch2-visual-locks.test.ts`
-  的 G1-4 一例（含 rail 的 16px gap 与 `-4px 0` margin 两半算式）。
+- **图标钮命中区 = 视觉盒（2026-09-14 起；回退 2026-09 命中盒 pass `33238ffe`）**：本页
+  小于 24px 的六个图标钮（`.actionIcon` 20 / `.searchButton` 20 / `.searchClear` 18 /
+  `.foldToggle`、`.sourceFoldToggle`、`.railDotButton` 16）连同该 pass 顺带加宽的
+  `.sourceActions` 2→4px gap 一起回到 v0.2.4 几何：**命中区就是视觉盒，不再有不可见
+  命中盒**。机制、实测与"这是缓解、不是根治"的完整说明在
+  `sidebar-chamber.module.css` 的 `.actionIcon` 注释块（唯一权威处，本文不复述）；
+  一句话：rim 把按钮所在行/头部里的"纯行"带压到 ≈0–1px，指针从按钮上离开该行时
+  Chromium 只发 native `pointerleave`、不发 `pointerout`，React 便不合成
+  `onPointerLeave` ⇒ `hover-intent` 的 `inside` 保持 true ⇒ 悬停卡「关不掉 / 异常
+  打开」。**它缓解的是排名第一的触发（日常从动作簇离开该行）**；无指针位移的触发
+  （轮子/重排/插入、blur+dwell）与"极快甩动跨过恢复后的 ≈3px 带"仍在，根治需要一条不
+  依赖 React 合成的投递通道（**未实现**，见 §7 的悬停移植条与 `src/shared/hover-intent.ts`）。
+  代价（已登记）：24px 目标尺寸重新成为本模块偏差（design 24 §13 第 17 条、design 08
+  §3.4）。**簇间距**：`.rowActions` 4px（2026-09-13 用户报告修订）与 footer 4px 保留；
+  `.sourceActions` 与 git 的 `.headerGit` 回到 v0.2.4 的 2px——它们的 4px 只出自该 pass
+  （`46b522c9` 没碰它们）。**rail**：只回退该 pass 加宽的 `gap`（16→12px），点按钮化
+  （2026-09-11 T7）自带的 `margin: -4px 0` 保留 ⇒ 20px 点距 / 12px 可见间隙 = v0.2.4
+  节奏；**不要只删 margin 而不改 gap**（点距会松成 28px/20px 间隙）。锁见
+  `test/batch2-visual-locks.test.ts` 与 git 包同名 V1 一例（含"scoped 重加 rim 也红"的
+  选择器扫描）。**不要再加回 rim**：加之前必须重测按钮命中盒与行/头部边缘之间的纯行带。
 - **会话行窗口与展开条（2026-09-11 upstream-alignment T11；2026-09 batch 1 A10
   补几何）**：每个 workspace 只
   展开前 N 行（`sessionRowWindow`），其余由展开条揭示。展开条采用官方
@@ -1016,9 +1029,13 @@ onRequest`），**默认全开**——被动呈现（空时零占用），区别
   内容右侧，不压尾槽）。
 - **文字列** = 40px（来源标签列）：表头标题、「还有 N 项」与行标题同列；表头计数
   pill 右缘与行尾状态槽/工作区计数同列。
-- **墨色** = 会话行纪律：**静止即主色**（2026-09 batch 1 A1 起会话行标题常驻
-  `label-primary`，条带行同期跟随；hover 只画行底色）；行与「还有 N 项」按钮均带
-  brand focus-visible 自绘环（§7）。
+- **墨色** = 会话行纪律（v0.2.4 两级，2026-09-14 恢复）：`.todoRow` 自带
+  `label-secondary`、hover 转 `label-primary`；行标题 `.todoRowTitle` 不自带墨色
+  （v0.2.4 亦然），因此随行两级；条带头部标题 `.todoTitle` 与计数 pill 在
+  `.todoHeader`（行外，`SessionTodoArea.tsx:118-119`），两级同为 `label-secondary`，
+  不受本条影响——整体与 v0.2.4 逐字一致，条带由此再次"同语言"于会话行（会话行标题
+  本身是静止次级/hover 主色，§7）；hover 另画行底色；行与
+  「还有 N 项」按钮均带 brand focus-visible 自绘环（§7）。
 - **a11y 取舍（记录）**：装饰性槽位 aria-hidden；可访问名 = 状态 · 标题 · 来源
   （region 名带条目数）；tooltip = 完整标题 + 状态 · 来源 · 工作区——截断标题由此
   可复现（vendor tooltip 无 aria-describedby，hover 卡片不进读屏，不重复播报）。

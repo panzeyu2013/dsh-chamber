@@ -160,40 +160,48 @@ const ROTATION_ALLOWLIST = new Set([
   '.sourceFoldToggleFolded .sourceFoldChevron',
 ])
 
-test('A1: session titles carry the official primary ink, and the hover override is gone', () => {
-  // Official Rows: `.sessionRow{color:label-primary}` + `.title{font-size:14px}`
-  // with no colour override — a title never dims to secondary.
-  pin('A1', '.sessionTitle', { color: 'var(--dsw-alias-label-primary)' })
-  assert.deepEqual(
-    colorDecls(rule('.sessionTitle')),
-    ['color: var(--dsw-alias-label-primary);'],
-    'the title rule declares exactly one ink, the official primary',
-  )
-  assert.equal(
-    css.includes('.sessionRow:hover .sessionTitle'),
-    false,
-    'the now-dead hover colour override must stay deleted',
-  )
-  // A compound selector (current row, hover variant, …) re-dimming the title
-  // must fail too — scanning only the base rule would miss it.
-  for (const block of rulesMentioning('sessionTitle')) {
-    const selector = block.slice(0, block.indexOf('{')).trim()
-    assert.equal(block.includes('label-secondary'), false, `no rule touching .sessionTitle may dim it: ${selector}`)
-    const inks = colorDecls(block)
-    if (inks.length > 0) {
-      assert.deepEqual(inks, ['color: var(--dsw-alias-label-primary);'], `a .sessionTitle ink may only be primary: ${selector}`)
-    }
+test('A1 (v0.2.4 ink step, restored 2026-09-14): session titles dim at rest and brighten on hover', () => {
+  // v0.2.4: `.sessionTitle { color: label-secondary }` + `.sessionRow:hover
+  // .sessionTitle { color: label-primary }`. The 2026-09 batch-1 A1 pass had
+  // aligned the resting ink with the official `.title` (primary at rest, no
+  // hover rule); 2026-09-14 restored the step on user request — the row wash
+  // alone was too low-contrast to read as feedback before the 500ms card.
+  pin('A1', '.sessionTitle', { color: 'var(--dsw-alias-label-secondary)' })
+  pin('A1 hover', '.sessionRow:hover .sessionTitle', { color: 'var(--dsw-alias-label-primary)' })
+  // Every title this change set steps gets the same scan: ONLY the rest/hover
+  // pair may colour it — a third, compound rule (`.sessionActive .sessionTitle`,
+  // `.searchResultRow.selected .searchResultTitle`, …) re-inking any of them
+  // must fail here. `.todoRowTitle` is the third case: it must take NO colour at
+  // all, because it inherits the row's step.
+  const inkPairs: Record<string, string[]> = {
+    sessionTitle: [
+      '.sessionTitle → color: var(--dsw-alias-label-secondary);',
+      '.sessionRow:hover .sessionTitle → color: var(--dsw-alias-label-primary);',
+    ],
+    searchResultTitle: [
+      '.searchResultTitle → color: var(--dsw-alias-label-secondary);',
+      '.searchResultRow:hover .searchResultTitle → color: var(--dsw-alias-label-primary);',
+    ],
+    todoRowTitle: [],
   }
-  // A1 knock-on: the todo strip mirrors the list rows, so it is primary too.
-  pin('A1 knock-on', '.todoRow', { color: 'var(--dsw-alias-label-primary)' })
-  // …and so does the search-result title (a session title in the result list):
-  // the follow-up pass closed the last resting-secondary title.
-  pin('A1 search result', '.searchResultTitle', { color: 'var(--dsw-alias-label-primary)' })
-  assert.equal(
-    css.includes('.searchResultRow:hover .searchResultTitle'),
-    false,
-    'the search-result hover ink override must stay deleted too',
-  )
+  for (const [token, expected] of Object.entries(inkPairs)) {
+    const inks = rulesMentioning(token)
+      .flatMap((block) => colorDecls(block).map((decl) => `${block.slice(0, block.indexOf('{')).trim()} → ${decl}`))
+    assert.deepEqual(inks, expected, `only the rest/hover pair may colour .${token}`)
+  }
+  // The strip mirrors the list rows again, exactly as in v0.2.4: the ROW's
+  // inherited ink (which .todoRowTitle reads — it declares no colour of its
+  // own, in v0.2.4 just as now) steps secondary → primary. The strip's header
+  // caption (.todoTitle) is a separate element and keeps its step-free
+  // secondary.
+  pin('A1 knock-on', '.todoRow', { color: 'var(--dsw-alias-label-secondary)' })
+  pin('A1 knock-on hover', '.todoRow:hover', { color: 'var(--dsw-alias-label-primary)' })
+  pin('A1 knock-on caption', '.todoTitle', { color: 'var(--dsw-alias-label-secondary)' })
+  // …and so does the search-result title (a session title in the result list).
+  pin('A1 search result', '.searchResultTitle', { color: 'var(--dsw-alias-label-secondary)' })
+  pin('A1 search result hover', '.searchResultRow:hover .searchResultTitle', {
+    color: 'var(--dsw-alias-label-primary)',
+  })
 })
 
 test('A8/A8b: the kebab is the official horizontal 16px glyph, cluster gap = the header rhythm', () => {
@@ -220,9 +228,10 @@ test('A8/A8b: the kebab is the official horizontal 16px glyph, cluster gap = the
   // cluster while both gaps agree. The copied official `Rows .rowActions` 12px
   // described a two-item cluster with no git occupant; with the occupant as the
   // cluster's leftmost member it landed INSIDE the cluster and split it
-  // 4px + 12px (user report: the kebab read as detached). Both sides now ride the
-  // header's 4px icon rhythm — also the G1-4 floor two 24px hit boxes need, and
-  // the value `.headerGit` / `.sourceActions` already carry.
+  // 4px + 12px (user report: the kebab read as detached). Both sides ride the
+  // header's 4px icon rhythm — the value `.headerGit` / `.sourceActions` carry
+  // (the 2026-09 G1-4 hit rims that once shared this value are rolled back; the
+  // rhythm itself is not).
   pin('A8b', '.rowActions', { gap: '4px' })
   pin('A8b cluster boundary', '.workspaceHeader', { gap: '4px' })
   pin('A8 (option C)', '.actionIcon', { width: '20px' })

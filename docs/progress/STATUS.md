@@ -1145,14 +1145,29 @@
   证据：`docs/design/20-open-in-registry.md` §6.2/§9（插件页行集门）、
   `packages/dsh-chamber-client-ui-settings-connections/test/chamber-rows.test.ts` +
   `test/chamber-table-wiring.test.ts`（分类兜底由 `test/chamber-seed-drift.test.ts` 钉住）。
+- **会话行 / 搜索结果标题墨色不照官方：静止次级、hover 主色（2026-09-14 用户指令
+  「把 hover 变色加回来」，偏差）**：官方 `Rows .title` 继承行墨、从不降级，2026-09
+  batch 1 的 A1 曾照此把本仓标题改为**常驻** `label-primary` 并删掉 hover 覆盖；现恢复
+  v0.2.4 的两级——`.sessionTitle` 静止 `label-secondary`、`.sessionRow:hover` 转
+  `label-primary`，`.searchResultTitle` / `.searchResultRow:hover` 同规则，`.todoRow`
+  同语言（行自带次级、hover 转主色；行标题 `.todoRowTitle` 不自带墨色、随行两级，条带
+  头部 `.todoTitle` 在行外、两级同为次级——逐字同 v0.2.4）。**理由**：
+  A1 删掉该步后行 hover 只剩极低对比度的底色 wash，在 500ms 悬停卡出现之前没有任何
+  可读反馈（用户"不跟手"的来源之一）。**副作用（接受）**：静止列表比 A1 之后更暗
+  （当前会话行也不例外），这正是 v0.2.4 的原貌——亮度差本身就是 hover 反馈。
+  **下一轮上游对齐不得**把它改回常驻主色；判据见
+  design 06 §7「排版/墨色」条与 §8，锁在
+  `packages/dsh-chamber-client-ui-sidebar/test/batch1-visual-locks.test.ts` 的 A1 一例
+  （两级墨色逐一钉住，任何第三条复合规则再上色都会红）。
 - **workspace 头部行尾动作簇间距 = 4px，不跟随官方 12px（2026-09-13 用户报告登记，
   偏差）**：`sidebar-chamber.module.css .rowActions` 的 `gap` 由官方
   `Rows .rowActions` 的 12px（2026-09 batch 1 A8b）改为 **4px**。该 12px 描述的是
   没有 git occupant 的两项簇，而本仓 workspace 头部行尾的可见簇是**三项**：occupant
   的揭示态动作（`.headerGit`，同一行的兄弟 flex 子项，design 08 §3.2）是簇的最左
   成员、落在头部自身的 4px 间距上，12px 因此落进**簇内部**、把一簇切成 4px + 12px
-  （用户报告：「`+` 与省略号之间的间隔明显更大」）。4px 同时是 G1-4 两个 24px 命中盒
-  相邻所需的 ≥4px 下限，与 `.headerGit` / `.sourceActions` 同值；session 行的簇只有
+  （用户报告：「`+` 与省略号之间的间隔明显更大」）。4px 是这一条自己的值：
+  `.headerGit` / `.sourceActions` 的 4px 出自 2026-09 的命中盒 pass，2026-09-14 已随该
+  pass 回退到 v0.2.4 的 2px（见下方命中区条）；session 行的簇只有
   单个 kebab，间距无观感影响。**下一轮上游对齐不得**把它改回官方 12px；判据见
   design 06 §7「行内操作」条与 design 08 §3.2，锁在
   `packages/dsh-chamber-client-ui-sidebar/test/batch1-visual-locks.test.ts`（A8b 钉住
@@ -1161,16 +1176,53 @@
 - **轨道来源点多于可视高度时被裁掉、无滚动入口（2026-09-13 审计登记，未修）**：
   `SidebarRoot.module.css` 的 `.regionArea` 是 `flex: 1` + `overflow: hidden`，而
   `.railDots`（`flex: 1`，无自己的 overflow/min-height）是它的子项——rail 态下没有滚动
-  容器。本次 4px 簇节奏把点距由 20px 提到 24px（`gap: 12 → 16` 抵消子项 `-4px 0`
-  margin，见 design 06 §7 的 G1-4 条），可容纳的来源数因此再少约 1/6，临界提前。**不做**
+  容器。点按钮化（2026-09-11）时用子项 `margin: -4px 0` 抵消 16px 按钮盒多出的 8px，
+  点距仍是 20px；随后的 2026-09 命中盒 pass 为防两个 24px 命中盒重叠把 `gap` 由 12px
+  提到 16px，点距因此变成 24px（可见间隙 12 → 16px），rail 可容纳的来源数少约 1/6。
+  **2026-09-14 只回退命中盒那一半（`gap: 12px`），buttonization 的 margin 保留** ⇒ 点距
+  回到 20px / 可见间隙 12px，故此处不再有"少约 1/6"的临界提前。**不做**
   的原因是 rail 的滚动呈现是设计面（官方 rail 本身没有这一层），加 `overflow-y: auto`
   会引入插件自绘滚动条；判据：`packages/dsh-chamber-client-ui-sidebar/test/batch2-visual-locks.test.ts`
-  钉住的 `.railDots { gap: 16px }` + `.railDotButton { margin: -4px 0 }` 两侧算式。
+  的 V1 一例（`.railDots { gap: 12px }` + `.railDotButton { margin: -4px 0 }` 两半都钉住）。
 - **footer 动作行 `gap: 4px` 是 chamber 对官方复制块的增量（2026-09-13 审计登记，偏差）**：
   `sidebar.footer.action` 是 **list 座**（`sources` 见 design 05 §2），官方
   `ui-sidebar/SidebarRoot.module.css` 的 `.footerActions` 只有 `display: flex`、无 gap，
-  多个 occupant 会零间距相接，故本仓补 4px（同时是 G1-4 两个 24px 命中盒的下限）。当前
+  多个 occupant 会零间距相接，故本仓补 4px（本表的图标簇节奏；2026-09-14 G1-4 命中盒
+  回退后它不再是 rim 下限）。当前
   座位无注册者 ⇒ 该 gap 对发布形态不可见，但**重抄官方块时必须带上**：判据
   `packages/dsh-chamber-client-ui-sidebar/test/batch2-visual-locks.test.ts` 的
   `.footerActions { gap: 4px }` 一例，纵向间距仍按官方契约由 occupant 自己的 margin 承担
   （settings 触发器 `margin: 4px -2px` / rail `8px 0 10px`）。
+- **侧栏与 git 的 16/18/20px 图标钮命中区回到视觉盒，重新低于 WCAG 2.2 2.5.8 的 24px
+  （2026-09-14 用户指令「按照 v0.2.4 恢复」，偏差）**：2026-09 命中盒 pass `33238ffe`
+  给 `.actionIcon` / `.searchButton` / `.searchClear` / `.foldToggle` / `.sourceFoldToggle`
+  / `.railDotButton`（`sidebar-chamber.module.css`）与 `.headerGitAction` /
+  `.unregisteredAction`（`SidebarGit.module.css`）各加一层不可见 `::after` rim，并顺带
+  加宽了 `.sourceActions` 与 git `.headerGit` 的 gap；本次整体回退（命中区 = 视觉盒，
+  两处 gap 回 v0.2.4 的 2px）。**理由与边界**（唯一权威说明在 `sidebar-chamber.module.css`
+  的 `.actionIcon` 注释块，本文不重复机制）：这是对"指针从动作钮上离开该行"这条主触发的
+  **缓解**，不是根治——无指针位移的触发（轮子/重排/插入、blur+dwell）与快速甩动跨过
+  恢复后的 ≈3px 纯行带仍会出现。**代价**：这些按钮重新低于 2.5.8 的 24px 目标尺寸
+  （先前"同类偏差全部收口"的登记随之撤销，design 24 §13 第 17 条已改回登记态）。
+  判据/锁：两个包的 `test/batch2-visual-locks.test.ts` V1 一例（无 rim、视觉盒不变、
+  `.sourceActions` 2px、`.rowActions`/footer 4px、rail `gap` 12px 且 buttonization 的
+  `-4px 0` margin 保留、scoped 重加 rim 的选择器扫描）。**卡片实现未随之回退**：v0.2.4
+  的 vendor 原子只在**已提交** `open` 时 arm 关闭且无任何兜底关闭，退回它会重新引入
+  dwell→commit 窗口的搁浅；本次只恢复几何，chamber 机器（`RowHoverCard.tsx` +
+  `hover-intent.ts`）保留。**重加 rim 前必须重测按钮命中盒与行/头部边缘之间的纯行带。**
+- **根治该漏事件类的补丁未落地（2026-09-14 登记，未做）**：上面那条只是缓解；真正的
+  根治是给悬停卡一条不依赖 React 合成 enter/leave 的投递通道（wrapper 与 portaled 卡
+  各绑原生 `pointerenter`/`pointerleave`，加 dwell 期的几何否决），使"漏 pointerout"
+  不再能留下陈旧 `inside`。**不做**的原因是用户当前指令是"按 v0.2.4 恢复"，而该补丁是新
+  机制（要动 `hover-intent` 的单一权威规则并新增偏差登记）；复发时再落，方案与验证点
+  见 `.tmp/audit2/fix-design.json`。
+- **悬停几何/墨色没有真指针验收腿（2026-09-14 登记，未做）**：`scripts/gui-acceptance/`
+  的 W-4b 四条腿都从行**中心**离开，覆盖不到本次症状路径（从动作钮上离开该行），也没有
+  任何腿读标题墨色的静止/hover 两级；当前证据是 CSS 锁 + 打包页注入实测
+  （`.tmp/band-after-report.json`、`.tmp/ink-report.json`）。**不做**的原因是新增腿必须在
+  打包应用上实跑才算数（本轮无法构建），发布前补 W-4b-`cluster`（从 kebab 上 5px 步进
+  离开）与墨色腿。
+- **发布期必须改 CHANGELOG（2026-09-14 登记）**：`CHANGELOG.md` / `docs/CHANGELOG.en-US.md`
+  的 beta.2/beta.3 段落仍写着"24px 命中区"，而本次回退已撤销它；按仓规 CHANGELOG 只在
+  发布时写，故此处只登记：v0.3.0 正文落笔时必须把那条改写为"命中区 = 视觉盒（回退）"，
+  并同步英文镜像与 i18n 记录。

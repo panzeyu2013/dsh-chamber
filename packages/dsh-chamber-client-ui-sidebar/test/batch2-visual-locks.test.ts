@@ -177,58 +177,79 @@ test('P2-B B-1: the todo banner is separated from the list by a 0.5px neutral di
     'the banner must not draw a top hairline')
 })
 
-test('P2-B B-2 / G1-4: icon buttons keep their box and row, and carry a 24px hit area', () => {
-  // Generalized by stage-3 G1-4: one block now serves every icon button in the
-  // sheet, so the assertion moved from the archive-scoped rule to `.actionIcon`.
-  pin('G1-4 action icon hit area', css, '.actionIcon::after', {
-    content: "''", position: 'absolute', inset: '-2px',
-  })
-  pin('G1-4 action icon anchor', css, '.actionIcon', { position: 'relative' })
-  for (const [selector, inset] of [['.searchButton::after', '-2px'], ['.searchClear::after', '-3px']] as const) {
-    pin(`G1-4 ${selector}`, css, selector, { content: "''", position: 'absolute', inset })
+test('V1 (v0.2.4 rollback of P2-B B-2 / G1-4): icon buttons keep their visual box and carry no invisible hit rim', () => {
+  // 2026-09-14 (user directive 「按照 v0.2.4 恢复」): the stage-3 G1-4 rims are
+  // rolled back. They grew every < 24px icon button's hit box with an invisible
+  // `::after` (inset -2/-3/-4px); inside a 26px row that rim left 0px of plain
+  // row above the button and 1px below (measured: elementFromPoint sweep, row
+  // 183-209, kebab hit band 183.5-207.5), so a pointer leaving the row FROM the
+  // button produced the native pointerleave chain with no pointerout, React
+  // synthesized no onPointerLeave, and the row's hover card stranded. v0.2.4's
+  // geometry — the visual box IS the hit box — is what this locks.
+  for (const selector of ['.actionIcon', '.searchButton', '.searchClear', '.foldToggle',
+    '.sourceFoldToggle', '.railDotButton']) {
+    // Parse the declaration instead of substring-matching the text: a rule
+    // written `position:relative` (no space) must fail this all the same.
+    const body = ruleBodies(css, selector) ?? ''
+    assert.equal(
+      decls(body).some(([name, value]) => name === 'position' && value === 'relative'),
+      false,
+      `${selector} must not anchor a hit rim`,
+    )
+    assert.equal(ruleBodies(css, `${selector}::after`), undefined,
+      `${selector} must not carry a hit rim`)
+    assert.equal(ruleBodies(css, `${selector}:disabled::after`), undefined,
+      `${selector} must not carry the rim's disabled switch`)
   }
-  for (const selector of ['.foldToggle::after', '.sourceFoldToggle::after', '.railDotButton::after']) {
-    pin(`G1-4 ${selector}`, css, selector, { content: "''", position: 'absolute', inset: '-4px' })
+  // The rollback did not grow any box to compensate: the visual boxes are the
+  // sheet's own sizes, which is what keeps the 26px rows 26px.
+  for (const [selector, size] of [['.actionIcon', '20px'], ['.searchButton', '20px'],
+    ['.searchClear', '18px'], ['.foldToggle', '16px'], ['.sourceFoldToggle', '16px'],
+    ['.railDotButton', '16px']] as const) {
+    pin(`V1 ${selector} box`, css, selector, { width: size, height: size })
   }
-  // A disabled button still hit-tests: the enlarged rim must be switched off, or
-  // it would swallow pointer events meant for a neighbour.
-  for (const selector of ['.actionIcon:disabled::after', '.searchClear:disabled::after',
-    '.foldToggle:disabled::after', '.railDotButton:disabled::after']) {
-    pin(`G1-4 ${selector}`, css, selector, { 'pointer-events': 'none' })
-  }
-  // The invariant behind G1-4, stated as the BORDER-box gap it really is: two
-  // adjacent boxes must sit >= 2 x their rim apart, or their 24px hit boxes
-  // overlap. A 20px box with a -2px rim therefore needs >= 4px, and a 16px box
-  // with a -4px rim >= 8px — the column gap alone is NOT the box gap whenever the
-  // children carry margins of their own.
-  const clusterGap = Number.parseInt(
-    decls(rule(css, '.sourceActions')).find(([name]) => name === 'gap')?.[1] ?? '0', 10)
-  assert.ok(clusterGap >= 4,
-    `the source-header cluster needs >= 4px between two 24px hit boxes (got ${clusterGap}px)`)
-  // 2026-09-13 audit: the rail's dots were the counter-example — 16px buttons
-  // with a -4px rim in a 12px column gap leave only 12 - 4 - 4 = 4px between
-  // boxes, i.e. overlapping hit boxes, and each dot stole 4px of its neighbour's
-  // target band. The gap is now 16px (16 - 8 = 8 = 2 x 4). Both halves of that
-  // arithmetic are pinned, so neither can drift back on its own.
-  pin('G1-4 rail cluster', css, '.railDots', { gap: '16px' })
-  pin('G1-4 rail button margin', css, '.railDotButton', { margin: '-4px 0' })
-  const railGap = Number.parseInt(
-    decls(rule(css, '.railDots')).find(([name]) => name === 'gap')?.[1] ?? '0', 10)
-  assert.ok(railGap - 8 >= 8,
-    `the rail's 16px dots need >= 8px between their boxes, i.e. a >= 16px column gap (got ${railGap}px)`)
-  // The footer-action hole is a LIST seat: several occupants share this one flex
-  // row, so the row — not the occupants — owns the space between them (each
-  // occupant owns only its own box; the settings trigger carries its own
-  // vertical margins). 4px is the sheet's icon-cluster rhythm and the G1-4 floor.
-  pin('G1-4 footer action row', rootCss, '.footerActions', { gap: '4px' })
-  // The row geometry the hit-area overlay must NOT be allowed to change: the row
+  // The 2026-09-13 cluster-rhythm revision survives the rollback (its value was
+  // set for the user-reported `+`/kebab cluster, not for rims): `.rowActions`
+  // stays 4px, as does the footer row's chamber-added rhythm. `.sourceActions`
+  // does NOT: its 4px came from the 2026-09 hit-area pass itself (widened so two
+  // 24px rims stayed distinct), so the rollback returns it to v0.2.4's 2px.
+  pin('V1 source-header cluster', css, '.sourceActions', { gap: '2px' })
+  pin('V1 row cluster', css, '.rowActions', { gap: '4px' })
+  pin('V1 footer action row', rootCss, '.footerActions', { gap: '4px' })
+  // The rail: only the RIM half of the 2026-09 change is rolled back, i.e. the
+  // column gap returns to 12px. The `-4px 0` margin STAYS — it is the
+  // buttonization compensation (a 16px button box carrying an 8px dot must give
+  // its extra 8px back or the dot rhythm loosens), so gap 12px + margins keep
+  // the 20px box pitch / 12px visible gap the rail shipped with. Pinning both
+  // halves separately is the point: dropping the margin instead of the gap is
+  // the mistake this lock exists to catch (it would read as 20px visible gaps).
+  pin('V1 rail cluster', css, '.railDots', { gap: '12px' })
+  pin('V1 rail button margin', css, '.railDotButton', { margin: '-4px 0' })
+  // The row geometry the rollback must NOT be allowed to change: the archive row
   // stays content-sized (this 20px button + 5px + 5px padding = 30px), so a later
   // box-growing "fix" has to show up as an explicit height here and fail.
   pin('B-2 row', css, '.archiveManagerRow', { padding: '5px 8px' })
   const row = rule(css, '.archiveManagerRow')
   assert.equal(/(?<![\w-])(?:min-|max-)?height\s*:/.test(row), false, 'the archive row must stay content-sized')
   assertSoleDeclaration(css, '.archiveManagerRow', ['height', 'min-height'])
-  assertSoleDeclaration(css, '.archiveManagerRow .actionIconDanger::after', ['inset'])
+  // A re-added rim must fail even when it is SCOPED (`:hover::after`,
+  // `.rowActions .actionIcon::after`, a attribute variant …): scan every rule
+  // whose selector mentions one of the rolled-back classes, not just the exact
+  // `X::after` spelling the loop above checks. `content`/`inset` on any of these
+  // classes is the rim signature (none of them has a legitimate pseudo-element).
+  const mentionsClass = (selector: string, cls: string): boolean =>
+    new RegExp(`${cls.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w-])`).test(selector)
+  for (const entry of allRules(css)) {
+    for (const cls of ['.actionIcon', '.searchButton', '.searchClear', '.foldToggle',
+      '.sourceFoldToggle', '.railDotButton']) {
+      if (!mentionsClass(entry.selector, cls)) continue
+      assert.equal(
+        decls(entry.body).some(([name]) => name === 'content' || name === 'inset'),
+        false,
+        `${entry.selector} re-adds an invisible hit rim to ${cls}`,
+      )
+    }
+  }
   // 2026-09 user decision: the row/select-all checkbox carries the dsh business
   // blue, not the official neutral `--dsw-alias-brand-primary` (near-black in the
   // light theme) — the same ruling as the settings page's on/selected states.
