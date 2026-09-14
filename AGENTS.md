@@ -50,6 +50,12 @@ decision value and is not already owned by a design document or `CHANGELOG.md`.
 - Read and execute `docs/checklists/release-checklist.md` — any ❌ blocks the release (version
   assertions, release preflight, changelog/i18n, the full test suite on the exact release commit,
   build, tag, and a CI dry-run first).
+- **Release-blocking markers**: `FIXME` marks an issue that should block a release — a release does
+  not ship with an open `FIXME` unless the reviewers explicitly agree the change can merge anyway;
+  `TODO` means fix soon; `XXX` means someday, no commitment. Pick the tag that matches the urgency so
+  anyone scanning the code can tell a release blocker from a someday-maybe. `release-preflight`
+  reports open `FIXME` markers and requires the explicit `--allow-fixme` opt-out, so shipping one is
+  a recorded decision rather than an oversight.
 - Changes to packaged modules, build scripts, `build.files` or `extraResources` additionally require
   `docs/checklists/packaging-closure-checklist.md`.
 - The release workflow is policy-tested: `pnpm run test:release-workflow`.
@@ -87,6 +93,15 @@ Read `CONTRIBUTING.md` and `.github/PULL_REQUEST_TEMPLATE.md`; complete the temp
 current evidence for the final PR HEAD. The reviewer must not have to reconstruct intent, affected
 surfaces, applicable guidance, validation, or failure/rollback considerations from the diff alone.
 
+- A change that alters a design contract, a cross-package boundary, or shipped behavior adds a short
+  **Rejected alternatives** section to the owning `docs/design/0X-*.md`: what else was considered and
+  why it lost. This is a **review duty, not a gate** — no script can judge whether the alternatives
+  were genuinely weighed, so the reviewer checks it and the PR template asks for it. Labeling a rule
+  review-only is deliberate: a green gate never means this one was satisfied.
+- Pick the evidence for a change with `node scripts/dev/run-checks.mjs <static|tests|typecheck|full>`
+  (or `--list` to see the plan) instead of recalling the set from CI YAML: the modes name the same
+  gates ci.yml and release validation run, so a local pass is the same evidence.
+
 ## Runtime Boundaries
 
 | Package | Responsibility |
@@ -116,6 +131,10 @@ surfaces, applicable guidance, validation, or failure/rollback considerations fr
   editing `harness.commit` or the gitlink. Of the dsh sources, only the chamber packages are ours to
   change (see Runtime Boundaries).
 - Do not run git or GitHub commands unless the user explicitly asks.
+- This repository installs **no git hooks**, and adding one is a decision to raise rather than a
+  convenience to add: `core.hooksPath` is not carried by a clone, so every clone and machine would
+  have to configure it again. The cheap checks live as ordinary gates instead — `pnpm run
+  check:static` runs that set (registration: `docs/progress/STATUS.md`, 范围决策).
 - Credentials and connection secrets never enter the renderer, logs or any persistence layer — only
   the documented transient write-only form inputs (design 05 §8, design 17).
 - Package manager is pnpm, and runtime dependencies are not added without an explicit request

@@ -503,6 +503,11 @@
   （`.boot-gap-detail`，产出方在 `host-graph.ts` / `required-extra-rows.ts` 的中文原文），
   框架只按字典出正文、**不翻译也不解析**它。
 
+- **变更文件覆盖率门未接**：`scripts/dev/run-checks.mjs` 的 `tests` 模式是每文件一个 `node`
+  子进程，V8 覆盖率须跨进程合并才能成表，而仓内无 `c8` 类工具、新增 devDependency 需显式
+  请求。待裁决二选一：引入 devDependency，或把 runner 改成单进程 `node --test`（动到现有
+  进程隔离语义）。
+
 ## 一致性债务与开放登记（低–中，未排期；均指回代码面注释/design 登记）
 
 - **设置面残余登记（design 05 §5，2026-12 完整桥接修订后剩余项）**：
@@ -1275,3 +1280,19 @@
   的 beta.2/beta.3 段落仍写着"24px 命中区"，而本次回退已撤销它；按仓规 CHANGELOG 只在
   发布时写，故此处只登记：v0.3.0 正文落笔时必须把那条改写为"命中区 = 视觉盒（回退）"，
   并同步英文镜像与 i18n 记录。
+- **不做 git 钩子（2026-12 决定）**：`core.hooksPath` 不随 clone 携带，装钩子等于要求每个 clone
+  单独配置一次（同一 clone 的多个 worktree 共享一份，但新 clone / 新机器仍要重装）；而钩子本要
+  跑的检查都已是有 CI 背书的普通门禁，`pnpm run check:static` 一条命令即可本地跑全（i18n 配对、
+  样式 token、action pin、工作流 YAML、测试接线、文档链接、发布/工具链策略测试）。故本仓
+  **不提供也不安装任何钩子**，也不引入 husky/lefthook 之类的托管层；规范
+  `docs/progress/todo/upstream-engineering-practices.md` §7.7 登记了这一打折项。
+- **推迟：规范里尚未落地的 P2 项（2026-12 登记，来源同上）**：观察型 CI job（非阻塞、只报数）、
+  术语表、文档字数预算、把 `docs/checklists/*` 过程文件转为可调用动作、`packages/*/README.i18n.yaml`
+  三元组的译文一致性门（现状只有哈希记录，无校验）——均未排期。
+- **上游纯镜像 README 的失效链接被链接门显式跳过（2026-12 登记）**：`packages/dsh-client-connection/`
+  的 `README.md` / `README.zh.md` 是上游**逐字节纯镜像**（注册表 §2.1，C1 冻结），文内 10 条
+  相对链接按上游树形书写（`../file-upload/README.md`、`../../../.agents/notes/…`、
+  `../../../docs/config-catalog.md`），在 chamber 树内不存在。改镜像文件违反 C1，故
+  `scripts/dev/verify-md-links.mjs` 以 `MIRRORED_DOCUMENTS` 显式排除这两份**并在每次运行时
+  打印跳过清单**（不静默）；真正的修复面在上游（让上游改用不与树形绑定的引用）。
+

@@ -17,6 +17,7 @@
 | 6 | [client-store-scoping-upstream.md](client-store-scoping-upstream.md) | 上游：N-壳宿主下持久化 selection（`dsh.sessions.current`）需按 shell/入口作用域——它是"每次冷 boot 都新建空白会话"的根因；chamber 侧无法根治（vendor store 不在 fork 副本内，逐入口 localStorage 代理不安全），已用本地回显缓解（design 05 §2.2.1 修订） | 上游提案，未排期 |
 | 7 | [product-freshness-guards.md](product-freshness-guards.md) | 产物新鲜度守卫：2026-12 产物普查（9 行清单）+ G1–G8 最小守卫建议（P0/P1/P2，含适用产物/成本/收益） | 想法，未排期；缺口现状登记在 STATUS |
 | 8 | [audit-2026-12-findings.md](audit-2026-12-findings.md) | 2026-12 四路审计发现台账：A1 状态呈现 7+6 疑似 / A2 尺度错配 7 / A3 聚合吞未检 15+13 疑似 / A4 无 / A5 守卫缺口；逐条 file:line + 证据来源 + 严重度 + 建议 + 状态（已修/已派修/未动/需产品裁决） | 台账：task-17/18/20 在修；其余未动或待裁决 |
+| 9 | [upstream-engineering-practices.md](upstream-engineering-practices.md) | **工程实践规范草案**（质量 / 版本 / 交付 / 知识治理）：三条总则 + 分层门禁 / 测试与覆盖率 / 反向证明与反假绿 / 文档↔代码等价 / 设计期质量 / 版本与发布纪律 / 知识分层与决策记录 / 双语文档 / 反模式清单 / 提交前·发布前自检清单 / 边界与打折项。来源为上游 dsh `0.1.5-rc.2` 治理调研 | 规范草案，未定稿；尚未落地的条目与打折项见 `docs/progress/STATUS.md`（本表不记落地台账） |
 
 ## 纪律
 
