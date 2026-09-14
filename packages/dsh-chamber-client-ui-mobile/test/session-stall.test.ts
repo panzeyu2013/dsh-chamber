@@ -328,7 +328,7 @@ test('stall shape: an active conversation with a displayed header and no rows is
 
 test('stall truth table: hero / unknown / no phase, rows, hidden header, missing flow are NOT stalled', () => {
   assert.equal(shapeOf(conversation({ phase: 'settling' })), true,
-    'settling (a session opening its history) is exactly the face this notice exists for')
+    'settling is a real-session face (value-space assertion; which of its upstream arms can reach here is the header gate\'s business, not this predicate\'s)')
   assert.equal(shapeOf(conversation({ phase: 'engaging' })), false,
     'engaging is an internal contract name and never reaches the attribute')
   assert.equal(shapeOf(conversation({ phase: 'blank' })), false, 'the no-conversation face is never a stall')
@@ -746,19 +746,21 @@ test('installations share one watcher and the LAST disposer tears it down', () =
     const first = installSessionStallNotice(key => zh[key])
     const second = installSessionStallNotice(key => zh[key])
     assert.equal(harness.intervals(), 1, 'a second install must not add a second watcher')
-    // The second disposer releases only its own reference: the first holder is
-    // still watching (the old no-op disposer left the second holder unwatched
-    // the moment the first one disposed).
-    second()
-    assert.equal(harness.intervals(), 1, 'releasing one reference keeps the watcher alive')
+    // Dispose the FIRST holder first: the pre-fix code handed every later
+    // install a dead disposer, so releasing the first stopped watching for a
+    // context that was still alive. Disposing the second first would pass under
+    // both versions (2026-12 review: the earlier assertion order could not fail
+    // on the regression it named).
+    first()
+    assert.equal(harness.intervals(), 1, 'releasing the first reference keeps the watcher alive')
     harness.at(STALL_THRESHOLD_MS)
     assert.ok(harness.notice() !== null, 'the surviving holder is still watching')
     harness.at(STALL_THRESHOLD_MS + STALL_POLL_MS)
     assert.ok(harness.notice() !== null)
     // Idempotent: a double release must not consume the other holder's count.
-    second()
-    assert.equal(harness.intervals(), 1)
     first()
+    assert.equal(harness.intervals(), 1)
+    second()
     assert.equal(harness.intervals(), 0, 'the last reference stops the watcher')
     assert.equal(harness.notice(), null)
     // The guard is cleared with the last release: a later tier flip installs

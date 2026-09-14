@@ -2012,7 +2012,7 @@ function installSessionStallNotice(t) {
       const probe = probeStall(document, {
         isVisible: (node) => isVisibleElement(node)
       });
-      const anchor = probe.header ?? probe.activeRoot;
+      const anchor = probe.header;
       if (anchor !== sessionAnchor) {
         sessionAnchor = anchor;
         since = 0;
@@ -2030,7 +2030,7 @@ function installSessionStallNotice(t) {
       });
       since = decision.since;
       if (!shape || !pageVisible) dismissed = false;
-      if (decision.show || shape && !dismissed && notice !== null) mount(probe.header);
+      if (decision.show || shape && notice !== null) mount(probe.header);
       else unmount();
     } catch {
     }

@@ -679,10 +679,14 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       } catch (error) {
         planeStopError = error
       }
-      // The listener is closed now, so no further rejection can open a debounce
-      // window: publish whatever the fence-time drain could not see (a refusal
-      // accepted between the fence and this point). Idempotent, and cheap when
-      // nothing is open.
+      // The listener is closed now, so no NEW request can be accepted: publish
+      // whatever the fence-time drain could not see (a refusal accepted between
+      // the fence and this point). One window can still open after this line — a
+      // handler already inside `await auth.verify()` resumes and records its
+      // rejection — and that coalesced count then rides the debounce timer
+      // (unref'd: an exiting process drops it). The anchor line is already on
+      // disk, so what is at stake is a diagnostic count, not the record itself.
+      // Idempotent, and cheap when nothing is open.
       dispatch.flushAuditWindows()
       started = false
       if (runtimeDisposalError === null && runtimeManager === managerAtStop) runtimeManager = null

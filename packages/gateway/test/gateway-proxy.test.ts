@@ -130,8 +130,9 @@ test('hashed-asset caching: the immutable stamp is bounded by response type and 
   // asset URL with `text/html` 200, and caching that immutably poisons the URL
   // for a year (across rollbacks); an upstream `no-store` was overwritten the
   // same way. The seam now stamps only a real asset representation.
-  const stamp = async (path: string, headers: Record<string, string>): Promise<string | undefined> => {
+  const stamp = async (path: string, headers: Record<string, string>, status = 200): Promise<string | undefined> => {
     const { upstreamRes, proxy } = htmlUpstreamFixture({ 'content-type': 'text/javascript', ...headers })
+    upstreamRes.statusCode = status
     const res = new FakeResponse()
     await proxy.handleHttp(new FakeRequest('GET', path), res)
     upstreamRes.emit('data', Buffer.from('body'))
@@ -152,6 +153,23 @@ test('hashed-asset caching: the immutable stamp is bounded by response type and 
   // A percent-encoded / dot-segment path can END in a hash-shaped name while the
   // upstream (which decodes) resolves a different file: never pinned.
   assert.equal(await stamp('/assets/..%2f..%2fsec-12345678.js', {}), undefined)
+  // Only a 200 is a complete representation: a 206 (or a 304/500) must never be
+  // stamped (2026-12 review: these two guards had no test at all).
+  assert.equal(await stamp('/assets/index-BKQ_L1z6.js', {}, 206), undefined, 'a partial response is never immutable')
+  assert.equal(await stamp('/assets/index-BKQ_L1z6.js', {}, 304), undefined)
+  assert.equal(await stamp('/assets/index-BKQ_L1z6.js', {}, 500), undefined)
+  // A range response carries content-range even with a 200.
+  assert.equal(
+    await stamp('/assets/index-BKQ_L1z6.js', { 'content-range': 'bytes 0-3/4' }),
+    undefined,
+    'a ranged representation must not be cached as the whole file',
+  )
+  // Real Vite layout: fonts live one level down (`assets/fonts/<name>-<hash>.woff2`)
+  // and the pinned dist also ships .ttf — the anchored predicate must reach them,
+  // otherwise the rule only ever applies to the four top-level files.
+  assert.equal(await stamp('/assets/fonts/KaTeX_AMS-Regular-BQhdFMY1.woff2', { 'content-type': 'font/woff2' }), 'public, max-age=31536000, immutable')
+  assert.equal(await stamp('/assets/langs/cpp-DIPi6g--.js', { 'content-type': 'text/javascript' }), 'public, max-age=31536000, immutable')
+  assert.equal(await stamp('/assets/fonts/KaTeX_Math-Italic-DA0__PXp.ttf', { 'content-type': 'font/ttf' }), 'public, max-age=31536000, immutable')
 })
 
 test('an origin-form request target is accepted (no 400 before forwarding)', async () => {

@@ -877,7 +877,18 @@ test('isHashedStaticAssetPath: content-addressed Vite output only (never favicon
   assert.equal(isHashedStaticAssetPath('/assets/my-super-long-file.js'), false) // last '-' token is the 4-char 'file'
   assert.equal(isHashedStaticAssetPath('/assets/index-BKQ_L1z6.js.map'), false)
   assert.equal(isHashedStaticAssetPath('/other/index-BKQ_L1z6.js'), false)
-  assert.equal(isHashedStaticAssetPath('/assets/sub/index-BKQ_L1z6.js'), false)
+  // Nested asset directories are REAL at the pin (assets/fonts/*.woff2|ttf,
+  // assets/langs/*.js), so exactly one level is accepted — without it the rule
+  // could only ever reach the four top-level files (2026-12 review).
+  assert.equal(isHashedStaticAssetPath('/assets/fonts/KaTeX_AMS-Regular-BQhdFMY1.woff2'), true)
+  assert.equal(isHashedStaticAssetPath('/assets/sub/index-BKQ_L1z6.js'), true, 'one nested level is the real shape')
+  assert.equal(isHashedStaticAssetPath('/assets/a/b/index-BKQ_L1z6.js'), false, 'two levels is not a Vite layout')
+  // Hash-SHAPED but decoded by the upstream before it resolves: the same bytes
+  // can name a different file, so no caller may treat them as an asset (this
+  // guard lives in the predicate precisely so all three callers agree).
+  assert.equal(isHashedStaticAssetPath('/assets/..%2f..%2fsec-12345678.js'), false)
+  assert.equal(isHashedStaticAssetPath('/assets/sec%2Fret-12345678.js'), false)
+  assert.equal(isHashedStaticAssetPath('/assets/../assets/ok-12345678.js'), false)
 })
 
 // Direct forwardHttp calls: the M3-3 seam lives on ProxyForwardDeps, which the

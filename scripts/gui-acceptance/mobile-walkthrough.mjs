@@ -13,15 +13,17 @@
  *      Chromium 忽略，本机实测，见 mobile-checks.mjs 文件头）
  *   3. 重新加载（模拟是会话级、跨导航保留），随后只做**只读测量**
  *
- * 断言（结构化，不靠截图；判据纯函数在 mobile-checks.mjs）：
- *   M-1 设备模拟生效（含 pointer:coarse / hover:none / 手机档媒体查询）
- *   M-2 无横向溢出（设备宽基准 + task 的 innerWidth 断言；收缩适配时明确标注）
- *   M-3 会话头首行高度 ≤ 48px
- *   M-4 会话头内无「单字换行」（行盒数 + 高度启发式，lineage count 单列）
- *   M-5 会话头内所有 button 命中盒 ≥ 44px
- *   M-6 插件激活观察（[data-mobile-frame] 打标；观察项，不判失败）
- *   M-7 WebSocket 帧捕获（`Network.webSocketFrameSent/Received`，落盘 JSON）
- *   M-8 走查期间的控制台/网络观察（观察项，判定沿用桌面走查的容忍表）
+ * 断言（结构化，不靠截图；判据纯函数在 mobile-checks.mjs，编号即报告里的顺序）：
+ *   M-0 走查环境（找不到 CDP 目标 ⇒ INFO；--require-run 时 FAIL）
+ *   M-1 壳挂载成功（30s 内出现挂载标记；默认 INFO，--require-run 时 FAIL）
+ *   M-2 设备模拟生效（含 pointer:coarse / hover:none / 手机档媒体查询）
+ *   M-3 无横向溢出（设备宽基准 + task 的 innerWidth 断言；收缩适配时明确标注）
+ *   M-4 插件激活观察（[data-mobile-frame] 打标；观察项，不判失败）
+ *   M-5 会话头首行高度 ≤ 48px（无会话 ⇒ INFO；--require-run 时 FAIL）
+ *   M-6 会话头内无「单字换行」（行盒数 + 高度启发式；同上）
+ *   M-7 会话头内所有 button 命中盒 ≥ 44px（同上）
+ *   M-8 WebSocket 帧捕获（`Network.webSocketFrameSent/Received`，落盘 JSON）
+ *   M-9 走查期间的控制台/网络观察（观察项，判定沿用桌面走查的容忍表）
  *
  * 凭据：**没有任何硬编码**。要访问认证过的 gateway 时只从环境变量读：
  *   --auth-token-env <NAME>（默认 DSH_MOBILE_AUTH_TOKEN）→ `Authorization: Bearer <值>`
@@ -51,7 +53,7 @@ import {
   renderMarkdown, summarize, summarizeNetFailures,
 } from './checks.mjs'
 import {
-  DEVICE_FACTS_EXPRESSION, HEADER_FACTS_EXPRESSION, MOBILE_DEVICE, deviceEmulationSteps,
+  DEVICE_FACTS_EXPRESSION, HEADER_FACTS_EXPRESSION, MOBILE_DEVICE, applyRequireRun, deviceEmulationSteps,
   deviceEmulationVerdict, headerFirstRowVerdict, headerWrapVerdict, hitBoxVerdict,
   overflowVerdict, pluginActivationVerdict, redactSecrets, summarizeWebSocketFrames,
 } from './mobile-checks.mjs'
@@ -221,7 +223,10 @@ export async function runMobileWalkthrough({
     ].join('\n')
     console.log(requirement)
     rec.add('M-0', '走查环境（CDP 目标）', requireRun ? false : null, requirement)
-    const reportPath = writeReport({ outDir, target: null, cdpPort, url, results: rec.results, frames: null, notes: [requirement] })
+    const reportPath = writeReport({
+      outDir, target: null, cdpPort, url, secrets: credentials.secrets,
+      results: rec.results, frames: null, notes: [requirement],
+    })
     return {
       results: rec.results, reportPath, framesPath: null, shots, skipped: true,
       ...summarize(rec.results),
@@ -230,7 +235,10 @@ export async function runMobileWalkthrough({
 
   console.log(`# CDP 移动走查目标 ${redactSecrets(target.url, credentials.secrets)}（${target.title}）`)
   const session = await CdpSession.connect(target.webSocketDebuggerUrl)
-  const ws = collectWebSocketFrames(session, { cap: frameCap })
+  // `--ws-frames off` means off: no listener, no accumulation. (The summary is
+  // the only place raw frame bytes leave this module, so not collecting is both
+  // the honest reading of the flag and one less credential-bearing buffer.)
+  const ws = wsFrames === 'off' ? { frames: [] } : collectWebSocketFrames(session, { cap: frameCap })
   await session.enableObservation()
   if (Object.keys(credentials.headers).length > 0) {
     await session.send('Network.setExtraHTTPHeaders', { headers: credentials.headers })
@@ -256,10 +264,13 @@ export async function runMobileWalkthrough({
     const mounted = await session.waitFor(ROOT_MOUNTED, 'shell mounted', { timeoutMs: 30_000 })
       .then(() => true)
       .catch(() => false)
-    rec.add('M-1', '壳挂载成功（会话/插件面的前提）', mounted ? true : (requireRun ? false : null),
-      mounted
+    const mountVerdict = applyRequireRun({
+      ok: mounted ? true : null,
+      evidence: mounted
         ? 'shell mounted 标记在 30s 内出现'
-        : `30s 内未观察到挂载标记 ${ROOT_MOUNTED}——其后每条几何/插件判据的 INFO 都不能当成通过`)
+        : `30s 内未观察到挂载标记 ${ROOT_MOUNTED}——其后每条几何/插件判据的 INFO 都不能当成通过`,
+    }, requireRun)
+    rec.add('M-1', '壳挂载成功（会话/插件面的前提）', mountVerdict.ok, mountVerdict.evidence)
     await sleep(settleMs)
 
     const deviceFacts = await session.evaluate(DEVICE_FACTS_EXPRESSION)
@@ -274,24 +285,25 @@ export async function runMobileWalkthrough({
     rec.add('M-4', '移动插件激活（观察项：[data-mobile-frame] 打标）', activation.ok, activation.evidence)
 
     // ---- 会话头几何（无会话 ⇒ INFO；--require-run 下「没有会话」正是它要拦的
-    //      情形，USAGE 承诺过 ⇒ 计 FAIL） ----
-    const requireSession = ok => (ok === null && requireRun ? false : ok)
+    //      情形，USAGE 承诺过 ⇒ applyRequireRun 把它改判 FAIL） ----
     const headerFacts = await session.evaluate(HEADER_FACTS_EXPRESSION)
     await shot('M2-header')
-    const firstRow = headerFirstRowVerdict(headerFacts)
-    rec.add('M-5', `会话头首行高度 ≤ 48px（实测，无会话则 INFO）`, requireSession(firstRow.ok), firstRow.evidence)
-    const wrap = headerWrapVerdict(headerFacts)
-    rec.add('M-6', '会话头内无「单字换行」（行盒数 + 高度启发式）', requireSession(wrap.ok), wrap.evidence)
-    const hitBox = hitBoxVerdict(headerFacts)
-    rec.add('M-7', '会话头内所有 button 命中盒 ≥ 44px', requireSession(hitBox.ok), hitBox.evidence)
+    const addGated = (id, title, verdict) => {
+      const gated = applyRequireRun(verdict, requireRun)
+      rec.add(id, title, gated.ok, gated.evidence)
+    }
+    addGated('M-5', `会话头首行高度 ≤ 48px（实测，无会话则 INFO）`, headerFirstRowVerdict(headerFacts))
+    addGated('M-6', '会话头内无「单字换行」（行盒数 + 高度启发式）', headerWrapVerdict(headerFacts))
+    addGated('M-7', '会话头内所有 button 命中盒 ≥ 44px', hitBoxVerdict(headerFacts))
 
     // ---- 观察项：帧 + 控制台/网络（沿用桌面走查的容忍表） ----
     await sleep(1_000)
-    const frameSummary = summarizeWebSocketFrames(ws.frames)
+    const scrub = value => redactSecrets(String(value), credentials.secrets)
+    const frameSummary = summarizeWebSocketFrames(ws.frames, { redact: scrub })
     rec.add('M-8', 'WebSocket 帧捕获（会话打开停滞的证据来源）', null,
       wsFrames === 'off'
-        ? '--ws-frames off：本档不采集、不落盘帧（其余判据不受影响）'
-        : `${frameSummary.summary}\n（帧自 CDP 连接起累计——含 reload 前的那一次连接；完整帧见报告旁 mobile-ws-frames.json，payload/URL 均已脱敏；--ws-frames full 可逐帧打印）`)
+        ? '--ws-frames off：本档不采集、不落盘、不打印帧（其余判据不受影响）'
+        : `${scrub(frameSummary.summary)}\n（帧自 CDP 连接起累计——含 reload 前的那一次连接；完整帧见报告旁 mobile-ws-frames.json，payload/URL 均已脱敏；--ws-frames full 可逐帧打印）`)
     if (wsFrames === 'full') {
       for (const frame of ws.frames) {
         console.log(`[WS] ${frame.direction} opcode=${frame.opcode ?? '-'} len=${frame.payloadLength ?? '-'} ${redactSecrets(frame.payload ?? frame.url ?? frame.error ?? '', credentials.secrets).slice(0, 300)}`)
@@ -301,10 +313,10 @@ export async function runMobileWalkthrough({
     const net = partitionFailures([...session.netFailures.keys()], TOLERATED_REQUEST_FAILURES)
     const consolePartition = partitionFailures(session.consoleErrors, KNOWN_UPSTREAM_BOOT_NOISE)
     rec.add('M-9', '走查期间的 ≥400 请求与渲染层 error（观察项）', null,
-      [`未预期网络：${redactSecrets(net.unexpected.slice(0, 5).join(' | '), credentials.secrets) || '（无）'}`,
-        `已登记容忍：${redactSecrets(net.tolerated.slice(0, 3).join(' | '), credentials.secrets) || '（无）'}`,
-        `未预期 console error：${consolePartition.unexpected.slice(0, 3).join(' | ') || '（无）'}`,
-        `已登记上游噪声：${consolePartition.tolerated.slice(0, 2).join(' | ') || '（无）'}`].join('\n'))
+      [`未预期网络：${scrub(net.unexpected.slice(0, 5).join(' | ')) || '（无）'}`,
+        `已登记容忍：${scrub(net.tolerated.slice(0, 3).join(' | ')) || '（无）'}`,
+        `未预期 console error：${scrub(consolePartition.unexpected.slice(0, 3).join(' | ')) || '（无）'}`,
+        `已登记上游噪声：${scrub(consolePartition.tolerated.slice(0, 2).join(' | ')) || '（无）'}`].join('\n'))
 
     // ---- 帧落盘（脱敏后；--ws-frames off 不落盘） ----
     // 凭据可以出现在 URL 查询串里（`?token=…`），不只出现在帧载荷里：每个要落盘的
@@ -327,7 +339,7 @@ export async function runMobileWalkthrough({
     const reportPath = writeReport({
       outDir, target, cdpPort, url, device, secrets: credentials.secrets,
       results: rec.results,
-      frames: framesPath === null ? null : { summary: frameSummary.summary, counts: frameSummary.counts, file: framesPath },
+      frames: framesPath === null ? null : { summary: scrub(frameSummary.summary), counts: frameSummary.counts, file: framesPath },
       netFailures: summarizeNetFailures(session.netFailures),
       consoleErrors: session.consoleErrors.map(error => redactSecrets(error, credentials.secrets)),
       consoleWarnings: session.consoleWarnings.map(warning => redactSecrets(warning, credentials.secrets)),

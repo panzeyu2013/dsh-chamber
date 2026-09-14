@@ -18,11 +18,13 @@
  *      错误（exit 2 的那条路），`--help` 优先，`DSH_MOBILE_ANCHOR_ROOT` 兜底。
  *
  * 跑法：`node --test scripts/dev/verify-mobile-anchors.test.mjs`
- * （root `test:upgrade-tools` 目前逐文件列名，未包含本文件——见 §4 登记行的说明）。
+ * （root `test:upgrade-tools` 逐文件列名，本文件在其中——见 §4 登记行。）
  */
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { spawnSync } from 'node:child_process'
+import { copyFileSync, cpSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, sep } from 'node:path'
 import test from 'node:test'
 import { fileURLToPath } from 'node:url'
 import {
@@ -185,9 +187,18 @@ test('真语料：本包源码抽出的每一条上游锚点，都能被「只�
   // 自己的声明文本里命中——上游删掉发射点也照样绿（自证）。这里改成：语料只由
   // 合成发射件（UPSTREAM_TEXT，形态与真实产物一致）与仓内跨包发射方组成，
   // 插件源码只用于**抽锚点**，绝不参与证据。
-  const clientDir = join(ROOT, 'packages', 'dsh-chamber-client-ui-mobile', 'src', 'client')
-  const files = ['markup.ts', 'index.ts', 'styles.ts', 'composer.ts', 'MobileNavToggle.tsx', 'official-hover-card.ts', 'session-stall.ts']
-  const realSources = files.map(name => ({ path: `packages/dsh-chamber-client-ui-mobile/src/client/${name}`, text: readFileSync(join(clientDir, name), 'utf8') }))
+  // The file list is DISCOVERED, not written out: a hardcoded list stops covering
+  // the package the moment a source file is added (2026-12 review: it read 7 of
+  // the 13 files the gate reads).
+  const sourcesDir = join(ROOT, 'packages', 'dsh-chamber-client-ui-mobile', 'src')
+  const discovered = readdirSync(sourcesDir, { recursive: true, encoding: 'utf8' })
+    .filter(name => name.endsWith('.ts') || name.endsWith('.tsx'))
+    .sort()
+  assert.ok(discovered.length >= 10, `expected the package sources to be discovered, got ${discovered.length}`)
+  const realSources = discovered.map(name => ({
+    path: `packages/dsh-chamber-client-ui-mobile/src/${name.split(sep).join('/')}`,
+    text: readFileSync(join(sourcesDir, name), 'utf8'),
+  }))
   const extracted = extractDeclaredAnchors(realSources)
   const syntheticUpstream = [{ path: 'upstream/all.js', text: UPSTREAM_TEXT }]
   const findings = anchorFindings({ anchors: extracted.anchors, upstream: syntheticUpstream, chamber, required: REQUIRED_ANCHORS })
@@ -200,58 +211,113 @@ test('真语料：本包源码抽出的每一条上游锚点，都能被「只�
   assert.deepEqual(findings.violations, [])
 })
 
-test('防伪：注释、数组字面量、错误文案都不算上游发射证据', () => {
-  // 2026-12 review 的诱饵族：旧边界（前引号/后引号）会把这些当成「上游还在发射」。
+test('防伪：只有写入形算发射；注释/数组/文案/选择器/attr() 都不算', () => {
+  const anchors = [
+    { kind: 'attribute', token: 'data-chat-flow', path: 'x.ts', line: 1 },
+    { kind: 'attribute', token: 'data-chat-anchor-key', path: 'x.ts', line: 1 },
+    { kind: 'attribute', token: 'data-phase', path: 'x.ts', line: 1 },
+    { kind: 'attribute', token: 'data-sidebar-right-panel', path: 'x.ts', line: 1 },
+  ]
+  const verdicts = text => anchorFindings({
+    anchors, upstream: [{ path: 'upstream/all.js', text }], chamber: [], required: [],
+  }).rows.map(row => row.verdict)
+
+  // 消费形（CSS 规则 / 选择器 / attr()）与裸提及都不证明上游还在**写**这个属性。
+  // 2026-12 review：§4 登记行当初把 `[data-x]` 选择器也算证据，于是「上游删掉写入点、
+  // 只留一条死 CSS」的漂移照样绿——`data-ds-dark-theme` 的真实写入点是
+  // `document.body.toggleAttribute('data-ds-dark-theme', dark)`，而判定当时只认 CSS。
   const decoys = [
     '// upstream still emits "data-chat-flow" somewhere',
+    '// historically: jsx("div", { "data-chat-flow": "" })',
     '/* [data-chat-anchor-key] was removed upstream */',
     'const legacy = ["data-chat-flow", "data-chat-anchor-key"]',
-    'throw new Error("data-phase is gone")',
+    'throw new Error("[data-phase] is gone")',
+    'throw new Error("expected data-phase=active")',
+    'document.querySelector("[data-chat-flow]")',
+    'body[data-chat-flow]{display:flex}',
+    'css(":after{content:attr(data-sidebar-right-panel)}")',
   ].join('\n')
-  const findings = anchorFindings({
-    anchors: [
-      { kind: 'attribute', token: 'data-chat-flow', path: 'x.ts', line: 1 },
-      { kind: 'attribute', token: 'data-chat-anchor-key', path: 'x.ts', line: 1 },
-      { kind: 'attribute', token: 'data-phase', path: 'x.ts', line: 1 },
-      { kind: 'attribute', token: 'data-sidebar-right-panel', path: 'x.ts', line: 1 },
-    ],
-    upstream: [{ path: 'upstream/all.js', text: decoys }],
-    chamber: [],
-    required: [],
-  })
-  assert.deepEqual(findings.rows.map(row => row.verdict), ['missing', 'missing', 'missing', 'missing'],
-    'a bare mention is not an emission')
-  // 边界（有意保留，不是漏判）：**字符串字面量**里出现结构形仍算证据——真实发射
-  // 形态本身就是字符串（`jsx("div", { "data-x": … })`、`css("[data-x]{…}")`），把
-  // 字符串内容一并剥掉会删掉证据类本身。上面被拒的是「注释/数组/文案里的裸提及」。
-  const literal = anchorFindings({
-    anchors: [{ kind: 'attribute', token: 'data-sidebar-right-panel', path: 'x.ts', line: 1 }],
-    upstream: [{ path: 'upstream/all.js', text: 'const s = "[data-sidebar-right-panel]"' }],
-    chamber: [],
-    required: [],
-  })
-  assert.deepEqual(literal.rows.map(row => row.verdict), ['ok'])
-  // 结构形是同一条判定的正例：选择器、对象键、setAttribute、attr()。
+  assert.deepEqual(verdicts(decoys), ['missing', 'missing', 'missing', 'missing'],
+    'mentions and consumers are not emissions')
+  // 失败文案要说清「只有消费方证据」，别让人以为上游完全没提过它。
+  const messages = anchorFindings({
+    anchors: [anchors[0]], upstream: [{ path: 'upstream/all.js', text: 'body[data-chat-flow]{display:flex}' }],
+    chamber: [], required: [],
+  }).violations
+  assert.equal(messages.filter(message => message.includes('消费方')).length, 1, messages.join(' | '))
+
+  // 写入形才是证据：对象键（编译后的 JSX）、setAttribute/toggleAttribute。
   const real = anchorFindings({
-    anchors: [
-      { kind: 'attribute', token: 'data-chat-flow', path: 'x.ts', line: 1 },
-      { kind: 'attribute', token: 'data-chat-anchor-key', path: 'x.ts', line: 1 },
-      { kind: 'attribute', token: 'data-phase', path: 'x.ts', line: 1 },
-      { kind: 'attribute', token: 'data-tip', path: 'x.ts', line: 1 },
-    ],
+    anchors,
     upstream: [{
       path: 'upstream/all.js',
       text: [
-        'css("[data-chat-flow]{display:flex}")',
-        'jsx("div", { "data-chat-anchor-key": key })',
+        'jsx("div", { "data-chat-flow": "", "data-chat-anchor-key": key })',
         'node.setAttribute("data-phase", phase)',
-        'css(":after{content:attr(data-tip)}")',
+        "document.body.toggleAttribute('data-sidebar-right-panel', true)",
       ].join('\n'),
     }],
     chamber: [],
     required: [],
   })
   assert.deepEqual(real.rows.map(row => row.verdict), ['ok', 'ok', 'ok', 'ok'])
+  // 打包产物里 `data-x=` 只可能是文案/字符串（JS 标识符不能带 `-`），所以它只对
+  // .ts/.tsx 这类源码语料开启。
+  const jsxSource = anchorFindings({
+    anchors: [{ kind: 'attribute', token: 'data-phase', path: 'x.ts', line: 1 }],
+    upstream: [{ path: 'packages/example/src/X.tsx', text: '<div data-phase={phase} />' }],
+    chamber: [], required: [],
+  })
+  assert.deepEqual(jsxSource.rows.map(row => row.verdict), ['ok'])
+  const bundledString = anchorFindings({
+    anchors: [{ kind: 'attribute', token: 'data-phase', path: 'x.ts', line: 1 }],
+    upstream: [{ path: 'upstream/all.js', text: 'console.warn("expected data-phase=active")' }],
+    chamber: [], required: [],
+  })
+  assert.deepEqual(bundledString.rows.map(row => row.verdict), ['missing'],
+    'a bundled JS string is not a JSX attribute')
+  // 跨包锚点（data-git-action）查的是仓内发射方：同样的 TSX 属性写法在那里是证据。
+  const crossPackage = anchorFindings({
+    anchors: [{ kind: 'attribute', token: 'data-git-action', path: 'x.tsx', line: 1 }],
+    upstream: [],
+    chamber: [{ path: 'packages/dsh-chamber-client-ui-git/src/client/X.tsx', text: '<button data-git-action="stage" />' }],
+    required: [],
+  })
+  assert.deepEqual(crossPackage.rows.map(row => row.verdict), ['ok'])
+})
+
+test('防伪：role 的「文案」不算发射，只有对象键/选择器形才算', () => {
+  // 与属性锚点同一类假绿：`console.warn('role: "dialog" is gone')` 这种**文案**在旧
+  // 判定下能让一个已被上游改名的 role 继续绿。真实发射形（编译后的 JSX 属性表）值后
+  // 必是 `,`/`}` 收尾，所以冒号形加了收尾要求（2026-12 review）。
+  const decoy = anchorFindings({
+    anchors: [{ kind: 'role', token: 'dialog', path: 'x.ts', line: 1 }],
+    upstream: [{ path: 'upstream/all.js', text: `console.warn('role: "dialog" is gone')` }],
+    chamber: [],
+    required: [],
+  })
+  assert.deepEqual(decoy.rows.map(row => row.verdict), ['missing'], 'a message is not an emission')
+  for (const text of [
+    'jsx("div", { role: "dialog", "aria-modal": true })',
+    'jsx("div", { "role" : "dialog" })',
+    'node.setAttribute("role", "dialog")',
+  ]) {
+    const real = anchorFindings({
+      anchors: [{ kind: 'role', token: 'dialog', path: 'x.ts', line: 1 }],
+      upstream: [{ path: 'upstream/all.js', text }],
+      chamber: [],
+      required: [],
+    })
+    assert.deepEqual(real.rows.map(row => row.verdict), ['ok'], text)
+  }
+  // 消费形（CSS 选择器）单独存在时不算发射——与属性锚点同一条规则。
+  const selectorOnly = anchorFindings({
+    anchors: [{ kind: 'role', token: 'dialog', path: 'x.ts', line: 1 }],
+    upstream: [{ path: 'upstream/all.js', text: 'css("[role=\"dialog\"]{position:fixed}")' }],
+    chamber: [],
+    required: [],
+  })
+  assert.deepEqual(selectorOnly.rows.map(row => row.verdict), ['missing'])
 })
 
 test('data-tip 是上游锚点（不是本插件自打标）：上游零命中时必须硬失败', () => {
@@ -272,7 +338,54 @@ test('data-tip 是上游锚点（不是本插件自打标）：上游零命中�
     'an upstream rename of data-tip is now a hard failure')
 })
 
-test('最小断言集本身：19 项、无重复、kind 合法', () => {
+test('严格模式的「其实什么都没查」路径：源码缺失 ⇒ exit 1（默认仍 fail-soft）', () => {
+  // 2026-12 review：`--require-anchor-root` 的承诺是「区分正常跳过与其实什么都没查」，
+  // 但源码抽不到那条跳过路径当时仍 exit 0。用真实子进程跑一遍（这是退出码，只能端到端测）。
+  const root = mkdtempSync(join(tmpdir(), 'anchors-strict-'))
+  try {
+    mkdirSync(join(root, 'scripts', 'dev'), { recursive: true })
+    for (const name of ['verify-mobile-anchors.mjs', 'verify-mobile-anchors-args.mjs', 'mobile-anchors.mjs']) {
+      copyFileSync(join(ROOT, 'scripts', 'dev', name), join(root, 'scripts', 'dev', name))
+    }
+    const run = args => spawnSync(process.execPath, ['scripts/dev/verify-mobile-anchors.mjs', ...args], { cwd: root, encoding: 'utf8' })
+    const strict = run(['--require-anchor-root'])
+    assert.equal(strict.status, 1, `strict must not exit 0 with no sources: ${strict.stdout}`)
+    assert.match(strict.stderr, /没有可抽的插件源码/)
+    const fallback = run([])
+    assert.equal(fallback.status, 0, 'the default stays fail-soft (CI has no upstream tree)')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('严格模式的 pin 身份：读不到 lockfile ⇒ 明说「无法判定」并 exit 1', () => {
+  const root = mkdtempSync(join(tmpdir(), 'anchors-pin-'))
+  try {
+    mkdirSync(join(root, 'scripts', 'dev'), { recursive: true })
+    for (const name of ['verify-mobile-anchors.mjs', 'verify-mobile-anchors-args.mjs', 'mobile-anchors.mjs']) {
+      copyFileSync(join(ROOT, 'scripts', 'dev', name), join(root, 'scripts', 'dev', name))
+    }
+    // Sources present (so the run gets past that gate) but no in-repo lockfile.
+    cpSync(join(ROOT, 'packages', 'dsh-chamber-client-ui-mobile', 'src'), join(root, 'packages', 'dsh-chamber-client-ui-mobile', 'src'), { recursive: true })
+    // A fake anchor tree whose corpus SATISFIES every declared anchor (the same
+    // synthetic emissions the corpus test uses), so the run would otherwise exit 0
+    // — making the pin the only thing that can fail it.
+    const anchor = join(root, 'anchor')
+    mkdirSync(join(anchor, 'node_modules', '@deepseek-ai', 'fake', 'lib'), { recursive: true })
+    writeFileSync(join(anchor, 'node_modules', '@deepseek-ai', 'fake', 'lib', 'client.js'), UPSTREAM_TEXT)
+    const run = args => spawnSync(process.execPath, ['scripts/dev/verify-mobile-anchors.mjs', ...args], { cwd: root, encoding: 'utf8' })
+    const fallback = run(['--anchor-root', anchor])
+    assert.equal(fallback.status, 0, `the anchors themselves must pass on this corpus: ${fallback.stdout}${fallback.stderr}`)
+    assert.match(fallback.stdout, /pin 身份无法判定/, 'the default says so out loud, then keeps going')
+    const strict = run(['--require-anchor-root', '--anchor-root', anchor])
+    assert.equal(strict.status, 1, `strict must fail when the pin cannot be read: ${strict.stdout}`)
+    assert.match(strict.stderr + strict.stdout, /pin 身份无法判定/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('最小断言集本身：无重复、kind 合法，且与 §4 登记行逐项对得上', () => {
   assert.equal(REQUIRED_ANCHORS.length, 19)
   const keys = REQUIRED_ANCHORS.map(item => `${item.kind}:${item.token}`)
   assert.equal(new Set(keys).size, keys.length)
@@ -280,6 +393,18 @@ test('最小断言集本身：19 项、无重复、kind 合法', () => {
     assert.ok(['attribute', 'role', 'slot', 'hash'].includes(item.kind), item.kind)
     assert.ok(['plugin', 'external'].includes(item.declared), item.declared)
     assert.ok(typeof item.note === 'string' && item.note.length > 0)
+  }
+  // Doc lockstep (2026-12 review): a count alone just restates a constant. The
+  // registry row is the human half of this gate, so every required token must
+  // still be named there.
+  const registry = readFileSync(join(ROOT, 'docs/checklists/upstream-touchpoints.md'), 'utf8')
+  const row = registry.split('\n').find(line => line.includes('verify-mobile-anchors.mjs')) ?? ''
+  assert.ok(row.length > 0, 'the §4 row for the mobile anchor gate must exist')
+  for (const item of REQUIRED_ANCHORS) {
+    // Slot anchors may be named compactly in the row ("conversation.session.header
+    // 及其 actions/utilities/corner/lineage 四座"), so the tail segment counts.
+    const named = row.includes(item.token) || (item.kind === 'slot' && row.includes(item.token.split('.').pop() ?? ''))
+    assert.ok(named, `the §4 row must name the required anchor ${item.kind}:${item.token}`)
   }
 })
 

@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  HEADER_FIRST_ROW_MAX_PX, HIT_BOX_MIN_PX, MOBILE_DEVICE, deviceEmulationSteps, deviceEmulationVerdict,
+  HEADER_FIRST_ROW_MAX_PX, HIT_BOX_MIN_PX, MOBILE_DEVICE, applyRequireRun, deviceEmulationSteps, deviceEmulationVerdict,
   headerFirstRowVerdict, headerWrapVerdict, hitBoxVerdict, overflowVerdict, pluginActivationVerdict,
   redactSecrets, summarizeWebSocketFrames,
 } from './mobile-checks.mjs'
@@ -142,6 +142,21 @@ test('WS 帧摘要：有上行无下行 = 停滞形态；计数与 URL 去参数
   assert.ok(!summary.summary.includes('token=1'))
 })
 
+test('applyRequireRun：INFO 在 --require-run 下改判 FAIL，已判定的结论原样保留', () => {
+  // 2026-12 self-review：这条规则原先写在 walkthrough 驱动里（无 IO 的判据层
+  // 才是它的家，CI 才测得到）。语义与桌面档 checks.mjs 的 applyRequireHover 同构。
+  const info = { ok: null, evidence: '本次没有 CDP 目标' }
+  assert.deepEqual(applyRequireRun(info, false), info, '默认档：INFO 保持 INFO')
+  const strict = applyRequireRun(info, true)
+  assert.equal(strict.ok, false)
+  assert.match(strict.evidence, /--require-run/)
+  assert.match(strict.evidence, /本次没有 CDP 目标/, '原有证据必须保留')
+  const passing = { ok: true, evidence: 'ok' }
+  assert.deepEqual(applyRequireRun(passing, true), passing, '已通过的不受影响')
+  const failing = { ok: false, evidence: '真的失败了' }
+  assert.deepEqual(applyRequireRun(failing, true), failing, '已失败的不被覆盖证据')
+})
+
 test('脱敏：环境变量凭据值被抹掉，token/authorization/cookie 键的值也被抹掉', () => {
   const secret = 'super-secret-token-value'
   const redacted = redactSecrets(`{"authorization":"Bearer ${secret}","token":"abc12345","cookie":"sid=xyz9876"}`, [secret])
@@ -149,6 +164,47 @@ test('脱敏：环境变量凭据值被抹掉，token/authorization/cookie 键�
   assert.ok(!redacted.includes('abc12345'))
   assert.ok(!redacted.includes('xyz9876'))
   assert.match(redacted, /\*\*\*/)
+})
+
+test('脱敏：Bearer/Basic/Cookie 的**值**整段抹掉（只抹方案词等于没抹）', () => {
+  // 2026-12 review（P1）：旧规则的值类在第一个空格处停下，于是
+  // `"Authorization":"Bearer SECRET"` 变成 `"Authorization":"*** SECRET"`——
+  // 凭据本身原样落盘；嵌入在外层 JSON 里的转义引号形（`\"token\":\"x\"`）
+  // 更是一个字符都没抹。这些都是真会出现在 WS 帧里的形状。
+  const secret = 'SECRETFRAMETOKEN'
+  for (const [name, input] of [
+    ['quoted', `{"Authorization":"Bearer ${secret}"}`],
+    ['bare', `authorization: Bearer ${secret}`],
+    ['basic', 'Authorization: Basic Ym9iOnNlY3JldA=='],
+    ['cookie', `Cookie: sid=${secret}; other=1`],
+    ['escaped', `{"payload":"{\\"Authorization\\":\\"Bearer ${secret}\\"}"}`],
+    ['escaped token', '{"payload":"{\\"token\\":\\"abc12345\\"}"}'],
+    ['fragment', `https://h/#token=${secret}`],
+  ]) {
+    const out = redactSecrets(input, [])
+    assert.ok(!out.includes(secret), `${name}: ${out}`)
+    assert.ok(!out.includes('Ym9iOnNlY3JldA'), `${name}: basic 的 base64 也必须抹掉`)
+    assert.ok(!out.includes('abc12345'), `${name}: ${out}`)
+  }
+  // 不越界：同一条记录里后面的键值不受影响；查询串的其它参数保留。
+  assert.match(redactSecrets('Authorization: Bearer x, "next": 1', []), /"next": 1/)
+  assert.match(redactSecrets('ws://h/x?token=1&keep=1', []), /keep=1/)
+})
+
+test('帧摘要里的 payload 片段也过脱敏（它同样会被落盘/打印）', () => {
+  // 2026-12 review（P1）：脱敏只覆盖了帧文件的 payload 字段，摘要里的
+  // 「最后一帧上/下行」是另一条落盘通道（报告 md+json + M-8 证据 + stdout）。
+  const frames = [
+    { direction: 'sent', opcode: 1, payload: '{"Authorization":"Bearer SECRETFRAMETOKEN"}' },
+    { direction: 'received', opcode: 1, payload: '{"token":"abc12345"}' },
+  ]
+  const raw = summarizeWebSocketFrames(frames)
+  assert.ok(raw.summary.includes('SECRETFRAMETOKEN'), '前提：不注入脱敏时片段是原始的')
+  const scrub = value => redactSecrets(String(value), [])
+  const safe = summarizeWebSocketFrames(frames, { redact: scrub })
+  assert.ok(!safe.summary.includes('SECRETFRAMETOKEN'), safe.summary)
+  assert.ok(!safe.summary.includes('abc12345'), safe.summary)
+  assert.match(safe.summary, /最后一帧上行：opcode=1/)
 })
 
 test('脱敏：URL 查询串里的凭据也抹掉（长度不限——短 token 同样是凭据）', () => {
@@ -161,4 +217,13 @@ test('脱敏：URL 查询串里的凭据也抹掉（长度不限——短 token 
   const headers = redactSecrets('https://h/p?password=pw&cookie=session-abc', [])
   assert.ok(!headers.includes('password=pw'), headers)
   assert.ok(!headers.includes('cookie=session-abc'), headers)
+  // A query VALUE is one unit even when it contains characters the bare-header
+  // rule stops at (`,` and `;` are legal in a URL): only the query rule can take
+  // the whole thing, so this is the case that pins it (2026-12 self-review: a
+  // plain `?token=1` is already covered by the bare-value rule, which made the
+  // mutation of the query rule invisible).
+  const comma = redactSecrets('ws://h/x?token=abc,def&keep=1', [])
+  assert.ok(!comma.includes('def'), comma)
+  assert.match(comma, /token=\*\*\*&keep=1/)
+  assert.ok(!redactSecrets('ws://h/x?token=a;b', []).includes(';b'))
 })

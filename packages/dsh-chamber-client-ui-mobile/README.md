@@ -117,7 +117,9 @@ its hashed class or by its copy:
   `ConversationRoot`; `hero` is the no-session face and never qualifies, so an
   empty session cannot false-positive. `conversationPhase()`'s internal
   `blank`/`engaging` names never reach the attribute — the earlier note here
-  claimed that value space and was wrong),
+  claimed that value space and was wrong. Which arms of `settling` can actually
+  reach this predicate is decided by the header gate below, not by the phase
+  list: upstream hides the header in the blank-shell arm),
 - the flow subtree contains NO `[data-chat-anchor-key]` row,
 - the `conversation.session.header` `<header>` exists and is actually rendered
   (upstream hides it while the shell is blank, which is what keeps the
@@ -126,10 +128,17 @@ its hashed class or by its copy:
   is discarded rather than accumulated, because a frozen mobile timer must not
   replay a stale interval on resume — and
 - the session identity (and therefore the clock, the dismissal and the shown
-  notice) is the displayed `<header>` node, falling back to the phase node.
-  The phase node alone is NOT enough: `ui-layout`'s `main` slot is keyed by
-  entry identity, so `div.root[data-phase]` survives a session switch, while
-  the session-scoped header subtree is remounted.
+  notice) is the displayed `<header>` node, with NO fallback: `ui-layout`'s
+  `main` slot is keyed by entry identity, so `div.root[data-phase]` survives a
+  session switch, while the session-scoped header subtree is remounted. When no
+  header is displayed the shape is false anyway, so there is nothing to time.
+
+Known limit of the shape: `data-chat-anchor-key` is emitted only by the routed
+node wrapper, so a session with an EMPTY transcript and a pending first prompt
+(the optimistic submission echo) satisfies the shape and would be told the
+loading face is stalled. Narrowing that needs an anchor upstream does not expose
+(open state / a pending-echo attribute); the dismissal control is what keeps the
+false-positive cost at zero.
 
 The notice is `role="status"` / `aria-live="polite"`, anchored under the session
 header, `pointer-events: none` except its two controls, and never takes focus.

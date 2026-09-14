@@ -87,7 +87,10 @@ function compareAnchorPin(anchorRoot) {
   if (anchorManifest === null || lockfile === null) return null
   let anchorVersion = null
   try { anchorVersion = JSON.parse(anchorManifest).version ?? null } catch { return null }
-  const pinned = lockfile.match(/^\s{2}'@deepseek-ai\/dsh-web-frontend@([^']+)':/m)?.[1] ?? null
+  // pnpm keys carry a peer suffix on patched/peer-resolved entries
+  // (`'@deepseek-ai/dsh-web-frontend@0.1.5-rc.2(react@19.1.0)'`); the version is
+  // the part before the parenthesis (250 such keys exist in this lockfile).
+  const pinned = lockfile.match(/^\s{2}'@deepseek-ai\/dsh-web-frontend@([^'()]+)(?:\([^']*\))?':/m)?.[1] ?? null
   if (typeof anchorVersion !== 'string' || pinned === null) return null
   return { anchor: anchorVersion, pinned, same: anchorVersion === pinned }
 }
@@ -169,7 +172,13 @@ function main() {
 
   const sources = readMobileSources()
   if (sources.length === 0) {
-    console.error(`[SKIP] 找不到本包源码：${repoRel(MOBILE_PACKAGE)}/src/**/*.ts(x) 为空——无法抽锚点，跳过（exit 0）`)
+    const detail = `[SKIP] 找不到本包源码：${repoRel(MOBILE_PACKAGE)}/src/**/*.ts(x) 为空——无法抽锚点`
+    if (parsed.requireAnchorRoot) {
+      console.error(detail)
+      console.error('\n移动锚点门：--require-anchor-root 下没有可抽的插件源码（exit 1）')
+      process.exit(1)
+    }
+    console.error(`${detail}，跳过（exit 0）`)
     process.exit(0)
   }
   const { anchors, byKey } = extractDeclaredAnchors(sources)
@@ -200,7 +209,10 @@ function main() {
   const rawFiles = readUpstreamFiles(root)
   const rawCss = readShellCssFiles(root)
   if (rawFiles === null || rawFiles.clientHalves.length === 0) {
-    const detail = `[SKIP] 锚点根 ${root} 下没有 client 产物（node_modules/@deepseek-ai/**/lib/*.js）——fail-soft 跳过`
+    const shell = rawFiles === null ? 0 : rawFiles.shellBundles.length
+    const detail = `[SKIP] 锚点根 ${root} 下没有 client 产物（node_modules/@deepseek-ai/**/lib/*.js）`
+      + `（同一根下的 shell bundle ${shell} 个、shell CSS ${rawCss.length} 个）`
+      + '——不完整的树会让 data-* 锚点假红，fail-soft 跳过' 
     if (parsed.requireAnchorRoot) {
       console.error(detail)
       console.error('\n移动锚点门：--require-anchor-root 下锚点树没有 client 产物（exit 1）')
@@ -211,6 +223,16 @@ function main() {
   }
   // pin 身份：锚点树与仓内 pin 不是同一个上游时，这个门证明的是另一个版本。
   const pin = compareAnchorPin(root)
+  if (pin === null) {
+    const detail = `[note] pin 身份无法判定：读不到 ${join(ROOT, 'packages', 'desktop', 'vendor', 'dsh', 'pnpm-lock.yaml')}`
+      + ` 或锚点树里的 @deepseek-ai/dsh-web-frontend/package.json——本次运行没有验证「锚点树就是仓内 pin」`
+    if (parsed.requireAnchorRoot) {
+      console.error(`[FAIL] ${detail}`)
+      console.error('\n移动锚点门：--require-anchor-root 下 pin 身份不可判定（exit 1）')
+      process.exit(1)
+    }
+    console.log(detail)
+  }
   if (pin !== null) {
     if (!pin.same && parsed.requireAnchorRoot) {
       console.error(`[FAIL] 锚点树 dsh-web-frontend@${pin.anchor} != 仓内 pin @${pin.pinned}（packages/desktop/vendor/dsh/pnpm-lock.yaml）——查的不是这个 pin，先物化正确的树再跑`)

@@ -308,10 +308,13 @@ export function isHtmlDocumentNavigation(method: string | undefined, pathname: s
  * Content-addressed static asset path (M3-3 seam contract): Vite's
  * `[name]-[hash][extname]` output under `/assets/`, hash = exactly 8 base64url
  * characters (Vite's default hash width — every measured upstream name has 8),
- * extension exactly `js | css | woff2 | woff | svg`.
+ * extension exactly `js | css | woff2 | woff | ttf | svg`, and at most ONE nested
+ * directory (the pinned dist keeps fonts in `assets/fonts/` and the per-language
+ * chunks in `assets/langs/`; without the optional segment the rule could only
+ * ever reach the four top-level files — 2026-12 review).
  *
  * Measured 2026-12 upstream names: `index-BKQ_L1z6.js`, `cpp-DIPi6g--.js`,
- * `KaTeX_AMS-Regular-BQhdFMY1.woff2`. Deliberately NOT matched: unhashed root
+ * `KaTeX_AMS-Regular-BQhdFMY1.woff2` (the last one under `assets/fonts/`). Deliberately NOT matched: unhashed root
  * files (`favicon.svg`, `manifest.webmanifest`, `index.html`) — they carry no
  * `-<hash>` segment and/or an extension outside the set. The EXACT width is
  * what keeps an ordinary hyphenated name out: `/assets/my-super-long-file.js`
@@ -324,9 +327,16 @@ export function isHtmlDocumentNavigation(method: string | undefined, pathname: s
  * policy (this module never caches anything itself). Exported as the shared
  * naming rule for the M3-3 response-header seam's owner-side implementation.
  */
-const HASHED_STATIC_ASSET_PATTERN = /^\/assets\/[^/]+-[A-Za-z0-9_-]{8}\.(?:js|css|woff2?|svg)$/
+const HASHED_STATIC_ASSET_PATTERN = /^\/assets\/(?:[^/]+\/)?[^/]+-[A-Za-z0-9_-]{8}\.(?:js|css|woff2?|ttf|svg)$/
 
 export function isHashedStaticAssetPath(pathname: string): boolean {
+  // A build never emits `%` or a dot-segment in an asset name, while the
+  // upstream DECODES the path before resolving it — so
+  // `/assets/..%2f..%2fsec-12345678.js` is hash-SHAPED but can name a different
+  // file. Refusing both once, here, keeps the three callers (asset compression
+  // policy, static-serving's immutable rule, the gateway's cache stamp) on the
+  // same answer; a caller-local copy is how they drift apart.
+  if (pathname.includes('%') || pathname.includes('..')) return false
   return HASHED_STATIC_ASSET_PATTERN.test(pathname)
 }
 

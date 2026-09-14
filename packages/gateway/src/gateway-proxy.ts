@@ -59,6 +59,7 @@ const HASHED_ASSET_CONTENT_TYPES: ReadonlyArray<{ readonly extension: string; re
   { extension: '.css', pattern: /^text\/css\b/i },
   { extension: '.woff2', pattern: /^(?:font\/woff2|application\/(?:font-woff2|octet-stream))\b/i },
   { extension: '.woff', pattern: /^(?:font\/woff|application\/(?:font-woff|octet-stream))\b/i },
+  { extension: '.ttf', pattern: /^(?:font\/(?:ttf|sfnt)|application\/(?:x-font-ttf|x-font-sfnt|font-sfnt|octet-stream))\b/i },
   { extension: '.svg', pattern: /^image\/svg\+xml\b/i },
 ]
 
@@ -66,6 +67,12 @@ const HASHED_ASSET_CONTENT_TYPES: ReadonlyArray<{ readonly extension: string; re
  * Whether a 200 response for a content-addressed asset path carries a content
  * type the extension can actually produce. Pure; exported so the cache-stamp
  * guard is testable without an upstream.
+ *
+ * The `application/octet-stream` arm is deliberate: a server that does not know
+ * the font mime still serves the FONT bytes, and the case this guard exists for
+ * is the opposite one — an SPA fallback answering with `text/html`, which no
+ * extension/type row accepts. A mislabelled font stays a font; a mislabelled
+ * document is what poisons the URL.
  * @param pathname - the resolved upstream pathname (already hash-matched).
  * @param contentType - the upstream `content-type` header value.
  * @returns true only for a matching extension/type pair.
@@ -183,10 +190,8 @@ export function createGatewayProxy(deps: GatewayProxyDeps): GatewayProxy {
     // is untouchable from here.
     onUpstreamResponseHeaders: (pathname, status, headers) => {
       if (status !== 200 || !isHashedStaticAssetPath(pathname)) return
-      // A Vite asset name needs no decoding and has no dot-segments; the
-      // upstream DOES decode before resolving, so `/assets/..%2f..%2fsec-12345678.js`
-      // matches the hash pattern while naming a different file. Never pin those.
-      if (pathname.includes('%') || pathname.includes('..')) return
+      // (`%`-escaped and dot-segment paths are refused inside the predicate
+      // itself, so all three callers agree on what counts as an asset.)
       if (headers['content-range'] !== undefined) return
       if (headers['cache-control'] !== undefined || headers['etag'] !== undefined || headers['expires'] !== undefined) return
       if (!hashedAssetContentTypeMatches(pathname, headers['content-type'])) return

@@ -406,10 +406,8 @@
   宿主**都没有首帧超时**；收口需要**设备侧帧证据**（CDP WS Frames 或抓包），入口是
   `scripts/gui-acceptance/mobile-walkthrough.mjs`（其 `mobile-ws-frames.json` 落盘前
   过脱敏）。插件侧的「停滞提示 + 用户主动重载」兜底（`session-stall.ts`）判据全为
-  属性锚点，**但 45s 阈值仍未经真机校准**——真机对照前不得当成已验收；判据的状态
-  取值与「会话切换重置」两条已按 2026-12 复核修正（`data-phase` 的 DOM 取值空间是
-  `settling|hero|active`，会话身份取会话作用域的 header 节点），其依据写在该模块头注
-  与 `README.md`「Anchor baseline」。
+  属性锚点，**但 45s 阈值仍未经真机校准**——真机对照前不得当成已验收；形态的取值空间、
+  会话身份与已知误报边界见 `session-stall.ts` 头注与 `README.md`「Anchor baseline」。
 - **上游装载面的三项待办（本仓只登记，不改 upstream）**：① `dsh-client-modules`
   的 `compose()` 把**全部非 bootstrap 行**打进一个 application 批次、只按 URL 3 KiB
   切分（不按字节）⇒ 首屏一个 ~10.65 MiB 响应，其中 `ui-sidebar-documentpreview`

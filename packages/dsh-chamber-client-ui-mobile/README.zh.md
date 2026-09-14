@@ -85,15 +85,23 @@ gateway 访问）真正可用——窄屏抽屉化布局、触控目标、安全
 - 存在 `[data-chat-flow]` 列，且其最近的 `[data-phase]` 祖先进相为 `settling` 或
   `active`（DOM 取值空间恰为 settling / hero / active，由上游 `ConversationRoot`
   发出；hero 是「无会话」面，永不成立，空会话因此不会误报。`conversationPhase()`
-  内部的 `blank` / `engaging` 名字**从不到达该属性**——本文件早前那条说法是错的）；
+  内部的 `blank` / `engaging` 名字**从不到达该属性**——本文件早前那条说法是错的。
+  settling 的哪条臂真能走到这里由下面的头部门决定，不由相位表决定：blank 壳那条臂
+  上游会隐藏头部）；
 - flow 子树内**没有任何** `[data-chat-anchor-key]` 行；
 - `conversation.session.header` 的 `<header>` 存在且确实被渲染（上游在 blank 壳期
   隐藏它，这也是 settling 纳入后仍不会在无头面误报的原因）；
 - 该状态已连续持续 **45s 可见页面时间**——后台时间**丢弃而不累计**，因为被冻结的
   移动端定时器在恢复时不得按过期时间戳一次性补算；
 - 会话身份（以及随之的计时、忽略动作与已显示的提示）是**被渲染的 `<header>` 节点**，
-  取不到时回落到 phase 节点。只认 phase 节点不够：`ui-layout` 的 `main` 槽按条目
-  身份做 key，`div.root[data-phase]` 会跨会话原地复用，而会话作用域的头部子树会重挂。
+  **没有回落**：`ui-layout` 的 `main` 槽按条目身份做 key，`div.root[data-phase]` 会
+  跨会话原地复用，而会话作用域的头部子树会重挂；头部不显示时形态本就为假，没有东西
+  需要计时。
+
+形态的已知边界：`data-chat-anchor-key` 只由 routed node 包装层发出，因此「空会话 +
+首个提问尚未落盘（乐观提交气泡）」也满足形态，此时用户会被告知载入面停滞。要收窄
+需要上游目前不暴露的锚点（open 状态 / pending 气泡属性）；把误报代价压到零的是
+「继续等待」控件。
 
 提示是 `role="status"` / `aria-live="polite"`，锚在会话头下方，除两个控件外
 `pointer-events: none`，从不抢焦点。主操作是**用户主动**的页面重载；次控件

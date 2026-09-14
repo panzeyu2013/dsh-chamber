@@ -36,9 +36,13 @@
  *     `conversationPhase()` contract never reach the attribute). `hero` is the
  *     no-session face where an empty column is CORRECT, so excluding it is what
  *     keeps a brand-new empty session from being reported as stalled;
- *     `settling` (a session is open but the shell is still blank/loading, or a
- *     continuable subagent is waiting for its parent catalog) and `active` are
- *     the two faces that present a real session, and both are INCLUDED.
+ *     `settling` and `active` are the two non-hero faces and both are INCLUDED
+ *     (2026-12 review correction: an earlier note here claimed `settling` was
+ *     "a session opening its history with a visible header" — which upstream's
+ *     own gating makes unreachable, because that arm also hides the header. The
+ *     inclusion is justified by the value space alone: it is a real-session face
+ *     that is not `hero`, and the header gate below decides whether a session is
+ *     actually presented).
  *     Ancestor coupling (rather than a bare document-wide phase existence
  *     test) also keeps the phase and the flow provably the same surface: no
  *     cross-root misfire.
@@ -63,8 +67,8 @@
  * recovers, so a background/resume round trip cannot take it away for another
  * full threshold.
  *
- * The SESSION IDENTITY is the displayed `<header>` node, falling back to the
- * phase node when no header is displayed. This matters because the phase node
+ * The SESSION IDENTITY is the displayed `<header>` node. This matters because
+ * the phase node
  * is NOT session-scoped: ui-layout's `main` slot is `{kind:'keyed',
  * scope:'root'}` and its React key is the stable entry identity, so the
  * `div.root[data-phase]` element survives a session switch and is re-rendered
@@ -72,9 +76,12 @@
  * (`conversation.session.header` is `{kind:'single', scope:'session'}`, and
  * the renderer keys that subtree by the session binding), so its `<header>`
  * element is replaced on a switch — which is what resets both the clock and a
- * shown notice when the user moves to another session. A session switch to a
- * face whose header is hidden is already handled: `headerVisible` failing
- * breaks the shape, and a broken shape zeroes the clock.
+ * shown notice when the user moves to another session. There is deliberately NO
+ * fallback to the phase node (2026-12 review: it was unreachable anyway, since
+ * no displayed header means the shape is already false, and keeping it implied
+ * a second identity source that cannot exist). A session switch to a face whose
+ * header is hidden needs no identity at all: `headerVisible` failing breaks the
+ * shape, and a broken shape zeroes the clock.
  *
  * THE SURFACE. A body-level, fixed, top-anchored notice: non-modal, never
  * focused, never covering the composer (it sits under the session header it
@@ -108,6 +115,18 @@
  * re-audited when the vendored dsh pin moves, like every other anchor in this
  * package. A drifted anchor makes the notice a silent no-op — fail closed,
  * never a misfire.
+ *
+ * KNOWN FALSE-POSITIVE ENVELOPE (2026-12 review, pre-existing): the shape cannot
+ * tell "the loading hint is stuck" from "a real session with an EMPTY transcript
+ * and a pending first prompt". `data-chat-anchor-key` is emitted by the routed
+ * node wrapper only, so an optimistic submission echo (upstream
+ * `PendingSubmissionBubble`) renders with no row anchor, and `data-phase` is
+ * `active` for the `engaging` face too — both satisfy the shape. The notice
+ * would then say "loading appears stalled" while the loading hint is not on
+ * screen. This needs an anchor upstream does not expose (openState / a
+ * pending-echo attribute) before it can be narrowed; the dismissal control is
+ * what keeps the cost to the user at zero, and this note records the limit
+ * rather than implying the shape is exact.
  *
  * NOT COVERED: the instance-origin frontend opened DIRECTLY (e.g. :17510) has
  * no chamber client plugin at all, and a stall on a fine-pointer desktop
@@ -147,10 +166,13 @@ export const CONVERSATION_PHASE_QUERY = '[data-phase]'
 
 /** The phases that present a REAL conversation — the ones where an empty
  *  message column is a fault rather than the correct empty face. `hero` (no
- *  session) is the only exclusion; `settling` is included because a session
- *  that is still opening its history is exactly the state this notice exists
- *  for, and the header-visibility gate below keeps the sub-case where upstream
- *  hides the header (blank shell) out. */
+ *  session) is the only exclusion. `settling` is included on the strength of
+ *  the value space alone (it is a real-session phase, not the empty face);
+ *  WHICH of its arms can actually reach this predicate is decided by the
+ *  header-visibility gate below, not here — in the blank-shell arm upstream
+ *  hides the header, so the shape cannot hold there (2026-12 review correction;
+ *  an earlier comment claimed this inclusion covered "a session opening its
+ *  history", which that gating makes unreachable). */
 export const STALL_PHASES: readonly string[] = ['settling', 'active']
 
 /** Is this root phase one where an empty flow means "stalled"? */
@@ -606,10 +628,11 @@ export function installSessionStallNotice(t: (key: MobileKey) => string): () => 
       const probe = probeStall(document, {
         isVisible: node => isVisibleElement(node as unknown as Element),
       })
-      // A different session (its header node, else its conversation root) is a
-      // different stall: the clock, the dismissal and any shown notice belong
-      // to the session they were started for.
-      const anchor = probe.header ?? probe.activeRoot
+      // A different session (its header node) is a different stall: the clock,
+      // the dismissal and any shown notice belong to the session they were
+      // started for. No fallback is needed: no displayed header means the shape
+      // is false, which already resets everything below.
+      const anchor = probe.header
       if (anchor !== sessionAnchor) {
         sessionAnchor = anchor
         since = 0
@@ -635,7 +658,9 @@ export function installSessionStallNotice(t: (key: MobileKey) => string): () => 
       // Once announced, the notice STANDS until the shape itself recovers: the
       // clock is discarded in the background, so recomputing the decision alone
       // would take the notice away for another full threshold on resume.
-      if (decision.show || (shape && !dismissed && notice !== null)) mount(probe.header)
+      // (`dismissed` needs no re-check here: the only setter also unmounts, so a
+      // mounted notice implies it is false.)
+      if (decision.show || (shape && notice !== null)) mount(probe.header)
       else unmount()
     } catch {
       // Fail closed: a notice watcher must never break the page it watches.

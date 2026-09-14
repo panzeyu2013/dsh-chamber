@@ -838,3 +838,23 @@ test('stop() retains the stateDir lock when runtime writer disposal is unsafe', 
     rmSync(stateDir, { recursive: true, force: true })
   }
 })
+
+test('stop() drains the audit windows the fence-time drain could not see (wiring lock)', async () => {
+  // The behavioural half lives in audit.test.ts: flushAuditWindows() publishes a
+  // window opened after the quiesce fence and is idempotent. That test calls the
+  // method itself, so it cannot see the WIRING — a 2026-12 mutation battery
+  // deleted the production call and every test stayed green, which is the exact
+  // false-green shape this file exists to prevent. Pin the call site and its
+  // order instead: the drain must follow the plane stop (by then the listener is
+  // closed, so no further rejection can open a window), and there must be
+  // exactly one call.
+  const source = readFileSync(new URL('../src/index.ts', import.meta.url), 'utf8')
+  const stops = [...source.matchAll(/await createdPlane\.stop\(\)/g)].map(match => match.index)
+  const drain = source.indexOf('dispatch.flushAuditWindows()')
+  assert.equal(stops.length, 2, 'the two plane-stop sites: the startup-rollback branch and the stop operation')
+  assert.ok(drain !== -1, 'the stop path must drain the audit debounce windows')
+  assert.ok(drain > stops[1]!, 'the drain must follow the LAST plane stop (the awaited stop operation)')
+  assert.ok(drain > stops[0]!, 'and therefore also the rollback-branch stop')
+  assert.equal(source.split('dispatch.flushAuditWindows()').length - 1, 1,
+    'exactly one drain call site (the post-close one)')
+})

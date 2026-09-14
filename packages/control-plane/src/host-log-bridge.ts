@@ -233,7 +233,6 @@ function fallbackFormat(message) {
 export default function chamberHostLogBridge(ctx) {
   try {
     if (ctx === null || typeof ctx !== 'object' || MOUNTED.has(ctx)) return
-    MOUNTED.add(ctx)
     let render = fallbackFormat
     try {
       const Logger = ctx.logger('chamber-host-log-bridge').constructor
@@ -247,7 +246,7 @@ export default function chamberHostLogBridge(ctx) {
     // an uncaught stream error that takes the host down with it.
     try { process.stderr.on('error', function () {}) } catch { /* ignore */ }
     const mount = function () {
-      return ctx.logger.exporter({
+      const sink = {
         colors: 0,
         maxLength: MAX_LINE_CHARS,
         levels: { default: LEVEL },
@@ -257,16 +256,45 @@ export default function chamberHostLogBridge(ctx) {
             for (const line of lines) process.stderr.write(line.slice(0, MAX_LINE_CHARS) + '\\n')
           } catch { /* diagnostics must never break the host */ }
         },
-      })
+      }
+      const returned = ctx.logger.exporter(sink)
+      // The pinned cordis disposer deletes the CURRENT counter entry
+      // (exporters.delete(this._snExporter), logger.ts:232-237), not this
+      // registration's own id. It therefore removes whichever exporter
+      // registered LAST: with another exporter mounted after ours it would kill
+      // THAT one and leave ours installed, so the next mount would double every
+      // application line. Remove our own entry by identity instead (exporters is
+      // a public Map on the service); the returned disposer is deliberately
+      // unused.
+      void returned
+      return function () {
+        try {
+          for (const entry of ctx.logger.exporters) {
+            if (entry[1] === sink) ctx.logger.exporters.delete(entry[0])
+          }
+        } catch { /* ignore */ }
+      }
     }
     // LoggerService.exporter() registers its effect on the ROOT context (the
     // service's own ctx), so an exporter mounted directly here would outlive
     // this plugin's fiber: a loader remount would leave the previous exporter
     // installed and every application line would reach stderr twice (N times
     // after N remounts). Re-own the registration through THIS fiber's effect,
-    // whose disposer removes the exporter when the plugin unloads.
-    if (typeof ctx.effect === 'function') ctx.effect(mount, 'chamber host log bridge exporter')
-    else mount()
+    // whose disposer (ours, identity-based) removes the exporter when the plugin
+    // unloads. MOUNTED is cleared by that same disposer: a same-fiber reload
+    // (Fiber.update re-runs the plugin with the SAME ctx) disposes the effect
+    // first, so marking ownership outside the effect would suppress the
+    // re-mount and silently stop the bridge.
+    const run = function () {
+      MOUNTED.add(ctx)
+      const dispose = mount()
+      return function () {
+        MOUNTED.delete(ctx)
+        dispose()
+      }
+    }
+    if (typeof ctx.effect === 'function') ctx.effect(run, 'chamber host log bridge exporter')
+    else run()
     process.stderr.write('[chamber] host log bridge active (level=' + LEVEL_NAME + ')\\n')
   } catch { /* a broken bridge must never fail the host boot */ }
 }

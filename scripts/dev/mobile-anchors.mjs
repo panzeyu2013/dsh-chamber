@@ -56,6 +56,12 @@ const OWN_ATTRIBUTE_PATTERNS = [
  * 而不是上游。`data-git-action` 是 2026-09-11 upstream-alignment 定下的
  * 侧栏 git 动作钩子（styles.ts 头注），发射方在 git 插件里。
  */
+/**
+ * 仓内跨包发射方：这些属性由**别的** chamber 包发射，所以查本仓发射方而不是上游。
+ * 注意：本插件当前不声明其中任何一条（git 插件自己发射 `data-git-action`，移动端
+ * 只在注释里提到它），所以 `--list` 的「跨包」计数是 0——这条规则是为「移动端真的
+ * 用上该钩子」预留的，不是死代码待删，也不假装今天在保护什么（2026-12 review）。
+ */
 export const CHAMBER_CROSS_PACKAGE = {
   'data-git-action': 'packages/dsh-chamber-client-ui-git',
 }
@@ -241,33 +247,85 @@ export function anchorCategory(anchor) {
 }
 
 /**
- * 属性锚点在上游产物里的发射形态。只认**结构形**，不认「裸提及」：
- *   1. CSS 属性选择器：`[data-x]`、`[data-x=…]`、`[data-x~=…]` 等；
- *   2. 对象键 / JSX 编译产物：`"data-x":`、`'data-x':`；
- *   3. 属性写入：`setAttribute("data-x"`，以及 JSX/HTML 模板里的 `data-x=`；
- *   4. CSS 消费：`attr(data-x)`（`content: attr(data-tip)` 这类）。
- *
- * 为什么收紧（2026-12 review）：旧边界只要求「前后是引号/括号」，于是
- * `// upstream emits "data-x"` 这样的注释、或 `["data-x"]` 这样的数组，都能充当
- * 「上游仍在发射」的证据——上游真把发射点删掉、只留一句提及，门禁照样绿。C15 对
- * 形状检查用的是「去注释 + 去字符串」投影，这里用「只认结构形」达到同样的防伪
- * 效果，且不需要写 JS 词法分析器。用 `String.raw` 写，避免 `\\]` 在字符类里提前
- * 闭合——这个坑在首版里让三个 dockkit 锚点假红过一次。
+ * 属性锚点的证据分两级（2026-12 review 起）。**写入形**证明上游仍在发射：
+ *   1. 对象键 / 编译后的 JSX 属性：`"data-x":`、`'data-x':`；
+ *   2. DOM 写入：`setAttribute(` / `toggleAttribute(` / `removeAttribute(`；
+ *   3. JSX 源码里的属性写法 `data-x=`（**只对 `.ts/.tsx` 这类源码语料开启**；
+ *      打包产物里 `data-x=` 只可能出现在字符串/文案里，那是诱饵面：见下）。
+ * 另有**消费形**（选择器 `[data-x…]`、CSS `attr(data-x)`）：它们只证明页面**用**这个
+ * 属性，不证明上游还在**写**它——上游删掉写入点、留下一条死 CSS，旧判定照样绿
+ * （`data-ds-dark-theme` 正是这样：唯一写入点是
+ * `document.body.toggleAttribute('data-ds-dark-theme', dark)`，其余全是 CSS 规则）。
+ * 因此：属性锚点的判定只认写入形；只有消费形 ⇒ 硬失败并点名（判据见
+ * anchorFindings）。注释里的裸提及、数组字面量、错误文案都不算——语料先过
+ * stripCommentsKeepingLines 投影，而"文案里带结构形"（如
+ * `console.warn("[data-x] is gone")`）落在消费形那一级，同样不能决定判定。
  */
-function attributePattern(token) {
+const SOURCE_SYNTAX_PATH = /\.(?:ts|tsx|mts|cts)$/
+
+function attributeEmissionPatterns(token, { sourceSyntax = false } = {}) {
   const escaped = escapeRe(token)
-  return new RegExp([
-    String.raw`\[${escaped}(?=[\]~^$*|=])`,
-    String.raw`["']${escaped}["']\s*:`,
-    String.raw`setAttribute\(\s*["']${escaped}["']`,
-    String.raw`(?<![\w-])${escaped}\s*=`,
-    String.raw`attr\(\s*${escaped}\s*\)`,
-  ].join('|'))
+  return [
+    new RegExp(String.raw`["']${escaped}["']\s*:`),
+    new RegExp(String.raw`(?:set|toggle|remove)Attribute\(\s*["']${escaped}["']`),
+    ...(sourceSyntax ? [new RegExp(String.raw`(?<![\w-])${escaped}\s*=`, 'i')] : []),
+  ]
 }
 
-/** role 锚点在上游产物里的发射形态：`role:"dialog"`、`"role":"dialog"`、`[role="dialog"]`。 */
-function rolePattern(role) {
-  return new RegExp(`(?:["']?role["']?\\s*:\\s*["']${escapeRe(role)}["']|\\[role=["']${escapeRe(role)}["']\\])`)
+function attributeSelectorPatterns(token) {
+  const escaped = escapeRe(token)
+  return [
+    new RegExp(String.raw`\[${escaped}(?=[\]~^$*|=])`),
+    new RegExp(String.raw`attr\(\s*${escaped}\s*\)`),
+  ]
+}
+
+/**
+ * role 锚点同样分两级：**写入形**是 `role:"dialog"` / `"role":"dialog"` /
+ * `setAttribute("role"`（值后必须是 `,`/`}`/`]`/`;`/`)` 收尾，否则
+ * `console.warn('role: "dialog" is gone')` 这种**文案**就成了发射证据）；**消费形**是
+ * CSS 的 `[role="dialog"]`。当前 pin 上 8 个 role 锚点全都有写入形证据。
+ */
+function roleEmissionPatterns(role) {
+  // NOT accepted: an HTML-template `role="dialog"` (the pinned renderer compiles
+  // JSX, so it emits the colon form) — if a future pin ever ships that shape the
+  // gate goes red and asks for a re-anchor rather than silently passing.
+  const escaped = escapeRe(role)
+  return [
+    new RegExp(`["']?role["']?\\s*:\\s*["']${escaped}["'](?=\\s*[,}\\];)])`),
+    new RegExp(`(?:set|toggle|remove)Attribute\\(\\s*["']role["']\\s*,\\s*["']${escaped}["']`),
+  ]
+}
+
+function roleSelectorPatterns(role) {
+  return [new RegExp(`\\[role=["']${escapeRe(role)}["']\\]`)]
+}
+
+/** 按「写入形优先」取证据：有写入形就只报写入形，否则回落消费形（判定方决定
+ *  这是硬失败还是可接受）。 */
+function evidenceByStrength(files, emissionPatternsFor, selectorPatterns) {
+  const emissions = files
+    .filter(file => emissionPatternsFor(file).some(pattern => pattern.test(file.text)))
+    .map(file => file.path)
+  if (emissions.length > 0) return { emissions, selectors: [] }
+  const selectors = files
+    .filter(file => selectorPatterns.some(pattern => pattern.test(file.text)))
+    .map(file => file.path)
+  return { emissions: [], selectors }
+}
+
+/** 属性锚点：写入形 / 消费形两份证据（导出以便负例测试直接钉判定边界）。 */
+export function attributeEvidence(files, token) {
+  return evidenceByStrength(
+    files,
+    file => attributeEmissionPatterns(token, { sourceSyntax: SOURCE_SYNTAX_PATH.test(file.path) }),
+    attributeSelectorPatterns(token),
+  )
+}
+
+/** role 锚点：写入形 / 消费形两份证据。 */
+export function roleEvidence(files, role) {
+  return evidenceByStrength(files, () => roleEmissionPatterns(role), roleSelectorPatterns(role))
 }
 
 /**
@@ -293,14 +351,48 @@ export function slotEvidencePatterns(slot) {
  * @returns {string[]} 命中的文件路径（去重，稳定顺序）。
  */
 export function anchorEvidence(files, anchor) {
-  const patterns = anchor.kind === 'role'
-    ? [rolePattern(anchor.token)]
-    : anchor.kind === 'slot'
-      ? slotEvidencePatterns(anchor.token)
-      : anchor.kind === 'attribute'
-        ? [attributePattern(anchor.token)]
-        : [new RegExp(escapeRe(anchor.token))]
+  // attribute/role 走「写入形优先」的两级判定；slot / hash 仍是单一形态集。
+  if (anchor.kind === 'attribute') {
+    const { emissions, selectors } = attributeEvidence(files, anchor.token)
+    return emissions.length > 0 ? emissions : selectors
+  }
+  if (anchor.kind === 'role') {
+    const { emissions, selectors } = roleEvidence(files, anchor.token)
+    return emissions.length > 0 ? emissions : selectors
+  }
+  const patterns = anchor.kind === 'slot'
+    ? slotEvidencePatterns(anchor.token)
+    : [new RegExp(escapeRe(anchor.token))]
   return files.filter(file => patterns.some(pattern => pattern.test(file.text))).map(file => file.path)
+}
+
+/** 一个锚点的证据强度：attribute/role 分写入形与消费形，其余 kind 只有一种形态
+ *  （命中即写入形，消费形为空）。 */
+function strengthOf(files, anchor) {
+  if (anchor.kind === 'attribute') return attributeEvidence(files, anchor.token)
+  if (anchor.kind === 'role') return roleEvidence(files, anchor.token)
+  return { emissions: anchorEvidence(files, anchor), selectors: [] }
+}
+
+/**
+ * 「没有写入点」的失败文案。两种可能都要写出来，读的人才知道下一步做什么：
+ * 上游真删了写入点（留下死 CSS），或写入形态没被本门识别。消费方命中要点名，
+ * 那正是「看着还在、其实已经不再发射」的那一类。
+ *
+ * @param {{kind: string, token: string}} anchor
+ * @param {string} where - 声明处 `path:line`。
+ * @param {string} label - 中文类别名（如「attribute 锚点」）。
+ * @param {string} corpusName - 语料名（上游产物 / 本仓发射方）。
+ * @param {string[]} selectorHits - 消费形证据文件（可为空）。
+ * @param {string} extra - 追加信息（如跨包发射方路径），可为空。
+ */
+function noEmissionMessage(anchor, where, label, corpusName, selectorHits, extra = '') {
+  const detail = selectorHits.length > 0
+    ? `只有**消费方**证据（选择器/CSS：${selectorHits[0]}），没有任何写入点`
+      + '——上游可能已停止发射它（留下的是死 CSS），或它的写入形态未被本门识别（dataset./toggleAttribute/其它 API 变体）'
+    : '在语料里零命中（连消费方证据都没有）'
+  return `${label} ${anchor.token} 在${corpusName}${detail}。请按 design 17 §18.4.3 重锚，`
+    + `或把该形态补进 scripts/dev/mobile-anchors.mjs（声明于 ${where}）${extra === '' ? '' : `；${extra}`}`
 }
 
 /**
@@ -354,20 +446,31 @@ export function anchorFindings({ anchors, upstream, chamber, required = REQUIRED
       continue
     }
     if (category === 'chamber-cross-package') {
-      const evidence = anchorEvidence(chamber, anchor)
-      rows.push({ ...anchor, category, verdict: evidence.length > 0 ? 'ok' : 'missing', evidence })
-      if (evidence.length === 0) {
-        violations.push(`chamber 跨包锚点 ${anchor.token} 在本仓发射方零命中（${where} 声明的契约已断；发射方=${CHAMBER_CROSS_PACKAGE[anchor.token]}）`)
+      const evidence = strengthOf(chamber, anchor)
+      const proof = evidence.emissions.length > 0 ? evidence.emissions : evidence.selectors
+      rows.push({ ...anchor, category, verdict: evidence.emissions.length > 0 ? 'ok' : 'missing', evidence: proof })
+      if (evidence.emissions.length === 0) {
+        violations.push(noEmissionMessage(anchor, where, 'chamber 跨包锚点', '本仓发射方',
+          evidence.selectors, `发射方=${CHAMBER_CROSS_PACKAGE[anchor.token]}`))
       }
       continue
     }
-    const evidence = anchorEvidence(upstream, anchor)
+    const evidence = strengthOf(upstream, anchor)
     const hard = HARD_KINDS.has(anchor.kind)
-    rows.push({ ...anchor, category, verdict: evidence.length > 0 ? 'ok' : (hard ? 'missing' : 'advisory'), evidence })
-    if (evidence.length === 0) {
+    const proof = evidence.emissions.length > 0 ? evidence.emissions : evidence.selectors
+    rows.push({
+      ...anchor,
+      category,
+      verdict: evidence.emissions.length > 0 ? 'ok' : (hard ? 'missing' : 'advisory'),
+      evidence: proof,
+    })
+    if (evidence.emissions.length === 0) {
       const message = `${anchor.kind} 锚点 ${anchor.token} 在上游产物零命中（声明于 ${where}，形态 ${anchor.form}）`
-      if (hard) violations.push(`${message}——本插件的规则已静默 no-op，请按 design 17 §18.4.3 重锚`)
-      else advisories.push(`${message}——build-time 哈希 token，pin 一动必变：属于「pin 前移必须重锚」的登记项，不判失败`)
+      if (hard) {
+        violations.push(noEmissionMessage(anchor, where, `${anchor.kind} 锚点`, '上游产物', evidence.selectors))
+      } else {
+        advisories.push(`${message}——build-time 哈希 token，pin 一动必变：属于「pin 前移必须重锚」的登记项，不判失败`)
+      }
     }
   }
 
@@ -378,10 +481,15 @@ export function anchorFindings({ anchors, upstream, chamber, required = REQUIRED
       violations.push(`最小断言集要求插件声明 ${item.kind} 锚点 ${item.token}，但源码里抽不到——插件侧改名/删除，或该锚点所属功能被移除`
         + `（后者应把本项与 docs/checklists/upstream-touchpoints.md §4 的登记行一起删）：${item.note}`)
     }
-    const upstreamEvidence = anchorEvidence(upstream, item)
+    // 与方向 A 同一条强度规则：只有**写入形**才算「上游还在发射」，选择器/CSS 是
+    // 消费方证据，不能单独支撑最小断言集。
+    const strength = strengthOf(upstream, item)
+    const upstreamEvidence = strength.emissions.length > 0 ? strength.emissions : strength.selectors
     const hard = HARD_KINDS.has(item.kind)
-    if (upstreamEvidence.length === 0 && hard) {
-      violations.push(`最小断言集要求上游发射 ${item.kind} 锚点 ${item.token}，但产物里零命中（${item.note}；声明侧=${item.declared}）`)
+    if (strength.emissions.length === 0 && hard) {
+      violations.push(strength.selectors.length > 0
+        ? noEmissionMessage(item, '最小断言集', `${item.kind} 锚点`, '上游产物', strength.selectors, `声明侧=${item.declared}`)
+        : `最小断言集要求上游发射 ${item.kind} 锚点 ${item.token}，但产物里零命中（${item.note}；声明侧=${item.declared}）`)
     }
     if (upstreamEvidence.length === 0 && !hard) {
       advisories.push(`最小断言集里的 build-time 哈希 token ${item.token} 在上游产物零命中（${item.note}）`)

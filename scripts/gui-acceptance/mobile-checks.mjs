@@ -322,13 +322,46 @@ export function pluginActivationVerdict(facts) {
 }
 
 /**
+ * Opt-in strictness for legs that may legitimately not run (`--require-run`).
+ *
+ * The mobile twin of `checks.mjs`'s `applyRequireHover`, and it exists for the
+ * same reason: a verdict of `ok === null` is INFO — the environment did not
+ * offer the thing the leg judges (no CDP target, a page that never mounted, no
+ * session in the header), so the leg decided nothing. INFO keeps a run green by
+ * design, which is exactly how "nothing was exercised" gets misread as
+ * "verified"; this helper turns that into a FAIL when the run asked for the leg
+ * to really execute. It is a re-labelling ONLY: a verdict that already decided
+ * (`ok === true` / `ok === false`) is returned untouched, so a pass stays a pass
+ * and an existing failure keeps its own evidence.
+ *
+ * @param {{ok: boolean|null, evidence: string}} verdict
+ * @param {boolean} requireRun - whether this run demands the leg actually ran.
+ * @returns the original verdict, or its FAIL re-labelling.
+ */
+export function applyRequireRun(verdict, requireRun) {
+  if (requireRun !== true || verdict.ok !== null) return verdict
+  return {
+    ...verdict,
+    ok: false,
+    evidence: `${verdict.evidence}（--require-run：本次运行要求该腿必须真实执行）`,
+  }
+}
+
+/**
  * WebSocket 帧摘要（`Network.webSocketFrameSent/Received` + created/closed/error）。
  * 这是「会话打开停滞」唯一缺的证据来源：帧有没有发出去、上游有没有回。
  *
+ * The payload snippets below are the ONE place raw frame bytes leave this module,
+ * and the summary is persisted (report md+json) and printed. `redact` is applied
+ * to every snippet BEFORE slicing, so a handshake frame carrying
+ * `Authorization: Bearer …` cannot ride the summary past the redaction the frame
+ * FILE goes through (2026-12 review).
+ *
  * @param {Array<{direction: string, url?: string, opcode?: number, payload?: string, at?: number}>} frames
+ * @param {{redact?: (value: string) => string}} [options]
  * @returns {{counts: object, summary: string}}
  */
-export function summarizeWebSocketFrames(frames) {
+export function summarizeWebSocketFrames(frames, { redact = value => value } = {}) {
   const counts = { created: 0, sent: 0, received: 0, closed: 0, error: 0 }
   for (const frame of frames) {
     if (Object.hasOwn(counts, frame.direction)) counts[frame.direction] += 1
@@ -339,8 +372,8 @@ export function summarizeWebSocketFrames(frames) {
   const summary = [
     `created=${counts.created} sent=${counts.sent} received=${counts.received} closed=${counts.closed} error=${counts.error}`,
     urls.length === 0 ? '未观察到 WebSocket 连接' : `连接=${urls.map(url => url.replace(/[?#].*$/, '')).join(', ')}`,
-    lastSent === undefined ? '' : `最后一帧上行：opcode=${lastSent.opcode} ${JSON.stringify(lastSent.payload ?? '').slice(0, 120)}`,
-    lastReceived === undefined ? '' : `最后一帧下行：opcode=${lastReceived.opcode} ${JSON.stringify(lastReceived.payload ?? '').slice(0, 120)}`,
+    lastSent === undefined ? '' : `最后一帧上行：opcode=${lastSent.opcode} ${redact(JSON.stringify(lastSent.payload ?? '')).slice(0, 120)}`,
+    lastReceived === undefined ? '' : `最后一帧下行：opcode=${lastReceived.opcode} ${redact(JSON.stringify(lastReceived.payload ?? '')).slice(0, 120)}`,
     counts.created > 0 && counts.sent > 0 && counts.received === 0
       ? '有上行、无下行 —— 与「会话打开停滞」的形态一致（值得人工看完整帧文件）'
       : '',
@@ -367,9 +400,17 @@ export function redactSecrets(text, secrets) {
     out = out.split(secret).join('***')
   }
   return out
-    // URL 查询串：长度不限（短 token 同样是凭据）。
-    .replace(/([?&](?:token|authorization|cookie|password|secret)=)[^&\s"'<>]*/gi, '$1***')
-    // 键值形态（JSON / 对象字面量 / 头字段）：值至少 4 字符才足以判定为凭据；
-    // `&` 排除在外，免得把 `token=***&keep=1` 的后半截一并吃掉。
-    .replace(/("?(?:token|authorization|cookie|password|secret)"?\s*[:=]\s*"?)([^"',;\s}&]{4,})/gi, '$1***')
+    // URL query / fragment: length is irrelevant (a short token is a credential)
+    // and an unrelated `&param` must survive.
+    .replace(/([?&#](?:token|authorization|cookie|password|secret)=)[^&\s"'<>]*/gi, '$1***')
+    // QUOTED values — JSON, JS object literals, and the escaped-quote form you
+    // get when a JSON payload is embedded inside another JSON string. The WHOLE
+    // value is consumed: matching only up to the first space redacted the scheme
+    // word and left the credential itself on disk
+    // (`"Authorization":"Bearer SECRET"` → `"Authorization":"*** SECRET"`).
+    .replace(/((?:token|authorization|cookie|password|secret)(?:\\?")?\s*[:=]\s*)(\\?")[^"\\]*(\\?")/gi, '$1$2***$3')
+    // BARE values — header-dump shapes (`Authorization: Bearer X`,
+    // `Cookie: a=1; b=2`). Run to the end of the record, never past a query
+    // separator or into the next JSON member.
+    .replace(/((?:token|authorization|cookie|password|secret)(?:\\?")?\s*[:=]\s*)(?!\\?")([^\r\n},&]*)/gi, '$1***')
 }
