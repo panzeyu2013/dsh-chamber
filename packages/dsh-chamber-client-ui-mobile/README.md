@@ -112,25 +112,37 @@ ATTRIBUTE-ONLY — the package's anchor discipline forbids matching the hint by
 its hashed class or by its copy:
 
 - a `[data-chat-flow]` column exists and its nearest `[data-phase]` ancestor
-  carries an emitted conversation phase of `active` or `engaging` (the
-  upstream `conversationPhase()` value space is exactly active / engaging /
-  blank; `blank` never qualifies, so an empty session cannot false-positive,
-  while a stall right after a first prompt still does),
+  carries an emitted conversation phase of `settling` or `active` (the DOM value
+  space is exactly `settling` / `hero` / `active`, emitted by upstream
+  `ConversationRoot`; `hero` is the no-session face and never qualifies, so an
+  empty session cannot false-positive. `conversationPhase()`'s internal
+  `blank`/`engaging` names never reach the attribute — the earlier note here
+  claimed that value space and was wrong),
 - the flow subtree contains NO `[data-chat-anchor-key]` row,
 - the `conversation.session.header` `<header>` exists and is actually rendered
-  (a blank session hides it upstream),
+  (upstream hides it while the shell is blank, which is what keeps the
+  `settling` inclusion from firing on a header-less face),
 - the state has held for a continuous 45s of VISIBLE page time — background time
   is discarded rather than accumulated, because a frozen mobile timer must not
   replay a stale interval on resume — and
-- the anchor is `[data-slot="conversation.session.header"] > header`.
+- the session identity (and therefore the clock, the dismissal and the shown
+  notice) is the displayed `<header>` node, falling back to the phase node.
+  The phase node alone is NOT enough: `ui-layout`'s `main` slot is keyed by
+  entry identity, so `div.root[data-phase]` survives a session switch, while
+  the session-scoped header subtree is remounted.
 
 The notice is `role="status"` / `aria-live="polite"`, anchored under the session
-header, `pointer-events: none` except its single action, never takes focus, and
-its only action is a USER-INITIATED page reload. It never reloads or reopens a
-session on its own: a legitimately slow open (a large session on a slow link)
-must not be interrupted. It ships its own minimal
+header, `pointer-events: none` except its two controls, and never takes focus.
+Its primary action is a USER-INITIATED page reload; the secondary control
+("keep waiting") DISMISSES the notice for the current continuous stall and
+re-arms when the shape breaks — a slow-but-healthy open looks exactly like this
+shape, and the threshold is not device-calibrated (STATUS keeps that gate open),
+so the false-positive path must cost the user nothing. It never reloads or
+reopens a session on its own. It ships its own minimal
 `data-plugin="dsh-chamber-mobile-stall"` style tag, installs only in the touch
 tier, and is fully removed (timers, listeners, DOM, own style tag) on dispose.
+Installation is reference-counted on the window: a second context joins the live
+watcher, and the last disposer tears it down.
 
 ## Right panel & drawer coexistence (touch tier)
 
@@ -572,6 +584,23 @@ structure-shaped and verified in the rc.2 tree:
   stylesheet's `grid-template-columns: 0 minmax(0,1fr) 0` lock can never strand
   the transcript in the 0px first track after a vendor rename of the centre key
   (the page degrades to the official narrow layout instead).
+
+**The session-stall notice's anchors (2026-09-14; value space re-audited
+2026-12)**, likewise attribute-only:
+
+- `[data-chat-flow]` — the `ui-chat` message column; absent means no chat
+  surface is on screen, so nothing else is read;
+- the flow's NEAREST `[data-phase]` ancestor — the conversation root
+  (`ConversationRoot.tsx`), whose attribute value space is exactly
+  `settling` / `hero` / `active`. `hero` is the no-session face; the internal
+  `conversationPhase()` names (`blank` / `engaging`) never reach the attribute,
+  so a plugin matching them would be dead code;
+- `[data-chat-anchor-key]` — a rendered message row (the official
+  `routedNode.key` projection);
+- `[data-slot="conversation.session.header"] > header` — the header outlet and
+  its direct `<header>` child, which is also the SESSION IDENTITY: the outlet is
+  a session-scoped slot the renderer remounts per session, unlike the keyed
+  root-scope `[data-phase]` node.
 
 **The hover-card watchdog's own anchors (2026-09-13 review B2 — these are anchors
 too, so they are listed here rather than only in the feature section above):**

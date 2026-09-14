@@ -392,3 +392,17 @@ test('the data-tip bubble suppression lives inside the coarse/no-hover block', (
     'the rule must sit inside the coarse/no-hover media block',
   )
 })
+
+test('the data-tip attribute this rule depends on is still EMITTED by the chamber page that owns it', () => {
+  // Cross-package lockstep (2026-12 review): `[data-tip]::after` is a silent
+  // no-op if the emitting package renames the attribute, and the anchor gate
+  // cannot see a JSX attribute in a sibling package's source. The mobile plugin
+  // owns no data-tip site itself — the connections settings sheet does — so the
+  // contract is pinned here. (The official side of the same attribute is checked
+  // against the pinned upstream corpus by scripts/dev/verify-mobile-anchors.mjs.)
+  const repoRoot = new URL('../../..', import.meta.url)
+  const emitter = readFileSync(new URL('packages/dsh-chamber-client-ui-settings-connections/src/client/ConnectionsSection.tsx', repoRoot), 'utf8')
+  assert.match(emitter, /data-tip=\{/, 'the connections page must still set the data-tip attribute')
+  const emitterCss = readFileSync(new URL('packages/dsh-chamber-client-ui-settings-connections/src/client/ConnectionsSection.module.css', repoRoot), 'utf8')
+  assert.match(emitterCss, /content:\s*attr\(data-tip\)/, 'the emitter must still render the bubble through content: attr(data-tip)')
+})

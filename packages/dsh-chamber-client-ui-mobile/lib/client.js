@@ -33,14 +33,16 @@ var zh = {
   "dsh-chamber.mobile.drawer.open": "\u6253\u5F00\u4FA7\u8FB9\u680F",
   "dsh-chamber.mobile.drawer.close": "\u6536\u8D77\u4FA7\u8FB9\u680F",
   "dsh-chamber.mobile.stall.message": "\u4F1A\u8BDD\u8F7D\u5165\u4F3C\u4E4E\u505C\u6EDE\u4E86",
-  "dsh-chamber.mobile.stall.action": "\u91CD\u65B0\u52A0\u8F7D\u9875\u9762"
+  "dsh-chamber.mobile.stall.action": "\u91CD\u65B0\u52A0\u8F7D\u9875\u9762",
+  "dsh-chamber.mobile.stall.dismiss": "\u7EE7\u7EED\u7B49\u5F85"
 };
 var en = {
   "dsh-chamber.mobile.title": "Mobile view",
   "dsh-chamber.mobile.drawer.open": "Open sidebar",
   "dsh-chamber.mobile.drawer.close": "Close sidebar",
   "dsh-chamber.mobile.stall.message": "Session loading appears stalled",
-  "dsh-chamber.mobile.stall.action": "Reload page"
+  "dsh-chamber.mobile.stall.action": "Reload page",
+  "dsh-chamber.mobile.stall.dismiss": "Keep waiting"
 };
 
 // src/client/styles.ts
@@ -90,19 +92,24 @@ var MOBILE_CSS = `
     display: none !important;
   }
 
-  /* Hand-rolled data-tip bubbles (chamber pages; e.g. the connections
-     settings sheet's .iconButton / .restartTip in ConnectionsSection.module
-     .css, whose ::after carries content: attr(data-tip)). Same coarse-pointer
-     artifact as the official Tooltip above: the bubble is opacity-gated on
-     :hover / :focus-visible, so a tap leaves the synthesized hover behind and
-     the bubble stays over the row it describes. Every data-tip site pairs the
-     attribute with aria-label (verified across the 13 sites at the 2026-09
-     review; that package's Button prop surface documents the pairing), so no
-     accessible name is lost, and the official bundle carries ZERO data-tip
-     attributes (grepped on the served index-*.js) \u2014 this rule cannot reach an
-     official surface. Hiding only the pseudo-element leaves the host button,
-     its box and its label untouched: pure CSS, no JS, desktop untouched
-     (media-query scoped). */
+  /* data-tip bubbles: the hand-rolled ones on chamber pages (e.g. the
+     connections settings sheet's .iconButton / .restartTip in
+     ConnectionsSection.module.css, whose ::after carries content:
+     attr(data-tip)) AND the official ones \u2014 upstream's agent-preset client row
+     sets the data-tip attribute on its icon buttons and consumes it the same
+     way (content:attr(data-tip) in its bundled CSS; re-audited 2026-12, the
+     earlier "the official bundle carries ZERO data-tip" note was wrong because
+     it only grepped the SHELL bundle, not the dynamic client rows). Same
+     coarse-pointer artifact as the official Tooltip above: the bubble is
+     opacity-gated on :hover / :focus-visible, so a tap leaves the synthesized
+     hover behind and the bubble stays over the row it describes. On the
+     chamber pages every data-tip site pairs the attribute with aria-label
+     (verified across the 13 sites at the 2026-09 review; that package's Button
+     prop surface documents the pairing), so no chamber accessible name is
+     lost; the official sites are upstream's own pairing and are suppressed for
+     the same reason as the tooltip rule above. Hiding only the pseudo-element
+     leaves the host control, its box and its label untouched: pure CSS, no JS,
+     desktop untouched (media-query scoped). */
   [data-tip]::after {
     display: none !important;
   }
@@ -1752,7 +1759,7 @@ function installStrandedHoverCardWatchdog(active) {
 var STALL_THRESHOLD_MS = 45e3;
 var STALL_POLL_MS = 3e3;
 var CONVERSATION_PHASE_QUERY = "[data-phase]";
-var STALL_PHASES = ["active", "engaging"];
+var STALL_PHASES = ["settling", "active"];
 function isStallPhase(value) {
   return value !== null && value !== void 0 && STALL_PHASES.includes(value);
 }
@@ -1763,6 +1770,7 @@ var STALL_STYLE_TAG = "dsh-chamber-mobile-stall";
 var STALL_NOTICE_CLASS = "dsh-mobile-stall";
 var STALL_NOTICE_MESSAGE_CLASS = "dsh-mobile-stall-message";
 var STALL_NOTICE_ACTION_CLASS = "dsh-mobile-stall-action";
+var STALL_NOTICE_DISMISS_CLASS = "dsh-mobile-stall-dismiss";
 var STALL_NOTICE_GAP_PX = 8;
 var STALL_NOTICE_MIN_VISIBLE_PX = 96;
 var STALL_GUARD = Symbol.for("dsh-chamber.dsh-client-ui-mobile.session-stall");
@@ -1785,7 +1793,8 @@ var STALL_NOTICE_CSS = `
     left: 50%;
     transform: translateX(-50%);
     /* Above the conversation content, BELOW the official shell.overlay layer
-       (z-index 20 at body level: drawer, floating toggle, right panel). */
+       (z-index 20 inside the frame: drawer, floating toggle, right panel; the
+       frame itself creates no stacking context, so 19 < 20 still orders them). */
     z-index: 19;
     box-sizing: border-box;
     display: flex;
@@ -1809,6 +1818,10 @@ var STALL_NOTICE_CSS = `
   .dsh-mobile-stall-action {
     flex: none;
     pointer-events: auto;
+    /* The same 44px touch floor the rest of this package's controls carry: a
+       tap target, not a text link. */
+    min-height: 44px;
+    box-sizing: border-box;
     padding: 6px 10px;
     border: none;
     border-radius: 8px;
@@ -1828,6 +1841,32 @@ var STALL_NOTICE_CSS = `
     outline: none;
     box-shadow: 0 0 0 2px var(--dsw-alias-state-business-primary);
   }
+  /* The dismiss half ("keep waiting"): the same hit box, no filled surface \u2014
+     it must read as "the notice goes away", not as a second action to take. */
+  .dsh-mobile-stall-dismiss {
+    flex: none;
+    pointer-events: auto;
+    min-height: 44px;
+    box-sizing: border-box;
+    padding: 6px 8px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--dsw-alias-label-secondary);
+    font: inherit;
+    white-space: nowrap;
+    cursor: pointer;
+    touch-action: manipulation;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  .dsh-mobile-stall-dismiss:active {
+    background: var(--dsw-alias-interactive-bg-hover);
+  }
+  .dsh-mobile-stall-dismiss:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--dsw-alias-state-business-primary);
+  }
 }
 `;
 function isStallShape(facts) {
@@ -1836,7 +1875,7 @@ function isStallShape(facts) {
 function decideStallNotice(input) {
   if (!input.shape || !input.pageVisible) return { since: 0, show: false };
   const since = input.since === 0 ? input.now : input.since;
-  return { since, show: input.now - since >= STALL_THRESHOLD_MS };
+  return { since, show: !input.dismissed && input.now - since >= STALL_THRESHOLD_MS };
 }
 function isRendered(node, styleOf) {
   if (node.isConnected === false) return false;
@@ -1884,17 +1923,30 @@ function noticeTopFor(rect, viewportHeight) {
   if (!Number.isFinite(viewportHeight)) return top;
   return Math.max(0, Math.min(top, viewportHeight - STALL_NOTICE_MIN_VISIBLE_PX));
 }
+function singleShot(release) {
+  let done = false;
+  return () => {
+    if (done) return;
+    done = true;
+    release();
+  };
+}
 function installSessionStallNotice(t) {
   if (typeof document === "undefined" || typeof window === "undefined") return () => {
   };
   const guard = window;
-  if (guard[STALL_GUARD] !== void 0) return () => {
-  };
+  const live = guard[STALL_GUARD];
+  if (live !== void 0) {
+    live.count += 1;
+    return singleShot(live.release);
+  }
   let since = 0;
-  let activeRoot = null;
+  let dismissed = false;
+  let sessionAnchor = null;
   let notice = null;
   let noticeMessage = null;
   let noticeAction = null;
+  let noticeDismiss = null;
   let ownedStyle = null;
   if (document.querySelector(`style[data-plugin="${STALL_STYLE_TAG}"]`) === null) {
     ownedStyle = document.createElement("style");
@@ -1908,12 +1960,17 @@ function installSessionStallNotice(t) {
     } catch {
     }
   };
+  const dismiss = () => {
+    dismissed = true;
+    unmount();
+  };
   const unmount = () => {
     if (notice === null) return;
     notice.remove();
     notice = null;
     noticeMessage = null;
     noticeAction = null;
+    noticeDismiss = null;
   };
   const setText = (element, value) => {
     if (element.textContent !== value) element.textContent = value;
@@ -1932,14 +1989,20 @@ function installSessionStallNotice(t) {
       action.type = "button";
       action.className = STALL_NOTICE_ACTION_CLASS;
       action.addEventListener("click", reload);
-      root.append(message, action);
+      const dismissButton = document.createElement("button");
+      dismissButton.type = "button";
+      dismissButton.className = STALL_NOTICE_DISMISS_CLASS;
+      dismissButton.addEventListener("click", dismiss);
+      root.append(message, dismissButton, action);
       body.appendChild(root);
       notice = root;
       noticeMessage = message;
       noticeAction = action;
+      noticeDismiss = dismissButton;
     }
     if (noticeMessage !== null) setText(noticeMessage, t("dsh-chamber.mobile.stall.message"));
     if (noticeAction !== null) setText(noticeAction, t("dsh-chamber.mobile.stall.action"));
+    if (noticeDismiss !== null) setText(noticeDismiss, t("dsh-chamber.mobile.stall.dismiss"));
     const top = noticeTopFor(header?.getBoundingClientRect?.() ?? null, window.innerHeight);
     if (top === null) notice.style.removeProperty("top");
     else notice.style.top = `${top}px`;
@@ -1949,20 +2012,25 @@ function installSessionStallNotice(t) {
       const probe = probeStall(document, {
         isVisible: (node) => isVisibleElement(node)
       });
-      if (probe.activeRoot !== activeRoot) {
-        activeRoot = probe.activeRoot;
+      const anchor = probe.header ?? probe.activeRoot;
+      if (anchor !== sessionAnchor) {
+        sessionAnchor = anchor;
         since = 0;
+        dismissed = false;
         unmount();
       }
       const shape = isStallShape(probe);
+      const pageVisible = document.visibilityState === "visible";
       const decision = decideStallNotice({
         shape,
-        pageVisible: document.visibilityState === "visible",
+        pageVisible,
         since,
-        now: Date.now()
+        now: Date.now(),
+        dismissed
       });
       since = decision.since;
-      if (decision.show || shape && notice !== null) mount(probe.header);
+      if (!shape || !pageVisible) dismissed = false;
+      if (decision.show || shape && !dismissed && notice !== null) mount(probe.header);
       else unmount();
     } catch {
     }
@@ -1974,17 +2042,24 @@ function installSessionStallNotice(t) {
   const interval = window.setInterval(evaluate, STALL_POLL_MS);
   evaluate();
   let disposed = false;
-  const dispose = () => {
+  const teardown = () => {
     if (disposed) return;
     disposed = true;
     window.clearInterval(interval);
     document.removeEventListener("visibilitychange", onVisibilityChange);
     unmount();
     ownedStyle?.remove();
-    if (guard[STALL_GUARD] === dispose) delete guard[STALL_GUARD];
   };
-  guard[STALL_GUARD] = dispose;
-  return dispose;
+  const release = () => {
+    const live2 = guard[STALL_GUARD];
+    if (live2 === void 0) return;
+    live2.count -= 1;
+    if (live2.count > 0) return;
+    delete guard[STALL_GUARD];
+    teardown();
+  };
+  guard[STALL_GUARD] = { count: 1, release };
+  return singleShot(release);
 }
 
 // src/client/MobileNavToggle.tsx

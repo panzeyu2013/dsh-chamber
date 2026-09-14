@@ -82,19 +82,27 @@ gateway 访问）真正可用——窄屏抽屉化布局、触控目标、安全
 `session-stall.ts` 只为这一状态补一个非阻断提示。判据**全部是属性锚点**——本包的锚点
 纪律禁止按哈希类名或文案匹配那句提示：
 
-- 存在 `[data-chat-flow]` 列，且其最近的 `[data-phase]` 祖先进相为 `active`
-  （上游 conversationPhase() 的取值空间恰为 active / engaging / blank；blank 永不成立，空会话因此不会误报）；
+- 存在 `[data-chat-flow]` 列，且其最近的 `[data-phase]` 祖先进相为 `settling` 或
+  `active`（DOM 取值空间恰为 settling / hero / active，由上游 `ConversationRoot`
+  发出；hero 是「无会话」面，永不成立，空会话因此不会误报。`conversationPhase()`
+  内部的 `blank` / `engaging` 名字**从不到达该属性**——本文件早前那条说法是错的）；
 - flow 子树内**没有任何** `[data-chat-anchor-key]` 行；
-- `conversation.session.header` 的 `<header>` 存在且确实被渲染（空会话上游会隐藏它）；
+- `conversation.session.header` 的 `<header>` 存在且确实被渲染（上游在 blank 壳期
+  隐藏它，这也是 settling 纳入后仍不会在无头面误报的原因）；
 - 该状态已连续持续 **45s 可见页面时间**——后台时间**丢弃而不累计**，因为被冻结的
   移动端定时器在恢复时不得按过期时间戳一次性补算；
-- 定位锚为 `[data-slot="conversation.session.header"] > header`。
+- 会话身份（以及随之的计时、忽略动作与已显示的提示）是**被渲染的 `<header>` 节点**，
+  取不到时回落到 phase 节点。只认 phase 节点不够：`ui-layout` 的 `main` 槽按条目
+  身份做 key，`div.root[data-phase]` 会跨会话原地复用，而会话作用域的头部子树会重挂。
 
-提示是 `role="status"` / `aria-live="polite"`，锚在会话头下方，除唯一按钮外
-`pointer-events: none`，从不抢焦点，唯一动作是**用户主动**的页面重载。它绝不自动
-重载或自动重开会话：合法但缓慢的打开（大会话 + 慢链路）不应被打断。它自带极小的
+提示是 `role="status"` / `aria-live="polite"`，锚在会话头下方，除两个控件外
+`pointer-events: none`，从不抢焦点。主操作是**用户主动**的页面重载；次控件
+（"继续等待"）在当前这段连续停滞内关掉提示，形态一恢复即重新武装——健康但缓慢的
+打开与这个形态完全同形，而阈值未经真机校准（该门禁在 STATUS 里仍开放），所以误报
+的代价必须是零。它绝不自动重载或自动重开会话。它自带极小的
 `data-plugin="dsh-chamber-mobile-stall"` style 标签，只在触屏档安装，dispose 时连同
-定时器、监听、DOM 与自建样式一并清理。
+定时器、监听、DOM 与自建样式一并清理；安装按 window 级引用计数共享，最后一个
+disposer 才真正拆除。
 
 ## 右栏与抽屉的共存（触屏档）
 
@@ -427,6 +435,17 @@ chrome；`[role="menu"] [role="menuitem"][aria-selected]` 高亮信号在本 pin
   `stampFrame` 是**全或无**的——conversation 列缺失时它拒绝适配该 frame，于是样式表里
   的 `grid-template-columns: 0 minmax(0,1fr) 0` 锁不可能在上游改掉中心列 key 之后把
   会话内容困在 0px 第一轨（此时页面退化为官方窄窗布局）。
+
+**会话打开停滞提示的锚点（2026-09-14；取值空间 2026-12 重审）**，同样全为属性形：
+
+- `[data-chat-flow]`——`ui-chat` 的消息列；缺失即屏幕上没有会话面，其余锚点一律不读；
+- flow 的**最近** `[data-phase]` 祖先——会话根（`ConversationRoot.tsx`），其属性取值
+  空间恰为 `settling` / `hero` / `active`；`hero` 是「无会话」面，而
+  `conversationPhase()` 的内部名字（`blank` / `engaging`）从不到达该属性；
+- `[data-chat-anchor-key]`——已渲染的消息行（官方 `routedNode.key` 投影）；
+- `[data-slot="conversation.session.header"] > header`——头部出口与其直接 `<header>`
+  子节点，同时是**会话身份**：该出口是会话作用域槽，渲染器按会话重挂；keyed 的
+  root 作用域 `[data-phase]` 节点则会跨会话复用。
 
 **悬停卡 watchdog 自己的锚点（2026-09-13 review B2——它们同样是锚点，因此列在这里，
 而不只写在上面那一节）：** `official-hover-card.ts` 用三项事实匹配官方原子，pin 移动时

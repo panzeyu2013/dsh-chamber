@@ -16,7 +16,7 @@ import { en, zh } from '../src/client/locales.ts'
 import {
   CHAT_FLOW_QUERY, CHAT_ROW_QUERY, CONVERSATION_PHASE_QUERY,
   SESSION_HEADER_QUERY, STALL_NOTICE_ACTION_CLASS, STALL_NOTICE_CLASS,
-  STALL_NOTICE_CSS, STALL_NOTICE_GAP_PX, STALL_NOTICE_MESSAGE_CLASS,
+  STALL_NOTICE_CSS, STALL_NOTICE_DISMISS_CLASS, STALL_NOTICE_GAP_PX, STALL_NOTICE_MESSAGE_CLASS,
   STALL_NOTICE_MIN_VISIBLE_PX, STALL_POLL_MS, STALL_STYLE_TAG, STALL_THRESHOLD_MS,
   STALL_PHASES, decideStallNotice, installSessionStallNotice, isRendered, isStallPhase, isStallShape,
   noticeTopFor, probeStall,
@@ -243,8 +243,13 @@ test('every anchor is an attribute selector — no hashed class, no copy', () =>
     assert.ok(!syntax.includes('.') && !syntax.includes('#'), `${selector} must not use a class/id anchor`)
     assert.ok(!/[\u4e00-\u9fff]/.test(selector), `${selector} must not carry copy`)
   }
-  assert.deepEqual([...STALL_PHASES], ['active', 'engaging'])
-  assert.equal(isStallPhase('engaging'), true)
+  // The DOM value space is settling|hero|active (upstream ConversationRoot's
+  // `phase`); `engaging`/`blank` are internal contract names that never reach
+  // the attribute.
+  assert.deepEqual([...STALL_PHASES], ['settling', 'active'])
+  assert.equal(isStallPhase('settling'), true)
+  assert.equal(isStallPhase('hero'), false)
+  assert.equal(isStallPhase('engaging'), false, 'engaging never reaches data-phase')
   assert.equal(isStallPhase('blank'), false)
   assert.equal(isStallPhase(null), false)
   assert.equal(SESSION_HEADER_QUERY, '[data-slot="conversation.session.header"] > header')
@@ -262,8 +267,9 @@ test('the notice rides its own class family and its own style tag', () => {
   assert.equal(STALL_NOTICE_CLASS, 'dsh-mobile-stall')
   assert.equal(STALL_NOTICE_MESSAGE_CLASS, 'dsh-mobile-stall-message')
   assert.equal(STALL_NOTICE_ACTION_CLASS, 'dsh-mobile-stall-action')
+  assert.equal(STALL_NOTICE_DISMISS_CLASS, 'dsh-mobile-stall-dismiss')
   assert.equal(STALL_STYLE_TAG, 'dsh-chamber-mobile-stall')
-  for (const name of [STALL_NOTICE_CLASS, STALL_NOTICE_MESSAGE_CLASS, STALL_NOTICE_ACTION_CLASS]) {
+  for (const name of [STALL_NOTICE_CLASS, STALL_NOTICE_MESSAGE_CLASS, STALL_NOTICE_ACTION_CLASS, STALL_NOTICE_DISMISS_CLASS]) {
     assert.ok(name.startsWith('dsh-mobile-'), `${name} must join the nav-toggle/backdrop naming family`)
   }
 })
@@ -281,8 +287,16 @@ test('the notice CSS defaults to hidden OUTSIDE the tier and never blocks taps',
   // Only the action takes taps; the rest of the notice passes them through.
   const noticeBlock = STALL_NOTICE_CSS.slice(media, STALL_NOTICE_CSS.indexOf(`.${STALL_NOTICE_MESSAGE_CLASS}`))
   assert.match(noticeBlock, /pointer-events:\s*none/)
-  assert.match(STALL_NOTICE_CSS.slice(STALL_NOTICE_CSS.indexOf(`.${STALL_NOTICE_ACTION_CLASS}`)),
+  const controls = STALL_NOTICE_CSS.slice(STALL_NOTICE_CSS.indexOf(`.${STALL_NOTICE_ACTION_CLASS}`))
+  assert.match(controls, /pointer-events:\s*auto/)
+  // Both controls are tap targets: the reload action AND the dismiss half.
+  assert.match(STALL_NOTICE_CSS.slice(STALL_NOTICE_CSS.indexOf(`.${STALL_NOTICE_DISMISS_CLASS}`)),
     /pointer-events:\s*auto/)
+  for (const control of [STALL_NOTICE_ACTION_CLASS, STALL_NOTICE_DISMISS_CLASS]) {
+    const block = STALL_NOTICE_CSS.slice(STALL_NOTICE_CSS.indexOf(`.${control} {`))
+    assert.match(block.slice(0, block.indexOf('}')), /min-height:\s*44px/,
+      `${control} must carry the package's 44px touch floor`)
+  }
 })
 
 test('the notice copy exists in both dictionaries and adds no other key', () => {
@@ -290,6 +304,7 @@ test('the notice copy exists in both dictionaries and adds no other key', () => 
   assert.deepEqual(keys.filter(key => key.startsWith('dsh-chamber.mobile.stall.')), [
     'dsh-chamber.mobile.stall.message',
     'dsh-chamber.mobile.stall.action',
+    'dsh-chamber.mobile.stall.dismiss',
   ])
   for (const key of keys) assert.equal(typeof en[key as MobileKey], 'string', `${key} must be translated`)
   assert.deepEqual(Object.keys(en), keys, 'en must cover exactly the zh key set')
@@ -311,12 +326,14 @@ test('stall shape: an active conversation with a displayed header and no rows is
   assert.equal(isStallShape(probe), true)
 })
 
-test('stall truth table: blank / unknown / no phase, rows, hidden header, missing flow are NOT stalled', () => {
-  assert.equal(shapeOf(conversation({ phase: 'engaging' })), true,
-    'engaging (first prompt attempted, nothing produced yet) is a real conversation too — a stall there leaves the same empty column')
+test('stall truth table: hero / unknown / no phase, rows, hidden header, missing flow are NOT stalled', () => {
+  assert.equal(shapeOf(conversation({ phase: 'settling' })), true,
+    'settling (a session opening its history) is exactly the face this notice exists for')
+  assert.equal(shapeOf(conversation({ phase: 'engaging' })), false,
+    'engaging is an internal contract name and never reaches the attribute')
   assert.equal(shapeOf(conversation({ phase: 'blank' })), false, 'the no-conversation face is never a stall')
   assert.equal(shapeOf(conversation({ phase: 'hero' })), false,
-    'an unknown phase value (outside the emitted active/engaging/blank space) never qualifies')
+    'hero (no session presented) is never a stall')
   assert.equal(shapeOf(conversation({ phase: null })), false, 'a flow with no phase ancestor is never a stall')
   assert.equal(shapeOf(conversation({ rows: 1 })), false, 'a rendered row disproves the stall')
   assert.equal(shapeOf(conversation({ rows: 40 })), false, 'many rows likewise')
@@ -386,36 +403,36 @@ test('the render check walks the whole ancestor chain', () => {
 // ---------------------------------------------------------------------------
 
 test('the clock seeds at the first sighting and fires exactly at the threshold', () => {
-  const first = decideStallNotice({ shape: true, pageVisible: true, since: 0, now: 1_000 })
+  const first = decideStallNotice({ shape: true, pageVisible: true, since: 0, now: 1_000, dismissed: false })
   assert.deepEqual(first, { since: 1_000, show: false }, 'the clock starts, the notice does not')
   assert.deepEqual(
-    decideStallNotice({ shape: true, pageVisible: true, since: first.since, now: 1_000 + STALL_THRESHOLD_MS - 1 }),
+    decideStallNotice({ shape: true, pageVisible: true, since: first.since, now: 1_000 + STALL_THRESHOLD_MS - 1, dismissed: false }),
     { since: 1_000, show: false }, 'one millisecond short is not a stall')
   assert.deepEqual(
-    decideStallNotice({ shape: true, pageVisible: true, since: first.since, now: 1_000 + STALL_THRESHOLD_MS }),
+    decideStallNotice({ shape: true, pageVisible: true, since: first.since, now: 1_000 + STALL_THRESHOLD_MS, dismissed: false }),
     { since: 1_000, show: true }, 'the threshold is inclusive')
 })
 
 test('the stall must be CONTINUOUS: any break zeroes the clock and restarts the window', () => {
-  assert.deepEqual(decideStallNotice({ shape: false, pageVisible: true, since: 40_000, now: 46_000 }),
+  assert.deepEqual(decideStallNotice({ shape: false, pageVisible: true, since: 40_000, now: 46_000, dismissed: false }),
     { since: 0, show: false }, 'a row arrived (or the shape broke) — the clock resets')
-  assert.deepEqual(decideStallNotice({ shape: true, pageVisible: true, since: 0, now: 47_000 }),
+  assert.deepEqual(decideStallNotice({ shape: true, pageVisible: true, since: 0, now: 47_000, dismissed: false }),
     { since: 47_000, show: false }, 'a re-formed stall starts a fresh window')
   // A long-lived shape with a broken middle: 30s + 30s around a reset is never 60s.
-  const broken = decideStallNotice({ shape: true, pageVisible: true, since: 0, now: 10_000 })
-  const reset = decideStallNotice({ shape: false, pageVisible: true, since: broken.since, now: 40_000 })
-  const again = decideStallNotice({ shape: true, pageVisible: true, since: reset.since, now: 40_000 })
-  assert.deepEqual(decideStallNotice({ shape: true, pageVisible: true, since: again.since, now: 40_000 + STALL_THRESHOLD_MS - 1 }),
+  const broken = decideStallNotice({ shape: true, pageVisible: true, since: 0, now: 10_000, dismissed: false })
+  const reset = decideStallNotice({ shape: false, pageVisible: true, since: broken.since, now: 40_000, dismissed: false })
+  const again = decideStallNotice({ shape: true, pageVisible: true, since: reset.since, now: 40_000, dismissed: false })
+  assert.deepEqual(decideStallNotice({ shape: true, pageVisible: true, since: again.since, now: 40_000 + STALL_THRESHOLD_MS - 1, dismissed: false }),
     { since: 40_000, show: false })
 })
 
 test('a hidden page never counts and discards the accumulated visible time', () => {
-  assert.deepEqual(decideStallNotice({ shape: true, pageVisible: false, since: 40_000, now: 900_000 }),
+  assert.deepEqual(decideStallNotice({ shape: true, pageVisible: false, since: 40_000, now: 900_000, dismissed: false }),
     { since: 0, show: false }, 'background time is not stall time')
-  assert.deepEqual(decideStallNotice({ shape: true, pageVisible: true, since: 0, now: 900_000 }),
+  assert.deepEqual(decideStallNotice({ shape: true, pageVisible: true, since: 0, now: 900_000, dismissed: false }),
     { since: 900_000, show: false }, 'coming back starts a fresh visible window')
   assert.deepEqual(
-    decideStallNotice({ shape: true, pageVisible: true, since: 900_000, now: 900_000 + STALL_THRESHOLD_MS }),
+    decideStallNotice({ shape: true, pageVisible: true, since: 900_000, now: 900_000 + STALL_THRESHOLD_MS, dismissed: false }),
     { since: 900_000, show: true })
 })
 
@@ -564,8 +581,11 @@ test('the installer shows nothing before the threshold, then a role=status notic
     assert.equal(notice.getAttribute('aria-live'), 'polite')
     assert.equal(notice.getAttribute('hidden'), null, 'the notice is visible')
     assert.equal(notice.style.top, `${120 + STALL_NOTICE_GAP_PX}px`, 'anchored under the session header')
-    const [message, action] = notice.children
+    const [message, dismiss, action] = notice.children
     assert.equal(message?.textContent, zh['dsh-chamber.mobile.stall.message'])
+    assert.equal(dismiss?.tag, 'button')
+    assert.equal(dismiss?.className, STALL_NOTICE_DISMISS_CLASS)
+    assert.equal(dismiss?.textContent, zh['dsh-chamber.mobile.stall.dismiss'])
     assert.equal(action?.tag, 'button')
     assert.equal(action?.type, 'button')
     assert.equal(action?.textContent, zh['dsh-chamber.mobile.stall.action'])
@@ -641,21 +661,107 @@ test('switching sessions resets the clock and the notice (a new conversation roo
   })
 })
 
-test('the installer is single-install per page and its disposer is idempotent', () => {
+test('a session switch that keeps the phase node still resets (the header node is the session identity)', () => {
+  withFakeBrowser(harness => {
+    // The production transition: ui-layout's `main` slot is keyed by ENTRY
+    // identity, so `div.root[data-phase]` is re-rendered in place for the next
+    // session; only the session-scoped header subtree is replaced. A watcher
+    // keyed on the phase node alone would carry session A's 45s into session B.
+    const tree = conversation()
+    harness.document.body.appendChild(tree.root)
+    const dispose = installSessionStallNotice(key => zh[key])
+    harness.at(STALL_THRESHOLD_MS)
+    assert.ok(harness.notice() !== null)
+
+    // Session B: same phase node, a NEW header element under the same outlet.
+    const slot = tree.slot
+    assert.ok(slot !== null)
+    const oldHeader = tree.header
+    assert.ok(oldHeader !== null)
+    oldHeader.remove()
+    const replacement = attach(slot, new FakeNode('header'))
+    replacement.rect = { bottom: 120 }
+    harness.at(STALL_THRESHOLD_MS + STALL_POLL_MS)
+    assert.equal(harness.notice(), null, 'the switched-to session gets its own window')
+    harness.at(STALL_THRESHOLD_MS + STALL_POLL_MS + STALL_THRESHOLD_MS)
+    assert.ok(harness.notice() !== null, 'and its own notice once IT is stalled')
+    dispose()
+  })
+})
+
+test('the dismissal keeps waiting: it hides the notice for THIS stall and re-arms for the next', () => {
+  withFakeBrowser(harness => {
+    const tree = conversation()
+    harness.document.body.appendChild(tree.root)
+    const dispose = installSessionStallNotice(key => zh[key])
+    harness.at(STALL_THRESHOLD_MS)
+    const notice = harness.notice()
+    assert.ok(notice !== null)
+    assert.equal(harness.reloads(), 0)
+
+    // The user answers a false positive ("keep waiting") instead of aborting a
+    // load that is still progressing.
+    const dismiss = notice.children[1]
+    assert.equal(dismiss?.className, STALL_NOTICE_DISMISS_CLASS)
+    dismiss?.click()
+    assert.equal(harness.notice(), null, 'the notice goes away')
+    assert.equal(harness.reloads(), 0, 'dismissing never reloads')
+
+    // The same continuous stall must NOT bring it back on the next polls.
+    harness.at(STALL_THRESHOLD_MS + STALL_POLL_MS)
+    harness.at(STALL_THRESHOLD_MS + 90 * STALL_POLL_MS)
+    assert.equal(harness.notice(), null, 'a dismissed stall stays dismissed while it lasts')
+
+    // A background round trip ends the episode too (the clock restarts on
+    // resume), so the dismissal must not outlive it — otherwise a resumed app
+    // onto a still-stalled session would never be told again.
+    harness.visibility('hidden')
+    harness.at(STALL_THRESHOLD_MS + 91 * STALL_POLL_MS)
+    harness.visibility('visible')
+    const resumedBase = STALL_THRESHOLD_MS + 92 * STALL_POLL_MS
+    harness.at(resumedBase)
+    assert.equal(harness.notice(), null, 'the resumed episode still waits its full threshold')
+    harness.at(resumedBase + STALL_THRESHOLD_MS)
+    assert.ok(harness.notice() !== null, 'a resumed stall is announced again after a dismissal')
+
+    // Progress (a row) ends the stall episode; the next one re-arms.
+    const episodeBreak = resumedBase + STALL_THRESHOLD_MS + STALL_POLL_MS
+    if (tree.flow !== null) attach(tree.flow, new FakeNode('div')).setAttribute('data-chat-anchor-key', 'k')
+    harness.at(episodeBreak)
+    if (tree.flow !== null) tree.flow.children.pop()
+    const rearmBase = episodeBreak + STALL_POLL_MS
+    harness.at(rearmBase)
+    harness.at(rearmBase + STALL_THRESHOLD_MS - 1)
+    assert.equal(harness.notice(), null, 'the fresh window still waits its full threshold')
+    harness.at(rearmBase + STALL_THRESHOLD_MS)
+    assert.ok(harness.notice() !== null, 'a new stall is announced again after a dismissal')
+    dispose()
+  })
+})
+
+test('installations share one watcher and the LAST disposer tears it down', () => {
   withFakeBrowser(harness => {
     const tree = conversation()
     harness.document.body.appendChild(tree.root)
     const first = installSessionStallNotice(key => zh[key])
     const second = installSessionStallNotice(key => zh[key])
     assert.equal(harness.intervals(), 1, 'a second install must not add a second watcher')
+    // The second disposer releases only its own reference: the first holder is
+    // still watching (the old no-op disposer left the second holder unwatched
+    // the moment the first one disposed).
     second()
-    assert.equal(harness.intervals(), 1, 'the no-op disposer must not tear the live watcher down')
+    assert.equal(harness.intervals(), 1, 'releasing one reference keeps the watcher alive')
     harness.at(STALL_THRESHOLD_MS)
-    assert.ok(harness.notice() !== null, 'the first install is still watching')
+    assert.ok(harness.notice() !== null, 'the surviving holder is still watching')
+    harness.at(STALL_THRESHOLD_MS + STALL_POLL_MS)
+    assert.ok(harness.notice() !== null)
+    // Idempotent: a double release must not consume the other holder's count.
+    second()
+    assert.equal(harness.intervals(), 1)
     first()
-    assert.equal(harness.intervals(), 0)
+    assert.equal(harness.intervals(), 0, 'the last reference stops the watcher')
     assert.equal(harness.notice(), null)
-    // The guard is cleared with the live disposer: a later tier flip installs
+    // The guard is cleared with the last release: a later tier flip installs
     // a fresh watcher.
     const third = installSessionStallNotice(key => zh[key])
     assert.equal(harness.intervals(), 1)
@@ -675,7 +781,8 @@ test('the notice copy follows the locale binding on the next poll', () => {
     language = 'en'
     harness.at(STALL_THRESHOLD_MS + STALL_POLL_MS)
     assert.equal(harness.notice()?.children[0]?.textContent, en['dsh-chamber.mobile.stall.message'])
-    assert.equal(harness.notice()?.children[1]?.textContent, en['dsh-chamber.mobile.stall.action'])
+    assert.equal(harness.notice()?.children[1]?.textContent, en['dsh-chamber.mobile.stall.dismiss'])
+    assert.equal(harness.notice()?.children[2]?.textContent, en['dsh-chamber.mobile.stall.action'])
     dispose()
   })
 })

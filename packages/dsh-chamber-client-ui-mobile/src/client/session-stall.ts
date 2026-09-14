@@ -30,24 +30,27 @@
  *     (markup.ts's re-audited DOM map: `[data-slot="main"] >
  *     div.root[data-phase]`, which carries BOTH the session header outlet and
  *     the message column), and its phase must be one of STALL_PHASES. The
- *     emitter is upstream `conversationPhase()`, whose value space is exactly
- *     `active` / `engaging` / `blank`: `blank` is the no-conversation face
- *     where an empty column is CORRECT, so excluding it is what keeps a
- *     brand-new empty session from being reported as stalled; `engaging`
- *     (prompt attempted, first turn not produced yet) is INCLUDED because a
- *     stall that hits right after the first prompt leaves the column empty in
- *     exactly the same way. Ancestor coupling (rather than a bare
- *     document-wide phase existence test) also keeps the phase and the flow
- *     provably the same surface: no cross-root misfire, and the phase node
- *     doubles as the session identity below.
+ *     emitter is upstream `ConversationRoot`'s `phase` attribute, whose value
+ *     space is exactly `settling` / `hero` / `active` (2026-12 re-audit of
+ *     `ConversationRoot.tsx`; the `blank` / `engaging` names in the
+ *     `conversationPhase()` contract never reach the attribute). `hero` is the
+ *     no-session face where an empty column is CORRECT, so excluding it is what
+ *     keeps a brand-new empty session from being reported as stalled;
+ *     `settling` (a session is open but the shell is still blank/loading, or a
+ *     continuable subagent is waiting for its parent catalog) and `active` are
+ *     the two faces that present a real session, and both are INCLUDED.
+ *     Ancestor coupling (rather than a bare document-wide phase existence
+ *     test) also keeps the phase and the flow provably the same surface: no
+ *     cross-root misfire.
  *   - no message row anywhere inside the flow: rows carry
  *     `data-chat-anchor-key` (the official `routedNode.key` projection), so
  *     "nothing has ever rendered" is an existence test, never a count.
  *   - the session header outlet `[data-slot="conversation.session.header"]`
  *     still renders a `<header>` child that is actually displayed: with no
  *     session presented the official header is hidden, so its visibility is a
- *     second, independent "a real session is on screen" gate (the blank face
- *     can never pass it).
+ *     second, independent "a real session is on screen" gate (the hero face
+ *     can never pass it) — and it is what bounds the `settling` inclusion:
+ *     while upstream hides the header, this gate fails and nothing shows.
  *
  * THE DURABILITY AND PAGE-STATE CONDITIONS are the pure clock below: the
  * shape must hold CONTINUOUSLY for STALL_THRESHOLD_MS, and only while the
@@ -58,23 +61,46 @@
  * accumulated-time bookkeeping would resume against a stale timestamp and
  * over-count. Once the notice IS shown it stands until the shape itself
  * recovers, so a background/resume round trip cannot take it away for another
- * full threshold. Switching to a different conversation root (a different
- * session) resets both the clock and the notice.
+ * full threshold.
+ *
+ * The SESSION IDENTITY is the displayed `<header>` node, falling back to the
+ * phase node when no header is displayed. This matters because the phase node
+ * is NOT session-scoped: ui-layout's `main` slot is `{kind:'keyed',
+ * scope:'root'}` and its React key is the stable entry identity, so the
+ * `div.root[data-phase]` element survives a session switch and is re-rendered
+ * in place with a new sessionId. The header outlet IS session-scoped
+ * (`conversation.session.header` is `{kind:'single', scope:'session'}`, and
+ * the renderer keys that subtree by the session binding), so its `<header>`
+ * element is replaced on a switch — which is what resets both the clock and a
+ * shown notice when the user moves to another session. A session switch to a
+ * face whose header is hidden is already handled: `headerVisible` failing
+ * breaks the shape, and a broken shape zeroes the clock.
  *
  * THE SURFACE. A body-level, fixed, top-anchored notice: non-modal, never
  * focused, never covering the composer (it sits under the session header it
  * belongs to, measured at show time with the CSS default as the fallback), and
- * `pointer-events: none` on everything but its one button — so it cannot trap
+ * `pointer-events: none` on everything but its two buttons — so it cannot trap
  * a tap even where it overlaps. z-index 19 keeps it above the conversation
- * content and BELOW the official `shell.overlay` layer (z-index 20 at body
- * level, which owns the drawer, the floating toggle and the fullscreen right
- * panel) — see the stacking note in styles.ts. Its few rules ride a dedicated
+ * content and BELOW the official `shell.overlay` layer (z-index 20, which owns
+ * the drawer, the floating toggle and the fullscreen right panel) — see the
+ * stacking note in styles.ts. Its few rules ride a dedicated
  * `<style data-plugin="dsh-chamber-mobile-stall">` tag injected and removed by
  * the installer: styles.ts is not extendable from here, and a JS-only inline
  * style could not express the tier default, which must stay declarative —
  * `display: none` outside the touch tier is the same "PC leak" default the nav
  * toggle and backdrop carry, and the element is only ever mounted while the
  * tier matches anyway. Copy comes from locales.ts (new keys only).
+ *
+ * The threshold is a heuristic and the recovery is deliberately the USER's
+ * choice, not the plugin's: the notice offers "reload" (the only lever that
+ * actually recovers a lost first frame) AND "keep waiting", which dismisses the
+ * notice for the current continuous stall and re-arms when the shape breaks.
+ * A slow-but-healthy open of a large session on a slow link looks exactly like
+ * this shape, so the dismissal is what keeps a false positive from pushing the
+ * user into aborting a load that was still progressing. `STALL_THRESHOLD_MS`
+ * itself is NOT device-calibrated (docs/progress/STATUS.md keeps that gate
+ * open): the plugin never reloads on its own, so the residual risk is a
+ * suggestion the user can dismiss, not an action taken for them.
  *
  * Anchor-version note: every selector here is an attribute emitted by the
  * pinned official build (`data-phase` phase values, `data-chat-flow`,
@@ -108,21 +134,24 @@ export const STALL_THRESHOLD_MS = 45_000
 export const STALL_POLL_MS = 3_000
 
 /** The conversation root's phase attribute. The emitter is upstream
- *  `conversationPhase()` (ui-conversation): the value space is exactly
- *  `active` (a real conversation: active targets, or a non-blank session past
- *  its first turn, or a running turn), `engaging` (the user attempted a prompt
- *  and the first turn has not produced anything yet) and `blank` (no
- *  conversation). The composer node's own `data-phase` carries a different
- *  value set (`input.phase` / `inert`) and is never an ancestor of the chat
- *  flow, so the nearest-ancestor read below can only land on the root. */
+ *  `ConversationRoot`'s `phase` attribute (ui-conversation): the value space is
+ *  exactly `settling` (a session is open but the shell is blank and loading, or
+ *  a continuable subagent is waiting for its parent catalog), `hero` (no
+ *  session presented) and `active` (everything else). The `conversationPhase()`
+ *  contract's `blank` / `engaging` names are internal and NEVER reach this
+ *  attribute (2026-12 re-audit). The composer node's own `data-phase` carries a
+ *  different value set (`input.phase` / `inert`) and is never an ancestor of
+ *  the chat flow, so the nearest-ancestor read below can only land on the
+ *  root. */
 export const CONVERSATION_PHASE_QUERY = '[data-phase]'
 
 /** The phases that present a REAL conversation — the ones where an empty
- *  message column is a fault rather than the correct empty face. `engaging` is
- *  included deliberately: a stall that hits a brand-new session whose first
- *  prompt was already attempted leaves the column empty in exactly the same
- *  way, and the image/blank faces are excluded by `blank` staying out. */
-export const STALL_PHASES: readonly string[] = ['active', 'engaging']
+ *  message column is a fault rather than the correct empty face. `hero` (no
+ *  session) is the only exclusion; `settling` is included because a session
+ *  that is still opening its history is exactly the state this notice exists
+ *  for, and the header-visibility gate below keeps the sub-case where upstream
+ *  hides the header (blank shell) out. */
+export const STALL_PHASES: readonly string[] = ['settling', 'active']
 
 /** Is this root phase one where an empty flow means "stalled"? */
 export function isStallPhase(value: string | null | undefined): boolean {
@@ -143,6 +172,7 @@ export const STALL_STYLE_TAG = 'dsh-chamber-mobile-stall'
 export const STALL_NOTICE_CLASS = 'dsh-mobile-stall'
 export const STALL_NOTICE_MESSAGE_CLASS = 'dsh-mobile-stall-message'
 export const STALL_NOTICE_ACTION_CLASS = 'dsh-mobile-stall-action'
+export const STALL_NOTICE_DISMISS_CLASS = 'dsh-mobile-stall-dismiss'
 
 /** Gap between the session header and the notice (px). */
 export const STALL_NOTICE_GAP_PX = 8
@@ -180,7 +210,8 @@ export const STALL_NOTICE_CSS = `
     left: 50%;
     transform: translateX(-50%);
     /* Above the conversation content, BELOW the official shell.overlay layer
-       (z-index 20 at body level: drawer, floating toggle, right panel). */
+       (z-index 20 inside the frame: drawer, floating toggle, right panel; the
+       frame itself creates no stacking context, so 19 < 20 still orders them). */
     z-index: 19;
     box-sizing: border-box;
     display: flex;
@@ -204,6 +235,10 @@ export const STALL_NOTICE_CSS = `
   .dsh-mobile-stall-action {
     flex: none;
     pointer-events: auto;
+    /* The same 44px touch floor the rest of this package's controls carry: a
+       tap target, not a text link. */
+    min-height: 44px;
+    box-sizing: border-box;
     padding: 6px 10px;
     border: none;
     border-radius: 8px;
@@ -220,6 +255,32 @@ export const STALL_NOTICE_CSS = `
     background: var(--dsw-alias-interactive-bg-active);
   }
   .dsh-mobile-stall-action:focus-visible {
+    outline: none;
+    box-shadow: 0 0 0 2px var(--dsw-alias-state-business-primary);
+  }
+  /* The dismiss half ("keep waiting"): the same hit box, no filled surface —
+     it must read as "the notice goes away", not as a second action to take. */
+  .dsh-mobile-stall-dismiss {
+    flex: none;
+    pointer-events: auto;
+    min-height: 44px;
+    box-sizing: border-box;
+    padding: 6px 8px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--dsw-alias-label-secondary);
+    font: inherit;
+    white-space: nowrap;
+    cursor: pointer;
+    touch-action: manipulation;
+    -webkit-appearance: none;
+    appearance: none;
+  }
+  .dsh-mobile-stall-dismiss:active {
+    background: var(--dsw-alias-interactive-bg-hover);
+  }
+  .dsh-mobile-stall-dismiss:focus-visible {
     outline: none;
     box-shadow: 0 0 0 2px var(--dsw-alias-state-business-primary);
   }
@@ -285,6 +346,10 @@ export interface StallNoticeInput {
   readonly pageVisible: boolean
   readonly since: number
   readonly now: number
+  /** The user dismissed the notice for the CURRENT continuous stall. It stays
+   *  suppressed while the shape holds; the suppression ends with the shape, so
+   *  a later stall (a new session, a re-open) still gets its notice. */
+  readonly dismissed: boolean
 }
 
 /**
@@ -303,15 +368,17 @@ export function isStallShape(facts: StallShapeFacts): boolean {
  * The stall clock and the notice decision together. The clock is seeded at the
  * first sighting of the shape (`since === 0` means "not timing yet"), runs
  * only while the shape holds AND the page is visible, and is zeroed the moment
- * either half breaks — the stall must be CONTINUOUS and observed. Pure —
+ * either half breaks — the stall must be CONTINUOUS and observed. A dismissal
+ * suppresses the notice without stopping the clock, so the caller can keep the
+ * user's choice for as long as that same continuous stall lasts. Pure —
  * unit-tested.
- * @param input - the shape, the page state, the previous clock and now.
+ * @param input - the shape, the page state, the previous clock, now, dismissal.
  * @returns the clock to carry forward and whether to show the notice.
  */
 export function decideStallNotice(input: StallNoticeInput): StallDecision {
   if (!input.shape || !input.pageVisible) return { since: 0, show: false }
   const since = input.since === 0 ? input.now : input.since
-  return { since, show: input.now - since >= STALL_THRESHOLD_MS }
+  return { since, show: !input.dismissed && input.now - since >= STALL_THRESHOLD_MS }
 }
 
 /**
@@ -397,35 +464,61 @@ export function noticeTopFor(
   return Math.max(0, Math.min(top, viewportHeight - STALL_NOTICE_MIN_VISIBLE_PX))
 }
 
-/** The guarded window property's shape. */
+/** The guarded window property's shape: the live installation, with its
+ *  reference count (two contexts on one page share ONE watcher; the last
+ *  disposer tears it down). */
 interface GuardedWindow {
-  [STALL_GUARD]?: () => void
+  [STALL_GUARD]?: { count: number; release: () => void }
+}
+
+/** Wrap a shared release so ONE caller's disposer can only ever run once (a
+ *  double dispose must not decrement another holder's reference). */
+function singleShot(release: () => void): () => void {
+  let done = false
+  return () => {
+    if (done) return
+    done = true
+    release()
+  }
 }
 
 /**
  * Install the session-load stall notice. The installer is an observer only:
  * it reads the official DOM, polls at STALL_POLL_MS, recomputes immediately on
- * visibilitychange, and mounts a single notice whose only action calls
- * `location.reload()`. It never reloads, re-opens or writes to the official
- * tree on its own. Idempotent: a second install while one is live returns a
- * no-op disposer (the first one keeps watching). The returned disposer clears
- * the timer and the listener, removes the notice and the style tag it created,
- * and is itself idempotent.
+ * visibilitychange, and mounts a single notice whose primary action calls
+ * `location.reload()` and whose secondary action dismisses the notice for the
+ * current stall. It never reloads, re-opens or writes to the official tree on
+ * its own.
+ *
+ * Sharing: the installation is reference-counted on the window, so a second
+ * install (a second context on the same page) joins the live watcher instead of
+ * silently receiving a dead disposer — disposing the first would otherwise stop
+ * watching for the second. The watcher's copy is the first installer's locale
+ * binding, which is the same dictionary on one page.
  * @param t - the bound locale lookup for the notice copy.
- * @returns the disposer.
+ * @returns the disposer (idempotent; the watcher stops when the last one runs).
  */
 export function installSessionStallNotice(t: (key: MobileKey) => string): () => void {
   // DOM-free harness (the package's plain-node test files) and any non-browser
   // scope: nothing to watch, nothing installed.
   if (typeof document === 'undefined' || typeof window === 'undefined') return () => {}
   const guard = window as unknown as GuardedWindow
-  if (guard[STALL_GUARD] !== undefined) return () => {}
+  const live = guard[STALL_GUARD]
+  if (live !== undefined) {
+    live.count += 1
+    return singleShot(live.release)
+  }
 
   let since = 0
-  let activeRoot: StallNodeFace | null = null
+  let dismissed = false
+  // The session identity: the displayed header when there is one, else the
+  // conversation root. See the module header — the phase node alone survives a
+  // session switch, the header node does not.
+  let sessionAnchor: StallNodeFace | null = null
   let notice: HTMLElement | null = null
   let noticeMessage: HTMLElement | null = null
   let noticeAction: HTMLButtonElement | null = null
+  let noticeDismiss: HTMLButtonElement | null = null
 
   // The stylesheet's notch: this module cannot extend styles.ts (owned by
   // another surface of the package), so its few rules ride their own tag. An
@@ -438,7 +531,7 @@ export function installSessionStallNotice(t: (key: MobileKey) => string): () => 
     document.head.appendChild(ownedStyle)
   }
 
-  /** The ONE action: reload the page. Never called by the watcher itself. */
+  /** The ONE recovery action: reload the page. Never called by the watcher. */
   const reload = (): void => {
     try {
       window.location.reload()
@@ -447,12 +540,21 @@ export function installSessionStallNotice(t: (key: MobileKey) => string): () => 
     }
   }
 
+  /** The user's answer to a false positive: hide the notice and keep waiting.
+   *  It suppresses the notice for this continuous stall only — a broken shape
+   *  (progress, a session switch, a reload) clears the suppression. */
+  const dismiss = (): void => {
+    dismissed = true
+    unmount()
+  }
+
   const unmount = (): void => {
     if (notice === null) return
     notice.remove()
     notice = null
     noticeMessage = null
     noticeAction = null
+    noticeDismiss = null
   }
 
   // Live regions re-announce on every text write, so identical copy is left
@@ -477,14 +579,23 @@ export function installSessionStallNotice(t: (key: MobileKey) => string): () => 
       action.type = 'button'
       action.className = STALL_NOTICE_ACTION_CLASS
       action.addEventListener('click', reload)
-      root.append(message, action)
+      // The dismiss control is what makes a false positive harmless: reloading
+      // aborts the in-flight load, and a slow-but-healthy open looks exactly
+      // like this shape (the threshold is not device-calibrated).
+      const dismissButton = document.createElement('button')
+      dismissButton.type = 'button'
+      dismissButton.className = STALL_NOTICE_DISMISS_CLASS
+      dismissButton.addEventListener('click', dismiss)
+      root.append(message, dismissButton, action)
       body.appendChild(root)
       notice = root
       noticeMessage = message
       noticeAction = action
+      noticeDismiss = dismissButton
     }
     if (noticeMessage !== null) setText(noticeMessage, t('dsh-chamber.mobile.stall.message'))
     if (noticeAction !== null) setText(noticeAction, t('dsh-chamber.mobile.stall.action'))
+    if (noticeDismiss !== null) setText(noticeDismiss, t('dsh-chamber.mobile.stall.dismiss'))
     const top = noticeTopFor(header?.getBoundingClientRect?.() ?? null, window.innerHeight)
     if (top === null) notice.style.removeProperty('top')
     else notice.style.top = `${top}px`
@@ -495,25 +606,36 @@ export function installSessionStallNotice(t: (key: MobileKey) => string): () => 
       const probe = probeStall(document, {
         isVisible: node => isVisibleElement(node as unknown as Element),
       })
-      // A different conversation root is a different session: the clock and any
-      // shown notice belong to the session they were started for.
-      if (probe.activeRoot !== activeRoot) {
-        activeRoot = probe.activeRoot
+      // A different session (its header node, else its conversation root) is a
+      // different stall: the clock, the dismissal and any shown notice belong
+      // to the session they were started for.
+      const anchor = probe.header ?? probe.activeRoot
+      if (anchor !== sessionAnchor) {
+        sessionAnchor = anchor
         since = 0
+        dismissed = false
         unmount()
       }
       const shape = isStallShape(probe)
+      const pageVisible = document.visibilityState === 'visible'
       const decision = decideStallNotice({
         shape,
-        pageVisible: document.visibilityState === 'visible',
+        pageVisible,
         since,
         now: Date.now(),
+        dismissed,
       })
       since = decision.since
+      // A broken shape ends the stall episode — and so does a hidden page, which
+      // zeroes the clock for the same reason (background time is not stall time).
+      // Either way the episode a dismissal belonged to is over, so it must not
+      // silence the NEXT one (a backgrounded app resumed onto a still-stalled
+      // session gets its notice back).
+      if (!shape || !pageVisible) dismissed = false
       // Once announced, the notice STANDS until the shape itself recovers: the
       // clock is discarded in the background, so recomputing the decision alone
       // would take the notice away for another full threshold on resume.
-      if (decision.show || (shape && notice !== null)) mount(probe.header)
+      if (decision.show || (shape && !dismissed && notice !== null)) mount(probe.header)
       else unmount()
     } catch {
       // Fail closed: a notice watcher must never break the page it watches.
@@ -529,15 +651,23 @@ export function installSessionStallNotice(t: (key: MobileKey) => string): () => 
   evaluate()
 
   let disposed = false
-  const dispose = (): void => {
+  const teardown = (): void => {
     if (disposed) return
     disposed = true
     window.clearInterval(interval)
     document.removeEventListener('visibilitychange', onVisibilityChange)
     unmount()
     ownedStyle?.remove()
-    if (guard[STALL_GUARD] === dispose) delete guard[STALL_GUARD]
   }
-  guard[STALL_GUARD] = dispose
-  return dispose
+  /** Give up ONE reference; the last one stops the watcher. */
+  const release = (): void => {
+    const live = guard[STALL_GUARD]
+    if (live === undefined) return
+    live.count -= 1
+    if (live.count > 0) return
+    delete guard[STALL_GUARD]
+    teardown()
+  }
+  guard[STALL_GUARD] = { count: 1, release }
+  return singleShot(release)
 }
