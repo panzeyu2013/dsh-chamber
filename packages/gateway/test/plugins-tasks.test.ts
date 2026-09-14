@@ -11,19 +11,35 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { MATERIALIZED_VALUE_MASK } from '../src/plugins-installed.ts'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { INSTALLED_MANIFEST_MAX_BYTES, MATERIALIZED_VALUE_MASK } from '../src/plugins-installed.ts'
 import { createChamberPluginTasks, deferredIntentsFilePath } from '../src/plugins-tasks.ts'
 import type { GatewayRuntimeManagerLike, PluginTaskRefusalCode, PluginTaskSubmitResult } from '../src/plugins-tasks.ts'
 import { createChamberInstalled } from '../src/plugins-installed.ts'
 import { INSTALLED_PROFILE_DIR, MANAGED_DSH_HOME_DIR } from '../src/plugins-installed.ts'
-import { createPluginsJournal, thirdPartyRoot } from '../src/plugins-journal.ts'
+import { backupDirFor, createPluginsJournal, journalFilePath, thirdPartyRoot } from '../src/plugins-journal.ts'
 import type { ProfileWriteRefusalCode } from '../src/runtime-manager.ts'
 import type { JournalLogger } from '../src/plugins-journal.ts'
 import { writeManifestFixture, scratchDir, waitFor, makeSpawnHarness } from './plugins-tasks-fixtures.ts'
 
 const silent: JournalLogger = { log() {}, warn() {} }
+
+/** Capturing logger: the data-loss fixes are only half-done unless the skip is
+ *  LOUD (the audit's failure mode was a calm "removed N orphaned"). */
+function makeCaptureLogger(): { logger: JournalLogger; logs: string[]; warns: string[] } {
+  const logs: string[] = []
+  const warns: string[] = []
+  const joinArgs = (args: unknown[]): string => args.map(String).join(' ')
+  return {
+    logger: {
+      log(...args: unknown[]) { logs.push(joinArgs(args)) },
+      warn(...args: unknown[]) { warns.push(joinArgs(args)) },
+    },
+    logs,
+    warns,
+  }
+}
 const posix = process.platform !== 'win32'
 const mode = (path: string): number => statSync(path).mode & 0o777
 
@@ -91,7 +107,7 @@ interface TasksHarness {
   setManagerNull(): void
 }
 
-function makeHarness(t: { after(fn: () => void): void }): TasksHarness {
+function makeHarness(t: { after(fn: () => void): void }, logger: JournalLogger = silent): TasksHarness {
   const stateDir = scratchDir(t, 'plugins-tasks-')
   // The managed profile manifest (the executor backs it up before spawning).
   writeManifestFixture(stateDir, {})
@@ -118,7 +134,7 @@ function makeHarness(t: { after(fn: () => void): void }): TasksHarness {
     stateDir,
     manager: () => managerRef.current,
     statusProbe: () => 'ready',
-    logger: silent,
+    logger,
     installed: createChamberInstalled(stateDir),
     spawn: spawn.spawn,
     timeoutMs: 1000,
@@ -1028,4 +1044,120 @@ test('the boot orphan sweep removes staged archives nothing references and keeps
   h.tasks.sweepOrphanedStagedArchives()
   assert.equal(existsSync(keptByManifest), true)
   assert.equal(existsSync(keptByIntent), true)
+})
+
+test('reconcileJournal never claims "no pending operations" when the journal is corrupt', t => {
+  const { logger, logs, warns } = makeCaptureLogger()
+  const h = makeHarness(t, logger)
+  // A previous run left a pending op with an executed preImage, then the
+  // journal was torn (crash mid-write / damaged disk).
+  const seed = createPluginsJournal(h.stateDir, silent)
+  const lostOpId = seed.appendPending({ kind: 'install', name: 'lost-pkg', spec: 'lost-pkg@1' })
+  seed.recordPreImage(lostOpId)
+  const preImage = backupDirFor(h.stateDir, lostOpId)
+  mkdirSync(preImage, { recursive: true })
+  writeFileSync(join(preImage, 'package.json'), '{"name":"web"}', 'utf8')
+  const filePath = journalFilePath(h.stateDir)
+  const truncated = readFileSync(filePath, 'utf8').slice(0, 40)
+  writeFileSync(filePath, truncated, 'utf8')
+
+  h.tasks.reconcileJournal()
+
+  assert.equal(
+    logs.some(message => message.includes('no pending operations carried over')),
+    false,
+    'a corrupt journal must never be reported as "no pending operations"',
+  )
+  assert.ok(warns.some(message => message.includes('corrupt')), `corruption is loud (warns: ${warns.join(' | ')})`)
+  // Evidence retained byte-for-byte; the lost op's rollback material untouched.
+  const aside = readdirSync(thirdPartyRoot(h.stateDir)).find(name => /^journal\.json\.corrupt-\d+$/.test(name))
+  assert.ok(aside !== undefined, 'the raw bytes are kept aside')
+  assert.equal(readFileSync(join(thirdPartyRoot(h.stateDir), aside!), 'utf8'), truncated)
+  assert.equal(existsSync(preImage), true, 'the lost pending op preImage is untouched')
+
+  // A new record after the loss still works (guarded cleanup, not a dead journal).
+  const fresh = seed.appendPending({ kind: 'install', name: 'pkg-after', spec: 'pkg-after@1' })
+  const journal = createPluginsJournal(h.stateDir, silent)
+  journal.markTerminal(fresh, { status: 'ok' })
+  assert.equal(existsSync(preImage), true, 'a later terminal mark never reclaims the lost preImage')
+})
+
+test('the boot orphan sweep deletes nothing while the profile manifest is unreadable', t => {
+  const { logger, warns } = makeCaptureLogger()
+  const h = makeHarness(t, logger)
+  const root = thirdPartyRoot(h.stateDir)
+  const orphan = join(root, 'slug-gamma', 'gamma-0.0.1-33333333.tgz')
+  mkdirSync(dirname(orphan), { recursive: true, mode: 0o700 })
+  writeFileSync(orphan, 'tgz-bytes', { mode: 0o600 })
+  const manifestPath = join(h.stateDir, MANAGED_DSH_HOME_DIR, INSTALLED_PROFILE_DIR, 'package.json')
+  const profileDir = join(h.stateDir, MANAGED_DSH_HOME_DIR, INSTALLED_PROFILE_DIR)
+
+  // (a) Present but not JSON: the read face answers profile_corrupt — the
+  //     sweep must never read it as "nothing is referenced".
+  writeFileSync(manifestPath, '{"name":"web","dependencies":{', 'utf8')
+  h.tasks.sweepOrphanedStagedArchives()
+  assert.equal(existsSync(orphan), true, 'a corrupt manifest never licenses deletion')
+  assert.ok(warns.some(message => message.includes('manifest')), 'the skip names the manifest')
+
+  // (b) Oversized (> read bound) is a read failure, not an empty reference set.
+  writeFileSync(manifestPath, JSON.stringify({ dependencies: {}, pad: 'x'.repeat(INSTALLED_MANIFEST_MAX_BYTES) }), 'utf8')
+  h.tasks.sweepOrphanedStagedArchives()
+  assert.equal(existsSync(orphan), true, 'the read bound is honoured as unreadable')
+
+  // (c) Symlinked profile directory (no-follow discipline, read-face parity).
+  const real = scratchDir(t, 'plugins-tasks-sweep-real-')
+  mkdirSync(join(real, MANAGED_DSH_HOME_DIR, INSTALLED_PROFILE_DIR), { recursive: true })
+  writeFileSync(join(real, MANAGED_DSH_HOME_DIR, INSTALLED_PROFILE_DIR, 'package.json'), '{"name":"web","dependencies":{}}', 'utf8')
+  rmSync(profileDir, { recursive: true, force: true })
+  symlinkSync(join(real, MANAGED_DSH_HOME_DIR, INSTALLED_PROFILE_DIR), profileDir)
+  h.tasks.sweepOrphanedStagedArchives()
+  assert.equal(existsSync(orphan), true, 'a symlinked profile dir is unreadable, not empty')
+
+  // (d) Absent manifest (fresh gateway): existing semantics — an orphan with
+  //     no intent/op reference is still reclaimed.
+  rmSync(profileDir, { force: true })
+  h.tasks.sweepOrphanedStagedArchives()
+  assert.equal(existsSync(orphan), false, 'an absent manifest keeps the original sweep semantics')
+})
+
+test('the boot orphan sweep deletes nothing while the journal is corrupt', t => {
+  const { logger, warns } = makeCaptureLogger()
+  const h = makeHarness(t, logger)
+  const root = thirdPartyRoot(h.stateDir)
+  const orphan = join(root, 'slug-delta', 'delta-0.0.1-44444444.tgz')
+  mkdirSync(dirname(orphan), { recursive: true, mode: 0o700 })
+  writeFileSync(orphan, 'tgz-bytes', { mode: 0o600 })
+  // A pending op's staged spec is unknowable from a torn journal: the sweep
+  // must refuse rather than delete the archive that lost op may still consume.
+  writeFileSync(journalFilePath(h.stateDir), '{"version":1,"ops":[{"id":"lost"', 'utf8')
+
+  h.tasks.reconcileJournal()
+  h.tasks.sweepOrphanedStagedArchives()
+  assert.equal(existsSync(orphan), true, 'a corrupt journal leaves live-op references unknown')
+  assert.ok(
+    warns.some(message => message.includes('journal') && message.includes('sweep')),
+    `the skip is announced and names the journal (warns: ${warns.join(' | ')})`,
+  )
+})
+
+test('the boot orphan sweep deletes nothing while the deferred intent store is corrupt', t => {
+  const { logger, warns } = makeCaptureLogger()
+  const h = makeHarness(t, logger)
+  const root = thirdPartyRoot(h.stateDir)
+  const orphan = join(root, 'slug-epsilon', 'epsilon-0.0.1-55555555.tgz')
+  mkdirSync(dirname(orphan), { recursive: true, mode: 0o700 })
+  writeFileSync(orphan, 'tgz-bytes', { mode: 0o600 })
+  // A lost deferred materialize's staged spec is unknowable from a corrupt
+  // store: the intent references are unknown, so nothing may be swept.
+  writeFileSync(deferredIntentsFilePath(h.stateDir), '{"version":1,"intents":[', 'utf8')
+
+  h.tasks.sweepOrphanedStagedArchives()
+  assert.equal(existsSync(orphan), true, 'a corrupt deferred store leaves intent references unknown')
+  assert.ok(
+    warns.some(message => message.includes('deferred') && message.includes('sweep')),
+    `the skip is announced and names the deferred store (warns: ${warns.join(' | ')})`,
+  )
+  // The store itself recovers exactly as before: evidence aside + fresh store.
+  assert.ok(readdirSync(root).some(name => name.startsWith('deferred.json.corrupt-')), 'corrupt evidence retained')
+  assert.deepEqual(h.tasks.deferredIntents(), [])
 })

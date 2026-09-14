@@ -71,6 +71,7 @@ import type { ProfileWriteLease } from './runtime-manager.ts'
 import { createPluginsJournal, thirdPartyRoot } from './plugins-journal.ts'
 import type { JournalLogger, JournalOp, JournalPending } from './plugins-journal.ts'
 import {
+  INSTALLED_MANIFEST_MAX_BYTES,
   INSTALLED_PROFILE_DIR,
   isFileValue,
   MANAGED_DSH_HOME_DIR,
@@ -206,7 +207,9 @@ export interface ChamberPluginTasksDeps {
 export interface ChamberPluginTasks {
   /** Startup reconciliation: journal pending ops from a previous run →
    * failed (preImage retained). Called once by the wiring layer at
-   * construction. */
+   * construction. A corrupt journal is NOT an empty one: the "no pending
+   * operations carried over" judgement is suppressed and the unknown pending
+   * set is reported loudly (2026-12 audit A3-9). */
   reconcileJournal(): void
   /** Boot-time staged-archive orphan sweep — called once by the wiring
    * layer right AFTER reconcileJournal, when the executor is idle and no
@@ -216,7 +219,11 @@ export interface ChamberPluginTasks {
    * references; this reclaims *.tgz files under the third-party root that
    * neither the managed profile manifest, a deferred intent, nor a live
    * (non-terminal) journal op references. Growth stays bounded by manifest
-   * references + in-flight work; referenced files are never touched. */
+   * references + in-flight work; referenced files are never touched.
+   * Deletion is licensed ONLY by successfully read reference sources: an
+   * unreadable manifest (oversized/symlinked/permissions) or a corrupt
+   * journal leaves references unknown and skips the sweep entirely
+   * (2026-12 audit A3-8/A3-9). */
   sweepOrphanedStagedArchives(): void
   /** Validate → lease → enqueue (or defer), per the module header. Throws
    * ONLY on deferred-store persistence failure (the route maps that to 500
@@ -421,7 +428,27 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
   // discipline as the journal, corrupt evidence renamed aside, ≤ 64 KiB)
   // -----------------------------------------------------------------------
 
+  /** Corruption observed on the deferred store by THIS instance (sticky): the
+   * staged specs of the lost intents are unknown, so the boot sweep must not
+   * treat them as "nothing references those archives" (2026-12 audit A3-8
+   * class — the same read-source discipline as the profile manifest). */
+  let deferredStoreCorrupt = false
+  /** Unresolved `deferred.json.corrupt-*` evidence from earlier runs. */
+  let deferredPriorEvidence: string[] | null = null
+  function deferredCorruptionEvidence(): string[] {
+    if (deferredPriorEvidence === null) {
+      try {
+        deferredPriorEvidence = readdirSync(thirdPartyRoot(stateDir))
+          .filter(name => name.startsWith(`${DEFERRED_INTENTS_FILE}.corrupt-`))
+      } catch {
+        deferredPriorEvidence = []
+      }
+    }
+    return deferredPriorEvidence
+  }
+
   function asideCorruptIntents(cause: unknown, text?: string): DeferredIntent[] {
+    deferredStoreCorrupt = true
     const aside = `${deferredFilePath()}.corrupt-${Date.now()}`
     warn(
       `plugins-tasks: deferred intent store is corrupt or unreadable (${messageOf(cause)}${text === undefined ? '' : `: ${text}`}); ` +
@@ -739,15 +766,33 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
   return {
     reconcileJournal() {
       const reconciled = journal.reconcile()
+      // A corrupt journal answers [] from reconcile() exactly like an empty
+      // one, but its pending-operation set — and with it every recorded
+      // childPid — is UNKNOWN. Never claim "no pending operations carried
+      // over" for it: say so loudly, and skip every judgement that would
+      // rest on "nothing is pending" (2026-12 audit A3-9).
+      const integrity = journal.integrity()
+      const corrupt = integrity.state === 'corrupt'
+      if (corrupt) {
+        warn(
+          'plugins-tasks: plugin journal is corrupt or has unresolved corruption evidence — the pending ' +
+          `operation set is UNKNOWN (${integrity.error}` +
+          `${integrity.asidePath === null ? '' : `; evidence kept at ${integrity.asidePath}`}); refusing to ` +
+          'report "no pending operations carried over" — no orphan child is reaped and no preImage is ' +
+          'reclaimed from these records',
+        )
+      }
       if (reconciled.length > 0) {
         warn(`plugins-tasks: journal reconciled ${reconciled.length} pending operation(s) from a previous run (marked failed)`)
-      } else {
+      } else if (!corrupt) {
         log('plugins-tasks: journal reconciled; no pending operations carried over')
       }
       // Crash-orphan reaping (design 21 §6.3 P2 review): a pending op that
       // recorded a spawned child pid means the previous gateway process died
       // mid-mutation — its detached `dsh plugin`/pnpm child may still be
-      // writing DSH_HOME. Kill it before any new mutation can start.
+      // writing DSH_HOME. Kill it before any new mutation can start. Only
+      // records that were actually READ are reaped: a corrupt journal carries
+      // no trustworthy pid at all.
       for (const op of reconciled) {
         if (op.childPid !== undefined) killOrphanedChild(op.childPid)
       }
@@ -761,20 +806,84 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
       //  2. deferred intents' staged specs (they drain at the next ready
       //     edge — their archives must survive);
       //  3. live (non-terminal) journal ops' staged specs.
+      // A reference set is trustworthy only when every source was READ
+      // successfully — "could not read it" is never "nothing references it"
+      // (2026-12 audit A3-8/A3-9). Delete nothing when a source is unknown.
+      const integrity = journal.integrity()
+      if (integrity.state === 'corrupt') {
+        warn(
+          'plugins-tasks: staged-archive sweep skipped: the plugin journal is corrupt or has unresolved ' +
+          `corruption evidence (${integrity.error}), so the live operation set is unknown; staged archives are retained`,
+        )
+        return
+      }
       const referenced = new Set<string>()
       const manifestPath = join(stateDir, MANAGED_DSH_HOME_DIR, INSTALLED_PROFILE_DIR, 'package.json')
+      let manifestText: string | null = null
       try {
-        const raw = readPrivateFileNoFollow(manifestPath, { tightenMode: 0o600, requiredMode: 0o600, maxBytes: 1024 * 1024 }).value
-        const manifest = JSON.parse(raw) as { dependencies?: Record<string, unknown> }
-        for (const spec of Object.values(manifest.dependencies ?? {})) {
-          if (typeof spec === 'string' && isFileValue(spec)) referenced.add(spec.slice('file:'.length))
+        manifestText = readPrivateFileNoFollow(manifestPath, {
+          tightenMode: 0o600,
+          maxBytes: INSTALLED_MANIFEST_MAX_BYTES,
+        }).value
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+          // Absent manifest (fresh gateway before the first materialize):
+          // nothing can be referenced through it — intents/ops below still
+          // protect their own. This is the ONE empty answer the sweep trusts.
+          manifestText = null
+        } else {
+          // Present but unreadable/unsafe (permissions, symlinked dir/leaf,
+          // oversized): the read face calls this profile_corrupt, and a read
+          // failure must never license deletion.
+          warn(
+            'plugins-tasks: staged-archive sweep skipped: the managed profile manifest is present but ' +
+            `unreadable (${messageOf(error)}); refusing to read that as "nothing is referenced" — staged archives are retained`,
+          )
+          return
         }
-      } catch {
-        // Unreadable/absent profile (ENOENT on a fresh gateway before the
-        // first materialize): nothing can reference staged archives through
-        // the manifest — intents/ops below still protect their own.
       }
-      for (const intent of loadIntents()) {
+      if (manifestText !== null) {
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(manifestText)
+        } catch (error) {
+          warn(
+            'plugins-tasks: staged-archive sweep skipped: the managed profile manifest is present but ' +
+            `not valid JSON (${messageOf(error)}); staged archives are retained`,
+          )
+          return
+        }
+        if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+          warn(
+            'plugins-tasks: staged-archive sweep skipped: the managed profile manifest is present but ' +
+            'not a JSON object; staged archives are retained',
+          )
+          return
+        }
+        const dependencies = (parsed as { dependencies?: unknown }).dependencies
+        // Read-face parse shape (plugins-installed.ts): a missing/non-object
+        // `dependencies` member means "no declared dependencies", not corrupt.
+        if (dependencies !== null && typeof dependencies === 'object' && !Array.isArray(dependencies)) {
+          for (const spec of Object.values(dependencies as Record<string, unknown>)) {
+            if (typeof spec === 'string' && isFileValue(spec)) referenced.add(spec.slice('file:'.length))
+          }
+        }
+      }
+      // The deferred store is a reference source too, and its corrupt path
+      // collapses to "no intents" exactly like the manifest's did: read it
+      // FIRST (the read may move corrupt bytes aside), then refuse the whole
+      // sweep if this run or an earlier one observed corruption — deleting
+      // here could destroy the only archive a lost deferred materialize can
+      // still consume.
+      const intents = loadIntents()
+      if (deferredStoreCorrupt || deferredCorruptionEvidence().length > 0) {
+        warn(
+          'plugins-tasks: staged-archive sweep skipped: the deferred intent store is corrupt or has unresolved ' +
+          'corruption evidence, so deferred staged references are unknown; staged archives are retained',
+        )
+        return
+      }
+      for (const intent of intents) {
         if (intent.spec !== undefined && isFileValue(intent.spec)) referenced.add(intent.spec.slice('file:'.length))
       }
       for (const op of journal.recent()) {

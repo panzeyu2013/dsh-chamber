@@ -269,6 +269,78 @@ test('markChildPid records the spawned pid on a pending op; markTerminal clears 
   assert.equal(recent.find(op => op.id === opId)?.childPid, undefined, 'a terminal op no longer runs — stale pids must never be reaped')
 })
 
+test('an absent journal is a clean empty journal, not corruption', t => {
+  const stateDir = tmpState(t)
+  const { logger, warns } = makeLogger()
+  const journal = createPluginsJournal(stateDir, logger)
+  // The corruption state must be distinguishable from "nothing ever recorded":
+  // a fresh gateway (no journal file) is OK and must stay silent.
+  assert.deepEqual(journal.integrity(), { state: 'ok' }, 'a missing journal file is empty, never corrupt')
+  assert.deepEqual(journal.reconcile(), [])
+  assert.equal(journal.recent().length, 0)
+  assert.equal(warns.length, 0, 'a fresh gateway has nothing to warn about')
+})
+
+test('a corrupt journal is distinguishable from an empty one and never lets a preImage be pruned', t => {
+  const stateDir = tmpState(t)
+  const { logger, warns } = makeLogger()
+  const seed = createPluginsJournal(stateDir, logger)
+  const lostOpId = seed.appendPending({ kind: 'materialize', name: 'pkg-lost', spec: 'file:/tmp/pkg-lost.tgz' })
+  seed.recordPreImage(lostOpId)
+  const preImage = backupDirFor(stateDir, lostOpId)
+  mkdirSync(preImage, { recursive: true })
+  writeFileSync(join(preImage, 'package.json'), '{"name":"web","version":"0.0.0"}', 'utf8')
+
+  // A torn write / damaged disk leaves unparsable bytes where the op records
+  // live. Before this fix the journal answered [] — indistinguishable from an
+  // empty journal — and the next pruneAndClean collected the lost preImage.
+  const filePath = journalFilePath(stateDir)
+  const truncated = readFileSync(filePath, 'utf8').slice(0, 40)
+  writeFileSync(filePath, truncated, 'utf8')
+
+  const journal = createPluginsJournal(stateDir, logger)
+  assert.equal(journal.integrity().state, 'corrupt', 'a torn journal is NOT an empty journal')
+  assert.deepEqual(journal.reconcile(), [], 'nothing readable can be reconciled')
+  assert.ok(warns.some(message => message.includes('corrupt')), 'corruption is announced, never silent')
+
+  // The raw bytes stay as evidence (aside), byte for byte.
+  const aside = readdirSync(thirdPartyRoot(stateDir)).find(name => /^journal\.json\.corrupt-\d+$/u.test(name))
+  assert.ok(aside !== undefined, 'the corrupt journal is moved aside with a timestamp')
+  assert.equal(readFileSync(join(thirdPartyRoot(stateDir), aside!), 'utf8'), truncated, 'the aside keeps the raw bytes')
+
+  // A fresh record + terminal mark in the same run must NOT reclaim backups:
+  // the lost op's preImage is the only rollback material left for it.
+  const fresh = journal.appendPending({ kind: 'install', name: 'pkg-new' })
+  journal.markTerminal(fresh, { status: 'ok' })
+  assert.equal(existsSync(preImage), true, 'a lost op\'s preImage survives the next terminal mark')
+
+  // Unresolved evidence on disk keeps protecting the backups across a reopen
+  // too (a later boot must not read the fresh journal as "nothing references
+  // these dirs").
+  const reopened = createPluginsJournal(stateDir, silent)
+  assert.equal(reopened.integrity().state, 'corrupt', 'unresolved aside evidence keeps the journal untrusted')
+  const late = reopened.appendPending({ kind: 'install', name: 'pkg-late' })
+  reopened.markTerminal(late, { status: 'ok' })
+  assert.equal(existsSync(preImage), true, 'a later boot still retains the preImage')
+  // Normal records keep working: the guard blocks cleanup, never the journal.
+  assert.equal(reopened.recent().length, 2)
+})
+
+test('a clean journal still prunes unreferenced backups (the corruption guard is scoped)', t => {
+  const stateDir = tmpState(t)
+  const journal = createPluginsJournal(stateDir, silent)
+  assert.deepEqual(journal.integrity(), { state: 'ok' })
+  const opId = journal.appendPending({ kind: 'install', name: 'pkg-clean' })
+  journal.recordPreImage(opId)
+  const kept = backupDirFor(stateDir, opId)
+  mkdirSync(kept, { recursive: true })
+  const junk = join(backupsRoot(stateDir), 'stale-op-dir')
+  mkdirSync(junk, { recursive: true })
+  journal.markTerminal(opId, { status: 'ok' })
+  assert.equal(existsSync(kept), true, 'referenced backup survives')
+  assert.equal(existsSync(junk), false, 'an intact journal still reclaims unreferenced dirs')
+})
+
 test('reconcile returns interrupted ops with their recorded childPid (orphan reaping input)', t => {
   const stateDir = tmpState(t)
   const journal = createPluginsJournal(stateDir, silent)

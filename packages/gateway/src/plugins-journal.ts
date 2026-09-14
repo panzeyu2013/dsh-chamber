@@ -34,6 +34,17 @@
  * bounded (≤ 256 KiB); a corrupt/unreadable journal is renamed aside as
  * journal.json.corrupt-<ts> (evidence retained, warn logged) and a fresh
  * journal starts.
+ *
+ * Corruption ≠ emptiness (2026-12 audit A3-9): a present file that cannot be
+ * read/parsed must never be answered as "no ops recorded". `integrity()`
+ * distinguishes the two; a corrupt read makes the pending-op set UNKNOWN, so
+ * (a) reconcileJournal refuses the "no pending operations carried over"
+ * judgement (there is nothing to reap and nothing to trust), (b) no backup
+ * directory is ever reclaimed while corruption or its aside evidence is
+ * unresolved (an unreferenced preImage may be the only rollback material of
+ * an op whose record was lost), and (c) a write never overwrites an
+ * unreadable original that could not be moved aside — it fails closed
+ * instead of destroying the evidence.
  */
 
 import { existsSync, readdirSync, renameSync, rmSync } from 'node:fs'
@@ -57,12 +68,27 @@ export const JOURNAL_BACKUPS_REL = join(THIRD_PARTY_REL, 'backups')
 export const JOURNAL_MAX_BYTES = 256 * 1024
 /** Retention: newest N terminal ops kept, with their backups. */
 export const JOURNAL_RETENTION_LIMIT = 50
+/** Aside-name prefix for corrupt-journal evidence. */
+export const CORRUPT_ASIDE_PREFIX = 'journal.json.corrupt-'
 /** The op kinds the journal can record. */
 export type JournalOpKind = 'install' | 'remove' | 'materialize'
 /** Lifecycle of one recorded op. */
 export type JournalOpStatus = 'pending' | 'ok' | 'failed' | 'blocked'
 /** Post-mutation restart outcome (recorded by the wiring layer, later). */
 export type JournalRestartOutcome = 'ok' | 'failed' | 'skipped'
+
+/** Journal read integrity: "nothing was ever recorded" and "the record could
+ *  not be read" are different facts and must never collapse into one. */
+export type JournalIntegrity =
+  | { state: 'ok' }
+  | {
+    state: 'corrupt'
+    /** Why the journal was judged corrupt/unreadable (message only). */
+    error: string
+    /** Where the raw bytes were moved aside; null when the move itself failed
+     *  (the original then stays in place and writes fail closed). */
+    asidePath: string | null
+  }
 
 export interface JournalOp {
   /** Unique op id; also the name of the op's preImage backup directory. */
@@ -141,8 +167,17 @@ export interface PluginsJournal {
   latestFailed(): JournalOp | null
   /** Startup reconciliation: pending → failed ('interrupted before
    * completion; preImage retained'), persisted once; idempotent (second call
-   * rewrites nothing and returns []). Returns the ops it transitioned. */
+   * rewrites nothing and returns []). Returns the ops it transitioned. On a
+   * corrupt journal nothing is readable: the result is [] but integrity()
+   * reports 'corrupt' — the caller must never read that [] as "no pending
+   * operations". */
   reconcile(): JournalOp[]
+  /** Integrity of the journal as of a real read, sticky for this instance:
+   *  'corrupt' from the moment a present file cannot be read/parsed (or
+   *  unresolved `journal.json.corrupt-*` evidence exists) until the operator
+   *  resolves it. While 'corrupt' the pending-op set is UNKNOWN: no orphan
+   *  pid may be judged and no preImage may be reclaimed. */
+  integrity(): JournalIntegrity
 }
 
 /** Third-party plugin state root under the gateway stateDir. */
@@ -174,13 +209,21 @@ export function createPluginsJournal(stateDir: string, logger: JournalLogger): P
   const filePath = journalFilePath(stateDir)
   const backupRoot = backupsRoot(stateDir)
 
+  /** Corruption observed by THIS instance. Sticky on purpose: once the bad file
+   * is moved aside and a fresh journal starts, "no pending op" is still not a
+   * fact about the records that were lost. */
+  let corruption: { error: string; asidePath: string | null } | null = null
+  /** Unresolved corrupt-journal evidence from earlier runs, scanned once. */
+  let priorEvidence: string[] | null = null
+  let warnedCleanupBlocked = false
+
   function ensureRoot(): void {
     ensurePrivateDirectoryNoFollow(root, 0o700)
   }
 
   function readFileText(): string | null {
     // ENOENT (absent file or absent root) means an empty journal; every other
-    // failure is treated as corrupt evidence (see asideCorrupt).
+    // failure is treated as corrupt evidence (see noteCorruption).
     try {
       return readPrivateFileNoFollow(filePath, { tightenMode: 0o600, requiredMode: 0o600, maxBytes: JOURNAL_MAX_BYTES }).value
     } catch (error) {
@@ -189,47 +232,90 @@ export function createPluginsJournal(stateDir: string, logger: JournalLogger): P
     }
   }
 
+  /** `journal.json.corrupt-*` asides left by earlier runs: unresolved evidence
+   * that the record set is incomplete. While one exists the journal must never
+   * be read as "empty" for cleanup purposes. */
+  function corruptEvidence(): string[] {
+    if (priorEvidence === null) {
+      try {
+        priorEvidence = readdirSync(root).filter(name => name.startsWith(CORRUPT_ASIDE_PREFIX))
+      } catch {
+        // No third-party root yet: nothing was ever recorded, nothing to keep.
+        priorEvidence = []
+      }
+    }
+    return priorEvidence
+  }
+
+  /** No backup cleanup may run while the journal's record set is unknown:
+   * a dir that "looks unreferenced" may be the only rollback material of an
+   * op whose record was lost (2026-12 audit A3-9). */
+  function cleanupBlocked(): boolean {
+    return corruption !== null || corruptEvidence().length > 0
+  }
+
   /** Corrupt/unreadable journal → rename aside + warn + fresh start. Never
    * silent, never crash-looping: the next write creates a clean journal and
-   * the aside keeps the evidence for the operator. */
-  function asideCorrupt(cause: unknown): void {
-    const aside = join(root, `journal.json.corrupt-${Date.now()}`)
+   * the aside keeps the evidence for the operator. Never the same answer as
+   * "empty": the caller reads integrity() and the lost-op consequences are
+   * suppressed (no cleanup, no write over the evidence). */
+  function noteCorruption(cause: unknown): void {
+    if (corruption !== null) return
+    const aside = join(root, `${CORRUPT_ASIDE_PREFIX}${Date.now()}`)
     logger.warn(
-      `plugins-journal: journal is corrupt or unreadable (${messageOf(cause)}); ` +
-      `moving it aside to ${aside} and starting a fresh journal`,
+      `plugins-journal: journal is corrupt or unreadable (${messageOf(cause)}); moving it aside to ${aside} ` +
+      'and starting a fresh journal — the pending-operation set is UNKNOWN, no preImage is reclaimed and ' +
+      'no orphan child is judged from these records',
     )
+    let asidePath: string | null = aside
     try {
       renameSync(filePath, aside)
     } catch (error) {
+      asidePath = null
       logger.warn(`plugins-journal: could not move corrupt journal aside: ${messageOf(error)}`)
     }
+    corruption = { error: messageOf(cause), asidePath }
   }
 
-  function loadOps(): JournalOp[] {
+  /** One read outcome: parsed ops, or "unreadable" (corruption already noted
+   * and made sticky). An absent file is a genuinely empty journal. */
+  function loadOps(): { ok: true; ops: JournalOp[] } | { ok: false } {
     let text: string | null
     try {
       text = readFileText()
     } catch (error) {
-      asideCorrupt(error)
-      return []
+      noteCorruption(error)
+      return { ok: false }
     }
-    if (text === null) return []
+    if (text === null) return { ok: true, ops: [] }
     let parsed: unknown
     try {
       parsed = JSON.parse(text)
     } catch (error) {
-      asideCorrupt(error)
-      return []
+      noteCorruption(error)
+      return { ok: false }
     }
     if (typeof parsed !== 'object' || parsed === null || !Array.isArray((parsed as { ops?: unknown }).ops)) {
-      asideCorrupt(new Error('journal payload is not a {version, ops} object'))
-      return []
+      noteCorruption(new Error('journal payload is not a {version, ops} object'))
+      return { ok: false }
     }
-    return (parsed as { ops: JournalOp[] }).ops
+    return { ok: true, ops: (parsed as { ops: JournalOp[] }).ops }
+  }
+
+  /** Op list for projections/writes; an unreadable journal yields none (its
+   * corruption is sticky and surfaced separately by integrity()). */
+  function loadOpsOrEmpty(): JournalOp[] {
+    const loaded = loadOps()
+    return loaded.ok ? loaded.ops : []
   }
 
   function persistOps(ops: JournalOp[]): void {
     ensureRoot()
+    if (corruption !== null && corruption.asidePath === null) {
+      // The unreadable original could not be moved aside: overwriting it would
+      // destroy the only evidence of the lost records. Fail closed.
+      throw new Error(`plugins-journal: refusing to overwrite an unreadable journal (${corruption.error})`)
+    }
     const text = `${JSON.stringify({ version: 1, ops }, undefined, 2)}\n`
     atomicWritePrivateFileNoFollow(filePath, text, { mode: 0o600 })
   }
@@ -243,9 +329,22 @@ export function createPluginsJournal(stateDir: string, logger: JournalLogger): P
   }
 
   /** Prune to the newest RETENTION_LIMIT ops (file keeps oldest-first
-   * reading order) and drop backup dirs no retained op references. */
+   * reading order) and drop backup dirs no retained op references. While the
+   * record set is unknown (corruption, or its unresolved aside evidence) the
+   * record pruning still runs but NOTHING is deleted: the ops' records are
+   * gone, so no dir can be proven unreferenced. */
   function pruneAndClean(ops: JournalOp[]): JournalOp[] {
     const retained = newestFirst(ops).slice(0, JOURNAL_RETENTION_LIMIT)
+    if (cleanupBlocked()) {
+      if (!warnedCleanupBlocked) {
+        warnedCleanupBlocked = true
+        logger.warn(
+          'plugins-journal: journal integrity is unknown (corrupt journal evidence on disk); skipping ' +
+          'backup-directory cleanup — every preImage is retained until the operator resolves the evidence',
+        )
+      }
+      return [...retained].reverse()
+    }
     if (!existsSync(backupRoot)) return [...retained].reverse()
     const referenced = new Set(retained.map(op => op.preImage).filter((value): value is string => value !== null))
     for (const entry of readdirSync(backupRoot, { withFileTypes: true })) {
@@ -272,7 +371,7 @@ export function createPluginsJournal(stateDir: string, logger: JournalLogger): P
       if (input.spec !== undefined) op.spec = input.spec
       if (input.version !== undefined) op.version = input.version
       if (input.initiator !== undefined) op.initiator = input.initiator
-      const ops = loadOps()
+      const ops = loadOpsOrEmpty()
       ops.push(op)
       persistOps(ops)
       logger.log(`plugins-journal: recorded ${input.kind} ${input.name} (op ${op.id})`)
@@ -280,7 +379,7 @@ export function createPluginsJournal(stateDir: string, logger: JournalLogger): P
     },
 
     recordPreImage(opId) {
-      const ops = loadOps()
+      const ops = loadOpsOrEmpty()
       const op = ops.find(candidate => candidate.id === opId)
       if (op === undefined) return
       op.preImage = opId
@@ -289,7 +388,7 @@ export function createPluginsJournal(stateDir: string, logger: JournalLogger): P
 
     markChildPid(opId, pid) {
       if (!Number.isInteger(pid) || pid <= 1) return
-      const ops = loadOps()
+      const ops = loadOpsOrEmpty()
       const op = ops.find(candidate => candidate.id === opId)
       if (op === undefined) return
       op.childPid = pid
@@ -297,7 +396,7 @@ export function createPluginsJournal(stateDir: string, logger: JournalLogger): P
     },
 
     markTerminal(opId, patch) {
-      const ops = loadOps()
+      const ops = loadOpsOrEmpty()
       const op = ops.find(candidate => candidate.id === opId)
       if (op === undefined) return null
       op.status = patch.status
@@ -314,15 +413,15 @@ export function createPluginsJournal(stateDir: string, logger: JournalLogger): P
     },
 
     recent(limit = JOURNAL_RETENTION_LIMIT) {
-      return newestFirst(loadOps()).slice(0, limit)
+      return newestFirst(loadOpsOrEmpty()).slice(0, limit)
     },
 
     latestFailed() {
-      return newestFirst(loadOps()).find(op => op.status === 'failed') ?? null
+      return newestFirst(loadOpsOrEmpty()).find(op => op.status === 'failed') ?? null
     },
 
     reconcile() {
-      const ops = loadOps()
+      const ops = loadOpsOrEmpty()
       const reconciled: JournalOp[] = []
       for (const op of ops) {
         if (op.status !== 'pending') continue
@@ -343,6 +442,25 @@ export function createPluginsJournal(stateDir: string, logger: JournalLogger): P
         )
       }
       return reconciled
+    },
+
+    integrity() {
+      // Force one real read: an unread journal file must never report 'ok'
+      // merely because nothing has looked at it yet.
+      const loaded = loadOps()
+      if (!loaded.ok || corruption !== null) {
+        const known = corruption ?? { error: 'journal is unreadable', asidePath: null }
+        return { state: 'corrupt', error: known.error, asidePath: known.asidePath }
+      }
+      const evidence = corruptEvidence()
+      if (evidence.length > 0) {
+        return {
+          state: 'corrupt',
+          error: `unresolved corrupt-journal evidence from a previous run: ${evidence.join(', ')}`,
+          asidePath: join(root, evidence[evidence.length - 1]!),
+        }
+      }
+      return { state: 'ok' }
     },
   }
 }
