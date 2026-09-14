@@ -292,11 +292,11 @@ export const zh = {
   chamberRemoteFailed: '远端：已注入（加载失败）',
   pluginDisabled: '已停用',
   // 第三方行生效状态 chips（Loader 快照派生，local/gateway/http 行内状态）：
-  // 生效中（ok）/ 加载中（muted）/ 重启后生效（warn）；已停用复用
-  // pluginDisabled，加载失败复用 chamberBadgeFailed。
+  // 生效中（ok）/ 加载中（muted）；已停用复用 pluginDisabled，加载失败复用
+  // chamberBadgeFailed。快照无同名行时状态格中性（无「重启后生效」承诺 ——
+  // bundle 层的挂载行不带包名，无从判定，见 plugin-inventory-text.ts）。
   thirdPartyLiveActive: '生效中',
   thirdPartyLiveStarting: '加载中',
-  thirdPartyLiveRestart: '重启后生效',
   // gateway 本地导入（文件夹/.tgz）成功且受控重启已生效：插件已挂载在运行实例上。
   materializeLive: '已安装并已重启生效',
   chamberSyncNow: '重新同步 chamber 组件',
@@ -665,12 +665,13 @@ export const en: Record<SettingsConnectionsKey, string> = {
   chamberRemoteFailed: 'Remote: injected (failed to load)',
   pluginDisabled: 'Disabled',
   // Third-party row live-state chips (Loader-snapshot derived, in-row state
-  // for the local / gateway / http zones): Active (ok) / Starting (muted) /
-  // Activates on restart (warn); Disabled reuses pluginDisabled, failed to
-  // load reuses chamberBadgeFailed.
+  // for the local / gateway / http zones): Active (ok) / Starting (muted);
+  // Disabled reuses pluginDisabled, failed to load reuses chamberBadgeFailed.
+  // No matching snapshot entry leaves the cell neutral — no "activates on
+  // restart" promise is derivable for a bundle layer (see
+  // plugin-inventory-text.ts).
   thirdPartyLiveActive: 'Active',
   thirdPartyLiveStarting: 'Starting',
-  thirdPartyLiveRestart: 'Activates on restart',
   // Gateway local import (folder / .tgz) success with the controlled restart
   // settled: the plugin is mounted on the running instance.
   materializeLive: 'Installed and live (restarted)',

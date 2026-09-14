@@ -7,8 +7,11 @@
  * (plan 24 B1.5 — local manifest truth + remote live-Loader state badge-
  * ized into {labelKey, tone}) and the third-party row live-state chips
  * (Loader-snapshot derived 生效状态 for the local/gateway/http installed
- * lists — liveness only from an enabled + active fiber, a missing entry
- * claims a restart, and an unreadable snapshot stays neutral).
+ * lists — liveness only from an enabled + active fiber of the SAME name, a
+ * missing entry stays neutral: a bundle layer mounts the rows its
+ * cordis.patch.yml inserts, never an entry named after the bundle, so the
+ * old "no entry + bundle layer → 重启后生效" claim was a permanent false
+ * warning; an unreadable snapshot stays neutral).
  */
 
 import { test } from 'node:test'
@@ -149,16 +152,17 @@ test('installedRowLiveState: protected composition/seed rows never claim a Loade
   const snapshot = { entries: [
     { moduleName: 'third-party-live', enabled: true, fiberPhase: 'active' },
   ] } as unknown as PluginInventorySnapshot
-  assert.equal(installedRowLiveState(snapshot, { name: '@deepseek-ai/dsh-base', protected: true, role: 'composition' }, true), null)
-  assert.equal(installedRowLiveState(snapshot, { name: '@dsh-chamber/dsh-chamber-seed-client-graph', protected: true, role: 'seed' }, true), null)
-  assert.equal(installedRowLiveState(snapshot, { name: 'x', protected: false, role: 'composition' }, true), null)
+  assert.equal(installedRowLiveState(snapshot, { name: '@deepseek-ai/dsh-base', protected: true, role: 'composition' }), null)
+  assert.equal(installedRowLiveState(snapshot, { name: '@dsh-chamber/dsh-chamber-seed-client-graph', protected: true, role: 'seed' }), null)
+  assert.equal(installedRowLiveState(snapshot, { name: 'x', protected: false, role: 'composition' }), null)
   // 用户行照旧。
-  assert.deepEqual(installedRowLiveState(snapshot, { name: 'third-party-live', protected: false, role: 'layer' }, true),
+  assert.deepEqual(installedRowLiveState(snapshot, { name: 'third-party-live', protected: false, role: 'layer' }),
     { labelKey: 'thirdPartyLiveActive', tone: 'ok' })
-  assert.deepEqual(installedRowLiveState(snapshot, { name: 'missing-entry', protected: false, role: 'third-party' }, true),
-    { labelKey: 'thirdPartyLiveRestart', tone: 'warn' })
-  assert.equal(installedRowLiveState(snapshot, { name: 'missing-entry', protected: false, role: 'third-party' }, false), null)
-  assert.equal(installedRowLiveState(null, { name: 'third-party-live', protected: false, role: 'layer' }, true), null)
+  // 快照无同名行 → 中性：bundle 层（role 'bundle'）与普通依赖同判据，绝不承诺重启生效
+  // （下一用例给真实报告形态）。
+  assert.equal(installedRowLiveState(snapshot, { name: 'missing-entry', protected: false, role: 'third-party' }), null)
+  assert.equal(installedRowLiveState(snapshot, { name: 'missing-entry', protected: false, role: 'bundle' }), null)
+  assert.equal(installedRowLiveState(null, { name: 'third-party-live', protected: false, role: 'layer' }), null)
 })
 
 test('thirdPartyLiveState: only an enabled + active Loader entry claims live, never an unreadable snapshot', () => {
@@ -173,44 +177,61 @@ test('thirdPartyLiveState: only an enabled + active Loader entry claims live, ne
       { entryId: 'e7', moduleName: 'dsh-mcp-scope-off-loading', enabled: false, fiberPhase: 'loading' },
     ],
   }
-  // Matched-entry states are independent of the loader-entry expectation (a
-  // matched entry IS a loader entry): expectations true/false agree here.
+  // Matched-entry states are read from the matched row alone, one per phase;
   // enabled + active = the only live claim.
-  assert.deepEqual(thirdPartyLiveState(snapshot, 'dsh-mcp-scope', true), { labelKey: 'thirdPartyLiveActive', tone: 'ok' })
+  assert.deepEqual(thirdPartyLiveState(snapshot, 'dsh-mcp-scope'), { labelKey: 'thirdPartyLiveActive', tone: 'ok' })
   // enabled, not yet active (null fiber / pending / loading) → starting, never live.
-  assert.deepEqual(thirdPartyLiveState(snapshot, 'dsh-mcp-scope-lazy', true), { labelKey: 'thirdPartyLiveStarting', tone: 'muted' })
-  assert.deepEqual(thirdPartyLiveState(snapshot, 'dsh-mcp-scope-booting', true), { labelKey: 'thirdPartyLiveStarting', tone: 'muted' })
-  assert.deepEqual(thirdPartyLiveState(snapshot, 'dsh-mcp-scope-loading', true), { labelKey: 'thirdPartyLiveStarting', tone: 'muted' })
+  assert.deepEqual(thirdPartyLiveState(snapshot, 'dsh-mcp-scope-lazy'), { labelKey: 'thirdPartyLiveStarting', tone: 'muted' })
+  assert.deepEqual(thirdPartyLiveState(snapshot, 'dsh-mcp-scope-booting'), { labelKey: 'thirdPartyLiveStarting', tone: 'muted' })
+  assert.deepEqual(thirdPartyLiveState(snapshot, 'dsh-mcp-scope-loading'), { labelKey: 'thirdPartyLiveStarting', tone: 'muted' })
   // enabled + failed → load failure (the shared failed-to-load label).
-  assert.deepEqual(thirdPartyLiveState(snapshot, 'dsh-mcp-scope-failed', false), { labelKey: 'chamberBadgeFailed', tone: 'danger' })
+  assert.deepEqual(thirdPartyLiveState(snapshot, 'dsh-mcp-scope-failed'), { labelKey: 'chamberBadgeFailed', tone: 'danger' })
   // Disabled is dominant, whatever the fiber reports (an unloading fiber may
   // still be active while the disable lands).
-  assert.deepEqual(thirdPartyLiveState(snapshot, 'dsh-mcp-scope-off', true), { labelKey: 'pluginDisabled', tone: 'muted' })
-  assert.deepEqual(thirdPartyLiveState(snapshot, 'dsh-mcp-scope-off-loading', false), { labelKey: 'pluginDisabled', tone: 'muted' })
+  assert.deepEqual(thirdPartyLiveState(snapshot, 'dsh-mcp-scope-off'), { labelKey: 'pluginDisabled', tone: 'muted' })
+  assert.deepEqual(thirdPartyLiveState(snapshot, 'dsh-mcp-scope-off-loading'), { labelKey: 'pluginDisabled', tone: 'muted' })
 })
 
-test('thirdPartyLiveState: a bundle-layer row without a matching entry claims a restart; a non-layer row stays neutral', () => {
-  const snapshot: PluginInventorySnapshot = {
+test('thirdPartyLiveState: a bundle-layer row is neutral without a name match and live only from its own entry', () => {
+  // 真实报告形态（2026-12 review）：`@deepseek-ai/dsh-experimental-agent-team-profile`
+  // 是 bundle 层，实例的挂载行来自它 cordis.patch.yml 的 insert 列表 ——
+  // @deepseek-ai/dsh-experimental-agent-team / @deepseek-ai/dsh-experimental-tool-agent-team；
+  // profile 根 cordis.yml 是空条目列表，bundle 包名从不成为 Loader 行。旧实现按
+  // 「快照无同名行 + 是 bundle 层」给出「重启后生效」，对每个 bundle 层永久为真
+  // （实例已重启并实际生效也不消失）。
+  const bundleRow = '@deepseek-ai/dsh-experimental-agent-team-profile'
+  const composedWithoutBundleName: PluginInventorySnapshot = {
     entries: [
-      { entryId: 'e1', moduleName: 'dsh-mcp-scope', enabled: true, fiberPhase: 'active' },
+      { entryId: 'e1', moduleName: '@deepseek-ai/dsh-experimental-agent-team', enabled: true, fiberPhase: 'active' },
+      { entryId: 'e2', moduleName: '@deepseek-ai/dsh-experimental-tool-agent-team', enabled: true, fiberPhase: 'active' },
     ],
   }
-  // Installed in the profile manifest AS A BUNDLE LAYER but the RUNNING
-  // instance has not mounted it (the Loader reports no such module) →
-  // activates on restart (never a live claim).
-  assert.deepEqual(thirdPartyLiveState(snapshot, 'just-installed-plugin', true), { labelKey: 'thirdPartyLiveRestart', tone: 'warn' })
-  // Exact-name match only: a near name is not the row's entry.
-  assert.deepEqual(thirdPartyLiveState(snapshot, 'dsh-mcp-scope@1.0.0', true), { labelKey: 'thirdPartyLiveRestart', tone: 'warn' })
-  // NOT a bundle layer (plain / client-only dependency — `dsh plugin add`
-  // only promotes dsh.bundle-declaring packages into the layer stack): no
-  // loader entry can ever appear, so a restart promise would be a false
-  // promise — the cell stays neutral.
-  assert.equal(thirdPartyLiveState(snapshot, 'plain-lib-dep', false), null)
+  // 已生效的实例：insert 行活着，但没有任何归属事实能把这些行算到该 bundle 名下 →
+  // 状态格中性，绝不显示 restart（本回归的判据）。
+  assert.equal(thirdPartyLiveState(composedWithoutBundleName, bundleRow), null)
+  // 刚安装、实例尚未重启：视图同样只看到「无同名行」。两个方向都没有可用的宿主事实，
+  // 因此两边都不承诺 —— 取舍见 plugin-inventory-text.ts 的 JSDoc。
+  assert.equal(thirdPartyLiveState({ entries: [] }, bundleRow), null)
+  // 若某个 patch 确实以该包名插入了一行，同一路同名匹配照旧给出真实状态（不是无条件中性）。
+  assert.deepEqual(
+    thirdPartyLiveState({ entries: [{ entryId: 'e1', moduleName: bundleRow, enabled: true, fiberPhase: 'active' }] }, bundleRow),
+    { labelKey: 'thirdPartyLiveActive', tone: 'ok' })
+  assert.deepEqual(
+    thirdPartyLiveState({ entries: [{ entryId: 'e1', moduleName: bundleRow, enabled: false, fiberPhase: 'active' }] }, bundleRow),
+    { labelKey: 'pluginDisabled', tone: 'muted' })
+  assert.deepEqual(
+    thirdPartyLiveState({ entries: [{ entryId: 'e1', moduleName: bundleRow, enabled: true, fiberPhase: 'failed' }] }, bundleRow),
+    { labelKey: 'chamberBadgeFailed', tone: 'danger' })
+  // Exact-name match only: a near name is not the row's entry (never a restart
+  // promise, never a live claim from a version-suffixed name).
+  assert.equal(thirdPartyLiveState(composedWithoutBundleName, `${bundleRow}@0.1.5-rc.2`), null)
+  // 普通 / client-only 依赖无同名行同样中性。
+  assert.equal(thirdPartyLiveState(composedWithoutBundleName, 'plain-lib-dep'), null)
 })
 
 test('thirdPartyLiveState: a null snapshot (instance not running / read failed) stays neutral — never a claim', () => {
-  assert.equal(thirdPartyLiveState(null, 'any-plugin', true), null)
-  assert.equal(thirdPartyLiveState(null, 'plain-lib-dep', false), null)
+  assert.equal(thirdPartyLiveState(null, 'any-plugin'), null)
+  assert.equal(thirdPartyLiveState(null, 'plain-lib-dep'), null)
 })
 
 /* ---- sshChamberGates (design 13 §6 / design 20 §6, 2026-12 review): the two

@@ -186,38 +186,6 @@ export interface ThirdPartyLiveState {
 }
 
 /**
- * Live state of one installed third-party package, derived from the managed
- * instance's Loader snapshot. Exact-name match (`moduleName === packageName`
- * — the historical exact-name contract for non-chamber names, mirroring
- * chamberRemoteKey): a profile dependency whose package mounts as a Loader
- * entry keeps the package name as its module name. Each state stays under
- * its honesty ceiling — a live claim only from an enabled + active fiber:
- *  - no matching entry AND the package is a profile LAYER (in
- *    `dsh.profile.bundles` / `localList.bundles` — `expectsLoaderEntry`) →
- *    the RUNNING instance has not mounted it yet; it activates on the
- *    instance's next restart (never a live claim);
- *  - no matching entry and NOT a profile layer (plain / client-only
- *    dependency — nothing mounts it on restart: `dsh plugin add` only adds
- *    dsh.bundle-declaring packages to the bundle layers) → null: the state
- *    cell stays neutral; "重启后生效" would be a false promise;
- *  - matched but disabled → installed, explicitly disabled (已停用);
- *  - matched + enabled + active → mounted and live (生效中);
- *  - matched + enabled + failed → the load failed (加载失败);
- *  - matched + enabled in any other phase (pending / loading / unloading /
- *    null fiber) → still loading or between lifecycles (加载中).
- * @param snapshot - the Loader inventory snapshot; null (the read failed or
- *   the instance is not reachable, e.g. a stopped local instance) → null:
- *   the caller keeps the state cell neutral — an unreadable snapshot is
- *   never a state claim.
- * @param expectsLoaderEntry - whether the installed row names a profile
- *   bundle layer (local: `localList.bundles.includes(name)`; gateway:
- *   `installed.bundles.includes(name)`). Only such rows can ever mount via
- *   the Loader, so only they may render the "activates on restart" state
- *   when the snapshot has no entry yet.
- * @returns The chip {labelKey, tone}, or null when no snapshot is available
- *   or the row cannot mount (no entry + not a bundle layer).
- */
-/**
  * Live-state for one INSTALLED row: a protected composition/seed row is part of
  * the installation baseline (a host-side boot layer), so it is never expected
  * to be a Loader client entry — asking for one would paint a false
@@ -225,26 +193,69 @@ export interface ThirdPartyLiveState {
  * review). Such rows only reach this list when the profile itself declares them
  * as dependencies (§6.11.5's 2026-09 row-set revision stopped projecting the
  * B₀ ∪ S baseline into the installed list).
+ * @param snapshot - the managed instance's Loader snapshot; null (read failed /
+ *   instance not reachable) → null, never a state claim.
+ * @param row - the installed row's name plus its backend-computed role /
+ *   protection flags.
+ * @returns the row's live-state chip, or null for a baseline row or when the
+ *   snapshot answers nothing (thirdPartyLiveState).
  */
 export function installedRowLiveState(
   snapshot: Pick<PluginInventorySnapshot, 'entries'> | null,
   row: { name: string; protected: boolean; role: string },
-  expectsLoaderEntry: boolean,
 ): ThirdPartyLiveState | null {
   if (row.protected || row.role === 'composition' || row.role === 'seed') return null
-  return thirdPartyLiveState(snapshot, row.name, expectsLoaderEntry)
+  return thirdPartyLiveState(snapshot, row.name)
 }
 
+/**
+ * Live state of one installed package, derived from the managed instance's
+ * Loader snapshot. Exact-name match (`moduleName === packageName` — the
+ * historical exact-name contract for non-chamber names, mirroring
+ * chamberRemoteKey): a profile dependency whose package mounts as a Loader
+ * entry keeps the package name as its module name. Each state stays under its
+ * honesty ceiling — a live claim only from an enabled + active fiber:
+ *  - no matching entry → null: the state cell stays neutral. The running
+ *    instance mounts nothing under this name, and no fact the view holds says
+ *    whether one is still coming (the bundle note below);
+ *  - matched but disabled → installed, explicitly disabled (已停用);
+ *  - matched + enabled + active → mounted and live (生效中);
+ *  - matched + enabled + failed → the load failed (加载失败);
+ *  - matched + enabled in any other phase (pending / loading / unloading /
+ *    null fiber) → still loading or between lifecycles (加载中).
+ *
+ * A missing entry is neutral for EVERY row, a `dsh.profile.bundles` layer
+ * included — the layer mechanism mounts the rows the bundle's patch inserts,
+ * never an entry named after the bundle itself (2026-12 review). The profile
+ * root `cordis.yml` is an empty entry list and each bundle contributes rows
+ * through the `insert:` list of its own `dsh.bundle.patch` `cordis.patch.yml`
+ * (app-boot's profile loader composes every layer over `[]`), so the bundle
+ * package is never a composed row — only the packages its patch inserts are
+ * (the reporting row `@deepseek-ai/dsh-experimental-agent-team-profile` inserts
+ * `@deepseek-ai/dsh-experimental-agent-team` and
+ * `@deepseek-ai/dsh-experimental-tool-agent-team`). The removed
+ * "no entry + bundle layer → 重启后生效" branch therefore fired for EVERY bundle
+ * layer of an already-restarted instance: a permanent false warning, never a
+ * pending restart. Intersecting the bundle's own insert names with the snapshot
+ * is the honest successor, but those names live only in
+ * `<profile>/node_modules/<bundle>/cordis.patch.yml`, which no renderer fact
+ * carries today — until a host fact supplies them, the neutral cell is the
+ * ceiling.
+ * @param snapshot - the Loader inventory snapshot; null (the read failed or
+ *   the instance is not reachable, e.g. a stopped local instance) → null:
+ *   the caller keeps the state cell neutral — an unreadable snapshot is
+ *   never a state claim.
+ * @param packageName - the installed row's package name.
+ * @returns The chip {labelKey, tone}, or null when no snapshot is available or
+ *   the snapshot has no entry under that name.
+ */
 export function thirdPartyLiveState(
   snapshot: Pick<PluginInventorySnapshot, 'entries'> | null,
   packageName: string,
-  expectsLoaderEntry: boolean,
 ): ThirdPartyLiveState | null {
   if (snapshot === null) return null
   const entry = snapshot.entries.find(candidate => candidate.moduleName === packageName)
-  if (entry === undefined) {
-    return expectsLoaderEntry ? { labelKey: 'thirdPartyLiveRestart', tone: 'warn' } : null
-  }
+  if (entry === undefined) return null
   if (!entry.enabled) return { labelKey: 'pluginDisabled', tone: 'muted' }
   if (entry.fiberPhase === 'active') return { labelKey: 'thirdPartyLiveActive', tone: 'ok' }
   // The failed-load label is the shared badge copy (chamberBadgeFailed:

@@ -1611,14 +1611,12 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
                           {unsync !== undefined && !(row.spec ?? '').startsWith('file:') ? <span className={css.pluginKindUnsync}> · {t('pluginsRowUnsyncable')}</span> : null}
                         </span>
                         <span className={clsx(css.pluginCell, css.pluginCellKind)}>
-                          {/* Only bundle-layer rows can mount via the Loader: a
-                              plain/client-only dependency with no loader entry
-                              never activates on restart — keep the cell neutral
-                              instead of promising 重启后生效. */}
-                          {/* 受保护行是安装自带基线（宿主侧 boot 层），从不是 Loader
-                              客户端入口 —— 对它们要 Loader 状态会在每次打开对话框时
-                              给出假告警（installedRowLiveState）。 */}
-                          {liveStateCell(installedRowLiveState(localSnapshot, row, rowCategory === 'bundle'))}
+                          {/* 状态格只读运行实例的 Loader 快照：只有同名行才给出生效状态。
+                              bundle 层自己从不是 Loader 行（挂载的是它 cordis.patch.yml 的
+                              insert 行），无同名行即中性 —— 绝不承诺「重启后生效」；受保护行
+                              是安装自带基线（宿主侧 boot 层），同样不索要 Loader 状态
+                              （installedRowLiveState）。 */}
+                          {liveStateCell(installedRowLiveState(localSnapshot, row))}
                         </span>
                         {rowActionCell(row, localRemoveBusy || applying || installing || folderBusy, () => {
                           setLocalRemoveTarget(row.name)
@@ -1697,11 +1695,10 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
                                   {installedSpecCell(row)}
                                 </span>
                                 <span className={clsx(css.pluginCell, css.pluginCellKind)}>
-                                  {/* Only dsh.profile.bundles layers mount via the
-                                      Loader (installed.bundles) — non-bundle deps
-                                      with no loader entry never activate on
-                                      restart: neutral cell, never a false 重启后生效. */}
-                                  {liveStateCell(installedRowLiveState(snapshot, row, installed.bundles.includes(row.name)))}
+                                  {/* 与 local 列表同一判据（installedRowLiveState）：
+                                      同名 Loader 行才给状态，bundle 层同普通依赖一样
+                                      无同名行即中性 —— 绝不承诺「重启后生效」。 */}
+                                  {liveStateCell(installedRowLiveState(snapshot, row))}
                                 </span>
                                 {rowActionCell(row, opsBlocked, () => {
                                   setManageStatus(null)
@@ -1769,7 +1766,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
           {thirdParty.map(entry => (
             <div key={entry.entryId} className={css.pluginChamberRow}>
               <code className={css.pluginName}>{entry.moduleName}</code>
-              {liveStateCell(thirdPartyLiveState(snapshot, entry.moduleName, true))}
+              {liveStateCell(thirdPartyLiveState(snapshot, entry.moduleName))}
             </div>
           ))}
         </div>
