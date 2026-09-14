@@ -322,8 +322,10 @@
   （几何观感、横滑与谱系 hover-open 互扰、横向平移与抽屉边缘手势）、该走查目前**只读**
   （抽屉/设置/键盘补偿与其余 44px 座席未断言），以及**会话打开停滞的 WS 帧证据**；
   **锚点门在 CI 无上游树时 fail-soft 跳过**（`packages/desktop/vendor/dsh` 只有
-  lockfile）⇒ 目前只保护装有 anchor 的开发机，若要 CI 生效需把已知良好 pin 的发射集
-  存成生成式快照；⑥ **pin 前瞻**：上游 npm `next`
+  lockfile）⇒ 默认那条腿只保护装有 anchor 的开发机；需要「必须真的查过」的场合
+  （升级流程 §7）加 `--require-anchor-root`：缺根、无 client 产物、或锚点树版本与
+  仓内 pin 不一致都 exit 1。要在 CI 常态生效仍需把已知良好 pin 的发射集存成生成式
+  快照；⑥ **pin 前瞻**：上游 npm `next`
   已是 `0.1.5-rc.2`（client 包已发布，`latest` 仍为 `0.1.5-rc.1`）——pin 前移须按
   `packages/dsh-chamber-client-ui-mobile/README.md`「Anchor baseline」重审锚点
   （风险集中在 ui-layout frame 与 settings/composer 结构）；⑦ **iOS 键盘补偿期
@@ -358,9 +360,9 @@
   剩余——**实机门禁**（§18.6：真机触控目标比例/抽屉开合/键盘遮挡
   （含新补偿层的 iOS 时序与 Android WebView 盲区、**聚焦缩放后的打字正例**、
   缩放态平移不得引起抖动、捏合缩放负例、提交窗口不闪落、重挂 re-arm、
-  死区 ≤23px）/安全区/抽屉开关不重叠/crumbs 单行平移（**已由 2026-09-14 review-fix
-  从「换行」改为「保持官方 nowrap + 横向平移」**；原换行规则会让无 class 的谱系计数
-  span 逐字竖排，即用户截图的「31 个子代理」竖排五行）/iOS 单击
+  死区 ≤23px）/安全区/抽屉开关不重叠/crumbs 条保持官方 nowrap 后的横向平移手感
+  （无 class 的谱系计数 span 只靠继承 nowrap 才不成竖排，故该条不许退回换行；
+  平移与抽屉边缘手势是否互扰仍需真机）/iOS 单击
   切换/设置手机档走查（含分区切换重置）/刘海横屏/深层谱系高度等；
   **移动端 git 侧边栏**（桌面链 chamber sidebar + `sidebar.workspace.git`
   座席为桌面专有形态，gateway 链官方 sidebar 无该座席；接入需装配矩阵第二
@@ -399,16 +401,15 @@
     ~2min 一次的连接 bounce**——「桌面也发生」若指桌面 chamber App，此即现成解释。
 - **会话打开停滞（「载入历史…」永久停留，2026-09-14 实机现象）**：手机经 gateway
   打开一个大会话（`session-28e9eb86`「评审 dsh Electron 桌面版架构」，31 个后代
-  子代理）时会话区只显示 `chat.loadingHistory`。**根因未证实**——已排除：插件锚点
-  （41 条在 rc.2 全部命中且插件不触碰 fetch/WS/store）、shell 装载失败（官方
-  `assertEntriesActive` 任一行非 ACTIVE 即整页失败，与「骨架已挂载」不符）、鉴权
-  （gateway 日志有 `browser-auth cookie minted`）、WS 被拒（无 non-101 且手机那条
-  splice 存活 186s）、`/api` RPC（审计无 `path:api`）、宿主冷读慢（该会话 724 事件 /
-  3.73 MiB 解码 / 本机 18ms）。唯一与症状同构的状态 = **mux 物理 socket 正常而
-  `session/follow` 逻辑流永久无首帧**，而客户端与宿主**都没有首帧超时**。收口需要
-  **设备侧帧证据**（CDP WS Frames 或抓包），见 `scripts/gui-acceptance/` 的移动走查；
-  插件侧已有全属性判据的「停滞提示 + 一键重载」兜底（`session-stall.ts`），
-  **其 45s 阈值与 `active|engaging` 取值都未经真机校准**——真机对照前不得当成已验收。
+  子代理）时会话区只显示 `chat.loadingHistory`。**根因未证实**，唯一与症状同构的
+  状态 = **mux 物理 socket 正常而 `session/follow` 逻辑流永久无首帧**，而客户端与
+  宿主**都没有首帧超时**；收口需要**设备侧帧证据**（CDP WS Frames 或抓包），入口是
+  `scripts/gui-acceptance/mobile-walkthrough.mjs`（其 `mobile-ws-frames.json` 落盘前
+  过脱敏）。插件侧的「停滞提示 + 用户主动重载」兜底（`session-stall.ts`）判据全为
+  属性锚点，**但 45s 阈值仍未经真机校准**——真机对照前不得当成已验收；判据的状态
+  取值与「会话切换重置」两条已按 2026-12 复核修正（`data-phase` 的 DOM 取值空间是
+  `settling|hero|active`，会话身份取会话作用域的 header 节点），其依据写在该模块头注
+  与 `README.md`「Anchor baseline」。
 - **上游装载面的三项待办（本仓只登记，不改 upstream）**：① `dsh-client-modules`
   的 `compose()` 把**全部非 bootstrap 行**打进一个 application 批次、只按 URL 3 KiB
   切分（不按字节）⇒ 首屏一个 ~10.65 MiB 响应，其中 `ui-sidebar-documentpreview`
