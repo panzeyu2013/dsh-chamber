@@ -31,6 +31,11 @@
  * innocent third-party name — pnpm installs the ARCHIVE's name, and that name
  * then lands in the profile as a DIRECT dependency (exempt from the post-install
  * verifier), i.e. the exact shadow the protected set exists to prevent.
+ * 2026-12 audit fix: the capture CLOSES at the end of the candidate's own data
+ * area (a real archive carries entries after `package/package.json`, and their
+ * data must not be appended to the JSON), the oversize flag is per candidate
+ * (never sticky) and the capture is bounded by TGZ_MANIFEST_MAX_BYTES — the
+ * LAST candidate wins, matching the entry pnpm's extraction overwrites.
  *
  * Pure Node (node:zlib), no dependencies. Returns a promise (the gunzip
  * stream is inherently async); the memory held at any moment is one 512-byte
@@ -142,17 +147,29 @@ export function scanTgzMetadata(buffer: Buffer): Promise<TgzScanResult> {
     /** Partial header accumulation across chunk boundaries. */
     const headerParts: Buffer[] = []
     let headerLength = 0
-    /** Bounded capture of `package/package.json` (see the module header). */
+    /**
+     * Bounded capture of the npm-pack `package/package.json` (see the module
+     * header). The state is PER CANDIDATE: every candidate header resets it
+     * (an oversized candidate is never sticky, and the LAST candidate wins —
+     * pnpm's tar extraction overwrites, so the last entry is what installs).
+     * Capture stops at the end of the candidate's own data area
+     * (`manifestRemaining` reaches 0) — later entries' data must never leak
+     * into the JSON. `manifestParts === null` = the current candidate has no
+     * readable manifest.
+     */
     let manifestParts: Buffer[] | null = null
     let manifestCaptured = 0
+    /** Bytes of the CURRENT candidate's declared size still to capture. */
+    let manifestRemaining = 0
     let manifestOversized = false
     const manifestOf = (): { manifest: TgzManifestProjection | null; manifestError?: 'missing' | 'invalid' | 'oversized' } => {
       if (manifestOversized) return { manifest: null, manifestError: 'oversized' }
       if (manifestParts === null) return { manifest: null, manifestError: 'missing' }
       try {
-        // The capture covers the entry's declared size ROUNDED UP to the 512-byte
-        // tar block, so trailing NUL padding is expected and must be stripped
-        // before parsing (2026-12 review).
+        // Only the candidate's declared data bytes were captured — never the
+        // 512-block padding tail, never a later entry's data. A manifest may
+        // still declare its own trailing NUL/space bytes inside that size, so
+        // strip them before parsing.
         const text = Buffer.concat(manifestParts).subarray(0, manifestCaptured).toString('utf8').replace(/[\0\s]+$/u, '')
         const parsed: unknown = JSON.parse(text)
         if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -186,9 +203,11 @@ export function scanTgzMetadata(buffer: Buffer): Promise<TgzScanResult> {
       while (offset < chunk.length) {
         if (skipRemaining > 0) {
           const consumed = Math.min(skipRemaining, chunk.length - offset)
-          if (manifestParts !== null) {
-            manifestParts.push(Buffer.from(chunk.subarray(offset, offset + consumed)))
-            manifestCaptured += consumed
+          if (manifestRemaining > 0 && manifestParts !== null) {
+            const capture = Math.min(manifestRemaining, consumed)
+            manifestParts.push(Buffer.from(chunk.subarray(offset, offset + capture)))
+            manifestCaptured += capture
+            manifestRemaining -= capture
           }
           skipRemaining -= consumed
           offset += consumed
@@ -222,11 +241,17 @@ export function scanTgzMetadata(buffer: Buffer): Promise<TgzScanResult> {
           return
         }
         if (header.name === 'package/package.json' || header.name === './package/package.json') {
-          if (header.size > TGZ_MANIFEST_MAX_BYTES) {
-            manifestOversized = true
-          } else {
+          // New candidate: the previous capture is closed for good. An
+          // oversized candidate is recorded WITHOUT buffering a single byte
+          // (the capture bound the module header promises), and it is not
+          // sticky — a later readable candidate replaces it entirely.
+          manifestParts = null
+          manifestCaptured = 0
+          manifestRemaining = 0
+          manifestOversized = header.size > TGZ_MANIFEST_MAX_BYTES
+          if (!manifestOversized) {
             manifestParts = []
-            manifestCaptured = 0
+            manifestRemaining = header.size
           }
         }
         entries += 1

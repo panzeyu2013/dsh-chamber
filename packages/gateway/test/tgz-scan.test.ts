@@ -10,6 +10,7 @@ import assert from 'node:assert/strict'
 import { gzipSync } from 'node:zlib'
 import {
   scanTgzMetadata,
+  TGZ_MANIFEST_MAX_BYTES,
   TGZ_MAX_ENTRIES,
   TGZ_MAX_UNPACKED_BYTES,
 } from '../src/tgz-scan.ts'
@@ -43,6 +44,71 @@ test('scan: projects the npm-pack manifest identity (bounded) or says why it can
   assert.equal(huge.ok, true)
   assert.equal(huge.ok ? huge.manifest : null, null)
   assert.equal(huge.ok ? huge.manifestError : null, 'oversized')
+})
+
+test('scan: the manifest capture closes at the end of its entry data area', async () => {
+  // The audit's end-to-end shape: a real desktop-built archive carries files
+  // ordered AFTER `package/package.json` (here `package/zzz.bin`) — the
+  // capture must not swallow their data into the manifest JSON.
+  const manifest = JSON.stringify({ name: 'capture-close-pkg', version: '2.3.4' })
+  const tgz = buildTgz([
+    { name: 'package/package.json', data: manifest },
+    { name: 'package/index.js', data: 'export const x = 1\n' },
+    { name: 'package/zzz.bin', data: 'Z'.repeat(4096) },
+  ])
+  const result = await scanTgzMetadata(tgz)
+  assert.equal(result.ok, true)
+  if (result.ok) {
+    assert.deepEqual(result.manifest, { name: 'capture-close-pkg', version: '2.3.4' })
+    assert.equal(result.manifestError, undefined)
+    assert.equal(result.entries, 3)
+  }
+})
+
+test('scan: a large entry after the manifest is neither captured nor able to break it', async () => {
+  const manifest = JSON.stringify({ name: 'bounded-capture-pkg', version: '1.0.0' })
+  const tgz = buildTgz([
+    { name: 'package/package.json', data: manifest },
+    // 1 MiB — far beyond the 64 KiB capture bound the module promises.
+    { name: 'package/big.bin', data: Buffer.alloc(1024 * 1024, 0x5a) },
+  ])
+  const result = await scanTgzMetadata(tgz)
+  assert.equal(result.ok, true)
+  if (result.ok) {
+    assert.deepEqual(result.manifest, { name: 'bounded-capture-pkg', version: '1.0.0' })
+    assert.equal(result.manifestError, undefined)
+  }
+})
+
+test('scan: an oversized candidate is not sticky — a later valid candidate is still adopted', async () => {
+  const tgz = buildTgz([
+    // Declared size past the capture bound: skipped WITHOUT buffering.
+    { name: 'package/package.json', data: ' '.repeat(TGZ_MANIFEST_MAX_BYTES + 1024) },
+    { name: 'package/package.json', data: JSON.stringify({ name: 'later-valid-pkg', version: '3.0.0' }) },
+  ])
+  const result = await scanTgzMetadata(tgz)
+  assert.equal(result.ok, true)
+  if (result.ok) {
+    assert.deepEqual(result.manifest, { name: 'later-valid-pkg', version: '3.0.0' })
+    assert.equal(result.manifestError, undefined)
+  }
+})
+
+test('scan: a LATER oversized candidate supersedes an earlier valid one (pnpm installs the last entry)', async () => {
+  // Security-shaped: keeping the earlier valid capture would let a caller
+  // declare the innocent name while pnpm installs the later (oversized,
+  // unreadable-to-us) manifest — exactly the shadow the identity binding
+  // exists to prevent.
+  const tgz = buildTgz([
+    { name: 'package/package.json', data: JSON.stringify({ name: 'innocent-early', version: '1.0.0' }) },
+    { name: 'package/package.json', data: ' '.repeat(TGZ_MANIFEST_MAX_BYTES + 1024) },
+  ])
+  const result = await scanTgzMetadata(tgz)
+  assert.equal(result.ok, true)
+  if (result.ok) {
+    assert.equal(result.manifest, null)
+    assert.equal(result.manifestError, 'oversized')
+  }
 })
 
 test('scan: not gzip (plain bytes / empty buffer) → not_gzip', async () => {

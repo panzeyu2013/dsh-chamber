@@ -19,12 +19,13 @@ import { randomBytes } from 'node:crypto'
 import { closeSync, ftruncateSync, mkdtempSync, mkdirSync, openSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
-import { gunzipSync } from 'node:zlib'
+import { gunzipSync, gzipSync } from 'node:zlib'
 import { scanTgzMetadata } from '../gateway/src/tgz-scan.ts'
 import {
   buildPluginTarball,
   classifyPluginPick,
   GATEWAY_PLUGIN_VERSION_PATTERN,
+  inspectTgzManifest,
   listTgzManifest,
   PLUGIN_MANIFEST_MAX_BYTES,
   pluginNameFromFolder,
@@ -55,7 +56,9 @@ function write(root: string, relative: string, content: string | Buffer): void {
 }
 
 /** A tiny ustar header walker (test-side only) so mode/type assertions are
- *  against the actual archive bytes. */
+ *  against the actual archive bytes. The name field is bytes 0-99: a
+ *  NUL-terminated shorter name, or the full 100 bytes at the bound (the mode
+ *  bytes that follow are never part of it). */
 function tarHeaderEntries(tar: Buffer): Array<{ name: string; mode: number; typeflag: string }> {
   const entries: Array<{ name: string; mode: number; typeflag: string }> = []
   let offset = 0
@@ -63,8 +66,9 @@ function tarHeaderEntries(tar: Buffer): Array<{ name: string; mode: number; type
     assert.ok(offset + 512 <= tar.length, 'unexpectedly truncated tar')
     const header = tar.subarray(offset, offset + 512)
     if (header.every(byte => byte === 0)) break
-    const nameNul = header.indexOf(0, 0)
-    const name = header.subarray(0, nameNul === -1 ? 100 : nameNul).toString('utf8')
+    const nameField = header.subarray(0, 100)
+    const nameNul = nameField.indexOf(0)
+    const name = nameField.subarray(0, nameNul === -1 ? 100 : nameNul).toString('utf8')
     const mode = parseInt(header.subarray(100, 107).toString('ascii').replace(/[^\d]/g, ''), 8)
     const sizeField = header.subarray(124, 136).toString('ascii').replace(/[\0 ]+$/u, '')
     const size = sizeField === '' ? 0 : parseInt(sizeField, 8)
@@ -77,6 +81,33 @@ function tarHeaderEntries(tar: Buffer): Array<{ name: string; mode: number; type
 
 function gzipBytes(archive: Buffer): Buffer {
   return gunzipSync(archive)
+}
+
+/** Test-side single-entry ustar block (name/size/typeflag only — neither
+ *  reader validates the checksum). Used ONLY to splice a decoy entry in front
+ *  of a REAL `buildPluginTarball` archive; the builder is the only production
+ *  writer. */
+function ustarEntry(name: string, content: string): Buffer {
+  const body = Buffer.from(content, 'utf8')
+  const header = Buffer.alloc(512)
+  header.write(name, 0, 'utf8')
+  header.write('0000644', 100, 'ascii')
+  header.write('0000000', 108, 'ascii')
+  header.write('0000000', 116, 'ascii')
+  header.write(body.length.toString(8).padStart(11, '0'), 124, 'ascii')
+  header.write('00000000000', 136, 'ascii')
+  header[156] = 0x30
+  header.write('ustar\0', 257, 'ascii')
+  header.write('00', 263, 'ascii')
+  const padded = Buffer.alloc(Math.ceil(body.length / 512) * 512)
+  body.copy(padded)
+  return Buffer.concat([header, padded])
+}
+
+/** The audit's shadow archive: a root `package.json` decoy FIRST, then a real
+ *  builder archive (whose `package/package.json` pnpm would actually install). */
+function prependRootManifestDecoy(archive: Buffer, manifest: { name: string; version: string }): Buffer {
+  return gzipSync(Buffer.concat([ustarEntry('package.json', JSON.stringify(manifest)), gunzipSync(archive)]))
 }
 
 test('buildPluginTarball packs a folder in the npm-pack layout with normalized modes and a valid manifest', async () => {
@@ -195,6 +226,52 @@ test('buildPluginTarball: a relative entry path beyond 100 bytes is an honest pa
   }
 })
 
+test('buildPluginTarball: the ustar 100-byte name bound is measured in UTF-8 bytes, not UTF-16 units', async () => {
+  // 'package/' (8 bytes) + 30 CJK chars (90 bytes) + suffix. The retired
+  // `archivePath.length > 100` check read 40/41 UTF-16 units for these paths,
+  // so BOTH "fit" — yet the 101-byte one was silently truncated mid-character
+  // inside the 100-byte header name field (archive ≠ reported entries).
+  const exactFile = `${'中'.repeat(30)}ab` // archive path: exactly 100 bytes
+  const overFile = `${'中'.repeat(30)}abc` // archive path: 101 bytes
+  const exactDir = `${'中'.repeat(30)}a/` // archive path: exactly 100 bytes
+  const overDir = `${'中'.repeat(30)}ab/` // archive path: 101 bytes
+
+  const atBoundary = makeFolder()
+  try {
+    write(atBoundary.path, exactFile, 'x')
+    mkdirSync(join(atBoundary.path, exactDir), { recursive: true })
+    write(atBoundary.path, 'package.json', JSON.stringify({ name: 'cjk-boundary', version: '1.0.0' }))
+    const result = await buildPluginTarball(atBoundary.path)
+    const headerNames = tarHeaderEntries(gzipBytes(result.buffer)).map(entry => entry.name)
+    for (const target of [`package/${exactDir}`, `package/${exactFile}`]) {
+      assert.equal(Buffer.byteLength(target, 'utf8'), 100, `fixture must sit exactly on the byte bound: ${target}`)
+      assert.ok(target.length < 100, 'the retired UTF-16 check would have accepted this path')
+      assert.ok(result.entries.includes(target), `entries must report the full 100-byte path: ${target}`)
+      assert.ok(headerNames.includes(target), `the header name must be the full 100-byte path, not truncated: ${headerNames.join(', ')}`)
+    }
+  } finally {
+    atBoundary.cleanup()
+  }
+
+  for (const kind of ['file', 'directory'] as const) {
+    const fixture = makeFolder()
+    try {
+      const over = kind === 'file' ? overFile : overDir
+      if (kind === 'file') write(fixture.path, over, 'x')
+      else mkdirSync(join(fixture.path, over), { recursive: true })
+      write(fixture.path, 'package.json', JSON.stringify({ name: 'cjk-boundary', version: '1.0.0' }))
+      assert.equal(Buffer.byteLength(`package/${over}`, 'utf8'), 101, kind)
+      await assert.rejects(buildPluginTarball(fixture.path), (error: unknown) => {
+        assert.equal((error as Error & { code?: string }).code, 'path_too_long', kind)
+        assert.match((error as Error).message, /100-byte ustar name field/, kind)
+        return true
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  }
+})
+
 test('buildPluginTarball: injected entry-cap and unpacked-byte limits error with the mirror codes', async () => {
   const many = makeFolder()
   try {
@@ -270,6 +347,31 @@ test('every archive the desktop builder accepts is accepted by the real gateway 
       { ok: true, entries: 15, error: null },
       'a desktop-built archive must always pass the gateway materialize scan (entries: package/ + package/lib/ + package.json + 12 files)',
     )
+  } finally {
+    fixture.cleanup()
+  }
+})
+
+test('a real desktop-built archive with an entry AFTER package/package.json still projects its manifest to the gateway scan', async () => {
+  const fixture = makeFolder()
+  try {
+    write(fixture.path, 'package.json', JSON.stringify({ name: 'e2e-capture-pkg', version: '1.2.3' }))
+    write(fixture.path, 'a.js', 'x')
+    // Sorted after package.json, so the archive's LAST file entry is zzz.txt —
+    // the exact shape the gateway scan used to reject as tgz_invalid.
+    write(fixture.path, 'zzz.txt', 'y')
+    const result = await buildPluginTarball(fixture.path)
+    assert.ok(
+      result.entries.indexOf('package/zzz.txt') > result.entries.indexOf('package/package.json'),
+      'fixture must carry an entry after package/package.json',
+    )
+    const scanned = await scanTgzMetadata(result.buffer)
+    assert.equal(scanned.ok, true)
+    if (scanned.ok) {
+      assert.deepEqual(scanned.manifest, { name: 'e2e-capture-pkg', version: '1.2.3' })
+      assert.equal(scanned.manifestError, undefined)
+    }
+    assert.deepEqual(listTgzManifest(result.buffer), { name: 'e2e-capture-pkg', version: '1.2.3' })
   } finally {
     fixture.cleanup()
   }
@@ -432,6 +534,68 @@ test('classifyPluginPick: an archive beyond TARBALL_MAX_ARCHIVE_BYTES is refused
     if (!pick.ok) assert.match(pick.error, new RegExp(`beyond the ${TARBALL_MAX_ARCHIVE_BYTES}-byte plugin archive cap`))
   } finally {
     fixture.cleanup()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Archive identity binding (2026-12 audit): pnpm installs the manifest at
+// `package/package.json`, so THAT identity is the one the protected-set
+// judgement must see — never an archive-order-first decoy.
+// ---------------------------------------------------------------------------
+
+test('classifyPluginPick: a stray root package.json can never mask the installed package/package.json identity', async () => {
+  const fixture = makeFolder()
+  const archivePath = join(tmpdir(), `decoy-root-manifest-${randomBytes(6).toString('hex')}.tgz`)
+  try {
+    write(fixture.path, 'package.json', JSON.stringify({ name: '@dsh-chamber/taken-seed', version: '9.9.9' }))
+    write(fixture.path, 'index.js', 'x')
+    const built = await buildPluginTarball(fixture.path)
+    assert.equal(built.manifest.ok, true)
+    // Decoy FIRST in archive order: the retired reader returned the first
+    // parseable candidate, i.e. this innocent third-party name — and the ssh /
+    // local write faces judged the protected-set on THAT name.
+    const decoy = prependRootManifestDecoy(built.buffer, { name: 'innocent-third-party', version: '1.0.0' })
+    writeFileSync(archivePath, decoy)
+    const pick = classifyPluginPick(archivePath)
+    assert.equal(
+      pick.ok,
+      false,
+      pick.ok ? `wrongly accepted as ${pick.source.kind === 'tgz' ? pick.source.name : pick.source.path}` : '',
+    )
+    if (!pick.ok) {
+      assert.ok(pick.error.includes('innocent-third-party'), pick.error)
+      assert.ok(pick.error.includes('@dsh-chamber/taken-seed'), pick.error)
+    }
+    // The bounded reader itself exposes BOTH names structurally.
+    const inspection = inspectTgzManifest(readFileSync(archivePath))
+    assert.equal(inspection.ok, false)
+    if (!inspection.ok && inspection.reason === 'identity_mismatch') {
+      assert.deepEqual(inspection.installed, { name: '@dsh-chamber/taken-seed', version: '9.9.9' })
+      assert.deepEqual(inspection.declared, { name: 'innocent-third-party', version: '1.0.0' })
+    } else {
+      assert.fail(`expected identity_mismatch, got ${JSON.stringify(inspection)}`)
+    }
+  } finally {
+    fixture.cleanup()
+    rmSync(archivePath, { force: true })
+  }
+})
+
+test('classifyPluginPick: a root package.json alone is still the fallback identity (no installed-path manifest)', () => {
+  const archivePath = join(tmpdir(), `root-manifest-only-${randomBytes(6).toString('hex')}.tgz`)
+  try {
+    writeFileSync(archivePath, gzipSync(Buffer.concat([
+      ustarEntry('package.json', JSON.stringify({ name: 'legacy-root-only', version: '0.1.0' })),
+      Buffer.alloc(1024),
+    ])))
+    const pick = classifyPluginPick(archivePath)
+    assert.equal(pick.ok, true, pick.ok ? '' : pick.error)
+    if (pick.ok && pick.source.kind === 'tgz') {
+      assert.equal(pick.source.name, 'legacy-root-only')
+      assert.equal(pick.source.version, '0.1.0')
+    }
+  } finally {
+    rmSync(archivePath, { force: true })
   }
 })
 

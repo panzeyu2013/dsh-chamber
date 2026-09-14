@@ -119,6 +119,13 @@ export interface PluginTarballBuildResult {
 // ustar header writer
 // ---------------------------------------------------------------------------
 
+/** Width of the ustar `name` field (bytes 0-99). The bound is BYTES: the
+ *  retired `archivePath.length > 100` check measured UTF-16 code units, so a
+ *  CJK path of 58 units / 138 bytes passed the check and was then silently
+ *  truncated mid-character by `header.write` — an archive that no longer
+ *  matched the `entries`/manifest the builder reported. */
+const USTAR_NAME_FIELD_BYTES = 100
+
 /** Write an octal field: `length-1` octal digits + NUL (ustar convention). */
 function writeOctalField(header: Buffer, offset: number, length: number, value: number): void {
   const text = value.toString(8).padStart(length - 1, '0')
@@ -129,7 +136,7 @@ function writeOctalField(header: Buffer, offset: number, length: number, value: 
 /** One 512-byte ustar v0 header block. `size` is only meaningful for files. */
 function ustarHeader(name: string, mode: number, size: number, typeflag: '0' | '5'): Buffer {
   const header = Buffer.alloc(512)
-  // name (bytes 0-99): the caller caps at 100 bytes and refuses longer names.
+  // name (bytes 0-99): the caller caps at 100 BYTES and refuses longer names.
   header.write(name, 0, 'utf8')
   // mode (100-107), uid/gid (108-123) — uid/gid stay 0: the archive is
   // unpacked by pnpm under the gateway user, ownership is not transferable.
@@ -287,6 +294,16 @@ function tarError(code: PluginTarballErrorCode, message: string): Error & { code
   return Object.assign(new Error(message), { code })
 }
 
+/** Refuse an archive entry path that does not fit the 100-byte ustar name
+ *  field. The field is a BYTE field: `String.length` counts UTF-16 code units
+ *  and let multibyte paths through to `header.write`, which truncated them at
+ *  byte 100 — archive bytes that no longer matched `entries`. */
+function assertUstarNameFits(archivePath: string): void {
+  if (Buffer.byteLength(archivePath, 'utf8') > USTAR_NAME_FIELD_BYTES) {
+    throw tarError('path_too_long', `archive entry path exceeds the ${USTAR_NAME_FIELD_BYTES}-byte ustar name field: ${archivePath}`)
+  }
+}
+
 /**
  * Build a gzip-compressed ustar tarball of a local plugin source folder
  * (npm-pack `package/` layout). Rejects (Error.code ∈ PluginTarballErrorCode)
@@ -379,9 +396,7 @@ function buildSync(
   }
 
   const addFile = (archivePath: string, body: Buffer): void => {
-    if (archivePath.length > 100) {
-      throw tarError('path_too_long', `archive entry path exceeds the 100-byte ustar name field: ${archivePath}`)
-    }
+    assertUstarNameFits(archivePath)
     const header = ustarHeader(archivePath, 0o644, body.length, '0')
     trackEntry(archivePath)
     // Padded data length — the ustar layout pads each body to a 512-byte
@@ -397,9 +412,7 @@ function buildSync(
   }
 
   const addDirectory = (archivePath: string): void => {
-    if (archivePath.length > 100) {
-      throw tarError('path_too_long', `archive entry path exceeds the 100-byte ustar name field: ${archivePath}`)
-    }
+    assertUstarNameFits(archivePath)
     trackEntry(archivePath)
     blocks.push(ustarHeader(archivePath, 0o755, 0, '5'))
   }
@@ -474,24 +487,51 @@ function buildSync(
 
 // ---------------------------------------------------------------------------
 // Bounded tgz manifest reader (roundtrip verification + archive-pick
-// classification, see below): gunzip + locate `package/package.json` (or a
-// root `package.json`) and read ≤ 64 KiB of its text. Null on any structural
-// failure — never a guessed manifest.
+// classification, see below): gunzip + locate the manifest pnpm actually
+// INSTALLS — `package/package.json` in npm-pack layout — and read ≤ 64 KiB of
+// its text. A root `package.json` is only a fallback for archives that carry
+// no installed-path manifest at all; when both exist and declare different
+// identities the archive is refused loudly (never a guessed manifest).
 // ---------------------------------------------------------------------------
 
-const TGZ_MANIFEST_CANDIDATES = ['package/package.json', 'package.json']
+/** The manifest path pnpm installs from an npm-pack archive (`pnpm add
+ *  file:<archive>` extracts `package/*` into the dependency tree). */
+const TGZ_INSTALLED_MANIFEST_NAMES = ['package/package.json', './package/package.json']
+/** Tolerance fallback (NOT an install path): an archive whose only manifest
+ *  sits at its root — accepted only when no installed-path manifest exists. */
+const TGZ_FALLBACK_MANIFEST_NAMES = ['package.json', './package.json']
 
 export interface TgzPackageManifest {
   name: string
   version: string
 }
 
-/** Parse a gzip tar archive and read its package manifest (npm-pack
- *  layout). Bounded: gunzip is capped at TARBALL_MAX_UNPACKED_BYTES and the
- *  manifest entry text at 64 KiB. Returns null when the buffer is not a
- *  gzip/tar stream, the archive is truncated, or no parseable
- *  package.json entry exists. */
-export function listTgzManifest(archive: Buffer): TgzPackageManifest | null {
+/** Loud result of the bounded manifest read (2026-12 audit, design 21
+ *  §6.2/§6.5). `identity_mismatch` carries BOTH names so a caller can surface
+ *  exactly which identity was claimed where. */
+export type TgzManifestInspection =
+  | { ok: true; manifest: TgzPackageManifest }
+  | { ok: false; reason: 'missing' | 'invalid' }
+  | { ok: false; reason: 'identity_mismatch'; installed: TgzPackageManifest; declared: TgzPackageManifest }
+
+/**
+ * Parse a gzip tar archive and read its package manifest (npm-pack layout).
+ * Bounded: gunzip is capped at TARBALL_MAX_UNPACKED_BYTES and the manifest
+ * entry text at PLUGIN_MANIFEST_MAX_BYTES.
+ *
+ * Identity rules (2026-12 audit — pnpm installs the archive's
+ * `package/package.json`, so THAT is the identity every downstream judgement
+ * must see):
+ * - the LAST entry at an installed-path candidate wins (tar extraction
+ *   overwrite semantics: pnpm installs the last one);
+ * - when an installed-path manifest exists but is unreadable (invalid JSON /
+ *   > 64 KiB), the archive is `invalid` — the root fallback must NOT stand in
+ *   for it, since pnpm would install the unreadable one;
+ * - the root `package.json` fallback is used only when NO installed-path
+ *   manifest exists at all, and a DISAGREEMENT between the two identities is
+ *   `identity_mismatch` (both names returned).
+ */
+export function inspectTgzManifest(archive: Buffer): TgzManifestInspection {
   let tar: Buffer
   try {
     // Inflate bound: the desktop archive builder emits at most
@@ -501,35 +541,67 @@ export function listTgzManifest(archive: Buffer): TgzPackageManifest | null {
     // refusing zip-bomb growth.
     tar = gunzipSync(archive, { maxOutputLength: TARBALL_MAX_UNPACKED_BYTES + 4 * 1024 * 1024 })
   } catch {
-    return null
+    return { ok: false, reason: 'missing' }
   }
+  /** Last entry seen per candidate slot: `null` = seen but not parseable. */
+  let installedSeen = false
+  let installedManifest: TgzPackageManifest | null = null
+  let fallbackSeen = false
+  let fallbackManifest: TgzPackageManifest | null = null
   let offset = 0
   while (offset + 512 <= tar.length) {
     const header = tar.subarray(offset, offset + 512)
     offset += 512
     if (header.every(byte => byte === 0)) break
-    const nul = header.indexOf(0, 0)
-    const nameEnd = nul === -1 ? 100 : nul
-    const name = header.subarray(0, nameEnd).toString('utf8')
+    // ustar name field (bytes 0-99): NUL-terminated when shorter, the full
+    // 100 BYTES when exactly at the bound (never scan past the field — the
+    // mode bytes that follow are not part of the name).
+    const nameField = header.subarray(0, USTAR_NAME_FIELD_BYTES)
+    const nameNul = nameField.indexOf(0)
+    const name = nameField.subarray(0, nameNul === -1 ? USTAR_NAME_FIELD_BYTES : nameNul).toString('utf8')
     const sizeField = header.subarray(124, 136).toString('ascii').replace(/[\0 ]+$/u, '')
     const size = sizeField === '' || !/^[0-7]+$/u.test(sizeField) ? null : parseInt(sizeField, 8)
-    if (size === null) return null
+    if (size === null) return { ok: false, reason: 'invalid' }
     const padded = Math.ceil(size / 512) * 512
     const body = tar.subarray(offset, offset + size)
-    if (padded > tar.length - offset) return null
+    if (padded > tar.length - offset) return { ok: false, reason: 'invalid' }
     offset += padded
     const typeflag = String.fromCharCode(header[156])
-    if (typeflag === '0' || typeflag === '\0') {
-      if (TGZ_MANIFEST_CANDIDATES.includes(name)) {
-        if (size > PLUGIN_MANIFEST_MAX_BYTES) return null
-        const candidate = parseTgzManifestText(body.toString('utf8'))
-        if (candidate !== null) return candidate
-        // Fall through: a malformed preferred entry never shadows a valid
-        // candidate encountered later.
-      }
+    if (typeflag !== '0' && typeflag !== '\0') continue
+    const installedSlot = TGZ_INSTALLED_MANIFEST_NAMES.includes(name)
+    if (!installedSlot && !TGZ_FALLBACK_MANIFEST_NAMES.includes(name)) continue
+    // An oversized entry is read no further: `null` records "present but not
+    // readable" without buffering 64 KiB+ of attacker-chosen bytes.
+    const manifest = size > PLUGIN_MANIFEST_MAX_BYTES ? null : parseTgzManifestText(body.toString('utf8'))
+    if (installedSlot) {
+      installedSeen = true
+      installedManifest = manifest
+    } else {
+      fallbackSeen = true
+      fallbackManifest = manifest
     }
   }
-  return null
+  if (installedSeen) {
+    // The install path is present: it IS the identity, readable or not.
+    if (installedManifest === null) return { ok: false, reason: 'invalid' }
+    if (fallbackSeen && fallbackManifest !== null
+      && (fallbackManifest.name !== installedManifest.name || fallbackManifest.version !== installedManifest.version)) {
+      return { ok: false, reason: 'identity_mismatch', installed: installedManifest, declared: fallbackManifest }
+    }
+    return { ok: true, manifest: installedManifest }
+  }
+  if (fallbackSeen) {
+    return fallbackManifest === null ? { ok: false, reason: 'invalid' } : { ok: true, manifest: fallbackManifest }
+  }
+  return { ok: false, reason: 'missing' }
+}
+
+/** Bounded manifest read: the installed-path identity, or null when the
+ *  archive has no coherent one (see {@link inspectTgzManifest} for the loud
+ *  form carrying the mismatching names). */
+export function listTgzManifest(archive: Buffer): TgzPackageManifest | null {
+  const inspection = inspectTgzManifest(archive)
+  return inspection.ok ? inspection.manifest : null
 }
 
 function parseTgzManifestText(text: string): TgzPackageManifest | null {
@@ -578,9 +650,12 @@ export type PluginPickClassification =
  * carry the `.tgz` suffix and be ≤ TARBALL_MAX_ARCHIVE_BYTES; its bytes are
  * read and its package manifest located with the bounded reader — a file
  * that is not a gzip/tar stream or has no parseable `package.json` entry is
- * an honest error, never a guessed name/version. Errors are loud and carry
- * the picked file's basename only (main never echoes the full local path of
- * a refused pick back into the renderer).
+ * an honest error, never a guessed name/version. The name/version projected
+ * are the INSTALLED-path identity (`package/package.json`, what pnpm
+ * installs); an archive whose root `package.json` declares a different
+ * identity is refused with both names (`identity_mismatch`, 2026-12 audit).
+ * Errors are loud and carry the picked file's basename only (main never
+ * echoes the full local path of a refused pick back into the renderer).
  */
 export function classifyPluginPick(pickedPath: string): PluginPickClassification {
   if (typeof pickedPath !== 'string' || pickedPath === '') {
@@ -621,9 +696,21 @@ export function classifyPluginPick(pickedPath: string): PluginPickClassification
   if (bytes.length > TARBALL_MAX_ARCHIVE_BYTES) {
     return { ok: false, error: `${basename} is ${bytes.length} bytes after reading — beyond the ${TARBALL_MAX_ARCHIVE_BYTES}-byte plugin archive cap` }
   }
-  const manifest = listTgzManifest(bytes)
-  if (manifest === null) {
+  const inspection = inspectTgzManifest(bytes)
+  if (!inspection.ok) {
+    if (inspection.reason === 'identity_mismatch') {
+      // Loud, both identities named (design 21 §6.2 materialize identity
+      // binding): pnpm installs the archive's `package/package.json`, so a
+      // disagreeing root `package.json` must never become the judged name.
+      return {
+        ok: false,
+        error: `${basename} declares two different identities — its installed package/package.json declares ${inspection.installed.name}@${inspection.installed.version}, but its root package.json declares ${inspection.declared.name}@${inspection.declared.version} (identity_mismatch: pnpm installs the package/package.json identity)`,
+      }
+    }
     return { ok: false, error: `${basename} is not a valid plugin archive — no parseable package.json manifest (npm-pack layout)` }
   }
-  return { ok: true, source: { kind: 'tgz', path: pickedPath, name: manifest.name, version: manifest.version, bytes } }
+  return {
+    ok: true,
+    source: { kind: 'tgz', path: pickedPath, name: inspection.manifest.name, version: inspection.manifest.version, bytes },
+  }
 }
