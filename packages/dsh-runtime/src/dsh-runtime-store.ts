@@ -1800,7 +1800,7 @@ function asyncTargetForEntry(name: string, isDirectory: boolean, treeSet: Set<st
 /** 异步单遍磁盘统计（perf T3）。会计契约与 `runtimeDiskSummary` 逐字段一致
  *  （并发删除的竞态窗口除外——嵌套 ENOENT 抛错 vs 同步逐路径类别的 0，见
  *  chargeNodeAsync 注，2026-09 review P2-1）；
- *  真实布局 + 硬链接/符号链接 fixture 的对等测试见 dsh-runtime-store.test.ts。 */
+ *  真实布局 + 硬链接/符号链接 fixture 的对等测试见 store/disk-accounting.test.ts。 */
 export async function runtimeDiskSummaryAsync(
   baseDir: string,
   dshHome: string = join(baseDir, 'state', 'dsh-home'),

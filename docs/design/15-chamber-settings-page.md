@@ -107,7 +107,7 @@
     （两态：定宽 `.runtimeProgressBar` / 滑动条纹 `.runtimeProgressBarIndeterminate`；
     6px 轨道仍是 `--dsw-alias-border-l2` 浅灰）同取该蓝。分段控件的
     **几何保持 chamber 档**（26px/12px），只换色。锁：
-    `dsh-chamber-client-ui-settings-bridge/test/batch2-visual-locks.test.ts` 的
+    `dsh-chamber-client-ui-settings-bridge/test/shell/batch2-visual-locks.test.ts` 的
     B-3/B-4（含开关覆盖规则本身）与进度填充两条；③ 面板头取官方 `SettingsRoot .header` 的**对齐**（`align-items:flex-start`）与
     54px 盒高（`justify-content:space-between` 保留），**纵向内距保留 chamber 的
     `12px 14px 10px`**：官方 `padding:20px 14px 8px 10px` 是围绕官方 26px 内容行
@@ -163,7 +163,7 @@ ChamberSettings.sessionTodo: {
   白名单/嵌套归一与损坏校验/validatePatch 同 notifications 纪律；`main.ts`
   `applySettingsPatch` 嵌套 deep-merge，绝不全组替换）；
 - 类型镜像三处：`desktop/chamber-settings.ts`（store 权威）、`desktop/preload.cts`、
-  `renderer/src/global.d.ts`（preload↔renderer 由 ipc-surface-mirror.test.ts 守护，
+  `renderer/src/global.d.ts`（preload↔renderer 由 test/ipc/ipc-surface-mirror.test.ts 守护，
   含嵌套类型签名比对；desktop store 为手工镜像——同 notifications 纪律）；
 - 渲染端助手：`settings-bridge/src/client/session-todo-settings.ts`
   （`sessionTodoOf`/`sessionTodoPatch`/`SESSION_TODO_DEFAULTS`，partial 嵌套 patch

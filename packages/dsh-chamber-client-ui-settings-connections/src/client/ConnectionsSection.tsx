@@ -41,7 +41,16 @@ import {
 import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 // Type-only: pulls the settings shell's SlotMap merge ('settings.section').
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
-import { pollGatewayReady } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+// The page-owned restart→reload completion (design 18 §3.6 item 8, sidebar shared
+// face): a restarted source's client-plugin set only changes on a window boot, so
+// every restart-to-apply entry point arms the same completion.
+import {
+  RESTART_RELOAD_BUDGET_MS,
+  armLocalDshRestartCompletion,
+  armWindowReloadWhenServed,
+  pollGatewayReady,
+  waitForSourceServing,
+} from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import type {
   DesktopSshSurface, SshConfigDiscovery, SshConfigHost, SshInstanceSpec, SshLogEntry, SshPhase, SshStatusProjection, TransportKind, TransportMethod,
 } from '../global.d.ts'
@@ -153,6 +162,10 @@ type RestartNote = { tone: 'ok' | 'error'; text: string }
 /** Local-card connection-row poll cadence: 状态由 /api/host/health-events
  * 推送（05 §3），此处只兜底行字段（label/dshPort）与流异常收敛。 */
 const LOCAL_ROW_POLL_MS = 30_000
+
+/** Page-level net for a source restart whose readiness the shared serving gate
+ *  waits on (the gate's own 120s budget runs inside this). */
+const SOURCE_RESTART_RELOAD_BUDGET_MS = 180_000
 
 /** Slugify a ~/.ssh/config alias into the id whitelist (^[a-zA-Z0-9_-]+$). */
 function slugifyAlias(alias: string): string {
@@ -545,6 +558,9 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     try {
       setConnection(await cp.createLocal())
       setLocalError(null)
+      // Starting the instance is a new host process: if a plugin was installed
+      // while it was stopped, only a window boot shows the new client half.
+      void armLocalDshRestartCompletion()
     } catch (err) {
       setLocalError(errorMessage(err))
     } finally {
@@ -566,6 +582,9 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       setConnection(outcome.connection)
       setReclaimOk(true)
       setLocalError(null)
+      // The reclaim starts the instance (new host process): same completion as
+      // the start button.
+      void armLocalDshRestartCompletion()
     } catch (err) {
       setReclaimError(errorMessage(err))
     } finally {
@@ -645,24 +664,47 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     }
   }, [clearOpError])
 
-  /** systemd 起停/查询：结果投影合并进 statuses（serviceActive 随卡片显示）。 */
-  const runServiceOp = useCallback(async (id: string, op: 'start_service' | 'stop_service' | 'restart_service' | 'is_active'): Promise<void> => {
+  /** systemd 起停/查询：结果投影合并进 statuses（serviceActive 随卡片显示）。
+   *  Returns whether the op succeeded — the source-restart leg arms the
+   *  page-owned completion only on a real success. */
+  const runServiceOp = useCallback(async (id: string, op: 'start_service' | 'stop_service' | 'restart_service' | 'is_active'): Promise<boolean> => {
     const bridge = ssh()
-    if (bridge === null) return
+    if (bridge === null) return false
     setBusy(prev => ({ ...prev, [id]: true }))
     try {
       const result = await bridge[op](id)
-      if ('error' in result) setOpError(prev => ({ ...prev, [id]: result.error }))
-      else {
-        setStatuses(prev => ({ ...prev, [id]: result }))
-        clearOpError(id)
+      if ('error' in result) {
+        setOpError(prev => ({ ...prev, [id]: result.error }))
+        return false
       }
+      setStatuses(prev => ({ ...prev, [id]: result }))
+      clearOpError(id)
+      return true
     } catch (err) {
       setOpError(prev => ({ ...prev, [id]: errorMessage(err) }))
+      return false
     } finally {
       setBusy(prev => ({ ...prev, [id]: false }))
     }
   }, [clearOpError])
+
+  /**
+   * systemd restart of a dsh source (「重启实例」): a new host process = a new
+   * plugin set for that source, so the page-owned completion reloads the window
+   * once the source serves again. Gateway sources are deliberately NOT armed —
+   * 「重启网关服务」 restarts the gateway service, not the instance's plugin set
+   * (design 18 §3.6 item 8 covers the plugin-refresh actions only).
+   */
+  const restartSourceService = useCallback(async (spec: SshInstanceSpec): Promise<void> => {
+    const restarted = await runServiceOp(spec.id, 'restart_service')
+    if (!restarted || spec.kind !== 'dsh') return
+    const sourceId = `dsh-${spec.id}`
+    void armWindowReloadWhenServed(
+      sourceId,
+      () => waitForSourceServing(sourceId, { timeoutMs: 120_000 }),
+      { budgetMs: SOURCE_RESTART_RELOAD_BUDGET_MS },
+    )
+  }, [runServiceOp])
 
   /**
    * 受控重启 gateway 托管的 dsh（design 21 §5.1）：POST
@@ -703,15 +745,31 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
         note({ tone: 'error', text: runtimeRefusalText(body, response.status, RESTART_REFUSAL_KEYS, t) })
         return
       }
-      try {
-        await pollGatewayReady(id, controller.signal, { action: 'restart' })
+      // Readiness + reload are PAGE-owned (review F6): the completion keeps
+      // running when this card unmounts mid-restart. Its classified failure
+      // still feeds this card's note slot whenever the panel is on screen.
+      let pollFailure: unknown = null
+      const outcome = await armWindowReloadWhenServed(
+        id,
+        async signal => {
+          try {
+            await pollGatewayReady(id, signal, { action: 'restart' })
+            return true
+          } catch (err) {
+            pollFailure = err
+            return false
+          }
+        },
+        { budgetMs: RESTART_RELOAD_BUDGET_MS },
+      )
+      if (outcome === 'reloaded') {
         note({ tone: 'ok', text: t('restartManagedDshOk') })
-        // 成功/失败刷新卡片状态投影（design 21 §5.1）：registry 不变，只重读
+        // 成功刷新卡片状态投影（design 21 §5.1）：registry 不变，只重读
         // 各实例 phase/service 激活态。
         void loadRemote()
-      } catch (err) {
-        if (controller.signal.aborted) return
-        const cls = classifyRestartError(err)
+      } else {
+        const cls = classifyRestartError(pollFailure
+          ?? new Error('restart completion aborted before the readiness poll settled'))
         // accepted-timeout = 重启已接受、仍在恢复 → 本地化说明（ok 语气：动作
         // 已被接受，仅提示仍在恢复）；其余 = 轮询/服务的英文错误串原样透出
         // （error 语气；未本地化文案登记接受，design 21 §5.2）。
@@ -797,14 +855,29 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
         note({ tone: 'error', text: runtimeRefusalText(body, response.status, START_REFUSAL_KEYS, t) })
         return
       }
-      try {
-        await pollGatewayReady(id, controller.signal, { action: 'start' })
+      // Same page-owned completion as the restart leg (review F6): a started
+      // managed dsh boots a new plugin set, so the window reloads once it serves.
+      let pollFailure: unknown = null
+      const outcome = await armWindowReloadWhenServed(
+        id,
+        async signal => {
+          try {
+            await pollGatewayReady(id, signal, { action: 'start' })
+            return true
+          } catch (err) {
+            pollFailure = err
+            return false
+          }
+        },
+        { budgetMs: RESTART_RELOAD_BUDGET_MS },
+      )
+      if (outcome === 'reloaded') {
         note({ tone: 'ok', text: t('startManagedDshOk') })
         void loadRemote()
         void probeGatewayRuntime(spec.id)
-      } catch (err) {
-        if (controller.signal.aborted) return
-        const cls = classifyRestartError(err)
+      } else {
+        const cls = classifyRestartError(pollFailure
+          ?? new Error('start completion aborted before the readiness poll settled'))
         // accepted-timeout = 启动已接受、仍在恢复（超时串已按 start 措辞，标记
         // 与 restart 共用）→ 本地化说明，ok 语气：动作已被接受，仅提示仍在
         // 恢复；其余 = 启动失败 + 轮询的 'start failed: …' detail（error 语气；
@@ -1729,7 +1802,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                         // 可见标签（dsh 实例的「重启实例」）。
                         data-tip={!serviceConfigured ? t('serviceUnconfigured') : spec.kind === 'gateway' ? t('restartServiceTip') : undefined}
                         aria-label={!serviceConfigured ? t('serviceUnconfigured') : spec.kind === 'gateway' ? t('restartServiceTip') : t('restartInstance')}
-                        onClick={() => { void runServiceOp(spec.id, 'restart_service') }}
+                        onClick={() => { void restartSourceService(spec) }}
                       >
                         {spec.kind === 'gateway' ? t('restartGatewayService') : t('restartInstance')}
                       </Button>

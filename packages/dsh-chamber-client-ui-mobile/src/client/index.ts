@@ -44,6 +44,10 @@ import {
 } from './composer.ts'
 import { installDrawerTapHeal } from './drawer-taps.ts'
 import { installSettingsSheetScrollReset } from './settings-sheet.ts'
+import {
+  COARSE_NO_HOVER_QUERY, installStrandedHoverCardWatchdog,
+} from './official-hover-card.ts'
+import { installSessionStallNotice } from './session-stall.ts'
 import { MobileNavToggle, type MobileNavToggleInjected } from './MobileNavToggle.tsx'
 
 export type { MobileNavToggleInjected } from './MobileNavToggle.tsx'
@@ -288,6 +292,67 @@ export function apply(ctx: ClientContext): void {
       for (const dispose of disposers) dispose()
     }
   }, 'dsh-chamber: mobile composer behavior')
+
+  // ---- stranded OFFICIAL hover-card watchdog (design 17 §18.4.5) ----
+  // This tier loads the OFFICIAL ui-primitives HoverCard (the chamber's own
+  // `RowHoverCard` exists only in the composite page), and the atom's close
+  // grace is armed from the last COMMITTED open — a leave inside the commit
+  // window arms nothing, and on touch no leave is delivered at all, so the
+  // card strands over the row. The watchdog drives the atom's own
+  // `onPointerLeave` through one bubbling `pointerout` on the matched wrapper;
+  // see official-hover-card.ts for the mechanism and every guard. It rides its
+  // own tier — the coarse-pointer chrome tier the stylesheet's sticky-tooltip
+  // rule already uses, NOT the width-capped touch tier: a landscape tablet
+  // taps too, while attaching a mouse flips `hover` and restores the official
+  // behavior. Installed/uninstalled dynamically as the tier flips.
+  ctx.effect(() => {
+    const coarseNoHover = window.matchMedia(COARSE_NO_HOVER_QUERY)
+    let disposeWatchdog: (() => void) | null = null
+    const sync = (): void => {
+      if (coarseNoHover.matches) {
+        disposeWatchdog ??= installStrandedHoverCardWatchdog(() => coarseNoHover.matches)
+      } else {
+        disposeWatchdog?.()
+        disposeWatchdog = null
+      }
+    }
+    sync()
+    coarseNoHover.addEventListener('change', sync)
+    return () => {
+      coarseNoHover.removeEventListener('change', sync)
+      disposeWatchdog?.()
+      disposeWatchdog = null
+    }
+  }, 'dsh-chamber: stranded official hover-card watchdog')
+
+  // ---- session-load stall notice (design 17 §18) ----
+  // The official chat view can park on its loading-history face forever (no
+  // deadline on either side of the wire) and the official UI offers no way
+  // out; this plugin's notice is the page's only recovery lever. It rides the
+  // TOUCH tier (the same tier the mobile surface lives on) and, like the
+  // watchdog above, is installed/uninstalled dynamically as the tier flips —
+  // nothing is created at apply time. It only ever SHOWS a notice whose one
+  // action is a user-initiated reload; see session-stall.ts for the shape,
+  // the threshold and every guard.
+  ctx.effect(() => {
+    const touchTier = window.matchMedia(TOUCH_TIER_QUERY)
+    let disposeNotice: (() => void) | null = null
+    const sync = (): void => {
+      if (touchTier.matches) {
+        disposeNotice ??= installSessionStallNotice(t)
+      } else {
+        disposeNotice?.()
+        disposeNotice = null
+      }
+    }
+    sync()
+    touchTier.addEventListener('change', sync)
+    return () => {
+      touchTier.removeEventListener('change', sync)
+      disposeNotice?.()
+      disposeNotice = null
+    }
+  }, 'dsh-chamber: session-load stall notice')
 
   // ---- shell.overlay: the floating drawer toggle (additive list slot) ----
   const injected = (): MobileNavToggleInjected => ({

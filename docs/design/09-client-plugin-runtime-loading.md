@@ -39,7 +39,12 @@ bundle 未覆盖的 entry（方案 A，§3）。第 1、2 步在 chamber 托管�
 
 - 任何**已装进 profile 的 `dsh.client` 包** → chamber 前端**按实例运行时加载**：
   装法维持官方语义（profile 装包 + `cordis.patch.yml` 加行），宿主图变化后
-  chamber 前端自然看到新插件（重启实例即可，与官方一致：插件集变化在重启生效）。
+  chamber 前端自然看到新插件（插件集变化在宿主重启生效）。**2026-12 修订**：
+  chamber 是常驻窗口，页面侧 client 插件集在**窗口 boot** 时固定（宿主图每 boot 取一次、
+  bundle 那时执行；模块表按 id first-load-wins），所以「用户发起重启」的完整动作
+  = 宿主重启 **+ 一次窗口重载**——由 sidebar 共享面的 page-owned completion
+  （`restart-window-reload.ts`，按来源单飞、卸载不取消）统一承担，已覆盖全部用户发起的
+  插件刷新入口（design 18 §3.6 项 8 列清单）；设置面板需随之重新打开。
 - 本地与远程实例同等（远程宿主插件集不同，各自 ctx 加载自己的子集）。
 - 宿主侧 / vendor **零改动**：图是现成的、bundle 是现成的、反代是现成的。
 
@@ -154,7 +159,7 @@ bundle 未覆盖的 entry（方案 A，§3）。第 1、2 步在 chamber 托管�
   （`registry.ts:77-81`）时成员在原型上、`Object.keys` 看不见，这一种由当场抛错兜住；
   而"命名空间干脆不再导出 `inject`"两侧**同时**为空（`plugin.inject` 都是 undefined），
   不抛错、名单静默变小——这一类由 CI 表测试兜底
-  （`test/required-extra-rows.test.ts` 逐个注册 id 读其 client 入口并钉住所审计的
+  （`test/lifecycle/required-extra-rows.test.ts` 逐个注册 id 读其 client 入口并钉住所审计的
   `inject` 面），那也是这种漂移唯一可见的地方。
   名单成员变更即改 `chamber-entry.ts` 的 `register(...)` 调用，
   不维护第二张表；口径变更须同步 `host-graph.ts` 的降级注释与

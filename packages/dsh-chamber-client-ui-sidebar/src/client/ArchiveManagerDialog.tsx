@@ -87,6 +87,14 @@
  * after a successful purge the App-side refresh drops the deleted rows from
  * the aggregate and this dialog's selection is pruned to surviving rows.
  *
+ * RESIDENT-RETAINED ROWS (design 24 §4 step 9, 2026-13): a session the
+ * instance process still holds keeps its archived membership after its
+ * content is deleted, so its row legitimately STAYS in this list (and stays
+ * hidden in the workspace) until that instance restarts. The dialog labels
+ * exactly the rows the run reported (`residentPurged`, a dialog-lifetime set
+ * — not persisted, not a control) so "still listed" reads as "deleted,
+ * waiting for the restart" instead of "the delete failed".
+ *
  * CHROME (2026 style pass): the dialog is the OFFICIAL primitives Modal
  * (mask + r24 card + header close — the same shell RemoveWorktreeDialog /
  * PluginDialog render), so mask/Escape/close-button behaviour and the
@@ -168,6 +176,15 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState<{ kind: NoteKind; text: string } | null>(null)
+  // Rows this dialog has deleted the CONTENT of while the session stayed
+  // resident in the instance process (design 24 §4 step 9, 2026-13): the host
+  // keeps their archived membership, so they stay listed here (and stay hidden
+  // in the workspace) until that instance restarts. Purely informational — the
+  // label says "deleted, waiting for the restart" instead of leaving the user
+  // to wonder whether the delete failed. Accumulated across runs in this
+  // dialog's lifetime (a later run that reports nothing must not erase the
+  // labels of rows an earlier run already cleared) and pruned with the rows.
+  const [residentPurged, setResidentPurged] = useState<ReadonlySet<string>>(() => new Set())
   const mountedRef = useRef(true)
   // The list panel receives initial focus (tabIndex -1) so the keyboard lands
   // inside the dialog on open; the official Modal owns Esc/mask/close-button
@@ -214,6 +231,10 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
   const rowSet = useMemo(() => new Set(rowIds), [rowIds])
   useEffect(() => {
     setSelected(prev => pruneSet(prev, rowSet))
+    // Residency labels ride the same prune: a labeled row that actually left
+    // the list (instance restarted, or another shell's convergence) drops its
+    // label with the row.
+    setResidentPurged(prev => pruneSet(prev, rowSet))
   }, [rowSet])
 
   // Same passive prune for collapsed group keys: a group that vanished with
@@ -418,6 +439,14 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
           kind: outcome.kind,
           text: outcome.lines.map(line => t(line.key, line.params)).join('\n'),
         })
+        // Label the rows whose content this run deleted while the session
+        // stayed resident in the instance process (design 24 §4 step 9): the
+        // host keeps their membership, so they legitimately remain listed here
+        // — hidden from the workspace — until that instance restarts.
+        const retained = run.purge.residentRetainedRoots
+        if (retained !== undefined && retained.length > 0) {
+          setResidentPurged(prev => new Set([...prev, ...retained]))
+        }
         if (outcome.kind === 'info' && purgeRemovedContent(run)) {
           // The refreshed aggregate (requestRefresh above) prunes the rows;
           // the selection effect drops ids that no longer exist. Only a run
@@ -484,6 +513,16 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
     if (title === undefined || title === '') return t('archive.manager.rowUntitled')
     return title
   }
+
+  /** Accessible name of one row's checkbox (2026-13 a11y review): the resolved
+   *  title, plus the resident-retention state when this dialog deleted that
+   *  row's content. The tag span alone is only announced in browse mode, so a
+   *  screen-reader user focusing the checkbox would otherwise hear a plain row
+   *  with no hint that the deletion already happened. */
+  const rowAriaLabel = (row: { readonly sessionId: string; readonly title?: string }): string =>
+    residentPurged.has(row.sessionId)
+      ? t('archive.manager.rowAriaResidentPurged', { title: titleText(row.title) })
+      : titleText(row.title)
 
   const countKey: SidebarKey = rowIds.length === 1 ? 'archive.manager.rowCount.one' : 'archive.manager.rowCount.other'
   const selectedCountKey: SidebarKey = selected.size === 1
@@ -701,7 +740,7 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
                             type="checkbox"
                             className={cc.archiveManagerCheck}
                             checked={selected.has(row.sessionId)}
-                            aria-label={titleText(row.title)}
+                            aria-label={rowAriaLabel(row)}
                             disabled={inputLocked}
                             onChange={() => { toggle(row.sessionId) }}
                           />
@@ -711,6 +750,14 @@ export function ArchiveManagerDialog({ server, t, onClose }: ArchiveManagerDialo
                           >
                             {titleText(row.title)}
                           </span>
+                          {residentPurged.has(row.sessionId) && (
+                            <span
+                              className={cc.archiveManagerRowTag}
+                              title={t('archive.manager.residentPurged')}
+                            >
+                              {t('archive.manager.residentPurged')}
+                            </span>
+                          )}
                           {projectLabelOf(row.cwd) !== '' && (
                             <span className={cc.archiveManagerRowPath} title={row.cwd}>
                               {projectLabelOf(row.cwd)}

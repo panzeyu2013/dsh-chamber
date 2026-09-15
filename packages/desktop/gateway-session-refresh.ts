@@ -37,7 +37,7 @@
  * Pure main-process logic with injectable deps (clock, timer scheduling,
  * session manager, credential/URL lookups, the re-registration callback), so
  * the whole orchestration is unit-testable with node:test (see the refresh
- * cases in gateway-session.test.ts).
+ * cases in test/gateway/gateway-session.test.ts).
  */
 
 import type { GatewaySessionManager, GatewaySessionOrigin } from './gateway-session.ts'

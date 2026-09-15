@@ -174,10 +174,12 @@ export interface ChamberHostPackageState {
   version: string | null
   live: boolean | null
   /** The registry row is meaningful for the LOCAL instance shape only (design
-   *  20 §6: the open-in host domain). Remote/gateway/http targets report it
-   *  with `installed:false` and no probe; the plugin table renders "local
-   *  shape only" from this flag instead of "not injected" — absent by design
-   *  there, not by fault. Absent = an ordinary row. */
+   *  20 §6: the open-in host domain). The ssh PROBE reports it as
+   *  `installed:false`/`patched:false` without ever asking the remote ("not
+   *  asked", never "the target lacks it"), while the desktop's own projection
+   *  carries the real local state; whichever projection delivered the row, the
+   *  plugin table OMITS it on every non-local target (it is listed for the
+   *  local shape alone). Absent = an ordinary row. */
   localOnly?: boolean
 }
 /** Chamber-injected component state (design 09): ok:false = unreadable (loud,
@@ -186,10 +188,28 @@ export interface ChamberHostPackageState {
 export type ChamberInjectionState =
   | { ok: true; packages: ChamberHostPackageState[] }
   | { ok: false; error: string }
+/**
+ * One read-face plugin row (design 21 §6.11.5, 2026-09 row-set revision): one
+ * row per profile dependency, carrying the backend-computed role and
+ * `protected` flag (the renderer never re-derives protection). The
+ * installation baseline (B₀) and the chamber seed registry (S) only classify
+ * rows; they are not projected as installed plugins.
+ */
+export interface PluginRowProjection {
+  name: string
+  spec: string | null
+  version: string | null
+  role: 'composition' | 'seed' | 'layer' | 'third-party' | 'materialized' | 'unknown'
+  protected: boolean
+  owner?: 'installation' | 'chamber' | 'user'
+}
+
 /** Remote plugin manifest projection (design 13 §4.1). */
 export interface SshRemotePluginManifest {
   dependencies: Record<string, string>
   bundles: string[]
+  /** Read-face row projection (design 21 §6.11.5). */
+  rows: PluginRowProjection[]
   profileExists: boolean
   error?: string
   /** Chamber-injected component state (design 09), probed over the wire —
@@ -205,6 +225,8 @@ export type SshRemotePluginListResult =
 export interface SshLocalPluginManifest {
   dependencies: Record<string, string>
   bundles: string[]
+  /** Read-face row projection (design 21 §6.11.5). */
+  rows: PluginRowProjection[]
   clientLines: string[]
   /** Deps whose own manifest declares a `dsh.bundle` (verifyApplied bundles half-assertion). */
   bundleLines: string[]

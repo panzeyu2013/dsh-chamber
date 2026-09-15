@@ -1,6 +1,6 @@
 /**
  * Desktop notification decision logic (design 19 §3.3) — pure logic, no
- * electron, unit-testable with plain node:test (see notifications.test.ts).
+ * electron, unit-testable with plain node:test (see test/desktop-shell/notifications.test.ts).
  *
  * The main process (main.ts) is the authority for the decision chain: the
  * renderer only detects session edges and assembles a NotificationRequest,

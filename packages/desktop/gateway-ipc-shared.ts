@@ -2,7 +2,7 @@
  * Main-process shared pure logic for the gateway plugin-apply IPC surface
  * (design 21 §6.5, plan Phase 4.6): payload validation + the confirmation
  * copy builder + the registry-spec name parser. No Electron imports — the
- * whole surface is unit-testable standalone (gateway-ipc-shared.test.ts) and
+ * whole surface is unit-testable standalone (test/gateway/gateway-ipc-shared.test.ts) and
  * main.ts stays thin.
  *
  * The whitelists are the control-plane shared single source (plugin-spec.ts
@@ -14,7 +14,6 @@
 
 import {
   extractSpecName,
-  isDeniedPluginName,
   MAX_PLUGIN_SPEC_CHARS,
   PLUGIN_NAME_PATTERN,
   PLUGIN_SPEC_PATTERN,
@@ -39,18 +38,22 @@ export type GatewayApplyPayloadValidation =
 /**
  * Parse + validate one registry ADD spec (`name@spec` | `name`, optional
  * scope) into its package name. Client-side mirror of the gateway install
- * route's validation (routes submit: PLUGIN_SPEC_PATTERN + the spec's name
- * must equal the submitted name + reserved-domain deny; `file:` specs are
- * REFUSED here — folder pushes go through gateway_plugin_materialize, never
- * this channel). Returns null for any invalid shape — the caller decides the
- * honest error text.
+ * route's SHAPE validation (routes submit: PLUGIN_SPEC_PATTERN + the spec's
+ * name must equal the submitted name; `file:` specs are REFUSED here — folder
+ * pushes go through gateway_plugin_materialize, never this channel). Returns
+ * null for any invalid shape — the caller decides the honest error text.
+ *
+ * The PROTECTED-SET judgement is NOT mirrored here (design 21 §6.11.5): for a
+ * gateway target the family facts live on the server, so the gateway's own
+ * decide is the authority and this layer only refuses malformed input. The
+ * renderer renders `rows[].protected` from the server projection.
  */
 export function parseSpecArg(spec: string): { name: string } | null {
   if (typeof spec !== 'string') return null
   if (spec === '' || spec.length > MAX_PLUGIN_SPEC_CHARS) return null
   if (!PLUGIN_SPEC_PATTERN.test(spec)) return null
   const name = pluginSpecName(spec)
-  if (!PLUGIN_NAME_PATTERN.test(name) || isDeniedPluginName(name)) return null
+  if (!PLUGIN_NAME_PATTERN.test(name)) return null
   return { name }
 }
 
@@ -63,10 +66,11 @@ export const pluginSpecName = extractSpecName
 /**
  * Validate the renderer-supplied apply payload (design 21 §6.5): add/remove
  * must be arrays of strings with ≤ GATEWAY_APPLY_MAX_OPS items each, each
- * item ≤ GATEWAY_APPLY_MAX_ITEM_CHARS and whitelist-valid (adds are registry
+ * item ≤ GATEWAY_APPLY_MAX_ITEM_CHARS and whitelist-SHAPED (adds are registry
  * specs — `file:` refused; removes are bare names); deferRestart must be a
- * boolean when present. Never trust the renderer: gatewayChamberApplyBatch
- * re-validates per op too (defense in depth).
+ * boolean when present. Never trust the renderer: the gateway re-validates per
+ * op too (defense in depth) and runs the protected-set decision server-side
+ * (design 21 §6.11) — this payload check is shape only.
  */
 export function validateApplyPayload(input: unknown): GatewayApplyPayloadValidation {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) {
@@ -101,7 +105,7 @@ export function validateApplyPayload(input: unknown): GatewayApplyPayloadValidat
     if (typeof item !== 'string' || item.length > GATEWAY_APPLY_MAX_ITEM_CHARS) {
       return { ok: false, error: `invalid remove name: ${JSON.stringify(item)}` }
     }
-    if (!PLUGIN_NAME_PATTERN.test(item) || isDeniedPluginName(item)) {
+    if (!PLUGIN_NAME_PATTERN.test(item)) {
       return { ok: false, error: `invalid remove name: ${JSON.stringify(item)}` }
     }
   }

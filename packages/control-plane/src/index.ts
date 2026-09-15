@@ -31,7 +31,7 @@ import { randomBytes } from 'node:crypto'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync, statSync } from 'node:fs'
 import type { ConnectionRowView } from './api.ts'
 import { createCatalog } from './catalog.ts'
 import { createLocalConnection } from './local-connection.ts'
@@ -59,9 +59,11 @@ import {
   HOST_ARCHIVE_CLEANUP_INSERT,
   HOST_GIT_WORKTREE_INSERT,
   HOST_GRAPH_INSERT,
+  HOST_GRAPH_PATCH_FILENAME,
   HOST_OPEN_IN_INSERT,
   type SeedEntry,
 } from './host-graph-seed.ts'
+import { planHostLogBridge } from './host-log-bridge.ts'
 import type { Logger } from './types.ts'
 import type { ApiCorsEvaluator, ApiRequest, ApiResponse, ApiSurface } from './api.ts'
 
@@ -344,6 +346,147 @@ export interface PlaneHandle {
 }
 
 /**
+ * Drop the local `--patch` overlay file. Called by every resolution that passes
+ * NO overlay, so the file's presence keeps meaning exactly "the last spawn
+ * passed it": the desktop's chamber probe reads that file as a mount fact
+ * (`packages/desktop/plugin-sync.ts` localOverlayCarriesInsert), and a leftover
+ * from an earlier spawn would report a row the current tree does not carry.
+ * An undeletable file is a broken state root (this plane's own layout) — fail
+ * loud, never a silent skip that leaves the false fact in place.
+ * @param stateDir - the control-plane state root.
+ */
+function clearHostGraphPatchOverlay(stateDir: string): void {
+  rmSync(join(stateDir, HOST_GRAPH_PATCH_FILENAME), { force: true })
+}
+
+/** Inputs of one local host-graph overlay resolution (see {@link resolveLocalHostGraphOverlay}). */
+export interface LocalHostGraphOverlayInput {
+  /** The control-plane state root (the overlay lives directly under it). */
+  readonly stateDir: string
+  /** The managed dsh home (the profile's own patch layer is read from under it). */
+  readonly dshHome: string
+  /** The resolved seed registry entries (the four base host packages + extras). */
+  readonly entries: readonly SeedEntry[]
+  /** Informational sink (the plane's logger in production; tests pass no-ops). */
+  readonly log?: (message: string) => void
+  /** Warning sink (absent/stub seed sources). */
+  readonly warn?: (message: string) => void
+  /**
+   * Environment that decides the opt-in host-log bridge
+   * (DSH_CHAMBER_HOST_LOG_LEVEL — host-log-bridge.ts). Defaults to an EMPTY
+   * environment (bridge off), so a synthetic/test caller can never pick up the
+   * ambient shell by accident; the production spawn-thunk wiring passes
+   * `process.env` explicitly.
+   */
+  readonly env?: NodeJS.ProcessEnv
+  /**
+   * Receives the probe domains backed by the host packages this resolution
+   * actually seeds (2026-09 模块评审 D#2): the plane's spawn thunk records
+   * them on `PlaneHandle.seededProbeDomains`, so the desktop's activation
+   * expectation set follows the real seed set. Optional — direct test callers
+   * omit it and keep the resolver a pure overlay producer.
+   */
+  readonly onSeededProbeDomains?: (domains: readonly string[]) => void
+}
+
+/**
+ * Resolve one local spawn's `--patch` overlay (design 09 module B), or null
+ * when that spawn passes none.
+ *
+ * Returned path = the overlay this spawn hands the launcher, carrying ONLY the
+ * rows the profile's own `cordis.patch.yml` does not already own (loader
+ * identities are global across both layers: a duplicated id/name pair is a
+ * boot failure, so an already user-owned row is reused, never repeated).
+ *
+ * The no-overlay paths (no built `dist/index.js` artifact; every row already
+ * user-owned in the profile patch) REMOVE a leftover overlay file. That keeps
+ * one invariant the desktop probe relies on: the file exists exactly when the
+ * spawn about to run passes it, so reading it is reading this spawn's mount
+ * set — never a previous spawn's (T20).
+ *
+ * @param input - state root, managed dsh home, resolved seed entries, sinks.
+ * @returns the `--patch` overlay path, or null (no overlay passed).
+ */
+export function resolveLocalHostGraphOverlay(input: LocalHostGraphOverlayInput): string | null {
+  const { stateDir, dshHome, entries: baseEntries } = input
+  const log = input.log ?? (() => {})
+  const warn = input.warn ?? (() => {})
+  // Opt-in managed-dsh application-log bridge (host-log-bridge.ts): ONE extra
+  // seed entry while DSH_CHAMBER_HOST_LOG_LEVEL is set for this spawn, carrying
+  // the generated logger-exporter plugin. With the switch absent the entry list
+  // (and therefore every write, row and overlay byte below) is exactly what it
+  // was before the bridge existed.
+  const bridgeEntry = planHostLogBridge({ stateDir, env: input.env ?? {}, warn })
+  const entries = bridgeEntry === null ? baseEntries : [...baseEntries, bridgeEntry]
+  // An extra entry with no packaged source is warned, never fatal — but the
+  // wording distinguishes a true stub (packaged entry whose package has not
+  // shipped yet, e.g. the gateway mobile slot) from a desktop-synced entry
+  // merely awaiting its first sync (an expected pre-sync state, logged once
+  // per spawn as informational). The base packaged dirs keep their documented
+  // silent-skip behavior (absent source or dist = no row, no overlay).
+  for (const entry of entries) {
+    if (entry.sourceDir === null || !existsSync(entry.sourceDir)) {
+      const message = `seed entry '${entry.insert.id}' (${entry.insert.name}): source absent; skipped`
+      if (entry.source === 'desktop-synced') log(`${message} (awaiting the first desktop sync)`)
+      else warn(`${message} (stub: package not shipped in this runtime)`)
+    }
+  }
+  // 影子条目（extraSeedEntries 覆盖同 id）若缺 probeDomains，会让该宿主域在
+  // 激活期望集中静默消失（2026-09 二轮评审 P2）——必须 loud。桥接条目由
+  // resolver 自己追加（无宿主域），不在用户声明的 seed 集合里，故排除在外。
+  for (const entry of baseEntries) {
+    if (entry.kind === 'host' && (entry.probeDomains ?? []).length === 0) {
+      warn(`seed entry '${entry.insert.id}' (${entry.insert.name}): host entry without probeDomains; its chamber domain will not be probed`)
+    }
+  }
+  const available = entries
+    .filter(entry => entry.sourceDir !== null && existsSync(join(entry.sourceDir, 'dist', 'index.js')))
+    .map(entry => ({
+      label: entry.insert.id,
+      sourceDir: entry.sourceDir as string,
+      seedFiles: entry.seedFiles,
+      insert: entry.insert,
+      packageName: entry.insert.name,
+      probeDomains: entry.probeDomains ?? [],
+    }))
+  // The activation expectation set follows exactly what this resolution seeds
+  // (the callback fires on the empty set too, so a previously seeded plane
+  // resets instead of keeping a stale domain list).
+  input.onSeededProbeDomains?.(available.flatMap(entry => entry.probeDomains))
+
+  if (available.length === 0) {
+    clearHostGraphPatchOverlay(stateDir)
+    return null
+  }
+  // Preflight every declared package before writing any of them. A damaged
+  // second artifact must not leave the first package partially refreshed.
+  for (const entry of available) {
+    const manifest = join(entry.sourceDir, 'package.json')
+    if (!existsSync(manifest)) {
+      throw new Error(`${entry.label}: built seed package is missing ${manifest}`)
+    }
+  }
+  // Loader identities are global across the profile patch and this external
+  // overlay. Reuse an exact user-owned row, but fail before any package write
+  // when an id/name is duplicated or bound differently.
+  const profilePatchPath = join(dshHome, 'profiles', 'web', 'cordis.patch.yml')
+  const overlayInserts = missingHostPackageInserts(
+    existsSync(profilePatchPath) ? readFileSync(profilePatchPath, 'utf8') : null,
+    available.map(entry => entry.insert),
+  )
+  for (const entry of available) {
+    if (ensureSeedPackage(dshHome, entry.packageName, entry.sourceDir, entry.seedFiles)) {
+      log(`${entry.label}: seeded ${entry.packageName} into the local web profile`)
+    }
+  }
+  if (overlayInserts.length === 0) {
+    clearHostGraphPatchOverlay(stateDir)
+    return null
+  }
+  return buildPatchOverlay(stateDir, overlayInserts)
+}
+
+/**
  * Create the control plane.
  * @param options - {port?, host?, stateDir?, dshWorkspacePath?, webDistDir?,
  *   logger?, corsOrigins?}.
@@ -583,71 +726,34 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
    * would boot with a --patch row that cannot resolve and fail loudly, the
    * only self-heal being a desktop-app restart. This thunk is idempotent
    * (content-hash skip in ensureSeedPackage, content-compare in
-   * buildPatchOverlay). Returns the --patch overlay path, or null when
-   * module A's built artifact is absent (v4 baseline command line, nothing
-   * to mount). Failure semantics: a seed throw on the initial-spawn path
-   * lands the instance in error state (the next local start retries); on the
-   * restart path it rides the connection's existing bounded backoff loop and
-   * ends in restart-exhausted — the same fail-loud surface as any spawn
-   * failure (a broken shipped module A is a packaging bug, never silent).
+   * buildPatchOverlay). Returns the --patch overlay path, or null when this
+   * spawn passes none (no built artifact, or every row already user-owned in
+   * the profile patch) — a leftover overlay file is removed on those paths so
+   * the file's presence keeps meaning "this spawn passes it", the invariant
+   * the desktop install probe reads (resolveLocalHostGraphOverlay). Failure
+   * semantics: a seed throw on the initial-spawn path lands the instance in
+   * error state (the next local start retries); on the restart path it rides
+   * the connection's existing bounded backoff loop and ends in
+   * restart-exhausted — the same fail-loud surface as any spawn failure (a
+   * broken shipped module A is a packaging bug, never silent).
    */
   function resolveHostGraphPatch(): string | null {
-    // An extra entry with no packaged source is warned, never fatal — but the
-    // wording distinguishes a true stub (packaged entry whose package has not
-    // shipped yet, e.g. the gateway mobile slot) from a desktop-synced entry
-    // merely awaiting its first sync (an expected pre-sync state, logged once
-    // per spawn as informational). The base packaged dirs keep their
-    // documented silent-skip behavior (absent source or dist = no row, no
-    // overlay).
-    for (const entry of options.extraSeedEntries ?? []) {
-      if (entry.sourceDir === null || !existsSync(entry.sourceDir)) {
-        const message = `seed entry '${entry.insert.id}' (${entry.insert.name}): source absent; skipped`
-        if (entry.source === 'desktop-synced') logger.log(`${message} (awaiting the first desktop sync)`)
-        else logger.warn(`${message} (stub: package not shipped in this runtime)`)
-      }
-    }
-    // 影子条目（extraSeedEntries 覆盖同 id）若缺 probeDomains，会让该宿主域在
-    // 激活期望集中静默消失（2026-09 二轮评审 P2）——必须 loud。
-    for (const entry of seedEntries()) {
-      if (entry.kind === 'host' && (entry.probeDomains ?? []).length === 0) {
-        logger.warn(`seed entry '${entry.insert.id}' (${entry.insert.name}): host entry without probeDomains; its chamber domain will not be probed`)
-      }
-    }
-    const available = seedEntries()
-      .filter(entry => entry.sourceDir !== null && existsSync(join(entry.sourceDir, 'dist', 'index.js')))
-      .map(entry => ({
-        label: entry.insert.id,
-        sourceDir: entry.sourceDir as string,
-        seedFiles: entry.seedFiles,
-        insert: entry.insert,
-        packageName: entry.insert.name,
-        probeDomains: entry.probeDomains ?? [],
-      }))
-    seededProbeDomains = available.flatMap(entry => entry.probeDomains)
-
-    if (available.length === 0) return null
-    // Preflight every declared package before writing any of them. A damaged
-    // second artifact must not leave the first package partially refreshed.
-    for (const entry of available) {
-      const manifest = join(entry.sourceDir, 'package.json')
-      if (!existsSync(manifest)) {
-        throw new Error(`${entry.label}: built seed package is missing ${manifest}`)
-      }
-    }
-    // Loader identities are global across the profile patch and this
-    // external overlay. Reuse an exact user-owned row, but fail before any
-    // package write when an id/name is duplicated or bound differently.
-    const profilePatchPath = join(dshHome, 'profiles', 'web', 'cordis.patch.yml')
-    const overlayInserts = missingHostPackageInserts(
-      existsSync(profilePatchPath) ? readFileSync(profilePatchPath, 'utf8') : null,
-      available.map(entry => entry.insert),
-    )
-    for (const entry of available) {
-      if (ensureSeedPackage(dshHome, entry.packageName, entry.sourceDir, entry.seedFiles)) {
-        logger.log(`${entry.label}: seeded ${entry.packageName} into the local web profile`)
-      }
-    }
-    return overlayInserts.length === 0 ? null : buildPatchOverlay(stateDir, overlayInserts)
+    return resolveLocalHostGraphOverlay({
+      stateDir,
+      dshHome,
+      entries: seedEntries(),
+      log: message => logger.log(message),
+      warn: message => logger.warn(message),
+      // The opt-in host-log bridge switch is read from the plane's own
+      // environment at each spawn (the managed host inherits it, and the
+      // generated plugin needs nothing from the child env). Passing it here is
+      // the only production wiring; the resolver's own default stays "off".
+      env: process.env,
+      // 2026-09 模块评审 D#2：宿主期望集必须跟随本次实际 seed 的条目（host 包
+      // 缺失时 exact-set 裁决仍按全量域会误判激活失败并回滚）；见
+      // PlaneHandle.seededProbeDomains。
+      onSeededProbeDomains: domains => { seededProbeDomains = domains },
+    })
   }
 
   // The managed local connection adapter (design 02): spawn/health/reaper
@@ -1292,7 +1398,7 @@ export {
   // gateway upload, overlay resolution) derives from host-graph-seed.ts
   // instead of re-typing a literal (A2 cross-package protocol
   // single-sourcing). Cross-side equality is pinned by
-  // packages/desktop/cross-package-contract.test.ts.
+  // packages/desktop/test/ipc/cross-package-contract.test.ts.
   HOST_GRAPH_PATCH_FILENAME,
   HOST_OPEN_IN_INSERT,
   HOST_PACKAGE_SEED_FILES,
@@ -1327,14 +1433,14 @@ export type {
 // the desktop audit log (dedupe audit E-4/N11, 2026-09).
 export { AUDIT_TRAIL_MAX_BYTES, appendAuditTrailLine, serializeAuditEvent } from './audit-trail.ts'
 export type { AuditTrailEvent } from './audit-trail.ts'
-// The plugin spec/name whitelist family + reserved-name deny predicate
+// The plugin spec/name whitelist family (the reserved-name deny predicate is
+// retired: `protected-plugins.ts` owns the judgement, design 21 §6.11)
 // (design 21 §6.2/§6.7 — single source for the desktop main via
 // control-plane-module.ts and the gateway executor). Renderer mirrors stay
 // hand-written and are pinned by the gateway lockstep test
 // (plugin-spec-lockstep.test.ts).
 export {
   extractSpecName,
-  isDeniedPluginName,
   MATERIALIZE_FILE_SPEC_PATTERN,
   MAX_PLUGIN_SPEC_CHARS,
   PLUGIN_NAME_PATTERN,
@@ -1342,6 +1448,53 @@ export {
   RUN_STDOUT_MAX_BYTES,
   WRITE_FILE_MAX_BYTES,
 } from './plugin-spec.ts'
+// The protected-plugin set + generation coupling (design 21 §6.11, decision 19
+// 2026-12 revision): P = B₀ ∪ S ∪ F derivation, the op-phased write-face
+// decision (install/remove judge P alike; remove never judges a version;
+// official-scope installs must pin the instance's exact generation) and the
+// read-face row projection the three backends emit — single source for the
+// desktop main (control-plane-module.ts) and the gateway.
+export {
+  CHAMBER_SCOPE,
+  decidePluginMutation,
+  derivePluginRows,
+  deriveProtectedSet,
+  familyNamesFromLockfileClosure,
+  familyNamesFromRuntimeTree,
+  isExactVersion,
+  isMaterializedValue,
+  OFFICIAL_SCOPE,
+  officialScope,
+  parseExactVersion,
+  PLUGIN_MATERIALIZED_VALUE_MASK,
+  PROFILE_BUNDLES_SNAPSHOT,
+  describeFamilyFindings,
+  protectedReason,
+  readInstalledVersion,
+  registrySpecVersion,
+  resolveRuntimeFamily,
+  sameGeneration,
+  suggestExactSpec,
+  verifyProfileFamilyConsistency,
+} from './protected-plugins.ts'
+export type {
+  DecidePluginMutationInput,
+  FamilyConsistencyFinding,
+  FamilyConsistencyVerdict,
+  FamilyVersions,
+  DerivePluginRowsInput,
+  ParsedVersion,
+  PluginMutationDecision,
+  PluginMutationOp,
+  PluginRefusalCode,
+  PluginRow,
+  PluginRowRole,
+  ProtectedDerivation,
+  ProtectedFacts,
+  ProtectedSet,
+  ProtectedSource,
+  RuntimeFamilyResolution,
+} from './protected-plugins.ts'
 // Gateway wire-protocol credential/session facts + SPKI pin helpers (design
 // 17 §7.1/§9.3/§13.4.2/S23) — the single source shared by the gateway server
 // (auth.ts/config.ts), the proxy injection gate (instance-proxy.ts) and the

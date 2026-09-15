@@ -216,7 +216,18 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     // Managed-profile plugin read projection (design 21 §6.2 A0 read surface):
     // readManifest's gateway implementation over <stateDir>/dsh-home/profiles/
     // web/package.json (bounded no-follow read; file: values masked).
-    const installed = createChamberInstalled(options.config.plane.stateDir)
+    // The read projection's row roles/protected flags come from the SAME
+    // runtime facts the write face judges with (design 21 §6.11): the active
+    // managed workspace path + its effective version, dereferenced lazily
+    // (this module is built before the runtime manager exists).
+    const installed = createChamberInstalled(
+      options.config.plane.stateDir,
+      () => {
+        if (runtimeManager === null) return null
+        const workspace = runtimeManager.resolveWorkspace()
+        return { path: workspace.path, version: workspace.version }
+      },
+    )
     // Design 21 §6.3 A1 mutation orchestrator (plan Phase 4.2-4.5 wiring):
     // journal + serial executor + deferred install intents behind the
     // runtime-manager profile-write lease. Status probes dereference the
@@ -668,6 +679,15 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       } catch (error) {
         planeStopError = error
       }
+      // The listener is closed now, so no NEW request can be accepted: publish
+      // whatever the fence-time drain could not see (a refusal accepted between
+      // the fence and this point). One window can still open after this line — a
+      // handler already inside `await auth.verify()` resumes and records its
+      // rejection — and that coalesced count then rides the debounce timer
+      // (unref'd: an exiting process drops it). The anchor line is already on
+      // disk, so what is at stake is a diagnostic count, not the record itself.
+      // Idempotent, and cheap when nothing is open.
+      dispatch.flushAuditWindows()
       started = false
       if (runtimeDisposalError === null && runtimeManager === managerAtStop) runtimeManager = null
       // A plane-listener failure alone does not imply a surviving runtime writer,

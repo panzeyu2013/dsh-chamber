@@ -1,5 +1,6 @@
 /**
- * Test fixture for packages/renderer/src/shell.test.ts — the controllable
+ * Test fixture shared by the packages/renderer/test/lifecycle/shell*.test.ts split —
+ * the controllable
  * `@deepseek-ai/dsh-client-web` face shell.ts consumes.
  *
  * The renderer has no install-tree copy of the dsh workspace packages, so the

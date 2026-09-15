@@ -150,6 +150,20 @@ export function formatChildOutputChunk(chunk: Buffer): string {
   return `${chunk.subarray(0, retainedBytes).toString('utf8').trimEnd()}${CHILD_OUTPUT_TRUNCATION_MARKER}`
 }
 
+/**
+ * Mask credential-bearing query values in ONE COMPLETE child-output line —
+ * the last gate before a managed host's stdout/stderr reaches the
+ * control-plane log or the on-disk rolling log. The `?token=` launch token is
+ * the only recoverable credential the host ever prints (the 0.1.2
+ * browser-auth bootstrap reads it from the `dsh web: <url>?token=…` line), so
+ * it must be redacted on the complete line, never on per-chunk fragments
+ * (review-round6a). Exported as the single source for that rule so a test can
+ * pin it without spawning a host.
+ */
+export function redactChildOutputLine(line: string): string {
+  return line.replace(/([?&]token=)[^&\s)]+/g, '$1***')
+}
+
 /** A retry delay that wakes immediately when its lifecycle is cancelled. */
 function waitForRetry(ms: number, signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.resolve()
@@ -626,14 +640,13 @@ async function spawnAttempt({
     // survive so line splitting works (trimEnd swallowed it and left every
     // line stuck in the tail). The scanner has the same raw-bytes rule.
     const text = chunk.toString('utf8')
-    const redact = (line: string) => line.replace(/([?&]token=)[^&\s)]+/g, '$1***')
     const segments = (forwardLineTail + text).split('\n')
     // Bound the incomplete-line tail (review-round7b P2-2): a child that
     // never emits newlines must not grow the buffer without limit — the
     // module's own 64KiB chunk bound applies.
     forwardLineTail = (segments.pop() ?? '').slice(-MAX_CHILD_OUTPUT_CHUNK_BYTES)
     for (const segment of segments) {
-      const safeLine = redact(segment)
+      const safeLine = redactChildOutputLine(segment)
       log(safeLine)
       hostLog.write(safeLine, stream)
     }

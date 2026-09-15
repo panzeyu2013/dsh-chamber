@@ -165,10 +165,19 @@ import {
   type SessionOrderBy,
 } from '../shared/derive.ts'
 import {
-  archiveSession, createHostDirectory, createSession, createWorkspace, deleteWorkspace,
-  forkSession, getInstanceClient, insertSessionBefore, insertWorkspaceBefore, listHostDirectory,
-  renameSession, renameWorkspace, searchSessions, stopArchivedSubtree,
+  createHostDirectory, getInstanceClient, insertSessionBefore, insertWorkspaceBefore, listHostDirectory,
+  renameSession, searchSessions, stopArchivedSubtree,
 } from '../shared/instance-api.ts'
+// 工作区变更的唯一事实出口（design 05 §2.2.1 2026-12 修订）：wire 调用 + 回声
+// 事实同处发布，侧栏对话框与 Git 插件走同一条路，谁都不会漏发。
+import {
+  createWorkspaceForSource, deleteWorkspaceForSource, renameWorkspaceForSource,
+} from '../shared/workspace-mutations.ts'
+// 会话变更的唯一事实出口（design 05 §2.2 2026-12 修订）：同上的会话侧构件——
+// 新建/fork 立即回声进投影，归档发布撤下事实。
+import {
+  archiveSessionForSource, createSessionForSource, forkSessionForSource,
+} from '../shared/session-mutations.ts'
 import { DirectoryBrowser } from '@deepseek-ai/dsh-client-ui-directory-picker-browse/client/DirectoryBrowser.tsx'
 import { ArchiveManagerDialog } from './ArchiveManagerDialog.tsx'
 import { setSearchFetcher, getSearchStates, subscribeSearch } from '../shared/search-state.ts'
@@ -1092,7 +1101,15 @@ export function SidebarRoot({
   const onForkSession = (server: ChamberServerAggregate, session: { id: string; title: string }): void => {
     runAction(`${server.id}/session/${session.id}/fork`, async () => {
       const client = getInstanceClient(server.id)
-      const childId = await forkSession(client, session.id)
+      // 2026-12 会话回声：子行与 "+" 的新建行走同一条唯一出口。意图标题（递增后
+      // 的父标题）随事实一起发布，权威行到达之前子行就渲染最终标签；随后的 rename
+      // 仍照旧执行（失败只告警，不阻断）。
+      const intendedTitle = session.title === '' ? undefined : increasedForkTitle(session.title)
+      const childId = await forkSessionForSource(
+        server.id,
+        session.id,
+        intendedTitle === undefined ? {} : { title: intendedTitle },
+      )
       if (session.title !== '') {
         try {
           await renameSession(client, childId, increasedForkTitle(session.title))
@@ -1129,10 +1146,12 @@ export function SidebarRoot({
         chamberBridge.requestOpenSession(server.id, reusable)
         return
       }
-      const client = getInstanceClient(server.id)
-      const sessionId = await createSession(client, workspaceId)
-      // 05 §2.2: created under this workspace, then open it on that source.
-      // The App layer re-pulls the snapshot so the new session shows here.
+      // 05 §2.2（2026-12 修订）：创建事实由唯一出口在 wire 成功后立即发布——App
+      // 把该行并入这个工作区并立即渲染；官方 summaries 看不见它时（unary 侧栏创建
+      // 的会话不在挂载壳的会话列表里），回声账本保证行不会在下一次挂载推送时消失。
+      const sessionId = await createSessionForSource(server.id, workspaceId)
+      // The App layer re-pulls the snapshot so every OTHER row of that source
+      // converges; the created row itself rides the echo fact above.
       chamberBridge.requestRefresh(server.id)
       chamberBridge.requestOpenSession(server.id, sessionId)
     })
@@ -1156,7 +1175,9 @@ export function SidebarRoot({
   // dead surface every caller still had to satisfy.
   const onArchiveSession = (server: ChamberServerAggregate, sessionId: string): void => {
     runAction(`${server.id}/session/${sessionId}/archive`, async () => {
-      await archiveSession(getInstanceClient(server.id), sessionId)
+      // 唯一出口（2026-12）：归档同时撤下该会话的待定回声——创建后立刻归档的行
+      // 不会留成幽灵。
+      await archiveSessionForSource(server.id, sessionId)
       // 2026-09 归档即终止（user motion「已归档的对话应该终止」，与删除侧同一
       // 纪律）：归档成功后**就地**停止该会话及其 subagent 闭包。归档会把"正在
       // 查看"的选中清空（vendor `clearArchivedCurrent`），卡在提问/权限的回合
@@ -1307,15 +1328,15 @@ export function SidebarRoot({
     void runActionWithOutcome(`${target.sourceId}/workspace/${target.workspaceId}/delete`, async () => {
       try {
         const path = workspacePathForFact(target.sourceId, target.workspaceId)
-        await deleteWorkspace(getInstanceClient(target.sourceId), target.workspaceId)
-        // chamber (2026-09-11 review S3, design 05 §2.2.1): the WITHDRAW half of
-        // the workspace echo. An unmounted source has no authoritative baseline
-        // listing this workspace, so `reconcilePendingWorkspaces` cannot retire
-        // the echoed row — without this fact a create → delete left a ghost row
-        // with real-id actions enabled until the TTL. Published for the ROW's own
-        // source (the source the create handler published for), never for the
-        // publishing shell.
-        chamberBridge.reportWorkspaceRemoved({ sourceId: target.sourceId, workspaceId: target.workspaceId, path })
+        // chamber (2026-09-11 review S3 / 2026-12 收口, design 05 §2.2.1): the
+        // WITHDRAW half of the workspace echo now rides the single funnel — the
+        // wire call and the fact publish together, for the ROW's own source
+        // (never for the publishing shell). An unmounted source has no
+        // authoritative baseline listing this workspace, so
+        // `reconcilePendingWorkspaces` cannot retire the echoed row: without
+        // this fact a create → delete left a ghost row with real-id actions
+        // enabled until the TTL.
+        await deleteWorkspaceForSource(target.sourceId, target.workspaceId, path)
         chamberBridge.requestRefresh(target.sourceId)
       } catch (reason) {
         // The dialog's own copy of the failure (finding 3). Rethrown so the
@@ -1338,18 +1359,12 @@ export function SidebarRoot({
     runAction(`${target.sourceId}/${target.kind}/${target.id}/rename`, async () => {
       const client = getInstanceClient(target.sourceId)
       if (target.kind === 'session') await renameSession(client, target.id, target.value)
-      else {
-        await renameWorkspace(client, target.id, target.value)
-        // chamber (2026-09-11 review S3, design 05 §2.2.1): the PATCH half of
-        // the workspace echo — an echo row's title is `basenameOf(path)`, so on
-        // a source whose shell is not mounted the rename used to look like a
-        // no-op until the mount push arrived.
-        chamberBridge.reportWorkspaceRenamed({
-          sourceId: target.sourceId,
-          workspaceId: target.id,
-          title: target.value,
-        })
-      }
+      // chamber (2026-09-11 review S3 / 2026-12 收口, design 05 §2.2.1): the
+      // PATCH half of the workspace echo — an echo row's title is
+      // `basenameOf(path)`, so on a source whose shell is not mounted the rename
+      // used to look like a no-op until the mount push arrived. Published by the
+      // single funnel together with the wire call.
+      else await renameWorkspaceForSource(target.sourceId, target.id, target.value)
       chamberBridge.requestRefresh(target.sourceId)
     })
   }
@@ -1395,22 +1410,18 @@ export function SidebarRoot({
         delete next[key]
         return next
       })
-      createWorkspace(browseClient, path)
-        .then((created) => {
+      // chamber (2026-12, design 05 §2.2 revision): the HOST workspace identity
+      // is published by the single funnel together with the wire call — the
+      // only trustworthy "this workspace exists on that host" fact reachable
+      // without a mounted shell. The unary fallback derives its groups from
+      // session cwds (a brand-new workspace has none yet) and a previously-
+      // pushed source keeps its workspace set frozen, so without the echo the
+      // row only appeared after the user clicked that server (2026-12 field
+      // report). The App echoes it immediately; the mounted follow baseline
+      // converges later.
+      createWorkspaceForSource(sourceId, path)
+        .then(() => {
           setAddingWorkspace(null)
-          // chamber (2026-12, design 05 §2.2 revision): publish the HOST
-          // workspace identity so the App can echo the row immediately. It is
-          // the only trustworthy "this workspace exists on that host" fact
-          // reachable without a mounted shell: the unary fallback derives its
-          // groups from session cwds (a brand-new workspace has none yet) and a
-          // previously-pushed source keeps its workspace set frozen — without
-          // the echo the row only appeared after the user clicked that server
-          // (2026-12 field report).
-          chamberBridge.reportWorkspaceCreated({
-            sourceId,
-            workspaceId: created.workspaceId,
-            path: created.path,
-          })
           chamberBridge.requestRefresh(sourceId)
         })
         .catch((reason: unknown) => {
@@ -1784,7 +1795,12 @@ export function SidebarRoot({
              an accessible name, vendor ui-sidebar SidebarRoot.tsx:63-68) — the
              inert title-only span is gone. The status display is unchanged: the
              coloured source dot and the active-source accent ring still paint on
-             the inner span, with the exactly same geometry and pitch.
+             the inner span; the span→button swap changed no geometry — the dot
+             PITCH stays the 20px the rail always had: the buttonization's own
+             `margin: -4px 0` takes the 16px button box back down to the old 8px
+             dot element, and only the 2026-09 rim pass's gap widening (12 →
+             16px) was rolled back on 2026-09-14; see 06 §7 and
+             test/visual-lock/batch2-visual-locks.test.ts.
              Operability mirrors the wide source header: activating a remote,
              usable source asks the App layer to switch the N-ctx view, the
              current source is marked aria-current, and a managed-down source

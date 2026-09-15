@@ -101,8 +101,8 @@ export {
  * the renderer App layer cannot import it (it resolves this fork through a
  * deep source alias, so it spells the literal instead — see
  * `packages/renderer/src/App.tsx` and its note). The two spellings therefore
- * drift-check rather than share a symbol: `test/client-apply.test.ts` and
- * `packages/desktop/ipc-surface-mirror.test.ts` pin the literal on both sides
+ * drift-check rather than share a symbol: `test/lifecycle/client-apply.test.ts` and
+ * `packages/desktop/test/ipc/ipc-surface-mirror.test.ts` pin the literal on both sides
  * (2026-09 audit — the earlier comment claimed a shared import that does not
  * exist).
  */

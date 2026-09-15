@@ -21,8 +21,8 @@ The shell declares and renders the three holes the alpha.2 official
   resolved at read time, notifications fire only on change), the shell renders
   one `PanelRow` per entry, and a click calls `ctx.layout.selectPanel(id)`.
   Upstream ships an empty list, so the section is invisible by default; the
-  projection and wiring are pinned by `test/panel-source.test.ts` and
-  `test/panel-wiring.test.ts`.
+  projection and wiring are pinned by `test/plugin-kernel/panel-source.test.ts` and
+  `test/plugin-kernel/panel-wiring.test.ts`.
 
 ## Structure
 
@@ -169,13 +169,17 @@ The shell declares and renders the three holes the alpha.2 official
   can also be switched from the rail; the coloured dot and the active accent
   ring are unchanged, geometry included.
 
-## Open-intent gates and the workspace echo (design 05 §2.2.1, 2026-12)
+## Open-intent gates, the workspace echo and the session echo (design 05 §2.2.1, 2026-12)
 
 This package owns the page-wide open-intent slot (`shared/open-intent.ts` — the
 same vite-shared singleton discipline as `pending-click.ts`, because the target
 instance's own ctx must read it too) together with the pure rules the App layer
-consumes, plus the workspace-echo ledger rules (`shared/workspace-echo.ts`) and
-their publish site (`client/SidebarRoot.tsx`). Two user-visible surfaces follow:
+consumes, plus the workspace-echo ledger rules (`shared/workspace-echo.ts`,
+placement anchors included) and their publish site (`shared/workspace-mutations.ts`
+— the single funnel every in-app workspace mutation goes through: the sidebar
+dialogs and the Git worktree plugin's create/adopt/recovery alike), plus the
+session-echo ledger (`shared/session-echo.ts`) and its own single funnel
+(`shared/session-mutations.ts`). Three user-visible surfaces follow:
 
 - **Intent gates.** A source with an in-flight open projects its `current` only
   when that current IS the requested session (`projectableCurrent`), so the
@@ -190,13 +194,48 @@ their publish site (`client/SidebarRoot.tsx`). Two user-visible surfaces follow:
   the list immediately, before any mounted baseline can carry it: the row
   carries the real host id (never `synthetic`, so workspace-level actions stay
   available), replaces a same-path synthetic group in place, and is handed over
-  to the authoritative row once that source's push lists it (05 §2.2.1). The
+  to the authoritative row once that source's push lists it (05 §2.2.1). A Git
+  worktree creation carries the placement anchor (`afterWorkspaceId` = its main
+  checkout), so the row lands directly below that checkout instead of at the
+  tail, and its git flags are published by the funnel's `beforePublish` hook —
+  BEFORE the echo fact, not after it — so the row is born in its worktree shape
+  and never renders as a plain workspace first; the adopt path also carries its
+  branch title as a hint, so the row is born with its final label. The
   same channel carries the withdraw/patch halves — `reportWorkspaceRemoved`
   after a successful `workspace.delete` (without it a create → delete on an
   unmounted source leaves a real-id ghost row until the TTL) and
   `reportWorkspaceRenamed` with the new title after a successful
   `workspace.rename` (an echo row's title is the path basename, so the rename
   otherwise looks like a no-op) — and the App applies both to that one ledger.
+- **Echoed session row.** The workspace row's `+` and a session row's `fork` /
+  `archive` verbs mint and mutate sessions through that source's own unary
+  client, so a new row reaches the projection only through the host's
+  ASYNCHRONOUS `api-session/added` broadcast — or never, when that source's
+  shell is not mounted (the post-harvest steady state, where its pushed
+  workspace rows stay real and `+` stays clickable). The mounted push that
+  follows the open request replaces the aggregate from a summary store that may
+  not list the id yet, and the 30s unary fallback's merge keeps the pushed
+  workspace membership frozen, so the new id can at best appear as an
+  unaccounted stray — which a provisional blank row is not allowed to render.
+  A successful create therefore also publishes a one-way fact
+  (`shared/session-mutations.ts`: sidebar `+`/fork/archive and the Git plugin's
+  session creates), the App records the HOST id in a renderer-local ledger and
+  projects the row INTO its workspace (`withSessionEcho` — host workspace id
+  first, canonical path second), requests that source's official session-list
+  refresh (mounted contexts only) and retires the entry as soon as the
+  authoritative membership names the id (the push, or an unmounted source's
+  fallback pull). Blank semantics are deliberately NOT overridden — a
+  provisional row still renders only while it is that source's current session
+  — and a create → archive inside the window is retired by the same funnel's
+  removal fact. The membership is inserted at the workspace HEAD, matching the
+  host's own `attachSession` order (`[sessionId, ...rest]`), so the row never
+  renders at the tail and then jumps up on convergence. That same removal fact
+  also records a local ARCHIVE TOMBSTONE: a source whose shell is not mounted
+  keeps listing the archived row (the unary fallback has no archive wire at
+  all, and the mounted merge keeps the frozen pushed set), so the id is
+  filtered until an AUTHORITATIVE archive set names it — a mounted push; the
+  lease is refreshed by every degraded listing that still shows the row, and
+  the archive manager keeps reading the authoritative set only.
 
 ## Data discipline
 

@@ -12,7 +12,7 @@ gateway 访问）真正可用——窄屏抽屉化布局、触控目标、安全
 - `src/client/index.ts` —— 浏览器半：assets 注入（viewport/stylesheet/
   theme-color）、frame 打标（`ROLE_SLOT_KEYS` 把插件角色映射到 alpha.2 槽键
   `sidebar` / `main` / `rightbar`）、layoutFacts 驱动的抽屉滚动锁、
-  composer 行为、抽屉点击自愈、设置 sheet 分区切换打磨、
+  composer 行为、抽屉点击自愈、设置 sheet 分区切换打磨、官方悬停卡片搁浅看护、
   `shell.overlay` 抽屉开关（官方面板图标）+ 遮罩。该开关**就是**官方控件而非
   仿制品（2026-09-11 upstream-alignment T17a）：渲染 `IconPanelLeftOutline16`
   ——官方侧边栏开关所用的图标，取自 `ui-primitives` 客户端 baseline 模块，
@@ -26,7 +26,8 @@ gateway 访问）真正可用——窄屏抽屉化布局、触控目标、安全
 - `src/client/styles.ts` —— 单文件样式（全部媒体查询作用域，桌面零影响；
   只用官方 `--dsw-*`/`--ds-*` token）；
 - `src/client/markup.ts` / `composer.ts` / `layout-facts.ts` /
-  `drawer-taps.ts` / `settings-sheet.ts` —— 纯逻辑 + 薄安装器（可单测）；
+  `drawer-taps.ts` / `settings-sheet.ts` / `official-hover-card.ts` /
+  `session-stall.ts` —— 纯逻辑 + 薄安装器（可单测）；
 - `scripts/build.mjs` —— esbuild 两半构建（`dist/index.js` + `lib/client.js`）。
 
 ## 会话头部适配（触屏档）
@@ -36,14 +37,33 @@ gateway 访问）真正可用——窄屏抽屉化布局、触控目标、安全
 
 - **开关重叠**：浮动抽屉开关（左上 44px）压在头部内容上——头部预留左侧 gutter
   （`padding-left`）；
-- **面包屑被裁**：官方 crumbs 行 nowrap + overflow hidden，长标题链与
-  谱系 chip（「N 个子代理」目录触发器）会被静默截断——改为换行而非裁切
-  （单段省略号保留）；
+- **面包屑被裁**：官方 crumbs 行是 `nowrap + overflow hidden`，长标题链与
+  谱系 chip（「N 个子代理」目录触发器）会被静默截断。本条改为**保持官方单行契约 +
+  横向平移**（`overflow-x: auto`、隐藏滚动条），不再换行：谱系 chip 渲染在
+  crumbs 行**内部**（在当前 crumb 自己的 `span.crumbSeg` 里），而它的计数文本是
+  一个**上游没有 class 的裸 span**（`SubagentHeaderLineage` 的类字典里没有组件
+  引用的 `count` 键），所以「继承来的 nowrap」是它唯一的保护——把 nowrap 覆盖成
+  `normal` 后 CJK 逐字可断，徽标渲染成五行竖排（5 × 18px = 90px），把标题行从
+  30px 撑到 ~96px（2026-09-14 review-fix；**之前那条换行规则本身就是回归源**）；
+- **会话头首行（phone 档）**：单行、48px 上限，并吃顶部/右侧安全区。收缩顺序是
+  显式的——**当前 crumb**（上游用 `disabled` 渲染的那一个）吸收剩余宽度并省略号；
+  **谱系 chip 不参与收缩竞争**（`flex: 0 0 auto`、44px 触控底线〔上游只有 28px
+  盒〕、计数文本有界），因为它是子代理目录的唯一入口；agent-preset 座席——上游的
+  `AgentPresetLabel`，是**裸 `span[icon][name]`**，也是 `headerActions` list 座席里
+  唯一承载文字的直接子节点——从 480px 起把宽度还给面包屑条（8em），360px 再让一档
+  （5em）；上游自己已把该标签限在 180px，本插件只是**收回**宽度（`overflow: hidden`，
+  绝不 `display: none`），图标与可访问名因此保留；两个图标座席取
+  `box-sizing: border-box`，让共享的 44px 底线
+  落在**盒**上（否则 28px 按钮 + 6px 内边距会渲染成 ~56px，白白加厚整行）；
 - **「Session 日志」导出胶囊**：alpha.2 重锚时**退役**——上游已把该控件改为
   会话头 more-actions 菜单里的 28×28 图标按钮，插件不再按文案打标。右列保留第三轨
   的网格锁、不自绘覆盖层——面板的呈现仍是官方那一套，只是在整档触屏宽度上重新按
   **全屏**呈现（只加网格锁会让 769–1023px 档被常规宽度的面板盖住；见下节
   「右栏与抽屉的共存」）。
+- **抽屉入口门控**：浮动开关与遮罩只在抽屉真的可用时才渲染——frame 必须已打标，且
+  `data-mobile-roles` 必须含 sidebar 角色。`stampFrame` 是全或无的（缺 conversation
+  列的 frame 绝不适配），因此没有这道门控时，上游一旦改掉中心列 key，就会留下一个
+  可见但点了没反应的按钮，以及盖住会话区的全屏遮罩。
 - **视图 tab**：`tabs.length > 1` 是**常态**而非边角——`ui-chat` 与
   `ui-trajectory` 都无条件注册 `conversation.view`，且都在默认 web bundle 里。
   官方 tab 是 13px 文字 + 25px 盒，而 tab 条既不换行也不滚动、frame 又裁掉溢出
@@ -53,6 +73,44 @@ gateway 访问）真正可用——窄屏抽屉化布局、触控目标、安全
   `min-height: 76px` 是**下限**，行高随内容增长），并让 tab 条**换行**。
   选择换行而非滚动是刻意的：滚动容器会把另一轴强制算成 `auto`，从而裁掉活动
   tab 那条 2px 指示条——上游特意把它画到 tab 盒外 1px，好与头部底线齐平。
+
+## 会话打开停滞提示（触屏档）
+
+官方会话视图在日志流打开期间会渲染 `chat.loadingHistory` 提示，而**客户端与宿主都没有
+首帧超时**——因此当 `session/follow`（乘 `/api/remote.mux` WebSocket mux 的 remote 流）
+停滞时，会话区会永远停在那句提示上，且官方 UI **没有任何恢复入口**。
+`session-stall.ts` 只为这一状态补一个非阻断提示。判据**全部是属性锚点**——本包的锚点
+纪律禁止按哈希类名或文案匹配那句提示：
+
+- 存在 `[data-chat-flow]` 列，且其最近的 `[data-phase]` 祖先进相为 `settling` 或
+  `active`（DOM 取值空间恰为 settling / hero / active，由上游 `ConversationRoot`
+  发出；hero 是「无会话」面，永不成立，空会话因此不会误报。`conversationPhase()`
+  内部的 `blank` / `engaging` 名字**从不到达该属性**——本文件早前那条说法是错的。
+  settling 的哪条臂真能走到这里由下面的头部门决定，不由相位表决定：blank 壳那条臂
+  上游会隐藏头部）；
+- flow 子树内**没有任何** `[data-chat-anchor-key]` 行；
+- `conversation.session.header` 的 `<header>` 存在且确实被渲染（上游在 blank 壳期
+  隐藏它，这也是 settling 纳入后仍不会在无头面误报的原因）；
+- 该状态已连续持续 **45s 可见页面时间**——后台时间**丢弃而不累计**，因为被冻结的
+  移动端定时器在恢复时不得按过期时间戳一次性补算；
+- 会话身份（以及随之的计时、忽略动作与已显示的提示）是**被渲染的 `<header>` 节点**，
+  **没有回落**：`ui-layout` 的 `main` 槽按条目身份做 key，`div.root[data-phase]` 会
+  跨会话原地复用，而会话作用域的头部子树会重挂；头部不显示时形态本就为假，没有东西
+  需要计时。
+
+形态的已知边界：`data-chat-anchor-key` 只由 routed node 包装层发出，因此「空会话 +
+首个提问尚未落盘（乐观提交气泡）」也满足形态，此时用户会被告知载入面停滞。要收窄
+需要上游目前不暴露的锚点（open 状态 / pending 气泡属性）；把误报代价压到零的是
+「继续等待」控件。
+
+提示是 `role="status"` / `aria-live="polite"`，锚在会话头下方，除两个控件外
+`pointer-events: none`，从不抢焦点。主操作是**用户主动**的页面重载；次控件
+（"继续等待"）在当前这段连续停滞内关掉提示，形态一恢复即重新武装——健康但缓慢的
+打开与这个形态完全同形，而阈值未经真机校准（该门禁在 STATUS 里仍开放），所以误报
+的代价必须是零。它绝不自动重载或自动重开会话。它自带极小的
+`data-plugin="dsh-chamber-mobile-stall"` style 标签，只在触屏档安装，dispose 时连同
+定时器、监听、DOM 与自建样式一并清理；安装按 window 级引用计数共享，最后一个
+disposer 才真正拆除。
 
 ## 右栏与抽屉的共存（触屏档）
 
@@ -199,6 +257,52 @@ Tooltip 用法中 27 处是带 aria-label 的按钮，标签命名同一动作�
 的内容。第五处 `role="tooltip"`（轨迹 turn-rail 预览，被 `aria-describedby`
 引用）没有 `data-side`，被规则结构性排除。桌面零影响（媒体查询作用域）。
 
+同一档也抑制 chamber 页面里**手写的 `data-tip` 气泡**
+（`[data-tip]::after { display: none !important }`）——例如连接设置页的
+`.iconButton` / `.restartTip` 气泡（`ConnectionsSection.module.css`，`::after`
+上 `content: attr(data-tip)`，由 `:hover` / `:focus-visible` 控透明度）：同一个
+粗指针产物，只是换了一套词汇。13 处站点全部把该属性与 `aria-label` 配对（该包的
+`Button` prop 面已记这条配对），所以可访问名不丢；官方 bundle 里 `data-tip`
+属性为**零**，规则够不到任何官方面；且只隐藏伪元素——宿主按钮、盒子与标签原样
+保留。残留：两处 `.restartTip` 的提示承载的是**禁用原因**，本档因此失去可见的
+解释（原因仍在 `aria-label` 与 `disabled` 状态里）——与上面官方 Tooltip 规则
+一样的取舍，优于每次点按后粘在行上的气泡。
+
+## 官方悬停卡片搁浅（粗指针档）
+
+实例自带前端——也就是 gateway 档、本包唯一被加载的档——会话行渲染的是**官方**
+`ui-primitives` `HoverCard`；chamber 的替代实现（`RowHoverCard` + `hover-intent`
+状态机）只存在于复合页，而复合页从不加载本插件。官方原子的 200ms 宽限关闭由
+**上一次已提交的 `open`** 决定，因此落在提交窗口内的 leave 什么都不 arm，卡片随后
+挂载而指针已经离开；触屏上更是根本不派发 leave。卡片 portal 到 `document.body`
+（`position: fixed`、244px），宿主侧任何 CSS 也藏不住它。
+
+`official-hover-card.ts` 就是针对该档的文档级看护（与上面 tooltip 规则同一
+`(pointer: coarse) and (hover: none)` 门控——有 hover 能力的指针、以及全部桌面，
+都保持官方行为）。它从不触碰官方包：对一张按官方自身锚定几何
+（`card.left = wrapper.right + 8`；`card.top = wrapper.top`，或底夹的
+`card.bottom = innerHeight − 8`）与两个 CSS-module 类名 token
+（`_card_1b2ny_*` / `_root_1b2ny_*`）唯一匹配到某个 wrapper 的卡片，它在该 wrapper
+上派发**一次**冒泡 `pointerout`（无 related target）。React 的委托 enter/leave
+路径把它读作「指针离开了窗口」，执行 wrapper 的 `onPointerLeave`——卡片在 DOM 里
+即原子已提交的 `open` 为真——从而 arm 原子自己的宽限关闭；这 200ms 内真实的
+`pointerenter` 会再次取消它，因此真实用户输入永远优先。触发条件：`pointerdown`
+且其目标**与**坐标都证明在两个盒子之外（膨胀 2px）、`window.blur`、
+`visibilitychange → hidden`。看护不派发 click / pointerdown / 键盘事件，自己不 armed
+任何计时器，遇意外一律 fail-closed，可幂等安装，并由 `ctx.effect` 在一个
+`Symbol.for` 窗口守卫后安装/卸载。
+
+**残留现实——它不覆盖什么。**
+
+1. **直开的实例自带前端**（例如浏览器里的 `http://127.0.0.1:17510`）**没有任何
+   chamber 客户端插件**：本包在那里完全不被加载，所以搁浅缺陷在该 origin 上依然
+   存在，且无法从 chamber 侧缓解——那一档需要上游在 `ui-primitives` 里的修复
+   （与 chamber 为自己卡片在复合页做的是同一件事）。
+2. 在覆盖档内，两个页面状态触发也会关掉「指针在 blur/切标签页时物理停在行上」的
+   卡片；卡片会在下一次离开再进入（或点按）后重开，全程不涉及 click、导航或焦点。
+3. 类名 token 与 vendor 构建绑定，和本包其他锚点一样，pin 升级时必须重审。token
+   过期只会把看护降级为静默 no-op（永远匹配不到卡片），而**不会**误伤。
+
 ## 抽屉点击与键盘（触屏档）
 
 - **点击自愈**（`drawer-taps.ts`）：iOS Safari 会抑制抽屉内点击的合成
@@ -313,3 +417,68 @@ chrome；`[role="menu"] [role="menuitem"][aria-selected]` 高亮信号在本 pin
 （ui-primitives `Menu` 不发 `aria-selected`，且它会把焦点移入菜单，其 Enter 根本
 到不了 document 处理器）；全树仍恰好三个 `aria-modal` 产出点与三个 `data-side`
 载体（两个 AppFrame/ConversationRoot 拖拽把手 + 那颗恒为 `role="tooltip"` 的气泡）。
+
+**会话头锚点（2026-09-14 review-fix）**，全部为属性形或结构形，已在 rc.2 树中核对：
+
+- `conversation.session.header.lineage`——会话头出口的**第四个**座席，与
+  `actions` / `utilities` / `corner` 并列注册，但它渲染在 **`nav.crumbs` 内部**
+  （当前 crumb 的 `span.crumbSeg` 里），这正是它会被面包屑条挤压的原因；
+- 该座席自身的形状：根 `div` 的首个子节点是 `/` 分隔 `span`（仅 count 变体），随后是
+  `button`，内含 `[span.activitySlot][span(count，无 class)][IconChevronDownOutline14]`；
+- phone 档选择器依赖的 DOM 层级：
+  `header > div.titleRow > div.titleCluster > [nav.crumbs, div.headerActions]`，
+  `div.headerUtilities` 与 `div.headerCorner[data-conversation-header-corner]` 是
+  `titleRow` 的另两个子节点，`div.tabs[role=tablist]` 是 `header` 的第二个子节点——
+  因此写在行上的 `> nav` 子代组合器是**静默 no-op**（`:has()` 必须是后代匹配）；
+- 当前 crumb 是 `button.crumb:disabled`（上游以 `disabled: last` 渲染），收缩顺序
+  就挂在它上面；
+- `headerActions` 出口是 **list 座席**，本 pin 的三个注册者**都不渲染直接子
+  `button`**：`agent-preset`（order −10）是 `AgentPresetLabel`，裸
+  `span[icon][name]`（上游自己限 `max-width: 180px` + `overflow: hidden`，且非交互，
+  只带 `title`）；`schedule-catalog`（10）与 `job-list`（20）是 `div` 包裹、触发器内嵌
+  ——因此该座席的命中盒规则必须用后代 `button` 选择器，任何 `> button` 臂都是死代码；
+  而 hero chip 的交互式 `button[aria-haspopup=menu]` 在**另一个座席**
+  （`conversation.hero.agentPreset`）；出口本身是 `display: contents`；
+- `data-mobile-roles`（插件自有，非上游）：探针在 frame 上实际找到的角色，空格分隔。
+  `stampFrame` 是**全或无**的——conversation 列缺失时它拒绝适配该 frame，于是样式表里
+  的 `grid-template-columns: 0 minmax(0,1fr) 0` 锁不可能在上游改掉中心列 key 之后把
+  会话内容困在 0px 第一轨（此时页面退化为官方窄窗布局）。
+
+**会话打开停滞提示的锚点（2026-09-14；取值空间 2026-12 重审）**，同样全为属性形：
+
+- `[data-chat-flow]`——`ui-chat` 的消息列；缺失即屏幕上没有会话面，其余锚点一律不读；
+- flow 的**最近** `[data-phase]` 祖先——会话根（`ConversationRoot.tsx`），其属性取值
+  空间恰为 `settling` / `hero` / `active`；`hero` 是「无会话」面，而
+  `conversationPhase()` 的内部名字（`blank` / `engaging`）从不到达该属性；
+- `[data-chat-anchor-key]`——已渲染的消息行（官方 `routedNode.key` 投影）；
+- `[data-slot="conversation.session.header"] > header`——头部出口与其直接 `<header>`
+  子节点，同时是**会话身份**：该出口是会话作用域槽，渲染器按会话重挂；keyed 的
+  root 作用域 `[data-phase]` 节点则会跨会话复用。
+
+**主题观察器的锚点（2026-12）**：`data-ds-dark-theme`——`index.ts` 用
+`MutationObserver.observe(document.body, { attributeFilter: ['data-ds-dark-theme', …] })`
+观察它。该 pin 上上游**唯一**的写入点是
+`document.body.toggleAttribute('data-ds-dark-theme', dark)`（`dsh-client-ui-theme` 的
+client 半）；其余引用全是 CSS 规则（`body[data-ds-dark-theme]{…}`），属消费形——
+`scripts/dev/verify-mobile-anchors.mjs` 刻意**不**把它当作「上游仍在发射」的证据。
+若未来 pin 把写入改成 `dataset` API，属性名字面量会消失、门禁按 fail-closed 变红：
+那时应针对新的写入点重锚，而不是盲目放宽判定。
+
+**悬停卡 watchdog 自己的锚点（2026-09-13 review B2——它们同样是锚点，因此列在这里，
+而不只写在上面那一节）：** `official-hover-card.ts` 用三项事实匹配官方原子，pin 移动时
+一并重审：
+
+- `_root_1b2ny_3` 与 `_card_1b2ny_13`——**被服务的那份** bundle 里 ui-primitives
+  `HoverCard` 模块的 CSS-module class token。它们是 build-time 哈希：当前 pin
+  （0.1.5-rc.2）在 `@deepseek-ai/dsh-web-frontend/dist/assets/index-*.css` 里产出它们
+  （已对 `packages/desktop/vendor/dsh/` 下的随仓副本逐字节核对；该产物另有 251 个同形
+  `_<local>_<hash>_<idx>` 名字，且没有旧审计记录的 `[hash]_[local]` 形）。pin 一动哈希
+  即变，watchdog 退化为静默 no-op（fail closed，绝不误触发）——这是本包唯一没有属性形
+  兜底的锚点；
+- 锚定几何 `card.left = wrapper.right + 8`、`card.top = wrapper.top`（或贴底夹取的
+  `card.bottom = innerHeight − 8`）；
+- 卡片盒是该 wrapper 内唯一的 `[class*="_card_1b2ny_"]` 元素。
+
+`test/dom/official-hover-card.test.ts` 钉住常数与 src↔产物锁步，C8 钉住随包字节；
+**没有任何门能看到被服务 bundle 的哈希变化**（它是仓外的派生状态），这正是本条存在的
+理由。

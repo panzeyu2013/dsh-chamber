@@ -224,6 +224,7 @@ export const zh = {
   pluginsRestarted: '已重启',
   pluginsRestartFailed: '插件已安装，但重启失败，需手动重启。',
   pluginsDeferred: '已安装，下次重启生效。',
+  pluginsDeferredLocal: '已安装；在「dsh 运行时」点「重启 dsh」后生效（窗口会重新加载一次，需重新打开设置）。',
   pluginsVerifyFailed: '安装完成但校验失败。',
   pluginsReadyFailed: '已重启但实例未恢复，疑似插件集损坏。',
   pluginsRefresh: '刷新',
@@ -292,11 +293,11 @@ export const zh = {
   chamberRemoteFailed: '远端：已注入（加载失败）',
   pluginDisabled: '已停用',
   // 第三方行生效状态 chips（Loader 快照派生，local/gateway/http 行内状态）：
-  // 生效中（ok）/ 加载中（muted）/ 重启后生效（warn）；已停用复用
-  // pluginDisabled，加载失败复用 chamberBadgeFailed。
+  // 生效中（ok）/ 加载中（muted）；已停用复用 pluginDisabled，加载失败复用
+  // chamberBadgeFailed。快照无同名行时状态格中性（无「重启后生效」承诺 ——
+  // bundle 层的挂载行不带包名，无从判定，见 plugin-inventory-text.ts）。
   thirdPartyLiveActive: '生效中',
   thirdPartyLiveStarting: '加载中',
-  thirdPartyLiveRestart: '重启后生效',
   // gateway 本地导入（文件夹/.tgz）成功且受控重启已生效：插件已挂载在运行实例上。
   materializeLive: '已安装并已重启生效',
   chamberSyncNow: '重新同步 chamber 组件',
@@ -314,9 +315,6 @@ export const zh = {
   chamberBadgeNotInjected: '未注入',
   chamberBadgeUnknown: '未知',
   chamberBadgeFailed: '加载失败',
-  // 本地形态专用行（design 20 §6：open-in host 域只注入本地实例）——在远端/网关
-  // 目标上渲染它，而不是「未注入」：那里缺它不是故障，是设计。
-  chamberBadgeLocalOnly: '本地形态专用',
   // 内建表「版本」列表头（plan 24 B1.5）。
   pluginsColVersion: '版本',
   // Phase-5 A keys（design 21 §6.6 键表清单）：单一模型视图（已安装列表/恢复面）文案。
@@ -339,6 +337,15 @@ export const zh = {
   installedTab: '已安装',
   installedEmpty: '尚未安装第三方插件',
   installedAddHint: '在下方添加区按包名搜索安装，或从本地文件夹 / .tgz 插件包导入。',
+  // design 21 §6.11.5 受保护行投影（后端 rows 驱动，渲染端只渲染不推导）：
+  // 五个角色徽标 + 受保护行只读提示 + 旧 gateway 无 rows 的回退提示（§6.11.7）。
+  pluginsRoleComposition: '安装组合',
+  pluginsRoleSeed: 'chamber 播种',
+  pluginsRoleLayer: '用户层',
+  pluginsRoleThirdParty: '第三方',
+  pluginsRoleMaterialized: '本地物化',
+  pluginsProtectedHint: '受保护：实例组合 / chamber 播种 / 运行时线族，只读',
+  pluginsLegacyGatewayHint: '该 Gateway 版本较低（未提供受保护行投影）：仅第三方行可操作，官方与 chamber 行不在此列出。',
   removeRowConfirmTitle: '移除插件？',
   removeRowConfirmDescription: '将移除 {name} 并在需要时重启实例生效。',
   removeRowConfirmUnconfiguredDescription: '将移除 {name}；该实例未配置 systemd 服务，不会自动重启——需手动重启远端后变更才生效。',
@@ -589,6 +596,7 @@ export const en: Record<SettingsConnectionsKey, string> = {
   pluginsRestarted: 'Restarted',
   pluginsRestartFailed: 'Plugins installed, but the restart failed — restart manually.',
   pluginsDeferred: 'Installed; takes effect on the next restart.',
+  pluginsDeferredLocal: 'Installed. Activate it with “Restart dsh” in the dsh runtime section; the window reloads once (reopen Settings).',
   pluginsVerifyFailed: 'Install completed but verification failed.',
   pluginsReadyFailed: 'Restarted but the instance did not recover; the plugin set may be broken.',
   pluginsRefresh: 'Refresh',
@@ -659,12 +667,13 @@ export const en: Record<SettingsConnectionsKey, string> = {
   chamberRemoteFailed: 'Remote: injected (failed to load)',
   pluginDisabled: 'Disabled',
   // Third-party row live-state chips (Loader-snapshot derived, in-row state
-  // for the local / gateway / http zones): Active (ok) / Starting (muted) /
-  // Activates on restart (warn); Disabled reuses pluginDisabled, failed to
-  // load reuses chamberBadgeFailed.
+  // for the local / gateway / http zones): Active (ok) / Starting (muted);
+  // Disabled reuses pluginDisabled, failed to load reuses chamberBadgeFailed.
+  // No matching snapshot entry leaves the cell neutral — no "activates on
+  // restart" promise is derivable for a bundle layer (see
+  // plugin-inventory-text.ts).
   thirdPartyLiveActive: 'Active',
   thirdPartyLiveStarting: 'Starting',
-  thirdPartyLiveRestart: 'Activates on restart',
   // Gateway local import (folder / .tgz) success with the controlled restart
   // settled: the plugin is mounted on the running instance.
   materializeLive: 'Installed and live (restarted)',
@@ -683,10 +692,6 @@ export const en: Record<SettingsConnectionsKey, string> = {
   chamberBadgeNotInjected: 'Not injected',
   chamberBadgeUnknown: 'Unknown',
   chamberBadgeFailed: 'Failed to load',
-  // Local-shape-only row (design 20 §6: the open-in host domain is injected
-  // into the local instance only) — rendered on remote/gateway targets instead
-  // of "Not injected": absent there by design, not by fault.
-  chamberBadgeLocalOnly: 'Local shape only',
   // Built-in table "version" column header (plan 24 B1.5).
   pluginsColVersion: 'Version',
   // Phase-5 A keys (design 21 §6.6 key table): unified model view (installed list / recovery surface) copy.
@@ -711,6 +716,16 @@ export const en: Record<SettingsConnectionsKey, string> = {
   installedTab: 'Installed',
   installedEmpty: 'No third-party plugins installed yet',
   installedAddHint: 'Install by package name in the add area below, or import a local source folder / .tgz plugin archive.',
+  // design 21 §6.11.5 protected-row projection (backend rows drive it; the
+  // renderer only renders): five role badges + the protected-row read-only hint
+  // + the old-gateway no-rows fallback hint (§6.11.7).
+  pluginsRoleComposition: 'Composition',
+  pluginsRoleSeed: 'Chamber seed',
+  pluginsRoleLayer: 'User layer',
+  pluginsRoleThirdParty: 'Third-party',
+  pluginsRoleMaterialized: 'Materialized',
+  pluginsProtectedHint: 'Protected: composition / chamber seed / runtime family \u2014 read-only',
+  pluginsLegacyGatewayHint: 'This gateway is older and provides no protected-row projection: only third-party rows are actionable; official and chamber rows are not listed here.',
   removeRowConfirmTitle: 'Remove this plugin?',
   removeRowConfirmDescription: 'Removing {name}; a restart applies the change when required.',
   removeRowConfirmUnconfiguredDescription: 'Removing {name}; no systemd service is configured on this instance, so nothing restarts automatically \u2014 restart the remote manually for the change to take effect.',

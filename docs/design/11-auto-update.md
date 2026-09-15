@@ -72,6 +72,44 @@
   no-event watchdog（`restartWatchdogMs`，默认 60s）释放单飞并给如实文案。
   重启失败经一次性 `restartFailureText` carry（脱敏）呈现，phase 保持
   `downloaded`，downloaded 行渲染重启专用失败行 + 原位重试。
+  **关窗次序不变量（2026-12 实机缺陷修复）**：`quitAndInstall` **不走应用正常退出
+  序列的开头——它先关闭全部窗口，全部关掉后才退出**（Electron 43.4.0 typings
+  `AutoUpdater#before-quit-for-update` 明文「`before-quit` 不会在所有窗口关闭前
+  发出」；43.4.0/darwin 探针证实 autoUpdater 的 `before-quit-for-update` 与窗口
+  `close` 都发生在 `quitAndInstall()` 调用内部、早于 `before-quit`）。而「关窗到
+  托盘」（design 14 D1，默认 `hide-to-tray`）以 `quitRequested`（由 `before-quit`
+  置位，即关窗**之后**）为放行条件——更新退出腿的关窗会被 hide 吞掉：页面消失、
+  进程（连同本地 dsh 与隧道）永久留存、更新永不安装。因此控制器在即将调用
+  `quitAndInstall()` 前同步回调 `onQuitAndInstallArmed`，主进程在该回调里武装
+  `updaterQuitArmed`（关窗发生在该调用内部，返回后再置位已晚；拒绝路径不回调，
+  因而没有需要回滚的「假武装」），武装期间 `shouldHideToTray` 恒 false；
+  重启失败或停滞（一次性 `restartFailureText` / 相位离开 `downloaded`）立即撤回，
+  并把被更新关掉的窗口拉回主界面（失败/停滞文案的唯一诚实呈现面；窗口若是**重建**的，
+  同一次订阅的 `UPDATE_STATE_CHANGED` 推送会落在还没装监听的 renderer 上，呈现靠
+  renderer 挂载时的 `UPDATE_STATE` pull 补齐——2026-09-13 review C7b）。
+  回归契约：`packages/desktop/test/desktop-shell/update-restart-quit.test.ts`（main.ts 接线 + 武装标志
+  生命周期）+ `test/local-state/chamber-settings.test.ts`（两个纯判定，含
+  `shouldUpdaterQuitTakeOver` 的真值表）+ `test/desktop-shell/updater-restart-install.test.ts`（回调时序，含 native 退出
+  事件必须把停滞 watchdog **重锚**——不是清除：它是该路径上单飞闸的唯一释放者，清掉就
+  会出现「永远 restart in progress」，重锚则既不会在退出腿中途误报停滞、又保证腿走不完
+  时仍有如实文案与就地重试）；真实的 macOS 端到端仍是实机门禁（§9）。
+  **原生退出桥与兜底（同一条缺陷的另一半）**：控制器订阅 Electron 原生
+  autoUpdater 的 `before-quit-for-update`（它就在 `quitAndInstall()` 内部、关窗之前
+  发出——43.4.0/darwin 实测），经 `onNativeUpdaterQuitting` 回调宿主：①**每次**原生
+  退出都重新武装关窗豁免（覆盖「首次武装已被停滞 watchdog 撤回、原生退出迟到」的窗口）；
+  ②宿主在宽限期（5s）后若进程仍未进入退出序列（`before-quit` 未到）就自行 `app.quit()`，
+  走正常 before-quit/will-quit 清理路径完成退出。**此刻自退是安全的**：该事件只在
+  Squirrel 已完成 staging 后发出（MacUpdater 仅在 `squirrelDownloadedUpdate` 或原生
+  `update-downloaded` 之后才调原生 quitAndInstall），退出即安装——这正是 §9 预案
+  「监听 native staging 完成后自行 `app.quit()`」的落地形态。**「原生腿关窗后走不到
+  `before-quit`」这一条仍是未复测的观察**（2026-09-13 review C4）：它是修复前取的
+  （当时关窗被 hide 吞掉、窗口从未真正关闭，退出序列自然到不了 `before-quit`），typing
+  只保证 `before-quit` 不在所有窗口关闭前发出。兜底在两种情形下都安全——`before-quit`
+  会到时 `quitRequested` 已置位，`shouldUpdaterQuitTakeOver` 直接返回 false——因此 §9 的
+  签名包实机门禁要顺带记录这一次观测。原生 autoUpdater 的解析
+  严格门控在 Electron 运行时内（`process.versions.electron`）且仅在宿主提供回调时进行：
+  `electron` 说明符在普通 node 下会解析到 npm 包，其加载在 dist 缺失时会触发 ~100MB
+  二进制下载（实测踩中），绝不允许出现在测试路径上。
   **退出腿与重启腿对
   `app.exit(1)` 的语义不同**：超时强制退出只跳过退出腿的 onQuit 安装；重启腿
   NSIS 安装器已 detached 先行、AppImage 已原位替换，安装照常完成。用户不点击
@@ -335,10 +373,12 @@ electron-updater 6.x **安装成功后从不删除**下载产物（`DownloadedUp
   （stable/beta 独立配置、feed 互斥资产、beta exact-tag 消费）、mac/win/linux 实机检查
   与「确认前不下载 → 下载 → 退出时安装 → 重启并安装」端到端、打包态实测一次
   「升级 → 重启 → 更新缓存被自动清空」、真实同步失败路径下的 `quitAndInstall`、
-  以及 mac 原生 quit 语义断言清单（点击后须观察到：主进程 will-quit 清理完成日志
-  先于新版本启动、本地 dsh 与传输层无孤儿进程、进程退出码 0、新版本自动启动；
-  若确证原生终止跳过事件序列 → 控制器改为监听 native staging 完成后自行
-  `app.quit()`）。仓库若改为私有（匿名 Releases/feed 不再成立）、beta 通道开关
+  以及 mac 原生 quit 语义断言清单（点击后须观察到：窗口**真正关闭**而非隐藏到托盘
+  ——关窗次序（先关窗、后 `before-quit`）与原生退出桥/兜底自退已在 Electron
+  43.4.0/darwin 探针上确证并实现（`updaterQuitArmed` + 5s 兜底 `app.quit()`），
+  剩余待实机确证的是**签名正式包**端到端：主进程 will-quit 清理完成日志先于新版本
+  启动、本地 dsh 与传输层无孤儿进程、进程退出码 0、新版本自动启动，以及一次真实
+  staging 失败路径下的文案与窗口恢复）。仓库若改为私有（匿名 Releases/feed 不再成立）、beta 通道开关
   形态（仅环境变量 vs 设置项）、百分比灰度的引入评估（§4）同样登记在那里。
 - 涉及面：`packages/desktop`（`main.ts`、`preload.cts`、`updater.ts`、
   `package.json`）、`packages/dsh-chamber-client-ui-settings-bridge`（settings 壳

@@ -1,6 +1,6 @@
 /**
  * 未读徽标计数投影（design 19 §3.7）——pure logic, no React/DOM, node:test
- * runnable (see test/badge-count.test.ts).
+ * runnable (see test/aggregate/badge-count.test.ts).
  *
  * The count is a PROJECTION of the App-owned「完成未读」blue-dot set
  * (`completedBySource`, App.tsx / 06 §4.1) — never a second state machine:

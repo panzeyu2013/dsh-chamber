@@ -2581,6 +2581,17 @@ export async function buildHeadlessCtx(
       inFlight: () => runtimeOperation,
     },
     bundledRuntimeVersion: bundledVersion,
+    // 2026-12 合并（main 的插件受保护集合判定，design 21 §6.11）：core 的
+    // localProtectionFacts 需要内建工作区路径（resolveActiveRuntime 第二参）与
+    // 运行时线锚锁文件路径叶。Swift 装配的内建树 = inputs.builtinDshWorkspace
+    // （<sidecar>/vendor/dsh）；锚锁文件即该树自己的 pnpm-lock.yaml。更新退出腿
+    // 回撤叶不提供（v1 blocked-available 从不武装 ⇒ ctx 可选字段缺省）。
+    builtinDshWorkspacePath: builtinDshWorkspace,
+    pinnedRuntimeLockfilePath: () => {
+      if (builtinDshWorkspace === null) return null
+      const candidate = path.join(builtinDshWorkspace, 'pnpm-lock.yaml')
+      return existsSync(candidate) ? candidate : null
+    },
   }
   /** 递归 stub：可调用（调用即抛）+ 任意成员访问返回同款 stub（供
    *  installIpcHandlers 顶部解构对象字段/方法后、在 handler 运行时才调用

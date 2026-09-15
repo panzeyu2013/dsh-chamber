@@ -21,6 +21,10 @@
        一次给出「fork pure/replay/dropped + 深引 vendor seam 文件 + 上游包集合增删 +
        新增 client 行 + 运行时 npm 状态」；`--fail-on-replay` 可当硬门（fork 面需人工重放时
        先评估规模，再决定升级窗口）。
+- [ ] 用只读门禁先照一次现状：`node scripts/dev/verify-upstream-touchpoints.mjs --no-artifact-rebuild`
+      ——记住 C11–C14（插件受保护集合：F 族集合 / profile 契约锚 / 播种注册表 / manifest
+      三方镜像）的**绿是升级后必须仍然绿**的那几条；升级后它们若变红，按 §6 的处置口径
+      改派生，不得改判据放行（同目录 `upstream-touchpoints.md` §6；design 21 §6.11）。
 
 ## 1. 上游差异审计（只读）
 
@@ -46,7 +50,7 @@
        design 09 §3.2），无需再往清单里加名字，但新 provider 行若不在复合覆盖集内
        要确认探针能观测到它；另有一种派生面本身看不见的漂移须靠测试兜底——命名空间
        **不再导出** `inject` 时两侧同时为空、不抛错，由
-       `packages/renderer/test/required-extra-rows.test.ts` 的逐 id 表测试钉住。
+       `packages/renderer/test/lifecycle/required-extra-rows.test.ts` 的逐 id 表测试钉住。
 
 ## 2. 双线 pin 一致性（源码线 + 运行时线）
 
@@ -137,7 +141,11 @@
       运行时的检出应打印 SKIP——冒烟门槛按 dsh CLI 入口存在性判定，仅有 lockfile
       的 `packages/desktop/vendor/dsh` 不算已安装）。
 - [ ] 触点与锚门禁：`node scripts/dev/verify-upstream-touchpoints.mjs` 全绿
-      （C1/C3–C10；`--no-artifact-rebuild` 可跳过产物重建）。
+      （C1/C3–C15；`--no-artifact-rebuild` 可跳过产物重建）。
+      C11–C14 是**插件受保护集合**的保鲜门（F 族集合 / profile 契约锚 / 播种注册表 /
+      manifest 三方镜像，见同目录 `upstream-touchpoints.md` §6 与 design 21 §6.11）：
+      任一门变红时**不要**顺手改判据放行——先判定是上游漂移还是派生写错，再改派生
+      （B₀ 快照、F 来源、S 注册表或 wire 镜像）。
 - [ ] 残留扫描：`grep -rn "<上一版 pin 的版本字面量>\|<上一版 commit 短哈希>" packages/ scripts/ harness.commit`
       （非 vendor/node_modules/产物）仅剩注释里的历史叙述——生产源码/脚本/配置里的
       「活」版本字面量必须登记在 C10 白名单。

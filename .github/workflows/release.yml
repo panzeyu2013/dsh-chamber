@@ -296,6 +296,8 @@ jobs:
         run: node scripts/dev/verify-release-ci-proof.mjs --sha "$RELEASE_SHA"
       - name: Verify workflow action pins
         run: node scripts/dev/verify-workflow-action-pins.mjs
+      - name: Verify workflow YAML scalars
+        run: node scripts/dev/verify-workflow-yaml-scalars.mjs
       - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
         with:
           version: 11.21.0
@@ -307,7 +309,7 @@ jobs:
         run: node scripts/dev/ensure-harness-vendor.mjs
       # Upstream-touchpoint registry gates (docs/checklists/upstream-touchpoints.md),
       # exactly as ci.yml runs them — in TWO passes, both required:
-      #   1. here, before the install: C1/C3–C10 are file-only, so a drift fails
+      #   1. here, before the install: C1/C3–C15 are file-only, so a drift fails
       #      fast without node_modules (`--no-artifact-rebuild` = C8 mtime
       #      advisory, and nothing is written);
       #   2. below, after the install: the default mode re-runs everything AND
@@ -315,7 +317,7 @@ jobs:
       #      and byte-compare, hard failure, then restore). C8 is the gate most
       #      easily defeated by "edited src, forgot to rebuild the artifact", so
       #      a release must never be the first place it runs (2026-12 review P2).
-      - name: Upstream touchpoint registry (C1/C3/C4/C5/C6/C7/C9/C10)
+      - name: Upstream touchpoint registry (C1/C3/C4/C5/C6/C7/C9/C10 + C11–C15)
         run: node scripts/dev/verify-upstream-touchpoints.mjs --no-artifact-rebuild
       - run: pnpm install --frozen-lockfile
       # C8 deterministic artifact gate (see the step above): rebuilds in place,
@@ -362,39 +364,14 @@ jobs:
       # docs/checklists/gui-acceptance-checklist.md).
       - name: GUI acceptance toolbox unit tests
         run: pnpm run test:gui-acceptance
-      - name: Shared runtime core unit tests
-        run: pnpm run test:runtime
-      - name: Control-plane unit tests
-        run: pnpm run test:control-plane
-      - name: Gateway unit tests
-        run: pnpm run test:gateway
-      - name: Desktop / renderer / plugin unit tests and type checks
-        run: |
-          pnpm run test:desktop
-          pnpm run test:renderer-shell
-          pnpm run typecheck:sidebar
-          pnpm run typecheck:git
-          pnpm run typecheck:layout
-          pnpm run typecheck:connections
-          pnpm run typecheck:settings-bridge
-          pnpm run typecheck:client-web
-          pnpm run typecheck:connection
-          pnpm run typecheck:api-gateway
-          pnpm run typecheck:open-in
-          pnpm run typecheck:mobile
-          pnpm run test:sidebar
-          pnpm run test:layout
-          pnpm run test:git
-          pnpm run test:host-git
-          pnpm run test:host-archive-cleanup
-          pnpm run test:host-open-in
-          pnpm run test:settings-bridge
-          pnpm run test:connections
-          pnpm run test:client-web
-          pnpm run test:connection
-          pnpm run test:open-in
-          pnpm run test:mobile
-          pnpm run test:cli
+      # Same single entries the push path runs (2026-12): the package test set and
+      # the client typecheck set are named once in scripts/dev/run-checks.mjs, so
+      # `pnpm run test:release-workflow` proves validation and ci.yml cannot drift
+      # from each other by comparing these two commands.
+      - name: Package unit tests (single entry)
+        run: node scripts/dev/run-checks.mjs tests
+      - name: Client plugin type checks (single entry)
+        run: node scripts/dev/run-checks.mjs typecheck
       # Shared runtime core build: the gateway tarball packs it, so a broken
       # runtime build must fail here rather than inside the packaging leg.
       - name: Shared runtime core build (gateway tarball prerequisite)

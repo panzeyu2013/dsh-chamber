@@ -34,7 +34,7 @@
  * real-machine acceptance round found it. A drifted name is not a silent miss:
  * the typert gateway rejects unknown arg fields with
  * `gateway/arguments-invalid`, which fails this probe loud, and the fixture in
- * test/runtime-probes.test.ts now enforces the same exact key set while a
+ * test/activation/runtime-probes.test.ts now enforces the same exact key set while a
  * vendor-lockstep test pins the name to the upstream signature.
  */
 import { constants } from 'node:fs'

@@ -36,6 +36,8 @@ import {
   emptyAggregate,
   fetchInstanceSnapshot,
   fetchManagedRuntimeState,
+  forgetPendingArchives,
+  forgetPendingSessions,
   forgetPendingWorkspaces,
   getInstanceClient,
   getOpenIntentsSnapshot,
@@ -45,25 +47,38 @@ import {
   managedRuntimeUnusable,
   mergeRuntimeFacts,
   projectableCurrent,
+  reconcilePendingArchives,
+  reconcilePendingSessions,
   reconcilePendingWorkspaces,
+  recordPendingArchive,
+  recordPendingSession,
   recordPendingWorkspace,
   releaseInstanceClient,
   releaseOpenIntent,
   // 2026-09-11 review S3: the withdraw/rewrite half of the workspace echo.
   removePendingWorkspace,
+  // 2026-12 session echo: the create/withdraw halves (design 05 §2.2).
+  removePendingSession,
   renamePendingWorkspace,
   reconcileCompletedFacts,
   runtimeReportSignature,
   serversProjectionSignature,
   shouldHoldViewVeil,
   subscribeOpenIntent,
+  refreshPendingArchives,
+  sweepPendingArchives,
+  sweepPendingSessions,
   sweepPendingWorkspaces,
+  withPendingArchives,
+  withSessionEcho,
   withWorkspaceEcho,
   type ChamberServerAggregate,
   type InstanceAggregate,
   type InstanceRuntimeReport,
   type InstanceSnapshot,
   type PluginGraphDiagnostic,
+  type SessionArchiveLedger,
+  type SessionEchoLedger,
   type WorkspaceEchoLedger,
 } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import { detectNotificationEdges, dedupeCompleteEdges, type SessionFacts } from './notification-edges.ts'
@@ -320,6 +335,12 @@ function deriveServers(
   shellStates: Record<string, ShellState | undefined>,
   managedRuntime: Record<string, string | null>,
   workspaceEcho: WorkspaceEchoLedger,
+  // 2026-12 session echo（design 05 §2.2 修订）：会话创建回声账本，与会话状态
+  // 同一汇合点并入（见下方 withSessionEcho 的调用与 shared/session-echo.ts）。
+  sessionEcho: SessionEchoLedger,
+  // 2026-12：本地归档墓碑（见 sessionArchiveRef 的说明）。它必须最先施加——归档会
+  // 把同一 id 的会话回声行一并藏掉（即使那条回声还没退休）。
+  sessionArchive: SessionArchiveLedger,
   openIntents: Readonly<Record<string, string>>,
   // T16 (2026-09-11 upstream-alignment): the local source's fallback label is
   // frame copy (the connection row may carry no label), so it comes from the
@@ -404,7 +425,13 @@ function deriveServers(
       // aggregate. `withWorkspaceEcho` is identity-preserving for an absent or
       // empty ledger, leaving this derive byte-identical to before.
       workspaces = deriveServerWorkspaces(
-        withWorkspaceEcho(aggregate, workspaceEcho[id]),
+        // 顺序是契约：①归档墓碑先把本页刚归档的 id 并进归档集（可见性规则只认这个
+        // 字段，回声行也一并被它过滤）；②工作区回声补齐可能刚建的工作区行；③会话
+        // 回声再按 workspaceId/路径把新建的会话挂进那一行。三步都只做纯投影。
+        withSessionEcho(
+          withWorkspaceEcho(withPendingArchives(aggregate, sessionArchive[id]), workspaceEcho[id]),
+          sessionEcho[id],
+        ),
         id,
         '',
         current,
@@ -757,6 +784,36 @@ export default function App() {
     workspaceEchoRef.current = next
     setWorkspaceEcho(next)
   }, [])
+  // 会话创建回声（2026-12，design 05 §2.2 修订；会话侧的问题 2）：侧栏的 "+" 与
+  // 行菜单 fork 都经**该来源自己的 unary client** 建会话。挂载壳的官方 summaries
+  // 只有一条异步外源（宿主的 api-session/added 广播）：竞态窗内随后那次挂载推送
+  // 会拿还不含它的 store 替换整份聚合，行随即消失；而未挂载来源（收割后的稳态，
+  // 工作区行仍是真实推送行）根本收不到广播，30s unary 兜底的 mounted merge 又冻结
+  // 工作区成员位——新会话只能以未归属散落行出现，且仍是暂存 blank 行时不进导航。
+  // 真机表现：新建的会话要切到那个服务器（挂载 → follow 基线）才出现。账本记录
+  // 宿主 id 并立刻并入投影，权威视图（App 在事实到达时请求的官方 session-list
+  // 刷新——只有挂载壳有这条 seam，它强制 summaries 重读语料——或该来源下次挂载）
+  // 到达即退场（reconcilePendingSessions）。与会话打开意图同纪律：state 供渲染，
+  // ref 供事件侧同步读。
+  const [sessionEcho, setSessionEcho] = useState<SessionEchoLedger>({})
+  const sessionEchoRef = useRef<SessionEchoLedger>({})
+  const updateSessionEcho = useCallback((next: SessionEchoLedger): void => {
+    sessionEchoRef.current = next
+    setSessionEcho(next)
+  }, [])
+  // 会话归档墓碑（2026-12，design 05 §2.2.1）：侧栏的归档动词同样走 unary，未挂载来源
+  // （收割后的稳态）没有任何活通道——mounted merge 冻结上次推送的 archivedSessionIds、
+  // unary 兜底根本没有归档 wire，于是刚归档的行照样留在列表里且可点（点开即空视图：
+  // 官方运行时会把 archived current 清掉）。本账本把**本页自己归档**的 id 过滤掉，直到
+  // 权威归档集覆盖它；别处（另一个客户端）归档的仍需挂载（已登记残余）。租约由
+  // 兜底拉取续期（只要那份错视图还在列它，就继续藏）；权威集覆盖 / 来源退役 / 租约到期
+  // 收敛。与会话回声同纪律：state 供渲染，ref 供事件侧同步读。
+  const [sessionArchive, setSessionArchive] = useState<SessionArchiveLedger>({})
+  const sessionArchiveRef = useRef<SessionArchiveLedger>({})
+  const updateSessionArchive = useCallback((next: SessionArchiveLedger): void => {
+    sessionArchiveRef.current = next
+    setSessionArchive(next)
+  }, [])
   /**
    * Expire echoes past their TTL. Called from every tick that can change what a
    * source's workspace list SHOULD contain — a new creation, an authoritative
@@ -770,6 +827,24 @@ export default function App() {
     const next = sweepPendingWorkspaces(workspaceEchoRef.current, Date.now())
     if (next !== workspaceEchoRef.current) updateWorkspaceEcho(next)
   }, [updateWorkspaceEcho])
+  /**
+   * Session-echo TTL tick (same three clocks as the workspace echo: a new
+   * creation — where the recording handler sweeps before it records — an
+   * authoritative mount push, and each fallback pull). The TTL is a leak guard,
+   * not a convergence budget: a create whose convergence never arrives (a
+   * source that is never mounted again, a session deleted on the host by
+   * another client) must still expire. Identity preserving.
+   */
+  const sweepSessionEcho = useCallback((): void => {
+    const next = sweepPendingSessions(sessionEchoRef.current, Date.now())
+    if (next !== sessionEchoRef.current) updateSessionEcho(next)
+  }, [updateSessionEcho])
+  /** Lease-expiry tick for the local archive tombstones (the fallback pull clock, plus
+   *  the archive fact tick which sweeps before recording). */
+  const sweepSessionArchive = useCallback((): void => {
+    const next = sweepPendingArchives(sessionArchiveRef.current, Date.now())
+    if (next !== sessionArchiveRef.current) updateSessionArchive(next)
+  }, [updateSessionArchive])
   // 会话打开意图（2026-12，design 05 §2.2 修订；真机问题 1）：App 是唯一写者
   // （openSession 的 arm/release），槽位本身在 sidebar 包的 shared/open-intent.ts
   // ——它是跨 ctx 单例，因为 boot 期早开臂要在**目标实例自己的 ctx 内**读它。
@@ -805,8 +880,8 @@ export default function App() {
   // chamberBridge 投影（05 §3）：health/remoteStatus/aggregates 任一变化后
   // 派生并发布；首帧（health 未就绪）即发布 connected=false 的分组。
   const servers = useMemo(
-    () => deriveServers(health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, shellStates, managedRuntime, workspaceEcho, openIntents, locale),
-    [health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, shellStates, managedRuntime, workspaceEcho, openIntents, locale],
+    () => deriveServers(health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, shellStates, managedRuntime, workspaceEcho, sessionEcho, sessionArchive, openIntents, locale),
+    [health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, shellStates, managedRuntime, workspaceEcho, sessionEcho, sessionArchive, openIntents, locale],
   )
   // chamberBridge publish 签名闸（2026-08 perf pass）：servers 在每次依赖变化
   // 时都会重建（含聚合快照上报/兜底、30s 注册表轮询、状态推送的恒新对象），但
@@ -1247,6 +1322,10 @@ export default function App() {
     // 工作区创建回声账本随来源生命周期收敛（同纪律：同 id 重新注册 = 新来源代，
     // 上一代的回声不得在新代里残留成幽灵工作区行）。
     updateWorkspaceEcho(forgetPendingWorkspaces(workspaceEchoRef.current, retired))
+    // 会话创建回声同纪律：上一代记账的会话不得在新来源代的列表里幽灵复现。
+    updateSessionEcho(forgetPendingSessions(sessionEchoRef.current, retired))
+    // 归档墓碑同纪律：新一代来源必须是干净的（旧代的本地归档不得藏住新代的会话）。
+    updateSessionArchive(forgetPendingArchives(sessionArchiveRef.current, retired))
     // 打开意图同纪律：被删除来源的在途意图必须撤掉，否则新一代会在投影门/揭示门
     // 上被上一代的 open 永久压住（那是两个"永远不释放"的闸门）。
     clearOpenIntents(retired)
@@ -1421,6 +1500,28 @@ export default function App() {
       // 挂载 push 可依，30s 兜底拉取是它唯一的周期时钟——否则一条永远不会被
       // 权威列表覆盖的回声（例如工作区已在别处被删除）会一直留在投影里。
       sweepWorkspaceEcho()
+      // 会话回声同理（2026-12）：TTL 挂同一条时钟，并且**未推送**来源（兜底提交
+      // 的合成 cwd 分组就是它的投影工作区）在列表归属到该会话时立即收敛。
+      // 已推送来源刻意不做这一步：commitAggregatePull 的 mounted merge 保留的是
+      // 权威工作区行，用兜底的合成行收敛会把行抛进未分组桶（位置跳动）。
+      sweepSessionEcho()
+      if (snapshotSourcesRef.current[instanceId] !== true) {
+        const reconciled = reconcilePendingSessions(sessionEchoRef.current, instanceId, snapshot.workspaces)
+        if (reconciled !== sessionEchoRef.current) updateSessionEcho(reconciled)
+      }
+      // 归档墓碑（2026-12）：租约挂在同一条兜底时钟上——只要这份（冻结/降级）视图
+      // 还在列该会话，就继续藏着它；权威归档集只可能来自挂载 push，所以这里**绝不**
+      // 用兜底的空归档集收敛。
+      // 顺序是契约：**先续租、再回收**。回收是全账本的（任何来源的一次拉取都会清所有
+      // 过期租约），若先回收，一个离线超过租约窗的来源重连后首个列表还没续上租，墓碑
+      // 就被别的来源那次拉取清掉了，归档行随即回浮。反过来，只要列表仍列着该 id 就先
+      // 续租：TTL 只回收"列表里已经没有"的墓碑（没什么可藏了）。
+      {
+        const listed = new Set(snapshot.sessions.map(session => session.sessionId))
+        const leased = refreshPendingArchives(sessionArchiveRef.current, instanceId, listed, Date.now())
+        if (leased !== sessionArchiveRef.current) updateSessionArchive(leased)
+      }
+      sweepSessionArchive()
       // identity-preserving：快照内容未变（兜底/手动刷新常态）则复用旧 state 对象
       // ——避免恒新对象驱动 servers 重新派生并触发 publish 签名闸后面的全量
       // 侧边栏重渲染（2026-08 perf pass）。错误分支保持无条件覆盖（error 文本
@@ -1483,7 +1584,7 @@ export default function App() {
       // session/list cwd 事实，workspace.list 已删）。
       scheduleRetry()
     }
-  }, [clearAggregateRetry, refreshHealth, sweepWorkspaceEcho])
+  }, [clearAggregateRetry, refreshHealth, sweepSessionArchive, sweepSessionEcho, sweepWorkspaceEcho, updateSessionArchive, updateSessionEcho])
 
   /**
    * Run a bounded refresh wave: at most AGGREGATE_POLL_CONCURRENCY concurrent
@@ -3056,8 +3157,10 @@ export default function App() {
 
   /**
    * 工作区创建回声（2026-12，design 05 §2.2 修订；真机问题 2）：
-   * 侧栏在建好工作区后上报宿主 workspaceId，App 记入渲染端账本并把该行并入
-   * 投影（deriveServers 的单一汇合点）。权威收敛点只有两个：
+   * 应用内**任一**工作区创建（唯一出口 workspace-mutations.ts：侧栏对话框与
+   * Git worktree 插件的 create/adopt/recovery 同走它）建好后上报宿主
+   * workspaceId，App 记入渲染端账本并把该行并入投影（deriveServers 的单一
+   * 汇合点）。权威收敛点只有两个：
    * - 该来源挂载壳的 push 列出同一 workspaceId / 同一路径的真实 id ⇒ 账本条目
    *   立即清除（reconcilePendingWorkspaces，见 onInstanceSnapshot）；
    * - 来源离开注册表 / TTL 到期 ⇒ 随生命周期收敛。
@@ -3072,7 +3175,17 @@ export default function App() {
       if (owner === null) return
       const now = Date.now()
       let ledger = sweepPendingWorkspaces(workspaceEchoRef.current, now)
-      ledger = recordPendingWorkspace(ledger, sourceId, { workspaceId: fact.workspaceId, path: fact.path }, now)
+      ledger = recordPendingWorkspace(ledger, sourceId, {
+        workspaceId: fact.workspaceId,
+        path: fact.path,
+        // Placement anchor（2026-12 第二入口）：Git 插件在宿主上把新 worktree
+        // 摆在其主 checkout 之后，回声行也必须渲染在那个位置，否则会先出现在
+        // 列表末尾、挂载收敛时再跳上去。缺省（其它创建入口）= 追加到尾部。
+        ...(fact.afterWorkspaceId === undefined ? {} : { afterWorkspaceId: fact.afterWorkspaceId }),
+        // 创作意图标题（Git adopt 的分支名，2026-12 复审）：回声行生来就是最终
+        // 标签，不必先显示路径 basename、等那次 rename 落地再翻转。
+        ...(fact.title === undefined ? {} : { title: fact.title }),
+      }, now)
       if (ledger !== workspaceEchoRef.current) updateWorkspaceEcho(ledger)
     })
   }, [updateWorkspaceEcho])
@@ -3119,6 +3232,84 @@ export default function App() {
       if (next !== workspaceEchoRef.current) updateWorkspaceEcho(next)
     })
   }, [updateWorkspaceEcho])
+  /**
+   * 会话创建回声的记账端（2026-12，design 05 §2.2 修订）：唯一出口
+   * （sidebar shared/session-mutations.ts）在 wire 成功后发布宿主会话 id，这里
+   * 把它记入渲染端账本。与会话打开意图同栅栏（活跃来源 + 生命周期捕获），投影的
+   * 唯一写者仍是 App。
+   *
+   * 成员位解析（best-effort，全部来自 App 手里的权威聚合）：
+   * ①事实自带 workspaceId（"+" 建会话必然知道）→ 按宿主 id 找到那一行取路径；
+   * ②否则按父会话（fork）找到**归属**父会话的工作区——子会话与父会话同属一个
+   * 目录；③解析不到也照记：行仍以未分组形态出现，好过整行缺失（TTL 有界）。
+   *
+   * 记账之后立刻请求该来源挂载壳的官方 session-list 刷新：unary 侧建出来的会话进
+   * 挂载壳 summaries 的唯一外源是宿主 api-session/added 的**异步**广播（竞态或丢帧都
+   * 可能），刷新则强制 summaries 重读宿主语料——否则回声要独自撑住整段 TTL（且会话
+   * 首轮之后仍是 blank 形态）。未挂载来源没有该 seam（广播无人订阅）：回声独自撑住
+   * 该行，直到该来源下次挂载时的基线收敛。
+   */
+  useEffect(() => {
+    return chamberBridge.onSessionCreated((fact) => {
+      const { sourceId } = fact
+      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
+      const owner = sourceLifecyclesRef.current!.capture(sourceId)
+      if (owner === null) return
+      const now = Date.now()
+      const aggregate = watchdogAggregatesRef.current[sourceId]
+      const workspaces = aggregate !== undefined && aggregate.state === 'ok' ? aggregate.workspaces : []
+      const byId = fact.workspaceId === undefined
+        ? undefined
+        : workspaces.find(workspace => workspace.workspaceId === fact.workspaceId)
+      const parentId = fact.parentSessionId
+      const byParent = byId === undefined && parentId !== undefined
+        ? workspaces.find(workspace => workspace.sessionIds.includes(parentId))
+        : undefined
+      const target = byId ?? byParent
+      const workspaceId = fact.workspaceId ?? target?.workspaceId
+      const path = target?.path
+      let ledger = sweepPendingSessions(sessionEchoRef.current, now)
+      ledger = recordPendingSession(ledger, sourceId, {
+        sessionId: fact.sessionId,
+        ...(workspaceId === undefined ? {} : { workspaceId }),
+        ...(path === undefined || path === '' ? {} : { path }),
+        ...(fact.title === undefined ? {} : { title: fact.title }),
+        blank: fact.blank,
+      }, now)
+      if (ledger !== sessionEchoRef.current) updateSessionEcho(ledger)
+      chamberBridge.requestSessionListRefresh(sourceId)
+    })
+  }, [updateSessionEcho])
+  /**
+   * 会话回声的撤下半 + 归档墓碑（2026-12）：归档成功做两件事——①退休该会话的待定
+   * 创建回声（创建后又在回声窗内被归档的行不会留到 TTL；挂载推送只能退休它**归属**
+   * 的条目，未挂载来源根本不推送）；②记一条本地归档墓碑，让**未挂载来源**上刚归档
+   * 的行也立刻从列表消失（权威归档集到达即收敛，见 shared/session-echo.ts 的
+   * PendingArchive）。与会话创建事实同栅栏、同账本写入路径。
+   */
+  useEffect(() => {
+    return chamberBridge.onSessionRemoved((fact) => {
+      const { sourceId } = fact
+      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
+      const owner = sourceLifecyclesRef.current!.capture(sourceId)
+      if (owner === null) return
+      const now = Date.now()
+      const withoutPending = removePendingSession(sessionEchoRef.current, sourceId, fact.sessionId)
+      if (withoutPending !== sessionEchoRef.current) updateSessionEcho(withoutPending)
+      const swept = sweepPendingArchives(sessionArchiveRef.current, now)
+      const archived = recordPendingArchive(swept, sourceId, fact.sessionId, now)
+      if (archived !== sessionArchiveRef.current) updateSessionArchive(archived)
+    })
+  }, [updateSessionArchive, updateSessionEcho])
+  /**
+   * 归档墓碑的权威收敛点：挂载 push 的**权威**归档集命名该 id 即退休（degraded 视图
+   * 的空集绝不能传进来——那会把墓碑全撤掉）。与其它两个回声收敛点同位置（ready 门
+   * 之前：权威归档集与聚合是否已提交无关）。
+   */
+  const reconcileArchiveEchoes = useCallback((sourceId: string, archivedSessionIds: readonly string[]): void => {
+    const next = reconcilePendingArchives(sessionArchiveRef.current, sourceId, archivedSessionIds)
+    if (next !== sessionArchiveRef.current) updateSessionArchive(next)
+  }, [updateSessionArchive])
   /**
    * Mounted source ctxs publish the same complete snapshot shape as the unary
    * fallback. A push invalidates any older in-flight pull before committing.
@@ -3177,6 +3368,24 @@ export default function App() {
         const swept = sweepPendingWorkspaces(workspaceEchoRef.current, Date.now())
         const reconciled = reconcilePendingWorkspaces(swept, sourceId, snapshot.workspaces)
         if (reconciled !== workspaceEchoRef.current) updateWorkspaceEcho(reconciled)
+      }
+      // 会话创建回声的权威收敛点（2026-12，design 05 §2.2 修订）：挂载壳自己的
+      // 会话列表 + 工作区 follow 基线一旦把该会话**归属**到某个工作区（成员位，
+      // 含合成行），回声条目立刻退休——权威行从此渲染它。刻意只看成员位、不看
+      // sessions 列表：只列出而无所属时退休会把行抛进未分组桶，正是回声要避免的
+      // 位置跳动。与工作区收敛同规：放在 ready 门之前（权威归属与聚合是否已提交
+      // 无关）。该收敛同时覆盖「官方 session-list 刷新后 id 回来了但基线尚未归
+      // 属」的中间态：中间态里回声仍在，行不会消失。
+      {
+        const swept = sweepPendingSessions(sessionEchoRef.current, Date.now())
+        const reconciled = reconcilePendingSessions(swept, sourceId, snapshot.workspaces)
+        if (reconciled !== sessionEchoRef.current) updateSessionEcho(reconciled)
+      }
+      // 归档墓碑的权威收敛（2026-12）：只有挂载壳的 workspace follow 基线才带得出
+      // 「宿主归档集」这一事实（archiveSetKnown），因此只认这一条；degraded 视图的
+      // 空集绝不能传进去。
+      if (snapshot.archiveSetKnown === true) {
+        reconcileArchiveEchoes(sourceId, snapshot.archivedSessionIds)
       }
       // A mounted ctx can deliver a late store notification after its
       // transport generation died. Keep producer ownership, but never let

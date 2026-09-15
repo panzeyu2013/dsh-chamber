@@ -15,7 +15,8 @@ drawer layout, touch targets, safe areas, PWA phased.
   theme-color), frame stamping (`ROLE_SLOT_KEYS` maps the plugin's roles onto
   the alpha.2 slot keys `sidebar` / `main` / `rightbar`),
   layout-source-driven drawer scroll lock, composer behavior, drawer tap
-  self-heal, settings-sheet section-switch polish, `shell.overlay` drawer
+  self-heal, settings-sheet section-switch polish, the stranded official
+  hover-card watchdog, `shell.overlay` drawer
   toggle (the official panel glyph) + backdrop. The toggle IS the official
   control, not a look-alike (2026-09-11 upstream-alignment T17a): it renders
   `IconPanelLeftOutline16` — the glyph the official sidebar toggle draws, from
@@ -32,8 +33,8 @@ drawer layout, touch targets, safe areas, PWA phased.
 - `src/client/styles.ts` — single stylesheet (fully media-query scoped,
   desktop untouched; official `--dsw-*`/`--ds-*` tokens only);
 - `src/client/markup.ts` / `composer.ts` / `layout-facts.ts` /
-  `drawer-taps.ts` / `settings-sheet.ts` — pure logic + thin installers
-  (unit-testable);
+  `drawer-taps.ts` / `settings-sheet.ts` / `official-hover-card.ts` /
+  `session-stall.ts` — pure logic + thin installers (unit-testable);
 - `scripts/build.mjs` — esbuild two-half build (`dist/index.js` + `lib/client.js`).
 
 ## Session header adaptation (touch tier)
@@ -44,9 +45,33 @@ mobile surface on three axes, all covered structurally (no hashed classes):
 
 - **Toggle overlap**: the floating drawer toggle (top-left 44px) sat on top of
   the header content — the header gets a reserved gutter (`padding-left`);
-- **Clipped crumbs**: the official crumbs row is nowrap + overflow hidden, so
-  long title chains and the lineage chips ("N 个子代理" catalog triggers)
-  were silently cut — crumbs wrap instead of clip (per-crumb ellipsis stays);
+- **Clipped crumbs**: the official crumbs row is `nowrap + overflow hidden`, so
+  long title chains and the lineage chips ("N 个子代理" catalog triggers) were
+  silently cut. The strip keeps the official single-line contract and PANS
+  (`overflow-x: auto`, scrollbar hidden) instead of wrapping: the lineage chip
+  renders INSIDE the crumbs row (inside its own crumb segment) and its count
+  text is a bare `span` with **no class of its own** upstream (the
+  `SubagentHeaderLineage` class dictionary omits the `count` key the component
+  references), so the inherited `nowrap` was its only protection — overriding
+  it to `normal` let CJK break per character and the badge rendered as a
+  five-line vertical column (5 x 18px = 90px) that inflated the title row from
+  30px to ~96px (2026-09-14 review-fix; the earlier wrap rule WAS the
+  regression);
+- **Session header row (phone tier)**: one bounded 48px row with the top/right
+  safe-area insets applied. The shrink order is explicit — the CURRENT crumb
+  (the one upstream renders with `disabled`) absorbs the remaining width and
+  ellipsises; the lineage chip is OUT of the shrink race (`flex: 0 0 auto`, a
+  44px touch floor where upstream ships a 28px box, and a bounded count label)
+  because it is the only entry point to the subagent catalog; the agent-preset
+  cell — upstream's `AgentPresetLabel`, a BARE `span[icon][name]` and the only
+  text-bearing direct child of the `headerActions` list seat — gives width back
+  from 480px down (8em) and once more at 360px (5em) so the crumb strip keeps
+  room; upstream bounds that label itself at 180px, and the plugin only takes
+  width back (`overflow: hidden`, never `display: none`), so the icon and the
+  accessible name survive; and the two icon
+  seats take `box-sizing: border-box` so the shared 44px floor means the BOX
+  (without it a 28px button with 6px padding renders ~56px and thickens the row
+  for nothing);
 - **"Session 日志" export capsule**: RETIRED at the alpha.2 re-anchor —
   upstream now renders that control as a 28x28 icon button inside the header
   more-actions menu, so the plugin no longer stamps it by copy. The right
@@ -55,6 +80,13 @@ mobile surface on three axes, all covered structurally (no hashed classes):
   fullscreen across the whole touch tier (a bare grid lock left the
   769-1023px band covered by a normal-width panel; see "Right panel & drawer
   coexistence").
+- **Drawer entry gate**: the floating toggle and its backdrop only render when
+  the drawer can actually work — the frame must be stamped AND
+  `data-mobile-roles` must include the sidebar role. `stampFrame` is
+  all-or-nothing (a frame whose conversation column is missing is never
+  adapted), so without this gate a vendor rename of the centre key would leave
+  a visible button whose only effect is flipping a frame attribute nothing
+  responds to, plus a full-screen scrim over the transcript.
 - **View tabs**: `tabs.length > 1` is the NORM, not an edge case — `ui-chat`
   and `ui-trajectory` both register a `conversation.view` unconditionally and
   both ship in the default web bundle. The official tab is 13px text on a 25px
@@ -67,6 +99,59 @@ mobile surface on three axes, all covered structurally (no hashed classes):
   scroll container forces the other axis to `auto` and would clip the active
   tab's 2px bar, which upstream draws 1px past the tab box to end flush with
   the header's bottom rule.
+
+## Session-open stall notice (touch tier)
+
+The official chat view renders its `chat.loadingHistory` hint while a session's
+journal stream is opening, and NEITHER the client nor the host has a first-frame
+timeout — a stalled `session/follow` (the remote stream that rides the
+`/api/remote.mux` WebSocket mux) therefore leaves the transcript on that hint
+forever, and the official UI offers no recovery control at all. `session-stall.ts`
+adds a non-blocking notice for exactly that state. The predicate is
+ATTRIBUTE-ONLY — the package's anchor discipline forbids matching the hint by
+its hashed class or by its copy:
+
+- a `[data-chat-flow]` column exists and its nearest `[data-phase]` ancestor
+  carries an emitted conversation phase of `settling` or `active` (the DOM value
+  space is exactly `settling` / `hero` / `active`, emitted by upstream
+  `ConversationRoot`; `hero` is the no-session face and never qualifies, so an
+  empty session cannot false-positive. `conversationPhase()`'s internal
+  `blank`/`engaging` names never reach the attribute — the earlier note here
+  claimed that value space and was wrong. Which arms of `settling` can actually
+  reach this predicate is decided by the header gate below, not by the phase
+  list: upstream hides the header in the blank-shell arm),
+- the flow subtree contains NO `[data-chat-anchor-key]` row,
+- the `conversation.session.header` `<header>` exists and is actually rendered
+  (upstream hides it while the shell is blank, which is what keeps the
+  `settling` inclusion from firing on a header-less face),
+- the state has held for a continuous 45s of VISIBLE page time — background time
+  is discarded rather than accumulated, because a frozen mobile timer must not
+  replay a stale interval on resume — and
+- the session identity (and therefore the clock, the dismissal and the shown
+  notice) is the displayed `<header>` node, with NO fallback: `ui-layout`'s
+  `main` slot is keyed by entry identity, so `div.root[data-phase]` survives a
+  session switch, while the session-scoped header subtree is remounted. When no
+  header is displayed the shape is false anyway, so there is nothing to time.
+
+Known limit of the shape: `data-chat-anchor-key` is emitted only by the routed
+node wrapper, so a session with an EMPTY transcript and a pending first prompt
+(the optimistic submission echo) satisfies the shape and would be told the
+loading face is stalled. Narrowing that needs an anchor upstream does not expose
+(open state / a pending-echo attribute); the dismissal control is what keeps the
+false-positive cost at zero.
+
+The notice is `role="status"` / `aria-live="polite"`, anchored under the session
+header, `pointer-events: none` except its two controls, and never takes focus.
+Its primary action is a USER-INITIATED page reload; the secondary control
+("keep waiting") DISMISSES the notice for the current continuous stall and
+re-arms when the shape breaks — a slow-but-healthy open looks exactly like this
+shape, and the threshold is not device-calibrated (STATUS keeps that gate open),
+so the false-positive path must cost the user nothing. It never reloads or
+reopens a session on its own. It ships its own minimal
+`data-plugin="dsh-chamber-mobile-stall"` style tag, installs only in the touch
+tier, and is fully removed (timers, listeners, DOM, own style tag) on dispose.
+Installation is reference-counted on the window: a second context joins the live
+watcher, and the last disposer tears it down.
 
 ## Right panel & drawer coexistence (touch tier)
 
@@ -259,6 +344,70 @@ trajectory turn-rail preview, `aria-describedby`-referenced) carries no
 `data-side` and is structurally outside the rule. Desktop is untouched
 (media-query scoped).
 
+The same tier suppresses the chamber pages' **hand-rolled `data-tip`
+bubbles** (`[data-tip]::after { display: none !important }`) — e.g. the
+connections settings sheet's `.iconButton` / `.restartTip` bubbles
+(`ConnectionsSection.module.css`, `content: attr(data-tip)` on the `::after`,
+opacity-gated on `:hover` / `:focus-visible`): the same coarse-pointer artifact
+in a different vocabulary. Every one of the 13 sites pairs the attribute with
+`aria-label` (that package's `Button` prop surface documents the pairing), so
+no accessible name is lost; the official bundle carries ZERO `data-tip`
+attributes, so the rule cannot reach an official surface; and only the
+pseudo-element is hidden — the host button, its box and its label are
+untouched. Residual: on the two `.restartTip` sites whose tip carries the
+*disabled reason*, this tier loses the visible explanation (the reason still
+rides the `aria-label` and the `disabled` state) — the same trade the official
+Tooltip rule above already takes, and preferable to a bubble that sticks over
+the row after every tap.
+
+## Stranded official hover card (coarse-pointer tier)
+
+The instance's own frontend — the gateway tier, and the only tier that loads
+this package — renders the OFFICIAL `ui-primitives` `HoverCard` for session
+rows; the chamber's replacement (`RowHoverCard` + the `hover-intent` machine)
+exists only in the composite page, which never loads this plugin. The official
+atom arms its 200ms close grace from the last COMMITTED `open`, so a leave
+inside the commit window arms nothing and the card then mounts with the pointer
+already gone; on touch no leave is delivered at all. The card is portaled to
+`document.body` (`position: fixed`, 244px), so no host-side CSS can hide it
+either.
+
+`official-hover-card.ts` is a document-level watchdog for exactly that tier
+(same `(pointer: coarse) and (hover: none)` gate as the tooltip rule — a
+hover-capable pointer, and every desktop, keeps official behavior). It never
+touches the official package: for a card matched to exactly one wrapper by the
+atom's own anchoring geometry (`card.left = wrapper.right + 8`; `card.top =
+wrapper.top`, or the bottom-clamped `card.bottom = innerHeight − 8`) and the
+two CSS-module class tokens (`_card_1b2ny_*` / `_root_1b2ny_*`), it dispatches
+ONE bubbling `pointerout` on the wrapper with no related target. React's
+delegated enter/leave path reads that as "the pointer left the window" and runs
+the wrapper's `onPointerLeave`, which — with the card in the DOM, i.e. the
+atom's committed `open` true — arms the atom's own grace close; a real
+`pointerenter` inside those 200ms cancels it again, so genuine user input
+always wins. Triggers: a `pointerdown` whose target AND coordinates are
+provably outside both boxes (2px inflated), `window.blur`, and
+`visibilitychange → hidden`. The watchdog dispatches no click / pointerdown /
+key event, arms no timer of its own, fails closed on anything unexpected, is
+idempotent, and is installed/uninstalled by `ctx.effect` behind one
+`Symbol.for` window guard.
+
+**Residual reality — what this does NOT cover.**
+
+1. **The instance-origin frontend opened DIRECTLY** (e.g.
+   `http://127.0.0.1:17510` in a browser) has NO chamber client plugin at all:
+   nothing from this package is loaded there, so the stranding bug is still
+   live on that origin. It cannot be mitigated from the chamber — that tier
+   needs the upstream fix in `ui-primitives` (the same one the chamber made for
+   its own card on the composite tier).
+2. On the covered tier the two page-state triggers also close a card whose
+   pointer is physically parked on a row across a blur or tab switch; the card
+   reopens on the next leave-and-re-enter (or tap). No click, navigation or
+   focus change is involved.
+3. The class tokens are pinned to the vendored build, like every other anchor
+   in this package, and must be re-audited when the pin moves. A stale token
+   degrades the watchdog to a silent no-op (no card ever matches) — never to a
+   misfire.
+
 ## Drawer taps & keyboard (touch tier)
 
 - **Tap self-heal** (`drawer-taps.ts`): iOS Safari suppresses the
@@ -410,3 +559,89 @@ menu, so its Enter never reaches a document handler); and the tree still has
 exactly three `aria-modal` producers and exactly three `data-side` carriers
 (the two AppFrame/ConversationRoot drag handles and the always-`role="tooltip"`
 bubble).
+
+**The session-header anchors (2026-09-14 review-fix)**, all attribute- or
+structure-shaped and verified in the rc.2 tree:
+
+- `conversation.session.header.lineage` — a FOURTH seat of the session-header
+  outlet, registered next to `actions` / `utilities` / `corner`, but rendered
+  **inside `nav.crumbs`** (inside the current crumb's `span.crumbSeg`), which is
+  what makes it the element the crumb strip can squeeze;
+- the seat's own shape: a root `div` whose first child is the `/` separator
+  `span` (count variant only), then `button` holding
+  `[span.activitySlot][span(count, NO class)][IconChevronDownOutline14]`;
+- the DOM nesting the phone-tier selectors depend on:
+  `header > div.titleRow > div.titleCluster > [nav.crumbs, div.headerActions]`,
+  with `div.headerUtilities` and `div.headerCorner[data-conversation-header-corner]`
+  as further `titleRow` children and `div.tabs[role=tablist]` as the header's
+  second child — so a `> nav` child combinator on the row is a silent NO-OP
+  (the `:has()` arm must be a descendant match);
+- the current crumb is `button.crumb:disabled` (upstream renders
+  `disabled: last`), which is the hook the shrink order uses;
+- the `headerActions` outlet is a LIST seat whose three registrants in this pin
+  render NO direct-child `button`: `agent-preset` (order −10) is
+  `AgentPresetLabel`, a bare `span[icon][name]` that upstream itself bounds
+  (`max-width: 180px` + `overflow: hidden`) and that is non-interactive (a
+  `title` only), while `schedule-catalog` (10) and `job-list` (20) are `div`
+  wrappers with nested triggers — so the seat's hit-box rules must use a
+  DESCENDANT `button` selector, a `> button` arm is dead code, and the hero
+  chip's interactive `button[aria-haspopup=menu]` lives in a different seat
+  (`conversation.hero.agentPreset`); the outlet itself is `display: contents`;
+- `data-mobile-roles` (the plugin's own, not upstream's): the roles the frame
+  probe actually found, space-separated. `stampFrame` is ALL-OR-NOTHING — it
+  refuses to adapt a frame whose conversation column is missing, so the
+  stylesheet's `grid-template-columns: 0 minmax(0,1fr) 0` lock can never strand
+  the transcript in the 0px first track after a vendor rename of the centre key
+  (the page degrades to the official narrow layout instead).
+
+**The session-stall notice's anchors (2026-09-14; value space re-audited
+2026-12)**, likewise attribute-only:
+
+- `[data-chat-flow]` — the `ui-chat` message column; absent means no chat
+  surface is on screen, so nothing else is read;
+- the flow's NEAREST `[data-phase]` ancestor — the conversation root
+  (`ConversationRoot.tsx`), whose attribute value space is exactly
+  `settling` / `hero` / `active`. `hero` is the no-session face; the internal
+  `conversationPhase()` names (`blank` / `engaging`) never reach the attribute,
+  so a plugin matching them would be dead code;
+- `[data-chat-anchor-key]` — a rendered message row (the official
+  `routedNode.key` projection);
+- `[data-slot="conversation.session.header"] > header` — the header outlet and
+  its direct `<header>` child, which is also the SESSION IDENTITY: the outlet is
+  a session-scoped slot the renderer remounts per session, unlike the keyed
+  root-scope `[data-phase]` node.
+
+**The theme observer's anchor (2026-12)**: `data-ds-dark-theme` — observed through
+`MutationObserver.observe(document.body, { attributeFilter: ['data-ds-dark-theme', …] })`
+in `index.ts`. Upstream's only WRITE at the pin is
+`document.body.toggleAttribute('data-ds-dark-theme', dark)` (`dsh-client-ui-theme`'s
+client half); every other reference is a CSS rule
+(`body[data-ds-dark-theme]{…}`), i.e. consumption — which
+`scripts/dev/verify-mobile-anchors.mjs` deliberately does NOT accept as proof that
+the attribute is still emitted. A pin that moves the writer to the `dataset` API
+would stop the literal name from appearing and fail the gate closed; re-anchor
+against the new writer rather than widening the matcher blindly.
+
+**The hover-card watchdog's own anchors (2026-09-13 review B2 — these are anchors
+too, so they are listed here rather than only in the feature section above):**
+`official-hover-card.ts` matches the official atom by three facts, all re-audited
+when the pin moves:
+
+- `_root_1b2ny_3` and `_card_1b2ny_13` — the ui-primitives `HoverCard` module's
+  CSS-module class tokens in the SERVED bundle. They are build-time hashes: the
+  current pin (0.1.5-rc.2) emits them in
+  `@deepseek-ai/dsh-web-frontend/dist/assets/index-*.css` (verified byte-for-byte
+  on the bundled copy under `packages/desktop/vendor/dsh/`, which also carries
+  251 unique names of the same `_<local>_<hash>_<idx>` shape and none of the
+  `[hash]_[local]` shape the older audit recorded). A pin move changes the hash
+  and the watchdog degrades to a silent no-op (fail closed, never a misfire), so
+  this is the one anchor in the package with no attribute-shaped fallback;
+- the anchoring geometry `card.left = wrapper.right + 8`, `card.top =
+  wrapper.top` (or the bottom-clamped `card.bottom = innerHeight − 8`);
+- the card box being the only `[class*="_card_1b2ny_"]` element inside that
+  wrapper.
+
+`test/dom/official-hover-card.test.ts` pins the constants and the src↔artifact
+lockstep, and C8 pins the shipped bytes; **no gate can see the served bundle's
+hash change** (it is derived state outside the repo), which is exactly why this
+entry exists.

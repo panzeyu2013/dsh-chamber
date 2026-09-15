@@ -1,6 +1,6 @@
 /**
  * Minimal `@deepseek-ai/dsh-subprocess` stand-in for this package's node unit
- * tests (see ../vendor-loader.mjs): the source-only vendor tree cannot be
+ * tests (see ../support/vendor-loader.mjs): the source-only vendor tree cannot be
  * imported from a plain `node test/…` run.
  *
  * Only `scrubbedParentEnv` is reachable from the forked resolver, and only from

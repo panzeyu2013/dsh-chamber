@@ -14,7 +14,7 @@
  * diagnostics — 2026 review T4). If the real component's props change, this
  * declaration and the <ConnectionsSection> call site in SettingsShell.tsx MUST
  * be updated together — that pairing is pinned by
- * `test/connections-section-mirror.test.ts` (the mirror had no gate before).
+ * `test/shell/connections-section-mirror.test.ts` (the mirror had no gate before).
  * Structural note: the real component keeps
  * pluginDiagnostics/bootGaps/onRecheckDiagnostic/assembly* in its extra-props
  * block (not the injected business face); the mirror lumps them into

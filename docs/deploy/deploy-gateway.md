@@ -281,6 +281,32 @@ bash install-gateway.sh install -y \
   fail-closed），无需手动 chmod；安装器也会直接以 0700 创建该目录及全部
   自有子目录。**升级请走 `install-gateway.sh update`**（会把旧布局一并收敛，
   不要手动替换二进制）。
+- **服务里 `gh auth status` 说"未登录"、npm 找不到缓存、git 凭据助手取不到
+  token**：这些工具按 `$HOME` 找配置与缓存，而 unit 不带 `User=`（默认的"当前
+  用户运行"形态）时 systemd **不设置任何登录环境**（`systemd.exec` 的
+  `SetLoginEnvironment=` 默认只对 `User=`/`DynamicUser=`/`PAMName=` 为真），
+  gateway 与它拉起的每个子进程（managed dsh → 代码运行时 → bash 工具 →
+  gh/npm/git）于是都从空 HOME 起步；旧版安装器生成的 unit 因此没有
+  `Environment=HOME=…`。修复：先更新脚本副本（含自拷贝），再让 unit 重新生成
+  ——新版模板为"当前用户运行"注入 `HOME/LOGNAME/USER/XDG_CONFIG_HOME`，
+  `--service-user` 形态不注入（systemd 按 `User=` 推导）：
+
+  ```bash
+  curl -fsSL -o install-gateway.sh \
+    https://raw.githubusercontent.com/panzeyu2013/dsh-chamber/main/scripts/install-gateway.sh
+  bash -n install-gateway.sh && cp install-gateway.sh ~/.dsh-chamber/bin/install-gateway.sh
+  # 重跑 install 会按 flags 重新生成凭据（install 路径不读既有 conf）：
+  # 照原安装补齐 flags（--gateway-port/--bind/--origin/--ui-password …），或走 update
+  bash ~/.dsh-chamber/bin/install-gateway.sh install -y <原 flags>
+  systemctl daemon-reload && systemctl restart dsh-chamber-gateway
+  systemctl show dsh-chamber-gateway -p Environment | tr ' ' '\n' | grep '^HOME='
+  ```
+
+  两点提醒：① 自拷贝副本不同步时，下次 `update` 会用旧模板重写 unit、修复被静默
+  回退（与上面 `EnvironmentFile` 一条同源）；② unit 路径：root 安装为
+  `/etc/systemd/system/dsh-chamber-gateway.service`，非 root 用户态为
+  `~/.config/systemd/user/dsh-chamber-gateway.service`。只改 unit 也可把四行手工插到
+  `EnvironmentFile=` 之前，再 `daemon-reload` + `restart`。
 - **root 与非 root**：文件统一落在 `~/.dsh-chamber`；root 仅用于 systemd 与
   npm 全局；非 root 自动用 `systemctl --user` 或前台。注意 npm 全局安装形态
   下，安装器以 owner-only（0700/0600）创建全局树与 `gateway` 命令——多用户

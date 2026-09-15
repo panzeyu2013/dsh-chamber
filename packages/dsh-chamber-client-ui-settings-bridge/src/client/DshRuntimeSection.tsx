@@ -72,6 +72,13 @@ import {
   type RemoteVersions,
 } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import { projectRemoteRuntimeBadge, remoteRuntimeStatusView } from './gateway-runtime-api.ts'
+// Page-owned restart→reload completion (design 18 §3.6 item 8), shared with the
+// connections package's restart entry points — design 21 §5.2 shared face.
+import {
+  RESTART_RELOAD_BUDGET_MS,
+  armLocalDshRestartCompletion,
+  armWindowReloadWhenServed,
+} from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import {
   acceptConfirm as acceptConfirmStep, armConfirm, cancelConfirm as cancelConfirmStep,
   IDLE_CONFIRM, type ConfirmState,
@@ -1585,13 +1592,18 @@ export function DshRuntimeSection({
       .sort((a, b) => compareSemver(b, a) ?? 0)
   }, [envGated, state, active, pending])
 
-  const runRuntimeAction = useCallback(async (task: () => Promise<unknown>): Promise<void> => {
+  /** Run one local runtime action; reports whether it succeeded — the
+   *  restarting transactions (apply-now / retry-apply / retry-restore) end with
+   *  the page-owned completion. */
+  const runRuntimeAction = useCallback(async (task: () => Promise<unknown>): Promise<boolean> => {
     setBusy(true)
     setActionError(null)
     try {
       await task()
+      return true
     } catch (error) {
       setActionError(errorMessage(error))
+      return false
     } finally {
       setBusy(false)
     }
@@ -1619,25 +1631,36 @@ export function DshRuntimeSection({
     try {
       if (instanceSource === 'local') {
         const surface = currentRuntimeSurface()
-        if (surface !== null) {
-          await surface.restart()
-        } else {
+        if (surface === null) {
           // Bridge torn down between render and click: never claim a
           // restart that cannot run (review fix).
           throw new Error('runtime surface unavailable')
         }
+        await surface.restart()
+        // 2026-12: the restart refreshes the HOST side only — this window's
+        // client-plugin set is fixed at its boot, so a newly installed or
+        // rebuilt `dsh.client` contribution (a settings section, e.g.) cannot
+        // appear until the page boots again. The action is complete only with
+        // one reload after the instance serves; a restart that never reaches
+        // ready stays on this page with an honest note (never reload onto a
+        // dead instance). The completion is PAGE-owned (review F6): closing this
+        // panel mid-restart cannot cancel it.
+        if (await armLocalDshRestartCompletion() === 'not-served') {
+          throw new Error(t('dshRuntimeRestartNotServed'))
+        }
       } else if (instanceSource === 'gateway' && chamberInstanceId !== undefined) {
-        // 2026-09-11 review-fix F4b: the readiness POST is bounded by the SAME
-        // controller that owns the readiness poll, so the whole gateway leg (POST
-        // + poll) runs under one deadline and a wedged hop cannot leave the
-        // confirmation dialog pending forever. The poll keeps its own inner
-        // budget (pollGatewayReady, 120s) inside this ceiling.
+        // The POST stays bounded by this panel's own controller (review-fix
+        // F4b: a wedged hop must not leave the dialog pending forever). The
+        // readiness poll no longer shares that controller: it belongs to the
+        // PAGE-owned completion below, which keeps its own inner budget
+        // (pollGatewayReady, 120s) inside the page-level net (review F6 — an
+        // unmount mid-restart must not cancel the completion).
         restartPollAbort.current?.abort()
         const restartController = new AbortController()
         restartPollAbort.current = restartController
-        let restartTimedOut = false
+        let postTimedOut = false
         const restartTimeout = setTimeout(() => {
-          restartTimedOut = true
+          postTimedOut = true
           restartController.abort()
         }, REMOTE_ACTION_TIMEOUT_MS)
         try {
@@ -1657,15 +1680,37 @@ export function DshRuntimeSection({
             } catch { /* non-JSON body — fall back to the status */ }
             throw new Error(serverReason !== '' ? `restart refused: ${serverReason}` : `restart refused (${response.status})`)
           }
-          await pollGatewayReady(chamberInstanceId, restartController.signal)
         } catch (error) {
-          // Our own deadline reports itself in the section's copy; every other
-          // failure (including the poll's own budget) keeps its own message.
-          if (restartTimedOut) throw new Error(t('dshRuntimeActionTimeout'))
+          // Our own POST deadline reports itself in the section's copy; every
+          // other failure (including the refusal above) keeps its own message.
+          if (postTimedOut) throw new Error(t('dshRuntimeActionTimeout'))
           throw error
         } finally {
           clearTimeout(restartTimeout)
         }
+        // Same completion as the local leg (2026-12), armed on the PAGE: the
+        // managed dsh becomes ready again, but this window still runs the
+        // pre-restart client-plugin set, so the action ends with one reload.
+        // The poll's own classified failure is kept for the panel's copy.
+        let pollFailure: unknown = null
+        const outcome = await armWindowReloadWhenServed(
+          `gateway-${chamberInstanceId}`,
+          async signal => {
+            try {
+              await pollGatewayReady(chamberInstanceId, signal, { action: 'restart' })
+              return true
+            } catch (error) {
+              pollFailure = error
+              return false
+            }
+          },
+          { budgetMs: RESTART_RELOAD_BUDGET_MS },
+        )
+        if (outcome === 'not-served') {
+          throw pollFailure ?? new Error(t('dshRuntimeRestartNotServed'))
+        }
+        setRestartNote(t('dshRuntimeRestarted'))
+        return
       } else {
         // Defensive (review fix): a source/id mismatch must never fall
         // through to the success note for a restart that cannot run.
@@ -1727,7 +1772,11 @@ export function DshRuntimeSection({
     if (surface === null || envGated || !actions.has('apply-now') || pending === null) return
     applyNowRef.current = true
     setApplyNowInFlight(true)
-    void runRuntimeAction(() => surface.applyNow()).finally(() => {
+    void runRuntimeAction(() => surface.applyNow()).then((ran) => {
+      // Apply-now is the local activation transaction: it stops and respawns the
+      // instance, so a plugin set change rides the same window-boot rule.
+      if (ran) void armLocalDshRestartCompletion()
+    }).finally(() => {
       setApplyNowInFlight(false)
       applyNowRef.current = false
     })
@@ -1735,12 +1784,19 @@ export function DshRuntimeSection({
 
   const onRetryApply = useCallback(() => {
     if (runtime === null || envGated || state?.canRetryApply !== true || !actions.has('retry-apply')) return
-    void runRuntimeAction(() => runtime.retryApply())
+    // Retrying a pending activation resumes the same stop→apply→respawn
+    // transaction: arm the page-owned completion on success.
+    void runRuntimeAction(() => runtime.retryApply()).then((ran) => {
+      if (ran) void armLocalDshRestartCompletion()
+    })
   }, [runtime, envGated, state, actions, runRuntimeAction])
 
   const onRetryRestore = useCallback(() => {
     if (runtime === null || state?.canRetryRestore !== true || !actions.has('retry-restore')) return
-    void runRuntimeAction(() => runtime.retryRestore())
+    // Restore likewise respawns the instance before it can report readiness.
+    void runRuntimeAction(() => runtime.retryRestore()).then((ran) => {
+      if (ran) void armLocalDshRestartCompletion()
+    })
   }, [runtime, state, actions, runRuntimeAction])
 
   const onRecoverMetadata = useCallback(() => {

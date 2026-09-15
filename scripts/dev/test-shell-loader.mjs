@@ -1,5 +1,6 @@
 /**
- * Test-only ESM loader for packages/renderer/src/shell.test.ts.
+ * Test-only ESM loader shared by the packages/renderer/test/lifecycle/shell*.test.ts
+ * split.
  *
  * The renderer has no install-tree copy of the dsh workspace packages (their
  * `lib/` types/bundles are not built in the source-only vendor tree), so

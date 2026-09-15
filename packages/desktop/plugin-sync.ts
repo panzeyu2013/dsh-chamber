@@ -58,7 +58,17 @@ import type { CordisInsert, InsertConflictKind } from './control-plane-module.ts
 // dist/control-plane, dev/tests → workspace source) so the orchestration-side
 // 二次校验, the exec-side argv whitelist (ssh-provider.ts re-exports the same
 // names) and the gateway executor share one source and can never drift.
-import { isDeniedPluginName, MAX_PLUGIN_SPEC_CHARS, PLUGIN_NAME_PATTERN, PLUGIN_SPEC_PATTERN } from './control-plane-module.ts'
+import {
+  decidePluginMutation,
+  derivePluginRows,
+  deriveProtectedSet,
+  MAX_PLUGIN_SPEC_CHARS,
+  PLUGIN_MATERIALIZED_VALUE_MASK,
+  PLUGIN_NAME_PATTERN,
+  PLUGIN_SPEC_PATTERN,
+  readInstalledVersion,
+} from './control-plane-module.ts'
+import type { FamilyVersions, PluginMutationDecision, PluginRow, ProtectedSet } from './control-plane-module.ts'
 // Owner-private file primitives (control-plane private-file.ts, P2-2a) —
 // consumed through the same dual-path facade for the local-plugin-writer
 // ledger (owner-only 0600 atomic replace, owner-only parent).
@@ -72,11 +82,18 @@ import {
   HOST_GRAPH_PATCH_FILENAME, HOST_OPEN_IN_INSERT, HOST_PACKAGE_SEED_FILES,
   type ChamberHostPackageDescriptor, type HostPackageInsert, type HostPackageSeedFile,
 } from './control-plane-module.ts'
-// ssh unified increments (design 21 §6.4, plan Phase 5): the reserved-name
-// deny + row assembly helpers (parseSpecName / buildSshApplyRows /
-// describeReservedNameRefusal — ssh-apply-rows.ts). Pure module, imports no
+// ssh unified increments (design 21 §6.4, plan Phase 5): the protected-set
+// row assembly helpers (parseSpecName / buildSshApplyRows / describePluginRefusals
+// — ssh-apply-rows.ts). Pure module, imports no
 // Electron and nothing from plugin-sync (no cycle).
-import { buildSshApplyRows, describeReservedNameRefusal, parseSpecName } from './ssh-apply-rows.ts'
+import {
+  buildSshApplyRows,
+  defaultSshProtectionFacts,
+  describePluginRefusals,
+  parseSpecName,
+  parseSpecVersion,
+  type SshProtectionFacts,
+} from './ssh-apply-rows.ts'
 // ENOENT_PATTERN ("absent remote file" classification) is shared the same way:
 // ssh-provider classifies the RAW stderr line against it (redaction can hide a
 // `.ssh*`-named home path), so the provider-side classification and this
@@ -97,6 +114,121 @@ export { PLUGIN_SPEC_PATTERN, PLUGIN_NAME_PATTERN }
 // probe). Re-exported so every desktop consumer/tests derive from the SAME
 // list — the plugin-management projection must never re-declare it.
 export { CHAMBER_HOST_PACKAGES }
+
+/** S 分量：chamber 播种注册表名（单一来源 = CHAMBER_HOST_PACKAGES，design 21 §6.11）。 */
+export const CHAMBER_SEED_NAMES: readonly string[] = CHAMBER_HOST_PACKAGES.map(descriptor => descriptor.insert.name)
+
+/**
+ * 写面/读面共用的判定事实（design 21 §6.11.1）。
+ * - `familySource: 'runtime'`（默认，local/gateway）：`familyNames` 应是已解析的 F；
+ *   缺席 ⇒ **降级态**（`familySource:'unavailable'`）：P 退到 B₀ ∪ S 且官方 scope 的
+ *   install 一律被拒（比 R2 的同代校验更强），第三方与 remove 面照常——只收紧不放松。
+ * - `familySource: 'none'`（ssh）：远端**没有**族事实源，同上保守形态（码为 `protected`）。
+ */
+export interface PluginProtectionFacts {
+  familyNames?: readonly string[] | null
+  /** F 内名字由运行时线提供的版本集合（design 21 §6.11.3 的版本事实）。缺席 ⇒ 复验退回
+   *  世代比较——写面判定不需要它，只有装后复验用。 */
+  familyVersions?: FamilyVersions | null
+  runtimeVersion?: string | null
+  profileState?: 'ready' | 'absent'
+  familySource?: 'runtime' | 'none'
+}
+
+/** ssh 缺省事实（B₀ ∪ S、无族来源、版本未知）。 */
+export function sshProtectionFacts(): PluginProtectionFacts {
+  return { familyNames: null, familyVersions: null, runtimeVersion: null, familySource: 'none' }
+}
+
+/**
+ * 是否该把**内建运行时线**的锚锁文件当成本次 F 的来源（design 21 §6.11.1）。
+ *
+ * 锚锁文件描述的是**随包发布的那条运行时线**；用户选装的运行时（design 18 §3.6）与
+ * `DSH_CHAMBER_DSH_PATH` 指向的树都可能是**另一条线**。把内建锚交给另一条线，装后复验
+ * 就会拿那份 profile 里的副本去比它从未有过的版本——一致的树被响亮误判成跨代副本
+ * （2026-12 复核实测：活动运行时 `0.1.5-rc.3` 的合法 profile 在内建 pin=`rc.2` 下判
+ * `generation-mismatch`；同一棵树按 gateway 形态（不带 pin）判 ok）。
+ *
+ * 判据用**版本相等**而不是"来源是 bundled"：dev/env 形态的活动树与内建同版时，锚仍是
+ * 更好的来源——源码线的活动锁文件含 opt-in 段，会被可信性判据拒掉，而锚不会。
+ * @param activeVersion - 活动运行时的 dsh 世代串（读不到时 null）。
+ * @param pinnedVersion - 内建运行时线的 dsh 世代串（读不到时 null）。
+ * @returns true = 可以把内建锚锁文件交给 `resolveRuntimeFamily`。
+ */
+export function shouldPreferPinnedRuntimeLockfile(
+  activeVersion: string | null,
+  pinnedVersion: string | null,
+): boolean {
+  return activeVersion !== null && pinnedVersion !== null && activeVersion === pinnedVersion
+}
+
+/**
+ * 由事实派生受保护集合 + 是否处于**降级态**（design 21 §6.11.3）。
+ *
+ * 降级 = 本该有 F（familySource 'runtime'）但读不到：此时**不是**"没有保护"，而是
+ * 退到 `B₀ ∪ S` 并让官方 scope 的 install 一律被拒（只收紧不放松）。第三方行与
+ * remove 面（B₀∪S 事实）不受影响——这正是"绝不静默放行拆组合"的保守退化方向。
+ */
+export function protectedSetFromFacts(facts: PluginProtectionFacts): ProtectedSet | null {
+  return protectedSetState(facts).set
+}
+
+/** 派生结果 + 降级标记（写面用它选 `familySource`）。 */
+export function protectedSetState(facts: PluginProtectionFacts): { set: ProtectedSet | null; degraded: boolean } {
+  const family = facts.familyNames
+  const hasFamily = Array.isArray(family) && family.length > 0
+  const degraded = facts.familySource !== 'none' && !hasFamily
+  const derived = deriveProtectedSet({
+    seedNames: CHAMBER_SEED_NAMES,
+    familyNames: hasFamily ? family : null,
+  })
+  return { set: derived.ok ? derived.set : null, degraded }
+}
+
+/**
+ * 本地/ssh 写面的判定包装（design 21 §6.11.3）：把「事实 → P → decide」收敛成一次调用，
+ * 供 main.ts 的 IPC 前置校验、`runLocalDshPlugin` 的纵深校验与 `applyPlugins` 的整批拒绝共用。
+ */
+export function guardPluginMutation(input: {
+  op: 'install' | 'remove'
+  name: string | null
+  version?: string | null
+  facts: PluginProtectionFacts
+}): PluginMutationDecision {
+  if (input.name === null || input.name === '') {
+    return { kind: 'refuse', code: 'invalid-name', error: 'invalid plugin name' }
+  }
+  const { set, degraded } = protectedSetState(input.facts)
+  return decidePluginMutation({
+    op: input.op,
+    name: input.name,
+    version: input.version ?? null,
+    runtimeVersion: input.facts.runtimeVersion ?? null,
+    derivation: set === null ? null : { ok: true, set },
+    profileState: input.facts.profileState ?? 'ready',
+    familySource: degraded ? 'unavailable' : (input.facts.familySource ?? 'runtime'),
+  })
+}
+
+/**
+ * ssh 组装事实（ssh-apply-rows 的形状）——由共享事实派生，供 main.ts 的 IPC 前置校验
+ * 与 applyPlugins 的整批拒绝使用同一份 P。
+ */
+export function sshApplyFacts(facts: PluginProtectionFacts = sshProtectionFacts()): SshProtectionFacts {
+  return {
+    protectedSet: protectedSetFromFacts(facts),
+    runtimeVersion: facts.runtimeVersion ?? null,
+    profileState: facts.profileState ?? 'ready',
+  }
+}
+
+/** 判定 → 面向主进程调用方的错误文案（含建议 spec）。 */
+export function describePluginDecision(decision: PluginMutationDecision): string {
+  if (decision.kind === 'allow') return ''
+  if (decision.kind === 'defer') return `${decision.error} [${decision.code}]`
+  const base = `${decision.error} [${decision.code}]`
+  return decision.suggest === undefined ? base : `${base}（建议 spec：${decision.suggest}）`
+}
 
 // ============================================================================
 // Contract A types: TransportExecAction / TransportRunPayload imported from
@@ -454,10 +586,13 @@ export interface ChamberHostPackageState {
   live: boolean | null
   /**
    * The registry row is meaningful for the LOCAL instance shape only (design
-   * 20 §6). On a remote target the row is reported with `installed:false` /
-   * `patched:false` WITHOUT any remote call, and the plugin view renders
-   * "local shape only" from this flag instead of "not injected": the package
-   * is absent by design there, never missing by fault.
+   * 20 §6). The ssh PROBE reports it with `installed:false`/`patched:false`
+   * WITHOUT any remote call — those values mean "not asked", never "the target
+   * lacks it" — while the desktop's LOCAL projection (localPluginList) carries
+   * its real state; the plugin view reads this flag to OMIT the row on every
+   * non-local target (it is listed for the local shape alone, where the state
+   * is real). The synthesized probe row must therefore never feed a
+   * target-level gate such as the ssh needs-seed/restart decision.
    */
   localOnly?: boolean
 }
@@ -479,6 +614,13 @@ export type ChamberInjectionState =
 export interface RemotePluginManifest {
   dependencies: Record<string, string>
   bundles: string[]
+  /** Read-face row projection (design 21 §6.11.5, 2026-09 revision): one row per
+   *  `dependencies` entry, each with its role + backend-computed `protected`
+   *  flag. The composition (B₀) and the chamber seed registry (S) classify rows
+   *  but never create them — this list is the profile's own plugin set, not the
+   *  installation baseline. `dependencies` keeps its exact meaning (name-based
+   *  diff); the renderer must render from `rows` when present. */
+  rows: PluginRow[]
   profileExists: boolean
   error?: string
   /** Chamber-injected component state (design 09) probed over the wire —
@@ -494,6 +636,8 @@ export interface UnsyncableEntry {
 export interface LocalPluginManifest {
   dependencies: Record<string, string>
   bundles: string[]
+  /** Read-face row projection (design 21 §6.11.5) — see RemotePluginManifest.rows. */
+  rows: PluginRow[]
   clientLines: string[]
   /** Dependency names whose own package.json declares `dsh.bundle` (design 13
    *  §4.1) — the "known bundle packages" the remote apply's bundles assertion
@@ -611,8 +755,24 @@ export function classifyLocalDependency(pkg: unknown): LocalPluginKind {
  * syncable, never flagged). Dependency names are whitelist-checked before any
  * node_modules read (path traversal defense). Throws on an unreadable/
  * malformed profile manifest.
+ *
+ * `rows` (design 21 §6.11.5, 2026-09 revision) is the profile's DEPENDENCY
+ * table projected with the backend-computed role/protected flags. B₀ and the
+ * seed registry S only CLASSIFY rows here — they no longer create rows:
+ * 「已安装」 lists what this profile declares as plugins, the chamber host
+ * packages are shown by the chamber component table (`chamber` below), and
+ * the official composition is the runtime baseline, not a plugin row.
  */
-export function localPluginList(localDshHome: string): LocalPluginManifest {
+export function localPluginList(localDshHome: string, facts?: PluginProtectionFacts): LocalPluginManifest {
+  // The projection's protected flags come from the CALLER-supplied runtime facts
+  // (main.ts resolves the active runtime). Without them F is unknown, but B₀ ∪ S
+  // is a CONSTANT and is always applied (no call path may render a composition
+  // member or a chamber seed actionable) — never "no protection" as a silent
+  // default. `protected` is exactly `name ∈ P`; the caller must pass facts to get
+  // F-derived protection (main.ts does).
+  const protectedSet = facts === undefined
+    ? protectedSetState({ familyNames: null, familySource: 'none' }).set
+    : protectedSetFromFacts(facts)
   const profileDir = join(localDshHome, 'profiles', WEB_PROFILE)
   const manifestPath = join(profileDir, 'package.json')
   let parsed: unknown
@@ -653,20 +813,38 @@ export function localPluginList(localDshHome: string): LocalPluginManifest {
     const cls = classifyDependencyValue(spec)
     if (cls.kind === 'unsyncable') unsyncable.push({ name, reason: cls.reason })
   }
+  const rows = derivePluginRows({
+    dependencies,
+    bundles,
+    protectedSet,
+    seedNames: CHAMBER_SEED_NAMES,
+    // The rows derivation asks once per dependency; memoize for this call so a
+    // 200-dependency profile does not pay 200 disk reads for one list (2026-12
+    // review optimality note). A mutation between two list calls re-reads.
+    installedVersion: (() => {
+      const cache = new Map<string, string | null>()
+      return (name: string) => {
+        if (!cache.has(name)) cache.set(name, readInstalledVersion(profileDir, name))
+        return cache.get(name) ?? null
+      }
+    })(),
+  })
   return {
     dependencies,
     bundles,
+    rows,
     clientLines,
     bundleLines,
     unsyncable,
     // Chamber host packages (design 09 module B / 08 §11 / 24 §7): each
     // registry row is probed for the SAME two facts the remote probe uses —
-    // both seed files present in the profile node_modules, and the `--patch`
-    // overlay beside the dsh home carrying that exact insert row (one overlay
-    // file, per-package row presence: a machine seeded before a package
-    // existed carries the older rows only, and must report that package as
-    // half-injected rather than "done"). `live` stays null locally: the local
-    // instance IS the chamber page, whose own boot proves the channels.
+    // both seed files present in the profile node_modules, and the exact
+    // insert row present in one of the LOCAL mount sources (the profile's own
+    // `cordis.patch.yml` user layer OR the `--patch` overlay this spawn
+    // passes; `localChamberRowPatched`) — judged per package, so a machine
+    // seeded before a package existed reports that package as half-injected
+    // rather than "done". `live` stays null locally: the local instance IS the
+    // chamber page, whose own boot proves the channels.
     chamber: {
       ok: true,
       packages: CHAMBER_HOST_PACKAGES.map((descriptor): ChamberHostPackageState => ({
@@ -680,12 +858,12 @@ export function localPluginList(localDshHome: string): LocalPluginManifest {
         // report 未注入, never "done".
         installed: SEED_FILES.every(relative =>
           existsSync(join(profileDir, 'node_modules', descriptor.insert.name, relative))),
-        patched: localOverlayCarriesInsert(localDshHome, descriptor.insert),
+        patched: localChamberRowPatched(localDshHome, descriptor.insert),
         version: readManifestVersion(readDependencyManifest(profileDir, descriptor.insert.name)),
         live: null,
         // The local profile is exactly where a local-shape-only row IS
         // meaningful, so the flag is reported as the registry declares it and
-        // the view distinguishes it from a missing package on remote targets
+        // the view lists the row here while omitting it on every remote target
         // (design 20 §6). Absent = an ordinary row: the field is only written
         // when it is true, so a normal row's shape stays byte-identical to the
         // pre-open-in projection (the desktop tests pin these objects whole).
@@ -708,7 +886,7 @@ export function localPluginList(localDshHome: string): LocalPluginManifest {
  * classify the value as materialize and the name-based diff matching
  * (plugin-diff.ts §6) keeps working unchanged.
  */
-export const MATERIALIZED_VALUE_MASK = 'file:<hidden>'
+export const MATERIALIZED_VALUE_MASK = PLUGIN_MATERIALIZED_VALUE_MASK
 
 /**
  * Project the LOCAL manifest for the renderer: dependency VALUES that are
@@ -724,7 +902,20 @@ export function redactLocalPluginManifest(manifest: LocalPluginManifest): LocalP
   for (const [name, spec] of Object.entries(manifest.dependencies)) {
     dependencies[name] = classifyDependencyValue(spec).kind === 'materialize' ? MATERIALIZED_VALUE_MASK : spec
   }
-  return { ...manifest, dependencies }
+  return { ...manifest, dependencies, rows: maskRowSpecs(manifest.rows, dependencies) }
+}
+
+/**
+ * Row specs follow the manifest's own masking rule (design 21 §6.2/§6.11.5): a
+ * masking backend must not leak a machine-local path through the `rows` channel
+ * that its `dependencies` projection masks (2026-12 review). Idempotent — a
+ * value already masked keeps its mask.
+ */
+function maskRowSpecs(rows: readonly PluginRow[], masked: Record<string, string>): PluginRow[] {
+  return rows.map(row => {
+    const spec = row.spec === null ? null : (masked[row.name] ?? row.spec)
+    return spec === row.spec ? row : { ...row, spec }
+  })
 }
 
 /** Is this dependency spec a remote-local-path `file:` value? Case-
@@ -829,13 +1020,15 @@ export function describePluginApplyConfirmation(info: {
  * where the managed dsh home is `<stateDir>/dsh-home`), so
  * `dirname(localDshHome)` locates it.
  *
- * Presence of the overlay file alone does not prove the row is mounted: the
- * overlay is regenerated per spawn with only the rows whose built artifacts
- * exist, so a stale overlay can predate a package. Unreadable/absent → false
- * (never a guessed "patched"). The overlay is a single file for every chamber
- * host package, so presence is judged per package (a stale overlay from before
- * a package existed carries the older rows only — the same half-injected state
- * the remote probe's per-package insert check detects).
+ * The file's presence is the control plane's own invariant: it writes the
+ * overlay exactly when the spawn passes it as `--patch` and REMOVES a leftover
+ * one on the resolutions that pass none (`resolveLocalHostGraphOverlay`, index.ts
+ * — no built artifact, or every row already user-owned in the profile patch).
+ * Reading it therefore reads the mount set of the spawn that produced it. It is
+ * still judged per package: one overlay file carries every chamber row, so a
+ * row seeded later is absent from an earlier file (the half-injected state the
+ * remote probe's per-package insert check detects). Unreadable/absent → false
+ * (never a guessed "patched").
  */
 function localOverlayCarriesInsert(localDshHome: string, insert: HostPackageInsert): boolean {
   const overlayPath = join(dirname(localDshHome), HOST_GRAPH_PATCH_FILENAME)
@@ -845,6 +1038,42 @@ function localOverlayCarriesInsert(localDshHome: string, insert: HostPackageInse
   } catch {
     return false
   }
+}
+
+/**
+ * Whether the LOCAL profile's own user patch layer carries one chamber loader
+ * row: `<profile>/cordis.patch.yml`, the file app-boot composes over the empty
+ * root entry list after every bundle layer (vendor app-boot profile.ts
+ * loadProfileDirectory). This is the SECOND mount source of a local chamber
+ * row: the control plane reuses an exact row already present here instead of
+ * repeating it in the `--patch` overlay (loader identities are global across
+ * both layers — a duplicate id/name pair fails the boot), so an overlay-only
+ * check reported a mounted row as 未注入 (T20). Unreadable/absent → false,
+ * never a guessed "patched".
+ */
+function localProfilePatchCarriesInsert(localDshHome: string, insert: HostPackageInsert): boolean {
+  const patchPath = join(localDshHome, 'profiles', WEB_PROFILE, 'cordis.patch.yml')
+  if (!existsSync(patchPath)) return false
+  try {
+    return hasExactInsert(readFileSync(patchPath, 'utf8'), registryInsertToCordis(insert))
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Whether one chamber loader row is actually in the LOCAL instance's composed
+ * tree: the profile's own patch layer OR the `--patch` overlay the spawn
+ * passes. Both are exact-insert checks against the two files app-boot composes
+ * (root `cordis.yml` + bundle layers + `<profile>/cordis.patch.yml` + the
+ * `--patch` overlays); neither file alone is the whole mount set, and the
+ * overlay file's presence is maintained by the control plane so it cannot
+ * outlive the spawn that passed it. No other source is consulted — the probe
+ * never infers from time or mere file presence.
+ */
+function localChamberRowPatched(localDshHome: string, insert: HostPackageInsert): boolean {
+  return localProfilePatchCarriesInsert(localDshHome, insert)
+    || localOverlayCarriesInsert(localDshHome, insert)
 }
 
 /**
@@ -917,7 +1146,21 @@ export async function remotePluginList(
   if (!result.ok) {
     // ENOENT = the remote profile is not initialized (not a fatal ssh error).
     if (ENOENT_PATTERN.test(result.error)) {
-      return { ok: true, manifest: { dependencies: {}, bundles: [], profileExists: false, chamber: await probeRemoteChamber(exec, spec, opts) } }
+      return {
+        ok: true,
+        manifest: {
+          dependencies: {},
+          bundles: [],
+          rows: derivePluginRows({
+            dependencies: {},
+            bundles: [],
+            protectedSet: protectedSetFromFacts(sshProtectionFacts()),
+            seedNames: CHAMBER_SEED_NAMES,
+          }),
+          profileExists: false,
+          chamber: await probeRemoteChamber(exec, spec, opts),
+        },
+      }
     }
     return { ok: false, error: result.error }
   }
@@ -927,6 +1170,24 @@ export async function remotePluginList(
     manifest: {
       dependencies: parsed.dependencies,
       bundles: parsed.bundles,
+      // ssh facts are B₀ ∪ S (no remote family source): installs of official-scope
+      // names are refused by the write face, removals are judged by those facts.
+      rows: derivePluginRows({
+        dependencies: parsed.dependencies,
+        bundles: parsed.bundles,
+        protectedSet: protectedSetFromFacts(sshProtectionFacts()),
+        seedNames: CHAMBER_SEED_NAMES,
+        // NOTE (2026-12 review): `protected` means exactly "name ∈ P" — the ssh INSTALL
+        // conservatism is a target capability, not a read-face protection fact. Marking
+        // official-scope rows protected here would hide a REMOVE the write face allows
+        // (removal is judged by B₀ ∪ S only) and would print a false "protected by the
+        // composition" hint. The reconcile batch is kept safe by the ssh transport
+        // filter instead (UI `sshSyncableDependencies`).
+        // Mirror redactRemotePluginManifest's rule (below): a remote-local
+        // `file:` path is masked in `dependencies`, so it must be masked in the
+        // rows the renderer renders too.
+        maskSpec: spec => (isRemoteFileValue(spec) ? MATERIALIZED_VALUE_MASK : spec),
+      }),
       profileExists: true,
       error: parsed.error,
       chamber: await probeRemoteChamber(exec, spec, opts),
@@ -990,7 +1251,10 @@ async function probeRemoteChamber(
     // Local-shape-only rows (design 20 §6) are not part of a remote instance's
     // contract: report the row with the flag and make NO remote call. Probing
     // would cost three exec round-trips per row to learn nothing, and the
-    // result would read "not injected" for a rule rather than a fault.
+    // result would read "not injected" for a rule rather than a fault. The
+    // page drops such a row from every non-local target, so these synthesized
+    // values are a record that nothing was asked — never a probe result other
+    // consumers may fold into a target-level gate.
     if (descriptor.localOnly === true) {
       packages.push({
         insertId: descriptor.insert.id,
@@ -1191,6 +1455,10 @@ export async function applyPlugins(
      *  an undo can never replay a change onto a different host that reuses
      *  the same connection id after an edit (design 21 §6.4 review P1). */
     targetFingerprint?: string | null
+    /** Protected-set facts (design 21 §6.11): ssh form by default (B₀ ∪ S, no
+     *  family source). The main process passes the facts it resolved so the
+     *  batch judgement uses the same P as the read-face projection. */
+    protection?: SshProtectionFacts
   },
 ): Promise<ApplyPluginsResult> {
   const id = spec.id
@@ -1215,17 +1483,16 @@ export async function applyPlugins(
       return { ok: false, error: `invalid remove name: ${JSON.stringify(name)}` }
     }
   }
-  // Reserved-name deny (design 21 §6.4/decision 19, same set as the gateway):
-  // @deepseek-ai/* and @dsh-chamber/* are the official/chamber domains and
-  // can never be installed or removed through the plugin model — refuse the
-  // WHOLE batch, loudly, listing the denied names, BEFORE any remote change
-  // (never a partial apply around a refused row). parseSpecName extracts the
-  // name of every add row (the rows are already whitelist-shaped above);
-  // remove rows carry their name directly. buildSshApplyRows stays the
-  // shared assembly both here and the main-process IPC preflight use.
-  const assembled = buildSshApplyRows(add, remove)
-  if (assembled.refused.length > 0) {
-    return { ok: false, error: describeReservedNameRefusal(assembled.refused) }
+  // Protected-set judgement (design 21 §6.11, decision 19 2026-12 revision —
+  // ssh form: B₀ ∪ S, no family source). Refuse the WHOLE batch, loudly,
+  // naming each refused row and its code, BEFORE any remote change (never a
+  // partial apply around a refused row). buildSshApplyRows is the shared
+  // assembly both here (defense in depth) and the main-process IPC preflight
+  // use; the *undo* path rides this same function, so a journal-derived undo
+  // is judged here too.
+  const assembled = buildSshApplyRows(add, remove, opts?.protection ?? defaultSshProtectionFacts())
+  if (assembled.refusals.length > 0) {
+    return { ok: false, error: describePluginRefusals(assembled.refusals) }
   }
   // A non-boolean `restart` (e.g. the string 'false') must never be treated
   // as truthy and trigger an unwanted restart.
@@ -1352,6 +1619,46 @@ export interface ChamberHostPackageSeedState {
   insertId: string
   packageName: string
   wrote: boolean
+}
+
+/**
+ * The seeds that may exist on ANOTHER host (design 20 §6): a `localOnly`
+ * registry row serves the machine the user is sitting at, so it never travels
+ * to a remote instance or a gateway.
+ *
+ * THE single source for that rule. `seedRemoteChamberHostPackages` drops the
+ * rows here before its own validation/preflight/write, and every desktop-side
+ * path that inspects "what should be on that other machine" must read THIS
+ * list rather than the full registry projection: a `localOnly` row carries an
+ * empty `sourceDir` by design, so counting it as a missing artifact failed the
+ * manual 注入 action with "…的 dist/index.js 缺失", appended a false
+ * "构建产物缺失" gap to the REMOTE instance's log on every ready transition,
+ * and warned on every gateway sync (2026-12 review).
+ * @param seeds - the registry projection, in registry order.
+ * @returns the seeds whose package may live on another host, input order.
+ */
+export function portableChamberHostPackageSeeds(
+  seeds: readonly ChamberHostPackageSeed[],
+): readonly ChamberHostPackageSeed[] {
+  return seeds.filter(seed => seed.localOnly !== true)
+}
+
+/**
+ * The seeds that are actually SHIPPED here (design 09 §3.5): a real source dir
+ * whose built entry exists. The `sourceDir !== ''` guard is load bearing, not
+ * defensive noise — an unmapped registry row carries an empty `sourceDir`, and
+ * `existsSync(join('', 'dist', 'index.js'))` resolves against the process CWD,
+ * so a shell whose working directory happens to contain `dist/index.js` would
+ * stage the CWD's OWN bytes as that package's seed and report success
+ * (2026-12 review). An empty dir means "not shipped here", never "the artifact
+ * is somewhere else".
+ * @param seeds - portable seeds (or any registry projection), input order.
+ * @returns the shipped seeds, input order.
+ */
+export function builtChamberHostPackageSeeds(
+  seeds: readonly ChamberHostPackageSeed[],
+): readonly ChamberHostPackageSeed[] {
+  return seeds.filter(seed => seed.sourceDir !== '' && existsSync(join(seed.sourceDir, 'dist', 'index.js')))
 }
 
 type ChamberHostInsert = Pick<ChamberHostPackageSeed, 'insertId' | 'packageName'>
@@ -1532,9 +1839,11 @@ export async function seedRemoteChamberHostPackages(
   // Local-shape-only rows never travel (design 20 §6): the open-in host domain
   // launches applications on the machine the user is sitting at, so a remote
   // instance must not receive it. Dropping them here — before validation,
-  // preflight and every remote call — keeps the rule in one place; the caller
-  // also passes no source dir for them (`chamberHostSourceDirs`).
-  const portable = seeds.filter(seed => seed.localOnly !== true)
+  // preflight and every remote call — keeps the rule in one place
+  // (portableChamberHostPackageSeeds, shared with the desktop's preflight/log/
+  // upload paths, which must not count an absent-by-design row as a gap); the
+  // caller also passes no source dir for them (`chamberHostSourceDirs`).
+  const portable = portableChamberHostPackageSeeds(seeds)
   for (const seed of portable) {
     if (!/^[a-zA-Z0-9._-]+$/.test(seed.insertId)
       || !/^@dsh-chamber\/[a-zA-Z0-9._-]+$/.test(seed.packageName)) {
@@ -1549,8 +1858,10 @@ export async function seedRemoteChamberHostPackages(
 
   // Only a built dist/index.js makes a package available. A checkout may have
   // the source directory without its artifact; that is "not shipped", so it
-  // must not create a dangling loader row.
-  const available = portable.filter(seed => existsSync(join(seed.sourceDir, 'dist', 'index.js')))
+  // must not create a dangling loader row. `builtChamberHostPackageSeeds` also
+  // rejects an empty sourceDir outright, so the CWD can never be mistaken for
+  // a package directory.
+  const available = builtChamberHostPackageSeeds(portable)
   if (available.length === 0) return { ok: true, wrote: false, patched: false, packages: [] }
 
   // Preflight every local byte before touching the remote. In particular, a
@@ -2039,6 +2350,7 @@ export async function materializeAndAdd(
   pack?: (dir: string) => { bytes: Buffer } | null | Promise<{ bytes: Buffer } | null>,
 ): Promise<MaterializeResult> {
   let name: string
+  let version: string | null = null
   try {
     const pkg = JSON.parse(readFileSync(join(localDir, 'package.json'), 'utf8')) as Record<string, unknown>
     // Name-length bound: the whitelist regex has no {max}; a ≤64 KiB manifest
@@ -2049,16 +2361,17 @@ export async function materializeAndAdd(
       return { ok: false, error: 'materialize: invalid package name' }
     }
     name = pkg.name
+    version = typeof pkg.version === 'string' && pkg.version !== '' ? pkg.version : null
   } catch {
     return { ok: false, error: 'materialize: cannot read package.json' }
   }
-  // Reserved-name deny (design 21 §6.4, decision 19 — same set as the dialog
-  // row filter and the apply rows): a picked folder whose manifest claims an
-  // official/chamber domain name is refused BEFORE the pack/upload/write
-  // chain touches anything (the package.json is user-picked code, but its
-  // declared name decides what would be installed into the managed profile).
-  if (isDeniedPluginName(name)) {
-    return { ok: false, error: describeReservedNameRefusal([name]) }
+  // Protected-set judgement (design 21 §6.11, ssh form) over the manifest's
+  // declared name + version, BEFORE the pack/upload/write chain touches
+  // anything: a picked folder can never smuggle a protected name, and an
+  // official-scope pick must be same-generation.
+  const sshGuard = guardPluginMutation({ op: 'install', name, version, facts: sshProtectionFacts() })
+  if (sshGuard.kind !== 'allow') {
+    return { ok: false, error: `materialize: ${describePluginDecision(sshGuard)}` }
   }
   const packed = await (pack ?? packDirectory)(localDir)
   if (packed === null) return { ok: false, error: 'materialize: pnpm pack failed' }
@@ -2071,14 +2384,15 @@ export async function materializeAndAdd(
  * manifest already read (classifyPluginPick); the remote install tail is the
  * same as the folder flow's (write-file → remote `$HOME` → `add file:`), but
  * no local `pnpm pack` runs and no local package.json is consulted. The
- * declared name is re-validated here (PLUGIN_NAME_PATTERN + reserved-domain
- * deny) — the same single enforcement point the folder flow uses — and the
+ * declared name is re-validated here (PLUGIN_NAME_PATTERN + the shared
+ * protected-set judgement) — the same single enforcement point the folder flow
+ * uses — and the
  * archive bytes are capped at the remote write ceiling before any transfer.
  */
 export async function materializeArchiveAndAdd(
   exec: ExecFn,
   spec: RemoteSpec,
-  archive: { name: string; bytes: Buffer },
+  archive: { name: string; version?: string | null; bytes: Buffer },
 ): Promise<MaterializeResult> {
   if (typeof archive?.name !== 'string' || archive.name.length > MAX_PLUGIN_SPEC_CHARS || !PLUGIN_NAME_PATTERN.test(archive.name)) {
     return { ok: false, error: 'materialize: invalid package name' }
@@ -2086,8 +2400,14 @@ export async function materializeArchiveAndAdd(
   if (!Buffer.isBuffer(archive?.bytes) || archive.bytes.length === 0) {
     return { ok: false, error: 'materialize: the picked plugin archive is empty' }
   }
-  if (isDeniedPluginName(archive.name)) {
-    return { ok: false, error: describeReservedNameRefusal([archive.name]) }
+  const archiveGuard = guardPluginMutation({
+    op: 'install',
+    name: archive.name,
+    version: archive.version ?? null,
+    facts: sshProtectionFacts(),
+  })
+  if (archiveGuard.kind !== 'allow') {
+    return { ok: false, error: `materialize: ${describePluginDecision(archiveGuard)}` }
   }
   return installRemoteTarball(exec, spec, archive.name, archive.bytes)
 }
@@ -2171,7 +2491,7 @@ export async function runLocalDshPlugin(
   localDshHome: string,
   action: 'add' | 'remove',
   spec: string,
-  options: { allowFileSpec?: boolean } = {},
+  options: { allowFileSpec?: boolean; protection?: PluginProtectionFacts } = {},
 ): Promise<LocalPluginExecResult> {
   if (typeof spec !== 'string') return { ok: false, error: 'plugin spec must be a string' }
   const addOk = spec.length <= 4096 && (
@@ -2180,6 +2500,24 @@ export async function runLocalDshPlugin(
   )
   if (action === 'add' && !addOk) return { ok: false, error: `invalid add spec: ${JSON.stringify(spec)}` }
   if (action === 'remove' && (spec.length > MAX_PLUGIN_SPEC_CHARS || !PLUGIN_NAME_PATTERN.test(spec))) return { ok: false, error: `invalid remove name: ${JSON.stringify(spec)}` }
+  // Defense in depth (design 21 §6.11): the protected-set judgement runs here
+  // too when the caller supplies facts. Registry specs carry their own name +
+  // version; a `file:` spec has no registry name (the caller has already judged
+  // the picked manifest before reaching this function), so it is skipped here.
+  if (options.protection !== undefined && !spec.startsWith('file:')) {
+    const guarded = guardPluginMutation({
+      op: action === 'add' ? 'install' : 'remove',
+      name: parseSpecName(spec),
+      version: action === 'add' ? parseSpecVersion(spec) : null,
+      facts: options.protection,
+    })
+    // ONLY `refuse` stops the CLI. `defer` (profile absent) must fall through:
+    // the first `dsh plugin add` is exactly what creates the profile, so a
+    // deferral is not a refusal (design 21 §6.11.3 R0).
+    if (guarded.kind === 'refuse') {
+      return { ok: false, error: describePluginDecision(guarded) }
+    }
+  }
 
   const installed = join(dshWorkspace, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
   const source = join(dshWorkspace, 'apps', 'cli', 'src', 'bin.ts')

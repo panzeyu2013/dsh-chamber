@@ -3,7 +3,7 @@
  * gates and the launch instance-id derivation, extracted from the component
  * (which imports React, CSS and a raster mark — untestable under plain node).
  * Everything here is a pure function over plain data, so the node test suite
- * (`test/open-in-gates.ts`) covers the button's decision surface without a
+ * (`test/launch-flow/open-in-view-model.test.ts`) covers the button's decision surface without a
  * DOM: which apps a source may use, whether a header's session maps to a
  * concrete workspace path, and the view-id → raw-registry-id strip.
  */

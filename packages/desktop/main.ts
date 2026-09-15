@@ -180,6 +180,8 @@ import {
   ReadyPhaseEdges,
   reapStaleLocalPluginWriters,
   seedRemoteChamberHostPackages,
+  builtChamberHostPackageSeeds,
+  portableChamberHostPackageSeeds,
   disposePluginSyncChildren,
   scopeExecToOwnership,
 } from './plugin-sync.ts';
@@ -191,6 +193,7 @@ import {
   computeQuitRisk,
   readSettingsFile,
   shouldHideToTray,
+  shouldUpdaterQuitTakeOver,
   writeSettingsFile,
 } from './chamber-settings.ts';
 import type { ChamberSettings } from './chamber-settings.ts';
@@ -311,6 +314,18 @@ function resolveBuiltinDshWorkspace(): string | null {
   return null;
 }
 
+/**
+ * 运行时线锚锁文件（design 21 §6.11.1 的 F 首选事实源）：随应用发布的
+ * `vendor/dsh/pnpm-lock.yaml`，也是 C11 门禁断言的那个文件。dev 形态指向仓库里的
+ * 同一份（活动树此时可能是源码线 `ref-dsh`，其闭包含 opt-in 段，不能当 F）。
+ */
+function resolvePinnedRuntimeLockfile(): string | null {
+  const candidate = app.isPackaged
+    ? path.join(process.resourcesPath, 'vendor', 'dsh', 'pnpm-lock.yaml')
+    : path.join(pkgDir, 'vendor', 'dsh', 'pnpm-lock.yaml');
+  return existsSync(candidate) ? candidate : null;
+}
+
 const builtinDshWorkspace = resolveBuiltinDshWorkspace();
 if (builtinDshWorkspace === null) {
   console.warn(
@@ -371,6 +386,82 @@ let quitCleanupInProgress = false;
 // Update controller ref (created in whenReady): the quit-confirmation exemption
 // (design 14 D2) reads its state at will-quit time.
 let updateController: { state(): { phase: string; installBlockedReason: string | null } } | null = null;
+// 「重启并安装」在途标志（2026-12 review：macOS 实机缺陷）。electron-updater 的
+// quitAndInstall 在 macOS 上「先关闭全部窗口、再退出」（Electron 43.4.0 typings
+// AutoUpdater#before-quit-for-update 明文：before-quit 不会在窗口关闭前发出；本机
+// 对 43.4.0/darwin 的探针亦证实 autoUpdater 的 before-quit-for-update 与窗口
+// close 都发生在 quitAndInstall() 调用内部、远早于 before-quit——「before-quit 晚于
+// 关窗」是 typings 的明文，而关窗当下被 hide 吞掉时退出序列根本走不到它，所以修复前
+// 那个「before-quit 从未到达」的观测不能当作原生腿的行为证据，见 armNativeUpdaterQuit），
+// 而 main.ts 的
+// 关窗到托盘（design 14 D1，默认 hide-to-tray）只在 quitRequested（由 before-quit
+// 置位）后才放行关窗——更新退出腿的关窗因此被 hide 吞掉：窗口消失、进程（连同本地
+// dsh 与隧道）永久留存、更新永不安装（用户实测症状）。
+// 该标志由控制器的 onQuitAndInstallArmed 回调在**调用 quitAndInstall 之前**置位
+// （关窗发生在调用内部，返回后再置位就晚了）；原生退出每次到达都会重新武装
+// （armNativeUpdaterQuit），失败/停滞时由 updater 状态订阅撤回。
+let updaterQuitArmed = false;
+// 原生更新器退出兜底计时器（见 armNativeUpdaterQuit）：原生 macOS 退出腿只关窗、
+// 不保证走到 app.quit()，宽限期内未退出即由主进程接管退出。
+let updaterQuitFallback: ReturnType<typeof setTimeout> | null = null;
+
+/** 更新退出兜底的宽限期（armNativeUpdaterQuit）：原生更新器已发出
+ *  before-quit-for-update 后，正常腿应当立即 app.quit()（win: setImmediate；
+ *  mac: 原生终止）。超过这个窗口仍未进入退出序列，就由主进程接管退出——
+ *  取 5s 与退出清理上限同量级，绝不会等到 60s 的重启停滞 watchdog。 */
+const UPDATER_QUIT_FALLBACK_MS = 5_000;
+
+/** 武装「更新退出腿」：期间关窗一律真正关闭，绝不 hide 到托盘。 */
+function armUpdaterQuit(): void {
+  if (updaterQuitArmed) return;
+  updaterQuitArmed = true;
+  console.log('[dsh-chamber] 更新重启已武装：更新退出腿的关窗不再隐藏到托盘');
+}
+
+/** 撤回武装（重启失败/停滞，或本次调用什么都没武装）：恢复正常关窗语义。 */
+function disarmUpdaterQuit(reason: string): void {
+  if (updaterQuitFallback !== null) {
+    clearTimeout(updaterQuitFallback);
+    updaterQuitFallback = null;
+  }
+  if (!updaterQuitArmed) return;
+  updaterQuitArmed = false;
+  console.warn(`[dsh-chamber] 更新重启未成立（${reason}），恢复关窗到托盘语义`);
+  // 更新退出腿已经把窗口关掉、重启却没走完时，唯一能如实显示失败/停滞文案的
+  // 入口就是主窗口——把它拉回来（无窗口常驻绝不能是「更新卡住」的表现形式）。
+  if (mainWindow === null || mainWindow.isDestroyed()) showMainWindow();
+}
+
+/** 原生更新器正在关窗退出（Electron autoUpdater `before-quit-for-update`，
+ *  在 quitAndInstall 内部、关窗之前发出——43.4.0/darwin 实测）。两件事：
+ *  1) 武装关窗豁免：这一次关窗属于安装退出腿，绝不能被 hide 吞掉（也覆盖
+ *     「首次武装已被停滞 watchdog 撤回、原生退出迟到」的窗口）；
+ *  2) 兜底自退：macOS 原生腿只关窗、不保证走到 app.quit()（修复前实测「关窗后
+ *     before-quit 从未到达」——注意该观测是在**旧**行为下取的：关窗当时被 hide
+ *     吞掉，窗口从未真正关闭，退出序列自然走不到 before-quit；修复后是否仍不到达
+ *     需要在签名包上重测一次，见 design 11 §9 的实机门禁），进程会以「无窗口仍在
+ *     运行」滞留。这里在宽限期后仍未退出就由主进程 app.quit() 走正常
+ *     before-quit/will-quit 清理路径。兜底本身在两种情形下都安全：before-quit 会到
+ *     时 `quitRequested` 已置位、兜底直接 stand down（见 shouldUpdaterQuitTakeOver）。
+ *     此刻退出是安全的：该事件只在 Squirrel 已完成 staging 后发出
+ *     （MacUpdater 仅在 squirrelDownloadedUpdate / 原生 update-downloaded 之后
+ *     才调原生 quitAndInstall），退出即安装。 */
+function armNativeUpdaterQuit(): void {
+  armUpdaterQuit();
+  if (updaterQuitFallback !== null) return;
+  updaterQuitFallback = setTimeout(() => {
+    updaterQuitFallback = null;
+    // 三个守卫（真退出已在途 / 武装已撤回 / 窗口仍在）是纯判定
+    // shouldUpdaterQuitTakeOver：只在「窗口确已被更新退出腿关掉」时接管退出——原生腿
+    // 没走到关窗（或用户又从 Dock 拉回了窗口）就绝不能在用户眼皮底下把应用拽下去，那种
+    // 情况交给 60s 停滞 watchdog 如实呈现与恢复，而不是制造一次无预警退出。
+    const windowAlive = mainWindow !== null && !mainWindow.isDestroyed();
+    if (!shouldUpdaterQuitTakeOver(quitRequested, updaterQuitArmed, windowAlive)) return;
+    console.warn('[dsh-chamber] 原生更新退出腿未完成退出：进程仍在，改由主进程 app.quit()（已 staged 的更新随退出安装）');
+    app.quit();
+  }, UPDATER_QUIT_FALLBACK_MS);
+  updaterQuitFallback.unref?.();
+}
 // dsh runtime version controller (design 18 M2): module-level ref so the
 // settings「dsh 运行时」block's install/check/reset always reach the same
 // instance; state pushes go to the (single) main window.
@@ -820,9 +911,11 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
   // 需托盘；macOS Dock 常驻）且非真正退出在途 → hide（不 destroy），控制面/
   // 传输层/dsh 子进程继续运行。托盘缺失时回退现状（关窗即退，受 D2 确认保护）
   // ——绝不允许窗口被隐藏后无任何恢复入口。
+  // 更新退出腿（updaterQuitArmed）例外：关窗是更新安装的前置步骤，hide 会截断
+  // quitAndInstall 的退出链（见 armUpdaterQuit 的注释与该函数的契约）。
   win.on('close', (event) => {
     const recoveryAvailable = process.platform === 'darwin' || tray !== null;
-    if (shouldHideToTray(chamberSettings.windowCloseBehavior, recoveryAvailable, quitRequested)) {
+    if (shouldHideToTray(chamberSettings.windowCloseBehavior, recoveryAvailable, quitRequested, updaterQuitArmed)) {
       event.preventDefault();
       win.hide();
     }
@@ -1672,14 +1765,25 @@ if (!gotTheLock) {
       insertId: descriptor.insert.id,
       packageName: descriptor.insert.name,
       // A registry package with no desktop source dir is "not shipped here":
-      // seedRemoteChamberHostPackages skips it (an empty dir never resolves a
-      // dist/index.js) instead of writing a dangling loader row.
+      // the shipped-artifact gate (builtChamberHostPackageSeeds) rejects an
+      // empty dir before any existsSync, so it can never resolve the process
+      // CWD's own dist/index.js; seedRemoteChamberHostPackages then skips it
+      // instead of writing a dangling loader row.
       sourceDir: chamberHostSourceDirs[descriptor.insert.name] ?? '',
       label: descriptor.insert.id,
       // The registry's ownership flag travels with the seed so the remote
       // writer drops the row explicitly (never "seeded because a path appeared").
       ...(descriptor.localOnly === true ? { localOnly: true as const } : {}),
     }));
+    // Everything that judges "what should be on that OTHER host" reads the
+    // portable list, never the full registry projection: a `localOnly` row has
+    // an empty sourceDir by design (`chamberHostSourceDirs` above), so counting
+    // it as a seedable package made the manual 注入 action fail with a
+    // "构建产物缺失" error naming the one package that must never be seeded, and
+    // appended a false gap to the REMOTE instance's log on every ready
+    // transition (design 20 §6, 2026-12 review). The writer re-applies the same
+    // rule internally (portableChamberHostPackageSeeds).
+    const portableHostSeeds = portableChamberHostPackageSeeds(chamberHostPackageSeeds);
     type RemoteTarget = {
       spec: RemoteSpec
       fingerprint: string
@@ -1726,20 +1830,20 @@ if (!gotTheLock) {
       };
       void (async () => {
         try {
-          const builtSeeds = chamberHostPackageSeeds.filter(seed => existsSync(path.join(seed.sourceDir, 'dist', 'index.js')));
+          const builtSeeds = builtChamberHostPackageSeeds(portableHostSeeds);
           if (builtSeeds.length === 0) {
             if (ownsSeed()) console.log(`[dsh-chamber] chamber host seed skipped for ${id}: no built host package artifacts`);
             appendSeedLog('info', 'chamber host 包未注入：构建产物缺失；远端相关客户端能力不可用');
             return;
           }
-          const missingSeeds = chamberHostPackageSeeds.filter(seed => !builtSeeds.includes(seed));
+          const missingSeeds = portableHostSeeds.filter(seed => !builtSeeds.includes(seed));
           if (missingSeeds.length > 0) {
             appendSeedLog('info', `chamber host 包部分未注入（构建产物缺失）：${missingSeeds.map(seed => seed.label).join(', ')}`);
           }
           const result = await seedRemoteChamberHostPackages(
             scopedExecForTarget(target, ownsSeed),
             target.spec,
-            chamberHostPackageSeeds,
+            portableHostSeeds,
           );
           if (!ownsSeed()) return;
           if (result.ok) {
@@ -1767,12 +1871,14 @@ if (!gotTheLock) {
     // control-plane seed uses; the sync uploads them into the gateway seed
     // cache after every gateway ready registration.
     const localChamberHostPackageSources = (): Array<{ name: string; packageJsonPath: string; distIndexPath: string }> => {
-      // Registry-driven: one entry per chamber host package, reusing the
-      // single per-package source-dir map declared with the seed list above
-      // (2026-09 P2 round: the two consumers must not maintain the paths
-      // twice — a packaged/repo path fix has to land in one place).
-      return CHAMBER_HOST_PACKAGES.flatMap(descriptor => {
-        const dir = chamberHostSourceDirs[descriptor.insert.name];
+      // Registry-driven AND portability-driven: this iterates the SAME portable
+      // list the ssh seed/preflight paths read (`portableHostSeeds`), so the
+      // local-shape-only rule has exactly one implementation and a future
+      // portability dimension cannot leak a row into the gateway seed cache by
+      // forgetting this site. The per-package source dirs still come from the
+      // single map declared with the seed list above (2026-09 P2 round).
+      return portableHostSeeds.flatMap(seed => {
+        const dir = chamberHostSourceDirs[seed.packageName];
         if (dir === undefined) {
           // NEVER silent (a registry entry with no desktop source dir used to
           // disappear here without a trace). This is the ssh seed list's
@@ -1784,13 +1890,13 @@ if (!gotTheLock) {
           // the UI shows no hint. Loud, with the missing name and that
           // consequence — the fix is a new entry in chamberHostSourceDirs.
           console.warn(
-            `[dsh-chamber] chamber host package ${descriptor.insert.name} (${descriptor.insert.id}) has no desktop source dir in chamberHostSourceDirs: `
+            `[dsh-chamber] chamber host package ${seed.packageName} (${seed.insertId}) has no desktop source dir in chamberHostSourceDirs: `
             + 'it is NOT uploaded to the gateway seed cache, so the gateway-hosted instance cannot load it (its host domain 404s) and no UI surface reports the gap',
           );
           return [];
         }
         return [{
-          name: descriptor.insert.name,
+          name: seed.packageName,
           packageJsonPath: path.join(dir, 'package.json'),
           distIndexPath: path.join(dir, 'dist', 'index.js'),
         }];
@@ -2327,6 +2433,15 @@ if (!gotTheLock) {
         warn: (...args) => console.warn('[updater]', ...args),
         error: (...args) => console.error('[updater]', ...args),
       },
+      // 更新退出腿的关窗豁免（2026-12 macOS 实机缺陷修复）：控制器恰好在调用
+      // electron-updater quitAndInstall **之前**同步回调这里——macOS 上该调用
+      // 先关闭全部窗口、再退出（Electron 43.4.0 typings/探针，见
+      // shouldHideToTray），关窗一旦被 hide 吞掉，安装+重启链就地中断。回调只在
+      // 真正武装的路径上触发（拒绝路径不回调），失败/停滞由状态订阅撤回。
+      onQuitAndInstallArmed: armUpdaterQuit,
+      // 原生更新器开始关窗退出（Electron autoUpdater before-quit-for-update）：
+      // 关窗豁免 + 原生退出腿的兜底自退（见 armNativeUpdaterQuit）。
+      onNativeUpdaterQuitting: armNativeUpdaterQuit,
     });
     // Module-level ref so will-quit can read the update state for the quit-
     // confirmation exemption (design 14 D2).
@@ -3821,6 +3936,15 @@ if (!gotTheLock) {
         inFlight: () => runtimeOperation,
       },
       bundledRuntimeVersion: bundledVersion,
+      // 2026-12 合并（main 的插件受保护集合判定，design 21 §6.11）：core 的
+      // localProtectionFacts 需要内建工作区路径（resolveActiveRuntime 第二参）、
+      // 运行时线锚锁文件路径叶与更新退出腿回撤叶——三者都是宿主事实/生命周期，
+      // 归装配侧（core 不碰 Electron paths；回撤叶与上方 armUpdaterQuit/
+      // disarmUpdaterQuit 同一实现——I 组状态订阅在武装期间收到失败/相位离开
+      // downloaded 时调用，叶自身幂等）。
+      builtinDshWorkspacePath: builtinDshWorkspace,
+      pinnedRuntimeLockfilePath: () => resolvePinnedRuntimeLockfile(),
+      disarmUpdaterQuit,
       confirmRegistryOriginSwitch: async (currentOrigin, nextOrigin) => {
         const win = mainWindow;
         if (win === null || win.isDestroyed()) return 'unavailable';

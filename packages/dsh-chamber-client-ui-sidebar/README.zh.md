@@ -18,7 +18,7 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   槽位台账镜像为 `{id, order, label}` 元数据（label thunk 读取时解析、仅在
   变化时通知），外壳为每条渲染一行 `PanelRow`，点击调用
   `ctx.layout.selectPanel(id)`。上游出厂为空列表，故该区默认不可见；投影与
-  接线由 `test/panel-source.test.ts` 与 `test/panel-wiring.test.ts` 钉死。
+  接线由 `test/plugin-kernel/panel-source.test.ts` 与 `test/plugin-kernel/panel-wiring.test.ts` 钉死。
 
 ## 结构
 
@@ -128,12 +128,15 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   来源头自己的拒绝理由），取代此前只有 `title` 的惰性色点——因此 rail 上也能
   切换来源；彩色点与活动 accent 环一字未改（含几何）。
 
-## 打开意图闸门与工作区回声（design 05 §2.2.1，2026-12）
+## 打开意图闸门、工作区回声与会话回声（design 05 §2.2.1，2026-12）
 
 本包持有页面级打开意图槽（`shared/open-intent.ts`——与 `pending-click.ts` 同款
 vite shared 单例纪律，因为目标实例自己的 ctx 也要读它）及其供 App 层消费的纯
-规则，以及工作区回声账本规则（`shared/workspace-echo.ts`）与上报点
-（`client/SidebarRoot.tsx`）。由此有两个用户可见面：
+规则，工作区回声账本规则（`shared/workspace-echo.ts`，含位置锚点）与
+**唯一**上报点（`shared/workspace-mutations.ts`——应用内任何工作区变更都经它：
+侧栏对话框与 Git worktree 插件的 create/adopt/recovery 同路），以及会话回声账本
+（`shared/session-echo.ts`）与它自己的唯一出口（`shared/session-mutations.ts`）。
+由此有三个用户可见面：
 
 - **意图闸门**：某来源有在途 open 时，只有它的当前会话**就是**请求的那个
   会话才投影 `current`（`projectableCurrent`）——冷 boot 期间运行时自选的
@@ -144,11 +147,33 @@ vite shared 单例纪律，因为目标实例自己的 ctx 也要读它）及其
 - **回声工作区行**：从本侧栏新建的工作区立刻出现在列表里，不等任何挂载基线
   带来它：该行带真实宿主 id（**不带 `synthetic`**，故工作区级动作照常可用）、
   与同路径合成组相遇时原位替换后者，并在该来源 push 列出它后交由权威行接管
-  （05 §2.2.1）。同一通道还承载撤销/改名两半：`workspace.delete` 成功后
+  （05 §2.2.1）。Git 创建 worktree 的那次事实带位置锚点（`afterWorkspaceId` = 其主
+  checkout），行因此落在主 checkout 之后而不是列表尾部；它的 git flag 由出口的
+  `beforePublish` 在**事实之前**写好，行因此生来就是 worktree 形态，不会先渲染成
+  普通 workspace 再翻转；adopt 另带分支名标题提示，行生来就是最终标签。
+  同一通道还承载撤销/改名两半：`workspace.delete` 成功后
   `reportWorkspaceRemoved`（没有它，未挂载来源上的 create → delete 会留下一个
   带真 id 的幽灵行直到 TTL 到期）、`workspace.rename` 成功后
   `reportWorkspaceRenamed` 带新标题（回声行标题是路径 basename，否则改名前
   看起来完全没生效）——两者都由 App 施加到同一个账本。
+- **回声会话行**：workspace 行的「+」与会话行的 fork / archive 动词经**该来源
+  自己的 unary client** 建改会话，新行因此只能靠宿主 `api-session/added` 的
+  **异步**广播进投影——该来源的壳未挂载时（基线收割后的稳态：推送过的工作区行仍是
+  真实行、「+」仍可点）根本收不到广播。紧跟在 open 之后的那次挂载 push 会用一份
+  **可能还不含该 id** 的 summaries store 整份替换聚合，30s unary 兜底的 merge 又保留
+  被冻结的推送工作区成员位，于是新 id 最多只能作为未归属散落行出现——而官方临时
+  blank 行不允许这样渲染。因此成功创建同时发布一条单向事实
+  （`shared/session-mutations.ts`：侧栏「+」/fork/archive 与 Git 插件的会话创建），
+  App 把**宿主 id** 记入渲染端账本并把它并入所属工作区（`withSessionEcho`：先按
+  宿主 workspaceId、再按 canonical path），随后请求该来源的官方 session-list 刷新
+  （仅挂载壳有这条 seam），并在权威成员位命名该 id 时立刻退休（挂载 push，或未挂载
+  来源的兜底拉取）。**blank 语义刻意不被覆盖**——暂存行仍只在它是该来源 current 时
+  渲染；窗口内"创建后立刻归档"由同一出口的撤下事实上报。成员位插在该工作区**头部**，
+  与宿主 `attachSession` 的顺序一致（`[sessionId, ...rest]`），行不会先渲染在尾部、
+  收敛时再跳上去。这条撤下事实同时记一条本地**归档墓碑**：壳未挂载的来源会继续列出
+  那条已归档的行（unary 兜底根本没有归档 wire，mounted merge 又冻结上次推送的集合），
+  墓碑因此按 id 过滤它，直到**权威**归档集命名该 id（挂载 push）；租约由每一份仍在列
+  它的降级列表续期，归档管理器仍只读权威集。
 
 ## 数据纪律
 

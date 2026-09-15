@@ -92,7 +92,13 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
 - 已连接来源的聚合拉取失败时以错误行呈现（不冒充"无工作区"）；全部来源
   断开时显示空态提示。
 - 保留官方侧边栏的：logo 行、New Session（作用于当前活动来源）、折叠
-  （wide/rail）状态机、foot（footer.action + settings 孔位）。
+  （wide/rail）状态机、foot（footer.action + settings 孔位）。foot 的座位契约
+  （2026-09-13 审计补记）：`sidebar.footer.action` 是 **list 座**（`contract/slots.ts`），
+  多个注册项共用同一行 ⇒ 这一行由 chamber 补 4px 间距（官方块本身无 gap，两个 occupant
+  会零间距相接；该 4px 是侧栏/本表的图标簇节奏——「4px = G1-4 两个 24px 命中盒的
+  下限」一说已随 2026-09-14 的命中盒整体回退作废）；纵向（footer.action 行 ↔
+  settings 座）仍按官方契约由 occupant 自己的 margin 承担（settings 触发器
+  `margin: 4px -2px` / rail `8px 0 10px` 即该契约的既有先例）。
 - 当前活动来源以视觉强调（如行高亮/侧边标记），与其余来源同列表呈现。
 - 来源分组头可**点击**（非当前来源）→ 切到该来源 shell（不打开会话；见 §2.2）。
 
@@ -147,7 +153,7 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
   悬停显示**信息卡片**（标题/会话数/相对时间/状态点/复制标题，06 §7）。
 - New Session → 当前活动来源新建会话。
 
-#### 2.2.1 打开意图与工作区回声（2026-12 修订；两项真机反馈）
+#### 2.2.1 打开意图、工作区回声与会话回声（2026-12 修订；三项真机反馈）
 
 > 背景：N-ctx 下"用户意图"比官方运行时的默认收敛**到得晚**，两条真实反馈都由
 > 此产生：①切到远程 server 的会话时先闪出一个"新会话"；②在某来源上新建工作区
@@ -206,13 +212,19 @@ runner，App.tsx 里恰好这两处调用点。**深链不在其中**：深链�
    因此丢弃被更新的请求：静默 resolve（被放弃不是失败，行内错误面归最新那次），
    记录随来源退役清除。首请求永远照常分发（记录为空时不判定）。
 
-**工作区回声（workspace echo）**：侧栏在某来源上建好工作区后（unary
-`workspace.create` 返回宿主 workspaceId），经 `chamberBridge.reportWorkspaceCreated`
-上报，App 记入渲染端账本（不持久化 / 不轮询 / 不写宿主），并在**投影的唯一汇合点**
-（`deriveServerWorkspaces` 之前套一层 `withWorkspaceEcho`）把该行并入。同一通道也
-承载**撤销/改名回声**（见 §3）：该来源的 `workspace.delete` / `workspace.rename` 成功后，
-侧栏分别经 `reportWorkspaceRemoved` / `reportWorkspaceRenamed` 上报，App 只把事实施加
-到该账本（`removePendingWorkspace` 删条目 / `renamePendingWorkspace` 改标题）——照旧
+**工作区回声（workspace echo）**：**应用内任何**工作区变更都走 chamber 侧的
+**唯一出口** `packages/dsh-chamber-client-ui-sidebar/src/shared/workspace-mutations.ts`
+——`createWorkspaceForSource` / `deleteWorkspaceForSource` / `renameWorkspaceForSource`
+各做一次 wire 调用，随即上报对应事实（unary `workspace.create` 返回宿主
+workspaceId ⇒ `chamberBridge.reportWorkspaceCreated`；delete / rename 成功后分别
+`reportWorkspaceRemoved` / `reportWorkspaceRenamed`）。侧栏自己的对话框（添加工作区 /
+删除确认 / 改名）与 **Git worktree 插件的 create / adopt / 两类 recovery** 都经它，
+因此不存在"某个入口忘了发事实"的形态（2026-12 **第二入口**真机反馈：用 Git 建的
+worktree 行要等用户点开那个服务器才出现——同一现象的第二个生产者）。
+App 记入渲染端账本（不持久化 / 不轮询 / 不写宿主），并在**投影的唯一汇合点**
+（`deriveServerWorkspaces` 之前套一层 `withWorkspaceEcho`）把该行并入；撤销 / 改名
+事实由 App 施加到同一账本（`removePendingWorkspace` 删条目 /
+`renamePendingWorkspace` 改标题）——照旧
 不新增读通道、不写宿主。为什么
 必须回声：未挂载来源只有 unary 兜底（工作区分组由会话 cwd 反推——**刚建的空
 工作区没有任何会话，结构上不可见**），已推送来源的工作区集又被
@@ -228,6 +240,24 @@ unary 轮询它——所以新建后那次 `requestRefresh` 两条分支都刷�
 - 条目随来源生命周期 / TTL（10min）收敛（TTL 挂在三处时钟上：本次 create、权威
   push、以及未挂载来源唯一的 30s unary 兜底拉取）；回声行**不带 `synthetic`**——
   它的 id 是真的，工作区级动作照常可用。
+- **位置锚点（`afterWorkspaceId`，2026-12 第二入口修订）**：Git 插件在宿主上把新
+  worktree 插到其主 checkout 之后（`workspace.insertBefore`），该次 create 的事实
+  因此带锚点，`withWorkspaceEcho` 把回声行插到该投影行之后（同一锚点的多条按账本
+  序）；缺省（侧栏自己的创建）仍追加到列表尾部。渲染序是 design 08 §3.3 连续家族
+  不变式的载体（拖拽裁决器直接读它），所以不留"先渲染在末尾、挂载收敛后再跳上去"
+  的窗口。两条边界：锚点行不在投影里（权威集尚无该行）时退化为追加尾部，**绝不
+  丢行**；**同 path 合成组被原位替换时锚点不适用**——替换规则优先（目录不跳动，
+  见上条），家族位置由挂载 push 收敛。
+- **标题提示（`title?`，2026-12 复审修订）**：adopt 这类"宿主标题将由后续 rename
+  改写"的创建随事实带上**最终标题**（Git adopt 用分支名），回声行因此生来就是最终
+  标签，不会先显示路径 basename、几个 RPC 之后再翻转；缺省仍是路径 basename 规则，
+  权威 follow 基线两者都压过。
+- **装饰先于事实（`beforePublish`，2026-12 复审修订）**：任何"回声行首帧就必须
+  成立"的事实（Git 的工作树 flag、adopt 的未注册块收敛）由唯一出口在**事实发布
+  之前**的同一同步续体里写好，而不是等 create 返回后再补——否则那两个更新分属
+  App 状态与外部 store，能否落在同一次提交取决于调度器，行会先以普通 workspace
+  形态出现再翻转。装饰抛错只记录不中止：宿主上的创建已经提交，一个渲染期装饰
+  绝不能把成功变成 saga 的失败/补偿分支。
 - **替换的真实代价（已登记）**：换的是行的**身份**，因此按
   `sourceId/workspaceId` 键控的 per-workspace 视图偏好（折叠态 `folded`、updated 模式的
   `updatedOrder`/`sessionUpdatedAtByAccount`）不会跟随新 id——旧合成键留在存储里不再命中
@@ -240,14 +270,112 @@ unary 轮询它——所以新建后那次 `requestRefresh` 两条分支都刷�
   可用）。回声让投影的 id 集合发生变化，因此新建工作区的 **git 行也随之立即出现**，
   而不是等用户点开该来源。
 
+**会话回声（session echo）**：**应用内任何**会话创建同样走 chamber 侧的唯一出口
+`packages/dsh-chamber-client-ui-sidebar/src/shared/session-mutations.ts`——
+`createSessionForSource` / `forkSessionForSource` 各做一次 wire 调用，随即上报
+`chamberBridge.reportSessionCreated`（宿主返回的 sessionId、目标 workspaceId 与官方
+`blank` 事实；fork 另带 `parentSessionId` 与递增标题提示），
+`archiveSessionForSource` 上报 `reportSessionRemoved`（单一回声的**撤下半**：创建后
+立刻归档的行不会留到 TTL）。侧栏 workspace 行的「+」、会话行菜单的 fork 与 archive、
+以及 Git 插件的会话创建（create / adopt / 两类 recovery）都经它——与工作区回声同一条
+"唯一出口"纪律（第二入口教训见下）。
+App 记入渲染端账本，并在同一汇合点按固定顺序并入：`withPendingArchives`（归档墓碑，
+最外层，先藏掉本页刚归档的 id）→ `withWorkspaceEcho`（补齐可能刚建的工作区行）→
+`withSessionEcho`（把新会话挂进那一行），三步都在 `deriveServerWorkspaces` 之前。
+为什么必须回声：unary 侧建出来的会话要进
+投影只有两条生产者路径，而两条都到不了——①挂载壳的官方 summaries 只在连接世代拉取，
+此后唯一的外源是宿主 `api-session/added` 的**异步广播**：竞态窗内紧接着的那次挂载
+push 会拿还不含它的 store **整份替换**聚合，行随即消失；②来源未挂载时（基线收割后的
+稳态：工作区行仍是上次推送的**真实**行，「+」照常可点）根本收不到广播，而 30s unary
+兜底的 mounted merge 又保留被冻结的推送工作区成员位，新会话只能以**未归属散落行**
+出现——它仍是官方临时 blank 行时（`!blank || current` 规则）不进导航。真机形态即
+"新建的会话不出现，切到那个服务器（挂载 → follow 基线）才刷新出来"。回声**不是第二
+事实源**：
+
+- **行 + 成员位一起并入**：成员位先按宿主 workspaceId 命中，其次按 canonical path 命中
+  合成 cwd 组（未挂载来源没有宿主 id）；两者都不命中时行仍渲染，落在未分组桶。
+  **成员位插在该工作区的头部**（宿主 `attachSession` 就是 `[sessionId, ...rest]`，
+  而 manual 默认渲染序正是这个数组）：追加到尾部会让行先渲染在末尾、权威基线到达时
+  再跳回头部——正是工作区回声用位置锚点消除的那种位置跳动。
+- 权威**归属**胜出：该 id 出现在任一工作区的 `sessionIds` 里即从账本退休
+  （`reconcilePendingSessions`）——挂载 push 在 ready 门之前执行；**未推送**来源的
+  30s 兜底拉取同样收敛（它的合成组就是该视图的工作区）。已推送来源**刻意不做**兜底
+  收敛：那一支的投影工作区仍是被冻结的权威行，用合成行收敛会把行抛进未分组桶。
+- **投影合并本身防御**：聚合已列出的 id 不重复插行，已被归属的 id 不插成员位——
+  一条陈旧账本条目永远不会复制或搬移一行；blank 语义**照旧不覆盖**（回声只让行可达，
+  「+」随后那次 open 会把该来源切为 current 而让暂存行可见）；fork 子会话继承内容，
+  按普通行渲染。
+- **收敛臂**：事实到达时 App 立刻请求该来源挂载壳的**官方 session-list 刷新**
+  （`chamberBridge.requestSessionListRefresh`——只有挂载壳有这条 seam，它强制
+  summaries 重读宿主语料，同时覆盖"广播丢了"与"仍在竞态窗内"两种形态）；条目随来源
+  生命周期与 TTL（10min，与工作区回声同量级）收敛。
+
+**归档墓碑（local archive tombstone，同一修订）**：侧栏的归档动词经同一个唯一出口
+（`archiveSessionForSource`）发布 `reportSessionRemoved`，App 随即记一条本地墓碑
+（`shared/session-echo.ts` 的 `PendingArchive`）并把它并入该来源的
+`archivedSessionIds`（`withPendingArchives`，施加在**最外层**——同一 id 的创建回声行
+也一并被可见性规则藏掉）。为什么需要：**已挂载**来源的归档本就由宿主 follow upsert
+收敛（生产端 push 带新归档集，行驶即消失）；**未挂载**来源则没有任何活通道——
+`commitAggregatePull` 的 mounted merge 冻结上次推送的 `archivedSessionIds`，unary
+兜底根本没有归档 wire（已登记 KNOWN DEGRADATION），于是刚归档的行照样留在列表里、可点，
+点开落入官方"当前会话已被清空"的空视图。墓碑**只覆盖本页自己归档的 id**：
+
+- 收敛只认**权威**归档集（挂载 push 且 `archiveSetKnown === true`）命名该 id——degraded
+  视图的空集绝不能用来收敛（那会把墓碑全撤掉）；
+- 租约挂在 30s unary 兜底拉取上：只要那份（冻结/降级）视图还在列该会话，就继续藏它；
+  回收是全账本的（任何一次拉取都清所有过期租约），因此顺序是**先续租、再回收**——
+  否则一个离线超过租约窗的来源重连后首个列表还没续租就被别的来源清掉，归档行回浮。
+  租约窗口 10min：**每次列出该 id 的拉取都会续租**（先续租、再回收，见上），因此正常
+  在线的未挂载来源上墓碑不会过期。唯一会让它回浮的路径是"来源离线超过窗口、其间被其它
+  来源触发的全账本回收清掉"——结果与修复前相同（行重新可点），重挂载即收敛；来源退役
+  同样回收。TTL 是泄漏护栏，不是收敛预算；
+- `archiveSetKnown` 刻意不动：归档管理器仍只按权威集工作（它不列这条墓碑），墓碑只是
+  **导航可见性**事实，不冒充归档集来源。
+
 **登记残余（本修订不解决）**：
 
+- 会话侧的**外部变更**（另一个客户端、宿主侧直接改动）仍只有两条收敛通道：已挂载来源
+  的宿主广播 / 挂载 push，以及未挂载来源的 30s unary 兜底——**未挂载来源上刚在别处
+  出现的会话行仍要等该来源被点开**（它的工作区成员位只存在于挂载 follow 基线里），
+  这是 §2.3 已登记的整源降级面的一部分；本修订覆盖的是**应用内**发起的创建。**别处
+  归档**的会话同理（本页自己归档的已由上面的归档墓碑覆盖），且墓碑租约到期后那条行会
+  回浮，直到该来源被挂载。
 - 未被早开臂抢先时，宿主上仍会留下一个 blank 会话（同一工作区复用，不增长；后台
   预热 / 基线收割 boot 本来也会各造一个）。根治需要上游把"当前会话选择"的持久化
   按 shell 作用域拆开——见 `docs/progress/todo/client-store-scoping-upstream.md`；
-- 未挂载来源的**工作区集合**仍然只有"回声 + 挂载 push"两个来源：别处创建 / 改名 /
-  删除的工作区、以及工作区**顺序**，仍要等该来源被挂载（用户点开）才收敛——这是
-  §2.3 已登记的降级面；本修订刻意不引入"每次变更付一次后台 boot"的收敛臂。
+- 未挂载来源的**工作区集合**仍然只有"回声 + 挂载 push"两个来源：**别处**（另一个
+  客户端、或宿主侧直接改动）创建 / 改名 / 删除的工作区、以及工作区**顺序**，仍要
+  等该来源被挂载（用户点开）才收敛——这是 §2.3 已登记的降级面；本修订刻意不引入
+  "每次变更付一次后台 boot"的收敛臂。**应用内**发起的工作区变更已由上面的唯一出口
+  覆盖（2026-12 第二入口修订），不属于本残余。
+
+**被否方案（Rejected alternatives，2026-12 第二入口修订）**：
+
+- **逐调用点各发一次回声**（2026-12 修复的原形态，只挂在侧栏对话框上）：正是本次
+  缺陷的成因——Git 的 create / adopt / 两类 recovery 四个调用点漏发，且未来任何新
+  入口都可能再漏；由单一出口取代。
+- **新增"工作区读通道"**（让未挂载来源直接列工作区）：`workspace.list` 已被上游删除，
+  在 chamber 侧重造一份读面等于把执行面事实搬进侧栏/控制面（违 §2.3 数据纪律与
+  AGENTS 边界）；被否。
+- **每次工作区变更付一次后台挂载**：与"稳态 ≤1 常驻壳 / 首启每源一次后台 boot"的
+  成本政策冲突（STATUS 已登记"不做"）；被否。
+- **回声行一律追加尾部**（锚点引入前的行为）：会把 Git 新建的 worktree 先渲染在列表
+  末尾、挂载收敛时再跳一次，并让 design 08 §3.3 的连续家族不变式在窗口内失真；
+  被锚点方案取代。
+- **会话侧只依赖宿主 `api-session/added` 广播收敛**（不加本地回声）：真机反馈即"新建
+  的会话不出现，切到那个服务器才刷新出来"——广播与那次 open/挂载 push 是竞态，且未挂载
+  来源收不到任何广播；被否。
+- **会话侧缩短 unary 兜底周期 / 每次创建后再拉一次**：兜底的 mounted merge 保留被冻结的
+  推送工作区成员位，新会话只能落到未归属桶（位置跳动），且 blank 行不进导航——解决不了
+  可见性，只多了 RPC；被否。
+- **每次会话创建付一次后台挂载（复用基线收割）**：与"稳态 ≤1 常驻壳"的成本政策冲突
+  （与工作区回声同款裁决），且温壳场景下不解决 summaries 竞态；被否。
+- **归档侧不加本地墓碑、只等挂载收敛**：未挂载来源没有任何通道带出新的归档集（mounted
+  merge 冻结、兜底无归档 wire），真机形态即"归档了但那一行还在"，且可点、点开是空
+  视图；被否。
+- **为归档侧新建一条读通道 / 每次归档付一次后台挂载**：上游不存在会话级归档 wire，
+  自建读面违 §2.3 数据纪律；后台挂载与"稳态 ≤1 常驻壳"的成本政策冲突（与其它回声
+  同款裁决）；被否。
 
 ### 2.3 数据纪律
 
@@ -344,11 +472,15 @@ unary 轮询它——所以新建后那次 `requestRefresh` 两条分支都刷�
   （意图槽 + 投影/揭示纯规则）、`.../src/shared/aggregate-store.ts`（桥接单例 +
   回声事实通道：`WorkspaceCreatedFact`/`reportWorkspaceCreated` 等）、
   `.../src/shared/workspace-echo.ts`（回声账本 +
-  union/去重纯规则）、`.../src/client/early-open.ts`（boot 期早开臂）、
+  union/去重/锚点插入纯规则）、`.../src/shared/workspace-mutations.ts`（**唯一事实
+  出口**：create/delete/rename 的 wire 调用与回声事实，2026-12 第二入口收口）、
+  `.../src/client/early-open.ts`（boot 期早开臂）、
   `.../src/client/index.ts`（每个 ctx 挂一次早开臂）、
-  `.../src/client/SidebarRoot.tsx`（create 成功后上报回声）、
-  `packages/renderer/src/App.tsx`（arm/release、账本与退休、投影门、揭示门判定、
-  holdVeil 传入）、`packages/renderer/src/components/InstanceView.tsx`（遮罩合成）、
+  `.../src/client/SidebarRoot.tsx`（三个变更点经唯一出口，自身不再直接上报）、
+  `packages/dsh-chamber-client-ui-git/src/shared/coordinator.ts`（Git create / adopt /
+  recovery 经唯一出口；create 带位置锚点，flag/未注册块由 beforePublish 装饰）、
+  `packages/renderer/src/App.tsx`（arm/release、账本与退休（含锚点）、投影门、
+  揭示门判定、holdVeil 传入）、`packages/renderer/src/components/InstanceView.tsx`（遮罩合成）、
   `packages/renderer/src/shell.ts`（被取代请求的丢弃：`lastRequestedSession`）。
 
 ## 3. 桥接层（chamberBridge，renderer 共享单例）
@@ -378,7 +510,11 @@ interface ChamberServerAggregate {
   updatedAt: number
 }
 interface OpenSessionRequest { sourceId: string; sessionId: string }
-interface WorkspaceCreatedFact { sourceId: string; workspaceId: string; path: string }
+interface WorkspaceCreatedFact {
+  sourceId: string; workspaceId: string; path: string
+  afterWorkspaceId?: string        // 位置锚点（Git 新 worktree 紧跟其主 checkout）；缺省 = 追加尾部
+  title?: string                   // 创作意图标题（Git adopt 的分支名）；缺省 = 路径 basename
+}
 interface WorkspaceRemovedFact { sourceId: string; workspaceId: string; path: string }  // path 尽力而为（快照未报告该行时为空串；账本同时按 workspaceId 匹配）
 interface WorkspaceRenamedFact { sourceId: string; workspaceId: string; title: string }
 interface InstanceRuntimeReport {
@@ -852,12 +988,18 @@ export const chamberBridge: {
   单飞 + 共享 pollGatewayReady 轮询，多用户中断确认文案）+ **单一插件管理模型
   视图（唯一 `PluginDialog` 组件）**：统一区域 = 诊断横幅
   （状态名 + message 去重）→ chamber 内建组件表（注册表驱动的宿主包行，
-  当前四行 client-graph / git-worktree / archive-cleanup / open-in，badge 化；另有 gateway 源才出现的
+  注册表现有四行 client-graph / git-worktree / archive-cleanup / open-in，其中 open-in 标
+  `localOnly`：**该行只列在本地目标**，非本地目标的行集 = 该目标适用行（local 4 行 /
+  ssh·gateway·http 3 行；2026-12 裁决，详见 design 21 §6.6）；另有 gateway 源才出现的
   移动端 client 行，随发行物注入）→ 第三方插件区（已安装列表 + 逐行卸载 + 添加：spec 输入 + npm 搜索 +
-  文件夹导入）→ 恢复/动作行；gateway 添加双通道（registry spec 直装 +
+  文件夹导入；**行集 = 该目标 profile 的依赖表**（local/ssh/gateway；http 直连没有 `rows` 面，只有
+  Loader 清单分类）——安装自带组合与 chamber 播种物不在此列，它们分别属于运行时基线与上面的
+  chamber 内建组件表（详见 design 21 §6.11.5 的 2026-09 行集修订））
+  → 恢复/动作行；gateway 添加双通道（registry spec 直装 +
   文件夹直推）已接线；「变更记录」区不渲染（后端 journal/备份保留）；恢复撤销
   仅 gateway（崩溃/恢复态恢复横幅）；http 直连只读不变；恢复提示 r0–r4 文案双
-  后端同权；契约与余留见 design 21 §6.6/§7。
+  后端同权；契约与余留见 design 21 §6.6/§7；**受保护集合与代耦合**（官方 opt-in 层可装可卸、
+  受保护行只读可见、角色徽标、代不匹配提示、旧 gateway 只读回退）见 design 21 §6.11。
 - 操作全走现有 `desktop_ssh_*` IPC 与 `/api/connections`；表单收非秘密
   元数据（id/label/kind/transport/insecureHttp/host/user/sshPort/remotePort/
   serviceName，id 白名单
@@ -994,7 +1136,8 @@ export const chamberBridge: {
   - **host 包与 seed（设计 08/09/20/24）**：`packages/dsh-chamber-seed-client-graph`、
     `packages/dsh-chamber-seed-git-worktree`、`packages/dsh-chamber-seed-archive-cleanup`
     与 `packages/dsh-chamber-seed-open-in`（后者 `localOnly`：只 seed 进本地 profile，
-    不进远端 seed 也不随 gateway 上传，design 20 §6）都提交 esbuild `dist/index.js`
+    不进远端 seed 也不随 gateway 上传，插件页亦只在本地目标列出该行——非本地目标的行集 =
+    该目标适用行，design 20 §6）都提交 esbuild `dist/index.js`
     （`@deepseek-ai/*` external）；控制面 `host-graph-seed.ts` 幂等 seed 所有
     已构建包进 `$DSH_HOME/profiles/web/node_modules/@dsh-chamber/*/`，并把
     `client-graph` / `git-worktree` / `archive-cleanup` / `open-in` insert 合并到单一

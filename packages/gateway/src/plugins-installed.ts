@@ -36,7 +36,17 @@
  */
 
 import { join } from 'node:path'
-import { readPrivateFileNoFollow } from '@dsh-chamber/control-plane'
+import {
+  CHAMBER_HOST_PACKAGES,
+  derivePluginRows,
+  deriveProtectedSet,
+  PLUGIN_MATERIALIZED_VALUE_MASK,
+  isMaterializedValue,
+  readInstalledVersion,
+  readPrivateFileNoFollow,
+  resolveRuntimeFamily,
+} from '@dsh-chamber/control-plane'
+import type { PluginRow, ProtectedSet } from '@dsh-chamber/control-plane'
 
 /** Managed dsh home directory name under the gateway stateDir (the runtime
  * manager spawns the managed instance with DSH_HOME=<stateDir>/dsh-home). */
@@ -54,27 +64,70 @@ export const INSTALLED_MANIFEST_MAX_BYTES = 1024 * 1024
 /**
  * Mask replacing `file:` dependency VALUES in the read projection. Keeps the
  * `file:` prefix so the value's materialize classification survives the
- * projection. Mirrors the desktop's plugin-sync.ts MATERIALIZED_VALUE_MASK
- * literal ('file:<hidden>'); the desktop/gateway single-source merge into the
- * control-plane shared whitelist module happens with the A1 migration (plan
- * Phase 4.3) — chamber-installed.test.ts pins both literals together until
- * then (drift guard).
+ * projection. Single source = control-plane `PLUGIN_MATERIALIZED_VALUE_MASK`
+ * (desktop plugin-sync.ts re-exports the same constant);
+ * chamber-installed.test.ts still pins the two exported literals together.
  */
-export const MATERIALIZED_VALUE_MASK = 'file:<hidden>'
+export const MATERIALIZED_VALUE_MASK = PLUGIN_MATERIALIZED_VALUE_MASK
 
-/** Is this dependency spec a local-path `file:` value? Case-insensitive,
- * like the desktop materialize classifier's file: branch (isMaterializeSpec).
- * Only `file:` forms can name gateway-local paths on this profile (the
- * gateway write flows land registry or file: entries); the wider materialize
- * classifier (link:/relative/absolute/`~/`) moves here with the shared
- * whitelist module (plan Phase 4.3). */
+/** Is this dependency spec a local-path `file:` value? Case-insensitive (kept for
+ *  the narrow questions that really mean `file:`). */
 export function isFileValue(spec: string): boolean {
   return /^file:/i.test(spec)
 }
 
+/**
+ * Masking predicate: **the same ruler the role classifier uses** — `file:`/`link:`/
+ * relative/absolute/`~` values all name a machine-local path (2026-12 review: masking
+ * only `file:` leaked `link:`/absolute values into `dependencies` and `rows[].spec`).
+ * The mask keeps the `file:` prefix, so the name-based diff and both spec classifiers
+ * still classify the value as materialized.
+ */
+function isMaskableValue(spec: string): boolean {
+  return isMaterializedValue(spec)
+}
+
 export type InstalledResult =
-  | { ok: true; dependencies: Record<string, string>; bundles: string[]; profileExists: true }
+  | {
+    ok: true
+    dependencies: Record<string, string>
+    bundles: string[]
+    /** Read-face row projection (design 21 §6.11.5, 2026-09 revision): one row per
+     *  declared dependency, each with role + the SERVER-computed `protected` flag
+     *  (the gateway is the authority for a gateway target — the family facts live
+     *  here, not in the desktop). B₀ and the seed registry only classify rows;
+     *  the managed profile's installation baseline is not part of this list. */
+    rows: PluginRow[]
+    profileExists: true
+  }
   | { ok: false; code: 'profile_absent' | 'profile_corrupt'; error?: string }
+
+/** Runtime facts the protected-set derivation needs (design 21 §6.11.1): the
+ *  effective workspace path + its version, or null before the manager exists. */
+export type GatewayRuntimeFacts = { path: string; version: string | null }
+
+/** S 分量：chamber 播种注册表名（与 desktop 同源，control-plane 单一来源）。 */
+const SEED_NAMES: readonly string[] = CHAMBER_HOST_PACKAGES.map(descriptor => descriptor.insert.name)
+
+/** B₀ ∪ S only (no family) — the degraded-ladder set (design 21 §6.11.3). */
+export function deriveBootProtectedSet(): ProtectedSet {
+  const derived = deriveProtectedSet({ seedNames: SEED_NAMES, familyNames: null })
+  if (!derived.ok) throw new Error(`chamber seed registry cannot form a protected set: ${derived.reason}`)
+  return derived.set
+}
+
+/**
+ * Derive the server-side protected set from the ACTIVE runtime's lockfile
+ * closure. F cannot be derived ⇒ null (the write faces fail closed; the read
+ * face then conservatively marks official-scope rows read-only).
+ */
+export function gatewayProtectedSet(facts: GatewayRuntimeFacts | null): ProtectedSet | null {
+  if (facts === null) return null
+  const family = resolveRuntimeFamily(facts.path)
+  if (!family.ok) return null
+  const derived = deriveProtectedSet({ seedNames: SEED_NAMES, familyNames: family.names })
+  return derived.ok ? derived.set : null
+}
 
 export interface ChamberInstalled {
   /** Project the managed web profile's plugin manifest (design 21 §6.2). */
@@ -106,8 +159,15 @@ function readStringArray(record: Record<string, unknown>, path: string[]): strin
   return current.filter((item): item is string => typeof item === 'string')
 }
 
-export function createChamberInstalled(stateDir: string): ChamberInstalled {
+export function createChamberInstalled(
+  stateDir: string,
+  /** Lazy runtime-facts accessor (the gateway wiring passes
+   *  `() => deps.manager()?.resolveWorkspace() ?? null`). Absent ⇒ the read
+   *  face conservatively marks official-scope rows read-only. */
+  runtimeFacts?: () => GatewayRuntimeFacts | null,
+): ChamberInstalled {
   const manifestPath = join(stateDir, MANAGED_DSH_HOME_DIR, INSTALLED_PROFILE_DIR, 'package.json')
+  const profileDir = join(stateDir, MANAGED_DSH_HOME_DIR, INSTALLED_PROFILE_DIR)
   return {
     read(): InstalledResult {
       let text: string
@@ -141,15 +201,49 @@ export function createChamberInstalled(stateDir: string): ChamberInstalled {
           // String values only, kept raw — except file: values, which are
           // masked (gateway-local paths never leave this module).
           if (typeof spec !== 'string') continue
-          dependencies[name] = isFileValue(spec) ? MATERIALIZED_VALUE_MASK : spec
+          dependencies[name] = isMaskableValue(spec) ? MATERIALIZED_VALUE_MASK : spec
         }
       }
-      return {
-        ok: true,
-        dependencies,
-        bundles: readStringArray(record, ['dsh', 'profile', 'bundles']),
-        profileExists: true,
+      const bundles = readStringArray(record, ['dsh', 'profile', 'bundles'])
+      // The accessor resolves the runtime workspace, which THROWS on corrupt
+      // override/pointer metadata (design 18). The read face must survive that:
+      // a throwing projection would kill the §6.8 r1 recovery read with a
+      // generic 500 (2026-12 review). Null facts ⇒ B₀ ∪ S only.
+      let facts: GatewayRuntimeFacts | null = null
+      if (runtimeFacts !== undefined) {
+        try {
+          facts = runtimeFacts()
+        } catch {
+          facts = null
+        }
       }
+      // F unknown (no wiring / no manager yet) ⇒ B₀ ∪ S is still a constant and is
+      // ALWAYS applied. `protected` stays exactly "name ∈ P": the official-scope
+      // INSTALL conservatism is a capability of the write face (refused with its own
+      // code), not a read-face protection fact — marking such rows protected would
+      // hide a remove the write face allows (2026-12 review).
+      const derived = gatewayProtectedSet(facts)
+      const protectedSet = derived ?? deriveBootProtectedSet()
+      const rows = derivePluginRows({
+        dependencies,
+        bundles,
+        protectedSet,
+        seedNames: SEED_NAMES,
+        // Memoized per call (see the desktop twin): the rows derivation asks once
+        // per dependency, and a large profile must not pay one disk read per row.
+        installedVersion: (() => {
+          const cache = new Map<string, string | null>()
+          return (name: string) => {
+            if (!cache.has(name)) cache.set(name, readInstalledVersion(profileDir, name))
+            return cache.get(name) ?? null
+          }
+        })(),
+        // Same masking rule the `dependencies` projection above applies: a
+        // managed-profile `file:` value names a gateway-local path and must
+        // never reach the renderer through `rows` either (design 21 §6.2).
+        maskSpec: spec => (isMaskableValue(spec) ? MATERIALIZED_VALUE_MASK : spec),
+      })
+      return { ok: true, dependencies, bundles, rows, profileExists: true }
     },
   }
 }

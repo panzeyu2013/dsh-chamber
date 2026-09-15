@@ -7,7 +7,7 @@
  * planes are authoritative; chamber settings are app-level and disjoint).
  *
  * This module is deliberately electron-free so the decision functions are
- * unit-testable with plain node:test (see chamber-settings.test.ts). The
+ * unit-testable with plain node:test (see test/local-state/chamber-settings.test.ts). The
  * electron side effects (powerSaveBlocker / setLoginItemSettings / XDG
  * autostart / window lifecycle) live in main.ts.
  */
@@ -346,13 +346,61 @@ export function computeSupported(
  * is hide-to-tray, a recovery surface exists (tray on win/linux; Dock on
  * macOS), and no real quit is in flight. Never hide a window the user could
  * not get back to.
+ *
+ * `updateRestartArmed` (2026-12): the「重启并安装」leg has armed
+ * electron-updater's `quitAndInstall()` and the updater itself is closing the
+ * windows on its way out. That close MUST reach the window manager: on macOS
+ * Electron's `quitAndInstall()` closes every window FIRST and only quits after
+ * all of them are closed (`before-quit` therefore runs AFTER this close — the
+ * Electron 43.4.0 typings say so verbatim, and a real-machine probe on
+ * 43.4.0/darwin confirmed the `autoUpdater` `before-quit-for-update` event and
+ * the window `close` both arrive inside the `quitAndInstall()` call, before it
+ * returns and long before `before-quit`). A close swallowed here (hidden
+ * instead of closed) therefore aborts the whole install/relaunch chain: the
+ * page disappears, the process — with its local dsh child and SSH tunnels —
+ * stays alive forever, and the update never installs. While an update restart
+ * is armed this decision is always false, whatever `quitRequested` says.
  */
 export function shouldHideToTray(
   behavior: WindowCloseBehavior,
   recoveryAvailable: boolean,
   quitRequested: boolean,
+  updateRestartArmed = false,
 ): boolean {
-  return behavior === 'hide-to-tray' && recoveryAvailable && !quitRequested;
+  return behavior === 'hide-to-tray' && recoveryAvailable && !quitRequested && !updateRestartArmed;
+}
+
+/**
+ * Whether the host must take the update quit over once the native leg's grace
+ * expired (2026-12 fix, `armNativeUpdaterQuit`).
+ *
+ * macOS's native `quitAndInstall()` closes every window and then, on the
+ * observed build, stops without reaching `app.quit()` — the process would sit
+ * there windowless with the update staged. The host therefore arms a bounded
+ * fallback when the native `before-quit-for-update` arrives; this predicate is
+ * its decision, kept pure so the three guards are testable instead of asserted
+ * as source text:
+ *
+ *  - a real quit already in flight owns the exit (`before-quit` ran): doing
+ *    anything here would race the normal teardown;
+ *  - an arming that was released (restart failed / stalled / the leg never
+ *    happened) must never be followed by a self-quit;
+ *  - and the window must be GONE. That is what proves the update leg really
+ *    closed it: a live window means either the native leg never got there or
+ *    the user pulled the app back from the Dock, and yanking a visible app out
+ *    from under the user is never acceptable — the stall watchdog owns that
+ *    case and reports it honestly.
+ * @param quitRequested - `before-quit` already ran (a real exit is in flight).
+ * @param updateRestartArmed - the update leg is still armed (not disarmed by a failure push).
+ * @param windowAlive - the main window exists and is not destroyed.
+ * @returns true when the fallback should call `app.quit()`.
+ */
+export function shouldUpdaterQuitTakeOver(
+  quitRequested: boolean,
+  updateRestartArmed: boolean,
+  windowAlive: boolean,
+): boolean {
+  return !quitRequested && updateRestartArmed && !windowAlive;
 }
 
 /**

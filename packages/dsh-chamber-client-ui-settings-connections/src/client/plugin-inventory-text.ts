@@ -14,7 +14,7 @@ import type { PluginFiberPhase, PluginInventorySnapshot } from './plugin-invento
  *  view surfaces. These constants are the CLIENT-side mirror of the
  *  control-plane registry (host-graph-seed.ts CHAMBER_HOST_PACKAGES) — a client
  *  package cannot import the Node-side module, so the drift test in
- *  test/chamber-seed-drift.test.ts pins the NAME SET against the registry
+ *  test/plugin-inventory/chamber-seed-drift.test.ts pins the NAME SET against the registry
  *  source text (a new registry row must fail there, never be silently
  *  ignored). */
 export const HOST_GRAPH_PACKAGE = '@dsh-chamber/dsh-chamber-seed-client-graph'
@@ -23,8 +23,9 @@ export const GIT_WORKTREE_PACKAGE = '@dsh-chamber/dsh-chamber-seed-git-worktree'
 export const ARCHIVE_CLEANUP_PACKAGE = '@dsh-chamber/dsh-chamber-seed-archive-cleanup'
 /** Open-in host domain (design 20 §6, 2026-09-11) — the fork of upstream's
  *  open-in host half. It is `localOnly` in the registry: it exists for the
- *  local instance shape alone, and the plugin view renders that fact instead of
- *  "not injected" on remote and gateway targets. */
+ *  local instance shape alone, so every non-local target's chamber table omits
+ *  its row outright (`applicableChamberPackages`) — never a "not injected"
+ *  claim for a package that can never be seeded there. */
 export const OPEN_IN_PACKAGE = '@dsh-chamber/dsh-chamber-seed-open-in'
 
 /** The gateway-packaged mobile client entry (design 21 §6.2: the single
@@ -185,47 +186,76 @@ export interface ThirdPartyLiveState {
 }
 
 /**
- * Live state of one installed third-party package, derived from the managed
- * instance's Loader snapshot. Exact-name match (`moduleName === packageName`
- * — the historical exact-name contract for non-chamber names, mirroring
+ * Live-state for one INSTALLED row: a protected composition/seed row is part of
+ * the installation baseline (a host-side boot layer), so it is never expected
+ * to be a Loader client entry — asking for one would paint a false
+ * "restart to take effect" warning on a row that is already active (2026-12
+ * review). Such rows only reach this list when the profile itself declares them
+ * as dependencies (§6.11.5's 2026-09 row-set revision stopped projecting the
+ * B₀ ∪ S baseline into the installed list).
+ * @param snapshot - the managed instance's Loader snapshot; null (read failed /
+ *   instance not reachable) → null, never a state claim.
+ * @param row - the installed row's name plus its backend-computed role /
+ *   protection flags.
+ * @returns the row's live-state chip, or null for a baseline row or when the
+ *   snapshot answers nothing (thirdPartyLiveState).
+ */
+export function installedRowLiveState(
+  snapshot: Pick<PluginInventorySnapshot, 'entries'> | null,
+  row: { name: string; protected: boolean; role: string },
+): ThirdPartyLiveState | null {
+  if (row.protected || row.role === 'composition' || row.role === 'seed') return null
+  return thirdPartyLiveState(snapshot, row.name)
+}
+
+/**
+ * Live state of one installed package, derived from the managed instance's
+ * Loader snapshot. Exact-name match (`moduleName === packageName` — the
+ * historical exact-name contract for non-chamber names, mirroring
  * chamberRemoteKey): a profile dependency whose package mounts as a Loader
- * entry keeps the package name as its module name. Each state stays under
- * its honesty ceiling — a live claim only from an enabled + active fiber:
- *  - no matching entry AND the package is a profile LAYER (in
- *    `dsh.profile.bundles` / `localList.bundles` — `expectsLoaderEntry`) →
- *    the RUNNING instance has not mounted it yet; it activates on the
- *    instance's next restart (never a live claim);
- *  - no matching entry and NOT a profile layer (plain / client-only
- *    dependency — nothing mounts it on restart: `dsh plugin add` only adds
- *    dsh.bundle-declaring packages to the bundle layers) → null: the state
- *    cell stays neutral; "重启后生效" would be a false promise;
+ * entry keeps the package name as its module name. Each state stays under its
+ * honesty ceiling — a live claim only from an enabled + active fiber:
+ *  - no matching entry → null: the state cell stays neutral. The running
+ *    instance mounts nothing under this name, and no fact the view holds says
+ *    whether one is still coming (the bundle note below);
  *  - matched but disabled → installed, explicitly disabled (已停用);
  *  - matched + enabled + active → mounted and live (生效中);
  *  - matched + enabled + failed → the load failed (加载失败);
  *  - matched + enabled in any other phase (pending / loading / unloading /
  *    null fiber) → still loading or between lifecycles (加载中).
+ *
+ * A missing entry is neutral for EVERY row, a `dsh.profile.bundles` layer
+ * included — the layer mechanism mounts the rows the bundle's patch inserts,
+ * never an entry named after the bundle itself (2026-12 review). The profile
+ * root `cordis.yml` is an empty entry list and each bundle contributes rows
+ * through the `insert:` list of its own `dsh.bundle.patch` `cordis.patch.yml`
+ * (app-boot's profile loader composes every layer over `[]`), so the bundle
+ * package is never a composed row — only the packages its patch inserts are
+ * (the reporting row `@deepseek-ai/dsh-experimental-agent-team-profile` inserts
+ * `@deepseek-ai/dsh-experimental-agent-team` and
+ * `@deepseek-ai/dsh-experimental-tool-agent-team`). The removed
+ * "no entry + bundle layer → 重启后生效" branch therefore fired for EVERY bundle
+ * layer of an already-restarted instance: a permanent false warning, never a
+ * pending restart. Intersecting the bundle's own insert names with the snapshot
+ * is the honest successor, but those names live only in
+ * `<profile>/node_modules/<bundle>/cordis.patch.yml`, which no renderer fact
+ * carries today — until a host fact supplies them, the neutral cell is the
+ * ceiling.
  * @param snapshot - the Loader inventory snapshot; null (the read failed or
  *   the instance is not reachable, e.g. a stopped local instance) → null:
  *   the caller keeps the state cell neutral — an unreadable snapshot is
  *   never a state claim.
- * @param expectsLoaderEntry - whether the installed row names a profile
- *   bundle layer (local: `localList.bundles.includes(name)`; gateway:
- *   `installed.bundles.includes(name)`). Only such rows can ever mount via
- *   the Loader, so only they may render the "activates on restart" state
- *   when the snapshot has no entry yet.
- * @returns The chip {labelKey, tone}, or null when no snapshot is available
- *   or the row cannot mount (no entry + not a bundle layer).
+ * @param packageName - the installed row's package name.
+ * @returns The chip {labelKey, tone}, or null when no snapshot is available or
+ *   the snapshot has no entry under that name.
  */
 export function thirdPartyLiveState(
   snapshot: Pick<PluginInventorySnapshot, 'entries'> | null,
   packageName: string,
-  expectsLoaderEntry: boolean,
 ): ThirdPartyLiveState | null {
   if (snapshot === null) return null
   const entry = snapshot.entries.find(candidate => candidate.moduleName === packageName)
-  if (entry === undefined) {
-    return expectsLoaderEntry ? { labelKey: 'thirdPartyLiveRestart', tone: 'warn' } : null
-  }
+  if (entry === undefined) return null
   if (!entry.enabled) return { labelKey: 'pluginDisabled', tone: 'muted' }
   if (entry.fiberPhase === 'active') return { labelKey: 'thirdPartyLiveActive', tone: 'ok' }
   // The failed-load label is the shared badge copy (chamberBadgeFailed:
@@ -380,9 +410,12 @@ export interface ChamberPackageState {
   readonly version: string | null
   readonly live: boolean | null
   /** The registry row is meaningful for the LOCAL instance shape only (design
-   *  20 §6: the open-in host domain). Remote/gateway targets report it with
-   *  `installed:false` and no probe, and the table renders "local shape only"
-   *  rather than "not injected" — absent by design, not by fault. */
+   *  20 §6: the open-in host domain). The ssh PROBE reports it as
+   *  `installed:false`/`patched:false` without ever asking the remote ("not
+   *  asked", never "the target lacks it"), while the desktop's own projection
+   *  carries the real local state; whichever projection delivered the row,
+   *  every non-local chamber table omits it rather than rendering "not
+   *  injected" (see `applicableChamberPackages`). */
   readonly localOnly?: boolean
 }
 
@@ -510,6 +543,85 @@ function chamberClientRows(entries: readonly ChamberInventoryEntry[] | null): Ch
   return rows
 }
 
+/**
+ * The registry rows that APPLY to one target shape: a `localOnly` row (design
+ * 20 §6: the open-in host domain) exists for the local instance alone, so a
+ * remote/gateway/http target's chamber table does not list it at all — its rows
+ * are the registry rows that can actually be seeded, probed and synced there
+ * (row counts: local 4, ssh/gateway/http 3).
+ *
+ * Why DROP instead of badge ("local shape only" was the earlier rule): the
+ * table answers what THIS target has and what it can be given. A row that can
+ * never exist there is not a state — rendering it forced the reader to
+ * interpret a per-target table for a package that is simply not part of that
+ * target's contract (2026-12 user decision after asking exactly that question
+ * on a remote target).
+ *
+ * The filter reads the REGISTRY flag, never the observed state: a not-yet-seeded
+ * target must still list the rows it is missing — that 未注入 row IS the sync
+ * action's justification. Applicability only ever removes rows that no action
+ * could produce.
+ *
+ * Generic over the row shape on purpose: the rule needs nothing but the
+ * registry's `localOnly` flag, so the desktop projection rows (and any future
+ * row shape carrying the same flag) pass through it without a cast.
+ * @param target - the dialog's backend.
+ * @param packages - the target's expected registry rows (or the ssh probe's).
+ * @returns the same list for the local target (identity, same array), or the
+ *   non-`localOnly` rows in input order for every remote target.
+ */
+export function applicableChamberPackages<T extends { readonly localOnly?: boolean }>(
+  target: ChamberTarget,
+  packages: readonly T[],
+): readonly T[] {
+  return target === 'local' ? packages : packages.filter(pkg => pkg.localOnly !== true)
+}
+
+/** The two ssh target-level gates derived from the remote probe (design 13
+ *  §6, design 20 §6). The pair is a partition: a target either needs a seed or
+ *  it is fully injected (some rows possibly not live yet). */
+export interface ChamberProbeGates {
+  /** At least one APPLICABLE registry row is not fully injected (or the probe
+   *  could not be read) — the 「注入」 action's justification. */
+  readonly needsSeed: boolean
+  /** Every applicable row IS injected and at least one is not live yet — the
+   *  restart-to-apply state. Never true together with `needsSeed`: a
+   *  half-injected target asks for a seed (restarting alone cannot add a
+   *  missing row), so a caller reading this flag ALONE can never show 重启生效
+   *  on a target that is missing a package. */
+  readonly injectedNotLive: boolean
+}
+
+/**
+ * Derive the two ssh gates from the remote probe in ONE place.
+ *
+ * Both are target-level decisions, so they read exactly the rows the chamber
+ * table lists (`applicableChamberPackages`). A `localOnly` row is not part of a
+ * remote instance's contract, and the probe reports it as a synthesized
+ * `installed:false` WITHOUT ever asking the remote — folding it in pinned
+ * `needsSeed` true forever, so 「注入」 showed over a fully seeded remote and the
+ * restart branch was unreachable (2026-12 review).
+ *
+ * null/undefined = the probe has not answered (not an ssh target, still
+ * loading, or the read has not happened): both gates stay false. `ok:false` is
+ * an ANSWERED probe that could not be read — a re-seed may repair it, so that
+ * arm asks for the seed and never claims a pending restart.
+ * @param probe - the ssh remote probe state (null/undefined = unanswered).
+ * @returns the two gate booleans — never a claim beyond the probe's own.
+ */
+export function sshChamberGates(probe: ChamberProbeState | null | undefined): ChamberProbeGates {
+  if (probe === null || probe === undefined) return { needsSeed: false, injectedNotLive: false }
+  if (probe.ok !== true) return { needsSeed: true, injectedNotLive: false }
+  const applicable = applicableChamberPackages('ssh', probe.packages)
+  const needsSeed = applicable.some(pkg => !(pkg.installed && pkg.patched))
+  return {
+    needsSeed,
+    // Strict on purpose (see ChamberProbeGates.injectedNotLive): the restart
+    // hint owns only the state where nothing is missing.
+    injectedNotLive: !needsSeed && applicable.some(pkg => pkg.installed && pkg.patched && pkg.live === false),
+  }
+}
+
 /** The full input matrix of the chamber table (see deriveChamberRows). */
 export interface ChamberRowsInput {
   readonly target: ChamberTarget
@@ -543,9 +655,10 @@ export interface ChamberRowsInput {
  *    expected rows); remote targets read the desktop's projection.
  *  - version: ssh reads the remote probe's version, everything else the local
  *    list's version (gateway additionally renders the seed-cache comparison).
- *  - a `localOnly` registry row (design 20 §6) on a NON-local target renders
- *    "local shape only" in both state columns with no version and no sync
- *    marker: the package is absent there by design.
+ *  - a `localOnly` registry row (design 20 §6) is DROPPED on every non-local
+ *    target before any state is derived (`applicableChamberPackages`): the row
+ *    is not part of that target's contract, so no column, version or sync
+ *    marker may speak about it there.
  *  - an EMPTY expected list yields no rows and can never claim a seed-cache
  *    state.
  * @returns the registry rows (one per expected package) plus, for the gateway,
@@ -557,46 +670,39 @@ export function deriveChamberRows(input: ChamberRowsInput): ChamberRowDescriptor
   const isSsh = target === 'ssh'
   const isGateway = target === 'gateway'
   const remoteExpected = isSsh && remoteChamber?.ok === true ? remoteChamber.packages : null
-  const expectedList = remoteExpected ?? expected ?? []
-  const localList = isLocal ? expected : localManifestChamber
+  // Applicability filter FIRST, so neither the row set nor any target-level
+  // state below can be influenced by a row that does not apply here (the ssh
+  // probe reports the local-only row as a synthesized installed:false WITHOUT
+  // asking the remote — counting it would read as "the remote is missing it").
+  const expectedList = applicableChamberPackages(target, remoteExpected ?? expected ?? [])
+  // The LOCAL column of a remote target reads the desktop's projection through
+  // the same filter (the gateway drift map is keyed by name); null keeps its
+  // meaning — the local manifest was unreadable.
+  const localList = isLocal
+    ? expectedList
+    : localManifestChamber === null
+      ? null
+      : applicableChamberPackages(target, localManifestChamber)
   const localByName = new Map((localList ?? []).map(pkg => [pkg.name, pkg]))
   const remoteByName = new Map((remoteExpected ?? []).map(pkg => [pkg.name, pkg]))
   const entries = inventory === null ? null : inventory.entries
   // A KNOWN, non-empty expected set is a precondition: an unreadable manifest
-  // (empty list) must never claim "the gateway has nothing synced".
+  // (empty list) must never claim "the gateway has nothing synced". Read over
+  // the APPLICABLE rows: a local-only row is never cached (the desktop uploads
+  // portable rows only), so a stray cache entry for one must not suppress this
+  // claim for the packages that do belong to the gateway.
   const cacheAbsent = isGateway && seedCache !== null && expectedList.length > 0
     && expectedList.every(pkg => (seedCache[pkg.name] ?? null) === null)
   const driftStates = isGateway && seedCache !== null && localList !== null
     ? chamberSeedDrift(localList, seedCache)
     : null
   const unknownBadge: ChamberBadge = { labelKey: 'chamberBadgeUnknown', tone: 'muted' }
-  /** A local-shape-only row on a target where it does not apply (design 20 §6):
-   *  "local shape only", never "not injected" — nothing is missing there. */
-  const localOnlyBadge: ChamberBadge = { labelKey: 'chamberBadgeLocalOnly', tone: 'muted' }
   const versionTextOf = (version: string | null): string | null => version === null ? null : `v${version}`
 
   const rows = expectedList.map((pkg): ChamberRowDescriptor => {
     const local = localByName.get(pkg.name)
     const remote = remoteByName.get(pkg.name)
     const cached = seedCache === null ? null : (seedCache[pkg.name] ?? null)
-    // Not applicable here: no column claims a state, no version and no sync
-    // marker (a permanent 未同步 alarm on the gateway for a row that can never
-    // be synced would be noise, not information).
-    if (pkg.localOnly === true && !isLocal) {
-      return {
-        key: pkg.insertId,
-        name: pkg.name,
-        nameLabelKey: null,
-        localBadge: localOnlyBadge,
-        remoteBadge: isSsh || isGateway || target === 'http' ? localOnlyBadge : null,
-        versionText: null,
-        versionHintKey: null,
-        cacheVersionText: null,
-        cacheNotSynced: false,
-        cacheAbsent,
-        driftState: null,
-      }
-    }
     return {
       key: pkg.insertId,
       name: pkg.name,

@@ -1745,8 +1745,10 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                               ) : (
                                 <RowHoverCard
                                   anchor={workspaceHeader}
-                                  copyLabel={t('action.copy')}
-                                  copiedLabel={t('hover.copied')}
+                                  // Read-only by design: the projection carries no
+                                  // cwd for a workspace, so there is nothing to
+                                  // copy — no `copyText` and therefore no copy
+                                  // props here (they could never render).
                                   content={(
                                     <div className={cc.hoverContent}>
                                       <div className={cc.hoverTitle}>{workspace.title}</div>

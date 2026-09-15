@@ -245,7 +245,16 @@
 /* Optional chamber feature seat between navigation and the fixed foot. The
    occupant controls its own max-height/scrolling; an empty slot takes no room. */
 /* Footer seats: additive actions stack above Settings. Each occupant owns its
-   button geometry and hover chrome. */
+   button geometry and hover chrome — including its own VERTICAL margins (the
+   settings trigger carries `margin: 4px -2px` wide / `8px 0 10px` on the rail,
+   SettingsShell.module.css:24/51), because this block is official-verbatim and
+   the stack itself carries no gap. The footer-action hole is a LIST seat
+   (`sidebar.footer.action`, kind 'list' — contract/slots.ts:88), so several
+   occupants share ONE row: that row holds the sheet's 4px icon-cluster rhythm
+   (chamber addition to the copied block; the seat ships empty, so the row has no
+   occupant to space today and the gap stays invisible — the shipped layout is
+   unchanged; the value is the sheet's icon-cluster rhythm, not the 2026-09 G1-4
+   hit-rim floor, which the 2026-09-14 v0.2.4 rollback removed). */
 .footArea {
   flex: none;
   display: flex;
@@ -261,6 +270,7 @@
 
 .footerActions {
   display: flex;
+  gap: 4px;
 }
 
 .collapsed .footArea {

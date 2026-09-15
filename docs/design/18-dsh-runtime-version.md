@@ -230,7 +230,7 @@ override（未失效时）→ 内建锚（`--dsh-path` ?? `findDshWorkspace`）�
     missing / applied-monitoring / intent（旧壳事务被 F4 intent 替换）时武装；
     仅 live 事务 phase（prepared/switched/restoring…）不武装——旧壳在途事务保持
     各自的 journal-mismatch 阻塞 / rollback-continuation 语义（writeActivationIntent
-    亦拒绝覆盖）。回归测试：runtime-routes.test.ts FRESH-shell 两例（稳态 journal
+    亦拒绝覆盖）。回归测试：runtime-start-lease-invalidation.test.ts FRESH-shell 两例（稳态 journal
     + intent 替换）。
 - **失效的用户可见记录**：壳更新导致运行时选择失效时，settings
   记录一行「因应用更新，dsh 运行时已回落内建 vX（原选择 vY 保留，可重新选用）」——
@@ -381,16 +381,39 @@ chamber-settings.json，非秘密）：
    插件生效）；前端 N-ctx shell 经 WS 断开重连后重新 boot（design 09 每实例
    boot graph 重新合并）。**互斥与门控**：与健康状态机 `restarting` 单飞行
    互斥；applying 期间禁用（同「应用 dsh vY…」门控）；执行期间状态行
-   「重启 dsh…」→「已重启」（就绪探测通过）/ 诚实失败文案（附 host-logs
-   入口）。失败不回滚、不改指针——重启前后运行同一棵激活树，仅进程级刷新。
+   「重启 dsh…」→「已重启」（就绪探测通过，随即窗口重载，见下）/ 诚实失败文案
+   （附 host-logs 入口）。失败不回滚、不改指针——重启前后运行同一棵激活树，
+   仅进程级刷新。
    per-server 分支：local = 控制面事务接口 `restartLocal()`（与健康状态机
    重启单飞行串行化，**不用** `stopLocal()`+`startLocal()` 裸组合——会与
    健康"进程死亡即重启"分支交错，§9.3）；gateway = `POST /chamber/runtime/restart`
    （202 + status 轮询，§9.3）。远端重启窗口内隧道 phase 保持 `ready`
    （隧道未断）、实例反代对目标连接拒绝返回显式 503（诚实失败，03 §3），
    会话/侧边栏短时错误属预期。
-   Electron 壳无需重启：插件
-   挂载在每次 dsh 进程 boot 时重新确定，不是 Electron 会话级事实（02 §2.6）。
+   **窗口随动作重载一次（2026-12 修订）**：宿主侧插件行确实在每次 dsh 进程 boot
+   时重新确定，不是 Electron 会话级事实（02 §2.6）；但**页面侧的 client 插件集在
+   窗口 boot 时固定**（宿主图每 boot 取一次、`dsh.client` bundle 那时执行；模块表
+   按 id first-load-wins，design 09 §3.2/§3.5），新装或重打包的客户端半身（例如
+   设置分节）只有窗口重新 boot 才出现。因此**插件刷新语义的重启动作** = 就绪探测通过
+   **+ 一次窗口重载**；重载后需重新打开设置面板。
+   **实现 = 一个 page-owned completion**（sidebar 共享面
+   `restart-window-reload.ts`，两个客户端插件都不得互相 value-import）：按来源 key
+   （`local` / `gateway-<id>` / `dsh-<id>`）单飞；**发起面板卸载不取消**（重启是宿主
+   事实，完成动作不能随按钮消失，review F6）；就绪预算内未恢复则**不重载**并如实报错；
+   就绪 waiter 由调用方提供（本地 `/health` 的 `ready|degraded`；gateway
+   `pollGatewayReady`；ssh `waitForSourceServing`）。**接线范围**：本段「重启 dsh」
+   两种形态、本地「立即应用」/「重试应用」/「重试恢复」三类重启事务（仅成功时 arm）、
+   本地卡「启动」/写者接管、gateway 卡「重启 dsh」/「启动实例」、插件对话框 footer 重启
+   与全部 restart-to-apply（行删/加/导入/撤销/批量应用，按 `restarted` 判定）、ssh 卡
+   「重启实例」（仅 dsh 目标）。**有意例外**：「重启网关服务」（systemd）不改变实例
+   插件集，不接。
+   **被拒替代**：①只重挂该来源的页内壳——换不掉**已加载** id 的实现（页面模块表按
+   id first-load-wins），且因 bundle rev 是每进程 nonce，重挂后每个旧行都会冒一条
+   `restart-required` 假警报（审计 F5 同类），不做；②单插件热替换（vendor 已验证的
+   `invalidate → 装载 → registry-first teardown → 清样式 → entry.refresh()` 顺序）——
+   能保住来源壳状态，但要在 chamber 侧重实现 HMR 的换血纪律（样式重复注入、依赖闭包、
+   跨来源同 id 共享），成本与风险远超本问题收益，只登记为将来可选；③不重载、只出提示——
+   半自动，用户仍须手动刷新，主诉未解。
 
 **B. connections 本地实例卡片**：加一行/chip「dsh vX」，读同一 resolve 结果，
 与 settings 块同源一致（桥未就绪时回落 `window.dshChamber.dshVersion`）。
@@ -759,7 +782,7 @@ packaged smoke，以及更强的 packaged fake-registry 安装 + web host + 全�
   10 GiB 软阈值、保留策略等**单一来源常量**都在共享包内。
 - 宿主适配接口 `RuntimeHostAdapter`（**生产侧无实现者**：desktop 与 gateway 各自经
   `StartupDeps`/`ApplyDeps`/`InstallerDeps`/`ControllerDeps` 直接适配共享核心；
-  该接口是**测试夹具契约**——`test/fake-adapter.ts` 实现它，`test/run-phase-fixture.ts`
+  该接口是**测试夹具契约**——`test/support/fake-adapter.ts` 实现它，`test/support/run-phase-fixture.ts`
   以它为底座驱动共享包全部纯 Node 测试。**核心裁决逻辑零分叉**，分叉只允许出现在
   适配器）。**本接口是草图**：实际 seam 以 desktop 的
   `StartupDeps`/`ApplyDeps` 并集 + gateway 需求为权威，其中必须覆盖的 seam 为——
@@ -900,7 +923,7 @@ ready——就绪窗口可达 90s），进度与结果经 `GET /chamber/runtime/
 
 | 路由 | 语义 |
 |---|---|
-| `GET /chamber/runtime/status` | 固定身份 `kind:'dsh-chamber-gateway-runtime'` + 实际生效版本/来源 tag（内建锚/用户选择/env）+ 状态机态 + pending + operation/restart + 失败记录（脱敏）+ restore/pre-rollback + 快照 + 安装进度 + 全分类磁盘统计 |
+| `GET /chamber/runtime/status` | 固定身份 `kind:'dsh-chamber-gateway-runtime'` + 实际生效版本/来源 tag（内建锚/用户选择/env）+ 状态机态 + pending + operation/restart + 失败记录（脱敏）+ restore/pre-rollback + 快照 + 安装进度 + 全分类磁盘统计。**该「实际生效版本」同时是插件安装代耦合校验的事实源**（design 21 §6.11 R2：官方 scope 安装必须与它精确同代，预发布字符串全等）——不得在插件写面另立版本读取路径 |
 | `GET /chamber/runtime/versions` | registry metadata（简略 packument）+ 全部有效缓存版本；离线仍返回缓存，当前 builtin 只标 active、不误标 cached |
 | `POST /chamber/runtime/select` | 绑定源/版本/tarball/SRI → 下载+SRI → pnpm `file:` install → prune → 冒烟 → 只读原子发布（异步 job，进度经 status 轮询） |
 | `POST /chamber/runtime/apply` | 置 pending（下次 gateway 重启应用） |

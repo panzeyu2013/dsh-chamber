@@ -6,7 +6,7 @@
  * file is the owner rather than a mirror — the official client never loads, and
  * the `app.*` labels must cover exactly the catalog ids our host domain can
  * answer (`packages/dsh-chamber-seed-open-in/src/catalog.ts`), which
- * `test/open-in-labels.test.ts` pins. Product names still track upstream's
+ * `test/catalog/open-in-labels.test.ts` pins. Product names still track upstream's
  * spelling where an id is shared, so a user sees the same application names the
  * official surface would show.
  */
@@ -122,7 +122,7 @@ export type OpenInKey = keyof typeof zh
 /**
  * Label key per catalog id — the table is OURS now (design 20 §5): our host
  * domain's catalog (`packages/dsh-chamber-seed-open-in/src/catalog.ts`) is the
- * authority on which ids can appear, and `test/open-in-labels.test.ts` fails
+ * authority on which ids can appear, and `test/catalog/open-in-labels.test.ts` fails
  * when an id has no zh+en label. Ids outside this table still render through
  * `titleGeneric`, so a catalog extension degrades to a raw id instead of
  * disappearing.

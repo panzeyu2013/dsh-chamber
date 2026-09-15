@@ -864,11 +864,43 @@ export interface ArchiveCleanupPurgeResult {
    *  archived set with no content — membership-only removal, never counted in
    *  deletedSessions/deletedSubagents. Absent on older hosts / when zero. */
   readonly clearedOrphanMembers?: number
+  /** Roots whose CONTENT this run deleted but whose archived membership the
+   *  host KEPT, because the session is still resident in the instance process
+   *  (design 24 §4 step 9, 2026-13 resident-retention revision). The host's
+   *  session list is live-preferred, so such a row keeps being served; the
+   *  archived set is the only thing hiding it, and clearing the membership
+   *  there is exactly what made a just-deleted session reappear in the
+   *  workspace as an ordinary row. These rows stay hidden until that
+   *  instance's dsh restarts (then the row is gone and a later purge's orphan
+   *  sweep converges the content-free member); the manager labels them so the
+   *  user can tell "deleted, waiting for the instance restart" from "not
+   *  deleted". Absent on older hosts / when zero. */
+  readonly residentRetainedRoots?: readonly string[]
 }
 
 function countField(value: unknown, key: string): number {
   const field = (value as Record<string, unknown> | null | undefined)?.[key]
   return typeof field === 'number' && Number.isFinite(field) && field >= 0 ? field : 0
+}
+
+/**
+ * OPTIONAL id-list field of the purge result (currently only
+ * `residentRetainedRoots`). Tolerant exactly like the per-item error decode
+ * below: a missing key, a non-array value or a non-string entry can never be
+ * turned into a fabricated id (this list only drives row LABELS; the counts
+ * above stay the authoritative outcome), duplicates collapse (the list's
+ * consumers are a count and a label SET), and an empty list is reported as
+ * absent so callers keep the historical shape.
+ * @param value - the decoded domain value object.
+ * @param key - the result field name.
+ * @returns the non-empty, de-duplicated id list, or undefined when
+ *   absent/empty/malformed.
+ */
+function optionalIdList(value: unknown, key: string): readonly string[] | undefined {
+  const field = (value as Record<string, unknown> | null | undefined)?.[key]
+  if (!Array.isArray(field)) return undefined
+  const ids = [...new Set(field.filter((id): id is string => typeof id === 'string' && id !== ''))]
+  return ids.length > 0 ? ids : undefined
 }
 
 /**
@@ -1008,6 +1040,7 @@ export async function purgeArchivedSessions(
     })
     : []
   const clearedOrphanMembers = countField(value, 'clearedOrphanMembers')
+  const residentRetainedRoots = optionalIdList(value, 'residentRetainedRoots')
   return {
     deletedSessions: countField(value, 'deletedSessions'),
     deletedSubagents: countField(value, 'deletedSubagents'),
@@ -1017,6 +1050,7 @@ export async function purgeArchivedSessions(
     skippedProtected: countField(value, 'skippedProtected'),
     truncated: (value as Record<string, unknown> | null | undefined)?.truncated === true,
     ...(clearedOrphanMembers > 0 ? { clearedOrphanMembers } : {}),
+    ...(residentRetainedRoots === undefined ? {} : { residentRetainedRoots }),
     errors,
   }
 }

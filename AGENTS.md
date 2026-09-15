@@ -50,24 +50,35 @@ decision value and is not already owned by a design document or `CHANGELOG.md`.
 - Read and execute `docs/checklists/release-checklist.md` — any ❌ blocks the release (version
   assertions, release preflight, changelog/i18n, the full test suite on the exact release commit,
   build, tag, and a CI dry-run first).
+- **Release-blocking markers**: `FIXME` marks an issue that should block a release — a release does
+  not ship with an open `FIXME` unless the reviewers explicitly agree the change can merge anyway;
+  `TODO` means fix soon; `XXX` means someday, no commitment. Pick the tag that matches the urgency so
+  anyone scanning the code can tell a release blocker from a someday-maybe. `release-preflight`
+  reports open `FIXME` markers and requires the explicit `--allow-fixme` opt-out, so shipping one is
+  a recorded decision rather than an oversight.
 - Changes to packaged modules, build scripts, `build.files` or `extraResources` additionally require
   `docs/checklists/packaging-closure-checklist.md`.
 - The release workflow is policy-tested: `pnpm run test:release-workflow`.
 - `CHANGELOG.md` (with its `docs/CHANGELOG.en-US.md` mirror and the `verify:i18n` record) is written
   at RELEASE time only — never add `[Unreleased]` entries while implementing.
 - `CHANGELOG.md` records **only the difference between adjacent formal releases** (`X.Y.Z` against the
-  previous `X.Y.Z`): what someone running the previous formal release sees changed. A section still has
-  to exist for a beta (`release.yml` extracts it as the release body), but its content obeys the same
-  rule. The internal path taken to get there — intermediate dsh pins, beta-to-beta deltas, batch/round
-  codenames, gate counts, lockfile-regeneration notes, verification reports — never goes in: it belongs
-  to git history and, while still open, `docs/progress/STATUS.md`.
+  previous `X.Y.Z`): what someone running the previous formal release sees changed. A formal release
+  whose name was preceded by a beta series is therefore **never** the delta from the last beta
+  (`X.Y.Z` against `X.Y.Z-beta.N`): it aggregates that whole series into one release-level delta,
+  expressed once, with the beta-to-beta steps left out. A beta section obeys the same rule (it too is
+  written against the previous formal release), so a reader of the previous formal release can use
+  either section; a section still has to exist for a beta because `release.yml` extracts it as the
+  release body. The internal path taken to get there — intermediate dsh pins, beta-to-beta deltas,
+  batch/round codenames, gate counts, lockfile-regeneration notes, verification reports — never goes in:
+  it belongs to git history and, while still open, `docs/progress/STATUS.md`.
 
 ### Before a dsh (upstream) upgrade
 
 - Execute `docs/checklists/dsh-upgrade-checklist.md`, then the per-tag maintenance loop in
   `docs/checklists/upstream-touchpoints.md` §7.
 - `docs/checklists/upstream-touchpoints.md` and `scripts/dev/verify-upstream-touchpoints.mjs`
-  (gates C1–C10, run in CI) are two sides of one registry — a change to either must be mirrored in
+  (gates C1–C15, run in CI: C11–C14 the plugin protected set, C15 the hover-port retirement gate)
+  are two sides of one registry — a change to either must be mirrored in
   the other, and the pin-upgrade entry point reminds you of the freshness gate.
 - `docs/checklists/*` are **procedure only**: no version values — no pinned tags, commits, current
   baseline snapshots or per-tag delta logs — belong in them. The current anchor's single sources are
@@ -90,6 +101,15 @@ decision value and is not already owned by a design document or `CHANGELOG.md`.
 Read `CONTRIBUTING.md` and `.github/PULL_REQUEST_TEMPLATE.md`; complete the template with concrete,
 current evidence for the final PR HEAD. The reviewer must not have to reconstruct intent, affected
 surfaces, applicable guidance, validation, or failure/rollback considerations from the diff alone.
+
+- A change that alters a design contract, a cross-package boundary, or shipped behavior adds a short
+  **Rejected alternatives** section to the owning `docs/design/0X-*.md`: what else was considered and
+  why it lost. This is a **review duty, not a gate** — no script can judge whether the alternatives
+  were genuinely weighed, so the reviewer checks it and the PR template asks for it. Labeling a rule
+  review-only is deliberate: a green gate never means this one was satisfied.
+- Pick the evidence for a change with `node scripts/dev/run-checks.mjs <static|tests|typecheck|full>`
+  (or `--list` to see the plan) instead of recalling the set from CI YAML: the modes name the same
+  gates ci.yml and release validation run, so a local pass is the same evidence.
 
 ## Runtime Boundaries
 
@@ -121,6 +141,10 @@ surfaces, applicable guidance, validation, or failure/rollback considerations fr
   editing `harness.commit` or the gitlink. Of the dsh sources, only the chamber packages are ours to
   change (see Runtime Boundaries).
 - Do not run git or GitHub commands unless the user explicitly asks.
+- This repository installs **no git hooks**, and adding one is a decision to raise rather than a
+  convenience to add: `core.hooksPath` is not carried by a clone, so every clone and machine would
+  have to configure it again. The cheap checks live as ordinary gates instead — `pnpm run
+  check:static` runs that set (registration: `docs/progress/STATUS.md`, 范围决策).
 - Credentials and connection secrets never enter the renderer, logs or any persistence layer — only
   the documented transient write-only form inputs (design 05 §8, design 17).
 - Both flavors resolve one userData root and share one directory lock; the derivation is pinned by

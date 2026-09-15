@@ -25,7 +25,7 @@
  *   construction (imports only node built-ins + INSTANCE_ID_PATTERN and the
  *   deep-link core), and every host capability (registry lookup, vscode
  *   availability/url-open) is injected via OpenInLaunchContext, so the
- *   pure-Node test suite (open-in.test.ts) runs without electron or any
+ *   pure-Node test suite (test/desktop-shell/open-in.test.ts) runs without electron or any
  *   third-party dependency.
  *
  * Responsibilities:

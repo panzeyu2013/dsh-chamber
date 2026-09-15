@@ -312,6 +312,21 @@ proxy）的 S1 硬门在**播种之前**按**部署配置**判定——持久化
 `prerelease` 标记解析最新预发布；提供 install/update/restart/status/logs/uninstall
 子命令与 `--purge`。
 
+安装形态的**登录环境**：unit 带 `User=` 时 systemd 按该用户的 passwd 条目推导
+`$HOME/$LOGNAME/$SHELL`；「当前用户运行」（`--service-user` 缺省）的 unit 不带
+`User=`，systemd 什么都不设（systemd.exec `SetLoginEnvironment=` 的默认真值只对
+`User=`/`DynamicUser=`/`PAMName=` 成立），因此安装器生成 unit 时显式注入**运行用户**的
+`HOME/LOGNAME/USER/XDG_CONFIG_HOME`。缺了它，gateway 与它拉起的每个子进程（managed
+dsh → 代码运行时 → bash 工具 → gh / npm / git credential.helper）从空 HOME 起步：
+gh 报「未登录」、npm 找不到缓存、git 凭据助手取不到 token。注入值取自 passwd，不读
+安装者环境里的 `$HOME`（`sudo` 可能把调用者的 HOME 带进来，那正是要避免的错值）。
+
+**被否方案**：`SetLoginEnvironment=yes`（systemd 原生开关，语义等价）比手工注入更
+贴切，但它不在 systemd v253 的 systemd.exec 指令表里，写进旧发行版的 unit 只会得到
+「未知指令」告警、环境照旧为空——静默失效正是本次缺陷的同类；无条件注入
+`Environment=HOME=…` 则会把安装者的 HOME 写进 `--service-user` 的 unit，而服务用户的
+家目录必须由 systemd 按 passwd 推导。
+
 ## 6. 单一公网请求策略
 
 HTTP、OPTIONS 与 WebSocket upgrade 使用同一个 request policy，执行顺序固定为：
@@ -373,6 +388,16 @@ trusted proxy 缺失、重复、含逗号或非法的 XFF 时，client identity 
 - 登录过载返回 503，限流返回 429；登录 body 上限为 16 KiB，超限返回 413 并
   **销毁请求 socket**（不排空、不继续消费，防止慢速匿名上传钉住连接；login 与
   change 路由同纪律）；凭据和内部错误不进入日志或响应。
+- 代理到 dsh 前端的响应头取自 `packages/gateway/src/dispatch.ts` 的
+  `GATEWAY_PROXY_CSP`（gateway-only 放宽）：`script-src` 放开 inline（被代理的文档是
+  上游自己的 render 产物，其内联 `__DSH_BOOT__`/loader 脚本不带 nonce，而本进程只往该
+  文档插入 S0 信任声明、并不为不属于自己的脚本铸发/回填 nonce）；`base-uri` 取 `'self'`
+  而非 `'none'`——上游 `@deepseek-ai/dsh-host-frontend-static` 每个 renderIndex 出来的
+  文档都注入 `<base href="/">`，`'none'` 会让浏览器拒绝该元素。该放宽按「元素必须生效」
+  而非按「某个已复现的白屏」记账：固定 pin 下 `serveStatic` 只在 dist 根与 index 路径本身
+  渲染 HTML（其余路径是文件读取，miss 即 404），相对资源 URL 本就解析正确；只有当前移到的
+  上游真的用 index 回答深链（其注释所称的 "SPA-fallback paths"）时，该元素才决定 `./assets/…`
+  是否按站点根解析。其余指令与 shell 的 nonce CSP 逐字一致。
 
 桌面端对 401 的**可行动三态分类**（探针层，非秘密 detail）：
 
@@ -493,6 +518,26 @@ Gateway proxy 与 per-instance proxy 共用 `proxy-forward.ts`，从而保持相
 - 上游 Host 固定改写为目标 origin；浏览器 Origin 改写为目标同源；
 - 请求剥离 cookie、authorization、hop-by-hop、`Forwarded`、`Via`、全部
   `X-Forwarded-*` 和 `X-Real-IP`；只有注册 transport 的受控 extra header 可重新注入；
+- `accept-encoding` 只对**必须 identity 的两类请求**剥离（判定 `proxy-forward.ts`
+  `requiresIdentityUpstreamEncoding` = `isHtmlDocumentNavigation` ∨ `acceptsEventStream`）：
+  ① HTML 文档导航（GET/HEAD + `Accept` 含 `text/html`，路径不在 `/api`、`/plugins`、`/auth/…`、
+  `/chamber/<subpath>`，且不是内容寻址的 `/assets/<name>-<hash>.<ext>`）——这是 S0 注入的前提：
+  `htmlInjectable` 要求上游 `text/html` 未被编码，gateway `html-inject.ts` 依赖它写入
+  `__DSH_TRANSPORT__`；② `Accept` 含 `text/event-stream` 的 SSE 请求——**不是文档导航，而是传输层
+  保险**（远端/旧版实例未必带 pinned 的 gzip filter，长流被压缩即被缓冲）。其余请求把压缩协商交给
+  上游 gzip 中间件（dsh-host-webserver `createGzipMiddleware` 自身拒绝 `text/event-stream` 与
+  `content-range`），回程 `content-encoding`/`vary` 已在响应白名单内 —— 该取舍修订 2026 audit M3b
+  的「一律剥离」（2026-12）；
+- 响应头组装提供窄 seam `ProxyForwardDeps.onUpstreamResponseHeaders(pathname, status, headers)`
+  （`forwardHttp`，默认 `undefined` = 零变化）：owner 可补上游缺失的表示元数据，gateway 用它给
+  内容寻址静态资源加 immutable `cache-control`（上游 dsh-host-frontend-static 只写 `content-type`；
+  命名判定 `isHashedStaticAssetPath`，绝不匹配 `favicon.svg`/`manifest.webmanifest`/`index.html`）。
+  **seam 的两条硬边界**：其一，回调返回后响应头映射会被 `RESPONSE_HEADER_WHITELIST` 再过滤一次，
+  因此回调写入的 `content-length`/`transfer-encoding` 或任何非表示元数据都到不了线上，framing
+  始终是代理自己的（`content-length` 在过滤后按上游声明重算）；其二，gateway 侧只在「200 + 命名
+  命中 + 上游未给 `cache-control`/`etag`/`expires` + `content-type` 与该扩展名相符」时才盖章——
+  路径本身不是载荷证明：一个把 miss 回退成 index 的 dsh（旧版 frontend-static 就是）会用
+  `text/html` 200 回答资源 URL，给它 immutable 等于把 HTML 按脚本 URL 缓存一年并跨版本回滚存活；
 - WS 只转发握手白名单；30 秒 ping/pong，漏一次 pong 即回收；
 - 响应保留 content encoding、location、vary 等表示/跳转元数据，并重写同源 redirect；
 - 45 秒为 idle timeout；响应 chunk 会重置 timer；SSE/WS 是长流；
@@ -695,12 +740,15 @@ version）。每次 spawn 时控制面种子注册表从缓存注入托管 profi
 - **移动例外**：`dsh-chamber-client-ui-mobile` 不参与同步——移动访问绑定
   gateway（链路无桌面），插件随 gateway 发行物打包 seed（§3 装配矩阵）。
 
-**第三方插件管理写面（design 21 A1；契约见 design 21 §6.2/§6.3）**：托管 profile
+**第三方插件管理写面（design 21 A1；契约见 design 21 §6.2/§6.3，受保护集合与代耦合见 §6.11）**：托管 profile
 第三方插件管理——
-`GET …/installed` = readManifest 投影（file: 值掩码、profile_absent 404 /
-profile_corrupt 500）；`PUT …/install`（registry spec，202 异步/400/409/deferred）、
-`POST …/remove`（停机态可用，not_installed 409）、`PUT …/materialize`（≤32 MiB
-独立流式上传 + tgz 上限）、`GET …/tasks`（journal + deferred 投影，file: spec 掩
+`GET …/installed` = readManifest 投影（`dependencies` + `bundles` + **加性 `rows`**（role/protected）、
+file: 值掩码、profile_absent 404 / profile_corrupt 500）；`PUT …/install`（registry spec，
+202 异步/400/409/deferred；**受保护集合判定 + 官方 scope 精确同代**：`protected` /
+`needs-version` / `needs-exact-version` / `generation-mismatch`，旧码 `reserved` 退役）、
+`POST …/remove`（停机态可用，not_installed 409；只判受保护名、不判版本）、`PUT …/materialize`
+（≤32 MiB 独立流式上传 + tgz 上限；name+version 同样过判定与代校验）、`GET …/tasks`
+（journal + deferred 投影，file: spec 掩
 码）——串行队列 + 持久 journal + 单写者租约（runtime-manager profile-write
 lease）+ deferred ready 边沿排空（装完自动受控 restart 一次）；执行器 env 白名
 单、子进程 pid journal（崩溃孤儿启动对账击杀）、错误 `persistence_failed` 500 族。
@@ -992,6 +1040,13 @@ fail-closed）并响亮失败。不可读的锁文件（非普通文件/symlink/
 - **落点**：桌面主进程本地审计日志（`<userData>/audit-log.jsonl`，0600 JSONL
   追加文件）+ gateway 服务器侧登录事件投影（成功/失败/限流，与既有限流器
   同源）；控制面仍无审计路由（不回流匿名控制面）；
+- **去抖**（`packages/gateway/src/dispatch.ts` 的 `AUTH_REJECTION_DEBOUNCE_MS`）：
+  认证边界拒绝按 (客户端, code, 路径类别) 做 1 s 短窗口去抖——窗口内**首条立即落盘**
+  （事件不延迟到窗口结束），其后同类重复只累加内存计数，窗口结束时落一条带
+  `count:<n>`（该窗口同类总数）的合并记录；不同客户端/code/路径类别永不合并，
+  拒绝码本身不变，`login_*`/`credential_*` 不经该路径；停机 drain（`quiesce`）会先
+  把未闭合窗口的计数落盘。动机：每次 append 含一次同步 fsync（实测 ≈3.3 ms），
+  无凭据的根类子资源洪峰（manifest/图标族）会把单线程事件循环钉在磁盘 I/O 上；
 - **消费**：CLI/日志查询即可；不进入设置 UI（v1）；
 - **价值**：可信网络 + 无认证模式下，接入事实可追溯——「谁在什么时候连过、
   认证结果如何」的责任记录。
@@ -1623,8 +1678,16 @@ PWA / Web Push 社区实现机制（dsh-ui-mobile，jasondu，npm 0.1.8，MIT，
   UA 路由测试（含伪造 UA 负例）、插件 PWA 资产经 gateway 透传后的 HEAD/GET
   测试（`/pwa/*`、`/sw.js` 可达且内容正确、未注入形态下 gateway 占位不注册
   SW）；
-- 实机（移动视口清单，CDP 设备模拟 + 真机抽检；设备模拟部分**尚无工具**，见
-  STATUS 的 2026-09-13 开放项 ⑤）：
+- 实机（移动视口清单，CDP 设备模拟 + 真机抽检）：**设备模拟部分已有工具**
+  （2026-09-14）——`scripts/gui-acceptance/mobile-walkthrough.mjs`（设备尺寸 +
+  触控模拟 ⇒ 真实 `pointer:coarse`；结构化断言：无横向溢出、会话头首行高度、
+  「单字换行」行盒、命中盒；**并抓 WebSocket 帧**，是会话打开停滞取证的入口；
+  判定语义由 `mobile-checks.test.mjs` 以合成事实锁定，含已知边界：
+  `Emulation.setEmulatedMedia` 的 `pointer/hover` 被 Chromium 忽略、`mobile:true`
+  的收缩适配会让 `scrollWidth <= innerWidth` 恒真因而判定以 `clientWidth` 为准）
+  与 `scripts/dev/verify-mobile-anchors.mjs`（锚点新鲜度门）。**真机抽检仍不可省**
+  （iOS 键盘/安全区/`100dvh`/聚焦缩放、惯性滚动与 hover 观感；当前走查只读，
+  抽屉/设置/键盘补偿尚未断言）：
   - 触控目标 ≥44px 比例（**座席清单**：composer bar / sidebar / 会话头
     actions+utilities+corner / settings.section / 右栏 dockkit 条 chips+按钮 /
     menuitem+option）、无横向溢出、抽屉开合、弹层不出屏、设置全屏可滚动、
@@ -1714,3 +1777,33 @@ PWA / Web Push 社区实现机制（dsh-ui-mobile，jasondu，npm 0.1.8，MIT，
 - `18-dsh-runtime-version.md`：dsh 运行时版本管理的权威行为契约；§3.6 = per-server
   设置分节（local/gateway/ssh 三态挂载差异）、§9 = gateway 宿主实现设计；
 - `docs/progress/STATUS.md`：当前验证证据和剩余实机门禁。
+
+## 20. 已否决的替代方案（2026-12 review 补记）
+
+改动触及既有契约或已交付行为时，按 `AGENTS.md` 的 PR 纪律记下「还考虑过什么、为什么落选」：
+
+- **移动停滞提示的控制面**（实现与锚点见 `packages/dsh-chamber-client-ui-mobile/README.md`）：
+  - 只留「重载」一个按钮（review 前的形态）——**否决**：45s 阈值未经真机校准，健康但缓慢的
+    打开与停滞同形，误报时用户只能在「无视提示」与「中断一次合法加载」之间二选一；补一个
+    「继续等待」把误报代价降到零，代价是提示多一个控件。
+  - 超时后自动重载或自动重开会话——**否决**：违反本插件「只观察、不代替用户决定」的边界，
+    慢链路下会把可完成的一次加载变成永久循环。
+  - 用 `conversationPhase()` 的内部名字（`blank`/`engaging`）当判据——**否决**：这些名字从不到达
+    `[data-phase]`，按它们匹配等于写死一条永不成立（或永不恢复）的规则；DOM 值空间
+    （`settling`/`hero`/`active`）才是可锚定的事实。
+  - 只用 `[data-phase]` 节点当会话身份——**否决**：该节点属于按条目 key 的 root 作用域槽，切会话
+    时原地复用，于是计时、提示与「继续等待」都会被带进下一个会话；会话作用域的 header 子树
+    才是上游实际重挂的边界。
+- **网关的不可变缓存标记**（§8 附近的资产缓存段）：只按路径形状（`-<hash>.<ext>`）打标——
+  **否决**：实测 0.1.0-rc.5 的 frontend-static 会把 miss SPA 回退到渲染后的 index（`text/html`
+  200），那样一个「JS URL 上的一年期 HTML」会跨版本回滚长期驻留；标记必须同时看内容类型与
+  上游自己的缓存元数据。反过来「只在上游声明长缓存时打标」——**否决**：上游对资产不发任何
+  缓存头，那样等于这个优化永远不生效。
+- **宿主日志导出器的卸载归属**（`packages/control-plane/src/host-log-bridge.ts`）：保持直接注册、
+  靠模块释放或「同 ctx 二次挂载」自证——**否决**：cordis 的 `LoggerService.exporter()` 把 effect
+  注册在**服务**的上下文（应用根）上，插件卸载不会移除它；重新物化 loader 会叠加第二个导出器
+  并把每行应用日志写两遍。挂到插件自己的 `ctx.effect` 是唯一由插件生命周期管辖的位置。
+- **锚点保鲜门的 fail-soft 默认**（`scripts/dev/verify-mobile-anchors.mjs`）：让缺锚点树直接 exit 1
+  ——**否决**：CI 与裸 clone 上没有上游树（`packages/desktop/vendor/dsh` 只提交 lockfile），
+  常态红会把门变成噪声；改为默认 fail-soft + 升级流程 §7 显式 `--require-anchor-root`（缺根、
+  无 client 产物、锚点树版本与 pin 不符都 exit 1），让「真的查过」成为可断言的事实。

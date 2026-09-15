@@ -151,6 +151,9 @@ export class ArchiveCleanupGateway extends TypertRemoteService {
         skippedLoaded: value.skippedLoaded,
         skippedProtected: value.skippedProtected,
         forcedLoaded: value.forcedLoaded,
+        // 常驻保留（2026-13）：内容删了但会话仍活在本进程 ⇒ 成员关系保留、
+        // 行继续隐藏（直到该实例重启）。宿主审计必须能看到这条事实。
+        residentRetained: value.residentRetainedRoots?.length ?? 0,
         errorCount: value.errors.length,
       })
       return value

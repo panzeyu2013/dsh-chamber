@@ -76,8 +76,14 @@ CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 ta
 - [ ] `pnpm run test:renderer-shell`、`test:git`、`test:host-git`、`test:sidebar`、`test:layout`、
       `test:settings-bridge`、`test:connections`、`test:client-web`、`test:connection`、
       `test:open-in`、`test:cli`
-- [ ] 类型检查全套：`typecheck` + `typecheck:sidebar/layout/connections/settings-bridge/git/open-in/client-web/connection/host-graph/host-git`
-- [ ] **旧版本号残留扫描**：`grep -rn "<上一发布版本>" packages/*/test* packages/*/*.test.ts packages/*/scripts/*.test.mjs`
+- [ ] **本地可跑的 CI 步骤一个都不能少**（清单以 `ci.yml` 的步骤表为准，本节是它的投影；
+      2026-09-13 事故：`typecheck:mobile` 只在 CI 跑，v0.3.0-beta.4 的发布提交因此红在
+      `test` 腿的第 24 步，而本地"全量"套件是绿的）：`test:mobile`、`test:host-archive-cleanup`、
+      `test:host-open-in`、`test:upgrade-tools`、`test:gui-acceptance`、`verify:styles`、
+      `build:dsh-runtime`（windows 腿的 `test:win32` 只能由 CI 跑）。
+- [ ] 类型检查全套：`typecheck` + `typecheck:sidebar/layout/connections/settings-bridge/git/open-in/client-web/connection/host-graph/host-git/api-gateway/mobile`
+      + `typecheck:host-archive-cleanup` + `typecheck:host-open-in`
+- [ ] **旧版本号残留扫描**：`grep -rn "<上一发布版本>" packages/*/test* packages/*/scripts/*.test.mjs`
       为空（测试硬编码旧 shellVersion 会在 bump 后误触发 F4 壳升级路径；`after-pack-adhoc-sign.test.mjs`
       的版本钉曾因未纳入扫描而失配）。
 

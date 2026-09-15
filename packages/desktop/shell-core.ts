@@ -367,8 +367,12 @@ import type { DshRuntimeController, RuntimeLifecycleProjection } from './dsh-run
 // seed/撤销路径与 F 组注册体必须共享同一实例（单写者/单飞语义不分叉）。
 import {
   applyPlugins,
+  builtChamberHostPackageSeeds,
   describeLocalPluginAddConfirmation,
+  portableChamberHostPackageSeeds,
   describeLocalPluginRemoveConfirmation,
+  describePluginDecision,
+  guardPluginMutation,
   localPluginList,
   materializeAndAdd,
   materializeArchiveAndAdd,
@@ -378,16 +382,31 @@ import {
   runLocalDshPlugin,
   runWithFinalOwnership,
   seedRemoteChamberHostPackages,
+  shouldPreferPinnedRuntimeLockfile,
+  sshApplyFacts,
+  WEB_PROFILE,
 } from './plugin-sync.ts';
-import type { ChamberHostPackageSeed, ExactOwnershipRegistry, ExactOwnershipToken, ExecFn, RemoteSpec, StatusFn } from './plugin-sync.ts';
+import type { ChamberHostPackageSeed, ExactOwnershipRegistry, ExactOwnershipToken, ExecFn, PluginProtectionFacts, RemoteSpec, StatusFn } from './plugin-sync.ts';
+// 2026-12 合并（main 的插件受保护集合判定，design 21 §6.11）：F 来源解析与装后
+// 族一致性复验是 control-plane-module 的纯函数——core 直接 import；事实输入经
+// ctx（builtinDshWorkspacePath / pinnedRuntimeLockfilePath / bundledRuntimeVersion，
+// 见 ShellAssemblyCtx 字段注释）。localProtectionFacts / verifyLocalProfileFamily
+// 为 core 内助手（F/H 组注册体共用同一实现）。
+import {
+  describeFamilyFindings,
+  resolveRuntimeFamily,
+  verifyProfileFamilyConsistency,
+} from './control-plane-module.ts';
 import {
   buildSshApplyRows,
   buildSshUndoDecision,
-  describeReservedNameRefusal,
+  describePluginRefusals,
   describeSshUndoConfirmation,
+  parseSpecName,
+  parseSpecVersion,
 } from './ssh-apply-rows.ts';
 import type { SshPluginJournal } from './ssh-plugin-journal.ts';
-import { buildPluginTarball, classifyPluginPick } from './plugin-tarball.ts';
+import { buildPluginTarball, classifyPluginPick, folderPluginIdentity } from './plugin-tarball.ts';
 import { buildApplyConfirmMessage, validateApplyPayload } from './gateway-ipc-shared.ts';
 import { getGatewaySyncRegistration } from './gateway-sync-registry.ts';
 import { sanitizeErrorText } from './sanitize-error.ts';
@@ -1751,6 +1770,24 @@ export interface ShellAssemblyCtx {
   /** 内建 dsh 版本（whenReady 装配期解析值快照——原 main.ts bundledVersion 常量；
    *  K 组 RESET_BUILTIN 注册体与启动路径同一事实；core 不自行解析内置 workspace）。 */
   bundledRuntimeVersion: string | null
+  // —— 2026-12 合并（main 的插件受保护集合判定，design 21 §6.11）新增字段 ——
+  /** 内建 dsh 工作区路径（装配期解析值——原 main.ts 模块级 builtinDshWorkspace
+   *  常量 / sidecar inputs.builtinDshWorkspace）。localProtectionFacts 的
+   *  resolveActiveRuntime(runtimeBaseDir, builtinDshWorkspacePath) 第二参：
+   *  活动树解析需要它才能落到内建树；core 不自行解析 workspace 路径。 */
+  builtinDshWorkspacePath: string | null
+  /** 运行时线锚锁文件路径叶（design 21 §6.11.1 的 F 首选事实源）：装配侧解析
+   *  `vendor/dsh/pnpm-lock.yaml`（Electron = app.isPackaged ? <resources>/vendor/dsh
+   *  : <pkgDir>/vendor/dsh；Swift sidecar 装配 = <sidecar>/vendor/dsh，即
+   *  builtinDshWorkspacePath 同根）。读不到返回 null——core 侧据此退到活动树自己
+   *  的锁文件（跨线误判防护见 shouldPreferPinnedRuntimeLockfile）。 */
+  pinnedRuntimeLockfilePath(): string | null
+  /** 更新退出腿武装的回撤叶（可选；Electron 装配提供真叶）：I 组 update 状态
+   *  订阅在武装期间收到重启失败（restartFailureText）或相位离开 downloaded 时
+   *  调用——装配侧 hold updaterQuitArmed / 兜底计时器 / 关窗豁免（main.ts
+   *  armUpdaterQuit·disarmUpdaterQuit 同源；叶自身幂等，未武装时 no-op）。
+   *  Swift flavor v1 blocked-available 从不武装 ⇒ 不提供，订阅只做状态 push。 */
+  disarmUpdaterQuit?(reason: string): void
 }
 
 /** 装配 shell IPC 面（W-10 S1 A 组 + S2 B 组 + S3 C 组 + S4 D 组 + S5 E 组 +
@@ -1882,6 +1919,13 @@ export function installIpcHandlers(deps: {
     stopLocalDsh,
     runtimeOperationSlot,
     bundledRuntimeVersion: bundledVersion,
+    // 2026-12 合并：插件受保护集合判定的 F 事实源叶与更新退出腿回撤叶（见
+    // ShellAssemblyCtx 字段注释——builtinDshWorkspacePath 为活动树解析第二参，
+    // pinnedRuntimeLockfilePath 为锚锁文件宿主路径叶，disarmUpdaterQuit 为可选
+    // 装配叶；Swift flavor 不提供后者）。
+    builtinDshWorkspacePath,
+    pinnedRuntimeLockfilePath,
+    disarmUpdaterQuit,
   } = deps.ctx
 
   // ① edges 回灌订阅段（S2 转实）：OS 唤醒与主窗口 'show' 的事件源语义自 main.ts
@@ -2681,6 +2725,104 @@ export function installIpcHandlers(deps: {
     ).catch(err => ({ error: `exec failed: ${describeUnknownError(err)}` }));
   });
 
+  // —— 2026-12 合并（main 的插件受保护集合判定，design 21 §6.11）：F 事实解析与
+  // 装后族一致性复验（main.ts 同名闭包随迁；F/H 组注册体共用同一实现）。事实输入
+  // 全部来自 ctx：活动树 = resolveActiveRuntime(runtimeBaseDir,
+  // builtinDshWorkspacePath)（core 纯解析）、内建线世代 = bundledRuntimeVersion
+  // （装配期快照）、锚锁文件 = pinnedRuntimeLockfilePath()、profile 目录 =
+  // localDshHome。main 侧 2026-12 review 的两条语义逐字保留：①「同版优先锚」——
+  // 用户选装 / env 树不得用内建锚判跨代（shouldPreferPinnedRuntimeLockfile 只在
+  // 活动世代 == 内建世代时为真），env 树另有内建锚兜底解析；② familySource 恒
+  // 'runtime'，解析失败 = familyNames null ⇒ plugin-sync 侧保守降级（官方 scope
+  // install 一律拒），绝不静默放行拆组合。
+  /** Protection facts for the LOCAL profile (design 21 §6.11.1): F parsed from
+   *  the ACTIVE runtime's lockfile closure (platform-independent, never the
+   *  source-line vendor tree), the effective runtime version, and whether the
+   *  profile manifest already exists (absent ⇒ the write face defers — the
+   *  first install is what creates it). */
+  const localProtectionFacts = (): PluginProtectionFacts => {
+    const resolved = resolveActiveRuntime(runtimeBaseDir, builtinDshWorkspacePath);
+    let familyNames: readonly string[] | null = null;
+    // The version half of the SAME resolution (design 21 §6.11.3): the
+    // post-install verification compares an installed family member against
+    // the versions this runtime actually provides, so a re-scoped vendored
+    // package (which keeps its upstream version, never the generation string)
+    // is judged on its own scale. Absent key = no version fact ⇒ generation arm.
+    let familyVersions: PluginProtectionFacts['familyVersions'] = null;
+    if (resolved.path !== null) {
+      // The built-in anchor describes the BUILT-IN runtime line only. A
+      // user-selected runtime (design 18 §3.6) — or an env-provided tree — is
+      // another line whose own lockfile is the right fact source; handing it
+      // the pin would judge a consistent profile against versions it never
+      // had (2026-12 review). Same-version trees still prefer the pin, because
+      // a source-line lockfile carries the opt-in segment and gets refused by
+      // the trust criterion.
+      const usePinned = shouldPreferPinnedRuntimeLockfile(resolved.version, bundledVersion);
+      const pinnedPath = pinnedRuntimeLockfilePath();
+      let family = resolveRuntimeFamily(resolved.path, {
+        pinnedLockfilePath: usePinned ? pinnedPath : null,
+      });
+      // A dev/env tree (DSH_CHAMBER_DSH_PATH) at another generation normally
+      // carries a source-line lockfile (opt-in segment ⇒ refused) and a
+      // source-line tree (forbidden names ⇒ refused), so it would resolve to
+      // NO family facts and degrade the write face to "official installs
+      // refused". For an explicit developer override the built-in anchor is
+      // still the closest usable source; a user-SELECTED released runtime
+      // never gets this stand-in (that is exactly the cross-line misjudgement
+      // this gate fixes).
+      if (!family.ok && !usePinned && resolved.source === 'env') {
+        family = resolveRuntimeFamily(resolved.path, { pinnedLockfilePath: pinnedPath });
+      }
+      familyNames = family.ok ? family.names : null;
+      familyVersions = family.ok ? family.versions : null;
+    }
+    const profileManifest = path.join(localDshHome, 'profiles', WEB_PROFILE, 'package.json');
+    return {
+      familyNames,
+      familyVersions,
+      runtimeVersion: resolved.version,
+      profileState: existsSync(profileManifest) ? 'ready' : 'absent',
+      familySource: 'runtime',
+    };
+  };
+  /** 可移植（非 localOnly）chamber host 包种子（design 20 §6 单一实现：另一台
+   *  主机上「应该有什么」只读本列表——localOnly 行的空 sourceDir 不得当缺件，
+   *  见 portableChamberHostPackageSeeds 的审查注记）。 */
+  const portableHostSeeds = (): readonly ChamberHostPackageSeed[] =>
+    portableChamberHostPackageSeeds(chamberHostPackageSeeds);
+  /** Post-install family verification (design 21 §6.11.4): a successful install
+   *  is not a success until the profile tree is proven consistent — a hoisted
+   *  transitive copy of a runtime-family package that the pinned release does
+   *  not provide (outside-family) or that sits on another generation
+   *  (generation-mismatch) is exactly the composition split the judgement alone
+   *  cannot see (R2 only sees the direct spec).
+   *
+   *  v1 semantics (matching the gateway's existing preImage discipline): the
+   *  finding is LOUD and the op reports failure; automatic rollback of the
+   *  mutated profile is registered as open work in STATUS. */
+  const verifyLocalProfileFamily = (facts: PluginProtectionFacts): { ok: true } | { ok: false; error: string } => {
+    if (!Array.isArray(facts.familyNames) || facts.familyNames.length === 0) return { ok: true };
+    const familyVersions = facts.familyVersions ?? null;
+    const verdict = verifyProfileFamilyConsistency({
+      profileDir: path.join(localDshHome, 'profiles', WEB_PROFILE),
+      familyNames: facts.familyNames,
+      runtimeVersion: facts.runtimeVersion ?? null,
+      familyVersions,
+    });
+    if (verdict.ok) {
+      // A skip is NOT a pass: record it loudly (the install itself succeeded,
+      // but the profile tree was never proven consistent).
+      if (verdict.skipped !== undefined) {
+        console.warn(`[dsh-chamber] 插件族一致性复验被跳过：${verdict.skipped}`);
+      }
+      return { ok: true };
+    }
+    return {
+      ok: false,
+      error: `installed, but the profile tree no longer matches the instance runtime: ${describeFamilyFindings(verdict.findings, facts.runtimeVersion ?? null, familyVersions)}`,
+    };
+  };
+
   // —— F 组（S6 批；W-10 S6 施工图第 1 项）——
   // ssh plugin 6 注册体（SSH_PLUGIN_LIST / SSH_PLUGIN_APPLY / SSH_PLUGIN_UNDO /
   // SSH_SEED_HOST_GRAPH / SSH_PLUGIN_MATERIALIZE_ADD /
@@ -2751,14 +2893,13 @@ export function installIpcHandlers(deps: {
     if (restart !== undefined && typeof restart !== 'boolean') {
       return { ok: false, error: 'restart must be a boolean' };
     }
-    // Reserved-name deny (design 21 §6.4/decision 19, same set as the
-    // gateway): whole-batch refusal listing the denied names BEFORE any
-    // transport work — @deepseek-ai/* and @dsh-chamber/* can never be
-    // installed or removed through the plugin model. applyPlugins re-checks
-    // (defense in depth) with the same copy.
-    const assembled = buildSshApplyRows(add, remove);
-    if (assembled.refused.length > 0) {
-      return { ok: false, error: describeReservedNameRefusal(assembled.refused) };
+    // Protected-set judgement (design 21 §6.11, ssh form = B₀ ∪ S with no
+    // family source): whole-batch refusal naming each refused row and its
+    // code BEFORE any transport work. applyPlugins re-checks with the same
+    // facts (defense in depth) and the undo path rides that same check.
+    const assembled = buildSshApplyRows(add, remove, sshApplyFacts());
+    if (assembled.refusals.length > 0) {
+      return { ok: false, error: describePluginRefusals(assembled.refusals) };
     }
     // Known bundle packages for the §4.5 ④ bundles assertion (design 13):
     // the LOCAL manifest's bundle-declaring dependency names. When the
@@ -2767,7 +2908,7 @@ export function installIpcHandlers(deps: {
     // membership is still asserted); never a silent wrong assertion.
     let knownBundles: string[] | undefined;
     try {
-      knownBundles = localPluginList(localDshHome).bundleLines;
+      knownBundles = localPluginList(localDshHome, localProtectionFacts()).bundleLines;
     } catch (localError) {
       console.warn('[dsh-chamber] 本地清单不可读，bundle 激活层断言跳过：', localError);
       knownBundles = undefined;
@@ -2784,6 +2925,7 @@ export function installIpcHandlers(deps: {
           ownershipKey: `${target.sourceToken.generation}:${target.fingerprint}`,
           journal: sshPluginJournal,
           targetFingerprint: target.fingerprint,
+          protection: sshApplyFacts(),
         },
       ),
     );
@@ -2847,6 +2989,7 @@ export function installIpcHandlers(deps: {
             ownershipKey: `${target.sourceToken.generation}:${target.fingerprint}`,
             journal: sshPluginJournal,
             targetFingerprint: target.fingerprint,
+            protection: sshApplyFacts(),
           },
         );
         if (!result.ok) return { ok: false as const, error: result.error };
@@ -2906,7 +3049,13 @@ export function installIpcHandlers(deps: {
     // packages (host-graph + git-worktree): a remote connected before the
     // git package existed only picks it up through this path or the next
     // ready transition.
-    const missing = chamberHostPackageSeeds.filter(seed => !existsSync(path.join(seed.sourceDir, 'dist', 'index.js')));
+    // Portability first (design 20 §6, 2026-12 review): a `localOnly` row (empty
+    // sourceDir by design) must never count as a missing artifact on this
+    // OTHER-host path; the shipped-artifact gate also refuses an empty dir, so it
+    // can never resolve the process CWD's own dist/index.js.
+    const seeds = portableHostSeeds();
+    const built = builtChamberHostPackageSeeds(seeds);
+    const missing = seeds.filter(seed => !built.includes(seed));
     if (missing.length > 0) {
       return { ok: false, error: `chamber host 包未打包：${missing.map(seed => seed.label).join('、')} 的 dist/index.js 缺失——请先构建（pnpm run build:host-packages）` };
     }
@@ -2918,7 +3067,7 @@ export function installIpcHandlers(deps: {
       const result = await seedRemoteChamberHostPackages(
         scopedExecForTarget(target, ownsSeed),
         target.spec,
-        chamberHostPackageSeeds,
+        seeds,
       );
       if (!ownsSeed()) return { ok: false, error: 'ssh instance changed while host seed was in progress' };
       // Surface the outcome in the instance's ring-buffer log (the connections
@@ -2976,11 +3125,16 @@ export function installIpcHandlers(deps: {
       );
     }
     const archiveName = source.name;
+    // The archive's declared version (read by classifyPluginPick) is the
+    // judgement's version input; dropping it left the parameter dead and
+    // the materialize generation check unable to see it (2026-12 review).
+    const archiveVersion = source.version;
     const archiveBytes = source.bytes;
     return runWithFinalOwnership(
       () => ownsRemoteTarget(target),
       () => materializeArchiveAndAdd(scopedExecForTarget(target), target.spec, {
         name: archiveName,
+        version: archiveVersion,
         bytes: archiveBytes,
       }),
     );
@@ -3259,7 +3413,7 @@ export function installIpcHandlers(deps: {
   // silent empty success.
   deps.ipc.handle(IPC_CHANNELS.LOCAL_PLUGIN_LIST, () => {
     try {
-      return { ok: true, manifest: localPluginList(localDshHome) };
+      return { ok: true, manifest: localPluginList(localDshHome, localProtectionFacts()) };
     } catch (error) {
       return { ok: false, error: describeUnknownError(error) };
     }
@@ -3349,13 +3503,39 @@ export function installIpcHandlers(deps: {
     // exactly as with folder picks.
     const classified = classifyPluginPick(picked.path);
     if (!classified.ok) return { ok: false, error: sanitizeErrorText(classified.error) };
+    // Protected-set judgement over the PICKED manifest (design 21 §6.11):
+    // a folder/archive pick is the one local path whose name is known only
+    // from the picked package.json, so it is judged here before the picker
+    // result can reach the CLI. `file:` specs carry no registry name, so
+    // runLocalDshPlugin's own guard deliberately skips them.
+    const pickedManifest = classified.source.kind === 'tgz'
+      ? { ok: true as const, name: classified.source.name, version: classified.source.version as string | null }
+      : folderPluginIdentity(classified.source.path);
+    if (!pickedManifest.ok) return { ok: false, error: sanitizeErrorText(pickedManifest.error) };
+    const localFacts = localProtectionFacts();
+    const pickedGuard = guardPluginMutation({
+      op: 'install',
+      name: pickedManifest.name,
+      version: pickedManifest.version,
+      facts: localFacts,
+    });
+    if (pickedGuard.kind === 'refuse') {
+      return { ok: false, error: describePluginDecision(pickedGuard) };
+    }
     return runLocalPluginMutation('plugin:add-file', async (dshWorkspace) => {
       // design 21 §10 缺陷① fix (plan 24 小项④): the main-process picker
       // IS the sanctioned file: source — pass the capability flag so
       // the picked absolute path passes runLocalDshPlugin's gate (without it
       // every file: pick was refused as an invalid add spec).
-      const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', `file:${picked.path}`, { allowFileSpec: true });
-      return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local add failed' };
+      // Facts are re-resolved INSIDE the mutation (2026-12 review): the guard
+      // above ran before the picker/fence lease, and a runtime switch in that
+      // window would make the inner guard and the post-install verification
+      // describe the PREVIOUS runtime.
+      const freshFacts = localProtectionFacts();
+      const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', `file:${picked.path}`, { allowFileSpec: true, protection: freshFacts });
+      if (!result.ok) return { ok: false, error: result.error ?? 'local add failed' };
+      const verified = verifyLocalProfileFamily(freshFacts);
+      return verified.ok ? { ok: true } : { ok: false, error: verified.error };
     });
   });
   deps.ipc.handle(IPC_CHANNELS.LOCAL_PLUGIN_ADD, async (payload: unknown) => {
@@ -3368,6 +3548,17 @@ export function installIpcHandlers(deps: {
     if (typeof specArg === 'string' && specArg.startsWith('file:')) {
       return { ok: false, error: 'local file imports must use the local import picker' };
     }
+    // Protected-set judgement FIRST (design 21 §6.11): never ask the user to
+    // confirm an install the write face would refuse (protected name, or an
+    // official-scope install without the instance's exact generation).
+    const addFacts = localProtectionFacts();
+    const addGuard = guardPluginMutation({
+      op: 'install',
+      name: parseSpecName(specArg),
+      version: parseSpecVersion(specArg),
+      facts: addFacts,
+    });
+    if (addGuard.kind === 'refuse') return { ok: false, error: describePluginDecision(addGuard) };
     // User confirmation (design 09 §4 v1 mitigation): installing a registry
     // package into the LOCAL profile creates a persistent execution surface
     // on the next local boot — never a silent script action.
@@ -3379,13 +3570,28 @@ export function installIpcHandlers(deps: {
     if ('cancelled' in confirm) return { ok: true, cancelled: true };
     if (!confirm.ok) return { ok: false, error: confirm.error };
     return runLocalPluginMutation('plugin:add', async (dshWorkspace) => {
-      const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', specArg);
-      return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local add failed' };
+      // Re-resolve the facts INSIDE the mutation: the guard above ran before
+      // the confirmation dialog and before this fence/lease, and a runtime
+      // switch in that window would make both the inner guard and the
+      // post-install verification describe the PREVIOUS runtime (2026-12
+      // review). The pre-dialog guard stays as the user-facing fast refusal.
+      const freshFacts = localProtectionFacts();
+      const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'add', specArg, { protection: freshFacts });
+      if (!result.ok) return { ok: false, error: result.error ?? 'local add failed' };
+      const verified = verifyLocalProfileFamily(freshFacts);
+      return verified.ok ? { ok: true } : { ok: false, error: verified.error };
     });
   });
   deps.ipc.handle(IPC_CHANNELS.LOCAL_PLUGIN_REMOVE, async (payload: unknown) => {
     const { name } = payload as { name: unknown };
     if (typeof name !== 'string' || name === '') return { ok: false, error: 'invalid plugin name' };
+    // Protected-set judgement first (design 21 §6.11): a composition member
+    // or chamber seed can never be removed through the plugin model — the
+    // refusal is honest and immediate, not a confirmed action that dies in
+    // the CLI. `remove` never judges a version.
+    const removeFacts = localProtectionFacts();
+    const removeGuard = guardPluginMutation({ op: 'remove', name, version: null, facts: removeFacts });
+    if (removeGuard.kind === 'refuse') return { ok: false, error: describePluginDecision(removeGuard) };
     // User confirmation (design 09 §4 v1 mitigation): removal is destructive
     // — a page script must not be able to wipe the local profile silently.
     // W-10 S8: 经上方 S6 edges 版 confirmPluginAction 助手（原 main.ts 调用为
@@ -3395,7 +3601,8 @@ export function installIpcHandlers(deps: {
     if ('cancelled' in confirm) return { ok: true, cancelled: true };
     if (!confirm.ok) return { ok: false, error: confirm.error };
     return runLocalPluginMutation('plugin:remove', async (dshWorkspace) => {
-      const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'remove', name);
+      const freshFacts = localProtectionFacts();
+      const result = await runLocalDshPlugin(dshWorkspace, localDshHome, 'remove', name, { protection: freshFacts });
       return result.ok ? { ok: true } : { ok: false, error: result.error ?? 'local remove failed' };
     });
   });
@@ -3561,6 +3768,19 @@ export function installIpcHandlers(deps: {
   // ctx.updateController 注入；本段注册状态 push 订阅与 4 个 UPDATE 注册体 +
   // OPEN_RELEASE（按原 main.ts 顺序）。
   updater.subscribe((updateState) => {
+    // 2026-12 合并（main 的更新退出腿回收）：装配侧在 quitAndInstall 前武装
+    // 「更新退出腿」（关窗不 hide），武装期间唯一可能出现的 push 就是重启失败
+    // （一次性 restartFailureText；phase 保持 downloaded，见 updater.ts 的
+    // 'error' 分支）或相位离开 downloaded——两者都证明退出腿没有发生，经
+    // ctx.disarmUpdaterQuit 撤回武装（恢复正常关窗语义；窗口已被更新退出腿关掉
+    // 时装配叶负责把主窗口拉回，让设置页如实呈现失败文案与就地重试）。
+    // 核心不持有武装位：装配叶自身幂等（未武装 no-op）；Swift flavor v1
+    // blocked-available 从不武装且不提供该叶（可选字段）⇒ 只做下方状态 push。
+    // 该帧的落点不是「唯一诚实呈现面」：装配叶可能刚重建主窗口，新 renderer 尚
+    // 未挂监听——真正的兜底是 settings 面挂载时的 UPDATE_STATE pull（下方注册体）。
+    if (updateState.restartFailureText !== undefined || updateState.phase !== 'downloaded') {
+      disarmUpdaterQuit?.(updateState.restartFailureText !== undefined ? 'restart failed' : `phase=${updateState.phase}`);
+    }
     // 状态 push（UPDATE_STATE_CHANGED send 源；主窗身份折算见组注释——S2 同款
     // committed-push 包装 + rendererPush 叶）：无存活主窗（原 updateWindow ===
     // null）静默跳过；push 失败 loud（等待 renderer 重拉兜底）。

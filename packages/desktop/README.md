@@ -5,7 +5,7 @@ dsh-chamber 的 Electron 壳（v4 连接管理器形态）：单 frame 加载控
 ## 目录
 
 - `main.ts` — Electron 主进程的唯一装配与 IPC 注册入口：单窗口单 frame、control-plane、connection v2 transport/plugin/open-in/deep-link/通知/设置/运行时/更新接线，以及退出清理。避免并存一套未导入的 handler 实现。
-- `ipc-events.ts` — IPC 通道名常量（`IPC_CHANNELS`，主进程侧单一来源；preload 重复字面量由 `ipc-surface-mirror.test.ts` 守卫）
+- `ipc-events.ts` — IPC 通道名常量（`IPC_CHANNELS`，主进程侧单一来源；preload 重复字面量由 `test/ipc/ipc-surface-mirror.test.ts` 守卫）
 - `control-plane-module.ts` — `@dsh-chamber/control-plane` 双路径门面（dev/测试 → workspace 源码；打包态 → `dist/control-plane/` 编译产物），导出 `createControlPlane` 与共享协议工具（rpc-envelope / cordis-inserts）
 - `updater.ts` — 更新控制器（设计 11）：stable 走 GitHub provider；beta 按应用自身版本自动锁定，经有界 Releases API 选择最高 canonical published beta 后切 exact-tag Generic feed（发现失败绝不回退 `latest*`）；静默检查（启动延迟 + 6h 周期）+ 状态机 + 用户确认后下载（autoDownload=false）+ 退出时安装；非秘密状态投影
 - `preload.cts` — 沙箱 preload 源码，经 contextBridge 暴露 `window.dshChamber`；运行时使用编译产物 `dist/preload.cjs`（见 `scripts/build-preload.mjs`）

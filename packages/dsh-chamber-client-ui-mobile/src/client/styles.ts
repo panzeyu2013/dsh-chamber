@@ -14,17 +14,43 @@
  * class emitted by another package is hashed per bundle and cannot be targeted
  * from here. That rule is why the sidebar's git-action hook is the
  * `data-git-action` attribute (2026-09-11 upstream-alignment) rather than the
- * global class it used to be; this header is the package that states it. Production CSS-modules naming in the
- * instance bundle is `[hash]_[local]` (upstream cssModules pattern, verified
- * on the shipped 0.1.5-rc.1 bundles: `JObwrW_row`, `zGbnIq_modelRow`,
- * `qSYn7G_cards`; the emitting packages are untouched at 0.1.5-rc.2), so a local
- * name is matched by SUFFIX through
- * `:is([class$="_<local>"], [class*="_<local> "])` — the second arm covers
- * elements that carry several classes, where the local name is not last.
- * The earlier `[class*="_<local>_"]` infix form matched NOTHING in production:
- * `_<local>_<hash>_<idx>` is the CHAMBER shell's own Vite naming, never the
- * instance bundle's, so the phone-tier composer row, the model row and the
- * settings card grids silently kept their desktop geometry (2026-09 audit).
+ * global class it used to be; this header is the package that states it.
+ *
+ * THE ONE CLASS-NAME EXCEPTION, AND BOTH NAMING SHAPES (2026-09-13 review A2):
+ * three ship-time anchors (the composer bar row, the settings Models row) target
+ * a compiled local name, so the arms must cover BOTH shapes the same upstream
+ * sources can be built with:
+ *   - local-first `_<local>_<hash>_<idx>` — what the PINNED bundles actually
+ *     emit today. Measured, not assumed: the official package that ships with
+ *     the pin
+ *     (`node_modules/@deepseek-ai/dsh-web-frontend/dist/assets/index-*.css`,
+ *     0.1.5-rc.2) carries 251 unique names of this shape and ZERO of the other,
+ *     and the chamber's own composite build (`packages/desktop/dist/web/
+ *     assets/chamber-*.css`) is the same shape (904 unique);
+ *   - hash-first `[hash]_[local]` (e.g. `JObwrW_row`) — the shape an earlier
+ *     audit saw on the rc.1 bundles, kept as a suffix arm so a future build
+ *     that flips back does not silently lose these rules.
+ * The dual arm is therefore `:is([class$="_<local>"], [class*="_<local> "],
+ * [class*="_<local>_"])`: suffix (single- and multi-class hash-first) plus
+ * infix (every local-first form). An earlier revision asserted the infix form
+ * "matched nothing" and dropped it — with the pinned bundles that left these
+ * rules matching nothing at all, i.e. exactly the silent desktop-geometry
+ * regression the audit set out to fix. The watchdog's own token query
+ * (`official-hover-card.ts`) has always used the infix form for this reason.
+ *
+ * WHERE THE NAMES COME FROM (2026-09-13 round-2 review F4 — the arm shape is
+ * evidenced by the two builds above, NOT by the examples): the composer row is
+ * `_row_74m2c_240` (`flex-wrap:wrap; container-type:inline-size`) in the
+ * chamber's composite build; the pinned official bundle has no composer row at
+ * all (its whole sheet contains zero `flex-wrap:wrap` and zero
+ * `container-type:inline-size`), and the `_row_*` names it does carry belong to
+ * other modules (e.g. `_row_4qrvp_55` is a `.topLevelBracket` row,
+ * `_row_luwio_16` a plain flex row). The Models row is `_modelRow_16d5a_459`,
+ * also composite-build only. The model trigger is NOT class-matched any more:
+ * the seat's `div[data-slot="conversation.input.model"]` wrapper is the anchor
+ * (see the phone-tier rule below), because `_trigger_` names four different
+ * modules in the composite build and the row's trailing cluster also holds
+ * ContextMeter's 28px `flex:none` ring.
  *
  * VISUAL LANGUAGE: everything rides the official `--dsw-*`/`--ds-*` tokens
  * (no literal colors except token fallbacks); the drawer reuses the official
@@ -146,6 +172,28 @@ export const MOBILE_CSS = `
    (media-query scoped). */
 @media (pointer: coarse) and (hover: none) {
   button[aria-label] + [role="tooltip"][data-side] {
+    display: none !important;
+  }
+
+  /* data-tip bubbles: the hand-rolled ones on chamber pages (e.g. the
+     connections settings sheet's .iconButton / .restartTip in
+     ConnectionsSection.module.css, whose ::after carries content:
+     attr(data-tip)) AND the official ones — upstream's agent-preset client row
+     sets the data-tip attribute on its icon buttons and consumes it the same
+     way (content:attr(data-tip) in its bundled CSS; re-audited 2026-12, the
+     earlier "the official bundle carries ZERO data-tip" note was wrong because
+     it only grepped the SHELL bundle, not the dynamic client rows). Same
+     coarse-pointer artifact as the official Tooltip above: the bubble is
+     opacity-gated on :hover / :focus-visible, so a tap leaves the synthesized
+     hover behind and the bubble stays over the row it describes. On the
+     chamber pages every data-tip site pairs the attribute with aria-label
+     (verified across the 13 sites at the 2026-09 review; that package's Button
+     prop surface documents the pairing), so no chamber accessible name is
+     lost; the official sites are upstream's own pairing and are suppressed for
+     the same reason as the tooltip rule above. Hiding only the pseudo-element
+     leaves the host control, its box and its label untouched: pure CSS, no JS,
+     desktop untouched (media-query scoped). */
+  [data-tip]::after {
     display: none !important;
   }
 }
@@ -327,7 +375,6 @@ export const MOBILE_CSS = `
     top: max(10px, env(safe-area-inset-top, 0px));
     left: max(10px, env(safe-area-inset-left, 0px));
     z-index: 76;
-    display: inline-flex;
     align-items: center;
     justify-content: center;
     width: 44px;
@@ -347,6 +394,26 @@ export const MOBILE_CSS = `
     touch-action: manipulation;
     -webkit-appearance: none;
     appearance: none;
+  }
+  /* The toggle is the DRAWER's entry point, so it may only be VISIBLE when the
+     drawer can actually work: the frame must be stamped AND the sidebar column
+     must have been found (markup.ts writes data-mobile-roles from the same
+     all-or-nothing probe that gates the frame, see stampFrame). Without this
+     gate a vendor rename of the centre key would leave a floating button whose
+     only effect is flipping a frame attribute nothing responds to — a dead
+     control is worse than an absent one. The display switch lives in its own
+     rule (not in the block above) so the artifact/test pins on that block stay
+     valid; the stylesheet's media-query-free default already hides it. */
+  [data-mobile-frame][data-mobile-roles~="sidebar"] .dsh-mobile-nav-toggle {
+    display: inline-flex;
+  }
+  /* Same gate for the tap-absorbing backdrop: it exists only to close the
+     drawer, so with no sidebar role found it must not cover the transcript.
+     A separate rule (rather than editing the pinned backdrop rule) keeps the
+     existing selector/declaration pins intact; equal specificity + later
+     position means this one wins exactly when the sidebar role is absent. */
+  [data-mobile-frame]:not([data-mobile-roles~="sidebar"]) .dsh-mobile-backdrop {
+    display: none;
   }
   .dsh-mobile-nav-toggle:hover {
     background: var(--dsw-alias-interactive-bg-hover);
@@ -417,16 +484,30 @@ export const MOBILE_CSS = `
     padding-left: calc(62px + env(safe-area-inset-left, 0px)) !important;
   }
 
-  /* Crumbs/lineage chain: wrap instead of clip. The official .crumbs row is
-     nowrap + overflow hidden (desktop-width assumption): on a phone a long
-     title chain or the lineage chips ("N 个子代理" catalog triggers) get
-     silently CUT (the observed truncated/collapsed header labels). Wrapping
-     keeps every crumb segment and chip on its own line; per-crumb ellipsis
-     (official .crumb max-width) still bounds single titles. */
+  /* Crumbs/lineage chain: KEEP the official single-line contract and pan the
+     strip instead of wrapping it. Upstream .crumbs is white-space:nowrap +
+     overflow:hidden + min-width:0; the previous wrap rule (2026-09 review-fix)
+     overrode the inherited nowrap to normal, which is a REGRESSION for the
+     lineage chip: its count text is a bare span with NO class of its own (the
+     upstream SubagentHeaderLineage class dictionary omits the count key it
+     references), so the ONLY thing keeping "31 个子代理" on one line was the
+     nowrap it inherited from this row. With normal, CJK broke per character
+     and the badge rendered as a five-line vertical column (5 x 18px = 90px),
+     inflating the title row from 30px to ~96px and squeezing the title.
+     overflow-x:auto replaces the upstream clip so long ancestry chains stay
+     reachable; the lineage chip is kept out of the shrink race in the phone
+     tier below, so panning is the last resort rather than the mechanism. The
+     scrollbar is hidden because the strip is a gesture surface, not a widget. */
   [data-mobile-frame] [data-slot="conversation.session.header"] nav {
-    flex-wrap: wrap;
-    overflow: visible;
-    white-space: normal;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    overflow-y: hidden;
+    white-space: nowrap;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+  [data-mobile-frame] [data-slot="conversation.session.header"] nav::-webkit-scrollbar {
+    display: none;
   }
 
   /* Session-header view tabs ('role="tablist"'): 'tabs.length > 1' is the
@@ -590,17 +671,103 @@ export const MOBILE_CSS = `
 
 /* ---- phone tier (design 17 §18.4.2/§18.4.3) ---- */
 @media (max-width: 768px) and (pointer: coarse) {
+  /* Session header: one bounded row (2026-09-14 review-fix). The touch tier
+     restored the official nowrap contract on the crumb strip; this tier
+     decides WHAT gives up width. Upstream ConversationSessionHeader shape:
+       header
+         > div.titleRow
+             > div.titleCluster > [nav.crumbs, div.headerActions]
+             > div.headerUtilities
+             > div.headerCorner[data-conversation-header-corner]
+         > div.tabs[role=tablist]
+     The lineage chip renders INSIDE nav.crumbs (inside its crumbSeg), so it
+     sits at the END of the strip and must never be the element that is
+     squeezed — that is exactly how the five-line vertical badge happened. The
+     CURRENT crumb absorbs instead, which it can do textually: upstream .crumb
+     already carries max-width:220px + text-overflow:ellipsis.
+     NOTE the :has() arm is a DESCENDANT match on purpose — the nav is
+     titleRow > titleCluster > nav, so a child combinator (> nav) would be a
+     silent no-op. The :has() invalidation cost stays inside the header
+     subtree, never the streaming transcript. */
+  [data-mobile-frame] [data-slot="conversation.session.header"] > header {
+    padding-top: calc(10px + env(safe-area-inset-top, 0px)) !important;
+    padding-right: calc(12px + env(safe-area-inset-right, 0px)) !important;
+  }
+  [data-mobile-frame] [data-slot="conversation.session.header"] > header > div:has(nav) {
+    flex-wrap: nowrap;
+    min-height: 48px;
+  }
+  /* The corner seat ships margin-right:-16px against upstream's 28px header
+     padding. This tier narrows that padding to 12px, so the negative margin
+     now only buys overlap risk. */
+  [data-mobile-frame] [data-slot="conversation.session.header"] > header > div:has(nav) > div:last-child {
+    margin-right: 0 !important;
+  }
+  /* Shrink order, crumb strip: the CURRENT crumb (the one upstream renders
+     with the disabled attribute) takes the remaining width and ellipsises;
+     every other crumb keeps its intrinsic width and is panned by the strip. */
+  [data-mobile-frame] [data-slot="conversation.session.header"] nav > span {
+    min-width: 0;
+  }
+  [data-mobile-frame] [data-slot="conversation.session.header"] nav > span > button {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+  [data-mobile-frame] [data-slot="conversation.session.header"] nav > span > button:disabled {
+    flex: 1 1 auto;
+    min-width: 4em;
+  }
+  /* Lineage chip: flex:0 0 auto so it is never in the shrink race, a 44px
+     touch floor (upstream ships a 28px box) and a bounded, single-line count
+     label. The count span is CLIPPED, never removed, so the accessible name
+     keeps the full text. */
+  [data-mobile-frame] [data-slot="conversation.session.header.lineage"] button {
+    flex: 0 0 auto;
+    min-width: 0;
+    min-height: 44px;
+    max-width: 100%;
+    white-space: nowrap;
+  }
+  [data-mobile-frame] [data-slot="conversation.session.header.lineage"] button > svg {
+    flex: none;
+  }
+  [data-mobile-frame] [data-slot="conversation.session.header.lineage"] button > span:last-of-type {
+    min-width: 0;
+    max-width: 8em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* The two icon seats: the 44px floor must mean the BOX (the same decision
+     the tab strip and the dockkit chips already carry). Without border-box a
+     28px button with 6px padding renders ~56px and thickens the row for
+     nothing. */
+  [data-mobile-frame] [data-slot="conversation.session.header.utilities"] button,
+  [data-mobile-frame] [data-slot="conversation.session.header.corner"] button {
+    box-sizing: border-box;
+  }
+
   /* Composer toolbar: one line. The official row wraps; force nowrap (the
      official 12px gap is kept — no gap override). */
-  /* Local-name SUFFIX match (production names are [hash]_[local]): the dual
-     arm covers multi-class elements. It also hits sibling rows whose local name
-     ends in "row" inside the composer bar subtree (e.g. the queue dock's
-     .row), which is harmless today — those rows declare no flex-wrap and carry
-     no _trigger child. */
-  [data-slot="conversation.composer.bar"] :is([class$="_row"], [class*="_row "]) {
+  /* Local-name match, BOTH production shapes (see the header): suffix for the
+     hash-first [hash]_[local] form (single- and multi-class), infix for the
+     local-first _<local>_<hash>_<idx> form the pinned bundles emit. It also
+     hits sibling rows whose local name ends in "row" inside the composer bar
+     subtree (e.g. the queue dock's .row), which is harmless today — those rows
+     declare no flex-wrap and carry no _trigger child. */
+  [data-slot="conversation.composer.bar"] :is([class$="_row"], [class*="_row "], [class*="_row_"]) {
     flex-wrap: nowrap !important;
   }
-  [data-slot="conversation.composer.bar"] :is([class$="_row"], [class*="_row "]) :is([class$="_trigger"], [class*="_trigger "]),
+  /* Model trigger: truncate instead of overflowing. Scoped to the model SEAT,
+     not to every local name "trigger" in the row: the seat renders a
+     div[data-slot="conversation.input.model"] wrapper around ModelSelect's
+     button (upstream scoped-slots.tsx gives every slot an addressable wrapper),
+     while the row's trailing cluster also holds ContextMeter — same "trigger"
+     local name, but flex:none and width:28px. A class-name arm therefore capped
+     the 28px ring's max-width and overrode its flex:none, which the 2026-09
+     audit never intended (2026-09-13 round-2 review F5). The seat anchor is the
+     narrow one; test/visual/breakpoints.test.ts pins both it and the absence of any
+     "trigger" class arm. */
   [data-slot="conversation.input.model"] button {
     max-width: 112px !important;
     flex: 0 1 auto !important;
@@ -737,7 +904,7 @@ export const MOBILE_CSS = `
        range, about 580-768px of the phone tier, not just 681-768px.
      The arm was deleted for both grids (2026-09-11 upstream-alignment T17b) —
      upstream's geometry is the only geometry for each of them. */
-  [data-slot="settings.section"] :is([class$="_modelRow"], [class*="_modelRow "]) {
+  [data-slot="settings.section"] :is([class$="_modelRow"], [class*="_modelRow "], [class*="_modelRow_"]) {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   }
   /* iOS focus zoom: any editable field below 16px triggers the automatic
@@ -782,6 +949,58 @@ export const MOBILE_CSS = `
      column (16px), neither of which this rule touches. */
   [data-conversation-scroll] {
     overscroll-behavior-y: contain;
+  }
+}
+
+/* ---- narrow phone tier: 480px and below (2026-09-14 review-fix) ----
+   The session header's width budget at 390px is ~78px of title after the
+   floating toggle gutter, the two 44px icon seats, the mode chip and the
+   lineage chip. Below 480px the mode chip's LABEL is the cheapest thing to
+   drop: the chip is still the same interactive menu trigger, and clipping the
+   span (rather than removing it) keeps the accessible name intact. The
+   lineage chip keeps its digits — it is the only entry point to the subagent
+   catalog. */
+@media (max-width: 480px) and (pointer: coarse) {
+  /* The headerActions seat's ONLY text-bearing direct child is upstream's
+     agent-preset cell, and it is a bare span (AgentPresetLabel) — the schedule
+     and job cells are div wrappers whose triggers are nested, so a
+     "> button > span" selector matches nothing at all. 2026-09-14 second-pass
+     review: the rule that used to sit here was dead code written against the
+     HERO seat's button[aria-haspopup=menu], which upstream registers into
+     conversation.hero.agentPreset — not into the header. Upstream already
+     bounds that label itself (max-width 180px + nowrap + overflow hidden), so
+     this tier only takes width BACK from it: the icon stays, the text clips,
+     and the crumb strip keeps usable room on a narrow row instead of losing it
+     to a label the user has already read. */
+  [data-mobile-frame] [data-slot="conversation.session.header.actions"] > span {
+    flex: 0 1 auto;
+    min-width: 0;
+    max-width: 8em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+
+/* ---- narrowest tier: 360px and below ----
+   Content width is ~246px here: the crumb strip keeps the digits and the
+   chevron, the unit text and the crumb separator are the next things to go,
+   and the current crumb's floor drops so the title does not collapse to an
+   ellipsis-only box. Everything stays attribute-anchored: the count variant
+   is the only lineage shape whose root carries a leading separator span. */
+@media (max-width: 360px) and (pointer: coarse) {
+  /* One more step for the narrowest row: the same agent-preset label. */
+  [data-mobile-frame] [data-slot="conversation.session.header.actions"] > span {
+    max-width: 5em;
+  }
+  [data-mobile-frame] [data-slot="conversation.session.header.lineage"] > div > span:first-child {
+    display: none;
+  }
+  [data-mobile-frame] [data-slot="conversation.session.header.lineage"] button > span:last-of-type {
+    max-width: 2.4em;
+  }
+  [data-mobile-frame] [data-slot="conversation.session.header"] nav > span > button:disabled {
+    min-width: 3em;
   }
 }
 `

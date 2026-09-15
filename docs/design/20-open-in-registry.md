@@ -174,7 +174,7 @@ fork & supersede 让前两条彻底消失（不再需要动 spawn 环境、不�
   `{ok:true,value}` / `{ok:false,error}` 的传输结果，再读`value`里的域载体
   `{ok:true,value}|{ok:false,error:{code,message}}`——只解一层的实现会在生产里恒得空目录
   （单测喂的是域载体本身，因此当时全绿），页级读取锁步由
-  `packages/renderer/test/page-read-path-lockstep.test.ts` 用**真实实例客户端**兜住。域载体里的
+  `packages/renderer/test/lifecycle/page-read-path-lockstep.test.ts` 用**真实实例客户端**兜住。域载体里的
   `apps` 必须是字符串数组（坏条目/重复只丢自己，不抹掉合法 sibling），任何形状不明的回答
   一律 fail-closed；本地实例未就绪时调用失败
   ⇒ 目录为空、按钮诚实隐藏（fail-closed），不阻塞 main 池，也不阻塞任何 boot；
@@ -255,7 +255,7 @@ provider（本地目录不再是主进程的事，也不再是"官方宿主行"�
   （`client/official-catalog.ts`）已退役；
 - **协议头镜像**：`shared/open-in-wire.ts` 是客户端侧的命名空间/方法名/错误码/媒体类型镜像
   （客户端是浏览器包，不能 import Node 侧的 seed 包），由
-  `test/open-in-wire-lockstep.test.ts` 读 seed 的 `src/shared.ts` + `src/index.ts` 逐项钉住
+  `test/wire-protocol/open-in-wire-lockstep.test.ts` 读 seed 的 `src/shared.ts` + `src/index.ts` 逐项钉住
   （命名空间、四个方法名、`@Remote` 面、错误码集合、图标媒体类型）；
 - **图标契约**：`iconUrl(appId): string | null`（`OpenInButton` 的 prop 形状**不变**）读的是
   **页级机器目录**缓存里的 `data:` URL；缓存由 `machine-catalog.ts` 预取并在到达时通知
@@ -276,7 +276,7 @@ provider（本地目录不再是主进程的事，也不再是"官方宿主行"�
   `defaultEntryId`）；迁移面：旧的全页键 `dsh.open-in-app.choice` 只被**读一次**作为
   `local` 来源的初值，任何一方都不再写它——一页多来源因此不会互相覆盖记忆；
 - **标签表**：`app.*` 标签是**我们自己的表**（源自上游 pin，见 `src/locales.ts`），覆盖门是
-  `test/open-in-labels.test.ts`：它读**我们 fork 的 `catalog.ts`**（34 个 id：finder/explorer/
+  `test/catalog/open-in-labels.test.ts`：它读**我们 fork 的 `catalog.ts`**（34 个 id：finder/explorer/
   filemanager、terminal/iterm/warp/kitty/ghostty/gnometerminal/konsole/windowsterminal/gitbash、
   vscode(+insiders)/cursor/windsurf/zed/sublimetext/xcode/androidstudio、JetBrains 家族 7 个、
   git GUI 家族 6 个），断言"每个 catalog id 都有 zh+en 标签"且"标签表没有多余行"。门的保鲜
@@ -324,8 +324,10 @@ provider（本地目录不再是主进程的事，也不再是"官方宿主行"�
 4. `packages/gateway/src/plugins.ts`：**无需手写映射**——`SYNCABLE_HOST_PACKAGES`（`plugins.ts:48`）
    与 `HOST_PACKAGE_PROBE_DOMAINS`（`:60`）都由 `CHAMBER_HOST_PACKAGES.map(...)` **派生**，
    load-time 断言（`:73-80`）比对"派生值集 == `HOST_DOMAIN_PROBE_NAMES`"⇒ 两侧同步新增即保持绿。
-   **`localOnly` 的过滤不能放在派生处**（会当场让该断言失败）：它只作用于"不上传/不缓存到
-   远端与 gateway"的**同步点**与插件页呈现。gateway **不需要额外代码**：它的 seed 条目同样由
+   **`localOnly` 的过滤不能放在 gateway 的注册表派生处**（`plugins.ts` 的 `SYNCABLE_HOST_PACKAGES` /
+   `HOST_PACKAGE_PROBE_DOMAINS`：会当场让该断言失败）：它只作用于"不上传/不缓存到远端与 gateway"的
+   **同步点**（桌面侧预检/日志/上传源清单，§6.2 第 6 条）与**插件页的行派生**
+   （`applicableChamberPackages`，design 13 §6）。gateway **不需要额外代码**：它的 seed 条目同样由
    注册表派生、`sourceDir` 指向同步缓存目录（`gateway/src/index.ts:333-343`），而未同步 ⇒ 目录为空
    ⇒ 按既有"缺产物优雅跳过、不写悬挂 loader 行"规则处理；
 5. `scripts/dev/verify-upstream-touchpoints.mjs`：**C7** 文本哨兵（gateway 域值集 ↔ runtime 列表）；
@@ -338,14 +340,22 @@ provider（本地目录不再是主进程的事，也不再是"官方宿主行"�
    `chamberHostSourceDirs`（不进远端 seed）与 `plugin-sync.ts:965` 的远端同步循环——
    **本包标 `localOnly`**：远端不 seed/不 probe。`localOnly?: true` 加到
    `ChamberHostPackageDescriptor`，**并透出到 `ChamberHostPackageState`**（`plugin-sync.ts:427-441`
-   的投影形状）以便页面如实显示"本地形态专用"而不是"未注入"。
+   的投影形状）以便页面按该标志把这一行**只列在本地目标**（2026-12 用户裁决：远端/gateway/http
+   目标的行集 = 该目标适用行，故为 3 行；此前"两列都渲染『本地形态专用』"的 badge 方案已退役——
+   一张按目标的表不该列出该目标上任何动作都产生不出的行）。
    客户端包**不能 import** Node 侧注册表，因此还有三处镜像锁步：`plugin-inventory-text.ts`
    的包名常量表（`OPEN_IN_PACKAGE`）与 `InventoryEntryKind`/`chamberKindOf` 分类、
    `packages/renderer/src/global.d.ts` 与 `packages/desktop/preload.cts` 的
    `ChamberHostPackageState`（两处都加 `localOnly?: boolean`——四份声明由 §9 的字段集门钉在一起）、
-   `test/chamber-seed-drift.test.ts`（读 `host-graph-seed.ts` 断言名字集合与注册表行一一对应
-   ——**新包不加进去，该门直接红**）；远端探针在该行上**一次远端调用都不发**，
-   插件页对非本地目标渲染 `chamberBadgeLocalOnly`（本地形态专用），而不是"未注入"；
+   `test/plugin-inventory/chamber-seed-drift.test.ts`（读 `host-graph-seed.ts` 断言名字集合与注册表行一一对应
+   ——**新包不加进去，该门直接红**）；远端探针在该行上**一次远端调用都不发**（其合成状态里的
+   `installed:false` 因此只表示"没问"，页面据注册表标志**不列**该行，绝不据此渲染"未注入"，
+   也绝不让它参与 ssh 的两个目标级门 `sshChamberGates`）；main 进程侧凡判定"那台机器上该有什么"
+   的路径（手动注入预检、ready-time 注入日志、桌面侧 gateway 上传**源清单**——`main.ts` 的
+   `localChamberHostPackageSources`）一律读 `portableChamberHostPackageSeeds`，绝不读完整注册表投影
+   （注意与**网关侧**由注册表派生的 `SYNCABLE_HOST_PACKAGES` 白名单区分：后者按设计仍含该行，
+   见 §9「网关派生白名单」/ design 17 §10.2）——该行的 `sourceDir` 按设计为空，
+   被当成"构建产物缺失"会让「注入」按钮直接失败、并在远端实例日志里留下假缺口（2026-12 review）；
 7. 打包闭包：根 `build:host-open-in` / `typecheck:host-open-in` / `test:host-open-in`，
    `build:host-packages` 聚合，desktop 的 `HOST_PACKAGE_BUILD_ROWS` 加 `open-in` 行
    （`scripts/build-host-graph-package.mjs` → `dist/host-open-in-package`，打包态
@@ -407,13 +417,13 @@ chevron，不因只有一个 app 少画 chevron）。
   `test/official-catalog.test.ts` → 由 §4.2 的 Remote 通道与 `client/local-catalog.ts` 取代；
 - `packages/dsh-chamber-client-ui-open-in/src/shared/open-in-app-protocol.ts`（官方路由镜像）+
   其 `test/open-in-app-protocol.test.ts` → 由 `shared/open-in-wire.ts` +
-  `test/open-in-wire-lockstep.test.ts` 取代；
+  `test/wire-protocol/open-in-wire-lockstep.test.ts` 取代；
 - 客户端 bespoke 菜单三件套 `src/client/AccessibleAppMenu.tsx` +
   `AccessibleAppMenu.module.css` + `src/client/menu-navigation.ts` 及其
   `test/menu-navigation.test.ts`（2026-09-11 upstream-alignment）→ 由官方
   `ui-primitives` `Menu`（焦点转移/方向键导航/`compact`/填充选中/项图标/portal）+
   `Tooltip` 取代；只有 N-ctx 归属留在插件内（新增
-  `src/client/instance-view-guard.ts` + `test/instance-view-guard.test.ts`，§5）；
+  `src/client/instance-view-guard.ts` + `test/ui-lock/instance-view-guard.test.ts`，§5）；
 - `docs/checklists/upstream-touchpoints.md` §4 的 "dsh-host-open-in-app 契约镜像"行 → 改为 fork 行；
 - 原方案里的 vendor 补丁 / composite covered+factory / `--no-open` / spawn env 剥离 /
   picker pin overlay / 按 transport 分流注册：**全部不再需要**（§2）；
@@ -434,15 +444,16 @@ chevron，不因只有一个 app 少画 chevron）。
   `src/client/instance-view-guard.ts`（新，N-ctx 归属守卫，§5）、
   `src/client/machine-catalog.ts`（新，**页级机器目录**：一次探测/每 id 一次图标/串行批次/
   通知，§4.2）、
-  `test/{local-catalog,machine-catalog,open-in-wire-lockstep,open-in-labels,instance-view-guard}.test.ts`（新），
+  `test/catalog/{local-catalog,machine-catalog,open-in-labels}.test.ts`、
+  `test/wire-protocol/open-in-wire-lockstep.test.ts`、`test/ui-lock/instance-view-guard.test.ts`（新），
   `client/{source-adapter,choice-store,index,open-in-gates,OpenInButton}.tsx?` 与
   `shared/{open-in-view-model,capabilities}.ts`、`src/locales.ts` 改写（§4.2/§5）；
 - 页级接线（2026-09-12）：`packages/renderer/src/shell.ts` 建唯一一份机器目录并
   `ctx.provide('chamberMachineCatalog', …)`；传输复用
   `packages/dsh-chamber-client-ui-sidebar/src/shared/instance-api.ts` 的公开
   `getInstanceClient('local').callUnary(...)`（同一信封/路由/栅栏，零新增传输面）；
-- 接线面：§6.2 的八处 + 插件页的 `localOnly` 呈现（`plugin-inventory-text.ts` +
-  `global.d.ts` + 设置页文案 `chamberBadgeLocalOnly`）。
+- 接线面：§6.2 的八处 + 插件页的 `localOnly` 行集过滤（`plugin-inventory-text.ts` 的
+  `applicableChamberPackages` + `global.d.ts`/`preload.cts` 的投影字段；该行只列在本地目标）。
 
 ## 9. 验证门
 
@@ -451,19 +462,20 @@ chevron，不因只有一个 app 少画 chevron）。
 | 客户端类型 | `pnpm run typecheck:open-in` | 客户端包自身构面 |
 | seed 类型 | `pnpm run typecheck:host-open-in` | 复制面 + 域核心（含 `@deepseek-ai/*` 解析） |
 | seed 单测 | `pnpm run test:host-open-in` | 探针零宿主动作、菜单顺序、SSH 标记回归（目录仍解析）、图标 base64/不可用、`open` 的 argv 与全部拒绝分支、ENOENT 重解析恰好两次、`domainResult` 只吞已知错误 |
-| 跨包 wire 契约 | `test/open-in-wire-lockstep.test.ts`（客户端包） | 命名空间、四个方法名与其全限定常量、`@Remote` 面、错误码集合、图标媒体类型 —— 全部读 seed 源码文本 |
-| 标签覆盖 | `test/open-in-labels.test.ts`（客户端包） | fork 的 `catalog.ts` 每个 id 都有 zh+en 标签，且标签表无多余行 |
-| 菜单归属守卫 | `test/instance-view-guard.test.ts`（客户端包） | `menuOwnerAllowsInteraction` 的 fail-closed 真值表（断连 / 隐藏 class / `hidden` / `aria-hidden` / 不可见任一不满足即关闭）；纯函数，不依赖浏览器 DOM |
-| 机器池 wire 纪律 | `test/local-catalog.test.ts`（客户端包） | 参数名（`app`/`path`）、**两层信封**（传输结果 → 域载体）、fail-closed、`data:` URL 允许表、拉起错误映射 |
-| 机器目录缓存 | `test/machine-catalog.test.ts`（客户端包） | boot 一次探测 + 每 id 恰好一次图标（刷新不重取）、串行批次（在途批次期间发现的 id 不丢）、单飞只包 id 读取且并发 caller 共享、通知顺序、失败 fail-closed |
-| 页级读取锁步 | `test/page-read-path-lockstep.test.ts`（renderer） | **真实实例客户端**（`getInstanceClient('local').callUnary` + 真实 URL/信封/rpcId，fetch 打桩喂宿主字节）经 `createMachineCatalog` 得到目录与真图标；并锁住 `shell.ts` 仍按此接线（注释剥离后的源码文本） |
-| 适配器行为 | `test/source-adapter.test.ts` | 机器池 × main 池合并、**远程来源用机器图标**、per-entry 通道路由、无机器目录时诚实降级、订阅释放 |
-| 页级注入契约 | `test/shell.test.ts`（renderer） | 两个 entry 拿到**同一个** `chamberMachineCatalog` 实例（页级事实，非 per-entry 副本） |
-| 记忆 | `test/choice-store.test.ts` | per-source 键、来源隔离、旧全页键只读迁移、畸形 id 不写键 |
-| 桌面投影 | `test:desktop`（plugin-sync/open-in/cross-package-contract/renderer-trust） | 远端 seed 丢弃 `localOnly` 行、远端探针对该行零调用、本地投影携带 `localOnly`、打包行集 |
-| 状态对象字段集 | `cross-package-contract.test.ts`（新增门）+ `ipc-surface-mirror.test.ts`（L3） | 同一个 wire 状态对象有**四份声明**（`plugin-sync.ts` 投影 / `renderer/global.d.ts` / `preload.cts` / 客户端 `ChamberPackageState`）：前两者与 client 由新门三向比对（client 允许只少 `probe`），preload ↔ renderer 由既有 L3 门覆盖 ⇒ 四向全闭合。**加 `localOnly` 时正是 renderer 与 preload 两处漏了**，两道门各抓一处 |
-| 网关派生白名单 | `test:gateway`（feature-lifecycle / chamber-installed / runtime-routes） | `/chamber/plugins` 投影与上传白名单由注册表派生 ⇒ 该 localOnly 行自动出现（本地形态专用行 `version` 恒 null）；gateway load 断言的域集 == `HOST_DOMAIN_PROBE_NAMES`（本机实测：该断言在 shim 解析到旧 runtime 时当场抛错，正是它应有的行为） |
-| 注册表锁步 | `test:chamber-seed-drift.test.ts`（connections 包） | 客户端名字镜像 == `CHAMBER_HOST_PACKAGES` 行集 |
+| 跨包 wire 契约 | `test/wire-protocol/open-in-wire-lockstep.test.ts`（客户端包） | 命名空间、四个方法名与其全限定常量、`@Remote` 面、错误码集合、图标媒体类型 —— 全部读 seed 源码文本 |
+| 标签覆盖 | `test/catalog/open-in-labels.test.ts`（客户端包） | fork 的 `catalog.ts` 每个 id 都有 zh+en 标签，且标签表无多余行 |
+| 菜单归属守卫 | `test/ui-lock/instance-view-guard.test.ts`（客户端包） | `menuOwnerAllowsInteraction` 的 fail-closed 真值表（断连 / 隐藏 class / `hidden` / `aria-hidden` / 不可见任一不满足即关闭）；纯函数，不依赖浏览器 DOM |
+| 机器池 wire 纪律 | `test/catalog/local-catalog.test.ts`（客户端包） | 参数名（`app`/`path`）、**两层信封**（传输结果 → 域载体）、fail-closed、`data:` URL 允许表、拉起错误映射 |
+| 机器目录缓存 | `test/catalog/machine-catalog.test.ts`（客户端包） | boot 一次探测 + 每 id 恰好一次图标（刷新不重取）、串行批次（在途批次期间发现的 id 不丢）、单飞只包 id 读取且并发 caller 共享、通知顺序、失败 fail-closed |
+| 页级读取锁步 | `test/lifecycle/page-read-path-lockstep.test.ts`（renderer） | **真实实例客户端**（`getInstanceClient('local').callUnary` + 真实 URL/信封/rpcId，fetch 打桩喂宿主字节）经 `createMachineCatalog` 得到目录与真图标；并锁住 `shell.ts` 仍按此接线（注释剥离后的源码文本） |
+| 适配器行为 | `test/launch-flow/source-adapter.test.ts` | 机器池 × main 池合并、**远程来源用机器图标**、per-entry 通道路由、无机器目录时诚实降级、订阅释放 |
+| 页级注入契约 | `test/lifecycle/shell.test.ts`（renderer） | 两个 entry 拿到**同一个** `chamberMachineCatalog` 实例（页级事实，非 per-entry 副本） |
+| 记忆 | `test/launch-flow/choice-store.test.ts` | per-source 键、来源隔离、旧全页键只读迁移、畸形 id 不写键 |
+| 桌面投影 | `test:desktop`（plugin-sync / chamber-seed-portability-wiring / open-in / cross-package-contract / renderer-trust） | 远端 seed 丢弃 `localOnly` 行、远端探针对该行零调用、本地投影携带 `localOnly`、打包行集；**portability 接线门**：main.ts 的注入预检 / ready-time 缺口日志 / gateway 上传源清单全部读 portable 列表，且"出货"判定用 `builtChamberHostPackageSeeds`（空 `sourceDir` 先被拒，绝不让 `join('','dist/index.js')` 落到进程 CWD） |
+| 插件页行集 | `test/plugin-inventory/chamber-rows.test.ts` + `test/plugin-management/chamber-table-wiring.test.ts`（connections 包） | local 4 行 / ssh·gateway·http 3 行（`applicableChamberPackages` 按注册表标志过滤，不做硬编码包名）；ssh 的两个目标级门（needs-seed / restart-pending）与表格共用该过滤后的列表，合成探测行不参与；loadSync 在读远端之前先提交本机投影（错误相位下表格不为空）；退役的 `chamberBadgeLocalOnly` 不得复活 |
+| 状态对象字段集 | `test/ipc/cross-package-contract.test.ts`（新增门）+ `test/ipc/ipc-surface-mirror.test.ts`（L3） | 同一个 wire 状态对象有**四份声明**（`plugin-sync.ts` 投影 / `renderer/global.d.ts` / `preload.cts` / 客户端 `ChamberPackageState`）：前两者与 client 由新门三向比对（client 允许只少 `probe`），preload ↔ renderer 由既有 L3 门覆盖 ⇒ 四向全闭合。**加 `localOnly` 时正是 renderer 与 preload 两处漏了**，两道门各抓一处 |
+| 网关派生白名单 | `test:gateway`（feature-lifecycle / chamber-installed / runtime-routes） | **网关侧**的 `/chamber/plugins` 投影与 PUT 名单由注册表派生 ⇒ 该 localOnly 行自动出现（只要只有桌面在上传，该行 `version` 恒 null；这是 API 投影，插件页不在非本地目标列出它——桌面侧的上传**源清单**是另一回事，见 §6.2 第 6 条）；gateway load 断言的域集 == `HOST_DOMAIN_PROBE_NAMES`（本机实测：该断言在 shim 解析到旧 runtime 时当场抛错，正是它应有的行为） |
+| 注册表锁步 | `test/plugin-inventory/chamber-seed-drift.test.ts`（connections 包） | 客户端名字镜像 == `CHAMBER_HOST_PACKAGES` 行集，且每个注册表包必须被 `classifyInventoryEntry` 归为 chamber 行（2026-12：非本地目标不再列 localOnly 行后，第三方区对该行只余分类这一道网，故把分类也钉进同一门） |
 | 文案 | `pnpm run verify:i18n` | 新文案 zh/en 双份与记录一致 |
 | 触点门 | `verify-upstream-touchpoints.mjs` | C7（四域锁步）+ C8（含新 seed dist，重建-比对 6 组）+ C9（vendor 补丁集不变：open-in 不新增补丁）+ 新 fork 的 C1/C3/C5（`FORKS` 行 + `versionAnchor: 'chamber'` 豁免，见 §10） |
 

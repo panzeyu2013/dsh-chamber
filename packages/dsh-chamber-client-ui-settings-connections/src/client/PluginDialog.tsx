@@ -6,14 +6,16 @@
  * action dispatch (design 21 §3 single-model matrix). Unified zones:
  *   ① diagnostic banner (bannerProjection — state name + message, never the
  *     state/pluginId/message triple repetition);
- *   ② chamber built-in component table — one row per registry host package
- *     (CHAMBER_HOST_PACKAGES projection), plus the gateway's chamber CLIENT
- *     rows derived from the Loader inventory (the packaged mobile entry today;
- *     never a hardcoded package name) — columns package | local badge |
+ *   ② chamber built-in component table — one row per TARGET-APPLICABLE registry
+ *     host package (`applicableChamberPackages`: a `localOnly` row is listed for
+ *     the local target alone; the CHAMBER_HOST_PACKAGES projection is the row
+ *     source), plus the gateway's chamber CLIENT rows derived from the Loader
+ *     inventory (the packaged mobile entry today; never a hardcoded package
+ *     name) — columns package | local badge |
  *     remote/gateway badge | version. The rows themselves come from the pure,
  *     tested `deriveChamberRows` (plugin-inventory-text.ts); this component
  *     only maps descriptors to elements. Version drift chips and the
- *     「重新同步 chamber 组件」action live in this zone;
+ *     「重新同步 chamber 组件」action (GATEWAY-only) live in this zone;
  *   ③ third-party plugin zone (installed list + per-row remove + add: spec
  *     input + npm search + local import — a plugin source folder OR a ready
  *     .tgz archive, design 21 §6.5 archive-pick; the macOS picker offers
@@ -58,7 +60,15 @@ import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } fr
 import type { ReactNode } from 'react'
 import clsx from 'clsx'
 import { Button, IconRefreshOutline16, IconTrashOutline16, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
-import { pollGatewayReady } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+// The page-owned restart→reload completion (design 18 §3.6 item 8, sidebar shared
+// face): a restart-to-apply refreshes the host's plugin mounts, but this window
+// keeps running the pre-restart client plugin set until it boots again.
+import {
+  RESTART_RELOAD_BUDGET_MS,
+  armWindowReloadWhenServed,
+  pollGatewayReady,
+  waitForSourceServing,
+} from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import type {
   ChamberHostPackageState,
   LocalPluginManifest,
@@ -91,8 +101,9 @@ import {
 } from './control-plane.ts'
 import { classifyRestartError, gatewayReadFenceText, serverRefusalText } from './managed-restart.ts'
 import {
-  classifyGatewayApplyResult, classifySshApplyResult, filterDeniedRows, isDeniedPluginName, partialCounts, projectTasks, undoForLatest,
-  type TaskRow,
+  classifyGatewayApplyResult, classifySshApplyResult, partialCounts, pluginRowsOf, projectInstalledRows, sshSyncableDependencies,
+  projectTasks, undoForLatest,
+  type InstalledRowView, type PluginRowRoleShape, type TaskRow,
 } from './plugin-model.ts'
 import { loadPluginInventory, type PluginInventorySnapshot } from './plugin-inventory-api.ts'
 import {
@@ -101,6 +112,8 @@ import {
 } from './plugin-diff.ts'
 import {
   deriveChamberRows,
+  installedRowLiveState,
+  sshChamberGates,
   thirdPartyEntries,
   thirdPartyLiveState,
   type ChamberBadgeTone,
@@ -182,6 +195,32 @@ function categoryLabel(category: PluginRow['category']): SettingsConnectionsKey 
     case 'bundle': return 'pluginsCatBundle'
     case 'client': return 'pluginsCatClient'
     default: return 'pluginsCatPlain'
+  }
+}
+
+/** Row-role badge label key (design 21 §6.11.5): the role is the BACKEND's
+ *  projection (`rows[].role`) — the dialog renders it, never re-derives it.
+ *  null for 'unknown': no label is invented for a role the backend could not
+ *  classify (such a row renders without a role badge, still fully visible). */
+function roleLabel(role: PluginRowRoleShape): SettingsConnectionsKey | null {
+  switch (role) {
+    case 'composition': return 'pluginsRoleComposition'
+    case 'seed': return 'pluginsRoleSeed'
+    case 'layer': return 'pluginsRoleLayer'
+    case 'third-party': return 'pluginsRoleThirdParty'
+    case 'materialized': return 'pluginsRoleMaterialized'
+    default: return null
+  }
+}
+
+/** Role badge → the EXISTING category-badge CSS vocabulary (no new CSS):
+ *  composition reuses the filled bundle tone, the chamber seed the warn-tint
+ *  client tone, everything else the muted plain pill. */
+function roleBadgeClass(role: PluginRowRoleShape): string {
+  switch (role) {
+    case 'composition': return css.pluginKindBundle
+    case 'seed': return css.pluginKindClient
+    default: return css.pluginKindPlain
   }
 }
 
@@ -447,12 +486,24 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
         setPhase('error')
         return
       }
+      // Commit the desktop projection the moment it is read. The chamber table
+      // reads it as the 本地 column AND as the fallback row source when the
+      // remote read fails, so a later failure must not discard it: on an ssh
+      // exec failure or an unparseable remote profile the table used to render
+      // with ZERO rows (the zone is phase-independent) even though the desktop
+      // side was already known (2026-12 review).
+      setLocalManifest(localRes.manifest)
       const remoteRes = await pluginList(sshSpec.id)
       if ('error' in remoteRes) {
         setLoadError(remoteRes.error)
         setPhase('error')
         return
       }
+      // Same for the remote answer: the chamber block is probed independently
+      // of package.json, so a corrupt remote manifest must not throw away rows
+      // and gates the probe DID answer (the error phase renders neither the
+      // dependency list nor the diff, so the early commit is inert elsewhere).
+      setRemoteManifest(remoteRes.manifest)
       // cat succeeded but package.json failed to parse: the manifest carries a
       // loud error with an empty dependency set — surface it, never show a
       // silent "manifests match" against the empty projection.
@@ -461,10 +512,17 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
         setPhase('error')
         return
       }
-      setLocalManifest(localRes.manifest)
-      setRemoteManifest(remoteRes.manifest)
       setProfileNotInit(!remoteRes.manifest.profileExists)
-      const d = computePluginDiff(localRes.manifest, remoteRes.manifest)
+      // design 21 §6.11.5 diff/apply 边界（硬要求）：computePluginDiff 的输入只吃
+      // 可操作行（后端判非 protected）。受保护行若进了输入，missing 行默认勾选 ⇒
+      // doApply 会把 `@deepseek-ai/dsh-base@…` 当 add 提交，后端整批拒绝。
+      // 这是 **ssh** 面，故再排除官方 scope（ssh 装面保守，官方行会让整批失效）——
+      // 传输能力过滤，不是保护判定。rows 缺失（旧 producer，§6.11.7）时走
+      // legacyProtectedName 回退（回退路径里官方 scope 同样被排除）。
+      const d = computePluginDiff(
+        { ...localRes.manifest, dependencies: sshSyncableDependencies(localRes.manifest.dependencies, pluginRowsOf(localRes.manifest)) },
+        { ...remoteRes.manifest, dependencies: sshSyncableDependencies(remoteRes.manifest.dependencies, pluginRowsOf(remoteRes.manifest)) },
+      )
       setDiff(d)
       if (keepChecked) {
         const rows = new Set(d.rows.map(row => row.name))
@@ -508,6 +566,37 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     }
   }, [isSsh, sshSpec, seedBusy, loadSync])
 
+  /**
+   * Arm the page-owned restart→reload completion for this dialog's source
+   * (design 18 §3.6 item 8). Every restart-to-apply path below ends here: the
+   * host restarts and refreshes its plugin mounts, but the window only picks the
+   * new client half up on a fresh boot. Page-owned on purpose — the completion
+   * survives this dialog closing (review F6), and the page-level key dedupes
+   * multiple paths arming for the same source.
+   * @param kind - the dialog's backend shape.
+   * @param rawId - the raw registry instance id.
+   */
+  const armSourceReload = useCallback((kind: 'ssh' | 'gateway', rawId: string): void => {
+    if (kind === 'ssh') {
+      const sourceId = `dsh-${rawId}`
+      void armWindowReloadWhenServed(
+        sourceId,
+        () => waitForSourceServing(sourceId, { timeoutMs: 120_000 }),
+        { budgetMs: RESTART_RELOAD_BUDGET_MS },
+      )
+      return
+    }
+    const sourceId = `gateway-${rawId}`
+    void armWindowReloadWhenServed(sourceId, async signal => {
+      try {
+        await pollGatewayReady(sourceId, signal, { action: 'restart' })
+        return true
+      } catch {
+        return false
+      }
+    }, { budgetMs: RESTART_RELOAD_BUDGET_MS })
+  }, [])
+
   /** One-click restart (design 08 §6.3): the chamber host packages are seeded
    *  and the insert is in place, but the RUNNING instance has not loaded
    *  them — restarting is the step that makes them live. Re-probes after. */
@@ -523,6 +612,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
       } else {
         setPendingRestart(false)
         onRecheckDiagnostic?.()
+        armSourceReload('ssh', sshSpec.id)
       }
     } catch (err) {
       setRestartError(errorMessage(err))
@@ -581,6 +671,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
             } else if (executed.restarted) {
               tone = 'ok'
               text = `${t('pluginsApplied')}${executed.readyNote === undefined ? '' : ` · ${executed.readyNote}`}`
+              armSourceReload('ssh', sshSpec.id)
             } else {
               tone = 'warn'
               text = t('restartNeededHint')
@@ -619,6 +710,9 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
           || (undone.restarted === true && undone.ready !== false)
         if (clean) {
           setRemoteListStatus({ tone: 'ok', text: t('undoDone') })
+          // Only a real restart-to-apply needs the window reload; an undo that
+          // never restarted (restarted === undefined) is already in effect.
+          if (undone.restarted === true) armSourceReload('ssh', sshSpec.id)
         } else if (undone.restarted === false) {
           const note = undone.readyNote === undefined ? '' : ` ${undone.readyNote}`
           setRemoteListStatus({ tone: 'warn', text: `${t('undoDone')} · ${t('restartNeededHint')}${note}` })
@@ -685,8 +779,9 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   // ---- local: Loader 快照（local zone 第三方行生效状态） ----
   // Loads on open and re-runs on every zone reload (reloadNonce — the same
   // channel the gateway/http snapshot uses); the RUNNING local instance only
-  // changes at a restart (the restart action lives on the local connection
-  // card, outside this dialog), so no per-action reload is needed here.
+  // changes at a restart (the restart action is 「dsh 运行时」→「重启 dsh」,
+  // outside this dialog — NOT on the local connection card, which only has
+  // start/stop), so no per-action reload is needed here.
   useEffect(() => {
     if (!isLocal) return
     let cancelled = false
@@ -804,13 +899,24 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
         setRestartNote({ tone: 'error', text: serverRefusalText(body, response.status) })
         return
       }
-      try {
-        await pollGatewayReady(sourceId, controller.signal)
+      // Readiness + reload are PAGE-owned (review F6): closing the dialog
+      // mid-restart cannot cancel the completion.
+      let pollFailure: unknown = null
+      const outcome = await armWindowReloadWhenServed(sourceId, async signal => {
+        try {
+          await pollGatewayReady(sourceId, signal)
+          return true
+        } catch (err) {
+          pollFailure = err
+          return false
+        }
+      }, { budgetMs: RESTART_RELOAD_BUDGET_MS })
+      if (outcome === 'reloaded') {
         setRestartNote({ tone: 'ok', text: t('restartManagedDshOk') })
         setReloadNonce(n => n + 1)
-      } catch (err) {
-        if (controller.signal.aborted) return
-        const cls = classifyRestartError(err)
+      } else {
+        const cls = classifyRestartError(pollFailure
+          ?? new Error('restart completion aborted before the readiness poll settled'))
         setRestartNote(cls.kind === 'accepted-timeout'
           ? { tone: 'ok', text: t('restartManagedDshAccepted') }
           : { tone: 'error', text: cls.detail })
@@ -882,6 +988,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
           ? { tone: 'ok', text: t('undoDone') }
           : { tone: 'warn', text: `${t('undoDone')} · ${t('restartNeededHint')}` })
       }
+      if (executed.restarted) armSourceReload('gateway', gatewayId)
       setReloadNonce(n => n + 1)
     } catch (err) {
       setManageStatus({ tone: 'error', text: errorMessage(err) })
@@ -940,6 +1047,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
             : executed.deferred
               ? t('pluginsDeferred')
               : t('restartNeededHint'))
+          if (executed.restarted) armSourceReload('gateway', gatewayId)
           setDraft('')
           reloadAfterAdd()
         }
@@ -949,10 +1057,12 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
         else if ('cancelled' in res) { /* silent no-op (user dismissed the confirmation) */ }
         else {
           // LOCAL `dsh plugin add` writes the local profile only — the RUNNING
-          // local instance mounts the plugin at its next restart (the restart
-          // action lives on the local connection card, outside this dialog),
-          // so「已应用/Applied」would overclaim: the honest note is deferred.
-          setAddResult(t('pluginsDeferred'))
+          // local instance mounts the plugin at its next restart (「dsh 运行时」→
+          // 「重启 dsh」, outside this dialog; the local connection card has only
+          // start/stop), and that restart now completes with one window reload
+          // (design 18 §3.6 item 8), so「已应用/Applied」would still overclaim:
+          // the honest note is deferred and names the entry point.
+          setAddResult(t('pluginsDeferredLocal'))
           setDraft('')
           reloadAfterAdd()
         }
@@ -1005,8 +1115,12 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
           // the profile changed but the plugin mounts at the next restart —
           // the same restartNeededHint arm the spec install uses (the import
           // fact stays visible in the refreshed installed list below).
-          if (res.outcome.restarted) setAddResult(t('materializeLive'))
-          else if (res.outcome.executed) setAddResult(t('restartNeededHint'))
+          if (res.outcome.restarted) {
+            setAddResult(t('materializeLive'))
+            armSourceReload('gateway', gatewayId)
+          } else if (res.outcome.executed) {
+            setAddResult(t('restartNeededHint'))
+          }
           reloadAfterAdd()
         }
       } else {
@@ -1015,8 +1129,8 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
         else if ('cancelled' in res) { /* silent no-op (picker dismissed) */ }
         else {
           // Same restart-honesty as the local spec install: the local profile
-          // changed; the running local instance mounts it at its next restart.
-          setAddResult(t('pluginsDeferred'))
+          // changed; 「dsh 运行时」→「重启 dsh」mounts it and reloads the window.
+          setAddResult(t('pluginsDeferredLocal'))
           reloadAfterAdd()
         }
       }
@@ -1113,6 +1227,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
             verified: res.result.verified,
             ready: res.result.ready,
           })
+          if (res.result.restarted && !res.result.deferred) armSourceReload('ssh', sshSpec.id)
         }
       } else {
         setResult({ applied, failed, skipped: 0, restarted: false, deferred: true, verified: failed.length === 0, ready: null })
@@ -1175,20 +1290,31 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
    *  plugin-inventory-text.ts (deriveChamberRows) — this component only maps
    *  descriptors to elements. Data sources per target (design 13 §6 / 21
    *  §6.2 / 24 §7): the LOCAL target's expected AND local list come from its
-   *  OWN profile manifest (`localList.chamber`), gateway/http/ssh read the
-   *  desktop's local manifest projection (`localChamberPackages`), and ssh
-   *  prefers the remote probe's list when it succeeded. An unreadable local
-   *  manifest leaves the list empty; the ssh arm still renders the remote
-   *  probe's own list, so a remote-only read failure is never invisible. */
+   *  OWN profile manifest (`localList.chamber`); every remote target's expected
+   *  list and local column come from the desktop's own projection, and ssh
+   *  prefers the remote probe's list when it succeeded — on a probe FAILURE the
+   *  desktop projection is the fallback row source, so a remote-only read
+   *  failure stays visible instead of emptying the table.
+   *  `localOnly` registry rows (design 20 §6) never appear here on a non-local
+   *  target — the derivation drops them before any state is read, so this
+   *  component's row set is already the target's applicable registry rows. */
   /** The ssh remote probe (design 13 §6): the remote profile manifest's own
    *  chamber projection, loaded by loadSync. */
   const sshRemoteChamber = isSsh ? remoteManifest?.chamber : undefined
+  /** The desktop's own chamber projection. The dedicated
+   *  `localChamberPackages` read is gated on a gateway/http `sourceId`, so it
+   *  never runs for ssh; that arm reads the same projection from the local
+   *  manifest `loadSync` already fetched (2026-12 review: the ssh 本地 column
+   *  used to sit on 未知 forever, and a failed probe left the table empty). */
+  const desktopChamberPackages = isSsh && localManifest !== null && localManifest.chamber.ok === true
+    ? localManifest.chamber.packages
+    : localChamberPackages
   const chamberRows: ChamberRowDescriptor[] = deriveChamberRows({
     target: target.kind,
     expected: isLocal
       ? (localList !== null && localList.chamber.ok === true ? localList.chamber.packages : null)
-      : localChamberPackages,
-    localManifestChamber: localChamberPackages,
+      : desktopChamberPackages,
+    localManifestChamber: desktopChamberPackages,
     remoteChamber: isSsh ? (sshRemoteChamber ?? null) : null,
     inventory: snapshot,
     seedCache: isGateway ? seedCache : null,
@@ -1196,14 +1322,16 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   })
   const chamberCacheAbsent = chamberRows.some(row => row.cacheAbsent)
 
-  // BOTH boot rows of EVERY registry package must be present for the chamber
-  // host layer to be complete — derived over the whole list, so a package
-  // added to the registry can never be silently exempt.
-  const remoteNeedsSeed = isSsh && sshRemoteChamber !== undefined
-    && (sshRemoteChamber.ok !== true
-      || sshRemoteChamber.packages.some(pkg => !(pkg.installed && pkg.patched)))
-  const remoteInjectedNotLive = isSsh && sshRemoteChamber?.ok === true
-    && sshRemoteChamber.packages.some(pkg => pkg.installed && pkg.patched && pkg.live === false)
+  // BOTH boot rows of EVERY APPLICABLE registry package must be present for the
+  // chamber host layer to be complete — derived over the whole registry-driven
+  // list, so a package added to the registry can never be silently exempt. Both
+  // gates come from the pure projection (sshChamberGates), which filters
+  // `localOnly` rows first: the remote probe reports such a row as a
+  // synthesized installed:false WITHOUT ever asking the remote, so counting it
+  // pinned 「注入」 true forever and the restart branch was unreachable.
+  const sshGates = sshChamberGates(sshRemoteChamber)
+  const remoteNeedsSeed = isSsh && sshGates.needsSeed
+  const remoteInjectedNotLive = isSsh && sshGates.injectedNotLive
   const restartPending = remoteInjectedNotLive || pendingRestart
 
   /** One row's version cell: the derived version text plus the gateway
@@ -1333,6 +1461,63 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
       : <span className={chamberBadgeClass(state.tone)}>{t(state.labelKey)}</span>
   )
 
+  /** 一行安装列表的角色徽标（design 21 §6.11.5）：角色来自后端 rows 投影，
+   *  渲染端只渲染。受保护行的 title 指向「受保护」提示（见 protectedHint）。 */
+  const roleBadge = (row: InstalledRowView): ReactNode => {
+    const key = roleLabel(row.role)
+    if (key === null) return null
+    return (
+      <span
+        className={clsx(css.pluginKindBadge, roleBadgeClass(row.role))}
+        title={row.protected ? t('pluginsProtectedHint') : undefined}
+      >
+        {t(key)}
+      </span>
+    )
+  }
+
+  /** 受保护行的只读提示（可见文本；受保护 = 安装组合 / chamber 播种 / 运行时
+   *  线族成员，由后端判定）：与「无移除按钮」一起构成只读语义。 */
+  const protectedHint = (row: InstalledRowView): ReactNode => (
+    row.protected
+      ? <span className={css.dim} title={t('pluginsProtectedHint')}>{t('pluginsProtectedHint')}</span>
+      : null
+  )
+
+  /** 一行的 spec 格：依赖值优先（file: 值掩码芯片化，不直显本地路径）；掩码后无可展示
+   *  值（spec null）时落到已装版本；两者都有时版本作 dim 后缀。 */
+  const installedSpecCell = (row: InstalledRowView, unsyncReason?: string | undefined): ReactNode => (
+    <>
+      {row.spec !== null && row.spec.startsWith('file:')
+        ? <span className={clsx(css.pluginKindBadge, css.pluginKindPlain)} title={unsyncReason ?? t('installedFromMask')}>{t('installedFromMask')}</span>
+        : row.spec !== null
+          ? <code className={css.pluginSpec} title={unsyncReason}>{row.spec}</code>
+          : row.version !== null
+            ? <code className={css.pluginSpec} title={unsyncReason}>{row.version}</code>
+            : <span className={css.dim}>—</span>}
+      {row.spec !== null && row.version !== null ? <span className={css.dim}> · {row.version}</span> : null}
+    </>
+  )
+
+  /** 逐行操作格：非受保护行保留既有移除按钮行为；受保护行只读（— + 提示），
+   *  绝不给一个后端必然拒绝的动作（§6.11.3 R1）。 */
+  const rowActionCell = (row: InstalledRowView, disabled: boolean, onRemove: () => void): ReactNode => (
+    row.removable
+      ? (
+        <Button
+          variant="outline"
+          size="sm"
+          icon={<IconTrashOutline16 />}
+          disabled={disabled}
+          aria-label={`${t('pluginsRemoveRow')}: ${row.name}`}
+          onClick={onRemove}
+        >
+          {t('pluginsRemoveRow')}
+        </Button>
+      )
+      : <span className={css.dim} title={t('pluginsProtectedHint')}>—</span>
+  )
+
   /** The add section (spec + npm search + local import — a source folder or
    *  a ready .tgz archive, design 21 §6.5 archive-pick) for the three writable
    *  backends; http-direct renders no add surface (design 21 §3). */
@@ -1443,13 +1628,17 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
         )
       }
       if (localList === null) return null
-      // 与 ssh/gateway 列表对称：保留域包（官方/chamber 受管）不进第三方列表。
-      const deps = Object.entries(localList.dependencies).filter(([name]) => !isDeniedPluginName(name))
+      // design 21 §6.11.5（2026-09 行集修订）：已安装 = 本 profile 的依赖表，后端投影
+      // 只做 role/protected 标注——安装自带组合（B₀）与 chamber 播种物（S）不再造行
+      // （chamber 组件在「chamber 受管组件」表里，官方组合是运行时基线）。受保护名若
+      // 确实出现在依赖表里仍只读可见；旧 producer 无 rows 时回退到 dependencies 的旧
+      // 过滤（§6.11.7）。
+      const installedRows = projectInstalledRows(localList.dependencies, pluginRowsOf(localList)).rows
       return (
         <div className={css.pluginStack}>
           <p className={css.pluginChamberTitle}>{t('installedTab')}</p>
           {localRemoveError !== null ? <p className={css.error} role="alert">{localRemoveError}</p> : null}
-          {deps.length === 0 && localList.unsyncable.length === 0
+          {installedRows.length === 0 && localList.unsyncable.length === 0
             ? (
               <>
                 <p className={css.pluginEmptyLead}>{t('pluginsNoLocalPlugins')}</p>
@@ -1466,13 +1655,15 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
                   <span className={css.pluginCellAction}>{t('pluginsColAction')}</span>
                 </div>
                 <div className={css.pluginRowsBody} aria-busy={localRemoveBusy || applying}>
-                  {deps.map(([name, spec]) => {
-                    const rowCategory = localList.bundles.includes(name) ? 'bundle' : localList.clientLines.includes(name) ? 'client' : 'plain'
-                    const unsync = localList.unsyncable.find(item => item.name === name)
+                  {installedRows.map(row => {
+                    const rowCategory = localList.bundles.includes(row.name) ? 'bundle' : localList.clientLines.includes(row.name) ? 'client' : 'plain'
+                    const unsync = localList.unsyncable.find(item => item.name === row.name)
                     return (
-                      <div key={name} className={clsx(css.pluginRow, unsync !== undefined && css.pluginRowGray)}>
+                      <div key={row.name} className={clsx(css.pluginRow, unsync !== undefined && css.pluginRowGray)}>
                         <label className={clsx(css.pluginCell, css.pluginCellName)}>
-                          <code className={css.pluginName}>{name}</code>
+                          <code className={css.pluginName}>{row.name}</code>
+                          {roleBadge(row)}
+                          {protectedHint(row)}
                         </label>
                         <span className={clsx(css.pluginCell, css.pluginCellCat)}>
                           <span className={clsx(css.pluginKindBadge, rowCategory === 'bundle' && css.pluginKindBundle, rowCategory === 'client' && css.pluginKindClient, rowCategory === 'plain' && css.pluginKindPlain)}>
@@ -1481,28 +1672,21 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
                         </span>
                         <span className={clsx(css.pluginCell, css.pluginCellSpec)}>
                           {/* 与 ssh/gateway 列表对称：file: 掩码芯片化，不直显本地路径。 */}
-                          {spec.startsWith('file:')
-                            ? <span className={clsx(css.pluginKindBadge, css.pluginKindPlain)} title={unsync?.reason}>{t('installedFromMask')}</span>
-                            : <code className={css.pluginSpec} title={unsync?.reason}>{spec}</code>}
-                          {unsync !== undefined && !spec.startsWith('file:') ? <span className={css.pluginKindUnsync}> · {t('pluginsRowUnsyncable')}</span> : null}
+                          {installedSpecCell(row, unsync?.reason)}
+                          {unsync !== undefined && !(row.spec ?? '').startsWith('file:') ? <span className={css.pluginKindUnsync}> · {t('pluginsRowUnsyncable')}</span> : null}
                         </span>
                         <span className={clsx(css.pluginCell, css.pluginCellKind)}>
-                          {/* Only bundle-layer rows can mount via the Loader: a
-                              plain/client-only dependency with no loader entry
-                              never activates on restart — keep the cell neutral
-                              instead of promising 重启后生效. */}
-                          {liveStateCell(thirdPartyLiveState(localSnapshot, name, rowCategory === 'bundle'))}
+                          {/* 状态格只读运行实例的 Loader 快照：只有同名行才给出生效状态。
+                              bundle 层自己从不是 Loader 行（挂载的是它 cordis.patch.yml 的
+                              insert 行），无同名行即中性 —— 绝不承诺「重启后生效」；受保护行
+                              是安装自带基线（宿主侧 boot 层），同样不索要 Loader 状态
+                              （installedRowLiveState）。 */}
+                          {liveStateCell(installedRowLiveState(localSnapshot, row))}
                         </span>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          icon={<IconTrashOutline16 />}
-                          disabled={localRemoveBusy || applying || installing || folderBusy}
-                          aria-label={`${t('pluginsRemoveRow')}: ${name}`}
-                          onClick={() => { setLocalRemoveTarget(name); setLocalRemoveError(null) }}
-                        >
-                          {t('pluginsRemoveRow')}
-                        </Button>
+                        {rowActionCell(row, localRemoveBusy || applying || installing || folderBusy, () => {
+                          setLocalRemoveTarget(row.name)
+                          setLocalRemoveError(null)
+                        })}
                       </div>
                     )
                   })}
@@ -1519,9 +1703,15 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   const gatewayZone = isGateway
     ? ((): ReactNode => {
       const opsBlocked = removeBusy || restarting || syncing || installing || folderBusy
-      const installedRows = installed !== null && installed.ok === true
-        ? filterDeniedRows(Object.entries(installed.dependencies).map(([name, spec]) => ({ name, spec }))).allowed
-        : []
+      // design 21 §6.11.5（2026-09 行集修订）：行集 = 服务端投影的**依赖行**
+      // （受保护判定的权威在服务端，渲染端只消费；B₀/S 不再造行）。旧 gateway 无
+      // rows ⇒ 回退到 dependencies 的旧过滤并置 legacy 标记（§6.11.7），只给出服务端
+      // 仍会接受的动作。
+      const projected: { rows: InstalledRowView[]; legacy: boolean } = installed !== null && installed.ok === true
+        ? projectInstalledRows(installed.dependencies, pluginRowsOf(installed))
+        : { rows: [], legacy: false }
+      const installedRows = projected.rows
+      const legacyRows = projected.legacy
       const statusTone = manageStatus?.tone
       return (
         <div className={css.pluginStack}>
@@ -1560,32 +1750,26 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
                               <div key={row.name} className={css.pluginRow}>
                                 <label className={clsx(css.pluginCell, css.pluginCellName)}>
                                   <code className={css.pluginName}>{row.name}</code>
+                                  {roleBadge(row)}
+                                  {protectedHint(row)}
                                 </label>
                                 <span className={clsx(css.pluginCell, css.pluginCellSpec)}>
                                   {/* file: values are the server-side mask of
                                       materialized copies — the chip names what
                                       it is (ssh-modal mirror). */}
-                                  {row.spec.startsWith('file:')
-                                    ? <span className={clsx(css.pluginKindBadge, css.pluginKindPlain)} title={t('installedFromMask')}>{t('installedFromMask')}</span>
-                                    : <code className={css.pluginSpec}>{row.spec}</code>}
+                                  {installedSpecCell(row)}
                                 </span>
                                 <span className={clsx(css.pluginCell, css.pluginCellKind)}>
-                                  {/* Only dsh.profile.bundles layers mount via the
-                                      Loader (installed.bundles) — non-bundle deps
-                                      with no loader entry never activate on
-                                      restart: neutral cell, never a false 重启后生效. */}
-                                  {liveStateCell(thirdPartyLiveState(snapshot, row.name, installed.bundles.includes(row.name)))}
+                                  {/* 与 local 列表同一判据（installedRowLiveState）：
+                                      同名 Loader 行才给状态，bundle 层同普通依赖一样
+                                      无同名行即中性 —— 绝不承诺「重启后生效」。 */}
+                                  {liveStateCell(installedRowLiveState(snapshot, row))}
                                 </span>
-                                <Button
-                                  variant="outline"
-                                  size="sm"
-                                  icon={<IconTrashOutline16 />}
-                                  disabled={opsBlocked}
-                                  aria-label={`${t('pluginsRemoveRow')}: ${row.name}`}
-                                  onClick={() => { setManageStatus(null); setRemoveTarget(row.name); setRemoveOrigin('row') }}
-                                >
-                                  {t('pluginsRemoveRow')}
-                                </Button>
+                                {rowActionCell(row, opsBlocked, () => {
+                                  setManageStatus(null)
+                                  setRemoveTarget(row.name)
+                                  setRemoveOrigin('row')
+                                })}
                               </div>
                             ))}
                           </div>
@@ -1614,6 +1798,9 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
                       {installed.code === 'profile_absent' ? t('profileAbsentBanner') : t('profileCorruptBanner')}
                     </p>
                   )}
+          {/* §6.11.7 版本歪斜：旧 gateway 不返回 rows，回退路径只列第三方行——
+              理由如实上屏，别让「受保护行不见了」看起来像事实。 */}
+          {legacyRows ? <p className={css.hint} role="status">{t('pluginsLegacyGatewayHint')}</p> : null}
           {addSection}
         </div>
       )
@@ -1644,7 +1831,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
           {thirdParty.map(entry => (
             <div key={entry.entryId} className={css.pluginChamberRow}>
               <code className={css.pluginName}>{entry.moduleName}</code>
-              {liveStateCell(thirdPartyLiveState(snapshot, entry.moduleName, true))}
+              {liveStateCell(thirdPartyLiveState(snapshot, entry.moduleName))}
             </div>
           ))}
         </div>
@@ -1720,7 +1907,10 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     if (diff === null) return null
     const total = diff.rows.length
     const differenceCount = diff.rows.filter(row => isDifferenceRow(row.kind)).length
-    const hasLocal = Object.keys(localManifest?.dependencies ?? {}).length > 0
+    // design 21 §6.11.5：计数只看可操作（第三方/物化）行——受保护行不进对账面，
+    // 「本地无插件」提示随之修正（与 diff 输入同一收窄规则）。
+    const hasLocal = localManifest !== null
+      && Object.keys(sshSyncableDependencies(localManifest.dependencies, pluginRowsOf(localManifest))).length > 0
     const visibleRows = diff.rows.filter(row => {
       if (query !== '' && !row.name.toLowerCase().includes(query.trim().toLowerCase())) return false
       if (category !== 'all' && row.category !== category) return false
@@ -1887,8 +2077,11 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   function renderRemoteList(): ReactNode {
     if (phase === 'loading' || phase === 'error') return renderSyncView()
     if (remoteManifest === null) return <p className={css.dim}>{t('pluginsLoading')}</p>
-    const deps = Object.entries(remoteManifest.dependencies)
-      .filter(([name]) => !isDeniedPluginName(name))
+    // design 21 §6.11.5（2026-09 行集修订）：远端行集同样来自 desktop main 的投影，
+    // 但只覆盖远端 profile 自己的依赖（B₀/S 不再造行）。ssh 的 F 无远端来源 ⇒ 集合退到
+    // B₀ ∪ S，官方 scope 的**装面**由写面保守拒绝（§6.11.3），不是读面把行标 protected。
+    // 旧 producer 无 rows 时回退到 dependencies 的旧过滤。
+    const rows = projectInstalledRows(remoteManifest.dependencies, pluginRowsOf(remoteManifest)).rows
     const opBusy = remoteRemoveBusy || undoBusy
     const opsBlocked = opBusy || applying || seedBusy || restartBusy || installing || folderBusy
     const statusTone = remoteListStatus?.tone
@@ -1909,7 +2102,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
           : null}
         {profileNotInit
           ? null
-          : deps.length === 0
+          : rows.length === 0
             ? (
               <>
                 <p className={css.pluginEmptyLead}>{t('installedEmpty')}</p>
@@ -1924,30 +2117,21 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
                   <span className={css.pluginCellAction}>{t('pluginsColAction')}</span>
                 </div>
                 <div className={css.pluginRowsBody} aria-busy={opsBlocked}>
-                  {deps.map(([name, spec]) => (
-                    <Fragment key={name}>
+                  {rows.map(row => (
+                    <Fragment key={row.name}>
                       <div className={css.pluginRow}>
                         <label className={clsx(css.pluginCell, css.pluginCellName)}>
-                          <code className={css.pluginName}>{name}</code>
+                          <code className={css.pluginName}>{row.name}</code>
+                          {roleBadge(row)}
+                          {protectedHint(row)}
                         </label>
                         <span className={clsx(css.pluginCell, css.pluginCellSpec)}>
-                          {spec.startsWith('file:')
-                            ? <span className={clsx(css.pluginKindBadge, css.pluginKindPlain)} title={t('installedFromMask')}>{t('installedFromMask')}</span>
-                            : <code className={css.pluginSpec}>{spec}</code>}
+                          {installedSpecCell(row)}
                         </span>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          icon={<IconTrashOutline16 />}
-                          disabled={opsBlocked}
-                          aria-label={`${t('pluginsRemoveRow')}: ${name}`}
-                          onClick={() => { setRemoteRemoveTarget(name) }}
-                        >
-                          {t('pluginsRemoveRow')}
-                        </Button>
+                        {rowActionCell(row, opsBlocked, () => { setRemoteRemoveTarget(row.name) })}
                       </div>
-                      {remoteRowErrors[name] !== undefined
-                        ? <p className={css.error} role="alert">{remoteRowErrors[name]}</p>
+                      {remoteRowErrors[row.name] !== undefined
+                        ? <p className={css.error} role="alert">{remoteRowErrors[row.name]}</p>
                         : null}
                     </Fragment>
                   ))}

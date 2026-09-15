@@ -8,7 +8,11 @@
   flex: none;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  /* 2px = the v0.2.4 value, restored 2026-09-14 with the sidebar sheet's
+     hit-area rollback: `33238ffe` widened this to 4px only so two adjacent 24px
+     hit rims would stay distinct. The gap is structurally inert anyway (this
+     span holds at most one action), so the value is fidelity, not layout. */
+  gap: 2px;
   min-width: 0;
   max-width: 45%;
 }
@@ -87,27 +91,19 @@
   flex: none;
 }
 
-/* 2026-09 (stage 3, G1-4): WCAG 2.2 2.5.8 target size. These two 20px icon
-   buttons keep their visual box — and the rows their heights — and grow an
-   invisible 24x24 hit box instead (`inset: -2px`). `.headerGit`'s cluster gap
-   therefore goes 2px -> 4px so two adjacent 24px boxes stay distinct; the
-   unregistered row's action has no neighbour within 24px at all, so its spacing
-   alternative already held and this only widens the comfortable area. */
-.headerGitAction,
-.unregisteredAction {
-  position: relative;
-}
-.headerGitAction::after,
-.unregisteredAction::after {
-  content: '';
-  position: absolute;
-  inset: -2px;
-}
-/* Disabled buttons still hit-test: never swallow a neighbour's pointer events. */
-.headerGitAction:disabled::after,
-.unregisteredAction:disabled::after {
-  pointer-events: none;
-}
+/* 2026-09-14 (user directive 「按照 v0.2.4 恢复」): the 2026-09 hit-area pass
+   (`33238ffe`) is rolled back here too — the two invisible 24x24 rims AND the 4px
+   `.headerGit` gap it introduced (see the gap's own rule above). Mechanism and
+   scope: sidebar-chamber.module.css's `.actionIcon` block is the canonical note.
+   Short version for this sheet: `.headerGitAction` sits inside a 26px workspace
+   header that carries a RowHoverCard; the rim left ~1px of plain header around
+   the button, so a pointer leaving the header FROM the button got the native
+   pointerleave chain with no pointerout, React synthesized no onPointerLeave,
+   and the header's card stranded. What is restored is that the HIT BOX IS THE
+   VISUAL BOX again, as in v0.2.4. The 20px box itself (and r5) is NOT part of
+   this rollback: it is the 2026-09 batch-1 G1 icon-button language that replaced
+   v0.2.4's 22px r6 on purpose. WCAG 2.2 2.5.8 target size is a registered
+   deviation again (design 08 §3.4, design 24 §13 item 17). */
 
 .unregisteredAction {
   display: inline-flex;

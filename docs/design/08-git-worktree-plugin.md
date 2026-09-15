@@ -205,13 +205,21 @@ slot，不由 renderer App 直接 import 领域组件。
   分支 chip**：worktree 行 rest 态行尾只保留计数徽标，分支身份随行 hover / 键盘
   焦点 / kebab 揭示的动作与工作区管理对话框呈现；主 checkout 也不显示 chip
   （root 组只显示项目名）。行内动作图标 16px；空 workspace 的组体显示
-  "该工作区暂无会话"提示行。
+  "该工作区暂无会话"提示行。**揭示态下 occupant 是行尾动作簇的最左成员**：它与
+  `rowActions` 之间只有头部自身的 4px 间距，故簇内（`+` ↔ kebab）与之一致，同为
+  4px（2026-09-13 修订——此前该段用官方 `Rows .rowActions` 的 12px，一簇被切成
+  4px + 12px；见 06 §7「行内操作」条与 `batch1-visual-locks` 的 A8b 锁）。
 - **行内动作揭示 pointer-safe**：动作按钮的样式钩子是 **`data-git-action` 属性**
   （主行「分支+」创建 / worktree 行删除，`SidebarWorkspaceGitLine.tsx:387,400`），
   由 sidebar 侧的 hover / `:has(:focus-visible)` / kebab 展开
-  （`.rowActionsVisible`）三条规则揭示（`sidebar-chamber.module.css:958-960`，禁用
-  态 `.42` 同钩子见 974-976），occupant 自身也在 `:has(:focus-visible)` 下按同一
-  钩子揭示（`SidebarGit.module.css:192`）。**不用字面量类名**：属性选择器不被
+  （`.rowActionsVisible`）三条规则揭示（`sidebar-chamber.module.css` 的
+  `.workspaceHeader:hover [data-git-action]`、
+  `.workspaceHeader:has(:focus-visible) [data-git-action]`、
+  `.workspaceHeader:has(.rowActionsVisible) [data-git-action]` 三条，禁用态 `.42` 走
+  同钩子的 `[data-git-action]:disabled`；按选择器锚定——行号随文件增长漂移，
+  2026-09-13 复核时旧引用的 958-960 / 974-976 已不对），occupant 自身也在
+  `:has(:focus-visible)` 下按同一钩子揭示（`SidebarGit.module.css` 的
+  `.headerGit:has(:focus-visible) [data-git-action]`）。**不用字面量类名**：属性选择器不被
   CSS Modules 哈希，跨包模块才能匹配同一钩子（本仓既有规则见
   `packages/dsh-chamber-client-ui-mobile/src/client/styles.ts:10-20`；
   2026-09-11 upstream-alignment，原 `git-ws-action` 全局类名已退役）。
@@ -258,7 +266,7 @@ slot，不由 renderer App 直接 import 领域组件。
   （main 居首、派生随后；注册表顺序持久）。家族内外不存在按仓库分隔的 CSS 间距
   （各组一律 `.workspaceGroup` 4px 组距）——分组完全由顺序不变式表达。
 - **单一纯裁决器** `shared/workspace-drag-order.ts`：marker 渲染 / onDragOver 门 /
-  onDrop / 提交四处同源（单测 `workspace-drag-order.test.ts`）：
+  onDrop / 提交四处同源（单测 `packages/dsh-chamber-client-ui-sidebar/test/session-state/workspace-drag-order.test.ts`）：
   - 外部 workspace **不得落入连续家族的内部空隙**（after main / 两派生
     之间等全部 blocked）；
   - 派生 workspace 只能在**自己家族内**重排，且**绝对不得排到主 checkout
@@ -289,10 +297,15 @@ slot，不由 renderer App 直接 import 领域组件。
 - **未注册工作树按仓库分散到 repo 组末尾**（名称=目录 basename、与派生
   workspace 一致的行样式：26px 行 / r8 / 名称 14px-600-次级色 + 20px 行内动作钮
   ——2026-09 batch 1 G1 收口，其中 20px 命中 < WCAG 2.2 2.5.8 的 24px 属模块
-  图标按钮语言的既有权衡；**2026-09 阶段 3 G1-4 起不再低于 WCAG 2.2 2.5.8**：
-  `.headerGitAction` 与 `.unregisteredAction` 视觉盒仍 20px，但用不可见 `::after
-  { inset: -2px }` 把命中区扩到 24px（`.headerGit` 的簇间距同步 2px → 4px，保证两个
-  24px 盒不相交），见 design 24 §13 第 17 条与 design 06 §7；
+  图标按钮语言的既有权衡。**2026-09-14（用户指令「按照 v0.2.4 恢复」）**：2026-09
+  命中盒 pass（`33238ffe`）的两层不可见 `::after` 24px rim **与它顺带加宽的
+  `.headerGit` 2→4px gap 一并回退**——命中区重新就是视觉盒，gap 回到 v0.2.4 的 2px
+  （该 gap 结构上惰性：这个 span 至多一个动作）。机制/范围/局限见
+  `sidebar-chamber.module.css` 的 `.actionIcon` 注释块（唯一权威处）与 design 06 §7：
+  这是对"从按钮上离开头部"这条主触发的**缓解**，不是根治。**20px/r5 视觉盒本身不是
+  本次回退对象**——那是 batch 1 G1 的图标钮语言，v0.2.4 此处为 22px/r6，属既有的有意
+  对齐。24px 目标尺寸重新成为本模块的已登记偏差，见 design 24 §13 第 17 条与
+  design 06 §7；锁见该包 `test/locks/batch2-visual-locks.test.ts` 的 V1 一例；
   行内动作钮命中区见 `SidebarGit.module.css` 的 `.unregisteredAction`：分支图标 +
   名称 + 健康徽标；非 ready 行的状态胶囊是
   官方 `Tag tone="warning"`（`SidebarWorkspaceGitLine.tsx:208`，官方 11px/17px
@@ -367,6 +380,17 @@ preflight -> git-creating -> workspace-adopting -> session-creating
 - **创建永不提交会话**：`createSession: false` 显式传入；
   recovery 记录携带 `createSession` 标志，重试尊重原意图（无会话创建重试
   不建会话、不跳转）。existing tab 不得残留 new 模式的建议分支。
+- **创建后的可见性（design 05 §2.2.1 第二入口，2026-12）**：注册 workspace 的
+  unary 调用必须走 `shared/workspace-mutations.ts` 的唯一出口上报回声事实，并带
+  `afterWorkspaceId = 来源主 checkout` 的位置锚点；否则未挂载来源上的这个
+  **0 会话**工作区没有任何读通道（unary 兜底按会话 cwd 反推分组），行只能等用户
+  点开该服务器。worktree flag（`isWorktree`/`mainWorkspaceId`，与 §3.2 的行形态
+  同源）与 adopt 的未注册块收敛走唯一出口的 `beforePublish`——**事实发布之前**
+  写好，使回声行**首帧**就是 worktree 形态（分支图标、无 kebab、删除动作），不先
+  渲染成普通 workspace 再翻转；该顺序是契约而非优化（见 design 05 §2.2.1
+  「装饰先于事实」）。adopt 另带**标题提示**（`title = 分支名`）：宿主标题随后由
+  rename 写成该值，回声行因此生来就是最终标签（见 design 05 §2.2.1「标题提示」）。
+  git 快照轮询与 `workspaceKeyOf` 联动照旧。
 - **来源分支候选**：候选 = `sourceBranchChoices()`（纯函数在
   `packages/dsh-chamber-client-ui-git/src/shared/git-facts.ts`）——host 分支表
   原样放行，
@@ -689,7 +713,8 @@ chamber 侧边栏的归档动词自 2026-09 起**就地**终止该会话与 suba
 
 - **404 = 确定性 `git-host-not-loaded`**（git RPC 404，host 包缺失或未生效）：
   客户端判定为**确定性失败**——不建恢复（recovery 会永久死循环）、不重试，
-  文案指引按来源区分重启路径：本地实例请重启桌面端；远程 ssh 实例请在连接设置
+  文案指引按来源区分重启路径：本地实例请在「dsh 运行时」点「重启 dsh」（窗口随之
+  重载一次，design 18 §3.6 项 8）；远程 ssh 实例请在连接设置
   中重新下发 chamber host 包并点击「重启生效」（`restart_service` systemd IPC）
   后重试；gateway 实例请经 `/chamber/runtime/restart`（事务化受控重启，刷新
   插件挂载，design 17 §3 / design 18 §3.6）后重试。该错误归属 connections

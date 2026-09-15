@@ -64,6 +64,12 @@ jobs:
         run: node scripts/dev/classify-ci-changes.mjs
       - name: Verify workflow action pins
         run: node scripts/dev/verify-workflow-action-pins.mjs
+      # The pin check above reads the workflows as TEXT, so it stays green on a
+      # file GitHub refuses to parse (2026-12: an inserted `single entry: …`
+      # step name was invalid YAML and every local gate passed). This closes
+      # that gap without adding a YAML dependency.
+      - name: Verify workflow YAML scalars
+        run: node scripts/dev/verify-workflow-yaml-scalars.mjs
       - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
         with:
           version: 11.21.0
@@ -81,11 +87,13 @@ jobs:
       # Upstream-touchpoint registry gates (docs/checklists/upstream-touchpoints.md):
       # C1 pure fork files must stay byte-identical, C3 every fork/upstream file
       # has a ruling, C5 anchors must not go stale, C6 EXCLUDED dirs must exist,
-      # C9 vendor patch anchors must match the pin. These are file-only, so they
-      # run before the install (fail fast). C8 (committed artifacts == sources)
+      # C9 vendor patch anchors must match the pin, C11–C14 plugin protection
+      # (runtime family set / profile contract / seed registry / manifest mirror,
+      # design 21 §6.11) — all file-only, so they run before the install
+      # (fail fast). C8 (committed artifacts == sources)
       # rebuilds with esbuild and therefore needs node_modules — it runs in the
       # post-install step below; here it is explicitly advisory.
-      - name: Upstream touchpoint registry (C1/C3/C4/C5/C6/C7/C9/C10)
+      - name: Upstream touchpoint registry (C1/C3/C4/C5/C6/C7/C9/C10 + C11–C15)
         run: node scripts/dev/verify-upstream-touchpoints.mjs --no-artifact-rebuild
       - run: pnpm install --frozen-lockfile
         if: steps.classify.outputs.code == 'true'
@@ -142,50 +150,18 @@ jobs:
       # is pure and pinned here, exactly like the other scripts/ tools.
       - name: GUI acceptance toolbox unit tests (pure judgement layer)
         run: pnpm run test:gui-acceptance
-      - name: Shared runtime core unit tests (packages/dsh-runtime)
+      # One entry for the package test set (2026-12): the same mode is what
+      # `pnpm run check:tests` runs locally, so the push path and a developer's
+      # terminal cannot drift. Adding or renaming a package suite means editing
+      # scripts/dev/run-checks.mjs once; `pnpm run test:release-workflow` keeps
+      # release validation aligned with what this step runs.
+      - name: Package unit tests — single entry (runtime / control-plane / desktop / gateway / renderer-shell / client+host plugins)
         if: steps.classify.outputs.code == 'true'
-        run: pnpm run test:runtime
-      - name: Control-plane unit tests
+        run: node scripts/dev/run-checks.mjs tests
+      # Client plugin compiler faces, same single entry as `pnpm run check:typecheck`.
+      - name: Client plugin type checks — single entry (sidebar / git / layout / connections / settings-bridge / client-web / connection / api-gateway / open-in / mobile)
         if: steps.classify.outputs.code == 'true'
-        run: pnpm run test:control-plane
-      - name: Desktop unit tests (lifecycle / transports / credentials / runtime / native edges)
-        if: steps.classify.outputs.code == 'true'
-        run: pnpm run test:desktop
-      - name: Gateway unit tests
-        if: steps.classify.outputs.code == 'true'
-        run: pnpm run test:gateway
-      - name: Renderer shell unit tests
-        if: steps.classify.outputs.code == 'true'
-        run: pnpm run test:renderer-shell
-      - name: Client plugin type checks (sidebar / git / layout / connections / settings-bridge / client-web / connection / api-gateway / open-in / mobile)
-        if: steps.classify.outputs.code == 'true'
-        run: |
-          pnpm run typecheck:sidebar
-          pnpm run typecheck:git
-          pnpm run typecheck:layout
-          pnpm run typecheck:connections
-          pnpm run typecheck:settings-bridge
-          pnpm run typecheck:client-web
-          pnpm run typecheck:connection
-          pnpm run typecheck:api-gateway
-          pnpm run typecheck:open-in
-          pnpm run typecheck:mobile
-      - name: Client and host plugin unit tests (sidebar / layout / git / settings-bridge / connections / client-web / connection / open-in / mobile)
-        if: steps.classify.outputs.code == 'true'
-        run: |
-          pnpm run test:sidebar
-          pnpm run test:layout
-          pnpm run test:git
-          pnpm run test:host-git
-          pnpm run test:host-archive-cleanup
-          pnpm run test:host-open-in
-          pnpm run test:settings-bridge
-          pnpm run test:connections
-          pnpm run test:client-web
-          pnpm run test:connection
-          pnpm run test:open-in
-          pnpm run test:mobile
-          pnpm run test:cli
+        run: node scripts/dev/run-checks.mjs typecheck
       # Runs `pnpm run smoke`; it SKIPs when the checkout carries no bundled
       # dsh runtime — normal here, since only
       # packages/desktop/vendor/dsh/pnpm-lock.yaml is committed and
@@ -315,8 +291,10 @@ jobs:
       # Upstream-touchpoint registry gates (docs/checklists/upstream-touchpoints.md):
       # C1 pure fork files must stay byte-identical, C3 every fork/upstream file
       # has a ruling, C5 anchors must not go stale, C6 EXCLUDED dirs must exist,
-      # C9 vendor patch anchors must match the pin (file-only, pre-install).
-      - name: Upstream touchpoint registry (C1/C3/C5/C6/C9)
+      # C9 vendor patch anchors must match the pin, C11–C14 plugin protection
+      # (design 21 §6.11), C15 the hover-port retirement gate — file-only,
+      # pre-install.
+      - name: Upstream touchpoint registry (C1/C3/C5/C6/C9 + C11–C15)
         if: steps.classify.outputs.code == 'true'
         run: node scripts/dev/verify-upstream-touchpoints.mjs --no-artifact-rebuild
       - run: pnpm install --frozen-lockfile
@@ -365,6 +343,25 @@ jobs:
       - name: desktop test:win32 manifest (real icacls)
         if: steps.classify.outputs.code == 'true'
         run: pnpm --filter @dsh-chamber/desktop run test:win32
+      # Credential-free packaging rehearsal (2026-12). Until now the first place a
+      # Windows packaging regression could surface was inside release.yml — the
+      # workflow that already holds the release credentials. This leg builds the
+      # desktop payload and runs electron-builder with `--publish=never`, so a
+      # broken `files`/`extraResources`/beforePack/afterPack path fails on an
+      # ordinary master push instead. Two deliberate limits: it never runs on pull
+      # requests (minutes of NSIS toolchain work per PR is not worth the signal),
+      # and it uploads nothing — the point is that packaging succeeds, not that an
+      # artifact is kept.
+      - name: Windows packaging rehearsal (no publish, no credentials)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.classify.outputs.code == 'true'
+        run: |
+          pnpm run build:desktop
+          # exec, not `run dist:win -- --publish=never`: pnpm forwards its own `--`
+          # separator to the script, so electron-builder received
+          # `--win --x64 "--" "--publish=never"`, treated the flag as a positional
+          # argument, fell back to CI implicit publishing and died on the missing
+          # GH_TOKEN. This mirrors the release workflow's own invocation.
+          pnpm --filter @dsh-chamber/desktop exec electron-builder --win --x64 --publish=never
 
   # macOS Swift shell leg (design 25, W-26): the SwiftPM package, the JS↔Swift
   # bridge manifest lockstep and the packaging inputs are macOS-only surfaces —
