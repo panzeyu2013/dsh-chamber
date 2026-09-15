@@ -282,6 +282,64 @@ export interface WorkspaceRenamedFact {
 }
 
 /**
+ * One successful in-app session creation (design 05 §2.2 revision 2026-12) —
+ * the session-side sibling of {@link WorkspaceCreatedFact}, published by the
+ * single funnel `shared/session-mutations.ts` for the sidebar's "+", the
+ * session row menu's fork, and the Git plugin's own session creations.
+ *
+ * WHY the fact exists: a session minted over the source's UNARY client reaches
+ * neither producer of that source's projection in time — the mounted ctx push
+ * carries the official session-summary store, whose only out-of-band update is
+ * the host's ASYNCHRONOUS `api-session/added` broadcast (in the race window the
+ * push replaces the aggregate from a store that does not list the id yet, and
+ * an UNMOUNTED source never receives the broadcast at all), while the 30s unary
+ * fallback's merge keeps a pushed source's workspace membership frozen, so the
+ * new id can only appear as an unaccounted stray (hidden while it is the
+ * provisional blank row of a non-current source). The App records the host id
+ * in its session-echo ledger, projects the row into its workspace immediately,
+ * and converges on the authoritative view (the official session-list refresh
+ * this fact triggers — the seam that forces the summaries to re-read the
+ * corpus — or the source's next mount).
+ */
+export interface SessionCreatedFact {
+  sourceId: string
+  /** HOST session id — the only trustworthy "this session now exists" proof. */
+  sessionId: string
+  /**
+   * Host workspace id the session was created under. Absent for a fork: the
+   * child's workspace is resolved from {@link parentSessionId} by the App.
+   */
+  workspaceId?: string
+  /** Parent session id (fork), for the App's membership resolution. */
+  parentSessionId?: string
+  /** Display-title hint (fork intent); absent = the official id ladder. */
+  title?: string
+  /**
+   * Official provisional-row fact: true for `session.create` (blank until the
+   * first turn, so navigation surfaces it only while it is that source's
+   * CURRENT session — upstream semantics, deliberately not overridden by the
+   * echo), false for a fork child, which inherits content.
+   */
+  blank: boolean
+}
+
+/**
+ * One successful sidebar-issued session ARCHIVE. Two jobs, both local-fact
+ * keeping for a source whose shell may not be mounted:
+ * - the WITHDRAW half of the creation echo (a create → archive inside the same
+ *   echo window must not leave a phantom row until the TTL), and
+ * - the trigger of the local ARCHIVE TOMBSTONE (session-echo.ts
+ *   PendingArchive): for an unmounted source no channel carries the new archive
+ *   set at all — the mounted merge keeps the frozen pushed set and the unary
+ *   fallback has no archive wire — so the archived row would stay listed and
+ *   open into the official empty (archived-current-cleared) view.
+ */
+export interface SessionRemovedFact {
+  sourceId: string
+  sessionId: string
+}
+
+/**
  * Per-instance runtime facts projected by the sidebar plugin of the source's
  * own ctx (design 06 §4): current session id plus per-session live rows. The
  * plugin projects the source's session-list snapshot (minus the ids it has
@@ -344,6 +402,10 @@ type WorkspaceCreatedListener = (fact: WorkspaceCreatedFact) => void
 type WorkspaceRemovedListener = (fact: WorkspaceRemovedFact) => void
 /** One successful sidebar-issued workspace rename (see WorkspaceRenamedFact). */
 type WorkspaceRenamedListener = (fact: WorkspaceRenamedFact) => void
+/** One successful in-app session creation (see SessionCreatedFact). */
+type SessionCreatedListener = (fact: SessionCreatedFact) => void
+/** One successful sidebar-issued session archive (the echo's withdraw half). */
+type SessionRemovedListener = (fact: SessionRemovedFact) => void
 type SourceListener = (sourceId: string) => void
 type SettingsTargetListener = (sourceId: string | undefined) => void
 /** Page-wide active-view fact: the source whose shell is on screen, undefined until the App publishes. */
@@ -368,6 +430,8 @@ const sessionListRefreshListeners = new Set<SessionListRefreshListener>()
 const workspaceCreatedListeners = new Set<WorkspaceCreatedListener>()
 const workspaceRemovedListeners = new Set<WorkspaceRemovedListener>()
 const workspaceRenamedListeners = new Set<WorkspaceRenamedListener>()
+const sessionCreatedListeners = new Set<SessionCreatedListener>()
+const sessionRemovedListeners = new Set<SessionRemovedListener>()
 const activateSourceListeners = new Set<SourceListener>()
 const settingsTargetListeners = new Set<SettingsTargetListener>()
 const activeSourceListeners = new Set<ActiveSourceListener>()
@@ -544,6 +608,44 @@ export const chamberBridge = {
     workspaceRenamedListeners.add(listener)
     return () => {
       workspaceRenamedListeners.delete(listener)
+    }
+  },
+
+  /**
+   * Call after a successful in-app session creation (single funnel:
+   * shared/session-mutations.ts): publish the HOST session id so the App layer
+   * can project the row into that source's workspace immediately
+   * (session-echo ledger) instead of waiting for a producer that cannot see it
+   * — see {@link SessionCreatedFact}. Same one-way fact shape as the workspace
+   * echo; the App remains the only writer of the projection.
+   */
+  reportSessionCreated(fact: SessionCreatedFact): void {
+    for (const listener of [...sessionCreatedListeners]) listener(fact)
+  },
+
+  /** App-layer subscription to session-creation facts; returns the unsubscribe. */
+  onSessionCreated(listener: SessionCreatedListener): () => void {
+    sessionCreatedListeners.add(listener)
+    return () => {
+      sessionCreatedListeners.delete(listener)
+    }
+  },
+
+  /**
+   * Sidebar call after a successful `workspace.archiveSession`: retires that
+   * session's pending creation echo AND records the local archive tombstone
+   * ({@link SessionRemovedFact}). Published by the same funnel, fenced by the
+   * App exactly like the create fact.
+   */
+  reportSessionRemoved(fact: SessionRemovedFact): void {
+    for (const listener of [...sessionRemovedListeners]) listener(fact)
+  },
+
+  /** App-layer subscription to session-removal (archive) facts; returns the unsubscribe. */
+  onSessionRemoved(listener: SessionRemovedListener): () => void {
+    sessionRemovedListeners.add(listener)
+    return () => {
+      sessionRemovedListeners.delete(listener)
     }
   },
 

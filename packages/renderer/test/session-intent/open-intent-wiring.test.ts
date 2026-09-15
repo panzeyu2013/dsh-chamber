@@ -89,7 +89,7 @@ test('the sidebar projection gates the current session on the pending intent', (
   // dropped input (or dep) freezes that warning at its first value.
   assert.match(
     app,
-    /managedRuntime, workspaceEcho, openIntents, locale\),\n    \[health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, shellStates, managedRuntime, workspaceEcho, openIntents, locale\],/,
+    /managedRuntime, workspaceEcho, sessionEcho, sessionArchive, openIntents, locale\),\n    \[health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, shellStates, managedRuntime, workspaceEcho, sessionEcho, sessionArchive, openIntents, locale\],/,
     'the intent, the frame locale AND the shell gap facts must be derive inputs and memo dependencies',
   )
 })

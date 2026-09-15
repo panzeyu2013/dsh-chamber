@@ -50,6 +50,7 @@ const GROUPS = {
   // wiring: 跨文件源码文本接线契约（App/InstanceView/侧栏桥）
   wiring: [
     'test/wiring/workspace-echo-wiring.test.ts',
+    'test/wiring/session-echo-wiring.test.ts',
     'test/wiring/app-purged-memory-wiring.test.ts',
     'test/wiring/viewed-protection-wiring.test.ts',
     'test/wiring/hover-card-view-hide-wiring.test.ts',

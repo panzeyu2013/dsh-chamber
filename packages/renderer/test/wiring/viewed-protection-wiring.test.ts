@@ -63,6 +63,6 @@ test('the wire sends force + the protected set, and the archive verb stops the s
 test('archiving a session stops it together with its subagent subtree (archive-time termination)', () => {
   const sidebar = read('../../../dsh-chamber-client-ui-sidebar/src/client/SidebarRoot.tsx')
   assert.match(sidebar,
-    /await archiveSession\(getInstanceClient\(server\.id\), sessionId\)[\s\S]*?await stopArchivedSubtree\(getInstanceClient\(server\.id\), sessionId\)/,
-    'the stop must run AFTER the archive succeeded (a failed archive must never kill the turn)')
+    /await archiveSessionForSource\(server\.id, sessionId\)[\s\S]*?await stopArchivedSubtree\(getInstanceClient\(server\.id\), sessionId\)/,
+    'the stop must run AFTER the archive succeeded (a failed archive must never kill the turn; the archive goes through the single funnel that also retires the pending session echo)')
 })

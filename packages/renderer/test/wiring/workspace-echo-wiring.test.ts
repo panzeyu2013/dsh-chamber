@@ -80,8 +80,8 @@ test('the projection merges the echo at the single derive choke point', () => {
   )
   assert.match(
     app,
-    /workspaces = deriveServerWorkspaces\(\s*withWorkspaceEcho\(aggregate, workspaceEcho\[id\]\),\s*id,\s*'',\s*current,\s*\)/,
-    'the echo merges into the aggregate BEFORE the workspace derive (one place, no second state copy)',
+    /workspaces = deriveServerWorkspaces\([\s\S]*?withSessionEcho\(\s*withWorkspaceEcho\(withPendingArchives\(aggregate, sessionArchive\[id\]\), workspaceEcho\[id\]\),\s*sessionEcho\[id\],\s*\),\s*id,\s*'',\s*current,\s*\)/,
+    'the echo merges into the aggregate BEFORE the workspace derive (one place, no second state copy; the archive tombstones are applied first and the session echo wraps it so a just-created session can attach to a just-echoed workspace row)',
   )
   // 2026-09-11 review-fix (finding 4f): `locale` is REQUIRED in both places, not
   // an optional suffix — a mutation that dropped it from the call or the memo
@@ -89,7 +89,7 @@ test('the projection merges the echo at the single derive choke point', () => {
   // frame copy the derive assembles would freeze in its first-render locale).
   assert.match(
     app,
-    /\) => deriveServers\([\s\S]*?workspaceEcho, openIntents, locale\),\n    \[health, [^\]]*workspaceEcho, openIntents, locale\],/,
+    /\) => deriveServers\([\s\S]*?workspaceEcho,[^\n]*openIntents, locale\),\n    \[health, [^\]]*workspaceEcho,[^\]]*openIntents, locale\],/,
     'the ledger plus the frame locale must be both derive inputs and memo dependencies, otherwise the echoed row never paints',
   )
 })
@@ -142,8 +142,8 @@ test('the echo TTL ticks on every clock the App owns (create, push, fallback pul
   )
   assert.match(
     app,
-    /\}, \[clearAggregateRetry, refreshHealth, sweepWorkspaceEcho\]\)/,
-    'the pull path must depend on the sweep helper it calls',
+    /\}, \[clearAggregateRetry, refreshHealth, sweepSessionArchive, sweepSessionEcho, sweepWorkspaceEcho, updateSessionArchive, updateSessionEcho\]\)/,
+    'the pull path must depend on the sweep helper it calls (and on the session-ledger ticks)',
   )
 })
 

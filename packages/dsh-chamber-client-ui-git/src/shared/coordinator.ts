@@ -7,7 +7,8 @@
  * by switching shells, and recovery remains visible after a view switch.
  */
 import {
-  archiveSession, chamberBridge, createSession,
+  chamberBridge,
+  createSessionForSource, archiveSessionForSource,
   createWorkspaceForSource, deleteWorkspaceForSource, renameWorkspaceForSource,
   insertWorkspaceBefore,
   clearWorkspaceGitFlags, getSourceRepoLayouts, getWorkspaceGitFlag, markSourceGitFlagsLoaded, retainSourceWorkspaceFlags, setSourceRepoLayouts, setWorkspaceGitFlag,
@@ -457,7 +458,7 @@ async function performCreateSaga(
           ...(sourceWorkspaceId === undefined ? {} : { mainWorkspaceId: sourceWorkspaceId }),
         }),
       }),
-      sessionCreate: (workspaceId, id) => createSession(getInstanceClient(sourceId), workspaceId, id),
+      sessionCreate: (workspaceId, id) => createSessionForSource(sourceId, workspaceId, { sessionId: id }),
       isAmbiguousHostFailure: isAmbiguousGitRpcFailure,
     }, preview, { operationId, sessionId }, {
       createSession: commitSession,
@@ -566,7 +567,7 @@ export async function createSessionHere(sourceId: string, path: string): Promise
             })
           },
         }),
-        sessionCreate: (workspaceId, id) => createSession(getInstanceClient(sourceId), workspaceId, id),
+        sessionCreate: (workspaceId, id) => createSessionForSource(sourceId, workspaceId, { sessionId: id }),
       }, path, sessionId)
       setRecovery(sourceId, undefined)
       // Position + identity (review 2026-08): the wire PREPENDS new
@@ -753,7 +754,7 @@ export async function removeWorktree(
             const snapshot = await fetchInstanceSnapshot(getInstanceClient(sourceId))
             return { sessions: snapshot.sessions, archivedSessionIds: snapshot.archivedSessionIds }
           },
-          archiveSession: sessionId => archiveSession(getInstanceClient(sourceId), sessionId),
+          archiveSession: sessionId => archiveSessionForSource(sourceId, sessionId),
         }, directSessionIds)
       } catch (error) {
         throw new Error(`归档会话失败：${errorText(error)}；未删除任何工作树（部分会话可能已归档）`)
@@ -855,7 +856,7 @@ export async function retryRecovery(sourceId: string): Promise<void> {
           // recovery 路径随后会 requestOpenSession（切到该来源 ⇒ 挂载 ⇒ follow
           // 基线），锚点收益有限，这里只保证事实不漏发。
           workspaceCreate: path => createWorkspaceForSource(sourceId, path),
-          sessionCreate: (workspaceId, sessionId) => createSession(getInstanceClient(sourceId), workspaceId, sessionId),
+          sessionCreate: (workspaceId, sessionId) => createSessionForSource(sourceId, workspaceId, { sessionId }),
           isWorkspaceOwnershipConflict: error => (
             error instanceof GitWorktreeRpcError && error.code === 'rollback-has-workspace'
           ),
@@ -864,11 +865,11 @@ export async function retryRecovery(sourceId: string): Promise<void> {
       } else if (recovery.kind === 'workspace-adopt' || recovery.kind === 'session-adopt') {
         const result = await runWorkspaceAdoptRecovery({
           workspaceCreate: path => createWorkspaceForSource(sourceId, path),
-          sessionCreate: (workspaceId, sessionId) => createSession(getInstanceClient(sourceId), workspaceId, sessionId),
+          sessionCreate: (workspaceId, sessionId) => createSessionForSource(sourceId, workspaceId, { sessionId }),
         }, recovery)
         requestOpenSession(sourceId, result.sessionId)
       } else if (recovery.kind === 'session-create') {
-        await createSession(getInstanceClient(sourceId), recovery.workspaceId, recovery.sessionId)
+        await createSessionForSource(sourceId, recovery.workspaceId, { sessionId: recovery.sessionId })
         requestOpenSession(sourceId, recovery.sessionId)
       } else {
         await runWorkspaceDeleteRecovery(

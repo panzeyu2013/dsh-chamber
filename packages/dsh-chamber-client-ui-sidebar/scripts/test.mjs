@@ -32,7 +32,9 @@ const GROUPS = {
   'session-state': [
     'test/session-state/aggregate-store.test.ts',
     'test/session-state/workspace-echo.test.ts',
+    'test/session-state/session-echo.test.ts',
     'test/session-state/workspace-mutations.test.ts',
+    'test/session-state/session-mutations.test.ts',
     'test/session-state/workspace-drag-order.test.ts',
     'test/session-state/workspace-git-flags.test.ts',
     'test/session-state/view-prefs.test.ts',
