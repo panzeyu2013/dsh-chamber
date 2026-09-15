@@ -55,6 +55,7 @@ design 05 / STATUS）。
 | `tsconfig.client.json` / `tsconfig.host.json` | [patch-mod] | chamber 构面（extends/rootDir/vendor paths）；`files` 列表与上游增量同步维护（脚本按 patched 登记） |
 | `src/client/carrier-assembly.ts`、`src/client/liveness-triggers.ts`、`src/client/recovery-policy.ts` | [own] | chamber 自有（载波装配策略 / sleep-wake 活性触发：原生 reconnect + 离线门 + 唤醒事件旁路 / 每来源恢复时序策略：远端 45s·5s，本地默认） |
 | `tsconfig.check-base/client/host.json` | [own] | chamber erasable-only 校验构面 |
+| `scripts/test.mjs` | [own] | chamber 自有测试清单（按域分组的显式 manifest；`verify:test-wiring` 校验可达性） |
 | `test/` | [own] | chamber 自有测试 + fixtures（含 schemastery/fixture/recovery-config 桩 loader） |
 | `tsdown.config.ts`、上游 `tests/` | [dropped] | chamber 无 tsdown/镜像上游测试 |
 

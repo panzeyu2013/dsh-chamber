@@ -144,6 +144,7 @@ const FORKS = [
       'tsconfig.check-base.json': 'chamber erasable-only 校验构面',
       'tsconfig.check-client.json': 'chamber erasable-only 校验构面（files 与 client 同步）',
       'tsconfig.check-host.json': 'chamber erasable-only 校验构面（files 与 host 同步）',
+      'scripts/test.mjs': 'chamber 自有测试清单（按域分组的显式 manifest；verify:test-wiring 校验可达性）',
     },
     ownPrefix: ['test/', 'src/client/carrier-assembly.ts', 'src/client/liveness-triggers.ts', 'src/client/recovery-policy.ts'],
     ownNotes: {
