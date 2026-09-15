@@ -479,6 +479,6 @@ client 半）；其余引用全是 CSS 规则（`body[data-ds-dark-theme]{…}`�
   `card.bottom = innerHeight − 8`）；
 - 卡片盒是该 wrapper 内唯一的 `[class*="_card_1b2ny_"]` 元素。
 
-`test/official-hover-card.test.ts` 钉住常数与 src↔产物锁步，C8 钉住随包字节；
+`test/dom/official-hover-card.test.ts` 钉住常数与 src↔产物锁步，C8 钉住随包字节；
 **没有任何门能看到被服务 bundle 的哈希变化**（它是仓外的派生状态），这正是本条存在的
 理由。

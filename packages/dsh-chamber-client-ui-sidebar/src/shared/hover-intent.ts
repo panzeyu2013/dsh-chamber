@@ -23,8 +23,8 @@
  *     machine stranded none. That probe was scratch work — its script and its
  *     rate never shipped, so they are deliberately NOT cited as repo evidence.
  *     The committed regression coverage is: the machine cases in
- *     `test/hover-intent.test.ts` (a leave inside the window must still close),
- *     the source locks in `test/hover-card-wiring.test.ts`, and the real-pointer
+ *     `test/session-rows/hover-intent.test.ts` (a leave inside the window must still close),
+ *     the source locks in `test/session-rows/hover-card-wiring.test.ts`, and the real-pointer
  *     acceptance leg `W-4b-race` (`scripts/gui-acceptance/walkthrough.mjs`,
  *     judged by `hoverRaceVerdict` in `checks.mjs`).
  *
@@ -95,7 +95,7 @@ function dismissVisibleCard(): void {
  * it. A card open while the pointer rests on it therefore survived a view
  * switch, painted over the incoming view until the next pointer move (observed
  * during the 2026-09 review with a real-Chrome harness; the lock for it is
- * `packages/renderer/test/hover-card-view-hide-wiring.test.ts`).
+ * `packages/renderer/test/wiring/hover-card-view-hide-wiring.test.ts`).
  * The renderer's view-hide path calls this explicitly, in the same frame the
  * class lands.
  *

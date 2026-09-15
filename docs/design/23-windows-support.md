@@ -46,7 +46,7 @@
   `realAlive || hasWindowsResidualTree` 树存活;POSIX 默认零改动。
 - `spawn-dsh.ts signalManagedGroup`:win32 → `treeKillWindows`(gone=false 即 ESRCH 等价);
   spawn 补 `windowsHide: true`(detached 子进程不弹控制台窗口)。
-- 集成测试:`control-plane/test/win32-lifecycle.integration.test.ts`(win32-only,自 skip)。
+- 集成测试:`control-plane/test/windows/win32-lifecycle.integration.test.ts`(win32-only,自 skip)。
 
 **语义让步(记录)**:Windows 无 POSIX 信号 → SIGTERM 段与 SIGKILL 段同形(taskkill);
 身份证明依赖 PowerShell 存在且同行权限可读 CommandLine;以上均 fail-closed。

@@ -92,7 +92,7 @@ export type TrustedIpc = (handler: (...args: any[]) => any) => (event: IpcSender
  * - 通过 → handler(...args)（事件对象不透传）。
  *
  * Injectable sender/quit predicates keep this electron-free and unit-testable
- * (renderer-trust.test.ts).
+ * (test/ipc/renderer-trust.test.ts).
  */
 export function createTrustedIpc(deps: {
   /** Sender validation: the current main window exists, is alive and the

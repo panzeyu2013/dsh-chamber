@@ -361,8 +361,8 @@ detectVscodeAvailability(platform): { available: boolean }
   逐文件登记；只有必须解包的模块才进 `asarUnpack`（当前 `sanitize-error.ts` /
   `dsh-runtime-controller.ts`）；
 - **类型面**：根 `tsconfig.json` 以 `packages/desktop/*.ts` / `*.cts` glob 收入；
-- `test:desktop` 脚本**逐项列出**测试文件（含 `deep-link.test.ts`、
-  `open-in.test.ts`）——新增测试必须登记；
+- `test:desktop` 脚本**逐项列出**测试文件（含 `test/desktop-shell/deep-link.test.ts`、
+  `test/desktop-shell/open-in.test.ts`）——新增测试必须登记；
 - `preload.cts` 暴露 `deepLink.onIntent()/ready()/ack()` 与 open-in 面
   （`openIn.apps()/open()`，设计 20 §3.2；`build:preload` 自动编译）；
 - main.ts 接线（§4.2/§4.3）；

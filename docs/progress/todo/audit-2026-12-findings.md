@@ -48,7 +48,7 @@
   `host-graph.ts:791-805`；`rev` 是 per-process 随机 nonce（`vendor/…/client/modules/src/index.ts:529`、
   `:868-871`）⇒ 同版本双实例必假报，且"对齐版本"修不掉；实跑：45 个 client 行中 6 个不在
   `CHAMBER_COVERED_IDS`（`dsh-client-resources`、`ui-sidebar-right`、`ui-sidebar-documentpreview`、
-  `ui-sidebar-files`、`ui-cordis`、`ui-schedule`）。测试 `packages/renderer/test/host-graph.test.ts:787-812`
+  `ui-sidebar-files`、`ui-cordis`、`ui-schedule`）。测试 `packages/renderer/test/lifecycle/host-graph.test.ts:787-812`
   正是在钉该文案而没有版本证据。
 - 建议：要么去掉"版本"断言（改为"实例提供的该行实现不同/无法比较"），要么改用真实内容事实。
 - 状态：未动
@@ -265,7 +265,7 @@
 
 ## A4 测试接线
 
-无确证的漏登记。唯一背景项——`packages/control-plane/test/protected-plugins.test.ts` 未进 runner——**已修**：
+无确证的漏登记。唯一背景项——`packages/control-plane/test/plugins/protected-plugins.test.ts` 未进 runner——**已修**：
 该文件已在 `packages/control-plane/scripts/test.mjs:67/:79`（POSIX + win32 两处），头注里失效的引用也已改为
 release-checklist §3（task-16 #7 复核通过）。
 
@@ -273,7 +273,7 @@ release-checklist §3（task-16 #7 复核通过）。
 
 - **已加守卫**（"存在但缺当前标记 ⇒ 失败 + 重建命令"）：`packages/desktop/dist/control-plane/**`
   （`packages/desktop/scripts/control-plane-freshness.test.mjs`）、`packages/gateway/dist/**`
-  （`packages/gateway/test/build-smoke.test.ts`）。
+  （`packages/gateway/test/packaging/build-smoke.test.ts`）。
 - **仍无守卫**（陈旧不会被任何测试发现）：`packages/desktop/dist/web/**`、`dist/preload.cjs`、
   `dist/host-{graph,git-worktree,archive-cleanup,open-in}-package/**`、`packages/gateway/host-packages/**`
   （只有存在性断言）、vendor `allowBuilds` 锁步（`pnpm-workspace.yaml` ↔

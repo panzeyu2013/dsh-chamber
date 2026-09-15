@@ -15,6 +15,7 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { stripComments } from '../../../scripts/dev/test-support/source-text.ts';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 
@@ -35,37 +36,6 @@ function sourceFiles(dir: string): string[] {
     const path = join(dir, entry.name);
     if (entry.isDirectory()) out.push(...sourceFiles(path));
     else if (entry.name.endsWith('.ts') || entry.name.endsWith('.tsx')) out.push(path);
-  }
-  return out;
-}
-
-/** Remove line/block comments while preserving string and template literals. */
-function stripComments(source: string): string {
-  let out = '';
-  let quote: string | undefined;
-  let line = false;
-  let block = false;
-  for (let i = 0; i < source.length; i += 1) {
-    const ch = source[i];
-    const next = source[i + 1];
-    if (line) {
-      if (ch === '\n') { line = false; out += ch; } else out += ' ';
-      continue;
-    }
-    if (block) {
-      if (ch === '*' && next === '/') { block = false; out += '  '; i += 1; } else out += ch === '\n' ? ch : ' ';
-      continue;
-    }
-    if (quote !== undefined) {
-      out += ch;
-      if (ch === '\\') { out += next ?? ''; i += 1; continue; }
-      if (ch === quote) quote = undefined;
-      continue;
-    }
-    if (ch === '/' && next === '/') { line = true; out += '  '; i += 1; continue; }
-    if (ch === '/' && next === '*') { block = true; out += '  '; i += 1; continue; }
-    if (ch === '"' || ch === "'" || ch === '`') { quote = ch; out += ch; continue; }
-    out += ch;
   }
   return out;
 }
@@ -438,7 +408,7 @@ test('the test-only vendor loader maps through the WORKSPACE MEMBER path (CI reg
   // inside the mapped vendor source only resolves when the mapping goes through
   // `vendor/harness-packages/@deepseek-ai/…` (the workspace member, which owns
   // the linked dependencies), never the raw submodule path.
-  const loader = stripComments(readFileSync(new URL('../test/vendor-loader.mjs', import.meta.url), 'utf8'))
+  const loader = stripComments(readFileSync(new URL('./support/vendor-loader.mjs', import.meta.url), 'utf8'))
   assert.match(loader, /vendor\/harness-packages\/@deepseek-ai\/dsh-client-ui-slots\/src\/index\.ts/,
     'the loader must map the specifier to the workspace member path')
   assert.doesNotMatch(loader, /harness-checkout\/packages\//,

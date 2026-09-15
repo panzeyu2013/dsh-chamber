@@ -21,14 +21,14 @@
 
 | 位置 | 内容 | 归类(翻转后去向) |
 |---|---|---|
-| control-plane/test/protocol.test.ts L738/822/865 | Unix detached 进程组契约 | win32 等价测试(M1,win32-lifecycle.integration)或 POSIX-only 注释 |
-| dsh-runtime/test/runtime-installer.test.ts L547-686 等 | 进程组契约/不可变树/symlink fixture | 实现类(树回收/清属性)后 win32 等价;symlink 类标 POSIX-only |
-| dsh-runtime/test/dsh-runtime-store.test.ts L440-527、snapshot-store L398/554、known-good-monitor L162、metadata-recovery L522/672/733/881 | symlink/权限 fixture | junction 或普通文件替代后 win32 等价;否则 POSIX-only |
-| desktop/plugin-sync.test.ts L1701-1703 | 本地插件写进程 reaper 杀死守护化后代(进程组契约,POSIX-only) | M1 已落地等价:taskkill /T /F + CIM 残余清扫(win-probes/win32-lifecycle);非 symlink 类 |
-| gateway/store-permissions.test.ts(0700 组)| POSIX 0700 | 有 win32 ACL 保留测试替代,保持 skip |
-| control-plane/test/reaper.test.ts L95 | symlink fixture(symlink 权限与平台相关) | POSIX-only 注释 |
-| dsh-runtime/test/dsh-runtime-store.test.ts L325-326、L950 | L325-326 symlink race fixture;L950 只读不可变树 eviction(与 M2a win32-readonly-rm 决策门直接相关) | symlink 类 POSIX-only;L950 由决策门结果决定(清属性实现或 Node rm 自带) |
-| dsh-runtime/test/runtime-installer.test.ts L365 | 不可变树(immutable-tree)契约 | 决策门同 L950 |
+| control-plane/test/protocol/protocol.test.ts L738/822/865 | Unix detached 进程组契约 | win32 等价测试(M1,win32-lifecycle.integration)或 POSIX-only 注释 |
+| dsh-runtime/test/install/runtime-installer.test.ts L547-686 等 | 进程组契约/不可变树/symlink fixture | 实现类(树回收/清属性)后 win32 等价;symlink 类标 POSIX-only |
+| dsh-runtime/test/store/metadata-authority.test.ts（原 dsh-runtime-store.test.ts L440-527 的 authority-reader symlink 用例）、snapshot-store L398/554、known-good-monitor L162、metadata-recovery L522/672/733/881 | symlink/权限 fixture | junction 或普通文件替代后 win32 等价;否则 POSIX-only |
+| desktop/test/plugins/plugin-sync-apply.test.ts（reaper fail-closes on PID identity reuse / kills a daemonized descendant；原 plugin-sync.test.ts L1701-1703 行号已失效） | 本地插件写进程 reaper 杀死守护化后代(进程组契约,POSIX-only) | M1 已落地等价:taskkill /T /F + CIM 残余清扫(win-probes/win32-lifecycle);非 symlink 类 |
+| gateway/test/auth/store-permissions.test.ts(0700 组)| POSIX 0700 | 有 win32 ACL 保留测试替代,保持 skip |
+| control-plane/test/host-lifecycle/reaper.test.ts L95 | symlink fixture(symlink 权限与平台相关) | POSIX-only 注释 |
+| dsh-runtime/test/store/metadata-authority.test.ts（replaced-parent 用例，原 L325-326）、dsh-runtime-store.test.ts（eviction can remove installer-owned read-only immutable trees，原 L950） | symlink race fixture;只读不可变树 eviction(与 M2a win32-readonly-rm 决策门直接相关) | symlink 类 POSIX-only;L950 由决策门结果决定(清属性实现或 Node rm 自带) |
+| dsh-runtime/test/install/runtime-installer.test.ts L365 | 不可变树(immutable-tree)契约 | 决策门同 L950 |
 
 ## 3. 平台门控拒绝码基线(现状断言,翻转时逐个销号)
 

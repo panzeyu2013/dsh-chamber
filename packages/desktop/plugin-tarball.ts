@@ -7,7 +7,7 @@
  * The gateway's `PUT /chamber/plugins/materialize` route accepts a raw gzip
  * tarball (≤ 32 MiB body, ≤ 4096 entries, ≤ 256 MiB unpacked — the caps this
  * module mirrors as TARBALL_MAX_*; the textual lockstep test
- * plugin-tarball.test.ts pins them to the gateway's own constants so they can
+ * test/plugins/plugin-tarball.test.ts pins them to the gateway's own constants so they can
  * never drift). This module builds that archive from a LOCAL plugin SOURCE
  * FOLDER in the npm-pack layout (`package/` root prefix — the layout pnpm
  * expects when the gateway stages the archive and runs `dsh plugin add
@@ -45,7 +45,7 @@ import {
 // ---------------------------------------------------------------------------
 // Caps — exact mirrors of the gateway route / tgz-scan ceilings (design 21
 // §6.2 / §6.9; routes.ts MATERIALIZE_MAX_BYTES + tgz-scan.ts TGZ_MAX_ENTRIES
-// / TGZ_MAX_UNPACKED_BYTES). plugin-tarball.test.ts pins the literals against
+// / TGZ_MAX_UNPACKED_BYTES). test/plugins/plugin-tarball.test.ts pins the literals against
 // the gateway sources so the desktop archive can never exceed what the route
 // accepts.
 // ---------------------------------------------------------------------------
@@ -74,7 +74,7 @@ export const PLUGIN_MANIFEST_MAX_BYTES = 64 * 1024
 
 /** Strict exact-semver grammar of the gateway's `x-plugin-version` header
  *  (routes.ts PLUGIN_VERSION_PATTERN — module-local there; this is the
- *  desktop-side mirror pinned by plugin-tarball.test.ts). */
+ *  desktop-side mirror pinned by test/plugins/plugin-tarball.test.ts). */
 export const GATEWAY_PLUGIN_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/
 
 /** Test/injection seam: per-build cap overrides (defaults = the mirrors

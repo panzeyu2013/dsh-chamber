@@ -7,7 +7,7 @@
  * planes are authoritative; chamber settings are app-level and disjoint).
  *
  * This module is deliberately electron-free so the decision functions are
- * unit-testable with plain node:test (see chamber-settings.test.ts). The
+ * unit-testable with plain node:test (see test/local-state/chamber-settings.test.ts). The
  * electron side effects (powerSaveBlocker / setLoginItemSettings / XDG
  * autostart / window lifecycle) live in main.ts.
  */

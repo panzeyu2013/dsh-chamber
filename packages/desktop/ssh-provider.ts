@@ -167,7 +167,7 @@ export const MAX_SSH_PASSWORD_CHARS = 4096
  * judgement, design 21 §6.11) — SINGLE-SOURCED in control-plane `plugin-spec.ts` (design 21
  * §6.2/§6.7: the gateway executor and the desktop share one source; the
  * renderer's ADD_SPEC stays a hand mirror pinned by the lockstep test in
- * gateway/test/plugin-spec-lockstep.test.ts). Consumed through
+ * gateway/test/plugins/plugin-spec-lockstep.test.ts). Consumed through
  * control-plane-module.ts — the desktop dual-path facade (packaged →
  * compiled dist/control-plane, dev → workspace source), the same A2 rule as
  * the rpc-envelope/cordis-inserts primitives above — and re-exported here so

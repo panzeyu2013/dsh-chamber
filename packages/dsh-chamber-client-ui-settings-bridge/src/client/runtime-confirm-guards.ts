@@ -20,7 +20,7 @@
  * recomputed over the snapshot, never a second copy of the server's matrix.
  *
  * This module is pure and plain-node testable (no DOM, no React): the probe
- * above is replayed in test/runtime-confirm-guards.test.ts.
+ * above is replayed in test/runtime/confirm-machine-guards.test.ts.
  */
 import {
   remoteRuntimeActionGates,

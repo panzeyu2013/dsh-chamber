@@ -21,8 +21,8 @@ The shell declares and renders the three holes the alpha.2 official
   resolved at read time, notifications fire only on change), the shell renders
   one `PanelRow` per entry, and a click calls `ctx.layout.selectPanel(id)`.
   Upstream ships an empty list, so the section is invisible by default; the
-  projection and wiring are pinned by `test/panel-source.test.ts` and
-  `test/panel-wiring.test.ts`.
+  projection and wiring are pinned by `test/plugin-kernel/panel-source.test.ts` and
+  `test/plugin-kernel/panel-wiring.test.ts`.
 
 ## Structure
 

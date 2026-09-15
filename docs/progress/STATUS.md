@@ -82,7 +82,7 @@
   本条。
 - **连接 fork 的 `ownsGeneration()` 守卫是"无行为见证"的纵深防御（2026-12 登记）**：
   `packages/dsh-client-connection/src/client/index.ts` 的 liveness 接线层已由
-  `test/client-start-liveness-wiring.test.ts` 覆盖（resume 绕过离线门、stop 拆卸全部监听、
+  `test/lifecycle/client-start-liveness-wiring.test.ts` 覆盖（resume 绕过离线门、stop 拆卸全部监听、
   两道单飞门响亮失败、唤醒 burst 收敛），但 :387 的 `if (!ownsGeneration()) return` 无法被
   任何测试见证：其唯一可能生效的路径是 `registerGenerationSource` 的 disposer（`:336-341`
   释放 owner 却不拆触发器），而该路径必经 `releaseOwner`（`:298-305`）调 `controller.stop()`，
@@ -92,7 +92,7 @@
 - **隐藏 span 的阈值语义只由触发器单元覆盖（2026-12 登记）**：接线层不断言
   `visibilitychange` 隐藏 ≥30s 的真时序（`start()` 不传 `now`/`hiddenReconnectThresholdMs`，
   `index.ts:379-401`），真测需实等 ≥30s。接线层只覆盖该 listener 的装配/拆卸；阈值语义由
-  `test/liveness-triggers.test.ts` 单元覆盖。漂移面为零（接线不传该选项），如需接线层也见红则
+  `test/recovery/liveness-triggers.test.ts` 单元覆盖。漂移面为零（接线不传该选项），如需接线层也见红则
   需给该调用加可选注入——按缺口严重性未做。
 - **gateway 运维页缺三个变更入口（design 21 §7 runbook 口径，2026-12 登记）**：
   `packages/gateway/src/routes.ts` 内嵌运维页的 `RUNTIME_PATHS`（`:224-236`）只含
@@ -133,7 +133,7 @@
   文件夹对话框，随 design 22/23）。
 - **产物新鲜度守卫只覆盖两个产物（2026-12 §6.11 漂移复盘）**：`packages/desktop/dist/control-plane/**`
   （`packages/desktop/scripts/control-plane-freshness.test.mjs`）与 `packages/gateway/dist/**`
-  （`packages/gateway/test/build-smoke.test.ts`）已有"**存在但缺当前标记 ⇒ 失败**"的守卫（缺失才按需构建，
+  （`packages/gateway/test/packaging/build-smoke.test.ts`）已有"**存在但缺当前标记 ⇒ 失败**"的守卫（缺失才按需构建，
   绝不静默自愈，失败信息给出重建命令）；其余产物陈旧时**没有任何测试会变红**（2026-12 A5 普查口径）——
   `packages/desktop/dist/web/**`（renderer 产物；`electron-shared.test.mjs` 只断言路径契约文本）、
   `dist/preload.cjs`、`dist/host-{graph,git-worktree,archive-cleanup,open-in}-package/**`
@@ -689,12 +689,12 @@
     指向**仓内不存在**的 `pnpm run verify-translation-pairing --write`。统一格式并纳入
     门禁是后续候选。
 - **gateway 运维页自身的失败分支不被测试夹具覆盖（2026-09-11 review-fix F4b 登记）**：
-  `packages/gateway/test/dashboard-harness.ts:432-435` 的 fetch spy 对每个它没有挂起的
+  `packages/gateway/test/support/dashboard-harness.ts:432-435` 的 fetch spy 对每个它没有挂起的
   请求**一律回 200**（`{ ok: true, status: 200 }`），因此页面脚本自己的 `request()`
   非 2xx 分支（`packages/gateway/src/routes.ts:316-326`：拼
   `Request failed (HTTP <n>)` 并挂 `code`/`httpStatus` 抛出）没有夹具驱动。失败路径的
   测试改为直接供给该分支**产出的确切 Error 形状**
-  （`packages/gateway/test/feature-lifecycle.test.ts:479-486`），即断言的是"页面拿到
+  （`packages/gateway/test/chamber-surface/feature-lifecycle.test.ts:479-486`），即断言的是"页面拿到
   这个错误之后的映射"，不是"这个错误是怎么被构造出来的"；要覆盖构造面，需给夹具的
   `respond` 增加 non-ok 响应能力（现在它只能抛错模拟网络错误）。
 - **归档保护的"候选根闭包"方向缺一条测试（2026-09 正确性审查登记，低）**：保护集只与
@@ -704,8 +704,9 @@
   **子代**保护其祖先整树」的方向相反，但**是合同写明的单向性，不是缺陷**；可达性上客户端
   也表达不出该组合：`sessionIds` 是必填数组（`instance-api.ts` 的 `purgeArchivedSessions`）
   且对话框要求非空选择，域层的"无过滤全删"进不来，隐藏子代理行同样不可被选择
-  （`test/core.test.ts` 的 subset 用例注释即此口径）。缺口只在测试：两个方向各有用例
-  （`test/core.test.ts:1302` 保护根、`:1315` 保护子代），唯独"受保护祖先 + 其 archived
+  （`test/subset-and-orphan-sweep.test.ts` 的 subset 用例注释即此口径）。缺口只在测试：两个方向各有用例
+  （`test/sweep-gates-and-protection.test.ts` 的 "purge protection: a protected ROOT skips its whole tree" 保护根、
+  "…a protected SUBAGENT descendant protects its archived ancestor tree" 保护子代），唯独"受保护祖先 + 其 archived
   子代候选"没有——**将来若给任何入口开放无过滤清理、或让子代理行可选，先补这条锁再放行**。
 
 ## 设计未决
@@ -780,8 +781,8 @@
   侧逐值锁步，形状一漂移或常数一失步即硬失败，
   强制退役/再登记裁决——**上游一旦修掉（任一侧），升级 pin 时本门先红**（登记时复核：上游
   master 上 `HoverCard.tsx`/`pointer-grace.ts` 与 pin 逐字节一致，故偏差仍成立）。
-  仓内证据：单测 `packages/dsh-chamber-client-ui-sidebar/test/hover-intent.test.ts`
-  （提交窗口内 leave 也必然收、同页互斥、slot 释放）与 `.../test/hover-card-wiring.test.ts`；
+  仓内证据：单测 `packages/dsh-chamber-client-ui-sidebar/test/session-rows/hover-intent.test.ts`
+  （提交窗口内 leave 也必然收、同页互斥、slot 释放）与 `.../test/session-rows/hover-card-wiring.test.ts`；
   实机走查 `scripts/gui-acceptance/walkthrough.mjs` 的 W-4b / **W-4b-race**（dwell+band
   内移开不搁浅）/ W-4b-swap（互斥与自愈）/ W-4b-dismiss（blur/hidden 清卡，监听接线），
   判据 = `scripts/gui-acceptance/checks.mjs` 的 `hoverCardVerdict`/`hoverRaceVerdict`。
@@ -818,7 +819,7 @@
   `existingPath` 探针，重放只会再跑同一失败探针并把有行动价值的拒绝换成永远重放的
   恢复项。宿主保留可重试是**因为同一码也会在已提交删除之后的
   `reconcileBoundRemove` 里出现**（`core.ts:2504-2595`）。该重叠由
-  `packages/dsh-chamber-client-ui-git/test/host-client-lockstep.test.ts:286-296` 显式
+  `packages/dsh-chamber-client-ui-git/test/snapshot/host-client-lockstep.test.ts:286-296` 显式
   钉死（未登记的漂移即红）⇒ 属性是**取舍**，不是缺陷。
 - **移出项（P3 硬纪律）**：匿名 control-plane 的认证/审计、薄壳聊天/会话列表/审批
   弹窗、控制面会话 runtime/统一索引、连接 broker/绑定、walkthrough、通知中心/历史、
@@ -921,7 +922,7 @@
     （上游 `SettingsRoot` 的 reset effect 原文，`onboarding.ts:onboardingStage` 的
     `resetsCompleted = !sessionsActive`）——早先把活动视图折进重置，于是一次普通
     切视图就抹掉全部确认，用户刚走完（或显式推迟）的步骤在切回来时重新挂载
-    （判据：`test/onboarding.test.ts` 的重放探针）。
+    （判据：`test/bridge/onboarding.test.ts` 的重放探针）。
     **登记残留（本轮引入的开放项）**：完成集是**组件局部**的，故壳被**重新挂载**
     （App 回收该实例再挂起）仍从空集重跑——运行并未结束，上游会认为该步骤已确认。
     证据：审查方探针 + `SettingsShell.tsx` 中 `completedOnboarding` 的 RESIDUAL
@@ -978,9 +979,9 @@
     `createPortal` 到 `body`，chamber 只能以文档级规则、锚在上游 CSS module 名上
     覆盖，且同框主按钮仍是官方黑、只改勾选会半蓝半黑；面板外的文档级弹层（首启
     `settings.onboarding`）同理不在作用域内。
-    判据：`dsh-chamber-client-ui-settings-bridge/test/batch2-visual-locks.test.ts`
+    判据：`dsh-chamber-client-ui-settings-bridge/test/shell/batch2-visual-locks.test.ts`
     的 B-3/B-4（含开关覆盖规则本身）与进度填充两条、
-    `dsh-chamber-client-ui-sidebar/test/batch2-visual-locks.test.ts` 的 archive
+    `dsh-chamber-client-ui-sidebar/test/visual-lock/batch2-visual-locks.test.ts` 的 archive
     checkbox 条；沿革与理由见 design 15 §D1② 与 design 24 §6。
   - **侧栏行没有 schedule 事实，标记靠 chamber 自己把 `projectionValues.schedule`
     带过去**：上游行类型直接带 `hasActiveSchedule`（`vendor/harness-checkout/packages/client/ui-workspace/src/client/tree.ts:161-163`
@@ -1002,7 +1003,7 @@
     与来源头连接绿点 `.statusOk` **同一 token**，同一侧栏里"会话完成未读"与
     "服务器已连接"会同色，用户 2026-09 裁决回到品牌蓝点（沿革：≤0.2.4 蓝点 →
     0.3.0-beta.1 T10 换官方 done 绿 → 本轮回到蓝点；锁在
-    `test/upstream-alignment.test.ts` 的 T10）；与运行环同属品牌蓝，靠
+    `test/visual-lock/upstream-alignment.test.ts` 的 T10）；与运行环同属品牌蓝，靠
     "静态实心点 vs 8 格动画环"的形状/动效区分。**提问/计划待审/请求权限**
     渲染 14px 图标徽标（问号/清单 business 蓝、警示三角 warn 琥珀；
     `sidebar-chamber.module.css .statePending*`、`ServerSection.tsx:391-399`），
@@ -1022,7 +1023,7 @@
   design 06 §7 / design 15 ④；证据：v0.2.4 的三处 `<Menu>` 全为 `compact`，
   v0.3.0-beta.1 为 0 处 + 1 处 `dense`（`git show <tag>:…ServerSection.tsx`）。
   **下一轮上游对齐不得**把这三个调用点改回官方默认/dense；锁在
-  `packages/dsh-chamber-client-ui-sidebar/test/`（`upstream-alignment.test.ts` 的菜单
+  `packages/dsh-chamber-client-ui-sidebar/test/visual-lock/`（`upstream-alignment.test.ts` 的菜单
   一例 + `batch2-visual-locks.test.ts`）。
 - **Electron 二进制惰性安装**（每机器共享 dist，worktree 并行共用）；**dev 实例隔离**
   （独立 user-data、控制面端口 17520 起自动退避）。
@@ -1240,8 +1241,8 @@
   但为一个不可达状态新增呈现路径）；该门与包同期落地、无已发布的播种路径
   （`main.ts` 的 `chamberHostSourceDirs` + `plugin-sync.ts` 的 `portable` 过滤），故不做。
   证据：`docs/design/20-open-in-registry.md` §6.2/§9（插件页行集门）、
-  `packages/dsh-chamber-client-ui-settings-connections/test/chamber-rows.test.ts` +
-  `test/chamber-table-wiring.test.ts`（分类兜底由 `test/chamber-seed-drift.test.ts` 钉住）。
+  `packages/dsh-chamber-client-ui-settings-connections/test/plugin-inventory/chamber-rows.test.ts` +
+  `test/plugin-management/chamber-table-wiring.test.ts`（分类兜底由 `test/plugin-inventory/chamber-seed-drift.test.ts` 钉住）。
 - **会话行 / 搜索结果标题墨色不照官方：静止次级、hover 主色（2026-09-14 用户指令
   「把 hover 变色加回来」，偏差）**：官方 `Rows .title` 继承行墨、从不降级，2026-09
   batch 1 的 A1 曾照此把本仓标题改为**常驻** `label-primary` 并删掉 hover 覆盖；现恢复
@@ -1254,7 +1255,7 @@
   （当前会话行也不例外），这正是 v0.2.4 的原貌——亮度差本身就是 hover 反馈。
   **下一轮上游对齐不得**把它改回常驻主色；判据见
   design 06 §7「排版/墨色」条与 §8，锁在
-  `packages/dsh-chamber-client-ui-sidebar/test/batch1-visual-locks.test.ts` 的 A1 一例
+  `packages/dsh-chamber-client-ui-sidebar/test/visual-lock/batch1-visual-locks.test.ts` 的 A1 一例
   （两级墨色逐一钉住，任何第三条复合规则再上色都会红）。
 - **workspace 头部行尾动作簇间距 = 4px，不跟随官方 12px（2026-09-13 用户报告登记，
   偏差）**：`sidebar-chamber.module.css .rowActions` 的 `gap` 由官方
@@ -1267,7 +1268,7 @@
   pass 回退到 v0.2.4 的 2px（见下方命中区条）；session 行的簇只有
   单个 kebab，间距无观感影响。**下一轮上游对齐不得**把它改回官方 12px；判据见
   design 06 §7「行内操作」条与 design 08 §3.2，锁在
-  `packages/dsh-chamber-client-ui-sidebar/test/batch1-visual-locks.test.ts`（A8b 钉住
+  `packages/dsh-chamber-client-ui-sidebar/test/visual-lock/batch1-visual-locks.test.ts`（A8b 钉住
   `.rowActions` = 4px——这一侧是本条偏差本体；`.workspaceHeader` 的 4px 是既有值
   （基提交即 4px，本次未改），它作为簇的左边界一并入锁，任一侧变成 12px 都会红）。
 - **轨道来源点多于可视高度时被裁掉、无滚动入口（2026-09-13 审计登记，未修）**：
@@ -1279,7 +1280,7 @@
   **2026-09-14 只回退命中盒那一半（`gap: 12px`），buttonization 的 margin 保留** ⇒ 点距
   回到 20px / 可见间隙 12px，故此处不再有"少约 1/6"的临界提前。**不做**
   的原因是 rail 的滚动呈现是设计面（官方 rail 本身没有这一层），加 `overflow-y: auto`
-  会引入插件自绘滚动条；判据：`packages/dsh-chamber-client-ui-sidebar/test/batch2-visual-locks.test.ts`
+  会引入插件自绘滚动条；判据：`packages/dsh-chamber-client-ui-sidebar/test/visual-lock/batch2-visual-locks.test.ts`
   的 V1 一例（`.railDots { gap: 12px }` + `.railDotButton { margin: -4px 0 }` 两半都钉住）。
 - **footer 动作行 `gap: 4px` 是 chamber 对官方复制块的增量（2026-09-13 审计登记，偏差）**：
   `sidebar.footer.action` 是 **list 座**（`sources` 见 design 05 §2），官方
@@ -1287,7 +1288,7 @@
   多个 occupant 会零间距相接，故本仓补 4px（本表的图标簇节奏；2026-09-14 G1-4 命中盒
   回退后它不再是 rim 下限）。当前
   座位无注册者 ⇒ 该 gap 对发布形态不可见，但**重抄官方块时必须带上**：判据
-  `packages/dsh-chamber-client-ui-sidebar/test/batch2-visual-locks.test.ts` 的
+  `packages/dsh-chamber-client-ui-sidebar/test/visual-lock/batch2-visual-locks.test.ts` 的
   `.footerActions { gap: 4px }` 一例，纵向间距仍按官方契约由 occupant 自己的 margin 承担
   （settings 触发器 `margin: 4px -2px` / rail `8px 0 10px`）。
 - **侧栏与 git 的 16/18/20px 图标钮命中区回到视觉盒，重新低于 WCAG 2.2 2.5.8 的 24px
@@ -1301,7 +1302,7 @@
   **缓解**，不是根治——无指针位移的触发（轮子/重排/插入、blur+dwell）与快速甩动跨过
   恢复后的 ≈3px 纯行带仍会出现。**代价**：这些按钮重新低于 2.5.8 的 24px 目标尺寸
   （先前"同类偏差全部收口"的登记随之撤销，design 24 §13 第 17 条已改回登记态）。
-  判据/锁：两个包的 `test/batch2-visual-locks.test.ts` V1 一例（无 rim、视觉盒不变、
+  判据/锁：sidebar 的 `test/visual-lock/batch2-visual-locks.test.ts` 与 git 包同名 V1 一例（无 rim、视觉盒不变、
   `.sourceActions` 2px、`.rowActions`/footer 4px、rail `gap` 12px 且 buttonization 的
   `-4px 0` margin 保留、scoped 重加 rim 的选择器扫描）。**卡片实现未随之回退**：v0.2.4
   的 vendor 原子只在**已提交** `open` 时 arm 关闭且无任何兜底关闭，退回它会重新引入

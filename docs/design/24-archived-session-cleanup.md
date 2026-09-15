@@ -666,7 +666,7 @@ vendor 源码）+ 薄 Remote 门面（`index.ts`），编排逻辑：
   `--dsw-alias-state-business-primary`（2026-09 用户裁决：与设置页的"开/选中"态、
   侧栏选中/完成未读蓝点同一语言；官方中性 `--dsw-alias-brand-primary` 浅色主题下
   近黑，勾选态会发黑。证据：`sidebar-chamber.module.css .archiveManagerCheck`，
-  锁在 `test/batch2-visual-locks.test.ts`）；footer Button/icon/字体均走 alias token；
+  锁在 `test/visual-lock/batch2-visual-locks.test.ts`）；footer Button/icon/字体均走 alias token；
   spinner 13px（导航 12px）随所在行高；在途 spinner + `aria-busy`。
 - **运行结果内联呈现**（`role=status`/`role=alert`，zh 硬编码）：完成摘要
   （`deletedSessions+deletedSubagents > 0` 时「清理完成：删除 X 个会话 /
@@ -762,7 +762,7 @@ src/core.ts + src/binding.ts + scripts/build.mjs + test/*.test.ts + **提交态 
   `ok:false` = 在位但异常 → fail-closed；
 - 提交态产物：**`packages/dsh-runtime/dist/index.js`（dsh-runtime 的提交态
   dist，承载探针常量；包 main 指向 dist）**——desktop 经 runtime-probes shim
-  消费包 main，cross-package-contract.test.ts 钉提交态 dist，dist-sync.test.ts
+  消费包 main，test/ipc/cross-package-contract.test.ts 钉提交态 dist，dist-sync.test.ts
   锁定同步；
 - **rollout 顺序（激活是硬门）**：desktop 启动事务/暴露门控跑全量探针
   （main.ts startAndProbeWorkspace），fail→observe→fail→回退——探针集改动、
@@ -774,8 +774,8 @@ src/core.ts + src/binding.ts + scripts/build.mjs + test/*.test.ts + **提交态 
 ARCHIVE_CLEANUP 常量 + `seedRemoteChamberHostPackages` + main.ts
 `chamberHostPackageSeeds`/`localChamberHostPackageSources`/打包路径）、
 `scripts/build-host-graph-package.mjs`（packages 数组含第三包 → desktop
-`dist/` 内嵌包源）、`plugin-sync.test.ts` / `ssh-provider.test.ts` /
-`gateway-provider.test.ts`（上传清单 fixture）。
+`dist/` 内嵌包源）、`test/plugins/plugin-sync-seed.test.ts` / `test/transport/ssh-provider-endpoint-auth.test.ts` /
+`test/gateway/gateway-chamber-sync.test.ts`（上传清单 fixture）。
 **门禁面**：根 `package.json`（`build:host-*` 并入 `build:host-packages`、
 `typecheck:host-archive-cleanup`、`test:host-archive-cleanup` 别名）、
 `.github/workflows/ci.yml` 与 `release.yml` 的逐包 typecheck/test/host-build
@@ -802,7 +802,7 @@ mobile 是唯一打包例外）。
 `localPluginList`/`probeRemoteChamber` 实时探针 + 主进程
 `LOCAL_PLUGIN_LIST`/`SSH_PLUGIN_LIST` live adapter；(b) IPC 类型镜像三处：
 renderer / settings-connections 两侧 `global.d.ts` + `preload.cts`
-`ChamberInjectionState` 镜像位（`ipc-surface-mirror.test.ts` 断言三镜像位）；
+`ChamberInjectionState` 镜像位（`test/ipc/ipc-surface-mirror.test.ts` 断言三镜像位）；
 (c) `ChamberSeedDriftState` / `plugin-inventory-text` 两键形状第三键；
 (d) 测试 fixture（desktop plugin-sync/gateway-provider、settings
 chamber-seed-drift/control-plane）。
@@ -1105,7 +1105,7 @@ workspace follow `{type:'archived'}` 立即到达客户端（`api/workspace-cont
   （侧边栏据此继续过滤已归档行，管理器保持诚实的降级分支、不获得任何破坏性
   动作）。记忆集合永不单独构成权威。**顺序是承重的**：基线必须是**覆盖前**的
   旧值，否则 remembered ≡ 本次快照集合 ⇒ `archiveSetShrink` 恒为 []（F3(a)
-  死代码）；`test/app-purged-memory-wiring.test.ts` 钉住该顺序。
+  死代码）；`test/wiring/app-purged-memory-wiring.test.ts` 钉住该顺序。
 - **F4 宿主 registry-global 孤儿清扫**：见 §4 step 5——每次 purge 收尾清
   全集合无记录成员，双重确认 + fail-closed + 同一次集合写 + 独立计数
   （`clearedOrphanMembers?`，归档管理器 settle 文案呈现）。

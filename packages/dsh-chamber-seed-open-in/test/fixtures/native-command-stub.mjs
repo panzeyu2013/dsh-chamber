@@ -1,6 +1,6 @@
 /**
  * Fail-loud `@deepseek-ai/dsh-native-command` stand-in for this package's node
- * unit tests (see ../vendor-loader.mjs).
+ * unit tests (see ../support/vendor-loader.mjs).
  *
  * The vendored dsh tree is source-only (no `lib/`), so the real adapter cannot
  * be imported by a plain `node test/…` run without a full workspace build —

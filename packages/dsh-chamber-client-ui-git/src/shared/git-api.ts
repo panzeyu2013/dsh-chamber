@@ -53,7 +53,7 @@ export function isAmbiguousGitRpcFailure(error: unknown): boolean {
  * serializes with `retryable: true` (outcome unverified). This set must stay
  * disjoint from it except for {@link DETERMINISTIC_HOST_RETRYABLE_OVERRIDES},
  * and must cover every code the host proves to be a pre-mutation refusal. The
- * cross-package test `test/host-client-lockstep.test.ts` fails on any other
+ * cross-package test `test/snapshot/host-client-lockstep.test.ts` fails on any other
  * divergence, so a code added or renamed on either side must be mirrored here.
  */
 export const DETERMINISTIC_GIT_REJECTION_CODES: ReadonlySet<string> = new Set([
@@ -87,7 +87,7 @@ export const DETERMINISTIC_GIT_REJECTION_CODES: ReadonlySet<string> = new Set([
  * explicit host `retryable: false` (isProvenPreMutationRefusal) remains the
  * proof that clears a pending recovery.
  *
- * LOCKSTEP POINT: `test/host-client-lockstep.test.ts` asserts this set is
+ * LOCKSTEP POINT: `test/snapshot/host-client-lockstep.test.ts` asserts this set is
  * EXACTLY the overlap between {@link DETERMINISTIC_GIT_REJECTION_CODES} and the
  * host's `RETRYABLE_CODES` — an undeclared overlap (or a host code that stops
  * overlapping without this list being updated) fails the suite.

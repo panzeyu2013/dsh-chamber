@@ -154,7 +154,7 @@ bundle 未覆盖的 entry（方案 A，§3）。第 1、2 步在 chamber 托管�
   （`registry.ts:77-81`）时成员在原型上、`Object.keys` 看不见，这一种由当场抛错兜住；
   而"命名空间干脆不再导出 `inject`"两侧**同时**为空（`plugin.inject` 都是 undefined），
   不抛错、名单静默变小——这一类由 CI 表测试兜底
-  （`test/required-extra-rows.test.ts` 逐个注册 id 读其 client 入口并钉住所审计的
+  （`test/lifecycle/required-extra-rows.test.ts` 逐个注册 id 读其 client 入口并钉住所审计的
   `inject` 面），那也是这种漂移唯一可见的地方。
   名单成员变更即改 `chamber-entry.ts` 的 `register(...)` 调用，
   不维护第二张表；口径变更须同步 `host-graph.ts` 的降级注释与

@@ -4,7 +4,7 @@
  *
  * The dialog's running-session notes were inline `filter`/length arithmetic in
  * the component and therefore untested. This module owns the derivation so the
- * plain-node suite pins it (test/remove-notes.test.ts) and the component only
+ * plain-node suite pins it (test/shared/remove-notes.test.ts) and the component only
  * maps descriptors to localized copy.
  *
  * The two host facts are DIFFERENT things and must never be conflated:

@@ -18,7 +18,7 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
   槽位台账镜像为 `{id, order, label}` 元数据（label thunk 读取时解析、仅在
   变化时通知），外壳为每条渲染一行 `PanelRow`，点击调用
   `ctx.layout.selectPanel(id)`。上游出厂为空列表，故该区默认不可见；投影与
-  接线由 `test/panel-source.test.ts` 与 `test/panel-wiring.test.ts` 钉死。
+  接线由 `test/plugin-kernel/panel-source.test.ts` 与 `test/plugin-kernel/panel-wiring.test.ts` 钉死。
 
 ## 结构
 

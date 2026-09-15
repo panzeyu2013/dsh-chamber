@@ -50,7 +50,7 @@
        design 09 §3.2），无需再往清单里加名字，但新 provider 行若不在复合覆盖集内
        要确认探针能观测到它；另有一种派生面本身看不见的漂移须靠测试兜底——命名空间
        **不再导出** `inject` 时两侧同时为空、不抛错，由
-       `packages/renderer/test/required-extra-rows.test.ts` 的逐 id 表测试钉住。
+       `packages/renderer/test/lifecycle/required-extra-rows.test.ts` 的逐 id 表测试钉住。
 
 ## 2. 双线 pin 一致性（源码线 + 运行时线）
 

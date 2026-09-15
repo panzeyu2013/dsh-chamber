@@ -4,7 +4,7 @@
  * WHY A MIRROR: this is a browser package, while the host domain lives in the
  * Node-side seed package `@dsh-chamber/dsh-chamber-seed-open-in` — seeded INTO
  * the managed instance, never linked into the composite bundle. The two sides
- * are pinned to each other by `test/open-in-wire-lockstep.test.ts`, which reads
+ * are pinned to each other by `test/wire-protocol/open-in-wire-lockstep.test.ts`, which reads
  * the seed's `src/shared.ts` and `src/index.ts` and fails on any drift of the
  * namespace, a method name, the error-code set or the `@Remote` surface. This
  * replaces the retired route/byte mirror (`shared/open-in-app-protocol.ts`,

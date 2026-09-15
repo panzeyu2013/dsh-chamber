@@ -168,7 +168,7 @@
   设计仍含该行（design 20 §9 / design 17 §10.2）。
 - **行派生为纯函数**：「chamber 内置（注入）」表的**行派生**是纯函数 `deriveChamberRows`
   （`plugin-inventory-text.ts`，locale-free：只回 label KEY 与版本 STRING，
-  绝不回 JSX/本地化文本），由 `test/chamber-rows.test.ts` 表驱动覆盖完整输入
+  绝不回 JSX/本地化文本），由 `test/plugin-inventory/chamber-rows.test.ts` 表驱动覆盖完整输入
   矩阵（local/ssh/gateway/http × 清单有/无 × installed/patched/live ×
   seed-cache 漂移/缺项/整盘缺/未读 × 空 expected）。**数据源矩阵是契约**：
   LOCAL 目标的 expected 与本地列都读**它自己的 profile 清单**

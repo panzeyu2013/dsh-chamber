@@ -6,7 +6,7 @@
  * 顶层过程式程序，与 verify-upstream-touchpoints.mjs 同一套拆法））。
  *
  * 背景（2026-09-13 STATUS 移动档开放项 ⑤）：`packages/dsh-chamber-client-ui-mobile`
- * 的锚点由 README「Anchor baseline」+ `test/breakpoints.test.ts` 钉住，但那套是
+ * 的锚点由 README「Anchor baseline」+ `test/visual/breakpoints.test.ts` 钉住，但那套是
  * **自证**（只读本包文件），上游把 `data-*`/slot key 改名时不会红——插件样式
  * 静默 no-op，只有真机才看得见。本门把「插件声明的锚点」与「上游真实发射的
  * 锚点」做双向差集（见 mobile-anchors.mjs 文件头）。

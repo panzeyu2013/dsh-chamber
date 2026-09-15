@@ -5,7 +5,7 @@
  * interface — the desktop main process and the gateway server adapt the core
  * through the real DI seams `StartupDeps`/`ApplyDeps`/`InstallerDeps` (and the
  * desktop-side `ControllerDeps`); the pure-Node fixture
- * `test/fake-adapter.ts` is the only implementor, for host-agnostic tests.
+ * `test/support/fake-adapter.ts` is the only implementor, for host-agnostic tests.
  *
  * This interface is a SKETCH per design 18 §9.1: M5 ships it exactly as
  * documented; the concrete desktop `StartupDeps`/`ApplyDeps` union plus gateway

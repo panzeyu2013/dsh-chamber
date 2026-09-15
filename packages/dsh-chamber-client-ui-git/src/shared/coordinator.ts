@@ -18,7 +18,7 @@ import { GitWorktreeRpcError, gitWorktreeApi, isAmbiguousGitRpcFailure, isDeterm
 import { canTargetSession, findWorktree, removeBlockReason } from './git-facts.ts'
 // Hidden-tab polling gate + injectable visibility face (P1, 2026-11) — the
 // module is dependency-free so the node suite covers it (see
-// test/visibility-gate.ts).
+// test/shared/visibility-gate.test.ts).
 import { isPollEligible, visibilityEvents } from './visibility-gate.ts'
 import {
   GitSagaError, isProvenPreMutationRefusal, recoveryForFailure, runAdoptSessionSaga, runCreateSaga, runPreRemoveArchive,

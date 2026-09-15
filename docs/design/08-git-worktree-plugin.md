@@ -266,7 +266,7 @@ slot，不由 renderer App 直接 import 领域组件。
   （main 居首、派生随后；注册表顺序持久）。家族内外不存在按仓库分隔的 CSS 间距
   （各组一律 `.workspaceGroup` 4px 组距）——分组完全由顺序不变式表达。
 - **单一纯裁决器** `shared/workspace-drag-order.ts`：marker 渲染 / onDragOver 门 /
-  onDrop / 提交四处同源（单测 `workspace-drag-order.test.ts`）：
+  onDrop / 提交四处同源（单测 `packages/dsh-chamber-client-ui-sidebar/test/session-state/workspace-drag-order.test.ts`）：
   - 外部 workspace **不得落入连续家族的内部空隙**（after main / 两派生
     之间等全部 blocked）；
   - 派生 workspace 只能在**自己家族内**重排，且**绝对不得排到主 checkout
@@ -305,7 +305,7 @@ slot，不由 renderer App 直接 import 领域组件。
   这是对"从按钮上离开头部"这条主触发的**缓解**，不是根治。**20px/r5 视觉盒本身不是
   本次回退对象**——那是 batch 1 G1 的图标钮语言，v0.2.4 此处为 22px/r6，属既有的有意
   对齐。24px 目标尺寸重新成为本模块的已登记偏差，见 design 24 §13 第 17 条与
-  design 06 §7；锁见该包 `test/batch2-visual-locks.test.ts` 的 V1 一例；
+  design 06 §7；锁见该包 `test/locks/batch2-visual-locks.test.ts` 的 V1 一例；
   行内动作钮命中区见 `SidebarGit.module.css` 的 `.unregisteredAction`：分支图标 +
   名称 + 健康徽标；非 ready 行的状态胶囊是
   官方 `Tag tone="warning"`（`SidebarWorkspaceGitLine.tsx:208`，官方 11px/17px

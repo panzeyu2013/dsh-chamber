@@ -30,7 +30,7 @@ export const browserVisibility: VisibilityEvents = {
 }
 
 /** Injectable visibility face (default = browser; tests swap a fake and
- *  restore by passing undefined — see test/visibility-gate.ts). */
+ *  restore by passing undefined — see test/shared/visibility-gate.test.ts). */
 export let visibilityEvents: VisibilityEvents = browserVisibility
 
 export function __setVisibilityEventsForTests(events: VisibilityEvents | undefined): void {
