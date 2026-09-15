@@ -962,14 +962,17 @@
     barrel 还带 primitives 的 markdown/CodeBlock 家族，T15 轮实测把约 **87 KB** 搬进
     **主图**（`packages/renderer/src/App.tsx` 的 T15 注释：barrel 主图 raw
     1,226,775 → 1,313,736，即 +86,961 B；该增量是 barrel 自身的属性，与本轮改动
-    无关）；深引让这些家族留在 chamber 入口。**本轮实测（2026-09-11 review-fix 树，
+    无关）；深引让这些家族留在 chamber 入口。**最近实测（2026-09-15，v0.3.1 发布构建，
     `pnpm run build:renderer` 写 `packages/desktop/dist/web/perf-sizes.json`，门值在
-    `packages/renderer/scripts/check-chunk-budgets.mjs`）**：主图 raw **1,228,157**
-    对 `mainGraphRaw.warn = 1,350,000`，余量 ≈9.0%；chamber 入口 raw **1,989,208**
-    对 `chamberEntryRaw.warn = 2,000,000`，余量只剩 10,936 B ≈ **0.5%**（表头 CSS
-    244,059 对 warn 300,000）。主图在 App 挂载前整体求值——正是 `chamber-entry.ts`
-    C3 注释要把 ui-primitives 挡在主图外的原因；复合入口距 warn 门不足 1% 是本轮的
-    真实余量，再加一个首屏家族即触 warn。
+    `packages/renderer/scripts/check-chunk-budgets.mjs`）**：主图 raw **1,240,951** 对
+    `mainGraphRaw.warn = 1,350,000`（余量 ≈8.1%）；chamber 入口 raw **2,028,224** 对
+    `chamberEntryRaw.warn = 2,000,000` —— **已越过 warn 门**（该门无硬门，脚本头注写明
+    「体积随上游 dsh 版本合法漂移，硬门会误伤升级」；2026-09-11 读数为 1,989,208，余量
+    仅 0.5%）；表头 CSS 245,786 对 warn 300,000。主图在 App 挂载前整体求值——正是
+    `chamber-entry.ts` C3 注释要把 ui-primitives 挡在主图外的原因。**待决**：拆出/懒化
+    一个首屏家族让复合入口回到门内，或明确裁决上调 `chamberEntryRaw.warn` 并把它与理由
+    写进脚本头注。失效判据：读数回到门内，或阈值调整与该理由落进
+    `check-chunk-budgets.mjs` 头注。
   - **`Switch` 的披露属性挂原语自己的控制节点（2026-09-11 review-fix F3 修正）**：
     披露行（通知主开关 / 会话待办区开关）需要 `aria-expanded`/`aria-controls`，而官方
     `Switch` 只收 `{checked, onChange, label, disabled, title, className}` 六个 props、
@@ -1353,10 +1356,6 @@
   （`.tmp/band-after-report.json`、`.tmp/ink-report.json`）。**不做**的原因是新增腿必须在
   打包应用上实跑才算数（本轮无法构建），发布前补 W-4b-`cluster`（从 kebab 上 5px 步进
   离开）与墨色腿。
-- **发布期必须改 CHANGELOG（2026-09-14 登记）**：`CHANGELOG.md` / `docs/CHANGELOG.en-US.md`
-  的 beta.2/beta.3 段落仍写着"24px 命中区"，而本次回退已撤销它；按仓规 CHANGELOG 只在
-  发布时写，故此处只登记：v0.3.0 正文落笔时必须把那条改写为"命中区 = 视觉盒（回退）"，
-  并同步英文镜像与 i18n 记录。
 - **不做 git 钩子（2026-12 决定）**：`core.hooksPath` 不随 clone 携带，装钩子等于要求每个 clone
   单独配置一次（同一 clone 的多个 worktree 共享一份，但新 clone / 新机器仍要重装）；而钩子本要
   跑的检查都已是有 CI 背书的普通门禁，`pnpm run check:static` 一条命令即可本地跑全（i18n 配对、
