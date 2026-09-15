@@ -882,8 +882,7 @@
    排定重载可取消、退出期抑制）+ TrustGuard 边界（默认端口折叠、expectedOrigin
    userinfo 拒绝）+ chamber-lock 收紧 0o7777（setuid/sticky）。门禁：
    `swift test` **115/115**、`test:desktop` **956/956**、`test:macos` **31/31**、
-   其余全绿。**剩余 = 外部阻断**：Apple 凭据公证、实机 G 门、真实 Node 归档
-   下载与 runner 实跑。
+   其余全绿。**剩余 = 外部阻断**：Apple 凭据公证、实机 G 门、runner 实跑。
    **第二轮验收（2026-09-09，3 并发 subagents ×2 批 + 自验）**：第一批（Swift/JS/
    CI 三域）均 `fixes-verified-with-issues`、**无功能回归**（Swift 侧实证无误拦：
    壳首载恒根文档、前端无路径/query 路由、无 iframe；CI 侧以 fake pnpm 复刻 bash 3.2
@@ -928,8 +927,8 @@
    electron-free 无传递闭包、legacy 启动门绕过）+ C 2 major（release 缺
    bundle:dsh、ubuntu 腿 darwin 硬断言）+ D 2 medium（loopback 不变量无测试、
    两 owner 宿主域期望集不对称）+ E 2 low（未知阻塞原因文案不诚实、无插件内
-   锁步测试）+ F 10 项文档漂移。**仍开放（登记）**：Node 归档 SHA 未在仓库固定
-   （需联网取摘要）；CLI 命令面（serve/status/connections/host logs）无测试；
+   锁步测试）+ F 10 项文档漂移。**仍开放（登记）**：CLI 命令面
+   （serve/status/connections/host logs）无测试；
    两 owner `activationFacts` 排除规则分歧未锁定；Swift `print` 无日志分级；
    `QuitGate.reset`/`chamber-bridge.stub.js` 死代码；真实 Apple 凭据公证、
    实机 G 门、runner 实跑。

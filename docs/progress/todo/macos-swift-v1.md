@@ -505,9 +505,10 @@ PATH shim 时写错目标路径；真二进制无备份、stub 与框架配对�
   `sidecar-entry.ts`（external：`@dsh-chamber/control-plane` / `electron` /
   `./dist/control-plane/index.js`）；拷贝 `build:control-plane` 产物；写装配
   `package.json`（shell-core 模块级 version 读取 + ESM 判定依赖）；Node 捆绑
-  = 官方 tar.gz 下载（或 `--node-archive` 离线）→ SHA-256 校验（`--node-sha256`
-  或 SHASUMS256.txt）→ 解出 `bin/node` → 落位 `<out>/node`（0755）→ **基名断言**
-  （A5）。`--dry-run` / `--skip-node` / `--skip-bundle` 支持离线与 CI 校验。
+  = 官方 tar.gz 下载（或 `--node-archive` 离线）→ SHA-256 校验（默认版本摘要
+  固定在仓库 `PINNED_NODE_SHA256`，`--node-sha256` 与之冲突即拒绝；未固定版本
+  回退 SHASUMS256.txt 并响亮说明）→ 解出 `bin/node` → 落位 `<out>/node`（0755）
+  → **基名断言**（A5）。`--dry-run` / `--skip-node` / `--skip-bundle` 支持离线与 CI 校验。
   **control-plane-module flavor 门落地**：新增
   `isPackagedSidecarRuntime`（`DSH_CHAMBER_SIDECAR_COMPILED=1`，由 Swift
   Supervisor/AppDelegate 在装配态 spawn 时注入）→ 走
@@ -616,8 +617,7 @@ PATH shim 时写错目标路径；真二进制无备份、stub 与框架配对�
 - **下一批（2026-09-09 更新：W-26/W-27 已交付）**：`swift-harness-driver.test.ts`
   （真实窗口集成，需 GUI 会话；方案已登记）；实机门禁清单不变（G2/G3/G4/G5/C1/C2
   + 退出确认/隐藏恢复/通知点击/SMAppService/launchApp + 更新设置页 blocked 行
-  目检）；正式发布仍缺 Apple 凭据（Developer ID/公证，外部阻断）；Node 归档
-  SHA 固定（需联网取摘要）。
+  目检）；正式发布仍缺 Apple 凭据（Developer ID/公证，外部阻断）。
 
 **验收审计（2026-09-08，六路 subagents + 对抗性复核；用户要求）**：
 六域判定：swift-lifecycle `pass-with-issues`、js-wire `pass-with-issues`、
@@ -761,7 +761,8 @@ E 前端与插件 / F 文档台账 —— 六域均 `pass-with-issues`、无 fai
 
 **仍开放（四审后剩余，均为外部/离线阻断）**：真实 Apple 凭据下的 Developer ID
 签名 + 公证 + stapler（release 腿已 fail-closed 就绪）；实机 G2/G3/G4/G5/C1/C2
-与退出确认/通知点击/SMAppService/launchApp；真实官方 Node 归档下载与 runner 实跑。
+与退出确认/通知点击/SMAppService/launchApp；runner 实跑（官方 Node 归档下载已由本地 sidecar 装配腿实跑：仓库固定摘要 +
+真实归档校验通过）。
 （`ARTIFACT_ARGS` 仅含字面 flag、`codesignArgs` 空串判据已收紧——边界已登记，无
 待办。）
 

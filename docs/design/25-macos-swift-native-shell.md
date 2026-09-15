@@ -252,7 +252,7 @@ control-plane-module.ts:5-30 同款注释）——sidecar 与 Electron 共享
   `DSH_CHAMBER_SIDECAR_COMPILED=1`（`control-plane-module.isPackagedSidecarRuntime`）
   → control-plane 走相对编译入口；装配目录没有 node_modules 树，裸说明符不可解析；
 - Node 捆绑落位 `<out>/node`（**基名必须是 `node`**，§4.3 A5），SHA-256 校验
-  后才落盘。
+  后才落盘（摘要来源 = 仓库固定表，见 §4.3）。
 
 **`.app` 装配（W-24 定稿，`macos/scripts/build-swift-app.mjs`）**：
 `<App>.app/Contents/{Info.plist, MacOS/DSHChamberPoc, Resources/{icon.icns,
@@ -388,7 +388,12 @@ interface HostEdges {
 
 - **捆绑**：fetch 固定版本官方 Node（arm64 + x86_64，或按 §10 决策 6 决定
   单一架构/universal），SHA-256 校验后进 `.app/Contents/Resources/sidecar/
-  node`。**基名必须叫 `node`**：`resolveNodeExecutable`（spawn-dsh.ts:435-447）
+  node`。**摘要的信任基座在仓库内**（`build-sidecar.mjs` 的
+  `PINNED_NODE_SHA256`，逐字取自官方 `SHASUMS256.txt`）：默认版本的两个
+  darwin 归档都必须在表内，`--node-sha256` 与固定值冲突即拒绝；未固定版本
+  （`--node-version`）回退联网 SHASUMS256.txt 并响亮说明——「没固定」不得
+  呈现为「已校验」。升级默认 Node 版本 = 同一提交更新该表
+  （`build-sidecar.test.mjs` 门禁会红）。**基名必须叫 `node`**：`resolveNodeExecutable`（spawn-dsh.ts:435-447）
   的纯 Node 分支只在 `basename(execPath) ∈ {node,node.exe}` 时直用
   process.execPath，否则回落 PATH/knownNodeLocations（nvm 等）→ 裸 'node'
   （系统 node 版本不可控）——捆绑命名 `node` 即零改动成立；建议 P1 加一次

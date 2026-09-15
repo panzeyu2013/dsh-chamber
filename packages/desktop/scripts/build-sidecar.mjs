@@ -21,7 +21,9 @@
  *      ./dist/control-plane/index.js——三者都在运行期由装配目录解析）；
  *   3. 拷贝 dist/control-plane → <out>/dist/control-plane；
  *   4. Node 捆绑：官方 tar.gz 下载（或 --node-archive 离线提供）→ SHA-256 校验
- *      → 解出 bin/node → 落位 <out>/node（0755）→ **基名断言**。
+ *      （默认版本摘要固定在仓库 PINNED_NODE_SHA256；未固定版本回退
+ *      SHASUMS256.txt 并响亮说明）→ 解出 bin/node → 落位 <out>/node（0755）
+ *      → **基名断言**。
  *
  * 离线/无网：--skip-node 跳过第 4 步（布局仍完整，仅缺 node，供 dev/CI 校验）；
  * --dry-run 只打印计划与输入校验，不写盘、不联网。
@@ -65,6 +67,50 @@ const repoRoot = path.resolve(desktopDir, '..', '..')
 export const DEFAULT_NODE_VERSION = '24.18.1'
 /** v1 只发 arm64（design 25 §10 决策 6）。 */
 export const DEFAULT_ARCH = 'arm64'
+
+/**
+ * 仓库内固定的官方 Node 归档 SHA-256（design 25 §4.3 A5 的信任基座）。
+ *
+ * 为什么固定：W-23 原先按 `SHASUMS256.txt` 联网取摘要——信任落在下载回来的那份
+ * 文本上（同一通道可被替换），构建可复现性也依赖网络内容。摘要钉进仓库后，默认
+ * 路径只下载归档、与表比对（fail-closed），不再读网络摘要；未列出的版本
+ * （`--node-version`）仍回退 SHASUMS256.txt，并**响亮说明**「该版本未固定」——
+ * 「没固定」绝不伪装成「已校验」。
+ *
+ * 来源与维护：摘要逐字取自 https://nodejs.org/dist/v<version>/SHASUMS256.txt。
+ * 默认 DEFAULT_NODE_VERSION 的两个 darwin 归档（arm64/x64）都必须在本表内；
+ * 升级默认版本时在同一提交更新本表（build-sidecar.test.mjs 的门禁会红）。
+ */
+export const PINNED_NODE_SHA256 = {
+  'node-v24.18.1-darwin-arm64.tar.gz': 'eb02f7fab96d3d67de40c5ec8566096fcb4c2026728787683ae5a97eb612b941',
+  'node-v24.18.1-darwin-x64.tar.gz': '6fb20fceacbb157c2f95825b80df4a454a0f6d81cdcd7bb81eeae9147e0e76ec',
+}
+
+/**
+ * 本次 Node 归档的期望摘要（纯函数，单测不联网）。
+ * - `--node-sha256`（override）优先，但与仓库固定值冲突时 **throw**：同一版本的
+ *   官方归档内容不可变，出现不同摘要只可能是固定值写错或包被替换——绝不静默采纳；
+ * - 无 override 且表内有该归档 → 用固定值（不读网络摘要）；
+ * - 表内没有 → `{ digest: null, source: 'network' }`，调用方回退 SHASUMS256.txt 并说明。
+ * @param {string} archiveName - `node-v<ver>-darwin-<arch>.tar.gz`
+ * @param {string | null} override - 调用方显式摘要（已归一化小写）或 null
+ * @param {Record<string, string>} pins - 固定表（测试可注入）
+ * @returns {{ digest: string | null, source: 'override' | 'pinned' | 'network' }}
+ */
+export function resolvePinnedNodeDigest(archiveName, override, pins = PINNED_NODE_SHA256) {
+  const pinned = Object.prototype.hasOwnProperty.call(pins, archiveName) ? pins[archiveName] : null
+  if (override !== null) {
+    if (pinned !== null && pinned !== override) {
+      throw new Error(
+        `--node-sha256 与仓库固定摘要不一致（${archiveName}）：固定 ${pinned}，传入 ${override}`
+        + '——官方归档内容不可变，请先核对固定值（或先更新 PINNED_NODE_SHA256）',
+      )
+    }
+    return { digest: override, source: 'override' }
+  }
+  if (pinned !== null) return { digest: pinned, source: 'pinned' }
+  return { digest: null, source: 'network' }
+}
 
 /** chamber host 包（design 09/08/24）——打包态必须随 sidecar 装配，否则
  *  sidecar-ctx 的 hostPackageSourceDir 在 .app 内向上找不到 `packages/<pkg>`
@@ -492,8 +538,13 @@ async function bundleNode(options, layout, log) {
     }
 
     let expected = options.nodeSha256
-    if (expected === null) {
-      log(`[build-sidecar] 拉取 SHASUMS256.txt（v${options.nodeVersion}）`)
+    const pin = resolvePinnedNodeDigest(archiveName, expected)
+    if (pin.digest !== null) {
+      expected = pin.digest
+      log(`[build-sidecar] Node 归档摘要：${pin.source === 'pinned' ? '仓库固定表 PINNED_NODE_SHA256' : '--node-sha256'}（不读网络摘要）`)
+    } else {
+      // 未固定的版本：退回官方 SHASUMS256.txt，并响亮说明信任落在本次下载内容上。
+      log(`[build-sidecar] ${archiveName} 未在仓库固定——回退 SHASUMS256.txt（v${options.nodeVersion}）；建议把该版本钉进 PINNED_NODE_SHA256`)
       const shasums = await fetchText(nodeDistUrl(options.nodeVersion, 'SHASUMS256.txt'))
       expected = parseShasums(shasums, archiveName)
       if (expected === null) throw new Error(`SHASUMS256.txt 未包含 ${archiveName}`)
@@ -543,6 +594,11 @@ export async function runBuildSidecar(options, io = { log: console.log, warn: co
   // 输入校验（dry-run 同样执行）。
   const tsconfig = path.join(desktopDir, 'tsconfig.sidecar.build.json')
   const sidecarEntry = path.join(desktopDir, 'sidecar-entry.ts')
+  // 摘要冲突先于任何耗时工作失败：--node-sha256 与仓库固定值不一致时，下载/打包
+  // 几十 MB 归档之后再报错是纯粹的浪费（判定与 bundleNode 同一纯函数，语义不分叉）。
+  if (!options.skipNode && options.nodeSha256 !== null) {
+    resolvePinnedNodeDigest(nodeArchiveName(options.nodeVersion, options.arch), options.nodeSha256)
+  }
   // dry-run 的「输入校验」必须真的校验（2026-09 模块评审 minor：原实现只打印
   // 计划，`--node-archive /nope --vendor-dsh /nope` 也报"输入校验通过"）。
   if (options.dryRun) {
@@ -687,7 +743,8 @@ if (isMain) {
     const options = parseBuildSidecarArgs(process.argv.slice(2))
     if (options.help) {
       console.log('用法：build-sidecar.mjs [--out <dir>] [--dry-run] [--skip-node] [--skip-bundle] [--skip-vendor]')
-      console.log('       [--node-version <v>] [--node-sha256 <hex>] [--node-archive <tar.gz>] [--arch <arm64|x64>]')
+      console.log('       [--node-version <v>] [--node-sha256 <hex>（覆盖仓库固定摘要，冲突即拒绝）]')
+      console.log('       [--node-archive <tar.gz>] [--arch <arm64|x64>]')
       process.exit(0)
     }
     await runBuildSidecar(options)

@@ -5,6 +5,8 @@
  *  ① 参数解析与布局（缺省 out、各开关、未知参数 loud）；
  *  ② 计划文本（--skip-node/--skip-bundle 的步骤差异）；
  *  ③ Node 归档命名/URL/成员路径 + SHASUMS256.txt 解析；
+ *  ③b 摘要固定（PINNED_NODE_SHA256）：默认版本两架构全覆盖、pin/override/冲突/
+ *     未固定四种判定（纯函数，不联网）；
  *  ④ SHA-256 流式计算与不匹配检测；
  *  ⑤ **A5 断言**：捆绑 Node 基名必须叫 node——正例通过、反例 loud；
  *     并实证 resolveNodeExecutable 的纯 Node 分支前提（basename(execPath) ==
@@ -37,6 +39,7 @@ import { fileURLToPath } from 'node:url'
 import {
   DEFAULT_NODE_VERSION,
   HOST_PACKAGES,
+  PINNED_NODE_SHA256,
   assertBundledNodeBasename,
   assertNodeArchiveMembers,
   copyPnpm,
@@ -49,6 +52,7 @@ import {
   nodeMemberPath,
   parseBuildSidecarArgs,
   parseShasums,
+  resolvePinnedNodeDigest,
   runBuildSidecar,
   sha256File,
   verifySha256,
@@ -133,6 +137,44 @@ test('③ Node 归档命名/URL/成员路径与 SHASUMS 解析', () => {
     parseShasums(shasums, 'node-v24.18.1-darwin-uppercase.tar.gz'), null,
     '非小写 hex 不是合法 sha256（真实 SHASUMS256.txt 恒小写）')
   assert.equal(parseShasums('garbage', 'node-v24.18.1-darwin-arm64.tar.gz'), null)
+})
+
+test('③b Node 归档摘要固定在仓库：默认版本两架构全覆盖 + 覆盖/冲突语义', () => {
+  // 固定表：默认版本的两个 darwin 归档都必须在表内、都是小写 64-hex——升级
+  // DEFAULT_NODE_VERSION 时本门禁先红（摘要必须与官方 SHASUMS256.txt 同步）。
+  for (const arch of ['arm64', 'x64']) {
+    const name = nodeArchiveName(DEFAULT_NODE_VERSION, arch)
+    assert.ok(Object.prototype.hasOwnProperty.call(PINNED_NODE_SHA256, name),
+      `默认 Node 版本 ${DEFAULT_NODE_VERSION} 的 ${arch} 归档必须钉进 PINNED_NODE_SHA256`)
+    assert.match(PINNED_NODE_SHA256[name], /^[0-9a-f]{64}$/,
+      `${name} 的固定摘要必须是小写 64 位 hex`)
+  }
+
+  const arm = nodeArchiveName(DEFAULT_NODE_VERSION, 'arm64')
+
+  // 未传 --node-sha256：用仓库固定值，来源标记 pinned（调用方据此不读网络摘要）。
+  assert.deepEqual(resolvePinnedNodeDigest(arm, null),
+    { digest: PINNED_NODE_SHA256[arm], source: 'pinned' })
+
+  // 显式传入且与固定值一致：走 override（同样不读网络摘要）。
+  assert.deepEqual(resolvePinnedNodeDigest(arm, PINNED_NODE_SHA256[arm]),
+    { digest: PINNED_NODE_SHA256[arm], source: 'override' })
+
+  // 显式传入却与固定值冲突：loud 拒绝（同一版本的官方归档内容不可变，只可能是
+  // 固定值写错或包被替换——绝不静默采纳）。
+  assert.throws(() => resolvePinnedNodeDigest(arm, 'f'.repeat(64)),
+    /与仓库固定摘要不一致/)
+
+  // 未固定的版本（--node-version 升级但表未更新）：digest=null ⇒ 调用方回退
+  // SHASUMS256.txt 并响亮说明，绝不把「没固定」当「已校验」。
+  assert.deepEqual(resolvePinnedNodeDigest(nodeArchiveName('24.9.0', 'arm64'), null),
+    { digest: null, source: 'network' })
+  assert.deepEqual(resolvePinnedNodeDigest(nodeArchiveName('24.9.0', 'arm64'), 'a'.repeat(64)),
+    { digest: 'a'.repeat(64), source: 'override' }, '未固定版本允许显式摘要')
+
+  // 注入表：判定完全由传入的表决定（测试与未来多版本表可替换来源）。
+  assert.deepEqual(resolvePinnedNodeDigest('x.tar.gz', null, { 'x.tar.gz': 'b'.repeat(64) }),
+    { digest: 'b'.repeat(64), source: 'pinned' })
 })
 
 test('④ sha256File 流式摘要 + verifySha256 真值/不匹配', async () => {
