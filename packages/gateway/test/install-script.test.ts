@@ -14,7 +14,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { tmpdir, userInfo } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -32,6 +32,17 @@ const library = source.slice(0, mainOffset)
 // their natural end — mid-body crashes (die/set -u/expansion errors) abort
 // before it and still fail closed through the trap.
 const LIB_EPILOGUE = '\nEXITED_OK=1\n'
+
+/**
+ * A harness that sources the installer library — or spawns the real script —
+ * needs a HOME: the library resolves BASE_DIR through `${HOME:?...}` unless
+ * DSH_CHAMBER_BASE_DIR is set. The environment this suite diagnoses (a gateway
+ * service started without a login environment) has none, so the acceptance run
+ * must not depend on the caller's variable. Use the passwd entry instead:
+ * os.userInfo() ignores $HOME, and an empty $HOME counts as unset for the
+ * installer's `${HOME:?...}`, while os.homedir() would happily return ''.
+ */
+const INSTALLER_ENV = { ...process.env, HOME: userInfo().homedir || process.env.HOME }
 
 /**
  * Host-global safety net prepended to every harness body.
@@ -229,6 +240,87 @@ if grep -q 'EnvironmentFile="/' "$XDG_CONFIG_HOME/systemd/user/dsh-chamber-gatew
   assert.doesNotMatch(output, /envfile-quoted/)
 })
 
+/** Minimal state write_unit reads; each unit test appends its own stubs. */
+const UNIT_PREAMBLE = `
+BASE_DIR="$(mktemp -d)"
+GATEWAY_DIR="$BASE_DIR/gateway"
+ENV_FILE="$GATEWAY_DIR/gateway.env"
+mkdir -p "$GATEWAY_DIR"
+GATEWAY_PORT=30801
+DSH_PORT=30800
+BIND_HOST=127.0.0.1
+DSH_WS=""
+ENV_ANCHOR=0
+PUBLIC_ORIGIN=""
+TRUSTED_PROXY=""
+NO_AUTH=0
+UI_PASSWORD=""
+API_TOKEN=""
+SERVICE_MODE=user
+XDG_CONFIG_HOME="$BASE_DIR/xdg"
+gateway_exec() { printf '/tmp/gateway'; }
+systemctl() { return 0; }
+`
+
+const UNIT_TAIL = `
+write_unit
+cat "$XDG_CONFIG_HOME/systemd/user/dsh-chamber-gateway.service"
+`
+
+test('current-user units inject the login environment systemd omits without User=', () => {
+  // systemd sets $HOME/$LOGNAME/$SHELL only for units carrying User=,
+  // DynamicUser= or PAMName= (systemd.exec: SetLoginEnvironment= defaults to
+  // true for exactly those, false otherwise). The "current user" service shape
+  // carries none of them, so the unit used to start with an EMPTY HOME — in the
+  // gateway process and in every child it spawns (managed dsh -> code runtime
+  // -> bash tool -> gh / npm / git credential.helper): gh reported "not logged
+  // in", npm could not find its cache, git credential helpers read no token.
+  const runUser = spawnSync('id', ['-un'], { encoding: 'utf8' }).stdout.trim()
+  const output = runLibrary(`${UNIT_PREAMBLE}
+SERVICE_USER=""
+passwd_home_of() { printf '/home/probe-user'; }
+${UNIT_TAIL}`, { HOME: '/decoy-home' })
+  assert.doesNotMatch(output, /^User=/m, 'the current-user shape must not gain a User= line')
+  assert.match(output, /^Environment=HOME=\/home\/probe-user$/m, 'HOME must be the passwd home')
+  assert.match(output, new RegExp(`^Environment=LOGNAME=${runUser}$`, 'm'))
+  assert.match(output, new RegExp(`^Environment=USER=${runUser}$`, 'm'))
+  assert.match(output, /^Environment=XDG_CONFIG_HOME=\/home\/probe-user\/\.config$/m)
+  assert.equal((output.match(/^Environment=/gm) ?? []).length, 4, 'exactly four login-environment lines')
+  // The pitfall this pins: a multi-line login_env expanded into the comment
+  // line above it would comment out HOME= and leave the rest live.
+  assert.doesNotMatch(output, /^#.*Environment=/m, 'login_env must be its own heredoc line, never folded into a comment')
+  assert.doesNotMatch(output, /decoy-home/, 'the ambient (possibly sudo-preserved) HOME must never reach the unit')
+  const serviceAt = output.indexOf('[Service]')
+  const installAt = output.indexOf('[Install]')
+  for (const line of output.split('\n').filter((entry) => entry.startsWith('Environment='))) {
+    const at = output.indexOf(line)
+    assert.ok(at > serviceAt && at < installAt, `${line} must live in [Service]`)
+  }
+})
+
+test('write_unit resolves the run user home from passwd, not from an exported HOME', () => {
+  const runUser = spawnSync('id', ['-un'], { encoding: 'utf8' }).stdout.trim()
+  const output = runLibrary(`${UNIT_PREAMBLE}
+SERVICE_USER=""
+${UNIT_TAIL}`, { HOME: '/decoy-home' })
+  const match = /^Environment=HOME=(.+)$/m.exec(output)
+  assert.ok(match, 'the unit must carry an explicit HOME=')
+  assert.notEqual(match[1], '/decoy-home', 'HOME must be looked up, never inherited from the installer environment')
+  assert.ok(existsSync(match[1]), `resolved home must be a real directory on this host: ${match[1]}`)
+  assert.match(output, new RegExp(`^Environment=LOGNAME=${runUser}$`, 'm'))
+})
+
+test('write_unit fails closed when the run user home cannot be resolved', () => {
+  const result = runLibraryResult(`${UNIT_PREAMBLE}
+SERVICE_USER=""
+passwd_home_of() { printf ''; }
+if write_unit; then printf 'UNIT-WRITTEN\\n'; else printf 'UNIT-REFUSED\\n'; fi
+`)
+  assert.notEqual(result.status, 0, 'an unresolvable home must not produce a unit with an empty HOME')
+  assert.match(`${result.stderr}${result.stdout}`, /无法解析用户/)
+  assert.doesNotMatch(result.stdout, /UNIT-WRITTEN/)
+})
+
 test('--service-user renders User= in the unit and is refused outside systemd mode', () => {
   const output = runLibrary(`
 BASE_DIR="$(mktemp -d)"
@@ -254,6 +346,7 @@ write_unit
 cat "$XDG_CONFIG_HOME/systemd/user/dsh-chamber-gateway.service"
 `)
   assert.match(output, /^User=dsh-chamber$/m, 'SERVICE_USER must render as a User= line in the unit')
+  assert.doesNotMatch(output, /^Environment=HOME=/m, 'User= units get HOME from systemd; the installer must not inject its own')
   const refused = runLibraryResult(`
 SERVICE_MODE=foreground
 SERVICE_USER=dsh-chamber
@@ -778,7 +871,7 @@ test('library EXIT-trap contract: clean ends fail closed without the EXITED_OK m
     const harness = join(dir, 'harness.sh')
     const run = (tail: string) => {
       writeFileSync(harness, `${library}\nprintf 'body-ran\\n'\n${tail}`, { mode: 0o700 })
-      return spawnSync('bash', [harness], { encoding: 'utf8' })
+      return spawnSync('bash', [harness], { encoding: 'utf8', env: INSTALLER_ENV })
     }
     const clean = run('')
     assert.equal(clean.status, 1, 'a clean rc=0 end without EXITED_OK=1 must fail closed through the trap')
@@ -796,10 +889,10 @@ test('real installer exit wiring: --help exits 0, missing option values die in p
   // No test exercised the real script's exit-code wiring (usage EXITED_OK
   // path, parse-level die) — only library-slice harnesses. Parse failures
   // die before any BASE_DIR/wizard mutation, so they are safe to run here.
-  const help = spawnSync('bash', [installer, '--help'], { encoding: 'utf8' })
+  const help = spawnSync('bash', [installer, '--help'], { encoding: 'utf8', env: INSTALLER_ENV })
   assert.equal(help.status, 0, `${help.stdout}${help.stderr}`)
   assert.match(help.stdout, /install-gateway\.sh/)
-  const missing = spawnSync('bash', [installer, 'install', '--version'], { encoding: 'utf8' })
+  const missing = spawnSync('bash', [installer, 'install', '--version'], { encoding: 'utf8', env: INSTALLER_ENV })
   assert.equal(missing.status, 1, 'a value option without a value must fail fast in parse')
   assert.match(`${missing.stdout}${missing.stderr}`, /需要值/)
 })

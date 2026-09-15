@@ -35,6 +35,12 @@
     composer 可用）与 `role="status"` 的实际观感；以及与 body portal 的叠压关系。
     目前只经单测 + 源码锁确认，**未在真机判**；无真实老代来源时只能判"未判"
     （`docs/checklists/gui-acceptance-checklist.md` §3）。
+- **gateway unit 登录环境的真机门（2026-09-15 登记，待 Linux 判）**：`write_unit` 现为
+  「当前用户运行」（无 `User=`）形态注入 `HOME/LOGNAME/USER/XDG_CONFIG_HOME`
+  （`scripts/install-gateway.sh`，design 17 §5）；单测只钉文本与结构
+  （`packages/gateway/test/install-script.test.ts`）。真实 systemd 上的
+  `systemd-analyze verify` 与「服务及其子进程确实拿到 HOME」（`gh auth status`）
+  必须重跑安装器 + `daemon-reload` 后在部署机判——开发机（macOS）无 systemd，未判。
 - **ssh/http dsh 目标无 cookie 注入（实例侧 401）**：五处同源绝对 URL 由构建期 vendor
   补丁集走本实例前缀（design 09 §3.6）；ssh/http dsh 目标的 cookie 注入属既有认证面，
   未覆盖。

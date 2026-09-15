@@ -312,6 +312,21 @@ proxy）的 S1 硬门在**播种之前**按**部署配置**判定——持久化
 `prerelease` 标记解析最新预发布；提供 install/update/restart/status/logs/uninstall
 子命令与 `--purge`。
 
+安装形态的**登录环境**：unit 带 `User=` 时 systemd 按该用户的 passwd 条目推导
+`$HOME/$LOGNAME/$SHELL`；「当前用户运行」（`--service-user` 缺省）的 unit 不带
+`User=`，systemd 什么都不设（systemd.exec `SetLoginEnvironment=` 的默认真值只对
+`User=`/`DynamicUser=`/`PAMName=` 成立），因此安装器生成 unit 时显式注入**运行用户**的
+`HOME/LOGNAME/USER/XDG_CONFIG_HOME`。缺了它，gateway 与它拉起的每个子进程（managed
+dsh → 代码运行时 → bash 工具 → gh / npm / git credential.helper）从空 HOME 起步：
+gh 报「未登录」、npm 找不到缓存、git 凭据助手取不到 token。注入值取自 passwd，不读
+安装者环境里的 `$HOME`（`sudo` 可能把调用者的 HOME 带进来，那正是要避免的错值）。
+
+**被否方案**：`SetLoginEnvironment=yes`（systemd 原生开关，语义等价）比手工注入更
+贴切，但它不在 systemd v253 的 systemd.exec 指令表里，写进旧发行版的 unit 只会得到
+「未知指令」告警、环境照旧为空——静默失效正是本次缺陷的同类；无条件注入
+`Environment=HOME=…` 则会把安装者的 HOME 写进 `--service-user` 的 unit，而服务用户的
+家目录必须由 systemd 按 passwd 推导。
+
 ## 6. 单一公网请求策略
 
 HTTP、OPTIONS 与 WebSocket upgrade 使用同一个 request policy，执行顺序固定为：

@@ -7,6 +7,13 @@
 # 生成 systemd 单元（root）或 systemctl --user / 前台（非 root），
 # 提供 install / update / restart / status / logs / uninstall 管理子命令。
 #
+# 服务登录环境：unit 带 User=（--service-user）时 systemd 按 passwd 推导
+# HOME/LOGNAME/SHELL；「当前用户运行」形态不带 User=，systemd 什么都不设，
+# 安装器于是把**运行用户**的 HOME/LOGNAME/USER/XDG_CONFIG_HOME 显式写进 unit。
+# 少了它，gateway 与它拉起的每个子进程（managed dsh → 代码运行时 → bash 工具
+# → gh / npm / git credential.helper）从空 HOME 起步：gh 报"未登录"、npm 找不到
+# 缓存、git 凭据助手取不到 token。值取自 passwd，不读安装者环境里的 $HOME。
+#
 # dsh 定位（design 18 §9，2026-09 受控锚决策）：dsh 内建/回退锚安装在
 # gateway 自己的受控目录 ${BASE_DIR}/gateway/dsh-anchor（workspace 形态，
 # 经 --dsh-path / DSH_GATEWAY_DSH_PATH 提供给 gateway），不使用 npm 全局
@@ -1681,6 +1688,20 @@ dir_owner_uid() {
   printf '%s' "$out"
 }
 
+# 用户名 → 家目录。GNU/Linux 走 getent passwd（passwd 数据库，含 LDAP/sss），
+# macOS 测试机没有 getent，用 dscacheutil。两者都不可用/查不到时返回空串，由
+# 调用方 fail-closed 报错——**绝不读 $HOME 兜底**：sudo 可能把调用者的 HOME 带进
+# 环境，那正是 write_unit 要避免的错值（与「安装者 HOME 写进服务用户 unit」同类）。
+passwd_home_of() {
+  local user="$1" home=""
+  if have getent; then
+    home="$(getent passwd "$user" 2>/dev/null | cut -d: -f6)" || home=""
+  elif have dscacheutil; then
+    home="$(dscacheutil -q user -a name "$user" 2>/dev/null | awk -F': ' '$1 == "dir" { print $2; exit }')" || home=""
+  fi
+  printf '%s' "$home"
+}
+
 write_unit() {
   local unit_name="dsh-chamber-gateway.service"
   local exec_path
@@ -1701,6 +1722,26 @@ write_unit() {
     warn "systemd unit 目录 owner 不可信：${unit_dir}（uid=${owner}，期望 ${expected_owner}）"
     return 1
   fi
+  # systemd 只为带 User= / DynamicUser= / PAMName= 的 unit 设置登录环境
+  # （$HOME/$LOGNAME/$SHELL；systemd.exec 的 SetLoginEnvironment= 默认值），
+  # 「当前用户运行」形态（SERVICE_USER 为空）里 systemd 什么都不设——gateway 与
+  # 它拉起的每个子进程（managed dsh → 代码运行时 → bash 工具 → gh / npm / git
+  # credential.helper）于是从空 HOME 起步：gh 报"未登录"、npm 找不到缓存、
+  # git 凭据助手取不到 token。这里按运行用户的 passwd 条目显式注入登录环境
+  # （unit 无 User= ⇒ 服务正是以该用户身份启动）。--service-user 形态不注入：
+  # systemd 按 User= 自己推导，无条件注入会把安装者的 HOME 写进服务用户的 unit。
+  local login_env=""
+  if [[ -z "${SERVICE_USER:-}" ]]; then
+    local run_user run_home
+    run_user="$(id -un)" || die "无法解析当前用户名（id -un）"
+    run_home="$(passwd_home_of "$run_user")"
+    [[ -n "$run_home" ]] \
+      || die "无法解析用户 ${run_user} 的家目录（getent/dscacheutil 均不可用）：请用 --service-user 指定服务用户，或检查 passwd 数据库"
+    login_env="Environment=HOME=${run_home}
+Environment=LOGNAME=${run_user}
+Environment=USER=${run_user}
+Environment=XDG_CONFIG_HOME=${run_home}/.config"
+  fi
   local content
   content=$(cat <<EOF
 [Unit]
@@ -1711,8 +1752,10 @@ After=network.target
 Type=simple
 # 以专用系统用户运行（--service-user；validate_service_user 已保证该用户
 # 存在且为 systemd 系统服务形态；数据目录由 apply_service_user_ownership
-# 移交属主）。systemd 会按 passwd 为用户设置 HOME/LOGNAME/USER。
+# 移交属主）。User= 存在时 systemd 按 passwd 设置登录环境；未指定服务用户
+# （当前用户运行）时它什么都不设，故上面显式注入（见 login_env 注释）。
 ${SERVICE_USER:+User=${SERVICE_USER}}
+${login_env}
 # systemd 的 EnvironmentFile= 指令**不支持引号**（与 ExecStart= 不同）：带引号的
 # 路径会被按字面（含引号字符）查找，文件加载静默失败、服务以空环境启动——
 # 曾导致配置全不生效（gateway 以纯默认 127.0.0.1:3000/auth=none 启动）。
