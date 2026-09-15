@@ -360,11 +360,19 @@ test('password: login with a wrong password rejects', async () => {
   } finally { cleanup() }
 })
 
-test('password: crafted signed sessions require an integral finite exp inside the 12h horizon', async () => {
+test('password: crafted signed sessions require an integral finite exp inside the 12h horizon', async (t) => {
   const { store, cleanup } = tempStore()
   try {
     const auth = createAuth({ kind: 'password', password: PASSWORD }, store)
-    const now = Math.floor(Date.now() / 1000)
+    // Freeze the wall clock for this case: validSessionExpiry compares exp
+    // against the verifier's OWN Date.now(), so a live clock made the payload
+    // "one second past the horizon" stop being beyond it as soon as the loop
+    // crossed a wall-clock second (measured 4 failures / 2000 runs, all
+    // `beyond 12h exp`). Both sides read the single frozen instant, so the
+    // beyond-horizon case and the exact-boundary case stop racing the clock.
+    const at = Date.now()
+    t.mock.timers.enable({ apis: ['Date'], now: at })
+    const now = Math.floor(at / 1000)
     const invalidPayloads: Array<[string, string]> = [
       ['missing exp', JSON.stringify({ sub: 'user', iat: now })],
       ['string exp', JSON.stringify({ sub: 'user', iat: now, exp: String(now + 60) })],
@@ -394,7 +402,10 @@ test('password: crafted signed sessions require an integral finite exp inside th
       headers: { cookie: `dsh_gateway_session=${boundaryJwt}` },
       socketAddr: '',
     }))?.kind, 'password')
-  } finally { cleanup() }
+  } finally {
+    t.mock.timers.reset()
+    cleanup()
+  }
 })
 
 test('password: changing configuration across restart invalidates old cookies', async () => {
