@@ -189,7 +189,9 @@ import {
   GIT_WORKTREE_INSERT_ID,
   GIT_WORKTREE_PACKAGE_NAME,
   ReadyPhaseEdges,
+  builtChamberHostPackageSeeds,
   disposePluginSyncChildren,
+  portableChamberHostPackageSeeds,
   reapStaleLocalPluginWriters,
   remoteHome,
   scopeExecToOwnership,
@@ -748,6 +750,12 @@ export async function buildHeadlessCtx(
     },
   ]
 
+  // 可移植（非 localOnly）seed 列表：本数组按构造已排除 open-in localOnly 行，
+  // 但「哪一行可以去别的机器」的**规则**仍取自单一实现（design 20 §6；main.ts
+  // 的 portableHostSeeds 同源）——Swift flavor 不再自带一份过滤判定，规则分叉
+  // 在结构上不可能（2026-12 合并审计 advisory 收口）。
+  const portableHostSeeds = portableChamberHostPackageSeeds(chamberHostPackageSeeds)
+
   // Exact-incarnation single-flight for ready/manual host-package seeds（main
   // 1615-1619 同源——changed same-id target 立即 supersede；stale finally/log/
   // result 路径绝不清理/写入其替换者）。
@@ -824,20 +832,22 @@ export async function buildHeadlessCtx(
     }
     void (async () => {
       try {
-        const builtSeeds = chamberHostPackageSeeds.filter(seed => existsSync(path.join(seed.sourceDir, 'dist', 'index.js')))
+        // 已构建判定与 main/shell-core 同一实现（空 sourceDir 绝不解析进程 CWD
+        // 的 dist/index.js；可移植列表也不把 localOnly 行算作缺件）。
+        const builtSeeds = builtChamberHostPackageSeeds(portableHostSeeds)
         if (builtSeeds.length === 0) {
           if (ownsSeed()) console.log(`[sidecar] chamber host seed skipped for ${id}: no built host package artifacts`)
           appendSeedLog('info', 'chamber host 包未注入：构建产物缺失；远端相关客户端能力不可用')
           return
         }
-        const missingSeeds = chamberHostPackageSeeds.filter(seed => !builtSeeds.includes(seed))
+        const missingSeeds = portableHostSeeds.filter(seed => !builtSeeds.includes(seed))
         if (missingSeeds.length > 0) {
           appendSeedLog('info', `chamber host 包部分未注入（构建产物缺失）：${missingSeeds.map(seed => seed.label).join(', ')}`)
         }
         const result = await seedRemoteChamberHostPackages(
           scopedExecForTarget(target, ownsSeed),
           target.spec,
-          chamberHostPackageSeeds,
+          portableHostSeeds,
         )
         if (!ownsSeed()) return
         if (result.ok) {
