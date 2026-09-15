@@ -27,8 +27,15 @@ export const LINK_SCAN_ROOTS = ['docs', 'packages']
 /** Standalone Markdown files at the repository root that are scanned too. */
 export const LINK_SCAN_FILES = ['AGENTS.md', 'CONTRIBUTING.md', 'README.md', 'CHANGELOG.md']
 
-/** Directory names never descended into. */
-export const IGNORED_DIRECTORIES = new Set(['node_modules', 'vendor', 'dist', 'lib', 'release', '.git', '.desktop-build'])
+/**
+ * Directory names never descended into. Besides build output and VCS metadata
+ * this includes LOCAL RUNTIME STATE that happens to live under the scan roots:
+ * `packages/desktop/.dev-user-data` is a dev instance's own user-data (gitignored
+ * by design, `.gitignore`), and its seeded harness notes carry upstream-relative
+ * links by construction — scanning it turns any developer's local dev run into
+ * hundreds of dead-link reports that CI (which has no such directory) never sees.
+ */
+export const IGNORED_DIRECTORIES = new Set(['node_modules', 'vendor', 'dist', 'lib', 'release', '.git', '.desktop-build', '.dev-user-data'])
 
 /**
  * Documents excluded from link checking because their contents are frozen

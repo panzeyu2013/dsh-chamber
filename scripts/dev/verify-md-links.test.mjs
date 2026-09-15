@@ -96,6 +96,26 @@ test('an empty documentation set is a failure, not a pass', () => {
   })
 })
 
+test('local dev-instance state under the scan roots is not scanned', () => {
+  withTempRepo({
+    'packages/desktop/.dev-user-data/state/dsh-home/notes/dead.md': '[dead](../../../../../../docs/nope.md)\n',
+    'packages/control-plane/README.md': 'no links here\n',
+  }, (root) => {
+    const { documents } = collectDocuments(root)
+    assert.equal(documents.some(path => path.includes('.dev-user-data')), false,
+      'a dev instance\'s user-data is not repository documentation')
+    const failures = collectLinkFailures(root)
+    assert.deepEqual(failures.failures, [], 'the ignored dir contributes no failures')
+  })
+})
+
+test('a dead link in a tracked document is still reported', () => {
+  withTempRepo({ 'docs/a.md': '[dead](./nope.md)\n' }, (root) => {
+    const failures = collectLinkFailures(root)
+    assert.equal(failures.failures.length, 1)
+  })
+})
+
 test('frozen upstream mirrors are excluded from the checked set and reported', () => {
   const { mirrored } = collectDocuments(join(import.meta.dirname, '..', '..'))
   for (const path of MIRRORED_DOCUMENTS.keys()) {
