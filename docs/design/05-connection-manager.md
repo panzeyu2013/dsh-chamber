@@ -212,13 +212,19 @@ runner，App.tsx 里恰好这两处调用点。**深链不在其中**：深链�
    因此丢弃被更新的请求：静默 resolve（被放弃不是失败，行内错误面归最新那次），
    记录随来源退役清除。首请求永远照常分发（记录为空时不判定）。
 
-**工作区回声（workspace echo）**：侧栏在某来源上建好工作区后（unary
-`workspace.create` 返回宿主 workspaceId），经 `chamberBridge.reportWorkspaceCreated`
-上报，App 记入渲染端账本（不持久化 / 不轮询 / 不写宿主），并在**投影的唯一汇合点**
-（`deriveServerWorkspaces` 之前套一层 `withWorkspaceEcho`）把该行并入。同一通道也
-承载**撤销/改名回声**（见 §3）：该来源的 `workspace.delete` / `workspace.rename` 成功后，
-侧栏分别经 `reportWorkspaceRemoved` / `reportWorkspaceRenamed` 上报，App 只把事实施加
-到该账本（`removePendingWorkspace` 删条目 / `renamePendingWorkspace` 改标题）——照旧
+**工作区回声（workspace echo）**：**应用内任何**工作区变更都走 chamber 侧的
+**唯一出口** `packages/dsh-chamber-client-ui-sidebar/src/shared/workspace-mutations.ts`
+——`createWorkspaceForSource` / `deleteWorkspaceForSource` / `renameWorkspaceForSource`
+各做一次 wire 调用，随即上报对应事实（unary `workspace.create` 返回宿主
+workspaceId ⇒ `chamberBridge.reportWorkspaceCreated`；delete / rename 成功后分别
+`reportWorkspaceRemoved` / `reportWorkspaceRenamed`）。侧栏自己的对话框（添加工作区 /
+删除确认 / 改名）与 **Git worktree 插件的 create / adopt / 两类 recovery** 都经它，
+因此不存在"某个入口忘了发事实"的形态（2026-12 **第二入口**真机反馈：用 Git 建的
+worktree 行要等用户点开那个服务器才出现——同一现象的第二个生产者）。
+App 记入渲染端账本（不持久化 / 不轮询 / 不写宿主），并在**投影的唯一汇合点**
+（`deriveServerWorkspaces` 之前套一层 `withWorkspaceEcho`）把该行并入；撤销 / 改名
+事实由 App 施加到同一账本（`removePendingWorkspace` 删条目 /
+`renamePendingWorkspace` 改标题）——照旧
 不新增读通道、不写宿主。为什么
 必须回声：未挂载来源只有 unary 兜底（工作区分组由会话 cwd 反推——**刚建的空
 工作区没有任何会话，结构上不可见**），已推送来源的工作区集又被
@@ -234,6 +240,24 @@ unary 轮询它——所以新建后那次 `requestRefresh` 两条分支都刷�
 - 条目随来源生命周期 / TTL（10min）收敛（TTL 挂在三处时钟上：本次 create、权威
   push、以及未挂载来源唯一的 30s unary 兜底拉取）；回声行**不带 `synthetic`**——
   它的 id 是真的，工作区级动作照常可用。
+- **位置锚点（`afterWorkspaceId`，2026-12 第二入口修订）**：Git 插件在宿主上把新
+  worktree 插到其主 checkout 之后（`workspace.insertBefore`），该次 create 的事实
+  因此带锚点，`withWorkspaceEcho` 把回声行插到该投影行之后（同一锚点的多条按账本
+  序）；缺省（侧栏自己的创建）仍追加到列表尾部。渲染序是 design 08 §3.3 连续家族
+  不变式的载体（拖拽裁决器直接读它），所以不留"先渲染在末尾、挂载收敛后再跳上去"
+  的窗口。两条边界：锚点行不在投影里（权威集尚无该行）时退化为追加尾部，**绝不
+  丢行**；**同 path 合成组被原位替换时锚点不适用**——替换规则优先（目录不跳动，
+  见上条），家族位置由挂载 push 收敛。
+- **标题提示（`title?`，2026-12 复审修订）**：adopt 这类"宿主标题将由后续 rename
+  改写"的创建随事实带上**最终标题**（Git adopt 用分支名），回声行因此生来就是最终
+  标签，不会先显示路径 basename、几个 RPC 之后再翻转；缺省仍是路径 basename 规则，
+  权威 follow 基线两者都压过。
+- **装饰先于事实（`beforePublish`，2026-12 复审修订）**：任何"回声行首帧就必须
+  成立"的事实（Git 的工作树 flag、adopt 的未注册块收敛）由唯一出口在**事实发布
+  之前**的同一同步续体里写好，而不是等 create 返回后再补——否则那两个更新分属
+  App 状态与外部 store，能否落在同一次提交取决于调度器，行会先以普通 workspace
+  形态出现再翻转。装饰抛错只记录不中止：宿主上的创建已经提交，一个渲染期装饰
+  绝不能把成功变成 saga 的失败/补偿分支。
 - **替换的真实代价（已登记）**：换的是行的**身份**，因此按
   `sourceId/workspaceId` 键控的 per-workspace 视图偏好（折叠态 `folded`、updated 模式的
   `updatedOrder`/`sessionUpdatedAtByAccount`）不会跟随新 id——旧合成键留在存储里不再命中
@@ -251,9 +275,25 @@ unary 轮询它——所以新建后那次 `requestRefresh` 两条分支都刷�
 - 未被早开臂抢先时，宿主上仍会留下一个 blank 会话（同一工作区复用，不增长；后台
   预热 / 基线收割 boot 本来也会各造一个）。根治需要上游把"当前会话选择"的持久化
   按 shell 作用域拆开——见 `docs/progress/todo/client-store-scoping-upstream.md`；
-- 未挂载来源的**工作区集合**仍然只有"回声 + 挂载 push"两个来源：别处创建 / 改名 /
-  删除的工作区、以及工作区**顺序**，仍要等该来源被挂载（用户点开）才收敛——这是
-  §2.3 已登记的降级面；本修订刻意不引入"每次变更付一次后台 boot"的收敛臂。
+- 未挂载来源的**工作区集合**仍然只有"回声 + 挂载 push"两个来源：**别处**（另一个
+  客户端、或宿主侧直接改动）创建 / 改名 / 删除的工作区、以及工作区**顺序**，仍要
+  等该来源被挂载（用户点开）才收敛——这是 §2.3 已登记的降级面；本修订刻意不引入
+  "每次变更付一次后台 boot"的收敛臂。**应用内**发起的工作区变更已由上面的唯一出口
+  覆盖（2026-12 第二入口修订），不属于本残余。
+
+**被否方案（Rejected alternatives，2026-12 第二入口修订）**：
+
+- **逐调用点各发一次回声**（2026-12 修复的原形态，只挂在侧栏对话框上）：正是本次
+  缺陷的成因——Git 的 create / adopt / 两类 recovery 四个调用点漏发，且未来任何新
+  入口都可能再漏；由单一出口取代。
+- **新增"工作区读通道"**（让未挂载来源直接列工作区）：`workspace.list` 已被上游删除，
+  在 chamber 侧重造一份读面等于把执行面事实搬进侧栏/控制面（违 §2.3 数据纪律与
+  AGENTS 边界）；被否。
+- **每次工作区变更付一次后台挂载**：与"稳态 ≤1 常驻壳 / 首启每源一次后台 boot"的
+  成本政策冲突（STATUS 已登记"不做"）；被否。
+- **回声行一律追加尾部**（锚点引入前的行为）：会把 Git 新建的 worktree 先渲染在列表
+  末尾、挂载收敛时再跳一次，并让 design 08 §3.3 的连续家族不变式在窗口内失真；
+  被锚点方案取代。
 
 ### 2.3 数据纪律
 
@@ -350,11 +390,15 @@ unary 轮询它——所以新建后那次 `requestRefresh` 两条分支都刷�
   （意图槽 + 投影/揭示纯规则）、`.../src/shared/aggregate-store.ts`（桥接单例 +
   回声事实通道：`WorkspaceCreatedFact`/`reportWorkspaceCreated` 等）、
   `.../src/shared/workspace-echo.ts`（回声账本 +
-  union/去重纯规则）、`.../src/client/early-open.ts`（boot 期早开臂）、
+  union/去重/锚点插入纯规则）、`.../src/shared/workspace-mutations.ts`（**唯一事实
+  出口**：create/delete/rename 的 wire 调用与回声事实，2026-12 第二入口收口）、
+  `.../src/client/early-open.ts`（boot 期早开臂）、
   `.../src/client/index.ts`（每个 ctx 挂一次早开臂）、
-  `.../src/client/SidebarRoot.tsx`（create 成功后上报回声）、
-  `packages/renderer/src/App.tsx`（arm/release、账本与退休、投影门、揭示门判定、
-  holdVeil 传入）、`packages/renderer/src/components/InstanceView.tsx`（遮罩合成）、
+  `.../src/client/SidebarRoot.tsx`（三个变更点经唯一出口，自身不再直接上报）、
+  `packages/dsh-chamber-client-ui-git/src/shared/coordinator.ts`（Git create / adopt /
+  recovery 经唯一出口；create 带位置锚点，flag/未注册块由 beforePublish 装饰）、
+  `packages/renderer/src/App.tsx`（arm/release、账本与退休（含锚点）、投影门、
+  揭示门判定、holdVeil 传入）、`packages/renderer/src/components/InstanceView.tsx`（遮罩合成）、
   `packages/renderer/src/shell.ts`（被取代请求的丢弃：`lastRequestedSession`）。
 
 ## 3. 桥接层（chamberBridge，renderer 共享单例）
@@ -384,7 +428,11 @@ interface ChamberServerAggregate {
   updatedAt: number
 }
 interface OpenSessionRequest { sourceId: string; sessionId: string }
-interface WorkspaceCreatedFact { sourceId: string; workspaceId: string; path: string }
+interface WorkspaceCreatedFact {
+  sourceId: string; workspaceId: string; path: string
+  afterWorkspaceId?: string        // 位置锚点（Git 新 worktree 紧跟其主 checkout）；缺省 = 追加尾部
+  title?: string                   // 创作意图标题（Git adopt 的分支名）；缺省 = 路径 basename
+}
 interface WorkspaceRemovedFact { sourceId: string; workspaceId: string; path: string }  // path 尽力而为（快照未报告该行时为空串；账本同时按 workspaceId 匹配）
 interface WorkspaceRenamedFact { sourceId: string; workspaceId: string; title: string }
 interface InstanceRuntimeReport {

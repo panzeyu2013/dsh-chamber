@@ -166,6 +166,23 @@ test('workspace-created facts fan out with their host identity and unsubscribing
   assert.deepEqual(seen, ['ssh-b/w1//p/a', 'local/w2//p/b'])
 })
 
+test('workspace-created facts carry the optional placement anchor and title hint through unchanged', () => {
+  // 2026-12 第二入口：Git worktree create 的位置锚点（新行紧跟其主 checkout）与
+  // adopt 的标题提示（分支名）。事实通道只做透传——App 层据此插行/取标题，
+  // 缺省保持"追加到尾部 + 路径 basename"的旧行为。
+  const anchors: (string | undefined)[] = []
+  const titles: (string | undefined)[] = []
+  const off = chamberBridge.onWorkspaceCreated(fact => {
+    anchors.push(fact.afterWorkspaceId)
+    titles.push(fact.title)
+  })
+  chamberBridge.reportWorkspaceCreated({ sourceId: 'ssh-b', workspaceId: 'w1', path: '/p/a', afterWorkspaceId: 'main', title: 'feature/x' })
+  chamberBridge.reportWorkspaceCreated({ sourceId: 'ssh-b', workspaceId: 'w2', path: '/p/b' })
+  assert.deepEqual(anchors, ['main', undefined])
+  assert.deepEqual(titles, ['feature/x', undefined])
+  off()
+})
+
 test('workspace-removal and workspace-rename facts fan out and unsubscribe exactly like the create fact', () => {
   // 2026-09-11 review S3: the withdraw/patch halves of the workspace echo. The
   // sidebar owns delete/rename too, so these one-way facts are the only way an

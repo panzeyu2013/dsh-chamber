@@ -70,14 +70,26 @@ export interface PendingWorkspace {
   workspaceId: string
   path: string
   /**
-   * Display title — the path basename at record time (the same rule the
-   * cwd-derived groups use). A later successful rename replaces it with the
-   * user's own title ({@link renamePendingWorkspace}), so it is NOT
-   * re-derivable from `path`.
+   * Display title — the producer's title hint when it sent one (Git adopt: the
+   * branch it is about to write), otherwise the path basename at record time
+   * (the same rule the cwd-derived groups use). A later successful rename
+   * replaces it ({@link renamePendingWorkspace}), so it is NOT re-derivable
+   * from `path`.
    */
   title: string
   /** Epoch ms the echo was recorded; the TTL anchor. */
   at: number
+  /**
+   * Optional placement anchor (2026-12 revision, second entry point): the host
+   * workspace id this row sits immediately AFTER in the projection. The Git
+   * plugin registers a new worktree directly below its main checkout
+   * (`workspace.insertBefore` on the host), so appending the echo at the tail
+   * would render it in the wrong place and then make it jump once the source
+   * mounts — and design 08 §3.3's continuous-family invariant is a
+   * RENDERED-ORDER invariant (the drag resolver reads it). Absent = append at
+   * the tail, the shape every other creation keeps.
+   */
+  afterWorkspaceId?: string
 }
 
 /** Pending echoes keyed by source id. Absent key = nothing pending. */
@@ -118,7 +130,7 @@ export function workspaceEchoRow(pending: PendingWorkspace): WorkspaceRow {
 export function recordPendingWorkspace(
   ledger: WorkspaceEchoLedger,
   sourceId: string,
-  created: { workspaceId: string; path: string },
+  created: { workspaceId: string; path: string; afterWorkspaceId?: string; title?: string },
   now: number,
 ): WorkspaceEchoLedger {
   const rows = ledger[sourceId] ?? []
@@ -126,8 +138,16 @@ export function recordPendingWorkspace(
   const next: PendingWorkspace = {
     workspaceId: created.workspaceId,
     path: created.path,
-    title: basenameOf(created.path),
+    // Producer title hint wins (2026-12 review): the Git adopt path renames the
+    // workspace to its branch right after the saga, so a row born from the path
+    // basename would flip a few RPCs later. Absent = the path-basename rule the
+    // cwd-derived groups use.
+    title: created.title ?? basenameOf(created.path),
     at: now,
+    // Sparse on purpose: an anchor-less create keeps the pre-anchor entry shape
+    // byte-identical (the ledger is compared by value in tests and re-published
+    // on identity).
+    ...(created.afterWorkspaceId === undefined ? {} : { afterWorkspaceId: created.afterWorkspaceId }),
   }
   // The anchor is refreshed even when the entry is otherwise identical: this
   // runs once per create (never per render), so identity preservation buys
@@ -262,8 +282,12 @@ export function forgetPendingWorkspaces(
  * publish signature stable across derive passes.
  *
  * Placement: a replaced synthetic group keeps its slot (the directory does not
- * jump); brand-new echoes append at the tail, which is also where the host's
- * own creation order puts a workspace created last.
+ * jump); brand-new echoes append at the tail — where the host's own creation
+ * order puts a last-created workspace — UNLESS the entry carries an
+ * `afterWorkspaceId` anchor (the Git plugin's worktree create, which the host
+ * places directly below its main checkout): then the row is inserted right
+ * after that projected row, in ledger order for repeated anchors, so the
+ * rendered order never shows the row at the tail and then jumps.
  */
 export function withWorkspaceEcho(
   aggregate: InstanceAggregate,
@@ -308,13 +332,43 @@ export function withWorkspaceEcho(
     nextRows.push({ ...workspaceEchoRow(echo), sessionIds: row.sessionIds })
     replaced = true
   }
-  const appended: WorkspaceRow[] = []
+  const additions: PendingWorkspace[] = []
   for (const entry of pending) {
     const key = canonicalPathKey(entry.path)
-    if (!echoByPath.has(key)) continue
     if (echoByPath.get(key) !== entry) continue
-    appended.push(workspaceEchoRow(entry))
+    additions.push(entry)
   }
-  if (!replaced && appended.length === 0) return aggregate
-  return { ...aggregate, workspaces: [...nextRows, ...appended] }
+  if (!replaced && additions.length === 0) return aggregate
+  // Anchor-aware placement (2026-12, second entry point). Group by anchor and
+  // insert each anchor's block with a FRESH lookup: several creations anchored
+  // to one checkout stay in ledger order (one splice), and an insertion for
+  // another anchor — even one that lands earlier in the list — cannot skew the
+  // position of a later block. (The previous cursor-based form stored absolute
+  // indices, so a block inserted before a cursor shifted it and the next row of
+  // that anchor landed one slot early; reachable with two repos' checkouts
+  // alternating.) An anchor that is not in the projection (the source's pushed
+  // set predates that row, or another client removed it) degrades to the
+  // append-at-tail behavior rather than dropping the row.
+  const placed: WorkspaceRow[] = [...nextRows]
+  const tail: WorkspaceRow[] = []
+  const byAnchor = new Map<string, WorkspaceRow[]>()
+  for (const entry of additions) {
+    const row = workspaceEchoRow(entry)
+    if (entry.afterWorkspaceId === undefined) {
+      tail.push(row)
+      continue
+    }
+    const block = byAnchor.get(entry.afterWorkspaceId)
+    if (block === undefined) byAnchor.set(entry.afterWorkspaceId, [row])
+    else block.push(row)
+  }
+  for (const [anchor, block] of byAnchor) {
+    const anchorIndex = placed.findIndex(candidate => candidate.workspaceId === anchor)
+    if (anchorIndex === -1) {
+      tail.push(...block)
+      continue
+    }
+    placed.splice(anchorIndex + 1, 0, ...block)
+  }
+  return { ...aggregate, workspaces: [...placed, ...tail] }
 }

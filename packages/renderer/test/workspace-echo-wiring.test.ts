@@ -9,8 +9,9 @@
  * the sidebar package's `workspace-echo.test.ts` (echo/union/dedupe rules) and
  * `aggregate-store.test.ts` (the bridge fact).
  *
- * Every link here is a silent no-op when it goes missing: the sidebar creates
- * the workspace and never publishes the fact, the App never records it, the
+ * Every link here is a silent no-op when it goes missing: the single funnel
+ * (sidebar shared/workspace-mutations.ts) creates the workspace and never
+ * publishes the fact, the App never records it, the
  * derive never merges it (so the row stays invisible for unmounted sources —
  * the exact field report), or nothing ever retires the entry (a phantom row
  * that survives the authoritative baseline forever).
@@ -24,19 +25,33 @@ import { stripComments } from './source-text.ts'
 const read = (rel: string): string =>
   readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
 
-test('the sidebar publishes the host workspace identity right after a successful create', () => {
+test('the single funnel publishes the host workspace identity right after a successful create', () => {
+  // 2026-12 收口（第二入口）：事实由 shared/workspace-mutations.ts 的唯一出口发布，
+  // 侧栏对话框与 Git worktree create/adopt/recovery 都走它——逐点发布正是 Git 路径
+  // 漏发、行要等用户点开那个服务器才出现的成因，所以这里连"调用点不得自行发布"
+  // 一起钉住。
   const sidebar = read('../../dsh-chamber-client-ui-sidebar/src/client/SidebarRoot.tsx')
-  const report = sidebar.indexOf('chamberBridge.reportWorkspaceCreated({')
-  const refresh = sidebar.indexOf('chamberBridge.requestRefresh(sourceId)', report)
-  assert.notEqual(report, -1, 'the sidebar must publish the created workspace')
+  const funnel = read('../../dsh-chamber-client-ui-sidebar/src/shared/workspace-mutations.ts')
+  const create = funnel.indexOf('await createWorkspace(getInstanceClient(sourceId), path)')
+  const report = funnel.indexOf('chamberBridge.reportWorkspaceCreated({')
+  const refresh = sidebar.indexOf('chamberBridge.requestRefresh(sourceId)')
+  assert.notEqual(create, -1, 'the funnel performs the create wire call')
+  assert.ok(report > create, 'the echo fact is published only after the host accepted the create')
   assert.notEqual(refresh, -1, 'the refresh that follows must stay (it owns every other row of that source)')
-  assert.match(sidebar, /\.then\(\(created\) => \{/, 'the create result carries the host workspace id')
-  assert.match(sidebar, /workspaceId: created\.workspaceId,/, 'the echoed id is the HOST id, never a synthesized one')
-  assert.match(sidebar, /path: created\.path,/)
+  assert.match(funnel, /workspaceId: created\.workspaceId,/, 'the echoed id is the HOST id, never a synthesized one')
+  assert.match(funnel, /path: created\.path,/)
+  assert.match(funnel, /afterWorkspaceId: options\.afterWorkspaceId/, 'the optional placement anchor rides the fact')
+  assert.match(
+    funnel,
+    /try \{\s*options\.beforePublish\(created\)\s*\} catch \(error\) \{/,
+    'decorations run before the fact and never abort a committed host mutation',
+  )
+  assert.match(sidebar, /createWorkspaceForSource\(sourceId, path\)/, 'the sidebar dialog goes through the funnel')
+  assert.doesNotMatch(sidebar, /chamberBridge\.reportWorkspaceCreated/, 'no call site publishes the fact itself')
   assert.doesNotMatch(
-    sidebar,
+    funnel,
     /reused:/,
-    'the fact carries only what the ledger consumes (id + path): an inert field is not carried "just in case"',
+    'the fact carries only what the ledger consumes (id + path + optional anchor): an inert field is not carried "just in case"',
   )
 })
 
@@ -49,7 +64,11 @@ test('the App records the fact in a lifespan-scoped ledger (state + synchronous 
   // handler: a dead source and an ownership mismatch must not enter the ledger.
   assert.match(app, /return chamberBridge\.onWorkspaceCreated\(\(fact\) => \{/)
   assert.match(app, /const owner = sourceLifecyclesRef\.current!\.capture\(sourceId\)/)
-  assert.match(app, /ledger = recordPendingWorkspace\(ledger, sourceId, \{ workspaceId: fact\.workspaceId, path: fact\.path \}, now\)/)
+  assert.match(
+    app,
+    /ledger = recordPendingWorkspace\(ledger, sourceId, \{\s*workspaceId: fact\.workspaceId,\s*path: fact\.path,[\s\S]*?\.\.\.\(fact\.afterWorkspaceId === undefined \? \{\} : \{ afterWorkspaceId: fact\.afterWorkspaceId \}\),[\s\S]*?\.\.\.\(fact\.title === undefined \? \{\} : \{ title: fact\.title \}\),\s*\}, now\)/,
+    'the ledger records the host id + path and carries the optional anchor and title hint',
+  )
 })
 
 test('the projection merges the echo at the single derive choke point', () => {

@@ -165,10 +165,15 @@ import {
   type SessionOrderBy,
 } from '../shared/derive.ts'
 import {
-  archiveSession, createHostDirectory, createSession, createWorkspace, deleteWorkspace,
+  archiveSession, createHostDirectory, createSession,
   forkSession, getInstanceClient, insertSessionBefore, insertWorkspaceBefore, listHostDirectory,
-  renameSession, renameWorkspace, searchSessions, stopArchivedSubtree,
+  renameSession, searchSessions, stopArchivedSubtree,
 } from '../shared/instance-api.ts'
+// 工作区变更的唯一事实出口（design 05 §2.2.1 2026-12 修订）：wire 调用 + 回声
+// 事实同处发布，侧栏对话框与 Git 插件走同一条路，谁都不会漏发。
+import {
+  createWorkspaceForSource, deleteWorkspaceForSource, renameWorkspaceForSource,
+} from '../shared/workspace-mutations.ts'
 import { DirectoryBrowser } from '@deepseek-ai/dsh-client-ui-directory-picker-browse/client/DirectoryBrowser.tsx'
 import { ArchiveManagerDialog } from './ArchiveManagerDialog.tsx'
 import { setSearchFetcher, getSearchStates, subscribeSearch } from '../shared/search-state.ts'
@@ -1307,15 +1312,15 @@ export function SidebarRoot({
     void runActionWithOutcome(`${target.sourceId}/workspace/${target.workspaceId}/delete`, async () => {
       try {
         const path = workspacePathForFact(target.sourceId, target.workspaceId)
-        await deleteWorkspace(getInstanceClient(target.sourceId), target.workspaceId)
-        // chamber (2026-09-11 review S3, design 05 §2.2.1): the WITHDRAW half of
-        // the workspace echo. An unmounted source has no authoritative baseline
-        // listing this workspace, so `reconcilePendingWorkspaces` cannot retire
-        // the echoed row — without this fact a create → delete left a ghost row
-        // with real-id actions enabled until the TTL. Published for the ROW's own
-        // source (the source the create handler published for), never for the
-        // publishing shell.
-        chamberBridge.reportWorkspaceRemoved({ sourceId: target.sourceId, workspaceId: target.workspaceId, path })
+        // chamber (2026-09-11 review S3 / 2026-12 收口, design 05 §2.2.1): the
+        // WITHDRAW half of the workspace echo now rides the single funnel — the
+        // wire call and the fact publish together, for the ROW's own source
+        // (never for the publishing shell). An unmounted source has no
+        // authoritative baseline listing this workspace, so
+        // `reconcilePendingWorkspaces` cannot retire the echoed row: without
+        // this fact a create → delete left a ghost row with real-id actions
+        // enabled until the TTL.
+        await deleteWorkspaceForSource(target.sourceId, target.workspaceId, path)
         chamberBridge.requestRefresh(target.sourceId)
       } catch (reason) {
         // The dialog's own copy of the failure (finding 3). Rethrown so the
@@ -1338,18 +1343,12 @@ export function SidebarRoot({
     runAction(`${target.sourceId}/${target.kind}/${target.id}/rename`, async () => {
       const client = getInstanceClient(target.sourceId)
       if (target.kind === 'session') await renameSession(client, target.id, target.value)
-      else {
-        await renameWorkspace(client, target.id, target.value)
-        // chamber (2026-09-11 review S3, design 05 §2.2.1): the PATCH half of
-        // the workspace echo — an echo row's title is `basenameOf(path)`, so on
-        // a source whose shell is not mounted the rename used to look like a
-        // no-op until the mount push arrived.
-        chamberBridge.reportWorkspaceRenamed({
-          sourceId: target.sourceId,
-          workspaceId: target.id,
-          title: target.value,
-        })
-      }
+      // chamber (2026-09-11 review S3 / 2026-12 收口, design 05 §2.2.1): the
+      // PATCH half of the workspace echo — an echo row's title is
+      // `basenameOf(path)`, so on a source whose shell is not mounted the rename
+      // used to look like a no-op until the mount push arrived. Published by the
+      // single funnel together with the wire call.
+      else await renameWorkspaceForSource(target.sourceId, target.id, target.value)
       chamberBridge.requestRefresh(target.sourceId)
     })
   }
@@ -1395,22 +1394,18 @@ export function SidebarRoot({
         delete next[key]
         return next
       })
-      createWorkspace(browseClient, path)
-        .then((created) => {
+      // chamber (2026-12, design 05 §2.2 revision): the HOST workspace identity
+      // is published by the single funnel together with the wire call — the
+      // only trustworthy "this workspace exists on that host" fact reachable
+      // without a mounted shell. The unary fallback derives its groups from
+      // session cwds (a brand-new workspace has none yet) and a previously-
+      // pushed source keeps its workspace set frozen, so without the echo the
+      // row only appeared after the user clicked that server (2026-12 field
+      // report). The App echoes it immediately; the mounted follow baseline
+      // converges later.
+      createWorkspaceForSource(sourceId, path)
+        .then(() => {
           setAddingWorkspace(null)
-          // chamber (2026-12, design 05 §2.2 revision): publish the HOST
-          // workspace identity so the App can echo the row immediately. It is
-          // the only trustworthy "this workspace exists on that host" fact
-          // reachable without a mounted shell: the unary fallback derives its
-          // groups from session cwds (a brand-new workspace has none yet) and a
-          // previously-pushed source keeps its workspace set frozen — without
-          // the echo the row only appeared after the user clicked that server
-          // (2026-12 field report).
-          chamberBridge.reportWorkspaceCreated({
-            sourceId,
-            workspaceId: created.workspaceId,
-            path: created.path,
-          })
           chamberBridge.requestRefresh(sourceId)
         })
         .catch((reason: unknown) => {

@@ -132,8 +132,9 @@ chamber 自研侧边栏插件（设计 05 §2）：拷贝官方 ui-sidebar 外�
 
 本包持有页面级打开意图槽（`shared/open-intent.ts`——与 `pending-click.ts` 同款
 vite shared 单例纪律，因为目标实例自己的 ctx 也要读它）及其供 App 层消费的纯
-规则，以及工作区回声账本规则（`shared/workspace-echo.ts`）与上报点
-（`client/SidebarRoot.tsx`）。由此有两个用户可见面：
+规则，以及工作区回声账本规则（`shared/workspace-echo.ts`，含位置锚点）与
+**唯一**上报点（`shared/workspace-mutations.ts`——应用内任何工作区变更都经它：
+侧栏对话框与 Git worktree 插件的 create/adopt/recovery 同路）。由此有两个用户可见面：
 
 - **意图闸门**：某来源有在途 open 时，只有它的当前会话**就是**请求的那个
   会话才投影 `current`（`projectableCurrent`）——冷 boot 期间运行时自选的
@@ -144,7 +145,11 @@ vite shared 单例纪律，因为目标实例自己的 ctx 也要读它）及其
 - **回声工作区行**：从本侧栏新建的工作区立刻出现在列表里，不等任何挂载基线
   带来它：该行带真实宿主 id（**不带 `synthetic`**，故工作区级动作照常可用）、
   与同路径合成组相遇时原位替换后者，并在该来源 push 列出它后交由权威行接管
-  （05 §2.2.1）。同一通道还承载撤销/改名两半：`workspace.delete` 成功后
+  （05 §2.2.1）。Git 创建 worktree 的那次事实带位置锚点（`afterWorkspaceId` = 其主
+  checkout），行因此落在主 checkout 之后而不是列表尾部；它的 git flag 由出口的
+  `beforePublish` 在**事实之前**写好，行因此生来就是 worktree 形态，不会先渲染成
+  普通 workspace 再翻转；adopt 另带分支名标题提示，行生来就是最终标签。
+  同一通道还承载撤销/改名两半：`workspace.delete` 成功后
   `reportWorkspaceRemoved`（没有它，未挂载来源上的 create → delete 会留下一个
   带真 id 的幽灵行直到 TTL 到期）、`workspace.rename` 成功后
   `reportWorkspaceRenamed` 带新标题（回声行标题是路径 basename，否则改名前
