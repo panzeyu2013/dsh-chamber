@@ -1,4 +1,4 @@
-/** chamber sidebar package shared faces: the instance unary client, the chamberBridge singleton, the control-plane REST client, and the gateway dsh-runtime core (design 21 §5.2). */
+/** chamber sidebar package shared faces: the instance unary client, the chamberBridge singleton, the control-plane REST client, the gateway dsh-runtime core (design 21 §5.2), and the page-owned restart→reload completion (design 18 §3.6 item 8). */
 
 export * from './instance-api.ts'
 export * from './workspace-mutations.ts'
@@ -8,6 +8,7 @@ export * from './wire-error.ts'
 export * from './control-plane-client.ts'
 export * from './aggregate-store.ts'
 export * from './serving-gate.ts'
+export * from './restart-window-reload.ts'
 export * from './client-plugin-loader.ts'
 export * from './plugin-graph-recheck.ts'
 export * from './settings-shell.ts'

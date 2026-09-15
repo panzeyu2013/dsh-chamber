@@ -713,7 +713,8 @@ chamber 侧边栏的归档动词自 2026-09 起**就地**终止该会话与 suba
 
 - **404 = 确定性 `git-host-not-loaded`**（git RPC 404，host 包缺失或未生效）：
   客户端判定为**确定性失败**——不建恢复（recovery 会永久死循环）、不重试，
-  文案指引按来源区分重启路径：本地实例请重启桌面端；远程 ssh 实例请在连接设置
+  文案指引按来源区分重启路径：本地实例请在「dsh 运行时」点「重启 dsh」（窗口随之
+  重载一次，design 18 §3.6 项 8）；远程 ssh 实例请在连接设置
   中重新下发 chamber host 包并点击「重启生效」（`restart_service` systemd IPC）
   后重试；gateway 实例请经 `/chamber/runtime/restart`（事务化受控重启，刷新
   插件挂载，design 17 §3 / design 18 §3.6）后重试。该错误归属 connections

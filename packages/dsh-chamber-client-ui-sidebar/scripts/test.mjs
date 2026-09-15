@@ -63,6 +63,7 @@ const GROUPS = {
   'plugin-kernel': [
     'test/plugin-kernel/client-plugin-loader.test.ts',
     'test/plugin-kernel/plugin-graph-recheck.test.ts',
+    'test/plugin-kernel/restart-window-reload.test.ts',
     // panel-source.ts value-imports the dsh store engine, so this file runs through
     // the test-only vendor loader (mapping it to test/support/vendor-store-double.mjs).
     { file: 'test/plugin-kernel/panel-source.test.ts', nodeArgs: ['--import', './test/support/vendor-register.mjs'] },

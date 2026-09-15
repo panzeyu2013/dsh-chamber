@@ -381,16 +381,39 @@ chamber-settings.json，非秘密）：
    插件生效）；前端 N-ctx shell 经 WS 断开重连后重新 boot（design 09 每实例
    boot graph 重新合并）。**互斥与门控**：与健康状态机 `restarting` 单飞行
    互斥；applying 期间禁用（同「应用 dsh vY…」门控）；执行期间状态行
-   「重启 dsh…」→「已重启」（就绪探测通过）/ 诚实失败文案（附 host-logs
-   入口）。失败不回滚、不改指针——重启前后运行同一棵激活树，仅进程级刷新。
+   「重启 dsh…」→「已重启」（就绪探测通过，随即窗口重载，见下）/ 诚实失败文案
+   （附 host-logs 入口）。失败不回滚、不改指针——重启前后运行同一棵激活树，
+   仅进程级刷新。
    per-server 分支：local = 控制面事务接口 `restartLocal()`（与健康状态机
    重启单飞行串行化，**不用** `stopLocal()`+`startLocal()` 裸组合——会与
    健康"进程死亡即重启"分支交错，§9.3）；gateway = `POST /chamber/runtime/restart`
    （202 + status 轮询，§9.3）。远端重启窗口内隧道 phase 保持 `ready`
    （隧道未断）、实例反代对目标连接拒绝返回显式 503（诚实失败，03 §3），
    会话/侧边栏短时错误属预期。
-   Electron 壳无需重启：插件
-   挂载在每次 dsh 进程 boot 时重新确定，不是 Electron 会话级事实（02 §2.6）。
+   **窗口随动作重载一次（2026-12 修订）**：宿主侧插件行确实在每次 dsh 进程 boot
+   时重新确定，不是 Electron 会话级事实（02 §2.6）；但**页面侧的 client 插件集在
+   窗口 boot 时固定**（宿主图每 boot 取一次、`dsh.client` bundle 那时执行；模块表
+   按 id first-load-wins，design 09 §3.2/§3.5），新装或重打包的客户端半身（例如
+   设置分节）只有窗口重新 boot 才出现。因此**插件刷新语义的重启动作** = 就绪探测通过
+   **+ 一次窗口重载**；重载后需重新打开设置面板。
+   **实现 = 一个 page-owned completion**（sidebar 共享面
+   `restart-window-reload.ts`，两个客户端插件都不得互相 value-import）：按来源 key
+   （`local` / `gateway-<id>` / `dsh-<id>`）单飞；**发起面板卸载不取消**（重启是宿主
+   事实，完成动作不能随按钮消失，review F6）；就绪预算内未恢复则**不重载**并如实报错；
+   就绪 waiter 由调用方提供（本地 `/health` 的 `ready|degraded`；gateway
+   `pollGatewayReady`；ssh `waitForSourceServing`）。**接线范围**：本段「重启 dsh」
+   两种形态、本地「立即应用」/「重试应用」/「重试恢复」三类重启事务（仅成功时 arm）、
+   本地卡「启动」/写者接管、gateway 卡「重启 dsh」/「启动实例」、插件对话框 footer 重启
+   与全部 restart-to-apply（行删/加/导入/撤销/批量应用，按 `restarted` 判定）、ssh 卡
+   「重启实例」（仅 dsh 目标）。**有意例外**：「重启网关服务」（systemd）不改变实例
+   插件集，不接。
+   **被拒替代**：①只重挂该来源的页内壳——换不掉**已加载** id 的实现（页面模块表按
+   id first-load-wins），且因 bundle rev 是每进程 nonce，重挂后每个旧行都会冒一条
+   `restart-required` 假警报（审计 F5 同类），不做；②单插件热替换（vendor 已验证的
+   `invalidate → 装载 → registry-first teardown → 清样式 → entry.refresh()` 顺序）——
+   能保住来源壳状态，但要在 chamber 侧重实现 HMR 的换血纪律（样式重复注入、依赖闭包、
+   跨来源同 id 共享），成本与风险远超本问题收益，只登记为将来可选；③不重载、只出提示——
+   半自动，用户仍须手动刷新，主诉未解。
 
 **B. connections 本地实例卡片**：加一行/chip「dsh vX」，读同一 resolve 结果，
 与 settings 块同源一致（桥未就绪时回落 `window.dshChamber.dshVersion`）。

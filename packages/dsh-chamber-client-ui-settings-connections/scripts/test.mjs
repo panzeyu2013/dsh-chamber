@@ -40,6 +40,7 @@ const GROUPS = {
   'runtime-gate': [
     'test/runtime-gate/runtime-gate-wiring.test.ts',
     'test/runtime-gate/restart-gates.test.ts',
+    'test/runtime-gate/restart-completion-wiring.test.ts',
   ],
   // gateway: control-plane REST 客户端与网关就绪轮询
   gateway: [

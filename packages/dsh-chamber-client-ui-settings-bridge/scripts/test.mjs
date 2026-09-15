@@ -18,6 +18,7 @@ const GROUPS = {
   // runtime: 设计 18 runtime 投影/策略 + armed-confirmation 机与 live-fact 守卫
   runtime: [
     'test/runtime/gateway-runtime-api.test.ts',
+    'test/runtime/restart-completion-wiring.test.ts',
     'test/runtime/runtime-management.test.ts',
     'test/runtime/confirm-machine-guards.test.ts',
   ],

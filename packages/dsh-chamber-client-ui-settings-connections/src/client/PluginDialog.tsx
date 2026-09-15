@@ -60,7 +60,15 @@ import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } fr
 import type { ReactNode } from 'react'
 import clsx from 'clsx'
 import { Button, IconRefreshOutline16, IconTrashOutline16, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
-import { pollGatewayReady } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+// The page-owned restart→reload completion (design 18 §3.6 item 8, sidebar shared
+// face): a restart-to-apply refreshes the host's plugin mounts, but this window
+// keeps running the pre-restart client plugin set until it boots again.
+import {
+  RESTART_RELOAD_BUDGET_MS,
+  armWindowReloadWhenServed,
+  pollGatewayReady,
+  waitForSourceServing,
+} from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import type {
   ChamberHostPackageState,
   LocalPluginManifest,
@@ -558,6 +566,37 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     }
   }, [isSsh, sshSpec, seedBusy, loadSync])
 
+  /**
+   * Arm the page-owned restart→reload completion for this dialog's source
+   * (design 18 §3.6 item 8). Every restart-to-apply path below ends here: the
+   * host restarts and refreshes its plugin mounts, but the window only picks the
+   * new client half up on a fresh boot. Page-owned on purpose — the completion
+   * survives this dialog closing (review F6), and the page-level key dedupes
+   * multiple paths arming for the same source.
+   * @param kind - the dialog's backend shape.
+   * @param rawId - the raw registry instance id.
+   */
+  const armSourceReload = useCallback((kind: 'ssh' | 'gateway', rawId: string): void => {
+    if (kind === 'ssh') {
+      const sourceId = `dsh-${rawId}`
+      void armWindowReloadWhenServed(
+        sourceId,
+        () => waitForSourceServing(sourceId, { timeoutMs: 120_000 }),
+        { budgetMs: RESTART_RELOAD_BUDGET_MS },
+      )
+      return
+    }
+    const sourceId = `gateway-${rawId}`
+    void armWindowReloadWhenServed(sourceId, async signal => {
+      try {
+        await pollGatewayReady(sourceId, signal, { action: 'restart' })
+        return true
+      } catch {
+        return false
+      }
+    }, { budgetMs: RESTART_RELOAD_BUDGET_MS })
+  }, [])
+
   /** One-click restart (design 08 §6.3): the chamber host packages are seeded
    *  and the insert is in place, but the RUNNING instance has not loaded
    *  them — restarting is the step that makes them live. Re-probes after. */
@@ -573,6 +612,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
       } else {
         setPendingRestart(false)
         onRecheckDiagnostic?.()
+        armSourceReload('ssh', sshSpec.id)
       }
     } catch (err) {
       setRestartError(errorMessage(err))
@@ -631,6 +671,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
             } else if (executed.restarted) {
               tone = 'ok'
               text = `${t('pluginsApplied')}${executed.readyNote === undefined ? '' : ` · ${executed.readyNote}`}`
+              armSourceReload('ssh', sshSpec.id)
             } else {
               tone = 'warn'
               text = t('restartNeededHint')
@@ -669,6 +710,9 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
           || (undone.restarted === true && undone.ready !== false)
         if (clean) {
           setRemoteListStatus({ tone: 'ok', text: t('undoDone') })
+          // Only a real restart-to-apply needs the window reload; an undo that
+          // never restarted (restarted === undefined) is already in effect.
+          if (undone.restarted === true) armSourceReload('ssh', sshSpec.id)
         } else if (undone.restarted === false) {
           const note = undone.readyNote === undefined ? '' : ` ${undone.readyNote}`
           setRemoteListStatus({ tone: 'warn', text: `${t('undoDone')} · ${t('restartNeededHint')}${note}` })
@@ -735,8 +779,9 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   // ---- local: Loader 快照（local zone 第三方行生效状态） ----
   // Loads on open and re-runs on every zone reload (reloadNonce — the same
   // channel the gateway/http snapshot uses); the RUNNING local instance only
-  // changes at a restart (the restart action lives on the local connection
-  // card, outside this dialog), so no per-action reload is needed here.
+  // changes at a restart (the restart action is 「dsh 运行时」→「重启 dsh」,
+  // outside this dialog — NOT on the local connection card, which only has
+  // start/stop), so no per-action reload is needed here.
   useEffect(() => {
     if (!isLocal) return
     let cancelled = false
@@ -854,13 +899,24 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
         setRestartNote({ tone: 'error', text: serverRefusalText(body, response.status) })
         return
       }
-      try {
-        await pollGatewayReady(sourceId, controller.signal)
+      // Readiness + reload are PAGE-owned (review F6): closing the dialog
+      // mid-restart cannot cancel the completion.
+      let pollFailure: unknown = null
+      const outcome = await armWindowReloadWhenServed(sourceId, async signal => {
+        try {
+          await pollGatewayReady(sourceId, signal)
+          return true
+        } catch (err) {
+          pollFailure = err
+          return false
+        }
+      }, { budgetMs: RESTART_RELOAD_BUDGET_MS })
+      if (outcome === 'reloaded') {
         setRestartNote({ tone: 'ok', text: t('restartManagedDshOk') })
         setReloadNonce(n => n + 1)
-      } catch (err) {
-        if (controller.signal.aborted) return
-        const cls = classifyRestartError(err)
+      } else {
+        const cls = classifyRestartError(pollFailure
+          ?? new Error('restart completion aborted before the readiness poll settled'))
         setRestartNote(cls.kind === 'accepted-timeout'
           ? { tone: 'ok', text: t('restartManagedDshAccepted') }
           : { tone: 'error', text: cls.detail })
@@ -932,6 +988,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
           ? { tone: 'ok', text: t('undoDone') }
           : { tone: 'warn', text: `${t('undoDone')} · ${t('restartNeededHint')}` })
       }
+      if (executed.restarted) armSourceReload('gateway', gatewayId)
       setReloadNonce(n => n + 1)
     } catch (err) {
       setManageStatus({ tone: 'error', text: errorMessage(err) })
@@ -990,6 +1047,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
             : executed.deferred
               ? t('pluginsDeferred')
               : t('restartNeededHint'))
+          if (executed.restarted) armSourceReload('gateway', gatewayId)
           setDraft('')
           reloadAfterAdd()
         }
@@ -999,10 +1057,12 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
         else if ('cancelled' in res) { /* silent no-op (user dismissed the confirmation) */ }
         else {
           // LOCAL `dsh plugin add` writes the local profile only — the RUNNING
-          // local instance mounts the plugin at its next restart (the restart
-          // action lives on the local connection card, outside this dialog),
-          // so「已应用/Applied」would overclaim: the honest note is deferred.
-          setAddResult(t('pluginsDeferred'))
+          // local instance mounts the plugin at its next restart (「dsh 运行时」→
+          // 「重启 dsh」, outside this dialog; the local connection card has only
+          // start/stop), and that restart now completes with one window reload
+          // (design 18 §3.6 item 8), so「已应用/Applied」would still overclaim:
+          // the honest note is deferred and names the entry point.
+          setAddResult(t('pluginsDeferredLocal'))
           setDraft('')
           reloadAfterAdd()
         }
@@ -1055,8 +1115,12 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
           // the profile changed but the plugin mounts at the next restart —
           // the same restartNeededHint arm the spec install uses (the import
           // fact stays visible in the refreshed installed list below).
-          if (res.outcome.restarted) setAddResult(t('materializeLive'))
-          else if (res.outcome.executed) setAddResult(t('restartNeededHint'))
+          if (res.outcome.restarted) {
+            setAddResult(t('materializeLive'))
+            armSourceReload('gateway', gatewayId)
+          } else if (res.outcome.executed) {
+            setAddResult(t('restartNeededHint'))
+          }
           reloadAfterAdd()
         }
       } else {
@@ -1065,8 +1129,8 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
         else if ('cancelled' in res) { /* silent no-op (picker dismissed) */ }
         else {
           // Same restart-honesty as the local spec install: the local profile
-          // changed; the running local instance mounts it at its next restart.
-          setAddResult(t('pluginsDeferred'))
+          // changed; 「dsh 运行时」→「重启 dsh」mounts it and reloads the window.
+          setAddResult(t('pluginsDeferredLocal'))
           reloadAfterAdd()
         }
       }
@@ -1163,6 +1227,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
             verified: res.result.verified,
             ready: res.result.ready,
           })
+          if (res.result.restarted && !res.result.deferred) armSourceReload('ssh', sshSpec.id)
         }
       } else {
         setResult({ applied, failed, skipped: 0, restarted: false, deferred: true, verified: failed.length === 0, ready: null })

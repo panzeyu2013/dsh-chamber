@@ -115,6 +115,22 @@ from retention reclaim); closing the panel releases both guarantees.
   confirms an action is otherwise unchanged — the local apply-now transaction is
   still confirmed inside the local runtime surface, so the panel never
   double-asks.
+- **Restart = host restart + one window reload (2026-12)**: the page-side
+  client-plugin set is fixed at the window's boot (the host graph is fetched once
+  per boot and the module table is first-load-wins per plugin id), so "restart dsh
+  to refresh mounted plugins" only makes a newly installed or rebuilt
+  `dsh.client` contribution (a settings section, e.g.) appear once the window
+  boots again. The implementation is the sidebar shared face's **page-owned
+  completion** (`restart-window-reload.ts` — this package and the connections
+  package must not value-import each other): this section's two restart shapes —
+  plus the local "apply now" / "retry apply" / "retry restore" transactions (armed
+  only on success) — arm it per source key (`local` / `gateway-<id>`); **a panel
+  unmount does not cancel
+  it** (the restart is a host fact, review F6); local waits for `/health`
+  `ready|degraded` (30s budget) and the gateway leg waits inside the 180s page
+  net via `pollGatewayReady` (120s inner). A restart that never becomes ready is
+  NOT reloaded onto — it reports `dshRuntimeRestartNotServed` honestly instead.
+  Reopen Settings afterwards.
 - Config facts stay on the target host: no chamber-side persistence, no new
   control-plane API.
 

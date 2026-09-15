@@ -744,6 +744,20 @@
 
 ## 范围决策与必要取舍（不做 / 推迟 / 移出 / 偏差）
 
+- **重启即重载：用户发起的插件刷新入口已全部接线（2026-12；唯一有意例外 = 「重启网关服务」）**：
+  页面侧 client 插件集在窗口 boot 时固定（宿主图每 boot 取一次、`dsh.client` bundle 那时执行；
+  模块表按 id first-load-wins），因此**用户发起的实例/托管 dsh 重启必须附带一次窗口重载**，否则
+  新装/重打包的客户端半身（设置分节等）不出现——即本条登记时的原始问题。实现 = 一个 page-owned
+  completion（`sidebar/shared/restart-window-reload.ts`：按来源 key 单飞、就绪预算内未恢复则**不重载**
+  并如实报错、发起面板卸载不取消、就绪后可重试再 arm），已接：local「dsh 运行时→重启 dsh」、
+  「立即应用」/「重试应用」/「重试恢复」三类重启事务（仅成功时 arm）与本地卡「启动」/写者接管；
+  gateway「dsh 运行时→重启 dsh」、gateway 卡「重启 dsh」/「启动实例」、插件对话框 footer 重启；
+  ssh 卡「重启实例」（`restart_service`，仅 dsh 目标）、ssh/gateway 的 restart-to-apply（行删/加/
+  导入/撤销/批量应用，按 `restarted` 判定）。**有意不接**：gateway 的「重启网关服务」
+  （systemd）——它不改变实例插件集。**仍不覆盖**：不经 chamber 界面的插件集变更（外部改 profile 且
+  实例未重启）只能手动刷新窗口（Cmd/Ctrl+R）。失效判据：新增重启/生效入口必须接同一 completion
+  （或在其 design/卡片注释写明不接的理由），且 `restart-window-reload` 用例覆盖「就绪即重载 /
+  预算内未就绪不重载 / 同 key 单飞 / 卸载不取消」四类路径。
 - **降级事实的覆盖边界（2026-12，做完全部座位后仍成立的取舍）**：降级提示已覆盖
   三个座位（活动视图横幅、侧栏来源行、连接页卡片与插件对话框；事实 =
   `ChamberServerAggregate.bootGap`，见 design 05 §4「降级呈现」）。仍不覆盖：

@@ -57,10 +57,17 @@ test('a failed runtime probe DELETES the card entry and never returns early', ()
 })
 
 test('the start flow polls with action:\'start\' so its failures are never reported as restart failures', () => {
-  assert.match(source, /pollGatewayReady\(id, controller\.signal, \{ action: 'restart' \}\)/u,
+  // 2026-12 shape change: the poll now runs inside the PAGE-owned restart→reload
+  // completion (restart-window-reload.ts), so the signal is the completion's —
+  // the action labelling contract is unchanged and still pinned here.
+  assert.match(source, /pollGatewayReady\(id, signal, \{ action: 'restart' \}\)/u,
     'the restart flow must name its action explicitly')
-  assert.match(source, /pollGatewayReady\(id, controller\.signal, \{ action: 'start' \}\)/u,
+  assert.match(source, /pollGatewayReady\(id, signal, \{ action: 'start' \}\)/u,
     'the start action must reach the shared poll — restart wording on a start failure is a lie')
-  assert.equal(/pollGatewayReady\(id, controller\.signal\)/u.test(source), false,
-    'no runtime action may poll with an implicit action')
+  const polls = source.match(/pollGatewayReady\([^)]*\)/gu) ?? []
+  assert.ok(polls.length >= 2, 'both card runtime actions must poll through the shared poll')
+  for (const call of polls) {
+    assert.match(call, /\{ action: '(?:restart|start)' \}/u,
+      `every runtime poll must name its action (implicit-action poll found): ${call}`)
+  }
 })
