@@ -356,4 +356,9 @@ jobs:
         if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.classify.outputs.code == 'true'
         run: |
           pnpm run build:desktop
-          pnpm --filter @dsh-chamber/desktop run dist:win -- --publish=never
+          # exec, not `run dist:win -- --publish=never`: pnpm forwards its own `--`
+          # separator to the script, so electron-builder received
+          # `--win --x64 "--" "--publish=never"`, treated the flag as a positional
+          # argument, fell back to CI implicit publishing and died on the missing
+          # GH_TOKEN. This mirrors the release workflow's own invocation.
+          pnpm --filter @dsh-chamber/desktop exec electron-builder --win --x64 --publish=never
