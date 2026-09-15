@@ -442,6 +442,291 @@ export function hoverDismissVerdict({ cardable = false, blur = null, hidden = nu
 }
 
 /**
+ * Locator policy for the sidebar RAIL toggle (W-4), as a pure function over the
+ * button descriptors the walkthrough dumps from the page.
+ *
+ * WHY IT IS NOT `button[aria-expanded]`: the official toggle — and this repo's
+ * sidebar fork with it — carries NO `aria-expanded`; its only own handle is a
+ * label that flips between `toggle.collapse` / `toggle.open`. The mobile
+ * substitute states the reason explicitly (`MobileNavToggle.tsx`): the official
+ * control "carries that label alone, because it sits inside the sidebar it
+ * collapses", so the OUT-OF-CANVAS substitute had to add the disclosure state
+ * itself. Selecting "the first `aria-expanded` control in the left half" could
+ * therefore never take this control — it took the SOURCE-SECTION fold switch
+ * (`ServerSection.tsx`, design 06 §2.4) instead, and the leg passed while the
+ * sidebar never moved.
+ *
+ * The control is located STRUCTURALLY instead: the icon-sized button in the
+ * sidebar HEADER ROW, on the sidebar side of the viewport, outside any modal.
+ * Identity is then settled by the EFFECT the leg asserts (see
+ * `railToggleVerdict`): a click that does not move the frame's
+ * `[data-sidebar-collapsed]` is a FAIL, so a wrong pick can never pass again.
+ *
+ * SAFETY — the header band must stay TIGHT: the rail state renders a second
+ * icon-sized button in the sidebar header region, the rail's `新建会话`
+ * (36×36 at top≈66, measured), which STARTS A SESSION. A band wide enough to
+ * include it would let a missing/hidden toggle degrade into clicking a
+ * mutating control on `--attach`'s real app — the one thing the toolbox's
+ * click allowlist promises never happens. With the band bounded to the header
+ * row (top < 48: measured toggle tops 18/22) a missing toggle yields
+ * `no-candidate` ⇒ FAIL, and no mutation. Do not raise it without re-measuring
+ * the rows below.
+ * @param buttons - descriptors `{ index, left, top, width, height, inDialog }`.
+ * @param opts.viewportWidth - viewport width; candidates must sit on its left side.
+ * @returns `{ ok, picked?, reason?, candidates }` — `ok: false` means NOT LOCATED
+ *   (a shell-control contract, not an environment fact), never "picked a guess".
+ */
+export const RAIL_TOGGLE_BOX_MAX_PX = 48
+export const RAIL_TOGGLE_BAND_MAX_TOP_PX = 48
+export const RAIL_TOGGLE_LEFT_FRACTION = 0.4
+
+export function pickRailToggle(buttons, { viewportWidth = null } = {}) {
+  const list = Array.isArray(buttons) ? buttons : []
+  const candidates = list.filter(entry =>
+    entry.width > 0 && entry.height > 0
+    && entry.width <= RAIL_TOGGLE_BOX_MAX_PX && entry.height <= RAIL_TOGGLE_BOX_MAX_PX
+    && entry.top < RAIL_TOGGLE_BAND_MAX_TOP_PX
+    && (viewportWidth === null || entry.left < viewportWidth * RAIL_TOGGLE_LEFT_FRACTION)
+    && entry.inDialog !== true
+    // Inactive instance views (N-ctx) keep layout, so their controls have a real
+    // rect: without this scope a hidden shell's toggle either wins the topmost
+    // rule or ties with the visible one (measured: an injected hidden clone was
+    // taken while it was topmost; a real hidden shell sits at the same top).
+    && entry.visibility !== 'hidden')
+  if (candidates.length === 0) return { ok: false, reason: 'no-candidate', candidates: [] }
+  const sorted = [...candidates].sort((a, b) => (a.top - b.top) || (a.index - b.index))
+  const tied = sorted.filter(entry => entry.top === sorted[0].top)
+  // Two plausible header-band controls mean the structure moved: fail closed
+  // instead of silently taking the first one (the defect this policy replaces).
+  if (tied.length > 1) return { ok: false, reason: 'ambiguous', picked: tied[0], candidates: sorted }
+  return { ok: true, picked: sorted[0], candidates: sorted }
+}
+
+/**
+ * Adapter between the merged facts expression and the rail verdicts: `DOM_FACTS`
+ * names the sidebar population `sidebarSources`/`sidebarRows`, the verdicts read a
+ * small stable snapshot (`sections`/`rows`). Keeping the mapping in one place is
+ * what makes the merge safe — the first merged run reported
+ * `[data-chamber-section] undefined → undefined → undefined` because the two
+ * names had drifted apart.
+ * @param facts - a `DOM_FACTS` snapshot (or null).
+ * @returns `{ railCollapsed, sections, rows, settingsOpen }`, or null.
+ */
+export function railFactsSnapshot(facts) {
+  if (facts === null || facts === undefined) return null
+  return {
+    railCollapsed: facts.railCollapsed === true,
+    sections: facts.sidebarSources,
+    rows: facts.sidebarRows,
+    settingsOpen: facts.settingsOpen === true,
+  }
+}
+
+/** One button descriptor as an evidence fragment. */
+export function describeButton(entry) {
+  if (entry === null || entry === undefined) return '（无）'
+  const raw = entry.ariaLabel
+  const label = raw === null || raw === undefined || raw === '' ? '(无 aria-label)' : `"${raw}"`
+  return `${label} ${entry.width ?? '?'}×${entry.height ?? '?'}@(${entry.left ?? '?'},${entry.top ?? '?'})`
+}
+
+/**
+ * Fingerprint of the persisted sidebar view preferences (design 06 §3.1, the
+ * shared `dsh-chamber.sidebar.v1` localStorage key) as the walkthrough reports
+ * them. Comparing fingerprints is how the README's write-boundary claim stops
+ * being prose: "this leg wrote nothing" / "the round trip left no residue"
+ * become checked facts.
+ * @param prefs - `VIEW_PREFS` snapshot, or null when the leg did not read it.
+ * @returns a comparable string, or null when no snapshot was taken.
+ */
+export function viewPrefsFingerprint(prefs) {
+  if (prefs === null || prefs === undefined) return null
+  if (prefs.present !== true) return 'absent'
+  return JSON.stringify({
+    v: prefs.v ?? null,
+    sourceFolded: prefs.sourceFolded ?? null,
+    folded: prefs.foldedKeys ?? null,
+    width: prefs.sidebarWidth ?? null,
+    order: prefs.serverOrder ?? null,
+    orderBy: prefs.orderByKeys ?? null,
+    parseError: prefs.parseError ?? null,
+  })
+}
+
+/**
+ * Whether a `VIEW_PREFS` snapshot can support a boundary CLAIM at all: a missing
+ * snapshot (the leg never read it) or an unparsable stored value means "not
+ * checked", which must never read as "nothing was written". A snapshot with
+ * `present: false` IS readable — it says the key does not exist.
+ * @param prefs - `VIEW_PREFS` snapshot.
+ * @returns true when the snapshot cannot support a claim.
+ */
+export function viewPrefsUnreadable(prefs) {
+  if (prefs === null || prefs === undefined) return true
+  return prefs.parseError !== undefined && prefs.parseError !== null
+}
+
+/**
+ * The changed preference fields between two snapshots, as a short evidence
+ * fragment (null when nothing changed, or when either side was not read).
+ * @param before - `VIEW_PREFS` snapshot.
+ * @param after - `VIEW_PREFS` snapshot.
+ * @returns a description such as `sourceFolded null→{"local":true}`, or null.
+ */
+export function viewPrefsDelta(before, after) {
+  const fingerprintBefore = viewPrefsFingerprint(before)
+  const fingerprintAfter = viewPrefsFingerprint(after)
+  if (fingerprintBefore === null || fingerprintAfter === null || fingerprintBefore === fingerprintAfter) return null
+  const show = value => (value === undefined || value === null ? 'null' : JSON.stringify(value))
+  const fields = ['v', 'sourceFolded', 'foldedKeys', 'sidebarWidth', 'serverOrder', 'orderByKeys']
+  const changed = fields.filter(field => show(before?.[field]) !== show(after?.[field]))
+    .map(field => `${field} ${show(before?.[field])}→${show(after?.[field])}`)
+  return changed.length > 0 ? changed.join('，') : `${fingerprintBefore} → ${fingerprintAfter}`
+}
+
+/**
+ * W-4's verdict, anchored on the SHELL EFFECT rather than on the clicked
+ * element's own attribute.
+ *
+ * Judged effects (`DOM_FACTS`): the official frame attribute
+ * `[data-sidebar-collapsed]` (the contract the mobile plugin already consumes,
+ * `layout-facts.ts`) must APPEAR on the collapse click and DISAPPEAR on the
+ * restore click, and the sidebar's `[data-chamber-section]` population is
+ * reported alongside. A click that leaves the attribute untouched is a FAIL —
+ * that is exactly how the old leg's silent mis-target (source-section fold)
+ * would be caught today.
+ *
+ * The leg also asserts the WRITE boundary: design 06 §3.1 keeps the collapsed
+ * state in the store (it is never persisted, only the dragged width is), so a
+ * visible change in `dsh-chamber.sidebar.v1` across either click is a FAIL.
+ * @param args.pick - result of `pickRailToggle`.
+ * @param args.identity - descriptor of the element actually clicked.
+ * @param args.drift - whether the click had to be re-located by identity.
+ * @param args.before/after/restored - `DOM_FACTS` snapshots around the two clicks.
+ * @param args.restoredVia - how the restore click was delivered ('stash' | 'rescan' | 'none').
+ * @param args.prefs - `{ before, after, restored }` `VIEW_PREFS` snapshots.
+ * @param args.note - walkthrough-side explanation appended to the evidence.
+ * @returns `{ ok, evidence }` (`ok === null` is INFO; W-4 never reports INFO:
+ *   the control exists in both sidebar states, so "not located" is a FAIL).
+ */
+export function railToggleVerdict({ pick, identity = null, drift = false, before = null, after = null, restored = null, restoredVia = 'stash', prefs = null, note = '' }) {
+  if (pick?.ok !== true) {
+    const seen = (pick?.candidates ?? []).slice(0, 4).map(describeButton).join(' | ') || '（无）'
+    return {
+      ok: false,
+      evidence: `未定位到侧栏导轨开关（${pick?.reason ?? 'unknown'}）：它在展开态与 rail 态都存在，属壳契约；候选=${seen}${noteTail(note)}`,
+    }
+  }
+  const clicked = `clicked=${describeButton(identity ?? pick.picked)}${drift ? '（索引漂移，已按身份重定位）' : ''}`
+  const trail = `[data-sidebar-collapsed] ${before?.railCollapsed} → ${after?.railCollapsed} → ${restored?.railCollapsed}`
+  const counts = `[data-chamber-section] ${before?.sections ?? '?'} → ${after?.sections ?? '?'} → ${restored?.sections ?? '?'}；settingsOpen=${restored?.settingsOpen ?? '?'}`
+  // The collapse fact must be a boolean on all three snapshots; a missing one is
+  // "not checked", and must not be reported as "the click did not collapse"
+  // (that message would accuse the product of the tool's own unreadable input).
+  if (typeof before?.railCollapsed !== 'boolean' || typeof after?.railCollapsed !== 'boolean' || typeof restored?.railCollapsed !== 'boolean') {
+    return {
+      ok: false,
+      evidence: `壳折叠状态不可读（[data-sidebar-collapsed]=${before?.railCollapsed} → ${after?.railCollapsed} → ${restored?.railCollapsed}）：读不到该官方属性即 FAIL；${clicked}${noteTail(note)}`,
+    }
+  }
+  if (before.railCollapsed === after.railCollapsed) {
+    return {
+      ok: false,
+      evidence: `点击未折叠：${trail}（${clicked}）——点到的不是导轨开关，效果没发生即 FAIL；${counts}${noteTail(note)}`,
+    }
+  }
+  if (restored?.railCollapsed !== before?.railCollapsed) {
+    return {
+      ok: false,
+      evidence: `复原失败：${trail}（复原路径=${restoredVia}，${clicked}）；${counts}${noteTail(note)}`,
+    }
+  }
+  if (prefs !== null) {
+    const unreadable = ['before', 'after', 'restored'].filter(side => viewPrefsUnreadable(prefs[side]))
+    if (unreadable.length > 0) {
+      return {
+        ok: false,
+        evidence: `写入边界不可判：偏好快照读不到（${unreadable.join('、')}）——本次运行证明不了"点击没写用户状态"，按未检查处理；${clicked}；${trail}${noteTail(note)}`,
+      }
+    }
+    const wrote = viewPrefsDelta(prefs.before, prefs.after) ?? viewPrefsDelta(prefs.before, prefs.restored)
+    if (wrote !== null) {
+      return {
+        ok: false,
+        evidence: `持久化边界被破坏：本次点击写入了 dsh-chamber.sidebar.v1（${wrote}）——design 06 §3.1 只持久化拖拽宽度，折叠态留在 store；${clicked}；${trail}${noteTail(note)}`,
+      }
+    }
+  }
+  const via = restoredVia === 'stash' ? '' : `；复原路径=${restoredVia}`
+  const writeNote = prefs === null ? '' : '；持久化偏好未变'
+  return { ok: true, evidence: `${clicked}；${trail}；${counts}${via}${writeNote}${noteTail(note)}` }
+}
+
+/**
+ * W-4a's verdict: source-section fold (design 06 §2.4 — the control the old
+ * W-4 selector hit by accident, kept as its own leg with §2.4's own criterion).
+ *
+ * §2.4 requires the click to collapse the source's ENTIRE workspace list, so the
+ * disclosure attribute alone is not enough: the section's rendered height must
+ * SHRINK and come back on expand. A flip with no visible change is a FAIL — the
+ * same "flipped something, proved nothing" shape the rail leg was fixed for.
+ * @param args.executed - whether the leg ran at all (it writes the persisted
+ *   `sourceFolded` preference, so `--attach` records INFO instead).
+ * @param args.reason - why it did not run (INFO evidence).
+ * @param args.before/after/restored - `SOURCE_FOLD_FACTS` snapshots.
+ * @param args.drift - whether a click had to be re-located by identity.
+ * @param args.prefs - `{ before, after }` `VIEW_PREFS` snapshots taken AFTER the
+ *   normalisation click and AFTER the round trip: the fold is a persisted
+ *   preference; the round trip must leave the stored value exactly as it was.
+ * @returns `{ ok, evidence }`.
+ */
+export function sourceFoldVerdict({ executed = false, reason = '', identity = null, drift = false, before = null, after = null, restored = null, prefs = null }) {
+  if (executed !== true) return { ok: null, evidence: `未执行：${reason}` }
+  const fn = `aria-expanded ${before?.expanded} → ${after?.expanded} → ${restored?.expanded}`
+  const px = `来源节高度 ${before?.height} → ${after?.height} → ${restored?.height} px`
+  const clicked = identity === null ? '' : `（${describeButton(identity)}${drift ? '，索引漂移已按身份重定位' : ''}）`
+  // The geometry IS the criterion here (design 06 §2.4 judges the collapsed
+  // LIST): an unreadable height must fail closed — `NaN <= 1` and `NaN > 1` are
+  // both false, so a malformed snapshot would otherwise pass every gate below.
+  if (![before?.height, after?.height, restored?.height].every(Number.isFinite)) {
+    return {
+      ok: false,
+      evidence: `来源节几何不可读（height=${before?.height} → ${after?.height} → ${restored?.height}）：本腿判"列表真的收拢了"，读不到几何即 FAIL；${fn}${clicked}`,
+    }
+  }
+  if (before?.expanded !== true) {
+    return { ok: false, evidence: `起始态不是展开：${fn}${clicked}，无法判定收拢方向` }
+  }
+  if (after?.expanded !== false || (before.height - after.height) <= 1) {
+    return {
+      ok: false,
+      evidence: `点击后未收拢：${fn}，${px}${clicked} —— design 06 §2.4 要求收拢该来源的整个列表，开关翻转而列表没动同样算 FAIL`,
+    }
+  }
+  if (restored?.expanded !== true || Math.abs(restored.height - before.height) > 1) {
+    return { ok: false, evidence: `展开未恢复：${fn}，${px}${clicked}` }
+  }
+  if (prefs !== null) {
+    const unreadable = ['before', 'after'].filter(side => viewPrefsUnreadable(prefs[side]))
+    if (unreadable.length > 0) {
+      return {
+        ok: false,
+        evidence: `写入边界不可判：偏好快照读不到（${unreadable.join('、')}）——往返是否留下残留无法证明，按未检查处理；${fn}，${px}${clicked}`,
+      }
+    }
+    const residue = viewPrefsDelta(prefs.before, prefs.after)
+    if (residue !== null) {
+      return {
+        ok: false,
+        evidence: `收拢偏好未复原：往返后 dsh-chamber.sidebar.v1 仍有残留（${residue}）——design 06 §3.1 的 sourceFolded 只在收拢期存在；${fn}，${px}${clicked}`,
+      }
+    }
+  }
+  const writeNote = prefs === null ? '' : '；收拢往返后持久化偏好未变'
+  return { ok: true, evidence: `${fn}；${px}；行 ${before?.rows ?? '?'} → ${after?.rows ?? '?'} → ${restored?.rows ?? '?'}${clicked}${writeNote}` }
+}
+
+/**
  * Opt-in strictness for legs that may legitimately not run (`--require-hover`).
  *
  * A verdict of `ok === null` is INFO: the environment did not offer the thing

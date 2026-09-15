@@ -1313,6 +1313,14 @@
   不再能留下陈旧 `inside`。**不做**的原因是用户当前指令是"按 v0.2.4 恢复"，而该补丁是新
   机制（要动 `hover-intent` 的单一权威规则并新增偏差登记）；复发时再落，方案与验证点
   见 `.tmp/audit2/fix-design.json`。
+- **导轨开关没有稳定 DOM 锚点、也不带 `aria-expanded`（2026-09-15 登记，取舍）**：侧栏头部折叠钮沿用
+  上游形状——只有会翻转的 `aria-label`（`toggle.collapse`/`toggle.open`）；"移动档替代品为何自行补
+  `aria-expanded`"写在 `packages/dsh-chamber-client-ui-mobile/src/client/MobileNavToggle.tsx` 头注里（它不在
+  它所折叠的侧栏内部）。因此 `W-4` 只能**结构定位**（`scripts/gui-acceptance/checks.mjs` 的 `pickRailToggle`：
+  侧栏头部图标钮，候选为空或并列即 FAIL）＋**效果锚定**（官方 frame 属性 `[data-sidebar-collapsed]` 的出现/
+  消失，复原点击用同一元素），不新增测试钩子；`W-4a`（来源级收拢）会写持久化偏好 `sourceFolded`，故只在
+  `--dev` 实例上执行（`--attach` 记 INFO）。要改成身份锚定，需先按 design 06 §7 的 a11y 名单给该控件加属性
+  并同步 `docs/checklists/upstream-touchpoints.md` 的控件形状登记——属设计裁决，非本轮范围。
 - **悬停几何/墨色没有真指针验收腿（2026-09-14 登记，未做）**：`scripts/gui-acceptance/`
   的 W-4b 四条腿都从行**中心**离开，覆盖不到本次症状路径（从动作钮上离开该行），也没有
   任何腿读标题墨色的静止/hover 两级；当前证据是 CSS 锁 + 打包页注入实测

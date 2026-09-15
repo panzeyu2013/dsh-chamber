@@ -96,6 +96,8 @@ try {
     // only to that instance's own state. --attach never does (someone's real app).
     const walked = await runWalkthrough({
       cdpPort, outDir, advanceOnboarding: mode === 'dev', requireHover: values['require-hover'],
+      // State-writing legs (W-4a source fold) run only on the throwaway instance.
+      allowPersistentWrites: mode === 'dev',
     })
     failed += walked.failed
     info += walked.info

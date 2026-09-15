@@ -46,12 +46,20 @@
 | 壳启动并挂载实例视图（`[data-instance]`） | `W-1` | design 09 §3.2 |
 | 侧栏多来源结构（`[data-chamber-section]` / `[data-chamber-row]` / `[data-session-id]`） | `W-2` | design 05 §2、06 |
 | 首启模态可关闭/可走完（非首启记 INFO） | `W-3` | design 05 §5（onboarding 阶段） |
-| 侧栏折叠/展开（`aria-expanded` 导轨开关） | `W-4` | design 06（layout 持久化） |
+| 侧栏 rail 折叠/展开：控件**结构定位**（侧栏头部图标钮，按计算可见性只取可见视图；候选为空或并列即 FAIL）+ **效果锚定**（官方 frame 属性 `[data-sidebar-collapsed]` 出现/消失；复原点击用同一元素，点击按身份寻址）+ **写入边界**（本次点击不得改动 `dsh-chamber.sidebar.v1`）；点错控件、未复原、定位不到、写了偏好都算 FAIL | `W-4` | design 06 §3.1（ui-layout fork 的折叠与宽度共享）、05 §6 |
+| 来源级收拢：来源节整列表收拢**且几何可见**（`aria-expanded` 翻转 + 来源节高度收缩、展开恢复；几何非有限数即 FAIL）+ **往返后不留持久化残留**（`sourceFolded`；快照读不到按未检查 FAIL）；只覆盖首个来源节；会写该偏好，**只在 `--dev` 跑**，`--attach` 记 INFO | `W-4a` | design 06 §2.4、§3.1（`sourceFolded`） |
 | 行悬停卡片（`[data-chamber-hovercard]` 标记计数）：悬停升起一张、卡片文本含该行自身标题、移开消失；竞态腿**先测本机 dwell→React 提交窗口**（每 ~5ms 轮询卡片标记，取最后未见的时刻作严格下界，多次取最大），再由 `raceBandForWindow()` 在窗口内取确定性偏移、12 次试验 0 搁浅（固定 `dwell+10..60ms` 只是窗口下界，不足以判别——见 README；窗口测不到或 ≤2ms 时记"不具区分力"INFO，绝不记 PASS）；A→B 换行始终至多一张且结束为 B 的卡片；blur / `visibilitychange`（hidden）清卡（实例确无可悬停行时 INFO；有锚点形状的行却没有 `[data-chamber-hovercard-anchor]` 记 FAIL）。**INFO 只表示"这条腿没执行/没区分力"**：结束行会报出 `（N 项 INFO 未执行）`；要"必须真跑过并真的判别"就用 `--require-hover`，四条腿的 INFO 一律改记 FAIL | `W-4b`、`W-4b-race`、`W-4b-swap`、`W-4b-dismiss` | design 06 §7（悬停卡片：锚点/搁浅/互斥/失焦清卡） |
 | 设置面从侧栏座席打开、插槽渲染且**无 `[data-slot-error]`** | `W-5`、`W-6` | design 05 §5（完整桥接） |
 | 设置导航项存在、每个设置页渲染内容、页面切换真的换内容 | `W-7`…`W-9` | design 05 §5 |
 | 真实 Escape 键关闭设置面 | `W-10` | design 05 §5 |
 | 走查期间无**未预期**的 ≥400 请求、无**未预期**的渲染层 error | `W-11`、`W-12` | 容忍清单见工具箱 README（诚实性基线） |
+
+`W-4` 的控件**不带 `aria-expanded`**（上游形状只有会翻转的 `aria-label`），所以这条腿不按属性选控件：
+先用纯判据 `pickRailToggle`（`checks.mjs`）在侧栏头部**结构定位**，再用官方 frame 属性
+`[data-sidebar-collapsed]` 判"折叠真的发生了"——**点错控件 ⇒ FAIL**，定位不到也 FAIL（该控件在展开与
+rail 两态都存在，属壳契约，不是环境事实）。`W-4a` 是来源级收拢（此前被旧的 `W-4` 选择器静默打到的那个
+控件），判据是 design 06 §2.4 的"整列表收拢"，因此**几何必须可见**（只翻转属性不算）；它写持久化偏好，
+故只在一次性实例上执行。
 
 ## 3. 目检腿（机械腿不能替代的部分）
 

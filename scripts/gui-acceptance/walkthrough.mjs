@@ -9,20 +9,31 @@
  * else uses the DOM contracts the code already carries:
  *   - `[data-instance]`                      per-instance shell (renderer InstanceView)
  *   - `[data-chamber-section]` / `[data-chamber-row]`  sidebar sources and rows
+ *   - `[data-sidebar-collapsed]`             official frame attribute: the sidebar rail state
  *   - `[data-chamber-hovercard]` / `[data-chamber-hovercard-anchor]`  hover card + its anchor
  *   - `[data-slot]` / `[data-slot-error]`     settings-bridge render sites
  *   - `dialog nav [class*="navList"] > button`  settings nav items (aria-current = active)
  *
  * SAFETY: the run never clicks a control that is not one of the above (no
- * 启动/停止/保存/删除 can be reached), and it performs no data mutation.
+ * 启动/停止/保存/删除 can be reached). Two legs are located STRUCTURALLY and are
+ * judged by the EFFECT they must produce — never by the clicked element's own
+ * attribute: W-4 picks the sidebar header's icon-sized button and requires the
+ * frame's `[data-sidebar-collapsed]` to flip (the rail toggle carries no
+ * `aria-expanded`, so the previous "first aria-expanded in the left half"
+ * selector silently took the source-section fold and passed while the sidebar
+ * never moved; that false green is what the structural pick + effect assertion replace).
+ * W-4a drives that source-section fold, which writes the PERSISTED
+ * `sourceFolded` preference (design 06 §3.1), so it runs only on a throwaway
+ * instance (`--dev`); `--attach` records INFO for it.
  */
 import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { CdpSession, discoverPageTarget } from './cdp.mjs'
 import {
   KNOWN_UPSTREAM_BOOT_NOISE, TOLERATED_REQUEST_FAILURES, applyRequireHover, createRecorder, hoverCardVerdict,
-  hoverDismissVerdict, hoverExclusiveVerdict, hoverRaceVerdict, partitionFailures, raceBandForWindow,
-  renderMarkdown, summarize, summarizeNetFailures,
+  hoverDismissVerdict, hoverExclusiveVerdict, hoverRaceVerdict, partitionFailures, pickRailToggle,
+  raceBandForWindow, railFactsSnapshot, railToggleVerdict, renderMarkdown, sourceFoldVerdict, summarize,
+  summarizeNetFailures,
 } from './checks.mjs'
 
 const SETTINGS_SEAT_LABELS = ['设置', 'Settings']
@@ -75,6 +86,34 @@ const DOM_FACTS = `(() => {
     navLabels: navItems.map(text),
     panelChars: settingsDialog === undefined ? 0 : text(settingsDialog).length,
     controls: [...document.querySelectorAll('button,a[href],[role="button"]')].filter(visible).length,
+    // The structurally-located legs (W-4 rail, W-4a fold) read these: every
+    // visible button as a DESCRIPTOR — the page never picks, the pure
+    // pickRailToggle (checks.mjs) does — plus the official
+    // [data-sidebar-collapsed] frame attribute. One facts expression, so
+    // "settings open" and the section counts cannot drift between legs.
+    railCollapsed: document.querySelector('[data-sidebar-collapsed]') !== null,
+    buttons: [...document.querySelectorAll('button')].map((el, index) => {
+      const rect = el.getBoundingClientRect()
+      let inDialog = false
+      for (let node = el; node !== null; node = node.parentElement) {
+        if (node.getAttribute !== undefined && node.getAttribute('role') === 'dialog') { inDialog = true; break }
+      }
+      // Inactive instance views stay MOUNTED in N-ctx windows, hidden by
+      // visibility: hidden (.instance-hidden / .instance-pending,
+      // packages/renderer/src/styles.css) — geometry alone would keep their
+      // header buttons in the candidate set, so the computed visibility rides
+      // along as a FACT the pure picker uses to scope to the visible view.
+      return {
+        index,
+        ariaLabel: el.getAttribute('aria-label'),
+        ariaExpanded: el.getAttribute('aria-expanded'),
+        cls: (el.className || '').toString().slice(0, 80),
+        left: Math.round(rect.left), top: Math.round(rect.top),
+        width: Math.round(rect.width), height: Math.round(rect.height),
+        visibility: window.getComputedStyle(el).visibility,
+        inDialog,
+      }
+    }).filter(entry => entry.width > 0 && entry.height > 0),
   }
 })()`
 
@@ -110,15 +149,129 @@ function clickNavItem(index) {
   })()`
 }
 
-/** The sidebar's collapse toggle, found structurally: an aria-expanded control in the left rail. */
-const CLICK_SIDEBAR_TOGGLE = `(() => {
+/**
+ * Persisted sidebar view preferences (design 06 §3.1, the shared
+ * `dsh-chamber.sidebar.v1` localStorage key) as a compact snapshot: the write
+ * boundary W-4/W-4a assert, so the README's "this leg writes nothing / the round
+ * trip leaves no residue" claims are checked rather than promised. Only counts
+ * and the fold map are reported — never session titles or paths.
+ */
+const VIEW_PREFS = `(() => {
+  try {
+    const raw = window.localStorage.getItem('dsh-chamber.sidebar.v1')
+    if (raw === null) return { present: false }
+    const parsed = JSON.parse(raw)
+    return {
+      present: true,
+      v: parsed.v ?? null,
+      sourceFolded: parsed.sourceFolded ?? null,
+      foldedKeys: parsed.folded === undefined ? null : Object.keys(parsed.folded).length,
+      sidebarWidth: parsed.sidebarWidth ?? null,
+      serverOrder: parsed.serverOrder === undefined ? null : parsed.serverOrder.length,
+      orderByKeys: parsed.orderBy === undefined ? null : Object.keys(parsed.orderBy).length,
+    }
+  } catch (error) {
+    return { present: true, parseError: String(error?.message ?? error) }
+  }
+})()`
+
+/**
+ * W-4a's facts: the FIRST source section, its fold control (the section's first
+ * VISIBLE `button[aria-expanded]` — that is the source-fold switch in the header
+ * row), the section's rendered height and its rows. The height is why this leg
+ * exists: design 06 §2.4 judges the collapsed workspace LIST, not the attribute.
+ */
+const SOURCE_FOLD_FACTS = `(() => {
   const visible = el => { const rect = el.getBoundingClientRect(); return rect.width > 0 && rect.height > 0 }
-  const toggle = [...document.querySelectorAll('button[aria-expanded]')]
-    .filter(el => visible(el) && el.getBoundingClientRect().left < window.innerWidth * 0.4)[0]
-  if (toggle === undefined) return null
-  const before = toggle.getAttribute('aria-expanded')
-  toggle.click()
-  return before
+  // The FIRST VISIBLE section: in an N-ctx window the DOM also holds inactive
+  // views (hidden by visibility: hidden), and folding one of those would judge
+  // a view the user cannot see.
+  const section = [...document.querySelectorAll('[data-chamber-section]')]
+    .find(el => window.getComputedStyle(el).visibility !== 'hidden') ?? null
+  if (section === null) return { found: false }
+  const all = [...document.querySelectorAll('button')]
+  const control = [...section.querySelectorAll('button[aria-expanded]')]
+    .filter(visible)
+    .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)[0]
+  const rect = section.getBoundingClientRect()
+  const controlRect = control === undefined ? null : control.getBoundingClientRect()
+  return {
+    found: true,
+    expanded: control === undefined ? null : control.getAttribute('aria-expanded') === 'true',
+    foldIndex: control === undefined ? null : all.indexOf(control),
+    // Identity of the control, so the click can be addressed by DESCRIPTOR
+    // (clickButtonAt) instead of trusting a DOM index across two CDP calls.
+    control: control === undefined ? null : {
+      ariaLabel: control.getAttribute('aria-label'),
+      left: Math.round(controlRect.left), top: Math.round(controlRect.top),
+      width: Math.round(controlRect.width), height: Math.round(controlRect.height),
+    },
+    height: Math.round(rect.height),
+    rows: section.querySelectorAll('[data-chamber-row]').length,
+    sections: document.querySelectorAll('[data-chamber-section]').length,
+  }
+})()`
+
+/**
+ * Click the control the PURE picker chose, addressed by IDENTITY: the DOM index
+ * is only a hint. If the page re-rendered between the facts call and this one
+ * (a session event inserts a row, a poll commits), the element at that index is
+ * some OTHER button — possibly a mutating one. So the page verifies the element
+ * at the index against the expected descriptor, re-locates the control by
+ * descriptor when it drifted, and clicks nothing when it cannot find it (the
+ * leg then fails on the effect it never produced).
+ *
+ * Remembering the clicked element is what keeps the RESTORE click on the same
+ * node: re-running a selector after the state changed is how the old leg's
+ * "restore" step clicked the rail's settings seat and opened the settings dialog.
+ * @param index - descriptor index from the facts dump (a hint only).
+ * @param expected - descriptor `{ ariaLabel, left, top }` of the chosen control.
+ * @returns `{ clicked, drifted, identity }`.
+ */
+export function clickButtonAt(index, expected) {
+  return `(() => {
+    const wanted = ${JSON.stringify(expected ?? null)}
+    if (wanted === null) return { clicked: false, drifted: false, identity: null }
+    const all = [...document.querySelectorAll('button')]
+    const near = (value, want) => Math.abs(value - want) <= 2
+    const matches = el => {
+      const rect = el.getBoundingClientRect()
+      return (el.getAttribute('aria-label') ?? null) === (wanted.ariaLabel ?? null)
+        && near(Math.round(rect.left), wanted.left) && near(Math.round(rect.top), wanted.top)
+    }
+    let el = all[${index}]
+    let drifted = false
+    if (el === undefined || !matches(el)) {
+      drifted = true
+      el = all.find(node => matches(node))
+    }
+    if (el === undefined) return { clicked: false, drifted: drifted, identity: null }
+    const rect = el.getBoundingClientRect()
+    window.__dshGuiAcceptanceClicked = el
+    const identity = {
+      ariaLabel: el.getAttribute('aria-label'),
+      cls: (el.className || '').toString().slice(0, 80),
+      left: Math.round(rect.left), top: Math.round(rect.top),
+      width: Math.round(rect.width), height: Math.round(rect.height),
+    }
+    el.click()
+    return { clicked: true, drifted: drifted, identity: identity }
+  })()`
+}
+
+/** The restore click: the element the leg clicked before, never a re-scan. */
+export const CLICK_STASHED_BUTTON = `(() => {
+  const el = window.__dshGuiAcceptanceClicked
+  if (el === undefined || el === null || el.isConnected === false) return { clicked: false, drifted: false, identity: null }
+  const rect = el.getBoundingClientRect()
+  const identity = {
+    ariaLabel: el.getAttribute('aria-label'),
+    cls: (el.className || '').toString().slice(0, 80),
+    left: Math.round(rect.left), top: Math.round(rect.top),
+    width: Math.round(rect.width), height: Math.round(rect.height),
+  }
+  el.click()
+  return { clicked: true, drifted: false, identity: identity }
 })()`
 
 
@@ -289,6 +442,9 @@ const RESTORE_VISIBILITY = `(() => { delete document.visibilityState; return doc
  */
 export async function runWalkthrough({
   cdpPort = 9333, outDir = '.tmp/gui-acceptance', settleMs = 1_500, advanceOnboarding = false, requireHover = false,
+  // Legs that WRITE state (the source-section fold persists `sourceFolded`) are
+  // allowed only on a throwaway instance, exactly like advancing the wizard.
+  allowPersistentWrites = false,
 } = {}) {
   const rec = createRecorder()
   const shots = path.join(outDir, 'shots')
@@ -348,21 +504,93 @@ export async function runWalkthrough({
     rec.add('W-3', '首启模态（本次未出现）', null, '实例已有历史状态：非首启，跳过')
   }
 
-  // Sidebar collapse/expand through the aria-expanded rail toggle.
-  const toggleBefore = await session.evaluate(CLICK_SIDEBAR_TOGGLE)
-  await sleep(settleMs)
-  const collapsed = await session.evaluate(`(() => {
-    const el = [...document.querySelectorAll('button[aria-expanded]')].find(node => node.getBoundingClientRect().left < window.innerWidth * 0.4)
-    return el === undefined ? null : el.getAttribute('aria-expanded')
-  })()`)
-  await shot('03-sidebar-toggled')
-  if (toggleBefore === null || collapsed === null) {
-    rec.add('W-4', '侧栏折叠开关', null, '未找到 aria-expanded 导轨开关：请目检（截图见 03-sidebar-toggled.png）')
+  // W-4: sidebar rail collapse/expand — located STRUCTURALLY (the pure
+  // `pickRailToggle`) and judged by the frame's own `[data-sidebar-collapsed]`
+  // contract. See the file header: the old "first aria-expanded in the left
+  // half" pick took the source-section fold and passed while the sidebar never
+  // moved.
+  const W4_TITLE = '侧栏 rail 折叠/展开（[data-sidebar-collapsed] 效果锚定）'
+  const railPrefsBefore = await session.evaluate(VIEW_PREFS)
+  const railBefore = await session.evaluate(DOM_FACTS)
+  const railPick = pickRailToggle(railBefore.buttons, { viewportWidth: railBefore.viewport.width })
+  // A shell that never mounted already failed W-1: say so rather than leaving
+  // the reader with two reds that look unrelated.
+  const shellNote = railBefore.shells.length === 0 ? '壳未挂载（见 W-1）' : ''
+  let railVerdict
+  if (!railPick.ok) {
+    railVerdict = railToggleVerdict({ pick: railPick, before: railFactsSnapshot(railBefore), note: shellNote })
+    await shot('03-sidebar-toggled')
   } else {
-    rec.add('W-4', '侧栏折叠/展开切换', toggleBefore !== collapsed, `aria-expanded ${toggleBefore} → ${collapsed}`)
-    await session.evaluate(CLICK_SIDEBAR_TOGGLE)
+    const railClick = await session.evaluate(clickButtonAt(railPick.picked.index, railPick.picked))
     await sleep(settleMs)
+    const railAfter = await session.evaluate(DOM_FACTS)
+    const railPrefsAfter = await session.evaluate(VIEW_PREFS)
+    await shot('03-sidebar-toggled')
+    // Restore click = the SAME element. Only if React dropped it do we re-locate
+    // through the same policy — and the effect assertion still catches a wrong
+    // pick, so the fallback cannot turn into a second false green.
+    let railRestore = await session.evaluate(CLICK_STASHED_BUTTON)
+    let restoredVia = 'stash'
+    if (railRestore.clicked !== true) {
+      const rePick = pickRailToggle(railAfter.buttons, { viewportWidth: railAfter.viewport.width })
+      railRestore = rePick.ok
+        ? await session.evaluate(clickButtonAt(rePick.picked.index, rePick.picked))
+        : { clicked: false, drifted: false, identity: null }
+      restoredVia = rePick.ok ? 'rescan' : 'none'
+    }
+    await sleep(settleMs)
+    const railRestored = await session.evaluate(DOM_FACTS)
+    const railPrefsRestored = await session.evaluate(VIEW_PREFS)
     await shot('03b-sidebar-restored')
+    const clickNote = railClick.clicked === true ? shellNote : [shellNote, '点击未落下（选中控件已不在 DOM）'].filter(Boolean).join('；')
+    railVerdict = railToggleVerdict({
+      pick: railPick, identity: railClick.identity, drift: railClick.drifted,
+      before: railFactsSnapshot(railBefore), after: railFactsSnapshot(railAfter),
+      restored: railFactsSnapshot(railRestored), restoredVia,
+      prefs: { before: railPrefsBefore, after: railPrefsAfter, restored: railPrefsRestored },
+      note: clickNote,
+    })
+  }
+  rec.add('W-4', W4_TITLE, railVerdict.ok, railVerdict.evidence)
+
+  // W-4a: source-section fold (design 06 §2.4) — the control the old W-4
+  // selector hit by accident, kept as its own leg with §2.4's own criterion
+  // (the collapsed LIST must be visible in the geometry, not just the
+  // attribute). It writes the persisted `sourceFolded` preference, so it runs
+  // only on a throwaway instance — the same rule as the first-run wizard.
+  const foldStart = await session.evaluate(SOURCE_FOLD_FACTS)
+  if (!foldStart.found) {
+    rec.add('W-4a', '来源级收拢（来源节折叠）', null, '实例里没有 [data-chamber-section]：无可收拢的来源节（见 W-2）')
+  } else if (!allowPersistentWrites) {
+    rec.add('W-4a', '来源级收拢（来源节折叠）', null,
+      '未执行：本腿写入持久化偏好 sourceFolded（design 06 §3.1），只允许在一次性实例（--dev）上跑；--attach 面向真实状态')
+  } else {
+    // Normalize first: a previous run may have left the source folded.
+    if (foldStart.expanded === false && foldStart.foldIndex !== null) {
+      await session.evaluate(clickButtonAt(foldStart.foldIndex, foldStart.control))
+      await sleep(settleMs)
+    }
+    const foldBefore = await session.evaluate(SOURCE_FOLD_FACTS)
+    // Read the stored preference AFTER normalisation: the round trip below must
+    // leave it exactly as it found it (design 06 §3.1).
+    const foldPrefsBefore = await session.evaluate(VIEW_PREFS)
+    const foldClick = foldBefore.foldIndex === null
+      ? { clicked: false, drifted: false, identity: null }
+      : await session.evaluate(clickButtonAt(foldBefore.foldIndex, foldBefore.control))
+    await sleep(settleMs)
+    const foldAfter = await session.evaluate(SOURCE_FOLD_FACTS)
+    await shot('03c-source-folded')
+    const foldRestore = await session.evaluate(CLICK_STASHED_BUTTON)
+    await sleep(settleMs)
+    const foldRestored = await session.evaluate(SOURCE_FOLD_FACTS)
+    const foldPrefsAfter = await session.evaluate(VIEW_PREFS)
+    await shot('03d-source-restored')
+    const foldVerdict = sourceFoldVerdict({
+      executed: true, identity: foldClick.identity, drift: foldClick.drifted,
+      before: foldBefore, after: foldAfter, restored: foldRestored,
+      prefs: { before: foldPrefsBefore, after: foldPrefsAfter },
+    })
+    rec.add('W-4a', '来源级收拢（来源节折叠）', foldVerdict.ok, foldVerdict.evidence)
   }
 
   // Row hover card (design 06 §7, id W-4b): identity-anchored, four legs.
