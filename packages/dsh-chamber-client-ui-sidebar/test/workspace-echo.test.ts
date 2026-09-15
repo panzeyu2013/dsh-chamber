@@ -11,8 +11,9 @@
  * retirement, TTL) retires or patches the entry. Identity preservation is
  * checked explicitly — the projection publish is signature-gated, and a
  * needlessly rebuilt aggregate would drive a full sidebar re-render per derive.
- * The last case is a source-text contract for the two publishes the sidebar
- * owns (SidebarRoot.tsx cannot be imported by a node test).
+ * The last case is a source-text contract for the single funnel that publishes
+ * the facts (SidebarRoot.tsx and the Git coordinator cannot be imported by a
+ * node test): per-call-site publishing is the failure mode the funnel removes.
  */
 
 import { test } from 'node:test'
@@ -74,6 +75,15 @@ test('recordPendingWorkspace: records the host id with a path-basename title', (
 test('recordPendingWorkspace: the title follows the shared basename rule (both separators, design 23)', () => {
   const ledger = recordPendingWorkspace({}, 'ssh-b', { workspaceId: 'w1', path: 'C:\\Users\\u\\proj\\' }, 0)
   assert.equal(ledger['ssh-b']?.[0]?.title, 'proj')
+})
+
+test('recordPendingWorkspace: a producer title hint wins over the path basename', () => {
+  // Git adopt 随后会把宿主标题改成分支名；标题提示让回声行生来就是最终标签
+  // （否则先用 basename 出生、几个 RPC 之后再翻转）。
+  const hinted = recordPendingWorkspace({}, 'ssh-b', { workspaceId: 'w1', path: '/p/feature-dir', title: 'feature/x' }, 1)
+  assert.equal(hinted['ssh-b']?.[0]?.title, 'feature/x')
+  const plain = recordPendingWorkspace({}, 'ssh-b', { workspaceId: 'w1', path: '/p/feature-dir' }, 1)
+  assert.equal(plain['ssh-b']?.[0]?.title, 'feature-dir', 'no hint = the path-basename rule')
 })
 
 test('recordPendingWorkspace: an identical re-record refreshes the TTL anchor, a changed id for the same path replaces in place', () => {
@@ -175,6 +185,49 @@ test('withWorkspaceEcho: a brand-new workspace appends a real wire row at the ta
   assert.deepEqual(next.workspaces[1]?.sessionIds, [], 'no sessions yet: the row is legitimately empty')
 })
 
+test('withWorkspaceEcho: an anchored creation lands right after its anchor, never at the tail', () => {
+  // 2026-12 第二入口（Git worktree create）：宿主把新 worktree 摆在其主 checkout
+  // 之后（coordinator 的 insertWorkspaceBefore），投影必须同序——否则该行先出现
+  // 在列表末尾、挂载收敛时再跳上去；design 08 §3.3 的连续家族不变式正是按
+  // 渲染序成立的（拖拽裁决器读它）。
+  const base = aggregate([realWorkspace('main', '/repo'), realWorkspace('other', '/other')])
+  const ledger = recordPendingWorkspace({}, 'ssh-b', { workspaceId: 'wt', path: '/wt/feat', afterWorkspaceId: 'main' }, 1_000)
+  const next = withWorkspaceEcho(base, ledger['ssh-b'])
+  assert.deepEqual(next.workspaces.map(row => row.workspaceId), ['main', 'wt', 'other'])
+})
+
+test('withWorkspaceEcho: repeated anchors keep ledger order, an unknown anchor degrades to the tail', () => {
+  let ledger = recordPendingWorkspace({}, 'ssh-b', { workspaceId: 'wt1', path: '/wt/a', afterWorkspaceId: 'main' }, 1)
+  ledger = recordPendingWorkspace(ledger, 'ssh-b', { workspaceId: 'wt2', path: '/wt/b', afterWorkspaceId: 'main' }, 2)
+  const ordered = withWorkspaceEcho(
+    aggregate([realWorkspace('main', '/repo'), realWorkspace('other', '/other')]),
+    ledger['ssh-b'],
+  )
+  assert.deepEqual(ordered.workspaces.map(row => row.workspaceId), ['main', 'wt1', 'wt2', 'other'])
+  const orphan = recordPendingWorkspace({}, 'ssh-b', { workspaceId: 'wt3', path: '/wt/c', afterWorkspaceId: 'gone' }, 3)
+  const fallback = withWorkspaceEcho(aggregate([realWorkspace('main', '/repo')]), orphan['ssh-b'])
+  assert.deepEqual(fallback.workspaces.map(row => row.workspaceId), ['main', 'wt3'], 'an unknown anchor must not drop the row')
+})
+
+test('withWorkspaceEcho: interleaved anchors place each block after its own row', () => {
+  // 真机可达形态：同一来源有两个仓库，用户交替给各自的主 checkout 新建 worktree。
+  // 旧实现用"上次插入下标"做游标，另一次插入会把游标顶偏，第三个条目因此落到第
+  // 一个条目之前（顺序错乱）。这里钉住：每个锚点独立定位、块内保持账本序。
+  const base = aggregate([realWorkspace('main-a', '/repo-a'), realWorkspace('main-b', '/repo-b')])
+  let ledger = recordPendingWorkspace({}, 'ssh-b', { workspaceId: 'e1', path: '/a/1', afterWorkspaceId: 'main-b' }, 1)
+  ledger = recordPendingWorkspace(ledger, 'ssh-b', { workspaceId: 'e2', path: '/b/2', afterWorkspaceId: 'main-a' }, 2)
+  ledger = recordPendingWorkspace(ledger, 'ssh-b', { workspaceId: 'e3', path: '/a/3', afterWorkspaceId: 'main-b' }, 3)
+  const next = withWorkspaceEcho(base, ledger['ssh-b'])
+  assert.deepEqual(next.workspaces.map(row => row.workspaceId), ['main-a', 'e2', 'main-b', 'e1', 'e3'])
+})
+
+test('recordPendingWorkspace: the anchor is sparse — an anchor-less create keeps the pre-anchor entry shape', () => {
+  const plain = recordPendingWorkspace({}, 'ssh-b', { workspaceId: 'w1', path: '/p/a' }, 1)
+  assert.equal('afterWorkspaceId' in (plain['ssh-b']?.[0] ?? {}), false)
+  const anchored = recordPendingWorkspace({}, 'ssh-b', { workspaceId: 'w1', path: '/p/a', afterWorkspaceId: 'main' }, 1)
+  assert.equal(anchored['ssh-b']?.[0]?.afterWorkspaceId, 'main')
+})
+
 test('withWorkspaceEcho: a same-path synthetic group is REPLACED in place by the real id (never two rows)', () => {
   const base = aggregate([syntheticGroup('/p/a', ['s1']), realWorkspace('w9', '/p/other')])
   const next = withWorkspaceEcho(base, [pending('w1', '/p/a')])
@@ -207,6 +260,21 @@ test('withWorkspaceEcho: a session-carrying aggregate keeps that session in the 
     false,
     'no 未分组 bucket: the membership survived the identity swap',
   )
+})
+
+test('withWorkspaceEcho: synthetic replacement outranks the anchor (the directory never jumps)', () => {
+  // 两条位置规则同时命中时的优先级：同 path 合成组被**原位替换**（design 05
+  // §2.2.1 既有规则，目录不跳动），锚点只对"新增行"生效。测试里合成组刻意放在
+  // 尾部：锚点若生效，wt 会插到 main 之后——期望它在原位（other 之后）。
+  const base = aggregate([
+    realWorkspace('main', '/repo'),
+    realWorkspace('other', '/other'),
+    syntheticGroup('/wt/feat', ['s1']),
+  ])
+  const ledger = recordPendingWorkspace({}, 'ssh-b', { workspaceId: 'wt', path: '/wt/feat', afterWorkspaceId: 'main' }, 1_000)
+  const next = withWorkspaceEcho(base, ledger['ssh-b'])
+  assert.deepEqual(next.workspaces.map(row => row.workspaceId), ['main', 'other', 'wt'])
+  assert.deepEqual(next.workspaces[2]?.sessionIds, ['s1'], 'the replaced group keeps its members')
 })
 
 test('withWorkspaceEcho: canonical-path matching means a trailing separator cannot render the directory twice', () => {
@@ -355,33 +423,57 @@ test('integration: the rename fact patches the row the user sees before the sour
   assert.deepEqual(groups.map(group => group.title), ['项目 A'], 'the path basename is not re-derived over the rename')
 })
 
-test('wiring: SidebarRoot publishes both facts after the successful wire call, for the ROW own source', () => {
+test('wiring: the single funnel publishes every workspace fact right after its wire call', () => {
   // Source-text contract (the package's `probe-*.test.ts` / `panel-wiring.ts`
-  // precedent): SidebarRoot.tsx cannot be imported by a node test, and these
-  // two publishes are silent no-ops when they go missing — the pure helpers
-  // above would then never be called and the reviewed ghost/no-op bugs return.
-  // 2026-09-11 review S3.
+  // precedent): these publishes are silent no-ops when they go missing — the
+  // pure helpers above would then never be called and the reviewed
+  // invisible-row/ghost/no-op bugs return. 2026-09-11 review S3.
+  //
+  // 2026-12 收口（第二入口真机反馈）：事实不再由每个调用点各发一次，而是由
+  // shared/workspace-mutations.ts 的单一出口随 wire 调用发布。逐点发布正是
+  // Git worktree create/adopt sage 漏发、行要等用户点开那个服务器才出现的成因。
+  const funnel = readFileSync(new URL('../src/shared/workspace-mutations.ts', import.meta.url), 'utf8')
+  const code = funnel.replace(/\s+/g, ' ')
+  const createWire = code.indexOf('await createWorkspace(getInstanceClient(sourceId), path)')
+  const decorate = code.indexOf('try { options.beforePublish(created) } catch (error) {')
+  const createdFact = code.indexOf('chamberBridge.reportWorkspaceCreated({')
+  assert.notEqual(createWire, -1, 'the create funnel performs the wire call')
+  assert.notEqual(decorate, -1, 'the pre-publish decoration hook must stay (Git worktree shape facts, abort-proof)')
+  assert.ok(createdFact > decorate, 'decorations run BEFORE the fact: the echoed row must be born in its final shape')
+  assert.ok(createdFact > createWire, 'the create fact is published only after the host accepted the create')
+  assert.match(code, /afterWorkspaceId: options\.afterWorkspaceId/, 'the placement anchor rides the fact (Git worktree sits below its main checkout)')
+  const deleteWire = code.indexOf('await deleteWorkspace(getInstanceClient(sourceId), workspaceId)')
+  const removedFact = code.indexOf('chamberBridge.reportWorkspaceRemoved({ sourceId, workspaceId, path })')
+  assert.notEqual(deleteWire, -1, 'the delete funnel performs the wire call')
+  assert.ok(removedFact > deleteWire, 'the removal fact is published only after the host accepted the delete')
+  const renameWire = code.indexOf('await renameWorkspace(getInstanceClient(sourceId), workspaceId, title)')
+  const renamedFact = code.indexOf('chamberBridge.reportWorkspaceRenamed({ sourceId, workspaceId, title })')
+  assert.notEqual(renameWire, -1, 'the rename funnel performs the wire call')
+  assert.ok(renamedFact > renameWire, 'the rename fact is published only after the host accepted the rename')
+
+  // The sidebar's three call sites go THROUGH the funnel and publish nothing
+  // themselves — one producer per fact, so no future entry point can forget.
   // 2026-09-11 upstream-alignment T2b: the delete call lives in the ACCEPTED
   // in-app confirm (the armed subject is `deleteTarget`, addressed through its
-  // own `target` fields) — the ordering contract below is unchanged, and the
-  // extra assertion pins that nothing deletes before the user accepts.
-  const source = readFileSync(new URL('../src/client/SidebarRoot.tsx', import.meta.url), 'utf8')
-  const code = source.replace(/\s+/g, ' ')
-  const acceptAt = code.indexOf('const confirmDeleteWorkspace = ()')
-  const deleteAt = code.indexOf('await deleteWorkspace(getInstanceClient(target.sourceId), target.workspaceId)')
-  const removedAt = code.indexOf('chamberBridge.reportWorkspaceRemoved({ sourceId: target.sourceId, workspaceId: target.workspaceId, path })')
-  const refreshAfterDelete = code.indexOf('chamberBridge.requestRefresh(target.sourceId)', removedAt)
+  // own `target` fields) — the ordering contract is unchanged, and the extra
+  // assertion pins that nothing deletes before the user accepts.
+  const sidebar = readFileSync(new URL('../src/client/SidebarRoot.tsx', import.meta.url), 'utf8')
+  const root = sidebar.replace(/\s+/g, ' ')
+  const acceptAt = root.indexOf('const confirmDeleteWorkspace = ()')
+  const deleteAt = root.indexOf('await deleteWorkspaceForSource(target.sourceId, target.workspaceId, path)')
   assert.notEqual(acceptAt, -1, 'the accepted-confirm handler must exist')
-  assert.notEqual(deleteAt, -1, 'the delete wire call must exist')
+  assert.notEqual(deleteAt, -1, 'the delete must go through the funnel')
   assert.ok(deleteAt > acceptAt, 'the delete must run only inside the accepted confirm (never at arm time)')
-  assert.ok(removedAt > deleteAt, 'the removal fact is published only after the host accepted the delete')
-  assert.ok(refreshAfterDelete > removedAt, 'the refresh that owns every other row stays')
-  const renameAt = code.indexOf('await renameWorkspace(client, target.id, target.value)')
-  const renamedAt = code.indexOf('chamberBridge.reportWorkspaceRenamed({ sourceId: target.sourceId, workspaceId: target.id, title: target.value, })')
-  assert.notEqual(renameAt, -1, 'the workspace rename wire call must exist')
-  assert.ok(renamedAt > renameAt, 'the rename fact is published only after the host accepted the rename')
   assert.ok(
-    code.indexOf('chamberBridge.requestRefresh(target.sourceId)', renamedAt) > renamedAt,
+    root.indexOf('chamberBridge.requestRefresh(target.sourceId)', deleteAt) > deleteAt,
+    'the refresh that owns every other row stays',
+  )
+  const renameAt = root.indexOf('await renameWorkspaceForSource(target.sourceId, target.id, target.value)')
+  assert.notEqual(renameAt, -1, 'the workspace rename must go through the funnel')
+  assert.ok(
+    root.indexOf('chamberBridge.requestRefresh(target.sourceId)', renameAt) > renameAt,
     'the shared rename path keeps its refresh for both kinds',
   )
+  assert.notEqual(root.indexOf('createWorkspaceForSource(sourceId, path)'), -1, 'the add-workspace dialog must go through the funnel')
+  assert.doesNotMatch(root, /chamberBridge\.reportWorkspace(Created|Removed|Renamed)/, 'no call site publishes the facts itself')
 })

@@ -115,7 +115,10 @@ test('T2b: workspace delete confirm is the in-app Modal, with upstream chrome', 
     normalize(rootCode).includes('runActionWithOutcome(`${target.sourceId}/workspace/${target.workspaceId}/delete`, async () => {'),
     'the accepted confirm must run the same keyed delete action',
   )
-  assert.ok(rootCode.includes('chamberBridge.reportWorkspaceRemoved({ sourceId: target.sourceId, workspaceId: target.workspaceId, path })'), 'the workspace-echo withdraw fact must survive')
+  // 2026-12 收口：撤销回声事实由唯一出口 shared/workspace-mutations.ts 随 wire
+  // 调用发布，侧栏这一行只需证明它走的是出口而不是裸 wire 调用（否则就是
+  // "第二个生产者忘了上报"那个失败模式）。
+  assert.ok(rootCode.includes('await deleteWorkspaceForSource(target.sourceId, target.workspaceId, path)'), 'the workspace-echo withdraw fact must survive (published by the single funnel)')
   assert.ok(rootCode.includes('chamberBridge.requestRefresh(target.sourceId)'), 'the post-delete refresh must survive')
   // Modal chrome (upstream WorkspaceBrowser.tsx:1393-1418): title + description
   // + outline cancel/destructive pair + a role="status" pending line + a

@@ -213,20 +213,42 @@ export interface OpenSessionOutcome extends OpenSessionRequest {
 }
 
 /**
- * One successful workspace creation issued from the sidebar for a source whose
- * shell may not be mounted (design 05 §2.2 revision 2026-12). The sidebar owns
- * the directory-browser flow and therefore the ONLY trustworthy "this
- * workspace now exists on that host" fact available without a shell: the
- * unary `workspace.create` result. It publishes that fact here so the App
- * layer can echo the row into the projection immediately
- * (shared/workspace-echo.ts) while the authoritative `workspace/follow`
- * baseline converges later — for an unmounted source the unary fallback cannot
- * express an empty workspace at all (no session carries its cwd yet).
+ * One successful in-app workspace creation for a source whose shell may not be
+ * mounted (design 05 §2.2 revision 2026-12). The unary `workspace.create`
+ * result is the ONLY trustworthy "this workspace now exists on that host" fact
+ * available without a shell: the App layer echoes the row into the projection
+ * immediately (shared/workspace-echo.ts) while the authoritative
+ * `workspace/follow` baseline converges later — for an unmounted source the
+ * unary fallback cannot express an empty workspace at all (no session carries
+ * its cwd yet).
+ *
+ * Every in-app producer goes through shared/workspace-mutations.ts (the single
+ * funnel: the sidebar's own dialogs AND the Git worktree plugin's create/adopt
+ * sagas). Publishing per call site is the failure mode this funnel removes —
+ * the Git path was the second entry point of the 2026-12 field report.
  */
 export interface WorkspaceCreatedFact {
   sourceId: string
   workspaceId: string
   path: string
+  /**
+   * Optional placement anchor (2026-12 revision, second entry point): the host
+   * workspace id this creation sits immediately AFTER in the projection — the
+   * Git plugin registers a new worktree right below its main checkout
+   * (workspace.insertBefore) while the projection would otherwise append the
+   * echoed row at the tail and make it jump once the source mounts. Absent =
+   * append at the tail (every sidebar-issued creation, whose host order is
+   * "last created is last").
+   */
+  afterWorkspaceId?: string
+  /**
+   * Optional label this creation INTENDS for the row (2026-12 review): the Git
+   * plugin's adopt path renames the workspace to the branch right after the
+   * saga, and without the hint the echoed row would be born with the path
+   * basename and flip a few RPCs later. Absent = the ledger's path-basename
+   * rule; the mounted follow baseline still wins over both.
+   */
+  title?: string
 }
 
 /**
@@ -467,11 +489,12 @@ export const chamberBridge = {
   },
 
   /**
-   * Sidebar call after a successful `workspace.create`: publish the host
-   * workspace identity so the App layer can echo the row into that source's
-   * projection without waiting for a mount (`withWorkspaceEcho`). The App
-   * layer remains the only owner of the projection; this channel is a
-   * one-way fact, never a request to mutate the host.
+   * Call after a successful `workspace.create` (single funnel:
+   * shared/workspace-mutations.ts): publish the host workspace identity so the
+   * App layer can echo the row into that source's projection without waiting
+   * for a mount (`withWorkspaceEcho`). The App layer remains the only owner of
+   * the projection; this channel is a one-way fact, never a request to mutate
+   * the host.
    */
   reportWorkspaceCreated(fact: WorkspaceCreatedFact): void {
     for (const listener of [...workspaceCreatedListeners]) listener(fact)

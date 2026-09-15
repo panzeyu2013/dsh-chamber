@@ -3056,8 +3056,10 @@ export default function App() {
 
   /**
    * 工作区创建回声（2026-12，design 05 §2.2 修订；真机问题 2）：
-   * 侧栏在建好工作区后上报宿主 workspaceId，App 记入渲染端账本并把该行并入
-   * 投影（deriveServers 的单一汇合点）。权威收敛点只有两个：
+   * 应用内**任一**工作区创建（唯一出口 workspace-mutations.ts：侧栏对话框与
+   * Git worktree 插件的 create/adopt/recovery 同走它）建好后上报宿主
+   * workspaceId，App 记入渲染端账本并把该行并入投影（deriveServers 的单一
+   * 汇合点）。权威收敛点只有两个：
    * - 该来源挂载壳的 push 列出同一 workspaceId / 同一路径的真实 id ⇒ 账本条目
    *   立即清除（reconcilePendingWorkspaces，见 onInstanceSnapshot）；
    * - 来源离开注册表 / TTL 到期 ⇒ 随生命周期收敛。
@@ -3072,7 +3074,17 @@ export default function App() {
       if (owner === null) return
       const now = Date.now()
       let ledger = sweepPendingWorkspaces(workspaceEchoRef.current, now)
-      ledger = recordPendingWorkspace(ledger, sourceId, { workspaceId: fact.workspaceId, path: fact.path }, now)
+      ledger = recordPendingWorkspace(ledger, sourceId, {
+        workspaceId: fact.workspaceId,
+        path: fact.path,
+        // Placement anchor（2026-12 第二入口）：Git 插件在宿主上把新 worktree
+        // 摆在其主 checkout 之后，回声行也必须渲染在那个位置，否则会先出现在
+        // 列表末尾、挂载收敛时再跳上去。缺省（其它创建入口）= 追加到尾部。
+        ...(fact.afterWorkspaceId === undefined ? {} : { afterWorkspaceId: fact.afterWorkspaceId }),
+        // 创作意图标题（Git adopt 的分支名，2026-12 复审）：回声行生来就是最终
+        // 标签，不必先显示路径 basename、等那次 rename 落地再翻转。
+        ...(fact.title === undefined ? {} : { title: fact.title }),
+      }, now)
       if (ledger !== workspaceEchoRef.current) updateWorkspaceEcho(ledger)
     })
   }, [updateWorkspaceEcho])

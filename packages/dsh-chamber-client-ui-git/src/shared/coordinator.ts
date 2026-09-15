@@ -7,8 +7,9 @@
  * by switching shells, and recovery remains visible after a view switch.
  */
 import {
-  archiveSession, chamberBridge, createSession, createWorkspace, deleteWorkspace,
-  insertWorkspaceBefore, renameWorkspace,
+  archiveSession, chamberBridge, createSession,
+  createWorkspaceForSource, deleteWorkspaceForSource, renameWorkspaceForSource,
+  insertWorkspaceBefore,
   clearWorkspaceGitFlags, getSourceRepoLayouts, getWorkspaceGitFlag, markSourceGitFlagsLoaded, retainSourceWorkspaceFlags, setSourceRepoLayouts, setWorkspaceGitFlag,
   fetchInstanceSnapshot, getInstanceClient, InstanceRpcError,
 } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
@@ -24,6 +25,7 @@ import {
   GitSagaError, isProvenPreMutationRefusal, recoveryForFailure, runAdoptSessionSaga, runCreateSaga, runPreRemoveArchive,
   runRemoveSaga, runRollbackRecovery, runWorkspaceAdoptRecovery, runWorkspaceDeleteRecovery,
 } from './saga.ts'
+import type { WorkspaceCreationPlacement } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import type {
   GitBusyState, GitRecovery, GitSourceError, GitSourceState, GitWorktreeInfo, GitWorktreeSnapshot, PreviewCreateInput, PreviewCreateResult, RemoveWorktreeResult, UnregisteredWorktreeInfo,
 } from './types.ts'
@@ -332,15 +334,43 @@ function finishMutation(sourceId: string): void {
   void refreshSource(sourceId, true)
 }
 
+/**
+ * 乐观 worktree 形态 + 未注册块收敛，**必须在回声事实发布之前**跑
+ * （`beforePublish`，见 workspace-mutations.ts）：事实一到，App 立刻重派生投影，
+ * 此刻该行必须已经是 worktree 形态（分支图标 / 无 kebab / 删除动作），同一路径
+ * 也不能还挂着一条"未注册工作树"行。两个 store 的写入都早于那次派生，因此不再
+ * 依赖"两个 React 更新落在同一批次"这种调度层假设。
+ */
+function decorateWorktreeWorkspace(
+  sourceId: string,
+  workspaceId: string,
+  facts: { repoKey: string | undefined; mainWorkspaceId?: string | undefined; worktreeId?: string },
+): void {
+  if (facts.repoKey === undefined) return
+  setWorkspaceGitFlag(sourceId, workspaceId, {
+    isWorktree: true,
+    isMain: false,
+    repoKey: facts.repoKey,
+    ...(facts.mainWorkspaceId === undefined ? {} : { mainWorkspaceId: facts.mainWorkspaceId }),
+  })
+  // 未注册块收敛（adopt 才有：新 worktree 从未进过该块）。
+  if (facts.worktreeId === undefined) return
+  setSourceRepoLayouts(sourceId, getSourceRepoLayouts(sourceId).map(layout => layout.repoKey === facts.repoKey
+    ? { ...layout, unregistered: layout.unregistered.filter(info => info.worktreeId !== facts.worktreeId) }
+    : layout))
+}
+
 /** Best-effort post-adopt placement/identity (review 2026-08):
  *  - `workspace.insertBefore` moves the new workspace right after its main
  *    checkout (the registry PREPENDS by default, leaving the worktree
  *    stranded at the list head — "not associated with the original
  *    workspace");
  *  - the title derives from the branch (the directory basename can equal
- *    the main checkout's name);
- *  - the flag + repo layout publish optimistically so the stale unregistered
- *    "+" row cannot mint a second session before the git refresh lands.
+ *    the main checkout's name).
+ *  Flag + repo layout are NOT here any more: they ride the create funnel's
+ *  `beforePublish` (see decorateWorktreeWorkspace), so the adopted row's first
+ *  projected frame is already the real worktree row and the unregistered row is
+ *  gone in the same derive pass.
  */
 /** The workspace that currently follows `mainWorkspaceId` in the rendered
  *  order — the `insertWorkspaceBefore` anchor that lands a new/adopted
@@ -361,43 +391,30 @@ function workspaceAfterMain(sourceId: string, mainWorkspaceId: string | undefine
 async function positionAdoptedWorkspace(
   sourceId: string,
   result: { workspaceId: string; path: string },
-  snapshot: GitWorktreeSnapshot,
-  known: GitWorktreeInfo,
+  mainWorkspaceId: string | undefined,
+  branch: string | null,
 ): Promise<void> {
-  const repo = snapshot.repos.find(candidate => candidate.worktrees.some(worktree => worktree.path === result.path))
-  const mainWorkspaceId = repo?.worktrees.find(worktree => worktree.isMain)?.workspaceId ?? undefined
-  const client = getInstanceClient(sourceId)
   // AWAITED (not fire-and-forget): the registry order must be correct BEFORE
   // the caller refreshes, so the adopted worktree does not first render at the
   // prepended head and only later jump below its main checkout.
   try {
-    await insertWorkspaceBefore(client, result.workspaceId, workspaceAfterMain(sourceId, mainWorkspaceId))
+    await insertWorkspaceBefore(
+      getInstanceClient(sourceId),
+      result.workspaceId,
+      workspaceAfterMain(sourceId, mainWorkspaceId),
+    )
   } catch (error) {
     console.error('[dsh-chamber] Git adopt workspace reposition failed (best-effort):', error)
   }
-  if (known.branch !== null) {
-    // AWAITED (best-effort) too: the workspace title must be in place before
-    // the caller's refresh, same as the order — otherwise the adopted row can
-    // briefly show the stale directory-name title before it flips to the
-    // branch name.
-    try {
-      await renameWorkspace(client, result.workspaceId, known.branch)
-    } catch (error) {
-      console.error('[dsh-chamber] Git adopt workspace rename failed (best-effort):', error)
-    }
-  }
-  if (repo !== undefined) {
-    // Optimistic flag + layout: the unregistered block stops offering "+"
-    // for this path immediately (the next git refresh confirms).
-    setWorkspaceGitFlag(sourceId, result.workspaceId, {
-      isWorktree: true,
-      isMain: false,
-      repoKey: repo.repoId,
-      ...(mainWorkspaceId === undefined ? {} : { mainWorkspaceId }),
-    })
-    setSourceRepoLayouts(sourceId, getSourceRepoLayouts(sourceId).map(layout => layout.repoKey === repo.repoId
-      ? { ...layout, unregistered: layout.unregistered.filter(info => info.worktreeId !== known.worktreeId) }
-      : layout))
+  if (branch === null) return
+  // AWAITED (best-effort) too: the workspace title must be in place before the
+  // caller's refresh, same as the order — otherwise the adopted row can
+  // briefly show the stale directory-name title before it flips to the branch
+  // name.
+  try {
+    await renameWorkspaceForSource(sourceId, result.workspaceId, branch)
+  } catch (error) {
+    console.error('[dsh-chamber] Git adopt workspace rename failed (best-effort):', error)
   }
 }
 
@@ -428,7 +445,18 @@ async function performCreateSaga(
     const result = await runCreateSaga({
       hostCreate: input => gitWorktreeApi.create(sourceId, input, preview),
       hostRollback: (input, expected) => gitWorktreeApi.rollbackCreate(sourceId, input, expected),
-      workspaceCreate: path => createWorkspace(getInstanceClient(sourceId), path),
+      // 2026-12（design 05 §2.2.1 第二入口）：workspace.create 必须走唯一出口，
+      // 否则这个 0 会话的工作区行在未挂载来源上没有任何读通道，只能等用户点开
+      // 那个服务器。位置锚点 = 本次创建的主 checkout（宿主上新 worktree 就摆在
+      // 它后面）；worktree flag 走 beforePublish——**事实发布之前**写好，因为 App
+      // 一收到事实就重派生投影，git 快照要等一次 RPC（见 decorateWorktreeWorkspace）。
+      workspaceCreate: path => createWorkspaceForSource(sourceId, path, {
+        ...(sourceWorkspaceId === undefined ? {} : { afterWorkspaceId: sourceWorkspaceId }),
+        beforePublish: created => decorateWorktreeWorkspace(sourceId, created.workspaceId, {
+          repoKey: preview.repoId,
+          ...(sourceWorkspaceId === undefined ? {} : { mainWorkspaceId: sourceWorkspaceId }),
+        }),
+      }),
       sessionCreate: (workspaceId, id) => createSession(getInstanceClient(sourceId), workspaceId, id),
       isAmbiguousHostFailure: isAmbiguousGitRpcFailure,
     }, preview, { operationId, sessionId }, {
@@ -476,6 +504,25 @@ export async function createFromPreview(
   ))
 }
 
+/** adopt 的宿主事实：位置锚点（`path` 所属仓库主 checkout 自己的 workspace id，
+ *  宿主把它摆在主 checkout 之后）+ 乐观装饰所需的仓库身份。仓库/主行未知时锚点
+ *  为空对象 = 回声行按原行为追加到尾部（不丢行）。 */
+interface AdoptPlacement {
+  placement: WorkspaceCreationPlacement
+  repoKey?: string
+  mainWorkspaceId?: string
+}
+
+function adoptPlacementOf(snapshot: GitWorktreeSnapshot, path: string): AdoptPlacement {
+  const repo = snapshot.repos.find(candidate => candidate.worktrees.some(worktree => worktree.path === path))
+  const mainWorkspaceId = repo?.worktrees.find(worktree => worktree.isMain)?.workspaceId ?? undefined
+  return {
+    placement: mainWorkspaceId === undefined ? {} : { afterWorkspaceId: mainWorkspaceId },
+    ...(repo === undefined ? {} : { repoKey: repo.repoId }),
+    ...(mainWorkspaceId === undefined ? {} : { mainWorkspaceId }),
+  }
+}
+
 /**
  * Create a new session in an EXISTING worktree (adopt-only, no Git mutation).
  * The workspace at `path` is registered or reused via workspace.create, then a
@@ -489,6 +536,9 @@ export async function createSessionHere(sourceId: string, path: string): Promise
     if (fresh.snapshot === undefined || fresh.sourceError !== undefined) {
       throw new Error(fresh.sourceError?.message ?? '无法取得最新 Git 工作树事实')
     }
+    // 锚点与装饰事实在这里（守卫之后、闭包之外）解析：`fresh.snapshot` 的窄化
+    // 不会跨进下面的回调（属性访问在闭包内重新放宽为 `| undefined`）。
+    const adopt = adoptPlacementOf(fresh.snapshot, path)
     const known = fresh.snapshot.repos.flatMap(repo => repo.worktrees).find(worktree => worktree.path === path)
     if (known === undefined) throw new Error('目标工作树不在当前来源拓扑中')
     // Re-check health against the FRESH snapshot: the UI button reflects an
@@ -496,7 +546,26 @@ export async function createSessionHere(sourceId: string, path: string): Promise
     if (!canTargetSession(known)) throw new Error('目标工作树不可用（目录缺失/无效/非 Git 仓库），不能作为会话目标')
     try {
       const result = await runAdoptSessionSaga({
-        workspaceCreate: targetPath => createWorkspace(getInstanceClient(sourceId), targetPath),
+        workspaceCreate: targetPath => createWorkspaceForSource(sourceId, targetPath, {
+          ...adopt.placement,
+          // adopt 随后会把宿主标题改成分支名（positionAdoptedWorkspace）：标题
+          // 作为创作意图随事实一起带上，否则回声行先用路径 basename 出生、几个
+          // RPC 之后才翻转。branch 为 null 时留给路径 basename 规则。
+          ...(known.branch === null ? {} : { title: known.branch }),
+          // adopt 的目标可能是未注册工作树：回声行与"未注册"行必须在同一次投影里
+          // 换手，且行首帧就是 worktree 形态——flag/layout 因此随事实同一续体发布。
+          // 主 checkout 例外：adopt 主行注册/复用的就是主行本身，写 isWorktree:true
+          // 会把它临时渲染成派生行（分支图标、无 kebab、带删除动作）——那是一条
+          // 既有缺陷，这里顺手挡掉。
+          beforePublish: created => {
+            if (known.isMain) return
+            decorateWorktreeWorkspace(sourceId, created.workspaceId, {
+              repoKey: adopt.repoKey,
+              ...(adopt.mainWorkspaceId === undefined ? {} : { mainWorkspaceId: adopt.mainWorkspaceId }),
+              worktreeId: known.worktreeId,
+            })
+          },
+        }),
         sessionCreate: (workspaceId, id) => createSession(getInstanceClient(sourceId), workspaceId, id),
       }, path, sessionId)
       setRecovery(sourceId, undefined)
@@ -506,7 +575,7 @@ export async function createSessionHere(sourceId: string, path: string): Promise
       // (the directory basename can equal the main's name). Both are
       // best-effort: a failure never rolls back the committed workspace.
       // AWAITED so the refresh below reads the corrected registry order.
-      await positionAdoptedWorkspace(sourceId, result, fresh.snapshot, known)
+      await positionAdoptedWorkspace(sourceId, result, adopt.mainWorkspaceId, known.branch)
       finishMutation(sourceId)
       requestOpenSession(sourceId, result.sessionId)
       return result.sessionId
@@ -556,7 +625,7 @@ async function performRemoveSaga(
         ...(request.deleteBranch === undefined ? {} : { deleteBranch: request.deleteBranch }),
         ...discardChanges,
       }, request.path),
-      workspaceDelete: id => deleteWorkspace(getInstanceClient(sourceId), id),
+      workspaceDelete: id => deleteWorkspaceForSource(sourceId, id, request.path),
       deleteBranch: request.deleteBranch,
       discardChanges: request.discardChanges,
       ambiguousRecovery: error => isAmbiguousGitRpcFailure(error) && !isDeterministicGitRejection(error)
@@ -741,7 +810,7 @@ export async function removeUnregisteredWorktree(
       await runRemoveSaga({
         hostRemove: () => gitWorktreeApi.remove(sourceId, input, target.path),
         verifyTerminalRemove: () => gitWorktreeApi.remove(sourceId, input, target.path),
-        workspaceDelete: id => deleteWorkspace(getInstanceClient(sourceId), id),
+        workspaceDelete: id => deleteWorkspaceForSource(sourceId, id, target.path),
         ambiguousRecovery: error => isAmbiguousGitRpcFailure(error) && !isDeterministicGitRejection(error)
           ? { kind: 'git-remove', ...input, message: errorText(error) }
           : undefined,
@@ -783,7 +852,9 @@ export async function retryRecovery(sourceId: string): Promise<void> {
           hostRollback: (operationId, expected) => (
             gitWorktreeApi.rollbackCreate(sourceId, { operationId }, expected)
           ),
-          workspaceCreate: path => createWorkspace(getInstanceClient(sourceId), path),
+          // recovery 路径随后会 requestOpenSession（切到该来源 ⇒ 挂载 ⇒ follow
+          // 基线），锚点收益有限，这里只保证事实不漏发。
+          workspaceCreate: path => createWorkspaceForSource(sourceId, path),
           sessionCreate: (workspaceId, sessionId) => createSession(getInstanceClient(sourceId), workspaceId, sessionId),
           isWorkspaceOwnershipConflict: error => (
             error instanceof GitWorktreeRpcError && error.code === 'rollback-has-workspace'
@@ -792,7 +863,7 @@ export async function retryRecovery(sourceId: string): Promise<void> {
         if (result.committed) requestOpenSession(sourceId, result.sessionId)
       } else if (recovery.kind === 'workspace-adopt' || recovery.kind === 'session-adopt') {
         const result = await runWorkspaceAdoptRecovery({
-          workspaceCreate: path => createWorkspace(getInstanceClient(sourceId), path),
+          workspaceCreate: path => createWorkspaceForSource(sourceId, path),
           sessionCreate: (workspaceId, sessionId) => createSession(getInstanceClient(sourceId), workspaceId, sessionId),
         }, recovery)
         requestOpenSession(sourceId, result.sessionId)
@@ -808,7 +879,7 @@ export async function retryRecovery(sourceId: string): Promise<void> {
             ...(recovery.deleteBranch === undefined ? {} : { deleteBranch: recovery.deleteBranch }),
             ...(recovery.discardChanges === true ? { discardChanges: true } : {}),
           }, recovery.path),
-          () => deleteWorkspace(getInstanceClient(sourceId), recovery.workspaceId),
+          () => deleteWorkspaceForSource(sourceId, recovery.workspaceId, recovery.path),
           error => error instanceof InstanceRpcError && error.code === 'workspace/not-found',
         )
       }

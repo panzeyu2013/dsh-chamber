@@ -380,6 +380,17 @@ preflight -> git-creating -> workspace-adopting -> session-creating
 - **创建永不提交会话**：`createSession: false` 显式传入；
   recovery 记录携带 `createSession` 标志，重试尊重原意图（无会话创建重试
   不建会话、不跳转）。existing tab 不得残留 new 模式的建议分支。
+- **创建后的可见性（design 05 §2.2.1 第二入口，2026-12）**：注册 workspace 的
+  unary 调用必须走 `shared/workspace-mutations.ts` 的唯一出口上报回声事实，并带
+  `afterWorkspaceId = 来源主 checkout` 的位置锚点；否则未挂载来源上的这个
+  **0 会话**工作区没有任何读通道（unary 兜底按会话 cwd 反推分组），行只能等用户
+  点开该服务器。worktree flag（`isWorktree`/`mainWorkspaceId`，与 §3.2 的行形态
+  同源）与 adopt 的未注册块收敛走唯一出口的 `beforePublish`——**事实发布之前**
+  写好，使回声行**首帧**就是 worktree 形态（分支图标、无 kebab、删除动作），不先
+  渲染成普通 workspace 再翻转；该顺序是契约而非优化（见 design 05 §2.2.1
+  「装饰先于事实」）。adopt 另带**标题提示**（`title = 分支名`）：宿主标题随后由
+  rename 写成该值，回声行因此生来就是最终标签（见 design 05 §2.2.1「标题提示」）。
+  git 快照轮询与 `workspaceKeyOf` 联动照旧。
 - **来源分支候选**：候选 = `sourceBranchChoices()`（纯函数在
   `packages/dsh-chamber-client-ui-git/src/shared/git-facts.ts`）——host 分支表
   原样放行，

@@ -174,8 +174,11 @@ The shell declares and renders the three holes the alpha.2 official
 This package owns the page-wide open-intent slot (`shared/open-intent.ts` — the
 same vite-shared singleton discipline as `pending-click.ts`, because the target
 instance's own ctx must read it too) together with the pure rules the App layer
-consumes, plus the workspace-echo ledger rules (`shared/workspace-echo.ts`) and
-their publish site (`client/SidebarRoot.tsx`). Two user-visible surfaces follow:
+consumes, plus the workspace-echo ledger rules (`shared/workspace-echo.ts`,
+placement anchors included) and their publish site (`shared/workspace-mutations.ts`
+— the single funnel every in-app workspace mutation goes through: the sidebar
+dialogs and the Git worktree plugin's create/adopt/recovery alike). Two
+user-visible surfaces follow:
 
 - **Intent gates.** A source with an in-flight open projects its `current` only
   when that current IS the requested session (`projectableCurrent`), so the
@@ -190,7 +193,13 @@ their publish site (`client/SidebarRoot.tsx`). Two user-visible surfaces follow:
   the list immediately, before any mounted baseline can carry it: the row
   carries the real host id (never `synthetic`, so workspace-level actions stay
   available), replaces a same-path synthetic group in place, and is handed over
-  to the authoritative row once that source's push lists it (05 §2.2.1). The
+  to the authoritative row once that source's push lists it (05 §2.2.1). A Git
+  worktree creation carries the placement anchor (`afterWorkspaceId` = its main
+  checkout), so the row lands directly below that checkout instead of at the
+  tail, and its git flags are published by the funnel's `beforePublish` hook —
+  BEFORE the echo fact, not after it — so the row is born in its worktree shape
+  and never renders as a plain workspace first; the adopt path also carries its
+  branch title as a hint, so the row is born with its final label. The
   same channel carries the withdraw/patch halves — `reportWorkspaceRemoved`
   after a successful `workspace.delete` (without it a create → delete on an
   unmounted source leaves a real-id ghost row until the TTL) and
