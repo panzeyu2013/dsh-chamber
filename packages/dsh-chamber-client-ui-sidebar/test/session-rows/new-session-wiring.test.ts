@@ -16,6 +16,11 @@ import { fileURLToPath } from 'node:url'
  *  1. the handler must READ `reusableBlankSessionId` and reopen it, instead of
  *     issuing `session/create` unconditionally — the defect that produced
  *     invisible empty sessions (I2);
+ *  1b. the create itself must go through the single funnel
+ *     (`createSessionForSource`, shared/session-mutations.ts): the row is
+ *     projected immediately from the echo fact instead of waiting for a mounted
+ *     summary store that never learns the unary-side session in time (design 05
+ *     §2.2 revision 2026-12);
  *  2. the reuse branch must come BEFORE the create call in source order;
  *  3. a per-workspace in-flight guard must exist, mirroring upstream
  *     `connectWorkspace`'s `connecting` map: two clicks in the same tick both
@@ -42,10 +47,15 @@ function onNewSessionBody(): string {
 test('"+": the handler resolves reuse BEFORE it creates (design 05 §2.1)', () => {
   const body = onNewSessionBody()
   const reuseAt = body.indexOf('reusableBlankSessionId')
-  const createAt = body.indexOf('createSession(')
+  const createAt = body.indexOf('createSessionForSource(')
   assert.notEqual(reuseAt, -1, 'onNewSession no longer reads reusableBlankSessionId — "+" would always create')
   assert.notEqual(createAt, -1, 'onNewSession no longer creates the fallback session at all')
-  assert.ok(reuseAt < createAt, 'the reuse branch must precede session/create in source order')
+  assert.ok(reuseAt < createAt, 'the reuse branch must precede the create in source order')
+  assert.doesNotMatch(
+    body,
+    /await createSession\(/,
+    'the raw wire wrapper is bypassed: the funnel is what publishes the echo fact (bypassing it re-hides the row)',
+  )
   assert.match(body, /chamberBridge\.requestOpenSession\(server\.id, reusable\)/,
     'the reuse branch must OPEN the existing row through the per-source open path')
 })

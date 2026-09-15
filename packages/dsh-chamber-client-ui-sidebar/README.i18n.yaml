@@ -47,5 +47,20 @@
 # precise wording ("its label naming the active mode" / "由标签报出当前模式" — `orderBy.label`
 # names the section and the trigger's accessible name carries the active mode), an
 # audit finding about read-back ambiguity. Same single claim re-read on both sides.
-README.md: 62b415be83cb10d98dae64519c123eee0d56974381da4c94211ad8dbebccb804
-README.zh.md: f8da7102a3a791567cccdaec58998d7d6342e762345f1b9965e99b52083ca54a
+# Re-recorded again (2026-12, the session echo; both sides carried together): the
+# section now also covers the session-echo ledger and its single funnel
+# (shared/session-echo.ts + shared/session-mutations.ts) — a session minted over
+# the source's unary client reaches the projection only via the host's ASYNC
+# api-session/added broadcast, so the "+"/fork/archive verbs publish a one-way
+# fact and the App projects the row into its workspace immediately. The same
+# heading and the new bullet were written on the zh and en sides in one pass,
+# then both hashes were recomputed with shasum -a 256. Nothing else changed.
+# Re-recorded again (2026-12, the second session-echo pass — the local ARCHIVE
+# tombstone and the placement rule): the session bullet now also states that the
+# membership is inserted at the workspace HEAD (the host's own attachSession
+# order, so the row never jumps) and that the archive verb's removal fact feeds
+# a local tombstone which filters the row on a source whose shell is not mounted
+# until an authoritative archive set names it. Both sides were written in one
+# pass and re-compared claim by claim, then rehashed with shasum -a 256.
+README.md: ff71e0c765f972c8f94faa90485ad5672614723b667a9c8c6dbcc93375fed1d3
+README.zh.md: dd27bede2a66722f814f273be5aa95c83cc378b3c7c188aa408af18e61381a59
