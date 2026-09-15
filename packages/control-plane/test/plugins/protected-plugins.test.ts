@@ -268,7 +268,7 @@ test('derivePluginRows: 行集 = 依赖表；B₀/S 只分类，不再凭空造�
   const declared = derivePluginRows({
     dependencies: {
       '@deepseek-ai/dsh-base': '0.1.5-rc.2',
-      [SEEDS[0]]: '0.3.0',
+      [SEEDS[0]]: '0.3.1',
     },
     bundles: ['@deepseek-ai/dsh-base'],
     protectedSet: set,
@@ -282,7 +282,7 @@ test('derivePluginRows: 行集 = 依赖表；B₀/S 只分类，不再凭空造�
   assert.equal(byName.get(SEEDS[0])?.role, 'seed')
   assert.equal(byName.get(SEEDS[0])?.owner, 'chamber')
   assert.equal(byName.get(SEEDS[0])?.protected, true)
-  assert.equal(byName.get(SEEDS[0])?.spec, '0.3.0')
+  assert.equal(byName.get(SEEDS[0])?.spec, '0.3.1')
 })
 
 test('derivePluginRows: 用户后加的层 = live bundles 里不在 B₀ 的名 ⇒ role=layer 且不被保护', () => {
@@ -482,7 +482,7 @@ test('derivePluginRows: owner 是全枚举（installation / chamber / user），
   const dependencies = {
     'third-party-pkg': '^1.0.0',
     'layer-pkg': '^2.0.0',
-    [SEEDS[0]]: '0.3.0',
+    [SEEDS[0]]: '0.3.1',
     '@deepseek-ai/dsh-base': '0.1.5-rc.2',
   }
   const rows = derivePluginRows({

@@ -652,12 +652,12 @@ test('projectInstalledRows: rows mode renders one row per declared dependency (p
   // 也**带依赖值**（`@deepseek-ai/dsh-base` 若出现，是因为该 profile 自己声明了它）。
   const dependencies = {
     '@deepseek-ai/dsh-base': '^0.1.0',
-    '@dsh-chamber/dsh-chamber-seed-client-graph': '0.3.0',
+    '@dsh-chamber/dsh-chamber-seed-client-graph': '0.3.1',
     'third-party-a': '^1.0.0',
   }
   const rows = [
     row({ name: '@deepseek-ai/dsh-base', role: 'composition', protected: true, version: '0.1.5' }),
-    row({ name: '@dsh-chamber/dsh-chamber-seed-client-graph', role: 'seed', protected: true, version: '0.3.0' }),
+    row({ name: '@dsh-chamber/dsh-chamber-seed-client-graph', role: 'seed', protected: true, version: '0.3.1' }),
     row({ name: 'third-party-a' }),
   ]
   const projected = projectInstalledRows(dependencies, rows)
@@ -676,7 +676,7 @@ test('projectInstalledRows: rows mode renders one row per declared dependency (p
   assert.equal(seed.protected, true)
   assert.equal(seed.removable, false)
   assert.equal(seed.role, 'seed')
-  assert.equal(seed.spec, '0.3.0')
+  assert.equal(seed.spec, '0.3.1')
   assert.equal(projected.rows[2].removable, true)
   // 防御性：投影是「按行」驱动的——万一某个后端给出没有依赖项的行，它照样渲染
   // （spec null ⇒ 单元格落到版本），绝不静默丢行或抛错。
