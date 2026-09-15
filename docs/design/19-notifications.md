@@ -291,7 +291,7 @@ interface ChamberSettings {
 ```
 
 - `normalizeSettings` / `validatePatch` / `SETTINGS_KEYS` 扩展（嵌套对象校验，
-  未知键拒绝；`chamber-settings.test.ts` 补用例）；
+  未知键拒绝；`test/local-state/chamber-settings.test.ts` 补用例）；
 - 主进程在 `dsh-chamber:notify` 裁决时读取内存设置（同一次 settings-set 即生效）。
 
 **设置 UI**（`packages/dsh-chamber-client-ui-settings-bridge`）：

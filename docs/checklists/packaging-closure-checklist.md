@@ -70,8 +70,9 @@
 `package.json`）。新增根级运行模块因此**自动进包**——纪律落在「例外名单」而不是
 「逐个补录」，需要人工保证的只有两件事：
 
-1. 新增根级模块不得命中下面的 9 条 negate（尤其：测试文件必须用 `*.test.ts`
-   后缀，否则会被打进包）；
+1. 新增根级模块不得命中下面的 9 条 negate（测试一律放
+   `packages/desktop/test/<domain>/`——包根三条 glob 不收取它；2026-12 测试重组前，
+   根级测试靠 `!*.test.ts` 后缀排除）；
 2. `main.ts` / `preload.cts` 的传递 import 闭包不得指到 `scripts/`、`vendor/` 或
    未编译的 `node_modules/@dsh-chamber/control-plane/**`（见 §1、§2）。
 
@@ -90,19 +91,20 @@
 `store-file-hygiene.ts`、`transport-manager.ts`、`transport-provider.ts`、`updater.ts`、
 `win-acl.ts`
 
-复核命令（与 glob 同义，扣除 `!*.test.ts` 与两条测试夹具 negate）：
+复核命令（与 glob 同义，扣除两条测试夹具 negate；包根已无 `.test.ts`——测试在
+`test/<domain>/`，`*.ts` glob 不收取）：
 
 ```sh
 ls -1 packages/desktop/*.ts packages/desktop/*.cts packages/desktop/*.mjs \
-  | grep -vE '\.test\.ts$|/(gateway-session-test-hooks|loopback-http-test-server)\.ts$'
+  | grep -vE '/(gateway-session-test-hooks|loopback-http-test-server)\.ts$'
 ```
 
 **例外名单 = `build.files` 的 9 条 negate（勿删；顺序同 package.json）**：
 
 | negate | 原因 |
 |---|---|
-| `!*.test.ts` | 30 个根级测试；`*.ts` glob 会收它们，只能靠后缀排除 |
-| `!gateway-session-test-hooks.ts` | 测试夹具，仅 `gateway-session.test.ts` 引用 |
+| `!*.test.ts` | 历史防御：2026-12 测试重组前有 33 个根级测试被 `*.ts` glob 收取，靠后缀排除；重组后测试在 `test/<domain>/`（glob 不收取），negate 保留以防新增根级测试 |
+| `!gateway-session-test-hooks.ts` | 测试夹具，被 `test/gateway/gateway-session-spki.test.ts`、`test/gateway/gateway-provider.test.ts`、`test/transport/ssh-provider-endpoint-auth.test.ts` 引用（可执行路径不受 `!*.ts` 的收包 glob 影响） |
 | `!loopback-http-test-server.ts` | 测试夹具（回环 HTTP 测试服务器） |
 | `!dist/**/*.map` | source map 不随包（2026-09 P2，见 §5） |
 | `!node_modules/@dsh-chamber/control-plane/**` | 用 `dist/control-plane` 编译产物替代 TS 源码（node_modules 内 .ts 无类型擦除） |

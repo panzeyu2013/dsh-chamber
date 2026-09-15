@@ -14,7 +14,7 @@
  * - the WEB/RENDERER chain must NOT import this module (it is Node-side; a
  *   browser bundle cannot reach it) — the renderer's ADD_SPEC keeps its hand
  *   mirror, and the lockstep test
- *   (packages/gateway/test/plugin-spec-lockstep.test.ts) pins that mirror to
+ *   (packages/gateway/test/plugins/plugin-spec-lockstep.test.ts) pins that mirror to
  *   this file's PLUGIN_SPEC_PATTERN literal.
  *
  * Moved verbatim from desktop ssh-provider.ts (design 13 §7.2 origin) so the

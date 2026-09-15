@@ -1360,7 +1360,7 @@ export {
   // gateway upload, overlay resolution) derives from host-graph-seed.ts
   // instead of re-typing a literal (A2 cross-package protocol
   // single-sourcing). Cross-side equality is pinned by
-  // packages/desktop/cross-package-contract.test.ts.
+  // packages/desktop/test/ipc/cross-package-contract.test.ts.
   HOST_GRAPH_PATCH_FILENAME,
   HOST_OPEN_IN_INSERT,
   HOST_PACKAGE_SEED_FILES,

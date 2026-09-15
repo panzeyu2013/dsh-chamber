@@ -20,7 +20,7 @@
  * placement; the derives stay deterministic for a given (snapshot, current,
  * now) triple plus the grace maps — tests inject `now`.
  *
- * No React, no DOM — plain-node unit-testable (see test/derive.test.ts).
+ * No React, no DOM — plain-node unit-testable (see test/session-rows/derive.test.ts).
  */
 import type { InstanceSnapshot, SearchRow, SessionRow, WorkspaceRow } from './instance-api.ts'
 import type { ChamberServerAggregate, ChamberServerWorkspace, InstanceRuntimeReport, ServerBootGap } from './aggregate-store.ts'

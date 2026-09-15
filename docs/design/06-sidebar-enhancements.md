@@ -193,7 +193,7 @@
 - `sidebar-chamber.module.css`：marker/指示线类。
 - `shared/derive.ts`：新增纯函数 `reconciledSessionOrder(stored, wireIds)`
   （stored 序优先、未知 id 按 wire 序追加——官方 `reconciledSessionOrder`/
-  `orderedUngrouped` 移植），`test/derive.ts` 补用例。
+  `orderedUngrouped` 移植），`test/session-rows/derive.test.ts` 补用例。
 
 ### 2.4 来源级收拢 + 来源显示序
 
@@ -295,7 +295,7 @@
 
 - `shared/view-prefs.ts` + `shared/index.ts` 再导出；`SidebarRoot.tsx`
   经 `getViewPrefs`/`subscribeViewPrefs`/`updateViewPrefs` 读写；
-  `test/view-prefs.ts` 覆盖存储单例/通知/裁剪（node:test 风格）。
+  `test/session-state/view-prefs.test.ts` 覆盖存储单例/通知/裁剪（node:test 风格）。
 
 ## 4. 运行时事实通道（完成/待交互点 + 跨来源当前会话高亮）
 
@@ -358,7 +358,7 @@
     跨断连保留——重连后重新挂载，且能捕获断连期间完成的会话（prevRunning
     持有断连前 running=true）。
 - 对账逻辑是**纯函数** `shared/derive.ts reconcileCompletedFacts`（单测见
-  `test/derive.ts`）：App 在 `setCompletedBySource` 的函数式 updater 里调用
+  `test/session-rows/derive.test.ts`）：App 在 `setCompletedBySource` 的函数式 updater 里调用
   它，且每份上报各自捕获 `prevRunning` 快照——同来源两次上报落在同一渲染
   周期时按序组合，不会互相覆盖丢蓝点。
 
@@ -387,7 +387,7 @@
     **版本沿革**：≤0.2.4 自绘 6px 品牌蓝点 → 0.3.0-beta.1（2026-09-12，
     upstream-alignment T10）换成官方 `done` 绿点 → 2026-09 用户裁决**回到品牌
     蓝点**（本轮）。换色只动外观：武装/解除它的事实（完成未读）与通知边沿
-    逻辑始终未变；`test/upstream-alignment.test.ts` 的 T10 锁按本裁决改钉
+    逻辑始终未变；`test/visual-lock/upstream-alignment.test.ts` 的 T10 锁按本裁决改钉
     （蓝点必须存在、`StateDot state="done"` 不得回归、运行环仍是官方 ongoing）。
   - **活动定时任务标记（2026-09-11 upstream-alignment T7）**：行标题之后渲染官方
     `ActiveScheduleIndicator` 同形标记（16px 闹钟字形 + `role="img"`，可访问名与
@@ -553,7 +553,7 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   （全页单例 presenter + effect）、`packages/renderer/src/App.tsx`
   （活动视图发布，`useLayoutEffect` 保证绘制前生效）、`shared/aggregate-store.ts`
   （活动来源事实 + 单测）、`packages/renderer/src/styles.css`（兜底值，
-  源码级钉子 `packages/renderer/test/theme-fallback.test.ts`）。
+  源码级钉子 `packages/renderer/test/frame-chrome/theme-fallback.test.ts`）。
 - **同族残留（非本节修复面）**：同一份文档里还有其它
   document-global 状态被逐实例写/监听，属同一"N-ctx 单文档"缺陷族：
   ①**文档级 `drop` 扇出（真实缺陷）**——vendor `ui-attachment`
@@ -621,13 +621,13 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
 
 - 纯函数单测：`reconciledSessionOrder`、`view-prefs` 读写/单例通知/裁剪、
   搜索 sanitize、`todo-attention` 派生、`todo-prefs` 水合
-  （`test/derive.ts`、`test/view-prefs.ts`、`test/todo-attention.test.ts`、
-  `test/todo-prefs.test.ts`，node:test 风格）。
+  （`test/session-rows/derive.test.ts`、`test/session-state/view-prefs.test.ts`、`test/session-rows/todo-attention.test.ts`、
+  `test/session-state/todo-prefs.test.ts`，node:test 风格）。
 - **上游对齐源文本锁（2026-09-11 upstream-alignment；review-fix 扩充）**：
-  `test/upstream-alignment.test.ts`（读源码文本，注释先剥离，只经
-  `test/source-lock.ts`——**不挂 vendor 载入桩**：包 `package.json` 的 test 脚本把
-  `node --import ./test/vendor-register.mjs`（→ `test/vendor-loader.mjs`）只接给
-  `test/panel-source.test.ts`，因为只有它要 import vendor 模块；
+  `test/visual-lock/upstream-alignment.test.ts`（读源码文本，注释先剥离，只经
+  `test/support/source-lock.ts`——**不挂 vendor 载入桩**：包内 `scripts/test.mjs` 把
+  `node --import ./test/support/vendor-register.mjs`（→ `test/support/vendor-loader.mjs`）只接给
+  `test/plugin-kernel/panel-source.test.ts`，因为只有它要 import vendor 模块；
   `upstream-alignment.test.ts` 以普通 `node test/…` 运行）钉住本批的对齐面——归档
   动词只在行菜单、全包无原生 confirm、workspace 删除是官方 `Modal` chrome（含对话框内
   `role="alert"` 失败行与「仅成功才关闭」）、**同一时刻至多一层 chamber Modal**（见下）、
@@ -637,7 +637,7 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   （`compact` 一项在 2026-09 阶段 2 由"非 compact"改回，见 §7 菜单密度裁决）、
   `{name}` 参数化可访问名、活动定时任务标记的位置、`data-git-action`
   属性钩子（`:disabled` 在方括号之外）；行为面单测在函数旁边
-  （`test/session-row-window.test.ts` 的 disclosure 窗口、`test/panel-source.test.ts`
+  （`test/session-rows/session-row-window.test.ts` 的 disclosure 窗口、`test/plugin-kernel/panel-source.test.ts`
   的 `createSnapshotStore` 投影与通知纪律）。
 - **同一时刻至多一层 chamber Modal（2026-09-11 review-fix finding 2，对称门）**：
   官方 `Modal` **没有焦点陷阱**（vendor
@@ -798,8 +798,8 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   `.sourceActions` 与 git 的 `.headerGit` 回到 v0.2.4 的 2px——它们的 4px 只出自该 pass
   （`46b522c9` 没碰它们）。**rail**：只回退该 pass 加宽的 `gap`（16→12px），点按钮化
   （2026-09-11 T7）自带的 `margin: -4px 0` 保留 ⇒ 20px 点距 / 12px 可见间隙 = v0.2.4
-  节奏；**不要只删 margin 而不改 gap**（点距会松成 28px/20px 间隙）。锁见
-  `test/batch2-visual-locks.test.ts` 与 git 包同名 V1 一例（含"scoped 重加 rim 也红"的
+  节奏；**不要只删 margin 而不改 gap**（点距会松成 28px/20px 间隙）。锁见 `test/visual-lock/
+  batch2-visual-locks.test.ts` 与 git 包同名 V1 一例（含"scoped 重加 rim 也红"的
   选择器扫描）。**不要再加回 rim**：加之前必须重测按钮命中盒与行/头部边缘之间的纯行带。
 - **会话行窗口与展开条（2026-09-11 upstream-alignment T11；2026-09 batch 1 A10
   补几何）**：每个 workspace 只
@@ -990,8 +990,8 @@ onRequest`），**默认全开**——被动呈现（空时零占用），区别
 ### 8.4 代码落点
 
 - 派生：`packages/dsh-chamber-client-ui-sidebar/src/shared/todo-attention.ts`
-  （纯函数 + `test/todo-attention.test.ts`）；
-- 设置订阅：同包 `shared/todo-prefs.ts`（只读水合 + `test/todo-prefs.test.ts`）；
+  （纯函数 + `test/session-rows/todo-attention.test.ts`）；
+- 设置订阅：同包 `shared/todo-prefs.ts`（只读水合 + `test/session-state/todo-prefs.test.ts`）；
 - UI：同包 `client/SessionTodoArea.tsx` + `sidebar-chamber.module.css` `.todo*` 类；
   `SidebarRoot` 在 `regionArea` 内、滚动容器**外**渲染（`wide` 门控；rail 无待办区；
   在 `ChamberListBoundary` **之内**——region 渲染错误纪律覆盖待办区）。打开经

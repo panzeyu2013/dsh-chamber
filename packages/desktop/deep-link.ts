@@ -4,7 +4,7 @@
  * Electron-free by construction: this module imports only node built-ins
  * (node:fs / node:os / node:path / node:url) plus the INSTANCE_ID_PATTERN
  * constant from transport-provider.ts (which itself has no runtime imports),
- * so the pure-Node test suite (deep-link.test.ts) runs without electron or
+ * so the pure-Node test suite (test/desktop-shell/deep-link.test.ts) runs without electron or
  * any third-party dependency.
  *
  * Responsibilities — all deep-link validation happens here (design 16 §8,

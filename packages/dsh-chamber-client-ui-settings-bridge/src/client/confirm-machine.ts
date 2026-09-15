@@ -16,7 +16,7 @@
  *
  * The machine is pure so the invariant that matters — no action reaches the wire
  * without an accept, and an accept launches exactly one runner — is pinned by
- * plain unit tests (test/confirm-machine.test.ts) instead of DOM rendering: the
+ * plain unit tests (test/runtime/confirm-machine-guards.test.ts) instead of DOM rendering: the
  * dsh runtime section both arms (its own gateway mutations) and is armed for it
  * (the shared restart path), so the same transition set serves both.
  */

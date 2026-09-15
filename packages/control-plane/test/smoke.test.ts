@@ -15,7 +15,7 @@ import { join, resolve } from 'node:path'
 import { mkdtempSync, rmSync, existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { createControlPlane } from '../src/index.ts'
-import { fetchJson, waitFor } from './utils.ts'
+import { fetchJson, waitFor } from './support/utils.ts'
 
 const repoRoot = resolve(fileURLToPath(new URL('../../..', import.meta.url)))
 

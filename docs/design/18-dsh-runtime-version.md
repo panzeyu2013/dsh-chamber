@@ -230,7 +230,7 @@ override（未失效时）→ 内建锚（`--dsh-path` ?? `findDshWorkspace`）�
     missing / applied-monitoring / intent（旧壳事务被 F4 intent 替换）时武装；
     仅 live 事务 phase（prepared/switched/restoring…）不武装——旧壳在途事务保持
     各自的 journal-mismatch 阻塞 / rollback-continuation 语义（writeActivationIntent
-    亦拒绝覆盖）。回归测试：runtime-routes.test.ts FRESH-shell 两例（稳态 journal
+    亦拒绝覆盖）。回归测试：runtime-start-lease-invalidation.test.ts FRESH-shell 两例（稳态 journal
     + intent 替换）。
 - **失效的用户可见记录**：壳更新导致运行时选择失效时，settings
   记录一行「因应用更新，dsh 运行时已回落内建 vX（原选择 vY 保留，可重新选用）」——
@@ -759,7 +759,7 @@ packaged smoke，以及更强的 packaged fake-registry 安装 + web host + 全�
   10 GiB 软阈值、保留策略等**单一来源常量**都在共享包内。
 - 宿主适配接口 `RuntimeHostAdapter`（**生产侧无实现者**：desktop 与 gateway 各自经
   `StartupDeps`/`ApplyDeps`/`InstallerDeps`/`ControllerDeps` 直接适配共享核心；
-  该接口是**测试夹具契约**——`test/fake-adapter.ts` 实现它，`test/run-phase-fixture.ts`
+  该接口是**测试夹具契约**——`test/support/fake-adapter.ts` 实现它，`test/support/run-phase-fixture.ts`
   以它为底座驱动共享包全部纯 Node 测试。**核心裁决逻辑零分叉**，分叉只允许出现在
   适配器）。**本接口是草图**：实际 seam 以 desktop 的
   `StartupDeps`/`ApplyDeps` 并集 + gateway 需求为权威，其中必须覆盖的 seam 为——

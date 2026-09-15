@@ -10,7 +10,7 @@
  *
  * 本门要回答的问题（STATUS.md 移动档开放项 ⑤ 的另一半）：移动插件的 CSS/JS 锚在
  * 上游 DOM 契约上（`data-*` 属性、slot key、`role`），打包 fork 的 README +
- * `test/breakpoints.test.ts` 只**自证**（只读本包），拦不住上游漂移。这里把
+ * `test/visual/breakpoints.test.ts` 只**自证**（只读本包），拦不住上游漂移。这里把
  * 「插件声明的锚点」与「上游产物里真实发射的锚点」做双向差集：
  *
  *   方向 A（声明 → 上游）：插件源码里出现的每个 `data-*` / `[role=…]` /
@@ -26,7 +26,7 @@
  *     `dsh-client-ui-agent-preset` 的 client 行自己在按钮上设置该属性（其打包 CSS
  *     用 `content:attr(data-tip)` 消费），所以它按普通上游锚点查；本插件侧发射方在
  *     `dsh-chamber-client-ui-settings-connections`，那条契约由该包与移动包的
- *     lockstep 测试钉住（`test/official-hover-card.test.ts`）。
+ *     lockstep 测试钉住（`test/dom/official-hover-card.test.ts`）。
  *   direction B（上游 → 声明）：对上游全量做反向差集是不可能的（上游发射数百个
  *     锚点，插件只用其一）。所以方向 B 收窄到**门禁要求的最小断言集**
  *     {@link REQUIRED_ANCHORS}：其中每一项都必须（1）在本插件源码里被声明、

@@ -15,7 +15,7 @@
 | `packages/desktop/dist/preload.cjs` | `scripts/build-preload.mjs`（先 emit 到临时目录再只搬入该文件） | 忽略 | 无（`scripts/electron-dev.mjs` 缺文件才补建） | 打包发行旧 preload —— IPC/trust 边界与 src 漂移 |
 | `packages/desktop/dist/control-plane/**` | `scripts/build-control-plane.mjs` | 忽略 | ✅ **标记守卫**（`scripts/control-plane-freshness.test.mjs`：存在但缺当前标记 ⇒ 失败 + 重建命令） | 打包 app 加载旧控制面（本轮实际发生过） |
 | `packages/desktop/dist/host-{graph,git-worktree,archive-cleanup,open-in}-package/**` | `scripts/build-host-graph-package.mjs`（从各 seed 包 `dist` cpSync） | 忽略 | 只有行序/outDir 断言（`scripts/build-host-graph-package.test.mjs`） | 打包 seed 旧宿主包 |
-| `packages/gateway/dist/**`（含 `dist/pnpm/**`） | `packages/gateway/scripts/build.mjs` | 忽略 | ✅ **标记守卫** + 内嵌 pnpm 版本/pin 断言（`packages/gateway/test/build-smoke.test.ts`） | 打包 gateway 旧服务端（本轮实际发生过） |
+| `packages/gateway/dist/**`（含 `dist/pnpm/**`） | `packages/gateway/scripts/build.mjs` | 忽略 | ✅ **标记守卫** + 内嵌 pnpm 版本/pin 断言（`packages/gateway/test/packaging/build-smoke.test.ts`） | 打包 gateway 旧服务端（本轮实际发生过） |
 | `packages/gateway/host-packages/dsh-chamber-client-ui-mobile/**` | `packages/gateway/scripts/build.mjs`（`HOST_PACKAGES` 拷贝） | 忽略 | 只有存在性/导出契约断言（缺文件才按需构建） | gateway seed 旧移动端（`lib/client.js` 旧 DOM 锚点） |
 | seed 包 `dist/index.js` ×4 + `packages/dsh-runtime/dist/index.js` + mobile `dist/index.js`/`lib/**` | 各自 `scripts/build.mjs` | **提交** | ✅ C8 重建-比对（`scripts/dev/verify-upstream-touchpoints.mjs`，硬失败） | 已由门禁挡住 |
 | `packages/renderer/src/generated/**`、`packages/renderer/.cache/**` | gen-typert / 构建 | 忽略 | 构建期重新生成 | 构建失败或旧 remote 契约 |

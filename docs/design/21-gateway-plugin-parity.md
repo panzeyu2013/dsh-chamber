@@ -76,7 +76,7 @@ control-plane `protected-plugins.ts`，与 `plugin-spec.ts` 同族）。
 `remoteNeedsSeed`/重启提示/seed-cache 漂移/同步包表同样逐包派生（design 13 §6）。
 行派生收敛为纯函数 `deriveChamberRows`
 （plugin-inventory-text.ts，只回 label KEY 与版本 STRING，组件只做 descriptor→JSX 映射），
-由 `test/chamber-rows.test.ts` 表驱动测试覆盖（含 LOCAL 目标读自身清单、空 expected 不谎报
+由 `test/plugin-inventory/chamber-rows.test.ts` 表驱动测试覆盖（含 LOCAL 目标读自身清单、空 expected 不谎报
 seed-cache、gateway 客户端行由 Loader inventory 分类派生、inventory 不可用时 unknown 行
 而非写死包名）。
 
@@ -175,7 +175,7 @@ TS6059）；settings-bridge 保留自身 connections-section paths、经 workspa
 `exports["./shared"]` 解析。`RemoteRuntimeStatus`（33 字段，30 必填+3 可选）/parse/gates/
 Error/poll 符号随 shared 真源直接可见，无需镜像同步。
 poll 的英文错误串随迁（connections 会显示未本地化文案，登记接受——见 §7）。**测试**：pollGatewayReady 用例驻
-settings-bridge/test/runtime-management.test.ts；`gateway-runtime-api.test.ts` 按 split 拆：view 部分留
+settings-bridge/test/runtime/runtime-management.test.ts；`gateway-runtime-api.test.ts` 按 split 拆：view 部分留
 settings-bridge，核心随迁；settings-bridge/sidebar 两个 test 清单同步；
 test:renderer-shell 无迁移文件（其清单无 gateway-runtime 用例；测试矩阵见 §9）。
 
@@ -333,7 +333,7 @@ chamberProvision=seed_host_graph、restartToApply/startFromStopped=restart_servi
   渲染端提交的 file: spec 仍被拒；
 - **镜像面（IPC 新增写方法时的真实编辑集）**：preload.cts（方法+invoke 字面量）+ ipc-events.ts
   （3 通道）+ main.ts（3 个 trustedIpc handler）+ renderer global.d.ts +
-  ipc-surface-mirror.test.ts（golden 方法/字段清单 + 结果联合形状；gateway_plugin_apply 的 batch+cancelled 联合
+  test/ipc/ipc-surface-mirror.test.ts（golden 方法/字段清单 + 结果联合形状；gateway_plugin_apply 的 batch+cancelled 联合
   需要精确形状守卫）+ connections global.d.ts（**re-export 型**，仅新命名类型落新文件时改动）——共 5 处代码 +
   1 测试 + 条件性 re-export；
 - 读侧（installed/tasks/status/Loader）全经实例代理 GET。

@@ -520,7 +520,7 @@ export function rowMirrorFindings({ producerSource, preloadSource, rendererSourc
 
 /**
  * C14 判据：producer ↔ preload ↔ renderer 的字段集必须逐字一致
- * （ipc-surface-mirror.test.ts 只覆盖 preload ↔ renderer 两道门，producer 侧裸奔）。
+ * （test/ipc/ipc-surface-mirror.test.ts 只覆盖 preload ↔ renderer 两道门，producer 侧裸奔）。
  * 宿主接口之后还要过 {@link rowMirrorFindings}（`rows` 的**元素**类型）。
  *
  * @param {{ producerSource: string, preloadSource: string, rendererSource: string }} input

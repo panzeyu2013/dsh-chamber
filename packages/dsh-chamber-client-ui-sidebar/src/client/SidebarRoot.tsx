@@ -1784,7 +1784,7 @@ export function SidebarRoot({
              `margin: -4px 0` takes the 16px button box back down to the old 8px
              dot element, and only the 2026-09 rim pass's gap widening (12 →
              16px) was rolled back on 2026-09-14; see 06 §7 and
-             test/batch2-visual-locks.test.ts.
+             test/visual-lock/batch2-visual-locks.test.ts.
              Operability mirrors the wide source header: activating a remote,
              usable source asks the App layer to switch the N-ctx view, the
              current source is marked aria-current, and a managed-down source

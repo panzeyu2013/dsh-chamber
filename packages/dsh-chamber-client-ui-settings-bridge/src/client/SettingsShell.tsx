@@ -807,7 +807,7 @@ export function SettingsShell(props: SettingsShellProps) {
   // (upstream SettingsRoot.tsx's reset effect), never the composite: a view
   // switch is not a new run, and resetting on the composite re-mounted an
   // acknowledged or explicitly deferred step over a still-blank session
-  // (2026-09-11 review-fix F1; the probe is replayed in test/onboarding.test.ts).
+  // (2026-09-11 review-fix F1; the probe is replayed in test/bridge/onboarding.test.ts).
   //
   // RESIDUAL (registered deviation, 2026-09-11 review-fix F1): this set is
   // component-local, so a REMOUNT of this shell — the App reclaims the instance

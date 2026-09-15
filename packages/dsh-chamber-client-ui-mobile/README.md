@@ -641,7 +641,7 @@ when the pin moves:
 - the card box being the only `[class*="_card_1b2ny_"]` element inside that
   wrapper.
 
-`test/official-hover-card.test.ts` pins the constants and the src↔artifact
+`test/dom/official-hover-card.test.ts` pins the constants and the src↔artifact
 lockstep, and C8 pins the shipped bytes; **no gate can see the served bundle's
 hash change** (it is derived state outside the repo), which is exactly why this
 entry exists.

@@ -15,7 +15,7 @@
  * `docs/progress/STATUS.md` carries the upstream defect as an open deviation.
  *
  * Deliberate differences from the vendored atom, all pinned by
- * `test/hover-card-wiring.test.ts`:
+ * `test/session-rows/hover-card-wiring.test.ts`:
  *  - the close path bumps the copy epoch, so a clipboard write still in flight
  *    when the card closes can never make the NEXT card render `copiedLabel`
  *    (upstream does this in `close()`, `HoverCard.tsx:54-58`);

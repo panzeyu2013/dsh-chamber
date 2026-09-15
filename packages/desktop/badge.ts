@@ -1,6 +1,6 @@
 /**
  * Dock/taskbar unread badge count (design 19 §3.7) — pure logic, no electron,
- * unit-testable with plain node:test (see badge.test.ts).
+ * unit-testable with plain node:test (see test/desktop-shell/badge.test.ts).
  *
  * The renderer projects its「完成未读」blue-dot set into a single non-negative
  * integer and pushes it over `dsh-chamber:badge-count`; the main process is

@@ -682,7 +682,7 @@ export function apply(ctx: Context): void {
     // below catches. A namespace that simply STOPS EXPORTING `inject` yields an
     // empty roster entry AND an empty witness (`plugin.inject` is undefined on
     // both sides) — no throw, roster silently smaller. That class is covered by
-    // the CI table test instead (test/required-extra-rows.test.ts reads every
+    // the CI table test instead (test/lifecycle/required-extra-rows.test.ts reads every
     // registered id's client entry and pins its audited face), which is the only
     // place a drift is visible: this runtime check cannot know what a namespace
     // "should" export without the hand-written roster the round retired.

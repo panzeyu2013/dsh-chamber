@@ -2,7 +2,7 @@
  * Main-process shared pure logic for the gateway plugin-apply IPC surface
  * (design 21 §6.5, plan Phase 4.6): payload validation + the confirmation
  * copy builder + the registry-spec name parser. No Electron imports — the
- * whole surface is unit-testable standalone (gateway-ipc-shared.test.ts) and
+ * whole surface is unit-testable standalone (test/gateway/gateway-ipc-shared.test.ts) and
  * main.ts stays thin.
  *
  * The whitelists are the control-plane shared single source (plugin-spec.ts

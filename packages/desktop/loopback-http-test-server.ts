@@ -1,7 +1,7 @@
 /**
  * Bare loopback test-server helpers shared by the desktop provider suites
- * (ssh-provider.test.ts binds servers it creates inline with closures;
- * gateway-provider.test.ts keeps its own http/https start helpers around the
+ * (test/transport/ssh-provider-endpoint-auth.test.ts binds servers it creates inline with closures;
+ * test/gateway/gateway-provider.test.ts keeps its own http/https start helpers around the
  * same two steps). They encode ONLY the previously inlined listen/close
  * boilerplate (dedupe audit N7): bind an already-created node:http(s) server
  * to 127.0.0.1 on an ephemeral port and read the port AFTER the listen

@@ -1,7 +1,7 @@
 /**
  * Shared test fixtures for the gateway-session surface of the two provider
- * suites (ssh-provider.test.ts — gateway reached through the ssh tunnel —
- * and gateway-provider.test.ts — direct http). The former byte-identical
+ * suites (test/transport/ssh-provider-endpoint-auth.test.ts — gateway reached through the ssh tunnel —
+ * and test/gateway/gateway-provider.test.ts — direct http). The former byte-identical
  * local twins (completeTestGatewaySessionHooks / completeTestSessionHooks +
  * GATEWAY_RUNTIME_STATUS) were unified here — dedupe audit N7. Bare helper
  * file, not a test: the desktop test script enumerates suites explicitly.

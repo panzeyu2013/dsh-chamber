@@ -59,13 +59,13 @@ design 18 现行契约：apply 只置 pending，激活事务在下次启动相�
 ## 4. desktop 宿主改动（packages/desktop）
 
 ### 4.1 IPC 与动作
-- `ipc-events.ts` 新增 `RUNTIME_APPLY_NOW` 常量；`preload.cts` `runtimeApi()` 新增 `applyNow`（镜像测试 `ipc-surface-mirror.test.ts` 强制 handle 集 == invoke 集）。
+- `ipc-events.ts` 新增 `RUNTIME_APPLY_NOW` 常量；`preload.cts` `runtimeApi()` 新增 `applyNow`（镜像测试 `test/ipc/ipc-surface-mirror.test.ts` 强制 handle 集 == invoke 集）。
 - `runtime-state-machine.ts`（desktop shim 指向 dsh-runtime）：`RuntimeAction` 增 `'apply-now'`；`allowedActions('pending')` 扩为 `['apply-now', 'reset-builtin']`。
 - `main.ts` 新 handler（**不持有跨事务 fence 租约**——`runRuntimeStartup` 内部自取 `'runtime:startup'` 租约，外层持有必死锁；采用 `RUNTIME_RETRY_APPLY` 同款入口模式）：
   - 门控为纯函数 `evaluateApplyNowGate`（`packages/desktop/apply-now-gate.ts`，零副作用，矩阵测试覆盖）——顺序：busy（operation/fence 单飞）→ env → not-allowed（非 pending 相位 / `managementSupported=false`）→ blocked → not-ready（connectionState 非 ready/degraded）→ no-pending（`pending ?? journalTarget ?? overridePending` 三源全空，**防无事务空重启循环**）→ snapshot-failed（走 retry-apply）→ invalid-tree（目标树预检，防注定失败的停启循环）→ ok(target)。
   - 确认对话框前后各调用一次同一 gate（两处输入构造完全同构，覆盖 TOCTOU）；原生二次确认 `confirmRuntimeMutation`（复用既有原生确认路径）；拒绝路径返回现状。
   - 确认后 `await runRuntimeStartup()`——事务窗口即既有 `phase:'applying'` + `runtimeBlocked:true` 投影，`publishApplyOutcome` 负责终态。
-- renderer `runtime-management.ts`：`RuntimeAction`/`RuntimeSurface.applyNow()`/`BASE_ACTIONS['pending']` 同步；**pending + `hasOverride===false` 时隐藏 apply-now**（与 reset-builtin 的 hasOverride 过滤对称，杜绝 UI⊄main）；`runtime-lockstep.test.ts` 精确相等断言强制 renderer ⊆ main。
+- renderer `runtime-management.ts`：`RuntimeAction`/`RuntimeSurface.applyNow()`/`BASE_ACTIONS['pending']` 同步；**pending + `hasOverride===false` 时隐藏 apply-now**（与 reset-builtin 的 hasOverride 过滤对称，杜绝 UI⊄main）；`test/runtime/runtime-lockstep.test.ts` 精确相等断言强制 renderer ⊆ main。
 
 ### 4.2 门控与互斥（全部复用既有机制）
 - 健康自动重启交错：`restartLocal` 单飞 + `canSpawn` 门（`local-connection.ts`）——事务窗口内健康机「进程死亡即重启」被抑制。
@@ -133,7 +133,7 @@ promise 后才释放 owner/state lock——apply-now 在途收到 stop → journ
 | 其余状态 | 不变 | 不变 |
 | env 源 | mutation 禁用 | 不变（env 禁立即应用；[重启 dsh] 仍可用） |
 
-实现面：`runtime-state-machine.ts` 的 `allowedActions` pending 分支 + renderer `runtime-management.ts` `BASE_ACTIONS` 同步（含 `hasOverride=false` 时隐藏 apply-now）；`runtime-lockstep.test.ts` 精确相等断言是天然强制同步点。
+实现面：`runtime-state-machine.ts` 的 `allowedActions` pending 分支 + renderer `runtime-management.ts` `BASE_ACTIONS` 同步（含 `hasOverride=false` 时隐藏 apply-now）；`test/runtime/runtime-lockstep.test.ts` 精确相等断言是天然强制同步点。
 
 ### 6.2 诚实信号纪律（窗口期）
 - desktop：`phase='applying'` + `runtimeBlocked=true` + `runtimeBlockedReason`；connections 卡 `runtimeBlocksLocalStart` 门控（`runtime-management.ts`）。

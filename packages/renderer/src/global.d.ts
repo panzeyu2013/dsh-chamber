@@ -195,7 +195,7 @@ export type SshExecIpcResult = SshStatusProjection | { error: string }
  *  plugin-sync.ts). The EXPECTED set is the control-plane registry, so a new
  *  host package appears in the plugin-management page without a UI change.
  *  The field set is pinned to the desktop projection by
- *  `packages/desktop/cross-package-contract.test.ts` (2026-09-11: the
+ *  `packages/desktop/test/ipc/cross-package-contract.test.ts` (2026-09-11: the
  *  `localOnly` field below was added there after a silent miss). */
 export interface ChamberHostPackageState {
   insertId: string

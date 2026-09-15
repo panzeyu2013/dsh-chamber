@@ -4,7 +4,7 @@
  * also referenced (as the same literal) by preload.cts: the preload build
  * contract is a self-contained single file (build-preload.mjs), so it cannot
  * import this module — the duplication is deliberate and pinned by
- * ipc-surface-mirror.test.ts (which asserts the main-side handle/send literal
+ * test/ipc/ipc-surface-mirror.test.ts (which asserts the main-side handle/send literal
  * sets EQUAL the preload-side invoke/on literal sets).
  *
  * The renderer-side twin lives in

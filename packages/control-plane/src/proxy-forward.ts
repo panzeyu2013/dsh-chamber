@@ -794,7 +794,7 @@ export function armUpstreamTimeout(deps: ProxyForwardDeps, counters: ProxyForwar
 /**
  * Whether one HTTP request takes the long-RPC window (design 03 §3.4): POST
  * on one of the exact `paths`. Pure decision predicate — zero timers, tested
- * by table in instance-proxy.test.ts; forwardHttp consumes it so the arm
+ * by table in liveness-timeout.test.ts; forwardHttp consumes it so the arm
  * sites and the counters agree with the same verdict.
  */
 export function matchesLongRpcPath(method: string, pathname: string, paths: readonly string[]): boolean {
