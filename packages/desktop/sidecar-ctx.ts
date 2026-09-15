@@ -2602,6 +2602,13 @@ export async function buildHeadlessCtx(
       const candidate = path.join(builtinDshWorkspace, 'pnpm-lock.yaml')
       return existsSync(candidate) ? candidate : null
     },
+    // 更新退出腿回撤叶：Swift v1 blocked-available 从不武装（无 quitAndInstall 腿），
+    // 这里是显式惰性 no-op——**不能省略**：本文件末尾的 ctx Proxy 把「缺失成员」变成
+    // 调用即抛的 methodStub，而 core 的 I 组状态订阅在每个非 downloaded 相位都调它
+    // （shell-core 的 disarmUpdaterQuit?.(...)，首个 'checking' 相位也算），省略会让
+    // 首次「检查更新」在订阅回调里抛错、headless 控制器 checking 卡死（2026-12 审查
+    // blocker）。update-headless 的 setState 亦已加固为「listener 抛错不反噬控制器」。
+    disarmUpdaterQuit: () => {},
   }
   /** 递归 stub：可调用（调用即抛）+ 任意成员访问返回同款 stub（供
    *  installIpcHandlers 顶部解构对象字段/方法后、在 handler 运行时才调用

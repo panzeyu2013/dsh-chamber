@@ -133,15 +133,26 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
 
   function setState(patch: Partial<UpdateState>): void {
     state = { ...state, ...patch }
-    for (const listener of listeners) listener(state)
+    for (const listener of listeners) {
+      // 推送腿（宿主 subscribe 回调）抛错绝不能反噬控制器：既不能让 checking 卡死，
+      // 也不能把 IPC 变成 reject（2026-12 审查：sidecar ctx 的缺失成员 stub 曾在
+      // 该路径抛出，UPDATE_CHECK 因此永久失效）。失败响亮记日志，控制流继续。
+      try {
+        listener(state)
+      } catch (error) {
+        try {
+          deps.logger.error('[updater-headless] state listener failed:', error instanceof Error ? error.message : String(error))
+        } catch { /* logging boundary */ }
+      }
+    }
   }
 
   async function runCheck(): Promise<void> {
     if (checking) return
     if (state.phase === 'downloading' || state.phase === 'downloaded') return
     checking = true
-    setState({ phase: 'checking', error: null })
     try {
+      setState({ phase: 'checking', error: null })
       if (typeof request !== 'function') throw new Error('update check is unavailable (no fetch)')
       const abort = new AbortController()
       const timer = setTimeout(() => abort.abort(), timeoutMs)

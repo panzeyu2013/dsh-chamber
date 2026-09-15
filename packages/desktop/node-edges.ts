@@ -60,6 +60,7 @@ import type {
   HostMessageOptions,
   HostResourceKind,
 } from './shell-core.ts'
+import { MAX_ACTIVE_NATIVE_NOTIFICATIONS } from './notifications.ts'
 
 /** B 桥 host 侧入站 method 名（sidecar-entry 与 Swift 侧共用同一拼写）。 */
 export const HOST_INBOUND = {
@@ -169,6 +170,9 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
   let onMainWindowShownCb: (() => void) | null = null
 
   // ---- 通知 click 路由表（notificationId → clickRoute） ----
+  /** click 路由上限：与 electron-edges 的活跃原生通知上限同一数字（语义见
+   *  showNativeNotification——淘汰只丢路由，不动宿主横幅）。 */
+  const MAX_PENDING_NOTIFICATION_ROUTES = MAX_ACTIVE_NATIVE_NOTIFICATIONS
   const clickRoutes = new Map<number, { token: NotificationSourceToken; onActivated(): void }>()
   let nextNotificationId = 1
 
@@ -192,6 +196,12 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
       nextNotificationId += 1
       if (clickRoute !== null) {
         clickRoutes.set(notificationId, clickRoute)
+        // 有界登记（上限与 electron-edges 的活跃原生通知同源）：淘汰最旧一条只丢
+        // click 路由（横幅本身归宿主，无法从这里收回），保证长期运行不无界增长。
+        if (clickRoutes.size > MAX_PENDING_NOTIFICATION_ROUTES) {
+          const oldest = clickRoutes.keys().next().value
+          if (oldest !== undefined) clickRoutes.delete(oldest)
+        }
       }
       const result = deps
         .sendEdge('showNativeNotification', {
@@ -211,8 +221,14 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
         },
         shown: result,
       }
-      // dispose 随 shown 完成自动注销（与 electron-edges 的 evict 语义同向）
-      void route.shown.then(() => clickRoutes.delete(notificationId))
+      // 路由存活到 dispose / 来源退役 / 被淘汰：**显示成功不得注销**——click 必然
+      // 晚于 shown 结算（Electron 同语义：通知对象的 click 监听持有 route 直到窗口/
+      // 来源生命周期结束，core 从不调 dispose）。只有显示失败（没有可点的横幅）
+      // 才即时注销。2026-12 审查：原实现在 shown 结算即删除，导致 Swift flavor 的
+      // 通知点击永远命中不到路由、静默返回 ok——「点横幅打开会话」整体失效。
+      void route.shown.then((outcome) => {
+        if (!outcome.shown) clickRoutes.delete(notificationId)
+      })
       return route
     },
 
@@ -281,8 +297,13 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
     },
 
     retireNotificationsForSources(retiredSourceIds: ReadonlySet<string>): number {
+      // 已退役来源的 click 路由随对象消亡（electron-edges 的 close 腿同语义）；
+      // OS 横幅的清除仍由 Swift 侧负责（当前为如实 no-op，见
+      // MainWindowController.retireNoop——故计数恒 0，不虚报「已关闭」）。
+      for (const [id, route] of clickRoutes) {
+        if (retiredSourceIds.has(route.token.sourceId)) clickRoutes.delete(id)
+      }
       deps.sendNotify('retireNotifications', { sourceIds: [...retiredSourceIds] })
-      // 同步计数无法往返：返回 0 并注记（core 侧仅用于日志/裁决辅助）。
       return 0
     },
 

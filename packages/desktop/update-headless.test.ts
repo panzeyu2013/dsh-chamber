@@ -10,7 +10,9 @@
  *     无更新 → up-to-date（latestVersion/releaseUrl 清空）；
  *  ⑤ HTTP 失败 / 响应非数组 → error（绝不把 feed 故障伪装成「已是最新」）；
  *  ⑥ download/restartAndInstall 核心层显式拒绝（不是 UI 隐藏）；
- *  ⑦ subscribe 推送与退订；start() 不排周期检查。
+ *  ⑦ subscribe 推送与退订；start() 不排周期检查；
+ *  ⑨ 订阅者（宿主推送腿）抛错不反噬控制器：check 不卡死、二次检查仍推进
+ *     （2026-12 审查 blocker 回归——sidecar ctx 的缺失成员 stub 曾在此路径抛出）。
  * 纯逻辑（无网络、无 Electron、无真实 timer 等待）。
  */
 import { test } from 'node:test'
@@ -257,4 +259,24 @@ test('⑧ 渲染器侧 known reason 映射与本地化键锁步（跨包文本�
       (locales.match(new RegExp(`${key}:`, 'g')) ?? []).length, 2,
       `locales.ts 应有 ${key} 的 zh/en 两处定义`)
   }
+})
+
+test('⑨ 订阅者抛错不反噬控制器：check 不卡死、二次检查仍推进（2026-12 审查回归）', async () => {
+  const controller = createHeadlessUpdateController({
+    version: '0.3.1',
+    logger,
+    request: fakeFetch([release('v0.3.2')]),
+  })
+  const seen: string[] = []
+  controller.subscribe((state) => {
+    seen.push(state.phase)
+    throw new Error('listener boom')
+  })
+  // 每个相位的 listener 抛错都只响亮记录，IPC 仍 resolve（原缺陷：首个
+  // 'checking' 推送就把异常抛穿 runCheck，checking 卡死、后续检查永久 no-op）。
+  await assert.doesNotReject(controller.checkNow())
+  assert.deepEqual(seen, ['checking', 'available'], '推送照常推进（抛错不吞相位）')
+  assert.equal(controller.state().phase, 'available')
+  await controller.checkNow()
+  assert.deepEqual(seen, ['checking', 'available', 'checking', 'available'], 'checking 必须复位')
 })

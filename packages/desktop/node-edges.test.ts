@@ -10,7 +10,9 @@
  *  ④ __host.rendererLifecycle 命中注入汇，未知事件 → loud；
  *  ⑤ 未注入汇 → loud；
  *  ⑥ hostFacts 仍刷新同步门缓存（回归）；
- *  ⑦ 未知 __host.* → loud。
+ *  ⑦ 未知 __host.* → loud；
+ *  ⑩ 通知 click 路由生命周期（shown 后仍可激活 / 显示失败即注销 / 来源退役即注销 /
+ *     未知 id 静默 ok）——2026-12 审查回归。
  * 纯逻辑（无子进程、无 sidecar spawn）。
  */
 import { test } from 'node:test'
@@ -178,4 +180,49 @@ test('⑨ __host.quitFacts 入参非法 / 未注入汇 → loud 拒绝', () => {
     bare.handleHostInbound(HOST_INBOUND.quitFacts, { quitRequested: false, recoveryAvailable: true }),
     { ok: false, error: 'sidecar-edges:quit-facts-sink-unavailable' },
   )
+})
+
+test('⑩ 通知 click 路由：shown 后仍可激活、显示失败/来源退役即注销、未知 id 静默 ok', async () => {
+  const activated: number[] = []
+  const token = { sourceId: 'src-1', fingerprint: 'f'.repeat(64), generation: 1 }
+  let failShow = false
+  const edges = createNodeEdges({
+    sendEdge: async (method: string) => {
+      if (method === 'showNativeNotification') {
+        if (failShow) throw new Error('show failed')
+        return { shown: true }
+      }
+      return null
+    },
+    sendNotify: () => {},
+  })
+  // 显示成功：click 路由必须存活到 click（Electron 同语义；core 从不调 dispose）。
+  const shown = edges.showNativeNotification({ title: 't', body: 'b' }, {
+    token,
+    onActivated: () => activated.push(1),
+  })
+  await shown.shown
+  assert.deepEqual(edges.handleHostInbound(HOST_INBOUND.notifyClicked, { notificationId: 1 }), { ok: true })
+  assert.deepEqual(activated, [1], 'shown 之后的点击必须回灌 onActivated（原缺陷：shown 即注销）')
+  // 显示失败：没有可点的横幅 → 路由立即注销（点击静默 ok，绝不误激活）。
+  failShow = true
+  const failed = edges.showNativeNotification({ title: 't2', body: 'b2' }, {
+    token,
+    onActivated: () => activated.push(2),
+  })
+  await failed.shown
+  assert.deepEqual(edges.handleHostInbound(HOST_INBOUND.notifyClicked, { notificationId: 2 }), { ok: true })
+  assert.deepEqual(activated, [1], '显示失败的通知不得保留 click 路由')
+  // 来源退役：该来源的路由随对象消亡（OS 横幅清除在 Swift 侧，本层只注销回灌）。
+  const retired = edges.showNativeNotification({ title: 't3', body: 'b3' }, {
+    token,
+    onActivated: () => activated.push(3),
+  })
+  await retired.shown
+  edges.retireNotificationsForSources(new Set(['src-1']))
+  assert.deepEqual(edges.handleHostInbound(HOST_INBOUND.notifyClicked, { notificationId: 3 }), { ok: true })
+  assert.deepEqual(activated, [1], '退役来源的通知点击不再回灌')
+  // 未知 id：横幅已被系统/淘汰回收——静默 ok（Swift 侧已自行恢复窗口）。
+  assert.deepEqual(edges.handleHostInbound(HOST_INBOUND.notifyClicked, { notificationId: 99 }), { ok: true })
+  assert.deepEqual(activated, [1])
 })
