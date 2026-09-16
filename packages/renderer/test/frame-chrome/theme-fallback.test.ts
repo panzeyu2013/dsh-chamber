@@ -32,6 +32,10 @@ test('the App publishes the active source in a layout effect (the producer half 
   // Without this publish `activeSourceId` stays undefined, the projector's
   // fail-open arm applies to EVERY instance, and the original N-ctx defect
   // returns with all projector/unit tests still green (2026-12 review MAJOR-1).
-  assert.match(app, /useLayoutEffect\(\(\) => \{\s*chamberBridge\.setActiveSource\(activeView\)\s*\}, \[activeView\]\)/s,
+  // The effect body may carry SIBLING document-global publications (the
+  // page-language owner is published in the same commit — see
+  // page-language.test.ts); the lock is the publish itself, inside the layout
+  // effect keyed on activeView, before paint.
+  assert.match(app, /useLayoutEffect\(\(\) => \{\s*chamberBridge\.setActiveSource\(activeView\)[\s\S]*?\}, \[activeView\]\)/,
     'the active view must be published before paint, keyed on activeView')
 })

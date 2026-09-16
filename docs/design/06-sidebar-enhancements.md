@@ -522,7 +522,7 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
 聚合轮询陈旧（≤一个轮询周期）时 running 环与子 agent 环瞬时同形，
 取实时通道为真。
 
-### 4.6 文档级主题投影归属（N-ctx）
+### 4.6 文档级全局量的活动视图归属（N-ctx）
 
 - **缺陷**：官方 `ThemePresenter`（vendor
   `packages/client/ui-layout/src/client/theme-presenter.ts`）把主题投影到
@@ -536,8 +536,10 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   的 `body` 块，无属性即浅色）与 chamber 壳的 `:root{color-scheme}` 兜底
   拼在一起——「浅色界面 + 深色原生 checkbox」直到某次 theme/change 或重挂载
   才自愈（用户观察：点服务器/切主题后刷新才恢复）。
-- **归属规则**：**主题**投影只由活动视图的实例写（其余文档级写入者
-  另见下方「同族残留」——本节结论仅覆盖主题这组全局量）。
+- **归属规则**：文档级全局量只由**活动视图**的实例写。本节已落地的两条——
+  **主题**（以下各条）与**页面语言 `<html lang>`**（见下方「页面语言
+  （`<html lang>`）归属」）——共用同一份「谁在屏上」权威与同一种
+  producer+projector 模式；其余文档级写入者另见下方「同族残留」。
   App 是「谁在屏上」的唯一权威，经 page-wide chamberBridge 发布
   （`setActiveSource`/`getActiveSource`/`onActiveSource`，`shared/aggregate-store.ts`）；
   ui-layout fork 的 `document-theme.ts` 按 `ctx.chamberInstanceId` 门控：
@@ -554,23 +556,90 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   （活动视图发布，`useLayoutEffect` 保证绘制前生效）、`shared/aggregate-store.ts`
   （活动来源事实 + 单测）、`packages/renderer/src/styles.css`（兜底值，
   源码级钉子 `packages/renderer/test/frame-chrome/theme-fallback.test.ts`）。
+- **页面语言（`<html lang>`）归属（2026-12 修复）**：官方 locale 服务的
+  `syncDocumentLanguage` 在**每个实例壳**的 ctx 里无条件写
+  `document.documentElement.lang`——激活时一次、之后**每次字典注册**再写一次
+  （`@deepseek-ai/dsh-client-locale` 的 `apply()` → `sync()`），无 teardown、
+  无活动来源判定；实例自己的语言偏好还要等 settings mirror 异步落地才写回。
+  N 壳同文档时这就是 last-writer-wins：预热/收割壳的 en（`detectBrowserLocale`
+  只认已注册语言，`navigator.languages` 指不到 zh 时回落 en——**运行形态相关**：
+  打包配置 `electronLanguages: [en-US, zh-CN]` 裁剪 locales，dev/整包形态可能
+  直接报 zh-CN；壳自身语言偏好为 en 时同理）会把可见的中文文档翻成
+  `lang=en`；**T16 之后框架 chrome
+  也按该属性解析**（`renderer/src/locales.ts`），用户可感的形态是「本地实例 /
+  Local instance」在 boot 期间来回闪烁，且最终由"谁最后写"决定。
+  - **归属规则**：页面语言 = **屏上来源**（App 的 `activeView`，默认恒为本地
+    实例）**设置面已敲定**之后的语言；**设置面未敲定期间**的 provisional 永不
+    拥有页面（含屏上来源自己的）；后台/预热壳的任何写入一律被就地回写；切到
+    尚未敲定的来源时保持当前页面语言，等它敲定再切一次（敲定后该实例的**有效
+    语言**才成为页面语言——没有存过偏好时，那就是它自己仍在用的浏览器兜底值）。
+  - **机制**：`renderer/src/page-language.ts`（纯投影 + 页级 owner，带
+    MutationObserver 兜底）＋ `renderer/src/locale-ownership.ts`（每 entry 的
+    上报钩子：读 vendor LocaleFace 的 active，用 `ctx.settingsScope.bind({namespace:
+    'locale'})` 的 status 判「设置面已敲定」）＋ `chamber-entry.ts` 的挂载装饰器
+    （`decorateMount` 在 vendor `apply()` **之后同栈**运行，所以"vendor 写 →
+    归属器回写"落在同一个同步任务里，中间不可能绘制；**两条挂载路径**
+    ——首屏 `register` 与 `registerDeferred`——都过装饰器）＋ `main.tsx` 在任何壳
+    boot 之前安装 owner（served markup 的 `lang` 即冷启动值）＋ `App.tsx` 在
+    发布活动来源的同一 `useLayoutEffect` 里发布给它。
+    三处 2026-12 review 加固：① owner 存在**页级全局槽**（`globalThis` 上的
+    `__dshChamberPageLanguageOwner__`）——frame 入口与 composite 入口是两个 chunk、
+    今天靠单次 Rollup 构建的共享 chunk 才共用同一模块实例，重估（HMR）或未来
+    拆构建都不得产生第二个 owner/观察者；② 事实带**挂载世代**（`mountGeneration`），
+    退出的旧挂载不能抹掉同 id 新挂载的事实；③ 绑到的 settings scope 与 LocaleFace
+    一样做**形状检查**，坏形状 fail-open 而不是把异常抛进 vendor fiber（那会变成
+    降级启动通知）。
+  - **失败开放（2026-12 review 措辞修正）**：无 `chamberInstanceId`（官方单壳
+    形态）/读不到 LocaleFace/绑不到 settings scope 时该壳**不参与归属**——它的
+    语言永不被采纳（页面停在当前语言，直到出现可归属的来源），但页级归属器仍会
+    把它的写入回写为当前页面语言（不会闪）；"vendor 行为完全不变"只对**根本不装
+    归属器**的官方单壳形态成立，不是舱内某个 fail-open 壳的保证。`registerDeferred`
+    的挂载同样过 `decorateMount`，未来把受装饰 id 移进 `DEFERRED_ROWS` 时不会
+    静默失去归属。
+  - **既定结果**：设置桥可以编辑**非活动**来源的设置，其中 ctx-free 的
+    时间戳渲染（`DshRuntimeSection.tsx` 的 `formatTimestamp`）按页面语言
+    （= 屏上来源）取值——这正是"只有屏上实例能拥有页面语言"的直接推论，不是
+    缺陷；要让设置面跟随被编辑来源的语言，需另立规则（未采纳，本版不做）。
+  - **被否的替代方案**：
+    - **vendor fork 门控**（把 `dsh-client-locale` 纳入 in-repo fork，在
+      `syncDocumentLanguage` 里按 `chamberInstanceId` 门控）：语义等价且写入点
+      更干净，但该包要进受保护集合与 upstream-touchpoints 登记、每次 dsh 升级
+      背维护；composite 已有"vendor `apply()` 之后同栈"的挂载缝（`decorateMount`），
+      能拿到同样的"非活动壳永不生效"，故不选。
+    - **构建期 vendor patch**（`scripts/vendor-patches.mjs` 再加一条 C9 锚点，把
+      `syncDocumentLanguage` 门控在 `ctx.get('chamberInstanceId')` 上）：写入点更
+      干净，但会把"文档级归属"的逻辑埋进 vendor 文本重写里，且 patch 锚点是每次
+      dsh 升级都要维护的常驻成本；只有在观察者回写被证明不够时才升级到这条路。
+    - **只在框架侧解耦**（框架不再读 `document.lang`，改读来源事实）：只消掉框架
+      chrome 的闪烁，`document.lang` 本身仍错——a11y `:lang`、语言相关 CSS、
+      settings-bridge 的 ctx-free 读取点仍会跳，属症状级。
+    - **页面语言长期归本地实例**（不随屏上来源切换）：与 design 05 §4 同节
+      「文档级全局量由活动视图独占」的规则冲突，切到英文远程时框架 chrome 与
+      屏上 UI 语言不一致。
+    - **只按活动来源门控、不判"设置面已敲定"**：本地实例自己的 provisional
+      仍会把默认进入闪一次（用户报告的主症状之一），不满足"默认进入只和本地实例
+      的设置相关"。
+  - **证据**：`packages/renderer/test/frame-chrome/page-language.test.ts`
+    （规则 + 状态机 + 挂载世代 + 接线锁）、`page-language-hook.test.ts`（真实
+    decorator + 真实归属器、stub DOM 端到端：同栈回写 / 后台壳 / 切换等待 /
+    世代 / fail-open 形状）、`locale-vendor-contract.test.ts`（§4 契约镜像的
+    只读锁步：服务名、`installLocale`、namespace 字面量、`subscribe(sync)` 先于
+    立即 `sync()`、scope 的 `loading/ready/unavailable` 词表）、
+    `theme-fallback.test.ts`（活动来源发布锁）、`required-extra-rows.test.ts`
+    （两条挂载路径的装饰器形状锁）。
 - **同族残留（非本节修复面）**：同一份文档里还有其它
   document-global 状态被逐实例写/监听，属同一"N-ctx 单文档"缺陷族：
   ①**文档级 `drop` 扇出（真实缺陷）**——vendor `ui-attachment`
   `ComposerAttachments.tsx` 在 document 上挂 drop 监听且无 containment/活动视图
   判定，local 与任一挂载远程同时在场时，拖入的图片会同时附到**两个**实例的
   草稿（修法需 vendor patch 路线：按 event.target 归属或按活动来源门控）；
-  ②**`<html lang>` last-writer-wins（真实缺陷）**——vendor `locale` 每次 boot
-  写 `documentElement.lang` 且无 teardown 回收，预热实例的 dsh locale 为 en 时
-  会把可见的中文文档翻成 `lang=en`（连带影响 runtime 分节的本地化）；**2026-09-11
-  upstream-alignment T16 后影响面更大**：App 框架自己的 chrome 文案
-  （骨架屏/失败屏/通知标题，`renderer/src/locales.ts`）也按该属性解析——即框架
-  文案与文档语言同源、也同受这条缺陷牵动（缓冲是"下一次投影/locale 变更即自愈"，
-  与 ④ 同型）；
-  ③**`document.title`（已被主进程掩盖）**——每个壳的 DocumentTitle 竞争写/清，
-  桌面主进程冻结标题故当前不可见；④**`--dsh-content-font-size` 播种**
+  ②**`document.title`（机制上仍活着，只是被主进程掩盖）**——chamber 的 ui-layout
+  fork deep-import 官方 `AppFrame`，其 `DocumentTitle` 每个壳竞争写/清；桌面主进程
+  冻结窗口标题故当前不可见。它**不**并入本节的页面语言归属器（归属器的被拥有值是
+  语言，没有会话标题投影）：将来的归属点是与 `document-theme` 同址的 ui-layout
+  fork（按 `chamberBridge` 活动来源门控）或 ui-layout vendor patch；③**`--dsh-content-font-size` 播种**
   （vendor `bootstrapFontSize` 读 body 变量）会读到"上一个 applier"的值，
-  下一次投影自愈；⑤**portal 逃逸（真实缺陷，部分收窄）**——vendor
+  下一次投影自愈；④**portal 逃逸（真实缺陷，部分收窄）**——vendor
   `ui-primitives/Modal`（含 backdrop）与 chamber 的 SettingsShell 都
   portal 到 `document.body`，而 `.instance-hidden` 只隐藏视图子树：视图 A 里
   打开的模态在程序化切换（深链/通知/注册表回落）后仍盖在 B 上，直到 A 被回收；
@@ -583,10 +652,10 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   未修形态；
   同族 `ui-attachment/DropOverlay` 由每个挂载中的 ComposerAttachments 各渲染
   一份（N 层遮罩，隐藏视图的禁用副本可能盖在活动视图的启用副本之上）；
-  ⑥**主题样式表重复**——vendor `installThemeStyles` 每个实例 ctx 各插 6 个
+  ⑤**主题样式表重复**——vendor `installThemeStyles` 每个实例 ctx 各插 6 个
   `<style>`（同内容，随各自 fiber 移除，级联无影响，属良性重复）。
-  ①/② 的治本同本节：按活动来源门控，但落在 vendor 源码，需 seed/patch 路线
-  裁定后实施（②可纯 chamber 侧做：同样的 producer+projector 模式）。
+  ① 的治本同本节：按活动来源门控，但落在 vendor 源码，需 seed/patch 路线裁定后
+  实施。
 
 ## 5. 已知取舍与开放项（已决）
 

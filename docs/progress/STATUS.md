@@ -680,6 +680,20 @@
 - **N-ctx 文档级主题投影归属（design 06 §4.6）**：剩余=打包态实机目检——首屏、视图
   切换与回收窗口的 checkbox 深浅，以及预热视图不再互踩主题（验收前须
   `pnpm run dist:desktop:mac` 重打包：安装态 `.app` 可能落后仓库一个构建）。
+- **页面语言归属（design 06 §4.6「页面语言归属」）**：剩余=实机目检——一次冷启动里
+  `document.lang` 的**语言类**变化 ≤1，且必由"屏上实例的设置面敲定"引起；预热/收割/
+  后台壳 boot 期间变化 = 0（侧栏来源名与骨架/失败文案不得再出现语言波动）。打包版
+  无 CDP，需 `pnpm run acceptance:gui -- --dev` 起隔离 dev 实例后在页面挂
+  `MutationObserver` 记 `document.lang` 时间线；dev 实例注册表是干净的，至少要注册
+  一个远程源才能覆盖多写者形态。同一轮目检要一并确认两点：①**跨语言切换的同一帧性**
+  ——归属器在 `App` 的 layout effect 里写属性，框架 copy 经 uSES 观察者在微任务后重渲染，
+  若实机看到一帧陈旧框架文案，改为从 `owner.languageOf()` 取值或在该 effect 内强制渲染；
+  ②**持续未敲定的降级姿态**——`settings.describe` 持续失败时该 namespace 的 scope 停在
+  `loading`（vendor 镜像回到 `idle`），此时屏上实例自己的 UI 用浏览器兜底值而页面停在
+  服务端默认（`zh-CN`）：这是刻意选择（把"未答"当已答会直接复活本问题），不是缺陷。
+- **构建后回填（design 06 §4.6 的源文件增量）**：`check-chunk-budgets.mjs` 的
+  `chamberEntry` 基线（warn 线余量本就很薄）要在真实 `pnpm run build:renderer` 后
+  重新取样并回填脚本头部/performance-baseline 代表点；本环境无 node_modules 不能构建。
 - **Git 来源分支候选（design 08 §4.2 尾条）**：剩余=打包态实机目检（判别期 harness
   gateway 停机，wire 快照仅由 host 代码路径 + 宿主 git 事实推断）；unborn（零提交）
   仓库 `branches` 必空 + 默认 base 40 零直送 git 无 preview 门仍为代码面已知残留
@@ -1226,14 +1240,12 @@
     **剩余** = 托管 dsh 停机的恢复原语（`/chamber/runtime/start`）仍未从设置面板
     直达（现需走 connections 页的「启动实例」）。
   - **同一份文档的其它逐实例全局量（2026-12 复查登记，design 06 §4.6「同族残留」）**：
-    主题投影为活动视图独占，但同族还有六处——①**文档级 `drop` 扇出（真实
+    主题投影为活动视图独占，但同族还有五处——①**文档级 `drop` 扇出（真实
     缺陷，未修）**：vendor `ui-attachment/ComposerAttachments` 在 document 上挂
-    drop 且无归属判定，两个壳同时挂载时一张图会同时附到两个实例的草稿；②**`<html
-    lang>` last-writer-wins（真实缺陷，未修，且被收割放大）**：vendor `locale` 每次
-    boot 写且无 teardown 回收，预热/收割实例的 en locale 会把可见文档翻成 `lang=en`；
-    ③`document.title` 竞争写（被桌面主进程冻结标题掩盖，当前不可见）；④
+    drop 且无归属判定，两个壳同时挂载时一张图会同时附到两个实例的草稿；
+    ②`document.title` 竞争写（被桌面主进程冻结标题掩盖，当前不可见）；③
     `--dsh-content-font-size` 播种读到上一个 applier 的值（下次投影自愈）；
-    ⑤**portal 逃逸（真实缺陷，未修）**：portal 到 `document.body` 的使用者 = vendor
+    ④**portal 逃逸（真实缺陷，未修）**：portal 到 `document.body` 的使用者 = vendor
     `ui-primitives/Modal`（含 backdrop）、官方 `Menu` 的 portal 形态（侧栏来源头排序
     菜单与行菜单）与 chamber SettingsShell 的服务器下拉
     （`SettingsShell.module.css .dropdownList`，注释即写 "Body-portal list"）——
@@ -1249,9 +1261,9 @@
     （`z-index: 900` < 失败覆盖层 1000），因此**同样会被 body portal 盖住**——它不新增
     逃逸成员，只是又一个受本条影响的 chamber chrome 面（验收按"既有边界"判，不当新缺陷）；
     同族 `DropOverlay` 每壳一份
-    （N 层遮罩，隐藏壳的禁用副本可能盖住活动壳的启用副本）；⑥主题样式表每壳各插
-    6 个 `<style>`（同内容、随 fiber 移除，良性重复）。①②的修法同主题：按活动来源
-    门控（②可纯 chamber 侧实现），需 seed/patch 路线裁定后实施。
+    （N 层遮罩，隐藏壳的禁用副本可能盖住活动壳的启用副本）；⑤主题样式表每壳各插
+    6 个 `<style>`（同内容、随 fiber 移除，良性重复）。①的修法同主题：按活动来源
+    门控，落在 vendor 源码，需 seed/patch 路线裁定后实施。
   - **活跃视图的"数据面拉活"仍缺席（2026-12 评估，未实施）**：对**当前活跃**来源，
     点会话行不触发任何聚合刷新（`openSession` 只做导航分发；`selectView` 对活跃
     视图早退），其新鲜度完全依赖后台通道（30s 兜底 watchdog / producer 推送 /
