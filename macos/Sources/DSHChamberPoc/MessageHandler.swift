@@ -88,6 +88,11 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
     /// 反向强持 webView 会成环；闭包内捕获 controller/webView 应 weak）。
     var evaluateJavaScript: ((String) -> Void)?
 
+    /// 原生通道令牌（S-06）：controller 注入 shim 时使用同一个值，护栏回执必须
+    /// 带上它（shim 的 requireNativeToken 校验）。未赋值时拒绝回写并 loud——绝不下发
+    /// 一个必然被 shim 抛错的无令牌调用。
+    var nativeChannelToken: String?
+
     /// 最近一次已提交导航（didCommit）的顶层 URL：controller 在导航提交时
     /// 调 noteCommitted(url:) 更新。origin 判定以 message.webView?.url
     /// （实时）优先、此记录兜底（webView 缺省 / 进程终止 / 测试桩），
@@ -248,7 +253,12 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
 
     /// 护栏不过 → 经 evaluateJavaScript 回 `__dshChamberResolve(id, null, 码)`。
     private func reject(id: Int, code: String) {
-        evaluateJavaScript?("__dshChamberResolve(\(id), null, \(Self.jsStringLiteral(code)));")
+        guard let token = nativeChannelToken else {
+            print("[poc] 原生通道令牌未注入，无法回执 \(code)（S-06）")
+            return
+        }
+        evaluateJavaScript?("__dshChamberResolve(\(Self.jsStringLiteral(token)), \(id), null, "
+            + "\(Self.jsStringLiteral(code)));")
     }
 
     /// 整值字段校验：JS 数字桥接为 NSNumber，仅接受非布尔、整值且在 Int

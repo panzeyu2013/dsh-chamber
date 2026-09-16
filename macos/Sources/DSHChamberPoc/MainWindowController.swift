@@ -38,6 +38,13 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     private static let consoleMessageName = "pocConsole"
     /// A 桥 shim 资源文件名（Resources/ 下，W-04 作者创建，本文件只读取）
     private static let shimResourceName = "bridge-shim.poc.js"
+
+    /// 本次窗口的原生通道令牌（S-06）：注入时写进 shim，回执/推送时作为首参
+    /// 回传；页面脚本无从得知（内部管路不在公开面上）。
+    private let nativeChannelToken = BridgeShimInjector.makeNativeToken()
+
+    /// 令牌的 JS 字符串字面量（十六进制，无需转义）。
+    private var nativeTokenLiteral: String { "\"\(nativeChannelToken)\"" }
     /// 可 invoke 的 method 白名单：W-04 是最小 7 通道集；W-18 manifest 化后
     /// 扩为 BridgeManifest.invokeChannels 全集（60/60 真实现都在 sidecar 侧，
     /// 语义权威与护栏仍在 sidecar/TrustGuard——readiness/badge 等通道不再
@@ -128,7 +135,11 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
         // A 桥 shim 注入（W-04：BridgeShimInjector.install 负责落 WKUserScript）
         if let shimSource = Self.readShimSource() {
-            BridgeShimInjector.install(config: configuration, source: shimSource)
+            // S-06：注入前把占位符换成窗口随机令牌（内部管路 resolve/emit/
+            // rehydrate 都要带对令牌才生效）。
+            BridgeShimInjector.install(
+                config: configuration,
+                source: BridgeShimInjector.injectNativeToken(nativeChannelToken, into: shimSource))
             print("[poc] A 桥 shim 注入完成（\(Self.shimResourceName)）")
         } else {
             print("[poc] 警告：资源中找不到 \(Self.shimResourceName)，跳过 shim 注入")
@@ -153,6 +164,8 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         handler.evaluateJavaScript = { [weak self] script in
             self?.evaluateJS(script)
         }
+        // S-06：护栏回执也要带原生通道令牌（与注入 shim 的同一个值）。
+        handler.nativeChannelToken = nativeChannelToken
         bridgeHandler = handler
         configuration.userContentController.add(handler, name: Self.bridgeMessageName)
 
@@ -465,12 +478,12 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             do {
                 let result = try await bridge.invoke(method: method, payload: payload)
                 let resultJSON = Self.jsonLiteral(result.jsonObject) ?? "null"
-                evaluateJS("__dshChamberResolve(\(id), \(resultJSON), null)")
+                evaluateJS("__dshChamberResolve(\(nativeTokenLiteral), \(id), \(resultJSON), null)")
             } catch {
                 // 失败：__dshChamberResolve(id, null, <errorString>)；errorString
                 // 经 JSON 序列化即为合法 JS 字符串字面量
                 let errorJSON = Self.jsonLiteral(error.localizedDescription) ?? "\"bridge error\""
-                evaluateJS("__dshChamberResolve(\(id), null, \(errorJSON))")
+                evaluateJS("__dshChamberResolve(\(nativeTokenLiteral), \(id), null, \(errorJSON))")
             }
         }
     }
@@ -488,7 +501,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         } else {
             payloadJSON = "null"
         }
-        evaluateJS("__dshChamberEmit(\(eventJSON), \(payloadJSON))")
+        evaluateJS("__dshChamberEmit(\(nativeTokenLiteral), \(eventJSON), \(payloadJSON))")
     }
 
     /// 主线程执行 JS（所有调用点都已收敛到主线程）
@@ -738,7 +751,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // documentStart 就定义 surface，若首次 1+10 次水化都在 ready 前被就绪门
         // 拒掉，之前没有任何 re-kick → 版本/平台整会话缺失。
         if ready {
-            evaluateJS("window.__dshChamberRehydrateInfo && window.__dshChamberRehydrateInfo()")
+            evaluateJS("window.__dshChamberRehydrateInfo && window.__dshChamberRehydrateInfo(\(nativeTokenLiteral))")
         }
     }
 

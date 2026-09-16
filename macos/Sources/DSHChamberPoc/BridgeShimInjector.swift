@@ -32,6 +32,26 @@ enum BridgeShimInjector {
     /// __dshChamberResolve/__dshChamberEmit 的注入可达性与 hydration 对拍
     /// （renderer 的 bridge-hydration「surface 缺失 + 100ms×20 快速链」自愈
     /// 语义不变）。
+    /// 原生通道令牌占位符（S-06，与 shim 里 NATIVE_CHANNEL_TOKEN 的字面量一致）：
+    /// 安装前必须用 `injectNativeToken` 换成窗口随机值。
+    static let nativeTokenPlaceholder = "__DSH_CHAMBER_NATIVE_TOKEN__"
+
+    /// 每次窗口创建时生成的原生通道令牌：32 位十六进制（128 位随机）。只注入
+    /// shim、只在 Swift 侧留存——页面脚本无法得知，从而无法伪造原生回执/事件。
+    static func makeNativeToken() -> String {
+        var bytes = [UInt8](repeating: 0, count: 16)
+        for index in bytes.indices { bytes[index] = UInt8.random(in: 0...255) }
+        return bytes.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// 把占位符替换为令牌（fail-closed：替换后仍含占位符说明注入失败）。
+    static func injectNativeToken(_ token: String, into source: String) -> String {
+        let injected = source.replacingOccurrences(of: nativeTokenPlaceholder, with: token)
+        precondition(!injected.contains(nativeTokenPlaceholder),
+                     "shim 源码仍含原生通道令牌占位符：token 注入失败会退化为可伪造")
+        return injected
+    }
+
     static func makeUserScript(source: String) -> WKUserScript {
         WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true)
     }

@@ -228,8 +228,19 @@
     })
   }
 
-  /** Called by Swift as window.__dshChamberResolve(id, result, err). */
-  function resolveInvocation(id, result, err) {
+  /** 原生通道令牌（S-06，2026-12 复裁决）：壳在注入前把占位符替换成每次窗口随机
+   *  的 32 位十六进制串。内部管路不在公开面上，页面脚本无从得知令牌值——伪造
+   *  「原生回执」或「原生事件」必须先猜中令牌，猜不中即抛，绝不静默生效。 */
+  var NATIVE_CHANNEL_TOKEN = '__DSH_CHAMBER_NATIVE_TOKEN__'
+  function requireNativeToken(token) {
+    if (token !== NATIVE_CHANNEL_TOKEN) {
+      throw new Error('dsh-chamber: native channel token mismatch')
+    }
+  }
+
+  /** Called by Swift as window.__dshChamberResolve(token, id, result, err). */
+  function resolveInvocation(token, id, result, err) {
+    requireNativeToken(token)
     var entry = pending.get(id)
     // Unknown id = leftover from an earlier page generation (Swift replay /
     // reload race). The pending table is per-document; ignoring is safe.
@@ -246,10 +257,11 @@
 
   var listeners = new Map() // eventName -> Array<Function>
 
-  /** Called by Swift as window.__dshChamberEmit(event, payload). Payload is
-   *  JSON or null; listeners receive undefined for null (matching how the
+  /** Called by Swift as window.__dshChamberEmit(token, event, payload). Payload
+   *  is JSON or null; listeners receive undefined for null (matching how the
    *  preload-side push handlers see an absent payload). */
-  function emitToListeners(event, payload) {
+  function emitToListeners(token, event, payload) {
+    requireNativeToken(token)
     var callbacks = listeners.get(event)
     if (callbacks === undefined || callbacks.length === 0) return
     var value = payload === null ? undefined : payload
@@ -628,7 +640,8 @@
   // 内部管路（Swift 需要它们在任何时刻都能回执/推送）：立即定义。
   defineWindowGlobal('__dshChamberResolve', resolveInvocation)
   defineWindowGlobal('__dshChamberEmit', emitToListeners)
-  defineWindowGlobal('__dshChamberRehydrateInfo', function () {
+  defineWindowGlobal('__dshChamberRehydrateInfo', function (token) {
+    requireNativeToken(token)
     // sidecar ready 后由 Swift 触发：重跑一次 info 水化（成功即暴露公开面）。
     fetchInfo(INFO_MAX_ATTEMPTS + 1)
   })
