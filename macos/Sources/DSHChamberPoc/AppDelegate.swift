@@ -189,18 +189,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 // 恒 17520，打包态 URL 已改 17500 → 端口错配、白窗）。S11：
                 // POC_PORT > DSH_CHAMBER_CP_PORT > dev 空闲端口退避（packaged
                 // 固定 17500，不改）；解析结果同时派生控制面 URL。
-                let port: String
-                do {
-                    let resolution = try ControlPlanePort.resolve(
-                        env: env, isPackaged: isPackaged,
-                        probeDevPort: { ControlPlanePort.probeFreePort(startingAt: $0) })
-                    port = String(resolution.port)
-                    print("[poc] 控制面端口 = \(port)（\(Self.portSourceLabel(resolution.source))）")
-                } catch let error as ControlPlanePort.ResolutionError {
-                    fatalStartup(error.message)
-                } catch {
-                    fatalStartup("控制面端口解析失败：\(error.localizedDescription)")
-                }
+                // S-03（2026-12 复裁决）：非法显式端口 / dev 退避耗尽**降级不致命**
+                // （对齐 Electron `resolveControlPlanePort()`，shell-core.ts:425-442）。
+                // 降级原因逐条 loud 打印，绝不静默换端口。
+                let resolution = ControlPlanePort.resolve(
+                    env: env, isPackaged: isPackaged,
+                    probeDevPort: { ControlPlanePort.probeFreePort(startingAt: $0) },
+                    probeEphemeralPort: { ControlPlanePort.probeEphemeralPort() })
+                for notice in resolution.notices { print("[poc] 端口降级：\(notice)") }
+                let port = String(resolution.port)
+                print("[poc] 控制面端口 = \(port)（\(Self.portSourceLabel(resolution.source))）")
                 resolvedCPPort = port
                 sidecarArguments += [
                     "--user-data-dir", stateDir,
@@ -994,6 +992,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         case .packagedDefault: return "打包默认"
         case .devProbe: return "dev 自动退避（17520 起，首个空闲端口）"
         case .devDefault: return "dev 默认（自定义 sidecar 形状，不探测）"
+        case .devEphemeral: return "dev 退避耗尽 → 系统临时端口"
         }
     }
 

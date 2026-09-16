@@ -327,38 +327,66 @@ final class ShellStartupTests: XCTestCase {
 
     // MARK: - S11：ControlPlanePort
 
-    func testPortResolutionPrecedenceAndPackagedDefault() throws {
-        XCTAssertEqual(try ControlPlanePort.resolve(
+    func testPortResolutionPrecedenceAndPackagedDefault() {
+        XCTAssertEqual(ControlPlanePort.resolve(
             env: ["POC_PORT": "18001", "DSH_CHAMBER_CP_PORT": "18002"],
             isPackaged: false, probeDevPort: { _ in 19999 }).port, 18001)
-        XCTAssertEqual(try ControlPlanePort.resolve(
+        XCTAssertEqual(ControlPlanePort.resolve(
             env: ["DSH_CHAMBER_CP_PORT": "18002"], isPackaged: false,
             probeDevPort: { _ in 19999 }).port, 18002)
-        XCTAssertEqual(try ControlPlanePort.resolve(
+        XCTAssertEqual(ControlPlanePort.resolve(
             env: [:], isPackaged: true, probeDevPort: nil),
             .init(port: 17500, source: .packagedDefault), "packaged 行为不变：固定 17500")
-        XCTAssertEqual(try ControlPlanePort.resolve(
+        XCTAssertEqual(ControlPlanePort.resolve(
             env: [:], isPackaged: false, probeDevPort: { $0 + 3 }),
             .init(port: 17523, source: .devProbe))
         // 自定义 sidecar 形状（不探测）→ dev 固定缺省
-        XCTAssertEqual(try ControlPlanePort.resolve(
+        XCTAssertEqual(ControlPlanePort.resolve(
             env: [:], isPackaged: false, probeDevPort: nil),
             .init(port: 17520, source: .devDefault))
     }
 
-    func testPortResolutionRejectsInvalidAndExhausted() {
-        XCTAssertThrowsError(try ControlPlanePort.resolve(
-            env: ["POC_PORT": "abc"], isPackaged: false, probeDevPort: nil)) { error in
-            XCTAssertEqual(error as? ControlPlanePort.ResolutionError,
-                           .invalidExplicitPort(key: "POC_PORT", value: "abc"))
+    /// S-03（2026-12 复裁决）：非法显式端口与退避耗尽一律**降级不致命**，
+    /// 对齐 Electron `resolveControlPlanePort()`（shell-core.ts:425-442）。
+    func testPortResolutionDegradesInsteadOfFailing() {
+        let invalidPOC = ControlPlanePort.resolve(
+            env: ["POC_PORT": "abc"], isPackaged: true, probeDevPort: nil)
+        XCTAssertEqual(invalidPOC.port, 17500, "非法 POC_PORT 落到打包缺省，不再致命")
+        XCTAssertEqual(invalidPOC.source, .packagedDefault)
+        XCTAssertTrue(invalidPOC.notices.contains { $0.contains("POC_PORT") },
+                      "降级必须 loud（notices 含原因）")
+
+        let invalidDSH = ControlPlanePort.resolve(
+            env: ["DSH_CHAMBER_CP_PORT": "70000"], isPackaged: false,
+            probeDevPort: { $0 + 1 })
+        XCTAssertEqual(invalidDSH.port, 17521)
+        XCTAssertEqual(invalidDSH.source, .devProbe)
+        XCTAssertTrue(invalidDSH.notices.contains { $0.contains("DSH_CHAMBER_CP_PORT") })
+
+        // 退避区间全占用 → 系统临时端口（注入假探针，避免真占 200 个端口）。
+        let exhausted = ControlPlanePort.resolve(
+            env: [:], isPackaged: false, probeDevPort: { _ in nil },
+            probeEphemeralPort: { 54321 })
+        XCTAssertEqual(exhausted.port, 54321)
+        XCTAssertEqual(exhausted.source, .devEphemeral)
+        XCTAssertFalse(exhausted.notices.isEmpty)
+
+        // 连临时端口都拿不到 → 回退固定缺省；依然不致命。
+        let hopeless = ControlPlanePort.resolve(
+            env: [:], isPackaged: false, probeDevPort: { _ in nil },
+            probeEphemeralPort: { nil })
+        XCTAssertEqual(hopeless.port, 17520)
+        XCTAssertEqual(hopeless.source, .devDefault)
+        XCTAssertFalse(hopeless.notices.isEmpty)
+    }
+
+    /// 真 socket 路径：bind 0 取到的系统临时端口必须可解析且落在合法区间。
+    func testProbeEphemeralPortReturnsBindablePort() {
+        guard let port = ControlPlanePort.probeEphemeralPort() else {
+            return XCTFail("bind 0 应能拿到系统临时端口")
         }
-        XCTAssertThrowsError(try ControlPlanePort.resolve(
-            env: ["DSH_CHAMBER_CP_PORT": "70000"], isPackaged: false, probeDevPort: nil))
-        XCTAssertThrowsError(try ControlPlanePort.resolve(
-            env: [:], isPackaged: false, probeDevPort: { _ in nil })) { error in
-            XCTAssertEqual(error as? ControlPlanePort.ResolutionError,
-                           .noFreeDevPort(start: 17520, attempts: 200))
-        }
+        XCTAssertGreaterThan(port, 0)
+        XCTAssertLessThanOrEqual(port, 65535)
     }
 
     func testRealSidecarScriptShape() {

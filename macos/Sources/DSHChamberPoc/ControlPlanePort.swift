@@ -34,54 +34,57 @@ public enum ControlPlanePort {
         case packagedDefault
         case devProbe
         case devDefault
+        /// 2026-12 S-03 对齐：dev 退避区间全占用 → 系统临时端口（bind 0 取实际端口）。
+        case devEphemeral
     }
 
     public struct Resolution: Equatable {
         public var port: Int
         public var source: Source
-    }
-
-    public enum ResolutionError: Error, Equatable {
-        case invalidExplicitPort(key: String, value: String)
-        case noFreeDevPort(start: Int, attempts: Int)
-
-        public var message: String {
-            switch self {
-            case .invalidExplicitPort(let key, let value):
-                return "\(key)=\(value) 不是合法端口（需 1…65535 的整数）"
-            case .noFreeDevPort(let start, let attempts):
-                return "dev 控制面端口 \(start)…\(start + attempts - 1) 全部被占用（bind 探测失败）"
-            }
-        }
+        /// 降级说明（loud 打印用）。S-03 复裁决：非法显式端口 / 退避耗尽一律
+        /// **降级不致命**，对齐 Electron `resolveControlPlanePort()`
+        /// （`shell-core.ts:425-442`：忽略非法值 + 退避耗尽回退系统临时端口 0）。
+        public var notices: [String] = []
     }
 
     /// 解析控制面端口。`probeDevPort` 为 nil（自定义 sidecar 形状）时不探测：
     /// dev 直接用 17520。
     public static func resolve(env: [String: String],
                                isPackaged: Bool,
-                               probeDevPort: ((Int) -> Int?)? = nil) throws -> Resolution {
+                               probeDevPort: ((Int) -> Int?)? = nil,
+                               probeEphemeralPort: (() -> Int?)? = nil) -> Resolution {
+        var notices: [String] = []
         if let raw = env["POC_PORT"], !raw.isEmpty {
-            guard let port = parsePort(raw) else {
-                throw ResolutionError.invalidExplicitPort(key: "POC_PORT", value: raw)
+            if let port = parsePort(raw) {
+                return Resolution(port: port, source: .envPOC, notices: notices)
             }
-            return Resolution(port: port, source: .envPOC)
+            notices.append("忽略非法 POC_PORT=\"\(raw)\"（需 1…65535 整数），落到下一优先源")
         }
         if let raw = env["DSH_CHAMBER_CP_PORT"], !raw.isEmpty {
-            guard let port = parsePort(raw) else {
-                throw ResolutionError.invalidExplicitPort(key: "DSH_CHAMBER_CP_PORT", value: raw)
+            if let port = parsePort(raw) {
+                return Resolution(port: port, source: .envDSH, notices: notices)
             }
-            return Resolution(port: port, source: .envDSH)
+            let fallback = isPackaged ? "默认端口 \(packagedDefault)" : "dev 自动退避端口"
+            notices.append("忽略非法 DSH_CHAMBER_CP_PORT=\"\(raw)\"（需 1…65535 整数），使用\(fallback)")
         }
         if isPackaged {
-            return Resolution(port: packagedDefault, source: .packagedDefault)
+            return Resolution(port: packagedDefault, source: .packagedDefault, notices: notices)
         }
         guard let probeDevPort else {
-            return Resolution(port: devDefault, source: .devDefault)
+            return Resolution(port: devDefault, source: .devDefault, notices: notices)
         }
-        guard let free = probeDevPort(devDefault) else {
-            throw ResolutionError.noFreeDevPort(start: devDefault, attempts: devProbeAttempts)
+        if let free = probeDevPort(devDefault) {
+            return Resolution(port: free, source: .devProbe, notices: notices)
         }
-        return Resolution(port: free, source: .devProbe)
+        // 退避区间全占用 → 系统临时端口（bind 0）；连它都拿不到才退回固定缺省。
+        // 任何分支都不致命退出（S-03）。
+        let ephemeral = probeEphemeralPort ?? { probeBind(0) }
+        if let port = ephemeral() {
+            notices.append("dev 端口 \(devDefault)…\(devDefault + devProbeAttempts - 1) 均被占用，回退系统临时端口 \(port)")
+            return Resolution(port: port, source: .devEphemeral, notices: notices)
+        }
+        notices.append("dev 端口区间全占用且系统临时端口不可用，回退固定 \(devDefault)")
+        return Resolution(port: devDefault, source: .devDefault, notices: notices)
     }
 
     /// 严格端口解析（数字串、1…65535；拒绝前导 +/-、空白、小数）。
@@ -111,6 +114,13 @@ public enum ControlPlanePort {
             if let bound = probeBind(port) { return bound }
         }
         return nil
+    }
+
+    /// 系统临时端口（bind 0 → getsockname 取实际端口 → 立即释放）：S-03 与
+    /// Electron 的 `findFreePort` 失败回退（`port 0`，shell-core.ts:437-441）同语义。
+    /// 与区间探测同一 bind-and-release 内核（free-port.ts probePort）。
+    public static func probeEphemeralPort() -> Int? {
+        probeBind(0)
     }
 
     /// 单端口 bind/listen/close 探测（free-port.ts probePort 的 Darwin 版）。
