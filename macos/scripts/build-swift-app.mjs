@@ -41,6 +41,7 @@ import {
   readdirSync,
   readSync,
   readFileSync,
+  readlinkSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -80,12 +81,88 @@ export function appLayout(outDir, appName = APP_NAME, artifactBasename = APP_NAM
     resourceBundle: path.join(resourcesDir, RESOURCE_BUNDLE_NAME),
     icon: path.join(resourcesDir, 'icon.icns'),
     sidecarDir: path.join(resourcesDir, 'sidecar'),
+    // Sparkle 等内嵌框架放 Contents/Frameworks（S-01 / 裁决 D-1 选 B）；可执行靠
+    // @executable_path/../Frameworks 的 rpath 找到它（见下方 embedSparkle）。
+    frameworksDir: path.join(contentsDir, 'Frameworks'),
     webDist: path.join(resourcesDir, 'dist', 'web'),
     zipPath: path.join(outDir, `${artifactBasename}.zip`),
     dmgPath: path.join(outDir, `${artifactBasename}.dmg`),
   }
 }
 
+/** Sparkle.framework 的定位（SwiftPM 二进制制品；纯函数，单测直测）。
+ *  路径形态：<macos>/.build/artifacts/sparkle/Sparkle/Sparkle.xcframework/<slice>/Sparkle.framework
+ *  （slice 名随机器与架构而变，如 macos-arm64_x86_64 / macos-arm64）。找不到返回 null。 */
+export function findSparkleFramework(packageRoot, hostArch = process.arch) {
+  const artifacts = path.join(packageRoot, '.build', 'artifacts', 'sparkle')
+  if (!existsSync(artifacts)) return null
+  const wanted = hostArch === 'arm64' ? 'macos-arm64' : 'macos-x86_64'
+  const candidates = []
+  for (const xcframework of globDirs(artifacts, 'Sparkle.xcframework')) {
+    for (const slice of readdirSync(xcframework)) {
+      const framework = path.join(xcframework, slice, 'Sparkle.framework')
+      if (existsSync(framework)) candidates.push({ framework, slice })
+    }
+  }
+  if (candidates.length === 0) return null
+  // 宿主架构 slice 优先（.app 只装宿主架构时也够用）；否则退第一个。
+  const preferred = candidates.find((c) => c.slice.includes(wanted))
+  return (preferred ?? candidates[0]).framework
+}
+
+/** 递归找目录名（exactly-one 语义不需要；仅供 findSparkleFramework 使用）。 */
+function globDirs(root, name) {
+  const found = []
+  const walk = (dir, depth) => {
+    if (depth > 6) return
+    let entries = []
+    try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return }
+    for (const entry of entries) {
+      if (!entry.isDirectory() && !entry.isSymbolicLink()) continue
+      const next = path.join(dir, entry.name)
+      if (entry.name === name) { found.push(next); continue }
+      walk(next, depth + 1)
+    }
+  }
+  walk(root, 0)
+  return found
+}
+
+/** 嵌入 Sparkle.framework 到 Contents/Frameworks，并保证可执行带 rpath。
+ *  必须在签名之前调用（嵌套框架先于主签名）。找不到框架而配置了 feed → 抛。 */
+function embedSparkle(layout, options, io) {
+  const configured = options.sparkleFeed !== '' && options.sparklePublicKey !== ''
+  const framework = findSparkleFramework(macosDir)
+  if (framework === null) {
+    if (configured) {
+      throw new Error('配置了 --sparkle-feed/--sparkle-public-key 但找不到 Sparkle.framework'
+        + '（先跑 swift package resolve；CI 需要网络取二进制制品）')
+    }
+    return false
+  }
+  mkdirSync(layout.frameworksDir, { recursive: true })
+  const destination = path.join(layout.frameworksDir, 'Sparkle.framework')
+  rmSync(destination, { recursive: true, force: true })
+  // verbatimSymlinks 必须有：Node 缺省会把框架里的相对符号链接（Sparkle ->
+  // Versions/Current/Sparkle 等）改写成指向 SwiftPM 制品的绝对路径——codesign 随即
+  // 报 "unsealed contents present in the root directory of an embedded framework"，
+  // 且 bundle 里出现逃出自身的链接；把链接**物化**（normalizeSymlinks）又会得到
+  // "bundle format is ambiguous (could be app or framework)"（2026-12 实测）。
+  cpSync(framework, destination, { recursive: true, dereference: false, verbatimSymlinks: true })
+  const escaping = findEscapingSymlinks(destination)
+  if (escaping.length > 0) {
+    throw new Error(`Sparkle.framework 含逃出自身的符号链接：${escaping.join(', ')}`)
+  }
+  io.log(`[build-swift-app] Sparkle.framework → ${destination}`)
+  // rpath：swift build 的链接行已带 @executable_path/../Frameworks（缺省 swiftArgs），
+  // 但 --skip-build 复用旧产物时未必有——这里补齐并校验（失败 = 启动期 dyld 找不到）。
+  quiet('install_name_tool', ['-add_rpath', '@executable_path/../Frameworks', layout.executable])
+  const otool = quiet('otool', ['-l', layout.executable])
+  if (!otool.stdout.includes('@executable_path/../Frameworks')) {
+    throw new Error('可执行缺少 @executable_path/../Frameworks rpath——嵌入的 Sparkle 在启动期会找不到')
+  }
+  return true
+}
 export function buildOutputDir(config) {
   return path.join(macosDir, '.build', config)
 }
@@ -118,6 +195,11 @@ export function parseBuildSwiftAppArgs(argv) {
     // 显式值（arm64|x64）时两者都必须包含它。
     arch: null,
     swiftArgs: [],
+    // Sparkle（S-01 / 裁决 D-1 选 B）：feed 与 EdDSA 公钥由发布腿注入；
+    // 缺省空串 = 更新不可用（壳禁用「检查更新…」菜单项，也不向内嵌 sidecar
+    // 声明 --native-updater）。
+    sparkleFeed: '',
+    sparklePublicKey: '',
   }
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]
@@ -146,6 +228,8 @@ export function parseBuildSwiftAppArgs(argv) {
     else if (arg === '--no-zip') options.noZip = true
     else if (arg === '--no-dmg') options.noDmg = true
     else if (arg === '--dry-run') options.dryRun = true
+    else if (arg === '--sparkle-feed') options.sparkleFeed = next()
+    else if (arg === '--sparkle-public-key') options.sparklePublicKey = next()
     else if (arg === '--swift-args') options.swiftArgs = next().split(' ').filter(Boolean)
     else if (arg === '--help' || arg === '-h') options.help = true
     else throw new Error(`未知参数：${arg}`)
@@ -160,6 +244,9 @@ export function assemblePlan(options) {
     ? `[1] 复用已有 swift build -c ${options.config} 产物`
     : `[1] swift build -c ${options.config}${options.swiftArgs.length > 0 ? ` ${options.swiftArgs.join(' ')}` : ''}`)
   steps.push(`[2] 组装 ${layout.appDir}（MacOS/ + Resources/ + Info.plist）`)
+  if (options.sparkleFeed !== '' && options.sparklePublicKey !== '') {
+    steps.push(`[2b] 嵌入 Sparkle.framework → ${path.join(layout.frameworksDir, 'Sparkle.framework')}`)
+  }
   if (options.skipSidecar) steps.push('[3] 跳过 sidecar 拷贝（--skip-sidecar）')
   else steps.push(`[3] 拷贝 W-23 sidecar 装配 → ${layout.sidecarDir}`)
   steps.push(options.noSign ? '[4] 跳过签名（--no-sign）' : `[4] 签名（identity=${options.identity}）`)
@@ -212,6 +299,66 @@ export function isMachO(file) {
 }
 
 /** 递归找出目录下所有 Mach-O 文件（跳过符号链接；导出以便单测）。 */
+/** 找出 .app 内部的嵌套 bundle（framework/xpc/app/bundle），最深者在前。
+ *  codesign 只会自动封存它认识的嵌套位置；framework 里的 Updater.app /
+ *  XPCServices/*.xpc 必须**先于**所属 framework 单独签名，否则主签名后
+ *  codesign --verify 会报 unsealed contents present in the root directory
+ *  of an embedded framework（Sparkle 嵌入实测，2026-12）。 */
+/** 找出 rootDir 下指向自身之外的符号链接（绝对目标或 .. 逃逸）；fail-closed
+ *  用词：bundle 内不得含逃出自身的链接（AGENTS.md「Before changing the Swift
+ *  native shell」）。纯函数，单测直测。 */
+export function findEscapingSymlinks(rootDir) {
+  const escaping = []
+  const walk = (dir, depth) => {
+    if (depth > 12) return
+    let entries
+    try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name)
+      if (entry.isSymbolicLink()) {
+        const target = readlinkSync(full)
+        const resolved = path.resolve(dir, target)
+        if (path.isAbsolute(target) || !resolved.startsWith(rootDir + path.sep)) {
+          escaping.push(path.relative(rootDir, full) + ' -> ' + target)
+        }
+        continue
+      }
+      if (entry.isDirectory()) walk(full, depth + 1)
+    }
+  }
+  walk(rootDir, 0)
+  return escaping
+}
+export function findNestedBundles(rootDir) {
+  const found = []
+  const walk = (dir) => {
+    let entries
+    try {
+      entries = readdirSync(dir, { withFileTypes: true })
+    } catch (error) {
+      throw new Error(`无法读取待枚举目录（嵌套 bundle 签名前置）：${dir}——` +
+        (error instanceof Error ? error.message : String(error)))
+    }
+    for (const entry of entries) {
+      if (entry.isSymbolicLink() || !entry.isDirectory()) continue
+      const full = path.join(dir, entry.name)
+      // 只签真正的**代码** bundle：framework / xpc / app。SwiftPM 的
+      // RESOURCE_BUNDLE（DSHChamberPoc_DSHChamberPoc.bundle）是纯资源目录、
+      // 没有 Info.plist，交给它签会得到 "bundle format unrecognized"（2026-12；
+      // 该目录由主 app 的签名封存，历来不需要单独签）。
+      if (/\.(framework|xpc|app)$/.test(entry.name)) {
+        found.push(full)
+        // 继续下潜：framework 里还有 Updater.app / XPCServices/*.xpc。
+        walk(full)
+      } else {
+        walk(full)
+      }
+    }
+  }
+  walk(rootDir)
+  // 最深者先签（先内后外）。
+  return found.sort((a, b) => b.split(path.sep).length - a.split(path.sep).length)
+}
 export function findNestedMachOFiles(rootDir) {
   const found = []
   const walk = (dir) => {
@@ -324,7 +471,10 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
 
   // 1. swift build。
   if (!options.skipBuild) {
-    run('swift', ['build', '-c', options.config, ...options.swiftArgs], io, macosDir)
+    // 链接期带上 @executable_path/../Frameworks 的 rpath：装配态内嵌的 Sparkle
+    // 靠它被 dyld 找到（dev 态该路径不存在，无副作用）。
+    run('swift', ['build', '-c', options.config, ...options.swiftArgs,
+      '-Xlinker', '-rpath', '-Xlinker', '@executable_path/../Frameworks'], io, macosDir)
   }
   if (!existsSync(binarySource)) {
     throw new Error(`缺少可执行产物：${binarySource}（先跑 swift build -c ${options.config}）`)
@@ -349,6 +499,9 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
   const plist = renderInfoPlist(readFileSync(templatePath, 'utf8'), {
     VERSION: version,
     BUNDLE_VERSION: bundleVersion,
+    // 空串 = 更新不可用（AppUpdater 把空值判为未配置）；两键任一为空都不算配置。
+    SPARKLE_FEED_URL: options.sparkleFeed,
+    SPARKLE_PUBLIC_ED_KEY: options.sparklePublicKey,
   })
   writeFileSync(layout.infoPlist, plist)
   const lint = quiet('plutil', ['-lint', layout.infoPlist])
@@ -446,6 +599,10 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
     io.log(`[build-swift-app] renderer dist/web → ${layout.webDist}`)
   }
 
+  // 3b. 嵌入 Sparkle.framework（S-01 / 裁决 D-1 选 B）：必须在签名之前——
+  //     嵌套框架先于主签名，否则 codesign --verify --deep 会报未密封。
+  embedSparkle(layout, options, io)
+
   // 4. 签名（嵌套先于主签名）。argv 由 codesignArgs 单源生成（顺序由
   //    build-swift-app.test.mjs 的 argv 断言锁定）。
   if (options.noSign) {
@@ -467,6 +624,16 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
     }
     if (nested.length > 0) {
       io.log(`[build-swift-app] 嵌套 Mach-O 已签名 ${nested.length} 个（含自带 node 与 .node 原生模块）`)
+    }
+    // 嵌套 bundle（Sparkle.framework 及其 Updater.app / XPCServices）：必须按
+    // 由深到浅单独签名——只签内部可执行文件不产生 framework 自己的封存，
+    // 主签名后 --verify 会报 unsealed contents（2026-12 Sparkle 嵌入实测）。
+    const nestedBundles = findNestedBundles(layout.appDir)
+    for (const bundle of nestedBundles) {
+      run('codesign', codesignArgs(options, bundle), io)
+    }
+    if (nestedBundles.length > 0) {
+      io.log(`[build-swift-app] 嵌套 bundle 已签名 ${nestedBundles.length} 个（由深到浅）`)
     }
     run('codesign', codesignArgs(options, layout.appDir, entitlements), io)
     const verify = quiet('codesign', ['--verify', '--deep', '--strict', layout.appDir])
@@ -508,7 +675,8 @@ if (isMain) {
       console.log('用法：build-swift-app.mjs [--out <dir>] [--config release] [--identity <id>|-]')
       console.log('       [--app-name <name>] [--artifact-basename <name>] [--arch arm64|x64]')
       console.log('       [--sidecar <dir>] [--icon <icns>] [--web-dist <dir>] [--skip-build]')
-      console.log('       [--skip-sidecar] [--skip-web-dist] [--no-sign] [--no-zip] [--no-dmg] [--dry-run] [--swift-args "<args>"]')
+      console.log('       [--skip-sidecar] [--skip-web-dist] [--no-sign] [--no-zip] [--no-dmg] [--dry-run]')
+      console.log('       [--sparkle-feed <url>] [--sparkle-public-key <ed25519>] [--swift-args "<args>"]')
       process.exit(0)
     }
     await runBuildSwiftApp(options)

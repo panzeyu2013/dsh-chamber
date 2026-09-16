@@ -24,9 +24,11 @@
  *  ⑫ lipo 输出解析（x86_64/arm64e/旧版 Non-fat 文案）；
  *  ⑬ DMG 卷内容（/Applications 快捷方式）与卷名来自 --app-name（纯 + 真实 hdiutil）。
  */
-import { test } from 'node:test'
+import {
+  test } from 'node:test'
 import assert from 'node:assert/strict'
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync,
+  spawnSync } from 'node:child_process'
 import {
   chmodSync,
   existsSync,
@@ -39,7 +41,7 @@ import {
   statSync,
   symlinkSync,
   writeFileSync,
-} from 'node:fs'
+  } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -57,8 +59,10 @@ import {
   parseBuildSwiftAppArgs,
   parseLipoArchs,
   renderInfoPlist,
+  findEscapingSymlinks,
   runBuildSwiftApp,
   stageDmgVolume,
+  findSparkleFramework,
 } from '../../../macos/scripts/build-swift-app.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -574,6 +578,75 @@ test('⑭ 缺 renderer dist/web 又要产出归档 → fail-closed；--skip-web-
       '--out', out, '--web-dist', path.join(out, 'no-such-web-dist'),
       '--skip-build', '--skip-sidecar', '--skip-web-dist', '--no-sign', '--no-zip', '--no-dmg',
     ]), { log: () => {}, error: () => {} })
+  } finally {
+    rmSync(out, { recursive: true, force: true })
+  }
+})
+
+test('⑮ Sparkle 装配面：plist 注入 + 计划文本 + 框架定位（S-01 / 裁决 D-1 选 B）', async () => {
+  // 未配置 → 两个键是空串（壳据此判为不可用，不点亮「检查更新…」）。
+  const bare = renderInfoPlist('A=__SPARKLE_FEED_URL__/__SPARKLE_PUBLIC_ED_KEY__/__VERSION__', {
+    SPARKLE_FEED_URL: '', SPARKLE_PUBLIC_ED_KEY: '', VERSION: '1.2.3',
+  })
+  assert.equal(bare, 'A=//1.2.3')
+  const configured = renderInfoPlist('F=__SPARKLE_FEED_URL__ K=__SPARKLE_PUBLIC_ED_KEY__', {
+    SPARKLE_FEED_URL: 'https://example.com/appcast-swift.xml', SPARKLE_PUBLIC_ED_KEY: 'abc=',
+  })
+  assert.equal(configured, 'F=https://example.com/appcast-swift.xml K=abc=')
+
+  const withKeys = parseBuildSwiftAppArgs(['--sparkle-feed', 'https://example.com/a.xml', '--sparkle-public-key', 'abc='])
+  assert.equal(withKeys.sparkleFeed, 'https://example.com/a.xml')
+  assert.equal(withKeys.sparklePublicKey, 'abc=')
+  const plan = assemblePlan(withKeys).join('\n')
+  assert.match(plan, /\[2b\] 嵌入 Sparkle\.framework/)
+  assert.doesNotMatch(assemblePlan(parseBuildSwiftAppArgs([])).join('\n'), /\[2b\]/, '未配置时计划里没有 Sparkle 步')
+
+  // findSparkleFramework：SwiftPM 二进制制品的路径形态（用假树验证定位逻辑）。
+  const root = mkdtempSync(path.join(tmpdir(), 'dsh-sparkle-'))
+  try {
+    assert.equal(findSparkleFramework(root), null, '没有 artifacts 目录 → null')
+    const slice = path.join(root, '.build', 'artifacts', 'sparkle', 'Sparkle', 'Sparkle.xcframework', 'macos-arm64_x86_64', 'Sparkle.framework')
+    mkdirSync(slice, { recursive: true })
+    assert.equal(findSparkleFramework(root, 'arm64'), slice)
+    const other = path.join(root, '.build', 'artifacts', 'sparkle', 'Sparkle', 'Sparkle.xcframework', 'macos-x86_64', 'Sparkle.framework')
+    mkdirSync(other, { recursive: true })
+    assert.equal(findSparkleFramework(root, 'x64'), other, '宿主架构 slice 优先')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('⑯ Sparkle 嵌入装配：framework 就位 + 链接/ rpath + 无逃逸符号链接 + 深度校验', async (t) => {
+  // 依赖解析成功（SwiftPM 制品在 .build/artifacts）才跑；没解析的环境跳过而不是假绿。
+  const framework = findSparkleFramework(macosDir)
+  if (framework === null) {
+    t.skip('本机未解析 Sparkle 制品（swift package resolve）')
+    return
+  }
+  const out = tempOut()
+  try {
+    await runBuildSwiftApp(parseBuildSwiftAppArgs([
+      '--out', out, '--skip-build', '--skip-web-dist', '--skip-sidecar', '--no-zip', '--no-dmg',
+    ]), { log: () => {}, error: () => {} })
+    const layout = appLayout(out)
+    const embedded = path.join(layout.frameworksDir, 'Sparkle.framework')
+    assert.ok(existsSync(path.join(embedded, 'Versions', 'B', 'Sparkle')),
+      'Sparkle 可执行文件必须在 Contents/Frameworks/Sparkle.framework 里')
+    assert.ok(existsSync(path.join(embedded, 'Versions', 'B', 'Updater.app')),
+      'Sparkle 的 Updater.app 必须随框架一起嵌入（安装腿）')
+    // 符号链接必须保持相对目标（绝对目标 = 逃出 bundle；物化 = framework 格式歧义）。
+    assert.deepEqual(findEscapingSymlinks(embedded), [])
+    assert.equal(readlinkSync(path.join(embedded, 'Sparkle')), 'Versions/Current/Sparkle')
+    // 可执行既链接 @rpath 的框架，又带 @executable_path/../Frameworks 的 rpath。
+    const linked = spawnSync('otool', ['-L', layout.executable], { encoding: 'utf8' }).stdout
+    assert.match(linked, /@rpath\/Sparkle\.framework\/Versions\/B\/Sparkle/)
+    const load = spawnSync('otool', ['-l', layout.executable], { encoding: 'utf8' }).stdout
+    assert.match(load, /@executable_path\/\.\.\/Frameworks/)
+    // 嵌套 bundle（framework 及 Updater.app / XPCServices）逐个封装后主签名才成立。
+    const verify = spawnSync('codesign', ['--verify', '--deep', '--strict', layout.appDir], { encoding: 'utf8' })
+    assert.equal(verify.status, 0, verify.stderr + verify.stdout)
+    const nested = spawnSync('codesign', ['-dv', path.join(embedded, 'Versions', 'B', 'Updater.app')], { encoding: 'utf8' })
+    assert.match(`${nested.stdout}${nested.stderr}`, /Signature=adhoc/)
   } finally {
     rmSync(out, { recursive: true, force: true })
   }
