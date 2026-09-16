@@ -679,16 +679,34 @@ interface HostEdges {
 ## 7. 更新（design 11 的 Swift 侧形态）
 
 - Electron 版维持 electron-updater（GitHub provider、zip target）不动。
-- **Swift 版 v1 = 诚实 blocked-available 形态（§0.1-E1 修订，不用 idle|error）**：
-  UpdateState.phase 七值与接口方法/字段集（6 通道）**全部不变**（消费面
-  settings-bridge UpdateSection.tsx/update-store/update-gate 零契约改动），
-  只换控制器实现：真实 check（对比 GitHub Releases，可复用 updater.ts 纯
-  函数 + isAllowedReleaseUrl 白名单）→ phase='available' + releaseUrl +
-  installBlockedReason='原生壳不支持自动安装'——设置 UI 的 blocked 行 +
-  releaseLink 零改动直接诚实呈现（新增该 known reason 的本地化映射）；
-  update-restart 返回显式错误；updateDownloadReady 豁免恒 false（before-quit
-  腿自然豁免，文档明示该差异）。**禁止**把检查合并为"打开发布页"——那会让
-  UI 永不出现入口且每次检查显示失败态。
+- **Swift 版更新链 = Sparkle 2（2026-12 用户裁决「D-1 选 B」，取代原 v1
+  blocked-available）**：壳内 `AppUpdater`（`macos/Sources/DSHChamberPoc/AppUpdater.swift`）
+  持一个 `SPUStandardUpdaterController`，承担**检查 → 下载 → 重启并安装**。安装必须由
+  bundle 外的 helper 完成（运行中的 .app 不能覆盖自己），更新包来源用 **EdDSA 公钥**
+  （`SUPublicEDKey`）鉴权——注意它与 Developer ID 签名/公证是两件事：后者是分发信任，
+  前者是更新通道鉴权。
+  - 装配面：`Info.plist` 的 `SUFeedURL`/`SUPublicEDKey` 由 `build-swift-app` 的
+    `--sparkle-feed`/`--sparkle-public-key` 注入（模板占位符 `__SPARKLE_FEED_URL__` /
+    `__SPARKLE_PUBLIC_ED_KEY__`）；两键任一为空 = 更新不可用：菜单「检查更新…」禁用，
+    且不向 sidecar 声明 `--native-updater sparkle`。`SUEnableAutomaticChecks` 缺省
+    false（ad-hoc/未发布装配启动即弹更新窗会与启动期窗口竞争），
+    `SUScheduledCheckInterval=21600` 与 Electron 侧 6h 检查同节奏。
+  - 双 flavor 分工：页面（settings-bridge UpdateSection）仍由 headless 控制器驱动
+    （真实 check + 状态行）；壳声明并报告原生更新器可用时，sidecar 把
+    `installBlockedReason` 清空，「更新 / 重启并安装」经 edge
+    （`updateNativeCapability` / `updateNativeAction`）转发到 Sparkle 的标准更新窗口
+    （下载+安装是该窗口内的一段连续流程）。壳侧确认无原生腿时仍回显
+    `原生壳不支持自动安装`。
+  - 安装前清理：`SPUUpdaterDelegate.updater(_:willInstallUpdate:)` 先停受管 sidecar、
+    收 keep-awake 与 Dock 角标（安装路径不保证先走我们的退出链）。
+  - 打包：`build-swift-app` 把 `Sparkle.framework` 嵌入 `Contents/Frameworks`、补
+    `@executable_path/../Frameworks` rpath 并校验；嵌入在签名之前（嵌套先于主签名）。
+  - 发布：`SPARKLE_PUBLIC_ED_KEY` 存在时注入 feed/公钥；正式腿在 `SPARKLE_PRIVATE_KEY`
+    存在时用 Sparkle 的 `generate_appcast` 生成并签名 `appcast-swift.xml`，随 release
+    上传（feed 指向 `releases/latest/download/appcast-swift.xml`）。两把钥匙都缺失 =
+    该构建的自动更新保持关闭（照常出包，只是没有安装腿），loud 警告。
+  - 契约：`UpdateController.restartAndInstallAsync?()` 为原生腿提供异步面（IPC 处理
+    器优先用它），Electron 的同步实现与页面契约不变。
 - **shell-flavor 判别字段（§0.1-E2）**：共享 renderer 无法用 platform 区分两 flavor
   （同为 'darwin'）→ `dsh-chamber:info` 载荷增 `flavor: 'electron'|'swift'`
   （或能力位 updateAutoInstall/notificationPermission），同步

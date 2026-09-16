@@ -766,6 +766,11 @@
   无应用内安装）、网页权限口径（剪贴板读与 Notification 预拒绝）、双壳 `dsh-chamber://` 归属、
   托盘/菜单面、sidecar fatal 与宿主决策不可得时的终态，以及 design 25 §7 E2 的 `flavor` 能力位未落地。
   未裁决前原生 flavor 保持「预览」定位，不转入默认通道。
+  更新链已按用户裁决「D-1 选 B」（Sparkle 2）落位；其余产品级项仍待裁决。**未闭门禁**：
+  ① 仓库 secrets 需配 `SPARKLE_PUBLIC_ED_KEY` / `SPARKLE_PRIVATE_KEY`（缺失时发布腿 loud
+  跳过 appcast、原生壳不带安装腿）；② 实机安装验收（真实 appcast 的检查 → 下载 → 安装 →
+  重启）尚未做，`build-swift-app` 的 Sparkle 嵌入需要网络解析 SwiftPM 制品（本机经代理验证，
+  CI 的 `test-macos` 天然有网）。
 - **macOS Swift 原生壳（design 25，路线 A）的开放门禁**：正式决策 D1–D7 未签核
   （实现按推荐默认值落位），M5 门禁未闭合。剩余：
 

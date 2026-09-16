@@ -20,7 +20,7 @@
 
 | # | 现象（用户可感） | 取舍 / 推荐 | 状态 |
 |---|---|---|---|
-| S-01 | 原生壳缺整条应用内更新安装链（下载 → 已退出安装 → 重启并安装） | 推荐 v2 采用 **Sparkle 2**（`SPUStandardUpdaterController` + appcast + EdDSA 签名 + `willInstallUpdate` 里停受管 dsh 服务）；短期维持「检查 + 提示 + 手动安装」 | open（需裁决） |
+| S-01 | 原生壳缺整条应用内更新安装链（下载 → 已退出安装 → 重启并安装） | **已按 Sparkle 2 落地代码**（`AppUpdater` + 菜单 + Info.plist 注入 + framework 嵌入 + appcast 签名步 + sidecar/页面转发）；**外部门禁未闭**：EdDSA 密钥（`SPARKLE_PUBLIC_ED_KEY`/`SPARKLE_PRIVATE_KEY`）与 CI 编译验证（本机沙箱取不到 SwiftPM 二进制制品） | 代码就绪且本机验证通过（swift test 177/177、打包嵌入 ⑯ 通过） / 外部门禁 open（EdDSA secrets + 实机安装验收） |
 | S-02 | 原生壳渲染器卡死无自愈（Electron 15s 重载） | 推荐页面心搏探测（限 3 次、仅无输入时重载） | open（需裁决） |
 | S-03 | 非法显式端口 / dev 端口耗尽：Electron 降级，Swift 致命退出 | 推荐对齐降级 + loud 提示 | open（需裁决） |
 | S-04 | 双壳 `dsh-chamber://` 归属可能被 Electron 抢占 | 推荐 Swift 增注册 `dsh-chamber-native://`（保留原 scheme 兼容） | open（需裁决） |
@@ -141,6 +141,8 @@
 | B-06 | 打包 fail-closed：只有显式 `--skip-web-dist` 才允许缺 web dist，判据是 `dist/web/index.html` | release 正式腿用 `--no-zip --no-dmg` 组装，按「是否产出归档」判定会漏 | accepted（门禁） |
 | B-07 | 开发者工具：`#if DEBUG` 开 `isInspectable` | 参考实现通行做法；release 不暴露检查器 | accepted（新基线） |
 | B-08 | 台账新增 §6 裁决清单（D-1…D-17）与 §7 参考实现对照 | 把「需要人判断的点」从代码注释里提出来集中裁决 | accepted |
+| B-09 | 引入 **Sparkle 2.10.0**（本包唯一第三方依赖，SwiftPM 二进制制品） | 用户裁决 D-1 选 B：安装腿必须由 bundle 外 helper 完成，自研=重写迷你 Sparkle；签名/公证替代不了更新通道 | accepted（原始「零第三方依赖」不变式由该裁决显式取代） |
+| B-10 | 原生壳更新源 = `appcast-swift.xml`（release 资产，EdDSA 签名） | Sparkle 的标准分发形态；Squirrel 的 `latest-mac.yml` 仍只归 Electron 腿（策略测试已更新为「允许 appcast、仍禁止 Squirrel feed」） | accepted |
 
 ## 6. 未决 / 待评估
 

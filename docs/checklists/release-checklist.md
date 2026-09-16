@@ -119,6 +119,11 @@ CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 ta
 
 ## 6. 签名/公证（全部由 CI 处理）
 
+- [ ] **原生壳更新密钥（Sparkle，S-01 / D-1 选 B）**：仓库 secrets 需配
+      `SPARKLE_PUBLIC_ED_KEY`（EdDSA 公钥，注入 Info.plist）与 `SPARKLE_PRIVATE_KEY`
+      （EdDSA 私钥，仅正式腿用它签 `appcast-swift.xml`）。两把钥匙与 Developer ID /
+      公证**互不替代**：签名/公证是分发信任，EdDSA 是更新通道鉴权。任一缺失时发布腿
+      loud 跳过（出包但不带安装腿），并核对 release 资产里存在 `appcast-swift.xml`。
 - [ ] 本地不配置任何签名密钥；macOS Developer ID 签名/公证由 release.yml 发布腿
       处理。正式发布缺少五项凭据时在创建/变更 draft 前 fail-closed；构建后的 Developer
       ID、stapler 与 spctl 任一校验失败时阻断公开 finalize（draft 已创建并不等于已公开）。
