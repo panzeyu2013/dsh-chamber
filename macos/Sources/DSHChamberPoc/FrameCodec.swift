@@ -2,8 +2,8 @@
 //
 // design 25 §4.4.2（B 桥 Swift ↔ sidecar，本机受信 stdio 通道）与 W-05
 // （垂直切片，docs/progress/todo/macos-swift-v1.md §0.2-⑥）。协议与 sidecar
-// 服务端（packages/desktop/poc-sidecar.ts，P1 由 sidecar-entry.ts 替换）逐
-// 字段一致，**字段名勿自行更改**：
+// 服务端（packages/desktop/sidecar-entry.ts；W-05 桩 poc-sidecar.ts 同帧族，
+// 保留为集成测试 fixture）逐字段一致，**字段名勿自行更改**：
 //
 //   请求   {"id":<Int>, "method":"<string>", "payload":<json|null>}
 //   响应   {"id":<Int>, "ok":true,  "result":<json>}
@@ -33,7 +33,8 @@
 
 import Foundation
 
-/// B 桥帧的三元形状（与 poc-sidecar.ts 的 OutboundFrame/RequestFrame 对应）。
+/// B 桥帧的三元形状（与 sidecar-entry.ts / poc-sidecar.ts 的
+/// OutboundFrame/RequestFrame 对应）。
 public enum BridgeFrame: Equatable {
     /// Swift → sidecar 的请求（id 单调，由 BridgeClient 分配）。
     case request(id: Int, method: String, payload: AnyCodable?)

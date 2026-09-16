@@ -29,18 +29,14 @@
 //             { code:'ipc_sender_forbidden' }，A 桥版沿用字符串族）
 //
 //   反向事件（sidecar push → web）：
-//     sidecar 事件 → B 桥 → BridgeClient.onEvent(event, payload)
-//       → controller 二选一（避免双写 __dshChamberEmit）：
-//         甲（推荐，本文件自包含）：controller 把 BridgeClient.onEvent 转接
-//             进 handler.emit(event:payload:) —— emit 负责序列化为
-//             "__dshChamberEmit(event, payload)" 并交给 evaluateJavaScript，
-//             controller 不再自行拼装 __dshChamberEmit；
-//         乙：controller 用自己的桥直接写 __dshChamberEmit —— 此时
-//             controller 不调用 emit。
-//       谁调用谁：事件下行唯一入口是 controller → emit → evaluateJavaScript
-//       （谁持有 BridgeClient 谁就是事件源；emit 永不被本 handler 内部触发）。
-//       → web shim 订阅表按事件名派发（design 25 §4.4.1 事件面；通道名以
-//         IPC_CHANNELS / 05 §7.4 为权威，POC 手写 3 通道）。
+//     sidecar 的 notify 帧（node-edges sendNotify/rendererPush）→ B 桥
+//     BridgeClient.onNotify → MainWindowController.notify 路由解包 →
+//     evaluateJS 直写 __dshChamberEmit(event, payload) → web shim 订阅表派发
+//     （通道名以 IPC_CHANNELS / 05 §7.4 为权威，manifest 8 push 通道）。
+//     本 handler 不参与事件下行（W-04 双写纪律「乙」：事件唯一入口是
+//     controller 的 notify 路由；原 emit/onEvent 降级面自 2026-12 审计 S14
+//     删除——生产接线从未调用它）。event 帧族仅 W-05 桩 fixture
+//     （poc-sidecar.ts / BridgeClientIntegrationTests）使用，壳内无消费面。
 //
 // 线程与持有关系：
 //   - userContentController.add(handler:) 会强持有本对象，因此本对象绝不
@@ -52,10 +48,10 @@
 //     WKWebView.evaluateJavaScript 均主线程语义）；controller 侧若从后台
 //     线程喂入事件，需自行切主线程再调 emit（赋入方责任，注释声明）。
 //
-// 可测性：不依赖真实 WKWebView——测试可直接驱动
-// userContentController(_:didReceive:)（伪造 WKScriptMessage 子类），或先
-// noteCommitted(url:) 再投递 webView == nil 的消息；emit 的 JS 输出经
-// evaluateJavaScript 闭包捕获断言。
+// 可测性（S15/S17）：WKScriptMessage 无公开构造器（WebKit 不能伪造
+// frameInfo），didReceive 不可在单测驱动；四道护栏 + app_quitting 门收敛到
+// 纯函数 fence(_:)（didReceive 只做输入取值与结果执行），origin/白名单/
+// 拒绝/app_quitting 路径由 MessageHandlerTests 直接覆盖。
 
 import Foundation
 import WebKit
@@ -66,32 +62,26 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
 
     // MARK: - 构造参数（共享契约，MainWindowController 按此构造，勿改名）
 
-    /// 方法白名单：POC 手写 7 个 invoke 通道（dsh-chamber:info /
-    /// desktop_ssh_instances_get / desktop_ssh_connect / desktop_ssh_disconnect /
-    /// desktop_ssh_status / dsh-chamber:settings-get / dsh-chamber:settings-set，
-    /// 与 MainWindowController 实传集合一致），其余通道一律
-    /// method_not_allowed；M2 manifest 化后以 BridgeManifest 生成为准
-    /// （design 25 §4.4.3）。事件订阅面（desktop_ssh_status_changed 等）属
-    /// shim 侧 PUSH_EVENTS，不经本白名单。
+    /// 方法白名单：MainWindowController 实传 BridgeManifest.invokeChannels
+    /// （W-18 生成物，60 invoke 通道；design 25 §4.4.3），其余通道一律
+    /// method_not_allowed。事件订阅面（8 push 通道）属 shim 侧 PUSH_EVENTS，
+    /// 不经本白名单。
     private let whitelist: Set<String>
 
-    /// 期望控制面 origin 的取回闭包。POC 无 ready 握手帧（BridgeClient 协议
-    /// 无握手，见其文件头注释），controller 恒返回 cpOrigin → 就绪门语义
-    /// 属 M2 sidecar-entry 的 ready 帧（design 25 §4.4.1 第 2 条「port 只在
-    /// ready 帧后放开」届时实现：ready 前返回 nil，护栏对全部消息回
-    /// ipc_sender_forbidden，渲染端按「10×50ms 有界重试」自愈）。
+    /// 期望控制面 origin 的取回闭包：MainWindowController 在 sidecar ready
+    /// 帧前返回 nil → 护栏对全部消息回 ipc_sender_forbidden（design 25
+    /// §4.4.1 第 2 条「port 只在 ready 帧后放开」；渲染端按「10×50ms 有界
+    /// 重试」自愈），ready / 重启落闸由 noteSidecarReady 驱动。
     private let expectedOrigin: () -> String?
+
+    /// 退出清理是否已开始（S7）：镜像 renderer-trust.ts createTrustedIpc 的
+    /// app_quitting 门——before-quit/will-quit teardown 开始后，late invoke
+    /// 不得再向 shutdown 注入传输/运行时工作。
+    private let isQuitting: () -> Bool
 
     /// invoke 上行回调（护栏全过后调用）：controller 在此转
     /// BridgeClient.invoke(method:payload:) → sidecar（语义校验在 sidecar）。
     private let onInvoke: (Int, String, AnyCodable?) -> Void
-
-    /// 事件下行降级回调：emit() 在 evaluateJavaScript 尚未赋入（controller
-    /// 未就绪 / 纯测试环境）时，把事件原样经此交回 controller（缓冲至 ready
-    /// 后重放或记录），避免就绪前事件静默丢失——§0.1-B3 渲染器可用性门的
-    /// 事件面对偶。正常情况下（evaluateJavaScript 已赋入）不会被调用。
-    /// 谁调用谁：emit →（evaluateJavaScript 就绪 ? 直写 web : onEvent）。
-    private let onEvent: (String, AnyCodable?) -> Void
 
     /// 回写通道：controller 赋入（内部为 WKWebView.evaluateJavaScript，
     /// 主线程调用）。handler 只持闭包不持 webView（add 强持 handler，
@@ -108,12 +98,12 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
 
     init(whitelist: Set<String>,
          expectedOrigin: @escaping () -> String?,
-         onInvoke: @escaping (Int, String, AnyCodable?) -> Void,
-         onEvent: @escaping (String, AnyCodable?) -> Void) {
+         isQuitting: @escaping () -> Bool,
+         onInvoke: @escaping (Int, String, AnyCodable?) -> Void) {
         self.whitelist = whitelist
         self.expectedOrigin = expectedOrigin
+        self.isQuitting = isQuitting
         self.onInvoke = onInvoke
-        self.onEvent = onEvent
         super.init()
     }
 
@@ -127,108 +117,105 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
 
     func userContentController(_ userContentController: WKUserContentController,
                                didReceive message: WKScriptMessage) {
-        // ① 通道名 + 主 frame。WKScriptMessage 只可能来自注册了本 handler
-        //    的 content controller 所属 webView（design 25 §4.4.1 第 1 条
-        //    「主 frame」；对应 Electron 侧 event.senderFrame ===
-        //    webContents.mainFrame，renderer-trust.ts 同族）。子 frame /
-        //    未知通道一律静默不处理（不是我们的信封，无 Promise 可归因）。
-        guard message.name == "dshChamber", message.frameInfo.isMainFrame else { return }
-
-        // ② origin 护栏（design 25 §4.4.1 第 2 条）。当前顶层 URL 取法二选一
-        //    的实现：优先 message.webView?.url（真实加载场景的实时值；该
-        //    属性本身 weak），缺失时回退 noteCommitted 的 lastCommittedURL
-        //    （进程终止后、纯测试桩等无 webView 场景）——本 handler 不持有
-        //    webView 强引用，只依赖这两处取当前值。
-        let currentURL = message.webView?.url?.absoluteString ?? lastCommittedURL
-        guard let expected = expectedOrigin(),
-              TrustGuard.isTrustedDocument(currentURL, expectedOrigin: expected) else {
-            // 不信任来源页：无 shim 的 Promise 归因保证；仅当信封仍能解析出
-            // id 时回执（错误码同族 renderer-trust {code:'ipc_sender_forbidden'}）。
-            // 此时 evaluateJavaScript 的目标页 = 消息来源页，回执只含固定错误
-            // 码字符串，不含任何载荷/内部信息（对不可信页面无信息泄漏面）。
-            rejectIfAddressable(message.body, code: Self.codeSenderForbidden)
+        // S17：判定全部收敛到纯函数 fence（WKScriptMessage 不可构造的替代
+        // 接缝）；本回调只做输入取值（实时 URL 优先、noteCommitted 兜底——
+        // 进程终止后/测试桩无 webView 时用后者）与结果执行。
+        let decision = Self.fence(FenceInput(
+            messageName: message.name,
+            isMainFrame: message.frameInfo.isMainFrame,
+            body: message.body,
+            currentURL: message.webView?.url?.absoluteString ?? lastCommittedURL,
+            expectedOrigin: expectedOrigin(),
+            isQuitting: isQuitting(),
+            whitelist: whitelist
+        ))
+        switch decision {
+        case .accept(let id, let method, let payload):
+            // 全过 → invoke 上行（controller → BridgeClient → sidecar；
+            // 结果回写 __dshChamberResolve 属 controller/桥的职责，不在本文件）。
+            onInvoke(id, method, payload)
+        case .reject(let id, let code):
+            // 仅当信封可解析出合法 id 时回执（否则无 Promise 可归因——静默
+            // 丢弃，不向页面注入无法归因的 JS）。
+            guard let id else { return }
+            reject(id: id, code: code)
+        case .drop:
             return
         }
+    }
 
-        // ③ 信封结构：必须是 [String: Any]，含 id: Int、method: String，
-        //    payload 可选（JSONSerialization 读桥接对象；id 需整值——JS 数字
-        //    桥接为 NSNumber，用 exactInt 做整值/布尔/越界校验）。
-        guard let envelope = message.body as? [String: Any],
-              let id = Self.exactInt(from: envelope["id"]),
-              let method = envelope["method"] as? String else {
-            rejectIfAddressable(message.body, code: Self.codeMalformedEnvelope)
-            return
+    // MARK: - 入站围栏（S17：didReceive 的纯逻辑接缝）
+
+    /// 围栏输入（把判定与 WKScriptMessage 解耦）。
+    struct FenceInput {
+        var messageName: String
+        var isMainFrame: Bool
+        var body: Any
+        var currentURL: String?
+        var expectedOrigin: String?
+        var isQuitting: Bool
+        var whitelist: Set<String>
+    }
+
+    /// 围栏判定结果。
+    enum FenceDecision: Equatable {
+        /// 全过：controller 上行 invoke。
+        case accept(id: Int, method: String, payload: AnyCodable?)
+        /// 拒绝并回执（id == nil = 无法归因 → 调用方静默丢弃）。
+        case reject(id: Int?, code: String)
+        /// 非本通道 / 非主 frame：不是我们的信封，静默。
+        case drop
+    }
+
+    /// 围栏流水线（纯函数，顺序与拒绝语义 = 原 didReceive）：
+    ///   ① 通道名 + 主 frame（对应 Electron event.senderFrame ===
+    ///      webContents.mainFrame，renderer-trust.ts 同族）；
+    ///   ② origin 文档信任（ready 前 expectedOrigin == nil → 一律
+    ///      ipc_sender_forbidden）；
+    ///   ③ app_quitting 门（S7：镜像 renderer-trust.ts createTrustedIpc——
+    ///      sender 校验后、handler 前；退出清理开始后 late invoke 不得再向
+    ///      shutdown 注入传输/运行时工作）；
+    ///   ④ 信封结构（[String: Any] + id 整值 + method 字符串）；
+    ///   ⑤ 尺寸上限（≤4 MiB）：先做有限性/深度扫描再 JSON 序列化——
+    ///      JSONSerialization 遇 NaN/±Infinity 抛 NSException（try? 拦不住），
+    ///      必须先判可序列化；
+    ///   ⑥ 方法白名单；⑦ payload → AnyCodable（失败 = 信封不合法）。
+    static func fence(_ input: FenceInput) -> FenceDecision {
+        guard input.messageName == "dshChamber", input.isMainFrame else { return .drop }
+        let envelope = input.body as? [String: Any]
+        let addressableID = envelope.flatMap { Self.exactInt(from: $0["id"]) }
+        guard let expected = input.expectedOrigin,
+              TrustGuard.isTrustedDocument(input.currentURL, expectedOrigin: expected) else {
+            return .reject(id: addressableID, code: Self.codeSenderForbidden)
         }
-
-        // ④ 尺寸上限（design 25 §4.4.1 ③「≤4 MiB」）：对 message.body 整体
-        //    做一次 JSON 序列化，用序列化文本计量字节（TrustGuard.envelopeSizeOK
-        //    按 body.utf8.count）。postMessage 的 WebKit 序列化 ≈ JSON，键序/
-        //    空白差异属 POC 近似（W-04 声明）。
-        //    先做 ③b 有限性扫描再序列化：JSONSerialization 遇到 NaN/±Infinity
-        //    抛的是 NSException 而非 NSError（try? 拦不住，直接崩进程）——JS
-        //    侧的 NaN/Infinity 经桥接可成为 NSNumber(NaN)，故任何序列化之前
-        //    必须先递归确认信封可无异常 JSON 化；不过 → 信封不合法（NaN/
-        //    Infinity 本就无 JSON 表示，sidecar JSON 语义层也无法消费）。
+        if input.isQuitting {
+            return .reject(id: addressableID, code: Self.codeAppQuitting)
+        }
+        guard let envelope, let id = addressableID, let method = envelope["method"] as? String else {
+            return .reject(id: addressableID, code: Self.codeMalformedEnvelope)
+        }
         guard Self.isJSONSerializableValue(envelope) else {
-            reject(id: id, code: Self.codeMalformedEnvelope)
-            return
+            return .reject(id: id, code: Self.codeMalformedEnvelope)
         }
         guard let envelopeData = try? JSONSerialization.data(withJSONObject: envelope) else {
-            reject(id: id, code: Self.codeMalformedEnvelope)
-            return
+            return .reject(id: id, code: Self.codeMalformedEnvelope)
         }
         guard TrustGuard.envelopeSizeOK(String(decoding: envelopeData, as: UTF8.self)) else {
-            reject(id: id, code: Self.codeFrameTooLarge)
-            return
+            return .reject(id: id, code: Self.codeFrameTooLarge)
         }
-
-        // ⑤ 方法白名单（design 25 §4.4.1 ③「method ∈ manifest 白名单」）。
-        guard TrustGuard.isAllowedMethod(method, whitelist: whitelist) else {
-            reject(id: id, code: Self.codeMethodNotAllowed)
-            return
+        guard TrustGuard.isAllowedMethod(method, whitelist: input.whitelist) else {
+            return .reject(id: id, code: Self.codeMethodNotAllowed)
         }
-
-        // ⑥ payload → AnyCodable：payload 键缺省 → nil（无载荷）；键存在
-        //    （含显式 null）→ JSON 往返转换，失败视为信封不合法（传输层
-        //    无法忠实表达，语义层本应拿到合法 JSON payload）。
         let payload: AnyCodable?
         if let rawPayload = envelope["payload"] {
             guard let converted = Self.anyCodablePayload(from: rawPayload) else {
-                reject(id: id, code: Self.codeMalformedEnvelope)
-                return
+                return .reject(id: id, code: Self.codeMalformedEnvelope)
             }
             payload = converted
         } else {
             payload = nil
         }
-
-        // 全过 → invoke 上行（controller → BridgeClient → sidecar；
-        // 结果回写 __dshChamberResolve 属 controller/桥的职责，不在本文件）。
-        onInvoke(id, method, payload)
-    }
-
-    // MARK: - 事件下行出口（反向事件：sidecar → BridgeClient.onEvent → controller → 本方法 → web）
-
-    /// 把原生事件序列化为 `__dshChamberEmit(event, payload)` 调用串交给
-    /// evaluateJavaScript（design 25 §4.4.1 事件面；shim 按订阅表派发）。
-    ///
-    /// 双写纪律：controller 的 BridgeClient.onEvent 事件源与本方法二选一
-    /// 接线——甲：controller 把 onEvent 事件转接进本方法（推荐，序列化唯一
-    /// 出口）；乙：controller 自备桥直写 __dshChamberEmit（此时不得再调
-    /// emit）。同一事件绝不允许两条路径各发一次。
-    ///
-    /// evaluateJavaScript 未赋入（controller 未 ready / 纯测试）时，事件
-    /// 原样经构造时 onEvent 回调交回 controller（可缓冲至 ready 后重放），
-    /// 不静默丢失（§0.1-B3 事件面对偶）。
-    func emit(event: String, payload: AnyCodable?) {
-        let eventLiteral = Self.jsStringLiteral(event)
-        let payloadLiteral = Self.jsPayloadLiteral(payload) ?? "null"
-        let js = "__dshChamberEmit(\(eventLiteral), \(payloadLiteral));"
-        if let evaluateJavaScript {
-            evaluateJavaScript(js)
-        } else {
-            onEvent(event, payload)
-        }
+        return .accept(id: id, method: method, payload: payload)
     }
 
     // MARK: - 回执与私有工具
@@ -240,17 +227,14 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
     static let codeMethodNotAllowed = "method_not_allowed"    // method ∉ 白名单
     static let codeFrameTooLarge = "frame_too_large"          // 信封 > 4 MiB
     static let codeMalformedEnvelope = "malformed_envelope"   // 结构/JSON 表示不合法
+    /// 退出清理已开始（S7）：与 renderer-trust.ts createTrustedIpc 的
+    /// error.code = 'app_quitting'（Error('app is quitting')）同码同语义；
+    /// A 桥回执通道只传错误码字符串（与 ipc_sender_forbidden 同款编码）。
+    static let codeAppQuitting = "app_quitting"
 
     /// 护栏不过 → 经 evaluateJavaScript 回 `__dshChamberResolve(id, null, 码)`。
     private func reject(id: Int, code: String) {
         evaluateJavaScript?("__dshChamberResolve(\(id), null, \(Self.jsStringLiteral(code)));")
-    }
-
-    /// 仅当信封可解析出合法 id 时回执（否则无 Promise 可归因——静默丢弃并
-    /// 注释声明，不向页面注入无法归因的 JS）。
-    private func rejectIfAddressable(_ body: Any, code: String) {
-        guard let dict = body as? [String: Any], let id = Self.exactInt(from: dict["id"]) else { return }
-        reject(id: id, code: code)
     }
 
     /// 整值字段校验：JS 数字桥接为 NSNumber，仅接受非布尔、整值且在 Int
@@ -295,21 +279,6 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
         }
     }
 
-    /// AnyCodable → JS 值字面量（JSON 文本）：经公开契约 `var jsonObject: Any`
-    /// 取规范对象后 JSON 序列化。jsonObject 若含 NaN/∞（如直接手工构造的
-    /// AnyCodable），先经 isJSONSerializableValue 拒绝，避免 JSONSerialization
-    /// 抛 NSException（try? 拦不住）；失败返回 nil（调用方降级为 null）。
-    static func jsPayloadLiteral(_ payload: AnyCodable?) -> String? {
-        guard let payload else { return nil }
-        let object = payload.jsonObject
-        guard Self.isJSONSerializableValue(object) else { return nil }
-        guard let data = try? JSONSerialization.data(withJSONObject: [object]),
-              let text = String(data: data, encoding: .utf8) else { return nil }
-        // 剥掉包装数组的首尾括号（data 形如 '[' + 载荷JSON + ']'，剥取即原
-        // 载荷 JSON 文本——内层转义不受影响）。
-        return String(text.dropFirst().dropLast())
-    }
-
     /// JSON 嵌套深度上限：防受信页面构造 <4MiB 的极深嵌套信封在预扫描阶段
     /// 击穿 Swift 栈（静态审查 #4；超限按 malformed_envelope 拒绝）。
     static let maxJSONDepth = 512
@@ -318,7 +287,7 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
     /// NSNull/String/NSNumber/NSArray/[String:Any] 或其 Swift 原生等价物；
     /// 其余类型一律 false（fail closed）。NSNumber 需额外检查有限性——
     /// JSONSerialization 对 NaN/±Infinity 抛 NSException（非 NSError），
-    /// 任何 try? 序列化之前必须先过此扫描（见 didReceive ④ 注释）。
+    /// 任何 try? 序列化之前必须先过此扫描（见 fence ⑤ 注释）。
     static func isJSONSerializableValue(_ value: Any, depth: Int = 0) -> Bool {
         if depth > maxJSONDepth { return false }
         if value is NSNull || value is String { return true }

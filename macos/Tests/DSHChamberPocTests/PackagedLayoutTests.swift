@@ -12,6 +12,13 @@ import XCTest
 final class PackagedLayoutTests: XCTestCase {
     private let resources = "/Applications/dsh-chamber-native.app/Contents/Resources"
 
+    /// #filePath = <repo>/macos/Tests/DSHChamberPocTests/PackagedLayoutTests.swift
+    private func repoRoot() -> URL {
+        var url = URL(fileURLWithPath: #filePath)
+        for _ in 0..<4 { url.deleteLastPathComponent() }
+        return url
+    }
+
     func testIsAppBundle() {
         XCTAssertTrue(PackagedLayout.isAppBundle(
             executablePath: "/Applications/dsh-chamber-native.app/Contents/MacOS/DSHChamberPoc"))
@@ -19,7 +26,21 @@ final class PackagedLayoutTests: XCTestCase {
         XCTAssertFalse(PackagedLayout.isAppBundle(executablePath: ""))
     }
 
-    func testLayoutPathsMatchBuildScript() {
+    /// S15：读 macos/scripts/build-swift-app.mjs 的 appLayout 源文本核对，而不是
+    /// 复述路径——脚本改布局而 Swift 常量没跟上时必须红（原测试名不副实）。
+    func testLayoutPathsMatchBuildScript() throws {
+        let script = try String(
+            contentsOf: repoRoot().appendingPathComponent("macos/scripts/build-swift-app.mjs"),
+            encoding: .utf8)
+        for anchor in [
+            "sidecarDir: path.join(resourcesDir, 'sidecar')",
+            "webDist: path.join(resourcesDir, 'dist', 'web')",
+            "path.join(layout.sidecarDir, 'sidecar.js')",
+            "vendor/dsh",
+        ] {
+            XCTAssertTrue(script.contains(anchor),
+                          "build-swift-app.mjs 应含布局锚点（脚本即路径权威）：\(anchor)")
+        }
         XCTAssertEqual(PackagedLayout.sidecarDir(resourcesDir: resources), resources + "/sidecar")
         XCTAssertEqual(PackagedLayout.sidecarScript(resourcesDir: resources), resources + "/sidecar/sidecar.js")
         XCTAssertEqual(PackagedLayout.nodeBinary(resourcesDir: resources), resources + "/sidecar/node")
@@ -29,28 +50,57 @@ final class PackagedLayoutTests: XCTestCase {
                        "/Users/tester/Library/Application Support/@dsh-chamber/desktop")
     }
 
+    /// S4：node 解析不再有「另一个 app 的 Electron 二进制」fail-open 缺省——
+    /// 每一层都要求可执行，否则抛精确错误（调用方 fatalStartup）。
     func testResolveNode() {
         let bundled = resources + "/sidecar/node"
-        let exists: (String) -> Bool = { $0 == bundled }
-        // env 优先
-        XCTAssertEqual(PackagedLayout.resolveNode(
+        // env 优先（显式路径须可执行）
+        XCTAssertEqual(try? PackagedLayout.resolveNode(
             env: ["POC_NODE_BIN": "/custom/node"], resourcesDir: resources,
-            isPackaged: true, exists: exists), "/custom/node")
+            isPackaged: true, isExecutable: { $0 == "/custom/node" }), "/custom/node")
         // 装配态自带 node
-        XCTAssertEqual(PackagedLayout.resolveNode(
-            env: [:], resourcesDir: resources, isPackaged: true, exists: exists), bundled)
-        // 装配态但缺 node → 旧缺省（Electron 二进制当 Node）
-        XCTAssertEqual(PackagedLayout.resolveNode(
-            env: [:], resourcesDir: resources, isPackaged: true, exists: { _ in false }),
-            "/Applications/dsh-chamber.app/Contents/MacOS/dsh-chamber")
-        // dev 态不解析装配路径
-        XCTAssertEqual(PackagedLayout.resolveNode(
-            env: [:], resourcesDir: resources, isPackaged: false, exists: exists),
-            "/Applications/dsh-chamber.app/Contents/MacOS/dsh-chamber")
-        // resourcesDir 缺失不崩
-        XCTAssertEqual(PackagedLayout.resolveNode(
-            env: [:], resourcesDir: nil, isPackaged: true, exists: { _ in true }),
-            "/Applications/dsh-chamber.app/Contents/MacOS/dsh-chamber")
+        XCTAssertEqual(try? PackagedLayout.resolveNode(
+            env: [:], resourcesDir: resources, isPackaged: true,
+            isExecutable: { $0 == bundled }), bundled)
+        // 装配态但缺 node → 抛错（绝不回落 Electron 二进制）
+        XCTAssertThrowsError(try PackagedLayout.resolveNode(
+            env: [:], resourcesDir: resources, isPackaged: true,
+            isExecutable: { _ in false })) { error in
+            XCTAssertEqual(error as? PackagedLayout.PathResolutionError,
+                           .packagedNodeMissing(path: bundled))
+        }
+        // resourcesDir 缺失同样致命
+        XCTAssertThrowsError(try PackagedLayout.resolveNode(
+            env: [:], resourcesDir: nil, isPackaged: true, isExecutable: { _ in true }))
+        // dev：PATH 中首个可执行 node
+        XCTAssertEqual(try? PackagedLayout.resolveNode(
+            env: ["PATH": "/opt/bin:/usr/local/bin"], resourcesDir: resources,
+            isPackaged: false, isExecutable: { $0 == "/usr/local/bin/node" }),
+            "/usr/local/bin/node")
+        // dev 无 PATH node → 抛错
+        XCTAssertThrowsError(try PackagedLayout.resolveNode(
+            env: ["PATH": "/opt/bin"], resourcesDir: resources,
+            isPackaged: false, isExecutable: { _ in false })) { error in
+            XCTAssertEqual(error as? PackagedLayout.PathResolutionError, .pathNodeMissing)
+        }
+        // POC_NODE_BIN 显式但不可执行 → 抛错（不静默回退）
+        XCTAssertThrowsError(try PackagedLayout.resolveNode(
+            env: ["POC_NODE_BIN": "/gone/node"], resourcesDir: nil,
+            isPackaged: false, isExecutable: { _ in false })) { error in
+            XCTAssertEqual(error as? PackagedLayout.PathResolutionError,
+                           .explicitNodeMissing(path: "/gone/node"))
+        }
+    }
+
+    /// dev PATH node 解析（S4 纯函数面）。
+    func testResolvePathNode() {
+        XCTAssertEqual(PackagedLayout.resolvePathNode(
+            env: ["PATH": "/a:/b"], isExecutable: { $0 == "/b/node" }), "/b/node")
+        XCTAssertNil(PackagedLayout.resolvePathNode(
+            env: ["PATH": "/a::/b"], isExecutable: { _ in false }))
+        XCTAssertEqual(PackagedLayout.resolvePathNode(
+            env: ["PATH": ""], isExecutable: { $0 == "/usr/local/bin/node" }),
+            "/usr/local/bin/node", "PATH 空串 → 系统缺省目录序列")
     }
 
     func testResolveSidecar() {
@@ -63,7 +113,7 @@ final class PackagedLayoutTests: XCTestCase {
             env: [:], resourcesDir: resources, isPackaged: true, exists: exists), bundled)
         XCTAssertNil(PackagedLayout.resolveSidecar(
             env: [:], resourcesDir: resources, isPackaged: true, exists: { _ in false }))
-        // dev 态返回 nil，调用方回退向上查找 poc-sidecar.ts / sidecar-entry.ts
+        // dev 态返回 nil，调用方回退向上查找 sidecar-entry.ts（S12）
         XCTAssertNil(PackagedLayout.resolveSidecar(
             env: [:], resourcesDir: resources, isPackaged: false, exists: exists))
     }

@@ -235,6 +235,114 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
                        "vscode://file/trailing/")
     }
 
+    // MARK: - S1：交互腿异步应答（10 分钟上限、超时弃权、非交互短界保持）
+
+    /// 跨线程单值盒（回执在后台/主线程写，断言线程读）。
+    private final class SyncBox<T> {
+        private let lock = NSLock()
+        private var storage: T?
+        func set(_ value: T) {
+            lock.lock()
+            storage = value
+            lock.unlock()
+        }
+        var value: T? {
+            lock.lock()
+            defer { lock.unlock() }
+            return storage
+        }
+    }
+
+    /// 主线程泵 RunLoop 直到条件满足或 deadline（body 异步派到主线程时驱动它）。
+    private func pumpMainRunLoop(until deadline: Date, condition: () -> Bool) -> Bool {
+        while Date() < deadline {
+            if condition() { return true }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        return condition()
+    }
+
+    /// 交互腿（showMessage）不得在旧 1s 上限处失败：慢 body（1.5s）的结果必须
+    /// 在模态完成时交付。调用形态 = 后台线程（BridgeClient 管道读取线程的真实
+    /// 形态）→ body 派主线程；旧实现会在 1s 处回 main-thread-busy 并丢弃结果。
+    func testInteractiveLegNotFailedAtOneSecondAndDeliversResult() {
+        let legs = SwiftEdgeHostLegs(config: .init(
+            canShowUI: { true },
+            uiLegBodyOverride: { method, _ in
+                XCTAssertEqual(method, "showMessage")
+                Thread.sleep(forTimeInterval: 1.5)
+                return (.number(1), nil)
+            }))
+        let box = SyncBox<(AnyCodable?, String?, Date)>()
+        let start = Date()
+        DispatchQueue.global().async {
+            legs.respondAsync(method: "showMessage",
+                              payload: .object(["message": .string("x")])) { result, error in
+                box.set((result, error, Date()))
+            }
+        }
+        XCTAssertTrue(pumpMainRunLoop(until: start.addingTimeInterval(5.0),
+                                      condition: { box.value != nil }),
+                      "交互腿结果未在 5s 内交付")
+        guard let outcome = box.value else { return }
+        XCTAssertNil(outcome.1, "不得在 1s 处失败（旧实现回 main-thread-busy，模态结果被丢弃）")
+        XCTAssertEqual(outcome.0, .number(1), "模态完成后的结果必须交付")
+        XCTAssertGreaterThanOrEqual(outcome.2.timeIntervalSince(start), 1.0,
+                                   "结果在慢 body（1.5s）完成时才交付：证明未被 1s 上限截断")
+    }
+
+    /// S1：超时后仍在主队列排队的 body 绝不补执行（无双重执行），回执恰一次。
+    func testInteractiveTimeoutNeverExecutesQueuedBodyLater() {
+        let box = SyncBox<(AnyCodable?, String?)>()
+        var bodyRan = false
+        let legs = SwiftEdgeHostLegs(config: .init(
+            canShowUI: { true },
+            uiLegBodyOverride: { _, _ in
+                bodyRan = true
+                return (nil, nil)
+            }))
+        // 主线程刻意不泵 RunLoop：body 保持排队，50ms 后注入超时。
+        DispatchQueue.global().async {
+            legs.performInteractiveUI(method: "showMessage", payload: nil, timeout: 0.05) { result, error in
+                box.set((result, error))
+            }
+        }
+        let deadline = Date().addingTimeInterval(2.0)
+        while box.value == nil && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        XCTAssertEqual(box.value?.1, "swift-edge-ui-unavailable:showMessage:main-thread-busy")
+        XCTAssertFalse(bodyRan, "超时回执时 body 尚未执行")
+        // 放行主队列：已排定 body 必须见弃权位退出，绝不补执行。
+        RunLoop.current.run(until: Date().addingTimeInterval(0.3))
+        XCTAssertFalse(bodyRan, "超时后 body 不得再执行（不得双执行）")
+        XCTAssertEqual(box.value?.1, "swift-edge-ui-unavailable:showMessage:main-thread-busy",
+                       "超时回执恰一次（body 弃权不覆盖）")
+    }
+
+    /// 非交互腿保留 1s 短界（S1 明确不把非交互腿一并拉长）。
+    func testNonInteractiveLegKeepsShortBound() {
+        let legs = SwiftEdgeHostLegs(config: .init(canShowUI: { true }))
+        let box = SyncBox<(AnyCodable?, String?)>()
+        var bodyRan = false
+        DispatchQueue.global().async {
+            let outcome = legs.performUI(method: "setBadge", body: {
+                bodyRan = true
+                return (nil, nil)
+            })
+            box.set(outcome)
+        }
+        // 主线程刻意忙 >1s（阻塞主队列、不泵 RunLoop）→ 1s 有界等待必须超时。
+        Thread.sleep(forTimeInterval: 1.3)
+        let deadline = Date().addingTimeInterval(2.0)
+        while box.value == nil && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        XCTAssertEqual(box.value?.1, "swift-edge-ui-unavailable:setBadge:main-thread-busy")
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertFalse(bodyRan, "超时后 body 也不得补执行（同一弃权位）")
+    }
+
     /// 二轮评审 P3：EdgePayload.int 对非有限/越界值返回 nil，绝不 trap。
     func testEdgePayloadIntDoesNotTrap() {
         XCTAssertEqual(EdgePayload.int(.number(3)), 3)

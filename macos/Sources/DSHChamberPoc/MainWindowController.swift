@@ -6,7 +6,7 @@
 //  职责：WKWebView 加载控制面 origin 的壳文档（根路径）；把 bridge-shim.poc.js
 //  （ChamberResources 定位的 SwiftPM 资源）注入 WebView；ChamberMessageHandler
 //  注册为 "dshChamber" 消息通道并回接 evaluateJavaScript；B 桥 invoke 结果与
-//  sidecar 事件经 __dshChamberResolve / __dshChamberEmit 回写页面；
+//  sidecar notify 帧经 __dshChamberResolve / __dshChamberEmit 回写页面；
 //  导航护栏：仅放行**壳文档**（origin 相等 + pathname=/ + 无 query，与 Electron
 //  isTrustedRendererUrl 对齐）——同源非壳文档（/api/i/* 代理 HTML）一律取消，
 //  其余交给系统打开或一律取消。
@@ -20,9 +20,12 @@
 //  BridgeClient.onNotify 到本控制器的 notify 路由：rendererPush 解包进页面
 //  emit（Electron webContents.send 同语义），setBadge/showItemInFolder 走
 //  SwiftEdgeHostLegs 原生腿（守卫同 edge 面、失败 loud），retireNotifications
-//  如实 no-op（无登记表），notifyClicked/未知事件 loud 不处理——路由决策表
-//  见文件底部 decodeNotify/NotifyRoute（纯逻辑，单测直测）。
+//  按 NotificationDeliveryRegistry 的 sourceId→identifier 登记表调
+//  UNUserNotificationCenter.removeDeliveredNotifications（S8），
+//  notifyClicked/未知事件 loud 不处理——路由决策表见文件底部
+//  decodeNotify/NotifyRoute（纯逻辑，单测直测）。
 import AppKit
+import UserNotifications
 import WebKit
 
 final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUIDelegate, NSWindowDelegate {
@@ -66,6 +69,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     private let cpOrigin: String
     /// sidecar ready 帧已到（A 桥 origin 门在此之前一律拒绝）。
     private var sidecarReady = false
+    /// 退出清理已开始（S7：A 桥 app_quitting 门；AppDelegate
+    /// beginTerminationCleanup 置位）。置位后全部 invoke 回 app_quitting。
+    private var quitting = false
     /// 外链打开预算（镜像 shell-core openExternally：10s/8 次 + 30s 冷却）。
     private var externalBudget = ExternalOpenBudget()
 
@@ -134,11 +140,11 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                 guard let self, self.sidecarReady else { return nil }
                 return self.cpOrigin
             },
+            // S7：退出清理开始后 late invoke 回 app_quitting（renderer-trust
+            // createTrustedIpc 同码），不再向 shutdown 注入传输/运行时工作。
+            isQuitting: { [weak self] in self?.quitting ?? false },
             onInvoke: { [weak self] id, method, payload in
                 self?.handleInvoke(id: id, method: method, payload: payload)
-            },
-            onEvent: { [weak self] event, payload in
-                self?.handleEvent(event: event, payload: payload)
             }
         )
         handler.evaluateJavaScript = { [weak self] script in
@@ -147,55 +153,47 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         bridgeHandler = handler
         configuration.userContentController.add(handler, name: Self.bridgeMessageName)
 
-        // POC dev 调试（白屏诊断）：web 控制台/错误回传 → [poc-web] 打印。
-        // 页面 JS onerror/unhandledrejection/console.* 经 pocConsole 通道回传；
-        // 打包/发布不需要移除（仅额外打印，无副作用）。
-        let consoleCatcher = POCConsoleCatcher()
-        self.consoleCatcher = consoleCatcher
-        configuration.userContentController.add(consoleCatcher, name: Self.consoleMessageName)
-        let consoleSource = """
-        (function () {
-          function post(kind, args) {
-            try {
-              window.webkit.messageHandlers.pocConsole.postMessage({kind: kind, text: Array.prototype.map.call(args, String).join(' ')});
-            } catch (e) {}
-          }
-          window.addEventListener('error', function (e) {
-            post('error', [e.message, ' @ ' + (e.filename || '') + ':' + (e.lineno || '')]);
-          });
-          window.addEventListener('unhandledrejection', function (e) {
-            post('rejection', [String(e && e.reason)]);
-          });
-          ['log','info','warn','error','debug'].forEach(function (m) {
-            var orig = console[m];
-            console[m] = function () { post(m, arguments); orig.apply(console, arguments); };
-          });
-        })();
-        """
-        configuration.userContentController.addUserScript(WKUserScript(
-            source: consoleSource,
-            injectionTime: .atDocumentStart,
-            forMainFrameOnly: true
-        ))
-
-        // 事件下行接线（W-04 MessageHandler 双写纪律「乙」）：sidecar 事件唯一
-        // 入口 = BridgeClient.onEvent → 本控制器直写 __dshChamberEmit；本控制器
-        // 不调用 handler.emit（避免同事件双写）。构造参数 onEvent 只是 emit 在
-        // evaluateJavaScript 未就绪时的降级路径，语义同一。事件可能来自 B 桥
-        // 后台队列：handleEvent 内部经 Task { @MainActor } 收敛到主线程。
-        bridge.onEvent = { [weak self] event, payload in
-            self?.handleEvent(event: event, payload: payload)
+        // POC dev 调试（白屏诊断；S14：仅在 POC_DEBUG=1 时安装——默认关闭，
+        // 发布壳不转发渲染器每一行 console）：页面 JS onerror/
+        // unhandledrejection/console.* 经 pocConsole 通道回传 → [poc-web] 打印。
+        if POCDebug.isEnabled() {
+            let consoleCatcher = POCConsoleCatcher()
+            self.consoleCatcher = consoleCatcher
+            configuration.userContentController.add(consoleCatcher, name: Self.consoleMessageName)
+            let consoleSource = """
+            (function () {
+              function post(kind, args) {
+                try {
+                  window.webkit.messageHandlers.pocConsole.postMessage({kind: kind, text: Array.prototype.map.call(args, String).join(' ')});
+                } catch (e) {}
+              }
+              window.addEventListener('error', function (e) {
+                post('error', [e.message, ' @ ' + (e.filename || '') + ':' + (e.lineno || '')]);
+              });
+              window.addEventListener('unhandledrejection', function (e) {
+                post('rejection', [String(e && e.reason)]);
+              });
+              ['log','info','warn','error','debug'].forEach(function (m) {
+                var orig = console[m];
+                console[m] = function () { post(m, arguments); orig.apply(console, arguments); };
+              });
+            })();
+            """
+            configuration.userContentController.addUserScript(WKUserScript(
+                source: consoleSource,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            ))
+            print("[poc] POC_DEBUG=1：已安装 pocConsole 回传（\(Self.consoleMessageName)）")
         }
+
         // S-D：sidecar 出站 **notify 帧**（{"notify":event,"payload":…}——
         // node-edges 的 sendNotify 族：rendererPush/setBadge/
-        // showItemInFolder/retireNotifications）→ 本控制器 notify 路由消费
-        // （与 onEvent 的 event 帧族是两条独立帧族，B 桥线协议两侧都发——
-        // 本文件「事件下行接线」注释的 onEvent 只覆盖 event 帧族；notify 帧
-        // 族在 BridgeClient.dispatchOutboundFrame 走 onNotify，此前无人接线
-        // → 全部 loud 丢弃，rendererPush 等从未进页面。S-D 在此接线：
-        // routeNotify 解码 → rendererPush 解包进页面 emit / 原生腿分流）。
-        // 线程契约与 onEvent 相同：管道读取线程回调，消费在 routeNotify 内
-        // 收敛主线程。
+        // showItemInFolder/retireNotifications）→ 本控制器 notify 路由消费。
+        // event 帧族（BridgeClient.onEvent）已无生产接线（sidecar-entry 只发
+        // notify；W-05 桩 fixture 仅供 BridgeClientIntegrationTests），页面下行
+        // 唯一入口 = 本 onNotify 路由（W-04 双写纪律「乙」）。
+        // 线程契约：管道读取线程回调，消费在 routeNotify 内收敛主线程。
         bridge.onNotify = { [weak self] event, payload in
             self?.routeNotify(event: event, payload: payload)
         }
@@ -246,17 +244,26 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     @objc private func hostWakeUp(_ note: Notification) {
         print("[poc] 系统唤醒——发送 __host.systemResume")
         Task { @MainActor in
-            try? await bridge.invoke(
-                method: HostInboundMethod.systemResume,
-                payload: .object(["timestamp": .number(Date().timeIntervalSince1970 * 1000)])
-            )
+            do {
+                _ = try await bridge.invoke(
+                    method: HostInboundMethod.systemResume,
+                    payload: .object(["timestamp": .number(Date().timeIntervalSince1970 * 1000)]))
+            } catch {
+                // S10：事件边界绝不吞错、绝不崩——失败 loud（同
+                // sendRendererLifecycle 风格；core 侧幂等，无需重试）。
+                print("[poc] __host.systemResume 发送失败：\(error.localizedDescription)")
+            }
         }
     }
 
     @objc private func appDidBecomeActive(_ note: Notification) {
         print("[poc] 应用激活——发送 __host.mainWindowShown")
         Task { @MainActor in
-            _ = try? await bridge.invoke(method: HostInboundMethod.mainWindowShown, payload: nil)
+            do {
+                _ = try await bridge.invoke(method: HostInboundMethod.mainWindowShown, payload: nil)
+            } catch {
+                print("[poc] __host.mainWindowShown 发送失败：\(error.localizedDescription)")
+            }
         }
     }
 
@@ -297,6 +304,30 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         return rolledBack
     }
 
+    /// 导航生命周期三态（WKNavigationDelegate 回调映射）。
+    enum NavigationOutcome {
+        case started
+        case finished
+        case failed
+    }
+
+    /// 导航事实变换（S-A/S5；纯逻辑单测直测）：
+    ///  - started  → webViewLoading:true；
+    ///  - finished → webViewLoading:false + webViewContentAlive:true；
+    ///  - failed   → webViewLoading:false（S5：失败无 didFinish，也必须收敛，
+    ///    否则 sidecar 侧 webViewLoading 同步门永久为 true，通知打开/深链
+    ///    drain 被 hold）。
+    static func navigationFacts(for outcome: NavigationOutcome) -> [String: Bool] {
+        switch outcome {
+        case .started:
+            return ["webViewLoading": true]
+        case .finished:
+            return ["webViewLoading": false, "webViewContentAlive": true]
+        case .failed:
+            return ["webViewLoading": false]
+        }
+    }
+
     static func hostFactsDiff(last: [String: Bool], changes: [String: Bool])
         -> (payload: [String: Bool], merged: [String: Bool]) {
         var merged = last
@@ -318,7 +349,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     ///   - 实际发送经 `Task { @MainActor in … }`：@MainActor 任务队 FIFO 且
     ///     invoke 的登记与写帧在任务首个同步段完成（其后挂起等应答），故帧
     ///     写序 = 事件入队序，杜绝并发推送乱序把旧值后写到 sidecar；invoke
-    ///     的线程安全由 BridgeClient 保证（与 onEvent/handleInvoke 同款收敛）；
+    ///     的线程安全由 BridgeClient 保证（与 handleInvoke 同款收敛）；
     ///   - 失败 loud 打印并**回滚本次意图**（`hostFactsRollback`）：启动期首推
     ///     早于 `bridge.start()`（invoke 必抛「未在运行」），不回滚会让去重簿记
     ///     误判已送达——而 sidecar 侧存活事实缺省「未知=不可交付」，rendererPush
@@ -326,9 +357,16 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     ///     ready 时的 `resetHostFactsBookkeeping()` 仍会推全量快照兜底。
     /// sidecar 重启（新进程没有历史事实）→ 清空去重簿记，下一次推送即全量
     /// 快照；否则新 sidecar 会长期以「种子事实」运行（2026-09 三审 #8）。
+    /// S9：快照必须含 focused = window.isKeyWindow 的实时值——否则重启前缓存
+    /// 的 focused=false 会粘滞到下一次 key 事件，窗口明明是 key 却推 false。
     func resetHostFactsBookkeeping() {
         lastHostFacts = [:]
-        pushHostFacts(["mainWindowAlive": true, "webViewContentAlive": true])
+        pushHostFacts(Self.resetFacts(isKeyWindow: window?.isKeyWindow ?? false))
+    }
+
+    /// sidecar 重启后的全量事实快照（纯逻辑，单测直测；S9）。
+    static func resetFacts(isKeyWindow: Bool) -> [String: Bool] {
+        ["mainWindowAlive": true, "webViewContentAlive": true, "focused": isKeyWindow]
     }
 
     private func pushHostFacts(_ changes: [String: Bool]) {
@@ -404,7 +442,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     /// web → Swift invoke（经 handler 转发）：调 B 桥后把结果交回页面
     private func handleInvoke(id: Int, method: String, payload: AnyCodable?) {
-        print("[poc] invoke #\(id) \(method)")
+        if POCDebug.isEnabled() {
+            print("[poc] invoke #\(id) \(method)")
+        }
         Task { @MainActor in
             do {
                 let result = try await bridge.invoke(method: method, payload: payload)
@@ -416,21 +456,6 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                 let errorJSON = Self.jsonLiteral(error.localizedDescription) ?? "\"bridge error\""
                 evaluateJS("__dshChamberResolve(\(id), null, \(errorJSON))")
             }
-        }
-    }
-
-    /// sidecar 事件（event 帧族）→ 页面 __dshChamberEmit。
-    /// 事件源两条路径殊途同归：① 本控制器把 BridgeClient.onEvent 直接喂进来
-    /// （W-04「乙」，主线）；② handler.emit 在 evaluateJavaScript 未赋入时的
-    /// 构造 onEvent 降级（POC 中 evaluateJavaScript 恒已赋入，实际不触发）；
-    /// ③（S-D）notify 路由的 rendererPush 解包后同样落 emitToPage——event 帧
-    /// 族与 notify 帧族两路殊途同归到同一页面 emit 面（双写纪律不变：同一
-    /// 事件只经一条路径发一次）。事件可能来自 B 桥后台队列：本方法经
-    /// Task { @MainActor } 收敛到主线程再 emit。
-    private func handleEvent(event: String, payload: AnyCodable?) {
-        print("[poc] 事件 \(event)")
-        Task { @MainActor in
-            emitToPage(event: event, payload: payload)
         }
     }
 
@@ -460,7 +485,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// sidecar notify → 消费（路由表与解码见文件底部 decodeNotify/
     /// NotifyRoute——纯逻辑，单测直测；本方法只做执行与 loud）。
     /// 解码在到达线程（管道读取线程）就地完成（纯函数），消费按决策收敛
-    /// 主线程（Task { @MainActor }，与 handleEvent 同款纪律——宿主腿触碰
+    /// 主线程（Task { @MainActor }，与页面 emit 同款纪律——宿主腿触碰
     /// NSApp/NSWorkspace/dockTile 必须主线程）。
     private func routeNotify(event: String, payload: AnyCodable?) {
         switch Self.decodeNotify(event: event, payload: payload) {
@@ -487,13 +512,29 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                     print("[poc] notify \(method) 消费失败（loud）：\(error)")
                 }
             }
-        case .retireNoop(let count):
-            // Electron 退役语义 = 关闭登记中的活跃原生通知；Swift 侧撤销已
-            // 展示通知 = UNUserNotificationCenter.removeDeliveredNotifications
-            // (identifiers)，需 sourceId→identifier 登记表——POC 未跟踪已展示
-            // 通知（edge 调度以 chamber-edge-<notificationId> 命名、无 sourceId
-            // 映射），如实 no-op 并 loud（未来登记表落地后在此改接 remove）。
-            print("[poc] notify retireNotifications：无 sourceId→identifier 登记表，no-op（\(count) 个 sourceId）")
+        case .retireNotifications(let sourceIds):
+            // S8：Electron 退役语义 = 关闭登记中的活跃原生通知。Swift 侧经
+            // NotificationDeliveryRegistry（sourceId→chamber-edge-<id>）取回
+            // 已投递 identifier，调 UNUserNotificationCenter
+            // .removeDeliveredNotifications 清除 OS 通知中心存量横幅。
+            guard let registry = bridge.edgeHostLegs?.notificationRegistry else {
+                print("[poc] notify retireNotifications 消费失败：edgeHostLegs 未接线（loud）")
+                return
+            }
+            let identifiers = registry.retire(sourceIds: sourceIds)
+            guard !identifiers.isEmpty else {
+                print("[poc] notify retireNotifications：无已投递登记（\(sourceIds.count) 个 sourceId，no-op）")
+                return
+            }
+            guard Bundle.main.bundleIdentifier != nil else {
+                // 无 bundle（swift run dev）下 UNUserNotificationCenter.current()
+                // 会崩（bundleProxyForCurrentProcess nil）——同 AppDelegate 守卫。
+                print("[poc] notify retireNotifications：dev 无 bundle 不支持通知中心，"
+                      + "\(identifiers.count) 条登记未清除（loud）")
+                return
+            }
+            UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: identifiers)
+            print("[poc] notify retireNotifications：已请求清除 \(identifiers.count) 条已投递通知")
         case .unexpectedClick:
             // notifyClicked 的正常路径是 __host.notifyClicked 入站请求
             // （AppDelegate userNotificationCenter click 回灌），不应经 notify
@@ -606,8 +647,8 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         // S-A：provisional 导航开始（首载 / 退避重试 / 重载统一入口）→
         // webViewLoading:true（electron-edges webViewLoading = isLoading 的
-        // 事件化等价；加载失败无 didFinish 时保持 true，成功/重载后收敛）
-        pushHostFacts(["webViewLoading": true])
+        // 事件化等价；失败路径由 didFail* 推 false 收敛，见 navigationFacts）
+        pushHostFacts(Self.navigationFacts(for: .started))
         // E19：导航开始即**取消已排定的崩溃重载**（Electron did-start-loading
         // 里 clearCrashReloadTimer；2026-09 三审 E19 偏离 #2）并上报
         // （core 复位 ready 位 + in-flight 重排）。
@@ -621,13 +662,13 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // S-A：加载完成 → webViewLoading:false + webViewContentAlive:true。
         // 渲染进程终止后的恢复导航成功也在此把 alive 收敛回 true（崩溃回调
         // webViewWebContentProcessDidTerminate 推 false 并触发 E19 有界重载）。
-        pushHostFacts(["webViewLoading": false, "webViewContentAlive": true])
+        pushHostFacts(Self.navigationFacts(for: .finished))
         // E19 三事件映射之二：加载完成 = core 的确定性 replay 边（drain 待发
         // 通知点击/深链 intent）。
         sendRendererLifecycle("did-finish-load")
-        // POC dev 白屏诊断：延迟数秒后渲染快照落盘（takeSnapshot 不需要屏幕
-        // 录制权限；多帧取样便于观察首屏演进）。
-        guard !didSnapshot else { return }
+        // POC dev 白屏诊断（S14：仅 POC_DEBUG=1，默认关闭）：延迟数秒后渲染
+        // 快照落盘（takeSnapshot 不需要屏幕录制权限；多帧取样便于观察首屏演进）。
+        guard POCDebug.isEnabled(), !didSnapshot else { return }
         didSnapshot = true
         let snapshotURL = URL(fileURLWithPath: "/tmp/poc-ui-snapshot.png")
         Task { @MainActor in
@@ -656,6 +697,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     func webView(_ webView: WKWebView,
                  didFail navigation: WKNavigation!,
                  withError error: Error) {
+        // S5：失败路径必须推 webViewLoading:false（无 didFinish 可收敛；
+        // sidecar 侧同步门若保持 true，通知打开/深链 drain 会被永久 hold）。
+        pushHostFacts(Self.navigationFacts(for: .failed))
         // 注：若 http:// 字面 IP 被 ATS 拦截，可 -Xlinker -sectcreate __TEXT
         // __info_plist 注入 NSAllowsLocalNetworking，或改用 localhost（§0.2④）
         print("[poc] 页面加载失败 \(error.localizedDescription)")
@@ -663,10 +707,16 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     /// sidecar 就绪态（AppDelegate 的 bridge.onReady / 重启回调）。
     /// `false` = 新进程未就绪 → A 桥 origin 门落闸（重启窗口不放行）。
-    /// 桩态（poc-sidecar.ts 无 B 桥协议、永无 ready 帧）由 AppDelegate 显式
-    /// 传 true 免门——否则页面 invoke 会被永久拒绝（2026-09 二轮实测）。
+    /// S12 起无「免门桩态」：dev/装配侧车恒为 sidecar-entry/sidecar.js，
+    /// 就绪只由 ready 帧开启；形状未识别的自定义 POC_SIDECAR 自负 ready 协议。
     func noteSidecarReady(_ ready: Bool = true) {
         sidecarReady = ready
+    }
+
+    /// 退出清理已开始（S7）：A 桥 app_quitting 门置位（AppDelegate
+    /// beginTerminationCleanup 调用）。置位后 late invoke 一律回 app_quitting。
+    func noteQuitting() {
+        quitting = true
     }
 
     /// 退出清理开始 → 抑制渲染恢复并取消已排定重载（AppDelegate 调用）。
@@ -723,6 +773,10 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     func webView(_ webView: WKWebView,
                  didFailProvisionalNavigation navigation: WKNavigation!,
                  withError error: Error) {
+        // S5：初载失败同样收敛 webViewLoading:false（退避重试会在
+        // didStartProvisionalNavigation 再推 true；失败间隙保持 true 会让
+        // sidecar 侧的 drain 门被 hold）。
+        pushHostFacts(Self.navigationFacts(for: .failed))
         // POC dev 竞态兜底：控制面起动晚于首载（sidecar 就绪需 1~2s）——
         // 初次连不上时按退避重试；上限 25 次后放弃（loud）。
         let nsError = error as NSError
@@ -800,9 +854,10 @@ enum NotifyRoute: Equatable {
     /// 原生宿主腿执行（method + 形状校验后的原载荷；执行经
     /// SwiftEdgeHostLegs.respond——守卫语义与 edge 面一致）。
     case hostLeg(method: String, payload: AnyCodable?)
-    /// retireNotifications：POC 无 sourceId→identifier 登记表 → 诚实 no-op
-    /// （sourceIdCount = 载荷中来源数，仅作 loud 上下文）。
-    case retireNoop(sourceIdCount: Int)
+    /// retireNotifications：退役来源集经登记表解析为已投递 identifier，
+    /// 宿主腿调 removeDeliveredNotifications 清除（sourceIds = 校验后的
+    /// 字符串数组；空数组 = 退役空集，no-op）。
+    case retireNotifications(sourceIds: [String])
     /// notifyClicked 经 notify 出现（不应发生；正常路径为入站请求）。
     case unexpectedClick
     /// 未知事件 / 载荷形状非法：loud 丢弃（含原因，绝不伪造/猜测）。
@@ -851,15 +906,15 @@ extension MainWindowController {
             guard case .array(let items) = list else {
                 return .malformed(reason: "retireNotifications sourceIds 非数组（丢弃）")
             }
-            var count = 0
+            var sourceIds: [String] = []
             for item in items {
-                if case .string = item {
-                    count += 1
+                if case .string(let sourceId) = item {
+                    sourceIds.append(sourceId)
                 } else {
                     return .malformed(reason: "retireNotifications sourceIds 含非字符串元素（丢弃）")
                 }
             }
-            return .retireNoop(sourceIdCount: count)
+            return .retireNotifications(sourceIds: sourceIds)
         case "notifyClicked":
             return .unexpectedClick
         default:

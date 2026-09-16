@@ -70,12 +70,14 @@
  *     Swift 侧 node-edges pickPluginSource → NSOpenPanel E8 腿已实现）——
  *     shim 直接 invoke，pick 决策不属本文件。
  *   - desktop_ssh_* 载荷用官方 {id} schema（sidecar-entry/shell-core 同款）。
- *     W-05 切片桩 poc-sidecar.ts 仍读 {instanceId}——该桩的调和归属 P1
- *     sidecar-entry 侧（poc-sidecar 头注释声明），shim 不为其改形。
+ *     W-05 切片桩 poc-sidecar.ts 只读 {instanceId}，且自 2026-12 起仅作
+ *     BridgeClient 集成测试 fixture——它不再是任何宿主路径的缺省回退（见下），
+ *     故 shim 不为其改形。
  *
- * POC 期注意：Swift 默认回退侧车是 poc-sidecar.ts（只注册 W-05 8 通道，
- * 其余回 {error:'poc-unimplemented'}）——该回退属 sidecar 桩而非本 shim；
- * 60/60 语义侧车是 sidecar-entry.ts（POC_SIDECAR env 指向，dev 循环已用）。
+ * POC 期注意：Swift 的 dev 缺省侧车是 packages/desktop/sidecar-entry.ts
+ * （60/60 语义、A 桥 ready 帧齐全）；poc-sidecar.ts 只注册 W-05 8 通道、
+ * 其余回 {error:'poc-unimplemented'}，2026-12 审计 S12 起已删除其缺省回退
+ * ——只有显式 POC_SIDECAR 指向它时才会被加载（届时须自行发 ready 帧）。
  *
  * A-bridge envelope (web → Swift, through the WKScriptMessageHandler named
  * "dshChamber"): postMessage({id, method, payload}) — payload is JSON or
@@ -368,7 +370,8 @@
 
   /** desktopSsh — 全 32 invoke 方法接真实通道；载荷键逐字 preload（id 寻址
    *  通道一律 {id}，instances_set 直传数组原文）。W-05 切片桩 poc-sidecar.ts
-   *  读 {instanceId}（superseded by sidecar-entry，见文件头注记），此处不迁就。 */
+   *  读 {instanceId}（自 2026-12 起仅作集成测试 fixture，见文件头注记），
+   *  此处不迁就。 */
   var desktopSsh = {
     instances_get: function () { return invoke('desktop_ssh_instances_get', null) },
     // preload 逐字：第二参原文直传（主进程校验数组；legacy no-op roster 通道）。

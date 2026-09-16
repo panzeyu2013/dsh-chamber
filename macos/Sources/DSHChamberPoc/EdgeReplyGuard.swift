@@ -1,0 +1,46 @@
+//
+//  EdgeReplyGuard.swift
+//  DSHChamberPoc
+//
+//  S14（2026-12 审计）：edge 应答「恰好一次」守卫此前是无限增长的
+//  Set<Int64>——长会话（edgeId 单调递增）下内存无界。改为有界 FIFO：满员
+//  淘汰最旧一个 id。窗口外重复应答不再被识别为重复，但 sidecar 侧
+//  pendingEdges 首次应答即出表，窗口外重复本就无对端可伤（协议违约，非正确性
+//  依赖）。
+//
+import Foundation
+
+/// 有界 edgeId 应答守卫（值类型；调用方持锁使用）。
+struct BoundedEdgeReplyGuard {
+    /// 窗口容量（默认 4096：长会话内存有界，重复应答的识别窗口足够大）。
+    let capacity: Int
+    private var seen: Set<Int64> = []
+    private var order: [Int64] = []
+
+    init(capacity: Int = 4096) {
+        precondition(capacity > 0, "capacity 必须为正")
+        self.capacity = capacity
+    }
+
+    /// 窗口内是否已应答（只读）。
+    func contains(_ edgeId: Int64) -> Bool { seen.contains(edgeId) }
+
+    /// 首次插入 → true；窗口内已存在 → false。
+    mutating func firstInsert(_ edgeId: Int64) -> Bool {
+        guard !seen.contains(edgeId) else { return false }
+        seen.insert(edgeId)
+        order.append(edgeId)
+        if order.count > capacity {
+            seen.remove(order.removeFirst())
+        }
+        return true
+    }
+
+    mutating func removeAll() {
+        seen.removeAll()
+        order.removeAll()
+    }
+
+    /// 当前窗口内条目数（诊断/测试）。
+    var count: Int { seen.count }
+}

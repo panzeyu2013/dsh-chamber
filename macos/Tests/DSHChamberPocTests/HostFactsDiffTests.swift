@@ -154,4 +154,31 @@ final class HostFactsDiffTests: XCTestCase {
         // 场景 C：空推送 → 原样返回
         XCTAssertEqual(MainWindowController.hostFactsRollback(last: ["a": true], pushed: [:]), ["a": true])
     }
+
+    // MARK: - S5/S9：导航失败事实与重启快照（纯逻辑）
+
+    func testNavigationFactsConvergeOnFailure() {
+        XCTAssertEqual(MainWindowController.navigationFacts(for: .started),
+                       ["webViewLoading": true])
+        XCTAssertEqual(MainWindowController.navigationFacts(for: .finished),
+                       ["webViewLoading": false, "webViewContentAlive": true])
+        // S5：失败（didFail / didFailProvisionalNavigation）必须推 loading:false，
+        // 否则 sidecar 侧 webViewLoading 同步门永久 true、通知/深链 drain 被 hold。
+        XCTAssertEqual(MainWindowController.navigationFacts(for: .failed),
+                       ["webViewLoading": false])
+        // 失败事实经去重后确实产生一次收敛推送（last=true → payload 非空）。
+        let (payload, merged) = MainWindowController.hostFactsDiff(
+            last: ["webViewLoading": true],
+            changes: MainWindowController.navigationFacts(for: .failed))
+        XCTAssertEqual(payload, ["webViewLoading": false])
+        XCTAssertEqual(merged, ["webViewLoading": false])
+    }
+
+    func testResetFactsCarryLiveFocusState() {
+        // S9：重启快照必须取 window.isKeyWindow 实时值（旧实现漏 focused，
+        // 缓存 focused=false 会粘滞到下一次 key 事件）。
+        XCTAssertEqual(MainWindowController.resetFacts(isKeyWindow: true),
+                       ["mainWindowAlive": true, "webViewContentAlive": true, "focused": true])
+        XCTAssertEqual(MainWindowController.resetFacts(isKeyWindow: false)["focused"], false)
+    }
 }

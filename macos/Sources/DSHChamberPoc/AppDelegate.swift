@@ -15,10 +15,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// 打包态路径解析集中在 `PackagedLayout`（纯函数、可单测）：装配态
     /// node/sidecar/userData/vendor-dsh 都按 `<App>/Contents/Resources/...`
     /// 与 Electron 同根 userData 解析，`POC_*` 环境变量始终优先。
-    /// dev 态 sidecar 脚本相对仓库根的位置（自当前工作目录向上查找）
-    private static let sidecarRelativePath = "packages/desktop/poc-sidecar.ts"
+    /// dev 态 sidecar 脚本相对仓库根的位置（自当前工作目录向上查找）。
+    /// S12：dev 缺省指向真实 sidecar-entry.ts——poc-sidecar 桩回退整体删除
+    /// （桩不开 A 桥 gate、字段形状与 shim 矛盾，是「另一条矛盾路径」）。
+    private static let sidecarRelativePath = "packages/desktop/sidecar-entry.ts"
     /// 退出清理硬顶（design 25 §3.3(4)：Swift terminate 超时 = 强制放行退出）。
-    private static let quitCleanupTimeout: TimeInterval = 5.0
+    /// S6：与 BridgeClient.quitCleanupGracePeriod（SIGTERM 宽限）和 shell-core
+    /// 的 QUIT_CLEANUP_TIMEOUT_MS = 5_000 同一预算，单源常量化，拆开不再漂移。
+    static let quitCleanupTimeout: TimeInterval = BridgeClient.quitCleanupGracePeriod
     /// 退出/关窗决策请求超时（sidecar 无应答 → 诚实 nil，绝不无限挂起退出）。
     private static let quitFactsTimeout: TimeInterval = 2.0
 
@@ -68,46 +72,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let executablePath = Bundle.main.executableURL?.path ?? CommandLine.arguments.first ?? ""
         let isPackaged = PackagedLayout.isAppBundle(executablePath: executablePath)
         let fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
+        let isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
         if isPackaged { print("[poc] 装配态（.app）——按 Contents/Resources 解析缺省路径") }
-        // 端口缺省：装配态 17500 / dev 17520（design 25 §3.3 A3；2026-09 模块
-        // 评审 minor：原实现两者共用 17520）。
-        let defaultCPPort = env["POC_PORT"] ?? (isPackaged ? "17500" : "17520")
+        // userData 根（与 Electron 打包实根同根）：S2 起无论 sidecar 形状都要
+        // 读 chamber-settings.json，故提前解析（lockDir 仍只给真实 sidecar 形状）。
+        let stateDir = PackagedLayout.resolveUserData(
+            env: env, home: NSHomeDirectory(), isPackaged: isPackaged)
+        // 控制面端口缺省（S11）：POC_PORT > DSH_CHAMBER_CP_PORT > dev 空闲退避 /
+        // packaged 17500；真实 sidecar 分支里解析后回填（自定义脚本形状不探测，
+        // 保持缺省，绝不静默漂移）。
+        var resolvedCPPort = env["POC_PORT"] ?? env["DSH_CHAMBER_CP_PORT"]
+            ?? (isPackaged ? "17500" : "17520")
 
-
-        // ① Node 路径：POC_NODE_BIN → 装配态自带 <Resources>/sidecar/node →
-        //    旧缺省 Electron 二进制（ELECTRON_RUN_AS_NODE=1 当 Node 24 用）
-        let nodePath = PackagedLayout.resolveNode(
-            env: env, resourcesDir: resourcesDir, isPackaged: isPackaged, exists: fileExists)
+        // ① Node 路径（S4）：POC_NODE_BIN（须可执行）→ 装配态自带
+        //    <Resources>/sidecar/node（须可执行）→ dev PATH node。皆无 →
+        //    fatal（绝不 spawn 裸 node，也绝不拿另一个 app 的 Electron 二进制顶替）。
+        let nodePath: String
+        do {
+            nodePath = try PackagedLayout.resolveNode(
+                env: env, resourcesDir: resourcesDir, isPackaged: isPackaged,
+                isExecutable: isExecutable)
+        } catch let error as PackagedLayout.PathResolutionError {
+            fatalStartup(error.message)
+        } catch {
+            fatalStartup("node 解析失败：\(error.localizedDescription)")
+        }
         print("[poc] node = \(nodePath)")
 
-        // ② sidecar 脚本路径：POC_SIDECAR → 装配态自带 <Resources>/sidecar/sidecar.js
-        //    → dev 自当前目录向上（≤6 层）查找
-        let sidecarPath = PackagedLayout.resolveSidecar(
+        // ② sidecar 脚本路径（S3）：POC_SIDECAR → 装配态自带
+        //    <Resources>/sidecar/sidecar.js → dev 自当前目录向上（≤6 层）查找
+        //    sidecar-entry.ts。找不到一律 fatal（绝不 spawn 一个没有脚本的 node）。
+        let resolvedSidecar = PackagedLayout.resolveSidecar(
             env: env, resourcesDir: resourcesDir, isPackaged: isPackaged, exists: fileExists)
-            ?? Self.findSidecarUpwards()
-        if let path = sidecarPath {
-            print("[poc] sidecar = \(path)")
-        } else {
-            print("[poc] sidecar = (未找到：POC_SIDECAR 未设且向上查找 \(Self.sidecarRelativePath) 失败)")
+        guard let sidecarPath = resolvedSidecar ?? Self.findSidecarUpwards(),
+              fileExists(sidecarPath) else {
+            fatalStartup(Self.missingSidecarMessage(
+                isPackaged: isPackaged, resourcesDir: resourcesDir,
+                explicitPath: env["POC_SIDECAR"].flatMap { $0.isEmpty ? nil : $0 }))
         }
+        print("[poc] sidecar = \(sidecarPath)")
         // 真实 sidecar（dev 的 sidecar-entry.ts / W-23 装配产物的 sidecar.js）
         // 需要参数：--user-data-dir / --web-dist-dir / --port。按脚本名识别并补
-        // 默认参数（env 可覆盖：POC_USER_DATA / POC_WEB_DIST / POC_PORT）；
-        // poc-sidecar 桩保持旧零参语义不变。
-        var sidecarArguments: [String] = sidecarPath.map { [$0] } ?? []
-        /// 目录锁根（W-15：真实 sidecar 形态才取锁——poc-sidecar 桩是另一进程
-        /// 模型，保持 POC 旧行为不取锁）。
+        // 默认参数（env 可覆盖：POC_USER_DATA / POC_WEB_DIST / POC_PORT /
+        // DSH_CHAMBER_CP_PORT）；形状未识别的自定义 POC_SIDECAR 不注入参数。
+        var sidecarArguments: [String] = [sidecarPath]
+        /// 目录锁根（W-15：真实 sidecar 形态才取锁——sidecar-entry/sidecar.js
+        /// 需要锁与守护；形状未识别的自定义脚本保持直启语义）。
         var lockDir: String?
         /// 装配态 sidecar（W-23 产物 `<Resources>/sidecar/sidecar.js`）：注入
         /// DSH_CHAMBER_SIDECAR_COMPILED=1，让 control-plane-module 走
         /// `<sidecar>/dist/control-plane/index.js` 相对入口（装配目录无
         /// node_modules 树，裸说明符不可解析）。
         var compiledSidecar = false
-        if let path = sidecarPath {
+        do {
+            let path = sidecarPath
             let basename = (path as NSString).lastPathComponent
             let isCompiled = basename == "sidecar.js"
-            let isDevEntry = basename.contains("sidecar-entry")
-            if isCompiled || isDevEntry {
+            // 形状判定单源 = ControlPlanePort.isRealSidecarScript（与 S11 的
+            // --port 注入/空闲探测前置同一判定，测试直测）。
+            if ControlPlanePort.isRealSidecarScript(path) {
                 compiledSidecar = isCompiled
                 let sidecarDir = (path as NSString).deletingLastPathComponent
                 let repoRoot = URL(fileURLWithPath: path)
@@ -115,8 +138,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     .deletingLastPathComponent()  // packages
                     .deletingLastPathComponent()  // 仓库根
                     .path
-                let stateDir = PackagedLayout.resolveUserData(
-                    env: env, home: NSHomeDirectory(), isPackaged: isPackaged)
                 lockDir = stateDir
                 // 装配态 web dist = `<App>/Contents/Resources/dist/web`（W-24 布局；
                 // 2026-09 审计发现脚本落位与这里不一致会导致控制面 fatal exit 1）
@@ -139,8 +160,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     webDir = repoRoot + "/packages/desktop/dist/web"
                 }
                 // sidecar 监听端口必须与控制面 URL 同源（2026-09 二轮：此前
-                // 恒 17520，打包态 URL 已改 17500 → 端口错配、白窗）。
-                let port = defaultCPPort
+                // 恒 17520，打包态 URL 已改 17500 → 端口错配、白窗）。S11：
+                // POC_PORT > DSH_CHAMBER_CP_PORT > dev 空闲端口退避（packaged
+                // 固定 17500，不改）；解析结果同时派生控制面 URL。
+                let port: String
+                do {
+                    let resolution = try ControlPlanePort.resolve(
+                        env: env, isPackaged: isPackaged,
+                        probeDevPort: { ControlPlanePort.probeFreePort(startingAt: $0) })
+                    port = String(resolution.port)
+                    print("[poc] 控制面端口 = \(port)（\(Self.portSourceLabel(resolution.source))）")
+                } catch let error as ControlPlanePort.ResolutionError {
+                    fatalStartup(error.message)
+                } catch {
+                    fatalStartup("控制面端口解析失败：\(error.localizedDescription)")
+                }
+                resolvedCPPort = port
                 sidecarArguments += [
                     "--user-data-dir", stateDir,
                     "--web-dist-dir", webDir,
@@ -178,6 +213,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 }
                 print("[poc] sidecar 参数：user-data=\(stateDir) web=\(webDir) port=\(port)"
                     + (isCompiled ? "（装配态 W-23 布局）" : "（dev sidecar-entry）"))
+            } else {
+                print("[poc] 警告：POC_SIDECAR 形状未识别（\(basename)）——不注入锁/守护/端口参数"
+                    + "（脚本自身决定协议；控制面 URL 端口保持 \(resolvedCPPort)）")
             }
         }
 
@@ -194,10 +232,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             print("[poc] 注入 ELECTRON_RUN_AS_NODE=1（Electron 二进制当 Node 用）")
         }
 
-        // ④ 控制面 URL：POC_CP_URL 显式覆盖；缺省派生自 POC_PORT（sidecar-entry
-        //    默认端口同源 17520）——消除 POC_PORT/POC_CP_URL 双 env 错位陷阱
-        //    （A-3 审计收口；sidecar ready 帧 port 本侧记录于 onReady）。
-        guard let rawCPURL = URL(string: env["POC_CP_URL"] ?? "http://127.0.0.1:\(defaultCPPort)/") else {
+        // ④ 控制面 URL：POC_CP_URL 显式覆盖；缺省派生自 resolvedCPPort
+        //    （POC_PORT > DSH_CHAMBER_CP_PORT > dev 探测/packaged 缺省，S11）
+        //    ——与传给 sidecar 的 --port 必然同源，消除端口错位白窗
+        //    （sidecar ready 帧 port 本侧记录于 onReady）。
+        guard let rawCPURL = URL(string: env["POC_CP_URL"] ?? "http://127.0.0.1:\(resolvedCPPort)/") else {
             fatalStartup("POC_CP_URL 无法解析为 URL")
         }
         // 壳文档 = 根路径 + 无 query（A 桥信任边界，TrustGuard.isTrustedDocument）。
@@ -239,9 +278,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         legs.mainWindowProvider = { [weak controller] in controller?.window }
         bridge.edgeHostLegs = legs
         self.bridge = bridge
-        // W-15 Supervisor（design 25 §3.3(1)(4)）：真实 sidecar-entry 形态下
-        // 先取目录锁再 spawn，运行中崩溃按退避重启（500ms/60s≤3），fatal 分流
-        // NSAlert；poc-sidecar 桩保持旧直启语义（无锁/无守护）。
+        // W-15 Supervisor（design 25 §3.3(1)(4)）：真实 sidecar 形态
+        // （sidecar.js / sidecar-entry.ts）先取目录锁再 spawn，运行中崩溃按
+        // 退避重启（500ms/60s≤3），fatal 分流 NSAlert；形状未识别的自定义
+        // POC_SIDECAR 保持直启语义（无锁/无守护，ready 协议由脚本自负）。
         if let lockDir {
             let supervisor = SidecarSupervisor(
                 directoryLock: SidecarDirectoryLock(userDataDir: lockDir),
@@ -276,7 +316,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             } catch {
                 fatalStartup("BridgeClient 启动失败：\(error.localizedDescription)")
             }
-            print("[poc] bridge 已启动（poc-sidecar 桩：无目录锁/无守护）")
+            print("[poc] bridge 已启动（自定义 sidecar 形状：无目录锁/无守护）")
+        }
+
+        // S2：启动期 chamber-settings reconcile（main.ts:1428-1438 同序）——
+        // <userData>/chamber-settings.json 的 keepAwake 经 settings UI 同一个
+        // setKeepAwake 宿主腿应用。缺文件 = 默认 off（无日志）；损坏 = loud +
+        // 默认。窗口对象此刻已存在，腿的 no-window 守卫可通过。
+        StartupSettings.apply(StartupSettings.readKeepAwake(userDataDir: stateDir)) { on in
+            legs.respond(method: "setKeepAwake", payload: .object(["on": .bool(on)]))
         }
 
         // 显示主窗口并激活（页面首载若早于控制面就绪由导航退避重试兜底）
@@ -442,6 +490,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private func beginTerminationCleanup() -> Bool {
         // E19 偏离 #3：退出清理一开始就抑制渲染恢复（不再排定/执行 reload）。
         mainWindowController?.suppressRendererRecovery()
+        // S7：A 桥 app_quitting 门——清理开始后 late invoke 不得再向 shutdown
+        // 注入传输/运行时工作（renderer-trust.ts createTrustedIpc 对偶）。
+        mainWindowController?.noteQuitting()
         guard supervisor != nil else { return false }
         guard !quitCleanupStarted else { return true }
         quitCleanupStarted = true
@@ -601,8 +652,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         exit(1)
     }
 
-    /// 最小主菜单：App 菜单（退出）+ 编辑菜单（WebKit 编辑快捷键路由）
-    private func installMainMenu() {
+    /// 最小主菜单：App（退出）+ 编辑（WebKit 快捷键路由）+ 窗口
+    /// （S13：performClose/performMiniaturize，恢复 Cmd+W/Cmd+M——Electron
+    /// 默认 macOS Window 菜单对偶，design E3）。抽为静态纯函数便于单测断言
+    /// selector（构造 NSMenu 无需 NSApp.run）。
+    static func makeMainMenu() -> NSMenu {
         let mainMenu = NSMenu()
 
         let appMenuItem = NSMenuItem()
@@ -625,7 +679,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         editMenu.addItem(withTitle: "全选", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editMenuItem.submenu = editMenu
 
-        NSApp.mainMenu = mainMenu
+        let windowMenuItem = NSMenuItem()
+        mainMenu.addItem(windowMenuItem)
+        let windowMenu = NSMenu(title: "窗口")
+        windowMenu.addItem(withTitle: "最小化",
+                           action: #selector(NSWindow.performMiniaturize(_:)),
+                           keyEquivalent: "m")
+        windowMenu.addItem(withTitle: "关闭",
+                           action: #selector(NSWindow.performClose(_:)),
+                           keyEquivalent: "w")
+        windowMenuItem.submenu = windowMenu
+        mainMenu.setSubmenu(windowMenu, for: windowMenuItem)
+
+        return mainMenu
+    }
+
+    private func installMainMenu() {
+        let menu = Self.makeMainMenu()
+        NSApp.mainMenu = menu
+        NSApp.windowsMenu = menu.items.first { $0.submenu?.title == "窗口" }?.submenu
+    }
+
+    /// sidecar 缺失的精确 fatal 文案（S3；纯函数单测直测）。explicitPath 非 nil
+    /// = POC_SIDECAR 显式指向但文件不存在（绝不 spawn 一个脚本缺失的 node）。
+    static func missingSidecarMessage(isPackaged: Bool, resourcesDir: String?,
+                                      explicitPath: String? = nil) -> String {
+        if let explicitPath, !explicitPath.isEmpty {
+            return "POC_SIDECAR 指向的 sidecar 脚本不存在：\(explicitPath)"
+        }
+        if isPackaged {
+            let expected = resourcesDir.map { PackagedLayout.sidecarScript(resourcesDir: $0) }
+                ?? "<Resources>/sidecar/sidecar.js（Bundle.main.resourceURL 缺失）"
+            return "装配态缺少 sidecar 脚本：\(expected)（POC_SIDECAR 可显式指定）"
+        }
+        return "dev 态未找到 sidecar 脚本：POC_SIDECAR 未设，且自 "
+            + "\(FileManager.default.currentDirectoryPath) 向上 6 层未找到 \(sidecarRelativePath)"
+    }
+
+    /// 端口来源日志标签（S11；纯函数单测直测）。
+    static func portSourceLabel(_ source: ControlPlanePort.Source) -> String {
+        switch source {
+        case .envPOC: return "POC_PORT 显式覆盖"
+        case .envDSH: return "DSH_CHAMBER_CP_PORT 显式覆盖"
+        case .packagedDefault: return "打包默认"
+        case .devProbe: return "dev 自动退避（17520 起，首个空闲端口）"
+        case .devDefault: return "dev 默认（自定义 sidecar 形状，不探测）"
+        }
     }
 
     // MARK: - UNUserNotificationCenterDelegate（W-21）
@@ -647,7 +746,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// 激活窗口（electron-edges 宿主 click 腿同序），再经保留入站 method
     /// __host.notifyClicked {notificationId} 送回 sidecar——node-edges 命中
     /// 通知 id 的 clickRoute.onActivated（core owns+入队）。identifier 形如
-    /// chamber-edge-<notificationId>（SwiftEdgeHostLegs 调度时命名）。
+    /// chamber-edge-<壳进程纪年>.<壳内序号>.<notificationId>（SwiftEdgeHostLegs
+    /// 调度时命名；**末段才是 sidecar 的 notificationId**，按 `.` 末段解析）。
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
@@ -661,8 +761,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             NSApp.activate(ignoringOtherApps: true)
         }
         let identifier = response.notification.request.identifier
+        // 末段 = sidecar 的 notificationId（前两段是壳进程纪年与壳内单调序号；
+        // 2026-12 第四轮验证：按首段解析会把纪年当 id，几乎总是回灌失败）。
         guard identifier.hasPrefix("chamber-edge-"),
-              let rawID = identifier.dropFirst("chamber-edge-".count).split(separator: "-").first,
+              let rawID = identifier.split(separator: ".").last,
               let notificationId = Int(rawID) else {
             print("[poc] 通知 click：未知 identifier，跳过回灌（仅聚焦窗口）")
             return

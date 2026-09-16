@@ -39,11 +39,9 @@
 //      （swift test 的 cwd 是 macos/ 包根，上溯 1 层即仓库根）→ 找不到
 //      XCTSkip。spawn 参数 --user-data-dir <mkdtemp> --port 17920。
 //
-//  60 通道清单：文件内静态数组（Swift 不能 import TS；转录自
-//  packages/desktop/ipc-events.ts 的 IPC_CHANNELS 68 值中经 shell-core
-//  installIpcHandlers 注册为 invoke 通道的 60 个，键注释 = IPC_CHANNELS 键名
-//  便于核对；其余 8 个是主进程→渲染器单向 push 通道）。W-17 manifest 落地后
-//  改由生成物单源替换本数组。
+//  60 通道清单（S16a）：直接迭代生成物 BridgeManifest.invokeChannels（由
+//  ipc-events.ts + main 侧注册事实生成；其余 8 个是主进程→渲染器单向 push
+//  通道，不在此列）——不再手工转录静态数组。
 //
 //  超时纪律：onReady 30s；每通道 invoke 5s（侧car 全量应 <1s，5s 是「永不
 //  达」余量）；事件等待 10s；单用例心智上限 10s 级（60 通道全绿 ~1-3s）。
@@ -150,86 +148,26 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
                             defaultEdgeResponder: defaultEdgeResponder)
     }
 
-    // MARK: - 60 通道清单（与 ipc-events.ts 对齐的静态转录）
+    // MARK: - 60 通道清单（W-18 生成物单源）
 
-    /// 60 个 invoke 通道——与 packages/desktop/ipc-events.ts 的 IPC_CHANNELS
-    /// 对齐：68 个值里 60 个经 shell-core installIpcHandlers 注册为 invoke
-    /// 通道（sidecar-entry.ts 起动日志「60 通道注册」同数）；其余 8 个为
-    /// 主进程→渲染器单向 push 通道（SETTINGS_CHANGED / NOTIFICATION_OPEN /
-    /// UPDATE_STATE_CHANGED / DEEP_LINK_INTENT / SYSTEM_RESUME /
-    /// SSH_STATUS_CHANGED / SSH_INSTANCES_CHANGED / RUNTIME_STATE_CHANGED），
-    /// 不在清单。Swift 无法 import TS：本清单按 ipc-events.ts 逐字转录，行尾
-    /// 注释 = IPC_CHANNELS 键名（核对锚点）；W-17 manifest 落地后改由生成物
-    /// 单源替换本数组。
-    private static let sixtyInvokeChannels: [String] = [
-        // —— A 组/设置 ——
-        "dsh-chamber:info",                  // INFO
-        "dsh-chamber:settings-get",          // SETTINGS_GET
-        "dsh-chamber:settings-set",          // SETTINGS_SET
-        // —— B 组（notify/badge/deep-link 注册体）——
-        "dsh-chamber:notify",                // NOTIFY
-        "dsh-chamber:notifications-ready",   // NOTIFICATIONS_READY
-        "dsh-chamber:notification-open-ack", // NOTIFICATION_OPEN_ACK
-        "dsh-chamber:badge-count",           // BADGE_COUNT
-        "dsh-chamber:update-state",          // UPDATE_STATE
-        "dsh-chamber:update-check",          // UPDATE_CHECK
-        "dsh-chamber:update-download",       // UPDATE_DOWNLOAD
-        "dsh-chamber:update-restart",        // UPDATE_RESTART
-        "dsh-chamber:open-release",          // OPEN_RELEASE
-        // —— open-in / deep-link 注册体 ——
-        "dsh-chamber:open-in-apps",          // OPEN_IN_APPS
-        "dsh-chamber:open-in",               // OPEN_IN
-        "dsh-chamber:deep-link-ready",       // DEEP_LINK_READY
-        "dsh-chamber:deep-link-ack",         // DEEP_LINK_ACK
-        // —— C 组（registry + 凭据）——
-        "desktop_ssh_instances_get",         // SSH_INSTANCES_GET
-        "desktop_ssh_instances_set",         // SSH_INSTANCES_SET
-        "desktop_ssh_save_connection",       // SSH_SAVE_CONNECTION
-        "desktop_ssh_delete_connection",     // SSH_DELETE_CONNECTION
-        "desktop_ssh_set_password",          // SSH_SET_PASSWORD
-        "desktop_gateway_set_token",         // GATEWAY_SET_TOKEN
-        "desktop_gateway_set_password",      // GATEWAY_SET_PASSWORD
-        "desktop_gateway_plugin_sync",       // GATEWAY_PLUGIN_SYNC
-        "desktop_gateway_plugin_apply",      // GATEWAY_PLUGIN_APPLY
-        "desktop_gateway_plugin_materialize",// GATEWAY_PLUGIN_MATERIALIZE
-        "desktop_ssh_config_list",           // SSH_CONFIG_LIST
-        // —— D 组（ssh 连接状态）+ E 组（exec/systemd）——
-        "desktop_ssh_connect",               // SSH_CONNECT
-        "desktop_ssh_disconnect",            // SSH_DISCONNECT
-        "desktop_ssh_status",                // SSH_STATUS
-        "desktop_ssh_reverify",              // SSH_REVERIFY
-        "desktop_ssh_logs",                  // SSH_LOGS
-        "desktop_ssh_logs_clear",            // SSH_LOGS_CLEAR
-        "desktop_ssh_start_service",         // SSH_START_SERVICE
-        "desktop_ssh_stop_service",          // SSH_STOP_SERVICE
-        "desktop_ssh_is_active",             // SSH_IS_ACTIVE
-        "desktop_ssh_restart_service",       // SSH_RESTART_SERVICE
-        // —— F 组（ssh plugin）+ local/npm 批 ——
-        "desktop_ssh_plugin_list",           // SSH_PLUGIN_LIST
-        "desktop_ssh_plugin_apply",          // SSH_PLUGIN_APPLY
-        "desktop_ssh_plugin_undo",           // SSH_PLUGIN_UNDO
-        "desktop_local_plugin_list",         // LOCAL_PLUGIN_LIST
-        "desktop_npm_search",                // NPM_SEARCH
-        "desktop_ssh_seed_host_graph",       // SSH_SEED_HOST_GRAPH
-        "desktop_ssh_plugin_materialize_add",       // SSH_PLUGIN_MATERIALIZE_ADD
-        "desktop_ssh_plugin_materialize_add_pick",  // SSH_PLUGIN_MATERIALIZE_ADD_PICK
-        "desktop_local_plugin_add_file",     // LOCAL_PLUGIN_ADD_FILE
-        "desktop_local_plugin_add",          // LOCAL_PLUGIN_ADD
-        "desktop_local_plugin_remove",       // LOCAL_PLUGIN_REMOVE
-        // —— runtime（K 组 12 注册体；RUNTIME_STATE_CHANGED 为 push 不入列）——
-        "dsh-chamber:runtime-state",                 // RUNTIME_STATE
-        "dsh-chamber:runtime-check",                 // RUNTIME_CHECK
-        "dsh-chamber:runtime-install",               // RUNTIME_INSTALL
-        "dsh-chamber:runtime-cleanup-version",       // RUNTIME_CLEANUP_VERSION
-        "dsh-chamber:runtime-clear-failure",         // RUNTIME_CLEAR_FAILURE
-        "dsh-chamber:runtime-recover-metadata",      // RUNTIME_RECOVER_METADATA
-        "dsh-chamber:runtime-reset-builtin",         // RUNTIME_RESET_BUILTIN
-        "dsh-chamber:runtime-restart",               // RUNTIME_RESTART
-        "dsh-chamber:runtime-apply-now",             // RUNTIME_APPLY_NOW
-        "dsh-chamber:runtime-retry-apply",           // RUNTIME_RETRY_APPLY
-        "dsh-chamber:runtime-retry-restore",         // RUNTIME_RETRY_RESTORE
-        "dsh-chamber:runtime-restore-pre-rollback",  // RUNTIME_RESTORE_PRE_ROLLBACK
-    ]
+    /// 60 个 invoke 通道 = `BridgeManifest.invokeChannels`（Generated/
+    /// BridgeManifest.swift；由 packages/desktop/scripts/emit-bridge-manifest.mjs
+    /// 从 ipc-events.ts + main 侧注册事实生成，bridge-manifest.test.ts 守
+    /// 「重生成 == 提交物」）。S16a：此前是手工转录的 80 行静态数组——本测试
+    /// 改为直接迭代生成物，通道增删不可能再与测试清单漂移。
+    ///
+    /// 顺序（成员仍单源 manifest，仅迭代次序是测试关切）：轻通道
+    /// （dsh-chamber:*：设置/更新/通知/open-in/deep-link——update-check 是真实
+    /// 网络探测，~2s）先跑；重的 desktop_*（SSH/插件）与 runtime-* 后跑——
+    /// 原手工清单就是这个分组次序（update-check 第 9 个）；若按字典序把
+    /// update-check 排到第 57 个，前 56 个通道的累计负载会顶穿 5s 护栏。
+    private static let invokeChannels: [String] = {
+        let deferred = ["desktop_", "dsh-chamber:runtime-"]
+        let isDeferred = { (channel: String) in deferred.contains { channel.hasPrefix($0) } }
+        let heavy = BridgeManifest.invokeChannels.filter(isDeferred).sorted()
+        let light = BridgeManifest.invokeChannels.filter { !isDeferred($0) }.sorted()
+        return light + heavy
+    }()
 
     /// 各通道冒烟载荷：不需要参数的通道 → nil（处理器校验失败会给 loud 错误
     /// 或 ok 结果，都是合格应答）；已知需要 payload 的通道给最小合法对象。
@@ -408,12 +346,20 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
         }
     }
 
+    /// 逐通道 invoke 超时：update-check 是唯一真实网络探测（上游 releases/
+    /// registry 查询），网络抖动下可能 >5s——给 15s 余量；其余 59 通道保持
+    /// 5s 紧界（挂起判定不被稀释）。
+    private static func invokeTimeout(for channel: String) -> TimeInterval {
+        channel == "dsh-chamber:update-check" ? 15 : invokeTimeout
+    }
+
     private func runSmokeLoop(_ bridge: BridgeClient,
                               channels: [String]) async -> SmokeReport {
         var report = SmokeReport()
         for (index, channel) in channels.enumerated() {
             let outcome = await invokeWithTimeout(bridge, method: channel,
-                                                  payload: Self.payload(for: channel))
+                                                  payload: Self.payload(for: channel),
+                                                  timeout: Self.invokeTimeout(for: channel))
             switch outcome {
             case .ok:
                 report.okCount += 1
@@ -459,8 +405,8 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
 
         _ = try startBridgeAndWaitReady(bridge, expectedPort: 17920)
 
-        let channels = Self.sixtyInvokeChannels
-        XCTAssertEqual(channels.count, 60, "清单应与 ipc-events.ts 的 60 个 invoke 通道等长")
+        let channels = Self.invokeChannels
+        XCTAssertEqual(channels.count, 60, "BridgeManifest.invokeChannels 应为 60 个 invoke 通道")
         XCTAssertEqual(Set(channels).count, channels.count, "清单不得含重复通道")
 
         let report = await runSmokeLoop(bridge, channels: channels)
@@ -529,13 +475,13 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
                       "自定义应答器应收到 pickPluginSource edge（记录：\(edgeRecorder.entries)）")
 
         // 自定义应答器下 60 通道全量冒烟同样无挂起（回落覆盖未处理 edge）。
-        let report = await runSmokeLoop(bridge, channels: Self.sixtyInvokeChannels)
+        let report = await runSmokeLoop(bridge, channels: Self.invokeChannels)
         if let timedOut = report.timedOut {
             XCTFail("自定义应答器冒烟存在挂起：第 \(timedOut.index + 1)/60「\(timedOut.channel)」；"
-                    + "循环已中止，余下 \(Self.sixtyInvokeChannels.count - timedOut.index - 1) 未跑")
+                    + "循环已中止，余下 \(Self.invokeChannels.count - timedOut.index - 1) 未跑")
             return
         }
-        XCTAssertEqual(report.okCount + report.errorCount, Self.sixtyInvokeChannels.count, report.summary)
+        XCTAssertEqual(report.okCount + report.errorCount, Self.invokeChannels.count, report.summary)
         XCTAssertEqual(report.anomalies, [], "\(report.summary)；异常：\(report.anomalies)")
 
         // —— spawn 2：纯回落应答器（每个方法都经 defaultEdgeResponse）——

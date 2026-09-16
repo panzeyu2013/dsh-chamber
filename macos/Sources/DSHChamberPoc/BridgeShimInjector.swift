@@ -9,8 +9,8 @@
 //
 // 调用契约（共享契约，MainWindowController 以
 // `BridgeShimInjector.install(config:source:)` 调用，勿改名）：
-//   - source：chamber-bridge.js 源码（W-04 注入脚本，4 标量 + 9 面形状、
-//     未实现面统一 loud 拒绝 {error:'poc-unimplemented'}）；
+//   - source：chamber-bridge.js 源码（S-B 全表面：4 标量 + 9 命名空间 +
+//     59 invoke-backed 方法；文件内零 poc-unimplemented 兜底，错误如实上抛）；
 //   - install 必须在用该 configuration 构造 WKWebView 之前调用（user
 //     script 随 configuration 生效于首次导航）。
 

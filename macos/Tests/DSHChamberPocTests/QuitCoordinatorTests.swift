@@ -93,10 +93,17 @@ final class QuitCoordinatorTests: XCTestCase {
         XCTAssertTrue(gate.isConfirmed)
         XCTAssertFalse(gate.beginDecision(), "已确认后不再重新决策")
         XCTAssertFalse(gate.beginConfirm(), "已确认后不再弹确认")
-        gate.reset()
+    }
+
+    /// 已确认 = 终态：新 gate 才是新退出会话的起点（S14 删除了无生产调用者的
+    /// QuitGate.reset；测试以新实例表达「下次会话」，不再驱动 reset）。
+    func testFreshGateStartsUnconfirmedAndAcceptsBothRegimes() {
+        let gate = QuitGate()
         XCTAssertFalse(gate.isConfirmed)
         XCTAssertTrue(gate.beginDecision())
         gate.endDecision()
+        XCTAssertTrue(gate.beginConfirm())
+        gate.endConfirm()
     }
 
     func testGateDecisionBlocksWhileConfirming() {

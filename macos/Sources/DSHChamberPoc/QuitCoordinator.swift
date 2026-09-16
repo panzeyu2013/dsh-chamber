@@ -124,13 +124,4 @@ public final class QuitGate {
         decisionInFlight = false
         lock.unlock()
     }
-
-    /// 取消/失败复位（取消后应用继续运行，可再次发起）。
-    public func reset() {
-        lock.lock()
-        decisionInFlight = false
-        confirming = false
-        confirmed = false
-        lock.unlock()
-    }
 }

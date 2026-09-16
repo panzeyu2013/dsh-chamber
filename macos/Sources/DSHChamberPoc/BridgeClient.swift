@@ -6,8 +6,8 @@
 // onEvent），勿改名。
 //
 // 进程模型（design 25 §3.1）：Swift 应用是客户端、sidecar（打包 Node +
-// JS bundle；POC 期 = `node packages/desktop/poc-sidecar.ts`，另一作者实现，
-// 见 AppDelegate.sidecarRelativePath）是服务端——
+// JS bundle；dev = `node packages/desktop/sidecar-entry.ts`、装配态 =
+// `sidecar.js`，见 AppDelegate.sidecarRelativePath）是服务端——
 //   - stdout 是**唯一协议流**（NDJSON 帧：request/response/event，行协议）；
 //   - stderr 是**唯一日志通道**（D2：sidecar-entry 会把存量 console.* 重定向
 //     到 stderr，本客户端逐行透传到自己的标准错误，前缀 "[sidecar] "）；
@@ -148,6 +148,13 @@ public final class BridgeClient {
     public static let errorCodePendingDropped = 4
     public static let errorCodeAlreadyStarted = 5
 
+    /// 退出清理预算（S6）：SIGTERM 后等待 sidecar 优雅退出的宽限期，须与
+    /// shell-core.ts `QUIT_CLEANUP_TIMEOUT_MS = 5_000`（AppDelegate
+    /// .quitCleanupTimeout 同一预算）对齐——旧 2s 会在 sidecar 仍在回收本地
+    /// dsh/ssh 子进程时 SIGKILL，留下孤儿。跨语言锁步由
+    /// CrossLanguageLockstepTests 钉住。
+    public static let quitCleanupGracePeriod: TimeInterval = 5.0
+
     // MARK: - 构造参数
 
     private let nodePath: String
@@ -159,7 +166,7 @@ public final class BridgeClient {
     /// - Parameters:
     ///   - nodePath: Node 可执行文件路径（POC：系统 node 或 Electron 二进制
     ///     + ELECTRON_RUN_AS_NODE=1，见 AppDelegate）。
-    ///   - arguments: sidecar 脚本路径与参数（POC：poc-sidecar.ts 路径）。
+    ///   - arguments: sidecar 脚本路径与参数（sidecar-entry.ts / sidecar.js）。
     ///   - environment: 附加环境变量（合并进当前进程环境，同名覆盖）。
     ///   - defaultEdgeResponder: true（默认）= init 时把 v1 默认 edge 应答器
     ///     装进 onEdgeRequest（setDefaultEdgeResponder）；false = 留 nil——
@@ -191,9 +198,10 @@ public final class BridgeClient {
     private var pending: [Int: CheckedContinuation<AnyCodable, Error>] = [:]
     private var sigpipeIgnored = false
     // —— M3 W-15/16 出站面状态 ——
-    /// 已应答 edgeId 集合（锁保护）：edge 应答恰好一次的守卫（与 pending 字典
-    /// 的 id 所有权纪律同构——edgeId 的所有权 = 本集合的插入成功）。
-    private var answeredEdgeIDs = Set<Int64>()
+    /// 已应答 edgeId 守卫（锁保护）：edge 应答恰好一次的守卫（与 pending 字典
+    /// 的 id 所有权纪律同构——edgeId 的所有权 = 本守卫的插入成功）。有界
+    /// （S14：长会话不无界增长；容量与淘汰语义见 BoundedEdgeReplyGuard）。
+    private var answeredEdgeIDs = BoundedEdgeReplyGuard()
     /// 会话代际（锁保护）：start() 每次递增。stop/重启后，旧会话 dispatch 的
     /// edge 迟到应答按代际作废（防旧 edgeId 撞上新会话同号 edge）。
     private var sessionGeneration = 0
@@ -389,9 +397,10 @@ public final class BridgeClient {
         self.lastTerminationStatusStorage = nil
     }
 
-    /// 停止 sidecar：SIGTERM → 等 ≤2s → SIGKILL（spec 原文语义）。同步阻塞
-    /// 调用方（最坏 ≈2.1s + 收尸），仅 AppDelegate.applicationWillTerminate
-    /// 退出路径使用，注释声明。幂等：重复 stop / 进程已自然退出均安全。
+    /// 停止 sidecar：SIGTERM → 等 ≤ quitCleanupGracePeriod（5s，与 shell-core
+    /// 清理预算同值，S6）→ SIGKILL 兜底。同步阻塞调用方（最坏 ≈5.1s + 收尸），
+    /// 仅 AppDelegate.applicationWillTerminate / 退出清理路径使用，注释声明。
+    /// 幂等：重复 stop / 进程已自然退出均安全。
     public func stop() {
         // 摘状态（此后 invoke 一律 code 2；重复 stop 直接返回）。
         var takenProcess: Process?
@@ -418,7 +427,7 @@ public final class BridgeClient {
         if takenProcess.isRunning {
             takenProcess.terminate()
         }
-        let deadline = Date().addingTimeInterval(2.0)
+        let deadline = Date().addingTimeInterval(Self.quitCleanupGracePeriod)
         while takenProcess.isRunning && Date() < deadline {
             Thread.sleep(forTimeInterval: 0.05)
         }
@@ -765,7 +774,7 @@ public final class BridgeClient {
         } else if generation != sessionGeneration {
             refused = "应答代际过期（edgeId=\(edgeId)，会话已重启）"
         } else if let pipe = inputPipe, let process = process, process.isRunning {
-            answeredEdgeIDs.insert(edgeId)
+            _ = answeredEdgeIDs.firstInsert(edgeId)
             input = pipe.fileHandleForWriting
         } else {
             refused = "客户端未运行（未 start / 已 stop / sidecar 已退出）"

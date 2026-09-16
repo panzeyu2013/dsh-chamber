@@ -18,9 +18,10 @@
 //    setKeepAwake / setLoginItem（E14：SMAppService.mainApp，S-D 补齐——
 //    swift run 无 bundle 时 guard 诚实报 no-bundle）/ showError /
 //    launchApp（E12：appId 最小映射 finder/vscode + 缺省 loud，S-D 补齐）。
-//  - 未实现边沿：edge 面 "retireNotifications"（node-edges 以 notify 发送
-//    退役，不经 edge——Swift 侧 notify 消费路由见 MainWindowController；
-//    POC 无 sourceId→identifier 登记表 → 诚实 no-op）。
+//  - 退役：edge 面 "retireNotifications" 不在本类（node-edges 以 notify 发送
+//    退役，不经 edge）——notify 消费路由在 MainWindowController：S8 起按
+//    sourceId→identifier 登记表调 UNUserNotificationCenter
+//    .removeDeliveredNotifications(withIdentifiers:) 清除已展示横幅。
 //  GUI 分支实机验收属硬门禁（M3 集成点见各腿注释 TODO；setLoginItem 的
 //  register/unregister 真机调用、launchApp 的 Finder/vscode 真实拉起均须
 //  实机/签名环境）。
@@ -58,6 +59,48 @@ enum EdgePayload {
     }
 }
 
+/// 原生通知调度解码（S8）：node-edges/electron-edges 出站形状
+/// {notificationId: Int, sourceId?: String, spec: {title?, body?, message?,
+/// silent?: bool, sound?: string}}。sourceId 缺省/null/非字符串 =
+/// unknown-source——仍投递，不登记退役（无法归属退役集）；identifier 恒
+/// chamber-edge-<进程纪年>.<壳内序号>.<notificationId>（见 identifierEpoch /
+/// identifier(sequence:)）。
+struct NotificationDispatch: Equatable {
+    var notificationId: Int
+    var sourceId: String?
+    var title: String
+    var body: String
+    var silent: Bool
+
+    /// 本壳进程的投递标识纪年。
+    static let identifierEpoch = String(UUID().uuidString.prefix(8)).lowercased()
+
+    /// OS 标识：`chamber-edge-<纪年>.<壳内单调序号>.<sidecar notificationId>`。
+    /// - 纪年区分不同壳进程；序号在壳进程内单调，**sidecar 重启不会重置它**，
+    ///   因此重启前后的横幅在通知中心绝不同名（否则退役旧来源会误删新来源的
+    ///   同名活横幅——2026-12 第三/四轮验证）；
+    /// - **末段恒为 sidecar 的 notificationId**：click 回灌按 `.` 末段解析
+    ///   （AppDelegate.userNotificationCenter didReceive）；分隔符用 `.` 而非
+    ///   `-`，否则负值（缺省容错 -1）会被拆成两段而解析成正数。
+    func identifier(sequence: Int) -> String {
+        "chamber-edge-\(Self.identifierEpoch).\(sequence).\(notificationId)"
+    }
+
+    /// payload → dispatch；顶层非对象 → nil（调用方 loud 拒绝）。
+    static func decode(_ payload: AnyCodable?) -> NotificationDispatch? {
+        guard let dict = EdgePayload.dictionary(payload) else { return nil }
+        let spec = EdgePayload.dictionary(dict["spec"])
+        return NotificationDispatch(
+            notificationId: EdgePayload.int(dict["notificationId"]) ?? -1,
+            sourceId: EdgePayload.string(dict["sourceId"]),
+            title: spec.flatMap { EdgePayload.string($0["title"]) } ?? "",
+            body: spec.flatMap { EdgePayload.string($0["body"]) }
+                ?? spec.flatMap { EdgePayload.string($0["message"]) } ?? "",
+            silent: spec.flatMap { EdgePayload.bool($0["silent"]) } ?? false
+        )
+    }
+}
+
 
 public final class SwiftEdgeHostLegs {
     /// UI/系统能力门（headless/测试 → false：全部 UI 腿诚实降级）。
@@ -68,18 +111,28 @@ public final class SwiftEdgeHostLegs {
         /// 诚实报错而非碰运气）。默认真实现 = Bundle.main.bundleIdentifier
         /// 存在性；测试可注入固定值（headless 不触碰 ServiceManagement）。
         public var isAppBundled: () -> Bool
+        /// 测试注入：UI 腿执行体覆盖（method → outcome）。生产恒 nil；
+        /// 注入慢/假 body 让单测可验证交互腿的异步应答、10 分钟上限与超时
+        /// 弃权——真实 NSAlert/NSOpenPanel 模态无法在单测里驱动（S1/S17）。
+        public var uiLegBodyOverride: ((String, AnyCodable?) -> (result: AnyCodable?, error: String?))?
         public init(canShowUI: @escaping () -> Bool = { false },
                     isAppBundled: @escaping () -> Bool = {
                         Bundle.main.bundleIdentifier != nil
-                    }) {
+                    },
+                    uiLegBodyOverride: ((String, AnyCodable?) -> (result: AnyCodable?, error: String?))? = nil) {
             self.canShowUI = canShowUI
             self.isAppBundled = isAppBundled
+            self.uiLegBodyOverride = uiLegBodyOverride
         }
     }
 
     private let config: Config
     /// 主窗提供者（POC 接线点：MainWindowController 注册后置非 nil）。
     public var mainWindowProvider: (() -> NSWindow?)?
+
+    /// 已投递通知登记表（S8）：scheduleNotification 成功后登记，notify 路由
+    /// retireNotifications 消费（removeDeliveredNotifications）。
+    public let notificationRegistry = NotificationDeliveryRegistry()
 
     /// keep-awake activity token（ProcessInfo 防休眠；nil = 未激活）。
     private var keepAwakeActivity: NSObjectProtocol?
@@ -110,6 +163,16 @@ public final class SwiftEdgeHostLegs {
     public static let unimplementedPrefix = "swift-edge-unimplemented:"
     public static let uiUnavailablePrefix = "swift-edge-ui-unavailable:"
 
+    /// 非交互 UI 腿的有界等待：主线程可能正被 BridgeClient.stop() 的收尾轮询
+    /// 占用，退出优先；超时 loud 失败（core 可重试），body 幂等。
+    static let uiLegTimeout: TimeInterval = 1.0
+    /// 交互腿（showMessage/pickPluginSource）上限：与 node 侧
+    /// sidecar-entry.ts 的 INTERACTIVE_EDGE_TIMEOUT_MS = 600_000ms 对齐——
+    /// 用户在模态上思考/浏览可能远超 1s；Swift 侧超时点必须 ≥ node 侧，
+    /// 否则模态还在屏上而 node 已判超时（S1 缺陷）。跨语言锁步见
+    /// CrossLanguageLockstepTests。
+    static let interactiveLegTimeout: TimeInterval = 600
+
     /// 异步宿主腿入口（W-21 前置）：非 nil 时 BridgeClient 默认应答器改经
     /// 它应答（reply 可延迟调用，恰一次契约由 sendEdgeReply 守卫）；本入口
     /// 内部先走同步 respond——命中实现腿（非 unimplemented/ui-unavailable）
@@ -121,30 +184,36 @@ public final class SwiftEdgeHostLegs {
         payload: AnyCodable?,
         completion: @escaping (AnyCodable?, String?) -> Void
     ) {
-        if method == "showNativeNotification" {
-            scheduleNotification(payload: payload, completion: completion)
-            return
-        }
-        let outcome = respond(method: method, payload: payload)
-        completion(outcome.result, outcome.error)
-    }
-
-    /// 异步腿面（当前：showNativeNotification——canShowUI 为真时由本类真实
-    /// 调度，无需宿主接线）；其余方法走同步 respond。
-    public func canHandleAsync(method: String) -> Bool {
         switch method {
         case "showNativeNotification":
+            scheduleNotification(payload: payload, completion: completion)
+        case "showMessage", "pickPluginSource":
+            // S1：交互腿经异步入口应答——模态在主线程执行、完成才 reply，
+            // 既不占住管道读取线程，也不在 1s 处丢弃模态结果。
+            performInteractiveUI(method: method, payload: payload, completion: completion)
+        default:
+            let outcome = respond(method: method, payload: payload)
+            completion(outcome.result, outcome.error)
+        }
+    }
+
+    /// 异步腿面（canShowUI 为真时由本类真实接管，BridgeClient 默认应答器据此
+    /// 走 respondAsync）：showNativeNotification 调度 + showMessage/
+    /// pickPluginSource 两个交互模态（S1：10 分钟上限，完成才 reply）。
+    public func canHandleAsync(method: String) -> Bool {
+        switch method {
+        case "showNativeNotification", "showMessage", "pickPluginSource":
             return self.config.canShowUI()
         default:
             return false
         }
     }
 
-    /// 真实通知调度（W-21 切片；design 25 §5 E4）：node-edges 载荷形状
-    /// {notificationId: Int, spec: {title?, body?, …}}。canShowUI 为假 →
-    /// ui-unavailable 诚实降级；调度失败（未授权/系统拒绝）→ loud error。
-    /// click 回灌（__host.notifyClicked {notificationId}）与前台展示 delegate
-    /// 属 M3 集成（需 UNUserNotificationCenterDelegate 宿主接线 + 实机门禁）。
+    /// 真实通知调度（W-21 切片；design 25 §5 E4；S8 补 sourceId/silent）：
+    /// 载荷解码见 NotificationDispatch。canShowUI 为假 → ui-unavailable 诚实
+    /// 降级；调度失败（未授权/系统拒绝）→ loud error。click 回灌
+    /// （__host.notifyClicked）与前台展示 delegate 已由 AppDelegate 接线
+    /// （UNUserNotificationCenterDelegate），不再是 M3 遗留。
     private func scheduleNotification(
         payload: AnyCodable?,
         completion: @escaping (AnyCodable?, String?) -> Void
@@ -153,24 +222,44 @@ public final class SwiftEdgeHostLegs {
             completion(nil, Self.uiUnavailablePrefix + "showNativeNotification")
             return
         }
-        guard let dict = EdgePayload.dictionary(payload) else {
+        guard let dispatch = NotificationDispatch.decode(payload) else {
             completion(nil, Self.unimplementedPrefix + "showNativeNotification:payload")
             return
         }
         let content = UNMutableNotificationContent()
-        if let spec = EdgePayload.dictionary(dict["spec"]) {
-            content.title = EdgePayload.string(spec["title"]) ?? ""
-            content.body = EdgePayload.string(spec["body"]) ?? EdgePayload.string(spec["message"]) ?? ""
-        }
+        content.title = dispatch.title
+        content.body = dispatch.body
+        // 声音映射（S8 对齐 electron-edges:157-162）：silent → 无声音，否则
+        // 系统默认声。macOS UNUserNotificationCenter 没有 Electron 的具名
+        // Glass 音效资源——默认声是平台等价物（差异登记）。
+        content.sound = dispatch.silent ? nil : .default
+        // 调度前登记（**先于** add）：退役与投递之间没有原子点，先登记让退役端
+        // 一定能看到该 identifier；完成回调再由 finishDelivery 判定是否需要在
+        // 横幅落地后立即清除（2026-12 验证轮：只在完成回调登记会漏掉这个窗口）。
+        let identifier = dispatch.identifier(sequence: notificationRegistry.nextIdentifierSequence())
+        let tracked = notificationRegistry.beginDelivery(sourceId: dispatch.sourceId,
+                                                         identifier: identifier)
         let request = UNNotificationRequest(
-            identifier: "chamber-edge-" + String(EdgePayload.int(dict["notificationId"]) ?? -1),
+            identifier: identifier,
             content: content,
-            trigger: nil  // 立即投递（前台展示语义需 delegate，M3 集成）
+            trigger: nil  // 立即投递（前台展示由 AppDelegate delegate 接管）
         )
-        UNUserNotificationCenter.current().add(request) { error in
+        UNUserNotificationCenter.current().add(request) { [registry = notificationRegistry] error in
             if let error {
+                // 投递失败：撤下登记（没有可退役的横幅）。
+                _ = registry.finishDelivery(sourceId: dispatch.sourceId,
+                                            identifier: identifier,
+                                            delivered: false)
                 completion(nil, "swift-edge-notification-schedule-failed:\(error.localizedDescription)")
             } else {
+                let retiredInFlight = tracked && registry.finishDelivery(sourceId: dispatch.sourceId,
+                                                                        identifier: identifier,
+                                                                        delivered: true)
+                if retiredInFlight {
+                    // 在途期间来源已被退役：横幅刚落地，立即清除。
+                    UNUserNotificationCenter.current()
+                        .removeDeliveredNotifications(withIdentifiers: [identifier])
+                }
                 completion(nil, nil)
             }
         }
@@ -247,40 +336,11 @@ public final class SwiftEdgeHostLegs {
             }
         case "pickPluginSource":
             // E8/A10 一体化 picker（folder|.tgz；design 21 §10 ⑧，electron-edges
-            // 语义：darwin openFile+openDirectory 一体）。模态主线程执行；
-            // 无窗/headless → 诚实降级。应答形状 {status:'cancelled'} 或
-            // {status:'picked', path}（node-edges pickPluginSource 折算）。
-            return performUI(method: method) {
-                guard self.mainWindowProvider?() != nil else {
-                    return (nil, Self.uiUnavailablePrefix + method + ":no-window")
-                }
-                var pickedPath: String?
-                var cancelled = false
-                let run: () -> Void = {
-                    let panel = NSOpenPanel()
-                    panel.title = "选择 chamber 插件源"
-                    panel.canChooseFiles = true
-                    panel.canChooseDirectories = true
-                    panel.allowsMultipleSelection = false
-                    panel.allowedContentTypes = [UTType.folder, UTType(filenameExtension: "tgz") ?? UTType.data]
-                    if panel.runModal() == .OK, let url = panel.urls.first {
-                        pickedPath = url.path
-                    } else {
-                        cancelled = true
-                    }
-                }
-                if Thread.isMainThread {
-                    run()
-                } else {
-                    DispatchQueue.main.sync(execute: run)
-                }
-                if cancelled {
-                    return (.object(["status": .string("cancelled")]), nil)
-                }
-                if let path = pickedPath {
-                    return (.object(["status": .string("picked"), "path": .string(path)]), nil)
-                }
-                return (nil, Self.uiUnavailablePrefix + method + ":no-selection")
+            // 语义：darwin openFile+openDirectory 一体）。交互模态（S1）——同步
+            // 面按 node 侧 10 分钟上限等待、超时弃权；默认应答器经
+            // canHandleAsync 走 respondAsync（模态完成才 reply，不占管道线程）。
+            return performUI(method: method, timeout: Self.interactiveLegTimeout) {
+                self.pickPluginSourceBody()
             }
         case "showError":
             // dialog.showErrorBox 对应腿：payload {title, detail}；主线程模态
@@ -389,46 +449,13 @@ public final class SwiftEdgeHostLegs {
                 }
             }
         case "showMessage":
-            // dialog.showMessageBox 对应腿：payload HostMessageOptions 形状
-            // {type,title,message,detail,buttons[],defaultId,cancelId,noLink?}。
-            // 主线程模态 NSAlert；应答 = 按钮序（0 基，electron-edges 同契约；
-            // 无 buttons → 默认 ["OK"]）。无窗/headless → 诚实降级。
-            return performUI(method: method) {
-                guard self.mainWindowProvider?() != nil else {
-                    return (nil, Self.uiUnavailablePrefix + method + ":no-window")
-                }
-                let dict0 = dict ?? [:]
-                let styleRaw = EdgePayload.string(dict0["type"]) ?? "warning"
-                let alert = NSAlert()
-                switch styleRaw {
-                case "error", "critical": alert.alertStyle = .critical
-                case "info", "information": alert.alertStyle = .informational
-                default: alert.alertStyle = .warning
-                }
-                alert.messageText = EdgePayload.string(dict0["title"]) ?? "dsh-chamber"
-                let message = EdgePayload.string(dict0["message"]) ?? ""
-                let detail = EdgePayload.string(dict0["detail"]) ?? ""
-                alert.informativeText = [message, detail].filter { !$0.isEmpty }.joined(separator: "\n")
-                var buttons: [String] = []
-                if case .array(let items)? = dict0["buttons"] {
-                    for item in items {
-                        if case .string(let s) = item { buttons.append(s) }
-                    }
-                }
-                if buttons.isEmpty { buttons = ["OK"] }
-                for title in buttons {
-                    alert.addButton(withTitle: title)
-                }
-                var modalResponse: NSApplication.ModalResponse = .alertFirstButtonReturn
-                let run: () -> Void = { modalResponse = alert.runModal() }
-                if Thread.isMainThread {
-                    run()
-                } else {
-                    DispatchQueue.main.sync(execute: run)
-                }
-                // NSAlert 按钮返回码：1000=第一个…；索引 = raw-1000（越界夹 0）。
-                let index = max(0, min(buttons.count - 1, Int(modalResponse.rawValue) - 1000))
-                return (.number(Double(index)), nil)
+            // dialog.showMessageBox 对应腿（S1 交互模态）：payload
+            // HostMessageOptions 形状 {type,title,message,detail,buttons[],
+            // defaultId,cancelId,noLink?}；应答 = 按钮序（0 基，electron-edges
+            // 同契约）。同步面按 10 分钟上限等待、超时弃权；默认应答器经
+            // canHandleAsync 走 respondAsync。
+            return performUI(method: method, timeout: Self.interactiveLegTimeout) {
+                self.showMessageBody(dict: dict ?? [:])
             }
         case "openExternal", "openPath":
             return performUI(method: method) {
@@ -447,16 +474,35 @@ public final class SwiftEdgeHostLegs {
         default:
             // 仍未实现的宿主腿：edge 面 "retireNotifications"（node-edges 的
             // 退役经 notify 发送，不经 edge——消费在 MainWindowController 的
-            // notify 路由，POC 无 sourceId→identifier 登记表 → 诚实 no-op）；
-            // showNativeNotification 同步面（UI 可用时的真实调度走
-            // respondAsync/canHandleAsync）。无宿主接线前一律 loud 拒绝
-            // （回落默认表不挂起）。
+            // notify 路由 + NotificationDeliveryRegistry）；showNativeNotification
+            // 同步面（真实调度走 respondAsync/canHandleAsync）。无宿主接线前
+            // 一律 loud 拒绝（回落默认表不挂起）。
             return (nil, Self.unimplementedPrefix + method)
         }
     }
 
-    private func performUI(method: String,
-                           _ body: @escaping () -> (result: AnyCodable?, error: String?))
+    /// UI 腿执行体解析（method → outcome）：测试覆盖优先，否则真实 AppKit
+    /// 实现（交互腿见 performInteractiveUI；其余经 performUI 主线程收敛）。
+    func uiBody(method: String, payload: AnyCodable?) -> (result: AnyCodable?, error: String?) {
+        if let override = config.uiLegBodyOverride {
+            return override(method, payload)
+        }
+        switch method {
+        case "pickPluginSource":
+            return pickPluginSourceBody()
+        case "showMessage":
+            return showMessageBody(dict: EdgePayload.dictionary(payload) ?? [:])
+        default:
+            return (nil, Self.unimplementedPrefix + method + ":no-body")
+        }
+    }
+
+    /// 同步 UI 腿入口（有界等待；body 主线程执行）。默认超时 = 非交互腿
+    /// 1s；交互腿调用方传 interactiveLegTimeout。超时 → 置弃权位：已排定
+    /// 未执行的 body 不再执行（S1：不得「已失败但 body 稍后照常弹模态」）。
+    func performUI(method: String,
+                   timeout: TimeInterval = SwiftEdgeHostLegs.uiLegTimeout,
+                   body: @escaping () -> (result: AnyCodable?, error: String?))
         -> (result: AnyCodable?, error: String?) {
         guard self.config.canShowUI() else {
             return (nil, Self.uiUnavailablePrefix + method)
@@ -468,20 +514,124 @@ public final class SwiftEdgeHostLegs {
         if Thread.isMainThread {
             return body()
         }
-        // 有界等待（2026-09 二轮评审 P2）：主线程可能正被 BridgeClient.stop()
-        // 的有界轮询占用（SIGTERM→SIGKILL ≤2s），`main.sync` 会一直等到它结束
-        // 才应答，sidecar 的优雅退出因此退化为 SIGKILL。改为 async + 1s 超时：
-        // 主线程空闲时照常应答，忙时 loud 失败（core 侧报 leg 失败，可重试）。
+        // 有界等待（2026-09 二轮评审 P2 + S1）：主线程可能正被
+        // BridgeClient.stop() 的收尾轮询占用，`main.sync` 会一直等到它结束
+        // 才应答，sidecar 的优雅退出因此退化为 SIGKILL。改为 async + 有界超时：
+        // 主线程空闲时照常应答，忙时 loud 失败（core 侧报 leg 失败，可重试）；
+        // 交互腿用 10 分钟上限（node 侧同值），非交互腿保持 1s。
         var outcome: (result: AnyCodable?, error: String?) = (nil, nil)
+        let gate = InteractiveCallGate()
         let semaphore = DispatchSemaphore(value: 0)
         DispatchQueue.main.async {
+            guard !gate.isAbandoned else { return }
             outcome = body()
             semaphore.signal()
         }
-        if semaphore.wait(timeout: .now() + 1.0) == .timedOut {
+        if semaphore.wait(timeout: .now() + timeout) == .timedOut {
+            _ = gate.beginTimeout()
             return (nil, Self.uiUnavailablePrefix + method + ":main-thread-busy")
         }
         return outcome
+    }
+
+    /// 交互腿异步应答（S1）：body 只在主线程执行、模态完成才 reply；上限
+    /// interactiveLegTimeout（10 min，与 node 侧 INTERACTIVE_EDGE_TIMEOUT_MS
+    /// 对齐）。超时 → 弃权位：仍排队的 body 不再执行（绝无双重执行）；
+    /// completion 恰一次由 gate 守卫，edge 应答写回的恰一次由
+    /// BridgeClient.sendEdgeReply 守卫。
+    func performInteractiveUI(method: String,
+                              payload: AnyCodable?,
+                              timeout: TimeInterval = SwiftEdgeHostLegs.interactiveLegTimeout,
+                              completion: @escaping (AnyCodable?, String?) -> Void) {
+        guard self.config.canShowUI() else {
+            completion(nil, Self.uiUnavailablePrefix + method)
+            return
+        }
+        let gate = InteractiveCallGate()
+        DispatchQueue.main.async {
+            guard !gate.isAbandoned else { return }
+            let outcome = self.uiBody(method: method, payload: payload)
+            _ = gate.finishIfActive {
+                completion(outcome.result, outcome.error)
+            }
+        }
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+            guard gate.beginTimeout() else { return }
+            completion(nil, Self.uiUnavailablePrefix + method + ":main-thread-busy")
+        }
+    }
+
+    /// showMessage 模态体（须主线程执行；同步与异步应答面共用）。
+    private func showMessageBody(dict: [String: AnyCodable]) -> (result: AnyCodable?, error: String?) {
+        guard self.mainWindowProvider?() != nil else {
+            return (nil, Self.uiUnavailablePrefix + "showMessage:no-window")
+        }
+        let styleRaw = EdgePayload.string(dict["type"]) ?? "warning"
+        let alert = NSAlert()
+        switch styleRaw {
+        case "error", "critical": alert.alertStyle = .critical
+        case "info", "information": alert.alertStyle = .informational
+        default: alert.alertStyle = .warning
+        }
+        alert.messageText = EdgePayload.string(dict["title"]) ?? "dsh-chamber"
+        let message = EdgePayload.string(dict["message"]) ?? ""
+        let detail = EdgePayload.string(dict["detail"]) ?? ""
+        alert.informativeText = [message, detail].filter { !$0.isEmpty }.joined(separator: "\n")
+        var buttons: [String] = []
+        if case .array(let items)? = dict["buttons"] {
+            for item in items {
+                if case .string(let s) = item { buttons.append(s) }
+            }
+        }
+        if buttons.isEmpty { buttons = ["OK"] }
+        for title in buttons {
+            alert.addButton(withTitle: title)
+        }
+        var modalResponse: NSApplication.ModalResponse = .alertFirstButtonReturn
+        let run: () -> Void = { modalResponse = alert.runModal() }
+        if Thread.isMainThread {
+            run()
+        } else {
+            DispatchQueue.main.sync(execute: run)
+        }
+        // NSAlert 按钮返回码：1000=第一个…；索引 = raw-1000（越界夹 0）。
+        let index = max(0, min(buttons.count - 1, Int(modalResponse.rawValue) - 1000))
+        return (.number(Double(index)), nil)
+    }
+
+    /// pickPluginSource 模态体（须主线程执行；同步与异步应答面共用）。应答
+    /// 形状 {status:'cancelled'} 或 {status:'picked', path}（node-edges 折算）。
+    private func pickPluginSourceBody() -> (result: AnyCodable?, error: String?) {
+        guard self.mainWindowProvider?() != nil else {
+            return (nil, Self.uiUnavailablePrefix + "pickPluginSource:no-window")
+        }
+        var pickedPath: String?
+        var cancelled = false
+        let run: () -> Void = {
+            let panel = NSOpenPanel()
+            panel.title = "选择 chamber 插件源"
+            panel.canChooseFiles = true
+            panel.canChooseDirectories = true
+            panel.allowsMultipleSelection = false
+            panel.allowedContentTypes = [UTType.folder, UTType(filenameExtension: "tgz") ?? UTType.data]
+            if panel.runModal() == .OK, let url = panel.urls.first {
+                pickedPath = url.path
+            } else {
+                cancelled = true
+            }
+        }
+        if Thread.isMainThread {
+            run()
+        } else {
+            DispatchQueue.main.sync(execute: run)
+        }
+        if cancelled {
+            return (.object(["status": .string("cancelled")]), nil)
+        }
+        if let path = pickedPath {
+            return (.object(["status": .string("picked"), "path": .string(path)]), nil)
+        }
+        return (nil, Self.uiUnavailablePrefix + "pickPluginSource:no-selection")
     }
 
     // MARK: - launchApp 的 vscode 深链 URL 构造（纯逻辑，单测直测）
@@ -528,5 +678,44 @@ public final class SwiftEdgeHostLegs {
             return URL(fileURLWithPath: raw)
         }
         return nil
+    }
+}
+
+/// 交互 UI 腿的恰一次应答/弃权门（线程安全）：
+///  - body 完成 → finishIfActive 恰好一次交付结果（超时已抢占则不再交付）；
+///  - 超时 → beginTimeout 抢占并置弃权位，已排定未执行的 body 见位即退出
+///    ——超时后绝不补执行（S1 无双重执行）。
+private final class InteractiveCallGate {
+    private let lock = NSLock()
+    private var finished = false
+    private var abandoned = false
+
+    var isAbandoned: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return abandoned
+    }
+
+    /// 超时路径：尚未完成 → 标记完成+弃权并返回 true（调用方回超时错误）。
+    func beginTimeout() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !finished else { return false }
+        finished = true
+        abandoned = true
+        return true
+    }
+
+    /// body 完成路径：恰一次交付；超时已抢占 → false。
+    func finishIfActive(_ deliver: () -> Void) -> Bool {
+        lock.lock()
+        guard !finished else {
+            lock.unlock()
+            return false
+        }
+        finished = true
+        lock.unlock()
+        deliver()
+        return true
     }
 }
