@@ -751,9 +751,12 @@
   open-in 拉起映射为本地 `NSWorkspace`/`activateFileViewerSelecting`/
   `HostEdges.launchApp`（`macos/Sources/DSHChamberPoc/SwiftEdgeHostLegs.swift`、
   `MainWindowController.swift` 的 `showItemInFolder` 路由；Electron 侧同类边沿叶
-  `packages/desktop/electron-edges.ts` 亦仍在，但已无注册表消费点）。**待办（owner）**：
-  要么按新契约把 design 25 E11/E12 与该两侧腿退役/收窄（推荐——与 §6 同模型），要么在
-  design 25 §2 像 design 24 的存在性探针那样明文写死已批准的边界例外。功能面不受影响：
+  `packages/desktop/electron-edges.ts` 亦仍在，但已无注册表消费点）。**2026-12 可达性复核改判（见 `docs/progress/deviations.md` §7）**：这三条腿在 core **零调用点**、
+  Electron 侧同样是「等第一个消费者」，属**潜伏契约面**，不是待裁决的产品级缺口；open-in 的接入
+  已全部可达（页面面 + 实例内 `openInApp/*` + `openExternal`）。**待办（`macos/`-only）**：删掉
+  `SwiftEdgeHostLegs.launchApp` 的自决部分（自建 `vscode://` + 自持 appId 白名单），并把
+  `openPath`/`showItemInFolder` 标为 shell-internal；design 25 §2 能力表按「共享执行面 / 壳侧执行面 /
+  潜伏契约面」三栏标注（§7.1）。功能面不受影响：
   原生 flavor 的 sidecar 装配已随包分发 open-in 种子包（`build-sidecar.mjs`
   HOST_PACKAGES 四项、`--host-open-in-dir` → `hostOpenInPackageSourceDir`），
   本地实例的 open-in 域照常播种。
@@ -762,8 +765,8 @@
 
 - **Electron / Swift 双 flavor 接入点 parity 台账（2026-12 六路逐函数核对，基线 `8cbee32f`）**：
   120 项差异条目（功能级 68 / 前端可见 40）逐项证据与 A/B 选项在
-  `docs/progress/todo/electron-swift-parity-audit.md`，其余待裁决；产品级集中在更新链（无周期检查 /
-  无应用内安装）、网页权限口径（剪贴板读与 Notification 预拒绝）、双壳 `dsh-chamber://` 归属、
+  `docs/progress/todo/electron-swift-parity-audit.md`，其余待裁决；产品级集中在网页权限口径（剪贴板读与
+  Notification 预拒绝）、双壳 `dsh-chamber://` 归属、
   托盘/菜单面、sidecar fatal 与宿主决策不可得时的终态，以及 design 25 §7 E2 的 `flavor` 能力位未落地。
   未裁决前原生 flavor 保持「预览」定位，不转入默认通道。
   更新链已按用户裁决「D-1 选 B」（Sparkle 2）落位；其余产品级项仍待裁决。**未闭门禁**：

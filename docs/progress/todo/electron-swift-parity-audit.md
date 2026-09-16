@@ -1867,3 +1867,22 @@ Top 严重度排序（详细见功能级差异节）：D1 唤醒事件永不触�
 - 选项：A 提交（拆分为 Swift 壳 / sidecar / 共享前端与打包 / 台账 四个提交）；B 继续留在工作区；C 只提交部分。
 - 推荐：A（按 CONTRIBUTING 的 Conventional Commits，英文信息，一个逻辑改动一个提交）。
 - 后果：A = 需要你明确授权 git；B = 工作区持续承载 1000+ 行未提交改动，后续审查/回归风险上升。
+## 8. 2026-12 复核：可达性优先（对 §S4/§S5 与 D-15 的更正）
+
+> 触发：open-in 复核暴露的方法论问题——我按「共享契约面两侧必须一致」给出跨包方案，而该契约的腿
+> 在 core **零调用点**。复核纪律与全量重排见 `docs/progress/deviations.md` §7。
+
+- **更正 §S4/§S5 相关行（原 1002-1006、1111-1112、1798-1801）**：原结论「能且推荐二选一：(A) 退役
+  Swift 的 `launchApp`/`openPath`/`showItemInFolder` 腿与 Electron 同名叶；或 (B) 保留契约面并把
+  `launchApp` 收编为 core 调用路径」——**两条都不必要**。复核结论：这些腿在两侧都是潜伏契约面
+  （`grep "edges\.<member>("` = 0；Electron 侧注释明写「等第一个消费者」），open-in 的用户路径
+  （页面面 + 实例内 `openInApp/*` + `openExternal`）已全部可达。
+- **正确的最小动作（`macos/`-only）**：删掉 Swift `launchApp` 的自决部分（自建 `vscode://` + 自持 appId
+  白名单），保留「执行调用方给定目标」；`openPath`/`showItemInFolder` 标注为 shell-internal/超集。
+- **证据（可达性盘点）**：可达 6（`openExternal` 4 / `pickPluginSource` 8 / `showMessage` / `setBadge` 2 /
+  `showError` 2 / `showNativeNotification` 2）；潜伏 10（`launchApp` / `openPath` / `showItemInFolder` /
+  `focusMainWindow` / `setKeepAwake` / `setLoginItem` / `notifyClicked` / `resolveResource` / `isPackaged` /
+  `trayAvailable`）。
+- **对 §6 裁决清单的影响**：D-15（open-in 的 A/B 二选一）**撤销**，改为「潜伏差异 + `macos/` 内清理」；
+  其余 D 项不受影响。
+

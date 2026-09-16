@@ -21,13 +21,13 @@
 | # | 现象（用户可感） | 取舍 / 推荐 | 状态 |
 |---|---|---|---|
 | S-01 | 原生壳缺整条应用内更新安装链（下载 → 已退出安装 → 重启并安装） | **已按 Sparkle 2 落地代码**（`AppUpdater` + 菜单 + Info.plist 注入 + framework 嵌入 + appcast 签名步 + sidecar/页面转发）；**外部门禁未闭**：EdDSA 密钥（`SPARKLE_PUBLIC_ED_KEY`/`SPARKLE_PRIVATE_KEY`）与 CI 编译验证（本机沙箱取不到 SwiftPM 二进制制品） | 代码就绪且本机验证通过（swift test 177/177、打包嵌入 ⑯ 通过） / 外部门禁 open（EdDSA secrets + 实机安装验收） |
-| S-02 | 原生壳渲染器卡死无自愈（Electron 15s 重载） | 推荐页面心搏探测（限 3 次、仅无输入时重载） | open（需裁决） |
-| S-03 | 非法显式端口 / dev 端口耗尽：Electron 降级，Swift 致命退出 | 推荐对齐降级 + loud 提示 | open（需裁决） |
-| S-04 | 双壳 `dsh-chamber://` 归属可能被 Electron 抢占 | 推荐 Swift 增注册 `dsh-chamber-native://`（保留原 scheme 兼容） | open（需裁决） |
-| S-05 | 原生壳无本地 open 执行面（Finder/launchApp 一类动作） | 推荐登记为设计边界（改 design 25 E11/E12），open-in 走页面/window.open | open（需裁决） |
-| S-06 | page world 可伪造 `__dshChamberResolve/__dshChamberEmit`（无 contextBridge 隔离） | 推荐注入随机 token 校验（低成本可测） | open（需裁决） |
-| S-07 | 网页权限：媒体采集已显式拒绝；剪贴板读 / 网页 Notification 无等价面 | 推荐登记并实机复核；必要时只做权限「查询面」shim | open（需裁决） |
-| S-08 | 取消退出后的窗口恢复时序与 Electron 不同 | 推荐对齐（确保可见 + 激活） | open（需裁决） |
+| S-02 | 原生壳渲染器卡死无自愈（Electron 15s 重载） | **2026-12 复裁决**：仍是真问题（可达、罕见），但修复**全在 `macos/`**（壳侧空闲心搏 ≤3 次后重载，不碰共享面）；唯一待定的是「允许丢弃多少页面内状态」 | open（低优先；macos-only 方案已定） |
+| S-03 | 非法显式端口 / dev 端口耗尽：Electron 降级，Swift 致命退出 | **2026-12 复裁决**：真问题（用户误配即触发），修复 `macos/`-only——非法显式端口不再 `fatalStartup`，退回下一优先源（dev 空闲退避 / 打包固定端口）并 loud 记账 | open（macos-only，小改） |
+| S-04 | 双壳 `dsh-chamber://` 归属可能被 Electron 抢占 | **2026-12 复裁决（降级）**：本仓的 scheme 生产者只有自己的 `open-vscode` 管线（`deep-link.ts`），且两 flavor 共用一个目录锁 → 同机只会有一个在跑；被抢占的后果是「链接进了另一个 flavor，它因锁退出」。判为**潜伏**：不新增 scheme（新增无生产者的面），若用户实机报告错投再补 `dsh-chamber-native://` | accepted（潜伏；实机观察项） |
+| S-05 | 原生壳无本地 open 执行面（Finder/launchApp 一类动作） | **2026-12 可达性复核改判**：这三条腿在 core **零调用点**，Electron 侧同样「等第一个消费者」（`electron-edges.ts:59`/`shell-core.ts:1933`）；open-in 的用户路径（页面面 + 实例内 `openInApp/*` + `openExternal`）**已全部可达**，接入无需非 `macos/` 改动。残留的唯一缺陷是 Swift 的 `launchApp` 自建 `vscode://` + 自持 appId 白名单（无人可达的重复决策） | 潜伏差异；最小清理在 `macos/` 内（见 §7） |
+| S-06 | page world 可伪造 `__dshChamberResolve/__dshChamberEmit`（无 contextBridge 隔离） | **2026-12 复裁决**：仍是真差异（Electron 有 contextBridge 隔离），威胁模型限于**已在页内的脚本**（首方前端/客户端插件），伪造的增量能力是「代答他人 pending」与「伪造原生事件」；修复 `macos/`-only（shim 注入随机 token，内部管路校验） | open（macos-only，小改；价值是收紧伪原生事件面） |
+| S-07 | 网页权限：媒体采集已显式拒绝；剪贴板读 / 网页 Notification 无等价面 | **2026-12 复裁决（降级为潜伏）**：本仓客户端包与 vendored dsh 客户端都没有 `navigator.clipboard.readText` / `new Notification(` 的消费点（媒体采集已由 `WKUIDelegate` 拒绝）；无消费者 → 不改 | accepted（潜伏；有新消费者时再评估） |
+| S-08 | 取消退出后的窗口恢复时序与 Electron 不同 | **2026-12 复裁决：已消解**（`9dfa9233`）：`presentQuitConfirmation` 取消分支调 `restoreMainWindow()`，实现为 `makeKeyAndOrderFront` + `NSApp.activate()`，与 Electron「确保可见 + 激活」逐条对齐 | resolved（代码 + 测试） |
 | S-09 | 通知音效：Swift 用具名系统音效（缺省 Glass），非标准名由系统回落 | 接受（功能等价；不做音效名映射表） | accepted |
 | S-10 | 隐藏窗口的 WebKit 定时器节流（无 `backgroundThrottling:false` 等价物） | 接受，实机门禁验证后台 SSH 流不受影响 | accepted |
 | S-11 | 右键上下文菜单为平台默认（未覆写） | 接受（Electron 亦为系统默认 + 应用菜单） | accepted |
@@ -36,6 +36,8 @@
 | S-14 | sidecar 业务错误的 `code` 字段在 Swift 链路上只剩文案（A 桥围栏码已带 `.code`） | 部分消解：A 桥围栏码已等价；edge 回执要真 code 需先把契约异步化 | open（低优先） |
 | S-15 | 就绪门（`ipc_not_ready`）先于 origin 判定 | 有意排序：`expectedOrigin == nil` 时没有可比较的可信 origin，且该分支不授予任何能力 | accepted（已注释 + 台账） |
 | S-16 | `--skip-web-dist` 之外的装配一律要求 `dist/web/index.html`（打包 fail-closed） | 有意：白屏 .app 比构建失败更贵；release 腿本就先 build:renderer | accepted（门禁） |
+| S-17 | sidecar 起不来 / 宿主决策不可得时，关窗与退出方向与 Electron 相反（Electron 保持窗口、Swift 直接落终态） | **2026-12 复裁决**：Swift 的终态是 `fatalStartup` = 原生 `NSAlert`（含原因）+ `exit(1)`，不是静默崩溃；不可恢复状态（缺 sidecar/node/host 包）下「清楚说明 + 快速失败」优于「坏 UI 降级」 | accepted（有意边界；design 25/本节已记录） |
+| S-18 | 入站信封 >4MiB 被 `frame_too_large` 拒绝（Electron 结构化克隆无此上限） | 有意护栏（防管道内存放大）；影响面仅「超长行」这一极端输入 | accepted（T-02 的边界值；用户可感概率极低） |
 
 ## 2. 结构性 / 实现方式差异（**有意**，非缺陷）
 
@@ -44,7 +46,7 @@
 | T-01 | 页面桥 | preload + `contextBridge`（隔离 world） | documentStart 注入 shim + `window.webkit.messageHandlers` | 两侧契约（通道/形状/错误码）一致即可；隔离能力差异另登记为 S-06 |
 | T-02 | IPC 编码 | 结构化克隆 | JSON（envelope ≤4MiB） | 协议可见形状相同；超限行为已在台账登记 |
 | T-03 | 宿主进程 | Electron main + electron-updater | Swift 壳 + Node sidecar（stdio NDJSON JSON-RPC） | 宿主语言不同；sidecar 复用 core 注册体（60 invoke 同一实现） |
-| T-04 | 更新实现 | electron-updater（Squirrel/NSIS/AppImage） | headless 控制器（GitHub releases 查询）+ 手动安装 | 见 S-01；标准做法是 Sparkle 2 |
+| T-04 | 更新实现 | electron-updater（Squirrel/NSIS/AppImage；mac 走 latest-mac.yml） | headless 控制器（GitHub releases 查询）+ **Sparkle 2**（appcast-swift.xml + EdDSA） | 见 S-01：用户裁决 D-1 选 B 后安装腿由 Sparkle 承担；两端更新源/密钥彼此独立（Squirrel feed 仍只归 Electron 腿） |
 | T-05 | 签名 | release.yml 走 Developer ID + 公证（需凭据） | dry-run 形态为 ad-hoc 签名 | 凭据门禁是外部依赖，非代码差异 |
 | T-06 | 目录锁 | Darwin `O_EXLOCK|O_NONBLOCK` | `flock(LOCK_EX|LOCK_NB)`（同一 `.dsh-chamber.lock`） | 锁文件仅诊断；内核锁本身是唯一裁决者（design 25 §6.3） |
 | T-07 | 打包布局 | electron-builder（asar/extraResources） | `.app` + `Contents/Resources/sidecar`（内建 node + dist/web） | 锁步由 packaging-manifest + build-swift-app 断言 |
@@ -146,6 +148,78 @@
 
 ## 6. 未决 / 待评估
 
-- **S-01 Sparkle 迁移**：需要新依赖（Sparkle 2）与密钥/公证基建，属需批准的运行时依赖变更；在批准前只保留手动检查。
+- **S-01 Sparkle 迁移**：代码已落地（裁决 D-1 选 B），未决的只剩**外部门禁**：EdDSA 密钥 secrets（`SPARKLE_PUBLIC_ED_KEY`/`SPARKLE_PRIVATE_KEY`）、CI dry run、实机安装验收。
 - **通知授权的「重置后重问」**：参考实现用 `.notDetermined` + post-ready 请求覆盖；我们当前在首次投递时请求，用户重置权限后不会主动重问（可接受，待评估）。
 - **S-02 心搏自愈**：任何方案都要先定义「允许丢弃多少页面内状态」；未定前不做。
+
+## 7. 2026-12 复核：可达性优先（open-in 教训 + 全量重排）
+
+### 7.1 触发与新纪律
+
+- **触发**：open-in 复核。我最初按「共享契约面（`packages/desktop/node-edges.ts`）两侧必须一致」的
+  **契约优先**思路，给出了跨包方案（把 `launchApp` 的决策收归 core，或退役同名叶）。事实是这些腿在
+  core **零调用点**，Electron 自己也是「等第一个消费者」（`electron-edges.ts:59`「launchApp moves with
+  its first consumer」、`shell-core.ts:1933` notifyClicked「留后续批」）——功能接入本来只需 `macos/` 改动。
+- **纪律（此后所有双端差异复核照此执行）**：
+  1. **先查可达性**：调用点/消费者（`grep "edges\.<member>("`、A 桥通道的消费者、host 包域的真实使用者）；
+     没有调用点的差异先记为**潜伏差异**，不进修复队列。
+  2. **只修「可达且用户可见」的差异**；修复位置优先 `macos/`。
+  3. **跨出 `macos/` 必须给出调用点证据**：只有「新增能力 / 新增通道 / 新增契约」才允许动共享面，
+     否则只登记不动手。
+  4. **契约面 ≠ 功能面**：接口里有成员，不等于用户路径上有行为。
+
+### 7.2 HostEdges 可达性盘点
+
+> 证据：`grep -rn "edges\.<member>(" packages/desktop/shell-core.ts packages/desktop/main.ts`（0.3.x 基线）。
+
+| 成员 | core 调用点 | 可达性 | Swift 侧实现 | 复核结论 |
+|---|---|---|---|---|
+| `openExternal` | 4 | ✅ | `SwiftEdgeHostLegs`（NSWorkspace） | parity 必对齐面（2026-12 批已对齐） |
+| `pickPluginSource` | 8 | ✅ | ✅（`NSOpenPanel`，含 zip 文案） | 同上 |
+| `showMessage` | 多（对话框） | ✅ | ✅（ADD_FILE 预检 + defaultId/cancelId） | 同上 |
+| `setBadge` | 2 | ✅ | ✅（Dock 角标） | 同上 |
+| `showError` | 2 | ✅ | ✅（sheet） | 同上 |
+| `showNativeNotification` | 2 | ✅ | ✅（UNUserNotificationCenter） | 同上 |
+| `launchApp` | **0** | ❌ 潜伏 | ✅ 但**自决**（自建 `vscode://` + 自持 appId 白名单） | 无用户路径；缺陷是「无人可达的重复决策」→ 清理在 `macos/` 内 |
+| `openPath` / `showItemInFolder` | **0** | ❌ 潜伏 | ✅（`NSWorkspace` 执行） | 保留为 shell-internal/超集，不宣称共享契约面 |
+| `focusMainWindow` / `setKeepAwake` / `setLoginItem` | **0** | ❌ 潜伏 | ✅ | 同上（Swift 侧另经 AppDelegate/设置叶自用） |
+| `notifyClicked` / `resolveResource` / `isPackaged` / `trayAvailable` | **0** | ❌ 潜伏 | 部分 | Electron 侧注释即「留后续批」；不进入修复队列 |
+
+### 7.2b A 桥面（页面 → 壳）可达性
+
+> 判据：**surface 方法是否有消费调用点**（通道字符串不是判据——前端只调 surface，通道名只出现在
+> preload/shim 与宿主注册面）。
+
+- 有调用点：`restartAndInstall` / `download` / `openReleasePage`（settings-bridge 的 `update-store.ts:117/143/157`、
+  `UpdateSection.tsx`）、`applyNow` / `retryApply` / `retryRestore` / `recoverMetadata` / `cleanupVersion` /
+  `clearFailure` / `restorePreRollback` / `resetBuiltin`（runtime-management）、`onIntent`（renderer 深链）、
+  `onResume`（系统恢复）、`desktopSsh` 面（sidebar）、`vscodeOpenInNewWindow`（deep-link/settings）。
+- 结论：**A 桥面没有潜伏面**；其结构性对齐已由 `bridge-manifest.json` + `bridge-shim-surface.test.ts` +
+  `ipc-surface-mirror.test.ts` 锁定。这也确认 Sparkle 的 `updateNativeAction` 落在真实用户路径（页面「更新」按钮）上。
+### 7.3 过往改动复核结论
+
+| 改动 | 类别 | 复核结论 | 动作 |
+|---|---|---|---|
+| `9dfa9233` 壳对齐（退出链/通知/深链/登录项/菜单/错误页） | 可达路径 | **必需** | keep |
+| `bec4b464` sidecar 宿主路径（退出/回执/stdout/排队） | 可达（Swift flavor 的宿主就是 sidecar） | **必需**（文件在 desktop 包，但 Electron 不 import） | keep |
+| `038e32f2` 装配 fail-closed（renderer dist） | 可达（装配路径） | **必需** | keep |
+| `61fe415f` 共享前端（bridge-hydration / update-store / open-in / App.tsx） | 共享面 | **防御性**：根因（shim 早暴露）已在 `macos/` 修掉，共享改动是同类失败的收敛保护，非必需 | 保留（用户已接受「严格改善 + 一致性」），类别如实登记 |
+| `36fb2bdb` settings-bridge 英文 beta 文案 | 共享面（可达：Electron 签名缺失场景） | 一致性 | keep |
+| `98728b10` Sparkle 更新链 | 可达（页面更新区） | **必需**；两行共享改动（`shell-core` 可选成员 + `updater` 类型）对 Electron 逐字等价 | keep（可选下沉 sidecar） |
+| `d72281e8`/`82f50af8`/`e3904fdc`/`38b52e86` | 打包/发布/声明/文档 | 原生专属，零共享行为 | keep |
+| **未实施**的「open-in 跨包收编 core」方案 | — | 无调用点证据 | **撤回（wontfix）**，改为 `macos/` 内清理 |
+
+### 7.4 差异的重新定级（可达性视角）
+
+- **可达且用户可见（必修/已修）**：S-01（已落地）、S-03、S-04、S-08
+- **可达、影响低（待裁决）**：S-02、S-07、S-14
+- **潜伏（无人可达）**：S-05（改判，见上表）、S-11、S-15、S-16
+- **已接受**：S-09、S-10、S-12、S-13
+
+### 7.5 由此产生的待办（最小改动）
+
+- **`macos/`-only**：删 `SwiftEdgeHostLegs` 中 `launchApp` 的自决部分（自建 `vscode://` + 自持 appId
+  白名单），保留「执行调用方给定目标」语义；`openPath`/`showItemInFolder` 标注为 shell-internal/超集。
+- **文档**：design 25 §2 能力表按「共享执行面（可达）/ 壳侧执行面（shell-internal）/ 潜伏契约面」三栏
+  标注；本节的复核纪律即 design 层的取舍来源。
+
