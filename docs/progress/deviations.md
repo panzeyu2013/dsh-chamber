@@ -29,7 +29,7 @@
 | S-07 | 网页权限：媒体采集已显式拒绝；剪贴板读 / 网页 Notification 无等价面 | **2026-12 复裁决（降级为潜伏）**：本仓客户端包与 vendored dsh 客户端都没有 `navigator.clipboard.readText` / `new Notification(` 的消费点（媒体采集已由 `WKUIDelegate` 拒绝）；无消费者 → 不改 | **resolved（2026-12 收尾）**：媒体采集显式拒绝 = Electron「只放行 `clipboard-sanitized-write`、其余全拒」（`main.ts:3751-3753`）的等价姿态；WebKit 对其余权限类别无可编程面（属平台结构差异，见 T 表）；`WebPermissionPolicyTests` 已锁步 |
 | S-08 | 取消退出后的窗口恢复时序与 Electron 不同 | **2026-12 复裁决：已消解**（`9dfa9233`）：`presentQuitConfirmation` 取消分支调 `restoreMainWindow()`，实现为 `makeKeyAndOrderFront` + `NSApp.activate()`，与 Electron「确保可见 + 激活」逐条对齐 | resolved（代码 + 测试） |
 | S-09 | 通知音效：Swift 用具名系统音效（缺省 Glass），非标准名由系统回落 | 接受（功能等价；不做音效名映射表） | accepted |
-| S-10 | 隐藏窗口的 WebKit 定时器节流（无 `backgroundThrottling:false` 等价物） | 接受，实机门禁验证后台 SSH 流不受影响 | accepted |
+| S-10 | 隐藏窗口的 WebKit 定时器节流（原：Electron 用 `backgroundThrottling:false` 关闭节流，Swift 无等价物） | **resolved（2026-12，perf 批次收敛）**：Electron 侧恢复 Chromium 默认节流（`packages/desktop/main.ts:855-869` 实测：旧配置隐藏期 rAF 仍满速 / renderer 22.0% / 431 flush；新配置 rAF 0 / 0.1% / 0 flush，SSE 两配置均 15/15、maxGap ≈1s），两 flavor 隐藏态行为同向；design 14 §D1 修订与 design 25 的 C1 行已同步（剩余实机门禁见 STATUS） | resolved |
 | S-11 | 右键上下文菜单为平台默认（未覆写） | 接受（Electron 亦为系统默认 + 应用菜单） | accepted |
 | S-12 | 崩溃诊断无 Crashpad（Electron 有） | 接受（不引入新依赖）；如要上报需单独立项 | accepted |
 | S-13 | 目录锁获取晚于窗口构建（二次启动会有极短空窗闪现） | 接受（用户体验问题已由「激活已有实例 + 转发深链」修好）；重排主装配顺序收益过低 | accepted（2026-12 复核） |
@@ -214,7 +214,7 @@
 - **可达且用户可见（必修/已修）**：S-01（已落地）、**S-02 / S-03 / S-06（2026-12 实施）**、S-08
 - **可达、影响低**：无（S-07 / S-14 均已在 2026-12 收尾中判为等价或已实施）
 - **潜伏（无人可达）**：S-04（scheme 归属，留实机观察）、S-11、S-15、S-16
-- **已接受**：S-09、S-10、S-12、S-13
+- **已接受**：S-09、S-12、S-13（S-10 已随 perf 批次收敛为 resolved，见上表）
 
 ### 7.5 由此产生的待办（最小改动）
 
