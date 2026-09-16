@@ -65,6 +65,11 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 退出中/已开始清理 → 抑制渲染恢复（Electron `reload()` 的 `quitRequested`
     /// 早退；2026-09 三审 E19 偏离 #3）。
     private var recoverySuppressed = false
+
+    /// S-02 卡死自愈：空闲 ping 判定器 + 定时器 + 键鼠监听。
+    private var hangWatchdog = RendererHangWatchdog(now: Date())
+    private var hangProbeTimer: Timer?
+    private var userInputMonitor: Any?
     /// 自动恢复已放弃（超限后不再重载，只 loud/弹窗一次）。
 
 
@@ -127,6 +132,11 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     @available(*, unavailable)
     required init?(coder: NSCoder) {
         fatalError("POC 为纯代码构建窗口，不支持 nib/storyboard 初始化")
+    }
+
+    deinit {
+        hangProbeTimer?.invalidate()
+        if let monitor = userInputMonitor { NSEvent.removeMonitor(monitor) }
     }
 
     /// 构建 WKWebView（含 A 桥注入与消息通道）与主窗口
@@ -202,6 +212,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             ))
             print("[poc] POC_DEBUG=1：已安装 pocConsole 回传（\(Self.consoleMessageName)）")
         }
+
+        // S-02：渲染器卡死自愈（空闲 ping + 有界重载）。
+        startHangWatchdog()
 
         // S-D：sidecar 出站 **notify 帧**（{"notify":event,"payload":…}——
         // node-edges 的 sendNotify 族：rendererPush/setBadge/
@@ -766,6 +779,68 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         recoverySuppressed = true
         recoveryReloadWorkItem?.cancel()
         recoveryReloadWorkItem = nil
+        hangProbeTimer?.invalidate()
+        hangProbeTimer = nil
+    }
+
+    // MARK: - S-02 渲染器卡死自愈（空闲 ping）
+
+    /// 启动卡死探测：定时器 + 键鼠监听（都在主线程）。
+    private func startHangWatchdog() {
+        hangProbeTimer?.invalidate()
+        let timer = Timer.scheduledTimer(withTimeInterval: RendererHangWatchdog.probeInterval,
+                                         repeats: true) { [weak self] _ in
+            self?.tickHangWatchdog()
+        }
+        hangProbeTimer = timer
+        // 键鼠活动 = 渲染器服务的是人，不判定卡死。
+        userInputMonitor = NSEvent.addLocalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown,
+                       .keyDown, .scrollWheel, .flagsChanged]) { [weak self] event in
+            self?.hangWatchdog.noteUserInput(at: Date())
+            return event
+        }
+    }
+
+    /// 一次探测：空闲够久 → ping（3s 无回即记 strike）；连续 3 次 → 有界重载。
+    private func tickHangWatchdog() {
+        guard !recoverySuppressed, !quitting else { return }
+        switch hangWatchdog.tick(now: Date()) {
+        case .nothing:
+            return
+        case .probe:
+            webView.evaluateJavaScript("1") { [weak self] _, _ in
+                self?.hangWatchdog.noteProbeSucceeded()
+            }
+        case .reload:
+            print("[poc] 渲染器疑似卡死（连续 \(RendererHangWatchdog.maxStrikes) 次 ping 超时且用户空闲 ≥\(Int(RendererHangWatchdog.idleGrace))s）→ 有界重载")
+            scheduleRecoveryReload(reason: "unresponsive")
+        }
+    }
+
+    /// 有界重载（崩溃与卡死共用同一份预算；差异只在文案与是否上报 crashed）。
+    private func scheduleRecoveryReload(reason: String) {
+        guard recoveryReloadWorkItem == nil else { return }
+        let now = Date().timeIntervalSince1970
+        switch recoveryPolicy.decide(now: now, attempts: &recoveryAttempts) {
+        case .reload(let delay, let attempt):
+            print("[poc] 渲染恢复（\(reason)），\(String(format: "%.2f", delay))s 后重载（\(attempt)/\(recoveryPolicy.maxReloads)）")
+            let item = DispatchWorkItem { [weak self] in
+                guard let self else { return }
+                self.recoveryReloadWorkItem = nil
+                guard !self.recoverySuppressed else { return }
+                self.webView.reload()
+            }
+            recoveryReloadWorkItem = item
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+        case .giveUp(let attempts):
+            print("[poc] 渲染恢复正常化放弃（\(reason)，\(attempts) 次），本次不重载")
+            let alert = NSAlert()
+            alert.alertStyle = .critical
+            alert.messageText = "dsh-chamber 前端异常"
+            alert.informativeText = "前端渲染进程反复无响应/崩溃，已停止自动恢复。请重新启动应用。"
+            alert.runModal()
+        }
     }
 
     /// WKWebView 渲染进程终止（崩溃/被系统回收；Electron render-process-gone
@@ -787,29 +862,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // 上报 crashed，否则 core 会继续向死 frame 推送丢事件。
         sendRendererLifecycle("crashed")
 
-        guard recoveryReloadWorkItem == nil else { return }
-        let now = Date().timeIntervalSince1970
-        switch recoveryPolicy.decide(now: now, attempts: &recoveryAttempts) {
-        case .reload(let delay, let attempt):
-            print("[poc] 渲染进程异常，\(String(format: "%.2f", delay))s 后重载（\(attempt)/\(recoveryPolicy.maxReloads)）")
-            let item = DispatchWorkItem { [weak self] in
-                guard let self else { return }
-                self.recoveryReloadWorkItem = nil
-                guard !self.recoverySuppressed else { return }
-                self.webView.reload()
-            }
-            recoveryReloadWorkItem = item
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
-        case .giveUp(let attempts):
-            // 不置永久放弃位（Electron 语义：窗口外的下次崩溃重新计数——滚动
-            // 窗口自身限制 60s 内 ≤3 次；2026-09 三审 E19 偏离 #1）。
-            print("[poc] 渲染进程反复异常退出（\(attempts) 次），本次不重载")
-            let alert = NSAlert()
-            alert.alertStyle = .critical
-            alert.messageText = "dsh-chamber 前端异常"
-            alert.informativeText = "前端渲染进程反复崩溃，已停止自动恢复。请重新启动应用。"
-            alert.runModal()
-        }
+        // 重载走共享的有界恢复策略（不置永久放弃位：滚动窗口自身限制 60s 内 ≤3 次；
+        // 2026-09 三审 E19 偏离 #1）。S-02 的卡死腿同用这一份预算。
+        scheduleRecoveryReload(reason: "crashed")
     }
 
     func webView(_ webView: WKWebView,
