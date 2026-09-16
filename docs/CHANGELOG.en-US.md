@@ -11,6 +11,28 @@ Release artifacts and per-release notes also live on the GitHub Releases page
 > 中文版: [CHANGELOG.md](../CHANGELOG.md)
 
 
+## [0.3.2-beta.1] - 2026-09-16
+
+### Added
+- **macOS Swift native shell (design 25 route A, preview)** — macOS gains a second shell: Swift/AppKit implements only the shell (window, WKWebView, menu/notifications/badge/deep link/dialogs/external open/hide-restore) and carries **no business logic**; the business runs unchanged as a packaged Node sidecar executable (the existing control-plane plus the desktop package's pure-Node business modules) reached over a trusted stdio JSON-RPC channel, while the page side gets an injected shim equivalent to the preload in place of `window.dshChamber`. The web UI is reused 100%. It **coexists** with the Electron build: artifacts are `dsh-chamber-native-<version>-macos-arm64.dmg/.zip`, the bundle id is `com.dshchamber.native` (its own notification-authorization identity), and both flavors share one userData root and directory lock (`<userData>/.dsh-chamber.lock`, darwin `flock`/`O_EXLOCK`; the exclusive lock itself is the only arbitration authority).
+- **The native flavor's update shape (design 25 §7)** — the update check compares against the real remote and shows "an update is available" with the release link; there is deliberately **no** in-app download/install, with the reason and the manual-download entry stated in the update section (honest blocked-available). Automatic install waits for v2.
+- **Anti-drift lockstep for both flavors, plus a new CI leg** — independent gates now cover the IPC-surface mirror (literal channel strings and structures on both the main and preload sides), the bridge manifest (`bridge-manifest.json` ↔ the generated Swift whitelist, 68 channels = 60 invoke + 8 push), the injected shim surface, the electron-free transitive closure of the core, and the packaging manifest with artifact names (`-native` names never collide, and update-feed ownership is unique); a new macOS CI leg `test-macos` (Swift build + XCTest + packaging dry runs + the darwin lock and packaging-script suites) joins the release proof, which now requires the linux, windows and macos legs to pass together.
+- **Packaging chain** — `build:sidecar` (the official Node archive is verified against a SHA-256 pinned in the repository before bundling, and the executable must keep the basename `node`; the bundled dsh workspace and embedded pnpm ride along) and `build:swift-app` (assemble → ad-hoc or Developer ID signature → notarize → staple → archive, fail-closed on any missing input) publish in parallel with the Electron artifacts under one tag without overwriting them.
+
+### Changed
+- **The desktop main process is split into an electron-free core plus two host-edge implementations** — the orchestration and business logic of `main.ts` moved into Electron-independent `shell-core.ts`, the Electron native edges stay in `electron-edges.ts`, and the Node/sidecar edges live in `node-edges.ts`; the Electron build behaves identically (only four files genuinely import electron, asserted by the transitive-closure gate) while the native flavor reuses the same business code.
+- **`dsh-chamber:info` and the host-facts surface expose a flavor discriminator** (pages can branch on the flavor), and host facts (focus / window shown / system resume) are pushed from one source on both sides.
+
+### Fixed
+- **Immediate reconnect and held delivery after system wake never fired in the native flavor** — the wake notification was registered on the wrong notification center; it now registers with `NSWorkspace.shared.notificationCenter`.
+- **keep-awake no longer prevents display sleep** — aligned with the Electron `prevent-app-suspension` semantics (and design 14 D5): system sleep only.
+- **Confirmation dialogs no longer show their body twice** (when a call site passes the same copy as both title and message, the native shell rendered it in both places).
+- **A sidecar restart no longer drops buffered, unsent deep links** — reset only clears the readiness bit; the buffer survives and is delivered FIFO on the next ready frame.
+- **An oversized response no longer leaves a renderer request hanging forever** — a response past the frame limit now fails closed, settling every pending request and reporting loudly.
+- **Quit cleanup explicitly releases keep-awake and clears the Dock badge.**
+- **A packaged .app ignores `POC_*` environment overrides** — these dev/POC switches used to stay live in an assembled bundle, letting the environment redirect the shell to any node, sidecar script, web dist, userData or control-plane origin; the dev path (`swift run` / non-.app) is unaffected.
+- **A local false red in the new test gate, and a `build-sidecar` defect exposed by the first CI run** — the desktop test-manifest lockstep used to scan `packages/desktop/.dev-user-data` (another checkout left behind by dev runtime state) and fail `check:tests` locally, and is now ignored; `build-sidecar`'s "no bundled dsh workspace" warning branch threw `TypeError` on a clean checkout because the injected io lacked `warn`, and now falls back to the console.
+
 ## [0.3.1] - 2026-09-15
 
 ### Added

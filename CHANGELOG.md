@@ -11,6 +11,28 @@
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
 
+## [0.3.2-beta.1] - 2026-09-16
+
+### 新增
+- **macOS Swift 原生壳（design 25 路线 A，预览）** —— macOS 上新增第二只壳：Swift/AppKit 只做壳（窗口、WKWebView、菜单/通知/角标/深链/对话框/外部打开/隐藏恢复），**壳内不承载任何业务**；业务由打包成独立 Node 可执行文件的 sidecar 承载（现有 control-plane 与 desktop 的纯 Node 业务模块族原样运行），Swift 与 sidecar 之间走一条受信的 stdio JSON-RPC 通道，页面侧用与 preload 等价的注入 shim 顶替 `window.dshChamber`，web UI 100% 复用。与原 Electron 版**共存**：产物为 `dsh-chamber-native-<版本>-macos-arm64.dmg/.zip`，bundle id `com.dshchamber.native`（通知授权身份独立），双 flavor 共用同一 userData 根与目录锁（`<userData>/.dsh-chamber.lock`，darwin `flock`/`O_EXLOCK`，锁本身是唯一仲裁权威）。
+- **原生 flavor 的更新形态（design 25 §7）** —— 更新检查走真实远端比对并显示「有新版本可用」与 release 链接；**不**提供应用内下载/安装，原因与手动下载入口在更新区写明（诚实 blocked-available），自动安装留待 v2。
+- **双 flavor 防漂移锁步与新 CI 腿** —— IPC 面镜像（main/preload 两侧字面量与结构）、桥 manifest（`bridge-manifest.json` ↔ 生成的 Swift 白名单，通道 68 = 60 invoke + 8 push）、注入 shim 表面、core 的 electron-free 传递闭包、打包清单与产物命名（`-native` 不含碰撞、更新 feed 归属唯一）各有独立门禁；新增 macOS CI 腿 `test-macos`（Swift 构建 + XCTest + 打包干跑 + darwin 目录锁与打包脚本套件），发布证明要求 linux/windows/macos 三腿同时通过。
+- **打包链** —— `build:sidecar`（官方 Node 归档按仓库固定 SHA-256 校验后捆绑，基名必须是 `node`；内置 dsh 工作区与内嵌 pnpm）与 `build:swift-app`（组装 → ad-hoc 或 Developer ID 签名 → 公证 → stapler 装订 → 归档，任一缺失即 fail-closed），同一 tag 下与 Electron 产物并行发布、互不覆盖。
+
+### 变更
+- **桌面主进程拆分为 electron-free 核心 + 两套宿主边沿实现** —— `main.ts` 的编排与业务逻辑抽到与 Electron 无关的 `shell-core.ts`，Electron 原生边沿留在 `electron-edges.ts`，Node/sidecar 侧边沿在 `node-edges.ts`；Electron 版行为不变（真实依赖 Electron 的仅 4 个文件，由传递闭包门禁断言），原生 flavor 复用同一业务代码。
+- **`dsh-chamber:info` 与宿主事实面提供 flavor 判别位**（页面可按 flavor 分支），宿主事实（焦点/窗口显示/系统唤醒）在两侧同源推送。
+
+### 修复
+- **系统唤醒后原生 flavor 的立即重连与补发从未生效** —— 唤醒通知此前注册在错误的通知中心，现已注册到 `NSWorkspace.shared.notificationCenter`。
+- **keep-awake 不再连带阻止显示器休眠** —— 与 Electron 的 `prevent-app-suspension` 语义（以及 design 14 D5）对齐：只防系统休眠。
+- **确认对话框不再把正文显示两遍**（调用点把标题与正文传同一文案时，原生壳此前两处都渲染）。
+- **sidecar 重启不再丢弃已缓冲未发送的深链** —— 复位只落就绪位，缓冲保留并在下一个 ready 帧按 FIFO 补发。
+- **超大响应不再让渲染端请求永久悬挂** —— 超过帧上限的响应改为 fail-closed 结算全部未决请求并响亮上报。
+- **退出清理显式收回 keep-awake 与 Dock 角标**。
+- **打包 .app 忽略 `POC_*` 环境覆盖** —— 这些 dev/POC 开关此前在装配态仍生效，可被环境变量重定向到任意 node、sidecar 脚本、web dist、userData 或控制面 origin；dev（`swift run` / 非 .app）路径不受影响。
+- **测试门的本地误红与 CI 首跑暴露的 `build-sidecar` 缺陷** —— desktop 测试清单锁步此前会扫描到 `packages/desktop/.dev-user-data`（dev 运行态里的另一份 worktree）导致本地 `check:tests` 失败，现已忽略该目录；`build-sidecar` 在干净 checkout 的「缺内置 dsh 工作区」警告分支因注入 io 缺 `warn` 抛 `TypeError`，现已回落控制台。
+
 ## [0.3.1] - 2026-09-15
 
 ### 新增
