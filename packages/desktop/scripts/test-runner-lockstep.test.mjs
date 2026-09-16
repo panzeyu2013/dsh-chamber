@@ -39,7 +39,7 @@ const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 
 
 /** 与 scripts/dev/verify-test-wiring.mjs 同款忽略目录（vendor/dist 里的
  *  测试不属于本包清单的扫描面）。 */
-const IGNORED_DIRECTORIES = new Set(['node_modules', 'vendor', 'dist', 'lib', 'release', '.git', '.desktop-build', 'coverage'])
+const IGNORED_DIRECTORIES = new Set(['node_modules', 'vendor', 'dist', 'lib', 'release', '.git', '.desktop-build', 'coverage', '.dev-user-data'])
 
 function discoverTestFiles(root) {
   const found = []

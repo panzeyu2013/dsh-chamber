@@ -39,6 +39,10 @@ export const IGNORED_DIRECTORIES = new Set([
   '.git',
   '.desktop-build',
   'coverage',
+  // Dev runtime state (the desktop app's own .dev-user-data holds a harness
+  // worktree with foreign *.test.mjs files): never part of the package's test
+  // surface. Mirrors test-runner-lockstep.test.mjs's list.
+  '.dev-user-data',
 ])
 
 /** Wiring forms accepted for one test file. */
