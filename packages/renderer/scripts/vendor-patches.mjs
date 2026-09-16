@@ -24,6 +24,17 @@
  * `expect`→`replace` edits; prefer an optional chamber-provided standard prop
  * (see `chamberFileApiBase`) with upstream behaviour as the fallback, so an
  * official-layout deployment stays correct.
+ *
+ * SECOND ADMITTED CLASS (2026-12, measured shell CPU — correctness patches keep
+ * priority): an upstream constant or CSS animation whose per-frame cost is
+ * MEASURED on the target hardware and which a chamber package cannot express
+ * (hashed CSS-module class names are unselectable from outside; the publication
+ * scheduler is module-private). Such an entry MUST state the A/B measurement in
+ * `reason` (same Electron/display, renderer+GPU process CPU via
+ * `app.getAppMetrics` cumulative deltas) and is held to the same C9 anchor gate
+ * as a correctness patch, so a pin bump re-derives it loudly instead of
+ * silently dropping it. Never widen this class for a perf change that a chamber
+ * package or a visibility gate can already express.
  */
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -242,6 +253,123 @@ export const VENDOR_PATCHES = Object.freeze([
       Object.freeze({
         expect: '      mentions={mentions}\n      t={t}\n    />',
         replace: '      mentions={mentions}\n      t={t}\n      chamberFileApiBase={chamberFileApiBase}\n    />',
+      }),
+    ]),
+  }),
+  Object.freeze({
+    idSuffixes: Object.freeze([
+      'dsh-client-ui-chat/src/client/chat/ReasoningRow.module.css',
+      'packages/client/ui-chat/src/client/chat/ReasoningRow.module.css',
+    ]),
+    vendorFile: 'dsh-client-ui-chat/src/client/chat/ReasoningRow.module.css',
+    reason: 'measured 120 Hz frame cost: the running-row sweep animates `left` (-300px→100%), forcing layout+paint every frame. A/B of the REAL pinned CSS bytes with this registry applied (Electron 43.4.0 / Chromium 150 / M5 Pro 120 Hz, app.getAppMetrics cumulative deltas): 3 concurrent rows 12.3% renderer / 7.6% GPU before → 1.3% / 1.2% after; 1 row 15.4% / 9.2% → 1.0% / 1.0%. Hashed CSS-module class names make a chamber-side override unselectable from styles.css, and the sweep is upstream UX: retarget it, never delete it.',
+    edits: Object.freeze([
+      Object.freeze({
+        expect: '  animation: dsh-reasoning-row-sweep 2.6s ease-out infinite;',
+        replace: '  /* chamber patch: sweep on the compositor only (vendor-patches.mjs reason) */\n'
+          + '  animation: dsh-reasoning-row-sweep-x 2.6s ease-out infinite;',
+      }),
+      Object.freeze({
+        expect: '@keyframes dsh-reasoning-row-sweep {\n  0% { left: -300px; }\n  90%, 100% { left: 100%; }\n}',
+        replace: '@keyframes dsh-reasoning-row-sweep-x {\n'
+          + '  0% { transform: translateX(-300px); }\n'
+          + "  /* 100vw exits any row width; the row's overflow:hidden clips the tail\n"
+          + '     exactly like the upstream left:100% end state. */\n'
+          + '  90%, 100% { transform: translateX(100vw); }\n'
+          + '}',
+      }),
+    ]),
+  }),
+  Object.freeze({
+    idSuffixes: Object.freeze([
+      'dsh-client-ui-chat/src/client/chat/GenericCommandCard.module.css',
+      'packages/client/ui-chat/src/client/chat/GenericCommandCard.module.css',
+    ]),
+    vendorFile: 'dsh-client-ui-chat/src/client/chat/GenericCommandCard.module.css',
+    reason: 'measured 120 Hz frame cost: the running-command-row sweep animates `left` (-300px→100%), forcing layout+paint every frame — structurally identical to the reasoning-row sweep and measured on the same rig (real pinned bytes + this registry): 12.3% renderer / 7.6% GPU at 3 rows → 1.3% / 1.2% after. Hashed class names block a chamber-side override.',
+    edits: Object.freeze([
+      Object.freeze({
+        expect: '  animation: dsh-command-row-sweep 2.6s ease-out infinite;',
+        replace: '  /* chamber patch: sweep on the compositor only (vendor-patches.mjs reason) */\n'
+          + '  animation: dsh-command-row-sweep-x 2.6s ease-out infinite;',
+      }),
+      Object.freeze({
+        expect: '@keyframes dsh-command-row-sweep {\n  0% { left: -300px; }\n  90%, 100% { left: 100%; }\n}',
+        replace: '@keyframes dsh-command-row-sweep-x {\n'
+          + '  0% { transform: translateX(-300px); }\n'
+          + "  /* 100vw exits any row width; the row's overflow:hidden clips the tail\n"
+          + '     exactly like the upstream left:100% end state. */\n'
+          + '  90%, 100% { transform: translateX(100vw); }\n'
+          + '}',
+      }),
+    ]),
+  }),
+  Object.freeze({
+    idSuffixes: Object.freeze([
+      'dsh-client-ui-conversation/src/client/conversation/assembly.ts',
+      'packages/client/ui-conversation/src/client/conversation/assembly.ts',
+    ]),
+    vendorFile: 'dsh-client-ui-conversation/src/client/conversation/assembly.ts',
+    reason: 'measured 120 Hz re-render cost: the upstream three-paint publication chain is pinned at 40 flushes/s under a saturated stream (3 frames x 8.3ms) and each flush commits the whole transcript. A/B executing the REAL upstream and patched method bodies verbatim (1500-row React tree, Electron 43.4.0 / Chromium 150 / M5 Pro 120 Hz): 100 events/s 40 flush/s / 22.5% renderer before → 11 flush/s / 9.5% after (-58%); 25 events/s 25 / 16.6% → 14 / 9.6% (-42%); 8 events/s 8 / 5.8% → 8 / 7.4% (same cadence, difference within run noise). The scheduler is module-private; no chamber package can gate it, and hidden-window stalling alone does not cover the visible-but-streaming case.',
+    edits: Object.freeze([
+      Object.freeze({
+        expect: '  private frame: number | undefined',
+        replace: '  private frame: number | undefined\n'
+          + '  /** chamber patch: slice-scheduler timestamps in ms (monotonic clock). */\n'
+          + '  private lastFlushAt = 0\n'
+          + '  private lastPublishAt = 0',
+      }),
+      Object.freeze({
+        expect: '      if (this.frame !== undefined) return\n'
+          + '      // Cross three paint opportunities before publishing high-frequency stream updates.\n'
+          + '      this.frame = requestAnimationFrame(() => {\n'
+          + '        this.frame = requestAnimationFrame(() => {\n'
+          + '          this.frame = requestAnimationFrame(() => {\n'
+          + '            this.frame = undefined\n'
+          + '            this.flush()\n'
+          + '          })\n'
+          + '        })\n'
+          + '      })\n'
+          + '      return',
+        replace: '      if (this.frame !== undefined) return\n'
+          + '      // chamber patch: quiet streams keep the upstream three-paint wait; saturated\n'
+          + '      // streams coalesce into a fixed 80 ms slice, re-checked each frame and\n'
+          + '      // flushed on the first frame at/after the boundary (vendor-patches.mjs\n'
+          + '      // reason). The immediate publication still bypasses this branch entirely.\n'
+          + '      const now = performance.now()\n'
+          + '      const saturated = now - this.lastPublishAt < 40\n'
+          + '      this.lastPublishAt = now\n'
+          + '      if (saturated && now - this.lastFlushAt < 80) {\n'
+          + '        this.frame = requestAnimationFrame(() => {\n'
+          + '          this.frame = undefined\n'
+          + "          this.publish('animation-frame')\n"
+          + '        })\n'
+          + '        return\n'
+          + '      }\n'
+          + '      if (saturated) {\n'
+          + '        this.frame = requestAnimationFrame(() => {\n'
+          + '          this.frame = undefined\n'
+          + '          this.flush()\n'
+          + '        })\n'
+          + '        return\n'
+          + '      }\n'
+          + '      this.frame = requestAnimationFrame(() => {\n'
+          + '        this.frame = requestAnimationFrame(() => {\n'
+          + '          this.frame = requestAnimationFrame(() => {\n'
+          + '            this.frame = undefined\n'
+          + '            this.flush()\n'
+          + '          })\n'
+          + '        })\n'
+          + '      })\n'
+          + '      return',
+      }),
+      Object.freeze({
+        expect: '  private flush(): void {\n    if (this.assembler.flush()) this.snapshot.set(this.currentSnapshot())\n  }',
+        replace: '  private flush(): void {\n'
+          + '    // chamber patch: the slice scheduler measures from the last flush.\n'
+          + '    this.lastFlushAt = performance.now()\n'
+          + '    if (this.assembler.flush()) this.snapshot.set(this.currentSnapshot())\n'
+          + '  }',
       }),
     ]),
   }),
