@@ -33,6 +33,10 @@
  *
  * Electron-free 不变式：本文件零 electron import（electron-free-gate 面 A）。
  */
+// ⚠️ 必须是**第一条** import（D2/S2·F8）：sidecar-console-redirect.ts 的模块体
+// 在任何其它依赖求值之前把 console.log/info/debug 钉到 stderr（stdout 只允许
+// 协议写）。本 import 同时取回协议行序列化用的 safeStringify（单一实现）。
+import { safeStringify } from './sidecar-console-redirect.ts'
 import process from 'node:process'
 import { createInterface } from 'node:readline'
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
@@ -55,6 +59,7 @@ import {
 } from './shell-core.ts'
 import { createNodeEdges, HOST_INBOUND, QUIT_INBOUND_ERROR } from './node-edges.ts'
 import { buildHeadlessCtx, type HeadlessCtxAssembly } from './sidecar-ctx.ts'
+import type { HeadlessUpdateController } from './update-headless.ts'
 import {
   EXIT_GRACEFUL,
   EXIT_LOCK_CONFLICT,
@@ -62,30 +67,8 @@ import {
   EXIT_STARTUP_FAILURE,
 } from './sidecar-exit-codes.ts'
 
-// ---------------------------------------------------------------------------
-// 0. console 重定向（D2）：stdout 只允许协议写——console.log/info/debug 全部
-//    转 stderr（带 [sidecar-console] 前缀）；warn/error 原样走 stderr。
-// ---------------------------------------------------------------------------
-const stderrLine = (prefix: string, args: unknown[]): void => {
-  process.stderr.write(
-    `[sidecar] ${prefix} ${args.map((a) => (typeof a === 'string' ? a : safeStringify(a))).join(' ')}\n`,
-  )
-}
-function safeStringify(value: unknown): string {
-  try {
-    const text = JSON.stringify(value)
-    return text === undefined ? String(value) : text
-  } catch {
-    return String(value)
-  }
-}
-const originalWarn = console.warn.bind(console)
-const originalError = console.error.bind(console)
-console.log = (...args: unknown[]) => stderrLine('console:', args)
-console.info = (...args: unknown[]) => stderrLine('console:', args)
-console.debug = (...args: unknown[]) => stderrLine('console:', args)
-console.warn = (...args: unknown[]) => originalWarn(...args)
-console.error = (...args: unknown[]) => originalError(...args)
+// console→stderr 重定向（D2）已前移到文件头第一条 import 的
+// sidecar-console-redirect.ts 模块体内——先于本文件任何其它依赖求值。
 
 // ---------------------------------------------------------------------------
 // 1. 参数与环境解析
@@ -296,6 +279,18 @@ async function handleInboundLine(line: string): Promise<void> {
   try {
     if (hostInbound) {
       const outcome = nodeEdges.handleHostInbound(method, payload ?? null)
+      // S3·D2：__host.systemResume 是**双腿**消费点——core 回灌（handleHostInbound
+      // 内 onSystemResume → shell-core handleSystemResume 的 held/push 状态机）之外，
+      // 装配侧补 Electron powerMonitor 第二条监听等价的「唤醒 → 重探陈旧 transport」
+      // （main.ts:1451-1453 → reconnectStaleTransports 679-697）。重探叶自带早退
+      // （装配前/退出在途/只碰 error/degraded 非终态），失败 loud 且绝不反噬本帧。
+      if (method === HOST_INBOUND.systemResume) {
+        try {
+          headless?.reconnectStaleTransports()
+        } catch (error) {
+          console.error('[sidecar] 唤醒重探异常：' + String(error))
+        }
+      }
       writeProtocolLine({
         id,
         ok: outcome.ok,
@@ -339,6 +334,10 @@ let controlPlaneInstance: Awaited<ReturnType<typeof createControlPlane>> | null 
 let shuttingDown = false
 /** pre-spawn 回退幂等门（W-13 补；见 main() 内注释） */
 let startLocalAttempted = false
+/** 更新检查定时器的测试注入门（与 DSH_SIDECAR_TEST_STALL_SHUTDOWN_MS 同纪律：
+ *  仅 dev/测试态生效、装配态忽略）。sidecar-stdio 的 spawn 用例不需要真实出网，
+ *  也避免 15s 首检改变 update-state 投影的确定性。 */
+const TEST_NO_UPDATE_CHECK_ENV = 'DSH_SIDECAR_TEST_NO_UPDATE_CHECK'
 
 async function boot(): Promise<void> {
   // S-C-1/S-C-2 无头 ctx（async：启动前导 reaps 本地插件写进程账目；edges =
@@ -437,6 +436,15 @@ async function boot(): Promise<void> {
   // ready 帧最小化（D8：port + shellVersion；其余身份字段走 dsh-chamber:info）
   writeProtocolLine({ notify: 'ready', payload: { port: controlPlane.port, shellVersion } })
 
+  // I 组更新控制器 start（S5·F3/S6·F2 parity；main.ts:3958 同序——订阅已在
+  // installIpcHandlers 内注册，start 只排定 15s 静默首检与 6h 周期，绝不阻塞）。
+  // 测试注入门见 TEST_NO_UPDATE_CHECK_ENV：产品/装配态一律走真实节奏。
+  if (process.env[TEST_NO_UPDATE_CHECK_ENV] === '1' && !isPackagedSidecarRuntime()) {
+    console.log(`[sidecar] ${TEST_NO_UPDATE_CHECK_ENV}=1——跳过更新检查定时器（测试注入）`)
+  } else {
+    headless.ctx.updateController.start()
+  }
+
   // 启动尾部（main 3785-3789 同形——内部已含 catch 折叠与门/投影处理，绝不
   // 使 ready 帧延迟：尾部在 ready 之后异步执行）。legacy 快捷路径：直接
   // pre-spawn（早前已验证的 dev 行为；无探针、离线可用）。
@@ -518,6 +526,14 @@ const QUIT_CLEANUP_DEADLINE_MS = QUIT_CLEANUP_TIMEOUT_MS - 500
 async function shutdown(code: number): Promise<void> {
   if (shuttingDown) return
   shuttingDown = true
+  // 更新控制器停表（S5·F3/S6·F2）：定时器已 unref（不阻止退出），退出路径再显式
+  // 停掉——清理收尾期间绝不再发起网络检查。控制器契约面只保证 UpdateController，
+  // stop 是 headless 附加成员（见 update-headless.ts）。
+  try {
+    (ctx?.updateController as HeadlessUpdateController | undefined)?.stop()
+  } catch (error) {
+    console.error('[sidecar] 更新控制器停表失败：' + String(error))
+  }
   console.log('[sidecar] 优雅退出中…')
   const cleanup = (async (): Promise<void> => {
     const stallMs = shutdownStallMs()

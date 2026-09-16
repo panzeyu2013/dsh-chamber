@@ -360,6 +360,49 @@ export interface HeadlessCtxAssembly {
     localRunning: boolean
     updateDownloadReady: boolean
   }
+  /** OS 唤醒 → 重探陈旧 transport（design 14 D4 ②；S3·D2）：判据与 Electron
+   *  main.ts:679-697 reconnectStaleTransports 逐字对齐——只碰 phase error/
+   *  degraded 且非终态（requiresUserAction !== true）的实例，绝不碰 idle；
+   *  quit 在途早退。sidecar-entry 在 __host.systemResume 入站帧上调用（core
+   *  回灌之外的装配侧第二条监听，Electron powerMonitor 双监听对偶）。 */
+  reconnectStaleTransports(): void
+}
+
+/**
+ * OS 唤醒即时重探（design 14 D4 ②，主进程侧；main.ts:679-697 判据逐字对齐）：
+ * 只触碰**瞬时失败**的实例——phase error/degraded 且 **非终态**
+ * （requiresUserAction !== true；认证失败/verifyUp 终态等确定性错误绝不自动
+ * 重试，05 §7.6 纪律）；**绝不触碰 idle**（保持手动断开语义）。
+ *
+ * 连接动作复用 core 已有的 `TransportManager.connect`（对 connecting/ready
+ * 幂等，重复唤醒无副作用）——不新写重连机制，只搬 main 的判据/早退。
+ *
+ * 早退门与 main 一致：quit 在途（dispose 已开始）不得再 spawn 新传输，否则
+ * dispose 完成后可能留下孤儿 ssh 子进程；transportManager 缺失（装配前）
+ * 同样 no-op。单实例 connect 抛错只 loud，绝不反噬唤醒帧。
+ *
+ * @param sm 传输管理器（sidecar-ctx 的进程内单例；null = 尚未装配）
+ * @param isQuitting 退出在途判据（dispose 置位；main 的 quitRequested 对偶）
+ * @param warn 失败日志腿（main 的 console.warn 同形）
+ */
+export function reconnectStaleTransports(
+  sm: Pick<TransportManager, 'listInstances' | 'status' | 'connect'> | null,
+  isQuitting: () => boolean,
+  warn: (message: string, error: unknown) => void,
+): void {
+  if (isQuitting()) return
+  if (sm === null) return
+  for (const instance of sm.listInstances()) {
+    const status = sm.status(instance.id)
+    if (status === null) continue
+    if (status.phase !== 'error' && status.phase !== 'degraded') continue
+    if (status.requiresUserAction === true) continue
+    try {
+      sm.connect(instance.id)
+    } catch (error) {
+      warn(`[sidecar] 唤醒重探 ${instance.id} 失败：`, error)
+    }
+  }
 }
 
 /**
@@ -493,16 +536,19 @@ export async function buildHeadlessCtx(
     warn: (...args) => console.warn('[sidecar-journal]', ...args),
   })
 
-  // chamber settings（design 14 D7）：启动加载（损坏 loud——readSettingsFile
-  // 自身保留 *.corrupt，绝不静默假默认）。
-  let settings: ChamberSettings = (() => {
-    try {
-      const loaded = readSettingsFile(settingsPath)
-      return loaded.settings
-    } catch {
-      return DEFAULT_CHAMBER_SETTINGS
-    }
-  })()
+  // chamber settings（design 14 D7）：启动加载 + 损坏 loud——readSettingsFile
+  // 自身保留 *.corrupt 并返回 notice，绝不静默假默认。notice 与 Electron
+  // main.ts:1430-1432 同路径 console.error（S2·F14：原实现丢弃 notice，用户
+  // 设置被静默重置为默认而 stderr 无任何解释）；读取异常同样 loud 回退
+  // （readSettingsFile 按契约恒返回 notice 而非抛错，这里只做防御，绝不静默）。
+  let settings: ChamberSettings = DEFAULT_CHAMBER_SETTINGS
+  try {
+    const loaded = readSettingsFile(settingsPath)
+    if (loaded.notice !== null) console.error(`[sidecar] ${loaded.notice}`)
+    settings = loaded.settings
+  } catch (error) {
+    console.error('[sidecar] chamber settings 读取异常（回退默认值）：' + sanitizeErrorText(error instanceof Error ? error.message : String(error)))
+  }
   // main 1306-1313 的 keep-awake / 登录自启启动 reconcile 为 Electron 宿主腿
   // （setKeepAwakeActive/applyLaunchAtLogin，同步应用加载值）。Swift flavor：
   // 宿主腿经 ctx.setKeepAwake/setLoginItem 真实转发（见下方 real 字段——S-E
@@ -2799,5 +2845,19 @@ export async function buildHeadlessCtx(
     }
   }
 
-  return { ctx, localSpawnGates, bindPlane, runStartupTail, dispose, quitFacts }
+  return {
+    ctx,
+    localSpawnGates,
+    bindPlane,
+    runStartupTail,
+    dispose,
+    quitFacts,
+    // S3·D2：闭包绑定本装配的传输管理器单例 + 退出在途门（main 的模块级
+    // transportManager / quitRequested 对偶；判据见模块级叶注释）。
+    reconnectStaleTransports: () => reconnectStaleTransports(
+      transportManager,
+      () => quittingRequested,
+      (message, error) => console.warn(message, error),
+    ),
+  }
 }

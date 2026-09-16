@@ -10,10 +10,12 @@
  *     无更新 → up-to-date（latestVersion/releaseUrl 清空）；
  *  ⑤ HTTP 失败 / 响应非数组 → error（绝不把 feed 故障伪装成「已是最新」）；
  *  ⑥ download/restartAndInstall 核心层显式拒绝（不是 UI 隐藏）；
- *  ⑦ subscribe 推送与退订；start() 不排周期检查；
+ *  ⑦ subscribe 推送与退订；start() 立即不改状态（首检在定时器上）；
  *  ⑨ 订阅者（宿主推送腿）抛错不反噬控制器：check 不卡死、二次检查仍推进
- *     （2026-12 审查 blocker 回归——sidecar ctx 的缺失成员 stub 曾在此路径抛出）。
- * 纯逻辑（无网络、无 Electron、无真实 timer 等待）。
+ *     （2026-12 审查 blocker 回归——sidecar ctx 的缺失成员 stub 曾在此路径抛出）；
+ *  ⑩ start() 与 Electron 同节奏（15s 静默首检 + 6h 周期）、定时器 unref/幂等/
+ *     stop 可停、失败轮不抛穿（S5·F3/S6·F2）。
+ * 纯逻辑（无网络、无 Electron、无真实 timer 等待——⑩ 用假定时器注入）。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -22,6 +24,8 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { isAllowedReleaseUrl } from './updater.ts'
 import {
+  HEADLESS_CHECK_DELAY_MS,
+  HEADLESS_CHECK_INTERVAL_MS,
   NATIVE_SHELL_DOWNLOAD_REFUSAL,
   NATIVE_SHELL_INSTALL_BLOCKED_REASON,
   NATIVE_SHELL_RESTART_REFUSAL,
@@ -212,7 +216,7 @@ test('⑥ download / restartAndInstall 核心层显式拒绝', async () => {
   assert.equal(controller.state().installBlockedReason, NATIVE_SHELL_INSTALL_BLOCKED_REASON)
 })
 
-test('⑦ subscribe 推送与退订；start() 不改状态', async () => {
+test('⑦ subscribe 推送与退订；start() 立即不改状态（首检在 15s 定时器上）', async () => {
   const seen: string[] = []
   const controller = createHeadlessUpdateController({
     version: '0.2.2',
@@ -221,7 +225,7 @@ test('⑦ subscribe 推送与退订；start() 不改状态', async () => {
   })
   const dispose = controller.subscribe((state) => seen.push(state.phase))
   controller.start()
-  assert.deepEqual(seen, [], 'start() 不排周期检查、不推送')
+  assert.deepEqual(seen, [], 'start() 不立即检查、不推送（首检在 15s 定时器上）')
   assert.equal(controller.state().phase, 'idle')
   await controller.checkNow()
   assert.deepEqual(seen, ['checking', 'available'])
@@ -279,4 +283,90 @@ test('⑨ 订阅者抛错不反噬控制器：check 不卡死、二次检查仍�
   assert.equal(controller.state().phase, 'available')
   await controller.checkNow()
   assert.deepEqual(seen, ['checking', 'available', 'checking', 'available'], 'checking 必须复位')
+})
+
+test('⑩ start()：15s 静默首检 + 6h 周期（与 Electron 同参数），unref/幂等/stop 可停；失败轮不抛穿', async () => {
+  // 与 Electron updater.ts:651,653 同值（那边常量未导出——这里断值锁步防漂移）。
+  assert.equal(HEADLESS_CHECK_DELAY_MS, 15_000)
+  assert.equal(HEADLESS_CHECK_INTERVAL_MS, 6 * 60 * 60 * 1000)
+  interface TimerCall { fn: () => void; ms: number; unref: boolean }
+  const timeouts: TimerCall[] = []
+  const intervals: TimerCall[] = []
+  const timeoutHandles: unknown[] = []
+  const intervalHandles: unknown[] = []
+  const clearedTimeouts: unknown[] = []
+  const clearedIntervals: unknown[] = []
+  const makeHandle = (call: TimerCall, sink: unknown[]): { unref(): void } => {
+    const handle = { unref(): void { call.unref = true } }
+    sink.push(handle)
+    return handle
+  }
+  const realTimers = {
+    setTimeout: globalThis.setTimeout,
+    setInterval: globalThis.setInterval,
+    clearTimeout: globalThis.clearTimeout,
+    clearInterval: globalThis.clearInterval,
+  }
+  try {
+    globalThis.setTimeout = ((fn: () => void, ms?: number) => {
+      const call: TimerCall = { fn, ms: ms ?? 0, unref: false }
+      timeouts.push(call)
+      return makeHandle(call, timeoutHandles)
+    }) as unknown as typeof setTimeout
+    globalThis.setInterval = ((fn: () => void, ms?: number) => {
+      const call: TimerCall = { fn, ms: ms ?? 0, unref: false }
+      intervals.push(call)
+      return makeHandle(call, intervalHandles)
+    }) as unknown as typeof setInterval
+    globalThis.clearTimeout = ((handle: unknown) => { clearedTimeouts.push(handle) }) as unknown as typeof clearTimeout
+    globalThis.clearInterval = ((handle: unknown) => { clearedIntervals.push(handle) }) as unknown as typeof clearInterval
+
+    let requests = 0
+    const request = (async () => {
+      requests += 1
+      if (requests === 2) throw new Error('network down')
+      return { ok: true, status: 200, json: async () => [release('v0.2.3')] }
+    }) as unknown as typeof fetch
+
+    // A：start() 排定两枚定时器后立即 stop() → 两枚句柄都必须被清掉，且零出网。
+    const stopped = createHeadlessUpdateController({ version: '0.2.2', logger, request })
+    stopped.start()
+    assert.equal(timeouts.length, 1, 'start() 恰排一枚 15s 静默首检')
+    assert.equal(timeouts[0]?.ms, HEADLESS_CHECK_DELAY_MS, '首检延迟必须与 Electron CHECK_DELAY_MS 同值')
+    assert.equal(timeouts[0]?.unref, true, '首检定时器必须 unref（不阻止进程退出）')
+    assert.equal(intervals.length, 1, 'start() 恰排一枚周期定时器')
+    assert.equal(intervals[0]?.ms, HEADLESS_CHECK_INTERVAL_MS, '周期间隔必须与 Electron CHECK_INTERVAL_MS 同值')
+    assert.equal(intervals[0]?.unref, true, '周期定时器必须 unref')
+    assert.equal(requests, 0, 'start() 本身不出网（首检在 15s 定时器上）')
+    assert.equal(stopped.state().phase, 'idle')
+    stopped.start()
+    assert.equal(timeouts.length, 1, 'start() 幂等：不叠加首检定时器')
+    assert.equal(intervals.length, 1, 'start() 幂等：不叠加周期定时器')
+    stopped.stop()
+    assert.ok(clearedTimeouts.includes(timeoutHandles[0]), 'stop() 必须 clearTimeout 首检句柄')
+    assert.ok(clearedIntervals.includes(intervalHandles[0]), 'stop() 必须 clearInterval 周期句柄')
+
+    // B：定时器到点走真实受控检查路径——首检成功、周期失败折 error（绝不抛穿）。
+    const controller = createHeadlessUpdateController({ version: '0.2.2', logger, request })
+    controller.start()
+    const initial = timeouts[1]!
+    const periodic = intervals[1]!
+    initial.fn()
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    assert.equal(requests, 1, '首检在 15s 到点后才出网')
+    assert.equal(controller.state().phase, 'available')
+    periodic.fn()
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    await new Promise<void>((resolve) => setImmediate(resolve))
+    assert.equal(requests, 2)
+    assert.equal(controller.state().phase, 'error', '失败轮折叠为 error 态（绝不 reject/抛穿定时器）')
+    controller.stop()
+    controller.stop() // 幂等：再次 stop 不抛
+  } finally {
+    globalThis.setTimeout = realTimers.setTimeout
+    globalThis.setInterval = realTimers.setInterval
+    globalThis.clearTimeout = realTimers.clearTimeout
+    globalThis.clearInterval = realTimers.clearInterval
+  }
 })

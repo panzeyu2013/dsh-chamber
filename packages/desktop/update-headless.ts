@@ -16,9 +16,11 @@
  * - `download()` / `restartAndInstall()` **核心逻辑层显式拒绝**（不是 UI 隐藏）；
  * - `updateDownloadReady` 恒 false（phase 永不 downloaded）→ before-quit 的
  *   「已下载豁免」自然不适用（与 Electron 的差异已在 design 25 §7 明示）；
- * - `start()` 不排周期检查：v1 blocked-available 下周期出网只产出信息态，
- *   用户主动检查即入口（gateway 侧同样不移植周期检查，语义同向；设计 25 §7
- *   未要求周期检查 parity）。
+ * - `start()` 与 Electron updater.ts:1184-1198 **同节奏**（S5·F3/S6·F2 parity）：
+ *   15s 后一次静默首检、之后每 6h 周期静默检查（两枚定时器 unref，
+ *   绝不阻止进程退出；`stop()` 显式停表——sidecar 退出路径调用；start() 幂等，
+ *   重复调用不叠加定时器）。每轮失败在 runCheck 内折叠为 error 态 + warn，
+ *   定时器回调绝不产生未捕获异常。
  *
  * Electron-free：本文件只 import updater.ts 的纯函数（updater.ts 模块加载零
  * electron——electron 只在缺省 seam 内 lazy require）。
@@ -56,6 +58,11 @@ export const NATIVE_SHELL_RESTART_REFUSAL = '原生壳不支持自动更新安�
 const STABLE_TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
 const BETA_TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-beta\.(0|[1-9]\d*)$/
 const RELEASES_URL = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases?per_page=100`
+/** 静默首检延迟（与 Electron updater.ts:651 的 CHECK_DELAY_MS 同值——那边未导出，
+ *  这里以等值常量 + 单测锁步，防两端节奏漂移）。 */
+export const HEADLESS_CHECK_DELAY_MS = 15_000
+/** 周期静默检查间隔（与 Electron updater.ts:653 的 CHECK_INTERVAL_MS 同值 6h）。 */
+export const HEADLESS_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
 
 /**
  * 从 GitHub releases 列表选最新版本（纯函数；feed 数据是不可信输入）：
@@ -113,8 +120,15 @@ export interface HeadlessUpdateControllerDeps {
   timeoutMs?: number
 }
 
+/** headless 控制器的附加停表面（消费面仍按 UpdateController 使用）：`stop()`
+ *  清除 `start()` 排定的静默首检 / 周期定时器（sidecar 退出路径调用）。Electron
+ *  版无此成员——那边定时器随 Electron 进程退出消亡，无显式停表入口。 */
+export interface HeadlessUpdateController extends UpdateController {
+  stop(): void
+}
+
 /** 构造 Swift flavor 更新控制器（UpdateController 契约，无 Electron 依赖）。 */
-export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDeps): UpdateController {
+export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDeps): HeadlessUpdateController {
   const request = deps.request ?? globalThis.fetch
   const channel = deps.channel ?? resolveHeadlessChannel(deps.version)
   const timeoutMs = deps.timeoutMs ?? 10_000
@@ -129,6 +143,20 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
     releaseUrl: null,
     installBlockedReason: NATIVE_SHELL_INSTALL_BLOCKED_REASON,
     error: null,
+  }
+
+  // start() 排定的两枚定时器（stop()/首检到点清引用；句柄本身上了 unref）。
+  let initialTimer: ReturnType<typeof setTimeout> | null = null
+  let intervalTimer: ReturnType<typeof setInterval> | null = null
+  function stopTimers(): void {
+    if (initialTimer !== null) {
+      clearTimeout(initialTimer)
+      initialTimer = null
+    }
+    if (intervalTimer !== null) {
+      clearInterval(intervalTimer)
+      intervalTimer = null
+    }
   }
 
   function setState(patch: Partial<UpdateState>): void {
@@ -214,7 +242,24 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
       return () => listeners.delete(listener)
     },
     start() {
-      deps.logger.log('[updater-headless] 周期检查未启用（v1 blocked-available：仅用户主动「检查更新」触发）')
+      // 与 Electron updater.ts:1184-1197 同节奏（S5·F3/S6·F2）：15s 静默首检 +
+      // 每 6h 周期检查。幂等：重复调用不叠加定时器。unref 保证定时器绝不阻止
+      // 进程退出（sidecar 退出路径另有显式 stop()）。
+      if (initialTimer !== null || intervalTimer !== null) return
+      initialTimer = setTimeout(() => {
+        initialTimer = null
+        // runCheck 内部 catch 全部失败并落 error 态（绝不 reject）——void 安全。
+        void runCheck()
+      }, HEADLESS_CHECK_DELAY_MS)
+      initialTimer.unref?.()
+      intervalTimer = setInterval(() => void runCheck(), HEADLESS_CHECK_INTERVAL_MS)
+      intervalTimer.unref?.()
+      deps.logger.log(
+        `[updater-headless] 更新检查已启动（channel=${channel}，${HEADLESS_CHECK_DELAY_MS / 1000}s 后首次检查，之后每 ${HEADLESS_CHECK_INTERVAL_MS / 3_600_000}h）`,
+      )
+    },
+    stop() {
+      stopTimers()
     },
     async checkNow() {
       // 与 Electron 同契约：返回值恒 {ok:true}，渲染器以 update-state 推送

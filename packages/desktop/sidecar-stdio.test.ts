@@ -17,11 +17,11 @@
  */
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { mkdtempSync, statSync, writeFileSync } from 'node:fs'
+import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createInterface } from 'node:readline'
 import {
   EXIT_GRACEFUL,
@@ -68,7 +68,10 @@ interface Driver {
 function startDriver(): Promise<Driver> {
   return new Promise((resolve, reject) => {
     const userDataDir = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-test-'))
-    const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+    // DSH_SIDECAR_TEST_NO_UPDATE_CHECK（与 DSH_SIDECAR_TEST_STALL_SHUTDOWN_MS
+    // 同纪律）：跳过 15s 首检/6h 周期定时器——本套用例不需要真实出网，也避免
+    // 首检改写 update-state 投影（W-22 断 idle）的确定性。
+    const env = { ...process.env, ELECTRON_RUN_AS_NODE: '1', DSH_SIDECAR_TEST_NO_UPDATE_CHECK: '1' }
     const child: ChildProcessWithoutNullStreams = spawn(nodePath, [sidecarPath, '--user-data-dir', userDataDir, '--port', '17910'], {
       env,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -212,7 +215,7 @@ function spawnWithLockRecord(lockPid: number, port: string): {
   const child: ChildProcessWithoutNullStreams = spawn(
     nodePath,
     [sidecarPath, '--user-data-dir', userDataDir, '--port', port],
-    { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }, stdio: ['pipe', 'pipe', 'pipe'] },
+    { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', DSH_SIDECAR_TEST_NO_UPDATE_CHECK: '1' }, stdio: ['pipe', 'pipe', 'pipe'] },
   )
   let stderr = ''
   child.stderr.on('data', (chunk) => {
@@ -259,7 +262,7 @@ function spawnInjectable(extraEnv: Record<string, string>, port: string): {
   const child: ChildProcessWithoutNullStreams = spawn(
     nodePath,
     [sidecarPath, '--user-data-dir', userDataDir, '--port', port],
-    { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ...extraEnv }, stdio: ['pipe', 'pipe', 'pipe'] },
+    { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', DSH_SIDECAR_TEST_NO_UPDATE_CHECK: '1', ...extraEnv }, stdio: ['pipe', 'pipe', 'pipe'] },
   )
   let stderr = ''
   child.stderr.on('data', (chunk) => {
@@ -533,10 +536,81 @@ test('W-22 更新控制器：真实态 + blocked-available 契约', async () => 
   assert.deepEqual(restart.result, { ok: false, error: '原生壳不支持自动更新安装（请手动下载新版本）' })
 })
 
+test('S3·D2 __host.systemResume 入站：core 回灌 + 装配侧重探双腿，恒 ok 不挂起', async () => {
+  if (!nodeAvailable) return
+  // sidecar-entry 的入站分派在 handleHostInbound（core 回灌）之后调用装配侧
+  // reconnectStaleTransports 叶（main powerMonitor 第二条监听对偶）。本用例
+  // 证明双腿接线后帧仍按普通 host method 结算（无实例/未绑定 plane 时叶 no-op）。
+  const r = await driver.invoke('__host.systemResume', { timestamp: Date.now() })
+  assert.deepEqual(r, { ok: true, result: undefined, error: undefined })
+})
+
 test('W-13 ⑤ SIGTERM 优雅退出 exit 0', async () => {
   if (!nodeAvailable) return
   const code = await driver.close()
   assert.equal(code, 0)
+})
+
+test('S2·F8 stdout 纪律：重定向模块是 sidecar-entry 第一条 import，且先于依赖求值生效', () => {
+  // 结构性锁步：第一条 import 必须是只做重定向的模块（原实现把重定向写在
+  // import 之后——先于它求值的依赖模块会把日志写进协议流 stdout）。
+  const entry = readFileSync(sidecarPath, 'utf8')
+  const firstImport = entry.split('\n').find((line) => /^import\b/.test(line))
+  assert.match(firstImport ?? '', /from '\.\/sidecar-console-redirect\.ts'/)
+
+  // 行为证明：先 import 重定向模块、再 import 一个顶层 console.log 的模块——
+  // 该输出必须落 stderr，stdout 保持空（协议流零污染）。
+  const fixture = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-redirect-'))
+  try {
+    const dep = path.join(fixture, 'dep.mjs')
+    writeFileSync(dep, "console.log('top-level-dep-log')\n")
+    const redirect = pathToFileURL(path.join(dir, 'sidecar-console-redirect.ts')).href
+    const code = `import ${JSON.stringify(redirect)}\nimport ${JSON.stringify(pathToFileURL(dep).href)}\n`
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', code], { encoding: 'utf8' })
+    assert.equal(result.status, 0, '重定向夹具必须正常退出：' + String(result.stderr))
+    assert.equal(result.stdout, '', 'stdout 必须为空（只有 writeProtocolLine 可写协议流）')
+    assert.match(result.stderr, /top-level-dep-log/, '依赖模块顶层日志必须落 stderr')
+  } finally {
+    rmSync(fixture, { recursive: true, force: true })
+  }
+})
+
+test('S3·D2 唤醒重探叶：只连 error/degraded 非终态；idle/ready/终态/quit 在途不动', async () => {
+  const { reconnectStaleTransports } = await import('./sidecar-ctx.ts')
+  type ReconnectSm = Parameters<typeof reconnectStaleTransports>[0]
+  const statuses: Record<string, { phase: string; requiresUserAction: boolean }> = {
+    idle: { phase: 'idle', requiresUserAction: false },
+    err: { phase: 'error', requiresUserAction: false },
+    degraded: { phase: 'degraded', requiresUserAction: false },
+    terminal: { phase: 'error', requiresUserAction: true },
+    ready: { phase: 'ready', requiresUserAction: false },
+  }
+  const connectCalls: string[] = []
+  const warnings: string[] = []
+  const sm = {
+    listInstances: () => Object.keys(statuses).map((id) => ({ id })),
+    status: (id: string) => statuses[id] ?? null,
+    connect: (id: string) => {
+      // connect 抛错路径（degraded）：只 loud，绝不反噬唤醒帧。
+      if (id === 'degraded') throw new Error('connect boom')
+      connectCalls.push(id)
+      return null
+    },
+  } as unknown as ReconnectSm
+  reconnectStaleTransports(sm, () => false, (message) => { warnings.push(message) })
+  assert.deepEqual(connectCalls, ['err'], '只重探 error/degraded 且非终态；idle/ready/requiresUserAction 一律不碰')
+  assert.equal(warnings.length, 1, '单实例 connect 抛错只 loud（degraded 的抛错已计）')
+
+  const quitCalls: string[] = []
+  const quittingSm = {
+    listInstances: () => [{ id: 'err' }],
+    status: () => ({ phase: 'error', requiresUserAction: false }),
+    connect: (id: string) => { quitCalls.push(id); return null },
+  } as unknown as ReconnectSm
+  reconnectStaleTransports(quittingSm, () => true, () => { throw new Error('quit 在途绝不重探') })
+  assert.deepEqual(quitCalls, [], 'quit 在途必须早退（dispose 后不得 spawn 新传输）')
+
+  assert.doesNotThrow(() => reconnectStaleTransports(null, () => false, () => { throw new Error('no-op') }))
 })
 
 test('D1c 退出在途：入站帧以 app_quitting 拒绝 + 清理硬顶（早于宿主 SIGKILL grace）强退', async () => {
