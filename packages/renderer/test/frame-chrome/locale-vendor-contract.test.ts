@@ -56,7 +56,8 @@ function vendorClientProjection(packageId: string): string {
     existsSync(root),
     `${packageId}: vendor tree missing at ${root} — bootstrap it with scripts/dev/ensure-harness-vendor.mjs`,
   )
-  const clientRoot = existsSync(join(root, 'src', 'client')) ? join(root, 'src', 'client') : join(root, 'src')
+  const srcRoot = join(root, 'src')
+  const clientRoot = existsSync(join(srcRoot, 'client')) ? join(srcRoot, 'client') : srcRoot
   assert.ok(existsSync(clientRoot), `${packageId}: no client source under ${clientRoot}`)
   const files: string[] = []
   const walk = (dir: string): void => {
@@ -72,6 +73,15 @@ function vendorClientProjection(packageId: string): string {
     }
   }
   walk(clientRoot)
+  // 共享契约常量住在 src/ 顶层、而不是 src/client 里：`locale-settings.ts` 定义
+  // LOCALE_SETTINGS_NAMESPACE（client 与 host 两侧同读），只走 src/client 会漏掉本
+  // 文件镜像的命名空间锚（2026-12 合并 server-name-flash 后实测的漂移）。顶层只取
+  // *.ts/*.tsx，不下潜 src/locales/ 等纯文案目录。
+  for (const entry of readdirSync(srcRoot, { withFileTypes: true })) {
+    if (!entry.isFile() || !/\.tsx?$/.test(entry.name) || /\.d\.ts$/.test(entry.name)) continue
+    const path = join(srcRoot, entry.name)
+    if (!files.includes(path)) files.push(path)
+  }
   assert.ok(files.length > 0, `${packageId}: no client source files under ${clientRoot}`)
   return normalize(stripComments(files.map(path => readFileSync(path, 'utf8')).join('\n')))
 }
@@ -90,7 +100,9 @@ test('the locale plugin still publishes the faces the ownership hook reads', () 
   )
   assert.match(
     locale,
-    /settingsScope\s*\.\s*bind\s*\(\s*\{\s*namespace\s*:\s*LOCALE_SETTINGS_NAMESPACE/,
+    // 泛型实参可有可无（当前 pin 是 bind<LocaleSettings>({ namespace: … })）：锚只钉
+    // 「把 LOCALE_SETTINGS_NAMESPACE 传进 settingsScope.bind」这条事实。
+    /settingsScope\s*\.\s*bind\s*(?:<[^>]*>)?\s*\(\s*\{\s*namespace\s*:\s*LOCALE_SETTINGS_NAMESPACE/,
     'the settingsScope.bind({ namespace }) shape the hook assumes',
   )
 })
