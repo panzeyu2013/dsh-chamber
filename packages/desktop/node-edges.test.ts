@@ -15,7 +15,11 @@
  *     未知 id 静默 ok）——2026-12 审查回归；
  *  ⑪ showNativeNotification edge 载荷 {notificationId, spec, sourceId}（D1a 线
  *     协议：sourceId 与 retireNotifications 用的是同一个标识）；
- *  ⑫ 退出在途拒绝形状与 Electron renderer-trust 的 app_quitting 围栏逐字同形（D1c）。
+ *  ⑫ S2·F7：retireNotificationsForSources 返回真实驱逐数（不再是恒 0）；
+ *  ⑬ S2·F7/V1：setBadge 走 edge 回执面（失败 loud、主线程忙有界重试，同步返回
+ *     乐观 applied 的契约限制注记）；
+ *  ⑭ S2·V1：非交互腿有界队列（合流最新载荷 / 确定性失败不空转 / 放弃时明确 loud）；
+ *  ⑮ 退出在途拒绝形状与 Electron renderer-trust 的 app_quitting 围栏逐字同形（D1c）。
  * 纯逻辑（无子进程、无 sidecar spawn）。
  */
 import { test } from 'node:test'
@@ -268,7 +272,141 @@ test('⑪ showNativeNotification edge 载荷含 {notificationId, spec, sourceId}
   assert.deepEqual(notifies, [{ event: 'retireNotifications', payload: { sourceIds: ['src-d1a'] } }])
 })
 
-test('⑫ 退出在途拒绝形状与 Electron app_quitting 围栏逐字同形（D1c）', () => {
+test('⑫ S2·F7 retireNotificationsForSources 返回真实驱逐数（不再是恒 0）', async () => {
+  const notifies: Array<{ event: string; payload: unknown }> = []
+  const activated: string[] = []
+  const edges = createNodeEdges({
+    sendEdge: async () => null,
+    sendNotify: (event, payload) => notifies.push({ event, payload }),
+  })
+  const token = (sourceId: string) => ({ sourceId, fingerprint: 'f'.repeat(64), generation: 1 })
+  let nextId = 0
+  for (const sourceId of ['src-retire-1', 'src-retire-2', 'src-keep']) {
+    nextId += 1
+    const id = nextId
+    const route = edges.showNativeNotification({ title: 't', body: 'b' }, {
+      token: token(sourceId),
+      onActivated: () => activated.push(sourceId),
+    })
+    await route.shown
+    // 记录 notificationId（showNativeNotification 自增：1、2、3）
+    assert.deepEqual(edges.handleHostInbound(HOST_INBOUND.notifyClicked, { notificationId: id }), { ok: true })
+  }
+  assert.deepEqual(activated, ['src-retire-1', 'src-retire-2', 'src-keep'], '退役前三条路由都可点击')
+
+  const retired = edges.retireNotificationsForSources(new Set(['src-retire-1', 'src-retire-2']))
+  // 契约口径 = 驱逐数（shell-core.ts:737 / electron-edges.ts:291-300 同款）：
+  // 必须返回本层真实驱逐的 click 路由数，而不是恒 0。
+  assert.equal(retired, 2, '必须返回真实驱逐的 click 路由数')
+  assert.deepEqual(notifies, [{
+    event: 'retireNotifications',
+    payload: { sourceIds: ['src-retire-1', 'src-retire-2'] },
+  }], 'Swift 宿主仍按 sourceId 清横幅（notify 面不变）')
+
+  activated.length = 0
+  assert.deepEqual(edges.handleHostInbound(HOST_INBOUND.notifyClicked, { notificationId: 1 }), { ok: true })
+  assert.deepEqual(edges.handleHostInbound(HOST_INBOUND.notifyClicked, { notificationId: 2 }), { ok: true })
+  assert.deepEqual(edges.handleHostInbound(HOST_INBOUND.notifyClicked, { notificationId: 3 }), { ok: true })
+  assert.deepEqual(activated, ['src-keep'], '只驱逐退役来源的 click 路由；保留来源仍可点击')
+})
+
+test('⑬ S2·F7/V1 setBadge 走 edge 回执面：乐观返回不变、失败 loud、主线程忙有界重试', async () => {
+  const logged: string[] = []
+  const originalError = console.error
+  console.error = (...args: unknown[]) => { logged.push(args.map(String).join(' ')) }
+  try {
+    const attempts: Array<{ method: string; payload: unknown }> = []
+    let busyRemaining = 2
+    const edges = createNodeEdges({
+      nonInteractiveRetryDelayMs: 5,
+      sendEdge: async (method, payload) => {
+        attempts.push({ method, payload })
+        if (busyRemaining > 0) {
+          busyRemaining -= 1
+          throw new Error('swift-edge-ui-unavailable:setBadge:main-thread-busy')
+        }
+        return null
+      },
+      sendNotify: () => { throw new Error('setBadge 不得再走 notify（原实现无任何失败答案）') },
+    })
+    // HostEdges.setBadge 是同步契约：立即返回乐观 applied（真应答在飞）。
+    assert.deepEqual(edges.setBadge(3), { applied: true })
+    assert.deepEqual(attempts, [{ method: 'setBadge', payload: { count: 3 } }], '首送立即发生且走 edge')
+    // 2 次 main-thread-busy（每次间隔 5ms 注入）→ 第 3 次成功；成功不得 loud。
+    await new Promise<void>((resolve) => setTimeout(resolve, 120))
+    assert.equal(attempts.length, 3, '主线程忙必须重试到成功（有界排队）')
+    assert.deepEqual(attempts.every((a) => a.method === 'setBadge' && (a.payload as { count: number }).count === 3), true)
+    assert.deepEqual(logged, [], '重试成功不得 loud')
+
+    // 有界窗口内始终忙 → 明确文案 loud 一次（绝不静默丢弃）。
+    const alwaysBusy: number[] = []
+    const failing = createNodeEdges({
+      nonInteractiveRetryDelayMs: 2,
+      sendEdge: async () => {
+        alwaysBusy.push(1)
+        throw new Error('swift-edge-ui-unavailable:showError:main-thread-busy')
+      },
+      sendNotify: () => {},
+    })
+    failing.showError('打开失败', 'detail')
+    await new Promise<void>((resolve) => setTimeout(resolve, 200))
+    assert.equal(alwaysBusy.length, 6, '有界队列 = 6 次尝试后放弃（不无限重试）')
+    assert.equal(logged.length, 1, '放弃时 loud 一次')
+    assert.match(logged[0]!, /showError 宿主腿失败（S2·V1 有界排队 6\/6 次后放弃）：swift-edge-ui-unavailable:showError:main-thread-busy/)
+  } finally {
+    console.error = originalError
+  }
+})
+
+test('⑭ S2·V1 非交互队列：合流只应用最新载荷；确定性失败不空转、立即 loud', async () => {
+  const logged: string[] = []
+  const originalError = console.error
+  console.error = (...args: unknown[]) => { logged.push(args.map(String).join(' ')) }
+  try {
+    // 合流：首送在飞期间 badge 计数被更新 → 重试必须送最新值（旧载荷绝不晚到覆盖）。
+    let releaseFirst!: () => void
+    const firstInFlight = new Promise<void>((resolve) => { releaseFirst = resolve })
+    const attempts: unknown[] = []
+    const edges = createNodeEdges({
+      nonInteractiveRetryDelayMs: 2,
+      sendEdge: async (_method, payload) => {
+        attempts.push(payload)
+        if (attempts.length === 1) {
+          await firstInFlight
+          throw new Error('swift-edge-ui-unavailable:setBadge:main-thread-busy')
+        }
+        return null
+      },
+      sendNotify: () => {},
+    })
+    edges.setBadge(1)
+    edges.setBadge(9) // 合流：替换排队载荷
+    releaseFirst()
+    await new Promise<void>((resolve) => setTimeout(resolve, 120))
+    assert.equal(attempts.length, 2, '首送 + 一次重试')
+    assert.deepEqual(attempts, [{ count: 1 }, { count: 9 }], '重试携带最新载荷（badge 计数只应用最后一个）')
+
+    // 确定性失败（no-window 等）：不重试、立即 loud。
+    const deterministicAttempts: number[] = []
+    const deterministic = createNodeEdges({
+      nonInteractiveRetryDelayMs: 2,
+      sendEdge: async () => {
+        deterministicAttempts.push(1)
+        throw new Error('swift-edge-ui-unavailable:showItemInFolder:no-window')
+      },
+      sendNotify: () => {},
+    })
+    deterministic.showItemInFolder('/tmp/x')
+    await new Promise<void>((resolve) => setTimeout(resolve, 60))
+    assert.equal(deterministicAttempts.length, 1, '确定性失败绝不空转等待（忙态才重试）')
+    assert.equal(logged.length, 1)
+    assert.match(logged[0]!, /showItemInFolder 宿主腿失败（S2·V1 有界排队 1\/6 次后放弃）：swift-edge-ui-unavailable:showItemInFolder:no-window/)
+  } finally {
+    console.error = originalError
+  }
+})
+
+test('⑮ 退出在途拒绝形状与 Electron app_quitting 围栏逐字同形（D1c）', () => {
   assert.deepEqual(QUIT_INBOUND_ERROR, { error: 'app is quitting', code: 'app_quitting' })
   // 单一事实源断言：Electron 侧 trustedIpc 的退出围栏（renderer-trust.ts）抛出的
   // 错误 message/code 必须与 sidecar 帧里回的字面量一致（镜像而非复制漂移）。

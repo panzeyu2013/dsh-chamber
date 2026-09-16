@@ -406,6 +406,36 @@ export function reconnectStaleTransports(
 }
 
 /**
+ * S2·F13 退出清理并行编排：把 dispose 与 cp.stop 两条腿**同时启动**、一起等待
+ * （allSettled 语义——任一腿失败只 loud，不阻断另一条腿、不改变调用方/退出码
+ * 语义）。与 Electron main will-quit 的单个 Promise.allSettled（main.ts
+ * 1149-1155）同形：原 Swift 侧 `await dispose` → `await cp.stop` 串行会把
+ * 退出耗时变成两者之和，cp.stop（本地 dsh/ssh 子进程回收腿）可能还没开始就撞
+ * 4.5s 内部硬顶（QUIT_CLEANUP_DEADLINE_MS），留下孤儿进程。
+ *
+ * 启动语义：`legs.map(...)` 同步为每条腿建立 promise（async IIFE 体内首个
+ * await 之前的 `run()` 立即执行），因此**所有腿都在等待任何一条结算之前已经
+ * 启动**——这正是并行与串行的分界；`allSettled` 只负责收尾等待。
+ *
+ * @param legs 有序腿表（label 只用于失败日志，保持两条腿各自的既有文案）
+ * @param onLegError 单腿失败 loud 腿（本函数从不 reject：失败只经它上报）
+ */
+export async function settleShutdownLegs(
+  legs: ReadonlyArray<{ label: string; run: () => Promise<unknown> | undefined }>,
+  onLegError: (label: string, error: unknown) => void,
+): Promise<void> {
+  await Promise.allSettled(
+    legs.map(async ({ label, run }) => {
+      try {
+        await run()
+      } catch (error) {
+        onLegError(label, error)
+      }
+    }),
+  )
+}
+
+/**
  * 装配 Swift flavor 无头 ctx。签名相对 W-13 原型（buildHeadlessCtx(userDataDir)）
  * 增加 edges 参数（S-C-1：publish push / 通知退役驱逐 / mainWindowAlive 预检 /
  * 确认对话框 showMessage 腿）与 inputs 参数（S-C-2：内建 dsh workspace + host

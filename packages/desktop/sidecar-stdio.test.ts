@@ -206,6 +206,8 @@ function spawnWithLockRecord(lockPid: number, port: string): {
   exit: Promise<number | null>
   stderr: () => string
   kill: (signal: NodeJS.Signals) => void
+  /** S2·F11：stdin EOF 正常退出路径（sidecar-entry rl 'close' → EXIT_GRACEFUL）。 */
+  closeStdin: () => void
 } {
   const userDataDir = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-lock-'))
   writeFileSync(
@@ -245,7 +247,13 @@ function spawnWithLockRecord(lockPid: number, port: string): {
   // 调用方可能只等 exit（冲突用例 ready 必 reject）——先挂空 catch，
   // 避免未 await 的 ready 触发 unhandledRejection。
   void ready.catch(() => {})
-  return { ready, exit, stderr: () => stderr, kill: (signal) => child.kill(signal) }
+  return {
+    ready,
+    exit,
+    stderr: () => stderr,
+    kill: (signal) => child.kill(signal),
+    closeStdin: () => child.stdin.end(),
+  }
 }
 
 /** D1c 测试用 harness：可注入 env、可等 stderr 行（确定性进入退出在途窗口）、
@@ -651,3 +659,92 @@ test('退出码分级常量（0/3/70/1）', () => {
   assert.deepEqual(codes, [0, 3, 70, 1])
   assert.equal(new Set(codes).size, codes.length, '退出码不得重复')
 })
+
+// ---------------------------------------------------------------------------
+// S2·F13 退出清理并行（本次批次）
+// ---------------------------------------------------------------------------
+test('S2·F13 settleShutdownLegs：两条腿同时启动（并行非串行）、单腿失败只 loud 不阻断', async () => {
+  const { settleShutdownLegs } = await import('./sidecar-ctx.ts')
+  const events: string[] = []
+  const legErrors: Array<{ label: string; message: string }> = []
+  let releaseDispose!: () => void
+  const disposeGate = new Promise<void>((resolve) => { releaseDispose = resolve })
+  await settleShutdownLegs(
+    [
+      {
+        label: 'ctx 回收失败',
+        run: async () => {
+          events.push('dispose:start')
+          await disposeGate
+          events.push('dispose:end')
+          throw new Error('dispose boom')
+        },
+      },
+      {
+        label: 'cp.stop 失败',
+        run: async () => {
+          events.push('stop:start')
+          releaseDispose()
+          events.push('stop:end')
+        },
+      },
+    ],
+    (label, error) => legErrors.push({ label, message: String(error) }),
+  )
+  // 串行实现（await dispose → await stop）会永远卡在 disposeGate 上、到不了
+  // stop:start；事件序证明 cp.stop 在 dispose 仍挂起时已启动（并行 allSettled），
+  // 且 dispose 失败只 loud（onLegError）、不 reject、不阻断 cp.stop。
+  assert.deepEqual(events, ['dispose:start', 'stop:start', 'stop:end', 'dispose:end'])
+  assert.deepEqual(legErrors, [{ label: 'ctx 回收失败', message: 'Error: dispose boom' }])
+  // 未装配腿（undefined：headless/controlPlane 尚未创建）必须安全结算。
+  await settleShutdownLegs(
+    [{ label: 'ctx 回收失败', run: () => undefined }],
+    () => { throw new Error('无失败腿时不得调用 onLegError') },
+  )
+})
+
+test('S2·F13 接线锁步：dispose 与 cp.stop 在同一 settleShutdownLegs 内，无串行残留', () => {
+  const entry = readFileSync(sidecarPath, 'utf8')
+  const start = entry.indexOf('await settleShutdownLegs(')
+  assert.ok(start >= 0, 'shutdown 清理必须经 settleShutdownLegs 编排（并行 allSettled 语义）')
+  const block = entry.slice(start, start + 500)
+  assert.match(block, /headless\?\.dispose\(\)/, 'dispose 腿在并行编排内')
+  assert.match(block, /controlPlaneInstance\?\.stop\(\)/, 'cp.stop 腿在并行编排内')
+  assert.doesNotMatch(entry, /await headless\?\.dispose\(\)/, '不得回退为「先 await dispose」的串行形态（S2·F13 原缺陷）')
+})
+
+// ---------------------------------------------------------------------------
+// S2·F4 交互腿超时锁步（本次批次）
+// ---------------------------------------------------------------------------
+test('S2·F4 交互腿超时锁步：node 侧 = Swift 600s + 60s 缓冲（node 后超时）', () => {
+  const entry = readFileSync(sidecarPath, 'utf8')
+  const swiftMatch = /const SWIFT_INTERACTIVE_LEG_TIMEOUT_MS = ([\d_]+)/.exec(entry)
+  const nodeMatch = /const INTERACTIVE_EDGE_TIMEOUT_MS = SWIFT_INTERACTIVE_LEG_TIMEOUT_MS \+ ([\d_]+)/.exec(entry)
+  assert.ok(swiftMatch !== null && nodeMatch !== null, '常量形状必须可锁步（见 sidecar-entry.ts S2·F4 注释）')
+  const swiftMs = Number(swiftMatch[1].replaceAll('_', ''))
+  const bufferMs = Number(nodeMatch[1].replaceAll('_', ''))
+  assert.equal(swiftMs, 600_000, 'Swift 侧保持 600s（SwiftEdgeHostLegs.interactiveLegTimeout）')
+  assert.equal(swiftMs + bufferMs, 660_000, 'node 侧 660s = Swift 600s + 60s（裁决 D4 选项 B）')
+  assert.ok(swiftMs + bufferMs > swiftMs, 'node 侧必须严格大于 Swift 侧（node 起点更早，同值必然先超时丢答案）')
+  // 本批只放宽交互腿上限：非交互预算与交互腿集合都不变。
+  assert.match(entry, /const EDGE_TIMEOUT_MS = 30_000/)
+  assert.match(entry, /const INTERACTIVE_EDGE_METHODS = new Set\(\['showMessage', 'pickPluginSource'\]\)/)
+})
+
+// ---------------------------------------------------------------------------
+// S2·F11 非崩溃退出（本次批次：Node 侧契约半面）
+// ---------------------------------------------------------------------------
+test('S2·F11 正常退出码面：stdin EOF 与 SIGTERM 同为 EXIT_GRACEFUL=0（不得表现为崩溃 1）', async () => {
+  if (!nodeAvailable) return
+  // Node 侧唯一能保证的契约半面：信号/EOF 正常退出恒以 0 面世，绝不以运行期
+  // 崩溃码 1 出现——Swift Supervisor 的 60s 退避配额只应累计「非零/崩溃」退出。
+  // 另一半（SidecarSupervisor 不把 exit 0/3/70 计入 attempts）在 macos/ 源内
+  // （SidecarSupervisor.swift:400-402 decide 先于退出码分级），不在本批写入范围；
+  // 证据与建议补丁见交付说明。
+  const harness = spawnWithLockRecord(process.pid, '17926')
+  await harness.ready
+  harness.closeStdin()
+  assert.equal(await harness.exit, EXIT_GRACEFUL, 'stdin EOF 必须走文档化优雅退出码 0')
+  assert.match(harness.stderr(), /stdin EOF/)
+})
+

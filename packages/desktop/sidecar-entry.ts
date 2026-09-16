@@ -58,7 +58,7 @@ import {
   type ShellAssemblyCtx,
 } from './shell-core.ts'
 import { createNodeEdges, HOST_INBOUND, QUIT_INBOUND_ERROR } from './node-edges.ts'
-import { buildHeadlessCtx, type HeadlessCtxAssembly } from './sidecar-ctx.ts'
+import { buildHeadlessCtx, settleShutdownLegs, type HeadlessCtxAssembly } from './sidecar-ctx.ts'
 import type { HeadlessUpdateController } from './update-headless.ts'
 import {
   EXIT_GRACEFUL,
@@ -155,19 +155,54 @@ const ipcRegistrar: IpcRegistrar = {
   },
 }
 
-/** stdout 协议行写（单线程下写原子；绝不允许其他代码写 stdout）。 */
+/** stdout 协议行写（单线程下写原子；绝不允许其他代码写 stdout）。
+ *  2026-12 审查（S2 面）：safeStringify 对不可 JSON 化值（BigInt/循环引用）兜底返回
+ *  的是**非 JSON 文本**，写成进程间协议行后 Swift 侧按「非协议帧」丢弃且**不结算**
+ *  pending → 那次 invoke 永久悬挂。这里改为严格序列化：失败时若帧里有 id，就回一帧
+ *  合法错误（调用方据此 reject），否则丢掉并 loud（绝不写非协议字节）。 */
 function writeProtocolLine(frame: unknown): void {
-  process.stdout.write(safeStringify(frame) + '\n')
+  let line: string | null = null
+  try {
+    line = JSON.stringify(frame)
+  } catch {
+    line = null
+  }
+  if (line === undefined || line === null) {
+    const id = (frame as { id?: unknown } | null)?.id
+    if (typeof id === 'number') {
+      process.stdout.write(
+        JSON.stringify({ id, ok: false, error: 'sidecar-frame-not-serializable' }) + '\n',
+      )
+    }
+    console.error('[sidecar] 协议帧不可序列化（已丢弃，绝不写非协议字节）：' + String(safeStringify(frame)))
+    return
+  }
+  process.stdout.write(line + '\n')
 }
 
 const pendingEdges = new Map<number, { resolve(v: unknown): void; reject(e: Error): void }>()
 let nextEdgeId = 1
 /** edge 往返超时（2026-09 模块评审 low #6）：Swift 不应答时不得永久挂起。
  *  **交互腿豁免**（二轮评审 medium）：showMessage / pickPluginSource 是主线程
- *  模态（NSAlert / NSOpenPanel），用户思考/浏览可能远超 30s——按 10 分钟上限，
- *  超时才 loud 失败。 */
+ *  模态（NSAlert / NSOpenPanel），用户思考/浏览可能远超 30s——按 11 分钟上限，
+ *  超时才 loud 失败。
+ *  S2·F4（裁决 D4 选项 B）：Swift 侧交互腿上限同为 600s，但起点是「收到 edge」
+ *  （SwiftEdgeHostLegs.swift:209 interactiveLegTimeout / :582 performInteractiveUI），
+ *  node 侧起点是「发出 edge」→ 两侧同值时 node 必然先超时，用户此后点下的模态
+ *  答案到达时只被记为「迟到的 edge 应答」丢弃（sidecar-entry.ts 入站分派）。
+ *  故 node 侧放宽到 Swift 上限 + 60s 缓冲：Swift 的 600s 有界应答（ok /
+ *  swift-edge-ui-unavailable:…:main-thread-busy）恒先于 node 超时到达，node
+ *  只在 Swift 腿整体失联（进程挂死/管道断开）时才自行超时。
+ *  失败面（写清，不假装已消除）：① 放宽只是把竞态窗口推后 60s——Swift 腿在
+ *  600s+60s 内仍无应答时 node 仍超时丢弃（600s 已由 Swift 弃权位兜住，属双腿
+ *  双重故障）；② 两侧锁步断言已同步（macos CrossLanguageLockstepTests
+ *  `testInteractiveEdgeTimeoutMatchesSidecarEntry` 现断言 SWIFT_INTERACTIVE_LEG_TIMEOUT_MS
+ *  = 600_000 且 INTERACTIVE_EDGE_TIMEOUT_MS = 前者 + 60_000）。 */
 const EDGE_TIMEOUT_MS = 30_000
-const INTERACTIVE_EDGE_TIMEOUT_MS = 600_000
+/** Swift 侧交互腿上限镜像（SwiftEdgeHostLegs.interactiveLegTimeout = 600s）。 */
+const SWIFT_INTERACTIVE_LEG_TIMEOUT_MS = 600_000
+/** node 侧交互腿等待上限 = Swift 上限 + 60s 缓冲（S2·F4）。 */
+const INTERACTIVE_EDGE_TIMEOUT_MS = SWIFT_INTERACTIVE_LEG_TIMEOUT_MS + 60_000
 const INTERACTIVE_EDGE_METHODS = new Set(['showMessage', 'pickPluginSource'])
 
 const nodeEdges = createNodeEdges({
@@ -516,6 +551,8 @@ function shutdownStallMs(): number {
  *  D1c：整条清理链有硬顶——挂起的 dispose/cp.stop 不得让进程滞留到被外部
  *  SIGKILL 才消失；超时 loud 强退，沿用本次退出路径的文档化退出码（信号/EOF =
  *  EXIT_GRACEFUL=0，Supervisor 不得把清理超时误判为崩溃重启）。
+ *  S2·F13：两条腿**并行**等待（settleShutdownLegs，allSettled 语义——见
+ *  sidecar-ctx 的 helper 与 main.ts:1149-1155），4.5s 硬顶内两条腿都已启动。
  *  硬顶取 QUIT_CLEANUP_DEADLINE_MS = QUIT_CLEANUP_TIMEOUT_MS - 500ms：宿主
  *  （Swift BridgeClient 的 terminate→SIGKILL grace，与 QUIT_CLEANUP_TIMEOUT_MS
  *  同为 5s）从同一 SIGTERM 起算，两侧同为 5s 时 SIGKILL 会先到、内部硬顶形同
@@ -541,16 +578,21 @@ async function shutdown(code: number): Promise<void> {
       console.error(`[sidecar] 测试注入：退出清理人为挂起 ${stallMs}ms（${TEST_SHUTDOWN_STALL_ENV}）`)
       await new Promise<void>((resolve) => setTimeout(resolve, stallMs))
     }
-    try {
-      await headless?.dispose()
-    } catch (err) {
-      console.error('[sidecar] ctx 回收失败：' + String(err))
-    }
-    try {
-      await controlPlaneInstance?.stop()
-    } catch (err) {
-      console.error('[sidecar] cp.stop 失败：' + String(err))
-    }
+    // S2·F13：dispose 与 cp.stop **并行**（allSettled 语义）——原实现先
+    // await dispose 再 await cp.stop 是串行：退出耗时 = 两者之和，cp.stop
+    // （本地 dsh/ssh 子进程回收腿）可能在 4.5s 内部硬顶到点前还没启动就被
+    // process.exit 强退，留下孤儿进程。Electron main will-quit 即单个
+    // Promise.allSettled（main.ts:1149-1155）；两腿各自 loud、互不阻断，
+    // 失败不改写本次退出路径的文档化退出码。
+    await settleShutdownLegs(
+      [
+        { label: 'ctx 回收失败', run: () => headless?.dispose() },
+        { label: 'cp.stop 失败', run: () => controlPlaneInstance?.stop() },
+      ],
+      (label, err) => {
+        console.error(`[sidecar] ${label}：` + String(err))
+      },
+    )
   })()
   let deadlineTimer: NodeJS.Timeout | undefined
   const completed = await Promise.race([

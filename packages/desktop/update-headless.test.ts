@@ -286,7 +286,13 @@ test('⑨ 订阅者抛错不反噬控制器：check 不卡死、二次检查仍�
 })
 
 test('⑩ start()：15s 静默首检 + 6h 周期（与 Electron 同参数），unref/幂等/stop 可停；失败轮不抛穿', async () => {
-  // 与 Electron updater.ts:651,653 同值（那边常量未导出——这里断值锁步防漂移）。
+  // 与 Electron updater.ts 同值（那边常量未导出——这里同时断自身字面量与**源锚点**，
+  // 2026-12 审查：只断自身字面量时 updater.ts 漂移不会红）。
+  const updaterSource = readFileSync(
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'updater.ts'), 'utf8',
+  )
+  assert.match(updaterSource, /const CHECK_DELAY_MS = 15_000/, 'updater.ts 首检延迟必须仍是 15s')
+  assert.match(updaterSource, /const CHECK_INTERVAL_MS = 6 \* 60 \* 60 \* 1000/, 'updater.ts 周期必须仍是 6h')
   assert.equal(HEADLESS_CHECK_DELAY_MS, 15_000)
   assert.equal(HEADLESS_CHECK_INTERVAL_MS, 6 * 60 * 60 * 1000)
   interface TimerCall { fn: () => void; ms: number; unref: boolean }

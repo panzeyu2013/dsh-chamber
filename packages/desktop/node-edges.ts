@@ -21,6 +21,11 @@
  *   往返，事实推送在 M3 Swift 侧实现。
  * - rendererPush → sendNotify('rendererPush', {channel,payload}) 并返回 true
  *   （fire-and-forget；Swift 侧 ACK 化前为尽力语义，M3 复核）。
+ * - 非交互宿主腿（setBadge/showItemInFolder/showError）→ edge + 有界重试队列
+ *   （S2·V1：主线程忙先等，窗口内仍忙则 loud 明确失败，绝不静默丢弃；S2·F7：
+ *   setBadge 的同步契约返回值仍是乐观 applied:true——真应答在飞、失败 loud，
+ *   见 createNodeEdges 内两处注释与台账登记）。retireNotificationsForSources
+ *   返回本层真实驱逐的 click 路由数（S2·F7，不再是恒 0）。
  * - resolveResource（同步 string 契约）→ 同样无法往返：路径缓存经
  *   deps.hostFacts.resources（Swift ready 后推送）；缺失即 loud 抛
  *   'sidecar-edges:resource-not-cached:<kind>'。
@@ -131,6 +136,9 @@ export interface NodeEdgesDeps {
     quitRequested: boolean
     recoveryAvailable: boolean
   }) => { hideOnClose: boolean; quitNeedsConfirm: boolean; quitReasons: string[] }
+  /** S2·V1 测试注入：非交互宿主腿有界排队的重试间隔（缺省 5s；测试用短值
+   *  确定性覆盖「先等→仍忙→明确失败」与「忙后空出→成功」两分支）。 */
+  nonInteractiveRetryDelayMs?: number
   /** 同步门缓存初始种子（可选；hostFacts 推送会覆盖）。 */
   hostFacts?: {
     focused?: boolean
@@ -149,6 +157,12 @@ interface PendingNotificationRoute {
   dispose(): void
   shown: Promise<{ shown: true } | { shown: false; error: string }>
 }
+
+/** S2·V1：非交互宿主腿有界排队的发送次数（首送 + 重试）。 */
+const NON_INTERACTIVE_LEG_ATTEMPTS = 6
+/** S2·V1：有界排队的基础重试间隔——总窗 ≈ (attempts-1)×delay = 25s，落在
+ *  非交互 edge 的 30s 预算内（先等主线程空出，仍忙才 loud 放弃）。 */
+const NON_INTERACTIVE_LEG_RETRY_DELAY_MS = 5_000
 
 /** 序列化安全化：非 JSON 可序列化值（如函数）剔除——edge payload 必须纯数据。 */
 function jsonSafe(value: unknown): unknown {
@@ -201,6 +215,112 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
   const MAX_PENDING_NOTIFICATION_ROUTES = MAX_ACTIVE_NATIVE_NOTIFICATIONS
   const clickRoutes = new Map<number, { token: NotificationSourceToken; onActivated(): void }>()
   let nextNotificationId = 1
+
+  // ---- S2·V1：非交互宿主腿的有界排队 ----
+  // 模态（NSAlert/NSOpenPanel）在屏时 Swift 主线程忙，非交互腿经 performUI 的 1s
+  // 有界等待回 'swift-edge-ui-unavailable:<method>:main-thread-busy'
+  // （SwiftEdgeHostLegs.swift:203/541-573），模态结束前重发仍撞同一忙态。原实现
+  // 这些腿走 notify（无回执——失败只在 Swift stderr）或一发即弃 → 用户操作静默
+  // 丢失。本队列改为 edge + 有界重试：同一 method 只保留**最新**载荷（单飞 +
+  // 合流——旧载荷绝不晚到覆盖新状态，badge 计数只应用最后一个），主线程空出即
+  // 应用；窗口内仍未空出则以明确文案 loud 失败一次，绝不静默丢弃。投递异步，
+  // 不阻塞任何调用方；交互腿（showMessage/pickPluginSource）不走本队列，语义不变。
+  interface QueuedLeg {
+    /** 待送载荷队列。状态型腿（setBadge）恒只保留最新一个（合流——旧值绝不
+     *  晚到覆盖新状态）；事件型腿（弹框 / 在 Finder 中显示）按到达顺序排队、
+     *  上限内逐条投递（2026-12 审查：Electron 每次调用都会发生，不能合流成
+     *  最后一次）。 */
+    pending: unknown[]
+    /** true = 状态型（只保留最新）；false = 事件型（逐条投递）。 */
+    coalesce: boolean
+    attemptsLeft: number
+    /** 当前是否已有一次 sendEdge 在飞（单飞门）。 */
+    inFlight: boolean
+    /** 下一次重试的定时器（unref——绝不阻止退出）。 */
+    timer: NodeJS.Timeout | null
+  }
+  const queuedLegs = new Map<string, QueuedLeg>()
+
+  /** 只对「主线程忙」这一瞬时失败重试；确定性失败（no-window/unimplemented/
+   *  参数错误/无 bundle）立即 loud 放弃，绝不空转等待。 */
+  function isRetryableLegError(message: string): boolean {
+    return message.includes('main-thread-busy')
+  }
+
+  /** 事件型腿：语义是「每次都发生」，不合流（Electron 每次调用都会弹/都会显示）。 */
+  const LEG_EVENT_METHODS = new Set(['showError', 'showItemInFolder'])
+  /** 事件型腿的排队上限（超出只 loud 丢弃并记账，绝不无限增长）。 */
+  const NON_INTERACTIVE_LEG_PENDING_MAX = 8
+
+  function queueNonInteractiveLeg(method: string, payload: unknown): void {
+    const coalesce = !LEG_EVENT_METHODS.has(method)
+    const existing = queuedLegs.get(method)
+    if (existing !== undefined) {
+      if (coalesce) {
+        existing.pending[0] = payload
+      } else if (existing.pending.length < NON_INTERACTIVE_LEG_PENDING_MAX) {
+        existing.pending.push(payload)
+      } else {
+        console.error(
+          `[node-edges] ${method} 排队已满（${NON_INTERACTIVE_LEG_PENDING_MAX}）——本次调用未能排队（S2·V1）`,
+        )
+      }
+      return
+    }
+    const entry: QueuedLeg = {
+      pending: [payload],
+      coalesce,
+      attemptsLeft: NON_INTERACTIVE_LEG_ATTEMPTS,
+      inFlight: false,
+      timer: null,
+    }
+    queuedLegs.set(method, entry)
+    void flushNonInteractiveLeg(method, entry)
+  }
+
+  async function flushNonInteractiveLeg(method: string, entry: QueuedLeg): Promise<void> {
+    entry.inFlight = true
+    for (;;) {
+      const payload = entry.pending[0]
+      try {
+        await deps.sendEdge(method, payload)
+        // 只弹出刚送出的这一条：在飞期间到达的新载荷（更新的 badge 计数 / 后续
+        // 事件调用）留在队首，下一轮继续送。
+        entry.pending.shift()
+        if (entry.pending.length > 0) continue
+        queuedLegs.delete(method)
+        entry.inFlight = false
+        return
+      } catch (error) {
+        entry.attemptsLeft -= 1
+        const message = error instanceof Error ? error.message : String(error)
+        if (entry.attemptsLeft > 0 && isRetryableLegError(message)) {
+          await new Promise<void>((resolve) => {
+            entry.timer = setTimeout(resolve, deps.nonInteractiveRetryDelayMs ?? NON_INTERACTIVE_LEG_RETRY_DELAY_MS)
+            entry.timer.unref?.()
+          })
+          entry.timer = null
+          if (queuedLegs.get(method) !== entry) return // 已被清理/替换
+          continue
+        }
+        // 队首载荷没送达就放弃时，**绝不静默丢掉队列里的更新值**（2026-12 审查
+        // major）：状态型腿的队首可能已被更新过（pending[0] !== payload），
+        // 事件型腿后面还排着别的调用——补发一次队首，再记账放弃。
+        if (entry.pending[0] !== payload) {
+          entry.attemptsLeft = Math.max(entry.attemptsLeft, 1)
+          continue
+        }
+        const dropped = entry.pending.length - 1
+        queuedLegs.delete(method)
+        entry.inFlight = false
+        console.error(
+          `[node-edges] ${method} 宿主腿失败（S2·V1 有界排队 ${NON_INTERACTIVE_LEG_ATTEMPTS - entry.attemptsLeft}/${NON_INTERACTIVE_LEG_ATTEMPTS} 次后放弃）：${message}`
+          + (dropped > 0 ? `；另有 ${dropped} 条排队载荷未能投递` : ''),
+        )
+        return
+      }
+    }
+  }
 
   const edges: HostEdges = {
     rendererPush(channel, payload) {
@@ -272,9 +392,18 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
     },
 
     setBadge(count: number): HostSetBadgeResult {
-      // 同步契约无法往返：乐观 applied + 显式注记（badge 裁决已在 core；
-      // Swift 侧 dock 徽标为尽力 UI。M3 复核 ACK 化）。
-      deps.sendNotify('setBadge', { count })
+      // S2·F7 回执面：Swift 侧 setBadge 是 **edge 可应答腿**
+      // （SwiftEdgeHostLegs.swift:328-350 performUI：dockTile 写失败/无窗/
+      // 主线程忙都回 ok:false + 错误串）。HostEdges.setBadge 却是**同步**契约
+      // （shell-core.ts:708/2045 立即读 {applied}）——跨进程应答无法同步取回，
+      // 因此本层只能：① 走 edge + 有界排队（S2·V1），真实失败 loud 落 stderr
+      // （原 notify 连失败答案都没有）；② 返回值保持 {applied:true}——这是
+      // 同步契约限制下的乐观值，**不是伪造的成功回执**：把未知当失败回
+      // {applied:false, reason} 同样不诚实，且会误导 core 的 badge 状态机
+      // （applyBadgePresentation 以 !applied 记失败并降级）。回执面要真正
+      // 收窄必须先改 HostEdges 契约（异步化），属台账 S2·F7 登记项——本批
+      // 不做契约变更，只让失败可观察（loud）+ 注释/台账留证。
+      queueNonInteractiveLeg('setBadge', { count })
       return { applied: true }
     },
 
@@ -329,14 +458,21 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
       // 已退役来源的 click 路由随对象消亡（electron-edges 的 close 腿同语义），
       // 且本次退役经 notify 交给 Swift 宿主：宿主按 sourceId→已投递标识登记表
       // 调 removeDeliveredNotifications 真正清横幅（NotificationDeliveryRegistry）。
-      // 返回值契约是「关闭的原生通知数」——那只在宿主侧可观察，本层同步拿不到
-      // 真实条数，故恒返回 0 = 不虚报（两个调用方 main.ts / sidecar-ctx.ts 都
-      // 直接丢弃返回值）。
+      // S2·F7：返回值不再是恒 0——返回本层**真实驱逐的 click 路由数**
+      // （electron-edges.ts:291-300 同款口径：注册表驱逐数；shell-core.ts:737
+      // 的契约注记也是「返回驱逐数」）。OS 横幅的实际清除条数只在 Swift 宿主
+      // 侧可观察，本层同步拿不到——返回真实可观察量而非把 0 假称成功；Swift
+      // 宿主清除失败在该侧 loud（MainWindowController.swift:526-543）。
+      // 两个调用方（main.ts / sidecar-ctx.ts）当前丢弃返回值，故无行为变更。
+      let retired = 0
       for (const [id, route] of clickRoutes) {
-        if (retiredSourceIds.has(route.token.sourceId)) clickRoutes.delete(id)
+        if (retiredSourceIds.has(route.token.sourceId)) {
+          clickRoutes.delete(id)
+          retired += 1
+        }
       }
       deps.sendNotify('retireNotifications', { sourceIds: [...retiredSourceIds] })
-      return 0
+      return retired
     },
 
     async openExternal(url: string) {
@@ -351,7 +487,9 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
     },
 
     showItemInFolder(p: string) {
-      deps.sendNotify('showItemInFolder', { path: p })
+      // S2·V1：Finder 揭示腿同样经 edge + 有界排队（原 notify 无回执——Swift
+      // 主线程忙时失败只落在 Swift stderr，node 侧完全静默）。
+      queueNonInteractiveLeg('showItemInFolder', { path: p })
     },
 
     async launchApp(appId: string, path: string): Promise<boolean> {
@@ -370,9 +508,10 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
     },
 
     showError(title: string, detail: string) {
-      deps.sendEdge('showError', { title, detail }).catch((err: unknown) => {
-        console.error('[node-edges] showError edge 失败：' + String(err))
-      })
+      // S2·V1/V2：错误框是深链/更新失败路径的可见面——原实现只把 leg 失败
+      // catch 成一行 node stderr（主线程忙时错误框根本不弹）。改经有界排队：
+      // 模态在屏 = 主线程忙 → 先等，窗口内仍未空出则以明确文案 loud 放弃。
+      queueNonInteractiveLeg('showError', { title, detail })
     },
 
     async showMessage(opts: HostMessageOptions): Promise<number> {
