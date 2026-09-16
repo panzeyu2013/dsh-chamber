@@ -58,7 +58,11 @@ export function releaseManifest(version) {
   return {
     version,
     electron: { artifacts: electron, feed: electronMacFeed(version) },
-    native: { artifacts: native, feed: null },
+    // 原生壳的更新源是 Sparkle appcast（S-01 / 裁决 D-1 选 B）：release 腿在 EdDSA
+    // 私钥存在时生成 appcast-swift.xml 并随 release 上传；它不是与产物同名的文件，
+    // 故不进 artifacts（--check-dir 也不强制它存在——私钥缺失时该构建只是没有安装
+    // 腿，仍照常出包）。
+    native: { artifacts: native, feed: 'appcast-swift.xml' },
   }
 }
 

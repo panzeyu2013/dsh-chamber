@@ -915,19 +915,62 @@ jobs:
           if [[ "$DRY_RUN" != "true" ]]; then
             ARTIFACT_ARGS=(--no-zip --no-dmg)
           fi
+          # 原生壳的应用内更新（S-01 / 裁决 D-1 选 B）：公钥存在才把 feed 与公钥注入
+          # Info.plist（壳据此点亮「检查更新…」并向 sidecar 声明安装腿）；缺失 = 该
+          # 构建的自动更新保持关闭（照常出包，只是没有安装腿）。
+          SPARKLE_ARGS=()
+          if [[ -n "${SPARKLE_PUBLIC_ED_KEY:-}" ]]; then
+            SPARKLE_ARGS=(--sparkle-feed
+              "https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/appcast-swift.xml"
+              --sparkle-public-key "$SPARKLE_PUBLIC_ED_KEY")
+            echo "Sparkle auto-update wired (public key present)"
+          else
+            echo "::warning::SPARKLE_PUBLIC_ED_KEY absent — native auto-update stays disabled in this build"
+          fi
           pnpm run build:swift-app --out macos/release \
             --app-name dsh-chamber-native \
             --artifact-basename "dsh-chamber-native-${VERSION}-macos-arm64" \
-            --identity "$IDENTITY" ${ARTIFACT_ARGS[@]+"${ARTIFACT_ARGS[@]}"}
+            --identity "$IDENTITY" ${SPARKLE_ARGS[@]+"${SPARKLE_ARGS[@]}"} ${ARTIFACT_ARGS[@]+"${ARTIFACT_ARGS[@]}"}
         env:
           VERSION: ${{ needs.create-release.outputs.version }}
           DRY_RUN: ${{ github.event.inputs.dry_run == 'true' && 'true' || 'false' }}
+          SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Generate + sign the Sparkle appcast (release only)
+        # S-01 / 裁决 D-1 选 B：原生壳的更新源是随 release 上传的 appcast-swift.xml，
+        # 由 Sparkle 的 generate_appcast 用 EdDSA 私钥签名（与 Developer ID 无关的第三
+        # 把钥匙，客户端据此校验更新包来源）。私钥缺失 → loud 跳过（照常发布，只是原生
+        # 壳看不到这次更新），绝不发布未签名 appcast。
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          VERSION: ${{ needs.create-release.outputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ZIP="macos/release/dsh-chamber-native-${VERSION}-macos-arm64.zip"
+          if [[ -z "${SPARKLE_PRIVATE_KEY:-}" ]]; then
+            echo "::warning::SPARKLE_PRIVATE_KEY absent — appcast-swift.xml not generated; the native shell will not see this release through Sparkle"
+            exit 0
+          fi
+          test -f "$ZIP" || { echo "::error::missing $ZIP (the appcast signs the release zip)"; exit 1; }
+          curl -sSL -o /tmp/sparkle.tar.xz "https://github.com/sparkle-project/Sparkle/releases/download/2.10.0/Sparkle-2.10.0.tar.xz"
+          rm -rf /tmp/sparkle-bin && mkdir -p /tmp/sparkle-bin && tar -xJf /tmp/sparkle.tar.xz -C /tmp/sparkle-bin
+          rm -rf /tmp/appcast-in /tmp/appcast-out && mkdir -p /tmp/appcast-in /tmp/appcast-out
+          cp "$ZIP" /tmp/appcast-in/
+          printf '%s' "$SPARKLE_PRIVATE_KEY" > /tmp/ed-key.txt
+          /tmp/sparkle-bin/bin/generate_appcast --ed-key-file /tmp/ed-key.txt -o /tmp/appcast-out /tmp/appcast-in
+          rm -f /tmp/ed-key.txt
+          test -f /tmp/appcast-out/appcast.xml || { echo "::error::generate_appcast produced no appcast"; exit 1; }
+          cp /tmp/appcast-out/appcast.xml macos/release/appcast-swift.xml
+          gh release upload "v${VERSION}" macos/release/appcast-swift.xml --clobber
+          echo "appcast-swift.xml signed and uploaded"
 
       - name: Notarize + staple native app and dmg (release only)
         if: ${{ github.event.inputs.dry_run != 'true' }}

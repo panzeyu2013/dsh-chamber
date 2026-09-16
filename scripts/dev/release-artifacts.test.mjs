@@ -43,7 +43,8 @@ test('feed 归属唯一：只有 Electron 腿产出 yml', () => {
   assert.equal(electronMacFeed('0.3.0-beta.2'), 'beta-mac.yml')
   const manifest = releaseManifest('0.3.0-beta.2')
   assert.equal(manifest.electron.feed, 'beta-mac.yml')
-  assert.equal(manifest.native.feed, null, 'Swift v1 blocked-available 无 appcast/feed')
+  assert.equal(manifest.native.feed, 'appcast-swift.xml',
+    '原生壳更新源 = Sparkle appcast（S-01 / 裁决 D-1 选 B）')
   for (const name of manifest.native.artifacts) {
     assert.doesNotMatch(name, /\.ya?ml$/)
   }
@@ -58,12 +59,17 @@ test('release.yml 的 Swift 命名参数与本清单一致', () => {
   for (const name of native) {
     assert.ok(name.startsWith('dsh-chamber-native-1.2.3-macos-arm64'), name)
   }
-  // Swift 腿不得生成/上传更新 feed（Electron 独占 latest-mac.yml/beta-mac.yml）。
+  // Electron/Squirrel 的 feed 仍归 Electron 腿；Swift 腿的更新源是 Sparkle appcast
+  // （S-01 / 裁决 D-1 选 B），必须由 EdDSA 私钥签名，且 dry-run 不进入该步。
   const swiftJob = workflow.slice(
     workflow.indexOf('\n  build-swift:'),
     workflow.indexOf('\n  finalize-release:'),
   )
-  assert.doesNotMatch(swiftJob, /latest-mac\.yml|beta-mac\.yml|appcast/)
+  assert.doesNotMatch(swiftJob, /latest-mac\.yml|beta-mac\.yml/, 'Squirrel feed 不得出现在 Swift 腿')
+  assert.match(swiftJob, /appcast-swift\.xml/, '原生壳更新源 = appcast-swift.xml')
+  assert.match(swiftJob, /generate_appcast/, 'appcast 必须由 Sparkle 的 generate_appcast 生成')
+  assert.match(swiftJob, /SPARKLE_PRIVATE_KEY/, 'appcast 必须用 EdDSA 私钥签名')
+  assert.match(swiftJob, /dry_run != 'true'/, '签名/上传 appcast 只在正式发布腿执行')
 })
 
 test('CLI 输出 JSON 清单', () => {
