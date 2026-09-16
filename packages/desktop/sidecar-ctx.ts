@@ -174,19 +174,19 @@ import {
 import { appendAuditEvent, configureAuditLog, type AuditEvent } from './audit-log.ts'
 import { createSshPluginJournal } from './ssh-plugin-journal.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
+// 探针失败诊断单源（与 Electron 装配 main.ts 共用；见模块头注释）。
+import { metadataProbeFailureMessage, probeFailureMessage } from './runtime-probe-detail.ts'
 import { createHeadlessUpdateController } from './update-headless.ts'
 import type { ApplyNowGateInput } from './apply-now-gate.ts'
 import { shouldSkipDiskRefresh } from './disk-evidence-gate.ts'
-import { call } from './control-plane-module.ts'
+import { CHAMBER_HOST_PACKAGES, call } from './control-plane-module.ts'
+import { packageDirName } from './host-package-dirs.ts'
 import type { ChamberHostPackageSeed, ExecFn, RemoteSpec, StatusFn } from './plugin-sync.ts'
 import type { ChamberHostPackageDescriptor } from './control-plane-module.ts'
 import {
-  ARCHIVE_CLEANUP_INSERT_ID,
   ARCHIVE_CLEANUP_PACKAGE_NAME,
-  CLIENT_GRAPH_INSERT_ID,
   CLIENT_GRAPH_PACKAGE_NAME,
   ExactOwnershipRegistry,
-  GIT_WORKTREE_INSERT_ID,
   GIT_WORKTREE_PACKAGE_NAME,
   ReadyPhaseEdges,
   builtChamberHostPackageSeeds,
@@ -720,35 +720,44 @@ export async function buildHeadlessCtx(
     return path.join(fallbackRepoRoot, 'packages', packageDir)
   }
   const hostDirs = inputs.hostPackageDirs ?? { graph: null, git: null, archive: null }
-  const moduleASourceDir = hostPackageSourceDir('dsh-chamber-seed-client-graph', hostDirs.graph)
-  const gitWorktreeHostSourceDir = hostPackageSourceDir('dsh-chamber-seed-git-worktree', hostDirs.git)
-  const archiveCleanupHostSourceDir = hostPackageSourceDir('dsh-chamber-seed-archive-cleanup', hostDirs.archive)
-  // Host 包种子数组（main 1636-1655 同参：insertId/packageName/sourceDir/label
-  // 常量同源——自动 seed 路径（ready 边缘/reseed）与手动 seed 注册体共用）。
-  // 远端（SSH）seed 表：注册表里标 localOnly 的 open-in 行**故意缺席**——它
-  // 是本地实例形态专属域，绝不该被上传到别人的机器（main.ts 的
-  // chamberHostSourceDirs 同款注记；本地播种走 --host-open-in-dir → 控制面
-  // hostOpenInPackageSourceDir）。
-  const chamberHostPackageSeeds: ChamberHostPackageSeed[] = [
-    {
-      insertId: CLIENT_GRAPH_INSERT_ID,
-      packageName: CLIENT_GRAPH_PACKAGE_NAME,
-      sourceDir: moduleASourceDir,
-      label: 'host-graph',
-    },
-    {
-      insertId: GIT_WORKTREE_INSERT_ID,
-      packageName: GIT_WORKTREE_PACKAGE_NAME,
-      sourceDir: gitWorktreeHostSourceDir,
-      label: 'git-worktree',
-    },
-    {
-      insertId: ARCHIVE_CLEANUP_INSERT_ID,
-      packageName: ARCHIVE_CLEANUP_PACKAGE_NAME,
-      sourceDir: archiveCleanupHostSourceDir,
-      label: 'archive-cleanup',
-    },
-  ]
+  // 本 flavor 的源目录解析：显式 CLI 目录（--host-*-dir）优先，缺省 = dev 布局
+  // 向上检索（打包布局由 Swift 传显式目录）。**键 = 注册表包名**，单一来源 =
+  // control-plane 的 CHAMBER_HOST_PACKAGES（与 main.ts 的 chamberHostSourceDirs
+  // 同构）——2026-12 审查：原先这里手抄三行，注册表新增一行会被静默漏掉。
+  // 包名 → 仓库目录名（去 scope）的单源纯函数（有单测）；映射表仍只登记需要
+  // 显式 CLI 目录的三个包——注册表新增非 localOnly 行若漏登记，下面的构造会
+  // loud 警告，绝不静默少 seed 一个域（2026-12 验证轮收口）。
+  const hostPackageSourceDirs: Record<string, string> = {
+    [CLIENT_GRAPH_PACKAGE_NAME]: hostPackageSourceDir(packageDirName(CLIENT_GRAPH_PACKAGE_NAME), hostDirs.graph),
+    [GIT_WORKTREE_PACKAGE_NAME]: hostPackageSourceDir(packageDirName(GIT_WORKTREE_PACKAGE_NAME), hostDirs.git),
+    [ARCHIVE_CLEANUP_PACKAGE_NAME]: hostPackageSourceDir(packageDirName(ARCHIVE_CLEANUP_PACKAGE_NAME), hostDirs.archive),
+  }
+  // Host 包种子数组：注册表驱动（main 1636-1655 同形——insertId/packageName/
+  // sourceDir/label 全部来自 descriptor）。localOnly 行（open-in）保留在数组里但
+  // sourceDir 恒为空——「哪一行可以去别的机器」只由
+  // portableChamberHostPackageSeeds（下方 portableHostSeeds）判，它绝不会把该行
+  // 交给远端 seed、gateway 上传或控制面注入；本地播种走 --host-open-in-dir →
+  // 控制面 hostOpenInPackageSourceDir（design 20 §6）。
+  const chamberHostPackageSeeds: ChamberHostPackageSeed[] = CHAMBER_HOST_PACKAGES.map(descriptor => {
+    const sourceDir = descriptor.localOnly === true
+      ? ''
+      : (hostPackageSourceDirs[descriptor.insert.name] ?? '')
+    if (descriptor.localOnly !== true && sourceDir === '') {
+      // 注册表新增一行而本 flavor 没给源目录 = 该域在远端 seed 与 gateway 上传
+      // 都会被静默跳过（界面无提示）。Electron 侧同款判据是 loud 的，这里对齐。
+      console.warn(
+        `[sidecar] chamber host 包 ${descriptor.insert.name} (${descriptor.insert.id}) 在注册表里非 localOnly 但本 flavor 无源目录映射：`
+        + '远端 seed 与 gateway 上传都会跳过该域（需在 hostPackageSourceDirs 登记）',
+      )
+    }
+    return {
+      insertId: descriptor.insert.id,
+      packageName: descriptor.insert.name,
+      sourceDir,
+      label: descriptor.insert.id,
+      ...(descriptor.localOnly === true ? { localOnly: true as const } : {}),
+    }
+  })
 
   // 可移植（非 localOnly）seed 列表：本数组按构造已排除 open-in localOnly 行，
   // 但「哪一行可以去别的机器」的**规则**仍取自单一实现（design 20 §6；main.ts
@@ -876,11 +885,24 @@ export async function buildHeadlessCtx(
   // app.isPackaged 分支 = sidecar 源目录解析（上方 hostPackageSourceDir 同值）；
   // ready 注册自动 sync 与手动 gateway_plugin_sync re-entry 共用同一执行路径）。
   const localChamberHostPackageSources = (): Array<{ name: string; packageJsonPath: string; distIndexPath: string }> => {
-    return [
-      { name: CLIENT_GRAPH_PACKAGE_NAME, packageJsonPath: path.join(moduleASourceDir, 'package.json'), distIndexPath: path.join(moduleASourceDir, 'dist', 'index.js') },
-      { name: GIT_WORKTREE_PACKAGE_NAME, packageJsonPath: path.join(gitWorktreeHostSourceDir, 'package.json'), distIndexPath: path.join(gitWorktreeHostSourceDir, 'dist', 'index.js') },
-      { name: ARCHIVE_CLEANUP_PACKAGE_NAME, packageJsonPath: path.join(archiveCleanupHostSourceDir, 'package.json'), distIndexPath: path.join(archiveCleanupHostSourceDir, 'dist', 'index.js') },
-    ]
+    // 注册表驱动 + 可移植驱动（与 main.ts 的 localChamberHostPackageSources 同
+    // 语义）：只遍历 portableHostSeeds，本地专属行绝不进 gateway 上传；源目录仍
+    // 来自上方唯一的注册表映射。缺目录 = 响亮跳过（绝不静默少上传一个域）。
+    return portableHostSeeds.flatMap(seed => {
+      const dir = hostPackageSourceDirs[seed.packageName]
+      if (dir === undefined || dir === '') {
+        console.warn(
+          `[sidecar] chamber host 包 ${seed.packageName} (${seed.insertId}) 缺源目录：`
+          + '它不会被上传到 gateway seed 缓存，gateway 形态实例的对应宿主域会 404 且界面无提示',
+        )
+        return []
+      }
+      return [{
+        name: seed.packageName,
+        packageJsonPath: path.join(dir, 'package.json'),
+        distIndexPath: path.join(dir, 'dist', 'index.js'),
+      }]
+    })
   }
   const syncGatewayChamberPluginsFor = async (
     id: string,
@@ -1681,7 +1703,7 @@ export async function buildHeadlessCtx(
     if (!blocked && (outcome.status === 'snapshot-failed' || (planeRef.current?.localProcessAlive ?? false) === false)) {
       try {
         const resumed = await startAndProbeCurrent(runtimeOperationAbort?.signal)
-        if (!probesPassed(resumed.probes)) throw new Error('原运行时兼容性探针失败')
+        if (!probesPassed(resumed.probes)) throw new Error(probeFailureMessage('原运行时兼容性探针失败', resumed.probes))
       } catch (resumeError) {
         await planeRef.current?.stopLocal().catch(() => undefined)
         blocked = true
@@ -1740,16 +1762,7 @@ export async function buildHeadlessCtx(
 
   const metadataProbeError = (
     probes: Awaited<ReturnType<typeof runRuntimeActivationProbes>>,
-  ): string => {
-    const failed = probes.filter(probe => !probe.ok).map(probe => (
-      `${probe.name}: ${probe.error ?? '探针未通过'}`
-    ))
-    return sanitizeErrorText(
-      failed.length === 0
-        ? '内建 dsh 运行时探针未返回完整成功结果'
-        : `内建 dsh 运行时探针失败：${failed.join('; ')}`,
-    )
-  }
+  ): string => metadataProbeFailureMessage(probes)
 
   /** Execute inside runtimeOperation + runtimeWriterFence（main 2820-2926 同源
    * ——公共门保持关闭直到精确 bundled 树过全量探针且 durable recovery marker
@@ -1877,7 +1890,7 @@ export async function buildHeadlessCtx(
       }
       const current = await startAndProbeCurrent(signal)
       if (current.active.source !== 'env' || !probesPassed(current.probes)) {
-        throw new Error('env runtime compatibility probes failed')
+        throw new Error(probeFailureMessage('env runtime compatibility probes failed', current.probes))
       }
       setRuntimeGate(false)
       await refreshRuntimeEvidence({
@@ -2012,7 +2025,7 @@ export async function buildHeadlessCtx(
             return null
           }
           const current = await startAndProbeCurrent(runtimeOperationAbort.signal)
-          if (!probesPassed(current.probes)) throw new Error('runtime compatibility probes failed')
+          if (!probesPassed(current.probes)) throw new Error(probeFailureMessage('runtime compatibility probes failed', current.probes))
           setRuntimeGate(false)
           await refreshRuntimeEvidence({
             phase: 'idle', error: null, runtimeBlocked: false, runtimeBlockedReason: null,
@@ -2124,7 +2137,7 @@ export async function buildHeadlessCtx(
 
       try {
         const current = await startAndProbeCurrent(runtimeOperationAbort.signal)
-        if (!probesPassed(current.probes)) throw new Error('runtime compatibility probes failed')
+        if (!probesPassed(current.probes)) throw new Error(probeFailureMessage('runtime compatibility probes failed', current.probes))
         if (current.active.source === 'user' && current.active.version !== null) {
           noteBoot(runtimeBaseDir, current.active.version)
           promoteDueCandidates(runtimeBaseDir)
@@ -2598,6 +2611,13 @@ export async function buildHeadlessCtx(
     // 回撤叶不提供（v1 blocked-available 从不武装 ⇒ ctx 可选字段缺省）。
     builtinDshWorkspacePath: builtinDshWorkspace,
     pinnedRuntimeLockfilePath: () => {
+      // 装配形态：--dsh-path = <sidecar>/vendor/dsh（build-sidecar 随包拷贝
+      // package.json + pnpm-lock.yaml + pnpm-workspace.yaml），与 Electron 的
+      // <resources|pkgDir>/vendor/dsh/pnpm-lock.yaml 是同一份锚。
+      // dev 形态：runbook 把 POC_DSH_PATH 指向 packages/desktop/vendor/dsh（同一
+      // 锚）；若有人把它指向源码线 ref-dsh，该树的锁文件带 opt-in 段会被 F 信任
+      // 判据拒绝 ⇒ familyNames=null ⇒ 官方 scope 安装一律拒（保守降级、绝不按
+      // 另一条线误判），这是有意的 fail-closed 行为而非路径错误。
       if (builtinDshWorkspace === null) return null
       const candidate = path.join(builtinDshWorkspace, 'pnpm-lock.yaml')
       return existsSync(candidate) ? candidate : null

@@ -98,6 +98,8 @@ import {
   pruneRuntimeStore,
 } from '@dsh-chamber/dsh-runtime';
 import { sanitizeErrorText } from './sanitize-error.ts';
+// 探针失败诊断单源（Electron 与 Swift 装配共用；见模块头注释）。
+import { metadataProbeFailureMessage, probeFailureMessage } from './runtime-probe-detail.ts';
 // W-10 S11：evaluateApplyNowGate 随 APPLY_NOW 注册体迁入 shell-core（K 组段
 // 直接 import apply-now-gate.ts 纯门）；本文件保留门输入构造叶 readApplyNowGateInput
 // （装配侧宿主读——经 ctx 注入 core），仅剩类型 import。
@@ -2707,25 +2709,10 @@ if (!gotTheLock) {
     const probesPassed = (probes: Awaited<ReturnType<typeof runRuntimeActivationProbes>>) =>
       probes.length > 0 && probes.every(probe => probe.ok);
 
-    /**
-     * Name the probes that failed and why ('' when none did) — shared by every
-     * activation throw below and by metadataProbeError. The bare "probes failed"
-     * string those throws used was the ONLY diagnostic on the activation path:
-     * the 2026-09 acceptance round met a quarantined fresh install whose real
-     * cause — a mistyped `commands/execute` wire argument answered with
-     * `gateway/arguments-invalid` — was invisible in every log and surface, and
-     * had been since the 0.1.3-alpha.1 upgrade. `ProbeResult.error` is sanitized
-     * in dsh-runtime (`sanitizeErrorText` + quoted-path strip, 2 000-char cap),
-     * so attaching it here leaks nothing new; the text stays bounded for the UI.
-     */
-    const probeFailureDetail = (
-      probes: Awaited<ReturnType<typeof runRuntimeActivationProbes>>,
-    ): string => probes
-      .filter(probe => !probe.ok)
-      .map(probe => `${probe.name}: ${probe.error ?? '探针未通过'}`)
-      .join('; ')
-      .slice(0, 600);
-
+    // 探针失败诊断（`probeFailureDetail` 的 600 字符清单 + 前缀文案）自 W-10 起
+    // 抽到 electron-free 的 runtime-probe-detail.ts，与 Swift 装配（sidecar-ctx）
+    // 共用同一实现——原先该诊断只存在于本闭包，Swift 侧只 throw 常量串，同一失败
+    // 在两种 flavor 上的可诊断性不同（2026-09 验收轮的唯一可见证据链）。
     const startAndProbeWorkspace = async (workspace: string, signal?: AbortSignal) => {
       if (quitRequested) throw new Error('application is quitting');
       signal?.throwIfAborted();
@@ -2933,7 +2920,7 @@ if (!gotTheLock) {
       if (!blocked && (outcome.status === 'snapshot-failed' || !cp.localProcessAlive)) {
         try {
           const resumed = await startAndProbeCurrent(runtimeOperationAbort?.signal);
-          if (!probesPassed(resumed.probes)) throw new Error(`原运行时兼容性探针失败 — ${probeFailureDetail(resumed.probes) || 'no probe results'}`);
+          if (!probesPassed(resumed.probes)) throw new Error(probeFailureMessage('原运行时兼容性探针失败', resumed.probes));
         } catch (resumeError) {
           await cp.stopLocal().catch(() => undefined);
           blocked = true;
@@ -2997,12 +2984,7 @@ if (!gotTheLock) {
     const metadataProbeError = (
       probes: Awaited<ReturnType<typeof runRuntimeActivationProbes>>,
     ): string => {
-      const detail = probeFailureDetail(probes);
-      return sanitizeErrorText(
-        detail === ''
-          ? '内建 dsh 运行时探针未返回完整成功结果'
-          : `内建 dsh 运行时探针失败：${detail}`,
-      );
+      return metadataProbeFailureMessage(probes);
     };
 
     /** Execute inside runtimeOperation + runtimeWriterFence. The public gate
@@ -3129,7 +3111,7 @@ if (!gotTheLock) {
         }
         const current = await startAndProbeCurrent(signal);
         if (current.active.source !== 'env' || !probesPassed(current.probes)) {
-          throw new Error(`env runtime compatibility probes failed — ${probeFailureDetail(current.probes) || 'no probe results'}`);
+          throw new Error(probeFailureMessage('env runtime compatibility probes failed', current.probes));
         }
         setRuntimeGate(false);
         await refreshRuntimeEvidence({
@@ -3266,7 +3248,7 @@ if (!gotTheLock) {
               return null;
             }
             const current = await startAndProbeCurrent(runtimeOperationAbort.signal);
-            if (!probesPassed(current.probes)) throw new Error(`runtime compatibility probes failed — ${probeFailureDetail(current.probes) || 'no probe results'}`);
+            if (!probesPassed(current.probes)) throw new Error(probeFailureMessage('runtime compatibility probes failed', current.probes));
             setRuntimeGate(false);
             await refreshRuntimeEvidence({
               phase: 'idle', error: null, runtimeBlocked: false, runtimeBlockedReason: null,
@@ -3386,7 +3368,7 @@ if (!gotTheLock) {
 
         try {
           const current = await startAndProbeCurrent(runtimeOperationAbort.signal);
-          if (!probesPassed(current.probes)) throw new Error(`runtime compatibility probes failed — ${probeFailureDetail(current.probes) || 'no probe results'}`);
+          if (!probesPassed(current.probes)) throw new Error(probeFailureMessage('runtime compatibility probes failed', current.probes));
           if (current.active.source === 'user' && current.active.version !== null) {
             noteBoot(runtimeBaseDir, current.active.version);
             promoteDueCandidates(runtimeBaseDir);
