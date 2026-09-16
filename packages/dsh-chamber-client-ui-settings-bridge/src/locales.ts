@@ -325,7 +325,7 @@ export const en: Record<keyof typeof zh, string> = {
   updateAvailable: 'New version {version} available',
   updateAvailableBeta: 'New version {version} available (beta channel)',
   updateAvailableBlocked: 'New version {version} available — automatic install unavailable (missing signature); install manually',
-  updateAvailableBlockedBeta: 'New version {version} available (beta channel) — automatic install unavailable; install manually',
+  updateAvailableBlockedBeta: 'New version {version} available (beta channel) — automatic install unavailable (missing signature); install manually',
   // Native-shell (macOS Swift flavor) blocked-available line: the block is the
   // shell's missing auto-install leg, not signing (design 25 §7).
   updateAvailableBlockedNativeShell: 'New version {version} available — the native shell cannot auto-install; install manually from the download page',
