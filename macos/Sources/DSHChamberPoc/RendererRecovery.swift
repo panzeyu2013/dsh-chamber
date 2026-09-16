@@ -122,12 +122,13 @@ public final class DeepLinkRelay {
         buffer.enqueue(url)
     }
 
-    /// sidecar 重启（W-15 Supervisor 换进程）→ 复位就绪位并清空缓冲：
-    /// 新进程尚未收到 ready 帧，此时到达的深链必须重新缓冲，否则会被
-    /// 直通发送给一个还没装配的 sidecar 并丢弃（2026-09 三审 #9）。
+    /// sidecar 重启（W-15 Supervisor 换进程）→ 只复位就绪位，**保留**缓冲：
+    /// 新进程尚未收到 ready 帧，复位后到达的深链必须重新缓冲（2026-09 三审
+    /// #9）；同时重启前已缓冲、尚未补发的 URL 不再被清空丢弃，下一个 ready
+    /// 帧按 FIFO 一并补发（2026-12 双端逐函数核对 F2：原实现 drainAll 复位即
+    /// 丢，droppedCount 也不计，用户点开的深链静默消失）。
     public func reset() {
         isReady = false
-        _ = buffer.drainAll()
     }
 
     /// sidecar 就绪：置位并按 FIFO 补发缓冲。幂等（重复调用不重发）。

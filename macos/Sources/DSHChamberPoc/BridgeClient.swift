@@ -579,7 +579,12 @@ public final class BridgeClient {
     /// 单条协议行 → 帧分发。超长/非法 → 打印错误并丢弃该帧，绝不静默继续。
     private func handleIncomingLine(_ line: String) {
         guard !FrameCodec.isLineTooLong(line) else {
+            // 2026-12 双端逐函数核对 F4：超长行连 id 都解析不出（响应被截断），
+            // 若它正对应某个未决请求，该 continuation 会永久悬挂（Electron 侧
+            // 无长度上限）。fail-closed：loud 上报并作废全部未决请求，绝不静默
+            // 留一个永不 settle 的 Promise。
             log("收到超长行（> \(FrameCodec.maxFrameBytes) 字节），丢弃该帧：\(Self.preview(line))")
+            failAllPending(reason: "sidecar 响应超过 \(FrameCodec.maxFrameBytes) 字节上限，无法与请求配对")
             return
         }
         guard let frame = FrameCodec.decodeLine(line) else {

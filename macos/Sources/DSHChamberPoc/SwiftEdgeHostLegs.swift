@@ -137,10 +137,14 @@ public final class SwiftEdgeHostLegs {
     /// keep-awake activity token（ProcessInfo 防休眠；nil = 未激活）。
     private var keepAwakeActivity: NSObjectProtocol?
 
+    /// 2026-12 双端逐函数核对 D3/F6：只防【系统】休眠，不阻止显示器关闭 ——
+    /// Electron 用 powerSaveBlocker prevent-app-suspension（main.ts），
+    /// design 14 D5 亦写明「仅防应用挂起，不阻止显示器关闭」。原实现带
+    /// .idleDisplaySleepDisabled（屏幕永不熄灭），与 Electron 可感不一致。
     private func updateKeepAwake(enabled: Bool) {
         if enabled, keepAwakeActivity == nil {
             keepAwakeActivity = ProcessInfo.processInfo.beginActivity(
-                options: [.idleDisplaySleepDisabled, .idleSystemSleepDisabled],
+                options: [.idleSystemSleepDisabled],
                 reason: "dsh-chamber keep-awake (edge setKeepAwake)"
             )
         } else if !enabled, let token = keepAwakeActivity {
@@ -152,6 +156,22 @@ public final class SwiftEdgeHostLegs {
     deinit {
         if let token = keepAwakeActivity {
             ProcessInfo.processInfo.endActivity(token)
+        }
+    }
+
+    /// 退出清理（2026-12 双端逐函数核对 D13）：显式收回 keep-awake。窗口可能
+    /// 已关闭，故不经 A 桥的 no-window 守卫路径（respond 会被挡掉）。
+    public func clearKeepAwake() {
+        updateKeepAwake(enabled: false)
+    }
+
+    /// 退出清理（同 D13）：清空 Dock 角标（Electron will-quit 同序）。
+    public func clearBadge() {
+        let run: () -> Void = { NSApp.dockTile.badgeLabel = nil }
+        if Thread.isMainThread {
+            run()
+        } else {
+            DispatchQueue.main.sync(execute: run)
         }
     }
 
@@ -573,10 +593,15 @@ public final class SwiftEdgeHostLegs {
         case "info", "information": alert.alertStyle = .informational
         default: alert.alertStyle = .warning
         }
-        alert.messageText = EdgePayload.string(dict["title"]) ?? "dsh-chamber"
+        let title = EdgePayload.string(dict["title"]) ?? "dsh-chamber"
+        alert.messageText = title
         let message = EdgePayload.string(dict["message"]) ?? ""
         let detail = EdgePayload.string(dict["detail"]) ?? ""
-        alert.informativeText = [message, detail].filter { !$0.isEmpty }.joined(separator: "\n")
+        // 2026-12 双端逐函数核对 U1：调用点把 title 与 message 传同一文案
+        // （shell-core.ts 的两处确认框都如此），而 NSAlert 没有独立窗口标题，
+        // 照搬会把正文显示两遍。相等时只保留一份。
+        let body = message == title ? [detail] : [message, detail]
+        alert.informativeText = body.filter { !$0.isEmpty }.joined(separator: "\n")
         var buttons: [String] = []
         if case .array(let items)? = dict["buttons"] {
             for item in items {

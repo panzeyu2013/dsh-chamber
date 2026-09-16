@@ -233,8 +233,13 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // （design 25 §5 E6）。didWake → __host.systemResume {timestamp}；
         // didBecomeActive → __host.mainWindowShown（held lastResume 补发点）。
         // 幂等：core 无 held/无待办时均为 no-op。
-        center.addObserver(self, selector: #selector(hostWakeUp(_:)),
-                           name: NSWorkspace.didWakeNotification, object: nil)
+        // 2026-12 双端逐函数核对 D1：NSWorkspace 的通知必须注册在它自己的
+        // 通知中心上（SDK NSWorkspace.h 明示），注册到 NotificationCenter.default
+        // 永不触发——__host.systemResume 因此从未发出，core 的立即重连/held
+        // 补发（shell-core.ts systemResume 路径）在原生 flavor 全失效。
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self, selector: #selector(hostWakeUp(_:)),
+            name: NSWorkspace.didWakeNotification, object: nil)
         center.addObserver(self, selector: #selector(appDidBecomeActive(_:)),
                            name: NSApplication.didBecomeActiveNotification, object: nil)
     }

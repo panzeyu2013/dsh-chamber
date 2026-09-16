@@ -65,12 +65,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         } else {
             print("[poc] 无 bundle id（swift run dev 态）——跳过通知授权接线")
         }
-        let env = ProcessInfo.processInfo.environment
-
         // 打包态判定 + 资源根（PackagedLayout 纯函数解析，见 ChamberResources）。
         let resourcesDir = Bundle.main.resourceURL?.path
         let executablePath = Bundle.main.executableURL?.path ?? CommandLine.arguments.first ?? ""
         let isPackaged = PackagedLayout.isAppBundle(executablePath: executablePath)
+        // 2026-12 双端逐函数核对 F13：装配态忽略 POC_* 覆盖。它们只服务 dev/POC；
+        // 若在打包 .app 里生效，环境变量即可把壳重定向到任意 node、sidecar 脚本、
+        // web dist、userData 或控制面 origin —— 产品边界破口。dev（swift run /
+        // 非 .app）路径不受影响。
+        let env = isPackaged
+            ? ProcessInfo.processInfo.environment.filter { !$0.key.hasPrefix("POC_") }
+            : ProcessInfo.processInfo.environment
         let fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
         let isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
         if isPackaged { print("[poc] 装配态（.app）——按 Contents/Resources 解析缺省路径") }
@@ -493,6 +498,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // S7：A 桥 app_quitting 门——清理开始后 late invoke 不得再向 shutdown
         // 注入传输/运行时工作（renderer-trust.ts createTrustedIpc 对偶）。
         mainWindowController?.noteQuitting()
+        // D13/V5（2026-12 双端逐函数核对）：退出清理显式收回 keep-awake 与 Dock
+        // 角标（Electron will-quit 同序）。窗口可能已关闭，故走不经 no-window
+        // 守卫的直接清理入口，而不是 A 桥 respond（会被守卫挡掉）。
+        bridge?.edgeHostLegs?.clearKeepAwake()
+        bridge?.edgeHostLegs?.clearBadge()
         guard supervisor != nil else { return false }
         guard !quitCleanupStarted else { return true }
         quitCleanupStarted = true

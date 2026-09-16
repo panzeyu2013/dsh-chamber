@@ -188,4 +188,21 @@ final class HostInboundMethodTests: XCTestCase {
         XCTAssertEqual(sent, ["a", "b", "c"], "重启 ready 后补发")
         XCTAssertEqual(relay.droppedCount, 0)
     }
+
+    /// 2026-12 双端逐函数核对 F2 回归：重启窗口里「已缓冲未补发」的深链
+    /// 不得被 reset 丢弃（原实现 drainAll 直接清空且不计 droppedCount）。
+    func testDeepLinkRelayResetKeepsUnsentBufferAcrossRestart() {
+        var sent: [String] = []
+        let relay = DeepLinkRelay { sent.append($0) }
+        relay.enqueue("cold-start")
+        XCTAssertEqual(relay.bufferedCount, 1)
+
+        relay.reset()                       // sidecar 换进程，新进程尚未 ready
+        relay.enqueue("during-restart")     // 重启窗口内到达 → 继续缓冲
+
+        XCTAssertEqual(relay.bufferedCount, 2, "重启不得丢弃已缓冲的深链")
+        XCTAssertEqual(relay.markReady(), 2)
+        XCTAssertEqual(sent, ["cold-start", "during-restart"], "FIFO 补发顺序不变")
+        XCTAssertEqual(relay.droppedCount, 0)
+    }
 }
