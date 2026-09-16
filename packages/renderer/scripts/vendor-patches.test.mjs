@@ -22,6 +22,7 @@ const esbuild = await import(
   pathToFileURL(createRequire(requireFromRenderer.resolve('vite')).resolve('esbuild')).href
 )
 
+const NL = String.fromCharCode(10)
 const VENDOR = fileURLToPath(new URL('../../../vendor/harness-packages/@deepseek-ai/', import.meta.url))
 const MARKDOWN = `${VENDOR}dsh-client-ui-chat/src/client/chat/AssistantMarkdown.tsx`
 const NODE_VIEW = `${VENDOR}dsh-client-ui-chat/src/client/chat/AssistantNodeView.tsx`
@@ -169,4 +170,55 @@ test('vite module ids with a query string or windows separators still match', ()
     applyVendorPatches('C:\\repo\\node_modules\\@deepseek-ai\\dsh-client-ui-chat\\src\\client\\chat\\AssistantMarkdown.tsx', source),
     undefined,
   )
+})
+
+test('the running-row sweeps are rewritten to a compositor-only transform', () => {
+  const cases = [
+    {
+      file: 'dsh-client-ui-chat/src/client/chat/ReasoningRow.module.css',
+      id: '/x/vendor/harness-checkout/packages/client/ui-chat/src/client/chat/ReasoningRow.module.css',
+      name: 'dsh-reasoning-row-sweep',
+    },
+    {
+      file: 'dsh-client-ui-chat/src/client/chat/GenericCommandCard.module.css',
+      id: '/x/vendor/harness-checkout/packages/client/ui-chat/src/client/chat/GenericCommandCard.module.css',
+      name: 'dsh-command-row-sweep',
+    },
+  ]
+  for (const item of cases) {
+    const source = readFileSync(VENDOR + item.file, 'utf8')
+    const patched = applyVendorPatches(item.id, source)
+    assert.notEqual(patched, undefined, item.file + ' must be selected through the submodule id form')
+    assert.deepEqual(patched.applied, [item.file])
+    assert.ok(patched.code.includes('animation: ' + item.name + '-x 2.6s ease-out infinite;'), 'the running row uses the transform keyframes')
+    assert.ok(patched.code.includes('@keyframes ' + item.name + '-x'), 'the transform keyframes exist')
+    assert.ok(patched.code.includes('transform: translateX(100vw)'), 'the sweep travels on the compositor')
+    assert.ok(!patched.code.includes('animation: ' + item.name + ' 2.6s'), 'the upstream left-animated shape is gone')
+    assert.ok(patched.code.includes('animation: none;'), 'the reduced-motion opt-out is untouched')
+  }
+})
+
+test('the publication chain coalesces saturated streams and keeps the quiet path', () => {
+  const file = 'dsh-client-ui-conversation/src/client/conversation/assembly.ts'
+  const source = readFileSync(VENDOR + file, 'utf8')
+  const patched = applyVendorPatches(
+    '/x/vendor/harness-checkout/packages/client/ui-conversation/src/client/conversation/assembly.ts',
+    source,
+  )
+  assert.notEqual(patched, undefined)
+  assert.deepEqual(patched.applied, [file])
+  assert.ok(patched.code.includes('private lastFlushAt = 0'), 'the slice scheduler keeps monotonic timestamps')
+  assert.ok(patched.code.includes('const saturated = now - this.lastPublishAt < 40'), 'saturation is judged from the request cadence')
+  assert.ok(patched.code.includes('if (saturated && now - this.lastFlushAt < 80)'), 'a saturated stream holds until the 80 ms slice boundary')
+  assert.ok(patched.code.includes('this.lastFlushAt = performance.now()'), 'flush stamps the slice boundary')
+  assert.ok(
+    patched.code.includes([
+      '      this.frame = requestAnimationFrame(() => {',
+      '        this.frame = requestAnimationFrame(() => {',
+      '          this.frame = requestAnimationFrame(() => {',
+    ].join(NL)),
+    'quiet streams keep the upstream three-paint chain',
+  )
+  assert.ok(patched.code.includes(['    this.cancelFrame()', '    this.flush()', '  }'].join(NL)), 'the immediate publication path is untouched')
+  assert.ok(!patched.code.includes('const deferred'), 'no dead draft branch is shipped')
 })

@@ -10,6 +10,18 @@
 
 - **实机门禁（未验证；缺真实实例 / 打包态环境）**：
   - 多来源 sleep/wake 与隐藏恢复、版本歪斜容忍、gateway 形态回归；
+  - **隐藏态节流修订的实机门禁（2026-12，design 14 §D1 修订）**：`backgroundThrottling`
+    回归 Chromium 默认后需在**打包态真实实例**上复核——隐藏 ≥60s 期间 SSE/推送不断、
+    唤醒（powerMonitor resume / 托盘点击）后即时重连与首帧渲染，以及两条 30s 兜底
+    轮询（连接行/注册表）隐藏期跳过 + 恢复补偿一轮的行为。
+    **测量台已跑（真实 Electron 43.4.0 + 真实页面 + 本地 SSE，两配置同页对拍，15s）**：
+    当前配置（默认节流）隐藏期 `visibilityState=hidden`、rAF 0、**renderer 0.1% / GPU ~0%、0 flush**；
+    旧配置（`backgroundThrottling:false`）物理隐藏中仍 `visible`、**renderer 22.0% / GPU 7.4%、431 flush（29/s）**；
+    两者 **SSE 均 15/15 条、maxGap 1007–1008ms**（D1 的「心跳被节流」顾虑实测不成立）。
+  - **vendor 性能补丁（2026-12）的可见态 A/B**：真实 pin 字节 + 本注册表补丁的对照已跑
+    （`vendor-patches.mjs` 各条 `reason` 记录数字：sweep 3 行 12.3%/7.6% → 1.3%/1.2%；
+    发布 100 ev/s 40 flush/s·22.5% → 11 flush/s·9.5%；组合 23.2%/7.8% → 12.2%/1.1%）；
+    仍待在**真实 app 同环境**前后对照复核（`performance-baseline.md §1` 的跨环境不可比纪律）。
   - 右侧栏栈在真实 profile 下的装载时序与 `provideRoot` 时序（`useResource` /
     `usePanelInfo` / `chamberFileApiBase`）、session v3 迁移在真实存储上的行为；
   - open-in：实例进程内的 chamber host 包（`@dsh-chamber/dsh-chamber-seed-open-in`，本地形态

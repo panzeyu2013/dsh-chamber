@@ -855,10 +855,19 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
       // Keep Electron's renderer sandbox explicit: this window only needs the
       // narrow contextBridge surface from preload, never Electron/Node powers.
       sandbox: true,
-      // 隐藏到托盘后渲染进程计时器不被 Chromium 节流（design 14 D1）：唤醒
-      // 「立即重连」依赖 SSE 心跳/重连计时器，节流会把它拖慢到 ~1 次/秒。
-      // 单窗口 + 控制面 origin + 无第三方内容，安全。
-      backgroundThrottling: false,
+      // 2026-12 修订（design 14 §D1，实测换判）：**不再**关闭 backgroundThrottling。
+      // 关闭它会让 Electron 永久抑制隐藏态（backgroundThrottling=false 时
+      // electron_api_web_contents.cc 置 disable_hidden_=true），实测后果：窗口
+      // 隐藏后 rAF 仍 120/s、document.visibilityState 恒 'visible'、
+      // visibilitychange 0 次——retention.ts 的 shouldRunBackgroundPhase 因此
+      // 在 Electron 上从不生效，隐藏期 renderer CPU 最高 28.1%（上游常驻动画
+      // 19.0% + 发布 19.4%，叠加 28.1%）。
+      // 恢复默认节流后同一测量台（Electron 43.4.0 / Chromium 150 / M5 Pro
+      // 120 Hz）：隐藏期 rAF 0、动画停、visibilitychange 恢复，renderer CPU
+      // 0.0–0.1%；SSE 是网络流不受影响（隐藏 9s 收 9/9 条、maxGap 1005ms、
+      // 0 错误），唤醒即时重连由 powerMonitor resume 的 IPC 推送驱动（不依赖
+      // 隐藏期计时器）。代价仅 <1s 定时器被钳到 1Hz（100ms→1Hz，1s 不变），
+      // 而 3s/15s/30s/60s/120s 各档看门狗节奏不变。
     },
   });
   mainWindow = win;

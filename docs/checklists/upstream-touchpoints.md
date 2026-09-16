@@ -149,10 +149,18 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
   `packages/desktop/vendor/dsh/package.json`（bundle 清单交叉校验，见上），所以文件级跳过只作用于
   常规分支，不越过该特例——2026-09 本地重放发现这些目录内残留的旧代际字面量会让**干净工作区**误红
   （tracked 文件零命中），CI 因无这些目录而不受影响。
-- **vendor 源码补丁集（构建期改写，2026-09 三轮登记，design 09 §3.6）**：
-  `packages/renderer/scripts/vendor-patches.mjs` 登记「同源绝对 URL」类硬假设的补丁，
-  由 renderer 的 `deepseekSource().transform` 在构建期按**精确上游文本**改写，
-  vendor 文件零写入。当前 **7 条（7 文件 / 21 处锚点）**：① `ui-chat`
+- **vendor 源码补丁集（构建期改写，2026-09 三轮登记；2026-12 扩第二类，design 09 §3.6）**：
+  `packages/renderer/scripts/vendor-patches.mjs` 登记两类补丁，由 renderer 的
+  `deepseekSource().transform` 在构建期按**精确上游文本**改写，vendor 文件零写入。
+  ① 同源绝对 URL 类硬假设（N-ctx 壳必须改写）7 条；② **实测帧成本类（2026-12 增，
+  正确性优先）3 条**：`ui-chat` 的 `ReasoningRow.module.css` / `GenericCommandCard.module.css`
+  （running 行的 `left` sweep 每帧 layout+paint；实测 3 行 12.6% renderer / 8.1% GPU
+  对 transform 形态 7.9% / 4.0%；CSS-module 哈希类名无法从 chamber CSS 选中）、
+  `ui-conversation` 的 `assembly.ts`（三层 rAF 发布链在饱和流下钉在 39.8 flush/s，
+  实测 100 ev/s 时 24.1% renderer；饱和流合并为 80ms 片后 11.4 flush/s / 10.2%，
+  静流保持上游「下一帧」延迟）。该类条目必须把 A/B 实测写进 `reason`（同一
+  Electron/显示器、`app.getAppMetrics` 累积差），并受与正确性补丁相同的 C9 门禁。
+  当前共 **10 条（10 文件 / 28 处锚点）**：① `ui-chat`
   （`/api/file`，读 chamber layout fork 提供的 root 标准 prop `chamberFileApiBase`
   = `ctx.chamberBasePath`）；② `client-file-upload`（`/api/session/uploadFileBinary`，
   从服务自身的 ctx 读 `chamberBasePath`——该包已转为 **covered**，否则 extra-row
@@ -161,7 +169,9 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
   该包已转 covered-deferred）。全部保留「缺 base path → 回落上游」的形状，读取一律走
   `ctx.get('chamberBasePath')`（cordis 代理对未 provide 的服务是抛错而非 undefined）。
   门：**C9**（锚点必须唯一命中，漂移即硬失败）+ `scripts/vendor-patches.test.mjs`
-  （锚点/行为/id 形态）。新增补丁前先问「能否在 chamber 自己的包里修」。
+  （锚点/行为/id 形态）。新增补丁前先问「能否在 chamber 自己的包里修」——
+  性能类还必须先证明该成本是**每帧**的、且 chamber 侧门控（可见性/保留/回收）
+  覆盖不到它。
 - **复合首屏 ← 未覆盖官方行（反向依赖，2026-09 二轮登记；三轮收敛为 1 条；
   2026-09-11 起为派生集合）**：
   `ui-chat` ← `sidebarRight`（`ui-sidebar-right` 行提供）。二轮曾把 `fileUpload`

@@ -112,11 +112,26 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
   （dev 模式 `app.isPackaged=false` / 图标资源缺失 → `maybeCreateTray` 跳过）时，
   非 darwin 回退现状（关窗即退出，仍受 D2 确认保护）——**绝不允许窗口被隐藏后
   无任何恢复入口**。macOS 无托盘也安全（Dock 图标常驻可恢复，hide 是系统惯例）。
-- **隐藏窗口不节流**：`createMainWindow` webPreferences 增加
-  `backgroundThrottling: false`（对齐 OpenChamber main.mjs）——否则窗口
-  隐藏后渲染进程计时器被 Chromium 节流（隐藏 5 分钟后钳制到 ~1 次/秒），
-  D4 唤醒「立即重连」会被拖慢。仅 dsh-chamber 单窗口 + 控制面 origin + 无第三
-  方内容，安全。
+- **隐藏窗口节流 = 保持 Chromium 默认（2026-12 修订；实测换判，取代旧「不节流」定案）**：
+  `createMainWindow` webPreferences **不再**设置 `backgroundThrottling: false`。旧判
+  （对齐 OpenChamber main.mjs）担心「隐藏后计时器被节流 → D4 唤醒立即重连被拖慢」；
+  2026-12 在 Electron 43.4.0 / Chromium 150 / M5 Pro 120 Hz 上实测证伪该代价并给出
+  反向成本：
+  - 关闭节流的真实后果是 Electron **永久抑制隐藏态**（`disable_hidden_ = !backgroundThrottling_`，
+    `shell/browser/api/electron_api_web_contents.cc`）：窗口隐藏后 rAF 仍 120/s、
+    帧照画照交换、`document.visibilityState` 恒 `'visible'`、`visibilitychange` 0 次。
+    于是 `retention.ts` 的 `shouldRunBackgroundPhase` 六处门控在 Electron 上
+    **从不生效**，隐藏期 renderer CPU 最高 28.1%（上游常驻动画 19.0% + 发布 19.4%）。
+  - 恢复默认节流后同一测量台：隐藏期 rAF 0、CSS 动画暂停、`visibilitychange` 恢复，
+    renderer CPU 0.0–0.1%；**SSE 是网络流不受影响**（隐藏 9s 收 9/9 条、`maxGap`
+    1005ms、0 错误），唤醒即时重连走 `powerMonitor.on('resume')` →
+    `dsh-chamber:system-resume` 的 IPC 推送（非计时器，不受节流影响）。被节流的只有
+    <1s 定时器（100ms→1Hz；1s 保持 1Hz），3s/15s/30s/60s/120s 各档看门狗节奏不变。
+  - **Rejected alternatives**：① 保留 `backgroundThrottling: false` + 新增「窗口隐藏」
+    IPC 推送由渲染侧暂停动画/发布——多一条宿主桥面（preload / bridge manifest / 锁步测试）
+    而收益已被恢复节流完全覆盖（隐藏期已是 0.0%），故不采纳；② 运行时
+    `webContents.backgroundThrottling = true`——实测对**已隐藏**窗口不生效（rAF 仍
+    120/s、`visibilityState` 仍 visible），只在建窗时有效，故不作为恢复手段。
 - `showMainWindow()` 保留：隐藏 ≠ 销毁，`activate` / `second-instance` /
   托盘点击 → `show()+focus()`；销毁后才走重建分支（现有逻辑已覆盖）。
 
@@ -244,7 +259,7 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 
 | 面 | 改动 |
 |---|---|
-| `packages/desktop/main.ts` | 关窗分支（hide vs quit，**托盘可用门控**）；`backgroundThrottling: false`；`powerMonitor.on('resume')` → push；`powerSaveBlocker`；退出确认（仅本地实例实际 live process，远程隧道/连接不影响关闭；**含更新安装豁免 + 单飞**）；will-quit single-flight 并行等待 plugin-sync/本地插件子进程、transport、control-plane 与 runtime 工作；`chamber-settings.json` store + `dsh-chamber:settings-get/set` IPC + push |
+| `packages/desktop/main.ts` | 关窗分支（hide vs quit，**托盘可用门控**）；隐藏态节流 = Chromium 默认（2026-12 修订，见 D1）；`powerMonitor.on('resume')` → push；`powerSaveBlocker`；退出确认（仅本地实例实际 live process，远程隧道/连接不影响关闭；**含更新安装豁免 + 单飞**）；will-quit single-flight 并行等待 plugin-sync/本地插件子进程、transport、control-plane 与 runtime 工作；`chamber-settings.json` store + `dsh-chamber:settings-get/set` IPC + push |
 | `packages/desktop/preload.cts` | `settings` 面（get/set/onChanged，覆盖 chamber 级全部设置键）+ `systemResume` 订阅；`DshChamberBridge` 扩展 |
 | `packages/renderer` | App 层订阅 system-resume → 分发实例重连 + transport 即时重探 |
 | settings-bridge 壳 | 「通用」视图（见设计 15：固定入口 `__general` 平铺） |
