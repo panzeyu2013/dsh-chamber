@@ -44,3 +44,9 @@ Generated with `npm run gen:notices`.
 | `vite` | 6.4.3 | MIT |
 | `zod` | 4.4.3 | MIT |
 | `zustand` | 4.4.7 | MIT |
+
+## macOS native shell (SwiftPM)
+
+| Package | Version | License |
+|---|---|---|
+| `Sparkle` | 2.10.0 | MIT |

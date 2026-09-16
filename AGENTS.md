@@ -158,7 +158,9 @@ surfaces, applicable guidance, validation, or failure/rollback considerations fr
   only (design 25 §6.3).
 - Package manager is pnpm, and runtime dependencies are not added without an explicit request
   (current set: `ws`, `electron-updater`, React/Vite, Electron, the embedded pinned `pnpm`, the dsh
-  client workspace packages; `typescript` / `@types/*` / `node-pty` are devDependencies — `node-pty`
+  client workspace packages; `Sparkle` 2.10.0 is the Swift native shell's only SwiftPM dependency
+  — the in-app update chain, added on the user's explicit 2026-12 ruling "D-1 = B");
+  `typescript` / `@types/*` / `node-pty` are devDependencies — `node-pty`
   is the root resolution target for `@deepseek-ai/dsh-subprocess-local`'s workspace postinstall
   (`pnpm-workspace.yaml` allowBuilds note + `scripts/dev/ensure-harness-vendor.mjs` shim), not a
   runtime dependency of the chamber tree; it heads the runtime tree's `ALLOW_BUILDS`).

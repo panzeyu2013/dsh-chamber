@@ -55,6 +55,12 @@ const rows = [...found.entries()]
   .sort(([a], [b]) => a.localeCompare(b))
   .map(([name, { version, license }]) => `| \`${name}\` | ${version} | ${license} |`)
 
+// macOS 原生壳的第三方依赖（SwiftPM，不在 npm 树里；2026-12 裁决「D-1 选 B」批准）。
+// 版本与 macos/Package.swift 的钉值同步——改钉值时这里同改（许可证取自包自身 LICENSE）。
+const nativeRows = [
+  '| `Sparkle` | 2.10.0 | MIT |',
+]
+
 const bodyZh = `# 第三方声明（Third-Party Notices）
 
 dsh-chamber 重新分发以下第三方包。每个包的完整许可证文本位于其自身的
@@ -63,6 +69,12 @@ dsh-chamber 重新分发以下第三方包。每个包的完整许可证文本�
 | 包 | 版本 | 许可证 |
 |---|---|---|
 ${rows.join('\n')}
+
+## macOS 原生壳（SwiftPM）
+
+| 包 | 版本 | 许可证 |
+|---|---|---|
+${nativeRows.join('\n')}
 `
 
 const bodyEn = `# Third-Party Notices
@@ -74,6 +86,12 @@ Generated with \`npm run gen:notices\`.
 | Package | Version | License |
 |---|---|---|
 ${rows.join('\n')}
+
+## macOS native shell (SwiftPM)
+
+| Package | Version | License |
+|---|---|---|
+${nativeRows.join('\n')}
 `
 
 const EN_OUT = join(ROOT, 'docs/THIRD_PARTY_NOTICES.en-US.md')

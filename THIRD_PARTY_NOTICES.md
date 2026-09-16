@@ -43,3 +43,9 @@ dsh-chamber 重新分发以下第三方包。每个包的完整许可证文本�
 | `vite` | 6.4.3 | MIT |
 | `zod` | 4.4.3 | MIT |
 | `zustand` | 4.4.7 | MIT |
+
+## macOS 原生壳（SwiftPM）
+
+| 包 | 版本 | 许可证 |
+|---|---|---|
+| `Sparkle` | 2.10.0 | MIT |
