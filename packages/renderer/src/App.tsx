@@ -1848,13 +1848,22 @@ export default function App() {
 
   // 前台恢复补偿（2026 性能整改）：hidden → visible 立即推进一轮聚合
   // watchdog（隐藏期暂停的 30s 兜底/stale 拉取在此收敛，含已回收源）、
-  // 空闲预热队列与保留回收检查。三个目标都是 ref 镜像的最新闭包。
+  // 空闲预热队列与保留回收检查，以及两条 30s 兜底轮询（连接行/注册表，
+  // 2026-12 加可见性门控后同样需要恢复补偿）。五个目标都是 ref 镜像的最新闭包。
+  const refreshConnectionsRef = useRef(refreshConnections)
+  const refreshRemotesRef = useRef(refreshRemotes)
+  useEffect(() => {
+    refreshConnectionsRef.current = refreshConnections
+    refreshRemotesRef.current = refreshRemotes
+  })
   useEffect(() => {
     let compensationTimer: number | undefined
     let disposed = false
     const onVisibilityChange = (): void => {
       if (document.visibilityState !== 'visible') return
       runStalenessWatchdogRef.current()
+      void refreshConnectionsRef.current()
+      void refreshRemotesRef.current()
       // 托管 dsh 状态**先刷新完再** drain：隐藏期探针被跳过，若并行 drain 会
       // 读到期前的 managedRuntime 投影，把一个已停机的 gateway 源拿去收割/预热
       // （白烧一次尝试；复查 MINOR-2）。
@@ -1932,17 +1941,21 @@ export default function App() {
     }
 
     // 连接行低频刷新（label/dshPort 极少变化；行状态在启动判定后不再敏感）。
+    // 隐藏期跳过（2026-12，design 14 §D1 修订后可见性门控在 Electron 上重新
+    // 生效）：恢复可见时由上方 visibility effect 立即补偿一轮。
     const connectionsTimer = setInterval(() => {
       if (cancelled) return
+      if (!shouldRunBackgroundPhase(document.visibilityState)) return
       void refreshConnections()
     }, CONNECTIONS_POLL_MS)
 
     // 注册表低频轮询（与连接行同节奏）：兜底桌面侧任何来源的注册表变化
     // （主进程 save/delete 的 instances_changed 推送之外；隧道状态本身走 onStatusChanged
-    // 推送，不依赖此轮询）。
+    // 推送，不依赖此轮询）。隐藏期跳过与恢复补偿同连接行轮询。
     const remotesTimer = setInterval(() => {
       if (cancelled) return
       if (!rosterListenerReadyRef.current) return
+      if (!shouldRunBackgroundPhase(document.visibilityState)) return
       void refreshRemotes()
     }, CONNECTIONS_POLL_MS)
 
