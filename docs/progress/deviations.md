@@ -21,11 +21,11 @@
 | # | 现象（用户可感） | 取舍 / 推荐 | 状态 |
 |---|---|---|---|
 | S-01 | 原生壳缺整条应用内更新安装链（下载 → 已退出安装 → 重启并安装） | **已按 Sparkle 2 落地代码**（`AppUpdater` + 菜单 + Info.plist 注入 + framework 嵌入 + appcast 签名步 + sidecar/页面转发）；**外部门禁未闭**：EdDSA 密钥（`SPARKLE_PUBLIC_ED_KEY`/`SPARKLE_PRIVATE_KEY`）与 CI 编译验证（本机沙箱取不到 SwiftPM 二进制制品） | 代码就绪且本机验证通过（swift test 177/177、打包嵌入 ⑯ 通过） / 外部门禁 open（EdDSA secrets + 实机安装验收） |
-| S-02 | 原生壳渲染器卡死无自愈（Electron 15s 重载） | **2026-12 复裁决**：仍是真问题（可达、罕见），但修复**全在 `macos/`**（壳侧空闲心搏 ≤3 次后重载，不碰共享面）；唯一待定的是「允许丢弃多少页面内状态」 | open（低优先；macos-only 方案已定） |
-| S-03 | 非法显式端口 / dev 端口耗尽：Electron 降级，Swift 致命退出 | **2026-12 复裁决**：真问题（用户误配即触发），修复 `macos/`-only——非法显式端口不再 `fatalStartup`，退回下一优先源（dev 空闲退避 / 打包固定端口）并 loud 记账 | open（macos-only，小改） |
+| S-02 | 原生壳渲染器卡死无自愈（Electron 15s 重载） | **2026-12 复裁决**：仍是真问题（可达、罕见），但修复**全在 `macos/`**（壳侧空闲心搏 ≤3 次后重载，不碰共享面）；唯一待定的是「允许丢弃多少页面内状态」 | **resolved（2026-12 实施）**：`RendererHangWatchdog`（空闲 ≥15s 才 ping、≤3 次超时、键鼠输入清零）+ 复用既有有界恢复预算（60s ≤3 次）；`swift test` 186/186 |
+| S-03 | 非法显式端口 / dev 端口耗尽：Electron 降级，Swift 致命退出 | **2026-12 复裁决**：真问题（用户误配即触发），修复 `macos/`-only——非法显式端口不再 `fatalStartup`，退回下一优先源（dev 空闲退避 / 打包固定端口）并 loud 记账 | **resolved（2026-12 实施）**：非法显式端口 / 退避耗尽改为 loud 降级（退避耗尽回退系统临时端口），`ControlPlanePort.resolve` 不再抛错 |
 | S-04 | 双壳 `dsh-chamber://` 归属可能被 Electron 抢占 | **2026-12 复裁决（降级）**：本仓的 scheme 生产者只有自己的 `open-vscode` 管线（`deep-link.ts`），且两 flavor 共用一个目录锁 → 同机只会有一个在跑；被抢占的后果是「链接进了另一个 flavor，它因锁退出」。判为**潜伏**：不新增 scheme（新增无生产者的面），若用户实机报告错投再补 `dsh-chamber-native://` | accepted（潜伏；实机观察项） |
 | S-05 | 原生壳无本地 open 执行面（Finder/launchApp 一类动作） | **2026-12 可达性复核改判**：这三条腿在 core **零调用点**，Electron 侧同样「等第一个消费者」（`electron-edges.ts:59`/`shell-core.ts:1933`）；open-in 的用户路径（页面面 + 实例内 `openInApp/*` + `openExternal`）**已全部可达**，接入无需非 `macos/` 改动。残留的唯一缺陷是 Swift 的 `launchApp` 自建 `vscode://` + 自持 appId 白名单（无人可达的重复决策） | 潜伏差异；最小清理在 `macos/` 内（见 §7） |
-| S-06 | page world 可伪造 `__dshChamberResolve/__dshChamberEmit`（无 contextBridge 隔离） | **2026-12 复裁决**：仍是真差异（Electron 有 contextBridge 隔离），威胁模型限于**已在页内的脚本**（首方前端/客户端插件），伪造的增量能力是「代答他人 pending」与「伪造原生事件」；修复 `macos/`-only（shim 注入随机 token，内部管路校验） | open（macos-only，小改；价值是收紧伪原生事件面） |
+| S-06 | page world 可伪造 `__dshChamberResolve/__dshChamberEmit`（无 contextBridge 隔离） | **2026-12 复裁决**：仍是真差异（Electron 有 contextBridge 隔离），威胁模型限于**已在页内的脚本**（首方前端/客户端插件），伪造的增量能力是「代答他人 pending」与「伪造原生事件」；修复 `macos/`-only（shim 注入随机 token，内部管路校验） | **resolved（2026-12 实施）**：内部管路（resolve/emit/rehydrate）收 128 位窗口随机令牌（注入时替换、调用必带），MessageHandler 护栏同令牌、缺令牌拒绝回写；`BridgeShimInjectorTests` 钉住生成/注入/校验面 |
 | S-07 | 网页权限：媒体采集已显式拒绝；剪贴板读 / 网页 Notification 无等价面 | **2026-12 复裁决（降级为潜伏）**：本仓客户端包与 vendored dsh 客户端都没有 `navigator.clipboard.readText` / `new Notification(` 的消费点（媒体采集已由 `WKUIDelegate` 拒绝）；无消费者 → 不改 | accepted（潜伏；有新消费者时再评估） |
 | S-08 | 取消退出后的窗口恢复时序与 Electron 不同 | **2026-12 复裁决：已消解**（`9dfa9233`）：`presentQuitConfirmation` 取消分支调 `restoreMainWindow()`，实现为 `makeKeyAndOrderFront` + `NSApp.activate()`，与 Electron「确保可见 + 激活」逐条对齐 | resolved（代码 + 测试） |
 | S-09 | 通知音效：Swift 用具名系统音效（缺省 Glass），非标准名由系统回落 | 接受（功能等价；不做音效名映射表） | accepted |
@@ -211,9 +211,9 @@
 
 ### 7.4 差异的重新定级（可达性视角）
 
-- **可达且用户可见（必修/已修）**：S-01（已落地）、S-03、S-04、S-08
-- **可达、影响低（待裁决）**：S-02、S-07、S-14
-- **潜伏（无人可达）**：S-05（改判，见上表）、S-11、S-15、S-16
+- **可达且用户可见（必修/已修）**：S-01（已落地）、**S-02 / S-03 / S-06（2026-12 实施）**、S-08
+- **可达、影响低**：S-07（已降级为潜伏）、S-14（低优先，未做）
+- **潜伏（无人可达）**：S-05（改判，见上表）、S-04（已降级）、S-11、S-15、S-16
 - **已接受**：S-09、S-10、S-12、S-13
 
 ### 7.5 由此产生的待办（最小改动）
