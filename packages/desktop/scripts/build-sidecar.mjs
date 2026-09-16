@@ -591,7 +591,12 @@ async function bundleNode(options, layout, log) {
   }
 }
 
-export async function runBuildSidecar(options, io = { log: console.log, warn: console.warn, error: console.error }) {
+export async function runBuildSidecar(options, io = {}) {
+  // 注入的 io 允许是部分实现（现有测试只给 log/error）；缺项回落控制台。
+  // 否则「干净 checkout 缺 vendor/dsh 或 pnpm」的 warn 分支会 io.warn is not
+  // a function —— 本地有 vendor/pnpm 永不触发，只在 CI 的 test-macos 上红
+  // （2026-09 合并后首次 CI 实测）。
+  io = { log: console.log, warn: console.warn, error: console.error, ...io }
   const layout = sidecarLayout(options.outDir)
   const plan = buildPlan(options)
   for (const step of plan) io.log(`  ${step}`)
