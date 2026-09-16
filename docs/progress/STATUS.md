@@ -93,7 +93,7 @@
   任何测试见证：其唯一可能生效的路径是 `registerGenerationSource` 的 disposer（`:336-341`
   释放 owner 却不拆触发器），而该路径必经 `releaseOwner`（`:298-305`）调 `controller.stop()`，
   `ConnectionController.reconnect()` 在 `!running` 时首行即返回（`connection.ts:130-131`）⇒
-  删掉守卫行为逐字节相同（实测：删守卫后 7/7 全绿、专用探针输出 `diff` 无差异）。**不要为它补
+  删掉守卫行为逐字节相同（专用探针输出 `diff` 无差异）。**不要为它补
   测试**（那会是新的假绿）；待裁决：留作纵深防御，或按死代码评估删除（`:354`/`:361` 两处同类）。
 - **隐藏 span 的阈值语义只由触发器单元覆盖（2026-12 登记）**：接线层不断言
   `visibilitychange` 隐藏 ≥30s 的真时序（`start()` 不传 `now`/`hiddenReconnectThresholdMs`，
@@ -746,192 +746,32 @@
 
 ## 设计未决
 
-- **macOS Swift 原生壳（design 25 v2，路线 A：WKWebView + Node sidecar 全复用）**：
-  方案与实施计划均已出——docs/design/25-macos-swift-native-shell.md（v2，经三个
-  并行 subagent 打磨轮：逐条评审 / 承重核验 / 执行计划细化，Major 修正已闭合）+
-  docs/progress/todo/macos-swift-v1.md（M0–M5 六门 + WBS W-01…W-32 + runbook/
-  门禁/中止条件；估算 46–72 人-日）。**未立项**。待用户决策 D1–D7：P0 先行、
-  双壳共存/bundle id、更新路线（v1 blocked-available → v2 Sparkle）、仓库落位、
-  原生 UI 渐进范围、Node 版本/架构、静态凭据加密（v1 建议诚实 0600 明文）。实施
-  须先过 P0 验证门（G1–G5 + WebKit 后台节流/存储隔离 C1/C2 + 桥护栏）；Electron
-  版（Win/Linux/mac）并行不回归。**自主推进（2026-09-07）**：P0 代码交付级完成——
-  `macos/` SwiftPM 壳（窗口/A 桥护栏/B 桥/编解码）+ `packages/desktop/poc-sidecar.ts`
-  （W-03…W-05）：swift build 0 警告、swift test 24/24（含 B 桥集成 5 例，push 拓扑
-  无 GUI 闭环）、sidecar 驱动 33/33、真链冒烟（真实 chamber UI→shim→Swift→sidecar
-  `desktop_ssh_instances_get` 回包）；静态审查 0 Blocker/1 Major 已修（instances_get
-  诚实错误帧）+ 7 项 Minor 代码修正（深度上限/Dock reopen/护栏统一/转义等）；G1 用户
-  实机目测确认（本地实例正常显示），其余 G 门按用户指示暂缓；D1–D7 未签核。
-   **M2/W-09+W-10 已交付（同日，逐批门禁全绿）**：shell-core.ts 落地（W-09 纯搬运）；
-   W-10 S0–S11 十二批——60/60 ipcMain.handle 全迁 installIpcHandlers、HostEdges/
-   electron-edges seam 落位、深链合龙、mirror 无死键断言（68/68）、main.ts 5663→
-   3803（剩装配/窗口 glue/生命周期/启动事务宿主）；每批 test:desktop 全绿（收官
-   896/896）+ typecheck 0。
-   **M2/P1 后续已交付（同日续，消息/目标驱动持续推进）**：W-11/12/13
-   sidecar-entry/node-edges/B 桥 stdio 冒烟 6/6（a669124）；W-14 门禁全绿；
-   M3：BridgeClient edge/notify/ready + 60 通道无 GUI 全量冒烟（c612382）、
-   W-17 manifest 管线（2c3cfc4）、W-18 前半接线+一致性 XCTest（3e082f6）、
-   W-18 后半 A shim 存根（9d06caa）、E2 flavor（645a654）、W-19/20
-   SwiftEdgeHostLegs 骨架+注入+装配接线（4ec76ce/9f19d0e）；swift test
-   38/38、desktop 全链 38 文件绿、typecheck 0。
-   **已登记硬门禁（未伪造，待实机/凭据）**：W-21 真实通知/角标腿需 BridgeClient
-   异步 edge 应答改造 + GUI 验收；M4 Sparkle/blocked-available 需 Apple 凭据
-   （A6）；G 门 walkthrough 与截屏此前被系统屏幕录制拒绝。
-   **P3 打包闭环（同日）**：当前 HEAD 产物 zip/blockmap/app/DMG（离线
-   hdiutil）就绪于 packages/desktop/release/（adhoc 签名、0.2.2）；沙箱无
-   外网 → distribution 签名/notarization/dmgbuild 标准版式受阻（登记）；
-   asar 抽查含当前分支核心文件；/Applications 刷新待用户确认（事故纪律）。
-   **Swift 路径全量占位实现（同日 S-A…S-C-2/parity）**：hostFacts 推送、shim
-   全表面 67 方法、sidecar ctx 全真化（连接/凭据/审计/确认框/插件/runtime 控
-   制器族）、notify 消费路由+legs 补全；POC dev 全栈可用（DSH_SIDECAR_LEGACY_
-   START=1 离线快捷门）；swift 66/66、desktop 914/914。parity 边界：update
-   （Swift W-22 Sparkle 线）、settings 叶 async 化（已收口 8b988eb）、全新离线
-   profile 阻塞（与 Electron 同语义）、实机门禁（SMAppService/拉起/通知闭环）。
-   **状态快照（2026-09-08 17:26，用户要求记录）**：swift @ b1c19c8（树干净）；
-   swift test 65/65、desktop 914/914、typecheck 0；M2/P1+M3 代码级+P3(adhoc)+
-   parity 批(S-A…S-E)+跨层审计 A 类收口均已完成；POC dev 验收环境就绪（POC_*
-   env + DSH_SIDECAR_LEGACY_START=1，独立 userData/17520/17511，与现网隔离）；
-   硬门禁清单与解锁条件见 todo macos-swift-v1.md「当前状态快照」；最近 POC
-   已退出待重拉。
-   **推进轮（2026-09-08 续，M3 缺口收口批）**：W-15 Supervisor 落地（目录锁
-   `flock(LOCK_EX|LOCK_NB)` + `O_NOFOLLOW`/0600/规整+属主校验 + 记录
-   `{pid,startedAt,shell}` 供 sidecar-entry 只读复验；崩溃退避 500ms/60s≤3、
-   exit=3 锁冲突 fatal、exit=0 不重启、spawn 失败 fatal）；E19 renderer 崩溃
-   有界重载 + 三事件映射（新保留入站 `__host.rendererLifecycle` → core
-   `onRendererLifecycle`，语义单源在 core）；E13 深链 `application(_:open:)`
-   + `DeepLinkRelay` + `__host.deepLink` → core `enqueueDeepLink` +
-   `macos/Info.plist.template`（CFBundleURLTypes，W-24 消费）；E1/E9/E20 关窗与
-   退出链（新保留入站 `__host.quitFacts` → core 决策投影，复用
-   `shouldHideToTray`/`computeQuitRisk`；Swift `windowShouldClose` → orderOut
-   隐藏或转 `NSApp.terminate`，`applicationShouldTerminate` 三分支 +
-   `.terminateLater` 5s 清理硬顶 + `QuitGate` 单飞，决策失败保守取消/隐藏）；
-   桥面保留 method Swift 单源 `HostInboundMethod` 与 node-edges.ts 表锁步
-   （XCTest 断言）；`bridge-shim-surface.test.ts` 接入 `test:desktop`（此前孤儿
-   静默跳过，已修）；**跨层缺陷修复**：sidecar-entry 原复验把「记录 pid ≠ 自身且
-   存活」一律判冲突——Swift 壳先持锁再 spawn 时记录 pid 即父进程，会导致恒
-   exit 3；已按 §6.3「校验父 pid」语义修正（父 pid 放行 / 陈旧放行 / 其他存活
-   进程 loud exit 3），两条真 sidecar 集成测试钉住。（Electron 侧同锁已于本轮
-   落地，见下方 `chamber-lock.ts` 条目——原「未落地/开放项」登记作废。）
-   **W-22 更新 v1 blocked-available 已落地**（`packages/desktop/update-headless.ts`）：
-   Swift flavor 真实 check（有界 GitHub releases 列表 API → 版本比较 →
-   `phase='available'` + `releaseUrl`，`isAllowedReleaseUrl` 复核）+
-   `installBlockedReason` 恒「原生壳不支持自动安装」+ download/restart 核心层
-   显式拒绝 + feed 故障响亮 error（绝不伪装 up-to-date）+ 不排周期检查（v1 仅
-   用户主动检查，有意差异）；sidecar-ctx 由 loud stub 换真实控制器；
-   settings-bridge 增原生壳 blocked 行本地化键（zh/en）与 known-reason 映射。
-   **W-23 sidecar 打包已落地**（`tsconfig.sidecar.build.json` +
-   `scripts/build-sidecar.mjs`）：布局 `<out>/{node, sidecar.js, package.json,
-   dist/control-plane/}`；tsc 闭包校验 + esbuild 打包（control-plane/electron
-   外部化）+ control-plane 产物拷贝 + 装配 package.json + Node 捆绑
-   （SHA-256 校验、落位 `<out>/node`、**基名断言 A5**）；`--dry-run`/`--skip-node`
-   支持离线校验；control-plane-module 增 `isPackagedSidecarRuntime`
-   （`DSH_CHAMBER_SIDECAR_COMPILED=1` → 相对入口，装配目录无 node_modules 树）。
-   实跑：装配产物 `sidecar.js` 两种模式均出 ready 帧、SIGTERM exit 0（Node 捆绑
-   因沙箱无外网未执行，已登记）。
-   **W-24 `.app` 打包已落地**（`macos/scripts/build-swift-app.mjs` +
-   `entitlements.plist`/`entitlements.node.plist`）：Info.plist 由模板渲染
-   （`__VERSION__`）、SwiftPM 资源包 + icon.icns + W-23 sidecar + renderer
-   dist/web 装配、嵌套 node 先签 / 主 app 后签（Developer ID 带 hardened
-   runtime）、`codesign --verify --deep --strict`、ditto zip / hdiutil dmg。
-   **实跑发现并修正三处**：资源包不能放 .app 根（codesign 未密封内容）→ 改
-   Contents/Resources + 新增 `ChamberResources` 定位（弃 `Bundle.module`）；
-   entitlements plist 不能带 XML 注释（AMFI 解析）；`sidecar-entry.ts` 裸
-   import `@dsh-chamber/control-plane` 在装配态 ERR_MODULE_NOT_FOUND → 一律经
-   `control-plane-module` facade。**打包态端到端实跑**：`.app` 启动 → shim 注入
-   → 装配态参数 + `DSH_CHAMBER_SIDECAR_COMPILED=1` → 目录锁 + Supervisor →
-   `sidecar ready（shellVersion=0.2.2）` → 窗口显示 + 页面 invoke 1..10；
-   ad-hoc 签名 + 208 密封资源校验通过。
-   实测：`swift build` 0 告警、`swift test` **115/115**、`test:desktop` **956/956**、
-   `test:macos` **31/31**（darwin 锁 + 两打包脚本；ubuntu 腿不跑）、
-   `typecheck` 0、`verify:i18n` 无漂移。**W-26 CI/release 腿已落地**：
-   `ci.yml` `test-macos`（swift build/test + 桥面锁步三件 + 打包 dry-run）；
-   `release.yml` `build-swift`（与 Electron mac 腿同 tag 并行、`-native` 命名、
-   dry-run 剥离凭据走 ad-hoc、正式腿 fail-closed Developer ID +
-   notarytool/stapler/spctl + draft 上传），`finalize-release.needs` 已含
-   `build-swift`；`test:release-workflow` + `verify:workflows` 绿。
-   **W-27 双端同 tag 演练准备已落地**：`scripts/dev/release-artifacts.mjs`
-   （两族产物清单 + 碰撞/feed 归属断言，CLI 可打印）+ 4 例测试并入
-   `test:release-workflow`；演练记录（顺序/命名隔离/回滚语义）在 todo companion。
-   **Electron 侧同锁已落地**（`chamber-lock.ts`，design §6.3 收口）：Darwin
-   `O_EXLOCK|O_NONBLOCK` 经 `fs.open` 数值 flags（实测 EAGAIN/可重取），
-   whenReady 首步取锁、失败 fail-closed 弹窗退出、`app.on('quit')` 释放（清理链
-   settle 之后；2026-09 二审 #6）；非 darwin
-   返回 `unsupported` 放行（loud）；7 例单测（含既有宽松权限 fchmod 收紧）。`swift-harness-driver` 可行方案
-   已登记（`--harness` 模式 + node 驱动，需 GUI 会话，2–3 人日，未实施）。
-   **未实跑**：GitHub runner 上的真实执行（本地仅 YAML 解析 + 策略测试 + 等价
-   命令 dry-run）、真实 Node 捆绑（沙箱无外网）。**剩余 = 外部门禁**：实机
-   G2/G3/G4/G5/C1/C2、退出确认/隐藏恢复/通知点击/SMAppService/launchApp、更新
-   设置页 blocked 行目检、Developer ID 签名与公证（Apple 凭据）。
-   **三审收口（2026-09-09，用户要求「继续修复残留」）**：打包态默认路径解析
-   （新增 `PackagedLayout` 纯函数：node/sidecar/userData 同根/vendor-dsh 全部
-   bundle-relative，`POC_*` 优先）+ vendor-dsh/pnpm 装配（Electron
-   extraResources 同款过滤器 + 嵌套 Mach-O 先签 + release 断言）+
-   Supervisor launch/终止竞态（`launchGeneration` 提交门 + 启动期退出按启动
-   失败 fatal）+ 退出码分级（新模块 `sidecar-exit-codes.ts` 0/1/3/70）+
-   hostFacts 重启全量重推 + 深链 relay 重启复位 + `.terminateLater` awaiting +
-   CI 打开 8 例 Swift 集成（`POC_NODE_BIN`，本地 8/8 零 skip）+
-   sidecar-stdio 逐通道具体断言 + 深链端到端（core→宿主腿）+
-   `chamber-lock-wiring.test.ts`（main.ts 锁接线源码断言）+ update-headless
-   feed 三态（全 beta/全 draft → up-to-date，仅「无可解析版本」才 error）+
-   pin 守卫补 `@ref` 缺失判定。门禁：`swift test` **115/115**（0 skip）、
-   `test:desktop` **956/956**、`test:macos` **31/31**、typecheck 0、
-   verify:i18n 无漂移、build:preload 成功、verify:workflows OK、
-   test:release-workflow 4/4、swift build 0 源告警。**三审后剩余**：E19 三处
-   未声明偏离、默认端口折叠/userinfo 边界、真实 Apple 凭据公证、实机 G 门、
-   真实 Node 归档下载。
-   **四审收口（2026-09-09 续）**：E19 三处偏离与 Electron 对齐（giveUp 非永久、
-   排定重载可取消、退出期抑制）+ TrustGuard 边界（默认端口折叠、expectedOrigin
-   userinfo 拒绝）+ chamber-lock 收紧 0o7777（setuid/sticky）。门禁：
-   `swift test` **115/115**、`test:desktop` **956/956**、`test:macos` **31/31**、
-   其余全绿。**剩余 = 外部阻断**：Apple 凭据公证、实机 G 门、runner 实跑。
-   **第二轮验收（2026-09-09，3 并发 subagents ×2 批 + 自验）**：第一批（Swift/JS/
-   CI 三域）均 `fixes-verified-with-issues`、**无功能回归**（Swift 侧实证无误拦：
-   壳首载恒根文档、前端无路径/query 路由、无 iframe；CI 侧以 fake pnpm 复刻 bash 3.2
-   双分支；JS 侧独立复核 SHA 真值与 fchmod）。第二批：对抗猎捕 `no-regression`
-   （归一化/双护栏/drain/锁/codesignArgs/guarded 展开全部实测）、开放项复核
-   10/12 登记准确 + 3 条补登、文档漂移 10 项。**二轮新修**：release 腿空数组在
-   bash 3.2 + `set -u` 下 unbound variable（dry-run 必失败）→ guarded 展开 +
-   策略断言；`POC_CP_URL` 带路径/query 归一化为 origin 根；`origin(of:)` IPv6
-   补方括号 + host 小写；`codesignArgs` 补 argv 单测 + entitlements 判据收紧；
-   A5 改 `tar -tzf` 列成员 + 导出断言 + 合成归档三例单测 + maxBuffer 64 MiB；
-   chamber-lock fchmod 分支单测；drain 移到 `runStartupTail().then(ok,err)`
-   （legacy 分支亦补，且避免 `.finally` 未处理拒绝）；文档 10 处漂移（门禁数字
-   94/94→**96/96**、975/975→**951/951**、补登 test:macos **28/28**、Electron 锁
-   与 `quit` 释放措辞、design §3.2/§4.4.1/§4.4.2/§6.3、测试头注释与用例名、
-   README 开放项）。
-   **验收审计（2026-09，六路 subagents + 对抗复核；详见 todo companion）**：
-   六域结论 swift-lifecycle pass-with-issues / js-wire pass-with-issues /
-   packaging **fail** / ci-release **fail** / tests-gates pass-with-issues /
-   docs-drift pass-with-issues。**已修**：codesign Developer ID argv 错序
-   （blocker）、打包态 web-dist 落位不一致导致 sidecar fatal（blocker）、
-   `test:desktop` 在 ubuntu 跑 macOS 专属用例致 CI 必红（blocker，拆出
-   `test:macos` + NODE_BIN 缺省改 `process.execPath`）、A 桥缺
-   「壳文档」判定（major：同源非根文档可继承 shim+60 通道 → 新增
-   `TrustGuard.isTrustedDocument` 并接入消息/导航护栏）、release 腿先打包后
-   公证（major → 改为 `--no-zip --no-dmg` → notarize → staple → 再生成归档）、
-   Electron 锁在 will-quit 起始释放（改 `quit`）、SHA-256 断言恒真（改真值 +
-   负例）、feed 无可用候选伪装 up-to-date（改响亮 error）、A5 断言恒真（加归档
-   成员名/解包基名检查）、HostInboundMethod 仅 4/7（补齐 7 条 + 锁步断言）、
-   `drainDeepLinkLaunches` 缺调用、chamber-lock 不收紧既有权限、文档漂移
-   5 处（Info.plist 注释/design §6.1 同根声称/§6.3 旧锁条目/AGENTS 纪律措辞/
-   测试头注释）。**二轮检查（2026-09-09，3 并发 subagent + 自验）**：结论 regression-found →
-   全部已修：Swift 打包态 `--port` 错配（P0 白窗）、ready 门单向/桩态死锁、
-   宿主腿有界等待 + 外链预算、`AnyCodable`/`EdgePayload.int` 崩溃面、
-   hostFacts 失败不回滚；JS 侧 dry-run 校验依赖 release-only 产物（干净树 CI
-   必红）→ 只对显式源严格、交互腿 edge 超时 10 分钟、rendererPush 未投递不发送；
-   裁决侧 `probeExpectedNames` 与探针同源（补齐 D#2 的另一半）+ 三态测试；
-   文档/文案 4 处。**六模块评审（2026-09-09，3 并发 ×2 批）**：A Swift 壳 / B Electron-free 核心 /
-   C 打包·CI·发布 / D 控制面·网关·运行时 / E 前端与插件 / F 文档台账
-   —— 六域均 `pass-with-issues`、无 fail。评审发现并**已修**：A 4 major（隐藏
-   窗口无法发通知、`_blank` 外链静默丢弃、宿主腿跨线程碰 AppKit、MessageHandler
-   零测试→补 6 例并暴露 2 个真实崩溃面）+ B 3 medium（rendererPush 恒 true、
-   electron-free 无传递闭包、legacy 启动门绕过）+ C 2 major（release 缺
-   bundle:dsh、ubuntu 腿 darwin 硬断言）+ D 2 medium（loopback 不变量无测试、
-   两 owner 宿主域期望集不对称）+ E 2 low（未知阻塞原因文案不诚实、无插件内
-   锁步测试）+ F 10 项文档漂移。**仍开放（登记）**：CLI 命令面
-   （serve/status/connections/host logs）无测试；
-   两 owner `activationFacts` 排除规则分歧未锁定；Swift `print` 无日志分级；
-   `QuitGate.reset`/`chamber-bridge.stub.js` 死代码；真实 Apple 凭据公证、
-   实机 G 门、runner 实跑。
+- **macOS Swift 原生壳（design 25，路线 A）的开放门禁**：正式决策 D1–D7 未签核
+  （实现按推荐默认值落位），M5 门禁未闭合。剩余：
+
+  - **实机 / GUI 验收（打包 `.app` + 真实实例）**：通知权限时机与点击激活会话、
+    SMAppService 登录项、LaunchServices 深链冷/热启动、关窗隐藏与恢复、唤醒补发、
+    ATS loopback，以及 WKWebView 无 `backgroundThrottling:false` 等价物下的
+    SSE/WS 心跳与恢复（design 25 §8.1 C1/C2、§8.5 W1–W6；判定标准见 todo
+    companion §七）。
+  - **凭据 / runner-only 发布证明**：Developer ID 签名、公证、stapler、spctl
+    各臂与 arch（lipo）断言在真实 runner 上的实跑，以及首个正式 `build-swift`
+    发布腿（release.yml 已 fail-closed 就绪；缺 Apple 凭据 = 外部阻断，
+    design 25 §7 / companion A6）。
+  - **M5 实机矩阵的 parity 与性能收口**：W-29（W1–W6 逐项判定）与 W-30（双端
+    性能/产物体积对比）未执行，见 todo companion §七协议与 WBS。
+  - **有意保留的零 core 消费者契约面**：`resolveResource`、`isPackaged`、
+    `notifyClicked`、`trayAvailable`、`focusMainWindow`、`launchApp` 与
+    HostEdges 同步 `setKeepAwake`/`setLoginItem` 在
+    `packages/desktop/shell-core.ts:679-762` 只有声明与 doc、无任何调用点
+    （settings 路径走装配 ctx 的 async 叶）——保留为 flavor 契约，不是死代码。
+  - **`BridgeClient` 事件帧入站面保留**：`onEvent` 派发
+    （`macos/Sources/DSHChamberPoc/BridgeClient.swift:214/605`）无生产接线，
+    仅为 `BridgeClientIntegrationTests` 夹具保留；删除前须先处理该测试。
+  - **通知音效平台等价物**：Swift 侧 `silent → 无声`、否则系统默认声
+    （`macos/Sources/DSHChamberPoc/SwiftEdgeHostLegs.swift:219-222`）；
+    Electron darwin 用具名 `Glass`，UNUserNotificationCenter 无该资源——
+    默认声是平台等价物，差异已登记。
 - **起始端口偏移**：本地默认 17510、控制面默认 17500；当前固定起始端口 + P+1 重试 +
   记录仲裁，是否开放配置仍未决。
 - **trusted-host 自定义 Host**：当前反代 Host 与实例自身 `127.0.0.1:<port>` 一致；
@@ -939,9 +779,11 @@
 - **多控制面 `$DSH_HOME` 冲突**：同 stateDir 共享 home 时会话 JSONL 可追加，settings
   由 dsh 的 `settings-conflict` 仲裁；是否进一步隔离未决。
 - **多控制面 catalog metadata 无跨进程 CAS**：label/accentColor 并发修改是
-  last-writer-wins；可靠多 writer 需 kernel-backed 跨平台 lock + 锁内 reload + 字段
-  intent，否则应正式改为「并发 plane 必须不同 stateDir」。普通 pidfile/mkdir stale
-  lock 存在三方 takeover 双持，不能作为修复。
+  last-writer-wins。design 25 §6.3 的 `<userData>/.dsh-chamber.lock` 只做
+  flavor/实例互斥（仲裁权威是 flock 本身，文件内 pid/时间仅诊断、不含秘密），
+  **不能**当字段级 CAS 用；可靠多 writer 需锁内 reload + 字段 intent，否则应正式
+  改为「并发 plane 必须不同 stateDir」。普通 pidfile/mkdir stale lock 存在三方
+  takeover 双持，不能作为修复。
 - **响应头白名单双处同步**：权威在 04 §4.3，仍建议把代码/文档表述进一步单源化。
 - **`__DSH_BOOT__` 随 dsh 版本漂移**：manifest 形状继续以 vendor `parseBootManifest`
   为准维护。
@@ -1534,7 +1376,7 @@
   `.footerActions { gap: 4px }` 一例，纵向间距仍按官方契约由 occupant 自己的 margin 承担
   （settings 触发器 `margin: 4px -2px` / rail `8px 0 10px`）。
 - **侧栏与 git 的 16/18/20px 图标钮命中区回到视觉盒，重新低于 WCAG 2.2 2.5.8 的 24px
-  （2026-09-14 用户指令「按照 v0.2.4 恢复」，偏差）**：2026-09 命中盒 pass `33238ffe`
+  （2026-09-14 用户指令「按照 v0.2.4 恢复」，偏差）**：2026-09 命中盒修复
   给 `.actionIcon` / `.searchButton` / `.searchClear` / `.foldToggle` / `.sourceFoldToggle`
   / `.railDotButton`（`sidebar-chamber.module.css`）与 `.headerGitAction` /
   `.unregisteredAction`（`SidebarGit.module.css`）各加一层不可见 `::after` rim，并顺带

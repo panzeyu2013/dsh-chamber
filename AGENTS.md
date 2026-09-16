@@ -90,7 +90,9 @@ decision value and is not already owned by a design document or `CHANGELOG.md`.
 ### Before changing the Swift native shell (`macos/`)
 
 - Assemble the sidecar payload and the app with `pnpm run build:sidecar` then
-  `pnpm run build:swift-app` (both take `--dry-run` / `--no-sign` / `--out`); the native artifacts
+  `pnpm run build:swift-app` (`build:sidecar` takes `--out`/`--dry-run` plus its
+  `--skip-*` switches — it has no `--no-sign`; `build:swift-app` takes
+  `--dry-run`/`--no-sign`/`--out`); the native artifacts
   ship from the same tag as the Electron ones, so a signed build must pass the assembly's own
   `codesign --verify --deep --strict` and the bundle must stay free of symlinks that escape it.
 - `pnpm run test:macos` is the macOS-only leg (darwin lock assertions plus the packaging-script
@@ -147,9 +149,13 @@ surfaces, applicable guidance, validation, or failure/rollback considerations fr
   check:static` runs that set (registration: `docs/progress/STATUS.md`, 范围决策).
 - Credentials and connection secrets never enter the renderer, logs or any persistence layer — only
   the documented transient write-only form inputs (design 05 §8, design 17).
-- Both flavors resolve one userData root and share one directory lock; the derivation is pinned by
-  the `chamber-lock.test.ts` lockstep assertion, and design 25 §6.3's `<userData>/.dsh-chamber.lock`
-  carries no secrets and is never an arbitration authority.
+- Both flavors resolve one userData root; on Darwin they share one directory lock
+  (`<userData>/.dsh-chamber.lock`: Swift `flock(LOCK_EX|LOCK_NB)`, Electron Darwin
+  `O_EXLOCK|O_NONBLOCK`; non-Darwin Electron returns `unsupported` and passes, and the
+  Swift flavor is macOS-only). The root derivation is pinned by the `chamber-lock.test.ts`
+  lockstep assertion; the lock file carries no secrets and is **never the arbitration
+  authority** — the exclusive lock itself is, and the recorded pid/start time are diagnostics
+  only (design 25 §6.3).
 - Package manager is pnpm, and runtime dependencies are not added without an explicit request
   (current set: `ws`, `electron-updater`, React/Vite, Electron, the embedded pinned `pnpm`, the dsh
   client workspace packages; `typescript` / `@types/*` / `node-pty` are devDependencies — `node-pty`
