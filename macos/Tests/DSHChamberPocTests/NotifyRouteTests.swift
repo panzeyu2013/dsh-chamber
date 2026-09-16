@@ -286,6 +286,27 @@ final class NotifyRouteTests: XCTestCase {
         XCTAssertEqual(dispatch.identifier(sequence: 1), first)
     }
 
+    /// 2026-12 双端逐函数核对 V4/V7：音效名缺省/空串回落 Electron darwin 的 Glass。
+    func testNotificationSoundNameFallsBackToElectronGlass() {
+        XCTAssertEqual(NotificationDispatch.notificationSoundName(nil), "Glass")
+        XCTAssertEqual(NotificationDispatch.notificationSoundName(""), "Glass")
+        XCTAssertEqual(NotificationDispatch.notificationSoundName("Ping"), "Ping")
+    }
+
+    /// 2026-12 双端逐函数核对 V4/V7：spec.sound 进 dispatch（缺省 nil = Glass）。
+    func testNotificationDispatchDecodesSoundName() {
+        let withSound = NotificationDispatch.decode(.object([
+            "notificationId": .number(11),
+            "spec": .object(["title": .string("T"), "sound": .string("Ping")]),
+        ]))
+        XCTAssertEqual(withSound?.sound, "Ping")
+        let withoutSound = NotificationDispatch.decode(.object([
+            "notificationId": .number(12),
+            "spec": .object(["title": .string("T")]),
+        ]))
+        XCTAssertNil(withoutSound?.sound)
+    }
+
     // MARK: - NotificationDispatch（S8：载荷解析 + sourceId/silent）
 
     func testNotificationDispatchDecodesSourceIdAndSilent() {

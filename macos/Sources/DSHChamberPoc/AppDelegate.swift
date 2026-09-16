@@ -41,6 +41,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var quitCleanupStarted = false
     /// 是否在等待 `reply(toApplicationShouldTerminate:)`（每次 .terminateLater 一轮）。
     private var awaitingTerminateReply = false
+    /// SIGTERM/SIGINT 的 DispatchSource（必须常驻持有，否则信号监听失效）。
+    private var signalSources: [DispatchSourceSignal] = []
+    /// 托盘状态项（Electron Tray 对偶：显示窗口 / 退出）。
+    private var statusItem: NSStatusItem?
+    /// 本壳注册的 URL scheme（Info.plist.template CFBundleURLSchemes 同源）。
+    static let deepLinkScheme = "dsh-chamber:"
 
     // MARK: - NSApplicationDelegate
 
@@ -343,6 +349,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
         // 最小主菜单（WKWebView 文本编辑快捷键路由需要；G2 剪贴板走查预检）
         installMainMenu()
+        // 2026-12 双端功能对齐（台账 S3·D12 / S5·F10）：SIGTERM/SIGINT 转入标准退出链
+        // （design 25 §3.3(5)；Electron 同场景走 before-quit）。
+        installSignalHandlers()
+        // argv 冷启动深链（main.ts scanDeepLinkUrls 对偶，台账 S4·F1）：GUI 启动通常走
+        // application(_:open:)，但从终端/脚本直接传 URL 时只有 argv。
+        enqueueCommandLineDeepLinks()
+        // 托盘入口（Electron Tray「显示窗口/退出」对偶，台账 S3·V4 / S4·U3）。
+        installStatusItem()
     }
 
     /// 关闭最后一个窗口不退出（隐藏到 Dock 语义；G5 退出/隐藏走查在 W-07）
@@ -473,7 +487,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         alert.messageText = "退出 dsh-chamber？"
         alert.informativeText = QuitCoordinator.confirmDetail(reasons: facts.quitReasons)
         alert.addButton(withTitle: "退出")
-        alert.addButton(withTitle: "取消")
+        let cancelButton = alert.addButton(withTitle: "取消")
+        // 与 Electron 对齐（main.ts:1064-1066 buttons ['退出','取消'] defaultId: 1
+        // cancelId: 1；2026-12 双端逐函数核对 V2）：Enter 命中「取消」这个安全项。
+        cancelButton.keyEquivalent = "\r"
         let response = alert.runModal()
         quitGate.endConfirm()
         if response == .alertFirstButtonReturn {
@@ -607,7 +624,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     /// fatal 分流（Supervisor 不可恢复：锁冲突 / 重启耗尽 / spawn 失败）——
-    /// 运行中 fatal 不直接退出（窗口仍在，用户可自行退出）。
+    /// 与 Electron 对齐（main.ts:246-266 fatal = 弹框后 app.exit(1)，2026-12 双端逐
+    /// 函数核对 S2·F2）：呈现致命提示后**终止进程**，绝不留一个对着死桥的窗口
+    /// （所有 invoke 恒 code 2 的僵尸 UI）。
     ///
     /// 呈现语义（2026-09 GUI 验收修正）：
     /// - **单次呈现门**：同一 fatal 会同时走 Supervisor.onFatal 与本类的
@@ -625,9 +644,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         alert.messageText = "dsh-chamber sidecar 异常"
         alert.informativeText = message
         if let window = NSApp.windows.first(where: { $0.isVisible }) {
-            alert.beginSheetModal(for: window, completionHandler: nil)
+            alert.beginSheetModal(for: window) { _ in exit(1) }
         } else {
             alert.runModal()
+            exit(1)
         }
     }
 
@@ -655,7 +675,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             Self.fatalAlertShown = true
             let alert = NSAlert()
             alert.alertStyle = .critical
-            alert.messageText = "dsh-chamber POC 启动失败"
+            alert.messageText = "dsh-chamber 启动失败"
             alert.informativeText = message
             alert.runModal()
         }
@@ -671,8 +691,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
         let appMenuItem = NSMenuItem()
         mainMenu.addItem(appMenuItem)
+        // App 菜单补齐 macOS 标准项（Electron 未自定义 setApplicationMenu，即系统默认
+        // 菜单；2026-12 双端逐函数核对 V5/U4 的功能对齐）。
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "退出 dsh-chamber POC",
+        appMenu.addItem(withTitle: "关于 dsh-chamber",
+                        action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
+                        keyEquivalent: "")
+        appMenu.addItem(.separator())
+        let servicesItem = NSMenuItem(title: "服务", action: nil, keyEquivalent: "")
+        servicesItem.submenu = NSMenu(title: "服务")
+        appMenu.addItem(servicesItem)
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "隐藏 dsh-chamber",
+                        action: #selector(NSApplication.hide(_:)),
+                        keyEquivalent: "h")
+        let hideOthers = appMenu.addItem(withTitle: "隐藏其他",
+                                         action: #selector(NSApplication.hideOtherApplications(_:)),
+                                         keyEquivalent: "h")
+        hideOthers.keyEquivalentModifierMask = [.command, .option]
+        appMenu.addItem(withTitle: "显示全部",
+                        action: #selector(NSApplication.unhideAllApplications(_:)),
+                        keyEquivalent: "")
+        appMenu.addItem(.separator())
+        appMenu.addItem(withTitle: "退出 dsh-chamber",
                         action: #selector(NSApplication.terminate(_:)),
                         keyEquivalent: "q")
         appMenuItem.submenu = appMenu
@@ -698,6 +739,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         windowMenu.addItem(withTitle: "关闭",
                            action: #selector(NSWindow.performClose(_:)),
                            keyEquivalent: "w")
+        windowMenu.addItem(withTitle: "缩放",
+                           action: #selector(NSWindow.performZoom(_:)),
+                           keyEquivalent: "")
+        windowMenu.addItem(.separator())
+        windowMenu.addItem(withTitle: "前置全部窗口",
+                           action: #selector(NSApplication.arrangeInFront(_:)),
+                           keyEquivalent: "")
         windowMenuItem.submenu = windowMenu
         mainMenu.setSubmenu(windowMenu, for: windowMenuItem)
 
@@ -708,6 +756,74 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let menu = Self.makeMainMenu()
         NSApp.mainMenu = menu
         NSApp.windowsMenu = menu.items.first { $0.submenu?.title == "窗口" }?.submenu
+        NSApp.servicesMenu = menu.items
+            .compactMap({ $0.submenu })
+            .flatMap({ $0.items })
+            .first(where: { $0.title == "服务" })?.submenu
+    }
+
+    /// SIGTERM/SIGINT → NSApp.terminate（走 applicationShouldTerminate 的三分支与
+    /// 清理链，绝不绕过退出确认/清理）。先 SIG_IGN 再交给 DispatchSource 是标准做法。
+    private func installSignalHandlers() {
+        for sig in [SIGTERM, SIGINT] {
+            signal(sig, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+            source.setEventHandler {
+                print("[poc] 收到信号 \(sig)：转入标准退出链")
+                NSApp.terminate(nil)
+            }
+            source.resume()
+            signalSources.append(source)
+        }
+    }
+
+    /// argv 冷启动深链：跳过 argv[0] 与非本 scheme 的参数。归一化/去重/排队由 core 的
+    /// enqueueDeepLink 负责，本层与 application(_:open:) 共用同一条缓冲（只做不丢）。
+    private func enqueueCommandLineDeepLinks() {
+        for raw in Self.commandLineDeepLinks(arguments: CommandLine.arguments) {
+            print("[poc] 命令行深链 \(raw)")
+            deepLinks.enqueue(raw)
+        }
+    }
+
+    /// argv 深链筛选（纯函数，单测直测）：跳过 argv[0]，只留本 scheme 的参数。
+    static func commandLineDeepLinks(arguments: [String]) -> [String] {
+        arguments.dropFirst().filter { $0.hasPrefix(deepLinkScheme) }
+    }
+
+    /// 托盘（Electron Tray 对偶）：状态栏图标 +「显示窗口 / 退出」。关窗隐藏后这是与
+    /// Dock 并列的恢复入口（2026-12 双端逐函数核对 V4/U3）。
+    private func installStatusItem() {
+        guard statusItem == nil else { return }
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        if let button = item.button {
+            let icon = NSApp.applicationIconImage
+            icon?.size = NSSize(width: 18, height: 18)
+            button.image = icon
+            button.toolTip = "dsh-chamber"
+        }
+        let menu = NSMenu()
+        let show = NSMenuItem(title: "显示窗口",
+                              action: #selector(showMainWindowFromStatusItem(_:)),
+                              keyEquivalent: "")
+        show.target = self
+        menu.addItem(show)
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "退出 dsh-chamber",
+                     action: #selector(NSApplication.terminate(_:)),
+                     keyEquivalent: "")
+        item.menu = menu
+        statusItem = item
+    }
+
+    @objc private func showMainWindowFromStatusItem(_ sender: Any?) {
+        mainWindowController?.showWindow(nil)
+        mainWindowController?.window?.makeKeyAndOrderFront(nil)
+        if #available(macOS 14.0, *) {
+            NSApp.activate()
+        } else {
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 
     /// sidecar 缺失的精确 fatal 文案（S3；纯函数单测直测）。explicitPath 非 nil

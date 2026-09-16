@@ -210,7 +210,8 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                               styleMask: [.titled, .closable, .miniaturizable, .resizable],
                               backing: .buffered,
                               defer: false)
-        window.title = "dsh-chamber POC"
+        // 功能对齐 Electron（窗口标题冻结为 dsh-chamber；2026-12 双端逐函数核对 U5/V8）。
+        window.title = "dsh-chamber"
         window.contentView = webView
         window.center()
         // 关窗决策委托（E1/E20）：windowShouldClose 交给 AppDelegate（隐藏 vs
@@ -822,6 +823,19 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             print("[poc] 拒绝新建窗口请求")
         }
         return nil
+    }
+
+    /// 媒体采集权限：默认拒绝（2026-12 双端逐函数核对 S4·F9/S3·D11）。Electron 只
+    /// 放行 clipboard-sanitized-write、其余权限请求全拒（main.ts:3751-3753）；WKWebView
+    /// 只暴露媒体采集这一类权限回调（macOS 12+），因此这里拒绝摄像头/麦克风/屏幕共享，
+    /// 剪贴板与网页 Notification 的等价面登记在台账。
+    func webView(_ webView: WKWebView,
+                 requestMediaCapturePermissionFor origin: WKSecurityOrigin,
+                 initiatedByFrame frame: WKFrameInfo,
+                 type: WKMediaCaptureType,
+                 decisionHandler: @escaping (WKPermissionDecision) -> Void) {
+        print("[poc] 拒绝媒体采集权限请求（origin=\(origin.host) type=\(type.rawValue)）")
+        decisionHandler(.deny)
     }
 
     // MARK: - 私有

@@ -71,6 +71,8 @@ struct NotificationDispatch: Equatable {
     var title: String
     var body: String
     var silent: Bool
+    /// 具名音效（Electron darwin: spec.sound ?? 'Glass'；nil = 用默认名 Glass）。
+    var sound: String?
 
     /// 本壳进程的投递标识纪年。
     static let identifierEpoch = String(UUID().uuidString.prefix(8)).lowercased()
@@ -86,6 +88,18 @@ struct NotificationDispatch: Equatable {
         "chamber-edge-\(Self.identifierEpoch).\(sequence).\(notificationId)"
     }
 
+    /// 音效名解析（纯函数，单测直测）：空名/缺省回落 Electron darwin 的默认
+    /// 'Glass'（electron-edges.ts:161 spec.sound ?? 'Glass'）。
+    static func notificationSoundName(_ name: String?) -> String {
+        (name?.isEmpty == false) ? name! : "Glass"
+    }
+
+    /// 具名音效（2026-12 双端逐函数核对 V4/V7）：UNUserNotificationCenter 以系统
+    /// 音效名等价表达 Electron 的具名音效；名字无法解析时系统回落默认声。
+    static func notificationSound(named name: String?) -> UNNotificationSound {
+        UNNotificationSound(named: UNNotificationSoundName(notificationSoundName(name)))
+    }
+
     /// payload → dispatch；顶层非对象 → nil（调用方 loud 拒绝）。
     static func decode(_ payload: AnyCodable?) -> NotificationDispatch? {
         guard let dict = EdgePayload.dictionary(payload) else { return nil }
@@ -96,7 +110,8 @@ struct NotificationDispatch: Equatable {
             title: spec.flatMap { EdgePayload.string($0["title"]) } ?? "",
             body: spec.flatMap { EdgePayload.string($0["body"]) }
                 ?? spec.flatMap { EdgePayload.string($0["message"]) } ?? "",
-            silent: spec.flatMap { EdgePayload.bool($0["silent"]) } ?? false
+            silent: spec.flatMap { EdgePayload.bool($0["silent"]) } ?? false,
+            sound: spec.flatMap { EdgePayload.string($0["sound"]) }
         )
     }
 }
@@ -249,10 +264,13 @@ public final class SwiftEdgeHostLegs {
         let content = UNMutableNotificationContent()
         content.title = dispatch.title
         content.body = dispatch.body
-        // 声音映射（S8 对齐 electron-edges:157-162）：silent → 无声音，否则
-        // 系统默认声。macOS UNUserNotificationCenter 没有 Electron 的具名
-        // Glass 音效资源——默认声是平台等价物（差异登记）。
-        content.sound = dispatch.silent ? nil : .default
+        // 声音映射（2026-12 双端逐函数核对 V4/V7）：silent → 无声音；否则与
+        // Electron darwin 一致地用具名音效（electron-edges.ts:161
+        // sound: spec.sound ?? 'Glass'）——UNUserNotificationCenter 以系统音效名
+        // 等价表达，缺省名 Glass，名字无法解析时系统回落默认声。
+        content.sound = dispatch.silent
+            ? nil
+            : NotificationDispatch.notificationSound(named: dispatch.sound)
         // 调度前登记（**先于** add）：退役与投递之间没有原子点，先登记让退役端
         // 一定能看到该 identifier；完成回调再由 finishDelivery 判定是否需要在
         // 横幅落地后立即清除（2026-12 验证轮：只在完成回调登记会漏掉这个窗口）。
@@ -609,8 +627,19 @@ public final class SwiftEdgeHostLegs {
             }
         }
         if buttons.isEmpty { buttons = ["OK"] }
-        for title in buttons {
-            alert.addButton(withTitle: title)
+        // defaultId / cancelId（2026-12 双端逐函数核对 F5/Q4）：Electron
+        // dialog.showMessageBox 用 defaultId 指定 Enter 命中的按钮、cancelId 指定
+        // Esc 命中的按钮；NSAlert 用 keyEquivalent 表达同一语义。两者相同或越界
+        // 时不额外设置（避免一键双义；NSAlert 缺省即首个按钮回车）。
+        let defaultId = EdgePayload.int(dict["defaultId"])
+        let cancelId = EdgePayload.int(dict["cancelId"])
+        for (index, title) in buttons.enumerated() {
+            let button = alert.addButton(withTitle: title)
+            if let defaultId, defaultId == index, defaultId != cancelId {
+                button.keyEquivalent = "\r"
+            } else if let cancelId, cancelId == index {
+                button.keyEquivalent = "\u{1b}"
+            }
         }
         var modalResponse: NSApplication.ModalResponse = .alertFirstButtonReturn
         let run: () -> Void = { modalResponse = alert.runModal() }

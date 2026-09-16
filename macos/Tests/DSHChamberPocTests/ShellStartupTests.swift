@@ -382,6 +382,43 @@ final class ShellStartupTests: XCTestCase {
         XCTAssertEqual(miniItem?.keyEquivalent, "m")
     }
 
+    /// 2026-12 双端逐函数核对 V5/U4：App 菜单含 About/隐藏/退出（对齐 Electron 的
+    /// 系统默认菜单），窗口菜单含缩放与前置全部窗口。
+    func testMainMenuCarriesStandardAppMenuItems() {
+        let menu = AppDelegate.makeMainMenu()
+        guard let appMenu = menu.items.first?.submenu else {
+            return XCTFail("主菜单缺少 App 子菜单")
+        }
+        XCTAssertNotNil(appMenu.items.first { $0.action == #selector(NSApplication.orderFrontStandardAboutPanel(_:)) },
+                        "App 菜单应含「关于」")
+        XCTAssertNotNil(appMenu.items.first { $0.action == #selector(NSApplication.hide(_:)) },
+                        "App 菜单应含「隐藏」")
+        XCTAssertNotNil(appMenu.items.first { $0.action == #selector(NSApplication.hideOtherApplications(_:)) },
+                        "App 菜单应含「隐藏其他」")
+        XCTAssertNotNil(appMenu.items.first { $0.action == #selector(NSApplication.unhideAllApplications(_:)) },
+                        "App 菜单应含「显示全部」")
+        XCTAssertNotNil(appMenu.items.first { $0.action == #selector(NSApplication.terminate(_:)) },
+                        "App 菜单应含「退出」")
+        guard let windowMenu = menu.items.compactMap({ $0.submenu }).first(where: { $0.title == "窗口" }) else {
+            return XCTFail("主菜单缺少「窗口」子菜单")
+        }
+        XCTAssertNotNil(windowMenu.items.first { $0.action == #selector(NSWindow.performZoom(_:)) })
+        XCTAssertNotNil(windowMenu.items.first { $0.action == #selector(NSApplication.arrangeInFront(_:)) })
+    }
+
+    /// 2026-12 双端逐函数核对 S4·F1：argv 冷启动深链筛选（跳过 argv[0] 与非本 scheme）。
+    func testCommandLineDeepLinkFilter() {
+        let urls = AppDelegate.commandLineDeepLinks(arguments: [
+            "/Applications/dsh-chamber-native.app/Contents/MacOS/DSHChamberPoc",
+            "--flag",
+            "dsh-chamber://open/session?x=1",
+            "https://example.com",
+            "dsh-chamber://second",
+        ])
+        XCTAssertEqual(urls, ["dsh-chamber://open/session?x=1", "dsh-chamber://second"])
+        XCTAssertEqual(AppDelegate.commandLineDeepLinks(arguments: ["/bin/x"]), [])
+    }
+
     // MARK: - S3：sidecar 缺失文案 / S11 端口来源标签
 
     func testMissingSidecarMessageIsPrecise() {
