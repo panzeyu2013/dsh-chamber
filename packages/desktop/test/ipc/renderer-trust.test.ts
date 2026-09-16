@@ -119,19 +119,34 @@ test('fatal main-process boundary claims ownership before every hostile host cal
 })
 
 test('committed settings, registry and held-resume pushes use the non-throwing send boundary', () => {
-  const source = readFileSync(new URL('../../main.ts', import.meta.url), 'utf8')
-  assert.match(source, /function pushSettingsChanged\(\): void \{[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{/)
-  assert.match(source, /function pushHeldSystemResume\([\s\S]*?attemptCommittedRegistryPush\(\(\) => \{/)
-  assert.match(source, /IPC_CHANNELS\.SSH_INSTANCES_CHANGED[\s\S]*?return projectedSaved;/)
-  assert.match(source, /const statusWindow = mainWindow;[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{[\s\S]*?IPC_CHANNELS\.SSH_STATUS_CHANGED/)
-  assert.match(source, /const updateWindow = mainWindow;[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{[\s\S]*?IPC_CHANNELS\.UPDATE_STATE_CHANGED/)
+  // W-10 S1: pushSettingsChanged（SETTINGS_CHANGED send 源）随 info+settings
+  // 批迁入 shell-core（installIpcHandlers 内；最内 send 叶改 HostEdges
+  // rendererPush，attemptCommittedRegistryPush 非-throw 包装随迁）。
+  // W-10 S2: held-resume（pushHeldSystemResume + lastResume 补发）随渲染器投递
+  // 状态机迁入 shell-core（SYSTEM_RESUME send 叶同改 rendererPush）——两锚的
+  // 读取源都指向 shell-core.ts，断言意图原样保留。
+  // W-10 S9: updater 状态 push（updater.subscribe + UPDATE_STATE_CHANGED send
+  // 源）随 I 组 update 注册体迁入 shell-core（committed-push 包装同款；原
+  // main.ts 的 updateWindow 主窗身份复查折算为主窗门 + rendererPush 求值，见
+  // installIpcHandlers I 组段注释）——该锚读取源随之指向 shell-core.ts。
+  // 其余推送锚（instances / status）仍在 main.ts。
+  const core = readFileSync(new URL('../../shell-core.ts', import.meta.url), 'utf8')
+  const main = readFileSync(new URL('../../main.ts', import.meta.url), 'utf8')
+  assert.match(core, /function pushSettingsChanged\(\): void \{[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{/)
+  assert.match(core, /function pushHeldSystemResume[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{/)
+  assert.match(main, /IPC_CHANNELS\.SSH_INSTANCES_CHANGED[\s\S]*?return projectedSaved;/)
+  assert.match(main, /const statusWindow = mainWindow;[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{[\s\S]*?IPC_CHANNELS\.SSH_STATUS_CHANGED/)
+  assert.match(core, /updater\.subscribe\(\(updateState\) => \{[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{[\s\S]*?IPC_CHANNELS\.UPDATE_STATE_CHANGED/)
 })
 
 test('renderer ACK deliveries project and preload-validates the captured lifecycle proof', () => {
-  const main = readFileSync(new URL('../../main.ts', import.meta.url), 'utf8')
+  // W-10 S2: DEEP_LINK_INTENT / NOTIFICATION_OPEN 的 send 源（drain 内投影构造）
+  // 随渲染器投递队列迁入 shell-core——fingerprint 投影断言的读取源指向
+  // shell-core.ts（意图保留：payload 只带非秘密投影字段）。
+  const core = readFileSync(new URL('../../shell-core.ts', import.meta.url), 'utf8')
   const preload = readFileSync(new URL('../../preload.cts', import.meta.url), 'utf8')
-  assert.match(main, /IPC_CHANNELS\.DEEP_LINK_INTENT[\s\S]*?sourceFingerprint: intent\.sourceFingerprint/)
-  assert.match(main, /IPC_CHANNELS\.NOTIFICATION_OPEN[\s\S]*?sourceFingerprint: delivery\.payload\.sourceFingerprint/)
+  assert.match(core, /IPC_CHANNELS\.DEEP_LINK_INTENT[\s\S]*?sourceFingerprint: intent\.sourceFingerprint/)
+  assert.match(core, /IPC_CHANNELS\.NOTIFICATION_OPEN[\s\S]*?sourceFingerprint: delivery\.payload\.sourceFingerprint/)
   assert.match(preload, /const REMOTE_SOURCE_FINGERPRINT_PATTERN = \/\^\[a-f0-9\]\{64\}\$\//)
   assert.match(preload, /validSourceFingerprint\(intent\.instanceId, intent\.sourceFingerprint\)/)
   assert.match(preload, /validSourceFingerprint\(sourceId as string, req\.sourceFingerprint\)/)

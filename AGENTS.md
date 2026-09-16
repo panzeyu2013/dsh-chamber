@@ -87,6 +87,17 @@ decision value and is not already owned by a design document or `CHANGELOG.md`.
   still-open deviations to `docs/progress/STATUS.md`. `upstream-touchpoints.md` keeps only the
   structural registry (file classifications, contract mirrors, artifacts, gate criteria).
 
+### Before changing the Swift native shell (`macos/`)
+
+- Assemble the sidecar payload and the app with `pnpm run build:sidecar` then
+  `pnpm run build:swift-app` (`build:sidecar` takes `--out`/`--dry-run` plus its
+  `--skip-*` switches — it has no `--no-sign`; `build:swift-app` takes
+  `--dry-run`/`--no-sign`/`--out`); the native artifacts
+  ship from the same tag as the Electron ones, so a signed build must pass the assembly's own
+  `codesign --verify --deep --strict` and the bundle must stay free of symlinks that escape it.
+- `pnpm run test:macos` is the macOS-only leg (darwin lock assertions plus the packaging-script
+  suites); it runs in the ci.yml `test-macos` job, never on the ubuntu leg.
+
 ### Before a pull request
 
 Read `CONTRIBUTING.md` and `.github/PULL_REQUEST_TEMPLATE.md`; complete the template with concrete,
@@ -123,6 +134,7 @@ surfaces, applicable guidance, validation, or failure/rollback considerations fr
 | `packages/dsh-chamber-seed-*` | Chamber host packages seeded into the managed instance: read-only client boot graph, in-instance Git worktree, archived-session content cleanup, in-instance open-in catalog/icons/launch (designs 09, 08, 24, 20) |
 | `packages/cli` | CLI thin shell (serve/status/connections/host logs) |
 | `packages/gateway` | Separately invoked server shape (design 17): authenticated-by-default public boundary, single local-dsh proxy, host duties, seed registry |
+| `macos/` | Swift native shell (design 25): WKWebView over the control-plane origin, the packaged Node sidecar, native edges (notifications, deep link, open-in, hide/restore), and the shared directory lock |
 
 ## Hard Facts
 
@@ -137,6 +149,13 @@ surfaces, applicable guidance, validation, or failure/rollback considerations fr
   check:static` runs that set (registration: `docs/progress/STATUS.md`, 范围决策).
 - Credentials and connection secrets never enter the renderer, logs or any persistence layer — only
   the documented transient write-only form inputs (design 05 §8, design 17).
+- Both flavors resolve one userData root; on Darwin they share one directory lock
+  (`<userData>/.dsh-chamber.lock`: Swift `flock(LOCK_EX|LOCK_NB)`, Electron Darwin
+  `O_EXLOCK|O_NONBLOCK`; non-Darwin Electron returns `unsupported` and passes, and the
+  Swift flavor is macOS-only). The root derivation is pinned by the `chamber-lock.test.ts`
+  lockstep assertion; the lock file carries no secrets and is **never the arbitration
+  authority** — the exclusive lock itself is, and the recorded pid/start time are diagnostics
+  only (design 25 §6.3).
 - Package manager is pnpm, and runtime dependencies are not added without an explicit request
   (current set: `ws`, `electron-updater`, React/Vite, Electron, the embedded pinned `pnpm`, the dsh
   client workspace packages; `typescript` / `@types/*` / `node-pty` are devDependencies — `node-pty`

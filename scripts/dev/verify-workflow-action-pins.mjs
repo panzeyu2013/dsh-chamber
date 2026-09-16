@@ -42,6 +42,22 @@ for (const source of sources) {
     actionPins.set(action, pins)
   }
 }
+// 三审：上面的 usesPattern 要求存在 `@`，因此 `uses: actions/checkout`（完全
+// 不写 ref）会**整条漏检**。这里对每条 uses 行做独立判定：外部 action 必须
+// 是 `<owner>/<repo>@<40-hex>`；本地 ./ 与 docker:// 除外。
+for (const source of sources) {
+  const anyUses = /^\s*-?\s*uses:\s*(.+?)\s*$/gm
+  for (const match of source.text.matchAll(anyUses)) {
+    const value = match[1].replace(/#.*$/, '').trim()
+    if (value.startsWith('./') || value.startsWith('docker://')) continue
+    assert.match(
+      value,
+      /^[^\s@]+@[0-9a-f]{40}$/,
+      `uses: ${value} must pin a full immutable commit SHA in ${source.path} (an omitted @ref is not a pin)`,
+    )
+  }
+}
+
 for (const [action, pins] of actionPins) {
   const unique = new Set(pins.map(pin => pin.sha))
   assert.equal(unique.size, 1, `${action} pins drifted across workflows: ${[...unique].join(', ')}`)

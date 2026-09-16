@@ -26,22 +26,22 @@ import {
   getUpdateState, subscribeUpdateState, requestUpdateCheck, requestUpdateDownload, requestUpdateRestart, requestOpenReleasePage,
 } from './update-store.ts'
 import { updateCheckDisabled, updateCheckPlatformBlocked, updateRestartAvailable } from './update-gate.ts'
+import { classifyBlockedReason } from './blocked-reason.ts'
 import css from './SettingsShell.module.css'
 
 /** The shell's bound translate (params supported: {version} {percent} {reason}). */
 type UpdateTranslate = (key: SettingsBridgeKey, params?: Record<string, unknown>) => string
 
-/**
- * Localized reason for the mac-install-blocked state (design 11 §3.1): the
- * main-process reasons are technical English; map the known ones to
- * dictionary keys so the zh/en row reads naturally, falling back to the raw
- * reason for anything unknown (honest, never fabricated).
- */
 function blockedCopy(update: UpdateState, t: UpdateTranslate): string {
-  if (update.installBlockedReason === 'missing Developer ID signature') {
-    return t('updateInstallBlockedMacSigning')
+  switch (classifyBlockedReason(update.installBlockedReason)) {
+    case 'native-shell':
+      return t('updateInstallBlockedNativeShell')
+    case 'mac-signing':
+      return t('updateInstallBlockedMacSigning')
+    default:
+      // 未知原因：原样透出（诚实，不编造签名缺失）。
+      return t('updateDownloadBlocked', { reason: update.installBlockedReason ?? '' })
   }
-  return t('updateDownloadBlocked', { reason: update.installBlockedReason ?? '' })
 }
 
 /**
@@ -108,9 +108,22 @@ function StatusRow({
         return installBlockedReason !== null ? (
           <div className={css.updateStatusLine}>
             <span className={css.updateStatusText}>
-              {update.channel === 'beta'
-                ? t('updateAvailableBlockedBeta', { version: latestVersion ?? '' })
-                : t('updateAvailableBlocked', { version: latestVersion ?? '' })}
+              {(() => {
+                const version = latestVersion ?? ''
+                switch (classifyBlockedReason(installBlockedReason)) {
+                  case 'native-shell':
+                    return t('updateAvailableBlockedNativeShell', { version })
+                  case 'mac-signing':
+                    return update.channel === 'beta'
+                      ? t('updateAvailableBlockedBeta', { version })
+                      : t('updateAvailableBlocked', { version })
+                  default:
+                    return t('updateAvailableBlockedUnknown', {
+                      version,
+                      reason: installBlockedReason ?? '',
+                    })
+                }
+              })()}
             </span>
             {releaseLink}
           </div>

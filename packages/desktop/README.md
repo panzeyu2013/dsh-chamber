@@ -113,7 +113,7 @@ pnpm run dist:desktop
 
 ### 运行数据位置
 
-- **打包态**：`userData = ~/Library/Application Support/dsh-chamber`（macOS；Windows `%APPDATA%\dsh-chamber`、Linux `~/.config/dsh-chamber`）。
+- **打包态**：`userData = appData + app.getName()`；`app.getName()` 取 package.json 的**顶层** `productName`、其次 `name`。本仓顶层没有 `productName`（`build.productName` 只命名 .app/DMG）→ 目录名是包名：macOS `~/Library/Application Support/@dsh-chamber/desktop`（2026-09 实机核实；Windows/Linux 同推导）。Swift 壳同根（`PackagedLayout.userDataDir`，由 `chamber-lock.test.ts` ⑦ lockstep 断言钉住）。
 - **dev 态**：`electron-dev.mjs` 显式传 `--user-data-dir=packages/desktop/.dev-user-data`（gitignored）——**dev 与打包态目录不同、状态互不共享**（注册表/密码/目录各自独立）。
 - userData 下内容：`ssh-instances.json`、`ssh-passwords.json`（schema v2 binding）、`gateway-secrets.json`（schema v3 binding；safeStorage 优先、诚实 0600 plaintext fallback）与 `state/` + Electron 自身缓存。
 - **不在 userData 下**：askpass 助手位于 `os.tmpdir()/dsh-chamber-ssh-<pid>-<random>/`；独立控制面默认 `~/.dsh-chamber` 或 `$DSH_CHAMBER_STATE`。

@@ -491,7 +491,16 @@ function arrowFunctionBody(source: string, name: string): string {
   return balancedBlock(source, source.indexOf('{', start))
 }
 
-const desktopMain = readFileSync(join(import.meta.dirname, '..', '..', '..', '..', 'packages', 'desktop', 'main.ts'), 'utf8')
+// The desktop main-process surface spans two files on this branch: W-10 moved the
+// 60 trusted-IPC registrations (RUNTIME_RESTART among them) into shell-core.ts,
+// which takes an injected registrar, while the desktop-only `runtimeActionAllowed`
+// guards stayed in main.ts. Read both, like ipc-surface-mirror.test.ts's
+// MAIN_SIDE_FILES — pointing these assertions at main.ts alone would report the
+// relocated handler as "gone" (and vice versa).
+const MAIN_SIDE_FILES = ['main.ts', 'shell-core.ts']
+const desktopMain = MAIN_SIDE_FILES
+  .map(file => readFileSync(join(import.meta.dirname, '..', '..', '..', '..', 'packages', 'desktop', file), 'utf8'))
+  .join('\n')
 
 test('main.ts still orders the three desktop-only guards before the shared core, unchanged (P3)', () => {
   const body = arrowFunctionBody(desktopMain, 'runtimeActionAllowed')
@@ -519,8 +528,8 @@ test('main.ts still orders the three desktop-only guards before the shared core,
 })
 
 test('main.ts keeps restart-dsh on its own gate, outside the unsupported-platform guard (P3)', () => {
-  const handleStart = desktopMain.indexOf('ipcMain.handle(IPC_CHANNELS.RUNTIME_RESTART')
-  assert.notEqual(handleStart, -1, 'the RUNTIME_RESTART handler is gone from main.ts')
+  const handleStart = desktopMain.indexOf('.handle(IPC_CHANNELS.RUNTIME_RESTART')
+  assert.notEqual(handleStart, -1, 'the RUNTIME_RESTART handler is gone from the main-side files (main.ts + shell-core.ts)')
   const handler = balancedBlock(desktopMain, desktopMain.indexOf('{', handleStart))
   assert.match(handler, /const busyPhase = state\.phase === 'checking'/,
     'the restart gate must keep refusing the busy phases')

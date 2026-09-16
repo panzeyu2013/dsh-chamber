@@ -1,0 +1,7 @@
+# macOS Swift 壳（macos/，design 25 §3.2）——SwiftPM 构建产物与本地状态
+.build/
+.swiftpm/
+*.xcodeproj
+.DS_Store
+# W-24 打包产物（build-swift-app.mjs 缺省输出目录：.app/zip/dmg）
+release/

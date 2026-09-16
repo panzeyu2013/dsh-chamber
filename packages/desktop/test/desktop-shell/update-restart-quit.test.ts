@@ -35,6 +35,14 @@ const desktopMain = readFileSync(join(import.meta.dirname, '..', '..', 'main.ts'
  *  debugging (2026-09-13 round-2 review F3). */
 const desktopCode = stripComments(desktopMain)
 
+// W-10 (design 25 §4.1 seam): the updater registration bodies and the state
+// subscription live in shell-core.ts's installIpcHandlers (deps.ipc.handle);
+// main.ts keeps only the assembly, the arming/disarming host state and the
+// controller creation. The two assertions that pin the IPC/subscription side
+// therefore read shell-core.ts, comment-stripped the same way.
+const coreSource = readFileSync(join(import.meta.dirname, '..', '..', 'shell-core.ts'), 'utf8')
+const coreCode = stripComments(coreSource)
+
 /**
  * Top-level `;`-separated statements of a `{ … }` block, whitespace collapsed.
  * Statement level, not substring: `if (false) updaterQuitArmed = true;` contains
@@ -97,11 +105,11 @@ test('main.ts: the controller is given the arming hook, and the restart handler 
     'the close-to-tray exception must be armed by the controller hook (the only proof the native quit was really armed)')
   assert.match(creation, /onNativeUpdaterQuitting: armNativeUpdaterQuit/,
     'the native before-quit-for-update signal must be bridged to the host (late native quit + quit fallback)')
-  const handlerStart = desktopMain.indexOf('ipcMain.handle(IPC_CHANNELS.UPDATE_RESTART')
-  assert.notEqual(handlerStart, -1, 'the UPDATE_RESTART handler is gone from main.ts')
-  const statementEnd = desktopMain.indexOf(';\n', handlerStart)
+  const handlerStart = coreCode.indexOf('deps.ipc.handle(IPC_CHANNELS.UPDATE_RESTART')
+  assert.notEqual(handlerStart, -1, 'the UPDATE_RESTART handler is gone from shell-core.ts')
+  const statementEnd = coreCode.indexOf(';\n', handlerStart)
   assert.notEqual(statementEnd, -1, 'the UPDATE_RESTART handler statement is unterminated')
-  const handler = desktopMain.slice(handlerStart, statementEnd)
+  const handler = coreCode.slice(handlerStart, statementEnd)
   assert.match(handler, /updater\.restartAndInstall\(\)/,
     'the IPC boundary must stay a plain call: arming and its rollback belong to the controller hook + the failure pushes')
   assert.equal(handler.includes('armUpdaterQuit()'), false,
@@ -163,12 +171,14 @@ test('main.ts: the arming flag really is set and really is released (the fix IS 
 })
 
 test('main.ts: the updater state subscription disarms on restart failure and restores the window', () => {
-  const subscribeStart = desktopMain.indexOf('updater.subscribe((updateState) => {')
-  assert.notEqual(subscribeStart, -1, 'the updater state subscription is gone from main.ts')
-  const subscription = balancedBlock(desktopMain, subscribeStart)
+  const subscribeStart = coreCode.indexOf('updater.subscribe((updateState) => {')
+  assert.notEqual(subscribeStart, -1, 'the updater state subscription is gone from shell-core.ts')
+  const subscription = balancedBlock(coreCode, subscribeStart)
   assert.match(subscription, /updateState\.restartFailureText !== undefined \|\| updateState\.phase !== 'downloaded'/,
     'a restart failure push (one-shot restartFailureText, phase stays downloaded) or a phase that left downloaded must release the arming')
-  assert.match(subscription, /disarmUpdaterQuit\(/, 'the release path must go through disarmUpdaterQuit')
+  // W-10: core reaches the arming state through the ctx leaf (the host state
+  // itself stays in main.ts — see the disarm assertions below).
+  assert.match(subscription, /disarmUpdaterQuit\?\.\(/, 'the release path must go through the ctx disarmUpdaterQuit leaf')
   const disarm = balancedBlock(desktopMain, desktopMain.indexOf('function disarmUpdaterQuit('))
   assert.match(disarm, /showMainWindow\(\)/,
     'when the update quit leg already closed the window, the failure must bring it back — that is the only honest failure surface')

@@ -93,7 +93,7 @@
   任何测试见证：其唯一可能生效的路径是 `registerGenerationSource` 的 disposer（`:336-341`
   释放 owner 却不拆触发器），而该路径必经 `releaseOwner`（`:298-305`）调 `controller.stop()`，
   `ConnectionController.reconnect()` 在 `!running` 时首行即返回（`connection.ts:130-131`）⇒
-  删掉守卫行为逐字节相同（实测：删守卫后 7/7 全绿、专用探针输出 `diff` 无差异）。**不要为它补
+  删掉守卫行为逐字节相同（专用探针输出 `diff` 无差异）。**不要为它补
   测试**（那会是新的假绿）；待裁决：留作纵深防御，或按死代码评估删除（`:354`/`:361` 两处同类）。
 - **隐藏 span 的阈值语义只由触发器单元覆盖（2026-12 登记）**：接线层不断言
   `visibilitychange` 隐藏 ≥30s 的真时序（`start()` 不传 `now`/`hiddenReconnectThresholdMs`，
@@ -728,8 +728,50 @@
   "…a protected SUBAGENT descendant protects its archived ancestor tree" 保护子代），唯独"受保护祖先 + 其 archived
   子代候选"没有——**将来若给任何入口开放无过滤清理、或让子代理行可选，先补这条锁再放行**。
 
+- **原生 flavor 的本地 open 执行面待对齐（design 20 §6 实例内 host 包 × design 25 E11/E12）**：
+  main 的 open-in 落地已定契约——本地目录/图标/拉起由**实例内 host 包**
+  `@dsh-chamber/dsh-chamber-seed-open-in`（`localOnly`，design 20 §6）服务，"本地目录
+  不再是主进程的事"（design 20 §210）；桌面壳的 open-in 注册表保持 vscode-only
+  （`OpenInLaunchContext` 无 stat/openPath/showItemInFolder）。**原生侧仍未对齐**：
+  design 25 §5 的 E11/E12 等价表还把 Swift 壳的 `shell.openPath`/`showItemInFolder`/
+  open-in 拉起映射为本地 `NSWorkspace`/`activateFileViewerSelecting`/
+  `HostEdges.launchApp`（`macos/Sources/DSHChamberPoc/SwiftEdgeHostLegs.swift`、
+  `MainWindowController.swift` 的 `showItemInFolder` 路由；Electron 侧同类边沿叶
+  `packages/desktop/electron-edges.ts` 亦仍在，但已无注册表消费点）。**待办（owner）**：
+  要么按新契约把 design 25 E11/E12 与该两侧腿退役/收窄（推荐——与 §6 同模型），要么在
+  design 25 §2 像 design 24 的存在性探针那样明文写死已批准的边界例外。功能面不受影响：
+  原生 flavor 的 sidecar 装配已随包分发 open-in 种子包（`build-sidecar.mjs`
+  HOST_PACKAGES 四项、`--host-open-in-dir` → `hostOpenInPackageSourceDir`），
+  本地实例的 open-in 域照常播种。
+
 ## 设计未决
 
+- **macOS Swift 原生壳（design 25，路线 A）的开放门禁**：正式决策 D1–D7 未签核
+  （实现按推荐默认值落位），M5 门禁未闭合。剩余：
+
+  - **实机 / GUI 验收（打包 `.app` + 真实实例）**：通知权限时机与点击激活会话、
+    SMAppService 登录项、LaunchServices 深链冷/热启动、关窗隐藏与恢复、唤醒补发、
+    ATS loopback，以及 WKWebView 无 `backgroundThrottling:false` 等价物下的
+    SSE/WS 心跳与恢复（design 25 §8.1 C1/C2、§8.5 W1–W6；判定标准见 todo
+    companion §七）。
+  - **凭据 / runner-only 发布证明**：Developer ID 签名、公证、stapler、spctl
+    各臂与 arch（lipo）断言在真实 runner 上的实跑，以及首个正式 `build-swift`
+    发布腿（release.yml 已 fail-closed 就绪；缺 Apple 凭据 = 外部阻断，
+    design 25 §7 / companion A6）。
+  - **M5 实机矩阵的 parity 与性能收口**：W-29（W1–W6 逐项判定）与 W-30（双端
+    性能/产物体积对比）未执行，见 todo companion §七协议与 WBS。
+  - **有意保留的零 core 消费者契约面**：`resolveResource`、`isPackaged`、
+    `notifyClicked`、`trayAvailable`、`focusMainWindow`、`launchApp` 与
+    HostEdges 同步 `setKeepAwake`/`setLoginItem` 在
+    `packages/desktop/shell-core.ts:679-762` 只有声明与 doc、无任何调用点
+    （settings 路径走装配 ctx 的 async 叶）——保留为 flavor 契约，不是死代码。
+  - **`BridgeClient` 事件帧入站面保留**：`onEvent` 派发
+    （`macos/Sources/DSHChamberPoc/BridgeClient.swift:214/605`）无生产接线，
+    仅为 `BridgeClientIntegrationTests` 夹具保留；删除前须先处理该测试。
+  - **通知音效平台等价物**：Swift 侧 `silent → 无声`、否则系统默认声
+    （`macos/Sources/DSHChamberPoc/SwiftEdgeHostLegs.swift:219-222`）；
+    Electron darwin 用具名 `Glass`，UNUserNotificationCenter 无该资源——
+    默认声是平台等价物，差异已登记。
 - **起始端口偏移**：本地默认 17510、控制面默认 17500；当前固定起始端口 + P+1 重试 +
   记录仲裁，是否开放配置仍未决。
 - **trusted-host 自定义 Host**：当前反代 Host 与实例自身 `127.0.0.1:<port>` 一致；
@@ -737,9 +779,11 @@
 - **多控制面 `$DSH_HOME` 冲突**：同 stateDir 共享 home 时会话 JSONL 可追加，settings
   由 dsh 的 `settings-conflict` 仲裁；是否进一步隔离未决。
 - **多控制面 catalog metadata 无跨进程 CAS**：label/accentColor 并发修改是
-  last-writer-wins；可靠多 writer 需 kernel-backed 跨平台 lock + 锁内 reload + 字段
-  intent，否则应正式改为「并发 plane 必须不同 stateDir」。普通 pidfile/mkdir stale
-  lock 存在三方 takeover 双持，不能作为修复。
+  last-writer-wins。design 25 §6.3 的 `<userData>/.dsh-chamber.lock` 只做
+  flavor/实例互斥（仲裁权威是 flock 本身，文件内 pid/时间仅诊断、不含秘密），
+  **不能**当字段级 CAS 用；可靠多 writer 需锁内 reload + 字段 intent，否则应正式
+  改为「并发 plane 必须不同 stateDir」。普通 pidfile/mkdir stale lock 存在三方
+  takeover 双持，不能作为修复。
 - **响应头白名单双处同步**：权威在 04 §4.3，仍建议把代码/文档表述进一步单源化。
 - **`__DSH_BOOT__` 随 dsh 版本漂移**：manifest 形状继续以 vendor `parseBootManifest`
   为准维护。
@@ -1332,7 +1376,7 @@
   `.footerActions { gap: 4px }` 一例，纵向间距仍按官方契约由 occupant 自己的 margin 承担
   （settings 触发器 `margin: 4px -2px` / rail `8px 0 10px`）。
 - **侧栏与 git 的 16/18/20px 图标钮命中区回到视觉盒，重新低于 WCAG 2.2 2.5.8 的 24px
-  （2026-09-14 用户指令「按照 v0.2.4 恢复」，偏差）**：2026-09 命中盒 pass `33238ffe`
+  （2026-09-14 用户指令「按照 v0.2.4 恢复」，偏差）**：2026-09 命中盒修复
   给 `.actionIcon` / `.searchButton` / `.searchClear` / `.foldToggle` / `.sourceFoldToggle`
   / `.railDotButton`（`sidebar-chamber.module.css`）与 `.headerGitAction` /
   `.unregisteredAction`（`SidebarGit.module.css`）各加一层不可见 `::after` rim，并顺带

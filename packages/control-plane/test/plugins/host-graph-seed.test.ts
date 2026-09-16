@@ -22,6 +22,7 @@ import { mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileS
 import { join } from 'node:path'
 import { tempDir } from '../support/utils.ts'
 import {
+  CHAMBER_HOST_PACKAGES,
   assertHostSeedEntryNaming,
   assertHostSeedInsertNaming,
   buildPatchOverlay,
@@ -603,6 +604,82 @@ test('resolveLocalHostGraphOverlay: no built artifact yields no overlay AND clea
 // absent — a fake hostGraphPackageSourceDir covers both branches). plane.start
 // only reaps writers; DSH_HOME remains untouched until the fenced spawn path.
 // ---------------------------------------------------------------------------
+
+test('seededProbeDomains 按实际 seed 派生（全/部分/空三态；2026-09 二轮 P1）', async t => {
+  const dir = tempDir(t)
+  const graphSource = stageSource(t, 'export const v = 1\n')
+  // 部分 seed：graph 在、git/archive 源缺失
+  const partial = createControlPlane({
+    stateDir: dir,
+    port: 0,
+    dshWorkspacePath: join(dir, 'dsh'),
+    hostGraphPackageSourceDir: graphSource,
+    hostGitWorktreePackageSourceDir: join(dir, 'no-git'),
+    hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive'),
+    // open-in 是 localOnly 行，其源码包在仓库里真实存在：不显式指向缺失目录的话
+    // 缺省目录会被播种，本用例就不再是"部分 seed"（2026-09 四包化后的 P1 复核）。
+    hostOpenInPackageSourceDir: join(dir, 'no-open-in'),
+    logger: silentLogger,
+    localConnectionDeps: healthyLocalConnectionDeps,
+  })
+  try {
+    await partial.start()
+    assert.deepEqual([...partial.seededProbeDomains], [], '未 seed 前为空')
+    await partial.startLocal()
+    assert.deepEqual([...partial.seededProbeDomains], ['clientGraph/graph'], '只含实际 seed 的域')
+  } finally {
+    await partial.stop()
+  }
+
+  // 空 seed：三源全缺 → 空集（激活期望集退化为无宿主域，不误判失败）
+  const emptyDir = tempDir(t)
+  const empty = createControlPlane({
+    stateDir: emptyDir,
+    port: 0,
+    dshWorkspacePath: join(emptyDir, 'dsh'),
+    hostGraphPackageSourceDir: join(emptyDir, 'no-graph'),
+    hostGitWorktreePackageSourceDir: join(emptyDir, 'no-git'),
+    hostArchiveCleanupPackageSourceDir: join(emptyDir, 'no-archive'),
+    hostOpenInPackageSourceDir: join(emptyDir, 'no-open-in'),
+    logger: silentLogger,
+    localConnectionDeps: healthyLocalConnectionDeps,
+  })
+  try {
+    await empty.start()
+    await empty.startLocal()
+    assert.deepEqual([...empty.seededProbeDomains], [])
+  } finally {
+    await empty.stop()
+  }
+
+  // 三源齐备 → 全三域
+  const fullDir = tempDir(t)
+  const gitFull = stageSource(t, 'export const v = 3\n')
+  const archiveFull = stageSource(t, 'export const v = 4\n')
+  const full = createControlPlane({
+    stateDir: fullDir,
+    port: 0,
+    dshWorkspacePath: join(fullDir, 'dsh'),
+    hostGraphPackageSourceDir: stageSource(t, 'export const v = 5\n'),
+    hostGitWorktreePackageSourceDir: gitFull,
+    hostArchiveCleanupPackageSourceDir: archiveFull,
+    hostOpenInPackageSourceDir: stageSource(t, 'export const v = 6\n'),
+    logger: silentLogger,
+    localConnectionDeps: healthyLocalConnectionDeps,
+  })
+  try {
+    await full.start()
+    await full.startLocal()
+    // 期望域从注册表派生（不是手抄清单）：再加宿主包时这里自动跟上，
+    // 而"播种集漂移"仍会被下面的相等断言抓住。
+    assert.deepEqual(
+      [...full.seededProbeDomains].sort(),
+      CHAMBER_HOST_PACKAGES.map(descriptor => descriptor.probe.method).sort(),
+    )
+  } finally {
+    await full.stop()
+  }
+})
 
 test('createControlPlane.startLocal() seeds the host package and materializes the overlay when dist/index.js exists', async t => {
   const dir = tempDir(t)

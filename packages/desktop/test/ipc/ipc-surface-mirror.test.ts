@@ -58,6 +58,58 @@ function stripComments(text: string): string {
     .join('\n')
 }
 
+/** Robust whole-file comment stripper (B12/E8 dead-channel scan): block
+ *  comments, line comments and string literals are consumed in ONE state
+ *  pass. The regex `stripComments` above is only safe for short balanced
+ *  interface blocks — over a concatenated whole-file union, a slash-star
+ *  sequence inside a line comment (main.ts 注记含 /api/i/<id>/星) would pair
+ *  with a far-away close sequence and swallow real code. Strings are skipped
+ *  entirely here: IPC_CHANNELS constant references never live inside string
+ *  literals. */
+function stripCommentsRobust(text: string): string {
+  let out = ''
+  let inBlock = false
+  let inString: string | null = null
+  let i = 0
+  while (i < text.length) {
+    const ch = text[i]
+    const next = text[i + 1]
+    if (inString !== null) {
+      out += ch
+      if (ch === '\\' && next !== undefined) {
+        out += next
+        i += 2
+        continue
+      }
+      if (ch === inString) inString = null
+      i += 1
+      continue
+    }
+    if (inBlock) {
+      if (ch === '*' && next === '/') {
+        inBlock = false
+        i += 2
+        continue
+      }
+      i += 1
+      continue
+    }
+    if (ch === '/' && next === '/') {
+      while (i < text.length && text[i] !== '\n') i += 1
+      continue
+    }
+    if (ch === '/' && next === '*') {
+      inBlock = true
+      i += 2
+      continue
+    }
+    if (ch === '"' || ch === "'" || ch === '`') inString = ch
+    out += ch
+    i += 1
+  }
+  return out
+}
+
 /** Extract the sorted method names of one interface block. */
 function interfaceMethodNames(source: string, interfaceName: string): string[] {
   const names: string[] = []
@@ -364,7 +416,40 @@ test('system-resume channel name stays in lockstep across all three sites (H2)',
 
 const transportProvider = readFileSync(join(ROOT, 'packages/desktop/transport-provider.ts'), 'utf8')
 const connectionSave = readFileSync(join(ROOT, 'packages/desktop/connection-save.ts'), 'utf8')
-const desktopMain = readFileSync(join(ROOT, 'packages/desktop/main.ts'), 'utf8')
+
+/** The IPC *registration* owner split across the W-10 seam: main.ts keeps the
+ * not-yet-migrated ipcMain.handle(...) registrations, and
+ * shell-core.installIpcHandlers (S1: INFO / SETTINGS_GET / SETTINGS_SET; S2:
+ * NOTIFY / NOTIFICATIONS_READY / NOTIFICATION_OPEN_ACK / BADGE_COUNT /
+ * DEEP_LINK_READY / DEEP_LINK_ACK; S3: SSH_INSTANCES_GET / SSH_SAVE_CONNECTION
+ * / SSH_DELETE_CONNECTION / SSH_INSTANCES_SET / SSH_SET_PASSWORD /
+ * GATEWAY_SET_TOKEN / GATEWAY_SET_PASSWORD) registers through the injected
+ * registrar — the executable owner of each channel stays single (a second,
+ * unimported handler cannot drift beside the registered one because the
+ * surface equality below counts every spelling).
+ * shell-core.ts and electron-edges.ts join the scan because W-10 (design
+ * 25 §4.1) moves main-side TEXT between the three files: the send-side channel
+ * references can now sit in any of them (S0: the four committed pushes leave
+ * through the electron-edges rendererPush leaf whose IPC_CHANNELS.X call sites
+ * still live in main.ts; S1: the SETTINGS_CHANGED send source moved into
+ * shell-core; S2: the DEEP_LINK_INTENT / NOTIFICATION_OPEN drain sends moved
+ * into shell-core's renderer delivery drains). Scanning the union preserves
+ * the lockstep strength: the three-file handle/send sets must still equal the
+ * preload invoke/on sets.
+ * W-10 S3: the per-test TEXT anchors below scan the SAME union (desktopMain
+ * below) — the C 组 registry/credentials handler bodies (incl. the
+ * credential-existence projection text, the save/delete transactions and the
+ * clear-only legacy setters) now live in shell-core.ts, so a main.ts-only read
+ * would silently un-anchor them. Assertion intent is unchanged: the text must
+ * exist on the desktop main side (main.ts ∪ shell-core.ts ∪ electron-edges.ts);
+ * handle-registration spelling assertions accept BOTH main-side spellings
+ * (see MAIN_HANDLE_CALLS below — trustedIpc is applied by the assembly-side
+ * wrapper in main.ts, so no trustedIpc text appears beside the core
+ * registrations). */
+const MAIN_SIDE_FILES = ['main.ts', 'shell-core.ts', 'electron-edges.ts']
+const desktopMain = MAIN_SIDE_FILES
+  .map(file => readFileSync(join(ROOT, 'packages/desktop', file), 'utf8'))
+  .join('\n')
 
 test('renderer connection target/input/spec mirrors desktop v2 fields including S23', () => {
   assert.match(renderer, /export type TransportKind = 'dsh' \| 'gateway'/, 'renderer target kind must be the normalized v2 union')
@@ -443,7 +528,7 @@ test('main-owned connection transaction is wired through the preload without ret
   assert.deepEqual(interfaceFieldNames(renderer, 'SaveConnectionResult'), interfaceFieldNames(preload, 'SaveConnectionResult'),
     'save_connection result drifted across preload/renderer')
   assert.match(preload, /save_connection:\s*\(previousId, input, credentials\)\s*=>\s*ipcRenderer\.invoke\('desktop_ssh_save_connection',\s*\{ previousId, input, credentials \}\)/)
-  assert.match(desktopMain, /ipcMain\.handle\(IPC_CHANNELS\.SSH_SAVE_CONNECTION/)
+  assert.match(desktopMain, /(?:ipcMain|deps\.ipc)\.handle\(IPC_CHANNELS\.SSH_SAVE_CONNECTION/)
   assert.match(desktopMain, /canonicalizeTransportInstanceInput\(candidate\)/,
     'the save IPC must honor the typed optional transport through canonical v1/v2 normalization')
   assert.match(
@@ -468,7 +553,7 @@ test('legacy credential setters are clear-only, deletion is exact-id, and instan
   assert.match(desktopMain, /desktop_gateway_set_token is clear-only/)
   assert.match(desktopMain, /desktop_gateway_set_password is clear-only/)
   assert.match(preload, /delete_connection:\s*id\s*=>\s*ipcRenderer\.invoke\('desktop_ssh_delete_connection',\s*\{ id \}\)/)
-  assert.match(desktopMain, /ipcMain\.handle\(IPC_CHANNELS\.SSH_DELETE_CONNECTION/)
+  assert.match(desktopMain, /(?:ipcMain|deps\.ipc)\.handle\(IPC_CHANNELS\.SSH_DELETE_CONNECTION/)
   assert.match(desktopMain, /deleteConnectionTransaction\(/)
   assert.match(desktopMain, /desktop_ssh_instances_set: only an exact unchanged no-op roster is allowed/)
 })
@@ -897,9 +982,15 @@ test('ChamberInjectionState / ChamberHostPackageState / ChamberSettings stay in 
 
 const { IPC_CHANNELS } = await import('../../ipc-events.ts')
 
-/** main.ts is the sole IPC registration owner. Keeping one executable owner
- * avoids a second, unimported handler implementation drifting beside it. */
-const MAIN_SIDE_FILES = ['main.ts']
+/** Handle-side registration spellings across the W-10 seam split (S1): main.ts
+ *  still owns the not-yet-migrated ipcMain.handle(...) registrations, while
+ *  shell-core.installIpcHandlers registers through the injected registrar
+ *  (deps.ipc.handle(...) — the S1 spelling; trustedIpc is applied by the
+ *  assembly-side wrapper, so no trustedIpc text appears beside it). The union
+ *  keeps the mirror equality strength across the split: every registration
+ *  counts once, and a handler re-spelled under the new registrar stays
+ *  covered. */
+const MAIN_HANDLE_CALLS = ['ipcMain.handle', 'deps.ipc.handle']
 
 function mainSideSource(): string {
   return MAIN_SIDE_FILES
@@ -910,10 +1001,13 @@ function mainSideSource(): string {
 /** Collect the channel names of one main-side registration/send call: the
  *  argument is either an IPC_CHANNELS constant reference (resolved against
  *  the imported constants) or a raw quoted literal (a regression the guard
- *  must also surface — the constant set is the source of truth). */
-function collectMainChannels(source: string, call: 'ipcMain.handle' | 'webContents.send'): string[] {
+ *  must also surface — the constant set is the source of truth). Since W-10
+ *  the handle/send sides have multiple spellings and `calls` is the union
+ *  (see MAIN_HANDLE_CALLS / collectMainSendChannels). */
+function collectMainChannels(source: string, calls: string | string[]): string[] {
+  const spellings = Array.isArray(calls) ? calls : [calls]
   const channels = new Set<string>()
-  const pattern = new RegExp(`${call}\\(\\s*(?:IPC_CHANNELS\\.([A-Z][A-Z0-9_]*)|'([^']*)'|"([^"]*)")`, 'g')
+  const pattern = new RegExp(`(?:${spellings.join('|')})\\(\\s*(?:IPC_CHANNELS\\.([A-Z][A-Z0-9_]*)|'([^']*)'|"([^"]*)")`, 'g')
   let match: RegExpExecArray | null
   while ((match = pattern.exec(source)) !== null) {
     if (match[1] !== undefined) {
@@ -938,15 +1032,28 @@ function collectPreloadChannels(source: string, call: 'invoke' | 'on'): string[]
   return [...channels].sort()
 }
 
-const mainHandleChannels = collectMainChannels(mainSideSource(), 'ipcMain.handle')
-const mainSendChannels = collectMainChannels(mainSideSource(), 'webContents.send')
+/** Send-side channels across the W-10 seam spelling split: webContents.send(
+ *  ...) text (drains and any not-yet-migrated sends) plus the HostEdges
+ *  rendererPush(IPC_CHANNELS.X, ...) leaf calls. The union is what must equal
+ *  the preload on-set — a push re-spelled under the new leaf stays covered,
+ *  and the electron-edges.ts implementation body contributes nothing here
+ *  (its webContents.send argument is a parameter, not a channel reference). */
+function collectMainSendChannels(source: string): string[] {
+  return [...new Set([
+    ...collectMainChannels(source, 'webContents.send'),
+    ...collectMainChannels(source, 'rendererPush'),
+  ])].sort()
+}
+
+const mainHandleChannels = collectMainChannels(mainSideSource(), MAIN_HANDLE_CALLS)
+const mainSendChannels = collectMainSendChannels(mainSideSource())
 const preloadInvokeChannels = collectPreloadChannels(preload, 'invoke')
 const preloadOnChannels = collectPreloadChannels(preload, 'on')
 
-test('every ipcMain.handle channel is an IPC_CHANNELS constant (B8 — no raw main-side literals)', () => {
+test('every main-side ipcMain.handle / deps.ipc.handle channel is an IPC_CHANNELS constant (B8 — no raw main-side literals)', () => {
   const mainSource = mainSideSource()
-  const rawLiteral = /ipcMain\.handle\(\s*'([^']*)'|ipcMain\.handle\(\s*"([^"]*)"/.exec(mainSource)
-  assert.equal(rawLiteral, null, `main-side ipcMain.handle must use IPC_CHANNELS constants, found raw literal: ${rawLiteral?.[1] ?? rawLiteral?.[2]}`)
+  const rawLiteral = /(?:ipcMain\.handle|deps\.ipc\.handle)\(\s*'([^']*)'|(?:ipcMain\.handle|deps\.ipc\.handle)\(\s*"([^"]*)"/.exec(mainSource)
+  assert.equal(rawLiteral, null, `main-side handle registration must use IPC_CHANNELS constants, found raw literal: ${rawLiteral?.[1] ?? rawLiteral?.[2]}`)
 })
 
 test('the main-side handle channel set EQUALS the preload invoke channel set (B8)', () => {
@@ -964,16 +1071,46 @@ test('every preload channel literal is a known IPC_CHANNELS value (B8 — consta
   }
 })
 
+test('no IPC_CHANNELS constant is dead or duplicated across the main-side files (B12/E8 — 68/68 恰用一次由事实变断言)', () => {
+  // W-10 S11 收口：installIpcHandlers 全 60 handler 注册点与 send 叶
+  // （edges.rendererPush）迁入后，把「68 个 channel 常量在 MAIN_SIDE_FILES
+  // （main.ts ∪ shell-core.ts ∪ electron-edges.ts）的**代码引用**中每个至少使用
+  // 一次（当前恰为各一次）」由事实变断言。计数只认 `IPC_CHANNELS.<KEY>` 常量
+  // 引用拼写（词边界）：任一常量 0 次 = 死 channel（注册/发送随某批迁出丢失，
+  // preload invoke/on 集合相等仍会过，但主侧事实与常量表漂移）；>1 次 = 意外
+  // 双引用（镜像 set 相等同样看不见，语义重复须显式登记）。若未来合法双引用
+  // （如一个 channel 有两个显式 send 源），此断言须随用途注记同步更新。
+  // 注释剥离用下方逐字扫描器（string/block/line 单趟状态机）——上面的
+  // stripComments 正则助手只适用于短 interface 块，整文件 union 里行注释中的
+  // `/*` 序列会让它吞掉真实代码（main.ts 注记含 /api/i/<id>/* 即触发）。
+  const code = stripCommentsRobust(mainSideSource())
+  const dead: string[] = []
+  const duplicated: string[] = []
+  for (const key of Object.keys(IPC_CHANNELS) as Array<keyof typeof IPC_CHANNELS>) {
+    const occurrences = [...code.matchAll(new RegExp(`\\bIPC_CHANNELS\\.${key}\\b`, 'g'))].length
+    if (occurrences < 1) dead.push(key)
+    else if (occurrences > 1) duplicated.push(key)
+  }
+  assert.deepEqual(dead, [], 'every IPC_CHANNELS constant must be referenced at least once by a main-side file')
+  assert.deepEqual(duplicated, [], 'every IPC_CHANNELS constant must be referenced exactly once on the main side')
+})
+
 // ---------------------------------------------------------------------------
 // design 19 §3.7: badge wiring pin. The badge IPC handler has no direct unit
-// seam (registration + toggle reconcile + quit clear live in main.ts glue),
-// so the three load-bearing call shapes are pinned as source assertions — a
+// seam, so the load-bearing call shapes are pinned as source assertions — a
 // rename, a dropped call, or an un-gated reconcile fails loudly here.
+// W-10 S2: BADGE_COUNT 注册体 + 意图 holder（pendingBadgeCount）迁入
+// shell-core.installIpcHandlers（注册拼写 = deps.ipc.handle；平台门
+// badgePlatformGate + applyBadgePresentation/reconcileBadgeCount 在 core 侧，
+// setBadge/badgeCountApiAvailable 宿主叶在 electron-edges.ts）；quit 兜底清除
+// 仍由 main.ts will-quit 驱动，但其「曾有意图」守卫迁 core
+// （clearBadgeIntentForQuit 内的 if (pendingBadgeCount !== null)），原生清除叶
+// （app.setBadgeCount(0)）仍在 main.ts 注入——union 文本断言随之更新。
 // ---------------------------------------------------------------------------
 
 test('badge wiring is pinned: handler registration + toggle-gated reconcile + quit clear (design 19 §3.7)', () => {
   const mainSource = mainSideSource()
-  assert.match(mainSource, /ipcMain\.handle\(IPC_CHANNELS\.BADGE_COUNT, trustedIpc/, 'BADGE_COUNT handler must stay registered')
+  assert.match(mainSource, /deps\.ipc\.handle\(IPC_CHANNELS\.BADGE_COUNT, \(payload: unknown\) => \{/, 'BADGE_COUNT handler must stay registered through the shell-core registrar (trustedIpc is applied by the assembly-side wrapper)')
   // 设置切换收敛仅在实际携带 badgeEnabled 键时执行（无关设置变更不重发）。
   assert.match(mainSource, /validated\.patch\.notifications\?\.badgeEnabled !== undefined/, 'reconcile must stay gated on badgeEnabled flips only')
   assert.match(mainSource, /reconcileBadgeCount\(\)/, 'toggle reconcile call must stay wired')

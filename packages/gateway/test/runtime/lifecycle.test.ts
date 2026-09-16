@@ -35,7 +35,7 @@ function compositionPlane(state: { connectionState: string }, order: string[]): 
     get localProcessAlive() { return false },
     get localWritersQuiescent() { return true },
     get localDshPort() { return null },
-    instanceId: 'test',
+    instanceId: 'test', seededProbeDomains: [],
   }
 }
 
@@ -95,7 +95,7 @@ test('gateway start quarantines and stops a blocked verdict that left its probe 
     getLocalDshPort() { return state === 'ready' ? 17510 : null },
     get port() { return 3000 }, get connectionState() { return state },
     get localProcessAlive() { return state === 'ready' }, get localWritersQuiescent() { return true },
-    get localDshPort() { return state === 'ready' ? 17510 : null }, instanceId: 'blocked-ready',
+    get localDshPort() { return state === 'ready' ? 17510 : null }, instanceId: 'blocked-ready', seededProbeDomains: [],
   }
   let blocked = false
   const runtime = {
@@ -193,7 +193,7 @@ test('gateway forwards plane.dshPort as the control-plane dshPortBase (design 17
     get localProcessAlive() { return false },
     get localWritersQuiescent() { return true },
     get localDshPort() { return null },
-    instanceId: 'test',
+    instanceId: 'test', seededProbeDomains: [],
     getLocalDshPort() { return null },
     async stopLocal() {},
     async restartLocal() {},
@@ -318,7 +318,7 @@ test('stop keeps the proxy quarantined when a rollback finishes during disposal'
     refreshLocalExposure() {}, registerInstanceTransport() {}, unregisterInstanceTransport() {},
     getLocalDshPort() { return 17510 }, get port() { return 3000 },
     get connectionState() { return state }, get localProcessAlive() { return state === 'ready' },
-    get localWritersQuiescent() { return true }, get localDshPort() { return 17510 }, instanceId: 'test',
+    get localWritersQuiescent() { return true }, get localDshPort() { return 17510 }, instanceId: 'test', seededProbeDomains: [],
   }
   const runtime = {
     transactionWorkspace: null,
@@ -448,7 +448,7 @@ test('live activation keeps candidate and rollback ready edges detached, then ex
     refreshLocalExposure() {}, registerInstanceTransport() {}, unregisterInstanceTransport() {},
     getLocalDshPort() { return 17510 }, get port() { return 3000 },
     get connectionState() { return connectionState }, get localProcessAlive() { return connectionState === 'ready' },
-    get localWritersQuiescent() { return true }, get localDshPort() { return 17510 }, instanceId: 'test',
+    get localWritersQuiescent() { return true }, get localDshPort() { return 17510 }, instanceId: 'test', seededProbeDomains: [],
   }
   const runtime = {
     transactionWorkspace: null,
@@ -521,7 +521,7 @@ test('apply-now keeps candidate ready edges detached and explicitly resyncs afte
     refreshLocalExposure() {}, registerInstanceTransport() {}, unregisterInstanceTransport() {},
     getLocalDshPort() { return 17510 }, get port() { return 3000 },
     get connectionState() { return connectionState }, get localProcessAlive() { return connectionState === 'ready' },
-    get localWritersQuiescent() { return true }, get localDshPort() { return 17510 }, instanceId: 'test',
+    get localWritersQuiescent() { return true }, get localDshPort() { return 17510 }, instanceId: 'test', seededProbeDomains: [],
   }
   const runtime = {
     transactionWorkspace: null,
@@ -580,7 +580,7 @@ test('a local startup failure rolls back the listening plane', async () => {
     localProcessAlive: false,
     localWritersQuiescent: true,
     localDshPort: null,
-    instanceId: 'test-instance',
+    instanceId: 'test-instance', seededProbeDomains: [],
     getLocalDshPort() { return null },
     async stopLocal() {},
     async restartLocal() {},
@@ -618,7 +618,7 @@ test('a plane listen failure is also rolled back and remains retryable', async (
     localProcessAlive: false,
     localWritersQuiescent: true,
     localDshPort: null,
-    instanceId: 'test-instance',
+    instanceId: 'test-instance', seededProbeDomains: [],
     getLocalDshPort() { return null },
     async stopLocal() {},
     async restartLocal() {},
@@ -789,7 +789,7 @@ test('stop() releases the stateDir lock even when the plane stop fails', async (
           refreshLocalExposure() {},
           registerInstanceTransport() {},
           unregisterInstanceTransport() {},
-          instanceId: 'test',
+          instanceId: 'test', seededProbeDomains: [],
         })) as never,
         createProxy: (() => ({ async handleHttp() {}, async handleUpgrade() {}, closeAllStreams() {} })) as never,
       },

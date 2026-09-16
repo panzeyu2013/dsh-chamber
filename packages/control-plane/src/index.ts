@@ -288,6 +288,13 @@ export interface PlaneHandle {
   /** Live port of the managed local host; null while it is not serving. */
   readonly localDshPort: number | null
   readonly instanceId: string
+  /**
+   * The activation-probe domains backed by the host packages **actually
+   * seeded** into the local profile (2026-09 模块评审 D#2）：desktop 两个
+   * owner 在启动探针时按此派生期望集，避免 host 包缺失时仍按「全 3 域」做
+   * exact-set 裁决而误判激活失败并回滚。
+   */
+  readonly seededProbeDomains: readonly string[]
   /** The managed local dsh host's port, or null when not ready (design 17
    * §2.1 改动①: exposed for the gateway-proxy's single-target resolution). */
   getLocalDshPort(): number | null
@@ -372,6 +379,14 @@ export interface LocalHostGraphOverlayInput {
    * `process.env` explicitly.
    */
   readonly env?: NodeJS.ProcessEnv
+  /**
+   * Receives the probe domains backed by the host packages this resolution
+   * actually seeds (2026-09 模块评审 D#2): the plane's spawn thunk records
+   * them on `PlaneHandle.seededProbeDomains`, so the desktop's activation
+   * expectation set follows the real seed set. Optional — direct test callers
+   * omit it and keep the resolver a pure overlay producer.
+   */
+  readonly onSeededProbeDomains?: (domains: readonly string[]) => void
 }
 
 /**
@@ -416,6 +431,14 @@ export function resolveLocalHostGraphOverlay(input: LocalHostGraphOverlayInput):
       else warn(`${message} (stub: package not shipped in this runtime)`)
     }
   }
+  // 影子条目（extraSeedEntries 覆盖同 id）若缺 probeDomains，会让该宿主域在
+  // 激活期望集中静默消失（2026-09 二轮评审 P2）——必须 loud。桥接条目由
+  // resolver 自己追加（无宿主域），不在用户声明的 seed 集合里，故排除在外。
+  for (const entry of baseEntries) {
+    if (entry.kind === 'host' && (entry.probeDomains ?? []).length === 0) {
+      warn(`seed entry '${entry.insert.id}' (${entry.insert.name}): host entry without probeDomains; its chamber domain will not be probed`)
+    }
+  }
   const available = entries
     .filter(entry => entry.sourceDir !== null && existsSync(join(entry.sourceDir, 'dist', 'index.js')))
     .map(entry => ({
@@ -424,7 +447,12 @@ export function resolveLocalHostGraphOverlay(input: LocalHostGraphOverlayInput):
       seedFiles: entry.seedFiles,
       insert: entry.insert,
       packageName: entry.insert.name,
+      probeDomains: entry.probeDomains ?? [],
     }))
+  // The activation expectation set follows exactly what this resolution seeds
+  // (the callback fires on the empty set too, so a previously seeded plane
+  // resets instead of keeping a stale domain list).
+  input.onSeededProbeDomains?.(available.flatMap(entry => entry.probeDomains))
 
   if (available.length === 0) {
     clearHostGraphPatchOverlay(stateDir)
@@ -626,6 +654,8 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
     [HOST_ARCHIVE_CLEANUP_INSERT.id, hostArchiveCleanupPackageSourceDir],
     [HOST_OPEN_IN_INSERT.id, hostOpenInPackageSourceDir],
   ])
+  /** 最近一次 seed 实际落地的探针域（seed 时刷新；见 PlaneHandle 注释）。 */
+  let seededProbeDomains: readonly string[] = []
   const seedEntries = (): SeedEntry[] => {
     const byId = new Map<string, SeedEntry>()
     for (const descriptor of CHAMBER_HOST_PACKAGES) {
@@ -719,6 +749,10 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       // generated plugin needs nothing from the child env). Passing it here is
       // the only production wiring; the resolver's own default stays "off".
       env: process.env,
+      // 2026-09 模块评审 D#2：宿主期望集必须跟随本次实际 seed 的条目（host 包
+      // 缺失时 exact-set 裁决仍按全量域会误判激活失败并回滚）；见
+      // PlaneHandle.seededProbeDomains。
+      onSeededProbeDomains: domains => { seededProbeDomains = domains },
     })
   }
 
@@ -1290,6 +1324,10 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
 
     refreshLocalExposure() {
       publishPublicLocalSnapshot()
+    },
+
+    get seededProbeDomains() {
+      return seededProbeDomains
     },
 
     /** Subscribe to the authoritative local-host lifecycle stream. */

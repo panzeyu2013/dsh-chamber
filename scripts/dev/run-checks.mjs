@@ -58,6 +58,16 @@ const CLIENT_TYPECHECKS = [
   'typecheck:mobile',
 ]
 
+/**
+ * macOS/Swift-only leg: `test:macos` runs the darwin O_EXLOCK lock assertions
+ * and the two packaging-script suites (plutil/codesign/ditto/hdiutil + the
+ * SwiftPM .build output), so it is appended only on darwin — never on the
+ * ubuntu test job / release validation. The CI entry point is ci.yml's
+ * test-macos job, which prepares `dist/control-plane` and `swift build`
+ * first; a local `check:tests` on darwin needs the same preparation.
+ */
+const MACOS_CHECKS = process.platform === 'darwin' ? ['test:macos'] : []
+
 /** Repository-level policy and documentation gates. */
 const STATIC_CHECKS = [
   'verify:i18n',
@@ -74,9 +84,9 @@ const STATIC_CHECKS = [
 /** Named gate groups. Keep the names disjoint from script names to avoid confusion. */
 export const MODES = {
   static: STATIC_CHECKS,
-  tests: PACKAGE_TESTS,
+  tests: [...PACKAGE_TESTS, ...MACOS_CHECKS],
   typecheck: CLIENT_TYPECHECKS,
-  full: [...STATIC_CHECKS, ...CLIENT_TYPECHECKS, ...PACKAGE_TESTS],
+  full: [...STATIC_CHECKS, ...CLIENT_TYPECHECKS, ...PACKAGE_TESTS, ...MACOS_CHECKS],
 }
 
 /**

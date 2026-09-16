@@ -11,6 +11,43 @@ const silentLogger = { log() {}, warn() {}, error() {} }
 const reaped = { reclaimed: 0, kept: 0, errors: [] as string[] }
 const stateDir = (): string => mkdtempSync(join(tmpdir(), 'dsh-plane-lifecycle-'))
 
+test('loopback-only 是硬不变量：非 loopback host 无边界评估器即拒绝', () => {
+  // AGENTS.md「控制面只监听 loopback」+ design 17：匿名管理 API/反代绝不裸奔。
+  // 2026-09 模块评审 D#1：实现处有此守卫但无测试。
+  const dir = stateDir()
+  try {
+    assert.throws(
+      () => createControlPlane({ host: '0.0.0.0', port: 0, stateDir: dir, logger: silentLogger }),
+      /refuses non-loopback bind/,
+    )
+    assert.throws(
+      () => createControlPlane({ host: '192.168.1.10', port: 0, stateDir: dir, logger: silentLogger }),
+      /refuses non-loopback bind/,
+    )
+    // 显式提供三件套（评估器 + HTTP/upgrade 中间件）才允许非 loopback 绑定。
+    const boundary = { evaluate: () => ({ ok: true }) } as never
+    assert.doesNotThrow(() => {
+      const plane = createControlPlane({
+        host: '0.0.0.0',
+        port: 0,
+        stateDir: dir,
+        logger: silentLogger,
+        corsEvaluator: boundary,
+        middleware: (async () => {}) as never,
+        upgradeMiddleware: (() => {}) as never,
+      })
+      void plane.stop()
+    })
+    // loopback 变体不需要三件套。
+    assert.doesNotThrow(() => {
+      const plane = createControlPlane({ host: '127.0.0.1', port: 0, stateDir: dir, logger: silentLogger })
+      void plane.stop()
+    })
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('concurrent start calls share one reaper/bind flight', async () => {
   const dir = stateDir()
   let release!: () => void

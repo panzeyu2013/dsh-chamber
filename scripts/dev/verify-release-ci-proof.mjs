@@ -13,7 +13,8 @@
  *
  * This gate replaces the re-run with the proof, and closes the hole: the release
  * commit must carry a COMPLETED, SUCCESSFUL `ci.yml` push run on `main` whose
- * `test` and `test-windows` jobs both succeeded. A run still in progress is
+ * `test`, `test-macos` and `test-windows` jobs all succeeded. A run still in
+ * progress is
  * waited for (a release may be tagged seconds after the push); a failed run, a
  * commit that never went through `main`, or anything still unresolved at the
  * deadline fails closed.
@@ -31,9 +32,13 @@
 import { argv, env, exit } from 'node:process'
 
 /** Jobs that must have concluded `success` on the proven run: the linux chain
- *  (release.yml's mechanical superset is validated against it) and the Windows
- *  contract leg release.yml has no equivalent of. */
-export const REQUIRED_JOBS = ['test', 'test-windows']
+ *  (release.yml's mechanical superset is validated against it), the Windows
+ *  contract leg release.yml has no equivalent of, and the macOS leg — the
+ *  native `.app`/dmg/zip ship from the SAME tag (release.yml's build-swift),
+ *  and `test-macos` is the only job that exercises the darwin lock and the two
+ *  packaging-script suites those artifacts are produced by, so a release that
+ *  skipped it would ship native artifacts no push-path gate ever validated. */
+export const REQUIRED_JOBS = ['test', 'test-windows', 'test-macos']
 
 /**
  * Pick the candidate proof runs for one commit: push runs on the base branch,

@@ -1,0 +1,590 @@
+/**
+ * build-sidecar.test.mjs —— W-23 sidecar 打包脚本单测（design 25 §3.2/§4.3）
+ *
+ * 覆盖：
+ *  ① 参数解析与布局（缺省 out、各开关、未知参数 loud）；
+ *  ② 计划文本（--skip-node/--skip-bundle 的步骤差异）；
+ *  ③ Node 归档命名/URL/成员路径 + SHASUMS256.txt 解析；
+ *  ③b 摘要固定（PINNED_NODE_SHA256）：默认版本两架构全覆盖、pin/override/冲突/
+ *     未固定四种判定（纯函数，不联网）；
+ *  ④ SHA-256 流式计算与不匹配检测；
+ *  ⑤ **A5 断言**：捆绑 Node 基名必须叫 node——正例通过、反例 loud；
+ *     并实证 resolveNodeExecutable 的纯 Node 分支前提（basename(execPath) ==
+ *     'node' → 直用 execPath；其他基名 → 回落，不直用）；
+ *  ⑥ --dry-run 真实子进程：输入校验通过、不写盘、不联网（exit 0）；
+ *  ⑦ normalizeSymlinks：树内绝对链接→相对、树外链接→实体化、悬空→loud、
+ *     幂等（P2：cpSync 会把相对链接绝对化，bundle 因此过不了 codesign）；
+ *  ⑧ copyTree：cpSync(verbatimSymlinks) 只搬链接，实体化全部交给 normalizeSymlinks；
+ *  ⑨b --skip-* 的诚实语义：跳过 = 缺位，不继承上一轮装配；
+ *  ⑨c 历史 tsc emit 目录（dist/sidecar）被清掉，不再被 electron-builder 打包。
+ * 不联网、不下载 Node、不写仓库外路径（dry-run 无副作用）。
+ */
+import { test } from 'node:test'
+import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
+import {
+  chmodSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  readlinkSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import {
+  DEFAULT_NODE_VERSION,
+  HOST_PACKAGES,
+  PINNED_NODE_SHA256,
+  assertBundledNodeBasename,
+  assertHostPackageArtifacts,
+  assertNodeArchiveMembers,
+  clearLegacySidecarEmit,
+  copyPnpm,
+  copyTree,
+  normalizeSymlinks,
+  copyVendorDsh,
+  buildPlan,
+  nodeArchiveName,
+  nodeDistUrl,
+  nodeMemberPath,
+  parseBuildSidecarArgs,
+  parseShasums,
+  resolvePinnedNodeDigest,
+  runBuildSidecar,
+  sha256File,
+  verifySha256,
+  sidecarLayout,
+} from './build-sidecar.mjs'
+
+const here = path.dirname(fileURLToPath(import.meta.url))
+const desktopDir = path.resolve(here, '..')
+const script = path.join(here, 'build-sidecar.mjs')
+
+test('① 参数解析：缺省值、开关与错误', () => {
+  const defaults = parseBuildSidecarArgs([])
+  assert.equal(defaults.outDir, path.join(desktopDir, 'release', 'sidecar'))
+  assert.equal(defaults.dryRun, false)
+  assert.equal(defaults.skipNode, false)
+  assert.equal(defaults.nodeVersion, DEFAULT_NODE_VERSION)
+  assert.equal(defaults.arch, 'arm64')
+  assert.equal(defaults.nodeSha256, null)
+
+  const parsed = parseBuildSidecarArgs([
+    '--out', '/tmp/x', '--dry-run', '--skip-node', '--skip-bundle',
+    '--node-version', '24.9.0', '--node-sha256', 'AB'.repeat(32), '--arch', 'x64',
+  ])
+  assert.equal(parsed.outDir, '/tmp/x')
+  assert.equal(parsed.dryRun, true)
+  assert.equal(parsed.skipNode, true)
+  assert.equal(parsed.skipBundle, true)
+  assert.equal(parsed.nodeVersion, '24.9.0')
+  assert.equal(parsed.nodeSha256, 'ab'.repeat(32), 'sha256 归一化为小写')
+  assert.equal(parsed.arch, 'x64')
+  assert.throws(() => parseBuildSidecarArgs(['--nope']), /未知参数/)
+  assert.throws(() => parseBuildSidecarArgs(['--out']), /缺少取值/)
+})
+
+test('① 布局：node / sidecar.js / package.json / dist/control-plane / host 包', () => {
+  const layout = sidecarLayout('/tmp/out')
+  assert.equal(layout.outDir, '/tmp/out')
+  assert.equal(layout.node, '/tmp/out/node')
+  assert.equal(layout.entry, '/tmp/out/sidecar.js')
+  assert.equal(layout.packageJson, '/tmp/out/package.json')
+  assert.equal(layout.dist, '/tmp/out/dist')
+  assert.equal(layout.controlPlaneDist, '/tmp/out/dist/control-plane')
+  assert.equal(layout.controlPlaneEntry, '/tmp/out/dist/control-plane/index.js')
+  assert.equal(layout.hostPackageDist('dsh-chamber-seed-client-graph'), '/tmp/out/dist/dsh-chamber-seed-client-graph')
+})
+
+test('② 计划文本反映开关', () => {
+  const base = parseBuildSidecarArgs([])
+  const full = buildPlan(base).join('\n')
+  assert.match(full, /esbuild 打包 sidecar-entry\.ts/)
+  assert.match(full, /Node 捆绑：https:\/\/nodejs\.org\/dist\/v24\.18\.1\/node-v24\.18\.1-darwin-arm64\.tar\.gz/)
+  assert.match(full, /写装配 package\.json/)
+
+  const skipped = buildPlan(parseBuildSidecarArgs(['--skip-node', '--skip-bundle'])).join('\n')
+  assert.match(skipped, /跳过 esbuild 打包/)
+  assert.match(skipped, /跳过 Node 捆绑/)
+  assert.doesNotMatch(skipped, /nodejs\.org/)
+
+  const offline = buildPlan(parseBuildSidecarArgs(['--node-archive', '/tmp/node.tar.gz'])).join('\n')
+  assert.match(offline, /本地 \/tmp\/node\.tar\.gz/)
+})
+
+test('③ Node 归档命名/URL/成员路径与 SHASUMS 解析', () => {
+  assert.equal(nodeArchiveName('24.18.1', 'arm64'), 'node-v24.18.1-darwin-arm64.tar.gz')
+  assert.equal(
+    nodeDistUrl('24.18.1', 'node-v24.18.1-darwin-arm64.tar.gz'),
+    'https://nodejs.org/dist/v24.18.1/node-v24.18.1-darwin-arm64.tar.gz',
+  )
+  assert.equal(nodeMemberPath('24.18.1', 'arm64'), 'node-v24.18.1-darwin-arm64/bin/node')
+
+  const shasums = [
+    'aaaa'.repeat(16) + '  node-v24.18.1-linux-x64.tar.gz',
+    'bbbb'.repeat(16) + '  node-v24.18.1-darwin-arm64.tar.gz',
+    'cccc'.repeat(16) + ' *node-v24.18.1-darwin-x64.tar.gz',
+    'DDDD'.repeat(16) + '  node-v24.18.1-darwin-uppercase.tar.gz',
+    '',
+  ].join('\n')
+  assert.equal(parseShasums(shasums, 'node-v24.18.1-darwin-arm64.tar.gz'), 'bbbb'.repeat(16))
+  assert.equal(parseShasums(shasums, 'node-v24.18.1-darwin-x64.tar.gz'), 'cccc'.repeat(16))
+  assert.equal(parseShasums(shasums, 'missing.tar.gz'), null)
+  assert.equal(
+    parseShasums(shasums, 'node-v24.18.1-darwin-uppercase.tar.gz'), null,
+    '非小写 hex 不是合法 sha256（真实 SHASUMS256.txt 恒小写）')
+  assert.equal(parseShasums('garbage', 'node-v24.18.1-darwin-arm64.tar.gz'), null)
+})
+
+test('③b Node 归档摘要固定在仓库：默认版本两架构全覆盖 + 覆盖/冲突语义', () => {
+  // 固定表：默认版本的两个 darwin 归档都必须在表内、都是小写 64-hex——升级
+  // DEFAULT_NODE_VERSION 时本门禁先红（摘要必须与官方 SHASUMS256.txt 同步）。
+  for (const arch of ['arm64', 'x64']) {
+    const name = nodeArchiveName(DEFAULT_NODE_VERSION, arch)
+    assert.ok(Object.prototype.hasOwnProperty.call(PINNED_NODE_SHA256, name),
+      `默认 Node 版本 ${DEFAULT_NODE_VERSION} 的 ${arch} 归档必须钉进 PINNED_NODE_SHA256`)
+    assert.match(PINNED_NODE_SHA256[name], /^[0-9a-f]{64}$/,
+      `${name} 的固定摘要必须是小写 64 位 hex`)
+  }
+
+  const arm = nodeArchiveName(DEFAULT_NODE_VERSION, 'arm64')
+
+  // 未传 --node-sha256：用仓库固定值，来源标记 pinned（调用方据此不读网络摘要）。
+  assert.deepEqual(resolvePinnedNodeDigest(arm, null),
+    { digest: PINNED_NODE_SHA256[arm], source: 'pinned' })
+
+  // 显式传入且与固定值一致：走 override（同样不读网络摘要）。
+  assert.deepEqual(resolvePinnedNodeDigest(arm, PINNED_NODE_SHA256[arm]),
+    { digest: PINNED_NODE_SHA256[arm], source: 'override' })
+
+  // 显式传入却与固定值冲突：loud 拒绝（同一版本的官方归档内容不可变，只可能是
+  // 固定值写错或包被替换——绝不静默采纳）。
+  assert.throws(() => resolvePinnedNodeDigest(arm, 'f'.repeat(64)),
+    /与仓库固定摘要不一致/)
+
+  // 未固定的版本（--node-version 升级但表未更新）：digest=null ⇒ 调用方回退
+  // SHASUMS256.txt 并响亮说明，绝不把「没固定」当「已校验」。
+  assert.deepEqual(resolvePinnedNodeDigest(nodeArchiveName('24.9.0', 'arm64'), null),
+    { digest: null, source: 'network' })
+  assert.deepEqual(resolvePinnedNodeDigest(nodeArchiveName('24.9.0', 'arm64'), 'a'.repeat(64)),
+    { digest: 'a'.repeat(64), source: 'override' }, '未固定版本允许显式摘要')
+
+  // 注入表：判定完全由传入的表决定（测试与未来多版本表可替换来源）。
+  assert.deepEqual(resolvePinnedNodeDigest('x.tar.gz', null, { 'x.tar.gz': 'b'.repeat(64) }),
+    { digest: 'b'.repeat(64), source: 'pinned' })
+})
+
+test('④ sha256File 流式摘要 + verifySha256 真值/不匹配', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-sha-'))
+  try {
+    const file = path.join(dir, 'payload.bin')
+    writeFileSync(file, 'dsh-chamber')
+    // 真值 = sha256("dsh-chamber")（勿手写假摘要——2026-09 审计：旧测试的
+    // 假期望值让「任何 64 位 hex 都通过」，校验回归不可见）。
+    const real = '857528dee81128d5a6156b79a167c06a91b36e9c28fcf7be286210b6d7c7d6cf'
+    assert.equal(await sha256File(file), real)
+    assert.equal(await verifySha256(file, real), real)
+    await assert.rejects(
+      verifySha256(file, 'f'.repeat(64)),
+      /SHA-256 不匹配/,
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('④b A5 归档成员断言：合成 tar 三例 + stdout 注入', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-a5-'))
+  try {
+    const member = 'node-v24.18.1-darwin-arm64/bin/node'
+    const makeArchive = (name, entries) => {
+      const root = path.join(dir, name)
+      for (const entry of entries) {
+        const full = path.join(root, entry)
+        mkdirSync(path.dirname(full), { recursive: true })
+        writeFileSync(full, 'fake')
+      }
+      const archive = path.join(dir, `${name}.tgz`)
+      execFileSync('tar', ['-czf', archive, '-C', root, 'node-v24.18.1-darwin-arm64'])
+      return archive
+    }
+    const good = makeArchive('good', [member])
+    assert.deepEqual(assertNodeArchiveMembers(good, member).length > 0, true)
+
+    const badName = makeArchive('badname', ['node-v24.18.1-darwin-arm64/bin/node-v24.18.1'])
+    assert.throws(() => assertNodeArchiveMembers(badName, member), /缺少成员/)
+
+    const missing = makeArchive('missing', ['node-v24.18.1-darwin-arm64/lib/x'])
+    assert.throws(() => assertNodeArchiveMembers(missing, member), /缺少成员/)
+
+    // tar 不可用/非归档 → 响亮失败（fail-closed）
+    const notArchive = path.join(dir, 'not.tgz')
+    writeFileSync(notArchive, 'not a tar')
+    assert.throws(() => assertNodeArchiveMembers(notArchive, member), /无法列出 Node 归档成员/)
+
+    // 纯 stdout 注入路径（不依赖真实 tar）：成员存在 → 通过；不存在 → loud。
+    assert.deepEqual(assertNodeArchiveMembers('unused', member, `${member}\nother\n`), [member, 'other'])
+    assert.throws(
+      () => assertNodeArchiveMembers('unused', member, 'node-v24.18.1-darwin-arm64/bin/node-v24.18.1\n'),
+      /缺少成员/,
+      'member 不在 stdout 时应报缺少成员',
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('③c dry-run 真校验输入源（显式缺失即抛 / 默认缺失 warn）且不写盘', async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-dry-'))
+  try {
+    const out = path.join(dir, 'out')
+    // 正常 dry-run（源齐备）→ 计划可生成
+    const plan = buildPlan(parseBuildSidecarArgs(['--dry-run', '--out', out])).join('\n')
+    assert.match(plan, /\[4\] Node 捆绑/)
+    assert.equal(existsSync(out), false, 'dry-run 不得创建输出目录')
+    // 缺 --node-archive 源 → 抛（原实现静默"校验通过"）
+    await assert.rejects(
+      runDryRun(['--dry-run', '--out', out, '--node-archive', path.join(dir, 'missing.tgz')]),
+      /--node-archive 不存在/,
+    )
+    // **显式**传入的 vendor 源缺失 → 抛（调用方路径写错）
+    await assert.rejects(
+      runDryRun(['--dry-run', '--out', out, '--vendor-dsh', path.join(dir, 'no-vendor')]),
+      /--vendor-dsh 源不存在/,
+    )
+    // 默认源缺失 → 只 warn（干净 checkout 的正常形态；2026-09 二轮：严格校验
+    // 会让 push CI 必红，因为 vendor/dsh 由 release 腿的 bundle:dsh 物化）。
+    // 直接改 options 的默认源路径（保持 Explicit=false）来模拟干净 checkout。
+    const warnings = []
+    const cleanOptions = parseBuildSidecarArgs(['--dry-run', '--out', out])
+    cleanOptions.vendorDshDir = path.join(dir, 'no-vendor')
+    cleanOptions.pnpmDir = path.join(dir, 'no-pnpm')
+    await runBuildSidecar(cleanOptions, {
+      log() {},
+      warn(message) { warnings.push(message) },
+      error() {},
+    })
+    assert.ok(warnings.some(w => /未找到内置 dsh 工作区/.test(w)), '默认 vendor 源缺失应 warn')
+    assert.ok(warnings.some(w => /未找到 pnpm/.test(w)), '默认 pnpm 源缺失应 warn')
+    assert.equal(existsSync(out), false, 'dry-run 不得写盘')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('③d vendor/dsh + pnpm 拷贝（Electron extraResources 同款过滤器）', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-vendor-'))
+  try {
+    // vendor/dsh：清单三件 + node_modules；dest 预置脏文件必须被清掉
+    const vendorSrc = path.join(dir, 'vendor-src')
+    mkdirSync(path.join(vendorSrc, 'node_modules', 'x'), { recursive: true })
+    writeFileSync(path.join(vendorSrc, 'package.json'), '{"name":"dsh"}')
+    writeFileSync(path.join(vendorSrc, 'pnpm-lock.yaml'), 'lockfileVersion: 9')
+    writeFileSync(path.join(vendorSrc, 'pnpm-workspace.yaml'), 'packages: []')
+    writeFileSync(path.join(vendorSrc, 'node_modules', 'x', 'index.js'), 'module.exports=1')
+    writeFileSync(path.join(vendorSrc, 'README.md'), 'must not be copied')
+    const vendorDest = path.join(dir, 'out', 'vendor', 'dsh')
+    mkdirSync(vendorDest, { recursive: true })
+    writeFileSync(path.join(vendorDest, 'stale.txt'), 'stale')
+    assert.equal(copyVendorDsh(vendorSrc, vendorDest), true)
+    assert.ok(existsSync(path.join(vendorDest, 'package.json')))
+    assert.ok(existsSync(path.join(vendorDest, 'pnpm-lock.yaml')))
+    assert.ok(existsSync(path.join(vendorDest, 'node_modules', 'x', 'index.js')))
+    assert.ok(!existsSync(path.join(vendorDest, 'README.md')), '未列入过滤器的文件不得拷入')
+    assert.ok(!existsSync(path.join(vendorDest, 'stale.txt')), '目标目录应先清空')
+
+    // pnpm：package.json + bin/pnpm.{cjs,mjs} + dist；多余文件不拷
+    const pnpmSrc = path.join(dir, 'pnpm-src')
+    mkdirSync(path.join(pnpmSrc, 'bin'), { recursive: true })
+    mkdirSync(path.join(pnpmSrc, 'dist'), { recursive: true })
+    writeFileSync(path.join(pnpmSrc, 'package.json'), '{"name":"pnpm"}')
+    writeFileSync(path.join(pnpmSrc, 'bin', 'pnpm.cjs'), '// pnpm')
+    writeFileSync(path.join(pnpmSrc, 'bin', 'pnpm.mjs'), '// pnpm mjs')
+    writeFileSync(path.join(pnpmSrc, 'bin', 'pnpx.cjs'), '// pnpx must not copy')
+    writeFileSync(path.join(pnpmSrc, 'dist', 'pnpm.js'), '// dist')
+    const pnpmDest = path.join(dir, 'out', 'pnpm')
+    assert.equal(copyPnpm(pnpmSrc, pnpmDest), true)
+    assert.ok(existsSync(path.join(pnpmDest, 'bin', 'pnpm.cjs')))
+    assert.ok(existsSync(path.join(pnpmDest, 'bin', 'pnpm.mjs')))
+    assert.ok(existsSync(path.join(pnpmDest, 'dist', 'pnpm.js')))
+    assert.ok(!existsSync(path.join(pnpmDest, 'bin', 'pnpx.cjs')), 'pnpx 不在过滤器内')
+
+    // 缺源 → false（调用方 warn；不抛）
+    assert.equal(copyVendorDsh(path.join(dir, 'nope'), path.join(dir, 'out2')), false)
+    assert.equal(copyPnpm(path.join(dir, 'nope'), path.join(dir, 'out3')), false)
+
+    // 计划包含 3d/3e 与 --skip-vendor 分支
+    const plan = buildPlan(parseBuildSidecarArgs(['--dry-run'])).join('\n')
+    assert.match(plan, /\[3d\] 拷贝内置 dsh 工作区/)
+    assert.match(plan, /\[3e\] 拷贝内嵌 pnpm/)
+    const skipped = buildPlan(parseBuildSidecarArgs(['--dry-run', '--skip-vendor'])).join('\n')
+    assert.match(skipped, /\[3d\] 跳过 vendor\/dsh \+ pnpm 拷贝/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('⑤ A5：捆绑 Node 基名断言（正例通过、反例 loud）', () => {
+  assert.doesNotThrow(() => assertBundledNodeBasename('/tmp/sidecar/node'))
+  assert.throws(
+    () => assertBundledNodeBasename('/tmp/sidecar/node-v24.18.1'),
+    /基名必须是 'node'/,
+  )
+  assert.throws(() => assertBundledNodeBasename('/tmp/sidecar/dsh-chamber'), /A5/)
+})
+
+test('⑤ A5 实证：resolveNodeExecutable 纯 Node 分支以 basename 为唯一前提', () => {
+  const scriptBody = `
+    Object.defineProperty(process, 'execPath', { value: process.argv[1], configurable: true });
+    const { resolveNodeExecutable } = await import('@dsh-chamber/control-plane');
+    console.log(JSON.stringify(resolveNodeExecutable()));
+  `
+  const run = (fakeExecPath) => JSON.parse(execFileSync(
+    process.execPath,
+    ['--input-type=module', '-e', scriptBody, fakeExecPath],
+    { cwd: desktopDir, encoding: 'utf8' },
+  ).trim())
+
+  // 正例：基名 node → 直用 execPath、零额外 args/env（捆绑命名 node 的零改动前提）。
+  const direct = run('/tmp/assembled-sidecar/node')
+  assert.deepEqual(direct, { file: '/tmp/assembled-sidecar/node', args: [], env: {} })
+  // 反例：其他基名 → 绝不直用（回落 PATH/known locations，系统 node 版本不可控）。
+  const fallback = run('/tmp/assembled-sidecar/dsh-chamber')
+  assert.notEqual(fallback.file, '/tmp/assembled-sidecar/dsh-chamber')
+})
+
+test('⑥ 真实装配（--skip-node）：sidecar.js / package.json / control-plane / host 包', async () => {
+  const out = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-build-'))
+  try {
+    await runBuildSidecar(parseBuildSidecarArgs(['--out', out, '--skip-node']), {
+      log: () => {},
+      error: () => {},
+    })
+    const layout = sidecarLayout(out)
+    assert.ok(existsSync(layout.entry), 'sidecar.js 应产出')
+    assert.ok(existsSync(layout.controlPlaneEntry), 'control-plane 编译产物应拷贝')
+    const pkg = JSON.parse(readFileSync(layout.packageJson, 'utf8'))
+    assert.equal(pkg.type, 'module')
+    assert.equal(typeof pkg.version, 'string')
+    for (const host of HOST_PACKAGES) {
+      const target = layout.hostPackageDist(host.name)
+      assert.ok(existsSync(path.join(target, 'package.json')), `${host.name}/package.json 应拷贝`)
+      assert.ok(existsSync(path.join(target, 'dist', 'index.js')), `${host.name}/dist/index.js 应拷贝`)
+    }
+    // bundle 内不得残留 runtime 裸说明符（control-plane 经 facade 的相对入口）。
+    const bundle = readFileSync(layout.entry, 'utf8')
+    const bareUses = bundle.split('\n').filter((line) => line.includes("from '@dsh-chamber/control-plane'"))
+    assert.deepEqual(bareUses, [], '打包产物不应含裸 control-plane 静态 import')
+  } finally {
+    rmSync(out, { recursive: true, force: true })
+  }
+})
+
+test('⑥ --dry-run 子进程：输入校验通过、无写盘、无联网', async () => {  const out = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-dry-'))
+  try {
+    const stdout = execFileSync(
+      process.execPath,
+      [script, '--dry-run', '--out', path.join(out, 'assembled')],
+      { cwd: desktopDir, encoding: 'utf8' },
+    )
+    assert.match(stdout, /dry-run：输入校验通过，未写盘、未联网/)
+    // 无写盘：目标目录不存在。
+    const result = await runBuildSidecar(
+      parseBuildSidecarArgs(['--dry-run', '--out', path.join(out, 'assembled')]),
+      { log: () => {}, error: () => {} },
+    )
+    assert.equal(result.dryRun, true)
+  } finally {
+    rmSync(out, { recursive: true, force: true })
+  }
+})
+
+test('⑨b --skip-* 产生缺位：不继承上一轮装配的 node / sidecar.js / vendor / pnpm / host 包', async () => {
+  const out = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-skip-'))
+  try {
+    // 上一轮完整装配的遗留（含改名前的旧 host 包目录）。
+    writeFileSync(path.join(out, 'node'), 'stale node')
+    chmodSync(path.join(out, 'node'), 0o755)
+    writeFileSync(path.join(out, 'sidecar.js'), '// stale bundle')
+    mkdirSync(path.join(out, 'vendor', 'dsh'), { recursive: true })
+    writeFileSync(path.join(out, 'vendor', 'dsh', 'package.json'), '{"name":"dsh"}')
+    mkdirSync(path.join(out, 'pnpm', 'bin'), { recursive: true })
+    writeFileSync(path.join(out, 'pnpm', 'bin', 'pnpm.cjs'), '// stale pnpm')
+    mkdirSync(path.join(out, 'dist', 'dsh-host-client-graph'), { recursive: true })
+    writeFileSync(path.join(out, 'dist', 'dsh-host-client-graph', 'index.js'), 'stale\n')
+
+    await runBuildSidecar(parseBuildSidecarArgs([
+      '--out', out, '--skip-node', '--skip-bundle', '--skip-vendor', '--skip-host-packages',
+    ]), { log: () => {}, error: () => {} })
+    const layout = sidecarLayout(out)
+    assert.equal(existsSync(layout.node), false, '--skip-node 必须产生缺位（旧的 node 不得留下被一起签名发布）')
+    assert.equal(existsSync(layout.entry), false, '--skip-bundle 必须产生缺位')
+    assert.equal(existsSync(layout.vendorDsh), false, '--skip-vendor 必须清掉旧 vendor/dsh')
+    assert.equal(existsSync(layout.pnpm), false, '--skip-vendor 必须清掉旧 pnpm')
+    assert.equal(existsSync(path.join(layout.dist, 'dsh-host-client-graph')), false,
+      '--skip-host-packages 不得让旧 host 包目录残留')
+    // dist 仍由 control-plane 重建（它是本次的唯一合法成员）。
+    assert.deepEqual(readdirSync(layout.dist), ['control-plane'])
+  } finally {
+    rmSync(out, { recursive: true, force: true })
+  }
+})
+
+test('⑨c 历史 tsc emit 目录被清掉（electron-builder 的 dist glob 不再打包无人消费的编译产物）', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-emit-'))
+  try {
+    const legacy = path.join(dir, 'dist', 'sidecar')
+    mkdirSync(legacy, { recursive: true })
+    writeFileSync(path.join(legacy, 'poc-sidecar.js'), '// legacy emit\n')
+    clearLegacySidecarEmit(legacy)
+    assert.equal(existsSync(legacy), false, '旧 emit 目录必须删除')
+    clearLegacySidecarEmit(legacy) // 幂等：不存在也不炸
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('⑨d host 包产物 fail-closed：缺一个即抛，不产出半套 host 包', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-host-artifacts-'))
+  try {
+    const good = path.join(dir, 'good')
+    mkdirSync(path.join(good, 'dist'), { recursive: true })
+    writeFileSync(path.join(good, 'package.json'), '{"name":"@dsh-chamber/good"}')
+    writeFileSync(path.join(good, 'dist', 'index.js'), 'export {}\n')
+    const bad = path.join(dir, 'bad')
+    mkdirSync(bad, { recursive: true })
+    writeFileSync(path.join(bad, 'package.json'), '{}')
+    const resolve = (name) => path.join(dir, name)
+    assert.doesNotThrow(() => assertHostPackageArtifacts([{ name: 'good' }], resolve))
+    assert.throws(
+      () => assertHostPackageArtifacts([{ name: 'bad' }], resolve),
+      /host 包 bad 缺少构建产物/,
+      '缺 dist/index.js 必须 fail closed（旧实现只 warn，产出宿主域缺席的 .app）',
+    )
+    // 全量前置：第一个齐备、第二个缺失也在拷贝前抛（不发布半新半旧的集合）。
+    assert.throws(() => assertHostPackageArtifacts([{ name: 'good' }, { name: 'bad' }], resolve), /bad/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+/** 跑 dry-run 的输入校验路径（不写盘、不联网）。 */
+/** 跑真实的 dry-run 校验路径（runBuildSidecar 的 dry-run 分支）。 */
+async function runDryRun(argv, warnings = []) {
+  await runBuildSidecar(parseBuildSidecarArgs(argv), {
+    log() {},
+    warn(message) { warnings.push(message) },
+    error() {},
+  })
+}
+
+test('⑦ normalizeSymlinks：树内→相对、树外→实体化、悬空 loud、幂等', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'dsh-symlink-'))
+  try {
+    const dest = path.join(root, 'dest')
+    const external = path.join(root, 'external')
+    mkdirSync(path.join(dest, '.bin'), { recursive: true })
+    mkdirSync(path.join(dest, 'pkg'), { recursive: true })
+    mkdirSync(path.join(external, 'dir'), { recursive: true })
+    writeFileSync(path.join(dest, 'pkg', 'cli.js'), 'console.log(1)\n')
+    writeFileSync(path.join(external, 'outside.js'), 'outside\n')
+    writeFileSync(path.join(external, 'dir', 'a.txt'), 'a\n')
+    // cpSync 的产物形状：相对链接被改写成绝对链接。
+    symlinkSync(path.join(dest, 'pkg', 'cli.js'), path.join(dest, '.bin', 'inside'))
+    symlinkSync(path.join(external, 'outside.js'), path.join(dest, '.bin', 'outside'))
+    symlinkSync(path.join(external, 'dir'), path.join(dest, 'dirlink'))
+
+    const rewritten = normalizeSymlinks(dest)
+    assert.equal(rewritten, 3)
+    // 树内 → 相对链接（保留链接语义）
+    assert.equal(readlinkSync(path.join(dest, '.bin', 'inside')), '../pkg/cli.js')
+    // 树外 → 实体化（文件/目录），不再是链接
+    assert.ok(!lstatSync(path.join(dest, '.bin', 'outside')).isSymbolicLink())
+    assert.equal(readFileSync(path.join(dest, '.bin', 'outside'), 'utf8'), 'outside\n')
+    assert.ok(!lstatSync(path.join(dest, 'dirlink')).isSymbolicLink())
+    assert.ok(statSync(path.join(dest, 'dirlink')).isDirectory())
+    assert.equal(readFileSync(path.join(dest, 'dirlink', 'a.txt'), 'utf8'), 'a\n')
+    // 幂等
+    assert.equal(normalizeSymlinks(dest), 0)
+    // 悬空 → loud
+    symlinkSync(path.join(root, 'missing'), path.join(dest, '.bin', 'dangling'))
+    assert.throws(() => normalizeSymlinks(dest), /符号链接目标不存在/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('⑧ copyTree：verbatim 只搬链接；树内相对链接保留、树外链接由 normalizeSymlinks 实体化', () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'dsh-copytree-'))
+  try {
+    const src = path.join(root, 'src')
+    const dst = path.join(root, 'dst')
+    const external = path.join(root, 'ext')
+    mkdirSync(path.join(src, '.bin'), { recursive: true })
+    mkdirSync(path.join(src, 'pkg'), { recursive: true })
+    mkdirSync(external, { recursive: true })
+    writeFileSync(path.join(src, 'pkg', 'cli.js'), 'cli\n')
+    writeFileSync(path.join(external, 'out.js'), 'out\n')
+    symlinkSync('../pkg/cli.js', path.join(src, '.bin', 'inside'))
+    symlinkSync(path.join(external, 'out.js'), path.join(src, '.bin', 'outside'))
+
+    // cpSync(verbatimSymlinks: true)：链接原样搬运，不再自行 deref/绝对化。
+    copyTree(src, dst)
+    assert.ok(lstatSync(path.join(dst, '.bin', 'inside')).isSymbolicLink())
+    assert.equal(readlinkSync(path.join(dst, '.bin', 'inside')), '../pkg/cli.js')
+    assert.equal(readFileSync(path.join(dst, 'pkg', 'cli.js'), 'utf8'), 'cli\n')
+    assert.ok(lstatSync(path.join(dst, '.bin', 'outside')).isSymbolicLink(),
+      'copyTree 只搬链接（实体化是 normalizeSymlinks 的职责）')
+
+    // 实体化：唯一处置点，树外链接变成自包含文件。
+    const materialized = normalizeSymlinks(dst)
+    assert.equal(materialized, 1)
+    assert.ok(!lstatSync(path.join(dst, '.bin', 'outside')).isSymbolicLink())
+    assert.equal(readFileSync(path.join(dst, '.bin', 'outside'), 'utf8'), 'out\n')
+
+    // 悬空链接：copyTree 不再自带第二份检查，normalizeSymlinks loud。
+    symlinkSync(path.join(root, 'missing'), path.join(src, '.bin', 'dangling'))
+    copyTree(src, path.join(root, 'dst2'))
+    assert.throws(() => normalizeSymlinks(path.join(root, 'dst2')), /符号链接目标不存在/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('⑨ 装配目录重建：上一轮遗留的 host 包目录（T2 改名前的旧名）不留在产物里', async () => {
+  const out = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-rebuild-'))
+  try {
+    // 模拟"改名前的上一轮装配"：旧名 host 包目录 + 一个无关的陈旧目录。
+    const stale = path.join(out, 'dist', 'dsh-host-client-graph', 'dist')
+    mkdirSync(stale, { recursive: true })
+    writeFileSync(path.join(stale, 'index.js'), 'stale\n')
+    mkdirSync(path.join(out, 'dist', 'leftover-junk'), { recursive: true })
+
+    await runBuildSidecar(parseBuildSidecarArgs(['--out', out, '--skip-node']), {
+      log: () => {},
+      error: () => {},
+    })
+    const layout = sidecarLayout(out)
+    // <out>/dist 由本脚本独家拥有 → 整目录重建，旧目录必须消失
+    assert.ok(!existsSync(path.join(layout.dist, 'dsh-host-client-graph')), '旧名 host 包目录不应残留')
+    assert.ok(!existsSync(path.join(layout.dist, 'leftover-junk')), '无关陈旧目录不应残留')
+    // 当前 host 包与 control-plane 仍齐全
+    assert.ok(existsSync(layout.controlPlaneEntry))
+    for (const host of HOST_PACKAGES) {
+      assert.ok(existsSync(path.join(layout.hostPackageDist(host.name), 'dist', 'index.js')))
+    }
+    // dist/ 顶层 == {control-plane} ∪ HOST_PACKAGES（无第三方成员）
+    const expected = ['control-plane', ...HOST_PACKAGES.map((h) => h.name)].sort()
+    assert.deepEqual(readdirSync(layout.dist).sort(), expected)
+  } finally {
+    rmSync(out, { recursive: true, force: true })
+  }
+})

@@ -63,47 +63,59 @@
       永久丢掉 dsh-runtime 的类型面（`pnpm typecheck` 以 TS7016 失败，
       `pnpm install --frozen-lockfile` 修不回来）。
 
-## 4. 快速清单速查（当前基线，2026-12 复核）
+## 4. 快速清单速查（当前基线，2026-12 复核；2026-12 合并后全量复核）
 
 **glob 即闭包**：`packages/desktop/package.json` 的 `build.files` 用包根三条 glob
 `*.ts` / `*.cts` / `*.mjs` 收取**全部**根级源模块（另含 `dist/**/*` 与
 `package.json`）。新增根级运行模块因此**自动进包**——纪律落在「例外名单」而不是
 「逐个补录」，需要人工保证的只有两件事：
 
-1. 新增根级模块不得命中下面的 9 条 negate（测试一律放
-   `packages/desktop/test/<domain>/`——包根三条 glob 不收取它；2026-12 测试重组前，
-   根级测试靠 `!*.test.ts` 后缀排除）；
+1. 新增根级运行模块不得命中下面的 9 条 negate。测试的常规位置是
+   `packages/desktop/test/<domain>/`（包根三条 glob 不收取它）；**例外**：W-10/W-23
+   沿线的 Swift/POC 专属测试（bridge-manifest / bridge-shim / bridge-shim-surface /
+   chamber-lock / chamber-lock-wiring / electron-free-gate / node-edges /
+   sidecar-stdio / update-headless，共 9 个 `.test.ts`）留在**包根**——由
+   `scripts/test.mjs` 清单显式接线，`ci.yml` 的 `test-macos` 桥面锁步步骤也按包根
+   路径调用，故 `!*.test.ts` negate 自 2026-12 测试重组后**重新变得载荷相关**（勿删）；
 2. `main.ts` / `preload.cts` 的传递 import 闭包不得指到 `scripts/`、`vendor/` 或
    未编译的 `node_modules/@dsh-chamber/control-plane/**`（见 §1、§2）。
 
-当前被收取的根级模块（**37 个**，2026-12 全量核对；含 1 个仅被测试引用的惰性
+当前被收取的根级模块（**48 个**，2026-12 审计后全量核对；含 1 个仅被测试引用的惰性
 模块 `registry-password-commit.ts`，随 glob 进包但无运行引用）：
 
 `main.ts`、`preload.cts`、`control-plane-module.ts`、`ipc-events.ts`、
 `apply-now-gate.ts`、`audit-log.ts`、`badge.ts`、`bounded-lines.ts`、
-`chamber-settings.ts`、`connection-save.ts`、`credential-binding.ts`、`deep-link.ts`、
-`disk-evidence-gate.ts`、`dsh-runtime-controller.ts`、`free-port.ts`、
+`chamber-lock.ts`、`chamber-settings.ts`、`connection-save.ts`、
+`credential-binding.ts`、`deep-link.ts`、`disk-evidence-gate.ts`、
+`dsh-runtime-controller.ts`、`electron-edges.ts`、`free-port.ts`、
 `gateway-ipc-shared.ts`、`gateway-provider.ts`、`gateway-session-refresh.ts`、
-`gateway-session.ts`、`gateway-sync-registry.ts`、`notifications.ts`、`open-in.ts`、
-`owner-only-secret-file.ts`、`plugin-sync.ts`、`plugin-tarball.ts`、
-`registry-password-commit.ts`、`renderer-trust.ts`、`sanitize-error.ts`、
-`ssh-apply-rows.ts`、`ssh-config.ts`、`ssh-plugin-journal.ts`、`ssh-provider.ts`、
-`store-file-hygiene.ts`、`transport-manager.ts`、`transport-provider.ts`、`updater.ts`、
+`gateway-session.ts`、`gateway-sync-registry.ts`、`host-package-dirs.ts`、
+`node-edges.ts`、
+`notifications.ts`、`open-in.ts`、`owner-only-secret-file.ts`、`plugin-sync.ts`、
+`plugin-tarball.ts`、`poc-sidecar.ts`、`registry-password-commit.ts`、
+`renderer-trust.ts`、`runtime-probe-detail.ts`、`sanitize-error.ts`、
+`shell-core.ts`、`sidecar-ctx.ts`、
+`sidecar-entry.ts`、`sidecar-exit-codes.ts`、`ssh-apply-rows.ts`、`ssh-config.ts`、
+`ssh-plugin-journal.ts`、`ssh-provider.ts`、`store-file-hygiene.ts`、
+`transport-manager.ts`、`transport-provider.ts`、`update-headless.ts`、`updater.ts`、
 `win-acl.ts`
 
-复核命令（与 glob 同义，扣除两条测试夹具 negate；包根已无 `.test.ts`——测试在
-`test/<domain>/`，`*.ts` glob 不收取）：
+复核命令（与 glob 同义，扣除两条测试夹具 negate 与包根 `.test.ts`；**自检式**：
+输出必须等于上方名单的模块数，当前 **48**——名单与计数同改，任一漂移即红）：
 
 ```sh
-ls -1 packages/desktop/*.ts packages/desktop/*.cts packages/desktop/*.mjs \
-  | grep -vE '/(gateway-session-test-hooks|loopback-http-test-server)\.ts$'
+count=$(ls -1 packages/desktop/*.ts packages/desktop/*.cts packages/desktop/*.mjs \
+  | grep -vE '/(gateway-session-test-hooks|loopback-http-test-server)\.ts$' \
+  | grep -vc '\.test\.ts$')
+echo "root-level collected modules: $count"
+test "$count" = 48 || { echo "STALE: 名单/计数需同步（见上方 48 个）"; exit 1; }
 ```
 
 **例外名单 = `build.files` 的 9 条 negate（勿删；顺序同 package.json）**：
 
 | negate | 原因 |
 |---|---|
-| `!*.test.ts` | 历史防御：2026-12 测试重组前有 33 个根级测试被 `*.ts` glob 收取，靠后缀排除；重组后测试在 `test/<domain>/`（glob 不收取），negate 保留以防新增根级测试 |
+| `!*.test.ts` | **载荷相关**（2026-12 合并后复核）：测试重组后常规测试在 `test/<domain>/`，但 9 个 Swift/POC 专属根级测试仍靠后缀排除（清单见 §4）；勿删 |
 | `!gateway-session-test-hooks.ts` | 测试夹具，被 `test/gateway/gateway-session-spki.test.ts`、`test/gateway/gateway-provider.test.ts`、`test/transport/ssh-provider-endpoint-auth.test.ts` 引用（可执行路径不受 `!*.ts` 的收包 glob 影响） |
 | `!loopback-http-test-server.ts` | 测试夹具（回环 HTTP 测试服务器） |
 | `!dist/**/*.map` | source map 不随包（2026-09 P2，见 §5） |
