@@ -12,7 +12,10 @@
  *  ⑥ hostFacts 仍刷新同步门缓存（回归）；
  *  ⑦ 未知 __host.* → loud；
  *  ⑩ 通知 click 路由生命周期（shown 后仍可激活 / 显示失败即注销 / 来源退役即注销 /
- *     未知 id 静默 ok）——2026-12 审查回归。
+ *     未知 id 静默 ok）——2026-12 审查回归；
+ *  ⑪ showNativeNotification edge 载荷 {notificationId, spec, sourceId}（D1a 线
+ *     协议：sourceId 与 retireNotifications 用的是同一个标识）；
+ *  ⑫ 退出在途拒绝形状与 Electron renderer-trust 的 app_quitting 围栏逐字同形（D1c）。
  * 纯逻辑（无子进程、无 sidecar spawn）。
  */
 import { test } from 'node:test'
@@ -21,8 +24,10 @@ import {
   createNodeEdges,
   HOST_INBOUND,
   HOST_RENDERER_LIFECYCLE_EVENTS,
+  QUIT_INBOUND_ERROR,
   type HostRendererLifecycleEvent,
 } from './node-edges.ts'
+import { createTrustedIpc } from './renderer-trust.ts'
 
 function makeEdges(overrides: {
   onDeepLink?: (url: string) => void
@@ -225,4 +230,55 @@ test('⑩ 通知 click 路由：shown 后仍可激活、显示失败/来源退�
   // 未知 id：横幅已被系统/淘汰回收——静默 ok（Swift 侧已自行恢复窗口）。
   assert.deepEqual(edges.handleHostInbound(HOST_INBOUND.notifyClicked, { notificationId: 99 }), { ok: true })
   assert.deepEqual(activated, [1])
+})
+
+test('⑪ showNativeNotification edge 载荷含 {notificationId, spec, sourceId}（D1a 线协议）', async () => {
+  const edgesSent: Array<{ method: string; payload: Record<string, unknown> }> = []
+  const notifies: Array<{ event: string; payload: unknown }> = []
+  const edges = createNodeEdges({
+    sendEdge: async (method, payload) => {
+      edgesSent.push({ method, payload: payload as Record<string, unknown> })
+      return null
+    },
+    sendNotify: (event, payload) => notifies.push({ event, payload }),
+  })
+  const token = { sourceId: 'src-d1a', fingerprint: 'f'.repeat(64), generation: 3 }
+  const routed = edges.showNativeNotification({ title: 't', body: 'b' }, {
+    token,
+    onActivated: () => {},
+  })
+  await routed.shown
+  assert.deepEqual(edgesSent, [{
+    method: 'showNativeNotification',
+    payload: {
+      notificationId: 1,
+      spec: { title: 't', body: 'b' },
+      sourceId: 'src-d1a',
+    },
+  }], 'Swift 侧据 sourceId 建 sourceId→identifier 登记表（retireNotifications 清横幅）')
+  // 'test' 通知（clickRoute=null）：无来源 → sourceId 必须为 null（Swift 侧不登记）。
+  const bare = edges.showNativeNotification({ title: 't2', body: 'b2' }, null)
+  await bare.shown
+  assert.deepEqual(edgesSent[1], {
+    method: 'showNativeNotification',
+    payload: { notificationId: 2, spec: { title: 't2', body: 'b2' }, sourceId: null },
+  })
+  // 同一标识回链：退役通知用的 sourceIds 与已投递 payload 的 sourceId 逐字一致。
+  edges.retireNotificationsForSources(new Set([edgesSent[0]!.payload.sourceId as string]))
+  assert.deepEqual(notifies, [{ event: 'retireNotifications', payload: { sourceIds: ['src-d1a'] } }])
+})
+
+test('⑫ 退出在途拒绝形状与 Electron app_quitting 围栏逐字同形（D1c）', () => {
+  assert.deepEqual(QUIT_INBOUND_ERROR, { error: 'app is quitting', code: 'app_quitting' })
+  // 单一事实源断言：Electron 侧 trustedIpc 的退出围栏（renderer-trust.ts）抛出的
+  // 错误 message/code 必须与 sidecar 帧里回的字面量一致（镜像而非复制漂移）。
+  const fence = createTrustedIpc({ isTrustedSender: () => true, isQuitting: () => true })
+  assert.throws(
+    () => fence(() => 'handler-must-not-run')({ sender: null }),
+    (error: unknown) => {
+      assert.equal((error as Error).message, QUIT_INBOUND_ERROR.error)
+      assert.equal((error as { code?: string }).code, QUIT_INBOUND_ERROR.code)
+      return true
+    },
+  )
 })

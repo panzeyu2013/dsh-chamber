@@ -24,7 +24,12 @@
  * - 生命周期：SIGTERM/SIGINT/stdin EOF → 优雅回收（quitting 门 + 在飞运行时
  *   事务 abort + cp.stop + ctx 侧 transport/gateway 会话/插件子进程/安装器
  *   回收（dispose——SSH 子进程不孤儿化））→ exit 0；uncaught → stderr + exit 1
- *   （B7 fatal 分级）。
+ *   （B7 fatal 分级）。回收有 5s 硬顶（D1c：QUIT_CLEANUP_TIMEOUT_MS，与 Swift
+ *   侧 terminate 的 5s grace→SIGKILL 对齐）——dispose/cp.stop 挂起时强退，绝不
+ *   滞留到被 SIGKILL；强退沿用本次退出路径的文档化退出码（信号/EOF = 0）。
+ *   shuttingDown 置位后迟到的入站帧不再受理：以 QUIT_INBOUND_ERROR（与 Electron
+ *   trustedIpc 的 app_quitting 围栏逐字同形）拒绝（edge 应答除外——在飞 edge
+ *   仍可结算）。
  *
  * Electron-free 不变式：本文件零 electron import（electron-free-gate 面 A）。
  */
@@ -44,10 +49,11 @@ import {
   enqueueDeepLink,
   installIpcHandlers,
   onRendererLifecycle,
+  QUIT_CLEANUP_TIMEOUT_MS,
   type IpcRegistrar,
   type ShellAssemblyCtx,
 } from './shell-core.ts'
-import { createNodeEdges, HOST_INBOUND } from './node-edges.ts'
+import { createNodeEdges, HOST_INBOUND, QUIT_INBOUND_ERROR } from './node-edges.ts'
 import { buildHeadlessCtx, type HeadlessCtxAssembly } from './sidecar-ctx.ts'
 import {
   EXIT_GRACEFUL,
@@ -255,6 +261,18 @@ async function handleInboundLine(line: string): Promise<void> {
     frame = JSON.parse(line) as Record<string, unknown>
   } catch {
     console.error('[sidecar] 非协议帧（丢弃，fail-loud）：' + line.slice(0, 200))
+    return
+  }
+  // D1c：退出在途（dispose/cp.stop 已开始）——不再受理任何新入站工作，以与
+  // Electron trustedIpc 退出围栏（renderer-trust.ts）逐字同形的错误拒绝
+  // （'app is quitting' + 'app_quitting'）。edge 应答不是新工作，仍走下方分派
+  // 让在飞 edge 结算（dispose 可能在等它）。
+  if (shuttingDown && typeof frame.edgeId !== 'number') {
+    if (typeof frame.id === 'number') {
+      writeProtocolLine({ id: frame.id, ok: false, ...QUIT_INBOUND_ERROR })
+    } else {
+      console.error('[sidecar] 退出在途：丢弃无 id 入站帧：' + line.slice(0, 200))
+    }
     return
   }
   if (typeof frame.edgeId === 'number') {
@@ -469,22 +487,69 @@ async function boot(): Promise<void> {
   }
 }
 
+/** D1c 测试注入（与 DSH_SIDECAR_LEGACY_START 同纪律）：非装配态下人为拖慢
+ *  退出清理，供 sidecar-stdio.test.ts 确定性覆盖「退出在途帧拒绝」与「5s 硬顶
+ *  强退」。产品路径不设置该变量；装配态一律忽略（退出行为不接受运行时开关）。 */
+const TEST_SHUTDOWN_STALL_ENV = 'DSH_SIDECAR_TEST_STALL_SHUTDOWN_MS'
+function shutdownStallMs(): number {
+  const raw = process.env[TEST_SHUTDOWN_STALL_ENV]
+  if (raw === undefined || raw.length === 0) return 0
+  if (isPackagedSidecarRuntime()) {
+    console.error(`[sidecar] ${TEST_SHUTDOWN_STALL_ENV} 在装配态被忽略（测试注入仅限 dev/测试）`)
+    return 0
+  }
+  const ms = Number(raw)
+  return Number.isFinite(ms) && ms > 0 ? ms : 0
+}
+
 /** 优雅退出（信号/EOF 共用）：quitting 门 → ctx 侧回收（transport/插件子进程/
  *  安装器/runtime 事务 abort/gateway 会话/session refresh——dispose 内序与
- *  main will-quit 同源）→ cp.stop（本地 dsh 子进程不孤儿化）→ exit code。 */
+ *  main will-quit 同源）→ cp.stop（本地 dsh 子进程不孤儿化）→ exit code。
+ *  D1c：整条清理链有硬顶——挂起的 dispose/cp.stop 不得让进程滞留到被外部
+ *  SIGKILL 才消失；超时 loud 强退，沿用本次退出路径的文档化退出码（信号/EOF =
+ *  EXIT_GRACEFUL=0，Supervisor 不得把清理超时误判为崩溃重启）。
+ *  硬顶取 QUIT_CLEANUP_DEADLINE_MS = QUIT_CLEANUP_TIMEOUT_MS - 500ms：宿主
+ *  （Swift BridgeClient 的 terminate→SIGKILL grace，与 QUIT_CLEANUP_TIMEOUT_MS
+ *  同为 5s）从同一 SIGTERM 起算，两侧同为 5s 时 SIGKILL 会先到、内部硬顶形同
+ *  虚设（2026-12 集成复核），留 500ms 余量保证内部强退先发生。 */
+/** 退出清理硬顶（见 shutdown 头注释）：必须早于宿主 5s SIGKILL grace。 */
+const QUIT_CLEANUP_DEADLINE_MS = QUIT_CLEANUP_TIMEOUT_MS - 500
+
 async function shutdown(code: number): Promise<void> {
   if (shuttingDown) return
   shuttingDown = true
   console.log('[sidecar] 优雅退出中…')
-  try {
-    await headless?.dispose()
-  } catch (err) {
-    console.error('[sidecar] ctx 回收失败：' + String(err))
-  }
-  try {
-    await controlPlaneInstance?.stop()
-  } catch (err) {
-    console.error('[sidecar] cp.stop 失败：' + String(err))
+  const cleanup = (async (): Promise<void> => {
+    const stallMs = shutdownStallMs()
+    if (stallMs > 0) {
+      console.error(`[sidecar] 测试注入：退出清理人为挂起 ${stallMs}ms（${TEST_SHUTDOWN_STALL_ENV}）`)
+      await new Promise<void>((resolve) => setTimeout(resolve, stallMs))
+    }
+    try {
+      await headless?.dispose()
+    } catch (err) {
+      console.error('[sidecar] ctx 回收失败：' + String(err))
+    }
+    try {
+      await controlPlaneInstance?.stop()
+    } catch (err) {
+      console.error('[sidecar] cp.stop 失败：' + String(err))
+    }
+  })()
+  let deadlineTimer: NodeJS.Timeout | undefined
+  const completed = await Promise.race([
+    // cleanup 内部已 catch 全部失败，不会 reject（Promise.race 的 reject 分支
+    // 会成为 unhandledRejection 并命中 exit 1，绝不能到达）。
+    cleanup.then(() => true as const),
+    new Promise<false>((resolve) => {
+      deadlineTimer = setTimeout(() => resolve(false), QUIT_CLEANUP_DEADLINE_MS)
+    }),
+  ])
+  if (deadlineTimer !== undefined) clearTimeout(deadlineTimer)
+  if (!completed) {
+    console.error(
+      `[sidecar] 退出清理超时（${QUIT_CLEANUP_DEADLINE_MS}ms，宿主 ${QUIT_CLEANUP_TIMEOUT_MS}ms 前留 500ms 余量），强制退出（code=${code}；可能有子进程残留）`,
+    )
   }
   process.exit(code)
 }

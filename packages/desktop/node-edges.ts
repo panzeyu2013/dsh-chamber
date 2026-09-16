@@ -24,11 +24,17 @@
  * - resolveResource（同步 string 契约）→ 同样无法往返：路径缓存经
  *   deps.hostFacts.resources（Swift ready 后推送）；缺失即 loud 抛
  *   'sidecar-edges:resource-not-cached:<kind>'。
- * - 通知 click 回灌：showNativeNotification 为每条通知分配本地 notificationId
- *   并随 edge payload 发送；Swift 侧点击（先自行 activate/restore/focus，
- *   语义 = electron-edges 的宿主 click 腿）后以入站
- *   __host.notifyClicked {notificationId} 通知本层，命中则调用该条
- *   clickRoute.onActivated()（core 的 owns+入队闭包）。dispose 注销映射。
+ * - 通知 click 回灌 + 退役清除（D1a 线协议，Swift 侧按此消费）：
+ *   showNativeNotification 为每条通知分配本地 notificationId，edge payload =
+ *   {notificationId, spec, sourceId}——sourceId 取 clickRoute.token.sourceId
+ *   （'test' 通知/无路由 = null）。Swift 侧按 sourceId 登记「已投递」通知的
+ *   UNUserNotificationCenter identifier，使随后 notify retireNotifications
+ *   {sourceIds} 能真正 removeDeliveredNotifications 清横幅（无登记表时只能
+ *   no-op）；点击（先自行 activate/restore/focus，语义 = electron-edges 宿主
+ *   click 腿）后以入站 __host.notifyClicked {notificationId} 通知本层，命中则
+ *   调用该条 clickRoute.onActivated()（core 的 owns+入队闭包）。dispose 注销
+ *   映射；来源退役时本层按 sourceId 注销 click 路由，横幅由 Swift 侧按同
+ *   sourceId 清（两侧同用这一个标识）。
  *
  * 保留入站 host method（由 sidecar-entry 分派到 handleHostInbound）：
  *   __host.notifyClicked    {notificationId}
@@ -49,6 +55,16 @@
  * 同步 setKeepAwake/setLoginItem（fire-and-forget + catch loud）不再被 ctx
  * 设置叶调用（避免双写/乐观假成功），保留供后续 HostEdges 面直接使用——
  * 两叶职责分离注记见下方成员注释。
+ *
+ * - **共享契约面，core 当前不经 Pick 消费（D1e，保留不删）**：
+ *   resolveResource / isPackaged / notifyClicked / trayAvailable /
+ *   focusMainWindow / launchApp 与同步 setKeepAwake/setLoginItem——core 的
+ *   HostEdges Pick（shell-core.ts installIpcHandlers 1802-1821）未收窄到它们，
+ *   本仓也暂无调用方；electron-edges 的返回 Pick 同样不含（Electron 侧这些动作
+ *   在 main.ts 直做，见其 TODO 段）。它们是 design 25 §4.1 v2 字段集这一共享
+ *   契约面（本文件是当前唯一实现；focusMainWindow/launchApp/setKeepAwake/
+ *   setLoginItem 的 Swift 宿主腿已在 SwiftEdgeHostLegs 落位），删除会砍掉契约
+ *   本身。语义仍须保持诚实（形状/失败语义与契约一致）；改这些成员时两侧同时核对。
  */
 import type {
   HostEdges,
@@ -71,6 +87,16 @@ export const HOST_INBOUND = {
   deepLink: '__host.deepLink',
   rendererLifecycle: '__host.rendererLifecycle',
   quitFacts: '__host.quitFacts',
+} as const
+
+/** 退出在途的入站拒绝形状（D1c）：与 Electron trustedIpc 退出围栏
+ *  （renderer-trust.ts createTrustedIpc）抛出的错误逐字同形——message
+ *  'app is quitting' + code 'app_quitting'。sidecar-entry 在 shuttingDown
+ *  开始后对迟到的 invoke 帧回 {ok:false, ...QUIT_INBOUND_ERROR}，让两种
+ *  flavor 的 renderer 拿到同一个可判别的退出错误（error 字段承载 message）。 */
+export const QUIT_INBOUND_ERROR = {
+  error: 'app is quitting',
+  code: 'app_quitting',
 } as const
 
 /** 渲染器生命周期事件（core `RendererLifecycleEvent` 的 wire 子集；Swift 侧
@@ -207,6 +233,9 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
         .sendEdge('showNativeNotification', {
           notificationId,
           spec: jsonSafe(spec),
+          // D1a：退役清横幅所需的来源标识（Swift 侧 sourceId→identifier 登记表）；
+          // 'test' 通知（clickRoute=null）无来源 → null（Swift 侧不登记、不退役）。
+          sourceId: clickRoute === null ? null : clickRoute.token.sourceId,
         })
         .then(
           () => ({ shown: true as const }),
@@ -297,9 +326,12 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
     },
 
     retireNotificationsForSources(retiredSourceIds: ReadonlySet<string>): number {
-      // 已退役来源的 click 路由随对象消亡（electron-edges 的 close 腿同语义）；
-      // OS 横幅的清除仍由 Swift 侧负责（当前为如实 no-op，见
-      // MainWindowController.retireNoop——故计数恒 0，不虚报「已关闭」）。
+      // 已退役来源的 click 路由随对象消亡（electron-edges 的 close 腿同语义），
+      // 且本次退役经 notify 交给 Swift 宿主：宿主按 sourceId→已投递标识登记表
+      // 调 removeDeliveredNotifications 真正清横幅（NotificationDeliveryRegistry）。
+      // 返回值契约是「关闭的原生通知数」——那只在宿主侧可观察，本层同步拿不到
+      // 真实条数，故恒返回 0 = 不虚报（两个调用方 main.ts / sidecar-ctx.ts 都
+      // 直接丢弃返回值）。
       for (const [id, route] of clickRoutes) {
         if (retiredSourceIds.has(route.token.sourceId)) clickRoutes.delete(id)
       }

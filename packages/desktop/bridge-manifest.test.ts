@@ -29,8 +29,12 @@
  *   ⑥ 提交物双件语义一致：Swift 三 Set 的字面量集合与 JSON 通道集逐条对应
  *      （防两提交物手工改坏其一 —— 文本级相等之外的交叉检查）。
  *
- * E8 chamber-bridge.js shim 存根产出不在本批（W-18 范围）——本文件只守
- * manifest 两提交物；W-18 桥面一致性测试可在此扩展。
+ * E8 chamber-bridge.stub.js 存根已由本管线的第三产物 renderShimStub 产出并
+ * 提交；其逐字节锁步、通道映射与 vm 执行断言在 bridge-shim.test.ts。本文件只
+ * 守 JSON/Swift 两提交物，桥面一致性不重复断言。维度：manifest 当前只承载
+ * 方向（invoke/push）；design 25 §4.4.3 提到的「归属命名空间」不在产物内——
+ * 命名空间方法面由 bridge-shim-surface.test.ts 锁 preload ↔ shim，设计句由
+ * docs owner 修订（生成器头注释同注）。
  *
  * 通道增删纪律：改动 IPC_CHANNELS/注册文件必须同 PR 提交新 manifest 两件，
  * 并把本文件 ③④⑤ 中钉死的数字/清单随事实同步（与 ipc-surface-mirror.test.ts

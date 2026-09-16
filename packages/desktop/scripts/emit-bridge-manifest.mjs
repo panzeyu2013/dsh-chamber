@@ -30,21 +30,34 @@
  *      随 swift build 编译接线，Swift 白名单 XCTest 方可 @testable import
  *      引用）；旧 macos/Sources/Generated/BridgeManifest.swift 已删除、生成器
  *      不再产出该位置（docs 侧旧路径引用属文档同步范围，随 W-18 记录处理）。
- *   C. chamber-bridge.js（E8）shim 存根产出**不在本批**（W-18 后半）——W-18
- *      直接 import 本模块的纯函数即可复用解析/方向/渲染，无需复制逻辑。
+ *   C. macos/Sources/DSHChamberPoc/Resources/chamber-bridge.stub.js（E8）——
+ *      renderShimStub(manifest) 的提交产出（CLI 第三位置参数，无参时写默认
+ *      位），与 JSON/Swift 两件同源同批；生成物 == 提交物由 bridge-shim.test.ts
+ *      逐字节守住（另含通道映射与 vm 执行负例）。
+ *
+ * 维度说明：design 25 §4.4.3 的文字写「通道名 + 方向 invoke|push + 归属命名
+ * 空间」，但本管线当前只落**方向**一个维度——manifest 供 Swift 侧通道白名单
+ * 与 shim 常量单源使用，命名空间归属的单源在 preload.cts 的 *Api 工厂/方法面
+ * （bridge-shim-surface.test.ts 已逐命名空间锁 preload ↔ shim 一致），manifest
+ * 不重复承载；该设计句须由 docs owner 修订（或另立批次把命名空间端到端落进
+ * json/Swift/shim 三产物），本文件绝不产出伪造的 namespace 字段。
  *
  * 用法（工作目录 packages/desktop）：
- *   node scripts/emit-bridge-manifest.mjs                # 写两个提交物默认位
- *   node scripts/emit-bridge-manifest.mjs <json> <swift> # 写指定路径（测试用）
+ *   node scripts/emit-bridge-manifest.mjs                       # 写三个提交物默认位
+ *   node scripts/emit-bridge-manifest.mjs <json> <swift>        # 写指定路径（不入 stub）
+ *   node scripts/emit-bridge-manifest.mjs <json> <swift> <stub> # 三产物到指定路径（测试用）
  *
  * 稳定性承诺：产物不含时间戳/绝对路径等易漂移内容；同输入两次运行字节一致。
  * 错误纪律：解析/校验失败一律 loud（stderr 中文原因 + 非 0 退出），绝不带病
- * 产出部分 manifest。生成物 == 提交物由 bridge-manifest.test.ts 守住。
+ * 产出部分 manifest。生成物 == 提交物由 bridge-manifest.test.ts（JSON/Swift，
+ * 重生成逐字节比对 + 无死键）与 bridge-shim.test.ts（stub，重生成 + 通道映射
+ * + vm 执行）守住。
  *
  * 导出（供 JS 侧复用；.mjs ↔ .mjs 直接 import，无类型声明问题）：
  *   MAIN_SIDE_FILES / parseIpcChannels(source) /
  *   computeManifest(sourceIpc?, sourceFiles?) /
- *   renderJsonManifest(manifest) / renderSwiftManifest(manifest)
+ *   renderJsonManifest(manifest) / renderSwiftManifest(manifest) /
+ *   renderShimStub(manifest)
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'

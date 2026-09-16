@@ -18,8 +18,7 @@
 import { test, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { existsSync } from 'node:fs'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -33,7 +32,29 @@ import {
 
 const dir = path.dirname(fileURLToPath(import.meta.url))
 const sidecarPath = path.join(dir, 'sidecar-entry.ts')
-const nodePath = process.env.NODE_BIN ?? process.execPath
+// D1b 门禁（2026-12 审计）：显式 NODE_BIN（非空）是调用方的配置承诺——不可用
+// 必须硬失败；只有隐式缺省（process.execPath）不可用才是环境缺失，允许一行
+// loud skip。原实现 existsSync 后整组静默 return：NODE_BIN=/nonexistent/node
+// 得到 11 pass / 0 fail / exit 0 的假绿。
+const explicitNodeBin = typeof process.env.NODE_BIN === 'string' && process.env.NODE_BIN.length > 0
+const nodePath = explicitNodeBin ? (process.env.NODE_BIN as string) : process.execPath
+/** 可用 node = 存在的常规文件（目录/缺失都不可用）。 */
+function nodeUsable(p: string): boolean {
+  try {
+    return statSync(p).isFile()
+  } catch {
+    return false
+  }
+}
+type NodeGate = 'run' | 'hard-fail' | 'skip'
+/** 门禁判定（纯逻辑，测试可直断言；spawn 决策在 before/各用例入口）。 */
+function classifyNodeGate(explicit: boolean, usable: boolean): NodeGate {
+  if (usable) return 'run'
+  return explicit ? 'hard-fail' : 'skip'
+}
+const nodeAvailable = nodeUsable(nodePath)
+const nodeGate = classifyNodeGate(explicitNodeBin, nodeAvailable)
+const NODE_GATE_HARD_FAIL = `NODE_BIN 显式提供但不可用：${nodePath}（配置错误必须硬失败，绝不静默 skip）`
 
 interface Driver {
   invoke(method: string, payload: unknown, timeoutMs?: number): Promise<{ ok: boolean; result?: unknown; error?: string }>
@@ -175,7 +196,6 @@ function startDriver(): Promise<Driver> {
 }
 
 let driver: Driver
-const nodeAvailable = existsSync(nodePath)
 
 /** W-15 目录锁复验用：带预置锁记录 spawn 一个 sidecar（不共享 driver 的 userData）。 */
 function spawnWithLockRecord(lockPid: number, port: string): {
@@ -225,17 +245,127 @@ function spawnWithLockRecord(lockPid: number, port: string): {
   return { ready, exit, stderr: () => stderr, kill: (signal) => child.kill(signal) }
 }
 
+/** D1c 测试用 harness：可注入 env、可等 stderr 行（确定性进入退出在途窗口）、
+ *  观察原始响应帧（含 code 字段）的独立 sidecar。 */
+function spawnInjectable(extraEnv: Record<string, string>, port: string): {
+  ready: Promise<void>
+  invoke(method: string, payload: unknown, timeoutMs?: number): Promise<{ ok: boolean; result?: unknown; error?: string; code?: string }>
+  waitStderr(pattern: RegExp, timeoutMs?: number): Promise<void>
+  exit: Promise<number | null>
+  stderr: () => string
+  kill: (signal: NodeJS.Signals) => void
+} {
+  const userDataDir = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-d1c-'))
+  const child: ChildProcessWithoutNullStreams = spawn(
+    nodePath,
+    [sidecarPath, '--user-data-dir', userDataDir, '--port', port],
+    { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ...extraEnv }, stdio: ['pipe', 'pipe', 'pipe'] },
+  )
+  let stderr = ''
+  child.stderr.on('data', (chunk) => {
+    stderr += String(chunk)
+  })
+  const exit = new Promise<number | null>((resolve) => child.on('exit', (code) => resolve(code)))
+  const pending = new Map<number, (frame: { ok: boolean; result?: unknown; error?: string; code?: string }) => void>()
+  let nextId = 1
+  let readyResolve: (() => void) | null = null
+  let readyTimer: NodeJS.Timeout | undefined
+  const rl = createInterface({ input: child.stdout })
+  rl.on('line', (line) => {
+    if (line.length === 0) return
+    let frame: Record<string, unknown>
+    try {
+      frame = JSON.parse(line) as Record<string, unknown>
+    } catch {
+      return
+    }
+    if (frame.notify === 'ready') {
+      readyResolve?.()
+      return
+    }
+    if (typeof frame.id === 'number') {
+      const settle = pending.get(frame.id)
+      if (settle !== undefined) {
+        pending.delete(frame.id)
+        settle({
+          ok: frame.ok === true,
+          result: frame.result,
+          error: typeof frame.error === 'string' ? frame.error : undefined,
+          code: typeof frame.code === 'string' ? frame.code : undefined,
+        })
+      }
+    }
+  })
+  const ready = new Promise<void>((resolve, reject) => {
+    readyResolve = () => {
+      if (readyTimer !== undefined) clearTimeout(readyTimer)
+      resolve()
+    }
+    readyTimer = setTimeout(() => reject(new Error('ready 超时（20s）')), 20000)
+    void exit.then(() => reject(new Error('ready 前退出')))
+  })
+  void ready.catch(() => {})
+  return {
+    ready,
+    invoke(method, payload, timeoutMs = 4000) {
+      return new Promise((resolve, reject) => {
+        const id = nextId
+        nextId += 1
+        const timer = setTimeout(() => {
+          pending.delete(id)
+          reject(new Error('invoke 超时: ' + method))
+        }, timeoutMs)
+        pending.set(id, (frame) => {
+          clearTimeout(timer)
+          resolve(frame)
+        })
+        child.stdin.write(JSON.stringify({ id, method, payload }) + '\n')
+      })
+    },
+    waitStderr(pattern, timeoutMs = 4000) {
+      if (pattern.test(stderr)) return Promise.resolve()
+      return new Promise<void>((resolve, reject) => {
+        const onData = (): void => {
+          if (!pattern.test(stderr)) return
+          clearTimeout(timer)
+          child.stderr.off('data', onData)
+          resolve()
+        }
+        const timer = setTimeout(() => {
+          child.stderr.off('data', onData)
+          reject(new Error('stderr 未匹配 ' + String(pattern) + '（尾部：' + stderr.slice(-400) + '）'))
+        }, timeoutMs)
+        child.stderr.on('data', onData)
+      })
+    },
+    exit,
+    stderr: () => stderr,
+    kill: (signal) => child.kill(signal),
+  }
+}
+
 before(async () => {
-  if (!nodeAvailable) return
+  // 显式 NODE_BIN 不可用 = 硬失败：before 抛错 → 整组用例失败（exit 非 0），
+  // 绝不能像原实现那样静默 skip 出假绿。
+  if (nodeGate === 'hard-fail') throw new Error(NODE_GATE_HARD_FAIL)
+  if (nodeGate === 'skip') return
   driver = await startDriver()
 })
 after(async () => {
-  if (!nodeAvailable) return
+  if (nodeGate !== 'run') return
   await driver.close()
 })
 
-test('sidecar stdio：环境缺 node 时整组 skip', (t) => {
-  if (!nodeAvailable) t.skip('NODE_BIN 与 process.execPath 均不可用')
+test('D1b 门禁：显式 NODE_BIN 不可用 = 硬失败；隐式缺 node = 一行 loud skip', (t) => {
+  // 判定分支断言（与运行环境无关，两分支都必须可复现）。
+  assert.equal(classifyNodeGate(true, false), 'hard-fail', '显式提供但不可用 = 配置错误，必须硬失败')
+  assert.equal(classifyNodeGate(false, false), 'skip', '隐式缺省不可用 = 环境缺失，一行 loud skip')
+  assert.equal(classifyNodeGate(true, true), 'run')
+  assert.equal(classifyNodeGate(false, true), 'run')
+  if (nodeGate === 'skip') {
+    // 隐式 node 缺失：唯一一条 loud skip（其余用例仍走各自的早退），绝不静默绿。
+    t.skip('隐式运行时 process.execPath 不可用——整组 skip（未显式提供 NODE_BIN）')
+  }
 })
 
 test('W-13 ① info 真实载荷', async () => {
@@ -407,6 +537,37 @@ test('W-13 ⑤ SIGTERM 优雅退出 exit 0', async () => {
   if (!nodeAvailable) return
   const code = await driver.close()
   assert.equal(code, 0)
+})
+
+test('D1c 退出在途：入站帧以 app_quitting 拒绝 + 清理硬顶（早于宿主 SIGKILL grace）强退', async () => {
+  if (!nodeAvailable) return
+  // 清理注入挂起 8s（> 硬顶 4.5s = QUIT_CLEANUP_TIMEOUT_MS 5s 留 500ms 余量，
+  // 保证先于宿主 SIGKILL grace）：进程只能由内部硬顶强退，
+  // 绝不可能等到清理完成——这正是「不退到被 SIGKILL」要证明的行为。
+  const stallMs = 8000
+  const harness = spawnInjectable({ DSH_SIDECAR_TEST_STALL_SHUTDOWN_MS: String(stallMs) }, '17924')
+  await harness.ready
+  const startedAt = Date.now()
+  harness.kill('SIGTERM')
+  // 等挂起日志（shuttingDown 已置位、清理尚未完成）再发帧：确定性落在退出
+  // 在途窗口内，不赌信号与 stdin 读的事件顺序。
+  await harness.waitStderr(/退出清理人为挂起/, 5000)
+  const rejected = await harness.invoke('dsh-chamber:info', null, 4000)
+  assert.equal(rejected.ok, false, '退出在途不得再受理新工作')
+  assert.equal(rejected.error, 'app is quitting', '与 Electron trustedIpc 的 app_quitting 同文案')
+  assert.equal(rejected.code, 'app_quitting', '与 Electron trustedIpc 的 app_quitting 同 code')
+  const rejectedAgain = await harness.invoke('dsh-chamber:info', null, 4000)
+  assert.equal(rejectedAgain.error, 'app is quitting', '退出在途拒绝是持续门，不是一次性')
+  assert.equal(rejectedAgain.code, 'app_quitting')
+  const code = await harness.exit
+  const elapsed = Date.now() - startedAt
+  assert.equal(code, EXIT_GRACEFUL, '硬顶强退沿用信号/EOF 路径的文档化退出码（Supervisor 不得误判崩溃）')
+  assert.match(harness.stderr(), /退出清理超时/, '硬顶强退必须 loud（stderr 超时日志）')
+  assert.ok(elapsed >= 4000, `硬顶应在 ~4.5s（QUIT_CLEANUP_TIMEOUT_MS 留 500ms 余量）触发，实际 ${elapsed}ms`)
+  // 硬顶必须早于宿主 5s SIGKILL grace：上界取 5000 而不是 stallMs（2026-12
+  // 验证轮：原上界 8000 允许 [5000,8000) 的宽限，正是会被宿主先杀死的区间）。
+  assert.ok(elapsed < 5000, `硬顶必须早于宿主 5s grace（实际 ${elapsed}ms）`)
+  assert.ok(elapsed < stallMs, `不得等清理完成（${stallMs}ms），实际 ${elapsed}ms`)
 })
 
 // 三审 #7：退出码分级常量必须互异且与 Supervisor 分级一致（70=启动失败、
