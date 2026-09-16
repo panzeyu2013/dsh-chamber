@@ -384,7 +384,7 @@ interface HostEdges {
   openExternal(url: string): Promise<void>                    // 预算/冷却/规范化在 core（B11）
   openPath(p: string): Promise<void>
   showItemInFolder(p: string): void
-  launchApp(appId: string, path: string): Promise<boolean>    // open-in 原生拉起（§5 E12）
+  launchApp(appId: string, path: string): Promise<boolean>    // 契约保留；**两 flavor 均无实现**（S-05 复裁决：等第一个消费者，§5 E12）
   // 对话框（E8：仅插件源 folder|.tgz 一体化 picker，design 21 §10 ⑧/13 §5.8）
   pickPluginSource(): Promise<HostPluginSourcePick>           // {status:'cancelled'}|{status:'picked';path}
   showError(title: string, detail: string): void
@@ -416,7 +416,7 @@ interface HostEdges {
 | control-plane（含 proxy/ws/静态伺服/seed/reaper） | ≈14.2k | 无 | sidecar 原样（编译产物复用 build-control-plane 模式） |
 | dsh-runtime | ≈11.5k | 无 | sidecar 原样 |
 | transport-manager / ssh-provider / gateway-provider / gateway-session(+refresh) / plugin-sync / connection-save / ssh-config / plugin-tarball / notifications(裁决) / deep-link(解析) / audit-log / badge(裁决) / chamber-settings / dsh-runtime-controller / apply-now / disk-evidence / 凭据文件事务族 / sidecar-ctx / shell-core | 零 Electron import（electron-free-gate.test.ts 传递闭包断言） | 无 | core 原样 |
-| open-in（分类/校验）+ 原生拉起 | 纯逻辑 | 拉起点在 edges | 逻辑进 core；拉起走 HostEdges.launchApp |
+| open-in（分类/校验）+ 本地拉起 | 纯逻辑 | 拉起点在 edges | 决策全在 core；**本地拉起由实例内 host 包 `openInApp/*` 负责，壳不实现 launchApp**（S-05 复裁决） |
 | main.ts 编排 + electron-edges + preload + updater | ≈6.7k（3,982+367+941+1,413） | **4 文件，全部** | P1 拆分；updater 走 §7 |
 | ipc-events.ts IPC_CHANNELS + ipc-surface-mirror 测试 | — | — | **manifest 单源**（§4.4.3），不动 |
 | 资源/打包路径直拼点 | main.ts 内残余直拼点（builtin dsh / pnpm / webDistDir / 图标等） | 部分 | P1 参数化进 HostEdges.resolveResource（B1） |
@@ -580,7 +580,7 @@ interface HostEdges {
 | E9 | `dialog.showErrorBox/showMessageBox`（fatal 启动/前端崩溃/退出确认 D2）+ fatal 边界（uncaughtException → app.exit(1) :230-251） | `NSAlert`（sheet 或 app-modal）+ **sidecar fatal 边界：stderr + 非零退出码分级，Supervisor 分流文案** | 退出确认三分支与 5s 硬顶（§3.3/4） |
 | E10 | `shell.openExternal`（外链/发布页/`openVscodeUrl`） | `NSWorkspace.shared.open(URL)`（URL 规范化/预算/冷却在 core，main.ts:1269-1303） | open-release 亦此 |
 | E11 | `shell.openPath/showItemInFolder` | NSWorkspace `open(_:)` / `activateFileViewerSelecting` | 失败模式语义照搬 |
-| E12 | open-in 拉起 Finder/VS Code/应用 | `launchApp` 走 HostEdges：NSWorkspace 按 bundle id/path 启动 + activate | 分类/校验逻辑留 core（open-in.test.ts 继续覆盖） |
+| E12 | open-in 拉起 Finder/VS Code/应用 | **实例内 host 包** `dsh-chamber-seed-open-in`（`openInApp/*`，design 20 §6）负责目录/图标/拉起；壳只执行 `openExternal`（vscode 远程深链等）；`HostEdges.launchApp` 契约保留但两 flavor 均无实现（S-05 复裁决，等第一个消费者） | 注册表/设置/可用性/URL 规则只在 core（`open-in.ts`/`deep-link.ts`） |
 | E13 | 深链注册（打包态 `dsh-chamber://`） | Info.plist `CFBundleURLTypes` + `application(_:open:)` | 冷/热启动入队语义见 §4.5 |
 | E14 | `app.setLoginItemSettings(openAtLogin)` | macOS 13+ `SMAppService.mainApp`；旧系统 NSLoginItem 兜底 | 设置面语义不变（14） |
 | E15 | `safeStorage`（gateway-secrets v3） | **不移植**：Swift flavor 走既有"诚实 0600 明文"回退；旧 safeStorage 密文"保留禁用待重录"（判别单测 **S1**，编号避开 §5 E 表） | 更强者加密 → 决策 7 |
