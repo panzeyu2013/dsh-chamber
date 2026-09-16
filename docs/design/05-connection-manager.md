@@ -566,8 +566,10 @@ export const chamberBridge: {
   clearPluginDiagnostic(sourceId: string): void
   getPluginDiagnostics(): Readonly<Record<string, PluginGraphDiagnostic>>
   onPluginDiagnostic(listener: (sourceId: string, diagnostic: PluginGraphDiagnostic | undefined) => void): () => void
-  // 活动视图事实（design 06 §4.6）：文档级状态（主题投影、后续的
-  // lang 投影）只有活动视图的实例可以写，App 是「谁在屏上」的唯一权威。
+  // 活动视图事实（design 06 §4.6）：文档级状态只有活动视图的实例可以写
+  // ——已落地两条：主题投影（ui-layout fork 的 document-theme）与页面语言
+  // （`<html lang>`，renderer/src/page-language.ts 的页级归属器）。
+  // App 是「谁在屏上」的唯一权威。
   setActiveSource(sourceId: string | undefined): void     // 同值重发为 no-op；undefined = 未发布
   getActiveSource(): string | undefined                   // 未发布时 undefined（消费者 fail open）
   onActiveSource(listener: (sourceId: string | undefined) => void): () => void  // 仅变化时通知
@@ -672,8 +674,11 @@ export const chamberBridge: {
   字典（T16，2026-09-11 upstream-alignment）**：框架（App / InstanceView /
   `index.html` 的静态首帧）自身没有 `t` 席位，其 chrome 文案集中在
   `packages/renderer/src/locales.ts`（zh 为键集权威 + en 完整校验），按
-  **文档语言** `document.documentElement.lang` 解析——官方 locale 服务
-  `syncDocumentLanguage` 是该属性的唯一写入者；未设置时回落到**服务端 markup
+  **文档语言** `document.documentElement.lang` 解析；该属性由页级归属器
+  （`page-language.ts`，design 06 §4.6「页面语言归属」）持有——每个实例壳的官方
+  locale 服务都会写它（激活 + 每次字典注册，无 teardown），归属器只让**屏上来源
+  设置面已敲定**的语言落地、其余就地回写，因此框架 chrome 的语言与屏上实例一致、
+  不再 last-writer-wins；未设置时回落到**服务端 markup
   自己的默认**（`index.html` 的 `lang="zh-CN"`）而非 OS 语言。`index.html`
   的静态骨架文案由 `main.tsx` 在 React 挂载前用同一字典覆盖（`data-chamber-boot-hint`
   是唯一挂钩），因此英文文档首帧即英文。转圈是纯装饰（`aria-busy` 承载忙碌事实），

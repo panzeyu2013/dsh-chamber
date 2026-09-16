@@ -2,6 +2,7 @@ import React from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App.tsx'
 import { frameText, readDocumentLocale } from './locales.ts'
+import { installPageLanguageOwner } from './page-language.ts'
 import './styles.css'
 
 // T16 (2026-09-11 upstream-alignment): the static first-frame skeleton in
@@ -21,6 +22,16 @@ import './styles.css'
 // the frame itself would not use.
 const bootHint = document.querySelector('[data-chamber-boot-hint]')
 if (bootHint !== null) bootHint.textContent = frameText(readDocumentLocale(), 'boot.starting')
+
+// design 06 §4.6「页面语言归属」: `<html lang>` is a DOCUMENT-global fact, and every mounted
+// instance shell writes it unconditionally (the vendor locale service, at
+// activation and on each dictionary registration, with no teardown). N shells
+// share this one document, so the last writer — including a prewarmed shell's
+// browser-derived provisional — used to own the frame chrome's language. The
+// page-language owner takes that attribute over BEFORE any shell boots: the
+// served markup's own language is the cold-start value, and from here on only
+// the on-screen source's SETTLED language may change it (page-language.ts).
+installPageLanguageOwner()
 
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

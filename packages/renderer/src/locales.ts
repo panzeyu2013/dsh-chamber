@@ -23,10 +23,16 @@
  * ## How the frame chooses the locale (it owns no `t` seat)
  *
  * The document language: `document.documentElement.lang`. The official locale
- * service is its single writer — `syncDocumentLanguage` sets `<html lang>` at
- * activation and on every locale change (vendor
- * packages/client/locale/src/client/index.ts:149), i.e. the booted shell's own
- * active locale IS the document language. This is the same mechanism, and the
+ * service writes it (`syncDocumentLanguage`, vendor
+ * packages/client/locale/src/client/index.ts:149) — but in the chamber's N-ctx
+ * document EVERY mounted shell's service writes it, at activation and on every
+ * dictionary registration, so "the booted shell's locale" used to mean "the
+ * shell that wrote last" including a prewarmed one's browser-derived
+ * provisional. That last-writer-wins defect is closed by the page-language
+ * owner: `page-language.ts` sanctions only the ON-SCREEN source's SETTLED
+ * language and restores every other write (design 06 §4.6「页面语言归属」), so
+ * the document language the readers below observe IS the on-screen instance's
+ * own language. This is the same mechanism, and the
  * same fallback pin, the chamber's settings-bridge already uses for ctx-free
  * copy (`DshRuntimeSection.tsx` `formatTimestamp`: "the served markup defaults
  * to zh-CN, so an unset lang falls back to zh-CN rather than the OS locale") —
@@ -40,8 +46,9 @@
  * resolves zh and the first copy the user sees is always the served one (which
  * is also what the static skeleton in index.html already carries, so the
  * pre-mount rewrite in main.tsx is a no-op on that path). The dictionary takes
- * over the moment the document language actually changes — a booted shell
- * projecting its locale, or a control-plane markup that declares another
+ * over the moment the document language actually changes — the page-language
+ * owner letting the on-screen source's settled language land (main.tsx installs
+ * it before any shell boots), or a control-plane markup that declares another
  * language — which is exactly the subscription below.
  */
 

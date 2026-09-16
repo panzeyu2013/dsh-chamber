@@ -163,9 +163,13 @@ function RuntimeBadge({ view, t }: { view: RuntimeBadgeView; t: RuntimeTranslate
 }
 
 /** Localize a projected ISO timestamp before it reaches user copy. The locale
- *  service keeps `<html lang>` in sync at activation and on every locale
- *  change (dsh-client-locale syncDocumentLanguage); the served markup defaults
- *  to zh-CN, so an unset lang falls back to zh-CN rather than the OS locale. */
+ *  service writes `<html lang>` at activation and on every locale change
+ *  (dsh-client-locale syncDocumentLanguage), but the PAGE value is owned by the
+ *  renderer's page-language owner (design 06 §4.6「页面语言归属」): it follows the
+ *  source ON SCREEN once that source's settings have settled, so this ctx-free
+ *  read resolves as the on-screen instance's language, not necessarily the one
+ *  this settings panel is editing. The served markup defaults to zh-CN, so an
+ *  unset lang falls back to zh-CN rather than the OS locale. */
 function formatTimestamp(value: string): string {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value

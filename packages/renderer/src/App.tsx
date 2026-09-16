@@ -133,6 +133,7 @@ import { planDegradedRetries } from './degraded-retry.ts'
 // owns the copy key, the retry verdict and the "will the self-heal re-mount
 // this?" rule; the frame only maps its keys through `t`.
 import { bootGapNotice, toServerBootGap } from './boot-gap.ts'
+import { setPageActiveSource } from './page-language.ts'
 import { runViewTransition } from './view-transition.ts'
 import { captureSidebarScrollAnchor, restoreSidebarScroll } from './sidebar-scroll-sync.ts'
 import {
@@ -2757,8 +2758,15 @@ export default function App() {
   // packages/dsh-chamber-client-ui-layout/src/client/document-theme.ts）。
   // useLayoutEffect：必须在切换视图的那一帧**绘制前**发布，否则主题不同的两个
   // 视图互切会先画一帧旧调色板（2026-12 复查 MINOR-2）。
+  //
+  // 同一份「谁在屏上」的权威也是文档级 `<html lang>` 的归属来源（design 06
+  // §4.6「页面语言归属」）：每个实例壳的官方 locale 服务都无条件写这个属性且无 teardown，
+  // page-language 归属器只让**屏上来源、且其宿主设置已回答**的语言落地——默认
+  // 进入只有本地实例的设置能决定页面语言，后台/预热的壳一律被就地回写；尚未
+  // 加载的来源在它报出自己的语言之前保持当前页面语言。
   useLayoutEffect(() => {
     chamberBridge.setActiveSource(activeView)
+    setPageActiveSource(activeView)
   }, [activeView])
 
   // 活动视图落地即重计隐藏窗：离开活动的旧视图开始计时，新活动视图清计时。

@@ -469,7 +469,11 @@ test('deferred rows mount with their row id as the fiber name', () => {
   // surfaces. The upstream loader names graph rows by id
   // (`loader.create({ name: row.id })`); this pins the composite to the same
   // convention.
-  assert.match(entry, /ctx\.plugin\(\{ \.\.\.\w+, name: outcome\.id \}\)/,
+  // Mount decorators apply on this path too (design 06 §4.6「页面语言归属」): the
+  // deferred mount is `decorateMount(outcome.id, { ...loaded, name: outcome.id })`,
+  // which only spreads the namespace and replaces \`apply\` — the row id still
+  // names the fiber, and a decorated id never loses its hook by living here.
+  assert.match(entry, /ctx\.plugin\(decorateMount\(outcome\.id, \{ \.\.\.loaded, name: outcome\.id \}\)\)/,
     'a deferred row must be mounted with its row id as the fiber name')
   assert.doesNotMatch(entry, /ctx\.plugin\((?:outcome\.plugin|loaded)\)/,
     'a bare mount loses the row identity in every fiber-name diagnostic')
@@ -484,7 +488,12 @@ test('chamber-entry derives the probed roster from the registered namespaces (no
   // the id + the namespace's exported inject face…
   assert.match(entry, /const register = \(id: string, plugin: object\): void => \{/,
     'the register helper must mount and record in one step')
-  assert.match(entry, /const fiber = ctx\.plugin\(plugin\) as unknown as \{ inject\?: unknown \} \| undefined/,
+  // The mounted object is the DECORATED namespace: `decorateMount` only
+  // spreads the namespace and replaces `apply` (design 06 §4.6「页面语言归属」 — the vendor
+  // locale mount gains the page-language ownership hook), so the mount still
+  // happens inside the helper and cannot bypass the roster. A bare
+  // `ctx.plugin(plugin)` would leave every mount-time decorator unapplied.
+  assert.match(entry, /const fiber = ctx\.plugin\(decorateMount\(id, plugin\)\) as unknown as \{ inject\?: unknown \} \| undefined/,
     'the mount happens inside the helper, so no bare ctx.plugin can bypass the roster')
   assert.match(entry, /const declared = registeredInjectMembers\(id, \(plugin as \{ inject\?: unknown \}\)\.inject\)/,
     'the roster source is the namespace export, normalized by the shared helper')
@@ -498,12 +507,13 @@ test('chamber-entry derives the probed roster from the registered namespaces (no
     'a derivation blind spot must fail the entry loud, never shrink the roster silently',
   )
   // No bare first-screen mount can bypass the roster: the only ctx.plugin calls
-  // left are the helper's own (`plugin`) and the deferred cluster's named object
-  // form (whose chunks are not evaluated when the probe runs).
+  // left are the helper's own (the DECORATED namespace form,
+  // `decorateMount(id, plugin)`, design 06 §4.6「页面语言归属」) and the deferred cluster's
+  // named object form (whose chunks are not evaluated when the probe runs).
   const args = [...entry.matchAll(/ctx\.plugin\(([^)]*)/g)].map(match => match[1]!.trim())
   assert.ok(args.length > 0, 'the composite must still register plugins')
   for (const arg of args) {
-    assert.ok(arg.startsWith('plugin') || arg.startsWith('{'),
+    assert.ok(arg.startsWith('decorateMount(') || arg.startsWith('{'),
       `a bare ctx.plugin(${arg}…) bypasses the derived roster — mount it through register()`)
   }
   // The probe consumes exactly that roster, and the old hardcoded list is gone.

@@ -133,6 +133,7 @@ import {
   REQUIRED_SERVICE_PROBE_DEADLINE_MS, REQUIRED_SERVICE_PROBE_INTERVAL_MS,
   type RegisteredPluginInject,
 } from './required-extra-rows.ts'
+import { withLocaleOwnership } from './locale-ownership.ts'
 import { isChamberSourceId } from './transport-source.ts'
 
 declare module '@deepseek-ai/cordis' {
@@ -330,6 +331,36 @@ const DEFERRED_ROWS: ReadonlyArray<readonly [id: string, load: () => Promise<unk
 ]
 
 /**
+ * Mount-time decorators, keyed by registered id (design 06 §4.6「页面语言归属」):
+ * the composite owns the moment a namespace is MOUNTED, so a vendor plugin whose
+ * body writes a DOCUMENT-global fact gets a hook that runs immediately after its
+ * own `apply()` — same fiber, same synchronous task. `MOUNT_DECORATORS` covers
+ * BOTH mount paths (the first-screen `register` helper and the deferred
+ * cluster), so moving a decorated id between them cannot silently drop its hook.
+ *
+ * PRECONDITION: a decorated `apply` must be SYNCHRONOUS (today's locale plugin
+ * is; it returns void). An async apply would complete its later registrations
+ * after the hook ran.
+ *
+ * Why the decorators are applied inside the mount helpers and not at the
+ * `register(...)` call sites: the roster audit
+ * (test/lifecycle/required-extra-rows.test.ts, "registered plugins") resolves
+ * every registered id through its NAMESPACE IMPORT, so the call sites must keep
+ * passing the imported namespace itself. Decorating at the mount preserves that
+ * premise and the namespace's exported `inject` face (the decorator spreads the
+ * namespace and only replaces `apply`).
+ *
+ * The one entry today is the official locale plugin: it writes the
+ * DOCUMENT-global `<html lang>` at activation and on every dictionary
+ * registration, with no teardown and no active-source gate — see
+ * `locale-ownership.ts` for the ownership rule it is re-pointed at.
+ */
+const MOUNT_DECORATORS: Readonly<Record<string, (plugin: object) => object>> = {
+  '@deepseek-ai/dsh-client-locale': withLocaleOwnership,
+}
+const decorateMount = (id: string, plugin: object): object => MOUNT_DECORATORS[id]?.(plugin) ?? plugin
+
+/**
  * Register the non-first-screen ui-* families once their chunks arrive.
  * Fire-and-forget from apply: never awaited, so the entry (and the boot's
  * settle/sweep) does not wait for any of this. Failures (chunk load error, or a
@@ -395,7 +426,9 @@ async function registerDeferred(
     // roster is the contract, not the module shapes — so the cordis
     // object-plugin shape is asserted here.)
     const loaded = outcome.plugin as { apply: (ctx: Context, config?: never) => void; inject?: string[] }
-    ctx.plugin({ ...loaded, name: outcome.id })
+    // Mount decorators apply here too (see MOUNT_DECORATORS): a decorated id
+    // must not lose its hook by living in the deferred cluster instead.
+    ctx.plugin(decorateMount(outcome.id, { ...loaded, name: outcome.id }))
     // 2026-09-11 review-fix (finding 1): the row's OWN exported inject face
     // enters the probe roster now that its namespace is materialized — the
     // declaration the fiber above is waiting on, recorded exactly the way the
@@ -689,7 +722,7 @@ export function apply(ctx: Context): void {
     // (`ctx.plugin` returns the fiber; a shape that carries no inject map — or a
     // cordis that returned the context instead — yields no witness and no
     // false alarm.)
-    const fiber = ctx.plugin(plugin) as unknown as { inject?: unknown } | undefined
+    const fiber = ctx.plugin(decorateMount(id, plugin)) as unknown as { inject?: unknown } | undefined
     const witness = fiber?.inject
     const witnessKeys = witness !== null && typeof witness === 'object' && !Array.isArray(witness)
       ? Object.keys(witness as Record<string, unknown>)
