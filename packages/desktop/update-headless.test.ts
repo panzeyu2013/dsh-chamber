@@ -376,3 +376,54 @@ test('⑩ start()：15s 静默首检 + 6h 周期（与 Electron 同参数），u
     globalThis.clearInterval = realTimers.clearInterval
   }
 })
+
+test('⑪ 原生更新器可用：start() 清空 installBlockedReason，download/restartAndInstall 转发', async () => {
+  const calls: string[] = []
+  const controller = createHeadlessUpdateController({
+    version: '0.2.2',
+    logger,
+    request: fakeFetch([release('v0.2.3')]),
+    nativeUpdater: {
+      async available() { return true },
+      async trigger(kind: 'download' | 'install') { calls.push(kind); return { ok: true as const } },
+    },
+  })
+  assert.equal(controller.state().installBlockedReason, NATIVE_SHELL_INSTALL_BLOCKED_REASON)
+  controller.start()
+  await Promise.resolve(); await Promise.resolve()
+  assert.equal(controller.state().installBlockedReason, null, '原生可用 → 不再谎称 blocked')
+  assert.deepEqual(await controller.download(), { ok: true })
+  assert.deepEqual(await controller.restartAndInstallAsync!(), { ok: true })
+  assert.deepEqual(calls, ['download', 'install'], '转发顺序与 kind 原样')
+  assert.equal(controller.state().latestVersion, null, '转发不伪造本控制器状态')
+  controller.stop()
+})
+
+test('⑫ 原生更新器不可用/探测失败：保持 blocked-available 且不转发', async () => {
+  const calls: string[] = []
+  const bridge = (available: () => Promise<boolean>) => ({
+    available,
+    async trigger(kind: 'download' | 'install') { calls.push(kind); return { ok: true as const } },
+  })
+  const unavailable = createHeadlessUpdateController({
+    version: '0.2.2', logger, request: fakeFetch([release('v0.2.3')]),
+    nativeUpdater: bridge(async () => false),
+  })
+  unavailable.start()
+  await Promise.resolve(); await Promise.resolve()
+  assert.equal(unavailable.state().installBlockedReason, NATIVE_SHELL_INSTALL_BLOCKED_REASON)
+  await unavailable.checkNow()
+  assert.equal(unavailable.state().phase, 'available', '本控制器自己的检查仍然工作')
+  assert.deepEqual(await unavailable.download(), { ok: false, error: NATIVE_SHELL_DOWNLOAD_REFUSAL })
+  assert.deepEqual(await unavailable.restartAndInstallAsync!(), { ok: false, error: NATIVE_SHELL_RESTART_REFUSAL })
+
+  const broken = createHeadlessUpdateController({
+    version: '0.2.2', logger, request: fakeFetch([release('v0.2.3')]),
+    nativeUpdater: bridge(async () => { throw new Error('pipe closed') }),
+  })
+  broken.start()
+  await Promise.resolve(); await Promise.resolve()
+  assert.equal(broken.state().installBlockedReason, NATIVE_SHELL_INSTALL_BLOCKED_REASON, '探测失败不得清空 blocked')
+  assert.deepEqual(calls, [], '不可用时绝不转发')
+  unavailable.stop(); broken.stop()
+})

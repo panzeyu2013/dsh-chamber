@@ -221,6 +221,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 // <sidecar>/dist/<pkg>/——sidecar-ctx 的 hostPackageSourceDir
                 // 在 .app 内向上找不到 `packages/<pkg>`，不注入则三个宿主域
                 // 整体缺席并走「构建产物缺失」loud 路径）。
+                // 原生更新器声明（S-01 / D-1 选 B）：配好 feed + 公钥的装配才把安装腿
+                // 交给壳（sidecar 据此清掉「原生壳不支持自动安装」）；dev/dry-run 不传。
+                if AppUpdater.configuration(from: Bundle.main.infoDictionary ?? [:]) != nil {
+                    sidecarArguments += ["--native-updater", "sparkle"]
+                    print("[poc] sidecar 附加 --native-updater sparkle（Sparkle 已配置）")
+                }
                 if isCompiled {
                     let hostDirs: [(flag: String, name: String)] = [
                         ("--host-graph-dir", "dsh-chamber-seed-client-graph"),
@@ -408,6 +414,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         print("[poc] 主窗口已显示")
 
+        // 应用内更新（S-01 / 裁决 D-1 选 B）：Sparkle 装配必须在 installMainMenu
+        // 之前——菜单项按 isAvailable 决定 enable。安装前清理链在此注入。
+        AppUpdater.shared.onWillInstall = { [weak self] in
+            self?.bridge?.edgeHostLegs?.clearKeepAwake()
+            self?.bridge?.edgeHostLegs?.clearBadge()
+            self?.mainWindowController?.noteQuitting()
+            self?.supervisor?.stop()
+        }
+        AppUpdater.shared.start()
         // 最小主菜单（WKWebView 文本编辑快捷键路由需要；G2 剪贴板走查预检）
         installMainMenu()
         // 2026-12 双端功能对齐（台账 S3·D12 / S5·F10）：SIGTERM/SIGINT 转入标准退出链
@@ -815,6 +830,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         appMenu.addItem(withTitle: "关于 dsh-chamber",
                         action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
                         keyEquivalent: "")
+        // 「检查更新…」的 macOS 标准位置（About 之后）。2026-12 裁决 D-1 选 B：
+        // 原生壳的安装腿由 Sparkle 承担；未配置 feed/公钥（dev、dry-run）时禁用，
+        // 绝不假装能更新。
+        let checkForUpdates = NSMenuItem(title: "检查更新…",
+                                         action: #selector(AppUpdater.checkForUpdates(_:)),
+                                         keyEquivalent: "")
+        checkForUpdates.target = AppUpdater.shared
+        checkForUpdates.isEnabled = AppUpdater.shared.isAvailable
+        appMenu.addItem(checkForUpdates)
         appMenu.addItem(.separator())
         let servicesItem = NSMenuItem(title: "服务", action: nil, keyEquivalent: "")
         servicesItem.submenu = NSMenu(title: "服务")

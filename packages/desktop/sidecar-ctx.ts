@@ -177,6 +177,7 @@ import { sanitizeErrorText } from './sanitize-error.ts'
 // 探针失败诊断单源（与 Electron 装配 main.ts 共用；见模块头注释）。
 import { metadataProbeFailureMessage, probeFailureMessage } from './runtime-probe-detail.ts'
 import { createHeadlessUpdateController } from './update-headless.ts'
+import type { NativeUpdaterBridge } from './update-headless.ts'
 import type { ApplyNowGateInput } from './apply-now-gate.ts'
 import { shouldSkipDiskRefresh } from './disk-evidence-gate.ts'
 import { CHAMBER_HOST_PACKAGES, call } from './control-plane-module.ts'
@@ -312,6 +313,9 @@ export interface HeadlessCtxInputs {
     archive: string | null
     openIn: string | null
   }
+  /** 原生更新器桥（S-01 / 裁决 D-1 选 B；sidecar-entry 按 --native-updater 构造）。
+   *  缺省 = 无原生安装腿：更新控制器保持 blocked-available。 */
+  nativeUpdater?: NativeUpdaterBridge | null
 }
 
 /** 本地 dsh spawn 门（sidecar-entry 的 createControlPlane 装配原样接线——
@@ -2738,6 +2742,8 @@ export async function buildHeadlessCtx(
   //   UpdateSection 只按 phase + installBlockedReason 呈现。
   real.updateController = createHeadlessUpdateController({
     version: chamberVersion,
+    // 原生安装腿（可选）：壳声明 --native-updater sparkle 时启用 Sparkle 转发。
+    nativeUpdater: inputs.nativeUpdater ?? undefined,
     logger: {
       log: (...args: unknown[]) => console.log('[updater-headless]', ...args),
       warn: (...args: unknown[]) => console.warn('[updater-headless]', ...args),

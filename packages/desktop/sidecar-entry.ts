@@ -59,7 +59,7 @@ import {
 } from './shell-core.ts'
 import { createNodeEdges, HOST_INBOUND, QUIT_INBOUND_ERROR } from './node-edges.ts'
 import { buildHeadlessCtx, settleShutdownLegs, type HeadlessCtxAssembly } from './sidecar-ctx.ts'
-import type { HeadlessUpdateController } from './update-headless.ts'
+import type { HeadlessUpdateController, NativeUpdaterBridge } from './update-headless.ts'
 import {
   EXIT_GRACEFUL,
   EXIT_LOCK_CONFLICT,
@@ -82,6 +82,9 @@ function parseArgs(argv: readonly string[]): {
   hostArchiveDir: string | null
   hostOpenInDir: string | null
   port: number | null
+  /** 原生更新器形态（S-01 / 裁决 D-1 选 B）：'sparkle' = 壳声明了 Sparkle 安装腿；
+   *  null = 无原生安装腿（dev / dry-run / 未配置 feed 的装配）。 */
+  nativeUpdater: string | null
 } {
   const get = (flag: string): string | null => {
     const i = argv.indexOf(flag)
@@ -101,6 +104,7 @@ function parseArgs(argv: readonly string[]): {
     hostArchiveDir: get('--host-archive-dir'),
     hostOpenInDir: get('--host-open-in-dir'),
     port: portRaw === null ? null : Number(portRaw),
+    nativeUpdater: get('--native-updater'),
   }
 }
 const args = parseArgs(process.argv.slice(2))
@@ -378,6 +382,24 @@ async function boot(): Promise<void> {
   // S-C-1/S-C-2 无头 ctx（async：启动前导 reaps 本地插件写进程账目；edges =
   // 上方 nodeEdges 同一实例——单装配不变式，publish push/确认对话框/设置
   // 副作用宿主腿与 installIpcHandlers 投递状态机同对象）。
+/** 原生更新器桥（S-01 / 裁决 D-1 选 B）：壳在 argv 里声明 --native-updater sparkle
+ *  时，把「下载 / 重启并安装」转成 edge 调用交给壳内的 Sparkle；能力探测失败一律
+ *  回 false（保持 blocked-available），绝不假装能安装。 */
+const nativeUpdater: NativeUpdaterBridge | undefined = args.nativeUpdater === 'sparkle'
+  ? {
+      async available() {
+        const reply = await nodeEdges.sendEdge('updateNativeCapability', null) as { available?: unknown } | null
+        return reply?.available === true
+      },
+      async trigger(kind) {
+        const reply = await nodeEdges.sendEdge('updateNativeAction', { kind }) as { ok?: unknown; error?: unknown } | null
+        if (reply?.ok === true) return { ok: true as const }
+        const error = typeof reply?.error === 'string' ? reply.error : 'native updater refused'
+        return { ok: false as const, error }
+      },
+    }
+  : undefined
+
   headless = await buildHeadlessCtx(args.userDataDir, nodeEdges, {
     builtinDshWorkspace: args.dshPath,
     chamberVersion: shellVersion,
@@ -387,6 +409,7 @@ async function boot(): Promise<void> {
       archive: args.hostArchiveDir,
       openIn: args.hostOpenInDir,
     },
+    nativeUpdater,
   })
   ctx = headless.ctx
 

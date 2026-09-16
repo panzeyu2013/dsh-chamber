@@ -3804,7 +3804,10 @@ export function installIpcHandlers(deps: {
   // rendered state (phase downloaded + no install block) — not just UI
   // hiding; quitAndInstall then quits through before-quit (the
   // update-downloaded exemption) and will-quit (cleanup first).
-  deps.ipc.handle(IPC_CHANNELS.UPDATE_RESTART, () => updater.restartAndInstall());
+  // 重启并安装：原生更新器（Swift/Sparkle）提供异步变体时优先走它（结果跨进程），
+  // 否则用 Electron 的同步实现（S-01 / 裁决 D-1 选 B）。
+  deps.ipc.handle(IPC_CHANNELS.UPDATE_RESTART,
+    () => updater.restartAndInstallAsync?.() ?? updater.restartAndInstall());
   // The settings update section's「前往下载页」link: popups are denied and
   // navigation is pinned to the control-plane origin, so opening a release
   // page must go through the main process. Strict allowlist — parsed, not

@@ -330,6 +330,22 @@ public final class SwiftEdgeHostLegs {
         -> (result: AnyCodable?, error: String?) {
         let dict = EdgePayload.dictionary(payload)
         switch method {
+        case "updateNativeCapability":
+            // 原生更新器能力上报（S-01 / 裁决 D-1 选 B）：sidecar 用它决定页面更新区
+            // 是否还显示「原生壳不支持自动安装」。未装配（dev/dry-run/缺密钥）→ false。
+            return (.object(["available": .bool(AppUpdater.shared.isAvailable)]), nil)
+        case "updateNativeAction":
+            // 页面更新按钮 → Sparkle 标准更新窗口（下载与安装都在该窗口内完成）。
+            guard AppUpdater.shared.isAvailable else {
+                return (nil, "native-updater-unavailable")
+            }
+            var kind = "check"
+            if case .object(let dict)? = payload, case .string(let value)? = dict["kind"] {
+                kind = value
+            }
+            print("[poc] 原生更新动作：\(kind)（交给 Sparkle 标准窗口）")
+            AppUpdater.shared.checkForUpdates(nil)
+            return (.object(["ok": .bool(true), "kind": .string(kind)]), nil)
         case "focusMainWindow":
             return performUI(method: method) {
                 guard let window = self.mainWindowProvider?() else {

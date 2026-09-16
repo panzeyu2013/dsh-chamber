@@ -641,6 +641,11 @@ export interface UpdateController {
    *  shape where automatic installation is possible may start it — same
    *  core-logic enforcement as download(), never just UI hiding. */
   restartAndInstall(): { ok: true } | { ok: false; error: string }
+  /** 原生更新器（Swift flavor）的异步「重启并安装」（S-01 / 裁决 D-1 选 B）：
+   *  语义与 restartAndInstall 相同，但结果必须跨进程等（转发给壳内的 Sparkle
+   *  标准更新窗口）。省略 = 该 flavor 没有原生安装腿；IPC 面优先用它，
+   *  Electron 的同步实现保持原样。 */
+  restartAndInstallAsync?(): Promise<{ ok: true } | { ok: false; error: string }>
 }
 
 /** The update feed repository (release.yml uploads the same repo's artifacts). */

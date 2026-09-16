@@ -108,6 +108,23 @@ export function resolveHeadlessChannel(
     : 'stable'
 }
 
+/** 原生壳更新器桥（2026-12 裁决 D-1 选 B / 台账 S-01）。
+ *
+ *  Swift flavor 的安装腿由壳内的 Sparkle 承担（appcast + EdDSA + 标准更新窗口）。
+ *  壳在 sidecar 启动参数里声明支持（--native-updater sparkle），sidecar 据此把
+ *  「下载 / 重启并安装」转发给壳，而不是恒回 blocked；未声明时保持原有
+ *  blocked-available 行为（dev / dry-run / 未配置密钥的装配）。
+ *
+ *  check 走壳自己的 GitHub feed 查询（页面状态行），download/install 走 Sparkle 的
+ *  标准窗口——下载与安装在该窗口内是一段连续流程，与 Electron 的三步在用户可见
+ *  效果上等价（检查 → 下载 → 重启并安装），实现方式不同。 */
+export interface NativeUpdaterBridge {
+  /** 壳侧原生更新器是否真的可用（配好 feed + 公钥）。 */
+  available(): Promise<boolean>
+  /** 触发原生更新流程。download/install 都打开 Sparkle 的标准更新窗口。 */
+  trigger(kind: 'download' | 'install'): Promise<{ ok: true } | { ok: false; error: string }>
+}
+
 export interface HeadlessUpdateControllerDeps {
   /** 当前 chamber 版本（sidecar 读 packages/desktop/package.json）。 */
   version: string
@@ -118,6 +135,8 @@ export interface HeadlessUpdateControllerDeps {
   channel?: 'stable' | 'beta'
   /** 单次检查超时（缺省 10s，与 resolveGithubBetaFeed 同值）。 */
   timeoutMs?: number
+  /** 原生更新器桥（缺省 = 无原生安装腿：保持 blocked-available，见类型注释）。 */
+  nativeUpdater?: NativeUpdaterBridge
 }
 
 /** headless 控制器的附加停表面（消费面仍按 UpdateController 使用）：`stop()`
@@ -242,6 +261,24 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
       return () => listeners.delete(listener)
     },
     start() {
+      // 原生更新器能力探测（S-01 / D-1 选 B）：壳声明了 --native-updater 才探测；
+      // 可用就摘掉 installBlockedReason（页面更新区从「原生壳不支持自动安装」变成
+      // 可执行的「更新」按钮），不可用/探测失败保持原样并 loud。
+      void (async () => {
+        if (deps.nativeUpdater === undefined) return
+        try {
+          const available = await deps.nativeUpdater.available()
+          if (available) {
+            setState({ installBlockedReason: null })
+            deps.logger.log('[updater-headless] 原生更新器（Sparkle）可用：安装腿交给壳，installBlockedReason 已清空')
+          } else {
+            deps.logger.log('[updater-headless] 壳声明了原生更新器但当前不可用（缺 feed/公钥）：保持 blocked-available')
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          deps.logger.warn('[updater-headless] 原生更新器能力探测失败（保持 blocked-available）：' + message)
+        }
+      })()
       // 与 Electron updater.ts:1184-1197 同节奏（S5·F3/S6·F2）：15s 静默首检 +
       // 每 6h 周期检查。幂等：重复调用不叠加定时器。unref 保证定时器绝不阻止
       // 进程退出（sidecar 退出路径另有显式 stop()）。
@@ -268,13 +305,26 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
       return { ok: true }
     },
     async download() {
+      // 原生更新器可用时：打开 Sparkle 的标准更新窗口（下载+安装是其连续流程）。
+      if (state.installBlockedReason === null && deps.nativeUpdater !== undefined) {
+        return deps.nativeUpdater.trigger('download')
+      }
       if (state.latestVersion === null || (state.phase !== 'available' && state.phase !== 'error')) {
         return { ok: false, error: 'no update available' }
       }
       return { ok: false, error: NATIVE_SHELL_DOWNLOAD_REFUSAL }
     },
     restartAndInstall() {
+      // 同步面保持「无原生腿」的拒绝语义（Electron 契约不变）。
       return { ok: false, error: NATIVE_SHELL_RESTART_REFUSAL }
+    },
+    async restartAndInstallAsync() {
+      // 原生更新器可用时：Sparkle 标准窗口的「Install and Relaunch」即本方法语义
+      // （壳在 willInstallUpdate 里先停受管 sidecar，再替换 bundle 并重启）。
+      if (state.installBlockedReason === null && deps.nativeUpdater !== undefined) {
+        return deps.nativeUpdater.trigger('install')
+      }
+      return { ok: false as const, error: NATIVE_SHELL_RESTART_REFUSAL }
     },
   }
 }

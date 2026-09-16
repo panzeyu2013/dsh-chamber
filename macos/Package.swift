@@ -30,9 +30,18 @@ let package = Package(
     platforms: [
         .macOS(.v13)
     ],
+    dependencies: [
+        // 应用内更新（2026-12 裁决 D-1 选 B / 台账 S-01）：Sparkle 2 承担下载 /
+        // 安装 / 重启。**这是本包唯一的第三方依赖**——上游头注释里的「零第三方
+        // 依赖」不变式已被该裁决显式取代（运行时依赖红线由用户批准）。
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.10.0")
+    ],
     targets: [
         .executableTarget(
             name: "DSHChamberPoc",
+            dependencies: [
+                .product(name: "Sparkle", package: "Sparkle")
+            ],
             // JS 锁步生成物（chamber-bridge.stub.js）留在源码树供测试断言，
             // 但不属于 Swift target 的输入——不 exclude 会得到 SwiftPM 的
             // "unhandled file" 警告（2026-12 P8）。

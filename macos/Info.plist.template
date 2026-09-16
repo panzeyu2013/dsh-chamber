@@ -53,6 +53,22 @@
         <key>NSAllowsLocalNetworking</key>
         <true/>
     </dict>
+    <!-- 应用内更新（Sparkle 2，2026-12 裁决 D-1 选 B）：feed 与 EdDSA 公钥由
+         build-swift-app 在装配期替换（--sparkle-feed / --sparkle-public-key）。
+         两键任一为空 = 更新不可用（dev、dry-run、未配置密钥的装配）——壳据此
+         禁用「检查更新…」菜单项，绝不假装能更新。
+         SUEnableAutomaticChecks 只在 feed 与公钥都配好时才写 true：ad-hoc/未发布
+         装配启动即弹更新窗会与启动期窗口竞争（参考社区实现的做法）。
+         SUScheduledCheckInterval 与 Electron 侧的 6h 周期同量级（Sparkle 默认 24h，
+         这里显式写 21600 保持双 flavor 的检查节奏一致）。 -->
+    <key>SUFeedURL</key>
+    <string>__SPARKLE_FEED_URL__</string>
+    <key>SUPublicEDKey</key>
+    <string>__SPARKLE_PUBLIC_ED_KEY__</string>
+    <key>SUEnableAutomaticChecks</key>
+    <false/>
+    <key>SUScheduledCheckInterval</key>
+    <integer>21600</integer>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>
