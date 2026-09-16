@@ -17,6 +17,7 @@
 | 6 | [client-store-scoping-upstream.md](client-store-scoping-upstream.md) | 上游：N-壳宿主下持久化 selection（`dsh.sessions.current`）需按 shell/入口作用域——它是"每次冷 boot 都新建空白会话"的根因；chamber 侧无法根治（vendor store 不在 fork 副本内，逐入口 localStorage 代理不安全），已用本地回显缓解（design 05 §2.2.1 修订） | 上游提案，未排期 |
 | 7 | [macos-swift-v1.md](macos-swift-v1.md) | macOS Swift 原生壳 v1 实施计划（design 25 路线 A companion：M0–M5 六门 + WBS W-01…W-32 + runbook + 门禁/中止条件；计划，非记录） | M0 未签核（D1–D7 待用户）；未闭合 = M5 实机门禁（W-28…W-32：通知/登录项/深链/隐藏恢复/ATS/后台节流 + parity/性能）与凭据/runner 发布证明（A6）；开放项与失效判据同步于 STATUS |
 | 8 | [product-freshness-guards.md](product-freshness-guards.md) | 产物新鲜度守卫：2026-12 产物普查（9 行清单）+ G1–G8 最小守卫建议（P0/P1/P2，含适用产物/成本/收益） | 想法，未排期；缺口现状登记在 STATUS |
+| 10 | [electron-swift-parity-audit.md](electron-swift-parity-audit.md) | Electron / Swift 双 flavor 接入点逐函数核对台账（2026-12 六路只读审计，基线 `8cbee32f`）：120 项差异条目（功能级 68 / 前端可见 40）逐项给证据与 A/B 选项；本次已消解 8 项（唤醒通知注册中心、keep-awake 灭屏、showMessage 重复正文、超长响应悬挂、深链重启丢失、装配态 POC_* 覆盖、退出清理、测试门 dev 态误红） | 台账：其余待裁决（产品级集中在更新链、网页权限口径、双壳深链归属、托盘/菜单面、fatal 后终态）；未裁决前原生 flavor 保持「预览」定位 |
 | 9 | [audit-2026-12-findings.md](audit-2026-12-findings.md) | 2026-12 四路审计发现台账：A1 状态呈现 7+6 疑似 / A2 尺度错配 7 / A3 聚合吞未检 15+13 疑似 / A4 无 / A5 守卫缺口；逐条 file:line + 证据来源 + 严重度 + 建议 + 状态（已修/已派修/未动/需产品裁决） | 台账：task-17/18/20 在修；其余未动或待裁决 |
 
 ## 纪律

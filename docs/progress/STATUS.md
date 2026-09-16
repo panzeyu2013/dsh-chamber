@@ -746,6 +746,12 @@
 
 ## 设计未决
 
+- **Electron / Swift 双 flavor 接入点 parity 台账（2026-12 六路逐函数核对，基线 `8cbee32f`）**：
+  120 项差异条目（功能级 68 / 前端可见 40）逐项证据与 A/B 选项在
+  `docs/progress/todo/electron-swift-parity-audit.md`，其余待裁决；产品级集中在更新链（无周期检查 /
+  无应用内安装）、网页权限口径（剪贴板读与 Notification 预拒绝）、双壳 `dsh-chamber://` 归属、
+  托盘/菜单面、sidecar fatal 与宿主决策不可得时的终态，以及 design 25 §7 E2 的 `flavor` 能力位未落地。
+  未裁决前原生 flavor 保持「预览」定位，不转入默认通道。
 - **macOS Swift 原生壳（design 25，路线 A）的开放门禁**：正式决策 D1–D7 未签核
   （实现按推荐默认值落位），M5 门禁未闭合。剩余：
 
