@@ -140,6 +140,7 @@ export function parseBuildSwiftAppArgs(argv) {
     else if (arg === '--icon') options.iconPath = path.resolve(next())
     else if (arg === '--web-dist') options.webDistDir = path.resolve(next())
     else if (arg === '--skip-build') options.skipBuild = true
+    else if (arg === '--skip-web-dist') options.skipWebDist = true
     else if (arg === '--skip-sidecar') options.skipSidecar = true
     else if (arg === '--no-sign') options.noSign = true
     else if (arg === '--no-zip') options.noZip = true
@@ -425,7 +426,22 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
       )
     }
   }
-  if (existsSync(options.webDistDir)) {
+  // S5·F19（2026-12 双端逐函数核对 + 审查修正）：此前缺 renderer dist/web 只静默
+  // 跳过——装配出来的 .app 首次启动即白屏（release.yml 的 verify 步虽有断言，装配
+  // 脚本自身必须 fail-closed）。
+  // 规则（审查后收紧）：**只有显式 --skip-web-dist 才允许缺位**。早先按
+  // 「是否产出 zip/dmg」放行是错的——release.yml 的正式腿恰以 --no-zip --no-dmg
+  // 组装真正发布的 .app（归档在公证之后另做），那种形状也会缺 web 界面。
+  // 并且判据是 `dist/web/index.html` 而不是目录存在：emptyOutDir 失败留下的空目录
+  // 同样必须被挡住。
+  if (options.skipWebDist === true) {
+    io.log('[build-swift-app] 跳过 renderer dist/web 拷贝（--skip-web-dist）')
+  } else if (!existsSync(path.join(options.webDistDir, 'index.html'))) {
+    throw new Error(
+      `renderer dist/web 缺失或不完整：${path.join(options.webDistDir, 'index.html')}`
+      + '——装配必须自带 web 界面（先跑 pnpm run build:renderer；仅局部装配可显式 --skip-web-dist）',
+    )
+  } else {
     cpSync(options.webDistDir, layout.webDist, { recursive: true })
     io.log(`[build-swift-app] renderer dist/web → ${layout.webDist}`)
   }
@@ -492,7 +508,7 @@ if (isMain) {
       console.log('用法：build-swift-app.mjs [--out <dir>] [--config release] [--identity <id>|-]')
       console.log('       [--app-name <name>] [--artifact-basename <name>] [--arch arm64|x64]')
       console.log('       [--sidecar <dir>] [--icon <icns>] [--web-dist <dir>] [--skip-build]')
-      console.log('       [--skip-sidecar] [--no-sign] [--no-zip] [--no-dmg] [--dry-run] [--swift-args "<args>"]')
+      console.log('       [--skip-sidecar] [--skip-web-dist] [--no-sign] [--no-zip] [--no-dmg] [--dry-run] [--swift-args "<args>"]')
       process.exit(0)
     }
     await runBuildSwiftApp(options)

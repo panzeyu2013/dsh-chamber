@@ -108,7 +108,7 @@ test('① 参数解析：缺省与覆盖', () => {
 
   const parsed = parseBuildSwiftAppArgs([
     '--out', '/tmp/app', '--config', 'debug', '--identity', 'Developer ID Application: X',
-    '--skip-build', '--skip-sidecar', '--no-sign', '--no-zip', '--no-dmg', '--dry-run',
+    '--skip-build', '--skip-web-dist', '--skip-sidecar', '--no-sign', '--no-zip', '--no-dmg', '--dry-run',
     '--arch', 'x64', '--swift-args', '--disable-sandbox -Xswiftc -O',
   ])
   assert.equal(parsed.outDir, '/tmp/app')
@@ -172,7 +172,7 @@ test('③ 计划文本随开关变化', () => {
   assert.match(full, /dmg →/)
 
   const minimal = assemblePlan(parseBuildSwiftAppArgs([
-    '--skip-build', '--skip-sidecar', '--no-sign', '--no-zip', '--no-dmg', '--swift-args', '--disable-sandbox',
+    '--skip-build', '--skip-web-dist', '--skip-sidecar', '--no-sign', '--no-zip', '--no-dmg', '--swift-args', '--disable-sandbox',
   ])).join('\n')
   assert.match(minimal, /复用已有 swift build/)
   assert.match(minimal, /跳过 sidecar 拷贝/)
@@ -250,7 +250,7 @@ test('⑤ 真实组装：可执行位 / 资源包 / Info.plist 版本 / 图标',
   const out = tempOut()
   try {
     const result = await runBuildSwiftApp(parseBuildSwiftAppArgs([
-      '--out', out, '--skip-build', '--skip-sidecar', '--no-sign', '--no-zip', '--no-dmg',
+      '--out', out, '--skip-build', '--skip-web-dist', '--skip-sidecar', '--no-sign', '--no-zip', '--no-dmg',
     ]), { log: () => {}, error: () => {} })
     assert.equal(result.dryRun, false)
     const layout = appLayout(out)
@@ -289,7 +289,7 @@ test('⑥ sidecar 拷贝 + A5 基名反例 loud', async () => {
     writeFakeSidecar(sidecar)
     writeFileSync(path.join(sidecar, 'package.json'), '{}')
     const result = await runBuildSwiftApp(parseBuildSwiftAppArgs([
-      '--out', out, '--sidecar', sidecar, '--skip-build', '--no-sign', '--no-zip', '--no-dmg',
+      '--out', out, '--sidecar', sidecar, '--skip-build', '--skip-web-dist', '--no-sign', '--no-zip', '--no-dmg',
     ]), { log: () => {}, error: () => {} })
     const layout = appLayout(out)
     assert.ok(existsSync(path.join(layout.sidecarDir, 'sidecar.js')))
@@ -302,7 +302,7 @@ test('⑥ sidecar 拷贝 + A5 基名反例 loud', async () => {
     writeFileSync(path.join(sidecar, 'node-v24.18.1'), 'not a real node')
     await assert.rejects(
       runBuildSwiftApp(parseBuildSwiftAppArgs([
-        '--out', out, '--sidecar', sidecar, '--skip-build', '--no-sign', '--no-zip', '--no-dmg',
+        '--out', out, '--sidecar', sidecar, '--skip-build', '--skip-web-dist', '--no-sign', '--no-zip', '--no-dmg',
       ]), { log: () => {}, error: () => {} }),
       /基名必须是 'node'/,
     )
@@ -319,7 +319,7 @@ test('⑥ 缺 sidecar.js 的装配目录 loud', async () => {
     writeFileSync(path.join(sidecar, 'package.json'), '{}')
     await assert.rejects(
       runBuildSwiftApp(parseBuildSwiftAppArgs([
-        '--out', out, '--sidecar', sidecar, '--skip-build', '--no-sign', '--no-zip', '--no-dmg',
+        '--out', out, '--sidecar', sidecar, '--skip-build', '--skip-web-dist', '--no-sign', '--no-zip', '--no-dmg',
       ]), { log: () => {}, error: () => {} }),
       /缺少 sidecar\.js/,
     )
@@ -333,7 +333,7 @@ test('⑥ 缺捆绑 node / node 无执行位 → loud（runtime 不再静默回�
   const out = tempOut()
   const sidecar = mkdtempSync(path.join(tmpdir(), 'dsh-fake-sidecar-nonode-'))
   const argv = (dir) => parseBuildSwiftAppArgs([
-    '--out', out, '--sidecar', dir, '--skip-build', '--no-sign', '--no-zip', '--no-dmg',
+    '--out', out, '--sidecar', dir, '--skip-build', '--skip-web-dist', '--no-sign', '--no-zip', '--no-dmg',
   ])
   try {
     writeFileSync(path.join(sidecar, 'sidecar.js'), '// fake')
@@ -365,7 +365,7 @@ test('⑦ ad-hoc 签名 + codesign 校验通过', async (t) => {
   const out = tempOut()
   try {
     await runBuildSwiftApp(parseBuildSwiftAppArgs([
-      '--out', out, '--skip-build', '--skip-sidecar', '--no-zip', '--no-dmg',
+      '--out', out, '--skip-build', '--skip-web-dist', '--skip-sidecar', '--no-zip', '--no-dmg',
     ]), { log: () => {}, error: () => {} })
     const layout = appLayout(out)
     const verify = spawnSync('codesign', ['--verify', '--deep', '--strict', layout.appDir], { encoding: 'utf8' })
@@ -416,7 +416,7 @@ test('⑩ sidecar 含逃出 bundle 的绝对符号链接 → 归一化后真实 
     symlinkSync('../pkg/cli.js', path.join(bin, 'inside'))
 
     await runBuildSwiftApp(parseBuildSwiftAppArgs([
-      '--out', out, '--sidecar', sidecar, '--skip-build', '--no-zip', '--no-dmg',
+      '--out', out, '--sidecar', sidecar, '--skip-build', '--skip-web-dist', '--no-zip', '--no-dmg',
     ]), { log: () => {}, error: () => {} })
     const layout = appLayout(out)
 
@@ -448,7 +448,7 @@ test('⑪ 架构：同宿主通过；--arch 反向 loud；.app 与 node 无交�
   const same = mkdtempSync(path.join(tmpdir(), 'dsh-arch-same-'))
   const other = mkdtempSync(path.join(tmpdir(), 'dsh-arch-other-'))
   const argv = (dir, extra = []) => parseBuildSwiftAppArgs([
-    '--out', out, '--sidecar', dir, '--skip-build', '--no-sign', '--no-zip', '--no-dmg', ...extra,
+    '--out', out, '--sidecar', dir, '--skip-build', '--skip-web-dist', '--no-sign', '--no-zip', '--no-dmg', ...extra,
   ])
   try {
     writeFakeSidecar(same)
@@ -517,7 +517,7 @@ test('⑬ 真实 DMG：卷内含 .app + /Applications 链接，卷名 = --app-na
     await runBuildSwiftApp(parseBuildSwiftAppArgs([
       '--out', out, '--app-name', 'dsh-chamber-native',
       '--artifact-basename', 'dsh-chamber-native-9.9.9-macos-arm64',
-      '--skip-build', '--skip-sidecar', '--no-sign', '--no-zip',
+      '--skip-build', '--skip-sidecar', '--skip-web-dist', '--no-sign', '--no-zip',
     ]), { log: () => {}, error: () => {} })
     const dmg = path.join(out, 'dsh-chamber-native-9.9.9-macos-arm64.dmg')
     assert.ok(existsSync(dmg), 'DMG 应产出')
@@ -533,6 +533,47 @@ test('⑬ 真实 DMG：卷内含 .app + /Applications 链接，卷名 = --app-na
     } finally {
       spawnSync('hdiutil', ['detach', mount, '-force'], { encoding: 'utf8' })
     }
+  } finally {
+    rmSync(out, { recursive: true, force: true })
+  }
+})
+
+test('⑭ 缺 renderer dist/web 又要产出归档 → fail-closed；--skip-web-dist 显式跳过（S5·F19）', async () => {
+  const out = mkdtempSync(path.join(tmpdir(), 'dsh-webdist-'))
+  try {
+    // 归档形态（默认要 zip/dmg）+ 不存在的 web dist → 必须抛，绝不静默产出白屏 .app。
+    await assert.rejects(
+      runBuildSwiftApp(parseBuildSwiftAppArgs([
+        '--out', out, '--web-dist', path.join(out, 'no-such-web-dist'),
+        '--skip-build', '--skip-sidecar', '--no-sign', '--no-zip',
+      ]), { log: () => {}, error: () => {} }),
+      /renderer dist\/web 缺失/,
+    )
+    // 目录存在但没有 index.html（emptyOutDir 失败留下的空目录）→ 同样必须抛。
+    const emptyDist = path.join(out, 'empty-web-dist')
+    mkdirSync(emptyDist, { recursive: true })
+    await assert.rejects(
+      runBuildSwiftApp(parseBuildSwiftAppArgs([
+        '--out', out, '--web-dist', emptyDist,
+        '--skip-build', '--skip-sidecar', '--no-sign', '--no-zip', '--no-dmg',
+      ]), { log: () => {}, error: () => {} }),
+      /renderer dist\/web 缺失或不完整/,
+    )
+    // 合法 dist（含 index.html）→ 装配成功且文件被拷入（--no-zip --no-dmg 也要求
+    // web 界面：release 正式腿就是这个形状）。
+    const goodDist = path.join(out, 'good-web-dist')
+    mkdirSync(goodDist, { recursive: true })
+    writeFileSync(path.join(goodDist, 'index.html'), '<!doctype html><title>t</title>')
+    await runBuildSwiftApp(parseBuildSwiftAppArgs([
+      '--out', out, '--web-dist', goodDist,
+      '--skip-build', '--skip-sidecar', '--no-sign', '--no-zip', '--no-dmg',
+    ]), { log: () => {}, error: () => {} })
+    assert.ok(existsSync(appLayout(out).webDist + '/index.html'), 'web dist 必须随装配进 .app')
+    // 显式跳过 → 允许缺位（局部装配形状）。
+    await runBuildSwiftApp(parseBuildSwiftAppArgs([
+      '--out', out, '--web-dist', path.join(out, 'no-such-web-dist'),
+      '--skip-build', '--skip-sidecar', '--skip-web-dist', '--no-sign', '--no-zip', '--no-dmg',
+    ]), { log: () => {}, error: () => {} })
   } finally {
     rmSync(out, { recursive: true, force: true })
   }
