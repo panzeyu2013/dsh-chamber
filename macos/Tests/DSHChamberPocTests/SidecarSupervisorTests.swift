@@ -232,6 +232,30 @@ final class SidecarSupervisorTests: XCTestCase {
         supervisor.stop()
     }
 
+    /// S2·F11（2026-12 双端逐函数核对）：非崩溃退出（0/3/70）不得消耗崩溃退避
+    /// 配额——原来的 decide 在退出码分级之前无条件调用，几次正常退出就把「60s 内
+    /// 3 次」用光，用户随后第一次真实崩溃立刻 giveUp（自动恢复名存实亡）。
+    func testNonCrashExitsDoNotConsumeCrashBackoffQuota() throws {
+        let dir = makeTempDir()
+        let sidecar = FakeSidecar()
+        let fatal = NSMutableArray()
+        let (supervisor, scheduled) = makeSupervisor(dir: dir, sidecar: sidecar, fatalMessages: fatal)
+        // 三轮「正常退出」：每轮重新 start（exit=0 后 supervisor 停在 .stopped）。
+        for _ in 0..<3 {
+            try supervisor.start()
+            sidecar.terminate(status: 0)
+            XCTAssertEqual(supervisor.state, .stopped)
+        }
+        XCTAssertEqual(fatal.count, 0)
+        // 第一次真实崩溃：配额必须仍然完整 → 排定重启，而不是直接 fatal。
+        try supervisor.start()
+        sidecar.terminate(status: 1)
+        XCTAssertEqual(supervisor.state, .restarting, "正常退出不得预支崩溃退避配额")
+        XCTAssertEqual(scheduled().count, 1)
+        XCTAssertEqual(fatal.count, 0)
+        supervisor.stop()
+    }
+
     func testLockConflictExitThreeIsFatalWithoutRestart() throws {
         let dir = makeTempDir()
         let sidecar = FakeSidecar()

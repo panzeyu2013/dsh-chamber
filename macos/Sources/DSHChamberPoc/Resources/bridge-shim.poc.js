@@ -117,6 +117,28 @@
   var INFO_RETRY_MS = 50
   var INFO_MAX_ATTEMPTS = 10
 
+  /** Swift 拒绝码 → 与 Electron 渲染端逐字一致的文案与 error.code
+   *  （2026-12 双端逐函数核对 S1·V1）：renderer-trust.ts 抛
+   *  Error('forbidden IPC sender') 且带 code='ipc_sender_forbidden'，
+   *  Error('app is quitting') 且 code='app_quitting'；shim 此前直接把码当文案
+   *  （页面上出现 "Error(ipc_sender_forbidden)"）。未知码原样透传。 */
+  var ERROR_TEXT_BY_CODE = {
+    ipc_sender_forbidden: 'forbidden IPC sender',
+    app_quitting: 'app is quitting',
+    ipc_not_ready: 'bridge not ready',
+    method_not_allowed: 'method not allowed',
+    frame_too_large: 'payload too large',
+    malformed_envelope: 'malformed envelope'
+  }
+
+  function errorFromRejection(raw) {
+    var code = String(raw)
+    var known = Object.prototype.hasOwnProperty.call(ERROR_TEXT_BY_CODE, code)
+    var error = new Error(known ? ERROR_TEXT_BY_CODE[code] : code)
+    if (known) error.code = code
+    return error
+  }
+
   /** The 8 push events the bridge can subscribe to — one constant per event
    *  name so every method ↔ event mapping stays literal and reviewable. */
   var PUSH_EVENTS = {
@@ -214,7 +236,7 @@
     if (!entry) return
     pending.delete(id)
     if (err) {
-      entry.reject(new Error(String(err)))
+      entry.reject(errorFromRejection(err))
     } else {
       entry.resolve(result)
     }
@@ -237,9 +259,14 @@
       try {
         snapshot[i](value)
       } catch (err) {
-        // One throwing listener must not drop the rest of the dispatch or
-        // surface into Swift's evaluateJavaScript.
+        // 监听器抛错的可见性（2026-12 双端逐函数核对 S1·F10）：Electron 的
+        // ipcRenderer.on 是 EventEmitter，抛错会作为未捕获异常面世（devtools/
+        // 全局 error 处理器可见）；shim 此前只写 console.error。这里保持
+        // 「一个监听器抛错不吞掉其余监听器、不让异常穿回 Swift 的
+        // evaluateJavaScript」，但把错误重新抛回页面全局——两者取齐：错误可见，
+        // 派发不被截断。
         console.error('[dsh-chamber] listener for "' + event + '" threw:', err)
+        setTimeout(function () { throw err }, 0)
       }
     }
   }
@@ -561,13 +588,20 @@
     })
   }
 
-  /** preload.cts requestAppInfo mirror: retry only on rejection, 50 ms apart,
-   *  INFO_MAX_ATTEMPTS total tries. Total failure keeps the scalars null —
-   *  this promise never rejects, because defining the shim never depends on
-   *  info. */
+  /** preload.cts requestAppInfo mirror: retry only on rejection, 50 ms apart.
+   *  Total tries = 1 + INFO_MAX_ATTEMPTS (the first invoke plus up to
+   *  INFO_MAX_ATTEMPTS retries) — byte-for-byte the preload chain (2026-12
+   *  双端逐函数核对 S1·F2：此前只做 INFO_MAX_ATTEMPTS 次，比 preload 少一次).
+   *  Total failure keeps the scalars null — this promise never rejects,
+   *  because defining the shim never depends on info. */
   function fetchInfo(attemptsLeft) {
     return invoke(INFO_CHANNEL, null).then(function (info) {
       applyInfo(info)
+      // 与 preload 同序（2026-12 审查后的根因修法）：**只有 info 成功才暴露**公开面
+      // dshChamber——preload.cts 的 requestAppInfo().then(exposeInMainWorld) 在
+      // rejection 时永不暴露。这样页面在 surface 缺失时走自己的重试链（Electron
+      // 同款），而不是拿到一个 scalars 全 null 的假面。
+      exposePublicSurface()
       return null
     }, function () {
       if (attemptsLeft > 1) {
@@ -591,10 +625,25 @@
     })
   }
 
-  defineWindowGlobal('dshChamber', dshChamberApi)
+  // 内部管路（Swift 需要它们在任何时刻都能回执/推送）：立即定义。
   defineWindowGlobal('__dshChamberResolve', resolveInvocation)
   defineWindowGlobal('__dshChamberEmit', emitToListeners)
+  defineWindowGlobal('__dshChamberRehydrateInfo', function () {
+    // sidecar ready 后由 Swift 触发：重跑一次 info 水化（成功即暴露公开面）。
+    fetchInfo(INFO_MAX_ATTEMPTS + 1)
+  })
 
-  // Kick off info hydration (documentStart; scalars fill when it resolves).
-  fetchInfo(INFO_MAX_ATTEMPTS)
+  /** 公开面 dshChamber 的暴露门（只暴露一次；preload 语义）。
+   *  2026-12 审查：早先 shim 在 documentStart 就暴露、scalars 事后回填，导致
+   *  「surface 存在但 info 全 null」——平台串/版本号整会话缺失，且预就绪 invoke
+   *  只能被就绪门拒绝（渲染端不会走它自己的 surface-missing 重试链）。 */
+  var surfaceExposed = false
+  function exposePublicSurface() {
+    if (surfaceExposed) return
+    surfaceExposed = true
+    defineWindowGlobal('dshChamber', dshChamberApi)
+  }
+
+  // Kick off info hydration (documentStart; 成功即暴露公开面).
+  fetchInfo(INFO_MAX_ATTEMPTS + 1)
 })()

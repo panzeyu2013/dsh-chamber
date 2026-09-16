@@ -36,6 +36,41 @@ final class ShellStartupTests: XCTestCase {
         XCTAssertFalse(applied, "缺文件 = 默认 off，不调腿、无日志噪音")
     }
 
+    /// 2026-12 双端逐函数核对 S3·D5 / S5·F6：launchAtLogin 启动重放读取器——
+    /// 与 keepAwake 同一套文件纪律（损坏文件绝不采信单个合法键）。
+    func testStartupSettingsLaunchAtLoginReader() throws {
+        let dir = try tempUserData()
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let path = dir + "/" + StartupSettings.fileName
+        // 键缺省但文件合法 → 按 Electron 默认 false 重放（注销残留登录项）
+        try "{\"keepAwake\": true}".write(toFile: path, atomically: true, encoding: .utf8)
+        XCTAssertEqual(StartupSettings.readLaunchAtLogin(userDataDir: dir), false)
+        // true / false 逐字读取
+        try "{\"launchAtLogin\": true, \"keepAwake\": false}"
+            .write(toFile: path, atomically: true, encoding: .utf8)
+        XCTAssertEqual(StartupSettings.readLaunchAtLogin(userDataDir: dir), true)
+        try "{\"launchAtLogin\": false}".write(toFile: path, atomically: true, encoding: .utf8)
+        XCTAssertEqual(StartupSettings.readLaunchAtLogin(userDataDir: dir), false)
+        // 非布尔 → nil（绝不强转）
+        try "{\"launchAtLogin\": \"yes\"}".write(toFile: path, atomically: true, encoding: .utf8)
+        XCTAssertNil(StartupSettings.readLaunchAtLogin(userDataDir: dir))
+        // 已知键类型非法（跨键损坏）→ 整文件不可信 → nil
+        try "{\"launchAtLogin\": true, \"keepAwake\": \"on\"}"
+            .write(toFile: path, atomically: true, encoding: .utf8)
+        XCTAssertNil(StartupSettings.readLaunchAtLogin(userDataDir: dir),
+                     "跨键损坏必须整文件判损坏（与 readKeepAwake 同纪律）")
+        // 缺文件 → false（重放 Electron 默认值：注销残留登录项），而非 nil
+        try? FileManager.default.removeItem(atPath: path)
+        XCTAssertEqual(StartupSettings.readLaunchAtLogin(userDataDir: dir), false)
+        // 键缺失但文件合法 → 同样按默认 false 重放
+        try "{\"keepAwake\": true}".write(toFile: path, atomically: true, encoding: .utf8)
+        XCTAssertEqual(StartupSettings.readLaunchAtLogin(userDataDir: dir), false)
+        // 纯函数面：合法 JSON 直测
+        let data = Data("{\"launchAtLogin\": true}".utf8)
+        XCTAssertEqual(StartupSettings.decodeLaunchAtLogin(fromJSON: data), true)
+        XCTAssertNil(StartupSettings.decodeLaunchAtLogin(fromJSON: Data("{}".utf8)))
+    }
+
     func testStartupSettingsReadsFalseAndTrue() throws {
         let dir = try tempUserData()
         defer { try? FileManager.default.removeItem(atPath: dir) }

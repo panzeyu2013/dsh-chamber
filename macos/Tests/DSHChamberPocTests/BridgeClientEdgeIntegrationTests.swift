@@ -105,6 +105,10 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
         // GUI 应用而非 Node。只传增量：BridgeClient.start() 会把本字典合并到
         // 当前进程环境之上（BridgeClient.swift）。
         var childEnvironment: [String: String] = [:]
+        // 关掉 sidecar 的周期更新检查（2026-12 审查 minor）：集成测试 spawn 同一
+        // 入口，存活 >15s 的实例会真打 api.github.com（非 hermetic）。dev 态门，
+        // 装配态忽略。
+        childEnvironment["DSH_SIDECAR_TEST_NO_UPDATE_CHECK"] = "1"
         let nodeBasename = (nodePath as NSString).lastPathComponent
         if nodeBasename.contains("dsh-chamber") {
             childEnvironment["ELECTRON_RUN_AS_NODE"] = "1"

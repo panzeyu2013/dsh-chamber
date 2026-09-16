@@ -81,10 +81,14 @@ final class CrossLanguageLockstepTests: XCTestCase {
     func testInteractiveEdgeTimeoutMatchesSidecarEntry() throws {
         let text = try source("packages/desktop/sidecar-entry.ts")
         XCTAssertTrue(text.contains("const EDGE_TIMEOUT_MS = 30_000"))
-        XCTAssertTrue(text.contains("const INTERACTIVE_EDGE_TIMEOUT_MS = 600_000"),
-                      "sidecar-entry 交互腿上限应为 600000ms")
+        // S2·F4：node 侧不再与 Swift 同值（同值会让 node 恒先超时，用户 10 分钟后的
+        // 答案被丢弃）——node = Swift 上限 + 60s 缓冲，Swift 侧仍是 600s。
+        XCTAssertTrue(text.contains("const SWIFT_INTERACTIVE_LEG_TIMEOUT_MS = 600_000"),
+                      "sidecar-entry 应镜像 Swift 侧 600000ms 交互腿上限")
+        XCTAssertTrue(text.contains("const INTERACTIVE_EDGE_TIMEOUT_MS = SWIFT_INTERACTIVE_LEG_TIMEOUT_MS + 60_000"),
+                      "node 侧交互腿等待上限 = Swift 上限 + 60s 缓冲（S2·F4）")
         XCTAssertEqual(SwiftEdgeHostLegs.interactiveLegTimeout * 1000, 600_000,
-                       "Swift 交互腿上限必须与 node 侧 10 分钟对齐（S1）")
+                       "Swift 交互腿上限保持 10 分钟（S1/S2·F4）")
         XCTAssertEqual(SwiftEdgeHostLegs.uiLegTimeout, 1.0, "非交互腿保持 1s 短界")
     }
 

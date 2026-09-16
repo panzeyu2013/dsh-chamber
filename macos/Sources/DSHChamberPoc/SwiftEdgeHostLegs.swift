@@ -148,6 +148,8 @@ public final class SwiftEdgeHostLegs {
     /// 已投递通知登记表（S8）：scheduleNotification 成功后登记，notify 路由
     /// retireNotifications 消费（removeDeliveredNotifications）。
     public let notificationRegistry = NotificationDeliveryRegistry()
+    /// 授权请求是否已发起（S3·V1：首次通知时请求一次；进程内幂等）。
+    private static var notificationAuthorizationRequested = false
 
     /// keep-awake activity token（ProcessInfo 防休眠；nil = 未激活）。
     private var keepAwakeActivity: NSObjectProtocol?
@@ -201,11 +203,10 @@ public final class SwiftEdgeHostLegs {
     /// 非交互 UI 腿的有界等待：主线程可能正被 BridgeClient.stop() 的收尾轮询
     /// 占用，退出优先；超时 loud 失败（core 可重试），body 幂等。
     static let uiLegTimeout: TimeInterval = 1.0
-    /// 交互腿（showMessage/pickPluginSource）上限：与 node 侧
-    /// sidecar-entry.ts 的 INTERACTIVE_EDGE_TIMEOUT_MS = 600_000ms 对齐——
-    /// 用户在模态上思考/浏览可能远超 1s；Swift 侧超时点必须 ≥ node 侧，
-    /// 否则模态还在屏上而 node 已判超时（S1 缺陷）。跨语言锁步见
-    /// CrossLanguageLockstepTests。
+    /// 交互腿（showMessage/pickPluginSource）上限：用户在模态上思考/浏览可能远超
+    /// 1s。node 侧现在是 SWIFT_INTERACTIVE_LEG_TIMEOUT_MS(600_000) + 60_000 缓冲
+    /// （S2·F4：两侧同值时 node 恒先超时，用户 10 分钟后的答案被丢）——Swift 侧超时
+    /// 点必须 ≤ node 侧且二者有明确缓冲。跨语言锁步见 CrossLanguageLockstepTests。
     static let interactiveLegTimeout: TimeInterval = 600
 
     /// 异步宿主腿入口（W-21 前置）：非 nil 时 BridgeClient 默认应答器改经
@@ -282,23 +283,43 @@ public final class SwiftEdgeHostLegs {
             content: content,
             trigger: nil  // 立即投递（前台展示由 AppDelegate delegate 接管）
         )
-        UNUserNotificationCenter.current().add(request) { [registry = notificationRegistry] error in
-            if let error {
-                // 投递失败：撤下登记（没有可退役的横幅）。
-                _ = registry.finishDelivery(sourceId: dispatch.sourceId,
-                                            identifier: identifier,
-                                            delivered: false)
-                completion(nil, "swift-edge-notification-schedule-failed:\(error.localizedDescription)")
-            } else {
-                let retiredInFlight = tracked && registry.finishDelivery(sourceId: dispatch.sourceId,
-                                                                        identifier: identifier,
-                                                                        delivered: true)
-                if retiredInFlight {
-                    // 在途期间来源已被退役：横幅刚落地，立即清除。
-                    UNUserNotificationCenter.current()
-                        .removeDeliveredNotifications(withIdentifiers: [identifier])
+        let center = UNUserNotificationCenter.current()
+        let deliver: () -> Void = { [registry = notificationRegistry] in
+            center.add(request) { error in
+                if let error {
+                    // 投递失败：撤下登记（没有可退役的横幅）。
+                    _ = registry.finishDelivery(sourceId: dispatch.sourceId,
+                                                identifier: identifier,
+                                                delivered: false)
+                    completion(nil, "swift-edge-notification-schedule-failed:\(error.localizedDescription)")
+                } else {
+                    let retiredInFlight = tracked
+                        && registry.finishDelivery(sourceId: dispatch.sourceId,
+                                                   identifier: identifier,
+                                                   delivered: true)
+                    if retiredInFlight {
+                        // 在途期间来源已被退役：横幅刚落地，立即清除。
+                        center.removeDeliveredNotifications(withIdentifiers: [identifier])
+                    }
+                    completion(nil, nil)
                 }
-                completion(nil, nil)
+            }
+        }
+        // 授权时机（2026-12 双端逐函数核对 S3·V1）：首次**真正要投递**通知时才向
+        // 系统申请权限（Electron 同序——不是启动即弹系统框）。已授权/已拒绝时
+        // requestAuthorization 幂等（不再弹框）；请求失败 loud，但仍尝试投递：
+        // 未授权时 add 会以错误回调收敛，绝不静默假装成功。
+        if Self.notificationAuthorizationRequested {
+            deliver()
+        } else {
+            Self.notificationAuthorizationRequested = true
+            center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+                if let error {
+                    print("[poc] 通知授权请求错误：\(error.localizedDescription)")
+                } else {
+                    print("[poc] 通知授权 = \(granted)（首次通知时请求，S3·V1）")
+                }
+                deliver()
             }
         }
     }
@@ -394,7 +415,14 @@ public final class SwiftEdgeHostLegs {
                     alert.alertStyle = .critical
                     alert.messageText = title
                     alert.informativeText = detail
-                    alert.runModal()
+                    // S2·V2 / S3·V6（2026-12 双端逐函数核对）：有可见窗口时用
+                    // sheet 呈现，不再在主线程 runModal 冻住整个 UI（Electron 的
+                    // dialog.showErrorBox 不阻塞渲染器）；无窗口才退回 runModal。
+                    if let window = self.mainWindowProvider?(), window.isVisible {
+                        alert.beginSheetModal(for: window, completionHandler: nil)
+                    } else {
+                        alert.runModal()
+                    }
                 }
                 if Thread.isMainThread {
                     run()
@@ -663,7 +691,13 @@ public final class SwiftEdgeHostLegs {
         var cancelled = false
         let run: () -> Void = {
             let panel = NSOpenPanel()
-            panel.title = "选择 chamber 插件源"
+            // 文案与归属对齐 Electron（electron-edges.ts pickPluginSource：
+            // title 'Import a dsh plugin — source folder or .tgz archive'、
+            // buttonLabel 'Import'、扩展过滤器只约束文件、目录仍可选）——
+            // 2026-12 双端逐函数核对 S4·U2 / S2·V3。
+            panel.title = "Import a dsh plugin — source folder or .tgz archive"
+            panel.prompt = "Import"
+            panel.message = "Import a dsh plugin — source folder or .tgz archive"
             panel.canChooseFiles = true
             panel.canChooseDirectories = true
             panel.allowsMultipleSelection = false

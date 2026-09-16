@@ -43,6 +43,57 @@ public enum StartupSettings {
     /// （绝不透过链接读，也绝不读一个被换过的 inode）；Swift 只读不写，不与
     /// Electron 的 *.corrupt 保留动作竞争。
     public static func readKeepAwake(userDataDir: String) -> ReadOutcome {
+        switch readValidatedData(userDataDir: userDataDir) {
+        case .missing:
+            return .missing
+        case .corrupt(let reason):
+            return .corrupt(reason: reason)
+        case .ok(let data):
+            return decodeKeepAwake(fromJSON: data)
+        }
+    }
+
+    /// 读取 <userDataDir>/chamber-settings.json 的 launchAtLogin（Electron
+    /// main.ts:1434-1440 启动期重放的对偶；2026-12 双端逐函数核对 S3·D5 /
+    /// S5·F6）。键缺失 / 文件不可用 / 损坏 → nil（本层不动作，绝不猜一个值去
+    /// 动登录项）；文件级纪律与 readKeepAwake 完全同一套（含 no-follow、inode
+    /// 稳定性、重复键与编码拒绝）。
+    public static func readLaunchAtLogin(userDataDir: String) -> Bool? {
+        switch readValidatedData(userDataDir: userDataDir) {
+        case .missing:
+            // 文件缺失 = Electron 的默认设置（chamber-settings 默认 launchAtLogin:
+            // false）→ 同样要重放 false（注销残留登录项），与每次启动
+            // applyLaunchAtLogin 对偶（2026-12 审查 minor）。
+            return false
+        case .corrupt:
+            // 损坏文件：Electron 也回落默认值，但这里选择**不动作**——绝不因为一个
+            // 读不懂的文件去改动系统登录项（有意偏离，已登记在台账）。
+            return nil
+        case .ok(let data):
+            // 先跑整文件校验（编码/重复键/形状/已知键取值全规）再取键——与 keepAwake
+            // 同一条纪律，绝不因为「只要一个键」就放行 Electron 判为损坏的文件。
+            guard case .ok = decodeKeepAwake(fromJSON: data) else { return nil }
+            return decodeLaunchAtLogin(fromJSON: data) ?? false
+        }
+    }
+
+    /// 已校验字节 → launchAtLogin（纯函数，单测直测；缺键/非布尔 → nil = 不动作）。
+    public static func decodeLaunchAtLogin(fromJSON data: Data) -> Bool? {
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              let record = object as? [String: Any] else { return nil }
+        guard let raw = record["launchAtLogin"], isBoolean(raw) else { return nil }
+        return (raw as? NSNumber)?.boolValue ?? false
+    }
+
+    /// 读取结果（文件级校验的公共出口）。
+    private enum DataOutcome {
+        case ok(Data)
+        case missing
+        case corrupt(reason: String)
+    }
+
+    /// 文件级读取与校验（keepAwake / launchAtLogin 共用）。
+    private static func readValidatedData(userDataDir: String) -> DataOutcome {
         let path = userDataDir + "/" + fileName
         var info = stat()
         guard lstat(path, &info) == 0 else {
@@ -83,7 +134,7 @@ public enum StartupSettings {
         guard readBytes == Int(opened.st_size) else {
             return .corrupt(reason: "读取长度与 st_size 不一致（errno \(errno)）")
         }
-        return decodeKeepAwake(fromJSON: Data(buffer[0..<readBytes]))
+        return .ok(Data(buffer[0..<readBytes]))
     }
 
     /// JSON 数据 → keepAwake 决策（纯函数，单测直测）。

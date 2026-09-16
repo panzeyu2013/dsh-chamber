@@ -184,8 +184,19 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
         guard input.messageName == "dshChamber", input.isMainFrame else { return .drop }
         let envelope = input.body as? [String: Any]
         let addressableID = envelope.flatMap { Self.exactInt(from: $0["id"]) }
-        guard let expected = input.expectedOrigin,
-              TrustGuard.isTrustedDocument(input.currentURL, expectedOrigin: expected) else {
+        guard let expected = input.expectedOrigin else {
+            // 就绪门与信任拒绝分开编码（2026-12 双端逐函数核对 S1·F3）：sidecar
+            // 尚未 ready / 重启落闸期间 expectedOrigin 恒 nil，此时回
+            // ipc_not_ready，渲染端可据此重试；把「未就绪」混进永久性的
+            // sender-forbidden 会让一次失败被当成不可恢复（update-store 曾因此
+            // 整会话 latch）。
+            // 排序是**有意**的（2026-12 审查）：expectedOrigin 为 nil 时没有可比较
+            // 的可信 origin，无法先做信任判定；此分支只在「sidecar 未就绪」这个
+            // 短暂窗口成立，且它不授予任何能力（只是可重试状态码）——M5 起 shim
+            // 也只在 info 成功后暴露公开面，正常启动序不会走到这里。
+            return .reject(id: addressableID, code: Self.codeNotReady)
+        }
+        guard TrustGuard.isTrustedDocument(input.currentURL, expectedOrigin: expected) else {
             return .reject(id: addressableID, code: Self.codeSenderForbidden)
         }
         if input.isQuitting {
@@ -224,6 +235,9 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
     /// Electron 侧为 { code: 'ipc_sender_forbidden' } 等，web 侧 shim 据码
     /// reject Promise，UI 按既有错误投影呈现——loud，绝不静默吞错）。
     static let codeSenderForbidden = "ipc_sender_forbidden"   // origin / 主 frame 信任失败
+    /// 就绪门（S1·F3）：expectedOrigin 为 nil（sidecar 未 ready / 重启落闸）。
+    /// 与信任拒绝分开编码——渲染端可安全重试，不是「这个发送方永远非法」。
+    static let codeNotReady = "ipc_not_ready"
     static let codeMethodNotAllowed = "method_not_allowed"    // method ∉ 白名单
     static let codeFrameTooLarge = "frame_too_large"          // 信封 > 4 MiB
     static let codeMalformedEnvelope = "malformed_envelope"   // 结构/JSON 表示不合法

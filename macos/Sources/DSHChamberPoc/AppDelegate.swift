@@ -37,6 +37,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
     /// 退出单飞/已确认门（E9/E20；语义照搬 main.ts 三标志）。
     private let quitGate = QuitGate()
+    /// 最近一次成功取到的 quitFacts（S3·V9：关窗决策即时可用，不再等 B 桥往返）。
+    private var cachedQuitFacts: QuitFacts?
     /// 退出清理是否已启动（幂等；清理完成/超时后 reply 一次）。
     private var quitCleanupStarted = false
     /// 是否在等待 `reply(toApplicationShouldTerminate:)`（每次 .terminateLater 一轮）。
@@ -58,16 +60,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // 注意：swift run（无 app bundle）下 UNUserNotificationCenter.current()
         // 会崩（bundleProxyForCurrentProcess nil）——以 Bundle.main.bundleIdentifier
         // 是否存在守卫；dev/无 bundle 态跳过通知接线（真机/打包态自动启用）。
+        // 二次启动转发的深链接收（S5·F9）：注册必须**早**于取锁（2026-12 审查：
+        // 晚注册会给极早的二次实例留一个丢失窗口），且与 argv / application(_:open:)
+        // 共用同一条缓冲（顺序与去重由 core 的 enqueueDeepLink 统一负责）。
+        // object 校验：只接受本 scheme 的字符串（同用户任意进程都能 post 这条
+        // 通知名，未校验就等于把深链注入面开放给本地任意进程）。
+        DistributedNotificationCenter.default().addObserver(
+            forName: Self.secondaryDeepLinkNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let raw = note.object as? String, raw.hasPrefix(Self.deepLinkScheme + "//") else {
+                print("[poc] 丢弃非法二次启动深链通知（非本 scheme）")
+                return
+            }
+            print("[poc] 收到二次启动转发深链 (raw)")
+            self?.deepLinks.enqueue(raw)
+        }
         if Bundle.main.bundleIdentifier != nil {
             let center = UNUserNotificationCenter.current()
             center.delegate = self
-            center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
-                if let error {
-                    print("[poc] 通知授权请求错误：\(error.localizedDescription)")
-                } else {
-                    print("[poc] 通知授权 = \(granted)")
-                }
-            }
+            // 授权时机（2026-12 双端逐函数核对 S3·V1）：Electron 延后到**首次通知**
+            // 才向系统申请权限，Swift 此前首启即弹框（用户还没收到任何通知）。
+            // 授权请求现在发生在真正调度第一条通知时（SwiftEdgeHostLegs），这里只
+            // 接线 delegate（前台展示 + click 回灌）。
+            print("[poc] 通知 delegate 已接线（授权在首次通知时请求）")
         } else {
             print("[poc] 无 bundle id（swift run dev 态）——跳过通知授权接线")
         }
@@ -213,13 +228,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                         ("--host-archive-dir", "dsh-chamber-seed-archive-cleanup"),
                         ("--host-open-in-dir", "dsh-chamber-seed-open-in"),
                     ]
+                    var missingHosts: [String] = []
                     for host in hostDirs {
                         let candidate = sidecarDir + "/dist/" + host.name
                         if FileManager.default.fileExists(atPath: candidate + "/package.json") {
                             sidecarArguments += [host.flag, candidate]
                         } else {
-                            print("[poc] 警告：host 包缺失 \(candidate)（该宿主域将缺席）")
+                            missingHosts.append(candidate)
                         }
+                    }
+                    // S2·F12（2026-12 双端逐函数核对）：构建侧已 fail-closed
+                    // （build-sidecar 先全量校验再拷贝），运行侧过去只 print 警告
+                    // → 手工/损坏装配的 .app 会在缺宿主域的情况下照常启动，用户
+                    // 看到的是功能静默缺席。装配态一律 fatal（dev 形状不注入这些
+                    // flag，不受影响）。
+                    if !missingHosts.isEmpty {
+                        fatalStartup("装配态 host 包缺失：\(missingHosts.joined(separator: "、"))"
+                            + "——请重新运行 pnpm run build:sidecar 并重装 .app")
                     }
                 }
                 print("[poc] sidecar 参数：user-data=\(stateDir) web=\(webDir) port=\(port)"
@@ -315,6 +340,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             do {
                 try supervisor.start()
             } catch {
+                // 二次直接启动（S4·F4，2026-12 双端逐函数核对）：Electron 的
+                // requestSingleInstanceLock 失败会**静默激活**已有窗口，Swift 此前
+                // 只弹 flock 致命框（用户以为程序坏了）。锁被同一个本壳的另一实例
+                // 持有时 → 激活它并安静退出；被别的程序（另一个 flavor/其他进程）
+                // 持有时保留原来的致命提示（绝不假装「已激活」）。
+                if case .heldByAnotherProcess? = error as? SidecarDirectoryLock.LockError,
+                   Self.activateExistingInstance() {
+                    // 二次实例的深链不能丢（S5·F9）：Electron 的 second-instance
+                    // 事件会把 secondary 的 argv 转发给 primary，Swift 之前只激活
+                    // 窗口。这里把 argv 里的 dsh-chamber:// 经本壳私有分布式通知
+                    // 交给已运行实例，再安静退出。
+                    _ = Self.forwardDeepLinksToRunningInstance(arguments: CommandLine.arguments)
+                    exit(0)
+                }
                 let detail = (error as? SidecarDirectoryLock.LockError)?.description
                     ?? "sidecar 启动失败：\(error.localizedDescription)"
                 fatalStartup(detail)
@@ -337,9 +376,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         StartupSettings.apply(StartupSettings.readKeepAwake(userDataDir: stateDir)) { on in
             legs.respond(method: "setKeepAwake", payload: .object(["on": .bool(on)]))
         }
+        // 登录自启每次启动重放（2026-12 双端逐函数核对 S3·D5 / S5·F6）：
+        // Electron main.ts:1434-1440 每次都 applyLaunchAtLogin——系统移除登录项
+        // （例如 .app 被移动）后 Swift 侧此前永不修复，而设置页仍显示「已开启」。
+        // 键缺失/文件损坏 = 不动作（绝不猜一个值去动登录项）。
+        if let launchAtLogin = StartupSettings.readLaunchAtLogin(userDataDir: stateDir) {
+            legs.respond(method: "setLoginItem", payload: .object(["enabled": .bool(launchAtLogin)]))
+            print("[poc] 启动期重放登录自启：enabled=\(launchAtLogin)")
+        } else {
+            print("[poc] 登录自启设置不可读（损坏）——本次启动不改动登录项")
+        }
 
         // 显示主窗口并激活（页面首载若早于控制面就绪由导航退避重试兜底）
         controller.window?.makeKeyAndOrderFront(nil)
+        // 关窗决策缓存失效钩子（2026-12 审查 major）：设置页改「关闭窗口行为」后，
+        // 下一次关窗必须用**新**的 quitFacts，而不是缓存里的旧值。
+        controller.onSettingsChanged = { [weak self] in
+            self?.cachedQuitFacts = nil
+            print("[poc] 设置变化 → 关窗决策缓存作废")
+        }
+        // 关窗决策缓存失效钩子（2026-12 审查 major）：设置页改「关闭窗口行为」后，
+        // 下一次关窗必须用**新**的 quitFacts，而不是缓存里的旧值。
+        controller.onSettingsChanged = { [weak self] in
+            self?.cachedQuitFacts = nil
+            print("[poc] 设置变化 → 关窗决策缓存作废")
+        }
         if #available(macOS 14.0, *) {
             NSApp.activate()
         } else {
@@ -352,6 +413,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // 2026-12 双端功能对齐（台账 S3·D12 / S5·F10）：SIGTERM/SIGINT 转入标准退出链
         // （design 25 §3.3(5)；Electron 同场景走 before-quit）。
         installSignalHandlers()
+        // 二次启动转发的深链接收已前移到函数开头（S5·F9 审查：注册必须早于取锁，
+        // 且要校验 scheme）——此处不再重复注册，否则同一通知会入队两次。
         // argv 冷启动深链（main.ts scanDeepLinkUrls 对偶，台账 S4·F1）：GUI 启动通常走
         // application(_:open:)，但从终端/脚本直接传 URL 时只有 argv。
         enqueueCommandLineDeepLinks()
@@ -456,6 +519,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// 真退出在途放行关闭；决策失败保守隐藏（不关窗、不退出）。
     func handleWindowCloseRequest() -> Bool {
         if quitGate.isConfirmed { return true }
+        // S3·V9（2026-12 双端逐函数核对）：有缓存事实时**立即**决策——Electron 的
+        // 关窗判定是同步的（设置已在主进程），Swift 此前每次都等一次 B 桥往返
+        // （最长 2s 窗口无响应，用户以为卡死）。缓存缺失才走异步请求，并在返回
+        // 前顺手刷新缓存（后台，不阻塞本次决策）。
+        if let facts = cachedQuitFacts {
+            requestQuitFacts(quitRequested: false) { _ in }
+            switch QuitCoordinator.closeAction(facts: facts) {
+            case .hide:
+                print("[poc] 关窗 → 隐藏（缓存事实即时决策，S3·V9）")
+                mainWindowController?.window?.orderOut(nil)
+            case .terminate:
+                print("[poc] 关窗 → 退出（close-behavior='quit'，缓存事实即时决策）")
+                NSApp.terminate(nil)
+            }
+            return false
+        }
         guard quitGate.beginDecision() else { return false }
         requestQuitFacts(quitRequested: false) { [weak self] facts in
             guard let self else { return }
@@ -565,9 +644,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // 单次完成守卫：Task{@MainActor} 与 main.asyncAfter 同在主线程队列，
         // 先到者胜（Swift 5 模式下闭包捕获可变局部量，无并发写）。
         var finished = false
-        let finish: (QuitFacts?) -> Void = { facts in
+        let finish: (QuitFacts?) -> Void = { [weak self] facts in
             guard !finished else { return }
             finished = true
+            // S3·V9：成功取到的事实留作缓存，供下一次关窗决策即时使用。
+            if let facts { self?.cachedQuitFacts = facts }
             completion(facts)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.quitFactsTimeout) {
@@ -612,6 +693,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// 失败而阻塞，用户可见动作绝不静默丢弃）。
     private func sendDeepLink(_ raw: String) {
         guard let bridge else { return }
+        // S4·F3（2026-12 双端逐函数核对）：退出在途时不再投递深链——bridge 只会以
+        // app_quitting 拒绝并 loud，用户动作在这条路径上注定丢失；直接记账跳过。
+        if quitGate.isConfirmed {
+            print("[poc] 退出在途：深链不再投递（\(raw)）")
+            return
+        }
         Task { @MainActor in
             do {
                 _ = try await bridge.invoke(
@@ -669,6 +756,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// 致命启动错误：stderr 一行（无 GUI 可验证）+ 弹窗提示后退出。
     /// 与 `presentFatalAlert` 共用单次呈现门：同一 fatal 已呈现（如 Supervisor
     /// 的锁冲突分流）时不再弹第二个框，但仍按致命路径退出。
+    /// 二次启动深链转发通知名（S5·F9；本壳私有，Electron 的 second-instance
+    /// 事件对偶）。
+    static let secondaryDeepLinkNotification = Notification.Name("com.dshchamber.native.deep-link")
+
+    /// 把 secondary 实例 argv 里的深链交给已运行实例（返回转发条数）。
+    /// 只转发本 scheme 的参数（与 S4·F1 同一筛选），不重试、不阻塞。
+    static func forwardDeepLinksToRunningInstance(arguments: [String]) -> Int {
+        let urls = commandLineDeepLinks(arguments: arguments)
+        guard !urls.isEmpty else { return 0 }
+        for url in urls {
+            DistributedNotificationCenter.default().postNotificationName(
+                secondaryDeepLinkNotification, object: url, userInfo: nil, deliverImmediately: true)
+        }
+        print("[poc] 已向运行中实例转发 \(urls.count) 条深链（S5·F9）")
+        return urls.count
+    }
+
+    /// 已运行的**同 bundle** 实例：激活其全部窗口并返回 true；没有则 false。
+    /// 只用 bundle id 判定，绝不按进程名猜（Electron flavor 的 bundle id 不同，
+    /// 因此不会被误激活）。
+    static func activateExistingInstance() -> Bool {
+        guard let bundleID = Bundle.main.bundleIdentifier else { return false }
+        let me = ProcessInfo.processInfo.processIdentifier
+        let others = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
+            .filter { $0.processIdentifier != me && !$0.isTerminated }
+        guard let other = others.first else { return false }
+        print("[poc] 已有本壳实例（pid=\(other.processIdentifier)）：激活并安静退出（S4·F4）")
+        other.activate(options: [.activateAllWindows])
+        return true
+    }
+
     private func fatalStartup(_ message: String) -> Never {
         fputs("[poc] 致命错误：\(message)\n", stderr)
         if !Self.fatalAlertShown {
@@ -788,7 +906,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     /// argv 深链筛选（纯函数，单测直测）：跳过 argv[0]，只留本 scheme 的参数。
     static func commandLineDeepLinks(arguments: [String]) -> [String] {
-        arguments.dropFirst().filter { $0.hasPrefix(deepLinkScheme) }
+        // 前缀与 Electron 对齐（shell-core.ts 的 startsWith('dsh-chamber://')）：
+        // 只收完整 scheme 形态，裸 "dsh-chamber:foo" 不再入队（2026-12 审查 nit）。
+        arguments.dropFirst().filter { $0.hasPrefix(deepLinkScheme + "//") }
     }
 
     /// 托盘（Electron Tray 对偶）：状态栏图标 +「显示窗口 / 退出」。关窗隐藏后这是与

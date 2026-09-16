@@ -79,6 +79,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     private var bridgeHandler: ChamberMessageHandler!
     /// 关窗决策委托（AppDelegate；见 windowShouldClose）。
     weak var closeDelegate: MainWindowCloseDeciding?
+    /// 宿主设置变化回调（2026-12 审查 major）：关窗决策会缓存 quitFacts，设置页改
+    /// 「关闭窗口行为」后必须让缓存失效，否则首次关窗仍按旧值决策。
+    var onSettingsChanged: (() -> Void)?
     private var consoleCatcher: POCConsoleCatcher?
     private var didSnapshot = false
     private var navRetries = 0
@@ -203,6 +206,13 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                                 configuration: configuration)
         webView.navigationDelegate = self
         webView.uiDelegate = self
+        // 开发者工具：只在 DEBUG 构建开放（2026-12 参考独立 Swift 原生壳的通行做法：
+        // debug 默认开、release 默认关）。构建期常量，页面或环境变量都打不开。
+#if DEBUG
+        if #available(macOS 13.3, *) {
+            webView.isInspectable = true
+        }
+#endif
         self.webView = webView
 
         // 窗口
@@ -499,6 +509,10 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             // rendererPush 解包：channel/payload 原样进页面（与 electron-edges
             // rendererPush = webContents.send(channel, payload) 同语义）。
             print("[poc] notify rendererPush → 页面 emit \(channel)")
+            if channel == Self.settingsChangedChannel {
+                // 设置变了 → 关窗决策缓存作废（S3·V9：缓存必须随设置失效）。
+                onSettingsChanged?()
+            }
             Task { @MainActor in
                 emitToPage(event: channel, payload: payload)
             }
@@ -711,12 +725,21 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         print("[poc] 页面加载失败 \(error.localizedDescription)")
     }
 
+    /// 设置变化 push 通道（与 ipc-events.ts SETTINGS_CHANGED 同字面量）。
+    static let settingsChangedChannel = "dsh-chamber:settings-changed"
+
     /// sidecar 就绪态（AppDelegate 的 bridge.onReady / 重启回调）。
     /// `false` = 新进程未就绪 → A 桥 origin 门落闸（重启窗口不放行）。
     /// S12 起无「免门桩态」：dev/装配侧车恒为 sidecar-entry/sidecar.js，
     /// 就绪只由 ready 帧开启；形状未识别的自定义 POC_SIDECAR 自负 ready 协议。
     func noteSidecarReady(_ ready: Bool = true) {
         sidecarReady = ready
+        // ready 帧后让页面重跑一次 info 水化（2026-12 审查 minor）：shim 在
+        // documentStart 就定义 surface，若首次 1+10 次水化都在 ready 前被就绪门
+        // 拒掉，之前没有任何 re-kick → 版本/平台整会话缺失。
+        if ready {
+            evaluateJS("window.__dshChamberRehydrateInfo && window.__dshChamberRehydrateInfo()")
+        }
     }
 
     /// 退出清理已开始（S7）：A 桥 app_quitting 门置位（AppDelegate
@@ -790,6 +813,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
            nsError.code == NSURLErrorCannotConnectToHost || nsError.code == NSURLErrorNotConnectedToInternet {
             guard navRetries < 25 else {
                 print("[poc] 页面加载失败(初试) 重试耗尽：\(error.localizedDescription)")
+                showLoadFailurePage(in: webView, error: error, exhausted: true)
                 return
             }
             let retryURL = webView.url ?? cpURL
@@ -802,6 +826,29 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             return
         }
         print("[poc] 页面加载失败(初试) \(error.localizedDescription)")
+        showLoadFailurePage(in: webView, error: error, exhausted: false)
+    }
+
+    /// 首载失败的可见错误面（2026-12 双端逐函数核对 S5·U4）：Electron 失败时显示
+    /// 浏览器错误页，Swift 侧此前只打印 stderr → 用户面对白屏。这里落一张最小
+    /// 说明页（原因 + 控制面地址），绝不重载、绝不自行重开会话。
+    private func showLoadFailurePage(in webView: WKWebView, error: Error, exhausted: Bool) {
+        func escape(_ text: String) -> String {
+            text.replacingOccurrences(of: "&", with: "&amp;")
+                .replacingOccurrences(of: "<", with: "&lt;")
+                .replacingOccurrences(of: ">", with: "&gt;")
+        }
+        let hint = exhausted ? "已重试 25 次仍未连上控制面。" : "控制面未能加载。"
+        let html = """
+        <!doctype html><meta charset="utf-8"><title>dsh-chamber</title>
+        <body style="font-family:-apple-system,system-ui;padding:48px;color:#1d1d1f">
+        <h2>无法加载 dsh-chamber 界面</h2>
+        <p>\(hint)</p>
+        <p style="color:#6e6e73">\(escape(error.localizedDescription))</p>
+        <p style="color:#6e6e73">控制面地址：\(escape(cpURL.absoluteString))</p>
+        </body>
+        """
+        webView.loadHTMLString(html, baseURL: nil)
     }
 
     // MARK: - WKUIDelegate：禁新窗口
@@ -850,10 +897,17 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         case .allow:
             break
         }
+        // 打开失败必须 loud（2026-12 双端逐函数核对 S4·F7）：Electron 的
+        // openExternal 失败会 reject 并记录；此处此前把错误回调整个吞掉，
+        // 用户点了链接没反应且日志无痕。
         if #available(macOS 14.0, *) {
-            NSWorkspace.shared.open(url, configuration: NSWorkspace.OpenConfiguration()) { _, _ in }
-        } else {
-            NSWorkspace.shared.open(url)
+            NSWorkspace.shared.open(url, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+                if let error {
+                    print("[poc] 外链打开失败 \(url.absoluteString)：\(error.localizedDescription)")
+                }
+            }
+        } else if !NSWorkspace.shared.open(url) {
+            print("[poc] 外链打开失败 \(url.absoluteString)：NSWorkspace.open 返回 false")
         }
     }
 }

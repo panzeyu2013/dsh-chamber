@@ -73,8 +73,8 @@ final class MessageHandlerTests: XCTestCase {
             .reject(id: 1, code: ChamberMessageHandler.codeSenderForbidden))
         XCTAssertEqual(
             ChamberMessageHandler.fence(fenceInput(body: envelope(), origin: nil)),
-            .reject(id: 1, code: ChamberMessageHandler.codeSenderForbidden),
-            "ready 前 expectedOrigin=nil：一律拒绝")
+            .reject(id: 1, code: ChamberMessageHandler.codeNotReady),
+            "ready 前 expectedOrigin=nil：一律拒绝，但用可重试的 ipc_not_ready 码（S1·F3）")
         XCTAssertEqual(
             ChamberMessageHandler.fence(fenceInput(
                 body: envelope(), url: "http://127.0.0.1:17520/api/i/x")),

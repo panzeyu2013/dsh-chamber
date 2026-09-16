@@ -399,7 +399,6 @@ public final class SidecarSupervisor {
         }
         let policy = deps.policy
         let now = Date().timeIntervalSince1970
-        let decision = policy.decide(now: now, attempts: &attempts)
         stateLock.unlock()
 
         deps.log("[supervisor] sidecar 退出：status=\(status)"
@@ -432,6 +431,14 @@ public final class SidecarSupervisor {
             return
         }
 
+        // 退避配额只在**崩溃**分支消耗（S2·F11，2026-12 双端逐函数核对）：
+        // 原先在退出码分级之前无条件 decide，exit 0/3/70 也会写入 attempts 窗口，
+        // 「60s 内 3 次」配额会被正常退出（含我们自己 SIGTERM 后 sidecar 正常退出、
+        // 锁冲突、启动失败）提前耗尽——用户随后第一次真实崩溃就直接 giveUp，
+        // 自动恢复名存实亡。现在只在 status ∉ {0,3,70} 的崩溃路径记账。
+        stateLock.lock()
+        let decision = policy.decide(now: now, attempts: &attempts)
+        stateLock.unlock()
         switch decision {
         case .giveUp(let count):
             markFatal("sidecar 连续崩溃 \(count) 次（\(Int(policy.window))s 窗口），已停止自动恢复")
