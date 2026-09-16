@@ -337,6 +337,14 @@ jobs:
           pnpm run typecheck:runtime
       - name: i18n pair consistency
         run: pnpm run verify:i18n
+      # File-only gates the push path runs (ci.yml) and the docs call
+      # CI-backed: every *.test.ts / *.test.mjs must be reachable from a script,
+      # and every relative markdown link must resolve. Same commands as ci.yml —
+      # the release-workflow policy derives that alignment from ci.yml.
+      - name: Test wiring gate
+        run: pnpm run verify:test-wiring
+      - name: Markdown link gate
+        run: pnpm run verify:md-links
       # Upstream design-token conformance (S1–S7) — same gate as ci.yml's push
       # path; needs the bootstrapped vendor tree above (2026-12 review P2: the
       # release validation job silently omitted it).
@@ -921,7 +929,7 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
-      - name: Notarize + staple native app (release only)
+      - name: Notarize + staple native app and dmg (release only)
         if: ${{ github.event.inputs.dry_run != 'true' }}
         env:
           APPLE_ID: ${{ secrets.APPLE_ID }}
@@ -946,33 +954,87 @@ jobs:
           xcrun stapler validate "$APP"
           rm -f "$SUBMIT_ZIP" "${BASE}.zip" "${BASE}.dmg"
           ditto -c -k --sequesterRsrc --keepParent "$APP" "${BASE}.zip"
-          hdiutil create -volname dsh-chamber-native -srcfolder "$APP" \
+          # P7：DMG 卷 = .app + /Applications 快捷方式（Finder 拖拽安装惯例），
+          # 且 DMG 本体也要公证+装订——只装订 .app 时离线 Gatekeeper 对挂载卷
+          # 仍报未公证。
+          DMG_STAGE="$RUNNER_TEMP/dsh-chamber-native-dmg"
+          rm -rf "$DMG_STAGE"
+          mkdir -p "$DMG_STAGE"
+          ditto "$APP" "$DMG_STAGE/dsh-chamber-native.app"
+          ln -s /Applications "$DMG_STAGE/Applications"
+          hdiutil create -volname dsh-chamber-native -srcfolder "$DMG_STAGE" \
             -ov -format UDZO "${BASE}.dmg"
+          xcrun notarytool submit "${BASE}.dmg" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_APP_SPECIFIC_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+          xcrun stapler staple "${BASE}.dmg"
+          xcrun stapler validate "${BASE}.dmg"
           xcrun stapler validate "$APP"
 
-      - name: Verify native app (fail-closed on release)
+      - name: Verify native app + uploaded archives (fail-closed on release)
         run: |
           set -euo pipefail
           APP="macos/release/dsh-chamber-native.app"
+          BASE="macos/release/dsh-chamber-native-${VERSION}-macos-arm64"
+          DRY_RUN="${{ github.event.inputs.dry_run == 'true' && 'true' || 'false' }}"
           test -d "$APP"
           codesign --verify --deep --strict --verbose=2 "$APP"
-          # 装配面结构断言：sidecar 的 node 基名（A5）、打包 shim、renderer dist。
+          # 装配面结构断言：sidecar 的 node 基名（A5）、sidecar 入口 + 装配
+          # package.json、control-plane 相对入口、四个 host 包、打包 shim、
+          # renderer dist（2026-12 P2：原清单漏了后三类，.app 少任何一个都能
+          # 上传成功）。
           test -x "$APP/Contents/Resources/sidecar/node"
           test "$(basename "$APP/Contents/Resources/sidecar/node")" = "node"
           test -f "$APP/Contents/Resources/sidecar/sidecar.js"
+          test -f "$APP/Contents/Resources/sidecar/package.json"
+          test -f "$APP/Contents/Resources/sidecar/dist/control-plane/index.js"
+          for HOST in dsh-chamber-seed-client-graph dsh-chamber-seed-git-worktree \
+                      dsh-chamber-seed-archive-cleanup dsh-chamber-seed-open-in; do
+            test -f "$APP/Contents/Resources/sidecar/dist/$HOST/dist/index.js"
+          done
           test -f "$APP/Contents/Resources/DSHChamberPoc_DSHChamberPoc.bundle/bridge-shim.poc.js"
           test -f "$APP/Contents/Resources/dist/web/index.html"
           # 三审 #1/#2：打包态本地实例依赖内置 dsh 工作区与内嵌 pnpm。
           test -f "$APP/Contents/Resources/sidecar/vendor/dsh/package.json"
           test -f "$APP/Contents/Resources/sidecar/vendor/dsh/node_modules/.modules.yaml"
           test -f "$APP/Contents/Resources/sidecar/pnpm/bin/pnpm.cjs"
+          # P4：架构断言——build-sidecar 缺省 darwin-arm64 而 swift build 跟随
+          # 宿主；两者不一致的 .app 能签名打包、运行时才崩。
+          APP_ARCHS="$(lipo -archs "$APP/Contents/MacOS/DSHChamberPoc")"
+          NODE_ARCHS="$(lipo -archs "$APP/Contents/Resources/sidecar/node")"
+          echo "archs: app=$APP_ARCHS node=$NODE_ARCHS"
+          [[ " $APP_ARCHS " == *" arm64 "* ]] || { echo "::error::native .app 不是 arm64：$APP_ARCHS"; exit 1; }
+          [[ " $NODE_ARCHS " == *" arm64 "* ]] || { echo "::error::捆绑 node 不是 arm64：$NODE_ARCHS"; exit 1; }
+          # P4(c)：release-artifacts 清单是真实消费者——要上传的 native 文件名
+          # 必须逐字等于清单（碰撞断言因此观察到真实版本号）。
+          node scripts/dev/release-artifacts.mjs "$VERSION" --check-dir macos/release
           test -n "$(ls macos/release/*.dmg 2>/dev/null | head -n 1)"
           test -n "$(ls macos/release/*.zip 2>/dev/null | head -n 1)"
-          if [[ "${{ github.event.inputs.dry_run }}" != "true" ]]; then
-            codesign -dv --verbose=4 "$APP" 2>&1 | tee /tmp/swift-codesign-dv.txt
+          # P4(b)：验证**上传的 blob 本身**，而不是归档前的 .app——解出 zip 内的
+          # .app 再跑 codesign/架构/stapler/spctl；打包顺序倒退或 zip 损坏都在
+          # 这里红，而不是等用户下载后才发现。
+          EXTRACT="$RUNNER_TEMP/dsh-chamber-native-zip-verify"
+          rm -rf "$EXTRACT"
+          mkdir -p "$EXTRACT"
+          ditto -x -k "${BASE}.zip" "$EXTRACT"
+          # --keepParent 的归档恒有一个顶层 <App>.app；直接定位，避免 find|head
+          # 在 pipefail 下的 SIGPIPE 噪声。
+          ZIP_APP="$EXTRACT/dsh-chamber-native.app"
+          test -d "$ZIP_APP"
+          codesign --verify --deep --strict --verbose=2 "$ZIP_APP"
+          [[ " $(lipo -archs "$ZIP_APP/Contents/MacOS/DSHChamberPoc") " == *" arm64 "* ]] \
+            || { echo "::error::zip 内 .app 不是 arm64"; exit 1; }
+          [[ " $(lipo -archs "$ZIP_APP/Contents/Resources/sidecar/node") " == *" arm64 "* ]] \
+            || { echo "::error::zip 内捆绑 node 不是 arm64"; exit 1; }
+          if [[ "$DRY_RUN" != "true" ]]; then
+            codesign -dv --verbose=4 "$ZIP_APP" 2>&1 | tee /tmp/swift-codesign-dv.txt
             grep -q 'Authority=Developer ID' /tmp/swift-codesign-dv.txt
+            xcrun stapler validate "$ZIP_APP"
             xcrun stapler validate "$APP"
-            spctl --assess --type execute --verbose=4 "$APP"
+            xcrun stapler validate "${BASE}.dmg"
+            spctl --assess --type execute --verbose=4 "$ZIP_APP"
           fi
         env:
           VERSION: ${{ needs.create-release.outputs.version }}

@@ -122,6 +122,15 @@ jobs:
           pnpm run typecheck:runtime
       - name: i18n pair consistency
         run: pnpm run verify:i18n
+      # File-only, so NOT behind the classifier: every *.test.ts / *.test.mjs
+      # must be reachable from a script that runs (verify-test-wiring), and every
+      # relative markdown link must resolve (verify-md-links). Both are named in
+      # run-checks.mjs static and release validation; their job here is the same
+      # one: a newly added test file (or a doc link) must not sit unexecuted.
+      - name: Test wiring gate
+        run: pnpm run verify:test-wiring
+      - name: Markdown link gate
+        run: pnpm run verify:md-links
       # Upstream design-token conformance: S1 未声明 --dsw-* 引用 / S2 命名空间越界 /
       # S3 0.5px 发丝线 / S4 字面量 fallback / S5 边框+阴影配对 / S6 死声明 /
       # S7 全圆角配对. Upstream enforces these with specs that scan ITS OWN
@@ -369,9 +378,12 @@ jobs:
   # release. Deliberately NOT a packaging job: the .app/sidecar assembly and
   # the real Node download stay in release.yml (network + credentials), and the
   # expensive desktop suite keeps running on the linux leg. The macOS-only
-  # desktop tests (build-sidecar / build-swift-app packaging scripts, the
-  # sidecar stdio smoke) already ride `test:desktop`; this job re-runs the two
-  # cheapest bridge gates plus the Swift suite and the packaging dry runs.
+  # desktop tests (the darwin lock assertions and the build-sidecar /
+  # build-swift-app packaging-script suites) live in the package's MACOS_FILES
+  # list (packages/desktop/scripts/test.mjs) and run HERE via test:macos, never
+  # on the ubuntu leg; this job also re-runs the cheap bridge gates plus the
+  # Swift suite and the packaging dry runs. A prose-only push skips the whole
+  # leg through the same classifier as test/test-windows.
   test-macos:
     runs-on: macos-latest
     steps:
@@ -381,8 +393,21 @@ jobs:
           # harness.commit); the Swift package itself has zero third-party
           # dependencies (AppKit/WebKit only).
           submodules: true
+          # The change classifier diffs the pushed range, so both endpoints must
+          # exist locally.
+          fetch-depth: 0
       - name: Verify workflow action pins
         run: node scripts/dev/verify-workflow-action-pins.mjs
+      # Same classifier as test/test-windows: a prose-only branch push skips the
+      # macOS runner (Swift build + packaging suites) entirely. Releases prove
+      # THIS job's success on main through verify-release-ci-proof.mjs.
+      - name: Classify the change (prose-only pushes skip the macOS/Swift leg)
+        id: classify
+        env:
+          CI_BEFORE: ${{ github.event.before }}
+          CI_AFTER: ${{ github.sha }}
+          CI_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node scripts/dev/classify-ci-changes.mjs
       - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
         with:
           version: 11.21.0
@@ -391,14 +416,18 @@ jobs:
           node-version: 24
           cache: pnpm
       - name: Bootstrap vendor tree (verify pin + ensure links)
+        if: steps.classify.outputs.code == 'true'
         run: node scripts/dev/ensure-harness-vendor.mjs
       - run: pnpm install --frozen-lockfile
+        if: steps.classify.outputs.code == 'true'
       - name: Assert lockfile not rewritten
+        if: steps.classify.outputs.code == 'true'
         run: git diff --exit-code -- pnpm-lock.yaml
       # POC_NODE_BIN turns the 8 Swift↔sidecar integration tests from
       # XCTSkip into real runs (they spawn `node packages/desktop/sidecar-entry.ts`);
       # locally verified 8/8 green with a plain node binary (2026-09 三审 #3).
       - name: Swift build (release) + XCTest
+        if: steps.classify.outputs.code == 'true'
         working-directory: macos
         run: |
           export POC_NODE_BIN="$(command -v node)"
@@ -410,6 +439,7 @@ jobs:
       # cheap ones here keeps the macOS leg self-contained when only Swift
       # changes are pushed).
       - name: Bridge manifest + shim surface lockstep
+        if: steps.classify.outputs.code == 'true'
         run: |
           node packages/desktop/bridge-manifest.test.ts
           node packages/desktop/bridge-shim.test.ts
@@ -423,12 +453,14 @@ jobs:
       # SwiftPM .build output and dist/control-plane — so they live in
       # `test:macos` and run HERE, never in the ubuntu `test` leg.
       - name: Packaging + darwin lock suites (test:macos)
+        if: steps.classify.outputs.code == 'true'
         run: |
           pnpm --filter @dsh-chamber/desktop run build:control-plane
           pnpm --filter @dsh-chamber/desktop run test:macos
       # Packaging dry runs (no network / no real Node download): the sidecar
       # assembly plan and the .app assembly plan validate their inputs.
       - name: Packaging dry runs (sidecar + .app)
+        if: steps.classify.outputs.code == 'true'
         run: |
           pnpm run build:sidecar --dry-run
           pnpm run build:swift-app --dry-run --skip-build

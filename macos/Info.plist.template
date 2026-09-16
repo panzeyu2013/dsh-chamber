@@ -20,6 +20,15 @@
     <string>en</string>
     <key>CFBundleExecutable</key>
     <string>DSHChamberPoc</string>
+    <!-- W-24：build-swift-app 把 icon.icns 平移到 Contents/Resources；
+         CFBundleIconFile 是 Dock/访达读取散装 .icns 的键（带扩展名），
+         CFBundleIconName 是同一图标的 asset-catalog 名（本壳无 Assets.car，
+         为与 Electron flavor 的 icon 命名对齐而保留，缺失时回落到
+         CFBundleIconFile）。 -->
+    <key>CFBundleIconFile</key>
+    <string>icon.icns</string>
+    <key>CFBundleIconName</key>
+    <string>icon</string>
     <key>CFBundleIdentifier</key>
     <string>com.dshchamber.native</string>
     <key>CFBundleInfoDictionaryVersion</key>
@@ -36,6 +45,14 @@
     <string>13.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <!-- 壳的 WKWebView 直连本机控制面 http://127.0.0.1:<port>（design 25 §3）：
+         ATS 对 HTTP 缺省拒绝，必须显式放行 local networking。Electron flavor
+         在 packages/desktop/package.json build.mac.extendInfo 携带同键。 -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
     <key>CFBundleURLTypes</key>
     <array>
         <dict>

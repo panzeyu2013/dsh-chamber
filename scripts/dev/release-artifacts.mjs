@@ -11,7 +11,13 @@
  * 本模块把"产物名不得碰撞 / feed 归属唯一"从散文变成可执行断言（演练清单 +
  * 策略测试共用）：Electron 的名字不含 `-native`，Swift 的名字必含 `-native`；
  * 只有 Electron 腿产出 `*.yml` feed。
+ *
+ * CLI：`node scripts/dev/release-artifacts.mjs <version> [--check-dir <dir>]`。
+ * `--check-dir` 进一步断言清单里的 native 产物确实存在于发布腿输出目录——
+ * W-26 的真实消费者（release.yml 的 verify 步在上传前调用它，见脚本内注释）。
  */
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 /** Electron mac 腿产物（electron-builder 缺省命名：productName-version-arch[-mac].ext）。 */
@@ -56,14 +62,45 @@ export function releaseManifest(version) {
   }
 }
 
+/** 清单里在 dir 下缺失的文件名（--check-dir 的判定；导出以便单测）。 */
+export function missingArtifacts(names, dir, exists = existsSync) {
+  return names.filter((name) => !exists(join(dir, name)))
+}
+
 function main() {
-  const version = process.argv[2]
-  if (version === undefined || version === '') {
-    console.error('用法：release-artifacts.mjs <version>')
+  const argv = process.argv.slice(2)
+  let version = null
+  let checkDir = null
+  for (let index = 0; index < argv.length; index += 1) {
+    if (argv[index] === '--check-dir') {
+      checkDir = argv[index + 1] ?? null
+      index += 1
+      if (checkDir === null) {
+        console.error('用法：release-artifacts.mjs <version> [--check-dir <dir>]')
+        process.exit(1)
+      }
+    } else if (version === null) {
+      version = argv[index]
+    } else {
+      console.error(`未知参数：${argv[index]}`)
+      process.exit(1)
+    }
+  }
+  if (version === null || version === '') {
+    console.error('用法：release-artifacts.mjs <version> [--check-dir <dir>]')
     process.exit(1)
   }
   const manifest = releaseManifest(version)
   console.log(JSON.stringify(manifest, null, 2))
+  // W-26 消费者：发布腿在 build:swift-app 之后用它断言**实际要上传的** native
+  // 文件名与清单逐字一致（Electron 腿的产物由 build-macos 生成，不在本检查面）。
+  if (checkDir !== null) {
+    const missing = missingArtifacts(manifest.native.artifacts, checkDir)
+    if (missing.length > 0) {
+      console.error(`发布清单中的 native 产物在 ${checkDir} 缺失：${missing.join(', ')}`)
+      process.exit(1)
+    }
+  }
 }
 
 if (process.argv[1] !== undefined

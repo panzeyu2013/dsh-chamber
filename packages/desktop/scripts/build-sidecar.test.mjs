@@ -14,13 +14,16 @@
  *  ⑥ --dry-run 真实子进程：输入校验通过、不写盘、不联网（exit 0）；
  *  ⑦ normalizeSymlinks：树内绝对链接→相对、树外链接→实体化、悬空→loud、
  *     幂等（P2：cpSync 会把相对链接绝对化，bundle 因此过不了 codesign）；
- *  ⑧ copyTree：树内相对链接原样保留、树外链接实体化（cpSync 的替代）。
+ *  ⑧ copyTree：cpSync(verbatimSymlinks) 只搬链接，实体化全部交给 normalizeSymlinks；
+ *  ⑨b --skip-* 的诚实语义：跳过 = 缺位，不继承上一轮装配；
+ *  ⑨c 历史 tsc emit 目录（dist/sidecar）被清掉，不再被 electron-builder 打包。
  * 不联网、不下载 Node、不写仓库外路径（dry-run 无副作用）。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -41,7 +44,9 @@ import {
   HOST_PACKAGES,
   PINNED_NODE_SHA256,
   assertBundledNodeBasename,
+  assertHostPackageArtifacts,
   assertNodeArchiveMembers,
+  clearLegacySidecarEmit,
   copyPnpm,
   copyTree,
   normalizeSymlinks,
@@ -402,6 +407,75 @@ test('⑥ --dry-run 子进程：输入校验通过、无写盘、无联网', asy
   }
 })
 
+test('⑨b --skip-* 产生缺位：不继承上一轮装配的 node / sidecar.js / vendor / pnpm / host 包', async () => {
+  const out = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-skip-'))
+  try {
+    // 上一轮完整装配的遗留（含改名前的旧 host 包目录）。
+    writeFileSync(path.join(out, 'node'), 'stale node')
+    chmodSync(path.join(out, 'node'), 0o755)
+    writeFileSync(path.join(out, 'sidecar.js'), '// stale bundle')
+    mkdirSync(path.join(out, 'vendor', 'dsh'), { recursive: true })
+    writeFileSync(path.join(out, 'vendor', 'dsh', 'package.json'), '{"name":"dsh"}')
+    mkdirSync(path.join(out, 'pnpm', 'bin'), { recursive: true })
+    writeFileSync(path.join(out, 'pnpm', 'bin', 'pnpm.cjs'), '// stale pnpm')
+    mkdirSync(path.join(out, 'dist', 'dsh-host-client-graph'), { recursive: true })
+    writeFileSync(path.join(out, 'dist', 'dsh-host-client-graph', 'index.js'), 'stale\n')
+
+    await runBuildSidecar(parseBuildSidecarArgs([
+      '--out', out, '--skip-node', '--skip-bundle', '--skip-vendor', '--skip-host-packages',
+    ]), { log: () => {}, error: () => {} })
+    const layout = sidecarLayout(out)
+    assert.equal(existsSync(layout.node), false, '--skip-node 必须产生缺位（旧的 node 不得留下被一起签名发布）')
+    assert.equal(existsSync(layout.entry), false, '--skip-bundle 必须产生缺位')
+    assert.equal(existsSync(layout.vendorDsh), false, '--skip-vendor 必须清掉旧 vendor/dsh')
+    assert.equal(existsSync(layout.pnpm), false, '--skip-vendor 必须清掉旧 pnpm')
+    assert.equal(existsSync(path.join(layout.dist, 'dsh-host-client-graph')), false,
+      '--skip-host-packages 不得让旧 host 包目录残留')
+    // dist 仍由 control-plane 重建（它是本次的唯一合法成员）。
+    assert.deepEqual(readdirSync(layout.dist), ['control-plane'])
+  } finally {
+    rmSync(out, { recursive: true, force: true })
+  }
+})
+
+test('⑨c 历史 tsc emit 目录被清掉（electron-builder 的 dist glob 不再打包无人消费的编译产物）', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-sidecar-emit-'))
+  try {
+    const legacy = path.join(dir, 'dist', 'sidecar')
+    mkdirSync(legacy, { recursive: true })
+    writeFileSync(path.join(legacy, 'poc-sidecar.js'), '// legacy emit\n')
+    clearLegacySidecarEmit(legacy)
+    assert.equal(existsSync(legacy), false, '旧 emit 目录必须删除')
+    clearLegacySidecarEmit(legacy) // 幂等：不存在也不炸
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('⑨d host 包产物 fail-closed：缺一个即抛，不产出半套 host 包', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-host-artifacts-'))
+  try {
+    const good = path.join(dir, 'good')
+    mkdirSync(path.join(good, 'dist'), { recursive: true })
+    writeFileSync(path.join(good, 'package.json'), '{"name":"@dsh-chamber/good"}')
+    writeFileSync(path.join(good, 'dist', 'index.js'), 'export {}\n')
+    const bad = path.join(dir, 'bad')
+    mkdirSync(bad, { recursive: true })
+    writeFileSync(path.join(bad, 'package.json'), '{}')
+    const resolve = (name) => path.join(dir, name)
+    assert.doesNotThrow(() => assertHostPackageArtifacts([{ name: 'good' }], resolve))
+    assert.throws(
+      () => assertHostPackageArtifacts([{ name: 'bad' }], resolve),
+      /host 包 bad 缺少构建产物/,
+      '缺 dist/index.js 必须 fail closed（旧实现只 warn，产出宿主域缺席的 .app）',
+    )
+    // 全量前置：第一个齐备、第二个缺失也在拷贝前抛（不发布半新半旧的集合）。
+    assert.throws(() => assertHostPackageArtifacts([{ name: 'good' }, { name: 'bad' }], resolve), /bad/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 /** 跑 dry-run 的输入校验路径（不写盘、不联网）。 */
 /** 跑真实的 dry-run 校验路径（runBuildSidecar 的 dry-run 分支）。 */
 async function runDryRun(argv, warnings = []) {
@@ -448,7 +522,7 @@ test('⑦ normalizeSymlinks：树内→相对、树外→实体化、悬空 loud
   }
 })
 
-test('⑧ copyTree：树内相对链接原样保留、树外链接实体化', () => {
+test('⑧ copyTree：verbatim 只搬链接；树内相对链接保留、树外链接由 normalizeSymlinks 实体化', () => {
   const root = mkdtempSync(path.join(tmpdir(), 'dsh-copytree-'))
   try {
     const src = path.join(root, 'src')
@@ -462,15 +536,24 @@ test('⑧ copyTree：树内相对链接原样保留、树外链接实体化', ()
     symlinkSync('../pkg/cli.js', path.join(src, '.bin', 'inside'))
     symlinkSync(path.join(external, 'out.js'), path.join(src, '.bin', 'outside'))
 
-    const materialized = copyTree(src, dst)
-    assert.equal(materialized, 1)
-    // 树内相对链接：语义不变（pnpm .bin shim 的 import.meta.url 依赖它）
+    // cpSync(verbatimSymlinks: true)：链接原样搬运，不再自行 deref/绝对化。
+    copyTree(src, dst)
     assert.ok(lstatSync(path.join(dst, '.bin', 'inside')).isSymbolicLink())
     assert.equal(readlinkSync(path.join(dst, '.bin', 'inside')), '../pkg/cli.js')
     assert.equal(readFileSync(path.join(dst, 'pkg', 'cli.js'), 'utf8'), 'cli\n')
-    // 树外链接：实体化，产物自包含
+    assert.ok(lstatSync(path.join(dst, '.bin', 'outside')).isSymbolicLink(),
+      'copyTree 只搬链接（实体化是 normalizeSymlinks 的职责）')
+
+    // 实体化：唯一处置点，树外链接变成自包含文件。
+    const materialized = normalizeSymlinks(dst)
+    assert.equal(materialized, 1)
     assert.ok(!lstatSync(path.join(dst, '.bin', 'outside')).isSymbolicLink())
     assert.equal(readFileSync(path.join(dst, '.bin', 'outside'), 'utf8'), 'out\n')
+
+    // 悬空链接：copyTree 不再自带第二份检查，normalizeSymlinks loud。
+    symlinkSync(path.join(root, 'missing'), path.join(src, '.bin', 'dangling'))
+    copyTree(src, path.join(root, 'dst2'))
+    assert.throws(() => normalizeSymlinks(path.join(root, 'dst2')), /符号链接目标不存在/)
   } finally {
     rmSync(root, { recursive: true, force: true })
   }

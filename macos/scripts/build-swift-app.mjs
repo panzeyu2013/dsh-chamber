@@ -13,12 +13,17 @@
  *       sidecar/{node,sidecar.js,package.json,dist/…}   ← W-23 build-sidecar 产物
  *       dist/web/                     ← renderer 产物（可选；sidecar 静态伺服）
  *
- * 步骤：swift build（可 --skip-build）→ 组装 → Info.plist 渲染 → 嵌套签名
+ * 步骤：swift build（可 --skip-build）→ 组装（sidecar 必须自带可执行 node 与
+ * sidecar.js，build 时断言）→ 架构一致性断言（.app 可执行 vs 捆绑 node，lipo；
+ * build-sidecar 缺省 darwin-arm64 而 swift build 跟随宿主——不一致的 .app 过去能
+ * 签名打包、运行时才崩）→ Info.plist 渲染（plutil -lint）→ 嵌套签名
  * （sidecar/node，Developer ID 时带 hardened runtime + node 权限）→ 主签名
- * （--identity 缺省 ad-hoc `-`）→ zip（ditto）/ dmg（hdiutil）。
+ * （--identity 缺省 ad-hoc `-`）→ zip（ditto）/ dmg（hdiutil，卷内含
+ * /Applications 快捷方式）。
  *
  * 离线/沙箱：--skip-build 复用已有 .build 产物；--skip-sidecar 允许无 W-23
- * 产物时只验壳装配；--no-sign/--no-dmg/--no-zip 分步跳过。
+ * 产物时只验壳装配（此时不做 node 架构比对）；--no-sign/--no-dmg/--no-zip
+ * 分步跳过。
  *
  * 注意（2026-09 实测）：entitlements plist **不能带 XML 注释**——codesign 的
  * AMFIUnserializeXML 解析器对注释/非 ASCII 文本直接报
@@ -38,6 +43,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs'
 import path from 'node:path'
@@ -108,6 +114,9 @@ export function parseBuildSwiftAppArgs(argv) {
     noZip: false,
     noDmg: false,
     dryRun: false,
+    // 期望架构：null = 只断言 .app 与捆绑 node 存在交集（不猜宿主）；
+    // 显式值（arm64|x64）时两者都必须包含它。
+    arch: null,
     swiftArgs: [],
   }
   for (let index = 0; index < argv.length; index += 1) {
@@ -122,6 +131,11 @@ export function parseBuildSwiftAppArgs(argv) {
     else if (arg === '--artifact-basename') options.artifactBasename = next()
     else if (arg === '--config') options.config = next()
     else if (arg === '--identity') options.identity = next()
+    else if (arg === '--arch') {
+      const arch = next()
+      if (arch !== 'arm64' && arch !== 'x64') throw new Error(`--arch 只接受 arm64|x64：${arch}`)
+      options.arch = arch
+    }
     else if (arg === '--sidecar') options.sidecarDir = path.resolve(next())
     else if (arg === '--icon') options.iconPath = path.resolve(next())
     else if (arg === '--web-dist') options.webDistDir = path.resolve(next())
@@ -171,8 +185,13 @@ function quiet(command, args) {
   return { status: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' }
 }
 
-/** Mach-O magic（thin 32/64 + fat 大小端）——嵌套原生模块（.node/dylib）识别。 */
-const MACHO_MAGICS = new Set([0xfeedface, 0xfeedfacf, 0xcefaedfe, 0xcffaedfe, 0xcafebabe, 0xbebafeca])
+/** Mach-O magic（thin 32/64 + fat 32/64，大小端各一）——嵌套原生模块（.node/dylib）识别。 */
+const MACHO_MAGICS = new Set([
+  0xfeedface, 0xfeedfacf, // MH_MAGIC / MH_MAGIC_64（大端）
+  0xcefaedfe, 0xcffaedfe, // MH_CIGAM / MH_CIGAM_64（小端）
+  0xcafebabe, 0xbebafeca, // FAT_MAGIC / FAT_CIGAM
+  0xcafebabf, 0xbfbafeca, // FAT_MAGIC_64 / FAT_CIGAM_64（2026-12 P9：漏判会让 64 位胖文件逃避嵌套签名）
+])
 
 /** 读 4 字节判定是否 Mach-O（导出以便单测；读失败 → false）。 */
 export function isMachO(file) {
@@ -198,8 +217,13 @@ export function findNestedMachOFiles(rootDir) {
     let entries
     try {
       entries = readdirSync(dir, { withFileTypes: true })
-    } catch {
-      return
+    } catch (error) {
+      // fail closed（2026-12 P9）：旧实现静默 return——枚举不到嵌套 Mach-O 时
+      // 主签名仍会通过，未签名的 .node/可执行模块被「deep」校验放过，公证才炸。
+      throw new Error(
+        `无法读取待枚举目录（嵌套 Mach-O 签名前置）：${dir}——`
+        + (error instanceof Error ? error.message : String(error)),
+      )
     }
     for (const entry of entries) {
       const full = path.join(dir, entry.name)
@@ -234,6 +258,48 @@ export function codesignArgs(options, target, entitlements) {
   }
   args.push(target)
   return args
+}
+
+/** lipo -archs stdout → 架构集合（导出以便单测；x86_64/arm64e 归一化）。 */
+export function parseLipoArchs(stdout) {
+  const text = String(stdout)
+  const marker = 'architecture:'
+  // 旧版 lipo 对 thin 文件打印 "Non-fat file: … is architecture: arm64"。
+  const payload = text.includes(marker) ? text.slice(text.lastIndexOf(marker) + marker.length) : text
+  return [...new Set(payload.trim().split(/\s+/).filter(Boolean))]
+    .map((arch) => (arch === 'x86_64' ? 'x64' : arch === 'arm64e' ? 'arm64' : arch))
+}
+
+/**
+ * 读取 Mach-O 文件的架构集合（lipo -archs）。失败一律 throw（fail closed）：
+ * 一个 lipo 读不动的「可执行」正是需要拦下的产物。
+ */
+export function machOArchs(file) {
+  if (!existsSync(file)) throw new Error(`缺少可执行文件：${file}`)
+  const result = quiet('lipo', ['-archs', file])
+  if (result.status !== 0) {
+    throw new Error(`无法读取架构（lipo -archs exit ${result.status}）：${file}——${(result.stderr || result.stdout).trim()}`)
+  }
+  const archs = parseLipoArchs(result.stdout)
+  if (archs.length === 0) throw new Error(`lipo 未报告任何架构：${file}`)
+  return archs
+}
+
+/** DMG 的 hdiutil argv（纯函数；卷名必须来自 --app-name，而非壳内定名）。 */
+export function dmgCreateArgs(options, stageDir, dmgPath) {
+  return ['create', '-volname', options.appName, '-srcfolder', stageDir, '-ov', '-format', 'UDZO', dmgPath]
+}
+
+/**
+ * 搭 DMG 卷内容：.app 副本 + /Applications 快捷方式（Finder 拖拽安装惯例；
+ * 缺它的 DMG 只能手动把 app 拖出，2026-12 P7）。ditto 保签名与资源分叉。
+ */
+export function stageDmgVolume(appDir, stageDir, appName, io = { log: () => {} }) {
+  rmSync(stageDir, { recursive: true, force: true })
+  mkdirSync(stageDir, { recursive: true })
+  run('ditto', [appDir, path.join(stageDir, `${appName}.app`)], io)
+  symlinkSync('/Applications', path.join(stageDir, 'Applications'))
+  return stageDir
 }
 
 export async function runBuildSwiftApp(options, io = { log: console.log, error: console.error }) {
@@ -322,8 +388,42 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
     if (!existsSync(path.join(layout.sidecarDir, 'sidecar.js'))) {
       throw new Error(`sidecar 装配目录缺少 sidecar.js：${layout.sidecarDir}`)
     }
+    // 2026-12 P2：没有捆绑 node 时 runtime 会静默回落 PATH 上的系统 node——
+    // 签名与打包都会成功，但发布物的运行时依赖构建机环境。存在性与可执行位
+    // 必须在这里 fail closed（--skip-sidecar/--dry-run 才允许缺位）。
+    const bundledNode = path.join(layout.sidecarDir, 'node')
+    if (!existsSync(bundledNode)) {
+      throw new Error(`sidecar 装配目录缺少捆绑 node：${bundledNode}（runtime 会回落到 PATH 上的系统 node；先跑 build:sidecar，或用 --skip-sidecar）`)
+    }
+    const nodeStat = statSync(bundledNode)
+    if (!nodeStat.isFile()) {
+      throw new Error(`捆绑 node 不是常规文件：${bundledNode}`)
+    }
+    if ((nodeStat.mode & 0o111) === 0) {
+      throw new Error(`捆绑 node 没有可执行位：${bundledNode}（mode ${(nodeStat.mode & 0o777).toString(8)}）`)
+    }
   } else {
     throw new Error(`缺少 W-23 sidecar 装配目录：${options.sidecarDir}（先跑 build:sidecar，或用 --skip-sidecar）`)
+  }
+  // 2026-12 P4：build-sidecar 缺省 darwin-arm64，而 swift build 跟随宿主架构；
+  // 两者不一致的 .app 能签名、能打包，直到运行时才崩。lipo 读两边架构：必须
+  // 存在交集；显式 --arch 时两边都必须包含它（.app 可执行不存在/非 Mach-O 也
+  // 在这里 loud，不留给 codesign 的模糊报错）。
+  const appArchs = machOArchs(layout.executable)
+  if (options.arch !== null && !appArchs.includes(options.arch)) {
+    throw new Error(`.app 可执行架构不含 ${options.arch}：${layout.executable}（实际 ${appArchs.join('/')}）`)
+  }
+  if (!options.skipSidecar) {
+    const nodeArchs = machOArchs(path.join(layout.sidecarDir, 'node'))
+    if (options.arch !== null && !nodeArchs.includes(options.arch)) {
+      throw new Error(`捆绑 node 架构不含 ${options.arch}：实际 ${nodeArchs.join('/')}`)
+    }
+    if (!appArchs.some((arch) => nodeArchs.includes(arch))) {
+      throw new Error(
+        `.app 可执行与捆绑 node 架构无交集（.app ${appArchs.join('/')} ≠ node ${nodeArchs.join('/')}）`
+        + '——build:sidecar 的 --arch 必须与 swift build 的宿主架构一致',
+      )
+    }
   }
   if (existsSync(options.webDistDir)) {
     cpSync(options.webDistDir, layout.webDist, { recursive: true })
@@ -367,8 +467,15 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
   }
   if (!options.noDmg) {
     rmSync(layout.dmgPath, { force: true })
-    run('hdiutil', ['create', '-volname', APP_NAME, '-srcfolder', layout.appDir,
-      '-ov', '-format', 'UDZO', layout.dmgPath], io)
+    // 2026-12 P7：卷内容 = .app + /Applications 快捷方式；卷名来自 --app-name
+    // （旧实现固定 APP_NAME，与 --app-name dsh-chamber-native 的发布腿不符）。
+    const stageDir = path.join(layout.outDir, '.dmg-stage')
+    try {
+      stageDmgVolume(layout.appDir, stageDir, options.appName, io)
+      run('hdiutil', dmgCreateArgs(options, stageDir, layout.dmgPath), io)
+    } finally {
+      rmSync(stageDir, { recursive: true, force: true })
+    }
   }
 
   const size = statSync(layout.executable).size
@@ -383,7 +490,7 @@ if (isMain) {
     const options = parseBuildSwiftAppArgs(process.argv.slice(2))
     if (options.help) {
       console.log('用法：build-swift-app.mjs [--out <dir>] [--config release] [--identity <id>|-]')
-      console.log('       [--app-name <name>] [--artifact-basename <name>]')
+      console.log('       [--app-name <name>] [--artifact-basename <name>] [--arch arm64|x64]')
       console.log('       [--sidecar <dir>] [--icon <icns>] [--web-dist <dir>] [--skip-build]')
       console.log('       [--skip-sidecar] [--no-sign] [--no-zip] [--no-dmg] [--dry-run] [--swift-args "<args>"]')
       process.exit(0)

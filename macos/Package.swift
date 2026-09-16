@@ -8,10 +8,14 @@
 //    Swift 代码：本窗口壳（main/AppDelegate/MainWindowController，W-03）与
 //    W-04 的 A/B 桥文件（BridgeShimInjector/MessageHandler/AnyCodable/
 //    FrameCodec/BridgeClient，其他作者创建）同 target，模块内直接互引共享契约。
-//  - resources .process("Resources")：bridge-shim.poc.js 随包编译为
-//    DSHChamberPoc_DSHChamberPoc.bundle；运行时由 ChamberResources 定位
-//    （resourceURL → bundleURL → 可执行目录；**不用 Bundle.module**——装配态
-//    .app 与 dev `swift run` 两种布局都要覆盖，见 ChamberResources.swift 头注释）。
+//  - resources 显式列出 .process("Resources/bridge-shim.poc.js")：只有 A 桥 shim
+//    随包编译为 DSHChamberPoc_DSHChamberPoc.bundle（扁平）；运行时由
+//    ChamberResources 定位（resourceURL → bundleURL → 可执行目录；**不用
+//    Bundle.module**——装配态 .app 与 dev `swift run` 两种布局都要覆盖，见
+//    ChamberResources.swift 头注释）。**不要**把 Resources/ 整目录 process：
+//    同目录的 chamber-bridge.stub.js 是 JS 侧锁步生成物（测试断言它在源码树里
+//    存在），没有任何运行期代码加载它，打进 bundle 只会多一份可被替换/审计的
+//    JS 资产（2026-12 P8）。
 //  - testTarget「DSHChamberPocTests」（Tests/DSHChamberPocTests，测试文件由
 //    主 agent 后续创建）直接依赖 executable target：SwiftPM 允许测试依赖
 //    executable（@testable import DSHChamberPoc，构建期加 -enable-testing，
@@ -29,8 +33,14 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "DSHChamberPoc",
+            // JS 锁步生成物（chamber-bridge.stub.js）留在源码树供测试断言，
+            // 但不属于 Swift target 的输入——不 exclude 会得到 SwiftPM 的
+            // "unhandled file" 警告（2026-12 P8）。
+            exclude: [
+                "Resources/chamber-bridge.stub.js"
+            ],
             resources: [
-                .process("Resources")
+                .process("Resources/bridge-shim.poc.js")
             ]
         ),
         .testTarget(

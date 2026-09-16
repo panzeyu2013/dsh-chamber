@@ -1,12 +1,7 @@
 {
   "extends": "../../tsconfig.json",
   "compilerOptions": {
-    "noEmit": false,
-    "rootDir": ".",
-    "outDir": "dist/sidecar",
-    "rewriteRelativeImportExtensions": true,
-    "declaration": false,
-    "sourceMap": false
+    "rootDir": "."
   },
   "include": ["*.ts"],
   "exclude": [

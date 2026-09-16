@@ -7,13 +7,16 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { execFileSync, spawnSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   assertNoCollision,
   electronMacArtifacts,
   electronMacFeed,
+  missingArtifacts,
   nativeMacArtifacts,
   releaseManifest,
 } from './release-artifacts.mjs'
@@ -69,4 +72,28 @@ test('CLI 输出 JSON 清单', () => {
   assert.equal(manifest.version, '0.4.0')
   assert.deepEqual(manifest.electron.artifacts, electronMacArtifacts('0.4.0'))
   assert.deepEqual(manifest.native.artifacts, nativeMacArtifacts('0.4.0'))
+})
+
+test('--check-dir：清单成为真实消费者的断言，缺一即红（W-26 上传前门禁）', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-release-artifacts-'))
+  try {
+    const version = '0.4.0'
+    const native = nativeMacArtifacts(version)
+    for (const name of native) writeFileSync(join(dir, name), 'x')
+    const ok = execFileSync(process.execPath, [script, version, '--check-dir', dir], { encoding: 'utf8' })
+    assert.deepEqual(JSON.parse(ok).native.artifacts, native)
+
+    // 缺一个上传物 → 非零退出（发布腿不得上传与清单不符的名字）。
+    rmSync(join(dir, native[1]))
+    const bad = spawnSync(process.execPath, [script, version, '--check-dir', dir], { encoding: 'utf8' })
+    assert.notEqual(bad.status, 0, bad.stdout + bad.stderr)
+    assert.match(bad.stderr, /native 产物在 .* 缺失/)
+    assert.match(bad.stderr, new RegExp(native[1].replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')))
+
+    // 纯函数面：缺失清单只含真正缺失的名字。
+    assert.deepEqual(missingArtifacts(native, dir), [native[1]])
+    assert.deepEqual(missingArtifacts(native, dir, () => true), [])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
 })

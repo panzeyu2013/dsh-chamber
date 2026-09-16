@@ -13,16 +13,22 @@
  *  ③ 计划文本随开关变化；
  *  ④ --dry-run 子进程：模板/entitlements 就绪、不写盘；
  *  ⑤ 真实组装（--skip-build --skip-sidecar --no-sign --no-zip --no-dmg）：
- *     可执行位、资源包、Info.plist 版本、图标；
- *  ⑥ sidecar 装配拷贝 + A5 基名反例 loud；
+ *     可执行位、资源包（只含 bridge-shim.poc.js）、Info.plist 版本/图标/ATS、图标；
+ *  ⑥ sidecar 装配拷贝 + A5 基名反例 loud + 缺 node / node 无执行位 loud；
  *  ⑦ ad-hoc 签名 + codesign 校验通过（真实 codesign，无网络）；
  *  ⑧ codesignArgs argv 顺序（ad-hoc/hardened 分支互斥、identity 紧跟 --sign）；
- *  ⑨ entitlements 文件合法 plist 且为最小集。
+ *  ⑨ entitlements 文件合法 plist 且为最小集；
+ *  ⑩ 逃出 bundle 的绝对符号链接 → 归一化后真实 codesign 校验通过；
+ *  ④b Mach-O magic 全集（含 FAT_MAGIC_64）+ readdir 失败 fail closed；
+ *  ⑪ 架构断言：同宿主通过、--arch 反向 loud、.app 与捆绑 node 无交集 loud；
+ *  ⑫ lipo 输出解析（x86_64/arm64e/旧版 Non-fat 文案）；
+ *  ⑬ DMG 卷内容（/Applications 快捷方式）与卷名来自 --app-name（纯 + 真实 hdiutil）。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
 import {
+  chmodSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -44,11 +50,15 @@ import {
   assemblePlan,
   buildOutputDir,
   codesignArgs,
+  dmgCreateArgs,
   findNestedMachOFiles,
   isMachO,
+  machOArchs,
   parseBuildSwiftAppArgs,
+  parseLipoArchs,
   renderInfoPlist,
   runBuildSwiftApp,
+  stageDmgVolume,
 } from '../../../macos/scripts/build-swift-app.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -61,6 +71,30 @@ function tempOut() {
   return mkdtempSync(path.join(tmpdir(), 'dsh-swift-app-'))
 }
 
+/**
+ * 造一个真实（但极小）的 Mach-O 可执行文件——架构断言走 lipo，需要完整
+ * Mach-O 头/load command，字节魔数不足以让 lipo 读出架构。测试拿它当假 node。
+ */
+function fakeMachO(dir, name, arch) {
+  const target = path.join(dir, name)
+  // 源码走 stdin：sidecar 目录里不能留下 node.c（A5 基名断言只接受 node）。
+  execFileSync(
+    'cc',
+    ['-x', 'c', ...(arch === undefined ? [] : ['-arch', arch]), '-o', target, '-'],
+    { input: 'int main(void) { return 0; }\n' },
+  )
+  chmodSync(target, 0o755)
+  return target
+}
+
+/** 写一个最小可用的 sidecar 装配目录（真实 Mach-O node + sidecar.js/package.json）。 */
+function writeFakeSidecar(dir, nodeArch) {
+  writeFileSync(path.join(dir, 'sidecar.js'), '// fake')
+  writeFileSync(path.join(dir, 'package.json'), '{}')
+  fakeMachO(dir, 'node', nodeArch)
+  return dir
+}
+
 test('① 参数解析：缺省与覆盖', () => {
   const defaults = parseBuildSwiftAppArgs([])
   assert.equal(defaults.config, 'release')
@@ -70,13 +104,17 @@ test('① 参数解析：缺省与覆盖', () => {
   assert.equal(defaults.noSign, false)
   assert.deepEqual(defaults.swiftArgs, [])
 
+  assert.equal(defaults.arch, null, '缺省不猜宿主：只比对 .app 与 node 的架构交集')
+
   const parsed = parseBuildSwiftAppArgs([
     '--out', '/tmp/app', '--config', 'debug', '--identity', 'Developer ID Application: X',
     '--skip-build', '--skip-sidecar', '--no-sign', '--no-zip', '--no-dmg', '--dry-run',
-    '--swift-args', '--disable-sandbox -Xswiftc -O',
+    '--arch', 'x64', '--swift-args', '--disable-sandbox -Xswiftc -O',
   ])
   assert.equal(parsed.outDir, '/tmp/app')
   assert.equal(parsed.config, 'debug')
+  assert.equal(parsed.arch, 'x64')
+  assert.throws(() => parseBuildSwiftAppArgs(['--arch', 'mips']), /--arch 只接受 arm64\|x64/)
   assert.equal(parsed.identity, 'Developer ID Application: X')
   assert.equal(parsed.skipBuild, true)
   assert.equal(parsed.skipSidecar, true)
@@ -186,13 +224,23 @@ test('④b Mach-O 识别 + 嵌套原生文件枚举（公证前置）', () => {
     const fat = path.join(dir, 'nested', 'deep.node')
     mkdirSync(path.dirname(fat), { recursive: true })
     writeFileSync(fat, Buffer.from([0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 0]))
+    // 2026-12 P9：FAT_MAGIC_64 两个字节序都必须是 Mach-O（漏判会让 64 位胖二进制
+    // 逃避嵌套签名，公证才失败）。
+    const fat64 = path.join(dir, 'fat64.node')
+    writeFileSync(fat64, Buffer.from([0xca, 0xfe, 0xba, 0xbf, 0, 0, 0, 0]))
+    const fat64Swapped = path.join(dir, 'fat64-swapped.node')
+    writeFileSync(fat64Swapped, Buffer.from([0xbf, 0xba, 0xfe, 0xca, 0, 0, 0, 0]))
     const notMachO = path.join(dir, 'readme.js')
     writeFileSync(notMachO, 'module.exports = 1')
     assert.equal(isMachO(thin), true)
     assert.equal(isMachO(fat), true)
+    assert.equal(isMachO(fat64), true, 'FAT_MAGIC_64 (0xcafebabf) 必须是 Mach-O')
+    assert.equal(isMachO(fat64Swapped), true, 'FAT_CIGAM_64 (0xbfbafeca) 必须是 Mach-O')
     assert.equal(isMachO(notMachO), false)
     assert.equal(isMachO(path.join(dir, 'missing')), false)
-    assert.deepEqual(findNestedMachOFiles(dir), [fat, thin].sort())
+    assert.deepEqual(findNestedMachOFiles(dir), [fat, fat64, fat64Swapped, thin].sort())
+    // fail closed：枚举失败会让未签名的嵌套 Mach-O 逃过 deep 校验，绝不静默返回空表。
+    assert.throws(() => findNestedMachOFiles(path.join(dir, 'missing')), /无法读取待枚举目录/)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }
@@ -211,10 +259,22 @@ test('⑤ 真实组装：可执行位 / 资源包 / Info.plist 版本 / 图标',
     assert.ok(existsSync(layout.resourceBundle), 'SwiftPM 资源包应在 Contents/Resources')
     assert.ok(existsSync(path.join(layout.resourceBundle, 'bridge-shim.poc.js')),
       '资源包内应含 A 桥 shim（SwiftPM 资源包为扁平目录）')
+    // P8：chamber-bridge.stub.js 是 JS 锁步生成物，无运行期消费者——留在源码树
+    // 供 JS 测试断言，但不得进 bundle。
+    assert.ok(!existsSync(path.join(layout.resourceBundle, 'chamber-bridge.stub.js')),
+      '无运行期消费者的 stub 不得打进 SwiftPM 资源包')
+    assert.ok(existsSync(path.join(macosDir, 'Sources', 'DSHChamberPoc', 'Resources', 'chamber-bridge.stub.js')),
+      'stub 仍须留在源码树作为 JS 锁步产物')
     const plist = readFileSync(layout.infoPlist, 'utf8')
     const desktopPkg = JSON.parse(readFileSync(path.join(desktopDir, 'package.json'), 'utf8'))
     assert.ok(plist.includes(`<string>${desktopPkg.version}</string>`), 'Info.plist 版本 = chamber 版本')
     assert.ok(existsSync(layout.icon), 'icon.icns 应平移')
+    // P6：图标引用与 ATS 本地回环放行都必须真的写进产物 plist。
+    assert.match(plist, /<key>CFBundleIconFile<\/key>\s*<string>icon\.icns<\/string>/,
+      'Info.plist 必须引用平移到 Resources/icon.icns 的图标')
+    assert.ok(plist.includes('<key>NSAppTransportSecurity</key>'), 'ATS 字典必须存在')
+    assert.match(plist, /<key>NSAllowsLocalNetworking<\/key>\s*<true\/>/,
+      'http://127.0.0.1 控制面需要 ATS local networking 放行')
     const lint = spawnSync('plutil', ['-lint', layout.infoPlist], { encoding: 'utf8' })
     assert.equal(lint.status, 0, lint.stdout + lint.stderr)
   } finally {
@@ -226,7 +286,7 @@ test('⑥ sidecar 拷贝 + A5 基名反例 loud', async () => {
   const out = tempOut()
   const sidecar = mkdtempSync(path.join(tmpdir(), 'dsh-fake-sidecar-'))
   try {
-    writeFileSync(path.join(sidecar, 'sidecar.js'), '// fake')
+    writeFakeSidecar(sidecar)
     writeFileSync(path.join(sidecar, 'package.json'), '{}')
     const result = await runBuildSwiftApp(parseBuildSwiftAppArgs([
       '--out', out, '--sidecar', sidecar, '--skip-build', '--no-sign', '--no-zip', '--no-dmg',
@@ -234,6 +294,8 @@ test('⑥ sidecar 拷贝 + A5 基名反例 loud', async () => {
     const layout = appLayout(out)
     assert.ok(existsSync(path.join(layout.sidecarDir, 'sidecar.js')))
     assert.ok(existsSync(path.join(layout.sidecarDir, 'package.json')))
+    assert.ok(existsSync(path.join(layout.sidecarDir, 'node')), '捆绑 node 必须随装配进 .app（P2）')
+    assert.ok((statSync(path.join(layout.sidecarDir, 'node')).mode & 0o111) !== 0, 'node 必须可执行')
     assert.ok(result.layout)
 
     // 反例：node 名字不对（node-v24.18.1）→ A5 loud。
@@ -260,6 +322,33 @@ test('⑥ 缺 sidecar.js 的装配目录 loud', async () => {
         '--out', out, '--sidecar', sidecar, '--skip-build', '--no-sign', '--no-zip', '--no-dmg',
       ]), { log: () => {}, error: () => {} }),
       /缺少 sidecar\.js/,
+    )
+  } finally {
+    rmSync(out, { recursive: true, force: true })
+    rmSync(sidecar, { recursive: true, force: true })
+  }
+})
+
+test('⑥ 缺捆绑 node / node 无执行位 → loud（runtime 不再静默回落 PATH）', async () => {
+  const out = tempOut()
+  const sidecar = mkdtempSync(path.join(tmpdir(), 'dsh-fake-sidecar-nonode-'))
+  const argv = (dir) => parseBuildSwiftAppArgs([
+    '--out', out, '--sidecar', dir, '--skip-build', '--no-sign', '--no-zip', '--no-dmg',
+  ])
+  try {
+    writeFileSync(path.join(sidecar, 'sidecar.js'), '// fake')
+    writeFileSync(path.join(sidecar, 'package.json'), '{}')
+    await assert.rejects(
+      runBuildSwiftApp(argv(sidecar), { log: () => {}, error: () => {} }),
+      /缺少捆绑 node/,
+      '没有 node 的 sidecar 曾经能签名并打包成功（P2）',
+    )
+    const node = path.join(sidecar, 'node')
+    writeFileSync(node, '#!/bin/sh\n')
+    chmodSync(node, 0o644)
+    await assert.rejects(
+      runBuildSwiftApp(argv(sidecar), { log: () => {}, error: () => {} }),
+      /没有可执行位/,
     )
   } finally {
     rmSync(out, { recursive: true, force: true })
@@ -315,9 +404,7 @@ test('⑩ sidecar 含逃出 bundle 的绝对符号链接 → 归一化后真实 
   const sidecar = mkdtempSync(path.join(tmpdir(), 'dsh-fake-sidecar-link-'))
   const external = mkdtempSync(path.join(tmpdir(), 'dsh-external-target-'))
   try {
-    writeFileSync(path.join(sidecar, 'sidecar.js'), '// fake')
-    writeFileSync(path.join(sidecar, 'package.json'), '{}')
-    writeFileSync(path.join(sidecar, 'node'), '#!/bin/sh\necho fake\n')
+    writeFakeSidecar(sidecar)
     // 树外目标 + 树内目标各一枚绝对链接（cpSync 的产物形状）。
     writeFileSync(path.join(external, 'outside.js'), 'outside\n')
     mkdirSync(path.join(sidecar, 'vendor', 'dsh', 'node_modules', '.bin'), { recursive: true })
@@ -347,5 +434,106 @@ test('⑩ sidecar 含逃出 bundle 的绝对符号链接 → 归一化后真实 
     rmSync(out, { recursive: true, force: true })
     rmSync(sidecar, { recursive: true, force: true })
     rmSync(external, { recursive: true, force: true })
+  }
+})
+
+test('⑪ 架构：同宿主通过；--arch 反向 loud；.app 与 node 无交集 loud（P4）', async (t) => {
+  const binary = path.join(buildOutputDir('release'), APP_NAME)
+  if (!existsSync(binary)) {
+    t.skip('缺少 swift build 产物（先 swift build -c release）')
+    return
+  }
+  const hostArchs = machOArchs(binary)
+  const out = tempOut()
+  const same = mkdtempSync(path.join(tmpdir(), 'dsh-arch-same-'))
+  const other = mkdtempSync(path.join(tmpdir(), 'dsh-arch-other-'))
+  const argv = (dir, extra = []) => parseBuildSwiftAppArgs([
+    '--out', out, '--sidecar', dir, '--skip-build', '--no-sign', '--no-zip', '--no-dmg', ...extra,
+  ])
+  try {
+    writeFakeSidecar(same)
+    await assert.doesNotReject(
+      runBuildSwiftApp(argv(same), { log: () => {}, error: () => {} }),
+      '宿主架构一致的 .app + 捆绑 node 必须通过',
+    )
+    // 显式 --arch 反向：两个产物都不含它 → loud（App 检查先触发）。
+    const opposite = hostArchs.includes('arm64') ? 'x64' : 'arm64'
+    await assert.rejects(
+      runBuildSwiftApp(argv(same, ['--arch', opposite]), { log: () => {}, error: () => {} }),
+      /架构不含/,
+    )
+    // 交叉编译一枚异架构 node：无交集路径（非显式 --arch 分支）必须 loud——
+    // build-sidecar 缺省 darwin-arm64 + 宿主 swift build 正是这个形状。
+    const crossArch = hostArchs.includes('arm64') ? 'x86_64' : 'arm64'
+    writeFakeSidecar(other, crossArch)
+    await assert.rejects(
+      runBuildSwiftApp(argv(other), { log: () => {}, error: () => {} }),
+      /架构无交集/,
+    )
+  } finally {
+    rmSync(out, { recursive: true, force: true })
+    rmSync(same, { recursive: true, force: true })
+    rmSync(other, { recursive: true, force: true })
+  }
+})
+
+test('⑫ lipo 输出解析：x86_64/arm64e 归一化 + 旧版 Non-fat 文案', () => {
+  assert.deepEqual(parseLipoArchs('arm64\n'), ['arm64'])
+  assert.deepEqual(parseLipoArchs('x86_64 arm64\n'), ['x64', 'arm64'])
+  assert.deepEqual(parseLipoArchs('Non-fat file: /bin/ls is architecture: arm64\n'), ['arm64'])
+  assert.deepEqual(parseLipoArchs('arm64e\n'), ['arm64'])
+})
+
+test('⑬ DMG 卷内容：/Applications 快捷方式 + 卷名来自 --app-name', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-dmg-stage-'))
+  try {
+    const app = path.join(dir, 'Fake.app')
+    mkdirSync(path.join(app, 'Contents'), { recursive: true })
+    writeFileSync(path.join(app, 'Contents', 'Info.plist'), 'plist')
+    const stage = path.join(dir, 'stage')
+    stageDmgVolume(app, stage, 'dsh-chamber-native')
+    assert.ok(existsSync(path.join(stage, 'dsh-chamber-native.app', 'Contents', 'Info.plist')),
+      'DMG 卷内 app 名必须来自 --app-name')
+    const link = path.join(stage, 'Applications')
+    assert.ok(lstatSync(link).isSymbolicLink(), 'DMG 卷必须带 /Applications 快捷方式（P7）')
+    assert.equal(readlinkSync(link), '/Applications')
+    assert.deepEqual(
+      dmgCreateArgs({ appName: 'dsh-chamber-native' }, '/tmp/stage', '/tmp/x.dmg'),
+      ['create', '-volname', 'dsh-chamber-native', '-srcfolder', '/tmp/stage', '-ov', '-format', 'UDZO', '/tmp/x.dmg'],
+      'hdiutil 卷名必须来自 --app-name（不再固定 APP_NAME）',
+    )
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('⑬ 真实 DMG：卷内含 .app + /Applications 链接，卷名 = --app-name', async (t) => {
+  if (!existsSync('/usr/bin/hdiutil')) {
+    t.skip('hdiutil 不可用')
+    return
+  }
+  const out = tempOut()
+  try {
+    await runBuildSwiftApp(parseBuildSwiftAppArgs([
+      '--out', out, '--app-name', 'dsh-chamber-native',
+      '--artifact-basename', 'dsh-chamber-native-9.9.9-macos-arm64',
+      '--skip-build', '--skip-sidecar', '--no-sign', '--no-zip',
+    ]), { log: () => {}, error: () => {} })
+    const dmg = path.join(out, 'dsh-chamber-native-9.9.9-macos-arm64.dmg')
+    assert.ok(existsSync(dmg), 'DMG 应产出')
+    const mount = path.join(out, 'mnt')
+    mkdirSync(mount)
+    const attach = spawnSync('hdiutil', ['attach', '-nobrowse', '-readonly', '-mountpoint', mount, dmg], { encoding: 'utf8' })
+    assert.equal(attach.status, 0, attach.stderr + attach.stdout)
+    try {
+      assert.ok(existsSync(path.join(mount, 'dsh-chamber-native.app', 'Contents', 'Info.plist')))
+      assert.ok(lstatSync(path.join(mount, 'Applications')).isSymbolicLink(), '挂载卷内应有 /Applications 链接')
+      const info = spawnSync('diskutil', ['info', mount], { encoding: 'utf8' })
+      assert.match(info.stdout, /Volume Name:\s+dsh-chamber-native/)
+    } finally {
+      spawnSync('hdiutil', ['detach', mount, '-force'], { encoding: 'utf8' })
+    }
+  } finally {
+    rmSync(out, { recursive: true, force: true })
   }
 })

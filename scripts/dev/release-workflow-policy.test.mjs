@@ -39,7 +39,12 @@ const gatewayBuild = between('\n  build-gateway:', '\n  build-macos:')
 const macBuild = between('\n  build-macos:', '\n  build-windows:')
 const windowsBuild = between('\n  build-windows:', '\n  build-linux:')
 const linuxBuild = between('\n  build-linux:', '\n  build-swift:')
+// 2026-12 验证轮：整行注释必须先剥掉，否则被 `#` 注释掉的命令仍能满足锚点
+// 断言（notarytool 提交被注释后测试仍绿）。所有 swiftBuild.* 断言因此只看代码行。
 const swiftBuild = between('\n  build-swift:', '\n  finalize-release:')
+  .split('\n')
+  .filter((line) => !/^[ \t]*#/.test(line))
+  .join('\n')
 
 assert.match(tagBinding, /git rev-parse "\$\{TAG\}\^\{commit\}"/)
 assert.match(tagBinding, /TAG_SHA.*RELEASE_SHA/)
@@ -81,12 +86,102 @@ assert.match(gatewayBuild, /Upload gateway package to the draft release/)
 // identity (A6: missing Apple credentials block the release, never silently
 // downgrade to an ad-hoc build). The leg sits between build-linux and
 // finalize-release, so the linux slice above must stop at its boundary.
+//
+// 2026-12 audit (P1): the old block was satisfiable by the wrong code —
+// `--app-name dsh-chamber-native` alone matched the "native artifact names"
+// alternation, `--identity` alone matched the "identity|notarytool"
+// alternation, and nothing pinned the staple-before-archive order. Every claim
+// is now an exact-string or an order assertion.
 assert.match(swiftBuild, /pnpm run build:sidecar/)
 assert.match(swiftBuild, /pnpm run build:swift-app --out macos\/release/)
-assert.match(swiftBuild, /--app-name dsh-chamber-native/)
-assert.match(swiftBuild, /-native\.(dmg|zip)|dsh-chamber-native/, 'the native artifacts must keep their -native names')
+assert.ok(swiftBuild.includes('--app-name dsh-chamber-native'))
+assert.ok(swiftBuild.includes('--artifact-basename "dsh-chamber-native-${VERSION}-macos-arm64"'),
+  'the uploaded .zip/.dmg basename must be exact (a -native substring is not enough)')
+assert.ok(swiftBuild.includes('--identity "$IDENTITY"'),
+  'the resolved Developer ID identity must actually be passed to build:swift-app')
 assert.match(swiftBuild, /dry_run/, 'the native leg must branch on the dry-run input')
-assert.match(swiftBuild, /identity|notarytool/, 'the formal native leg must assert the signing identity')
+// Formal leg is credential fail-closed: no CSC_LINK → red; no Developer ID
+// identity inside the imported p12 → red. The no-credentials path is the
+// explicit dry-run branch only.
+assert.ok(
+  swiftBuild.includes('test -n "${CSC_LINK:-}" || { echo "::error::formal Swift release requires CSC_LINK"; exit 1; }'),
+  'formal native release must fail closed when CSC_LINK is absent',
+)
+assert.ok(swiftBuild.includes('no Developer ID Application identity in CSC_LINK'),
+  'formal native release must fail closed when the p12 carries no Developer ID identity')
+// Formal leg assembles+signs only (--no-zip --no-dmg): the archives are made
+// AFTER notarization+stapling, otherwise the uploaded .app has no ticket.
+// The array is used through the bash-3.2-safe guarded expansion (macOS runner
+// default bash + `set -u`: a bare "${ARTIFACT_ARGS[@]}" on the empty dry-run
+// array is an unbound-variable error). Pin the value and exactly two
+// expansions.
+assert.ok(swiftBuild.includes('ARTIFACT_ARGS=(--no-zip --no-dmg)'),
+  'the formal leg must defer zip/dmg creation until after stapling')
+assert.ok(
+  swiftBuild.includes('if [[ "$DRY_RUN" != "true" ]]; then')
+  && swiftBuild.indexOf('ARTIFACT_ARGS=(--no-zip --no-dmg)')
+    > swiftBuild.indexOf('if [[ "$DRY_RUN" != "true" ]]; then'),
+  '--no-zip/--no-dmg are the FORMAL branch, never the dry run',
+)
+assert.ok(swiftBuild.includes('${ARTIFACT_ARGS[@]+"${ARTIFACT_ARGS[@]}"}'),
+  'the artifact args must use the bash-3.2-guarded array expansion')
+assert.equal((swiftBuild.split('ARTIFACT_ARGS[@]').length - 1), 2,
+  'ARTIFACT_ARGS[@] must be expanded exactly twice (guard + value)')
+// Notarize then staple the .app BEFORE any distribution archive is written:
+// a zip/dmg generated before stapling ships an unticketed app (offline
+// Gatekeeper rejects it). The DMG itself is notarized+stapled after creation.
+const notarySubmit = swiftBuild.indexOf('xcrun notarytool submit')
+const dmgSubmit = swiftBuild.indexOf('xcrun notarytool submit "${BASE}.dmg"')
+const appStaple = swiftBuild.indexOf('xcrun stapler staple "$APP"')
+const appValidate = swiftBuild.indexOf('xcrun stapler validate "$APP"')
+const zipWrite = swiftBuild.indexOf('ditto -c -k --sequesterRsrc --keepParent "$APP" "${BASE}.zip"')
+const dmgCreate = swiftBuild.indexOf('hdiutil create')
+const dmgStaple = swiftBuild.indexOf('xcrun stapler staple "${BASE}.dmg"')
+assert.ok(notarySubmit !== -1, 'the formal leg must submit the app to notarytool')
+assert.ok(appStaple !== -1, 'the formal leg must staple the app')
+assert.ok(appStaple > notarySubmit, 'staple must follow the notarytool submit')
+assert.ok(appValidate > appStaple, 'the stapled app must be validated')
+assert.ok(zipWrite > appStaple, 'the distribution zip must be written AFTER the app is stapled')
+assert.ok(dmgCreate > appStaple, 'the distribution dmg must be created AFTER the app is stapled')
+assert.ok(dmgSubmit !== -1, 'the dmg itself must be submitted to notarytool (P7)')
+assert.ok(dmgSubmit > dmgCreate, 'the dmg notarization must follow its creation')
+assert.ok(dmgStaple > dmgSubmit, 'the dmg staple must follow its own notarization')
+assert.equal(swiftBuild.split('xcrun notarytool submit').length - 1, 2,
+  'exactly two notarytool submissions: the .app and the .dmg')
+assert.ok(swiftBuild.includes('ln -s /Applications "$DMG_STAGE/Applications"'),
+  'the dmg volume must carry the /Applications symlink (P7)')
+// Fail-closed verification of the UPLOADED blobs, not only the staged .app.
+assert.ok(
+  swiftBuild.split('\n').some((line) => line.trim() === 'node scripts/dev/release-artifacts.mjs "$VERSION" --check-dir macos/release'),
+  'release-artifacts must be a real consumer so its collision assertion observes the real tag names',
+)
+assert.ok(swiftBuild.includes('ditto -x -k "${BASE}.zip" "$EXTRACT"'),
+  'the zip actually uploaded must be extracted and re-verified (P4)')
+assert.ok(swiftBuild.includes('codesign --verify --deep --strict --verbose=2 "$ZIP_APP"'),
+  'codesign --verify must run on the app inside the zip')
+assert.ok(swiftBuild.includes('spctl --assess --type execute --verbose=4 "$ZIP_APP"'),
+  'spctl must assess the app inside the zip')
+assert.ok(swiftBuild.includes('lipo -archs "$APP/Contents/MacOS/DSHChamberPoc"'),
+  'the .app binary architecture must be asserted')
+assert.ok(swiftBuild.includes('lipo -archs "$APP/Contents/Resources/sidecar/node"'),
+  'the bundled node architecture must be asserted')
+// Closure: the .app must carry the sidecar entrypoint, the assembly
+// package.json, the control-plane relative entry and all four host packages.
+assert.ok(swiftBuild.includes('test -f "$APP/Contents/Resources/sidecar/package.json"'))
+assert.ok(swiftBuild.includes('test -f "$APP/Contents/Resources/sidecar/dist/control-plane/index.js"'))
+// The loop's package list is pinned as an EXACT token set: a substring assertion
+// would stay green if a name gained a suffix (…-open-in → …-open-in-x), which is
+// exactly the drift the 2026-12 verification round found (exactness, not
+// mutation-proven text).
+const hostLoop = swiftBuild.match(/for HOST in ([^;]*); do/)
+assert.ok(hostLoop !== null, 'the closure check must iterate the host packages through $HOST')
+assert.deepEqual(
+  (hostLoop?.[1] ?? '').replace(/\\\n\s*/g, ' ').trim().split(/\s+/).sort(),
+  ['dsh-chamber-seed-archive-cleanup', 'dsh-chamber-seed-client-graph', 'dsh-chamber-seed-git-worktree', 'dsh-chamber-seed-open-in'],
+  'the host-package loop list must be exactly the four shipped host packages',
+)
+assert.ok(swiftBuild.includes('test -f "$APP/Contents/Resources/sidecar/dist/$HOST/dist/index.js"'),
+  'the closure loop must test the per-host dist entry inside the .app')
 
 for (const build of [macBuild, windowsBuild, linuxBuild]) {
   assert.match(build, /electron-builder\.beta\.yml/)

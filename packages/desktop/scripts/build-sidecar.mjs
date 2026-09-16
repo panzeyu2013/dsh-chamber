@@ -14,8 +14,10 @@
  *                                  加载——包外裸说明符在打包态不可解析）
  *
  * 步骤：
- *   1. tsc -p tsconfig.sidecar.build.json —— 编译闭包校验（Electron-free 家族
- *      全家可编译；失败即 loud 中止，不产出半成品）；
+ *   1. tsc -p tsconfig.sidecar.build.json —— 编译闭包校验（noEmit；Electron-free
+ *      家族全家可编译；失败即 loud 中止，不产出半成品。历史上这一步 emit 到
+ *      packages/desktop/dist/sidecar，但没有任何运行期消费者，而 electron-builder
+ *      的 dist/** files glob 会把它打进 Electron 包——已改 noEmit 并清理遗留目录）；
  *   2. esbuild 打包 sidecar-entry.ts → sidecar.js（platform=node、format=esm、
  *      target=node22；external：@dsh-chamber/control-plane / electron /
  *      ./dist/control-plane/index.js——三者都在运行期由装配目录解析）；
@@ -25,8 +27,12 @@
  *      SHASUMS256.txt 并响亮说明）→ 解出 bin/node → 落位 <out>/node（0755）
  *      → **基名断言**。
  *
- * 离线/无网：--skip-node 跳过第 4 步（布局仍完整，仅缺 node，供 dev/CI 校验）；
- * --dry-run 只打印计划与输入校验，不写盘、不联网。
+ * 离线/无网：--skip-node 跳过第 4 步（供 dev/CI 校验）；--dry-run 只打印计划与
+ * 输入校验，不写盘、不联网。
+ * **--skip-* 的诚实语义（2026-12 P3）**：<out> 是持久装配目录，跳过必须产生
+ * **缺位**，而不是继承上一轮的产物——每个 skip 开关在开工前清掉自己的目标
+ * （node / sidecar.js / vendor+dsh / dist），否则上一轮的 node/vendor 会留在装配
+ * 里被 .app 一起签名发布，而构建日志却声称「已跳过」。
  *
  * 运行期标记：Swift Supervisor spawn `<sidecar>/sidecar.js` 时必须带
  * `DSH_CHAMBER_SIDECAR_COMPILED=1`（control-plane-module.isPackagedSidecarRuntime）
@@ -126,6 +132,27 @@ export const HOST_PACKAGES = [
   { name: 'dsh-chamber-seed-open-in', arg: 'host-open-in-dir' },
 ]
 
+/**
+ * host 包构建产物的 fail-closed 前置检查（导出以便单测）：sourceDir 下必须有
+ * package.json 与 dist/index.js。Electron 侧同款拷贝（build-host-graph-package.mjs）
+ * 缺产物直接 exit 1；这里过去只 warn，于是装配能「成功」产出宿主域整体缺席的 .app。
+ * @param {{ name: string }[]} hostPackages - 要检查的包（顺序无关）
+ * @param {(name: string) => string} resolveSourceDir - 包名 → 源目录
+ */
+export function assertHostPackageArtifacts(hostPackages, resolveSourceDir) {
+  for (const host of hostPackages) {
+    const sourceDir = resolveSourceDir(host.name)
+    const artifact = path.join(sourceDir, 'dist', 'index.js')
+    const manifest = path.join(sourceDir, 'package.json')
+    if (!existsSync(artifact) || !existsSync(manifest)) {
+      throw new Error(
+        `host 包 ${host.name} 缺少构建产物：${!existsSync(artifact) ? artifact : manifest}`
+        + '（先跑 pnpm run build:host-packages；或显式 --skip-host-packages 表达本次不要 host 包）',
+      )
+    }
+  }
+}
+
 export function sidecarLayout(outDir) {
   return {
     outDir,
@@ -150,54 +177,23 @@ export const VENDOR_DSH_FILES = ['package.json', 'pnpm-lock.yaml', 'pnpm-workspa
 export const PNPM_BIN_FILES = ['pnpm.cjs', 'pnpm.mjs']
 
 /**
- * 拷贝目录树并**正确保留树内相对符号链接**。
+ * 拷贝目录树并**原样保留符号链接**（含相对拼写）。
  *
- * 为什么不用 `fs.cpSync`：cpSync（含 `dereference: true`）会把相对链接改写成
- * 指向源树的**绝对**链接（Node 24 实测），产物于是含逃出 bundle 的链接，
+ * 为什么用 cpSync(verbatimSymlinks: true)：cpSync 的缺省行为
+ * （verbatimSymlinks=false，含 dereference: true）会把相对链接改写成指向源树的
+ * **绝对**链接（Node 24 实测），产物于是含逃出 bundle 的链接，
  * `codesign --verify --strict` 必挂；而把 `.bin/*` 一律实体化又会破坏
- * `import.meta.url` 相对解析（那些 shim 指向模块文件）。
+ * `import.meta.url` 相对解析（那些 shim 指向模块文件）。verbatimSymlinks
+ * 让复制只搬链接本身，链接语义交给下一步。
  *
- * 规则：
- * - 链接目标（realpath）在**源树内** → 目标字符串原样复制到镜像位置
- *   （源树结构同构，相对目标在副本里依然成立，语义不变）；
- * - 目标在源树外 → 实体化（文件 / 目录递归复制），产物自包含；
- * - 目标不存在 → throw（loud）。
- *
- * 返回实体化计数。
+ * 链接处置（**唯一**的实现点是 normalizeSymlinks，所有调用点都在 copyTree
+ * 之后立刻调用它）：
+ * - 树内链接 → 保持链接（相对拼写原样）；
+ * - 树外链接 → 由 normalizeSymlinks 实体化，产物自包含；
+ * - 悬空链接 → normalizeSymlinks loud（绝不留下悬空链接）。
  */
 export function copyTree(sourceDir, destDir) {
-  const realSource = realpathSync(sourceDir)
-  const insideSource = (p) => p === realSource || p.startsWith(realSource + path.sep)
-  let materialized = 0
-  const walk = (src, dst) => {
-    mkdirSync(dst, { recursive: true })
-    for (const entry of readdirSync(src)) {
-      const from = path.join(src, entry)
-      const to = path.join(dst, entry)
-      const lst = lstatSync(from)
-      if (lst.isSymbolicLink()) {
-        const raw = readlinkSync(from)
-        const resolved = path.resolve(path.dirname(from), raw)
-        if (!existsSync(resolved)) {
-          throw new Error(`符号链接目标不存在：${from} -> ${raw}`)
-        }
-        const real = realpathSync(resolved)
-        if (insideSource(real)) {
-          symlinkSync(raw, to)
-        } else {
-          rmSync(to, { recursive: true, force: true })
-          cpSync(real, to, { recursive: true, dereference: true })
-          materialized += 1
-        }
-      } else if (lst.isDirectory()) {
-        walk(from, to)
-      } else {
-        copyFileSync(from, to)
-      }
-    }
-  }
-  walk(sourceDir, destDir)
-  return materialized
+  cpSync(sourceDir, destDir, { recursive: true, verbatimSymlinks: true })
 }
 
 /**
@@ -261,6 +257,15 @@ export function normalizeSymlinks(rootDir) {
     }
   }
   return rewritten
+}
+
+/**
+ * 清掉历史 tsc emit 目标（packages/desktop/dist/sidecar）。
+ * 该目录已无任何消费者，但 electron-builder 的 `dist` files glob 会把它打进
+ * Electron 包，所以旧 checkout 上的遗留必须删除而不是留在那里（导出以便单测）。
+ */
+export function clearLegacySidecarEmit(emitDir) {
+  rmSync(emitDir, { recursive: true, force: true })
 }
 
 /** 拷贝内置 dsh 工作区（缺源时返回 false，由调用方决定 warn/fatal）。 */
@@ -416,7 +421,7 @@ export function parseBuildSidecarArgs(argv) {
 export function buildPlan(options) {
   const layout = sidecarLayout(options.outDir)
   const steps = [
-    `[1] tsc -p tsconfig.sidecar.build.json（编译闭包校验 → dist/sidecar）`,
+    '[1] tsc -p tsconfig.sidecar.build.json（编译闭包校验，noEmit）',
   ]
   if (options.skipBundle) steps.push('[2] 跳过 esbuild 打包（--skip-bundle）')
   else steps.push(`[2] esbuild 打包 sidecar-entry.ts → ${layout.entry}`)
@@ -642,7 +647,19 @@ export async function runBuildSidecar(options, io = { log: console.log, warn: co
 
   mkdirSync(layout.outDir, { recursive: true })
 
-  // 1. tsc 编译闭包校验（Electron-free 家族可编译）。
+  // 0. skip 的诚实语义（见文件头）：每个被跳过的目的地先清空，跳过 = 缺位。
+  if (options.skipBundle) rmSync(layout.entry, { force: true })
+  if (options.skipHostPackages) rmSync(layout.dist, { recursive: true, force: true })
+  if (options.skipVendor) {
+    rmSync(layout.vendorDsh, { recursive: true, force: true })
+    rmSync(layout.pnpm, { recursive: true, force: true })
+  }
+  if (options.skipNode) rmSync(layout.node, { force: true })
+  // 历史 tsc emit 遗留：noEmit 之后本脚本不再生成它，旧目录必须消失（否则
+  // electron-builder 的 dist/** glob 会把无人消费的编译产物打进 Electron 包）。
+  clearLegacySidecarEmit(path.join(desktopDir, 'dist', 'sidecar'))
+
+  // 1. tsc 编译闭包校验（Electron-free 家族可编译；noEmit，见 tsconfig）。
   const tscEntry = path.join(repoRoot, 'node_modules', 'typescript', 'bin', 'tsc')
   if (!existsSync(tscEntry)) throw new Error('未找到 TypeScript（先 pnpm install）')
   const compiled = spawnSync(process.execPath, [tscEntry, '-p', tsconfig], { stdio: 'inherit', shell: false })
@@ -680,19 +697,20 @@ export async function runBuildSidecar(options, io = { log: console.log, warn: co
   }, null, 2)}\n`)
   io.log(`[build-sidecar] package.json（version=${desktopPkg.version ?? 'unknown'}）→ ${layout.packageJson}`)
 
-  // 3c. chamber host 包（打包态 seed 源；缺失只 warn 不 fatal——宿主域缺席是
-  // 可诊断的降级，构建脚本不替运行期决定）。
+  // 3c. chamber host 包（打包态 seed 源）。**fail closed**（2026-12 P2）：Electron
+  // 侧同款拷贝（build-host-graph-package.mjs）缺产物直接 exit 1；这里过去只 warn，
+  // 于是装配可以「成功」产出一个宿主域整体缺席、却自称完整的 .app。source 不存在
+  // 或缺 dist/index.js 都是构建顺序错误，不是可降级状态；显式 --skip-host-packages
+  // 才是表达「本次不要 host 包」的开关。
   if (options.skipHostPackages) {
     io.log('[build-sidecar] 跳过 host 包拷贝（--skip-host-packages）')
   } else {
+    // 先全量检查再拷贝：缺第二个包时不得发布半新半旧的 host 包集合。
+    assertHostPackageArtifacts(HOST_PACKAGES, (name) => path.join(repoRoot, 'packages', name))
     for (const host of HOST_PACKAGES) {
       const sourceDir = path.join(repoRoot, 'packages', host.name)
       const artifact = path.join(sourceDir, 'dist', 'index.js')
       const manifest = path.join(sourceDir, 'package.json')
-      if (!existsSync(artifact) || !existsSync(manifest)) {
-        io.log(`[build-sidecar] 警告：host 包 ${host.name} 缺少构建产物（先跑 build:host-packages）——跳过`)
-        continue
-      }
       const target = layout.hostPackageDist(host.name)
       rmSync(target, { recursive: true, force: true })
       mkdirSync(path.join(target, 'dist'), { recursive: true })
