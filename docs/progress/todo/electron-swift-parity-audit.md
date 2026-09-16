@@ -1660,6 +1660,10 @@ Swift \`requestQuitFacts\` 走 sidecar \`__host.quitFacts\`（\`AppDelegate.swif
 ### V11 · 隐藏窗口的定时器节流（C1）
 
 - **Electron**：`backgroundThrottling:false`（`main.ts:861`），隐藏后 SSE/WS 心跳与重连计时器不被节流。
+  - **2026-12 更新（本条差异已消除）**：实测换判——`main.ts` 不再设置该项（关闭节流会让 Electron
+    永久抑制隐藏态：隐藏后 rAF 仍 120/s、`visibilityState` 恒 visible、六处后台门控从不生效、
+    renderer CPU 最高 28.1%；恢复默认后隐藏期 0.0–0.1%，SSE 不受影响）。两侧隐藏态行为自此同向，
+    见 design 14 §D1 / design 25 C1；打包态实机复核仍挂在 STATUS 实机门禁。
 - **Swift**：WKWebView 无等价开关（design 25 §5 E19/§8.1 C1 明示），隐藏态下页面定时器可能被系统降频；App 侧有 `visibilitychange` 补偿（`App.tsx:1874-1878`）与唤醒补发。
 - **触发条件**：关窗隐藏 ≥30s 后。
 - **用户可感后果**：Swift 版隐藏期间会话运行态/心跳更新可能变慢；唤醒/重开时才补齐。**能否消解**：设计层未定（keep-alive/唤醒补发方案 C1）；**需产品裁决**：是（STATUS 已挂实机门禁）。

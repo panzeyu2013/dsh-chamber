@@ -98,7 +98,7 @@
 | B10/C4 | 网页 Notification 双路径风险（WKWebView 无等价预拒绝 API） | §5 E4 加注 + P0 检查项 |
 | B11 | openExternal 预算/冷却/规范化语义 | 留 core；edge 只执行 NSWorkspace.open 并 loud 失败 |
 | B12 | MAIN_SIDE_FILES/badge pin 测试锚点迁移 + 无死键断言 | §4.4.3/P1 增补 |
-| C1 | Electron backgroundThrottling:false 无 WKWebView 等价物 | **P0 G2/G5 增子项**（hide ≥30s SSE 心跳/唤醒实测，失败=已知降级或 keep-alive 方案） |
+| C1 | Electron backgroundThrottling:false 无 WKWebView 等价物 | **2026-12 收敛**：design 14 §D1 修订把 Electron 侧恢复为 Chromium 默认节流（实测隐藏期 rAF 0 / SSE 不受影响），两 flavor 隐藏态行为同向，本项差异消除；**P0 G2/G5 的实机子项保留**（打包态 hide ≥30s SSE 心跳/唤醒 + 隐藏期 CPU，见 STATUS 实机门禁） |
 | C2 | WebKit 存储隔离（WKWebsiteDataStore 独立 jar） | §6.2 共存语义写明；**P0 增实测**（双 flavor 交替同实例的会话 cookie/登录态） |
 | C3/E6 | 剪贴板读写权限模型差异 | §5 E16 行文精确 + P0 对拍加"粘贴/剪贴板读" |
 | D1 | shim 挂出时机 vs preload"先 info 后 expose"语义 | §4.4.1 定案方案②：documentStart 预定义完整 API + ready 前 expectedOrigin nil（全部 invoke 回 `ipc_sender_forbidden`），渲染端 10×50ms 有界重试自愈 |
