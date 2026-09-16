@@ -36,6 +36,18 @@
 | A-5 | sidecar 重启丢弃已缓冲未补发的深链（S4·F2，RendererRecovery.swift:130） | reset 只复位就绪位、保留缓冲，下一 ready 帧 FIFO 补发 | swift test 166/166（新增 `testDeepLinkRelayResetKeepsUnsentBufferAcrossRestart`） |
 | A-6 | 装配态仍接受 POC_* 环境覆盖（S5·F13 / S5·D3，AppDelegate.swift:68） | 打包 .app 忽略全部 `POC_*`；dev（swift run/非 .app）路径不变 | swift test 166/166 |
 | A-7 | 退出清理未收回 keep-awake / 未清 Dock 角标（S3·D13 / S2·V5，AppDelegate.swift beginTerminationCleanup） | 退出清理起点显式清理，不经 A 桥 no-window 守卫（窗口可能已关） | swift test 166/166 |
+| A-17 | 更新检查触发面：Swift 仅手动检查（S5·F3 / S5·U1 / S6·F2） | headless 控制器 `start()` 改为 15s 静默首检 + 6h 周期（常量与 updater.ts 同值并锁步单测），退出时 `stop()` 清表；ready 后按 Electron main.ts 同序启动 | update-headless 15/15（新增假定时器用例）；check:static 9/9 |
+| A-18 | 唤醒后 transport 即时重探缺失（S3·D2） | sidecar 侧新增 `reconnectStaleTransports` 叶（判据逐字对齐 main.ts:679-697，复用 core `TransportManager.connect`），在 `__host.systemResume` 入站帧上双腿消费 | sidecar-stdio 16/16（含 systemResume e2e）；node-edges 24/24 |
+| A-19 | 损坏 chamber-settings 的 notice 被静默丢弃（S2·F14） | `loaded.notice !== null` 即 loud（与 Electron 同路），读取异常同样 loud 回退默认值 | sidecar-stdio 16/16 |
+| A-20 | stdout 重定向在 import 之后（S2·F8） | 抽出零依赖 `sidecar-console-redirect.ts` 并作为入口第一条 import（协议纪律变结构性），`safeStringify` 单源化 | sidecar-stdio 16/16（stdout 零污染行为证明） |
+| A-9 | 窗口标题/品牌面仍带 POC 后缀（S3·V8 / S4·U5 / S5·U5 / S6·V6） | 标题冻结为 `dsh-chamber`，失败框/菜单同步；应用名与 bundle 显示名维持 Info.plist | swift test 170/170 |
+| A-10 | 应用菜单面缩水、无托盘入口（S3·V4/V5、S4·U3/U4、S6·V3/V5、S5·U6） | App 菜单补 About/服务/隐藏/隐藏其他/显示全部；窗口菜单补缩放/前置全部窗口；新增 NSStatusItem「显示窗口/退出」 | swift test 170/170（菜单断言新增） |
+| A-11 | 退出确认默认按钮相反（S3·V2），showMessage 忽略 defaultId/cancelId（S4·F5 / S2·F5） | 退出确认 Enter 命中「取消」（对齐 Electron defaultId/cancelId=1）；showMessage 按 defaultId→Enter、cancelId→Esc 映射 | swift test 170/170 |
+| A-12 | 通知音效不同（S3·V7 / S2·V4 / S6·V10） | 用具名系统音效（缺省 Glass，对齐 electron-edges darwin）；新增纯函数 `notificationSoundName` | swift test 170/170（新增音效名/解码用例） |
+| A-13 | SIGTERM/SIGINT 未接优雅退出（S3·D12 / S5·F10） | DispatchSourceSignal → NSApp.terminate，走完整退出链 | swift test 170/170 |
+| A-14 | 缺 macOS 冷启动 argv 深链扫描（S4·F1） | 启动时按 scheme 扫 argv 并复用同一条深链缓冲；新增纯函数 `commandLineDeepLinks` | swift test 170/170（新增筛选用例） |
+| A-15 | sidecar fatal 后应用与死桥长存（S2·F2） | 呈现致命提示后 `exit(1)`（对齐 Electron app.exit(1)） | swift test 170/170；test:macos 17/18（仅本机沙箱 DMG 用例受限） |
+| A-16 | 媒体采集权限无门（S3·D11 / S4·F9，部分） | WKUIDelegate 显式拒绝摄像头/麦克风/屏幕共享；剪贴板与网页 Notification 的等价面仍缺（见条目正文） | swift test 170/170 |
 | A-8 | 新测试门在开发者机误红：desktop 测试清单锁步扫描到 `packages/desktop/.dev-user-data`（dev 运行态里的他仓 worktree） | `test-runner-lockstep.test.mjs` 与 `verify-test-wiring.mjs` 忽略目录增加 `.dev-user-data` | `test:desktop` 复跑通过 |
 
 ## 3. 条目索引
@@ -380,6 +392,8 @@
 - 风险：低（协议增量、两侧同提交改）。需产品裁决：否。
 
 ### F2 · sidecar fatal / 重启耗尽后应用不退出（Electron 的 fatal = 进程终止）
+
+> 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - Electron：主进程 uncaughtException/unhandledRejection = `fatalMainError → app.exit(1)`（main.ts:246-266）；没有「宿主崩溃后继续运行」的形态。
 - Swift：sidecar 非零退出（1）→ Supervisor 500ms/60s 窗口 ≤3 次退避重启（SidecarSupervisor.swift:435-449）；耗尽或 exit 3/70 → `markFatal`（:416-426、:436-437、:468-474）→ AppDelegate 只弹 NSAlert（AppDelegate.swift:610-622，非阻塞 sheet），应用与窗口继续存活，bridge 未运行。
 - 触发条件：sidecar 60s 内 4 次崩溃；或运行期控制面启动失败（exit 70）/锁冲突（exit 3）。
@@ -405,6 +419,8 @@
 - 风险：① 若 Swift 腿真的挂起（main-thread-busy 分支已覆盖超时），node 侧无线会悬挂；② 只把竞态窗口推后。需产品裁决：**是**（见 D4）。
 
 ### F5 · showMessage 忽略 defaultId/cancelId/noLink（NSAlert 语义不等价）
+
+> 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - Electron：`dialog.showMessageBox(win, opts)` 原样使用 type/title/message/detail/buttons/defaultId/cancelId/noLink（electron-edges.ts:338-343）。
 - Swift：showMessageBody 只读 type/title/message/detail/buttons，忽略 defaultId/cancelId/noLink（SwiftEdgeHostLegs.swift:565-600），按钮序按添加顺序，返回值 = 原始 raw-1000 夹紧（:597-599）。
 - 触发条件：任何需要 defaultId/cancelId 语义的对话框，尤其用户按 Esc/关闭框时。
@@ -431,6 +447,8 @@
 - 风险：中（把 fire-and-forget 改 ACK 会触碰退出时序；退役计数在 mac 上本就不可能等于「关闭的原生通知数」语义，可改为返回登记表驱逐数并注明语义）。需产品裁决：否。
 
 ### F8 · stdout 重定向在 import 之后（协议纪律非结构性）
+
+> 状态：**已消解**（本次功能对齐批次：sidecar 宿主路径补齐）。
 - Electron：无 B 桥；console 去向不与协议冲突。
 - Swift：sidecar-entry.ts 顶部先 import 全部依赖（36-63 行，ESM 依赖模块体在入口体之前求值），再在 82-88 行覆盖 console.log/info/debug；esbuild 的 ESM bundle 保持该求值序（build-sidecar.mjs:485-507）。任何依赖模块的顶层 console.log/process.stdout.write 都会在重定向生效前写进协议流。
 - 触发条件：未来任一被 bundle 的模块（shell-core/control-plane/dsh-runtime）新增顶层日志或直接写 stdout。
@@ -455,6 +473,8 @@
 - 风险：低。需产品裁决：**是**（保留 vs 删除，见 D5 备选）。
 
 ### F11 · 非崩溃退出也消耗 60s 退避配额
+
+> 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - Electron：无 Supervisor。
 - Swift：handleTermination 在退出码分级**之前**无条件 `policy.decide(now:attempts:)`（SidecarSupervisor.swift:400-402），随后 exit 3/70/0 分支直接 return，decision 被丢弃但 attempts 已写入时间戳（:408-433）。
 - 触发条件：同一 Supervisor 实例在 60s 窗口内先经历 3 次 exit 0/3/70，再 start 后首次真实崩溃 → `giveUp`（文案「连续崩溃 3 次」与事实不符）；当前 AppDelegate 在 .stopped/.fatal 后不再 start，故被接线掩盖。
@@ -479,6 +499,8 @@
 - 风险：中低（改动退出链；需确认 cp.stop 与 dispose 之间无顺序依赖——main 的并行实现即证据）。需产品裁决：否。
 
 ### F14 · 损坏的 chamber-settings notice 被静默丢弃（注释声称 loud，代码不 loud）
+
+> 状态：**已消解**（本次功能对齐批次：sidecar 宿主路径补齐）。
 - Electron：`readSettingsFile(...)` 的 notice 非空即 `console.error`（main.ts:1430-1432），损坏文件被保留为 `*.corrupt` 且有解释。
 - Swift：sidecar-ctx 的启动加载只取 `loaded.settings`，`loaded.notice` 被丢弃（sidecar-ctx.ts:497-505）——而紧邻注释（:495-496）写着「损坏 loud…绝不静默假默认」；`readSettingsFile` 恒返回 notice 而非抛错（chamber-settings.ts:267-300）。
 - 触发条件：chamber-settings.json 损坏/不可读/叶被换成符号链接。
@@ -524,6 +546,8 @@
 - 消解：对齐文案与 `beginSheetModal(for: mainWindow)`；allowedContentTypes 可保留（比扩展名过滤更强）。风险：低。产品裁决：**是**（中文文案是否 product 选择，见 D5）。
 
 ### V4 · 原生通知无具名音效（Electron darwin Glass → 系统默认声）
+
+> 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - Electron：`sound: spec.sound ?? 'Glass'`（electron-edges.ts:157-162）。
 - Swift：`content.sound = silent ? nil : .default`，无 Glass（SwiftEdgeHostLegs.swift:229-235，注释已登记平台等价物差异）。
 - 触发条件：非 silent 通知。
@@ -597,6 +621,8 @@
 - 产品裁决：否（缺陷修复，建议本批必修）。
 
 ### D2 唤醒后 transport 即时重探缺失（design 14 D4 ② 未落实）
+
+> 状态：**已消解**（本次功能对齐批次：sidecar 宿主路径补齐）。
 - Electron：`packages/desktop/main.ts:1451-1453` 第二条 powerMonitor('resume') 监听 → `reconnectStaleTransports()`(`:679-697`：quitRequested 门 + 只碰 phase error/degraded 且 requiresUserAction!==true，绝不碰 idle)。
 - Swift：`packages/desktop/node-edges.ts:416-420` 的 `__host.systemResume` 只调用 `onSystemResumeCb`（= `shell-core.ts:1934-1936` 注册的 handleSystemResume）；全仓 grep `reconnectStaleTransports` 仅 main.ts 命中，sidecar-ctx/sidecar-entry 无等价叶。
 - 触发：睡眠/网络切换后 SSH 隧道或实例进入 error/degraded（半开隧道）。
@@ -669,6 +695,8 @@
 - 产品裁决：否（可选对齐）。
 
 ### D11 网页 Notification 双路径未处置（B10 已登记）
+
+> 状态：**部分消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）（见正文保留部分）。
 - Electron：`main.ts:3751-3753` `session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => callback(permission === 'clipboard-sanitized-write'))` → 网页 Notification 权限被显式拒绝。
 - Swift：`MainWindowController.swift` 只实现 `decidePolicyFor`(603-639)、`didCommit`(641)、导航回调与 `createWebViewWith`(803-820)，无任何 WebKit 权限回调或预拒绝；全仓无 Notification 权限处理。
 - 触发：页面脚本 `Notification.requestPermission()` / `new Notification()`（官方 UI 若存在入口）。
@@ -679,6 +707,8 @@
 - 产品裁决：**是**（见待裁决 6）。
 
 ### D12 SIGTERM/SIGINT 未转优雅退出（design 25 §3.3(5) 要求未落地）
+
+> 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - Electron：`main.ts:989-996` SIGTERM/SIGINT → `quitRequested/quitConfirmed` 置位 → `app.quit()`（跳过确认，走 will-quit 清理；注释并说明 macOS Electron 上该 handler 是死代码、Chromium 自行走优雅退出）。
 - Swift：`macos/` 全树无 signal handler（grep SIGTERM/SIGINT 仅命中 BridgeClient.swift:363 的 `signal(SIGPIPE, SIG_IGN)` 与 kill 调用）；`main.swift:10-15` 直接 `NSApplication.shared` + `app.run()`；被信号杀死时 sidecar 靠 stdin EOF(`sidecar-entry.ts:569-572`) 走优雅回收。
 - 触发：Activity Monitor「退出」（SIGTERM）/终端 kill。
@@ -689,6 +719,8 @@
 - 产品裁决：否。
 
 ### D13 退出清理缺 keep-awake 停止与徽标清零
+
+> 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 
 > 状态：**已消解**（本次核对后已改代码并跑门禁，见 §2 对照表）。
 - Electron：`main.ts:1102 setKeepAwakeActive(false)`、`:1112-1114 clearBadgeIntentForQuit(() => app.setBadgeCount(0))`、`:1116-1121 tray.destroy()`。
@@ -722,6 +754,8 @@
 - 消解：懒请求（第一次 scheduleNotification 前），见待裁决 7。
 
 ### V2 退出确认默认按钮相反（Enter 键行为）
+
+> 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - Electron：`main.ts:1064-1067` `buttons ['退出','取消'], defaultId: 1, cancelId: 1, noLink: true` → 回车=取消。
 - Swift：`AppDelegate.swift:470-471` 先 addButton('退出') 再 addButton('取消')，NSAlert 默认按钮=第一个 → 回车=退出（响应判定 `:474`）。
 - 触发：Cmd+Q 且本地实例在跑。
@@ -736,6 +770,8 @@
 - 消解：无法在 Swift 内「对齐 Electron 的破坏性」而无意义；可选在 Electron 侧改成 close 拦截（另立产品决定）。
 
 ### V4 托盘/菜单栏入口缺失
+
+> 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - Electron：打包态创建 Tray（`main.ts:497-536`，菜单「显示窗口」`:523`、「退出 dsh-chamber」`:528`）。
 - Swift：全仓无 NSStatusItem/NSStatusBar（grep 0 命中）。
 - 触发：任意打包态运行。
@@ -743,6 +779,8 @@
 - 消解：NSStatusItem + 同两项菜单（可选排期，见待裁决 9）。
 
 ### V5 应用菜单面缩水（缺 Hide/Services/About/View 等）
+
+> 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - Electron：从未 `setApplicationMenu`（grep 0 命中），使用 Electron 默认 macOS 菜单（含 App 菜单 About/Services/Hide(H)/Hide Others/Quit、Edit、View、Window、Help）——design 25 §0.1-A8/§5 E3（`:85`/`:574`）自证。
 - Swift：`AppDelegate.swift:659-695` 只建 App（退出 dsh-chamber POC）/编辑（撤销/重做/剪切/拷贝/粘贴/全选）/窗口（最小化/关闭）。
 - 触发：任意运行。
@@ -764,6 +802,8 @@
 - 消解：打包 Glass 音效资产 + `UNNotificationSound(named:)`（授权/体积/许可属产品面）；design 25 §4.5（`:547-549`）已登记为平台等价物。
 
 ### V8 窗口标题文案
+
+> 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - Electron：`main.ts:850` `title: 'dsh-chamber'`（并 `:867-869` 冻结 page-title-updated）。
 - Swift：`MainWindowController.swift:213` `window.title = "dsh-chamber POC"`。
 - 触发：任意运行（标题栏/任务切换器可见）。
@@ -812,6 +852,8 @@
 ## 功能级差异（逐项）
 
 ### F1. Swift 缺 macOS 冷启动 argv 深链扫描（scanDeepLinkUrls 无对应）
+
+> 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - **Electron 行为**：`whenReady` 内扫 `process.argv`，`for (const url of scanDeepLinkUrls(process.argv)) enqueueDeepLink(url)`（main.ts:1187；扫描器 shell-core.ts:558-564），与 `open-url` 双触发由 core 去重兜底（design 16 §4.2:185-186）。
 - **Swift 行为**：只有 `application(_:open:)`（AppDelegate.swift:362-367）；全仓无 argv 扫描（grep `CommandLine.arguments`/argv 无深链消费）。
 - **触发条件**：冷启动 URL 只出现在 argv 的形态（macOS LaunchServices 对注册 scheme 的启动 argv 携带 URL 正是 Electron 防御的对象；另含 `open -n/-a --args dsh-chamber://…`、直接执行二进制并带 URL 的脚本/dev 流程）。标准 Finder/浏览器「打开 dsh-chamber://」走 Apple Event，不受影响。
@@ -848,6 +890,8 @@
 - **风险**：低-中（涉及锁语义，须保持「双 flavor 互斥仍 fail-closed」——只对同 bundle id 的自身实例放行激活）。**需产品裁决**：可选（是否接受现状）。
 
 ### F5. showMessage 忽略 defaultId/cancelId（Esc 归属未定）
+
+> 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - **Electron 行为**：整个 `HostMessageOptions` 透传 `dialog.showMessageBox`（electron-edges.ts:338-343），显式携带 `defaultId:0/cancelId:0`（shell-core.ts:2856-2857/3906-3907），按钮序 `['取消', X]`。
 - **Swift 行为**：只读 `type/title/message/detail/buttons`，`for title in buttons { alert.addButton(...) }` 后 `runModal()`，按 `raw-1000` 回传索引（SwiftEdgeHostLegs.swift:569-599）；`defaultId/cancelId` 无任何读取点。
 - **触发条件**：任意确认框（SSH 插件 apply 确认、runtime 变更确认）。
@@ -880,6 +924,8 @@
 - **风险**：中（用户可见的深链错投）。**需产品裁决**：是（D2 决策：是否双壳共存、归属策略）。
 
 ### F9. 剪贴板/网页权限模型：Electron 显式白名单 vs Swift 无权限处理
+
+> 状态：**部分消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）（见正文保留部分）。
 - **Electron 行为**：`session.defaultSession.setPermissionRequestHandler((_wc,p,cb)=>cb(p==='clipboard-sanitized-write'))` + `setPermissionCheckHandler(...)`（main.ts:3751-3753），注释明确：网页 Notification/geolocation/media/clipboard-read/自定义格式写全部拒绝（3736-3750）。
 - **Swift 行为**：无任何权限 handler（grep macos：`setPermissionRequestHandler|setPermissionCheckHandler|requestMediaCapturePermission` = 0），`setupWindow` 只装配 userContentController/导航委托（MainWindowController.swift:123-240）。
 - **触发条件**：页面调用 `navigator.clipboard.readText()`、`Notification.requestPermission()`、getUserMedia、geolocation 等。
@@ -906,18 +952,24 @@
 - **解法**：Swift 设 `panel.prompt = "Import"`（或本地化文案）与等价标题；若产品要求中文，则 Electron 侧也同步——以一支为准。**风险**：低。**需产品裁决**：可（文案语言口径）。
 
 ### U3. Swift 无托盘（菜单栏图标与其「显示窗口/退出」入口缺失）
+
+> 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - **证据**：Electron `maybeCreateTray` main.ts:497-536（打包态 + icon.png，托盘菜单 519-530）；Swift 全仓无 NSStatusItem（grep 0）。design 25 E2:573 已声明「v1：mac 用 Dock 常驻即可，可选 NSStatusItem」。
 - **触发**：打包态日常使用；关窗隐藏后用户寻找菜单栏入口。
 - **后果**：Electron 用户可从菜单栏图标显示窗口/退出；Swift 用户只能用 Dock 图标（`applicationShouldHandleReopen` AppDelegate.swift:349-356）与 Cmd+Q。功能可达但入口少一个。
 - **解法**：A) 保持 Dock-only（design 已定，建议在 STATUS/design 明文「托盘不做」）；B) 增 NSStatusItem + 同两项菜单。**风险**：B 需托盘图标资产（resources/icon.png 平移）。**需产品裁决**：是（A/B）。
 
 ### U4. 应用菜单项集与文案差异
+
+> 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - **证据**：Electron 从不 `setApplicationMenu`（grep 0；design 25:85 A8/574 也确认「未自定义应用菜单（默认菜单含 Edit role，Cmd+C/V 靠它）」）→ 项集 = Electron 官方默认模板（App/Edit/View/Window/Help；仓库内证据仅为「未自定义 + 默认菜单含 Edit role」，具体项以 Electron 运行时为准）。Swift `makeMainMenu` 只有：App 菜单（仅「退出 dsh-chamber POC」Cmd+Q）、编辑（撤销/重做/剪切/拷贝/粘贴/全选）、窗口（最小化 Cmd+M/关闭 Cmd+W）（AppDelegate.swift:659-695）。
 - **触发**：任何菜单栏使用。
 - **后果**（缺入口清单）：① 无「隐藏 dsh-chamber」（Cmd+H）与 Services/About；② 无 View 菜单（重载 Cmd+R、强制重载、开发者工具、实际大小/放大/缩小、全屏）；③ 无「缩放/Zoom」「全部置于前台」；④ 菜单文案中文（编辑/撤销/拷贝…）vs Electron 默认英文（Edit/Undo/Copy…），App 菜单退出项名字为「退出 dsh-chamber POC」（与产品名/POC 后缀不一致）。
 - **解法**：按产品口径补齐删除项：至少加 Hide（Cmd+H，`NSApplication.hide:`）与 Zoom/Bring All to Front；View 的 Reload/DevTools 是否要带入需产品定（Swift 壳无 devtools 面）；菜单文案与 App 名统一（与 U5 同一改动点）。**风险**：低-中（View 项涉及 Swift 壳能力边界）。**需产品裁决**：是（哪些项是产品要求）。
 
 ### U5. 窗口标题文案不一致（且 Swift 未冻结标题）
+
+> 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - **证据**：Electron `title:'dsh-chamber'`（main.ts:850）且 `page-title-updated` 一律 preventDefault（867-869）；STATUS:1099 记载产品口径「桌面原生标题固定 dsh-chamber」。Swift `window.title = "dsh-chamber POC"`（MainWindowController.swift:213），无标题冻结代码。
 - **触发**：看窗口标题栏。
 - **后果**：品牌文案不一致（多出 "POC"）；另外若 WKWebView 将 `document.title` 同步到窗口标题（macOS 行为需实机判），会话名会污染标题栏，而 Electron 已被显式冻结。
@@ -1007,6 +1059,8 @@
 - 产品裁决：否（可直接对齐），但涉及 ready 帧到 URL 的回填，属功能改动。
 
 ### F3. 更新检查触发面：Electron 静默首检 + 6h 周期；Swift 仅手动检查
+
+> 状态：**已消解**（本次功能对齐批次：sidecar 宿主路径补齐）。
 - 证据：Electron \`updater.ts:651,653,1193,1195\`：
   \`\`\`ts
   const CHECK_DELAY_MS = 15_000
@@ -1042,6 +1096,8 @@
 - 产品裁决：是（v1 保持 blocked-available vs v2 Sparkle）。
 
 ### F5. 退出安装豁免与关窗武装：Swift 恒不存在
+
+> 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - 证据：Electron \`main.ts:1031-1044\`（updateDownloadReady 计算 + computeQuitRisk 豁免）、\`main.ts:918-924\`（updaterQuitArmed 关窗豁免）、\`main.ts:405-466\`（武装/兜底）；Swift \`sidecar-ctx.ts:2798 updateDownloadReady: false\`，\`sidecar-ctx.ts:2631 disarmUpdaterQuit: () => {}\`。design 25 §7 第 689 行明示「updateDownloadReady 豁免恒 false」。
 - 触发：Swift 用户更新过下载（不可能发生，相位永不 downloaded）。
 - 后果：无实际用户差异（安装腿本就不存在）；仅说明契约差异已文档化。
@@ -1090,6 +1146,8 @@
 - 产品裁决：是（是否要求 CLI 二次启动 parity）。
 
 ### F10. SIGTERM/SIGINT 未接优雅退出（design 25 §3.3(5) 要求未实现）
+
+> 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - 证据：design 25:332「5. SIGTERM/SIGINT：Swift 捕获后转 terminate 优雅路径」；grep \`SIGTERM|SIGINT\` 在 \`macos/Sources\` 仅命中注释与 \`BridgeClient.swift:363 signal(SIGPIPE, SIG_IGN)\`，无 handler。侧车自身有：\`sidecar-entry.ts:574-578 process.on('SIGTERM'|'SIGINT')\`。
 - 触发：Activity Monitor「退出」/ \`kill <app pid>\`。
 - 后果：Swift 进程被信号直接终止，\`applicationWillTerminate\`（AppDelegate.swift:369-376）不执行；sidecar 因 stdin EOF 自行优雅回收（\`sidecar-entry.ts:569-572\`），本地 dsh/隧道不孤儿化，但 Swift 宿主的 keep-awake/badge/退出日志/5s 硬顶语义不运行，退出码与崩溃不可区分。
@@ -1190,6 +1248,8 @@
 ## 前端可见差异（非像素）
 
 ### U1 = F3（无静默/周期更新检查）
+
+> 状态：**已消解**（本次功能对齐批次：sidecar 宿主路径补齐）。
 设置页「更新」区块在 Swift 侧只有用户主动点「检查更新」才会离开 idle；Electron 15s 后静默检查。Swift 用户不会自动看到「有可用更新」。
 
 ### U2 = F4（更新只读不装）
@@ -1202,6 +1262,8 @@ WKWebView 内容进程未崩溃但无响应时，Swift 无 15s 重载、无对�
 Electron 启动期加载失败 → \`dialog.showErrorBox('dsh-chamber 启动失败', …)\` + \`app.exit(1)\`（\`main.ts:942-945\`；控制面启动失败同理 1369-1374）。Swift 首载失败只重试 25 次（每次 0.5s）后打印日志（\`MainWindowController.swift:782-798\`，非连接类错误仅在 697-706 打印），窗口保持空白且无弹窗。触发：控制面进程活着但 5xx/端口被顶，或侧车启动失败时。后果：白窗无解释。可在仓库内消解：在重试耗尽分支加 NSAlert + 显式退出或在页面内注入错误占位（F19 的构建侧 fail-closed 只解决打包缺资源）。
 
 ### U5. 文案/Branding 差异（POC 后缀）
+
+> 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - 窗口标题：Electron \`title: 'dsh-chamber'\`（\`main.ts:850\`，并 preventDefault page-title-updated 867-869）vs Swift \`window.title = "dsh-chamber POC"\`（\`MainWindowController.swift:213\`）。
 - 菜单退出项：「退出 dsh-chamber」（\`main.ts:528\`）vs「退出 dsh-chamber POC」（\`AppDelegate.swift:665\`）。
 - 启动失败对话框标题：「dsh-chamber 启动失败」（\`main.ts:943,1371\`）vs「dsh-chamber POC 启动失败」（\`AppDelegate.swift:648\`）；sidecar 异常：「dsh-chamber sidecar 异常」（\`AppDelegate.swift:615\`）。
@@ -1209,6 +1271,8 @@ Electron 启动期加载失败 → \`dialog.showErrorBox('dsh-chamber 启动失�
 - 后果：品牌名不一致（同一 tag 发布的两个 flavor 用户可见文案不同）。可解：\`MainWindowController.swift:213\`、\`AppDelegate.swift:648,665\` 改为与 Electron 相同文案；保留 POC 文案亦可视为 P0 期标识。产品裁决：是（POC 标识保留 vs 统一）。
 
 ### U6. 无托盘入口（Dock 常驻替代）
+
+> 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 Electron 打包态有托盘（图标 + 「显示窗口」「退出」菜单，\`main.ts:497-536\`，仅在 \`resourcesPath/icon.png\` 存在时创建）；Swift 无托盘，靠 Dock 图标重开（\`applicationShouldHandleReopen\` 349-356）。关闭窗口两 flavor 都保留进程（Electron hide；Swift orderOut，\`MainWindowController.swift:918-924\` / \`AppDelegate.swift:438-459\`），恢复入口分别为托盘 + Dock vs 仅 Dock。设计 25 §5 明确写 Dock 常驻，故属有意的入口差异，但用户可感。
 
 ### U7. 退出确认与关闭隐藏的语义等价但细节不同（无差异项，记录核对结论）
@@ -1290,6 +1354,8 @@ Swift \`requestQuitFacts\` 走 sidecar \`__host.quitFacts\`（\`AppDelegate.swif
 
 ### F2 · Swift flavor 无启动后 15s 与每 6h 的周期检查（“新版本可用”只在手动检查后出现）
 
+> 状态：**已消解**（本次功能对齐批次：sidecar 宿主路径补齐）。
+
 - **Electron 行为**：`updater.start()` 在 `main.ts:3958` 调用；首次 15s 后检查、之后每 6h（`updater.ts:1193-1197`），无需用户操作即可把 UI 推进到 available/up-to-date/error。
 - **Swift 行为**：`start()` 只记一行日志，不排任何定时器（`update-headless.ts:216-218`）。
   ```ts
@@ -1330,6 +1396,8 @@ Swift \`requestQuitFacts\` 走 sidecar \`__host.quitFacts\`（\`AppDelegate.swif
 
 ### V3 · 应用菜单/快捷键面缺失（View/App 标准项）
 
+> 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
+
 - **Electron 行为**：未调用 `Menu.setApplicationMenu`（全仓唯一 `Menu.buildFromTemplate` 是托盘菜单 `main.ts:520`，design 25:574 也自证"未自定义应用菜单"）→ 走 Electron 内置默认菜单（Edit role 提供 Cmd+C/V，design 25:574 明示依赖它；默认模板另含 View/Window 等标准 role）。
 - **Swift 行为**：显式替换为最小菜单：App（仅「退出」⌘Q）+ 编辑（撤销/重做/剪切/拷贝/粘贴/全选）+ 窗口（⌘M/⌘W），共 10 项；无 About/Services、无隐藏（⌘H）、无 View（重载/缩放/全屏）。
   ```swift
@@ -1364,6 +1432,8 @@ Swift \`requestQuitFacts\` 走 sidecar \`__host.quitFacts\`（\`AppDelegate.swif
 
 ### V5 · 托盘/菜单栏入口缺失（关窗隐藏后只有 Dock 恢复）
 
+> 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
+
 - **Electron 行为**：打包态创建 Tray，菜单栏图标有「显示窗口」「退出 dsh-chamber」；关窗隐藏后可从菜单栏恢复/退出（`main.ts:497-536`）。
 - **Swift 行为**：全树无 `NSStatusItem`（grep `NSStatusItem|statusItem` 在 `macos/Sources` 零命中）；关窗走 orderOut 隐藏，恢复入口 = Dock 点击（`AppDelegate.swift:349-355` `applicationShouldHandleReopen`）。
 - **触发条件**：用户以 hide-to-tray 模式关窗后想恢复/退出。
@@ -1374,6 +1444,8 @@ Swift \`requestQuitFacts\` 走 sidecar \`__host.quitFacts\`（\`AppDelegate.swif
 - **是否需产品裁决**：是（E2 已列为可选项）。
 
 ### V6 · 应用名/窗口标题/错误框仍带 POC / "-native"字样
+
+> 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 
 - **Electron 行为**：productName `dsh-chamber`（`packages/desktop/package.json:34`）；窗口标题固定 `dsh-chamber` 并冻结 `page-title-updated`（`main.ts:850`、`867-869`）；错误框标题「dsh-chamber 启动失败」「dsh-chamber 前端异常」（`main.ts:839/736`）。
 - **Swift 行为**：`CFBundleName = dsh-chamber-native`（`Info.plist.template:36-37`，bundle id `com.dshchamber.native` :32-33 是登记过的有意差异）；窗口标题 `dsh-chamber POC`（`MainWindowController.swift:213`）；菜单「退出 dsh-chamber POC」（`AppDelegate.swift:665`）；启动失败框「dsh-chamber POC 启动失败」（`AppDelegate.swift:648`）。
@@ -1433,6 +1505,8 @@ Swift \`requestQuitFacts\` 走 sidecar \`__host.quitFacts\`（\`AppDelegate.swif
 - **能否在仓库内消解**：可（一行文案）。**具体解法**：`locales.ts:328` 补 "(missing signature)"。**风险**：无。**需产品裁决**：否。
 
 ### V10 · 通知声音不同（已登记）
+
+> 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 
 - **Electron**：darwin 用具名 `Glass`；**Swift**：系统默认声（UNNotificationContent 无 Glass 资源），silent 则无声。证据 `SwiftEdgeHostLegs.swift:232-235`、STATUS:771。**后果**：同一通知两端音色不同。**可消解**：否（平台资源差异；可捆绑自定 sound 文件近似，但需素材与签名）。**需产品裁决**：已登记，维持。
 
