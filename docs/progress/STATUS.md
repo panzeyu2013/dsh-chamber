@@ -805,6 +805,9 @@
 
 ## 范围决策与必要取舍（不做 / 推迟 / 移出 / 偏差）
 
+> 合并检索索引与 Electron↔Swift 双 flavor 专项登记见 [deviations.md](deviations.md)：本文件仍是
+> 「未完成 / 未决 / 仍成立取舍」的权威记录；已落地的偏差从本文件删除、在 deviations.md 标 retired。
+
 - **重启即重载：用户发起的插件刷新入口已全部接线（2026-12；唯一有意例外 = 「重启网关服务」）**：
   页面侧 client 插件集在窗口 boot 时固定（宿主图每 boot 取一次、`dsh.client` bundle 那时执行；
   模块表按 id first-load-wins），因此**用户发起的实例/托管 dsh 重启必须附带一次窗口重载**，否则

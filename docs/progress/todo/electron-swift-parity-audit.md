@@ -36,6 +36,28 @@
 | A-5 | sidecar 重启丢弃已缓冲未补发的深链（S4·F2，RendererRecovery.swift:130） | reset 只复位就绪位、保留缓冲，下一 ready 帧 FIFO 补发 | swift test 166/166（新增 `testDeepLinkRelayResetKeepsUnsentBufferAcrossRestart`） |
 | A-6 | 装配态仍接受 POC_* 环境覆盖（S5·F13 / S5·D3，AppDelegate.swift:68） | 打包 .app 忽略全部 `POC_*`；dev（swift run/非 .app）路径不变 | swift test 166/166 |
 | A-7 | 退出清理未收回 keep-awake / 未清 Dock 角标（S3·D13 / S2·V5，AppDelegate.swift beginTerminationCleanup） | 退出清理起点显式清理，不经 A 桥 no-window 守卫（窗口可能已关） | swift test 166/166 |
+| A-41 | 二次启动深链被丢（S5·F9） | 二次实例把 argv 深链经本壳私有分布式通知转交运行中实例，再安静退出（Electron second-instance 对偶） | swift test 172/172 |
+| A-37 | open-in 平台串整会话快照（S1·V2） | 注入对象被 ui-renderer 按 binding 缓存，故改为 **getter**（每次读取即时取 `bridgePlatform()`，取不到才退回适配器快照）——审查纠正了「工厂每次渲染都执行」的误判 | typecheck；test:desktop |
+| A-38 | info 水化迟到则版本永不显示（S1·V3） | 连接页版本改有界重读（≤11×500ms），拿到即停；另 shim 暴露 `__dshChamberRehydrateInfo`，ready 帧后 Swift 触发一次重跑（审查补：仅重读标量在「首次全被就绪门拒掉」时无用） | typecheck；test:desktop；swift test |
+| A-39 | 关窗决策等 B 桥往返 ≤2s（S3·V9） | quitFacts 成功即缓存，关窗用缓存即时决策并后台刷新 | swift test 172/172 |
+| A-40 | 手工装配缺 host 包仅告警（S2·F12） | 装配态缺任一 host 包即 fatal（构建侧本就 fail-closed） | swift test 172/172 |
+| A-42 | 三路对抗式审查（2026-12）发现的问题 | 已修：quitFacts 缓存不随设置失效（major）、open-in 注入被缓存致 getter 化、hydration 慢探针 10Hz 风暴（成功才重置背退 + 无订阅者即停）、node-edges 放弃路径静默丢最新载荷 + 事件型腿改逐条排队、build-swift-app fail-closed 覆盖 release 形态、二次启动深链通知未校验 scheme/注册过晚、协议帧不可序列化会悬挂 pending、console guard 只钉三个方法、集成测试非 hermetic、launchAtLogin 缺键语义、argv 前缀；台账措辞同步（A-23/A-27/A-28） | swift test 172/172；node-edges/sidecar-stdio 50/50；test:desktop；typecheck；check:static |
+| A-36 | push 监听器抛错只写 console（S1·F10） | 抛错同时重新抛回页面全局（Electron EventEmitter 语义的可见面），仍不截断派发 | bridge-shim 6/6 |
+| A-21 | A 桥就绪门与消费者 latch（S1·F1/F3、S6·V8） | 未就绪改回可重试的 `ipc_not_ready`（与信任拒绝分开）；update-store 一次性 query 失败释放 latch（`slowReProbe`） | swift test 172/172；test:desktop |
+| A-22 | info 水化少一次重试（S1·F2） | shim 改为 1 + 10 次（逐字对齐 preload requestAppInfo） | swift test 172/172 |
+| A-23 | 错误文案以码面世（S1·V1） | shim 把**A 桥围栏码**映射为 Electron 同款文案并保留 error.code；sidecar 业务错误仍只有文案（S2·F1 保持部分消解） | swift test 172/172；审查复核 |
+| A-24 | 通知授权首启即弹（S3·V1 / S6·V2） | 授权请求延迟到首次真正投递通知时（Electron 同序，请求一次幂等） | swift test 172/172 |
+| A-25 | 对话框阻塞与文案（S2·V2/V3、S3·V6、S4·U2） | showError 有窗口时改 sheet（不再冻 UI）；插件源 picker 文案/按钮/过滤器对齐 Electron | swift test 172/172 |
+| A-26 | 深链/二次启动/外链诊断（S4·F3/F4/F7） | 退出在途不再投递深链；二次启动激活同 bundle 实例并安静退出；外链打开失败 loud | swift test 172/172 |
+| A-27 | 登录自启启动期不回放（S5·F6 / S3·D5） | StartupSettings 新增 `readLaunchAtLogin`/`decodeLaunchAtLogin`（与 keepAwake 同一套严格纪律 + 单测），启动期重放；缺文件/缺键按默认 false 重放（对齐 Electron），**损坏文件不动作**（有意偏离，已登记） | swift test 172/172；审查复核 |
+| A-28 | 缺 renderer dist 仍产出白屏 .app（S5·F19） | build-swift-app **只有显式 `--skip-web-dist` 才放行**（审查修正：release 正式腿用 `--no-zip --no-dmg` 组装，按「是否产出归档」放行会漏），判据是 `dist/web/index.html` 而非目录存在；⑭ 用例覆盖缺目录/空目录/正常拷贝/显式跳过 | build-swift-app 18/19（仅本机沙箱 DMG 用例受限） |
+| A-29 | 首载失败无错误面（S5·U4） | 重试耗尽/非重试型失败落可见错误页（原因 + 控制面地址） | swift test 172/172 |
+| A-30 | 英文 blocked 文案缺原因（S6·V9） | en beta blocked 文案补 (missing signature)，与中文一致 | verify:i18n 通过 |
+| A-31 | 非崩溃退出消耗崩溃退避配额（S2·F11） | 退避配额移到崩溃分支记账（exit 0/3/70 不再预支），新增「正常退出不预支」回归用例 | swift test 172/172 |
+| A-32 | 退出清理串行（S2·F13） | dispose/cp.stop 同批启动 + allSettled 收尾；单腿失败 loud 不阻断 | sidecar-stdio 通过；test:desktop |
+| A-33 | 交互腿双端同点超时（S2·F4） | node 侧上限 = Swift 600s + 60s 缓冲；两边锁步断言同步 | swift test 172/172；sidecar-stdio |
+| A-34 | 宿主腿回执面（S2·F7） | 退役返回真实驱逐数；setBadge 走 edge + 有界队列（真失败 loud，回执受同步契约限制已注释登记） | node-edges 通过 |
+| A-35 | 非交互腿静默失败（S2·V1） | 非交互宿主腿改有界排队（只重试 main-thread-busy，放弃时明确文案） | node-edges 通过 |
 | A-17 | 更新检查触发面：Swift 仅手动检查（S5·F3 / S5·U1 / S6·F2） | headless 控制器 `start()` 改为 15s 静默首检 + 6h 周期（常量与 updater.ts 同值并锁步单测），退出时 `stop()` 清表；ready 后按 Electron main.ts 同序启动 | update-headless 15/15（新增假定时器用例）；check:static 9/9 |
 | A-18 | 唤醒后 transport 即时重探缺失（S3·D2） | sidecar 侧新增 `reconnectStaleTransports` 叶（判据逐字对齐 main.ts:679-697，复用 core `TransportManager.connect`），在 `__host.systemResume` 入站帧上双腿消费 | sidecar-stdio 16/16（含 systemResume e2e）；node-edges 24/24 |
 | A-19 | 损坏 chamber-settings 的 notice 被静默丢弃（S2·F14） | `loaded.notice !== null` 即 loud（与 Electron 同路），读取异常同样 loud 回退默认值 | sidecar-stdio 16/16 |
@@ -56,101 +78,101 @@
 
 | # | 条目 | 状态 |
 |---|---|---|
-| F1 | surface 恒定义 vs preload「先 info 后 expose」：预就绪 invoke 全拒，渲染端「surface 缺失」重试链不适用 | 待裁决 |
-| F2 | info 水化只 10 次/≈450ms 且失败后永不重试（preload 为 11 次/≈500ms） | 待裁决 |
-| F3 | expectedOrigin=nil 的「就绪门」与「信任拒绝」同码，且 sidecar 重启会对运行中的页面回闸 | 待裁决 |
+| F1 | surface 恒定义 vs preload「先 info 后 expose」：预就绪 invoke 全拒，渲染端「surface 缺失」重试链不适用 | 已消解 |
+| F2 | info 水化只 10 次/≈450ms 且失败后永不重试（preload 为 11 次/≈500ms） | 已消解 |
+| F3 | expectedOrigin=nil 的「就绪门」与「信任拒绝」同码，且 sidecar 重启会对运行中的页面回闸 | 已消解 |
 | F4 | 出站响应 >4MiB 时 pending 永不结算（渲染端 Promise 永久悬挂）；Electron 无上限 | 已消解 |
 | F5 | 入站信封 >4MiB 被 frame_too_large 拒绝，Electron 无此上限 | 待裁决 |
 | F6 | push 载荷经 JSON 规范化（Swift）vs 结构化克隆（Electron） | 待裁决 |
 | F7 | 页面 world 的 __dshChamberResolve/__dshChamberEmit 可被壳文档内任意脚本调用伪造 | 待裁决 |
 | F8 | 非壳环境（Safari/浏览器直开）shim 仍定义完整 surface，调用全 reject | 待裁决 |
 | F9 | update.download/restartAndInstall 的宿主腿差异（Swift 恒拒绝，无自动安装） | 待裁决 |
-| F10 | push 监听器抛错的可见性差异 | 待裁决 |
-| V1 | 错误文案与错误对象形态不同（Swift 以「码即消息」/原始 sidecar 文案面世） | 待裁决 |
-| V2 | open-in 文件管理器文案在适配器初始化时一次性捕获 platform，可能整会话退化 | 待裁决 |
-| V3 | 连接页「dsh vX」与本地实例版本在 info 水化失败时不显示 | 待裁决 |
+| F10 | push 监听器抛错的可见性差异 | 已消解 |
+| V1 | 错误文案与错误对象形态不同（Swift 以「码即消息」/原始 sidecar 文案面世） | 已消解 |
+| V2 | open-in 文件管理器文案在适配器初始化时一次性捕获 platform，可能整会话退化 | 已消解 |
+| V3 | 连接页「dsh vX」与本地实例版本在 info 水化失败时不显示 | 已消解 |
 | D1 | 页面 world 伪造面（F7） | 待裁决 |
 | D2 | 就绪窗口的 A 桥语义（F1/F3：拒绝 vs 排队 vs 延迟暴露） | 待裁决 |
-| D3 | 4MiB 信封/帧上限（F4/F5） | 待裁决 |
+| D3 | 4MiB 信封/帧上限（F4/F5） | 部分消解 |
 
 ### S2 · B 桥（Swift ↔ Node sidecar）与 sidecar 生命周期
 
 | # | 条目 | 状态 |
 |---|---|---|
-| F1 | · 退出围栏的 code 字段在 Swift 全链丢失（app_quitting 只剩文案） | 待裁决 |
-| F2 | · sidecar fatal / 重启耗尽后应用不退出（Electron 的 fatal = 进程终止） | 待裁决 |
+| F1 | · 退出围栏的 code 字段在 Swift 全链丢失（app_quitting 只剩文案） | 部分消解 |
+| F2 | · sidecar fatal / 重启耗尽后应用不退出（Electron 的 fatal = 进程终止） | 已消解 |
 | F3 | · sidecar 入站没有帧长上限（护栏单向） | 待裁决 |
-| F4 | · 交互腿 600s 超时在两侧同一时刻到期（用户答案被丢弃） | 待裁决 |
-| F5 | · showMessage 忽略 defaultId/cancelId/noLink（NSAlert 语义不等价） | 待裁决 |
+| F4 | · 交互腿 600s 超时在两侧同一时刻到期（用户答案被丢弃） | 已消解 |
+| F5 | · showMessage 忽略 defaultId/cancelId/noLink（NSAlert 语义不等价） | 已消解 |
 | F6 | · keep-awake 在 Swift 额外禁用显示器休眠（Electron 只防系统休眠） | 已消解 |
-| F7 | · 宿主腿结果回执缺失（setBadge 乐观成功 + 退役计数恒 0） | 待裁决 |
-| F8 | · stdout 重定向在 import 之后（协议纪律非结构性） | 待裁决 |
+| F7 | · 宿主腿结果回执缺失（setBadge 乐观成功 + 退役计数恒 0） | 已消解 |
+| F8 | · stdout 重定向在 import 之后（协议纪律非结构性） | 已消解 |
 | F9 | · ready 帧的 port 不被消费也不校验 | 待裁决 |
 | F10 | · 两个「保留契约」成员的 Swift 语义与 Electron 不同（当前不可达） | 待裁决 |
-| F11 | · 非崩溃退出也消耗 60s 退避配额 | 待裁决 |
-| F12 | · 手工/损坏装配下 host 包缺失被降级为警告（构建侧是 fail-closed） | 待裁决 |
-| F13 | · 退出清理串行（dispose → cp.stop），可能撞 4.5s 内部硬顶并留下子进程 | 待裁决 |
-| F14 | · 损坏的 chamber-settings notice 被静默丢弃（注释声称 loud，代码不 loud） | 待裁决 |
+| F11 | · 非崩溃退出也消耗 60s 退避配额 | 已消解 |
+| F12 | · 手工/损坏装配下 host 包缺失被降级为警告（构建侧是 fail-closed） | 已消解 |
+| F13 | · 退出清理串行（dispose → cp.stop），可能撞 4.5s 内部硬顶并留下子进程 | 已消解 |
+| F14 | · 损坏的 chamber-settings notice 被静默丢弃（注释声称 loud，代码不 loud） | 已消解 |
 | F15 | · sidecar 自身无内建 dsh workspace 回退解析（dev 态） | 待裁决 |
 | F16 | · host 包源目录的 8 层向上启发式探测（当前值与 Electron 相同，风险型） | 待裁决 |
-| V1 | · 非交互宿主腿 1s 有界等待，模态打开期间操作静默失败 | 待裁决 |
-| V2 | · showError 用 runModal 阻塞主线程（整个 UI 冻结） | 待裁决 |
-| V3 | · pickPluginSource 对话框文案/归属/过滤器与 Electron 不一致 | 待裁决 |
-| V4 | · 原生通知无具名音效（Electron darwin Glass → 系统默认声） | 待裁决 |
-| V5 | · 退出清理前不清 Dock 角标、不停 keep-awake（≤5s 瞬态） | 待裁决 |
+| V1 | · 非交互宿主腿 1s 有界等待，模态打开期间操作静默失败 | 已消解 |
+| V2 | · showError 用 runModal 阻塞主线程（整个 UI 冻结） | 已消解 |
+| V3 | · pickPluginSource 对话框文案/归属/过滤器与 Electron 不一致 | 已消解 |
+| V4 | · 原生通知无具名音效（Electron darwin Glass → 系统默认声） | 已消解 |
+| V5 | · 退出清理前不清 Dock 角标、不停 keep-awake（≤5s 瞬态） | 已消解 |
 
 ### S3 · 宿主腿 A（通知/角标/keep-awake/登录项/唤醒/退出/窗口）
 
 | # | 条目 | 状态 |
 |---|---|---|
 | D1 | 唤醒事件永不触发（NSWorkspace 通知中心错位） | 已消解 |
-| D2 | 唤醒后 transport 即时重探缺失（design 14 D4 ② 未落实） | 待裁决 |
+| D2 | 唤醒后 transport 即时重探缺失（design 14 D4 ② 未落实） | 已消解 |
 | D3 | keep-awake 语义过强：连带阻止显示器休眠 | 已消解 |
 | D4 | sidecar 决策不可得时，关窗/退出方向与 Electron 相反（含 2s 超时面） | 待裁决 |
-| D5 | 登录自启启动期 reconcile 缺失 | 待裁决 |
+| D5 | 登录自启启动期 reconcile 缺失 | 已消解 |
 | D6 | 通知/Badge 的「已应用」回执缺失败与超时面 | 待裁决 |
 | D9 | renderer unresponsive 恢复腿缺失 | 待裁决 |
 | D10 | 通知满额（>16）淘汰语义不同：Swift 不清横幅、旧横幅点击无会话路由 | 待裁决 |
-| D11 | 网页 Notification 双路径未处置（B10 已登记） | 待裁决 |
-| D12 | SIGTERM/SIGINT 未转优雅退出（design 25 §3.3(5) 要求未落地） | 待裁决 |
+| D11 | 网页 Notification 双路径未处置（B10 已登记） | 部分消解 |
+| D12 | SIGTERM/SIGINT 未转优雅退出（design 25 §3.3(5) 要求未落地） | 已消解 |
 | D13 | 退出清理缺 keep-awake 停止与徽标清零 | 已消解 |
 | D14 | 宿主事实时效（实时查询 vs 事件缓存） | 待裁决 |
-| V1 | 通知授权时机（权限流程） | 待裁决 |
-| V2 | 退出确认默认按钮相反（Enter 键行为） | 待裁决 |
+| V1 | 通知授权时机（权限流程） | 已消解 |
+| V2 | 退出确认默认按钮相反（Enter 键行为） | 已消解 |
 | V3 | 取消退出后的窗口恢复方式（状态与时序） | 待裁决 |
-| V4 | 托盘/菜单栏入口缺失 | 待裁决 |
-| V5 | 应用菜单面缩水（缺 Hide/Services/About/View 等） | 待裁决 |
-| V6 | 对话框呈现模态与文案（showMessage/showError/pickPluginSource） | 待裁决 |
+| V4 | 托盘/菜单栏入口缺失 | 已消解 |
+| V5 | 应用菜单面缩水（缺 Hide/Services/About/View 等） | 已消解 |
+| V6 | 对话框呈现模态与文案（showMessage/showError/pickPluginSource） | 已消解 |
 | V7 | 通知音效（可听差异） | 待裁决 |
-| V8 | 窗口标题文案 | 待裁决 |
-| V9 | 关窗决策引入异步延迟（窗口驻留 ≤2s） | 待裁决 |
+| V8 | 窗口标题文案 | 已消解 |
+| V9 | 关窗决策引入异步延迟（窗口驻留 ≤2s） | 已消解 |
 
 ### S4 · 宿主腿 B（深链/open-in/对话框/外部打开/剪贴板/托盘/菜单）
 
 | # | 条目 | 状态 |
 |---|---|---|
-| F1 | Swift 缺 macOS 冷启动 argv 深链扫描（scanDeepLinkUrls 无对应） | 待裁决 |
+| F1 | Swift 缺 macOS 冷启动 argv 深链扫描（scanDeepLinkUrls 无对应） | 已消解 |
 | F2 | sidecar 重启时 DeepLinkRelay.reset() 丢弃已缓冲未发送的深链 | 已消解 |
-| F3 | 深链/恢复入口无 quit 在途门（低） | 待裁决 |
-| F4 | 直接二次启动：Swift 走 flock fatal 弹窗，Electron 走静默再激活 | 待裁决 |
-| F5 | showMessage 忽略 defaultId/cancelId（Esc 归属未定） | 待裁决 |
+| F3 | 深链/恢复入口无 quit 在途门（低） | 已消解 |
+| F4 | 直接二次启动：Swift 走 flock fatal 弹窗，Electron 走静默再激活 | 已消解 |
+| F5 | showMessage 忽略 defaultId/cancelId（Esc 归属未定） | 已消解 |
 | F6 | 原生 flavor 本地 open 执行面未对齐（STATUS:731-745 项现状） | 待裁决 |
-| F7 | 页面驱动外链打开失败在 Swift 侧被吞掉（诊断面） | 待裁决 |
+| F7 | 页面驱动外链打开失败在 Swift 侧被吞掉（诊断面） | 已消解 |
 | F8 | 双 flavor 共存时 `dsh-chamber://` 归属（注册面差异） | 待裁决 |
-| F9 | 剪贴板/网页权限模型：Electron 显式白名单 vs Swift 无权限处理 | 待裁决 |
+| F9 | 剪贴板/网页权限模型：Electron 显式白名单 vs Swift 无权限处理 | 部分消解 |
 | U1 | showMessage 确认框把 message 显示两遍（所有确认弹窗） | 已消解 |
-| U2 | 插件源 picker 的标题/按钮文案与 Electron 不一致 | 待裁决 |
-| U3 | Swift 无托盘（菜单栏图标与其「显示窗口/退出」入口缺失） | 待裁决 |
-| U4 | 应用菜单项集与文案差异 | 待裁决 |
-| U5 | 窗口标题文案不一致（且 Swift 未冻结标题） | 待裁决 |
+| U2 | 插件源 picker 的标题/按钮文案与 Electron 不一致 | 已消解 |
+| U3 | Swift 无托盘（菜单栏图标与其「显示窗口/退出」入口缺失） | 已消解 |
+| U4 | 应用菜单项集与文案差异 | 已消解 |
+| U5 | 窗口标题文案不一致（且 Swift 未冻结标题） | 已消解 |
 | U6 | 外链打开冷却/预算拒绝无用户提示（两侧一致，登记为观察项） | 待裁决 |
-| Q1 | 深链仅 argv 到达时是否必须补齐（F1） | 待裁决 |
-| Q2 | sidecar 重启窗口的深链丢弃策略（F2） | 待裁决 |
+| Q1 | 深链仅 argv 到达时是否必须补齐（F1） | 已消解 |
+| Q2 | sidecar 重启窗口的深链丢弃策略（F2） | 已消解 |
 | Q3 | 原生 flavor 本地 open 执行面（F6/STATUS:731-745） | 待裁决 |
-| Q4 | showMessage 的 defaultId/cancelId 与 Esc 语义（F5） | 待裁决 |
-| Q5 | 网页权限（剪贴板读/Notification 等）在 Swift 的口径（F9） | 待裁决 |
+| Q4 | showMessage 的 defaultId/cancelId 与 Esc 语义（F5） | 已消解 |
+| Q5 | 网页权限（剪贴板读/Notification 等）在 Swift 的口径（F9） | 部分消解 |
 | Q6 | 双 flavor 共存时 `dsh-chamber://` 归属（F8） | 待裁决 |
-| Q7 | 托盘与应用菜单补齐范围（U3/U4） | 待裁决 |
+| Q7 | 托盘与应用菜单补齐范围（U3/U4） | 已消解 |
 
 ### S5 · 装配/生命周期/数据面（启动/端口/锁/userData/运行时/更新）
 
@@ -158,14 +180,14 @@
 |---|---|---|
 | F1 | 非法显式控制面端口：Electron 降级，Swift 致命退出 | 待裁决 |
 | F2 | dev 端口候选耗尽：Electron 回退系统临时端口，Swift 致命退出 | 待裁决 |
-| F3 | 更新检查触发面：Electron 静默首检 + 6h 周期；Swift 仅手动检查 | 待裁决 |
+| F3 | 更新检查触发面：Electron 静默首检 + 6h 周期；Swift 仅手动检查 | 已消解 |
 | F4 | 更新安装腿：Electron 可下载 + 退出安装 + 重启并安装；Swift blocked-available（设计有意） | 待裁决 |
 | F5 | 退出安装豁免与关窗武装：Swift 恒不存在 | 待裁决 |
-| F6 | launchAtLogin 启动 reconcile：Electron 每次启动重放，Swift 不重放 | 待裁决 |
+| F6 | launchAtLogin 启动 reconcile：Electron 每次启动重放，Swift 不重放 | 已消解 |
 | F7 | 渲染器卡死（unresponsive）：Electron 15s 后重载，Swift 无该腿 | 待裁决 |
 | F8 | 进程级故障恢复方向相反（设计使然，但用户可感） | 待裁决 |
-| F9 | 单实例/二次启动/argv 深链 | 待裁决 |
-| F10 | SIGTERM/SIGINT 未接优雅退出（design 25 §3.3(5) 要求未实现） | 待裁决 |
+| F9 | 单实例/二次启动/argv 深链 | 已消解 |
+| F10 | SIGTERM/SIGINT 未接优雅退出（design 25 §3.3(5) 要求未实现） | 已消解 |
 | F11 | 目录锁获取时序晚于窗口构建与首载 | 待裁决 |
 | F12 | dev 内建 dsh 工作区发现 | 待裁决 |
 | F13 | POC_* 覆盖在打包（产品）路径仍生效 | 已消解 |
@@ -173,32 +195,32 @@
 | F16 | 崩溃诊断：Crashpad vs 无 | 待裁决 |
 | F17 | dev 实根不同：双 flavor 目录锁在 dev 不互斥 | 待裁决 |
 | F18 | pre-spawn 时间回退是 Swift 独有 | 待裁决 |
-| F19 | 打包 web dist 缺失非 fail-closed | 待裁决 |
+| F19 | 打包 web dist 缺失非 fail-closed | 已消解 |
 | F20 | Swift 布局锁步锚点不全（host 包目录 / pnpm 路径） | 待裁决 |
-| U1 | = F3（无静默/周期更新检查） | 待裁决 |
+| U1 | = F3（无静默/周期更新检查） | 已消解 |
 | U2 | = F4（更新只读不装） | 待裁决 |
 | U3 | = F7（卡死无自愈、无提示） | 待裁决 |
-| U4 | 首载失败没有错误面 | 待裁决 |
-| U5 | 文案/Branding 差异（POC 后缀） | 待裁决 |
-| U6 | 无托盘入口（Dock 常驻替代） | 待裁决 |
+| U4 | 首载失败没有错误面 | 已消解 |
+| U5 | 文案/Branding 差异（POC 后缀） | 已消解 |
+| U6 | 无托盘入口（Dock 常驻替代） | 已消解 |
 | U7 | 退出确认与关闭隐藏的语义等价但细节不同（无差异项，记录核对结论） | 待裁决 |
-| U8 | = F10/F6 的可见面 | 待裁决 |
+| U8 | = F10/F6 的可见面 | 部分消解 |
 
 ### S6 · 前端可见面（flavor 传播与非像素用户可见差异）
 
 | # | 条目 | 状态 |
 |---|---|---|
 | F1 | · Swift flavor 缺失「下载 → 已下载 → 重启并安装 / 退出时安装」整条应用内更新链 | 待裁决 |
-| F2 | · Swift flavor 无启动后 15s 与每 6h 的周期检查（“新版本可用”只在手动检查后出现） | 待裁决 |
-| V2 | · 原生通知授权弹窗时机：Swift 首启即弹，Electron 延后到首次通知 | 待裁决 |
-| V3 | · 应用菜单/快捷键面缺失（View/App 标准项） | 待裁决 |
+| F2 | · Swift flavor 无启动后 15s 与每 6h 的周期检查（“新版本可用”只在手动检查后出现） | 已消解 |
+| V2 | · 原生通知授权弹窗时机：Swift 首启即弹，Electron 延后到首次通知 | 已消解 |
+| V3 | · 应用菜单/快捷键面缺失（View/App 标准项） | 已消解 |
 | V4 | · 无开发者工具/检查器入口 | 待裁决 |
-| V5 | · 托盘/菜单栏入口缺失（关窗隐藏后只有 Dock 恢复） | 待裁决 |
-| V6 | · 应用名/窗口标题/错误框仍带 POC / "-native"字样 | 待裁决 |
+| V5 | · 托盘/菜单栏入口缺失（关窗隐藏后只有 Dock 恢复） | 已消解 |
+| V6 | · 应用名/窗口标题/错误框仍带 POC / "-native"字样 | 已消解 |
 | V7 | · Swift 连接设置页常驻「凭据以 0600 明文存储」提示 | 待裁决 |
-| V8 | · A 桥「documentStart 预定义 + ready 前拒绝」与渲染端重试模型的错配 | 待裁决 |
-| V9 | · 英文 blocked 文案与中文/稳定通道不一致（共享 UI 文案小瑕） | 待裁决 |
-| V10 | · 通知声音不同（已登记） | 待裁决 |
+| V8 | · A 桥「documentStart 预定义 + ready 前拒绝」与渲染端重试模型的错配 | 已消解 |
+| V9 | · 英文 blocked 文案与中文/稳定通道不一致（共享 UI 文案小瑕） | 已消解 |
+| V10 | · 通知声音不同（已登记） | 已消解 |
 | V11 | · 隐藏窗口的定时器节流（C1） | 待裁决 |
 | V12 | · 右键上下文菜单（Swift 侧为平台默认，仓内仅证未覆写） | 待裁决 |
 
@@ -214,6 +236,8 @@
 ## 功能级差异（逐项）
 
 ### F1. surface 恒定义 vs preload「先 info 后 expose」：预就绪 invoke 全拒，渲染端「surface 缺失」重试链不适用
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 - Electron 行为：window.dshChamber 只在 info invoke 成功后才定义（preload.cts:905-922 then 分支）；失败兜底分支才带 null 标量（preload.cts:923-939）。任何 invoke 成功即证明 sender 门已开，后续不会再吃 sender 拒绝。
 - Swift 行为：shim 在 documentStart 就定义完整面（bridge-shim.poc.js:112、530-544、594-599），info 只是事后水化（:568-581）；ready 帧前 expectedOrigin() 返回 nil（MainWindowController.swift:139-142）→ MessageHandler.fence 一律回 ipc_sender_forbidden（MessageHandler.swift:187-190）。
 - 触发条件：壳文档在 ready 帧被主线程消费之前执行（冷启动窗口；MainWindowController.swift:780-781 自注 sidecar 就绪需 1~2s），或 sidecar 崩溃重启窗口（AppDelegate.swift:295-302 主动 noteSidecarReady(false)）。
@@ -224,6 +248,8 @@
 - 是否需产品裁决：否（实现漏洞级）；若取 (c) 需与 design 25 §4.4.1 D1 同步（升级为 D2）。
 
 ### F2. info 水化只 10 次/≈450ms 且失败后永不重试（preload 为 11 次/≈500ms）
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 - Electron 行为：requestAppInfo 初始 1 次 + 最多 10 次重试（preload.cts:885-903，attempts < INFO_MAX_ATTEMPTS），失败后仍 expose（标量 null + console.error，:923-939）。
 - Swift 行为：fetchInfo(10) 是 10 次总尝试（bridge-shim.poc.js:117-118,568-581：attemptsLeft>1 才重试），失败只 console.warn，标量保持 null（:578），此后无任何再水化路径（push 通道不含标量）。
 - 触发条件：ready 门持续 >≈450ms（冷启动、sidecar 慢启动、主线程繁忙延迟 ready 消费）。
@@ -234,6 +260,8 @@
 - 是否需产品裁决：否。
 
 ### F3. expectedOrigin=nil 的「就绪门」与「信任拒绝」同码，且 sidecar 重启会对运行中的页面回闸
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 - Electron 行为：ipc_sender_forbidden 只在真违规时出现（不可信 sender/frame/非壳文档，renderer-trust.ts:106-110）；主进程生命周期内不存在「整体 IPC 面回闸」状态（dsh runtime 重启不重启 Electron main）。
 - Swift 行为：expectedOrigin() 在 ready 前为 nil（MainWindowController.swift:139-142），所有 invoke 回 ipc_sender_forbidden；sidecar 重启排期时主动 noteSidecarReady(false)（AppDelegate.swift:295-302），已水化、正在使用的页面会再次进入全员拒绝态直到新 ready 帧。
 - 触发条件：(a) 冷启动就绪窗口内任何 invoke；(b) sidecar 崩溃重启窗口内用户点击的任何操作（连接、设置、通知 ack、深链 ack 等）。
@@ -244,6 +272,8 @@
 - 是否需产品裁决：是（选项见 D2）。
 
 ### F4. 出站响应 >4MiB 时 pending 永不结算（渲染端 Promise 永久悬挂）；Electron 无上限
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 
 > 状态：**已消解**（本次核对后已改代码并跑门禁，见 §2 对照表）。
 - Electron 行为：invoke 响应经结构化克隆，无尺寸上限（preload.cts 无长度判定）。
@@ -322,6 +352,8 @@
 ## 前端可见差异（逐项，非像素）
 
 ### V1. 错误文案与错误对象形态不同（Swift 以「码即消息」/原始 sidecar 文案面世）
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 - Electron：ipc_sender_forbidden → Error(forbidden IPC sender)（带 .code）；app_quitting → Error(app is quitting)（带 .code）（renderer-trust.ts:106-115）。
 - Swift：MessageHandler.reject 把码字符串直接作为 JS 错误消息（MessageHandler.swift:226-238 + shim:216-220 → new Error(ipc_sender_forbidden) / new Error(app_quitting)）；sidecar 业务失败经 NSError.localizedDescription 上抛（BridgeClient.swift:870-878）→ MainWindowController 原样 JSON 化（:453-458）→ new Error(sidecar 文案)。
 - 触发条件：任何失败 invoke，尤其 F1/F3 的正常启动/重启窗口。
@@ -332,6 +364,8 @@
 - 是否需产品裁决：否。
 
 ### V2. open-in 文件管理器文案在适配器初始化时一次性捕获 platform，可能整会话退化
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 - Electron：platform 在 expose 时已填好（preload.cts:911），适配器初始化读到 darwin（index.ts:111）→ Finder 文案。
 - Swift：platform 由 info 水化（F2），初始化早于水化则 null → adapter.platform=null（source-adapter.ts:153）→ OpenInButton.finderLabel 落到通用「文件管理器」（OpenInButton.tsx:187-192），adapter 构造后不再重读（index.ts:111 在插件装配时求值一次）。
 - 触发条件：open-in 客户端插件装配早于 info 水化成功（host-graph 在 kernel 启动前 preload 额外 entry，packages/renderer/src/host-graph.ts:520 注；窗口即 F1/F2 的 ≤450ms）。
@@ -342,6 +376,8 @@
 - 是否需产品裁决：否。
 
 ### V3. 连接页「dsh vX」与本地实例版本在 info 水化失败时不显示
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 - Electron：dshVersion 在 expose 时已存在（preload.cts:910），直接渲染（ConnectionsSection.tsx:1482）。
 - Swift：dshVersion 由 info 水化（F2），失败则整会话 null → span 不渲染（ConnectionsSection.tsx:1482），App.tsx:3497-3502 也不为本地实例写 dshVersion。
 - 触发条件：同 F2（ready 门 >≈450ms）。
@@ -393,6 +429,8 @@
 
 ### F2 · sidecar fatal / 重启耗尽后应用不退出（Electron 的 fatal = 进程终止）
 
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
+
 > 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - Electron：主进程 uncaughtException/unhandledRejection = `fatalMainError → app.exit(1)`（main.ts:246-266）；没有「宿主崩溃后继续运行」的形态。
 - Swift：sidecar 非零退出（1）→ Supervisor 500ms/60s 窗口 ≤3 次退避重启（SidecarSupervisor.swift:435-449）；耗尽或 exit 3/70 → `markFatal`（:416-426、:436-437、:468-474）→ AppDelegate 只弹 NSAlert（AppDelegate.swift:610-622，非阻塞 sheet），应用与窗口继续存活，bridge 未运行。
@@ -411,6 +449,8 @@
 - 风险：低（需与 FrameCodec 常量同源，避免两侧调值漂移）。需产品裁决：否。
 
 ### F4 · 交互腿 600s 超时在两侧同一时刻到期（用户答案被丢弃）
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 - Electron：对话框与 handler 在同一进程，无跨进程超时，结果必定回传（electron-edges.ts:338-343）。
 - Swift：node 侧从发出 edge 起 600s（sidecar-entry.ts:186-197），Swift 侧从**收到 edge 起** 600s（SwiftEdgeHostLegs.swift:542-561）；Swift 起点更晚 → node 先超时 reject（"host edge 应答超时（600000ms）"），随后用户的模态答案到达时 sidecar 只记一条「迟到的 edge 应答」（sidecar-entry.ts:284-287），操作失败。
 - 触发条件：用户在 NSOpenPanel/NSAlert 上停留超过 10 分钟（大目录浏览、开会挂起）。
@@ -419,6 +459,8 @@
 - 风险：① 若 Swift 腿真的挂起（main-thread-busy 分支已覆盖超时），node 侧无线会悬挂；② 只把竞态窗口推后。需产品裁决：**是**（见 D4）。
 
 ### F5 · showMessage 忽略 defaultId/cancelId/noLink（NSAlert 语义不等价）
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 
 > 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - Electron：`dialog.showMessageBox(win, opts)` 原样使用 type/title/message/detail/buttons/defaultId/cancelId/noLink（electron-edges.ts:338-343）。
@@ -430,6 +472,8 @@
 
 ### F6 · keep-awake 在 Swift 额外禁用显示器休眠（Electron 只防系统休眠）
 
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
+
 > 状态：**已消解**（本次核对后已改代码并跑门禁，见 §2 对照表）。
 - Electron：`powerSaveBlocker.start('prevent-app-suspension')`（main.ts:612-626）——防系统睡眠，允许显示器休眠。
 - Swift：`ProcessInfo.beginActivity(options: [.idleDisplaySleepDisabled, .idleSystemSleepDisabled])`（SwiftEdgeHostLegs.swift:140-150）——**同时禁止显示器休眠**。
@@ -439,6 +483,8 @@
 - 风险：低；若原意就是要「保持屏幕可见」（例如长时间监控），则应反向统一 Electron。需产品裁决：**是**（见 D3）。
 
 ### F7 · 宿主腿结果回执缺失（setBadge 乐观成功 + 退役计数恒 0）
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 - Electron：`setBadge` 返回真实 `{applied:true}|{applied:false,reason}`（electron-edges.ts:212-219）；`retireNotificationsForSources` 返回实际关闭的横幅数（electron-edges.ts:291-300）。
 - Swift：`setBadge` 同步契约无法跨进程，node-edges 发 notify 后恒回 `{applied:true}`（node-edges.ts:274-279），dock 写失败只在 Swift 侧 loud（SwiftEdgeHostLegs.swift:305-312 注释自证）；`retireNotificationsForSources` 恒返回 0（node-edges.ts:328-340，注释声明调用方丢弃）。
 - 触发条件：NSApp.dockTile 写失败（mac 正常不可见）/ 通知退役路径被调用。
@@ -447,6 +493,8 @@
 - 风险：中（把 fire-and-forget 改 ACK 会触碰退出时序；退役计数在 mac 上本就不可能等于「关闭的原生通知数」语义，可改为返回登记表驱逐数并注明语义）。需产品裁决：否。
 
 ### F8 · stdout 重定向在 import 之后（协议纪律非结构性）
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 
 > 状态：**已消解**（本次功能对齐批次：sidecar 宿主路径补齐）。
 - Electron：无 B 桥；console 去向不与协议冲突。
@@ -474,6 +522,8 @@
 
 ### F11 · 非崩溃退出也消耗 60s 退避配额
 
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
+
 > 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - Electron：无 Supervisor。
 - Swift：handleTermination 在退出码分级**之前**无条件 `policy.decide(now:attempts:)`（SidecarSupervisor.swift:400-402），随后 exit 3/70/0 分支直接 return，decision 被丢弃但 attempts 已写入时间戳（:408-433）。
@@ -491,6 +541,8 @@
 
 
 ### F13 · 退出清理串行（dispose → cp.stop），可能撞 4.5s 内部硬顶并留下子进程
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 - Electron：will-quit 把插件子进程、传输层、控制面、运行时安装器、运行时事务全部放进**一个** `Promise.allSettled` 并行等待（main.ts:1149-1155），硬顶 5s 到点 `app.exit(1)`（main.ts:1137-1146）。
 - Swift：sidecar-entry 的 cleanup 先 `await headless?.dispose()` 再 `await controlPlaneInstance?.stop()`（sidecar-entry.ts:528-537），与 4.5s 硬顶（sidecar-entry.ts:516；QUIT_CLEANUP_TIMEOUT_MS 5000 − 500）做 Promise.race（:540-548）。
 - 触发条件：存在 SSH 隧道/在途 exec/本地 dsh/插件子进程时收到 SIGTERM/SIGINT/stdin EOF。
@@ -499,6 +551,8 @@
 - 风险：中低（改动退出链；需确认 cp.stop 与 dispose 之间无顺序依赖——main 的并行实现即证据）。需产品裁决：否。
 
 ### F14 · 损坏的 chamber-settings notice 被静默丢弃（注释声称 loud，代码不 loud）
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 
 > 状态：**已消解**（本次功能对齐批次：sidecar 宿主路径补齐）。
 - Electron：`readSettingsFile(...)` 的 notice 非空即 `console.error`（main.ts:1430-1432），损坏文件被保留为 `*.corrupt` 且有解释。
@@ -525,6 +579,8 @@
 ## 前端可见差异（非像素；逐项）
 
 ### V1 · 非交互宿主腿 1s 有界等待，模态打开期间操作静默失败
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 - Electron：无该超时（electron-edges.ts:212-219/321-323 等直接执行）。
 - Swift：performUI 非交互腿超时 1s（SwiftEdgeHostLegs.swift:168、503-535），主线程忙（NSAlert/NSOpenPanel 模态、退出收尾轮询）→ `swift-edge-ui-unavailable:<method>:main-thread-busy`；notify 消费侧只打印（MainWindowController.swift:507-513）。
 - 触发条件：任一交互模态（插件源 picker 最长 10min、退出确认、注册表源切换确认）在屏，期间发生 setBadge/showItemInFolder/showError 等腿。
@@ -532,6 +588,8 @@
 - 消解：把 notify 类腿（setBadge/showItemInFolder）改为 async（不占管道线程，无 1s 门）或排队到主线程空闲重放；showError 至少提高界或走非阻塞 sheet。风险：中（队列需有界并处理退出竞态）。产品裁决：**是**（D2）。
 
 ### V2 · showError 用 runModal 阻塞主线程（整个 UI 冻结）
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 - Electron：`dialog.showErrorBox` 不阻塞渲染器绘制（electron-edges.ts:327-329；main 进程被阻塞但 UI 不冻）。
 - Swift：`alert.runModal()` 在 Swift 进程主线程，WKWebView 同步停摆（SwiftEdgeHostLegs.swift:354-360）。
 - 触发条件：深链目标实例不存在、更新/远端操作失败等 showError 腿（sidecar-stdio.test.ts:451-458 实测该路径存在）。
@@ -539,6 +597,8 @@
 - 消解：有可见主窗时改用 `beginSheetModal(for:)`（AppDelegate.presentFatalAlert 已有同款先例，AppDelegate.swift:617-621），无窗才 runModal。风险：低。产品裁决：否。
 
 ### V3 · pickPluginSource 对话框文案/归属/过滤器与 Electron 不一致
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 - Electron：`dialog.showOpenDialog(win, ...)`（窗 sheet）、title "Import a dsh plugin — source folder or .tgz archive"、buttonLabel "Import"、filters tgz（electron-edges.ts:350-364）。
 - Swift：NSOpenPanel `runModal()`（应用级模态，非 sheet）、title「选择 chamber 插件源」、无 buttonLabel/prompt、allowedContentTypes=[folder, tgz]（SwiftEdgeHostLegs.swift:604-635）。
 - 触发条件：任何插件源导入。
@@ -546,6 +606,8 @@
 - 消解：对齐文案与 `beginSheetModal(for: mainWindow)`；allowedContentTypes 可保留（比扩展名过滤更强）。风险：低。产品裁决：**是**（中文文案是否 product 选择，见 D5）。
 
 ### V4 · 原生通知无具名音效（Electron darwin Glass → 系统默认声）
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 
 > 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - Electron：`sound: spec.sound ?? 'Glass'`（electron-edges.ts:157-162）。
@@ -555,6 +617,8 @@
 - 消解：可在 .app 内嵌 Glass 音效并用 `UNNotificationSound(named:)`；或接受为已登记平台差异。风险：低（需资源与签名）。产品裁决：**是**（D5 备选）。
 
 ### V5 · 退出清理前不清 Dock 角标、不停 keep-awake（≤5s 瞬态）
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 - Electron：will-quit 先 `setKeepAwakeActive(false)` + `clearBadgeIntentForQuit→app.setBadgeCount(0)` + tray.destroy（main.ts:1097-1121）。
 - Swift：AppDelegate.beginTerminationCleanup 只抑制渲染恢复 + 置 app_quitting 门 + stop sidecar（AppDelegate.swift:490-510）；角标/keep-awake 随进程退出才消失。
 - 触发条件：带未读角标/keep-awake 时退出且清理耗时（最长 5s）。
@@ -610,6 +674,8 @@
 
 ### D1 唤醒事件永不触发（NSWorkspace 通知中心错位）
 
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
+
 > 状态：**已消解**（本次核对后已改代码并跑门禁，见 §2 对照表）。
 - Electron：`packages/desktop/electron-edges.ts:119-131`（powerMonitor.on('resume') → callback(Date.now())）→ `packages/desktop/shell-core.ts:887-894`（handleSystemResume：立即推 SYSTEM_RESUME，无窗则 held）。
 - Swift：`macos/Sources/DSHChamberPoc/MainWindowController.swift:236-237` 在 **NotificationCenter.default** 上注册 NSWorkspace.didWakeNotification；SDK 头 `NSWorkspace.h:33-34` 明文：All notifications in this header file must be registered on this notification center. If you register on other notification centers, you will not receive the notifications.（NSWorkspaceDidWakeNotification 同头 `:323`）→ `hostWakeUp`(`:244-257`) 永不执行，`__host.systemResume` 永不发出。
@@ -622,6 +688,8 @@
 
 ### D2 唤醒后 transport 即时重探缺失（design 14 D4 ② 未落实）
 
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
+
 > 状态：**已消解**（本次功能对齐批次：sidecar 宿主路径补齐）。
 - Electron：`packages/desktop/main.ts:1451-1453` 第二条 powerMonitor('resume') 监听 → `reconnectStaleTransports()`(`:679-697`：quitRequested 门 + 只碰 phase error/degraded 且 requiresUserAction!==true，绝不碰 idle)。
 - Swift：`packages/desktop/node-edges.ts:416-420` 的 `__host.systemResume` 只调用 `onSystemResumeCb`（= `shell-core.ts:1934-1936` 注册的 handleSystemResume）；全仓 grep `reconnectStaleTransports` 仅 main.ts 命中，sidecar-ctx/sidecar-entry 无等价叶。
@@ -633,6 +701,8 @@
 - 产品裁决：否（补齐设计）。
 
 ### D3 keep-awake 语义过强：连带阻止显示器休眠
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 
 > 状态：**已消解**（本次核对后已改代码并跑门禁，见 §2 对照表）。
 - Electron：`packages/desktop/main.ts:613-626` `powerSaveBlocker.start('prevent-app-suspension')`；design 14 D5（`docs/design/14-sleep-background.md:220-222`）明文「仅防应用挂起，不阻止显示器关闭」。
@@ -654,6 +724,8 @@
 - 产品裁决：**是**（见待裁决 1）。
 
 ### D5 登录自启启动期 reconcile 缺失
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 - Electron：`packages/desktop/main.ts:1434-1440` 每次启动执行 `applyLaunchAtLogin(chamberSettings.launchAtLogin)`。
 - Swift：`AppDelegate.swift:322-328` 只 reconcile keepAwake；`StartupSettings.swift:8-9` 明文「本文件补 keepAwake 一项」；`sidecar-ctx.ts:506-511` 声明启动期 reconcile 归 Swift 宿主。
 - 触发：系统侧登录项被用户/系统移除（System Settings 关闭、app 迁移/改名、macOS 升级），或上次 register 未成功。
@@ -708,6 +780,8 @@
 
 ### D12 SIGTERM/SIGINT 未转优雅退出（design 25 §3.3(5) 要求未落地）
 
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
+
 > 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - Electron：`main.ts:989-996` SIGTERM/SIGINT → `quitRequested/quitConfirmed` 置位 → `app.quit()`（跳过确认，走 will-quit 清理；注释并说明 macOS Electron 上该 handler 是死代码、Chromium 自行走优雅退出）。
 - Swift：`macos/` 全树无 signal handler（grep SIGTERM/SIGINT 仅命中 BridgeClient.swift:363 的 `signal(SIGPIPE, SIG_IGN)` 与 kill 调用）；`main.swift:10-15` 直接 `NSApplication.shared` + `app.run()`；被信号杀死时 sidecar 靠 stdin EOF(`sidecar-entry.ts:569-572`) 走优雅回收。
@@ -719,6 +793,8 @@
 - 产品裁决：否。
 
 ### D13 退出清理缺 keep-awake 停止与徽标清零
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 
 > 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 
@@ -747,6 +823,8 @@
 共 9 项。每项：Electron 行为 / Swift 行为 / 触发 / 用户可感 / 消解。
 
 ### V1 通知授权时机（权限流程）
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 - Electron：无 `requestAuthorization`（全仓 grep 仅 `main.ts:3751` 的 web session handler）——首次 `new Notification().show()` 时才触发系统权限提示。
 - Swift：`AppDelegate.swift:55-64` 启动即 `center.requestAuthorization(options: [.alert,.sound,.badge])`。
 - 触发：新 bundle id 首装/首次启动。
@@ -754,6 +832,8 @@
 - 消解：懒请求（第一次 scheduleNotification 前），见待裁决 7。
 
 ### V2 退出确认默认按钮相反（Enter 键行为）
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 
 > 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - Electron：`main.ts:1064-1067` `buttons ['退出','取消'], defaultId: 1, cancelId: 1, noLink: true` → 回车=取消。
@@ -771,6 +851,8 @@
 
 ### V4 托盘/菜单栏入口缺失
 
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
+
 > 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - Electron：打包态创建 Tray（`main.ts:497-536`，菜单「显示窗口」`:523`、「退出 dsh-chamber」`:528`）。
 - Swift：全仓无 NSStatusItem/NSStatusBar（grep 0 命中）。
@@ -780,6 +862,8 @@
 
 ### V5 应用菜单面缩水（缺 Hide/Services/About/View 等）
 
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
+
 > 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - Electron：从未 `setApplicationMenu`（grep 0 命中），使用 Electron 默认 macOS 菜单（含 App 菜单 About/Services/Hide(H)/Hide Others/Quit、Edit、View、Window、Help）——design 25 §0.1-A8/§5 E3（`:85`/`:574`）自证。
 - Swift：`AppDelegate.swift:659-695` 只建 App（退出 dsh-chamber POC）/编辑（撤销/重做/剪切/拷贝/粘贴/全选）/窗口（最小化/关闭）。
@@ -788,6 +872,8 @@
 - 消解：补标准 App 菜单项（About/Hide/Hide Others/Show All/Quit）与需要的 View 项。
 
 ### V6 对话框呈现模态与文案（showMessage/showError/pickPluginSource）
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 - Electron：`electron-edges.ts:331-343` `dialog.showMessageBox(win, opts)`（macOS 挂为窗 sheet）、`:325-329` showErrorBox、`:350-365` `dialog.showOpenDialog(win, {buttonLabel:'Import', title:'Import a dsh plugin — source folder or .tgz archive', filters:[tgz]})`。
 - Swift：`SwiftEdgeHostLegs.swift:590-591`/`610-622` 均 `runModal()`（app-modal，非窗 sheet）；picker 标题 `选择 chamber 插件源`、无按钮 label（系统默认）。
 - 触发：任何确认框/错误框/插件源选择。
@@ -802,6 +888,8 @@
 - 消解：打包 Glass 音效资产 + `UNNotificationSound(named:)`（授权/体积/许可属产品面）；design 25 §4.5（`:547-549`）已登记为平台等价物。
 
 ### V8 窗口标题文案
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 
 > 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - Electron：`main.ts:850` `title: 'dsh-chamber'`（并 `:867-869` 冻结 page-title-updated）。
@@ -853,6 +941,8 @@
 
 ### F1. Swift 缺 macOS 冷启动 argv 深链扫描（scanDeepLinkUrls 无对应）
 
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
+
 > 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - **Electron 行为**：`whenReady` 内扫 `process.argv`，`for (const url of scanDeepLinkUrls(process.argv)) enqueueDeepLink(url)`（main.ts:1187；扫描器 shell-core.ts:558-564），与 `open-url` 双触发由 core 去重兜底（design 16 §4.2:185-186）。
 - **Swift 行为**：只有 `application(_:open:)`（AppDelegate.swift:362-367）；全仓无 argv 扫描（grep `CommandLine.arguments`/argv 无深链消费）。
@@ -864,6 +954,8 @@
 
 ### F2. sidecar 重启时 DeepLinkRelay.reset() 丢弃已缓冲未发送的深链
 
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
+
 > 状态：**已消解**（本次核对后已改代码并跑门禁，见 §2 对照表）。
 - **Electron 行为**：`pendingIntents` 是主进程模块级队列（shell-core.ts:1222），控制面/sidecar 重启不触碰它；`enqueueDeepLink` 只受 quit 门约束（1232-1250）。
 - **Swift 行为**：`onRestartScheduled` → `deepLinks.reset()`（AppDelegate.swift:295-302），`reset()` 置未就绪并 `_ = buffer.drainAll()` **丢弃全部缓冲**（RendererRecovery.swift:128-131）。
@@ -874,6 +966,8 @@
 - **需产品裁决**：否。
 
 ### F3. 深链/恢复入口无 quit 在途门（低）
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 - **Electron 行为**：`second-instance` 深链在 `quitRequested` 时直接 return（main.ts:966）；`enqueueDeepLink` 首行 `if (quittingLeaf()) return`（shell-core.ts:1233）；`showMainWindow` 经 `canRestoreMainWindow(quitRequested)`（585-586/341-345）。
 - **Swift 行为**：`application(_:open:)` 无 quit 判断，一律 `deepLinks.enqueue`（362-367），经 B 桥 invoke 后由 sidecar 的 `app_quitting` 拒绝（sidecar-entry.ts:270-274）；`applicationShouldHandleReopen` 也无 quit 门（349-356）。
 - **触发条件**：Cmd+Q 确认/清理进行中收到深链或 Dock 点击。
@@ -882,6 +976,8 @@
 - **风险**：极低。**需产品裁决**：否。
 
 ### F4. 直接二次启动：Swift 走 flock fatal 弹窗，Electron 走静默再激活
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 - **Electron 行为**：`requestSingleInstanceLock()` 失败 → 第二进程 `app.quit()`；首实例收到 `second-instance` → `showMainWindow()`（main.ts:953-969）。
 - **Swift 行为**：`SidecarSupervisor` 的目录锁失败 → `fatalStartup(detail)`（AppDelegate.swift:304-310/642-653）→ `dsh-chamber POC 启动失败` 弹窗后 `exit(1)`；无 NSRunningApplication 再激活分支（design E18:589 依赖 LaunchServices）。
 - **触发条件**：`open -n`、或直接执行 .app 内二进制、或在 Finder 里以「新实例」方式启动；正常双击由 LaunchServices 复用现有实例（等价路径）。
@@ -890,6 +986,8 @@
 - **风险**：低-中（涉及锁语义，须保持「双 flavor 互斥仍 fail-closed」——只对同 bundle id 的自身实例放行激活）。**需产品裁决**：可选（是否接受现状）。
 
 ### F5. showMessage 忽略 defaultId/cancelId（Esc 归属未定）
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 
 > 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - **Electron 行为**：整个 `HostMessageOptions` 透传 `dialog.showMessageBox`（electron-edges.ts:338-343），显式携带 `defaultId:0/cancelId:0`（shell-core.ts:2856-2857/3906-3907），按钮序 `['取消', X]`。
@@ -908,6 +1006,8 @@
 - **风险**：(A) 需同步删 node-edges 转发 + MainWindowController 的 showItemInFolder notify 路由 + 相关单测锚点；(B) 会让「本地执行面只在实例内」的边界出现文字例外。**需产品裁决**：是（A/B）。
 
 ### F7. 页面驱动外链打开失败在 Swift 侧被吞掉（诊断面）
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 - **Electron 行为**：`openExternally` 的叶 Promise reject → `console.error('[dsh-chamber] 打开外部链接失败：', …)`（shell-core.ts:1297-1299）。
 - **Swift 行为**：macOS 14 分支 `NSWorkspace.shared.open(url, configuration:){_,_ in}` 丢弃 error，旧分支丢返回值（MainWindowController.swift:834-838）；只有预算拒绝有 loud 打印（829）。
 - **触发条件**：无外链处理器/系统拒绝打开（如自定义 scheme 但 WKWebView 判外链、打开失败）。
@@ -939,6 +1039,8 @@
 
 ### U1. showMessage 确认框把 message 显示两遍（所有确认弹窗）
 
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
+
 > 状态：**已消解**（本次核对后已改代码并跑门禁，见 §2 对照表）。
 - **证据**：调用点 `title: copy.message, message: copy.message`（shell-core.ts:2850-2859；3898-3909 同形）→ Swift `alert.messageText = title` + `informativeText = [message, detail].filter{…}.joined("\n")`（SwiftEdgeHostLegs.swift:576-579）。Electron 走 `dialog.showMessageBox`，macOS 不显示 `title` 字段（electron-edges.ts:338-343）。
 - **触发**：SSH 插件 apply 确认（`confirmPluginAction`）与 runtime 变更确认（`confirmRuntimeMutation`）。
@@ -946,12 +1048,16 @@
 - **解法**：`showMessageBody`：`messageText = message`（缺失回落 title），`informativeText` 只放 detail；或当 title==message 去重。**风险**：低。**需产品裁决**：否。
 
 ### U2. 插件源 picker 的标题/按钮文案与 Electron 不一致
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 - **证据**：Electron `title:'Import a dsh plugin — source folder or .tgz archive'` + `buttonLabel:'Import'`（electron-edges.ts:360-361）；Swift `panel.title='选择 chamber 插件源'`、未设 buttonLabel（SwiftEdgeHostLegs.swift:612-616）。
 - **触发**：设置/插件页「导入插件源」。
 - **后果**：同一操作在 Swift 弹出中文标题 + 系统默认按钮（"打开"），Electron 为英文标题 + "Import"；且 Swift 侧没有 .tgz 过滤器下拉的可见提示（filters vs allowedContentTypes 呈现不同）。
 - **解法**：Swift 设 `panel.prompt = "Import"`（或本地化文案）与等价标题；若产品要求中文，则 Electron 侧也同步——以一支为准。**风险**：低。**需产品裁决**：可（文案语言口径）。
 
 ### U3. Swift 无托盘（菜单栏图标与其「显示窗口/退出」入口缺失）
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 
 > 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - **证据**：Electron `maybeCreateTray` main.ts:497-536（打包态 + icon.png，托盘菜单 519-530）；Swift 全仓无 NSStatusItem（grep 0）。design 25 E2:573 已声明「v1：mac 用 Dock 常驻即可，可选 NSStatusItem」。
@@ -961,6 +1067,8 @@
 
 ### U4. 应用菜单项集与文案差异
 
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
+
 > 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - **证据**：Electron 从不 `setApplicationMenu`（grep 0；design 25:85 A8/574 也确认「未自定义应用菜单（默认菜单含 Edit role，Cmd+C/V 靠它）」）→ 项集 = Electron 官方默认模板（App/Edit/View/Window/Help；仓库内证据仅为「未自定义 + 默认菜单含 Edit role」，具体项以 Electron 运行时为准）。Swift `makeMainMenu` 只有：App 菜单（仅「退出 dsh-chamber POC」Cmd+Q）、编辑（撤销/重做/剪切/拷贝/粘贴/全选）、窗口（最小化 Cmd+M/关闭 Cmd+W）（AppDelegate.swift:659-695）。
 - **触发**：任何菜单栏使用。
@@ -968,6 +1076,8 @@
 - **解法**：按产品口径补齐删除项：至少加 Hide（Cmd+H，`NSApplication.hide:`）与 Zoom/Bring All to Front；View 的 Reload/DevTools 是否要带入需产品定（Swift 壳无 devtools 面）；菜单文案与 App 名统一（与 U5 同一改动点）。**风险**：低-中（View 项涉及 Swift 壳能力边界）。**需产品裁决**：是（哪些项是产品要求）。
 
 ### U5. 窗口标题文案不一致（且 Swift 未冻结标题）
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 
 > 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - **证据**：Electron `title:'dsh-chamber'`（main.ts:850）且 `page-title-updated` 一律 preventDefault（867-869）；STATUS:1099 记载产品口径「桌面原生标题固定 dsh-chamber」。Swift `window.title = "dsh-chamber POC"`（MainWindowController.swift:213），无标题冻结代码。
@@ -984,11 +1094,15 @@
 ## 待裁决候选（每项给选项 A/B）
 
 ### Q1. 深链仅 argv 到达时是否必须补齐（F1）
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 - 现状：Swift 无 argv 扫描；标准 Apple Event 路径不受影响。
 - A（推荐）：在 Swift 补 argv 扫描（纯函数 + 单测），与 Electron 双路径对齐，消除唯一静默丢失形态。
 - B：明确只支持 LaunchServices/open-url，把「argv 冷启动深链」写进 design 25 §4.5 为已批准差异（并登记 dev 无法用 argv 复现）。
 
 ### Q2. sidecar 重启窗口的深链丢弃策略（F2）
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 - A（推荐）：reset 时保留缓冲（只落就绪位），ready 后按 FIFO 补发；补测试断言「reset 前缓冲项在下次 markReady 时仍发出」。
 - B：维持丢弃，但把丢弃数计入 `droppedCount` 并 loud 上报（至少可观测）。
 
@@ -997,6 +1111,8 @@
 - B：保留共享契约面，在 design 25 §2 写入明文边界例外，并把 launchApp 收编为 core 调用路径（注册表实查 + 设置/可用性门）。
 
 ### Q4. showMessage 的 defaultId/cancelId 与 Esc 语义（F5）
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 - A（推荐）：Swift 读 defaultId/cancelId 并将其映射为 NSAlert 首按钮/ Escape keyEquivalent；先实机确认现状 Esc 命中（含对 『继续』的反向确认风险）。
 - B：维持 AppKit 默认，但把两个调用点的按钮序改成「确认在前、取消在末」（Electron 侧同步）以让 Esc 语义天然安全——会改变两侧按钮序契约，需同步测试。
 
@@ -1009,6 +1125,8 @@
 - B：Swift 也在启动时注册（幂等覆盖），接受两 flavor 互相抢占——用户以「最后启动的壳」为准。
 
 ### Q7. 托盘与应用菜单补齐范围（U3/U4）
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 - A（推荐）：托盘维持不做（design E2）；菜单补齐 Hide/About/Services 与 Zoom/Bring All to Front，View 菜单按 Swift 壳能力裁剪并在 design 25 E3 写明项集。
 - B：完整对齐 Electron 默认菜单语义（含 Reload/DevTools 决策），并为托盘实现 NSStatusItem。
 
@@ -1060,6 +1178,8 @@
 
 ### F3. 更新检查触发面：Electron 静默首检 + 6h 周期；Swift 仅手动检查
 
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
+
 > 状态：**已消解**（本次功能对齐批次：sidecar 宿主路径补齐）。
 - 证据：Electron \`updater.ts:651,653,1193,1195\`：
   \`\`\`ts
@@ -1105,6 +1225,8 @@
 - 产品裁决：随 F4。
 
 ### F6. launchAtLogin 启动 reconcile：Electron 每次启动重放，Swift 不重放
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 - 证据：Electron \`main.ts:1434-1440\`：
   \`\`\`ts
   const loginItemResult = applyLaunchAtLogin(chamberSettings.launchAtLogin);
@@ -1147,6 +1269,8 @@
 
 ### F10. SIGTERM/SIGINT 未接优雅退出（design 25 §3.3(5) 要求未实现）
 
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
+
 > 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - 证据：design 25:332「5. SIGTERM/SIGINT：Swift 捕获后转 terminate 优雅路径」；grep \`SIGTERM|SIGINT\` 在 \`macos/Sources\` 仅命中注释与 \`BridgeClient.swift:363 signal(SIGPIPE, SIG_IGN)\`，无 handler。侧车自身有：\`sidecar-entry.ts:574-578 process.on('SIGTERM'|'SIGINT')\`。
 - 触发：Activity Monitor「退出」/ \`kill <app pid>\`。
@@ -1178,6 +1302,8 @@
 - 产品裁决：否（dev 体验，建议对齐）。
 
 ### F13. POC_* 覆盖在打包（产品）路径仍生效
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 
 > 状态：**已消解**（本次核对后已改代码并跑门禁，见 §2 对照表）。
 - 证据（全部无 \`isPackaged\` 前置）：\`ChamberResources.swift:146-151\` POC_NODE_BIN；\`:191\` POC_SIDECAR；\`:205\` POC_USER_DATA；\`:217\` POC_DSH_PATH（env 优先于打包自带树）；\`AppDelegate.swift:147\` POC_WEB_DIST；\`:84-85\` POC_PORT；\`:239\` POC_CP_URL。对照：Electron 无等价「任意脚本/任意 origin」覆盖面；其 dev 门集中在 DSH_CHAMBER_*，且 \`DSH_SIDECAR_LEGACY_START\` 在装配态被显式拒绝（\`sidecar-entry.ts:383-387\`）。
@@ -1227,6 +1353,8 @@
 - 产品裁决：是（保留 dev 便利 vs 语义 parity）。
 
 ### F19. 打包 web dist 缺失非 fail-closed
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 - 证据：\`build-swift-app.mjs:428-431\`：
   \`\`\`js
   if (existsSync(options.webDistDir)) { cpSync(options.webDistDir, layout.webDist, { recursive: true }) … }
@@ -1249,6 +1377,8 @@
 
 ### U1 = F3（无静默/周期更新检查）
 
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
+
 > 状态：**已消解**（本次功能对齐批次：sidecar 宿主路径补齐）。
 设置页「更新」区块在 Swift 侧只有用户主动点「检查更新」才会离开 idle；Electron 15s 后静默检查。Swift 用户不会自动看到「有可用更新」。
 
@@ -1259,9 +1389,13 @@ Swift 侧可显示 available + releaseUrl + blocked 行「原生壳不支持自�
 WKWebView 内容进程未崩溃但无响应时，Swift 无 15s 重载、无对话框；用户看到长时间冻结。Electron 有 15s 重载与超限错误框（\`main.ts:774-785\`）。
 
 ### U4. 首载失败没有错误面
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 Electron 启动期加载失败 → \`dialog.showErrorBox('dsh-chamber 启动失败', …)\` + \`app.exit(1)\`（\`main.ts:942-945\`；控制面启动失败同理 1369-1374）。Swift 首载失败只重试 25 次（每次 0.5s）后打印日志（\`MainWindowController.swift:782-798\`，非连接类错误仅在 697-706 打印），窗口保持空白且无弹窗。触发：控制面进程活着但 5xx/端口被顶，或侧车启动失败时。后果：白窗无解释。可在仓库内消解：在重试耗尽分支加 NSAlert + 显式退出或在页面内注入错误占位（F19 的构建侧 fail-closed 只解决打包缺资源）。
 
 ### U5. 文案/Branding 差异（POC 后缀）
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 
 > 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 - 窗口标题：Electron \`title: 'dsh-chamber'\`（\`main.ts:850\`，并 preventDefault page-title-updated 867-869）vs Swift \`window.title = "dsh-chamber POC"\`（\`MainWindowController.swift:213\`）。
@@ -1271,6 +1405,8 @@ Electron 启动期加载失败 → \`dialog.showErrorBox('dsh-chamber 启动失�
 - 后果：品牌名不一致（同一 tag 发布的两个 flavor 用户可见文案不同）。可解：\`MainWindowController.swift:213\`、\`AppDelegate.swift:648,665\` 改为与 Electron 相同文案；保留 POC 文案亦可视为 P0 期标识。产品裁决：是（POC 标识保留 vs 统一）。
 
 ### U6. 无托盘入口（Dock 常驻替代）
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 
 > 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 Electron 打包态有托盘（图标 + 「显示窗口」「退出」菜单，\`main.ts:497-536\`，仅在 \`resourcesPath/icon.png\` 存在时创建）；Swift 无托盘，靠 Dock 图标重开（\`applicationShouldHandleReopen\` 349-356）。关闭窗口两 flavor 都保留进程（Electron hide；Swift orderOut，\`MainWindowController.swift:918-924\` / \`AppDelegate.swift:438-459\`），恢复入口分别为托盘 + Dock vs 仅 Dock。设计 25 §5 明确写 Dock 常驻，故属有意的入口差异，但用户可感。
@@ -1354,6 +1490,8 @@ Swift \`requestQuitFacts\` 走 sidecar \`__host.quitFacts\`（\`AppDelegate.swif
 
 ### F2 · Swift flavor 无启动后 15s 与每 6h 的周期检查（“新版本可用”只在手动检查后出现）
 
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
+
 > 状态：**已消解**（本次功能对齐批次：sidecar 宿主路径补齐）。
 
 - **Electron 行为**：`updater.start()` 在 `main.ts:3958` 调用；首次 15s 后检查、之后每 6h（`updater.ts:1193-1197`），无需用户操作即可把 UI 推进到 available/up-to-date/error。
@@ -1378,6 +1516,8 @@ Swift \`requestQuitFacts\` 走 sidecar \`__host.quitFacts\`（\`AppDelegate.swif
 
 ### V2 · 原生通知授权弹窗时机：Swift 首启即弹，Electron 延后到首次通知
 
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
+
 - **Electron 行为**：全仓无 `requestAuthorization` 调用；原生通知只在首次构造/展示时由系统触发权限（`electron-edges.ts:157` `new Notification(...)`），且网页 Notification 被权限 handler 显式拒绝（`main.ts:3751-3753`）。
 - **Swift 行为**：`applicationDidFinishLaunching` 里无条件请求授权（有 bundle id 时），失败/拒绝只打日志、不阻断。
   ```swift
@@ -1395,6 +1535,8 @@ Swift \`requestQuitFacts\` 走 sidecar \`__host.quitFacts\`（\`AppDelegate.swif
 - **是否需产品裁决**：建议否（按"与 Electron 对齐"直接消解）；若产品希望提前征得同意，则保留现状并记为有意差异。
 
 ### V3 · 应用菜单/快捷键面缺失（View/App 标准项）
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 
 > 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 
@@ -1432,6 +1574,8 @@ Swift \`requestQuitFacts\` 走 sidecar \`__host.quitFacts\`（\`AppDelegate.swif
 
 ### V5 · 托盘/菜单栏入口缺失（关窗隐藏后只有 Dock 恢复）
 
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
+
 > 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 
 - **Electron 行为**：打包态创建 Tray，菜单栏图标有「显示窗口」「退出 dsh-chamber」；关窗隐藏后可从菜单栏恢复/退出（`main.ts:497-536`）。
@@ -1444,6 +1588,8 @@ Swift \`requestQuitFacts\` 走 sidecar \`__host.quitFacts\`（\`AppDelegate.swif
 - **是否需产品裁决**：是（E2 已列为可选项）。
 
 ### V6 · 应用名/窗口标题/错误框仍带 POC / "-native"字样
+
+> 状态：**已消解**（2026-12 功能对齐批次：Swift 与 sidecar 两侧补齐）。
 
 > 状态：**已消解**（本次功能对齐批次 b4decfaa：Swift 侧功能补齐）。
 
@@ -1618,3 +1764,105 @@ Top 严重度排序（详细见功能级差异节）：D1 唤醒事件永不触�
 - `SMAppService` 登录项在打包/非 /Applications 路径下的用户可见状态（`SwiftEdgeHostLegs.swift:419-450` 已实现，语义待实测）。
 - backdrop-filter 在目标 macOS 版本的实际渲染（像素计数唯一候选）。
 - C1 隐藏节流对 SSE/WS 的量化影响（STATUS 已挂 M5 实机门禁）。
+## 6. 裁决清单（需要判断的点 + 推荐方案与后果）
+
+> 只列**需要取舍**的项（功能对齐已完成的项见 §2 汇总表）。每条：现象 → 选项 → 推荐 → 后果。
+> 判据不变：功能一致即可，实现方式可以不同。
+
+### D-1 应用内更新安装链（S5·F4 / S5·F5 / S5·U2 / S6·F1 / S1·F9）
+- 现象：Swift 侧只有「检查 + 提示 + 前往下载页」，不能下载、不能退出时安装、不能重启并安装；installBlockedReason 恒为「原生壳不支持自动安装」。
+- 选项：A 维持 blocked-available（现状）；B v2 接 Sparkle 2 或自建下载/退出安装腿（对齐 Electron 三步）；C 只补「下载 dmg 并打开」半自动。
+- 推荐：A（本轮）+ 把 B 立为 v2 目标。
+- 后果：A = 用户多两次手动操作，零新依赖/零签名基建风险；B = 需要 EdDSA 签名、appcast、公证密钥、CI 发布改造，工作量以周计且新增运行时依赖（需你批准）；C = 半自动体验，仍需手动挂载/拖拽。
+
+### D-2 渲染器卡死自愈（S5·F7 / S5·U3）
+- 现象：Electron 有 render-process-gone / unresponsive → 15s 重载；WKWebView 无同类事件，Swift 当前无自愈腿。
+- 选项：A 不做；B 页面心搏探测（页面定时 postMessage，超时 reload，限 3 次）；C 仅 JS 错误面（onerror/unhandledrejection）提示不重载。
+- 推荐：B。
+- 后果：A = 极端场景白屏无提示；B = 需要注入 + 阈值调参，误判会丢弃页面内未落盘状态（用「只在无输入 15s 后重载 + 上限 3 次」收敛）；C = 只提示不恢复。
+
+### D-3 端口策略（S5·F1 / S5·F2）
+- 现象：非法显式控制面端口、dev 端口候选耗尽时 Electron 降级（忽略/回退临时端口），Swift 直接 fatal 退出。
+- 选项：A 对齐 Electron（降级 + loud 日志 + UI 可见提示）；B 保持 fatal。
+- 推荐：A。
+- 后果：A = 配错也能启动（可能连到非预期实例，必须 loud 提示，否则更难诊断）；B = 行为差异保留，用户遇到一次配置错误就起不来。
+
+### D-4 双壳 dsh-chamber:// 归属（S4·F8 / Q6）
+- 现象：两个 .app 注册同一 scheme，LaunchServices 归属可能被 Electron 抢占，Swift 收不到深链。
+- 选项：A Swift 增注册 dsh-chamber-native://（保留原 scheme 兼容）；B 维持共享；C 去掉 Electron 的 scheme 注册。
+- 推荐：A。
+- 后果：A = 需同步 Info.plist 与文档，浏览器点 dsh-chamber:// 仍可能进 Electron（此时 Swift 至少能靠 argv 处理终端启动）；B = 混合安装下深链行为不确定；C = 破坏现有 Electron 用户。
+
+### D-5 原生 flavor 本地 open 执行面（S4·F6 / Q3）
+- 现象：node-edges 的 showItemInFolder / openPath / launchApp 原语在原生壳无 core 消费者。
+- 选项：A 定义为设计边界（原生壳不支持本地 open 执行，open-in 走页面/window.open），改 design 25 E11/E12 记录；B 实装 NSWorkspace 执行腿。
+- 推荐：A。
+- 后果：A = open-in 插件的「在 Finder 中显示」一类动作在原生壳不可用（UI 需降级/隐藏）；B = 新增宿主腿 + 桥接，工作量中等，但功能面更齐。
+
+### D-6 page world 伪造面（S1·F7 / D1）
+- 现象：__dshChamberResolve / __dshChamberEmit 定义在 page world，壳文档内任意脚本可调用伪造应答/事件（Electron 有 contextBridge 隔离）。
+- 选项：A 接受并登记（威胁模型假定页面为受信代码）；B 每次注入随机 token，Swift 侧校验（成本低）；C 桥放入 isolated world。
+- 推荐：B。
+- 后果：A = 任意注入脚本可伪造边缘事件（本地威胁模型下风险有限但不为零）；B = shim/Swift 两侧改握手，reload 需重建 token（可测）；C = 最彻底但要实测 WKWebView isolated world × documentStart 组合。
+
+### D-7 网页权限口径（S4·F9 / Q5）
+- 现状：媒体采集显式拒绝；剪贴板读 / 网页 Notification 在 WKWebView 无回调（走系统默认）。
+- 选项：A 保持并登记；B 注入 navigator.permissions 查询面 shim（如实回答 denied）；C 全量权限 shim 拦截。
+- 推荐：A（本轮）→ 若实机发现页面行为异常再上 B。
+- 后果：A = 页面可能拿到浏览器默认结果，行为不完全可控；B = 注入面对第三方页面可能有兼容风险。
+
+### D-8 取消退出后的窗口恢复（S3·V3）
+- 现象：确认框取消后窗口恢复的时机/可见性与 Electron 不同。
+- 选项：A 对齐（取消后确保 makeKeyAndOrderFront + activate）；B 保持。
+- 推荐：A。
+- 后果：A = 小改动（处理已被 orderOut 的路径）；B = 用户取消后可能看不到窗口。
+
+### D-9 通知音效细差（S3·V7）
+- 现状：Swift 用具名系统音效（缺省 Glass，与 electron-edges 的 spec.sound ?? 'Glass' 同名义），非标准名由系统回落默认声。
+- 选项：A 保持（已功能等价）；B 维护音效名映射表追求逐字一致。
+- 推荐：A。
+- 后果：A = 极少数自定义音效名听感不同；B = 额外维护成本、收益低。
+
+### D-10 devtools 入口（S6·V4）
+- 选项：A 不给（现状，R13 刻意关闭）；B 仅非打包态给 Cmd+Opt+I。
+- 推荐：B。
+- 后果：A = 原生壳排障只能看 stderr；B = 需要 isPackaged 门与 Electron 一致，避免生产暴露检查器。
+
+### D-11 凭据存储（S6·V7）
+- 现象：原生壳无 safeStorage，设置页常驻「凭据以 0600 明文存储」提示；Electron 走 OS 钥匙串。
+- 选项：A 维持明文 + 提示；B 迁到 Keychain（kSecClassGenericPassword）并做迁移。
+- 推荐：A（短期）→ B 作为独立议题。
+- 后果：A = 安全面差异存在（需产品层面接受，且 AGENTS.md 的凭据红线要求不落盘明文——当前实现仅 0600 文件，需明确是否可接受）；B = 改存储层 + 迁移逻辑，涉及凭据纪律，必须单独设计与评审。
+
+### D-12 隐藏窗口节流（S6·V11）
+- 现象：WebKit 无 backgroundThrottling:false 等价物，隐藏窗口的定时器可能被节流。
+- 推荐：保持，M5 实机门禁里专门验证后台会话（SSH 流）不因节流失活；若失活，则考虑页面侧 keep-alive 心跳或窗口常驻可见。
+- 后果：不处理 = 后台长时间挂起场景可能出现连接状态更新滞后。
+
+### D-13 进程级故障恢复方向（S5·F8）
+- 现象：sidecar 崩溃耗尽重启配额后，Swift 弹 fatal 框并保持应用存活（窗口对着死桥）；Electron 侧 fatal 走 app.exit(1)（本轮已把 S2·F2 对齐为 exit(1)，但 supervisor giveUp 路径尚未统一）。
+- 选项：A 统一为 exit(1)；B 保持弹框可存活（用户自行退出）。
+- 推荐：A。
+- 后果：A = 可能丢弃未保存 UI 状态，但没有僵尸 UI；B = 僵尸 UI 持续（所有 invoke 恒失败）。
+
+### D-14 Crashpad / 崩溃诊断（S5·F16）
+- 选项：A 不做（登记差异）；B 接第三方崩溃上报（新增依赖需批准）。
+- 推荐：A。
+- 后果：A = 崩溃只能靠用户描述 + stderr；B = 新依赖与隐私面。
+
+### D-15 目录锁获取时序（S5·F11）
+- 现象：Swift 先建窗再取锁，Electron 先取锁；二次启动会有极短空窗闪现。
+- 选项：A 重排（锁先于窗口构建）；B 保持（二次启动体验已由 S4·F4 + S5·F9 修好：激活已有实例并转发深链）。
+- 推荐：B。
+- 后果：A = 收益极小、触及主装配顺序（启动路径回归风险）；B = 保留一个短暂的窗口闪现。
+
+### D-16 证据与流程（需要授权）
+- 现象：真实 DMG / 公证腿只能在本机沙箱外验证；本机 test:macos 因此 17/18。
+- 选项：A 我起一次 CI（需要你授权 push 或 dispatch）；B 等你自己跑。
+- 推荐：A（一次性、dry-run 形态）。
+- 后果：A = 需要你明确授权 git/GitHub 操作；B = 本批的 DMG/公证证据留空，release 前仍需补。
+
+### D-17 本批 23 文件改动是否提交
+- 选项：A 提交（拆分为 Swift 壳 / sidecar / 共享前端与打包 / 台账 四个提交）；B 继续留在工作区；C 只提交部分。
+- 推荐：A（按 CONTRIBUTING 的 Conventional Commits，英文信息，一个逻辑改动一个提交）。
+- 后果：A = 需要你明确授权 git；B = 工作区持续承载 1000+ 行未提交改动，后续审查/回归风险上升。
