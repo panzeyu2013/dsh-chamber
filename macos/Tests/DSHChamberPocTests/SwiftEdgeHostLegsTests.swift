@@ -20,7 +20,7 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
         // canShowUI=false：UI 腿一律 ui-unavailable（绝不静默假装成功）。
         let legs = SwiftEdgeHostLegs(config: .init(canShowUI: { false }))
         for method in ["focusMainWindow", "showMessage", "openExternal", "openPath",
-                       "setLoginItem", "launchApp"] {
+                       "setLoginItem"] {
             let outcome = legs.respond(method: method, payload: nil)
             XCTAssertNotNil(outcome.error, method)
             XCTAssertTrue(
@@ -54,7 +54,7 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
         // canShowUI=true 但未接主窗：窗口守卫腿一律 no-window 诚实降级
         // （headless 测试绝不触发 NSWorkspace/NSApp/ProcessInfo 副作用）。
         let legs = SwiftEdgeHostLegs(config: .init(canShowUI: { true }))
-        for method in ["setBadge", "setKeepAwake", "showItemInFolder", "pickPluginSource", "showError", "launchApp", "showMessage"] {
+        for method in ["setBadge", "setKeepAwake", "showItemInFolder", "pickPluginSource", "showError", "showMessage"] {
             let outcome = legs.respond(method: method, payload: nil)
             XCTAssertTrue(
                 outcome.error?.hasPrefix(SwiftEdgeHostLegs.uiUnavailablePrefix) ?? false,
@@ -139,102 +139,20 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
         }
     }
 
-    // MARK: - S-D：launchApp appId 映射的守卫/形状分支（成功分支真实拉起属
-    // 实机门禁——finder 揭示 / vscode 深链不在此触发系统副作用）
+    // MARK: - S-05 复裁决（2026-12）：launchApp 叶已移除，与 Electron 对称
 
-    /// 仅守卫/形状分支可无副作用测试：过窗口守卫后、命中系统副作用之前返回
-    /// 错误的分支。NSWindow 只创建不显示（无副作用）。
-    private func makeWindowGuardedLegs() -> SwiftEdgeHostLegs {
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 10, height: 10),
-                              styleMask: [.borderless],
-                              backing: .buffered,
-                              defer: false)
+    /// Electron 侧从未实现 launchApp（`electron-edges.ts:59`「moves with its first
+    /// consumer」），core 也零调用点；Swift 侧那份自决实现（自建 vscode:// URL +
+    /// 自持 appId 白名单）随之移除。未知方法一律诚实回落 unimplemented，两端能力面
+    /// 因此一致（本地 open 由实例内 host 包负责，壳只执行 openExternal）。
+    func testLaunchAppIsUnimplementedLikeElectron() {
         let legs = SwiftEdgeHostLegs(config: .init(canShowUI: { true }))
-        legs.mainWindowProvider = { window }
-        return legs
-    }
-
-    func testLaunchAppShapeGuardsAfterWindowGuard() {
-        let legs = makeWindowGuardedLegs()
-        // 缺 appId / 空 appId → unimplemented 形状错误（回落默认表 loud）。
-        let noAppIDPayloads: [AnyCodable?] = [
-            nil,
-            .object([:]),
-            .object(["path": .string("/x")]),
-            .object(["appId": .string(""), "path": .string("/x")]),
-        ]
-        for payload in noAppIDPayloads {
-            let outcome = legs.respond(method: "launchApp", payload: payload)
-            XCTAssertEqual(outcome.error, "swift-edge-unimplemented:launchApp:app-id-missing",
-                           "payload=\(String(describing: payload))")
-        }
-        // 有 appId 缺 path / 空 path → path-missing。
-        let noPathPayloads: [AnyCodable?] = [
-            .object(["appId": .string("finder")]),
-            .object(["appId": .string("finder"), "path": .string("")]),
-        ]
-        for payload in noPathPayloads {
-            let outcome = legs.respond(method: "launchApp", payload: payload)
-            XCTAssertEqual(outcome.error, "swift-edge-unimplemented:launchApp:path-missing",
-                           "payload=\(String(describing: payload))")
-        }
-    }
-
-    func testLaunchAppUnknownAppIdIsLoudNeverGuessed() {
-        // 镜像 open-in.ts：未知 appId → loud（绝不按 path 默认打开——
-        // 通用 path 打开属 openPath 职责）。
-        let legs = makeWindowGuardedLegs()
-        for appId in ["cursor", "zzz", "Finder"] {   // 大小写不折叠（白名单精确）
-            let outcome = legs.respond(method: "launchApp",
-                                       payload: .object(["appId": .string(appId),
-                                                         "path": .string("/tmp/x")]))
-            XCTAssertEqual(outcome.error,
-                           "swift-edge-ui-unavailable:launchApp:unknown-app-id:\(appId)")
-        }
-    }
-
-    func testLaunchAppVscodeRequiresAbsolutePath() {
-        let legs = makeWindowGuardedLegs()
         let outcome = legs.respond(method: "launchApp",
                                    payload: .object(["appId": .string("vscode"),
-                                                     "path": .string("relative/path")]))
-        XCTAssertEqual(outcome.error,
-                       "swift-edge-unimplemented:launchApp:path-not-absolute")
+                                                     "path": .string("/tmp")]))
+        XCTAssertNil(outcome.result)
+        XCTAssertEqual(outcome.error, "swift-edge-unimplemented:launchApp")
     }
-
-    // MARK: - S-D：vscode://file URL 构造纯逻辑（deep-link.ts 同构锚点）
-
-    func testVscodeFileURLEncodingAnchors() {
-        // Electron deep-link.test.ts:606 锚点逐字对照：
-        // runVscodeLaunch 对 '/home/user/我的 项目' 产出
-        // 'vscode://file/home/user/%E6%88%91%E7%9A%84%20%E9%A1%B9%E7%9B%AE'。
-        XCTAssertEqual(SwiftEdgeHostLegs.vscodeFileURL(for: "/home/user/我的 项目")?.absoluteString,
-                       "vscode://file/home/user/%E6%88%91%E7%9A%84%20%E9%A1%B9%E7%9B%AE")
-        // open-in.test.ts:177 锚点：'/home/user/local-ws' → vscode://file/home/user/local-ws。
-        XCTAssertEqual(SwiftEdgeHostLegs.vscodeFileURL(for: "/home/user/local-ws")?.absoluteString,
-                       "vscode://file/home/user/local-ws")
-        // encodeURIComponent 保留集：-_.!~*'() 与字母数字不转义。
-        XCTAssertEqual(SwiftEdgeHostLegs.vscodeFileURL(for: "/a/-_.!~*'() b")?.absoluteString,
-                       "vscode://file/a/-_.!~*'()%20b")
-        // '#'、'?'、'&'、'%'、'+' 全部编码（encodeRemotePath 同族覆盖）。
-        XCTAssertEqual(SwiftEdgeHostLegs.vscodeFileURL(for: "/a/b#c?d&e%f+g")?.absoluteString,
-                       "vscode://file/a/b%23c%3Fd%26e%25f%2Bg")
-    }
-
-    func testVscodeFileURLRejectsNonAbsolute() {
-        XCTAssertNil(SwiftEdgeHostLegs.vscodeFileURL(for: ""))
-        XCTAssertNil(SwiftEdgeHostLegs.vscodeFileURL(for: "relative/path"))
-        XCTAssertNil(SwiftEdgeHostLegs.vscodeFileURL(for: "~/proj"))
-    }
-
-    func testVscodeFileURLPreservesEmptySegmentsAndTrailingSlash() {
-        // JS split('/') 保留空段（encodeRemotePath 同款）；'//' 双斜杠保字面。
-        XCTAssertEqual(SwiftEdgeHostLegs.vscodeFileURL(for: "//host/share")?.absoluteString,
-                       "vscode://file//host/share")
-        XCTAssertEqual(SwiftEdgeHostLegs.vscodeFileURL(for: "/trailing/")?.absoluteString,
-                       "vscode://file/trailing/")
-    }
-
     // MARK: - S1：交互腿异步应答（10 分钟上限、超时弃权、非交互短界保持）
 
     /// 跨线程单值盒（回执在后台/主线程写，断言线程读）。

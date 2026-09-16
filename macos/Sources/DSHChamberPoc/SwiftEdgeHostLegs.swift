@@ -447,57 +447,11 @@ public final class SwiftEdgeHostLegs {
                 }
                 return (nil, nil)
             }
-        case "launchApp":
-            // E12 open-in 原生拉起叶（S-D：appId 映射补齐）：payload
-            // {appId, path}（node-edges launchApp 出站形状）。Electron open-in
-            // 权威语义（open-in.ts 注册表）＝按 appId 白名单分派 provider
-            // （finder/vscode 固定两枚），未知 appId → 'unknown open-in app'
-            // loud——绝不猜测/回退成通用打开（通用 path 打开属 openPath edge
-            // 职责）。分类/校验（instanceId/来源指纹/路径纪律）在 core
-            // （open-in.test.ts 继续覆盖），本叶只执行：
-            //   - 'finder' → Finder 揭示 path（darwin 分支：文件与目录一律
-            //     activateFileViewerSelecting，同 finderApp.open 揭示语义；
-            //     目录 openPath 分支仅非 darwin，本壳不可达）；
-            //   - 'vscode' → vscode://file/<path> 本地文件夹深链（deep-link.ts
-            //     buildVscodeFileUrl 同构：绝对路径逐段 encodeURIComponent
-            //     编码；vscode:// scheme 交 NSWorkspace 系统深链打开）。
-            //     远程 ssh-remote 目标需实例 authority 上下文（host/user/
-            //     transport），本载荷无法表达——远程 vscode 由 core 在
-            //     OPEN_IN 通道构造 vscode:// URL 后经 openExternal edge
-            //     打开，不经本叶（注释声明）；
-            //   - 缺省（未知 appId）→ loud ui-unavailable（镜像 open-in.ts
-            //     unknown-open-in-app 的 loud，绝不按 path 默认打开）。
-            return performUI(method: method) {
-                guard self.mainWindowProvider?() != nil else {
-                    return (nil, Self.uiUnavailablePrefix + method + ":no-window")
-                }
-                guard let appId = dict.flatMap({ EdgePayload.string($0["appId"]) }),
-                      !appId.isEmpty else {
-                    return (nil, Self.unimplementedPrefix + method + ":app-id-missing")
-                }
-                guard let rawPath = dict.flatMap({ EdgePayload.string($0["path"]) }),
-                      !rawPath.isEmpty else {
-                    return (nil, Self.unimplementedPrefix + method + ":path-missing")
-                }
-                switch appId {
-                case "finder":
-                    NSWorkspace.shared.activateFileViewerSelecting(
-                        [URL(fileURLWithPath: rawPath)]
-                    )
-                    return (.bool(true), nil)
-                case "vscode":
-                    guard let target = Self.vscodeFileURL(for: rawPath) else {
-                        return (nil, Self.unimplementedPrefix + method + ":path-not-absolute")
-                    }
-                    if NSWorkspace.shared.open(target) {
-                        return (.bool(true), nil)
-                    }
-                    return (nil, Self.uiUnavailablePrefix + method + ":open-failed")
-                default:
-                    // 镜像 open-in.ts：未知 appId → loud，绝不 fallback。
-                    return (nil, Self.uiUnavailablePrefix + method + ":unknown-app-id:" + appId)
-                }
-            }
+        // E12 open-in 原生拉起叶（launchApp）已于 2026-12 移除（S-05 复裁决）：
+        // Electron 侧从未实现该叶（`electron-edges.ts:59`「launchApp moves with its
+        // first consumer」），core 也零调用点；Swift 侧的实现自建 `vscode://` URL、
+        // 自持 appId 白名单，等于在无人可达的路径上留一份与 core 注册表重复的决策。
+        // 未知方法走默认分支 → `swift-edge-unimplemented:launchApp`，两端对称、诚实。
         case "setLoginItem":
             // E14 登录自启叶（S-D 补齐）：payload {enabled: bool}。Electron
             // 语义 = app.setLoginItemSettings({openAtLogin: enabled})（main.ts
@@ -738,38 +692,12 @@ public final class SwiftEdgeHostLegs {
         return (nil, Self.uiUnavailablePrefix + "pickPluginSource:no-selection")
     }
 
-    // MARK: - launchApp 的 vscode 深链 URL 构造（纯逻辑，单测直测）
+    // MARK: - open-in 本地拉起：无壳侧实现（S-05 复裁决，2026-12）
 
-    /// vscode://file/<path> 深链 URL（镜像 deep-link.ts buildVscodeFileUrl /
-    /// encodeRemotePath：绝对路径逐段编码、分隔符保持字面；drive-colon 还原
-    /// 分支仅 win32 路径可达，本壳 mac-only 不可达）。path 非绝对（含空）→
-    /// nil——叶侧形状守卫（绝对性/控制字符/长度/存在性的深度校验在 core
-    /// open-in.ts runOpenInLaunch，本叶不重复实现）。
-    static func vscodeFileURL(for path: String) -> URL? {
-        guard path.hasPrefix("/") else { return nil }
-        let encoded = path.dropFirst()
-            .split(separator: "/", omittingEmptySubsequences: false)
-            .map { encodeURIComponentSegment(String($0)) }
-            .joined(separator: "/")
-        return URL(string: "vscode://file/" + encoded)
-    }
-
-    /// encodeURIComponent 语义的段转义（JS 同族）：仅
-    /// A–Z a–z 0–9 - _ . ! ~ * ' ( ) 保持字面，其余字符按 UTF-8 字节转
-    /// %XX（大写十六进制）——空格 → %20、CJK/emoji → 逐字节 %XX，与
-    /// deep-link.ts 的 encodeRemotePath 输出逐字一致（对照其单测锚点
-    /// 'vscode://file/home/user/%E6%88%91%E7%9A%84%20%E9%A1%B9%E7%9B%AE'）。
-    static func encodeURIComponentSegment(_ segment: String) -> String {
-        let allowed = CharacterSet(charactersIn:
-            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.!~*'()")
-        return segment.utf8.map { byte -> String in
-            let scalar = UnicodeScalar(byte)
-            if allowed.contains(scalar) {
-                return String(Character(scalar))
-            }
-            return String(format: "%%%02X", byte)
-        }.joined()
-    }
+    // `launchApp` 的 vscode://file URL 构造与 appId 白名单随该叶一并移除：open-in 的
+    // 决策（注册表、设置、可用性、URL 规则）只在 core（`open-in.ts` / `deep-link.ts`），
+    // 本地目录/图标/拉起由实例内 host 包 `dsh-chamber-seed-open-in` 负责；壳只执行
+    // `openExternal`（共享路径）。两端能力面因此一致：都没有 launchApp 叶。
 
     /// openExternal/openPath 的 URL 提取：openExternal 载荷 {url: string}；
     /// openPath 载荷 {path: string}。
