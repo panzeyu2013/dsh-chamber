@@ -73,6 +73,11 @@ const hydration = createBridgeHydration<UpdateState, UpdateSurface>({
     // authoritative snapshot as-is (the release rule above is push-only —
     // only a PUSH can prove a restart failed).
   },
+  // 保持设计值 false（2026-12 审查后回退）：这里不靠慢探针兜底——Swift shim 已与
+  // preload 同序（只有 info 成功才暴露 dshChamber），因此「surface 存在但 query 恒
+  // reject」的形态不再出现；surface 缺失时走的是与本 store 无关的外层重试链。
+  // 慢探针本身的收敛性另有加固（bridge-hydration：成功才重置背退 + 无订阅者即停），
+  // 供 settings-store 等仍然启用它的消费面使用。
   slowReProbe: false,
 })
 

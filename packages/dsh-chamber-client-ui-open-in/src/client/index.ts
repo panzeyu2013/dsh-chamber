@@ -127,7 +127,10 @@ export function apply(ctx: ClientContext): void {
     getChoice: adapter.getChoice,
     choose: adapter.choose,
     iconUrl: adapter.iconUrl,
-    platform: adapter.platform,
+    // 保持一次性读取（2026-12 审查后回退）：根因修在 Swift shim——它现在与 preload
+    // 同序（只有 info 成功才暴露 dshChamber），因此注入发生时 platform 必然已填；
+    // 之前那个 getter 是在补偿 shim 的早暴露，不该由共享插件承担。
+    platform: bridgePlatform(),
   })
 
   ctx.slots.inject(OPEN_IN_HEADER_SLOT, () => ctx.slots.register({

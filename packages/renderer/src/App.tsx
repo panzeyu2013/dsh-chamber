@@ -3494,6 +3494,9 @@ export default function App() {
    * and no producer ever registered again (2026-09 cleanup).
    */
   useEffect(() => {
+    // 保持一次性读取（2026-12 审查后回退）：根因修在 Swift shim——它只在 info
+    // 成功后暴露 dshChamber（与 preload 同序），所以「surface 在、dshVersion 为
+    // null」的形态不再出现；此处不做与 Electron 不同的有界重读。
     const version = window.dshChamber?.dshVersion ?? undefined
     if (version === undefined) return
     setHostFacts(prev => {

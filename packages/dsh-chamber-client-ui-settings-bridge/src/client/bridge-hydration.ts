@@ -97,6 +97,10 @@ export function createBridgeHydration<TState, TSurface>(
    *  capped at 2s so a late bridge or a one-shot query failure can never
    *  strand the section permanently disabled. */
   let retryDelayMs = 100
+  /** 连续「surface 已在但 attach 失败」次数（2026-12 审查）：一次性失败要快速
+   *  自愈（首次失败仍按 100ms 重试），但持续失败必须收敛——否则每次 fire 都重置背退
+   *  会退化成 ~10Hz 的 invoke 风暴（Swift ready 前的 ipc_not_ready 即此形态）。 */
+  let attachFailureStreak = 0
 
   function notify(): void {
     for (const listener of listeners) listener()
@@ -112,6 +116,9 @@ export function createBridgeHydration<TState, TSurface>(
     })
     void config.query(api)
       .then((state) => {
+        // 成功即清连续失败计数并复位背退（一次失败后的自愈仍然是 100ms 级）。
+        attachFailureStreak = 0
+        retryDelayMs = 100
         // Push wins over a stale query snapshot: only apply the query result
         // when no push has landed yet.
         if (current === null) {
@@ -121,6 +128,7 @@ export function createBridgeHydration<TState, TSurface>(
         }
       })
       .catch(() => {
+        attachFailureStreak += 1
         if (!config.slowReProbe) return
         // A one-shot query failure must not leave the store unhydrated
         // forever (the section would stay permanently disabled with no
@@ -129,6 +137,10 @@ export function createBridgeHydration<TState, TSurface>(
         bridgeUnsubscribe?.()
         bridgeUnsubscribe = null
         bridgeSubscribed = false
+        // 存储契约要求「一次性失败不得把 section 永久停在 disabled」——重探必须继续
+        // （即使当前没有订阅者：settings-store 在模块加载时就开始水化）。收敛性由
+        // 连续失败计数 + 成功才复位背退保证：100→200→…→2s（≤0.5Hz），不会退化成
+        // 固定 100ms 的风暴。
         scheduleSlowProbe()
       })
   }
@@ -148,7 +160,9 @@ export function createBridgeHydration<TState, TSurface>(
         if (current === null && listeners.size > 0) scheduleSlowProbe()
         return
       }
-      retryDelayMs = 100
+      // 找到 surface 时通常立刻恢复 100ms 快节奏（一次性失败的自愈语义），但连续
+      // 失败 ≥2 次就不再重置背退：延迟按 100→200→…→2s 收敛，风暴被压在 0.5Hz。
+      if (attachFailureStreak < 2) retryDelayMs = 100
       attachBridge(api)
     }, retryDelayMs)
     retryDelayMs = Math.min(retryDelayMs * 2, 2_000)
