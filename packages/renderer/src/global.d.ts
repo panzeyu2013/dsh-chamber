@@ -83,6 +83,16 @@ export interface SshInstanceSpec {
    * never a secret value). Absent on older payloads.
    */
   secretStorage?: 'safeStorage' | 'plaintext'
+  /**
+   * Read-time NON-SECRET S-29 projection: the credentials mirror is a
+   * safeStorage-encrypted file written by the Electron flavor that this
+   * Electron-free shell (Swift sidecar without a keychain crypto adapter)
+   * cannot decrypt. The file is preserved unchanged and its entries fail
+   * closed; the settings UI can surface a precise "re-enter credentials in
+   * this flavor, or reopen the Electron flavor" notice. Optional: absent on
+   * older payloads / when the mirror is readable.
+   */
+  secretStorageUnreadable?: boolean
 }
 
 /** Instance spec as accepted on save (kind/user/sshPort/serviceName are optional inputs). */
@@ -519,7 +529,7 @@ export type SshPluginUndoIpcResult =
  * channel, a release-page URL, a short error text. Mirrors
  * packages/desktop/preload.cts structurally (interface merging).
  */
-export type UpdatePhase = 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'downloaded' | 'error'
+export type UpdatePhase = 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'error'
 
 /** Non-secret update state projection (design 11 §3.2). */
 export interface UpdateState {

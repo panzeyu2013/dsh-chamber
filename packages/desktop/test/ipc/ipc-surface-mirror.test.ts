@@ -458,7 +458,7 @@ test('renderer connection target/input/spec mirrors desktop v2 fields including 
     interfaceFieldNames(transportProvider, 'TransportInstanceInput'),
     'renderer input mirror drifted from desktop transport input',
   )
-  const projectionFields = new Set(['sshPasswordSet', 'tokenSet', 'passwordSet', 'secretStorage', 'sourceFingerprint'])
+  const projectionFields = new Set(['sshPasswordSet', 'tokenSet', 'passwordSet', 'secretStorage', 'secretStorageUnreadable', 'sourceFingerprint'])
   assert.deepEqual(
     interfaceFieldNames(renderer, 'SshInstanceSpec').filter(field => !projectionFields.has(field)),
     interfaceFieldNames(transportProvider, 'TransportInstanceSpec'),

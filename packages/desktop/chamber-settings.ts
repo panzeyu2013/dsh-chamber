@@ -11,7 +11,7 @@
  * electron side effects (powerSaveBlocker / setLoginItemSettings / XDG
  * autostart / window lifecycle) live in main.ts.
  */
-import { renameSync } from 'node:fs';
+import { lstatSync, renameSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { atomicWritePrivateFileNoFollow, ensurePrivateDirectoryNoFollow, readPrivateFileNoFollow } from './control-plane-module.ts';
 import { removeLegacyTmpResidue } from './store-file-hygiene.ts';
@@ -129,9 +129,12 @@ const SETTINGS_KEYS: ReadonlyArray<keyof ChamberSettings> = [
 /** Normalize a registry origin (design 18 M4): a valid https:// URL with no
  *  userinfo, reduced to scheme://host (no path/query/hash, no trailing slash).
  *  Returns null for anything else — the registry origin is a trust anchor, so
- *  invalid input is never silently accepted. */
+ *  invalid input is never silently accepted. P-12: the accept/reject decision
+ *  is the strict isAllowedRegistryOrigin predicate (shape-for-shape with the
+ *  Swift leg); WHATWG parsing only canonicalizes the accepted value. */
 function normalizeRegistryOrigin(raw: unknown): string | null {
   if (typeof raw !== 'string' || raw === '') return null;
+  if (!isAllowedRegistryOrigin(raw)) return null;
   let url: URL;
   try {
     url = new URL(raw);
@@ -144,6 +147,192 @@ function normalizeRegistryOrigin(raw: unknown): string | null {
   if (url.search !== '' || url.hash !== '') return null;
   return url.origin;
 }
+
+/** P-12: settings-file size bound, mirroring Swift StartupSettings (1 << 20).
+ *  An oversized document is corruption, never a truncated read. */
+export const MAX_SETTINGS_FILE_BYTES = 1 << 20;
+
+/** P-12: encoding discipline mirroring Swift StartupSettings.hasRejectedEncoding.
+ *  JSON.parse only accepts UTF-8 text: a UTF-8 BOM (U+FEFF) or a raw NUL byte
+ *  (which is what a UTF-16/UTF-32 document decodes to under a UTF-8 read) is
+ *  corruption. JSON.parse would reject most of these too, but the verdict must
+ *  be explicit so it cannot silently depend on the parser's whitespace rules. */
+function hasRejectedSettingsEncoding(raw: string): boolean {
+  return raw.startsWith('\uFEFF') || raw.includes('\u0000');
+}
+
+/** JSON string-body escape decoding (\uXXXX becomes its literal character)
+ *  used only for key-name equality — mirrors Swift StartupSettings.decodeJSONEscapes
+ *  so an escaped duplicate key ({"keepAwake":1,"\\u006beepAwake":2}) is still
+ *  one key. Non-escape backslashes keep their next character. */
+function decodeJsonEscapes(raw: string): string {
+  let out = '';
+  for (let index = 0; index < raw.length; index += 1) {
+    const char = raw[index]!;
+    if (char !== '\\') {
+      out += char;
+      continue;
+    }
+    index += 1;
+    if (index >= raw.length) break;
+    const next = raw[index]!;
+    if (next === '\\') out += '\\';
+    else if (next === '"') out += '"';
+    else if (next === '/') out += '/';
+    else if (next === 'b') out += '\b';
+    else if (next === 'f') out += '\f';
+    else if (next === 'n') out += '\n';
+    else if (next === 'r') out += '\r';
+    else if (next === 't') out += '\t';
+    else if (next === 'u') {
+      const hex = raw.slice(index + 1, index + 5);
+      if (/^[0-9a-fA-F]{4}$/.test(hex)) {
+        out += String.fromCharCode(Number.parseInt(hex, 16));
+        index += 4;
+      }
+    } else {
+      out += next;
+    }
+  }
+  return out;
+}
+
+/** P-12: duplicate JSON keys at ANY nesting level are corruption. JSON.parse
+ *  keeps the LAST occurrence while Swift JSONSerialization keeps the FIRST —
+ *  the same byte stream would otherwise yield opposite settings, so both
+ *  flavors must refuse it (mirrors Swift hasDuplicateJSONKeys, including the
+ *  escape-decoded key comparison). */
+function hasDuplicateJsonKeys(text: string): boolean {
+  const stack: Set<string>[] = [];
+  let inString = false;
+  let escaped = false;
+  let current = '';
+  let pendingKey: string | null = null;
+  for (const char of text) {
+    if (inString) {
+      current += char;
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+      if (char === '\\') {
+        escaped = true;
+        continue;
+      }
+      if (char === '"') {
+        current = current.slice(0, -1);
+        inString = false;
+        pendingKey = decodeJsonEscapes(current);
+        current = '';
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      current = '';
+    } else if (char === '{') {
+      stack.push(new Set());
+    } else if (char === '}') {
+      stack.pop();
+    } else if (char === ':' && stack.length > 0 && pendingKey !== null) {
+      const top = stack[stack.length - 1]!;
+      if (top.has(pendingKey)) return true;
+      top.add(pendingKey);
+      pendingKey = null;
+    }
+  }
+  return false;
+}
+
+/** WHATWG dot-segment normalization used by the strict origin check below
+ *  (only '.'/'..' and their %2e spellings are dot segments; any other escape
+ *  stays a literal segment). */
+function normalizeDotSegments(pathValue: string): string {
+  if (pathValue === '') return '';
+  const segments: string[] = [];
+  for (const segment of pathValue.split('/')) {
+    const lowered = segment.toLowerCase();
+    if (lowered === '.' || lowered === '%2e') continue;
+    if (lowered === '..' || lowered === '.%2e' || lowered === '%2e.' || lowered === '%2e%2e') {
+      if (segments.length > 0) segments.pop();
+      continue;
+    }
+    segments.push(segment);
+  }
+  return segments.join('/');
+}
+
+/** P-12: non-ASCII host scalars UTS46/bidi/private-use rules (mirror of Swift
+ *  StartupSettings.isForbiddenNonAsciiHostScalar): all non-ASCII digits, RTL
+ *  script blocks, private-use areas and the few UTS46-forbidden letters are
+ *  rejected fail-closed. */
+function isForbiddenNonAsciiHostScalar(value: number): boolean {
+  if (value >= 0xE000 && value <= 0xF8FF) return true;
+  if (value >= 0xF0000) return true;
+  if (value >= 0x0590 && value <= 0x08FF) return true;
+  if (value >= 0xFB1D && value <= 0xFDFF) return true;
+  if (value >= 0xFE70 && value <= 0xFEFF) return true;
+  if (value >= 0x10800 && value <= 0x10FFF) return true;
+  if (value >= 0x1E800 && value <= 0x1EFFF) return true;
+  if (value === 0x037A || (value >= 0x2135 && value <= 0x2138)) return true;
+  return /\p{N}/u.test(String.fromCodePoint(value));
+}
+
+/** P-12: strict registry-origin shape check, shape-for-shape with Swift
+ *  StartupSettings.isAllowedRegistryOrigin. WHATWG URL parsing alone is laxer
+ *  in exactly the ways the Swift leg judges corrupt (IPv6 literals, IDN
+ *  normalization hiding forbidden scalars, empty/leading-'+'/out-of-range
+ *  ports, surrounding whitespace, backslashes). Only when this predicate
+ *  accepts may normalizeRegistryOrigin use WHATWG to produce the canonical
+ *  origin value — so both flavors accept/reject the same shapes. */
+function isAllowedRegistryOrigin(raw: string): boolean {
+  const stripped = raw.replace(/[\t\n\r]/g, '');
+  if (!stripped.toLowerCase().startsWith('https:')) return false;
+  let rest = stripped.slice('https:'.length);
+  if (rest.startsWith('//')) rest = rest.slice(2);
+  const markerIndexes = [rest.indexOf('/'), rest.indexOf('?'), rest.indexOf('#')]
+    .filter(index => index >= 0)
+    .sort((a, b) => a - b);
+  const authorityEnd = markerIndexes.length > 0 ? markerIndexes[0]! : rest.length;
+  const authority = rest.slice(0, authorityEnd);
+  const tail = rest.slice(authorityEnd);
+  if (authority === '' || authority.includes('@') || authority.includes('\\')) return false;
+  const parts = authority.split(':');
+  if (parts.length > 2) return false;
+  const host = parts[0]!;
+  if (host === '') return false;
+  if (parts.length === 2) {
+    const portText = parts[1]!;
+    if (!/^[0-9]+$/.test(portText)) return false;
+    const port = Number(portText);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return false;
+  }
+  for (const scalar of host) {
+    const value = scalar.codePointAt(0)!;
+    const asciiAllowed = (value >= 0x30 && value <= 0x39) || (value >= 0x41 && value <= 0x5A)
+      || (value >= 0x61 && value <= 0x7A) || value === 0x2E || value === 0x2D || value === 0x5F;
+    if (asciiAllowed) continue;
+    if (value <= 0x7F) return false;
+    if (isForbiddenNonAsciiHostScalar(value)) return false;
+    if (/\p{L}/u.test(scalar) || /\p{N}/u.test(scalar)) continue;
+    return false;
+  }
+  let pathOnly = '';
+  let remainder = '';
+  let markerSeen = false;
+  for (const char of tail) {
+    if (!markerSeen && (char === '?' || char === '#')) {
+      markerSeen = true;
+      continue;
+    }
+    if (markerSeen) remainder += char;
+    else pathOnly += char;
+  }
+  if (markerSeen && remainder !== '') return false;
+  const normalized = normalizeDotSegments(pathOnly);
+  return normalized === '' || normalized === '/';
+}
+
 
 const NOTIFICATION_SETTINGS_KEYS: ReadonlyArray<keyof ChamberNotificationSettings> = [
   'enabled',
@@ -259,12 +448,34 @@ function isValidSettingsFile(input: unknown): input is Record<string, unknown> {
   return true;
 }
 
+/** S-41: the read outcome the callers need in order to decide whether a
+ *  side effect (the login item) may be touched. Swift's
+ *  `StartupSettings.readValidatedData` returns the same three-way verdict.
+ *
+ *  S-41 follow-up (2026-12 adversarial verification): `corrupt` also covers the
+ *  launches AFTER the preservation. `preserveCorrupt` renames the unreadable
+ *  file to `*.corrupt`, so the next launch sees a MISSING live path plus its
+ *  durable corrupt evidence — reading that as `missing` would replay the
+ *  default `launchAtLogin:false` and silently unregister the login item one
+ *  launch later. The sibling keeps the state indeterminate (defaults for the
+ *  UI, no OS-level side effect). */
+export type SettingsFileState = 'missing' | 'ok' | 'corrupt';
+
 /**
  * Read the settings file. Missing file → defaults; corrupt file → PRESERVE it
  * as `*.corrupt` (reversible, never silently faked as defaults) and return
  * defaults with a loud `notice` for the caller to log.
+ *
+ * `state` (S-41) tells the caller WHICH of those happened: a corrupt file may
+ * surface default VALUES for the UI, but it must never be treated as a user
+ * instruction to change an OS-level side effect (the login item). A missing
+ * live file whose `*.corrupt` sibling exists is the launch AFTER a
+ * preservation — it reports `corrupt` too, so the indeterminate state does not
+ * decay into the default replay one launch later.
  */
-export function readSettingsFile(filePath: string): { settings: ChamberSettings; notice: string | null } {
+export function readSettingsFile(
+  filePath: string,
+): { settings: ChamberSettings; notice: string | null; state: SettingsFileState } {
   // One-time crash-residue sweep (2a follow-up): the pre-2a write path's
   // FIXED `${filePath}.tmp` residue (see removeLegacyTmpResidue), swept at
   // the startup load.
@@ -280,23 +491,42 @@ export function readSettingsFile(filePath: string): { settings: ChamberSettings;
     // ENOENT (defaults below); anything unsafe (a planted symlink / multi-
     // link leaf) is treated like an unreadable file — loud notice + preserved
     // as `*.corrupt`, never read through.
-    raw = readPrivateFileNoFollow(filePath, { tightenMode: 0o600 }).value;
+    raw = readPrivateFileNoFollow(filePath, { tightenMode: 0o600, maxBytes: MAX_SETTINGS_FILE_BYTES }).value;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return { settings: { ...DEFAULT_CHAMBER_SETTINGS }, notice: null };
+      // S-41 follow-up: the live file is gone, but a preserved `*.corrupt`
+      // sibling proves the settings were unreadable (this reader renamed the
+      // file on the previous launch). Keep the state indeterminate instead of
+      // decaying to `missing` — whose default would replay as a silent OS
+      // login-item unregister.
+      if (corruptSiblingExists(filePath)) {
+        return {
+          settings: { ...DEFAULT_CHAMBER_SETTINGS },
+          notice: `chamber settings missing but the preserved corrupt copy ${filePath}.corrupt exists; using defaults`,
+          state: 'corrupt',
+        };
+      }
+      return { settings: { ...DEFAULT_CHAMBER_SETTINGS }, notice: null, state: 'missing' };
     }
     const notice = `chamber settings unreadable (${String(error)}); using defaults`;
     preserveCorrupt(filePath);
-    return { settings: { ...DEFAULT_CHAMBER_SETTINGS }, notice };
+    return { settings: { ...DEFAULT_CHAMBER_SETTINGS }, notice, state: 'corrupt' };
   }
   try {
+    // P-12（双 flavor 严格度对齐）：Swift StartupSettings 判损坏的形态在共享
+    // 读取器上同样成立——编码（BOM/裸 NUL）、任意层级的重复 JSON 键（JSON.parse
+    // 取最后一个而 JSONSerialization 取第一个：同一字节流会得到相反结论）与
+    // 大小上限（readPrivateFileNoFollow 的 maxBytes 拒绝而非截断）。registryOrigin
+    // 的形态严格度由 isAllowedRegistryOrigin 单源（见 normalizeRegistryOrigin）。
+    if (hasRejectedSettingsEncoding(raw)) throw new Error('settings file has an unsupported encoding (BOM/NUL)');
+    if (hasDuplicateJsonKeys(raw)) throw new Error('settings file has duplicate JSON keys');
     const parsed: unknown = JSON.parse(raw);
     if (!isValidSettingsFile(parsed)) throw new Error('settings file is not an object');
-    return { settings: normalizeSettings(parsed), notice: null };
+    return { settings: normalizeSettings(parsed), notice: null, state: 'ok' };
   } catch (error) {
     const notice = `chamber settings corrupt (${String(error)}); preserved as *.corrupt, using defaults`;
     preserveCorrupt(filePath);
-    return { settings: { ...DEFAULT_CHAMBER_SETTINGS }, notice };
+    return { settings: { ...DEFAULT_CHAMBER_SETTINGS }, notice, state: 'corrupt' };
   }
 }
 
@@ -309,6 +539,18 @@ export function readSettingsFile(filePath: string): { settings: ChamberSettings;
 export function writeSettingsFile(filePath: string, settings: ChamberSettings): void {
   ensurePrivateDirectoryNoFollow(dirname(filePath), 0o700);
   atomicWritePrivateFileNoFollow(filePath, `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
+}
+
+/** S-41 follow-up: does the preserved `*.corrupt` evidence sibling exist?
+ *  Any directory entry counts (even a symlink) — lstatSync never follows it,
+ *  matching the no-follow discipline of the read path. */
+function corruptSiblingExists(filePath: string): boolean {
+  try {
+    lstatSync(`${filePath}.corrupt`);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function preserveCorrupt(filePath: string): void {
@@ -339,6 +581,120 @@ export function computeSupported(
     launchAtLogin: true,
     closeToTray: closeToTrayRecoveryAvailable(platform, trayAvailable),
   };
+}
+
+/** S-08: the three outcomes a main-window `close` request can resolve to
+ *  before the quit gate runs. `defer-quit` keeps the window alive while the
+ *  quit decision is pending — the window is ONLY destroyed after the decision
+ *  confirmed the exit. */
+export type MainWindowCloseAction = 'hide' | 'defer-quit' | 'close';
+
+/**
+ * S-08 (2026-12 macOS audit): route a main-window close request.
+ *
+ * The defect: with close-behavior='quit', Electron used to let the window be
+ * destroyed first (`window-all-closed` → `app.quit()`) and only THEN ask for
+ * the quit decision in `before-quit`. Cancelling the dialog therefore had no
+ * window left to restore and rebuilt it via `loadURL` — a full page reload,
+ * i.e. lost renderer state. The Swift flavor never destroys the window there:
+ * it turns the close into `NSApp.terminate`, and cancelling just
+ * `restoreMainWindow()`s the still-living window (AppDelegate.swift:580-617,
+ * 642-646).
+ *
+ * The fix is this decision: a close that would end in a quit is `defer-quit`
+ * (the caller preventDefaults it and asks `app.quit()` with the window
+ * alive); only an already-confirmed quit or the updater's own window teardown
+ * may actually `close`. The hide-to-tray branch is unchanged
+ * (`shouldHideToTray`). No JSON source of truth is involved: the flags are the
+ * live quit state machine.
+ *
+ * @param behavior - chamber setting: 'hide-to-tray' | 'quit'.
+ * @param recoveryAvailable - tray on win/linux; the macOS Dock always recovers.
+ * @param quitRequested - a real quit is already in flight.
+ * @param quitConfirmed - this quit was confirmed (or exempt): the window may die.
+ * @param updateRestartArmed - electron-updater's quitAndInstall is closing
+ *   windows itself (Electron closes windows BEFORE before-quit): that close
+ *   must reach the window manager, as in shouldHideToTray.
+ */
+export function decideMainWindowClose(input: {
+  behavior: WindowCloseBehavior
+  recoveryAvailable: boolean
+  quitRequested: boolean
+  quitConfirmed: boolean
+  updateRestartArmed: boolean
+}): MainWindowCloseAction {
+  if (shouldHideToTray(input.behavior, input.recoveryAvailable, input.quitRequested, input.updateRestartArmed)) {
+    return 'hide';
+  }
+  if (input.quitConfirmed || input.updateRestartArmed) return 'close';
+  return 'defer-quit';
+}
+
+/**
+ * S-41: does the startup login-item reconcile touch the OS login item?
+ *
+ * Swift's `StartupSettings.readLaunchAtLogin` returns nil for a corrupt file
+ * and AppDelegate then does NOT apply anything (AppDelegate.swift:402-420);
+ * a missing file or a valid file without the key replays `false` — the same
+ * as Electron's default settings. Electron used to fall back to defaults for
+ * a corrupt file and replay `launchAtLogin:false` anyway, which silently
+ * UNREGISTERS the user's login item; both flavors must now treat a corrupt
+ * file as "settings unreadable → do not touch the login item". The loud
+ * corrupt-file handling (*.corrupt preservation + notice) is unchanged.
+ */
+export function launchAtLoginReconcileDecision(
+  state: SettingsFileState,
+  launchAtLogin: boolean,
+): { action: 'apply'; enabled: boolean } | { action: 'skip'; reason: 'corrupt-settings' } {
+  if (state === 'corrupt') return { action: 'skip', reason: 'corrupt-settings' };
+  return { action: 'apply', enabled: launchAtLogin };
+}
+
+/** P-20: the subset of Electron's LoginItemSettings the read-back validates
+ *  (structural so the decision is testable without electron). */
+export interface LoginItemSettingsReadBack {
+  openAtLogin?: unknown
+  /** darwin only (macOS 13+): 'not-registered' | 'enabled' | 'requires-approval' | 'not-found'. */
+  status?: unknown
+}
+
+/**
+ * P-20: judge the state the OS reports AFTER `setLoginItemSettings`.
+ *
+ * The defect: Electron returned `{ok:true}` unconditionally, so an OS that
+ * silently refused (or parked the item behind a user approval) still looked
+ * applied — while Swift's SMAppService leg pre-checks its status and fails
+ * loudly. This predicate is that honest read-back:
+ *  - a missing/non-boolean `openAtLogin` is a failed read, never a pass;
+ *  - a state that does not match the request is a failure with both values;
+ *  - on macOS, an item macOS still holds at 'requires-approval' (System
+ *    Settings > General > Login Items) is not actually launchable → failure.
+ *
+ * @param requested - the value just written.
+ * @param observed - `app.getLoginItemSettings()` read back (structural subset).
+ * @param platform - process.platform (the status check is darwin-only).
+ */
+export function verifyLaunchAtLoginReadBack(
+  requested: boolean,
+  observed: LoginItemSettingsReadBack,
+  platform: NodeJS.Platform,
+): { ok: true } | { ok: false; error: string } {
+  // The most actionable verdict first: macOS holds the item at
+  // 'requires-approval' — registered but not launchable until the user acts.
+  if (platform === 'darwin' && requested && observed.status === 'requires-approval') {
+    return {
+      ok: false,
+      error: 'login item registered but macOS requires user approval (System Settings > General > Login Items)',
+    };
+  }
+  const actual = observed.openAtLogin;
+  if (typeof actual !== 'boolean') {
+    return { ok: false, error: 'login item read-back unavailable (getLoginItemSettings returned no openAtLogin)' };
+  }
+  if (actual !== requested) {
+    return { ok: false, error: `login item read-back mismatch: requested openAtLogin=${requested}, observed ${actual}` };
+  }
+  return { ok: true };
 }
 
 /**

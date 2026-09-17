@@ -3,7 +3,8 @@
  * process group, WAIT for the exit, and only then remove the pid record
  * (design 02 §3.3: 注销只在确认进程已退出后) — and every failed spawnAttempt
  * path must converge on it so no untracked detached process can leak.
- * Pure-Node with a fake dsh entry; no real dsh, no fixed ports.
+ * Pure-Node with a fake dsh entry; no real dsh. Ports come from an ephemeral
+ * bind so the suite does not depend on 17510+ being free on the developer machine.
  */
 
 import { test } from 'node:test'
@@ -14,6 +15,7 @@ import { createHash } from 'node:crypto'
 import { EventEmitter, once } from 'node:events'
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
+import { createServer as createNetServer } from 'node:net'
 import { join } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
@@ -31,6 +33,26 @@ import { authCookieFor, clearAuthCookie, exchangeLaunchToken } from '../../src/b
 import { tempDir } from '../support/utils.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
+
+/**
+ * A dsh port base that is free right now. spawnDsh defaults to 17510, which is
+ * the live chamber instance range: on a developer machine already running the
+ * app every candidate port (17510..17514) is taken, and these cleanup and
+ * browser-auth tests then die with "failed to start after 5 attempts" before
+ * reaching the path they assert. The contracts under test are port-agnostic, so
+ * bind an ephemeral port and hand it over explicitly.
+ */
+async function freeDshPortBase(): Promise<number> {
+  return await new Promise<number>((resolvePort, rejectPort) => {
+    const server = createNetServer()
+    server.on('error', rejectPort)
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      const port = typeof address === 'object' && address !== null ? address.port : 0
+      server.close(() => resolvePort(port))
+    })
+  })
+}
 
 /**
  * The upstream browser-auth cookie NAME for one request authority
@@ -180,17 +202,22 @@ test('spawnDsh: an early-exit attempt cleans its pid record (no stale record for
   ].join('\n'))
   try {
     await assert.rejects(
-      () => spawnDsh({ stateDir, dshHome: join(stateDir, 'home'), dshWorkspacePath, logger: silentLogger }),
+      async () => spawnDsh({ dshPortBase: await freeDshPortBase(), stateDir, dshHome: join(stateDir, 'home'), dshWorkspacePath, logger: silentLogger }),
       /failed to start after 5 attempts/,
     )
     const recordsDir = join(stateDir, 'managed-dsh')
     const leftovers = existsSync(recordsDir) ? readdirSync(recordsDir).filter(file => file.endsWith('.json')) : []
     assert.deepEqual(leftovers, [], 'no pid record may survive a failed spawn attempt')
-    const finalAttemptLog = join(stateDir, 'host-logs', `${DEFAULT_DSH_START_PORT + 4}.log`)
+    // Attempt logs are named after the candidate port. The base is ephemeral here
+    // (17510+ is the live app range, not a test constant), so locate the log by
+    // content instead of recomputing a port number.
+    const hostLogs = join(stateDir, 'host-logs')
     await waitUntil(() => {
-      if (!existsSync(finalAttemptLog)) return false
-      const contents = readFileSync(finalAttemptLog, 'utf8')
-      return contents.includes('final stdout') && contents.includes('final stderr')
+      if (!existsSync(hostLogs)) return false
+      return readdirSync(hostLogs).some(file => {
+        const contents = readFileSync(join(hostLogs, file), 'utf8')
+        return contents.includes('final stdout') && contents.includes('final stderr')
+      })
     }, 3000)
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
@@ -212,7 +239,7 @@ test('spawnDsh: a pid-record write failure still cleans the spawned child up (no
   writeFileSync(join(stateDir, 'managed-dsh'), 'occupied')
   try {
     await assert.rejects(
-      () => spawnDsh({ stateDir, dshHome: join(stateDir, 'home'), dshWorkspacePath, logger: silentLogger }),
+      async () => spawnDsh({ dshPortBase: await freeDshPortBase(), stateDir, dshHome: join(stateDir, 'home'), dshWorkspacePath, logger: silentLogger }),
       // Fail-closed design-18 semantics (merged): a pid-ledger publication
       // failure is never retried on another port — the child is reclaimed
       // and the spawn throws non-retryable (protocol.ts asserts the code).
@@ -244,7 +271,7 @@ test('spawnDsh: abort during the post-TCP host-identity probe wait kills the det
   const controller = new AbortController()
   try {
     const startedAt = Date.now()
-    const spawning = spawnDsh({
+    const spawning = spawnDsh({ dshPortBase: await freeDshPortBase(),
       stateDir,
       dshHome: join(stateDir, 'home'),
       dshWorkspacePath,
@@ -310,7 +337,7 @@ test('spawnDsh: the 0.1.2 browser-auth bootstrap mints the cookie and the host-i
   ].join('\n'))
   const controller = new AbortController()
   try {
-    const spawned = await spawnDsh({
+    const spawned = await spawnDsh({ dshPortBase: await freeDshPortBase(),
       stateDir,
       dshHome: join(stateDir, 'home'),
       dshWorkspacePath,
@@ -350,7 +377,7 @@ test('spawnDsh: a gated host with no launch token fails loud with the browser-au
   const controller = new AbortController()
   try {
     await assert.rejects(
-      () => spawnDsh({ stateDir, dshHome: join(stateDir, 'home'), dshWorkspacePath, logger: silentLogger, signal: controller.signal, authBootstrapWaitMs: 50 }),
+      async () => spawnDsh({ dshPortBase: await freeDshPortBase(), stateDir, dshHome: join(stateDir, 'home'), dshWorkspacePath, logger: silentLogger, signal: controller.signal, authBootstrapWaitMs: 50 }),
       /browser-auth cookie, but the bootstrap failed/,
     )
   } finally {
@@ -408,7 +435,7 @@ test('spawnDsh: a 401 that arrives before the launch-token line re-arms the boun
   ].join('\n'))
   const controller = new AbortController()
   try {
-    const spawned = await spawnDsh({
+    const spawned = await spawnDsh({ dshPortBase: await freeDshPortBase(),
       stateDir, dshHome: join(stateDir, 'home'), dshWorkspacePath, logger: silentLogger, signal: controller.signal, authBootstrapWaitMs,
     })
     assert.equal(
@@ -455,7 +482,7 @@ test('spawnDsh: a readiness line split across chunks is still fully redacted and
   try {
     let spawned: Awaited<ReturnType<typeof spawnDsh>>
     try {
-      spawned = await spawnDsh({
+      spawned = await spawnDsh({ dshPortBase: await freeDshPortBase(),
         stateDir, dshHome: join(stateDir, 'home'), dshWorkspacePath, signal: controller.signal, authBootstrapWaitMs: 200,
         logger: { log(line) { logged.push(String(line)) }, warn(line) { logged.push('WARN:' + String(line)) }, error(line) { logged.push('ERR:' + String(line)) } },
       })
@@ -501,7 +528,7 @@ test('spawnDsh: the launch token never reaches the control-plane log or host-log
   ].join('\n'))
   const controller = new AbortController()
   try {
-    const spawned = await spawnDsh({
+    const spawned = await spawnDsh({ dshPortBase: await freeDshPortBase(),
       stateDir, dshHome: join(stateDir, 'home'), dshWorkspacePath, signal: controller.signal, authBootstrapWaitMs: 200,
       logger: { log(line) { logged.push(String(line)) }, warn() {}, error() {} },
     })
@@ -547,7 +574,7 @@ test('spawnDsh: a token line with a failed exchange fails loud with the browser-
   const controller = new AbortController()
   try {
     await assert.rejects(
-      () => spawnDsh({ stateDir, dshHome: join(stateDir, 'home'), dshWorkspacePath, logger: silentLogger, signal: controller.signal, authBootstrapWaitMs: 50 }),
+      async () => spawnDsh({ dshPortBase: await freeDshPortBase(), stateDir, dshHome: join(stateDir, 'home'), dshWorkspacePath, logger: silentLogger, signal: controller.signal, authBootstrapWaitMs: 50 }),
       /browser-auth cookie, but the bootstrap failed/,
     )
   } finally {
@@ -582,7 +609,7 @@ test('spawnDsh: an old runtime tree (only session/list, no launch token) spawns 
   ].join('\n'))
   const controller = new AbortController()
   try {
-    const spawned = await spawnDsh({ stateDir, dshHome: join(stateDir, 'home'), dshWorkspacePath, logger: silentLogger, signal: controller.signal, authBootstrapWaitMs: 50 })
+    const spawned = await spawnDsh({ dshPortBase: await freeDshPortBase(), stateDir, dshHome: join(stateDir, 'home'), dshWorkspacePath, logger: silentLogger, signal: controller.signal, authBootstrapWaitMs: 50 })
     assert.equal(authCookieFor(`http://127.0.0.1:${spawned.port}`), undefined)
     spawned.child.kill()
     await new Promise<void>(resolve => spawned.child.once('exit', () => resolve()))

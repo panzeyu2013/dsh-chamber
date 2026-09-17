@@ -25,8 +25,8 @@
  *
  * 输出：每次运行打印三项实测 + 阈值；硬门超限或资产缺失/未解析 exit 1
  * （build 失败）；并把本次构建快照 perf-sizes.json 写入 dist/web（vite
- * outDir，下次 build 覆写——跨构建趋势请存档代表点，见
- * docs/progress/performance-baseline.md §11）。gzip 列 = node gzipSync
+ * outDir，下次 build 覆写——跨构建趋势请存档代表点，口径见
+ * scripts/perf/README.md）。gzip 列 = node gzipSync
  * level-6 自洽口径，仅脚本内可比。
  */
 import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'

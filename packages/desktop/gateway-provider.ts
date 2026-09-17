@@ -189,9 +189,13 @@ export function gatewayHttpFailureIsTerminal(statusCode: number): boolean {
 /** Encryption boundary for the credential mirror (design 17 §13.4.1):
  * `encrypt`/`decrypt` translate between a plaintext credential and its
  * durable blob. `decrypt` must THROW when given a non-blob: a file explicitly
- * tagged `safeStorage` is then unreadable/corrupt and is never retried as raw
- * plaintext. A file explicitly tagged `plaintext` bypasses decryption. The
- * default adapter reports unavailable and never encrypts. */
+ * tagged `safeStorage` loaded with an available adapter that cannot decrypt it
+ * is unreadable/corrupt (preserved as `.corrupt`) and is never retried as raw
+ * plaintext. With the adapter UNAVAILABLE the same file is the S-29
+ * cross-flavor case instead: it is what the Electron flavor writes, so it is
+ * preserved in place (never renamed) and reported precisely — see
+ * configureGatewaySecretStore. A file explicitly tagged `plaintext` bypasses
+ * decryption. The default adapter reports unavailable and never encrypts. */
 export interface SecretCryptoAdapter {
   isAvailable(): boolean
   encrypt(plain: string): string
@@ -239,6 +243,25 @@ type GatewaySecretFileStorage = 'safeStorage' | 'plaintext'
  * differs from `secretCrypto.isAvailable()`: a plaintext file remains a
  * plaintext fact until its atomic safeStorage rewrite succeeds. */
 let durableSecretStorage: GatewaySecretFileStorage = 'plaintext'
+
+/** S-29：当前镜像文件是 Electron flavor 以 safeStorage 写出的密文，而本进程
+ *  （Electron-free sidecar）没有壳 Keychain 适配器 ⇒ 无法解密。此时文件**不是
+ *  损坏**（Electron flavor 仍可读它），不得走 preserveInvalidCredentialFile 的
+ *  .corrupt 改名路径；条目 fail closed（store 保持空），投影随之显示
+ *  `secretStorageUnreadable`（renderer 面）与精确的可操作 loud 文案。 */
+export const CROSS_FLAVOR_SAFESTORAGE_NOTICE =
+  'gateway credentials mirror is safeStorage-encrypted by the Electron flavor; '
+  + 'this Electron-free Swift sidecar has no shell keychain crypto adapter and cannot decrypt it '
+  + '— the file is preserved unchanged (reopen the Electron flavor to keep using those credentials, '
+  + 'or re-enter them here; the next save writes the documented 0600 plaintext fallback)'
+let crossFlavorSafeStorageUnreadable = false
+
+/** S-29 renderer projection input (non-secret boolean): the loaded mirror is a
+ *  cross-flavor safeStorage file this process cannot decrypt. Merged into
+ *  instances_get rows beside `secretStorage` (shell-core.projectInstanceSecrets). */
+export function gatewaySecretStorageCrossFlavorUnreadable(): boolean {
+  return crossFlavorSafeStorageUnreadable
+}
 
 /** A loaded credential must pass its table's gate exactly like a fresh one:
  * tokens are length-bounded visible ASCII, while passwords are length-bounded
@@ -314,6 +337,7 @@ export function configureGatewaySecretStore(
   // Missing/memory-only stores will use this on their first write. An
   // existing bound v3 file replaces it below with its explicit durable fact.
   durableSecretStorage = secretCrypto.isAvailable() ? 'safeStorage' : 'plaintext'
+  crossFlavorSafeStorageUnreadable = false
   tokens.clear()
   passwords.clear()
   tokenBindings.clear()
@@ -358,6 +382,21 @@ export function configureGatewaySecretStore(
     return preserveInvalidCredentialFile(file, 'gateway secrets file')
   }
   const effectiveStorage: GatewaySecretFileStorage = storage === 'safeStorage' ? 'safeStorage' : 'plaintext'
+  // S-29（跨 flavor 凭据不可读）：文件带 safeStorage 判别符，本进程没有壳
+  // Keychain 适配器 ⇒ 密文无法解密。**不是损坏**——绝不 rename 成 .corrupt
+  // （那会让 Electron flavor 也失去这些凭据）：原文件原地保留、条目 fail
+  // closed（store 保持空）、精确可操作 loud 文案 + secretStorageUnreadable
+  // 渲染器投影。空 safeStorage 文件无凭据可丢，直接收敛为明文空镜像。
+  if (effectiveStorage === 'safeStorage' && !secretCrypto.isAvailable()) {
+    const hasEntries = Object.keys(parsed.tokens).length > 0 || Object.keys(parsed.passwords).length > 0
+    if (hasEntries) {
+      crossFlavorSafeStorageUnreadable = true
+      durableSecretStorage = 'plaintext'
+      return CROSS_FLAVOR_SAFESTORAGE_NOTICE
+    }
+    persistGatewaySecrets(new Map(), new Map(), new Map(), new Map())
+    return null
+  }
   durableSecretStorage = effectiveStorage
   const loadedTokens = loadCredentialTable(
     parsed.tokens,

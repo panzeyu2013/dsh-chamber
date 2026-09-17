@@ -228,7 +228,7 @@ export function createStaticServing({ webDistDir, logger }: StaticServingOptions
     // are immutable — one year, no revalidation, so a relaunch serves them
     // from the Electron HTTP cache instead of re-fetching several MB of
     // renderer assets (sizes drift per build; measured totals live in
-    // docs/progress/performance-baseline.md). index.html
+    // dist/web/perf-sizes.json + scripts/perf/README.md). index.html
     // keeps no-cache (the __DSH_BOOT__ manifest moves every build). Other
     // paths (e.g. /manifest.json) keep their previous no-header behavior.
     // The predicate is the SAME one the gateway's response-header seam uses

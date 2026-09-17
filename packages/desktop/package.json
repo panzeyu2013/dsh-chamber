@@ -103,6 +103,7 @@
     "mac": {
       "icon": "resources/icon.icns",
       "notarize": true,
+      "minimumSystemVersion": "13.0",
       "entitlements": "resources/entitlements.mac.plist",
       "entitlementsInherit": "resources/entitlements.mac.plist",
       "extendInfo": {

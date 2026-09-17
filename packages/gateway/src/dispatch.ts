@@ -153,9 +153,12 @@ function shouldRedirectToLogin(req: ApiRequest, pathname: string, auth: AuthProv
  * describes) would need the element to resolve `./assets/…` against the site
  * root instead of the deep path. `'self'` keeps the element effective and
  * grants nothing script-src has not already granted. Every OTHER directive
- * stays identical to the shell's.
+ * stays identical to the shell's — including `frame-src blob:`, which the shell
+ * added for the document-preview plugin's blob iframes (S-35): the gateway
+ * proxies the same frontend, so a directive the shell needs would break the
+ * preview behind the gateway too.
  */
-const GATEWAY_PROXY_CSP = "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:"
+const GATEWAY_PROXY_CSP = "default-src 'self'; base-uri 'self'; object-src 'none'; frame-src blob:; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:"
 
 /** A browser *document* rejection (GET/HEAD/POST advertising HTML) is
  * answered with the rendered boundary error page instead of a bare JSON body

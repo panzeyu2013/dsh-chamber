@@ -266,6 +266,7 @@ import {
   gatewayChamberMaterialize,
   gatewayPasswordValidationError,
   gatewayProvider,
+  gatewaySecretStorageCrossFlavorUnreadable,
   gatewaySecretStorageMode,
   gatewayTokenValidationError,
   getGatewayPassword,
@@ -542,6 +543,125 @@ export function readDshVersion(workspace: string | null): string | null {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Dual-flavor parity helpers (deviations register P-04/P-11/G14/G15/G21).
+// The two flavors share these so a policy or a gate cannot drift into a
+// silently different behavior on one side; the Swift side consumes the same
+// spellings through the B bridge/assembly where one exists.
+// ---------------------------------------------------------------------------
+
+/** G15: the ONLY runtime-transaction abort reason (main.ts will-quit's
+ *  runtimeOperationAbort.abort and the startup transaction's quit guard; the
+ *  Swift sidecar's same site -- sidecar-ctx dispose -- must reference this
+ *  constant instead of spelling its own text). Renderer-invisible, but once
+ *  sourced here there is no "same semantics, two different strings" face to
+ *  drift. */
+export const RUNTIME_ABORT_REASON = 'application is quitting';
+
+/** G14: the ONLY rendererPush delivery gate. Both flavor implementations must
+ *  fold their return value through it: mainWindowAlive && webViewContentAlive
+ *  (Electron's webViewContentAlive carries the isCrashed predicate; the Swift
+ *  side reads hostFacts.webViewContentAlive). A send on a crashed renderer
+ *  never reaches the page, so not folding it to false would let core's
+ *  hold/rollback/ready-reset semantics silently diverge (held pushes never
+ *  replay, dedupe claims never release). */
+export function rendererPushDelivered(mainWindowAlive: boolean, webViewContentAlive: boolean): boolean {
+  return mainWindowAlive && webViewContentAlive;
+}
+
+/** G21: the pure decision core of the Electron renderer-recovery policy
+ *  (extracted from main.ts installRendererRecovery -- same parameters as the
+ *  Swift RendererRecoveryPolicy/HangWatchdog: at most 3 reloads inside a 60s
+ *  window, no hang reload before the first load finishes, clean-exit/quitting
+ *  never reload). main.ts keeps only the timers and the window-destroyed
+ *  guard; every decision goes through here. */
+export const RENDERER_RECOVERY_WINDOW_MS = 60_000;
+/** Maximum automatic reloads inside one window (the 4th attempt stops self-heal
+ *  and shows the loud error box). */
+export const RENDERER_RECOVERY_MAX_RELOADS = 3;
+/** How long an unresponsive renderer may take to recover before a reload. */
+export const RENDERER_HANG_RELOAD_DELAY_MS = 15_000;
+/** Reload delay after render-process-gone (abnormal exit) -- clears the crash
+ *  teardown window. */
+export const RENDERER_CRASH_RELOAD_DELAY_MS = 500;
+
+/** Reload-budget state (main.ts holds one instance for the window lifetime). */
+export interface RendererReloadBudgetState {
+  /** Current 60s window start in ms (0 = no window yet; the first reload opens one). */
+  windowStart: number
+  /** Reload attempts already made inside the current window. */
+  count: number
+}
+
+/** Record one reload attempt and decide whether it is allowed (a window older
+ *  than 60s resets the count -- the strict greater-than comparison is verbatim
+ *  the pre-extraction main.ts behavior). The returned attempt number drives the
+ *  loud log/error box (attempt 4 = exhausted). */
+export function noteRendererReload(
+  state: RendererReloadBudgetState,
+  now: number,
+): { allowed: boolean; attempt: number } {
+  if (now - state.windowStart > RENDERER_RECOVERY_WINDOW_MS) {
+    state.windowStart = now;
+    state.count = 0;
+  }
+  state.count += 1;
+  return { allowed: state.count <= RENDERER_RECOVERY_MAX_RELOADS, attempt: state.count };
+}
+
+/** Whether an abnormal renderer exit triggers an automatic reload: clean-exit
+ *  (normal window teardown) and a quit in flight never do. */
+export function shouldReloadAfterCrash(reason: string, quitRequested: boolean): boolean {
+  return reason !== 'clean-exit' && !quitRequested;
+}
+
+/** Before the first load finishes, an unresponsive renderer is only logged --
+ *  the dsh frontend's boot (dozens of plugin modules) legitimately blocks the
+ *  main thread; reloading would interrupt a normal startup (S-34 gate on both
+ *  flavors). */
+export function shouldScheduleHangReload(loadedOnce: boolean): boolean {
+  return loadedOnce;
+}
+
+/** P-04: dev-shape in-repo dsh workspace candidates (order = the original
+ *  main.ts resolveBuiltinDshWorkspace dev branch: <repoRoot>/ref-dsh then
+ *  <packageDir>/vendor/dsh). Packaged shapes never use this -- Electron uses
+ *  resources/vendor/dsh, and the Swift assembly passes --dsh-path explicitly. */
+export function devBuiltinDshWorkspaceCandidates(packageDir: string): string[] {
+  return [
+    path.join(packageDir, '..', '..', 'ref-dsh'),
+    path.join(packageDir, 'vendor', 'dsh'),
+  ];
+}
+
+/** P-04: first existing dev candidate, or null. The injectable exists predicate
+ *  lets the unit test cover both branches (defaults to existsSync). */
+export function resolveDevBuiltinDshWorkspace(
+  packageDir: string,
+  exists: (candidate: string) => boolean = existsSync,
+): string | null {
+  for (const candidate of devBuiltinDshWorkspaceCandidates(packageDir)) {
+    if (exists(candidate)) return candidate;
+  }
+  return null;
+}
+
+/** P-04: the Electron-free sidecar's builtin-workspace resolution -- an
+ *  explicit --dsh-path wins; the packaged shape never probes the repository
+ *  (packaged behavior unchanged: the assembly always carries the path, and a
+ *  failed probe keeps the loud blocked semantics); the dev shape falls back
+ *  through the same candidate order as main.ts. */
+export function resolveSidecarBuiltinDshWorkspace(input: {
+  explicit: string | null
+  packaged: boolean
+  packageDir: string
+  exists?: (candidate: string) => boolean
+}): string | null {
+  if (input.explicit !== null) return input.explicit;
+  if (input.packaged) return null;
+  return resolveDevBuiltinDshWorkspace(input.packageDir, input.exists ?? existsSync);
+}
+
 // 本地实例「运行中/在途」状态（design 14 D2，2026-08 修订）：进程存活
 // （ready/degraded）或 spawn/重启在途（starting/restarting）——退出会中断
 // 它们，需确认。stopped / error / restart-exhausted 无进程可中断，不触发
@@ -669,10 +789,13 @@ export type HostSetBadgeResult =
   | { applied: true }
   | { applied: false; reason: string };
 
-/** resolveResource 的资源位（B1：main.ts 直拼点参数化收口）。 */
-export type HostResourceKind = 'builtin-dsh' | 'pnpm' | 'dist-web' | 'host-package' | 'icon';
-
 /** HostEdges — core 侧唯一可见的宿主边沿契约（design 25 §4.1 v2 字段集）。
+ *  P-03（2026-12 裁决）：notifyClicked 与 resolveResource 两个**零消费者**保留
+ *  成员已从契约删除——Swift 宿主对 notifyClicked（经 notify 到达）判为
+ *  unexpected 并 loud 忽略、resolveResource 在两侧都恒不可达（core Pick 不含、
+ *  无调用方），保留它们等于保留一条语义不同、无法锁步的死面。hostFacts 的
+ *  resources 推送随之不再被消费（Swift 侧可继续推送，未知事实键按前向兼容
+ *  忽略）。
  *  S0 批实现 rendererPush、S2 批实现渲染器投递/通知/徽标批成员
  *  （electron-edges.ts 头注释按批列出已实现集合）；其余成员标注其后续批来源，
  *  未实现前 core/main.ts 不得调用（Pick 收窄在编译期保证）。 */
@@ -690,18 +813,18 @@ export interface HostEdges {
    *  结算（showNativeNotificationHonestly 语义）在实现侧内部执行；返回句柄的
    *  shown 暴露结算结果（NOTIFY IPC 返回值与 claim 释放依赖它），dispose 注销
    *  click 回执（注销后该通知的后续 click 只恢复窗口）。实现侧不 throw——构造/
-   *  登记/监听失败一律结算为 shown:false 且登记清理内部完成。 */
+   *  登记/监听失败一律结算为 shown:false 且登记清理内部完成。
+   *  S-44（2026-12 审计）：macOS 授权在 Electron 侧无可查询/可申请 API，实现
+   *  侧只能把 OS 拒绝投递（failed）与限时无回执（timeout）如实映成带原因文本
+   *  的 shown:false（notifications.describeNativeNotificationFailure）；预检
+   *  查询/申请面的缺失登记为精确残余（见 electron-edges showNativeNotification
+   *  与台账 S-44），绝不冒充「已授权但普通失败」。 */
   showNativeNotification(
     spec: NativeNotificationSpec,
     clickRoute: { token: NotificationSourceToken; onActivated(): void } | null,
   ): { dispose(): void; shown: Promise<{ shown: true } | { shown: false; error: string }> }
   /** Notification.isSupported 平台探测（异常安全由实现侧保证）。 */
   notificationSupported(): boolean
-  /** 通知 click → open-intent 回灌（design 25 §4.5 E4：宿主激活窗口腿成功后把
-   *  click 送回 core 队列）。S2 的 Electron click 回灌经 showNativeNotification
-   *  的 clickRoute 参数实现；本成员供后续批（Swift B flavor 的
-   *  edge:notification-clicked 对应面）使用，未实现前不可经 Pick 触碰。 */
-  notifyClicked(openIntent: NotificationOpenIntent): void
   /** 未读徽标 apply 叶（design 19 §3.7；E5——平台门与 badgeEnabled 裁决留 core
    *  badge.ts：core 以 badgePlatformGate(platform, badgeCountApiAvailable())
    *  先裁决、supported 后才调用本叶）：异常安全，绝不 throw。 */
@@ -757,8 +880,6 @@ export interface HostEdges {
   setLoginItem(enabled: boolean): void
   /** app.isPackaged 能力位（B1）。 */
   isPackaged: boolean
-  /** 资源/打包路径解析（B1/B13：main.ts 直拼点参数化收口）。 */
-  resolveResource(kind: HostResourceKind): string
 }
 
 // ---------------------------------------------------------------------------
@@ -1146,6 +1267,10 @@ export type ProjectedRegistryInstance = TransportInstanceSpec & {
   tokenSet: boolean
   passwordSet: boolean
   secretStorage: ReturnType<typeof gatewaySecretStorageMode>
+  /** S-29 非秘密投影：凭据镜像由 Electron flavor 以 safeStorage 写出，本
+   *  Electron-free 进程无壳 Keychain 适配器、无法解密（文件原地保留、条目
+   *  fail closed）。renderer 据此给出「跨 flavor 凭据不可读」的精确提示。 */
+  secretStorageUnreadable?: boolean
 }
 
 /** 单行凭据存在性投影（设计 17 §2.3/§9.1/§13.4.1：registry 保持无凭据元数据；
@@ -1157,6 +1282,7 @@ export function projectInstanceSecrets(instance: TransportInstanceSpec): Project
     tokenSet: instance.kind === 'gateway' && getGatewayToken(instance.id) !== null,
     passwordSet: instance.kind === 'gateway' && getGatewayPassword(instance.id) !== null,
     secretStorage: gatewaySecretStorageMode(),
+    ...(gatewaySecretStorageCrossFlavorUnreadable() ? { secretStorageUnreadable: true as const } : {}),
   };
 }
 
@@ -1399,7 +1525,7 @@ export function runRuntimeCheckCycle(): void {
 //      装配/窗口 glue/生命周期/启动事务宿主——控制面 ready 后的启动/恢复 push 与
 //      OS 三入口 glue 本就是装配侧宿主职责，见 main.ts 顶部职责清单；Swift
 //      sidecar flavor 装配点与 HostEdges 余下边沿叶属 W-10 之外后续批，
-//      见 macos-swift-v1.md §四批 2）。
+//      见 design 25 §4.1）。
 // ---------------------------------------------------------------------------
 
 /** IPC 注册面：core 经它注册处理器（channel 为 opaque 通道名；Electron 侧
@@ -1930,7 +2056,7 @@ export function installIpcHandlers(deps: {
 
   // ① edges 回灌订阅段（S2 转实）：OS 唤醒与主窗口 'show' 的事件源语义自 main.ts
   //    逐字迁入，订阅点统一走本函数单点——held lastResume 补发在 core（上段状态
-  //    机）。notifyClicked（Swift B flavor 对应面）留后续批。
+  //    机）。
   deps.edges.onSystemResume((timestamp) => {
     handleSystemResume(timestamp);
   });
@@ -3795,6 +3921,9 @@ export function installIpcHandlers(deps: {
     }
   });
   deps.ipc.handle(IPC_CHANNELS.UPDATE_STATE, () => updater.state());
+  // S-21 发现单源：页面「检查更新」只经本注册体进控制器；控制器在原生腿在场时把
+  // 它转成冻结边 updateNativeAction kind=check（壳内 Sparkle appcast），否则才走
+  // 该 flavor 自己的 feed。页面从不自跑发现，注册体也不分支 flavor。
   deps.ipc.handle(IPC_CHANNELS.UPDATE_CHECK, () => updater.checkNow());
   deps.ipc.handle(IPC_CHANNELS.UPDATE_DOWNLOAD, () => updater.download());
   // The settings update section's「重启并安装」button (2026-12 user
@@ -4389,5 +4518,5 @@ export function installIpcHandlers(deps: {
   //    装配/窗口 glue/生命周期/启动事务宿主——控制面 ready 后的启动/恢复 push 与
   //    OS 三入口 glue 本就是装配侧宿主职责，见 main.ts 顶部职责清单；Swift
   //    sidecar flavor 装配点与 HostEdges 余下边沿叶属 W-10 之外后续批，
-  //    见 macos-swift-v1.md §四批 2）。
+  //    见 design 25 §4.1）。
 }

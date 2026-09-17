@@ -53,20 +53,26 @@
  *     (main.ts setKeepAwakeActive ~:871).
  *   - tray/window: trayAvailable, focusMainWindow (D3 — the per-member
  *     activate/restore/focus leg; notification clicks already activate via
- *     host.showMainWindow), notifyClicked (design 25 §4.5 E4 Swift face).
+ *     host.showMainWindow).
+ *     P-03 (2026-12 ruling): notifyClicked (design 25 §4.5 E4) was deleted
+ *     from the shared contract — zero consumers, and the Swift host treats the
+ *     outbound member's notify as unexpected and ignores it loudly.
  *   - open/open-in: launchApp (E12 — the unified open-in native-launch leg;
  *     the finder/vscode providers still go through openExternal /
  *     openPath / showItemInFolder — launchApp moves with its first consumer).
- *   - system/resources: setLoginItem / trayAvailable / resolveResource /
- *     isPackaged (B1).
+ *   - system/resources: setLoginItem / trayAvailable / isPackaged (B1).
+ *     P-03 (2026-12 ruling): resolveResource was deleted from the shared
+ *     contract — zero consumers and always failing on the Swift side (no
+ *     resource cache); the hostFacts.resources push is no longer consumed.
  */
 import { Notification, app, dialog, powerMonitor, shell } from 'electron';
 import type { BrowserWindow } from 'electron';
-import type { HostEdges, HostMessageOptions } from './shell-core.ts';
+import { rendererPushDelivered, type HostEdges, type HostMessageOptions } from './shell-core.ts';
 import { describeUnknownError } from './deep-link.ts';
 import {
   BoundedActiveNotifications,
   MAX_ACTIVE_NATIVE_NOTIFICATIONS,
+  describeNativeNotificationFailure,
   showNativeNotificationHonestly,
 } from './notifications.ts';
 
@@ -130,14 +136,35 @@ export function createElectronEdges(host: ElectronEdgesHost): Pick<
     }
   });
 
+  /** B3 门实现：webContents 是否存活（非 crashed/destroyed）——rendererPush
+   *  与 webViewContentAlive 共用同一判据，绝不出现两套。 */
+  const webContentsAlive = (win: BrowserWindow): boolean => {
+    try {
+      return !win.webContents.isCrashed() && !win.isDestroyed();
+    } catch {
+      return false;
+    }
+  };
+
   return {
     /** 单窗身份 send 叶：主窗存在且未销毁则 webContents.send 并返回 true，
      *  否则返回 false（叶本身不 throw）。committed-push 包装
      *  （attemptCommittedRegistryPush）在调用侧把 false 折算为 push 失败，
-     *  与搬迁前 throw 语义等价（transport-manager.ts）。 */
+     *  与搬迁前 throw 语义等价（transport-manager.ts）。
+     *  G14：交付门 = 共享 rendererPushDelivered（mainWindowAlive &&
+     *  webViewContentAlive，后者含 isCrashed）——crashed 渲染器上的 send
+     *  绝不冒充已投递（否则 core 的 hold/rollback/ready 位复位在 Swift 侧
+     *  同语义下会与 Electron 分叉）。 */
     rendererPush(channel: string, payload: unknown): boolean {
       const win = host.mainWindow();
-      if (win === null || win.isDestroyed()) return false;
+      if (win === null) return false;
+      let windowAlive = true;
+      try {
+        windowAlive = !win.isDestroyed();
+      } catch {
+        windowAlive = false;
+      }
+      if (!rendererPushDelivered(windowAlive, webContentsAlive(win))) return false;
       win.webContents.send(channel, payload);
       return true;
     },
@@ -185,7 +212,20 @@ export function createElectronEdges(host: ElectronEdgesHost): Pick<
       created.on('close', () => {
         activeNotifications.delete(created);
       });
-      const shown = showNativeNotificationHonestly(created);
+      // S-44（2026-12 审计）：Electron 主进程没有 macOS 通知授权查询/申请
+      // API（证据与残余见 notifications.ts describeNativeNotificationFailure
+      // 头注）。唯一可得的诚实面在这里接线：OS 拒绝投递（failed 事件）或限时
+      // 无回执（timeout）时，错误文本显式说明「可能未授权 / 可能被系统抑制」
+      // 并保留 OS 原文——Swift 腿的 denied→fail、notDetermined→申请一次是
+      // 同一「拒绝/未确认必诚实回错」的语义；本叶不冒充已授权。
+      const honestShow = showNativeNotificationHonestly(created);
+      const shown = honestShow.then((outcome) => {
+        if (outcome.shown) return outcome;
+        return {
+          shown: false as const,
+          error: describeNativeNotificationFailure(process.platform, outcome.reason, outcome.error),
+        };
+      });
       void shown.then((outcome) => {
         // failed/早 close 结算后不再持有（超时路径由 honest-show 内部 close，
         // 其 'close' 监听同样注销；此处幂等兜底 failed 事件后未 close 的死条目）。
@@ -267,12 +307,8 @@ export function createElectronEdges(host: ElectronEdgesHost): Pick<
     /** 渲染器可用性门（B3）：webContents 是否存活（非 crashed/destroyed）。 */
     webViewContentAlive(): boolean {
       const win = host.mainWindow();
-      if (win === null || win.isDestroyed()) return false;
-      try {
-        return !win.webContents.isCrashed() && !win.isDestroyed();
-      } catch {
-        return false;
-      }
+      if (win === null) return false;
+      return webContentsAlive(win);
     },
 
     /** 主窗口存在性门（W-10 S2）：win!=null 且未销毁（隐藏到托盘仍为 true）。 */

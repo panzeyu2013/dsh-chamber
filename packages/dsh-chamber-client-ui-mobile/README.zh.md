@@ -460,7 +460,7 @@ chrome；`[role="menu"] [role="menuitem"][aria-selected]` 高亮信号在本 pin
 观察它。该 pin 上上游**唯一**的写入点是
 `document.body.toggleAttribute('data-ds-dark-theme', dark)`（`dsh-client-ui-theme` 的
 client 半）；其余引用全是 CSS 规则（`body[data-ds-dark-theme]{…}`），属消费形——
-`scripts/dev/verify-mobile-anchors.mjs` 刻意**不**把它当作「上游仍在发射」的证据。
+`scripts/upstream/verify-mobile-anchors.mjs` 刻意**不**把它当作「上游仍在发射」的证据。
 若未来 pin 把写入改成 `dataset` API，属性名字面量会消失、门禁按 fail-closed 变红：
 那时应针对新的写入点重锚，而不是盲目放宽判定。
 

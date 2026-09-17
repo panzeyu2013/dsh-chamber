@@ -8,7 +8,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { readFileSync } from 'node:fs';
 import { BoundedAckDeliveryQueue } from '../../deep-link.ts';
+import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts';
 import {
   BoundedActiveNotifications,
   BoundedRateLimiter,
@@ -24,6 +26,8 @@ import {
   readNotificationHostBoolean,
   claimNotification,
   decideNotification,
+  describeNativeNotificationFailure,
+  interpretNativeNotificationReply,
   shouldFocusApplicationBeforeShowing,
   showNativeNotificationHonestly,
   validateNotificationRequest,
@@ -392,6 +396,31 @@ class FakeNativeNotification extends EventEmitter {
   }
 }
 
+test('interpretNativeNotificationReply: explicit outcomes are authoritative; unknown shapes are failures (P-06)', () => {
+  // Swift 腿的 honest-show 应答：显式失败必须成为 {shown:false}（core 据此释放
+  // 去重 claim），未知形状绝不乐观当成功。
+  assert.deepEqual(interpretNativeNotificationReply({ shown: false, error: 'not authorized' }), {
+    shown: false,
+    error: 'not authorized',
+  });
+  assert.deepEqual(interpretNativeNotificationReply({ shown: false }), {
+    shown: false,
+    error: 'native notification was not shown',
+  });
+  assert.deepEqual(interpretNativeNotificationReply({ shown: false, error: '' }), {
+    shown: false,
+    error: 'native notification was not shown',
+  });
+  assert.deepEqual(interpretNativeNotificationReply({ shown: true, error: 'ignored' }), { shown: true });
+  // 旧线协议：leg 只以 edge 错误报告失败，ok 的 null 应答保持 shown:true。
+  assert.deepEqual(interpretNativeNotificationReply(null), { shown: true });
+  assert.deepEqual(interpretNativeNotificationReply(undefined), { shown: true });
+  // 不认识的形状（数组/数字/无 shown 的对象）一律失败。
+  for (const weird of [[], 0, 'ok', {}, { ok: true }]) {
+    assert.equal(interpretNativeNotificationReply(weird).shown, false, `${JSON.stringify(weird)} 不得被采信为成功`);
+  }
+});
+
 test('showNativeNotificationHonestly settles true only on the native show event', async () => {
   const shown = new FakeNativeNotification(self => setImmediate(() => self.emit('show')))
   assert.deepEqual(await showNativeNotificationHonestly(shown, 100), { shown: true })
@@ -399,13 +428,13 @@ test('showNativeNotificationHonestly settles true only on the native show event'
   const failed = new FakeNativeNotification(self => setImmediate(() => self.emit('failed', {}, 'unsigned binary')))
   assert.deepEqual(
     await showNativeNotificationHonestly(failed, 100),
-    { shown: false, error: 'unsigned binary' },
+    { shown: false, error: 'unsigned binary', reason: 'failed' },
   )
 
   const thrown = new FakeNativeNotification(() => { throw new Error('constructor bridge failed') })
   assert.deepEqual(
     await showNativeNotificationHonestly(thrown, 100),
-    { shown: false, error: 'constructor bridge failed' },
+    { shown: false, error: 'constructor bridge failed', reason: 'threw' },
   )
 })
 
@@ -417,13 +446,13 @@ test('showNativeNotificationHonestly never hangs or rethrows a hostile failed va
   const failed = new FakeNativeNotification(self => queueMicrotask(() => self.emit('failed', {}, hostile)))
   assert.deepEqual(
     await showNativeNotificationHonestly(failed, 100),
-    { shown: false, error: 'unknown error' },
+    { shown: false, error: 'unknown error', reason: 'failed' },
   )
 
   const silent = new FakeNativeNotification(() => {})
   assert.deepEqual(
     await showNativeNotificationHonestly(silent, 5),
-    { shown: false, error: 'notification show timed out' },
+    { shown: false, error: 'notification show timed out', reason: 'timed-out' },
   )
   assert.equal(silent.closed, true)
 })
@@ -443,6 +472,7 @@ test('showNativeNotificationHonestly rolls back partial listener setup and conta
   assert.deepEqual(await showNativeNotificationHonestly(setupFailure, 20), {
     shown: false,
     error: 'notification listener setup failed: listener boom',
+    reason: 'threw',
   })
   assert.equal(showCalls, 0, 'show never runs after partial listener installation fails')
   assert.equal(listeners.size, 0, 'already-installed listeners are rolled back')
@@ -666,4 +696,48 @@ test('BoundedActiveNotifications: entries() yields live insertion-ordered pairs 
   assert.deepEqual(seen, ['a', 'b', 'c']);
   assert.equal(registry.size, 2);
   assert.ok(!registry.has('a'));
+});
+
+// ---------------------------------------------------------------------------
+// S-44（2026-12 审计）：Electron 侧 macOS 通知授权的诚实面。
+//
+// Electron 43.4.0 主进程没有授权查询/申请 API（Notification 仅 isSupported/
+// show…；systemPreferences.getMediaAccessStatus 只接受 microphone/camera/
+// screen；Electron 自己的 cocoa_notification.mm 从不 requestAuthorization——
+// 授权状态只经 addNotificationRequest 的 completion handler 回话，非 nil
+// error → 原生 failed 事件）。因此唯一可得的诚实面 = 把 OS 拒绝投递/限时无
+// 回执如实表述为「可能未授权/被抑制」；预检查询/申请仍是登记在案的残余。
+// ---------------------------------------------------------------------------
+
+test('S-44 describeNativeNotificationFailure: OS refusal/doubt is named honestly, local artifacts are not', () => {
+  const refused = describeNativeNotificationFailure('darwin', 'failed', 'Notifications are not allowed for this application.');
+  assert.match(refused, /authorization may be denied/);
+  assert.match(refused, /Notifications are not allowed for this application./, 'the OS text must be preserved verbatim');
+  const timedOut = describeNativeNotificationFailure('darwin', 'timed-out', 'notification show timed out');
+  assert.match(timedOut, /authorization may be denied/);
+  assert.match(timedOut, /Focus\/Do Not Disturb/);
+  assert.match(timedOut, /notification show timed out/);
+  // Local construction/eviction failures must NOT be dressed as an OS
+  // authorization verdict (a capped-registry eviction closes before show, and
+  // a listener-install throw is our own bug).
+  assert.equal(describeNativeNotificationFailure('darwin', 'threw', 'listener boom'), 'listener boom');
+  assert.equal(describeNativeNotificationFailure('darwin', 'closed', 'notification closed before show'), 'notification closed before show');
+  assert.equal(describeNativeNotificationFailure('darwin', undefined, 'plain'), 'plain');
+  // Non-darwin platforms keep the raw error (Windows' failed is a delivery
+  // error, not an authorization state).
+  assert.equal(describeNativeNotificationFailure('win32', 'failed', 'toast failed'), 'toast failed');
+  assert.equal(describeNativeNotificationFailure('linux', 'timed-out', 'timeout'), 'timeout');
+  // An empty OS detail still has to describe the failure itself.
+  assert.match(describeNativeNotificationFailure('darwin', 'failed', '   '), /no detail/);
+});
+
+test('S-44 electron-edges routes every macOS delivery failure through the honest describer', () => {
+  // electron-edges imports electron (cannot be imported here), so the wiring is
+  // pinned on the comment-stripped source: the raw honest-show outcome must be
+  // translated before it reaches core's claim release / IPC boolean.
+  const source = stripComments(readFileSync(new URL('../../electron-edges.ts', import.meta.url), 'utf8'));
+  assert.match(source, /describeNativeNotificationFailure\(process\.platform, outcome\.reason, outcome\.error\)/,
+    'the NOTIFY host leg must surface why the OS refused/never confirmed the banner');
+  assert.match(source, /showNativeNotificationHonestly\(created\)/,
+    'the honest-show settlement must remain the single source of the outcome');
 });

@@ -13,7 +13,7 @@
  * `dsh-api-remotes` client half VALUE-imports, in assembly order
  * (dsh-v0.1.5-rc.2 = 15 rows). SINGLE SOURCE for both consumers — the
  * lockstep test (`typert-remote-contract.test.mjs`) and the upgrade touchpoint
- * gate (`scripts/dev/verify-upstream-touchpoints.mjs` C4). A same-length swap
+ * gate (`scripts/upstream/verify-upstream-touchpoints.mjs` C4). A same-length swap
  * (one package added while another is removed, or a reorder) must not pass
  * silently, so both compare the parsed assembly against this exact list; an
  * upstream change is one edit here plus the package contract assertions.

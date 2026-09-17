@@ -54,10 +54,11 @@ import {
   installIpcHandlers,
   onRendererLifecycle,
   QUIT_CLEANUP_TIMEOUT_MS,
+  resolveSidecarBuiltinDshWorkspace,
   type IpcRegistrar,
   type ShellAssemblyCtx,
 } from './shell-core.ts'
-import { createNodeEdges, HOST_INBOUND, QUIT_INBOUND_ERROR } from './node-edges.ts'
+import { MAX_INBOUND_FRAME_BYTES, createNodeEdges, HOST_INBOUND, QUIT_INBOUND_ERROR } from './node-edges.ts'
 import { buildHeadlessCtx, settleShutdownLegs, type HeadlessCtxAssembly } from './sidecar-ctx.ts'
 import type { HeadlessUpdateController, NativeUpdaterBridge } from './update-headless.ts'
 import {
@@ -268,6 +269,17 @@ const nodeEdges = createNodeEdges({
       quitReasons: risk.reasons,
     }
   },
+  // 原生更新阶段入站（S-19/S-21 冻结接口）：Swift 壳的 Sparkle 状态
+  // （__host.nativeUpdatePhase）→ headless 更新控制器（同一 UpdateState 投影 →
+  // 既有 update-state push 消费面）。装配尚未完成前的入站 loud 拒绝（绝不静默
+  // 丢弃一个用户可见的更新阶段）；控制器单源，Swift 侧不复制投影逻辑。
+  nativeUpdatePhase(input) {
+    const controller = headless?.ctx.updateController as HeadlessUpdateController | undefined
+    if (controller === undefined) {
+      throw new Error('sidecar-edges:native-update-phase-before-ctx-ready')
+    }
+    controller.applyNativePhase(input)
+  },
   hostFacts: {
     trayAvailable: true, // mac Dock 常驻（design 14 D1）
     isPackaged: true,
@@ -358,6 +370,18 @@ async function handleInboundLine(line: string): Promise<void> {
 //    1203-1220 同语义）→ bindPlane（plane 晚绑定）→ ready 帧 → 启动尾部。
 // ---------------------------------------------------------------------------
 const moduleDir = path.dirname(fileURLToPath(import.meta.url))
+/** P-04：Electron-free sidecar 的内建 dsh 工作区——显式 --dsh-path 优先；
+ *  打包形态恒不探测仓库（打包行为不变：装配总是显式携带路径）；dev 形态按
+ *  main.ts 同一候选顺序回退 <repoRoot>/ref-dsh → <moduleDir>/vendor/dsh
+ *  （共享 helper resolveSidecarBuiltinDshWorkspace，两侧不可能漂移）。 */
+const dshPath = resolveSidecarBuiltinDshWorkspace({
+  explicit: args.dshPath,
+  packaged: isPackagedSidecarRuntime(),
+  packageDir: moduleDir,
+})
+if (args.dshPath === null && dshPath !== null) {
+  console.log('[sidecar] dev 内建 dsh 工作区回退：' + dshPath)
+}
 const shellVersion = ((): string => {
   try {
     const pkg = JSON.parse(readFileSync(path.join(moduleDir, 'package.json'), 'utf8')) as { version?: string }
@@ -371,8 +395,6 @@ let headless: HeadlessCtxAssembly | null = null
 let ctx: ShellAssemblyCtx | null = null
 let controlPlaneInstance: Awaited<ReturnType<typeof createControlPlane>> | null = null
 let shuttingDown = false
-/** pre-spawn 回退幂等门（W-13 补；见 main() 内注释） */
-let startLocalAttempted = false
 /** 更新检查定时器的测试注入门（与 DSH_SIDECAR_TEST_STALL_SHUTDOWN_MS 同纪律：
  *  仅 dev/测试态生效、装配态忽略）。sidecar-stdio 的 spawn 用例不需要真实出网，
  *  也避免 15s 首检改变 update-state 投影的确定性。 */
@@ -388,8 +410,13 @@ async function boot(): Promise<void> {
 const nativeUpdater: NativeUpdaterBridge | undefined = args.nativeUpdater === 'sparkle'
   ? {
       async available() {
-        const reply = await nodeEdges.sendEdge('updateNativeCapability', null) as { available?: unknown } | null
-        return reply?.available === true
+        // S-38：壳现在回报 available + error（坏 feed/密钥 / 未启动）；error 供
+        // 页面相位走诚实失败态，而不是永远停在 checking。
+        const reply = await nodeEdges.sendEdge('updateNativeCapability', null) as { available?: unknown, error?: unknown } | null
+        return {
+          available: reply?.available === true,
+          error: typeof reply?.error === 'string' && reply.error.length > 0 ? reply.error : null,
+        }
       },
       async trigger(kind) {
         const reply = await nodeEdges.sendEdge('updateNativeAction', { kind }) as { ok?: unknown; error?: unknown } | null
@@ -401,7 +428,7 @@ const nativeUpdater: NativeUpdaterBridge | undefined = args.nativeUpdater === 's
   : undefined
 
   headless = await buildHeadlessCtx(args.userDataDir, nodeEdges, {
-    builtinDshWorkspace: args.dshPath,
+    builtinDshWorkspace: dshPath,
     chamberVersion: shellVersion,
     hostPackageDirs: {
       graph: args.hostGraphDir,
@@ -450,11 +477,11 @@ const nativeUpdater: NativeUpdaterBridge | undefined = args.nativeUpdater === 's
   const spawnGates: SpawnGateShape = legacyStart
     ? {
         getDshWorkspacePath: () => {
-          if (args.dshPath !== null) return args.dshPath
+          if (dshPath !== null) return dshPath
           throw new Error('dsh workspace not resolved (--dsh-path 未提供)')
         },
         canStartLocal: () =>
-          args.dshPath !== null
+          dshPath !== null
             ? { ok: true }
             : { ok: false, reason: '--dsh-path 未提供' },
         canExposeLocal: () => true,
@@ -507,7 +534,7 @@ const nativeUpdater: NativeUpdaterBridge | undefined = args.nativeUpdater === 's
   // 使 ready 帧延迟：尾部在 ready 之后异步执行）。legacy 快捷路径：直接
   // pre-spawn（早前已验证的 dev 行为；无探针、离线可用）。
   if (legacyStart) {
-    if (args.dshPath !== null) {
+    if (dshPath !== null) {
       try {
         await controlPlane.startLocal()
       } catch (err) {
@@ -530,26 +557,13 @@ const nativeUpdater: NativeUpdaterBridge | undefined = args.nativeUpdater === 's
       },
     )
 
-    // W-13 补（dev 观察实证）：启动事务只做探针拉起、探针进程退出后未驻留本地
-    // 实例（connectionState 回到 stopped）——5s/12s 两拍回退为直接 pre-spawn
-    // （幂等：已 attempt 或状态非 stopped 即跳过；与事务串行化由 cp startLocal
-    // 单飞语义兜住）。
-    if (args.dshPath !== null) {
-      const maybeStartLocal = async (): Promise<void> => {
-        if (startLocalAttempted) return
-        try {
-          if (controlPlane.connectionState !== 'ready' && controlPlane.connectionState !== 'starting') {
-            startLocalAttempted = true
-            console.log('[sidecar] 启动事务未驻留本地实例——直接 pre-spawn 回退')
-            await controlPlane.startLocal()
-          }
-        } catch (err) {
-          console.error('[sidecar] pre-spawn 回退失败：' + String(err))
-        }
-      }
-      setTimeout(() => void maybeStartLocal(), 5000).unref?.()
-      setTimeout(() => void maybeStartLocal(), 12000).unref?.()
-    }
+    // P-11（2026-12 parity 裁决）：原 Swift 独有的 5s/12s「启动事务未驻留本地
+    // 实例 → 定时强制 pre-spawn」回退已删除。启动事务在两个 flavor 上是同一
+    // 权威（main.ts refreshRuntimeEvidence().then(runRuntimeStartup) 同序；事务
+    // 内 startAndProbeWorkspace 已调用 startLocal），Electron 侧从无此时间回退；
+    // 一条只按 connectionState 判定的定时强制拉起会绕过 runtime 启动门
+    // （canStartLocal/runtimeStartBlocked），属偏差且是风险面，不逐字移植。
+    // dev 无 --dsh-path 的场景由上方 P-04 的 dev 内建工作区回退覆盖。
   }
 }
 
@@ -643,6 +657,18 @@ void boot().catch((err) => {
 const rl = createInterface({ input: process.stdin, crlfDelay: Infinity })
 rl.on('line', (line) => {
   if (line.length === 0) return
+  // P-01：入站帧字节上限（与 Swift FrameCodec.maxFrameBytes 4 MiB 锁步，跨语言
+  // 锁步测试读同一个常量）。超限行**绝不进 JSON.parse**（内存/CPU 放大面），
+  // 也绝不猜测帧内容——loud 记账后丢弃该行并继续服务（镜像 Swift 接收侧
+  // BridgeClient 对超长行的「丢弃该帧 + fail pending + 继续」语义；单条超限帧
+  // 不得杀死一个健康会话）。readline 仍会缓冲整行，本门约束的是解析与回显面。
+  const lineBytes = Buffer.byteLength(line, 'utf8')
+  if (lineBytes > MAX_INBOUND_FRAME_BYTES) {
+    console.error(
+      `[sidecar] 入站帧超过上限（> ${MAX_INBOUND_FRAME_BYTES} 字节，实际 ${lineBytes} 字节）——拒绝且不解析（P-01）`,
+    )
+    return
+  }
   void handleInboundLine(line).catch((err) => {
     console.error('[sidecar] 入站处理异常：' + String(err))
   })

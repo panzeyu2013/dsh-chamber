@@ -14,8 +14,11 @@
  *  ⑨ 订阅者（宿主推送腿）抛错不反噬控制器：check 不卡死、二次检查仍推进
  *     （2026-12 审查 blocker 回归——sidecar ctx 的缺失成员 stub 曾在此路径抛出）；
  *  ⑩ start() 与 Electron 同节奏（15s 静默首检 + 6h 周期）、定时器 unref/幂等/
- *     stop 可停、失败轮不抛穿（S5·F3/S6·F2）。
- * 纯逻辑（无网络、无 Electron、无真实 timer 等待——⑩ 用假定时器注入）。
+ *     stop 可停、失败轮不抛穿（S5·F3/S6·F2）；
+ *  ⑮/⑯ S-21 发现单源：原生腿在场 → 零 GitHub 出网、恰一次 kind=check、页面
+ *     checking → 壳推送结果、不排静默定时器；原生腿缺席 → 既有 GitHub 检查原样；
+ *  ⑰ S-38 坏配置：能力探测原因被记录、保持 blocked，check 落 error（不停 checking）。
+ * 纯逻辑（无网络、无 Electron、无真实 timer 等待——⑩/⑮ 用假定时器注入）。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -377,53 +380,296 @@ test('⑩ start()：15s 静默首检 + 6h 周期（与 Electron 同参数），u
   }
 })
 
-test('⑪ 原生更新器可用：start() 清空 installBlockedReason，download/restartAndInstall 转发', async () => {
+test('⑪ 原生更新器可用：start() 清空 installBlockedReason；check/available/download/downloaded 后 restart 转发', async () => {
   const calls: string[] = []
   const controller = createHeadlessUpdateController({
     version: '0.2.2',
     logger,
     request: fakeFetch([release('v0.2.3')]),
     nativeUpdater: {
-      async available() { return true },
-      async trigger(kind: 'download' | 'install') { calls.push(kind); return { ok: true as const } },
+      async available() { return { available: true } },
+      async trigger(kind: 'check' | 'download' | 'install') { calls.push(kind); return { ok: true as const } },
     },
   })
   assert.equal(controller.state().installBlockedReason, NATIVE_SHELL_INSTALL_BLOCKED_REASON)
   controller.start()
   await Promise.resolve(); await Promise.resolve()
   assert.equal(controller.state().installBlockedReason, null, '原生可用 → 不再谎称 blocked')
+  // 相位门（冻结语义「绝不二次下载」）：没有已发现的更新时绝不转发壳。
+  assert.deepEqual(await controller.download(), { ok: false, error: 'no update available' })
+  // 未下载完成（available）时「重启并安装」也不得转发（与 Electron 同门）。
+  assert.deepEqual(await controller.restartAndInstallAsync!(), { ok: false, error: NATIVE_SHELL_RESTART_REFUSAL })
+  // S-21：检查经冻结边 kind=check 交壳（不再跑 GitHub）；壳推送 available。
+  await controller.checkNow()
+  assert.deepEqual(calls, ['check'], '检查恰发一次 kind=check')
+  assert.equal(controller.state().phase, 'checking', '终态等壳的 __host.nativeUpdatePhase，不自行判定')
+  controller.applyNativePhase({ phase: 'available', version: '0.2.3', error: null })
+  assert.equal(controller.state().phase, 'available')
   assert.deepEqual(await controller.download(), { ok: true })
+  // 原生窗口的下载完成阶段由壳推送 → 这时才允许重启并安装。
+  controller.applyNativePhase({ phase: 'downloaded', version: '0.2.3', error: null })
+  assert.equal(controller.state().phase, 'downloaded')
   assert.deepEqual(await controller.restartAndInstallAsync!(), { ok: true })
-  assert.deepEqual(calls, ['download', 'install'], '转发顺序与 kind 原样')
-  assert.equal(controller.state().latestVersion, null, '转发不伪造本控制器状态')
+  assert.deepEqual(calls, ['check', 'download', 'install'], '转发顺序与 kind 原样')
   controller.stop()
 })
 
-test('⑫ 原生更新器不可用/探测失败：保持 blocked-available 且不转发', async () => {
+test('⑬ applyNativePhase：八个原生相位折进同一 UpdateState 投影（S-19/S-21）', () => {
+  const nativeUpdater = {
+    async available() { return { available: false } },
+    async trigger(_kind: 'check' | 'download' | 'install') { return { ok: false as const, error: 'never' } },
+  }
+  const controller = createHeadlessUpdateController({
+    version: '0.2.2', logger, request: fakeFetch([release('v0.2.3')]), nativeUpdater,
+  })
+  const seen: string[] = []
+  controller.subscribe((state) => seen.push(state.phase))
+  // 任何时候的原生阶段都必须清空 blocked reason（冻结语义：已配置的 Sparkle
+  // 绝不被降级为 unavailable——即便能力探测失败/未返回）。
+  controller.applyNativePhase({ phase: 'downloading', version: '0.2.3', error: null })
+  assert.equal(controller.state().phase, 'downloading')
+  assert.equal(controller.state().downloadPercent, null, '原生下载无百分比 → null（页面用不定量文案）')
+  assert.equal(controller.state().installBlockedReason, null, '原生阶段证明 Sparkle 已配置')
+  controller.applyNativePhase({ phase: 'checking', version: null, error: null })
+  assert.equal(controller.state().phase, 'checking')
+  controller.applyNativePhase({ phase: 'available', version: '0.2.3', error: null })
+  assert.equal(controller.state().phase, 'available')
+  assert.equal(controller.state().latestVersion, '0.2.3')
+  assert.equal(controller.state().releaseUrl, 'https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.2.3')
+  assert.equal(isAllowedReleaseUrl(controller.state().releaseUrl), true)
+  controller.applyNativePhase({ phase: 'downloaded', version: '0.2.3', error: null })
+  assert.equal(controller.state().phase, 'downloaded')
+  assert.equal(controller.state().downloadPercent, 100)
+  controller.applyNativePhase({ phase: 'installing', version: '0.2.3', error: null })
+  assert.equal(controller.state().phase, 'installing')
+  assert.equal(controller.state().downloadPercent, 100)
+  controller.applyNativePhase({ phase: 'failed', version: '0.2.3', error: 'Cannot read /Users/example/Library/Caches/dsh-chamber-updater/x' })
+  assert.equal(controller.state().phase, 'error')
+  assert.equal(controller.state().latestVersion, '0.2.3', '下载失败保留版本（重试行）')
+  // 与 Electron 的 error 面同一 sanitize（绝对路径 → [path]，非秘密投影）。
+  assert.equal(controller.state().error, 'Cannot read [path]')
+  controller.applyNativePhase({ phase: 'failed', version: null, error: null })
+  assert.equal(controller.state().error, 'native updater failed', '缺 error 文案时用稳定兜底串')
+  controller.applyNativePhase({ phase: 'up-to-date', version: null, error: null })
+  assert.equal(controller.state().phase, 'up-to-date')
+  assert.equal(controller.state().latestVersion, null)
+  assert.equal(controller.state().releaseUrl, null)
+  controller.applyNativePhase({ phase: 'idle', version: null, error: null })
+  assert.equal(controller.state().phase, 'idle')
+  assert.deepEqual(seen, [
+    'downloading', 'checking', 'available', 'downloaded', 'installing',
+    'error', 'error', 'up-to-date', 'idle',
+  ], '每个原生阶段都必须经 subscribe 推送（页面/壳单一来源）')
+})
+
+test('⑭ 冻结语义：downloading/downloaded/installing 在飞时绝不二次下载/安装，安装中不重查', async () => {
   const calls: string[] = []
-  const bridge = (available: () => Promise<boolean>) => ({
+  let requests = 0
+  const controller = createHeadlessUpdateController({
+    version: '0.2.2',
+    logger,
+    request: (async () => { requests += 1; return { ok: true, status: 200, json: async () => [release('v0.2.3')] } }) as unknown as typeof fetch,
+    nativeUpdater: {
+      async available() { return { available: true } },
+      async trigger(kind: 'check' | 'download' | 'install') { calls.push(kind); return { ok: true as const } },
+    },
+  })
+  controller.applyNativePhase({ phase: 'available', version: '0.2.3', error: null })
+  assert.deepEqual(await controller.download(), { ok: true })
+  assert.deepEqual(calls, ['download'])
+  // 下载在飞：再点「更新」明确拒绝，绝不转发（第二次下载）。
+  controller.applyNativePhase({ phase: 'downloading', version: '0.2.3', error: null })
+  assert.deepEqual(await controller.download(), { ok: false, error: 'download already in progress' })
+  // 已下载/安装中同样拒绝；安装中「重启并安装」也拒绝。
+  controller.applyNativePhase({ phase: 'downloaded', version: '0.2.3', error: null })
+  assert.deepEqual(await controller.download(), { ok: false, error: 'download already in progress' })
+  controller.applyNativePhase({ phase: 'installing', version: '0.2.3', error: null })
+  assert.deepEqual(await controller.download(), { ok: false, error: 'download already in progress' })
+  assert.deepEqual(await controller.restartAndInstallAsync!(), { ok: false, error: 'restart already in progress' })
+  assert.deepEqual(calls, ['download'], '在飞阶段零额外触发')
+  // 安装中重查也不得打回 checking / 出网。
+  await controller.checkNow()
+  assert.equal(requests, 0, '安装中的检查必须是 no-op（不出网）')
+  assert.equal(controller.state().phase, 'installing')
+})
+
+test('⑫ 原生腿已声明但不可用/探测失败：check 仍交壳（绝不出网），保持 blocked-available 且不转发下载', async () => {
+  const calls: string[] = []
+  let requests = 0
+  const request = (async () => {
+    requests += 1
+    return { ok: true, status: 200, json: async () => [release('v0.2.3')] }
+  }) as unknown as typeof fetch
+  // 壳在不可用时对 updateNativeAction 的诚实应答（SwiftEdgeHostLegs：
+  // guard isAvailable else "native-updater-unavailable"）。
+  const bridge = (available: () => Promise<{ available: boolean; error?: string | null }>) => ({
     available,
-    async trigger(kind: 'download' | 'install') { calls.push(kind); return { ok: true as const } },
+    async trigger(kind: 'check' | 'download' | 'install') {
+      calls.push(kind)
+      return { ok: false as const, error: 'native-updater-unavailable' }
+    },
   })
   const unavailable = createHeadlessUpdateController({
-    version: '0.2.2', logger, request: fakeFetch([release('v0.2.3')]),
-    nativeUpdater: bridge(async () => false),
+    version: '0.2.2', logger, request,
+    nativeUpdater: bridge(async () => ({ available: false })),
   })
   unavailable.start()
   await Promise.resolve(); await Promise.resolve()
-  assert.equal(unavailable.state().installBlockedReason, NATIVE_SHELL_INSTALL_BLOCKED_REASON)
+  assert.equal(unavailable.state().installBlockedReason, NATIVE_SHELL_INSTALL_BLOCKED_REASON, '探测 false 不得清空 blocked')
   await unavailable.checkNow()
-  assert.equal(unavailable.state().phase, 'available', '本控制器自己的检查仍然工作')
-  assert.deepEqual(await unavailable.download(), { ok: false, error: NATIVE_SHELL_DOWNLOAD_REFUSAL })
+  // S-21 无回退：壳拒绝就是终态（响亮 error），绝不再跑 GitHub 发现给出相反结论。
+  assert.equal(unavailable.state().phase, 'error')
+  assert.equal(unavailable.state().error, 'native-updater-unavailable')
+  assert.equal(requests, 0, 'S-21：声明过原生腿后绝不跑 GitHub releases 发现')
+  // 壳拒绝后没有已知更新 + blocked reason 仍在 → download 连原生门都进不了
+  // （不是「原生壳不支持自动安装」那条 blocked 文案：确实没有可下载的更新）。
+  assert.deepEqual(await unavailable.download(), { ok: false, error: 'no update available' })
   assert.deepEqual(await unavailable.restartAndInstallAsync!(), { ok: false, error: NATIVE_SHELL_RESTART_REFUSAL })
 
   const broken = createHeadlessUpdateController({
-    version: '0.2.2', logger, request: fakeFetch([release('v0.2.3')]),
+    version: '0.2.2', logger, request,
     nativeUpdater: bridge(async () => { throw new Error('pipe closed') }),
   })
   broken.start()
   await Promise.resolve(); await Promise.resolve()
   assert.equal(broken.state().installBlockedReason, NATIVE_SHELL_INSTALL_BLOCKED_REASON, '探测失败不得清空 blocked')
-  assert.deepEqual(calls, [], '不可用时绝不转发')
+  await broken.checkNow()
+  assert.equal(broken.state().phase, 'error', '探测失败也不回退 GitHub：check 仍只发壳边')
+  assert.equal(requests, 0, '探测失败同样零出网')
+  assert.deepEqual(calls, ['check', 'check'], '两次检查恰两次边调用（不重复、不回退）')
   unavailable.stop(); broken.stop()
 })
+
+test('⑮ S-21 提交形态：原生腿在场 → 零 GitHub 出网、恰一次 kind=check、页面 checking → 壳结果，且不排静默定时器', async () => {
+  const calls: string[] = []
+  let requests = 0
+  const request = (async () => {
+    requests += 1
+    throw new Error('S-21 违反：原生腿在场时不得跑 GitHub releases 查询')
+  }) as unknown as typeof fetch
+  const controller = createHeadlessUpdateController({
+    version: '0.2.2',
+    logger,
+    request,
+    nativeUpdater: {
+      async available() { return { available: true } },
+      async trigger(kind: 'check' | 'download' | 'install') { calls.push(kind); return { ok: true as const } },
+    },
+  })
+  // 假定时器：原生腿在场时 start() 必须零排程（静默 GitHub 检查退役；Sparkle 的
+  // 用户发起窗口绝不能被定时调用打开）。
+  const realSetTimeout = globalThis.setTimeout
+  const realSetInterval = globalThis.setInterval
+  const scheduled: number[] = []
+  try {
+    globalThis.setTimeout = ((_fn: () => void, ms?: number) => {
+      scheduled.push(ms ?? 0)
+      return { unref() {} } as unknown as ReturnType<typeof setTimeout>
+    }) as unknown as typeof setTimeout
+    globalThis.setInterval = ((_fn: () => void, ms?: number) => {
+      scheduled.push(ms ?? 0)
+      return { unref() {} } as unknown as ReturnType<typeof setInterval>
+    }) as unknown as typeof setInterval
+
+    controller.start()
+    await Promise.resolve(); await Promise.resolve()
+    assert.equal(controller.state().installBlockedReason, null, '能力探测可用 → blocked 清空')
+    assert.deepEqual(scheduled, [], 'S-21：原生腿在场时不排 15s 首检 / 6h 周期')
+
+    const seen: string[] = []
+    controller.subscribe((state) => seen.push(state.phase))
+    await controller.checkNow()
+    assert.equal(requests, 0, '页面「检查更新」绝不跑自己的 GitHub 发现')
+    assert.deepEqual(calls, ['check'], '冻结边 updateNativeAction kind=check 恰一次')
+    assert.equal(controller.state().phase, 'checking', '点下即呈现 checking（等壳结果）')
+    assert.deepEqual(seen, ['checking'])
+    // 壳推送终态 → 页面渲染壳的结果（available + 白名单 releaseUrl）。
+    controller.applyNativePhase({ phase: 'available', version: '0.2.3', error: null })
+    assert.equal(controller.state().phase, 'available')
+    assert.equal(controller.state().releaseUrl, 'https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.2.3')
+    assert.deepEqual(seen, ['checking', 'available'])
+    // 再点一次仍是单源：一次新边调用，零出网。
+    await controller.checkNow()
+    controller.applyNativePhase({ phase: 'up-to-date', version: null, error: null })
+    assert.equal(controller.state().phase, 'up-to-date')
+    assert.deepEqual(calls, ['check', 'check'])
+    assert.equal(requests, 0)
+    controller.stop()
+  } finally {
+    globalThis.setTimeout = realSetTimeout
+    globalThis.setInterval = realSetInterval
+  }
+})
+
+test('⑯ S-21 对照：原生腿缺席 → 既有 GitHub releases 检查原样（feed 的唯一来源）', async () => {
+  let requests = 0
+  const controller = createHeadlessUpdateController({
+    version: '0.2.2',
+    logger,
+    request: (async (url: string) => {
+      requests += 1
+      assert.equal(url, 'https://api.github.com/repos/panzeyu2013/dsh-chamber/releases?per_page=100')
+      return { ok: true, status: 200, json: async () => [release('v0.2.2'), release('v0.2.3')] }
+    }) as unknown as typeof fetch,
+  })
+  assert.equal(controller.state().installBlockedReason, NATIVE_SHELL_INSTALL_BLOCKED_REASON)
+  await controller.checkNow()
+  assert.equal(requests, 1, '无原生腿：GitHub 检查照旧（该形态的 feed 来源，不是回退）')
+  assert.equal(controller.state().phase, 'available')
+  assert.equal(controller.state().latestVersion, '0.2.3')
+})
+
+test('⑰ S-38 坏配置：能力探测原因必须记录、保持 blocked，check 落 error 而非停在 checking', async () => {
+  const reason = 'native-updater-misconfigured:SUPublicEDKey 必须是 base64 编码的 32 字节 Ed25519 公钥'
+  const warns: string[] = []
+  const controller = createHeadlessUpdateController({
+    version: '0.2.2',
+    logger: {
+      log: () => {},
+      warn: (...args: unknown[]) => warns.push(args.map((value) => String(value)).join(' ')),
+      error: () => {},
+    },
+    request: fakeFetch([release('v0.2.3')]),
+    nativeUpdater: {
+      // 壳的诚实能力回执（SwiftEdgeHostLegs：{available:false, error}）。
+      async available() { return { available: false, error: reason } },
+      async trigger() { return { ok: false as const, error: reason } },
+    },
+  })
+  controller.start()
+  await Promise.resolve(); await Promise.resolve()
+  assert.equal(controller.state().installBlockedReason, NATIVE_SHELL_INSTALL_BLOCKED_REASON,
+    '坏配置不得被当作可用（installBlockedReason 保持）')
+  assert.ok(warns.some((line) => line.includes('SUPublicEDKey 必须是 base64 编码的 32 字节 Ed25519 公钥')),
+    '能力探测的真实原因必须被记录，不能只剩一个没有理由的 false')
+  await controller.checkNow()
+  assert.equal(controller.state().phase, 'error',
+    '壳拒绝 → 页面诚实 error 相位（旧实现停在 checking）')
+  assert.equal(controller.state().error, reason, '错误文案 = 壳的真实原因（sanitize 后不变）')
+  controller.stop()
+
+  // 消费面兼容：sidecar-entry 的现有实现仍回 boolean（该文件不在本工作流域内），
+  // 控制器必须同样处理——boolean false 保持 blocked 并记录兜底原因，绝不因回执
+  // 形态升级而误判可用。
+  const booleanWarns: string[] = []
+  const booleanForm = createHeadlessUpdateController({
+    version: '0.2.2',
+    logger: {
+      log: () => {},
+      warn: (...args: unknown[]) => booleanWarns.push(args.map((value) => String(value)).join(' ')),
+      error: () => {},
+    },
+    request: fakeFetch([]),
+    nativeUpdater: {
+      async available() { return false },
+      async trigger() { return { ok: false as const, error: 'native-updater-unavailable' } },
+    },
+  })
+  booleanForm.start()
+  await Promise.resolve(); await Promise.resolve()
+  assert.equal(booleanForm.state().installBlockedReason, NATIVE_SHELL_INSTALL_BLOCKED_REASON)
+  assert.ok(booleanWarns.some((line) => line.includes('壳未提供原因')),
+    'boolean 形态的 false 也必须被记录（兼容 sidecar-entry 现有实现）')
+  booleanForm.stop()
+})
+

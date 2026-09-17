@@ -1,7 +1,7 @@
 /**
  * electron-free-gate.test.ts — core 对 electron 零 import 门禁（W-14）
  *
- * design 25 §4.1 判定标准 + companion §四批 4：Electron 依赖面收敛为白名单
+ * design 25 §4.1 判定标准 + §8.2：Electron 依赖面收敛为白名单
  * 文件（main.ts / preload.cts / updater.ts / electron-edges.ts），其余
  * packages/desktop 顶层源码（业务模块与 shell-core 家族）一律不得
  * import/require electron——拆分后 shell-core/node-edges/sidecar-entry 落位时

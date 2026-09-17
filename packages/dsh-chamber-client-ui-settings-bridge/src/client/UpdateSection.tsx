@@ -141,7 +141,20 @@ function StatusRow({
           </div>
         )
       case 'downloading':
-        return <p className={css.updateStatusText}>{t('updateDownloading', { percent: Math.round(downloadPercent ?? 0) })}</p>
+        // 原生（Sparkle）阶段没有百分比（downloadPercent null）：显示不定量文案，
+        // 绝不把 null 圆整成假的 0%；Electron 的进度推送仍走带百分比的分支。
+        return (
+          <p className={css.updateStatusText}>
+            {downloadPercent === null
+              ? t('updateDownloadingIndeterminate')
+              : t('updateDownloading', { percent: Math.round(downloadPercent) })}
+          </p>
+        )
+      case 'installing':
+        // 原生安装中（S-19，Electron 不产生）：Sparkle 正在替换 bundle 并重启，
+        // 页面只如实呈现进展——不提供第二次下载/安装入口（updateRestartAvailable
+        // 的 phase 门已排除 installing）。
+        return <p className={css.updateStatusText}>{t('updateInstalling')}</p>
       case 'downloaded': {
         // 2026-12 user decision: the「已下载，退出时安装」row gains the
         // user-triggered「重启并安装」primary action (main-process
@@ -277,6 +290,11 @@ export function UpdateSection({ t }: { t: UpdateTranslate }) {
     })
   }, [])
 
+  // S-21: the click emits exactly one bridge invoke (update-store single-flight)
+  // and never starts page-side discovery. In the native flavor that invoke is the
+  // frozen updateNativeAction kind=check edge; the「正在检查更新…」row and every
+  // later row come from the pushed phases the shell reports. The local busy flag
+  // only covers the invoke itself — it must not synthesize a CheckState.
   const onCheck = useCallback(() => {
     setChecking(true)
     void requestUpdateCheck().finally(() => setChecking(false))
@@ -304,8 +322,9 @@ export function UpdateSection({ t }: { t: UpdateTranslate }) {
   const currentVersion = update?.currentVersion ?? bridgeVersion
   // Manual check gates: no bridge yet (nothing to ask), an action in flight,
   // a phase that already owns the flow (checkImpossible — mirrors the main
-  // process runCheck() gates), or a platform where the main process refuses
-  // checks outright (linux — no installer feed; see update-gate).
+  // process runCheck() gates; in the native flavor 'checking' is the shell's
+  // own in-flight phase and equally owns the flow), or a platform where the
+  // main process refuses checks outright (linux — no installer feed).
   const checkDisabled = update === null || checking || busy
     || checkImpossible(update)
     || updateCheckPlatformBlocked(update?.installBlockedReason)

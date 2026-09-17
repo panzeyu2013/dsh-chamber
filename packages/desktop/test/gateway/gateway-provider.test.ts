@@ -15,7 +15,7 @@ import type { AddressInfo } from 'node:net'
 import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { configureGatewaySecretStore as configureGatewaySecretStoreRaw, configureGatewayTokenStore as configureGatewayTokenStoreRaw, DEFAULT_GATEWAY_HTTP_PORT, DEFAULT_GATEWAY_PORT, GATEWAY_HOST_PATTERN, gatewayHttpFailureIsTerminal, gatewayPasswordValidationError, gatewayProvider, gatewaySecretStorageMode, gatewayTokenValidationError, getGatewayPassword, getGatewayToken, setGatewayPassword, setGatewayToken, setInstanceSecrets } from '../../gateway-provider.ts'
+import { configureGatewaySecretStore as configureGatewaySecretStoreRaw, configureGatewayTokenStore as configureGatewayTokenStoreRaw, DEFAULT_GATEWAY_HTTP_PORT, DEFAULT_GATEWAY_PORT, GATEWAY_HOST_PATTERN, gatewayHttpFailureIsTerminal, gatewayPasswordValidationError, gatewayProvider, gatewaySecretStorageCrossFlavorUnreadable, gatewaySecretStorageMode, gatewayTokenValidationError, getGatewayPassword, getGatewayToken, setGatewayPassword, setGatewayToken, setInstanceSecrets } from '../../gateway-provider.ts'
 import { GATEWAY_RUNTIME_STATUS } from '../../gateway-session-test-hooks.ts'
 import type { SecretCryptoAdapter } from '../../gateway-provider.ts'
 import { gatewayCredentialBinding } from '../../credential-binding.ts'
@@ -358,7 +358,7 @@ function rawBase64Crypto(): SecretCryptoAdapter {
   }
 }
 
-test('P1-1: an encrypted mirror written while crypto was available is CORRUPT on a later crypto-unavailable load — the blob is never used as a plaintext credential (S22 availability flip)', () => {
+test('P1-1/S-29: an encrypted mirror loaded without crypto is loud + fail-closed, but is NOT corrupt-renamed (the Electron flavor must still be able to read it)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-gw-secret-flip-'))
   const file = join(dir, 'gateway-secrets.json')
   try {
@@ -368,20 +368,34 @@ test('P1-1: an encrypted mirror written while crypto was available is CORRUPT on
     assert.equal(configureGatewaySecretStore(file, rawBase64Crypto()), null)
     setGatewayToken('flip-token', TOKEN)
     setGatewayPassword('flip-pw', 'gateway-login-password-1234567890-abcd')
-    const stored = JSON.parse(readFileSync(file, 'utf8')) as { tokens: Record<string, string>; passwords: Record<string, string> }
+    const storedText = readFileSync(file, 'utf8')
+    const stored = JSON.parse(storedText) as { tokens: Record<string, string>; passwords: Record<string, string> }
     assert.notEqual(stored.tokens['flip-token'], TOKEN, 'with crypto available the mirror never holds plaintext')
     assert.match(stored.tokens['flip-token'] ?? '', /^[A-Za-z0-9+/=]+$/, 'the stored value is base64 ciphertext shape')
     assert.equal((stored as { storage?: unknown }).storage, 'safeStorage', 'the explicit discriminator, not blob punctuation, controls decoding')
-    // Startup 2: crypto UNAVAILABLE (the safeStorage availability flip) — the
-    // blobs must NOT silently load as the plaintext credentials (their base64
-    // passes the ASCII/length gates — the exact violation this fixes).
+    // Startup 2: crypto UNAVAILABLE (cross-flavor / safeStorage availability
+    // flip) — the blobs must NOT silently load as the plaintext credentials
+    // (their base64 passes the ASCII/length gates — the exact violation S22
+    // fixes). S-29: this is NOT a corrupt file — it is exactly what the
+    // Electron flavor writes; renaming it away would make those credentials
+    // unreadable on the other side too.
     const notice = configureGatewaySecretStore(file)
     assert.notEqual(notice, null, 'a crypto-unavailable load of encrypted blobs is LOUD, never silently plaintext')
-    assert.match(notice ?? '', /\.corrupt/, 'the notice names the preserved corrupt file')
-    assert.ok(existsSync(`${file}.corrupt`), 'the encrypted mirror is PRESERVED as .corrupt (现场保留)')
-    assert.equal(existsSync(file), false, 'the original is renamed away')
+    assert.match(notice ?? '', /safeStorage-encrypted by the Electron flavor/, 'the notice is precise and actionable (S-29)')
+    assert.doesNotMatch(notice ?? '', /\.corrupt/, 'never the generic corrupt-preserved wording')
+    assert.equal(existsSync(`${file}.corrupt`), false, 'no corrupt rename — the file is preserved in place')
+    assert.equal(existsSync(file), true, 'the encrypted mirror stays exactly where the Electron flavor reads it')
+    assert.equal(readFileSync(file, 'utf8'), storedText, 'the on-disk bytes are untouched')
     assert.equal(getGatewayToken('flip-token'), null, 'the blob is NEVER adopted as the token')
     assert.equal(getGatewayPassword('flip-pw'), null, 'the blob is NEVER adopted as the password')
+    assert.equal(gatewaySecretStorageMode(), 'plaintext', 'the projection reports the mode this process will actually write')
+    assert.equal(gatewaySecretStorageCrossFlavorUnreadable(), true, 'the renderer projection exposes the cross-flavor unreadable fact')
+    // The Electron flavor (crypto available again) still reads the preserved
+    // file: the credentials were never destroyed by the sidecar start.
+    const recovered = configureGatewaySecretStore(file, rawBase64Crypto())
+    assert.equal(recovered, null, 'a crypto-capable (Electron) load succeeds on the preserved file')
+    assert.equal(getGatewayToken('flip-token'), TOKEN)
+    assert.equal(gatewaySecretStorageCrossFlavorUnreadable(), false)
   } finally {
     configureGatewaySecretStore(null)
     rmSync(dir, { recursive: true, force: true })
@@ -407,7 +421,11 @@ test('S22: a pure-alphanumeric safeStorage ciphertext is still never mistaken fo
 
     const notice = configureGatewaySecretStore(file)
     assert.notEqual(notice, null, 'crypto unavailable + safeStorage tag fails closed')
-    assert.ok(existsSync(`${file}.corrupt`))
+    // S-29: precise cross-flavor wording, file preserved in place (no .corrupt).
+    assert.match(notice ?? '', /safeStorage-encrypted by the Electron flavor/)
+    assert.equal(existsSync(`${file}.corrupt`), false)
+    assert.equal(existsSync(file), true)
+    assert.equal(gatewaySecretStorageCrossFlavorUnreadable(), true)
     assert.equal(getGatewayToken('alpha-cipher'), null, 'ciphertext never becomes a wire credential')
   } finally {
     configureGatewaySecretStore(null)

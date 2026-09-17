@@ -12,6 +12,7 @@ import { after, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -294,6 +295,26 @@ test('malformed error branch degrades to unknown_rpc_code instead of dropping', 
 // ---------------------------------------------------------------------------
 
 const quietLogger = { log: () => {}, warn: () => {}, error: () => {} }
+
+/**
+ * A dsh port base that is free right now. spawnDsh's default base (17510) is the
+ * live chamber/control-plane range: when the developer machine is already
+ * running instances there, every candidate port is taken and these tests die
+ * with "failed to start after 5 attempts" instead of reaching the pid-ledger
+ * path they actually assert. The ledger/termination contract is port-agnostic,
+ * so bind an ephemeral port and hand it over explicitly.
+ */
+async function freeDshPortBase(): Promise<number> {
+  return await new Promise<number>((resolvePort, rejectPort) => {
+    const server = createServer()
+    server.on('error', rejectPort)
+    server.listen(0, '127.0.0.1', () => {
+      const address = server.address()
+      const port = typeof address === 'object' && address !== null ? address.port : 0
+      server.close(() => resolvePort(port))
+    })
+  })
+}
 
 function idleDshWorkspace(root: string): string {
   const workspace = join(root, 'runtime')
@@ -628,6 +649,7 @@ test('pid-ledger publication failure reclaims the child and is never retried on 
       stateDir,
       dshHome: join(root, 'dsh-home'),
       dshWorkspacePath: workspace,
+      dshPortBase: await freeDshPortBase(),
       logger: quietLogger,
       pidRecordWriter(_stateDir, pid) {
         writerCalls += 1
@@ -672,6 +694,7 @@ test('unproven attempt termination aborts port retries and preserves the pid led
       stateDir,
       dshHome: join(root, 'dsh-home'),
       dshWorkspacePath: workspace,
+      dshPortBase: await freeDshPortBase(),
       logger: quietLogger,
       signal: controller.signal,
       pidRecordWriter(...args) {

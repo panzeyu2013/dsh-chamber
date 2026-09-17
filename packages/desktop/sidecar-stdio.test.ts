@@ -29,6 +29,7 @@ import {
   EXIT_RUNTIME_CRASH,
   EXIT_STARTUP_FAILURE,
 } from './sidecar-exit-codes.ts'
+import { MAX_INBOUND_FRAME_BYTES } from './node-edges.ts'
 
 const dir = path.dirname(fileURLToPath(import.meta.url))
 const sidecarPath = path.join(dir, 'sidecar-entry.ts')
@@ -62,6 +63,13 @@ interface Driver {
   /** 等待 sidecar 向宿主发出的 edge 请求（{edge, payload, edgeId}）——用于断言
    *  入站汇确实到达 core 并驱动宿主腿，而非只停在传输层。 */
   waitEdge(method: string, timeoutMs?: number): Promise<Record<string, unknown>>
+  /** P-01 测试注入：向 sidecar stdin 写一行原始字节（不经 NDJSON 组帧），用于
+   *  超长行护栏用例。 */
+  writeRaw(line: string): void
+  /** W-13 ② 采样（P-04 起 sidecar 在 dev 也能解析内建 workspace，启动事务会并行
+   *  推 runtime 状态）：在**已缓冲**的 rendererPush 里按 channel 取，绝不与其它
+   *  合法 push 的到达次序竞态，也不会在重新挂 waitNotify 的空窗里丢目标 push。 */
+  waitRendererPushChannel(channel: string, timeoutMs?: number): Promise<Record<string, unknown>>
   close(): Promise<number | null>
 }
 
@@ -79,6 +87,8 @@ function startDriver(): Promise<Driver> {
     const rl = createInterface({ input: child.stdout })
     let nextId = 1
     const pending = new Map<number, { resolve(v: { ok: boolean; result?: unknown; error?: string }): void }>()
+    /** 全部 rendererPush 载荷（顺序保留）——channel 过滤采样读这份缓冲。 */
+    const rendererPushes: Record<string, unknown>[] = []
     const notifyWaiters = new Map<string, { resolve(v: Record<string, unknown>): void; timer: NodeJS.Timeout }[]>()
     const edgeWaiters = new Map<string, { resolve(v: Record<string, unknown>): void; timer: NodeJS.Timeout }[]>()
     let closed = false
@@ -91,6 +101,9 @@ function startDriver(): Promise<Driver> {
         return
       }
       if (typeof frame.notify === 'string') {
+        if (frame.notify === 'rendererPush') {
+          rendererPushes.push((frame.payload ?? {}) as Record<string, unknown>)
+        }
         const waiters = notifyWaiters.get(frame.notify) ?? []
         notifyWaiters.delete(frame.notify)
         for (const w of waiters) {
@@ -165,6 +178,30 @@ function startDriver(): Promise<Driver> {
           const list = notifyWaiters.get(event) ?? []
           list.push(waiter)
           notifyWaiters.set(event, list)
+        })
+      },
+      writeRaw(line) {
+        child.stdin.write(line + '\n')
+      },
+      waitRendererPushChannel(channel, timeoutMs = 4000) {
+        const find = () => rendererPushes.find((push) => push.channel === channel)
+        const existing = find()
+        if (existing !== undefined) return Promise.resolve(existing)
+        return new Promise((resolve, reject) => {
+          const deadline = Date.now() + timeoutMs
+          const tick = (): void => {
+            const hit = find()
+            if (hit !== undefined) {
+              resolve(hit)
+              return
+            }
+            if (Date.now() >= deadline) {
+              reject(new Error('rendererPush 超时: ' + channel))
+              return
+            }
+            setTimeout(tick, 5)
+          }
+          tick()
         })
       },
       close() {
@@ -262,6 +299,8 @@ function spawnInjectable(extraEnv: Record<string, string>, port: string): {
   ready: Promise<void>
   invoke(method: string, payload: unknown, timeoutMs?: number): Promise<{ ok: boolean; result?: unknown; error?: string; code?: string }>
   waitStderr(pattern: RegExp, timeoutMs?: number): Promise<void>
+  /** P-01 测试注入：向 stdin 写一行原始字节（不经 NDJSON 组帧）。 */
+  writeRaw(line: string): void
   exit: Promise<number | null>
   stderr: () => string
   kill: (signal: NodeJS.Signals) => void
@@ -333,6 +372,9 @@ function spawnInjectable(extraEnv: Record<string, string>, port: string): {
         child.stdin.write(JSON.stringify({ id, method, payload }) + '\n')
       })
     },
+    writeRaw(line) {
+      child.stdin.write(line + '\n')
+    },
     waitStderr(pattern, timeoutMs = 4000) {
       if (pattern.test(stderr)) return Promise.resolve()
       return new Promise<void>((resolve, reject) => {
@@ -393,7 +435,10 @@ test('W-13 ① info 真实载荷', async () => {
 
 test('W-13 ② settings-set → rendererPush 推送采样', async () => {
   if (!nodeAvailable) return
-  const notifyP = driver.waitNotify('rendererPush')
+  // P-04 起 dev sidecar 也会解析出内建 dsh workspace，启动事务与 settings-set
+  // 并行推 runtime 状态——按 channel 从缓冲里取 settings-changed，断言本用例
+  // 驱动的这次推送，而非「注册后第一个 push 恰好是它」的时序假设。
+  const notifyP = driver.waitRendererPushChannel('dsh-chamber:settings-changed', 5000)
   const r = await driver.invoke('dsh-chamber:settings-set', {
     patch: { windowCloseBehavior: 'hide-to-tray' },
   })
@@ -542,6 +587,47 @@ test('W-22 更新控制器：真实态 + blocked-available 契约', async () => 
   assert.deepEqual(download.result, { ok: false, error: 'no update available' })
   const restart = await driver.invoke('dsh-chamber:update-restart', null)
   assert.deepEqual(restart.result, { ok: false, error: '原生壳不支持自动更新安装（请手动下载新版本）' })
+})
+
+test('S-19/S-21 __host.nativeUpdatePhase：Sparkle 阶段进同一 update-state 投影并推送', async () => {
+  if (!nodeAvailable) return
+  // 先挂 push 观察（rendererPush 是更新状态的唯一页面来源），再发入站帧；其间的
+  // 其他 rendererPush（runtime 状态一类）按 channel/phase 过滤。
+  const pushP = (async (): Promise<Record<string, unknown>> => {
+    const deadline = Date.now() + 5000
+    for (;;) {
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) throw new Error('未等到 downloading 的 update-state push')
+      const push = await driver.waitNotify('rendererPush', remaining)
+      if (push.channel !== 'dsh-chamber:update-state-changed') continue
+      const payload = push.payload as Record<string, unknown>
+      if (payload.phase === 'downloading') return payload
+    }
+  })()
+  const routed = await driver.invoke('__host.nativeUpdatePhase', {
+    phase: 'downloading',
+    version: '0.3.0',
+    error: null,
+  })
+  assert.deepEqual(routed, { ok: true, result: undefined, error: undefined })
+  const pushed = await pushP
+  assert.equal(pushed.downloadPercent, null, '原生下载无百分比 → null')
+  assert.equal(pushed.installBlockedReason, null, '原生阶段绝不把已配置的 Sparkle 降级为 unavailable')
+  const state = await driver.invoke('dsh-chamber:update-state', null)
+  const projection = state.result as Record<string, unknown>
+  assert.equal(projection.phase, 'downloading')
+  assert.equal(projection.installBlockedReason, null)
+  // 非法载荷 loud（node-edges 校验在真实 sidecar 入口生效，不静默丢弃）。
+  const bad = await driver.invoke('__host.nativeUpdatePhase', { phase: 'zzz', version: null, error: null })
+  assert.equal(bad.ok, false)
+  assert.equal(bad.error, 'sidecar-edges:native-update-phase-invalid-phase:zzz')
+  // 失败阶段 → error + 文案进投影（页面与 Sparkle 窗同结论）。
+  const failed = await driver.invoke('__host.nativeUpdatePhase', { phase: 'failed', version: null, error: 'sparkle boom' })
+  assert.equal(failed.ok, true)
+  const after = await driver.invoke('dsh-chamber:update-state', null)
+  const failedState = after.result as Record<string, unknown>
+  assert.equal(failedState.phase, 'error')
+  assert.equal(failedState.error, 'sparkle boom')
 })
 
 test('S3·D2 __host.systemResume 入站：core 回灌 + 装配侧重探双腿，恒 ok 不挂起', async () => {
@@ -746,5 +832,49 @@ test('S2·F11 正常退出码面：stdin EOF 与 SIGTERM 同为 EXIT_GRACEFUL=0�
   harness.closeStdin()
   assert.equal(await harness.exit, EXIT_GRACEFUL, 'stdin EOF 必须走文档化优雅退出码 0')
   assert.match(harness.stderr(), /stdin EOF/)
+})
+
+// ---------------------------------------------------------------------------
+// P-01 入站帧长度上限（本次批次）
+// ---------------------------------------------------------------------------
+test('P-01 入站帧 >4MiB 被 loud 拒绝且不解析；会话继续服务（镜像 Swift 接收侧）', async () => {
+  if (!nodeAvailable) return
+  const harness = spawnInjectable({}, '17931')
+  await harness.ready
+  try {
+    const oversized = JSON.stringify({
+      id: 4242,
+      method: 'dsh-chamber:info',
+      payload: { big: 'x'.repeat(MAX_INBOUND_FRAME_BYTES) },
+    })
+    assert.ok(
+      Buffer.byteLength(oversized, 'utf8') > MAX_INBOUND_FRAME_BYTES,
+      '夹具行必须超过上限（JSON 组帧开销也计入）',
+    )
+    harness.writeRaw(oversized)
+    await harness.waitStderr(/入站帧超过上限/, 8000)
+    // 超长行只丢那一行：同一进程随后仍正常应答（绝不一帧杀死健康会话）。
+    const info = await harness.invoke('dsh-chamber:info', null, 4000)
+    assert.equal(info.ok, true, '超长帧后会话必须继续服务')
+    assert.equal(typeof (info.result as Record<string, unknown>).controlPlaneUrl, 'string')
+  } finally {
+    harness.kill('SIGTERM')
+    await harness.exit
+  }
+})
+
+test('P-01 跨语言锁步：TS 入站帧上限 = Swift FrameCodec.maxFrameBytes（4 MiB，按 UTF-8 字节）', () => {
+  const swiftPath = path.join(dir, '..', '..', 'macos', 'Sources', 'DSHChamberPoc', 'FrameCodec.swift')
+  const swift = readFileSync(swiftPath, 'utf8')
+  const match = /public static let maxFrameBytes = ([0-9_]+) \* ([0-9_]+) \* ([0-9_]+)/.exec(swift)
+  assert.ok(match !== null, 'FrameCodec.swift 的 maxFrameBytes 拼写必须可锁步（见 CrossLanguageLockstepTests.swift）')
+  const swiftBytes = Number(match[1]!.replaceAll('_', ''))
+    * Number(match[2]!.replaceAll('_', ''))
+    * Number(match[3]!.replaceAll('_', ''))
+  assert.equal(MAX_INBOUND_FRAME_BYTES, swiftBytes, 'TS 侧常量必须与 Swift FrameCodec.maxFrameBytes 逐值一致')
+  assert.equal(swiftBytes, 4 * 1024 * 1024, 'Swift 侧常量必须仍是 4 MiB（护栏不允许被悄悄放宽）')
+  const entry = readFileSync(sidecarPath, 'utf8')
+  assert.match(entry, /lineBytes > MAX_INBOUND_FRAME_BYTES/, 'sidecar-entry 入站门必须读同一常量')
+  assert.match(entry, /Buffer\.byteLength\(line, 'utf8'\)/, '门必须按 UTF-8 字节数判定（与 Swift line.utf8.count 同口径）')
 })
 

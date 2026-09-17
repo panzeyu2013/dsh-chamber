@@ -27,12 +27,29 @@
  * - The push wins over a stale query snapshot (a push arriving between the
  *   state() invoke and its resolution is never overwritten by the older
  *   query result).
+ * - S-21 discovery single-source: this page never runs its own update
+ *   discovery. In the native (Swift/Sparkle) flavor the shell advertises the
+ *   Sparkle leg and the「检查更新」invoke lands on the frozen
+ *   updateNativeAction kind=check edge inside the shell — the store just
+ *   consumes the dsh-chamber:update-state-changed phases the shell reports
+ *   (checking → available/up-to-date/error). The Electron flavor keeps its
+ *   electron-updater feed behind the same invoke; either way the page only
+ *   renders pushed phases. checkInFlight mirrors the other two actions'
+ *   module single-flight so N-ctx shells can never emit a second check edge.
  */
 import type { UpdateState, UpdateSurface } from '../ambient/update-bridge.d.ts'
 import { createBridgeHydration } from './bridge-hydration.ts'
 
 /** Module-wide download in-flight guard (N-ctx shells share one download). */
 let downloadInFlight = false
+
+/** Module-wide check in-flight guard (N-ctx shells share one check).
+ *
+ * S-21: in the native flavor the inspect invoke is the frozen
+ * updateNativeAction kind=check edge — the shell must see exactly ONE per
+ * click across every shell instance. The guard covers the invoke round trip
+ * only; the phase push is the visible authority for the outcome. */
+let checkInFlight = false
 
 /** Module-wide restart in-flight guard (N-ctx shells share one restart).
  *
@@ -94,16 +111,22 @@ export function subscribeUpdateState(listener: () => void): () => void {
   return hydration.subscribe(listener)
 }
 
-/** The「检查更新」button action: a user-initiated check (same silent check
- *  path as the startup/6h checks — autoDownload stays off, a check never
- *  downloads). */
+/** The「检查更新」button action: a user-initiated check (autoDownload stays
+ *  off, a check never downloads). A check never triggers the page's own
+ *  discovery — the flavor routes it inside the shell (S-21): native →
+ *  updateNativeAction kind=check → Sparkle appcast; Electron → electron-updater
+ *  feed. The result is rendered from the pushed phases, not this return value. */
 export async function requestUpdateCheck(): Promise<{ ok: true } | { ok: false; error: string }> {
-  const api = hydration.surface()
-  if (api === null) return { ok: false, error: 'update bridge unavailable' }
+  if (checkInFlight) return { ok: false, error: 'check already in progress' }
+  checkInFlight = true
   try {
+    const api = hydration.surface()
+    if (api === null) return { ok: false, error: 'update bridge unavailable' }
     return await api.check()
   } catch (error) {
     return { ok: false, error: String(error) }
+  } finally {
+    checkInFlight = false
   }
 }
 

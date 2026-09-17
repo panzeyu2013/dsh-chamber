@@ -1,7 +1,14 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import { createTrustedIpc, isExternalLinkUrl, isTrustedIpcSender, isTrustedRendererUrl } from '../../renderer-trust.ts'
+import {
+  CHAMBER_PERMISSION_ALLOWLIST,
+  createTrustedIpc,
+  isChamberPermissionGranted,
+  isExternalLinkUrl,
+  isTrustedIpcSender,
+  isTrustedRendererUrl,
+} from '../../renderer-trust.ts'
 import type { IpcSenderLike } from '../../renderer-trust.ts'
 
 const origin = 'http://127.0.0.1:17500'
@@ -19,6 +26,43 @@ test('renderer URL trust is the exact shell document, not the whole control-plan
   assert.equal(isTrustedRendererUrl('not a url', origin), false)
 })
 
+
+test('T-13: a same-origin URL carrying userinfo is never the trusted shell document', () => {
+  // Swift TrustGuard rejects any actual/expected userinfo; the Electron leg used
+  // to accept http://u:p@127.0.0.1:port/ because WHATWG origin drops userinfo.
+  // Closed in the safer direction: reject, because a credential-bearing URL is
+  // never the chamber shell document and no capability is lost.
+  assert.equal(isTrustedRendererUrl('http://u:p@127.0.0.1:17500/', origin), false)
+  assert.equal(isTrustedRendererUrl('http://user@127.0.0.1:17500/', origin), false)
+  assert.equal(isTrustedRendererUrl('http://:pass@127.0.0.1:17500/', origin), false)
+  // The expected origin carrying userinfo is equally untrusted (Swift checks both).
+  assert.equal(isTrustedRendererUrl(`${origin}/`, 'http://u:p@127.0.0.1:17500'), false)
+  // ... and the exact shell document without userinfo stays trusted.
+  assert.equal(isTrustedRendererUrl(`${origin}/`, origin), true)
+  // The IPC sender predicate inherits the same strictness (main-frame userinfo
+  // is rejected even when sender/identity match).
+  const userinfoFrame = { url: 'http://u:p@127.0.0.1:17500/' }
+  const userinfoContents = { mainFrame: userinfoFrame }
+  assert.equal(isTrustedIpcSender({ sender: userinfoContents, senderFrame: userinfoFrame }, userinfoContents, origin), false)
+})
+
+test('G21 permission posture: deny-by-default with the single clipboard-sanitized-write exception', () => {
+  assert.deepEqual([...CHAMBER_PERMISSION_ALLOWLIST], ['clipboard-sanitized-write'])
+  assert.equal(isChamberPermissionGranted('clipboard-sanitized-write'), true)
+  for (const denied of [
+    'clipboard-read', 'media', 'geolocation', 'notifications', 'midi', 'midiSysex',
+    'pointerLock', 'fullscreen', 'openExternal', 'display-capture', 'idle-detection', '',
+  ]) {
+    assert.equal(isChamberPermissionGranted(denied), false, `${denied} must stay denied`)
+  }
+  // main.ts wiring lock: the request handler and the permissions.query check
+  // handler consume the same predicate, and no stray literal can re-introduce a
+  // second posture. (The handlers cannot be imported here — main.ts loads electron.)
+  const main = readFileSync(new URL('../../main.ts', import.meta.url), 'utf8')
+  assert.match(main, /setPermissionRequestHandler\(\(_wc, permission, callback\) =>\s*callback\(isChamberPermissionGranted\(permission\)\)\)/)
+  assert.match(main, /setPermissionCheckHandler\(\(_wc, permission\) => isChamberPermissionGranted\(permission\)\)/)
+  assert.doesNotMatch(main, /permission === 'clipboard-sanitized-write'/)
+})
 test('external-link allowlist is external http(s) and mailto by scheme and origin', () => {
   // Same-origin http(s) targets are not external: opening the control plane in
   // the OS browser would only produce a preload-less duplicate shell.

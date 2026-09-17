@@ -1,6 +1,6 @@
 /**
  * poc-sidecar.ts — W-05 vertical slice: POC B-bridge service end
- * (todo companion §0.2⑥ W-05 / design 25 §4.4.2). P1 (M2) replaces this file
+ * (W-05; design 25 §4.4.2). P1 (M2) replaces this file
  * with sidecar-entry.ts (real processors + HostEdges); until then it stubs
  * exactly the three slice topologies so the full chain can be proven:
  *
@@ -174,7 +174,7 @@ function infoHandler(): Json {
 }
 
 function instancesGetHandler(): Json {
-  // Honest-error contract (todo §0.2-⑥): missing/unreadable/corrupt registry
+  // Honest-error contract (design 25 §4.4.2): missing/unreadable/corrupt registry
   // answers {error:'poc-no-registry'} on the wire — never a silent empty
   // success (AGENTS proxy-honesty invariant; the renderer must tell "no
   // instances" apart from "read failed"). Valid arrays pass through untouched
@@ -223,7 +223,7 @@ async function connectHandler(payload: Json | null): Promise<Json> {
   rememberPhase(instanceId, 'connected')
   // POC semantics are stubbed and loud-marked: the status event is fabricated
   // here (poc:true). After M2 the real transport-manager becomes the event
-  // source (todo companion §0.2⑥; design 25 §4.4.2) and this push disappears.
+  // source (design 25 §4.4.2) and this push disappears.
   pushEvent('desktop_ssh_status_changed', { id: instanceId, status: 'connected', poc: true })
   return { ok: true }
 }

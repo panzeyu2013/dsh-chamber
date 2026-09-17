@@ -1459,6 +1459,16 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       {instances.some(spec => spec.secretStorage === 'plaintext')
         ? <p className={css.hint} role="status">{t('secretStoragePlaintextHint')}</p>
         : null}
+      {/* S-29 residual (design 25 §6.4 cross-flavor credentials): the
+          secretStorageUnreadable projection is per-row (true only for rows
+          whose mirror bytes another flavor wrote with safeStorage), so this
+          dedicated hint renders exactly when at least one row carries it. It
+          must stay distinct from the plaintext hint: the preserved file is NOT
+          corruption, and the user has to re-enter those credentials (or go
+          back to the flavor that wrote them). */}
+      {instances.some(spec => spec.secretStorageUnreadable === true)
+        ? <p className={css.hint} role="status">{t('secretStorageUnreadableHint')}</p>
+        : null}
       {ssh() === null ? <p className={css.error} role="alert">{t('desktopOnly')}</p> : null}
 
       <section className={css.group}>

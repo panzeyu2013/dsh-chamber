@@ -20,14 +20,18 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import {
   DEFAULT_CHAMBER_SETTINGS,
+  MAX_SETTINGS_FILE_BYTES,
   closeToTrayRecoveryAvailable,
   computeQuitRisk,
   computeSupported,
+  decideMainWindowClose,
+  launchAtLoginReconcileDecision,
   normalizeSettings,
   readSettingsFile,
   shouldHideToTray,
   shouldUpdaterQuitTakeOver,
   validatePatch,
+  verifyLaunchAtLoginReadBack,
   writeSettingsFile,
   type ChamberSettings,
 } from '../../chamber-settings.ts';
@@ -537,6 +541,115 @@ test('validatePatch: nested sessionTodo — invalid values rejected loudly', () 
   assert.equal(mixedBad.ok, false);
 });
 
+
+// --- P-12: shared strictness (Swift StartupSettings parity) ---
+
+test('P-12: duplicate JSON keys at any nesting level are corruption (both flavors judge the same)', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'chamber-settings-dup-keys-'))
+  const file = path.join(dir, 'chamber-settings.json')
+  try {
+    const duplicates = [
+      '{"keepAwake":true,"keepAwake":false}',
+      '{"notifications":{"enabled":true,"enabled":false}}',
+      '{"sessionTodo":{"onAsk":true,"onAsk":false}}',
+      // Escaped key spelling is the same key (JSON.parse keeps the last, so an
+      // escape-only duplicate is exactly the shape that would change behavior).
+      '{"keepAwake":true,"\\u006beepAwake":false}',
+    ]
+    for (const [index, raw] of duplicates.entries()) {
+      writeFileSync(file, raw)
+      const read = readSettingsFile(file)
+      assert.match(read.notice ?? '', /corrupt/, `duplicate-key payload #${index} must be corrupt`)
+      assert.deepEqual(read.settings, DEFAULT_CHAMBER_SETTINGS)
+      assert.equal(existsSync(file), false, `duplicate-key payload #${index} moved away`)
+      assert.equal(existsSync(`${file}.corrupt`), true, `duplicate-key payload #${index} preserved`)
+    }
+    // Distinct keys (including unknown forward-compat keys) still read clean.
+    writeFileSync(file, '{"keepAwake":true,"futureKey":1,"notifications":{"enabled":true,"futureNested":1}}')
+    const clean = readSettingsFile(file)
+    assert.equal(clean.notice, null)
+    assert.equal(clean.settings.keepAwake, true)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('P-12: BOM / NUL encodings and an over-limit size are corruption, never coerced', () => {
+  assert.equal(MAX_SETTINGS_FILE_BYTES, 1 << 20, 'the shared bound mirrors the Swift 1 MiB read limit')
+  const dir = mkdtempSync(path.join(tmpdir(), 'chamber-settings-encoding-'))
+  const file = path.join(dir, 'chamber-settings.json')
+  try {
+    const payloads = [
+      '\uFEFF{"keepAwake":true}', // UTF-8 BOM
+      '{"keepAwake":true}\u0000', // raw NUL
+      // > 1 MiB (the Swift read bound; readPrivateFileNoFollow rejects, no truncation).
+      '{"keepAwake":true,"pad":"' + 'x'.repeat(MAX_SETTINGS_FILE_BYTES) + '"}',
+    ]
+    for (const [index, raw] of payloads.entries()) {
+      writeFileSync(file, raw)
+      const read = readSettingsFile(file)
+      assert.match(read.notice ?? '', /unreadable|corrupt/, `payload #${index} must be refused`)
+      assert.deepEqual(read.settings, DEFAULT_CHAMBER_SETTINGS)
+      assert.equal(existsSync(file), false, `payload #${index} moved away`)
+      assert.equal(existsSync(`${file}.corrupt`), true, `payload #${index} preserved`)
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('P-12: registry-origin shape set is the strict shared one (Swift mirror)', () => {
+  const rejected = [
+    'http://registry.example',
+    'https://[::1]',
+    'https://[::1]:8443',
+    'https://user:pass@registry.example',
+    'https://registry.example:',
+    'https://registry.example:+80',
+    'https://registry.example:0',
+    'https://registry.example:65536',
+    'https://\u0645\u062b\u0627\u0644.example', // RTL host (UTS46 CheckBidi)
+    'https://\uE000.example', // private-use host scalar
+    'https://\uFF11\uFF12.example', // non-ASCII digits
+    'https://exa\\mple.com', // backslash authority
+    ' https://registry.example', // stray whitespace WHATWG would trim
+    'https://registry.example/private',
+    'https://registry.example?token=x',
+  ]
+  for (const raw of rejected) {
+    const patch = validatePatch({ registryOrigin: raw })
+    assert.equal(patch.ok, false, `${raw} must be rejected`)
+    if (!patch.ok) assert.equal(patch.code, 'invalid-registry-origin')
+  }
+  const accepted: Array<[string, string]> = [
+    ['https://registry.npmjs.org', 'https://registry.npmjs.org'],
+    ['https://registry.example:8443', 'https://registry.example:8443'],
+    ['https://registry.example:65535', 'https://registry.example:65535'],
+    ['HTTPS://REGISTRY.EXAMPLE', 'https://registry.example'],
+    // LTR IDN letters stay legal; WHATWG canonicalizes the accepted value.
+    ['https://m\u00fcnchen.example', 'https://xn--mnchen-3ya.example'],
+  ]
+  for (const [raw, canonical] of accepted) {
+    const patch = validatePatch({ registryOrigin: raw })
+    assert.equal(patch.ok, true, `${raw} must be accepted`)
+    if (patch.ok) assert.equal(patch.patch.registryOrigin, canonical)
+  }
+})
+
+test('P-12: a persisted strict-rejected origin is preserved as corrupt (read path uses the same predicate)', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'chamber-settings-ipv6-origin-'))
+  const file = path.join(dir, 'chamber-settings.json')
+  try {
+    writeFileSync(file, JSON.stringify({ registryOrigin: 'https://[::1]:8443' }))
+    const read = readSettingsFile(file)
+    assert.match(read.notice ?? '', /corrupt/)
+    assert.equal(read.settings.registryOrigin, DEFAULT_CHAMBER_SETTINGS.registryOrigin)
+    assert.equal(existsSync(file), false)
+    assert.equal(existsSync(`${file}.corrupt`), true)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
 test('computeSupported: launchAtLogin on all shipping platforms; closeToTray follows tray availability, always on darwin', () => {
   // design 21 M4: win32 launchAtLogin unlocked (HKCU Run key).
   assert.deepEqual(computeSupported('win32', true), { launchAtLogin: true, closeToTray: true });
@@ -671,4 +784,172 @@ test('validatePatch: nested notifications — invalid values rejected loudly', (
   assert.ok(mixed.ok, 'mode 合法时整体通过');
   const mixedBad = validatePatch({ keepAwake: true, notifications: { mode: 'sometimes' } });
   assert.equal(mixedBad.ok, false);
+});
+
+// ---------------------------------------------------------------------------
+// S-08 / S-41 / P-20 纯判定（2026-12 macOS 审计修复；接线断言见
+// test/runtime/main-decision-gates.test.ts，行为矩阵在这里）。
+// ---------------------------------------------------------------------------
+
+test('S-41 readSettingsFile: missing / ok / corrupt are distinguishable for side-effect callers', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-chamber-settings-state-'));
+  try {
+    const missingPath = path.join(dir, 'absent.json');
+    const missing = readSettingsFile(missingPath);
+    assert.equal(missing.state, 'missing');
+    assert.equal(missing.notice, null);
+    assert.deepEqual(missing.settings, DEFAULT_CHAMBER_SETTINGS);
+
+    const okPath = path.join(dir, 'ok.json');
+    writeFileSync(okPath, JSON.stringify({ launchAtLogin: true, keepAwake: true }));
+    const ok = readSettingsFile(okPath);
+    assert.equal(ok.state, 'ok');
+    assert.equal(ok.notice, null);
+    assert.equal(ok.settings.launchAtLogin, true);
+
+    const corruptPath = path.join(dir, 'corrupt.json');
+    writeFileSync(corruptPath, 'not-json{');
+    const corrupt = readSettingsFile(corruptPath);
+    assert.equal(corrupt.state, 'corrupt');
+    assert.match(corrupt.notice ?? '', /corrupt/);
+    // 默认值只供内存/UI 使用；损坏文件本身仍被保留（loud 处理不变）。
+    assert.equal(corrupt.settings.launchAtLogin, false);
+    assert.equal(existsSync(corruptPath), false);
+    assert.equal(existsSync(`${corruptPath}.corrupt`), true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('S-41 launchAtLoginReconcileDecision: only a readable file may move the OS login item', () => {
+  // ok/missing replay the persisted value (missing = defaults → false, which
+  // still unregisters a historical leftover — Swift StartupSettings does the
+  // same for .missing); corrupt is the one state that must never touch it.
+  assert.deepEqual(launchAtLoginReconcileDecision('ok', true), { action: 'apply', enabled: true });
+  assert.deepEqual(launchAtLoginReconcileDecision('ok', false), { action: 'apply', enabled: false });
+  assert.deepEqual(launchAtLoginReconcileDecision('missing', false), { action: 'apply', enabled: false });
+  assert.deepEqual(launchAtLoginReconcileDecision('corrupt', false), { action: 'skip', reason: 'corrupt-settings' });
+  // Even a hypothetical true never leaks out of a corrupt file: the verdict is
+  // a property of the read state, not of the defaulted settings value.
+  assert.deepEqual(launchAtLoginReconcileDecision('corrupt', true), { action: 'skip', reason: 'corrupt-settings' });
+  assert.deepEqual(launchAtLoginReconcileDecision('missing', true), { action: 'apply', enabled: true });
+});
+
+test('S-41 follow-up: the *.corrupt sibling keeps the next launch indeterminate (never a default replay)', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-chamber-settings-corrupt-sibling-'));
+  try {
+    const file = path.join(dir, 'chamber-settings.json');
+    // Launch 1 — corrupt: preserved as *.corrupt (loud) and reported corrupt,
+    // so the login-item reconcile skips instead of replaying the default.
+    writeFileSync(file, 'not-json{');
+    const first = readSettingsFile(file);
+    assert.equal(first.state, 'corrupt');
+    assert.match(first.notice ?? '', /corrupt/);
+    assert.deepEqual(launchAtLoginReconcileDecision(first.state, first.settings.launchAtLogin),
+      { action: 'skip', reason: 'corrupt-settings' });
+    assert.equal(existsSync(file), false, 'corrupt file moved aside');
+    assert.equal(existsSync(`${file}.corrupt`), true, 'corrupt evidence preserved');
+
+    // Launch 2 — the live file is missing but the preserved sibling remains
+    // durable evidence. Decaying to 'missing' here used to replay the default
+    // launchAtLogin:false and silently UNREGISTER the user's login item one
+    // launch after the corruption.
+    const second = readSettingsFile(file);
+    assert.equal(second.state, 'corrupt', 'sibling evidence must keep the state indeterminate');
+    assert.notEqual(second.notice, null, 'the second launch stays loud');
+    assert.match(second.notice ?? '', /corrupt/);
+    assert.deepEqual(second.settings, DEFAULT_CHAMBER_SETTINGS);
+    assert.deepEqual(launchAtLoginReconcileDecision(second.state, second.settings.launchAtLogin),
+      { action: 'skip', reason: 'corrupt-settings' });
+
+    // A genuinely missing file WITHOUT corrupt evidence keeps today's
+    // semantics: the persisted default (false) is replayed.
+    const clean = readSettingsFile(path.join(dir, 'never-written.json'));
+    assert.equal(clean.state, 'missing');
+    assert.equal(clean.notice, null);
+    assert.deepEqual(launchAtLoginReconcileDecision(clean.state, clean.settings.launchAtLogin),
+      { action: 'apply', enabled: false });
+
+    // A readable file always wins over the stale sibling: after the user saves
+    // settings again, the next launch applies them normally.
+    writeSettingsFile(file, { ...DEFAULT_CHAMBER_SETTINGS, launchAtLogin: true });
+    const recovered = readSettingsFile(file);
+    assert.equal(recovered.state, 'ok');
+    assert.equal(recovered.settings.launchAtLogin, true);
+    assert.deepEqual(launchAtLoginReconcileDecision(recovered.state, recovered.settings.launchAtLogin),
+      { action: 'apply', enabled: true });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('P-20 verifyLaunchAtLoginReadBack: the OS state decides, never the write call', () => {
+  assert.deepEqual(verifyLaunchAtLoginReadBack(true, { openAtLogin: true }, 'darwin'), { ok: true });
+  assert.deepEqual(verifyLaunchAtLoginReadBack(false, { openAtLogin: false }, 'win32'), { ok: true });
+  // Read-back mismatch (OS silently refused): honest failure naming both values.
+  const mismatch = verifyLaunchAtLoginReadBack(true, { openAtLogin: false }, 'darwin');
+  assert.equal(mismatch.ok, false);
+  if (!mismatch.ok) {
+    assert.match(mismatch.error, /requested openAtLogin=true/);
+    assert.match(mismatch.error, /observed false/);
+  }
+  const reverse = verifyLaunchAtLoginReadBack(false, { openAtLogin: true }, 'win32');
+  assert.equal(reverse.ok, false);
+  // No usable read-back is a failure, never a pass (undefined/null/non-boolean).
+  for (const missing of [undefined, null, 'true', 1]) {
+    const verdict = verifyLaunchAtLoginReadBack(true, { openAtLogin: missing }, 'darwin');
+    assert.equal(verdict.ok, false, `openAtLogin=${String(missing)} must fail the read-back`);
+    if (!verdict.ok) assert.match(verdict.error, /read-back unavailable/);
+  }
+  // macOS 13+ 'requires-approval': registered but not launchable → honest failure.
+  const pending = verifyLaunchAtLoginReadBack(true, { openAtLogin: true, status: 'requires-approval' }, 'darwin');
+  assert.equal(pending.ok, false);
+  if (!pending.ok) assert.match(pending.error, /requires user approval/);
+  assert.deepEqual(verifyLaunchAtLoginReadBack(true, { openAtLogin: true, status: 'enabled' }, 'darwin'), { ok: true });
+  // The status caveat is darwin-only; a win32 read-back ignores it.
+  assert.deepEqual(verifyLaunchAtLoginReadBack(true, { openAtLogin: true, status: 'requires-approval' }, 'win32'), { ok: true });
+  // Disabling with 'not-registered' is a clean success, not a pending-approval.
+  assert.deepEqual(verifyLaunchAtLoginReadBack(false, { openAtLogin: false, status: 'not-registered' }, 'darwin'), { ok: true });
+});
+
+test('S-08 decideMainWindowClose: a close that would quit is deferred until the decision', () => {
+  // hide-to-tray with a recovery surface: the only branch that may hide.
+  assert.equal(decideMainWindowClose({
+    behavior: 'hide-to-tray', recoveryAvailable: true, quitRequested: false, quitConfirmed: false, updateRestartArmed: false,
+  }), 'hide');
+  // No recovery surface (win/linux without tray): this close would end in a
+  // quit, so it must keep the window alive for the confirmation dialog —
+  // the X-close cancel path used to rebuild/reload the page here.
+  assert.equal(decideMainWindowClose({
+    behavior: 'hide-to-tray', recoveryAvailable: false, quitRequested: false, quitConfirmed: false, updateRestartArmed: false,
+  }), 'defer-quit');
+  // close-behavior='quit': defer until confirmed; only a confirmed quit may
+  // destroy the window (cancel then restores it in place, no page reload).
+  assert.equal(decideMainWindowClose({
+    behavior: 'quit', recoveryAvailable: true, quitRequested: false, quitConfirmed: false, updateRestartArmed: false,
+  }), 'defer-quit');
+  assert.equal(decideMainWindowClose({
+    behavior: 'quit', recoveryAvailable: true, quitRequested: false, quitConfirmed: true, updateRestartArmed: false,
+  }), 'close');
+  // A real quit already in flight (before-quit confirmed it) may close.
+  assert.equal(decideMainWindowClose({
+    behavior: 'hide-to-tray', recoveryAvailable: true, quitRequested: true, quitConfirmed: true, updateRestartArmed: false,
+  }), 'close');
+  // Quit requested but not yet confirmed (confirmation dialog open): keep the
+  // window alive — this is the S-08 regression the decision must not allow.
+  assert.equal(decideMainWindowClose({
+    behavior: 'quit', recoveryAvailable: true, quitRequested: true, quitConfirmed: false, updateRestartArmed: false,
+  }), 'defer-quit');
+  // An armed update restart owns the window teardown (macOS quitAndInstall
+  // closes windows BEFORE before-quit): that close must reach the WM.
+  assert.equal(decideMainWindowClose({
+    behavior: 'quit', recoveryAvailable: true, quitRequested: false, quitConfirmed: false, updateRestartArmed: true,
+  }), 'close');
+  assert.equal(decideMainWindowClose({
+    behavior: 'hide-to-tray', recoveryAvailable: true, quitRequested: false, quitConfirmed: false, updateRestartArmed: true,
+  }), 'close');
+  // Confirmed quit + armed update: still a real close.
+  assert.equal(decideMainWindowClose({
+    behavior: 'quit', recoveryAvailable: false, quitRequested: true, quitConfirmed: true, updateRestartArmed: true,
+  }), 'close');
 });

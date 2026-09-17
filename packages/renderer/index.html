@@ -6,7 +6,7 @@
     <title>dsh-chamber</title>
     <!-- 启动骨架屏关键 CSS（首帧观感优化，2026-08）：首帧在 HTML 解析时即可
          绘制，不依赖全量 chamber CSS 与首屏 JS 的加载/求值（体积会随上游 dsh
-         版本漂移，勿在此写死数字；实测分账见 docs/progress/performance-baseline.md）。
+         版本漂移，勿在此写死数字；实测分账见 scripts/perf/README.md + dist/web/perf-sizes.json）。
          骨架用独立的 dsh-boot-* 命名空间：chamber CSS 无同名规则，全量样式加载后
          不会覆盖大字号品牌块（否则 .instance-loading-title 的 14px 会压掉 40px
          品牌字）。React createRoot 首次 render 会清空 #root 的既有子节点，mount

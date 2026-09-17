@@ -68,7 +68,13 @@ import { createGatewaySessionRefresh, gatewaySessionOriginForUrl, gatewayTunnelA
 import type { GatewaySessionRefresh } from './gateway-session-refresh.ts';
 import { appendAuditEvent, configureAuditLog, type AuditEvent } from './audit-log.ts';
 import type { GatewayRegistrationAuthProof, GatewaySessionManager } from './gateway-session.ts';
-import { createTrustedIpc, isExternalLinkUrl, isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
+import {
+  createTrustedIpc,
+  isChamberPermissionGranted,
+  isExternalLinkUrl,
+  isTrustedIpcSender,
+  isTrustedRendererUrl,
+} from './renderer-trust.ts';
 import { call, createControlPlane } from './control-plane-module.ts';
 import {
   attemptDeepLinkProtocolRegistration,
@@ -193,9 +199,11 @@ import type { ChamberHostPackageDescriptor } from './control-plane-module.ts';
 import {
   DEFAULT_CHAMBER_SETTINGS,
   computeQuitRisk,
+  decideMainWindowClose,
+  launchAtLoginReconcileDecision,
   readSettingsFile,
-  shouldHideToTray,
   shouldUpdaterQuitTakeOver,
+  verifyLaunchAtLoginReadBack,
   writeSettingsFile,
 } from './chamber-settings.ts';
 import type { ChamberSettings } from './chamber-settings.ts';
@@ -209,6 +217,10 @@ import { IPC_CHANNELS } from './ipc-events.ts';
 // 迁入 shell-core（core 直接 import），本文件 import 随迁移除——
 import { createSshPluginJournal } from './ssh-plugin-journal.ts';
 import {
+  RENDERER_CRASH_RELOAD_DELAY_MS,
+  RENDERER_HANG_RELOAD_DELAY_MS,
+  RENDERER_RECOVERY_MAX_RELOADS,
+  RUNTIME_ABORT_REASON,
   auditLogFilePath,
   chamberSettingsFilePath,
   gatewaySecretsFilePath,
@@ -235,10 +247,14 @@ import {
   projectNotificationSourceInstances,
   // W-10 S10：runtime 周期/首检检查触发入口（runRuntimeCheck 随 RUNTIME_CHECK
   // 注册体迁入 shell-core J 组段——计时器经它调用同一实现与门）。
+  noteRendererReload,
+  resolveDevBuiltinDshWorkspace,
   runRuntimeCheckCycle,
+  shouldReloadAfterCrash,
+  shouldScheduleHangReload,
   syncNotificationSourceRegistry,
 } from './shell-core.ts';
-import type { ShellAssemblyCtx } from './shell-core.ts';
+import type { RendererReloadBudgetState, ShellAssemblyCtx } from './shell-core.ts';
 import { createElectronEdges } from './electron-edges.ts';
 
 // Last-resort crash boundary. Expected socket/stream failures are handled at
@@ -307,13 +323,10 @@ function resolveBuiltinDshWorkspace(): string | null {
     const bundled = path.join(process.resourcesPath, 'vendor', 'dsh');
     return existsSync(bundled) ? bundled : null;
   }
-  for (const candidate of [
-    path.join(repoRoot, 'ref-dsh'),
-    path.join(pkgDir, 'vendor', 'dsh'),
-  ]) {
-    if (existsSync(candidate)) return candidate;
-  }
-  return null;
+  // P-04：dev 候选顺序由 shell-core 单源提供（<repoRoot>/ref-dsh →
+  // <pkgDir>/vendor/dsh）——Electron-free sidecar 的 dev 回退必须与这里逐字
+  // 同序（resolveSidecarBuiltinDshWorkspace），两侧共用同一 helper。
+  return resolveDevBuiltinDshWorkspace(pkgDir);
 }
 
 /**
@@ -638,7 +651,16 @@ function applyLaunchAtLogin(enabled: boolean): { ok: true } | { ok: false; error
       // process.execPath(打包态=dsh-chamber.exe)。开发态同样可用,但仅打包
       // 形态属于产品承诺(design 14 D6 / 21 M4)。
       app.setLoginItemSettings({ openAtLogin: enabled });
-      return { ok: true };
+      // P-20（2026-12 审计）：写完必须回读——OS 可能静默拒绝，macOS 还可能
+      // 把条目停在 requires-approval（系统设置里等用户批准，此时根本不会
+      // 自启）。Swift 腿的 SMAppService status 预检 + apply-failed 是这里的
+      // 对偶；绝不无回读地回 {ok:true}。
+      const observed = app.getLoginItemSettings();
+      const verdict = verifyLaunchAtLoginReadBack(enabled, observed, process.platform);
+      if (!verdict.ok) {
+        console.warn(`[dsh-chamber] 登录自启写入后回读不符：${verdict.error}`);
+      }
+      return verdict;
     }
     // Linux XDG autostart (design 14 D6 / 21): honor an absolute
     // XDG_CONFIG_HOME and target the RUNNING AppImage ($APPIMAGE) —
@@ -663,6 +685,14 @@ function applyLaunchAtLogin(enabled: boolean): { ok: true } | { ok: false; error
       // live entry behind with a silent ok:true.
       const legacyFile = path.join(os.homedir(), '.config', 'autostart', 'dsh-chamber.desktop');
       if (legacyFile !== desktopFile) rmSync(legacyFile, { force: true });
+    }
+    // P-20（同一条纪律，文件面）：写入/删除后回读目标态，绝不无验证地回
+    // {ok:true}（getLoginItemSettings 在 Linux 不存在，登录自启就是这个文件）。
+    if (existsSync(desktopFile) !== enabled) {
+      return {
+        ok: false,
+        error: `autostart entry read-back mismatch: requested enabled=${enabled}, observed ${existsSync(desktopFile)}`,
+      };
     }
     return { ok: true };
   } catch (error) {
@@ -702,8 +732,10 @@ function reconnectStaleTransports(): void {
  * 白屏）。正常退出（clean-exit，如用户关窗）不重载。
  */
 function installRendererRecovery(win: BrowserWindow): void {
-  let reloadCount = 0;
-  let reloadWindowStart = 0;
+  // G21：预算/门判定全部走 shell-core 的共享纯函数（main-decision-gates
+  // 行为单测；Swift RendererRecoveryPolicy/HangWatchdog 同参数），本文件只留
+  // 计时器与窗口销毁守卫。
+  const reloadBudget: RendererReloadBudgetState = { windowStart: 0, count: 0 };
   // 首次加载完成标志：dsh 前端 boot（加载数十个插件模块）期间渲染进程
   // 主线程长时间忙碌是合法的，unresponsive 只在"已成功加载过"之后才触发
   // 重载，避免打断正常启动。
@@ -722,14 +754,9 @@ function installRendererRecovery(win: BrowserWindow): void {
   };
   const reload = () => {
     if (quitRequested || win.isDestroyed()) return;
-    const now = Date.now();
-    if (now - reloadWindowStart > 60_000) {
-      reloadWindowStart = now;
-      reloadCount = 0;
-    }
-    reloadCount += 1;
-    if (reloadCount <= 3) {
-      console.warn(`[dsh-chamber] 渲染进程异常，尝试重载 (${reloadCount}/3)`);
+    const { allowed, attempt } = noteRendererReload(reloadBudget, Date.now());
+    if (allowed) {
+      console.warn(`[dsh-chamber] 渲染进程异常，尝试重载 (${attempt}/${RENDERER_RECOVERY_MAX_RELOADS})`);
       win.webContents.reload();
     } else {
       console.error('[dsh-chamber] 渲染进程反复异常退出，停止自动恢复');
@@ -755,7 +782,8 @@ function installRendererRecovery(win: BrowserWindow): void {
   win.webContents.on('render-process-gone', (_event, details) => {
     clearUnresponsiveTimer();
     clearCrashReloadTimer();
-    if (details.reason === 'clean-exit' || quitRequested) return; // 用户关窗/退出等正常路径
+    // 用户关窗/退出等正常路径（判定单源 = shouldReloadAfterCrash）。
+    if (!shouldReloadAfterCrash(details.reason, quitRequested)) return;
     // 通知就绪标志立即失效（design 19 §3.3）：崩溃到 500ms 后 reload 之间没有
     // 导航事件（did-start-loading 不会触发），不重置则向死 frame 推送丢事件。
     // （W-10 S2：ready 位复位 + in-flight 重排在 shell-core onRendererLifecycle。）
@@ -769,10 +797,10 @@ function installRendererRecovery(win: BrowserWindow): void {
     crashReloadTimer = setTimeout(() => {
       crashReloadTimer = null;
       reload();
-    }, 500);
+    }, RENDERER_CRASH_RELOAD_DELAY_MS);
   });
   win.webContents.on('unresponsive', () => {
-    if (!loadedOnce) {
+    if (!shouldScheduleHangReload(loadedOnce)) {
       console.warn('[dsh-chamber] 渲染进程无响应（首次加载中，仅记录不重载）');
       return;
     }
@@ -781,7 +809,7 @@ function installRendererRecovery(win: BrowserWindow): void {
     unresponsiveTimer = setTimeout(() => {
       unresponsiveTimer = null;
       reload();
-    }, 15_000);
+    }, RENDERER_HANG_RELOAD_DELAY_MS);
   });
   win.webContents.on('responsive', clearUnresponsiveTimer);
   win.on('closed', () => {
@@ -926,9 +954,30 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
   // quitAndInstall 的退出链（见 armUpdaterQuit 的注释与该函数的契约）。
   win.on('close', (event) => {
     const recoveryAvailable = process.platform === 'darwin' || tray !== null;
-    if (shouldHideToTray(chamberSettings.windowCloseBehavior, recoveryAvailable, quitRequested, updaterQuitArmed)) {
+    // S-08（2026-12 审计）：close 决策统一走纯函数（chamber-settings
+    // decideMainWindowClose）。hide 分支照旧；任何会走到退出的 close
+    // （close-behavior='quit'、无恢复面的关窗）一律 **defer**：先
+    // preventDefault，把窗口留到退出决策拍板之后再销毁。此前窗口先被销毁
+    // （window-all-closed → app.quit()），取消退出后只能重建 = 整页重载、
+    // 页面态丢失；Swift 全部退出腿都由 NSApp.terminate 承担，窗口不销毁，
+    // 取消只 restoreMainWindow()（原地恢复）。
+    const closeAction = decideMainWindowClose({
+      behavior: chamberSettings.windowCloseBehavior,
+      recoveryAvailable,
+      quitRequested,
+      quitConfirmed,
+      updateRestartArmed: updaterQuitArmed,
+    });
+    if (closeAction === 'hide') {
       event.preventDefault();
       win.hide();
+      return;
+    }
+    if (closeAction === 'defer-quit') {
+      // 决策在 before-quit（D2 确认）：窗口此刻仍然存活；确认后退出序列
+      // 再次触发 close（quitConfirmed=true → 'close'）才真正销毁。
+      event.preventDefault();
+      app.quit();
     }
   });
   // 无窗口常驻（托盘态）期间的唤醒事件由 core held（lastResume），窗口恢复可见
@@ -1014,8 +1063,10 @@ if (!gotTheLock) {
   app.on('window-all-closed', () => {
     // macOS 默认常驻（Dock 恢复入口，activate 重建窗口）——但设置 = quit 的
     // 关窗路径（design 14 D1）用户意图是退出：此时 darwin 也必须走
-    // app.quit()，经 before-quit 的 D2 确认（取消时窗口由取消分支重建，绝不
-    // 无窗滞留）。非 darwin 恒退出。
+    // app.quit()，经 before-quit 的 D2 确认。S-08（2026-12 审计）后该关窗
+    // 路径的窗口在确认前不会被销毁（close 被 defer），取消时窗口原地存活，
+    // 绝无「取消后重建 = 页面重载」；本条仍覆盖其它真正关完窗的退出腿
+    // （hide-to-tray 关窗销毁等）。非 darwin 恒退出。
     if (process.platform !== 'darwin' || chamberSettings.windowCloseBehavior === 'quit') app.quit();
   });
 
@@ -1027,12 +1078,23 @@ if (!gotTheLock) {
   // vs「普通关窗」——而 will-quit 要等所有窗口关闭后才触发，在 will-quit 内置
   // 位为时已晚（close 先 hide+preventDefault 会把退出吞掉）。before-quit 先
   // 置位/拦截：确认后重触发才放行；取消时窗口从未关闭（拦截在先），不丢窗口。
+  // S-08（2026-12 审计）把「从未关闭」扩展到 X 关窗路径：close 处理器对
+  // 会退出的关窗先 preventDefault（decideMainWindowClose）、再 app.quit()，
+  // 因此 before-quit 的确认/取消在两种入口下都面对存活的窗口。
   // async handler：preventDefault 在第一个 await 前同步执行（Electron 不等待
   // handler 的 promise）；await 仅用于把确认框的同步/异步失败统一进 try/catch。
   app.on('before-quit', async (event) => {
     if (quitConfirmed) return; // 已确认/豁免：放行（重入）
     const cp = controlPlane;
-    if (cp === null) return; // 控制面未就绪：无可保护内容，放行
+    if (cp === null) {
+      // 控制面未就绪：无可保护内容，放行。必须同时置位确认位——S-08 的
+      // defer 分支在关窗处理器里重入 app.quit()，若这条放行路径不置位，
+      // 退出序列的关窗会再次命中 defer 分支，形成 app.quit() ↔ close 的
+      // 自递归（窗口永远关不掉）。
+      quitRequested = true;
+      quitConfirmed = true;
+      return;
+    }
     if (confirmingQuit) {
       event.preventDefault(); // 确认框已打开：忽略重入（单飞）
       return;
@@ -1082,24 +1144,23 @@ if (!gotTheLock) {
           app.quit();
           return;
         }
-        // 取消：quitRequested 保持 false。app.quit() 发起的退出在关窗前被拦截、
-        // 窗口未关闭；但 X 关窗路径（windowCloseBehavior='quit'）窗口已先销毁
-        // （window-all-closed → app.quit()），取消后重建——绝不让应用以无窗
-        // 状态滞留（恢复入口不应只剩托盘/二次启动）。SIGTERM 已置位
-        // quitRequested 的退出在途（窗口已关、清理进行中）则**不**重建——
-        // 取消对已确认的退出无效力，重建只会闪烁（2026-08 review）。
-        if (!quitRequested && (mainWindow === null || mainWindow.isDestroyed())) {
-          showMainWindow();
-        }
+        // 取消：quitRequested 保持 false。S-08（2026-12 审计）后关窗路径
+        // 不再先销毁窗口——close 在决策前被 defer（decideMainWindowClose），
+        // 所以这里**原地恢复**（show/restore/focus）仍然存活的窗口即可，绝不
+        // 重建、绝不重载页面：页面态保留，与 Swift 取消分支
+        // restoreMainWindow() 对偶。showMainWindow 内部仍保留「窗口意外不在
+        // 则按 mainWindowUrl 重建」的防御兜底。SIGTERM 已置位 quitRequested
+        // 的退出在途则**不**恢复——取消对已确认的退出无效力（2026-08 review）。
+        if (!quitRequested) showMainWindow();
       });
     } catch (error) {
       // showMessageBox 同步/异步失败都必须复位 confirmingQuit，否则后续所有
       // before-quit 都被单飞闸拦死、应用再也退不出（2026-08 review）。
       confirmingQuit = false;
       console.error('[dsh-chamber] 退出确认对话框失败，取消退出：', error);
-      if (mainWindow === null || mainWindow.isDestroyed()) {
-        showMainWindow();
-      }
+      // 与取消同义（S-08）：这次退出作废，原地恢复存活的窗口；showMainWindow
+      // 自带无窗重建兜底。
+      if (!quitRequested) showMainWindow();
     }
   });
 
@@ -1135,7 +1196,9 @@ if (!gotTheLock) {
     event.preventDefault();
     quitCleanupInProgress = true;
     runtimeStartBlocked = true;
-    runtimeOperationAbort?.abort(new Error('application is quitting'));
+    // G15：abort 文案单源（shell-core RUNTIME_ABORT_REASON）——与 sidecar-ctx
+    // dispose 的同一事务 abort 引用同一常量，不允许两侧各拼一份。
+    runtimeOperationAbort?.abort(new Error(RUNTIME_ABORT_REASON));
     // 传输层（SSH 隧道/在途 exec）与控制面（本地 dsh + HTTP 门面）的回收互不
     // 依赖，并行等待（总耗时 = max 而非 sum）。各自的 SIGTERM→SIGKILL 窗口已
     // 压到 1s（transport-manager / spawn-dsh），正常 ~1-2s 完成。disposeAsync
@@ -1441,10 +1504,22 @@ if (!gotTheLock) {
     chamberSettings = settingsLoad.settings;
     setKeepAwakeActive(chamberSettings.keepAwake);
     // 登录自启 reconcile 覆盖全部三平台（design 21 M4:win32 已解锁）。
+    // S-41（2026-12 审计）：损坏文件绝不触碰系统登录项——默认值只回落给
+    // 内存/UI 使用；此前 replay launchAtLogin=false 会静默注销用户登录项，
+    // 且与 Swift 分叉（StartupSettings.readLaunchAtLogin 损坏返回 nil、
+    // AppDelegate 不动作）。后续修复：损坏文件被保留为 *.corrupt 后的下一次
+    // 启动（live 文件缺失 + 副本存在）由 readSettingsFile 判为 corrupt 状态，
+    // 仍然 skip——绝不因状态衰减成 missing 而重放默认 false。真正无副本的
+    // 缺失文件仍 replay 默认 false（注销历史残留）。
     {
-      const loginItemResult = applyLaunchAtLogin(chamberSettings.launchAtLogin);
-      if (!loginItemResult.ok) {
-        console.warn(`[dsh-chamber] 登录自启 reconcile 失败：${loginItemResult.error}`);
+      const loginItemDecision = launchAtLoginReconcileDecision(settingsLoad.state, chamberSettings.launchAtLogin);
+      if (loginItemDecision.action === 'skip') {
+        console.warn('[dsh-chamber] chamber settings 损坏——本次启动不改动系统登录项（S-41）');
+      } else {
+        const loginItemResult = applyLaunchAtLogin(loginItemDecision.enabled);
+        if (!loginItemResult.ok) {
+          console.warn(`[dsh-chamber] 登录自启 reconcile 失败：${loginItemResult.error}`);
+        }
       }
     }
 
@@ -2723,7 +2798,7 @@ if (!gotTheLock) {
     // 共用同一实现——原先该诊断只存在于本闭包，Swift 侧只 throw 常量串，同一失败
     // 在两种 flavor 上的可诊断性不同（2026-09 验收轮的唯一可见证据链）。
     const startAndProbeWorkspace = async (workspace: string, signal?: AbortSignal) => {
-      if (quitRequested) throw new Error('application is quitting');
+      if (quitRequested) throw new Error(RUNTIME_ABORT_REASON);
       signal?.throwIfAborted();
       runtimeTransactionWorkspace = workspace;
       runtimeInternalStart = true;
@@ -3758,8 +3833,8 @@ if (!gotTheLock) {
     // a normal browser, accepted. clipboard-read, custom-format writes and
     // media/geolocation/notifications/etc. stay denied.
     session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) =>
-      callback(permission === 'clipboard-sanitized-write'));
-    session.defaultSession.setPermissionCheckHandler((_wc, permission) => permission === 'clipboard-sanitized-write');
+      callback(isChamberPermissionGranted(permission)));
+    session.defaultSession.setPermissionCheckHandler((_wc, permission) => isChamberPermissionGranted(permission));
 
     // W-10 S1+S2（design 25 §4.1 seam）：shell IPC 注册点迁入 shell-core 的
     // installIpcHandlers——S1 迁 INFO / SETTINGS_GET / SETTINGS_SET 注册体与其

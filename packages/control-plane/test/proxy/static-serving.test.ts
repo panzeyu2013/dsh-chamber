@@ -220,6 +220,11 @@ test('static: /assets/* immutable cache policy; index.html no-cache; manifest.js
     assert.equal(html.headers['cache-control'], 'no-cache')
     assert.match(html.headers['content-security-policy'] ?? '', /default-src 'self'/)
     assert.match(html.headers['content-security-policy'] ?? '', /frame-ancestors 'none'/)
+    // S-35 CSP 半面：文档预览把 HTML/PDF/图片注入 blob: iframe，没有显式
+    // frame-src 时 default-src 'self' 会一并拒掉（两 flavor 同因）。范围收窄：
+    // 只放行 blob:，非 blob 子 frame 继续被 default-src 兜住。
+    assert.match(html.headers['content-security-policy'] ?? '', /frame-src blob:/)
+    assert.doesNotMatch(html.headers['content-security-policy'] ?? '', /frame-src [^;]*'self'/)
     assert.doesNotMatch(html.headers['content-security-policy'] ?? '', /script-src[^;]*'unsafe-inline'/)
     // 'unsafe-eval' is required by the official dsh module loader (boot-manifest
     // `__jsExpr` config evaluation); every inline script still needs the nonce.

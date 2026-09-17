@@ -23,6 +23,15 @@ export function isTrustedRendererUrl(url: string, controlPlaneOrigin: string): b
     const actual = new URL(url)
     const expected = new URL(controlPlaneOrigin)
     return (expected.protocol === 'http:' || expected.protocol === 'https:')
+      // T-13: a URL carrying userinfo (`http://u:p@127.0.0.1:port/`) has the
+      // same WHATWG origin but is a different trust class — Swift's TrustGuard
+      // rejects any actual/expected userinfo and this side must not be the
+      // laxer flavor. The credential-bearing URL is never the chamber shell
+      // document, so rejecting is the safe direction (no capability is lost).
+      && actual.username === ''
+      && actual.password === ''
+      && expected.username === ''
+      && expected.password === ''
       && actual.origin === expected.origin
       && actual.pathname === '/'
       && actual.search === ''
@@ -52,6 +61,27 @@ export function isExternalLinkUrl(url: string, controlPlaneOrigin?: string): boo
   } catch {
     return false
   }
+}
+
+/**
+ * G21: the Electron renderer permission posture, extracted so the matrix is a
+ * behavioural unit instead of a source-text anchor (the Swift leg pins its
+ * equivalent with WebPermissionPolicyTests). Electron default-grants
+ * same-origin permission requests, and the control plane also serves proxied
+ * remote-instance content under /api/i/<id>/* (same origin), so the posture is
+ * deny-by-default with exactly one benign exception: clipboard-sanitized-write
+ * (what navigator.clipboard.writeText() requests in Blink — a deny here would
+ * silently break every copy button while permissions.query still reports
+ * granted). clipboard-read, custom-format writes and media/geolocation/
+ * notifications/etc. stay denied. main.ts wires this same predicate into BOTH
+ * the request handler and the check handler (the check handler is only
+ * consulted for permissions.query and must mirror the request posture).
+ */
+export const CHAMBER_PERMISSION_ALLOWLIST: ReadonlySet<string> = new Set(['clipboard-sanitized-write'])
+
+/** True only for the allowlisted permission (see above). */
+export function isChamberPermissionGranted(permission: string): boolean {
+  return CHAMBER_PERMISSION_ALLOWLIST.has(permission)
 }
 
 /**

@@ -15,11 +15,17 @@
  * tests install a fake window.dshChamber.update BEFORE importing a fresh
  * module instance (query-cache-busted, same pattern as settings-store.test.ts)
  * and drive the recovery rule through the fake surface's onChanged push.
+ *
+ * S-21 coverage (append-only, below): the「检查更新」invoke is module
+ * single-flight (one bridge edge per click across N-ctx shells), the page does
+ * no discovery of its own, and the snapshot merely mirrors the shell-pushed
+ * phases (checking → available/up-to-date/error).
  */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import type { UpdateState, UpdateSurface } from '../../src/ambient/update-bridge.d.ts'
+import { updateCheckDisabled, updateRestartAvailable } from '../../src/client/update-gate.ts'
 
 /** A completed-download state (the phase a restart arm requires). */
 function downloadedState(overrides: Partial<UpdateState> = {}): UpdateState {
@@ -165,6 +171,117 @@ test('restart recovery rule: a pushed up-to-date phase releases the module gate 
     const retry = await store.requestUpdateRestart()
     assert.equal(retry.ok, true, 'an up-to-date push must release the module gate')
     assert.equal(surface.restartCalls, 2)
+  } finally {
+    delete (globalThis as Record<string, unknown>).window
+  }
+})
+
+test('native (Sparkle) phase pushes hydrate the same snapshot the Electron path consumes', async () => {
+  const { surface, push } = fakeUpdateSurface()
+  ;(globalThis as Record<string, unknown>).window = { dshChamber: { update: surface } }
+  const store = await freshStore()
+  try {
+    await waitHydrated(store)
+    // Shell reports the native downloading phase: no percentage (null) — the
+    // snapshot must carry it as-is so UpdateSection renders the indeterminate row.
+    push(downloadedState({ phase: 'downloading', downloadPercent: null, installBlockedReason: null }))
+    assert.equal(store.getUpdateState()?.phase, 'downloading')
+    assert.equal(store.getUpdateState()?.downloadPercent, null)
+    // downloaded → the restart action is offered and maps to the surface call
+    // (the same requestUpdateRestart the Electron path uses).
+    push(downloadedState({ phase: 'downloaded', downloadPercent: 100, installBlockedReason: null }))
+    assert.equal(store.getUpdateState()?.phase, 'downloaded')
+    assert.equal(updateRestartAvailable(store.getUpdateState()?.phase, store.getUpdateState()?.installBlockedReason ?? null, 'darwin'), true)
+    assert.deepEqual(await store.requestUpdateRestart(), { ok: true })
+    assert.equal(surface.restartCalls, 1)
+    // installing is a distinct native phase: no second restart affordance, and
+    // the single-flight stays armed (the app is being replaced, not failed).
+    push(downloadedState({ phase: 'installing', installBlockedReason: null }))
+    assert.equal(store.getUpdateState()?.phase, 'installing')
+    assert.equal(updateRestartAvailable(store.getUpdateState()?.phase, null, 'darwin'), false)
+    // failed → error + sanitized text, releasing the restart gate for retry.
+    push(downloadedState({ phase: 'error', downloadPercent: null, error: 'sparkle boom' }))
+    assert.equal(store.getUpdateState()?.phase, 'error')
+    assert.equal(store.getUpdateState()?.error, 'sparkle boom')
+    assert.deepEqual(await store.requestUpdateRestart(), { ok: true })
+    assert.equal(surface.restartCalls, 2)
+  } finally {
+    delete (globalThis as Record<string, unknown>).window
+  }
+})
+
+test('S-21: one「检查更新」invoke emits exactly one bridge check — N-ctx shells share the module gate', async () => {
+  let checkCalls = 0
+  const releases: Array<() => void> = []
+  const { surface } = fakeUpdateSurface()
+  surface.check = () => new Promise((resolve) => {
+    checkCalls += 1
+    releases.push(() => resolve({ ok: true }))
+  })
+  ;(globalThis as Record<string, unknown>).window = { dshChamber: { update: surface } }
+  const store = await freshStore()
+  try {
+    await waitHydrated(store)
+    const first = store.requestUpdateCheck()
+    // 第二个 shell/第二次点击在 invoke 结算前：本地拒绝，绝不再发一条边。
+    assert.deepEqual(await store.requestUpdateCheck(), { ok: false, error: 'check already in progress' })
+    assert.equal(checkCalls, 1, 'S-21：一次点击恰一条 check edge（native 边绝不重复）')
+    releases.shift()!()
+    assert.deepEqual(await first, { ok: true })
+    // invoke 结算即释放单飞（不是 restart 的 armed-forever）：下一次点击照常发出。
+    const second = store.requestUpdateCheck()
+    assert.equal(checkCalls, 2)
+    releases.shift()!()
+    assert.deepEqual(await second, { ok: true })
+    // 桥抛错也必须释放单飞，否则一次故障会永久禁用按钮。
+    surface.check = async () => { throw new Error('bridge boom') }
+    assert.deepEqual(await store.requestUpdateCheck(), { ok: false, error: 'Error: bridge boom' })
+    let recovered = 0
+    surface.check = async () => { recovered += 1; return { ok: true } }
+    assert.deepEqual(await store.requestUpdateCheck(), { ok: true })
+    assert.equal(recovered, 1, '抛错后单飞复位：按钮可重试')
+  } finally {
+    delete (globalThis as Record<string, unknown>).window
+  }
+})
+
+test('S-21: the page renders the shell-pushed phases (checking → available) and runs no discovery of its own', async () => {
+  let checkCalls = 0
+  const releases: Array<() => void> = []
+  const extraCalls: string[] = []
+  const { surface, push } = fakeUpdateSurface()
+  surface.check = () => new Promise((resolve) => {
+    checkCalls += 1
+    releases.push(() => resolve({ ok: true }))
+  })
+  const realDownload = surface.download.bind(surface)
+  surface.download = async () => { extraCalls.push('download'); return realDownload() }
+  const realOpen = surface.openReleasePage.bind(surface)
+  surface.openReleasePage = async (url: string) => { extraCalls.push('openReleasePage'); return realOpen(url) }
+  ;(globalThis as Record<string, unknown>).window = { dshChamber: { update: surface } }
+  const store = await freshStore()
+  try {
+    await waitHydrated(store)
+    const seen: string[] = []
+    store.subscribeUpdateState(() => {
+      const snapshot = store.getUpdateState()
+      if (snapshot !== null) seen.push(snapshot.phase)
+    })
+    const pending = store.requestUpdateCheck()
+    assert.equal(checkCalls, 1)
+    // 壳的第一帧：checking —— 页面如实渲染，按钮门随之关闭（无法重入）。
+    push(downloadedState({ phase: 'checking', latestVersion: null, downloadPercent: null, releaseUrl: null, installBlockedReason: null }))
+    assert.equal(store.getUpdateState()?.phase, 'checking')
+    assert.equal(updateCheckDisabled(store.getUpdateState()?.phase), true)
+    releases.shift()!()
+    assert.deepEqual(await pending, { ok: true })
+    // 壳的结果帧：available —— 原生腿 installBlockedReason=null，页面直接给「更新」。
+    push(downloadedState({ phase: 'available', installBlockedReason: null }))
+    assert.equal(store.getUpdateState()?.phase, 'available')
+    assert.equal(store.getUpdateState()?.latestVersion, '0.3.0')
+    assert.equal(updateCheckDisabled(store.getUpdateState()?.phase), false)
+    assert.deepEqual(seen, ['checking', 'available'], '页面相位序列 = 壳推送序列（无自有发现）')
+    assert.deepEqual(extraCalls, [], '检查路径绝不触碰 download/openReleasePage 等其它面')
   } finally {
     delete (globalThis as Record<string, unknown>).window
   }

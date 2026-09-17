@@ -177,7 +177,7 @@ import { sanitizeErrorText } from './sanitize-error.ts'
 // 探针失败诊断单源（与 Electron 装配 main.ts 共用；见模块头注释）。
 import { metadataProbeFailureMessage, probeFailureMessage } from './runtime-probe-detail.ts'
 import { createHeadlessUpdateController } from './update-headless.ts'
-import type { NativeUpdaterBridge } from './update-headless.ts'
+import type { HeadlessUpdateController, NativeUpdaterBridge } from './update-headless.ts'
 import type { ApplyNowGateInput } from './apply-now-gate.ts'
 import { shouldSkipDiskRefresh } from './disk-evidence-gate.ts'
 import { CHAMBER_HOST_PACKAGES, call } from './control-plane-module.ts'
@@ -271,7 +271,81 @@ import {
   activationProbeNamesForDomains,
 } from '@dsh-chamber/dsh-runtime'
 import { runtimeDiskSummaryAsync, runtimeFailureSummary } from '@dsh-chamber/dsh-runtime'
-import { runRuntimeCheckCycle } from './shell-core.ts'
+import { RUNTIME_ABORT_REASON, runRuntimeCheckCycle } from './shell-core.ts'
+
+// ---------------------------------------------------------------------------
+// 打包布局锚点（P-13）与 host 包源目录解析（P-05）——具名纯/近纯函数，Swift 布局
+// 锁步测试（macos/.../PackagedLayoutTests.swift）读本段源文本与主锚点；调用方只在
+// buildHeadlessCtx 内。路径事实的单源：
+//   - host 包构建产物：<sidecarDir>/dist/<pkg>（Swift AppDelegate 的
+//     sidecarDir + "/dist/" + name；build-sidecar.sidecarLayout().hostPackageDist）；
+//   - 内嵌 pnpm 入口：<sidecarDir>/pnpm/bin/pnpm.cjs（sidecarLayout().pnpmEntry）。
+// 改这些拼写必须同时改 macos/scripts/build-sidecar.mjs 与 Swift 侧锚点断言。
+// ---------------------------------------------------------------------------
+
+/** 打包布局：host 包构建产物目录 = `<sidecarDir>/dist/<packageDirName>`。 */
+export function packagedHostPackageDir(sidecarDir: string, packageDirName: string): string {
+  return path.join(sidecarDir, 'dist', packageDirName)
+}
+
+/** 打包布局：内嵌 pnpm 入口 = `<sidecarDir>/pnpm/bin/pnpm.cjs`。 */
+export function packagedPnpmEntry(sidecarDir: string): string {
+  return path.join(sidecarDir, 'pnpm', 'bin', 'pnpm.cjs')
+}
+
+/** 旧装配位：`<sidecarDir>/../pnpm/bin/pnpm.cjs`（sidecar 装配于
+ *  Resources/sidecar/ 时的 Electron extraResources 同构位 Resources/pnpm）。 */
+export function legacyPackagedPnpmEntry(sidecarDir: string): string {
+  return path.join(sidecarDir, '..', 'pnpm', 'bin', 'pnpm.cjs')
+}
+
+/** dev 位：`<moduleDir>/node_modules/pnpm/bin/pnpm.cjs`（pinned dep）。 */
+export function devPnpmEntry(moduleDir: string): string {
+  return path.join(moduleDir, 'node_modules', 'pnpm', 'bin', 'pnpm.cjs')
+}
+
+/** 检索根：自 startDir 向上第一个含 `pnpm-workspace.yaml` 的目录（P-05——
+ *  host 包源目录探测必须限定在 workspace 根，祖先链上任意同名
+ *  `packages/<pkg>/package.json` 不再可能成为 seed 源）。找不到 → null。 */
+export function findWorkspaceRoot(startDir: string, maxDepth = 8): string | null {
+  let candidate = startDir
+  for (let depth = 0; depth < maxDepth; depth += 1) {
+    if (existsSync(path.join(candidate, 'pnpm-workspace.yaml'))) return candidate
+    const parent = path.dirname(candidate)
+    if (parent === candidate) break
+    candidate = parent
+  }
+  return null
+}
+
+/** host 包源目录解析（P-05/P-13）：显式 CLI 目录 > workspace 根
+ *  `packages/<dir>`（且 package.json 存在）> 打包布局 `<moduleDir>/dist/<dir>`。
+ *  返回值不保证存在——seed 侧按存在性 loud 过滤（与 main.ts 同向）。 */
+export function resolveHostPackageSourceDir(
+  packageDir: string,
+  explicit: string | null,
+  moduleDir: string,
+): string {
+  if (explicit !== null) return explicit
+  const workspaceRoot = findWorkspaceRoot(moduleDir)
+  if (workspaceRoot !== null) {
+    const probe = path.join(workspaceRoot, 'packages', packageDir)
+    if (existsSync(path.join(probe, 'package.json'))) return probe
+  }
+  return packagedHostPackageDir(moduleDir, packageDir)
+}
+
+/** pnpm 入口解析：装配位 > 旧装配位 > dev node_modules；全缺失时保留 dev 形状
+ *  （安装路径上的 loud 失败与 main 缺 artifact 的 loud 语义同向）。 */
+export function resolvePnpmEntry(moduleDir: string): string {
+  const candidates = [
+    packagedPnpmEntry(moduleDir),
+    legacyPackagedPnpmEntry(moduleDir),
+    devPnpmEntry(moduleDir),
+  ]
+  const firstExisting = candidates.find(entry => existsSync(entry))
+  return firstExisting ?? devPnpmEntry(moduleDir)
+}
 
 /** publish/confirm 等真实叶所需的宿主边沿子集（node-edges 实现——sidecar-entry
  *  把同一 edges 实例传给 buildHeadlessCtx 与 installIpcHandlers：单装配不变式，
@@ -314,7 +388,8 @@ export interface HeadlessCtxInputs {
     openIn: string | null
   }
   /** 原生更新器桥（S-01 / 裁决 D-1 选 B；sidecar-entry 按 --native-updater 构造）。
-   *  缺省 = 无原生安装腿：更新控制器保持 blocked-available。 */
+   *  缺省 = 无原生安装腿：更新控制器保持 blocked-available，且只有此时 check 才走
+   *  GitHub releases 发现（S-21：声明了原生腿就交壳的 Sparkle appcast，绝不双源）。 */
   nativeUpdater?: NativeUpdaterBridge | null
 }
 
@@ -779,26 +854,15 @@ export async function buildHeadlessCtx(
   })
 
   // —— S-C-2 F 组：chamber host 包源目录（main 1624-1635 分支的 sidecar 位——
-  // 显式参数（打包 Resources 布局由 Swift 传 --host-*-dir）优先；缺省 = dev
-  // 布局同构：自本模块目录向上检索 <root>/packages/<pkg>（main dev 分支 =
-  // repoRoot/packages/<pkg> 同值）。目录本身不在此刻校验——seed 侧按 main
-  // 1699/1705 的 existsSync(dist/index.js) 运行时过滤 + loud。——
+  // 显式参数（打包 Resources 布局由 Swift 传 --host-*-dir）优先；缺省 = 具名
+  // resolveHostPackageSourceDir：workspace 根检索（P-05，限定含
+  // pnpm-workspace.yaml 的根）→ 打包锚点 <moduleDir>/dist/<pkg>（P-13，与
+  // Swift AppDelegate / build-sidecar.sidecarLayout 同拼写）。目录本身不在此刻
+  // 校验——seed 侧按 main 1699/1705 的 existsSync(dist/index.js) 运行时过滤 +
+  // loud。——
   const moduleDir = path.dirname(fileURLToPath(import.meta.url))
-  const hostPackageSourceDir = (packageDir: string, explicit: string | null): string => {
-    if (explicit !== null) return explicit
-    let candidate = moduleDir
-    for (let depth = 0; depth < 8; depth += 1) {
-      const probe = path.join(candidate, 'packages', packageDir)
-      if (existsSync(path.join(probe, 'package.json'))) return probe
-      const parent = path.dirname(candidate)
-      if (parent === candidate) break
-      candidate = parent
-    }
-    // 未命中（编译/打包布局且无显式参数）：保留 main dev 形状（repoRoot 猜测）
-    // ——seed 的 existsSync 过滤给出与 main 一致的「构建产物缺失」loud 路径。
-    const fallbackRepoRoot = path.resolve(moduleDir, '..', '..')
-    return path.join(fallbackRepoRoot, 'packages', packageDir)
-  }
+  const hostPackageSourceDir = (packageDir: string, explicit: string | null): string =>
+    resolveHostPackageSourceDir(packageDir, explicit, moduleDir)
   const hostDirs = inputs.hostPackageDirs ?? { graph: null, git: null, archive: null }
   // 本 flavor 的源目录解析：显式 CLI 目录（--host-*-dir）优先，缺省 = dev 布局
   // 向上检索（打包布局由 Swift 传显式目录）。**键 = 注册表包名**，单一来源 =
@@ -1335,16 +1399,9 @@ export async function buildHeadlessCtx(
   //    Resources/sidecar/ 时的 Electron 同构位 Resources/pnpm——main 2294）；
   //  - dev：<moduleDir>/node_modules/pnpm/bin/pnpm.cjs（pnpm 11.21.0 pinned
   //    dep——main 2295 dev 分支同值）。
-  const pnpmEntry = ((): string => {
-    const devEntry = path.join(moduleDir, 'node_modules', 'pnpm', 'bin', 'pnpm.cjs')
-    const assembledEntry = path.join(moduleDir, 'pnpm', 'bin', 'pnpm.cjs')
-    const packagedEntry = path.join(moduleDir, '..', 'pnpm', 'bin', 'pnpm.cjs')
-    const firstExisting = [assembledEntry, packagedEntry, devEntry].find(entry => existsSync(entry))
-    if (firstExisting !== undefined) return firstExisting
-    // 全部缺失（非 dev 且无 Resources 装配）：保留 dev 形状——安装路径上的
-    // loud 失败（installRuntimeVersion）与 main 缺 artifact 的 loud 语义同向。
-    return devEntry
-  })()
+  //  P-13：三条候选拼写全部收进打包布局具名函数（packagedPnpmEntry /
+  //  legacyPackagedPnpmEntry / devPnpmEntry），Swift 布局锁步测试锚定源文本。
+  const pnpmEntry = resolvePnpmEntry(moduleDir)
   let storePruneOperation: Promise<void> | null = null
   // The shared core's default node executor is plain node (design 18 §9.1);
   // the desktop injects its Electron-as-node branch for EVERY pnpm child —
@@ -1589,7 +1646,7 @@ export async function buildHeadlessCtx(
     probes.length > 0 && probes.every(probe => probe.ok)
 
   const startAndProbeWorkspace = async (workspace: string, signal?: AbortSignal) => {
-    if (quittingRequested) throw new Error('application is quitting')
+    if (quittingRequested) throw new Error(RUNTIME_ABORT_REASON)
     signal?.throwIfAborted()
     runtimeTransactionWorkspace = workspace
     runtimeInternalStart = true
@@ -2732,12 +2789,16 @@ export async function buildHeadlessCtx(
       },
     ) as ((..._args: never[]) => never)
   // - updateController（I 组；W-22 真化——design 25 §7「v1 blocked-available
-  //   诚实形态」）：Swift flavor 用 update-headless.ts 的纯 Node 控制器——真实
-  //   check（GitHub releases 列表 API → 版本比较 → phase='available' +
-  //   releaseUrl）+ installBlockedReason 恒为「原生壳不支持自动安装」+
-  //   download/restart 核心层显式拒绝。**不是** electron-updater 的伪造注入：
-  //   Electron 版 createUpdateController 的 autoUpdater 依赖 app 生命周期
-  //   （quitAndInstall/autoInstallOnAppQuit），本 flavor 明确不做安装腿。
+  //   诚实形态」）：Swift flavor 用 update-headless.ts 的纯 Node 控制器。
+  //   发现单源（S-21）：inputs.nativeUpdater 在场（壳声明 --native-updater
+  //   sparkle）时，check 经冻结边 updateNativeAction kind=check 交壳内 Sparkle
+  //   （appcast 单源），相位经 __host.nativeUpdatePhase 回来，sidecar 绝不再跑
+  //   GitHub releases 查询、也不排静默检查定时器；未声明原生腿时（dev /
+  //   dry-run / 未配置密钥）才走 GitHub 发现 + installBlockedReason 恒为
+  //   「原生壳不支持自动安装」+ download/restart 核心层显式拒绝。**不是**
+  //   electron-updater 的伪造注入：Electron 版 createUpdateController 的
+  //   autoUpdater 依赖 app 生命周期（quitAndInstall/autoInstallOnAppQuit），
+  //   本 flavor 明确不做自带的安装实现。
   //   契约零改动（UpdateState 七值/字段集不变），消费面 settings-bridge
   //   UpdateSection 只按 phase + installBlockedReason 呈现。
   real.updateController = createHeadlessUpdateController({
@@ -2846,7 +2907,8 @@ export async function buildHeadlessCtx(
   const dispose = async (): Promise<void> => {
     quittingRequested = true
     runtimeStartBlocked = true
-    runtimeOperationAbort?.abort(new Error('sidecar is shutting down'))
+    // G15：abort 文案单源（shell-core RUNTIME_ABORT_REASON）——与 main.ts will-quit 同串。
+    runtimeOperationAbort?.abort(new Error(RUNTIME_ABORT_REASON))
     try {
       await Promise.allSettled([
         transportManager?.disposeAsync().catch((err) => console.error('[sidecar] 传输层关闭失败：', err)),
@@ -2873,11 +2935,17 @@ export async function buildHeadlessCtx(
     const localRunning = plane !== null
       && LOCAL_RUNNING_STATES.has(plane.connectionState)
       && plane.localProcessAlive
+    // updateDownloadReady（S-19 parity）：原生 Sparkle 阶段经
+    // __host.nativeUpdatePhase 进同一个更新投影后，downloaded/installing 就是
+    // Electron before-quit 的「更新已下载豁免」等价态（main.ts:1042
+    // updateState.phase === 'downloaded'）——退出确认不得拦下即将安装的重启。
+    // 无原生安装腿时相位永不到 downloaded，恒 false（原语义不变）。
+    const updatePhase = (real.updateController as HeadlessUpdateController).state().phase
     return {
       windowCloseBehavior: settings.windowCloseBehavior,
       quitConfirmation: settings.quitConfirmation,
       localRunning,
-      updateDownloadReady: false,
+      updateDownloadReady: updatePhase === 'downloaded' || updatePhase === 'installing',
     }
   }
 

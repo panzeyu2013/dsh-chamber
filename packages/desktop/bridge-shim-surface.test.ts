@@ -261,6 +261,35 @@ test('④ invoke/push 通道集：preload == shim == manifest（60 invoke / 8 pu
   }
 })
 
+test('⑥ update 面 payload 形状锁步：openReleasePage {url} / 四个动作无载荷（G22 的更新面切片）', () => {
+  // G22（payload 形状缺口）在更新面的收口：preload 与 shim 的「动作是否携带
+  // payload、键叫什么」逐条锁死。更广的 payload 形状（notifications/deepLink/
+  // runtime 请求对象）仍靠 Swift 侧监听器校验 + 集成测试，未在本次收口范围。
+  const preloadMembers = memberSpans(preloadApiBlock('updateApi'))
+  const shimMembers = memberSpans(shimNamespaceBlock('update'))
+  const NO_PAYLOAD_ACTIONS: Array<[member: string, channel: string]> = [
+    ['state', 'dsh-chamber:update-state'],
+    ['check', 'dsh-chamber:update-check'],
+    ['download', 'dsh-chamber:update-download'],
+    ['restartAndInstall', 'dsh-chamber:update-restart'],
+  ]
+  for (const [action, channel] of NO_PAYLOAD_ACTIONS) {
+    // preload 不传第二实参；shim 显式传 null（同一「无载荷」语义，两种拼写）。
+    assert.ok(
+      (preloadMembers.get(action) ?? '').includes(`invoke('${channel}')`),
+      `preload update.${action} 不得携带 payload（应 invoke('${channel}')）`,
+    )
+    assert.match(
+      shimMembers.get(action) ?? '',
+      new RegExp(`invoke\\('${channel}',\\s*null\\)`),
+      `shim update.${action} 的无载荷拼写必须是 invoke('${channel}', null)`,
+    )
+  }
+  // openReleasePage 是唯一带载荷的更新动作：键必须同为 { url }。
+  assert.match(preloadMembers.get('openReleasePage') ?? '', /invoke\('dsh-chamber:open-release',\s*\{\s*url\s*\}\)/)
+  assert.match(shimMembers.get('openReleasePage') ?? '', /invoke\('dsh-chamber:open-release',\s*\{\s*url:\s*url\s*\}\)/)
+})
+
 test('⑤ 无 poc-unimplemented 兜底残留（代码形态）', () => {
   // 头部注记文本允许提及 poc-unimplemented 字样（描述 sidecar 桩），但
   // 兜底代码形态（pocUnimplemented 标识符 / rejectMethods 填充器）必须为零。

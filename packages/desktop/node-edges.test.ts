@@ -24,13 +24,16 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import {
   createNodeEdges,
   HOST_INBOUND,
   HOST_RENDERER_LIFECYCLE_EVENTS,
+  NATIVE_UPDATE_PHASES,
   QUIT_INBOUND_ERROR,
   type HostRendererLifecycleEvent,
 } from './node-edges.ts'
+import { rendererPushDelivered } from './shell-core.ts'
 import { createTrustedIpc } from './renderer-trust.ts'
 
 function makeEdges(overrides: {
@@ -58,6 +61,7 @@ test('① 保留 method 名与 core 拼写一致（含 E13/E19/E20 新增三条�
     deepLink: '__host.deepLink',
     rendererLifecycle: '__host.rendererLifecycle',
     quitFacts: '__host.quitFacts',
+    nativeUpdatePhase: '__host.nativeUpdatePhase',
   })
   assert.deepEqual([...HOST_RENDERER_LIFECYCLE_EVENTS], [
     'did-start-loading',
@@ -269,7 +273,10 @@ test('⑪ showNativeNotification edge 载荷含 {notificationId, spec, sourceId}
   })
   // 同一标识回链：退役通知用的 sourceIds 与已投递 payload 的 sourceId 逐字一致。
   edges.retireNotificationsForSources(new Set([edgesSent[0]!.payload.sourceId as string]))
-  assert.deepEqual(notifies, [{ event: 'retireNotifications', payload: { sourceIds: ['src-d1a'] } }])
+  assert.deepEqual(notifies, [{
+    event: 'retireNotifications',
+    payload: { sourceIds: ['src-d1a'], notificationIds: [1] },
+  }])
 })
 
 test('⑫ S2·F7 retireNotificationsForSources 返回真实驱逐数（不再是恒 0）', async () => {
@@ -300,8 +307,13 @@ test('⑫ S2·F7 retireNotificationsForSources 返回真实驱逐数（不再是
   assert.equal(retired, 2, '必须返回真实驱逐的 click 路由数')
   assert.deepEqual(notifies, [{
     event: 'retireNotifications',
-    payload: { sourceIds: ['src-retire-1', 'src-retire-2'] },
-  }], 'Swift 宿主仍按 sourceId 清横幅（notify 面不变）')
+    payload: {
+      sourceIds: ['src-retire-1', 'src-retire-2'],
+      // P-07：本次退役实际驱逐的本地 notificationId（1、2）一并下发，Swift 侧
+      // 按 identifier 精确清横幅（sourceIds 供旧消费端/整源退役路径）。
+      notificationIds: [1, 2],
+    },
+  }], 'Swift 宿主按 sourceId + identifier 清横幅')
 
   activated.length = 0
   assert.deepEqual(edges.handleHostInbound(HOST_INBOUND.notifyClicked, { notificationId: 1 }), { ok: true })
@@ -319,6 +331,9 @@ test('⑬ S2·F7/V1 setBadge 走 edge 回执面：乐观返回不变、失败 lo
     let busyRemaining = 2
     const edges = createNodeEdges({
       nonInteractiveRetryDelayMs: 5,
+      // P-06：setBadge 在已确证无主窗时同步回 applied:false；正常路径需要
+      // hostFacts 声明主窗存活（sidecar-entry 装配种子同值）。
+      hostFacts: { mainWindowAlive: true },
       sendEdge: async (method, payload) => {
         attempts.push({ method, payload })
         if (busyRemaining > 0) {
@@ -369,6 +384,7 @@ test('⑭ S2·V1 非交互队列：合流只应用最新载荷；确定性失败
     const attempts: unknown[] = []
     const edges = createNodeEdges({
       nonInteractiveRetryDelayMs: 2,
+      hostFacts: { mainWindowAlive: true },
       sendEdge: async (_method, payload) => {
         attempts.push(payload)
         if (attempts.length === 1) {
@@ -406,6 +422,52 @@ test('⑭ S2·V1 非交互队列：合流只应用最新载荷；确定性失败
   }
 })
 
+
+// --- P-03 / G14 (2026-12 dual-flavor parity batch) ---
+
+test('P-03: the dead notifyClicked/resolveResource members are gone from the contract and both flavors', () => {
+  // The two members had no consumer and DIVERGENT Swift semantics (the Swift
+  // host ignores an outbound notifyClicked notify loudly; resolveResource always
+  // fails without a cache). The ruling was to delete the dead contract instead of
+  // keeping an unsyncable face; until this lock, deleting only one side would
+  // silently resurrect a member. The inbound __host.notifyClicked click-feedback
+  // method is NOT the removed outbound member and must survive.
+  const edges = makeEdges() as unknown as Record<string, unknown>
+  assert.equal('notifyClicked' in edges, false, 'outbound notifyClicked member must be gone')
+  assert.equal('resolveResource' in edges, false, 'resolveResource member must be gone')
+
+  const core = readFileSync(new URL('./shell-core.ts', import.meta.url), 'utf8')
+  assert.doesNotMatch(core, /notifyClicked\(openIntent/, 'HostEdges must not declare the outbound member')
+  assert.doesNotMatch(core, /resolveResource\(kind/, 'HostEdges must not declare resolveResource')
+  assert.doesNotMatch(core, /HostResourceKind/, 'the resource-kind contract type goes with the member')
+
+  const electron = readFileSync(new URL('./electron-edges.ts', import.meta.url), 'utf8')
+  assert.doesNotMatch(electron, /notifyClicked\(openIntent/, 'Electron must not implement the removed member')
+  assert.doesNotMatch(electron, /resolveResource\(kind/, 'Electron must not implement the removed member')
+
+  // The live inbound click feedback (Swift -> core) still dispatches.
+  assert.equal(typeof edges.handleHostInbound, 'function')
+  const bound = edges.handleHostInbound as (method: string, payload: unknown) => unknown
+  assert.deepEqual(bound(HOST_INBOUND.notifyClicked, { notificationId: 999 }), { ok: true })
+})
+
+test('G14: the delivered gate is one shared predicate in both flavor implementations', () => {
+  // node-edges used mainWindowAlive && webViewContentAlive while electron-edges
+  // returned true whenever the window object existed — a crashed renderer was
+  // "delivered" on Electron but not on Swift, so core hold/rollback/ready-reset
+  // could silently diverge. Both now fold through rendererPushDelivered; the
+  // Electron webViewContentAlive fact carries the isCrashed predicate.
+  assert.equal(rendererPushDelivered(true, true), true)
+  assert.equal(rendererPushDelivered(false, true), false, 'no window -> not delivered')
+  assert.equal(rendererPushDelivered(true, false), false, 'crashed renderer -> not delivered')
+  assert.equal(rendererPushDelivered(false, false), false)
+
+  const node = readFileSync(new URL('./node-edges.ts', import.meta.url), 'utf8')
+  assert.match(node, /const delivered = rendererPushDelivered\(facts\.mainWindowAlive, facts\.webViewContentAlive\)/)
+  const electron = readFileSync(new URL('./electron-edges.ts', import.meta.url), 'utf8')
+  assert.match(electron, /rendererPushDelivered\(windowAlive, webContentsAlive\(win\)\)/)
+  assert.match(electron, /!win\.webContents\.isCrashed\(\)/)
+})
 test('⑮ 退出在途拒绝形状与 Electron app_quitting 围栏逐字同形（D1c）', () => {
   assert.deepEqual(QUIT_INBOUND_ERROR, { error: 'app is quitting', code: 'app_quitting' })
   // 单一事实源断言：Electron 侧 trustedIpc 的退出围栏（renderer-trust.ts）抛出的
@@ -419,4 +481,146 @@ test('⑮ 退出在途拒绝形状与 Electron app_quitting 围栏逐字同形�
       return true
     },
   )
+})
+
+test('⑯ __host.nativeUpdatePhase：八值相位 + 可空 version/error 校验，合法即入汇（S-19/S-21）', () => {
+  const seen: Array<{ phase: string; version: string | null; error: string | null }> = []
+  const edges = createNodeEdges({
+    sendEdge: async () => null,
+    sendNotify: () => {},
+    nativeUpdatePhase: (input) => seen.push(input),
+  })
+  for (const phase of NATIVE_UPDATE_PHASES) {
+    assert.deepEqual(
+      edges.handleHostInbound(HOST_INBOUND.nativeUpdatePhase, { phase, version: '0.3.0', error: null }),
+      { ok: true },
+      `合法相位 ${phase} 必须入汇`,
+    )
+  }
+  assert.deepEqual(seen.map(i => i.phase), [...NATIVE_UPDATE_PHASES])
+  // version/error 缺省 = null（合法）；string 原样透传。
+  assert.deepEqual(edges.handleHostInbound(HOST_INBOUND.nativeUpdatePhase, { phase: 'failed', error: 'boom' }), { ok: true })
+  assert.deepEqual(seen.at(-1), { phase: 'failed', version: null, error: 'boom' })
+  // 非法相位 / 非 string|null 类型 → loud 拒绝，绝不猜测映射。
+  assert.deepEqual(edges.handleHostInbound(HOST_INBOUND.nativeUpdatePhase, { phase: 'nope' }), {
+    ok: false,
+    error: 'sidecar-edges:native-update-phase-invalid-phase:nope',
+  })
+  assert.deepEqual(edges.handleHostInbound(HOST_INBOUND.nativeUpdatePhase, {}), {
+    ok: false,
+    error: 'sidecar-edges:native-update-phase-invalid-phase:',
+  })
+  assert.deepEqual(edges.handleHostInbound(HOST_INBOUND.nativeUpdatePhase, { phase: 'failed', version: 42 }), {
+    ok: false,
+    error: 'sidecar-edges:native-update-phase-invalid-version',
+  })
+  assert.deepEqual(edges.handleHostInbound(HOST_INBOUND.nativeUpdatePhase, { phase: 'failed', error: { oops: true } }), {
+    ok: false,
+    error: 'sidecar-edges:native-update-phase-invalid-error',
+  })
+  // 未注入汇 → loud；汇抛错 → loud 且不击穿入站帧。
+  const bare = makeEdges()
+  assert.deepEqual(bare.handleHostInbound(HOST_INBOUND.nativeUpdatePhase, { phase: 'idle' }), {
+    ok: false,
+    error: 'sidecar-edges:native-update-phase-sink-unavailable',
+  })
+  const throwing = createNodeEdges({
+    sendEdge: async () => null,
+    sendNotify: () => {},
+    nativeUpdatePhase: () => { throw new Error('ctx not ready') },
+  })
+  assert.deepEqual(throwing.handleHostInbound(HOST_INBOUND.nativeUpdatePhase, { phase: 'idle' }), {
+    ok: false,
+    error: 'sidecar-edges:native-update-phase-failed:ctx not ready',
+  })
+})
+
+test('⑰ P-06：showNativeNotification 按 honest-show 应答折算；显式失败注销 click 路由', async () => {
+  let reply: unknown = null
+  const edges = createNodeEdges({
+    sendEdge: async () => reply,
+    sendNotify: () => {},
+  })
+  const activated: number[] = []
+  const token = { sourceId: 'src-p06', fingerprint: 'f'.repeat(64), generation: 1 }
+  // 显式失败（未授权 / 调度失败 / 有界超时）→ shown:false，core 据此释放去重 claim。
+  reply = { shown: false, error: 'not authorized' }
+  const denied = edges.showNativeNotification({ title: 't', body: 'b' }, { token, onActivated: () => activated.push(1) })
+  assert.deepEqual(await denied.shown, { shown: false, error: 'not authorized' })
+  assert.deepEqual(edges.handleHostInbound(HOST_INBOUND.notifyClicked, { notificationId: 1 }), { ok: true })
+  // 注意：不能 deepEqual(activated, [])——node:assert 的断言签名会把数组窄化成
+  // never[]，后续 push 会误报类型错误。长度断言表达同一事实。
+  assert.equal(activated.length, 0, '失败通知不得保留 click 路由')
+  // 显式成功 / 旧协议 null 应答仍是 shown:true。
+  reply = { shown: true }
+  const ok = edges.showNativeNotification({ title: 't', body: 'b' }, { token, onActivated: () => activated.push(2) })
+  assert.deepEqual(await ok.shown, { shown: true })
+  assert.deepEqual(edges.handleHostInbound(HOST_INBOUND.notifyClicked, { notificationId: 2 }), { ok: true })
+  assert.deepEqual(activated, [2])
+  reply = null
+  const legacy = edges.showNativeNotification({ title: 't', body: 'b' }, null)
+  assert.deepEqual(await legacy.shown, { shown: true }, '旧线协议的 null 应答保持 shown:true')
+  // 不认识的形状绝不采信为成功。
+  reply = { ok: true }
+  const weird = edges.showNativeNotification({ title: 't', body: 'b' }, null)
+  assert.deepEqual(await weird.shown, {
+    shown: false,
+    error: 'native notification leg returned an unrecognized outcome',
+  })
+})
+
+test('⑱ P-07：>16 淘汰逐条按 identifier 清横幅（retire payload 携带 notificationIds）', async () => {
+  const notifies: Array<{ event: string; payload: unknown }> = []
+  const activated: string[] = []
+  const edges = createNodeEdges({
+    sendEdge: async () => null,
+    sendNotify: (event, payload) => notifies.push({ event, payload }),
+  })
+  const token = (sourceId: string) => ({ sourceId, fingerprint: 'f'.repeat(64), generation: 1 })
+  for (let i = 1; i <= 16; i += 1) {
+    const route = edges.showNativeNotification({ title: 't', body: 'b' }, {
+      token: token(`src-${i}`),
+      onActivated: () => activated.push(`src-${i}`),
+    })
+    await route.shown
+  }
+  assert.deepEqual(notifies, [], '16 条恰好满员，不触发淘汰/退役')
+  // 第 17 条：淘汰最旧（本地 notificationId=1）→ 逐条 identifier 清除；淘汰是
+  // 逐条语义，绝不按 sourceId 整源退役（那会误清同源的新横幅）。
+  const seventeenth = edges.showNativeNotification({ title: 't', body: 'b' }, {
+    token: token('src-17'),
+    onActivated: () => activated.push('src-17'),
+  })
+  await seventeenth.shown
+  assert.deepEqual(notifies, [{
+    event: 'retireNotifications',
+    payload: { sourceIds: [], notificationIds: [1] },
+  }])
+  assert.deepEqual(edges.handleHostInbound(HOST_INBOUND.notifyClicked, { notificationId: 1 }), { ok: true })
+  assert.deepEqual(activated, [], '被淘汰通知的 click 路由必须失效')
+  assert.deepEqual(edges.handleHostInbound(HOST_INBOUND.notifyClicked, { notificationId: 17 }), { ok: true })
+  assert.deepEqual(activated, ['src-17'], '新通知照常可点击')
+})
+
+test('⑲ P-06：已确证无主窗时 setBadge 同步回 applied:false（不再乐观假成功）', async () => {
+  const attempts: Array<{ method: string; payload: unknown }> = []
+  const edges = createNodeEdges({
+    sendEdge: async (method, payload) => {
+      attempts.push({ method, payload })
+      return null
+    },
+    sendNotify: () => {},
+  })
+  // 默认 hostFacts（未声明主窗）→ Swift 腿必以 no-window 拒绝：同步失败且绝不
+  // 发起注定失败的 edge。
+  assert.deepEqual(edges.setBadge(4), {
+    applied: false,
+    reason: 'swift-edge-ui-unavailable:setBadge:no-window',
+  })
+  assert.deepEqual(attempts, [], '无窗失败不得入队/发 edge')
+  // hostFacts 声明主窗存活（sidecar-entry 装配种子同值）→ 恢复乐观回执 + 排队。
+  assert.deepEqual(edges.handleHostInbound(HOST_INBOUND.hostFacts, { mainWindowAlive: true }), { ok: true })
+  assert.deepEqual(edges.setBadge(4), { applied: true })
+  await new Promise<void>((resolve) => setTimeout(resolve, 20))
+  assert.deepEqual(attempts, [{ method: 'setBadge', payload: { count: 4 } }])
 })

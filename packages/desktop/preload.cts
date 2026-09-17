@@ -34,6 +34,8 @@ export interface SshInstanceSpec extends RegistrySshInstanceSpec {
   tokenSet?: boolean
   passwordSet?: boolean
   secretStorage?: 'safeStorage' | 'plaintext'
+  /** S-29 cross-flavor projection (see renderer global.d.ts). */
+  secretStorageUnreadable?: boolean
 }
 
 export interface ConnectionCredentialMutations {
@@ -689,7 +691,7 @@ function desktopSshApi(): DesktopSshSurface {
 
 /**
  * The dsh-chamber:update-* IPC surface (design 11) — non-secret only.
- * onStateChanged subscribes to the main-process push and returns an
+ * onChanged subscribes to the main-process push and returns an
  * unsubscribe; download() is the user-confirmed download action;
  * restartAndInstall() is the「重启并安装」action (quitAndInstall).
  */

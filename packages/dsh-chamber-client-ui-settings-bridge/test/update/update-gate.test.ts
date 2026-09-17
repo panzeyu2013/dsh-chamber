@@ -17,6 +17,8 @@ import path from 'node:path';
 test('updateCheckDisabled: an explicit check is disabled while a check/download owns the flow', () => {
   assert.equal(updateCheckDisabled('checking'), true);
   assert.equal(updateCheckDisabled('downloading'), true);
+  // S-19：原生（Sparkle）安装中也拥有流程——重查绝不把 installing 打回 checking。
+  assert.equal(updateCheckDisabled('installing'), true);
 });
 
 test('updateCheckDisabled: a completed download is final for this version', () => {
@@ -53,6 +55,8 @@ test('updateRestartAvailable: every non-downloaded phase is not restartable', ()
   assert.equal(updateRestartAvailable('available', null, 'darwin'), false);
   assert.equal(updateRestartAvailable('downloading', null, 'darwin'), false);
   assert.equal(updateRestartAvailable('error', null, 'darwin'), false);
+  // S-19：原生安装中（phase installing）绝不提供第二次「重启并安装」入口。
+  assert.equal(updateRestartAvailable('installing', null, 'darwin'), false);
 });
 
 test('updateRestartAvailable: a blocked install shape never offers the restart action', () => {
@@ -89,4 +93,16 @@ test('原生壳 blocked reason：分类、跨包锁步与未知原因诚实透�
 
   // 原生壳原因不是「平台不支持自动更新」——检查按钮仍可用（design 25 §7）。
   assert.equal(updateCheckPlatformBlocked('原生壳不支持自动安装'), false);
+});
+
+test('S-21：页面更新面零发现——store/section/gate 绝不自跑 GitHub 查询或 fetch', () => {
+  // 发现单源在壳侧（native → updateNativeAction kind=check → Sparkle appcast；
+  // Electron → electron-updater feed）。页面只消费 dsh-chamber:update-state-changed
+  // 推送的相位——这里把「页面不得出现第二条发现腿」钉成回归锁。
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  for (const file of ['update-store.ts', 'update-gate.ts', 'UpdateSection.tsx']) {
+    const source = readFileSync(path.resolve(here, '../../src/client', file), 'utf8');
+    assert.doesNotMatch(source, /api\.github\.com/, file + ' 不得内嵌 GitHub API 发现（S-21）');
+    assert.doesNotMatch(source, /\bfetch\s*\(/, file + ' 不得自己出网发现更新（S-21）');
+  }
 });

@@ -24,18 +24,21 @@
  * - 非交互宿主腿（setBadge/showItemInFolder/showError）→ edge + 有界重试队列
  *   （S2·V1：主线程忙先等，窗口内仍忙则 loud 明确失败，绝不静默丢弃；S2·F7：
  *   setBadge 的同步契约返回值仍是乐观 applied:true——真应答在飞、失败 loud，
- *   见 createNodeEdges 内两处注释与台账登记）。retireNotificationsForSources
- *   返回本层真实驱逐的 click 路由数（S2·F7，不再是恒 0）。
- * - resolveResource（同步 string 契约）→ 同样无法往返：路径缓存经
- *   deps.hostFacts.resources（Swift ready 后推送）；缺失即 loud 抛
- *   'sidecar-edges:resource-not-cached:<kind>'。
+ *   见 createNodeEdges 内两处注释与台账登记；P-06 例外：已确证无主窗时同步回
+ *   applied:false，绝不假成功）。retireNotificationsForSources 返回本层真实
+ *   驱逐的 click 路由数（S2·F7，不再是恒 0）并携带 notificationIds（P-07）。
+ * - 通知「已应用」回执（P-06）：showNativeNotification 的 edge 应答按
+ *   interpretNativeNotificationReply 折算——Swift 腿显式 {shown:false,error}
+ *   （未授权/调度失败/有界超时）会让 core 释放 5s 去重 claim；不再把传输 ok
+ *   乐观当成横幅已显示。
  * - 通知 click 回灌 + 退役清除（D1a 线协议，Swift 侧按此消费）：
  *   showNativeNotification 为每条通知分配本地 notificationId，edge payload =
  *   {notificationId, spec, sourceId}——sourceId 取 clickRoute.token.sourceId
  *   （'test' 通知/无路由 = null）。Swift 侧按 sourceId 登记「已投递」通知的
  *   UNUserNotificationCenter identifier，使随后 notify retireNotifications
- *   {sourceIds} 能真正 removeDeliveredNotifications 清横幅（无登记表时只能
- *   no-op）；点击（先自行 activate/restore/focus，语义 = electron-edges 宿主
+ *   {sourceIds, notificationIds} 能真正 removeDeliveredNotifications 清横幅
+ *   （无登记表时只能 no-op；notificationIds = 逐条 identifier 清除，用于 >16
+ *   淘汰与来源退役两个路径，P-07）；点击（先自行 activate/restore/focus，语义 = electron-edges 宿主
  *   click 腿）后以入站 __host.notifyClicked {notificationId} 通知本层，命中则
  *   调用该条 clickRoute.onActivated()（core 的 owns+入队闭包）。dispose 注销
  *   映射；来源退役时本层按 sourceId 注销 click 路由，横幅由 Swift 侧按同
@@ -46,12 +49,17 @@
  *   __host.systemResume     {timestamp}
  *   __host.mainWindowShown  {}
  *   __host.hostFacts        {focused?, mainWindowAlive?, webViewLoading?,
- *                            webViewContentAlive?, trayAvailable?, resources?}
+ *                            webViewContentAlive?, trayAvailable?}
  *   __host.deepLink         {url}      → core enqueueDeepLink（design 25 §4.5：
  *                            Swift application(_:open:) 冷/热启动统一入口）
  *   __host.rendererLifecycle {event}   → core onRendererLifecycle（§5 E19 三事件
  *                            映射：did-start-loading / did-finish-load /
  *                            crashed / closed）
+ *   __host.nativeUpdatePhase {phase, version, error} → 装配侧原生更新阶段汇
+ *                            （sidecar-entry 接到 update-headless.applyNativePhase：
+ *                            Sparkle 状态 → 同一 UpdateState 投影 → 既有
+ *                            rendererPush/update-state 消费面。S-19/S-21 冻结接口；
+ *                            缺汇 = loud 拒绝，绝不静默丢用户可见的更新阶段）
  *
  * S-E（settings 副作用叶 async 化）：公开面新增 sendEdge 转发（NodeEdges
  * 附加成员，不改 HostEdges 契约）——sidecar-ctx 的 A 组设置副作用叶
@@ -62,26 +70,29 @@
  * 两叶职责分离注记见下方成员注释。
  *
  * - **共享契约面，core 当前不经 Pick 消费（D1e，保留不删）**：
- *   resolveResource / isPackaged / notifyClicked / trayAvailable /
- *   focusMainWindow / launchApp 与同步 setKeepAwake/setLoginItem——core 的
- *   HostEdges Pick（shell-core.ts installIpcHandlers 1802-1821）未收窄到它们，
- *   本仓也暂无调用方；electron-edges 的返回 Pick 同样不含（Electron 侧这些动作
- *   在 main.ts 直做，见其 TODO 段）。它们是 design 25 §4.1 v2 字段集这一共享
- *   契约面（本文件是当前唯一实现；focusMainWindow/launchApp/setKeepAwake/
- *   setLoginItem 的 Swift 宿主腿已在 SwiftEdgeHostLegs 落位），删除会砍掉契约
- *   本身。语义仍须保持诚实（形状/失败语义与契约一致）；改这些成员时两侧同时核对。
+ *   isPackaged / trayAvailable / focusMainWindow / launchApp 与同步
+ *   setKeepAwake/setLoginItem——core 的 HostEdges Pick
+ *   （shell-core.ts installIpcHandlers）未收窄到它们，本仓也暂无调用方；
+ *   electron-edges 的返回 Pick 同样不含（Electron 侧这些动作在 main.ts 直做，
+ *   见其 TODO 段）。它们是 design 25 §4.1 v2 字段集这一共享契约面（本文件是
+ *   当前唯一实现；focusMainWindow/launchApp/setKeepAwake/setLoginItem 的 Swift
+ *   宿主腿已在 SwiftEdgeHostLegs 落位），删除会砍掉契约本身。语义仍须保持诚实
+ *   （形状/失败语义与契约一致）；改这些成员时两侧同时核对。
+ *   P-03（2026-12 裁决）：notifyClicked 与 resolveResource 例外——两者零消费者
+ *   且 Swift 宿主语义本就不同（notifyClicked 经 notify 到达被 loud 忽略、
+ *   resolveResource 无缓存恒失败），已连同 hostFacts.resources 消费一起从两侧
+ *   删除；见 shell-core.ts HostEdges 头注。
  */
 import type {
   HostEdges,
   NativeNotificationSpec,
   NotificationSourceToken,
-  NotificationOpenIntent,
   HostSetBadgeResult,
   HostPluginSourcePick,
   HostMessageOptions,
-  HostResourceKind,
 } from './shell-core.ts'
-import { MAX_ACTIVE_NATIVE_NOTIFICATIONS } from './notifications.ts'
+import { rendererPushDelivered } from './shell-core.ts'
+import { MAX_ACTIVE_NATIVE_NOTIFICATIONS, interpretNativeNotificationReply } from './notifications.ts'
 
 /** B 桥 host 侧入站 method 名（sidecar-entry 与 Swift 侧共用同一拼写）。 */
 export const HOST_INBOUND = {
@@ -92,7 +103,45 @@ export const HOST_INBOUND = {
   deepLink: '__host.deepLink',
   rendererLifecycle: '__host.rendererLifecycle',
   quitFacts: '__host.quitFacts',
+  nativeUpdatePhase: '__host.nativeUpdatePhase',
 } as const
+
+/** B 桥单帧（行）字节上限（P-01）。与 Swift 侧 FrameCodec.maxFrameBytes /
+ *  TrustGuard.maxMessageBytes 同值（4 MiB）——sidecar 入站门与跨语言锁步测试
+ *  都读这一个常量；改值必须同步 macos/Sources/DSHChamberPoc/FrameCodec.swift。 */
+export const MAX_INBOUND_FRAME_BYTES = 4 * 1024 * 1024
+
+/** 原生更新阶段（S-19/S-21 冻结接口）：Swift 壳报告 Sparkle 状态，sidecar
+ *  映射进既有 UpdateState 投影。'installing' / 'failed' 是原生侧独有相位——
+ *  sidecar 分别映射为 UpdateState 的 'installing' / 'error'（见
+ *  update-headless.applyNativePhase）。 */
+export const NATIVE_UPDATE_PHASES = [
+  'idle',
+  'checking',
+  'up-to-date',
+  'available',
+  'downloading',
+  'downloaded',
+  'installing',
+  'failed',
+] as const
+
+export type NativeUpdatePhase = (typeof NATIVE_UPDATE_PHASES)[number]
+
+/** __host.nativeUpdatePhase 的入站载荷（version/error 可为 null，非 string/null
+ *  类型一律 loud 拒绝）。 */
+export interface NativeUpdatePhaseInput {
+  phase: NativeUpdatePhase
+  version: string | null
+  error: string | null
+}
+
+/** 可空字符串字段的线校验：null/undefined → null；string → 原样；
+ *  其他类型 → undefined（非法，调用方 loud 拒绝）。 */
+function nullableWireString(value: unknown): string | null | undefined {
+  if (value === null || value === undefined) return null
+  return typeof value === 'string' ? value : undefined
+}
 
 /** 退出在途的入站拒绝形状（D1c）：与 Electron trustedIpc 退出围栏
  *  （renderer-trust.ts createTrustedIpc）抛出的错误逐字同形——message
@@ -127,6 +176,11 @@ export interface NodeEdgesDeps {
    *  onRendererLifecycle：ready 位复位 + in-flight requeue/drain）。
    *  缺省未注入 → 入站 loud 拒绝。 */
   onRendererLifecycle?: (event: HostRendererLifecycleEvent) => void
+  /** 原生更新阶段入站汇（S-19/S-21 冻结接口）：装配侧把它接到更新控制器
+   *  （update-headless.applyNativePhase）——Swift 壳的 Sparkle 阶段/失败进与
+   *  Electron 同一 UpdateState 投影，页面呈现单一权威。缺省未注入 → 入站
+   *  loud 拒绝（绝不静默丢用户可见的更新阶段）。 */
+  nativeUpdatePhase?: (input: NativeUpdatePhaseInput) => void
   /** 关窗/退出决策投影（design 25 §5 E1/E9/E20）：输入 = Swift 宿主侧事实
    *  （退出在途 / 恢复入口可用），输出 = core 依据 chamber settings + 本地实例
    *  在跑判据算出的决策。决策逻辑单源在 core（shouldHideToTray /
@@ -149,7 +203,6 @@ export interface NodeEdgesDeps {
     badgeCountApiAvailable?: boolean
     notificationSupported?: boolean
     isPackaged?: boolean
-    resources?: Partial<Record<HostResourceKind, string>>
   }
 }
 
@@ -200,11 +253,6 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
     badgeCountApiAvailable: deps.hostFacts?.badgeCountApiAvailable ?? true,
     notificationSupported: deps.hostFacts?.notificationSupported ?? true,
   }
-  const resources = new Map<string, string>()
-  for (const [kind, p] of Object.entries(deps.hostFacts?.resources ?? {})) {
-    if (typeof p === 'string') resources.set(kind, p)
-  }
-
   // ---- 事件订阅槽（installIpcHandlers ① 段调用 onSystemResume/onMainWindowShown） ----
   let onSystemResumeCb: ((timestamp: number) => void) | null = null
   let onMainWindowShownCb: (() => void) | null = null
@@ -328,7 +376,9 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
       // 时返回 false，core 据此 hold/rollback/复位 ready 位；Swift flavor 原先
       // 恒 true，会让通知打开/深链/唤醒事件静默丢失。这里按「渲染器存活」事实
       // 返回（未收到 hostFacts 前为 false）。
-      const delivered = facts.mainWindowAlive && facts.webViewContentAlive
+      // G14：交付门 = 共享 roundtrip 判定（两侧唯一实现，见 shell-core
+      // rendererPushDelivered）——crashed 渲染器上的 send 视为未投递。
+      const delivered = rendererPushDelivered(facts.mainWindowAlive, facts.webViewContentAlive)
       // 与 electron-edges 同向：**未投递就不发送**（返回 false 让 core hold 并在
       // 下次生命周期事件重投；若这里仍发，隐藏/已死窗可能收到重复投递）。
       if (delivered) {
@@ -342,11 +392,17 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
       nextNotificationId += 1
       if (clickRoute !== null) {
         clickRoutes.set(notificationId, clickRoute)
-        // 有界登记（上限与 electron-edges 的活跃原生通知同源）：淘汰最旧一条只丢
-        // click 路由（横幅本身归宿主，无法从这里收回），保证长期运行不无界增长。
+        // 有界登记（上限与 electron-edges 的活跃原生通知同源，>16 淘汰最旧一条）。
+        // P-07：淘汰必须**同时**丢 click 路由并把 identifier 下发宿主清横幅——
+        // 只删路由会让陈旧横幅继续留在系统通知中心，点开也不再打开会话。
+        // 淘汰是逐条语义（不按 sourceId 整源退役），故 sourceIds 为空、
+        // notificationIds 只带被淘汰的那一条；Swift 侧据 identifier 精确清除。
         if (clickRoutes.size > MAX_PENDING_NOTIFICATION_ROUTES) {
           const oldest = clickRoutes.keys().next().value
-          if (oldest !== undefined) clickRoutes.delete(oldest)
+          if (oldest !== undefined) {
+            clickRoutes.delete(oldest)
+            deps.sendNotify('retireNotifications', { sourceIds: [], notificationIds: [oldest] })
+          }
         }
       }
       const result = deps
@@ -358,7 +414,10 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
           sourceId: clickRoute === null ? null : clickRoute.token.sourceId,
         })
         .then(
-          () => ({ shown: true as const }),
+          // P-06：应答必须按 honest-show 语义折算——Swift 腿现在可以显式回
+          // {shown:false,error}（未授权/调度失败/超时），core 据此释放去重 claim；
+          // 只有显式成功（或旧协议的 null 应答）才记 shown:true。
+          (reply) => interpretNativeNotificationReply(reply),
           (err: unknown) => ({
             shown: false as const,
             error: err instanceof Error ? err.message : String(err),
@@ -385,12 +444,6 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
       return facts.notificationSupported
     },
 
-    notifyClicked(openIntent: NotificationOpenIntent) {
-      // Swift flavor 路径：click 经 __host.notifyClicked + clickRoute 回灌，
-      // 本成员保留契约（未用）；若未来 core 直接调用则原样转发 intent。
-      deps.sendNotify('notifyClicked', jsonSafe(openIntent))
-    },
-
     setBadge(count: number): HostSetBadgeResult {
       // S2·F7 回执面：Swift 侧 setBadge 是 **edge 可应答腿**
       // （SwiftEdgeHostLegs.swift:328-350 performUI：dockTile 写失败/无窗/
@@ -403,6 +456,12 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
       // （applyBadgePresentation 以 !applied 记失败并降级）。回执面要真正
       // 收窄必须先改 HostEdges 契约（异步化），属台账 S2·F7 登记项——本批
       // 不做契约变更，只让失败可观察（loud）+ 注释/台账留证。
+      // P-06 补强：**已确证无主窗**时 Swift 腿必以 no-window 拒绝（canShowUI
+      // 守卫），这里不再乐观 applied:true——同步可知的失败必须如实回执，
+      // core 的 applyBadgePresentation 才会走失败降级而不是假成功。
+      if (!facts.mainWindowAlive) {
+        return { applied: false, reason: 'swift-edge-ui-unavailable:setBadge:no-window' }
+      }
       queueNonInteractiveLeg('setBadge', { count })
       return { applied: true }
     },
@@ -465,13 +524,22 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
       // 宿主清除失败在该侧 loud（MainWindowController.swift:526-543）。
       // 两个调用方（main.ts / sidecar-ctx.ts）当前丢弃返回值，故无行为变更。
       let retired = 0
+      const retiredNotificationIds: number[] = []
       for (const [id, route] of clickRoutes) {
         if (retiredSourceIds.has(route.token.sourceId)) {
           clickRoutes.delete(id)
+          retiredNotificationIds.push(id)
           retired += 1
         }
       }
-      deps.sendNotify('retireNotifications', { sourceIds: [...retiredSourceIds] })
+      // P-07：payload 同时携带 sourceIds（整源退役）与 notificationIds（逐条
+      // identifier 清除——本次退役实际驱逐的本地 notificationId，Swift 侧映射到
+      // 自己的 chamber-edge-* OS identifier）。两个字段并存：旧 Swift 消费端只读
+      // sourceIds（忽略多余键），新消费端两者并用。
+      deps.sendNotify('retireNotifications', {
+        sourceIds: [...retiredSourceIds],
+        notificationIds: retiredNotificationIds,
+      })
       return retired
     },
 
@@ -529,12 +597,6 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
     },
 
     isPackaged: deps.hostFacts?.isPackaged ?? true,
-
-    resolveResource(kind: HostResourceKind): string {
-      const cached = resources.get(kind)
-      if (cached !== undefined) return cached
-      throw new Error('sidecar-edges:resource-not-cached:' + kind)
-    },
   }
 
   /** sidecar-entry 把 __host.* 入站 method 分派到这里。返回 ok/result/error
@@ -597,6 +659,35 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
           result: deps.projectQuitFacts({ quitRequested, recoveryAvailable }),
         }
       }
+      case HOST_INBOUND.nativeUpdatePhase: {
+        // S-19/S-21 冻结接口校验：phase 必须是八值枚举；version/error 必须是
+        // string 或 null（缺省 = null）。任何非法形状 loud 拒绝，绝不猜测映射。
+        const phase = typeof p.phase === 'string' ? p.phase : ''
+        if (!(NATIVE_UPDATE_PHASES as readonly string[]).includes(phase)) {
+          // 回显截断（帧本身 <=4MiB）：拒绝文案不得把整段任意载荷放大成响应帧。
+          return { ok: false, error: 'sidecar-edges:native-update-phase-invalid-phase:' + phase.slice(0, 64) }
+        }
+        const version = nullableWireString(p.version)
+        if (version === undefined) {
+          return { ok: false, error: 'sidecar-edges:native-update-phase-invalid-version' }
+        }
+        const errorText = nullableWireString(p.error)
+        if (errorText === undefined) {
+          return { ok: false, error: 'sidecar-edges:native-update-phase-invalid-error' }
+        }
+        if (deps.nativeUpdatePhase === undefined) {
+          // 未注入消费方（装配缺失）：loud 拒绝——阶段是用户可见的更新状态，
+          // 静默 ok 会让页面与 Sparkle 窗不一致。
+          return { ok: false, error: 'sidecar-edges:native-update-phase-sink-unavailable' }
+        }
+        try {
+          deps.nativeUpdatePhase({ phase: phase as NativeUpdatePhase, version, error: errorText })
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          return { ok: false, error: 'sidecar-edges:native-update-phase-failed:' + message }
+        }
+        return { ok: true }
+      }
       case HOST_INBOUND.hostFacts: {
         if (typeof p.focused === 'boolean') facts.focused = p.focused
         if (typeof p.mainWindowAlive === 'boolean') facts.mainWindowAlive = p.mainWindowAlive
@@ -605,11 +696,8 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
           facts.webViewContentAlive = p.webViewContentAlive
         }
         if (typeof p.trayAvailable === 'boolean') facts.trayAvailable = p.trayAvailable
-        if (p.resources !== null && typeof p.resources === 'object') {
-          for (const [kind, path] of Object.entries(p.resources)) {
-            if (typeof path === 'string') resources.set(kind, path)
-          }
-        }
+        // P-03：resources 事实键随 resolveResource 死契约一起不再消费（未知
+        // 事实键按前向兼容忽略——Swift 侧继续推送不构成错误）。
         return { ok: true }
       }
       default:

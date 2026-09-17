@@ -12,7 +12,7 @@
  * WHAT IS DELIBERATELY NOT RE-TESTED — upstream's own catalog/launcher/icon
  * extraction behaviour: `src/catalog.ts`, `src/resolver.ts` and `src/icons.ts`
  * are byte-identical to the pinned upstream revision (the fork gate
- * `scripts/dev/verify-upstream-touchpoints.mjs` → FORKS C1 fails on any drift),
+ * `scripts/upstream/verify-upstream-touchpoints.mjs` → FORKS C1 fails on any drift),
  * and upstream covers them in its own suite. The fixtures below therefore drive
  * detection through injected platform facts (a temp "Applications" root, a temp
  * XDG data dir) and never through this machine's real applications.

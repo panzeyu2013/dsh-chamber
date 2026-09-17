@@ -1106,7 +1106,12 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
             ;(res as ApiResponse)._cspNonce = cspNonce
             res.setHeader(
               'content-security-policy',
-              `default-src 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'unsafe-eval' 'nonce-${cspNonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:`,
+              // frame-src blob:（S-35 CSP 半面）：文档预览把 HTML/PDF/图片内容注入
+              // blob: iframe（HtmlBody.tsx / pdf/runtime.ts / ImageBody.tsx）。
+              // 没有显式 frame-src 时 default-src 'self' 会把这类子 frame 一并拒掉
+              // （两种 flavor 同因）。范围收窄到消费点实际所需：只放行 blob:
+              // （不放 'self'/data:/http——非 blob 的 frame 继续被 default-src 兜住）。
+              `default-src 'self'; base-uri 'none'; object-src 'none'; frame-src blob:; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'unsafe-eval' 'nonce-${cspNonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:`,
             )
             let url: URL
             try {

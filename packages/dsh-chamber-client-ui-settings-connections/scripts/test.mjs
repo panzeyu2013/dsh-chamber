@@ -52,6 +52,8 @@ const GROUPS = {
     'test/connections-section/batch1-visual-locks.test.ts',
     'test/connections-section/action-hint.test.ts',
     'test/connections-section/writer-diagnosis.test.ts',
+    // S-29 residual: the secretStorageUnreadable settings-page hint (zh + en).
+    'test/connections-section/secret-storage-hint.test.ts',
   ],
 }
 

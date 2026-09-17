@@ -81,12 +81,16 @@ export const zh = {
   updateAvailableBlockedUnknown: '新版本 {version} 可用，自动安装不可用（{reason}），请手动安装',
   updateAction: '更新',
   updateDownloading: '正在下载更新… {percent}%',
+  // 原生（Sparkle）阶段没有百分比：不定量下载文案（S-19）。
+  updateDownloadingIndeterminate: '正在下载更新…',
   updateDownloaded: '已下载，退出时安装',
   updateRestartAction: '重启并安装',
   // 重启失败行（F2：phase 保持 downloaded，仅经 restartFailureText 携带失败）。
   updateRestartFailed: '重启并安装失败：{error}',
   // 重启在途行（F9：已点击重启并安装、退出窗口尚未完成时的诚实进展文案）。
   updateRestarting: '正在重启并安装…',
+  // 原生安装中行（S-19：Sparkle 正在替换 bundle；Electron 不产生该相位）。
+  updateInstalling: '正在安装更新…',
   updateDownloadBlocked: '已下载（{reason}），请手动安装',
   updateInstallBlockedMacSigning: '已下载（未配置自动安装签名），请手动安装',
   updateInstallBlockedNativeShell: '已下载（原生壳不支持自动安装），请手动安装',
@@ -333,12 +337,16 @@ export const en: Record<keyof typeof zh, string> = {
   updateAvailableBlockedUnknown: 'New version {version} available — auto-install unavailable ({reason}); install manually',
   updateAction: 'Update',
   updateDownloading: 'Downloading update… {percent}%',
+  // Native (Sparkle) phases carry no percentage: indeterminate download copy (S-19).
+  updateDownloadingIndeterminate: 'Downloading update…',
   updateDownloaded: 'Downloaded — will install on quit',
   updateRestartAction: 'Restart & Install',
   // Restart-failure line (F2: phase stays downloaded; the failure rides restartFailureText).
   updateRestartFailed: 'Restart & install failed: {error}',
   // Restart in-progress line (F9: honest progress copy while the quit window runs).
   updateRestarting: 'Restarting to install…',
+  // Native installing row (S-19: Sparkle is replacing the bundle; Electron never emits it).
+  updateInstalling: 'Installing update…',
   updateDownloadBlocked: 'Downloaded ({reason}) — install manually',
   updateInstallBlockedMacSigning: 'Downloaded (missing auto-install signature) — install manually',
   updateInstallBlockedNativeShell: 'Downloaded (the native shell cannot auto-install) — install manually',

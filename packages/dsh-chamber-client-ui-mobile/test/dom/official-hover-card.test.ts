@@ -399,7 +399,7 @@ test('the data-tip attribute this rule depends on is still EMITTED by the chambe
   // cannot see a JSX attribute in a sibling package's source. The mobile plugin
   // owns no data-tip site itself — the connections settings sheet does — so the
   // contract is pinned here. (The official side of the same attribute is checked
-  // against the pinned upstream corpus by scripts/dev/verify-mobile-anchors.mjs.)
+  // against the pinned upstream corpus by scripts/upstream/verify-mobile-anchors.mjs.)
   const repoRoot = new URL('../../../..', import.meta.url)
   const emitter = readFileSync(new URL('packages/dsh-chamber-client-ui-settings-connections/src/client/ConnectionsSection.tsx', repoRoot), 'utf8')
   assert.match(emitter, /data-tip=\{/, 'the connections page must still set the data-tip attribute')

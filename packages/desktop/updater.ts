@@ -169,8 +169,12 @@ function getRealNativeAutoUpdater(): NativeAutoUpdaterLike | null {
 }
 
 /** Update lifecycle phase (design 11 §3.2). `up-to-date` = a check ran and
- *  found nothing newer (distinct from `idle`, which means not checked yet). */
-export type UpdatePhase = 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'downloaded' | 'error'
+ *  found nothing newer (distinct from `idle`, which means not checked yet).
+ *  `installing` is the NATIVE (Swift/Sparkle) install-in-progress phase
+ *  (S-19): the Electron controller never emits it, but it must stay in the
+ *  shared projection so both flavors render from one Union (update-headless's
+ *  applyNativePhase maps __host.nativeUpdatePhase 'installing' onto it). */
+export type UpdatePhase = 'idle' | 'checking' | 'up-to-date' | 'available' | 'downloading' | 'downloaded' | 'installing' | 'error'
 
 /** Non-secret update state projection (preload + renderer mirror this shape). */
 export interface UpdateState {

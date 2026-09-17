@@ -464,13 +464,27 @@ export interface NativeNotificationLike {
   close(): void
 }
 
+/** S-44: the machine-readable half of an honest-show failure. Only `failed`
+ *  (the OS reported a scheduling error) and `timed-out` (the OS never confirmed
+ *  delivery) are evidence about the host platform; `threw`/`closed` are local
+ *  construction/eviction artifacts and must never be described as an OS
+ *  refusal. Kept on the result so the platform leg can attach an honest
+ *  authorization hint (describeNativeNotificationFailure). */
+export type NativeNotificationFailureReason = 'threw' | 'failed' | 'closed' | 'timed-out'
+
+export interface NativeNotificationFailure {
+  shown: false
+  error: string
+  reason: NativeNotificationFailureReason
+}
+
 /** Electron Notification.show() is void and may emit `failed` later. Settle
  * true only on the native `show` event; synchronous throw, failed, early close
  * and timeout are honest false results and can release the dedupe claim. */
 export function showNativeNotificationHonestly(
   notification: NativeNotificationLike,
   timeoutMs = NATIVE_NOTIFICATION_OUTCOME_TIMEOUT_MS,
-): Promise<{ shown: true } | { shown: false; error: string }> {
+): Promise<{ shown: true } | NativeNotificationFailure> {
   return new Promise(resolve => {
     let settled = false
     let timer: NodeJS.Timeout | null = null
@@ -480,7 +494,7 @@ export function showNativeNotificationHonestly(
       try { notification.removeListener('close', onClose) } catch { /* hostile host adapter */ }
       if (timer !== null) clearTimeout(timer)
     }
-    const settle = (result: { shown: true } | { shown: false; error: string }) => {
+    const settle = (result: { shown: true } | NativeNotificationFailure) => {
       if (settled) return
       settled = true
       cleanup()
@@ -489,9 +503,9 @@ export function showNativeNotificationHonestly(
     const onShow = () => settle({ shown: true })
     const onFailed = (...args: unknown[]) => {
       const error = args.length >= 2 ? args[1] : args[0]
-      settle({ shown: false, error: describeUnknownError(error) })
+      settle({ shown: false, error: describeUnknownError(error), reason: 'failed' })
     }
-    const onClose = () => settle({ shown: false, error: 'notification closed before show' })
+    const onClose = () => settle({ shown: false, error: 'notification closed before show', reason: 'closed' })
     try {
       notification.on('show', onShow)
       if (settled) return
@@ -500,19 +514,76 @@ export function showNativeNotificationHonestly(
       notification.on('close', onClose)
       if (settled) return
     } catch (error) {
-      settle({ shown: false, error: `notification listener setup failed: ${describeUnknownError(error)}` })
+      settle({ shown: false, error: `notification listener setup failed: ${describeUnknownError(error)}`, reason: 'threw' })
       return
     }
     timer = setTimeout(() => {
-      settle({ shown: false, error: 'notification show timed out' })
+      settle({ shown: false, error: 'notification show timed out', reason: 'timed-out' })
       try { notification.close() } catch { /* best-effort cancellation */ }
     }, timeoutMs)
     try {
       notification.show()
     } catch (error) {
-      settle({ shown: false, error: describeUnknownError(error) })
+      settle({ shown: false, error: describeUnknownError(error), reason: 'threw' })
     }
   })
+}
+
+/**
+ * S-44（2026-12 审计）：macOS 通知授权在 Electron 侧没有查询/申请 API。证据：
+ * 固定的 Electron 43.4.0 typings 里 Notification 只有 isSupported/show/…、
+ * systemPreferences.getMediaAccessStatus 只接受 'microphone' | 'camera' |
+ * 'screen'（无 notifications），Electron 自己的 macOS 实现（cocoa_notification
+ * .mm ScheduleNotification）从不调用 requestAuthorization——授权状态只通过
+ * `addNotificationRequest` 的 completion handler 回话：非 nil error → 原生
+ * failed 事件（拒绝/调度失败），成功 → show 事件。因此 Electron 唯一可得的
+ * 诚实面就是本函数：把「OS 明确拒绝投递」与「限时内没有任何回执」表述为
+ * 「可能未授权 / 可能被系统抑制」，保留 OS 原文；绝不把拒绝伪装成普通失败，
+ * 也绝不冒充已授权（预检查询仍是 Electron 运行时不可达的残余，见报告）。
+ * 非 darwin 平台原样返回（Windows 的 failed 是投递错误，不是授权语义）。
+ */
+export function describeNativeNotificationFailure(
+  platform: string,
+  reason: NativeNotificationFailureReason | undefined,
+  detail: string,
+): string {
+  const text = detail.trim() === '' ? 'no detail' : detail
+  if (platform !== 'darwin') return text
+  if (reason === 'failed') {
+    return `macOS refused to deliver the notification (notification authorization may be denied — check System Settings > Notifications): ${text}`
+  }
+  if (reason === 'timed-out') {
+    return `macOS did not confirm notification delivery within the bounded window (authorization may be denied, or Focus/Do Not Disturb suppresses banners): ${text}`
+  }
+  return text
+}
+
+/** 把 Swift 宿主腿的 showNativeNotification 应答折成 honest-show 结果
+ *  （P-06，共享 node-edges/notifications 面）：
+ *  - `null` / `undefined`：旧线协议（edge ok 即视为已调度）→ shown:true；
+ *  - `{shown:true}`：显式成功；
+ *  - `{shown:false,error?}`：显式失败（未授权 / 调度失败）→ 回执 false，core
+ *    据此释放 5s 去重 claim（shell-core maybeShowNativeNotification），
+ *    不再把「edge 传输成功」当成「横幅已显示」；
+ *  - 其他形状（数组/数字/无 shown 的对象）：不予采信 → shown:false。
+ *  Swift 侧（workstream B）须在授权检查失败/调度超时时回 {shown:false,error}。 */
+export function interpretNativeNotificationReply(
+  reply: unknown,
+): { shown: true } | { shown: false; error: string } {
+  if (reply === null || reply === undefined) return { shown: true };
+  if (typeof reply === 'object' && !Array.isArray(reply)) {
+    const record = reply as { shown?: unknown; error?: unknown };
+    if (record.shown === true) return { shown: true };
+    if (record.shown === false) {
+      return {
+        shown: false,
+        error: typeof record.error === 'string' && record.error.length > 0
+          ? record.error
+          : 'native notification was not shown',
+      };
+    }
+  }
+  return { shown: false, error: 'native notification leg returned an unrecognized outcome' };
 }
 
 export function shouldFocusApplicationBeforeShowing(platform: string): boolean {

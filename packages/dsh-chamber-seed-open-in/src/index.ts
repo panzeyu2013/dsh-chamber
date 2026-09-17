@@ -33,7 +33,7 @@
  * upstream's, kept byte-identical in `./catalog.ts`, `./resolver.ts` and
  * `./icons.ts`; `./core.ts` is where the two removed responsibilities used to
  * live. The fork is registered in the upstream-touchpoint gate
- * (`scripts/dev/verify-upstream-touchpoints.mjs` → `FORKS`) so any upstream
+ * (`scripts/upstream/verify-upstream-touchpoints.mjs` → `FORKS`) so any upstream
  * drift on those files fails CI instead of silently rotting here.
  */
 

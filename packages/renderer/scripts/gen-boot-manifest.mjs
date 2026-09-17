@@ -152,7 +152,7 @@ let html = readFileSync(INDEX_HTML, 'utf8')
 // multi-megabyte renderer main-graph eval that precedes the boot chain. Raw
 // sizes drift per build — live totals: dist/web/perf-sizes.json
 // (check-chunk-budgets.mjs)；存档代表点与口径见
-// docs/progress/performance-baseline.md §11 与 STATUS.md C3 条目. The href
+// scripts/perf/README.md 与 STATUS.md C3 条目. The href
 // carries the SAME absolute address as the manifest row url (`bundleUrl` above —
 // the two are built from one value and must stay identical): URL resolution of
 // both against the document origin then yields the same resource, so the

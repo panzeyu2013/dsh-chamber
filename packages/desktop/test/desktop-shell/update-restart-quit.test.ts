@@ -11,7 +11,8 @@
  * hide 吞掉：页面消失、进程连同本地 dsh/隧道永久留存、更新永不安装。
  *
  * 这些断言把修复钉死在 main.ts 的接线上（纯函数判定本身见 chamber-settings.test.ts）：
- *  - 关窗裁决必须把 `updaterQuitArmed` 传给 shouldHideToTray；
+ *  - 关窗裁决必须把 `updaterQuitArmed` 交给共享关窗决策
+ *    （S-08 起的 decideMainWindowClose，其 hide 分支仍单源在 shouldHideToTray）；
  *  - 控制器必须挂上 `onQuitAndInstallArmed: armUpdaterQuit`——该回调是唯一「真的
  *    武装了原生退出」的证据点，且是关窗前的最后一个同步指令（控制器内不早于
  *    quitAndInstall 的调用点、拒绝路径不触发，见 updater-restart-install.test.ts）；
@@ -82,19 +83,22 @@ function balancedBlock(source: string, from: number): string {
   assert.fail('unbalanced block in main.ts')
 }
 
-test('main.ts: the close handler passes the armed update restart into the hide decision', () => {
+test('main.ts: the close handler passes the armed update restart into the shared close decision', () => {
   const marker = "win.on('close', (event) => {"
-  const first = desktopMain.indexOf(marker)
+  const first = desktopCode.indexOf(marker)
   assert.notEqual(first, -1, 'the main-window close handler is gone from main.ts')
-  assert.equal(desktopMain.indexOf(marker, first + 1), -1,
+  assert.equal(desktopCode.indexOf(marker, first + 1), -1,
     'a second close handler appeared — this contract must be pointed at the one that guards hide-to-tray')
-  const handler = balancedBlock(desktopMain, first)
-  assert.match(
-    handler,
-    /shouldHideToTray\(chamberSettings\.windowCloseBehavior, recoveryAvailable, quitRequested, updaterQuitArmed\)/,
-    'the close handler must weigh updaterQuitArmed — otherwise an armed update restart is hidden to tray and the quit chain dies',
-  )
-  assert.match(handler, /event\.preventDefault\(\)/, 'the hide branch must still preventDefault')
+  const handler = balancedBlock(desktopCode, first)
+  // S-08（2026-12 审计）后 hide 裁决由纯函数 decideMainWindowClose 承担（其中
+  // shouldHideToTray 仍是 hide 分支的单源，真值表见 chamber-settings.test.ts）；
+  // 这里钉住同一意图：关窗路由必须把 updaterQuitArmed 交给共享决策，否则被
+  // 武装的更新重启会被 hide/defer 吞掉，退出链死亡。
+  assert.match(handler, /decideMainWindowClose\(\{/,
+    'the close route must go through the shared close decision')
+  assert.match(handler, /updateRestartArmed: updaterQuitArmed/,
+    'the close handler must weigh updaterQuitArmed — otherwise an armed update restart is hidden to tray and the quit chain dies')
+  assert.match(handler, /event\.preventDefault\(\)/, 'the hide/defer branches must preventDefault')
 })
 
 test('main.ts: the controller is given the arming hook, and the restart handler stays a plain call', () => {

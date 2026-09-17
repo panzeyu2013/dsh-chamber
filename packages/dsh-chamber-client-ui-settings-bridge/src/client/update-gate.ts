@@ -3,12 +3,20 @@
  * runCheck() phase gates (packages/desktop/updater.ts): an explicit「检查更新」
  * click is a no-op while a check/download already owns the flow, or once the
  *「已下载，退出时安装」state is final for this version.
+ *
+ * S-21: the phases the gate sees are flavor-neutral. In the native flavor the
+ * shell pushes Sparkle's checking/installing phases through the same
+ * update-state projection, so this gate disables a second check while the shell
+ * owns discovery — the page adds no discovery of its own.
  */
 import type { UpdatePhase } from '../ambient/update-bridge.d.ts'
 
 /** Whether the「检查更新」button must be disabled for the given phase. */
 export function updateCheckDisabled(phase: UpdatePhase | undefined): boolean {
+  // 'installing' (native/Sparkle install in flight, S-19) owns the flow exactly
+  // like downloading/downloaded: a check must not clobber the install phase.
   return phase === 'checking' || phase === 'downloading' || phase === 'downloaded'
+    || phase === 'installing'
 }
 
 /**

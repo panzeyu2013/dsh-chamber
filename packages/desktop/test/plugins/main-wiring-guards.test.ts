@@ -41,6 +41,13 @@ const mainCode = stripComments(mainSource)
 const coreCode = stripComments(coreSource)
 const desktopCode = mainCode + '\n' + coreCode
 
+// 2026-12 parity batch (P-04/P-11/G15): the Electron-free sidecar entry and its
+// ctx assembly are read-only here — F1 owns sidecar-ctx.ts, so these locks assert
+// the call-site shapes without editing it.
+const sidecarEntrySource = readFileSync(join(import.meta.dirname, '..', '..', 'sidecar-entry.ts'), 'utf8')
+const sidecarEntryCode = stripComments(sidecarEntrySource)
+const sidecarCtxCode = stripComments(readFileSync(join(import.meta.dirname, '..', '..', 'sidecar-ctx.ts'), 'utf8'))
+
 /** Slice of `source` between two code markers (exclusive of the end marker). */
 function between(source: string, startMarker: string, endMarker: string, what: string): string {
   const start = source.indexOf(startMarker)
@@ -259,6 +266,68 @@ test('shell-core.ts: the built-in runtime pin is only used when it IS the active
     'main.ts must inject the anchor lockfile path leaf')
 })
 
+
+// --- 2026-12 dual-flavor parity batch (P-04 / P-11 / G15) ---
+
+test('P-04: the sidecar resolves its builtin dsh workspace through the shared dev fallback (packaged = no probe)', () => {
+  // The Electron-free sidecar used to have no dev fallback at all (swift run
+  // without POC_DSH_PATH blocked every startup transaction); Electron main had
+  // one. Both now use the same shared resolver/candidate order.
+  assert.match(mainCode, /return resolveDevBuiltinDshWorkspace\(pkgDir\);/, 'main.ts dev branch uses the shared helper')
+  assert.match(sidecarEntryCode, /resolveSidecarBuiltinDshWorkspace\(\{/,
+    'sidecar-entry must resolve the workspace through the shared helper')
+  assert.match(sidecarEntryCode, /packaged: isPackagedSidecarRuntime\(\),/,
+    'the dev fallback must be gated on the packaged runtime shape')
+  assert.match(sidecarEntryCode, /builtinDshWorkspace: dshPath,/, 'the resolved path feeds buildHeadlessCtx')
+  assert.doesNotMatch(sidecarEntryCode, /builtinDshWorkspace: args\.dshPath,/,
+    'the raw CLI argument must no longer bypass the dev fallback')
+})
+
+test('P-11: neither flavor keeps a pre-spawn time fallback (the startup transaction is the only authority)', () => {
+  // The Swift-only 5s/12s force-start could bypass the runtime gate
+  // (connectionState-only check) and had no Electron equivalent. Both flavors
+  // reach the local instance through the same startup transaction:
+  // refreshRuntimeEvidence().then(runRuntimeStartup) — runStartupTail is the
+  // sidecar's wrapper around exactly that call.
+  assert.match(mainCode, /refreshRuntimeEvidence\(\)\.then\(\(\) => runRuntimeStartup\(\)\)/,
+    'Electron runs the shared startup transaction')
+  assert.match(sidecarEntryCode, /headless\.runStartupTail\(\)/,
+    'the sidecar runs its startup tail (the same transaction)')
+  assert.match(sidecarCtxCode, /refreshRuntimeEvidence\(\)\.then\(\(\) => runRuntimeStartup\(\)\)/,
+    'runStartupTail funnels into the same shared transaction')
+  assert.doesNotMatch(sidecarEntryCode, /maybeStartLocal/, 'the Swift-only pre-spawn fallback must stay deleted')
+  assert.doesNotMatch(sidecarEntryCode, /startLocalAttempted/, 'its idempotence flag goes with it')
+  assert.doesNotMatch(sidecarEntryCode, /setTimeout\(\(\) => void maybeStartLocal\(\), (?:5000|12000)\)/,
+    'no time-based force-start may come back on either flavor')
+})
+
+test('G15/G35: the runtime-transaction abort reason is one shared constant on BOTH flavors', () => {
+  // The two flavors used different abort strings (main.ts 'application is
+  // quitting' vs sidecar-ctx 'sidecar is shutting down'). The single source is
+  // shell-core RUNTIME_ABORT_REASON; main.ts must not spell the literal again.
+  assert.match(coreCode, /export const RUNTIME_ABORT_REASON = 'application is quitting';/,
+    'the shared constant keeps the canonical wording')
+  assert.match(mainCode, /runtimeOperationAbort\?\.abort\(new Error\(RUNTIME_ABORT_REASON\)\)/,
+    'the will-quit abort uses the shared constant')
+  assert.match(mainCode, /if \(quitRequested\) throw new Error\(RUNTIME_ABORT_REASON\)/,
+    'the startup transaction quit guard uses the shared constant')
+  assert.doesNotMatch(mainCode, /new Error\('application is quitting'\)/,
+    'no second spelling of the abort reason may remain in main.ts')
+  // G35: the Swift flavor's two sites are on the same constant — the sidecar
+  // startup-transaction probe guard and the dispose abort. G15 only proved the
+  // constant existed and Electron was on it; these assertions are what stop a
+  // revert to the old 'sidecar is shutting down' literal.
+  assert.match(sidecarCtxCode, /import \{[^}]*RUNTIME_ABORT_REASON[^}]*\} from '\.\/shell-core\.ts'/,
+    'sidecar-ctx.ts must import the shared constant from shell-core')
+  assert.match(sidecarCtxCode, /if \(quittingRequested\) throw new Error\(RUNTIME_ABORT_REASON\)/,
+    'the sidecar startup probe guard uses the shared constant')
+  assert.match(sidecarCtxCode, /runtimeOperationAbort\?\.abort\(new Error\(RUNTIME_ABORT_REASON\)\)/,
+    'the sidecar dispose abort uses the shared constant')
+  assert.doesNotMatch(sidecarCtxCode, /new Error\('application is quitting'\)/,
+    'the sidecar must not respell the Electron literal either')
+  assert.doesNotMatch(sidecarCtxCode, /new Error\('sidecar is shutting down'\)/,
+    'the old Swift-side abort literal must not come back (G35)')
+})
 test('shell-core.ts: a dev/env tree at another generation may still fall back to the built-in anchor', () => {
   // A source-line dev tree carries an opt-in lockfile and forbidden tree names,
   // so both of its own fact sources are refused. Without a stand-in the local
