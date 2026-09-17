@@ -54,6 +54,8 @@ const GROUPS = {
     'test/connections-section/writer-diagnosis.test.ts',
     // S-29 residual: the secretStorageUnreadable settings-page hint (zh + en).
     'test/connections-section/secret-storage-hint.test.ts',
+    // F1: the local card must show why the instance could not start.
+    'test/connections-section/local-failure-reason.test.ts',
   ],
 }
 

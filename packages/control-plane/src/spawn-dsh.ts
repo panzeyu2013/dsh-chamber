@@ -400,14 +400,152 @@ function isNonRetryableSpawnError(error: unknown): error is Error & { code: Spaw
   return code === DSH_SPAWN_NON_RETRYABLE_CODE || code === DSH_WRITER_QUIESCENCE_UNKNOWN_CODE
 }
 
+/**
+ * Render any thrown value without ever producing the literal `undefined` or
+ * `null`. Failure messages are user-facing (health/API/desktop log), so a
+ * non-Error throw must still name that fact instead of printing a hole (F1).
+ */
+function describeThrown(value: unknown): string {
+  if (value === undefined) return 'no error object was thrown'
+  if (value === null) return 'null was thrown'
+  if (value instanceof Error) return value.message === '' ? `${value.name === '' ? 'Error' : value.name} (no message)` : value.message
+  const text = String(value)
+  return text === '' ? 'a non-Error value with an empty string form was thrown' : text
+}
+
 function writerQuiescenceUnknown(child: ChildProcess, context: string, cause: unknown): SpawnLifecycleError {
   if (isWriterQuiescenceUnknown(cause)) return cause as SpawnLifecycleError
   const pid = child.pid ?? 'unknown'
   return new SpawnLifecycleError(
     DSH_WRITER_QUIESCENCE_UNKNOWN_CODE,
-    `${context}; dsh process group ${pid} quiescence is unknown: ${String(cause)}`,
+    `${context}; dsh process group ${pid} quiescence is unknown: ${describeThrown(cause)}`,
     cause,
   )
+}
+
+/**
+ * Why one spawn attempt failed. The exhausted-spawn error carries one typed
+ * record per attempt, so the terminal message names the REAL cause — a port
+ * collision, a listen timeout, a child exit code, or the child's own stderr
+ * tail — instead of the bare `undefined` a skipped attempt used to produce (F1).
+ */
+export type SpawnAttemptFailureKind =
+  | 'port-busy'
+  | 'child-exit'
+  | 'listen-timeout'
+  | 'spawn-error'
+  | 'identity-probe'
+  | 'auth-bootstrap'
+  | 'aborted'
+  | 'unknown'
+
+/** One failed spawn attempt, with its concrete reason. */
+export interface SpawnAttemptFailure {
+  /** 1-based attempt number inside the MAX_SPAWN_ATTEMPTS window. */
+  attempt: number
+  port: number
+  kind: SpawnAttemptFailureKind
+  /** Human-readable reason; always non-empty and never "undefined". */
+  message: string
+  /** Child exit code observed by the attempt, when any. */
+  exitCode?: number | null
+  /** Child exit signal observed by the attempt, when any. */
+  signal?: string | null
+  /** Bounded, credential-redacted stderr tail of the attempt, when any. */
+  stderr?: string
+}
+
+/** Code of the terminal exhausted-spawn error. */
+export const DSH_SPAWN_ATTEMPTS_EXHAUSTED_CODE = 'dsh_spawn_attempts_exhausted'
+
+/** Bounded stderr digest carried by one failed attempt's reason. */
+export const MAX_ATTEMPT_STDERR_DIGEST_CHARS = 512
+
+/** The typed failure of ONE attempt (readiness phases wrap their reason here). */
+class SpawnAttemptError extends Error {
+  readonly kind: SpawnAttemptFailureKind
+  readonly exitCode: number | null
+  readonly signal: string | null
+  readonly stderr: string
+
+  constructor(kind: SpawnAttemptFailureKind, message: string, facts: { exitCode?: number | null; signal?: string | null; stderr?: string } = {}) {
+    super(message)
+    this.name = 'SpawnAttemptError'
+    this.kind = kind
+    this.exitCode = facts.exitCode ?? null
+    this.signal = facts.signal ?? null
+    this.stderr = facts.stderr ?? ''
+  }
+}
+
+/** The terminal failure after the whole retry window was exhausted. */
+export class DshSpawnExhaustedError extends Error {
+  readonly code = DSH_SPAWN_ATTEMPTS_EXHAUSTED_CODE
+  /** One record per attempted port — always MAX_SPAWN_ATTEMPTS here. */
+  readonly attempts: readonly SpawnAttemptFailure[]
+
+  constructor(basePort: number, attempts: readonly SpawnAttemptFailure[]) {
+    super(formatSpawnExhaustedMessage(basePort, attempts))
+    this.name = 'DshSpawnExhaustedError'
+    this.attempts = attempts
+  }
+}
+
+/**
+ * Render the terminal message. Every attempt's reason is present, so the string
+ * can never be (or contain) a bare `undefined`: a genuinely empty reason is
+ * replaced by an explicit sentence ("attempt failed without an error message").
+ */
+function formatSpawnExhaustedMessage(basePort: number, attempts: readonly SpawnAttemptFailure[]): string {
+  const range = attempts.length === 0
+    ? `port ${basePort}`
+    : attempts.length === 1
+      ? `port ${attempts[0].port}`
+      : `ports ${attempts[0].port}..${attempts[attempts.length - 1].port}`
+  const details = attempts.length === 0
+    ? 'no attempt produced a failure record'
+    : attempts.map(failure => `[${failure.kind}] port ${failure.port}: ${failure.message}${failure.stderr === undefined || failure.stderr === '' ? '' : ` (stderr: ${failure.stderr})`}`).join('; ')
+  return `dsh failed to start after ${MAX_SPAWN_ATTEMPTS} attempts on ${range}: ${details}`
+}
+
+/** Turn any thrown value into a failure record with a non-empty reason. */
+function recordSpawnAttemptFailure(attempt: number, port: number, error: unknown): SpawnAttemptFailure {
+  if (error instanceof SpawnAttemptError) {
+    const record: SpawnAttemptFailure = { attempt, port, kind: error.kind, message: error.message }
+    if (error.exitCode !== null) record.exitCode = error.exitCode
+    if (error.signal !== null) record.signal = error.signal
+    const stderr = error.stderr.trim()
+    if (stderr !== '') record.stderr = stderr
+    return record.message === '' ? { ...record, message: `attempt failed (${error.kind}) without a message` } : record
+  }
+  return { attempt, port, kind: 'unknown', message: describeThrown(error) }
+}
+
+/** Map one readiness outcome (timeout / exit / spawn-error / abort) to the typed attempt failure. */
+function readinessAttemptError(
+  port: number,
+  outcome: string,
+  exitFacts: { code: number | null; signal: string | null } | null,
+  stderr: string,
+): SpawnAttemptError {
+  if (outcome === 'timeout') {
+    return new SpawnAttemptError('listen-timeout', `no TCP listener on 127.0.0.1:${port} within ${LISTEN_WAIT_MS}ms`, { stderr })
+  }
+  if (outcome.startsWith('exit(')) {
+    const label = exitFacts?.code ?? exitFacts?.signal ?? outcome.slice('exit('.length, -1)
+    return new SpawnAttemptError('child-exit', `child exited (${label}) before opening a TCP listener`, {
+      exitCode: exitFacts?.code ?? null,
+      signal: exitFacts?.signal ?? null,
+      stderr,
+    })
+  }
+  if (outcome.startsWith('spawn-error: ')) {
+    return new SpawnAttemptError('spawn-error', `child process spawn failed: ${outcome.slice('spawn-error: '.length)}`, { stderr })
+  }
+  if (outcome === 'aborted') {
+    return new SpawnAttemptError('aborted', 'spawn was aborted before TCP readiness', { stderr })
+  }
+  return new SpawnAttemptError('unknown', `attempt ended without TCP readiness: ${outcome}`, { stderr })
 }
 
 async function terminateAndProveQuiet(
@@ -635,6 +773,9 @@ async function spawnAttempt({
   // chunks — redaction must see the COMPLETE line, never per-chunk fragments
   // (review-round6a). The token query values are the only redacted content.
   let forwardLineTail = ''
+  // Bounded, redacted stderr digest (F1): a failed attempt must be able to name
+  // what the child itself printed, not only that it exited.
+  let stderrDigest = ''
   const forwardChildOutput = (chunk: Buffer, stream: 'stdout' | 'stderr') => {
     // RAW bytes, not the trimmed formatter: the trailing newline must
     // survive so line splitting works (trimEnd swallowed it and left every
@@ -649,6 +790,9 @@ async function spawnAttempt({
       const safeLine = redactChildOutputLine(segment)
       log(safeLine)
       hostLog.write(safeLine, stream)
+      if (stream === 'stderr') {
+        stderrDigest = (stderrDigest === '' ? safeLine : `${stderrDigest}\n${safeLine}`).slice(-MAX_ATTEMPT_STDERR_DIGEST_CHARS)
+      }
     }
   }
   // 0.1.2 browser-auth bootstrap (review-round3c P0): the web profile prints
@@ -723,7 +867,7 @@ async function spawnAttempt({
     } catch (terminationError) {
       throw writerQuiescenceUnknown(
         child,
-        `pid ledger publication failed (${String(ledgerError)}) and cleanup failed`,
+        `pid ledger publication failed (${describeThrown(ledgerError)}) and cleanup failed`,
         terminationError,
       )
     }
@@ -732,7 +876,7 @@ async function spawnAttempt({
     removePidRecord(stateDir, pid)
     throw new SpawnLifecycleError(
       DSH_SPAWN_NON_RETRYABLE_CODE,
-      `dsh pid ledger publication failed on port ${port}; child was reclaimed: ${String(ledgerError)}`,
+      `dsh pid ledger publication failed on port ${port}; child was reclaimed: ${describeThrown(ledgerError)}`,
       ledgerError,
     )
   }
@@ -742,6 +886,8 @@ async function spawnAttempt({
   let retryTimer: ReturnType<typeof setTimeout> | undefined
   let activeSocket: ReturnType<typeof createConnection> | undefined
   let onExit: ((code: number | null, signal: NodeJS.Signals | null) => void) | undefined
+  // Exit facts of THIS attempt, kept for the typed failure record (F1).
+  let childExitFacts: { code: number | null; signal: string | null } | null = null
   let onAbort: (() => void) | undefined
   const outcome = await new Promise<string>(resolve => {
     let settled = false
@@ -755,7 +901,10 @@ async function spawnAttempt({
       resolve(value)
     }
     timer = setTimeout(() => finish('timeout'), LISTEN_WAIT_MS)
-    onExit = (code, sig) => finish(`exit(${code ?? sig})`)
+    onExit = (code, sig) => {
+      childExitFacts = { code, signal: sig }
+      finish(`exit(${code ?? sig})`)
+    }
     child.once('exit', onExit)
     onAbort = () => finish('aborted')
     if (signal?.aborted) onAbort()
@@ -802,7 +951,7 @@ async function spawnAttempt({
     // The ledger is writer evidence: delete only after PGID quiescence was
     // positively established above.
     removePidRecord(stateDir, pid)
-    throw new Error(`dsh spawn attempt on port ${port} failed: ${outcome} before TCP listen`)
+    throw readinessAttemptError(port, outcome, childExitFacts, stderrDigest)
   }
   // 0.1.2 browser-auth bootstrap (review-round3c P0) — CONCURRENT, never
   // delaying the probe: wait for the `dsh web:` URL line, exchange the launch
@@ -860,7 +1009,7 @@ async function spawnAttempt({
       }
       return 'the host did not mint a session cookie'
     } catch (error) {
-      return error instanceof Error ? error.message : String(error)
+      return describeThrown(error)
     } finally {
       clearTimeout(bootstrapTimer)
       signal?.removeEventListener('abort', onSpawnAbort)
@@ -899,7 +1048,11 @@ async function spawnAttempt({
         break
       } catch (probeError) {
         if (child.exitCode !== null || child.signalCode !== null) {
-          throw new Error(`dsh spawn attempt on port ${port} failed: child exited: ${String(probeError)}`)
+          throw new SpawnAttemptError(
+            'child-exit',
+            `child exited: ${describeThrown(probeError)}`,
+            { stderr: stderrDigest },
+          )
         }
         if (controller.signal.aborted) throw probeError
         if (probeError instanceof RpcTransportError && probeError.status === 401) {
@@ -921,7 +1074,11 @@ async function spawnAttempt({
           }
           if (authOutcome !== 'minted') {
             logger.warn(`[dsh:${port}] browser-auth bootstrap failed (${authOutcome}); the host-identity probe will 401 on the 0.1.2 wire`)
-            throw new Error(`dsh spawn attempt on port ${port} failed: instance requires the 0.1.2 browser-auth cookie, but the bootstrap failed (${authOutcome})`)
+            throw new SpawnAttemptError(
+              'auth-bootstrap',
+              `instance requires the 0.1.2 browser-auth cookie, but the bootstrap failed (${authOutcome})`,
+              { stderr: stderrDigest },
+            )
           }
           // Cookie minted — fall through and retry the probe with it.
         }
@@ -934,7 +1091,11 @@ async function spawnAttempt({
     await terminateAndProveQuiet(child, terminateChildFn, `spawn attempt on port ${port} failed during the host-identity probe`)
     // Preserve the ledger when termination cannot prove group quiescence.
     removePidRecord(stateDir, pid)
-    throw new Error(`dsh spawn attempt on port ${port} failed: host identity probe: ${String(error)}`)
+    throw new SpawnAttemptError(
+      'identity-probe',
+      `host identity probe failed: ${describeThrown(error)}`,
+      { stderr: stderrDigest },
+    )
   } finally {
     clearTimeout(probeTimer)
     signal?.removeEventListener('abort', onGenerationAbort)
@@ -1151,14 +1312,30 @@ export async function spawnDsh({
   if (!isValidInstanceId(resolvedOwnerInstanceId)) {
     throw new Error('spawn ownerInstanceId must be a UUID')
   }
-  let lastError: unknown
+  // One typed record per failed attempt; the terminal error below carries all
+  // of them, so an exhausted retry window always names the real reason (F1).
+  const failures: SpawnAttemptFailure[] = []
   for (let attempt = 0; attempt < MAX_SPAWN_ATTEMPTS; attempt++) {
     const port = basePort + attempt
     if (signal?.aborted) throw new Error('spawn aborted')
     // Port pre-check: skip a port that is already taken (a stray process from
     // an earlier run would otherwise make this attempt die with EADDRINUSE).
-    const busy = await probePortBusy(port, signal)
+    let busy: boolean
+    try {
+      busy = await probePortBusy(port, signal)
+    } catch (probeError) {
+      if (signal?.aborted) throw probeError
+      failures.push(recordSpawnAttemptFailure(attempt + 1, port, probeError))
+      logger.log(`spawn attempt ${attempt + 1}/${MAX_SPAWN_ATTEMPTS} on port ${port} failed: port pre-check failed`)
+      continue
+    }
     if (busy) {
+      failures.push({
+        attempt: attempt + 1,
+        port,
+        kind: 'port-busy',
+        message: `port ${port} is already in use (a TCP connect to 127.0.0.1:${port} succeeded)`,
+      })
       logger.log(`port ${port} already in use; skipping`)
       continue
     }
@@ -1192,15 +1369,17 @@ export async function spawnDsh({
         },
       }
     } catch (error) {
-      lastError = error
-      const message = error instanceof Error ? error.message : String(error)
-      logger.log(`spawn attempt ${attempt + 1}/${MAX_SPAWN_ATTEMPTS} on port ${port} failed: ${message}`)
+      const failure = recordSpawnAttemptFailure(attempt + 1, port, error)
+      failures.push(failure)
+      logger.log(`spawn attempt ${attempt + 1}/${MAX_SPAWN_ATTEMPTS} on port ${port} failed: ${failure.message}`)
       // Ledger publication and unknown-writer failures are lifecycle failures,
       // not port collisions. Retrying would create a second DSH_HOME writer.
       if (isNonRetryableSpawnError(error)) throw error
     }
   }
-  throw new Error(`dsh failed to start after ${MAX_SPAWN_ATTEMPTS} attempts: ${String(lastError)}`)
+  // Every iteration records exactly one failure, so this is always the full
+  // MAX_SPAWN_ATTEMPTS window; the typed error's message lists each reason.
+  throw new DshSpawnExhaustedError(basePort, failures)
 }
 
 /** Read a managed-dsh pid record; null when absent or corrupt. */

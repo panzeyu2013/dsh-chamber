@@ -801,8 +801,20 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   // verdict opens exposure. A candidate can move from ready to degraded,
   // restarting, or error while the full probe is still running; none of those
   // states (nor its port/error detail) may escape through public REST/SSE.
+  //
+  // The ONE exception (F1): a start attempt that terminally failed before this
+  // incarnation ever reached ready is not a quarantined candidate fact — it is
+  // the user-visible reason the local instance cannot start. Masking it as
+  // 'starting' forever hid the failure; a start failure now projects the
+  // honest 'error' status plus its concrete reason (the spawn error already
+  // carries the per-port causes, exit codes and stderr digests). A candidate
+  // that DID reach ready and later failed keeps the quarantine above.
   const publicLocalSnapshot = (snapshot: { status: string; port: number | null; error: string | null }) => {
     if (!localExposureAllowed()) {
+      const startFailure = local.getStartFailure()
+      if (startFailure !== null) {
+        return { status: 'error', port: null, error: startFailure }
+      }
       return { status: 'starting', port: null, error: null }
     }
     return snapshot

@@ -140,6 +140,13 @@ export interface LocalConnection {
   getState(): ConnectionState
   getDshPort(): number | null
   getError(): string | null
+  /**
+   * Why the LAST start attempt terminally failed before ever reaching ready
+   * (null when the last attempt succeeded, is still in flight, or nothing was
+   * attempted). The public /health projection uses this to report a visible
+   * failure terminal even while the exposure latch is closed (F1).
+   */
+  getStartFailure(): string | null
   getConsecutiveFailures(): number
 
   /**
@@ -284,6 +291,16 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
 
   let state: ConnectionState = 'stopped'
   let error: string | null = null
+  /**
+   * Message of a start attempt that TERMINALLY failed before this incarnation
+   * ever reached 'ready' (spawn retries exhausted, ledger failure, writer
+   * quiescence unknown). This is the fail-loud fact the public /health
+   * projection may surface through a CLOSED exposure latch: a candidate that
+   * never started is a failure the user must see, while a candidate that
+   * reached ready and later died stays quarantined (F1). Cleared whenever a
+   * new start attempt begins or the connection stops.
+   */
+  let startFailure: string | null = null
   /** Lifecycle-change subscribers (the health-events push channel, 05 §3). */
   const stateListeners = new Set<(snapshot: { status: string; port: number | null; error: string | null }) => void>()
   let dshPort: number | null = null
@@ -725,6 +742,9 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
       // A fresh start has no port yet — the old (dead) one must not ride the
       // 'starting' projection (2026 review).
       dshPort = null
+      // A new attempt clears the previous terminal failure: health must show
+      // 'starting' while the retry window is live, never a stale error.
+      startFailure = null
       setState('starting')
       let spawnAttempted = false
       try {
@@ -751,13 +771,16 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
         }
         child = spawned
         dshPort = spawned.port
+        startFailure = null
         spawned.child.on('exit', onChildExit)
         setState('ready')
         startHealthTimer()
         return
       } catch (spawnError) {
+        const failureMessage = spawnError instanceof Error ? spawnError.message : String(spawnError)
         if (noteWriterQuiescenceUnknown(spawnError)) {
-          setState('error', spawnError.message)
+          startFailure = failureMessage
+          setState('error', failureMessage)
           throw spawnError
         }
         if (stopping || epoch !== startEpoch) {
@@ -780,7 +803,10 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
           if (state !== 'stopped') setState('stopped', spawnError.message)
           throw spawnError
         }
-        setState('error', String(spawnError))
+        // Terminal for this start attempt: record the real reason so the public
+        // /health projection can report it through a closed exposure latch (F1).
+        startFailure = failureMessage
+        setState('error', failureMessage)
         throw spawnError
       }
     })()
@@ -826,6 +852,11 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
     /** Current error detail; null when healthy. */
     getError(): string | null {
       return error
+    },
+
+    /** Why the last start attempt terminally failed before ever reaching ready. */
+    getStartFailure(): string | null {
+      return startFailure
     },
 
     /** Consecutive connection failures (probe failures/child exit), reset on connect. */
@@ -895,6 +926,8 @@ export function createLocalConnection({ stateDir, dshHome, dshWorkspacePath, log
           const stoppedPort = dshPort
           child = null
           dshPort = null
+          // A stopped connection has no terminal start failure to report.
+          startFailure = null
           restartTimes.length = 0
           // A failed verdict cached right before stop must not replay after a
           // later start and re-count a failure the new lifecycle never had.

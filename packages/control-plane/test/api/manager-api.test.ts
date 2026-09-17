@@ -12,13 +12,13 @@ import { EventEmitter } from 'node:events'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { connect } from 'node:net'
+import { connect, createServer } from 'node:net'
 import { createControlPlane, DEFAULT_CONTROL_PLANE_PORT } from '../../src/index.ts'
 import { createApi } from '../../src/api.ts'
 import { CATALOG_FILE } from '../../src/catalog.ts'
-import { DEFAULT_DSH_START_PORT } from '../../src/spawn-dsh.ts'
+import { DshSpawnExhaustedError, MAX_SPAWN_ATTEMPTS } from '../../src/spawn-dsh.ts'
 import type { SpawnedDsh } from '../../src/local-connection.ts'
-import { DSH_WRITER_QUIESCENCE_UNKNOWN_CODE } from '../../src/spawn-dsh.ts'
+import { DEFAULT_DSH_START_PORT, DSH_WRITER_QUIESCENCE_UNKNOWN_CODE } from '../../src/spawn-dsh.ts'
 import { fakeWire, fetchJson } from '../support/utils.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
@@ -262,6 +262,84 @@ test('candidate quarantine also hides internal error state, port, and detail bef
     assert.ok(!JSON.stringify(health.body).includes('runtime-secret'))
   } finally {
     await plane.stop()
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('an exhausted start (every candidate port occupied) is a visible /health failure with the concrete reason', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'dsh-chamber-start-exhausted-'))
+  const holders: Array<ReturnType<typeof createServer>> = []
+  const base = await new Promise<number>((resolvePort, rejectPort) => {
+    const probe = createServer()
+    probe.on('error', rejectPort)
+    probe.listen(0, '127.0.0.1', () => {
+      const address = probe.address()
+      probe.close(() => resolvePort(typeof address === 'object' && address !== null ? address.port : 0))
+    })
+  })
+  // The plane uses the REAL spawnDsh: the failure under test is the real
+  // exhausted-retry error, not an injected string.
+  const plane = createControlPlane({
+    port: 0,
+    stateDir,
+    logger: silentLogger,
+    canExposeLocal: () => false,
+    dshPortBase: base,
+  })
+  try {
+    for (let offset = 0; offset < MAX_SPAWN_ATTEMPTS; offset++) {
+      const holder = createServer()
+      await new Promise<void>((resolveListen, rejectListen) => {
+        holder.once('error', rejectListen)
+        holder.listen(base + offset, '127.0.0.1', () => resolveListen())
+      })
+      holders.push(holder)
+    }
+    await plane.start()
+    await assert.rejects(plane.startLocal(), (error: unknown) => {
+      assert.ok(error instanceof DshSpawnExhaustedError)
+      assert.match(error.message, new RegExp(`port ${base} is already in use`))
+      assert.ok(!error.message.includes('undefined'))
+      return true
+    })
+
+    const origin = `http://127.0.0.1:${plane.port}`
+    // The visible terminal: with the exposure latch still closed (the desktop's
+    // runtime probe never opened it) /health must report the failure + reason,
+    // not "starting" forever.
+    const health = await fetchJson(origin, '/health')
+    assert.equal(health.body.dsh.status, 'error')
+    assert.equal(health.body.dsh.port, 0)
+    assert.match(health.body.dsh.error, new RegExp(`port ${base} is already in use`))
+    const connections = await fetchJson(origin, '/api/connections')
+    assert.equal(connections.body.connection.status, 'error')
+    assert.match(connections.body.connection.error, /already in use/)
+
+    // The push channel carries the same terminal: the SSE snapshot on subscribe
+    // is the current projection, so a renderer mounting after the failure still
+    // receives the reason.
+    const events = await fetch(`${origin}/api/host/health-events`)
+    const reader = events.body!.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let frame: any = null
+    const deadline = Date.now() + 5_000
+    while (frame === null && Date.now() < deadline) {
+      const boundary = buffer.indexOf('\n\n')
+      if (boundary !== -1) {
+        frame = JSON.parse(buffer.slice(0, boundary).replace(/^data: /, ''))
+        break
+      }
+      const { done, value } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+    }
+    await reader.cancel()
+    assert.equal(frame?.dsh?.status, 'error')
+    assert.match(String(frame?.dsh?.error ?? ''), /already in use/)
+  } finally {
+    await plane.stop()
+    await Promise.all(holders.map(holder => new Promise<void>(resolveClose => holder.close(() => resolveClose()))))
     rmSync(stateDir, { recursive: true, force: true })
   }
 })

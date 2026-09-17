@@ -27,7 +27,10 @@ import {
   spawnDsh,
   writePidRecord,
   DEFAULT_DSH_START_PORT,
+  DSH_SPAWN_ATTEMPTS_EXHAUSTED_CODE,
+  DshSpawnExhaustedError,
   MAX_CHILD_OUTPUT_CHUNK_BYTES,
+  MAX_SPAWN_ATTEMPTS,
 } from '../../src/spawn-dsh.ts'
 import { authCookieFor, clearAuthCookie, exchangeLaunchToken } from '../../src/browser-auth-cookie.ts'
 import { tempDir } from '../support/utils.ts'
@@ -122,6 +125,104 @@ test('probePortBusy: a timed-out connect is conservatively treated as busy', asy
   const busy = await probePortBusy(DEFAULT_DSH_START_PORT, undefined, 5, () => socket as never)
   assert.equal(busy, true)
   assert.equal(socket.destroyed, true)
+})
+
+/** Bind and hold one loopback TCP port until the returned server is closed. */
+function holdPort(port: number): Promise<ReturnType<typeof createNetServer>> {
+  return new Promise((resolveHold, rejectHold) => {
+    const server = createNetServer()
+    server.once('error', rejectHold)
+    server.listen(port, '127.0.0.1', () => resolveHold(server))
+  })
+}
+
+/** Close every held server, then resolve. */
+function releasePorts(holders: Array<ReturnType<typeof createNetServer>>): Promise<void> {
+  return Promise.all(holders.map(server => new Promise<void>(resolveClose => { server.close(() => resolveClose()) }))).then(() => undefined)
+}
+
+/**
+ * Hold a fully consecutive loopback port window of `count` ports, retrying
+ * when a concurrently running process claims one of them between the ephemeral
+ * probe and the bind (the window must be entirely ours for the busy test).
+ */
+async function holdSpawnWindow(count: number): Promise<{ base: number; holders: Array<ReturnType<typeof createNetServer>> }> {
+  for (let attempt = 0; attempt < 25; attempt++) {
+    const base = await freeDshPortBase()
+    const holders: Array<ReturnType<typeof createNetServer>> = []
+    try {
+      for (let offset = 0; offset < count; offset++) holders.push(await holdPort(base + offset))
+      return { base, holders }
+    } catch {
+      await releasePorts(holders)
+    }
+  }
+  throw new Error('could not reserve a consecutive loopback port window')
+}
+
+test('spawnDsh: an exhausted window records every occupied port with its concrete reason (F1)', async () => {
+  const stateDir = tempDir()
+  const { base, holders } = await holdSpawnWindow(MAX_SPAWN_ATTEMPTS)
+  try {
+    await assert.rejects(
+      spawnDsh({ dshPortBase: base, stateDir, dshHome: join(stateDir, 'home'), dshWorkspacePath: join(stateDir, 'ws'), logger: silentLogger }),
+      (error: unknown) => {
+        assert.ok(error instanceof DshSpawnExhaustedError, 'a fully busy window must reject with the typed exhausted error')
+        assert.equal(error.code, DSH_SPAWN_ATTEMPTS_EXHAUSTED_CODE)
+        assert.equal(error.attempts.length, MAX_SPAWN_ATTEMPTS)
+        assert.deepEqual(
+          error.attempts.map(failure => failure.port),
+          Array.from({ length: MAX_SPAWN_ATTEMPTS }, (_unused, offset) => base + offset),
+        )
+        assert.ok(error.attempts.every(failure => failure.kind === 'port-busy'), 'a skipped port is a typed failure, not a missing record')
+        for (let offset = 0; offset < MAX_SPAWN_ATTEMPTS; offset++) {
+          assert.match(error.message, new RegExp(`port ${base + offset} is already in use`))
+        }
+        assert.ok(error.message.includes(`failed to start after ${MAX_SPAWN_ATTEMPTS} attempts`))
+        assert.ok(!error.message.includes('undefined'), 'the terminal message must never contain "undefined"')
+        return true
+      },
+    )
+  } finally {
+    await releasePorts(holders)
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('spawnDsh: an early child exit records the exit code and the stderr digest (F1)', async () => {
+  const stateDir = tempDir()
+  const dshWorkspacePath = join(stateDir, 'ws')
+  writeFakeDshEntry(dshWorkspacePath, [
+    "process.stderr.write('fatal: cannot bind the configured port\\n')",
+    'setTimeout(() => process.exit(9), 50)',
+    '',
+  ].join('\n'))
+  try {
+    await assert.rejects(
+      spawnDsh({ dshPortBase: await freeDshPortBase(), stateDir, dshHome: join(stateDir, 'home'), dshWorkspacePath, logger: silentLogger }),
+      (error: unknown) => {
+        assert.ok(error instanceof DshSpawnExhaustedError)
+        // The window is ephemeral: a concurrently active process can claim one
+        // of the five ports between the pre-check and the attempt (that attempt
+        // is then correctly typed 'port-busy'). The contract under test is that
+        // the exit path IS recorded — so at least one attempt must be the typed
+        // child-exit with its exit code and stderr digest.
+        assert.ok(
+          error.attempts.every(failure => failure.kind === 'child-exit' || failure.kind === 'port-busy'),
+          'every attempt must be typed as the child-exit or port-busy cause it actually observed',
+        )
+        const exited = error.attempts.filter(failure => failure.kind === 'child-exit')
+        assert.ok(exited.length > 0, 'at least one attempt must record the early child exit')
+        assert.ok(exited.every(failure => failure.exitCode === 9), 'the child exit code must ride the failure record')
+        assert.match(error.message, /child exited \(9\)/)
+        assert.ok(error.message.includes('cannot bind the configured port'), 'the stderr digest must carry the child\'s own reason')
+        assert.ok(!error.message.includes('undefined'))
+        return true
+      },
+    )
+  } finally {
+    rmSync(stateDir, { recursive: true, force: true })
+  }
 })
 
 test('killFailedSpawn: SIGKILLs the process group, waits for the exit, then removes the pid record', async () => {
