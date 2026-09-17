@@ -518,3 +518,34 @@ jobs:
         run: |
           pnpm run build:sidecar --dry-run
           pnpm run build:swift-app --dry-run --skip-build
+      # Electron mac packaging rehearsal (2026-12 A2 高危). The electron-builder
+      # mac leg used to run for the first time inside release.yml — after the
+      # draft release existed and with the Apple credentials loaded — so a broken
+      # files/extraResources/beforePack/afterPack path failed the release run
+      # itself (both real failures of the 0.3.2-beta series landed there). This
+      # step runs the exact release chain on an ordinary main push instead:
+      # build:desktop + electron-builder --mac --arm64 --publish=never, ad-hoc
+      # signing only, no notarization credentials, no upload. afterPack is the
+      # same fail-closed product verifier the release leg executes (G27 Electron
+      # payload + the packaged locale assertion), so a packaging regression now
+      # fails the push path that the release proof watches
+      # (verify-release-ci-proof.mjs REQUIRED_JOB_STEPS pins THIS step name).
+      # Same deliberate limits as the Windows rehearsal above: never on pull
+      # requests, uploads nothing, exit status is the whole signal.
+      - name: macOS packaging rehearsal (ad-hoc, no publish, no credentials)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.classify.outputs.code == 'true'
+        env:
+          # Never resolve a runner keychain identity: afterPack ad-hoc signs the
+          # bundle, exactly like the release dry run. No Apple credential is
+          # passed to this step, so notarization cannot run either.
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          pnpm run build:desktop
+          # exec, not `run dist:mac -- --publish=never`: pnpm forwards its own `--`
+          # separator to the script (same reason as the Windows rehearsal above).
+          pnpm --filter @dsh-chamber/desktop exec electron-builder --mac --arm64 --publish=never
+          # The pack above exercised afterPack on the real .app; now assert the
+          # staged product itself: the gate's packaged-app arm re-checks the
+          # locales electron-builder's electronLanguages matcher can silently
+          # delete (A1 zh_CN.lproj/locale.pak regression).
+          node scripts/gates/verify-electron-artifacts.mjs

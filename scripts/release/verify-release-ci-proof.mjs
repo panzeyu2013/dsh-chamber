@@ -85,6 +85,15 @@ export const REQUIRED_JOB_STEPS = {
     // real-machine item (no CDP).
     'Native assembly acceptance (spawned sidecar boots + serves)',
     'Packaging dry runs (sidecar + .app)',
+    // A2 高危: the Electron mac pack was rehearsed NOWHERE on the push path —
+    // release.yml built it for the first time after the draft existed and with
+    // the Apple credentials loaded, and both real failures of the 0.3.2-beta
+    // series landed exactly there. The rehearsal step now runs the same
+    // build:desktop + electron-builder --mac chain (ad-hoc, --publish=never,
+    // no notarization, no upload) on an ordinary main push, so the proof must
+    // require it: a green job whose mac rehearsal was deleted (or classifier-
+    // skipped) cannot prove the mac packaging path was ever exercised.
+    'macOS packaging rehearsal (ad-hoc, no publish, no credentials)',
   ],
 }
 

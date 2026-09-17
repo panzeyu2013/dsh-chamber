@@ -16,6 +16,10 @@ import { fileURLToPath } from 'node:url'
 import {
   NATIVE_BETA_ROLLING_TAG,
   NATIVE_STABLE_ZIP_PATTERN,
+  appcastEnclosureUrls,
+  appcastItems,
+  appcastSparkleField,
+  assertAppcastAdvertises,
   assertNoCollision,
   electronMacArtifacts,
   electronMacFeed,
@@ -29,8 +33,13 @@ import {
   nativeMacFeedUrl,
   releaseManifest,
 } from './release-artifacts.mjs'
+import { APPCAST_USAGE, verifyNativeAppcast } from './verify-native-appcast.mjs'
+// The appcast's sparkle:version is the .app CFBundleVersion; the mapping must
+// stay single-sourced with the Swift builder (lockstep asserted below).
+import { bundleVersionFor } from '../../macos/scripts/build-swift-app.mjs'
 
 const script = fileURLToPath(new URL('./release-artifacts.mjs', import.meta.url))
+const appcastScript = fileURLToPath(new URL('./verify-native-appcast.mjs', import.meta.url))
 
 test('两族产物名不碰撞（-native 命名空间隔离）', () => {
   const electron = electronMacArtifacts('0.3.0')
@@ -192,6 +201,106 @@ test('--check-dir：清单成为真实消费者的断言，缺一即红（W-26 �
     // 纯函数面：缺失清单只含真正缺失的名字。
     assert.deepEqual(missingArtifacts(native, dir), [native[1]])
     assert.deepEqual(missingArtifacts(native, dir, () => true), [])
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// ------------------------------------------------- 2026-12 A2 appcast 本版本门禁
+// generate_appcast 的**真实输出形状**（0.3.2-beta.1 的线上 appcast 逐字段）：
+// item 元素 + <sparkle:version>（CFBundleVersion）+ <sparkle:shortVersionString>
+// + <enclosure url=... sparkle:edSignature=...>。
+function appcastItem({ version, bundleVersion, zip, prefix = 'https://github.com/o/r/releases/latest/download' }) {
+  return [
+    '        <item>',
+    `            <title>${version}</title>`,
+    '            <pubDate>Thu, 17 Sep 2026 02:17:15 +0000</pubDate>',
+    `            <sparkle:version>${bundleVersion}</sparkle:version>`,
+    `            <sparkle:shortVersionString>${version}</sparkle:shortVersionString>`,
+    '            <sparkle:minimumSystemVersion>14.4</sparkle:minimumSystemVersion>',
+    '            <sparkle:hardwareRequirements>arm64</sparkle:hardwareRequirements>',
+    `            <enclosure url="${prefix}/${zip}" length="83274334" type="application/octet-stream" sparkle:edSignature="sig"/>`,
+    '        </item>',
+  ].join('\n')
+}
+function appcastXml(...items) {
+  return [
+    '<?xml version="1.0" standalone="yes"?>',
+    '<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">',
+    '    <channel>',
+    '        <title>dsh-chamber-native</title>',
+    ...items,
+    '    </channel>',
+    '</rss>',
+  ].join('\n')
+}
+
+test('appcast 本版本断言：命中本版本 item 的 sparkle:version + enclosure（A2）', () => {
+  const version = '0.4.0'
+  const zip = nativeMacArtifacts(version)[1]
+  const xml = appcastXml(appcastItem({ version, bundleVersion: bundleVersionFor(version), zip }))
+  const advertised = assertAppcastAdvertises(xml, { version, sparkleVersion: bundleVersionFor(version) })
+  assert.equal(advertised.sparkleVersion, '0.4.0.999999999')
+  assert.ok(advertised.enclosure.endsWith(`/${zip}`))
+
+  // beta appcast 同时收「最新 final + 当前 beta」：断言当前 beta 那一条。
+  const betaVersion = '0.4.0-beta.3'
+  const betaZip = nativeMacArtifacts(betaVersion)[1]
+  const betaXml = appcastXml(
+    appcastItem({ version, bundleVersion: bundleVersionFor(version), zip }),
+    appcastItem({ version: betaVersion, bundleVersion: bundleVersionFor(betaVersion), zip: betaZip }),
+  )
+  assert.equal(
+    assertAppcastAdvertises(betaXml, { version: betaVersion, sparkleVersion: bundleVersionFor(betaVersion) }).sparkleVersion,
+    '0.4.0.3',
+  )
+
+  // 解析辅助：item/字段/enclosure 拆分与属性形兼容。
+  assert.equal(appcastItems(betaXml).length, 2)
+  assert.equal(appcastSparkleField(appcastItems(betaXml)[1], 'version'), '0.4.0.3')
+  assert.equal(appcastEnclosureUrls(appcastItems(betaXml)[1])[0], `https://github.com/o/r/releases/latest/download/${betaZip}`)
+  const attributeForm = '<item><enclosure url="https://o/r/x.zip" sparkle:version="1.2.3"/></item>'
+  assert.equal(appcastSparkleField(appcastItems(attributeForm)[0], 'version'), '1.2.3')
+})
+
+test('appcast 本版本断言 fail-closed 的每种形态（A2）', () => {
+  const version = '0.4.0'
+  const zip = nativeMacArtifacts(version)[1]
+  const bundle = bundleVersionFor(version)
+  const good = appcastItem({ version, bundleVersion: bundle, zip })
+  for (const [name, xml] of [
+    ['空 appcast', ''],
+    ['没有 item', appcastXml()],
+    ['没有本版本条目（beta 只宣传别人）', appcastXml(appcastItem({ version: '0.3.9', bundleVersion: '0.3.9.999999999', zip: 'old.zip' }))],
+    ['sparkle:version 不是 CFBundleVersion（旧映射）', appcastXml(appcastItem({ version, bundleVersion: version, zip }))],
+    ['enclosure 指向别的归档', appcastXml(appcastItem({ version, bundleVersion: bundle, zip: 'other.zip' }))],
+    ['shortVersionString 缺失', appcastXml(good.replace(`<sparkle:shortVersionString>${version}</sparkle:shortVersionString>`, ''))],
+  ]) {
+    assert.throws(() => assertAppcastAdvertises(xml, { version, sparkleVersion: bundle }), /appcast/, name)
+  }
+})
+
+test('verify-native-appcast CLI：本版本命中即 0，缺 / 错即非零（A2 发布腿门禁）', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-native-appcast-'))
+  try {
+    const version = '0.4.0-beta.3'
+    const zip = nativeMacArtifacts(version)[1]
+    const file = join(dir, 'appcast-swift-beta.xml')
+    writeFileSync(file, appcastXml(
+      appcastItem({ version, bundleVersion: bundleVersionFor(version), zip, prefix: `https://github.com/o/r/releases/download/${NATIVE_BETA_ROLLING_TAG}` }),
+    ))
+    assert.equal(verifyNativeAppcast(version, file).sparkleVersion, '0.4.0.3')
+    const ok = execFileSync(process.execPath, [appcastScript, version, file], { encoding: 'utf8' })
+    assert.match(ok, /appcast 本版本门禁通过：0\.4\.0-beta\.3（sparkle:version 0\.4\.0\.3）/)
+    // 版本不匹配：脚本非零退出（发布腿 fail-closed）。
+    const wrong = spawnSync(process.execPath, [appcastScript, '0.4.0', file], { encoding: 'utf8' })
+    assert.notEqual(wrong.status, 0)
+    assert.match(wrong.stderr, /appcast 本版本门禁失败/)
+    // 文件缺失/参数错误同样非零。
+    assert.equal(spawnSync(process.execPath, [appcastScript, version, join(dir, 'missing.xml')]).status, 1)
+    const usage = spawnSync(process.execPath, [appcastScript, version], { encoding: 'utf8' })
+    assert.equal(usage.status, 1)
+    assert.equal(usage.stderr.trim(), APPCAST_USAGE)
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

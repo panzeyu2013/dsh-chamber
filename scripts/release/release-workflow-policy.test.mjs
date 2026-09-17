@@ -243,6 +243,14 @@ assert.match(appcastStep, /if: \$\{\{ github\.event\.inputs\.dry_run != 'true' \
   'the appcast step is release-only: the dry run must skip it')
 assert.match(appcastStep, /::warning::SPARKLE_PRIVATE_KEY absent/,
   'a missing SPARKLE_PRIVATE_KEY must skip loudly, never publish an unsigned appcast')
+// 2026-12 A2 key gate. A keyless repo keeps the loud skip above; a repo whose
+// PUBLIC key is configured but whose private key is missing would ship a shell
+// polling a feed nobody signs ("release green, clients never see an update") —
+// that arm must FAIL, and the check must read the public key to see it.
+assert.match(appcastStep, /::error::SPARKLE_PUBLIC_ED_KEY is configured but SPARKLE_PRIVATE_KEY is missing/,
+  'public key without private key must fail closed, never ship a dead update chain')
+assert.match(appcastStep, /SPARKLE_PUBLIC_ED_KEY: \$\{\{ secrets\.SPARKLE_PUBLIC_ED_KEY \}\}/,
+  'the appcast step must receive the public key so the inconsistent-key arm is reachable')
 assert.ok(appcastStep.includes('ZIP="${BASE}.zip"'),
   'the appcast must sign the final distribution zip path (BASE = the artifact basename)')
 const appcastZipGuard = appcastStep.indexOf('test -f "$ZIP"')
@@ -302,8 +310,7 @@ assert.equal(nativeEnclosureUrl(stableZip, nativeMacFeedUrl('0.3.2', 'panzeyu201
 
 // Staging: the signed beta zip always enters the generate_appcast input dir, and
 // a beta release also pulls the latest final native zip from releases/latest so
-// the beta appcast carries the final item too (S-22/S-23). A missing final zip
-// degrades loudly, never fails the beta.
+// the beta appcast carries the final item too (S-22/S-23).
 assert.ok(appcastStep.includes('cp "$ZIP" /tmp/appcast-in/'),
   'the final signed beta zip must be staged into the appcast input dir (S-36)')
 assert.ok(appcastStep.includes(`--pattern '${NATIVE_STABLE_ZIP_PATTERN}'`),
@@ -312,8 +319,31 @@ assert.ok(appcastStep.includes('gh release download "$STABLE_TAG"'),
   'the final zip must actually be fetched from the latest release')
 assert.ok(appcastStep.includes('repos/${GITHUB_REPOSITORY}/releases/latest'),
   'the final tag must come from /releases/latest (never an implicit/possibly-prerelease latest)')
-assert.match(appcastStep, /::warning::latest final release 没有可下载的 native zip/,
-  'a missing final native zip must degrade loudly, never fail the beta release')
+// 2026-12 A2 fail-closed rewrite of that staging. Exactly ONE degradation stays
+// allowed, and it is mechanically observable: the latest final release carries
+// NO native zip asset at all (the native chain has never produced a final — the
+// v0.3.1 state). Every other outcome fails closed while the EdDSA key is
+// configured: an unresolvable /releases/latest (non-404), an unreadable asset
+// list, or a download that fails although the asset exists. The old single
+// warning swallowed all of them into "release green, feed incomplete".
+assert.match(appcastStep, /::warning::latest final release [^\n]*没有 native zip/,
+  'only "no native zip exists upstream" may degrade, and it must be loud')
+assert.match(appcastStep, /::error::[^\n]*有 native zip 但下载失败/,
+  'an existing final native zip that fails to download must fail closed')
+assert.match(appcastStep, /::error::解析 \/releases\/latest 失败（非 404）/,
+  'a non-404 latest-release resolution failure must fail closed')
+assert.ok(appcastStep.includes('--json assets'),
+  'the asset list must be read (a failing read fails the step) before deciding to degrade')
+assert.match(appcastStep, /if STABLE_TAG="\$\(gh api/,
+  'the /releases/latest lookup must distinguish 404 (no final release) from real failures')
+assert.match(appcastStep, /elif grep -q 'Not Found' \/tmp\/stable-latest\.err/,
+  'only an explicit 404 may be treated as "no final release yet"')
+// 2026-12 A2 content gate: the generated appcast merely EXISTING was the whole
+// assertion; the signed feed must be proven to advertise THIS version
+// (sparkle:shortVersionString + sparkle:version = the .app CFBundleVersion +
+// its zip enclosure) before it is copied and uploaded.
+assert.match(appcastStep, /node scripts\/release\/verify-native-appcast\.mjs "\$VERSION" \/tmp\/appcast-out\/appcast\.xml/,
+  'the signed appcast must be proven to carry this version before it is uploaded')
 
 // Generation: exactly one generate_appcast call, without a prefix for stable and
 // with the rolling prefix for beta (the guarded bash-3.2 array expansion keeps
@@ -393,8 +423,14 @@ assert.ok(uploadStep.includes('STAGED_ZIP="/tmp/appcast-in/$(basename "${BASE}.z
   'the appcast-referenced beta zip must be located by its exact basename')
 assert.match(uploadStep, /::error::appcast 引用的 beta zip 不在收件目录/,
   'an appcast whose staged zip vanished must fail closed, never publish a 404 enclosure')
-assert.match(uploadStep, /::warning::beta appcast 缺失/,
+// 2026-12 A2 key gate, both arms in the UPLOAD step too: the keyless repo
+// keeps the loud skip (release still ships without an install leg), but a
+// CONFIGURED private key with a missing appcast is a broken chain (the appcast
+// step must have failed already) and must never be silently skipped.
+assert.match(uploadStep, /::warning::beta appcast 缺失（SPARKLE_PRIVATE_KEY 未配置）/,
   'a missing SPARKLE_PRIVATE_KEY stays a loud skip (release still ships)')
+assert.match(uploadStep, /::error::SPARKLE_PRIVATE_KEY 已配置但 \$BETA_APPCAST 缺失/,
+  'a configured key with no beta appcast must fail closed, never skip the rolling publish')
 
 // S-23: a FINAL release also refreshes the rolling beta appcast (preserving the
 // newest beta item), so a beta client discovers the final version even when the
@@ -404,8 +440,14 @@ assert.match(uploadStep, /::warning::beta appcast 缺失/,
 // the stable appcast asset itself is never rewritten (byte-identical channel).
 assert.ok(uploadStep.includes('STABLE_APPCAST="macos/release/appcast-swift.xml"'),
   'the stable branch must gate the rolling refresh on the generated stable appcast')
-assert.match(uploadStep, /::warning::stable appcast 缺失/,
+assert.match(uploadStep, /::warning::stable appcast 缺失（SPARKLE_PRIVATE_KEY 未配置）/,
   'a missing stable appcast (no private key) must skip the refresh loudly, never red the release')
+assert.match(uploadStep, /::error::SPARKLE_PRIVATE_KEY 已配置但 \$STABLE_APPCAST 缺失/,
+  'a configured key with no stable appcast must fail closed, never skip the refresh silently')
+// A2 content gate: the refreshed rolling appcast must ALSO advertise this final
+// version (final item + its zip enclosure) — test -f alone proved nothing.
+assert.match(uploadStep, /node scripts\/release\/verify-native-appcast\.mjs "\$VERSION" \/tmp\/appcast-stable-refresh-out\/appcast\.xml/,
+  'the refreshed rolling appcast must be proven to carry this version before upload')
 assert.ok(uploadStep.includes('BETA_ZIP_NAME=') && uploadStep.includes('--json assets')
   && uploadStep.includes('sort -V'),
   'the refresh must preserve the newest beta zip item held by the rolling release')
@@ -719,34 +761,56 @@ assert.equal(
   undefined,
   'formal desktop builds must not trust a committed third-party Electron mirror',
 )
-// S-30: without an explicit mac.minimumSystemVersion the Electron flavor inherits
-// the Electron runtime's floor (12.0 in Electron 43.x) while the Swift shell
-// declares 13.0 (Info.plist.template / Package.swift) — one support matrix, one
-// floor. Both flavors ship from the same tag, so the native release carries the
-// SAME 13.0 floor: pin the Electron declaration, the Swift plist and the SwiftPM
-// platform together. There is no macOS 12 fallback on either leg — raising the
-// floor is a deliberate edit in all three places.
+// S-30 support-matrix floor: the native shell runs the SHIPPED BUNDLE on the OS
+// WebKit, so the floor is the JS baseline that bundle needs — not the Electron
+// runtime's own floor (12.0 in Electron 43.x). The bundle calls
+// Promise.withResolvers unconditionally (approval / user-question / PDF-preview
+// construction paths, A3-1) and that API first ships in Safari 17.4 / macOS 14.4,
+// so 13.x and 14.0–14.3 are unservable and the floor is 14.4. Both flavors ship
+// from the same tag, so Electron must declare the SAME floor: pin the Electron
+// declaration, the Swift plist and the SwiftPM platform together. There is no
+// pre-14.4 fallback on either leg — raising the floor is a deliberate edit in all
+// three places. SwiftPM can only name a major (.macOS(.v14)); the plist carries
+// the EXACT 14.4, so the plist assertion below is the exact-floor check.
 const nativeInfoPlistTemplate = readFileSync(new URL('../../macos/Info.plist.template', import.meta.url), 'utf8')
 const swiftPackageManifest = readFileSync(new URL('../../macos/Package.swift', import.meta.url), 'utf8')
 assert.equal(
   desktopPackage.build?.mac?.minimumSystemVersion,
-  '13.0',
-  'the Electron flavor must declare the native macOS floor 13.0 (S-30)',
+  '14.4',
+  'the Electron flavor must declare the native macOS floor 14.4 (S-30)',
 )
 assert.match(
   nativeInfoPlistTemplate,
-  /<key>LSMinimumSystemVersion<\/key>\s*<string>13\.0<\/string>/,
-  'the native .app must carry LSMinimumSystemVersion 13.0 (the release floor)',
+  /<key>LSMinimumSystemVersion<\/key>\s*<string>14\.4<\/string>/,
+  'the native .app must carry the exact LSMinimumSystemVersion 14.4 (the release floor)',
 )
 assert.match(
   swiftPackageManifest,
-  /\.macOS\(\.v13\)/,
-  'the Swift package must declare the same macOS 13 floor as the shipped plist',
+  /\.macOS\(\.v14\)/,
+  'the Swift package must declare the same macOS floor (.v14) as the shipped plist',
 )
-assert.doesNotMatch(nativeInfoPlistTemplate, /<string>12\.0<\/string>/,
-  'no macOS 12 fallback may be reintroduced in the native plist')
-assert.doesNotMatch(swiftPackageManifest, /\.macOS\(\.v12\)/,
-  'no macOS 12 fallback may be reintroduced in the Swift package')
+assert.doesNotMatch(nativeInfoPlistTemplate, /<string>1[23]\.0<\/string>/,
+  'no pre-14.4 fallback may be reintroduced in the native plist')
+assert.doesNotMatch(swiftPackageManifest, /\.macOS\(\.v1[23]\)/,
+  'no pre-14.4 fallback may be reintroduced in the Swift package')
+// A1: app-builder-lib keeps a locale only when wanted === basename or
+// wanted.startsWith(basename + '-' | '_') (ElectronFramework.js:81-88). Mac
+// locale dirs are named <locale>.lproj with an UNDERSCORE (zh_CN.lproj; verified
+// against the pinned Electron dist), so the hyphenated "zh-CN" that works for the
+// win/linux locales/*.pak legs can never match it and silently deletes the
+// packaged Chinese resources. The mac leg therefore overrides electronLanguages
+// with the real lproj basenames; the top-level value keeps the hyphenated
+// spelling for the .pak legs.
+assert.ok(
+  Array.isArray(desktopPackage.build?.mac?.electronLanguages)
+  && desktopPackage.build.mac.electronLanguages.includes('zh_CN'),
+  'the mac leg must declare the real lproj basename zh_CN (zh-CN never matches zh_CN.lproj)',
+)
+assert.ok(
+  Array.isArray(desktopPackage.build?.electronLanguages)
+  && desktopPackage.build.electronLanguages.includes('zh-CN'),
+  'the win/linux .pak legs keep the hyphenated zh-CN spelling',
+)
 
 // Every build job (build-gateway / build-macos / build-windows / build-linux /
 // build-swift)
@@ -839,6 +903,19 @@ assert.equal(
   'failed',
   'a step the classifier skipped does not prove that gate ran on the release commit',
 )
+// A2 high: the mac packaging rehearsal is in the required table, so a run whose
+// rehearsal was deleted (or classifier-skipped on a prose-only push) fails the
+// proof even with all three jobs green — the release can no longer ship a mac
+// pack no push-path gate ever exercised.
+assert.equal(
+  judgeRun(GREEN_RUN, [
+    job('test', 'success'),
+    job('test-windows', 'success'),
+    jobWithoutStep('test-macos', 'macOS packaging rehearsal (ad-hoc, no publish, no credentials)'),
+  ]).state,
+  'failed',
+  'deleting the mac packaging rehearsal step must fail the release proof',
+)
 assert.equal(
   judgeRun(GREEN_RUN, [
     { name: 'test', conclusion: 'success' },
@@ -894,6 +971,35 @@ assert.ok(
   REQUIRED_JOB_STEPS['test-macos'].includes('Compiled sidecar smoke (shipped sidecar.js executes)'),
   'the proof must require the step that executes the shipped sidecar',
 )
+// A2 高危: the Electron mac pack used to be first really executed inside
+// release.yml (after the draft existed, with the Apple credentials loaded) —
+// both real failures of the 0.3.2-beta series landed there. ci.yml now
+// rehearses the exact chain on an ordinary main push, and the release proof
+// must require that rehearsal by name (a deleted or classifier-skipped
+// rehearsal then fails the proof instead of silently shrinking the coverage).
+// Pin the shape that makes it a rehearsal and not a second release: push-only,
+// classifier-gated, ad-hoc (no identity auto-discovery), --publish=never, and
+// no notarization/upload command anywhere in the step.
+const MAC_REHEARSAL_STEP = 'macOS packaging rehearsal (ad-hoc, no publish, no credentials)'
+assert.ok(
+  REQUIRED_JOB_STEPS['test-macos'].includes(MAC_REHEARSAL_STEP),
+  'G25/A2: the proof must require the mac packaging rehearsal step',
+)
+const macRehearsal = jobBlock(ciWorkflow, 'test-macos').slice(
+  jobBlock(ciWorkflow, 'test-macos').indexOf(`- name: ${MAC_REHEARSAL_STEP}`),
+)
+assert.notEqual(macRehearsal, '', 'ci.yml test-macos must define the mac packaging rehearsal step')
+assert.match(macRehearsal,
+  /if: github\.event_name == 'push' && github\.ref == 'refs\/heads\/main' && steps\.classify\.outputs\.code == 'true'/,
+  'the rehearsal is push-only and classifier-gated: never minutes of packaging per pull request')
+assert.match(macRehearsal, /CSC_IDENTITY_AUTO_DISCOVERY: 'false'/,
+  'the rehearsal must never pick up a runner keychain identity (afterPack ad-hoc signs)')
+assert.ok(
+  macRehearsal.includes('pnpm --filter @dsh-chamber/desktop exec electron-builder --mac --arm64 --publish=never'),
+  'the rehearsal must run the release packaging invocation with --publish=never',
+)
+assert.doesNotMatch(macRehearsal, /--publish=always|notarytool|gh release upload/,
+  'the rehearsal must not publish, notarize or upload anything')
 // G32: the two EXECUTED-assembly gates are the only steps that prove the
 // shipped artifacts actually boot; a proof that watched only their ci.yml
 // presence would stay green after the step (or its build prerequisite) was

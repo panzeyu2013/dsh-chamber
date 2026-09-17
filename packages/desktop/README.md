@@ -78,7 +78,7 @@ pnpm run dist:desktop
 ### electron-builder 配置要点（packages/desktop/package.json 的 `build` 键）
 
 - `files` 只收主进程/预加载/transport/settings/plugin-sync 源文件、package.json 与 dist（vendor 与 scripts 不进 asar；`node_modules/@dsh-chamber/control-plane` 显式排除）；`vendor/dsh` 经两个精确的 `extraResources` FileSet 拷入产物：根 manifest/lock/workspace 文件一组，`vendor/dsh/node_modules` 作为独立复制根一组（electron-builder 会无条件忽略任一 FileSet 根下名为 `node_modules` 的直接子目录，不能只复制 `vendor/dsh`）。`afterPack` 在生成 DMG/ZIP/NSIS 前校验 dsh package manifest、版本与目标平台，缺失/漂移直接使打包失败；暂存树和交换备份不会进入产物。
-- `electronLanguages: ["en-US", "zh-CN"]` 裁剪 locales。
+- `electronLanguages: ["en-US", "zh-CN"]` 裁剪 locales；mac 腿另有 `build.mac.electronLanguages: ["en","zh_CN"]`——`zh-CN` 匹配不到实际目录 `zh_CN.lproj`，app-builder-lib 会静默删除中文 `locale.pak`（S-47）。
 - **更新 feed（设计 11 §6）**：stable 使用 package 默认 GitHub publish 配置且只产 `latest.yml`/`latest-mac.yml`；SemVer beta 使用独立 `electron-builder.beta.yml`（经 `electron-builder.base.cjs` 继承同一 files/signing/runtime 配置）且只产 `beta.yml`/`beta-mac.yml`，发布策略测试同时做另一通道缺失断言。mac target 增加 `zip`（electron-updater mac 需要，dmg 保留首装）；`nsis.differentialPackage: false`（Windows 无 exe blockmap，更新全量下载）。`--publish=never` 不生成 update-info yml。
 - **公开 release fail-closed**：正式 macOS 缺少五项签名/公证凭据时在任何 Release mutation 前阻断；构建后必须通过 Developer ID、公证、stapler 与 spctl 才能公开 finalize。dry-run 即使正式 secrets 已配置也强制清空签名/Apple 环境与 `GH_TOKEN`，只产 ad-hoc 包，且不创建/修改 Release、不上传资产。Windows 首版未签名，SmartScreen 是明确让步（设计 11 §7）。
 

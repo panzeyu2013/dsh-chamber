@@ -9,16 +9,24 @@ import {
   ELECTRON_PAYLOAD_REQUIRED,
   MAC_DISABLE_LIBRARY_VALIDATION,
   MAC_ENTITLEMENTS_PATH,
+  MAC_FRAMEWORK_LOCALES_RELATIVE,
   PACKAGED_PNPM_VERSION,
   PACKAGED_RUNTIME_MODULES,
+  configuredElectronLanguages,
   electronPayloadEntries,
+  localeStemMatches,
   macAdhocSignArgs,
+  packagedLocaleStems,
   verifyMacEntitlementsFile,
   verifyPackagedDshRuntime,
   verifyPackagedElectronPayload,
+  verifyPackagedMacLocales,
   verifyPackagedRuntimeSupport,
   verifySignedMacEntitlements,
 } from './after-pack-adhoc-sign.mjs';
+// The executed-artifact gate discovers a staged product itself; its discovery
+// helper is asserted here so the packaging suite keeps it covered (2026-12 A1/F3).
+import { MAC_APP_ENV, resolvePackagedMacApp } from '../../../scripts/gates/verify-electron-artifacts.mjs';
 // Cross-module pin lockstep (G18): the Swift sidecar assembly reads the same
 // desktop manifest field, so a drift between the two builds fails HERE.
 import { PNPM_PINNED_VERSION } from './build-sidecar.mjs';
@@ -332,6 +340,164 @@ test('mac signing config and ad-hoc fallback share the explicit native-module en
     MAC_ENTITLEMENTS_PATH,
     '/tmp/dsh-chamber.app',
   ]);
+});
+
+/** 合成一个 electron-builder 形状的 mac .app：framework 的 .lproj/<locale>.pak。 */
+function macAppFixture(locales = ['en', 'zh_CN'], { localePakBytes = 64 } = {}) {
+  const appPath = mkdtempSync(path.join(tmpdir(), 'dsh-chamber-mac-app-'));
+  const localesDir = path.join(appPath, MAC_FRAMEWORK_LOCALES_RELATIVE);
+  for (const stem of locales) {
+    mkdirSync(path.join(localesDir, `${stem}.lproj`), { recursive: true });
+    writeFileSync(path.join(localesDir, `${stem}.lproj`, 'locale.pak'), Buffer.alloc(localePakBytes, 1));
+  }
+  return appPath;
+}
+
+test('locale matcher mirrors app-builder-lib and accepts Electron underscore spellings (A1/F3)', () => {
+  // app-builder-lib's matcher: exact, or wanted.startsWith(language + '-'/'_').
+  assert.equal(localeStemMatches('en', 'en-US'), true, 'en.lproj is Electron shipping for en-US');
+  assert.equal(localeStemMatches('zh_cn', 'zh_CN'), true, 'the fixed config form');
+  assert.equal(localeStemMatches('zh_cn', 'zh-CN'), true, 'BCP-47 spelling names the same language');
+  assert.equal(localeStemMatches('zh', 'zh_CN'), true, 'a zh resource satisfies the zh_CN request only through prefix');
+  assert.equal(localeStemMatches('zh_cn', 'zh-TW'), false, 'traditional Chinese is a different resource');
+  assert.equal(localeStemMatches('', 'zh_CN'), false);
+  assert.equal(localeStemMatches('en', ''), false);
+});
+
+test('packaged locale stems list .lproj dirs and tolerate an absent framework dir', () => {
+  const appPath = macAppFixture(['en', 'zh_CN', 'ja']);
+  try {
+    const stems = packagedLocaleStems(path.join(appPath, MAC_FRAMEWORK_LOCALES_RELATIVE));
+    assert.deepEqual(stems.map((entry) => entry.name).sort(), ['en', 'ja', 'zh_CN']);
+    assert.deepEqual(packagedLocaleStems(path.join(appPath, 'missing')), []);
+  } finally {
+    rmSync(appPath, { recursive: true, force: true });
+  }
+});
+
+test('packaged locale assertion passes when every declared locale survives (A1/F3)', () => {
+  for (const wanted of [['en-US', 'zh_CN'], ['en-US', 'zh-CN']]) {
+    const appPath = macAppFixture(['en', 'zh_CN']);
+    try {
+      assert.deepEqual(verifyPackagedMacLocales(appPath, { wantedLanguages: wanted }).checked, wanted);
+    } finally {
+      rmSync(appPath, { recursive: true, force: true });
+    }
+  }
+});
+
+test('packaged locale assertion fails closed when electronLanguages deleted a declared locale (A1 regression)', () => {
+  // The A1 shape: config said zh-CN, app-builder-lib deleted zh_CN.lproj.
+  const appPath = macAppFixture(['en']);
+  try {
+    assert.throws(
+      () => verifyPackagedMacLocales(appPath, { wantedLanguages: ['en-US', 'zh_CN'] }),
+      /lost configured locale resources: zh_CN[\s\S]*framework \.lproj on disk: \[en\]/,
+    );
+    assert.throws(
+      () => verifyPackagedMacLocales(appPath, { wantedLanguages: ['en-US', 'zh-CN'] }),
+      /build\.electronLanguages entries in Electron's own spelling/,
+    );
+  } finally {
+    rmSync(appPath, { recursive: true, force: true });
+  }
+});
+
+test('packaged locale assertion rejects an empty locale.pak and a missing framework dir', () => {
+  const emptyPakApp = macAppFixture(['en', 'zh_CN'], { localePakBytes: 0 });
+  try {
+    assert.throws(
+      () => verifyPackagedMacLocales(emptyPakApp, { wantedLanguages: ['zh_CN'] }),
+      /zh_CN .*locale\.pak/,
+    );
+  } finally {
+    rmSync(emptyPakApp, { recursive: true, force: true });
+  }
+  const bareApp = mkdtempSync(path.join(tmpdir(), 'dsh-chamber-mac-bare-'));
+  try {
+    assert.throws(
+      () => verifyPackagedMacLocales(bareApp, { wantedLanguages: ['zh_CN'] }),
+      /lost configured locale resources/,
+    );
+  } finally {
+    rmSync(bareApp, { recursive: true, force: true });
+  }
+});
+
+test('no declared electronLanguages means no cleanup: the locale assertion is a no-op', () => {
+  const appPath = macAppFixture(['en']);
+  try {
+    assert.deepEqual(verifyPackagedMacLocales(appPath, { wantedLanguages: [] }), { checked: [] });
+    assert.deepEqual(configuredElectronLanguages({ build: {} }), []);
+    assert.deepEqual(configuredElectronLanguages({ build: { electronLanguages: [' en-US ', '', 'zh_CN'] } }),
+      ['en-US', 'zh_CN']);
+    // electron-builder resolves platformSpecificBuildOptions.electronLanguages
+    // BEFORE the top-level list — the mac leg overrides with the real .lproj
+    // basenames (underscore) while win/linux keep the hyphenated .pak spelling.
+    assert.deepEqual(
+      configuredElectronLanguages({ build: { electronLanguages: ['zh-CN'], mac: { electronLanguages: ['zh_CN'] } } }),
+      ['zh_CN'],
+    );
+    assert.deepEqual(
+      configuredElectronLanguages({ build: { electronLanguages: ['zh-CN'], mac: { electronLanguages: ['zh_CN'] } } }, 'win32'),
+      ['zh-CN'],
+    );
+    // The shipped manifest is the gate's expectation source: whatever it
+    // declares must be well-formed for both platform resolutions (the mac leg
+    // reads build.mac.electronLanguages, win/linux the top-level list).
+    for (const platform of ['darwin', 'win32']) {
+      const declared = configuredElectronLanguages(undefined, platform);
+      assert.ok(Array.isArray(declared));
+      assert.ok(declared.every((entry) => entry !== '' && entry.trim() === entry),
+        `build.electronLanguages entries for ${platform} must be non-empty trimmed strings`);
+    }
+  } finally {
+    rmSync(appPath, { recursive: true, force: true });
+  }
+});
+
+test('afterPack runs the packaged locale assertion on darwin products', () => {
+  const source = readFileSync(new URL('./after-pack-adhoc-sign.mjs', import.meta.url), 'utf8');
+  const hook = source.slice(source.indexOf('export default async function afterPackAdhocSign'));
+  assert.match(hook, /verifyPackagedMacLocales\(appPath\)/,
+    'the darwin afterPack hook must run the locale assertion fail-closed');
+});
+
+test('executed-artifact gate discovers the staged mac product (or an explicit override)', () => {
+  const releaseDir = mkdtempSync(path.join(tmpdir(), 'dsh-chamber-release-'));
+  try {
+    assert.equal(resolvePackagedMacApp({}, releaseDir), null, 'an empty output dir stages no product');
+    mkdirSync(path.join(releaseDir, 'win-unpacked', 'dsh-chamber.app'), { recursive: true });
+    assert.equal(resolvePackagedMacApp({}, releaseDir), null, 'a win32 product is not a mac product');
+    const appPath = path.join(releaseDir, 'mac-arm64', 'dsh-chamber.app');
+    mkdirSync(appPath, { recursive: true });
+    assert.equal(resolvePackagedMacApp({}, releaseDir), appPath);
+    assert.equal(resolvePackagedMacApp({ [MAC_APP_ENV]: appPath }, releaseDir), appPath);
+    assert.throws(
+      () => resolvePackagedMacApp({ [MAC_APP_ENV]: path.join(releaseDir, 'gone.app') }, releaseDir),
+      /points at a missing app bundle/,
+      'an explicitly named product that vanished must fail, never silently skip',
+    );
+    assert.equal(resolvePackagedMacApp({}, path.join(releaseDir, 'absent')), null);
+  } finally {
+    rmSync(releaseDir, { recursive: true, force: true });
+  }
+});
+
+test('a real staged mac product, when present, satisfies the locale assertion (loud skip otherwise) (A1/F3)', () => {
+  const releaseDir = fileURLToPath(new URL('../release', import.meta.url));
+  let appPath = null;
+  if (existsSync(releaseDir)) {
+    for (const entry of readdirSync(releaseDir)) {
+      const candidate = path.join(releaseDir, entry, 'dsh-chamber.app');
+      if (entry.startsWith('mac') && existsSync(candidate)) { appPath = candidate; break; }
+    }
+  }
+  if (appPath === null) {
+    console.log(`SKIP: no staged mac product under ${releaseDir} — the locale assertion ran against fixtures here and runs fail-closed inside afterPack on a real pack`);
+    return;
+  }
+  assert.doesNotThrow(() => verifyPackagedMacLocales(appPath));
 });
 
 test('packaged signature assertion reads codesign output and fails closed without disable-library-validation', () => {

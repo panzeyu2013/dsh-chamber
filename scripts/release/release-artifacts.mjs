@@ -21,6 +21,9 @@
  * CLI：`node scripts/release/release-artifacts.mjs <version> [--check-dir <dir>]`。
  * `--check-dir` 进一步断言清单里的 native 产物确实存在于发布腿输出目录——
  * W-26 的真实消费者（release.yml 的 verify 步在上传前调用它，见脚本内注释）。
+ * 2026-12 A2 的 appcast 本版本门禁（sparkle:version = CFBundleVersion、enclosure
+ * = 本版本 zip，缺一即 FAIL）在 scripts/release/verify-native-appcast.mjs——它静态
+ * import build-swift-app 的映射；本模块只导出纯断言 assertAppcastAdvertises。
  */
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -123,6 +126,86 @@ export function nativeEnclosureUrl(archiveName, feedUrl, downloadPrefix = null) 
   return new URL(archiveName, downloadPrefix ?? feedUrl).toString()
 }
 
+/**
+ * appcast 的 <item> 块（generate_appcast 的输出不嵌套 <item>）。
+ *
+ * 期望的 `sparkle:version`（CFBundleVersion 映射）由调用方传入：单一来源是
+ * macos/scripts/build-swift-app.mjs 的 bundleVersionFor，它同时写进 .app 的
+ * Info.plist（Sparkle 用 CFBundleVersion 比较版本）。scripts/release/
+ * verify-native-appcast.mjs 是本断言的 CLI 消费者——它静态 import 那份映射，
+ * 绝不在本模块里动态 import build-swift-app：那会在 CLI 入口构成
+ * top-level-await 环（本模块被 build-swift-app 静态依赖），直接 deadlock。
+ */
+export function appcastItems(xml) {
+  return [...xml.matchAll(/<item>([\s\S]*?)<\/item>/g)].map((match) => match[1])
+}
+
+/**
+ * 取一条 item 里的 sparkle 字段：元素形（`<sparkle:x>v</sparkle:x>`，generate_appcast
+ * 的输出版本）或属性形（`sparkle:x="v"`，Sparkle 1.x 的 enclosure 形状）。
+ * @returns 字段值，缺失时 null。
+ */
+export function appcastSparkleField(item, field) {
+  const element = new RegExp(`<sparkle:${field}>([^<]*)</sparkle:${field}>`).exec(item)
+  if (element !== null) return element[1].trim()
+  const attribute = new RegExp(`\\bsparkle:${field}="([^"]*)"`).exec(item)
+  return attribute === null ? null : attribute[1].trim()
+}
+
+/** 一条 item 引用的 enclosure URL（可多条：zip 与 delta）。 */
+export function appcastEnclosureUrls(item) {
+  return [...item.matchAll(/<enclosure\b[^>]*\burl="([^"]+)"/g)].map((match) => match[1])
+}
+
+/**
+ * 发布物门禁（A2 中危，fail-closed）：appcast 必须真实宣传**本版本**。
+ *
+ * "generate_appcast 产出了文件"不等于客户端能看到这次更新：它可能只为别的归档
+ * 生成条目，或本版本的 sparkle:version 与 Info.plist 的 CFBundleVersion 不一致
+ * （Sparkle 用后者比较版本——错了就是"发布成功、永远不提示更新"）。断言要求同一
+ * 条 item 同时满足：
+ *   1. `sparkle:shortVersionString` == 发布版本（人类可读版本号）；
+ *   2. `sparkle:version` == 调用方传入的 CFBundleVersion（build-swift-app 的
+ *      bundleVersionFor(version)，Sparkle 的升级比较字段）；
+ *   3. enclosure 至少有一条 URL 指向本版本的 zip 文件名。
+ * 任一缺失即抛错——调用方（release.yml 的 appcast 步与滚动 beta 刷新）必须 FAIL。
+ * @param xml - appcast 文件内容。
+ * @param input - `{ version, sparkleVersion, archiveName? }`。
+ * @returns 命中条目的事实（版本/比较字段/enclosure）。
+ */
+export function assertAppcastAdvertises(xml, { version, sparkleVersion, archiveName = nativeMacArtifacts(version)[1] }) {
+  if (typeof xml !== 'string' || xml.trim() === '') {
+    throw new Error(`appcast 为空（或不可读）——无法断言 ${version} 的条目/enclosure 已被签名发布`)
+  }
+  const items = appcastItems(xml)
+  if (items.length === 0) {
+    throw new Error(`appcast 没有任何 <item>——${version} 没有被这次发布宣传`)
+  }
+  const isVersionArchive = (url) => url.endsWith(`/${archiveName}`) || url === archiveName
+  const matched = items.find((item) => {
+    if (appcastSparkleField(item, 'shortVersionString') !== version) return false
+    if (sparkleVersion !== null && sparkleVersion !== undefined
+      && appcastSparkleField(item, 'version') !== sparkleVersion) return false
+    return appcastEnclosureUrls(item).some(isVersionArchive)
+  })
+  if (matched === undefined) {
+    const found = items.map((item) => {
+      const short = appcastSparkleField(item, 'shortVersionString') ?? '?'
+      const bundle = appcastSparkleField(item, 'version') ?? '?'
+      return `${short} (sparkle:version ${bundle})`
+    }).join('; ')
+    const expected = `sparkle:shortVersionString=${version}`
+      + (sparkleVersion === null || sparkleVersion === undefined ? '' : `、sparkle:version=${sparkleVersion}`)
+      + `、enclosure 指向 ${archiveName}`
+    throw new Error(`appcast 不含本版本的条目/enclosure（需要 ${expected}；appcast 条目：${found}）`)
+  }
+  return {
+    version,
+    sparkleVersion: appcastSparkleField(matched, 'version'),
+    enclosure: appcastEnclosureUrls(matched).find(isVersionArchive),
+  }
+}
+
 /** 两族产物名必须互不碰撞（防同 tag 上传互相覆盖/--clobber 误删）。 */
 export function assertNoCollision(left, right) {
   const overlap = left.filter((name) => right.includes(name))
@@ -153,6 +236,8 @@ export function missingArtifacts(names, dir, exists = existsSync) {
   return names.filter((name) => !exists(join(dir, name)))
 }
 
+const USAGE = '用法：release-artifacts.mjs <version> [--check-dir <dir>]'
+
 function main() {
   const argv = process.argv.slice(2)
   let version = null
@@ -162,7 +247,7 @@ function main() {
       checkDir = argv[index + 1] ?? null
       index += 1
       if (checkDir === null) {
-        console.error('用法：release-artifacts.mjs <version> [--check-dir <dir>]')
+        console.error(USAGE)
         process.exit(1)
       }
     } else if (version === null) {
@@ -173,7 +258,7 @@ function main() {
     }
   }
   if (version === null || version === '') {
-    console.error('用法：release-artifacts.mjs <version> [--check-dir <dir>]')
+    console.error(USAGE)
     process.exit(1)
   }
   const manifest = releaseManifest(version)

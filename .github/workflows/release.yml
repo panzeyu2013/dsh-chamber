@@ -1094,6 +1094,9 @@ jobs:
         if: ${{ github.event.inputs.dry_run != 'true' }}
         env:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          # 2026-12 A2：公钥决定壳内更新面是否打开（build-swift 注入 Info.plist）。
+          # 私钥缺失但公钥在 = 自相矛盾的更新链，本步必须 FAIL（见下）。
+          SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
           VERSION: ${{ needs.create-release.outputs.version }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -1109,7 +1112,16 @@ jobs:
             APPCAST="appcast-swift.xml"
             ROLLING_TAG=""
           fi
+          # 2026-12 A2 密钥门禁，两支都必须显式：
+          #   - 两把钥匙都缺 = 该仓库没有 Sparkle 更新链，保持 loud 降级（照常出包，
+          #     只是原生壳看不到这次更新）；
+          #   - 公钥在而私钥缺 = 壳会去轮询一个没人签的 feed（"发布成功但客户端永远
+          #     看不到更新"）——FAIL，绝不静默发布。
           if [[ -z "${SPARKLE_PRIVATE_KEY:-}" ]]; then
+            if [[ -n "${SPARKLE_PUBLIC_ED_KEY:-}" ]]; then
+              echo "::error::SPARKLE_PUBLIC_ED_KEY is configured but SPARKLE_PRIVATE_KEY is missing — this formal release would ship a shell polling a feed nobody signs; restore the private key or remove both secrets"
+              exit 1
+            fi
             echo "::warning::SPARKLE_PRIVATE_KEY absent — ${APPCAST} not generated; the native shell will not see this release through Sparkle"
             exit 0
           fi
@@ -1121,20 +1133,47 @@ jobs:
           cp "$ZIP" /tmp/appcast-in/
           # S-22/S-23：beta appcast 必须同时收当前 beta 与**最新 final**——beta 客户端的
           # SUFeedURL 只指滚动 tag，只收 beta 条目就永远看不到 stable（Electron beta 经
-          # latest.yml 回退能看到；原生腿补上同一可见性）。latest release 尚无 native zip
-          # （首次 beta / stable 还没出过原生包）→ loud 降级为只收 beta，绝不算发布失败。
+          # latest.yml 回退能看到；原生腿补上同一可见性）。
+          # 2026-12 A2 门禁：私钥已配置（上面已过门），这里的降级不再允许静默：
+          #   - 仓库还没有 final release，或最新 final 确实没有 native zip 资产
+          #     （原生链还没出过 final）→ loud 警告：没有可收的包，不是链路失败；
+          #   - 其它任何失败（/releases/latest 解析失败、资产在但下载失败）→ FAIL，
+          #     因为那会让 beta 客户端看不到 final（S-23 可见性断裂），而"发布成功
+          #     但客户端看不到更新"正是本门禁要消灭的形态。
           if [[ -n "$ROLLING_TAG" ]]; then
             # 显式走 /releases/latest（与稳定 feed 同一解析面：绝不含 prerelease/draft），
             # 不用 gh 的隐式 latest——beta 必须是稳定的 final，绝不能把某个 prerelease
             # 当成 final 收进 appcast。
-            STABLE_TAG="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name 2>/dev/null || true)"
-            if [[ -n "$STABLE_TAG" ]] && gh release download "$STABLE_TAG" \
-                 --repo "$GITHUB_REPOSITORY" \
-                 --pattern 'dsh-chamber-native-*-macos-arm64.zip' \
-                 --dir /tmp/appcast-in --clobber; then
-              echo "beta appcast 收件目录：$(ls /tmp/appcast-in | tr '\n' ' ')"
+            if STABLE_TAG="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name 2>/tmp/stable-latest.err)"; then
+              :
+            elif grep -q 'Not Found' /tmp/stable-latest.err; then
+              STABLE_TAG=""
             else
-              echo "::warning::latest final release 没有可下载的 native zip——beta appcast 仅含当前 beta（beta 客户端暂时看不到 final）"
+              echo "::error::解析 /releases/latest 失败（非 404）——拒绝发布可能缺 final 条目的 beta appcast"
+              cat /tmp/stable-latest.err >&2
+              exit 1
+            fi
+            if [[ -z "$STABLE_TAG" ]]; then
+              echo "::warning::仓库尚无 final release——beta appcast 仅含当前 beta（首个 final 出原生包后这里必须收件）"
+            else
+              # 先列出资产（失败即红）再决定：只有"确实没有 native zip 资产"才允许降级。
+              STABLE_ASSETS="$(gh release view "$STABLE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+              STABLE_HAS_NATIVE_ZIP="false"
+              for ASSET in $STABLE_ASSETS; do
+                case "$ASSET" in
+                  dsh-chamber-native-*-macos-arm64.zip) STABLE_HAS_NATIVE_ZIP="true" ;;
+                esac
+              done
+              if [[ "$STABLE_HAS_NATIVE_ZIP" == "true" ]]; then
+                gh release download "$STABLE_TAG" \
+                  --repo "$GITHUB_REPOSITORY" \
+                  --pattern 'dsh-chamber-native-*-macos-arm64.zip' \
+                  --dir /tmp/appcast-in --clobber \
+                  || { echo "::error::latest final $STABLE_TAG 有 native zip 但下载失败——拒绝发布缺 final 条目的 beta appcast"; exit 1; }
+                echo "beta appcast 收件目录：$(ls /tmp/appcast-in | tr '\n' ' ')"
+              else
+                echo "::warning::latest final release $STABLE_TAG 没有 native zip（原生链尚未出过 final）——beta appcast 仅含当前 beta"
+              fi
             fi
           fi
           printf '%s' "$SPARKLE_PRIVATE_KEY" > /tmp/ed-key.txt
@@ -1154,6 +1193,11 @@ jobs:
           /tmp/sparkle-bin/bin/generate_appcast --ed-key-file /tmp/ed-key.txt ${PREFIX_ARGS[@]+"${PREFIX_ARGS[@]}"} -o /tmp/appcast-out/appcast.xml /tmp/appcast-in
           rm -f /tmp/ed-key.txt
           test -f /tmp/appcast-out/appcast.xml || { echo "::error::generate_appcast produced no appcast"; exit 1; }
+          # 2026-12 A2 发布物门禁：文件存在不等于宣传了本版本。断言同一条 item 同时
+          # 带 sparkle:shortVersionString=本版本、sparkle:version=本 .app 的
+          # CFBundleVersion（Sparkle 的升级比较字段）、以及指向本版本 zip 的
+          # enclosure——缺任一条即 FAIL（私钥已配置，客户端看不到更新不再允许只写日志）。
+          node scripts/release/verify-native-appcast.mjs "$VERSION" /tmp/appcast-out/appcast.xml
           cp /tmp/appcast-out/appcast.xml "macos/release/${APPCAST}"
           gh release upload "v${VERSION}" "macos/release/${APPCAST}" --clobber
           # S-22/S-36：beta 的**滚动发布**不在本步执行——rolling release 是公开面
@@ -1257,7 +1301,13 @@ jobs:
             BETA_APPCAST="macos/release/appcast-swift-beta.xml"
             STAGED_ZIP="/tmp/appcast-in/$(basename "${BASE}.zip")"
             if [[ ! -f "$BETA_APPCAST" ]]; then
-              echo "::warning::beta appcast 缺失（SPARKLE_PRIVATE_KEY 未配置或 appcast 步未运行）——跳过滚动发布"
+              # 2026-12 A2 密钥门禁：私钥在而 appcast 缺失 = appcast 步出事却没拦住
+              # （不该到达这里）——FAIL；两把钥匙都缺才是"没有更新链"的 loud 降级。
+              if [[ -n "${SPARKLE_PRIVATE_KEY:-}" ]]; then
+                echo "::error::SPARKLE_PRIVATE_KEY 已配置但 $BETA_APPCAST 缺失（appcast 步未产出）——拒绝静默跳过滚动发布"
+                exit 1
+              fi
+              echo "::warning::beta appcast 缺失（SPARKLE_PRIVATE_KEY 未配置）——跳过滚动发布"
             elif [[ ! -f "$STAGED_ZIP" ]]; then
               echo "::error::appcast 引用的 beta zip 不在收件目录（$STAGED_ZIP）——拒绝滚动发布"
               exit 1
@@ -1290,7 +1340,12 @@ jobs:
             ROLLING_TAG="${SPARKLE_BETA_ROLLING_TAG}"
             STABLE_APPCAST="macos/release/appcast-swift.xml"
             if [[ ! -f "$STABLE_APPCAST" ]]; then
-              echo "::warning::stable appcast 缺失（SPARKLE_PRIVATE_KEY 未配置或 appcast 步未运行）——跳过滚动 beta 通道刷新"
+              # 同上：私钥在而 stable appcast 缺失 = 必须 FAIL，不是跳过。
+              if [[ -n "${SPARKLE_PRIVATE_KEY:-}" ]]; then
+                echo "::error::SPARKLE_PRIVATE_KEY 已配置但 $STABLE_APPCAST 缺失（appcast 步未产出）——拒绝静默跳过滚动 beta 通道刷新"
+                exit 1
+              fi
+              echo "::warning::stable appcast 缺失（SPARKLE_PRIVATE_KEY 未配置）——跳过滚动 beta 通道刷新"
             elif ! gh release view "$ROLLING_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
               echo "beta 滚动通道不存在——stable 发布不创建它（没有 beta 客户端需要刷新）"
             else
@@ -1317,6 +1372,9 @@ jobs:
               rm -f /tmp/ed-key-refresh.txt
               test -f /tmp/appcast-stable-refresh-out/appcast.xml \
                 || { echo "::error::滚动 beta appcast 刷新失败（generate_appcast 无输出）"; exit 1; }
+              # 2026-12 A2：刷新后的滚动 appcast 同样必须宣传本版本（final 条目 +
+              # 指向本版本 zip 的 enclosure）——只 test -f 证明不了 final 真的在。
+              node scripts/release/verify-native-appcast.mjs "$VERSION" /tmp/appcast-stable-refresh-out/appcast.xml
               # 归档先于 appcast（每个 enclosure 先有可下载资产）；final zip 也因此
               # 落到滚动 release（刷新前缀指向它）。
               cp /tmp/appcast-stable-refresh-out/appcast.xml \

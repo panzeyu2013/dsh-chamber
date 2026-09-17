@@ -27,7 +27,7 @@
 // process-wide NSAllowsArbitraryLoads grant. This must happen before signing
 // because Info.plist is a sealed resource.
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -224,6 +224,107 @@ export function verifyPackagedElectronPayload(resourcesDir, options = {}) {
 }
 
 /**
+ * macOS .app 里 Electron 语言资源所在目录（每个 `.lproj` 子目录带一个
+ * `locale.pak`）。electron-builder 的 ElectronFramework.removeUnusedLanguagesIfNeeded
+ * 只扫描两个目录：`Contents/Resources` 与 framework 的 Versions/A/Resources；
+ * 真正的 Chromium 文案资源在后者（顶层只有空的 `en.lproj` 占位）。
+ */
+export const MAC_FRAMEWORK_LOCALES_RELATIVE = path.join(
+  'Contents', 'Frameworks', 'Electron Framework.framework', 'Versions', 'A', 'Resources',
+);
+
+/**
+ * desktop manifest 对 darwin 生效的 `electronLanguages`（trim；空 = 不做清理）。
+ *
+ * 复刻 electron-builder 的取值顺序（ElectronFramework.removeUnusedLanguagesIfNeeded：
+ * `platformSpecificBuildOptions.electronLanguages || config.electronLanguages`）：
+ * mac 腿可以（也必须）用 `build.mac.electronLanguages` 覆盖顶层值——mac 的目录名是
+ * `zh_CN.lproj`（下划线），win/linux 的 `.pak` 才是连字符 `zh-CN`。
+ */
+export function configuredElectronLanguages(manifest = DESKTOP_MANIFEST, platform = 'darwin') {
+  const declared = platform === 'darwin'
+    ? manifest?.build?.mac?.electronLanguages ?? manifest?.build?.electronLanguages
+    : manifest?.build?.electronLanguages;
+  if (!Array.isArray(declared)) return [];
+  return declared.map((entry) => String(entry).trim()).filter((entry) => entry !== '');
+}
+
+/** 磁盘上的 `.lproj` 基名（保留原名用于拼路径，另给小写 stem 用于匹配）。 */
+export function packagedLocaleStems(localesDir) {
+  if (!existsSync(localesDir)) return [];
+  return readdirSync(localesDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name.endsWith('.lproj'))
+    .map((entry) => {
+      const name = entry.name.slice(0, -'.lproj'.length);
+      return { name, stem: name.toLowerCase() };
+    });
+}
+
+/**
+ * 一个磁盘 stem（小写）是否满足一个配置语言的期望：复刻 app-builder-lib 的
+ * ElectronFramework matcher（`wanted === language` / `wanted.startsWith(language + '-')`
+ * / `wanted.startsWith(language + '_')`），并额外把配置里的 BCP-47 连字符写法归一化
+ * 为下划线再比一次（`zh-CN` 与 `zh_CN` 指同一语言，Electron 的目录名是后者）。
+ *
+ * 注意这不是"把 bug 放行"：A1 的失败形态是目录被 electron-builder **物理删除**——
+ * 本函数只决定一个真实存在的 .lproj 能否满足配置项，物理缺失由调用方断言。
+ */
+export function localeStemMatches(stem, wanted) {
+  const normalized = wanted.trim().toLowerCase();
+  if (normalized === '' || stem === '') return false;
+  if (normalized === stem || normalized.startsWith(`${stem}-`) || normalized.startsWith(`${stem}_`)) return true;
+  const canonical = normalized.replace(/-/g, '_');
+  return canonical === stem || canonical.startsWith(`${stem}_`) || stem.startsWith(`${canonical}_`);
+}
+
+/**
+ * 2026-12 A1 回归门禁：用户包必须真的带出 `build.electronLanguages` 声明的每个
+ * 语言资源。app-builder-lib 的 matcher 是"精确/前缀"匹配，过去配置写 `zh-CN`
+ * 而 Electron 目录名是 `zh_CN` ⇒ `zh_CN.lproj/locale.pak`（569KB）被静默删除，
+ * 中文系统上 Chromium 级文案回退英文，且没有任何门禁看得见（这份断言只能跑在
+ * 真实 .app 上——dist 没有 .lproj）。
+ *
+ * 期望值取自 manifest 自身（单源），所以删掉某个语言是有意的配置变更、不会被误
+ * 报；而"配置声明了却消失在包里"永远 FAIL。
+ * @param appPath - `<App>.app` 绝对路径。
+ * @param {{ wantedLanguages?: string[], localesDir?: string }} [options] - 测试接缝。
+ * @returns `{ checked: string[] }`。
+ */
+export function verifyPackagedMacLocales(appPath, options = {}) {
+  const wanted = (options.wantedLanguages ?? configuredElectronLanguages())
+    .map((entry) => String(entry).trim())
+    .filter((entry) => entry !== '');
+  if (wanted.length === 0) {
+    console.log('[after-pack-adhoc-sign] no build.electronLanguages declared — electron-builder removes nothing, every locale ships');
+    return { checked: [] };
+  }
+  const localesDir = options.localesDir ?? path.join(appPath, MAC_FRAMEWORK_LOCALES_RELATIVE);
+  const stems = packagedLocaleStems(localesDir);
+  const missing = [];
+  for (const language of wanted) {
+    const match = stems.find((entry) => localeStemMatches(entry.stem, language));
+    if (match === undefined) {
+      missing.push(language);
+      continue;
+    }
+    const pak = path.join(localesDir, `${match.name}.lproj`, 'locale.pak');
+    if (!existsSync(pak) || statSync(pak).size === 0) missing.push(`${language} (${pak})`);
+  }
+  if (missing.length > 0) {
+    throw new Error(
+      `packaged macOS app lost configured locale resources: ${missing.join(', ')} — `
+      + `framework .lproj on disk: [${stems.map((entry) => entry.name).join(', ')}]. `
+      + "app-builder-lib's electronLanguages matcher deletes every .lproj whose lowercase name is not "
+      + "an exact/prefix match for the configured language (A1: 'zh-CN' can never match Electron's "
+      + "'zh_CN'), so a declared locale silently disappears from the user bundle. "
+      + "Write build.electronLanguages entries in Electron's own spelling (en-US / zh_CN).",
+    );
+  }
+  console.log(`[after-pack-adhoc-sign] packaged locales verified: ${wanted.join(', ')} (${stems.length} .lproj dirs on disk)`);
+  return { checked: wanted };
+}
+
+/**
  * Fail the build before distributable targets are created when extraResources
  * did not carry the complete embedded runtime. electron-builder deliberately
  * ignores a FileSet root's `node_modules` child, so this is a required product
@@ -260,6 +361,9 @@ export default async function afterPackAdhocSign(context) {
   verifyPackagedElectronPayload(resourcesDir);
   if (context.electronPlatformName !== 'darwin') return;
   const appPath = path.join(context.appOutDir, `${appName}.app`);
+  // A1/F3 门禁：electronLanguages 静默删资源只在真实 .app 上可见（dist 没有
+  // .lproj），所以在打包阶段断言"用户包内确实带出每个声明的 locale 资源"。
+  verifyPackagedMacLocales(appPath);
   const infoPlist = path.join(appPath, 'Contents', 'Info.plist');
   execFileSync('/usr/libexec/PlistBuddy', [
     '-c',

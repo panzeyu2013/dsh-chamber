@@ -22,7 +22,15 @@
  *   (b) runs the COMPILED `dist/preload.cjs` inside node:vm with a stubbed
  *       `electron` module and asserts it parses and exposes the frozen
  *       surface: the 4 info scalars + the 9 namespace objects whose members
- *       are functions and whose subscribe members return an unsubscribe.
+ *       are functions and whose subscribe members return an unsubscribe;
+ *   (c) when a real electron-builder mac product is staged
+ *       (`packages/desktop/release/mac-arm64/dsh-chamber.app`, or the app named
+ *       by `DSH_CHAMBER_ELECTRON_APP`), asserts the packaged `.lproj/locale.pak`
+ *       resources for every `build.electronLanguages` entry survive
+ *       (2026-12 A1: app-builder-lib's matcher deleted `zh_CN.lproj` while the
+ *       config said `zh-CN`; dist/ carries no .lproj, so only a real product
+ *       can be asserted — the mac packaging rehearsal calls this gate right
+ *       after electron-builder, and afterPack runs the same fail-closed check).
  *
  * Discipline: with BOTH artifacts absent the gate prints a loud `SKIP:` and
  * exits 0 (a fresh checkout has no build). When either artifact exists the
@@ -37,16 +45,19 @@
  */
 
 import { spawn } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import vm from 'node:vm'
+import { verifyPackagedMacLocales } from '../../packages/desktop/scripts/after-pack-adhoc-sign.mjs'
 import { FACTORY_TO_NAMESPACE } from './verify-shim-payload-shape.mjs'
 
 export const DESKTOP_DIST_ENV = 'DSH_CHAMBER_DESKTOP_DIST'
+export const MAC_APP_ENV = 'DSH_CHAMBER_ELECTRON_APP'
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 export const DEFAULT_DESKTOP_DIST = join(REPO_ROOT, 'packages', 'desktop', 'dist')
+export const DEFAULT_RELEASE_DIR = join(REPO_ROOT, 'packages', 'desktop', 'release')
 
 /** The 4 info scalars of the frozen `window.dshChamber` surface. */
 export const BRIDGE_SCALAR_KEYS = ['controlPlaneUrl', 'dshVersion', 'version', 'platform']
@@ -64,6 +75,39 @@ export function resolveDesktopDist(env = process.env, cwd = process.cwd()) {
   const configured = typeof env[DESKTOP_DIST_ENV] === 'string' ? env[DESKTOP_DIST_ENV].trim() : ''
   if (configured !== '') return isAbsolute(configured) ? configured : resolve(cwd, configured)
   return DEFAULT_DESKTOP_DIST
+}
+
+/**
+ * Locate the packaged mac app whose locale resources must be asserted
+ * (2026-12 A1/F3). `dist/` carries no `.lproj` at all, so the only place the
+ * electronLanguages deletion bug is visible is a real electron-builder product:
+ *
+ *   - `DSH_CHAMBER_ELECTRON_APP` (absolute or cwd-relative) is authoritative and
+ *     must exist — an explicitly named product that vanished is a failure;
+ *   - otherwise the staged `packages/desktop/release/mac-arm64/dsh-chamber.app`
+ *     (any `mac*` output dir) is used when one exists (the mac packaging
+ *     rehearsal calls this gate right after electron-builder; a fresh checkout
+ *     has none).
+ * @param {NodeJS.ProcessEnv} env - process environment.
+ * @param {string} releaseDir - electron-builder output root to scan.
+ * @returns {string | null} absolute app path, or null when no product is staged.
+ */
+export function resolvePackagedMacApp(env = process.env, releaseDir = DEFAULT_RELEASE_DIR) {
+  const configured = typeof env[MAC_APP_ENV] === 'string' ? env[MAC_APP_ENV].trim() : ''
+  if (configured !== '') {
+    const appPath = isAbsolute(configured) ? configured : resolve(process.cwd(), configured)
+    if (!existsSync(appPath)) {
+      throw new Error(`${MAC_APP_ENV} points at a missing app bundle: ${appPath}`)
+    }
+    return appPath
+  }
+  if (!existsSync(releaseDir)) return null
+  for (const entry of readdirSync(releaseDir)) {
+    if (!entry.startsWith('mac')) continue
+    const candidate = join(releaseDir, entry, 'dsh-chamber.app')
+    if (existsSync(candidate)) return candidate
+  }
+  return null
 }
 
 /**
@@ -280,13 +324,16 @@ export function assertFrozenPreloadSurface(bridge, { expectedScalars } = {}) {
 
 /**
  * Run the gate. Returns a verdict instead of exiting so tests can call it.
- * @param {{ desktopDist?: string, nodeBinary?: string, log?: Function }} [options] - inputs.
- * @returns {Promise<{ action: 'skip', reason: string } | { action: 'run', port: number, members: number, health: unknown }>} verdict.
+ * @param {{ desktopDist?: string, nodeBinary?: string, log?: Function, packagedMacApp?: string | null }} [options] - inputs.
+ * `packagedMacApp` (undefined = discover, null = assert none) is the staged
+ * electron-builder mac product whose locale resources must be intact (A1/F3).
+ * @returns {Promise<{ action: 'skip', reason: string } | { action: 'run', port: number, members: number, health: unknown, locales: string[] }>} verdict.
  */
 export async function runElectronArtifactSmoke({
   desktopDist = resolveDesktopDist(),
   nodeBinary = process.execPath,
   log = console.log,
+  packagedMacApp,
 } = {}) {
   const controlPlaneEntry = join(desktopDist, 'control-plane', 'index.js')
   const preloadEntry = join(desktopDist, 'preload.cjs')
@@ -314,7 +361,18 @@ export async function runElectronArtifactSmoke({
       throw new Error('compiled preload never invoked dsh-chamber:info — the exposure branch was not exercised')
     }
     log(`electron-artifacts: control-plane booted on port ${boot.port} and answered /health; preload exposed ${surface.namespaces} namespaces / ${surface.members} members`)
-    return { action: 'run', port: boot.port, members: surface.members, health: boot.health }
+    // A1/F3: when a real electron-builder mac product is staged, the locale
+    // resources Electron loads its UI strings from are part of the product
+    // assertion — app-builder-lib's electronLanguages matcher can delete a
+    // declared language (zh-CN vs the on-disk zh_CN) with no other gate seeing
+    // it (dist has no .lproj). The packaging test suite pins the same helper.
+    const macApp = packagedMacApp === undefined ? resolvePackagedMacApp() : packagedMacApp
+    let locales = []
+    if (macApp !== null) {
+      locales = verifyPackagedMacLocales(macApp).checked
+      log(`electron-artifacts: packaged mac locale resources verified (${macApp})`)
+    }
+    return { action: 'run', port: boot.port, members: surface.members, health: boot.health, locales }
   } finally {
     rmSync(stateDir, { recursive: true, force: true })
   }
