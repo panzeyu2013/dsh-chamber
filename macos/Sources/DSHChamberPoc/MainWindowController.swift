@@ -101,6 +101,10 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     var onSettingsChanged: (() -> Void)?
     private var consoleCatcher: POCConsoleCatcher?
     private var didSnapshot = false
+    /// 在途下载占用的目标路径（S-26 静默落盘：WebKit 要求目标文件在决策时
+    /// 不存在，同一批并发下载因此必须相互避让；完成/失败即释放）。
+    private var reservedDownloadPaths: Set<String> = []
+    private var downloadDestinations: [ObjectIdentifier: String] = [:]
     private var navRetries = 0
     private var didStartLoading = false
     /// hostFacts 推送簿记（S-A）：已推送（含推送意图）事实，键 → 布尔。
@@ -259,6 +263,10 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         }
 #endif
         self.webView = webView
+        // A3-3：恢复本 origin 上次的缩放（Chromium 按 origin 持久化 zoomLevel；
+        // WKWebView.pageZoom 每次启动回 100%，这里用 UserDefaults 补齐）。
+        webView.pageZoom = ZoomPersistence.load(
+            defaults: .standard, key: zoomDefaultsKey, range: Self.zoomRange)
 
         // 窗口
         let window = NSWindow(contentRect: NSRect(origin: .zero, size: Self.windowSize),
@@ -827,7 +835,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         case .download:
             // S-26：.download 不装载文档（WKDownload 负责保存）；前端 session
             // 日志导出的 anchor[download] 走这条路，页面仍发布 success。
-            print("[poc] 导航转下载（不装入壳 webview）\(url?.absoluteString ?? "")")
+            shellLog("[poc] 导航转下载（不装入壳 webview）\(url?.absoluteString ?? "")")
             decisionHandler(.download)
         case .openExternally:
             print("[poc] 外链交给系统打开 \(url?.absoluteString ?? "")")
@@ -845,7 +853,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                  decidePolicyFor navigationResponse: WKNavigationResponse,
                  decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
         if !navigationResponse.canShowMIMEType {
-            print("[poc] 响应不可呈现 → 转下载 \(navigationResponse.response.url?.absoluteString ?? "")")
+            shellLog("[poc] 响应不可呈现 → 转下载 \(navigationResponse.response.url?.absoluteString ?? "")")
             decisionHandler(.download)
             return
         }
@@ -856,50 +864,69 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                  navigationAction: WKNavigationAction,
                  didBecome download: WKDownload) {
         download.delegate = self
-        print("[poc] 导航已转为下载（action 级）")
+        shellLog("[poc] 导航已转为下载（action 级）")
     }
 
     func webView(_ webView: WKWebView,
                  navigationResponse: WKNavigationResponse,
                  didBecome download: WKDownload) {
         download.delegate = self
-        print("[poc] 导航已转为下载（response 级）")
+        shellLog("[poc] 导航已转为下载（response 级）")
     }
 
-    // MARK: - WKDownloadDelegate（S-26）
+    // MARK: - WKDownloadDelegate（S-26；2026-12 对齐 Electron 默认下载）
 
-    /// 保存目标：NSSavePanel（Electron 默认下载例程的保存对话框对偶）。取消 →
-    /// completionHandler(nil)（WebKit 取消下载），绝不静默落盘。
+    /// 保存目标：**静默落盘到下载目录**，与 Electron 默认下载例程等价——Electron
+    /// 全仓无 will-download/setSavePath = Chromium 默认静默写
+    /// app.getPath('downloads')，无保存面板、无下载 UI、无用户同意（A1 差异表
+    /// S-26）。此前这里弹的是保存面板（单向多出的确认），其注释还谎称它是
+    /// Electron 默认下载例程的对偶——那是不存在的对偶，已删除；历史取证见
+    /// DownloadDestination.swift 头注释。
+    ///
+    /// WebKit 契约（WKDownloadDelegate.h）：目标必须是**已存在且可写目录里不存在
+    /// 的文件** → 按 Chromium 的 " (n)" 规则去重（DownloadDestination），目录缺失
+    /// 则创建。解析/创建失败 → completionHandler(nil)（WebKit 取消下载）+ 落盘
+    /// 日志诚实上报；在途下载的文件名同时记入预留集合，防同批并发撞名。
     func download(_ download: WKDownload,
                   decideDestinationUsing response: URLResponse,
                   suggestedFilename: String,
                   completionHandler: @escaping (URL?) -> Void) {
-        print("[poc] 下载目标选择（建议文件名 \(suggestedFilename)）")
-        let panel = NSSavePanel()
-        panel.canCreateDirectories = true
-        panel.nameFieldStringValue = suggestedFilename.isEmpty ? "download" : suggestedFilename
-        let finish: (NSApplication.ModalResponse) -> Void = { result in
-            guard result == .OK, let destination = panel.url else {
-                print("[poc] 下载已取消（未落盘）")
-                completionHandler(nil)
-                return
-            }
-            print("[poc] 下载保存到 \(destination.path)")
-            completionHandler(destination)
+        let directory = DownloadDestination.defaultDirectory()
+        let destination = DownloadDestination.destination(
+            directory: directory,
+            suggestedFilename: suggestedFilename,
+            exists: { [weak self] path in
+                self?.reservedDownloadPaths.contains(path) ?? false
+                    || FileManager.default.fileExists(atPath: path)
+            })
+        guard let destination else {
+            shellLog("[poc] 下载失败：无法解析/创建下载目录（\(directory?.path ?? "<未知>")）"
+                + "——取消下载（诚实失败，绝不静默换路径）")
+            completionHandler(nil)
+            return
         }
-        if let window {
-            panel.beginSheetModal(for: window, completionHandler: finish)
-        } else {
-            finish(panel.runModal())
-        }
+        reservedDownloadPaths.insert(destination.path)
+        downloadDestinations[ObjectIdentifier(download)] = destination.path
+        shellLog("[poc] 下载静默落盘（建议文件名 \(suggestedFilename)）→ \(destination.path)")
+        completionHandler(destination)
     }
 
     func downloadDidFinish(_ download: WKDownload) {
-        print("[poc] 下载完成")
+        releaseDownloadReservation(download)
+        shellLog("[poc] 下载完成")
     }
 
     func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
-        print("[poc] 下载失败：\(error.localizedDescription)")
+        releaseDownloadReservation(download)
+        shellLog("[poc] 下载失败：\(error.localizedDescription)")
+    }
+
+    /// 释放下载预留（完成/失败共用；预留只为同一批并发下载不撞名，与真实文件
+    /// 存在性判定并联——绝不影响磁盘上的既有文件）。
+    private func releaseDownloadReservation(_ download: WKDownload) {
+        if let path = downloadDestinations.removeValue(forKey: ObjectIdentifier(download)) {
+            reservedDownloadPaths.remove(path)
+        }
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
@@ -930,7 +957,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        print("[poc] 页面加载完成 \(webView.url?.absoluteString ?? "(未知)")")
+        shellLog("[poc] 页面加载完成 \(webView.url?.absoluteString ?? "(未知)")")
         // S-34：首载成功前卡死探测器不 ping/不重载（Electron loadedOnce 门）——
         // 建窗到控制面就绪之间的白屏加载不得被误判卡死。
         hangWatchdog.noteFirstLoadFinished()
@@ -980,7 +1007,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         presentationGate.noteNavigationFailed()
         // 注：若 http:// 字面 IP 被 ATS 拦截，可 -Xlinker -sectcreate __TEXT
         // __info_plist 注入 NSAllowsLocalNetworking，或改用 localhost（design 25 §3.2）
-        print("[poc] 页面加载失败 \(error.localizedDescription)")
+        shellLog("[poc] 页面加载失败 \(error.localizedDescription)")
     }
 
     /// 设置变化 push 通道（与 ipc-events.ts SETTINGS_CHANGED 同字面量）。
@@ -1017,6 +1044,10 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     // MARK: - 菜单动作：重新加载 / 页面缩放（S-24）
 
+    /// A3-3：本 origin 的缩放持久化键（Chromium per_host_zoom_levels 的按 origin
+    /// 语义；读写见 ZoomPersistence 与 setupWindow/zoomIn/zoomOut/resetPageZoom）。
+    private var zoomDefaultsKey: String { ZoomPersistence.defaultsKey(cpOrigin: cpOrigin) }
+
     /// 页面缩放步进（Electron 默认 View 菜单 role 对偶；WKWebView.pageZoom 是倍率）。
     static let zoomStep = 0.1
     /// pageZoom 上下限（Electron zoomLevel ±0.5 的可见等价区间，绝不无限缩放）。
@@ -1041,18 +1072,29 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     }
 
     func zoomIn() {
-        webView.pageZoom = Self.steppedZoom(current: webView.pageZoom, direction: 1)
-        print("[poc] 菜单放大 → pageZoom=\(webView.pageZoom)")
+        let zoom = Self.steppedZoom(current: webView.pageZoom, direction: 1)
+        webView.pageZoom = zoom
+        persistPageZoom(zoom)
+        shellLog("[poc] 菜单放大 → pageZoom=\(zoom)")
     }
 
     func zoomOut() {
-        webView.pageZoom = Self.steppedZoom(current: webView.pageZoom, direction: -1)
-        print("[poc] 菜单缩小 → pageZoom=\(webView.pageZoom)")
+        let zoom = Self.steppedZoom(current: webView.pageZoom, direction: -1)
+        webView.pageZoom = zoom
+        persistPageZoom(zoom)
+        shellLog("[poc] 菜单缩小 → pageZoom=\(zoom)")
     }
 
     func resetPageZoom() {
         webView.pageZoom = 1.0
-        print("[poc] 菜单实际大小 → pageZoom=1.0")
+        persistPageZoom(1.0)
+        shellLog("[poc] 菜单实际大小 → pageZoom=1.0")
+    }
+
+    /// 缩放写回（A3-3；读侧 = setupWindow 的 ZoomPersistence.load）。
+    private func persistPageZoom(_ zoom: Double) {
+        ZoomPersistence.save(defaults: .standard, key: zoomDefaultsKey,
+                             zoom: zoom, range: Self.zoomRange)
     }
 
     // MARK: - 窗口恢复（S-32：Dock/托盘/取消退出共用）
@@ -1110,7 +1152,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                 self?.hangWatchdog.noteProbeSucceeded()
             }
         case .reload:
-            print("[poc] 渲染器疑似卡死（连续 \(RendererHangWatchdog.maxStrikes) 次 ping 超时且用户空闲 ≥\(Int(RendererHangWatchdog.idleGrace))s）→ 有界重载")
+            shellLog("[poc] 渲染器疑似卡死（连续 \(RendererHangWatchdog.maxStrikes) 次 ping 超时且用户空闲 ≥\(Int(RendererHangWatchdog.idleGrace))s）→ 有界重载")
             scheduleRecoveryReload(reason: "unresponsive")
         }
     }
@@ -1121,7 +1163,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         let now = Date().timeIntervalSince1970
         switch recoveryPolicy.decide(now: now, attempts: &recoveryAttempts) {
         case .reload(let delay, let attempt):
-            print("[poc] 渲染恢复（\(reason)），\(String(format: "%.2f", delay))s 后重载（\(attempt)/\(recoveryPolicy.maxReloads)）")
+            shellLog("[poc] 渲染恢复（\(reason)），\(String(format: "%.2f", delay))s 后重载（\(attempt)/\(recoveryPolicy.maxReloads)）")
             let item = DispatchWorkItem { [weak self] in
                 guard let self else { return }
                 self.recoveryReloadWorkItem = nil
@@ -1131,7 +1173,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             recoveryReloadWorkItem = item
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
         case .giveUp(let attempts):
-            print("[poc] 渲染恢复正常化放弃（\(reason)，\(attempts) 次），本次不重载")
+            shellLog("[poc] 渲染恢复正常化放弃（\(reason)，\(attempts) 次），本次不重载")
             let alert = NSAlert()
             alert.alertStyle = .critical
             alert.messageText = "dsh-chamber 前端异常"
@@ -1147,11 +1189,11 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 500ms 延迟、60s 滚动窗口内至多 3 次；超限弹 NSAlert 并停止自动恢复）。
     /// 恢复导航成功由 didFinish 推回 alive:true 并 drain。
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        print("[poc] Web 内容进程终止（webViewWebContentProcessDidTerminate）")
+        shellLog("[poc] Web 内容进程终止（webViewWebContentProcessDidTerminate）")
         // 退出中：不重载、不上报（Electron render-process-gone 在 quitRequested
         // 时直接 return；2026-09 三审 E19 偏离 #3）。
         guard !recoverySuppressed else {
-            print("[poc] 退出中——抑制渲染恢复")
+            shellLog("[poc] 退出中——抑制渲染恢复")
             return
         }
         pushHostFacts(["webViewContentAlive": false])
@@ -1180,20 +1222,20 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         if nsError.domain == NSURLErrorDomain,
            nsError.code == NSURLErrorCannotConnectToHost || nsError.code == NSURLErrorNotConnectedToInternet {
             guard navRetries < 25 else {
-                print("[poc] 页面加载失败(初试) 重试耗尽：\(error.localizedDescription)")
+                shellLog("[poc] 页面加载失败(初试) 重试耗尽：\(error.localizedDescription)")
                 showLoadFailurePage(in: webView, error: error, exhausted: true)
                 return
             }
             let retryURL = webView.url ?? cpURL
             navRetries += 1
-            print("[poc] 控制面未就绪，\(navRetries)/25 次重试 0.5s 后加载 \(retryURL.absoluteString)")
+            shellLog("[poc] 控制面未就绪，\(navRetries)/25 次重试 0.5s 后加载 \(retryURL.absoluteString)")
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 500_000_000)
                 webView.load(URLRequest(url: retryURL))
             }
             return
         }
-        print("[poc] 页面加载失败(初试) \(error.localizedDescription)")
+        shellLog("[poc] 页面加载失败(初试) \(error.localizedDescription)")
         showLoadFailurePage(in: webView, error: error, exhausted: false)
     }
 
@@ -1221,6 +1263,10 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // 观察放行、didCommit 消费并触发呈现门（两个回调谁先到都呈现，见
         // StartupPresentationGate 注记）。
         presentationGate.beginFailurePage()
+        // 白屏/失败终态在落盘日志里也留一条（含控制面地址与重试耗尽标记；
+        // 双击态没有 stdout 可看，这是唯一的本地考古面）。
+        shellLog("[poc] 落首载失败说明页（exhausted=\(exhausted) "
+            + "cp=\(cpURL.absoluteString) error=\(error.localizedDescription)）")
         webView.loadHTMLString(html, baseURL: nil)
     }
 

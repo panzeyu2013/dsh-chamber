@@ -51,8 +51,15 @@
          保留完整发布版本字符串（含 -beta.N）用于展示。 -->
     <key>CFBundleVersion</key>
     <string>__BUNDLE_VERSION__</string>
+    <!-- 最低系统下限 = macOS 14.4，且这里承担**精确**下限（SwiftPM 的 .macOS 只能写
+         major：Package.swift 写 .macOS(.v14)）。为什么是 14.4：原生壳用 OS WebKit，
+         出货 bundle 在审批决策、用户提问/计划评审、PDF 预览构造路径直接调用
+         Promise.withResolvers（A3-1），该 API 自 Safari 17.4 / macOS 14.4 才存在；
+         13.x 与 14.0–14.3 会在构造期 TypeError。Electron 自带 V8 不受影响，但同一
+         支持矩阵只有一个下限（不做 polyfill，2026-12 用户裁决）。三处一致性由
+         scripts/release/release-workflow-policy.test.mjs 钉住。 -->
     <key>LSMinimumSystemVersion</key>
-    <string>13.0</string>
+    <string>14.4</string>
     <!-- S-46：标准 About 面板（orderFrontStandardAboutPanel）的版权行。
          Electron 侧未显式配 copyright，app-builder-lib 以
          「Copyright © <构建年> <productName>」生成（appInfo.js:129-135），

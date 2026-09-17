@@ -29,7 +29,7 @@
 //     多余未知键忽略（前瞻兼容 edge:* 等演进）；缺 id / 结构非法 → nil
 //     （调用方 loud）。
 //
-// 纯 Foundation + AnyCodable（无 AppKit/WebKit）；Swift 5 语言模式；macOS 13+。
+// 纯 Foundation + AnyCodable（无 AppKit/WebKit）；Swift 5 语言模式；macOS 14.4+（支持矩阵下限，见 deviations S-30）。
 
 import Foundation
 

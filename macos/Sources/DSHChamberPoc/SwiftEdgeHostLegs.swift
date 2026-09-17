@@ -607,8 +607,9 @@ public final class SwiftEdgeHostLegs {
             // 语义 = app.setLoginItemSettings({openAtLogin: enabled})（main.ts
             // applyLaunchAtLogin darwin 分支；失败 loud {error} 绝不静默假
             // 成功——设置面语义 design 14 D6）。Swift = SMAppService.mainApp
-            // （macOS 13+；Package 平台下限 13 → <13 的 NSLoginItem/
-            // SMLoginItemSetEnabled 兜底分支不可达，design 25 §5 E14 注记）。
+            // （macOS 14.4+；Package 声明 .macOS(.v14)、精确下限由 Info.plist
+            // 的 14.4 承担 → 旧系统 NSLoginItem/SMLoginItemSetEnabled 兜底分支
+            // 不可达且未实现，design 25 §5 E14 注记 / deviations T-26）。
             // 守卫：canShowUI（headless 绝不触碰 ServiceManagement）→ app
             // bundle 注册形态（SMAppService.mainApp 需要 Info.plist——swift
             // run dev 态无 bundle → ui-unavailable:setLoginItem:no-bundle 诚实

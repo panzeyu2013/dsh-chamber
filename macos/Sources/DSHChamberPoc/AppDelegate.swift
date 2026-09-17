@@ -57,7 +57,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     // MARK: - NSApplicationDelegate
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        print("[poc] applicationDidFinishLaunching：开始装配")
+        shellLog("[poc] applicationDidFinishLaunching：开始装配")
         // W-21：通知授权与 delegate 接线（前台展示 + click 回灌；权限拒绝 →
         // 授权结果打印，调度侧以 UNUserNotificationCenter.add 错误 loud——
         // 绝不静默假装成功）。请求失败/拒绝均不阻断装配。
@@ -73,10 +73,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             forName: Self.secondaryDeepLinkNotification, object: nil, queue: .main
         ) { [weak self] note in
             guard let raw = note.object as? String, raw.hasPrefix(Self.deepLinkScheme + "//") else {
-                print("[poc] 丢弃非法二次启动深链通知（非本 scheme）")
+                shellLog("[poc] 丢弃非法二次启动深链通知（非本 scheme）")
                 return
             }
-            print("[poc] 收到二次启动转发深链 (raw)")
+            shellLog("[poc] 收到二次启动转发深链 (raw)")
             self?.deepLinks.enqueue(raw)
         }
         // S-40：二次启动显窗请求（Electron second-instance 的 showMainWindow 对偶）。
@@ -87,7 +87,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         DistributedNotificationCenter.default().addObserver(
             forName: Self.secondaryShowWindowNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            print("[poc] 收到二次启动显窗请求（S-40）")
+            shellLog("[poc] 收到二次启动显窗请求（S-40）")
             self?.restoreMainWindow()
         }
         if Bundle.main.bundleIdentifier != nil {
@@ -97,9 +97,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             // 才向系统申请权限，Swift 此前首启即弹框（用户还没收到任何通知）。
             // 授权请求现在发生在真正调度第一条通知时（SwiftEdgeHostLegs），这里只
             // 接线 delegate（前台展示 + click 回灌）。
-            print("[poc] 通知 delegate 已接线（授权在首次通知时请求）")
+            shellLog("[poc] 通知 delegate 已接线（授权在首次通知时请求）")
         } else {
-            print("[poc] 无 bundle id（swift run dev 态）——跳过通知授权接线")
+            shellLog("[poc] 无 bundle id（swift run dev 态）——跳过通知授权接线")
         }
         // 打包态判定 + 资源根（PackagedLayout 纯函数解析，见 ChamberResources）。
         let resourcesDir = Bundle.main.resourceURL?.path
@@ -114,11 +114,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             : ProcessInfo.processInfo.environment
         let fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
         let isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
-        if isPackaged { print("[poc] 装配态（.app）——按 Contents/Resources 解析缺省路径") }
+        if isPackaged { shellLog("[poc] 装配态（.app）——按 Contents/Resources 解析缺省路径") }
         // userData 根（与 Electron 打包实根同根）：S2 起无论 sidecar 形状都要
         // 读 chamber-settings.json，故提前解析（lockDir 仍只给真实 sidecar 形状）。
         let stateDir = PackagedLayout.resolveUserData(
             env: env, home: NSHomeDirectory(), isPackaged: isPackaged)
+        // A2：原生壳落盘日志（<userData>/logs/native-shell.log）。Electron 侧无
+        // 对应文件（其唯一日志目录是控制面管理的 state/host-logs/<port>.log），
+        // 完整路径核实见 NativeShellLog 头注释。配置点尽可能早——启动、sidecar、
+        // 导航失败、更新相位、退出链的关键行都在其后。
+        NativeShellLog.shared.configure(userDataDir: stateDir)
+        shellLog("[poc] 原生壳日志落盘：\(NativeShellLog.shared.filePath ?? "未启用（仅 stdout）")")
         // 控制面端口缺省（S11）：POC_PORT > DSH_CHAMBER_CP_PORT > dev 空闲退避 /
         // packaged 17500；真实 sidecar 分支里解析后回填（自定义脚本形状不探测，
         // 保持缺省，绝不静默漂移）。
@@ -138,7 +144,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         } catch {
             fatalStartup("node 解析失败：\(error.localizedDescription)")
         }
-        print("[poc] node = \(nodePath)")
+        shellLog("[poc] node = \(nodePath)")
 
         // ② sidecar 脚本路径（S3）：POC_SIDECAR → 装配态自带
         //    <Resources>/sidecar/sidecar.js → dev 自当前目录向上（≤6 层）查找
@@ -151,7 +157,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 isPackaged: isPackaged, resourcesDir: resourcesDir,
                 explicitPath: env["POC_SIDECAR"].flatMap { $0.isEmpty ? nil : $0 }))
         }
-        print("[poc] sidecar = \(sidecarPath)")
+        shellLog("[poc] sidecar = \(sidecarPath)")
         // 真实 sidecar（dev 的 sidecar-entry.ts / W-23 装配产物的 sidecar.js）
         // 需要参数：--user-data-dir / --web-dist-dir / --port。按脚本名识别并补
         // 默认参数（env 可覆盖：POC_USER_DATA / POC_WEB_DIST / POC_PORT /
@@ -195,7 +201,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     webDir = candidates.first { FileManager.default.fileExists(atPath: $0 + "/index.html") }
                         ?? candidates[0]
                     if !FileManager.default.fileExists(atPath: webDir + "/index.html") {
-                        print("[poc] 警告：装配态 web dist 缺失（候选：\(candidates.joined(separator: ", "))）")
+                        shellLog("[poc] 警告：装配态 web dist 缺失（候选：\(candidates.joined(separator: ", "))）")
                     }
                 } else {
                     webDir = repoRoot + "/packages/desktop/dist/web"
@@ -211,9 +217,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     env: env, isPackaged: isPackaged,
                     probeDevPort: { ControlPlanePort.probeFreePort(startingAt: $0) },
                     probeEphemeralPort: { ControlPlanePort.probeEphemeralPort() })
-                for notice in resolution.notices { print("[poc] 端口降级：\(notice)") }
+                for notice in resolution.notices { shellLog("[poc] 端口降级：\(notice)") }
                 let port = String(resolution.port)
-                print("[poc] 控制面端口 = \(port)（\(Self.portSourceLabel(resolution.source))）")
+                shellLog("[poc] 控制面端口 = \(port)（\(Self.portSourceLabel(resolution.source))）")
                 resolvedCPPort = port
                 sidecarArguments += [
                     "--user-data-dir", stateDir,
@@ -226,9 +232,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 if let dshPath = PackagedLayout.resolveDshWorkspace(
                     env: env, resourcesDir: resourcesDir, isPackaged: isPackaged, exists: fileExists) {
                     sidecarArguments += ["--dsh-path", dshPath]
-                    print("[poc] sidecar 附加 --dsh-path \(dshPath)")
+                    shellLog("[poc] sidecar 附加 --dsh-path \(dshPath)")
                 } else if isPackaged {
-                    print("[poc] 警告：装配态未找到内置 dsh 工作区（<Resources>/sidecar/vendor/dsh）——本地实例不可用")
+                    shellLog("[poc] 警告：装配态未找到内置 dsh 工作区（<Resources>/sidecar/vendor/dsh）——本地实例不可用")
                 }
                 // 装配态：chamber host 包显式注入（W-23 装配产物
                 // <sidecar>/dist/<pkg>/——sidecar-ctx 的 hostPackageSourceDir
@@ -238,7 +244,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 // 交给壳（sidecar 据此清掉「原生壳不支持自动安装」）；dev/dry-run 不传。
                 if AppUpdater.configuration(from: Bundle.main.infoDictionary ?? [:]) != nil {
                     sidecarArguments += ["--native-updater", "sparkle"]
-                    print("[poc] sidecar 附加 --native-updater sparkle（Sparkle 已配置）")
+                    shellLog("[poc] sidecar 附加 --native-updater sparkle（Sparkle 已配置）")
                 }
                 if isCompiled {
                     let hostDirs: [(flag: String, name: String)] = [
@@ -266,10 +272,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                             + "——请重新运行 pnpm run build:sidecar 并重装 .app")
                     }
                 }
-                print("[poc] sidecar 参数：user-data=\(stateDir) web=\(webDir) port=\(port)"
+                shellLog("[poc] sidecar 参数：user-data=\(stateDir) web=\(webDir) port=\(port)"
                     + (isCompiled ? "（装配态 W-23 布局）" : "（dev sidecar-entry）"))
             } else {
-                print("[poc] 警告：POC_SIDECAR 形状未识别（\(basename)）——不注入锁/守护/端口参数"
+                shellLog("[poc] 警告：POC_SIDECAR 形状未识别（\(basename)）——不注入锁/守护/端口参数"
                     + "（脚本自身决定协议；控制面 URL 端口保持 \(resolvedCPPort)）")
             }
         }
@@ -279,12 +285,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         var childEnv = env
         if compiledSidecar {
             childEnv["DSH_CHAMBER_SIDECAR_COMPILED"] = "1"
-            print("[poc] 注入 DSH_CHAMBER_SIDECAR_COMPILED=1（装配态 control-plane 相对入口）")
+            shellLog("[poc] 注入 DSH_CHAMBER_SIDECAR_COMPILED=1（装配态 control-plane 相对入口）")
         }
         let nodeBasename = (nodePath as NSString).lastPathComponent
         if nodeBasename.contains("dsh-chamber") {
             childEnv["ELECTRON_RUN_AS_NODE"] = "1"
-            print("[poc] 注入 ELECTRON_RUN_AS_NODE=1（Electron 二进制当 Node 用）")
+            shellLog("[poc] 注入 ELECTRON_RUN_AS_NODE=1（Electron 二进制当 Node 用）")
         }
 
         // ④ 控制面 URL：POC_CP_URL 显式覆盖；缺省派生自 resolvedCPPort
@@ -301,17 +307,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if let origin = MainWindowController.origin(of: rawCPURL),
            !TrustGuard.isTrustedDocument(rawCPURL.absoluteString, expectedOrigin: origin),
            let rootURL = URL(string: origin + "/") {
-            print("[poc] 警告：POC_CP_URL 非壳文档（带路径/query）——改用 origin 根 \(rootURL.absoluteString)")
+            shellLog("[poc] 警告：POC_CP_URL 非壳文档（带路径/query）——改用 origin 根 \(rootURL.absoluteString)")
             cpURL = rootURL
         }
-        print("[poc] control plane = \(cpURL.absoluteString)")
+        shellLog("[poc] control plane = \(cpURL.absoluteString)")
 
         // 组装 B 桥：**接线先于 start**（A-3：onReady/onEvent/onNotify 在
         // start 前就位——ready 帧不再被 loud 丢弃；控制器 setupWindow 亦先于
         // start 完成事件接线，消灭起动期事件早丢窗口）。
         let bridge = BridgeClient(nodePath: nodePath, arguments: sidecarArguments, environment: childEnv)
         bridge.onReady = { [weak self] port, shellVersion in
-            print("[poc] sidecar ready（port=\(port) shellVersion=\(shellVersion)）")
+            shellLog("[poc] sidecar ready（port=\(port) shellVersion=\(shellVersion)）")
             guard let self else { return }
             // P-02：ready.port 必须与壳即将加载的控制面 URL 端口一致；不一致
             // = 控制面实际在别的 origin（白窗 + A 桥全拒）。绝不静默加载错
@@ -362,6 +368,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 directoryLock: SidecarDirectoryLock(userDataDir: lockDir),
                 dependencies: .init(
                     makeSidecar: { bridge },
+                    // A2：supervisor 的取锁/spawn/退出/重启/fatal 行同时落盘
+                    // （shellLog = 原样 stdout + append；spawn 失败与退出码分级
+                    // 因此都能在 <userData>/logs/native-shell.log 里考古）。
+                    log: { shellLog($0) },
                     onFatal: { message in
                         DispatchQueue.main.async { Self.presentFatalAlert(message) }
                     },
@@ -373,7 +383,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                             // 新进程未就绪 → A 桥 origin 门重新落闸（否则重启
                             // 窗口内的消息会被当成「已就绪」放行）。
                             self?.mainWindowController?.noteSidecarReady(false)
-                            print("[poc] sidecar 重启中（attempt=\(attempt)）——深链转缓冲、A 桥门落闸")
+                            shellLog("[poc] sidecar 重启中（attempt=\(attempt)）——深链转缓冲、A 桥门落闸")
                         }
                     }))
             do {
@@ -398,14 +408,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 fatalStartup(detail)
             }
             self.supervisor = supervisor
-            print("[poc] bridge 已启动（Supervisor 守护，锁=\(lockDir)/.dsh-chamber.lock）")
+            shellLog("[poc] bridge 已启动（Supervisor 守护，锁=\(lockDir)/.dsh-chamber.lock）")
         } else {
             do {
                 try bridge.start()
             } catch {
                 fatalStartup("BridgeClient 启动失败：\(error.localizedDescription)")
             }
-            print("[poc] bridge 已启动（自定义 sidecar 形状：无目录锁/无守护）")
+            shellLog("[poc] bridge 已启动（自定义 sidecar 形状：无目录锁/无守护）")
         }
 
         // S2：启动期 chamber-settings reconcile（main.ts:1428-1438 同序）——
@@ -428,11 +438,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                              payload: .object(["enabled": .bool(enabled)]))
             }) {
         case .settingsCorrupt:
-            print("[poc] 登录自启设置不可读（损坏）——本次启动不改动登录项")
+            shellLog("[poc] 登录自启设置不可读（损坏）——本次启动不改动登录项")
         case .applied(let enabled):
-            print("[poc] 启动期重放登录自启：enabled=\(enabled)")
+            shellLog("[poc] 启动期重放登录自启：enabled=\(enabled)")
         case .failed(let enabled, let error):
-            print("[poc] 启动期重放登录自启失败（loud，不致命）：enabled=\(enabled) error=\(error)")
+            shellLog("[poc] 启动期重放登录自启失败（loud，不致命）：enabled=\(enabled) error=\(error)")
         }
 
         // S-42：此处**不再**显示/激活主窗口——呈现由首个已提交内容触发
@@ -444,9 +454,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // 下一次关窗必须用**新**的 quitFacts，而不是缓存里的旧值。
         controller.onSettingsChanged = { [weak self] in
             self?.cachedQuitFacts = nil
-            print("[poc] 设置变化 → 关窗决策缓存作废")
+            shellLog("[poc] 设置变化 → 关窗决策缓存作废")
         }
-        print("[poc] 装配完成（主窗口等首个已提交内容后呈现，S-42）")
+        shellLog("[poc] 装配完成（主窗口等首个已提交内容后呈现，S-42）")
 
         // 应用内更新（S-01 / 裁决 D-1 选 B）：Sparkle 装配必须在 installMainMenu
         // 之前——菜单项按 isAvailable 决定 enable。安装前清理链在此注入。
@@ -467,7 +477,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     _ = try await bridge.invoke(method: HostInboundMethod.nativeUpdatePhase,
                                                 payload: report.payload)
                 } catch {
-                    print("[poc] nativeUpdatePhase 上报失败（\(report.phase.rawValue)）："
+                    shellLog("[poc] nativeUpdatePhase 上报失败（\(report.phase.rawValue)）："
                         + "\(error.localizedDescription)")
                 }
             }
@@ -510,13 +520,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// enqueueDeepLink，本层只做「不丢」。
     func application(_ application: NSApplication, open urls: [URL]) {
         for url in urls {
-            print("[poc] 深链到达 \(url.absoluteString)")
+            shellLog("[poc] 深链到达 \(url.absoluteString)")
             deepLinks.enqueue(url.absoluteString)
         }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        print("[poc] applicationWillTerminate：停止 bridge（Supervisor 回收进程 + 释放目录锁）")
+        shellLog("[poc] applicationWillTerminate：停止 bridge（Supervisor 回收进程 + 释放目录锁）")
         if let supervisor {
             supervisor.stop()
         } else {
@@ -543,7 +553,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return later ? .terminateLater : .terminateNow
         }
         guard quitGate.beginDecision() else {
-            print("[poc] 退出决策在途，忽略重复退出请求")
+            shellLog("[poc] 退出决策在途，忽略重复退出请求")
             return .terminateCancel
         }
         awaitingTerminateReply = true
@@ -562,7 +572,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 case .alertThenCancel:
                     self.presentQuitUnavailableAlert()
                 case .proceed:
-                    print("[poc] 退出决策不可得且 sidecar 未运行：无本地保护内容，放行退出")
+                    shellLog("[poc] 退出决策不可得且 sidecar 未运行：无本地保护内容，放行退出")
                     self.quitGate.markConfirmed()
                     if !self.beginTerminationCleanup() {
                         self.replyTerminate(true)
@@ -595,10 +605,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             requestQuitFacts(quitRequested: false) { _ in }
             switch QuitCoordinator.closeAction(facts: facts) {
             case .hide:
-                print("[poc] 关窗 → 隐藏（缓存事实即时决策，S3·V9）")
+                shellLog("[poc] 关窗 → 隐藏（缓存事实即时决策，S3·V9）")
                 mainWindowController?.window?.orderOut(nil)
             case .terminate:
-                print("[poc] 关窗 → 退出（close-behavior='quit'，缓存事实即时决策）")
+                shellLog("[poc] 关窗 → 退出（close-behavior='quit'，缓存事实即时决策）")
                 NSApp.terminate(nil)
             }
             return false
@@ -608,16 +618,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             guard let self else { return }
             self.quitGate.endDecision()
             guard let facts else {
-                print("[poc] 关窗决策获取失败：保守隐藏窗口（不关闭、不退出）")
+                shellLog("[poc] 关窗决策获取失败：保守隐藏窗口（不关闭、不退出）")
                 self.mainWindowController?.window?.orderOut(nil)
                 return
             }
             switch QuitCoordinator.closeAction(facts: facts) {
             case .hide:
-                print("[poc] 关窗 → 隐藏（Dock 常驻恢复入口）")
+                shellLog("[poc] 关窗 → 隐藏（Dock 常驻恢复入口）")
                 self.mainWindowController?.window?.orderOut(nil)
             case .terminate:
-                print("[poc] 关窗 → 退出（close-behavior='quit'）")
+                shellLog("[poc] 关窗 → 退出（close-behavior='quit'）")
                 NSApp.terminate(nil)
             }
         }
@@ -651,7 +661,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         // 取消：本次退出作废，恢复窗口（mac close-behavior='quit' 时窗口可能
         // 已隐藏/关闭——恢复入口绝不少于一个）。
-        print("[poc] 退出已取消")
+        shellLog("[poc] 退出已取消")
         restoreMainWindow()
         replyTerminate(false)
     }
@@ -683,7 +693,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// 并恢复窗口（同旧保守分支）；强制退出 → 置确认位走既有清理链（≤5s 硬顶）。
     private func presentQuitUnavailableAlert() {
         guard quitGate.beginConfirm() else {
-            print("[poc] 退出决策不可得：已有决策框在途，忽略重复退出请求")
+            shellLog("[poc] 退出决策不可得：已有决策框在途，忽略重复退出请求")
             replyTerminate(false)
             return
         }
@@ -698,14 +708,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let response = alert.runModal()
         quitGate.endConfirm()
         if response == .alertSecondButtonReturn {
-            print("[poc] 用户选择强制退出（quitFacts 不可得）：走既有清理链")
+            shellLog("[poc] 用户选择强制退出（quitFacts 不可得）：走既有清理链")
             quitGate.markConfirmed()
             if !beginTerminationCleanup() {
                 replyTerminate(true)
             }
             return
         }
-        print("[poc] 用户选择继续等待：本次退出取消，保留本地实例")
+        shellLog("[poc] 用户选择继续等待：本次退出取消，保留本地实例")
         restoreMainWindow()
         replyTerminate(false)
     }
@@ -726,14 +736,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         guard supervisor != nil else { return false }
         guard !quitCleanupStarted else { return true }
         quitCleanupStarted = true
-        print("[poc] 退出清理：停止 sidecar（≤\(Int(Self.quitCleanupTimeout))s 硬顶）")
+        shellLog("[poc] 退出清理：停止 sidecar（≤\(Int(Self.quitCleanupTimeout))s 硬顶）")
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             self?.supervisor?.stop()
             DispatchQueue.main.async { self?.replyTerminate(true) }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.quitCleanupTimeout) { [weak self] in
             guard let self, self.awaitingTerminateReply else { return }
-            print("[poc] 退出清理超时，强制放行退出（可能有子进程残留）")
+            shellLog("[poc] 退出清理超时，强制放行退出（可能有子进程残留）")
             self.replyTerminate(true)
         }
         return true
@@ -750,7 +760,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// 显式用户入口（Dock reopen、托盘、二次启动、取消退出）不走此门，直接
     /// 走各自的恢复函数。
     private func presentMainWindow() {
-        print("[poc] 首个已提交内容到达——主窗口呈现（S-42）")
+        shellLog("[poc] 首个已提交内容到达——主窗口呈现（S-42）")
         restoreMainWindow()
     }
 
@@ -786,7 +796,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.quitFactsTimeout) {
             if !finished {
-                print("[poc] quitFacts 请求超时（\(Self.quitFactsTimeout)s）——按不可得处理")
+                shellLog("[poc] quitFacts 请求超时（\(Self.quitFactsTimeout)s）——按不可得处理")
             }
             finish(nil)
         }
@@ -800,7 +810,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     ]))
                 finish(QuitFacts.decode(result))
             } catch {
-                print("[poc] quitFacts 请求失败：\(error.localizedDescription)")
+                shellLog("[poc] quitFacts 请求失败：\(error.localizedDescription)")
                 finish(nil)
             }
         }
@@ -815,10 +825,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         mainWindowController?.resetHostFactsBookkeeping()
         let flushed = deepLinks.markReady()
         if flushed > 0 {
-            print("[poc] ready 后补发深链 \(flushed) 条")
+            shellLog("[poc] ready 后补发深链 \(flushed) 条")
         }
         if deepLinks.droppedCount > 0 {
-            print("[poc] 深链缓冲溢出丢弃 \(deepLinks.droppedCount) 条（core 侧队列另有有界语义）")
+            shellLog("[poc] 深链缓冲溢出丢弃 \(deepLinks.droppedCount) 条（core 侧队列另有有界语义）")
         }
     }
 
@@ -829,7 +839,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // S4·F3（2026-12 双端逐函数核对）：退出在途时不再投递深链——bridge 只会以
         // app_quitting 拒绝并 loud，用户动作在这条路径上注定丢失；直接记账跳过。
         if quitGate.isConfirmed {
-            print("[poc] 退出在途：深链不再投递（\(raw)）")
+            shellLog("[poc] 退出在途：深链不再投递（\(raw)）")
             return
         }
         Task { @MainActor in
@@ -838,7 +848,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     method: HostInboundMethod.deepLink,
                     payload: .object(["url": .string(raw)]))
             } catch {
-                print("[poc] 深链转交失败（\(raw)）：\(error.localizedDescription)")
+                shellLog("[poc] 深链转交失败（\(raw)）：\(error.localizedDescription)")
             }
         }
     }
@@ -907,7 +917,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             DistributedNotificationCenter.default().postNotificationName(
                 secondaryDeepLinkNotification, object: url, userInfo: nil, deliverImmediately: true)
         }
-        print("[poc] 已向运行中实例转发 \(urls.count) 条深链（S5·F9）")
+        shellLog("[poc] 已向运行中实例转发 \(urls.count) 条深链（S5·F9）")
         return urls.count
     }
 
@@ -932,7 +942,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 }
         },
         requestShow: () -> Void = { AppDelegate.postShowWindowRequest() },
-        log: (String) -> Void = { print($0) }
+        log: (String) -> Void = { shellLog($0) }
     ) -> Bool {
         guard let bundleID else { return false }
         guard let other = instances(bundleID).first(where: { $0.pid != currentPID }) else {
@@ -953,6 +963,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     private func fatalStartup(_ message: String) -> Never {
+        // 致命启动错误是白屏/秒退的头号原因：stderr 已有一行，同时**只落盘**
+        // （不重复打到 stdout）留档。
+        NativeShellLog.shared.append("[poc] 致命错误：\(message)")
         fputs("[poc] 致命错误：\(message)\n", stderr)
         if !Self.fatalAlertShown {
             Self.fatalAlertShown = true
@@ -1166,7 +1179,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             signal(sig, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
             source.setEventHandler {
-                print("[poc] 收到信号 \(sig)：转入标准退出链")
+                shellLog("[poc] 收到信号 \(sig)：转入标准退出链")
                 NSApp.terminate(nil)
             }
             source.resume()
@@ -1178,7 +1191,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// enqueueDeepLink 负责，本层与 application(_:open:) 共用同一条缓冲（只做不丢）。
     private func enqueueCommandLineDeepLinks() {
         for raw in Self.commandLineDeepLinks(arguments: CommandLine.arguments) {
-            print("[poc] 命令行深链 \(raw)")
+            shellLog("[poc] 命令行深链 \(raw)")
             deepLinks.enqueue(raw)
         }
     }
@@ -1224,7 +1237,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// sidecar/页面桥（帮助入口必须在桥未就绪时也可用）。
     @objc func openHelpPage(_ sender: Any?) {
         guard let url = URL(string: Self.helpPageURL) else {
-            print("[poc] Help 页面 URL 非法：\(Self.helpPageURL)")
+            shellLog("[poc] Help 页面 URL 非法：\(Self.helpPageURL)")
             return
         }
         mainWindowController?.openExternalPage(url)
@@ -1333,7 +1346,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             !fileExists(settingsPath) && fileExists(settingsPath + ".corrupt")
         }
         if preservedCorruptEvidence() {
-            print("[poc] chamber-settings.json 缺失但存在 *.corrupt 保留副本——本次启动不改动登录项（S-41）")
+            shellLog("[poc] chamber-settings.json 缺失但存在 *.corrupt 保留副本——本次启动不改动登录项（S-41）")
             return nil
         }
         let value = readLaunchAtLogin(userDataDir)
@@ -1341,7 +1354,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // 此时读取器看到的是 .missing → 返回默认 false；读取后复查副本，仍改判
         // nil（顺序无关，绝不因一次改名时序把「损坏」读成「注销登录项」）。
         if value == false, preservedCorruptEvidence() {
-            print("[poc] chamber-settings.json 在读取期间被保留为 *.corrupt——本次启动不改动登录项（S-41）")
+            shellLog("[poc] chamber-settings.json 在读取期间被保留为 *.corrupt——本次启动不改动登录项（S-41）")
             return nil
         }
         return value
@@ -1414,23 +1427,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         guard identifier.hasPrefix("chamber-edge-"),
               let rawID = identifier.split(separator: ".").last,
               let notificationId = Int(rawID) else {
-            print("[poc] 通知 click：未知 identifier，跳过回灌（仅聚焦窗口）")
+            shellLog("[poc] 通知 click：未知 identifier，跳过回灌（仅聚焦窗口）")
             return
         }
         guard let bridge else {
-            print("[poc] 通知 click：bridge 未装配，跳过回灌")
+            shellLog("[poc] 通知 click：bridge 未装配，跳过回灌")
             return
         }
-        print("[poc] 通知 click 回灌：notificationId=\(notificationId)")
+        shellLog("[poc] 通知 click 回灌：notificationId=\(notificationId)")
         Task {
             do {
                 let outcome = try await bridge.invoke(
                     method: HostInboundMethod.notifyClicked,
                     payload: .object(["notificationId": .number(Double(notificationId))])
                 )
-                print("[poc] 通知 click 回灌应答：\(String(describing: outcome))")
+                shellLog("[poc] 通知 click 回灌应答：\(String(describing: outcome))")
             } catch {
-                print("[poc] 通知 click 回灌失败：\(error.localizedDescription)")
+                shellLog("[poc] 通知 click 回灌失败：\(error.localizedDescription)")
             }
         }
     }

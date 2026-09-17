@@ -28,7 +28,13 @@ import PackageDescription
 let package = Package(
     name: "DSHChamberPoc",
     platforms: [
-        .macOS(.v13)
+        // 最低系统下限 = macOS 14.4：原生壳用 OS WebKit，出货 bundle 在审批决策、
+        // 用户提问/计划评审、PDF 预览构造路径直接调用 Promise.withResolvers（A3-1），
+        // 该 API 自 Safari 17.4 / macOS 14.4 才存在（13.x 与 14.0–14.3 会 TypeError）。
+        // SwiftPM 的 .macOS 只能写 major，故这里写 .v14；**精确 14.4 下限由
+        // macos/Info.plist.template 的 LSMinimumSystemVersion 承担**，三处一致性由
+        // scripts/release/release-workflow-policy.test.mjs 钉住。
+        .macOS(.v14)
     ],
     dependencies: [
         // 应用内更新（2026-12 裁决 D-1 选 B / 台账 S-01）：Sparkle 2 承担下载 /

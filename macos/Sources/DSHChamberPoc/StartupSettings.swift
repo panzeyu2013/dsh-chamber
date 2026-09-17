@@ -427,12 +427,12 @@ public enum StartupSettings {
         case .missing:
             return false
         case .corrupt(let reason):
-            print("[poc] 警告：chamber-settings.json 损坏（\(reason)）——keep-awake 按默认 off")
+            shellLog("[poc] 警告：chamber-settings.json 损坏（\(reason)）——keep-awake 按默认 off")
             return false
         case .ok(let keepAwake):
             let result = apply(keepAwake)
             if let error = result.error {
-                print("[poc] 警告：启动 keep-awake 应用失败（on=\(keepAwake)）：\(error)")
+                shellLog("[poc] 警告：启动 keep-awake 应用失败（on=\(keepAwake)）：\(error)")
             }
             return true
         }

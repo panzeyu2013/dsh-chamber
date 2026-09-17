@@ -29,7 +29,7 @@
 //   - .null 只表示 JSON 字面 null；“payload 键缺省”与“payload:null”在帧层
 //     都折叠为 nil 可选字段（FrameCodec/本文件注释声明，协议容忍两者）。
 //
-// 纯 Foundation（无 AppKit/WebKit）；Swift 5 语言模式；macOS 13+。
+// 纯 Foundation（无 AppKit/WebKit）；Swift 5 语言模式；macOS 14.4+（支持矩阵下限，见 deviations S-30）。
 
 import Foundation
 

@@ -35,7 +35,7 @@ final class NavigationDecisionTests: XCTestCase {
         XCTAssertEqual(decide("http://127.0.0.1:17500/index.html", shouldPerformDownload: true),
                        .download, "壳文档 URL 带 download 属性也走下载")
         XCTAssertEqual(decide("https://evil.example/file.zip", shouldPerformDownload: true),
-                       .download, "外链下载走保存对话框（不装载、不开浏览器）")
+                       .download, "外链下载静默落盘下载目录（不装载、不开浏览器；与 Electron 默认下载同向）")
         XCTAssertEqual(decide("blob:http://127.0.0.1:17500/abc", shouldPerformDownload: true),
                        .download, "blob URL 导出（如有）同样转下载")
     }

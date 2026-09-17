@@ -47,7 +47,7 @@
 //
 // 本文件为纯 Foundation（无 AppKit/WebKit；kill/SIGKILL/SIGPIPE 等 Darwin
 // 符号经 Foundation 再导出直接可用，无需额外 import）；Swift 5 语言模式；
-// macOS 13+。
+// macOS 14.4+（支持矩阵下限，见 deviations S-30）。
 
 import Foundation
 
