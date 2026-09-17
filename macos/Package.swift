@@ -43,10 +43,21 @@ let package = Package(
         .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.10.0")
     ],
     targets: [
+        // S-48（2026-12，design 25 §5.1）：ProMotion/120Hz 支持。WebKit 的
+        // PreferPageRenderingUpdatesNear60FPSEnabled 只有私有 SPI 可改
+        // （WKPreferencesPrivate.h），Swift 侧没有直调面，故由独立 C target 承载；
+        // 公共 C 面只有 1 个函数（关偏好；读回是 .m 内部 static），零状态、零第三方依赖。**必须保持静态**
+        // （不声明 type: .dynamic——否则可执行会多出一个需随包嵌入并签名的 dylib，装配断言不覆盖）。
+        .target(
+            name: "DSHChamberWebKitSupport",
+            path: "Sources/DSHChamberWebKitSupport",
+            publicHeadersPath: "include"
+        ),
         .executableTarget(
             name: "DSHChamberPoc",
             dependencies: [
-                .product(name: "Sparkle", package: "Sparkle")
+                .product(name: "Sparkle", package: "Sparkle"),
+                "DSHChamberWebKitSupport"
             ],
             // JS 锁步生成物（chamber-bridge.stub.js）留在源码树供测试断言，
             // 但不属于 Swift target 的输入——不 exclude 会得到 SwiftPM 的
@@ -60,7 +71,8 @@ let package = Package(
         ),
         .testTarget(
             name: "DSHChamberPocTests",
-            dependencies: ["DSHChamberPoc"]
+            // 显式依赖 C target：测试直接 import DSHChamberWebKitSupport（不再靠传递可见性）。
+            dependencies: ["DSHChamberPoc", "DSHChamberWebKitSupport"]
         )
     ]
 )

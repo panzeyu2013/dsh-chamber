@@ -221,8 +221,10 @@ dsh-chamber desktop 的 Electron 使用面已收敛为薄壳（AGENTS.md 运行�
 ```
 macos/                          # SwiftPM 可执行包（或 xcodeproj）
   Package.swift
-  Sources/DSHChamberPoc/…        # 单 target（P0 从简；AppKit 壳 + A 桥/B 桥 + 宿主腿同 target，
+  Sources/DSHChamberPoc/…        # 可执行 target（P0 从简；AppKit 壳 + A 桥/B 桥 + 宿主腿同 target，
                                  #  product 化拆 target 未排期——见 Package.swift 头注释）
+  Sources/DSHChamberWebKitSupport/… # 静态 C support target（§5.1：关 WebKit prefer-60fps 偏好）
+                                 #  ——不是 product 化拆 target，目标文件链进同一可执行文件
   Sources/DSHChamberPoc/Generated/BridgeManifest.swift   # 构建脚本生成（随提交，防漂移）
   Tests/…                        # XCTest（信封解析、护栏、监督、协议）
   Resources/bridge-shim.poc.js   # A 桥注入 shim 真身（bridge-shim-surface 锁步）
@@ -596,6 +598,105 @@ interface HostEdges {
 | E19 | renderer 崩溃恢复（installRendererRecovery :1178-1267：500ms + 60s≤3 次 + 15s unresponsive + render-process-gone :1235-1240） | **三事件映射**：didStartProvisionalNavigation（复位 + requeue）/ didFinish（drain）/ webViewWebContentProcessDidTerminate（复位 + requeue + 500ms 有界重载，60s ≤3 次 + NSAlert） | **unresponsive 腿 v1 明示不可移植**（WKWebView 无该事件）或换心跳探测 |
 | E20 | `app.on('activate'/'window-all-closed')`（darwin 且 close-behavior='quit' 时也必须 quit :1510-1516） | `applicationShouldHandleReopen` 等 + windowShouldClose 判 close-behavior：'quit' → NSApp.terminate 走完整确认链，绝不无窗常驻 | 14 D1 语义 |
 
+### 5.1 刷新率（ProMotion 120Hz，2026-12 实机裁决）
+
+**问题**：原生壳在 120Hz ProMotion 机器上跑不出 120fps（思考流式滚动明显发涩），而同机
+Electron/Chromium flavor 是 120fps。实测（M5 Pro / 内置 3024×1964 120Hz 屏 / macOS 26.5，
+单位 = 页面 rAF 实测 fps，屏幕 vsync 与 `CVDisplayLink` 均为 120Hz）：
+
+| 引擎与配置 | 低电量模式 | 实测 |
+|---|---|---|
+| WKWebView 默认配置 | 关 | 60.0fps |
+| WKWebView（关闭 prefer-60fps 偏好） | 关 | 120.0fps |
+| WKWebView 默认配置 | 开 | 30.0fps |
+| Chromium（同机同时刻，Chrome 152） | 开 | 120fps |
+
+**根因（WebKit 源码定位）**：
+
+1. `Source/WTF/Scripts/Preferences/UnifiedWebPreferences.yaml` 的
+   `PreferPageRenderingUpdatesNear60FPSEnabled`：`defaultValue: default: true` —— WKWebView
+   默认把页面渲染更新压到「靠近 60fps」而不是显示器刷新率；**只在 nominal > 60 且整数商 > 1 时
+   才有影响**——61–119Hz 屏（如 100Hz）本就不受限，120Hz 上才表现为 60fps。（Safari 在 ProMotion
+   上跑满 120Hz 属实测推断，未在源码里定位到它显式关该偏好的位置；不碰它的 WKWebView 按缺省受压。）
+2. `ScriptedAnimationController::preferredScriptedAnimationInterval()` 调
+   `preferredFrameInterval(throttlingReasons(), page->displayNominalFramesPerSecond(),
+   settings().preferPageRenderingUpdatesNear60FPSEnabled())`；常量在 `AnimationFrameRate.h`
+   （`FullSpeedFramesPerSecond = 60`、`IntervalThrottlingFactor = 2`、
+   `FullSpeedAnimationInterval = 15ms`），半速集合在 `AnimationFrameRate.cpp` 顶部
+   （`{ LowPowerMode, NonInteractedCrossOriginFrame, VisuallyIdle, AggressiveThermalMitigation }`）；
+   低电量模式经 `Page::handleLowPowerModeChange()` → `adjustRenderingUpdateFrequency()` 生效。
+   本仓折算（`RefreshRatePolicy`）与上游 `framesPerSecondNearestFullSpeed` 同式（含其整数除法）。
+   代入本机：默认偏好 + 120Hz → 1/60；关闭偏好 + 120Hz → 1/120；再叠低电量模式 ×2。
+
+**决议**：
+
+- **关闭该偏好**：`WKPreferences` 只有私有 SPI（`WKPreferencesPrivate.h` 的 `_features` /
+  `_setEnabled:forFeature:`，`_features` 需 macOS 13.3+）可改，Swift 侧没有直调面 ⇒ 新增独立
+  C target `macos/Sources/DSHChamberWebKitSupport`（唯一职责 = 关偏好；读回只做内部自检，
+  公共 C 面只有一个函数，零状态、零第三方依赖）。**必须在构造
+  `WKWebView(frame:configuration:)` 之前调用**：实测页面创建后再改不生效（**稳态**：未换屏、
+  未发生节流原因变化、未重启 WebProcess 前）——机理是偏好变更
+  虽会实时下发到 WebProcess，但**偏好变更路径不会重设刷新节奏**：节奏只在
+  `RenderingUpdateScheduler::adjustRenderingUpdateFrequency()` 的既有触发点（页面创建、换屏、
+  节流原因变化）更新，`Page::settingsDidChange()` 不做这件事。装配点 =
+  `MainWindowController.setupWindow()`；折算与日志在 `RefreshRatePolicy`（纯逻辑，可单测）。
+- **低电量模式的 ×2 不覆盖（accepted）**：该状态由 WebContent 进程内的
+  `WebCore::LowPowerModeNotifier` 直读系统状态（`Page::handleLowPowerModeChange()` →
+  `adjustRenderingUpdateFrequency()`）。WebKit 内**确有**能强制「关」的钩子
+  （`Page::setLowPowerModeEnabledOverrideForTesting(false)` + `m_throttlingReasonsOverridenForTesting`），
+  但它只经 `Internals`（`window.internals`）暴露给布局测试，未发现 WKWebView / UI 进程可达面。
+  三条候选杠杆的逐一体检见 Rejected alternatives 第 5 条（注入面存在但所属类已 deprecated、未采用；
+  UI 进程不转发；interpose 探针不可复核）。⇒ 结论是「**无应用级开关**」，而不是「不存在能强制关的钩子」。
+  ⇒ **关闭偏好后**低电量模式下页面更新上限 = 显示器刷新率 ÷ 2（120Hz 屏 = 60fps；偏好仍开时是
+  nearest(nominal) ÷ 2 = 30fps）；要满 120fps 只能退出
+  低电量模式（系统设置 > 电池）。壳只如实写日志，不假装消除。**用户裁决（2026-12）**：确认为
+  系统级限制（WebKit 在 WebContent 进程内直读系统状态、应用侧无出口），按 accepted 登记差异，
+  **不追求注入 bundle 覆盖原型**（唯一候选与其代价见 Rejected alternatives 第 5 条）。
+- **POC_DEBUG 帧率观测**：`POC_DEBUG=1` 时注入 rAF 计数（每 2s 一行 `[native-fps]`，走既有
+  pocConsole 回传）；缺省 / 打包态不注入（S14/T-11 调试面纪律不变）。
+
+**Rejected alternatives**（本决策的备选与其被否原因）：
+
+1. **接受 60fps、不做**：同机 Electron/Chromium 是 120fps，双 flavor 在同一台机器上刷新率不同且原生侧
+   更差，没有任何产品理由保留；且关闭偏好是**一个 SPI 调用**的成本，代价与收益不成比例。
+2. **等 WebKit 提供公开开关再动**：无时间表；期间用户可感的 60fps 上限持续存在（S-48），且公开 API 出现
+   前无法验证。落地方式已按「SPI 缺失即 Unknown 降级」设计，将来换公开 API 只需替换 `apply(to:)` 一处。
+3. **页面内规避**（用 CSS 合成动画/自绘替代页面渲染更新）：不适用——节流点在引擎调度器
+   （`Page::preferredRenderingUpdateInterval()` 与 `ScriptedAnimationController`），页面拿不到旁路；
+   流式文本必须走渲染更新，任何页面内改写都改变不了上限。
+4. **按显示器能力门控**（仅 `NSScreen.maximumFramesPerSecond > 60` 时关偏好）：以三个理由否决——
+   ① 实测页面创建后再改偏好**不生效**，窗口拖到另一块屏后无法重配（门控会永久停在旧屏的取值）；
+   ② 60Hz 屏上 `nominal = 60`，`framesPerSecondNearestFullSpeed(60) = 60`，该偏好本就不额外限制，门控无收益；
+   ③ 建窗前的 `NSScreen.main` 未必是窗口最终所在屏，门控判据本身不可靠。
+5. **覆盖低电量模式**（injected bundle / UI 进程转发 / dyld interpose 三条候选）：**本壳不采用**——
+   注入面（`_WKProcessPoolConfiguration.injectedBundleURL`；所属类自 macOS 12 起 deprecated，
+   属性本身无单独注解。链路：`initializeNewWebProcess`（`createNewWebProcess` 调用）赋
+   `parameters.injectedBundlePath`）存在但未实测，
+   要用它做覆盖需自建 bundle 并链接 WebCore 的测试钩子（`Page::setLowPowerModeEnabledOverrideForTesting`），
+   代价与风险远超收益（仅省电工况下多 2× 帧率）；UI 进程不转发（已核对）；interpose 探针得 0 但
+   探针未入库、不可复核。系统省电策略本身没有应用侧出口，残余按 accepted 登记（决议第 2 条）。
+6. **换渲染引擎**（把原生壳改成 Chromium/CEF 内核）：唯一能在低电量模式下也拿满 120fps 的路径
+   （实测 Chromium 不受该策略影响），但超出 design 25 路线 A（WKWebView 壳 + 复用官方前端）的定义，
+   工程量与发布/签名面代价巨大——**移出本决策范围**；电池场景的替代品是 Electron flavor。
+
+**启动日志（唯一对照口径）**：`[native] 刷新率：显示器刷新率 120fps（当前模式）；prefer-60fps
+偏好=已关闭(跟随显示器刷新率)；低电量模式=开 → 页面更新上限约 60fps（…）`——由
+`RefreshRatePolicy.startupLogLine` 产出。刷新率取**窗口所在屏的当前模式**
+（`CGDisplayCopyDisplayMode`；取不到时回落面板上限 `NSScreen.maximumFramesPerSecond` 并在日志里
+标注「面板上限」）——与 WebKit 的 nominal **同源但不等价**（WebKit 用 CVDisplayLink 名义周期、在
+display link 初始化时只缓存一次，取不到时回落 60），建窗后立即
+记一次，并在换屏 / 屏幕参数变化（同屏改刷新率）/ 低电量模式切换 / 首次获得 key（上屏兜底）时按值去重补记
+（`MainWindowController.logRefreshRateIfChanged`；低电量通知在全局队列投递，处理器回主线程）。
+三个实测点为单次实机记录、**探针未入库**（复测方式 = 打包态 `POC_DEBUG=1` 的 `[native-fps]`）。
+`RefreshRatePolicyTests` 钉住 60/120/30 三个实测点、上游整数除法折算、接线时序（apply 先于
+`WKWebView` 构造）与 SPI 不可用时的诚实降级（unknown 按 WebKit 默认折算，绝不虚报 120）。
+注意：同屏改刷新率时 WebKit 是否重读 nominal 未证实（DisplayLink 名义周期只在初始化取一次），
+该场景的验收以 `[native-fps]` 实测为准，别只对日志。
+
+**验收（未完成）**：插电 120fps、电池 + 低电量模式 60fps、60Hz 外接屏不回退；日志标「面板上限」
+（模式读数取不到时的回落）或界面为 100Hz 类非整数倍屏时，判定以 `[native-fps]` 实测为准，
+别只对日志。见 STATUS.md 与 deviations.md S-48。
+
 ## 6. 数据、状态兼容与共存
 
 ### 6.1 userData 目录
@@ -840,7 +941,9 @@ node 集成测试拉起 Swift harness 断言真实窗口/桥，loopback-http-tes
 预启动/连接/网关凭据重录/运行时版本管理与回退/插件同步/归档清理入口（无
 对话框）/通知点击/深链/隐藏恢复/唤醒补发/退出确认）；WKWebView parity 清单
 （W1 剪贴板、W2 菜单快捷键、W3 富文本粘贴与拖拽、W4 打印/查找、W5 字体/
-滚动/IME、W6 后台节流对 SSE/WS——**无 backgroundThrottling 等价物（C1）**，
+滚动/IME、W6 后台节流对 SSE/WS——**无 backgroundThrottling 等价物（C1）**、
+W7 刷新率三工况（插电 120fps / 电池 + 低电量模式 60fps / 60Hz 外接屏不回退；判据见 §5.1、
+登记 deviations S-48；100Hz 类非整数倍屏不在三工况内，以 `[native-fps]` 实测为准），
 判定标准见 todo companion §七）；性能测量方法与同环境 A/B 纪律见 `scripts/perf/README.md` + **双端
 性能/产物体积验收协议**（companion §七：相对门/绝对预算/能力门三形态、注入式探针
 平移四场景、M5 双端同 tag 产物并排入库——.app/dmg/zip 体积目标 ≤ Electron × 0.75）。
@@ -853,7 +956,7 @@ node 集成测试拉起 Swift harness 断言真实窗口/桥，loopback-http-tes
 | B 桥 | 信封/帧长/超时/乱序/edge 往返——node 侧假 Swift 驱动（`sidecar-stdio.test.ts`），Swift 侧 XCTest | 已落地（`sidecar-stdio.test.ts` + `BridgeClient*Tests`） |
 | A 桥/护栏 | shim 与 manifest 一致性（bridge-manifest / bridge-shim / bridge-shim-surface）、origin 门、尺寸门 | 已落地 |
 | 集成 | node 集成测试拉起 Swift harness 断言真实窗口/通知/深链 | 无 GUI 通道冒烟（60/60）已落地；真实窗口 harness（`swift-harness-driver`）未实施——需 GUI 会话 |
-| 实机 | §8.5 矩阵 + C1/C2 | 未判，发布前执行（STATUS） |
+| 实机 | §8.5 矩阵（含 W7 刷新率三工况，S-48）+ C1/C2 | 未判，发布前执行（STATUS） |
 
 ## 9. 风险与开放问题
 
