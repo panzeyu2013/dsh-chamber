@@ -16,7 +16,7 @@
 > （S-47）、下载落盘（S-26）、缩放持久化（T-22）、原生壳日志（T-25）、mac 打包演练与 Sparkle
 > 密钥/发布物门禁（G41/G42）；S-10 降级为遮挡/App Nap 未判的部分收口（open），S-45 的状态词与
 > 正文拉齐。新增 accepted：JS 对话框（T-21）、WebKit ITP（T-23）、无 `NS*UsageDescription`
-> （T-24）与旧系统兜底在新下限下不可达（T-26）。仍 open 的只有外部门禁（S-01）、S-44 的实机面、S-10 的实机判定、S-48 的窗口高度单侧对齐裁决、T-28 的 corner-shape 单点裁决与 CI 内打包 .app
+> （T-24）与旧系统兜底在新下限下不可达（T-26）。仍 open 的只有外部门禁（S-01）、S-44 的实机面、S-10 的实机判定、S-49 的窗口高度单侧对齐裁决、T-28 的 corner-shape 单点裁决与 CI 内打包 .app
 > 启动（G19）；其余为 accepted 的结构性差异或已收口项。证据为当前工作树行号；旧 id 全部保留。
 
 ## 0. 更新纪律
@@ -77,7 +77,7 @@
 | S-45 | **ATS loopback 配置不对称（新发现，实机项）**：Electron 显式写 127.0.0.1/localhost 的 NSExceptionDomains 且 afterPack 强制 NSAllowsArbitraryLoads=false；Swift 只依赖 NSAllowsLocalNetworking | **resolved（2026-12 修复）**：模板已与 Electron `extendInfo` 逐键对齐——`NSAllowsArbitraryLoads=false` + `NSAllowsLocalNetworking=true` + `NSExceptionDomains`（`127.0.0.1`/`localhost`，`NSTemporaryExceptionAllowsInsecureHTTPLoads=true`，`Info.plist.template:78-101`），并由 `ShellStartupTests` 的模板断言钉住（S-45 测试）；残余（实机）= 真机 macOS 14+ loopback 首载验证（缺它时落到 S-27 失败页）。以下是原发现：macOS 14 起 ATS 可能拒绝 IP 直连，Apple 要求把 IP 写进 NSExceptionDomains；NSAllowsLocalNetworking 是否覆盖 127.0.0.1 字面量无法静态判定，覆盖不足则首载失败落 S-27 说明页 | E `package.json:109-124`、`after-pack-adhoc-sign.mjs:370-382` ↔ S `Info.plist.template:78-101` | resolved（2026-12 修复，正文即结论；产物双侧 ATS 逐键相同）；残余（实机）= 真机 macOS 14+ loopback 首载验证（缺它时落到 S-27 失败页） |
 | S-46 | **Swift About 面板缺版权行**：Electron 写入 NSHumanReadableCopyright，Swift 标准 About 面板无该键 | resolved：`Info.plist.template:63-69` 增 `NSHumanReadableCopyright`（值 `Copyright © 2026 dsh-chamber`，与 Electron 的构建年生成同义；静态年份已由注释说明）；标准 About 面板直接读取该键 | E `appInfo.js:129-135` ↔ S `Info.plist.template:63-69`、`ShellStartupTests.swift:1001-1019` | resolved；无残余 |
 | S-47 | **打包态 zh 本地化资源被 electron-builder 静默删除**：声明保留 en-US+zh-CN，实际用户包 framework 内只剩 `en.lproj`，`zh_CN.lproj/locale.pak`（569KB）被删 ⇒ zh 系统上 Chromium 级文案回退英文 | resolved：mac 腿改用 Electron 真实目录拼写 `build.mac.electronLanguages = ["en","zh_CN"]`（app-builder-lib 的 matcher 只做精确/前缀匹配，`"zh-CN"` 永远匹配不到 `zh_CN.lproj`；顶层连字符值保留给 win/linux `.pak` 腿）；afterPack 的 `verifyPackagedMacLocales()` 与 `verify-electron-artifacts.mjs` 打包态臂对真实 `.app` 断言「每个声明的 locale 都带出且 `locale.pak` 非空」，release 策略测试钉配置形状 | E `packages/desktop/package.json:99-107`、app-builder-lib `ElectronFramework.js` 的 `removeUnusedLanguagesIfNeeded`（`platformSpecificBuildOptions.electronLanguages || config.electronLanguages`） ↔ S 无对应面（原生壳不消费 Chromium locale） | resolved；退役判据 = mac 打包演练/发布腿在真实 `.app` 上跑 `verifyPackagedMacLocales`（CI 演练见 G41） |
-| S-48 | **初始窗口视口高度不对称**：Swift 内容区 1280×786（外框 ~814）vs Electron 外框 1280×800（视口 1280×772）——折中后两端仍差 14pt（~1.8%），侧栏会话列表 / 工作区列的可见高度差一档（折中前差 28pt） | **折中（2026-09）**：不单侧对齐，原生内容区取 786 使两端各偏 ~14pt；单侧对齐（原生取 772，或 Electron 开 `useContentSize` 后两端同取 800）**仍未裁决** | E `packages/desktop/main.ts:870-872`（无 useContentSize） ↔ S `macos/Sources/DSHChamberPoc/MainWindowController.swift:57-69,287,312` | open（待单侧对齐裁决）；裁决落地后按结论改 accepted/resolved 或退役本条 |
+| S-49 | **初始窗口视口高度不对称**：Swift 内容区 1280×786（外框 ~814）vs Electron 外框 1280×800（视口 1280×772）——折中后两端仍差 14pt（~1.8%），侧栏会话列表 / 工作区列的可见高度差一档（折中前差 28pt） | **折中（2026-09）**：不单侧对齐，原生内容区取 786 使两端各偏 ~14pt；单侧对齐（原生取 772，或 Electron 开 `useContentSize` 后两端同取 800）**仍未裁决** | E `packages/desktop/main.ts:870-872`（无 useContentSize） ↔ S `macos/Sources/DSHChamberPoc/MainWindowController.swift:57-69,287,312` | open（待单侧对齐裁决）；裁决落地后按结论改 accepted/resolved 或退役本条 |
 
 ## 2. 结构性 / 有意差异（T，非缺陷；除注明外均 accepted）
 
