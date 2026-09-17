@@ -24,11 +24,15 @@
    pass deleted chamber's plain one-app button). No declaration here invents a
    token, a size or a colour the pinned vendor surface does not already use.
 
-   Two deliberate SPELLING differences from the upstream text, both
-   computed-identical and verified against it: `0.5px` where upstream writes
-   `.5px` (this repo's convention — 30+ declarations), and `background: none`
-   where upstream writes `background: 0 0` (same longhand reset). Every other
-   declaration of `.split`/`.main`/`.chevron`/`.icon` matches upstream verbatim. */
+   Deliberate differences from the upstream text, all verified against it:
+   `0.5px` where upstream writes `.5px` (this repo's convention — 30+
+   declarations), `background: none` where upstream writes `background: 0 0`
+   (same longhand reset), and the engine-alignment form-control reset on
+   `.button, .chevron` below (`appearance`/`-webkit-appearance: none` plus
+   `font: inherit`, 2026-12: Chromium and WebKit otherwise keep different
+   native button dress; the explicit font longhands after the shorthand still
+   win). Every other declaration of `.split`/`.main`/`.chevron`/`.icon`
+   matches upstream verbatim. */
 
 /* The control box (upstream `.split`): the ONLY element that draws the
    hairline and the corner radius — the inner buttons stay borderless and are
@@ -53,6 +57,12 @@
   align-items: center;
   gap: 5px;
   color: var(--dsw-alias-label-primary);
+  /* Engine alignment (2026-12): kill the UA form-control dress WebKit would
+     otherwise keep, then re-state the upstream type below so the `font`
+     shorthand's inherited values never win. */
+  appearance: none;
+  -webkit-appearance: none;
+  font: inherit;
   font-size: 11px;
   font-weight: 400;
   line-height: 16px;

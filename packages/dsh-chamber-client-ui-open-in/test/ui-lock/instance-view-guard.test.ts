@@ -194,14 +194,21 @@ test('T5: the main button uses the design-system Tooltip and the existing dictio
     1,
     'upstream has one split-button form, so the main button is wrapped once',
   )
-  // No native title bubble on the main icon button (the chevron keeps
-  // upstream's own `title` + `aria-label` pair). The opening tag ends at the
-  // JSX attribute list's own line, so the arrow functions inside it do not
-  // truncate the match.
+  // No native title bubble on either half of the split control: the chevron's
+  // own `title` was retired in the 2026-12 engine-alignment round (WebKit and
+  // Chromium draw native tooltips differently), so both halves share the
+  // design-system Tooltip source. The opening tag ends at the JSX attribute
+  // list's own line, so the arrow functions inside it do not truncate the match.
   const mainButton = /className=\{styles\.button\}[\s\S]{0,600}?\n\s*>/u.exec(button)
   assert.ok(mainButton !== null, 'the main button exists')
   assert.ok(!mainButton[0].includes('title='), 'the main button must not carry a native title attribute')
   assert.ok(mainButton[0].includes('aria-label={title}'), 'the accessible name stays on the button')
+  assert.equal(
+    [...button.matchAll(/<Tooltip label=\{t\('menuToggle'\)\} side="bottom">/gu)].length,
+    1,
+    'the chevron uses the same design-system Tooltip source as the main button',
+  )
+  assert.equal([...button.matchAll(/\btitle=/gu)].length, 0, 'no native title bubble remains on the split control')
 
   // The copy rides the keys the dictionaries already carry.
   assert.match(button, /const title = phase === 'error' \? t\('openError'\) : t\('openTitle', \{ app: appLabel\(activeEntry, t, platform\) \}\)/u)

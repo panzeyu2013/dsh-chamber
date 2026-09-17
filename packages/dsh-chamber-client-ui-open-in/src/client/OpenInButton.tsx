@@ -24,10 +24,13 @@
  * form for any non-empty set; zero renders null.
  * The menu is the official `Menu` primitive (chamber `compact` rows — the
  * 2026-09 menu-density decision, design 06 §7 — fill selection, real
- * app icons, focus transfer and arrow navigation through `autoFocus`), and the
- * button carries the design-system `Tooltip`; only the `.instance-view`-scoped
- * dismissal stays local (`instance-view-guard.ts`) because this shell stacks
- * one instance view per source (2026-09-11 upstream-alignment, T13/T5).
+ * app icons, focus transfer and arrow navigation through `autoFocus`), and both
+ * halves of the split control carry the design-system `Tooltip` (the chevron's
+ * native `title` tooltip was retired in the 2026-12 engine-alignment round:
+ * WebKit and Chromium draw that bubble differently); only the
+ * `.instance-view`-scoped dismissal stays local (`instance-view-guard.ts`)
+ * because this shell stacks one instance view per source (2026-09-11
+ * upstream-alignment, T13/T5).
  *
  * Superset of the official `open-in-app` client (design 20 §7): the catalog and
  * its real icons (`local-catalog.ts`), the product-label table and button copy
@@ -371,35 +374,40 @@ export function OpenInButton({
               {appMark(iconUrl(activeEntry.id), BUTTON_MARK_SIZE)}
             </button>
           </Tooltip>
-          <button
-            type="button"
-            className={styles.chevron}
-            aria-haspopup="menu"
-            aria-expanded={open}
-            aria-label={t('menuToggle')}
-            title={t('menuToggle')}
-            onClick={() => {
-              const next = !open
-              setOpen(next)
-              // The catalog is re-probed on every open (the bespoke menu's
-              // `onOpening` behaviour, now owned by the trigger).
-              if (next) void refresh()
-            }}
-            onKeyDown={(event) => {
-              // Arrow-key opening stays available (the primitive's `autoFocus`
-              // then moves focus into the list).
-              if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-                event.preventDefault()
-                setOpen(true)
-                void refresh()
-              }
-            }}
-          >
-            {/* The design system's own chevron, at the official client's size
-                (`OpenInAppAction.tsx`: `IconChevronDownOutline14 size={11}`) —
-                no hand-drawn glyph and no chamber-invented expand animation. */}
-            <IconChevronDownOutline14 size={11} />
-          </button>
+          {/* Same design-system bubble as the main button: the chevron may
+              carry no native `title` (2026-12 engine alignment — WebKit and
+              Chromium draw native tooltips differently, so the split control
+              shows one bubble source for both halves). */}
+          <Tooltip label={t('menuToggle')} side="bottom">
+            <button
+              type="button"
+              className={styles.chevron}
+              aria-haspopup="menu"
+              aria-expanded={open}
+              aria-label={t('menuToggle')}
+              onClick={() => {
+                const next = !open
+                setOpen(next)
+                // The catalog is re-probed on every open (the bespoke menu's
+                // `onOpening` behaviour, now owned by the trigger).
+                if (next) void refresh()
+              }}
+              onKeyDown={(event) => {
+                // Arrow-key opening stays available (the primitive's `autoFocus`
+                // then moves focus into the list).
+                if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                  event.preventDefault()
+                  setOpen(true)
+                  void refresh()
+                }
+              }}
+            >
+              {/* The design system's own chevron, at the official client's size
+                  (`OpenInAppAction.tsx`: `IconChevronDownOutline14 size={11}`) —
+                  no hand-drawn glyph and no chamber-invented expand animation. */}
+              <IconChevronDownOutline14 size={11} />
+            </button>
+          </Tooltip>
         </span>
       )}
     />

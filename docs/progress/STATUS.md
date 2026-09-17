@@ -390,9 +390,9 @@
 
 ## 设计未决
 
-- **Electron / Swift 双 flavor 接入点 parity（2026-12 八路逐函数复核 + 打包/引擎专项）**：**仍 open：S-01（纯外部门禁：EdDSA 双密钥真实值、Sparkle 编译证明、实机安装验收）、G19（CI 内启动签名打包 `.app`：凭据 + GUI 会话）、S-44（收窄残余：Electron 43.4.0 无授权查询/申请面，只剩实机确认系统提示等价）、S-10（隐藏态节流代码已对齐，遮挡/App Nap 无实测，见上文实机门禁）**；实机核验清单（第二轮启动恢复、首帧时序、beta 真机下载安装、坏密钥页面态、Sparkle 节奏、ATS loopback、登录项回读、工具链 native gate 的 WKWebView 段、隐藏/遮挡态）见 §4；统一登记在 `docs/progress/deviations.md` §1/§3/§4，可达性纪律与盘点见 §6。
+- **Electron / Swift 双 flavor 接入点 parity（2026-12 八路逐函数复核 + 打包/引擎专项）**：**仍 open：S-01（纯外部门禁：EdDSA 双密钥真实值、Sparkle 编译证明、实机安装验收）、G19（CI 内启动签名打包 `.app`：凭据 + GUI 会话）、S-44（收窄残余：Electron 43.4.0 无授权查询/申请面，只剩实机确认系统提示等价）、S-10（隐藏态节流代码已对齐，遮挡/App Nap 无实测，见上文实机门禁）、T-28（U1 引擎差异：open-in 观感差异已证伪版本偏差，可对齐两项已改；`corner-shape` 超椭圆待 vendor `ui-theme` 单点裁决，裸 `scrollbar-width`/`field-sizing`/`text-autospace` 引擎降级已登记）**；实机核验清单（第二轮启动恢复、**打包态冷启动首载复验（宿主不占用 17500）**、首帧时序、beta 真机下载安装、坏密钥页面态、Sparkle 节奏、ATS loopback、登录项回读、工具链 native gate 的 WKWebView 段、隐藏/遮挡态）见 §4；统一登记在 `docs/progress/deviations.md` §1/§3/§4，可达性纪律与盘点见 §6。
 
-- **macOS Swift 原生壳（design 25，路线 A）开放门禁**：计划期的 D1–D7 正式签核未走形式流程（实现按推荐默认值落位；其中 D3 的更新路线经用户 2026-12 裁决改为 Sparkle 2），M5 门禁未闭合。剩余：① **实机/GUI 验收（打包 `.app` + 真实实例）**——通知权限时机与点击激活会话、SMAppService 登录项、LaunchServices
+- **macOS Swift 原生壳（design 25，路线 A）开放门禁**：计划期的 D1–D7 正式签核未走形式流程（实现按推荐默认值落位；其中 D3 的更新路线经用户 2026-12 裁决改为 Sparkle 2），M5 门禁未闭合。剩余：① **实机/GUI 验收（打包 `.app` + 真实实例）**——打包态冷启动首载（宿主不占用 17500：首载等 sidecar ready + 有界退避、失败页携带真实原因与端口占用提示）与同 bundle 二次启动的单实例流程、通知权限时机与点击激活会话、SMAppService 登录项、LaunchServices
   深链冷/热启动、关窗隐藏与恢复、唤醒补发、ATS loopback、最小化/被完全覆盖与 App Nap 语义（S-10），以及 WKWebView 无 `backgroundThrottling:false` 等价物下的
   SSE/WS 心跳与恢复（design 25 §8.1 C1/C2、§8.5 W1–W6；判定标准见 `todo/macos-swift-v1.md` §七）；② **凭据 /
   runner-only 发布证明**——Developer ID 签名、公证、stapler、spctl 各臂与 arch（lipo）断言实跑，以及首个正式
@@ -540,7 +540,7 @@
     T10）；提问/计划待审/请求权限 = 14px 图标徽标（官方是 10px warning 圆点，保留图标刻意；词表取官方
     `status.waiting*`）。**后续对齐轮不得当漏改收掉**；判据见 06 §4.3。
 
-- **默认排序 `manual`（06 §3.1）**：按 wire 顺序，与官方默认 `updated` 不同，是有意产品取舍。**窗口标题冻结**：桌面原生标题固定 `dsh-chamber`。
+- **默认排序 `manual`（06 §3.1）**：按 wire 顺序，与官方默认 `updated` 不同，是有意产品取舍。**窗口标题冻结**：Electron 固定 `dsh-chamber`（`main.ts:878`，`page-title-updated` 被拦），原生壳可见名 `dsh-chamber-native`（T-14）；两侧标题都不随页面 `document.title` 变化。
 
 - **菜单密度 = chamber 档，不跟随官方（2026-09 裁决）**：所有 chamber 弹层菜单（session/workspace kebab、排序、git 字段下拉、open-in 应用菜单）一律走官方原语 `compact`（26px/12px；open-in 原 dense、git 原默认档均本轮改判，见 design
   20 §1/design 08 §3.3），设置页服务器下拉用自己的 markup 而保留官方圆角/背景。判据见 design 06 §7/design 15④；**下一轮上游对齐不得**改回默认/dense，锁在 `sidebar/test/visual-lock/`。
