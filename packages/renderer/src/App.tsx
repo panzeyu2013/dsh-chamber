@@ -99,7 +99,7 @@ import {
   type RendererDeliveryCoordinates,
   type SourceOwnershipToken,
 } from './deep-link-activation.ts'
-import { openInstanceSession, reconnectInstanceConnection, disposeAllShells, disposeInstanceShell, type ShellState } from './shell.ts'
+import { openInstanceSession, reconnectInstanceConnection, disposeAllShells, disposeInstanceShell, isSettledShellState, type ShellState } from './shell.ts'
 // T15 (2026-09-11 upstream-alignment): the official Button atom (U
 // ui-primitives/src/Button.tsx) replaces the chamber's own `.btn` chrome in
 // every frame-level failure screen. Imported BY DEEP SOURCE PATH, the form the
@@ -170,8 +170,10 @@ import {
 import {
   decideReclaimCandidates,
   shouldRunBackgroundPhase,
+  VIEW_RECLAIM_GRACE_MS,
   VIEW_RECLAIM_TICK_MS,
 } from './retention.ts'
+import { decideServingGate, isDeferredReclaimDue, shouldDeferBootForSource } from './source-readiness.ts'
 import {
   HARVEST_ABANDON_MS,
   harvestAbandoned,
@@ -689,11 +691,22 @@ export default function App() {
   const serversPhaseRef = useRef<Record<string, string>>({})
   const waitForServing = useCallback((instanceId: string): Promise<boolean> => {
     const deadline = Date.now() + SERVING_WAIT_MS
+    // 终态宽限（W2）：用户点来源时 App 会先触发一次即时重连，相位需要一两个
+    // tick 才翻到 connecting——终态必须**持续**一段时间才判"不可服务"，
+    // 否则会把正在恢复的来源误报成未连接。
+    let terminalSince: number | null = null
     return new Promise<boolean>((resolve) => {
       const check = (): void => {
         const phase = serversPhaseRef.current[instanceId]
         if (phase === undefined) { resolve(false); return }
         if (phase === 'ready') { resolve(true); return }
+        // 相位感知（W2，2026-12 boot 死区收敛）：`error`（快速重试耗尽）与
+        // idle（手动断开）不再烧满整个 boot 预算；`connecting`/`degraded`
+        // （恢复中）继续在预算内等。判定是纯逻辑（source-readiness），本处只接线。
+        const decision = decideServingGate({ phase, nowMs: Date.now(), terminalSinceMs: terminalSince })
+        if (decision.action === 'serve') { resolve(true); return }
+        if (decision.action === 'unavailable') { resolve(false); return }
+        terminalSince = decision.terminalSinceMs
         if (Date.now() >= deadline) { resolve(false); return }
         setTimeout(check, SERVING_POLL_MS)
       }
@@ -902,6 +915,35 @@ export default function App() {
     serversPhaseRef.current = Object.fromEntries(servers.map(server => [server.id, server.phase]))
   }, [servers])
 
+  /**
+   * boot 推迟集合（W2，2026-12 boot 死区收敛）：**手动断开**（idle）的来源不
+   * 启动 shell——一次注定吃满 503 预算的 boot 只会白烧，还会把用户丢进加载态。
+   * 遮罩此时呈现「未连接」+「连接」，点连接后相位离开 idle，正常 boot 开始。
+   * 未知相位（投影未到）不推迟；本判定是渲染期事实（`servers`），不用 ref 镜像。
+   */
+  const deferredBootIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const server of servers) {
+      if (server.id === LOCAL_INSTANCE_ID) continue
+      // 事实源必须是**原始 transport 投影**（remoteStatus 以 raw id 为键）：
+      // deriveServers 把"投影未到达"折叠成 `'idle'`（`remoteStatus[...]?.phase ?? 'idle'`），
+      // 那不是手动断开事实——拿折叠值当输入会把一次投影延迟/状态拉取失败变成
+      // "该来源未连接、拒绝 boot"，而纯契约明确要求 undefined 绝不推迟。
+      const rawId = rawInstanceIdFromSourceId(server.id)
+      if (rawId === null) continue
+      if (shouldDeferBootForSource(remoteStatus[rawId]?.phase)) ids.add(server.id)
+    }
+    return ids
+  }, [servers, remoteStatus])
+  /** 推迟集合的稳定签名：让"起表/豁免"的 effect 只在成员变化时重跑。 */
+  const deferredBootSignature = useMemo(
+    () => [...deferredBootIds].sort().join('\u0000'),
+    [deferredBootIds],
+  )
+  /** 渲染期镜像（effect 与清理臂读它，避免把它们挂到 servers 的依赖上）。 */
+  const deferredBootRef = useRef<ReadonlySet<string>>(new Set<string>())
+  deferredBootRef.current = deferredBootIds
+
   // 降级自愈：boot 以降级收尾（无客户端插件图 / 必需 extra-row 服务缺席）而来源
   // 随后 ready 时，自动重挂一次——此前只有整页 reload 能恢复（2026-09-10，
   // sidebarRight 彻底修复）。每个 ready 世代一次。
@@ -1029,6 +1071,12 @@ export default function App() {
   const activeViewRef = useRef(activeView)
   activeViewRef.current = activeView
   const pendingViewRef = useRef<string | null>(null)
+  /**
+   * 用户在遮罩上显式放弃的视图（W1/W4）：只由遮罩的「切换来源」写入，由
+   * `selectView`（用户又点回它 = 撤回意图）或落地回收删除。声明位置必须在
+   * `selectView` 之前——撤回就发生在那里。
+   */
+  const abandonedViewsRef = useRef<Set<string>>(new Set())
 
   /**
    * N-ctx 视图回收（设计 05 §4）：视图生命周期 = 注册表条目生命周期。
@@ -2287,6 +2335,9 @@ export default function App() {
    * boot 很贵，且回收 effect 的回滚会造成一闪而过的幽灵骨架屏。local 常驻。
    */
   const selectView = useCallback((viewId: string) => {
+    // 用户又选中这个视图 = 撤回"放弃"意图（否则它下一次离开会跳过保留宽限被
+    // 立即回收）。切换来源的动作把标记写在**另一个** id 上，不会被这里误删。
+    abandonedViewsRef.current.delete(viewId)
     // 用户点击 = 意图使用该来源：ready 但会话/远端已死的来源立即探测一次
     //（heartbeat 的即时加速；fire-and-forget，见 probeRemoteReady）。
     probeRemoteReady(viewId)
@@ -2348,6 +2399,41 @@ export default function App() {
       if (scrollAnchor !== null) restoreSidebarScroll(viewId, scrollAnchor)
     }, 'view')
   }, [ensureRemoteConnected, probeRemoteReady])
+
+  /**
+   * 遮罩「切换来源」的放弃意图（W1/W4，2026-12 boot 死区收敛）：记下意图后
+   * 切换到目标来源，**等切换落地**再由下方 effect 回收被放弃的视图。
+   * 为什么不就地回收：reclaimView 拒绝活动/待开视图（既有守卫），而 selectView
+   * 的 apply 经 View Transition 单槽队列可能延迟——反过来"先拆再切"会在切换
+   * 失败时留下没有内容的窗口。标记只由这个显式用户动作写入；目标不合法或
+   * selectView 同步抛出时立即撤回，绝不让一个"没落地的放弃"污染后续回收
+   * （否则该视图下一次离开会跳过保留宽限被立刻拆掉）。
+   */
+  const switchSourceFromVeil = useCallback((fromViewId: string, targetId: string) => {
+    if (fromViewId === targetId) return
+    if (targetId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(targetId)) return
+    if (fromViewId !== LOCAL_INSTANCE_ID) abandonedViewsRef.current.add(fromViewId)
+    try {
+      selectView(targetId)
+    } catch (error) {
+      abandonedViewsRef.current.delete(fromViewId)
+      console.error(`[renderer] veil switch ${fromViewId} -> ${targetId} failed:`, error)
+    }
+  }, [selectView])
+
+  /**
+   * 遮罩「连接」（W2）：显式用户意图，与设置页 Connect 同语义。idle 的
+   * 「手动断开不被自动触碰」纪律正是靠"只有显式动作才连接"守恒，因此这里不像
+   * ensureRemoteConnected 那样按相位过滤。
+   */
+  const connectSourceFromVeil = useCallback((viewId: string) => {
+    const ssh = window.dshChamber?.desktopSsh
+    const rawId = rawInstanceIdFromSourceId(viewId)
+    if (ssh === undefined || rawId === null) return
+    void ssh.connect(rawId).catch(err => {
+      console.error(`[renderer] veil connect ${rawId} failed:`, err)
+    })
+  }, [])
 
   /** Replay the one cold-start remote activation only after the first
    * authoritative instances_get result committed the same roster generation.
@@ -2471,6 +2557,11 @@ export default function App() {
     const retentionSlotOccupied = mountedViews.some(id =>
       id !== LOCAL_INSTANCE_ID
       && id !== activeView
+      // W2：**从未 settle** 的被推迟视图不持有任何壳资源，不算占用后台槽
+      // （与下方"boot 失败的壳不计占用"同源：算占用会让 warmRemaining 恒 0）。
+      // 已 settle 后来源才被手动断开的壳仍是一个真壳：照常占槽、照常进 retention
+      // 候选（2026-12 复核：否则它有壳却既不占槽也不算隐藏壳，算术出现瞬态双壳）。
+      && !(deferredBootRef.current.has(id) && !isSettledShellState(shellStates[id]))
       && !autoPrewarmedRef.current.has(id)
       // 已失败的用户壳（error !== null）不算占用：它既不会被回收（隐藏 1 壳
       // 时 excess=0）也不是预热壳，若算占用则 remaining 恒 0、收割链整场停摆
@@ -2597,7 +2688,7 @@ export default function App() {
   const settledViewIds = useMemo(() => {
     const settled = new Set<string>()
     for (const [id, state] of Object.entries(shellStates)) {
-      if (state.booted || state.error !== null) settled.add(id)
+      if (isSettledShellState(state)) settled.add(id)
     }
     return settled
   }, [shellStates])
@@ -2642,6 +2733,16 @@ export default function App() {
   const reclaimView = useCallback((id: string, reason: 'retention' | 'harvest' = 'retention') => {
     if (id === LOCAL_INSTANCE_ID || !mountedViews.includes(id)) return
     if (id === activeViewRef.current || id === pendingViewRef.current) return
+    // 设置面板正在编辑的来源：拆壳 = 面板当前面消失（design 05 §5 的面板 hold）。
+    // 守卫放在**唯一拆除入口**上而不是逐个调用点：推迟臂与 retention 循环各有同名
+    // 守卫，但 135s 放弃臂、收割失败/放弃与遮罩放弃落地臂都能到达本函数——任何一条
+    // 漏守卫都会把面板钉死在"正在启动该实例的前端"（2026-12 复核 MINOR-1）。
+    // 面板关闭时 SettingsShell 显式 setSettingsTarget(undefined)，hold 不超期；
+    // 来源退役的卸载走注册表删除臂（不经本函数），不存在"退役壳拆不掉"。
+    // 守卫放在函数最前 = 命中即**纯 no-op**（连收割槽释放都不做）：不会造成
+    // 预热调度停滞——该挂载仍计入占用，`warmRemaining` 恒为 0，本来也不会
+    // 起新的后台 boot；面板关闭后下一个 tick 由放弃/收割/推迟任一臂照常恢复。
+    if (id === settingsTargetRef.current) return
     // 收割回收时后台槽就是它自己：boot 已产出首个推送（或已失败），先释放槽位
     // 再回收，否则 prewarmInflight 守卫会把自己挡回去（保留回收语义不变）。
     if (reason === 'harvest' && prewarmInflightRef.current === id) {
@@ -2677,6 +2778,18 @@ export default function App() {
     setShellStates(prev => withoutRemovedSourceKeys(prev, new Set([id])))
     setRetryTokens(prev => withoutRemovedSourceKeys(prev, new Set([id])))
   }, [mountedViews])
+
+  // 遮罩「切换来源」的落地臂（W1）：切换落地（activeView 变化）后回收被放弃的
+  // 视图。reclaimView 自己的活动/待开守卫**不被绕过**——标记留到真正拆掉为止；
+  // 拆除与 reclaimView 同一条路：dispose + 同 commit 卸载 + 抑制自动预热。
+  useEffect(() => {
+    if (abandonedViewsRef.current.size === 0) return
+    for (const id of [...abandonedViewsRef.current]) {
+      if (!mountedViews.includes(id)) { abandonedViewsRef.current.delete(id); continue }
+      if (id === activeView || id === pendingViewRef.current) continue
+      reclaimView(id, 'retention')
+    }
+  }, [activeView, mountedViews, reclaimView])
 
   /** 保留策略检查：仅前台执行（窗口隐藏期不拆壳；恢复可见由
    * visibilitychange 补偿一轮）。守卫与上限见 decideReclaimCandidates。
@@ -2731,8 +2844,36 @@ export default function App() {
         reclaimView(id, wasHarvest ? 'harvest' : 'retention')
       }
     }
+    // W2：被推迟（来源未连接）的隐藏视图不持有任何壳资源，却因为"未 settle 不入
+    // retention 候选"能永久占住挂载位——过既有隐藏宽限即回收，重开仍是既有
+    // selectView 冷挂载路径。裁决在 source-readiness.ts（纯函数 + 用例）；
+    // 这里只提供事实：已 settle 的推迟壳回到 retention 常规策略，设置面板正在
+    // 编辑的来源按 design 05 §5 的面板 hold 绝不回收（2026-12 复核 MAJOR：
+    // 少了这道守卫会把面板钉死在"正在启动该实例的前端"）。
+    for (const id of mountedViews) {
+      if (!isDeferredReclaimDue({
+        deferred: deferredBootRef.current.has(id),
+        settled: settledViewIds.has(id),
+        busy: id === activeViewRef.current || id === pendingViewRef.current,
+        settingsTarget: id === settingsTargetRef.current,
+        hiddenSinceMs: hiddenSinceRef.current[id],
+        nowMs: now,
+        graceMs: VIEW_RECLAIM_GRACE_MS,
+      })) continue
+      reclaimView(id, 'retention')
+    }
+    // W2（F1 复核）：**从未 settle** 的被推迟视图既不占隐藏壳数、也不由 retention
+    // 回收——它没有壳可拆（推迟回收臂按隐藏宽限负责它）。不排除会让一次"设置面板选了
+    // 离线来源"把 excess 抬到 ≥1，从而把用户真正的温壳挤掉（与 prewarmInflightId 的
+    // 同类排除同源）。已 settle 的推迟壳是**真壳**：它照常计数、照常进候选窗。
+    const unsettledDeferredIds = new Set(
+      [...deferredBootRef.current].filter(id => !settledViewIds.has(id)),
+    )
+    const retentionMountedViews = unsettledDeferredIds.size === 0
+      ? mountedViews
+      : mountedViews.filter(id => !unsettledDeferredIds.has(id))
     const candidates = decideReclaimCandidates({
-      mountedViews,
+      mountedViews: retentionMountedViews,
       activeViewId: activeViewRef.current,
       hiddenSince: hiddenSinceRef.current,
       settled: settledViewIds,
@@ -2800,16 +2941,31 @@ export default function App() {
     for (const id of Object.keys(hiddenSinceRef.current)) {
       if (!live.has(id)) delete hiddenSinceRef.current[id]
     }
-    // 挂载时刻（绝对放弃上限的基准；settle 时清除）。
+    // 挂载时刻（绝对放弃上限的基准；settle 时清除）。**被推迟的 boot 不起表**
+    // （W2）：还没有在途 boot，绝不能被放弃臂判成"永不 settle"；相位离开 idle
+    // 后本 effect 因签名变化重跑，那一刻才起表（新尝试有自己的预算）。
+    // 刻意**只跳过起表、绝不删除已有表**：boot 已经开始、来源随后被手动断开时，
+    // 在途的那次 boot 仍需放弃臂看管（删表会让它失去唯一的兜底）。
     const now = Date.now()
     for (const id of mountedViews) {
+      if (deferredBootRef.current.has(id)) {
+        // W2 生命周期：被推迟的视图**永不 settle**，所以它拿不到 handleInstanceSettled
+        // 的 hiddenSince——后台挂载（设置面板选来源）又不会经过 activeView 变化臂。
+        // 没有计时键，下面的推迟回收臂与 retention 都看不见它（F1：视图泄漏 +
+        // 误占预热槽/隐藏壳数）。这里按挂载时刻起表，与"隐藏即计时"同一条语义。
+        if (id !== activeViewRef.current && id !== pendingViewRef.current
+          && hiddenSinceRef.current[id] === undefined) {
+          hiddenSinceRef.current[id] = now
+        }
+        continue
+      }
       if (viewBootStartedAtRef.current[id] === undefined) viewBootStartedAtRef.current[id] = now
     }
     for (const id of Object.keys(viewBootStartedAtRef.current)) {
       if (!live.has(id)) delete viewBootStartedAtRef.current[id]
     }
     reclaimHiddenViews()
-  }, [mountedViews, reclaimHiddenViews])
+  }, [mountedViews, deferredBootSignature, reclaimHiddenViews])
 
   // 周期回收检查（settle/切换以外的主要驱动）；visibilitychange 恢复补偿的
   // 回收臂在下方 aggregate 段 visibility effect 中统一处理（与预热/聚合补偿
@@ -3872,6 +4028,15 @@ const HEALTH_ERROR_GRACE_MS = 10_000
               onStateChange={handleShellState}
               retryToken={retryTokens[viewId]}
               waitForServing={waitForServing}
+              // W1/W2/W4：遮罩的事实输入与动作（导航/回收顺序仍由 App 拥有）。
+              sourcePhase={servers.find(server => server.id === viewId)?.phase}
+              bootDeferred={deferredBootIds.has(viewId)}
+              switchTargets={servers
+                .filter(server => server.id !== viewId)
+                .map(server => ({ id: server.id, label: server.label }))}
+              onSwitchSource={targetId => switchSourceFromVeil(viewId, targetId)}
+              onConnectSource={() => connectSourceFromVeil(viewId)}
+              onRequestRetry={() => retryView(viewId)}
               // chamber (2026-12, design 05 §2.2 revision): the reveal gate. The
               // boot window is covered by the view's own `!settled` veil; this
               // boolean extends the hold past a clean settle for exactly as long

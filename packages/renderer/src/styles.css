@@ -172,7 +172,12 @@ body {
   display: flex;
   flex-direction: column;
   align-items: center;
+  /* 可操作遮罩（2026-12 W1）在来源很多时会换行增高：短窗口下必须能滚动，
+     否则重试/切换按钮会被推出视口且无处可滚（复核 F9）。safe center 让
+     溢出时从顶部对齐而不是两头裁切，不支持该关键字的引擎退回普通 center。 */
   justify-content: center;
+  justify-content: safe center;
+  overflow-y: auto;
   gap: 12px;
   padding: 24px;
 }
@@ -195,6 +200,37 @@ body {
 .instance-loading-hint {
   font-size: 12px;
   color: var(--dsw-alias-label-tertiary, var(--muted));
+}
+
+/* ---------- 可操作遮罩（2026-12 boot 死区收敛 W1/W2/W4） ----------
+   多来源导航（侧栏）在壳内部、App 失败覆盖层只在已 settle 的失败时出现，
+   所以未 settle 的 boot 曾经是一段没有任何导航的死区。超过反馈窗后遮罩
+   升级为可操作态：继续等待是默认，但「重试 / 连接 / 切换来源」必须可达。
+   样式与 .fatal-servers 同族（同一按钮原子与同一行内排版；两者是各自文件段里的
+   独立规则，只有颜色/文本 token 共享），方向与间距跟随
+   遮罩已声明的"零几何主张"：仅在居中的 main 列内追加行，不引入占位几何。 */
+.instance-loading-actions,
+.instance-loading-servers {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.instance-loading-servers {
+  max-width: 560px;
+}
+
+.instance-loading-elapsed,
+.instance-loading-note,
+.instance-loading-reload {
+  max-width: 560px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-tertiary, var(--muted));
+  text-align: center;
+  overflow-wrap: anywhere;
 }
 
 @keyframes instance-loading-spin {

@@ -23,11 +23,20 @@
   - **实例写者静默门拦住自动启动恢复路径（同上验收）**：shell 被 `SIGKILL`/孤儿 dsh 占住 DSH_HOME 时如实拒绝（
     `409 connection_busy`）但「启动/停止」点不动（状态停 `starting`、端口 0），恢复 = 优雅重启应用；仅硬杀后出现。
   - **降级提示目检/实机腿（05 §4，2026-12）**：结构性缺口下三处座位一致性——横幅 ~5s 出现/自愈后以「若仍然如此…」回来、侧栏行不重复播报、连接页卡片不同时出现「正常/能力受限」、提示非阻断与 `role="status"`、与 body portal 叠压；目前只经单测 + 源码锁，**未真机判**（`gui-acceptance-checklist.md` §3）。
+  - **boot 死区收敛实机门（05 §4.1，2026-12）**：未连接（idle）远端点击其会话 → 遮罩立即给「连接」+ 切换行且**不启动 boot**（该挂载隐藏满保留宽限后回收；设置面板正在编辑的来源不回收）；`error` 与托管 `stopped`/`restart-exhausted` 来源 → 就绪门 1.5s 宽限后判不可服务（不再等满 60s），`degraded`（重连在途）**不判死**、仍在预算内等，两者都在能退回本地；挂死 boot → **超过**反馈窗（10s）后遮罩给出重试/连接/切换 + ⌘R 提示；502（隧道通、远端端口死）→ 非阻断 `.boot-gap` 横幅 + 每 ready 世代一次自愈。**Swift 打包态**复测遮挡/最小化下仍收敛（与 S-10 同批）。契约与归谬见 design 05 §4.1；判定纯函数与接线锁在 `packages/renderer/src/source-readiness.ts` 与 `packages/renderer/test/lifecycle/boot-deadzone-wiring.test.ts`，通道失败上浮在 `packages/renderer/test/lifecycle/host-graph.test.ts`。
+
+  - **idle 来源点会话排队到 68s 才失败（05 §4.1 推迟 boot 的代价，2026-12）**：`open` 在 `QUEUED_OPEN_TIMEOUT_MS`(68s) 内等不到壳就以打开失败收尾；窗口内点「连接」可在 settle 后补发，但没有"连接成功后自动打开"这条腿。候选收口 = App 记下被推迟的 open 意图并在来源 ready 时重放（须与既有 pending-open 队列语义对齐）。
+
+- **Swift 原生运行期监督（未实现；两条正交缺口，2026-12 复核）**：① **控制面**：原生壳只在首载前探一次 `/health`（S-45）；sidecar 进程活着而事件循环卡住时无人发现（`SidecarSupervisor` 只看进程退出码，stderr 仅作诊断；design 25 §5 E19 的 unresponsive 腿已按"换心跳探测"实现，见 `RendererHangWatchdog`）。候选收口 = 前台有界周期探测 + 「重启 sidecar / 重新加载」动作。**留在 STATUS 而非新增 deviations 行**：它无 Electron 对应面（Electron 控制面在进程内），恢复方向差异已由 P-09/S-02 覆盖。② **渲染器**：`RendererHangWatchdog` 是整页存活探针（`evaluateJavaScript("1")`），需"15s 无输入 + 3 次探测"，任意键鼠即重置，且 `didFinish` 前完全未武装——而窗口在 `didCommit` 就已呈现，于是"首帧脚本求值期冻结"与"用户持续点击期冻结"都没有原生超时（页面侧定时器同样停摆），只剩 ⌘R。与 05 §4.1 的页面级逃生正交；可选收口 = `didCommit` 后武装首载超时。
+
+- **宿主 cwd / 安装根（2026-09-17 实机事故，未修）**：宿主进程 cwd 落在打包 bundle 的 dsh 安装根（Swift 拼写 `…/sidecar/vendor/dsh`，Electron 为 `resourcesPath/vendor/dsh`；`packages/control-plane/src/spawn-dsh.ts:322,735-736`），该 bundle 被原地替换（dev 重装 / 自动更新）后旧 inode 被 unlink，`worker_threads` 共享 `process.cwd()` ⇒ 每个工具调用 `uv_cwd ENOENT`（session worktree 未被删，重启应用从新安装根起宿主后自愈）。修复三件（复核补充：**不是一行改**）：控制面 cwd 不落在可替换路径——但 dev 兜底以裸 `--import tsx/esm` 启动、Node 从 cwd 解析该裸说明符，全局改 cwd 会打断 dev 源码启动，须把说明符绝对化或只改装配态分支；worker 不依赖 `process.cwd()`（vendor 上游 → fork/补丁 + FORKS/C 门，按升级维护）；安装/更新原子化 + 运行中检测（宿主是 detached spawn，会活过控制面，替换前必须先停/重定宿主）。
 
 - **gateway unit 登录环境真机门（2026-09-15，待 Linux 判）**：`write_unit` 无 `User=`、注入
   `HOME/LOGNAME/USER/XDG_CONFIG_HOME`（`scripts/install-gateway.sh`，design 17 §5）；单测只钉文本/结构。真实 systemd
   上 `systemd-analyze verify` + 服务拿到 HOME（`ghauth status`）须重跑安装器 + `daemon-reload` 后在部署机判——macOS
   开发机无 systemd，未判。
+
+- **deviations S-24 的 AppDelegate 锚点已漂移（2026-12 复核）**：该行引用的 `AppDelegate.swift:982-993,1131-1144` 等位置与当前文件不符（菜单构造 `:1007-1179`、Reload `:1118-1120`、Force Reload `:1124-1127`、File/Close `:1055-1061`）。S-24 的结论（Electron 缺省菜单 vs Swift 菜单面）仍成立，缺的是"可核对证据"的重锚；本次 boot 死区收敛的 ⌘R 提示文案依赖该菜单面，故一并登记。
 
 - **ssh/http dsh 目标无 cookie 注入（实例侧 401）**：五处同源绝对 URL 已由 vendor 补丁集走本实例前缀（design 09 §3.6）；cookie 注入属既有认证面，未覆盖。
 
@@ -437,9 +446,11 @@
   Cmd/Ctrl+R）。失效判据：新增重启/生效入口必须接同一 completion（或注明不接理由），且
   `sidebar/shared/restart-window-reload.ts` 用例覆盖「就绪即重载/预算内未就绪不重载/同 key 单飞/卸载不取消」四路径。
 
-- **降级事实覆盖边界（2026-12）**：已覆盖活动视图横幅、侧栏来源行、连接页卡片与插件对话框（事实 =
-  `ChamberServerAggregate.bootGap`，design 05 §4）。仍不覆盖：① 图通道硬失败（只在启动窗口耗尽路径报，不进
-  `ShellState.degraded`，只有连接页 `pluginDiagnostic`）；② 未激活/未预热来源无壳无事实；③
+- **降级事实覆盖边界（2026-12；① 已由 boot 死区收敛 W3 收口）**：已覆盖活动视图横幅、侧栏来源行、连接页卡片与插件对话框（事实 =
+  `ChamberServerAggregate.bootGap`，design 05 §4）。① 图通道失败（非 `not-injected`：502/504、网络错误、图形非法）自 2026-12 起
+  **同样上浮** `ShellState.degraded`（kind `graph-unavailable`，边界判定在 `source-readiness.ts` 的
+  `shouldReportGraphUnavailable`）：横幅 + 每 ready 世代一次的自愈都生效，旧口径"只在启动窗口耗尽路径报、只有连接页
+  `pluginDiagnostic`"作废（连接页那行仍独立存在，是诊断面不是降级面）。仍不覆盖：② 未激活/未预热来源无壳无事实；③
   壳回收时缺口行随shellStates 清除、重挂后 5s 探针重报；④
   事实单槽、后报覆盖先报（改列表会外溢投影/渲染/重试计划，暂不做；`shell.test.ts` seam 钉住）；⑤
   侧栏来源行只有说明没有动作（新增跨包请求通道不做）。

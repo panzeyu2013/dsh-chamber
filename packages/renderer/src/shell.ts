@@ -549,6 +549,15 @@ export function __testLastRequestedSession(instanceId: string): string | undefin
   return lastRequestedSession.get(instanceId)
 }
 
+/**
+ * settle 事实的唯一判据：booted 或已失败（`ShellState` 契约）。retention 候选、
+ * 后台预热槽占用、W2 推迟回收臂与视图的遮罩分类共用它——各写一遍
+ * `booted || error !== null` 会在下一次修订里漂移（2026-12 复核）。
+ */
+export function isSettledShellState(state: ShellState | undefined): boolean {
+  return state !== undefined && (state.booted || state.error !== null)
+}
+
 export function shellStateIdle(instanceId: string, basePath: string): ShellState {
   return { instanceId, basePath, booted: false, booting: false, error: null, degraded: null }
 }

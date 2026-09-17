@@ -44,7 +44,12 @@ test('the frame dictionaries are complete, parallel and non-empty', () => {
   }
   // The frame's chrome the audit named must be dictionary-owned, in both locales.
   for (const key of [
-    'action.retry', 'action.switchServer', 'boot.loading', 'boot.loadingHint', 'boot.starting',
+    'action.retry', 'action.switchServer', 'action.connect',
+    'boot.loading', 'boot.loadingHint', 'boot.starting',
+    // 2026-12 boot 死区收敛 W1/W2/W4（可操作遮罩）：新增键必须双字典齐备，
+    // 且由下面的接线锁钉住消费点（只存在于字典里 = 死键）。
+    'boot.deferred', 'boot.deferredHint', 'boot.elapsed', 'boot.stuckHint',
+    'boot.sourceFailedHint', 'boot.retryQueued', 'boot.reloadHint',
     'error.ui.title', 'error.unknown',
     'open.failed.sourceGone', 'open.failed.detail', 'open.failed.sourceRebuilt',
     'fatal.boot.title', 'fatal.entries.title', 'fatal.controlPlane.title',
@@ -52,6 +57,15 @@ test('the frame dictionaries are complete, parallel and non-empty', () => {
     'notification.sessionComplete', 'notification.awaitingAnswer', 'notification.awaitingApproval',
   ] as FrameKey[]) {
     assert.ok(key in zh && key in en, `${key} must exist in both dictionaries`)
+  }
+})
+
+test('both dictionaries carry the same placeholder set for every key', () => {
+  // 2026-12 复核 MINOR-2：形状/非空检查不覆盖占位符漂移——zh 写 {second} 而 en 写
+  // {seconds}（或漏一个占位符）会静默渲染出字面花括号，且只有真机才看得见。
+  const tokens = (text: string): string[] => [...text.matchAll(/\{(\w+)\}/g)].map(m => m[1] as string).sort()
+  for (const key of Object.keys(zh) as FrameKey[]) {
+    assert.deepEqual(tokens(en[key]), tokens(zh[key]), `${key} placeholder drift between zh and en`)
   }
 })
 
@@ -136,6 +150,19 @@ test('every audited frame string is dictionary-owned (no inline literals remain)
   }
   assert.ok(frameSources['InstanceView.tsx'].includes("frameText(locale, 'boot.loading', { label })"))
   assert.ok(frameSources['InstanceView.tsx'].includes("frameText(locale, 'boot.loadingHint')"))
+  // 2026-12 boot 死区收敛：可操作遮罩的每一句都在字典里（键集审计见上）。
+  for (const call of [
+    "frameText(locale, 'boot.deferred', { label })",
+    "frameText(locale, 'boot.deferredHint')",
+    "frameText(locale, 'boot.elapsed', { seconds: waitedSeconds })",
+    "frameText(locale, 'boot.stuckHint')",
+    "frameText(locale, 'boot.sourceFailedHint')",
+    "frameText(locale, 'boot.retryQueued', { seconds: retryQueueSeconds })",
+    "frameText(locale, 'boot.reloadHint')",
+    "frameText(locale, 'action.connect')",
+  ]) {
+    assert.ok(frameSources['InstanceView.tsx'].includes(call), `InstanceView.tsx must render ${call}`)
+  }
   // The notification effect holds no render-scope values (`[]` deps): it reads
   // the document language at assembly time, so navigation/notification copy
   // follows an English source instead of freezing the locale of first paint.

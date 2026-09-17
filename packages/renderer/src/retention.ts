@@ -15,6 +15,14 @@
  * - 回收 = dispose shell + 卸载 UI 壳（App 层动作）；实例进程/隧道/后台
  *   任务不受影响，重开走冷 boot + entry 重放（既有 InstanceView 路径）。
  *
+ * 本策略**只管已 settle 的隐藏壳**。它覆盖不到的形态有各自的归属（避免把"没被
+ * 这条策略收回"误读成遗漏）：① 从未 settle 的挂载——来源被手动断开（idle）而
+ * 推迟 boot 的视图由 boot 死区收敛的推迟回收臂接管（design 05 §4.1，判定
+ * `source-readiness.ts` 的 `isDeferredReclaimDue`：挂载时刻起隐藏计时 + 保留
+ * 宽限 + 设置面板 hold）；② 收割账本里的挂载走 baseline-harvest 的截止/放弃臂；
+ * ③ 绝对卡死（≥135s 未 settle）走 App 的放弃臂；④ 用户显式放弃的视图在切换
+ * 落地后由遮罩落地臂回收。
+ *
  * 回收后该源的数据面按既有语义自然降级：ctx 卸载触发快照 producer 撤回，
  * App 的 onInstanceSnapshot withdrawal 分支对已推送源保留 mounted marker
  * （保留最后权威分组/归档集），30s unary watchdog 以 mounted 合并持续

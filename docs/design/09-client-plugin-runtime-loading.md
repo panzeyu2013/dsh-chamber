@@ -103,6 +103,10 @@ bundle 未覆盖的 entry（方案 A，§3）。第 1、2 步在 chamber 托管�
   `required-services-missing`；2026-12 起另有 `deferred-registration-failed`，见下）
   交给 App，由 App 在该来源 ready 时**自动重挂一次**
   （每个 ready 世代一次，纯判定在 `degraded-retry.ts`；此前只有整页 reload 能恢复）。
+  **W3 边界（2026-12）**：② 的"不再静默"覆盖**除 `not-injected` 之外的所有通道失败**
+  （503 预算耗尽、502/504、网络错误、图形非法），边界判定在叶模块
+  `renderer/src/source-readiness.ts` 的 `shouldReportGraphUnavailable`；`not-injected`
+  （HTTP 404 或通道答 method 缺失）仍是 gateway/mobile 的合法无图形态，不是降级。
   该事实自 2026-12 起**同时有用户面**：形状与呈现裁决在叶模块
   `renderer/src/boot-gap.ts`（`Record<kind, …>` 强制每个 kind 带文案与 retryable
   裁决），由 App 在活动视图渲染非阻断横幅，并作为**独立字段**
@@ -345,7 +349,13 @@ bundle 未覆盖的 entry（方案 A，§3）。第 1、2 步在 chamber 托管�
   `graph-unreachable`；复合 bundle 仍
   提供完整官方壳，仅丢失 profile 新装的插件；畸形图响亮报错——错图是 boot 危害，
   不做猜测式合并）；503 `instance_unavailable` 是未就绪预期态，静默（图通道不可达
-  时不会伪装成“本实例无额外插件”）。额外 **bundle 加载**失败**不降级**——响亮失败、
+  时不会伪装成“本实例无额外插件”）。**2026-12（boot 死区收敛 W3）**：**除 404 外的
+  通道失败同样上浮 `ShellState.degraded`**（kind `graph-unavailable`，边界判定在
+  `renderer/src/source-readiness.ts` 的 `shouldReportGraphUnavailable`）——旧契约只把事实写进连接页的
+  `pluginDiagnostic` 一行（侧栏已不渲染该诊断）：事实并非没有出口，但用户停在 boot
+  表面时看不到解释、也拿不到自愈；现在由 App 的非阻断 boot-gap 横幅说明，并沿用该 kind
+  的「每个 ready 世代自动重挂一次」。豁免仍是 `not-injected`（HTTP 404 或通道答 method
+  缺失）——gateway/mobile 形态合法地没有图端点，不是降级。额外 **bundle 加载**失败**不降级**——响亮失败、
   该实例 boot 报错呈现（坏插件绝不静默消失，§4 fail-loud）。**实例重启跨代恢复
   （一轮有界恢复）**：普通加载失败先经**一轮有界恢复**再响亮失败——上游
   bundle rev 是**每进程随机 nonce + 行序号**（`dsh-client-modules`
