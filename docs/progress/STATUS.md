@@ -24,6 +24,10 @@
     `409 connection_busy`）但「启动/停止」点不动（状态停 `starting`、端口 0），恢复 = 优雅重启应用；仅硬杀后出现。
   - **降级提示目检/实机腿（05 §4，2026-12）**：结构性缺口下三处座位一致性——横幅 ~5s 出现/自愈后以「若仍然如此…」回来、侧栏行不重复播报、连接页卡片不同时出现「正常/能力受限」、提示非阻断与 `role="status"`、与 body portal 叠压；目前只经单测 + 源码锁，**未真机判**（`gui-acceptance-checklist.md` §3）。
 
+- **ProMotion / 120Hz 实机验收（未完成；口径与退役判据见 deviations S-48 / design 25 §5.1）**：
+  残余 = **打包态**三工况实机验收；另需确认 `POC_DEBUG=1` 的 `[native-fps]` 观测只在调试态
+  出现（S14/T-11 调试面纪律）。
+
 - **gateway unit 登录环境真机门（2026-09-15，待 Linux 判）**：`write_unit` 无 `User=`、注入
   `HOME/LOGNAME/USER/XDG_CONFIG_HOME`（`scripts/install-gateway.sh`，design 17 §5）；单测只钉文本/结构。真实 systemd
   上 `systemd-analyze verify` + 服务拿到 HOME（`ghauth status`）须重跑安装器 + `daemon-reload` 后在部署机判——macOS

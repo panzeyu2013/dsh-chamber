@@ -144,6 +144,11 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// WKNavigationDelegate），簿记在事件回调内同步完成（去重判断与推送
     /// 顺序因此与事件顺序一致，见 pushHostFacts 注释）。
     private var lastHostFacts: [String: Bool] = [:]
+    /// S-48：关偏好后的实际状态（建 configuration 时确定，此后不变）。
+    private var refreshRatePreference: RefreshRatePreference = .unknown
+    /// S-48：最近一次刷新率对照日志的**整行文本**（startupLogLine 是纯函数，行相等 ⟺ 全部事实
+    /// 相等，所以整行去重天然覆盖新增事实字段）。
+    private var lastRefreshRateLogLine: String?
 
     /// S-42：启动呈现门——首个可呈现内容（didCommit）才允许亮出启动主窗，且只
     /// 触发一次（后续重载/重试/失败页后的再次导航不再重复呈现）。同一状态机承载
@@ -199,6 +204,20 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 构建 WKWebView（含 A 桥注入与消息通道）与主窗口
     private func setupWindow() {
         let configuration = WKWebViewConfiguration()
+
+        // S-48（2026-12 实机裁决，design 25 §5.1）：ProMotion 120Hz。WKWebView 默认把页面渲染更新
+        // 压到「靠近 60fps」（PreferPageRenderingUpdatesNear60FPSEnabled 缺省 true；只在
+        // nominal > 60 且整数商 > 1 时才有影响——61–119Hz 屏本就不受限），低电量模式下 WebKit
+        // 再把帧间隔 ×2（→30fps）。**必须在下面 WKWebView(frame:configuration:) 之前关掉该偏好**：
+        // 页面创建后再改实测不生效（稳态：未换屏/未发生节流原因变化/未重启 WebContent；
+        // 同进程内 rAF 仍为 60fps）；实测 60 → 120fps（120Hz 显示器）。
+        // 低电量模式的 ×2 是 WebKit 在 WebContent 进程内直读系统状态的系统级策略：应用侧没有
+        // 公开开关（私有注入面 _WKProcessPoolConfiguration.injectedBundleURL 所属类自 macOS 12
+        // 起 deprecated，属性无单独注解；本壳未采用也未实测）——这里只如实记录折算结果。
+        refreshRatePreference = RefreshRatePolicy.apply(to: configuration.preferences)
+        // 对照日志**不在这里发**：建窗前没有任何 key window，NSScreen.main 未必是窗口
+        // 所在屏（SDK 只承诺 mainScreen = 有 key window 的屏）。统一由
+        // logRefreshRateIfChanged() 在建窗后发出，并在换屏/低电量切换时按值补记。
 
         // A 桥 shim 注入（W-04：BridgeShimInjector.install 负责落 WKUserScript）。
         // P-18：资源缺失/为空已在 AppDelegate 启动门 fail-closed（可见错误 +
@@ -266,7 +285,41 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                 injectionTime: .atDocumentStart,
                 forMainFrameOnly: true
             ))
-            print("[native] POC_DEBUG=1：已安装 pocConsole 回传（\(Self.consoleMessageName)）")
+            // S-48：POC_DEBUG 下的帧率观测——rAF 每 2s 回传一行 [native-fps]，
+            // 走既有 pocConsole 通道（[native-web] 打印）。只活在调试面：
+            // 缺省/POC_DEBUG=0/打包态都不注入（S14/T-11）。
+            let fpsSource = """
+            (function () {
+              var count = 0, mark = -1, last = 0;
+              function sample(ts) {
+                // 相邻回调断档（display sleep / App Nap / 调试暂停）会给窗口掺入无帧时间：
+                // 丢弃当前窗口并重新锚定。判的是"间隔"而不是"窗口累计"，否则 0.5–2s 的停顿
+                // 仍会打出 0.4fps 这类假低值。用 -1 作未初始化哨兵，避免 ts 恰为 0 时误判。
+                // 注意语义：回调节奏本身就慢于 500ms 时不会产出 [native-fps] 行——
+                // "没有读数"不等于"rAF 没在跑"，验收须结合可见的渲染表现判断。
+                if (last !== 0 && ts - last > 500) { count = 0; mark = -1; }
+                last = ts;
+                // 首帧只做锚点，不计入窗口——否则首个窗口（以及每次 visibilitychange 复位后的
+                // 首窗）会系统性多 1 帧（60→60.5、120→120.5）。
+                if (mark < 0) { mark = ts; } else { count++; }
+                if (ts - mark >= 2000) {
+                  var fps = count * 1000 / (ts - mark);
+                  try { window.webkit.messageHandlers.pocConsole.postMessage({ kind: 'log', text: '[native-fps] ' + fps.toFixed(1) + ' fps' }); } catch (e) {}
+                  count = 0; mark = ts;
+                }
+                requestAnimationFrame(sample);
+              }
+              // 隐藏/恢复会让下一次采样跨越大段暂停，出现一行假低值——切换时重置。
+              document.addEventListener('visibilitychange', function () { count = 0; mark = -1; last = 0; });
+              requestAnimationFrame(sample);
+            })();
+            """
+            configuration.userContentController.addUserScript(WKUserScript(
+                source: fpsSource,
+                injectionTime: .atDocumentStart,
+                forMainFrameOnly: true
+            ))
+            print("[native] POC_DEBUG=1：已安装 pocConsole 回传（\(Self.consoleMessageName)）+ 帧率观测")
         }
 
         // S-02：渲染器卡死自愈（空闲 ping + 有界重载）。
@@ -335,6 +388,21 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                            name: NSWindow.didResignKeyNotification, object: window)
         center.addObserver(self, selector: #selector(hostFactsWindowWillClose(_:)),
                            name: NSWindow.willCloseNotification, object: window)
+        // S-48：换屏与低电量模式切换都会改变实际上限（WebKit 侧实时生效），
+        // 对照日志按值去重补记（见 logRefreshRateIfChanged）。
+        center.addObserver(self, selector: #selector(refreshRateWindowDidChangeScreen(_:)),
+                           name: NSWindow.didChangeScreenNotification, object: window)
+        // 同屏改刷新率（系统设置/显示器 OSD）不产生 didChangeScreen，只发屏幕参数变化。
+        center.addObserver(self, selector: #selector(refreshRateScreenParametersDidChange(_:)),
+                           name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        // 低电量通知按 SDK 契约在**全局队列**投递（NSProcessInfo.h），处理器自己回主线程：
+        // window.screen 与指纹状态都只允许主线程碰。
+        center.addObserver(self, selector: #selector(refreshRatePowerStateDidChange(_:)),
+                           name: Notification.Name.NSProcessInfoPowerStateDidChange,
+                           object: ProcessInfo.processInfo)
+        // S-48 验收口径：建窗之后 window.screen 才是可信的「窗口所在屏」；
+        // 观察者先注册（避免首记与注册之间的同步窗口漏事件），日志按值去重。
+        logRefreshRateIfChanged()
         // A-1/A-2（审计收口）：macOS 唤醒与窗口/应用显示的事件发送方——
         // 对偶 electron-edges onSystemResume(powerMonitor)/onMainWindowShown
         // （design 25 §5 E6）。didWake → __host.systemResume {timestamp}；
@@ -349,6 +417,63 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             name: NSWorkspace.didWakeNotification, object: nil)
         center.addObserver(self, selector: #selector(appDidBecomeActive(_:)),
                            name: NSApplication.didBecomeActiveNotification, object: nil)
+    }
+
+    // MARK: - S-48 刷新率对照日志
+
+    /// 刷新率对照日志（design 25 §5.1 的验收唯一口径）：刷新率按**窗口所在屏的当前模式**取，
+    /// 低电量模式按当前系统态取；只在指纹变化时各写一行（不刷屏）。
+    private func logRefreshRateIfChanged() {
+        let refreshRate = currentDisplayRefreshRate()
+        let lowPowerMode = ProcessInfo.processInfo.isLowPowerModeEnabled
+        // 按**渲染后的日志行**去重：startupLogLine 是纯函数，行相等 ⟺ 全部事实相等，
+        // 所以以后新增事实字段不需要记得同步比较逻辑（第二轮就是漏了回落标记）。
+        let line = RefreshRatePolicy.startupLogLine(
+            preference: refreshRatePreference,
+            displayRefreshRate: refreshRate.rate,
+            displayRefreshRateIsPanelMaximum: refreshRate.isPanelMaximum,
+            lowPowerMode: lowPowerMode)
+        guard line != lastRefreshRateLogLine else { return }
+        lastRefreshRateLogLine = line
+        shellLog(line)
+    }
+
+    /// 当前显示模式的刷新率（读数，不是 WebKit 的 nominal 本体）。与 WebKit **同源但不等价**：
+    /// WebKit 用 `CVDisplayLinkGetNominalOutputVideoRefreshPeriod`（DisplayLinkMac 取整），
+    /// 且只在 display link 初始化时缓存一次（`DisplayLink::displayPropertiesChanged()` 仍是
+    /// FIXME 空实现），取不到时回落 60；本函数读 `CGDisplayCopyDisplayMode().refreshRate`
+    /// （内置屏上该值可能为 0），取不到回落面板上限并标记 isPanelMaximum = true。
+    /// 所以验收一律以 `[native-fps]` 实测仲裁（见 design 25 §5.1），日志只作对照。
+    /// 窗口没有所在屏时返回 (nil, false)。
+    private func currentDisplayRefreshRate() -> (rate: Int?, isPanelMaximum: Bool) {
+        guard let screen = window?.screen else { return (nil, false) }
+        let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
+        if let screenNumber,
+           let mode = CGDisplayCopyDisplayMode(CGDirectDisplayID(truncating: screenNumber)),
+           mode.refreshRate > 0 {
+            return (Int(mode.refreshRate.rounded()), false)
+        }
+        return (screen.maximumFramesPerSecond, true)
+    }
+
+    /// 窗口换屏（含全屏/在 ProMotion 与外接 60Hz 屏之间移动）：上限变了要重记一行。
+    @objc private func refreshRateWindowDidChangeScreen(_ note: Notification) {
+        logRefreshRateIfChanged()
+    }
+
+    /// 屏幕参数变化（同屏换刷新率/分辨率、显示器插拔）：上限可能已变，按值去重补记。
+    /// 与下面换屏回调一样按 AppKit 契约在**主线程**投递（只有低电量那条通知在全局队列，
+    /// 需要自己回主线程）。
+    @objc private func refreshRateScreenParametersDidChange(_ note: Notification) {
+        logRefreshRateIfChanged()
+    }
+
+    /// 低电量模式切换：WebKit 侧实时改为帧间隔 ×2，日志必须跟上，否则验收对表失真。
+    @objc private func refreshRatePowerStateDidChange(_ note: Notification) {
+        // 该通知在**全局队列**投递（NSProcessInfo.h），必须回主线程再读 AppKit / 写主线程状态。
+        DispatchQueue.main.async { [weak self] in
+            self?.logRefreshRateIfChanged()
+        }
     }
 
     // MARK: - A-1/A-2 入站事件发送（唤醒/窗口显示）
@@ -712,6 +837,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 往返（alive 未变）时去重后不产生额外推送。
     @objc private func hostFactsWindowDidBecomeKey(_ notification: Notification) {
         pushHostFacts(["mainWindowAlive": true, "focused": true])
+        // S-48：上屏兜底一拍——若首次记录时窗口还不在屏上（screen == nil），
+        // 这里补进真实上限；正常路径被整行去重吞掉，不产生重复行。
+        logRefreshRateIfChanged()
     }
 
     /// NSWindow.didResignKeyNotification：窗口失去 key（切走应用 / 隐藏 /
