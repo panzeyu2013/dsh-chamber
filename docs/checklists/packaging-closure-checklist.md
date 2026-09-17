@@ -78,8 +78,9 @@
       `SUPublicEDKey` 与 appcast 签发用的私钥成对；两把钥匙任一缺失 = 更新腿关闭且 loud。
       beta appcast 的 enclosure 必须指向滚动 release 上真实存在的 zip（`--download-url-prefix`
       + 先传 zip 后传 appcast；S-36），且滚动 appcast 同时带当前 beta 与最新 final 条目（S-22/S-23）。
-- [ ] `LSMinimumSystemVersion` 与 Electron 侧 `build.mac.minimumSystemVersion` 一致（当前 13.0，
-      对齐 `Package.swift` 的 `.macOS(.v13)`）。
+- [ ] `LSMinimumSystemVersion` 与 Electron 侧 `build.mac.minimumSystemVersion`、`Package.swift`
+      的平台声明三处同源一致（数值由 `scripts/release/release-workflow-policy.test.mjs` 钉住；
+      SwiftPM 只能写 major 平台，精确下限由 `Info.plist.template` 承担——本清单不记版本数值）。
 - [ ] 打包态启动冒烟（原生腿）：双击 `.app` → sidecar spawn → 页面加载 → 关闭窗口仅隐藏 →
       退出回收 sidecar；本机/CI 任一环境执行并记录证据（G19：CI 目前不启动打包产物）。
 - [ ] DMG 与 zip 均公证 + `stapler staple` + `stapler validate`（DMG 卷本身也要装订）。

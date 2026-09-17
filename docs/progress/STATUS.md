@@ -8,7 +8,7 @@
 
 - **实机门禁（未验证；缺真实实例 / 打包态环境）**：
   - 多来源 sleep/wake 与隐藏恢复、版本歪斜容忍、gateway 形态回归；
-  - **隐藏态节流修订（2026-12，design 14 §D1 修订）**：Chromium 默认节流下需打包态真实实例复核——隐藏 ≥60s 期间 SSE/推送不断、唤醒后即时重连与首帧渲染、两条 30s 兜底轮询隐藏期跳过 + 恢复补偿一轮。
+  - **隐藏/遮挡态节流修订（2026-12，design 14 §D1 修订；S-10 降级后的实机门）**：Chromium 默认节流下需打包态真实实例复核——最小化与被其它窗口完全覆盖（未最小化）两工况下的 rAF/定时器/`visibilityState` 与 App Nap 语义、隐藏 ≥60s 期间 SSE/推送不断、唤醒后即时重连与首帧渲染、两条 30s 兜底轮询隐藏期跳过 + 恢复补偿一轮；统一登记在 [deviations.md](deviations.md) 的 S-10。
   - **vendor 性能补丁（2026-12）可见态 A/B**：待真实 app 同环境复核；跨环境不可比纪律见 `scripts/perf/README.md`。
   - 右侧栏栈真实 profile 装载时序与 `provideRoot` 时序、session v3 迁移真实存储行为；
   - **open-in 实例内 host 包（`dsh-chamber-seed-open-in`，本地形态专用）**：两代 runtime 装载探针（`ctx.subprocess` 在旧 runtime web profile 是否挂载 = 最大未验证风险）、图标抽取一致性与 `openInApp/icon` 的 base64/缓存/CSP 实测、远程无 cookie fence、remote cwd 填充（设计 20 §6/§10）。**macOS 实机验收**
@@ -390,10 +390,10 @@
 
 ## 设计未决
 
-- **Electron / Swift 双 flavor 接入点 parity（2026-12 八路逐函数复核）**：2026-12 三轮后：前两批 74 条 + macOS 专项复核的 32 条中除下列外全部 resolved（更新链 S-36/S-22/S-23/S-37/S-38/S-39、生命周期 S-08/S-40/S-41/S-42/S-43、通知与凭据 S-44 残余/P-20、菜单与外观 S-24/S-46、布局锁步 P-13、门禁 G32–G40、文档 D4/D9/D13/D14），**仍 open：S-01（纯外部门禁：EdDSA 双密钥、Sparkle 编译证明、实机安装验收）、G19（CI 内启动签名打包 `.app`：凭据 + GUI 会话）、S-44（收窄残余：Electron 43.4.0 无授权查询/申请面，只剩实机确认系统提示等价）**；实机核验清单（第二轮启动恢复、首帧时序、beta 真机下载安装、坏密钥页面态、Sparkle 节奏、ATS loopback、登录项回读、工具链 native gate 的 WKWebView 段）见 §4；统一登记在 `docs/progress/deviations.md` §1/§3/§4，可达性纪律与盘点见 §6。
+- **Electron / Swift 双 flavor 接入点 parity（2026-12 八路逐函数复核 + 打包/引擎专项）**：**仍 open：S-01（纯外部门禁：EdDSA 双密钥真实值、Sparkle 编译证明、实机安装验收）、G19（CI 内启动签名打包 `.app`：凭据 + GUI 会话）、S-44（收窄残余：Electron 43.4.0 无授权查询/申请面，只剩实机确认系统提示等价）、S-10（隐藏态节流代码已对齐，遮挡/App Nap 无实测，见上文实机门禁）**；实机核验清单（第二轮启动恢复、首帧时序、beta 真机下载安装、坏密钥页面态、Sparkle 节奏、ATS loopback、登录项回读、工具链 native gate 的 WKWebView 段、隐藏/遮挡态）见 §4；统一登记在 `docs/progress/deviations.md` §1/§3/§4，可达性纪律与盘点见 §6。
 
 - **macOS Swift 原生壳（design 25，路线 A）开放门禁**：计划期的 D1–D7 正式签核未走形式流程（实现按推荐默认值落位；其中 D3 的更新路线经用户 2026-12 裁决改为 Sparkle 2），M5 门禁未闭合。剩余：① **实机/GUI 验收（打包 `.app` + 真实实例）**——通知权限时机与点击激活会话、SMAppService 登录项、LaunchServices
-  深链冷/热启动、关窗隐藏与恢复、唤醒补发、ATS loopback，以及 WKWebView 无 `backgroundThrottling:false` 等价物下的
+  深链冷/热启动、关窗隐藏与恢复、唤醒补发、ATS loopback、最小化/被完全覆盖与 App Nap 语义（S-10），以及 WKWebView 无 `backgroundThrottling:false` 等价物下的
   SSE/WS 心跳与恢复（design 25 §8.1 C1/C2、§8.5 W1–W6；判定标准见 `todo/macos-swift-v1.md` §七）；② **凭据 /
   runner-only 发布证明**——Developer ID 签名、公证、stapler、spctl 各臂与 arch（lipo）断言实跑，以及首个正式
   `build-swift` 发布腿（release.yml 已 fail-closed；缺 Apple 凭据 = 外部阻断，design 25 §7 / companion A6）；③**M5

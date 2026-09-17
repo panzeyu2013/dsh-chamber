@@ -1,6 +1,6 @@
 {
   "name": "@dsh-chamber/desktop",
-  "version": "0.3.2-beta.1",
+  "version": "0.3.2-beta.2",
   "type": "module",
   "main": "main.ts",
   "scripts": {
@@ -103,7 +103,11 @@
     "mac": {
       "icon": "resources/icon.icns",
       "notarize": true,
-      "minimumSystemVersion": "13.0",
+      "minimumSystemVersion": "14.4",
+      "electronLanguages": [
+        "en",
+        "zh_CN"
+      ],
       "entitlements": "resources/entitlements.mac.plist",
       "entitlementsInherit": "resources/entitlements.mac.plist",
       "extendInfo": {

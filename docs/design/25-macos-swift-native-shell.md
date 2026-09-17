@@ -588,7 +588,7 @@ interface HostEdges {
 | E11 | `shell.openPath/showItemInFolder` | NSWorkspace `open(_:)` / `activateFileViewerSelecting` | 失败模式语义照搬 |
 | E12 | open-in 拉起 Finder/VS Code/应用 | **实例内 host 包** `dsh-chamber-seed-open-in`（`openInApp/*`，design 20 §6）负责目录/图标/拉起；壳只执行 `openExternal`（vscode 远程深链等）；`HostEdges.launchApp` 契约保留但两 flavor 均无实现（S-05 复裁决，等第一个消费者） | 注册表/设置/可用性/URL 规则只在 core（`open-in.ts`/`deep-link.ts`） |
 | E13 | 深链注册（打包态 `dsh-chamber://`） | Info.plist `CFBundleURLTypes` + `application(_:open:)` | 冷/热启动入队语义见 §4.5 |
-| E14 | `app.setLoginItemSettings(openAtLogin)` | macOS 13+ `SMAppService.mainApp`；旧系统 NSLoginItem 兜底 | 设置面语义不变（14） |
+| E14 | `app.setLoginItemSettings(openAtLogin)` | macOS 14.4+ `SMAppService.mainApp`；旧系统 NSLoginItem 兜底在新下限下不可达（无实现，见 deviations T-26） | 设置面语义不变（14） |
 | E15 | `safeStorage`（gateway-secrets v3） | **不移植**：Swift flavor 走既有"诚实 0600 明文"回退；旧 safeStorage 密文"保留禁用待重录"（判别单测 **S1**，编号避开 §5 E 表） | 更强者加密 → 决策 7 |
 | E16 | `session` 权限 handler：只放行 clipboard-sanitized-write（**写**） | WebKit：写 = 用户手势自动放行（无需弹窗）；**读走 NSPasteboard 用户授权** | P0 对拍加"粘贴（富文本/图片）与剪贴板读"（C3） |
 | E17 | `crashReporter.start` + `child-process-gone` 诊断（:287/:295-301） | 不移植（macOS 崩溃报告原生 + Supervisor 日志）；child-process-gone 留 electron-edges | — |
@@ -699,8 +699,13 @@ interface HostEdges {
     `SUScheduledCheckInterval=21600`（6h）继续，与 Electron 的 6h 节奏同量级；
     scheduled 更新的标准窗在壳内被抑制（`SPUStandardUserDriverDelegate` 把展示权
     收回壳 → 相位进设置页），用户手动的「检查更新…」仍走标准窗。
-  - 最低系统版本：Electron 与原生壳同为 **13.0**（`build.mac.minimumSystemVersion` /
-    `LSMinimumSystemVersion` / `Package.swift .macOS(.v13)` 三处一致，由 release 策略测试钉住）。
+  - 最低系统版本：Electron 与原生壳同为 **macOS 14.4**（`build.mac.minimumSystemVersion` 与
+    `LSMinimumSystemVersion` 写精确 14.4；`Package.swift` 的 `.macOS` 只能写 major，故写
+    `.macOS(.v14)`，精确下限由 Info.plist 承担；三处一致由 release 策略测试钉住）。**为什么是
+    14.4**：原生壳跑 OS WebKit，出货 bundle 在审批决策、用户提问/计划评审、PDF 预览等构造路径
+    直接调用 `Promise.withResolvers`（A3-1），该 API 自 Safari 17.4 / macOS 14.4 才存在——
+    macOS 13.x 与 14.0–14.3 会在构造期 TypeError；Electron 自带 V8 不受影响，但同一支持矩阵只
+    保留一个下限（2026-12 用户裁决：抬高下限，不为旧系统加 polyfill）。
   - feed 为什么必须是 appcast：Sparkle 的更新协议只有 appcast（XML feed + 每条目的
     EdDSA 签名）一种读取方式，它不消费 GitHub REST API 或 electron-updater 的
     `latest-mac.yml`；`SUFeedURL` 因此指向**本仓 release 自带资产**（同一发布供应链，

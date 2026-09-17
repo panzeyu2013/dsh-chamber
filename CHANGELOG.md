@@ -11,17 +11,21 @@
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
 
-## [0.3.2-beta.1] - 2026-09-16
+## [0.3.2-beta.2] - 2026-09-17
 
 ### 新增
 - **macOS Swift 原生壳（design 25 路线 A，预览）** —— macOS 上新增第二只壳：Swift/AppKit 只做壳（窗口、WKWebView、菜单/通知/角标/深链/对话框/外部打开/隐藏恢复），**壳内不承载任何业务**；业务由打包成独立 Node 可执行文件的 sidecar 承载（现有 control-plane 与 desktop 的纯 Node 业务模块族原样运行），Swift 与 sidecar 之间走一条受信的 stdio JSON-RPC 通道，页面侧用与 preload 等价的注入 shim 顶替 `window.dshChamber`，web UI 100% 复用。与原 Electron 版**共存**：产物为 `dsh-chamber-native-<版本>-macos-arm64.dmg/.zip`，bundle id `com.dshchamber.native`（通知授权身份独立），双 flavor 共用同一 userData 根与目录锁（`<userData>/.dsh-chamber.lock`，darwin `flock`/`O_EXLOCK`，锁本身是唯一仲裁权威）。
-- **原生 flavor 的更新形态（design 25 §7）** —— 更新检查走真实远端比对并显示「有新版本可用」与 release 链接；**不**提供应用内下载/安装，原因与手动下载入口在更新区写明（诚实 blocked-available），自动安装留待 v2。
+- **原生 flavor 的应用内更新链（design 25 §7，D-1 = B）** —— 改为 Sparkle 2：检查真实 appcast（EdDSA 签名；公钥/私钥由发布链配置），支持应用内下载、安装与重启，并保留用户手动的「检查更新…」；beta 通道用滚动 appcast 同时收当前 beta 与最新 final，让 beta 客户端也能看到 final（S-22/S-23/S-36）。更新面不可用、坏 feed/坏公钥或忙态点击都返回诚实错误而不是静默吞掉（S-37–S-39）。
 - **双 flavor 防漂移锁步与新 CI 腿** —— IPC 面镜像（main/preload 两侧字面量与结构）、桥 manifest（`bridge-manifest.json` ↔ 生成的 Swift 白名单，通道 68 = 60 invoke + 8 push）、注入 shim 表面、core 的 electron-free 传递闭包、打包清单与产物命名（`-native` 不含碰撞、更新 feed 归属唯一）各有独立门禁；新增 macOS CI 腿 `test-macos`（Swift 构建 + XCTest + 打包干跑 + darwin 目录锁与打包脚本套件），发布证明要求 linux/windows/macos 三腿同时通过。
 - **打包链** —— `build:sidecar`（官方 Node 归档按仓库固定 SHA-256 校验后捆绑，基名必须是 `node`；内置 dsh 工作区与内嵌 pnpm）与 `build:swift-app`（组装 → ad-hoc 或 Developer ID 签名 → 公证 → stapler 装订 → 归档，任一缺失即 fail-closed），同一 tag 下与 Electron 产物并行发布、互不覆盖。
+- **原生壳本地落盘日志（design 25 排障面，T-25）** —— 原生壳此前双击态白屏/退出没有任何本地 dump 可考古；现在关键行（启动、sidecar spawn/退出、导航失败、更新相位、退出链）同写 `<userData>/logs/native-shell.log`，256 KiB 单份轮转（`.1`）、0600/0700，写不进静默退回 stdout。它**不**复用 Electron 的 `<userData>/state/host-logs/<port>.log`——那是控制面按端口寻址的宿主 stdout/stderr 管道，两条日志面不同目录、不能混用。
+- **Electron mac 打包演练进 push CI（G41）** —— main push 的 `test-macos` 腿新增 ad-hoc、`--publish=never`、无凭据/无公证/无上传的 `electron-builder --mac --arm64` 演练，并紧跟 `verify-electron-artifacts.mjs` 对真实 `.app` 校验；发布证明（`verify-release-ci-proof.mjs` 的 `REQUIRED_JOB_STEPS`）同步要求该步名，删步/改名即红。代价 = macos 腿每次 push 真跑一次打包（时间变长），换取 files/extraResources/beforePack/afterPack/entitlements 的破坏在 push 即暴露，而不是等到 release（draft 已建、凭据已加载）才失败。
+- **更新链 fail-closed 门禁（G42）** —— 正式发布中 Sparkle 公钥在而私钥缺 = FAIL（壳会轮询没人签的 feed）；私钥在而 beta/stable appcast 缺失 = FAIL（不再静默跳过滚动发布）；`/releases/latest` 解析失败（非 404）或 final 有 native zip 但下载失败 = FAIL；新增 `verify-native-appcast.mjs` 断言本版本 appcast 条目同时带 `shortVersionString`=本版本、`sparkle:version`=本 `.app` 的 CFBundleVersion、enclosure 指向本版本 zip（appcast 步与滚动刷新两处都跑）。两把钥匙都缺仍是 loud 降级（照常出包、客户端看不到更新）；仓库尚无 final release 或最新 final 确实没有 native zip 时保留 loud 警告。
 
 ### 变更
 - **桌面主进程拆分为 electron-free 核心 + 两套宿主边沿实现** —— `main.ts` 的编排与业务逻辑抽到与 Electron 无关的 `shell-core.ts`，Electron 原生边沿留在 `electron-edges.ts`，Node/sidecar 侧边沿在 `node-edges.ts`；Electron 版行为不变（真实依赖 Electron 的仅 4 个文件，由传递闭包门禁断言），原生 flavor 复用同一业务代码。
 - **`dsh-chamber:info` 与宿主事实面提供 flavor 判别位**（页面可按 flavor 分支），宿主事实（焦点/窗口显示/系统唤醒）在两侧同源推送。
+- **macOS 最低支持版本抬到 14.4（S-30）** —— Electron `build.mac.minimumSystemVersion` 与原生壳 `LSMinimumSystemVersion` 同写精确 14.4，`Package.swift` 写 `.macOS(.v14)`（SwiftPM 只能写 major）。原因：原生壳跑 OS WebKit，出货 bundle 在审批决策、用户提问/计划评审、PDF 预览构造路径直接调用 `Promise.withResolvers`，该 API 自 Safari 17.4 / macOS 14.4 才存在，13.x 与 14.0–14.3 会构造期 `TypeError`；Electron 自带 V8 不受影响，但同一支持矩阵只保留一个下限（不加 polyfill）。
 
 ### 修复
 - **系统唤醒后原生 flavor 的立即重连与补发从未生效** —— 唤醒通知此前注册在错误的通知中心，现已注册到 `NSWorkspace.shared.notificationCenter`。
@@ -32,6 +36,9 @@
 - **退出清理显式收回 keep-awake 与 Dock 角标**。
 - **打包 .app 忽略 `POC_*` 环境覆盖** —— 这些 dev/POC 开关此前在装配态仍生效，可被环境变量重定向到任意 node、sidecar 脚本、web dist、userData 或控制面 origin；dev（`swift run` / 非 .app）路径不受影响。
 - **测试门的本地误红与 CI 首跑暴露的 `build-sidecar` 缺陷** —— desktop 测试清单锁步此前会扫描到 `packages/desktop/.dev-user-data`（dev 运行态里的另一份 worktree）导致本地 `check:tests` 失败，现已忽略该目录；`build-sidecar` 在干净 checkout 的「缺内置 dsh 工作区」警告分支因注入 io 缺 `warn` 抛 `TypeError`，现已回落控制台。
+- **原生壳下载落盘与 Electron 对齐（S-26）** —— 此前 Swift 弹 NSSavePanel（可取消），而 Electron 全仓没有 `will-download`/`setSavePath`、走 Chromium 默认静默写 `~/Downloads`；现在 Swift 经 `DownloadDestination` 静默落盘：目录缺失即建、重名按 Chromium ` (n)` 去重、在途路径预留防同批撞名，解析/创建失败诚实取消并落盘原因（绝不静默换路径）。已知小偏差（accepted）：WebKit 无 `.crdownload` 中间态，下载中崩溃可能留下带最终名的半成品（Electron 留 `.crdownload` 不冒充成品）。
+- **原生壳页面缩放跨重启保持（T-22）** —— `WKWebView.pageZoom` 此前只活实例、每次启动回 100%；现在按 origin 存 UserDefaults（装配时恢复、zoomIn/zoomOut/reset 写回，坏值 normalize+clamp），与 Electron 的按 origin 持久化同向；存储介质仍是各 flavor 自己的偏好存储，不跨 flavor 共享。
+- **打包态 zh 本地化资源不再被静默删除（S-47）** —— mac 腿的 `electronLanguages` 改写成 Electron 真实目录拼写 `["en","zh_CN"]`（app-builder-lib 只做精确/前缀匹配，`"zh-CN"` 永远匹配不到 `zh_CN.lproj`，于是中文 `locale.pak` 被删、Chromium 级文案回退英文；顶层连字符值保留给 win/linux `.pak` 腿）；afterPack 与产物门禁对真实 `.app` 断言每个声明的 locale 都带出且 `locale.pak` 非空。
 
 ## [0.3.1] - 2026-09-15
 

@@ -563,7 +563,7 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   无活动来源判定；实例自己的语言偏好还要等 settings mirror 异步落地才写回。
   N 壳同文档时这就是 last-writer-wins：预热/收割壳的 en（`detectBrowserLocale`
   只认已注册语言，`navigator.languages` 指不到 zh 时回落 en——**运行形态相关**：
-  打包配置 `electronLanguages: [en-US, zh-CN]` 裁剪 locales，dev/整包形态可能
+  打包配置按平台拼写裁剪 locales（mac 腿 = 实际 lproj 基名 `zh_CN`，win/linux 顶层 = `zh-CN`；见 S-47），dev/整包形态可能
   直接报 zh-CN；壳自身语言偏好为 en 时同理）会把可见的中文文档翻成
   `lang=en`；**T16 之后框架 chrome
   也按该属性解析**（`renderer/src/locales.ts`），用户可感的形态是「本地实例 /
