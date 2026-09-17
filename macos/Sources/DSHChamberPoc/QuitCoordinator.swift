@@ -68,6 +68,32 @@ public enum QuitCoordinator {
     public static func confirmDetail(reasons: [String]) -> String {
         "退出将停止\(reasons.joined(separator: "与"))。确定退出？"
     }
+
+    /// 退出决策不可得（`__host.quitFacts` 超时/调用失败/解码失败）时的动作
+    /// （S-17：sidecar 挂死绝不静默取消 Cmd+Q）。
+    public enum UnavailableAction: Equatable {
+        /// sidecar 仍在运行：可能有本地保护内容 → 提示用户后取消本轮退出。
+        case alertThenCancel
+        /// sidecar 未运行：无本地保护内容 → 放行退出（main.ts cp===null 同向）。
+        case proceed
+    }
+
+    /// 决策不可得的动作映射（纯函数：超时 → 提示；sidecar 已停 → 放行）。
+    /// `sidecarLive` = supervisor 正在运行/重启中，与原保守分支判据逐字一致。
+    public static func unavailableAction(sidecarLive: Bool) -> UnavailableAction {
+        sidecarLive ? .alertThenCancel : .proceed
+    }
+
+    /// S-17 提示框文案与按钮：sidecar 未在预算内应答退出决策。
+    /// 默认（Enter）落在安全项「继续等待」；「强制退出」走既有清理链。
+    public enum UnavailableAlert {
+        public static let messageText = "dsh sidecar 未响应退出请求"
+        public static let informativeText =
+            "dsh sidecar 未在 2 秒内应答退出决策，本次退出已取消。"
+            + "可以继续等待 sidecar 恢复，或强制退出（强制退出仍会执行既有清理）。"
+        public static let waitButtonTitle = "继续等待"
+        public static let forceButtonTitle = "强制退出"
+    }
 }
 
 /// 退出单飞/确认门（线程安全；AppKit 的 applicationShouldTerminate /

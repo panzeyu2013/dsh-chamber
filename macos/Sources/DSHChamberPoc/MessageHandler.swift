@@ -1,7 +1,7 @@
 // MessageHandler.swift — A 桥 Swift 端消息处理器（传输层护栏 + invoke 上行 +
 // 事件下行出口）
 //
-// W-04（docs/progress/todo/macos-swift-v1.md §0.2-⑤「A 桥雏形」）/ design 25
+// W-04（A 桥雏形，design 25 §4.4.1）/ design 25
 // §4.4.1（A 桥 web↔Swift）与 §0.1-B3（渲染器可用性门：ready 前期望 origin
 // 未开放 → origin 护栏一律拒绝、渲染端有界重试自愈——与 preload「先 info 后
 // expose」对偶，D1 二选一取「documentStart 预定义 + 就绪前 reject」）。
@@ -36,7 +36,7 @@
 //     本 handler 不参与事件下行（W-04 双写纪律「乙」：事件唯一入口是
 //     controller 的 notify 路由；原 emit/onEvent 降级面自 2026-12 审计 S14
 //     删除——生产接线从未调用它）。event 帧族仅 W-05 桩 fixture
-//     （poc-sidecar.ts / BridgeClientIntegrationTests）使用，壳内无消费面。
+//     （poc-sidecar.ts / BridgeClientPocStubIntegrationTests）使用，壳内无消费面。
 //
 // 线程与持有关系：
 //   - userContentController.add(handler:) 会强持有本对象，因此本对象绝不

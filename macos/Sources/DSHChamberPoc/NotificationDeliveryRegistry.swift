@@ -142,31 +142,65 @@ public final class NotificationDeliveryRegistry {
         insertionOrder.removeAll { $0.sourceId == sourceId && $0.identifier == identifier }
     }
 
-    /// 退役给定来源集合：返回需要从通知中心移除的 identifier（FIFO 序），
-    /// 并从登记表移除这些来源的全部记录。未登记来源静默跳过（幂等）。
+    /// 退役给定来源集合（旧调用面）：等价于无逐条 notificationId 的合并退役。
     public func retire(sourceIds: [String]) -> [String] {
+        retire(sourceIds: sourceIds, notificationIds: [])
+    }
+
+    /// 退役：整源（sourceIds）+ 逐条（notificationIds = sidecar 的
+    /// notificationId，P-07）合并，返回需要从通知中心移除的 identifier
+    /// （FIFO 序，去重）。未登记来源/未投递 id 静默跳过（幂等）。
+    ///
+    /// notificationId → 本壳 identifier 的映射：identifier 末段恒为 sidecar
+    /// notificationId（见 NotificationDispatch.identifier），按末段整值比较；
+    /// 即使 sourceIds 为空（node-edges 的 >16 淘汰路径逐条下发）也精确清除。
+    public func retire(sourceIds: [String], notificationIds: [Int]) -> [String] {
         lock.lock()
         defer { lock.unlock() }
         var removed: [String] = []
-        var removedPairsSeen: [String] = []
+        var removedPairs = Set<String>()
+
+        // ① 逐条 id 的候选先按插入序快照（identifier 末段 = notificationId）。
+        var requestedByNotificationId: [(sourceId: String, identifier: String)] = []
+        if !notificationIds.isEmpty {
+            let wanted = Set(notificationIds)
+            for entry in insertionOrder {
+                guard let last = entry.identifier.split(separator: ".").last,
+                      let id = Int(last), wanted.contains(id) else { continue }
+                requestedByNotificationId.append(entry)
+            }
+        }
+
+        // ② 整源退役：移除该来源全部 identifier，并记录在途退役记忆。
         for sourceId in sourceIds {
             guard let ids = identifiersBySource.removeValue(forKey: sourceId) else { continue }
             for identifier in ids {
+                let pair = Self.deliveryKey(sourceId: sourceId, identifier: identifier)
+                guard removedPairs.insert(pair).inserted else { continue }
                 removed.append(identifier)
-                removedPairsSeen.append(Self.deliveryKey(sourceId: sourceId, identifier: identifier))
                 // 只有在途条目才进退役记忆：已完成投递的 identifier 不记，避免
                 // 跨 sidecar 重启的 identifier 重用误删新横幅（见文件头注记）。
-                let deliveryKey = Self.deliveryKey(sourceId: sourceId, identifier: identifier)
-                if pendingIdentifiers.contains(deliveryKey) {
-                    retiredIdentifiers.append(deliveryKey)
+                if pendingIdentifiers.contains(pair) {
+                    retiredIdentifiers.append(pair)
                 }
             }
         }
+
+        // ③ 逐条退役：与整源结果去重（两字段并存时同一 identifier 只返回一次）。
+        for entry in requestedByNotificationId {
+            let pair = Self.deliveryKey(sourceId: entry.sourceId, identifier: entry.identifier)
+            guard removedPairs.insert(pair).inserted else { continue }
+            removeLocked(sourceId: entry.sourceId, identifier: entry.identifier)
+            removed.append(entry.identifier)
+            if pendingIdentifiers.contains(pair) {
+                retiredIdentifiers.append(pair)
+            }
+        }
+
         if !removed.isEmpty {
             // 按 (sourceId, identifier) 成对删除：identifier 会跨 sidecar 重启
             // 重用，只按 identifier 删会误删别的来源仍在册的插入序槽位，令 16 条
             // 上限名存实亡（2026-12 第三轮验证）。
-            let removedPairs = Set(removedPairsSeen)
             insertionOrder.removeAll { removedPairs.contains(Self.deliveryKey(sourceId: $0.sourceId, identifier: $0.identifier)) }
             if retiredIdentifiers.count > Self.maxRetiredIdentifiers {
                 retiredIdentifiers.removeFirst(retiredIdentifiers.count - Self.maxRetiredIdentifiers)

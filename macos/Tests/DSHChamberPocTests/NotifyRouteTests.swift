@@ -127,12 +127,46 @@ final class NotifyRouteTests: XCTestCase {
         XCTAssertEqual(MainWindowController.decodeNotify(
             event: "retireNotifications",
             payload: .object(["sourceIds": .array([.string("local"), .string("ssh-web-1")])])),
-            .retireNotifications(sourceIds: ["local", "ssh-web-1"]))
+            .retireNotifications(sourceIds: ["local", "ssh-web-1"], notificationIds: []),
+            "旧 sidecar 形状（缺 notificationIds）按空数组兼容")
         XCTAssertEqual(MainWindowController.decodeNotify(
             event: "retireNotifications",
             payload: .object(["sourceIds": .array([])])),
-            .retireNotifications(sourceIds: []),
+            .retireNotifications(sourceIds: [], notificationIds: []),
             "空 sourceIds 合法（退役空集 = no-op）")
+    }
+
+    /// P-07：新 sidecar 形状 {sourceIds, notificationIds}；逐条 id 在 sourceIds
+    /// 为空时也要能解码（node-edges 的 >16 淘汰路径）。
+    func testRetireNotificationsDecodesNotificationIds() {
+        XCTAssertEqual(MainWindowController.decodeNotify(
+            event: "retireNotifications",
+            payload: .object(["sourceIds": .array([.string("local")]),
+                              "notificationIds": .array([.number(1), .number(42)])])),
+            .retireNotifications(sourceIds: ["local"], notificationIds: [1, 42]))
+        XCTAssertEqual(MainWindowController.decodeNotify(
+            event: "retireNotifications",
+            payload: .object(["sourceIds": .array([]), "notificationIds": .array([.number(7)])])),
+            .retireNotifications(sourceIds: [], notificationIds: [7]),
+            "sourceIds 空、仅逐条 id（淘汰路径）必须解码")
+    }
+
+    /// notificationIds 存在但形状非法 → 整体 loud 丢弃，绝不部分消费。
+    func testRetireNotificationsRejectsMalformedNotificationIds() {
+        let cases: [AnyCodable?] = [
+            .object(["sourceIds": .array([]), "notificationIds": .string("7")]),
+            .object(["sourceIds": .array([]), "notificationIds": .array([.string("7")])]),
+            .object(["sourceIds": .array([]), "notificationIds": .array([.number(1.5)])]),
+            .object(["sourceIds": .array([]), "notificationIds": .array([.bool(true)])]),
+            .object(["sourceIds": .array([]), "notificationIds": .null]),
+        ]
+        for payload in cases {
+            let decision = MainWindowController.decodeNotify(event: "retireNotifications", payload: payload)
+            guard case .malformed = decision else {
+                XCTFail("非法 notificationIds 应 malformed（payload=\(String(describing: payload))），实际 \(decision)")
+                continue
+            }
+        }
     }
 
     func testRetireNotificationsRejectsMalformed() {
@@ -263,6 +297,47 @@ final class NotifyRouteTests: XCTestCase {
         XCTAssertEqual(registry.sourceCount, 1, "B 仍应在册")
         XCTAssertEqual(registry.retire(sourceIds: ["B"]), ["chamber-edge-1"])
         XCTAssertEqual(registry.trackedCount, 0)
+    }
+
+    // MARK: - P-07：逐条 notificationId 退役（sourceIds 为空同样生效）
+
+    /// sidecar 的 notificationId 映射到本壳 identifier 末段：即使 sourceIds 为
+    /// 空（node-edges >16 淘汰只下发 notificationIds），也必须按 identifier
+    /// 精确清除，且不误伤末段只是子串的其它 id（7 vs 17/107）。
+    func testRegistryRetiresDeliveredBannerByNotificationId() {
+        let registry = NotificationDeliveryRegistry()
+        _ = registry.beginDelivery(sourceId: "local", identifier: "chamber-edge-abc.1.7")
+        _ = registry.beginDelivery(sourceId: "local", identifier: "chamber-edge-abc.2.17")
+        _ = registry.beginDelivery(sourceId: "local", identifier: "chamber-edge-abc.3.107")
+        XCTAssertEqual(registry.retire(sourceIds: [], notificationIds: [7]),
+                       ["chamber-edge-abc.1.7"],
+                       "sourceIds 为空时逐条 id 仍须清除横幅（P-07）")
+        XCTAssertEqual(registry.trackedCount, 2, "只清匹配的那一条")
+        XCTAssertEqual(registry.retire(sourceIds: [], notificationIds: [7]), [],
+                       "已清除的 id 幂等")
+        // 两字段并存时同一 identifier 只返回一次（去重），整源退役照常生效。
+        XCTAssertEqual(registry.retire(sourceIds: ["local"], notificationIds: [17]),
+                       ["chamber-edge-abc.2.17", "chamber-edge-abc.3.107"])
+        XCTAssertEqual(registry.trackedCount, 0)
+        XCTAssertEqual(registry.retire(sourceIds: [], notificationIds: [1]), [])
+    }
+
+    /// 逐条退役同样覆盖「退役时仍在途」的投递：完成回执必须报告 true，调用方
+    /// 立即 removeDeliveredNotifications（横幅在退役后才落地）。
+    func testRegistryRetireByNotificationIdCoversInFlightDelivery() {
+        let registry = NotificationDeliveryRegistry()
+        XCTAssertTrue(registry.beginDelivery(sourceId: "local",
+                                             identifier: "chamber-edge-e.9.5"))
+        XCTAssertEqual(registry.retire(sourceIds: [], notificationIds: [5]),
+                       ["chamber-edge-e.9.5"])
+        XCTAssertTrue(registry.finishDelivery(sourceId: "local",
+                                              identifier: "chamber-edge-e.9.5",
+                                              delivered: true),
+                      "在途期间被逐条退役 → 完成回执报告立即清除")
+        XCTAssertFalse(registry.finishDelivery(sourceId: "local",
+                                               identifier: "chamber-edge-e.9.5",
+                                               delivered: true),
+                       "退役记忆只消费一次（幂等收口）")
     }
 
     /// 2026-12 第三/四轮验证：投递标识 = chamber-edge-<纪年>-<壳内单调序号>-

@@ -1,7 +1,7 @@
 // BridgeClient.swift —— B 桥进程客户端（Swift 侧 spawn + NDJSON 读写 + invoke）
 //
 // design 25 §4.4.2（B 桥 Swift ↔ sidecar）与 W-05（垂直切片，
-// docs/progress/todo/macos-swift-v1.md §0.2-⑥）的 Swift 侧实现。AppDelegate
+// design 25 §4.4.2）的 Swift 侧实现。AppDelegate
 // 与 MessageHandler 作者按本文件的公开契约引用（构造/start/stop/invoke/
 // onEvent），勿改名。
 //
@@ -254,6 +254,14 @@ public final class BridgeClient {
         return process?.isRunning ?? false
     }
 
+    /// 未决请求数（测试/诊断用，G9：超长帧必须作废全部未决请求的可观察锚点；
+    /// 与 pending 字典同锁保护）。
+    var pendingRequestCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return pending.count
+    }
+
     /// 最近一次 sidecar 进程终止退出码（nil = 尚未观测到终止）。记录路径：
     /// stop() 收尸完成（waitUntilExit 后）与自然退出（handleTermination）都会
     /// 写。优雅退出（sidecar 处理 SIGTERM 后 exit(0)）→ 0；stop() 轮询超时后
@@ -266,19 +274,16 @@ public final class BridgeClient {
 
     // MARK: - 出站面默认 edge 应答策略（M3 W-15/16）
 
-    /// v1 默认 edge 应答策略——真实宿主腿落地前的 POC 应答表（W-15/16 语义：
-    /// Swift 必须应答、绝不挂起；sidecar 侧 sendEdge 无超时）：
-    ///   - 同步事实门 trayAvailable / notificationSupported /
-    ///     badgeCountApiAvailable / mainWindowAlive / webViewContentAlive →
-    ///     ok:true result:true（与 node-edges hostFacts 种子同族：mac Dock
-    ///     常驻、通知/徽标 API 可用、主窗与 web 内容存活）；
-    ///   - showNativeNotification → ok:true result:null（= 已显示；POC 无真实
-    ///     通知腿，M3 后由实际宿主实现接管）；
-    ///   - showMessage → ok:true result:0（= 消息框第 0 号按钮）；
-    ///   - 其余一律 {ok:false, error:"swift-edge-unimplemented:<method>"}
-    ///     （pickPluginSource 等——loud 拒绝，绝不静默假装成功，也不挂起）。
-    /// 宿主腿（W-19/20）：非 nil 时 defaultEdgeResponse 先问 legs；legs 报
-    /// unimplemented/ui-unavailable 前缀错误则回落本表（POC 无宿主不挂起）。
+    /// edge 应答兜底（W-15/16 语义：Swift 必须应答、绝不挂起；sidecar 侧
+    /// sendEdge 无超时）。宿主腿（W-19/20）非 nil 时先问 legs；legs 报
+    /// unimplemented 前缀（本壳没有该腿）才落到这里。
+    /// G31（2026-12 审计）：兜底**恒为** loud 拒绝
+    /// {ok:false, error:"swift-edge-unimplemented:<method>"}——绝不假成功。
+    /// 此前 trayAvailable/notificationSupported/badgeCountApiAvailable/
+    /// mainWindowAlive/webViewContentAlive 恒 true、showNativeNotification 恒
+    /// 成功、showMessage 恒第 0 号按钮：未来新增未实现 edge 落入该表即静默
+    /// 成功，core 会据此做出错误裁决。ui-unavailable 是真实腿的诚实降级，
+    /// 直接传播，绝不回落成本兜底。
     public var edgeHostLegs: SwiftEdgeHostLegs?
 
     /// 返回 (result, error)：error == nil → ok:true 应答，否则 ok:false。
@@ -295,17 +300,8 @@ public final class BridgeClient {
                 return outcome
             }
         }
-        switch method {
-        case "trayAvailable", "notificationSupported", "badgeCountApiAvailable",
-             "mainWindowAlive", "webViewContentAlive":
-            return (.bool(true), nil)
-        case "showNativeNotification":
-            return (nil, nil)
-        case "showMessage":
-            return (.number(0), nil)
-        default:
-            return (nil, "swift-edge-unimplemented:\(method)")
-        }
+        // G31：未实现 → 显式错误（绝不谎报可用/已显示/已选按钮）。
+        return (nil, "swift-edge-unimplemented:\(method)")
     }
 
     /// 把 v1 默认 edge 应答器装回 onEdgeRequest（策略见 defaultEdgeResponse；
@@ -327,6 +323,27 @@ public final class BridgeClient {
         }
     }
 
+    // MARK: - 子进程环境（T-11）
+
+    /// 子进程环境的合并规则（T-11）：打包态从基底与 overlay 都剔除全部 POC_*
+    /// （与 AppDelegate 对壳自身 env 的过滤同规）。start() 把当前进程环境当
+    /// 基底、构造参数当 overlay——若只过滤调用方传入的 overlay，基底里的
+    /// POC_* 仍会经合并进入 sidecar（此前的实际泄漏路径）。打包判定与
+    /// AppDelegate 相同：PackagedLayout.isAppBundle(executablePath:)。
+    public static func childEnvironment(base: [String: String],
+                                        overlay: [String: String],
+                                        isPackaged: Bool) -> [String: String] {
+        var merged = base
+        if isPackaged {
+            merged = merged.filter { !$0.key.hasPrefix("POC_") }
+        }
+        for (key, value) in overlay {
+            if isPackaged && key.hasPrefix("POC_") { continue }
+            merged[key] = value
+        }
+        return merged
+    }
+
     // MARK: - 生命周期
 
     /// 拉起 sidecar：Process 配置（executableURL=nodePath、arguments、
@@ -344,9 +361,12 @@ public final class BridgeClient {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: nodePath)
         process.arguments = arguments
-        var mergedEnvironment = ProcessInfo.processInfo.environment
-        for (key, value) in environment { mergedEnvironment[key] = value }
-        process.environment = mergedEnvironment
+        // T-11：打包态基底过滤 POC_*（见 childEnvironment 注释）。
+        let executablePath = Bundle.main.executableURL?.path ?? CommandLine.arguments.first ?? ""
+        process.environment = Self.childEnvironment(
+            base: ProcessInfo.processInfo.environment,
+            overlay: environment,
+            isPackaged: PackagedLayout.isAppBundle(executablePath: executablePath))
 
         let input = Pipe()
         let output = Pipe()
@@ -423,7 +443,10 @@ public final class BridgeClient {
         takenError?.fileHandleForReading.readabilityHandler = nil
         takenProcess.terminationHandler = nil
 
-        // SIGTERM → 轮询 ≤2s → SIGKILL 兜底。
+        // SIGTERM → 轮询 ≤ quitCleanupGracePeriod（5s，与 shell-core 的
+        // QUIT_CLEANUP_TIMEOUT_MS 同预算，S6）→ SIGKILL 兜底。（G10：旧注释写
+        // 「≤2s」与实现 5.0s 矛盾——改注释而非改值：5s 是跨语言冻结预算，
+        // 2s 会在 sidecar 回收本地 dsh/ssh 子进程时提前 SIGKILL 留孤儿。）
         if takenProcess.isRunning {
             takenProcess.terminate()
         }
@@ -577,7 +600,11 @@ public final class BridgeClient {
     }
 
     /// 单条协议行 → 帧分发。超长/非法 → 打印错误并丢弃该帧，绝不静默继续。
-    private func handleIncomingLine(_ line: String) {
+    ///
+    /// G9：internal（非 private）是**测试接缝**——读路径（LineReader →
+    /// processStdoutOutcome → 本函数）此前零 XCTest 覆盖；@testable 只放开
+    /// internal，本函数没有进入公开面，生产调用点仍只有 processStdoutOutcome。
+    func handleIncomingLine(_ line: String) {
         guard !FrameCodec.isLineTooLong(line) else {
             // 2026-12 双端逐函数核对 F4：超长行连 id 都解析不出（响应被截断），
             // 若它正对应某个未决请求，该 continuation 会永久悬挂（Electron 侧
@@ -908,10 +935,18 @@ public final class BridgeClient {
         try? FileHandle.standardError.write(contentsOf: Data(line.utf8))
     }
 
+    /// sidecar stderr 行 → 透传文本（S-29：Swift flavor 无 Electron safeStorage
+    /// adapter，Electron 写的 safeStorage 凭证文件不可读时，sidecar 的精确 loud
+    /// 文案只经这条日志链到达用户——逐字保留，绝不截断/改写；抽成静态纯函数
+    /// 供单测钉住）。
+    static func relayedSidecarLogLine(_ line: String) -> String {
+        "[sidecar] \(line)\n"
+    }
+
     /// sidecar stderr 行透传（D2：stderr = 唯一日志通道，原样输出）。
     private func relaySidecarLogLine(_ line: String) {
-        let text = "[sidecar] \(line)\n"
-        try? FileHandle.standardError.write(contentsOf: Data(text.utf8))
+        try? FileHandle.standardError.write(
+            contentsOf: Data(Self.relayedSidecarLogLine(line).utf8))
     }
 
     /// 行预览（日志用；截断防刷屏，不做内容转义——日志通道本机可见）。

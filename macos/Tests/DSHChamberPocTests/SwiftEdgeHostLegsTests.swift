@@ -6,6 +6,7 @@
 //  + 实机硬门禁，见 SwiftEdgeHostLegs.swift 各腿 TODO 注释）。
 //
 import XCTest
+import UserNotifications
 @testable import DSHChamberPoc
 
 final class SwiftEdgeHostLegsTests: XCTestCase {
@@ -271,5 +272,198 @@ final class SwiftEdgeHostLegsTests: XCTestCase {
         XCTAssertNil(EdgePayload.int(.number(1e30)))
         XCTAssertNil(EdgePayload.int(.string("3")))
         XCTAssertNil(EdgePayload.int(AnyCodable?.none))
+    }
+
+    // MARK: - P-06：通知腿的诚实回执（授权先查 + 有界 add + {shown:false,error}）
+
+    /// 测试假体：授权状态/请求/投递全部可控，add 可挂起（验证超时）或立即完成。
+    private final class FakeNotificationCenter: EdgeNotificationCenter {
+        var status: EdgeNotificationAuthorization = .authorized
+        var granted = true
+        var requestError: Error?
+        var addError: Error?
+        /// true = add 立即回调；false = 挂起，由 completePendingAdd 释放。
+        var completeAddImmediately = true
+        private(set) var addRequests: [UNNotificationRequest] = []
+        private(set) var removedIdentifierBatches: [[String]] = []
+        private(set) var requestAuthorizationCount = 0
+        private var pendingAddCompletion: ((Error?) -> Void)?
+
+        func authorizationStatus(_ completion: @escaping (EdgeNotificationAuthorization) -> Void) {
+            completion(status)
+        }
+
+        func requestAuthorization(_ completion: @escaping (Bool, Error?) -> Void) {
+            requestAuthorizationCount += 1
+            completion(granted, requestError)
+        }
+
+        func add(_ request: UNNotificationRequest, completion: @escaping (Error?) -> Void) {
+            addRequests.append(request)
+            if completeAddImmediately {
+                completion(addError)
+            } else {
+                pendingAddCompletion = completion
+            }
+        }
+
+        func removeDeliveredNotifications(withIdentifiers identifiers: [String]) {
+            removedIdentifierBatches.append(identifiers)
+        }
+
+        func completePendingAdd(error: Error? = nil) {
+            pendingAddCompletion?(error)
+            pendingAddCompletion = nil
+        }
+    }
+
+    private final class ReplyCounter {
+        private let lock = NSLock()
+        private var count = 0
+        func increment() { lock.lock(); count += 1; lock.unlock() }
+        var value: Int { lock.lock(); defer { lock.unlock() }; return count }
+    }
+
+    private func notificationPayload(notificationId: Int = 1,
+                                     sourceId: String? = "local") -> AnyCodable {
+        var dict: [String: AnyCodable] = [
+            "notificationId": .number(Double(notificationId)),
+            "spec": .object(["title": .string("T"), "body": .string("B")]),
+        ]
+        if let sourceId { dict["sourceId"] = .string(sourceId) }
+        return .object(dict)
+    }
+
+    /// 投递并等待首个回执（回执可能在任意队列异步到达）。
+    @discardableResult
+    private func deliverNotification(
+        _ legs: SwiftEdgeHostLegs,
+        payload: AnyCodable,
+        counter: ReplyCounter? = nil
+    ) -> (result: AnyCodable?, error: String?) {
+        let box = SyncBox<(AnyCodable?, String?)>()
+        legs.respondAsync(method: "showNativeNotification", payload: payload) { result, error in
+            counter?.increment()
+            box.set((result, error))
+        }
+        let deadline = Date().addingTimeInterval(5.0)
+        while box.value == nil && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        return box.value ?? (nil, "no-reply")
+    }
+
+    /// 授权 granted + add 成功 → 显式 {shown:true}（绝不依赖旧协议的 null）。
+    func testNotificationAddCompletedRepliesShownTrue() {
+        let center = FakeNotificationCenter()
+        let legs = SwiftEdgeHostLegs(config: .init(canShowUI: { true },
+                                                   notificationCenter: { center }))
+        let reply = deliverNotification(legs, payload: notificationPayload())
+        XCTAssertEqual(reply.result, .object(["shown": .bool(true)]))
+        XCTAssertNil(reply.error)
+        XCTAssertEqual(center.addRequests.count, 1)
+        XCTAssertTrue(center.addRequests[0].identifier.hasPrefix("chamber-edge-"),
+                      "identifier 必须进 OS 标识（P-07 逐条退役依赖末段 id）")
+        XCTAssertEqual(legs.notificationRegistry.trackedCount, 1,
+                       "成功后保留登记（供来源/逐条退役）")
+    }
+
+    /// 授权 denied：先查状态、绝不 add、回 {shown:false,error}（core 释放去重
+    /// claim），并撤下调度前登记（没有可退役横幅）。
+    func testNotificationDeniedRepliesShownFalseWithoutAdd() {
+        let center = FakeNotificationCenter()
+        center.status = .denied
+        let legs = SwiftEdgeHostLegs(config: .init(canShowUI: { true },
+                                                   notificationCenter: { center }))
+        let reply = deliverNotification(legs, payload: notificationPayload())
+        guard case .object(let fields)? = reply.result,
+              case .bool(false)? = fields["shown"] else {
+            return XCTFail("denied 必须回 {shown:false}（实际 \(String(describing: reply.result))）")
+        }
+        XCTAssertTrue((EdgePayload.string(fields["error"]) ?? "").contains("not-authorized"))
+        XCTAssertTrue(center.addRequests.isEmpty, "denied 不得触碰 add")
+        XCTAssertEqual(center.requestAuthorizationCount, 0, "已 denied 不重复请求授权")
+        XCTAssertEqual(legs.notificationRegistry.trackedCount, 0, "失败撤下登记")
+    }
+
+    /// notDetermined：先申请一次；拒绝 → {shown:false,error}；批准 → add 并 shown:true。
+    func testNotificationNotDeterminedRequestsAuthorizationFirst() {
+        let deniedCenter = FakeNotificationCenter()
+        deniedCenter.status = .notDetermined
+        deniedCenter.granted = false
+        let deniedLegs = SwiftEdgeHostLegs(config: .init(canShowUI: { true },
+                                                         notificationCenter: { deniedCenter }))
+        let deniedReply = deliverNotification(deniedLegs, payload: notificationPayload())
+        XCTAssertEqual(deniedCenter.requestAuthorizationCount, 1)
+        XCTAssertTrue(deniedCenter.addRequests.isEmpty, "未授权不得 add")
+        XCTAssertEqual(deniedReply.result,
+                       .object(["shown": .bool(false),
+                                "error": .string("swift-edge-notification-not-authorized:denied")]))
+
+        let grantedCenter = FakeNotificationCenter()
+        grantedCenter.status = .notDetermined
+        grantedCenter.granted = true
+        let grantedLegs = SwiftEdgeHostLegs(config: .init(canShowUI: { true },
+                                                          notificationCenter: { grantedCenter }))
+        let grantedReply = deliverNotification(grantedLegs, payload: notificationPayload())
+        XCTAssertEqual(grantedCenter.requestAuthorizationCount, 1)
+        XCTAssertEqual(grantedCenter.addRequests.count, 1)
+        XCTAssertEqual(grantedReply.result, .object(["shown": .bool(true)]))
+    }
+
+    /// add 错误：回 {shown:false,error}（含原始描述），绝不上报 shown:true。
+    func testNotificationAddErrorRepliesShownFalse() {
+        let center = FakeNotificationCenter()
+        center.addError = NSError(domain: "test", code: 1,
+                                  userInfo: [NSLocalizedDescriptionKey: "boom"])
+        let legs = SwiftEdgeHostLegs(config: .init(canShowUI: { true },
+                                                   notificationCenter: { center }))
+        let reply = deliverNotification(legs, payload: notificationPayload())
+        guard case .object(let fields)? = reply.result,
+              case .bool(false)? = fields["shown"] else {
+            return XCTFail("add 错误必须回 {shown:false}（实际 \(String(describing: reply.result))）")
+        }
+        XCTAssertTrue((EdgePayload.string(fields["error"]) ?? "").contains("schedule-failed"))
+        XCTAssertTrue((EdgePayload.string(fields["error"]) ?? "").contains("boom"))
+        XCTAssertEqual(legs.notificationRegistry.trackedCount, 0)
+    }
+
+    /// 有界超时：add 不回调 → 5s 上限（测试缩短）先回 {shown:false,error}，恰
+    /// 一次；超时后 add 晚到的成功横幅必须立即清除，绝不补发 shown:true。
+    func testNotificationAddTimeoutRepliesShownFalseOnceAndClearsLateBanner() {
+        let center = FakeNotificationCenter()
+        center.completeAddImmediately = false
+        let legs = SwiftEdgeHostLegs(config: .init(
+            canShowUI: { true },
+            notificationCenter: { center },
+            notificationAddTimeout: 0.05))
+        let counter = ReplyCounter()
+        let reply = deliverNotification(legs, payload: notificationPayload(), counter: counter)
+        guard case .object(let fields)? = reply.result,
+              case .bool(false)? = fields["shown"] else {
+            return XCTFail("超时必须回 {shown:false}（实际 \(String(describing: reply.result))）")
+        }
+        XCTAssertTrue((EdgePayload.string(fields["error"]) ?? "").contains("timeout"))
+        // 超时后 add 才完成：横幅落地 → 立即清除；回执仍恰一次。
+        center.completePendingAdd()
+        Thread.sleep(forTimeInterval: 0.1)
+        XCTAssertEqual(counter.value, 1, "超时后晚到的完成不得补发第二个回执")
+        XCTAssertEqual(center.removedIdentifierBatches,
+                       [[center.addRequests[0].identifier]],
+                       "晚到的成功横幅必须按 identifier 立即清除")
+    }
+
+    /// 超时回执后，未完成的投递仍留在登记表：随后按来源退役仍能取到它并清除。
+    func testNotificationTimeoutKeepsRegistryEntryForRetirement() {
+        let center = FakeNotificationCenter()
+        center.completeAddImmediately = false
+        let legs = SwiftEdgeHostLegs(config: .init(
+            canShowUI: { true },
+            notificationCenter: { center },
+            notificationAddTimeout: 0.05))
+        _ = deliverNotification(legs, payload: notificationPayload(sourceId: "local"))
+        XCTAssertEqual(legs.notificationRegistry.trackedCount, 1,
+                       "超时不是投递失败（add 可能仍在途）：登记留给退役端")
+        XCTAssertEqual(legs.notificationRegistry.retire(sourceIds: ["local"]).count, 1)
     }
 }

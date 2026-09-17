@@ -43,9 +43,18 @@ struct RendererHangWatchdog {
     private var lastInputAt: Date
     private var lastProbeAt: Date?
     private var probeInFlightSince: Date?
+    /// 首载成功门（S-34）：与 Electron main.ts 的 loadedOnce 同义——didFinish 前
+    /// 只记录键鼠活动，**不 ping、不重载**（建窗到控制面就绪期间的白屏加载不得
+    /// 被误判卡死）。
+    private(set) var loadedOnce = false
 
     init(now: Date) {
         lastInputAt = now
+    }
+
+    /// 首次成功加载（WKNavigationDelegate.didFinish）→ 打开探测门。幂等。
+    mutating func noteFirstLoadFinished() {
+        loadedOnce = true
     }
 
     /// 键鼠输入 → 重置判定并把「空闲计时」推到现在。
@@ -64,6 +73,9 @@ struct RendererHangWatchdog {
 
     /// 定时 tick（调用方每 probeInterval 秒调用一次）。
     mutating func tick(now: Date) -> Action {
+        // S-34 首载门：didFinish 前只记录（noteUserInput 照常更新空闲计时），
+        // 绝不 ping/重载——strike 语义在门打开后原样保留。
+        guard loadedOnce else { return .nothing }
         // 有人刚动过键鼠：不 ping、不重载。
         if now.timeIntervalSince(lastInputAt) < Self.idleGrace {
             strikes = 0

@@ -4,8 +4,9 @@
 //  覆盖：目录锁（flock 独占 / 记录 / no-follow / 规整文件 / 释放重取）、
 //  重启退避策略（500ms + 60s 滚动窗口 ≤3）、Supervisor 生命周期
 //  （启动 / 崩溃重启 / 退出码分级 0|3 / 重启耗尽 fatal / stop 后迟到调度作废 /
-//  spawn 失败 fatal）。进程用假实现注入，调度用可手工触发的闭包——无真实
-//  子进程、无 GUI。
+//  spawn 失败 fatal）。状态机分支用假进程注入 + 可手工触发的调度闭包；G11 另有
+//  一例用**真实 BridgeClient**（/bin/sh 子进程、无桩进程）钉住
+//  onTerminated → Supervisor 的生产接线。无 GUI。
 import XCTest
 @testable import DSHChamberPoc
 
@@ -41,6 +42,31 @@ private final class FakeSidecar: SupervisedSidecar {
 
 private struct FakeError: Error, LocalizedError {
     var errorDescription: String? { "fake spawn failure" }
+}
+
+/// G11：跨线程记录 Supervisor 排定闭包（真实 BridgeClient 的终止回调在
+/// Foundation 队列，闭包追加与断言线程读取必须互斥）。
+private final class ScheduledRecorder {
+    private let lock = NSLock()
+    private var work: [() -> Void] = []
+
+    func append(_ closure: @escaping () -> Void) {
+        lock.lock()
+        work.append(closure)
+        lock.unlock()
+    }
+
+    var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return work.count
+    }
+
+    var snapshot: [() -> Void] {
+        lock.lock()
+        defer { lock.unlock() }
+        return work
+    }
 }
 
 final class SidecarSupervisorTests: XCTestCase {
@@ -351,6 +377,67 @@ final class SidecarSupervisorTests: XCTestCase {
         XCTAssertEqual(sidecar.stopCount, 1, "启动期被 stop 的进程必须被回收")
         XCTAssertFalse(supervisor.directoryLock.isHeld)
         XCTAssertTrue(scheduled().isEmpty)
+    }
+
+    // MARK: - G11：真实 onTerminated → Supervisor 接线（无桩进程）
+
+    /// 有界轮询（真实进程终止回调不保证在断言线程的时序）。
+    private func pollUntil(timeout: TimeInterval, _ condition: () -> Bool) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return true }
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        return condition()
+    }
+
+    /// G11（2026-12 审计）：onTerminated → SidecarSupervisor 的生产接线此前
+    /// 只被假进程用例覆盖（FakeSidecar 自己调 onTerminated，接线断了也全绿）。
+    /// 本用例路径上**无桩进程**：makeSidecar 返回真实 BridgeClient（/bin/sh
+    /// 0.3s 后 exit 1），自然终止必须经 BridgeClient.handleTermination →
+    /// onTerminated → Supervisor.handleTermination → 崩溃退避排定；手工触发
+    /// 排定闭包（唯一注入的是调度时钟）后第二个真实进程必须被拉起。
+    func testRealBridgeTerminationDrivesSupervisorRestart() throws {
+        let dir = makeTempDir()
+        let scheduled = ScheduledRecorder()
+        var launchCount = 0
+        var bridges: [BridgeClient] = []
+        let supervisor = SidecarSupervisor(
+            directoryLock: SidecarDirectoryLock(userDataDir: dir),
+            dependencies: .init(
+                makeSidecar: {
+                    launchCount += 1
+                    let bridge = BridgeClient(nodePath: "/bin/sh",
+                                              arguments: ["-c", "sleep 0.3; exit 1"],
+                                              environment: [:])
+                    bridges.append(bridge)
+                    return bridge
+                },
+                schedule: { _, work in scheduled.append(work) },
+                log: { _ in },
+                onFatal: { _ in }))
+        XCTAssertEqual(try supervisor.start(), .running)
+        XCTAssertEqual(launchCount, 1)
+        XCTAssertTrue(supervisor.directoryLock.isHeld)
+        XCTAssertTrue(bridges[0].isRunning, "第一个真实 sidecar 进程应已拉起")
+
+        // 自然退出（exit 1）→ 真实 BridgeClient 的 onTerminated → Supervisor。
+        XCTAssertTrue(pollUntil(timeout: 5) { supervisor.state == .restarting },
+                      "真实 BridgeClient 的自然退出必须驱动 Supervisor 进入退避重启"
+                      + "（当前状态 \(supervisor.state)）")
+        XCTAssertEqual(scheduled.count, 1, "崩溃应排定一次重启")
+        XCTAssertFalse(bridges[0].isRunning, "第一个进程应已自然退出")
+
+        // 手工触发排定闭包：重启腿必须拉起第二个真实进程。
+        scheduled.snapshot[0]()
+        XCTAssertEqual(supervisor.state, .running)
+        XCTAssertEqual(launchCount, 2)
+        XCTAssertTrue(bridges[1].isRunning, "重启后的进程必须是真实 BridgeClient")
+
+        supervisor.stop()
+        XCTAssertEqual(supervisor.state, .stopped)
+        XCTAssertFalse(supervisor.directoryLock.isHeld)
+        XCTAssertFalse(bridges[1].isRunning, "stop() 必须回收真实进程")
     }
 
     func testStopIsIdempotent() throws {

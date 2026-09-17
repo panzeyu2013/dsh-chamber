@@ -1,7 +1,7 @@
 // swift-tools-version: 5.9
 //
 //  Package.swift —— dsh-chamber Swift 壳 P0（W-03，design 25 §8.1；
-//  todo companion macos-swift-v1 §0.2④）
+//  design 25 §3.2）
 //
 //  结构说明：
 //  - 单 executableTarget「DSHChamberPoc」（Sources/DSHChamberPoc）承载 P0 全部

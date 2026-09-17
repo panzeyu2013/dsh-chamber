@@ -34,14 +34,31 @@ final class CrossLanguageLockstepTests: XCTestCase {
         return String(rest[..<end.lowerBound])
     }
 
+    /// 2026-12 复核（G21 文本锚）：渲染恢复的预算/门判定已迁到 shell-core.ts 的
+    /// 共享常量 + 纯函数（`noteRendererReload` / `shouldScheduleHangReload` /
+    /// `shouldReloadAfterCrash`；main.ts 只留计时器 glue），旧锚点 `}, 500);`、
+    /// `60_000`、`reloadCount <= 3` 已不在 installRendererRecovery 体内——锚点随
+    /// 单源迁移到 shell-core（否则该文件假红且 Electron 侧失去唯一文本钉）。
     func testRendererRecoveryPolicyMatchesMainTs() throws {
-        let text = try source("packages/desktop/main.ts")
-        guard let body = functionBody(text, named: "function installRendererRecovery") else {
+        let mainText = try source("packages/desktop/main.ts")
+        guard let body = functionBody(mainText, named: "function installRendererRecovery") else {
             return XCTFail("main.ts 缺少 installRendererRecovery")
         }
-        // 500ms 延迟 / 60s 窗口 / ≤3 次（main.ts 源锚点）。
-        for anchor in ["}, 500);", "60_000", "reloadCount <= 3"] {
-            XCTAssertTrue(body.contains(anchor), "installRendererRecovery 应含源锚点：\(anchor)")
+        // main.ts 只允许留 glue：预算记账/门判定必须调 shell-core 共享纯函数。
+        for anchor in ["noteRendererReload(reloadBudget, Date.now())",
+                       "RENDERER_CRASH_RELOAD_DELAY_MS",
+                       "RENDERER_HANG_RELOAD_DELAY_MS",
+                       "shouldScheduleHangReload(loadedOnce)",
+                       "shouldReloadAfterCrash(details.reason, quitRequested)"] {
+            XCTAssertTrue(body.contains(anchor), "installRendererRecovery 应含 glue 锚点：\(anchor)")
+        }
+        // 单源：500ms 崩溃延迟 / 15s 卡死延迟 / 60s 窗口 / ≤3 次。
+        let coreText = try source("packages/desktop/shell-core.ts")
+        for anchor in ["export const RENDERER_CRASH_RELOAD_DELAY_MS = 500;",
+                       "export const RENDERER_HANG_RELOAD_DELAY_MS = 15_000;",
+                       "export const RENDERER_RECOVERY_WINDOW_MS = 60_000;",
+                       "export const RENDERER_RECOVERY_MAX_RELOADS = 3;"] {
+            XCTAssertTrue(coreText.contains(anchor), "shell-core 应含渲染恢复源锚点：\(anchor)")
         }
         let policy = RendererRecoveryPolicy()
         XCTAssertEqual(policy.delay * 1000, 500, "崩溃重载延迟 500ms")
@@ -68,14 +85,44 @@ final class CrossLanguageLockstepTests: XCTestCase {
                        "A 桥信封上限与 B 桥帧上限必须同值（4 MiB）")
     }
 
+    /// G12（2026-12 审计）：旧断言 AppDelegate.quitCleanupTimeout ==
+    /// BridgeClient.quitCleanupGracePeriod 恒真——前者就是后者的别名（AppDelegate
+    /// 里 `static let quitCleanupTimeout = BridgeClient.quitCleanupGracePeriod`），
+    /// 两个值一起改错也照样通过。现在期望字面量从**两侧源码**读出：Electron
+    /// （shell-core.ts 的 `QUIT_CLEANUP_TIMEOUT_MS = 5_000`）与 Swift
+    /// （BridgeClient.swift 的 `quitCleanupGracePeriod: TimeInterval = 5.0`）；
+    /// 先断言两侧字面量相等，再把两个 Swift 常量分别钉到这个共享字面量。
     func testQuitCleanupBudgetMatchesShellCore() throws {
-        let text = try source("packages/desktop/shell-core.ts")
-        XCTAssertTrue(text.contains("export const QUIT_CLEANUP_TIMEOUT_MS = 5_000"),
-                      "shell-core 退出清理预算应为 5000ms")
-        XCTAssertEqual(BridgeClient.quitCleanupGracePeriod, 5.0,
-                       "SIGTERM 宽限 = shell-core QUIT_CLEANUP_TIMEOUT_MS（S6）")
-        XCTAssertEqual(AppDelegate.quitCleanupTimeout, BridgeClient.quitCleanupGracePeriod,
-                       "terminate 硬顶与 SIGTERM 宽限单源（S6）")
+        let tsText = try source("packages/desktop/shell-core.ts")
+        guard let tsMatch = tsText.range(
+            of: #"export const QUIT_CLEANUP_TIMEOUT_MS = ([\d_]+)"#,
+            options: .regularExpression) else {
+            return XCTFail("shell-core.ts 缺少 QUIT_CLEANUP_TIMEOUT_MS 字面量")
+        }
+        let tsLiteral = String(tsText[tsMatch])
+            .components(separatedBy: "= ").last!
+            .replacingOccurrences(of: "_", with: "")
+        guard let tsSeconds = Double(tsLiteral).map({ $0 / 1000 }) else {
+            return XCTFail("无法解析 shell-core 字面量：\(tsLiteral)")
+        }
+
+        let swiftText = try source("macos/Sources/DSHChamberPoc/BridgeClient.swift")
+        guard let swiftMatch = swiftText.range(
+            of: #"quitCleanupGracePeriod: TimeInterval = ([\d.]+)"#,
+            options: .regularExpression) else {
+            return XCTFail("BridgeClient.swift 缺少 quitCleanupGracePeriod 字面量")
+        }
+        let swiftLiteral = String(swiftText[swiftMatch]).components(separatedBy: "= ").last!
+        guard let swiftSeconds = Double(swiftLiteral) else {
+            return XCTFail("无法解析 BridgeClient 字面量：\(swiftLiteral)")
+        }
+
+        XCTAssertEqual(swiftSeconds, tsSeconds,
+                       "Swift SIGTERM 宽限字面量必须等于 shell-core 的 QUIT_CLEANUP_TIMEOUT_MS（S6）")
+        XCTAssertEqual(BridgeClient.quitCleanupGracePeriod, swiftSeconds,
+                       "编译出的宽限必须等于 Swift 源字面量")
+        XCTAssertEqual(AppDelegate.quitCleanupTimeout, tsSeconds,
+                       "terminate 硬顶必须等于共享预算字面量（G12：不得再拿它和 BridgeClient 自比）")
     }
 
     func testInteractiveEdgeTimeoutMatchesSidecarEntry() throws {

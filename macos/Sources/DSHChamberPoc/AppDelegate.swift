@@ -1,6 +1,6 @@
 //  AppDelegate.swift —— 应用生命周期与启动装配
 //  DSHChamberPoc（macos/ SwiftPM POC 壳）：W-03（design 25 §8.1；
-//  todo companion macos-swift-v1 §0.2④）；B 桥接入点对应 W-04 契约
+//  design 25 §3.2）；B 桥接入点对应 W-04 契约
 //
 //  职责：解析环境（node / sidecar / 控制面 URL）→ 组装 BridgeClient
 //  （BridgeClient.swift，W-04 作者实现，见共享契约）→ 启动 sidecar →
@@ -49,6 +49,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var statusItem: NSStatusItem?
     /// 本壳注册的 URL scheme（Info.plist.template CFBundleURLSchemes 同源）。
     static let deepLinkScheme = "dsh-chamber:"
+    /// S-24：Help 菜单打开的项目页（仓库主页 = README/发布说明/issue 的统一入口；
+    /// 原生壳没有页面桥帮助面，这是最小且诚实的帮助项）。打开经既有外部打开路径
+    /// （MainWindowController.openExternally：预算 + loud 失败），不新开旁路。
+    static let helpPageURL = "https://github.com/panzeyu2013/dsh-chamber"
 
     // MARK: - NSApplicationDelegate
 
@@ -74,6 +78,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             }
             print("[poc] 收到二次启动转发深链 (raw)")
             self?.deepLinks.enqueue(raw)
+        }
+        // S-40：二次启动显窗请求（Electron second-instance 的 showMainWindow 对偶）。
+        // 跨进程无法替目标实例 order-in 已隐藏的窗口（NSRunningApplication.activate
+        // 只激活应用、不带出隐藏窗口），因此 secondary 发这条本壳私有通知，primary
+        // 收到后走既有恢复链（makeKeyAndOrderFront + deminiaturize + activate）。
+        // 无载荷；任何本机进程都能 post，最坏后果 = 本壳窗口前置，不扩大能力面。
+        DistributedNotificationCenter.default().addObserver(
+            forName: Self.secondaryShowWindowNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            print("[poc] 收到二次启动显窗请求（S-40）")
+            self?.restoreMainWindow()
         }
         if Bundle.main.bundleIdentifier != nil {
             let center = UNUserNotificationCenter.current()
@@ -297,16 +312,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let bridge = BridgeClient(nodePath: nodePath, arguments: sidecarArguments, environment: childEnv)
         bridge.onReady = { [weak self] port, shellVersion in
             print("[poc] sidecar ready（port=\(port) shellVersion=\(shellVersion)）")
+            guard let self else { return }
+            // P-02：ready.port 必须与壳即将加载的控制面 URL 端口一致；不一致
+            // = 控制面实际在别的 origin（白窗 + A 桥全拒）。绝不静默加载错
+            // origin：可见错误 + exit(1)（与 Electron 控制面启动失败分流同向）。
+            if let mismatch = Self.readyPortMismatchMessage(readyPort: port, cpURL: cpURL) {
+                DispatchQueue.main.async { self.fatalStartup(mismatch) }
+                return
+            }
             // E13：ready 后按序补发冷启动期间缓冲的深链（主线程收敛）；
             // 同时放开 A 桥 origin 门（ready 帧前一律拒绝）。
             DispatchQueue.main.async {
-                self?.mainWindowController?.noteSidecarReady()
-                self?.handleSidecarReady()
+                self.mainWindowController?.noteSidecarReady()
+                self.handleSidecarReady()
             }
         }
-        let controller = MainWindowController(cpURL: cpURL, bridge: bridge)
+        // P-18 fail-closed（对齐 Electron preload 加载失败 → showErrorBox +
+        // app.exit(1)）：shim 资源缺失/为空时绝不带着无桥页面开窗。
+        let shimSource = MainWindowController.readShimSource() ?? ""
+        if let shimFailure = MainWindowController.shimStartupFailure(source: shimSource) {
+            fatalStartup(shimFailure)
+        }
+        let controller = MainWindowController(cpURL: cpURL, bridge: bridge,
+                                              shimSource: shimSource)
         controller.closeDelegate = self
         mainWindowController = controller
+        // S-42：首个已提交内容（didCommit，含 S-27 失败说明页）才亮出主窗——
+        // 装配期绝不再无条件 makeKeyAndOrderFront（那会先亮出 1~2s 无内容空窗）。
+        controller.onFirstCommittedContent = { [weak self] in
+            self?.presentMainWindow()
+        }
         // W-19/20 宿主腿接线：canShowUI = **有 app bundle（可呈现 UI/通知）**，
         // 不再以窗口可见性为门（2026-09 模块评审 major：Electron 的通知面没有
         // 可见性门，hide-to-tray 后 orderOut 会让通知被误判 ui-unavailable）。
@@ -384,33 +419,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Electron main.ts:1434-1440 每次都 applyLaunchAtLogin——系统移除登录项
         // （例如 .app 被移动）后 Swift 侧此前永不修复，而设置页仍显示「已开启」。
         // 键缺失/文件损坏 = 不动作（绝不猜一个值去动登录项）。
-        if let launchAtLogin = StartupSettings.readLaunchAtLogin(userDataDir: stateDir) {
-            legs.respond(method: "setLoginItem", payload: .object(["enabled": .bool(launchAtLogin)]))
-            print("[poc] 启动期重放登录自启：enabled=\(launchAtLogin)")
-        } else {
+        // P-17：腿回执不再被静默丢弃——失败 loud 打印但绝不 fatal（dev 无
+        // bundle 时腿回 ui-unavailable:setLoginItem:no-bundle，属诚实降级）。
+        switch Self.reconcileLaunchAtLogin(
+            Self.readStartupLaunchAtLogin(userDataDir: stateDir),
+            apply: { enabled in
+                legs.respond(method: "setLoginItem",
+                             payload: .object(["enabled": .bool(enabled)]))
+            }) {
+        case .settingsCorrupt:
             print("[poc] 登录自启设置不可读（损坏）——本次启动不改动登录项")
+        case .applied(let enabled):
+            print("[poc] 启动期重放登录自启：enabled=\(enabled)")
+        case .failed(let enabled, let error):
+            print("[poc] 启动期重放登录自启失败（loud，不致命）：enabled=\(enabled) error=\(error)")
         }
 
-        // 显示主窗口并激活（页面首载若早于控制面就绪由导航退避重试兜底）
-        controller.window?.makeKeyAndOrderFront(nil)
+        // S-42：此处**不再**显示/激活主窗口——呈现由首个已提交内容触发
+        // （controller.onFirstCommittedContent → presentMainWindow，didCommit
+        // 覆盖正常壳文档与 S-27 失败页）；页面首载若早于控制面就绪由导航退避
+        // 重试兜底。Electron 的 controlPlane.start() 完成先于 createMainWindow，
+        // 用户因此不会先看到一个无内容空窗。
         // 关窗决策缓存失效钩子（2026-12 审查 major）：设置页改「关闭窗口行为」后，
         // 下一次关窗必须用**新**的 quitFacts，而不是缓存里的旧值。
         controller.onSettingsChanged = { [weak self] in
             self?.cachedQuitFacts = nil
             print("[poc] 设置变化 → 关窗决策缓存作废")
         }
-        // 关窗决策缓存失效钩子（2026-12 审查 major）：设置页改「关闭窗口行为」后，
-        // 下一次关窗必须用**新**的 quitFacts，而不是缓存里的旧值。
-        controller.onSettingsChanged = { [weak self] in
-            self?.cachedQuitFacts = nil
-            print("[poc] 设置变化 → 关窗决策缓存作废")
-        }
-        if #available(macOS 14.0, *) {
-            NSApp.activate()
-        } else {
-            NSApp.activate(ignoringOtherApps: true)
-        }
-        print("[poc] 主窗口已显示")
+        print("[poc] 装配完成（主窗口等首个已提交内容后呈现，S-42）")
 
         // 应用内更新（S-01 / 裁决 D-1 选 B）：Sparkle 装配必须在 installMainMenu
         // 之前——菜单项按 isAvailable 决定 enable。安装前清理链在此注入。
@@ -419,6 +455,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             self?.bridge?.edgeHostLegs?.clearBadge()
             self?.mainWindowController?.noteQuitting()
             self?.supervisor?.stop()
+        }
+        // S-19/S-20：Sparkle 阶段 → 冻结线 __host.nativeUpdatePhase → sidecar →
+        // 页面 update-state 投影（页面因此看到与 Electron 相同的 checking/
+        // available/downloading/downloaded/installing/failed 行）。失败 loud 不
+        // 重试：下一次阶段变化会再报。
+        AppUpdater.shared.onPhase = { [weak self] report in
+            guard let bridge = self?.bridge else { return }
+            Task { @MainActor in
+                do {
+                    _ = try await bridge.invoke(method: HostInboundMethod.nativeUpdatePhase,
+                                                payload: report.payload)
+                } catch {
+                    print("[poc] nativeUpdatePhase 上报失败（\(report.phase.rawValue)）："
+                        + "\(error.localizedDescription)")
+                }
+            }
         }
         AppUpdater.shared.start()
         // 最小主菜单（WKWebView 文本编辑快捷键路由需要；G2 剪贴板走查预检）
@@ -445,7 +497,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                                        hasVisibleWindows flag: Bool) -> Bool {
         if !flag {
             mainWindowController?.showWindow(nil)
-            mainWindowController?.window?.makeKeyAndOrderFront(nil)
+            // S-32：恢复入口必须先 deminiaturize（makeKeyAndOrderFront 对最小化
+            // 窗口不解除最小化）。
+            MainWindowController.restoreWindow(mainWindowController?.window)
         }
         return true
     }
@@ -477,7 +531,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     ///  - 已确认 → 直接进入清理（≤5s 硬顶）；
     ///  - 无需确认（core 决策）→ 置确认位后进入清理；
     ///  - 需确认 → NSAlert「退出/取消」：退出走清理，取消则恢复窗口（绝不无窗滞留）。
-    /// 决策请求失败 → 保守取消本次退出（绝不静默放行）。
+    /// 决策请求失败且实例仍在 → S-17 NSAlert「继续等待/强制退出」（绝不静默取消）；
+    /// sidecar 已停 → 无保护内容，放行退出（绝不静默放行有实例的退出）。
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if quitGate.isConfirmed {
             // 已确认分支同样要走 .terminateLater（清理链），必须置位 awaiting——
@@ -497,16 +552,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             self.quitGate.endDecision()
             guard let facts else {
                 // 决策不可得（sidecar 无应答/超时/解码失败）：区分「可能有本地
-                // 保护内容」与「无内容可保护」——前者诚实取消（保留实例，用户可
-                // 重试），后者放行（与 main.ts cp===null 语义同向，避免应用变成
-                // 退不掉）。
+                // 保护内容」与「无内容可保护」——前者经 S-17 提示框诚实取消
+                // （绝不静默吞掉 Cmd+Q），后者放行（与 main.ts cp===null 语义
+                // 同向，避免应用变成退不掉）。动作映射单源在
+                // QuitCoordinator.unavailableAction。
                 let sidecarLive = self.supervisor?.state == .running
                     || self.supervisor?.state == .restarting
-                if sidecarLive {
-                    print("[poc] 退出决策不可得（sidecar 无应答）：取消本次退出，保留本地实例")
-                    self.restoreMainWindow()
-                    self.replyTerminate(false)
-                } else {
+                switch QuitCoordinator.unavailableAction(sidecarLive: sidecarLive) {
+                case .alertThenCancel:
+                    self.presentQuitUnavailableAlert()
+                case .proceed:
                     print("[poc] 退出决策不可得且 sidecar 未运行：无本地保护内容，放行退出")
                     self.quitGate.markConfirmed()
                     if !self.beginTerminationCleanup() {
@@ -582,8 +637,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let cancelButton = alert.addButton(withTitle: "取消")
         // 与 Electron 对齐（main.ts:1064-1066 buttons ['退出','取消'] defaultId: 1
         // cancelId: 1；2026-12 双端逐函数核对 V2）：Enter 命中「取消」这个安全项。
+        // 保留 "\r" 让「取消」在版式上就是默认按钮（蓝色高亮）；实际按键解析
+        // 见 runQuitConfirmationAlert（S-43）。
         cancelButton.keyEquivalent = "\r"
-        let response = alert.runModal()
+        let response = Self.runQuitConfirmationAlert(alert)
         quitGate.endConfirm()
         if response == .alertFirstButtonReturn {
             quitGate.markConfirmed()
@@ -595,6 +652,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // 取消：本次退出作废，恢复窗口（mac close-behavior='quit' 时窗口可能
         // 已隐藏/关闭——恢复入口绝不少于一个）。
         print("[poc] 退出已取消")
+        restoreMainWindow()
+        replyTerminate(false)
+    }
+
+    /// S-43：退出确认框的按键语义——Electron defaultId: 1 + cancelId: 1 ⇒
+    /// **Enter 与 Esc 都命中按钮 1「取消」**（安全项）。NSAlert 一个按钮只能带
+    /// 一个 keyEquivalent（「取消」已占 Return），AppKit 也不会为无 Escape 键的
+    /// 按钮自动回落 Esc（实测 performKeyEquivalent 返回 false）；且模态期内
+    /// NSAlert 的默认键解析不可靠（实测「取消」虽有 "\r"，合成的 Return 仍可能
+    /// 落到第一个按钮）。故两个键都由模态期一次性本地 keyDown 监视器映射为
+    /// .alertSecondButtonReturn：stopModal(withCode:) 使 runModal() 以该响应返回，
+    /// 事件被吞掉（不触发系统警告音）；其余键原样放行。
+    static func runQuitConfirmationAlert(_ alert: NSAlert) -> NSApplication.ModalResponse {
+        // 36 = Return，76 = 小键盘 Enter，53 = Esc。
+        let cancelKeyCodes: Set<UInt16> = [36, 76, 53]
+        let monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            guard cancelKeyCodes.contains(event.keyCode) else { return event }
+            NSApplication.shared.stopModal(withCode: .alertSecondButtonReturn)
+            return nil
+        }
+        defer {
+            if let monitor { NSEvent.removeMonitor(monitor) }
+        }
+        return alert.runModal()
+    }
+
+    /// S-17：`__host.quitFacts` 不可得（超时/调用失败/解码失败）且 sidecar
+    /// 仍在运行 —— 绝不静默取消 Cmd+Q。提示后：继续等待（默认）→ 取消本轮退出
+    /// 并恢复窗口（同旧保守分支）；强制退出 → 置确认位走既有清理链（≤5s 硬顶）。
+    private func presentQuitUnavailableAlert() {
+        guard quitGate.beginConfirm() else {
+            print("[poc] 退出决策不可得：已有决策框在途，忽略重复退出请求")
+            replyTerminate(false)
+            return
+        }
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = QuitCoordinator.UnavailableAlert.messageText
+        alert.informativeText = QuitCoordinator.UnavailableAlert.informativeText
+        let waitButton = alert.addButton(withTitle: QuitCoordinator.UnavailableAlert.waitButtonTitle)
+        alert.addButton(withTitle: QuitCoordinator.UnavailableAlert.forceButtonTitle)
+        // 与既有「退出/取消」同约定：默认（Enter）落在安全项「继续等待」。
+        waitButton.keyEquivalent = "\r"
+        let response = alert.runModal()
+        quitGate.endConfirm()
+        if response == .alertSecondButtonReturn {
+            print("[poc] 用户选择强制退出（quitFacts 不可得）：走既有清理链")
+            quitGate.markConfirmed()
+            if !beginTerminationCleanup() {
+                replyTerminate(true)
+            }
+            return
+        }
+        print("[poc] 用户选择继续等待：本次退出取消，保留本地实例")
         restoreMainWindow()
         replyTerminate(false)
     }
@@ -635,10 +746,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         NSApp.reply(toApplicationShouldTerminate: proceed)
     }
 
-    /// 恢复主窗口（取消退出 / 决策失败时的恢复入口）。
+    /// S-42：首个已提交内容到达 → 呈现并激活主窗（装配期不再无条件显示）。
+    /// 显式用户入口（Dock reopen、托盘、二次启动、取消退出）不走此门，直接
+    /// 走各自的恢复函数。
+    private func presentMainWindow() {
+        print("[poc] 首个已提交内容到达——主窗口呈现（S-42）")
+        restoreMainWindow()
+    }
+
+    /// 恢复主窗口（取消退出 / 决策失败 / 二次启动显窗请求时的恢复入口）。
     private func restoreMainWindow() {
         guard let controller = mainWindowController, let window = controller.window else { return }
-        window.makeKeyAndOrderFront(nil)
+        // S-32：取消退出/决策失败后的恢复同样要解除最小化。
+        MainWindowController.restoreWindow(window)
         if #available(macOS 14.0, *) {
             NSApp.activate()
         } else {
@@ -773,6 +893,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// 事件对偶）。
     static let secondaryDeepLinkNotification = Notification.Name("com.dshchamber.native.deep-link")
 
+    /// 二次启动显窗通知名（S-40；本壳私有，Electron second-instance 的
+    /// showMainWindow 对偶）。接收端恢复主窗（含 deminiaturize），发送端 = 二次
+    /// 启动实例（activateExistingInstance）。
+    static let secondaryShowWindowNotification = Notification.Name("com.dshchamber.native.show-window")
+
     /// 把 secondary 实例 argv 里的深链交给已运行实例（返回转发条数）。
     /// 只转发本 scheme 的参数（与 S4·F1 同一筛选），不重试、不阻塞。
     static func forwardDeepLinksToRunningInstance(arguments: [String]) -> Int {
@@ -786,18 +911,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return urls.count
     }
 
-    /// 已运行的**同 bundle** 实例：激活其全部窗口并返回 true；没有则 false。
-    /// 只用 bundle id 判定，绝不按进程名猜（Electron flavor 的 bundle id 不同，
-    /// 因此不会被误激活）。
-    static func activateExistingInstance() -> Bool {
-        guard let bundleID = Bundle.main.bundleIdentifier else { return false }
-        let me = ProcessInfo.processInfo.processIdentifier
-        let others = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID)
-            .filter { $0.processIdentifier != me && !$0.isTerminated }
-        guard let other = others.first else { return false }
-        print("[poc] 已有本壳实例（pid=\(other.processIdentifier)）：激活并安静退出（S4·F4）")
-        other.activate(options: [.activateAllWindows])
+    /// 已运行的**同 bundle** 实例：请求它显示/恢复主窗并激活其应用，返回 true；
+    /// 没有则 false。只用 bundle id 判定，绝不按进程名猜（Electron flavor 的
+    /// bundle id 不同，因此不会被误激活）。
+    ///
+    /// S-40（Electron second-instance 的 show/restore/focus 对偶）：跨进程无法
+    /// 替目标实例 order-in 已隐藏的窗口——NSRunningApplication.activate 只把
+    /// 应用带到前台，隐藏/最小化窗口仍可能不现身。因此先 post 本壳私有显窗通知
+    /// （primary 收到后 makeKeyAndOrderFront + deminiaturize + activate），再激活
+    /// 应用。两件事都经注入 seam，测试可直测（NSRunningApplication 无公开构造器）。
+    static func activateExistingInstance(
+        bundleID: String? = Bundle.main.bundleIdentifier,
+        currentPID: Int32 = ProcessInfo.processInfo.processIdentifier,
+        instances: (String) -> [(pid: Int32, activate: () -> Void)] = {
+            NSRunningApplication.runningApplications(withBundleIdentifier: $0)
+                .filter { !$0.isTerminated }
+                .map { app in
+                    (pid: app.processIdentifier,
+                     activate: { app.activate(options: [.activateAllWindows]) })
+                }
+        },
+        requestShow: () -> Void = { AppDelegate.postShowWindowRequest() },
+        log: (String) -> Void = { print($0) }
+    ) -> Bool {
+        guard let bundleID else { return false }
+        guard let other = instances(bundleID).first(where: { $0.pid != currentPID }) else {
+            return false
+        }
+        log("[poc] 已有本壳实例（pid=\(other.pid)）：请求显示窗口并激活后安静退出（S4·F4/S-40）")
+        // 顺序：先请 primary 恢复窗口（异步送达），再把自己的应用激活请求发出去。
+        requestShow()
+        other.activate()
         return true
+    }
+
+    /// S-40：请求已运行的同 bundle 实例显示/恢复其主窗（本壳私有分布式通知；
+    /// 接收端在 applicationDidFinishLaunching 顶部接线）。无载荷。
+    static func postShowWindowRequest() {
+        DistributedNotificationCenter.default().postNotificationName(
+            secondaryShowWindowNotification, object: nil, userInfo: nil, deliverImmediately: true)
     }
 
     private func fatalStartup(_ message: String) -> Never {
@@ -813,10 +965,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         exit(1)
     }
 
-    /// 最小主菜单：App（退出）+ 编辑（WebKit 快捷键路由）+ 窗口
-    /// （S13：performClose/performMiniaturize，恢复 Cmd+W/Cmd+M——Electron
-    /// 默认 macOS Window 菜单对偶，design E3）。抽为静态纯函数便于单测断言
-    /// selector（构造 NSMenu 无需 NSApp.run）。
+    /// 主菜单：App / 文件（S-24 File 组 = Electron 默认 fileMenu 的 Close
+    /// Window 位置）/ 编辑（WebKit 快捷键路由 + S-24 扩展项，含 macOS
+    /// Substitutions 子菜单）/ 显示（S-24：Reload/Force Reload/缩放/全屏）/
+    /// 窗口（S13：performClose/performMiniaturize，恢复 Cmd+W/Cmd+M——Electron
+    /// 默认 macOS Window 菜单对偶，design E3）/ 帮助。抽为静态纯函数便于单测
+    /// 断言 selector（构造 NSMenu 无需 NSApp.run）。
     static func makeMainMenu() -> NSMenu {
         let mainMenu = NSMenu()
 
@@ -858,6 +1012,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                         keyEquivalent: "q")
         appMenuItem.submenu = appMenu
 
+        // S-24（残余）：File 组——Electron 默认菜单的 fileMenu role
+        // （{ label: 'File', submenu: [close] }，装配次序 appMenu/fileMenu/
+        // editMenu/viewMenu/windowMenu；macOS 上 close role =「关闭窗口」
+        // Cmd+W，Electron Framework menu-item-roles 实测）。Swift 此前五组无
+        // File，现补在最前（App 之后、Edit 之前），保持既有 App/Edit/显示/
+        // Window/Help 结构与 Window 组自带「关闭」不变——两条入口同 selector
+        // （performClose:），行为完全一致。
+        let fileMenuItem = NSMenuItem()
+        mainMenu.addItem(fileMenuItem)
+        let fileMenu = NSMenu(title: "文件")
+        fileMenu.addItem(withTitle: "关闭窗口",
+                         action: #selector(NSWindow.performClose(_:)),
+                         keyEquivalent: "w")
+        fileMenuItem.submenu = fileMenu
+
         let editMenuItem = NSMenuItem()
         mainMenu.addItem(editMenuItem)
         let editMenu = NSMenu(title: "编辑")
@@ -867,8 +1036,78 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         editMenu.addItem(withTitle: "剪切", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
         editMenu.addItem(withTitle: "拷贝", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
         editMenu.addItem(withTitle: "粘贴", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        // S-24：Electron 默认 Edit 菜单的其余标准项（此前缺失——网页输入框里
+        // Cmd+Opt+Shift+V 与 Delete 无效）。
+        let pasteAndMatch = editMenu.addItem(withTitle: "粘贴并匹配样式",
+                                             action: Selector(("pasteAndMatchStyle:")),
+                                             keyEquivalent: "v")
+        pasteAndMatch.keyEquivalentModifierMask = [.command, .option, .shift]
+        editMenu.addItem(withTitle: "删除", action: Selector(("delete:")), keyEquivalent: "")
         editMenu.addItem(withTitle: "全选", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editMenu.addItem(.separator())
+        // S-24（残余）：macOS Substitutions 子菜单（Electron 默认 editMenu role
+        // 在 darwin 上的标准分组：全选之后、Speech 之前 = Substitutions 子菜单，
+        // 含 Show Substitutions + Smart Quotes/Smart Dashes/Text Replacement 四个
+        // role；Electron Framework menu-item-roles 实测同一拼写）。动作走 AppKit/
+        // WebKit 响应链标准 selector（无响应者时系统自动禁用，绝不伪造可用）。
+        let substitutionsItem = NSMenuItem(title: "替换", action: nil, keyEquivalent: "")
+        let substitutionsMenu = NSMenu(title: "替换")
+        substitutionsMenu.addItem(withTitle: "显示替换…",
+                                  action: #selector(NSTextView.orderFrontSubstitutionsPanel(_:)),
+                                  keyEquivalent: "")
+        substitutionsMenu.addItem(.separator())
+        substitutionsMenu.addItem(withTitle: "智能引号",
+                                  action: #selector(NSTextView.toggleAutomaticQuoteSubstitution(_:)),
+                                  keyEquivalent: "")
+        substitutionsMenu.addItem(withTitle: "智能破折号",
+                                  action: #selector(NSTextView.toggleAutomaticDashSubstitution(_:)),
+                                  keyEquivalent: "")
+        substitutionsMenu.addItem(withTitle: "文本替换",
+                                  action: #selector(NSTextView.toggleAutomaticTextReplacement(_:)),
+                                  keyEquivalent: "")
+        substitutionsItem.submenu = substitutionsMenu
+        editMenu.addItem(substitutionsItem)
+        editMenu.addItem(.separator())
+        let speechItem = NSMenuItem(title: "语音", action: nil, keyEquivalent: "")
+        let speechMenu = NSMenu(title: "语音")
+        speechMenu.addItem(withTitle: "开始朗读", action: Selector(("startSpeaking:")), keyEquivalent: "")
+        speechMenu.addItem(withTitle: "停止朗读", action: Selector(("stopSpeaking:")), keyEquivalent: "")
+        speechItem.submenu = speechMenu
+        editMenu.addItem(speechItem)
         editMenuItem.submenu = editMenu
+
+        // S-24：View 组（Electron 未自定义菜单 → 系统默认 View 菜单含 Reload /
+        // 缩放 / 全屏；Swift 此前只有 App/Edit/Window）。动作经响应链到
+        // AppDelegate（reload/zoom 绑 webView.pageZoom），全屏走 NSWindow。
+        let viewMenuItem = NSMenuItem()
+        mainMenu.addItem(viewMenuItem)
+        let viewMenu = NSMenu(title: "显示")
+        viewMenu.addItem(withTitle: "重新加载",
+                         action: #selector(AppDelegate.reloadWebView(_:)),
+                         keyEquivalent: "r")
+        // S-24（残余）：Force Reload（Shift+Cmd+R；Electron 默认菜单 forceReload
+        // role = reloadIgnoringCache 对偶，标定见 Electron Framework
+        // menu-item-roles 实测「Force Reload / Shift+CmdOrCtrl+R」）。
+        let forceReload = viewMenu.addItem(withTitle: "强制重新加载",
+                                           action: #selector(AppDelegate.forceReloadWebView(_:)),
+                                           keyEquivalent: "r")
+        forceReload.keyEquivalentModifierMask = [.command, .shift]
+        viewMenu.addItem(.separator())
+        viewMenu.addItem(withTitle: "放大",
+                         action: #selector(AppDelegate.zoomInWebView(_:)),
+                         keyEquivalent: "+")
+        viewMenu.addItem(withTitle: "缩小",
+                         action: #selector(AppDelegate.zoomOutWebView(_:)),
+                         keyEquivalent: "-")
+        viewMenu.addItem(withTitle: "实际大小",
+                         action: #selector(AppDelegate.resetWebViewZoom(_:)),
+                         keyEquivalent: "0")
+        viewMenu.addItem(.separator())
+        let fullScreen = viewMenu.addItem(withTitle: "切换全屏幕",
+                                          action: #selector(NSWindow.toggleFullScreen(_:)),
+                                          keyEquivalent: "f")
+        fullScreen.keyEquivalentModifierMask = [.command, .control]
+        viewMenuItem.submenu = viewMenu
 
         let windowMenuItem = NSMenuItem()
         mainMenu.addItem(windowMenuItem)
@@ -889,6 +1128,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         windowMenuItem.submenu = windowMenu
         mainMenu.setSubmenu(windowMenu, for: windowMenuItem)
 
+        // S-24（残余收口）：Help 组（macOS 标准菜单位置 = Window 之后）。
+        // 最小且诚实的帮助项：打开项目页（仓库主页）——原生壳没有页面桥帮助面，
+        // 这是唯一不依赖 sidecar/页面状态的帮助入口，且走既有外部打开路径。
+        // 明确不加 DevTools 项：T-10 保持 isInspectable/菜单入口仅 DEBUG 可达，
+        // release 打包态菜单里绝不出现检查器入口。
+        let helpMenuItem = NSMenuItem()
+        mainMenu.addItem(helpMenuItem)
+        let helpMenu = NSMenu(title: "帮助")
+        let help = helpMenu.addItem(withTitle: "dsh-chamber 帮助",
+                                    action: #selector(AppDelegate.openHelpPage(_:)),
+                                    keyEquivalent: "?")
+        help.keyEquivalentModifierMask = [.command]
+        helpMenuItem.submenu = helpMenu
+        mainMenu.setSubmenu(helpMenu, for: helpMenuItem)
+
         return mainMenu
     }
 
@@ -896,6 +1150,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let menu = Self.makeMainMenu()
         NSApp.mainMenu = menu
         NSApp.windowsMenu = menu.items.first { $0.submenu?.title == "窗口" }?.submenu
+        // S-24：注册 Help 组（系统据此在帮助菜单提供搜索框；不做也是普通菜单，
+        // 注册才是「真实 Help 菜单」的标准接线）。
+        NSApp.helpMenu = menu.items.first { $0.submenu?.title == "帮助" }?.submenu
         NSApp.servicesMenu = menu.items
             .compactMap({ $0.submenu })
             .flatMap({ $0.items })
@@ -933,6 +1190,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         arguments.dropFirst().filter { $0.hasPrefix(deepLinkScheme + "//") }
     }
 
+    // MARK: - S-24 菜单动作（View 组）
+
+    /// 「重新加载」（Cmd+R；Electron 默认菜单 reload role 对偶）。
+    @objc func reloadWebView(_ sender: Any?) {
+        mainWindowController?.reloadPage()
+    }
+
+    /// 「强制重新加载」（Shift+Cmd+R；Electron 默认菜单 forceReload role 对偶：
+    /// 忽略缓存重新取源）。
+    @objc func forceReloadWebView(_ sender: Any?) {
+        mainWindowController?.forceReloadPage()
+    }
+
+    /// 「放大」/「缩小」/「实际大小」绑 WKWebView.pageZoom（Electron 默认菜单
+    /// zoomIn/zoomOut/resetZoom role 对偶；步进与边界见 MainWindowController）。
+    @objc func zoomInWebView(_ sender: Any?) {
+        mainWindowController?.zoomIn()
+    }
+
+    @objc func zoomOutWebView(_ sender: Any?) {
+        mainWindowController?.zoomOut()
+    }
+
+    @objc func resetWebViewZoom(_ sender: Any?) {
+        mainWindowController?.resetPageZoom()
+    }
+
+    // MARK: - S-24 菜单动作（Help 组）
+
+    /// 「dsh-chamber 帮助」（S-24 残余收口）：打开项目页——经 MainWindowController
+    /// 既有外部打开路径（预算 + NSWorkspace loud 失败），不新开旁路，也不经
+    /// sidecar/页面桥（帮助入口必须在桥未就绪时也可用）。
+    @objc func openHelpPage(_ sender: Any?) {
+        guard let url = URL(string: Self.helpPageURL) else {
+            print("[poc] Help 页面 URL 非法：\(Self.helpPageURL)")
+            return
+        }
+        mainWindowController?.openExternalPage(url)
+    }
+
     /// 托盘（Electron Tray 对偶）：状态栏图标 +「显示窗口 / 退出」。关窗隐藏后这是与
     /// Dock 并列的恢复入口（2026-12 双端逐函数核对 V4/U3）。
     private func installStatusItem() {
@@ -960,7 +1257,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
 
     @objc private func showMainWindowFromStatusItem(_ sender: Any?) {
         mainWindowController?.showWindow(nil)
-        mainWindowController?.window?.makeKeyAndOrderFront(nil)
+        // S-32：托盘「显示窗口」是最小化窗口的恢复入口，必须 deminiaturize。
+        MainWindowController.restoreWindow(mainWindowController?.window)
         if #available(macOS 14.0, *) {
             NSApp.activate()
         } else {
@@ -982,6 +1280,86 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         return "dev 态未找到 sidecar 脚本：POC_SIDECAR 未设，且自 "
             + "\(FileManager.default.currentDirectoryPath) 向上 6 层未找到 \(sidecarRelativePath)"
+    }
+
+    /// P-02（纯函数，单测直测）：ready 帧端口 vs 壳即将加载的控制面 URL 端口。
+    /// 返回 nil = 一致/不可比较；非 nil = loud 说明（调用方 fatal——绝不静默
+    /// 加载一个端口错位的 origin，那会得到白窗 + A 桥全拒）。cpURL 无显式端口
+    /// 时按 scheme 默认端口（http 80 / https 443）比较。
+    static func readyPortMismatchMessage(readyPort: Int, cpURL: URL) -> String? {
+        let scheme = (cpURL.scheme ?? "").lowercased()
+        let expected: Int?
+        if let port = cpURL.port {
+            expected = port
+        } else if scheme == "http" {
+            expected = 80
+        } else if scheme == "https" {
+            expected = 443
+        } else {
+            expected = nil
+        }
+        guard let expected, expected != readyPort else { return nil }
+        return "sidecar ready 端口 \(readyPort) 与壳即将加载的控制面 origin 端口 "
+            + "\(expected) 不一致（\(cpURL.absoluteString)）——拒绝加载错 origin"
+    }
+
+    /// P-17：登录自启启动期重放的决策结果（纯值，单测直测）。
+    enum LoginItemReconcile: Equatable {
+        /// 设置不可读（损坏）→ 不动作（绝不猜一个值去动登录项）。
+        case settingsCorrupt
+        /// setLoginItem 腿成功。
+        case applied(enabled: Bool)
+        /// setLoginItem 腿失败 → loud 日志；**绝不 fatal**（dev 无 bundle 的
+        /// no-bundle 是诚实降级，不是启动失败）。
+        case failed(enabled: Bool, error: String)
+    }
+
+    /// S-41 后续（对抗验证回归）：读取启动期 launchAtLogin，并叠加 `*.corrupt`
+    /// 保留副本证据。共享读取器（chamber-settings.ts；Electron main.ts 与 Swift
+    /// flavor 的 sidecar-ctx.ts 同源）把损坏文件改名为 `*.corrupt`，所以损坏后的
+    /// 下一次启动看到的是「live 文件缺失 + 副本存在」——StartupSettings 的
+    /// `.missing` 会返回默认 false，重放出去就是一次静默注销登录项。这里在
+    /// live 文件缺失而副本存在时改判 nil（不动作），与共享读取器修复后的
+    /// `state=corrupt` 语义对齐；真正无副本的缺失仍返回 false（注销历史残留）。
+    /// 注入读取/存在性 seam，单测不需要真实损坏文件。
+    static func readStartupLaunchAtLogin(
+        userDataDir: String,
+        fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) },
+        readLaunchAtLogin: (String) -> Bool? = { StartupSettings.readLaunchAtLogin(userDataDir: $0) }
+    ) -> Bool? {
+        let settingsPath = userDataDir + "/" + StartupSettings.fileName
+        /// live 文件缺失 + 保留副本存在 = 设置曾不可读（与共享读取器同判据）。
+        func preservedCorruptEvidence() -> Bool {
+            !fileExists(settingsPath) && fileExists(settingsPath + ".corrupt")
+        }
+        if preservedCorruptEvidence() {
+            print("[poc] chamber-settings.json 缺失但存在 *.corrupt 保留副本——本次启动不改动登录项（S-41）")
+            return nil
+        }
+        let value = readLaunchAtLogin(userDataDir)
+        // 竞态兜底：sidecar（共享读取器）可能在上面两次检查之间完成保留改名，
+        // 此时读取器看到的是 .missing → 返回默认 false；读取后复查副本，仍改判
+        // nil（顺序无关，绝不因一次改名时序把「损坏」读成「注销登录项」）。
+        if value == false, preservedCorruptEvidence() {
+            print("[poc] chamber-settings.json 在读取期间被保留为 *.corrupt——本次启动不改动登录项（S-41）")
+            return nil
+        }
+        return value
+    }
+
+    /// P-17：启动期登录自启重放（纯函数，注入腿执行体）。缺键/损坏 = 不动作；
+    /// 腿失败必须可观察（调用方 loud 打印）且不 hard-fail（返回 .failed，
+    /// 不是崩溃/exit）。
+    static func reconcileLaunchAtLogin(
+        _ settings: Bool?,
+        apply: (Bool) -> (result: AnyCodable?, error: String?)
+    ) -> LoginItemReconcile {
+        guard let enabled = settings else { return .settingsCorrupt }
+        let outcome = apply(enabled)
+        if let error = outcome.error {
+            return .failed(enabled: enabled, error: error)
+        }
+        return .applied(enabled: enabled)
     }
 
     /// 端口来源日志标签（S11；纯函数单测直测）。
@@ -1023,7 +1401,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
         defer { completionHandler() }
-        mainWindowController?.window?.makeKeyAndOrderFront(nil)
+        // S-32：通知点击唤醒窗口同属恢复入口（最小化 → 先 deminiaturize）。
+        MainWindowController.restoreWindow(mainWindowController?.window)
         if #available(macOS 14.0, *) {
             NSApp.activate()
         } else {

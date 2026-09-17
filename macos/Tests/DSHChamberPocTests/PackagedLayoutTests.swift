@@ -147,4 +147,74 @@ final class PackagedLayoutTests: XCTestCase {
         XCTAssertNil(PackagedLayout.resolveDshWorkspace(
             env: [:], resourcesDir: resources, isPackaged: false, exists: exists))
     }
+
+    /// P-13：`packages/desktop/sidecar-ctx.ts` 的七个具名打包布局助手是 Swift
+    /// 装配腿的真正对侧。登记表（P-13）曾声称本文件已有该锁步锚点，实际只锁了
+    /// build-swift-app.mjs 的布局形状——本用例补上缺失的一侧：解析 TS 源文本断言
+    /// 助手名与路径拼写，并核对 Swift/脚本消费点。任一侧改名或改拼写即红。
+    ///
+    /// 七个助手（sidecar-ctx.ts）：
+    ///   packagedHostPackageDir / packagedPnpmEntry / legacyPackagedPnpmEntry /
+    ///   devPnpmEntry / findWorkspaceRoot / resolveHostPackageSourceDir /
+    ///   resolvePnpmEntry。
+    func testSidecarLayoutHelpersMatchTSAnchors() throws {
+        func read(_ relative: String) throws -> String {
+            try String(contentsOf: repoRoot().appendingPathComponent(relative), encoding: .utf8)
+        }
+        let ctx = try read("packages/desktop/sidecar-ctx.ts")
+
+        // ① 名字：七个助手必须仍是导出函数（Swift 与 TS 的共同锚点）。
+        for helper in [
+            "packagedHostPackageDir",
+            "packagedPnpmEntry",
+            "legacyPackagedPnpmEntry",
+            "devPnpmEntry",
+            "findWorkspaceRoot",
+            "resolveHostPackageSourceDir",
+            "resolvePnpmEntry",
+        ] {
+            XCTAssertTrue(ctx.contains("export function \(helper)("),
+                          "sidecar-ctx.ts 必须保留具名布局助手 export function \(helper)(")
+        }
+
+        // ② 路径拼写（与 Swift 常量、装配脚本逐字对应）。
+        for anchor in [
+            "path.join(sidecarDir, 'dist', packageDirName)",
+            "path.join(sidecarDir, 'pnpm', 'bin', 'pnpm.cjs')",
+            "path.join(sidecarDir, '..', 'pnpm', 'bin', 'pnpm.cjs')",
+            "path.join(moduleDir, 'node_modules', 'pnpm', 'bin', 'pnpm.cjs')",
+            "findWorkspaceRoot(startDir: string, maxDepth = 8)",
+            "'pnpm-workspace.yaml'",
+            "path.join(workspaceRoot, 'packages', packageDir)",
+            "return packagedHostPackageDir(moduleDir, packageDir)",
+        ] {
+            XCTAssertTrue(ctx.contains(anchor), "sidecar-ctx.ts 布局锚点缺失：\(anchor)")
+        }
+
+        // ③ 行为：resolvePnpmEntry 的候选顺序 packaged > legacy > dev，全缺回落 dev。
+        let resolverStart = try XCTUnwrap(ctx.range(of: "export function resolvePnpmEntry"))
+        let resolver = String(ctx[resolverStart.lowerBound...])
+        let packaged = try XCTUnwrap(resolver.range(of: "packagedPnpmEntry(moduleDir)"))
+        let legacy = try XCTUnwrap(resolver.range(of: "legacyPackagedPnpmEntry(moduleDir)"))
+        let dev = try XCTUnwrap(resolver.range(of: "devPnpmEntry(moduleDir)"))
+        XCTAssertTrue(packaged.lowerBound < legacy.lowerBound && legacy.lowerBound < dev.lowerBound,
+                      "resolvePnpmEntry 的候选顺序必须是 packaged > legacy > dev（dev 同时是回落值）")
+        XCTAssertTrue(resolver.contains("?? devPnpmEntry(moduleDir)"),
+                      "resolvePnpmEntry 全缺时必须回落到 dev 形状（安装路径 loud 失败的前置）")
+
+        // ④ 消费点：Swift 装配把 host 包注入为 <sidecarDir>/dist/<pkg>（助手①的形状）。
+        let appDelegate = try read("macos/Sources/DSHChamberPoc/AppDelegate.swift")
+        XCTAssertTrue(appDelegate.contains("let candidate = sidecarDir + \"/dist/\" + host.name"),
+                      "AppDelegate 的装配态 host 包路径必须与 packagedHostPackageDir 同形")
+
+        // ⑤ 消费点：build-sidecar 的 sidecarLayout 正是助手②的拼写（装配目录布局单源）。
+        let buildSidecar = try read("packages/desktop/scripts/build-sidecar.mjs")
+        for anchor in [
+            "pnpm: path.join(outDir, 'pnpm')",
+            "pnpmEntry: path.join(outDir, 'pnpm', 'bin', 'pnpm.cjs')",
+            "hostPackageDist: (name) => path.join(outDir, 'dist', name)",
+        ] {
+            XCTAssertTrue(buildSidecar.contains(anchor), "build-sidecar.mjs 布局锚点缺失：\(anchor)")
+        }
+    }
 }

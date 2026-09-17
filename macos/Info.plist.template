@@ -9,10 +9,13 @@
 
   CFBundleURLTypes 是 E13 深链的注册面：Swift 侧 application(_:open:) 只有
   在 LaunchServices 注册了 dsh-chamber scheme 后才会被投递（冷/热启动同路，
-  见 design 25 §4.5）。**共存注意（D2 未决）**：Electron 版同样注册
-  dsh-chamber://（packages/desktop/package.json build.protocols）——同机
-  双壳时 LaunchServices 对同 scheme 的归属由注册状态决定，需在 W-24/D2 决策
-  记录中显式登记（本模板不改 scheme，保持与 Electron 版一致）。
+  见 design 25 §4.5）。**共存（S-04，已 accepted）**：Electron 版同样注册
+  dsh-chamber://（packages/desktop/package.json build.protocols）；两 flavor
+  共用同一 <userData>/.dsh-chamber.lock，同机同一时刻只有一个能持锁运行，
+  因此 scheme 归属不存在两个进程争抢的生产路径；被 LaunchServices 判给另一
+  flavor 时的后果（链接进另一实例而它因锁退出）与登记见 deviations S-04。
+  新 scheme 会破坏既有深链生产者，故不新增；本模板不改 scheme，保持与
+  Electron 版一致。
 -->
 <plist version="1.0">
 <dict>
@@ -39,34 +42,74 @@
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
     <string>__VERSION__</string>
+    <!-- S-23：build-swift-app 注入的 CFBundleVersion 是 Sparkle 的比较键
+         （只含点分十进制整数，4 段）。稳定版 X.Y.Z → X.Y.Z.999999999
+         （第 4 段 = final 标记，恒大于同 base 的 beta）；beta 版
+         X.Y.Z-beta.N → X.Y.Z.N（第 4 段 = beta 序号，随 N 单调递增）。
+         这样 beta.N 能看到 beta.N+1 与 final，final 也不会被同 base 的
+         beta 盖住（旧实现去掉 -beta.N 让两者相等）。CFBundleShortVersionString
+         保留完整发布版本字符串（含 -beta.N）用于展示。 -->
     <key>CFBundleVersion</key>
     <string>__BUNDLE_VERSION__</string>
     <key>LSMinimumSystemVersion</key>
     <string>13.0</string>
+    <!-- S-46：标准 About 面板（orderFrontStandardAboutPanel）的版权行。
+         Electron 侧未显式配 copyright，app-builder-lib 以
+         「Copyright © <构建年> <productName>」生成（appInfo.js:129-135），
+         即 Copyright © 2026 dsh-chamber；本模板是静态装配输入，年份取加入
+         时的构建年（跨年后随装配更新，与 Electron 的构建期生成同义）。 -->
+    <key>NSHumanReadableCopyright</key>
+    <string>Copyright © 2026 dsh-chamber</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <!-- 壳的 WKWebView 直连本机控制面 http://127.0.0.1:<port>（design 25 §3）：
-         ATS 对 HTTP 缺省拒绝，必须显式放行 local networking。Electron flavor
-         在 packages/desktop/package.json build.mac.extendInfo 携带同键。 -->
+         ATS 对 HTTP 缺省拒绝，必须显式放行 local networking。S-45：Apple 自
+         macOS 14 起默认拒绝**字面量 IP** 连接，NSAllowsLocalNetworking 对
+         127.0.0.1 的覆盖不可静态判定——因此与 Electron
+         （packages/desktop/package.json build.mac.extendInfo）逐键对齐，补上
+         127.0.0.1 / localhost 两个例外域；缺它时首载会落到失败说明页（S-27）。 -->
     <key>NSAppTransportSecurity</key>
     <dict>
+        <key>NSAllowsArbitraryLoads</key>
+        <false/>
         <key>NSAllowsLocalNetworking</key>
         <true/>
+        <key>NSExceptionDomains</key>
+        <dict>
+            <key>127.0.0.1</key>
+            <dict>
+                <key>NSIncludesSubdomains</key>
+                <false/>
+                <key>NSTemporaryExceptionAllowsInsecureHTTPLoads</key>
+                <true/>
+            </dict>
+            <key>localhost</key>
+            <dict>
+                <key>NSIncludesSubdomains</key>
+                <false/>
+                <key>NSTemporaryExceptionAllowsInsecureHTTPLoads</key>
+                <true/>
+            </dict>
+        </dict>
     </dict>
     <!-- 应用内更新（Sparkle 2，2026-12 裁决 D-1 选 B）：feed 与 EdDSA 公钥由
          build-swift-app 在装配期替换（--sparkle-feed / --sparkle-public-key）。
          两键任一为空 = 更新不可用（dev、dry-run、未配置密钥的装配）——壳据此
          禁用「检查更新…」菜单项，绝不假装能更新。
-         SUEnableAutomaticChecks 只在 feed 与公钥都配好时才写 true：ad-hoc/未发布
-         装配启动即弹更新窗会与启动期窗口竞争（参考社区实现的做法）。
-         SUScheduledCheckInterval 与 Electron 侧的 6h 周期同量级（Sparkle 默认 24h，
-         这里显式写 21600 保持双 flavor 的检查节奏一致）。 -->
+         SUEnableAutomaticChecks 是模板常量 true（D9 修正：renderInfoPlist 只替换
+         __VERSION__/__BUNDLE_VERSION__/__SPARKLE_*，**不写**该键）——自动检查开：
+         原生腿启动即检、之后每 SUScheduledCheckInterval=21600s（6h）一次，与
+         Electron 侧 CHECK_INTERVAL_MS 的 6h 节奏对齐（Sparkle 默认 24h，这里显式
+         写 21600 保持双 flavor 同节奏）。scheduled 更新的弹窗在代码里抑制
+         （SPUStandardUserDriverDelegate 把展示权收回壳，见 AppUpdater.swift），
+         展示面是设置页（nativeUpdatePhase）；用户手动的「检查更新…」仍走 Sparkle
+         标准窗口——这两条都是代码行为，模板只声明自动检查与检查间隔。 -->
     <key>SUFeedURL</key>
     <string>__SPARKLE_FEED_URL__</string>
     <key>SUPublicEDKey</key>
     <string>__SPARKLE_PUBLIC_ED_KEY__</string>
     <key>SUEnableAutomaticChecks</key>
-    <false/>
+    <true/>
     <key>SUScheduledCheckInterval</key>
     <integer>21600</integer>
     <key>CFBundleURLTypes</key>

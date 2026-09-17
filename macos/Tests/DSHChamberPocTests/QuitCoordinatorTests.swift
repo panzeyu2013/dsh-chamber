@@ -3,8 +3,9 @@
 //
 //  覆盖：`__host.quitFacts` 决策解码（形状严格 / 非法 → nil 保守路径）、
 //  关窗动作映射、确认文案（main.ts before-quit 逐字）、退出单飞/确认门
-//  （QuitGate 状态迁移）。AppKit 执行面（orderOut / NSAlert / terminate 链）
-//  属实机门禁，不在单测范围。
+//  （QuitGate 状态迁移）、退出确认框的 Enter/Esc 按键语义（S-43：真实
+//  runModal + 合成按键，无需人工交互，5s 兜底防挂死）。其余 AppKit 执行面
+//  （orderOut / terminate 链）属实机门禁，不在单测范围。
 import XCTest
 @testable import DSHChamberPoc
 
@@ -72,6 +73,25 @@ final class QuitCoordinatorTests: XCTestCase {
         XCTAssertEqual(QuitCoordinator.confirmDetail(reasons: []), "退出将停止。确定退出？")
     }
 
+    // MARK: - S-17：决策不可得（超时/无应答）
+
+    /// 超时/无应答且 sidecar 仍在运行 → 绝不静默取消：必须走提示分支；
+    /// sidecar 已停（无本地保护内容）→ 放行（main.ts cp===null 同向）。
+    func testUnavailableActionDecisionSeam() {
+        XCTAssertEqual(QuitCoordinator.unavailableAction(sidecarLive: true), .alertThenCancel)
+        XCTAssertEqual(QuitCoordinator.unavailableAction(sidecarLive: false), .proceed)
+    }
+
+    /// 提示框给出两个选择：默认安全项「继续等待」与「强制退出」；文案须说明
+    /// sidecar 未应答且本次退出已取消。
+    func testUnavailableAlertOffersWaitAndForce() {
+        XCTAssertEqual(QuitCoordinator.UnavailableAlert.waitButtonTitle, "继续等待")
+        XCTAssertEqual(QuitCoordinator.UnavailableAlert.forceButtonTitle, "强制退出")
+        XCTAssertTrue(QuitCoordinator.UnavailableAlert.messageText.contains("sidecar"))
+        XCTAssertTrue(QuitCoordinator.UnavailableAlert.informativeText.contains("2 秒"))
+        XCTAssertTrue(QuitCoordinator.UnavailableAlert.informativeText.contains("取消"))
+    }
+
     // MARK: - QuitGate
 
     func testGateSingleFlightDecision() {
@@ -113,5 +133,67 @@ final class QuitCoordinatorTests: XCTestCase {
         gate.endConfirm()
         XCTAssertTrue(gate.beginDecision())
         gate.endDecision()
+    }
+
+    // MARK: - S-43：退出确认框的按键语义（Enter/Esc 都命中安全项「取消」）
+
+    /// 与 presentQuitConfirmation 同构：[退出] + [取消(\r)]（defaultId=1）。
+    private static func twoButtonQuitAlert() -> NSAlert {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "退出 dsh-chamber？"
+        alert.addButton(withTitle: "退出")
+        let cancel = alert.addButton(withTitle: "取消")
+        cancel.keyEquivalent = "\r"
+        return alert
+    }
+
+    /// 合成 keyDown 投递（keyCode 53 = Esc；36 = Return）。
+    private static func postKey(code: UInt16, characters: String, windowNumber: Int) {
+        guard let event = NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [], timestamp: 0,
+            windowNumber: windowNumber, context: nil, characters: characters,
+            charactersIgnoringModifiers: characters, isARepeat: false, keyCode: code) else {
+            return XCTFail("无法构造 keyDown 事件")
+        }
+        NSApplication.shared.postEvent(event, atStart: false)
+    }
+
+    /// 跑真实 runModal（无人工交互）：先投一个中性键（x，必须原样放行、不结束
+    /// 模态），再投 Esc；5s 兜底 stopModal(third) 防回归挂死。Esc 必须返回第二
+    /// 按钮 = 安全项「取消」（Electron cancelId=1）。
+    func testQuitConfirmationEscapeReturnsCancelResponse() {
+        let alert = Self.twoButtonQuitAlert()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            Self.postKey(code: 7, characters: "x", windowNumber: alert.window.windowNumber)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+            Self.postKey(code: 53, characters: "\u{1b}", windowNumber: alert.window.windowNumber)
+        }
+        let failsafe = DispatchWorkItem {
+            NSApplication.shared.stopModal(withCode: .alertThirdButtonReturn)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: failsafe)
+        let response = AppDelegate.runQuitConfirmationAlert(alert)
+        failsafe.cancel()
+        XCTAssertEqual(response, .alertSecondButtonReturn,
+                       "Esc 必须命中安全项「取消」（Electron cancelId=1）")
+    }
+
+    /// Enter 同样命中安全项「取消」（Electron defaultId=1）——模态期 NSAlert 的
+    /// 默认键解析不可靠，故与 Esc 同由监视器映射，测试钉住该语义。
+    func testQuitConfirmationReturnReturnsCancelResponse() {
+        let alert = Self.twoButtonQuitAlert()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            Self.postKey(code: 36, characters: "\r", windowNumber: alert.window.windowNumber)
+        }
+        let failsafe = DispatchWorkItem {
+            NSApplication.shared.stopModal(withCode: .alertThirdButtonReturn)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: failsafe)
+        let response = AppDelegate.runQuitConfirmationAlert(alert)
+        failsafe.cancel()
+        XCTAssertEqual(response, .alertSecondButtonReturn,
+                       "Enter 必须命中「取消」（Electron defaultId=1）")
     }
 }

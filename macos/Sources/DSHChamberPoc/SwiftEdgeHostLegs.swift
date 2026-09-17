@@ -59,6 +59,65 @@ enum EdgePayload {
     }
 }
 
+/// 通知授权状态（P-06）：UNUserNotificationCenter.getNotificationSettings 的
+/// 最小投影——UNNotificationSettings 无公开构造器，测试经本枚举注入假体。
+public enum EdgeNotificationAuthorization: Equatable {
+    case notDetermined
+    case denied
+    case authorized
+    /// 临时/静默授权（已获准投递，add 仍可能失败）。
+    case provisional
+    case ephemeral
+    /// 未来新增状态：按已获准前进（add 结果才是权威裁决）。
+    case unknown
+}
+
+/// 原生通知中心的最小可注入面（P-06 单测 seam）。生产实现 =
+/// SystemUserNotificationCenter（UNUserNotificationCenter.current()，只在
+/// bundle 形态/canShowUI 为真时构造与调用——dev 无 bundle 调 current() 会崩）。
+public protocol EdgeNotificationCenter {
+    func authorizationStatus(_ completion: @escaping (EdgeNotificationAuthorization) -> Void)
+    func requestAuthorization(_ completion: @escaping (Bool, Error?) -> Void)
+    func add(_ request: UNNotificationRequest, completion: @escaping (Error?) -> Void)
+    func removeDeliveredNotifications(withIdentifiers identifiers: [String])
+}
+
+/// 生产实现（UNUserNotificationCenter 薄包装）。public：public init 的默认
+/// 参数要引用它（默认参数值在调用侧求值，只能引用 public/inlinable 符号）。
+public final class SystemUserNotificationCenter: EdgeNotificationCenter {
+    public init() {}
+
+    public func authorizationStatus(_ completion: @escaping (EdgeNotificationAuthorization) -> Void) {
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            completion(Self.mapAuthorizationStatus(settings.authorizationStatus))
+        }
+    }
+
+    public static func mapAuthorizationStatus(_ status: UNAuthorizationStatus) -> EdgeNotificationAuthorization {
+        switch status {
+        case .notDetermined: return .notDetermined
+        case .denied: return .denied
+        case .authorized: return .authorized
+        case .provisional: return .provisional
+        case .ephemeral: return .ephemeral
+        @unknown default: return .unknown
+        }
+    }
+
+    public func requestAuthorization(_ completion: @escaping (Bool, Error?) -> Void) {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge],
+                                                                completionHandler: completion)
+    }
+
+    public func add(_ request: UNNotificationRequest, completion: @escaping (Error?) -> Void) {
+        UNUserNotificationCenter.current().add(request) { error in completion(error) }
+    }
+
+    public func removeDeliveredNotifications(withIdentifiers identifiers: [String]) {
+        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: identifiers)
+    }
+}
+
 /// 原生通知调度解码（S8）：node-edges/electron-edges 出站形状
 /// {notificationId: Int, sourceId?: String, spec: {title?, body?, message?,
 /// silent?: bool, sound?: string}}。sourceId 缺省/null/非字符串 =
@@ -130,14 +189,25 @@ public final class SwiftEdgeHostLegs {
         /// 注入慢/假 body 让单测可验证交互腿的异步应答、10 分钟上限与超时
         /// 弃权——真实 NSAlert/NSOpenPanel 模态无法在单测里驱动（S1/S17）。
         public var uiLegBodyOverride: ((String, AnyCodable?) -> (result: AnyCodable?, error: String?))?
+        /// 通知中心 seam（P-06）：生产 = 系统中心；测试注入假体（系统中心
+        /// 在 headless 测试里不可驱动，且 dev 无 bundle 调 current() 会崩）。
+        public var notificationCenter: () -> EdgeNotificationCenter
+        /// add 的有界等待（P-06；默认 5s，测试可缩短）。
+        public var notificationAddTimeout: TimeInterval
         public init(canShowUI: @escaping () -> Bool = { false },
                     isAppBundled: @escaping () -> Bool = {
                         Bundle.main.bundleIdentifier != nil
                     },
-                    uiLegBodyOverride: ((String, AnyCodable?) -> (result: AnyCodable?, error: String?))? = nil) {
+                    uiLegBodyOverride: ((String, AnyCodable?) -> (result: AnyCodable?, error: String?))? = nil,
+                    notificationCenter: @escaping () -> EdgeNotificationCenter = {
+                        SystemUserNotificationCenter()
+                    },
+                    notificationAddTimeout: TimeInterval = SwiftEdgeHostLegs.notificationAddTimeout) {
             self.canShowUI = canShowUI
             self.isAppBundled = isAppBundled
             self.uiLegBodyOverride = uiLegBodyOverride
+            self.notificationCenter = notificationCenter
+            self.notificationAddTimeout = notificationAddTimeout
         }
     }
 
@@ -148,8 +218,20 @@ public final class SwiftEdgeHostLegs {
     /// 已投递通知登记表（S8）：scheduleNotification 成功后登记，notify 路由
     /// retireNotifications 消费（removeDeliveredNotifications）。
     public let notificationRegistry = NotificationDeliveryRegistry()
-    /// 授权请求是否已发起（S3·V1：首次通知时请求一次；进程内幂等）。
-    private static var notificationAuthorizationRequested = false
+    /// 授权请求是否已发起（S3·V1：首次通知时请求一次）。按 legs 实例记忆
+    /// （生产恰一个实例 = 进程内幂等；测试每例新实例，互不串味），经锁串行。
+    private let authorizationLock = NSLock()
+    private var notificationAuthorizationRequested = false
+
+    /// 首个调用者取得「发起授权请求」权；在途/已请求 → false（调用方仍尝试
+    /// add——未授权时 add 会以错误回调收敛，绝不静默假成功）。
+    private func beginAuthorizationRequestIfNeeded() -> Bool {
+        authorizationLock.lock()
+        defer { authorizationLock.unlock() }
+        guard !notificationAuthorizationRequested else { return false }
+        notificationAuthorizationRequested = true
+        return true
+    }
 
     /// keep-awake activity token（ProcessInfo 防休眠；nil = 未激活）。
     private var keepAwakeActivity: NSObjectProtocol?
@@ -203,6 +285,10 @@ public final class SwiftEdgeHostLegs {
     /// 非交互 UI 腿的有界等待：主线程可能正被 BridgeClient.stop() 的收尾轮询
     /// 占用，退出优先；超时 loud 失败（core 可重试），body 幂等。
     static let uiLegTimeout: TimeInterval = 1.0
+    /// 通知 add 的有界等待（P-06，5s；与 Electron
+    /// NATIVE_NOTIFICATION_OUTCOME_TIMEOUT_MS 同值）。超时回
+    /// {shown:false,error:"..."}，core 据此释放 5s 去重 claim。
+    public static let notificationAddTimeout: TimeInterval = 5.0
     /// 交互腿（showMessage/pickPluginSource）上限：用户在模态上思考/浏览可能远超
     /// 1s。node 侧现在是 SWIFT_INTERACTIVE_LEG_TIMEOUT_MS(600_000) + 60_000 缓冲
     /// （S2·F4：两侧同值时 node 恒先超时，用户 10 分钟后的答案被丢）——Swift 侧超时
@@ -245,11 +331,15 @@ public final class SwiftEdgeHostLegs {
         }
     }
 
-    /// 真实通知调度（W-21 切片；design 25 §5 E4；S8 补 sourceId/silent）：
-    /// 载荷解码见 NotificationDispatch。canShowUI 为假 → ui-unavailable 诚实
-    /// 降级；调度失败（未授权/系统拒绝）→ loud error。click 回灌
-    /// （__host.notifyClicked）与前台展示 delegate 已由 AppDelegate 接线
-    /// （UNUserNotificationCenterDelegate），不再是 M3 遗留。
+    /// 真实通知调度（W-21 切片；design 25 §5 E4；S8 补 sourceId/silent；
+    /// P-06 诚实回执）：canShowUI 为假 → ui-unavailable 诚实降级；先查授权
+    /// 状态（denied → {shown:false,error}；notDetermined → 先申请一次）；
+    /// add 有有界等待（notificationAddTimeout，缺省 5s），超时/add 错误一律
+    /// 回可解析的 {shown:false,error:"..."}——**只有 add 完成回调成功才回
+    /// {shown:true}**。node-edges 的 interpretNativeNotificationReply 据此
+    /// 决定是否释放 5s 去重 claim（绝不把「edge 传输成功」当成「横幅已显示」）。
+    /// click 回灌（__host.notifyClicked）与前台展示 delegate 已由 AppDelegate
+    /// 接线（UNUserNotificationCenterDelegate）。
     private func scheduleNotification(
         payload: AnyCodable?,
         completion: @escaping (AnyCodable?, String?) -> Void
@@ -283,42 +373,85 @@ public final class SwiftEdgeHostLegs {
             content: content,
             trigger: nil  // 立即投递（前台展示由 AppDelegate delegate 接管）
         )
-        let center = UNUserNotificationCenter.current()
+        // P-06 seam：生产 = UNUserNotificationCenter.current()；测试注入假体。
+        let center = self.config.notificationCenter()
+        let replyGate = NotificationReplyGate()
+        /// 授权/调度失败的统一收敛：撤下登记（没有可退役的横幅）并回
+        /// {shown:false,error}（**结果**而非 reject——core 的
+        /// interpretNativeNotificationReply 按对象形状折算 honest-show）。
+        let fail: (String) -> Void = { [registry = notificationRegistry] message in
+            _ = registry.finishDelivery(sourceId: dispatch.sourceId,
+                                        identifier: identifier,
+                                        delivered: false)
+            guard replyGate.claim() else { return }
+            completion(.object(["shown": .bool(false), "error": .string(message)]), nil)
+        }
         let deliver: () -> Void = { [registry = notificationRegistry] in
+            // 有界等待（P-06）：超时先回失败；add 晚到的成功横幅由完成回调
+            // 立即清除，绝不给用户留一条「已报失败」的通知。
+            DispatchQueue.global().asyncAfter(deadline: .now() + self.config.notificationAddTimeout) {
+                guard replyGate.claim() else { return }
+                print("[poc] 通知投递超时（\(self.config.notificationAddTimeout)s）——诚实回 {shown:false}")
+                completion(.object(["shown": .bool(false),
+                                    "error": .string("swift-edge-notification-add-timeout")]), nil)
+            }
             center.add(request) { error in
                 if let error {
                     // 投递失败：撤下登记（没有可退役的横幅）。
                     _ = registry.finishDelivery(sourceId: dispatch.sourceId,
                                                 identifier: identifier,
                                                 delivered: false)
-                    completion(nil, "swift-edge-notification-schedule-failed:\(error.localizedDescription)")
-                } else {
-                    let retiredInFlight = tracked
-                        && registry.finishDelivery(sourceId: dispatch.sourceId,
-                                                   identifier: identifier,
-                                                   delivered: true)
-                    if retiredInFlight {
-                        // 在途期间来源已被退役：横幅刚落地，立即清除。
-                        center.removeDeliveredNotifications(withIdentifiers: [identifier])
-                    }
-                    completion(nil, nil)
+                    guard replyGate.claim() else { return }
+                    completion(.object([
+                        "shown": .bool(false),
+                        "error": .string("swift-edge-notification-schedule-failed:\(error.localizedDescription)"),
+                    ]), nil)
+                    return
                 }
+                let retiredInFlight = tracked
+                    && registry.finishDelivery(sourceId: dispatch.sourceId,
+                                               identifier: identifier,
+                                               delivered: true)
+                if retiredInFlight {
+                    // 在途期间来源已被退役：横幅刚落地，立即清除。
+                    center.removeDeliveredNotifications(withIdentifiers: [identifier])
+                }
+                guard replyGate.claim() else {
+                    // 超时已回失败：晚到的横幅立即清除，保持回执与通知中心一致。
+                    center.removeDeliveredNotifications(withIdentifiers: [identifier])
+                    return
+                }
+                completion(.object(["shown": .bool(true)]), nil)
             }
         }
-        // 授权时机（2026-12 双端逐函数核对 S3·V1）：首次**真正要投递**通知时才向
-        // 系统申请权限（Electron 同序——不是启动即弹系统框）。已授权/已拒绝时
-        // requestAuthorization 幂等（不再弹框）；请求失败 loud，但仍尝试投递：
-        // 未授权时 add 会以错误回调收敛，绝不静默假装成功。
-        if Self.notificationAuthorizationRequested {
-            deliver()
-        } else {
-            Self.notificationAuthorizationRequested = true
-            center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
-                if let error {
-                    print("[poc] 通知授权请求错误：\(error.localizedDescription)")
+        // 授权状态先查（P-06）：denied 直接失败（不请求、不 add）；notDetermined
+        // 先申请一次（S3·V1 时机不变：首次真正要投递时才请求，不是启动即弹系统
+        // 框；申请在途时仍尝试 add，未授权会以错误回调收敛）；已授权/临时授权
+        // 直接投递；unknown 按已获准前进（add 结果才是权威裁决）。
+        center.authorizationStatus { status in
+            switch status {
+            case .denied:
+                print("[poc] 通知未授权（denied）——拒绝投递（P-06）")
+                fail("swift-edge-notification-not-authorized:denied")
+            case .notDetermined:
+                if self.beginAuthorizationRequestIfNeeded() {
+                    center.requestAuthorization { granted, error in
+                        if let error {
+                            print("[poc] 通知授权请求错误：\(error.localizedDescription)")
+                            fail("swift-edge-notification-authorization-failed:\(error.localizedDescription)")
+                        } else {
+                            print("[poc] 通知授权 = \(granted)（首次通知时请求，S3·V1）")
+                            if granted {
+                                deliver()
+                            } else {
+                                fail("swift-edge-notification-not-authorized:denied")
+                            }
+                        }
+                    }
                 } else {
-                    print("[poc] 通知授权 = \(granted)（首次通知时请求，S3·V1）")
+                    deliver()
                 }
+            case .authorized, .provisional, .ephemeral, .unknown:
                 deliver()
             }
         }
@@ -331,27 +464,44 @@ public final class SwiftEdgeHostLegs {
         let dict = EdgePayload.dictionary(payload)
         switch method {
         case "updateNativeCapability":
-            // 原生更新器能力上报（S-01 / 裁决 D-1 选 B）：sidecar 用它决定页面更新区
-            // 是否还显示「原生壳不支持自动安装」。未装配（dev/dry-run/缺密钥）→ false。
-            return (.object(["available": .bool(AppUpdater.shared.isAvailable)]), nil)
+            // 原生更新器能力上报（S-01 / 裁决 D-1 选 B；S-38 诚实化）：sidecar 用它
+            // 决定页面更新区是否还显示「原生壳不支持自动安装」。available=false 时
+            // 携带**真实原因**（未装配 / 坏 feed / 坏 EdDSA 公钥 / startUpdater 失败），
+            // sidecar 记录该原因；页面 check 因此拿 ok:false 落 error，绝不假 available。
+            let capability = AppUpdater.shared.capability
+            return (.object([
+                "available": .bool(capability.available),
+                "error": capability.error.map { .string($0) } ?? .null,
+            ]), nil)
         case "updateNativeAction":
-            // 页面更新按钮 → Sparkle 标准更新窗口（下载与安装都在该窗口内完成）。
-            guard AppUpdater.shared.isAvailable else {
-                return (nil, "native-updater-unavailable")
-            }
+            // 页面更新按钮：kind=check 走检查；download/install 把 Sparkle 标准更新
+            // 窗口带到前台（下载+安装在该窗口内完成，P-15/S-39 的 kind 分派）。回执
+            // 诚实：不可用/忙/未知 kind 都是显式 error，绝不假 ok:true 让页面停住。
+            // 形状先于状态：未知 kind 是坏请求，先诚实拒绝（与更新器是否装配无关）。
             var kind = "check"
             if case .object(let dict)? = payload, case .string(let value)? = dict["kind"] {
                 kind = value
             }
-            print("[poc] 原生更新动作：\(kind)（交给 Sparkle 标准窗口）")
-            AppUpdater.shared.checkForUpdates(nil)
-            return (.object(["ok": .bool(true), "kind": .string(kind)]), nil)
+            guard let action = AppUpdater.NativeUpdateActionKind(rawValue: kind) else {
+                return (nil, "native-updater-unknown-kind:" + kind)
+            }
+            guard AppUpdater.shared.isAvailable else {
+                return (nil, AppUpdater.shared.unavailableReason)
+            }
+            switch AppUpdater.shared.perform(action) {
+            case .accepted:
+                return (.object(["ok": .bool(true), "kind": .string(kind)]), nil)
+            case .refused(let reason):
+                print("[poc] 原生更新动作被拒绝：\(kind) → \(reason)")
+                return (nil, reason)
+            }
         case "focusMainWindow":
             return performUI(method: method) {
                 guard let window = self.mainWindowProvider?() else {
                     return (nil, Self.uiUnavailablePrefix + method + ":no-window")
                 }
-                window.makeKeyAndOrderFront(nil)
+                // S-32：focusMainWindow 也是恢复入口（最小化窗口先 deminiaturize）。
+                MainWindowController.restoreWindow(window)
                 NSApp.activate(ignoringOtherApps: true)
                 return (nil, nil)
             }
@@ -748,6 +898,21 @@ private final class InteractiveCallGate {
         finished = true
         lock.unlock()
         deliver()
+        return true
+    }
+}
+
+/// P-06：通知 edge 回执的恰一次门——add 完成回调与有界超时竞争首个到达者，
+/// 后到者取得 false（超时后晚到的成功横由调用方清除，绝不补发 shown:true）。
+private final class NotificationReplyGate {
+    private let lock = NSLock()
+    private var finished = false
+
+    func claim() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !finished else { return false }
+        finished = true
         return true
     }
 }

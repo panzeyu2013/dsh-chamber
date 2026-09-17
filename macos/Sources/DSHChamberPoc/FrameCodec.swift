@@ -1,7 +1,7 @@
 // FrameCodec.swift —— B 桥 NDJSON 帧的编解码（纯函数，可 XCTest 直测）
 //
 // design 25 §4.4.2（B 桥 Swift ↔ sidecar，本机受信 stdio 通道）与 W-05
-// （垂直切片，docs/progress/todo/macos-swift-v1.md §0.2-⑥）。协议与 sidecar
+// （垂直切片，design 25 §4.4.2）。协议与 sidecar
 // 服务端（packages/desktop/sidecar-entry.ts；W-05 桩 poc-sidecar.ts 同帧族，
 // 保留为集成测试 fixture）逐字段一致，**字段名勿自行更改**：
 //

@@ -1,11 +1,13 @@
 // BridgeShimInjector.swift — A 桥 chamber-bridge.js 注入器（design 25 §4.4.1）
 //
-// W-04（docs/progress/todo/macos-swift-v1.md §0.2-⑤「A 桥雏形」）/ design 25
+// W-04（A 桥雏形，design 25 §4.4.1）/ design 25
 // §4.4.1（A 桥 web↔Swift：注入 chamber-bridge.js shim，WKUserScript、
-// .page world、documentStart）与 §0.1-B3（渲染器可用性门对偶：shim 挂出即
-// 定义完整 API，但 Swift 侧在 ready（origin 门开放）前对全部 invoke 回
-// ipc_sender_forbidden，渲染端按既有「10×50ms 有界重试」自愈——即 D1 二选一
-// 中的方案②，挂出时机对拍结论由 W-04 登记）。
+// .page world、documentStart）。D2 修正（2026-12 审计）：shim 不是「挂出即
+// 定义完整 API」——公开面 dshChamber 只在 info 成功后（真实标量）或 1+10 次
+// 全败后（四个标量 null，见 T-12 / preload.cts:923-940）暴露一次；Swift 侧
+// 在 ready（origin 门开放）前对全部 invoke 回 ipc_not_ready，渲染端按自己的
+// surface 缺失重试链自愈（shim 自身的 info 链是 1+10 次、50ms 间隔，不是
+// 「10×50ms」）。
 //
 // 调用契约（共享契约，MainWindowController 以
 // `BridgeShimInjector.install(config:source:)` 调用，勿改名）：
@@ -52,15 +54,35 @@ enum BridgeShimInjector {
         return injected
     }
 
+    /// 已安装标记（P-19）：注入源码以此为前缀，install 据此幂等——显式标记，
+    /// 而不是依赖 shim 内非可配置 defineProperty 在第二份副本执行时抛
+    /// TypeError（公开面 info 水化成功前不存在，"dshChamber in window" 守卫
+    /// 覆盖不到那个窗口）。WKUserContentController 无 stored property，
+    /// `userScripts` 是唯一可检查的既有注册面。
+    static let installedMarker = "/* dsh-chamber-bridge-shim-installed */"
+
     static func makeUserScript(source: String) -> WKUserScript {
-        WKUserScript(source: source, injectionTime: .atDocumentStart, forMainFrameOnly: true)
+        WKUserScript(source: installedMarker + "\n" + source,
+                     injectionTime: .atDocumentStart, forMainFrameOnly: true)
+    }
+
+    /// 该 configuration 是否已注册过本注入器的 shim（P-19）。
+    static func isInstalled(in config: WKWebViewConfiguration) -> Bool {
+        config.userContentController.userScripts.contains {
+            $0.source.hasPrefix(installedMarker)
+        }
     }
 
     /// 安装：把 shim 用户脚本注册进 configuration 的 userContentController。
+    /// **幂等**（P-19）：已安装 → no-op（返回 false），绝不重复注册——重复的
+    /// documentStart 执行会撞 shim 的非可配置 defineProperty。
     /// （消息 handler 本身由 MainWindowController 单独以
     /// `userContentController.add(handler, name: "dshChamber")` 注册，
     /// 本注入器只负责脚本侧，职责单一。）
-    static func install(config: WKWebViewConfiguration, source: String) {
+    @discardableResult
+    static func install(config: WKWebViewConfiguration, source: String) -> Bool {
+        guard !isInstalled(in: config) else { return false }
         config.userContentController.addUserScript(makeUserScript(source: source))
+        return true
     }
 }

@@ -1,6 +1,6 @@
 // TrustGuard.swift — A 桥传输层信任护栏（纯函数工具，全 static，可测性优先）
 //
-// W-04（docs/progress/todo/macos-swift-v1.md §0.2-⑤「A 桥雏形」）/ design 25
+// W-04（A 桥雏形，design 25 §4.4.1）/ design 25
 // §4.4.1（A 桥 web↔Swift：Swift 端 WKScriptMessageHandler 的传输层护栏）与
 // §0.1-B3（渲染器可用性门：就绪前期望 origin 未开放 → 一律拒绝、渲染端有界
 // 重试语义保留——本工具不感知就绪态，就绪门由 MessageHandler 的

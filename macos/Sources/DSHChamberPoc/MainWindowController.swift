@@ -25,10 +25,11 @@
 //  notifyClicked/未知事件 loud 不处理——路由决策表见文件底部
 //  decodeNotify/NotifyRoute（纯逻辑，单测直测）。
 import AppKit
+import UniformTypeIdentifiers
 import UserNotifications
 import WebKit
 
-final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUIDelegate, NSWindowDelegate {
+final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUIDelegate, WKDownloadDelegate, NSWindowDelegate {
 
     // MARK: - 常量
 
@@ -36,8 +37,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     private static let bridgeMessageName = "dshChamber"
     /// POC dev 控制台回传通道名（页面脚本约定；见 setupWindow 注入）
     private static let consoleMessageName = "pocConsole"
-    /// A 桥 shim 资源文件名（Resources/ 下，W-04 作者创建，本文件只读取）
-    private static let shimResourceName = "bridge-shim.poc.js"
+    /// A 桥 shim 资源文件名（Resources/ 下，W-04 作者创建，本文件只读取）。
+    /// P-18 起可见性放开到 internal：AppDelegate 启动门与单测引用同一拼写。
+    static let shimResourceName = "bridge-shim.poc.js"
 
     /// 本次窗口的原生通道令牌（S-06）：注入时写进 shim，回执/推送时作为首参
     /// 回传；页面脚本无从得知（内部管路不在公开面上）。
@@ -77,6 +79,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     private let bridge: BridgeClient
     private let cpURL: URL
+    /// A 桥 shim 源码（P-18：AppDelegate 启动门已 fail-closed 判定非空，
+    /// setupWindow 只负责注入）。
+    private let shimSource: String
     /// 控制面 origin（scheme://host:port），导航放行与消息护栏共用
     private let cpOrigin: String
     /// sidecar ready 帧已到（A 桥 origin 门在此之前一律拒绝）。
@@ -104,14 +109,29 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 顺序因此与事件顺序一致，见 pushHostFacts 注释）。
     private var lastHostFacts: [String: Bool] = [:]
 
+    /// S-42：启动呈现门——首个可呈现内容（didCommit）才允许亮出启动主窗，且只
+    /// 触发一次（后续重载/重试/失败页后的再次导航不再重复呈现）。同一状态机承载
+    /// S-27 失败说明页的一次性 about: 导航豁免（见 StartupPresentationGate）。
+    private var presentationGate = StartupPresentationGate()
+    /// S-42：首个可呈现内容到达回调（AppDelegate 装配期接线 → makeKeyAndOrderFront；
+    /// 见 didCommit 与 AppDelegate.presentMainWindow）。窗口在此之前保持隐藏，
+    /// 绝不先亮出无内容空窗。
+    var onFirstCommittedContent: (() -> Void)?
+    /// 文件选择面板呈现器（S-25：composer 回形针）。测试经此 seam 注入假体，
+    /// 不需要真实 NSOpenPanel / WKOpenPanelParameters 实例（后者无公开构造器）。
+    var fileOpenPanelPresenter: FileOpenPanelPresenting = SystemFileOpenPanelPresenter()
+
     // MARK: - 初始化
 
     /// - Parameters:
     ///   - cpURL: 控制面 URL（AppDelegate 解析自 POC_CP_URL，缺省 127.0.0.1:17520）
     ///   - bridge: B 桥客户端（BridgeClient.swift，W-04 契约）
-    init(cpURL: URL, bridge: BridgeClient) {
+    ///   - shimSource: A 桥 shim 源码（P-18：调用方先经
+    ///     `shimStartupFailure(source:)` fail-closed 判定，缺失绝不开窗）
+    init(cpURL: URL, bridge: BridgeClient, shimSource: String) {
         self.cpURL = cpURL
         self.bridge = bridge
+        self.shimSource = shimSource
         self.cpOrigin = Self.origin(of: cpURL) ?? ""
         if self.cpOrigin.isEmpty {
             print("[poc] 警告：控制面 URL 无合法 origin，导航护栏将一律拦截 http(s)")
@@ -143,17 +163,16 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     private func setupWindow() {
         let configuration = WKWebViewConfiguration()
 
-        // A 桥 shim 注入（W-04：BridgeShimInjector.install 负责落 WKUserScript）
-        if let shimSource = Self.readShimSource() {
-            // S-06：注入前把占位符换成窗口随机令牌（内部管路 resolve/emit/
-            // rehydrate 都要带对令牌才生效）。
-            BridgeShimInjector.install(
-                config: configuration,
-                source: BridgeShimInjector.injectNativeToken(nativeChannelToken, into: shimSource))
-            print("[poc] A 桥 shim 注入完成（\(Self.shimResourceName)）")
-        } else {
-            print("[poc] 警告：资源中找不到 \(Self.shimResourceName)，跳过 shim 注入")
-        }
+        // A 桥 shim 注入（W-04：BridgeShimInjector.install 负责落 WKUserScript）。
+        // P-18：资源缺失/为空已在 AppDelegate 启动门 fail-closed（可见错误 +
+        // exit(1)，对齐 Electron showErrorBox + app.exit），这里不再有
+        // 「警告后照常开窗」的 fail-open 分支。
+        // S-06：注入前把占位符换成窗口随机令牌（内部管路 resolve/emit/
+        // rehydrate 都要带对令牌才生效）；P-19：install 幂等。
+        BridgeShimInjector.install(
+            config: configuration,
+            source: BridgeShimInjector.injectNativeToken(nativeChannelToken, into: shimSource))
+        print("[poc] A 桥 shim 注入完成（\(Self.shimResourceName)）")
 
         // 消息通道：ChamberMessageHandler 只做护栏与转发（W-04 实现）
         let handler = ChamberMessageHandler(
@@ -220,7 +239,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // node-edges 的 sendNotify 族：rendererPush/setBadge/
         // showItemInFolder/retireNotifications）→ 本控制器 notify 路由消费。
         // event 帧族（BridgeClient.onEvent）已无生产接线（sidecar-entry 只发
-        // notify；W-05 桩 fixture 仅供 BridgeClientIntegrationTests），页面下行
+        // notify；W-05 桩 fixture 仅供 BridgeClientPocStubIntegrationTests），页面下行
         // 唯一入口 = 本 onNotify 路由（W-04 双写纪律「乙」）。
         // 线程契约：管道读取线程回调，消费在 routeNotify 内收敛主线程。
         bridge.onNotify = { [weak self] event, payload in
@@ -322,6 +341,60 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         didStartLoading = true
         print("[poc] 加载控制面 \(cpURL.absoluteString)（origin=\(cpOrigin)）")
         webView.load(URLRequest(url: cpURL))
+    }
+
+    // MARK: - S-42：启动窗口呈现门（绝不先亮无内容空窗）
+
+    /// 启动呈现门（纯逻辑单测直测）：首个可呈现内容才允许亮窗，且只触发一次；
+    /// 后续提交（重载/重试/失败页后的再次导航）不再重复呈现。
+    /// 同一状态机承载 S-27 失败说明页的一次性 about: 导航豁免——对抗验证回归
+    /// （S-42 破坏了 S-27 失败页的呈现）：WebKit 实测回调顺序是
+    /// decidePolicyFor(about:blank) **先**、didCommit(about:blank) **后**。
+    /// 若在 decidePolicyFor 消费豁免，didCommit 就读到 failurePage:false →
+    /// isPresentableCommit(about:blank, false) = false → 呈现门永不触发，失败页
+    /// 加载进不可见窗口（用户点 Dock 才看见）。因此豁免只在 didCommit 消费；
+    /// decidePolicyFor 只做只读放行，didFail* 撤销未落地的豁免（一次性面不放大）。
+    struct StartupPresentationGate {
+        private(set) var presented = false
+        /// 失败说明页导航豁免在途（beginFailurePage → didCommit 消费 / didFail 撤销）。
+        private(set) var failurePagePending = false
+
+        /// 失败页导航开始（showLoadFailurePage 在 loadHTMLString 之前置位）。
+        mutating func beginFailurePage() {
+            failurePagePending = true
+        }
+
+        /// decidePolicyFor 的豁免观察（只读，绝不消费——见类型注记的顺序无关性）。
+        func allowsFailurePageNavigation() -> Bool {
+            failurePagePending
+        }
+
+        /// didCommit：消费失败页豁免并裁决本次提交是否呈现主窗（只呈现一次）。
+        /// 失败页恒可呈现；WKWebView 初始空文档（url 为 nil / about:blank 且非
+        /// 失败页）不算——启动期为此保持隐藏（presented 不被它占掉）。
+        mutating func shouldPresentOnCommit(url: String?) -> Bool {
+            let failurePage = failurePagePending
+            failurePagePending = false
+            guard MainWindowController.isPresentableCommit(url: url, failurePage: failurePage),
+                  !presented else { return false }
+            presented = true
+            return true
+        }
+
+        /// 失败页导航未落地（didFail/didFailProvisionalNavigation）：撤销豁免，
+        /// 绝不让它悬着放行后续 about: 导航（S-27 一次性安全面）。
+        mutating func noteNavigationFailed() {
+            failurePagePending = false
+        }
+    }
+
+    /// 一次导航提交是否算「可呈现内容」（纯逻辑单测直测）：S-27 失败说明页恒算
+    /// （about:blank，但由一次性豁免放行）；WKWebView 初始空文档（url 为 nil /
+    /// about:blank 且非失败页）不算——启动期为此保持隐藏。
+    static func isPresentableCommit(url: String?, failurePage: Bool) -> Bool {
+        if failurePage { return true }
+        guard let url, !url.isEmpty, url != "about:blank" else { return false }
+        return true
     }
 
     // MARK: - hostFacts 推送（S-A：窗口/聚焦/加载事实 → sidecar 同步门缓存）
@@ -558,18 +631,21 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                     print("[poc] notify \(method) 消费失败（loud）：\(error)")
                 }
             }
-        case .retireNotifications(let sourceIds):
-            // S8：Electron 退役语义 = 关闭登记中的活跃原生通知。Swift 侧经
-            // NotificationDeliveryRegistry（sourceId→chamber-edge-<id>）取回
-            // 已投递 identifier，调 UNUserNotificationCenter
-            // .removeDeliveredNotifications 清除 OS 通知中心存量横幅。
+        case .retireNotifications(let sourceIds, let notificationIds):
+            // S8/P-07：Electron 退役语义 = 关闭登记中的活跃原生通知。Swift 侧经
+            // NotificationDeliveryRegistry（sourceId→chamber-edge-<id>；identifier
+            // 末段 = sidecar notificationId）取回已投递 identifier，调
+            // UNUserNotificationCenter.removeDeliveredNotifications 清除 OS 通知
+            // 中心存量横幅。逐条 notificationIds 在 sourceIds 为空时同样生效
+            // （node-edges 的 >16 淘汰路径）。
             guard let registry = bridge.edgeHostLegs?.notificationRegistry else {
                 print("[poc] notify retireNotifications 消费失败：edgeHostLegs 未接线（loud）")
                 return
             }
-            let identifiers = registry.retire(sourceIds: sourceIds)
+            let identifiers = registry.retire(sourceIds: sourceIds, notificationIds: notificationIds)
             guard !identifiers.isEmpty else {
-                print("[poc] notify retireNotifications：无已投递登记（\(sourceIds.count) 个 sourceId，no-op）")
+                print("[poc] notify retireNotifications：无已投递登记（\(sourceIds.count) 个 sourceId、"
+                      + "\(notificationIds.count) 个 notificationId，no-op）")
                 return
             }
             guard Bundle.main.bundleIdentifier != nil else {
@@ -596,12 +672,33 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     /// 读取 A 桥 shim 源码（ChamberResources：打包态 Contents/Resources、
     /// dev `swift run` 扁平布局都能定位；不用 Bundle.module——见该文件头注释）。
-    private static func readShimSource() -> String? {
+    static func readShimSource() -> String? {
         guard let url = ChamberResources.url(forResource: shimResourceName),
               let source = try? String(contentsOf: url, encoding: .utf8) else {
             return nil
         }
         return source
+    }
+
+    /// P-18 启动门（纯函数，单测直测）：shim 源码缺失/为空 → 返回不可启动的
+    /// 致命说明（含已查找路径与修复动作）；可用 → nil。
+    ///
+    /// 对齐 Electron：preload 脚本加载失败会经 dialog.showErrorBox + app.exit(1)
+    /// 拒绝开窗（fail-closed）；Swift 此前只 print 警告后照常开窗，用户得到
+    /// 一个没有桥、全部本机能力静默缺席的页面。
+    static func shimStartupFailure(source: String?) -> String? {
+        guard let source, !source.isEmpty else {
+            var candidates: [String] = []
+            for base in ChamberResources.searchBases() {
+                candidates.append(base.appendingPathComponent(ChamberResources.bundleName)
+                    .appendingPathComponent(shimResourceName).path)
+                candidates.append(base.appendingPathComponent(shimResourceName).path)
+            }
+            return "缺少 A 桥 shim 资源 \(shimResourceName)：页面无法注入 dshChamber 桥，"
+                + "本机能力全部不可用。已查找：" + candidates.joined(separator: "、") + "。"
+                + "请重新运行 pnpm run build:swift-app（dev 用 swift build）后重试。"
+        }
+        return nil
     }
 
     /// 由 URL 生成 origin 串 "scheme://host[:port]"（nil：URL 无合法 origin）
@@ -646,48 +743,177 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     // MARK: - WKNavigationDelegate：导航护栏
 
-    func webView(_ webView: WKWebView,
-                 decidePolicyFor navigationAction: WKNavigationAction,
-                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
-        guard let url = navigationAction.request.url else {
-            decisionHandler(.cancel)
-            return
-        }
+    /// 导航决策（S-26/S-27/S-35；纯逻辑单测直测）。优先级：
+    ///  1. shouldPerformDownload → .download（WebKit 转交 WKDownload 保存，
+    ///     **绝不**把响应装进壳 webview——原围栏对此类导航一律 cancel，导致
+    ///     session 日志导出静默假成功）；
+    ///  2. 首载失败说明页的 about:blank（S-27 一次性放行）；
+    ///  3. 壳文档 allow；同源非壳文档 cancel（文档绝不继承 shim/IPC 面）；
+    ///     外部 http(s) / mailto 交系统；
+    ///  4. S-35：**非主 frame** 的 blob: 放行（随包文档预览插件的
+    ///     HTML/PDF/图片经 URL.createObjectURL 子 frame 呈现）；主 frame 的
+    ///     blob 与其余 scheme 一律 cancel（主 frame 围栏不变）。
+    enum NavigationDecision: Equatable {
+        case allow
+        case download
+        case openExternally
+        case cancel(reason: String)
+    }
+
+    /// - Parameter isMainFrame: 目标 frame 是否主 frame（默认 true = 未知/
+    ///   无 targetFrame 时按最严的主 frame 围栏处理）。
+    static func navigationDecision(url: URL?,
+                                   shouldPerformDownload: Bool,
+                                   failurePagePending: Bool,
+                                   expectedOrigin: String,
+                                   isMainFrame: Bool = true) -> NavigationDecision {
+        guard let url else { return .cancel(reason: "无 URL") }
+        if shouldPerformDownload { return .download }
         let scheme = (url.scheme ?? "").lowercased()
+        if failurePagePending, scheme == "about" { return .allow }
         if scheme == "http" || scheme == "https" {
             // 目标是 cp origin 的 http(s)：放行（与 TrustGuard 同款大小写
             // 折叠判定——静态审查 #11：导航/消息两门行为统一）
-            if TrustGuard.isTrustedDocument(url.absoluteString, expectedOrigin: cpOrigin) {
-                print("[poc] 放行导航 \(url.absoluteString)")
-                decisionHandler(.allow)
-                return
+            if TrustGuard.isTrustedDocument(url.absoluteString, expectedOrigin: expectedOrigin) {
+                return .allow
             }
-            if TrustGuard.isTrustedOrigin(url.absoluteString, expectedOrigin: cpOrigin) {
-                // 同源但非壳文档（如 /api/i/<id>/* 代理回传的远端 HTML）：绝不
-                // 放行——放行会让该文档继承 shim 与全量 IPC 面（审计 major）。
-                print("[poc] 拦截同源非壳文档导航 \(url.absoluteString)")
-                decisionHandler(.cancel)
-                return
+            // 同源但非壳文档（如 /api/i/<id>/* 代理回传的远端 HTML）：绝不
+            // 放行——放行会让该文档继承 shim 与全量 IPC 面（审计 major）。
+            // 判定不分 frame：同源非壳文档在任何 frame 都取消。
+            if TrustGuard.isTrustedOrigin(url.absoluteString, expectedOrigin: expectedOrigin) {
+                return .cancel(reason: "同源非壳文档")
             }
             // 其余 http(s) 外链：交给系统默认浏览器打开
-            print("[poc] 外链交给系统打开 \(url.absoluteString)")
-            openExternally(url)
+            return .openExternally
+        }
+        if scheme == "mailto" { return .openExternally }
+        if scheme == "blob", !isMainFrame {
+            // S-35：文档预览插件的 HTML/PDF/图片走 URL.createObjectURL 的 blob
+            // 子 frame（vendor ui-sidebar-documentpreview）。非主 frame 的该文档
+            // 拿不到桥：shim 只注入主 frame（BridgeShimInjector.makeUserScript
+            // forMainFrameOnly=true），且消息围栏丢弃非主 frame 消息
+            // （MessageHandler.fence 的 isMainFrame 门）——因此放行不扩大桥面。
+            // 主 frame 的 blob 仍按原围栏取消：壳文档只允许 ready 的 cp origin。
+            // about:blank/data: 不在放行之列（预览插件不需要；主 frame 的
+            // about:blank 仅经 S-27 失败页一次性门放行）。
+            return .allow
+        }
+        return .cancel(reason: "非 http(s) scheme")
+    }
+
+    func webView(_ webView: WKWebView,
+                 decidePolicyFor navigationAction: WKNavigationAction,
+                 decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+        let url = navigationAction.request.url
+        switch Self.navigationDecision(url: url,
+                                       shouldPerformDownload: navigationAction.shouldPerformDownload,
+                                       failurePagePending: presentationGate.allowsFailurePageNavigation(),
+                                       expectedOrigin: cpOrigin,
+                                       // S-35：targetFrame 缺省（新窗口等）按主 frame
+                                       // 最严围栏处理，绝不因未知而放宽。
+                                       isMainFrame: navigationAction.targetFrame?.isMainFrame ?? true) {
+        case .allow:
+            // S-27/S-42：失败页一次性豁免在这里只**观察**、绝不消费（didCommit
+            // 才消费——本回调实测先于 didCommit 到达，消费会让失败页呈现门失效：
+            // S-42 回归）。只有 about: 导航能带着豁免走到这里，放行面不放大；
+            // blob 子 frame 放行也绝不会吃掉 main frame 的豁免。
+            if presentationGate.allowsFailurePageNavigation(),
+               (url?.scheme ?? "").lowercased() == "about" {
+                print("[poc] 放行首载失败说明页（about:blank，一次性门；didCommit 消费）")
+            } else {
+                print("[poc] 放行导航 \(url?.absoluteString ?? "")")
+            }
+            decisionHandler(.allow)
+        case .download:
+            // S-26：.download 不装载文档（WKDownload 负责保存）；前端 session
+            // 日志导出的 anchor[download] 走这条路，页面仍发布 success。
+            print("[poc] 导航转下载（不装入壳 webview）\(url?.absoluteString ?? "")")
+            decisionHandler(.download)
+        case .openExternally:
+            print("[poc] 外链交给系统打开 \(url?.absoluteString ?? "")")
+            if let url { openExternally(url) }
             decisionHandler(.cancel)
-        } else if scheme == "mailto" {
-            print("[poc] mailto 交给系统打开 \(url.absoluteString)")
-            openExternally(url)
-            decisionHandler(.cancel)
-        } else {
-            // 其余一律取消（自定义 scheme / about: / data: 等）
-            print("[poc] 拦截导航 \(url.absoluteString)")
+        case .cancel(let reason):
+            print("[poc] 拦截导航（\(reason)）\(url?.absoluteString ?? "")")
             decisionHandler(.cancel)
         }
+    }
+
+    /// S-26 响应级下载：MIME 不可呈现（如 application/zip 的 session 导出）
+    /// 转下载；能呈现才放行。响应级导航不会是外链——外链在 action 级已转系统。
+    func webView(_ webView: WKWebView,
+                 decidePolicyFor navigationResponse: WKNavigationResponse,
+                 decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        if !navigationResponse.canShowMIMEType {
+            print("[poc] 响应不可呈现 → 转下载 \(navigationResponse.response.url?.absoluteString ?? "")")
+            decisionHandler(.download)
+            return
+        }
+        decisionHandler(.allow)
+    }
+
+    func webView(_ webView: WKWebView,
+                 navigationAction: WKNavigationAction,
+                 didBecome download: WKDownload) {
+        download.delegate = self
+        print("[poc] 导航已转为下载（action 级）")
+    }
+
+    func webView(_ webView: WKWebView,
+                 navigationResponse: WKNavigationResponse,
+                 didBecome download: WKDownload) {
+        download.delegate = self
+        print("[poc] 导航已转为下载（response 级）")
+    }
+
+    // MARK: - WKDownloadDelegate（S-26）
+
+    /// 保存目标：NSSavePanel（Electron 默认下载例程的保存对话框对偶）。取消 →
+    /// completionHandler(nil)（WebKit 取消下载），绝不静默落盘。
+    func download(_ download: WKDownload,
+                  decideDestinationUsing response: URLResponse,
+                  suggestedFilename: String,
+                  completionHandler: @escaping (URL?) -> Void) {
+        print("[poc] 下载目标选择（建议文件名 \(suggestedFilename)）")
+        let panel = NSSavePanel()
+        panel.canCreateDirectories = true
+        panel.nameFieldStringValue = suggestedFilename.isEmpty ? "download" : suggestedFilename
+        let finish: (NSApplication.ModalResponse) -> Void = { result in
+            guard result == .OK, let destination = panel.url else {
+                print("[poc] 下载已取消（未落盘）")
+                completionHandler(nil)
+                return
+            }
+            print("[poc] 下载保存到 \(destination.path)")
+            completionHandler(destination)
+        }
+        if let window {
+            panel.beginSheetModal(for: window, completionHandler: finish)
+        } else {
+            finish(panel.runModal())
+        }
+    }
+
+    func downloadDidFinish(_ download: WKDownload) {
+        print("[poc] 下载完成")
+    }
+
+    func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
+        print("[poc] 下载失败：\(error.localizedDescription)")
     }
 
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         // W-04：handler 的 origin 判定以 message.webView?.url 实时值为优先，
         // 本记录（lastCommittedURL）作兜底（进程终止/测试桩场景）
         bridgeHandler.noteCommitted(url: webView.url?.absoluteString)
+        // S-42：首个「有内容」的提交才呈现启动主窗——窗口在此之前保持隐藏，
+        // 绝不先亮无内容空窗（Electron 在 controlPlane.start() 完成后才
+        // createMainWindow 的对偶；S-27 失败说明页同为已提交内容，因此失败
+        // 终态仍可见）。失败页豁免在此消费（decidePolicyFor 只观察不消费——
+        // 两个回调的真实先后顺序因此都不影响呈现：S-42 回归修复）。
+        if presentationGate.shouldPresentOnCommit(url: webView.url?.absoluteString) {
+            onFirstCommittedContent?()
+        }
     }
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
@@ -705,6 +931,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         print("[poc] 页面加载完成 \(webView.url?.absoluteString ?? "(未知)")")
+        // S-34：首载成功前卡死探测器不 ping/不重载（Electron loadedOnce 门）——
+        // 建窗到控制面就绪之间的白屏加载不得被误判卡死。
+        hangWatchdog.noteFirstLoadFinished()
         // S-A：加载完成 → webViewLoading:false + webViewContentAlive:true。
         // 渲染进程终止后的恢复导航成功也在此把 alive 收敛回 true（崩溃回调
         // webViewWebContentProcessDidTerminate 推 false 并触发 E19 有界重载）。
@@ -746,8 +975,11 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // S5：失败路径必须推 webViewLoading:false（无 didFinish 可收敛；
         // sidecar 侧同步门若保持 true，通知打开/深链 drain 会被永久 hold）。
         pushHostFacts(Self.navigationFacts(for: .failed))
+        // S-27/S-42：失败页导航若没有走到提交就失败，一次性豁免没有落地对象——
+        // 撤销，绝不让它悬着放行后续 about: 导航（非失败页导航时为 no-op）。
+        presentationGate.noteNavigationFailed()
         // 注：若 http:// 字面 IP 被 ATS 拦截，可 -Xlinker -sectcreate __TEXT
-        // __info_plist 注入 NSAllowsLocalNetworking，或改用 localhost（§0.2④）
+        // __info_plist 注入 NSAllowsLocalNetworking，或改用 localhost（design 25 §3.2）
         print("[poc] 页面加载失败 \(error.localizedDescription)")
     }
 
@@ -781,6 +1013,71 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         recoveryReloadWorkItem = nil
         hangProbeTimer?.invalidate()
         hangProbeTimer = nil
+    }
+
+    // MARK: - 菜单动作：重新加载 / 页面缩放（S-24）
+
+    /// 页面缩放步进（Electron 默认 View 菜单 role 对偶；WKWebView.pageZoom 是倍率）。
+    static let zoomStep = 0.1
+    /// pageZoom 上下限（Electron zoomLevel ±0.5 的可见等价区间，绝不无限缩放）。
+    static let zoomRange: ClosedRange<Double> = 0.5...3.0
+
+    /// 缩放决策（纯逻辑单测直测）：clamp 到 zoomRange；非有限值回落 1.0。
+    static func steppedZoom(current: Double, direction: Double) -> Double {
+        guard current.isFinite else { return 1.0 }
+        return min(max(current + direction * zoomStep, zoomRange.lowerBound), zoomRange.upperBound)
+    }
+
+    func reloadPage() {
+        print("[poc] 菜单重新加载")
+        webView.reload()
+    }
+
+    /// 「强制重新加载」（S-24 残余；Electron 默认菜单 forceReload role 对偶：
+    /// reloadIgnoringCache 忽略缓存重新取源）。
+    func forceReloadPage() {
+        print("[poc] 菜单强制重新加载（忽略缓存）")
+        _ = webView.reloadFromOrigin()
+    }
+
+    func zoomIn() {
+        webView.pageZoom = Self.steppedZoom(current: webView.pageZoom, direction: 1)
+        print("[poc] 菜单放大 → pageZoom=\(webView.pageZoom)")
+    }
+
+    func zoomOut() {
+        webView.pageZoom = Self.steppedZoom(current: webView.pageZoom, direction: -1)
+        print("[poc] 菜单缩小 → pageZoom=\(webView.pageZoom)")
+    }
+
+    func resetPageZoom() {
+        webView.pageZoom = 1.0
+        print("[poc] 菜单实际大小 → pageZoom=1.0")
+    }
+
+    // MARK: - 窗口恢复（S-32：Dock/托盘/取消退出共用）
+
+    /// 恢复动作序列（纯值单测直测）：最小化窗口必须先 deminiaturize——
+    /// makeKeyAndOrderFront 对最小化窗口不解除最小化（Electron isMinimized →
+    /// restore()+show()+focus() 对偶）。
+    enum RestoreAction: Equatable {
+        case deminiaturize
+        case makeKeyAndOrderFront
+    }
+
+    static func restoreActions(isMiniaturized: Bool) -> [RestoreAction] {
+        isMiniaturized ? [.deminiaturize, .makeKeyAndOrderFront] : [.makeKeyAndOrderFront]
+    }
+
+    /// 执行恢复序列（window == nil → 无动作）。
+    static func restoreWindow(_ window: NSWindow?) {
+        guard let window else { return }
+        for action in restoreActions(isMiniaturized: window.isMiniaturized) {
+            switch action {
+            case .deminiaturize: window.deminiaturize(nil)
+            case .makeKeyAndOrderFront: window.makeKeyAndOrderFront(nil)
+            }
+        }
     }
 
     // MARK: - S-02 渲染器卡死自愈（空闲 ping）
@@ -874,6 +1171,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // didStartProvisionalNavigation 再推 true；失败间隙保持 true 会让
         // sidecar 侧的 drain 门被 hold）。
         pushHostFacts(Self.navigationFacts(for: .failed))
+        // S-27/S-42：失败页导航若在提交前失败，一次性豁免没有落地对象——撤销，
+        // 绝不让它悬着放行后续 about: 导航（非失败页导航时为 no-op）。
+        presentationGate.noteNavigationFailed()
         // POC dev 竞态兜底：控制面起动晚于首载（sidecar 就绪需 1~2s）——
         // 初次连不上时按退避重试；上限 25 次后放弃（loud）。
         let nsError = error as NSError
@@ -916,6 +1216,11 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         <p style="color:#6e6e73">控制面地址：\(escape(cpURL.absoluteString))</p>
         </body>
         """
+        // S-27/S-42：loadHTMLString(baseURL: nil) 导航到 about:blank，会被自家
+        // 围栏 cancel（说明页因此永不显示）——置一次性豁免：decidePolicyFor 只
+        // 观察放行、didCommit 消费并触发呈现门（两个回调谁先到都呈现，见
+        // StartupPresentationGate 注记）。
+        presentationGate.beginFailurePage()
         webView.loadHTMLString(html, baseURL: nil)
     }
 
@@ -940,8 +1245,28 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         return nil
     }
 
+    // MARK: - WKUIDelegate：文件选择面板（S-25）
+
+    /// composer 回形针（input type=file）：不实现本回调时 WebKit 在 macOS 视同
+    /// 用户取消（WKUIDelegate.h:291-295）。参数投影 → 呈现 seam（真机 NSOpenPanel /
+    /// 单测假体）→ 回执选中 URL；取消回空数组（任务约定）。
+    func webView(_ webView: WKWebView,
+                 runOpenPanelWith parameters: WKOpenPanelParameters,
+                 initiatedByFrame frame: WKFrameInfo,
+                 completionHandler: @escaping ([URL]?) -> Void) {
+        let request = FileOpenPanelRequest.make(
+            allowsMultipleSelection: parameters.allowsMultipleSelection,
+            allowsDirectories: parameters.allowsDirectories,
+            allowedContentTypes: Self.allowedContentTypes(of: parameters))
+        print("[poc] 文件选择面板：多选=\(request.allowsMultipleSelection) "
+            + "目录=\(request.allowsDirectories) 类型数=\(request.allowedContentTypes.count)")
+        FileOpenPanel.present(request, presenter: fileOpenPanelPresenter) { urls in
+            completionHandler(urls)
+        }
+    }
+
     /// 媒体采集权限：默认拒绝（2026-12 双端逐函数核对 S4·F9/S3·D11）。Electron 只
-    /// 放行 clipboard-sanitized-write、其余权限请求全拒（main.ts:3751-3753）；WKWebView
+    /// 放行 clipboard-sanitized-write、其余权限请求全拒（main.ts:3832-3834）；WKWebView
     /// 只暴露媒体采集这一类权限回调（macOS 12+），因此这里拒绝摄像头/麦克风/屏幕共享，
     /// 剪贴板与网页 Notification 的等价面登记在台账。
     func webView(_ webView: WKWebView,
@@ -951,6 +1276,13 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                  decisionHandler: @escaping (WKPermissionDecision) -> Void) {
         print("[poc] 拒绝媒体采集权限请求（origin=\(origin.host) type=\(type.rawValue)）")
         decisionHandler(.deny)
+    }
+
+    /// S-24：Help 菜单等原生入口复用既有外部打开路径（预算 + NSWorkspace
+    /// loud 失败）——页面 window.open 与原生菜单动作共享同一预算纪律，绝不
+    /// 绕开预算另开一条（openExternally 保持私有）。
+    func openExternalPage(_ url: URL) {
+        openExternally(url)
     }
 
     // MARK: - 私有
@@ -995,10 +1327,11 @@ enum NotifyRoute: Equatable {
     /// 原生宿主腿执行（method + 形状校验后的原载荷；执行经
     /// SwiftEdgeHostLegs.respond——守卫语义与 edge 面一致）。
     case hostLeg(method: String, payload: AnyCodable?)
-    /// retireNotifications：退役来源集经登记表解析为已投递 identifier，
-    /// 宿主腿调 removeDeliveredNotifications 清除（sourceIds = 校验后的
-    /// 字符串数组；空数组 = 退役空集，no-op）。
-    case retireNotifications(sourceIds: [String])
+    /// retireNotifications：退役来源集/逐条 notificationId 经登记表解析为
+    /// 已投递 identifier，宿主腿调 removeDeliveredNotifications 清除。
+    /// sourceIds 空数组合法（node-edges 的 >16 淘汰只带 notificationIds）；
+    /// notificationIds 缺省 = []（旧 sidecar 形状向后兼容）。
+    case retireNotifications(sourceIds: [String], notificationIds: [Int])
     /// notifyClicked 经 notify 出现（不应发生；正常路径为入站请求）。
     case unexpectedClick
     /// 未知事件 / 载荷形状非法：loud 丢弃（含原因，绝不伪造/猜测）。
@@ -1055,7 +1388,22 @@ extension MainWindowController {
                     return .malformed(reason: "retireNotifications sourceIds 含非字符串元素（丢弃）")
                 }
             }
-            return .retireNotifications(sourceIds: sourceIds)
+            // P-07：notificationIds 与 sourceIds 并存；缺省 = []（旧 sidecar
+            // 形状仍可消费）。存在时逐元素必须是整数——形状非法即 loud 丢弃，
+            // 绝不部分消费。
+            var notificationIds: [Int] = []
+            if let rawIds = dict["notificationIds"] {
+                guard case .array(let idItems) = rawIds else {
+                    return .malformed(reason: "retireNotifications notificationIds 非数组（丢弃）")
+                }
+                for item in idItems {
+                    guard case .number(let number) = item, let id = Int(exactly: number) else {
+                        return .malformed(reason: "retireNotifications notificationIds 含非整数元素（丢弃）")
+                    }
+                    notificationIds.append(id)
+                }
+            }
+            return .retireNotifications(sourceIds: sourceIds, notificationIds: notificationIds)
         case "notifyClicked":
             return .unexpectedClick
         default:

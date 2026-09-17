@@ -6,7 +6,7 @@
 //  node-edges.ts 的 B 桥协议；W-13 台账项——无 GUI 下用真实 sidecar 全量冒烟，
 //  W-15/16——Swift harness 应答 sidecar 的 edge 出站帧，绝不挂起）。
 //
-//  与既有 BridgeClientIntegrationTests（poc-sidecar.ts 桩）的差异：本文件
+//  与既有 BridgeClientPocStubIntegrationTests（poc-sidecar.ts 桩）的差异：本文件
 //  拉起的 sidecar 是 **packages/desktop/sidecar-entry.ts**——真实 shell-core
 //  60/60 注册体 + 无头 ctx（未实现字段 loud 抛 'sidecar-ctx-unavailable:*'）+
 //  node-edges 宿主腿。其中 NOTIFY 类通道的宿主腿会把宿主动作经 B 桥 **edge
@@ -15,7 +15,9 @@
 //  **notify 出站帧** {"notify":…}（ready/rendererPush）。本文件验证：
 //    1. 60 通道逐个 invoke 全量冒烟：每通道 ≤5s 应答且 (ok==true) 或
 //       (ok=false 带 error 文案)——绝无挂起（Swift v1 默认 edge 应答策略兜底，
-//       W-15/16）；记录 ok/error 计数与任何超时；
+//       W-15/16）；记录 ok/error 计数与任何超时；G3：不止二值判定——按命名空间
+//       对代表通道断言具体 wire 形状（与 sidecar-stdio.test.ts W-13①③ 同形状），
+//       「对每个调用都回泛化错误」的通道不能再静默通过；
 //    2. edge 应答的端到端证据：desktop_local_plugin_add_file 通道必然走到
 //       node-edges 的 pickPluginSource edge——默认策略回
 //       {ok:false,error:"swift-edge-unimplemented:pickPluginSource"}，文案应
@@ -29,7 +31,7 @@
 //       收到；随后 SIGTERM 优雅退出断言 exit 0（沿用现测试收尾模式 +
 //       BridgeClient.lastTerminationStatus）。
 //
-//  环境纪律（与 BridgeClientIntegrationTests 同规，全部可跳过而非失败）：
+//  环境纪律（与 BridgeClientPocStubIntegrationTests 同规，全部可跳过而非失败）：
 //    - Node：env POC_NODE_BIN → 否则 /Applications/dsh-chamber.app/…/
 //      dsh-chamber（Electron 二进制，basename 含 "dsh-chamber"，需注入
 //      ELECTRON_RUN_AS_NODE=1 才当 Node 用——AppDelegate.swift:45-52 同规）
@@ -53,7 +55,7 @@ import XCTest
 
 final class BridgeClientEdgeIntegrationTests: XCTestCase {
 
-    // MARK: - 环境解析（与 BridgeClientIntegrationTests 同规）
+    // MARK: - 环境解析（与 BridgeClientPocStubIntegrationTests 同规）
 
     /// 缺省 Node：打包态 dsh-chamber 的 Electron 二进制（AppDelegate 同款常量）
     private static let defaultNodePath = "/Applications/dsh-chamber.app/Contents/MacOS/dsh-chamber"
@@ -187,7 +189,18 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
             // 裁决 skip → ok:false 结果或 loud 错误，都是合格应答。
             return .object(["payload": .object([:])])
         case "desktop_ssh_connect", "desktop_ssh_disconnect", "desktop_ssh_status":
-            return .object(["instanceId": .string("local")])
+            // 真入口契约 = {id}（shell-core.ts 的 SSH_* 注册体解构 id；instanceId
+            // 是 poc-sidecar 桩的旧形状）。G3 起代表通道按真实契约给载荷。
+            return .object(["id": .string("local")])
+        case "desktop_gateway_set_token", "desktop_gateway_plugin_sync":
+            // gateway 面的代表通道同样以 {id} 取实例（缺 payload 会得到
+            // destructure 型噪声错误，钉不出真实形状）；空 registry 的
+            // 「invalid or unknown instance id」才是这两条通道的确定投影。
+            return .object(["id": .string("local")])
+        case "desktop_npm_search":
+            // 空 query → 确定性 {ok:false,error:"empty search query"}（绝不发
+            // 真实 registry 网络请求；G3 形状锚点）。
+            return .object(["query": .string("")])
         default:
             return nil
         }
@@ -338,6 +351,8 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
         var errorCount = 0
         var anomalies: [String] = []
         var byChannel: [String: String] = [:]
+        /// 成功通道的原始结果（G3：代表通道形状断言；错误通道的文案在 byChannel）。
+        var results: [String: AnyCodable] = [:]
         /// 非 nil = 第 timedOut.index 个通道超时/桥失活，循环已中止。
         var timedOut: (channel: String, index: Int)?
 
@@ -365,9 +380,10 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
                                                   payload: Self.payload(for: channel),
                                                   timeout: Self.invokeTimeout(for: channel))
             switch outcome {
-            case .ok:
+            case .ok(let value):
                 report.okCount += 1
                 report.byChannel[channel] = "ok"
+                report.results[channel] = value
             case .loudError(let error):
                 report.errorCount += 1
                 let message = error.localizedDescription
@@ -385,6 +401,150 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
             }
         }
         return report
+    }
+
+    /// G3（2026-12 审计）：60 通道冒烟此前只有「ok 或任意非空业务错误」的二值
+    /// 判定（一个对每个调用都回泛化错误的通道照样全绿，全文仅对 1 条文案下
+    /// 断言）。本助手按命名空间对代表通道断言具体 wire 形状——形状集与
+    /// sidecar-stdio.test.ts W-13①③ 逐条对应；形状漂移即失败。
+    private func assertRepresentativeShapes(_ bridge: BridgeClient,
+                                            report: SmokeReport,
+                                            file: StaticString = #filePath,
+                                            line: UInt = #line) async {
+        /// ok 结果必须是对象（失败即 XCTFail 并返回 nil）。
+        func object(_ channel: String) -> [String: AnyCodable]? {
+            guard let value = report.results[channel] else {
+                XCTFail("\(channel) 未返回 ok（实际：\(report.byChannel[channel] ?? "<未执行>")）",
+                        file: file, line: line)
+                return nil
+            }
+            guard case .object(let fields) = value else {
+                XCTFail("\(channel) 成功结果应为对象，实际：\(value)", file: file, line: line)
+                return nil
+            }
+            return fields
+        }
+        /// 键必须是非空字符串（返回解析值，便于追加前缀断言）。
+        func string(_ value: AnyCodable?, _ channel: String, _ key: String) -> String? {
+            guard case .string(let text)? = value, !text.isEmpty else {
+                XCTFail("\(channel) 的 \(key) 应为非空字符串，实际：\(String(describing: value))",
+                        file: file, line: line)
+                return nil
+            }
+            return text
+        }
+        func isObject(_ value: AnyCodable?) -> Bool {
+            if case .object? = value { return true }
+            return false
+        }
+        func isArray(_ value: AnyCodable?) -> Bool {
+            if case .array? = value { return true }
+            return false
+        }
+
+        // —— dsh-chamber:info（sidecar-stdio W-13①）——
+        if let info = object("dsh-chamber:info") {
+            if let url = string(info["controlPlaneUrl"], "dsh-chamber:info", "controlPlaneUrl") {
+                XCTAssertTrue(url.hasPrefix("http"),
+                              "controlPlaneUrl 应指向控制面 origin：\(url)", file: file, line: line)
+            }
+            XCTAssertEqual(string(info["platform"], "dsh-chamber:info", "platform"), "darwin",
+                           "平台串应为 darwin（W-13①）", file: file, line: line)
+            _ = string(info["version"], "dsh-chamber:info", "version")
+        }
+
+        // —— dsh-chamber:settings-get / runtime-state / update-state（W-13③）——
+        if let settings = object("dsh-chamber:settings-get") {
+            XCTAssertTrue(isObject(settings["settings"]),
+                          "settings-get 应返回 {settings,supported}，settings 实际："
+                          + "\(String(describing: settings["settings"]))", file: file, line: line)
+            XCTAssertTrue(isObject(settings["supported"]),
+                          "settings-get.supported 应为对象，实际："
+                          + "\(String(describing: settings["supported"]))", file: file, line: line)
+        }
+        if let runtime = object("dsh-chamber:runtime-state") {
+            _ = string(runtime["phase"], "dsh-chamber:runtime-state", "phase")
+        }
+        if let update = object("dsh-chamber:update-state") {
+            _ = string(update["phase"], "dsh-chamber:update-state", "phase")
+            _ = string(update["channel"], "dsh-chamber:update-state", "channel")
+            XCTAssertEqual(update["downloadPercent"], .null,
+                           "update-state.downloadPercent 无下载腿时恒 null（W-13③）",
+                           file: file, line: line)
+        }
+        if let openIn = object("dsh-chamber:open-in-apps") {
+            XCTAssertTrue(isArray(openIn["apps"]),
+                          "open-in-apps 应为 {apps:[…]}，实际："
+                          + "\(String(describing: openIn["apps"]))", file: file, line: line)
+        }
+
+        // —— desktop_ssh_* 命名空间 ——
+        if case .array(let instances)? = report.results["desktop_ssh_instances_get"] {
+            XCTAssertTrue(instances.isEmpty, "空 userData 下 instances_get 应为空数组（W-13③）",
+                          file: file, line: line)
+        } else {
+            XCTFail("desktop_ssh_instances_get 应返回数组，实际："
+                    + "\(String(describing: report.results["desktop_ssh_instances_get"]))",
+                    file: file, line: line)
+        }
+        if let config = object("desktop_ssh_config_list") {
+            XCTAssertTrue(isArray(config["hosts"]),
+                          "desktop_ssh_config_list 应返回 {hosts:[…]}（W-13③），实际："
+                          + "\(String(describing: config["hosts"]))", file: file, line: line)
+        }
+        if let status = report.results["desktop_ssh_status"] {
+            XCTAssertEqual(status, .null,
+                           "已加载契约 {id} 下未知实例 status 应为 null 投影（诚实缺席）",
+                           file: file, line: line)
+        } else {
+            XCTFail("desktop_ssh_status 应成功应答，实际："
+                    + "\(report.byChannel["desktop_ssh_status"] ?? "<未执行>")", file: file, line: line)
+        }
+        // 缺载荷必须 loud（W-13③ 同一条）：类型错误也必须经 ok=false 业务拒绝
+        // 回来，绝无静默空成功。
+        let missingPayload = await invokeWithTimeout(bridge, method: "desktop_ssh_status", payload: nil)
+        switch missingPayload {
+        case .loudError(let error):
+            XCTAssertEqual(error.domain, BridgeClient.errorDomain, file: file, line: line)
+            XCTAssertEqual(error.code, BridgeClient.errorCodeInvocationFailed, file: file, line: line)
+            XCTAssertFalse(error.localizedDescription.isEmpty, "缺载荷拒绝必须带文案",
+                           file: file, line: line)
+        default:
+            XCTFail("desktop_ssh_status 缺载荷必须 loud 拒绝，实际：\(missingPayload.summary)",
+                    file: file, line: line)
+        }
+        // connect 代表 loud 侧：空 registry 的确定业务错误（非泛化错误）。
+        XCTAssertEqual(report.byChannel["desktop_ssh_connect"], "ssh instance not found",
+                       "desktop_ssh_connect 空 registry 应回 ssh instance not found",
+                       file: file, line: line)
+
+        // —— desktop_gateway_* 命名空间 ——
+        if let token = object("desktop_gateway_set_token") {
+            _ = string(token["error"], "desktop_gateway_set_token", "error")
+        }
+        if let sync = object("desktop_gateway_plugin_sync") {
+            XCTAssertEqual(sync["ok"], .bool(false), "无效实例同步应回 ok:false",
+                           file: file, line: line)
+            _ = string(sync["error"], "desktop_gateway_plugin_sync", "error")
+        }
+
+        // —— desktop_local_plugin_* 命名空间 ——
+        if let plugins = object("desktop_local_plugin_list") {
+            if case .bool? = plugins["ok"] {
+                // 形状合格：manifest 可读与否都经 {ok,manifest|error} 投影。
+            } else {
+                XCTFail("desktop_local_plugin_list 结果应含 ok 布尔键（W-13③），ok 实际："
+                        + "\(String(describing: plugins["ok"]))", file: file, line: line)
+            }
+        }
+
+        // —— desktop_npm_search 命名空间 ——
+        if let search = object("desktop_npm_search") {
+            XCTAssertEqual(search["ok"], .bool(false), "空 query 应回 ok:false", file: file, line: line)
+            XCTAssertEqual(search["error"], .string("empty search query"),
+                           "空 query 必须回确定文案（绝不静默空成功/真实网络）",
+                           file: file, line: line)
+        }
     }
 
     // MARK: - 用例
@@ -422,6 +582,9 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
         }
         XCTAssertEqual(report.okCount + report.errorCount, channels.count, report.summary)
         XCTAssertEqual(report.anomalies, [], "\(report.summary)；异常：\(report.anomalies)")
+
+        // G3：代表通道的具体 wire 形状（每个命名空间至少一条）。
+        await assertRepresentativeShapes(bridge, report: report)
 
         // W-15/16 默认 edge 应答的端到端证据：LOCAL_PLUGIN_ADD_FILE 处理器在
         // 任何 ctx stub 之前先经 node-edges 发 pickPluginSource edge 并 await
@@ -487,6 +650,9 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
         }
         XCTAssertEqual(report.okCount + report.errorCount, Self.invokeChannels.count, report.summary)
         XCTAssertEqual(report.anomalies, [], "\(report.summary)；异常：\(report.anomalies)")
+
+        // G3：自定义应答器下代表通道形状与默认路径一致（边腿差异已单独断言）。
+        await assertRepresentativeShapes(bridge, report: report)
 
         // —— spawn 2：纯回落应答器（每个方法都经 defaultEdgeResponse）——
         // 与默认策略 wire 等价：pickPluginSource → swift-edge-unimplemented。

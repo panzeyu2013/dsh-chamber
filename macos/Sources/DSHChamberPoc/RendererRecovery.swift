@@ -26,6 +26,10 @@ public enum HostInboundMethod {
     public static let notifyClicked = "__host.notifyClicked"
     public static let systemResume = "__host.systemResume"
     public static let mainWindowShown = "__host.mainWindowShown"
+    /// S-19/S-20 冻结线：Swift 壳把 Sparkle 更新阶段
+    /// {phase, version, error} 报给 sidecar（sidecar 映射进页面的 update-state
+    /// 投影）。payload 值域见 NativeUpdatePhase。
+    public static let nativeUpdatePhase = "__host.nativeUpdatePhase"
 }
 
 /// renderer 崩溃重载决策（纯值逻辑，单测直测）。

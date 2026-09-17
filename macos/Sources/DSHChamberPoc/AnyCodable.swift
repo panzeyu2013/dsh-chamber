@@ -2,7 +2,7 @@
 //
 // design 25 §4.4.2（B 桥信封 {id,method,payload} / {id,ok,result|error} /
 // {event,payload} 中 payload/result 字段可以是任意 JSON）与 W-05（垂直切片，
-// docs/progress/todo/macos-swift-v1.md §0.2-⑥：Swift 侧 B 桥客户端原型）。
+// design 25 §4.4.2：Swift 侧 B 桥客户端原型）。
 // 本类型是 FrameCodec（帧编解码）与 A 桥 MessageHandler（JS 字面量序列化、
 // web 桥接对象 → payload）共享的载荷契约：
 //   - FrameCodec 经本类型的 Codable 编解码信封字段；

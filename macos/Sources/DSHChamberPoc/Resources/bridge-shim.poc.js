@@ -1,6 +1,6 @@
 /**
  * bridge-shim.poc.js — W-04 A-bridge shim for the macOS Swift shell POC
- * (todo companion §0.2⑤ W-04; design 25 §4.4.1). Swift's BridgeShimInjector
+ * (W-04; design 25 §4.4.1). Swift's BridgeShimInjector
  * injects this file as a WKUserScript (.page world, documentStart) from
  * macos/Sources/DSHChamberPoc/Resources/.
  *
@@ -61,10 +61,13 @@
  *   badge（1 invoke）→ badge-count {count}
  *
  * 宿主侧差异注记（shim 层照常 invoke，错误如实上抛；行为对齐待 S-D/验收批）：
- *   - update.restartAndInstall：Electron flavor = updater quitAndInstall（退出
- *     + 安装 + 重启宿主）；Swift flavor 无 updater 宿主（sidecar ctx
- *     updateController 为 loud stub）→ invoke 错误如实上抛（W-22 flavor 接
- *     v1 blocked-available）。
+ *   - update.download / update.restartAndInstall：sidecar 的 updateController
+ *     在两个 flavor 之间按装配切换（sidecar-ctx.ts:2734-2752）。壳声明
+ *     --native-updater sparkle（配好 feed + 公钥的装配）时，sidecar 把
+ *     download/install 转发给壳内的 Sparkle 标准更新窗口，并清空
+ *     installBlockedReason——与 Electron 的 quitAndInstall 用户可见流程等价。
+ *     未声明时保持 v1 blocked-available 诚实形态：invoke 回显式拒绝文案
+ *     （原生壳不支持自动安装），绝不假成功。
  *   - pick 类（gateway_plugin_materialize / plugin_materialize_add_pick /
  *     local_plugin_add_file）：picker 的弹出/取消语义在宿主侧（Electron dialog /
  *     Swift 侧 node-edges pickPluginSource → NSOpenPanel E8 腿已实现）——
@@ -91,10 +94,12 @@
  * single console.warn explains why (warn-once, never spam).
  *
  * Info hydration: the scalars start null and are filled by a
- * dsh-chamber:info invoke that retries 10×50 ms on rejection only — the
- * exact preload.cts semantics (INFO_MAX_ATTEMPTS=10 / INFO_RETRY_MS=50,
- * preload.cts:839-857). Total failure keeps the scalars null: defining the
- * shim never depends on info, and pushes only arrive after the matching
+ * dsh-chamber:info invoke that retries 1+10 times, 50 ms apart, on rejection
+ * only — the exact preload.cts semantics (INFO_MAX_ATTEMPTS=10 /
+ * INFO_RETRY_MS=50, preload.cts:885-903). The public surface is exposed on
+ * success with real scalars, and after total failure with the four scalars
+ * still null (T-12, mirroring the preload.cts failure branch :923-940); it
+ * is not defined before either point. Pushes only arrive after the matching
  * invoke, so there is no subscribe-before-info ordering hazard in the POC.
  *
  * Trust note: page-world injection means page code can observe these globals
@@ -106,9 +111,21 @@
 (function () {
   'use strict'
 
-  // Duplicate-injection guard: BridgeShimInjector may run more than once per
-  // page (reload edge / re-inject). The first definition wins; later copies
-  // are inert.
+  // Duplicate-injection guard (P-19): an explicit marker, checked by
+  // BridgeShimInjector.install on the Swift side too. The public surface does
+  // not exist until info hydration settles ('dshChamber' defineWindowGlobal
+  // runs only from exposePublicSurface), so relying on the non-configurable
+  // defineProperty to throw TypeError on a second copy leaves a window where
+  // a re-injected documentStart copy would crash before the first one exposes.
+  if (window.__dshChamberShimInstalled === true) return
+  try {
+    Object.defineProperty(window, '__dshChamberShimInstalled', {
+      value: true, configurable: false, enumerable: false, writable: false
+    })
+  } catch (e) {
+    // A foreign non-configurable marker already occupies the name: stay inert.
+    return
+  }
   if ('dshChamber' in window) return
 
   // ---- constants (write-once literals, mirroring ipc-events.ts) ----------
@@ -472,9 +489,9 @@
     }
   }
 
-  /** update — 5 invoke + onChanged。restartAndInstall 宿主腿差异见文件头
-   *  （Swift flavor updater 宿主落地前错误如实上抛）。onChanged 是 preload
-   *  唯一订阅拼写（W-04 时代的 onStateChanged 别名已移除——超集不在
+  /** update — 5 invoke + onChanged。download/restartAndInstall 的宿主腿按
+   *  装配切换（Sparkle 转发 / blocked-available），见文件头注记；onChanged 是
+   *  preload 唯一订阅拼写（W-04 时代的 onStateChanged 别名已移除——超集不在
    *  preload 面内）。 */
   var update = {
     state: function () { return invoke('dsh-chamber:update-state', null) },
@@ -609,10 +626,9 @@
   function fetchInfo(attemptsLeft) {
     return invoke(INFO_CHANNEL, null).then(function (info) {
       applyInfo(info)
-      // 与 preload 同序（2026-12 审查后的根因修法）：**只有 info 成功才暴露**公开面
-      // dshChamber——preload.cts 的 requestAppInfo().then(exposeInMainWorld) 在
-      // rejection 时永不暴露。这样页面在 surface 缺失时走自己的重试链（Electron
-      // 同款），而不是拿到一个 scalars 全 null 的假面。
+      // 与 preload 同序（T-12）：info 成功 → 用真实标量暴露公开面；成功前
+      // 不暴露（页面按自己的重试链等，避免拿到半成品）。1+10 次全败由下方
+      // 失败分支用 null 标量暴露（preload.cts 的失败分支同款），两端一致。
       exposePublicSurface()
       return null
     }, function () {
@@ -621,7 +637,12 @@
           return fetchInfo(attemptsLeft - 1)
         })
       }
-      console.warn('[dsh-chamber] dsh-chamber:info failed after ' + INFO_MAX_ATTEMPTS + ' attempts; bridge scalars stay null')
+      console.warn('[dsh-chamber] dsh-chamber:info failed after ' + INFO_MAX_ATTEMPTS + ' attempts; exposing the bridge with null scalars')
+      // T-12（2026-12 审计）：与 preload.cts 的失败分支一致——1+10 次全败仍暴露
+      // 公开面，四个标量保持 null（preload.cts:923-940 同款），而不是让
+      // window.dshChamber 不存在。两端降级因此一致：桥在、标量 null，页面可走
+      // 同一段代码路径。
+      exposePublicSurface()
       return null
     })
   }
@@ -647,9 +668,9 @@
   })
 
   /** 公开面 dshChamber 的暴露门（只暴露一次；preload 语义）。
-   *  2026-12 审查：早先 shim 在 documentStart 就暴露、scalars 事后回填，导致
-   *  「surface 存在但 info 全 null」——平台串/版本号整会话缺失，且预就绪 invoke
-   *  只能被就绪门拒绝（渲染端不会走它自己的 surface-missing 重试链）。 */
+   *  暴露时机 = info 成功（真实标量）或 1+10 次全败（null 标量，T-12 与
+   *  preload.cts 失败分支一致）；documentStart 到那一刻之前不暴露，避免在
+   *  就绪门拒绝期给页面一个「存在但值全是 null」的假面。 */
   var surfaceExposed = false
   function exposePublicSurface() {
     if (surfaceExposed) return
