@@ -216,10 +216,17 @@ public struct SidecarRestartPolicy: Equatable {
 /// 方法名与 BridgeClient 现有 API 同名，BridgeClient 以空扩展即符合。
 public protocol SupervisedSidecar: AnyObject {
     var isRunning: Bool { get }
+    /// 最近 sidecar stderr 摘要（T-3：启动失败报告带真实原因；无捕获面 = 空串）。
+    var recentStderrSummary: String { get }
     /// 自然终止回调（terminationStatus）；stop() 主动停止不触发。
     var onTerminated: ((Int32) -> Void)? { get set }
     func start() throws
     func stop()
+}
+
+/// 无 stderr 捕获面的被守护进程（测试假体）取空串——协议级默认值。
+public extension SupervisedSidecar {
+    var recentStderrSummary: String { "" }
 }
 
 // MARK: - Supervisor
@@ -405,7 +412,12 @@ public final class SidecarSupervisor {
             + (committed ? "" : "（启动期退出，未提交）"))
 
         if !committed {
-            markFatal("sidecar 启动期退出（status=\(status)）——启动失败，不自动重启")
+            // T-3：退出码 + stderr 摘要如实透出（EADDRINUSE host:port 等），
+            // 绝不只给一句「启动失败」。
+            let failure = SidecarStartupFailure.make(
+                exitCode: status, stderr: instance?.recentStderrSummary ?? "")
+            markFatal("sidecar 启动期退出（status=\(status)）——" + failure.message
+                + "；启动期退出不自动重启")
             return
         }
 
@@ -420,7 +432,11 @@ public final class SidecarSupervisor {
         // EXIT_STARTUP_FAILURE）——按启动失败 fatal，不做崩溃退避重启
         // （2026-09 三审 #7：原先与运行期崩溃同为 exit 1）。
         if status == 70 {
-            markFatal("sidecar 启动失败（exit=70）——请检查控制面/装配配置后重试")
+            // T-3：退出码 + stderr 摘要（含 EADDRINUSE host:port）如实透出；
+            // 端口占用时给「先退出另一个实例」的可执行提示（SidecarStartupFailure）。
+            let failure = SidecarStartupFailure.make(
+                exitCode: status, stderr: instance?.recentStderrSummary ?? "")
+            markFatal(failure.message)
             return
         }
         if status == 0 {

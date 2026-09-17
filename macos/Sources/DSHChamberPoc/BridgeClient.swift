@@ -207,6 +207,21 @@ public final class BridgeClient {
     private var sessionGeneration = 0
     /// 最近一次 sidecar 进程终止退出码（锁保护；nil = 尚未观测到终止）。
     private var lastTerminationStatusStorage: Int32?
+    /// 最近 sidecar stderr 行（T-3：有界环形，只服务启动失败报告/失败页考古；
+    /// 锁保护，start() 复位）。
+    private var stderrTail: [String] = []
+    /// stderr 环形保留行数上限。
+    private static let stderrTailLimit = 40
+    /// 单行入环前的字符截断（防一篇超长栈撑爆报告/日志）。
+    private static let stderrLineCharLimit = 400
+
+    /// 最近 sidecar stderr 摘要（T-3；启动失败报告在进程终止回调里同步读取，
+    /// 见 handleTermination 的 finishStderrReading）。多行以换行连接。
+    public var recentStderrSummary: String {
+        lock.lock()
+        defer { lock.unlock() }
+        return stderrTail.joined(separator: "\n")
+    }
 
     /// sidecar 事件出口（事件帧到达时在管道读取线程回调；调用方负责切回
     /// 主线程再碰 UI/WKWebView——本属性在 start() 之前赋值、之后只读，
@@ -415,6 +430,8 @@ public final class BridgeClient {
         self.answeredEdgeIDs.removeAll()
         self.sessionGeneration += 1
         self.lastTerminationStatusStorage = nil
+        // T-3：stderr 环形复位（新进程/重启只带自己的失败证据）。
+        self.stderrTail.removeAll()
     }
 
     /// 停止 sidecar：SIGTERM → 等 ≤ quitCleanupGracePeriod（5s，与 shell-core
@@ -517,6 +534,10 @@ public final class BridgeClient {
         // 未决请求作废（作废先于残帧分发会丢“死前应答”——进程已亡，
         // 语义上桥已断，注释声明此取舍：宁可 loud 丢弃也不悬挂）。
         finishStdoutReading()
+        // T-3：stderr 同步抽干——terminationHandler 与 readabilityHandler 之间
+        // 没有先后保证，不抽干则「死前最后一行」（EADDRINUSE 等）会漏出
+        // fatal 摘要（失败报告/失败页只能给笼统建议）。
+        finishStderrReading(takenError)
         failAllPending(reason: "sidecar 进程退出，未决请求作废")
 
         // 收尾完成后上报（Supervisor 的回调里可能新建/启动下一个 sidecar；
@@ -550,6 +571,29 @@ public final class BridgeClient {
         outcome = outputReader.finish()
         lock.unlock()
         processStdoutOutcome(outcome)
+    }
+
+    /// stderr 残尾同步抽干（进程终止路径专用，T-3）：摘回调后把管道里剩余
+    /// 字节全部读进 stderrReader 并 EOF 收尾；幂等（LineReader.finished 拒收
+    /// 且 availableData 在 EOF 后返回空）。
+    private func finishStderrReading(_ pipe: Pipe?) {
+        guard let handle = pipe?.fileHandleForReading else { return }
+        var batches = 0
+        while batches < 1024 {
+            let data = handle.availableData
+            if data.isEmpty { break }
+            var outcome = LineReader.Outcome()
+            lock.lock()
+            outcome = stderrReader.append(data)
+            lock.unlock()
+            processStderrOutcome(outcome)
+            batches += 1
+        }
+        var outcome = LineReader.Outcome()
+        lock.lock()
+        outcome = stderrReader.finish()
+        lock.unlock()
+        processStderrOutcome(outcome)
     }
 
     private func readStderr(_ handle: FileHandle) {
@@ -943,8 +987,18 @@ public final class BridgeClient {
         "[sidecar] \(line)\n"
     }
 
-    /// sidecar stderr 行透传（D2：stderr = 唯一日志通道，原样输出）。
+    /// sidecar stderr 行透传（D2：stderr = 唯一日志通道，原样输出）+ T-3 入
+    /// 有界环形（供启动失败报告读取同一份「死前证据」）。
     private func relaySidecarLogLine(_ line: String) {
+        let captured = line.count > Self.stderrLineCharLimit
+            ? String(line.prefix(Self.stderrLineCharLimit)) + "…"
+            : line
+        lock.lock()
+        stderrTail.append(captured)
+        if stderrTail.count > Self.stderrTailLimit {
+            stderrTail.removeFirst(stderrTail.count - Self.stderrTailLimit)
+        }
+        lock.unlock()
         try? FileHandle.standardError.write(
             contentsOf: Data(Self.relayedSidecarLogLine(line).utf8))
     }

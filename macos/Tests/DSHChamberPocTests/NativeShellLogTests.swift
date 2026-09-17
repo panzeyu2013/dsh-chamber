@@ -50,13 +50,13 @@ final class NativeShellLogTests: XCTestCase {
                                  now: { Date(timeIntervalSince1970: 1_700_000_000.25) })
         XCTAssertTrue(log.isActive, "初始化后文件必须真的打开（不是只打印）")
         XCTAssertEqual(log.filePath, url.path)
-        log.append("[poc] 装配完成")
+        log.append("[native] 装配完成")
         log.append("[supervisor] sidecar 已启动")
 
         let text = try String(contentsOf: url, encoding: .utf8)
         let lines = text.split(separator: "\n")
         XCTAssertEqual(lines.count, 2)
-        XCTAssertTrue(text.contains("[poc] 装配完成"))
+        XCTAssertTrue(text.contains("[native] 装配完成"))
         XCTAssertTrue(text.contains("[supervisor] sidecar 已启动"))
         XCTAssertTrue(lines.allSatisfy { $0.hasPrefix("[2023-11-14T") },
                       "每行以 ISO8601 时间戳开头：\(text)")
@@ -137,19 +137,19 @@ final class NativeShellLogTests: XCTestCase {
         XCTAssertTrue(appDelegate.contains("log: { shellLog($0) }"),
                       "sidecar spawn/退出/重启/fatal（supervisor）必须同时落盘")
         XCTAssertTrue(appDelegate.contains("退出清理"), "退出链关键点必须存在并被 shellLog 覆盖")
-        XCTAssertTrue(appDelegate.contains("shellLog(\"[poc] applicationDidFinishLaunching")
-            || appDelegate.contains("shellLog(\"[poc] 装配完成"),
+        XCTAssertTrue(appDelegate.contains("shellLog(\"[native] applicationDidFinishLaunching")
+            || appDelegate.contains("shellLog(\"[native] 装配完成"),
                       "启动装配行必须落盘")
 
         let controller = try source("Sources/DSHChamberPoc/MainWindowController.swift")
-        XCTAssertTrue(controller.contains("shellLog(\"[poc] 页面加载失败"),
+        XCTAssertTrue(controller.contains("shellLog(\"[native] 页面加载失败"),
                       "导航失败必须落盘（双击态白屏的唯一本地考古面）")
         XCTAssertTrue(controller.contains("落首载失败说明页"),
                       "首载失败页必须留一条落盘记录")
-        XCTAssertTrue(controller.contains("shellLog(\"[poc] 下载"))
+        XCTAssertTrue(controller.contains("shellLog(\"[native] 下载"))
 
         let updater = try source("Sources/DSHChamberPoc/AppUpdater.swift")
-        XCTAssertTrue(updater.contains("shellLog(\"[poc] nativeUpdatePhase"),
+        XCTAssertTrue(updater.contains("shellLog(\"[native] nativeUpdatePhase"),
                       "更新相位必须落盘")
     }
 }

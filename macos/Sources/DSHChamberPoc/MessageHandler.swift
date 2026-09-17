@@ -254,7 +254,7 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
     /// 护栏不过 → 经 evaluateJavaScript 回 `__dshChamberResolve(id, null, 码)`。
     private func reject(id: Int, code: String) {
         guard let token = nativeChannelToken else {
-            shellLog("[poc] 原生通道令牌未注入，无法回执 \(code)（S-06）")
+            shellLog("[native] 原生通道令牌未注入，无法回执 \(code)（S-06）")
             return
         }
         evaluateJavaScript?("__dshChamberResolve(\(Self.jsStringLiteral(token)), \(id), null, "

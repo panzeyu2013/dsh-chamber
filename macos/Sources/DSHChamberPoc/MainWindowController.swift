@@ -56,6 +56,22 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     private static let invokeWhitelist: Set<String> = BridgeManifest.invokeChannels
     /// 窗口默认内容尺寸
     private static let windowSize = NSSize(width: 1280, height: 800)
+
+    /// 原生壳**可见**产品名（T-1：暂时把 native 标记为 dsh-chamber-native）：
+    /// 窗口标题 / 失败说明页 / fatal 提示框共用。不可见名（SwiftPM target、
+    /// CFBundleExecutable、资源名 bridge-shim.poc.js）保持 DSHChamberPoc 不变。
+    static let displayName = "dsh-chamber-native"
+
+    /// 首帧/重载底色（T-4）：与 Electron backgroundColor:#0f1115、前端
+    /// packages/renderer/index.html 骨架底色同一 token 值
+    /// #0f1115 = rgb(15, 17, 21)。WKWebView 缺省白底在首帧/重载时会白闪。
+    static let backgroundRed: CGFloat = 15.0 / 255.0
+    static let backgroundGreen: CGFloat = 17.0 / 255.0
+    static let backgroundBlue: CGFloat = 21.0 / 255.0
+    static var windowBackgroundColor: NSColor {
+        NSColor(srgbRed: backgroundRed, green: backgroundGreen,
+                blue: backgroundBlue, alpha: 1)
+    }
     /// B 桥入站保留 method 名（单源 = HostInboundMethod；node-edges.ts 同拼写）。
     private static let hostFactsMethod = HostInboundMethod.hostFacts
     /// renderer 崩溃有界重载策略（design 25 §5 E19；Electron 版 500ms/60s≤3）。
@@ -107,6 +123,11 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     private var downloadDestinations: [ObjectIdentifier: String] = [:]
     private var navRetries = 0
     private var didStartLoading = false
+    /// 首载失败退避重试的挂起调度（T-2：sidecar fatal / 退出 / 成功时取消）。
+    private var navRetryWorkItem: DispatchWorkItem?
+    /// sidecar 启动失败的真实原因（T-3：supervisor fatal 时经
+    /// noteStartupFailure 注入；失败页与日志共用，绝不只剩 WebKit 的 ATS 文案）。
+    private var startupFailureMessage: String?
     /// hostFacts 推送簿记（S-A）：已推送（含推送意图）事实，键 → 布尔。
     /// 仅主线程读写：全部推送调用点都是主线程回调（AppKit 窗口通知 /
     /// WKNavigationDelegate），簿记在事件回调内同步完成（去重判断与推送
@@ -138,7 +159,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         self.shimSource = shimSource
         self.cpOrigin = Self.origin(of: cpURL) ?? ""
         if self.cpOrigin.isEmpty {
-            print("[poc] 警告：控制面 URL 无合法 origin，导航护栏将一律拦截 http(s)")
+            print("[native] 警告：控制面 URL 无合法 origin，导航护栏将一律拦截 http(s)")
         }
         super.init(window: nil)
         setupWindow()
@@ -176,7 +197,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         BridgeShimInjector.install(
             config: configuration,
             source: BridgeShimInjector.injectNativeToken(nativeChannelToken, into: shimSource))
-        print("[poc] A 桥 shim 注入完成（\(Self.shimResourceName)）")
+        print("[native] A 桥 shim 注入完成（\(Self.shimResourceName)）")
 
         // 消息通道：ChamberMessageHandler 只做护栏与转发（W-04 实现）
         let handler = ChamberMessageHandler(
@@ -204,7 +225,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
         // POC dev 调试（白屏诊断；S14：仅在 POC_DEBUG=1 时安装——默认关闭，
         // 发布壳不转发渲染器每一行 console）：页面 JS onerror/
-        // unhandledrejection/console.* 经 pocConsole 通道回传 → [poc-web] 打印。
+        // unhandledrejection/console.* 经 pocConsole 通道回传 → [native-web] 打印。
         if POCDebug.isEnabled() {
             let consoleCatcher = POCConsoleCatcher()
             self.consoleCatcher = consoleCatcher
@@ -233,7 +254,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                 injectionTime: .atDocumentStart,
                 forMainFrameOnly: true
             ))
-            print("[poc] POC_DEBUG=1：已安装 pocConsole 回传（\(Self.consoleMessageName)）")
+            print("[native] POC_DEBUG=1：已安装 pocConsole 回传（\(Self.consoleMessageName)）")
         }
 
         // S-02：渲染器卡死自愈（空闲 ping + 有界重载）。
@@ -263,6 +284,13 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         }
 #endif
         self.webView = webView
+        // T-4：WKWebView 与窗口共用前端同一底色 token（#0f1115 = rgb(15,17,21)）
+        // ——WKWebView 缺省白底会让首帧/重载白闪；drawsBackground=false 让页面
+        // 透明区域直接露出窗口底色（亮/暗主题同值，token 常量见文件顶部）。
+        webView.underPageBackgroundColor = Self.windowBackgroundColor
+        if webView.responds(to: NSSelectorFromString("setDrawsBackground:")) {
+            webView.setValue(false, forKey: "drawsBackground")
+        }
         // A3-3：恢复本 origin 上次的缩放（Chromium 按 origin 持久化 zoomLevel；
         // WKWebView.pageZoom 每次启动回 100%，这里用 UserDefaults 补齐）。
         webView.pageZoom = ZoomPersistence.load(
@@ -273,8 +301,11 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                               styleMask: [.titled, .closable, .miniaturizable, .resizable],
                               backing: .buffered,
                               defer: false)
-        // 功能对齐 Electron（窗口标题冻结为 dsh-chamber；2026-12 双端逐函数核对 U5/V8）。
-        window.title = "dsh-chamber"
+        // T-1：可见标题 = dsh-chamber-native（功能对齐 Electron 的标题冻结行为；
+        // 2026-12 双端逐函数核对 U5/V8；不可见 target/可执行名保持 DSHChamberPoc）。
+        window.title = Self.displayName
+        // T-4：窗口底色 = 同一 #0f1115（缩放/全屏露底不白闪）。
+        window.backgroundColor = Self.windowBackgroundColor
         window.contentView = webView
         window.center()
         // 关窗决策委托（E1/E20）：windowShouldClose 交给 AppDelegate（隐藏 vs
@@ -311,7 +342,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     // MARK: - A-1/A-2 入站事件发送（唤醒/窗口显示）
 
     @objc private func hostWakeUp(_ note: Notification) {
-        print("[poc] 系统唤醒——发送 __host.systemResume")
+        print("[native] 系统唤醒——发送 __host.systemResume")
         Task { @MainActor in
             do {
                 _ = try await bridge.invoke(
@@ -320,18 +351,18 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             } catch {
                 // S10：事件边界绝不吞错、绝不崩——失败 loud（同
                 // sendRendererLifecycle 风格；core 侧幂等，无需重试）。
-                print("[poc] __host.systemResume 发送失败：\(error.localizedDescription)")
+                print("[native] __host.systemResume 发送失败：\(error.localizedDescription)")
             }
         }
     }
 
     @objc private func appDidBecomeActive(_ note: Notification) {
-        print("[poc] 应用激活——发送 __host.mainWindowShown")
+        print("[native] 应用激活——发送 __host.mainWindowShown")
         Task { @MainActor in
             do {
                 _ = try await bridge.invoke(method: HostInboundMethod.mainWindowShown, payload: nil)
             } catch {
-                print("[poc] __host.mainWindowShown 发送失败：\(error.localizedDescription)")
+                print("[native] __host.mainWindowShown 发送失败：\(error.localizedDescription)")
             }
         }
     }
@@ -343,12 +374,21 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     // MARK: - 页面加载
 
-    /// 首次加载控制面（幂等：windowDidLoad 与 init 兜底都可能触发）
+    /// 首次加载控制面（幂等：windowDidLoad / init / noteSidecarReady 都可能触发）。
+    /// T-2：sidecar ready 前**绝不**发起首载——打包态冷启动时控制面还没监听，
+    /// 抢跑只会拿到「连接被拒」的 WebKit/ATS 文案并停在失败页。判定抽成纯函数
+    /// （shouldStartFirstLoad，单测直测）。
     private func startLoadingIfNeeded() {
-        guard !didStartLoading else { return }
+        guard Self.shouldStartFirstLoad(sidecarReady: sidecarReady,
+                                        didStartLoading: didStartLoading) else { return }
         didStartLoading = true
-        print("[poc] 加载控制面 \(cpURL.absoluteString)（origin=\(cpOrigin)）")
+        shellLog("[native] 加载控制面 \(cpURL.absoluteString)（origin=\(cpOrigin)）")
         webView.load(URLRequest(url: cpURL))
+    }
+
+    /// T-2 首载门（纯逻辑，单测直测）：sidecar ready 且尚未首载才放行。
+    static func shouldStartFirstLoad(sidecarReady: Bool, didStartLoading: Bool) -> Bool {
+        sidecarReady && !didStartLoading
     }
 
     // MARK: - S-42：启动窗口呈现门（绝不先亮无内容空窗）
@@ -497,7 +537,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         guard !payload.isEmpty else { return }
         lastHostFacts = merged
         let summary = payload.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " ")
-        print("[poc] hostFacts 推送 \(summary)")
+        print("[native] hostFacts 推送 \(summary)")
         let object = AnyCodable.object(payload.mapValues { .bool($0) })
         let pushed = payload
         Task { @MainActor in
@@ -509,7 +549,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                 // 事实已送达，而 sidecar 侧存活事实缺省为「未知=不可交付」，于是
                 // rendererPush 长期返回 false、通知/深链被永久 hold。
                 self.lastHostFacts = Self.hostFactsRollback(last: self.lastHostFacts, pushed: pushed)
-                print("[poc] hostFacts 推送失败（已回滚意图，等待下次事件重推）：\(error.localizedDescription)")
+                print("[native] hostFacts 推送失败（已回滚意图，等待下次事件重推）：\(error.localizedDescription)")
             }
         }
     }
@@ -549,14 +589,14 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// Swift 只做事件源，绝不复制状态机。fire-and-forget：失败 loud 不重试
     /// （下一次事件会再报；sidecar 未就绪时帧被 stdin 管道缓冲）。
     private func sendRendererLifecycle(_ event: String) {
-        print("[poc] rendererLifecycle 上报 \(event)")
+        print("[native] rendererLifecycle 上报 \(event)")
         Task { @MainActor in
             do {
                 _ = try await bridge.invoke(
                     method: HostInboundMethod.rendererLifecycle,
                     payload: .object(["event": .string(event)]))
             } catch {
-                print("[poc] rendererLifecycle 上报失败（\(event)）：\(error.localizedDescription)")
+                print("[native] rendererLifecycle 上报失败（\(event)）：\(error.localizedDescription)")
             }
         }
     }
@@ -566,7 +606,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// web → Swift invoke（经 handler 转发）：调 B 桥后把结果交回页面
     private func handleInvoke(id: Int, method: String, payload: AnyCodable?) {
         if POCDebug.isEnabled() {
-            print("[poc] invoke #\(id) \(method)")
+            print("[native] invoke #\(id) \(method)")
         }
         Task { @MainActor in
             do {
@@ -586,7 +626,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// payloadJSON)。序列化失败 → loud 打印不注入（绝不注入残缺 JS）。
     private func emitToPage(event: String, payload: AnyCodable?) {
         guard let eventJSON = Self.jsonLiteral(event) else {
-            print("[poc] 页面 emit 序列化失败：event 不可 JSON 化（丢弃）")
+            print("[native] 页面 emit 序列化失败：event 不可 JSON 化（丢弃）")
             return
         }
         let payloadJSON: String
@@ -615,7 +655,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         case .emitToPage(let channel, let payload):
             // rendererPush 解包：channel/payload 原样进页面（与 electron-edges
             // rendererPush = webContents.send(channel, payload) 同语义）。
-            print("[poc] notify rendererPush → 页面 emit \(channel)")
+            print("[native] notify rendererPush → 页面 emit \(channel)")
             if channel == Self.settingsChangedChannel {
                 // 设置变了 → 关窗决策缓存作废（S3·V9：缓存必须随设置失效）。
                 onSettingsChanged?()
@@ -626,7 +666,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         case .hostLeg(let method, let payload):
             Task { @MainActor in
                 guard let legs = bridge.edgeHostLegs else {
-                    print("[poc] notify \(method) 消费失败：edgeHostLegs 未接线（loud）")
+                    print("[native] notify \(method) 消费失败：edgeHostLegs 未接线（loud）")
                     return
                 }
                 // 与 edge 面同一执行体（respond 内部 performUI + 窗口守卫）：
@@ -636,7 +676,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                     // notify 无回执通道（sidecar fire-and-forget）——失败只能
                     // 本侧 loud（Electron 侧同步 setBadge 失败同样不回执
                     // renderer，见 SwiftEdgeHostLegs.setBadge 注释的 parity 结论）。
-                    print("[poc] notify \(method) 消费失败（loud）：\(error)")
+                    print("[native] notify \(method) 消费失败（loud）：\(error)")
                 }
             }
         case .retireNotifications(let sourceIds, let notificationIds):
@@ -647,32 +687,32 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             // 中心存量横幅。逐条 notificationIds 在 sourceIds 为空时同样生效
             // （node-edges 的 >16 淘汰路径）。
             guard let registry = bridge.edgeHostLegs?.notificationRegistry else {
-                print("[poc] notify retireNotifications 消费失败：edgeHostLegs 未接线（loud）")
+                print("[native] notify retireNotifications 消费失败：edgeHostLegs 未接线（loud）")
                 return
             }
             let identifiers = registry.retire(sourceIds: sourceIds, notificationIds: notificationIds)
             guard !identifiers.isEmpty else {
-                print("[poc] notify retireNotifications：无已投递登记（\(sourceIds.count) 个 sourceId、"
+                print("[native] notify retireNotifications：无已投递登记（\(sourceIds.count) 个 sourceId、"
                       + "\(notificationIds.count) 个 notificationId，no-op）")
                 return
             }
             guard Bundle.main.bundleIdentifier != nil else {
                 // 无 bundle（swift run dev）下 UNUserNotificationCenter.current()
                 // 会崩（bundleProxyForCurrentProcess nil）——同 AppDelegate 守卫。
-                print("[poc] notify retireNotifications：dev 无 bundle 不支持通知中心，"
+                print("[native] notify retireNotifications：dev 无 bundle 不支持通知中心，"
                       + "\(identifiers.count) 条登记未清除（loud）")
                 return
             }
             UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: identifiers)
-            print("[poc] notify retireNotifications：已请求清除 \(identifiers.count) 条已投递通知")
+            print("[native] notify retireNotifications：已请求清除 \(identifiers.count) 条已投递通知")
         case .unexpectedClick:
             // notifyClicked 的正常路径是 __host.notifyClicked 入站请求
             // （AppDelegate userNotificationCenter click 回灌），不应经 notify
             // 到达——loud 打印不处理。
-            print("[poc] notify notifyClicked 不经 notify 到达（正常 = __host.notifyClicked 请求路径）——忽略（loud）")
+            print("[native] notify notifyClicked 不经 notify 到达（正常 = __host.notifyClicked 请求路径）——忽略（loud）")
         case .malformed(let reason):
             // 未知事件/形状非法：loud 丢弃，绝不伪造成功/猜测。
-            print("[poc] notify 拒绝消费（loud）：\(reason)")
+            print("[native] notify 拒绝消费（loud）：\(reason)")
         }
     }
 
@@ -689,21 +729,23 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     }
 
     /// P-18 启动门（纯函数，单测直测）：shim 源码缺失/为空 → 返回不可启动的
-    /// 致命说明（含已查找路径与修复动作）；可用 → nil。
+    /// 致命说明（含已查找目录与修复动作）；可用 → nil。
     ///
     /// 对齐 Electron：preload 脚本加载失败会经 dialog.showErrorBox + app.exit(1)
     /// 拒绝开窗（fail-closed）；Swift 此前只 print 警告后照常开窗，用户得到
     /// 一个没有桥、全部本机能力静默缺席的页面。
+    /// T-1：本说明是**用户可见**文案——内部资源名（bridge-shim.poc.js）与 SwiftPM
+    /// bundle 名只进 native-shell.log（AppDelegate 调用点显式落盘），这里只列查找
+    /// 目录，绝不把 "poc" 露到提示框。
     static func shimStartupFailure(source: String?) -> String? {
         guard let source, !source.isEmpty else {
-            var candidates: [String] = []
+            var searched: [String] = []
             for base in ChamberResources.searchBases() {
-                candidates.append(base.appendingPathComponent(ChamberResources.bundleName)
-                    .appendingPathComponent(shimResourceName).path)
-                candidates.append(base.appendingPathComponent(shimResourceName).path)
+                let path = base.path
+                if !searched.contains(path) { searched.append(path) }
             }
-            return "缺少 A 桥 shim 资源 \(shimResourceName)：页面无法注入 dshChamber 桥，"
-                + "本机能力全部不可用。已查找：" + candidates.joined(separator: "、") + "。"
+            return "缺少 A 桥 shim 资源：页面无法注入 dshChamber 桥，本机能力全部不可用。"
+                + "已在以下目录查找：" + searched.joined(separator: "、") + "。"
                 + "请重新运行 pnpm run build:swift-app（dev 用 swift build）后重试。"
         }
         return nil
@@ -827,22 +869,22 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             // blob 子 frame 放行也绝不会吃掉 main frame 的豁免。
             if presentationGate.allowsFailurePageNavigation(),
                (url?.scheme ?? "").lowercased() == "about" {
-                print("[poc] 放行首载失败说明页（about:blank，一次性门；didCommit 消费）")
+                print("[native] 放行首载失败说明页（about:blank，一次性门；didCommit 消费）")
             } else {
-                print("[poc] 放行导航 \(url?.absoluteString ?? "")")
+                print("[native] 放行导航 \(url?.absoluteString ?? "")")
             }
             decisionHandler(.allow)
         case .download:
             // S-26：.download 不装载文档（WKDownload 负责保存）；前端 session
             // 日志导出的 anchor[download] 走这条路，页面仍发布 success。
-            shellLog("[poc] 导航转下载（不装入壳 webview）\(url?.absoluteString ?? "")")
+            shellLog("[native] 导航转下载（不装入壳 webview）\(url?.absoluteString ?? "")")
             decisionHandler(.download)
         case .openExternally:
-            print("[poc] 外链交给系统打开 \(url?.absoluteString ?? "")")
+            print("[native] 外链交给系统打开 \(url?.absoluteString ?? "")")
             if let url { openExternally(url) }
             decisionHandler(.cancel)
         case .cancel(let reason):
-            print("[poc] 拦截导航（\(reason)）\(url?.absoluteString ?? "")")
+            print("[native] 拦截导航（\(reason)）\(url?.absoluteString ?? "")")
             decisionHandler(.cancel)
         }
     }
@@ -853,7 +895,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                  decidePolicyFor navigationResponse: WKNavigationResponse,
                  decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
         if !navigationResponse.canShowMIMEType {
-            shellLog("[poc] 响应不可呈现 → 转下载 \(navigationResponse.response.url?.absoluteString ?? "")")
+            shellLog("[native] 响应不可呈现 → 转下载 \(navigationResponse.response.url?.absoluteString ?? "")")
             decisionHandler(.download)
             return
         }
@@ -864,14 +906,14 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                  navigationAction: WKNavigationAction,
                  didBecome download: WKDownload) {
         download.delegate = self
-        shellLog("[poc] 导航已转为下载（action 级）")
+        shellLog("[native] 导航已转为下载（action 级）")
     }
 
     func webView(_ webView: WKWebView,
                  navigationResponse: WKNavigationResponse,
                  didBecome download: WKDownload) {
         download.delegate = self
-        shellLog("[poc] 导航已转为下载（response 级）")
+        shellLog("[native] 导航已转为下载（response 级）")
     }
 
     // MARK: - WKDownloadDelegate（S-26；2026-12 对齐 Electron 默认下载）
@@ -900,25 +942,25 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                     || FileManager.default.fileExists(atPath: path)
             })
         guard let destination else {
-            shellLog("[poc] 下载失败：无法解析/创建下载目录（\(directory?.path ?? "<未知>")）"
+            shellLog("[native] 下载失败：无法解析/创建下载目录（\(directory?.path ?? "<未知>")）"
                 + "——取消下载（诚实失败，绝不静默换路径）")
             completionHandler(nil)
             return
         }
         reservedDownloadPaths.insert(destination.path)
         downloadDestinations[ObjectIdentifier(download)] = destination.path
-        shellLog("[poc] 下载静默落盘（建议文件名 \(suggestedFilename)）→ \(destination.path)")
+        shellLog("[native] 下载静默落盘（建议文件名 \(suggestedFilename)）→ \(destination.path)")
         completionHandler(destination)
     }
 
     func downloadDidFinish(_ download: WKDownload) {
         releaseDownloadReservation(download)
-        shellLog("[poc] 下载完成")
+        shellLog("[native] 下载完成")
     }
 
     func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
         releaseDownloadReservation(download)
-        shellLog("[poc] 下载失败：\(error.localizedDescription)")
+        shellLog("[native] 下载失败：\(error.localizedDescription)")
     }
 
     /// 释放下载预留（完成/失败共用；预留只为同一批并发下载不撞名，与真实文件
@@ -957,7 +999,11 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        shellLog("[poc] 页面加载完成 \(webView.url?.absoluteString ?? "(未知)")")
+        shellLog("[native] 页面加载完成 \(webView.url?.absoluteString ?? "(未知)")")
+        // T-2：首载/重载成功 → 重试预算归零（下一次失败从最小退避重新开始）。
+        navRetries = 0
+        navRetryWorkItem?.cancel()
+        navRetryWorkItem = nil
         // S-34：首载成功前卡死探测器不 ping/不重载（Electron loadedOnce 门）——
         // 建窗到控制面就绪之间的白屏加载不得被误判卡死。
         hangWatchdog.noteFirstLoadFinished()
@@ -983,14 +1029,14 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                       let tiff = image.tiffRepresentation,
                       let rep = NSBitmapImageRep(data: tiff),
                       let png = rep.representation(using: .png, properties: [:]) else {
-                    print("[poc] 快照失败（delay=\(delay)）")
+                    print("[native] 快照失败（delay=\(delay)）")
                     continue
                 }
                 do {
                     try png.write(to: snapshotURL)
-                    print("[poc] 快照已写 \(snapshotURL.path)（delay=\(delay)s）")
+                    print("[native] 快照已写 \(snapshotURL.path)（delay=\(delay)s）")
                 } catch {
-                    print("[poc] 快照写盘失败：\(error.localizedDescription)")
+                    print("[native] 快照写盘失败：\(error.localizedDescription)")
                 }
             }
         }
@@ -1007,7 +1053,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         presentationGate.noteNavigationFailed()
         // 注：若 http:// 字面 IP 被 ATS 拦截，可 -Xlinker -sectcreate __TEXT
         // __info_plist 注入 NSAllowsLocalNetworking，或改用 localhost（design 25 §3.2）
-        shellLog("[poc] 页面加载失败 \(error.localizedDescription)")
+        shellLog("[native] 页面加载失败 \(error.localizedDescription)")
     }
 
     /// 设置变化 push 通道（与 ipc-events.ts SETTINGS_CHANGED 同字面量）。
@@ -1024,6 +1070,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // 拒掉，之前没有任何 re-kick → 版本/平台整会话缺失。
         if ready {
             evaluateJS("window.__dshChamberRehydrateInfo && window.__dshChamberRehydrateInfo(\(nativeTokenLiteral))")
+            // T-2：ready 才允许首载（打包态冷启动竞态的根治点；重启后再次
+            // ready 也走这里，didStartLoading 去重）。
+            startLoadingIfNeeded()
         }
     }
 
@@ -1038,6 +1087,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         recoverySuppressed = true
         recoveryReloadWorkItem?.cancel()
         recoveryReloadWorkItem = nil
+        // T-2：退出在途也不再排定首载退避重试。
+        navRetryWorkItem?.cancel()
+        navRetryWorkItem = nil
         hangProbeTimer?.invalidate()
         hangProbeTimer = nil
     }
@@ -1060,14 +1112,14 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     }
 
     func reloadPage() {
-        print("[poc] 菜单重新加载")
+        print("[native] 菜单重新加载")
         webView.reload()
     }
 
     /// 「强制重新加载」（S-24 残余；Electron 默认菜单 forceReload role 对偶：
     /// reloadIgnoringCache 忽略缓存重新取源）。
     func forceReloadPage() {
-        print("[poc] 菜单强制重新加载（忽略缓存）")
+        print("[native] 菜单强制重新加载（忽略缓存）")
         _ = webView.reloadFromOrigin()
     }
 
@@ -1075,20 +1127,20 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         let zoom = Self.steppedZoom(current: webView.pageZoom, direction: 1)
         webView.pageZoom = zoom
         persistPageZoom(zoom)
-        shellLog("[poc] 菜单放大 → pageZoom=\(zoom)")
+        shellLog("[native] 菜单放大 → pageZoom=\(zoom)")
     }
 
     func zoomOut() {
         let zoom = Self.steppedZoom(current: webView.pageZoom, direction: -1)
         webView.pageZoom = zoom
         persistPageZoom(zoom)
-        shellLog("[poc] 菜单缩小 → pageZoom=\(zoom)")
+        shellLog("[native] 菜单缩小 → pageZoom=\(zoom)")
     }
 
     func resetPageZoom() {
         webView.pageZoom = 1.0
         persistPageZoom(1.0)
-        shellLog("[poc] 菜单实际大小 → pageZoom=1.0")
+        shellLog("[native] 菜单实际大小 → pageZoom=1.0")
     }
 
     /// 缩放写回（A3-3；读侧 = setupWindow 的 ZoomPersistence.load）。
@@ -1152,7 +1204,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                 self?.hangWatchdog.noteProbeSucceeded()
             }
         case .reload:
-            shellLog("[poc] 渲染器疑似卡死（连续 \(RendererHangWatchdog.maxStrikes) 次 ping 超时且用户空闲 ≥\(Int(RendererHangWatchdog.idleGrace))s）→ 有界重载")
+            shellLog("[native] 渲染器疑似卡死（连续 \(RendererHangWatchdog.maxStrikes) 次 ping 超时且用户空闲 ≥\(Int(RendererHangWatchdog.idleGrace))s）→ 有界重载")
             scheduleRecoveryReload(reason: "unresponsive")
         }
     }
@@ -1163,7 +1215,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         let now = Date().timeIntervalSince1970
         switch recoveryPolicy.decide(now: now, attempts: &recoveryAttempts) {
         case .reload(let delay, let attempt):
-            shellLog("[poc] 渲染恢复（\(reason)），\(String(format: "%.2f", delay))s 后重载（\(attempt)/\(recoveryPolicy.maxReloads)）")
+            shellLog("[native] 渲染恢复（\(reason)），\(String(format: "%.2f", delay))s 后重载（\(attempt)/\(recoveryPolicy.maxReloads)）")
             let item = DispatchWorkItem { [weak self] in
                 guard let self else { return }
                 self.recoveryReloadWorkItem = nil
@@ -1173,7 +1225,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             recoveryReloadWorkItem = item
             DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
         case .giveUp(let attempts):
-            shellLog("[poc] 渲染恢复正常化放弃（\(reason)，\(attempts) 次），本次不重载")
+            shellLog("[native] 渲染恢复正常化放弃（\(reason)，\(attempts) 次），本次不重载")
             let alert = NSAlert()
             alert.alertStyle = .critical
             alert.messageText = "dsh-chamber 前端异常"
@@ -1189,11 +1241,11 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 500ms 延迟、60s 滚动窗口内至多 3 次；超限弹 NSAlert 并停止自动恢复）。
     /// 恢复导航成功由 didFinish 推回 alive:true 并 drain。
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        shellLog("[poc] Web 内容进程终止（webViewWebContentProcessDidTerminate）")
+        shellLog("[native] Web 内容进程终止（webViewWebContentProcessDidTerminate）")
         // 退出中：不重载、不上报（Electron render-process-gone 在 quitRequested
         // 时直接 return；2026-09 三审 E19 偏离 #3）。
         guard !recoverySuppressed else {
-            shellLog("[poc] 退出中——抑制渲染恢复")
+            shellLog("[native] 退出中——抑制渲染恢复")
             return
         }
         pushHostFacts(["webViewContentAlive": false])
@@ -1213,51 +1265,74 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // didStartProvisionalNavigation 再推 true；失败间隙保持 true 会让
         // sidecar 侧的 drain 门被 hold）。
         pushHostFacts(Self.navigationFacts(for: .failed))
+        let nsError = error as NSError
+        // 取消不是失败：loadHTMLString 替换在途导航（含失败页自身导航）与主动
+        // reload 都会以 cancelled 收尾——重试或落失败页只会自扰。**也不得**撤销
+        // 失败页豁免：noteStartupFailure 的 loadHTMLString 会取消在途的 cpURL
+        // 导航，若这里清掉 pending，随后 about: 失败页会被自家围栏拦掉（S-27）。
+        if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorCancelled {
+            shellLog("[native] 导航被取消（不重试、不落失败页）：\(error.localizedDescription)")
+            return
+        }
         // S-27/S-42：失败页导航若在提交前失败，一次性豁免没有落地对象——撤销，
         // 绝不让它悬着放行后续 about: 导航（非失败页导航时为 no-op）。
         presentationGate.noteNavigationFailed()
-        // POC dev 竞态兜底：控制面起动晚于首载（sidecar 就绪需 1~2s）——
-        // 初次连不上时按退避重试；上限 25 次后放弃（loud）。
-        let nsError = error as NSError
-        if nsError.domain == NSURLErrorDomain,
-           nsError.code == NSURLErrorCannotConnectToHost || nsError.code == NSURLErrorNotConnectedToInternet {
-            guard navRetries < 25 else {
-                shellLog("[poc] 页面加载失败(初试) 重试耗尽：\(error.localizedDescription)")
-                showLoadFailurePage(in: webView, error: error, exhausted: true)
-                return
-            }
-            let retryURL = webView.url ?? cpURL
-            navRetries += 1
-            shellLog("[poc] 控制面未就绪，\(navRetries)/25 次重试 0.5s 后加载 \(retryURL.absoluteString)")
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 500_000_000)
-                webView.load(URLRequest(url: retryURL))
-            }
+        // T-3：sidecar 已 fatal 时失败页的权威原因已经在（noteStartupFailure
+        // 已呈现）——晚到的 WebKit 错误绝不覆盖它。
+        if startupFailureMessage != nil {
+            shellLog("[native] 页面加载失败（sidecar 启动失败已呈现为失败页）：\(error.localizedDescription)")
             return
         }
-        shellLog("[poc] 页面加载失败(初试) \(error.localizedDescription)")
-        showLoadFailurePage(in: webView, error: error, exhausted: false)
+        // T-2：首载只在 sidecar ready 后发起；失败后按退避重试至成功或真正
+        // 耗尽（说明页只在耗尽/不可重试时出现），不再「首次失败就停在说明页」。
+        guard Self.StartupLoadRetry.isRetryableLoadError(error) else {
+            shellLog("[native] 页面加载失败(不可重试) \(error.localizedDescription)")
+            showLoadFailurePage(in: webView, error: error, exhausted: false)
+            return
+        }
+        switch Self.StartupLoadRetry.decision(attempts: navRetries,
+                                              sidecarFailed: startupFailureMessage != nil) {
+        case .retry(let delay):
+            let retryURL = webView.url ?? cpURL
+            navRetries += 1
+            shellLog("[native] 控制面未就绪，\(navRetries)/\(Self.StartupLoadRetry.maxAttempts) 次重试 "
+                + "\(String(format: "%.1f", delay))s 后加载 \(retryURL.absoluteString)")
+            scheduleNavRetry(url: retryURL, after: delay)
+        case .giveUp:
+            shellLog("[native] 页面加载失败 重试耗尽：\(error.localizedDescription)")
+            showLoadFailurePage(in: webView, error: error, exhausted: true)
+        }
+    }
+
+    /// T-2：退避重试调度（可取消；退出 / sidecar fatal / 加载成功时取消）。
+    private func scheduleNavRetry(url: URL, after delay: TimeInterval) {
+        navRetryWorkItem?.cancel()
+        let item = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.navRetryWorkItem = nil
+            guard !self.quitting else { return }
+            self.webView.load(URLRequest(url: url))
+        }
+        navRetryWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
     }
 
     /// 首载失败的可见错误面（2026-12 双端逐函数核对 S5·U4）：Electron 失败时显示
     /// 浏览器错误页，Swift 侧此前只打印 stderr → 用户面对白屏。这里落一张最小
-    /// 说明页（原因 + 控制面地址），绝不重载、绝不自行重开会话。
+    /// 说明页（原因 + 控制面地址 + T-3 sidecar 真实原因），绝不自行重开会话。
     private func showLoadFailurePage(in webView: WKWebView, error: Error, exhausted: Bool) {
-        func escape(_ text: String) -> String {
-            text.replacingOccurrences(of: "&", with: "&amp;")
-                .replacingOccurrences(of: "<", with: "&lt;")
-                .replacingOccurrences(of: ">", with: "&gt;")
+        let hint: String
+        if startupFailureMessage != nil {
+            hint = "sidecar 启动失败，控制面未能启动。"
+        } else if exhausted {
+            hint = "已重试 \(navRetries) 次仍未连上控制面。"
+        } else {
+            hint = "控制面未能加载。"
         }
-        let hint = exhausted ? "已重试 25 次仍未连上控制面。" : "控制面未能加载。"
-        let html = """
-        <!doctype html><meta charset="utf-8"><title>dsh-chamber</title>
-        <body style="font-family:-apple-system,system-ui;padding:48px;color:#1d1d1f">
-        <h2>无法加载 dsh-chamber 界面</h2>
-        <p>\(hint)</p>
-        <p style="color:#6e6e73">\(escape(error.localizedDescription))</p>
-        <p style="color:#6e6e73">控制面地址：\(escape(cpURL.absoluteString))</p>
-        </body>
-        """
+        let html = Self.failurePageHTML(hint: hint,
+                                        detail: error.localizedDescription,
+                                        cpURL: cpURL.absoluteString,
+                                        sidecarFailure: startupFailureMessage)
         // S-27/S-42：loadHTMLString(baseURL: nil) 导航到 about:blank，会被自家
         // 围栏 cancel（说明页因此永不显示）——置一次性豁免：decidePolicyFor 只
         // 观察放行、didCommit 消费并触发呈现门（两个回调谁先到都呈现，见
@@ -1265,9 +1340,94 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         presentationGate.beginFailurePage()
         // 白屏/失败终态在落盘日志里也留一条（含控制面地址与重试耗尽标记；
         // 双击态没有 stdout 可看，这是唯一的本地考古面）。
-        shellLog("[poc] 落首载失败说明页（exhausted=\(exhausted) "
+        shellLog("[native] 落首载失败说明页（exhausted=\(exhausted) "
             + "cp=\(cpURL.absoluteString) error=\(error.localizedDescription)）")
         webView.loadHTMLString(html, baseURL: nil)
+    }
+
+    /// 失败说明页 HTML（T-1 文案锁步的纯函数）：可见面恒用 displayName，
+    /// 绝不出现 "poc"/"DSHChamberPoc"；sidecar 失败原因（T-3）附加在页面上。
+    static func failurePageHTML(hint: String, detail: String, cpURL: String,
+                                sidecarFailure: String?) -> String {
+        func escape(_ text: String) -> String {
+            text.replacingOccurrences(of: "&", with: "&amp;")
+                .replacingOccurrences(of: "<", with: "&lt;")
+                .replacingOccurrences(of: ">", with: "&gt;")
+        }
+        var html = """
+        <!doctype html><meta charset="utf-8"><title>\(displayName)</title>
+        <body style="font-family:-apple-system,system-ui;padding:48px;color:#1d1d1f">
+        <h2>无法加载 \(displayName) 界面</h2>
+        <p>\(escape(hint))</p>
+        <p style="color:#6e6e73">\(escape(detail))</p>
+        <p style="color:#6e6e73">控制面地址：\(escape(cpURL))</p>
+        """
+        if let sidecarFailure, !sidecarFailure.isEmpty, sidecarFailure != detail {
+            html += "\n<p>sidecar 启动失败：\(escape(sidecarFailure))</p>"
+        }
+        html += "\n</body>"
+        return html
+    }
+
+    /// T-3：sidecar 启动失败（supervisor fatal）→ 记录真实原因（退出码 +
+    /// stderr 摘要 + 端口占用提示），停掉首载退避重试并立即呈现失败说明页。
+    /// 应用随后仍走既有 fatal 提示框/退出链；本函数保证失败页不是 WebKit 的
+    /// ATS 文案，而是 sidecar 的诚实报错（S-27/S-42 呈现门照常生效）。
+    func noteStartupFailure(_ message: String) {
+        startupFailureMessage = message
+        navRetryWorkItem?.cancel()
+        navRetryWorkItem = nil
+        shellLog("[native] sidecar 启动失败 → 停止首载重试并显示失败页：\(message)")
+        showLoadFailurePage(in: webView,
+                            error: StartupFailurePageError(message: message),
+                            exhausted: true)
+    }
+
+    /// 失败页把 sidecar 启动失败当「error」呈现（LocalizedError 直出 message）。
+    struct StartupFailurePageError: LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
+    }
+
+    /// T-2：首载失败退避重试策略（纯逻辑单测直测）。首载只在 sidecar ready
+    /// 后发起；失败后指数退避（baseDelay 起、maxDelay 封顶）重试至多
+    /// maxAttempts 次——说明页只在真正耗尽或 sidecar 已 fatal 时出现
+    /// （sidecar fatal 由 noteStartupFailure 立即呈现真实原因，不等耗尽）。
+    struct StartupLoadRetry: Equatable {
+        /// 重试次数上限（0.5 + 1 + 2×8 = 17.5s 退避窗口后才落说明页）。
+        static let maxAttempts = 10
+        static let baseDelay: TimeInterval = 0.5
+        static let maxDelay: TimeInterval = 2.0
+
+        enum Decision: Equatable {
+            case retry(after: TimeInterval)
+            case giveUp
+        }
+
+        /// 第 attempt 次重试前的退避（1 起；2 的幂，封顶 maxDelay）。
+        static func delay(forAttempt attempt: Int) -> TimeInterval {
+            guard attempt > 0 else { return 0 }
+            let raw = baseDelay * pow(2, Double(attempt - 1))
+            return min(raw, maxDelay)
+        }
+
+        /// 决策：sidecar 已 fatal 或预算耗尽 → giveUp；否则退避重试。
+        static func decision(attempts: Int, sidecarFailed: Bool) -> Decision {
+            if sidecarFailed { return .giveUp }
+            guard attempts < maxAttempts else { return .giveUp }
+            return .retry(after: delay(forAttempt: attempts + 1))
+        }
+
+        /// 可重试的导航错误：NSURLErrorDomain 的失败都属「控制面暂时不可达」
+        /// ——连接被拒、超时、以及 WebKit 把连接被拒包装成的 ATS 文案
+        /// （NSURLErrorAppTransportSecurityRequiresSecureConnection）都是同一
+        /// 事实的不同包装；取消不是失败。非 NSURLErrorDomain → 不重试（真实
+        /// 实现错误，重试无意义）。
+        static func isRetryableLoadError(_ error: Error) -> Bool {
+            let nsError = error as NSError
+            guard nsError.domain == NSURLErrorDomain else { return false }
+            return nsError.code != NSURLErrorCancelled
+        }
     }
 
     // MARK: - WKUIDelegate：禁新窗口
@@ -1283,10 +1443,10 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         if navigationAction.targetFrame == nil,
            let url = navigationAction.request.url,
            TrustGuard.isExternalLink(url.absoluteString, expectedOrigin: cpOrigin) {
-            print("[poc] 新窗外链交系统打开 \(url.absoluteString)")
+            print("[native] 新窗外链交系统打开 \(url.absoluteString)")
             openExternally(url)
         } else {
-            print("[poc] 拒绝新建窗口请求")
+            print("[native] 拒绝新建窗口请求")
         }
         return nil
     }
@@ -1304,7 +1464,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             allowsMultipleSelection: parameters.allowsMultipleSelection,
             allowsDirectories: parameters.allowsDirectories,
             allowedContentTypes: Self.allowedContentTypes(of: parameters))
-        print("[poc] 文件选择面板：多选=\(request.allowsMultipleSelection) "
+        print("[native] 文件选择面板：多选=\(request.allowsMultipleSelection) "
             + "目录=\(request.allowsDirectories) 类型数=\(request.allowedContentTypes.count)")
         FileOpenPanel.present(request, presenter: fileOpenPanelPresenter) { urls in
             completionHandler(urls)
@@ -1320,7 +1480,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                  initiatedByFrame frame: WKFrameInfo,
                  type: WKMediaCaptureType,
                  decisionHandler: @escaping (WKPermissionDecision) -> Void) {
-        print("[poc] 拒绝媒体采集权限请求（origin=\(origin.host) type=\(type.rawValue)）")
+        print("[native] 拒绝媒体采集权限请求（origin=\(origin.host) type=\(type.rawValue)）")
         decisionHandler(.deny)
     }
 
@@ -1338,7 +1498,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // 30s 冷却并 loud（与 shell-core 同参数）。
         switch externalBudget.decide(now: Date().timeIntervalSince1970) {
         case .blocked(let remaining):
-            print("[poc] 外链打开被预算限制（冷却 \(Int(remaining))s）：\(url.absoluteString)")
+            print("[native] 外链打开被预算限制（冷却 \(Int(remaining))s）：\(url.absoluteString)")
             return
         case .allow:
             break
@@ -1349,11 +1509,11 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         if #available(macOS 14.0, *) {
             NSWorkspace.shared.open(url, configuration: NSWorkspace.OpenConfiguration()) { _, error in
                 if let error {
-                    print("[poc] 外链打开失败 \(url.absoluteString)：\(error.localizedDescription)")
+                    print("[native] 外链打开失败 \(url.absoluteString)：\(error.localizedDescription)")
                 }
             }
         } else if !NSWorkspace.shared.open(url) {
-            print("[poc] 外链打开失败 \(url.absoluteString)：NSWorkspace.open 返回 false")
+            print("[native] 外链打开失败 \(url.absoluteString)：NSWorkspace.open 返回 false")
         }
     }
 }
@@ -1469,9 +1629,9 @@ final class POCConsoleCatcher: NSObject, WKScriptMessageHandler {
         if let body = message.body as? [String: Any],
            let kind = body["kind"] as? String,
            let text = body["text"] as? String {
-            print("[poc-web] \(kind): \(text)")
+            print("[native-web] \(kind): \(text)")
         } else {
-            print("[poc-web] raw: \(message.body)")
+            print("[native-web] raw: \(message.body)")
         }
     }
 }

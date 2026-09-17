@@ -168,7 +168,7 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
     func start(info: [String: Any] = Bundle.main.infoDictionary ?? [:],
                startUpdater: Bool = true) -> Bool {
         guard let configuration = Self.configuration(from: info) else {
-            shellLog("[poc] Sparkle 更新不可用：Info.plist 缺 SUFeedURL/SUPublicEDKey"
+            shellLog("[native] Sparkle 更新不可用：Info.plist 缺 SUFeedURL/SUPublicEDKey"
                 + "（dev 或未配置密钥的装配）——「检查更新…」保持禁用")
             return false
         }
@@ -176,7 +176,7 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
         // 原因（能力面携带），页面 check 拿 error 而不是停在 checking。
         if let error = Self.configurationError(for: configuration) {
             availabilityError = error
-            shellLog("[poc] Sparkle 更新不可用：配置错误——\(error)")
+            shellLog("[native] Sparkle 更新不可用：配置错误——\(error)")
             return false
         }
         let controller = SPUStandardUpdaterController(startingUpdater: false,
@@ -195,14 +195,14 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
                 try controller.updater.start()
             } catch {
                 availabilityError = error.localizedDescription
-                shellLog("[poc] Sparkle 启动失败（绝不谎报可用）：\(error.localizedDescription)")
+                shellLog("[native] Sparkle 启动失败（绝不谎报可用）：\(error.localizedDescription)")
                 return false
             }
         }
         self.controller = controller
         self.configuration = configuration
         availabilityError = nil
-        shellLog("[poc] Sparkle 更新已装配（feed=\(configuration.feedURL)，"
+        shellLog("[native] Sparkle 更新已装配（feed=\(configuration.feedURL)，"
             + "自动检查=\(configuration.automaticChecks)）")
         if Self.shouldForceLaunchBackgroundCheck(configuration: configuration, startUpdater: startUpdater) {
             // S-37：每启动一次的后台检查（不弹窗）。放在下一个 runloop 周期，让
@@ -220,7 +220,7 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
     /// 返回真实回执（S-38/S-39）——拒绝带原因；AppKit action 面只记录日志。
     @objc func checkForUpdates(_ sender: Any?) {
         if case .refused(let reason) = perform(.check) {
-            shellLog("[poc] 检查更新被拒绝：\(reason)")
+            shellLog("[native] 检查更新被拒绝：\(reason)")
         }
     }
 
@@ -242,7 +242,7 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
             return .refused(reason: "native-updater-busy")
         }
         if kind == .check { note(.checkStarted) }
-        shellLog("[poc] 原生更新动作：\(kind.rawValue)（交给 Sparkle 标准窗口）")
+        shellLog("[native] 原生更新动作：\(kind.rawValue)（交给 Sparkle 标准窗口）")
         controller.checkForUpdates(nil)
         return .accepted
     }
@@ -265,7 +265,7 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
         guard let report = phaseProjector.apply(event) else { return }
         let version = report.version ?? "nil"
         let error = report.error ?? "nil"
-        shellLog("[poc] nativeUpdatePhase \(report.phase.rawValue) version=\(version) error=\(error)")
+        shellLog("[native] nativeUpdatePhase \(report.phase.rawValue) version=\(version) error=\(error)")
         onPhase?(report)
     }
 
@@ -297,9 +297,9 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
         switch presentation {
         case .standardWindow:
             // didFindValidUpdate 已把 available 投到页面；标准窗路径不追加阶段。
-            shellLog("[poc] Sparkle 标准更新窗口：update=\(version) userInitiated=\(userInitiated)")
+            shellLog("[native] Sparkle 标准更新窗口：update=\(version) userInitiated=\(userInitiated)")
         case .pageProjection:
-            shellLog("[poc] scheduled 更新由原生壳展示（不弹 Sparkle 窗）："
+            shellLog("[native] scheduled 更新由原生壳展示（不弹 Sparkle 窗）："
                 + "update=\(version) → nativeUpdatePhase")
             note(.validUpdate(version: version))
         }
@@ -310,7 +310,7 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
     func standardUserDriverShouldHandleShowingScheduledUpdate(_ update: SUAppcastItem,
                                                               andInImmediateFocus immediateFocus: Bool) -> Bool {
         let handle = Self.shouldHandleShowingScheduledUpdate(immediateFocus: immediateFocus)
-        shellLog("[poc] Sparkle 询问 scheduled 更新展示权（immediateFocus=\(immediateFocus)）"
+        shellLog("[native] Sparkle 询问 scheduled 更新展示权（immediateFocus=\(immediateFocus)）"
             + " → \(handle ? "标准窗" : "原生壳接管（页面投影）")")
         return handle
     }
@@ -360,7 +360,7 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
     /// Sparkle 替换 bundle 前先停受管进程（安装路径不保证先走我们的退出链）。
     func updater(_ updater: SPUUpdater, willInstallUpdate item: SUAppcastItem) {
         note(.installWillStart(version: item.displayVersionString))
-        shellLog("[poc] Sparkle 即将安装 \(item.displayVersionString)："
+        shellLog("[native] Sparkle 即将安装 \(item.displayVersionString)："
             + "先停受管 sidecar / 收 keep-awake 与角标")
         onWillInstall?()
     }

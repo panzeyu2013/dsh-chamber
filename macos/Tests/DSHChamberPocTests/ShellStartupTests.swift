@@ -634,14 +634,19 @@ final class ShellStartupTests: XCTestCase {
 
     // MARK: - P-18：shim 资源缺失 = fail-closed 决策
 
-    /// 缺失/空 → 返回可见且可操作的致命说明（含资源名、已查找路径与修复动作）；
+    /// 缺失/空 → 返回可见且可操作的致命说明（含已查找目录与修复动作）；
     /// 有源码 → nil（可继续）。AppDelegate 据此对齐 Electron 的
     /// showErrorBox + app.exit(1)，绝不带着无桥页面开窗。
+    /// T-1：内部资源名（bridge-shim.poc.js）不得露进用户可见文案——它只进
+    /// native-shell.log（AppDelegate 调用点显式落盘）。
     func testShimStartupFailsClosedWhenResourceMissing() {
         XCTAssertNil(MainWindowController.shimStartupFailure(source: "// shim"))
         let missing = MainWindowController.shimStartupFailure(source: nil)
         XCTAssertNotNil(missing)
-        XCTAssertTrue(missing?.contains(MainWindowController.shimResourceName) ?? false)
+        XCTAssertFalse((missing ?? "").lowercased().contains("poc"),
+                       "T-1：用户可见启动错误不得出现 poc/内部资源名")
+        XCTAssertFalse(missing?.contains(MainWindowController.shimResourceName) ?? true,
+                       "内部资源名只进日志，不进提示框")
         XCTAssertTrue(missing?.contains("build:swift-app") ?? false,
                       "说明必须含可操作修复动作")
         XCTAssertNotNil(MainWindowController.shimStartupFailure(source: ""),
