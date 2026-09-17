@@ -54,8 +54,19 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 只暴露其脚本内实现的方法，未暴露方法在页面层即 stub——两处均以
     /// manifest 为准的演进是 M3 全量 shim（chamber-bridge.stub.js）的活。
     private static let invokeWhitelist: Set<String> = BridgeManifest.invokeChannels
-    /// 窗口默认内容尺寸
-    private static let windowSize = NSSize(width: 1280, height: 800)
+    /// 窗口默认内容尺寸。
+    /// 双 flavor 几何折中（2026-09）：这里的尺寸是**内容区**尺寸
+    /// （NSWindow(contentRect:) + contentView = webView），而 Electron 侧
+    /// BrowserWindow 的 1280x800 是**窗口外框**（main.ts 未设 useContentSize；
+    /// Electron 43 只在 use_content_size 为真时才 SetContentSize），其 web 视口
+    /// 实为 1280x772——差的 ~28pt 是 macOS 标准标题栏。同一份前端因此在两端
+    /// 视口高度差 ~3.6%（侧栏会话列表 / 工作区列的可见高度同步差一档）。
+    /// 786 = (800 + 772) / 2：原生视口 1280x786（外框 ~814）对 Electron 的
+    /// 772（外框 800）两侧各偏 ~14pt，先收窄差异而不是单侧对齐；单侧对齐
+    /// （原生取 772，或 Electron 开 useContentSize 后两端都取 800）仍未裁决。
+    /// 本值只影响**高度**；内容列宽等宽度偏好是 per-flavor 页面存储
+    /// （deviation T-18），不随本值收敛。
+    private static let windowSize = NSSize(width: 1280, height: 786)
 
     /// 原生壳**可见**产品名（T-1：暂时把 native 标记为 dsh-chamber-native）：
     /// 窗口标题 / 失败说明页 / fatal 提示框共用。不可见名（SwiftPM target、
