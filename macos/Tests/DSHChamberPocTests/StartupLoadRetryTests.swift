@@ -76,16 +76,74 @@ final class StartupLoadRetryTests: XCTestCase {
                        "非 NSURLErrorDomain 不重试")
     }
 
-    func testSourceWiringKeepsReadyGateAndBackoffRetry() throws {
+    // MARK: - S-45：首载 HTTP 就绪探测（探测先行）
+
+    func testProbePrecedesFirstNavigation() {
+        typealias Plan = MainWindowController.StartupLoadPlan
+        XCTAssertEqual(Plan.firstStep(sidecarReady: false, didStartLoading: false), .waitForSidecar,
+                       "sidecar ready 前不探测也不导航")
+        XCTAssertEqual(Plan.firstStep(sidecarReady: true, didStartLoading: false), .probe,
+                       "S-45：ready 后的第一步必须是探测（探测先行，绝不直接导航）")
+        XCTAssertEqual(Plan.firstStep(sidecarReady: true, didStartLoading: true), .alreadyStarted,
+                       "首载只开工一次")
+        XCTAssertEqual(Plan.outcome(afterProbeReachable: true, attempts: 0, sidecarFailed: false),
+                       .navigate, "2xx 才导航")
+        XCTAssertEqual(Plan.outcome(afterProbeReachable: false, attempts: 0, sidecarFailed: false),
+                       .retry(after: MainWindowController.StartupLoadRetry.delay(forAttempt: 1)),
+                       "探测失败走 T-2 同一退避预算")
+        XCTAssertEqual(Plan.outcome(afterProbeReachable: false,
+                                    attempts: MainWindowController.StartupLoadRetry.maxAttempts,
+                                    sidecarFailed: false),
+                       .giveUp, "预算耗尽才落失败页")
+        XCTAssertEqual(Plan.outcome(afterProbeReachable: false, attempts: 0, sidecarFailed: true),
+                       .giveUp, "sidecar fatal 立即放弃")
+    }
+
+    func testHealthProbeDerivesOriginHealthURLAndAcceptsOnly2xx() {
+        XCTAssertEqual(MainWindowController.healthProbeURL(cpURL: URL(string: "http://localhost:17599/")!),
+                       URL(string: "http://localhost:17599/health"),
+                       "S-45：打包态探测 http://localhost:<port>/health")
+        XCTAssertEqual(MainWindowController.healthProbeURL(
+            cpURL: URL(string: "http://127.0.0.1:17500/index.html?x=1")!),
+                       URL(string: "http://127.0.0.1:17500/health"),
+                       "探测恒取 origin 根（与壳文档判定同源语义）")
+        XCTAssertTrue(MainWindowController.isHealthyResponse(statusCode: 200))
+        XCTAssertTrue(MainWindowController.isHealthyResponse(statusCode: 204))
+        XCTAssertTrue(MainWindowController.isHealthyResponse(statusCode: 299))
+        XCTAssertFalse(MainWindowController.isHealthyResponse(statusCode: 199))
+        XCTAssertFalse(MainWindowController.isHealthyResponse(statusCode: 301))
+        XCTAssertFalse(MainWindowController.isHealthyResponse(statusCode: 503))
+    }
+
+    func testHealthProbeFailureDetailKeepsDiagnosableReason() {
+        let ats = NSError(domain: NSURLErrorDomain,
+                          code: NSURLErrorAppTransportSecurityRequiresSecureConnection,
+                          userInfo: [NSLocalizedDescriptionKey: "ATS blocked"])
+        let detail = MainWindowController.healthProbeFailureDetail(statusCode: nil, error: ats)
+        XCTAssertTrue(detail.contains("NSURLError -1022"),
+                      "ATS 拒绝码必须进落盘日志可考古：\(detail)")
+        XCTAssertEqual(MainWindowController.healthProbeFailureDetail(statusCode: 503, error: nil),
+                       "HTTP 503（期望 2xx）")
+    }
+
+    func testSourceWiringKeepsReadyGateProbeFirstAndBackoffRetry() throws {
         let source = try controllerSource()
-        XCTAssertTrue(source.contains("guard Self.shouldStartFirstLoad(sidecarReady: sidecarReady"),
-                      "首载入口必须过 ready 门")
-        XCTAssertTrue(source.contains("startLoadingIfNeeded()"),
-                      "ready 回调必须踢首载")
-        XCTAssertTrue(source.contains("Self.StartupLoadRetry.decision(attempts: navRetries"),
-                      "失败路径必须走退避决策")
+        let gate = try XCTUnwrap(
+            source.range(of: "guard Self.shouldStartFirstLoad(sidecarReady: sidecarReady"),
+            "首载入口必须过 ready 门")
+        let probe = try XCTUnwrap(source.range(of: "beginHealthProbe()"),
+                                  "S-45：首载入口必须接就绪探测")
+        let navigate = try XCTUnwrap(source.range(of: "webView.load(URLRequest(url: cpURL))"),
+                                     "首载导航入口必须存在")
+        XCTAssertLessThan(gate.lowerBound, probe.lowerBound, "ready 门先于探测")
+        XCTAssertLessThan(probe.lowerBound, navigate.lowerBound,
+                          "S-45：就绪探测必须先于首载导航（探测先行）")
+        XCTAssertTrue(source.contains("Self.StartupLoadPlan.outcome(afterProbeReachable:"),
+                      "探测失败必须走退避决策")
+        XCTAssertTrue(source.contains("scheduleNavRetry(probe: true, url: probeURL, after: delay)"),
+                      "探测重试必须可取消地排定")
         XCTAssertTrue(source.contains("scheduleNavRetry(url: retryURL, after: delay)"),
-                      "重试必须可取消地排定")
+                      "导航失败仍保留退避重试")
         XCTAssertTrue(source.contains("noteStartupFailure"),
                       "sidecar fatal 必须停重试并立即显示真实原因")
     }

@@ -426,7 +426,15 @@ test('⑤ 真实组装：可执行位 / 资源包 / Info.plist 版本 / 图标',
       'Info.plist 必须引用平移到 Resources/icon.icns 的图标')
     assert.ok(plist.includes('<key>NSAppTransportSecurity</key>'), 'ATS 字典必须存在')
     assert.match(plist, /<key>NSAllowsLocalNetworking<\/key>\s*<true\/>/,
-      'http://127.0.0.1 控制面需要 ATS local networking 放行')
+      'http://localhost 控制面需要 ATS local networking 放行')
+    // S-45（2026-12 实机修正）：放行的关键是**正确键名**
+    // NSExceptionAllowsInsecureHTTPLoads（旧 NSTemporary... 实测不生效）；
+    // localhost 是打包态导航 origin 的例外域，旧键名不得再出现在产物 plist 里。
+    assert.match(plist,
+      /<key>localhost<\/key>\s*<dict>\s*<key>NSIncludesSubdomains<\/key>\s*<false\/>\s*<key>NSExceptionAllowsInsecureHTTPLoads<\/key>\s*<true\/>/,
+      'S-45：localhost 例外必须用 NSExceptionAllowsInsecureHTTPLoads 放行本机 HTTP')
+    assert.ok(!plist.includes('<key>NSTemporaryExceptionAllowsInsecureHTTPLoads</key>'),
+      'S-45：旧键名不得再出现在产物 plist')
     const lint = spawnSync('plutil', ['-lint', layout.infoPlist], { encoding: 'utf8' })
     assert.equal(lint.status, 0, lint.stdout + lint.stderr)
   } finally {

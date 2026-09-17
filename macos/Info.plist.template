@@ -69,12 +69,15 @@
     <string>Copyright © 2026 dsh-chamber</string>
     <key>NSHighResolutionCapable</key>
     <true/>
-    <!-- 壳的 WKWebView 直连本机控制面 http://127.0.0.1:<port>（design 25 §3）：
-         ATS 对 HTTP 缺省拒绝，必须显式放行 local networking。S-45：Apple 自
-         macOS 14 起默认拒绝**字面量 IP** 连接，NSAllowsLocalNetworking 对
-         127.0.0.1 的覆盖不可静态判定——因此与 Electron
-         （packages/desktop/package.json build.mac.extendInfo）逐键对齐，补上
-         127.0.0.1 / localhost 两个例外域；缺它时首载会落到失败说明页（S-27）。 -->
+    <!-- 壳的 WKWebView 直连本机控制面（design 25 §3）：打包态 origin 是
+         http://localhost:<port>（AppDelegate.controlPlaneHost）。ATS 对 HTTP
+         缺省拒绝，必须显式放行。S-45（2026-12 实机修正）：放行的关键是**正确
+         键名** NSExceptionAllowsInsecureHTTPLoads——旧键 NSTemporaryException...
+         在 macOS 26 实测不生效（127.0.0.1 + 旧键 → WebKit 报 ATS
+         NSURLError -1022；仅把键名改正确即加载成功）。两个例外域
+         （localhost + 127.0.0.1）都写、都用正确键名；打包态导航 origin 用
+         localhost（ATS 文档的例外形态是 DNS 域名，走域名匹配路径，不赌 IP
+         字面量键在其它系统版本的采纳）。缺例外时首载会落到失败说明页（S-27）。 -->
     <key>NSAppTransportSecurity</key>
     <dict>
         <key>NSAllowsArbitraryLoads</key>
@@ -83,18 +86,18 @@
         <true/>
         <key>NSExceptionDomains</key>
         <dict>
-            <key>127.0.0.1</key>
-            <dict>
-                <key>NSIncludesSubdomains</key>
-                <false/>
-                <key>NSTemporaryExceptionAllowsInsecureHTTPLoads</key>
-                <true/>
-            </dict>
             <key>localhost</key>
             <dict>
                 <key>NSIncludesSubdomains</key>
                 <false/>
-                <key>NSTemporaryExceptionAllowsInsecureHTTPLoads</key>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key>
+                <true/>
+            </dict>
+            <key>127.0.0.1</key>
+            <dict>
+                <key>NSIncludesSubdomains</key>
+                <false/>
+                <key>NSExceptionAllowsInsecureHTTPLoads</key>
                 <true/>
             </dict>
         </dict>

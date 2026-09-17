@@ -149,7 +149,8 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     // MARK: - 初始化
 
     /// - Parameters:
-    ///   - cpURL: 控制面 URL（AppDelegate 解析自 POC_CP_URL，缺省 127.0.0.1:17520）
+    ///   - cpURL: 控制面 URL（AppDelegate 解析自 POC_CP_URL；缺省 dev
+    ///     127.0.0.1:17520 / 打包 localhost:17500，S-45）
     ///   - bridge: B 桥客户端（BridgeClient.swift，W-04 契约）
     ///   - shimSource: A 桥 shim 源码（P-18：调用方先经
     ///     `shimStartupFailure(source:)` fail-closed 判定，缺失绝不开窗）
@@ -378,17 +379,155 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// T-2：sidecar ready 前**绝不**发起首载——打包态冷启动时控制面还没监听，
     /// 抢跑只会拿到「连接被拒」的 WebKit/ATS 文案并停在失败页。判定抽成纯函数
     /// （shouldStartFirstLoad，单测直测）。
+    /// S-45：ready 帧只是 sidecar 协议就绪；首载前还必须先过一次 HTTP 就绪探测
+    /// （GET /health 期望 2xx）——探测先行、导航在后（StartupLoadPlan 不变量）。
     private func startLoadingIfNeeded() {
         guard Self.shouldStartFirstLoad(sidecarReady: sidecarReady,
                                         didStartLoading: didStartLoading) else { return }
         didStartLoading = true
-        shellLog("[native] 加载控制面 \(cpURL.absoluteString)（origin=\(cpOrigin)）")
-        webView.load(URLRequest(url: cpURL))
+        beginHealthProbe()
     }
 
     /// T-2 首载门（纯逻辑，单测直测）：sidecar ready 且尚未首载才放行。
     static func shouldStartFirstLoad(sidecarReady: Bool, didStartLoading: Bool) -> Bool {
-        sidecarReady && !didStartLoading
+        StartupLoadPlan.firstStep(sidecarReady: sidecarReady,
+                                  didStartLoading: didStartLoading) == .probe
+    }
+
+    // MARK: - 首载 HTTP 就绪探测（S-45：探测先行）
+
+    /// 就绪探测路径（控制面 /health；与 sidecar/control-plane 同一路由）。
+    static let healthProbePath = "/health"
+    /// 探测超时（秒）：loopback 的 /health 是毫秒级；2s 足够区分「尚未监听」
+    /// 与「已监听但不应答」，且单次卡顿只占退避预算的一个节拍。
+    static let healthProbeTimeout: TimeInterval = 2.0
+    /// 在途探测（退出 / sidecar fatal 时取消）。
+    private var healthProbeTask: URLSessionDataTask?
+
+    /// 首载编排（纯逻辑，单测直测——不变量：**探测先行**，导航永不先于探测）。
+    struct StartupLoadPlan: Equatable {
+        /// 首载入口的第一步。
+        enum Step: Equatable {
+            /// sidecar 未 ready：等待（绝不导航）。
+            case waitForSidecar
+            /// 首载已开工（幂等去重）。
+            case alreadyStarted
+            /// ready 且未开工 → 必须先探测。
+            case probe
+        }
+
+        /// 探测结果后的动作（复用 T-2 退避预算）。
+        enum ProbeOutcome: Equatable {
+            case navigate
+            case retry(after: TimeInterval)
+            case giveUp
+        }
+
+        static func firstStep(sidecarReady: Bool, didStartLoading: Bool) -> Step {
+            if didStartLoading { return .alreadyStarted }
+            return sidecarReady ? .probe : .waitForSidecar
+        }
+
+        /// 2xx → navigate；否则按 T-2 退避重试/耗尽（sidecar fatal 立即 giveUp）。
+        static func outcome(afterProbeReachable reachable: Bool, attempts: Int,
+                            sidecarFailed: Bool) -> ProbeOutcome {
+            if reachable { return .navigate }
+            switch StartupLoadRetry.decision(attempts: attempts, sidecarFailed: sidecarFailed) {
+            case .retry(let delay): return .retry(after: delay)
+            case .giveUp: return .giveUp
+            }
+        }
+    }
+
+    /// 探测 URL（纯逻辑，单测直测）：控制面 origin 的根路径 + /health。
+    static func healthProbeURL(cpURL: URL) -> URL? {
+        guard let origin = origin(of: cpURL) else { return nil }
+        return URL(string: origin + healthProbePath)
+    }
+
+    /// 就绪判据（纯逻辑，单测直测）：HTTP 2xx 才算控制面可达。
+    static func isHealthyResponse(statusCode: Int) -> Bool {
+        (200..<300).contains(statusCode)
+    }
+
+    /// 探测失败的可诊断原因（纯逻辑，单测直测）：NSURLError 带域与码——ATS
+    /// 拒绝（NSURLErrorAppTransportSecurityRequiresSecureConnection，-1022）
+    /// 等网络层事实进落盘日志，不再只剩「未就绪」三个字。
+    static func healthProbeFailureDetail(statusCode: Int?, error: Error?) -> String {
+        if let error {
+            let nsError = error as NSError
+            if nsError.domain == NSURLErrorDomain {
+                return "NSURLError \(nsError.code)：\(error.localizedDescription)"
+            }
+            return error.localizedDescription
+        }
+        if let statusCode { return "HTTP \(statusCode)（期望 2xx）" }
+        return "无响应"
+    }
+
+    /// 首载第一步：探测（绝不直接导航）。
+    private func beginHealthProbe() {
+        guard let probeURL = Self.healthProbeURL(cpURL: cpURL) else {
+            handleHealthProbeFailure(statusCode: nil, error: nil, probeURL: cpURL)
+            return
+        }
+        shellLog("[native] 控制面就绪探测先行：GET \(probeURL.absoluteString)")
+        var request = URLRequest(url: probeURL)
+        request.httpMethod = "GET"
+        request.timeoutInterval = Self.healthProbeTimeout
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        let task = URLSession.shared.dataTask(with: request) { [weak self] _, response, error in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.healthProbeTask = nil
+                let statusCode = (response as? HTTPURLResponse)?.statusCode
+                if let statusCode, Self.isHealthyResponse(statusCode: statusCode) {
+                    self.loadControlPlaneAfterProbe()
+                } else {
+                    self.handleHealthProbeFailure(statusCode: statusCode, error: error,
+                                                  probeURL: probeURL)
+                }
+            }
+        }
+        healthProbeTask = task
+        task.resume()
+    }
+
+    /// 探测 2xx 后的首载导航（唯一首载导航入口）。
+    private func loadControlPlaneAfterProbe() {
+        shellLog("[native] 控制面就绪（GET \(Self.healthProbePath) 2xx），加载控制面 "
+            + "\(cpURL.absoluteString)（origin=\(cpOrigin)）")
+        webView.load(URLRequest(url: cpURL))
+    }
+
+    /// 探测失败 = 「控制面未就绪」的同义事实：走 T-2 同一退避预算；预算耗尽才
+    /// 落失败说明页（原因是探测的真实错误，不是 WebKit 的错误包装）。
+    private func handleHealthProbeFailure(statusCode: Int?, error: Error?, probeURL: URL) {
+        // T-3：sidecar 已 fatal 时权威原因已呈现，晚到的探测失败不再覆盖。
+        if startupFailureMessage != nil { return }
+        let detail = Self.healthProbeFailureDetail(statusCode: statusCode, error: error)
+        switch Self.StartupLoadPlan.outcome(afterProbeReachable: false, attempts: navRetries,
+                                            sidecarFailed: false) {
+        case .navigate:
+            return
+        case .retry(let delay):
+            navRetries += 1
+            shellLog("[native] 控制面未就绪（就绪探测失败 \(detail)），"
+                + "\(navRetries)/\(Self.StartupLoadRetry.maxAttempts) 次重试 "
+                + "\(String(format: "%.1f", delay))s 后探测 \(probeURL.absoluteString)")
+            scheduleNavRetry(probe: true, url: probeURL, after: delay)
+        case .giveUp:
+            shellLog("[native] 控制面就绪探测耗尽（\(detail)）：\(probeURL.absoluteString)")
+            showLoadFailurePage(in: webView,
+                                error: HealthProbeFailureError(detail: detail),
+                                exhausted: true)
+        }
+    }
+
+    /// 就绪探测失败的失败页错误（LocalizedError 直出可诊断原因）。
+    struct HealthProbeFailureError: LocalizedError {
+        let detail: String
+        var errorDescription: String? { "控制面就绪探测失败：\(detail)" }
     }
 
     // MARK: - S-42：启动窗口呈现门（绝不先亮无内容空窗）
@@ -1051,8 +1190,10 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // S-27/S-42：失败页导航若没有走到提交就失败，一次性豁免没有落地对象——
         // 撤销，绝不让它悬着放行后续 about: 导航（非失败页导航时为 no-op）。
         presentationGate.noteNavigationFailed()
-        // 注：若 http:// 字面 IP 被 ATS 拦截，可 -Xlinker -sectcreate __TEXT
-        // __info_plist 注入 NSAllowsLocalNetworking，或改用 localhost（design 25 §3.2）
+        // S-45：打包态控制面 origin 已是 localhost、ATS 例外用正确键名
+        // NSExceptionAllowsInsecureHTTPLoads（旧 NSTemporary... 实测不生效）；
+        // 此处保留退避重试——探测已 2xx 而导航仍失败属 WebKit 层事实，错误
+        // 原文照旧落盘。
         shellLog("[native] 页面加载失败 \(error.localizedDescription)")
     }
 
@@ -1087,9 +1228,11 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         recoverySuppressed = true
         recoveryReloadWorkItem?.cancel()
         recoveryReloadWorkItem = nil
-        // T-2：退出在途也不再排定首载退避重试。
+        // T-2：退出在途也不再排定首载退避重试（在途就绪探测同样取消）。
         navRetryWorkItem?.cancel()
         navRetryWorkItem = nil
+        healthProbeTask?.cancel()
+        healthProbeTask = nil
         hangProbeTimer?.invalidate()
         hangProbeTimer = nil
     }
@@ -1305,13 +1448,18 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     }
 
     /// T-2：退避重试调度（可取消；退出 / sidecar fatal / 加载成功时取消）。
-    private func scheduleNavRetry(url: URL, after delay: TimeInterval) {
+    /// S-45：probe=true 时重试的是首载前的 /health 探测（而不是导航）。
+    private func scheduleNavRetry(probe: Bool = false, url: URL, after delay: TimeInterval) {
         navRetryWorkItem?.cancel()
         let item = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.navRetryWorkItem = nil
             guard !self.quitting else { return }
-            self.webView.load(URLRequest(url: url))
+            if probe {
+                self.beginHealthProbe()
+            } else {
+                self.webView.load(URLRequest(url: url))
+            }
         }
         navRetryWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
@@ -1377,6 +1525,8 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         startupFailureMessage = message
         navRetryWorkItem?.cancel()
         navRetryWorkItem = nil
+        healthProbeTask?.cancel()
+        healthProbeTask = nil
         shellLog("[native] sidecar 启动失败 → 停止首载重试并显示失败页：\(message)")
         showLoadFailurePage(in: webView,
                             error: StartupFailurePageError(message: message),

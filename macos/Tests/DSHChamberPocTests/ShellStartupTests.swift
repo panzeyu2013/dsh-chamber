@@ -1022,17 +1022,66 @@ final class ShellStartupTests: XCTestCase {
                        "D14：共存决策已 accepted（S-04），注释不得再写未决")
         XCTAssertTrue(compact.contains("deviations S-04"),
                       "D14：模板注释应指向 accepted 的登记（S-04）")
-        // S-45：ATS 必须与 Electron build.mac.extendInfo 逐键对齐——macOS 14 起
-        // 字面量 IP 默认被拒，缺例外域会首载白屏（落到 S-27 失败页）。
+        // S-45（2026-12 实机修正）：ATS 例外必须用正确键名
+        // NSExceptionAllowsInsecureHTTPLoads（旧 NSTemporary... 实测不生效），
+        // 且打包态导航 origin http://localhost:<port> 的例外挂在 localhost 下。
         XCTAssertTrue(compact.contains("<key>NSAppTransportSecurity</key>"),
                       "S-45：ATS 段必须存在")
         XCTAssertTrue(compact.contains("<key>NSAllowsLocalNetworking</key> <true/>"),
                       "S-45：local networking 放行必须保留")
         XCTAssertTrue(compact.contains("<key>NSExceptionDomains</key>"),
-                      "S-45：字面量 IP/回环域名例外域必须存在")
+                      "S-45：回环域名例外域必须存在")
         XCTAssertTrue(compact.contains("<key>127.0.0.1</key>") && compact.contains("<key>localhost</key>"),
-                      "S-45：127.0.0.1 与 localhost 两个例外域缺一不可")
-        XCTAssertTrue(compact.contains("<key>NSTemporaryExceptionAllowsInsecureHTTPLoads</key>"),
-                      "S-45：例外域必须允许本机 HTTP（控制面是 http://127.0.0.1:<port>）")
+                      "S-45：localhost 是放行依据；127.0.0.1 键保留（不依赖）")
+        XCTAssertTrue(compact.contains("<key>NSExceptionAllowsInsecureHTTPLoads</key>"),
+                      "S-45：例外域必须用正确键名允许本机 HTTP")
+        XCTAssertFalse(compact.contains("<key>NSTemporaryExceptionAllowsInsecureHTTPLoads</key>"),
+                       "S-45：旧键名退役，不再作为放行依据")
+    }
+
+    /// S-45（2026-12 实机修正，结构断言）：放行的关键是**正确键名**——
+    /// `localhost` 下的 NSExceptionAllowsInsecureHTTPLoads 是打包态
+    /// http://localhost:<port> 导航的放行依据（旧键 NSTemporary... 实测不生效），
+    /// 127.0.0.1 例外键同样用正确键名保留。
+    func testInfoPlistATSExceptionIsLocalhostWithModernKey() throws {
+        let macosDir = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // DSHChamberPocTests
+            .deletingLastPathComponent()   // Tests
+            .deletingLastPathComponent()   // macos
+        let xml = try XCTUnwrap(String(
+            data: Data(contentsOf: macosDir.appendingPathComponent("Info.plist.template")),
+            encoding: .utf8), "模板必须可按 UTF-8 读取")
+        let parsed = try PropertyListSerialization.propertyList(from: Data(xml.utf8), format: nil)
+        let plist = try XCTUnwrap(parsed as? [String: Any], "模板必须是可解析的 plist")
+        let ats = try XCTUnwrap(plist["NSAppTransportSecurity"] as? [String: Any],
+                                "S-45：ATS 段必须存在")
+        XCTAssertEqual(ats["NSAllowsArbitraryLoads"] as? Bool, false,
+                       "S-45：ArbitraryLoads 必须保持 false")
+        XCTAssertEqual(ats["NSAllowsLocalNetworking"] as? Bool, true,
+                       "S-45：local networking 放行必须保留")
+        let domains = try XCTUnwrap(ats["NSExceptionDomains"] as? [String: Any])
+        let localhost = try XCTUnwrap(domains["localhost"] as? [String: Any],
+                                      "S-45：localhost 例外域是打包态导航 origin 的放行依据")
+        XCTAssertEqual(localhost["NSExceptionAllowsInsecureHTTPLoads"] as? Bool, true,
+                       "S-45：必须用正确键名 NSExceptionAllowsInsecureHTTPLoads")
+        XCTAssertNil(localhost["NSTemporaryExceptionAllowsInsecureHTTPLoads"],
+                     "S-45：localhost 例外不得再依赖旧键名")
+        XCTAssertNotNil(domains["127.0.0.1"],
+                        "S-45：127.0.0.1 例外键保留（同样用正确键名；localhost 是打包态放行依据）")
+    }
+
+    /// S-45：打包态控制面 origin 用 DNS 名 localhost（ATS 例外域只按域名匹配），
+    /// dev 无 ATS 执行面保持 127.0.0.1；两态端口与 sidecar 单源（resolvedCPPort）。
+    func testControlPlaneOriginSelectsLocalhostWhenPackaged() {
+        XCTAssertEqual(AppDelegate.controlPlaneHost(isPackaged: true), "localhost",
+                       "S-45：打包态导航 origin 必须是 localhost")
+        XCTAssertEqual(AppDelegate.controlPlaneHost(isPackaged: false), "127.0.0.1",
+                       "dev 无 Info.plist/ATS 执行面，保持 127.0.0.1")
+        XCTAssertEqual(AppDelegate.defaultControlPlaneURL(isPackaged: true, port: "17500")?.absoluteString,
+                       "http://localhost:17500/",
+                       "S-45：打包态缺省控制面 URL")
+        XCTAssertEqual(AppDelegate.defaultControlPlaneURL(isPackaged: false, port: "17520")?.absoluteString,
+                       "http://127.0.0.1:17520/",
+                       "dev 缺省控制面 URL 不变")
     }
 }

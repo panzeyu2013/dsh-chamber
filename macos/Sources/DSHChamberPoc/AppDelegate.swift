@@ -297,8 +297,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         //    （POC_PORT > DSH_CHAMBER_CP_PORT > dev 探测/packaged 缺省，S11）
         //    ——与传给 sidecar 的 --port 必然同源，消除端口错位白窗
         //    （sidecar ready 帧 port 本侧记录于 onReady）。
-        guard let rawCPURL = URL(string: env["POC_CP_URL"] ?? "http://127.0.0.1:\(resolvedCPPort)/") else {
-            fatalStartup("POC_CP_URL 无法解析为 URL")
+        //    S-45：打包态缺省主机名是 **localhost**——ATS 例外以 DNS 域名为规范
+        //    形态（关键是正确键名 NSExceptionAllowsInsecureHTTPLoads，见
+        //    Info.plist.template；旧 NSTemporary... 实测不生效）；dev 无
+        //    Info.plist/ATS 执行面，保持 127.0.0.1（与 sidecar --port 习惯一致）。
+        let rawCPURL: URL
+        if let explicit = env["POC_CP_URL"] {
+            guard let url = URL(string: explicit) else { fatalStartup("POC_CP_URL 无法解析为 URL") }
+            rawCPURL = url
+        } else if let url = Self.defaultControlPlaneURL(isPackaged: isPackaged, port: resolvedCPPort) {
+            rawCPURL = url
+        } else {
+            fatalStartup("控制面 URL 无法派生（port=\(resolvedCPPort)）")
         }
         // 壳文档 = 根路径 + 无 query（A 桥信任边界，TrustGuard.isTrustedDocument）。
         // 配置带路径/query（如 /index.html、?fixture=1）时只取 origin 根，否则首载
@@ -1383,6 +1393,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             return .failed(enabled: enabled, error: error)
         }
         return .applied(enabled: enabled)
+    }
+
+    /// 控制面缺省 URL 的主机名（S-45；纯函数单测直测）：打包态用 DNS 域名
+    /// `localhost`——ATS 例外域的规范形态是域名，且 2026-12 实机修正前
+    /// 127.0.0.1 上的旧键从不放行（**正确键名**
+    /// NSExceptionAllowsInsecureHTTPLoads 才是关键，见 Info.plist.template；
+    /// localhost 让放行沿域名匹配，不赌 IP 字面量键的系统差异）。dev（非 .app，
+    /// 无 Info.plist/ATS 执行面）保持 127.0.0.1。两态指向同一个 loopback 服务
+    /// （端口单源 = ControlPlanePort.resolve 的 resolvedCPPort）。
+    static func controlPlaneHost(isPackaged: Bool) -> String {
+        isPackaged ? "localhost" : "127.0.0.1"
+    }
+
+    /// 缺省控制面 URL（纯逻辑，单测直测）：端口字符串原样拼装（合法性由
+    /// ControlPlanePort.resolve 前置保证），路径固定为壳文档根 "/"。
+    static func defaultControlPlaneURL(isPackaged: Bool, port: String) -> URL? {
+        URL(string: "http://\(controlPlaneHost(isPackaged: isPackaged)):\(port)/")
     }
 
     /// 端口来源日志标签（S11；纯函数单测直测）。
