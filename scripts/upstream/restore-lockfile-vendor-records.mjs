@@ -26,8 +26,8 @@
  * 然后照常以 `pnpm install --frozen-lockfile` 收尾验证。
  *
  * 用法：
- *   node scripts/dev/restore-lockfile-vendor-records.mjs            # 就地修复
- *   node scripts/dev/restore-lockfile-vendor-records.mjs --check    # 只检测，缺失即退出码 1
+ *   node scripts/upstream/restore-lockfile-vendor-records.mjs            # 就地修复
+ *   node scripts/upstream/restore-lockfile-vendor-records.mjs --check    # 只检测，缺失即退出码 1
  * 测试可用环境变量覆盖路径（默认走 git HEAD）：
  *   RESTORE_LOCKFILE_PATH=<工作 lockfile>  RESTORE_LOCKFILE_HEAD=<HEAD 版本>
  */
@@ -249,7 +249,7 @@ if (addedImporters === 0 && addedPackages === 0 && addedSnapshots === 0) {
 
 if (checkOnly) {
   console.error(`[restore-lockfile] 检测到缺失：vendor importer ${addedImporters} 条、packages ${addedPackages} 条、snapshots ${addedSnapshots} 条。`)
-  console.error('[restore-lockfile] 请执行 node scripts/dev/restore-lockfile-vendor-records.mjs 修复后再提交。')
+  console.error('[restore-lockfile] 请执行 node scripts/upstream/restore-lockfile-vendor-records.mjs 修复后再提交。')
   process.exit(1)
 }
 

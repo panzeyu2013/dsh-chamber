@@ -5,9 +5,9 @@
  * 与 boot/switch/eval-measure 的分工：那些测"事件窗"（启动/切换/归因）；
  * 本脚本测**稳态基数与空闲/输入响应**，输出一份固定 schema 的基线 JSON，
  * 供视图保留回收 / 预热收敛 / 后台拉取门控等整改的 A/B 前后对照
- * （performance-baseline.md §1 环境纪律：只做同环境 A/B，跨环境不可比）。
+ * （README「前置条件」的环境纪律：只做同环境 A/B，跨环境不可比）。
  *
- * 前置（同 performance-baseline.md §7）：以 --remote-debugging-port=9333
+ * 前置（同 README「复测命令」）：以 --remote-debugging-port=9333
  * 启动的 dev/打包实例，渲染目标已就绪（本地连接 + 期望的挂载视图数）。
  *
  * 用法：node scripts/perf/measure-ui.mjs [--port 9333] [--idle 15] [--clicks 5]
@@ -68,7 +68,7 @@ try {
   page = await findPageTarget(port)
 } catch (error) {
   console.error(`无法连接 :${port} 的 CDP target（${error instanceof Error ? error.message : String(error)}）`)
-  console.error('前置：以 --remote-debugging-port=9333 启动实例（见 docs/progress/performance-baseline.md §7）')
+  console.error('前置：以 --remote-debugging-port=9333 启动实例（见 scripts/perf/README.md）')
   process.exit(1)
 }
 const cdp = connect(page.webSocketDebuggerUrl)

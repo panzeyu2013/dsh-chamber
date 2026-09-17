@@ -63,8 +63,8 @@
  * precondition as the C-gates in verify-upstream-touchpoints.mjs).
  *
  * Usage:
- *   node scripts/dev/verify-style-tokens.mjs           # gate (exit 1 on any finding)
- *   node scripts/dev/verify-style-tokens.mjs --list    # print the upstream token set
+ *   node scripts/gates/verify-style-tokens.mjs           # gate (exit 1 on any finding)
+ *   node scripts/gates/verify-style-tokens.mjs --list    # print the upstream token set
  */
 
 import { createHash } from 'node:crypto'

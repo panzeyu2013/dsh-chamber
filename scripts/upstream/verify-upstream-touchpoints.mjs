@@ -68,10 +68,10 @@
  * 文件的修改都会在此硬失败——升级/重锚后同步登记表（每 tag 维护循环见文档 §7）。
  *
  * 用法（`--help` 打印权威文本；未知参数 = 用法错误 exit 2，绝不静默跑默认模式）：
- *   node scripts/dev/verify-upstream-touchpoints.mjs            # C1/C3–C15
- *   node scripts/dev/verify-upstream-touchpoints.mjs --no-artifact-rebuild
- *   node scripts/dev/verify-upstream-touchpoints.mjs --tags <old> <new>  # +C2
- *   node scripts/dev/verify-upstream-touchpoints.mjs --help
+ *   node scripts/upstream/verify-upstream-touchpoints.mjs            # C1/C3–C15
+ *   node scripts/upstream/verify-upstream-touchpoints.mjs --no-artifact-rebuild
+ *   node scripts/upstream/verify-upstream-touchpoints.mjs --tags <old> <new>  # +C2
+ *   node scripts/upstream/verify-upstream-touchpoints.mjs --help
  *
  * 参数守卫（2026-12 review P2）：默认模式会**就地重建并还原**生成物（唯一写盘
  * 路径），因此任何未知参数/位置参数都由 verify-upstream-touchpoints-args.mjs
@@ -652,7 +652,7 @@ for (const fork of FORKS) {
       lockFd = undefined
     }
     if (lockFd !== undefined) {
-      // Snapshot/restore/compare live in scripts/dev/artifact-gate.mjs so the
+      // Snapshot/restore/compare live in scripts/upstream/artifact-gate.mjs so the
       // decision logic is unit-tested (see artifact-gate.test.mjs).
       const artifactDirs = (group) => [...new Set(group.outputs.map(output => dirname(join(ROOT, output))))]
       let inFlight = undefined
@@ -797,7 +797,7 @@ for (const fork of FORKS) {
       ['.github/workflows/release.yml', { anchor: true, reason: '运行时线锚 3/6（release env）' }],
       ['scripts/install-gateway.sh', { anchor: true, reason: '运行时线锚 4/6（gateway 安装默认值）' }],
       ['packages/gateway/package.json', { anchor: true, reason: '运行时线锚 5/6（dshAnchorVersion）' }],
-      ['scripts/dev/release-preflight.mjs', { anchor: true, reason: '运行时线锚 6/6（FORK_VERSION）' }],
+      ['scripts/release/release-preflight.mjs', { anchor: true, reason: '运行时线锚 6/6（FORK_VERSION）' }],
       ['packages/dsh-client-connection/package.json', { anchor: true, reason: 'fork 副本版本 = 上游基线' }],
       ['packages/dsh-client-web/package.json', { anchor: true, reason: 'fork 副本版本 = 上游基线' }],
       ['packages/dsh-api-gateway/package.json', { anchor: true, reason: 'fork 副本版本 = 上游基线' }],
@@ -809,7 +809,7 @@ for (const fork of FORKS) {
       '.github/workflows/release.yml',
       'scripts/install-gateway.sh',
       'packages/gateway/package.json',
-      'scripts/dev/release-preflight.mjs',
+      'scripts/release/release-preflight.mjs',
       'packages/desktop/vendor/dsh/pnpm-lock.yaml',
     ]
     // Live-literal extraction: TS/JS via esbuild (comments stripped, strings

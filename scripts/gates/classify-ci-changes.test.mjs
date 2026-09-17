@@ -1,5 +1,5 @@
 /**
- * Unit tests for the CI change classifier (scripts/dev/classify-ci-changes.mjs).
+ * Unit tests for the CI change classifier (scripts/gates/classify-ci-changes.mjs).
  *
  * The classifier decides whether the expensive CI chain runs, so its fail-safe
  * direction is the property under test: anything it cannot prove to be prose
@@ -24,7 +24,7 @@ test('anything outside the prose allowlist is code', () => {
     'harness.commit',
     'pnpm-workspace.yaml',
     '.github/workflows/ci.yml',
-    'scripts/dev/release-preflight.mjs',
+    'scripts/release/release-preflight.mjs',
     'packages/renderer/src/main.ts',
     'vendor/harness-packages/@deepseek-ai/dsh-client-web/package.json',
     'tsconfig.json',

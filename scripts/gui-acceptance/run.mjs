@@ -14,6 +14,7 @@ import { parseArgs } from 'node:util'
 import { runLiveAcceptance } from './probe.mjs'
 import { runWalkthrough } from './walkthrough.mjs'
 import { launchDevInstance } from './launch.mjs'
+import { runNativeAcceptance } from './native.mjs'
 
 // `pnpm run acceptance:gui -- --dev` forwards the separator literally, while
 // `pnpm run acceptance:gui --dev` does not. Accept both: strip one leading `--`.
@@ -26,6 +27,13 @@ const { values } = parseArgs({
     live: { type: 'boolean', default: false },
     dev: { type: 'boolean', default: false },
     attach: { type: 'boolean', default: false },
+    // electron (default) drives the Electron dev instance over CDP; native runs
+    // the minimal sidecar walkthrough of the macOS Swift payload (G20).
+    flavor: { type: 'string', default: 'electron' },
+    'sidecar-dir': { type: 'string' },
+    // G33: native machine gate — an absent assembly is a FAIL, not a SKIP, so a
+    // CI step that lost its build prerequisite cannot exit 0 on a skip.
+    'require-assembly': { type: 'boolean', default: false },
     out: { type: 'string', default: '.tmp/gui-acceptance' },
     plane: { type: 'string', default: 'http://127.0.0.1:17500' },
     instance: { type: 'string', default: 'http://127.0.0.1:17510' },
@@ -45,6 +53,12 @@ if (values.help) {
   --live                     只读探测运行中的应用（默认；安装态亦可用）
   --attach                   对已带 --remote-debugging-port 的 dev 实例做界面走查
   --dev                      自起一次性 dev 实例（隔离 user-data）→ 走查 → 关闭
+  --flavor <electron|native> 目标 flavor（默认 electron）。native 走查原生壳 spawn 的
+                             sidecar 装配（ready/B 桥/控制面 HTTP）；—— 注意 native 不可
+                             驱动 WKWebView UI（无 CDP），那仍属实机验收
+  --sidecar-dir <dir>        native 模式的 sidecar 装配目录（默认 packages/desktop/release/sidecar）
+  --require-assembly         native 模式机器门：装配缺失记 FAIL（而非 SKIP）并退出 1，
+                             供 CI 的 native 装配启动门使用（缺前置不得变绿）
   --out <dir>                产物目录（默认 .tmp/gui-acceptance）
   --plane <origin>           控制面 origin（默认 http://127.0.0.1:17500）
   --instance <origin>        本地 dsh 实例 origin（默认 http://127.0.0.1:17510，用于凭据围栏项）
@@ -57,6 +71,16 @@ if (values.help) {
   process.exit(0)
 }
 
+const flavor = values.flavor
+if (flavor !== 'electron' && flavor !== 'native') {
+  console.error(`--flavor 只接受 electron|native，收到：${flavor}`)
+  process.exit(2)
+}
+if (flavor === 'native' && values.dev) {
+  console.error('--flavor native 不支持 --dev（原生壳没有 CDP dev 实例）：请用 --attach 指向运行中的原生壳控制面，或直接运行 native 走查（会自起 sidecar 装配）')
+  process.exit(2)
+}
+
 const mode = values.dev ? 'dev' : values.attach ? 'attach' : 'live'
 const outDir = values.out
 const cdpPort = Number(values['cdp-port'])
@@ -67,40 +91,58 @@ let failed = 0
 let info = 0
 let launched = null
 try {
-  // --dev: the throwaway instance must exist before anything probes it.
-  if (mode === 'dev') {
-    launched = await launchDevInstance({ outDir, cpPort, cdpPort, electronArgs: values['electron-arg'] })
-  }
-  if (mode === 'live') {
-    const live = await runLiveAcceptance({
-      planeOrigin: values.plane,
-      instanceOrigin: values.instance,
-      sourceIds,
+  if (flavor === 'native') {
+    // Native flavor: probe the sidecar the packaged Swift shell spawns (or, in
+    // --attach mode, the control plane of an already-running native shell). The
+    // WKWebView UI itself has no CDP endpoint and cannot be driven here — the
+    // report says so instead of claiming coverage.
+    const native = await runNativeAcceptance({
+      sidecarDir: values['sidecar-dir'],
       outDir,
+      attachPlaneOrigin: values.attach ? values.plane : null,
+      requireAssembly: values['require-assembly'],
     })
-    failed += live.failed
-  }
-  if (mode === 'dev') {
-    // Same read-only probe set, aimed at the throwaway instance (its dsh port is
-    // dynamic, and a fresh state dir has no remote sources to sweep).
-    const live = await runLiveAcceptance({
-      planeOrigin: `http://127.0.0.1:${cpPort}`,
-      instanceOrigin: '',
-      sourceIds: [],
-      outDir: `${outDir}/dev`,
-    })
-    failed += live.failed
-  }
-  if (mode === 'attach' || mode === 'dev') {
-    // --dev runs on a throwaway instance: advancing the first-run wizard writes
-    // only to that instance's own state. --attach never does (someone's real app).
-    const walked = await runWalkthrough({
-      cdpPort, outDir, advanceOnboarding: mode === 'dev', requireHover: values['require-hover'],
-      // State-writing legs (W-4a source fold) run only on the throwaway instance.
-      allowPersistentWrites: mode === 'dev',
-    })
-    failed += walked.failed
-    info += walked.info
+    if (native.skipped) {
+      console.error('SKIP: ' + native.reason)
+    }
+    failed += native.failed
+    info += native.info
+  } else {
+    // --dev: the throwaway instance must exist before anything probes it.
+    if (mode === 'dev') {
+      launched = await launchDevInstance({ outDir, cpPort, cdpPort, electronArgs: values['electron-arg'] })
+    }
+    if (mode === 'live') {
+      const live = await runLiveAcceptance({
+        planeOrigin: values.plane,
+        instanceOrigin: values.instance,
+        sourceIds,
+        outDir,
+      })
+      failed += live.failed
+    }
+    if (mode === 'dev') {
+      // Same read-only probe set, aimed at the throwaway instance (its dsh port is
+      // dynamic, and a fresh state dir has no remote sources to sweep).
+      const live = await runLiveAcceptance({
+        planeOrigin: `http://127.0.0.1:${cpPort}`,
+        instanceOrigin: '',
+        sourceIds: [],
+        outDir: `${outDir}/dev`,
+      })
+      failed += live.failed
+    }
+    if (mode === 'attach' || mode === 'dev') {
+      // --dev runs on a throwaway instance: advancing the first-run wizard writes
+      // only to that instance's own state. --attach never does (someone's real app).
+      const walked = await runWalkthrough({
+        cdpPort, outDir, advanceOnboarding: mode === 'dev', requireHover: values['require-hover'],
+        // State-writing legs (W-4a source fold) run only on the throwaway instance.
+        allowPersistentWrites: mode === 'dev',
+      })
+      failed += walked.failed
+      info += walked.info
+    }
   }
 } finally {
   if (launched !== null && !values.keep) {

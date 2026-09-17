@@ -444,7 +444,7 @@ function noEmissionMessage(anchor, where, label, corpusName, selectorHits, extra
       + '——上游可能已停止发射它（留下的是死 CSS），或它的写入形态未被本门识别（dataset./toggleAttribute/其它 API 变体）'
     : '在语料里零命中（连消费方证据都没有）'
   return `${label} ${anchor.token} 在${corpusName}${detail}。请按 design 17 §18.4.3 重锚，`
-    + `或把该形态补进 scripts/dev/mobile-anchors.mjs（声明于 ${where}）${extra === '' ? '' : `；${extra}`}`
+    + `或把该形态补进 scripts/upstream/mobile-anchors.mjs（声明于 ${where}）${extra === '' ? '' : `；${extra}`}`
 }
 
 /**

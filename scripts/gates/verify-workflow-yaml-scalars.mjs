@@ -14,8 +14,8 @@
  * values and are ignored.
  *
  * Usage:
- *   node scripts/dev/verify-workflow-yaml-scalars.mjs          # gate
- *   node scripts/dev/verify-workflow-yaml-scalars.mjs --list   # report only
+ *   node scripts/gates/verify-workflow-yaml-scalars.mjs          # gate
+ *   node scripts/gates/verify-workflow-yaml-scalars.mjs --list   # report only
  */
 
 import { readFileSync, readdirSync } from 'node:fs'

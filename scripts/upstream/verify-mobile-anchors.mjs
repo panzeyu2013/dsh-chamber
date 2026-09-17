@@ -28,12 +28,12 @@
  *   2 用法错误（未知参数、--simulate-rename 形态非法等；不会先跑门）
  *
  * 用法：
- *   node scripts/dev/verify-mobile-anchors.mjs
- *   node scripts/dev/verify-mobile-anchors.mjs --anchor-root <dir>      # 指定上游锚点根
- *   node scripts/dev/verify-mobile-anchors.mjs --simulate-rename main=center   # 自测负例（只在内存里改名）
- *   node scripts/dev/verify-mobile-anchors.mjs --list                   # 打印抽到的锚点表
- *   node scripts/dev/verify-mobile-anchors.mjs --require-anchor-root    # 严格模式（见 --help）
- *   node scripts/dev/verify-mobile-anchors.mjs --help
+ *   node scripts/upstream/verify-mobile-anchors.mjs
+ *   node scripts/upstream/verify-mobile-anchors.mjs --anchor-root <dir>      # 指定上游锚点根
+ *   node scripts/upstream/verify-mobile-anchors.mjs --simulate-rename main=center   # 自测负例（只在内存里改名）
+ *   node scripts/upstream/verify-mobile-anchors.mjs --list                   # 打印抽到的锚点表
+ *   node scripts/upstream/verify-mobile-anchors.mjs --require-anchor-root    # 严格模式（见 --help）
+ *   node scripts/upstream/verify-mobile-anchors.mjs --help
  */
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join, relative, resolve, sep } from 'node:path'

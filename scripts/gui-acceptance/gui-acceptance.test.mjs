@@ -12,9 +12,12 @@
  * row selection decides whether W-4b judges the product or itself, so the real
  * expressions run here against a fake DOM.
  */
-import { readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { fileURLToPath } from 'node:url'
 import {
   HOVER_RACE_FALLBACK_OFFSETS, HOVER_RACE_WINDOW_CAP_MS, KNOWN_UPSTREAM_BOOT_NOISE,
   RAIL_TOGGLE_BAND_MAX_TOP_PX, RAIL_TOGGLE_BOX_MAX_PX, RAIL_TOGGLE_LEFT_FRACTION, TOLERATED_REQUEST_FAILURES,
@@ -29,6 +32,18 @@ import {
 // strings against a fake DOM (identity addressing and the no-click-when-missing
 // rule are behaviour, not something a source-text assertion can guard).
 import { CLICK_STASHED_BUTTON, clickButtonAt } from './walkthrough.mjs'
+// Native flavor mode helpers (G20): the native walkthrough drives the sidecar
+// assembly the packaged Swift shell spawns (WKWebView itself has no CDP).
+import {
+  nativePreflight,
+  nativeSidecarArgs,
+  nativeSidecarEnv,
+  resolveNativeSidecarDir,
+  resolveNodeBinary,
+  runNativeAcceptance,
+} from './native.mjs'
+
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 
 const SHELL_HTML = `<!doctype html><html lang="zh-CN"><head><title>dsh-chamber</title>
 <script type="module" crossorigin src="/assets/chamber-abc.js"></script>
@@ -960,6 +975,117 @@ test('view prefs fingerprint: only the persisted fields decide "did this leg wri
   assert.match(viewPrefsDelta(base, { ...base, sourceFolded: { local: true } }), /sourceFolded/)
   assert.equal(viewPrefsFingerprint({ present: false }), 'absent')
   assert.equal(viewPrefsDelta(null, base), null, 'no snapshot taken ⇒ no claim made')
+})
+
+// ---------------------------------------------------------------------------
+// Native flavor mode (native.mjs; G20)
+// ---------------------------------------------------------------------------
+
+test('native sidecar preflight: a missing or partial assembly is a named loud skip, a complete one passes', () => {
+  const missing = nativePreflight({ sidecarDir: '/nonexistent/native-sidecar' })
+  assert.equal(missing.ok, false)
+  assert.match(missing.reason, /native sidecar assembly is absent or incomplete/)
+  assert.match(missing.reason, /build:sidecar/)
+
+  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-native-preflight-'))
+  try {
+    // Entry without the compiled control-plane: still a partial assembly.
+    writeFileSync(path.join(dir, 'sidecar.js'), '// sidecar')
+    const partial = nativePreflight({ sidecarDir: dir })
+    assert.equal(partial.ok, false)
+    assert.match(partial.reason, /dist\/control-plane\/index\.js/)
+    mkdirSync(path.join(dir, 'dist', 'control-plane'), { recursive: true })
+    writeFileSync(path.join(dir, 'dist', 'control-plane', 'index.js'), 'export {}')
+    const complete = nativePreflight({ sidecarDir: dir })
+    assert.equal(complete.ok, true)
+    assert.equal(complete.entry, path.join(dir, 'sidecar.js'))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('native launch contract: throwaway user data + explicit port + compiled marker + node preference', () => {
+  assert.deepEqual(nativeSidecarArgs({ userDataDir: '/tmp/u', port: 12345 }), ['--user-data-dir', '/tmp/u', '--port', '12345'])
+  const env = nativeSidecarEnv({ KEEP: '1' })
+  assert.equal(env.DSH_CHAMBER_SIDECAR_COMPILED, '1', 'the assembly-relative control-plane import requires the compiled marker')
+  assert.equal(env.KEEP, '1', 'the base environment is preserved')
+  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-native-node-'))
+  try {
+    assert.equal(resolveNodeBinary(dir, '/usr/bin/node'), '/usr/bin/node', 'no bundled node → the running node')
+    writeFileSync(path.join(dir, 'node'), '#!/bin/sh\n')
+    assert.equal(resolveNodeBinary(dir, '/usr/bin/node'), path.join(dir, 'node'), 'the assembly bundled node wins')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('native sidecar dir resolver honors the environment override', () => {
+  assert.equal(resolveNativeSidecarDir({}, '/repo'), path.join(REPO_ROOT, 'packages', 'desktop', 'release', 'sidecar'))
+  assert.equal(resolveNativeSidecarDir({ DSH_CHAMBER_SIDECAR_DIR: '/tmp/assembly' }, '/repo'), '/tmp/assembly')
+  assert.equal(resolveNativeSidecarDir({ DSH_CHAMBER_SIDECAR_DIR: 'rel/assembly' }, '/repo'), path.resolve('/repo', 'rel/assembly'))
+})
+
+test('native mode skips LOUDLY (not silently) when the assembly is absent, and writes a report', async () => {
+  const outDir = mkdtempSync(path.join(tmpdir(), 'dsh-native-skip-'))
+  try {
+    const verdict = await runNativeAcceptance({
+      sidecarDir: path.join(outDir, 'no-assembly'),
+      outDir,
+      log: () => {},
+    })
+    assert.equal(verdict.skipped, true)
+    assert.match(verdict.reason, /native sidecar assembly is absent or incomplete/)
+    assert.equal(verdict.failed, 0)
+    assert.equal(verdict.info, 1, 'the skip rides the INFO count, so a green run does not read as coverage')
+    assert.ok(existsSync(verdict.reportPath), 'the skip must be recorded in the report artifact')
+  } finally {
+    rmSync(outDir, { recursive: true, force: true })
+  }
+})
+
+test('native machine gate: --require-assembly makes an absent assembly a FAIL, never a green skip (G33)', async () => {
+  const outDir = mkdtempSync(path.join(tmpdir(), 'dsh-native-required-'))
+  try {
+    const verdict = await runNativeAcceptance({
+      sidecarDir: path.join(outDir, 'no-assembly'),
+      outDir,
+      requireAssembly: true,
+      log: () => {},
+    })
+    assert.equal(verdict.skipped, false, 'the machine gate must not report a skip')
+    assert.equal(verdict.failed, 1, 'the missing assembly is a failure, not green coverage')
+    assert.equal(verdict.info, 0, 'the machine gate does not ride the INFO count')
+    assert.equal(verdict.results[0].ok, false)
+    assert.match(verdict.reason, /native sidecar assembly is absent or incomplete/)
+    assert.ok(existsSync(verdict.reportPath), 'the failure must be recorded in the report artifact')
+    const json = JSON.parse(readFileSync(path.join(outDir, 'gui-native-report.json'), 'utf8'))
+    assert.equal(json.skipped, false)
+    assert.match(json.reason, /build:sidecar/)
+  } finally {
+    rmSync(outDir, { recursive: true, force: true })
+  }
+})
+
+test('native mode drives the REAL packaged sidecar assembly when present (loud skip otherwise) (G20)', async (t) => {
+  const sidecarDir = resolveNativeSidecarDir()
+  const preflight = nativePreflight({ sidecarDir })
+  if (!preflight.ok) {
+    t.diagnostic('SKIP: ' + preflight.reason)
+    return
+  }
+  const outDir = mkdtempSync(path.join(tmpdir(), 'dsh-native-real-'))
+  try {
+    const verdict = await runNativeAcceptance({ sidecarDir, outDir, log: () => {} })
+    assert.equal(verdict.skipped, false)
+    assert.equal(verdict.failed, 0, 'the real native sidecar walkthrough must be green: ' + JSON.stringify(verdict.results.filter(r => r.ok === false)))
+    const ids = verdict.results.map(entry => entry.id)
+    for (const expected of ['N-1', 'N-2', 'N-3', 'N-4', 'N-5', 'N-7']) {
+      assert.ok(ids.includes(expected), `${expected} must be part of the native walkthrough`)
+    }
+    assert.ok(existsSync(verdict.reportPath))
+  } finally {
+    rmSync(outDir, { recursive: true, force: true })
+  }
 })
 
 test('walkthrough source: the first-match aria-expanded picker is gone, restore is identity-based', () => {

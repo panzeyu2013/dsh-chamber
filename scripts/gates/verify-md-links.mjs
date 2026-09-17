@@ -11,8 +11,8 @@
  * (see {@link MIRRORED_DOCUMENTS}); the skip is printed on every run.
  *
  * Usage:
- *   node scripts/dev/verify-md-links.mjs           # gate (exit 1 on a dead link)
- *   node scripts/dev/verify-md-links.mjs --list    # report, never fails
+ *   node scripts/gates/verify-md-links.mjs           # gate (exit 1 on a dead link)
+ *   node scripts/gates/verify-md-links.mjs --list    # report, never fails
  */
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs'

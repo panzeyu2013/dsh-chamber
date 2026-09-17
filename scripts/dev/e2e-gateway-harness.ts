@@ -26,8 +26,8 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createTransportManager } from '../packages/desktop/transport-manager.ts'
-import { sshProvider } from '../packages/desktop/ssh-provider.ts'
+import { createTransportManager } from '../../packages/desktop/transport-manager.ts'
+import { sshProvider } from '../../packages/desktop/ssh-provider.ts'
 import {
   gatewayProvider,
   configureGatewaySecretStore,
@@ -35,9 +35,9 @@ import {
   setGatewayPassword,
   configureGatewaySessionProvider,
   getGatewayToken,
-} from '../packages/desktop/gateway-provider.ts'
-import { createGatewaySessionManager } from '../packages/desktop/gateway-session.ts'
-import { createControlPlane } from '../packages/control-plane/src/index.ts'
+} from '../../packages/desktop/gateway-provider.ts'
+import { createGatewaySessionManager } from '../../packages/desktop/gateway-session.ts'
+import { createControlPlane } from '../../packages/control-plane/src/index.ts'
 
 const HOST = process.env.E2E_HOST ?? '192.168.110.172'
 const USER = process.env.E2E_USER ?? 'root'

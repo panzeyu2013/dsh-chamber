@@ -17,7 +17,7 @@
  *  10. 参数契约（`verify-mobile-anchors-args.mjs`）：未知参数/位置参数/缺值 = 用法
  *      错误（exit 2 的那条路），`--help` 优先，`DSH_MOBILE_ANCHOR_ROOT` 兜底。
  *
- * 跑法：`node --test scripts/dev/verify-mobile-anchors.test.mjs`
+ * 跑法：`node --test scripts/upstream/verify-mobile-anchors.test.mjs`
  * （root `test:upgrade-tools` 逐文件列名，本文件在其中——见 §4 登记行。）
  */
 import assert from 'node:assert/strict'
@@ -374,11 +374,11 @@ test('严格模式的「其实什么都没查」路径：源码缺失 ⇒ exit 1
   // 但源码抽不到那条跳过路径当时仍 exit 0。用真实子进程跑一遍（这是退出码，只能端到端测）。
   const root = mkdtempSync(join(tmpdir(), 'anchors-strict-'))
   try {
-    mkdirSync(join(root, 'scripts', 'dev'), { recursive: true })
+    mkdirSync(join(root, 'scripts', 'upstream'), { recursive: true })
     for (const name of ['verify-mobile-anchors.mjs', 'verify-mobile-anchors-args.mjs', 'mobile-anchors.mjs']) {
-      copyFileSync(join(ROOT, 'scripts', 'dev', name), join(root, 'scripts', 'dev', name))
+      copyFileSync(join(ROOT, 'scripts', 'upstream', name), join(root, 'scripts', 'upstream', name))
     }
-    const run = args => spawnSync(process.execPath, ['scripts/dev/verify-mobile-anchors.mjs', ...args], { cwd: root, encoding: 'utf8' })
+    const run = args => spawnSync(process.execPath, ['scripts/upstream/verify-mobile-anchors.mjs', ...args], { cwd: root, encoding: 'utf8' })
     const strict = run(['--require-anchor-root'])
     assert.equal(strict.status, 1, `strict must not exit 0 with no sources: ${strict.stdout}`)
     assert.match(strict.stderr, /没有可抽的插件源码/)
@@ -392,9 +392,9 @@ test('严格模式的「其实什么都没查」路径：源码缺失 ⇒ exit 1
 test('严格模式的 pin 身份：读不到 lockfile ⇒ 明说「无法判定」并 exit 1', () => {
   const root = mkdtempSync(join(tmpdir(), 'anchors-pin-'))
   try {
-    mkdirSync(join(root, 'scripts', 'dev'), { recursive: true })
+    mkdirSync(join(root, 'scripts', 'upstream'), { recursive: true })
     for (const name of ['verify-mobile-anchors.mjs', 'verify-mobile-anchors-args.mjs', 'mobile-anchors.mjs']) {
-      copyFileSync(join(ROOT, 'scripts', 'dev', name), join(root, 'scripts', 'dev', name))
+      copyFileSync(join(ROOT, 'scripts', 'upstream', name), join(root, 'scripts', 'upstream', name))
     }
     // Sources present (so the run gets past that gate) but no in-repo lockfile.
     cpSync(join(ROOT, 'packages', 'dsh-chamber-client-ui-mobile', 'src'), join(root, 'packages', 'dsh-chamber-client-ui-mobile', 'src'), { recursive: true })
@@ -410,7 +410,7 @@ test('严格模式的 pin 身份：读不到 lockfile ⇒ 明说「无法判定�
     mkdirSync(frontend, { recursive: true })
     writeFileSync(join(frontend, 'index-ABCDEFGH.js'), UPSTREAM_TEXT)
     writeFileSync(join(frontend, 'index-ABCDEFGH.css'), 'body[data-slot]{display:contents}')
-    const run = args => spawnSync(process.execPath, ['scripts/dev/verify-mobile-anchors.mjs', ...args], { cwd: root, encoding: 'utf8' })
+    const run = args => spawnSync(process.execPath, ['scripts/upstream/verify-mobile-anchors.mjs', ...args], { cwd: root, encoding: 'utf8' })
     const fallback = run(['--anchor-root', anchor])
     assert.equal(fallback.status, 0, `the anchors themselves must pass on this corpus: ${fallback.stdout}${fallback.stderr}`)
     assert.match(fallback.stdout, /pin 身份无法判定/, 'the default says so out loud, then keeps going')
@@ -438,9 +438,9 @@ function pinnedFrontendVersion() {
 function makeStrictRoot(t, { frontendVersion, shell = false }) {
   const root = mkdtempSync(join(tmpdir(), 'anchors-strict-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
-  mkdirSync(join(root, 'scripts', 'dev'), { recursive: true })
+  mkdirSync(join(root, 'scripts', 'upstream'), { recursive: true })
   for (const name of ['verify-mobile-anchors.mjs', 'verify-mobile-anchors-args.mjs', 'mobile-anchors.mjs']) {
-    copyFileSync(join(ROOT, 'scripts', 'dev', name), join(root, 'scripts', 'dev', name))
+    copyFileSync(join(ROOT, 'scripts', 'upstream', name), join(root, 'scripts', 'upstream', name))
   }
   cpSync(join(ROOT, 'packages', 'dsh-chamber-client-ui-mobile', 'src'), join(root, 'packages', 'dsh-chamber-client-ui-mobile', 'src'), { recursive: true })
   mkdirSync(join(root, 'packages', 'desktop', 'vendor', 'dsh'), { recursive: true })
@@ -462,7 +462,7 @@ test('严格模式的语料完整性：只有 client 半、没有 shell 产物 �
   // 2026-12 第三轮复核：这两条严格分支当时没有任何反例（把分支还原，21 个测试仍全绿）。
   const t = { after: () => {} }
   const { root, anchor } = makeStrictRoot(t, { frontendVersion: pinnedFrontendVersion(), shell: false })
-  const run = args => spawnSync(process.execPath, ['scripts/dev/verify-mobile-anchors.mjs', ...args], { cwd: root, encoding: 'utf8' })
+  const run = args => spawnSync(process.execPath, ['scripts/upstream/verify-mobile-anchors.mjs', ...args], { cwd: root, encoding: 'utf8' })
   try {
     const fallback = run(['--anchor-root', anchor])
     assert.equal(fallback.status, 0, `default stays fail-soft: ${fallback.stdout}${fallback.stderr}`)
@@ -477,7 +477,7 @@ test('严格模式的语料完整性：只有 client 半、没有 shell 产物 �
 test('严格模式的 pin 一致性：树版本与仓内 pin 不符 ⇒ exit 1', () => {
   const t = { after: () => {} }
   const { root, anchor } = makeStrictRoot(t, { frontendVersion: '0.0.0-not-the-pin', shell: true })
-  const run = args => spawnSync(process.execPath, ['scripts/dev/verify-mobile-anchors.mjs', ...args], { cwd: root, encoding: 'utf8' })
+  const run = args => spawnSync(process.execPath, ['scripts/upstream/verify-mobile-anchors.mjs', ...args], { cwd: root, encoding: 'utf8' })
   try {
     const strict = run(['--require-anchor-root', '--anchor-root', anchor])
     assert.equal(strict.status, 1, `strict must fail on a version mismatch: ${strict.stdout}`)

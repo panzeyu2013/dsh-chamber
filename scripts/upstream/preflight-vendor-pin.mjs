@@ -16,8 +16,8 @@
  *      元数据的包 → roster/covered 决策），以及运行时版本是否已发布 npm。
  *
  * 用法：
- *   node scripts/dev/preflight-vendor-pin.mjs dsh-v0.1.5-alpha.1 [--offline] [--fail-on-replay]
- *   node scripts/dev/preflight-vendor-pin.mjs <tag> --json
+ *   node scripts/upstream/preflight-vendor-pin.mjs dsh-v0.1.5-alpha.1 [--offline] [--fail-on-replay]
+ *   node scripts/upstream/preflight-vendor-pin.mjs <tag> --json
  *
  * 退出码：默认 0（advisory）；`--fail-on-replay` 时若存在需人工重放项则 1。
  * 只依赖内置模块 + git（+ 可选 npm view）；不写工作树、不动 submodule 的 HEAD
@@ -150,7 +150,7 @@ function main() {
   const asJson = argv.includes('--json')
   const failOnReplay = argv.includes('--fail-on-replay')
   if (tag === undefined) {
-    console.error('用法: node scripts/dev/preflight-vendor-pin.mjs <tag> [--offline] [--fail-on-replay] [--json]')
+    console.error('用法: node scripts/upstream/preflight-vendor-pin.mjs <tag> [--offline] [--fail-on-replay] [--json]')
     process.exit(2)
   }
 

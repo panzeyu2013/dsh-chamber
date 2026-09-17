@@ -13,7 +13,7 @@ paint/resource，buffered），boot/eval 每个 run 还执行 `Page.reload`（sw
 |---|---|
 | `cdp-lib.mjs` | CDP 公共库：target 发现、ws 连接、早期性能观察者注入（longtask/layout-shift/paint/resource，buffered）、状态轮询（单次 evaluate 4s 超时守卫）、`__dshPerf` 汇总 |
 | `boot-measure.mjs` | 场景① 启动（骨架 → 内容）：`Page.reload` 冷启 ×N，记录长任务/CLS/区间 |
-| `switch-measure.mjs` | 场景② 跨来源切换 / 场景③ 连点 ×N（热切换面；见 performance-baseline.md §3） |
+| `switch-measure.mjs` | 场景② 跨来源切换 / 场景③ 连点 ×N（热切换面；口径见本文「指标口径」节） |
 | `eval-measure.mjs` | T6/H3 归因探针：每 run 新建 CDP 连接（导航竞态下旧 ws 会挂起）→ reload → 长任务 + JS 资源清单 |
 | `disk-walk-baseline.mjs` | T3 磁盘统计曲线：合成 .pnpm-store 形态 fixture（深层嵌套/符号链接/硬链接去重面）上同步 vs 异步实现描点（`--async` 切换测量目标） |
 | `measure-ui.mjs` | **稳态基线尺子**（2026 性能整改验收）：附加运行中实例，采 DOM 节点/挂载视图数/JS 堆基数 + 空闲 N 秒长任务 + 合成输入帧间隔 + 可选 5s CPU profile，输出固定 schema 基线 JSON 供 A/B 对照 |

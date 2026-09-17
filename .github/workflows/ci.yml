@@ -6,7 +6,7 @@ on:
   # validation is its mechanical superset) while the windows leg re-ran the
   # identical SHA, and tagging a commit that never went through `main` skipped the
   # linux chain entirely. A release now PROVES its commit passed here instead:
-  # release.yml's validation runs scripts/dev/verify-release-ci-proof.mjs, which
+  # release.yml's validation runs scripts/release/verify-release-ci-proof.mjs, which
   # requires a completed, successful ci.yml push run on main whose linux AND
   # windows legs both passed.
   push:
@@ -35,7 +35,7 @@ jobs:
   test:
     # Branch pushes and PRs only — no tag trigger exists (see `on:` above).
     # release.yml's validation mirrors this chain (the alignment contract is
-    # asserted in scripts/dev/release-workflow-policy.test.mjs) and proves its
+    # asserted in scripts/release/release-workflow-policy.test.mjs) and proves its
     # commit ran it here, on main, with this job and the windows leg green
     # (verify-release-ci-proof.mjs names both jobs explicitly).
     runs-on: ubuntu-latest
@@ -61,15 +61,15 @@ jobs:
           CI_BEFORE: ${{ github.event.before }}
           CI_AFTER: ${{ github.sha }}
           CI_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: node scripts/dev/classify-ci-changes.mjs
+        run: node scripts/gates/classify-ci-changes.mjs
       - name: Verify workflow action pins
-        run: node scripts/dev/verify-workflow-action-pins.mjs
+        run: node scripts/gates/verify-workflow-action-pins.mjs
       # The pin check above reads the workflows as TEXT, so it stays green on a
       # file GitHub refuses to parse (2026-12: an inserted `single entry: …`
       # step name was invalid YAML and every local gate passed). This closes
       # that gap without adding a YAML dependency.
       - name: Verify workflow YAML scalars
-        run: node scripts/dev/verify-workflow-yaml-scalars.mjs
+        run: node scripts/gates/verify-workflow-yaml-scalars.mjs
       - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
         with:
           version: 11.21.0
@@ -94,7 +94,7 @@ jobs:
       # rebuilds with esbuild and therefore needs node_modules — it runs in the
       # post-install step below; here it is explicitly advisory.
       - name: Upstream touchpoint registry (C1/C3/C4/C5/C6/C7/C9/C10 + C11–C15)
-        run: node scripts/dev/verify-upstream-touchpoints.mjs --no-artifact-rebuild
+        run: node scripts/upstream/verify-upstream-touchpoints.mjs --no-artifact-rebuild
       - run: pnpm install --frozen-lockfile
         if: steps.classify.outputs.code == 'true'
       # C8 deterministic artifact gate: rebuilds the committed host/mobile
@@ -102,7 +102,7 @@ jobs:
       # esbuild) is a loud warning, never a silent pass.
       - name: Committed artifacts match sources (C8 rebuild gate)
         if: steps.classify.outputs.code == 'true'
-        run: node scripts/dev/verify-upstream-touchpoints.mjs
+        run: node scripts/upstream/verify-upstream-touchpoints.mjs
       # The lockfile is the deterministic contract between the committed
       # workspace members and the resolution result; a non-frozen install
       # must never silently rewrite it (pnpm 11 prunes symlinked-member
@@ -140,7 +140,7 @@ jobs:
       - name: Upstream design-token conformance (S1–S7)
         run: pnpm run verify:styles
       - name: Workflow action pins resolve upstream (release-preflight --actions-only)
-        run: node scripts/dev/release-preflight.mjs --actions-only
+        run: node scripts/release/release-preflight.mjs --actions-only
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Release workflow safety policy
@@ -162,15 +162,15 @@ jobs:
       # One entry for the package test set (2026-12): the same mode is what
       # `pnpm run check:tests` runs locally, so the push path and a developer's
       # terminal cannot drift. Adding or renaming a package suite means editing
-      # scripts/dev/run-checks.mjs once; `pnpm run test:release-workflow` keeps
+      # scripts/gates/run-checks.mjs once; `pnpm run test:release-workflow` keeps
       # release validation aligned with what this step runs.
       - name: Package unit tests — single entry (runtime / control-plane / desktop / gateway / renderer-shell / client+host plugins)
         if: steps.classify.outputs.code == 'true'
-        run: node scripts/dev/run-checks.mjs tests
+        run: node scripts/gates/run-checks.mjs tests
       # Client plugin compiler faces, same single entry as `pnpm run check:typecheck`.
       - name: Client plugin type checks — single entry (sidebar / git / layout / connections / settings-bridge / client-web / connection / api-gateway / open-in / mobile)
         if: steps.classify.outputs.code == 'true'
-        run: node scripts/dev/run-checks.mjs typecheck
+        run: node scripts/gates/run-checks.mjs typecheck
       # Runs `pnpm run smoke`; it SKIPs when the checkout carries no bundled
       # dsh runtime — normal here, since only
       # packages/desktop/vendor/dsh/pnpm-lock.yaml is committed and
@@ -231,7 +231,7 @@ jobs:
       # stale committed file fails the push (2026 review).
       - name: Third-party notices current
         if: steps.classify.outputs.code == 'true'
-        run: node scripts/dev/gen-third-party-notices.mjs && git diff --exit-code -- THIRD_PARTY_NOTICES.md docs/THIRD_PARTY_NOTICES.en-US.md
+        run: node scripts/release/gen-third-party-notices.mjs && git diff --exit-code -- THIRD_PARTY_NOTICES.md docs/THIRD_PARTY_NOTICES.en-US.md
       - name: Gateway package build and installed CLI smoke
         if: steps.classify.outputs.code == 'true'
         run: |
@@ -244,7 +244,7 @@ jobs:
   # Windows contract leg (Windows 首版推进, M0): mirrors the linux test job
   # for the platform-sensitive suites. This is where the win32-only lifecycle
   # integration tests run and where the remaining `skip: platform === 'win32'`
-  # points are tracked (docs/progress/windows-baseline.md is the ledger).
+  # points are tracked (docs/progress/todo/windows-v1.md holds the ledger and the recording rules).
   # Packaging stays in release.yml (build-windows); no smoke/builds here yet.
   test-windows:
     runs-on: windows-2022
@@ -271,7 +271,7 @@ jobs:
           # The change classifier diffs the pushed range, so both endpoints must exist locally.
           fetch-depth: 0
       - name: Verify workflow action pins
-        run: node scripts/dev/verify-workflow-action-pins.mjs
+        run: node scripts/gates/verify-workflow-action-pins.mjs
       # Same classifier as the linux leg: a prose-only branch push skips the
       # windows runner entirely. Releases never come here (there is no tag
       # trigger) — they prove THIS job's success on main through
@@ -283,7 +283,7 @@ jobs:
           CI_BEFORE: ${{ github.event.before }}
           CI_AFTER: ${{ github.sha }}
           CI_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: node scripts/dev/classify-ci-changes.mjs
+        run: node scripts/gates/classify-ci-changes.mjs
       - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
         with:
           version: 11.21.0
@@ -305,13 +305,13 @@ jobs:
       # pre-install.
       - name: Upstream touchpoint registry (C1/C3/C5/C6/C9 + C11–C15)
         if: steps.classify.outputs.code == 'true'
-        run: node scripts/dev/verify-upstream-touchpoints.mjs --no-artifact-rebuild
+        run: node scripts/upstream/verify-upstream-touchpoints.mjs --no-artifact-rebuild
       - run: pnpm install --frozen-lockfile
         if: steps.classify.outputs.code == 'true'
       # C8 deterministic artifact gate (see the linux leg): needs node_modules.
       - name: Committed artifacts match sources (C8 rebuild gate)
         if: steps.classify.outputs.code == 'true'
-        run: node scripts/dev/verify-upstream-touchpoints.mjs
+        run: node scripts/upstream/verify-upstream-touchpoints.mjs
       - name: Assert lockfile not rewritten
         if: steps.classify.outputs.code == 'true'
         run: git diff --exit-code -- pnpm-lock.yaml
@@ -381,8 +381,9 @@ jobs:
   # desktop tests (the darwin lock assertions and the build-sidecar /
   # build-swift-app packaging-script suites) live in the package's MACOS_FILES
   # list (packages/desktop/scripts/test.mjs) and run HERE via test:macos, never
-  # on the ubuntu leg; this job also re-runs the cheap bridge gates plus the
-  # Swift suite and the packaging dry runs. A prose-only push skips the whole
+  # on the ubuntu leg; this job also re-runs the cheap bridge gates, the Swift
+  # suite in the release configuration (XCTSkip == 0), the compiled sidecar
+  # smoke and the packaging dry runs. A prose-only push skips the whole
   # leg through the same classifier as test/test-windows.
   test-macos:
     runs-on: macos-latest
@@ -397,7 +398,7 @@ jobs:
           # exist locally.
           fetch-depth: 0
       - name: Verify workflow action pins
-        run: node scripts/dev/verify-workflow-action-pins.mjs
+        run: node scripts/gates/verify-workflow-action-pins.mjs
       # Same classifier as test/test-windows: a prose-only branch push skips the
       # macOS runner (Swift build + packaging suites) entirely. Releases prove
       # THIS job's success on main through verify-release-ci-proof.mjs.
@@ -407,7 +408,7 @@ jobs:
           CI_BEFORE: ${{ github.event.before }}
           CI_AFTER: ${{ github.sha }}
           CI_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: node scripts/dev/classify-ci-changes.mjs
+        run: node scripts/gates/classify-ci-changes.mjs
       - uses: pnpm/action-setup@fe02b34f77f8bc703788d5817da081398fad5dd2 # v4.1.0
         with:
           version: 11.21.0
@@ -426,24 +427,39 @@ jobs:
       # POC_NODE_BIN turns the 8 Swift↔sidecar integration tests from
       # XCTSkip into real runs (they spawn `node packages/desktop/sidecar-entry.ts`);
       # locally verified 8/8 green with a plain node binary (2026-09 三审 #3).
-      - name: Swift build (release) + XCTest
+      # This raw step stays the release proof's pinned anchor (G25,
+      # REQUIRED_JOB_STEPS in release-workflow-policy.test.mjs); the gated
+      # release run below is the one that enforces the shipped configuration.
+      - name: Swift build (release)
         if: steps.classify.outputs.code == 'true'
         working-directory: macos
         run: |
           export POC_NODE_BIN="$(command -v node)"
           swift build -c release
-          swift test
+      # The gate the local/tests mode uses (run-checks `test:swift`): pins
+      # `swift test -c release` (G23 — the shipped native binary is a release
+      # build, so the release configuration must be the one executed, not
+      # merely compiled) and fails on ANY XCTSkip (G2 — the 8 sidecar
+      # integration cases must run, never skip to green). The runner defaults
+      # POC_NODE_BIN to its own node, so the integration cases really spawn
+      # `packages/desktop/sidecar-entry.ts`. Invoked directly (not through
+      # package.json) so the CI contract does not depend on a script alias.
+      - name: Swift tests (release configuration, XCTSkip == 0)
+        if: steps.classify.outputs.code == 'true'
+        run: node scripts/gates/run-swift-tests.mjs
       # JS↔Swift bridge lockstep: the committed bridge-manifest.json /
-      # BridgeManifest.swift must equal a regeneration, and the shim surface
-      # must match preload (both are in the desktop chain; re-running the two
-      # cheap ones here keeps the macOS leg self-contained when only Swift
-      # changes are pushed).
-      - name: Bridge manifest + shim surface lockstep
+      # BridgeManifest.swift must equal a regeneration, the shim surface must
+      # match preload, and the payload SHAPE at every method call site must
+      # match too (the manifest locks channels; the payload gate closes G22's
+      # wire-shape gap). Re-running the cheap ones here keeps the macOS leg
+      # self-contained when only Swift changes are pushed.
+      - name: Bridge manifest + shim surface + payload shape lockstep
         if: steps.classify.outputs.code == 'true'
         run: |
           node packages/desktop/bridge-manifest.test.ts
           node packages/desktop/bridge-shim.test.ts
           node packages/desktop/bridge-shim-surface.test.ts
+          node scripts/gates/verify-shim-payload-shape.mjs
       # Packaging inputs, no network / no real Node download: the sidecar
       # assembly needs build:control-plane first, then both packaging scripts
       # validate their plans and layouts (the real Node fetch is release.yml).
@@ -457,6 +473,44 @@ jobs:
         run: |
           pnpm --filter @dsh-chamber/desktop run build:control-plane
           pnpm --filter @dsh-chamber/desktop run test:macos
+      # Executed-assembly gate (G4): build the sidecar from the same sources
+      # Swift ships (no network — --skip-node/--skip-vendor; the host packages
+      # are not needed to boot and answer dsh-chamber:info) and run the REAL
+      # sidecar.js with DSH_CHAMBER_SIDECAR_COMPILED=1. A bundle that cannot
+      # boot fails here instead of after signing. A missing artifact is a hard
+      # failure once the marker is set; without the marker the gate prints a
+      # loud SKIP, never a silent pass.
+      - name: Compiled sidecar smoke (shipped sidecar.js executes)
+        if: steps.classify.outputs.code == 'true'
+        run: |
+          pnpm run build:sidecar --skip-node --skip-vendor --skip-host-packages
+          DSH_CHAMBER_SIDECAR_COMPILED=1 node scripts/gates/compiled-sidecar-smoke.mjs
+      # G33 machine gate: the native GUI acceptance used to be manual-only
+      # (pnpm run acceptance:gui --flavor native), so nothing in CI pinned that
+      # the native assembly the packaged Swift shell spawns actually launches
+      # and serves. This step drives the sidecar built by the step above (the
+      # NDJSON B bridge ready/info/settings frames, /health, the hostile-Origin
+      # fence, the shell index when the assembly carries dist/web, and a clean
+      # SIGTERM exit) and passes --require-assembly so a missing/skipped build
+      # prerequisite is a hard FAIL instead of a loud SKIP. The WKWebView UI
+      # and the .app double-click path still cannot be driven headlessly (no
+      # CDP endpoint): those stay documented real-machine acceptance items.
+      - name: Native assembly acceptance (spawned sidecar boots + serves)
+        if: steps.classify.outputs.code == 'true'
+        run: node scripts/gui-acceptance/run.mjs --flavor native --require-assembly
+      # Electron compiled-artifact smoke (G4 residual): the compiled
+      # dist/control-plane entry is spawned electron-free, must bind and answer
+      # /health, then exit 0 on SIGTERM; dist/preload.cjs is executed inside
+      # node:vm with a stubbed electron and must expose the frozen
+      # window.dshChamber surface (4 scalars + 9 namespaces). build:preload is a
+      # cheap tsc emit that gives the gate the real artifact. Both artifacts
+      # absent = loud SKIP; either present = hard fail (a partial build is a
+      # build-order bug, never a silent pass).
+      - name: Electron compiled artifacts smoke (control-plane boot + preload surface)
+        if: steps.classify.outputs.code == 'true'
+        run: |
+          pnpm --filter @dsh-chamber/desktop run build:preload
+          node scripts/gates/verify-electron-artifacts.mjs
       # Packaging dry runs (no network / no real Node download): the sidecar
       # assembly plan and the .app assembly plan validate their inputs.
       - name: Packaging dry runs (sidecar + .app)

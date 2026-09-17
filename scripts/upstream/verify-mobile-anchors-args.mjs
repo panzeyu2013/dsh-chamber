@@ -1,5 +1,5 @@
 /**
- * Argument contract for `scripts/dev/verify-mobile-anchors.mjs`
+ * Argument contract for `scripts/upstream/verify-mobile-anchors.mjs`
  * （纯函数，无 I/O、无 process —— 与 `verify-upstream-touchpoints-args.mjs`
  * 同一套拆法：顶层门脚本不可被测试 import，参数面单独成模块才能做负例）。
  *
@@ -25,9 +25,9 @@ export const DEFAULT_ANCHOR_ROOTS = [
 export const VERIFY_MOBILE_ANCHORS_USAGE = `verify-mobile-anchors — 移动插件锚点上游保鲜门（docs/checklists/upstream-touchpoints.md §4）
 
 用法：
-  node scripts/dev/verify-mobile-anchors.mjs [--anchor-root <dir>] [--require-anchor-root] [--list]
-  node scripts/dev/verify-mobile-anchors.mjs --simulate-rename <old>=<new> [--simulate-rename …]
-  node scripts/dev/verify-mobile-anchors.mjs --help
+  node scripts/upstream/verify-mobile-anchors.mjs [--anchor-root <dir>] [--require-anchor-root] [--list]
+  node scripts/upstream/verify-mobile-anchors.mjs --simulate-rename <old>=<new> [--simulate-rename …]
+  node scripts/upstream/verify-mobile-anchors.mjs --help
 
 选项：
   --anchor-root <dir>        上游锚点根（须含 node_modules/@deepseek-ai/**/lib/*.js

@@ -1,5 +1,5 @@
 /**
- * Argument contract for `scripts/dev/verify-upstream-touchpoints.mjs`
+ * Argument contract for `scripts/upstream/verify-upstream-touchpoints.mjs`
  * (2026-12 review P2, pure — no I/O, no process access, so it is unit-testable
  * on its own; the gate script itself is a top-level program and cannot be
  * imported by a test).
@@ -26,9 +26,9 @@ export const USAGE_EXIT_CODE = 2
 export const VERIFY_USAGE = `verify-upstream-touchpoints — 上游触点保鲜门（C1/C3–C15；docs/checklists/upstream-touchpoints.md 的机器侧）
 
 用法：
-  node scripts/dev/verify-upstream-touchpoints.mjs [--no-artifact-rebuild]
-  node scripts/dev/verify-upstream-touchpoints.mjs --tags <old> <new>
-  node scripts/dev/verify-upstream-touchpoints.mjs --help
+  node scripts/upstream/verify-upstream-touchpoints.mjs [--no-artifact-rebuild]
+  node scripts/upstream/verify-upstream-touchpoints.mjs --tags <old> <new>
+  node scripts/upstream/verify-upstream-touchpoints.mjs --help
 
 选项：
   --no-artifact-rebuild   C8 退回 mtime advisory（**不写盘**）。CI 在 install

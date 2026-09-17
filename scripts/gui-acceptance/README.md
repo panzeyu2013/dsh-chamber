@@ -9,8 +9,9 @@
 
 | 文件 | 用途 |
 |---|---|
-| `run.mjs` | 单一入口：`--live` / `--attach` / `--dev` |
+| `run.mjs` | 单一入口：`--live` / `--attach` / `--dev`（`--flavor electron|native`） |
 | `probe.mjs` | `--live`：对**运行中的应用**做只读 HTTP/WS 探测（安装态亦可，无 CDP） |
+| `native.mjs` | `--flavor native`：驱动**原生壳 spawn 的 sidecar 装配**（ready/B 桥/控制面 HTTP），或 `--attach` 探测运行中的原生壳控制面；WKWebView UI 不可驱动（没有 CDP 端点）。`--require-assembly` 是机器门形态：装配缺失记 FAIL 而非 SKIP（ci.yml 的 native 装配启动门用它） |
 | `walkthrough.mjs` | CDP 界面走查：结构断言 + 截图 + 控制台/网络事实采集（含 `W-4b` 行悬停卡片四条腿：标记锚定的升起/清卡 + 标题同一性、**实测窗口内**的搁浅竞态、A→B 互斥自愈、blur/hidden 清卡） |
 | `launch.mjs` | `--dev`：一次性 dev 实例（隔离 user-data、固定控制面端口、CDP 端口） |
 | `cdp.mjs` | 零依赖 CDP 客户端（Node 内置 `WebSocket`/`fetch`） |
@@ -34,6 +35,9 @@ pnpm run acceptance:gui -- --attach          # 对已带 CDP 的 dev 实例做�
 pnpm run acceptance:gui -- --dev             # 自起 dev 实例 → 走查 → 自动关闭
 pnpm run acceptance:gui -- --dev --require-hover   # 悬停腿必须真实执行：未执行（INFO）计为 FAIL
 pnpm run acceptance:gui -- --live --sources gateway-a,gateway-b   # 显式指定要扫的远程来源
+pnpm run acceptance:gui -- --flavor native   # 原生 flavor：自起 sidecar 装配 → 走查 → SIGTERM 关闭
+pnpm run acceptance:gui -- --flavor native --attach --plane http://127.0.0.1:17500   # 探测运行中的原生壳控制面
+node scripts/gui-acceptance/run.mjs --flavor native --require-assembly             # 机器门：装配缺失即 FAIL（ci.yml 用同一条命令）
 pnpm run test:gui-acceptance                 # 纯判据单测（无需 GUI，CI 跑）
 ```
 
@@ -51,6 +55,35 @@ pnpm run test:gui-acceptance                 # 纯判据单测（无需 GUI，CI
 INFO（实例确无可悬停卡片行），就在报告里改成 FAIL 并附上"本次运行要求 hover 腿必须真实执行"。退出码语义
 不变（`INFO` 默认仍不算失败），所以这是**逐次显式选择**的严格档，不是新的默认门；它只重标"未执行"，
 已经是 PASS/FAIL 的判据原样通过。
+
+## 原生 flavor（`--flavor native`）：能查什么、不能查什么
+
+原生壳（macOS Swift，design 25）的窗口是 WKWebView，**没有 CDP 端点**，所以本工具箱无法像
+Electron 那样驱动它的 DOM。`--flavor native` 因此驱动**打包 .app 内嵌的 sidecar 装配**
+（`packages/desktop/release/sidecar`，即 `build:sidecar` 的产物、`build-swift-app` 原样拷进
+`Contents/Resources/sidecar` 的同一棵树）：
+
+- `N-1` ready 帧（NDJSON B 桥，与 Swift BridgeClient 同一协议）带真实端口；
+- `N-2`/`N-3` `dsh-chamber:info`（platform 与宿主一致）与 `dsh-chamber:settings-get`；
+- `N-4`/`N-5` 控制面 `/health` 与敌意 Origin 的 403 `origin_forbidden` 围栏；
+- `N-6` 装配携带 `dist/web` 时壳 index 与声明资源全部 200；未携带时记 **INFO**（不假装通过）；
+- `N-7` SIGTERM 后干净退出（exit 0）。
+
+**不能查**：WKWebView 的界面本身（DOM、悬停卡片、设置面、首启向导）。这些腿只属于 Electron
+`--attach`/`--dev` 或实机目检；`--attach` 原生档只探测运行中壳的控制面 HTTP，接不进它的 web view。
+报告 meta 会写明这条边界。**打包 .app 的双击启动/装载页面**同样不可无头驱动（WKWebView 没有 CDP
+端点，签名/公证产物在 CI 里也不可达，见 G19）：它是实机验收项，不在本工具箱的机器门内。
+
+- 前置：`pnpm run build:sidecar --skip-vendor --skip-host-packages`（先 `build:control-plane`），
+  或 `DSH_CHAMBER_SIDECAR_DIR` / `--sidecar-dir` 指向现成装配。
+- 装配缺失/半成品：默认打印 `SKIP: …`（列出缺失路径与补救命令）并以退出码 0 结束，报告里记 INFO——
+  **不是静默通过**。`pnpm run test:gui-acceptance`（纯判据层）不构建 sidecar 装配，所以那里必定是这条
+  loud skip 路径；本地/发布验收先构建装配即可得到真实走查。
+- **机器门（G33）**：CI 的 `test-macos` 在 `Compiled sidecar smoke` 之后跑
+  `node scripts/gui-acceptance/run.mjs --flavor native --require-assembly`——它**要求**上一步刚构建的
+  sidecar 装配在场（缺失即 FAIL，退出码 1），因此启动链的机器验证不会因为丢了构建前置而变绿；
+  该步骤名同时进 `verify-release-ci-proof.mjs` 的必跑表，删掉它 release proof 会红。原生壳 spawn 出的
+  sidecar 启动链由此在无 GUI 环境被机械验证，而 .app 双击与 WKWebView 界面仍归实机。
 
 ## 已登记容忍与策略（判据的例外都写在这里，不藏在代码里）
 
@@ -151,7 +184,7 @@ INFO（实例确无可悬停卡片行），就在报告里改成 FAIL 并附上"
   残留也是 FAIL。"不写数据"因此是被断言的事实，而不是 README 里的承诺。**读不到快照**（没取到，或存值
   JSON 解析失败）一律按"未检查"处理并 FAIL——"证明不了没写"不会被读成"没写"；同理 `W-4a` 的来源节几何
   读不到（非有限数）即 FAIL，因为那条腿的判据本来就是几何。
-- GUI 腿需要 display/打包态，**不进 CI**；进 CI 的是 `checks.mjs` 的纯判据单测，加上悬停行选择逻辑对假 DOM 跑的迷你用例（真页面表达式，判"未分组桶头不会被误选"这类选择缺陷）。
+- **Electron CDP 走查**需要 display/打包态，**不进 CI**；进 CI 的是 `checks.mjs` 的纯判据单测（加上悬停行选择逻辑对假 DOM 跑的迷你用例）与 **native 装配机器门**（`--flavor native --require-assembly`，无 GUI、无 CDP，只驱动 sidecar 装配；见上文"机器门（G33）"）。
 
 ## 与其它工具的关系
 

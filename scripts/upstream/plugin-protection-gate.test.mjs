@@ -4,7 +4,7 @@
  * 文件**的正向断言（我的解析器与锚点必须与仓内现状一致——锚点写错会在这里先红，
  * 而不是在 CI 里红）。
  *
- * 跑法：`node --test scripts/dev/plugin-protection-gate.test.mjs`
+ * 跑法：`node --test scripts/upstream/plugin-protection-gate.test.mjs`
  * （已挂进 `pnpm run test:upgrade-tools`）。
  */
 

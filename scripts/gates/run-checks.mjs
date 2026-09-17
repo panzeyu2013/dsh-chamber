@@ -9,10 +9,17 @@
  * test derives the push path's gates from ci.yml and requires release
  * validation to run them).
  *
+ * A step is normally a package script name (`pnpm run <step>`). Two executed-
+ * assembly gates (G4's compiled-sidecar smoke and the compiled Electron
+ * artifacts smoke, G32/G33) have no root package.json alias on purpose — one is
+ * a script under scripts/gates/ — so a step may also be written as an explicit
+ * command line: `node <script> [args]` or `pnpm <args>`. Both forms are
+ * spawned directly by this runner; nothing is interpreted by a shell.
+ *
  * Usage:
- *   node scripts/dev/run-checks.mjs <static|tests|typecheck|full>
- *   node scripts/dev/run-checks.mjs <mode> --list     # print the plan, run nothing
- *   node scripts/dev/run-checks.mjs <mode> --continue # keep going after a failure
+ *   node scripts/gates/run-checks.mjs <static|tests|typecheck|full>
+ *   node scripts/gates/run-checks.mjs <mode> --list     # print the plan, run nothing
+ *   node scripts/gates/run-checks.mjs <mode> --continue # keep going after a failure
  *
  * Exit status is 1 when any step fails (or when a mode resolves to no steps: a
  * mode that runs nothing has not passed).
@@ -59,14 +66,37 @@ const CLIENT_TYPECHECKS = [
 ]
 
 /**
- * macOS/Swift-only leg: `test:macos` runs the darwin O_EXLOCK lock assertions
- * and the two packaging-script suites (plutil/codesign/ditto/hdiutil + the
- * SwiftPM .build output), so it is appended only on darwin — never on the
- * ubuntu test job / release validation. The CI entry point is ci.yml's
- * test-macos job, which prepares `dist/control-plane` and `swift build`
- * first; a local `check:tests` on darwin needs the same preparation.
+ * macOS/Swift-only leg: `test:swift` is the XCTest suite (run-swift-tests.mjs
+ * pins `-c release` and fails on any XCTSkip — G2/G23), `test:macos` runs the
+ * darwin O_EXLOCK lock assertions and the two packaging-script suites
+ * (plutil/codesign/ditto/hdiutil + the SwiftPM .build output). Both are
+ * appended only on darwin — never on the ubuntu test job / release validation.
+ * The CI entry point is ci.yml's test-macos job; a local `check:tests` on
+ * darwin needs `pnpm run build:control-plane` first (the packaging suites read
+ * dist/control-plane). `test:swift` runs first so its release build satisfies
+ * the packaging suite's `.build/release` precondition.
+ *
+ * G32/G33: the same leg also carries the executed-assembly gates ci.yml's
+ * test-macos job runs — the compiled sidecar smoke (the shipped sidecar.js
+ * boots, DSH_CHAMBER_SIDECAR_COMPILED=1 so a missing assembly is a hard
+ * failure), the native acceptance (the sidecar the packaged Swift shell spawns
+ * launches and serves; `--require-assembly` turns the loud SKIP into a FAIL,
+ * so deleting the build step cannot turn this gate green), and the compiled
+ * Electron artifacts smoke (control-plane boot + frozen preload surface). The
+ * sidecar assembly is built here exactly as ci.yml builds it
+ * (--skip-node/--skip-vendor/--skip-host-packages) so the mode is
+ * self-contained; the Electron gate needs build:preload because a
+ * control-plane-only tree is the partial build that gate refuses by design.
  */
-const MACOS_CHECKS = process.platform === 'darwin' ? ['test:macos'] : []
+const MACOS_CHECKS = process.platform === 'darwin' ? [
+  'test:swift',
+  'test:macos',
+  'pnpm run build:sidecar --skip-node --skip-vendor --skip-host-packages',
+  'test:sidecar:compiled',
+  'node scripts/gui-acceptance/run.mjs --flavor native --require-assembly',
+  'pnpm --filter @dsh-chamber/desktop run build:preload',
+  'node scripts/gates/verify-electron-artifacts.mjs',
+] : []
 
 /** Repository-level policy and documentation gates. */
 const STATIC_CHECKS = [
@@ -75,6 +105,7 @@ const STATIC_CHECKS = [
   'verify:workflows',
   'verify:workflow-yaml',
   'verify:test-wiring',
+  'verify:shim-payload',
   'verify:md-links',
   'test:release-workflow',
   'test:upgrade-tools',
@@ -112,6 +143,35 @@ export function requestedMode(argv) {
 }
 
 /**
+ * Resolve one mode step to an executable invocation. A step is either a
+ * package script name (the default: `pnpm run <step>`) or an explicit command
+ * line for a gate without a root package.json alias (`node <script> [args]` or
+ * `pnpm <args>`); nothing is passed through a shell, so the tokens are split on
+ * whitespace and no quoting is honoured — the entries in this file are
+ * constants, not user input.
+ * @param {string} step - one MODES entry.
+ * @param {{ command: string, prefix: string[] }} [pnpm] - the pnpm invocation.
+ * @returns {{ command: string, args: string[], display: string }} invocation.
+ */
+export function stepInvocation(step, pnpm = pnpmInvocation()) {
+  if (step.startsWith('node ')) {
+    return {
+      command: process.execPath,
+      args: step.slice('node '.length).trim().split(/\s+/u),
+      display: step,
+    }
+  }
+  if (step.startsWith('pnpm ')) {
+    return {
+      command: pnpm.command,
+      args: [...pnpm.prefix, ...step.slice('pnpm '.length).trim().split(/\s+/u)],
+      display: step,
+    }
+  }
+  return { command: pnpm.command, args: [...pnpm.prefix, 'run', step], display: `pnpm run ${step}` }
+}
+
+/**
  * Run one mode's steps in order.
  * @param {string} mode - mode name present in {@link MODES}.
  * @param {{ list?: boolean, keepGoing?: boolean, log?: (line: string) => void }} [options] - behaviour overrides.
@@ -121,17 +181,18 @@ export function runMode(mode, options = {}) {
   const log = options.log ?? ((line) => { console.log(line) })
   const steps = MODES[mode]
   if (steps === undefined || steps.length === 0) return { failed: [`mode ${mode} has no steps`], ran: 0 }
+  const pnpm = pnpmInvocation()
   if (options.list === true) {
     log(`run-checks ${mode}: ${steps.length} step(s)`)
-    for (const step of steps) log(`  - pnpm run ${step}`)
+    for (const step of steps) log(`  - ${stepInvocation(step, pnpm).display}`)
     return { failed: [], ran: 0 }
   }
-  const { command, prefix } = pnpmInvocation()
   const failed = []
   let ran = 0
   for (const step of steps) {
-    log(`\n=== pnpm run ${step} ===`)
-    const result = spawnSync(command, [...prefix, 'run', step], { stdio: 'inherit' })
+    const invocation = stepInvocation(step, pnpm)
+    log(`\n=== ${invocation.display} ===`)
+    const result = spawnSync(invocation.command, invocation.args, { stdio: 'inherit' })
     ran += 1
     if (result.status !== 0) {
       failed.push(step)
@@ -146,7 +207,7 @@ function main() {
   const mode = requestedMode(process.argv.slice(2))
   if (mode === undefined) {
     console.error(`run-checks: expected one of ${Object.keys(MODES).join(', ')}`)
-    console.error('  node scripts/dev/run-checks.mjs <mode> [--list] [--continue]')
+    console.error('  node scripts/gates/run-checks.mjs <mode> [--list] [--continue]')
     process.exit(2)
   }
   const { failed, ran } = runMode(mode, {
