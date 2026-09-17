@@ -47,7 +47,7 @@
 - 不把官方的客户端半拉进复合壳（不需要 covered/factory、不需要 vendor 补丁、不需要 subpath seam）；
 - 控制面零执行面（逐字代理 + cookie 注入），桌面主进程不持有本地启动面
   （无 `stat` / `openPath` / `showItemInFolder` / `shell.openPath`）；
-- v1 不做（分批见 §7.2 与 `docs/progress/todo/open-in-ownership-and-enhancements.md`）：
+- v1 不做（分批见 §7.2 与 `docs/progress/todo/open-in-superset-batches.md`）：
   远端宿主侧打开（C 档候选）、远程 provider 家族与远程文件级打开（S1/S2）；
   非启动出口收窄为「复制路径」（侧栏，零新 IPC），多入口（侧栏入口/快捷键）裁决为不做。
 
@@ -330,7 +330,7 @@ provider（本地目录不再是主进程的事，也不再是"官方宿主行"�
    （`applicableChamberPackages`，design 13 §6）。gateway **不需要额外代码**：它的 seed 条目同样由
    注册表派生、`sourceDir` 指向同步缓存目录（`gateway/src/index.ts:333-343`），而未同步 ⇒ 目录为空
    ⇒ 按既有"缺产物优雅跳过、不写悬挂 loader 行"规则处理；
-5. `scripts/dev/verify-upstream-touchpoints.mjs`：**C7** 文本哨兵（gateway 域值集 ↔ runtime 列表）；
+5. `scripts/upstream/verify-upstream-touchpoints.mjs`：**C7** 文本哨兵（gateway 域值集 ↔ runtime 列表）；
    **C8** 的提交态产物清单已加入 `packages/dsh-chamber-seed-open-in/dist/index.js`
    （现为 host dist ×4，C8 共 6 组）并同步了脚本头注；
    **C2** 的 tag 重放会自动纳入（`FORKS.map(f => f.upstream)`，advisory，缺目录可容忍）；
@@ -482,7 +482,7 @@ chevron，不因只有一个 app 少画 chevron）。
 ## 10. 已知边界与实机验收
 
 - **fork 的保鲜（机器门，不是人工 diff）**：新包已登记进
-  `scripts/dev/verify-upstream-touchpoints.mjs` 的 `FORKS` 表
+  `scripts/upstream/verify-upstream-touchpoints.mjs` 的 `FORKS` 表
   （`name: 'seed-open-in'`、`upstream: 'packages/host/open-in-app'`，与
   `docs/checklists/upstream-touchpoints.md` §4 同源），从而获得三层保护：
   **C1** = 未登记差异即硬失败（上游漂移后我们的副本"不一致且未登记补丁"，门直接红）、
@@ -529,5 +529,5 @@ chevron，不因只有一个 app 少画 chevron）。
 - `docs/design/05-connection-manager.md` §2.2/§7（自研插件替换官方注册的纪律、trustedIpc 围栏）
 - `docs/design/24-archived-session-cleanup.md`（第二个 seed host 包先例：Remote 域 + 探针）
 - `docs/checklists/upstream-touchpoints.md` §4（本文的 fork 行）
-- `docs/progress/todo/open-in-ownership-and-enhancements.md`（实施计划与超集分批）
+- `docs/progress/todo/open-in-superset-batches.md`（超集分批与降级留档形态）
 - `docs/progress/STATUS.md`（唯一进度记录）

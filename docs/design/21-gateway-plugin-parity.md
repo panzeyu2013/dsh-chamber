@@ -642,8 +642,8 @@ R2 只看**直接 spec**；官方层的**依赖闭包**同样会进入实例树�
 
 #### 6.11.6 抗漂移门禁（把「担心」变成会红的东西）
 
-挂在既有 C 门家族（`scripts/dev/verify-upstream-touchpoints.mjs`，判据纯函数在
-`scripts/dev/plugin-protection-gate.mjs`，负例测试随 `pnpm run test:upgrade-tools`；
+挂在既有 C 门家族（`scripts/upstream/verify-upstream-touchpoints.mjs`，判据纯函数在
+`scripts/upstream/plugin-protection-gate.mjs`，负例测试随 `pnpm run test:upgrade-tools`；
 登记表镜像在 `docs/checklists/upstream-touchpoints.md` §6）：
 
 | 门 | 断言 | 红意味着 |
@@ -737,7 +737,7 @@ R2 只看**直接 spec**；官方层的**依赖闭包**同样会进入实例树�
   （已安装列表逐行移除、**受保护集合判定（装面保守 / 卸面按 `B₀ ∪ S`）**、undo journal、清单掩码）落在
   design 13 前置 blockquote 与 §6/§7；
 - 受保护集合与代耦合的**上游保鲜门 C11–C14** 登记在 `docs/checklists/upstream-touchpoints.md` §6
-  （机器侧判据 `scripts/dev/plugin-protection-gate.mjs`，负例测试随 `pnpm run test:upgrade-tools`；
+  （机器侧判据 `scripts/upstream/plugin-protection-gate.mjs`，负例测试随 `pnpm run test:upgrade-tools`；
   升级流程引用在 `docs/checklists/dsh-upgrade-checklist.md` §0/§6）——两者与本文 §6.11 同源，改动时三侧同步；
 - design 17：§3 能力表含第三方插件管理行与 dsh 直连（ssh/http）不挂载 dsh-runtime 分节；`/chamber/plugins/*`
   写面与 §10 编排面剥离后的存活面一致；§4.1/§12 生命周期 writer barrier 语言含插件队列与 executor 子进程；
@@ -782,7 +782,7 @@ R2 只看**直接 spec**；官方层的**依赖闭包**同样会进入实例树�
   组合行提交出去）+ 旧后端无 `rows` 的回退路径（golden 缺字段载荷不抛错、**官方/chamber 行整行不列出**）+
   受保护行（含自己声明的组合/播种名）与**无同名 Loader entry 的 bundle 层行**都保持状态格中性
   （不产生假「重启后生效」）；
-- **上游保鲜门 C11–C14**：`scripts/dev/plugin-protection-gate.test.mjs`
+- **上游保鲜门 C11–C14**：`scripts/upstream/plugin-protection-gate.test.mjs`
   （真实仓库正向断言 + 改坏派生来源/契约/注册表/镜像的负例），随 `pnpm run test:upgrade-tools` 进 CI；
 - A gateway 子矩阵：spec 白名单族/**受保护集合判定（§6.11 的判定码 `protected`/`needs-version`/
   `needs-exact-version`/`generation-mismatch`/`protected-set-unavailable`/`runtime-version-unknown`；

@@ -54,7 +54,7 @@
   锁步（锁步范围 = 通道名字符串集合 + 类型/字段镜像）；桥 manifest
   （`bridge-manifest.json`，提交物）另带**通道 + 方向**两维，命名空间归属单源在
   preload/shim 暴露面并由 `bridge-shim-surface.test.ts` 锁步（§4.4.3）。
-- **工作量（熟练工程师人-日；日历折算与三档排期见 todo companion §九）**：M0
+- **工作量（熟练工程师人-日；三档排期随执行收口，量级见本节末）**：M0
   1–2 → M1 5–10 → M2 10–15 → M3 15–20 → M4 10–15 → M5 5–10（单位均为人-日）；
   合计 **46–72 人-日（9–14 人周）**。Electron 版全程并行保留（P1 的前提），
   Win/Linux 不受影响。
@@ -77,7 +77,7 @@
 | 来源 | 发现 | 处置 |
 |---|---|---|
 | A1/A2/A11 | "4 个文件依赖 Electron"笔误；23.5k/21k 行口径高估 | §0/§4.2 口径（P1 拆分后重测）：真实依赖 Electron 4 文件（main.ts/electron-edges.ts/preload.cts/updater.ts）≈6.7k——打磨轮当时为 3 文件（electron-edges.ts 是 P1 新 seam）；纯 Node 业务模块零 import（electron-free-gate 传递闭包） |
-| A3 | "port 从 17500 起试"与现状不符 | §3.3 改：**打包固定 17500 无退避**（main.ts:253-281）；dev 从 17520 起 bind 探测首个空闲端口（200 个候选），或按 `POC_PORT` > `DSH_CHAMBER_CP_PORT` 钉死（Swift 侧 ControlPlanePort.swift）；控制面 EADDRINUSE 即失败；**dsh 实例**从 17510 起 +1 ≤5 次 |
+| A3 | "port 从 17500 起试"与现状不符 | §3.3 改：**打包固定 17500 无退避**（`shell-core.ts:426-441` 的 resolveControlPlanePort）；dev 从 17520 起 bind 探测首个空闲端口（200 个候选），或按 `POC_PORT` > `DSH_CHAMBER_CP_PORT` 钉死（Swift 侧 ControlPlanePort.swift）；控制面 EADDRINUSE 即失败；**dsh 实例**从 17510 起 +1 ≤5 次 |
 | A4 | Supervisor backoff 误引 "5×500ms"（那是 renderer-ready 握手语义） | §3.3 改：sidecar 重启退避另立；renderer 恢复 = 500ms 延迟 + 60s 窗口 ≤3 次 + 15s unresponsive（main.ts:1178-1267）参数化 |
 | A5/4.3 | spawn-dsh 纯 Node 分支有 basename 门；Electron 分支另带 --expose-internals | §4.3 写明基名约束 + 解析断言测试；Swift 捆绑 `Resources/sidecar/node` 即满足 |
 | A6 | "13 命名空间"实为 4 标量 + 9 命名空间 | §4.4.1 全篇改口径（companion 同） |
@@ -101,13 +101,13 @@
 | C1 | Electron backgroundThrottling:false 无 WKWebView 等价物 | **2026-12 收敛**：design 14 §D1 修订把 Electron 侧恢复为 Chromium 默认节流（实测隐藏期 rAF 0 / SSE 不受影响），两 flavor 隐藏态行为同向，本项差异消除；**P0 G2/G5 的实机子项保留**（打包态 hide ≥30s SSE 心跳/唤醒 + 隐藏期 CPU，见 STATUS 实机门禁） |
 | C2 | WebKit 存储隔离（WKWebsiteDataStore 独立 jar） | §6.2 共存语义写明；**P0 增实测**（双 flavor 交替同实例的会话 cookie/登录态） |
 | C3/E6 | 剪贴板读写权限模型差异 | §5 E16 行文精确 + P0 对拍加"粘贴/剪贴板读" |
-| D1 | shim 挂出时机 vs preload"先 info 后 expose"语义 | §4.4.1 定案方案②：documentStart 预定义完整 API + ready 前 expectedOrigin nil（全部 invoke 回 `ipc_sender_forbidden`），渲染端 10×50ms 有界重试自愈 |
+| D1 | shim 挂出时机 vs preload"先 info 后 expose"语义 | §4.4.1 按实现收敛：documentStart 定义内部管路（带令牌），`dsh-chamber:info` 成功后才暴露 `dshChamber`；未就绪/失败期 invoke 回 `ipc_not_ready`（1+10 次 50ms 重试），全败分支与 preload 同形（surface 在、标量 null） |
 | D2 | sidecar stdout=协议流 与存量 console.log 冲突 | sidecar-entry 顶部 console→stderr 重定向；fail-loud 只针对重定向后意外泄漏 |
 | D3 | 通知 click 需先激活窗口 | click 顺序 = NSApp.activate + orderFront（含无窗重建）→ 回 B 桥 → core 队列；HostEdges 补 focusMainWindow() |
 | D4/D6 | 退出链三分支 + 5s 硬顶 + LOCAL_RUNNING_STATES 判据 | §3.3/§5 E9 补 |
 | D8 | ready 帧与 INFO 双源漂移 | ready 帧最小化（port + shellVersion），其余全走既有 dsh-chamber:info |
 | E1 | §7 v1 降级用 idle\|error 会让 UI 永不出现入口且显示失败态 | 改用现成 **blocked-available 形态**：真实 check（对比 GitHub Releases，复用 updater.ts 纯函数）→ phase='available' + releaseUrl + installBlockedReason='原生壳不支持自动安装'；update-restart 显式错误 |
-| E2 | 共享 renderer 缺 shell-flavor 判别字段（platform 同为 darwin） | `dsh-chamber:info` 载荷增 **flavor: 'electron'\|'swift'**；同步 preload/global.d.ts/镜像测试；UI 门（更新文案等）加 flavor 条件 |
+| E2 | 共享 renderer 缺 shell-flavor 判别字段（platform 同为 darwin） | 字段已落地（`main.ts:3858` 载荷带 `flavor`，镜像面仍 4 标量）；**UI 能力门最终由 `installBlockedReason`/原生能力位驱动，renderer 未消费 flavor**（零消费者，保留字段不加条件） |
 | E7 | W6 应注明无 backgroundThrottling 等价物 | §8.5 W6 注（同 C1） |
 | E8 | shim 是第三处通道面，手写会漂移 | manifest 产出 Swift 枚举 + `Resources/chamber-bridge.stub.js` 锁步样本（不随 .app 打包）；真正注入的 `bridge-shim.poc.js` 由 `bridge-shim-surface.test.ts` 对 preload 面逐命名空间锁步 |
 
@@ -191,8 +191,13 @@ dsh-chamber desktop 的 Electron 使用面已收敛为薄壳（AGENTS.md 运行�
 
 - **Swift 壳**不 import 任何业务模块；它是"边缘执行器 + 传输层护栏 +
   窗口"，业务状态全部在 sidecar。
-- **sidecar** = 打包产物：`node sidecar.js --user-data-dir <dir> [--dsh-path
-  <dir>] [--pnpm-dir <dir>] [--stdio|--socket <path>]`；stdout/stderr 不混业务：
+- **sidecar** = 打包产物，传输恒为 **stdio**（无 socket 传输：壳始终以管道 spawn，
+  未实现的 `--socket` 不再列为接口面）。实参形状与 `sidecar-entry.ts` 一致：
+  `node sidecar.js --user-data-dir <dir> [--dsh-path <dir>] [--web-dist-dir <dir>]
+  [--host-graph-dir <dir>] [--host-git-dir <dir>] [--host-archive-dir <dir>]
+  [--host-open-in-dir <dir>] [--port <n>] [--native-updater <feed|off>]`
+  （pnpm/host 包路径由 sidecar 内部布局解析决定，不再有 `--pnpm-dir` 入参）。
+  stdout/stderr 不混业务：
   **sidecar-entry 入口把存量 console.log/console.debug 重定向到 stderr**
   （main.ts 遍布业务日志如端口行 :1787、will-quit 清理完成串 :1673——实机
   门禁断言该串；不重定向则 B 桥首发即撞非协议行）；fail-loud 只针对重定向
@@ -256,7 +261,7 @@ dist/dsh-chamber-seed-*/, vendor/dsh/, pnpm/}`。
   `--host-graph-dir/--host-git-dir/--host-archive-dir/--host-open-in-dir` 注入
   同一基名（`BuildSidecar.HOST_PACKAGES` 单源；`sidecar-ctx` 的
   `hostPackageSourceDir` dev 兜底也按同名在 `packages/` 下探测）——
-  `scripts/dev/packaging-manifest-lockstep.test.mjs` 把这组清单在 build-sidecar /
+  `scripts/release/packaging-manifest-lockstep.test.mjs` 把这组清单在 build-sidecar /
   control-plane / 根构建链 / `HOST_PACKAGE_BUILD_ROWS` / AppDelegate 五处锁步；
   改名/加包要一起改。
 - **open-in 是 localOnly 行（design 20 §6）**：它随 .app 分发、**只**喂本地实例
@@ -306,9 +311,9 @@ DSHChamberPoc_DSHChamberPoc.bundle, sidecar/, dist/web}}`。三条实跑约束�
    shellVersion}**（其余身份字段全走既有 `dsh-chamber:info` 通道，保留其
    10×50ms 重试与 null 兜底语义，防双源漂移，D8）。
 3. Swift 收到 ready → 用 `http://127.0.0.1:<port>/` 建 WKWebView 并 loadURL
-   （A 桥注入时机 = §4.4.1 D1 定案方案②：**documentStart 预定义完整 API，
-   ready 前 expectedOrigin 为 nil → 全部 invoke 回 `ipc_sender_forbidden`**，
-   渲染端按既有 10×50ms 有界重试自愈）。
+   （A 桥注入时机 = §4.4.1 D1：**documentStart 定义内部管路，`dsh-chamber:info`
+   成功后才暴露 `dshChamber`**；info 未就绪/失败期间 invoke 回 `ipc_not_ready`
+   （1 次 + 10 次 50ms 重试），渲染端按既有 surface 缺失链自愈）。
 4. 运行时故障分级：
    - sidecar 崩溃/非零退出 → Supervisor 按重启退避重启（**sidecar 无 Electron
      先例，退避语义另立**：cp.start 失败 = fatal 退出；运行中崩溃 = 退避重启，
@@ -459,11 +464,12 @@ interface HostEdges {
   runtime/notifications/badge）**（preload.cts:888-925；合计 60 invoke + 8
   订阅）。Swift 注入 `bridge-shim.poc.js`（WKUserScript、.page world、
   documentStart；资源名 = MainWindowController.swift:40）定义同形 API：
-  - **挂出时机（D1，已定案）**：documentStart 预定义完整 API，Swift 侧在 ready
-    帧前把 expectedOrigin 置 nil → 全部 invoke 回 `ipc_sender_forbidden`，
-    渲染端按既有「surface 缺失 + 10×50ms 有界重试」自愈
-    （BridgeShimInjector.swift:1-37 的方案②；即 preload「先 info 后 expose」
-    的语义等价物，P0 对拍结论已落于接线）。
+  - **挂出时机（D1，已按实现收敛）**：documentStart 定义内部管路（resolve/emit/
+    rehydrate，带窗口随机令牌），**`dsh-chamber:info` 成功后**才暴露 `dshChamber`
+    面；info 未就绪/失败期间 invoke 回 `ipc_not_ready`（1 次 + 10 次 50ms 重试），
+    渲染端走既有 surface 缺失链自愈。全败分支与 preload 同形（surface 在、标量
+    null）——即 preload「先 info 后 expose」的真正等价物（bridge-shim.poc.js、
+    BridgeShimInjector.swift；G22/T-12 有对应门禁与登记）。
   - 方法面：按 manifest 生成 `dshChamber.<ns>.<method>(args)` →
     postMessage({id, method, payload})，以 id 关联 Promise（含 info 的
     10×50ms 重试语义照搬——仅 reject 时重试）。
@@ -688,35 +694,55 @@ interface HostEdges {
   - 装配面：`Info.plist` 的 `SUFeedURL`/`SUPublicEDKey` 由 `build-swift-app` 的
     `--sparkle-feed`/`--sparkle-public-key` 注入（模板占位符 `__SPARKLE_FEED_URL__` /
     `__SPARKLE_PUBLIC_ED_KEY__`）；两键任一为空 = 更新不可用：菜单「检查更新…」禁用，
-    且不向 sidecar 声明 `--native-updater sparkle`。`SUEnableAutomaticChecks` 缺省
-    false（ad-hoc/未发布装配启动即弹更新窗会与启动期窗口竞争），
-    `SUScheduledCheckInterval=21600` 与 Electron 侧 6h 检查同节奏。
-  - 双 flavor 分工：页面（settings-bridge UpdateSection）仍由 headless 控制器驱动
-    （真实 check + 状态行）；壳声明并报告原生更新器可用时，sidecar 把
-    `installBlockedReason` 清空，「更新 / 重启并安装」经 edge
-    （`updateNativeCapability` / `updateNativeAction`）转发到 Sparkle 的标准更新窗口
-    （下载+安装是该窗口内的一段连续流程）。壳侧确认无原生腿时仍回显
-    `原生壳不支持自动安装`。
+    且不向 sidecar 声明 `--native-updater sparkle`。`SUEnableAutomaticChecks` 模板常量
+    **true**：原生腿每次启动强制一次后台检查（S-37），之后由 Sparkle 调度器按
+    `SUScheduledCheckInterval=21600`（6h）继续，与 Electron 的 6h 节奏同量级；
+    scheduled 更新的标准窗在壳内被抑制（`SPUStandardUserDriverDelegate` 把展示权
+    收回壳 → 相位进设置页），用户手动的「检查更新…」仍走标准窗。
+  - 最低系统版本：Electron 与原生壳同为 **13.0**（`build.mac.minimumSystemVersion` /
+    `LSMinimumSystemVersion` / `Package.swift .macOS(.v13)` 三处一致，由 release 策略测试钉住）。
+  - feed 为什么必须是 appcast：Sparkle 的更新协议只有 appcast（XML feed + 每条目的
+    EdDSA 签名）一种读取方式，它不消费 GitHub REST API 或 electron-updater 的
+    `latest-mac.yml`；`SUFeedURL` 因此指向**本仓 release 自带资产**（同一发布供应链，
+    无第三方托管）：稳定通道 `releases/latest/download/appcast-swift.xml`，beta 通道
+    `releases/download/appcast-swift-beta/appcast-swift-beta.xml`（滚动 prerelease tag
+    `appcast-swift-beta`，每个 beta `--clobber` 覆盖 ⇒ beta.N 能看到 beta.N+1）。
+  - 双 flavor 分工（2026-12 单源化）：**壳声明原生更新器可用时，检查也由壳承担**——
+    页面的「检查更新」经 `updateNativeAction kind=check` 转发给 Sparkle，页面只消费
+    壳推回的 `dsh-chamber:update-state-changed` 相位（checking/available/downloading/
+    downloaded/installing/failed），**不再并行发起 GitHub Releases 查询**（无双源、无回退）；
+    Electron（无原生腿）保留既有 headless GitHub 检查 —— 那是它自己的 feed 源。
+    sidecar 把 `installBlockedReason` 清空，「更新 / 重启并安装」经 edge
+    （`updateNativeCapability` / `updateNativeAction`）落地：`kind=check` → 壳内检查，
+    `kind=download|install` → Sparkle 标准窗口（Sparkle 2 无「仅下载」公开 API），
+    忙碌/未配置/未知 kind 一律如实拒绝；能力查询回 `{available, error}`，坏 feed/坏
+    密钥不再是「假装可用」（S-38/S-39）——页面因此落到诚实错误相位，绝不卡在 checking。
+    壳侧确认无原生腿时仍回显 `原生壳不支持自动安装`。
   - 安装前清理：`SPUUpdaterDelegate.updater(_:willInstallUpdate:)` 先停受管 sidecar、
     收 keep-awake 与 Dock 角标（安装路径不保证先走我们的退出链）。
   - 打包：`build-swift-app` 把 `Sparkle.framework` 嵌入 `Contents/Frameworks`、补
     `@executable_path/../Frameworks` rpath 并校验；嵌入在签名之前（嵌套先于主签名）。
   - 发布：`SPARKLE_PUBLIC_ED_KEY` 存在时注入 feed/公钥；正式腿在 `SPARKLE_PRIVATE_KEY`
-    存在时用 Sparkle 的 `generate_appcast` 生成并签名 `appcast-swift.xml`，随 release
-    上传（feed 指向 `releases/latest/download/appcast-swift.xml`）。两把钥匙都缺失 =
+    存在时用 Sparkle 的 `generate_appcast` 生成并签名 appcast，随 release 上传。
+    **enclosure 必须可解析**：beta appcast 输入目录同时放当前 beta zip 与最新 final zip，
+    并以 `--download-url-prefix` 指向滚动 tag；verify 之后把**每个被引用的 zip**先传到
+    滚动 release，再传 appcast（S-36：此前 enclosure 相对滚动 tag 解析、zip 只在
+    `v<version>` ⇒ beta 下载 404）。稳定通道保持单条、无前缀、不写滚动 release；
+    稳定发布也会在 verify 后刷新滚动 beta appcast（保留最新 beta 条目）——所以
+    beta.N 既能看到 beta.N+1，也能看到后发的 final（S-22/S-23）。两把钥匙都缺失 =
     该构建的自动更新保持关闭（照常出包，只是没有安装腿），loud 警告。
   - 契约：`UpdateController.restartAndInstallAsync?()` 为原生腿提供异步面（IPC 处理
     器优先用它），Electron 的同步实现与页面契约不变。
-- **shell-flavor 判别字段（§0.1-E2）**：共享 renderer 无法用 platform 区分两 flavor
-  （同为 'darwin'）→ `dsh-chamber:info` 载荷增 `flavor: 'electron'|'swift'`
-  （或能力位 updateAutoInstall/notificationPermission），同步
-  preload.cts/global.d.ts/L3 镜像测试；UI 能力门（更新文案/重启安装按钮等）
-  加 flavor 条件。
+- **shell-flavor 判别字段（§0.1-E2）**：`dsh-chamber:info` 载荷带 `flavor`
+  （`main.ts:3858`；镜像面仍 4 标量），但**共享 renderer 至今没有消费者**——
+  UI 能力门（更新文案/重启安装按钮）实际由 `installBlockedReason` 与原生能力位驱动。
+  字段保留备查；将来要用它做 UI 条件时，须先补消费者与 preload.cts/global.d.ts
+  镜像测试。
 - **检查腿的宿主叶（2026-12 审计修复）**：headless 控制器在 `setState` 时逐个
   listener 走 try/catch，推送腿抛错绝不反噬控制器（`update-headless.ts:134-148`）；
   sidecar-ctx 的 HostEdges 必须**显式**提供惰性 `disarmUpdaterQuit: () => {}`
-  （`sidecar-ctx.ts:2618`）——该文件的 ctx Proxy 把「缺失成员」变成调用即抛的
-  `sidecar-ctx-unavailable:*` methodStub（`sidecar-ctx.ts:2663-2668`），省略该叶
+  （`sidecar-ctx.ts:2768`）——该文件的 methodStub 把「缺失成员」变成调用即抛的
+  `sidecar-ctx-unavailable:*` 递归 stub（`sidecar-ctx.ts:2774-2784`，抛错点 `:2777`），省略该叶
   会让首次「检查更新」在订阅回调里抛错、控制器 checking 卡死。这是有意的惰性
   契约叶，不是死代码。
 - v2（P3 末，决策 3）：Sparkle（appcast 独立 EdDSA 密钥）——发布 CI 打
@@ -810,7 +836,7 @@ node 集成测试拉起 Swift harness 断言真实窗口/桥，loopback-http-tes
 对话框）/通知点击/深链/隐藏恢复/唤醒补发/退出确认）；WKWebView parity 清单
 （W1 剪贴板、W2 菜单快捷键、W3 富文本粘贴与拖拽、W4 打印/查找、W5 字体/
 滚动/IME、W6 后台节流对 SSE/WS——**无 backgroundThrottling 等价物（C1）**，
-判定标准见 todo companion §七）；性能基线对照 performance-baseline.md + **双端
+判定标准见 todo companion §七）；性能测量方法与同环境 A/B 纪律见 `scripts/perf/README.md` + **双端
 性能/产物体积验收协议**（companion §七：相对门/绝对预算/能力门三形态、注入式探针
 平移四场景、M5 双端同 tag 产物并排入库——.app/dmg/zip 体积目标 ≤ Electron × 0.75）。
 

@@ -5,7 +5,7 @@
 > 重建才生效。本轮只给这两个产物加了"存在但缺当前标记 ⇒ 失败"的守卫，其余产物的陈旧仍无人发现。
 > 本文只记**未实现**的守卫想法与优先级；已落地的两条守卫、两条真实覆盖空洞见
 > `docs/progress/STATUS.md`（design 21 §7 有指针）。**这是想法清单，不是承诺**；落地后按
-> `docs/progress/todo/README.md` 的纪律移出本表。
+> `docs/progress/README.md` 的纪律移出本表。
 
 ## 1. 产物清单（2026-12 普查）
 
@@ -17,9 +17,9 @@
 | `packages/desktop/dist/host-{graph,git-worktree,archive-cleanup,open-in}-package/**` | `scripts/build-host-graph-package.mjs`（从各 seed 包 `dist` cpSync） | 忽略 | 只有行序/outDir 断言（`scripts/build-host-graph-package.test.mjs`） | 打包 seed 旧宿主包 |
 | `packages/gateway/dist/**`（含 `dist/pnpm/**`） | `packages/gateway/scripts/build.mjs` | 忽略 | ✅ **标记守卫** + 内嵌 pnpm 版本/pin 断言（`packages/gateway/test/packaging/build-smoke.test.ts`） | 打包 gateway 旧服务端（本轮实际发生过） |
 | `packages/gateway/host-packages/dsh-chamber-client-ui-mobile/**` | `packages/gateway/scripts/build.mjs`（`HOST_PACKAGES` 拷贝） | 忽略 | 只有存在性/导出契约断言（缺文件才按需构建） | gateway seed 旧移动端（`lib/client.js` 旧 DOM 锚点） |
-| seed 包 `dist/index.js` ×4 + `packages/dsh-runtime/dist/index.js` + mobile `dist/index.js`/`lib/**` | 各自 `scripts/build.mjs` | **提交** | ✅ C8 重建-比对（`scripts/dev/verify-upstream-touchpoints.mjs`，硬失败） | 已由门禁挡住 |
+| seed 包 `dist/index.js` ×4 + `packages/dsh-runtime/dist/index.js` + mobile `dist/index.js`/`lib/**` | 各自 `scripts/build.mjs` | **提交** | ✅ C8 重建-比对（`scripts/upstream/verify-upstream-touchpoints.mjs`，硬失败） | 已由门禁挡住 |
 | `packages/renderer/src/generated/**`、`packages/renderer/.cache/**` | gen-typert / 构建 | 忽略 | 构建期重新生成 | 构建失败或旧 remote 契约 |
-| `packages/desktop/vendor/dsh/**`（运行时线） | `bundle:dsh` / `scripts/dev/update-vendor.mjs` | lockfile 提交、树忽略 | C10/C11 + release preflight | 运行时线漂移（已有门） |
+| `packages/desktop/vendor/dsh/**`（运行时线） | `bundle:dsh` / `scripts/upstream/update-vendor.mjs` | lockfile 提交、树忽略 | C10/C11 + release preflight | 运行时线漂移（已有门） |
 
 `dist/` 整族在 `.gitignore`：干净 checkout 里"缺失"是正常态（守卫因此按需构建），
 **本地/打包态的"存在但陈旧"才是要防的**——CI 每次全新构建，天然看不到这一类。

@@ -342,7 +342,7 @@ push 会拿还不含它的 store **整份替换**聚合，行随即消失；②�
   回浮，直到该来源被挂载。
 - 未被早开臂抢先时，宿主上仍会留下一个 blank 会话（同一工作区复用，不增长；后台
   预热 / 基线收割 boot 本来也会各造一个）。根治需要上游把"当前会话选择"的持久化
-  按 shell 作用域拆开——见 `docs/progress/todo/client-store-scoping-upstream.md`；
+  按 shell 作用域拆开——见 `docs/progress/todo/upstream-proposals.md` §1；
 - 未挂载来源的**工作区集合**仍然只有"回声 + 挂载 push"两个来源：**别处**（另一个
   客户端、或宿主侧直接改动）创建 / 改名 / 删除的工作区、以及工作区**顺序**，仍要
   等该来源被挂载（用户点开）才收敛——这是 §2.3 已登记的降级面；本修订刻意不引入
@@ -623,7 +623,7 @@ export const chamberBridge: {
   reclaimView，与注册表删除同原语），实例进程/隧道/后台任务不受影响，重开走
   冷 boot + entry 重放；被回收源的侧栏聚合落到 30s unary 兜底（§2.3）。
   取舍：被回收壳内运行中任务的完成蓝点/通知边沿暂停至该源重开。预热/可见性
-  门控等细节与偏差登记见 STATUS.md、performance-baseline.md §10。
+  门控等细节与偏差登记见 STATUS.md 与 `scripts/perf/README.md`。
 - N 个 AppWebEntry（共享一份静态模块表，v1 允许各自创建）；每来源一个 shell，
   hide/show 切换，会话保活。**视图生命周期 = 注册表来源代生命周期**：来源删除，
   或 `kind/host/user/sshPort/remotePort` 任一传输身份字段变化，都会通过权威
@@ -980,7 +980,7 @@ export const chamberBridge: {
     卡片上的「客户端插件状态」仍由 chamber 的 boot/extra-row 诊断通道供给
     （`pluginDiagnostic`），与设置面是否可渲染无关。
   - **上游可选项（非前置）**：声明式贡献描述符 / 设置面服务契约 / Remote descriptor
-    上行通道仍是上游提案（`docs/progress/todo/settings-surface-upstream-contributions.md`）；
+    上行通道仍是上游提案（`docs/progress/todo/upstream-proposals.md` §2）；
     完整桥接不依赖它们——它复用上游既有的「来源自己的前端」这一事实。
 - 内容：本地实例卡（/health 状态徽标 + /api/connections 行端口/label +
   启动/停止（二次确认）+ host 日志只读）+ 远程主机卡片列表（label +

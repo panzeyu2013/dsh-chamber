@@ -18,7 +18,9 @@ facts.
 
 This file is an action guide, not a record: it carries the purpose, the recording rules for
 `docs/progress/STATUS.md`, and the flows that have a fixed procedure. Design lives in `docs/design/`
-(entry point `01-overview.md`), unimplemented ideas in `docs/progress/todo/`.
+(entry point `01-overview.md`), unimplemented ideas in `docs/progress/todo/`. The Electron↔Swift
+dual-flavor deviation register is `docs/progress/deviations.md` (S/T/P/G/D rows plus the reachability
+discipline); STATUS keeps a one-line pointer to it instead of duplicating dual-flavor rows.
 
 ## STATUS.md — what to record
 
@@ -76,7 +78,7 @@ decision value and is not already owned by a design document or `CHANGELOG.md`.
 
 - Execute `docs/checklists/dsh-upgrade-checklist.md`, then the per-tag maintenance loop in
   `docs/checklists/upstream-touchpoints.md` §7.
-- `docs/checklists/upstream-touchpoints.md` and `scripts/dev/verify-upstream-touchpoints.mjs`
+- `docs/checklists/upstream-touchpoints.md` and `scripts/upstream/verify-upstream-touchpoints.mjs`
   (gates C1–C15, run in CI: C11–C14 the plugin protected set, C15 the hover-port retirement gate)
   are two sides of one registry — a change to either must be mirrored in
   the other, and the pin-upgrade entry point reminds you of the freshness gate.
@@ -109,7 +111,7 @@ surfaces, applicable guidance, validation, or failure/rollback considerations fr
   why it lost. This is a **review duty, not a gate** — no script can judge whether the alternatives
   were genuinely weighed, so the reviewer checks it and the PR template asks for it. Labeling a rule
   review-only is deliberate: a green gate never means this one was satisfied.
-- Pick the evidence for a change with `node scripts/dev/run-checks.mjs <static|tests|typecheck|full>`
+- Pick the evidence for a change with `node scripts/gates/run-checks.mjs <static|tests|typecheck|full>`
   (or `--list` to see the plan) instead of recalling the set from CI YAML: the modes name the same
   gates ci.yml and release validation run, so a local pass is the same evidence.
 
@@ -139,7 +141,7 @@ surfaces, applicable guidance, validation, or failure/rollback considerations fr
 ## Hard Facts
 
 - `vendor/harness-packages` is a read-only symlink tree into the pinned submodule
-  `vendor/harness-checkout`; upgrade the pin only via `scripts/dev/update-vendor.mjs <tag>`, never by
+  `vendor/harness-checkout`; upgrade the pin only via `scripts/upstream/update-vendor.mjs <tag>`, never by
   editing `harness.commit` or the gitlink. Of the dsh sources, only the chamber packages are ours to
   change (see Runtime Boundaries).
 - Do not run git or GitHub commands unless the user explicitly asks.

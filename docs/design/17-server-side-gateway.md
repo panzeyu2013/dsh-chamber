@@ -1685,7 +1685,7 @@ PWA / Web Push 社区实现机制（dsh-ui-mobile，jasondu，npm 0.1.8，MIT，
   判定语义由 `mobile-checks.test.mjs` 以合成事实锁定，含已知边界：
   `Emulation.setEmulatedMedia` 的 `pointer/hover` 被 Chromium 忽略、`mobile:true`
   的收缩适配会让 `scrollWidth <= innerWidth` 恒真因而判定以 `clientWidth` 为准）
-  与 `scripts/dev/verify-mobile-anchors.mjs`（锚点新鲜度门）。**真机抽检仍不可省**
+  与 `scripts/upstream/verify-mobile-anchors.mjs`（锚点新鲜度门）。**真机抽检仍不可省**
   （iOS 键盘/安全区/`100dvh`/聚焦缩放、惯性滚动与 hover 观感；当前走查只读，
   抽屉/设置/键盘补偿尚未断言）：
   - 触控目标 ≥44px 比例（**座席清单**：composer bar / sidebar / 会话头
@@ -1803,7 +1803,7 @@ PWA / Web Push 社区实现机制（dsh-ui-mobile，jasondu，npm 0.1.8，MIT，
   靠模块释放或「同 ctx 二次挂载」自证——**否决**：cordis 的 `LoggerService.exporter()` 把 effect
   注册在**服务**的上下文（应用根）上，插件卸载不会移除它；重新物化 loader 会叠加第二个导出器
   并把每行应用日志写两遍。挂到插件自己的 `ctx.effect` 是唯一由插件生命周期管辖的位置。
-- **锚点保鲜门的 fail-soft 默认**（`scripts/dev/verify-mobile-anchors.mjs`）：让缺锚点树直接 exit 1
+- **锚点保鲜门的 fail-soft 默认**（`scripts/upstream/verify-mobile-anchors.mjs`）：让缺锚点树直接 exit 1
   ——**否决**：CI 与裸 clone 上没有上游树（`packages/desktop/vendor/dsh` 只提交 lockfile），
   常态红会把门变成噪声；改为默认 fail-soft + 升级流程 §7 显式 `--require-anchor-root`（缺根、
   无 client 产物、锚点树版本与 pin 不符都 exit 1），让「真的查过」成为可断言的事实。

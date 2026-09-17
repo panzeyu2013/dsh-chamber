@@ -89,7 +89,7 @@ AppImage 的 `process.execPath` 是每次启动的 squashfs 挂载点（`/tmp/.m
 钉 SHA、beta 带 electron-builder.beta.yml、dry_run 清 GH_TOKEN）验证:
 runner=linux-x64、打包 dsh runtime `platform.startsWith('linux-')`、AppImage 存在、
 非 dry_run 时 feed 互斥（`latest-linux.yml` vs `beta-linux.yml`）且无 .blockmap。
-`finalize-release.needs` 含 build-linux；`scripts/dev/release-workflow-policy.test.mjs`
+`finalize-release.needs` 含 build-linux；`scripts/release/release-workflow-policy.test.mjs`
 按 4 腿（build-gateway / build-macos / build-windows / build-linux）切片计数。
 **取舍**：不做 OpenChamber 式独立 verify-linux-appimage 脚本——覆盖由 workflow
 内联 verify 步骤（上述断言）+ 打包期钩子后置断言 + 人工无头冒烟（AppImage 提取/

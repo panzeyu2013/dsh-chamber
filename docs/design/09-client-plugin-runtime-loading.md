@@ -472,7 +472,7 @@ base path 从每个 entry 的私有 ctx 取。
   第三方插件的设置贡献在**它自己那台实例**的 ctx 上注册（与该实例自己的前端完全同一份
   注册），桌面设置壳渲染该台账，因此「插件设置用不上/看不到」这一类问题由构造消除
   （design 05 §5）。上游声明式贡献描述符 / 设置面服务契约 / Remote descriptor 上行通道
-  仍是可选提案（`docs/progress/todo/settings-surface-upstream-contributions.md`），
+  仍是可选提案（`docs/progress/todo/upstream-proposals.md` §2），
   不再是完整桥接的前置条件。
 - 版本漂移：宿主图 rev 与 chamber 复合 bundle 的合并是 union 语义，不要求
   两图同 rev（chamber 复合由 chamber 构建管，宿主图由实例插件集管）。壳版本
@@ -482,7 +482,7 @@ base path 从每个 entry 的私有 ctx 取。
   单一事实来源——当前 pin = dsh `0.1.5-rc.2`（`packages/desktop/vendor/dsh/
   pnpm-lock.yaml` 的 `@deepseek-ai/dsh` specifier 同值），三个 fork 副本与
   `release-preflight.mjs` 的 `FORK_VERSION` 同步；vendor 树是仓库内 git submodule
-  （gitlink = pin，升级走 `scripts/dev/update-vendor.mjs <tag>`）。宿主 wire 只增
+  （gitlink = pin，升级走 `scripts/upstream/update-vendor.mjs <tag>`）。宿主 wire 只增
   不改——`commands.execute` 新增必填 `images` 参数即一例：旧形状客户端（旧壳）向
   新宿主发命令会被网关严格参数核对拒绝或宿主崩溃，经 `session.command` 的斜杠命令
   （Access 权限芯片 `/permission` 等）静默失效。因此壳种子词表、boot 模块系统、

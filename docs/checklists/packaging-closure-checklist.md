@@ -63,6 +63,27 @@
       永久丢掉 dsh-runtime 的类型面（`pnpm typecheck` 以 TS7016 失败，
       `pnpm install --frozen-lockfile` 修不回来）。
 
+### 3.1 原生壳（macos/）专属检查
+
+- [ ] `build:sidecar` 载荷完整：`node`（官方 tar + SHA 校验）、`dist/web`、四个 host 包、
+      `vendor/dsh`、内嵌 `pnpm` 全部就位（缺项 fail-closed；`--skip-*` 只用于本地试跑）。
+- [ ] `build:swift-app` 装配：`Contents/Resources/sidecar` 就位、`Sparkle.framework` 嵌入
+      `Contents/Frameworks`、rpath 指向 `@executable_path/../Frameworks`、bundle 内无逃逸符号链接、
+      `codesign --verify --deep --strict` 通过；`--dry-run` 必须能报出解析后的路径/feed/产物名计划。
+- [ ] 产物命名与形态：`dsh-chamber-native-<ver>-macos-arm64.{dmg,zip}`，与 Electron 产物共存不覆盖；
+      两侧 release 腿都按**精确产物名**验证/上传（S-36/G36；不再 find|head 或 glob），
+      复用的输出目录因此不会把旧版本带进 release。
+- [ ] 更新腿装配：`Info.plist` 的 `CFBundleShortVersionString`/`CFBundleVersion` 与 tag 一致且
+      **beta 与同基版本正式号不同且单调**；`SUFeedURL` 按通道（稳定/beta）注入；
+      `SUPublicEDKey` 与 appcast 签发用的私钥成对；两把钥匙任一缺失 = 更新腿关闭且 loud。
+      beta appcast 的 enclosure 必须指向滚动 release 上真实存在的 zip（`--download-url-prefix`
+      + 先传 zip 后传 appcast；S-36），且滚动 appcast 同时带当前 beta 与最新 final 条目（S-22/S-23）。
+- [ ] `LSMinimumSystemVersion` 与 Electron 侧 `build.mac.minimumSystemVersion` 一致（当前 13.0，
+      对齐 `Package.swift` 的 `.macOS(.v13)`）。
+- [ ] 打包态启动冒烟（原生腿）：双击 `.app` → sidecar spawn → 页面加载 → 关闭窗口仅隐藏 →
+      退出回收 sidecar；本机/CI 任一环境执行并记录证据（G19：CI 目前不启动打包产物）。
+- [ ] DMG 与 zip 均公证 + `stapler staple` + `stapler validate`（DMG 卷本身也要装订）。
+
 ## 4. 快速清单速查（当前基线，2026-12 复核；2026-12 合并后全量复核）
 
 **glob 即闭包**：`packages/desktop/package.json` 的 `build.files` 用包根三条 glob

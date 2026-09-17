@@ -46,7 +46,7 @@ CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 ta
 
 ## 1.5 机械门禁：release:preflight
 
-- [ ] `node scripts/dev/release-preflight.mjs <版本>` 全绿（版本统一性含 fork 副本与
+- [ ] `node scripts/release/release-preflight.mjs <版本>` 全绿（版本统一性含 fork 副本与
       安装脚本/release.yml/gateway 包三源 dsh 常量、changelog 中英对等、verify:i18n、**全部 workflow action SHA
       可解析上游**（`--offline` 跳过网络）、冲突标记、git 干净、frozen install、
       test:release-workflow；最后提示 §3 全量测试套件须在**精确发布提交**上跑）。
@@ -59,9 +59,9 @@ CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 ta
       （release.yml 提取为发布正文，缺失即失败）；中英条目对等。
 - [ ] 版本节结构完整（`### 新增/修复/变更` 或 `### Added/Fixed/Changed`），
       无重复版本标题。
-- [ ] `node scripts/dev/verify-i18n.mjs` → 5 对全部 `consistent`（改过 README/
+- [ ] `node scripts/gates/verify-i18n.mjs` → 5 对全部 `consistent`（改过 README/
       DEVELOPMENT/CONTRIBUTING/CHANGELOG/THIRD_PARTY_NOTICES 任意文本后须
-      `node scripts/dev/verify-i18n.mjs --write` 刷新）。
+      `node scripts/gates/verify-i18n.mjs --write` 刷新）。
 
 ## 3. 测试与类型检查
 
@@ -112,7 +112,7 @@ CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 ta
 ## 5. 工作区健康
 
 - [ ] `git status --short` 无未跟踪文件（无 UPGRADE-*.md / .DS_Store / 临时文件）；`git stash list` 空。
-- [ ] 无冲突标记（用 `node scripts/dev/release-preflight.mjs --offline` 的锚定行首扫描；
+- [ ] 无冲突标记（用 `node scripts/release/release-preflight.mjs --offline` 的锚定行首扫描；
       裸 `grep '<<<<<<<' packages/ docs/ scripts/` 会自匹配本清单文件的字面示例行）。
 - [ ] 旧 dsh pin 残留扫描：`grep -rn "141eb6f\|0\.1\.0-rc\.8" packages/ scripts/ harness.commit`
       （非 vendor/node_modules）仅剩历史文档/迁移条目。
@@ -121,9 +121,12 @@ CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 ta
 
 - [ ] **原生壳更新密钥（Sparkle，S-01 / D-1 选 B）**：仓库 secrets 需配
       `SPARKLE_PUBLIC_ED_KEY`（EdDSA 公钥，注入 Info.plist）与 `SPARKLE_PRIVATE_KEY`
-      （EdDSA 私钥，仅正式腿用它签 `appcast-swift.xml`）。两把钥匙与 Developer ID /
+      （EdDSA 私钥，仅正式腿用它签 appcast）。两把钥匙与 Developer ID /
       公证**互不替代**：签名/公证是分发信任，EdDSA 是更新通道鉴权。任一缺失时发布腿
-      loud 跳过（出包但不带安装腿），并核对 release 资产里存在 `appcast-swift.xml`。
+      loud 跳过（出包但不带安装腿）。资产核对：稳定通道 = release 里的
+      `appcast-swift.xml`；beta 通道 = 滚动 tag `appcast-swift-beta` 上的
+      `appcast-swift-beta.xml` **以及它每条 enclosure 引用的 zip**（S-36：appcast 里
+      的 zip 必须已在滚动 release 上，否则 beta 客户端能发现、下载 404）。
 - [ ] 本地不配置任何签名密钥；macOS Developer ID 签名/公证由 release.yml 发布腿
       处理。正式发布缺少五项凭据时在创建/变更 draft 前 fail-closed；构建后的 Developer
       ID、stapler 与 spctl 任一校验失败时阻断公开 finalize（draft 已创建并不等于已公开）。
@@ -141,9 +144,10 @@ CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 ta
 - [ ] `git tag -a v<版本> -m "..."`（同 tag 重推前先删旧：`git tag -d v<版本> && git push origin :v<版本>`）。
 - [ ] **push 前最后再跑一次 `release:preflight`**（含 git 干净检查）。
 - [ ] **发布提交的 CI 证明**：`release.yml` 的 `validation` 会硬断言该提交在 `main` 上
-      有成功的完整 `ci.yml` 运行（linux `test` + `test-windows` 两腿都绿；运行中有界
+      有成功的完整 `ci.yml` 运行（linux `test` + `test-windows` + macOS `test-macos`
+      三腿都绿，且各腿的承载步全部 success——`verify-release-ci-proof.mjs` 按步名判定；运行中有界
       等待，从未经过 `main` 或失败即阻断）。本地可先自查：
-      `GITHUB_TOKEN=<token> node scripts/dev/verify-release-ci-proof.mjs --sha <commit>`。
+      `GITHUB_TOKEN=<token> node scripts/release/verify-release-ci-proof.mjs --sha <commit>`。
       打 tag 前确认 main 的 CI 已收敛，避免 dry-run 在等待上耗时间。
 - [ ] **dry-run 先行**：`git push origin <分支>`（提交在分支上即可），
       然后 GitHub Actions 手动运行 `release.yml`（`workflow_dispatch`）：

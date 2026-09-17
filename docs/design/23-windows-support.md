@@ -1,7 +1,7 @@
 # 23. Windows 支持推进方案（Windows 11 x64 首版）
 
 > **状态：未实现（Windows 首版支持推进；代码项已落地，真实 Windows runner / 实机门禁未过，2026）**——本文是
-> dsh-chamber 桌面端（本地实例 + ssh/gateway 远程连接 + dsh 运行时版本管理）Windows 支持的权威契约（平台适配、运行时管理解锁纪律、妥协点与验收矩阵）；未完成门禁见 `docs/progress/STATUS.md`；执行台账:`docs/progress/todo/windows-v1.md`；测试基线台账:`docs/progress/windows-baseline.md`。
+> dsh-chamber 桌面端（本地实例 + ssh/gateway 远程连接 + dsh 运行时版本管理）Windows 支持的权威契约（平台适配、运行时管理解锁纪律、妥协点与验收矩阵）；未完成门禁见 `docs/progress/STATUS.md`；执行台账与基线登记口径:`docs/progress/todo/windows-v1.md`。
 > 本设计只记录契约与决策，不重复实现过程。
 
 ## 1. 范围与总原则
@@ -10,7 +10,7 @@
   mac/linux 全量回归绿。
 - 纪律:
   1. **能力先于开关**:任何 mutation/功能解锁先经 env 门控或单测在后台验证,UI 开关最后翻;
-  2. **基线先行**:win32 测试 pass/skip 集合与平台门控拒绝码先固化(`windows-baseline.md`),
+  2. **基线先行**:win32 测试 pass/skip 集合与平台门控拒绝码先固化(登记口径在 `docs/progress/todo/windows-v1.md`),
      后续每个里程碑的测试变化必须对照基线归因;
   3. **fail-closed 不撤销**:不可证即保留/拒绝的语义在 Windows 适配中一律维持;
   4. **妥协即文档**:真实平台事实(见 §5)写入发布附注,不静默、不伪称等价;

@@ -17,11 +17,11 @@
        `git -C vendor/harness-checkout tag -l | sort -V`。
 - [ ] 记录当前 `harness.commit`（旧 pin）与目标 commit。
 - [ ] 检查工作区/stash：确认无未提交的迁移相关工作（发布 stash 等）。
-- [ ] **先跑只读预检再动 pin**：`node scripts/dev/preflight-vendor-pin.mjs <tag> --offline`
+- [ ] **先跑只读预检再动 pin**：`node scripts/upstream/preflight-vendor-pin.mjs <tag> --offline`
        一次给出「fork pure/replay/dropped + 深引 vendor seam 文件 + 上游包集合增删 +
        新增 client 行 + 运行时 npm 状态」；`--fail-on-replay` 可当硬门（fork 面需人工重放时
        先评估规模，再决定升级窗口）。
-- [ ] 用只读门禁先照一次现状：`node scripts/dev/verify-upstream-touchpoints.mjs --no-artifact-rebuild`
+- [ ] 用只读门禁先照一次现状：`node scripts/upstream/verify-upstream-touchpoints.mjs --no-artifact-rebuild`
       ——记住 C11–C14（插件受保护集合：F 族集合 / profile 契约锚 / 播种注册表 / manifest
       三方镜像）的**绿是升级后必须仍然绿**的那几条；升级后它们若变红，按 §6 的处置口径
       改派生，不得改判据放行（同目录 `upstream-touchpoints.md` §6；design 21 §6.11）。
@@ -55,11 +55,11 @@
 ## 2. 双线 pin 一致性（源码线 + 运行时线）
 
 > **源码线**（构建期 vendor 树）由 git submodule 固定 commit，升级唯一入口是
-> `scripts/dev/update-vendor.mjs`；**运行时线**（打包进桌面的 `@deepseek-ai/dsh` npm 包）
+> `scripts/upstream/update-vendor.mjs`；**运行时线**（打包进桌面的 `@deepseek-ai/dsh` npm 包）
 > 维持六个锚（bundle-dsh 兜底常量、desktop vendor 锁文件、release.yml env、
 > install-gateway.sh、gateway `dshAnchorVersion`、release-preflight `FORK_VERSION`）。
 
-- [ ] **源码线（submodule）**：`node scripts/dev/update-vendor.mjs <tag>` 原子升级
+- [ ] **源码线（submodule）**：`node scripts/upstream/update-vendor.mjs <tag>` 原子升级
       （fetch+校验 tag → 切 submodule → 更新 `harness.commit` → 差量建链 →
       重生成锁文件 → frozen 验证）；输出确认 commit 与 tag 远程解析一致。
       禁止手工改 gitlink / `harness.commit`。
@@ -100,14 +100,14 @@
 
 ## 4. 锁文件（AGENTS.md 关键注意）
 
-- [ ] 源码线升级时由 `scripts/dev/update-vendor.mjs` 原子重生成（非 frozen install →
+- [ ] 源码线升级时由 `scripts/upstream/update-vendor.mjs` 原子重生成（非 frozen install →
       restore-lockfile-vendor-records.mjs 补回 → frozen 验证），**不要在锁文件
       重生成前手工跑 ensure 的默认模式**（断言会因锁文件滞后而失败，属预期）。
-- [ ] pnpm 11 会裁剪 vendor importer 记录 → `node scripts/dev/restore-lockfile-vendor-records.mjs`
+- [ ] pnpm 11 会裁剪 vendor importer 记录 → `node scripts/upstream/restore-lockfile-vendor-records.mjs`
       补回；**新增 vendor 包**若不在 HEAD 锁文件中需手工补齐 importer 记录
       （参照既有 vendor 记录格式，零依赖成员为单行 `key: {}` 块）；**删除的 vendor 成员**
       不得被脚本从 HEAD 复活（守卫已按链接集合存在性跳过，见
-      `scripts/dev/restore-lockfile-vendor-records.test.mjs`）。
+      `scripts/upstream/restore-lockfile-vendor-records.test.mjs`）。
 - [ ] **已有 vendor 成员的依赖集变化**（不是新增/删除包）同样会动 importer 记录：脚本是
       **只增不减**（键已存在即跳过），所以一旦 pnpm 裁掉了该段，它会从 HEAD 复活**旧**记录，
       而旧记录不含新依赖边 ⇒ frozen 验证以「specifiers don't match」失败。判据就是
@@ -140,7 +140,7 @@
 - [ ] `pnpm run build:renderer`、`pnpm run verify:i18n`、`pnpm run smoke`（未捆绑
       运行时的检出应打印 SKIP——冒烟门槛按 dsh CLI 入口存在性判定，仅有 lockfile
       的 `packages/desktop/vendor/dsh` 不算已安装）。
-- [ ] 触点与锚门禁：`node scripts/dev/verify-upstream-touchpoints.mjs` 全绿
+- [ ] 触点与锚门禁：`node scripts/upstream/verify-upstream-touchpoints.mjs` 全绿
       （C1/C3–C15；`--no-artifact-rebuild` 可跳过产物重建）。
       C11–C14 是**插件受保护集合**的保鲜门（F 族集合 / profile 契约锚 / 播种注册表 /
       manifest 三方镜像，见同目录 `upstream-touchpoints.md` §6 与 design 21 §6.11）：
@@ -156,10 +156,10 @@
       `CHANGELOG.md` + `docs/CHANGELOG.en-US.md` 的发布节；**未落地的实机门禁与遗留偏差**
       才登记进 `docs/progress/STATUS.md` 的未完成项（只写仍 open 的项，不留"已完成"台账）。
 - [ ] `CHANGELOG.md` + `docs/CHANGELOG.en-US.md` 的发布节补迁移条目
-      （如「dsh 基线升级 … + 代理限额变化」），并 `node scripts/dev/verify-i18n.mjs --write`
+      （如「dsh 基线升级 … + 代理限额变化」），并 `node scripts/gates/verify-i18n.mjs --write`
       刷新 i18n 记录。
 - [ ] 触点表刷新：`docs/checklists/upstream-touchpoints.md` 受影响的**结构登记行**
-      （与 `scripts/dev/verify-upstream-touchpoints.mjs` 内的登记表两侧同步）；**版本值不写进
+      （与 `scripts/upstream/verify-upstream-touchpoints.mjs` 内的登记表两侧同步）；**版本值不写进
       checklist**——逐 tag 的升级叙述写 `CHANGELOG.md` 发布节，仍 open 的偏差写 `STATUS.md`。
 - [ ] 引用基线版本的文档（design 09/11、README、DEVELOPMENT、本目录 checklist）中的
       版本号更新（历史叙述保留）。

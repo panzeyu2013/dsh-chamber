@@ -91,7 +91,7 @@ node scripts/dev/ensure-harness-vendor.mjs
 pnpm install
 ```
 
-**升级上游 pin 只能走** `node scripts/dev/update-vendor.mjs <tag>`（原子流程：fetch+校验 tag → 切 submodule → 更新 `harness.commit` → 差量建链 → 重生成锁文件 → frozen 验证），不要手工改 gitlink / `harness.commit`。`pnpm-workspace.yaml` 已设 `verifyDepsBeforeRun: false`：pnpm run 不再隐式 install（防非 frozen install 改写锁文件），依赖变更请显式 `pnpm install`；CI 在 frozen install 后另有 `git diff --exit-code -- pnpm-lock.yaml` 漂移断言。
+**升级上游 pin 只能走** `node scripts/upstream/update-vendor.mjs <tag>`（原子流程：fetch+校验 tag → 切 submodule → 更新 `harness.commit` → 差量建链 → 重生成锁文件 → frozen 验证），不要手工改 gitlink / `harness.commit`。`pnpm-workspace.yaml` 已设 `verifyDepsBeforeRun: false`：pnpm run 不再隐式 install（防非 frozen install 改写锁文件），依赖变更请显式 `pnpm install`；CI 在 frozen install 后另有 `git diff --exit-code -- pnpm-lock.yaml` 漂移断言。
 
 根目录 `.npmrc` 是 gitignored 的本地便利配置，本地开发可自行把 Electron 二进制下载指向镜像；正式构建配置不提交第三方 `electronDownload.mirror`，始终使用 Electron 官方源，避免镜像同时替换二进制与校验表后被正式签名。
 
@@ -142,14 +142,14 @@ seed，不进远端/gateway）。
 | 桌面能力(M3) | AUMID/托盘候选收敛/preload loud 失败已接;实机矩阵待执行 |
 | 决策解锁(M4) | 登录自启、深链注册、open-in 本地路径、SSH 密码门引导已解锁(代码);NSIS 卸载 Run 清理 include 已接 |
 | 已知限制 | 未签名(SmartScreen);SSH 密码禁用(keys/Pageant);运行时 mutation 只读;0700/0600 以 icacls/ACL 表达 |
-| 权威记录 | `docs/design/23-windows-support.md`、`docs/progress/todo/windows-v1.md`、`docs/progress/windows-baseline.md` |
+| 权威记录 | `docs/design/23-windows-support.md`、`docs/progress/todo/windows-v1.md`（含基线登记口径） |
 
 ## 5. CI 与发布
 
 - `.github/workflows/ci.yml`：每次 push/PR 运行——纯验证链（frozen install → 根/gateway/runtime/host 包/client 插件 typecheck → i18n → 控制面/runtime/desktop/gateway/renderer/client/host 单测〔含 `test:git`、`test:host-git`〕→ **workflow action SHA 门禁**（`release-preflight --actions-only`，2026-09 起）→ smoke〔未捆绑运行时 SKIP〕→ renderer/host/desktop 子构建 → gateway 打包安装冒烟〔`pack` → 临时 prefix 安装 → `gateway --help`〕），**不产出发布包**；桌面打包与真实 smoke 验证在 `release.yml`（tag/手动触发）进行。
-- `.github/workflows/release.yml`：产出可分发的发布版——推送 `v*` tag（或手动运行，版本输入不带 `v`，可选 dry-run）。发布版本只允许 canonical stable `X.Y.Z` 或 beta `X.Y.Z-beta.N`，`alpha`/`rc`/其他 prerelease fail closed；stable 使用默认 desktop 打包配置且只发布 `latest.yml`/`latest-mac.yml`，beta 使用独立 `packages/desktop/electron-builder.beta.yml` 且只发布 `beta.yml`/`beta-mac.yml`，两通道资产互斥。正式流程先建 draft，构建 macOS arm64（v1 仅 Apple Silicon）与 Windows x64，完成上述 macOS fail-closed 校验后才翻转公开；dry-run 全程零 Release 写入。版本断言经 `release-preflight --versions-only` 动态覆盖根、全部非 fork chamber 包及三个 fork 基线；`CHANGELOG.md` 的 `## [<version>]` 段落被提取为发布正文（缺失会失败）。`validation` job 第一步是**发布提交的 CI 证明**（`scripts/dev/verify-release-ci-proof.mjs`：该 commit 必须在 `main` 上有一条已完成且成功的 `ci.yml` push 运行，`test` 与 `test-windows` 两个 job 都 success；运行中有界等待，失败或从未经过 main 一律 fail closed），随后自验证 gateway/runtime typecheck+tests、关键 control-plane/desktop/renderer/plugin/CLI/policy 门禁；`build-gateway` 只在 GitHub Release 发布经干净临时前缀安装冒烟的 `.tgz` 与同名 `.tgz.sha256`，npm publish/dist-tag 延后。
+- `.github/workflows/release.yml`：产出可分发的发布版——推送 `v*` tag（或手动运行，版本输入不带 `v`，可选 dry-run）。发布版本只允许 canonical stable `X.Y.Z` 或 beta `X.Y.Z-beta.N`，`alpha`/`rc`/其他 prerelease fail closed；stable 使用默认 desktop 打包配置且只发布 `latest.yml`/`latest-mac.yml`，beta 使用独立 `packages/desktop/electron-builder.beta.yml` 且只发布 `beta.yml`/`beta-mac.yml`，两通道资产互斥。正式流程先建 draft，构建 macOS arm64（v1 仅 Apple Silicon）与 Windows x64，完成上述 macOS fail-closed 校验后才翻转公开；dry-run 全程零 Release 写入。版本断言经 `release-preflight --versions-only` 动态覆盖根、全部非 fork chamber 包及三个 fork 基线；`CHANGELOG.md` 的 `## [<version>]` 段落被提取为发布正文（缺失会失败）。`validation` job 第一步是**发布提交的 CI 证明**（`scripts/release/verify-release-ci-proof.mjs`：该 commit 必须在 `main` 上有一条已完成且成功的 `ci.yml` push 运行，`test` 与 `test-windows` 两个 job 都 success；运行中有界等待，失败或从未经过 main 一律 fail closed），随后自验证 gateway/runtime typecheck+tests、关键 control-plane/desktop/renderer/plugin/CLI/policy 门禁；`build-gateway` 只在 GitHub Release 发布经干净临时前缀安装冒烟的 `.tgz` 与同名 `.tgz.sha256`，npm publish/dist-tag 延后。
 - **发布机械门禁（2026-09 起）**：`pnpm run release:preflight <版本>`
-  （`scripts/dev/release-preflight.mjs`）——版本统一性（含 fork 副本与安装器 dsh
+  （`scripts/release/release-preflight.mjs`）——版本统一性（含 fork 副本与安装器 dsh
   常量）、changelog 中英对等、i18n、**workflow action SHA 上游可解析**、冲突标记、
   git 干净、frozen install、test:release-workflow；发布 checklist §1.5/§7 强制
   commit 前与 push 前各跑一次。
@@ -157,7 +157,7 @@ seed，不进远端/gateway）。
   commit+tag → **workflow_dispatch dry_run 先行**（新增/修改的 workflow/脚本
   路径/action SHA 必须先 dry-run 验证过一次）→ 正式 tag push。
   详细步骤见发布 checklist。
-- **推送路径的判类（2026-09）**：`ci.yml` 的 linux 链按事件分档——**分支 push/PR**：纯文档变更（`docs/**`、根级 prose 白名单；判类器 `scripts/dev/classify-ci-changes.mjs`）只跑 file-only 门（action SHA 门禁、i18n、设计 token、上游触点登记表、release-workflow 策略、工具单测），跳过 install / typecheck / 单测 / 构建 / 打包冒烟与 windows 腿；代码变更照旧全跑。**tag push**：`ci.yml` **没有 tag 触发**（2026-09 CI 触发策略修订）——发布改为**证明而非重跑**：`release.yml` 的 `validation` 跑 `verify-release-ci-proof.mjs`，要求该提交在 `main` 上已有成功的完整 `ci.yml` 运行（linux `test` + `test-windows` 两腿都绿），运行中有限等待、失败即阻断。旧形态（linux 链让位、windows 腿在 tag 上照跑）不但对同一 SHA 重复一次 windows 运行，还留下漏洞——给不在 `main` 上的提交打 tag 会跳过整条 linux 链；现在这条漏洞由证明直接堵住。release.yml 与 ci.yml 的门禁对齐契约仍由 `release-workflow-policy.test.mjs` **从 ci.yml 派生**断言（往 ci.yml 加门禁而忘了 release.yml 会直接红灯）。判类器 fail-safe：无法证明是 prose 一律按代码跑；prose 白名单被 policy test 冻结，放宽必须显式改那个测试。
+- **推送路径的判类（2026-09）**：`ci.yml` 的 linux 链按事件分档——**分支 push/PR**：纯文档变更（`docs/**`、根级 prose 白名单；判类器 `scripts/gates/classify-ci-changes.mjs`）只跑 file-only 门（action SHA 门禁、i18n、设计 token、上游触点登记表、release-workflow 策略、工具单测），跳过 install / typecheck / 单测 / 构建 / 打包冒烟与 windows 腿；代码变更照旧全跑。**tag push**：`ci.yml` **没有 tag 触发**（2026-09 CI 触发策略修订）——发布改为**证明而非重跑**：`release.yml` 的 `validation` 跑 `verify-release-ci-proof.mjs`，要求该提交在 `main` 上已有成功的完整 `ci.yml` 运行（linux `test` + `test-windows` 两腿都绿），运行中有限等待、失败即阻断。旧形态（linux 链让位、windows 腿在 tag 上照跑）不但对同一 SHA 重复一次 windows 运行，还留下漏洞——给不在 `main` 上的提交打 tag 会跳过整条 linux 链；现在这条漏洞由证明直接堵住。release.yml 与 ci.yml 的门禁对齐契约仍由 `release-workflow-policy.test.mjs` **从 ci.yml 派生**断言（往 ci.yml 加门禁而忘了 release.yml 会直接红灯）。判类器 fail-safe：无法证明是 prose 一律按代码跑；prose 白名单被 policy test 冻结，放宽必须显式改那个测试。
 - `ci.yml` 用 `concurrency: ci-${{ github.ref }}` 串行化同 ref 的推送，且**只取消 PR 的旧运行**：分支推送排队——纯文档推送若取消前一轮，会让被它跟随的那个代码提交彻底失去验证（判类器已让文档推送不跑重活，但没有"零验证"这一档）。`release.yml` 保持 `release-publish` + `cancel-in-progress: false`，绝不取消可能已建 draft 的发布。
 - 两个 workflow 都在 install 之前按 `harness.commit` 固定提交引导 vendor 源码树。
 
@@ -193,10 +193,21 @@ packages/
                             实例内归档清理 host Remote（design 24）
 docs/
   design/                   设计文档（01 为入口；05 为表面/架构契约（v1））
-  progress/                 STATUS.md——唯一进度总览（只记未完成/部分完成项）
+  progress/                 STATUS.md——唯一进度总览（只记未完成/部分完成项、设计未决、
+                            范围决策与必要取舍）；deviations.md——Electron↔Swift 双 flavor
+                            偏差登记与可达性纪律
   progress/todo/            未实现功能想法（每条一个文件；只保留未完成项）
   checklists/               操作清单（发布 / dsh 升级 / 打包完整性）
   *.en-US.md                各根文档的英文镜像
+scripts/
+  install-gateway.sh        Gateway 一键安装器（用户/运维面；入口 docs/deploy/deploy-gateway.md）
+  dev/                      开发期工具链（安装引导 / typecheck 垫片 / 测试 loader 桩 / test-support）
+  gates/                    每次 push 的仓库门（run-checks 单入口 + verify-* + CI 判类 + workflow 门）
+  release/                  发布链（release-preflight/semver/artifacts + 工作流策略 + 打包清单锁步）
+  upstream/                 上游 pin 与触点（update-vendor / pin 预检 / C1–C15 触点门 / 锚点门 / C8 产物门）
+  perf/                     性能实测工具箱（boot/switch/eval/measure-ui/disk-walk + data/）
+  gui-acceptance/           GUI 验收工具箱（probe/walkthrough/mobile-walkthrough/checks）
+                            （分类规则与接线纪律见 scripts/README.md）
 vendor/
   harness-packages/         @deepseek-ai/* 符号链接树，指向 submodule 内的 dsh 源码
                             （preinstall 引导，gitlink 固定于 harness.commit）

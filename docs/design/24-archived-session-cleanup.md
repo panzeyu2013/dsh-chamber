@@ -4,10 +4,11 @@
 > dsh-chamber「删除已归档会话内容」宿主域（wire `archiveCleanup/{probe,preview,purge}`）、
 > 归档管理器交互与 purge 后会话列表收敛的权威契约；未完成门禁见 docs/progress/STATUS.md。
 >
-> 承接并修订 `docs/progress/todo/12-todo-archived-sessions.md`（归档单向、
-> 不可见、上游无 delete/unarchive wire 的事实核实仍以该文为准）；todo 12 的
-> 方案 B（控制面/主进程特权层直删）继续冻结，本方案用「实例进程内的 chamber
-> 宿主域」替代它的位置——不是 B 的翻版，理由见 §2。
+> 承接并修订原 `docs/progress/todo/12-todo-archived-sessions.md`（归档单向、不可见、
+> 上游无 delete/unarchive wire 的事实核实见 git 历史与该文）；该 todo 的方案 B
+> （控制面/主进程特权层直删）继续冻结（STATUS「范围决策」），上游 wire 草案移入
+> `docs/progress/todo/upstream-proposals.md` §3。本方案用「实例进程内的 chamber
+> 宿主域」替代 B 的位置——不是 B 的翻版，理由见 §2。
 >
 > 交互锚点 = chamber 侧边栏**服务器分组头行（server 行）hover 操作簇**；
 > 执行层 = **新增 chamber 宿主域插件**（实例进程内、宿主权威状态执行删除）；
@@ -779,7 +780,7 @@ ARCHIVE_CLEANUP 常量 + `seedRemoteChamberHostPackages` + main.ts
 **门禁面**：根 `package.json`（`build:host-*` 并入 `build:host-packages`、
 `typecheck:host-archive-cleanup`、`test:host-archive-cleanup` 别名）、
 `.github/workflows/ci.yml` 与 `release.yml` 的逐包 typecheck/test/host-build
-步骤、`scripts/dev/release-preflight.mjs` 逐包步骤。
+步骤、`scripts/release/release-preflight.mjs` 逐包步骤。
 
 **E. gateway 面**：`plugins.ts` `SYNCABLE_HOST_PACKAGES` 第三行 +
 `index.ts` `extraSeedEntries` 第三行（desktop-synced sourceDir）；
