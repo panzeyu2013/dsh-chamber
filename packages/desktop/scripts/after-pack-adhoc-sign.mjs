@@ -31,10 +31,22 @@ import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { HOST_PACKAGE_BUILD_ROWS } from './build-host-graph-package.mjs';
 
 const require = createRequire(import.meta.url);
 export const MAC_DISABLE_LIBRARY_VALIDATION = 'com.apple.security.cs.disable-library-validation';
 export const MAC_ENTITLEMENTS_PATH = fileURLToPath(new URL('../resources/entitlements.mac.plist', import.meta.url));
+
+/** The desktop manifest this packaging run ships (single source for the pnpm
+ *  pin; build-sidecar.mjs reads the same field — G18). */
+export const DESKTOP_MANIFEST = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+
+/**
+ * The pnpm version the packaged extraResources must carry (G18). Read from the
+ * desktop manifest so the Electron-side assertion, the Swift sidecar assembly's
+ * `copyPnpm` fail-closed check and the manifest cannot drift apart silently.
+ */
+export const PACKAGED_PNPM_VERSION = DESKTOP_MANIFEST.dependencies?.pnpm ?? null;
 
 function entitlementEnabled(plistText, key) {
   const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -96,8 +108,13 @@ export function verifyPackagedRuntimeSupport(resourcesDir) {
     throw new Error(`incomplete packaged pnpm runtime: expected ${pnpmEntry}, ${pnpmModuleEntry} and ${pnpmDist}`);
   }
   const pnpmManifest = JSON.parse(readFileSync(pnpmManifestPath, 'utf8'));
-  if (pnpmManifest.name !== 'pnpm' || pnpmManifest.version !== '11.21.0') {
-    throw new Error(`wrong packaged pnpm: ${JSON.stringify(pnpmManifest.name)}@${JSON.stringify(pnpmManifest.version)}`);
+  // G18: the expectation is the desktop manifest's own pin (the same field the
+  // Swift sidecar assembly reads), never a second hardcoded literal.
+  if (PACKAGED_PNPM_VERSION === null) {
+    throw new Error('desktop package.json has no dependencies.pnpm — the packaged pnpm pin has no source');
+  }
+  if (pnpmManifest.name !== 'pnpm' || pnpmManifest.version !== PACKAGED_PNPM_VERSION) {
+    throw new Error(`wrong packaged pnpm: ${JSON.stringify(pnpmManifest.name)}@${JSON.stringify(pnpmManifest.version)} (expected pnpm@${PACKAGED_PNPM_VERSION})`);
   }
 
   const unpackedRoot = path.join(resourcesDir, 'app.asar.unpacked');
@@ -137,6 +154,76 @@ export function verifyPackagedRuntimeSupport(resourcesDir) {
 }
 
 /**
+ * The Electron payload the staged app must carry (G27). `dist/web` is the only
+ * static-frontend source main.ts serves (missing → the control plane 404s the
+ * shell into a white window, main.ts:1354), `dist/preload.cjs` is loaded
+ * fail-closed at window creation (missing → showErrorBox + exit(1),
+ * main.ts:832-841), `dist/control-plane/index.js` is the compiled plane the
+ * packaged main process imports, and each host package copy carries the seed
+ * artifact the local profile needs. The Swift builder fails closed on the same
+ * payload (build-swift-app.mjs); this is the Electron-side mirror.
+ */
+export const ELECTRON_PAYLOAD_REQUIRED = [
+  'dist/web/index.html',
+  'dist/preload.cjs',
+  'dist/control-plane/index.js',
+];
+
+/**
+ * Every asar-relative path the payload assertion requires: the three fixed
+ * entries plus `package.json` + `dist/index.js` for every host package
+ * build row (the rows are the single source of the packaged directory names —
+ * build-host-graph-package.mjs — so a rename cannot silently drop one).
+ * @param {{ outDir: string }[]} [rows] - host package build rows.
+ * @returns {string[]} required asar-relative entries, in a stable order.
+ */
+export function electronPayloadEntries(rows = HOST_PACKAGE_BUILD_ROWS) {
+  const hostEntries = rows.flatMap((row) => {
+    const base = 'dist/' + path.basename(row.outDir);
+    return [`${base}/package.json`, `${base}/dist/index.js`];
+  });
+  return [...ELECTRON_PAYLOAD_REQUIRED, ...hostEntries];
+}
+
+/**
+ * Assert the staged Electron app carries the complete runtime payload.
+ * Accepts either a packed `app.asar` (electron-builder's default) or the
+ * unpacked staged `app/` directory. Missing payload fails closed: a package
+ * that lost one of these entries passes every existing check but ships a
+ * white screen or a startup abort.
+ * @param {string} resourcesDir - `<App>.app/Contents/Resources` (darwin) or `resources` (other platforms).
+ * @param {{ asarPath?: string, stagedAppDir?: string, rows?: { outDir: string }[] }} [options] - test seams.
+ */
+export function verifyPackagedElectronPayload(resourcesDir, options = {}) {
+  const required = electronPayloadEntries(options.rows);
+  const asarPath = options.asarPath ?? path.join(resourcesDir, 'app.asar');
+  const stagedAppDir = options.stagedAppDir ?? path.join(resourcesDir, 'app');
+  let hasEntry;
+  if (existsSync(asarPath)) {
+    const asar = require('@electron/asar');
+    const packed = new Set(
+      asar.listPackage(asarPath).map((entry) => entry.replace(/\\/g, '/').replace(/^\//, '')),
+    );
+    hasEntry = (relative) => packed.has(relative);
+  } else if (existsSync(stagedAppDir)) {
+    hasEntry = (relative) => existsSync(path.join(stagedAppDir, relative));
+  } else {
+    throw new Error(`no Electron payload to verify under ${resourcesDir} (neither app.asar nor app/ exists)`);
+  }
+  const missing = required.filter((relative) => !hasEntry(relative));
+  if (missing.length > 0) {
+    throw new Error(
+      `incomplete packaged Electron payload: missing ${missing.join(', ')}`
+      + " (web dist / preload / compiled control-plane / host package artifacts must all ship)",
+    );
+  }
+  console.log(
+    `[after-pack-adhoc-sign] Electron payload verified: ${required.length} required entries `
+    + `(web dist, preload, control-plane, ${required.length - ELECTRON_PAYLOAD_REQUIRED.length} host package files)`,
+  );
+}
+
+/**
  * Fail the build before distributable targets are created when extraResources
  * did not carry the complete embedded runtime. electron-builder deliberately
  * ignores a FileSet root's `node_modules` child, so this is a required product
@@ -170,6 +257,7 @@ export default async function afterPackAdhocSign(context) {
     : path.join(context.appOutDir, 'resources');
   verifyPackagedDshRuntime(resourcesDir, context.electronPlatformName);
   verifyPackagedRuntimeSupport(resourcesDir);
+  verifyPackagedElectronPayload(resourcesDir);
   if (context.electronPlatformName !== 'darwin') return;
   const appPath = path.join(context.appOutDir, `${appName}.app`);
   const infoPlist = path.join(appPath, 'Contents', 'Info.plist');

@@ -12,6 +12,8 @@
  *     汇总在后）；
  *  ② evaluateChildRun：exit 0 + tests>0 通过；exit 0 + 无汇总/tests 0 失败；
  *     非 0 退出 / 信号 / spawn error 失败；allowlist 命中显式放行；
+ *  ②b macOS 腿跳过纪律（G2）：默认判定放过「部分跳过」，requireNoSkips 下
+ *     任一 skip 都失败（缺 codesign/hdiutil/.build/release/Sparkle 前置必须红）；
  *  ③ runEntries：零测试子进程返回接到守卫上（注入 spawn），证明守卫确实
  *     在 runner 主循环里生效，而不是孤立的纯函数；
  *  ④ runEntries：正常文件通过并按顺序输出（stdout/stderr 透传）；
@@ -37,7 +39,7 @@ import {
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 
-/** 与 scripts/dev/verify-test-wiring.mjs 同款忽略目录（vendor/dist 里的
+/** 与 scripts/gates/verify-test-wiring.mjs 同款忽略目录（vendor/dist 里的
  *  测试不属于本包清单的扫描面）。 */
 const IGNORED_DIRECTORIES = new Set(['node_modules', 'vendor', 'dist', 'lib', 'release', '.git', '.desktop-build', 'coverage', '.dev-user-data'])
 
@@ -97,6 +99,46 @@ test('② evaluateChildRun：零测试 / 无法 spawn 一律失败，例外须�
   assert.equal(evaluateChildRun('fixture.test.ts', { status: null, signal: null, error: new Error('spawn ENOENT'), stdout: '', stderr: '' }).ok, false)
   const allowlist = [{ file: 'fixture.test.ts', reason: 'fixture：该文件只在脚本模式下运行' }]
   assert.deepEqual(evaluateChildRun('fixture.test.ts', { status: 0, signal: null, stdout: '', stderr: '' }, allowlist), { ok: true })
+})
+
+test('②b macOS 腿的跳过纪律：部分跳过在 requireNoSkips 下必须失败（G2）', () => {
+  const partial = {
+    status: 0, signal: null,
+    stdout: 'ℹ tests 3\nℹ pass 2\nℹ fail 0\nℹ skipped 1\n', stderr: '',
+  }
+  // 非 macOS 腿沿用判定：有测试体执行即通过（win32 等平台腿确有合法 skip）。
+  assert.deepEqual(evaluateChildRun('fixture.test.ts', partial), { ok: true })
+  // macOS 腿：任一 skip 都是失败——跳过的是真前置（codesign/hdiutil/…），不是无关平台分支。
+  const verdict = evaluateChildRun('fixture.test.ts', partial, undefined, { requireNoSkips: true })
+  assert.equal(verdict.ok, false)
+  assert.match(verdict.reason, /macOS 腿不得有跳过用例（skipped 1）/)
+  // 零跳过仍是正常通过。
+  assert.deepEqual(
+    evaluateChildRun('fixture.test.ts', {
+      status: 0, signal: null,
+      stdout: 'ℹ tests 3\nℹ pass 3\nℹ fail 0\nℹ skipped 0\n', stderr: '',
+    }, undefined, { requireNoSkips: true }),
+    { ok: true },
+  )
+})
+
+test('②c runEntries：requireNoSkips 的跳过子进程在 runner 主循环里被判失败（G2）', () => {
+  const spawn = () => ({ status: 0, signal: null, stdout: 'ℹ tests 2\nℹ pass 1\nℹ skipped 1\n', stderr: '', error: undefined })
+  const macosVerdict = runEntries(
+    [{ group: 'macos', file: 'build-swift-app.test.mjs', nodeArgs: [] }],
+    { spawn, writeOut: () => {}, writeErr: () => {}, requireNoSkips: true },
+  )
+  assert.equal(macosVerdict.ok, false)
+  assert.equal(macosVerdict.file, 'build-swift-app.test.mjs')
+  assert.match(macosVerdict.reason, /跳过/)
+  // 同一子进程在默认判定（win32/全量腿）下通过——规则只在 macOS 腿启用。
+  assert.deepEqual(
+    runEntries(
+      [{ group: 'scripts', file: 'build-sidecar.test.mjs', nodeArgs: [] }],
+      { spawn, writeOut: () => {}, writeErr: () => {} },
+    ),
+    { ok: true },
+  )
 })
 
 test('③ runEntries：零测试子进程返回被判失败（守卫确实接在 runner 循环上）', () => {

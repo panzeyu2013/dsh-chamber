@@ -19,6 +19,13 @@
  * module), so it is both part of the full set and the package's Windows CI leg.
  * The macOS-only files need macOS tools (O_EXLOCK/plutil/codesign/ditto), so
  * --macos is their only entry point and they never ride the ubuntu leg.
+ *
+ * macOS leg skip discipline (G2, 2026-12 parity audit): the packaging suites
+ * carry five environment-conditional `t.skip` sites (codesign/hdiutil, the
+ * SwiftPM .build/release product, the resolved Sparkle artifact). A skipped case
+ * there is exactly the silent-coverage-loss this runner exists to stop, so the
+ * macOS leg additionally requires `skipped === 0` in every child summary —
+ * a missing prerequisite is a loud failure, not a green run.
  */
 import { existsSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
@@ -189,12 +196,17 @@ export function parseReportedTestCount(output) {
  * that executed no test body (no summary / tests 0 / pass 0 且 fail 0——全
  * skipped 也算，见 parseReportedTotals). `allowlist` is injectable so the
  * lockstep test covers both the failure and the explicit-exception paths.
+ * `requireNoSkips` is the macOS-leg discipline (G2): a partial skip set is a
+ * failure there, because the five packaging-suite `t.skip` sites guard real
+ * prerequisites (codesign/hdiutil/.build/release/Sparkle) that a green CI run
+ * must have proven, not skipped.
  * @param {string} file - package-relative listed path.
  * @param {{ status: number | null, signal: string | null, error?: Error, stdout?: string | null, stderr?: string | null }} result - spawnSync result.
  * @param {readonly { file: string, reason: string }[]} [allowlist] - zero-test exceptions.
+ * @param {{ requireNoSkips?: boolean }} [options] - macOS-leg no-skip discipline.
  * @returns {ChildVerdict}
  */
-export function evaluateChildRun(file, result, allowlist = ZERO_TEST_ALLOWLIST) {
+export function evaluateChildRun(file, result, allowlist = ZERO_TEST_ALLOWLIST, { requireNoSkips = false } = {}) {
   if (result.error !== undefined) return { ok: false, reason: '无法启动：' + result.error.message }
   if (result.status !== 0) {
     return { ok: false, reason: 'exit ' + (result.status ?? ('signal ' + (result.signal ?? 'unknown'))) }
@@ -203,6 +215,9 @@ export function evaluateChildRun(file, result, allowlist = ZERO_TEST_ALLOWLIST) 
   const totals = parseReportedTotals((result.stdout ?? '') + '\n' + (result.stderr ?? ''))
   if (totals.tests === null) return { ok: false, reason: '未运行任何测试（无 node:test 汇总行；零测试文件不得视为通过）' }
   if (totals.tests === 0) return { ok: false, reason: 'node:test 汇总 tests 0（零测试文件不得视为通过）' }
+  if (requireNoSkips && (totals.skipped ?? 0) > 0) {
+    return { ok: false, reason: `macOS 腿不得有跳过用例（skipped ${totals.skipped}）——缺前置必须红，不得静默降覆盖` }
+  }
   if ((totals.pass ?? 0) === 0 && (totals.fail ?? 0) === 0) {
     return { ok: false, reason: '所有测试被跳过/待办（pass 0 / fail 0）——未执行任何测试体' }
   }
@@ -223,13 +238,14 @@ export function collectEntries({ win32 = false, macos = false } = {}) {
  * seams are injectable so scripts/test-runner-lockstep.test.mjs can prove the
  * zero-test guard is actually wired into the loop.
  * @param {{ group: string, file: string, nodeArgs: string[] }[]} entries
- * @param {{ spawn?: Function, writeOut?: (text: string) => void, writeErr?: (text: string) => void }} [seams]
+ * @param {{ spawn?: Function, writeOut?: (text: string) => void, writeErr?: (text: string) => void, requireNoSkips?: boolean }} [seams]
  * @returns {{ ok: true } | { ok: false, file: string, reason: string }}
  */
 export function runEntries(entries, {
   spawn = spawnSync,
   writeOut = text => process.stdout.write(text),
   writeErr = text => process.stderr.write(text),
+  requireNoSkips = false,
 } = {}) {
   for (const [index, entry] of entries.entries()) {
     if (index === 0 || entries[index - 1].group !== entry.group) writeOut('\n=== ' + entry.group + ' ===\n')
@@ -241,7 +257,7 @@ export function runEntries(entries, {
     })
     if (typeof result.stdout === 'string' && result.stdout !== '') writeOut(result.stdout)
     if (typeof result.stderr === 'string' && result.stderr !== '') writeErr(result.stderr)
-    const verdict = evaluateChildRun(entry.file, result)
+    const verdict = evaluateChildRun(entry.file, result, ZERO_TEST_ALLOWLIST, { requireNoSkips })
     if (!verdict.ok) return { ok: false, file: entry.file, reason: verdict.reason }
   }
   return { ok: true }
@@ -261,7 +277,9 @@ function main() {
     for (const entry of missing) console.error('  - ' + entry.file)
     process.exit(1)
   }
-  const verdict = runEntries(entries)
+  // macOS leg: a skipped packaging case (codesign/hdiutil/.build/release/Sparkle
+  // prerequisite) must fail the run instead of quietly shrinking coverage.
+  const verdict = runEntries(entries, { requireNoSkips: macos })
   if (!verdict.ok) {
     console.error('[test] ' + verdict.file + ' failed (' + verdict.reason + ')')
     process.exit(1)

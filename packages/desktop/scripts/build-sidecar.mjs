@@ -33,6 +33,9 @@
  * **缺位**，而不是继承上一轮的产物——每个 skip 开关在开工前清掉自己的目标
  * （node / sidecar.js / vendor+dsh / dist），否则上一轮的 node/vendor 会留在装配
  * 里被 .app 一起签名发布，而构建日志却声称「已跳过」。
+ * **缺源的诚实语义（2026-12 G6/G18）**：不跳过的源缺失不是可降级状态——vendor/dsh
+ * 或 pnpm 源不存在时在**任何写盘之前** fail closed（旧产物绝不冒充本轮结果）；
+ * pnpm 源还必须是仓库 pin 的版本（desktop dependencies.pnpm，Electron 侧同源）。
  *
  * 运行期标记：Swift Supervisor spawn `<sidecar>/sidecar.js` 时必须带
  * `DSH_CHAMBER_SIDECAR_COMPILED=1`（control-plane-module.isPackagedSidecarRuntime）
@@ -71,6 +74,23 @@ const repoRoot = path.resolve(desktopDir, '..', '..')
 /** 缺省 Node 版本：与 desktop Electron 43.4.0 内置 Node 大版本对齐（D6；
  *  exact minor 以安装态 process.versions.node 核实——24.18.1 为 2026-09 实测）。 */
 export const DEFAULT_NODE_VERSION = '24.18.1'
+
+/**
+ * Electron pin → 该 Electron 发布内置的 Node 版本（D6 / G37）。
+ *
+ * 为什么是表而不是「执行 Electron 二进制读 process.versions.node」：后者在
+ * 没有 Electron dist 的机器（CI 的每条腿；electron 无 postinstall，
+ * DSH_CHAMBER_ELECTRON=1 是桌面开发的显式物化开关）只能响亮 SKIP——于是
+ * 「装配捆绑 node == Electron 内置 node」这条 G18 断言在 CI 恒真跳过，版本漂移
+ * 没有门禁兜底。表把映射变成无条件断言：desktop manifest 的**精确** Electron
+ * pin 必须命中一行，且该行的 node 版本必须等于 DEFAULT_NODE_VERSION。
+ * 升级 Electron 或 Node 而不动此表 = 构建在动网络之前失败（见
+ * assertElectronNodePin；二进制在场时 build-sidecar.test.mjs 仍会实测交叉验证
+ * 表值，两者互为证据）。
+ */
+export const ELECTRON_NODE_PINS = {
+  '43.4.0': '24.18.1',
+}
 /** v1 只发 arm64（design 25 §10 决策 6）。 */
 export const DEFAULT_ARCH = 'arm64'
 
@@ -116,6 +136,36 @@ export function resolvePinnedNodeDigest(archiveName, override, pins = PINNED_NOD
   }
   if (pinned !== null) return { digest: pinned, source: 'pinned' }
   return { digest: null, source: 'network' }
+}
+
+/**
+ * 默认 Node pin 的机械锁步（G18）：PINNED_NODE_SHA256 必须**恰好**覆盖
+ * DEFAULT_NODE_VERSION 的两个 darwin 归档，且每条为小写 64 位 hex。
+ * 升级 DEFAULT_NODE_VERSION 却漏改/多留摘要行时，构建在动网络之前失败——
+ * 「版本 + SHA 一起更新」从此是断言而非注释。
+ * @param {Record<string, string>} [pins] - 摘要表（测试可注入）。
+ * @param {string} [version] - 默认 Node 版本（测试可注入）。
+ * @returns {string[]} 已断言的表键（排序后）。
+ */
+export function assertNodePinTable(pins = PINNED_NODE_SHA256, version = DEFAULT_NODE_VERSION) {
+  const expected = [nodeArchiveName(version, 'arm64'), nodeArchiveName(version, 'x64')]
+  const keys = Object.keys(pins)
+  for (const key of keys) {
+    if (!expected.includes(key)) {
+      throw new Error(
+        `PINNED_NODE_SHA256 含非默认版本条目 ${key}（默认 ${version}）——升级 DEFAULT_NODE_VERSION 时必须同步整表`,
+      )
+    }
+    if (!/^[0-9a-f]{64}$/.test(pins[key])) {
+      throw new Error(`${key} 的固定摘要必须是小写 64 位 hex，实际 ${JSON.stringify(pins[key])}`)
+    }
+  }
+  for (const name of expected) {
+    if (!Object.prototype.hasOwnProperty.call(pins, name)) {
+      throw new Error(`PINNED_NODE_SHA256 缺少默认归档 ${name}（DEFAULT_NODE_VERSION=${version} 的两个 darwin 归档都必须固定）`)
+    }
+  }
+  return [...keys].sort()
 }
 
 /** chamber host 包（design 09/08/24）——打包态必须随 sidecar 装配，否则
@@ -175,6 +225,79 @@ export function sidecarLayout(outDir) {
 export const VENDOR_DSH_FILES = ['package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml']
 /** Electron extraResources 同款过滤器：pnpm 只带 package.json + bin/pnpm.{cjs,mjs} + dist。 */
 export const PNPM_BIN_FILES = ['pnpm.cjs', 'pnpm.mjs']
+
+/**
+ * 内嵌 pnpm 的版本 pin（G18）：**单一来源** = desktop package.json 的
+ * `dependencies.pnpm`。Electron 侧 after-pack 的运行时校验
+ * （after-pack-adhoc-sign.mjs 的 PACKAGED_PNPM_VERSION）读同一个来源，
+ * build-sidecar.test.mjs 断言两者逐一相等——任一处的版本注释漂移都会红。
+ * @param {object} [manifest] - desktop package.json（测试可注入）。
+ * @returns {string} 期望的 pnpm 版本。
+ */
+export function resolvePnpmPin(manifest = JSON.parse(readFileSync(path.join(desktopDir, 'package.json'), 'utf8'))) {
+  const version = manifest !== null && typeof manifest === 'object' && manifest.dependencies !== undefined
+    ? manifest.dependencies.pnpm
+    : undefined
+  if (typeof version !== 'string' || version === '') {
+    throw new Error('desktop package.json 缺少 dependencies.pnpm —— sidecar 内嵌 pnpm 的版本 pin 无来源（G18）')
+  }
+  return version
+}
+
+/** 本次构建期望的内嵌 pnpm 版本（Electron 侧同一来源，见 after-pack）。 */
+export const PNPM_PINNED_VERSION = resolvePnpmPin()
+
+/**
+ * desktop manifest 的 Electron pin（G37 单源）。**必须是精确版本**：范围说明符
+ * （`^43.4.0`）会让锁文件解析出的实际 Electron 漂出 ELECTRON_NODE_PINS 的键，
+ * 那时表就锚不住任何东西——所以范围/空值直接 fail closed。
+ * @param {object} [manifest] - desktop package.json（测试可注入）。
+ * @returns {string} 精确 Electron 版本。
+ */
+export function resolveElectronPin(manifest = JSON.parse(readFileSync(path.join(desktopDir, 'package.json'), 'utf8'))) {
+  const version = manifest !== null && typeof manifest === 'object' && manifest.devDependencies !== undefined
+    ? manifest.devDependencies.electron
+    : undefined
+  if (typeof version !== 'string' || version === '') {
+    throw new Error('desktop package.json 缺少 devDependencies.electron —— Electron↔Node pin 无来源（G37）')
+  }
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) {
+    throw new Error(
+      `desktop devDependencies.electron 必须是精确版本，实际 ${JSON.stringify(version)}`
+      + '——范围说明符下锁文件解析出的版本会漂移，ELECTRON_NODE_PINS 无法锚定（G37）',
+    )
+  }
+  return version
+}
+
+/** 本次构建期望的 Electron pin（G37；module 级读取，与 PNPM_PINNED_VERSION 同姿态）。 */
+export const ELECTRON_PINNED_VERSION = resolveElectronPin()
+
+/**
+ * Electron pin ↔ 捆绑 node 版本的机械锁步（G37）：pin 必须在 ELECTRON_NODE_PINS
+ * 表内，且表里的 node 版本必须等于 DEFAULT_NODE_VERSION。任何一条不满足都在
+ * 构建开始（动网络之前）失败——这是 G18「装配 node == Electron 内置 node」
+ * 断言在 CI 的替代形态（原断言缺 Electron 二进制即 SKIP）。
+ * @param {string} electronVersion - desktop manifest 的精确 Electron pin。
+ * @param {{ nodeVersion?: string, pins?: Record<string, string> }} [options] - 测试可注入。
+ * @returns {string} 该 Electron 的 node 版本。
+ */
+export function assertElectronNodePin(electronVersion, { nodeVersion = DEFAULT_NODE_VERSION, pins = ELECTRON_NODE_PINS } = {}) {
+  const pinned = Object.prototype.hasOwnProperty.call(pins, electronVersion) ? pins[electronVersion] : undefined
+  if (pinned === undefined) {
+    throw new Error(
+      `Electron ${electronVersion} 不在 ELECTRON_NODE_PINS 表内（G37）——`
+      + '升级 desktop devDependencies.electron 时必须在 build-sidecar.mjs 同步该 Electron 的 node 版本',
+    )
+  }
+  if (pinned !== nodeVersion) {
+    throw new Error(
+      `Electron ${electronVersion} 内置 node ${pinned} != 捆绑 pin ${nodeVersion}`
+      + '（D6/G37：sidecar 捆绑 node 必须与出货 Electron 的 node 一致；同步 DEFAULT_NODE_VERSION 与 ELECTRON_NODE_PINS）',
+    )
+  }
+  return pinned
+}
 
 /**
  * 拷贝目录树并**原样保留符号链接**（含相对拼写）。
@@ -268,10 +391,50 @@ export function clearLegacySidecarEmit(emitDir) {
   rmSync(emitDir, { recursive: true, force: true })
 }
 
-/** 拷贝内置 dsh 工作区（缺源时返回 false，由调用方决定 warn/fatal）。 */
-export function copyVendorDsh(sourceDir, destDir) {
+/**
+ * vendor/dsh 的版本 + 平台装配断言（G39）——Electron after-pack 的
+ * verifyPackagedDshRuntime 同款两问：
+ *   ① runtime manifest 记录的 @deepseek-ai/dsh 版本 == 包内 node_modules 里
+ *      dsh 自己的 version（防拼接了别的 dsh 版本）；
+ *   ② runtime manifest 的 dsh.platform 以 `<platform>-` 开头（防把别的平台
+ *      烘焙的运行时装进 .app）。
+ * Swift 腿此前只拷贝 + release 只 `test -f`，漂移的 vendor 树能过全部门禁；
+ * 本函数在任何写盘之前对源、拷贝之后再对产物各断一次。
+ * @param {string} vendorDir - vendor/dsh 目录。
+ * @param {string} [platform] - 期望平台前缀（构建宿主，测试可注入）。
+ * @returns {{ version: string, platform: string }} 已验证的运行时事实。
+ */
+export function verifyVendorDshRuntime(vendorDir, platform = process.platform) {
+  const runtimeManifestPath = path.join(vendorDir, 'package.json')
+  const dshManifestPath = path.join(vendorDir, 'node_modules', '@deepseek-ai', 'dsh', 'package.json')
+  if (!existsSync(runtimeManifestPath) || !existsSync(dshManifestPath)) {
+    throw new Error(
+      `vendor/dsh 装配不完整：缺少 ${!existsSync(runtimeManifestPath) ? runtimeManifestPath : dshManifestPath}（G39）`,
+    )
+  }
+  const runtimeManifest = JSON.parse(readFileSync(runtimeManifestPath, 'utf8'))
+  const dshManifest = JSON.parse(readFileSync(dshManifestPath, 'utf8'))
+  const recordedVersion = runtimeManifest.dependencies?.['@deepseek-ai/dsh']
+  if (recordedVersion !== dshManifest.version) {
+    throw new Error(
+      `vendor/dsh 版本漂移：runtime manifest=${JSON.stringify(recordedVersion)}，包内 dsh=${JSON.stringify(dshManifest.version)}`
+      + '（G39；与 Electron afterPack 的 verifyPackagedDshRuntime 同款断言）',
+    )
+  }
+  if (typeof runtimeManifest.dsh?.platform !== 'string' || !runtimeManifest.dsh.platform.startsWith(`${platform}-`)) {
+    throw new Error(
+      `vendor/dsh 平台漂移：期望 ${platform}-*，实际 ${JSON.stringify(runtimeManifest.dsh?.platform)}（G39）`,
+    )
+  }
+  return { version: recordedVersion, platform: runtimeManifest.dsh.platform }
+}
+
+/** 拷贝内置 dsh 工作区（缺源时返回 false；调用方 fail closed——G6，见 runBuildSidecar）。
+ *  G39：版本/平台漂移的 vendor 树在任何写盘之前 fail closed，拷贝产物再验一次。 */
+export function copyVendorDsh(sourceDir, destDir, { platform = process.platform } = {}) {
   const manifest = path.join(sourceDir, 'package.json')
   if (!existsSync(manifest)) return false
+  verifyVendorDshRuntime(sourceDir, platform)
   rmSync(destDir, { recursive: true, force: true })
   mkdirSync(destDir, { recursive: true })
   for (const file of VENDOR_DSH_FILES) {
@@ -288,14 +451,34 @@ export function copyVendorDsh(sourceDir, destDir) {
   if (!existsSync(path.join(destDir, 'package.json'))) {
     throw new Error(`vendor/dsh 拷贝不完整：${path.join(destDir, 'package.json')}`)
   }
+  verifyVendorDshRuntime(destDir, platform)
   return true
 }
 
-/** 拷贝内嵌 pnpm（缺源时返回 false）。 */
-export function copyPnpm(sourceDir, destDir) {
+/**
+ * 拷贝内嵌 pnpm（缺源时返回 false）。**版本 fail-closed**（G18）：源的
+ * package.json 必须 name=pnpm 且 version == 仓库 pin（desktop dependencies.pnpm，
+ * 与 Electron after-pack 的运行时校验同一来源），否则 throw——绝不让一个与
+ * Electron extraResources 不同版本的 pnpm 混进 Swift 装配并随 .app 签名发布。
+ * @param {string} sourceDir - pnpm 包目录。
+ * @param {string} destDir - 装配目标。
+ * @param {object} [options] - { expectedVersion } 测试可注入。
+ * @returns {boolean} 源存在并已拷贝。
+ */
+export function copyPnpm(sourceDir, destDir, { expectedVersion = PNPM_PINNED_VERSION } = {}) {
   const manifest = path.join(sourceDir, 'package.json')
   const entry = path.join(sourceDir, 'bin', 'pnpm.cjs')
   if (!existsSync(manifest) || !existsSync(entry)) return false
+  const parsed = JSON.parse(readFileSync(manifest, 'utf8'))
+  if (parsed.name !== 'pnpm') {
+    throw new Error(`内嵌 pnpm 源不是 pnpm 包：${manifest}（name=${JSON.stringify(parsed.name)}）`)
+  }
+  if (parsed.version !== expectedVersion) {
+    throw new Error(
+      `内嵌 pnpm 版本漂移：源 ${String(parsed.version)} != 仓库 pin ${String(expectedVersion)}`
+      + '（desktop package.json dependencies.pnpm；与 Electron after-pack 校验同一来源）',
+    )
+  }
   rmSync(destDir, { recursive: true, force: true })
   mkdirSync(path.join(destDir, 'bin'), { recursive: true })
   cpSync(manifest, path.join(destDir, 'package.json'))
@@ -411,7 +594,13 @@ export function parseBuildSidecarArgs(argv) {
     else if (arg === '--node-version') options.nodeVersion = next()
     else if (arg === '--node-sha256') options.nodeSha256 = next().toLowerCase()
     else if (arg === '--node-archive') options.nodeArchive = path.resolve(next())
-    else if (arg === '--arch') options.arch = next()
+    else if (arg === '--arch') {
+      const arch = next()
+      // 架构白名单（对照 build-swift-app.mjs 的同款校验，D8）：拼错或空值此前会一路
+      // 传进 node 归档名与 lipo 断言，失败点距参数很远。
+      if (arch !== 'arm64' && arch !== 'x64') throw new Error(`--arch 只接受 arm64|x64，收到：${arch}`)
+      options.arch = arch
+    }
     else if (arg === '--help' || arg === '-h') options.help = true
     else throw new Error(`未知参数：${arg}`)
   }
@@ -601,6 +790,14 @@ export async function runBuildSidecar(options, io = {}) {
   const plan = buildPlan(options)
   for (const step of plan) io.log(`  ${step}`)
 
+  // Node pin 表与 DEFAULT_NODE_VERSION 的锁步（G18）：版本升级漏改/多留摘要
+  // 行时在动网络之前失败，而不是下载后再由摘要不匹配报错。
+  assertNodePinTable()
+
+  // Electron pin ↔ 捆绑 node 的锁步（G37）：这条断言不依赖 Electron 二进制
+  // （原 G18 断言在 CI 恒 SKIP），升级 Electron/Node 而未同步表即在构建开始失败。
+  assertElectronNodePin(ELECTRON_PINNED_VERSION)
+
   // 输入校验（dry-run 同样执行）。
   const tsconfig = path.join(desktopDir, 'tsconfig.sidecar.build.json')
   const sidecarEntry = path.join(desktopDir, 'sidecar-entry.ts')
@@ -648,6 +845,23 @@ export async function runBuildSidecar(options, io = {}) {
   if (options.dryRun) {
     io.log('[build-sidecar] dry-run：输入校验通过，未写盘、未联网')
     return { dryRun: true, layout }
+  }
+
+  // 非 dry-run 的 vendor/pnpm 缺源 **fail closed**（G6 + G18）：<out> 是持久
+  // 装配目录，旧 vendor/dsh 与 pnpm 留在那里会被 build-swift-app 原样拷进 .app
+  // 一起签名发布，而构建日志只 warn「未找到源」——这正是 G6 描述的假成功。
+  // 显式 --skip-vendor 才是「本次不要 vendor」的表达（它先清缺位再跳过）。
+  // 检查在任何写盘之前：失败不产出半新半旧的装配。
+  if (!options.skipVendor) {
+    if (!existsSync(path.join(options.vendorDshDir, 'package.json'))) {
+      throw new Error(
+        `内置 dsh 工作区源不存在：${options.vendorDshDir}`
+        + '（先跑 bundle:dsh；或显式 --skip-vendor 表达本次不要 vendor）',
+      )
+    }
+    if (!existsSync(path.join(options.pnpmDir, 'bin', 'pnpm.cjs'))) {
+      throw new Error(`内嵌 pnpm 源不存在：${options.pnpmDir}（先 pnpm install；或显式 --skip-vendor）`)
+    }
   }
 
   mkdirSync(layout.outDir, { recursive: true })
@@ -730,16 +944,16 @@ export async function runBuildSidecar(options, io = {}) {
   if (options.skipVendor) {
     io.log('[build-sidecar] 跳过 vendor/dsh + pnpm 拷贝（--skip-vendor）')
   } else {
-    if (copyVendorDsh(options.vendorDshDir, layout.vendorDsh)) {
-      io.log(`[build-sidecar] vendor/dsh → ${layout.vendorDsh}`)
-    } else {
-      io.log(`[build-sidecar] 警告：未找到 dsh 工作区 ${options.vendorDshDir}（先跑 bundle-dsh / 或 --skip-vendor）`)
+    // 前置已在写盘前检查缺源；这里是兜底（源在检查与拷贝之间消失/竞态时，
+    // 绝不留下旧产物冒充本轮结果）。
+    if (!copyVendorDsh(options.vendorDshDir, layout.vendorDsh)) {
+      throw new Error(`内置 dsh 工作区源不存在：${options.vendorDshDir}（先跑 bundle:dsh；或显式 --skip-vendor）`)
     }
-    if (copyPnpm(options.pnpmDir, layout.pnpm)) {
-      io.log(`[build-sidecar] pnpm → ${layout.pnpm}`)
-    } else {
-      io.log(`[build-sidecar] 警告：未找到 pnpm ${options.pnpmDir}（先 pnpm install / 或 --skip-vendor）`)
+    io.log(`[build-sidecar] vendor/dsh → ${layout.vendorDsh}`)
+    if (!copyPnpm(options.pnpmDir, layout.pnpm)) {
+      throw new Error(`内嵌 pnpm 源不存在：${options.pnpmDir}（先 pnpm install；或显式 --skip-vendor）`)
     }
+    io.log(`[build-sidecar] pnpm → ${layout.pnpm}`)
   }
 
   // 4. Node 捆绑（可选）。
@@ -765,9 +979,11 @@ if (isMain) {
   try {
     const options = parseBuildSidecarArgs(process.argv.slice(2))
     if (options.help) {
-      console.log('用法：build-sidecar.mjs [--out <dir>] [--dry-run] [--skip-node] [--skip-bundle] [--skip-vendor]')
+      console.log('用法：build-sidecar.mjs [--out <dir>] [--dry-run] [--arch <arm64|x64>]')
+      console.log('       [--skip-node] [--skip-bundle] [--skip-host-packages] [--skip-vendor]')
+      console.log('       [--vendor-dsh <dir>] [--pnpm-dir <dir>]')
       console.log('       [--node-version <v>] [--node-sha256 <hex>（覆盖仓库固定摘要，冲突即拒绝）]')
-      console.log('       [--node-archive <tar.gz>] [--arch <arm64|x64>]')
+      console.log('       [--node-archive <tar.gz>] [--help]')
       process.exit(0)
     }
     await runBuildSidecar(options)

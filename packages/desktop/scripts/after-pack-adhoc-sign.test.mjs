@@ -1,20 +1,27 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  ELECTRON_PAYLOAD_REQUIRED,
   MAC_DISABLE_LIBRARY_VALIDATION,
   MAC_ENTITLEMENTS_PATH,
+  PACKAGED_PNPM_VERSION,
   PACKAGED_RUNTIME_MODULES,
+  electronPayloadEntries,
   macAdhocSignArgs,
   verifyMacEntitlementsFile,
   verifyPackagedDshRuntime,
+  verifyPackagedElectronPayload,
   verifyPackagedRuntimeSupport,
   verifySignedMacEntitlements,
 } from './after-pack-adhoc-sign.mjs';
+// Cross-module pin lockstep (G18): the Swift sidecar assembly reads the same
+// desktop manifest field, so a drift between the two builds fails HERE.
+import { PNPM_PINNED_VERSION } from './build-sidecar.mjs';
 
 const require = createRequire(import.meta.url);
 const builderRequire = createRequire(require.resolve('electron-builder'));
@@ -37,7 +44,7 @@ function supportFixture() {
   const pnpmDir = path.join(resourcesDir, 'pnpm');
   mkdirSync(path.join(pnpmDir, 'bin'), { recursive: true });
   mkdirSync(path.join(pnpmDir, 'dist'), { recursive: true });
-  writeFileSync(path.join(pnpmDir, 'package.json'), JSON.stringify({ name: 'pnpm', version: '11.21.0' }));
+  writeFileSync(path.join(pnpmDir, 'package.json'), JSON.stringify({ name: 'pnpm', version: PACKAGED_PNPM_VERSION }));
   writeFileSync(path.join(pnpmDir, 'bin', 'pnpm.cjs'), 'import("./pnpm.mjs")');
   writeFileSync(path.join(pnpmDir, 'bin', 'pnpm.mjs'), 'await import("../dist/pnpm.mjs")');
   writeFileSync(path.join(pnpmDir, 'dist', 'pnpm.mjs'), '');
@@ -45,6 +52,21 @@ function supportFixture() {
   mkdirSync(unpacked, { recursive: true });
   for (const name of PACKAGED_RUNTIME_MODULES) writeFileSync(path.join(unpacked, name), '');
   return resourcesDir;
+}
+
+/** Build a real app.asar containing the complete Electron payload (G27), or
+ * omit the named asar-relative entries to prove the assertion fails closed. */
+async function withPayloadAsar(resourcesDir, omit = []) {
+  const asar = require('@electron/asar');
+  const srcDir = mkdtempSync(path.join(tmpdir(), 'dsh-chamber-payload-asar-'));
+  for (const relative of electronPayloadEntries()) {
+    if (omit.includes(relative)) continue;
+    const target = path.join(srcDir, relative);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, relative.endsWith('.html') ? '<!doctype html><title>dsh-chamber</title>' : 'export {};');
+  }
+  await asar.createPackage(srcDir, path.join(resourcesDir, 'app.asar'));
+  rmSync(srcDir, { recursive: true, force: true });
 }
 
 /** Build a real app.asar (like electron-builder does) containing the shared
@@ -130,9 +152,130 @@ test('packaged runtime support verification rejects missing pnpm or runtime modu
   }
 });
 
+test('packaged runtime support verification rejects a pnpm version drift against the manifest pin (G18)', () => {
+  const resourcesDir = supportFixture();
+  try {
+    writeFileSync(path.join(resourcesDir, 'pnpm', 'package.json'), JSON.stringify({ name: 'pnpm', version: '0.0.0-drift' }));
+    assert.throws(
+      () => verifyPackagedRuntimeSupport(resourcesDir),
+      /wrong packaged pnpm: "pnpm"@"0\.0\.0-drift" \(expected pnpm@/,
+    );
+  } finally {
+    rmSync(resourcesDir, { recursive: true, force: true });
+  }
+});
+
+/** Escape one literal path for use inside a RegExp. */
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+test('electronPayloadEntries covers web dist, preload, control-plane and every host package (G27)', () => {
+  const entries = electronPayloadEntries();
+  for (const fixed of ELECTRON_PAYLOAD_REQUIRED) {
+    assert.ok(entries.includes(fixed), `${fixed} must be a required payload entry`);
+  }
+  // Four host package rows × (package.json + dist/index.js).
+  assert.equal(entries.length, ELECTRON_PAYLOAD_REQUIRED.length + 8);
+  assert.deepEqual([...new Set(entries)], entries, 'required entries must be unique');
+  assert.ok(entries.includes('dist/host-graph-package/dist/index.js'));
+  assert.ok(entries.includes('dist/host-open-in-package/package.json'));
+});
+
+test('packaged Electron payload verification accepts a complete asar and fails closed per missing entry (G27)', async () => {
+  // Every critical artifact is load-bearing: web dist → shell, preload → the
+  // fail-closed window path, control-plane → the packaged plane import, host
+  // package dist → the local seed. Each omission must name the missing entry.
+  for (const omit of [
+    [],
+    ['dist/web/index.html'],
+    ['dist/preload.cjs'],
+    ['dist/control-plane/index.js'],
+    ['dist/host-graph-package/dist/index.js'],
+  ]) {
+    const resourcesDir = mkdtempSync(path.join(tmpdir(), 'dsh-chamber-payload-asar-'));
+    try {
+      await withPayloadAsar(resourcesDir, omit);
+      if (omit.length === 0) {
+        assert.doesNotThrow(() => verifyPackagedElectronPayload(resourcesDir));
+      } else {
+        assert.throws(
+          () => verifyPackagedElectronPayload(resourcesDir),
+          new RegExp('incomplete packaged Electron payload: missing ' + escapeRegExp(omit[0])),
+          `a build missing ${omit[0]} must fail closed`,
+        );
+      }
+    } finally {
+      rmSync(resourcesDir, { recursive: true, force: true });
+    }
+  }
+});
+
+test('packaged Electron payload verification accepts the unpacked staged app dir, rejects an empty resources dir (G27)', () => {
+  const resourcesDir = mkdtempSync(path.join(tmpdir(), 'dsh-chamber-payload-staged-'));
+  try {
+    assert.throws(
+      () => verifyPackagedElectronPayload(resourcesDir),
+      /no Electron payload to verify/,
+      'neither app.asar nor app/ must be loud, never a pass',
+    );
+    const appDir = path.join(resourcesDir, 'app');
+    for (const relative of electronPayloadEntries()) {
+      const target = path.join(appDir, relative);
+      mkdirSync(path.dirname(target), { recursive: true });
+      writeFileSync(target, relative.endsWith('.html') ? '<!doctype html>' : 'export {};');
+    }
+    assert.doesNotThrow(() => verifyPackagedElectronPayload(resourcesDir));
+    rmSync(path.join(appDir, 'dist', 'preload.cjs'));
+    assert.throws(
+      () => verifyPackagedElectronPayload(resourcesDir),
+      /dist\/preload\.cjs/,
+      'the staged-dir arm must apply the same required set',
+    );
+  } finally {
+    rmSync(resourcesDir, { recursive: true, force: true });
+  }
+});
+
+test('a real staged release app, when present, satisfies the payload assertion (loud skip otherwise) (G27)', () => {
+  // The fixture tests above pin the assertion; this leg proves the assertion
+  // against the REAL electron-builder output when a pack has run. Absence is a
+  // loud SKIP, never a silent green: in CI the windows packaging rehearsal and
+  // the release legs run afterPack, which calls the same function fail-closed.
+  const releaseDir = fileURLToPath(new URL('../release', import.meta.url));
+  const candidates = []
+  if (existsSync(releaseDir)) {
+    for (const entry of readdirSync(releaseDir)) {
+      for (const relative of [
+        path.join(entry, 'dsh-chamber.app', 'Contents', 'Resources', 'app.asar'),
+        path.join(entry, 'resources', 'app.asar'),
+        path.join(entry, 'dsh-chamber.app', 'Contents', 'Resources', 'app'),
+        path.join(entry, 'resources', 'app'),
+      ]) {
+        const candidate = path.join(releaseDir, relative)
+        if (existsSync(candidate)) candidates.push(candidate)
+      }
+    }
+  }
+  if (candidates.length === 0) {
+    console.log(`SKIP: no staged Electron release app under ${releaseDir} — the payload assertion ran against fixtures here and runs fail-closed inside afterPack on a real pack`)
+    return
+  }
+  for (const candidate of candidates) {
+    if (candidate.endsWith('app.asar')) {
+      verifyPackagedElectronPayload(path.dirname(candidate), { asarPath: candidate });
+    } else {
+      verifyPackagedElectronPayload(path.dirname(candidate), { stagedAppDir: candidate });
+    }
+  }
+});
+
 test('desktop packaging config keeps pnpm and asserted runtime modules in lockstep', () => {
   const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
-  assert.equal(manifest.dependencies.pnpm, '11.21.0');
+  // G18: no second hardcoded literal — the packaged assertion, the Swift sidecar
+  // assembly and the manifest all read/compare the same dependencies.pnpm.
+  assert.equal(PACKAGED_PNPM_VERSION, manifest.dependencies.pnpm);
+  assert.equal(PNPM_PINNED_VERSION, manifest.dependencies.pnpm, 'the Swift sidecar build must read the same pin');
   // The asar verification needs @electron/asar at packaging time.
   assert.ok(manifest.devDependencies['@electron/asar'], '@electron/asar must stay a desktop devDependency');
   for (const name of PACKAGED_RUNTIME_MODULES) {

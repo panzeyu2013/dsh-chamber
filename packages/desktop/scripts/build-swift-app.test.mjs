@@ -23,6 +23,12 @@
  *  ⑪ 架构断言：同宿主通过、--arch 反向 loud、.app 与捆绑 node 无交集 loud；
  *  ⑫ lipo 输出解析（x86_64/arm64e/旧版 Non-fat 文案）；
  *  ⑬ DMG 卷内容（/Applications 快捷方式）与卷名来自 --app-name（纯 + 真实 hdiutil）。
+ *  ⑰ CFBundleVersion 映射（S-23）：beta.N → X.Y.Z.N、final → X.Y.Z.final 标记，
+ *     同 base 的 beta.N < beta.N+1 < final 且 beta 与 final 不同；
+ *  ⑱ --dry-run 计划断言（G30）：feed/公钥成对、https、.xml、精确产物名；不写盘；
+ *  ⑲ sidecar 符号链接归一化日志不含 undefined（D12：copyTree 无返回值）；
+ *  ⑳ G38 缺图标 fail closed（装配与 dry-run 两处）；㉑ G40 dist/web 过滤
+ *     （*.map / .vite 不进 .app，规则与 Electron build.files 对齐）。
  */
 import {
   test } from 'node:test'
@@ -48,11 +54,14 @@ import { fileURLToPath } from 'node:url'
 import {
   APP_NAME,
   RESOURCE_BUNDLE_NAME,
+  STABLE_BUNDLE_SUFFIX,
   appLayout,
   assemblePlan,
   buildOutputDir,
+  bundleVersionFor,
   codesignArgs,
   dmgCreateArgs,
+  dryRunPlanReport,
   findNestedMachOFiles,
   isMachO,
   machOArchs,
@@ -63,7 +72,12 @@ import {
   runBuildSwiftApp,
   stageDmgVolume,
   findSparkleFramework,
+  shouldCopyWebDistEntry,
+  sparkleFeedChannel,
 } from '../../../macos/scripts/build-swift-app.mjs'
+// S-22：滚动 tag 是 release-artifacts.mjs 的单源——这里按同一常量断言 dry-run
+// 计划的通道 URL 形状（build-swift-app.mjs 也从它导入）。
+import { NATIVE_BETA_ROLLING_TAG } from '../../../scripts/release/release-artifacts.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const desktopDir = path.resolve(here, '..')
@@ -168,6 +182,41 @@ test('② Info.plist 渲染：只替换占位符', () => {
   assert.ok(rendered.includes('<string>dsh-chamber</string>'))
 })
 
+test('②b CFBundleVersion：beta.N 与 final 同 base 不同且有序（S-23）', () => {
+  // beta.N → X.Y.Z.N；final → X.Y.Z.<final 标记>（见 bundleVersionFor 注释）。
+  assert.equal(bundleVersionFor('0.3.2-beta.0'), '0.3.2.0')
+  assert.equal(bundleVersionFor('0.3.2-beta.1'), '0.3.2.1')
+  assert.equal(bundleVersionFor('0.3.2-beta.10'), '0.3.2.10')
+  assert.equal(bundleVersionFor('0.3.2'), `0.3.2.${STABLE_BUNDLE_SUFFIX}`)
+
+  // Sparkle 把缺失的数字段补 0 后逐段比较；测试用同样的语义比较映射结果。
+  const parts = (version) => bundleVersionFor(version).split('.').map(Number)
+  const cmp = (left, right) => {
+    const a = parts(left)
+    const b = parts(right)
+    for (let index = 0; index < Math.max(a.length, b.length); index += 1) {
+      const diff = (a[index] ?? 0) - (b[index] ?? 0)
+      if (diff !== 0) return Math.sign(diff)
+    }
+    return 0
+  }
+  assert.ok(cmp('0.3.2-beta.1', '0.3.2-beta.2') < 0, 'beta.N 必须能看到 beta.N+1')
+  assert.ok(cmp('0.3.2-beta.9', '0.3.2-beta.10') < 0, 'beta 序号按数值比较而不是字典序')
+  assert.ok(cmp('0.3.2-beta.10', '0.3.2') < 0, 'final 必须大于同 base 的 beta（S-23 的 beta.N→final 路径）')
+  assert.ok(cmp('0.3.2', '0.3.3-beta.1') < 0, '下一个 patch 的 beta 大于上一个 final')
+  assert.ok(cmp('0.3.2-beta.1', '0.3.2') !== 0, 'beta 与 final 不得映成同一 CFBundleVersion')
+
+  // Apple 规则：只含点分十进制整数；非法版本 loud，绝不产出非数字段。
+  for (const value of ['0.3.2-beta.0', '0.3.2-beta.1', '1.2.3']) {
+    assert.match(bundleVersionFor(value), /^[0-9]+(\.[0-9]+)*$/)
+  }
+  assert.throws(() => bundleVersionFor('0.3.2-rc.1'), /无法映射 CFBundleVersion/)
+  assert.throws(() => bundleVersionFor(`0.3.2-beta.${STABLE_BUNDLE_SUFFIX}`), /beta 序号越界/)
+  // 模板保留唯一的 __BUNDLE_VERSION__ 注入点。
+  const template = readFileSync(path.join(macosDir, 'Info.plist.template'), 'utf8')
+  assert.match(template, /<key>CFBundleVersion<\/key>\s*<string>__BUNDLE_VERSION__<\/string>/)
+})
+
 test('③ 计划文本随开关变化', () => {
   const full = assemblePlan(parseBuildSwiftAppArgs([])).join('\n')
   assert.match(full, /swift build -c release/)
@@ -184,18 +233,112 @@ test('③ 计划文本随开关变化', () => {
   assert.doesNotMatch(minimal, /dmg →/)
 })
 
-test('④ --dry-run 子进程：就绪校验、不写盘', () => {
+test('④ --dry-run 子进程：就绪校验、计划打印、不写盘、半配置 loud（G30）', () => {
   const out = tempOut()
   try {
-    const stdout = execFileSync(process.execPath, [script, '--dry-run', '--out', out], {
+    const stdout = execFileSync(process.execPath, [script, '--dry-run', '--out', out,
+      '--sparkle-feed', 'https://github.com/o/r/releases/latest/download/appcast-swift.xml',
+      '--sparkle-public-key', 'abc=', '--skip-build'], {
       cwd: macosDir,
       encoding: 'utf8',
     })
     assert.match(stdout, /dry-run：模板\/entitlements 就绪/)
+    assert.match(stdout, /dry-run：计划校验通过/)
+    assert.match(stdout, /sparkle-feed=https:\/\/github\.com\/o\/r\/releases\/latest\/download\/appcast-swift\.xml/)
+    assert.match(stdout, /sparkle-channel=stable（releases\/latest）/, 'S-22：dry-run 计划必须标注通道')
+    assert.match(stdout, /zip=.*DSHChamberPoc\.zip/, 'dry-run 必须打印解析后的精确产物名')
+    assert.match(stdout, /dmg=.*DSHChamberPoc\.dmg/)
+    assert.ok(!stdout.includes('abc='), '公钥值不得回显')
     assert.ok(!existsSync(path.join(out, `${APP_NAME}.app`)), 'dry-run 不写盘')
+    // 半配置 feed → 非零退出：CI 的 packaging dry run 真的校验计划，不再空跑。
+    const bad = spawnSync(process.execPath, [script, '--dry-run', '--out', out,
+      '--sparkle-feed', 'https://example.com/appcast-swift.xml', '--skip-build'], {
+      cwd: macosDir,
+      encoding: 'utf8',
+    })
+    assert.notEqual(bad.status, 0, bad.stdout + bad.stderr)
+    assert.match(`${bad.stdout}${bad.stderr}`, /必须成对配置/)
   } finally {
     rmSync(out, { recursive: true, force: true })
   }
+})
+
+test('④b dryRunPlanReport：feed/公钥成对、https、.xml、精确产物名（G30）', () => {
+  const good = parseBuildSwiftAppArgs([
+    '--out', '/tmp/dsh-plan', '--app-name', 'dsh-chamber-native',
+    '--artifact-basename', 'dsh-chamber-native-9.9.9-macos-arm64',
+    '--sparkle-feed', 'https://github.com/o/r/releases/latest/download/appcast-swift.xml',
+    '--sparkle-public-key', 'abc=',
+  ])
+  const report = dryRunPlanReport(good)
+  assert.equal(report.layout.zipPath, '/tmp/dsh-plan/dsh-chamber-native-9.9.9-macos-arm64.zip')
+  const text = report.lines.join('\n')
+  assert.match(text, /zip=\/tmp\/dsh-plan\/dsh-chamber-native-9\.9\.9-macos-arm64\.zip/)
+  assert.match(text, /dmg=\/tmp\/dsh-plan\/dsh-chamber-native-9\.9\.9-macos-arm64\.dmg/)
+  assert.match(text, /app-name=dsh-chamber-native；artifact-basename=dsh-chamber-native-9\.9\.9-macos-arm64/)
+  assert.match(text, /sparkle-feed=https:\/\/github\.com\/o\/r\/releases\/latest\/download\/appcast-swift\.xml/)
+  assert.match(text, /sparkle-channel=stable（releases\/latest）/, '稳定通道必须按 releases/latest 标注')
+  assert.doesNotMatch(text, /abc=/, '公钥值不得回显')
+
+  // S-22：beta feed 必须落在滚动 tag 上（beta.N 才能发现 beta.N+1）——dry-run
+  // 计划把通道与滚动 tag 一并标注；版本固定 tag 直接 loud。
+  const rollingFeed = `https://github.com/o/r/releases/download/${NATIVE_BETA_ROLLING_TAG}/appcast-swift-beta.xml`
+  const beta = dryRunPlanReport(parseBuildSwiftAppArgs([
+    '--out', '/tmp/dsh-plan',
+    '--artifact-basename', 'dsh-chamber-native-0.3.2-beta.1-macos-arm64',
+    '--sparkle-feed', rollingFeed, '--sparkle-public-key', 'abc=',
+  ]))
+  assert.match(
+    beta.lines.join('\n'),
+    new RegExp(`sparkle-channel=beta（滚动 tag ${NATIVE_BETA_ROLLING_TAG}`),
+    'beta feed 必须标注为滚动通道')
+  assert.throws(
+    () => dryRunPlanReport(parseBuildSwiftAppArgs([
+      '--sparkle-feed', 'https://github.com/o/r/releases/download/v0.3.2-beta.1/appcast-swift-beta.xml',
+      '--sparkle-public-key', 'abc=',
+    ])),
+    /滚动 tag/,
+    '版本固定 tag 的 beta feed 必须被拒（beta.N 永远看不到 beta.N+1）',
+  )
+  assert.throws(
+    () => dryRunPlanReport(parseBuildSwiftAppArgs([
+      '--sparkle-feed', 'https://github.com/o/r/releases/download/v0.3.2/appcast-swift.xml',
+      '--sparkle-public-key', 'abc=',
+    ])),
+    /releases\/latest/,
+    '稳定 appcast 必须落在 releases/latest（版本固定 tag 解析不到）',
+  )
+  // 未识别的本地 appcast 名仍允许（只做 https/.xml 形状校验），通道标注为未识别。
+  const custom = dryRunPlanReport(parseBuildSwiftAppArgs([
+    '--sparkle-feed', 'https://example.com/feed.xml', '--sparkle-public-key', 'abc=',
+  ]))
+  assert.match(custom.lines.join('\n'), /sparkle-channel=（未识别 appcast 名/)
+  assert.equal(sparkleFeedChannel(''), null)
+  assert.equal(sparkleFeedChannel('https://x/appcast-swift.xml'), 'stable')
+  assert.equal(sparkleFeedChannel('https://x/appcast-swift-beta.xml'), 'beta')
+  // 未配置 Sparkle → 明确报告更新不可用，而不是半配置。
+  assert.match(dryRunPlanReport(parseBuildSwiftAppArgs([])).lines.join('\n'), /sparkle=未配置（更新不可用）/)
+  // 半配置 / 明文 feed / 非 appcast → loud。
+  assert.throws(
+    () => dryRunPlanReport(parseBuildSwiftAppArgs(['--sparkle-feed', 'https://x/appcast-swift.xml'])),
+    /必须成对配置/,
+  )
+  assert.throws(
+    () => dryRunPlanReport(parseBuildSwiftAppArgs(['--sparkle-public-key', 'abc='])),
+    /必须成对配置/,
+  )
+  assert.throws(
+    () => dryRunPlanReport(parseBuildSwiftAppArgs([
+      '--sparkle-feed', 'http://x/appcast-swift.xml', '--sparkle-public-key', 'abc=',
+    ])),
+    /必须是 https URL/,
+  )
+  assert.throws(
+    () => dryRunPlanReport(parseBuildSwiftAppArgs([
+      '--sparkle-feed', 'https://x/feed.json', '--sparkle-public-key', 'abc=',
+    ])),
+    /必须指向 \.xml appcast/,
+  )
 })
 
 test('④ codesignArgs argv：选项先于 --sign，ad-hoc/hardened 分支互斥', () => {
@@ -272,6 +415,11 @@ test('⑤ 真实组装：可执行位 / 资源包 / Info.plist 版本 / 图标',
     const plist = readFileSync(layout.infoPlist, 'utf8')
     const desktopPkg = JSON.parse(readFileSync(path.join(desktopDir, 'package.json'), 'utf8'))
     assert.ok(plist.includes(`<string>${desktopPkg.version}</string>`), 'Info.plist 版本 = chamber 版本')
+    // S-23：CFBundleVersion 走 bundleVersionFor 映射，beta 与 final 不再同版本。
+    assert.ok(plist.includes(`<string>${bundleVersionFor(desktopPkg.version)}</string>`),
+      'CFBundleVersion 必须是 S-23 映射（Sparkle 比较键）')
+    assert.notEqual(bundleVersionFor(desktopPkg.version), desktopPkg.version.split('-')[0],
+      '不得再退化成去掉 beta 后缀的数字段')
     assert.ok(existsSync(layout.icon), 'icon.icns 应平移')
     // P6：图标引用与 ATS 本地回环放行都必须真的写进产物 plist。
     assert.match(plist, /<key>CFBundleIconFile<\/key>\s*<string>icon\.icns<\/string>/,
@@ -419,10 +567,16 @@ test('⑩ sidecar 含逃出 bundle 的绝对符号链接 → 归一化后真实 
     // 树内**相对**链接（pnpm .bin 的真实形状）：必须原样保留。
     symlinkSync('../pkg/cli.js', path.join(bin, 'inside'))
 
+    const logs = []
     await runBuildSwiftApp(parseBuildSwiftAppArgs([
       '--out', out, '--sidecar', sidecar, '--skip-build', '--skip-web-dist', '--no-zip', '--no-dmg',
-    ]), { log: () => {}, error: () => {} })
+    ]), { log: (line) => logs.push(line), error: () => {} })
     const layout = appLayout(out)
+
+    // ⑲ D12：copyTree 无返回值，归一化日志必须由 normalizeSymlinks 的计数驱动，
+    // 不得再打印「实体化 undefined 处」。
+    assert.ok(!logs.some((line) => line.includes('undefined')), `归一化日志不得含 undefined：${logs.join('\n')}`)
+    assert.ok(logs.some((line) => /符号链接归一化 \d+ 处/.test(line)), '真实链接被处理时必须打印实际计数')
 
     // ① 不再有逃出 bundle 的链接
     const bundBin = path.join(layout.sidecarDir, 'vendor', 'dsh', 'node_modules', '.bin')
@@ -647,6 +801,75 @@ test('⑯ Sparkle 嵌入装配：framework 就位 + 链接/ rpath + 无逃逸符
     assert.equal(verify.status, 0, verify.stderr + verify.stdout)
     const nested = spawnSync('codesign', ['-dv', path.join(embedded, 'Versions', 'B', 'Updater.app')], { encoding: 'utf8' })
     assert.match(`${nested.stdout}${nested.stderr}`, /Signature=adhoc/)
+  } finally {
+    rmSync(out, { recursive: true, force: true })
+  }
+})
+
+test('⑳ G38 缺图标 fail closed：装配与 dry-run 计划都不接受无图标 .app', async () => {
+  const out = tempOut()
+  try {
+    // electron-builder 在缺 mac.icon 时抛 InvalidConfigurationError；Swift 装配
+    // 此前只警告并继续，能签名打包出无图标 .app——必须同样致命。
+    const missing = path.join(out, 'no-such-icon.icns')
+    await assert.rejects(
+      runBuildSwiftApp(parseBuildSwiftAppArgs([
+        '--out', out, '--icon', missing,
+        '--skip-build', '--skip-web-dist', '--skip-sidecar', '--no-sign', '--no-zip', '--no-dmg',
+      ]), { log: () => {}, error: () => {} }),
+      /缺少图标/,
+    )
+    assert.throws(
+      () => dryRunPlanReport(parseBuildSwiftAppArgs(['--icon', missing])),
+      /缺少图标/,
+      'dry-run 声称校验计划：缺图标也必须在计划期红',
+    )
+    // 图标就绪时计划文本显式报告路径（可观察的装配输入）。
+    const plan = dryRunPlanReport(parseBuildSwiftAppArgs([])).lines.join('\n')
+    assert.match(plan, /icon=.*icon\.icns（就绪）/)
+  } finally {
+    rmSync(out, { recursive: true, force: true })
+  }
+})
+
+test('㉑ G40 dist/web 过滤：*.map 与 .vite/ 不进 .app（与 Electron build.files 对齐）', async () => {
+  // 纯函数面：Electron build.files 的两条排除（!dist/**/*.map、!dist/.vite/**）。
+  assert.equal(shouldCopyWebDistEntry('index.html'), true)
+  assert.equal(shouldCopyWebDistEntry('assets/app.js'), true)
+  assert.equal(shouldCopyWebDistEntry('perf-sizes.json'), true,
+    'Electron build.files 也随包 perf-sizes.json（只排除 map 与 .vite）')
+  assert.equal(shouldCopyWebDistEntry('assets/app.js.map'), false)
+  assert.equal(shouldCopyWebDistEntry('deep/nested/chunk.js.map'), false)
+  assert.equal(shouldCopyWebDistEntry('.vite'), false)
+  assert.equal(shouldCopyWebDistEntry('.vite/manifest.json'), false)
+  assert.equal(shouldCopyWebDistEntry('assets/.vite/manifest.json'), false)
+  assert.equal(shouldCopyWebDistEntry('assets/vite.config.js'), true,
+    '只有 .vite 目录/ .map 后缀被排除，不做子串误伤')
+
+  const out = tempOut()
+  try {
+    const dist = path.join(out, 'web-dist')
+    mkdirSync(path.join(dist, 'assets', '.vite'), { recursive: true })
+    mkdirSync(path.join(dist, '.vite'), { recursive: true })
+    writeFileSync(path.join(dist, 'index.html'), '<!doctype html>')
+    writeFileSync(path.join(dist, 'perf-sizes.json'), '{}')
+    writeFileSync(path.join(dist, 'assets', 'app.js'), 'console.log(1)')
+    writeFileSync(path.join(dist, 'assets', 'app.js.map'), '{"version":3}')
+    writeFileSync(path.join(dist, '.vite', 'manifest.json'), '{"a":1}')
+    writeFileSync(path.join(dist, 'assets', '.vite', 'manifest.json'), '{"b":2}')
+    await runBuildSwiftApp(parseBuildSwiftAppArgs([
+      '--out', out, '--web-dist', dist,
+      '--skip-build', '--skip-sidecar', '--no-sign', '--no-zip', '--no-dmg',
+    ]), { log: () => {}, error: () => {} })
+    const bundled = appLayout(out).webDist
+    assert.ok(existsSync(path.join(bundled, 'index.html')), 'index.html 必须在')
+    assert.ok(existsSync(path.join(bundled, 'assets', 'app.js')), '正常资源必须在')
+    assert.ok(existsSync(path.join(bundled, 'perf-sizes.json')),
+      'Electron 同款过滤不含 perf-sizes.json——不得多删（跨侧过滤是同一集合）')
+    assert.ok(!existsSync(path.join(bundled, 'assets', 'app.js.map')), '源码映射不得进 .app')
+    assert.ok(!existsSync(path.join(bundled, '.vite', 'manifest.json')), '.vite 清单不得进 .app')
+    assert.ok(!existsSync(path.join(bundled, 'assets', '.vite', 'manifest.json')),
+      '任意层级的 .vite 目录都不得进 .app')
   } finally {
     rmSync(out, { recursive: true, force: true })
   }

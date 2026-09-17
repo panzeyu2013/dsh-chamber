@@ -7,11 +7,14 @@
  *     Info.plist                      ← macos/Info.plist.template（__VERSION__ 替换）
  *     MacOS/DSHChamberPoc             ← swift build -c release 产物
  *     Resources/
- *       icon.icns                     ← packages/desktop/resources/icon.icns（平移）
+ *       icon.icns                     ← packages/desktop/resources/icon.icns（缺件 fail
+ *                                       closed——G38：electron-builder 同样 fatal）
  *       DSHChamberPoc_DSHChamberPoc.bundle   ← SwiftPM 资源包（bridge-shim 等）；
  *         **必须放 Contents/Resources**（放 .app 根会被 codesign 判为未密封内容）
  *       sidecar/{node,sidecar.js,package.json,dist/…}   ← W-23 build-sidecar 产物
- *       dist/web/                     ← renderer 产物（可选；sidecar 静态伺服）
+ *       dist/web/                     ← renderer 产物（可选；sidecar 静态伺服；
+ *                                       过滤 *.map 与 .vite/，与 Electron build.files
+ *                                       逐条对齐——G40）
  *
  * 步骤：swift build（可 --skip-build）→ 组装（sidecar 必须自带可执行 node 与
  * sidecar.js，build 时断言）→ 架构一致性断言（.app 可执行 vs 捆绑 node，lipo；
@@ -24,6 +27,17 @@
  * 离线/沙箱：--skip-build 复用已有 .build 产物；--skip-sidecar 允许无 W-23
  * 产物时只验壳装配（此时不做 node 架构比对）；--no-sign/--no-dmg/--no-zip
  * 分步跳过。
+ *
+ * --dry-run（G30）：不写盘，但把**已解析的计划**（app/可执行/产物名/feed/公钥
+ * 成对性）全部打印并做一致性断言（dryRunPlanReport）——ci.yml 的 packaging dry
+ * run 声称 "validate their plans and layouts"，此前只是打印存在性便返回 0。
+ *
+ * CFBundleVersion（S-23）：Sparkle 以它（而非 CFBundleShortVersionString）做版本
+ * 比较，映射见 bundleVersionFor：稳定版 X.Y.Z → X.Y.Z.999999999，beta
+ * X.Y.Z-beta.N → X.Y.Z.N；同 base 的 beta.N < beta.N+1 < final。
+ *
+ * 产物路径是**精确路径**（artifactBasename 单源）：发布腿只上传这些精确文件，
+ * 绝不 glob 输出目录（G29：复用工作目录时旧版本归档曾被 *.dmg/*.zip 一并上传）。
  *
  * 注意（2026-09 实测）：entitlements plist **不能带 XML 注释**——codesign 的
  * AMFIUnserializeXML 解析器对注释/非 ASCII 文本直接报
@@ -53,6 +67,9 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 // build-swift-app.test.mjs 的反向引用）：bundle 内符号链接归一化必须与 W-23
 // sidecar 装配同源，绝不允许两份实现漂移。
 import { copyTree, normalizeSymlinks } from '../../packages/desktop/scripts/build-sidecar.mjs'
+// S-22：beta feed 的滚动 tag 单源在 release-artifacts.mjs（release.yml 的 job env
+// 与它逐字锁步）——装配脚本据此在 dry-run 计划里断言通道 URL 形状。
+import { NATIVE_BETA_ROLLING_TAG } from '../../scripts/release/release-artifacts.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const macosDir = path.resolve(here, '..')
@@ -175,6 +192,38 @@ export function renderInfoPlist(template, values) {
   return rendered
 }
 
+/** 稳定版 CFBundleVersion 的 final 标记（第 4 段）：恒大于同 base 的 beta 序号。 */
+export const STABLE_BUNDLE_SUFFIX = 999999999
+
+/**
+ * chamber 版本字符串 → CFBundleVersion（S-23；纯函数，单测直测）。
+ *
+ * 为什么不能只取数字段：Sparkle 用 CFBundleVersion 作 sparkle:version 做版本
+ * 比较，旧实现把 X.Y.Z-beta.N 与 X.Y.Z 都映射成 X.Y.Z ⇒ beta.N→final 不提示、
+ * beta.N→beta.N+1 也不可区分。
+ *
+ * 方案（只含点分十进制整数，4 段）：
+ *   X.Y.Z-beta.N → X.Y.Z.N        第 4 段 = beta 序号（N 单调递增）
+ *   X.Y.Z        → X.Y.Z.999999999 第 4 段 = final 标记（恒大于 beta 序号）
+ * 排序：X.Y.Z-beta.N < X.Y.(Z).999999999 < X.Y.(Z+1)-beta.M——Sparkle 对同段数
+ * 的整数段做数值比较；beta 序号须 < STABLE_BUNDLE_SUFFIX（超出即 loud，绝不
+ * 产出会让 final 被 beta 盖住的映射）。CFBundleShortVersionString 仍是完整
+ * 版本字符串（含 -beta.N），展示不受影响。
+ */
+export function bundleVersionFor(version) {
+  const beta = /^([0-9]+)\.([0-9]+)\.([0-9]+)-beta\.([0-9]+)$/.exec(version)
+  if (beta !== null) {
+    const number = Number(beta[4])
+    if (!Number.isSafeInteger(number) || number >= STABLE_BUNDLE_SUFFIX) {
+      throw new Error(`无法映射 CFBundleVersion：beta 序号越界（${version}）`)
+    }
+    return `${beta[1]}.${beta[2]}.${beta[3]}.${number}`
+  }
+  const stable = /^([0-9]+)\.([0-9]+)\.([0-9]+)$/.exec(version)
+  if (stable !== null) return `${version}.${STABLE_BUNDLE_SUFFIX}`
+  throw new Error(`无法映射 CFBundleVersion：版本必须是 X.Y.Z 或 X.Y.Z-beta.N（got ${version}）`)
+}
+
 export function parseBuildSwiftAppArgs(argv) {
   const options = {
     outDir: path.join(macosDir, 'release'),
@@ -253,6 +302,114 @@ export function assemblePlan(options) {
   if (!options.noZip) steps.push(`[5] zip → ${layout.zipPath}`)
   if (!options.noDmg) steps.push(`[6] dmg → ${layout.dmgPath}`)
   return steps
+}
+
+/**
+ * appcast feed 的通道判定（S-22；纯函数，单测直测）：按 feed 末段文件名区分
+ * 稳定/beta；其他 .xml 名（本地自定义 feed）返回 null，只做 https/.xml 形状校验。
+ */
+export function sparkleFeedChannel(feed) {
+  if (feed.endsWith('/appcast-swift-beta.xml')) return 'beta'
+  if (feed.endsWith('/appcast-swift.xml')) return 'stable'
+  return null
+}
+
+/**
+ * web dist 条目的跨侧过滤（G40；纯函数，单测直测）：Electron 的 build.files
+ * （packages/desktop/package.json）排除 dist 下任意 .map 文件与 dist/.vite 目录，
+ * Swift 装配此前无条件 cpSync 整棵 dist/web，随包带出 .vite/manifest.json 与
+ * 源码映射等构建内部文件。规则**逐条对齐 Electron**（目录名 .vite 出现在任意
+ * 层级 + 任何 .map 文件），不另造第二套规则。relativePath 相对 web dist 根。
+ */
+export function shouldCopyWebDistEntry(relativePath) {
+  const normalized = relativePath.split(path.sep).join('/')
+  if (normalized === '') return true
+  if (normalized.endsWith('.map')) return false
+  if (normalized === '.vite' || normalized.startsWith('.vite/')) return false
+  if (normalized.includes('/.vite/')) return false
+  return true
+}
+
+/**
+ * --dry-run 的计划报告 + 一致性断言（G30；纯函数：不发命令、不写盘、单测直测）。
+ *
+ * ci.yml 的 packaging dry run 声称 ".app assembly plan validates its inputs"；
+ * 此前 --dry-run 只打印二进制/sidecar 存在性便返回 0。这里把已解析的 app 布局、
+ * 精确产物名与 Sparkle 注入面完整输出，并对**计划本身不合法**的组合直接 throw：
+ * - feed 与公钥必须成对（半配置 = Info.plist 一半有值，壳会误判更新面）；
+ * - feed 必须是 https（Sparkle/ATS 都拒绝明文；发布腿的 GitHub URL 天然满足）；
+ * - feed 必须指向 .xml appcast；
+ * - S-22 通道 URL 形状：appcast-swift-beta.xml 必须落在滚动 tag
+ *   （NATIVE_BETA_ROLLING_TAG）上——版本固定 tag 会让 beta.N 看不到 beta.N+1；
+ *   appcast-swift.xml 必须落在 releases/latest（稳定客户端的唯一解析面）；
+ * - 产物名必须逐字来自 --artifact-basename（发布腿据此上传精确路径，G29）。
+ * @returns {{ layout: object, lines: string[] }} 供调用方逐行打印。
+ */
+export function dryRunPlanReport(options) {
+  const layout = appLayout(options.outDir, options.appName, options.artifactBasename)
+  const feed = options.sparkleFeed
+  const key = options.sparklePublicKey
+  if ((feed === '') !== (key === '')) {
+    throw new Error(
+      'dry-run：--sparkle-feed 与 --sparkle-public-key 必须成对配置'
+      + `（feed=${feed === '' ? '(空)' : feed}，publicKey=${key === '' ? '(空)' : '(已配置)'}）`,
+    )
+  }
+  if (feed !== '' && !/^https:\/\//.test(feed)) {
+    throw new Error(`dry-run：--sparkle-feed 必须是 https URL（Sparkle 拒绝明文 feed）：${feed}`)
+  }
+  if (feed !== '' && !/\.xml($|[?#])/.test(feed)) {
+    throw new Error(`dry-run：--sparkle-feed 必须指向 .xml appcast：${feed}`)
+  }
+  // S-22 通道 URL 形状：稳定 = releases/latest；beta = 滚动 tag 的 asset。
+  const channel = sparkleFeedChannel(feed)
+  if (channel === 'beta'
+    && !feed.endsWith(`/releases/download/${NATIVE_BETA_ROLLING_TAG}/appcast-swift-beta.xml`)) {
+    throw new Error(
+      `dry-run：beta feed 必须指向滚动 tag ${NATIVE_BETA_ROLLING_TAG}`
+      + `（releases/download/${NATIVE_BETA_ROLLING_TAG}/appcast-swift-beta.xml）——`
+      + `版本固定 tag 会让 beta.N 永远看不到 beta.N+1：${feed}`,
+    )
+  }
+  if (channel === 'stable' && !feed.endsWith('/releases/latest/download/appcast-swift.xml')) {
+    throw new Error(
+      `dry-run：稳定 feed 必须是 releases/latest/download/appcast-swift.xml`
+      + `（beta 才走滚动 tag ${NATIVE_BETA_ROLLING_TAG}）：${feed}`,
+    )
+  }
+  for (const [kind, file] of [['zip', layout.zipPath], ['dmg', layout.dmgPath]]) {
+    if (path.dirname(file) !== layout.outDir || path.basename(file) !== `${options.artifactBasename}.${kind}`) {
+      throw new Error(`dry-run：${kind} 产物路径与 --artifact-basename 不一致：${file}`)
+    }
+  }
+  // G38：图标缺件在 electron-builder 是 fatal（InvalidConfigurationError），
+  // Swift 装配也必须 fail closed——dry-run 是 CI 的计划校验面，计划不合法直接抛。
+  if (!existsSync(options.iconPath)) {
+    throw new Error(`dry-run：缺少图标（${options.iconPath}）——electron-builder 在缺 mac.icon 时同样致命（G38）`)
+  }
+  const lines = [
+    `app=${layout.appDir}`,
+    `可执行=${layout.executable}`,
+    `sidecar=${options.sidecarDir}（${existsSync(options.sidecarDir) ? '存在' : '缺失'}）`,
+    options.skipWebDist
+      ? 'web-dist=（--skip-web-dist 跳过）'
+      : `web-dist=${options.webDistDir}（${existsSync(path.join(options.webDistDir, 'index.html')) ? '就绪' : '缺失'}）`,
+    `icon=${options.iconPath}（就绪）`,
+    options.noZip ? 'zip=（--no-zip 跳过）' : `zip=${layout.zipPath}`,
+    options.noDmg ? 'dmg=（--no-dmg 跳过）' : `dmg=${layout.dmgPath}`,
+    feed === ''
+      ? 'sparkle=未配置（更新不可用）'
+      : `sparkle-feed=${feed}；--sparkle-public-key=已配置（值不回显）`,
+    feed === ''
+      ? 'sparkle-channel=（未配置）'
+      : channel === 'beta'
+        ? `sparkle-channel=beta（滚动 tag ${NATIVE_BETA_ROLLING_TAG}：beta.N 能发现 beta.N+1）`
+        : channel === 'stable'
+          ? 'sparkle-channel=stable（releases/latest）'
+          : 'sparkle-channel=（未识别 appcast 名；仅做 https/.xml 形状校验）',
+    `app-name=${options.appName}；artifact-basename=${options.artifactBasename}`,
+  ]
+  return { layout, lines }
 }
 
 function run(command, args, io, cwd) {
@@ -464,9 +621,13 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
   const bundleSource = path.join(outputDir, RESOURCE_BUNDLE_NAME)
 
   if (options.dryRun) {
+    // G30：不写盘，但把完整计划（路径/产物名/feed 配对）打印出来并做一致性断言；
+    // 计划不合法（feed 半配置、非 https、产物名与 --artifact-basename 不符）直接抛。
+    const plan = dryRunPlanReport(options)
     io.log(`[build-swift-app] dry-run：模板/entitlements 就绪；二进制 ${binarySource}（${existsSync(binarySource) ? '存在' : '待构建'}）`)
-    io.log(`[build-swift-app] dry-run：sidecar ${options.sidecarDir}（${existsSync(options.sidecarDir) ? '存在' : '缺失'}）`)
-    return { dryRun: true, layout }
+    for (const line of plan.lines) io.log(`[build-swift-app] dry-run：${line}`)
+    io.log(`[build-swift-app] dry-run：计划校验通过（app-name=${options.appName}，artifact-basename=${options.artifactBasename}）`)
+    return { dryRun: true, layout: plan.layout, plan: plan.lines }
   }
 
   // 1. swift build。
@@ -493,9 +654,9 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
 
   const desktopPkg = JSON.parse(readFileSync(path.join(desktopDir, 'package.json'), 'utf8'))
   const version = typeof desktopPkg.version === 'string' ? desktopPkg.version : '0.0.0'
-  // CFBundleVersion 只允许数字与点（Apple）；beta 版本 X.Y.Z-beta.N 取其
-  // 数字段（2026-09 模块评审 minor：plutil -lint 不查这条）。
-  const bundleVersion = version.split('-')[0]
+  // S-23：CFBundleVersion 必须让 beta.N、beta.N+1 与同 base 的 final 彼此可区分
+  // （Sparkle 以它作 sparkle:version 比较）；映射与理由见 bundleVersionFor。
+  const bundleVersion = bundleVersionFor(version)
   const plist = renderInfoPlist(readFileSync(templatePath, 'utf8'), {
     VERSION: version,
     BUNDLE_VERSION: bundleVersion,
@@ -508,12 +669,17 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
   if (lint.status !== 0) throw new Error(`Info.plist 非法：${lint.stdout}${lint.stderr}`)
   io.log(`[build-swift-app] Info.plist（version=${version}）→ ${layout.infoPlist}`)
 
-  if (existsSync(options.iconPath)) {
-    cpSync(options.iconPath, layout.icon)
-    io.log(`[build-swift-app] icon.icns → ${layout.icon}`)
-  } else {
-    io.log(`[build-swift-app] 警告：图标缺失（${options.iconPath}）——继续，Dock/访达用默认图标`)
+  // G38：图标缺件在 electron-builder 是 fatal（app-builder-lib 的
+  // InvalidConfigurationError），Swift 装配此前只警告并继续，能产出无图标 .app。
+  // 对称 fail closed：发布腿永远拿不到「带默认图标」的次品。
+  if (!existsSync(options.iconPath)) {
+    throw new Error(
+      `缺少图标：${options.iconPath}——electron-builder 在缺 mac.icon 时同样失败（G38）；`
+      + '先补齐 packages/desktop/resources/icon.icns 或用 --icon <path> 指定',
+    )
   }
+  cpSync(options.iconPath, layout.icon)
+  io.log(`[build-swift-app] icon.icns → ${layout.icon}`)
 
   // 3. sidecar（W-23 装配产物）。
   if (options.skipSidecar) {
@@ -524,11 +690,13 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
     // --strict` 直接报 `invalid destination for symbolic link in bundle`。
     // copyTree 保留树内相对链接（pnpm `.bin` 的语义）、实体化树外链接。
     rmSync(layout.sidecarDir, { recursive: true, force: true })
-    const materialized = copyTree(options.sidecarDir, layout.sidecarDir)
-    // 兜底网：任何仍逃出树的链接一律实体化（对手工/旧装配目录也成立）。
+    // D12：copyTree 没有返回值（build-sidecar.mjs 只做 cpSync），旧实现把
+    // undefined 当计数、日志恒打印「实体化 undefined 处」。归一化计数由
+    // normalizeSymlinks 统一返回（它同时负责树外链接实体化与树内相对链接改写）。
+    copyTree(options.sidecarDir, layout.sidecarDir)
     const normalizedLinks = normalizeSymlinks(layout.sidecarDir)
-    if (materialized > 0 || normalizedLinks > 0) {
-      io.log(`[build-swift-app] 符号链接归一化：实体化 ${materialized} 处 / 改写 ${normalizedLinks} 处（bundle 自包含）`)
+    if (normalizedLinks > 0) {
+      io.log(`[build-swift-app] 符号链接归一化 ${normalizedLinks} 处（树外链接实体化 / 树内相对链接改写，bundle 自包含）`)
     }
     io.log(`[build-swift-app] sidecar → ${layout.sidecarDir}`)
     // A5 前置断言（W-23 已保证，这里防手工/外部装配目录把 node 放错名）：
@@ -595,8 +763,15 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
       + '——装配必须自带 web 界面（先跑 pnpm run build:renderer；仅局部装配可显式 --skip-web-dist）',
     )
   } else {
-    cpSync(options.webDistDir, layout.webDist, { recursive: true })
-    io.log(`[build-swift-app] renderer dist/web → ${layout.webDist}`)
+    // G40：过滤规则与 Electron 的 build.files 逐条对齐（no *.map / no .vite）——
+    // 过滤是跨侧对称契约，不是「少拷几个文件」：.vite/manifest.json 与源码映射
+    // 属构建内部文件，不得随 .app 分发（Electron 侧同样不打进 asar）。
+    cpSync(options.webDistDir, layout.webDist, {
+      recursive: true,
+      filter: (source) => source === options.webDistDir
+        || shouldCopyWebDistEntry(path.relative(options.webDistDir, source)),
+    })
+    io.log(`[build-swift-app] renderer dist/web → ${layout.webDist}（过滤 *.map 与 .vite/，与 Electron build.files 对齐）`)
   }
 
   // 3b. 嵌入 Sparkle.framework（S-01 / 裁决 D-1 选 B）：必须在签名之前——
@@ -643,7 +818,9 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
     io.log('[build-swift-app] codesign 校验通过')
   }
 
-  // 5/6. 分发产物。
+  // 5/6. 分发产物。路径 = artifactBasename + .zip/.dmg（精确路径，永不 glob）：
+  // 复用输出目录时旧版本的归档会与新版本并存，发布腿必须只上传这两个精确路径
+  // （G29：曾把 0.3.1 与 0.3.2-beta.1 的 *.dmg/*.zip 一并上传）。
   if (!options.noZip) {
     rmSync(layout.zipPath, { force: true })
     run('ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', layout.appDir, layout.zipPath], io)
