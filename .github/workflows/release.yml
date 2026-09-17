@@ -696,7 +696,16 @@ jobs:
             --wait
           xcrun stapler staple "$DMG"
           xcrun stapler validate "$DMG"
-          spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG"
+          # 复核（真实发布暴露）：`spctl --type open --context primary-signature` 要求 **dmg 自身**
+          # 有 Developer ID 签名，而 electron-builder 只签 .app（dmg 只有装订票据），因此会以
+          # "source=no usable signature" 判死。有签名则强制校验（fail-closed），无签名则 loud 降级：
+          # 票据已由上面的 stapler validate 证明，用户打开挂载卷时 Gatekeeper 评估的是卷内
+          # 已签名并公证的 .app。
+          if codesign -dv "$DMG" >/dev/null 2>&1; then
+            spctl --assess --type open --context context:primary-signature --verbose=4 "$DMG"
+          else
+            echo "::warning::$DMG is stapled but unsigned (electron-builder signs only the .app) — skipping the spctl primary-signature assertion"
+          fi
           gh release upload "v${VERSION}" "$DMG" --clobber
           echo "dmg notarized + stapled + re-uploaded: $DMG"
 
@@ -1139,7 +1148,10 @@ jobs:
           if [[ -n "$ROLLING_TAG" ]]; then
             PREFIX_ARGS=(--download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${ROLLING_TAG}/")
           fi
-          /tmp/sparkle-bin/bin/generate_appcast --ed-key-file /tmp/ed-key.txt ${PREFIX_ARGS[@]+"${PREFIX_ARGS[@]}"} -o /tmp/appcast-out /tmp/appcast-in
+          # Sparkle 的 -o 是**输出文件路径**（help: "Path to filename for the generated appcast"），
+          # 传目录会以 "Is a directory" 失败——真实发布第一次跑这条链时正是这样挂的。
+          # delta 仍由 generate_appcast 写进收件目录，由下面的上传循环一并发布。
+          /tmp/sparkle-bin/bin/generate_appcast --ed-key-file /tmp/ed-key.txt ${PREFIX_ARGS[@]+"${PREFIX_ARGS[@]}"} -o /tmp/appcast-out/appcast.xml /tmp/appcast-in
           rm -f /tmp/ed-key.txt
           test -f /tmp/appcast-out/appcast.xml || { echo "::error::generate_appcast produced no appcast"; exit 1; }
           cp /tmp/appcast-out/appcast.xml "macos/release/${APPCAST}"
@@ -1301,7 +1313,7 @@ jobs:
               printf '%s' "$SPARKLE_PRIVATE_KEY" > /tmp/ed-key-refresh.txt
               /tmp/sparkle-bin/bin/generate_appcast --ed-key-file /tmp/ed-key-refresh.txt \
                 --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${ROLLING_TAG}/" \
-                -o /tmp/appcast-stable-refresh-out /tmp/appcast-stable-refresh
+                -o /tmp/appcast-stable-refresh-out/appcast.xml /tmp/appcast-stable-refresh
               rm -f /tmp/ed-key-refresh.txt
               test -f /tmp/appcast-stable-refresh-out/appcast.xml \
                 || { echo "::error::滚动 beta appcast 刷新失败（generate_appcast 无输出）"; exit 1; }

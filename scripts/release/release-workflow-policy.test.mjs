@@ -335,6 +335,15 @@ assert.ok(appcastStep.includes('${PREFIX_ARGS[@]+"${PREFIX_ARGS[@]}"}'),
   'the optional prefix must use the bash-3.2-guarded array expansion')
 assert.ok(swiftBuild.includes('gh release upload "v${VERSION}" "macos/release/${APPCAST}" --clobber'),
   'the channel appcast must actually be uploaded to the draft release')
+// The first real release run died here: Sparkle's -o takes the output FILE, not a
+// directory ("Is a directory" / "The file appcast-out couldn't be opened"). Pin the
+// file form so the fixed invocation cannot silently regress.
+assert.match(appcastStep, /generate_appcast .*-o \/tmp\/appcast-out\/appcast\.xml \/tmp\/appcast-in/,
+  'the beta appcast must be written to an explicit .xml file path (-o takes a filename)')
+assert.doesNotMatch(appcastStep, /-o \/tmp\/appcast-out /,
+  'passing a directory to -o fails at runtime (Sparkle expects a file path)')
+assert.match(uploadStep, /-o \/tmp\/appcast-stable-refresh-out\/appcast\.xml/,
+  'the stable refresh must also write an explicit .xml file path')
 assert.match(
   swiftBuild,
   /if \[\[ "\$VERSION" == \*-\* \]\]; then\n\s+SPARKLE_FEED="\$SPARKLE_FEED_BETA"\n\s+else\n\s+SPARKLE_FEED="\$SPARKLE_FEED_STABLE"\n\s+fi/,
@@ -474,7 +483,14 @@ assert.ok(dmgStep.indexOf('xcrun stapler staple "$DMG"') > dmgSubmitIndex,
   'the dmg staple must follow its own notarization')
 assert.ok(dmgStep.indexOf('xcrun stapler validate "$DMG"') > dmgStep.indexOf('xcrun stapler staple "$DMG"'),
   'the stapled dmg must be validated')
-assert.match(dmgStep, /spctl --assess --type open[^\n]*"\$DMG"/, 'the dmg must be Gatekeeper-assessed')
+// Real-release check: electron-builder signs only the .app, so an unsigned but
+// stapled dmg is rejected by `spctl --type open --context primary-signature`
+// ("source=no usable signature"). The assertion must stay fail-closed for a
+// signed image and degrade loudly for an unsigned one.
+assert.match(dmgStep, /if codesign -dv "\$DMG" >\/dev\/null 2>&1; then\n\s+spctl --assess --type open[^\n]*"\$DMG"/,
+  'the dmg Gatekeeper assessment must be gated on the dmg actually carrying a signature')
+assert.match(dmgStep, /stapled but unsigned[^\n]*primary-signature assertion/,
+  'an unsigned dmg must degrade loudly instead of failing the release')
 assert.match(dmgStep, /gh release upload "v\$\{VERSION\}" "\$DMG" --clobber/,
   'the stapled dmg must replace the unstapled asset electron-builder published')
 // G28: the uploaded zip is not just `test -n`-ed — it is extracted and the .app
