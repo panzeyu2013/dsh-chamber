@@ -913,8 +913,21 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                 evaluateJS("__dshChamberResolve(\(nativeTokenLiteral), \(id), \(resultJSON), null)")
             } catch {
                 // 失败：__dshChamberResolve(id, null, <errorString>)；errorString
-                // 经 JSON 序列化即为合法 JS 字符串字面量
-                let errorJSON = Self.jsonLiteral(error.localizedDescription) ?? "\"bridge error\""
+                // 经 JSON 序列化即为合法 JS 字符串字面量。
+                // A2 兜底（2026-09-18）：fence 的尺寸门用「安全上界」短路，其成立
+                // 依赖 AnyCodable.jsonUpperBoundByteCount ≥ 实际线格式字节（含
+                // 「JSONSerialization 不对非 ASCII 转义」这一平台事实，已由
+                // AnyCodableTests.upperBound 用例钉住）。若该前提在某平台不成立，
+                // 超大信封会改在报文组帧处抛 frameTooLarge——这里把错误码还原为与
+                // fence 相同的页面可见字面量，避免退化成不可归因的通用文案
+                // （FrameCodec.encode 与 TrustGuard.maxMessageBytes 同值同源）。
+                let message: String
+                if let frameError = error as? FrameCodecError, case .frameTooLarge = frameError {
+                    message = ChamberMessageHandler.codeFrameTooLarge
+                } else {
+                    message = error.localizedDescription
+                }
+                let errorJSON = Self.jsonLiteral(message) ?? "\"bridge error\""
                 evaluateJS("__dshChamberResolve(\(nativeTokenLiteral), \(id), null, \(errorJSON))")
             }
         }

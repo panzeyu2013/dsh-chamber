@@ -141,6 +141,33 @@ final class MessageHandlerTests: XCTestCase {
             .reject(id: 1, code: ChamberMessageHandler.codeFrameTooLarge))
     }
 
+    /// Phase 3（2026-09-18）：尺寸门的**安全上界短路**不得改变接受集——对若干
+    /// 边界载荷，fence 的 accept/reject 必须与「精确 JSONSerialization 计量」
+    /// 逐条一致（覆盖短路接受、短路回退、转义密集与多字节字符四类）。
+    func testFenceSizeDecisionMatchesExactSerialization() {
+        let payloads: [Any] = [
+            String(repeating: "a", count: 200_000),                     // 上界在上限内 → 短路接受
+            String(repeating: "中", count: 200_000),                     // 上界 6x 超限 → 回退精确
+            String(repeating: "\u{01}", count: 200_000),                 // 转义密集
+            String(repeating: "a", count: TrustGuard.maxMessageBytes),    // 精确超限 → 拒绝
+        ]
+        for payload in payloads {
+            let body = envelope(payload: payload)
+            let exactOK = (try? JSONSerialization.data(withJSONObject: body))
+                .map { TrustGuard.envelopeSizeOK($0) } ?? false
+            switch ChamberMessageHandler.fence(fenceInput(body: body)) {
+            case .accept:
+                XCTAssertTrue(exactOK, "精确计量超限却被接受（载荷 (payload.utf8.count) 字节）")
+            case .reject(let id, let code):
+                XCTAssertEqual(code, ChamberMessageHandler.codeFrameTooLarge)
+                XCTAssertEqual(id, 1)
+                XCTAssertFalse(exactOK, "精确计量在限内却被拒（载荷 (payload.utf8.count) 字节）")
+            case .drop:
+                XCTFail("受信信封必须是 accept/reject")
+            }
+        }
+    }
+
     func testFenceDropsNonChamberChannelAndChildFrame() {
         XCTAssertEqual(
             ChamberMessageHandler.fence(fenceInput(name: "pocConsole", body: envelope())), .drop)

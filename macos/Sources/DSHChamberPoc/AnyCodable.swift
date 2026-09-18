@@ -155,6 +155,43 @@ public enum AnyCodable: Codable, Equatable {
         return out
     }
 
+    /// JSON 文本长度的**安全上界**（UTF-8 字节）——供尺寸门在序列化之前短路。
+    ///
+    /// 契约：对任意 value，本属性 ≥ 该值经 JSONSerialization 或本文件写出后的
+    /// 实际字节数。据此调用方可用「上界 ≤ 上限 ⇒ 必过」跳过精确序列化；只有
+    /// 上界超限时才必须做精确判定——接受集与逐字节判定完全相同（AnyCodableTests
+    /// 的 upper-bound 用例钉住该不等式）。
+    ///
+    /// 推导：字符串无需转义时 ≤ utf8.count + 2（引号）；需要转义时每个 UTF-8
+    /// 字节最多产出 6 字节（\u00XX / surrogate pair 形态），故 ≤ 6 x utf8.count + 2；数字取 24
+    /// （Double 最长往返表示 + 符号），非有限值写出 null 取 4；true/false/null
+    /// 分别 4/5/4；数组/对象为 2 个括号 + 每项（元素或键值对）各放宽 +2。
+    var jsonUpperBoundByteCount: Int {
+        switch self {
+        case .null:
+            return 4
+        case .bool(let flag):
+            return flag ? 4 : 5
+        case .number(let number):
+            return number.isFinite ? 24 : 4
+        case .string(let text):
+            let raw = text.utf8.count
+            return Self.requiresJSONEscaping(text) ? raw * 6 + 2 : raw + 2
+        case .array(let values):
+            var total = 2
+            for value in values { total += value.jsonUpperBoundByteCount + 2 }
+            return total
+        case .object(let entries):
+            var total = 2
+            for (key, value) in entries {
+                let keyBytes = key.utf8.count
+                total += (Self.requiresJSONEscaping(key) ? keyBytes * 6 + 2 : keyBytes + 2)
+                total += value.jsonUpperBoundByteCount + 2
+            }
+            return total
+        }
+    }
+
     private static func writeJSON(_ value: AnyCodable, into out: inout String) {
         switch value {
         case .null:
@@ -192,26 +229,99 @@ public enum AnyCodable: Codable, Equatable {
         }
     }
 
+    /// 是否需要 JSON 转义：`"`、`\`、C0 控制字符（< 0x20）或 U+2028/U+2029。
+    ///
+    /// Phase 3（2026-09-18 实测）：单遍 UTF-8 扫描，供 writeJSONString 的
+    /// 「无转义整段直出」快路径与 jsonUpperBoundByteCount 的尺寸门共用。
+    /// U+2028/2029 的 UTF-8 编码是三字节序列 E2 80 A8 / E2 80 A9（自同步编码，
+    /// 该前缀无歧义），故用两个回看字节识别——只查 `"`/`\`/控制字符会漏掉
+    /// 它们（历史上是 JS 字面量的坑，AnyCodableTests 有专例）。
+    static func requiresJSONEscaping(_ string: String) -> Bool {
+        var prev: UInt8 = 0
+        var prev2: UInt8 = 0
+        for byte in string.utf8 {
+            if byte < 0x20 || byte == 0x22 || byte == 0x5C { return true }
+            if (byte == 0xA8 || byte == 0xA9), prev == 0x80, prev2 == 0xE2 { return true }
+            prev2 = prev
+            prev = byte
+        }
+        return false
+    }
+
     /// JSON 字符串转义（含 U+2028/U+2029；非 BMP 字符原样保留，UTF-8 直出）。
+    ///
+    /// Phase 3 / 3b（2026-09-18）：先做一次 requiresJSONEscaping 扫描，整串无需
+    /// 转义（ASCII 路径/代码/日志/base64 主体）时**整段直出**；含转义时走下面的
+    /// 字节缓冲批量写出。两条路径输出与改动前的逐 scalar 实现**逐字节相同**
+    /// （AnyCodableTests 语义用例 + .tmp/perf/swiftbench{4,7,8} 对抗载荷 equal=y）。
+    /// 实测（-O，1 MB 级；bench8 = 对改动前基线的加速）：纯 ASCII 10.9x、
+    /// 引号每 100 字符 10.1x、转义点在末尾 5.4x、控制字符密布 2.1x、
+    /// U+2028/2029 密布 4.1x、CJK+emoji 2.3x。
     private static func writeJSONString(_ string: String, into out: inout String) {
-        out += "\""
-        for scalar in string.unicodeScalars {
-            switch scalar.value {
-            case 0x22: out += "\\\""
-            case 0x5C: out += "\\\\"
-            case 0x08: out += "\\b"
-            case 0x09: out += "\\t"
-            case 0x0A: out += "\\n"
-            case 0x0C: out += "\\f"
-            case 0x0D: out += "\\r"
-            case 0x00...0x1F, 0x2028, 0x2029:
-                let hex = String(scalar.value, radix: 16, uppercase: true)
-                out += "\\u" + String(repeating: "0", count: 4 - hex.count) + hex
+        // 快路径：整串无需转义（ASCII 载荷/路径/base64 主体）→ 整段直出。
+        if !requiresJSONEscaping(string) {
+            out += "\""
+            out += string
+            out += "\""
+            return
+        }
+        // 慢路径（Phase 3b）：字节缓冲 + 干净段批量拷贝。
+        //
+        // 逐 scalar 的 switch+append 在含转义的大载荷上要 ~17.5 ms/MB（每字符
+        // 一次 append），是页面结果帧在**主线程**上最大的一笔；本实现把「无转义
+        // 的连续字节段」整段拷贝、只在转义点写 2/6 字节，实测（-O，1 MB）：
+        //   引号每 100 字符 17.412→1.9 ms（9.1x）、转义点在末尾 18.650→1.5 ms（12.6x）、
+        //   控制字符密布 15.475→8.2 ms（1.9x）、U+2028/2029 密布 4.820→3.4 ms（1.4x）、
+        //   CJK+emoji 混排 4.135→1.5 ms（2.7x）；纯 ASCII 交给上面的快路径。
+        // 语义：与逐 scalar 路径**逐字节一致**（AnyCodableTests 的语义用例 + 
+        // .tmp/perf/swiftbench7 的七类对抗载荷 equal=y）。代价是一次 utf8 数组
+        // 拷贝与一次 String(decoding:)（4 MiB 载荷下瞬时多几 MB，可接受）。
+        let bytes = Array(string.utf8)
+        var buffer: [UInt8] = []
+        buffer.reserveCapacity(bytes.count + 16)
+        buffer.append(0x22)
+        let hexDigits = Array("0123456789ABCDEF".utf8)
+        var index = 0
+        var runStart = 0
+        while index < bytes.count {
+            let byte = bytes[index]
+            var escape: [UInt8]?
+            var consumed = 1
+            switch byte {
+            case 0x22: escape = [0x5C, 0x22]
+            case 0x5C: escape = [0x5C, 0x5C]
+            case 0x08: escape = [0x5C, 0x62]
+            case 0x09: escape = [0x5C, 0x74]
+            case 0x0A: escape = [0x5C, 0x6E]
+            case 0x0C: escape = [0x5C, 0x66]
+            case 0x0D: escape = [0x5C, 0x72]
             default:
-                out.unicodeScalars.append(scalar)
+                if byte < 0x20 {
+                    // \u00XX（大写十六进制，与逐 scalar 路径的 String(radix:16, uppercase:true) 同形）。
+                    escape = [0x5C, 0x75, 0x30, 0x30,
+                              hexDigits[Int(byte) >> 4], hexDigits[Int(byte) & 0x0F]]
+                } else if byte == 0xE2, index + 2 < bytes.count,
+                          bytes[index + 1] == 0x80,
+                          bytes[index + 2] == 0xA8 || bytes[index + 2] == 0xA9 {
+                    // U+2028 / U+2029（E2 80 A8 / A9，自同步编码无歧义）。
+                    escape = bytes[index + 2] == 0xA8
+                        ? [0x5C, 0x75, 0x32, 0x30, 0x32, 0x38]
+                        : [0x5C, 0x75, 0x32, 0x30, 0x32, 0x39]
+                    consumed = 3
+                }
+            }
+            if let escape {
+                buffer.append(contentsOf: bytes[runStart..<index])
+                buffer.append(contentsOf: escape)
+                index += consumed
+                runStart = index
+            } else {
+                index += 1
             }
         }
-        out += "\""
+        buffer.append(contentsOf: bytes[runStart..<bytes.count])
+        buffer.append(0x22)
+        out += String(decoding: buffer, as: UTF8.self)
     }
 
     // MARK: - 桥接对象 → AnyCodable

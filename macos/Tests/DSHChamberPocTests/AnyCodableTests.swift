@@ -129,4 +129,41 @@ final class AnyCodableTests: XCTestCase {
                            "语义不等价：\(value) legacy=\(String(decoding: legacyData, as: UTF8.self)) custom=\(value.jsonLiteralText)")
         }
     }
+
+    /// Phase 3（2026-09-18）：尺寸门的安全上界——`jsonUpperBoundByteCount` 必须
+    /// 恒 ≥ 实际序列化字节数（单遍写出与 JSONSerialization 两条口径）。
+    /// 该不等式是 MessageHandler ⑤「上界 ≤ 上限 ⇒ 必过」短路的唯一前提。
+    func testJsonUpperBoundCoversActualSerialization() throws {
+        // 非有限值单独走字面量口径：`jsonObject` 会把它们交给 JSONSerialization，
+        // 后者对 NaN/±Infinity 抛 **不可捕获的 NSException**（try? 拦不住，上面
+        // testJsonLiteralTextSemantics 的注释与 fence ⑤ 的可表示性前置同因），
+        // 故不进下面那条 legacy 比较。
+        for nonFinite in [AnyCodable.number(.nan), .number(.infinity), .number(-.infinity)] {
+            XCTAssertGreaterThanOrEqual(nonFinite.jsonUpperBoundByteCount,
+                                        nonFinite.jsonLiteralText.utf8.count,
+                                        "上界小于单遍写出实际长度：\(nonFinite)")
+        }
+        let values: [AnyCodable] = [
+            .null, .bool(true), .bool(false), .number(0), .number(-0.0),
+            .number(1e21), .number(-1.7976931348623157e308),
+            .string(""),
+            .string(String(repeating: "a", count: 100_000)),
+            .string(String(repeating: "\u{01}", count: 1_000)),
+            .string(String(repeating: "中", count: 10_000)),
+            .string("\u{2028}\u{2029}\"\\"),
+            .array([.string(String(repeating: "x", count: 5_000)), .number(1e21)]),
+            .object(["k\u{2028}": .array([.null, .bool(true)]), "s": .string("中文🚀")]),
+        ]
+        for value in values {
+            let literal = value.jsonLiteralText.utf8.count
+            XCTAssertGreaterThanOrEqual(value.jsonUpperBoundByteCount, literal,
+                                        "上界小于单遍写出实际长度：\(value)")
+            // 非有限值经 jsonObject 会让 JSONSerialization 抛异常（try? 拦下）→ 跳过该口径。
+            if let legacy = try? JSONSerialization.data(withJSONObject: value.jsonObject,
+                                                        options: [.fragmentsAllowed]) {
+                XCTAssertGreaterThanOrEqual(value.jsonUpperBoundByteCount, legacy.count,
+                                            "上界小于 JSONSerialization 实际长度：\(value)")
+            }
+        }
+    }
 }
