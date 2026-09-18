@@ -11,6 +11,26 @@ const snapshot = (id: string): InstanceSnapshot => ({
 const firstProof = 'a'.repeat(64)
 const secondProof = 'b'.repeat(64)
 
+test('requestSessionListRefresh 逐监听器隔离：一个抛错不得中断守卫的 L1 广播', () => {
+  const seen: string[] = []
+  const unsubscribeBad = chamberBridge.onRequestSessionListRefresh(() => {
+    throw new Error('listener exploded')
+  })
+  const unsubscribeGood = chamberBridge.onRequestSessionListRefresh((sourceId) => { seen.push(sourceId) })
+  const originalError = console.error
+  console.error = () => undefined
+  try {
+    chamberBridge.requestSessionListRefresh('isolation-source')
+  } finally {
+    console.error = originalError
+    unsubscribeBad()
+    unsubscribeGood()
+  }
+  // 若广播在第一个抛错监听器处中断，守卫的 L1 请求就永远送不到 producer
+  // ⇒ 拿不到回执 ⇒ 假 L2/假横幅（2026-12 三轮复核）。
+  assert.deepEqual(seen, ['isolation-source'])
+})
+
 test('producer proof validation accepts only local or opaque 64-character lowercase remote hex', () => {
   assert.equal(isValidProducerSourceFingerprint('local', 'local'), true)
   assert.equal(isValidProducerSourceFingerprint('local', firstProof), false)

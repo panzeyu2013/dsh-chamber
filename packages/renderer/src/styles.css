@@ -463,3 +463,51 @@ body {
    contain-intrinsic-size: auto <兜底>），且必须回归验证 rail 跳转与底部
    跟随；行本身（被测量几何的列表项）永远不能挂估算规则。上游引入行
    虚拟化才是根治方向。 */
+
+/* ---------- 会话活性停滞提示（2026-12；运行位守卫 L3） ----------
+   与上面的降级提示（.boot-gap-layer）同族：顶部非阻断横幅，层
+   pointer-events:none、只有卡片自己接收命中测试，侧栏/会话头/composer/
+   切换来源全部照常。z-index 950 高于 .boot-gap-layer(900)、低于
+   .fatal-overlay(1000)：本提示是**可动作**的（重连/重载/忽略），失败覆盖层
+   出现时压住它（失败态与它结构互斥，App 侧同样有门）。两个横幅同屏时本提示
+   覆盖降级提示的槽位——用户可用「忽略」让位（降级说明随后仍可达，见下）。
+   配色只用 token：状态色 1px 边框（S3 对状态色的要求），据此不加 elevation
+   阴影（S5 的「中性边框 + 阴影」配对规则不适用于状态色，与 .boot-gap 同）。 */
+.session-stall-layer {
+  position: absolute;
+  top: 12px;
+  left: 0;
+  right: 0;
+  z-index: 950;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.session-stall {
+  pointer-events: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+  max-width: min(600px, calc(100% - 24px));
+  padding: 10px 12px;
+  /* 回退走本文件既有的 --muted，不写颜色字面量（S4 禁止 alias 回退里的硬编码颜色）。 */
+  border: 1px solid var(--dsw-alias-state-warn-primary, var(--muted));
+  border-radius: 8px;
+  background: var(--dsw-alias-bg-base, var(--bg));
+}
+
+.session-stall-text {
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-primary, var(--text));
+  overflow-wrap: anywhere;
+}
+
+.session-stall-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}

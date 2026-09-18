@@ -54,6 +54,8 @@ const GROUPS = {
   // host-logs: 宿主日志文件（listDiagnostics/轮转）与 opt-in 应用日志桥
   'host-logs': [
     'test/host-logs/host-logs.test.ts',
+    // 控制面自身日志落盘（<stateDir>/logs/control-plane.log：JSONL + 有界轮转）。
+    'test/log-file.test.ts',
     // Opt-in managed-dsh application-log bridge (host-log-bridge.ts): the
     // generated Cordis logger exporter, its seed entry, and the off-path
     // byte-identity of the `--patch` overlay.

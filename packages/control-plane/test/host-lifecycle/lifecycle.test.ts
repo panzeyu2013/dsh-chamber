@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createControlPlane } from '../../src/index.ts'
@@ -95,6 +95,27 @@ test('a bind failure leaves start retryable', async () => {
     assert.equal(plane.port, port)
   } finally {
     if (blocker.listening) await new Promise<void>(resolve => blocker.close(() => resolve()))
+    await plane.stop()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('控制面自身日志落盘：start 后有行、stop→start 重启后继续追加（reopen 回归锁）', async () => {
+  const dir = stateDir()
+  const plane = createControlPlane({ port: 0, stateDir: dir, logger: silentLogger })
+  const logPath = join(dir, 'logs', 'control-plane.log')
+  try {
+    await plane.start()
+    assert.ok(existsSync(logPath), 'start 必须经落盘 sink 建文件（打包态 console 不落盘）')
+    const afterStart = readFileSync(logPath, 'utf8')
+    assert.ok(afterStart.length > 0, '启动行必须落盘')
+    await plane.stop()
+    const afterStop = readFileSync(logPath, 'utf8')
+    await plane.start()
+    const afterRestart = readFileSync(logPath, 'utf8')
+    assert.ok(afterRestart.length > afterStop.length,
+      'stop→start 必须重开句柄继续追加（删掉 logger.reopen() 就会静默只转发不落盘）')
+  } finally {
     await plane.stop()
     rmSync(dir, { recursive: true, force: true })
   }

@@ -230,6 +230,105 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
   代理**主动**撤销（`closeAllStreams`/revoke）也会记成 `upstream close`，
   故该行不可单独用于判定"实例侧判死"。
 
+- **会话运行位活性守卫（2026-12，Swift 原生版「深度求索中」永久卡死修复）**：
+  ui-chat 的运行指示器由官方 session 的 `running` 位驱动
+  （`dsh-client-ui-chat`: `running = useSession(s => s.running)` → `TurnStatus` →
+  `chat.deepDiving`），而该位只由 mux `$events` 流上一条 **emit 型转发事件**
+  `api-session/status` 递送（`dsh-api-session-controller`: `handleSessionStatus` →
+  `handleRunning`）。emit 无重传、`$events` 开场帧不重放会话状态（2026-12 独立复核
+  逐行核实）。官方另有两条**非周期**写 running 的路径——会话物化时按缓存 summary
+  播种、`refreshList()` 把权威 summary 的 running 回灌（`connection/reset` →
+  `handleConnected`，以及首次 apply 期）——但**没有任何周期性触发点**（全树无官方
+  `sessions.refresh()` 调用者、无 session.list 轮询）⇒ 稳态下丢一帧或 carrier 静默
+  半死时该位永久为 true（客户端零超时、零出口）。**残留故障类要精确命名**：传输层已有
+  周期性 liveness（宿主 mux 2s×2、控制面浏览器腿 30s×1），已覆盖的是「socket/心跳死亡」；
+  本守卫针对的是「**socket 与心跳全健康、而宿主侧转发事件源停摆**」（fiber 被 dispose /
+  源静默；emit 无重传也无游标）——这一类没有任何现成触发器。宿主侧无责：agent loop 在
+  `finally` 必写 `turn/end`。**上述 §D4 的 liveness 触发器覆盖不到
+  这一类**（它们全部要求 OS 级事件：唤醒/网络/可见性；窗口可见且机器未睡时一个都不响）。
+  修复 = 三级阶梯（决策半 `renderer/src/session-liveness.ts` 纯模块，执行半
+  `dsh-chamber-client-ui-sidebar/src/shared/session-fact-reconcile.ts` +
+  producer 既有 refresh seam）：
+  **状态机不变量**（2026-12 二轮复核后定稿）：时段按**每会话计时**（`runningSince`）
+  起算——同一来源下短会话反复开始/结束**不得**重置一个真正卡住的长会话的时段；只有
+  来源代际（registry fingerprint）变化、或当前运行集合与上一 tick 完全不相交时才重起
+  算（挡住「A 结束、B 开始」继承旧配额与旧提示）。**L3 门 = 未收敛证据 + 宽限**：
+  (`outcomeFailed`（最近一次**非 unknown** 结算 ok:false（且结算时刻晚于最近一次真实重连——重连前的 sticky 失败不算新证据，否则重连后一个宽限期就亮一条 30s 假横幅））或 `outcomeMissing`（等回执超过 150s = 对账链
+   最坏回执时延 2×(20s+35s)+1.5s ≈111.5s 之上，见 sidebar 的相位预算）)
+  ∧ **梯子到顶**（真实 L2 预算用尽 **或** 连续 no-op 派遣达 `maxNoopReconnects`——后者是「杠杆一直不可用」时的第二条出口）∧ 距**梯子到顶那一刻**（`ladderAnchorAt`，只记一次）≥ `noticeAfterMs` ∧ 本轮尚未提示。健康回执清除未收敛
+  证据并撤下已亮提示，**新的**失败证据可再次武装——既不会被守卫自己的 L1 请求无限推迟，
+  也不会被一次健康回执永久 latch，更不会在「配额间隙没发请求」时误报（只用时间锚点的
+  版本正是这样产生周期性假横幅的，2026-12 二轮复核修复）。
+  ① **L1 只读对账**：某来源持续 running ≥ 120s ⇒ 经既有
+     `chamberBridge.requestSessionListRefresh` 请挂载 ctx 重跑官方
+     `ctx.sessions.refresh()`（single-flight；其内部 `refreshList()` 把权威
+     summary 的 running 回灌到已物化会话 ⇒ 卡死的位自然掉落）；节拍 = `refreshCoalesceMs`
+     `200s`（**= refreshWindowMs / maxRefreshRequests**：把配额铺成均匀节拍——用 60s 会在
+     120/180/240s 爆发用完窗口、之后失明 8 分钟；相等时平均成本不变而最坏未探测时长 = 200s），
+     滚动窗口 10 分钟 ≤3 次。
+  ② **L2 有界 reconnect**：仅当**对账回执**证明**对账通道**已坏（**非 `unknown` 的**失败回执 `ok:false`，或请求后 150s
+     无回执）才 `reconnectInstanceConnection`（复用 S2 watchdog 的杠杆与**同一份
+     per-source 记账**：同 tick 去重集合 + 跨 tick 的 60s 账本；no-op 不消耗预算，但计入
+     `noopReconnects` 供 L3 收口）；**local 刻意不排除**（本次缺陷现场就是
+     本地实例）。回执由 `verify` seam 做**权威判定**——官方 `refreshList()` 对拉取
+     失败照常 resolve（2026-12 独立复核：`result.ok===false` 只置 `listState='error'`），
+     所以「promise 解决」不算成功：只有独立 unary 探针确认官方 running 位与权威快照
+     一致才结算 `converged`；探针**正面证伪**（官方说 running 而权威说没在跑）或 refresh 相位自身失败/超时结算 `stale`（允许升级）；**探针自己失败/超时结算 `unknown`**——它走控制面 HTTP 代理，与被守卫的 WS 事实通道是两条载体，只推进水位、不升级也不清「等回执」计时，持续无结论由 `outcomeMissing` 超期收口。
+  ③ **L3 可见提示**：有未收敛证据且距梯子到顶（`ladderAnchorAt`）≥ 120s ⇒ 顶部非模态
+     横幅（重连 / 重载应用页面 / 忽略），**绝不自动重载**（与 mobile `session-stall.ts`
+     同纪律）；横幅只在有证据时出现，通道健康时不会因探测间隙反复亮灭。
+  **核心取舍**：升级的唯一依据是「拿不到权威结论」，不是「沉默很久」——长工具/长推理
+  的合法静默与真卡死在 App 层不可区分，误升级（每次 reconnect 重放全部会话 baseline）
+  会引入比原缺陷更糟的风暴；L1 是读操作，可以廉价重复。实测依据：活跃 turn 期间宿主
+  durable 进展 5–21s/次（median 11s，161s 13 次），而合法静默可达 75s（TTFT）到数分钟。
+  **被否替代（Rejected alternatives，2026-12）**：
+   - **把 L1 放进 mobile 的 `session-stall.ts`**：该插件只有 gateway/mobile flavor 加载，
+     desktop 与 Swift 原生壳不挂它 ⇒ 缺陷现场打不到；且它自带一个未校准的 45s 阈值，
+     会造出第二套「停滞」概念。
+   - **只做 L3 横幅、不做 L1 对账**：`running` 位不会收敛，用户唯一出路是整页重载
+     （丢页面状态），而真正的收敛动作其实只是一次只读 `session.list`。
+   - **用 disconnected/close 事件驱动升级**：本次缺陷本体是「carrier 静态半死、socket
+     不 close」，事件根本不发，按事件升级只覆盖已经自愈的那一半场景。
+   - **决策机放进 client-plugin 直接盯官方 running 位**：插件拿不到 App 的 reconnect
+     杠杆与 registry 代际，且每个挂载页各持一份预算（多 ctx 放大成 N 次对账）。
+   - **改 vendor 在宿主侧加日志/心跳**：pin 升级即丢，违反「不改上游」边界；诊断价值
+     已由 P1 的两处落盘（02 §3.8 与 25 §3.1）拿到。
+   - **把 local 也纳入既有 S2 重连臂**（最省的想法）：S2 的判据是「mounted 快照静默」
+     ——本缺陷里工作区/会话列表的推送照常活着（丢的只是 status 事件）⇒ 源看起来「新鲜」，
+     该臂永远不响；守卫必须按**运行位本身**的收敛证据判定，不能复用快照静默。
+   - **改用 App 每 30s 兜底 unary pull 的权威 running 行直接对表**（STATUS ⑪ 记录的
+     下轮首选）：可删掉 reconcile/verify/回执整条链（≈450–500 行），但硬证据三条：
+     ① 挂载源的 `aggregates` 会被 producer push **整块覆盖**，而 push 与 runtimeFacts
+     同源于官方 store ⇒ 两份事实不独立；② push 会作废在途 pull；③ 该 pull 只在源
+     stale 时发生，推流存活的源根本不拉。要覆盖「丢一帧而流仍活」必须另加旁路采样面，
+     收益不足以承担新的 push/pull race，故选保留现形态。
+   - **把 `unknown` 当失败立即升级**：辅助探针走控制面 HTTP 代理、被守卫的是 WS 事实
+     通道，一次 502/代理重启就会拆流并把全部 baseline 重放一遍；改为 unknown 只推进
+     水位、持续无结论由 `outcomeMissing` 收口。
+   - **refresh/verify 共用一个尝试计时器（或沿用 90s 总预算）**：慢宿主上「refresh 用了
+     十几秒 + 探针还没回」会被判成「拿不到权威结论」⇒ 假 L2；改为两相位各自计时
+     （20s/35s），等回执期限随之抬到 150s，并由接线测试锁住三条不变量
+     （最坏回执 < 等回执期限、verify 预算 ≥ 探针自身 30s 上限、生产构造点不得 override）。
+  **未闭合**：**权威清单与逐条失效判据见 `docs/progress/STATUS.md`「会话运行位卡死」
+  条（编号以 STATUS 为准）**；与本设计直接相关的形态摘要：① transcript 与运行位可能分别
+  收敛（STATUS ②，需上游逐流交付统计/游标）；② 官方 `session.list` 单飞悬挂时本阶梯的
+  「重新连接」也无效，只剩「重新加载」（STATUS ③）；③ 子代理会话不在事实通道
+  （STATUS ④）；④ 隐藏期不 tick，恢复补偿 tick 按**累计** running 时长判定（STATUS ⑤）；
+  ⑤ 守卫自身的三级动作目前只落 renderer console（STATUS ⑩，真机取证仍缺一条落盘链）。
+  另：L1 对账把卡住的 running 位压回 false 时，官方完成通知/完成蓝点的边沿照常触发
+  （`syncCompletedNotifications`），用户能看到这一回合确实结束了——这是修复的副产品，
+  不需要额外机制。
+- **控制面日志落盘（2026-12，取证缺口修复）**：动机在本节——控制面自身日志
+  （含 WS splice 的 `WebSocket stream <id> closed (<cause>, Nms)` 与
+  `heartbeat lost …`）此前只交给注入的 logger（默认 console），而打包态从
+  Finder/Dock 启动时 stdout/stderr 不落盘（实测 `log show --predicate
+  'process == "DSHChamberPoc"'` 无输出）⇒ 两类 flavor 的这条归因证据都等于丢失。
+  **落盘规格归 design 02 §3.8 拥有**（`<stateDir>/logs/control-plane.log`：JSONL、
+  有界轮转、0700/0600 + 不跟随符号链接、写失败降级告警一次；控制面拥有 stateDir，
+  故两 flavor 共用同一实现）；原生壳侧 sidecar stderr 的对应面归 design 25 D2
+  （`<userData>/logs/sidecar.log`，见那里的规格）。**未闭合**：真机事故下
+  「`WebSocket stream … closed` 行确实可检索」未经实测（见 STATUS）。
+
 ### D5 keep-awake（v1 设置项，默认关）
 
 - `powerSaveBlocker.start('prevent-app-suspension')`；settings 壳「通用」入口
@@ -261,10 +360,11 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 |---|---|
 | `packages/desktop/main.ts` | 关窗分支（hide vs quit，**托盘可用门控**）；隐藏态节流 = Chromium 默认（2026-12 修订，见 D1）；`powerMonitor.on('resume')` → push；`powerSaveBlocker`；退出确认（仅本地实例实际 live process，远程隧道/连接不影响关闭；**含更新安装豁免 + 单飞**）；will-quit single-flight 并行等待 plugin-sync/本地插件子进程、transport、control-plane 与 runtime 工作；`chamber-settings.json` store + `dsh-chamber:settings-get/set` IPC + push |
 | `packages/desktop/preload.cts` | `settings` 面（get/set/onChanged，覆盖 chamber 级全部设置键）+ `systemResume` 订阅；`DshChamberBridge` 扩展 |
-| `packages/renderer` | App 层订阅 system-resume → 分发实例重连 + transport 即时重探 |
+| `packages/renderer` | App 层订阅 system-resume → 分发实例重连 + transport 即时重探；**D4 运行位活性守卫的决策与呈现**：`src/session-liveness.ts`（纯决策，含阈值/每会话计时/预算）+ App 内接线（staleness watchdog 内规划 → L1 广播 / L2 共享账本重连 / L3 横幅 + 忽略集合） |
+| `packages/dsh-chamber-client-ui-sidebar` | **D4 的执行半**：`shared/session-fact-reconcile.ts`（单飞 + 有界重试 + 相位超时 + 三值权威判定回执）；producer 订阅既有刷新通道并驱动它，回执经 `InstanceRuntimeReport.sessionFactReconcile` 回流（05 §3） |
 | settings-bridge 壳 | 「通用」视图（见设计 15：固定入口 `__general` 平铺） |
 | 测试 | `test:desktop`（关窗行为/退出确认/设置 store 单测）、`typecheck`、`build:renderer`（§6 验证门） |
-| 控制面 | **无改动**（loopback-only 不变，契约不动） |
+| 控制面 | loopback-only 与对外契约**无改动**；D4 的日志落盘包装（`createControlPlane` 无条件把注入 logger 包成 `<stateDir>/logs/control-plane.log`，规格见 02 §3.8）是本节新增的唯一控制面改动 |
 
 ## 5. 安全与纪律
 
@@ -289,9 +389,19 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 由「关窗到托盘」覆盖）；会话级托盘（P2 纪律）。
 
 验证门：`pnpm run test:desktop`、`pnpm run typecheck`、`pnpm run build:renderer`；
+**D4 附加门**：`pnpm run test:renderer-shell`（`test/lifecycle/session-liveness.test.ts`、
+`test/wiring/session-liveness-wiring.test.ts`）、`test:sidebar`
+（`test/session-state/session-fact-reconcile.test.ts`、`test/session-rows/completed-dots-signatures.test.ts`、
+`test/session-rows/workspace-membership.test.ts` 的回执投影边界）、`test:control-plane`
+（`test/log-file.test.ts`、`test/host-lifecycle/lifecycle.test.ts` 的落盘/reopen 端到端）、
+`verify:test-wiring`（**仓内全部 test manifest 必须登记在案**，本轮扫 366 个 JS + 33 个 Swift
+测试文件）、`test:swift`（NativeShellLogTests 全部用例，含新增的 sidecar 文件名/轮转名/落盘三条
++ CrossLanguageLockstepTests 的 sidecar sink 锁步）；
 手工清单：关窗 → 隧道存活 → 托盘恢复 → 退出确认（含**更新已下载时退出不弹
 确认**）→ 唤醒秒级重连 → 无窗口常驻期间 resume 补发 → **托盘缺失回退**
-（dev 模式关窗即退、窗口不消失）。
+（dev 模式关窗即退、窗口不消失）→ **运行位守卫可见性**（故意让某来源的 running 位不收敛：
+不自动重载；横幅出现后「重新连接」生效、「忽略」在来源恢复前不再弹、「重新加载」才丢页面态；
+判据回 STATUS「会话运行位卡死」①）。
 
 ## 7. 关联
 

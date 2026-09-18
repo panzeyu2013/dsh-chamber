@@ -430,6 +430,20 @@ test('mergeRuntimeFacts passes the report through when no App dots are armed', (
   assert.deepEqual(mergeRuntimeFacts(runtime, {}), runtime)
 })
 
+test('mergeRuntimeFacts 刻意丢弃对账回执（投影不得携带守卫内部事实）', () => {
+  // 回执是守卫与 App 之间的**原始**通道事实（App 读 setRuntimeFacts 原始态）；一旦
+  // 它随投影进入 runtime 面，status 签名/消费点会把内部诊断当作用户可见事实
+  // （2026-12 三轮复核要求钉住这条边界）。
+  assert.deepEqual(
+    mergeRuntimeFacts({
+      current: 's1',
+      sessions: { s1: { running: true } },
+      sessionFactReconcile: { requestedAt: 1, settledAt: 2, ok: false, attempts: 2, verdict: 'stale' },
+    }, undefined),
+    { current: 's1', sessions: { s1: { running: true } } },
+  )
+})
+
 test('mergeRuntimeFacts overlays App-armed dots onto the report rows, preserving live extras', () => {
   const merged = mergeRuntimeFacts(
     {

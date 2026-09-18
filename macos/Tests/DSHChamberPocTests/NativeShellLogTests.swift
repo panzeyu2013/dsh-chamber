@@ -42,6 +42,41 @@ final class NativeShellLogTests: XCTestCase {
         XCTAssertEqual(NativeShellLog.rotatedFileName, "native-shell.log.1")
     }
 
+    /// 2026-12 取证修复：sidecar stderr 独立落盘实例（<userData>/logs/sidecar.log）。
+    func testSidecarFileURLRuleAndInstance() throws {
+        XCTAssertEqual(NativeShellLog.sidecarFileURL(userDataDir: "/u/data").path,
+                       "/u/data/logs/sidecar.log")
+        XCTAssertEqual(NativeShellLog.sidecarFileName, "sidecar.log")
+        XCTAssertEqual(NativeShellLog.sidecarFileURL(userDataDir: tempDir.path).deletingLastPathComponent(),
+                       NativeShellLog.fileURL(userDataDir: tempDir.path).deletingLastPathComponent(),
+                       "两个文件同目录（logs/），不各自建目录树")
+        let log = NativeShellLog()
+        log.configureSidecar(userDataDir: tempDir.path)
+        XCTAssertTrue(log.isActive)
+        log.append("[sidecar] WebSocket stream 7 closed (heartbeat lost after 1 unanswered ping(s), 30123ms)")
+        let text = try String(contentsOf: NativeShellLog.sidecarFileURL(userDataDir: tempDir.path), encoding: .utf8)
+        XCTAssertTrue(text.contains("WebSocket stream 7 closed"), "拼接证据必须真的落盘：\(text)")
+    }
+
+    /// 轮转名必须按实例文件名派生：sidecar 实例绝不能把主日志轮转名（
+    /// native-shell.log.1）当成自己的——两个实例共用同一份 rotateLocked 实现。
+    func testSidecarRotationUsesItsOwnFileName() throws {
+        let log = NativeShellLog()
+        log.configureSidecar(userDataDir: tempDir.path, maxBytes: 1)
+        log.append("[sidecar] first line over the one-byte cap")
+        log.append("[sidecar] second line rotates the first away")
+        let rotated = NativeShellLog.sidecarFileURL(userDataDir: tempDir.path)
+            .deletingLastPathComponent()
+            .appendingPathComponent("sidecar.log.1")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: rotated.path),
+                      "sidecar 轮转文件必须是 sidecar.log.1")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: NativeShellLog.fileURL(userDataDir: tempDir.path)
+                .deletingLastPathComponent()
+                .appendingPathComponent(NativeShellLog.rotatedFileName).path),
+            "sidecar 实例不得写出 native-shell.log.1")
+    }
+
     // MARK: - 真的被写入
 
     func testAppendWritesTimestampedLinesToDisk() throws {

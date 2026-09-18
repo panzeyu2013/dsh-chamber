@@ -64,6 +64,7 @@ import {
   type SeedEntry,
 } from './host-graph-seed.ts'
 import { planHostLogBridge } from './host-log-bridge.ts'
+import { withControlLogFile } from './log-file.ts'
 import type { Logger } from './types.ts'
 import type { ApiCorsEvaluator, ApiRequest, ApiResponse, ApiSurface } from './api.ts'
 
@@ -508,7 +509,13 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
   const getDshWorkspacePath = options.getDshWorkspacePath ?? (() => defaultWorkspacePath)
   const webDistDir = options.webDistDir === undefined ? undefined : options.webDistDir
   // The console default satisfies every module's logger option ({log,warn,error}).
-  const logger = (options.logger ?? console) as Logger
+  // 2026-12 取证修复：控制面自己的日志同时落盘 <stateDir>/logs/control-plane.log
+  // （有界轮转）——打包态从 Finder/Dock 启动时 stdout/stderr 不落盘，WS splice
+  // 的 'WebSocket stream <id> closed (<cause>, Nms)' / 'heartbeat lost …' 这两类
+  // 归因证据此前在两类 flavor 上都等于丢失。控制面拥有 stateDir，故两 flavor
+  // 共用同一实现，不产生新的 flavor 偏差；写失败只降级不阻断。
+  const logger = withControlLogFile((options.logger ?? console) as Logger, stateDir)
+  // logger.reopen() 在 start() 里调用（stop 后重启必须重开句柄）。
   const reapManagedHosts = options.reaper ?? runReaper
   let localWritersQuiescent = false
   /**
@@ -1050,6 +1057,9 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       if (stopPromise !== null) await stopPromise
       if (server !== null) return
       if (startPromise !== null) return startPromise
+      // stop() 会关闭日志句柄，而 start() 支持 stop→start 重启：不在这里重开，
+      // 重启后的控制面日志只转发不落盘（取证缺口以「看起来还在写」的方式复发）。
+      logger.reopen()
 
       const epoch = ++lifecycleEpoch
       let candidate: Server | null = null
@@ -1264,6 +1274,8 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       try {
         await pending
       } finally {
+        // 停止后不再写日志文件（文件保留，供事后检索）。
+        logger.close()
         if (stopPromise === pending) stopPromise = null
       }
     },

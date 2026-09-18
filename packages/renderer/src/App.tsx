@@ -158,6 +158,13 @@ import {
   AGGREGATE_RECONNECT_HTTP_STALE_MS,
   AGGREGATE_RECONNECT_SSH_STALE_MS,
 } from './aggregate-refresh.ts'
+import {
+  createSessionLivenessState,
+  markSessionLivenessReconnect,
+  markSessionLivenessReconnectNoop,
+  planSessionLiveness,
+  type SessionLivenessSourceInput,
+} from './session-liveness.ts'
 import { errorMessage } from './status.ts'
 import type { SshInstanceSpec, SshStatusProjection, TransportKind } from './global.d.ts'
 import {
@@ -1765,6 +1772,17 @@ export default function App() {
   // remoteStatusRef above).
   const watchdogAggregatesRef = useRef(aggregates)
   watchdogAggregatesRef.current = aggregates
+  // 运行位活性守卫（2026-12，renderer/src/session-liveness.ts）：运行时事实的
+  // render-phase 镜像（与上面的 aggregates 镜像同纪律：timer 稳定，不因每次
+  // 上报重建）+ 守卫状态 ref + 需要用户可见提示的来源。
+  const watchdogRuntimeFactsRef = useRef(runtimeFacts)
+  watchdogRuntimeFactsRef.current = runtimeFacts
+  const sessionLivenessRef = useRef(createSessionLivenessState())
+  const [stalledSources, setStalledSources] = useState<readonly string[]>([])
+  // 用户已经「忽略」过的停滞来源：同一停滞时段不再重复提示（与 mobile
+  // session-stall.ts 的 dismiss 语义一致——误报不得反复打扰），来源恢复
+  // （离开 stalled）时自动解除忽略。
+  const [dismissedStalls, setDismissedStalls] = useState<readonly string[]>([])
   // S2 (对齐 ssh 断链自动恢复): a stale MOUNTED direct-http source (registry
   // spec transport === 'http', whatever the target kind) additionally gets a
   // lightweight connection reconnect (bounded by lastReconnectAtRef) so the
@@ -1807,6 +1825,13 @@ export default function App() {
     const transportBySourceId = new Map(
       remoteInstances.map(instance => [sourceIdForInstance(instance), instance.transport]),
     )
+    // 本 tick 内**真正执行过** reconnect 的来源（**三条臂**共享：S2 陈旧臂、
+    // fallback-view 重建臂、运行位守卫的 L2）：用局部集合而不是墙钟窗口判断，
+    // 避免「先规划改状态、后因窗口命中而跳过」把已到期的 L2 推迟一个退避周期，
+    // 也避免时钟抖动带来的误判（2026-12 二轮复核）。**每条执行了 reconnect 的臂
+    // 都必须登记**——漏登记就会让后面的臂对同一来源再重连一次（每次都要重放
+    // 全部 baseline；三轮复核抓出 fallback 臂漏登记）。
+    const reconnectedThisTick = new Set<string>()
     for (const id of ready) {
       if (id === LOCAL_INSTANCE_ID) continue
       const stalenessMs = reconnectStalenessMsForTransport(transportBySourceId.get(id))
@@ -1839,6 +1864,7 @@ export default function App() {
       // path, which removes it from this arm.
       if (reconnectInstanceConnection(id)) {
         lastReconnectAtRef.current[id] = now
+        reconnectedThisTick.add(id)
       }
     }
     // Fallback-view heal (sidebar-hidden merge, 2026-09 archived-resurfacing
@@ -1872,8 +1898,83 @@ export default function App() {
       })) continue
       if (reconnectInstanceConnection(id)) {
         lastReconnectAtRef.current[id] = now
+        reconnectedThisTick.add(id)
       }
     }
+    // 运行位活性守卫（2026-12，renderer/src/session-liveness.ts）：ui-chat 的
+    // 「深度求索中」由官方 session 的 running 位驱动，而该位只由 mux 上一条
+    // emit 型事件 api-session/status 递送（无重传），官方唯一的收敛路径
+    // handleConnected() → refreshList() 又只挂在连接代际重置上 ⇒ 丢一帧或
+    // carrier 静默半死时 running 永久为 true。本臂：L1 只读对账（官方
+    // session.list，权威 running 回灌）→ 仅当回执证明对账通道坏掉才 L2
+    // reconnect → L3 可见提示。local 刻意不排除：本次缺陷的现场就是本地实例，
+    // 且升级依据是「拿不到权威结论」而非「沉默很久」（长工具/长推理的合法
+    // 静默与真卡死在本层不可区分，误升级会引入 reconnect 风暴）。
+    const generationBySourceId = new Map(
+      servers.map(server => [server.id, server.sourceFingerprint]),
+    )
+    const livenessSources: Record<string, SessionLivenessSourceInput | undefined> = {}
+    for (const id of ready) {
+      const report = watchdogRuntimeFactsRef.current[id]
+      livenessSources[id] = {
+        sessions: report?.sessions,
+        // 代际指纹（registry 投影同源）：不变量是「A 结束、B 开始」若发生在两次
+        // tick 之间（隐藏期跳过），新会话绝不能继承旧时段的配额/提示。
+        ...(generationBySourceId.get(id) === undefined
+          ? {}
+          : { generation: generationBySourceId.get(id) }),
+        ...(report?.sessionFactReconcile === undefined
+          ? {}
+          : { reconcile: report.sessionFactReconcile }),
+      }
+    }
+    const livenessPlan = planSessionLiveness(sessionLivenessRef.current, { now, sources: livenessSources })
+    sessionLivenessRef.current = livenessPlan.state
+    for (const action of livenessPlan.actions) {
+      // watchdog 绝不向 App 抛错（与上面的 reconnect 臂同纪律）；动作次数由
+      // 守卫自身的预算封顶（L1 滚动窗口 10 分钟 ≤3 次、L2 每时段 ≤1 次），日志因此有界。
+      try {
+        if (action.kind === 'refresh') {
+          console.warn(`[renderer] session-liveness: reconciling session facts for ${action.sourceId}`)
+          chamberBridge.requestSessionListRefresh(action.sourceId)
+        } else if (action.kind === 'reconnect') {
+          // 与既有臂共用同一份 per-source 账本：同一 tick 内已经重连过的来源不得
+          // 被多条臂各重连一次；跨 tick 也要看账本——S2/fallback 臂可能刚在几十秒前
+          // 重连过（它们各自会重放全部 baseline），此时 L2 应当让位而不是紧跟一次
+          // （2026-12 三轮复核：账本此前是单向共享的）。
+          if (reconnectedThisTick.has(action.sourceId)) continue
+          const lastReconnectAt = lastReconnectAtRef.current[action.sourceId]
+          if (lastReconnectAt !== undefined && now - lastReconnectAt < AGGREGATE_RECONNECT_BACKOFF_MS) {
+            console.warn(`[renderer] session-liveness: ${action.sourceId} was reconnected ${String(Math.round((now - lastReconnectAt) / 1000))}s ago; deferring L2`)
+            continue
+          }
+          console.warn(`[renderer] session-liveness: reconciler unresponsive for ${action.sourceId}; reconnecting`)
+          // 只有真正执行了才消耗 L2 预算：shell 未 boot / ctx 缺失时该杠杆是
+          // no-op 并返回 false，此时升级会给出「一次都没试过」的假提示；no-op 另计
+          // 一条账（连续多次 ⇒ 允许 L3，否则用户永远看不到提示）。
+          if (reconnectInstanceConnection(action.sourceId)) {
+            sessionLivenessRef.current = markSessionLivenessReconnect(
+              sessionLivenessRef.current, action.sourceId, now)
+            lastReconnectAtRef.current = { ...lastReconnectAtRef.current, [action.sourceId]: now }
+          } else {
+            sessionLivenessRef.current = markSessionLivenessReconnectNoop(
+              sessionLivenessRef.current, action.sourceId)
+          }
+        } else {
+          console.warn(`[renderer] session-liveness: ${action.sourceId} still stalled after a reconnect`)
+        }
+      } catch (error) {
+        console.error('[renderer] session-liveness action failed:', error)
+      }
+    }
+    setStalledSources(prev => (prev.length === livenessPlan.stalled.length
+      && prev.every((id, index) => id === livenessPlan.stalled[index])
+      ? prev
+      : [...livenessPlan.stalled]))
+    setDismissedStalls(prev => {
+      const next = prev.filter(id => livenessPlan.stalled.includes(id))
+      return next.length === prev.length ? prev : next
+    })
   }, [health, remoteStatus, remoteInstances, runBoundedAggregateWave])
   const runStalenessWatchdogRef = useRef<() => void>(() => undefined)
   useEffect(() => {
@@ -3987,9 +4088,64 @@ const HEALTH_ERROR_GRACE_MS = 10_000
         retried: degradedRetriedRef.current[activeView] === true,
       })
 
+  // 停滞提示的可见集合（用户已忽略的来源不再提示；来源恢复即自动解除忽略）。
+  const visibleStalls = stalledSources.filter(id => !dismissedStalls.includes(id))
   return (
     <ErrorBoundary>
       <div className="app">
+        {/* 运行位活性守卫的 L3（2026-12）：L1 只读对账与 L2 有界 reconnect 都
+            没能收敛时，只给用户两个选择——轻恢复（重新连接，不丢页面状态）与
+            重恢复（重新加载应用页面）。绝不自动重载：与 mobile 的
+            session-stall.ts 同纪律（观测者只呈现，动作由用户决定）。 */}
+        {visibleStalls.length > 0 && !controlUnreachable && activeShellError === null && (
+          <div className="session-stall-layer">
+            <div className="session-stall">
+              {/* role=status 只包**文本**：交互后代放进 live region 会在整区
+                  变化时被读屏整体重播（与 boot-gap 横幅同规）。 */}
+              <div className="session-stall-text" role="status">
+                {t('sessionStall.text', {
+                  sources: visibleStalls
+                    .map(id => servers.find(server => server.id === id)?.label ?? id)
+                    .join('、'),
+                })}
+              </div>
+              <div className="session-stall-actions">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    // 与自动臂用同一记账（返回值 + 共享账本）：否则用户点一次之后
+                    // S2 臂看不到、守卫预算也没消耗，会在同一窗口再自动重连一次
+                    // （每次重连都要重放全部 baseline）。
+                    //
+                    // 手动动作也要**有界**（2026-12 三轮复核）：连点/多按钮会各自
+                    // 重放一份完整 baseline，所以沿用自动臂的 60s per-source 退避——
+                    // 窗口内只记账不重连（但记账仍需发生，否则自动臂会马上补一次）。
+                    const at = Date.now()
+                    for (const id of visibleStalls) {
+                      const lastReconnectAt = lastReconnectAtRef.current[id]
+                      if (lastReconnectAt !== undefined && at - lastReconnectAt < AGGREGATE_RECONNECT_BACKOFF_MS) continue
+                      if (!reconnectInstanceConnection(id)) continue
+                      sessionLivenessRef.current = markSessionLivenessReconnect(
+                        sessionLivenessRef.current, id, at)
+                      lastReconnectAtRef.current = { ...lastReconnectAtRef.current, [id]: at }
+                    }
+                  }}
+                >
+                  {t('sessionStall.reconnect')}
+                </Button>
+                <Button variant="outline" onClick={() => { window.location.reload() }}>
+                  {t('sessionStall.reload')}
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => { setDismissedStalls(prev => [...prev, ...visibleStalls]) }}
+                >
+                  {t('sessionStall.dismiss')}
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
         {/* 视图始终挂载：致命屏改为覆盖层——卸载视图而不 dispose shell 会
             遗留僵尸 ctx（entries 被新 boot 覆盖、旧 ctx 永不清除，违反
             05 §4 无僵尸不变量），且恢复后要重 boot 丢会话连续性。 */}

@@ -23,7 +23,12 @@ import {
 } from '../shared/derive.ts'
 import { createPanelSource } from './panel-source.ts'
 import { createPurgeTracker } from '../shared/purged-tracker.ts'
-import { fetchInstanceSnapshot, getInstanceClient } from '../shared/instance-api.ts'
+import {
+  SessionFactReconciler,
+  sessionFactsConverged,
+  type SessionFactVerdict,
+} from '../shared/session-fact-reconcile.ts'
+import { fetchInstanceSnapshot, getInstanceClient, type InstanceSnapshot } from '../shared/instance-api.ts'
 import {
   classifySettingsSeatOccupant, settingsSeatTakeoverMessage,
 } from '../shared/settings-shell.ts'
@@ -276,9 +281,12 @@ export function apply(ctx: ClientContext): void {
       try {
         return Promise.resolve(service.refresh())
       } catch (error) {
+        // 同步抛错是**可重试**的瞬时失败（代理/客户端状态窗口），与「方法不存在」
+        // 的永久失败必须区分：返回 rejected promise 让对账链走有界重试，而不是
+        // 被当成「seam 缺失」直接结算失败（2026-12 二轮复核）。
         console.warn(`[chamber] session list refresh for ${chamberInstanceId} threw synchronously:`,
           error instanceof Error ? error.message : String(error))
-        return undefined
+        return Promise.reject(error instanceof Error ? error : new Error(String(error)))
       }
     }
 
@@ -286,6 +294,42 @@ export function apply(ctx: ClientContext): void {
     const listedSummaryIds = (): Set<string> => {
       const byId = (sessionsList.getSnapshot() as { byId?: Record<string, unknown> }).byId ?? {}
       return new Set(Object.keys(byId))
+    }
+
+    /**
+     * L1 对账的**权威判定**（2026-12 独立复核修复的致命缺陷）：官方
+     * `refreshList()` 对「拉取失败」**照常 resolve**（vendor
+     * `dsh-api-session-controller` 的客户端半：`result.ok===false` 只置
+     * `listState='error'` 后正常返回；carrier 失败在 api-gateway 里也被折叠成
+     * `ok:false` 结果而非 reject）——所以「promise 解决」不能当「拿到权威结论」。
+     *
+     * 这里复用本文件的**独立 unary 探针**（design 24 §12 终局步：不受官方
+     * single-flight / 客户端缓存影响）取权威 running 位，与官方 store 的 running
+     * 位对表。**三值**（2026-12 二轮复核）：
+     *  - `converged`：探针成功且官方位与权威一致（含「宿主确实还在跑」——长工具/
+     *    长推理的合法静默必须留在这里，升级会引入 reconnect 风暴）；
+     *  - `stale`：**权威正面证伪**（官方说 running、权威明确说该会话没在跑）⇒
+     *    官方对账没有收敛，允许守卫升级 L2/L3；
+     *  - `unknown`：**辅助探针自己失败/超时**。探针走的是控制面 HTTP 代理，而被
+     *    守卫的是 WS 事实通道——两条不同载体，探针失败不能证明被守卫的通道坏；
+     *    返回 unknown 让守卫「不升级也不抹掉等待」（持续拿不到权威结论仍会在
+     *    超期后升级），避免一次 502/代理重启就拆流重放 baseline。
+     */
+    const verifySessionFactConvergence = async (): Promise<SessionFactVerdict> => {
+      let snapshot: InstanceSnapshot
+      try {
+        snapshot = await fetchInstanceSnapshot(getInstanceClient(chamberInstanceId))
+      } catch (error) {
+        console.warn(`[chamber] authority probe failed for ${chamberInstanceId} (no verdict this round):`,
+          error instanceof Error ? error.message : String(error))
+        return 'unknown'
+      }
+      const byId = (sessionsList.getSnapshot() as {
+        byId?: Record<string, { running?: boolean; origin?: string }>
+      }).byId ?? {}
+      // 判定规则（子代理/缺失行不作证、只有权威明确说「没在跑」才判未收敛）
+      // 是纯函数，可被单测钉住：session-fact-reconcile.ts 的 sessionFactsConverged。
+      return sessionFactsConverged(byId, snapshot.sessions) ? 'converged' : 'stale'
     }
 
     /**
@@ -328,10 +372,6 @@ export function apply(ctx: ClientContext): void {
       onRelease: () => { sync() },
       warn: (message) => { console.warn(`[chamber] ${message} (${chamberInstanceId})`) },
     })
-    const unsubscribeSessionListRefresh = chamberBridge.onRequestSessionListRefresh((sourceId) => {
-      if (sourceId !== chamberInstanceId) return
-      purgedRows.converge()
-    })
     // 2026-09 beta 回归修复：pending（审批/提问/plan-review）的权威 0.1.2 源是
     // 官方 ui-session 的 pending-interaction 注册表（官方 ui-workspace 侧边栏
     // 同一来源，经 useSessionPendingInteraction 消费；上游在 0.1.2 移除了
@@ -352,6 +392,9 @@ export function apply(ctx: ClientContext): void {
     let snapshotSignature = ''
     let snapshotQueued = false
     let disposed = false
+    // 运行位活性守卫的 L1 执行端（renderer/src/session-liveness.ts 的决策半）。
+    // 先声明后装配：sync() 要读它的回执，而它的 onSettled 又要回调 sync()。
+    let sessionFacts: SessionFactReconciler | undefined
 
     const syncSnapshot = (): void => {
       snapshotQueued = false
@@ -407,7 +450,13 @@ export function apply(ctx: ClientContext): void {
       for (const [parentId, summary] of indexSubagentDescendants(snapshot.byId)) {
         if (summary.runningCount > 0) subagentRunning.set(parentId, summary.runningCount)
       }
-      const report = projectRuntimeFacts(snapshot, subagentRunning, pendingInteractions.getSnapshot())
+      const baseReport = projectRuntimeFacts(snapshot, subagentRunning, pendingInteractions.getSnapshot())
+      // 运行位活性守卫的回执与事实同源上报：守卫据它区分「宿主确实还在跑」
+      // 与「对账拿不到结论」（只有后者允许升级 reconnect）。
+      const reconcile = sessionFacts?.snapshot()
+      const report = reconcile === undefined
+        ? baseReport
+        : { ...baseReport, sessionFactReconcile: reconcile }
       // F1 同纪律：tombstoned（内容已删）的会话不得进入运行时事实通道——
       // 否则完成未读蓝点/design-19 通知边沿/徽标计数会为一个已不存在的会话
       // 武装（行虽被过滤，计数与边沿是独立消费面）。current 一并收敛，避免
@@ -427,6 +476,28 @@ export function apply(ctx: ClientContext): void {
     // desktop bridge (`window.dshChamber.dshVersion` → renderer hostFacts);
     // remote versions stay hidden until the D2 wiring lands (control-plane
     // `dsh --version` facts, P1-7).
+    // L1 执行端装配 + 既有 refresh 通道订阅（原订阅点在此处，与 sync 同批：
+    // 它的 onSettled 需要 sync()，而 sync() 需要读它的回执，二者互为闭包）。
+    sessionFacts = new SessionFactReconciler({
+      refresh: officialSessionRefresh,
+      // 权威判定：没有它，「对账请求发出去了」会被当成「拿到了权威结论」，
+      // 守卫在真正的半死通道上永不升级（2026-12 独立复核的致命发现）。
+      verify: verifySessionFactConvergence,
+      now: () => Date.now(),
+      warn: (message) => { console.warn(`[chamber] ${message} (${chamberInstanceId})`) },
+      onSettled: () => { sync() },
+    })
+    const unsubscribeSessionListRefresh = chamberBridge.onRequestSessionListRefresh((sourceId) => {
+      if (sourceId !== chamberInstanceId) return
+      purgedRows.converge()
+      // 运行位活性守卫的 L1 对账复用同一条广播通道（App 侧看不到官方 store，
+      // 只能通过它请求重跑官方 session.list）。
+      // 注（2026-12 二轮复核 low/最优性）：这里没有按「归档抑制集为空」跳过
+      // converge()——该调用是本包既有归档收敛契约的一环（有自己的接线锁），
+      // 而 L1 广播最多 3 次/10 分钟，官方 refresh 又是 single-flight，额外成本可忽略；
+      // 为省一次 no-op 去改另一个子系统的契约不划算。
+      sessionFacts?.request()
+    })
     sync()
     queueSnapshot()
     const unsubscribeSessions = sessionsList.subscribe(sync)
@@ -436,6 +507,7 @@ export function apply(ctx: ClientContext): void {
     const unsubscribePending = pendingInteractions.subscribe(sync)
     return () => {
       disposed = true
+      sessionFacts?.dispose()
       purgedRows.dispose()
       unsubscribeSessions()
       unsubscribeWorkspaces()
