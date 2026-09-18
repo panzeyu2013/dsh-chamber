@@ -16,8 +16,8 @@
 //  构造；崩溃/卡死恢复只 reload，注入随每次导航生效）。Electron flavor 未同步，
 //  双 flavor 差异登记见 docs/progress/deviations.md S-50。
 //
-//  单一真源：规则文本、标记属性、注入源码都从这里取；测试
-//  （ShellOverscrollPolicyTests）钉住注入契约与"范围只到文档根"这条不变量。
+//  单一真源：规则文本、标记属性、注入源码都从这里取；测试面按 2026-12 裁决
+//  移除（Swift 锁测试与探针已删），效果判据归实机目检。
 
 import WebKit
 

@@ -68,9 +68,8 @@ CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 ta
 - [ ] **全量测试套件在精确发布提交（`git rev-parse HEAD`）上运行**——上一提交的记录
       不算数。
 - [ ] `pnpm run test:control-plane`（以根脚本为唯一清单，含生命周期、reaper、RPC/cordis 等门）。
-- [ ] **原生壳视口越界策略的实机效果探针**（S-50）：在 GUI 会话跑
-      `node macos/scripts/overscroll-probe/run.mjs --assert`，把输出与 `policyBytes`/`policySHA256`
-      记入发布记录；无 GUI 会话时记阻断或显式豁免理由，不静默跳过（编译面已由 darwin 门禁覆盖）。
+- [ ] **原生壳视口越界策略实机目检**（S-50）：GUI 会话里滚到端点、把指针停在不可滚动
+      chrome 上滚动，确认整页不平移（无自动化探针，2026-12 裁决）。
 - [ ] `pnpm run test:runtime` + `typecheck:runtime`。
 - [ ] `pnpm run test:desktop`（transport/ssh/config/trust/plugin-sync/settings/notifications/
       deep-link/open-in/ipc-surface-mirror/runtime-lockstep/dsh-runtime-controller；失败必须
