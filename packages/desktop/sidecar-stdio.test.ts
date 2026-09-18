@@ -793,7 +793,12 @@ test('S2·F13 接线锁步：dispose 与 cp.stop 在同一 settleShutdownLegs �
   const entry = readFileSync(sidecarPath, 'utf8')
   const start = entry.indexOf('await settleShutdownLegs(')
   assert.ok(start >= 0, 'shutdown 清理必须经 settleShutdownLegs 编排（并行 allSettled 语义）')
-  const block = entry.slice(start, start + 500)
+  // 切片到调用结束（'])'）：固定 500 字符窗口会随代码增长静默失效——本批次实测该块已
+  // 长于 500 字符（第八轮排查：断言仍命中纯属位置巧合，属「假绿通道」类问题）。
+  const callEnd = entry.indexOf('])', start)
+  assert.ok(callEnd > start, 'settleShutdownLegs 调用必须以 ]) 结束（否则切片无意义）')
+  const block = entry.slice(start, callEnd + 2)
+  assert.ok(block.length > 500, '切片必须覆盖整段编排（防止退回固定窗口）')
   assert.match(block, /headless\?\.dispose\(\)/, 'dispose 腿在并行编排内')
   assert.match(block, /controlPlaneInstance\?\.stop\(\)/, 'cp.stop 腿在并行编排内')
   assert.doesNotMatch(entry, /await headless\?\.dispose\(\)/, '不得回退为「先 await dispose」的串行形态（S2·F13 原缺陷）')
@@ -876,5 +881,85 @@ test('P-01 跨语言锁步：TS 入站帧上限 = Swift FrameCodec.maxFrameBytes
   const entry = readFileSync(sidecarPath, 'utf8')
   assert.match(entry, /lineBytes > MAX_INBOUND_FRAME_BYTES/, 'sidecar-entry 入站门必须读同一常量')
   assert.match(entry, /Buffer\.byteLength\(line, 'utf8'\)/, '门必须按 UTF-8 字节数判定（与 Swift line.utf8.count 同口径）')
+})
+
+test('P-03 桌面 TS 入口必须能被 Node 类型擦除真实解析（node --check 对 ESM .ts 是空操作）', async () => {
+  // 2026-12 第七轮验证 BUG：`node --check foo.ts` 对 ESM .ts **静默 no-op**（unclosed 括号
+  // 也返回 0），曾让 sidecar-entry.ts 带着多余 `}` 交付（sidecar 永远起不来而全套 Swift
+  // 用例照绿）。这里用 stripTypeScriptTypes 做真解析，并对「多一个 }」做反证自检。
+  const { stripTypeScriptTypes } = await import('node:module')
+  for (const file of ['sidecar-entry.ts', 'sidecar-console-redirect.ts', 'node-edges.ts']) {
+    const source = readFileSync(path.join(dir, file), 'utf8')
+    assert.doesNotThrow(() => stripTypeScriptTypes(source), `${file} 必须语法可解析（类型擦除）`)
+  }
+  const entrySource = readFileSync(sidecarPath, 'utf8')
+  assert.throws(
+    () => stripTypeScriptTypes(`${entrySource}\n}\n`),
+    '反证：多一个顶层 } 必须被解析器抓住（否则本门是假绿）',
+  )
+})
+
+test('P-02 跨语言锁步：出站帧上限与入站同源常量（writeProtocolLine 必须读它）', () => {
+  const edges = readFileSync(path.join(dir, 'node-edges.ts'), 'utf8')
+  assert.match(
+    edges,
+    /export const MAX_PROTOCOL_FRAME_BYTES = 4 \* 1024 \* 1024/,
+    'node-edges 必须有单一协议帧上限常量（4 MiB，双向）',
+  )
+  assert.match(
+    edges,
+    /export const MAX_INBOUND_FRAME_BYTES = MAX_PROTOCOL_FRAME_BYTES/,
+    '入站别名必须与协议常量同源（不得各自写字面量）',
+  )
+  const entry = readFileSync(sidecarPath, 'utf8')
+  // 收紧到 writeProtocolLine 函数体（第三轮审查：整文件正则会命中文件任意位置）。
+  const start = entry.indexOf('function writeProtocolLine(')
+  assert.ok(start !== -1, 'sidecar-entry 必须保留 writeProtocolLine')
+  const end = entry.indexOf('\n}\n', start)
+  assert.ok(end !== -1, 'writeProtocolLine 必须以顶层 } 结束')
+  const body = entry.slice(start, end)
+  assert.match(body, /lineBytes > MAX_PROTOCOL_FRAME_BYTES/, '出站门必须读同一常量（函数体内）')
+  assert.match(
+    body,
+    /line\.length \* 4 <= MAX_PROTOCOL_FRAME_BYTES/,
+    '快判谓词必须钉死（UTF-16 单元 ×4 是 UTF-8 字节上界；谓词写反会放过超限帧）',
+  )
+  assert.match(body, /Buffer\.byteLength\(line, 'utf8'\)/, '中间带必须按精确 UTF-8 字节判定')
+  assert.match(body, /sidecar-frame-too-large/, '有 id 的超限帧必须回合法错误帧（调用方 promise reject）')
+  // 第五轮验证后补齐：有界写（非阻塞 + 双上限）与 edge 可判定失败，此前只有行为探针、无套内锚点。
+  assert.match(
+    entry,
+    /const MAX_PENDING_STDOUT_BYTES = 8 \* 1024 \* 1024/,
+    '出站写必须有界（8 MiB 队内字节上限，绝不无界堆积）',
+  )
+  assert.match(
+    entry,
+    /const MAX_PENDING_STDOUT_WRITES = 4096/,
+    '出站写必须同时限排队帧数（Node 排队 write request 的常驻开销）',
+  )
+  assert.match(body, /process\.stdout\.writableLength/, '有界判定必须读队内未写出字节数')
+  assert.match(body, /sidecar-frame-backpressure/, '缓冲超限必须回可判定失败帧（有 id）')
+  assert.match(body, /sidecar-frame-not-serializable/, '不可序列化帧必须回可判定失败帧（有 id）')
+  // 反空洞（第八轮排查）：只匹配 return false 字面量会被别处两条 return false 满足，
+  // 拒发分支改成 return true 也能过。这里要求「拒发区域之后必须紧跟 return false」+
+  // 「返回面结构正确（≥2 个 false、≥1 个 true）」。
+  const rejectAt = body.indexOf('sidecar-frame-backpressure')
+  assert.ok(rejectAt >= 0, '背压拒发分支必须存在')
+  assert.match(
+    body.slice(rejectAt, rejectAt + 400),
+    /return false/,
+    '背压拒发分支必须真实返回 false（谎报成功不得通过）',
+  )
+  const returns = body.match(/\breturn (?:true|false)\b/g) ?? []
+  assert.ok(
+    returns.filter((value) => value === 'return false').length >= 2,
+    '拒发路径至少两条 return false（超限 / 不可序列化）',
+  )
+  assert.ok(returns.includes('return true'), '正常路径必须返回 true')
+  assert.match(
+    entry,
+    /if \(!writeProtocolLine\(\{ edge: method, payload, edgeId \}\) && pendingEdges\.delete\(edgeId\)\)/,
+    'edge 帧被拒发必须立即结算自己的 promise（否则只能等 30s/660s 超时）',
+  )
 })
 

@@ -53,7 +53,7 @@ public enum FrameCodec {
     /// 不 import TrustGuard 以免 A 桥 → B 桥文件耦合；两处调值必须同步。
     public static let maxFrameBytes = 4 * 1024 * 1024
 
-    // MARK: - 信封（帧的线格式镜像；decode/encode 共用一份，防两处漂移）
+    // MARK: - 信封（仅 encode 使用；decode 走 classify 的类型判定，字段名以本结构为线格式权威）
 
     /// 单帧线格式（全部字段可选：解码容忍缺省，编码按帧族只写应写字段）。
     /// 注意 Codable 合成编码对 nil 可选字段自动省略（encodeIfPresent 语义），
@@ -120,6 +120,22 @@ public enum FrameCodec {
     /// 一行 → 帧。容忍 null payload / 缺省字段 / 未知多余键；缺 id 或结构
     /// 非法返回 nil（不抛错——调用方负责 loud 打印并丢弃，见 BridgeClient）。
     ///
+    /// Phase 1 C3：本函数与 BridgeClient 的入站单次解析路径共用 `classify`，
+    /// 严格性契约集中在那一处（避免两条分类路径漂移）。
+    public static func decodeLine(_ line: String) -> BridgeFrame? {
+        // 防御性兜底：超长行由调用方先行判定并 loud（通常到不了这里）；
+        // 此处再挡一次，避免把 4 MiB+ 字符串喂给解码器。
+        guard !isLineTooLong(line),
+              let data = line.data(using: .utf8),
+              let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return nil
+        }
+        return classify(jsonObject: object)
+    }
+
+    /// 已解析顶层 JSON 对象 → 帧（唯一分类器；BridgeClient 每行只解析一次后
+    /// 直接调用本函数，edge/notify 两族的分类只在 classify 归 nil 后接手）。
+    ///
     /// 分类规则（确定性，防歧义帧摇摆）：
     ///   - 带 id + method → .request（method 型帧不校验字符串内容，见文件头）；
     ///   - 带 id + ok（Bool）→ .response；ok=false 时 error 缺省 → nil（容忍，
@@ -128,29 +144,105 @@ public enum FrameCodec {
     ///   - 无 id + event → .event；event 与 id 同现（协议外混写）按 id 族优先，
     ///     解析不到合法 id 族即 nil；
     ///   - 其余（空行/纯文本/数组顶层等）→ nil。
-    public static func decodeLine(_ line: String) -> BridgeFrame? {
-        // 防御性兜底：超长行由调用方先行判定并 loud（通常到不了这里）；
-        // 此处再挡一次，避免把 4 MiB+ 字符串喂给解码器。
-        guard !isLineTooLong(line),
-              let data = line.data(using: .utf8),
-              let envelope = try? JSONDecoder().decode(Envelope.self, from: data) else {
+    ///
+    /// 严格性（与旧 JSONDecoder Envelope 解码逐条对齐，FrameCodecTests 钉住）：
+    ///   1. 已知键**存在但类型不符** → 整行 nil——绝不忽略该键继续分类，否则
+    ///      `{"id":1,"method":5,"ok":true}` 会从"非法行"变成合法 response 窃取
+    ///      pending；显式 null 与键缺省同义（可选字段折叠为 nil）；
+    ///   2. id 仅接受非布尔 NSNumber：非浮点存储走无损 Int64 桥接（域外无符号
+    ///      大整数 → nil）；浮点存储要求精确可表示且排除 -2^63 边界（JSON 数字
+    ///      已被 JSONSerialization 归一成 Double、原始 token 不可得——与旧
+    ///      JSONDecoder 的极值边界差异见 intValue 注释，已用测试钉住；**不是**
+    ///      MessageHandler.exactInt 的 2^53 上限）；
+    ///   3. ok 仅接受 CFBoolean（`NSNumber(1) as? Bool == true` 是已知陷阱）。
+    static func classify(jsonObject: [String: Any]) -> BridgeFrame? {
+        let id = field(jsonObject, "id", intValue)
+        let method = field(jsonObject, "method", stringValue)
+        let ok = field(jsonObject, "ok", boolValue)
+        let event = field(jsonObject, "event", stringValue)
+        let error = field(jsonObject, "error", stringValue)
+        let payload = field(jsonObject, "payload") { AnyCodable.fromJSONObject($0) }
+        let result = field(jsonObject, "result") { AnyCodable.fromJSONObject($0) }
+
+        // 1. 任何已知键的类型不符都毒化整行（与 JSONDecoder 抛错等价）。
+        if id.isWrongType || method.isWrongType || ok.isWrongType || event.isWrongType
+            || error.isWrongType || payload.isWrongType || result.isWrongType {
+            return nil
+        }
+        if let id = id.value {
+            if let method = method.value {
+                return .request(id: id, method: method, payload: payload.value)
+            }
+            if let ok = ok.value {
+                return .response(id: id, ok: ok, result: result.value, error: error.value)
+            }
+            return nil
+        }
+        if let event = event.value {
+            return .event(event: event, payload: payload.value)
+        }
+        return nil
+    }
+
+    /// 三态字段取值：缺省/显式 null → 无值；类型正确 → 值；类型不符 → 违约。
+    private enum JSONField<Value> {
+        case empty
+        case value(Value)
+        case wrongType
+
+        var value: Value? {
+            if case .value(let value) = self { return value }
             return nil
         }
 
-        if let id = envelope.id {
-            if let method = envelope.method {
-                return .request(id: id, method: method, payload: envelope.payload)
-            }
-            if let ok = envelope.ok {
-                return .response(id: id, ok: ok,
-                                 result: envelope.result, error: envelope.error)
-            }
-            return nil
+        var isWrongType: Bool {
+            if case .wrongType = self { return true }
+            return false
         }
-        if let event = envelope.event {
-            return .event(event: event, payload: envelope.payload)
+    }
+
+    private static func field<Value>(_ object: [String: Any], _ key: String,
+                                     _ convert: (Any) -> Value?) -> JSONField<Value> {
+        guard let raw = object[key], !(raw is NSNull) else { return .empty }
+        if let value = convert(raw) { return .value(value) }
+        return .wrongType
+    }
+
+    /// 整数域（id）：非布尔 NSNumber；非浮点存储无损取 Int64（域外无符号大整数
+    /// → nil），浮点存储要求精确可表示。
+    ///
+    /// 与旧 JSONDecoder 的实测差异（独立差分审查确认；影响面有界并已用测试钉住）：
+    /// JSONSerialization 已把数字归一成 Double、原始 token 不可得，因此
+    ///   - `{"id":9007199254740993e0}` 旧实现按 token 文本给出 …993，本实现给
+    ///     Double 舍入后的 …992；
+    ///   - `{"id":9223372036854775000.0}` 旧实现接受，本实现因 Double 表示不了
+    ///     而拒绝（fail-closed）；
+    ///   - 浮点存储恰好落在 -2^63 的字面量（如 `-9223372036854775809` 经 Double
+    ///     舍入）本实现**拒绝**——旧实现按 token 文本判越界同样拒绝；整数存储的
+    ///     Int64.min 不受影响。
+    /// 线上 id 恒为 Swift `allocateID()` 的小整数（pending 只认这些），差异输入
+    /// 只会落成「未知 id → loud 丢弃」，不影响配对。
+    private static func intValue(_ raw: Any) -> Int? {
+        guard let number = raw as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        if !CFNumberIsFloatType(number) {
+            guard let value = number as? Int64 else { return nil }
+            return Int(value)
         }
-        return nil
+        let double = number.doubleValue
+        // -2^63 在 Double 里恰好可表示、Int64(exactly:) 会接受；但它只可能来自
+        // 越界 token 的舍入（合法 Int64.min 走整数存储），故 fail-closed 拒绝。
+        guard double != -9_223_372_036_854_775_808.0 else { return nil }
+        guard let value = Int(exactly: double) else { return nil }
+        return value
+    }
+
+    private static func stringValue(_ raw: Any) -> String? { raw as? String }
+
+    private static func boolValue(_ raw: Any) -> Bool? {
+        guard let number = raw as? NSNumber,
+              CFGetTypeID(number) == CFBooleanGetTypeID() else { return nil }
+        return number.boolValue
     }
 
     /// 行是否超过单帧上限：按 UTF-8 字节数计（帧长上限的计量口径与

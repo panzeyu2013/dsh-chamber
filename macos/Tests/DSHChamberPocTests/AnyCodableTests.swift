@@ -71,4 +71,62 @@ final class AnyCodableTests: XCTestCase {
         XCTAssertNil(AnyCodable.fromJSONObject(["k": NSNumber(value: Double.infinity)]))
         XCTAssertNil(AnyCodable.fromJSONObject([NSNumber(value: Double.nan)]))
     }
+
+    /// Phase 1 C2：深度上限与 A 桥常量锁步，边界与 isJSONSerializableValue 同规。
+    func testDepthLimitLockstepAndBoundary() {
+        XCTAssertEqual(AnyCodable.maxJSONDepth, ChamberMessageHandler.maxJSONDepth)
+        var allowed: Any = "leaf"
+        for _ in 0..<AnyCodable.maxJSONDepth { allowed = [allowed] }
+        XCTAssertNotNil(AnyCodable.fromJSONObject(allowed), "深度 = 上限的嵌套必须可转换")
+        var tooDeep: Any = "leaf"
+        for _ in 0...AnyCodable.maxJSONDepth { tooDeep = [tooDeep] }
+        XCTAssertNil(AnyCodable.fromJSONObject(tooDeep), "超过上限一层即拒绝（fail closed）")
+    }
+
+    /// Phase 2 C7（修正版）：页面字面量走单遍写出器——-0.0 折叠为 "0"（与旧
+    /// jsonObject 路径逐字一致）；B 桥出帧的 JSONEncoder 往返保持改动前行为。
+    func testJsonLiteralTextSemantics() throws {
+        XCTAssertEqual(AnyCodable.null.jsonLiteralText, "null")
+        XCTAssertEqual(AnyCodable.bool(true).jsonLiteralText, "true")
+        XCTAssertEqual(AnyCodable.number(-0.0).jsonLiteralText, "0")
+        XCTAssertEqual(AnyCodable.number(3.0).jsonLiteralText, "3")
+        XCTAssertEqual(AnyCodable.number(0.1).jsonLiteralText, "0.1")
+        XCTAssertEqual(AnyCodable.number(1e18).jsonLiteralText, "1000000000000000000")
+        XCTAssertEqual(AnyCodable.number(1e21).jsonLiteralText, "1e+21")
+        XCTAssertEqual(AnyCodable.number(.nan).jsonLiteralText, "null",
+                       "非有限值诚实降级（旧路径 JSONSerialization 会抛 NSException 崩进程）")
+        XCTAssertEqual(AnyCodable.string("a\"b\\c/d").jsonLiteralText, "\"a\\\"b\\\\c/d\"")
+        XCTAssertEqual(AnyCodable.string("中文🚀").jsonLiteralText, "\"中文🚀\"")
+        XCTAssertEqual(AnyCodable.string("\u{2028}x").jsonLiteralText, "\"\\u2028x\"")
+        XCTAssertEqual(AnyCodable.string("\u{01}").jsonLiteralText, "\"\\u0001\"")
+        XCTAssertEqual(AnyCodable.array([.number(1), .bool(true), .null]).jsonLiteralText,
+                       "[1,true,null]")
+        XCTAssertEqual(AnyCodable.object(["k": .array([.number(1)])]).jsonLiteralText,
+                       "{\"k\":[1]}")
+        // 空容器与嵌套 -0（独立审查 C 建议的边界）
+        XCTAssertEqual(AnyCodable.array([]).jsonLiteralText, "[]")
+        XCTAssertEqual(AnyCodable.object([:]).jsonLiteralText, "{}")
+        XCTAssertEqual(AnyCodable.array([.object(["z": .number(-0.0)])]).jsonLiteralText, "[{\"z\":0}]")
+        // B 桥出帧（FrameCodec.encode → JSONEncoder）保持改动前行为
+        XCTAssertEqual(String(data: try JSONEncoder().encode(AnyCodable.number(-0.0)), encoding: .utf8), "-0")
+    }
+
+    /// Phase 2 C7：单遍写出与旧路径（jsonObject + JSONSerialization）解析后语义等价。
+    func testJsonLiteralTextMatchesLegacySerialization() throws {
+        let values: [AnyCodable] = [
+            .null, .bool(false), .number(0), .number(-0.0), .number(0.1), .number(1e18), .number(1e21),
+            .string("a\"b\\c/d"), .string("中文🚀"), .string("\u{2028}\u{0001}"),
+            .array([.null, .bool(true), .number(2.5), .string("x")]),
+            .object(["k": .array([.object(["n": .number(1)])]), "e": .string("🚀")]),
+        ]
+        for value in values {
+            let legacyData = try JSONSerialization.data(withJSONObject: value.jsonObject,
+                                                        options: [.fragmentsAllowed])
+            let legacy = try JSONSerialization.jsonObject(with: legacyData, options: [.fragmentsAllowed])
+            let custom = try JSONSerialization.jsonObject(with: Data(value.jsonLiteralText.utf8),
+                                                          options: [.fragmentsAllowed])
+            XCTAssertEqual(legacy as? NSObject, custom as? NSObject,
+                           "语义不等价：\(value) legacy=\(String(decoding: legacyData, as: UTF8.self)) custom=\(value.jsonLiteralText)")
+        }
+    }
 }

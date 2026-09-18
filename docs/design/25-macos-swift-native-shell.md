@@ -524,10 +524,10 @@ interface HostEdges {
   隐藏/退出链，绝不复制决策）。Swift 侧拼写单源 = `HostInboundMethod`，
   与 TS 表锁步由 `HostInboundMethodTests` 断言。
 - 退出纪律：sidecar 进入清理后入站 invoke 一律回
-  `{error:'app is quitting', code:'app_quitting'}`（sidecar-entry.ts:270-277；
+  `{error:'app is quitting', code:'app_quitting'}`（sidecar-entry.ts:396-400；
   与 renderer-trust 的 `createTrustedIpc` 同码同语义），清理自身有 4.5s 硬顶
   （`QUIT_CLEANUP_TIMEOUT_MS=5_000` − 500，早于宿主 5s SIGKILL grace、留
-  500ms 余量；shell-core.ts:571 / sidecar-entry.ts:516）。
+  500ms 余量；shell-core.ts:691 / sidecar-entry.ts:691）。
 - 护栏：Swift 只接受自己 spawn 的进程 fd；帧长上限与超时；非协议帧 fail-loud
   （重定向后仍泄漏说明有 console 直写，须修）。
 - 事件推送经 B 桥到 Swift → A 桥 emit，事件名清单 = manifest。

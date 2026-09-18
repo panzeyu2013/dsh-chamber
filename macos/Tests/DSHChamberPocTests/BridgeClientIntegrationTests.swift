@@ -34,7 +34,8 @@
 //      （swift test 的 cwd 是 macos/ 包根，上溯 1 层即仓库根）→ 找不到
 //      XCTSkip。
 //    - BridgeClient 构造 environment 参数会在 start() 时与当前进程环境合并
-//      （BridgeClient.swift:201-203 mergedEnvironment），因此这里只传增量键。
+//      （BridgeClient.childEnvironment，见 BridgeClient.swift「子进程环境（T-11）」
+//      一节），因此这里只传增量键。
 //
 //  超时纪律：每个用例的全部等待都有显式上限（invoke 竞速 10s / 事件
 //  XCTWaiter 10s），sidecar 挂死也不会挂死 CI。
@@ -94,7 +95,7 @@ final class BridgeClientPocStubIntegrationTests: XCTestCase {
         // Electron 二进制当 Node 用（AppDelegate.swift:45-52 同规）：basename
         // 含 "dsh-chamber" 时必须注入 ELECTRON_RUN_AS_NODE=1，否则启动的是
         // GUI 应用而非 Node。只传增量：BridgeClient.start() 会把本字典合并到
-        // 当前进程环境之上（BridgeClient.swift:201-203）。
+        // 当前进程环境之上（BridgeClient.childEnvironment，T-11）。
         var childEnvironment: [String: String] = [:]
         let nodeBasename = (nodePath as NSString).lastPathComponent
         if nodeBasename.contains("dsh-chamber") {
@@ -309,8 +310,8 @@ final class BridgeClientPocStubIntegrationTests: XCTestCase {
     /// 4) disconnect 事件 + sidecar 记忆语义 + 干净 stop：connect → disconnect
     /// 期间推 disconnected 事件；随后 desktop_ssh_status 按 sidecar 记忆
     /// （poc-sidecar.ts:146-151/244-251 phases map）回 phase:"idle"；stop() 同步
-    /// 收尸（SIGTERM → ≤2s → SIGKILL + waitUntilExit，BridgeClient.swift:
-    /// 251-290）。BridgeClient 未暴露进程句柄/pid，进程确已退出以 stop() 返回后
+    /// 收尸（SIGTERM → ≤5s 宽限 → SIGKILL → ≤2s 有界轮询；理论上仅在 SIGKILL
+    /// 后仍存活才 waitUntilExit 兜底，见 stop() 注释）。BridgeClient 未暴露进程句柄/pid，进程确已退出以 stop() 返回后
     /// isRunning == false 为准（stop 内部 waitUntilExit 已收尸，无外部残留）。
     func testDisconnectAndCleanStop() async throws {
         let bridge = try makeBridge()

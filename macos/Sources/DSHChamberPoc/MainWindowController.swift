@@ -45,8 +45,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 回传；页面脚本无从得知（内部管路不在公开面上）。
     private let nativeChannelToken = BridgeShimInjector.makeNativeToken()
 
-    /// 令牌的 JS 字符串字面量（十六进制，无需转义）。
-    private var nativeTokenLiteral: String { "\"\(nativeChannelToken)\"" }
+    /// 令牌的 JS 字符串字面量（十六进制，无需转义）。令牌 init 后不变，用
+    /// lazy 缓存（每个 invoke/emit 少一次字符串插值分配；访问恒在主线程）。
+    private lazy var nativeTokenLiteral: String = "\"\(nativeChannelToken)\""
     /// 可 invoke 的 method 白名单：W-04 是最小 7 通道集；W-18 manifest 化后
     /// 扩为 BridgeManifest.invokeChannels 全集（60/60 真实现都在 sidecar 侧，
     /// 语义权威与护栏仍在 sidecar/TrustGuard——readiness/badge 等通道不再
@@ -267,7 +268,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // POC dev 调试（白屏诊断；S14：仅在 POC_DEBUG=1 时安装——默认关闭，
         // 发布壳不转发渲染器每一行 console）：页面 JS onerror/
         // unhandledrejection/console.* 经 pocConsole 通道回传 → [native-web] 打印。
-        if POCDebug.isEnabled() {
+        if POCDebug.isEnabledCached {
             let consoleCatcher = POCConsoleCatcher()
             self.consoleCatcher = consoleCatcher
             configuration.userContentController.add(consoleCatcher, name: Self.consoleMessageName)
@@ -643,6 +644,8 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     private func loadControlPlaneAfterProbe() {
         shellLog("[native] 控制面就绪（GET \(Self.healthProbePath) 2xx），加载控制面 "
             + "\(cpURL.absoluteString)（origin=\(cpOrigin)）")
+        // Phase 0：启动分段（sidecar ready → 控制面就绪 → 首帧）。
+        shellLog(ShellPerf.bootLine("controlPlaneReady"))
         webView.load(URLRequest(url: cpURL))
     }
 
@@ -893,13 +896,20 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     /// web → Swift invoke（经 handler 转发）：调 B 桥后把结果交回页面
     private func handleInvoke(id: Int, method: String, payload: AnyCodable?) {
-        if POCDebug.isEnabled() {
+        // 计时戳仅在调试态取（生产零成本，注释与实现一致）。
+        let started = POCDebug.isEnabledCached ? Date() : nil
+        if POCDebug.isEnabledCached {
             print("[native] invoke #\(id) \(method)")
         }
         Task { @MainActor in
             do {
                 let result = try await bridge.invoke(method: method, payload: payload)
-                let resultJSON = Self.jsonLiteral(result.jsonObject) ?? "null"
+                if let started, POCDebug.isEnabledCached {
+                    // Phase 0：单次 invoke 的端到端耗时（含 B 桥往返与结果编码），
+                    // 仅调试态打印。
+                    print("[perf] invoke \(method) \(Int((Date().timeIntervalSince(started) * 1000).rounded()))ms")
+                }
+                let resultJSON = Self.jsonLiteral(of: result)
                 evaluateJS("__dshChamberResolve(\(nativeTokenLiteral), \(id), \(resultJSON), null)")
             } catch {
                 // 失败：__dshChamberResolve(id, null, <errorString>)；errorString
@@ -919,7 +929,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         }
         let payloadJSON: String
         if let payload = payload {
-            payloadJSON = Self.jsonLiteral(payload.jsonObject) ?? "null"
+            payloadJSON = Self.jsonLiteral(of: payload)
         } else {
             payloadJSON = "null"
         }
@@ -1061,13 +1071,33 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     }
 
     /// 把 Swift 值序列化为合法 JS 字面量（JSON 字符串是 JS 字面量的合法子集；
-    /// .fragmentsAllowed 允许顶层为字符串/数字等标量）
+    /// .fragmentsAllowed 允许顶层为字符串/数字等标量）。
+    ///
+    /// 调用点只传 String（错误文案 / 事件名）与 JSON 可表示容器。首行白名单是
+    /// 必要的 fail-closed 护栏（独立审查发现的既有崩溃面）：`JSONSerialization`
+    /// 对 Date/NaN 等非法值抛的是 **NSException**，`try?` 拦不住、会直接崩进程。
     static func jsonLiteral(_ value: Any) -> String? {
+        let isFragment = value is String || value is NSNull
+            || ((value as? NSNumber)?.doubleValue.isFinite ?? false)
+        guard isFragment || JSONSerialization.isValidJSONObject(value) else { return nil }
         guard let data = try? JSONSerialization.data(withJSONObject: value,
-                                                     options: [.fragmentsAllowed]) else {
+                                                     options: [.fragmentsAllowed]),
+              let text = String(data: data, encoding: .utf8) else {
             return nil
         }
-        return String(data: data, encoding: .utf8)
+        // R3：U+2028/U+2029 是 JS 行终止符（ES2019 前不允许直接出现在字符串
+        // 字面量中；JSONSerialization 原样输出）。替换为转义序列对 JSON 语义
+        // 无损、对注入 evaluateJavaScript 的源码更安全。
+        return text.replacingOccurrences(of: "\u{2028}", with: "\\u2028")
+            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
+    }
+
+    /// AnyCodable → JS 字面量（Phase 2 C7）：单遍写出（AnyCodable.jsonLiteralText），
+    /// 免去 `jsonObject` 把整棵载荷物化成 [String: Any] 树的深拷贝，也不再经
+    /// JSONEncoder（实测在大载荷上比旧路径慢 2.1×）。JSON 文本是 JS 字面量的合法
+    /// 子集；无失败路径（非有限数值降级为 null），故返回非可选。
+    static func jsonLiteral(of value: AnyCodable) -> String {
+        value.jsonLiteralText
     }
 
     // MARK: - NSWindowDelegate：关窗决策（E1/E20）
@@ -1269,6 +1299,8 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // 终态仍可见）。失败页豁免在此消费（decidePolicyFor 只观察不消费——
         // 两个回调的真实先后顺序因此都不影响呈现：S-42 回归修复）。
         if presentationGate.shouldPresentOnCommit(url: webView.url?.absoluteString) {
+            // Phase 0：启动 → 首个可呈现提交（主窗呈现触发点）的耗时。
+            shellLog(ShellPerf.bootLine("firstFrame \(webView.url?.absoluteString ?? "(未知)")"))
             onFirstCommittedContent?()
         }
     }
@@ -1304,7 +1336,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         sendRendererLifecycle("did-finish-load")
         // POC dev 白屏诊断（S14：仅 POC_DEBUG=1，默认关闭）：延迟数秒后渲染
         // 快照落盘（takeSnapshot 不需要屏幕录制权限；多帧取样便于观察首屏演进）。
-        guard POCDebug.isEnabled(), !didSnapshot else { return }
+        guard POCDebug.isEnabledCached, !didSnapshot else { return }
         didSnapshot = true
         let snapshotURL = URL(fileURLWithPath: "/tmp/poc-ui-snapshot.png")
         Task { @MainActor in

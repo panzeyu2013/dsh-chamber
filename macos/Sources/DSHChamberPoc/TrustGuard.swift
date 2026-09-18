@@ -132,4 +132,14 @@ enum TrustGuard {
     static func envelopeSizeOK(_ body: String) -> Bool {
         body.utf8.count <= maxMessageBytes
     }
+
+    /// 信封尺寸判定（Data 形态，Phase 1 C1）：入参是
+    /// `JSONSerialization.data(withJSONObject:)` 的产出——合法 UTF-8，故
+    /// `data.count` 与 String 版的 `body.utf8.count` **逐字节等价**，省掉
+    /// 调用点一次 4MiB 级 `String(decoding:)` 分配。
+    /// 前提：仅对合法 UTF-8 的字节成立；若未来入参可能含非法 UTF-8，必须走
+    /// String 版（repairing 解码会把非法字节替换为 U+FFFD，字节数随之变化）。
+    static func envelopeSizeOK(_ data: Data) -> Bool {
+        data.count <= maxMessageBytes
+    }
 }

@@ -491,6 +491,24 @@ final class ShellStartupTests: XCTestCase {
         XCTAssertFalse(POCDebug.isEnabled(environment: ["POC_DEBUG": "0"]))
         XCTAssertFalse(POCDebug.isEnabled(environment: ["POC_DEBUG": "true"]))
         XCTAssertTrue(POCDebug.isEnabled(environment: ["POC_DEBUG": "1"]))
+        // Phase 2 C4：生产调用点缓存与纯函数判定锁步（进程内环境稳定，故相等）。
+        XCTAssertEqual(POCDebug.isEnabledCached, POCDebug.isEnabled())
+    }
+
+    /// Phase 2 C7：页面字面量出口委托单遍写出器；String/Any 版仍走 JSONSerialization
+    /// （错误串、事件名），失败回落 nil。
+    func testPageLiteralDelegatesToSinglePassWriter() {
+        XCTAssertEqual(MainWindowController.jsonLiteral(of: .object(["k": .number(1)])), "{\"k\":1}")
+        XCTAssertEqual(MainWindowController.jsonLiteral(of: .null), "null")
+        XCTAssertEqual(MainWindowController.jsonLiteral(of: .number(-0.0)), "0")
+        XCTAssertEqual(MainWindowController.jsonLiteral("a\"b"), "\"a\\\"b\"")
+        // R3：U+2028/U+2029 必须转义（JS 行终止符），JSON 语义不变
+        XCTAssertEqual(MainWindowController.jsonLiteral("a\u{2028}b"), "\"a\\u2028b\"")
+        XCTAssertEqual(MainWindowController.jsonLiteral("a\u{2029}b"), "\"a\\u2029b\"")
+        // fail-closed：非法值返回 nil 而不是让 JSONSerialization 抛 NSException 崩进程
+        XCTAssertNil(MainWindowController.jsonLiteral(Date()))
+        XCTAssertNil(MainWindowController.jsonLiteral(NSNumber(value: Double.nan)))
+        XCTAssertNil(MainWindowController.jsonLiteral(["k": Date()]))
     }
 
     func testBoundedEdgeReplyGuardWindow() {

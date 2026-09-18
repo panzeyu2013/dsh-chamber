@@ -45,6 +45,8 @@ console.debug = (...args: unknown[]) => stderrLine('console:', args)
 // 2026-12 审查 nit：stdout 纪律要对**所有**会写 stdout 的方法成立——Node 的
 // console.dir/table/count/countReset/group/groupEnd/time/timeLog/timeEnd/trace
 // 默认都写 stdout（dir 走 util.inspect），这里一并钉到 stderr。
+// 取舍：count/group*/time* 退化为普通日志行（不维护计数/计时/缩进状态）——仓内无
+// 调用点，且 stdout 纪律优先；将来要用这些方法时需改为带状态实现（见 STATUS 登记）。
 console.dir = (...args: unknown[]) => stderrLine('console:', args)
 console.table = (...args: unknown[]) => stderrLine('console:', args)
 console.count = (...args: unknown[]) => stderrLine('console:', args)
@@ -56,6 +58,11 @@ console.time = (...args: unknown[]) => stderrLine('console:', args)
 console.timeLog = (...args: unknown[]) => stderrLine('console:', args)
 console.timeEnd = (...args: unknown[]) => stderrLine('console:', args)
 console.trace = (...args: unknown[]) => stderrLine('console:', args)
-console.assert = (...args: unknown[]) => stderrLine('console:', args)
+// assert 恢复 Node 语义（2026-12 审查 nit 的收口）：**仅当首参为假**才打印；此前
+// 无条件打印，等于把每次 assert 都变成噪声（Node 只在断言失败时输出并带前缀）。
+console.assert = (condition?: unknown, ...args: unknown[]) => {
+  if (condition) return
+  stderrLine('console:', ['Assertion failed:', ...args])
+}
 console.warn = (...args: unknown[]) => originalWarn(...args)
 console.error = (...args: unknown[]) => originalError(...args)

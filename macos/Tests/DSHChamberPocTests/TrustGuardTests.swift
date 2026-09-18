@@ -129,5 +129,14 @@ final class TrustGuardTests: XCTestCase {
         // 多字节字符按字节计
         XCTAssertTrue(TrustGuard.envelopeSizeOK(String(repeating: "中", count: TrustGuard.maxMessageBytes / 3)))
         XCTAssertFalse(TrustGuard.envelopeSizeOK(String(repeating: "中", count: TrustGuard.maxMessageBytes)))
+        // Phase 1 C1：Data 形态（调用点是 JSONSerialization 产出的合法 UTF-8，
+        // data.count 与 String 版 utf8.count 逐字节等价）。
+        XCTAssertTrue(TrustGuard.envelopeSizeOK(Data(repeating: 0x61, count: 16)))
+        XCTAssertTrue(TrustGuard.envelopeSizeOK(Data(repeating: 0x61, count: TrustGuard.maxMessageBytes)))
+        XCTAssertFalse(TrustGuard.envelopeSizeOK(Data(repeating: 0x61, count: TrustGuard.maxMessageBytes + 1)))
+        // 等价性：JSONSerialization 产出的字节，两种口径一致
+        let json = try! JSONSerialization.data(withJSONObject: ["k": String(repeating: "中", count: 1000)])
+        XCTAssertEqual(TrustGuard.envelopeSizeOK(json),
+                       TrustGuard.envelopeSizeOK(String(decoding: json, as: UTF8.self)))
     }
 }

@@ -58,7 +58,13 @@ import {
   type IpcRegistrar,
   type ShellAssemblyCtx,
 } from './shell-core.ts'
-import { MAX_INBOUND_FRAME_BYTES, createNodeEdges, HOST_INBOUND, QUIT_INBOUND_ERROR } from './node-edges.ts'
+import {
+  MAX_INBOUND_FRAME_BYTES,
+  MAX_PROTOCOL_FRAME_BYTES,
+  createNodeEdges,
+  HOST_INBOUND,
+  QUIT_INBOUND_ERROR,
+} from './node-edges.ts'
 import { buildHeadlessCtx, settleShutdownLegs, type HeadlessCtxAssembly } from './sidecar-ctx.ts'
 import type { HeadlessUpdateController, NativeUpdaterBridge } from './update-headless.ts'
 import {
@@ -160,12 +166,48 @@ const ipcRegistrar: IpcRegistrar = {
   },
 }
 
+/** 出站缓冲上限（8 MiB）：process.stdout 的队内字节超过它即**拒发**并在有 id 时回
+ *  一帧合法错误——把「无界堆积」变成「有界 + loud 失败」。
+ *
+ *  为什么不用阻塞写（fs.writeSync）：在真阻塞 fd 上它会停住主线程（SIGTERM / stdin-EOF
+ *  处理器与内部强退定时器都跑不了，宿主 stop() 先摘 stdout 读端再 SIGTERM 时只能等到
+ *  被 SIGKILL，本地 dsh/ssh 子进程清理 D1c/S2·F13 永不执行）；在 Node 的 O_NONBLOCK
+ *  stdout 管道上它直接抛 EAGAIN（未捕获即 exit 1）。两种失败面都被非阻塞写 + 有界拒发
+ *  消除（第五轮验证者两种替身进程实测：阻塞 FIFO 2.5s 不处理 SIGTERM / EAGAIN 崩溃）。 */
+const MAX_PENDING_STDOUT_BYTES = 8 * 1024 * 1024
+/** 单轮排队的帧数上限（队内清零后重置）：限制 Node 排队 write request 的常驻开销。 */
+const MAX_PENDING_STDOUT_WRITES = 4096
+/** 单轮「缓冲超限」的拒发回帧配额（队内清零后重置）：保证回帧本身也有界。 */
+let backpressureNotices = 0
+/** 自上一轮队内清零以来已入队的帧数（见 MAX_PENDING_STDOUT_WRITES）。 */
+let queuedStdoutFrames = 0
+
+/** 小错误帧的有界写：与正文走**同一预算**（队内字节 / 排队帧数），超限即 loud 丢弃——
+ *  「合法错误帧」不得成为绕过 8 MiB / 4096 帧上限的无界排队通道（第七轮验证 RISK）。
+ *  背压分支的回帧走自己的每轮配额（backpressureNotices），不在此重复计预算。 */
+function writeBoundedErrorFrame(id: number, error: string): void {
+  const text = JSON.stringify({ id, ok: false, error }) + '\n'
+  const pendingBytes = process.stdout.writableLength
+  if (pendingBytes > 0
+      && (pendingBytes + text.length + 1 > MAX_PENDING_STDOUT_BYTES
+          || queuedStdoutFrames >= MAX_PENDING_STDOUT_WRITES)) {
+    console.error(`[sidecar] 出站队列已超限，错误帧（${error}）不再排队`)
+    return
+  }
+  if (pendingBytes === 0) {
+    queuedStdoutFrames = 0
+    backpressureNotices = 0
+  }
+  queuedStdoutFrames += 1
+  process.stdout.write(text)
+}
+
 /** stdout 协议行写（单线程下写原子；绝不允许其他代码写 stdout）。
  *  2026-12 审查（S2 面）：safeStringify 对不可 JSON 化值（BigInt/循环引用）兜底返回
  *  的是**非 JSON 文本**，写成进程间协议行后 Swift 侧按「非协议帧」丢弃且**不结算**
  *  pending → 那次 invoke 永久悬挂。这里改为严格序列化：失败时若帧里有 id，就回一帧
  *  合法错误（调用方据此 reject），否则丢掉并 loud（绝不写非协议字节）。 */
-function writeProtocolLine(frame: unknown): void {
+function writeProtocolLine(frame: unknown): boolean {
   let line: string | null = null
   try {
     line = JSON.stringify(frame)
@@ -174,15 +216,60 @@ function writeProtocolLine(frame: unknown): void {
   }
   if (line === undefined || line === null) {
     const id = (frame as { id?: unknown } | null)?.id
-    if (typeof id === 'number') {
-      process.stdout.write(
-        JSON.stringify({ id, ok: false, error: 'sidecar-frame-not-serializable' }) + '\n',
-      )
-    }
+    if (typeof id === 'number') { writeBoundedErrorFrame(id, 'sidecar-frame-not-serializable') }
     console.error('[sidecar] 协议帧不可序列化（已丢弃，绝不写非协议字节）：' + String(safeStringify(frame)))
-    return
+    return false
   }
+  // 出站帧门（2026-12 三轮，与入站 P-01 同源常量 MAX_PROTOCOL_FRAME_BYTES）：超限帧
+  // 绝不写出去——Swift 侧 LineReader 会先溢出重同步，>4 MiB 的结果帧因此会 fail-closed
+  // 作废该会话全部未决请求。有 id 的帧回一帧合法错误（调用方 promise 正常 reject）；
+  // 无 id 的 edge/notify 帧 loud 丢弃：edge 由 node 侧超时兜底（非交互腿 30s、
+  // showMessage/pickPluginSource 等交互腿 660s），notify 是单向的、丢弃后 core 不可见
+  // （≤4 MiB 载荷不可达，此处为 fail-closed 的已知代价）。
+  // 快判（第三轮审查 NIT）：UTF-16 单元数 × 4 是 UTF-8 字节数的上界 → ≤ MAX/4 时
+  // 必然合规，免掉每帧一次 O(n) 字节扫描；中间带才算精确字节数（与 Swift
+  // line.utf8.count 同口径）。
+  const lineBytes = line.length * 4 <= MAX_PROTOCOL_FRAME_BYTES
+    ? line.length
+    : Buffer.byteLength(line, 'utf8')
+  if (lineBytes > MAX_PROTOCOL_FRAME_BYTES) {
+    const id = (frame as { id?: unknown } | null)?.id
+    console.error(
+      `[sidecar] 出站帧超过上限（> ${MAX_PROTOCOL_FRAME_BYTES} 字节，实际 ${Buffer.byteLength(line, 'utf8')} 字节）——拒绝发送（出站门）`,
+    )
+    if (typeof id === 'number') { writeBoundedErrorFrame(id, 'sidecar-frame-too-large') }
+    return false
+  }
+  // 有界背压（非阻塞，第五轮验证后定稿）：**字节 + 排队帧数双上限**。
+  //   - 字节上限 MAX_PENDING_STDOUT_BYTES：限制卡住的数据量；
+  //   - 帧数上限 MAX_PENDING_STDOUT_WRITES：限制 Node 的排队 write request（每请求
+  //     ~数百字节常驻内存；只限字节时「上百万个 1 字节帧」仍会让 RSS 线性增长）。
+  // 任一超限即拒发；拒发回帧自身也有配额（否则每个被拒帧以 ~61B 反噬预算）。
+  // 空闲路径（队内 0 字节）免一次 O(n) 字节扫描，并重置本轮配额与帧计数。
+  const pendingBytes = process.stdout.writableLength
+  if (pendingBytes > 0) {
+    const exactBytes = Buffer.byteLength(line, 'utf8')
+    if (pendingBytes + exactBytes + 1 > MAX_PENDING_STDOUT_BYTES
+        || queuedStdoutFrames >= MAX_PENDING_STDOUT_WRITES) {
+      const id = (frame as { id?: unknown } | null)?.id
+      console.error(
+        `[sidecar] 出站缓冲超过上限（队内 ${pendingBytes} 字节 / ${queuedStdoutFrames} 帧；本帧 ${exactBytes} 字节）——拒发（有界背压）`,
+      )
+      if (typeof id === 'number' && backpressureNotices < 64) {
+        backpressureNotices++
+        process.stdout.write(
+          JSON.stringify({ id, ok: false, error: 'sidecar-frame-backpressure' }) + '\n',
+        )
+      }
+      return false
+    }
+  } else {
+    queuedStdoutFrames = 0        // 队内清零 = 上一轮背压结束：配额与帧计数重置
+    backpressureNotices = 0
+  }
+  queuedStdoutFrames += 1
   process.stdout.write(line + '\n')
+  return true
 }
 
 const pendingEdges = new Map<number, { resolve(v: unknown): void; reject(e: Error): void }>()
@@ -228,7 +315,13 @@ const nodeEdges = createNodeEdges({
         resolve(v) { clearTimeout(timer); resolve(v) },
         reject(e) { clearTimeout(timer); reject(e) },
       })
-      writeProtocolLine({ edge: method, payload, edgeId })
+      // 拒发（超限/背压/不可序列化）必须让本次 edge **立即**失败：edge 帧只有
+      // edgeId、没有 id，写不出「可判定失败帧」，否则调用方只能等 30s/660s 超时
+      // （第五轮验证者 RISK）。在 node 内直接结算自己的 pendingEdges，无协议往返。
+      if (!writeProtocolLine({ edge: method, payload, edgeId }) && pendingEdges.delete(edgeId)) {
+        clearTimeout(timer)        // 显式取消超时兜底（delete 已使回调 no-op，这里避免悬挂定时器）
+        reject(new Error(`host edge 帧被拒发（出站门/有界背压）：${method}`))
+      }
     })
   },
   sendNotify(event, payload) {

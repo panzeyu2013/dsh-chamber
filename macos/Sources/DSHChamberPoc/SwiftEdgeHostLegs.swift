@@ -33,7 +33,7 @@ import ServiceManagement
 import UserNotifications
 import UniformTypeIdentifiers
 
-/// AnyCodable 载荷提取助手（AnyCodable.jsonObject 的字典/标量投影）。
+/// AnyCodable 载荷提取助手（直接对 enum case 做字典/标量投影）。
 enum EdgePayload {
     /// 顶层字典投影（非 object → nil）。
     static func dictionary(_ payload: AnyCodable?) -> [String: AnyCodable]? {

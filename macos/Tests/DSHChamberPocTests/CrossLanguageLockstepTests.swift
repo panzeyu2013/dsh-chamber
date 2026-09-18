@@ -11,6 +11,38 @@ import XCTest
 
 final class CrossLanguageLockstepTests: XCTestCase {
 
+    /// P-02（2026-12 二轮）：B 桥**出站**帧上限必须与入站同源常量，且 writeProtocolLine
+    /// 真的读它。出站此前无上限：一个 >4 MiB 的结果帧会先把 Swift 侧 LineReader 推入
+    /// 溢出重同步并 fail-closed 作废该会话全部未决请求（BridgeClient.processStdoutOutcome）。
+    func testSidecarOutboundFrameLimitIsLockstep() throws {
+        let edges = try source("packages/desktop/node-edges.ts")
+        let entry = try source("packages/desktop/sidecar-entry.ts")
+        XCTAssertNotNil(edges.range(of: "export const MAX_PROTOCOL_FRAME_BYTES = 4 * 1024 * 1024"),
+                        "node-edges.ts 必须定义双向协议帧上限常量（4 MiB）")
+        XCTAssertNotNil(edges.range(of: "export const MAX_INBOUND_FRAME_BYTES = MAX_PROTOCOL_FRAME_BYTES"),
+                        "入站别名必须与协议常量同源（不得各自写字面量）")
+        XCTAssertEqual(FrameCodec.maxFrameBytes, 4 * 1024 * 1024,
+                       "Swift 侧上限必须仍是 4 MiB（锁步同一护栏）")
+        // 函数体按花括号/首个顶层 } 收紧（第三轮审查 B6：通用 functionBody 会抽到下一个
+        // 顶层 function，423 行的弱锚能被注释里的常量名满足）。
+        guard let start = entry.range(of: "function writeProtocolLine(") else {
+            return XCTFail("sidecar-entry.ts 必须保留 writeProtocolLine")
+        }
+        let tail = entry[start.lowerBound...]
+        guard let end = tail.range(of: "\n}\n") else {
+            return XCTFail("writeProtocolLine 必须以顶层 } 结束（锚点收紧失败）")
+        }
+        let body = String(tail[..<end.upperBound])
+        XCTAssertNotNil(body.range(of: "lineBytes > MAX_PROTOCOL_FRAME_BYTES"),
+                        "出站门必须按同源常量比较（精确表达式，注释不算）")
+        XCTAssertNotNil(body.range(of: "line.length * 4 <= MAX_PROTOCOL_FRAME_BYTES"),
+                        "快判谓词必须钉死（谓词写反会放过 >4 MiB 的多字节帧）")
+        XCTAssertNotNil(body.range(of: "Buffer.byteLength(line, 'utf8')"),
+                        "门必须按 UTF-8 字节数判定（与 Swift line.utf8.count 同口径）")
+        XCTAssertNotNil(body.range(of: "sidecar-frame-too-large"),
+                        "有 id 的超限帧必须回合法错误帧（调用方 reject，不得悬挂）")
+    }
+
     /// #filePath = <repo>/macos/Tests/DSHChamberPocTests/CrossLanguageLockstepTests.swift
     private func repoRoot() -> URL {
         var url = URL(fileURLWithPath: #filePath)
@@ -158,8 +190,10 @@ final class CrossLanguageLockstepTests: XCTestCase {
         let bridge = try source("macos/Sources/DSHChamberPoc/BridgeClient.swift")
         XCTAssertTrue(bridge.contains("public var sidecarLogSink: ((String) -> Void)?"),
                       "BridgeClient 必须暴露 sink（单测/自定义形状可注入）")
-        XCTAssertTrue(bridge.contains("sidecarLogSink?(captured)"),
-                      "透传行必须真的喂给 sink（漏掉这行 = 只打印不落盘）")
+        XCTAssertTrue(bridge.contains("logSink.enqueue(Self.relayedSidecarLogLine(line), sidecar: captured)"),
+                      "透传行必须进入非阻塞汇聚通道，并把落盘载荷随行交给旁路消费者")
+        XCTAssertTrue(bridge.contains("sidecarSink?(sidecar)"),
+                      "汇聚线程必须真的调用旁路 sink（漏掉 = 只打印不落盘）")
         let appDelegate = try source("macos/Sources/DSHChamberPoc/AppDelegate.swift")
         XCTAssertTrue(appDelegate.contains("bridge.sidecarLogSink = { line in NativeShellLog.sidecar.append(line) }"),
                       "AppDelegate 必须在 start 前接线 sink")

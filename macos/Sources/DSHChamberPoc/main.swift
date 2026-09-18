@@ -7,6 +7,11 @@
 //  窗口与 bridge 启动都在那里完成），再进入事件循环 run()。
 import AppKit
 
+// Phase 0 观测（《最终设计方案 v2》）：进程内最早的 Swift 时间点。顶层语句在
+// NSApplication 建立之前求值；`static let` 惰性初始化会丢掉这段，故在顶层显式
+// 记账，之后所有 boot 行都以它为相对零点（ShellPerf.bootLine）。
+ShellPerf.markProcessStart(Date())
+
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate

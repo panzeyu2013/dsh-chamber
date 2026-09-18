@@ -357,6 +357,15 @@ public final class SidecarSupervisor {
             try created.start()
         } catch {
             created.onTerminated = nil
+            // 生命周期过渡态（BridgeClient.errorCodeLifecycleBusy = 6）：上一会话仍在
+            // 终止收尾（≤ terminalTransitionTimeout）。这是可重试状态，**绝不 markFatal**
+            // ——退出期「重启调度 vs supervisor.stop()」竞态若弹致命告警是误报（第三轮
+            // 审查 R6）。错误照常上抛：用户态 start() 由调用方按启动失败处理，重启路径
+            // 在 performScheduledRestart 内做有界重试。
+            if (error as NSError).code == BridgeClient.errorCodeLifecycleBusy {
+                deps.log("[supervisor] sidecar 启动被生命周期过渡推迟：\(error.localizedDescription)")
+                throw error
+            }
             let message = "sidecar 启动失败：\(error.localizedDescription)"
             markFatal(message)
             throw error
@@ -472,7 +481,7 @@ public final class SidecarSupervisor {
         }
     }
 
-    private func performScheduledRestart(token: Int, attempt: Int) {
+    private func performScheduledRestart(token: Int, attempt: Int, busyRetries: Int = 0) {
         stateLock.lock()
         let valid = !stopping && token == generation
         stateLock.unlock()
@@ -483,7 +492,23 @@ public final class SidecarSupervisor {
         do {
             _ = try launch(isRestart: true)
         } catch {
-            // launch 已 markFatal（spawn 失败 = fatal）。
+            // code 6 = 生命周期过渡（上一会话仍在收尾）：有界重试（≤3 次 × 0.5s）。
+            if (error as NSError).code == BridgeClient.errorCodeLifecycleBusy {
+                if busyRetries < 3 {
+                    deps.log("[supervisor] 重启被生命周期过渡推迟（第 \(busyRetries + 1) 次，0.5s 后重试）")
+                    deps.schedule(0.5) { [weak self] in
+                        self?.performScheduledRestart(token: token, attempt: attempt,
+                                                     busyRetries: busyRetries + 1)
+                    }
+                    return
+                }
+                // 重试耗尽：过渡态持续不消（>~6s）说明终局收尾卡死——升格 fatal，
+                // 绝不静默停在 .restarting（第三轮验证 RISK：此前既不 fatal 也不续排，
+                // 日志还假称 launch 已 markFatal）。
+                markFatal("sidecar 重启被生命周期过渡持续推迟（重试 \(busyRetries) 次后放弃）")
+                return
+            }
+            // 其余错误：launch 已 markFatal（spawn 失败 = fatal）。
             deps.log("[supervisor] 重启失败（attempt=\(attempt)）：\(error.localizedDescription)")
         }
     }
