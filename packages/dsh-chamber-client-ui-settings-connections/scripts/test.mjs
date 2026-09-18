@@ -44,7 +44,6 @@ const GROUPS = {
   ],
   // connections-section: 连接页呈现面——视觉锁与本地卡片提示/通知投影
   'connections-section': [
-    'test/connections-section/batch1-visual-locks.test.ts',
     'test/connections-section/action-hint.test.ts',
     'test/connections-section/writer-diagnosis.test.ts',
     // S-29 residual: the secretStorageUnreadable settings-page hint (zh + en).

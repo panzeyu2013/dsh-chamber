@@ -10,7 +10,7 @@
  * (unbuilt lib/, and its source needs vendor-installed zustand/immer), so the
  * test loader maps the specifier to `test/support/vendor-store-double.mjs`, a
  * contract-faithful double; the production import is pinned by a source lock
- * (test/visual-lock/upstream-alignment.test.ts, A5) and resolved for real by
+ * (A5; its source-text lock was removed by the 2026-12 ruling) and resolved for real by
  * `pnpm run build:renderer`. 2026-09-12 CI fix.
  *
  *   node --import ./test/support/vendor-register.mjs test/plugin-kernel/panel-source.test.ts

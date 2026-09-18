@@ -602,13 +602,13 @@
     家族进主图；深引让它们留在 chamber 入口。**最近实测**（`build:renderer` 写 `desktop/dist/web/perf-sizes.json`，门值 `check-chunk-budgets.mjs`）：主图仍在 `mainGraphRaw.warn = 1,350,000` 内（余量 ≈8%）；chamber 入口 **已越过
     `chamberEntryRaw.warn = 2,000,000`**（无硬门）。**待决**：拆出/懒化首屏家族，或上调阈值并把理由写进脚本头注。失效判据：读数回门内或阈值调整与理由落进头注。
   - **`Switch` 披露属性挂原语自己的控制节点（review-fix F3）**：官方 `Switch` 无属性透传；`aria-expanded/controls` 不挂无 role 的包装 span，改由 `DisclosureSwitch`（`GeneralView.tsx:151-174`）经 `applyDisclosureAttributes` 写到原语
-    `[role="switch"]` 上。收口需上游加透传；原语根即 `role="switch"` 由 `upstream-alignment-locks.test.ts` tripwire 钉住。
+    `[role="switch"]` 上。收口需上游加透传；原语根即 `role="switch"` 由 （原源码文本锁，已按 2026-12 裁决移除） tripwire 钉住。
   - **「开/选中」色与进度色回到 dsh 业务蓝（2026-09 用户裁决）**：取 `--dsw-alias-state-business-primary`，不用官方中性档 `--dsw-alias-brand-primary`。落点六处（设置壳 generalCardCheck/SegmentedControl thumb/Switch 开启轨道覆盖/连接页 pluginPillActive/运行时进度填充/归档管理器勾选）；**有意不改**：官方 `RiskConfirmation` 勾选框与
-    `Button variant="primary"`（官方组件 + body portal）。判据：两包 `batch2-visual-locks.test.ts`。
+    `Button variant="primary"`（官方组件 + body portal）。判据：两包 （原源码文本锁，已按 2026-12 裁决移除）。
   - **侧栏 schedule 事实由 chamber 带过去**：`shared/derive.ts:hasActiveScheduleOf` 读挂载/unary 两路径并进
     `instanceSnapshotSignature`（不进签名则标记冻在首见值）；`.scheduleIndicator` 不带上游
     `margin-right:6px`（本仓行已有 6px gap）。
-  - **会话状态标记 completed/pending 都是保留偏差（2026-09 用户裁决，不改）**：运行中 = 官方 `StateDot` 10px 环；完成未读 = chamber 品牌蓝点（不用官方 done 绿——与来源头连接绿同 token；锁在 `visual-lock/upstream-alignment.test.ts`
+  - **会话状态标记 completed/pending 都是保留偏差（2026-09 用户裁决，不改）**：运行中 = 官方 `StateDot` 10px 环；完成未读 = chamber 品牌蓝点（不用官方 done 绿——与来源头连接绿同 token；锁在 `visual-lock/（原源码文本锁，已按 2026-12 裁决移除）`
     T10）；提问/计划待审/请求权限 = 14px 图标徽标（官方是 10px warning 圆点，保留图标刻意；词表取官方
     `status.waiting*`）。**后续对齐轮不得当漏改收掉**；判据见 06 §4.3。
 
@@ -693,19 +693,19 @@
   §6.2/§9、`chamber-rows.test.ts`（分类兜底由 `chamber-seed-drift.test.ts` 钉住）。
 
 - **会话行/搜索结果标题墨色不照官方：静止次级、hover 主色（2026-09-14 用户指令，偏差）**：官方 `Rows .title` 继承行墨从不降级；本仓恢复 v0.2.4 两级——`.sessionTitle` 静止 `label-secondary`、hover 转 `label-primary`，`.searchResult*`
-  与 `.todoRow` 同规则、`.todoTitle` 在行外两级同为次级。**理由**：A1 曾改常驻主色，行 hover 只剩极低对比底色wash、悬停卡出现前无可读反馈。**副作用（接受）**：静止列表更暗（当前会话行也不例外），亮度差本身就是 hover 反馈。**下一轮上游对齐不得**改回常驻主色；锁在 `sidebar/test/visual-lock/batch1-visual-locks.test.ts` A1 一例。
+  与 `.todoRow` 同规则、`.todoTitle` 在行外两级同为次级。**理由**：A1 曾改常驻主色，行 hover 只剩极低对比底色wash、悬停卡出现前无可读反馈。**副作用（接受）**：静止列表更暗（当前会话行也不例外），亮度差本身就是 hover 反馈。**下一轮上游对齐不得**改回常驻主色；锁在 `sidebar/（原源码文本锁，已按 2026-12 裁决移除）` A1 一例。
 
 - **workspace 头部行尾动作簇间距 = 4px，不跟随官方 12px（2026-09-13 用户报告，偏差）**：官方 12px 描述的是无 git
-  occupant 的两项簇，而本仓该处可见簇是三项（occupant 揭示态 `.headerGit` 落在头部自身 4px 间距上），12px 会落进簇内部把一簇切成 4px + 12px。`.headerGit`/`.sourceActions` 的 4px 已随 2026-09-14 命中盒回退到 2px（见命中区条）。**下一轮上游对齐不得**改回 12px；锁在 `batch1-visual-locks.test.ts` A8b（`.rowActions` =4px；`.workspaceHeader` 的 4px 作为簇左边界一并入锁）。
+  occupant 的两项簇，而本仓该处可见簇是三项（occupant 揭示态 `.headerGit` 落在头部自身 4px 间距上），12px 会落进簇内部把一簇切成 4px + 12px。`.headerGit`/`.sourceActions` 的 4px 已随 2026-09-14 命中盒回退到 2px（见命中区条）。**下一轮上游对齐不得**改回 12px；锁在 （原源码文本锁，已按 2026-12 裁决移除） A8b（`.rowActions` =4px；`.workspaceHeader` 的 4px 作为簇左边界一并入锁）。
 
 - **轨道来源点多于可视高度时被裁掉、无滚动入口（2026-09-13，未修）**：`SidebarRoot.module.css` 的 `.regionArea`（
   `flex:1` + `overflow:hidden`）下的 `.railDots` 无自己的 overflow/min-height ⇒ rail 态没有滚动容器。2026-09-14
   已把命中盒pass 的 `gap` 退回 12px（buttonization 的 `margin: -4px 0` 保留）⇒ 点距回 20px，不再有「少约
   1/6」。**不做**： rail 滚动呈现是设计面（官方 rail 无此层），加 `overflow-y:auto` 会引入自绘滚动条；判据
-  `batch2-visual-locks.test.ts` V1 一例（gap + margin 两半都钉住）。
+  （原源码文本锁，已按 2026-12 裁决移除） V1 一例（gap + margin 两半都钉住）。
 
 - **footer 动作行 `gap: 4px` 是 chamber 对官方复制块的增量（2026-09-13，偏差）**：`sidebar.footer.action` 是 list 座，官方 `.footerActions` 只有 `display:flex` 无 gap，多 occupant 零间距相接，本仓补 4px；当前无注册者故发布态不可见，但
-  **重抄官方块时必须带上**；判据 `batch2-visual-locks.test.ts` 的 `.footerActions{gap:4px}` 一例（纵向间距仍由
+  **重抄官方块时必须带上**；判据 （原源码文本锁，已按 2026-12 裁决移除） 的 `.footerActions{gap:4px}` 一例（纵向间距仍由
   occupant 自己的 margin 承担）。
 
 - **侧栏/git 图标钮命中区回到视觉盒，重新低于 WCAG 2.2 2.5.8 的 24px（2026-09-14 用户指令，偏差）**：2026-09命中盒

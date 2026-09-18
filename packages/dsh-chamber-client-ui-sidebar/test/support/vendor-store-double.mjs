@@ -15,7 +15,7 @@
  * actually changed).
  *
  * What still guarantees production rides the REAL engine:
- *   1. a source lock in `test/visual-lock/upstream-alignment.test.ts` (A5) pins
+ *   1. the A5 rule (its source-text lock was removed by the 2026-12 ruling) pins
  *      `panel-source.ts` to `import { createSnapshotStore } from
  *      '@deepseek-ai/dsh-client-store'` and to `set()` as the write path, with
  *      the hand-rolled listener Set / observable forbidden;

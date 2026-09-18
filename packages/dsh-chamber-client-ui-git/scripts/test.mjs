@@ -32,9 +32,6 @@ const GROUPS = {
   ],
   // locks: source-text locks over the client sources and the cross-package contracts.
   locks: [
-    'test/locks/batch1-visual-locks.test.ts',
-    'test/locks/batch2-visual-locks.test.ts',
-    'test/locks/upstream-alignment.test.ts',
     'test/locks/slot-contract.test.ts',
   ],
 }

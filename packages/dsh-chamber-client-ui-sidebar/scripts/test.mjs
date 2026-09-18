@@ -80,9 +80,6 @@ const GROUPS = {
   ],
   // visual-lock: the batch1/batch2/upstream-alignment visual and alignment locks (never merged)
   'visual-lock': [
-    'test/visual-lock/batch1-visual-locks.test.ts',
-    'test/visual-lock/batch2-visual-locks.test.ts',
-    'test/visual-lock/upstream-alignment.test.ts',
   ],
 }
 

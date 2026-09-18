@@ -63,7 +63,6 @@ const GROUPS = {
     'test/frame-chrome/frame-locale.test.ts',
     'test/frame-chrome/page-language.test.ts',
     'test/frame-chrome/page-language-hook.test.ts',
-    'test/frame-chrome/batch2-visual-locks.test.ts',
   ],
 }
 

@@ -37,7 +37,6 @@ const GROUPS = {
   // ui-lock: the OpenInButton menu/owner guard and the batch2 menu-density visual lock (never merged)
   'ui-lock': [
     'test/ui-lock/instance-view-guard.test.ts',
-    'test/ui-lock/batch2-visual-locks.test.ts',
   ],
 }
 

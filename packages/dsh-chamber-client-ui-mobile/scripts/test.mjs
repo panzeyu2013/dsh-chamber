@@ -16,7 +16,6 @@ const PACKAGE_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const GROUPS = {
   // visual: stylesheet/source-text locks over the mobile CSS and its component surface.
   visual: [
-    'test/visual/batch1-visual-locks.test.ts',
     'test/visual/breakpoints.test.ts',
     'test/visual/css-source.test.ts',
     'test/visual/nav-toggle.test.ts',

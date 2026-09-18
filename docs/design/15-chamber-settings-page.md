@@ -107,7 +107,7 @@
     （两态：定宽 `.runtimeProgressBar` / 滑动条纹 `.runtimeProgressBarIndeterminate`；
     6px 轨道仍是 `--dsw-alias-border-l2` 浅灰）同取该蓝。分段控件的
     **几何保持 chamber 档**（26px/12px），只换色。锁：
-    `dsh-chamber-client-ui-settings-bridge/test/shell/batch2-visual-locks.test.ts` 的
+    `dsh-chamber-client-ui-settings-bridge/（原源码文本锁，已按 2026-12 裁决移除）` 的
     B-3/B-4（含开关覆盖规则本身）与进度填充两条；③ 面板头取官方 `SettingsRoot .header` 的**对齐**（`align-items:flex-start`）与
     54px 盒高（`justify-content:space-between` 保留），**纵向内距保留 chamber 的
     `12px 14px 10px`**：官方 `padding:20px 14px 8px 10px` 是围绕官方 26px 内容行
@@ -194,7 +194,7 @@ ChamberSettings.sessionTodo: {
   壳装配隔离不变式/每实例面注册表与
   完整桥接源码锁/`cell-dispatch`（槽单元派发：胜出、fallback、占用但无胜出者的
   死单元、未声明）/`onboarding`（协调器真值表：blank 或缺席才活跃、有序取第一个
-  未完成、完成集推进）/`upstream-alignment-locks`（本批源码锁）；`update-gate`：
+  未完成、完成集推进）/（原源码文本锁，已按 2026-12 裁决移除）（本批源码锁）；`update-gate`：
   检查按钮相位门；会话待办区与通知设置纯函数）；`test:connections`（plugin-diff 等）；
   `typecheck:settings-bridge`、
   `typecheck:connections`、`build:renderer`。

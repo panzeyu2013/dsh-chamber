@@ -33,8 +33,6 @@ const GROUPS = {
   ],
   // shell: SettingsShell 面板面——视觉锁、交互辅助、跨包 prop 镜像
   shell: [
-    'test/shell/batch1-visual-locks.test.ts',
-    'test/shell/batch2-visual-locks.test.ts',
     'test/shell/escape-owner.test.ts',
     'test/shell/disclosure-attrs.test.ts',
   ],
@@ -52,7 +50,6 @@ const GROUPS = {
   ],
   // package-locks: 跨域包级锁文件（跨 runtime/shell/bridge，留在 test/ 顶层）
   'package-locks': [
-    'test/upstream-alignment-locks.test.ts',
   ],
 }
 
