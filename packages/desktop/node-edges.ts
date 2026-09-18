@@ -106,10 +106,16 @@ export const HOST_INBOUND = {
   nativeUpdatePhase: '__host.nativeUpdatePhase',
 } as const
 
-/** B 桥单帧（行）字节上限（P-01）。与 Swift 侧 FrameCodec.maxFrameBytes /
- *  TrustGuard.maxMessageBytes 同值（4 MiB）——sidecar 入站门与跨语言锁步测试
- *  都读这一个常量；改值必须同步 macos/Sources/DSHChamberPoc/FrameCodec.swift。 */
-export const MAX_INBOUND_FRAME_BYTES = 4 * 1024 * 1024
+/** B 桥协议帧（行）字节上限，**双向**（入站门 P-01 / 出站门 P-02）。与 Swift 侧
+ *  FrameCodec.maxFrameBytes / TrustGuard.maxMessageBytes 同值（4 MiB）——sidecar
+ *  两侧门与跨语言锁步测试都读这一个常量；改值必须同步
+ *  macos/Sources/DSHChamberPoc/FrameCodec.swift。出站侧的意义：一个 >4 MiB 的结果帧
+ *  会把 Swift 侧 LineReader 推入溢出重同步并 fail-closed 作废全部未决请求
+ *  （BridgeClient.processStdoutOutcome），故在源头对称拒绝。 */
+export const MAX_PROTOCOL_FRAME_BYTES = 4 * 1024 * 1024
+
+/** 入站门既有别名（P-01）：与 MAX_PROTOCOL_FRAME_BYTES 同源，保留给既有引用。 */
+export const MAX_INBOUND_FRAME_BYTES = MAX_PROTOCOL_FRAME_BYTES
 
 /** 原生更新阶段（S-19/S-21 冻结接口）：Swift 壳报告 Sparkle 状态，sidecar
  *  映射进既有 UpdateState 投影。'installing' / 'failed' 是原生侧独有相位——
