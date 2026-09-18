@@ -116,6 +116,24 @@ final class MessageHandlerTests: XCTestCase {
             .reject(id: 1, code: ChamberMessageHandler.codeMalformedEnvelope))
     }
 
+    /// Phase 1 C2：走完整 fence 的深嵌套 payload（此前只直测 isJSONSerializableValue，
+    /// 没有覆盖 fence ⑤→⑦ 的完整路径）。注意 envelope 根占深度 0，payload 从 1 起，
+    /// 故经 fence 的 payload 深度上限是 maxJSONDepth - 1（fail-closed 偏严无害）。
+    func testFenceRejectsDeeplyNestedPayload() {
+        var rejected: Any = "leaf"
+        for _ in 0..<ChamberMessageHandler.maxJSONDepth { rejected = [rejected] }
+        XCTAssertEqual(
+            ChamberMessageHandler.fence(fenceInput(body: envelope(payload: rejected))),
+            .reject(id: 1, code: ChamberMessageHandler.codeMalformedEnvelope))
+        // 边界内（payload 上限 = maxJSONDepth - 1）仍接受，避免把上限写死在过严一侧
+        var allowed: Any = "leaf"
+        for _ in 0..<(ChamberMessageHandler.maxJSONDepth - 1) { allowed = [allowed] }
+        guard case .accept(_, _, .some) = ChamberMessageHandler.fence(
+            fenceInput(body: envelope(payload: allowed))) else {
+            return XCTFail("深度 = 上限的 payload 必须通过 fence")
+        }
+    }
+
     func testFenceRejectsOversizeEnvelope() {
         let oversized = String(repeating: "a", count: TrustGuard.maxMessageBytes + 1)
         XCTAssertEqual(

@@ -12,14 +12,17 @@
 //         {id, method, payload}）
 //     └→ userContentController.add(ChamberMessageHandler, name: "dshChamber")
 //         └→ userContentController(_:didReceive:)  ← 本文件
-//             传输层护栏（语义校验在 sidecar，design 25 §1.2 目标 4）：
+//             传输层护栏（语义校验在 sidecar，design 25 §1.2 目标 4；与
+//             fence ①–⑦ 一一对应）：
 //                1. message.name == "dshChamber" && frameInfo.isMainFrame
-//                2. origin === 期望控制面 origin（TrustGuard.isTrustedOrigin；
-//                   expectedOrigin() 在 ready 帧前返回 nil → 一律拒绝）
-//                3. 信封结构：[String: Any]，含 id: Int、method: String，
-//                   payload 可选（AnyCodable）
-//                4. 尺寸 ≤ 4 MiB（TrustGuard.envelopeSizeOK）
-//                5. method ∈ 白名单（TrustGuard.isAllowedMethod）
+//                2. origin/文档信任（TrustGuard.isTrustedDocument；expectedOrigin()
+//                   在 ready 帧前返回 nil → 一律拒绝）
+//                3. app_quitting 门（退出清理开始后 late invoke 一律拒绝）
+//                4. 信封结构：[String: Any]，含 id: Int、method: String
+//                5. 尺寸 ≤ 4 MiB（TrustGuard.envelopeSizeOK，按 JSONSerialization
+//                   产出字节数；NaN/深度预扫描先行）
+//                6. method ∈ 白名单（TrustGuard.isAllowedMethod）
+//                7. payload → AnyCodable（失败 = 信封不合法）
 //             全过 → onInvoke(id, method, payload)
 //         └→ onInvoke → controller → BridgeClient.invoke(method:payload:)
 //              → sidecar（60 invoke 处理器语义校验原样，design 25 §3.1）
@@ -181,9 +184,10 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
     ///      sender 校验后、handler 前；退出清理开始后 late invoke 不得再向
     ///      shutdown 注入传输/运行时工作）；
     ///   ④ 信封结构（[String: Any] + id 整值 + method 字符串）；
-    ///   ⑤ 尺寸上限（≤4 MiB）：先做有限性/深度扫描再 JSON 序列化——
-    ///      JSONSerialization 遇 NaN/±Infinity 抛 NSException（try? 拦不住），
-    ///      必须先判可序列化；
+    ///   ⑤ 尺寸上限（≤4 MiB）：先做整封 JSON 可表示性/深度校验（Phase 2 起由
+    ///      同一遍 AnyCodable.fromJSONObject 顺带完成），再 JSON 序列化原始信封
+    ///      量字节——JSONSerialization 遇 NaN/±Infinity 抛 NSException（try?
+    ///      拦不住），必须先判可表示；
     ///   ⑥ 方法白名单；⑦ payload → AnyCodable（失败 = 信封不合法）。
     static func fence(_ input: FenceInput) -> FenceDecision {
         guard input.messageName == "dshChamber", input.isMainFrame else { return .drop }
@@ -210,21 +214,32 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
         guard let envelope, let id = addressableID, let method = envelope["method"] as? String else {
             return .reject(id: addressableID, code: Self.codeMalformedEnvelope)
         }
-        guard Self.isJSONSerializableValue(envelope) else {
+        // Phase 2（独立审查 C 实测 1.74MB 信封 113.7ms → 69.6ms，-39%）：把
+        // 「JSON 可表示性/深度/有限性预扫」与「payload → AnyCodable 转换」合成
+        // 一次整封转换——AnyCodable.fromJSONObject 的接受集与原预扫逐条等价
+        // （同类白名单、同 512 深度上限）。随后量尺寸仍对**原始信封**做
+        // JSONSerialization（线格式字节数语义不变）；因已过可表示性校验，这一步
+        // 不可能再抛 NSException/爆栈。预扫函数保留给测试（拒绝集基准）。
+        // 取舍：超限信封会先建一棵转换树再被尺寸门拒绝（峰值多一层树；信封本身
+        // 已在内存且有 4 MiB 门，可接受）。
+        guard let convertedEnvelope = AnyCodable.fromJSONObject(envelope) else {
             return .reject(id: id, code: Self.codeMalformedEnvelope)
         }
         guard let envelopeData = try? JSONSerialization.data(withJSONObject: envelope) else {
             return .reject(id: id, code: Self.codeMalformedEnvelope)
         }
-        guard TrustGuard.envelopeSizeOK(String(decoding: envelopeData, as: UTF8.self)) else {
+        // Phase 1 C1：直接按 JSONSerialization 产出的字节数判定（合法 UTF-8，
+        // 与 String(decoding:) 的 utf8.count 逐字节等价），省一次 4MiB 级 String 分配。
+        guard TrustGuard.envelopeSizeOK(envelopeData) else {
             return .reject(id: id, code: Self.codeFrameTooLarge)
         }
         guard TrustGuard.isAllowedMethod(method, whitelist: input.whitelist) else {
             return .reject(id: id, code: Self.codeMethodNotAllowed)
         }
         let payload: AnyCodable?
-        if let rawPayload = envelope["payload"] {
-            guard let converted = Self.anyCodablePayload(from: rawPayload) else {
+        if envelope["payload"] != nil {
+            // 已由上面的整封转换校验并转换过：从同一棵树取，不重复转换。
+            guard case .object(let fields) = convertedEnvelope, let converted = fields["payload"] else {
                 return .reject(id: id, code: Self.codeMalformedEnvelope)
             }
             payload = converted
@@ -282,36 +297,33 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
 
     /// 桥接 payload（[String: Any] / [Any] / 基础类型 / NSNull）→ AnyCodable。
     ///
-    /// 不做 AnyCodable case 的手工映射：case 布局（number 的存储类型等）属
-    /// FrameCodec.swift（他人实现）的内部契约，本文件不修改它——payload 先
-    /// 经 JSONSerialization 规范成 JSON，再用 JSONDecoder 按 AnyCodable 的
-    /// Codable 契约解码（包装成单元素数组以兼容 JSONSerialization 顶层
-    /// 片段限制）。若 FrameCodec 后续提供 init?(jsonObject:)/from(any:) 之类
-    /// 便利构造，本函数是唯一替换点（调用方语义不变）。
+    /// Phase 1 C2：直接走 `AnyCodable.fromJSONObject`（全量 CFTypeID 判定 +
+    /// 有限性拒绝 + 深度上限），不再经 JSONSerialization → JSONDecoder 往返。
+    /// 旧实现把同一棵载荷树走了两遍（规范成 JSON 一遍、按 Codable 契约解码
+    /// 一遍），且内部的 isJSONSerializableValue 预扫描与 fence ⑤ 对整封信封的
+    /// 扫描重复。调用方语义不变：非 JSON 可表示值（Date/Data/自定义对象）、
+    /// NaN/±Infinity、超深嵌套一律 nil（fail closed）。
+    /// 若 AnyCodable 的桥接契约再演进，本函数仍是唯一替换点。
+    ///
+    /// Phase 2：fence 已改为「整封信封一次转换」（见 fence ⑤ 注释），本函数
+    /// 现在只服务测试与其它单点调用方。
     static func anyCodablePayload(from raw: Any) -> AnyCodable? {
-        // 预扫描：JSONSerialization 对 Date/NaN 等非法值抛的是 NSException
-        // （Swift 无法 catch，直接崩进程）——任何序列化之前必须先判可序列化
-        // （2026-09 模块评审补测发现：原实现只在 didReceive ④ 前置扫描，
-        // 直调本函数会崩）。
-        guard Self.isJSONSerializableValue(raw) else { return nil }
-        do {
-            let data = try JSONSerialization.data(withJSONObject: [raw])
-            let boxed = try JSONDecoder().decode([AnyCodable].self, from: data)
-            return boxed.first
-        } catch {
-            return nil
-        }
+        AnyCodable.fromJSONObject(raw)
     }
 
     /// JSON 嵌套深度上限：防受信页面构造 <4MiB 的极深嵌套信封在预扫描阶段
     /// 击穿 Swift 栈（静态审查 #4；超限按 malformed_envelope 拒绝）。
     static let maxJSONDepth = 512
 
-    /// 递归确认值可被 JSONSerialization 无异常序列化。桥接/原生值只可能是
+    /// 递归确认值可被 JSONSerialization 无异常序列化。
+    ///
+    /// Phase 2：fence 不再调用它（整封 AnyCodable 转换已覆盖同一接受集），
+    /// 保留为拒绝集的测试基准（MessageHandlerTests）。桥接/原生值只可能是
     /// NSNull/String/NSNumber/NSArray/[String:Any] 或其 Swift 原生等价物；
     /// 其余类型一律 false（fail closed）。NSNumber 需额外检查有限性——
-    /// JSONSerialization 对 NaN/±Infinity 抛 NSException（非 NSError），
-    /// 任何 try? 序列化之前必须先过此扫描（见 fence ⑤ 注释）。
+    /// JSONSerialization 对 NaN/±Infinity 抛 NSException（非 NSError）。
+    /// Phase 2 起 fence 走 AnyCodable.fromJSONObject（同接受集），本函数只剩
+    /// 测试基准用途：任何「先 try? 序列化」的调用点都应先过它。
     static func isJSONSerializableValue(_ value: Any, depth: Int = 0) -> Bool {
         if depth > maxJSONDepth { return false }
         if value is NSNull || value is String { return true }

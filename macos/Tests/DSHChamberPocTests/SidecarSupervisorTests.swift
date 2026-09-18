@@ -229,6 +229,49 @@ final class SidecarSupervisorTests: XCTestCase {
         XCTAssertFalse(supervisor.directoryLock.isHeld)
     }
 
+    /// 第三轮验证 F4a：code 6（生命周期过渡）是**可重试**过渡态——用户态 start 抛错但
+    /// **绝不** markFatal（否则退出期「重启调度 vs stop()」竞态会弹致命告警）。
+    func testLifecycleBusyStartIsRetryableNotFatal() {
+        let dir = makeTempDir()
+        let sidecar = FakeSidecar()
+        sidecar.startError = NSError(domain: "BridgeClient",
+                                     code: BridgeClient.errorCodeLifecycleBusy,
+                                     userInfo: [NSLocalizedDescriptionKey: "busy"])
+        let fatal = NSMutableArray()
+        let (supervisor, scheduled) = makeSupervisor(dir: dir, sidecar: sidecar, fatalMessages: fatal)
+        XCTAssertThrowsError(try supervisor.start())
+        XCTAssertEqual(fatal.count, 0, "code 6 不得 fatal")
+        XCTAssertNotEqual(supervisor.state, .fatal)
+        XCTAssertTrue(scheduled().isEmpty)
+        supervisor.stop()
+    }
+
+    /// 第三轮验证 RISK：code 6 重试耗尽必须升格 fatal——绝不静默停在 .restarting
+    /// （此前既不 fatal 也不再排程，自动恢复名存实亡）。
+    func testLifecycleBusyRestartExhaustionBecomesFatal() throws {
+        let dir = makeTempDir()
+        let sidecar = FakeSidecar()
+        let fatal = NSMutableArray()
+        let (supervisor, scheduled) = makeSupervisor(dir: dir, sidecar: sidecar, fatalMessages: fatal)
+        try supervisor.start()
+        sidecar.startError = NSError(domain: "BridgeClient",
+                                     code: BridgeClient.errorCodeLifecycleBusy,
+                                     userInfo: [NSLocalizedDescriptionKey: "busy"])
+        sidecar.terminate(status: 1)                  // 崩溃 → 排定重启
+        XCTAssertEqual(supervisor.state, .restarting)
+        XCTAssertEqual(scheduled().count, 1)
+        scheduled()[0]()                              // 第 1 次：code 6 → 排定重试
+        XCTAssertEqual(scheduled().count, 2)
+        scheduled()[1]()                              // 第 2 次
+        XCTAssertEqual(scheduled().count, 3)
+        scheduled()[2]()                              // 第 3 次
+        XCTAssertEqual(scheduled().count, 4)
+        scheduled()[3]()                              // 第 4 次：耗尽 → fatal
+        XCTAssertEqual(fatal.count, 1, "重试耗尽必须 fatal（不得静默停 .restarting）")
+        XCTAssertEqual(supervisor.state, .fatal)
+        supervisor.stop()
+    }
+
     func testCrashSchedulesBackoffRestartAndRelaunches() throws {
         let dir = makeTempDir()
         let sidecar = FakeSidecar()

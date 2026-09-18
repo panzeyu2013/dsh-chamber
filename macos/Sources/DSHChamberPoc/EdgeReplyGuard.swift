@@ -36,6 +36,15 @@ struct BoundedEdgeReplyGuard {
         return true
     }
 
+    /// 撤销一次插入（写失败回滚：见 BridgeClient.sendEdgeReply——若守卫不回滚，
+    /// 「先烧号后写失败」会把一次可重试的应答永久记成重复，对端只能等超时）。
+    mutating func remove(_ edgeId: Int64) {
+        guard seen.remove(edgeId) != nil else { return }
+        if let index = order.firstIndex(of: edgeId) {
+            order.remove(at: index)
+        }
+    }
+
     mutating func removeAll() {
         seen.removeAll()
         order.removeAll()

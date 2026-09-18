@@ -57,6 +57,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     // MARK: - NSApplicationDelegate
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Phase 0：t0 之后壳内第一个可见时间点（t0 在 main.swift 顶层记账）。
+        print(ShellPerf.bootLine("applicationDidFinishLaunching"))
         shellLog("[native] applicationDidFinishLaunching：开始装配")
         // W-21：通知授权与 delegate 接线（前台展示 + click 回灌；权限拒绝 →
         // 授权结果打印，调度侧以 UNUserNotificationCenter.add 错误 loud——
@@ -125,6 +127,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // 导航失败、更新相位、退出链的关键行都在其后。
         NativeShellLog.shared.configure(userDataDir: stateDir)
         shellLog("[native] 原生壳日志落盘：\(NativeShellLog.shared.filePath ?? "未启用（仅 stdout）")")
+        // Phase 0：日志落盘后即可考古 t0→configure 的时间差（此前壳内第一个
+        // 时间点只能靠外部测量，NSApplication 之前的时段不可测）。
+        shellLog(ShellPerf.bootLine("logConfigured"))
         // 控制面端口缺省（S11）：POC_PORT > DSH_CHAMBER_CP_PORT > dev 空闲退避 /
         // packaged 17500；真实 sidecar 分支里解析后回填（自定义脚本形状不探测，
         // 保持缺省，绝不静默漂移）。
@@ -328,6 +333,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let bridge = BridgeClient(nodePath: nodePath, arguments: sidecarArguments, environment: childEnv)
         bridge.onReady = { [weak self] port, shellVersion in
             shellLog("[native] sidecar ready（port=\(port) shellVersion=\(shellVersion)）")
+            // Phase 0：启动分段——sidecar ready 是控制面加载的关键前置。
+            shellLog(ShellPerf.bootLine("sidecarReady port=\(port)"))
             guard let self else { return }
             // P-02：ready.port 必须与壳即将加载的控制面 URL 端口一致；不一致
             // = 控制面实际在别的 origin（白窗 + A 桥全拒）。绝不静默加载错

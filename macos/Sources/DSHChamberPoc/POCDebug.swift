@@ -31,4 +31,11 @@ enum POCDebug {
         guard !(isPackaged ?? Self.isPackaged()) else { return false }
         return environment[environmentKey] == "1"
     }
+
+    /// 生产调用点缓存（Phase 2 C4）：环境在进程启动后不可变、Bundle/打包态
+    /// 判定同样稳定，故首次求值后复用。`isEnabled()` 每次调用都要构造
+    /// `ProcessInfo.environment` 字典并做 Bundle 路径 + 打包态判定，而
+    /// MainWindowController 的逐 invoke 调用点不该付这份成本。测试继续用上面
+    /// 的可注入重载；本值只服务生产/诊断调用点。
+    static let isEnabledCached = isEnabled()
 }
