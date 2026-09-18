@@ -22,7 +22,7 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleExecutable</key>
-    <string>DSHChamberPoc</string>
+    <string>dsh-chamber</string>
     <!-- W-24：build-swift-app 把 icon.icns 平移到 Contents/Resources；
          CFBundleIconFile 是 Dock/访达读取散装 .icns 的键（带扩展名），
          CFBundleIconName 是同一图标的 asset-catalog 名（本壳无 Assets.car，

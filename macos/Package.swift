@@ -4,21 +4,21 @@
 //  design 25 §3.2）
 //
 //  结构说明：
-//  - 单 executableTarget「DSHChamberPoc」（Sources/DSHChamberPoc）承载 P0 全部
+//  - 单 executableTarget「DSHChamber」（Sources/DSHChamber）承载 P0 全部
 //    Swift 代码：本窗口壳（main/AppDelegate/MainWindowController，W-03）与
 //    W-04 的 A/B 桥文件（BridgeShimInjector/MessageHandler/AnyCodable/
 //    FrameCodec/BridgeClient，其他作者创建）同 target，模块内直接互引共享契约。
-//  - resources 显式列出 .process("Resources/bridge-shim.poc.js")：只有 A 桥 shim
-//    随包编译为 DSHChamberPoc_DSHChamberPoc.bundle（扁平）；运行时由
+//  - resources 显式列出 .process("Resources/bridge-shim.js")：只有 A 桥 shim
+//    随包编译为 DSHChamber_DSHChamber.bundle（扁平）；运行时由
 //    ChamberResources 定位（resourceURL → bundleURL → 可执行目录；**不用
 //    Bundle.module**——装配态 .app 与 dev `swift run` 两种布局都要覆盖，见
 //    ChamberResources.swift 头注释）。**不要**把 Resources/ 整目录 process：
 //    同目录的 chamber-bridge.stub.js 是 JS 侧锁步生成物（测试断言它在源码树里
 //    存在），没有任何运行期代码加载它，打进 bundle 只会多一份可被替换/审计的
 //    JS 资产（2026-12 P8）。
-//  - testTarget「DSHChamberPocTests」（Tests/DSHChamberPocTests，测试文件由
+//  - testTarget「DSHChamberTests」（Tests/DSHChamberTests，测试文件由
 //    主 agent 后续创建）直接依赖 executable target：SwiftPM 允许测试依赖
-//    executable（@testable import DSHChamberPoc，构建期加 -enable-testing，
+//    executable（@testable import DSHChamber，构建期加 -enable-testing，
 //    main.swift 顶层代码不干扰测试链接）。若日后需更强的模块隔离，可再拆出
 //    library target + 薄壳 executable，P0 从简即用本方案。
 //  - 零第三方依赖；仅系统框架 AppKit/WebKit/Foundation。
@@ -26,7 +26,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "DSHChamberPoc",
+    name: "DSHChamber",
     platforms: [
         // 最低系统下限 = macOS 14.4：原生壳用 OS WebKit，出货 bundle 在审批决策、
         // 用户提问/计划评审、PDF 预览构造路径直接调用 Promise.withResolvers（A3-1），
@@ -54,7 +54,7 @@ let package = Package(
             publicHeadersPath: "include"
         ),
         .executableTarget(
-            name: "DSHChamberPoc",
+            name: "DSHChamber",
             dependencies: [
                 .product(name: "Sparkle", package: "Sparkle"),
                 "DSHChamberWebKitSupport"
@@ -66,13 +66,13 @@ let package = Package(
                 "Resources/chamber-bridge.stub.js"
             ],
             resources: [
-                .process("Resources/bridge-shim.poc.js")
+                .process("Resources/bridge-shim.js")
             ]
         ),
         .testTarget(
-            name: "DSHChamberPocTests",
+            name: "DSHChamberTests",
             // 显式依赖 C target：测试直接 import DSHChamberWebKitSupport（不再靠传递可见性）。
-            dependencies: ["DSHChamberPoc", "DSHChamberWebKitSupport"]
+            dependencies: ["DSHChamber", "DSHChamberWebKitSupport"]
         )
     ]
 )

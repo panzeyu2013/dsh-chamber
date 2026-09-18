@@ -94,6 +94,6 @@ DSHChamberRefreshRatePreference DSHChamberPreferDisplayRefreshRate(WKPreferences
     // ——日志与事实不符。2026-12 三轮独立复核用 swizzling 构造出了这个窗口
     // （改完偏好再让 setter 抛：调用方记"SPI 不可用"而偏好已被改掉），因此本残余
     // **不是不可构造**，只是没有测试覆盖（测试需要在进程内换掉 objc 方法实现）。真正的证据
-    // 仍是 POC_DEBUG 的 [native-fps] A/B（S-48 实机三工况）。
+    // 仍是 DSH_CHAMBER_SHELL_DEBUG 的 [shell-fps] A/B（S-48 实机三工况）。
     return DSHChamberRefreshRatePreferenceState(preferences);
 }

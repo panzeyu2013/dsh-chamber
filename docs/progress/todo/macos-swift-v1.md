@@ -41,8 +41,8 @@
 |---|---|---|
 | W-01/W-02 | M0 决策包签核与文档同步 | §〇、design 25 §0.1 |
 | W-03 | Swift 壳脚手架（Package.swift / main / AppDelegate / MainWindowController） | design 25 §3.2、§8.1 |
-| W-04 | A 桥雏形（shim 注入 / MessageHandler / TrustGuard / bridge-shim.poc.js） | design 25 §4.4.1、§4.4.3 |
-| W-05 | 竖切（AnyCodable / FrameCodec / BridgeClient / poc-sidecar + 集成测试） | design 25 §4.4.2、§8.1 |
+| W-04 | A 桥雏形（shim 注入 / MessageHandler / TrustGuard / bridge-shim.js） | design 25 §4.4.1、§4.4.3 |
+| W-05 | 竖切（AnyCodable / FrameCodec / BridgeClient / sidecar-stub + 集成测试） | design 25 §4.4.2、§8.1 |
 | W-06…W-08 | P0 走查与门禁（G1–G5、C1/C2 判定） | design 25 §8.1 |
 | W-09/W-10 | core seam（node-edges / shell-core / IPC 面镜像与「core 禁 electron」门） | design 25 §4.1 |
 | W-11/W-12/W-13 | sidecar 入口与 stdio JSON-RPC（sidecar-entry / sidecar-ctx / bridge manifest 管道） | design 25 §3.2、§4.1 |
@@ -88,7 +88,7 @@ Electron 出问题 → 同 tag Swift 不单独发（防版本错位）；Win/Lin
 ### 7.1 风险登记（design 25 §9 R1–R13 的展开；措辞以 design 25 为准）
 
 - **R10 开发期双后端竞态**：Electron dev（17520 起探测）与 Swift dev 共享控制面起始端口族 → Electron 用
-  `DSH_CHAMBER_CP_PORT`、Swift 用 `POC_PORT` 钉死 + 双 userData（或先后启动）。
+  `DSH_CHAMBER_CP_PORT`、Swift 用 `DSH_CHAMBER_SHELL_PORT` 钉死 + 双 userData（或先后启动）。
 - **R11 Swift 侧人手单点**：壳 + 桥 + 护栏 ≈25–35 个 Swift 文件的长期维护面；缓解 = 护栏规则集中于单 target、
   XCTest 覆盖率门、Generated 产物减少手写面。
 - **R12 manifest 生成脚本解析脆弱性**：新写法（模板串/别名）会漏检 → 生成脚本复用 mirror 解析函数并加「通道数守恒」
@@ -105,7 +105,7 @@ Electron 出问题 → 同 tag Swift 不单独发（防版本错位）；Win/Lin
 | W4 打印/查找 | Cmd+P 弹系统打印对话框且内容合理；Cmd+F 若 dsh UI 未实现查找则 N/A（登记不视为失败） | 打印无对话框/空白 | N/A 不阻断；真失败按渲染差异排查 |
 | W5 字体/滚动/IME | 中文输入无吞字/乱序；长会话滚动无感卡顿；无方块字 | IME 丢字；滚动明显劣于 Electron；字体破损 | 归因 WebKit 渲染差异 → 按 W1 预算 |
 | W6 后台节流对 SSE/WS | 隐藏/失焦后 SSE/WS 心跳不断、恢复即时（≤现 Electron 语义） | 后台 WS 掉线且无法自动重连或恢复 >30s | 归因 WebKit 节流 → 改 keep-alive/唤醒补发（core 已具备） |
-| W7 刷新率三工况 | 打包态：插电 120fps；电池 + 低电量模式 60fps（系统级帧间隔 ×2）；60Hz 外接屏不回退 | 任一工况达不到，或启动日志与 `[native-fps]` 实测矛盾 | 归因（渲染侧偏好 vs 系统节流）；日志标「面板上限」时以 `[native-fps]` 实测为准；判据见 design 25 §5.1 / deviations S-48 |
+| W7 刷新率三工况 | 打包态：插电 120fps；电池 + 低电量模式 60fps（系统级帧间隔 ×2）；60Hz 外接屏不回退 | 任一工况达不到，或启动日志与 `[shell-fps]` 实测矛盾 | 归因（渲染侧偏好 vs 系统节流）；日志标「面板上限」时以 `[shell-fps]` 实测为准；判据见 design 25 §5.1 / deviations S-48 |
 
 ### 7.3 双端性能与产物体积验收协议（P0 预检 / M4–M5 定标）
 
@@ -148,6 +148,6 @@ D6 在 M3 入口定（24.18.1 + arm64-only）；D7 在 M4 出口复查（不做�
 ## 九、工具与 dev 侧约定
 
 - **ATS**：dev 态以 `NSAllowsLocalNetworking` 放行 loopback（生产同值）；WebView 只加载控制面 origin。
-- **dev 后端**：Swift dev 用 `POC_PORT` 钉死的控制面 + `dsh-chamber-poc-dev` userData（与 Electron dev 的
+- **dev 后端**：Swift dev 用 `DSH_CHAMBER_SHELL_PORT` 钉死的控制面 + `dsh-chamber-dev` userData（与 Electron dev 的
   `.dev-user-data` 隔离，见 `deviations.md` §3 P-10）。
 - **计划期工期估算**（三档人-日）与里程碑排期已随执行收口删除；量级与关键路径见 design 25 §0。

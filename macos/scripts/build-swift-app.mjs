@@ -3,13 +3,13 @@
  * build-swift-app.mjs —— Swift 原生壳 .app 打包（W-24；design 25 §3.2/§8.4）
  *
  * 产物布局（SwiftPM 可执行 + 资源包 + W-23 装配 sidecar）：
- *   <out>/DSHChamberPoc.app/Contents/
+ *   <out>/dsh-chamber.app/Contents/
  *     Info.plist                      ← macos/Info.plist.template（__VERSION__ 替换）
- *     MacOS/DSHChamberPoc             ← swift build -c release 产物
+ *     MacOS/dsh-chamber               ← swift build -c release 产物（SwiftPM target DSHChamber）
  *     Resources/
  *       icon.icns                     ← packages/desktop/resources/icon.icns（缺件 fail
  *                                       closed——G38：electron-builder 同样 fatal）
- *       DSHChamberPoc_DSHChamberPoc.bundle   ← SwiftPM 资源包（bridge-shim 等）；
+ *       DSHChamber_DSHChamber.bundle   ← SwiftPM 资源包（bridge-shim 等）；
  *         **必须放 Contents/Resources**（放 .app 根会被 codesign 判为未密封内容）
  *       sidecar/{node,sidecar.js,package.json,dist/…}   ← W-23 build-sidecar 产物
  *       dist/web/                     ← renderer 产物（可选；sidecar 静态伺服；
@@ -80,9 +80,14 @@ const macosDir = path.resolve(here, '..')
 const repoRoot = path.resolve(macosDir, '..')
 const desktopDir = path.join(repoRoot, 'packages', 'desktop')
 
-export const APP_NAME = 'DSHChamberPoc'
-/** SwiftPM 资源包名（target 名重复一次，见 Package.swift target DSHChamberPoc）。 */
-export const RESOURCE_BUNDLE_NAME = `${APP_NAME}_${APP_NAME}.bundle`
+/** 默认 .app 名与产物名（可见名；发布腿用 --app-name/--artifact-basename 显式覆盖）。 */
+export const APP_NAME = 'dsh-chamber'
+/** SwiftPM executable target / 模块名：构建产物 = .build/<config>/DSHChamber（T-17）。 */
+export const MODULE_NAME = 'DSHChamber'
+/** bundle 内可执行名（活动监视器/进程名）——与可见产品名同源。 */
+export const EXECUTABLE_NAME = APP_NAME
+/** SwiftPM 资源包名（target 名重复一次，见 Package.swift target DSHChamber）。 */
+export const RESOURCE_BUNDLE_NAME = `${MODULE_NAME}_${MODULE_NAME}.bundle`
 
 export function appLayout(outDir, appName = APP_NAME, artifactBasename = APP_NAME) {
   const appDir = path.join(outDir, `${appName}.app`)
@@ -95,7 +100,7 @@ export function appLayout(outDir, appName = APP_NAME, artifactBasename = APP_NAM
     macOsDir: path.join(contentsDir, 'MacOS'),
     resourcesDir,
     infoPlist: path.join(contentsDir, 'Info.plist'),
-    executable: path.join(contentsDir, 'MacOS', APP_NAME),
+    executable: path.join(contentsDir, 'MacOS', EXECUTABLE_NAME),
     // 资源包放 Contents/Resources（**不能放 .app 根**：codesign 会报
     // "unsealed contents present in the bundle root"；运行时由
     // ChamberResources 按 Bundle.main.resourceURL 定位——见该文件头注释）。
@@ -504,7 +509,7 @@ export function findNestedBundles(rootDir) {
       if (entry.isSymbolicLink() || !entry.isDirectory()) continue
       const full = path.join(dir, entry.name)
       // 只签真正的**代码** bundle：framework / xpc / app。SwiftPM 的
-      // RESOURCE_BUNDLE（DSHChamberPoc_DSHChamberPoc.bundle）是纯资源目录、
+      // RESOURCE_BUNDLE（DSHChamber_DSHChamber.bundle）是纯资源目录、
       // 没有 Info.plist，交给它签会得到 "bundle format unrecognized"（2026-12；
       // 该目录由主 app 的签名封存，历来不需要单独签）。
       if (/\.(framework|xpc|app)$/.test(entry.name)) {
@@ -618,7 +623,7 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
   if (!existsSync(entitlements)) throw new Error(`缺少 entitlements：${entitlements}`)
 
   const outputDir = buildOutputDir(options.config)
-  const binarySource = path.join(outputDir, APP_NAME)
+  const binarySource = path.join(outputDir, MODULE_NAME)
   const bundleSource = path.join(outputDir, RESOURCE_BUNDLE_NAME)
 
   if (options.dryRun) {

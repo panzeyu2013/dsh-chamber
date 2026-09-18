@@ -2751,7 +2751,7 @@ export async function buildHeadlessCtx(
       // 装配形态：--dsh-path = <sidecar>/vendor/dsh（build-sidecar 随包拷贝
       // package.json + pnpm-lock.yaml + pnpm-workspace.yaml），与 Electron 的
       // <resources|pkgDir>/vendor/dsh/pnpm-lock.yaml 是同一份锚。
-      // dev 形态：runbook 把 POC_DSH_PATH 指向 packages/desktop/vendor/dsh（同一
+      // dev 形态：runbook 把 DSH_CHAMBER_DSH_PATH 指向 packages/desktop/vendor/dsh（同一
       // 锚）；若有人把它指向源码线 ref-dsh，该树的锁文件带 opt-in 段会被 F 信任
       // 判据拒绝 ⇒ familyNames=null ⇒ 官方 scope 安装一律拒（保守降级、绝不按
       // 另一条线误判），这是有意的 fail-closed 行为而非路径错误。

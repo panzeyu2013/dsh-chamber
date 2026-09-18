@@ -323,7 +323,7 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
   （含 WS splice 的 `WebSocket stream <id> closed (<cause>, Nms)` 与
   `heartbeat lost …`）此前只交给注入的 logger（默认 console），而打包态从
   Finder/Dock 启动时 stdout/stderr 不落盘（实测 `log show --predicate
-  'process == "DSHChamberPoc"'` 无输出）⇒ 两类 flavor 的这条归因证据都等于丢失。
+  'process == "DSHChamber"'` 无输出）⇒ 两类 flavor 的这条归因证据都等于丢失。
   **落盘规格归 design 02 §3.8 拥有**（`<stateDir>/logs/control-plane.log`：JSONL、
   有界轮转、0700/0600 + 不跟随符号链接、写失败降级告警一次；控制面拥有 stateDir，
   故两 flavor 共用同一实现）；原生壳侧 sidecar stderr 的对应面归 design 25 §3.1
@@ -395,7 +395,7 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 （`test/session-state/session-fact-reconcile.test.ts`、`test/session-rows/completed-dots-signatures.test.ts`、
 `test/session-rows/workspace-membership.test.ts` 的回执投影边界）、`test:control-plane`
 （`test/log-file.test.ts`、`test/host-lifecycle/lifecycle.test.ts` 的落盘/reopen 端到端）、
-`verify:test-wiring`（**仓内全部 test manifest 必须登记在案**）、`test:swift`（NativeShellLogTests 全部用例，含新增的 sidecar 文件名/轮转名/落盘三条
+`verify:test-wiring`（**仓内全部 test manifest 必须登记在案**）、`test:swift`（ShellLogTests 全部用例，含新增的 sidecar 文件名/轮转名/落盘三条
 + CrossLanguageLockstepTests 的 sidecar sink 锁步）；
 手工清单：关窗 → 隧道存活 → 托盘恢复 → 退出确认（含**更新已下载时退出不弹
 确认**）→ 唤醒秒级重连 → 无窗口常驻期间 resume 补发 → **托盘缺失回退**

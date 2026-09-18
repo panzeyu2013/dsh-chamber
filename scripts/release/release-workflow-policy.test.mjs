@@ -212,7 +212,7 @@ assert.ok(swiftBuild.includes('codesign --verify --deep --strict --verbose=2 "$Z
   'codesign --verify must run on the app inside the zip')
 assert.ok(swiftBuild.includes('spctl --assess --type execute --verbose=4 "$ZIP_APP"'),
   'spctl must assess the app inside the zip')
-assert.ok(swiftBuild.includes('lipo -archs "$APP/Contents/MacOS/DSHChamberPoc"'),
+assert.ok(swiftBuild.includes('lipo -archs "$APP/Contents/MacOS/dsh-chamber"'),
   'the .app binary architecture must be asserted')
 assert.ok(swiftBuild.includes('lipo -archs "$APP/Contents/Resources/sidecar/node"'),
   'the bundled node architecture must be asserted')

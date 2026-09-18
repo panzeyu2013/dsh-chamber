@@ -24,7 +24,7 @@ const nodeBin = process.env.NODE_BIN ?? process.execPath
 const generator = path.join(dir, 'scripts', 'emit-bridge-manifest.mjs')
 const committedJson = readFileSync(path.join(dir, 'bridge-manifest.json'), 'utf8')
 const committedStub = readFileSync(
-  path.join(repoRoot, 'macos', 'Sources', 'DSHChamberPoc', 'Resources', 'chamber-bridge.stub.js'),
+  path.join(repoRoot, 'macos', 'Sources', 'DSHChamber', 'Resources', 'chamber-bridge.stub.js'),
   'utf8',
 )
 

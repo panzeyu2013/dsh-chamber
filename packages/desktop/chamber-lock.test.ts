@@ -197,7 +197,7 @@ test('⑦ 双 flavor 同根 lockstep：Swift 常量 == Electron identity 推导'
     'Electron userData 目录名 = app.getName()；改了 package.json identity 就必须同步 Swift 常量')
 
   const swiftSource = readFileSync(
-    path.join(repoRoot, 'macos', 'Sources', 'DSHChamberPoc', 'ChamberResources.swift'), 'utf8')
+    path.join(repoRoot, 'macos', 'Sources', 'DSHChamber', 'ChamberResources.swift'), 'utf8')
   const match = /func userDataDir\(home: String\) -> String \{\s*\n\s*home \+ "([^"]+)"/.exec(swiftSource)
   assert.ok(match, 'ChamberResources.swift 的 userDataDir 字面量形状变化——请同步本 lockstep 断言')
   assert.equal(match[1], `/Library/Application Support/${identity}`,

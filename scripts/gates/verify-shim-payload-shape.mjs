@@ -6,7 +6,7 @@
  *   - bridge-shim-surface.test.ts locks method names, channel names and the
  *     top-level 4+9 surface;
  *   - ipc-surface-mirror.test.ts locks two specific payloads (save/delete).
- * A payload drift between preload.cts (Electron) and bridge-shim.poc.js (Swift)
+ * A payload drift between preload.cts (Electron) and bridge-shim.js (Swift)
  * is then invisible: the Swift side would send `{ id }` where main now expects
  * `{ previousId }` and both suites stay green.
  *
@@ -131,7 +131,7 @@ export function makeNativeToken() {
  * Replace the token placeholder with a concrete token, mirroring
  * BridgeShimInjector.injectNativeToken: a source that still contains the
  * placeholder after replacement is a fail-closed injection bug.
- * @param {string} shimText - bridge-shim.poc.js source.
+ * @param {string} shimText - bridge-shim.js source.
  * @param {string} token - 32-hex token.
  * @returns {string} injected source.
  */
@@ -199,7 +199,7 @@ export function createShimHarness({ shimText, token = makeNativeToken(), onEnvel
       },
     },
   }
-  vm.runInContext(injectShimToken(shimText, token), sandbox, { filename: 'bridge-shim.poc.js' })
+  vm.runInContext(injectShimToken(shimText, token), sandbox, { filename: 'bridge-shim.js' })
   return api
 }
 
@@ -262,7 +262,7 @@ export function preloadApiBlock(preloadText, factory) {
 
 /**
  * Slice a shim namespace block: `  var <ns> = { ... }` up to the 2-space closer.
- * @param {string} shimText - bridge-shim.poc.js content.
+ * @param {string} shimText - bridge-shim.js content.
  * @param {string} namespace - namespace name.
  * @returns {string} block text.
  */
@@ -270,7 +270,7 @@ export function shimNamespaceBlock(shimText, namespace) {
   const match = String(shimText ?? '').match(
     new RegExp('^  var ' + namespace + ' = \\{([\\s\\S]*?)\\n  \\}', 'm'),
   )
-  if (match === null) throw new Error('bridge-shim.poc.js has no var ' + namespace + ' = { } block')
+  if (match === null) throw new Error('bridge-shim.js has no var ' + namespace + ' = { } block')
   return match[1]
 }
 
@@ -299,7 +299,7 @@ export function extractMemberSpans(blockText) {
 /** shim PUSH_EVENTS table → { CONSTANT: channel }. */
 export function shimPushEvents(shimText) {
   const match = String(shimText ?? '').match(/var PUSH_EVENTS = \{([\s\S]*?)\n  \}/)
-  if (match === null) throw new Error('bridge-shim.poc.js has no PUSH_EVENTS table')
+  if (match === null) throw new Error('bridge-shim.js has no PUSH_EVENTS table')
   const table = {}
   for (const line of match[1].split('\n')) {
     const row = line.match(/^ {4}([A-Za-z0-9_]+): '([^']+)',?$/)
@@ -484,7 +484,7 @@ export function comparePayloadShapes({ preloadText, shimText, manifest }) {
  * The preload call-site facts per namespace member, keyed `namespace.member`:
  * channel, invoke/push kind, and the payload shape as written after the channel.
  * @param {string} preloadText - preload.cts content.
- * @param {string} shimText - bridge-shim.poc.js content (PUSH_EVENTS table).
+ * @param {string} shimText - bridge-shim.js content (PUSH_EVENTS table).
  * @returns {Map<string, { channel: string, kind: 'invoke' | 'push', shape: object }>} facts.
  */
 export function preloadMemberCalls(preloadText, shimText) {
@@ -710,7 +710,7 @@ export async function assertShimReinjectionNoop({ shimText, token = makeNativeTo
     resolve: harness.sandbox.__dshChamberResolve,
     surface: harness.surface(),
   }
-  vm.runInContext(injectShimToken(shimText, token), harness.sandbox, { filename: 'bridge-shim.poc.js' })
+  vm.runInContext(injectShimToken(shimText, token), harness.sandbox, { filename: 'bridge-shim.js' })
   await new Promise((resolveTick) => setImmediate(resolveTick))
   const second = {
     envelopes: harness.envelopes.length,
@@ -738,7 +738,7 @@ function read(file) {
 
 async function main() {
   const preloadText = read('packages/desktop/preload.cts')
-  const shimText = read('macos/Sources/DSHChamberPoc/Resources/bridge-shim.poc.js')
+  const shimText = read('macos/Sources/DSHChamber/Resources/bridge-shim.js')
   let verdict
   try {
     verdict = comparePayloadShapes({

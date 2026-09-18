@@ -77,7 +77,7 @@
 | 来源 | 发现 | 处置 |
 |---|---|---|
 | A1/A2/A11 | "4 个文件依赖 Electron"笔误；23.5k/21k 行口径高估 | §0/§4.2 口径（P1 拆分后重测）：真实依赖 Electron 4 文件（main.ts/electron-edges.ts/preload.cts/updater.ts）≈6.7k——打磨轮当时为 3 文件（electron-edges.ts 是 P1 新 seam）；纯 Node 业务模块零 import（electron-free-gate 传递闭包） |
-| A3 | "port 从 17500 起试"与现状不符 | §3.3 改：**打包固定 17500 无退避**（`shell-core.ts:426-441` 的 resolveControlPlanePort）；dev 从 17520 起 bind 探测首个空闲端口（200 个候选），或按 `POC_PORT` > `DSH_CHAMBER_CP_PORT` 钉死（Swift 侧 ControlPlanePort.swift）；控制面 EADDRINUSE 即失败；**dsh 实例**从 17510 起 +1 ≤5 次 |
+| A3 | "port 从 17500 起试"与现状不符 | §3.3 改：**打包固定 17500 无退避**（`shell-core.ts:426-441` 的 resolveControlPlanePort）；dev 从 17520 起 bind 探测首个空闲端口（200 个候选），或按 `DSH_CHAMBER_SHELL_PORT` > `DSH_CHAMBER_CP_PORT` 钉死（Swift 侧 ControlPlanePort.swift）；控制面 EADDRINUSE 即失败；**dsh 实例**从 17510 起 +1 ≤5 次 |
 | A4 | Supervisor backoff 误引 "5×500ms"（那是 renderer-ready 握手语义） | §3.3 改：sidecar 重启退避另立；renderer 恢复 = 500ms 延迟 + 60s 窗口 ≤3 次 + 15s unresponsive（main.ts:1178-1267）参数化 |
 | A5/4.3 | spawn-dsh 纯 Node 分支有 basename 门；Electron 分支另带 --expose-internals | §4.3 写明基名约束 + 解析断言测试；Swift 捆绑 `Resources/sidecar/node` 即满足 |
 | A6 | "13 命名空间"实为 4 标量 + 9 命名空间 | §4.4.1 全篇改口径（companion 同） |
@@ -109,7 +109,7 @@
 | E1 | §7 v1 降级用 idle\|error 会让 UI 永不出现入口且显示失败态 | 改用现成 **blocked-available 形态**：真实 check（对比 GitHub Releases，复用 updater.ts 纯函数）→ phase='available' + releaseUrl + installBlockedReason='原生壳不支持自动安装'；update-restart 显式错误 |
 | E2 | 共享 renderer 缺 shell-flavor 判别字段（platform 同为 darwin） | 字段已落地（`main.ts:3858` 载荷带 `flavor`，镜像面仍 4 标量）；**UI 能力门最终由 `installBlockedReason`/原生能力位驱动，renderer 未消费 flavor**（零消费者，保留字段不加条件） |
 | E7 | W6 应注明无 backgroundThrottling 等价物 | §8.5 W6 注（同 C1） |
-| E8 | shim 是第三处通道面，手写会漂移 | manifest 产出 Swift 枚举 + `Resources/chamber-bridge.stub.js` 锁步样本（不随 .app 打包）；真正注入的 `bridge-shim.poc.js` 由 `bridge-shim-surface.test.ts` 对 preload 面逐命名空间锁步 |
+| E8 | shim 是第三处通道面，手写会漂移 | manifest 产出 Swift 枚举 + `Resources/chamber-bridge.stub.js` 锁步样本（不随 .app 打包）；真正注入的 `bridge-shim.js` 由 `bridge-shim-surface.test.ts` 对 preload 面逐命名空间锁步 |
 
 ## 1. 背景、目标与非目标
 
@@ -203,10 +203,14 @@ dsh-chamber desktop 的 Electron 使用面已收敛为薄壳（AGENTS.md 运行�
   门禁断言该串；不重定向则 B 桥首发即撞非协议行）；fail-loud 只针对重定向
   后的意外泄漏；stderr 是唯一日志通道（落 `~/Library/Logs/` 或
   userData/logs）。**sidecar stderr 的透传行另有一份独立有界落盘**：
-  `<userData>/logs/sidecar.log`（`NativeShellLog.sidecar.configureSidecar` +
+  `<userData>/logs/sidecar.log`（`ShellLog.sidecar.configureSidecar` +
   `BridgeClient.sidecarLogSink`；**规格**：单文件 256 KiB、单份轮转
   `sidecar.log.1`（轮转名按实例文件名派生）、目录 0700 / 文件 0600、写失败静默退
   stdout——与 design 02 §3.8 的控制面 sink 同一种权限纪律，但保留量更小）。
+  **壳自身日志**：`<userData>/logs/shell.log`（`ShellLog.shared`，同一 256 KiB /
+  单份轮转 `.1` / 0700-0600 纪律）——启动、sidecar spawn/退出、导航失败、更新相位
+  与退出链关键行经 `shellLog` 同写，是 T-25「原生壳本地 dump」的主角（2026-09 统一
+  名称时由 `native-shell.log` 改名，见 deviations T-17）。
   **两条链的关系（2026-12 复核修正）**：控制面 `<stateDir>/logs/control-plane.log`
   是 WS splice 归因行的**权威**去向，**两个 flavor 都有**（`createControlPlane` 无条件
   包装，02 §3.8 明说共用实现）；`sidecar.log` 是原生壳的**兜底**——它额外覆盖控制面
@@ -232,13 +236,13 @@ dsh-chamber desktop 的 Electron 使用面已收敛为薄壳（AGENTS.md 运行�
 ```
 macos/                          # SwiftPM 可执行包（或 xcodeproj）
   Package.swift
-  Sources/DSHChamberPoc/…        # 可执行 target（P0 从简；AppKit 壳 + A 桥/B 桥 + 宿主腿同 target，
+  Sources/DSHChamber/…        # 可执行 target（P0 从简；AppKit 壳 + A 桥/B 桥 + 宿主腿同 target，
                                  #  product 化拆 target 未排期——见 Package.swift 头注释）
   Sources/DSHChamberWebKitSupport/… # 静态 C support target（§5.1：关 WebKit prefer-60fps 偏好）
                                  #  ——不是 product 化拆 target，目标文件链进同一可执行文件
-  Sources/DSHChamberPoc/Generated/BridgeManifest.swift   # 构建脚本生成（随提交，防漂移）
+  Sources/DSHChamber/Generated/BridgeManifest.swift   # 构建脚本生成（随提交，防漂移）
   Tests/…                        # XCTest（信封解析、护栏、监督、协议）
-  Resources/bridge-shim.poc.js   # A 桥注入 shim 真身（bridge-shim-surface 锁步）
+  Resources/bridge-shim.js   # A 桥注入 shim 真身（bridge-shim-surface 锁步）
   Resources/chamber-bridge.stub.js # manifest 生成物（锁步样本，不随 .app 打包）
   Info.plist.template / entitlements*.plist # W-24 渲染/签名输入
   Resources/                     # 其余运行时占位（sidecar 由构建脚本拷入）
@@ -290,8 +294,8 @@ dist/dsh-chamber-seed-*/, vendor/dsh/, pnpm/}`。
   后才落盘（摘要来源 = 仓库固定表，见 §4.3）。
 
 **`.app` 装配（W-24 定稿，`macos/scripts/build-swift-app.mjs`）**：
-`<App>.app/Contents/{Info.plist, MacOS/DSHChamberPoc, Resources/{icon.icns,
-DSHChamberPoc_DSHChamberPoc.bundle, sidecar/, dist/web}}`。三条实跑约束：
+`<App>.app/Contents/{Info.plist, MacOS/dsh-chamber, Resources/{icon.icns,
+DSHChamber_DSHChamber.bundle, sidecar/, dist/web}}`。三条实跑约束：
 - **SwiftPM 资源包必须放 `Contents/Resources`**：放 .app 根会被 codesign 判为
   「unsealed contents present in the bundle root」；SwiftPM 生成的
   `Bundle.module` 访问器只查 `Bundle.main.bundleURL`（= .app 根）与构建目录，
@@ -317,7 +321,7 @@ DSHChamberPoc_DSHChamberPoc.bundle, sidecar/, dist/web}}`。三条实跑约束�
 2. Supervisor：spawn `node sidecar.js`；sidecar 自行完成今日 main.ts 的启动
    职责（目录锁在 sidecar 内复验但不二次 flock）→ `createControlPlane`
    （**端口由 Swift 宿主解析后以 `--port` 注入**：打包态固定 17500、无退避
-   （main.ts:253-281，EADDRINUSE 即 loud 失败）；dev 态按 `POC_PORT` >
+   （main.ts:253-281，EADDRINUSE 即 loud 失败）；dev 态按 `DSH_CHAMBER_SHELL_PORT` >
    `DSH_CHAMBER_CP_PORT` > 17520 起 bind 探测首个空闲端口（200 个候选；
    ControlPlanePort.swift）；**dsh 实例端口从 17510 起 +1 ≤5 次**——05
    §3.3 注）→ pre-spawn 本地实例 → 输出 **ready 帧最小化 {port,
@@ -475,13 +479,13 @@ interface HostEdges {
   **4 个 info 标量（controlPlaneUrl/dshVersion/version/platform）+ 9 个
   命名空间面（desktopSsh/update/settings/systemResume/openIn/deepLink/
   runtime/notifications/badge）**（preload.cts:888-925；合计 60 invoke + 8
-  订阅）。Swift 注入 `bridge-shim.poc.js`（WKUserScript、.page world、
+  订阅）。Swift 注入 `bridge-shim.js`（WKUserScript、.page world、
   documentStart；资源名 = MainWindowController.swift:42）定义同形 API：
   - **挂出时机（D1，已按实现收敛）**：documentStart 定义内部管路（resolve/emit/
     rehydrate，带窗口随机令牌），**`dsh-chamber:info` 成功后**才暴露 `dshChamber`
     面；info 未就绪/失败期间 invoke 回 `ipc_not_ready`（1 次 + 10 次 50ms 重试），
     渲染端走既有 surface 缺失链自愈。全败分支与 preload 同形（surface 在、标量
-    null）——即 preload「先 info 后 expose」的真正等价物（bridge-shim.poc.js、
+    null）——即 preload「先 info 后 expose」的真正等价物（bridge-shim.js、
     BridgeShimInjector.swift；G22/T-12 有对应门禁与登记）。
   - 方法面：按 manifest 生成 `dshChamber.<ns>.<method>(args)` →
     postMessage({id, method, payload})，以 id 关联 Promise（含 info 的
@@ -538,7 +542,7 @@ interface HostEdges {
   `ipc-surface-mirror.test.ts` 锁步**通道名字符串集合 + 类型/字段镜像**；
   `packages/desktop/scripts/emit-bridge-manifest.mjs` 解析三处 main 侧注册点，
   产出提交物 `packages/desktop/bridge-manifest.json`（**通道 + 方向
-  invoke|push + IPC_CHANNELS 键**）→ 生成 `macos/Sources/DSHChamberPoc/Generated/
+  invoke|push + IPC_CHANNELS 键**）→ 生成 `macos/Sources/DSHChamber/Generated/
   BridgeManifest.swift`（提交物）与 `Resources/chamber-bridge.stub.js`（提交物；
   **不进 Swift target、不随 .app 打包**，仅作锁步样本，见 `Package.swift`
   的 `exclude`）。**命名空间归属不由 manifest 承载**：preload/shim 暴露面是
@@ -663,8 +667,8 @@ Electron/Chromium flavor 是 120fps。实测（M5 Pro / 内置 3024×1964 120Hz 
   低电量模式（系统设置 > 电池）。壳只如实写日志，不假装消除。**用户裁决（2026-12）**：确认为
   系统级限制（WebKit 在 WebContent 进程内直读系统状态、应用侧无出口），按 accepted 登记差异，
   **不追求注入 bundle 覆盖原型**（唯一候选与其代价见 Rejected alternatives 第 5 条）。
-- **POC_DEBUG 帧率观测**：`POC_DEBUG=1` 时注入 rAF 计数（每 2s 一行 `[native-fps]`，走既有
-  pocConsole 回传）；缺省 / 打包态不注入（S14/T-11 调试面纪律不变）。
+- **DSH_CHAMBER_SHELL_DEBUG 帧率观测**：`DSH_CHAMBER_SHELL_DEBUG=1` 时注入 rAF 计数（每 2s 一行 `[shell-fps]`，走既有
+  shellConsole 回传）；缺省 / 打包态不注入（S14/T-11 调试面纪律不变）。
 
 **Rejected alternatives**（本决策的备选与其被否原因）：
 
@@ -690,7 +694,7 @@ Electron/Chromium flavor 是 120fps。实测（M5 Pro / 内置 3024×1964 120Hz 
    （实测 Chromium 不受该策略影响），但超出 design 25 路线 A（WKWebView 壳 + 复用官方前端）的定义，
    工程量与发布/签名面代价巨大——**移出本决策范围**；电池场景的替代品是 Electron flavor。
 
-**启动日志（唯一对照口径）**：`[native] 刷新率：显示器刷新率 120fps（当前模式）；prefer-60fps
+**启动日志（唯一对照口径）**：`[shell] 刷新率：显示器刷新率 120fps（当前模式）；prefer-60fps
 偏好=已关闭(跟随显示器刷新率)；低电量模式=开 → 页面更新上限约 60fps（…）`——由
 `RefreshRatePolicy.startupLogLine` 产出。刷新率取**窗口所在屏的当前模式**
 （`CGDisplayCopyDisplayMode`；取不到时回落面板上限 `NSScreen.maximumFramesPerSecond` 并在日志里
@@ -698,14 +702,14 @@ Electron/Chromium flavor 是 120fps。实测（M5 Pro / 内置 3024×1964 120Hz 
 display link 初始化时只缓存一次，取不到时回落 60），建窗后立即
 记一次，并在换屏 / 屏幕参数变化（同屏改刷新率）/ 低电量模式切换 / 首次获得 key（上屏兜底）时按值去重补记
 （`MainWindowController.logRefreshRateIfChanged`；低电量通知在全局队列投递，处理器回主线程）。
-三个实测点为单次实机记录、**探针未入库**（复测方式 = 打包态 `POC_DEBUG=1` 的 `[native-fps]`）。
+三个实测点为单次实机记录、**探针未入库**（复测方式 = 打包态 `DSH_CHAMBER_SHELL_DEBUG=1` 的 `[shell-fps]`）。
 `RefreshRatePolicyTests` 钉住 60/120/30 三个实测点、上游整数除法折算、接线时序（apply 先于
 `WKWebView` 构造）与 SPI 不可用时的诚实降级（unknown 按 WebKit 默认折算，绝不虚报 120）。
 注意：同屏改刷新率时 WebKit 是否重读 nominal 未证实（DisplayLink 名义周期只在初始化取一次），
-该场景的验收以 `[native-fps]` 实测为准，别只对日志。
+该场景的验收以 `[shell-fps]` 实测为准，别只对日志。
 
 **验收（未完成）**：插电 120fps、电池 + 低电量模式 60fps、60Hz 外接屏不回退；日志标「面板上限」
-（模式读数取不到时的回落）或界面为 100Hz 类非整数倍屏时，判定以 `[native-fps]` 实测为准，
+（模式读数取不到时的回落）或界面为 100Hz 类非整数倍屏时，判定以 `[shell-fps]` 实测为准，
 别只对日志。见 STATUS.md 与 deviations.md S-48。
 
 ### 5.2 视口越界（根级弹性回弹）与壳侧策略
@@ -753,8 +757,8 @@ macOS WebKit 在**视口层**实现弹性越界：指针停在不可滚动的 ch
   已按 `isPackaged` 解析——装配态 userData =
   `~/Library/Application Support/@dsh-chamber/desktop`（与 Electron
   `app.getPath('userData')` 同根，见 §6.1 的实根推导），node/sidecar/vendor-dsh/
-  web-dist 全部 bundle-relative；`POC_*` 环境变量仍优先，dev 态保持
-  `dsh-chamber-poc-dev` 隔离。**代码侧已闭合**（`PackagedLayoutTests` +
+  web-dist 全部 bundle-relative；`DSH_CHAMBER_SHELL_*` 环境变量仍优先，dev 态保持
+  `dsh-chamber-dev` 隔离。**代码侧已闭合**（`PackagedLayoutTests` +
   `chamber-lock.test.ts` ⑦ 跨语言 lockstep），残余仅为实机双 flavor 并发互斥的
   **C2 实机门禁**——注意互斥成立的前提是 Electron 侧**装的是含锁的构建**
   （2026-09 实测：本机 /Applications 内的旧构建无 `chamber-lock`，因此不会持锁）。
@@ -818,7 +822,7 @@ macOS WebKit 在**视口层**实现弹性越界：指针停在不可滚动的 ch
 
 - Electron 版维持 electron-updater（GitHub provider、zip target）不动。
 - **Swift 版更新链 = Sparkle 2（2026-12 用户裁决「D-1 选 B」，取代原 v1
-  blocked-available）**：壳内 `AppUpdater`（`macos/Sources/DSHChamberPoc/AppUpdater.swift`）
+  blocked-available）**：壳内 `AppUpdater`（`macos/Sources/DSHChamber/AppUpdater.swift`）
   持一个 `SPUStandardUpdaterController`，承担**检查 → 下载 → 重启并安装**。安装必须由
   bundle 外的 helper 完成（运行中的 .app 不能覆盖自己），更新包来源用 **EdDSA 公钥**
   （`SUPublicEDKey`）鉴权——注意它与 Developer ID 签名/公证是两件事：后者是分发信任，
@@ -908,13 +912,13 @@ macOS WebKit 在**视口层**实现弹性越界：指针停在不可滚动的 ch
 
 ### 8.1 P0 POC（1–2 人周）——先证伪再立项
 
-> P0 代码面已交付（`macos/` 壳 + `bridge-shim.poc.js` + B 桥 + dev 直跑
+> P0 代码面已交付（`macos/` 壳 + `bridge-shim.js` + B 桥 + dev 直跑
 > `sidecar-entry.ts`）；G1 经用户实机目测确认，**G2–G5 与 C1/C2 的实机判定
 > 仍开放**（STATUS 登记）。以下保留门定义与判据。
 
 1. `macos/` 最小壳：WKWebView 加载控制面 origin 的壳文档（`/`）；dev 后端 =
    `sidecar-entry.ts`（standalone/cli serve **不接 webDistDir**，故不经它们；
-   `POC_*` 环境可覆盖 userData/port/dsh path）。
+   `DSH_CHAMBER_SHELL_*` 环境可覆盖 userData/port/dsh path）。
 2. A 桥 shim 接通代表通道：`info`、`desktop_ssh_instances_get`、
    `desktop_ssh_status_changed` 推送；通知 click 走真实回环。shim 挂出时机的
    D1 判决见 §4.4.1（方案②：documentStart 预定义 + ready 前统一拒绝）。
@@ -990,7 +994,7 @@ node 集成测试拉起 Swift harness 断言真实窗口/桥，loopback-http-tes
 （W1 剪贴板、W2 菜单快捷键、W3 富文本粘贴与拖拽、W4 打印/查找、W5 字体/
 滚动/IME、W6 后台节流对 SSE/WS——**无 backgroundThrottling 等价物（C1）**、
 W7 刷新率三工况（插电 120fps / 电池 + 低电量模式 60fps / 60Hz 外接屏不回退；判据见 §5.1、
-登记 deviations S-48；100Hz 类非整数倍屏不在三工况内，以 `[native-fps]` 实测为准），
+登记 deviations S-48；100Hz 类非整数倍屏不在三工况内，以 `[shell-fps]` 实测为准），
 判定标准见 todo companion §七）；性能测量方法与同环境 A/B 纪律见 `scripts/perf/README.md` + **双端
 性能/产物体积验收协议**（companion §七：相对门/绝对预算/能力门三形态、注入式探针
 平移四场景、M5 双端同 tag 产物并排入库——.app/dmg/zip 体积目标 ≤ Electron × 0.75）。
@@ -1029,7 +1033,7 @@ W7 刷新率三工况（插电 120fps / 电池 + 低电量模式 60fps / 60Hz �
 - R9 维护负担：Swift 壳新增一门语言/一条 macOS CI；需有人持续负责 Swift 侧。
 - R10 开发期双后端竞态：Electron dev 与 sidecar dev 共享 cp 端口族 → 各自
   退避 + 端口钉死 + 独立 .dev-user-data（详见 companion）。
-- R11 Swift 侧人手单点：护栏规则集中 DSHChamberPoc 单 target + Generated
+- R11 Swift 侧人手单点：护栏规则集中 DSHChamber 单 target + Generated
   产物减少手写面。
 - R12 manifest 解析脆弱性：正则扫字面量会漏新写法 → 复用 mirror 解析函数 +
   通道数守恒断言（68=60+8）。

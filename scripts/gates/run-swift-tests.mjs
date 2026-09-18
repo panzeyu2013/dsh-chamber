@@ -15,9 +15,9 @@
  *
  * Environment discipline: the Swift integration tests spawn
  * `node packages/desktop/sidecar-entry.ts` (the 8 XCTSkip sites). When
- * POC_NODE_BIN is absent the runner points it at the node running this gate, so
+ * DSH_CHAMBER_SHELL_NODE_BIN is absent the runner points it at the node running this gate, so
  * the integration cases actually run instead of skipping. An explicit-but-broken
- * POC_NODE_BIN still hard-fails inside the Swift tests themselves.
+ * DSH_CHAMBER_SHELL_NODE_BIN still hard-fails inside the Swift tests themselves.
  *
  * Usage:
  *   node scripts/gates/run-swift-tests.mjs            # gate (exit 1 on any skip/failure)
@@ -37,7 +37,7 @@ import { fileURLToPath } from 'node:url'
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 
 /** Explicit node override consumed by the Swift integration tests. */
-export const NODE_BIN_ENV = 'POC_NODE_BIN'
+export const NODE_BIN_ENV = 'DSH_CHAMBER_SHELL_NODE_BIN'
 
 /** Swift package path relative to the repository root. */
 export const SWIFT_PACKAGE_PATH = 'macos'
@@ -68,10 +68,10 @@ export function swiftTestArgs(packagePath = SWIFT_PACKAGE_PATH) {
 }
 
 /**
- * Environment for the swift child: the caller's environment plus a POC_NODE_BIN
+ * Environment for the swift child: the caller's environment plus a DSH_CHAMBER_SHELL_NODE_BIN
  * default. An explicitly configured value is never overwritten.
  * @param {NodeJS.ProcessEnv} env - the parent environment.
- * @param {string} nodeExecPath - value to use when POC_NODE_BIN is absent/empty.
+ * @param {string} nodeExecPath - value to use when DSH_CHAMBER_SHELL_NODE_BIN is absent/empty.
  * @returns {NodeJS.ProcessEnv} child environment.
  */
 export function swiftTestEnvironment(env = process.env, nodeExecPath = process.execPath) {
@@ -175,4 +175,5 @@ function main() {
 
 const isEntry = process.argv[1] !== undefined
   && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))
-if (isEntry) process.exit(main())
+// process.exit 会丢掉管道尾部（runner 自己的摘要行）；用 exitCode 让事件循环自然退出（R5 复核发现）。
+if (isEntry) process.exitCode = main()

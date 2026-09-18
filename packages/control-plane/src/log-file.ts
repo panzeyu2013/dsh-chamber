@@ -8,8 +8,9 @@
  * `heartbeat lost after N unanswered ping(s)`——它们区分「实例判死 / 浏览器腿
  * 消失 / 代理自身心跳拆链」。但控制面此前只把日志交给注入的 logger（默认
  * console）：打包态从 Finder/Dock 启动时 stdout/stderr 不落盘（实测
- * `log show --predicate 'process == "DSHChamberPoc"'` 无输出），Electron 主进程
- * 同理——两类 flavor 的这条证据都等于丢失，事故只能靠猜。
+ * `log show --predicate 'process == "dsh-chamber"'`（Swift 壳）与
+ * `process == "dsh-chamber-electron"`（Electron 主进程）都取不到）——两类 flavor
+ * 的这条证据都等于丢失，事故只能靠猜。
  *
  * ## 位置与纪律
  *
@@ -20,7 +21,7 @@
  * - **有界**：单文件 `maxBytes`（默认 2 MiB），轮转保留 `files` 份
  *   （默认 3 份：`.log`、`.1`、`.2`）；
  * - **fail-soft**：目录创建失败、写失败、轮转失败一律只告警一次并降级为
- *   不落盘——日志绝不阻断控制面（与 sidecar/NativeShellLog 同纪律）；
+ *   不落盘——日志绝不阻断控制面（与 sidecar/ShellLog 同纪律）；
  * - **不脱敏的边界**：这里只是控制面自己的日志（不含凭据；秘密面契约见
  *   design 05 §8 / 17 §8 不变）。调用方仍不得把凭据写进日志。
  */
@@ -148,7 +149,7 @@ export function createControlLogSink(options: {
   }
   /**
    * 目录纪律（**每次开句柄前都查**，不只构造期）：0700 创建 + 目录本身 no-follow。
-   * 与同 stateDir 的 host-logs.ts（design 02 §3.8）和原生壳 NativeShellLog
+   * 与同 stateDir 的 host-logs.ts（design 02 §3.8）和原生壳 ShellLog
    * （0600/0700）同一纪律。文件级 O_NOFOLLOW 只保护最后一段，若 logs/ 是指向
    * 别处的符号链接，mkdirSync(recursive) 会接受它，随后把日志写进攻击者选定的
    * 目录（对照 host-logs.ts 同族检查）。2026-12 复核修正：reopen()/start() 是生产

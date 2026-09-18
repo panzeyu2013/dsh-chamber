@@ -57,7 +57,7 @@ test('host 包清单五处同源：build-sidecar / control-plane 常量 / 构建
     'build-host-graph-package 的行集必须与 HOST_PACKAGES 同集且同序')
 
   // ⑤ Swift AppDelegate 的装配态注入行（flag + 包名）。
-  const appDelegate = [...read('macos/Sources/DSHChamberPoc/AppDelegate.swift').matchAll(
+  const appDelegate = [...read('macos/Sources/DSHChamber/AppDelegate.swift').matchAll(
     /\("(--host-[a-z-]+-dir)", "([^"]+)"\)/g,
   )].map(([, flag, name]) => ({ arg: flag.slice(2), name }))
   assert.deepEqual(appDelegate, HOST_PACKAGES.map(({ name, arg }) => ({ arg, name })),

@@ -13,7 +13,7 @@
  *  ③ 计划文本随开关变化；
  *  ④ --dry-run 子进程：模板/entitlements 就绪、不写盘；
  *  ⑤ 真实组装（--skip-build --skip-sidecar --no-sign --no-zip --no-dmg）：
- *     可执行位、资源包（只含 bridge-shim.poc.js）、Info.plist 版本/图标/ATS、图标；
+ *     可执行位、资源包（只含 bridge-shim.js）、Info.plist 版本/图标/ATS、图标；
  *  ⑥ sidecar 装配拷贝 + A5 基名反例 loud + 缺 node / node 无执行位 loud；
  *  ⑦ ad-hoc 签名 + codesign 校验通过（真实 codesign，无网络）；
  *  ⑧ codesignArgs argv 顺序（ad-hoc/hardened 分支互斥、identity 紧跟 --sign）；
@@ -31,6 +31,7 @@
  *     （*.map / .vite 不进 .app，规则与 Electron build.files 对齐）。
  */
 import {
+  after,
   test } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync,
@@ -53,6 +54,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   APP_NAME,
+  MODULE_NAME,
   RESOURCE_BUNDLE_NAME,
   STABLE_BUNDLE_SUFFIX,
   appLayout,
@@ -250,8 +252,9 @@ test('④ --dry-run 子进程：就绪校验、计划打印、不写盘、半配
     assert.match(stdout, /dry-run：计划校验通过/)
     assert.match(stdout, /sparkle-feed=https:\/\/github\.com\/o\/r\/releases\/latest\/download\/appcast-swift\.xml/)
     assert.match(stdout, /sparkle-channel=stable（releases\/latest）/, 'S-22：dry-run 计划必须标注通道')
-    assert.match(stdout, /zip=.*DSHChamberPoc\.zip/, 'dry-run 必须打印解析后的精确产物名')
-    assert.match(stdout, /dmg=.*DSHChamberPoc\.dmg/)
+    // 默认产物名与 APP_NAME 同源（统一名称后 = dsh-chamber）。
+    assert.match(stdout, new RegExp(`zip=.*${APP_NAME}\\.zip`), 'dry-run 必须打印解析后的精确产物名')
+    assert.match(stdout, new RegExp(`dmg=.*${APP_NAME}\\.dmg`))
     assert.ok(!stdout.includes('abc='), '公钥值不得回显')
     assert.ok(!existsSync(path.join(out, `${APP_NAME}.app`)), 'dry-run 不写盘')
     // 半配置 feed → 非零退出：CI 的 packaging dry run 真的校验计划，不再空跑。
@@ -408,13 +411,13 @@ test('⑤ 真实组装：可执行位 / 资源包 / Info.plist 版本 / 图标',
     assert.ok(existsSync(layout.executable), '可执行应存在')
     assert.ok((statSync(layout.executable).mode & 0o111) !== 0, '可执行位应保留')
     assert.ok(existsSync(layout.resourceBundle), 'SwiftPM 资源包应在 Contents/Resources')
-    assert.ok(existsSync(path.join(layout.resourceBundle, 'bridge-shim.poc.js')),
+    assert.ok(existsSync(path.join(layout.resourceBundle, 'bridge-shim.js')),
       '资源包内应含 A 桥 shim（SwiftPM 资源包为扁平目录）')
     // P8：chamber-bridge.stub.js 是 JS 锁步生成物，无运行期消费者——留在源码树
     // 供 JS 测试断言，但不得进 bundle。
     assert.ok(!existsSync(path.join(layout.resourceBundle, 'chamber-bridge.stub.js')),
       '无运行期消费者的 stub 不得打进 SwiftPM 资源包')
-    assert.ok(existsSync(path.join(macosDir, 'Sources', 'DSHChamberPoc', 'Resources', 'chamber-bridge.stub.js')),
+    assert.ok(existsSync(path.join(macosDir, 'Sources', 'DSHChamber', 'Resources', 'chamber-bridge.stub.js')),
       'stub 仍须留在源码树作为 JS 锁步产物')
     const plist = readFileSync(layout.infoPlist, 'utf8')
     const desktopPkg = JSON.parse(readFileSync(path.join(desktopDir, 'package.json'), 'utf8'))
@@ -608,7 +611,7 @@ test('⑩ sidecar 含逃出 bundle 的绝对符号链接 → 归一化后真实 
 })
 
 test('⑪ 架构：同宿主通过；--arch 反向 loud；.app 与 node 无交集 loud（P4）', async (t) => {
-  const binary = path.join(buildOutputDir('release'), APP_NAME)
+  const binary = path.join(buildOutputDir('release'), MODULE_NAME)
   if (!existsSync(binary)) {
     t.skip('缺少 swift build 产物（先 swift build -c release）')
     return
@@ -905,5 +908,17 @@ test('㉑ G40 dist/web 过滤：*.map 与 .vite/ 不进 .app（与 Electron buil
       '任意层级的 .vite 目录都不得进 .app')
   } finally {
     rmSync(out, { recursive: true, force: true })
+  }
+})
+
+// 打包套件每次运行都会为 mkdtemp 出的 .app 新增 LaunchServices 注册，而 lsregister 不会
+// 随目录删除自动回收（R3/R5 复核实测：一次运行就留下多条指向已删除路径的记录）。套件结束
+// 前定向注销本套件前缀的临时注册；`/Volumes/*` 卷路径记录无法用 -u 撤销（README 已登记）。
+after(() => {
+  const lsregister = '/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister'
+  const dump = spawnSync(lsregister, ['-dump'], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 })
+  if (dump.status !== 0 || typeof dump.stdout !== 'string') return
+  for (const match of dump.stdout.matchAll(/^ *path: *(\/private\/var\/folders\/[^ ]*dsh-swift-app-[^ ]*\.app) \(0x[0-9a-f]+\)$/gm)) {
+    spawnSync(lsregister, ['-u', match[1]], { encoding: 'utf8' })
   }
 })

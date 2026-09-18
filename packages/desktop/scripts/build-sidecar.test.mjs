@@ -547,7 +547,7 @@ test('⑨c 历史 tsc emit 目录被清掉（electron-builder 的 dist glob 不�
   try {
     const legacy = path.join(dir, 'dist', 'sidecar')
     mkdirSync(legacy, { recursive: true })
-    writeFileSync(path.join(legacy, 'poc-sidecar.js'), '// legacy emit\n')
+    writeFileSync(path.join(legacy, 'sidecar-stub.js'), '// legacy emit\n')
     clearLegacySidecarEmit(legacy)
     assert.equal(existsSync(legacy), false, '旧 emit 目录必须删除')
     clearLegacySidecarEmit(legacy) // 幂等：不存在也不炸

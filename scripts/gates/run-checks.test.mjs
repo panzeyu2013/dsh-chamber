@@ -155,15 +155,15 @@ test('swiftTestArgs pins the shipped release configuration (G23)', () => {
   assert.equal(args[args.indexOf('-c') + 1], 'release', 'G23: the shipped release configuration must be the tested one')
 })
 
-test('swiftTestEnvironment defaults POC_NODE_BIN without overwriting an explicit value', () => {
-  assert.equal(swiftTestEnvironment({}, '/usr/bin/node').POC_NODE_BIN, '/usr/bin/node')
-  assert.equal(swiftTestEnvironment({ POC_NODE_BIN: '' }, '/usr/bin/node').POC_NODE_BIN, '/usr/bin/node')
-  assert.equal(swiftTestEnvironment({ POC_NODE_BIN: '/opt/node' }, '/usr/bin/node').POC_NODE_BIN, '/opt/node')
+test('swiftTestEnvironment defaults DSH_CHAMBER_SHELL_NODE_BIN without overwriting an explicit value', () => {
+  assert.equal(swiftTestEnvironment({}, '/usr/bin/node').DSH_CHAMBER_SHELL_NODE_BIN, '/usr/bin/node')
+  assert.equal(swiftTestEnvironment({ DSH_CHAMBER_SHELL_NODE_BIN: '' }, '/usr/bin/node').DSH_CHAMBER_SHELL_NODE_BIN, '/usr/bin/node')
+  assert.equal(swiftTestEnvironment({ DSH_CHAMBER_SHELL_NODE_BIN: '/opt/node' }, '/usr/bin/node').DSH_CHAMBER_SHELL_NODE_BIN, '/opt/node')
 })
 
 test('parseSwiftTestReport takes the last XCTest summary and counts every skipped case', () => {
   const output = [
-    "Test Case '-[DSHChamberPocTests.X testSkipped]' skipped (0.001 seconds).",
+    "Test Case '-[DSHChamberTests.X testSkipped]' skipped (0.001 seconds).",
     '\t Executed 5 tests, with 0 failures (0 unexpected) in 1.0 (1.0) seconds',
     '\t Executed 7 tests, with 1 failures (0 unexpected) in 2.0 (2.0) seconds',
   ].join('\n')
@@ -281,7 +281,7 @@ test('the shipped preload/shim surfaces agree on every payload shape and stay ma
   const verdict = comparePayloadShapes({
     preloadText: readFileSync(join(REPO_ROOT, 'packages/desktop/preload.cts'), 'utf8'),
     shimText: readFileSync(
-      join(REPO_ROOT, 'macos/Sources/DSHChamberPoc/Resources/bridge-shim.poc.js'),
+      join(REPO_ROOT, 'macos/Sources/DSHChamber/Resources/bridge-shim.js'),
       'utf8',
     ),
     manifest: JSON.parse(readFileSync(join(REPO_ROOT, 'packages/desktop/bridge-manifest.json'), 'utf8')),
@@ -316,17 +316,21 @@ test('G34: a silently removed member fails the surface-total pin, not only a mis
   assert.deepEqual(assertSurfaceCounts(base), base)
   // An emptied namespace: the per-member comparison sees two matching (empty)
   // blocks; only the count pin notices the rows are gone.
+  // 期望文案从 EXPECTED_SURFACE 派生：此前写死的 67/59 与 68/60 的钉子漂移，
+  // 让这条守卫在两个数都对的时候反而报红（2026-09 统一名称时的复核修正）。
+  const expects = (label, got, want) => new RegExp(`G34.*${label} ${got} != ${want}`)
   const emptied = { ...base, members: base.members - EXPECTED_SURFACE.perNamespace.runtime,
     perNamespace: { ...base.perNamespace, runtime: 0 } }
-  assert.throws(() => assertSurfaceCounts(emptied), /G34.*runtime members 0 != 13/s)
+  assert.throws(() => assertSurfaceCounts(emptied),
+    expects('runtime members', 0, EXPECTED_SURFACE.perNamespace.runtime))
   assert.throws(() => assertSurfaceCounts({ ...base, members: base.members - 1 }),
-    /G34.*members 66 != 67/)
+    expects('members', EXPECTED_SURFACE.members - 1, EXPECTED_SURFACE.members))
   assert.throws(() => assertSurfaceCounts({ ...base, invoke: base.invoke - 1 }),
-    /G34.*invoke members 58 != 59/)
+    expects('invoke members', EXPECTED_SURFACE.invoke - 1, EXPECTED_SURFACE.invoke))
   assert.throws(() => assertSurfaceCounts({ ...base, push: base.push - 1 }),
-    /G34.*push members 7 != 8/)
+    expects('push members', EXPECTED_SURFACE.push - 1, EXPECTED_SURFACE.push))
   assert.throws(() => assertSurfaceCounts({ ...base, namespaces: base.namespaces - 1 }),
-    /G34.*namespaces 8 != 9/)
+    expects('namespaces', EXPECTED_SURFACE.namespaces - 1, EXPECTED_SURFACE.namespaces))
   assert.throws(() => assertSurfaceCounts({ ...base, perNamespace: { ...base.perNamespace, nope: 1 } }),
     /G34.*unexpected namespace nope/)
   // The runtime arm may omit the invoke/push split only when it did not observe it.
@@ -337,7 +341,7 @@ test('G34: a silently removed member fails the surface-total pin, not only a mis
 // Shim runtime arm (verify-shim-payload-shape.mjs; G22 residual)
 // ---------------------------------------------------------------------------
 
-const SHIM_SOURCE = readFileSync(join(REPO_ROOT, 'macos/Sources/DSHChamberPoc/Resources/bridge-shim.poc.js'), 'utf8')
+const SHIM_SOURCE = readFileSync(join(REPO_ROOT, 'macos/Sources/DSHChamber/Resources/bridge-shim.js'), 'utf8')
 const PRELOAD_SOURCE = readFileSync(join(REPO_ROOT, 'packages/desktop/preload.cts'), 'utf8')
 
 test('injectShimToken replaces the placeholder and rejects a malformed token', () => {
@@ -530,5 +534,9 @@ test('the REAL compiled Electron artifacts execute when present (loud skip other
   const verdict = await runElectronArtifactSmoke({ desktopDist: DEFAULT_DESKTOP_DIST })
   assert.equal(verdict.action, 'run')
   assert.ok(verdict.port > 0)
-  assert.ok(verdict.members >= 60, 'the real preload must expose the full bridge member set, not a stub')
+  // G34 产物臂（R3 复核发现）：`>= 60` 下限会让陈旧的 dist 在本机一路绿；改为与源面同一组
+  // 精确钉子比对。红时先跑 `pnpm --filter @dsh-chamber/desktop run build:preload` 刷新编译产物。
+  assert.equal(verdict.members, EXPECTED_SURFACE.members,
+    'the COMPILED preload must equal the pinned member total（陈旧 dist 先跑 '
+    + 'pnpm --filter @dsh-chamber/desktop run build:preload）')
 })

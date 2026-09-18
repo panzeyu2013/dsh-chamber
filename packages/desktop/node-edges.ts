@@ -109,7 +109,7 @@ export const HOST_INBOUND = {
 /** B 桥协议帧（行）字节上限，**双向**（入站门 P-01 / 出站门 P-02）。与 Swift 侧
  *  FrameCodec.maxFrameBytes / TrustGuard.maxMessageBytes 同值（4 MiB）——sidecar
  *  两侧门与跨语言锁步测试都读这一个常量；改值必须同步
- *  macos/Sources/DSHChamberPoc/FrameCodec.swift。出站侧的意义：一个 >4 MiB 的结果帧
+ *  macos/Sources/DSHChamber/FrameCodec.swift。出站侧的意义：一个 >4 MiB 的结果帧
  *  会把 Swift 侧 LineReader 推入溢出重同步并 fail-closed 作废全部未决请求
  *  （BridgeClient.processStdoutOutcome），故在源头对称拒绝。 */
 export const MAX_PROTOCOL_FRAME_BYTES = 4 * 1024 * 1024

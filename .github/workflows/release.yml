@@ -1228,7 +1228,7 @@ jobs:
                       dsh-chamber-seed-archive-cleanup dsh-chamber-seed-open-in; do
             test -f "$APP/Contents/Resources/sidecar/dist/$HOST/dist/index.js"
           done
-          test -f "$APP/Contents/Resources/DSHChamberPoc_DSHChamberPoc.bundle/bridge-shim.poc.js"
+          test -f "$APP/Contents/Resources/DSHChamber_DSHChamber.bundle/bridge-shim.js"
           test -f "$APP/Contents/Resources/dist/web/index.html"
           # 三审 #1/#2：打包态本地实例依赖内置 dsh 工作区与内嵌 pnpm。
           test -f "$APP/Contents/Resources/sidecar/vendor/dsh/package.json"
@@ -1236,7 +1236,7 @@ jobs:
           test -f "$APP/Contents/Resources/sidecar/pnpm/bin/pnpm.cjs"
           # P4：架构断言——build-sidecar 缺省 darwin-arm64 而 swift build 跟随
           # 宿主；两者不一致的 .app 能签名打包、运行时才崩。
-          APP_ARCHS="$(lipo -archs "$APP/Contents/MacOS/DSHChamberPoc")"
+          APP_ARCHS="$(lipo -archs "$APP/Contents/MacOS/dsh-chamber")"
           NODE_ARCHS="$(lipo -archs "$APP/Contents/Resources/sidecar/node")"
           echo "archs: app=$APP_ARCHS node=$NODE_ARCHS"
           [[ " $APP_ARCHS " == *" arm64 "* ]] || { echo "::error::native .app 不是 arm64：$APP_ARCHS"; exit 1; }
@@ -1260,7 +1260,7 @@ jobs:
           ZIP_APP="$EXTRACT/dsh-chamber.app"
           test -d "$ZIP_APP"
           codesign --verify --deep --strict --verbose=2 "$ZIP_APP"
-          [[ " $(lipo -archs "$ZIP_APP/Contents/MacOS/DSHChamberPoc") " == *" arm64 "* ]] \
+          [[ " $(lipo -archs "$ZIP_APP/Contents/MacOS/dsh-chamber") " == *" arm64 "* ]] \
             || { echo "::error::zip 内 .app 不是 arm64"; exit 1; }
           [[ " $(lipo -archs "$ZIP_APP/Contents/Resources/sidecar/node") " == *" arm64 "* ]] \
             || { echo "::error::zip 内捆绑 node 不是 arm64"; exit 1; }

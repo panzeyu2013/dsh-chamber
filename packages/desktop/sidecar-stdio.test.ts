@@ -869,7 +869,7 @@ test('P-01 入站帧 >4MiB 被 loud 拒绝且不解析；会话继续服务（�
 })
 
 test('P-01 跨语言锁步：TS 入站帧上限 = Swift FrameCodec.maxFrameBytes（4 MiB，按 UTF-8 字节）', () => {
-  const swiftPath = path.join(dir, '..', '..', 'macos', 'Sources', 'DSHChamberPoc', 'FrameCodec.swift')
+  const swiftPath = path.join(dir, '..', '..', 'macos', 'Sources', 'DSHChamber', 'FrameCodec.swift')
   const swift = readFileSync(swiftPath, 'utf8')
   const match = /public static let maxFrameBytes = ([0-9_]+) \* ([0-9_]+) \* ([0-9_]+)/.exec(swift)
   assert.ok(match !== null, 'FrameCodec.swift 的 maxFrameBytes 拼写必须可锁步（见 CrossLanguageLockstepTests.swift）')

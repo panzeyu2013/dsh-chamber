@@ -109,7 +109,7 @@
 2. `main.ts` / `preload.cts` 的传递 import 闭包不得指到 `scripts/`、`vendor/` 或
    未编译的 `node_modules/@dsh-chamber/control-plane/**`（见 §1、§2）。
 
-当前被收取的根级模块（**48 个**，2026-12 审计后全量核对；含 1 个仅被测试引用的惰性
+当前被收取的根级模块（**49 个**，2026-12 审计后全量核对；含 1 个仅被测试引用的惰性
 模块 `registry-password-commit.ts`，随 glob 进包但无运行引用）：
 
 `main.ts`、`preload.cts`、`control-plane-module.ts`、`ipc-events.ts`、
@@ -121,23 +121,23 @@
 `gateway-session.ts`、`gateway-sync-registry.ts`、`host-package-dirs.ts`、
 `node-edges.ts`、
 `notifications.ts`、`open-in.ts`、`owner-only-secret-file.ts`、`plugin-sync.ts`、
-`plugin-tarball.ts`、`poc-sidecar.ts`、`registry-password-commit.ts`、
+`plugin-tarball.ts`、`sidecar-stub.ts`、`registry-password-commit.ts`、
 `renderer-trust.ts`、`runtime-probe-detail.ts`、`sanitize-error.ts`、
-`shell-core.ts`、`sidecar-ctx.ts`、
+`shell-core.ts`、`sidecar-console-redirect.ts`、`sidecar-ctx.ts`、
 `sidecar-entry.ts`、`sidecar-exit-codes.ts`、`ssh-apply-rows.ts`、`ssh-config.ts`、
 `ssh-plugin-journal.ts`、`ssh-provider.ts`、`store-file-hygiene.ts`、
 `transport-manager.ts`、`transport-provider.ts`、`update-headless.ts`、`updater.ts`、
 `win-acl.ts`
 
 复核命令（与 glob 同义，扣除两条测试夹具 negate 与包根 `.test.ts`；**自检式**：
-输出必须等于上方名单的模块数，当前 **48**——名单与计数同改，任一漂移即红）：
+输出必须等于上方名单的模块数，当前 **49**——名单与计数同改，任一漂移即红）：
 
 ```sh
 count=$(ls -1 packages/desktop/*.ts packages/desktop/*.cts packages/desktop/*.mjs \
   | grep -vE '/(gateway-session-test-hooks|loopback-http-test-server)\.ts$' \
   | grep -vc '\.test\.ts$')
 echo "root-level collected modules: $count"
-test "$count" = 48 || { echo "STALE: 名单/计数需同步（见上方 48 个）"; exit 1; }
+test "$count" = 49 || { echo "STALE: 名单/计数需同步（见上方 49 个）"; exit 1; }
 ```
 
 **例外名单 = `build.files` 的 9 条 negate（勿删；顺序同 package.json）**：

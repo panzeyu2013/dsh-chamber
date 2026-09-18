@@ -98,8 +98,8 @@ test('the shipped allowlist stays empty unless a reviewer adds a justified entry
 test('parseSwiftTestTargets: default Tests/<name> path and explicit path', () => {
   const targets = parseSwiftTestTargets(`
         .testTarget(
-            name: "DSHChamberPocTests",
-            dependencies: ["DSHChamberPoc"]
+            name: "DSHChamberTests",
+            dependencies: ["DSHChamber"]
         ),
         .testTarget(
             name: "HelperTests",
@@ -108,7 +108,7 @@ test('parseSwiftTestTargets: default Tests/<name> path and explicit path', () =>
         )
 `)
   assert.deepEqual(targets, [
-    { name: 'DSHChamberPocTests', path: 'Tests/DSHChamberPocTests' },
+    { name: 'DSHChamberTests', path: 'Tests/DSHChamberTests' },
     { name: 'HelperTests', path: 'Tests/Custom' },
   ])
   assert.deepEqual(parseSwiftTestTargets('no test targets here'), [])
@@ -188,5 +188,5 @@ test('the shipped Swift corpus, manifest script and gate entry stay in lockstep'
     [],
   )
   const targets = parseSwiftTestTargets(readFileSync(join(repoRoot, 'macos/Package.swift'), 'utf8'))
-  assert.deepEqual(targets.map(target => target.name), ['DSHChamberPocTests'])
+  assert.deepEqual(targets.map(target => target.name), ['DSHChamberTests'])
 })

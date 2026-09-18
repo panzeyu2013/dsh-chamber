@@ -32,7 +32,7 @@
 - **宿主 cwd / 安装根（2026-09-17 实机事故，未修）**：宿主进程 cwd 落在打包 bundle 的 dsh 安装根（Swift 拼写 `…/sidecar/vendor/dsh`，Electron 为 `resourcesPath/vendor/dsh`；`packages/control-plane/src/spawn-dsh.ts:322,735-736`），该 bundle 被原地替换（dev 重装 / 自动更新）后旧 inode 被 unlink，`worker_threads` 共享 `process.cwd()` ⇒ 每个工具调用 `uv_cwd ENOENT`（session worktree 未被删，重启应用从新安装根起宿主后自愈）。修复三件（复核补充：**不是一行改**）：控制面 cwd 不落在可替换路径——但 dev 兜底以裸 `--import tsx/esm` 启动、Node 从 cwd 解析该裸说明符，全局改 cwd 会打断 dev 源码启动，须把说明符绝对化或只改装配态分支；worker 不依赖 `process.cwd()`（vendor 上游 → fork/补丁 + FORKS/C 门，按升级维护）；安装/更新原子化 + 运行中检测（宿主是 detached spawn，会活过控制面，替换前必须先停/重定宿主）。
 
 - **ProMotion / 120Hz 实机验收（未完成；口径与退役判据见 deviations S-48 / design 25 §5.1）**：
-  残余 = **打包态**三工况实机验收；另需确认 `POC_DEBUG=1` 的 `[native-fps]` 观测只在调试态
+  残余 = **打包态**三工况实机验收；另需确认 `DSH_CHAMBER_SHELL_DEBUG=1` 的 `[shell-fps]` 观测只在调试态
   出现（S14/T-11 调试面纪律）。
 
 - **gateway unit 登录环境真机门（2026-09-15，待 Linux 判）**：`write_unit` 无 `User=`、注入
@@ -325,12 +325,12 @@
   `App.tsx`、`measure-ui.mjs`、design 05 §4。
 
 - **Swift 原生壳性能整改的实机同环境 A/B 未闭合**（2026-12）：**启动 t0→首帧 / 大载荷 invoke p95 / 空闲 wakeups 的同环境 A/B 仍需打包态实例**（本机缺 node workspace 依赖，real-sidecar 集成用例环境阻塞）；本批次触达的桥热路径与空闲开销改动的实现契约散见对应源文件头注（信封尺寸门
-   Data 化、payload 单遍转换 + 深度上限、B 桥入站每行单次解析 + 严格判型、页面字面量单遍写出、POCDebug 启动期缓存、LineReader 游标化、
-   stderr 读取/环形独立锁）。观测入口 `macos/Sources/DSHChamberPoc/ShellPerf.swift`（`[perf] boot …` 行）与 `POC_DEBUG=1` 的 `[perf] invoke` 行；A/B 纪律见 `scripts/perf/README.md`。
+   Data 化、payload 单遍转换 + 深度上限、B 桥入站每行单次解析 + 严格判型、页面字面量单遍写出、ShellDebug 启动期缓存、LineReader 游标化、
+   stderr 读取/环形独立锁）。观测入口 `macos/Sources/DSHChamber/ShellPerf.swift`（`[perf] boot …` 行）与 `DSH_CHAMBER_SHELL_DEBUG=1` 的 `[perf] invoke` 行；A/B 纪律见 `scripts/perf/README.md`。
 
 - **B 桥出站帧护栏的范围边界**：出站 4 MiB 门只覆盖产品入口 `packages/desktop/sidecar-entry.ts` 的
   `writeProtocolLine`（`node-edges.ts` 的 `MAX_PROTOCOL_FRAME_BYTES`，与入站 P-01 同源）；POC 桩入口
-  `packages/desktop/poc-sidecar.ts` 仍是裸 stdout 写——它只服务测试夹具（`BridgeClientIntegrationTests`），
+  `packages/desktop/sidecar-stub.ts` 仍是裸 stdout 写——它只服务测试夹具（`BridgeClientIntegrationTests`），
   产品路径不经它。证据：全仓 `process.stdout.write` 审计（产品路径仅 `writeProtocolLine` 内三处回错帧：not-serializable / too-large /
   backpressure，加一处正常写，全部在出站门与有界缓冲之内）。
 
@@ -474,7 +474,7 @@
   **有意保留的零 core 消费者契约面**——`resolveResource`/`isPackaged`/`notifyClicked`/`trayAvailable`/
   `focusMainWindow`/`launchApp` 与 HostEdges 同步 `setKeepAwake`/`setLoginItem` 在 `desktop/shell-core.ts:679-762`
   只有声明与 doc、无调用点（settings 走装配 ctx 的 async叶）——flavor 契约，不是死代码；⑤ **`BridgeClient`
-  事件帧入站面保留**——`onEvent` 派发（`macos/Sources/DSHChamberPoc/BridgeClient.swift` 的 `onEvent` 声明与
+  事件帧入站面保留**——`onEvent` 派发（`macos/Sources/DSHChamber/BridgeClient.swift` 的 `onEvent` 声明与
   `processStdoutOutcome` → `handleIncomingLine` 分发点）无生产接线，仅为
   `BridgeClientIntegrationTests` 夹具保留， 删除前须先处理该测试；⑥ **通知音效平台等价物**——Swift
   `silent → 无声`、否则系统默认声（`SwiftEdgeHostLegs.swift:219-222`），Electrondarwin 具名
@@ -503,6 +503,8 @@
 
 > 双 flavor 专项登记（用户可感偏差 S、有意结构差异 T、Swift leg 接入缺口 P、门禁/覆盖缺口 G 与文档漂移 D，外加可达性纪律与盘点）见 [deviations.md](deviations.md)；本节继续持有 chamber 对上游/平台的取舍、偏差与降级，仍开放的工作见上文与 deviations.md 的 open 条目。（原文：本文件仍是「未完成 / 未决 /
 仍成立取舍」的权威记录；已落地的偏差从本文件删除、在deviations.md 标 retired。
+
+- **统一名称的保留面（2026-12 用户指令；逐条登记以免被当成漏改再翻一遍）**：应用身份类字样（bundle 内可执行名、SwiftPM 模块/目录/资源包、shim 资源名、`DSH_CHAMBER_SHELL_*` 环境变量、dev 数据根、日志文件/标签、调试通道）已全量对齐 `dsh-chamber`（deviations T-17）。以下**有意不改**：① bundle id `com.dshchamber.native`（Swift 壳）/ `com.dshchamber.desktop`（Electron 腿）——改动 = 通知授权重来 + 打包身份返工（T-14）；② 跨进程协议串 `--native-updater`、`__host.nativeUpdatePhase`、`no-native-bridge`/`nativeChannelToken`——Swift ↔ sidecar ↔ 渲染端 shim 三侧锁步，改名需一次协调变更；③ 持久化键前缀 `native-shell.page-zoom.<origin>`（`macos/Sources/DSHChamber/ZoomPersistence.swift:22`）——改键会静默重置用户缩放偏好（T-22）；④ 测试夹具 loud 标记 `poc-stub`/`poc: true`/`poc-no-registry`/`poc-unimplemented`（`packages/desktop/sidecar-stub.ts`，只服务 Swift 集成测试）与 settings-bridge 的 `'native-shell'` 阻塞原因分类 id（`packages/dsh-chamber-client-ui-settings-bridge/src/client/blocked-reason.ts:12`；其用户可见文案是跨包锁步、不属改名面）。免改面：已发布 `CHANGELOG*` 段与 `.tmp/**`（后者含旧 `POC_*` 脚本与旧名 .app，属临时区）。失效判据：上述任一被改名时必须同步 T-14/T-17/T-22 与两侧测试。
 
 - **重启即重载：用户发起的插件刷新入口已全部接线（2026-12）**：页面侧 client 插件集在窗口 boot 时固定，用户发起的实例/
   托管 dsh 重启必须附带一次窗口重载，否则新装/重打包的客户端半身不出现。**有意不接**：gateway「重启网关服务」（systemd

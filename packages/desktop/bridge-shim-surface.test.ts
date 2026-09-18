@@ -1,5 +1,5 @@
 /**
- * bridge-shim-surface.test.ts —— S-B 静态面比对：bridge-shim.poc.js（macOS
+ * bridge-shim-surface.test.ts —— S-B 静态面比对：bridge-shim.js（macOS
  * Swift POC A-bridge shim）与 preload.cts 暴露面逐字一致 + 通道引用 ∈
  * bridge-manifest.json invoke/push 集。
  *
@@ -30,7 +30,7 @@ const dir = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(dir, '..', '..')
 const preloadSource = readFileSync(path.join(dir, 'preload.cts'), 'utf8')
 const shimSource = readFileSync(
-  path.join(repoRoot, 'macos', 'Sources', 'DSHChamberPoc', 'Resources', 'bridge-shim.poc.js'),
+  path.join(repoRoot, 'macos', 'Sources', 'DSHChamber', 'Resources', 'bridge-shim.js'),
   'utf8',
 )
 const manifest = JSON.parse(
@@ -76,7 +76,7 @@ function preloadApiBlock(factoryName: string): string {
 function shimNamespaceBlock(namespace: string): string {
   const re = new RegExp(`^  var ${namespace} = \\{([\\s\\S]*?)\\n  \\}`, 'm')
   const m = shimSource.match(re)
-  assert.ok(m !== null, `bridge-shim.poc.js 应含 var ${namespace} = { … } 块`)
+  assert.ok(m !== null, `bridge-shim.js 应含 var ${namespace} = { … } 块`)
   return m[1]
 }
 
@@ -118,7 +118,7 @@ function preloadMemberChannel(memberText: string): string {
 /** shim PUSH_EVENTS 对象 → { 键: 通道 }。 */
 function shimPushEvents(): Record<string, string> {
   const m = shimSource.match(/var PUSH_EVENTS = \{([\s\S]*?)\n  \}/)
-  assert.ok(m !== null, 'bridge-shim.poc.js 应含 PUSH_EVENTS 表')
+  assert.ok(m !== null, 'bridge-shim.js 应含 PUSH_EVENTS 表')
   const table: Record<string, string> = {}
   for (const line of m[1].split('\n')) {
     // 末行无尾逗号——`,?` 兼容。
@@ -156,7 +156,7 @@ function extractExposeKeys(source: string): Set<string> {
 
 function extractShimTopKeys(): Set<string> {
   const m = shimSource.match(/var dshChamberApi = \{([\s\S]*?)\n  \}/)
-  assert.ok(m !== null, 'bridge-shim.poc.js 应含 dshChamberApi 对象')
+  assert.ok(m !== null, 'bridge-shim.js 应含 dshChamberApi 对象')
   const keys = new Set<string>()
   for (const line of m[1].split('\n')) {
     const row = line.match(/^ {4}([a-zA-Z_$][a-zA-Z0-9_$]*):/)

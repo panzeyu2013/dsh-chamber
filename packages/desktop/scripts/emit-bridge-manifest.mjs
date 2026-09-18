@@ -22,15 +22,15 @@
  *   A. packages/desktop/bridge-manifest.json（提交物）——
  *      { "invoke": [{channel,key}×60], "push": [{channel,key}×8],
  *        "counts": {invoke,push,total} }，两数组均按 IPC_CHANNELS 定义序。
- *   B. macos/Sources/DSHChamberPoc/Generated/BridgeManifest.swift（生成物、
+ *   B. macos/Sources/DSHChamber/Generated/BridgeManifest.swift（生成物、
  *      提交）——`enum BridgeManifest` 三份 Set<String>（invokeChannels /
  *      pushChannels / allChannels = 前两者并集推导，不重复字面量）。
- *      W-18 落位迁移：文件位于 DSHChamberPoc target 目录内（Sources/
- *      DSHChamberPoc/Generated/——SwiftPM 递归收 Sources/<target>/ 子目录，
+ *      W-18 落位迁移：文件位于 DSHChamber target 目录内（Sources/
+ *      DSHChamber/Generated/——SwiftPM 递归收 Sources/<target>/ 子目录，
  *      随 swift build 编译接线，Swift 白名单 XCTest 方可 @testable import
  *      引用）；旧 macos/Sources/Generated/BridgeManifest.swift 已删除、生成器
  *      不再产出该位置（docs 侧旧路径引用属文档同步范围，随 W-18 记录处理）。
- *   C. macos/Sources/DSHChamberPoc/Resources/chamber-bridge.stub.js（E8）——
+ *   C. macos/Sources/DSHChamber/Resources/chamber-bridge.stub.js（E8）——
  *      renderShimStub(manifest) 的提交产出（CLI 第三位置参数，无参时写默认
  *      位），与 JSON/Swift 两件同源同批；生成物 == 提交物由 bridge-shim.test.ts
  *      逐字节守住（另含通道映射与 vm 执行负例）。
@@ -71,18 +71,18 @@ const repoRoot = join(desktopDir, '..', '..')
 export const MAIN_SIDE_FILES = ['main.ts', 'shell-core.ts', 'electron-edges.ts']
 
 /** 提交物/生成物默认路径（CLI 无参时写入）。
- *  Swift 生成物落位 DSHChamberPoc target 目录内（Sources/DSHChamberPoc/
+ *  Swift 生成物落位 DSHChamber target 目录内（Sources/DSHChamber/
  *  Generated/，W-18 迁移）——SwiftPM 递归收 Sources 子目录，随编译接线；
  *  旧 macos/Sources/Generated/ 位置已废弃删除（生成器不再产出）。 */
 export const COMMITTED_MANIFEST = join(desktopDir, 'bridge-manifest.json')
-export const COMMITTED_SWIFT = join(repoRoot, 'macos', 'Sources', 'DSHChamberPoc', 'Generated', 'BridgeManifest.swift')
+export const COMMITTED_SWIFT = join(repoRoot, 'macos', 'Sources', 'DSHChamber', 'Generated', 'BridgeManifest.swift')
 /** E8 shim 存根提交物（W-18 后半 A）：manifest 驱动的通道常量单源桥，
- *  与手写 bridge-shim.poc.js（POC 运行时面）并存——全量 shim 演进以此为准。 */
+ *  与手写 bridge-shim.js（POC 运行时面）并存——全量 shim 演进以此为准。 */
 export const COMMITTED_SHIM_STUB = join(
   repoRoot,
   'macos',
   'Sources',
-  'DSHChamberPoc',
+  'DSHChamber',
   'Resources',
   'chamber-bridge.stub.js',
 )
@@ -320,7 +320,7 @@ export function renderSwiftManifest(manifest) {
     `// 通道 manifest（W-17 / design 25 §4.4.3）：Swift 侧 IPC 白名单单源`,
     `// （${counts.total} 通道 = ${counts.invoke} invoke + ${counts.push} push）。`,
     '// 重新生成（工作目录 packages/desktop）：node scripts/emit-bridge-manifest.mjs',
-    '// 落位：macos/Sources/DSHChamberPoc/Generated/ —— target 内随编译接线',
+    '// 落位：macos/Sources/DSHChamber/Generated/ —— target 内随编译接线',
     '// （W-18 自旧 Sources/Generated/ 迁入；bridge-manifest.test.ts 守重生成 == 提交物）。',
     '// 生成器 scripts/emit-bridge-manifest.mjs —— 输入 ipc-events.ts 的',
     '// IPC_CHANNELS 常量表 + main 侧（main.ts ∪ shell-core.ts ∪ electron-edges.ts）',
@@ -361,7 +361,7 @@ const jsStringLiteral = (value) =>
   JSON.stringify(value)
 
 /** E8 shim 存根文本（W-18 后半 A）：manifest 驱动的通道常量单源桥。与手写
- *  bridge-shim.poc.js（POC 运行时方法面）并存；全量 shim 演进以本存根为准。 */
+ *  bridge-shim.js（POC 运行时方法面）并存；全量 shim 演进以本存根为准。 */
 export function renderShimStub(manifest) {
   const { counts } = manifest
   const invoke = manifest.invoke.map(({ channel }) => channel)
@@ -373,7 +373,7 @@ export function renderShimStub(manifest) {
     '//',
     `// E8 shim 存根（W-18 后半 A / design 25 §4.4.3）：manifest 通道常量单源桥`,
     `// （${counts.total} 通道 = ${counts.invoke} invoke + ${counts.push} push）。`,
-    '// 与手写 bridge-shim.poc.js（POC 运行时面）并存——全量 shim 生成以此为准。',
+    '// 与手写 bridge-shim.js（POC 运行时面）并存——全量 shim 生成以此为准。',
     '// 重新生成（工作目录 packages/desktop）：node scripts/emit-bridge-manifest.mjs',
     "// 用法：在 WebKit 页面上下文执行本文件后，window.__DSH_CHAMBER_MANIFEST__",
     '// 与 __dshChamberAssertMethod/__dshChamberAssertEvent 可用。',
