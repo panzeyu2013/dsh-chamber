@@ -60,7 +60,9 @@ test('no chamber stylesheet reintroduces an invisible first frame (repo-wide swe
   const offenders: string[] = []
   const walk = (dir: URL): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (entry.name === 'node_modules' || entry.name === '.git') continue
+      // Ignored local dev state (e.g. packages/desktop/.dev-user-data) can carry a
+      // nested dev instance's own stylesheets; the invariant is over chamber sources.
+      if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue
       const child = new URL(entry.name + (entry.isDirectory() ? '/' : ''), dir)
       if (entry.isDirectory()) walk(child)
       else if (entry.name.endsWith('.css')) {
