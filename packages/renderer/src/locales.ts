@@ -68,6 +68,27 @@ export const zh = {
   'boot.loading': '正在加载 {label}…',
   /** Shell-level veil hint under the title. */
   'boot.loadingHint': '首次打开需加载完整界面',
+  /** Deferred-boot veil title (W2): the source is manually disconnected, so the
+   *  boot is held back until the user explicitly connects it. `{label}` = source name. */
+  'boot.deferred': '未连接 {label}',
+  /** Deferred-boot veil hint: what the user should do next. */
+  'boot.deferredHint': '该来源尚未连接。连接成功后再打开会话。',
+  /** Elapsed wait shown once the veil becomes actionable; `{seconds}` is rounded. */
+  'boot.elapsed': '已等待 {seconds} 秒',
+  /** Actionable veil line while the boot is still running (never a failure claim). */
+  'boot.stuckHint': '仍未完成：可以继续等待，或先离开这个来源。',
+  /** Actionable veil line when the source's own connection is already terminal:
+   *  the copy must not blame the boot for a transport failure. Selected only when
+   *  `isTerminalUnreadyPhase` is true (error / stopped / restart-exhausted); a
+   *  `degraded` source is reconnecting and gets `boot.stuckHint` instead. */
+  'boot.sourceFailedHint': '该来源的连接已中断：可以先重试，或离开这个来源。',
+  /** Honest retry-queue note: the new attempt waits for the still-running
+   *  predecessor (same-id boot tail, capped at two boot budgets). */
+  'boot.retryQueued': '这次重试排在上一次启动之后（最长约 {seconds} 秒）；若上一次已经结束，会立即开始。',
+  /** Last-resort hint: whole-document reload is always available in both shells. */
+  'boot.reloadHint': '若界面长时间无响应，可按 ⌘R（Windows/Linux 为 Ctrl+R）重新加载。',
+  /** Connect affordance of the deferred-boot veil (same semantics as the settings page). */
+  'action.connect': '连接',
   /** Settled-boot gap notice title (design 05 §4 「降级呈现」): the source's own
    *  interface is reachable, but part of its frontend never registered. */
   'bootGap.title': '该来源的前端能力受限',
@@ -136,6 +157,14 @@ export const en: Record<FrameKey, string> = {
   'action.switchServer': 'Switch to another server:',
   'boot.loading': 'Loading {label}…',
   'boot.loadingHint': 'The full interface loads on first open',
+  'boot.deferred': '{label} is not connected',
+  'boot.deferredHint': 'This source is not connected yet. Connect it, then open the session again.',
+  'boot.elapsed': 'Waiting {seconds}s',
+  'boot.stuckHint': 'Still not ready: you can keep waiting, or leave this source for now.',
+  'boot.sourceFailedHint': 'This source’s connection dropped: retry, or leave this source for now.',
+  'boot.retryQueued': 'This retry waits behind the previous attempt (up to about {seconds}s); it starts at once if that attempt has already ended.',
+  'boot.reloadHint': 'If the interface stays unresponsive, press ⌘R (Ctrl+R on Windows/Linux) to reload.',
+  'action.connect': 'Connect',
   'bootGap.title': 'This source’s interface is limited',
   'bootGap.body.graphUnavailable': 'This source did not serve its client plugin graph inside the boot window, so this mount loaded none of its frontend plugins; the surfaces that depend on them (the conversation body, for example) will not appear.',
   'bootGap.body.requiredServicesMissing': 'This source did not provide a frontend service this page needs, so the surfaces waiting on it (the conversation body, for example) never register.',

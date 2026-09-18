@@ -24,6 +24,7 @@ const GROUPS = {
     'test/lifecycle/boot-degradation.test.ts',
     'test/lifecycle/sidebar-right-heal-wiring.test.ts',
     'test/lifecycle/baseline-harvest.test.ts',
+    'test/lifecycle/boot-deadzone-wiring.test.ts',
     'test/lifecycle/host-graph.test.ts',
     'test/lifecycle/required-extra-rows.test.ts',
     // The shell *.test.ts split is served from test/support/shell-harness.ts and needs the

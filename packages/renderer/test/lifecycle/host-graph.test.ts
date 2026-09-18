@@ -617,9 +617,13 @@ test('collectExtraRows: a gate that never sees the source serve ends degraded (n
   }
 })
 
-test('collectExtraRows: a non-503 channel failure stays a documented (non-degraded) skip', async () => {
+test('collectExtraRows: a 404 endpoint (no graph injected) stays a documented non-degrade', async () => {
   // The gateway/mobile shape legitimately runs without the graph — that is not
-  // a degrade, and the App must NOT be asked to re-boot for it.
+  // a degrade, and the App must NOT be asked to re-boot for it. 2026-12 (boot
+  // 死区收敛 W3) narrowed this boundary to the 404 shape ONLY: every other
+  // channel failure now reports the degrade fact, because that mount ships a
+  // plugin-less shell whose only explanation was a diagnostic rendered by the
+  // packages this very boot failed to load (see the new test below).
   const stub = stubFetch(404, { code: 'not_found', error: 'unknown method' })
   const unavailable: string[] = []
   const consoleCapture = captureConsoleError()
@@ -630,6 +634,31 @@ test('collectExtraRows: a non-503 channel failure stays a documented (non-degrad
       onGraphUnavailable: (message) => unavailable.push(message),
     }), [])
     assert.deepEqual(unavailable, [], 'a missing graph endpoint is not a serving degrade')
+  } finally {
+    stub.restore()
+    consoleCapture.restore()
+  }
+})
+
+test('collectExtraRows: a 502/504 channel failure reports the App-facing degrade fact (2026-12 W3)', async () => {
+  // 隧道活着而远端 dsh 端口死了：本轮挂载缺掉整套 profile 客户端插件，而旧契约
+  // 只发一条"由没被加载的包渲染"的诊断——用户侧零解释。这里钉住新契约：
+  // 通道失败（非 404）必须上浮 onGraphUnavailable，让 App 的 boot-gap 横幅说得出话。
+  const stub = stubFetch(502, { code: 'upstream_failed', error: 'upstream request failed' })
+  const consoleCapture = captureConsoleError()
+  const unavailable: string[] = []
+  const diagnostics: { state: string }[] = []
+  try {
+    assert.deepEqual(await collectExtraRows('local', '/api/i/local', {
+      loadModuleBundle: async () => {},
+      retry: { attempts: 2, delayMs: 1, sleep: async () => {} },
+      reportDiagnostic: (_sourceId, diagnostic) => { diagnostics.push({ state: diagnostic.state }) },
+      onGraphUnavailable: (message) => unavailable.push(message),
+    }), [])
+    assert.equal(unavailable.length, 1, 'a 502 must reach the App as a degrade fact')
+    assert.match(unavailable[0], /did not answer its client plugin graph request/)
+    assert.match(unavailable[0], /502/)
+    assert.deepEqual(diagnostics, [{ state: 'graph-unreachable' }])
   } finally {
     stub.restore()
     consoleCapture.restore()

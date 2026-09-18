@@ -50,6 +50,7 @@
  */
 
 import { CHAMBER_COVERED_IDS } from './chamber-covered.ts'
+import { shouldReportGraphUnavailable } from './source-readiness.ts'
 // A4 (2026-09-11 upstream-alignment): the boot-graph wire validators are
 // UPSTREAM's own — never a hand-rolled copy. manifest.ts is the browser-safe
 // contract face of the pinned dsh-client-modules (zero runtime imports), the
@@ -497,8 +498,12 @@ export interface CollectExtraRowsDeps {
    * still starting; the proxy answers 503 fast and the graph appears moments
    * later). Only the fast 503-null path retries — a hung fetch (30s timeout)
    * or other channel failure still fails fast, so the budget is bounded by the
-   * delay sum (~4.5s), never by per-attempt timeouts. Budget exhaustion keeps
-   * today's silent-degrade contract (no extra plugins for this boot). The
+   * delay sum (~4.5s), never by per-attempt timeouts. Budget exhaustion means
+   * no extra plugins for this boot; since the 2026-12 W3 change that outcome is
+   * no longer silent — a non-404 channel failure reports a named
+   * `graph-unreachable` diagnostic and upfloats the App-facing degrade fact
+   * (see `shouldReportGraphUnavailable`), and the boot-gap banner explains it.
+   * The
    * 10-attempt default was widened from 6 (2026-08 review): the observed
    * local spawn→ready window is ~3s (control-plane host logs), which the
    * former 2.5s delay sum did not cover for a shell boot starting at spawn
@@ -524,7 +529,12 @@ export interface CollectExtraRowsDeps {
  * before loader.create runs, not after.
  *
  * Degrades to [] when the graph CHANNEL fails (fetch throws — network /
- * non-2xx / malformed graph): the boot proceeds without extra plugins. That is
+ * non-2xx / malformed graph): the boot proceeds without extra plugins. Since
+ * 2026-12 that channel failure ALSO reports the App-facing degrade fact
+ * (`onGraphUnavailable`) unless the channel answered 404 — the legitimate
+ * "no graph endpoint" shapes (gateway/mobile) must never be labeled a degrade,
+ * while a 502/504 mount would otherwise ship a plugin-less shell with no
+ * user-visible explanation at all (see the branch comment). That is
  * NOT a complete shell any more (2026-09 二轮, alpha.2 sources): the composite's
  * own first-screen families inject services that a non-covered official row
  * provides (the derived probe roster — `required-extra-rows.ts`, the single
@@ -536,9 +546,12 @@ export interface CollectExtraRowsDeps {
  * that into a loud, named diagnostic (design 09 §3.2). A 503
  * `instance_unavailable` is the expected pre-ready state: the fetch is
  * retried on a bounded budget (the instance's graph appears moments after the
- * proxy stops answering 503 — see CollectExtraRowsDeps.retry) and only then
- * degrades silently, so a shell that boots inside the spawn window still gets
- * its profile plugins instead of losing them for the rest of the boot.
+ * proxy stops answering 503 — see CollectExtraRowsDeps.retry) and only then gives
+ * up on this boot's extra rows: no longer a silent degrade since the 2026-12 W3
+ * change routes the non-404 channel failure to a named `graph-unreachable`
+ * diagnostic plus the App-facing degrade fact (`shouldReportGraphUnavailable`),
+ * so a shell that boots inside the spawn window still gets its profile plugins
+ * instead of losing them for the rest of the boot.
  *
  * A kept row whose `external` requests a deferred-covered id (2026-12 review
  * F1) is reported as a NAMED diagnostic instead of the silent `ok`: the merge
@@ -655,12 +668,28 @@ export async function collectExtraRows(
   }
   if (firstFetch.error !== null) {
     console.error(`[shell] instance ${instanceId} host boot-graph fetch failed; booting without extra plugins`, firstFetch.error)
-    reportDiagnostic(
-      instanceId,
-      firstFetch.error instanceof HostGraphChannelError ? firstFetch.error.diagnosticState : 'graph-unreachable',
-      { message: firstFetch.error instanceof Error ? firstFetch.error.message : String(firstFetch.error) },
-      deps.reportDiagnostic,
-    )
+    const detail = firstFetch.error instanceof Error ? firstFetch.error.message : String(firstFetch.error)
+    const state = firstFetch.error instanceof HostGraphChannelError
+      ? firstFetch.error.diagnosticState
+      : 'graph-unreachable'
+    reportDiagnostic(instanceId, state, { message: detail }, deps.reportDiagnostic)
+    // 2026-12（boot 死区收敛 W3）：**通道失败（502/504/网络错误）也算一次可解释
+    // 的降级**，不能只留一条诊断。旧契约把这里当作"documented silent skip"，
+    // 理由是 gateway/mobile 形态合法地没有图端点——但那是 404（`not-injected`）
+    // 这一种，不是通道失败：隧道活着而远端 dsh 没起来时，本轮挂载会缺掉整套
+    // profile 客户端插件（典型是 ui-chat 的 sidebarRight 永久 pending）。旧契约
+    // 只把事实写进连接页的 pluginDiagnostic 一行（侧栏已不渲染该诊断）：事实并非
+    // 没有出口，但用户停在 boot 表面时看不到解释、也拿不到自愈（2026-12 复核更正
+    // 了口径）。上浮成 ShellState.degraded 后，App 的非阻断 boot-gap 横幅才说得
+    // 出口，且 graph-unavailable 的 retryable 裁决给出每个 ready 世代一次的冷重挂。
+    // 边界：`not-injected`（404 或通道答 method 缺失）仍然是"没注入图"的合法形态，
+    // 绝不当作降级（见 host-graph.test.ts 的 not-injected 用例）。
+    if (shouldReportGraphUnavailable(state)) {
+      deps.onGraphUnavailable?.(
+        `instance did not answer its client plugin graph request (${detail}); `
+        + 'this boot carries no profile client plugins',
+      )
+    }
     return []
   }
   if (firstFetch.rows === null) {
