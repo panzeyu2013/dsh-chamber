@@ -68,7 +68,7 @@
 | A 桥 stub 锁步 | `bridge-shim.test.ts` | 重生成逐字节 == 提交物；invoke/push 计数；信封 `{id,method,payload}` |
 | core 禁 electron | `electron-free-gate.test.ts` | fail-closed 传递闭包：core 家族无 electron import；白名单四文件有 |
 | sidecar 全通道冒烟 | `sidecar-stdio.test.ts` | 假 Swift 驱动 60 invoke 回包 + 8 push 采样（真处理器） |
-| release 腿策略 / 打包清单同源 | `scripts/release/release-workflow-policy.test.mjs`、`packaging-manifest-lockstep.test.mjs` | staple 先于归档；`ARTIFACT_ARGS` 展开恰 2 次；产物名 `dsh-chamber-native-<ver>-macos-arm64`；host 包清单五处一致 |
+| release 腿策略 / 打包清单同源 | `scripts/release/release-workflow-policy.test.mjs`、`packaging-manifest-lockstep.test.mjs` | staple 先于归档；`ARTIFACT_ARGS` 展开恰 2 次；产物名 `dsh-chamber-<ver>-macos-arm64`；host 包清单五处一致 |
 | Swift 负例护栏 | `macos/Tests`（XCTest，ci.yml `test-macos`） | 伪造 frame / 超大帧 / 非协议流 / 伪造事件名 / 越 origin 全拒 |
 | 双端 harness | `swift-harness-driver.test.ts`（**未实施**） | 真实窗口/桥/通知/深链（需 mac + GUI，见 §一） |
 
@@ -78,7 +78,7 @@
 ## 六、同 tag 双端发布草案（D2=共存默认）
 
 单 repo 单 tag `vX.Y.Z`：push CI 全绿（含上表全部 JS 门禁）→ release.yml `create-release`（Apple 凭据 fail-closed 门）
-→ Electron mac 腿（dmg/zip/latest-mac.yml）与 Swift mac 腿（`dsh-chamber-native-<ver>-macos-<arch>.dmg/.zip` +
+→ Electron mac 腿（dmg/zip/latest-mac.yml）与 Swift mac 腿（`dsh-chamber-<ver>-macos-<arch>.dmg/.zip` +
 `appcast-swift.xml`，**独立 EdDSA 密钥**）并行构建上传 draft → 双产物齐 → 双端冒烟（M5 矩阵 + harness）→ publish。
 回滚预案：Swift 产物出问题 → draft 不 publish、Electron 照发（Electron 是共存主通道，Swift 可晚一 tag 跟上）；
 Electron 出问题 → 同 tag Swift 不单独发（防版本错位）；Win/Linux 腿不受影响。

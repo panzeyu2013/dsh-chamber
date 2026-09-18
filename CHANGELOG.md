@@ -11,21 +11,30 @@
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
 
-## [0.3.2-beta.2] - 2026-09-17
+## [0.3.2-beta.3] - 2026-09-18
 
 ### 新增
-- **macOS Swift 原生壳（design 25 路线 A，预览）** —— macOS 上新增第二只壳：Swift/AppKit 只做壳（窗口、WKWebView、菜单/通知/角标/深链/对话框/外部打开/隐藏恢复），**壳内不承载任何业务**；业务由打包成独立 Node 可执行文件的 sidecar 承载（现有 control-plane 与 desktop 的纯 Node 业务模块族原样运行），Swift 与 sidecar 之间走一条受信的 stdio JSON-RPC 通道，页面侧用与 preload 等价的注入 shim 顶替 `window.dshChamber`，web UI 100% 复用。与原 Electron 版**共存**：产物为 `dsh-chamber-native-<版本>-macos-arm64.dmg/.zip`，bundle id `com.dshchamber.native`（通知授权身份独立），双 flavor 共用同一 userData 根与目录锁（`<userData>/.dsh-chamber.lock`，darwin `flock`/`O_EXLOCK`，锁本身是唯一仲裁权威）。
+- **macOS Swift 原生壳（design 25 路线 A，预览）** —— macOS 上新增第二只壳：Swift/AppKit 只做壳（窗口、WKWebView、菜单/通知/角标/深链/对话框/外部打开/隐藏恢复），**壳内不承载任何业务**；业务由打包成独立 Node 可执行文件的 sidecar 承载（现有 control-plane 与 desktop 的纯 Node 业务模块族原样运行），Swift 与 sidecar 之间走一条受信的 stdio JSON-RPC 通道，页面侧用与 preload 等价的注入 shim 顶替 `window.dshChamber`，web UI 100% 复用。与原 Electron 版**共存**：产物为 `dsh-chamber-<版本>-macos-arm64.dmg/.zip`（本版起命名归属反转，见「变更」），bundle id `com.dshchamber.native`（通知授权身份独立），双 flavor 共用同一 userData 根与目录锁（`<userData>/.dsh-chamber.lock`，darwin `flock`/`O_EXLOCK`，锁本身是唯一仲裁权威）。
 - **原生 flavor 的应用内更新链（design 25 §7，D-1 = B）** —— 改为 Sparkle 2：检查真实 appcast（EdDSA 签名；公钥/私钥由发布链配置），支持应用内下载、安装与重启，并保留用户手动的「检查更新…」；beta 通道用滚动 appcast 同时收当前 beta 与最新 final，让 beta 客户端也能看到 final（S-22/S-23/S-36）。更新面不可用、坏 feed/坏公钥或忙态点击都返回诚实错误而不是静默吞掉（S-37–S-39）。
 - **双 flavor 防漂移锁步与新 CI 腿** —— IPC 面镜像（main/preload 两侧字面量与结构）、桥 manifest（`bridge-manifest.json` ↔ 生成的 Swift 白名单，通道 68 = 60 invoke + 8 push）、注入 shim 表面、core 的 electron-free 传递闭包、打包清单与产物命名（`-native` 不含碰撞、更新 feed 归属唯一）各有独立门禁；新增 macOS CI 腿 `test-macos`（Swift 构建 + XCTest + 打包干跑 + darwin 目录锁与打包脚本套件），发布证明要求 linux/windows/macos 三腿同时通过。
 - **打包链** —— `build:sidecar`（官方 Node 归档按仓库固定 SHA-256 校验后捆绑，基名必须是 `node`；内置 dsh 工作区与内嵌 pnpm）与 `build:swift-app`（组装 → ad-hoc 或 Developer ID 签名 → 公证 → stapler 装订 → 归档，任一缺失即 fail-closed），同一 tag 下与 Electron 产物并行发布、互不覆盖。
 - **原生壳本地落盘日志（design 25 排障面，T-25）** —— 原生壳此前双击态白屏/退出没有任何本地 dump 可考古；现在关键行（启动、sidecar spawn/退出、导航失败、更新相位、退出链）同写 `<userData>/logs/native-shell.log`，256 KiB 单份轮转（`.1`）、0600/0700，写不进静默退回 stdout。它**不**复用 Electron 的 `<userData>/state/host-logs/<port>.log`——那是控制面按端口寻址的宿主 stdout/stderr 管道，两条日志面不同目录、不能混用。
 - **Electron mac 打包演练进 push CI（G41）** —— main push 的 `test-macos` 腿新增 ad-hoc、`--publish=never`、无凭据/无公证/无上传的 `electron-builder --mac --arm64` 演练，并紧跟 `verify-electron-artifacts.mjs` 对真实 `.app` 校验；发布证明（`verify-release-ci-proof.mjs` 的 `REQUIRED_JOB_STEPS`）同步要求该步名，删步/改名即红。代价 = macos 腿每次 push 真跑一次打包（时间变长），换取 files/extraResources/beforePack/afterPack/entitlements 的破坏在 push 即暴露，而不是等到 release（draft 已建、凭据已加载）才失败。
 - **更新链 fail-closed 门禁（G42）** —— 正式发布中 Sparkle 公钥在而私钥缺 = FAIL（壳会轮询没人签的 feed）；私钥在而 beta/stable appcast 缺失 = FAIL（不再静默跳过滚动发布）；`/releases/latest` 解析失败（非 404）或 final 有 native zip 但下载失败 = FAIL；新增 `verify-native-appcast.mjs` 断言本版本 appcast 条目同时带 `shortVersionString`=本版本、`sparkle:version`=本 `.app` 的 CFBundleVersion、enclosure 指向本版本 zip（appcast 步与滚动刷新两处都跑）。两把钥匙都缺仍是 loud 降级（照常出包、客户端看不到更新）；仓库尚无 final release 或最新 final 确实没有 native zip 时保留 loud 警告。
+- **原生壳跟随显示器刷新率（S-48）** —— 原生 flavor 此前把渲染上限压在接近 60Hz：面板是 ProMotion/高刷时会明显比 Electron 侧"钝"。现在按所在显示器的刷新率取整跟随（低电量模式减半），偏好必须在 web view 构造前应用，且**先读回确认可写**再改；实测原生壳 114–120fps。
+- **原生壳视口弹性回弹消除（S-50）** —— macOS WebKit 在视口层做橡皮筋：指针停在不可滚动 chrome（顶栏、会话栏头部）上滚动、或某个滚动器到端点继续滚时，整页（含 `position: fixed` 层）会被整体平移再弹回。壳在 configuration 段以 documentStart、仅主 frame 注入一条根级 `overscroll-behavior: none !important` 规则关掉它，不动任何滚动容器的滚动语义。
+- **控制面与 sidecar 的诊断也落盘（T-25 扩展）** —— 继原生壳本地日志之后，控制面日志与 sidecar 诊断同样按 0600 落盘：双击态出问题不再只能靠系统日志猜。
+- **未就绪来源的 boot 死区可以逃出去（design 05 §4.1）** —— 远程来源未就绪时点开会话，此前会停在全窗遮罩上等最长 135s 的收割臂，期间没有任何导航出口。现在遮罩按相位给动作：未连接（idle）立即给「连接」+ 切换行且**不启动 boot**；`error` 与托管 `stopped`/`restart-exhausted` 在 1.5s 宽限后判不可服务（不再等满 60s）；`degraded`（重连在途）不判死、仍在预算内等；挂死 boot 超过反馈窗（10s）后给重试/连接/切换 + ⌘R 提示；502（隧道通、远端端口死）是非阻断横幅并按 ready 世代自愈一次。
+- **侧栏会话 running 位陈旧会自愈** —— 会话已被判定结束、running 位却没收敛时，聊天面此前会一直不渲染：现在由侧栏会话事实与渲染位活性守卫三层收敛，聊天面恢复挂载。
 
 ### 变更
 - **桌面主进程拆分为 electron-free 核心 + 两套宿主边沿实现** —— `main.ts` 的编排与业务逻辑抽到与 Electron 无关的 `shell-core.ts`，Electron 原生边沿留在 `electron-edges.ts`，Node/sidecar 侧边沿在 `node-edges.ts`；Electron 版行为不变（真实依赖 Electron 的仅 4 个文件，由传递闭包门禁断言），原生 flavor 复用同一业务代码。
 - **`dsh-chamber:info` 与宿主事实面提供 flavor 判别位**（页面可按 flavor 分支），宿主事实（焦点/窗口显示/系统唤醒）在两侧同源推送。
 - **macOS 最低支持版本抬到 14.4（S-30）** —— Electron `build.mac.minimumSystemVersion` 与原生壳 `LSMinimumSystemVersion` 同写精确 14.4，`Package.swift` 写 `.macOS(.v14)`（SwiftPM 只能写 major）。原因：原生壳跑 OS WebKit，出货 bundle 在审批决策、用户提问/计划评审、PDF 预览构造路径直接调用 `Promise.withResolvers`，该 API 自 Safari 17.4 / macOS 14.4 才存在，13.x 与 14.0–14.3 会构造期 `TypeError`；Electron 自带 V8 不受影响，但同一支持矩阵只保留一个下限（不加 polyfill）。
+- **原生壳窗口几何向 Electron 收窄（S-49）** —— 原生壳与 Electron 的窗口高度差距收窄到显式折中值（1280×786），并把该折中登记为可复核的偏差条目。
+- **协议写侧与帧上限收严** —— sidecar 出站帧加上限、协议写侧改为有界写：超大响应 fail-closed 结算全部未决请求并响亮上报，不再让渲染端请求永久悬挂或让缓冲无界增长。
+- **原生壳热路径成本下降（性能）** —— 去掉热路径上的重复工作与每帧分配，实测原生壳稳定在 114–120fps。
+- **发布命名归属反转：Swift 原生壳 = `dsh-chamber`，Electron = `dsh-chamber-electron`** —— 原生腿的 .app/DMG/zip/卷名去掉 `-native` 后缀改用裸名，Electron 腿的 app/安装器/产物名加上 `-electron`。appId、原生 CFBundleIdentifier、共享 userData 身份（`@dsh-chamber/desktop`）、目录锁与深链 scheme `dsh-chamber` 全部不变，因此权限、凭据与双 flavor 共存语义不受影响；既有安装的旧 .app 目录名不会自动改写（更新只替换当前 bundle），要清爽目录名需重装。
 
 ### 修复
 - **系统唤醒后原生 flavor 的立即重连与补发从未生效** —— 唤醒通知此前注册在错误的通知中心，现已注册到 `NSWorkspace.shared.notificationCenter`。
@@ -39,6 +48,13 @@
 - **原生壳下载落盘与 Electron 对齐（S-26）** —— 此前 Swift 弹 NSSavePanel（可取消），而 Electron 全仓没有 `will-download`/`setSavePath`、走 Chromium 默认静默写 `~/Downloads`；现在 Swift 经 `DownloadDestination` 静默落盘：目录缺失即建、重名按 Chromium ` (n)` 去重、在途路径预留防同批撞名，解析/创建失败诚实取消并落盘原因（绝不静默换路径）。已知小偏差（accepted）：WebKit 无 `.crdownload` 中间态，下载中崩溃可能留下带最终名的半成品（Electron 留 `.crdownload` 不冒充成品）。
 - **原生壳页面缩放跨重启保持（T-22）** —— `WKWebView.pageZoom` 此前只活实例、每次启动回 100%；现在按 origin 存 UserDefaults（装配时恢复、zoomIn/zoomOut/reset 写回，坏值 normalize+clamp），与 Electron 的按 origin 持久化同向；存储介质仍是各 flavor 自己的偏好存储，不跨 flavor 共享。
 - **打包态 zh 本地化资源不再被静默删除（S-47）** —— mac 腿的 `electronLanguages` 改写成 Electron 真实目录拼写 `["en","zh_CN"]`（app-builder-lib 只做精确/前缀匹配，`"zh-CN"` 永远匹配不到 `zh_CN.lproj`，于是中文 `locale.pak` 被删、Chromium 级文案回退英文；顶层连字符值保留给 win/linux `.pak` 腿）；afterPack 与产物门禁对真实 `.app` 断言每个声明的 locale 都带出且 `locale.pak` 非空。
+- **一个瞬时的 unknown 判定不再触发唯一一次 L2 重连** —— 当结果刷新窗（150s）短于合并窗（200s）时，单次瞬时探测失败会被当成确定失败、把该 spell 唯一的一次 L2 重连烧掉。现在首次 `unknown` 只顺延一次截止时间（有界升级，第二次不再顺延），并且 App 把共享重连台账喂给规划器，被推迟的 L2 不再让守卫沉默一个退避窗。
+- **日志不再穿过符号链接写** —— 控制面与 Swift sidecar 两侧都拒绝符号链接的叶子/目录（此前只在构造时校验一次，`start()` 的无条件重开会重新激活降级 sink）；权限在每次打开时重申（0700/0600 只在创建时生效）；外部删除后有界自愈；轮转被阻塞时降级到 stdout，不再把水位清零导致文件每轮涨约 2 倍。
+- **失败覆盖层出现时把遮罩移出 DOM** —— 此前遮罩按钮留在 DOM 里仍可聚焦/被读出；队列提示不再挂在 `aria-busy` 下；遮罩切换失败会如实上报，不再留下粘住的放弃标记。
+- **渲染位活性边界按决定性结算取水位** —— 迟到/乱序的结算不再把已经推进的失败判定拉回，也不再把同一 tick 的边界判定误判。
+- **重放器不再认领身份未验证的遗留 token** —— 控制面回收器对遗留 token 的接管要求条目自身的 dsh 身份可识别，否则保留并记为 identity-unverified，避免误杀他人进程。
+- **CSP 的 style 源按生效链求值** —— 有效 style 源按 CSP3 回退链（`style-src-elem` → `style-src` → `default-src`）与大小写不敏感 nonce/hash 求值，注入的根规则因此不会被"别处还有一条 style-src"骗过。
+- **跨语言锁步测试不再被注释骗过** —— 两处装配锁步此前匹配原始源码，把 apply/install 调用注释掉仍然绿；现在先剥离注释行再匹配。
 
 ## [0.3.1] - 2026-09-15
 

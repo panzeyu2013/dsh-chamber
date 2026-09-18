@@ -58,7 +58,8 @@ test('--no-artifact-rebuild is accepted in either position and never duplicated'
 })
 
 test('--tags requires exactly two tag values', () => {
-  assert.deepEqual(parseVerifyArgs(['--tags', 'v0.1.0-rc.7', 'v0.1.0-rc.8']).tags, ['v0.1.0-rc.7', 'v0.1.0-rc.8'])
+  // 夹具用中性 tag：写死历史 dsh pin 会让 §5 的旧 pin 残留扫描每次发布都报一条。
+  assert.deepEqual(parseVerifyArgs(['--tags', 'v9.9.9-rc.7', 'v9.9.9-rc.8']).tags, ['v9.9.9-rc.7', 'v9.9.9-rc.8'])
   // A missing/flag-looking value used to fall through to a silent full run.
   assert.match(parseVerifyArgs(['--tags', 'v1']).errors.join('\n'), /--tags 需要恰好两个 tag 值/)
   assert.match(parseVerifyArgs(['--tags']).errors.join('\n'), /--tags 需要恰好两个 tag 值（得到 无）/)

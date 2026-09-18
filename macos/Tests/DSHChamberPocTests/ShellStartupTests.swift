@@ -569,7 +569,7 @@ final class ShellStartupTests: XCTestCase {
     /// 2026-12 双端逐函数核对 S4·F1：argv 冷启动深链筛选（跳过 argv[0] 与非本 scheme）。
     func testCommandLineDeepLinkFilter() {
         let urls = AppDelegate.commandLineDeepLinks(arguments: [
-            "/Applications/dsh-chamber-native.app/Contents/MacOS/DSHChamberPoc",
+            "/Applications/dsh-chamber.app/Contents/MacOS/DSHChamberPoc",
             "--flag",
             "dsh-chamber://open/session?x=1",
             "https://example.com",

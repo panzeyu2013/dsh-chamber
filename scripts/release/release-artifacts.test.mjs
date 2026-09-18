@@ -4,7 +4,7 @@
  * 演练清单的可执行面：两族产物名不碰撞、feed 归属唯一（Electron 腿的 yml feed
  * vs Swift 腿的 Sparkle appcast，S-22 双通道）、命名规则可预测（stable/beta
  * 通道），并与 release.yml 的实际命名参数一致（Swift 腿
- * `--artifact-basename dsh-chamber-native-${VERSION}-macos-arm64`）。
+ * `--artifact-basename dsh-chamber-${VERSION}-macos-arm64`）。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -41,14 +41,14 @@ import { bundleVersionFor } from '../../macos/scripts/build-swift-app.mjs'
 const script = fileURLToPath(new URL('./release-artifacts.mjs', import.meta.url))
 const appcastScript = fileURLToPath(new URL('./verify-native-appcast.mjs', import.meta.url))
 
-test('两族产物名不碰撞（-native 命名空间隔离）', () => {
+test('两族产物名不碰撞（-electron 命名空间隔离）', () => {
   const electron = electronMacArtifacts('0.3.0')
   const native = nativeMacArtifacts('0.3.0')
   assert.equal(assertNoCollision(electron, native), true)
-  assert.deepEqual(electron, ['dsh-chamber-0.3.0-arm64.dmg', 'dsh-chamber-0.3.0-arm64-mac.zip'])
+  assert.deepEqual(electron, ['dsh-chamber-electron-0.3.0-arm64.dmg', 'dsh-chamber-electron-0.3.0-arm64-mac.zip'])
   assert.deepEqual(native, [
-    'dsh-chamber-native-0.3.0-macos-arm64.dmg',
-    'dsh-chamber-native-0.3.0-macos-arm64.zip',
+    'dsh-chamber-0.3.0-macos-arm64.dmg',
+    'dsh-chamber-0.3.0-macos-arm64.zip',
   ])
   assert.throws(
     () => assertNoCollision(electron, [electron[0]]),
@@ -96,11 +96,11 @@ test('feed 归属唯一：Electron 产出 yml，Swift 产出 appcast（S-22 双�
 test('release.yml 的 Swift 命名参数与本清单一致', () => {
   const workflow = readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8')
   const native = nativeMacArtifacts('1.2.3')
-  assert.match(workflow, /--app-name dsh-chamber-native/)
-  assert.match(workflow, /--artifact-basename "dsh-chamber-native-\$\{VERSION\}-macos-arm64"/)
+  assert.match(workflow, /--app-name dsh-chamber/)
+  assert.match(workflow, /--artifact-basename "dsh-chamber-\$\{VERSION\}-macos-arm64"/)
   // 清单里的 dmg/zip 基名 = workflow 的 --artifact-basename。
   for (const name of native) {
-    assert.ok(name.startsWith('dsh-chamber-native-1.2.3-macos-arm64'), name)
+    assert.ok(name.startsWith('dsh-chamber-1.2.3-macos-arm64'), name)
   }
   // Electron/Squirrel 的 feed 仍归 Electron 腿；Swift 腿的更新源是 Sparkle appcast
   // （S-01 / 裁决 D-1 选 B；S-22 双通道），必须由 EdDSA 私钥签名，且 dry-run 不进
@@ -153,7 +153,7 @@ test('S-36 enclosure 前缀单源：beta 走滚动 tag 下载目录，stable 不
   assert.equal(nativeAppcastDownloadPrefix('0.3.0-beta.2', 'o/r'), nativeBetaRollingDownloadPrefix('o/r'))
   assert.equal(nativeAppcastDownloadPrefix('0.3.0', 'o/r'), null,
     'stable 不传前缀：enclosure 相对 releases/latest 解析，形状不变')
-  assert.equal(NATIVE_STABLE_ZIP_PATTERN, 'dsh-chamber-native-*-macos-arm64.zip')
+  assert.equal(NATIVE_STABLE_ZIP_PATTERN, 'dsh-chamber-*-macos-arm64.zip')
   // enclosure 解析与 Sparkle 的 URL(filename, relativeTo:) 同语义。
   const betaZip = nativeMacArtifacts('0.3.0-beta.2')[1]
   const betaFeed = nativeMacFeedUrl('0.3.0-beta.2', 'o/r')
@@ -228,7 +228,7 @@ function appcastXml(...items) {
     '<?xml version="1.0" standalone="yes"?>',
     '<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">',
     '    <channel>',
-    '        <title>dsh-chamber-native</title>',
+    '        <title>dsh-chamber</title>',
     ...items,
     '    </channel>',
     '</rss>',

@@ -293,7 +293,7 @@ process.on('unhandledRejection', (reason) => {
 // DiagnosticReports 事后考古"前端消失/白屏"类问题。uploadToServer=false
 // 时 submitURL 可省略（仅上传时使用）。
 crashReporter.start({
-  productName: 'dsh-chamber',
+  productName: 'dsh-chamber-electron',
   companyName: 'dsh-chamber',
   uploadToServer: false,
 });
@@ -875,7 +875,7 @@ function createMainWindow(rendererOrigin: string, fatalOnLoadFailure: boolean): 
     // 固定窗口标题：官方 dsh 前端（rc.8 起标题投影在 ui-renderer 行内）
     // 会把当前会话名投影到 document.title——若不拦截 page-title-updated，
     // 原生标题栏会随选中会话变化。单 frame 壳的品牌标识恒定，会话名在应用内可见。
-    title: 'dsh-chamber',
+    title: 'dsh-chamber-electron',
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,

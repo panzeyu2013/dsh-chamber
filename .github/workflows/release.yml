@@ -645,8 +645,8 @@ jobs:
           set -euo pipefail
           # G36：按 release-artifacts 的精确产物名验证（不再 find|head / glob ——
           # 复用工作目录时旧归档可以满足验证而新产物已坏）。
-          BASE="packages/desktop/release/dsh-chamber-${VERSION}-arm64"
-          APP_DIR="packages/desktop/release/mac-arm64/dsh-chamber.app"
+          BASE="packages/desktop/release/dsh-chamber-electron-${VERSION}-arm64"
+          APP_DIR="packages/desktop/release/mac-arm64/dsh-chamber-electron.app"
           test -d "$APP_DIR"
           echo "app bundle: $APP_DIR"
           codesign --verify --deep --strict --verbose=2 "$APP_DIR"
@@ -686,7 +686,7 @@ jobs:
           VERSION: ${{ needs.create-release.outputs.version }}
         run: |
           set -euo pipefail
-          BASE="packages/desktop/release/dsh-chamber-${VERSION}-arm64"
+          BASE="packages/desktop/release/dsh-chamber-electron-${VERSION}-arm64"
           DMG="${BASE}.dmg"
           test -f "$DMG" || { echo "::error::missing $DMG (the mac leg produced no exact-named dmg)"; exit 1; }
           xcrun notarytool submit "$DMG" \
@@ -715,7 +715,7 @@ jobs:
         # 复核，与 Swift 腿的 P4(b) 同一纪律。dry run 也解包验结构（ad-hoc 可过）。
         run: |
           set -euo pipefail
-          BASE="packages/desktop/release/dsh-chamber-${VERSION}-arm64"
+          BASE="packages/desktop/release/dsh-chamber-electron-${VERSION}-arm64"
           ZIP="${BASE}-mac.zip"
           test -f "$ZIP" || { echo "::error::missing $ZIP (the mac leg produced no exact-named zip)"; exit 1; }
           EXTRACT="$RUNNER_TEMP/dsh-chamber-electron-zip-verify"
@@ -1017,8 +1017,8 @@ jobs:
             echo "::warning::SPARKLE_PUBLIC_ED_KEY absent — native auto-update stays disabled in this build"
           fi
           pnpm run build:swift-app --out macos/release \
-            --app-name dsh-chamber-native \
-            --artifact-basename "dsh-chamber-native-${VERSION}-macos-arm64" \
+            --app-name dsh-chamber \
+            --artifact-basename "dsh-chamber-${VERSION}-macos-arm64" \
             --identity "$IDENTITY" ${SPARKLE_ARGS[@]+"${SPARKLE_ARGS[@]}"} ${ARTIFACT_ARGS[@]+"${ARTIFACT_ARGS[@]}"}
         env:
           VERSION: ${{ needs.create-release.outputs.version }}
@@ -1040,12 +1040,12 @@ jobs:
           VERSION: ${{ needs.create-release.outputs.version }}
         run: |
           set -euo pipefail
-          APP="macos/release/dsh-chamber-native.app"
-          BASE="macos/release/dsh-chamber-native-${VERSION}-macos-arm64"
+          APP="macos/release/dsh-chamber.app"
+          BASE="macos/release/dsh-chamber-${VERSION}-macos-arm64"
           test -d "$APP"
           # 提交用临时 zip（公证接受 zip/dmg/pkg）；票据装订到 .app 后才生成
           # 最终分发归档，保证上传物内的 .app 已 stapled。
-          SUBMIT_ZIP="$RUNNER_TEMP/dsh-chamber-native-notarize.zip"
+          SUBMIT_ZIP="$RUNNER_TEMP/dsh-chamber-notarize.zip"
           ditto -c -k --sequesterRsrc --keepParent "$APP" "$SUBMIT_ZIP"
           xcrun notarytool submit "$SUBMIT_ZIP" \
             --apple-id "$APPLE_ID" \
@@ -1059,12 +1059,12 @@ jobs:
           # P7：DMG 卷 = .app + /Applications 快捷方式（Finder 拖拽安装惯例），
           # 且 DMG 本体也要公证+装订——只装订 .app 时离线 Gatekeeper 对挂载卷
           # 仍报未公证。
-          DMG_STAGE="$RUNNER_TEMP/dsh-chamber-native-dmg"
+          DMG_STAGE="$RUNNER_TEMP/dsh-chamber-dmg"
           rm -rf "$DMG_STAGE"
           mkdir -p "$DMG_STAGE"
-          ditto "$APP" "$DMG_STAGE/dsh-chamber-native.app"
+          ditto "$APP" "$DMG_STAGE/dsh-chamber.app"
           ln -s /Applications "$DMG_STAGE/Applications"
-          hdiutil create -volname dsh-chamber-native -srcfolder "$DMG_STAGE" \
+          hdiutil create -volname dsh-chamber -srcfolder "$DMG_STAGE" \
             -ov -format UDZO "${BASE}.dmg"
           xcrun notarytool submit "${BASE}.dmg" \
             --apple-id "$APPLE_ID" \
@@ -1101,7 +1101,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          BASE="macos/release/dsh-chamber-native-${VERSION}-macos-arm64"
+          BASE="macos/release/dsh-chamber-${VERSION}-macos-arm64"
           # S-22：beta 通道发布独立的 appcast，与构建步注入的 beta feed 同名；
           # beta 还要覆盖到滚动 tag/release（v* 之外的 tag，见 build-swift 的
           # job env），让 beta.N 客户端能发现 beta.N+1。
@@ -1161,13 +1161,13 @@ jobs:
               STABLE_HAS_NATIVE_ZIP="false"
               for ASSET in $STABLE_ASSETS; do
                 case "$ASSET" in
-                  dsh-chamber-native-*-macos-arm64.zip) STABLE_HAS_NATIVE_ZIP="true" ;;
+                  dsh-chamber-*-macos-arm64.zip) STABLE_HAS_NATIVE_ZIP="true" ;;
                 esac
               done
               if [[ "$STABLE_HAS_NATIVE_ZIP" == "true" ]]; then
                 gh release download "$STABLE_TAG" \
                   --repo "$GITHUB_REPOSITORY" \
-                  --pattern 'dsh-chamber-native-*-macos-arm64.zip' \
+                  --pattern 'dsh-chamber-*-macos-arm64.zip' \
                   --dir /tmp/appcast-in --clobber \
                   || { echo "::error::latest final $STABLE_TAG 有 native zip 但下载失败——拒绝发布缺 final 条目的 beta appcast"; exit 1; }
                 echo "beta appcast 收件目录：$(ls /tmp/appcast-in | tr '\n' ' ')"
@@ -1211,8 +1211,8 @@ jobs:
       - name: Verify native app + uploaded archives (fail-closed on release)
         run: |
           set -euo pipefail
-          APP="macos/release/dsh-chamber-native.app"
-          BASE="macos/release/dsh-chamber-native-${VERSION}-macos-arm64"
+          APP="macos/release/dsh-chamber.app"
+          BASE="macos/release/dsh-chamber-${VERSION}-macos-arm64"
           DRY_RUN="${{ github.event.inputs.dry_run == 'true' && 'true' || 'false' }}"
           test -d "$APP"
           codesign --verify --deep --strict --verbose=2 "$APP"
@@ -1252,13 +1252,13 @@ jobs:
           # P4(b)：验证**上传的 blob 本身**，而不是归档前的 .app——解出 zip 内的
           # .app 再跑 codesign/架构/stapler/spctl；打包顺序倒退或 zip 损坏都在
           # 这里红，而不是等用户下载后才发现。
-          EXTRACT="$RUNNER_TEMP/dsh-chamber-native-zip-verify"
+          EXTRACT="$RUNNER_TEMP/dsh-chamber-zip-verify"
           rm -rf "$EXTRACT"
           mkdir -p "$EXTRACT"
           ditto -x -k "${BASE}.zip" "$EXTRACT"
           # --keepParent 的归档恒有一个顶层 <App>.app；直接定位，避免 find|head
           # 在 pipefail 下的 SIGPIPE 噪声。
-          ZIP_APP="$EXTRACT/dsh-chamber-native.app"
+          ZIP_APP="$EXTRACT/dsh-chamber.app"
           test -d "$ZIP_APP"
           codesign --verify --deep --strict --verbose=2 "$ZIP_APP"
           [[ " $(lipo -archs "$ZIP_APP/Contents/MacOS/DSHChamberPoc") " == *" arm64 "* ]] \
@@ -1286,7 +1286,7 @@ jobs:
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
           set -euo pipefail
-          BASE="macos/release/dsh-chamber-native-${VERSION}-macos-arm64"
+          BASE="macos/release/dsh-chamber-${VERSION}-macos-arm64"
           # G29：精确路径，绝不 glob（旧版本归档可能残留并与 *.dmg/*.zip 匹配）。
           gh release upload "v${VERSION}" \
             "${BASE}.dmg" "${BASE}.zip" --clobber
@@ -1355,7 +1355,7 @@ jobs:
               mkdir -p /tmp/appcast-stable-refresh /tmp/appcast-stable-refresh-out
               BETA_ZIP_NAME="$(gh release view "$ROLLING_TAG" --repo "$GITHUB_REPOSITORY" --json assets \
                 --jq '.assets[].name' \
-                | grep -E '^dsh-chamber-native-[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+-macos-arm64\.zip$' \
+                | grep -E '^dsh-chamber-[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+-macos-arm64\.zip$' \
                 | sort -V | tail -n 1)"
               if [[ -n "$BETA_ZIP_NAME" ]]; then
                 gh release download "$ROLLING_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$BETA_ZIP_NAME" \

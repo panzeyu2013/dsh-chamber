@@ -10,7 +10,7 @@ import XCTest
 @testable import DSHChamberPoc
 
 final class PackagedLayoutTests: XCTestCase {
-    private let resources = "/Applications/dsh-chamber-native.app/Contents/Resources"
+    private let resources = "/Applications/dsh-chamber.app/Contents/Resources"
 
     /// #filePath = <repo>/macos/Tests/DSHChamberPocTests/PackagedLayoutTests.swift
     private func repoRoot() -> URL {
@@ -21,7 +21,7 @@ final class PackagedLayoutTests: XCTestCase {
 
     func testIsAppBundle() {
         XCTAssertTrue(PackagedLayout.isAppBundle(
-            executablePath: "/Applications/dsh-chamber-native.app/Contents/MacOS/DSHChamberPoc"))
+            executablePath: "/Applications/dsh-chamber.app/Contents/MacOS/DSHChamberPoc"))
         XCTAssertFalse(PackagedLayout.isAppBundle(executablePath: "/repo/macos/.build/debug/DSHChamberPoc"))
         XCTAssertFalse(PackagedLayout.isAppBundle(executablePath: ""))
     }

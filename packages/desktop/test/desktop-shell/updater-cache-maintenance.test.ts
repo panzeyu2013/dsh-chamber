@@ -124,14 +124,14 @@ test('resolveUpdaterCacheDir refuses a RELATIVE derived cache dir (crafted env r
 })
 
 test('cachedUpdateVersion reads the first canonical chamber version out of a cache file name', () => {
-  assert.equal(cachedUpdateVersion('dsh-chamber-0.2.2-arm64-mac.zip'), '0.2.2')
-  assert.equal(cachedUpdateVersion('dsh-chamber-0.2.2-beta.1-arm64-mac.zip'), '0.2.2-beta.1')
+  assert.equal(cachedUpdateVersion('dsh-chamber-electron-0.2.2-arm64-mac.zip'), '0.2.2')
+  assert.equal(cachedUpdateVersion('dsh-chamber-electron-0.2.2-beta.1-arm64-mac.zip'), '0.2.2-beta.1')
   assert.equal(cachedUpdateVersion('dsh-chamber-0.10.2-x64.zip'), '0.10.2')
   assert.equal(cachedUpdateVersion('dsh-chamber-latest-mac.zip'), null)
   assert.equal(cachedUpdateVersion('0.2.2'), '0.2.2')
   // An extra dotted tail does not confuse the version read (patch stops at
   // the separator) and non-string input yields null.
-  assert.equal(cachedUpdateVersion('dsh-chamber-0.2.2.1-arm64.zip'), '0.2.2')
+  assert.equal(cachedUpdateVersion('dsh-chamber-electron-0.2.2.1-arm64.zip'), '0.2.2')
   assert.equal(cachedUpdateVersion(null), null)
   assert.equal(cachedUpdateVersion(undefined), null)
   assert.equal(cachedUpdateVersion(42), null)
@@ -170,7 +170,7 @@ async function writePendingInfo(cacheDir: string, fileName: string): Promise<voi
 test('cleanupStaleUpdateCache removes the whole cache dir when the pending update is already installed', async () => {
   const { root, cacheDir } = await makeCacheTree('equal')
   try {
-    await writePendingInfo(cacheDir, 'dsh-chamber-0.2.2-arm64-mac.zip')
+    await writePendingInfo(cacheDir, 'dsh-chamber-electron-0.2.2-arm64-mac.zip')
     await writeFile(join(cacheDir, 'update.zip'), 'x', 'utf8')
     assert.equal(await cleanupStaleUpdateCache(cacheDir, '0.2.2'), true, 'pending == running → stale (already installed)')
     assert.equal(existsSync(cacheDir), false, 'the whole cache dir (incl. update.zip) must be removed')
@@ -182,7 +182,7 @@ test('cleanupStaleUpdateCache removes the whole cache dir when the pending updat
 test('cleanupStaleUpdateCache removes an older pending update but keeps a newer one', async () => {
   const older = await makeCacheTree('older')
   try {
-    await writePendingInfo(older.cacheDir, 'dsh-chamber-0.2.1-arm64-mac.zip')
+    await writePendingInfo(older.cacheDir, 'dsh-chamber-electron-0.2.1-arm64-mac.zip')
     assert.equal(await cleanupStaleUpdateCache(older.cacheDir, '0.2.2'), true, 'pending older than running → stale')
     assert.equal(existsSync(older.cacheDir), false)
   } finally {
@@ -190,7 +190,7 @@ test('cleanupStaleUpdateCache removes an older pending update but keeps a newer 
   }
   const newer = await makeCacheTree('newer')
   try {
-    await writePendingInfo(newer.cacheDir, 'dsh-chamber-0.2.3-arm64-mac.zip')
+    await writePendingInfo(newer.cacheDir, 'dsh-chamber-electron-0.2.3-arm64-mac.zip')
     await writeFile(join(newer.cacheDir, 'update.zip'), 'x', 'utf8')
     assert.equal(await cleanupStaleUpdateCache(newer.cacheDir, '0.2.2'), false,
       'a genuinely newer pending update must never be deleted')
@@ -242,7 +242,7 @@ test('cleanupStaleUpdateCache keeps the cache when nothing is provably stale', a
   // (superseded); running 0.2.2-beta.1 keeps a pending stable 0.2.2.
   const betaStale = await makeCacheTree('beta-stale')
   try {
-    await writePendingInfo(betaStale.cacheDir, 'dsh-chamber-0.2.2-beta.1-arm64-mac.zip')
+    await writePendingInfo(betaStale.cacheDir, 'dsh-chamber-electron-0.2.2-beta.1-arm64-mac.zip')
     assert.equal(await cleanupStaleUpdateCache(betaStale.cacheDir, '0.2.2'), true)
     assert.equal(existsSync(betaStale.cacheDir), false)
   } finally {
@@ -250,7 +250,7 @@ test('cleanupStaleUpdateCache keeps the cache when nothing is provably stale', a
   }
   const betaFresh = await makeCacheTree('beta-fresh')
   try {
-    await writePendingInfo(betaFresh.cacheDir, 'dsh-chamber-0.2.2-arm64-mac.zip')
+    await writePendingInfo(betaFresh.cacheDir, 'dsh-chamber-electron-0.2.2-arm64-mac.zip')
     assert.equal(await cleanupStaleUpdateCache(betaFresh.cacheDir, '0.2.2-beta.1'), false,
       'a pending stable 0.2.2 is still newer than a running 0.2.2-beta.1')
   } finally {
@@ -278,7 +278,7 @@ test('cleanupStaleUpdateCache tolerates shape-less JSON content and removal fail
   // A failing removal reports false instead of throwing.
   const failing = await makeCacheTree('rm-fail')
   try {
-    await writePendingInfo(failing.cacheDir, 'dsh-chamber-0.2.2-arm64-mac.zip')
+    await writePendingInfo(failing.cacheDir, 'dsh-chamber-electron-0.2.2-arm64-mac.zip')
     assert.equal(await cleanupStaleUpdateCache(failing.cacheDir, '0.2.2', {
       removeTree: async () => { throw new Error('EACCES /private/var') },
     }), false)
@@ -291,7 +291,7 @@ test('cleanupStaleUpdateCache tolerates shape-less JSON content and removal fail
 test('controller startup cleans a stale injected cache dir and skips when disabled', async () => {
   const stale = await makeCacheTree('controller-stale')
   try {
-    await writePendingInfo(stale.cacheDir, 'dsh-chamber-0.2.2-arm64-mac.zip')
+    await writePendingInfo(stale.cacheDir, 'dsh-chamber-electron-0.2.2-arm64-mac.zip')
     const { controller } = makeController({ version: '0.2.2', deps: { staleCache: { cacheDir: stale.cacheDir } } })
     assert.equal(controller.state().phase, 'idle', 'controller construction is not affected by the cleanup')
     assert.equal(await waitFor(() => !existsSync(stale.cacheDir)), true,
@@ -302,7 +302,7 @@ test('controller startup cleans a stale injected cache dir and skips when disabl
   // { cacheDir: null } disables the cleanup entirely.
   const kept = await makeCacheTree('controller-kept')
   try {
-    await writePendingInfo(kept.cacheDir, 'dsh-chamber-0.2.2-arm64-mac.zip')
+    await writePendingInfo(kept.cacheDir, 'dsh-chamber-electron-0.2.2-arm64-mac.zip')
     const { controller } = makeController({ version: '0.2.2', deps: { staleCache: { cacheDir: null } } })
     assert.equal(controller.state().phase, 'idle')
     await new Promise(resolve => setTimeout(resolve, 80))

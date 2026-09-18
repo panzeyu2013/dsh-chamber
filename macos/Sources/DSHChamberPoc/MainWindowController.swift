@@ -69,10 +69,10 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// （deviation T-18），不随本值收敛。
     private static let windowSize = NSSize(width: 1280, height: 786)
 
-    /// 原生壳**可见**产品名（T-1：暂时把 native 标记为 dsh-chamber-native）：
+    /// 原生壳**可见**产品名（T-1：暂时把 native 标记为 dsh-chamber）：
     /// 窗口标题 / 失败说明页 / fatal 提示框共用。不可见名（SwiftPM target、
     /// CFBundleExecutable、资源名 bridge-shim.poc.js）保持 DSHChamberPoc 不变。
-    static let displayName = "dsh-chamber-native"
+    static let displayName = "dsh-chamber"
 
     /// 首帧/重载底色（T-4）：与 Electron backgroundColor:#0f1115、前端
     /// packages/renderer/index.html 骨架底色同一 token 值
@@ -377,7 +377,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                               styleMask: [.titled, .closable, .miniaturizable, .resizable],
                               backing: .buffered,
                               defer: false)
-        // T-1：可见标题 = dsh-chamber-native（功能对齐 Electron 的标题冻结行为；
+        // T-1：可见标题 = dsh-chamber（功能对齐 Electron 的标题冻结行为；
         // 2026-12 双端逐函数核对 U5/V8；不可见 target/可执行名保持 DSHChamberPoc）。
         window.title = Self.displayName
         // T-4：窗口底色 = 同一 #0f1115（缩放/全屏露底不白闪）。

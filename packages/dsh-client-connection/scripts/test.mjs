@@ -19,14 +19,11 @@ const GROUPS = {
     'test/base-path/api-path.test.ts',
     'test/base-path/carrier-assembly.test.ts',
   ],
-  // lifecycle: the apply/start seam and the liveness wiring it installs.
+  // lifecycle: the apply/start seam it installs (the former liveness-wiring
+  // source lock was removed by the 2026-12 ruling).
   lifecycle: [
     {
       file: 'test/lifecycle/client-apply.test.ts',
-      nodeArgs: ['--import', '../../scripts/dev/test-connection-register.mjs'],
-    },
-    {
-
       nodeArgs: ['--import', '../../scripts/dev/test-connection-register.mjs'],
     },
   ],

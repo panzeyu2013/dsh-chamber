@@ -3,9 +3,9 @@
  * release-artifacts.mjs —— 双端同 tag 产物清单（W-27；design 25 §8.4/§六）
  *
  * 单 tag 下两个 macOS 产物族并存（D2 共存决策）：
- *   Electron 腿（build-macos，既有）：dsh-chamber-<v>-arm64.dmg /
- *     dsh-chamber-<v>-arm64-mac.zip + 更新 feed（latest-mac.yml | beta-mac.yml）
- *   Swift 腿（build-swift，W-26）：dsh-chamber-native-<v>-macos-arm64.dmg /
+ *   Electron 腿（build-macos，既有）：dsh-chamber-electron-<v>-arm64.dmg /
+ *     dsh-chamber-electron-<v>-arm64-mac.zip + 更新 feed（latest-mac.yml | beta-mac.yml）
+ *   Swift 腿（build-swift，W-26）：dsh-chamber-<v>-macos-arm64.dmg /
  *     .zip + Sparkle appcast（S-01 / 裁决 D-1 选 B；S-22 双通道：稳定版
  *     appcast-swift.xml，beta 版 appcast-swift-beta.xml——beta 是 GitHub
  *     prerelease，releases/latest 解析不到它，因此 beta appcast 每次发布都覆盖
@@ -15,7 +15,8 @@
  *     （S-22/S-23：beta 客户端能看到 final，与 Electron 的 latest.yml 回退对齐）。
  *
  * 本模块把"产物名不得碰撞 / feed 归属唯一"从散文变成可执行断言（演练清单 +
- * 策略测试共用）：Electron 的名字不含 `-native`，Swift 的名字必含 `-native`；
+ * 策略测试共用）：Electron 的名字必含 `-electron`，Swift 原生腿用裸名 `dsh-chamber-`
+ * （2026-12 命名归属反转：旧约定是 Electron 裸名 / Swift 带 `-native` 后缀）；
  * 只有 Electron 腿产出 `*.yml` feed，Swift 腿的更新源是 `*.xml` appcast。
  *
  * CLI：`node scripts/release/release-artifacts.mjs <version> [--check-dir <dir>]`。
@@ -32,8 +33,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 /** Electron mac 腿产物（electron-builder 缺省命名：productName-version-arch[-mac].ext）。 */
 export function electronMacArtifacts(version) {
   return [
-    `dsh-chamber-${version}-arm64.dmg`,
-    `dsh-chamber-${version}-arm64-mac.zip`,
+    `dsh-chamber-electron-${version}-arm64.dmg`,
+    `dsh-chamber-electron-${version}-arm64-mac.zip`,
   ]
 }
 
@@ -42,11 +43,11 @@ export function electronMacFeed(version) {
   return version.includes('-') ? `beta-mac.yml` : `latest-mac.yml`
 }
 
-/** Swift 原生壳产物（W-26 build-swift：-native 命名；更新源 = Sparkle appcast）。 */
+/** Swift 原生壳产物（W-26 build-swift：裸名 dsh-chamber-…；更新源 = Sparkle appcast）。 */
 export function nativeMacArtifacts(version) {
   return [
-    `dsh-chamber-native-${version}-macos-arm64.dmg`,
-    `dsh-chamber-native-${version}-macos-arm64.zip`,
+    `dsh-chamber-${version}-macos-arm64.dmg`,
+    `dsh-chamber-${version}-macos-arm64.zip`,
   ]
 }
 
@@ -113,7 +114,7 @@ export function nativeAppcastDownloadPrefix(version, repository) {
 /** 最新 final release 的 native zip 模式（S-22/S-23：beta appcast 同时收当前 beta
  *  与最新 final，beta 客户端因此能看到 final——Electron beta 经 latest.yml 回退
  *  本来就能看到；发布腿用 gh release download 按本模式取件）。 */
-export const NATIVE_STABLE_ZIP_PATTERN = 'dsh-chamber-native-*-macos-arm64.zip'
+export const NATIVE_STABLE_ZIP_PATTERN = 'dsh-chamber-*-macos-arm64.zip'
 
 /**
  * 复刻 Sparkle 的 enclosure 绝对 URL 解析（S-36 锁步；纯函数，测试直测）：

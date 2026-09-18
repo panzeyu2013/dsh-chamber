@@ -104,8 +104,8 @@ CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 ta
 - [ ] **本地不做打包/签名/公证**：安装包/更新源由 release.yml 的
       build-macos / build-windows / build-linux / build-swift 在 CI 生成，发布者本机无需
       hdiutil/密钥。Swift 原生腿另产
-      `dsh-chamber-native-<版本>-macos-arm64.dmg/.zip`（与 Electron 产物同 draft、命名
-      带 `-native` 防碰撞）。
+      `dsh-chamber-<版本>-macos-arm64.dmg/.zip`（与 Electron 产物同 draft；Electron 侧名字
+      带 `-electron`，两族前缀互不包含，故不碰撞）。
 - [ ] **Linux 腿（design 22）**：build-linux 在 ubuntu-22.04 构建 AppImage（x64）；
       非 dry_run 断言 `latest-linux.yml`（或 beta 的 `beta-linux.yml`）存在且互斥、
       无 .blockmap；打包 dsh runtime 平台前缀 `linux-`。
@@ -170,8 +170,8 @@ CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 ta
 ## 8. 发布后
 
 - [ ] GitHub Release 正文 = changelog `[<version>]` 节（自动提取）。
-- [ ] **CI 产物**齐全（本地不打包）：mac `.dmg`/`.zip`，**Swift 原生
-      `-native` `.dmg`/`.zip`**，win `.exe`，Gateway `.tgz` + 同名
+- [ ] **CI 产物**齐全（本地不打包）：Electron mac `dsh-chamber-electron-*` `.dmg`/`.zip`，**Swift 原生
+      `dsh-chamber-*` `.dmg`/`.zip`**，win `.exe`，Gateway `.tgz` + 同名
       `.tgz.sha256`；无 `.blockmap`，Gateway 不经 npm 发布。
 - [ ] 更新源严格按通道存在：stable 只有 `latest.yml`/`latest-mac.yml`，beta 只有
       `beta.yml`/`beta-mac.yml`；beta Release 为 prerelease 且不占 GitHub latest。

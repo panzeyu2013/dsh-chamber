@@ -97,14 +97,14 @@ assert.match(gatewayBuild, /Upload gateway package to the draft release/)
 // finalize-release, so the linux slice above must stop at its boundary.
 //
 // 2026-12 audit (P1): the old block was satisfiable by the wrong code —
-// `--app-name dsh-chamber-native` alone matched the "native artifact names"
+// `--app-name dsh-chamber` alone matched the "native artifact names"
 // alternation, `--identity` alone matched the "identity|notarytool"
 // alternation, and nothing pinned the staple-before-archive order. Every claim
 // is now an exact-string or an order assertion.
 assert.match(swiftBuild, /pnpm run build:sidecar/)
 assert.match(swiftBuild, /pnpm run build:swift-app --out macos\/release/)
-assert.ok(swiftBuild.includes('--app-name dsh-chamber-native'))
-assert.ok(swiftBuild.includes('--artifact-basename "dsh-chamber-native-${VERSION}-macos-arm64"'),
+assert.ok(swiftBuild.includes('--app-name dsh-chamber'))
+assert.ok(swiftBuild.includes('--artifact-basename "dsh-chamber-${VERSION}-macos-arm64"'),
   'the uploaded .zip/.dmg basename must be exact (a -native substring is not enough)')
 assert.ok(swiftBuild.includes('--identity "$IDENTITY"'),
   'the resolved Developer ID identity must actually be passed to build:swift-app')
@@ -488,9 +488,9 @@ assert.ok(swiftBuild.includes('"${BASE}.dmg" "${BASE}.zip" --clobber'),
 // Swift leg only). A reused packages/desktop/release can hold older versions
 // side by side; every reference now names the exact staged artifact, and the
 // zip verify step must carry the VERSION env its path interpolation needs.
-assert.ok(macBuild.includes('BASE="packages/desktop/release/dsh-chamber-${VERSION}-arm64"'),
+assert.ok(macBuild.includes('BASE="packages/desktop/release/dsh-chamber-electron-${VERSION}-arm64"'),
   'G36: the mac leg must derive the exact artifact base from VERSION')
-assert.ok(macBuild.includes('APP_DIR="packages/desktop/release/mac-arm64/dsh-chamber.app"'),
+assert.ok(macBuild.includes('APP_DIR="packages/desktop/release/mac-arm64/dsh-chamber-electron.app"'),
   'G36: the app bundle path must be exact, not find|head')
 assert.ok(macBuild.includes('test -f "${BASE}.dmg"') && macBuild.includes('test -f "${BASE}-mac.zip"'),
   'G36: the verify step must assert the exact dmg/zip names')

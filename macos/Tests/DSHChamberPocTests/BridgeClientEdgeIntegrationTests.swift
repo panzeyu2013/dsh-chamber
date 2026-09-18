@@ -58,7 +58,7 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
     // MARK: - 环境解析（与 BridgeClientPocStubIntegrationTests 同规）
 
     /// 缺省 Node：打包态 dsh-chamber 的 Electron 二进制（AppDelegate 同款常量）
-    private static let defaultNodePath = "/Applications/dsh-chamber.app/Contents/MacOS/dsh-chamber"
+    private static let defaultNodePath = "/Applications/dsh-chamber-electron.app/Contents/MacOS/dsh-chamber-electron"
     /// sidecar 入口脚本相对仓库根的位置（真实 sidecar，非 poc 桩）
     private static let sidecarRelativePath = "packages/desktop/sidecar-entry.ts"
     /// 单通道 invoke 超时（sidecar 全量应答 <1s；5s 是「永不达」的余量）
@@ -365,11 +365,14 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
         }
     }
 
-    /// 逐通道 invoke 超时：update-check 是唯一真实网络探测（上游 releases/
-    /// registry 查询），网络抖动下可能 >5s——给 15s 余量；其余 59 通道保持
-    /// 5s 紧界（挂起判定不被稀释）。
+    /// 逐通道 invoke 超时：两个通道做真实的秒级工作——update-check 是真实网络
+    /// 探测（上游 releases/registry 查询），网络抖动下可能 >5s；runtime-restart
+    /// 会停掉并重启一个**真实的本地 dsh 宿主**（2026-09 实测冷启动 2–10s，套件里
+    /// 前序用例留下的宿主还要先停），5s 紧界会在本机稳定误判为挂起——两者各给
+    /// 20s 余量；其余 58 通道保持 5s 紧界（挂起判定不被稀释）。
     private static func invokeTimeout(for channel: String) -> TimeInterval {
-        channel == "dsh-chamber:update-check" ? 15 : invokeTimeout
+        let realWork: Set<String> = ["dsh-chamber:update-check", "dsh-chamber:runtime-restart"]
+        return realWork.contains(channel) ? 20 : invokeTimeout
     }
 
     private func runSmokeLoop(_ bridge: BridgeClient,

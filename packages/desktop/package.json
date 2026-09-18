@@ -1,6 +1,6 @@
 {
   "name": "@dsh-chamber/desktop",
-  "version": "0.3.2-beta.2",
+  "version": "0.3.2-beta.3",
   "type": "module",
   "main": "main.ts",
   "scripts": {
@@ -31,10 +31,10 @@
   },
   "build": {
     "appId": "com.dshchamber.desktop",
-    "productName": "dsh-chamber",
+    "productName": "dsh-chamber-electron",
     "protocols": [
       {
-        "name": "dsh-chamber",
+        "name": "dsh-chamber-electron",
         "schemes": [
           "dsh-chamber"
         ]
@@ -159,7 +159,7 @@
         "AppImage"
       ],
       "category": "Development",
-      "executableName": "dsh-chamber",
+      "executableName": "dsh-chamber-electron",
       "desktop": {
         "entry": {
           "Name": "dsh-chamber",

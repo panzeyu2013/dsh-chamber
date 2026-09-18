@@ -134,7 +134,7 @@ public enum PackagedLayout {
     /// node 解析（S4）：`POC_NODE_BIN`（显式，须可执行）→ 装配态自带
     /// `<Resources>/sidecar/node`（须可执行）→ dev 从 PATH 找 node（逐目录
     /// 检查可执行）→ 皆无 → 抛错。旧「Electron 二进制当 Node」缺省已删除：
-    /// 那是另一个 app 的二进制（/Applications/dsh-chamber.app/…），缺自带
+    /// 那是另一个 app 的二进制（/Applications/dsh-chamber-electron.app/…），缺自带
     /// node 时绝不能拿它顶替（审计 major fail-open）。`isExecutable` 注入
     /// 以便单测。
     public static func resolveNode(

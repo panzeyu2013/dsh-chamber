@@ -828,7 +828,7 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
   if (!options.noDmg) {
     rmSync(layout.dmgPath, { force: true })
     // 2026-12 P7：卷内容 = .app + /Applications 快捷方式；卷名来自 --app-name
-    // （旧实现固定 APP_NAME，与 --app-name dsh-chamber-native 的发布腿不符）。
+    // （旧实现固定 APP_NAME，与 --app-name dsh-chamber 的发布腿不符）。
     const stageDir = path.join(layout.outDir, '.dmg-stage')
     try {
       stageDmgVolume(layout.appDir, stageDir, options.appName, io)

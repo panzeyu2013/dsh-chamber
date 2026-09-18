@@ -2,7 +2,7 @@
 //  NativeIdentityTests.swift
 //  DSHChamberPocTests
 //
-//  T-1（2026-12 用户指令）：可见标识暂时标记为 dsh-chamber-native——窗口标题、
+//  T-1（2026-12 用户指令）：可见标识暂时标记为 dsh-chamber——窗口标题、
 //  失败说明页文案、About（Info.plist CFBundleName）的锁步断言，防止
 //  "poc"/"DSHChamberPoc" 再露到用户可见面；T-4 首帧白闪的底色 token 同处钉住。
 //
@@ -11,7 +11,7 @@ import XCTest
 
 final class NativeIdentityTests: XCTestCase {
 
-    static let displayName = "dsh-chamber-native"
+    static let displayName = "dsh-chamber"
 
     private func macosSource(_ relative: String) throws -> String {
         // #filePath = <repo>/macos/Tests/DSHChamberPocTests/NativeIdentityTests.swift
@@ -23,7 +23,7 @@ final class NativeIdentityTests: XCTestCase {
                           encoding: .utf8)
     }
 
-    func testVisibleDisplayNameIsNativeMarkerWithoutPoc() {
+    func testVisibleDisplayNameCarriesTheProductNameWithoutPoc() {
         XCTAssertEqual(MainWindowController.displayName, Self.displayName)
         XCTAssertFalse(MainWindowController.displayName.lowercased().contains("poc"),
                        "可见产品名不得出现 poc")
@@ -34,10 +34,10 @@ final class NativeIdentityTests: XCTestCase {
         let source = try macosSource("Sources/DSHChamberPoc/MainWindowController.swift")
         XCTAssertTrue(source.contains("window.title = Self.displayName"),
                       "窗口标题必须走 displayName 单源（T-1）")
-        XCTAssertFalse(source.contains("window.title = \"dsh-chamber-native\""),
-                       "标题不得再抄一份字面量（单源）")
         XCTAssertFalse(source.contains("window.title = \"dsh-chamber\""),
-                       "旧标题 dsh-chamber 不得回归")
+                       "标题不得再抄一份字面量（单源）")
+        XCTAssertFalse(source.contains("window.title = \"dsh-chamber-native\""),
+                       "旧标题 dsh-chamber-native 不得回归")
         XCTAssertFalse(source.contains("window.title = \"DSHChamberPoc\""))
     }
 

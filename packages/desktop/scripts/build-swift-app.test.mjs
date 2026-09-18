@@ -143,11 +143,11 @@ test('① 参数解析：缺省与覆盖', () => {
 
   // 发布腿命名（W-26）：.app 目录名与产物基名可分离（-native 防碰撞）。
   const named = parseBuildSwiftAppArgs([
-    '--app-name', 'dsh-chamber-native',
-    '--artifact-basename', 'dsh-chamber-native-0.2.2-macos-arm64',
+    '--app-name', 'dsh-chamber',
+    '--artifact-basename', 'dsh-chamber-0.2.2-macos-arm64',
   ])
-  assert.equal(named.appName, 'dsh-chamber-native')
-  assert.equal(named.artifactBasename, 'dsh-chamber-native-0.2.2-macos-arm64')
+  assert.equal(named.appName, 'dsh-chamber')
+  assert.equal(named.artifactBasename, 'dsh-chamber-0.2.2-macos-arm64')
 })
 
 test('① 布局：资源包在 Contents/Resources（放 .app 根会被 codesign 判未密封）', () => {
@@ -162,11 +162,11 @@ test('① 布局：资源包在 Contents/Resources（放 .app 根会被 codesign
   assert.equal(buildOutputDir('release'), path.join(macosDir, '.build', 'release'))
 
   // 发布腿命名：.app 目录与 zip/dmg 基名各自可定制。
-  const named = appLayout('/tmp/out', 'dsh-chamber-native', 'dsh-chamber-native-0.2.2-macos-arm64')
-  assert.equal(named.appDir, '/tmp/out/dsh-chamber-native.app')
-  assert.equal(named.executable, '/tmp/out/dsh-chamber-native.app/Contents/MacOS/' + APP_NAME)
-  assert.equal(named.zipPath, '/tmp/out/dsh-chamber-native-0.2.2-macos-arm64.zip')
-  assert.equal(named.dmgPath, '/tmp/out/dsh-chamber-native-0.2.2-macos-arm64.dmg')
+  const named = appLayout('/tmp/out', 'dsh-chamber', 'dsh-chamber-0.2.2-macos-arm64')
+  assert.equal(named.appDir, '/tmp/out/dsh-chamber.app')
+  assert.equal(named.executable, '/tmp/out/dsh-chamber.app/Contents/MacOS/' + APP_NAME)
+  assert.equal(named.zipPath, '/tmp/out/dsh-chamber-0.2.2-macos-arm64.zip')
+  assert.equal(named.dmgPath, '/tmp/out/dsh-chamber-0.2.2-macos-arm64.dmg')
 })
 
 test('② Info.plist 渲染：只替换占位符', () => {
@@ -200,7 +200,9 @@ test('②b CFBundleVersion：beta.N 与 final 同 base 不同且有序（S-23）
     }
     return 0
   }
-  assert.ok(cmp('0.3.2-beta.1', '0.3.2-beta.2') < 0, 'beta.N 必须能看到 beta.N+1')
+  // 排序语义用中性版本号做输入：写死"上一发布版本"会让 §3 的旧版本号残留扫描在
+  // 每次 bump 后误报（checklist §3 的扫描面就是这一处）。
+  assert.ok(cmp('1.2.3-beta.1', '1.2.3-beta.2') < 0, 'beta.N 必须能看到 beta.N+1')
   assert.ok(cmp('0.3.2-beta.9', '0.3.2-beta.10') < 0, 'beta 序号按数值比较而不是字典序')
   assert.ok(cmp('0.3.2-beta.10', '0.3.2') < 0, 'final 必须大于同 base 的 beta（S-23 的 beta.N→final 路径）')
   assert.ok(cmp('0.3.2', '0.3.3-beta.1') < 0, '下一个 patch 的 beta 大于上一个 final')
@@ -265,17 +267,17 @@ test('④ --dry-run 子进程：就绪校验、计划打印、不写盘、半配
 
 test('④b dryRunPlanReport：feed/公钥成对、https、.xml、精确产物名（G30）', () => {
   const good = parseBuildSwiftAppArgs([
-    '--out', '/tmp/dsh-plan', '--app-name', 'dsh-chamber-native',
-    '--artifact-basename', 'dsh-chamber-native-9.9.9-macos-arm64',
+    '--out', '/tmp/dsh-plan', '--app-name', 'dsh-chamber',
+    '--artifact-basename', 'dsh-chamber-9.9.9-macos-arm64',
     '--sparkle-feed', 'https://github.com/o/r/releases/latest/download/appcast-swift.xml',
     '--sparkle-public-key', 'abc=',
   ])
   const report = dryRunPlanReport(good)
-  assert.equal(report.layout.zipPath, '/tmp/dsh-plan/dsh-chamber-native-9.9.9-macos-arm64.zip')
+  assert.equal(report.layout.zipPath, '/tmp/dsh-plan/dsh-chamber-9.9.9-macos-arm64.zip')
   const text = report.lines.join('\n')
-  assert.match(text, /zip=\/tmp\/dsh-plan\/dsh-chamber-native-9\.9\.9-macos-arm64\.zip/)
-  assert.match(text, /dmg=\/tmp\/dsh-plan\/dsh-chamber-native-9\.9\.9-macos-arm64\.dmg/)
-  assert.match(text, /app-name=dsh-chamber-native；artifact-basename=dsh-chamber-native-9\.9\.9-macos-arm64/)
+  assert.match(text, /zip=\/tmp\/dsh-plan\/dsh-chamber-9\.9\.9-macos-arm64\.zip/)
+  assert.match(text, /dmg=\/tmp\/dsh-plan\/dsh-chamber-9\.9\.9-macos-arm64\.dmg/)
+  assert.match(text, /app-name=dsh-chamber；artifact-basename=dsh-chamber-9\.9\.9-macos-arm64/)
   assert.match(text, /sparkle-feed=https:\/\/github\.com\/o\/r\/releases\/latest\/download\/appcast-swift\.xml/)
   assert.match(text, /sparkle-channel=stable（releases\/latest）/, '稳定通道必须按 releases/latest 标注')
   assert.doesNotMatch(text, /abc=/, '公钥值不得回显')
@@ -285,7 +287,7 @@ test('④b dryRunPlanReport：feed/公钥成对、https、.xml、精确产物名
   const rollingFeed = `https://github.com/o/r/releases/download/${NATIVE_BETA_ROLLING_TAG}/appcast-swift-beta.xml`
   const beta = dryRunPlanReport(parseBuildSwiftAppArgs([
     '--out', '/tmp/dsh-plan',
-    '--artifact-basename', 'dsh-chamber-native-0.3.2-beta.1-macos-arm64',
+    '--artifact-basename', 'dsh-chamber-0.3.2-beta.1-macos-arm64',
     '--sparkle-feed', rollingFeed, '--sparkle-public-key', 'abc=',
   ]))
   assert.match(
@@ -657,15 +659,15 @@ test('⑬ DMG 卷内容：/Applications 快捷方式 + 卷名来自 --app-name',
     mkdirSync(path.join(app, 'Contents'), { recursive: true })
     writeFileSync(path.join(app, 'Contents', 'Info.plist'), 'plist')
     const stage = path.join(dir, 'stage')
-    stageDmgVolume(app, stage, 'dsh-chamber-native')
-    assert.ok(existsSync(path.join(stage, 'dsh-chamber-native.app', 'Contents', 'Info.plist')),
+    stageDmgVolume(app, stage, 'dsh-chamber')
+    assert.ok(existsSync(path.join(stage, 'dsh-chamber.app', 'Contents', 'Info.plist')),
       'DMG 卷内 app 名必须来自 --app-name')
     const link = path.join(stage, 'Applications')
     assert.ok(lstatSync(link).isSymbolicLink(), 'DMG 卷必须带 /Applications 快捷方式（P7）')
     assert.equal(readlinkSync(link), '/Applications')
     assert.deepEqual(
-      dmgCreateArgs({ appName: 'dsh-chamber-native' }, '/tmp/stage', '/tmp/x.dmg'),
-      ['create', '-volname', 'dsh-chamber-native', '-srcfolder', '/tmp/stage', '-ov', '-format', 'UDZO', '/tmp/x.dmg'],
+      dmgCreateArgs({ appName: 'dsh-chamber' }, '/tmp/stage', '/tmp/x.dmg'),
+      ['create', '-volname', 'dsh-chamber', '-srcfolder', '/tmp/stage', '-ov', '-format', 'UDZO', '/tmp/x.dmg'],
       'hdiutil 卷名必须来自 --app-name（不再固定 APP_NAME）',
     )
   } finally {
@@ -681,21 +683,21 @@ test('⑬ 真实 DMG：卷内含 .app + /Applications 链接，卷名 = --app-na
   const out = tempOut()
   try {
     await runBuildSwiftApp(parseBuildSwiftAppArgs([
-      '--out', out, '--app-name', 'dsh-chamber-native',
-      '--artifact-basename', 'dsh-chamber-native-9.9.9-macos-arm64',
+      '--out', out, '--app-name', 'dsh-chamber',
+      '--artifact-basename', 'dsh-chamber-9.9.9-macos-arm64',
       '--skip-build', '--skip-sidecar', '--skip-web-dist', '--no-sign', '--no-zip',
     ]), { log: () => {}, error: () => {} })
-    const dmg = path.join(out, 'dsh-chamber-native-9.9.9-macos-arm64.dmg')
+    const dmg = path.join(out, 'dsh-chamber-9.9.9-macos-arm64.dmg')
     assert.ok(existsSync(dmg), 'DMG 应产出')
     const mount = path.join(out, 'mnt')
     mkdirSync(mount)
     const attach = spawnSync('hdiutil', ['attach', '-nobrowse', '-readonly', '-mountpoint', mount, dmg], { encoding: 'utf8' })
     assert.equal(attach.status, 0, attach.stderr + attach.stdout)
     try {
-      assert.ok(existsSync(path.join(mount, 'dsh-chamber-native.app', 'Contents', 'Info.plist')))
+      assert.ok(existsSync(path.join(mount, 'dsh-chamber.app', 'Contents', 'Info.plist')))
       assert.ok(lstatSync(path.join(mount, 'Applications')).isSymbolicLink(), '挂载卷内应有 /Applications 链接')
       const info = spawnSync('diskutil', ['info', mount], { encoding: 'utf8' })
-      assert.match(info.stdout, /Volume Name:\s+dsh-chamber-native/)
+      assert.match(info.stdout, /Volume Name:\s+dsh-chamber/)
     } finally {
       spawnSync('hdiutil', ['detach', mount, '-force'], { encoding: 'utf8' })
     }

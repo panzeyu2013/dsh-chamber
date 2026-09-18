@@ -612,7 +612,7 @@
     T10）；提问/计划待审/请求权限 = 14px 图标徽标（官方是 10px warning 圆点，保留图标刻意；词表取官方
     `status.waiting*`）。**后续对齐轮不得当漏改收掉**；判据见 06 §4.3。
 
-- **默认排序 `manual`（06 §3.1）**：按 wire 顺序，与官方默认 `updated` 不同，是有意产品取舍。**窗口标题冻结**：Electron 固定 `dsh-chamber`（`main.ts:878`，`page-title-updated` 被拦），原生壳可见名 `dsh-chamber-native`（T-14）；两侧标题都不随页面 `document.title` 变化。
+- **默认排序 `manual`（06 §3.1）**：按 wire 顺序，与官方默认 `updated` 不同，是有意产品取舍。**窗口标题冻结**：Electron 固定 `dsh-chamber-electron`（`main.ts:878`，`page-title-updated` 被拦），原生壳可见名 `dsh-chamber`（T-14/T-29）；两侧标题都不随页面 `document.title` 变化。
 
 - **菜单密度 = chamber 档，不跟随官方（2026-09 裁决）**：所有 chamber 弹层菜单（session/workspace kebab、排序、git 字段下拉、open-in 应用菜单）一律走官方原语 `compact`（26px/12px；open-in 原 dense、git 原默认档均本轮改判，见 design
   20 §1/design 08 §3.3），设置页服务器下拉用自己的 markup 而保留官方圆角/背景。判据见 design 06 §7/design 15④；**下一轮上游对齐不得**改回默认/dense，锁在 `sidebar/test/visual-lock/`。

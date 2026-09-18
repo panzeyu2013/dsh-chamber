@@ -49,7 +49,7 @@ final class BridgeClientPocStubIntegrationTests: XCTestCase {
     // MARK: - 环境解析（与 AppDelegate 同规）
 
     /// 缺省 Node：打包态 dsh-chamber 的 Electron 二进制（AppDelegate 同款常量）
-    private static let defaultNodePath = "/Applications/dsh-chamber.app/Contents/MacOS/dsh-chamber"
+    private static let defaultNodePath = "/Applications/dsh-chamber-electron.app/Contents/MacOS/dsh-chamber-electron"
     /// dev 态 sidecar 脚本相对仓库根的位置（AppDelegate 同款常量）
     private static let sidecarRelativePath = "packages/desktop/poc-sidecar.ts"
     /// 单次 invoke 的超时护栏（sidecar 应答一切请求；10s 是「永不达」的余量）
@@ -405,7 +405,7 @@ final class BridgeClientPocStubIntegrationTests: XCTestCase {
 /// 不把不可运行的机器染红）；spawn 参数带隔离的 --user-data-dir 与端口。
 final class BridgeClientRealEntryIntegrationTests: XCTestCase {
 
-    private static let defaultNodePath = "/Applications/dsh-chamber.app/Contents/MacOS/dsh-chamber"
+    private static let defaultNodePath = "/Applications/dsh-chamber-electron.app/Contents/MacOS/dsh-chamber-electron"
     private static let sidecarRelativePath = "packages/desktop/sidecar-entry.ts"
     private static let invokeTimeout: TimeInterval = 10
     private static let readyTimeout: TimeInterval = 30

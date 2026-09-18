@@ -70,7 +70,7 @@
 - [ ] `build:swift-app` 装配：`Contents/Resources/sidecar` 就位、`Sparkle.framework` 嵌入
       `Contents/Frameworks`、rpath 指向 `@executable_path/../Frameworks`、bundle 内无逃逸符号链接、
       `codesign --verify --deep --strict` 通过；`--dry-run` 必须能报出解析后的路径/feed/产物名计划。
-- [ ] 产物命名与形态：`dsh-chamber-native-<ver>-macos-arm64.{dmg,zip}`，与 Electron 产物共存不覆盖；
+- [ ] 产物命名与形态：`dsh-chamber-<ver>-macos-arm64.{dmg,zip}`，与 Electron 产物共存不覆盖；
       两侧 release 腿都按**精确产物名**验证/上传（S-36/G36；不再 find|head 或 glob），
       复用的输出目录因此不会把旧版本带进 release。
 - [ ] 更新腿装配：`Info.plist` 的 `CFBundleShortVersionString`/`CFBundleVersion` 与 tag 一致且

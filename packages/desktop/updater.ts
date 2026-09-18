@@ -398,7 +398,7 @@ export async function resolveUpdaterCacheDir(deps: ResolveUpdaterCacheDirDeps = 
 }
 
 /** First canonical chamber version (X.Y.Z or X.Y.Z-beta.N) inside an
- *  electron-updater cache file name (e.g. `dsh-chamber-0.2.2-arm64-mac.zip`
+ *  electron-updater cache file name (e.g. `dsh-chamber-electron-0.2.2-arm64-mac.zip`
  *  → `0.2.2`). Null when none. Numeric groups are greedy, so a glued digit
  *  run parses as one (possibly longer) canonical version; the digit-
  *  adjacency guard only rejects a fragment that would START right after a
