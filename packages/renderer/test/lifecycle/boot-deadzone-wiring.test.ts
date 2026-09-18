@@ -65,8 +65,9 @@ test('the window and grace values carry the numbers the design promises', () => 
 
 test('serving gate: ready serves, idle is unavailable, a terminal phase fast-fails after the grace only', () => {
   assert.equal(decideServingGate({ phase: 'ready', nowMs: 0, terminalSinceMs: null }).action, 'serve')
-  // 相位缺失 = 投影里还没有该来源：与既有行为一致，立即放行（走无图降级）。
-  assert.equal(decideServingGate({ phase: undefined, nowMs: 0, terminalSinceMs: null }).action, 'unavailable')
+  // 相位缺失 = 投影里还没有该来源：事实未到 ≠ 手动断开，预算内继续等（调用方
+  // 绝对截止兜底）。2026-12 独立复核修正：折叠值 'idle' 曾让缺投影的来源被秒判无图。
+  assert.equal(decideServingGate({ phase: undefined, nowMs: 0, terminalSinceMs: null }).action, 'wait')
   // 手动断开：boot 本就被推迟，门必须立刻判不可服务，不烧预算。
   assert.equal(decideServingGate({ phase: 'idle', nowMs: 0, terminalSinceMs: null }).action, 'unavailable')
   // 连接中：继续等（绝对截止由调用方兜底）。

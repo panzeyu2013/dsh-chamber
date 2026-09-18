@@ -695,7 +695,7 @@ export default function App() {
    *    自动重挂一次——此前只有整页 reload 能恢复。每个 ready 世代一次。
    * 相位从 servers 的渲染期镜像读取，门自身带绝对上限，来源被移除即放弃。
    */
-  const serversPhaseRef = useRef<Record<string, string>>({})
+  const serversPhaseRef = useRef<Record<string, string | undefined>>({})
   const waitForServing = useCallback((instanceId: string): Promise<boolean> => {
     const deadline = Date.now() + SERVING_WAIT_MS
     // 终态宽限（W2）：用户点来源时 App 会先触发一次即时重连，相位需要一两个
@@ -705,7 +705,8 @@ export default function App() {
     return new Promise<boolean>((resolve) => {
       const check = (): void => {
         const phase = serversPhaseRef.current[instanceId]
-        if (phase === undefined) { resolve(false); return }
+        // undefined（投影未到）交给纯判定：事实未到不是"未连接"，预算内继续等
+        // （2026-12 独立复核修正：折叠值曾让缺投影的来源秒判无图）。
         if (phase === 'ready') { resolve(true); return }
         // 相位感知（W2，2026-12 boot 死区收敛）：`error`（快速重试耗尽）与
         // idle（手动断开）不再烧满整个 boot 预算；`connecting`/`degraded`
@@ -917,10 +918,20 @@ export default function App() {
     chamberBridge.publish(servers)
   }, [servers])
 
-  // 相位镜像（waitForServing 读它；effect 里写，避免渲染期改 ref）。
+  // 相位镜像（waitForServing 读它；effect 里写，避免渲染期改 ref）。远端来源取
+  // **原始 transport 投影**的相位（与 deferredBootIds 同源）：deriveServers 把
+  // "投影未到达"折叠成 'idle'，那是缺失事实的合成值——折叠值当输入会让一次投影
+  // 延迟被就绪门快判成"未连接"（2026-12 独立复核）。本地来源没有 transport 投影，
+  // 用派生相位；undefined = 事实未到，门在预算内继续等。
   useEffect(() => {
-    serversPhaseRef.current = Object.fromEntries(servers.map(server => [server.id, server.phase]))
-  }, [servers])
+    const phases: Record<string, string | undefined> = {}
+    for (const server of servers) {
+      if (server.id === LOCAL_INSTANCE_ID) { phases[server.id] = server.phase; continue }
+      const rawId = rawInstanceIdFromSourceId(server.id)
+      phases[server.id] = rawId === null ? server.phase : remoteStatus[rawId]?.phase
+    }
+    serversPhaseRef.current = phases
+  }, [servers, remoteStatus])
 
   /**
    * boot 推迟集合（W2，2026-12 boot 死区收敛）：**手动断开**（idle）的来源不

@@ -124,20 +124,29 @@ export function createControlLogSink(options: {
     try { closeSync(handle) } catch { /* 关闭失败不影响调用方 */ }
     handle = undefined
   }
-  try {
-    // 0700：与同 stateDir 的 host-logs.ts（design 02 §3.8）和原生壳
-    // NativeShellLog（0600/0700）同一纪律。日志行可能含本机路径/会话内容
-    // （凭据在写之前已脱敏，但文件不应被放宽到世界可读）。
-    mkdirSync(directory, { recursive: true, mode: 0o700 })
-    // **目录本身也要 no-follow**（2026-12 三轮复核）：文件级的 O_NOFOLLOW 只保护
-    // 最后一段，若 logs/ 是指向别处的符号链接，mkdirSync(recursive) 会接受它、
-    // 随后把日志写进攻击者选定的目录（对照 host-logs.ts 同族检查）。
-    if (lstatSync(directory).isSymbolicLink()) {
-      degrade('logs directory is a symbolic link: ' + directory)
+  /**
+   * 目录纪律（**每次开句柄前都查**，不只构造期）：0700 创建 + 目录本身 no-follow。
+   * 与同 stateDir 的 host-logs.ts（design 02 §3.8）和原生壳 NativeShellLog
+   * （0600/0700）同一纪律。文件级 O_NOFOLLOW 只保护最后一段，若 logs/ 是指向
+   * 别处的符号链接，mkdirSync(recursive) 会接受它，随后把日志写进攻击者选定的
+   * 目录（对照 host-logs.ts 同族检查）。2026-12 复核修正：reopen()/start() 是生产
+   * 必走路径，只在构造期查会让降级后的 sink 在 reopen 时被重新激活。
+   * @returns true = 目录可用；false = 已降级，调用方不得继续开句柄。
+   */
+  const validateDirectory = (): boolean => {
+    try {
+      mkdirSync(directory, { recursive: true, mode: 0o700 })
+      if (lstatSync(directory).isSymbolicLink()) {
+        degrade('logs directory is a symbolic link: ' + directory)
+        return false
+      }
+      return true
+    } catch (error) {
+      degrade(`cannot create ${directory}: ${String(error)}`)
+      return false
     }
-  } catch (error) {
-    degrade(`cannot create ${directory}: ${String(error)}`)
   }
+  validateDirectory()
   /**
    * 打开常驻句柄：**0600 + 不跟随符号链接**（O_NOFOLLOW），与 host-logs.ts 的
    * `open(..., O_WRONLY|O_APPEND|O_NOFOLLOW|O_CREAT|O_EXCL, 0o600)` 同族。
@@ -148,6 +157,9 @@ export function createControlLogSink(options: {
    */
   const openHandle = (): boolean => {
     if (handle !== undefined) return true
+    // reopen()/start() 是生产必走路径：构造期的目录检查不能只做一次，
+    // 否则符号链接目录会在 reopen 时被重新激活（O_NOFOLLOW 只保护最后一段）。
+    if (!validateDirectory()) return false
     try {
       handle = openSync(path,
         constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW, 0o600)

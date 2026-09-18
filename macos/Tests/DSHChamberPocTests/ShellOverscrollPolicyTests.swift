@@ -205,7 +205,12 @@ final class ShellOverscrollPolicyTests: XCTestCase {
     /// 装配锁步：策略"有效"由探针证明，"壳真的装了它"只能在这里钉住——
     /// 删掉或后移 MainWindowController 的 install 调用，此前所有门禁仍绿而 S-50 原样回归。
     func testMainWindowInstallsPolicyBeforeWebViewConstruction() throws {
+        // 去掉注释行再断言（2026-12 独立复核发现）：被注释掉的 install 调用会让
+        // 「出现 + 顺序」断言在策略实际被停用时仍然全绿。
         let source = try repoFile("macos/Sources/DSHChamberPoc/MainWindowController.swift")
+            .split(separator: "\n")
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
         let install = try XCTUnwrap(
             source.range(of: "ShellOverscrollPolicy.install(config: configuration)"),
             "装配点消失：视口越界策略不再被壳安装")

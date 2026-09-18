@@ -90,10 +90,16 @@ export interface ServingGateDecision {
  * 就绪门判定（纯函数）：`serve` = 图通道可以取；`unavailable` = 该来源此刻
  * 供不了图，boot 走既有的「无图降级」；`wait` = 继续轮询（受调用方的绝对
  * 截止兜底）。
+ *
+ * **`undefined`（投影尚未到达）走 `wait`，不是 `unavailable`**：调用方必须以
+ * **原始 transport 投影**的相位喂入，不能用 `deriveServers` 的 `?? 'idle'` 折叠值
+ * ——"事实未到"不等于"用户手动断开"，后者才是立即不可服务（2026-12 独立复核修正：
+ * 折叠值让缺投影的来源被秒判无图，把一次投影延迟变成无图挂载 + 只剩一次 ready
+ * 世代自愈）。
  */
 export function decideServingGate(facts: ServingGateFacts): ServingGateDecision {
   const { phase, nowMs, terminalSinceMs } = facts
-  if (phase === undefined) return { action: 'unavailable', terminalSinceMs: null }
+  if (phase === undefined) return { action: 'wait', terminalSinceMs: null }
   if (phase === 'ready') return { action: 'serve', terminalSinceMs: null }
   if (phase === 'idle') return { action: 'unavailable', terminalSinceMs: null }
   if (isTerminalUnreadyPhase(phase)) {

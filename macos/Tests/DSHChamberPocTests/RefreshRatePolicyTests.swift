@@ -155,11 +155,16 @@ final class RefreshRatePolicyTests: XCTestCase {
     /// 硬时序不变量：关偏好必须发生在构造 WKWebView 之前（建页后再改实测不生效）。
     /// 顺序被挪动时这里变红——注释不会响，这个断言会。
     func testRefreshRatePreferenceIsAppliedBeforeWebViewCreation() throws {
+        // 去掉注释行再断言（2026-12 独立复核发现）：被注释掉的 apply 调用会让
+        // 「出现 + 顺序」两条断言在策略实际被停用时仍然全绿。
         let controller = try source("Sources/DSHChamberPoc/MainWindowController.swift")
+            .split(separator: "\n")
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
         let applyIndex = try XCTUnwrap(
             controller.range(of: "RefreshRatePolicy.apply(to: configuration.preferences)")?.lowerBound,
             "MainWindowController 必须调用 RefreshRatePolicy.apply(to: configuration.preferences)")
-        // 锚在真正的构造语句上（"WKWebView(frame:" 也出现在 :199 的注释里，
+        // 锚在真正的构造语句上（"WKWebView(frame:" 也出现在装配注释里，
         // 用注释匹配会让这条断言失效）。
         let webViewIndex = try XCTUnwrap(
             controller.range(of: "let webView = WKWebView(frame:")?.lowerBound,

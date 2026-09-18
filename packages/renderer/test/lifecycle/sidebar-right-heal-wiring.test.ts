@@ -55,8 +55,11 @@ test('the App arms the serving gate, and it reaches the instance shell', () => {
 
 test('the phase mirror is written in an effect and feeds the bounded gate', () => {
   const app = read('../../src/App.tsx')
-  const mirror = /useEffect\(\(\) => \{\s*serversPhaseRef\.current = Object\.fromEntries\(servers\.map\(server => \[server\.id, server\.phase\]\)\)\s*\}, \[servers\]\)/
-  assert.match(app, mirror, 'the mirror is effect-written (never during render) and tracks servers')
+  // 2026-12 独立复核修正：远端来源的相位取**原始 transport 投影**（与 deferredBootIds
+  // 同源），不再用 deriveServers 的折叠值——缺投影必须走 wait 而不是秒判无图。
+  const mirror = /useEffect\(\(\) => \{\s*const phases: Record<string, string \| undefined> = \{\}[\s\S]*?serversPhaseRef\.current = phases\s*\}, \[servers, remoteStatus\]\)/
+  assert.match(app, mirror, 'the mirror is effect-written (never during render) and tracks servers + the raw projection')
+  assert.match(app, /remoteStatus\[rawId\]\?\.phase/, 'remote sources read the raw transport phase')
   assert.match(app, /const deadline = Date\.now\(\) \+ SERVING_WAIT_MS/)
   assert.match(app, /if \(Date\.now\(\) >= deadline\) \{ resolve\(false\); return \}/, 'the gate must time out, not hang')
 })

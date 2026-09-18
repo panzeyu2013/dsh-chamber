@@ -325,7 +325,7 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
   'process == "DSHChamberPoc"'` 无输出）⇒ 两类 flavor 的这条归因证据都等于丢失。
   **落盘规格归 design 02 §3.8 拥有**（`<stateDir>/logs/control-plane.log`：JSONL、
   有界轮转、0700/0600 + 不跟随符号链接、写失败降级告警一次；控制面拥有 stateDir，
-  故两 flavor 共用同一实现）；原生壳侧 sidecar stderr 的对应面归 design 25 D2
+  故两 flavor 共用同一实现）；原生壳侧 sidecar stderr 的对应面归 design 25 §3.1
   （`<userData>/logs/sidecar.log`，见那里的规格）。**未闭合**：真机事故下
   「`WebSocket stream … closed` 行确实可检索」未经实测（见 STATUS）。
 

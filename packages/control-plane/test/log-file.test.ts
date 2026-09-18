@@ -140,6 +140,25 @@ test('logs/ 本身是符号链接时必须拒绝落盘（文件级 O_NOFOLLOW �
   assert.ok(!existsSync(join(outside, CONTROL_LOG_FILE)), '绝不透过符号链接写出去')
 })
 
+test('logs/ 符号链接在 reopen 之后仍必须拒绝落盘（start() 无条件 reopen）', () => {
+  const stateDir = tempDir()
+  const outside = tempDir()
+  mkdirSync(join(stateDir, CONTROL_LOG_DIR), { recursive: true })
+  rmSync(join(stateDir, CONTROL_LOG_DIR), { recursive: true, force: true })
+  symlinkSync(outside, join(stateDir, CONTROL_LOG_DIR))
+  const warnings: string[] = []
+  const sink = createControlLogSink({ stateDir, warn: message => { warnings.push(message) } })
+  assert.equal(sink.isActive(), false, '构造期即降级')
+  // 生产路径：createControlPlane → start() 无条件 reopen()（2026-12 独立复核发现：
+  // 只查构造期会让降级在 reopen 时被撤销，O_NOFOLLOW 只保护最后一段）。
+  sink.reopen()
+  assert.equal(sink.isActive(), false, 'reopen 不得把符号链接目录重新激活')
+  sink.write({ ts: 't', level: 'log', line: 'must-not-land-outside' })
+  assert.ok(warnings.length >= 1, '降级必须告警')
+  assert.ok(!existsSync(join(outside, CONTROL_LOG_FILE)), 'reopen 后也绝不透过符号链接写出去')
+  assert.ok(!existsSync(join(outside, CONTROL_LOG_DIR)), '不得在链接目标目录里创建任何日志构件')
+})
+
 test('reopen 必须重新对齐磁盘水位（句柄已开时不 stat 会让边界涨到 2x 上限）', () => {
   const stateDir = tempDir()
   const sink = createControlLogSink({ stateDir, maxBytes: 100, warn: () => undefined })
