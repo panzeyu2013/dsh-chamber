@@ -994,6 +994,14 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
 
 ---
 
+- **入场动画退役（2026-12，可见性不变式）**：侧栏的 `wide-in`/`rail-in`/`rail-fade-in`
+  整组删除（`SidebarRoot.module.css`）。它们都以 `opacity: 0` 为首帧，而 CSS 时间线只在
+  子树被渲染时推进：隐藏实例壳（`content-visibility: hidden`）或窗口被遮挡时字标与设置
+  座席会停在首帧——不可见、仍可命中、除重挂载外不自愈（WKWebView 实测见 STATUS）。
+  必要内容不再参与入场动画；折叠的位移/裁剪仍由 AppFrame 轨道过渡承担，`.fading` 保留
+  （类驱动 + settle 定时器界定）。回归锁：`test/visual-lock/`（该包）+ 渲染器隐藏壳门
+  （design 05 §4）。设置壳按来源重放的 `contentFadeIn` 同批退役。
+
 ## 8. 会话待办区（sidebar todo area）
 
 **问题**：会话数量多时，行尾状态指示（完成绿点/琥珀徽章）随列表滚出视野，用户需要频繁

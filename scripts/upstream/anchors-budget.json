@@ -2,6 +2,6 @@
   "schema": 1,
   "scanRoot": "docs",
   "pattern": "[A-Za-z0-9_/.@-]+\\.(?:ts|tsx|mts|cts|mjs|js|swift|css|json|ya?ml|md):\\d+",
-  "legacyAnchors": 735,
-  "note": "遗留 文件:行 锚点预算棘轮（D15）：只降不升。首次落地由 --update-budget 记录实测值；新锚点一律写 path#symbol。2026-12 整合 main（788c6d55）落地时的一次性上调：整合前 uniform 树实测 731、main 树实测 735、整合后本树实测 735——多出的 4 处裸锚全部来自 main 已落地的 4 个提交（STATUS.md 2 处、deviations.md 2 处），uniform 侧零新增；故按实测值 731 → 735（无余量）。此后只降不升；批量语义化重锚按 STATUS D15 在全部在途分支落地后执行。"
+  "legacyAnchors": 743,
+  "note": "遗留 文件:行 锚点预算棘轮（D15）：只降不升。首次落地由 --update-budget 记录实测值；新锚点一律写 path#symbol。2026-12 整合 main（788c6d55）落地时的一次性上调：整合前 uniform 树实测 731、main 树实测 735、整合后本树实测 735——多出的 4 处裸锚全部来自 main 已落地的 4 个提交（STATUS.md 2 处、deviations.md 2 处），uniform 侧零新增；故按实测值 731 → 735（无余量）。此后只降不升；批量语义化重锚按 STATUS D15 在全部在途分支落地后执行。2026-09-18（prep/uichat 落地）的二次上调：ui-chat-render-fix 的新「看不到但能点」STATUS 条目自身带来 8 处诊断裸锚（SettingsShell.tsx:514、SidebarRoot.tsx:1684、SidebarRoot.tsx:1851、dsh-chamber-client-ui-sidebar/src/client/index.ts:125、renderer/src/chamber-entry.ts:325、settings-bridge/README.zh.md:111、styles.css:129、ui-renderer/src/client/scoped-slots.tsx:799），整合后本树实测 735 → 743（无余量）；按 Lead 裁决原样保留（不转符号锚、不改前两轮既有证据），批量语义化重锚仍按 D15 在全部在途分支落地后执行。"
 }

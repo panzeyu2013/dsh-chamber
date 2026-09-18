@@ -34,6 +34,7 @@ import { fileURLToPath } from 'node:url'
 const PACKAGE_TESTS = [
   'test:runtime',
   'test:control-plane',
+  'test:api-gateway',
   'test:desktop',
   'test:gateway',
   'test:renderer-shell',

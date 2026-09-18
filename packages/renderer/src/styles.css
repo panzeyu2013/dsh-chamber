@@ -130,6 +130,17 @@ body {
   content-visibility: hidden;
 }
 
+/* 2026-12（「看不到但能点」的空白图标防御）：无人渲染的壳里不得创建任何动画/
+   过渡。CSS 时间线只在子树被渲染时推进，在隐藏壳里创建的入场动画会被钉在首帧
+   （`opacity: 0`）——元素仍可命中，重挂载前不自愈。侧栏与设置壳已把入场动画
+   整组退役（各自的样式表有说明），这条门是防回归：将来任何一处重新引入入场动画
+   都不会在隐藏壳里被创建。 */
+.instance-hidden .instance-shell *,
+.instance-pending .instance-shell * {
+  animation: none !important;
+  transition: none !important;
+}
+
 /* 后台 boot 的视图（空闲预热 / 切换后仍在加载）：仅 visibility 隐藏——
    保留完整 style/layout（dsh 虚拟列表等依赖测量与 IntersectionObserver 的
    机制在 boot 期间正常工作；content-visibility 会跳过这些）。boot 是一次性

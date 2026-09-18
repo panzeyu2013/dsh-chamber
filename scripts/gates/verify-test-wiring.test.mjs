@@ -13,6 +13,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
+  findDuplicateGroupKeys,
   findSwiftTestScript,
   findUnwiredSwiftTests,
   findUnwiredTests,
@@ -26,6 +27,28 @@ import {
 function evidenceOf({ root = '', packages = {} } = {}) {
   return { root, byPackage: new Map(Object.entries(packages)) }
 }
+
+test('a repeated manifest group key is reported as a shadow', () => {
+  // The real regression (2026-12): the sidebar manifest carried an empty
+  // placeholder `'visual-lock': []` after a populated group of the same name, so
+  // the lock's path matched the wiring text while the group never ran.
+  const source = [
+    'const GROUPS = {',
+    "  'alpha': [",
+    "    'test/alpha/one.test.ts',",
+    '  ],',
+    "  'visual-lock': [",
+    "    'test/visual-lock/real-lock.test.ts',",
+    '  ],',
+    "  'visual-lock': [",
+    '  ],',
+    '}',
+  ].join('\n')
+  assert.deepEqual(findDuplicateGroupKeys(source), ['visual-lock'])
+  assert.deepEqual(findDuplicateGroupKeys("const GROUPS = {\n  'alpha': [\n  ],\n}"), [])
+  assert.deepEqual(findDuplicateGroupKeys(''), [])
+  assert.deepEqual(findDuplicateGroupKeys(undefined), [])
+})
 
 test('pattern accepts the two test extensions and nothing else', () => {
   assert.equal(TEST_FILE_PATTERN.test('a.test.ts'), true)

@@ -37,6 +37,7 @@ import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import { OpenInButton, type OpenInInjected } from './OpenInButton.tsx'
 import { createOpenInSourceAdapter } from './source-adapter.ts'
+import { registerSessionStreamHealthSeat } from './session-stream-health-seat.ts'
 import type { MachineCatalog } from './machine-catalog.ts'
 import { getOpenInChoice, setOpenInChoice, subscribeOpenInChoice } from './choice-store.ts'
 import { en, zh, type OpenInKey } from '../locales.ts'
@@ -67,6 +68,16 @@ export const inject = ['slots', 'locale']
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-chamber: open-in dictionaries')
 
+  const t = ctx.locale.bind(NS) as Translate
+
+  // Session stream-health seat (2026-12): the chamber's recovery arm for the
+  // reproduced ui-chat freeze (an 'error' journal is never re-opened by the
+  // official stack), registered BEFORE the open-in gates below and
+  // independently of them — a source whose open-in id does not parse still
+  // gets the recovery chip. See session-stream-health.ts for the defect, the
+  // lever and its hard boundary.
+  registerSessionStreamHealthSeat(ctx, t)
+
   // Per-boot instance id provided by chamber-entry; loose cast (the sidebar
   // plugin uses the same `as any` seam — the vendor cordis face stays loose).
   // Bail on an absent id (frontend-review P2-4): without it the gate-2 local
@@ -81,8 +92,6 @@ export function apply(ctx: ClientContext): void {
     (ctx as { chamberSourceFingerprint?: string }).chamberSourceFingerprint,
   )
   if (sourceFingerprint === null) return
-
-  const t = ctx.locale.bind(NS) as Translate
 
   // The machine catalog is a PAGE fact (built once by the renderer shell for
   // the LOCAL instance, design 20 §5); this entry reads it from its own Context

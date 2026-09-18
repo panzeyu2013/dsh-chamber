@@ -34,9 +34,21 @@ const GROUPS = {
     'test/launch-flow/source-adapter.test.ts',
     'test/launch-flow/choice-store.test.ts',
   ],
-  // ui-lock: the OpenInButton menu/owner guard and the batch2 menu-density visual lock (never merged)
+  // ui-lock: the OpenInButton menu/owner guard + the T5 console ban over every
+  // src/client/*.ts(x). The historical batch2 menu-density visual lock was never
+  // merged; its decision is asserted in place (compact 26px/12px) by this same file.
   'ui-lock': [
     'test/ui-lock/instance-view-guard.test.ts',
+  ],
+  // session-health: the conversation stream-health ladder (error ⇒ stage-move
+  // heal, parked loading ⇒ reload notice) and its imperative half
+  'session-health': [
+    'test/session-health/session-stream-health.test.ts',
+    'test/session-health/stream-health-wiring.test.ts',
+    // Vendor lockstep: reads vendor/harness-packages (needs an installed tree,
+    // like every other vendor-reading test) and fails loudly if the three facts
+    // the heal depends on ever change with a pin upgrade.
+    'test/session-health/vendor-heal-contract.test.ts',
   ],
 }
 

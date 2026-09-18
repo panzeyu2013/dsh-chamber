@@ -1,7 +1,20 @@
-/** Reconnecting lifecycle for one single-consumer Remote stream. */
+/**
+ * Reconnecting lifecycle for one single-consumer Remote stream.
+ *
+ * chamber fork patch (design 14 §D4): carrier failures inside a LIVE connection
+ * generation are paced and reopened with a bounded backoff instead of escaping
+ * as a terminal stream error. Upstream threw the carrier error on the second
+ * rapid failure (`waitForRemoteStreamRetry`); the gateway wrapped it as
+ * `gateway/internal`, and the session controller latched it on
+ * `failEventStream()` — which froze the conversation surface with no retry.
+ * The pacing math and the abortable backoff wait live in
+ * `./remote-retry-policy.ts` (pure, zero-import, unit-tested); the patch's shape
+ * is pinned by `test/patch-lock/remote-stream-carrier-retry-lock.test.ts`.
+ */
 
 import { RemoteError, remoteErrorOf } from '@deepseek-ai/dsh-typert-protocol'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
+import { delayRemoteStreamRetry, remoteStreamRetryDelayMs } from './remote-retry-policy.ts'
 import { RemoteStreamCarrierError } from './stream-client.ts'
 
 /** One item annotated with the physical Remote-stream generation that delivered it. */
@@ -134,7 +147,7 @@ export class RemoteStream<Item> implements AsyncIterable<RemoteStreamItem<Item>>
           if (revision !== this.revision) continue
           attempt++
           try {
-            await waitForRemoteStreamRetry(this.connection, error, attempt, signal)
+            await waitForRemoteStreamRetry(this.connection, attempt, signal)
           } catch (retryError) {
             if (isAborted(this.lifetime.signal)) return
             if (revision !== this.revision) continue
@@ -157,16 +170,29 @@ export class RemoteStream<Item> implements AsyncIterable<RemoteStreamItem<Item>>
   }
 }
 
+/**
+ * Pace the next reopen after a carrier failure.
+ *
+ * - LIVE generation (the connection lane is up): wait the bounded episode
+ *   backoff and reopen. A second failure is still a transport hiccup — it must
+ *   NOT escape as a terminal stream outcome (the chamber fork patch).
+ * - NO generation: wait for the connection to publish one (unchanged upstream
+ *   behaviour; the abort path still ends the stream terminally).
+ * @param connection - observable Host generation source used to pace retries.
+ * @param attempt - 1-based consecutive carrier-failure count for this episode.
+ * @param signal - generation cancellation lifetime.
+ * @returns when the caller may reopen the stream.
+ */
 async function waitForRemoteStreamRetry(
   connection: Pick<ConnectionHandle, 'generation'>,
-  error: RemoteStreamCarrierError,
   attempt: number,
   signal: AbortSignal,
 ): Promise<void> {
   signal.throwIfAborted()
   if (connection.generation.getSnapshot() !== undefined) {
-    if (attempt === 1) return
-    throw error
+    const delayMs = remoteStreamRetryDelayMs(attempt)
+    if (delayMs > 0) await delayRemoteStreamRetry(delayMs, signal)
+    return
   }
   await new Promise<void>((resolve, reject) => {
     const subscription: {
@@ -201,7 +227,9 @@ async function waitForRemoteStreamRetry(
  * discriminate failures by code, so an unmarked throw reads as a local bug.
  * Marked failures pass through verbatim. The carrier class never escapes as a
  * terminal outcome — it stays the retry-internal signal fed to `carrierFailed`
- * and the `ended(true)` retry trigger.
+ * and the `ended(true)` retry trigger. Enforced by the retry policy above: the
+ * only terminal escapes left are a non-carrier error, an aborted lifetime or
+ * generation signal, and `ended()`'s own classification.
  */
 function terminalStreamFailure(error: unknown): Error {
   return remoteErrorOf(error) ?? new RemoteError(

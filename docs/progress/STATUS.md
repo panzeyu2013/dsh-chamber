@@ -23,6 +23,7 @@
   - **实例写者静默门拦住自动启动恢复路径（同上验收）**：shell 被 `SIGKILL`/孤儿 dsh 占住 DSH_HOME 时如实拒绝（
     `409 connection_busy`）但「启动/停止」点不动（状态停 `starting`、端口 0），恢复 = 优雅重启应用；仅硬杀后出现。
   - **降级提示目检/实机腿（05 §4，2026-12）**：结构性缺口下三处座位一致性——横幅 ~5s 出现/自愈后以「若仍然如此…」回来、侧栏行不重复播报、连接页卡片不同时出现「正常/能力受限」、提示非阻断与 `role="status"`、与 body portal 叠压；目前只经单测 + 源码锁，**未真机判**（`gui-acceptance-checklist.md` §3）。
+  - **切源后侧栏两个座席图标空白（机制已在 WKWebView 复现；触发条件与齿轮那半未坐实，2026-12 用户报）**：症状 = 切到另一来源后，侧栏左上 `sidebar.brand.mark`（HARNESS 字标）与左下 `sidebar.settings`（齿轮）**看不见但仍然可点**（点原位置能打开设置面板，且面板内部图标正常），侧栏整体观感不变，**不自愈**，切走再切回/重启才恢复；侧栏其它图标（普通 JSX，不经插槽）全部正常。已核对的代码事实：① 全侧栏只有这两个图标来自插槽座席，其所在 key 都是 `'sidebar'` 入口的 children，父声明塌陷会被 vendor 移除、重声明后再跑（`dsh-chamber-client-ui-sidebar/src/client/index.ts:125-156` 自述「the sidebar shell would simply be missing」）；② `sidebar.settings` 的 `renderSlot` **没有 fallback**（`SidebarRoot.tsx:1851`），其两个占位者**都在延迟簇**（`renderer/src/chamber-entry.ts:325-330`），设计自述「设置入口在一个 chunk roundtrip 内缺席」（同文件 308-312），冷启动实测窗口 ~50ms（暖缓存）；③ `single` 槽**有条目但全部 abdicate 时渲染 `<div data-slot-error>` 死格、不回落 owner fallback**（vendor `ui-renderer/src/client/scoped-slots.tsx:799-810`，`settings-bridge/README.zh.md:111` 记为契约），而设置壳按钮的图标格正可由 `BridgeEntryBoundary` 收口成死格（`SettingsShell.tsx:514/610/872`）——即「按钮在、可点，图标空白」。待判分支（判据）：A) 新 boot/重连窗口（控制面日志同刻出现该来源 mux `closed/upgrade`）；B) 纯座席派发/贡献丢失（mux 未断）。**根因（2026-12 已定位，WebKit 实机复现）**：症状 = `opacity: 0` 停在入场动画首帧——`SidebarRoot.module.css` 的 `.wide { animation: wide-in 200ms }`（`@keyframes wide-in { from { opacity: 0 } }`，挂在 `SidebarRoot.tsx:1684` 的 `clsx(css.brand, css.wide)` 上 = HARNESS 字标）与 `.railIn .footArea { animation: rail-fade-in 150ms backwards }`（`from { opacity: 0 }`，`.footArea` 包着 `sidebar.settings` 座席；`.railIn` 在「曾宽后转 rail」时长期挂着，`backwards` 让首帧在动画前/中生效）；同类还有 `.fading > *`、`.railIn .iconButton/.newSession/.regionArea`。这些动画只在所属子树被渲染时推进：N-ctx 隐藏壳（`styles.css:129` 的 `content-visibility: hidden`）、窗口被遮挡/离屏、View Transition 快照期都会让时间线停住，元素就永久停在首帧 `opacity: 0`——**不可见但可点、无自愈、重挂载（切走再切回/重启）才恢复**，而普通 JSX 图标（无入场动画）永远正常。已在 WKWebView（用户所用引擎）复现：`.brand.wide` 计算 `opacity: 0`、动画 `wide-in:running:0`、DOM 里 SVG 182x24 完好，快照该区域 0 墨迹。**仍未闭合（2026-12）**：①故障态真机取证未做（判据 = 复现时量两个座席的 `opacity`/`getAnimations()`，或一张故障态截图）；②触发条件本身未被坐实——隐藏壳 / 遮挡 / View Transition 三条候选都不能单独解释「切源」这一时刻。已实现基线（4 个 from-opacity:0 入场动画退役 + 渲染器隐藏壳门）见 design 06 §7 与 design 05 §4，回归锁在 `dsh-chamber-client-ui-sidebar/test/visual-lock/`。
   - **boot 死区收敛实机门（05 §4.1，2026-12）**：未连接（idle）远端点击其会话 → 遮罩立即给「连接」+ 切换行且**不启动 boot**（该挂载隐藏满保留宽限后回收；设置面板正在编辑的来源不回收）；`error` 与托管 `stopped`/`restart-exhausted` 来源 → 就绪门 1.5s 宽限后判不可服务（不再等满 60s），`degraded`（重连在途）**不判死**、仍在预算内等，两者都在能退回本地；挂死 boot → **超过**反馈窗（10s）后遮罩给出重试/连接/切换 + ⌘R 提示；502（隧道通、远端端口死）→ 非阻断 `.boot-gap` 横幅 + 每 ready 世代一次自愈。**Swift 打包态**复测遮挡/最小化下仍收敛（与 S-10 同批）。契约与归谬见 design 05 §4.1；判定纯函数与接线锁在 `packages/renderer/src/source-readiness.ts` 与 `packages/renderer/test/lifecycle/source-readiness.test.ts`，通道失败上浮在 `packages/renderer/test/lifecycle/host-graph.test.ts`。
 
   - **idle 来源点会话排队到 68s 才失败（05 §4.1 推迟 boot 的代价，2026-12）**：`open` 在 `QUEUED_OPEN_TIMEOUT_MS`(68s) 内等不到壳就以打开失败收尾；窗口内点「连接」可在 settle 后补发，但没有"连接成功后自动打开"这条腿。候选收口 = App 记下被推迟的 open 意图并在来源 ready 时重放（须与既有 pending-open 队列语义对齐）。
@@ -215,7 +216,14 @@
     `proxy-forward.ts` 的
     `WebSocket stream <id> closed (<cause>, <ms>ms)`）区分实例判死与客户端重连；归因边界：代理主动撤销也记
     `upstream close`。下一步：DevTools 抓 close code + 节奏（1006/4000）；若为实例心跳，最小改动 = patch overlay 加
-    config 行（ 现 `cordis-inserts.ts` 仅 id/name）调宽 `websocketHeartbeatIntervalMs`。否决替代：解析 close
+    config 行（ 现 `cordis-inserts.ts` 仅 id/name）调宽 `websocketHeartbeatIntervalMs`（宿主 `api-gateway` 的 `Config.websocketHeartbeatIntervalMs`
+     默认 2s）。**2026-12 复核补充**：① 新增归因用取证日志
+     `WebSocket upgrade <id> abandoned (downstream close before upstream handshake, Nms)`
+     （控制面自身 `revokeTransportTraffic`/`closeAllStreams` 拆 socket 也走这一行，不可单独据此判定
+     「浏览器主动离开」）；② **上游腿代答宿主 pong 已评估并整体回退**：代理在上游腿是 client，
+     RFC 6455 §5.3 要求 client 帧掩码（pinned `ws` 对未掩码帧直接 1002），且 pong 会插进 `pipe`
+     的字节流中间劈开浏览器帧（实测 pinned 接收端报 invalid UTF-8）——两条都是协议级硬约束，故本条
+     的最小改动仍是调宽宿主心跳，不做字节注入（证据与推理见 design 14 §D4 触发面小节）。否决替代：解析 close
     帧（实例侧 `terminate()` 不发）——日志不足改用上游 ping 间隔计数（~15 行）。另：桌面 idle 重连看门狗只按 transport
     过滤（S2 臂在 `App.tsx:1824-1865`，阈值 `aggregate-refresh.ts:119-123`：http 120s/ssh 300s/local
     跳过），**gateway 目标（ 同属 direct-http）也吃 ~2min 连接 bounce**——「桌面也发生」若指桌面 App，此即解释。
@@ -226,7 +234,9 @@
     `breakStreams` 两个 timing hook 可做确定性回归，未接 CI（失效判据 = 该场景进 CI）；
     ② **HTTP 通路健康而 WS 逻辑流半盲**时运行位会收敛但 transcript 不收敛（需 fork 逐流交付
     统计 + 宿主 `session/list` 的 `projections.asOfSeq` 对账，再以官方 `Session.resync()`
-    做单会话重放——失效判据 = 该对账落地并由 `appendSilent` 场景钉住）；
+    做单会话重放——失效判据 = 该对账落地并由 `appendSilent` 场景钉住）。其中
+    `openState='error'` 与 `'loading'` 两个**可观测**变体已由对话流健康臂收口（见 ⑫），
+    「流仍 open 而静默」变体仍未闭合（见 ⑬）；
     ③ 官方 `session.list` **单飞悬挂**时 L2 与横幅「重新连接」均无效，只有「重新加载」有效
     （需上游给 fetch 超时或客户端可清除 in-flight——失效判据 = 悬挂后重连能恢复）；
     ④ 子代理会话（`origin==='subagent'`）不在事实通道 ⇒ 该臂看不见（失效判据 = 该行进入
@@ -252,12 +262,28 @@
     ⑪ **两处「更省形态」候选未落地**（下轮首选；2026-12 三轮复核把论据改写成硬约束，免得照旧方案重做踩同一个 race）：(a) 挂到 App 每 30s 兜底 unary pull 的提交点——
     ① 挂载源的 `aggregates` 会被 producer push **整块覆盖**（push 与 runtimeFacts 同源于官方 store ⇒ 两份事实不独立，卡住的 running 会被写回）；② push 会作废在途 pull；③ 该 pull 只在源 stale 时发生，推流存活的源根本不拉——故它只在「源完全静默」子场景成立，覆盖本缺陷必须另加旁路采样面，净省 ≈450–500 行。(b) 用官方 store 自己暴露的 `state/phase/error`（`buildListSnapshot` 已带）替代独立 unary 探针：省一半 host 调用，但丢掉「refresh 成功而 running 未回灌」这一上游回归的检测面。
     失效判据 = 任一形态落地并删掉相应生产端通道（并补上被删面的等价证据），或复核确认现形态更优并写回 design 14 §D4。
+     ⑫ **对话流健康臂（design 14 §D4，2026-12）的实机验收未做**（治因已由 ⑬ 的 fork 补丁承担，本臂只兜 `ended(false)` 等剩余终局）：自动 stage 迁移重开
+     （`error` 满 8s、冷却 120s、滚动窗口 10 分钟 ≤3 次）与 `loading` 20s 提示阈值均只在
+     headless 复现与单测里验过，未在真机抖动下校准（杠杆所依赖的三条 vendor 事实已由
+     `test/session-health/vendor-heal-contract.test.ts` 锁住：pin 升级若改了 stage/open/error
+     语义，该测试即红，届时恢复臂须重推而不是静默失效）；`error` 的自动重开还会让聊天面重挂载
+     （滚动回尾）——是否需要「保持滚动位置」取决于实机观感。失效判据 = 真机拆链后自查恢复
+     该臂的动作**只呈现在 chip 上**：包内既有 ui-lock 源文本锁禁止 `src/client/**` 出现任何
+     `console.*`，所以它与 ⑩ 同源、仍无落盘面；`presented` 判据是 document 级 `[data-chat-flow]`
+     **存在性**（非「实际可见」，多实例壳下可能把隐藏实例的 ChatView 也算作已呈现——放宽只让动作多
+     发生一次，收窄会静默废掉恢复臂，故刻意取宽；失效判据 = 确认隐藏实例的 conversation 树是否常驻
+     DOM 后改为按实例判定）；stage 迁移有前置条件：target 必须仍是 **current 且在列表**，因此
+     address-only 子代理会话与 masked gap 只留「重新加载」提示（设计取舍，不是缺陷）。失效判据 = 真机拆链后自查恢复
+     且判据写回 design 14 §D4。
+     ⑬ **静默半死（`openState === 'open'` 而事件不再投递）仍无自动杠杆**：无 applied cursor 水位时与合法长静默（TTFT 75s 起、工具可数分钟）不可区分，故刻意不做形状超时。治因（fork 载波重试不再终局）与信号面（`dsh-chamber:stream-carrier-failed` 页面事实 → 健康臂 chip「对话流正在重新连接…」）属已实现基线，契约（含拒绝替代）见 design 14 §D4。**仍未闭合**：①宿主侧流级 keepalive+游标未做；②真机抖动验收（判据 = 拆链后 `openState` 不落 `error`，且 churn 提示在真实 mux 抖动下出现并自行消退）；③churn 提示窗口（10s）与「按来源而非按会话」的粗粒度归属均未经真机校准（多会话同源时提示会同时出现在该源各会话上——刻意接受）；④`ended(false)`（正常结束而未收下 opening item）仍是终局，由健康臂兜底。失效判据 = ②③任一校准或裁决落地并写回 design 14 §D4。
 
 - **会话打开停滞（「载入历史…」永久停留，2026-09-14 实机）**：大会话（`session-28e9eb86`）经 gateway 打开只显示
   `chat.loadingHistory`。根因未证实；唯一同构状态 = mux socket正常而 `session/follow`
   逻辑流永久无首帧，客户端与宿主都没有首帧超时；收口需设备侧帧证据（CDP WS Frames/抓包），入口
   `mobile-walkthrough.mjs`（`mobile-ws-frames.json` 落盘前脱敏）。插件侧「停滞提示 + 主动重载」兜底（
-  `session-stall.ts`）判据全为属性锚点，**45s 阈值未经真机校准**；形态取值/误报边界见 `session-stall.ts` 头注与
+  `session-stall.ts`）判据全为属性锚点，**45s 阈值未经真机校准**；桌面侧同形兜底 =
+  `session-stream-health.ts` 的 `loading` 臂（20s 阈值，同样未经真机校准），另加 `error` 臂的
+  自动 stage 迁移重开（判据与未闭合项见上方「会话运行位卡死」⑫）；形态取值/误报边界见 `session-stall.ts` 头注与
   `README.md`「Anchor baseline」。（同族另一面见上方「会话运行位卡死」条与 design 14 §D4；
   本条的首帧期限与它共享同一类缺口——上游侧提案见 `docs/progress/todo/upstream-proposals.md` §4。）
 

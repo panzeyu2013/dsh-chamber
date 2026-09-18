@@ -1282,9 +1282,33 @@ export async function forwardUpgrade(req: ProxyRequest, socket: ProxySocket, hea
     }
   }
   const controller = new AbortController()
+  const upgradeStartedAt = Date.now()
   const onClientClose = () => {
+    // Forensic line (2026-12 freeze investigation): a downstream leg that went
+    // away while the upstream handshake was still running left NO trace at all —
+    // the abort path is deliberately silent (the upstream 'error' handler
+    // returns early when the controller aborted), so a mux reconnect whose
+    // first attempt never reached the host was indistinguishable from a
+    // connection that was never requested. Only a close BEFORE any terminal
+    // branch (timeout / non-101 / upstream error) logs: those branches have
+    // already aborted the controller and logged their own cause. Counters are
+    // deliberately untouched (this is a downstream abandon, not an upstream
+    // failure) — the log line is the whole change.
+    //
+    // ATTRIBUTION BOUNDARY (2026-12 review): "downstream" here means THIS
+    // socket closed, not "the browser chose to leave" — the control plane's own
+    // transport revocation (instance-proxy `closeAllStreams` /
+    // `revokeTransportTraffic`) destroys these sockets without aborting the
+    // controller, so the same line is printed for a chamber-initiated revoke.
+    // Do not use it alone to conclude the client reconnected on its own.
+    const premature = !controller.signal.aborted
     controller.abort()
     releaseHandshake()
+    if (premature) {
+      try {
+        logger.log(`${deps.logPrefix}: WebSocket upgrade ${deps.id} abandoned (downstream close before upstream handshake, ${String(Date.now() - upgradeStartedAt)}ms)`)
+      } catch { /* logging must never break teardown */ }
+    }
   }
   // The downstream socket, not IncomingMessage `close`, owns upgrade
   // handshake liveness (the latter may merely mean the HTTP headers parsed).

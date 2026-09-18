@@ -320,6 +320,26 @@ export function findUnwiredTests({ testFiles, evidence, allowlist = UNWIRED_ALLO
   return { unwired, allowlisted, corpusSize: testFiles.length }
 }
 
+/**
+ * Detect repeated group keys in a test manifest.
+ *
+ * A manifest groups its files under a top-level `'name': [` key, and a JavaScript
+ * object literal keeps the LAST value of a repeated key: a path listed under an
+ * earlier duplicate never runs while `wiringEvidence` still matches its text, so
+ * the gate would report it as wired. The sidebar's placeholder `'visual-lock': []`
+ * silently shadowed a real source lock exactly that way (2026-12). Unique keys are
+ * what make the text-match verdict trustworthy.
+ * @param {string} source - manifest source text.
+ * @returns {string[]} keys declared more than once, in first-seen order.
+ */
+export function findDuplicateGroupKeys(source) {
+  const counts = new Map()
+  for (const match of String(source ?? '').matchAll(/^ {2}["']([^"']+)["']: \[/gmu)) {
+    counts.set(match[1], (counts.get(match[1]) ?? 0) + 1)
+  }
+  return [...counts].filter(([, count]) => count > 1).map(([key]) => key)
+}
+
 /** Render the allowlist as a reviewer-visible report line. */
 function describeAllowlist(allowlist) {
   return allowlist.map(entry => `  - ${entry.path} — ${entry.reason}`).join('\n')
@@ -368,6 +388,21 @@ function main() {
   if (swiftTargets.length === 0) swiftProblems.push('macos/Package.swift declares no testTarget — nothing would compile')
   if (swiftVerdict.corpusSize === 0) swiftProblems.push('macos/Tests holds no Swift test files — a gate that scans nothing has not passed')
 
+  // Manifest shadows: a repeated group key never runs its earlier list.
+  const manifestShadows = []
+  const scannedPackages = new Set()
+  for (const file of testFiles) {
+    const segments = file.split('/')
+    if (segments[0] !== 'packages' || segments.length < 3 || scannedPackages.has(segments[1])) continue
+    scannedPackages.add(segments[1])
+    const manifest = join(REPO_ROOT, 'packages', segments[1], 'scripts', 'test.mjs')
+    const text = readTextOrNull(manifest)
+    if (text === null) continue
+    for (const key of findDuplicateGroupKeys(text)) {
+      manifestShadows.push(`packages/${segments[1]}/scripts/test.mjs — group '${key}' is declared twice (JS keeps the last value, so the earlier list never runs)`)
+    }
+  }
+
   if (corpusSize === 0) {
     console.error('test wiring: no test files found — a gate that scans nothing has not passed')
     process.exit(1)
@@ -383,11 +418,15 @@ function main() {
     for (const problem of swiftProblems) console.log(`  - ${problem}`)
     return
   }
-  if (unwired.length > 0 || swiftProblems.length > 0) {
+  if (unwired.length > 0 || swiftProblems.length > 0 || manifestShadows.length > 0) {
     if (unwired.length > 0) {
       console.error(`test wiring: ${unwired.length} test file(s) are on disk but no script runs them:`)
       for (const file of unwired) console.error(`  - ${file}`)
       console.error('Add each file to its package `test` script (or the owning file list), or record a justified allowlist entry.')
+    }
+    if (manifestShadows.length > 0) {
+      console.error(`test wiring: ${manifestShadows.length} shadowed group list(s) — the file looks wired but never runs:`)
+      for (const shadow of manifestShadows) console.error(`  - ${shadow}`)
     }
     if (swiftProblems.length > 0) {
       console.error(`swift test wiring: ${swiftProblems.length} problem(s) — XCTest would not run every file:`)
