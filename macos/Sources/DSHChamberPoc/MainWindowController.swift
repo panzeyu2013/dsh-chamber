@@ -230,6 +230,16 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             source: BridgeShimInjector.injectNativeToken(nativeChannelToken, into: shimSource))
         print("[native] A 桥 shim 注入完成（\(Self.shimResourceName)）")
 
+        // 视口越界策略（2026-12）：关闭 macOS WebKit 的根级弹性回弹——指针停在
+        // 不可滚动 chrome（顶栏/侧栏头部）上滚动、或滚动器滚到端点后继续滚时，
+        // 整页（含 position: fixed 层）会被整体平移再弹回。按 CSS Overscroll
+        // Behavior 规范，视口越界效果由根元素的 overscroll-behavior 决定，故由
+        // 壳以 WKUserScript（documentStart、仅主 frame）注入根规则，只落文档根、
+        // 不给上游滚动容器加 contain（design 25 §5.2；Electron 未同步见
+        // deviations S-50）。与 shim 同段：必须在 WKWebView 构造前生效。
+        ShellOverscrollPolicy.install(config: configuration)
+        print("[native] 视口越界策略注入完成（\(ShellOverscrollPolicy.rootOverscrollCSS)）")
+
         // 消息通道：ChamberMessageHandler 只做护栏与转发（W-04 实现）
         let handler = ChamberMessageHandler(
             whitelist: Self.invokeWhitelist,

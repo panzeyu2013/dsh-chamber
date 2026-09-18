@@ -40,8 +40,6 @@
   上 `systemd-analyze verify` + 服务拿到 HOME（`ghauth status`）须重跑安装器 + `daemon-reload` 后在部署机判——macOS
   开发机无 systemd，未判。
 
-- **deviations S-24 的 AppDelegate 锚点已漂移（2026-12 复核）**：该行引用的 `AppDelegate.swift:982-993,1131-1144` 等位置与当前文件不符（菜单构造 `:1007-1179`、Reload `:1118-1120`、Force Reload `:1124-1127`、File/Close `:1055-1061`）。S-24 的结论（Electron 缺省菜单 vs Swift 菜单面）仍成立，缺的是"可核对证据"的重锚；本次 boot 死区收敛的 ⌘R 提示文案依赖该菜单面，故一并登记。
-
 - **ssh/http dsh 目标无 cookie 注入（实例侧 401）**：五处同源绝对 URL 已由 vendor 补丁集走本实例前缀（design 09 §3.6）；cookie 注入属既有认证面，未覆盖。
 
 - **gateway 来源插件播种被拒（400 `invalid_input`，2026-09-10 实机）**：旧 gateway 只认 `dsh-host-*` 旧名 ⇒ 现仓
@@ -308,6 +306,8 @@
 
 - **变更文件覆盖率门未接**：`scripts/gates/run-checks.mjs` 的 `tests` 模式是每文件一个 `node` 子进程，V8 覆盖率须跨进程合并，而仓内无 `c8` 类工具、新增 devDependency 需显式请求。待裁决二选一：引入 devDependency 或把 runner 改成单进程
   `node --test`（动到现有进程隔离语义）。
+
+- **根级弹性回弹（deviations S-50）**：**仍 open** = 打包态 `.app` 实机走查（顶栏、会话栏顶部、内容区中段、内容区两端；含滚动/惯性/键盘/滚动条/缩放/拖拽选择无回归）与最低支持版本 macOS 14.4 复验；Electron 未同步属双 flavor 有意差异（S-50 ①，accepted，理由见该行）。
 
 ## 一致性债务与开放登记（低–中，未排期；均指回代码面注释/design 登记）
 

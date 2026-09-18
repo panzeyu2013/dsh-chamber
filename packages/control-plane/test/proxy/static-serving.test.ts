@@ -230,6 +230,15 @@ test('static: /assets/* immutable cache policy; index.html no-cache; manifest.js
     // `__jsExpr` config evaluation); every inline script still needs the nonce.
     assert.match(html.headers['content-security-policy'] ?? '', /script-src[^;]*'unsafe-eval'/)
     assert.match(html.headers['content-security-policy'] ?? '', /script-src[^;]*'nonce-[A-Za-z0-9+/=]+'/)
+    // S-50（macOS 原生壳视口越界策略）的运行时前提：壳注入的 <style> 无 nonce，
+    // style-src 必须保留 'unsafe-inline'，否则整页弹性回弹静默复现
+    // （design 25 §5.2；src/index.ts 同处有注释指向本条）。
+    // 三条一起钉：只钉 unsafe-inline 的存在会漏掉另两种同样静默失效的改法
+    // （同指令加 nonce/hash → CSP3 忽略 unsafe-inline；新增 style-src-elem → 覆盖 style-src）。
+    assert.match(html.headers['content-security-policy'] ?? '', /style-src[^;]*'unsafe-inline'/)
+    assert.doesNotMatch(html.headers['content-security-policy'] ?? '', /style-src[^;]*'nonce-/)
+    assert.doesNotMatch(html.headers['content-security-policy'] ?? '', /style-src[^;]*'sha(256|384|512)-/)
+    assert.doesNotMatch(html.headers['content-security-policy'] ?? '', /style-src-elem/)
     assert.equal(html.headers['cross-origin-opener-policy'], 'same-origin')
     // same-origin (not no-referrer): no-referrer makes modern browsers send
     // Origin: null on same-origin form POSTs, which the origin fences reject

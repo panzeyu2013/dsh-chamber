@@ -697,6 +697,26 @@ display link 初始化时只缓存一次，取不到时回落 60），建窗后�
 （模式读数取不到时的回落）或界面为 100Hz 类非整数倍屏时，判定以 `[native-fps]` 实测为准，
 别只对日志。见 STATUS.md 与 deviations.md S-48。
 
+### 5.2 视口越界（根级弹性回弹）与壳侧策略
+
+macOS WebKit 在**视口层**实现弹性越界：指针停在不可滚动的 chrome（顶栏、侧栏头部）上滚动，或某个滚动器滚到端点后继续滚时，越界量落在视口，**整页（含 position: fixed 层）被整体平移再弹回**。按 CSS Overscroll Behavior 规范，**视口的越界效果由根元素的 overscroll-behavior 决定**，故策略由壳在 configuration 段以 WKUserScript（documentStart、仅主 frame）注入根规则 `html, body { overscroll-behavior: none !important; }`（`ShellOverscrollPolicy.swift`，装配点 `MainWindowController.swift:233-241`）：
+
+- **只落文档根**：不改任何滚动容器的滚动范围，也不改文档内链式滚动（`none` 管的是视口越界效果与向视口外链接）；页面结构、上游代码零改动。
+- **`!important` + 样式元素标记**（`data-dsh-shell-overscroll`）：`!important` 压过页面的普通声明；**层叠边界**（2026-12 对抗复核修正）——页面若在根上再声明同属性的 `!important`（同特异性、文档序靠后）或在根元素上设内联 `!important`，仍可翻转。当前上游**没有任何根级声明**（`packages/dsh-client-web` 全目录 `overscroll` 命中 0；其余命中都是滚动容器的 `contain`——移动端子树与设置确认框，无一定在文档根），故这是理论边界而非现状；author 源内也没有手段挡住页面 JS 主动改。若将来上游在根上声明该属性，升级手段是 documentEnd 再追加一次（文档序靠后）或对 documentElement 设内联 `important`。打包态可用一条 JS（`getComputedStyle(document.documentElement).overscrollBehavior`）自检，单测钉住注入契约（`ShellOverscrollPolicyTests.swift`）。
+- **时机与作用域**：documentStart、仅主 frame（iframe 子文档保持自身行为）；崩溃/卡死恢复只 reload，注入随每次导航生效。本机实测 documentStart 时序为 readyState=loading、documentElement 已存在、head 尚不存在；落点**始终优先 documentElement**（即使将来 head 已存在也不落 head，保住"页面重写 head 也删不掉"的免疫），两者都取不到时才走一次 DOMContentLoaded。
+- **证据（可复跑）**：效果面 = 手动 `node macos/scripts/overscroll-probe/run.mjs --assert`（需 GUI 会话；探针与 `ShellOverscrollPolicy.swift` 一同编译，注入串即 `makeUserScript()` 真实产出，无手抄步骤）；编译面 = darwin 门禁 `node macos/scripts/overscroll-probe/typecheck.mjs`（无需 GUI，策略源 API 漂移或探针烂掉即红）。断言的精确集合：baseline 三场景出现位移（`bar-up`/`content-top-up` 负向 `vvTopMin ≤ −8`、`content-bottom-down` 正向 `vvTopMax ≥ 8`）；policy 四场景 `visualViewport.pageTop` 为 0（判据 |vvTop| ≤ 1pt 容差）；**正常滚动**用同一条确实驱动内层滚动器的手势（`bar-down`：`#main` 0→810）比对两态位移一致；`scope` 场景（无手势）要求主文档 `styleCount ≥ 1`/computed `none`、iframe 子文档 `styleCount = 0`/computed `auto`（`forMainFrameOnly` 的可观测面）；causal 三步（策略在 0 → 运行时移除注入样式位移立刻回来 → 重新执行策略源回 0）；`content-mid` 只打印不设断言；采样超时/异常一律按 `HARNESS-ERROR` 非零退出、绝不当 0 用；`policyBytes`/`policySHA256` 与 `run.mjs` 里签入的 `POLICY_SHA256_PIN` 比对（有意改注入串必须同步改锚）。判据不用 0×0 合成层 position（同场景在 0..40 抖动，单用会假阴性）；合成事件的 NSEvent windowNumber=0，指针落点语义不由装置保证，故场景名只表示方向与滚动器状态、不作位置断言。
+- **范围**：只关视口越界与链式越界；内层滚动器自身的局部回弹（若有）不在本策略范围内，勿当回归。
+- **CSP 依赖（已守卫三种形态）**：注入的 `<style>` 依赖控制面 CSP 的 `style-src 'self' 'unsafe-inline'`（`packages/control-plane/src/index.ts:1126-1133`：注释 :1126-1132、指令 :1133）。页面当前**没有** meta CSP（全仓 0 处）；即便将来加入 meta `style-src 'self'`，documentStart 注入也早于其解析（本地 fixture 实测），唯一真实耦合是响应头 CSP。对抗复核用本地 HTTP fixture + 真实 WKWebView 实测出**三种同样静默失效**的改法：① 删掉 `'unsafe-inline'`；② 在同一 `style-src` 里再加 `'nonce-…'`/`'sha256-…'`（CSP3：出现 nonce/hash 即忽略 unsafe-inline）；③ 新增 `style-src-elem`（它覆盖 style-src 对 `<style>` 的管辖）——三者都让 computed 回 `auto`、整页回弹复现。现状安全：CSP 形成点有注释、`packages/control-plane/test/proxy/static-serving.test.ts` 三条断言分别钉住这三种形态——改 CSP 必须同时复核本策略与 S-50。
+- **双 flavor 差异**：Electron 未同步，登记见 deviations S-50。
+
+**Rejected alternatives**（本策略的选择依据）：
+
+- 逐个滚动容器加 `overscroll-behavior: contain`（含按上游类名选择）：覆盖不全（管不到"指针停在非滚动 chrome 上"这条路径），且要按上游结构改上游的滚动语义——破坏性变更，拒。
+- 改 `packages/dsh-client-web/src/base.css` 等上游 shell 副本：等于给上游打补丁，还要重建前端产物、重新打包；本方案零页面改动，拒。
+- 私有 SPI `_setRubberBandingEnabled:`：不属公开接口（既无公开文档也无兼容承诺），发行风险与逐系统复核成本都高于一条标准 CSS，拒。
+- JS `wheel` 事件拦截：逐事件逻辑，且 WebKit 对合成/惯性相位事件的可取消性不由页面保证，最易回归，拒。
+- 把固定 chrome 移出 WKWebView（原生分层自绘）：不阻止内容区自身位移，且要重做命中测试/主题投影，代价与收益不成比例，拒。
+
 ## 6. 数据、状态兼容与共存
 
 ### 6.1 userData 目录
@@ -947,6 +967,8 @@ W7 刷新率三工况（插电 120fps / 电池 + 低电量模式 60fps / 60Hz �
 判定标准见 todo companion §七）；性能测量方法与同环境 A/B 纪律见 `scripts/perf/README.md` + **双端
 性能/产物体积验收协议**（companion §七：相对门/绝对预算/能力门三形态、注入式探针
 平移四场景、M5 双端同 tag 产物并排入库——.app/dmg/zip 体积目标 ≤ Electron × 0.75）。
+原生壳专项再加一条：**最低支持版本 macOS 14.4 上跑一次首载 + 视口越界策略（§5.2）复验**，
+通过后 S-50 的退役判据才算闭环。
 
 ### 8.6 测试策略汇总
 
@@ -956,6 +978,7 @@ W7 刷新率三工况（插电 120fps / 电池 + 低电量模式 60fps / 60Hz �
 | B 桥 | 信封/帧长/超时/乱序/edge 往返——node 侧假 Swift 驱动（`sidecar-stdio.test.ts`），Swift 侧 XCTest | 已落地（`sidecar-stdio.test.ts` + `BridgeClient*Tests`） |
 | A 桥/护栏 | shim 与 manifest 一致性（bridge-manifest / bridge-shim / bridge-shim-surface）、origin 门、尺寸门 | 已落地 |
 | 集成 | node 集成测试拉起 Swift harness 断言真实窗口/通知/深链 | 无 GUI 通道冒烟（60/60）已落地；真实窗口 harness（`swift-harness-driver`）未实施——需 GUI 会话 |
+| 壳视图策略 | 视口越界策略（§5.2）的注入契约、装配点与效果：`ShellOverscrollPolicyTests`（11 例：根规则与选择器只落文档根、注入契约字面量锁步、无未解析占位符、selector 角色、JavaScriptCore + DOM 桩真执行、host 缺失的就绪防护及其生效面、标记幂等、install 幂等且不挤 A 桥 shim、documentStart/仅主 frame、装配锁步（install 调用早于 `WKWebView(frame:`）、design 25 字面量锁步）+ 探针 `macos/scripts/overscroll-probe/`（编译面 = darwin 门禁 `typecheck.mjs`，无需 GUI；效果面 = 手动 `run.mjs --assert`，判据 `visualViewport.pageTop`/`scrollTop`：baseline 三场景出现位移、policy 四场景 0（≤1pt 容差）、`bar-down` 正常滚动两态一致、`scope` 主文档有而 iframe 无、causal 三步、`content-mid` 仅打印） | 单测已落地（2026-12）；效果断言**手动运行、不进 CI**（需 GUI 会话）；打包态 `.app` 实机走查与最低版本 macOS 14.4 复验归 §8.5 矩阵与 STATUS 未完成清单 |
 | 实机 | §8.5 矩阵（含 W7 刷新率三工况，S-48）+ C1/C2 | 未判，发布前执行（STATUS） |
 
 ## 9. 风险与开放问题

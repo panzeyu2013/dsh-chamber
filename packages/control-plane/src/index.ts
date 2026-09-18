@@ -1123,6 +1123,13 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
               // 没有显式 frame-src 时 default-src 'self' 会把这类子 frame 一并拒掉
               // （两种 flavor 同因）。范围收窄到消费点实际所需：只放行 blob:
               // （不放 'self'/data:/http——非 blob 的 frame 继续被 default-src 兜住）。
+              // ⚠ style-src 'self' 'unsafe-inline' 是 macOS 原生壳视口越界策略的
+              // 运行时前提（design 25 §5.2 / deviations S-50，ShellOverscrollPolicy）：
+              // 壳注入的 <style> 没有 nonce 可挂。三种改法都会让它被拦、整页弹性回弹
+              // 静默复现（对抗复核用本地 HTTP fixture 逐项实测）：① 删掉 'unsafe-inline'；
+              // ② 在同一 style-src 里再加 'nonce-…'/'sha256-…'（CSP3：出现 nonce/hash 即
+              // 忽略 unsafe-inline）；③ 新增 style-src-elem（它覆盖 style-src 对 <style> 的管辖）。
+              // 改本行必须同时复核 S-50；static-serving.test.ts 三条断言钉住这三种形态。
               `default-src 'self'; base-uri 'none'; object-src 'none'; frame-src blob:; frame-ancestors 'none'; form-action 'none'; script-src 'self' 'unsafe-eval' 'nonce-${cspNonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:`,
             )
             let url: URL

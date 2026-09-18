@@ -447,6 +447,15 @@ jobs:
       - name: Swift tests (release configuration, XCTSkip == 0)
         if: steps.classify.outputs.code == 'true'
         run: node scripts/gates/run-swift-tests.mjs
+      # Viewport-overscroll policy compile gate (design 25 §5.2 / S-50): the
+      # probe and the repository policy source must stay in type lockstep.
+      # run-checks' MACOS_CHECKS carries it on a local darwin run, but the
+      # ubuntu-leg run-checks invocations cannot, so the darwin job pins it
+      # directly. Compile only - the effect assertions stay manual
+      # (macos/scripts/overscroll-probe/run.mjs --assert, needs a GUI session).
+      - name: Overscroll probe compile gate (policy source ↔ probe)
+        if: steps.classify.outputs.code == 'true'
+        run: node macos/scripts/overscroll-probe/typecheck.mjs
       # JS↔Swift bridge lockstep: the committed bridge-manifest.json /
       # BridgeManifest.swift must equal a regeneration, the shim surface must
       # match preload, and the payload SHAPE at every method call site must
