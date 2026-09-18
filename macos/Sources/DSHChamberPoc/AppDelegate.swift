@@ -125,6 +125,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // 导航失败、更新相位、退出链的关键行都在其后。
         NativeShellLog.shared.configure(userDataDir: stateDir)
         shellLog("[native] 原生壳日志落盘：\(NativeShellLog.shared.filePath ?? "未启用（仅 stdout）")")
+        // 2026-12 取证修复：sidecar stderr 透传行独立落盘（<userData>/logs/sidecar.log）。
+        // 控制面的 WS splice 归因行（WebSocket stream … closed / heartbeat lost …）
+        // 的**权威**去向是控制面自己的 <stateDir>/logs/control-plane.log（两 flavor
+        // 共用，见 design 02 §3.8）；本文件是原生壳的兜底：额外覆盖控制面 sink 建立
+        // 之前的 stderr（如 fatal 启动输出），代价是同一批 console 行两处各存一份。
+        NativeShellLog.sidecar.configureSidecar(userDataDir: stateDir)
         // 控制面端口缺省（S11）：POC_PORT > DSH_CHAMBER_CP_PORT > dev 空闲退避 /
         // packaged 17500；真实 sidecar 分支里解析后回填（自定义脚本形状不探测，
         // 保持缺省，绝不静默漂移）。
@@ -326,6 +332,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // start 前就位——ready 帧不再被 loud 丢弃；控制器 setupWindow 亦先于
         // start 完成事件接线，消灭起动期事件早丢窗口）。
         let bridge = BridgeClient(nodePath: nodePath, arguments: sidecarArguments, environment: childEnv)
+        // sidecar stderr → <userData>/logs/sidecar.log（有界；sink 自带锁）。
+        bridge.sidecarLogSink = { line in NativeShellLog.sidecar.append(line) }
         bridge.onReady = { [weak self] port, shellVersion in
             shellLog("[native] sidecar ready（port=\(port) shellVersion=\(shellVersion)）")
             guard let self else { return }

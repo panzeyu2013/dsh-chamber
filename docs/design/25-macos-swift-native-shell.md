@@ -202,7 +202,18 @@ dsh-chamber desktop 的 Electron 使用面已收敛为薄壳（AGENTS.md 运行�
   （main.ts 遍布业务日志如端口行 :1787、will-quit 清理完成串 :1673——实机
   门禁断言该串；不重定向则 B 桥首发即撞非协议行）；fail-loud 只针对重定向
   后的意外泄漏；stderr 是唯一日志通道（落 `~/Library/Logs/` 或
-  userData/logs）。
+  userData/logs）。**sidecar stderr 的透传行另有一份独立有界落盘**：
+  `<userData>/logs/sidecar.log`（`NativeShellLog.sidecar.configureSidecar` +
+  `BridgeClient.sidecarLogSink`；**规格**：单文件 256 KiB、单份轮转
+  `sidecar.log.1`（轮转名按实例文件名派生）、目录 0700 / 文件 0600、写失败静默退
+  stdout——与 design 02 §3.8 的控制面 sink 同一种权限纪律，但保留量更小）。
+  **两条链的关系（2026-12 复核修正）**：控制面 `<stateDir>/logs/control-plane.log`
+  是 WS splice 归因行的**权威**去向，**两个 flavor 都有**（`createControlPlane` 无条件
+  包装，02 §3.8 明说共用实现）；`sidecar.log` 是原生壳的**兜底**——它额外覆盖控制面
+  sink 建立之前的 stderr（如 fatal 启动输出），代价是同一批 console 行在两处各存一份。
+  **flavor 偏差（已登记 deviations）**：Electron 只有 1 份文件、原生壳 2 份（保留量
+  Electron 只有 `control-plane.log`（2 MiB × 3 = 6 MiB）；原生壳另有 `sidecar.log`
+  （256 KiB × 2 轮转环 = 512 KiB），合计 6 MiB + 512 KiB）。
 - dsh 实例与控制面关系完全不变（05 §7.5：`PlaneHandle.startLocal()` 预启动、
   按需 spawn、reaper）；**迁移后 dsh 子进程的 node = sidecar 自身可执行文件**
   （须命名为 node，spawn-dsh 纯 Node 分支，§4.3）。

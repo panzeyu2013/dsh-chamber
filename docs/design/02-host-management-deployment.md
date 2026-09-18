@@ -475,6 +475,27 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
   新 setup，永久磁盘故障不会形成无限重试队列；
   旧 backing file 被删除后绝不由临界压缩把历史 ring 复活，失败写也不在下次
   重建时重复；
+- **控制面自身日志落盘**（2026-12，取证缺口修复）：`createControlPlane` 无条件把
+  注入的 `options.logger`（默认 console）包一层文件 sink，写
+  `<stateDir>/logs/control-plane.log`（JSONL：`{ts,level,line}`；单文件 2 MiB、
+  保留 3 份轮转环（最小 2 份）；目录 0700、文件 0600、**常驻句柄 + 不跟随符号
+  链接**（O_NOFOLLOW）——与本节 host-logs 的 no-follow/0600 纪律同族）。设计动机：
+  控制面是 `proxy-forward` 的 WS splice 取证行（`WebSocket stream <id> closed
+  (<cause>, Nms)`、`heartbeat lost …`）的**权威**来源，而打包态由 Finder/Dock
+  启动时 console 不落盘（design 14 §D4 记实测）；控制面拥有 stateDir，故 Electron
+  与 Swift 原生壳**共用同一实现**。写失败/轮转失败只降级为「不落盘 + 告警一次」，
+  日志绝不能成为新的失败面；`stop()` 关句柄、`start()` 重开（plane 支持
+  stop→start 重启）。**被否替代**：①写进 `host-logs/<port>.log`——那是**被管理
+  宿主**的 stdout/stderr 管道（按端口寻址、有读侧 API），控制面自身日志混进去会
+  冒充宿主日志；②只依赖 stdout——打包态不落盘，正是本条的动机；③两个 flavor 各写
+  一份——同一份实现即可，多出的只是漂移面；④ 删掉原生壳的 `sidecar.log`、只留
+  `control-plane.log`——两链生命周期不同步：`sidecar.log` 覆盖控制面 sink 建立**之前**的
+  stderr（含 fatal 启动输出），兜底价值大于同内容重复的成本（保留量差异登记在
+  deviations T-25）。**与原生壳的关系**：原生壳另有
+  `<userData>/logs/sidecar.log`（design 25 §3.1）作**兜底**（覆盖 sink 建立前的
+  stderr）；同一批 console 行两处各存一份，保留量不同（Electron 只有 `2 MiB × 3` = 6 MiB，
+  原生壳另有 `256 KiB × 2` 轮转环 = 512 KiB，合计 6 MiB + 512 KiB）——
+  该 flavor 偏差登记在 deviations。
 - 纪律：日志永不含凭据/令牌（05 §8 安全不变量）。
 
 ### 3.9 systemd 单元（远程实例部署参考）

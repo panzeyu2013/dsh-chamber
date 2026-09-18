@@ -33,9 +33,24 @@ public final class NativeShellLog {
     /// 进程级共享实例（AppDelegate 启动时 configure；未 configure 时只打印）。
     public static let shared = NativeShellLog()
 
+    /// sidecar stderr 透传行的独立落盘实例（2026-12 取证修复）。
+    ///
+    /// 此前 `[sidecar] <line>` 只透传到 app 的 stderr——打包态从 Finder/Dock
+    /// 启动时 stdout/stderr 不落盘（实测 `log show --predicate
+    /// 'process == "DSHChamberPoc"'` 无输出），于是控制面最有价值的归因行
+    /// （`WebSocket stream <id> closed (<cause>, Nms)`、`heartbeat lost after N
+    /// unanswered ping(s)`）在原生 flavor 等于丢失，事故只能靠猜。
+    ///
+    /// 用独立文件而不并入 native-shell.log：sidecar 日志的量级与轮转需求与壳
+    /// 自身日志不同，混写会让 256 KiB 轮转把壳日志顶掉（同一 2026-12 修复的
+    /// Electron 侧对偶 = 控制面自己的 `<stateDir>/logs/control-plane.log`）。
+    public static let sidecar = NativeShellLog()
+
     /// 相对 userData 根的目录名与文件名（纯函数 fileURL 单测钉住）。
     public static let directoryName = "logs"
     public static let fileName = "native-shell.log"
+    /// sidecar 日志文件名（轮转名 = 文件名 + ".1"，见 rotateLocked）。
+    public static let sidecarFileName = "sidecar.log"
     /// 单份轮转文件（超过上限时 native-shell.log 整体更名为它）。
     public static let rotatedFileName = "native-shell.log.1"
     /// 单文件字节上限（256 KiB；一轮排障足够，且不会无限增长）。
@@ -59,6 +74,13 @@ public final class NativeShellLog {
         URL(fileURLWithPath: userDataDir, isDirectory: true)
             .appendingPathComponent(directoryName, isDirectory: true)
             .appendingPathComponent(fileName)
+    }
+
+    /// sidecar 日志路径规则：<userData>/logs/sidecar.log（纯函数，单测直测）。
+    public static func sidecarFileURL(userDataDir: String) -> URL {
+        URL(fileURLWithPath: userDataDir, isDirectory: true)
+            .appendingPathComponent(directoryName, isDirectory: true)
+            .appendingPathComponent(sidecarFileName)
     }
 
     /// - Parameters:
@@ -91,7 +113,17 @@ public final class NativeShellLog {
     /// 配置共享实例的落盘位置并打开文件（幂等：同路径已打开则不动）。
     /// 打开失败静默（note/append 仍打印）。
     public func configure(userDataDir: String, maxBytes: Int = NativeShellLog.defaultMaxBytes) {
-        let url = Self.fileURL(userDataDir: userDataDir)
+        configure(fileURL: Self.fileURL(userDataDir: userDataDir), maxBytes: maxBytes)
+    }
+
+    /// 配置 sidecar 落盘实例（AppDelegate 启动时调用；幂等）。
+    public func configureSidecar(userDataDir: String, maxBytes: Int = NativeShellLog.defaultMaxBytes) {
+        configure(fileURL: Self.sidecarFileURL(userDataDir: userDataDir), maxBytes: maxBytes)
+    }
+
+    /// 配置任意文件的落盘位置并打开（幂等：同路径已打开则不动）。打开失败静默。
+    public func configure(fileURL: URL, maxBytes: Int = NativeShellLog.defaultMaxBytes) {
+        let url = fileURL
         lock.lock()
         if handle != nil, fileURLStorage?.path == url.path {
             lock.unlock()
@@ -167,13 +199,15 @@ public final class NativeShellLog {
     }
 
     /// 轮转：关闭当前 → 删旧 .1 → 现文件改名为 .1 → 重开空文件。
-    /// 调用方必须已持有 lock。
+    /// 调用方必须已持有 lock。轮转名按实例文件名派生（`<file>.1`）——main 与
+    /// sidecar 两个实例共用本实现，写死主文件名会把 sidecar 轮转成
+    /// `native-shell.log.1`（2026-12 加 sidecar 实例时必须改的点）。
     private func rotateLocked() {
         guard let url = fileURLStorage else { return }
         try? handle?.close()
         handle = nil
         let rotated = url.deletingLastPathComponent()
-            .appendingPathComponent(Self.rotatedFileName)
+            .appendingPathComponent(url.lastPathComponent + ".1")
         try? FileManager.default.removeItem(at: rotated)
         try? FileManager.default.moveItem(at: url, to: rotated)
         writtenBytes = 0

@@ -214,6 +214,11 @@ public final class BridgeClient {
     private static let stderrTailLimit = 40
     /// 单行入环前的字符截断（防一篇超长栈撑爆报告/日志）。
     private static let stderrLineCharLimit = 400
+    /// sidecar stderr 行的落盘出口（2026-12 取证修复）：`<userData>/logs/sidecar.log`。
+    /// nil = 只透传 stdout（单测/自定义形状）。注入方保证线程安全（生产端是
+    /// NativeShellLog，自带 NSLock）；本属性在 start() 之前赋值、之后只读，
+    /// 与管道读取线程不并发写（与 onEvent 同纪律）。
+    public var sidecarLogSink: ((String) -> Void)?
 
     /// 最近 sidecar stderr 摘要（T-3；启动失败报告在进程终止回调里同步读取，
     /// 见 handleTermination 的 finishStderrReading）。多行以换行连接。
@@ -1001,6 +1006,11 @@ public final class BridgeClient {
         lock.unlock()
         try? FileHandle.standardError.write(
             contentsOf: Data(Self.relayedSidecarLogLine(line).utf8))
+        // 落盘（有界：captured 已按行截断）。控制面最有价值的归因行
+        // （WS splice 拆链 / heartbeat lost）只经这条链到达磁盘——打包态
+        // stdout/stderr 不落盘，没有这一步它们就丢了。sink 自身绝不允许抛错
+        // （日志失败不得影响桥）。
+        sidecarLogSink?(captured)
     }
 
     /// 行预览（日志用；截断防刷屏，不做内容转义——日志通道本机可见）。
