@@ -27,16 +27,30 @@ import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { loadRegistry } from './registry.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const SUBMODULE = path.join(ROOT, 'vendor', 'harness-checkout')
 
-/** 三个 fork 副本：目录名 == 上游包名（vendor 路径 → 本仓副本路径）。 */
-export const FORK_PATHS = [
-  { upstream: 'packages/client/connection', fork: 'packages/dsh-client-connection' },
-  { upstream: 'packages/client/web', fork: 'packages/dsh-client-web' },
-  { upstream: 'packages/api/gateway', fork: 'packages/dsh-api-gateway' },
-]
+/**
+ * 三个 shadow fork 副本：目录名 == 上游包名（vendor 路径 → 本仓副本路径）。
+ * 单一来源 = scripts/upstream/registry.json 的 `fork` 条目；chamber-named fork
+ * （`seed.*`，如 seed-open-in）不覆盖上游包名，故不在本清单。
+ * 读失败必须响亮失败：静默降级成空表会让升级预检假绿。
+ */
+function loadForkPathsOrExit() {
+  try {
+    return loadRegistry()
+      .entries
+      .filter(entry => entry.type === 'fork' && entry.versionAnchor !== 'chamber')
+      .map(entry => ({ upstream: entry.upstream, fork: entry.ours }))
+  } catch (error) {
+    console.error(`✗ preflight: 无法读取 scripts/upstream/registry.json（fork 面单一来源）: ${error.message}`)
+    process.exit(1)
+  }
+}
+
+export const FORK_PATHS = loadForkPathsOrExit()
 
 /** 从 harness.commit 文本解析 pin（跳过注释/空行，取最后一行）。 */
 export function parsePin(text) {

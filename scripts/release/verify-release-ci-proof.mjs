@@ -32,7 +32,9 @@
  * rate-limits anonymous callers — release.yml passes the runner's own read-only
  * token, which is not a release credential).
  */
+import { realpathSync } from 'node:fs'
 import { argv, env, exit } from 'node:process'
+import { fileURLToPath } from 'node:url'
 
 /** Jobs that must have concluded `success` on the proven run: the linux chain
  *  (release.yml's mechanical superset is validated against it), the Windows
@@ -55,6 +57,8 @@ export const REQUIRED_JOBS = ['test', 'test-windows', 'test-macos']
 export const REQUIRED_JOB_STEPS = {
   test: [
     'Type check (tsc + chamber host packages + gateway)',
+    'Upstream registry integrity (schema/references/views)',
+    'Upstream anchor probe (symbol anchors + legacy budget)',
     'Assert lockfile not rewritten',
     'Package unit tests — single entry (runtime / control-plane / desktop / gateway / renderer-shell / client+host plugins)',
     'Client plugin type checks — single entry (sidebar / git / layout / connections / settings-bridge / client-web / connection / api-gateway / open-in / mobile)',
@@ -260,7 +264,19 @@ async function main() {
   }
 }
 
-if (import.meta.url === `file://${argv[1]}`) {
+// 入口判定（2026-12 对抗复核）：`file://${argv[1]}` 在 Windows 上恒不等于 import.meta.url
+// （盘符/三斜线差异）→ main() 永不执行而**静默 exit 0**（fail-open）；pathToFileURL 修了 Windows，
+// 但符号链接调用仍会 no-op。与三个新 CLI 一致：realpath 双侧比较。
+const isDirectInvocation = (() => {
+  const invoked = argv[1]
+  if (invoked === undefined) return false
+  try {
+    return realpathSync(invoked) === realpathSync(fileURLToPath(import.meta.url))
+  } catch {
+    return false
+  }
+})()
+if (isDirectInvocation) {
   try {
     await main()
   } catch (error) {

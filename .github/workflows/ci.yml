@@ -7,8 +7,8 @@ on:
   # identical SHA, and tagging a commit that never went through `main` skipped the
   # linux chain entirely. A release now PROVES its commit passed here instead:
   # release.yml's validation runs scripts/release/verify-release-ci-proof.mjs, which
-  # requires a completed, successful ci.yml push run on main whose linux AND
-  # windows legs both passed.
+  # requires a completed, successful ci.yml push run on main whose linux, Windows
+  # and macOS legs all passed.
   push:
     branches: [main]
   pull_request:
@@ -36,8 +36,8 @@ jobs:
     # Branch pushes and PRs only — no tag trigger exists (see `on:` above).
     # release.yml's validation mirrors this chain (the alignment contract is
     # asserted in scripts/release/release-workflow-policy.test.mjs) and proves its
-    # commit ran it here, on main, with this job and the windows leg green
-    # (verify-release-ci-proof.mjs names both jobs explicitly).
+    # commit ran it here, on main, with this job and the windows + macOS legs
+    # green (verify-release-ci-proof.mjs names all three jobs explicitly).
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -131,6 +131,16 @@ jobs:
         run: pnpm run verify:test-wiring
       - name: Markdown link gate
         run: pnpm run verify:md-links
+      # Upstream registry single source (2026-12): schema/canonical/reference checks,
+      # the coverage net (checklist headings ↔ entries, chamberNamedForks,
+      # ensure-harness-vendor EXCLUDED) and generated-view freshness; the anchor probe
+      # keeps registry symbol anchors resolvable and the legacy 文件:行 budget ratcheted
+      # (只降不升). File-only gates, so NOT behind the classifier; both need the
+      # bootstrapped vendor tree (Bootstrap step above).
+      - name: Upstream registry integrity (schema/references/views)
+        run: pnpm run verify:registry
+      - name: Upstream anchor probe (symbol anchors + legacy budget)
+        run: pnpm run verify:anchors
       # Upstream design-token conformance: S1 未声明 --dsw-* 引用 / S2 命名空间越界 /
       # S3 0.5px 发丝线 / S4 字面量 fallback / S5 边框+阴影配对 / S6 死声明 /
       # S7 全圆角配对. Upstream enforces these with specs that scan ITS OWN

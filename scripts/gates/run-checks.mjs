@@ -26,6 +26,7 @@
  */
 
 import { spawnSync } from 'node:child_process'
+import { realpathSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -107,6 +108,12 @@ const STATIC_CHECKS = [
   'verify:test-wiring',
   'verify:shim-payload',
   'verify:md-links',
+  'verify:registry',
+  'verify:anchors',
+  // C1–C15 触点门：advisory 模式（只读，不重建产物）。做成普通门是 2026-12 对抗复核的
+  // 结论——否则本地 static/full 可以在 C1/C3 失败（例如把 pure 文件挪进 patched）时全绿，
+  // 与 AGENTS "本地 pass = CI 同证据" 的口径矛盾。CI 两处已直接调用同一命令。
+  'node scripts/upstream/verify-upstream-touchpoints.mjs --no-artifact-rebuild',
   'test:release-workflow',
   'test:upgrade-tools',
   'test:gui-acceptance',
@@ -221,5 +228,14 @@ function main() {
   console.log(`\nrun-checks ${mode}: ${ran} step(s) passed`)
 }
 
-const isEntry = process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))
+/** 入口判定：realpath 双侧比较（符号链接绝对路径调用时不静默 no-op；2026-12 对抗复核）。 */
+const isEntry = (() => {
+  const invoked = process.argv[1]
+  if (invoked === undefined) return false
+  try {
+    return realpathSync(invoked) === realpathSync(fileURLToPath(import.meta.url))
+  } catch {
+    return false
+  }
+})()
 if (isEntry) main()

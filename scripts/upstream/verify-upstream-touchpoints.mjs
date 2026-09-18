@@ -11,14 +11,14 @@
  * exit-code 语义：0 全部通过（或 --help）/ 1 有门硬失败 / 2 用法错误。
  *   C1  纯文件字节恒等（fork 副本中未登记补丁的文件必须与上游锚逐字节一致）
  *       —— 对 shadow 副本与 chamber-named fork（如 seed-open-in）同等生效
- *   C2  --tags <old> <new>：上游两 tag 间全部已登记 fork 面（FORKS 全表，含非 shadow
+ *   C2  --tags <old> <new>：上游两 tag 间全部已登记 fork 面（registry 分类条目全表，含非 shadow
  *       的 seed-open-in）的重放差异报告（advisory）
  *   C3  完整性：fork 每文件有分类（pure/patched/own），上游每文件有裁决
  *       （mirrored/dropped）；漏分类/新文件漏裁决 = 硬失败
  *   C4  roster：typert remote 装配契约 == 15（集合与顺序）、covered/factory 存在性、
  *       删包 fail-loud（存在性哨兵列表）
  *   C5  过期锚扫描：shadow fork 的 package.json 版本 == 上游同文件版本
- *       （versionAnchor: "chamber" 的 fork 豁免——见 FORKS 表）；
+ *       （versionAnchor: "chamber" 的 fork 豁免——见 registry 的 seed 条目）；
  *       submodule HEAD == harness.commit
  *   C6  EXCLUDED 上游存在性（ensure-harness-vendor 排除的三个 shadow fork 源目录；
  *       非 shadow 的 fork（如 seed-open-in）必须留在 vendor 树作 C1 锚）
@@ -63,9 +63,11 @@
  *       任一不成立即红——上游修掉竞态那天必须做退役/再登记裁决（判定逻辑纯函数，
  *       单测随 args 测试同文件）
  *
- * 登记纪律：给某个文件打 chamber 补丁 = 在 FORKS.patched 里登记（含原因）；
- * 新增 chamber 自有文件 = own；上游文件有意不镜像 = dropped。任何对 pure
- * 文件的修改都会在此硬失败——升级/重锚后同步登记表（每 tag 维护循环见文档 §7）。
+ * 登记纪律：单一来源 = scripts/upstream/registry.json（本文件启动即读它，形状与迁移前
+ * 的内嵌 FORKS 逐字段一致）。给某个文件打 chamber 补丁 = 在 entry.classify.patched 里登记
+ * （含原因）；新增 chamber 自有文件 = own；上游文件有意不镜像 = dropped。任何对 pure 文件
+ * 的修改都会在此硬失败——升级/重锚后改 registry，并跑 registry-views.mjs --write 重生成
+ * docs/checklists/upstream-touchpoints.md 的 GENERATED 块（每 tag 维护循环见文档 §7）。
  *
  * 用法（`--help` 打印权威文本；未知参数 = 用法错误 exit 2，绝不静默跑默认模式）：
  *   node scripts/upstream/verify-upstream-touchpoints.mjs            # C1/C3–C15
@@ -93,6 +95,7 @@ import {
 } from './plugin-protection-gate.mjs'
 import { USAGE_EXIT_CODE, VERIFY_USAGE, parseVerifyArgs } from './verify-upstream-touchpoints-args.mjs'
 import { HOVER_PORT_SOURCES, hoverPortVerdict } from './verify-upstream-touchpoints-hover.mjs'
+import { loadRegistry, validateRegistry, verifierForks } from './registry.mjs'
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url))
 const SUBMODULE = join(ROOT, 'vendor', 'harness-checkout')
@@ -115,150 +118,31 @@ const PIN_FILE = join(ROOT, 'harness.commit')
 const repoRel = (from, to) => relative(from, to).split(sep).join('/')
 
 // ---------------------------------------------------------------------------
-// 触点登记（与 docs/checklists/upstream-touchpoints.md 的表同源；维护时两侧同步）
+// 触点登记：单一来源 = scripts/upstream/registry.json
+// 生成视图（checklist §2/§9 的 GENERATED 块）由 registry-views.mjs 产出；
+// 本文件不再内嵌登记表（迁移前那种'两侧同源、维护时同步'的手抄已删）。
 // ---------------------------------------------------------------------------
 
 /**
- * forks[].rel 相对仓库根；upstream 相对 submodule 根。
- * - patched: { <相对 fork 文件>: 原因 } —— 允许与上游不一致的 chamber 补丁面
- * - own:     fork 自有文件（上游无对应物），ownPrefix 覆盖整目录（如 test/）
- * - dropped: 上游文件有意不镜像（exact 或 prefix），如 tsdown.config.ts、tests/
- * - upstreamExtraExclude / forkExtraExclude: 两侧各自的排除目录（node_modules/
- *   lib/产物），不入登记表。
+ * registry 读取失败或 schema 校验不过必须响亮失败（exit 1），绝不静默降级成空登记表——
+ * 空表会让 C1/C3/C5/C6 全部'通过'，把覆盖面消失伪装成绿灯。
  */
-const FORKS = [
-  {
-    name: 'connection',
-    rel: 'packages/dsh-client-connection',
-    upstream: 'packages/client/connection',
-    patched: {
-      'package.json': '[patch-add] 仅追加 chamber test 脚本（其余与上游一致；版本行随上游推进）',
-      'src/api-path.ts': '[patch-mod] 追加 resolveInstanceBasePath + 头部 chamber 说明（basePath 语义，design 05 §6）',
-      'src/client/connection.ts': '[patch-mod] 仅 erasableSyntaxOnly 显式字段改写（两个构造参数属性）+ 顶部 chamber 说明；其余逐字节上游（Batch 2 重锚：loopEpoch 守卫与 CONNECTION_BACKOFF_MAX_MS 导出退役，改由原生 reconnect/setNetworkAvailable）',
-      'src/client/index.ts': '[patch-mod] apply(ctx) 读 ctx.chamberBasePath → 载波装配（design 05 §6）+ SYSTEM_RESUME_EVENT/liveness 触发（design 14 D4）+ recovery-policy 转出（/client barrel）+ 头部 chamber 说明',
-      'src/client/rpc.ts': '[patch-mod] basePath 前缀拼装 + WebConnectionRpcOptions（chamber 选项对象）+ 头部 chamber 说明',
-      'tsconfig.client.json': '[patch-mod] chamber 构面：extends ../../tsconfig.json + vendor paths + files 列表（与上游 files 增量同步维护）',
-      'tsconfig.host.json': '[patch-mod] 同上（host 构面）',
-    },
-    own: {
-      'tsconfig.check-base.json': 'chamber erasable-only 校验构面',
-      'tsconfig.check-client.json': 'chamber erasable-only 校验构面（files 与 client 同步）',
-      'tsconfig.check-host.json': 'chamber erasable-only 校验构面（files 与 host 同步）',
-      'scripts/test.mjs': 'chamber 自有测试清单（按域分组的显式 manifest；verify:test-wiring 校验可达性）',
-    },
-    ownPrefix: ['test/', 'src/client/carrier-assembly.ts', 'src/client/liveness-triggers.ts', 'src/client/recovery-policy.ts'],
-    ownNotes: {
-      'src/client/carrier-assembly.ts': 'chamber 载波装配纯策略（basePath 扇出）',
-      'src/client/liveness-triggers.ts': 'chamber sleep/wake 活性触发（design 14；原生 reconnect + 离线门 + 唤醒事件旁路）',
-      'src/client/recovery-policy.ts': 'chamber 每来源恢复时序策略（远端 45s/5s，本地保持上游默认）',
-      'test/': 'chamber 自有测试（api-path/carrier-assembly/liveness-triggers/client-apply + fixtures/桩 loader）',
-    },
-    dropped: ['tsdown.config.ts', 'tests/'],
-  },
-  {
-    name: 'client-web',
-    rel: 'packages/dsh-client-web',
-    upstream: 'packages/client/web',
-    patched: {
-      'package.json': '[patch-mod] 描述/测试脚本/deps·peerDeps·files 面差异（版本行随上游推进）',
-      'README.md': '[own-divergent] chamber 说明（boot kernel 差异/维护约定），非上游镜像',
-      'README.zh.md': '[own-divergent] 同 README.md（中文镜像）',
-      'README.i18n.yaml': '[own-divergent] chamber README 对的哈希记录',
-      'src/boot.ts': '[patch-mod] rc.8 N-ctx boot kernel（extraRows/configureContext/异步 dispose）',
-      'src/index.ts': '[patch-mod] 入口差异（module-system 宿主接线）',
-      'src/platform.ts': '[patch-mod] PLATFORM_MODULES/静态表 chamber 接线（C3 偏差：ui-primitives 不 seed）',
-      'src/seed.ts': '[patch-mod] seed 行 chamber 接线（extraRows/__ModuleLoader__；C3 偏差同步）',
-      'tsconfig.json': '[patch-mod] chamber 构面（vendor paths/检查面）',
-    },
-    own: {
-      'src/boot-rows.ts': 'chamber 每实例 boot-rows（design 09 module D）',
-      'src/boot-tolerance.ts': 'chamber boot 容忍/恢复（design 09）',
-    },
-    ownPrefix: ['test/'],
-    ownNotes: {
-      'test/': 'chamber 自有测试（boot-tolerance/boot-rows/configure-context + fixtures）',
-    },
-    dropped: ['tsdown.config.ts', 'tests/'],
-  },
-  {
-    name: 'api-gateway',
-    rel: 'packages/dsh-api-gateway',
-    upstream: 'packages/api/gateway',
-    patched: {
-      'package.json': '[patch-mod] description/peer 集裁剪（host 依赖 dropped）+ 版本行随上游推进',
-      'src/client/index.ts': '[patch-mod] apply(ctx) 读 ctx.chamberBasePath → /api/remote.mux 落到实例前缀 + start(sinks, recoveryOverridesForTransport(transport))（design 05 §6）',
-      'src/client/stream-client.ts': '[patch-mod] per-entry basePath（流载波 URL 拼装）',
-      'tsconfig.json': '[patch-mod] chamber 构面',
-      'tsconfig.client.json': '[patch-mod] chamber client 构面',
-    },
-    own: {
-      'tsconfig.check-base.json': 'chamber erasable-only 校验构面',
-      'tsconfig.check-client.json': 'chamber erasable-only 校验构面',
-    },
-    ownPrefix: ['test/'],
-    ownNotes: {
-      'test/': 'chamber 自有测试（若有）',
-    },
-    dropped: [
-      'README.md', 'README.zh.md', 'README.i18n.yaml',
-      'src/index.ts', 'src/stream-server.ts', 'src/types.ts',
-      'tsconfig.host.json', 'tsdown.config.ts', 'tests/',
-    ],
-    droppedNotes: {
-      'src/index.ts': '上游 host 插件入口（chamber 不镜像 host 半）',
-      'src/stream-server.ts': '上游 host 半流服务器（dropped）',
-      'src/types.ts': '上游 host/aux 类型文件（exports 保留 inert ./types 子路径）',
-      'README*': '上游 README 不携带（fork 描述在 package.json）',
-      'tsconfig.host.json': 'host 构面不镜像',
-    },
-  },
-  {
-    // design 20 §6 (fork & supersede, 2026-09-11): the open-in HOST half is
-    // forked into a chamber seed package that runs inside the managed
-    // instance. Unlike the three shadow copies above, this fork keeps the
-    // upstream PACKAGE NAME out of the workspace (the vendor tree must keep
-    // `packages/host/open-in-app` as this fork's diff anchor — do NOT add it
-    // to EXCLUDED_UPSTREAM_DIRS), so it lives under its own name and is
-    // versioned with chamber releases: `versionAnchor: 'chamber'` exempts it
-    // from the C5 upstream-version equality below.
-    name: 'seed-open-in',
-    rel: 'packages/dsh-chamber-seed-open-in',
-    upstream: 'packages/host/open-in-app',
-    versionAnchor: 'chamber',
-    patched: {
-      'package.json': '[patch-mod] chamber seed package（自有名字/版本/构建入口；upstream 名与发布面不复制）',
-      'tsconfig.json': '[patch-mod] chamber 构面（vendor paths + 本包 files）',
-      'src/shared.ts': '[patch-mod] wire 契约家：上游三条 webServer 路由常量 → typert Remote 方法名 + 域载体（design 20 §4.1/§6.1）',
-      'src/index.ts': '[patch-mod] typert 门面取代 webServer 路由 + Config schema + SSH 休眠门（design 20 §6.1）',
-    },
-    own: {
-      'src/core.ts': 'chamber 域核心：上游 apply() 的目录/图标/拉起状态机（去掉路由与 SSH 门）',
-      'scripts/build.mjs': 'chamber esbuild 产物构建',
-      'dist/index.js': 'chamber 提交态产物（C8 逐字节重建-比对；上游无对应文件）',
-    },
-    ownPrefix: ['test/'],
-    ownNotes: {
-      'test/': 'chamber 自有测试（域契约 + 载荷拒绝矩阵 + vendor stub loader）',
-    },
-    dropped: [
-      'README.md', 'README.zh.md', 'README.i18n.yaml',
-      'src/internals.ts', 'tsdown.config.ts', 'tests/',
-    ],
-    droppedNotes: {
-      'src/internals.ts': '上游测试接缝（本包的接缝走 OpenInAppCore 构造注入，不需要它）',
-      'README*': '上游 README 不携带（fork 描述在 package.json/源码首页）',
-      'tsdown.config.ts': '上游打包配置（本包走 scripts/build.mjs）',
-      'tests/': '上游测试不镜像（本包 test/ 覆盖域契约）',
-    },
-  },
-]
-
-/** ensure-harness-vendor EXCLUDED（fork 影子覆盖的上游包）——C6 存在性哨兵。 */
-const EXCLUDED_UPSTREAM_DIRS = [
-  'packages/client/connection',
-  'packages/client/web',
-  'packages/api/gateway',
-]
+function loadRegistryOrExit() {
+  try {
+    const registry = loadRegistry()
+    const findings = validateRegistry(registry)
+    if (findings.length > 0) {
+      console.error('✗ registry.json schema 校验失败（触点登记单一来源）:')
+      for (const finding of findings) console.error('  - ' + finding)
+      console.error('  下一步: node scripts/upstream/verify-registry.mjs（会给出完整失败面）')
+      process.exit(1)
+    }
+    return registry
+  } catch (error) {
+    console.error('✗ 无法读取 scripts/upstream/registry.json（触点登记单一来源）: ' + error.message)
+    process.exit(1)
+  }
+}
 
 /** C4 roster 存在性哨兵：covered 关键 id 删除即硬失败（删包保护）。 */
 const COVERED_SENTINELS = [
@@ -338,6 +222,25 @@ if (args.errors.length > 0) {
   console.error(`\n${VERIFY_USAGE}`)
   process.exit(USAGE_EXIT_CODE)
 }
+
+/**
+ * registry 在两道参数守卫之后才读：`--help`（exit 0）与用法错误（exit 2）
+ * 必须在不依赖 registry.json、也不碰任何文件的前提下返回；
+ * 读取失败/ schema 不过 = exit 1（响亮，绝不降级成空登记表）。
+ */
+const REGISTRY = loadRegistryOrExit()
+
+/**
+ * forks[].rel 相对仓库根；upstream 相对 submodule 根。
+ * 形状与迁移前内嵌 FORKS 逐字段一致（ownNotes/droppedNotes 是纯文档字段，不进 verifier）：
+ * - patched: { <相对 fork 文件>: 原因 } —— 允许与上游不一致的 chamber 补丁面
+ * - own:     fork 自有文件（上游无对应物），ownPrefix 覆盖整目录（如 test/）
+ * - dropped: 上游文件有意不镜像（exact 或 prefix）
+ */
+const FORKS = verifierForks(REGISTRY)
+
+/** ensure-harness-vendor EXCLUDED（fork 影子覆盖的上游包）——C6 存在性哨兵。 */
+const EXCLUDED_UPSTREAM_DIRS = REGISTRY.excludedUpstreamDirs
 
 /** C8 advisory 模式：绝不写盘（CI install 前那段就是靠它）。 */
 const noArtifactRebuild = args.noArtifactRebuild
