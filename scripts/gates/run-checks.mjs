@@ -90,6 +90,9 @@ const CLIENT_TYPECHECKS = [
  */
 const MACOS_CHECKS = process.platform === 'darwin' ? [
   'test:swift',
+  // 视口越界探针的编译面（无 GUI 会话也能跑）：策略源 API 漂移 / 探针烂掉在 CI 即红。
+  // 效果断言仍归手动 run.mjs --assert（见 macos/scripts/overscroll-probe/README.md）。
+  'node macos/scripts/overscroll-probe/typecheck.mjs',
   'test:macos',
   'pnpm run build:sidecar --skip-node --skip-vendor --skip-host-packages',
   'test:sidecar:compiled',

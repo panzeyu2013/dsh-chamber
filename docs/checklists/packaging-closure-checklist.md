@@ -83,6 +83,8 @@
       SwiftPM 只能写 major 平台，精确下限由 `Info.plist.template` 承担——本清单不记版本数值）。
 - [ ] 打包态启动冒烟（原生腿）：双击 `.app` → sidecar spawn → 页面加载 → 关闭窗口仅隐藏 →
       退出回收 sidecar；本机/CI 任一环境执行并记录证据（G19：CI 目前不启动打包产物）。
+- [ ] 视口越界策略实机探针（S-48）：GUI 会话跑 `node macos/scripts/overscroll-probe/run.mjs --assert`
+      通过（记录 `policyBytes`/`policySHA256`），对照 design 25 §5.1 的判据集。
 - [ ] DMG 与 zip 均公证 + `stapler staple` + `stapler validate`（DMG 卷本身也要装订）。
 
 ## 4. 快速清单速查（当前基线，2026-12 复核；2026-12 合并后全量复核）

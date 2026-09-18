@@ -296,6 +296,8 @@
 - **变更文件覆盖率门未接**：`scripts/gates/run-checks.mjs` 的 `tests` 模式是每文件一个 `node` 子进程，V8 覆盖率须跨进程合并，而仓内无 `c8` 类工具、新增 devDependency 需显式请求。待裁决二选一：引入 devDependency 或把 runner 改成单进程
   `node --test`（动到现有进程隔离语义）。
 
+- **根级弹性回弹（deviations S-48）**：**仍 open** = 打包态 `.app` 实机走查（顶栏、会话栏顶部、内容区中段、内容区两端；含滚动/惯性/键盘/滚动条/缩放/拖拽选择无回归）与最低支持版本 macOS 14.4 复验；Electron 未同步属双 flavor 有意差异（S-48 ①，accepted，理由见该行）。
+
 ## 一致性债务与开放登记（低–中，未排期；均指回代码面注释/design 登记）
 
 - **设置面残余登记（design 05 §5，2026-12 完整桥接修订后剩余项）**：壳渲染选中来源自己 boot ctx 的 `settings.section`
