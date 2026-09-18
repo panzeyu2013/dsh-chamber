@@ -263,8 +263,8 @@ test('dispose cancels a pending retry (ctx teardown never opens afterwards)', ()
  * Wiring contract for the boot-time early-open arm inside the sidebar plugin
  * (design 05 §2.2 revision 2026-12; 2026-12 field report problem 1).
  *
- * Source-text contract (the sidebar package's `producer-purged-wiring.test.ts`
- * pattern): `client/index.ts` is a cordis plugin body that cannot be imported by
+ * Source-text contract (a SHAPE-only lock; the package's former plumbing lock was
+ * removed by the 2026-12 ruling): `client/index.ts` is a cordis plugin body that cannot be imported by
  * a node test without a full client ctx. The arm's BEHAVIOUR is covered by
  * `early-open.test.ts` and the shared rules by `open-intent.test.ts`; this file
  * pins the links that would silently disable or misfire the preemption:

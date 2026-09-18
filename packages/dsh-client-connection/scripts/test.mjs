@@ -26,7 +26,7 @@ const GROUPS = {
       nodeArgs: ['--import', '../../scripts/dev/test-connection-register.mjs'],
     },
     {
-      file: 'test/lifecycle/client-start-liveness-wiring.test.ts',
+
       nodeArgs: ['--import', '../../scripts/dev/test-connection-register.mjs'],
     },
   ],

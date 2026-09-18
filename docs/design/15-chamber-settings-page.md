@@ -191,7 +191,7 @@ ChamberSettings.sessionTodo: {
 - **i18n**：扩展 `dsh-chamber.settings.bridge` 命名空间（客户端页文案，
   zh/en；`verify:i18n` 必须通过）。
 - **测试**：`test:settings-bridge`（`__general` 入口渲染/active 解析/固定项集合/
-  壳装配隔离不变式/`connections-section-mirror` 环境镜像漂移门/每实例面注册表与
+  壳装配隔离不变式/每实例面注册表与
   完整桥接源码锁/`cell-dispatch`（槽单元派发：胜出、fallback、占用但无胜出者的
   死单元、未声明）/`onboarding`（协调器真值表：blank 或缺席才活跃、有序取第一个
   未完成、完成集推进）/`upstream-alignment-locks`（本批源码锁）；`update-gate`：

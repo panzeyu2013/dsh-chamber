@@ -68,7 +68,6 @@ export const GROUPS = {
     'test/plugins/plugin-sync-apply.test.ts',
     'test/plugins/plugin-sync-seed.test.ts',
     'test/plugins/plugin-sync-renderer-projection.test.ts',
-    'test/plugins/main-wiring-guards.test.ts',
     'test/plugins/plugin-tarball.test.ts',
     'test/plugins/ssh-apply-rows.test.ts',
     'test/plugins/ssh-plugin-journal.test.ts',

@@ -889,8 +889,7 @@ design 18 §3.4（域枚举文字，随常量同 commit）、designs 09/13/16/17
   accept 语义、dist-sync / cross-package-contract 锁步——先红后绿；
 - 接线面：host-graph-seed / cordis-inserts / desktop plugin-sync /
   gateway 列表断言扩展（先红后绿）；根脚本/CI/release/preflight 逐包腿；
-  生产端接线由**源码文本契约守卫**（`producer-purged-wiring` /
-  `app-purged-memory-wiring` 钉住调用形状与顺序，不证明运行时语义，§12）；
+  生产端调用形状与顺序不再由源码文本锁钉住（2026-12 裁决移除，§12）；
 - 客户端 wire：`instance-api.test.ts`（client 对象 stub + global fetch stub）：
   404/503/超时分类、畸形双层载体 fail-loud、有界 404 判别体、wrapper 层错误
   类映射、**唯一 wire 形状**（`{sessionIds, force:true, protectSessionIds}` 恒发、
@@ -901,10 +900,9 @@ design 18 §3.4（域枚举文字，随常量同 commit）、designs 09/13/16/17
 - 客户端编排纯函数：`archive-purge.test.ts`（**未知 viewed 仍照删**（死端回归）、
   已知 viewed 进 protect、lineage 读失败只跳过停止、note 键集与顺序、空态不静默、
   **常驻保留行文案**与**旧宿主（无该字段）回退旧键**）；
-- 常驻保留接线（2026-13 review 补）：`resident-retention-wiring.test.ts` 以源码文本
-  契约钉住对话框 glue（结果字段 → 并集标签集 → 随行 prune → 标签渲染 + 复选框
-  可访问名 + 标签 CSS 让位规则 + 双字典键存在），与 `producer-purged-wiring` 同
-  政策（守接线不守语义；渲染面仍归打包版目检）；
+- 常驻保留接线（2026-13 review 补）：对话框 glue（结果字段 → 并集标签集 → 随行 prune →
+  标签渲染 + 复选框可访问名 + 标签 CSS 让位规则 + 双字典键存在）原由源码文本契约
+  钉住，2026-12 裁决已移除该锁；语义与渲染面仍归打包版目检；
 - 停止回合：`stopSessionsForPurge` 的**闭包全员 cancel**（含维护相位覆盖）、
   观察到的 running 才计数、失败对 running∪listed 上报（cold 吞掉）、有界并发的
   **输入序记账**、`requireCompleteExcludeChain` 整趟闸、排除 viewed、
@@ -1106,7 +1104,7 @@ workspace follow `{type:'archived'}` 立即到达客户端（`api/workspace-cont
   （侧边栏据此继续过滤已归档行，管理器保持诚实的降级分支、不获得任何破坏性
   动作）。记忆集合永不单独构成权威。**顺序是承重的**：基线必须是**覆盖前**的
   旧值，否则 remembered ≡ 本次快照集合 ⇒ `archiveSetShrink` 恒为 []（F3(a)
-  死代码）；`test/wiring/app-purged-memory-wiring.test.ts` 钉住该顺序。
+  死代码）。（源码文本接线锁已按 2026-12 裁决移除。）
 - **F4 宿主 registry-global 孤儿清扫**：见 §4 step 5——每次 purge 收尾清
   全集合无记录成员，双重确认 + fail-closed + 同一次集合写 + 独立计数
   （`clearedOrphanMembers?`，归档管理器 settle 文案呈现）。
@@ -1135,8 +1133,7 @@ workspace follow `{type:'archived'}` 立即到达客户端（`api/workspace-cont
 2. **探针依赖实例就绪**：官方刷新与 unary 探针都失败时保持抑制
    （fail-closed），实例长期不可达时官方 summaries 的收敛延后到连接代数——
    行不可见（用户可见正确性成立），属验证类缺口；
-3. **语义级接线**以源码契约测试 + 目检代证（`producer-purged-wiring` /
-   `app-purged-memory-wiring` 钉住调用形状与顺序，不证明运行时语义）；
+3. **语义级接线**以目检代证（源码契约锁已按 2026-12 裁决移除）；
 4. **归档集合 > `MAX_PURGE_SESSIONS`（65,536）** 时宿主不清扫（该规模全量
    purge 本就 `purge-capacity` 拒绝，不可重试、无逃生口直至上游 wire 收敛）；
 5. **宿主侧未对构建后的 vendor backend 跑过真实 `stat`**（本 worktree 的 vendor

@@ -35,7 +35,6 @@ const GROUPS = {
     'test/locks/batch1-visual-locks.test.ts',
     'test/locks/batch2-visual-locks.test.ts',
     'test/locks/upstream-alignment.test.ts',
-    'test/locks/workspace-funnel-wiring.test.ts',
     'test/locks/slot-contract.test.ts',
   ],
 }

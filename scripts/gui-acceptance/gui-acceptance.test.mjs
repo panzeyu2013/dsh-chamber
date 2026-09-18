@@ -397,9 +397,9 @@ test('marker contract: RowHoverCard.tsx stamps exactly the attribute names the w
   // Counting and row selection are ONLY as good as these exact names: the card
   // `<div>` that is portaled to document.body stamps `data-chamber-hovercard`,
   // and the wrapper `<span>` around the hover target stamps
-  // `data-chamber-hovercard-anchor` (the sidebar package's own wiring test,
-  // packages/dsh-chamber-client-ui-sidebar/test/session-rows/hover-card-wiring.test.ts:176-180,
-  // pins the same pair).
+  // and the wrapper `<span>` around the hover target stamps
+  // `data-chamber-hovercard-anchor` (the pair the shell pins; the former
+  // source-text wiring lock was removed by the 2026-12 ruling).
   assert.ok(source.includes('data-chamber-hovercard=""'), 'the card must stamp data-chamber-hovercard')
   assert.ok(source.includes('data-chamber-hovercard-anchor=""'), 'the anchor must stamp data-chamber-hovercard-anchor')
   const markers = [...new Set([...source.matchAll(/data-chamber-hovercard[\w-]*/g)].map(match => match[0]))]

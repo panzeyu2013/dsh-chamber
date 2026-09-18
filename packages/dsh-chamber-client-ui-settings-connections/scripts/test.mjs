@@ -27,9 +27,6 @@ const GROUPS = {
   'plugin-management': [
     'test/plugin-management/plugin-model.test.ts',
     'test/plugin-management/plugin-diff.test.ts',
-    'test/plugin-management/chamber-table-wiring.test.ts',
-    'test/plugin-management/installed-fence-wiring.test.ts',
-    'test/plugin-management/protected-rows-wiring.test.ts',
   ],
   // connection-form: 连接表单输入契约（桌面权威常量对齐 + draft/schema 行为）
   'connection-form': [
@@ -38,9 +35,7 @@ const GROUPS = {
   ],
   // runtime-gate: 卡片 runtime 门/探针与 managed-restart 分类
   'runtime-gate': [
-    'test/runtime-gate/runtime-gate-wiring.test.ts',
     'test/runtime-gate/restart-gates.test.ts',
-    'test/runtime-gate/restart-completion-wiring.test.ts',
   ],
   // gateway: control-plane REST 客户端与网关就绪轮询
   gateway: [

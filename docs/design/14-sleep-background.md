@@ -391,7 +391,7 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 
 验证门：`pnpm run test:desktop`、`pnpm run typecheck`、`pnpm run build:renderer`；
 **D4 附加门**：`pnpm run test:renderer-shell`（`test/lifecycle/session-liveness.test.ts`、
-`test/wiring/session-liveness-wiring.test.ts`）、`test:sidebar`
+`test/lifecycle/session-liveness.test.ts`（行为契约；后续裁决已移除源码文本接线锁））、`test:sidebar`
 （`test/session-state/session-fact-reconcile.test.ts`、`test/session-rows/completed-dots-signatures.test.ts`、
 `test/session-rows/workspace-membership.test.ts` 的回执投影边界）、`test:control-plane`
 （`test/log-file.test.ts`、`test/host-lifecycle/lifecycle.test.ts` 的落盘/reopen 端到端）、

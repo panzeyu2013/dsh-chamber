@@ -181,26 +181,4 @@ final class CrossLanguageLockstepTests: XCTestCase {
                        "手工转录清单必须删除（S16a）")
     }
 
-    /// 2026-12（P1 取证缺口）：sidecar stderr 的透传行必须真的有一条落到磁盘的
-    /// 通道——BridgeClient 暴露 sink、relaySidecarLogLine 把截断后的行喂给它、
-    /// AppDelegate 在 start 之前接线、NativeShellLog 提供独立文件实例
-    /// （<userData>/logs/sidecar.log）。四处缺一即静默丢证据：打包态 stdout/stderr
-    /// 不落盘，控制面 WS splice 的归因行只经这条链到达磁盘。
-    func testSidecarStderrPersistsThroughTheDeclaredSink() throws {
-        let bridge = try source("macos/Sources/DSHChamberPoc/BridgeClient.swift")
-        XCTAssertTrue(bridge.contains("public var sidecarLogSink: ((String) -> Void)?"),
-                      "BridgeClient 必须暴露 sink（单测/自定义形状可注入）")
-        XCTAssertTrue(bridge.contains("logSink.enqueue(Self.relayedSidecarLogLine(line), sidecar: captured)"),
-                      "透传行必须进入非阻塞汇聚通道，并把落盘载荷随行交给旁路消费者")
-        XCTAssertTrue(bridge.contains("sidecarSink?(sidecar)"),
-                      "汇聚线程必须真的调用旁路 sink（漏掉 = 只打印不落盘）")
-        let appDelegate = try source("macos/Sources/DSHChamberPoc/AppDelegate.swift")
-        XCTAssertTrue(appDelegate.contains("bridge.sidecarLogSink = { line in NativeShellLog.sidecar.append(line) }"),
-                      "AppDelegate 必须在 start 前接线 sink")
-        XCTAssertTrue(appDelegate.contains("NativeShellLog.sidecar.configureSidecar(userDataDir: stateDir)"),
-                      "AppDelegate 必须配置 sidecar 独立日志文件")
-        let log = try source("macos/Sources/DSHChamberPoc/NativeShellLog.swift")
-        XCTAssertTrue(log.contains("sidecarFileName"), "NativeShellLog 必须声明 sidecar 文件名")
-        XCTAssertTrue(log.contains("sidecar.log"), "落盘文件名必须是 sidecar.log")
-    }
 }

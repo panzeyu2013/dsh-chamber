@@ -25,8 +25,6 @@ const GROUPS = {
     'test/session-rows/session-row-window.test.ts',
     'test/session-rows/todo-attention.test.ts',
     'test/session-rows/hover-intent.test.ts',
-    'test/session-rows/hover-card-wiring.test.ts',
-    'test/session-rows/new-session-wiring.test.ts',
   ],
   // session-state: the shared chamber store and the per-source view/search/todo state
   'session-state': [
@@ -71,7 +69,6 @@ const GROUPS = {
     // panel-source.ts value-imports the dsh store engine, so this file runs through
     // the test-only vendor loader (mapping it to test/support/vendor-store-double.mjs).
     { file: 'test/plugin-kernel/panel-source.test.ts', nodeArgs: ['--import', './test/support/vendor-register.mjs'] },
-    'test/plugin-kernel/panel-wiring.test.ts',
     'test/plugin-kernel/settings-shell.test.ts',
   ],
   // archive-purge: the archive/purge flow, its tombstones and the producer/retention wiring
@@ -80,8 +77,6 @@ const GROUPS = {
     'test/archive-purge/purged-rows.test.ts',
     'test/archive-purge/purged-convergence.test.ts',
     'test/archive-purge/purged-tracker.test.ts',
-    'test/archive-purge/producer-purged-wiring.test.ts',
-    'test/archive-purge/resident-retention-wiring.test.ts',
   ],
   // visual-lock: the batch1/batch2/upstream-alignment visual and alignment locks (never merged)
   'visual-lock': [

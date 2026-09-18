@@ -23,7 +23,7 @@
   - **实例写者静默门拦住自动启动恢复路径（同上验收）**：shell 被 `SIGKILL`/孤儿 dsh 占住 DSH_HOME 时如实拒绝（
     `409 connection_busy`）但「启动/停止」点不动（状态停 `starting`、端口 0），恢复 = 优雅重启应用；仅硬杀后出现。
   - **降级提示目检/实机腿（05 §4，2026-12）**：结构性缺口下三处座位一致性——横幅 ~5s 出现/自愈后以「若仍然如此…」回来、侧栏行不重复播报、连接页卡片不同时出现「正常/能力受限」、提示非阻断与 `role="status"`、与 body portal 叠压；目前只经单测 + 源码锁，**未真机判**（`gui-acceptance-checklist.md` §3）。
-  - **boot 死区收敛实机门（05 §4.1，2026-12）**：未连接（idle）远端点击其会话 → 遮罩立即给「连接」+ 切换行且**不启动 boot**（该挂载隐藏满保留宽限后回收；设置面板正在编辑的来源不回收）；`error` 与托管 `stopped`/`restart-exhausted` 来源 → 就绪门 1.5s 宽限后判不可服务（不再等满 60s），`degraded`（重连在途）**不判死**、仍在预算内等，两者都在能退回本地；挂死 boot → **超过**反馈窗（10s）后遮罩给出重试/连接/切换 + ⌘R 提示；502（隧道通、远端端口死）→ 非阻断 `.boot-gap` 横幅 + 每 ready 世代一次自愈。**Swift 打包态**复测遮挡/最小化下仍收敛（与 S-10 同批）。契约与归谬见 design 05 §4.1；判定纯函数与接线锁在 `packages/renderer/src/source-readiness.ts` 与 `packages/renderer/test/lifecycle/boot-deadzone-wiring.test.ts`，通道失败上浮在 `packages/renderer/test/lifecycle/host-graph.test.ts`。
+  - **boot 死区收敛实机门（05 §4.1，2026-12）**：未连接（idle）远端点击其会话 → 遮罩立即给「连接」+ 切换行且**不启动 boot**（该挂载隐藏满保留宽限后回收；设置面板正在编辑的来源不回收）；`error` 与托管 `stopped`/`restart-exhausted` 来源 → 就绪门 1.5s 宽限后判不可服务（不再等满 60s），`degraded`（重连在途）**不判死**、仍在预算内等，两者都在能退回本地；挂死 boot → **超过**反馈窗（10s）后遮罩给出重试/连接/切换 + ⌘R 提示；502（隧道通、远端端口死）→ 非阻断 `.boot-gap` 横幅 + 每 ready 世代一次自愈。**Swift 打包态**复测遮挡/最小化下仍收敛（与 S-10 同批）。契约与归谬见 design 05 §4.1；判定纯函数与接线锁在 `packages/renderer/src/source-readiness.ts` 与 `packages/renderer/test/lifecycle/source-readiness.test.ts`，通道失败上浮在 `packages/renderer/test/lifecycle/host-graph.test.ts`。
 
   - **idle 来源点会话排队到 68s 才失败（05 §4.1 推迟 boot 的代价，2026-12）**：`open` 在 `QUEUED_OPEN_TIMEOUT_MS`(68s) 内等不到壳就以打开失败收尾；窗口内点「连接」可在 settle 后补发，但没有"连接成功后自动打开"这条腿。候选收口 = App 记下被推迟的 open 意图并在来源 ready 时重放（须与既有 pending-open 队列语义对齐）。
 
@@ -519,7 +519,7 @@
 - **侧栏行悬停卡片由本仓自持（2026-09-13 偏差；上游修掉竞态即可退役）**：vendor `HoverCard` 是否 arm 宽限关闭由**上一次已提交的 `open`** 决定（`ui-primitives/src/HoverCard.tsx:183-188`），本仓每实例一个大 React root、dwell 触发到提交可差数十毫秒，窗口内 pointerleave 漏 arm ⇒ 卡片挂载后无法关闭。改由 `RowHoverCard.tsx` + `shared/hover-intent.ts` 渲染（状态机替换，契约与上游等价）。有意偏差与内容差异见 design 06 §7（页面级单卡、blur/hidden 关闭、锚点滚出即关、
   `ResizeObserver` 重算、copyEpoch；workspace 卡只读，会话卡状态行 0–1）。**退役条件 = 上游修掉竞态**；
   `verify-upstream-touchpoints.mjs` **C15** 断言竞态两侧形状 + 时间常数锁步，**上游一修升级 pin 时本门先红**。证据：
-  `sidebar/test/session-rows/hover-intent.test.ts`/`hover-card-wiring.test.ts`；实机走查 W-4b/-race/-swap/-dismiss。
+  `sidebar/test/session-rows/hover-intent.test.ts`；实机走查 W-4b/-race/-swap/-dismiss。
 
 - **连接页手写 tooltip 未走 vendor `Tooltip`（2026-09-13 偏差；a11y 仍 open）**：
   `ConnectionsSection.module.css:320-375` 用 `data-tip` + `::after` 自绘（13 处），气泡无 `role="tooltip"`/
@@ -690,7 +690,7 @@
   `dsh-chamber-seed-open-in` 时该表不显示（实例自己的插件页仍显示；`classifyInventoryEntry`
   不漏进第三方区）。「确实存在才列」须在远端探针加 overlay 检查 + 偏差分支（overlay 文本 `plugin-sync.ts`
   已读到，成本近零，但为不可达状态新增呈现路径）；该门与包同期落地、无已发布播种路径，故不做。证据：design 20
-  §6.2/§9、`chamber-rows.test.ts` + `chamber-table-wiring.test.ts`（分类兜底由 `chamber-seed-drift.test.ts` 钉住）。
+  §6.2/§9、`chamber-rows.test.ts`（分类兜底由 `chamber-seed-drift.test.ts` 钉住）。
 
 - **会话行/搜索结果标题墨色不照官方：静止次级、hover 主色（2026-09-14 用户指令，偏差）**：官方 `Rows .title` 继承行墨从不降级；本仓恢复 v0.2.4 两级——`.sessionTitle` 静止 `label-secondary`、hover 转 `label-primary`，`.searchResult*`
   与 `.todoRow` 同规则、`.todoTitle` 在行外两级同为次级。**理由**：A1 曾改常驻主色，行 hover 只剩极低对比底色wash、悬停卡出现前无可读反馈。**副作用（接受）**：静止列表更暗（当前会话行也不例外），亮度差本身就是 hover 反馈。**下一轮上游对齐不得**改回常驻主色；锁在 `sidebar/test/visual-lock/batch1-visual-locks.test.ts` A1 一例。

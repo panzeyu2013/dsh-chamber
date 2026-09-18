@@ -622,9 +622,7 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   - **证据**：`packages/renderer/test/frame-chrome/page-language.test.ts`
     （规则 + 状态机 + 挂载世代 + 接线锁）、`page-language-hook.test.ts`（真实
     decorator + 真实归属器、stub DOM 端到端：同栈回写 / 后台壳 / 切换等待 /
-    世代 / fail-open 形状）、`locale-vendor-contract.test.ts`（§4 契约镜像的
-    只读锁步：服务名、`installLocale`、namespace 字面量、`subscribe(sync)` 先于
-    立即 `sync()`、scope 的 `loading/ready/unavailable` 词表）、
+    世代 / fail-open 形状）、
     `theme-fallback.test.ts`（活动来源发布锁）、`required-extra-rows.test.ts`
     （两条挂载路径的装饰器形状锁）。
 - **同族残留（非本节修复面）**：同一份文档里还有其它

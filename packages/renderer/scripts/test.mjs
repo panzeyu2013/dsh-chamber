@@ -22,9 +22,7 @@ const GROUPS = {
   // lifecycle: 实例启动生命周期 —— shell 引导与降级自愈、宿主图/必需行探测、首屏基线预热、page 读路
   lifecycle: [
     'test/lifecycle/boot-degradation.test.ts',
-    'test/lifecycle/sidebar-right-heal-wiring.test.ts',
     'test/lifecycle/baseline-harvest.test.ts',
-    'test/lifecycle/boot-deadzone-wiring.test.ts',
     'test/lifecycle/host-graph.test.ts',
     'test/lifecycle/required-extra-rows.test.ts',
     // The shell *.test.ts split is served from test/support/shell-harness.ts and needs the
@@ -34,6 +32,7 @@ const GROUPS = {
     { file: 'test/lifecycle/shell-tail-wait-teardown.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-shell-register.mjs'] },
     { file: 'test/lifecycle/session-open-poll.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-shell-register.mjs'] },
     'test/lifecycle/page-read-path-lockstep.test.ts',
+    'test/lifecycle/source-readiness.test.ts',
     // 运行位活性守卫的决策纯模块契约（design 14 §D4）。
     'test/lifecycle/session-liveness.test.ts',
   ],
@@ -46,18 +45,11 @@ const GROUPS = {
   ],
   // session-intent: 会话打开/深链意图管线（路由激活、待发队列、App 意图门接线）
   'session-intent': [
-    'test/session-intent/open-intent-wiring.test.ts',
     'test/session-intent/pending-open-queue.test.ts',
     'test/session-intent/deep-link-activation.test.ts',
   ],
   // wiring: 跨文件源码文本接线契约（App/InstanceView/侧栏桥）
   wiring: [
-    'test/wiring/workspace-echo-wiring.test.ts',
-    'test/wiring/session-echo-wiring.test.ts',
-    'test/wiring/app-purged-memory-wiring.test.ts',
-    'test/wiring/viewed-protection-wiring.test.ts',
-    'test/wiring/hover-card-view-hide-wiring.test.ts',
-    'test/wiring/session-liveness-wiring.test.ts',
   ],
   // view-runtime: 视图运行时 —— 隐藏视图回收、视图过渡队列、侧栏滚动恢复
   'view-runtime': [
@@ -71,7 +63,6 @@ const GROUPS = {
     'test/frame-chrome/frame-locale.test.ts',
     'test/frame-chrome/page-language.test.ts',
     'test/frame-chrome/page-language-hook.test.ts',
-    'test/frame-chrome/locale-vendor-contract.test.ts',
     'test/frame-chrome/batch2-visual-locks.test.ts',
   ],
 }

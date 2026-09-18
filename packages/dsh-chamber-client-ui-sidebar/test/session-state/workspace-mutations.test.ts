@@ -1,7 +1,7 @@
 /**
  * workspace-mutations.ts 行为测试（design 05 §2.2.1 唯一事实出口）。
  *
- * 接线锁（workspace-echo.test.ts / workspace-funnel-wiring.test.ts）只证明**调用
+ * 接线锁（2026-12 裁决后仅剩 workspace-echo.test.ts）只证明**调用
  * 形状**；这里补的是出口**运行时契约**本身（此前的残余风险）：
  * - 事实在 wire 成功后发布，携带宿主返回的 workspaceId 与 **canonical path**
  *   （不是浏览器侧那条可能含符号链接的请求路径）以及可选锚点；

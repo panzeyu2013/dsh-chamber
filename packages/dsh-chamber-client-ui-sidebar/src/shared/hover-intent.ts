@@ -23,10 +23,10 @@
  *     machine stranded none. That probe was scratch work — its script and its
  *     rate never shipped, so they are deliberately NOT cited as repo evidence.
  *     The committed regression coverage is: the machine cases in
- *     `test/session-rows/hover-intent.test.ts` (a leave inside the window must still close),
- *     the source locks in `test/session-rows/hover-card-wiring.test.ts`, and the real-pointer
- *     acceptance leg `W-4b-race` (`scripts/gui-acceptance/walkthrough.mjs`,
- *     judged by `hoverRaceVerdict` in `checks.mjs`).
+ *     `test/session-rows/hover-intent.test.ts` (a leave inside the window must still close)
+ *     and the real-pointer acceptance leg `W-4b-race` (`scripts/gui-acceptance/walkthrough.mjs`,
+ *     judged by `hoverRaceVerdict` in `checks.mjs`). The former source-text wiring
+ *     lock was removed by the 2026-12 ruling.
  *
  *  2. CLOSE. A state machine that keeps its own flag while React commits a
  *     separate one can diverge the other way: a press (`press`) or an owner

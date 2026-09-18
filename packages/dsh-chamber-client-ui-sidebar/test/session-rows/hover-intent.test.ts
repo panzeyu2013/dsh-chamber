@@ -6,8 +6,8 @@
  * handled while React's commit of the dwell timer was still pending armed
  * nothing and stranded the card on screen. The scratch probe that measured it
  * is deliberately NOT cited as evidence (see the module header): the committed
- * evidence is the cases below, the source locks in hover-card-wiring.test.ts,
- * and the W-4b-race real-pointer leg.
+ * evidence is the cases below and the W-4b-race real-pointer leg (the former
+ * source-text wiring lock was removed by the 2026-12 ruling).
  *
  * Pinned here: the dwell boundary, the fire-time pointer-inside check that
  * cancels an open whose commit is still in flight, the UNCONDITIONAL grace

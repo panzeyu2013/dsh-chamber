@@ -18,7 +18,6 @@ const GROUPS = {
   // runtime: 设计 18 runtime 投影/策略 + armed-confirmation 机与 live-fact 守卫
   runtime: [
     'test/runtime/gateway-runtime-api.test.ts',
-    'test/runtime/restart-completion-wiring.test.ts',
     'test/runtime/runtime-management.test.ts',
     'test/runtime/confirm-machine-guards.test.ts',
   ],
@@ -38,7 +37,6 @@ const GROUPS = {
     'test/shell/batch2-visual-locks.test.ts',
     'test/shell/escape-owner.test.ts',
     'test/shell/disclosure-attrs.test.ts',
-    'test/shell/connections-section-mirror.test.ts',
   ],
   // bridge: 完整桥接面——outlet cell dispatch / source face / 桥接契约锁 / onboarding
   bridge: [
