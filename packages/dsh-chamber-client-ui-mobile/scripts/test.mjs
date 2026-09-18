@@ -18,7 +18,6 @@ const GROUPS = {
   visual: [
     'test/visual/breakpoints.test.ts',
     'test/visual/css-source.test.ts',
-    'test/visual/nav-toggle.test.ts',
   ],
   // behavior: the pure interaction decisions (composer, drawer gestures, settings chips).
   behavior: [

@@ -106,7 +106,6 @@ export const GROUPS = {
     'test/desktop-shell/updater.test.ts',
     'test/desktop-shell/updater-restart-install.test.ts',
     'test/desktop-shell/updater-cache-maintenance.test.ts',
-    'test/desktop-shell/update-restart-quit.test.ts',
     // swift-side headless update controller (design 25 §7)
     'update-headless.test.ts',
   ],

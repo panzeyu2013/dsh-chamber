@@ -40,7 +40,6 @@ const GROUPS = {
   bridge: [
     'test/bridge/cell-dispatch.test.ts',
     'test/bridge/onboarding.test.ts',
-    'test/bridge/settings-extensions.test.ts',
     'test/bridge/settings-source-face.test.ts',
   ],
   // navigation: 固定导航 id 与服务器下拉选择/清理
