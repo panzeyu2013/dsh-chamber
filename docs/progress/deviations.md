@@ -16,7 +16,7 @@
 > （S-47）、下载落盘（S-26）、缩放持久化（T-22）、原生壳日志（T-25）、mac 打包演练与 Sparkle
 > 密钥/发布物门禁（G41/G42）；S-10 降级为遮挡/App Nap 未判的部分收口（open），S-45 的状态词与
 > 正文拉齐。新增 accepted：JS 对话框（T-21）、WebKit ITP（T-23）、无 `NS*UsageDescription`
-> （T-24）与旧系统兜底在新下限下不可达（T-26）。仍 open 的只有外部门禁（S-01）、S-44 的实机面、S-10 的实机判定、S-48 的实机验收、S-49 的窗口高度单侧对齐裁决、T-28 的 corner-shape 单点裁决与 CI 内打包 .app
+> （T-24）与旧系统兜底在新下限下不可达（T-26）。仍 open 的只有外部门禁（S-01）、S-44 的实机面、S-10 的实机判定、S-48 的实机验收、S-49 的窗口高度单侧对齐裁决、D15 的文档锚点过期、T-28 的 corner-shape 单点裁决与 CI 内打包 .app
 > 启动（G19）；其余为 accepted 的结构性差异或已收口项。证据为当前工作树行号；旧 id 全部保留。
 
 ## 0. 更新纪律
@@ -203,6 +203,7 @@
 - **D12 校正（保持 resolved）**：行为属实（`copyTree` 无返回值，直调、无恒假判断）但旧锚点错——现行在 `build-swift-app.mjs:663-666`（旧引 `:622-627` 为装配代码）。
 - **D13 resolved**：权限锚点已刷成当前值——两个处理器在 `main.ts:3832-3834`，`WebPermissionPolicyTests.swift:31` 的测试字面量与 `MainWindowController.swift:1236` 的注释都引用该行号（`main.ts:3817` 起为同一策略的说明正文）。保留备查。
 - **D14 resolved**：`Info.plist.template:10-18` 的共存注释已按 S-04（accepted）改写——同 scheme、目录锁保证同机单跑，并指向 deviations S-04；`ShellStartupTests.swift:887-890` 断言不再出现「D2 未决」。保留备查。
+- **D15 open（2026-12 实测；合并 refresh-rate 时发现）**：docs 的证据锚点是写死的 `文件:行`（`docs/**` 共 666 处），代码插入/删除后即过期，且位移**不均匀**——session-width 在 `MainWindowController.swift` 后半段插入 11 行（`+11` 只对插入点以下成立），refresh-rate 又在多处插入（同一文件净增 128 行，实测偏移从紧邻首个插入点的 +5 到文件末尾的 +128；design 25 在 §5.1 之后 +101），所以「按固定偏移刷一遍」会改错。实测（HEAD `6af6de77`；指向 `MainWindowController.swift`（1926 行）的锚点 32 处，抽检 10 处全部错位，仅本轮合并新刷的 S-48/S-49 两行正确）：T-10 引 `:250-256` 说 `isInspectable`，实际 `:250` 是 `evaluateJS`、`isInspectable` 在 `:348`；S-10 引 `:168` 说 `WKWebViewConfiguration()` 默认，实际该处是 cpURL 文档注释、构造在 `:206`；S-26 引 `:886-925` 说下载落盘，实际 `:886` 是 POC_DEBUG 探针、`func download(_:…)` 在 `:1210`；S-27 引 `:1103-1143` 说失败页，实际该处是导航放行注释、`showLoadFailurePage` 在 `:1610`；S-25 引 `:1172-1185` 说 runOpenPanel 回调，实际该处是 `decidePolicyFor navigationResponse`、`runOpenPanelWith` 在 `:1749`；T-27 引 `:65-72,290-291,308`，实际同内容在 `:76-83,355,373`；T-14 引 `:60-63` 说 `displayName`，实际该处是窗口几何注释、`displayName` 在 `:74`；S-24 引 `:1008-1013` 说菜单面，实际该处是 P-18 启动门注释（MWC 内已无 `NSMenu`/`validateMenuItem`）；P-14 引 `:827-833` 说外链预算，实际该处是 hostFacts 推送失败打印（预算面在外链放行一带，`:119` 为镜像注释、`:1160-1162` 为 `openExternally` 分派）；design 25:555 引 `:515-536` 说 `removeDeliveredNotifications`，实际该处是 T-2 首载注释、调用在 `:984`。其余 `文件:行` 锚点（约 634 处，跨 `main.ts`/`AppDelegate.swift`/子包等）未盘点，退役动作覆盖全量。**取舍**：不批量按偏移刷；退役动作 = 待合并分支（timeout-loading / ui-chat-not-render / windows-slide / swift-sidebar-update 等）全部落地后做一次**语义化重锚**——每条锚点按描述里的符号 grep 当前文件、写回真实行号并附 grep 证据；后续新登记优先写符号锚（`func download(_:…)`、`RefreshRatePolicy.apply(to:)`）而非裸行号。**状态**：open（低–中，未排期）。**退役判据**：`docs/**` 全部 `文件:行` 锚点完成语义核对并落盘（每处可复查「引用符号在该行」），或锚点写法整体转为符号锚后本条删除。
 
 **待实机核验（审计未覆盖，不计条目）**
 

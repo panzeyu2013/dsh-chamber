@@ -302,6 +302,8 @@
 
 ## 一致性债务与开放登记（低–中，未排期；均指回代码面注释/design 登记）
 
+- **docs 证据锚点过期（D15，2026-12 实测；低–中，未排期）**：`docs/**` 的 `文件:行` 证据锚点共 666 处（32 处指向 `MainWindowController.swift`），代码位移后大面积错位且偏移不均匀（同一文件净增 128 行，实测偏移 +5…+128），抽检 10 处全部错位。退役动作 = 待合并分支全部落地后按符号 grep 做一次语义化重锚；登记见 [deviations.md](deviations.md) D15。
+
 - **设置面残余登记（design 05 §5，2026-12 完整桥接修订后剩余项）**：壳渲染选中来源自己 boot ctx 的 `settings.section`
   台账与该 ctx 绑定的标准座（`settings-source-face.ts`）；原 child ctx 残余随其删除。剩余：①面板要求该来源壳处于挂载中（`setSettingsTarget` 保证后台挂载/不被回收；代价 = 付一次该来源 boot，失败只显示不可达/启动中，无独立降级面）；②
   `settings.trigger/header/close` 属壳 chrome、`settings.action` 仅本地；`settings.onboarding` 不再缺失（壳统筹自己
