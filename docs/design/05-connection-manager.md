@@ -744,7 +744,7 @@ export const chamberBridge: {
   首次切换在点击时已就绪；预热与用户触发复用同一 entry 的 boot promise，
   不依赖页面级 base-path/source 全局旋钮。
   不支持 content-visibility 的浏览器降级为保留 layout 的 visibility 方案
-  （同样无闪烁）（styles.css `.instance-view.instance-hidden`）。
+  （同样无闪烁）（styles.css `.instance-view.instance-hidden`）。**2026-12 追加纪律（「看不到但能点」的空白图标）**：CSS 动画/过渡只在子树被渲染时推进，在隐藏壳里创建的入场动画会被钉在首帧（`opacity: 0`）——元素仍可命中、除重挂载外不自愈（WKWebView 实测见 STATUS）。故隐藏壳内**不得创建任何动画/过渡**（`packages/renderer/src/styles.css` 的 `.instance-hidden/.instance-pending .instance-shell *` 门），且必要内容不得依赖入场动画才可见（侧栏/设置壳已整组退役，源文本锁在 `dsh-chamber-client-ui-sidebar/test/visual-lock/`）。
   **降级呈现（2026-12 修订）**：boot **成功**但已知缺口（来源在启动窗口内没有
   提供客户端插件图／图到了但复合首屏 inject 的服务始终没有 provide——典型是
   `ui-chat` 等 `sidebarRight`，于是整个会话视图不注册）时，事实经

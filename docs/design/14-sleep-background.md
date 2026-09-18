@@ -330,6 +330,63 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
   （`<userData>/logs/sidecar.log`，见那里的规格）。**未闭合**：真机事故下
   「`WebSocket stream … closed` 行确实可检索」未经实测（见 STATUS）。
 
+- **对话流健康臂（2026-12，纯 chamber 代码）**：本节阶梯覆盖不到的那类真机卡死的收口。
+  - **缺陷本体（已复现）**：连接代际仍 ready 时连续载体丢失 ⇒ 上游
+    `waitForRemoteStreamRetry` 把 `RemoteStreamCarrierError` 抛成终局 ⇒
+    `Session.failEventStream()` 把 `openState` 锁成 `'error'`（窗口保留、流不再重开），
+    官方聊天面只在列首渲染一行 `chat.loadError`。headless 复现：同一 mux socket 在
+    1.2s 内被拆 4 次（`closeAll` + `killNext(3, 25ms)`），页面此后不再重发
+    `session/follow`，DOM 冻结在 213 行 / 92 turn；对照跑（同一抖动、快照被接受）journal
+    正常重开 ⇒ 是 race 不是必失败。真机同形证据：`13:35:47.689Z local closed
+    (upstream close, 368803ms)`（用户报障前 91s）与该源两个子代理会话同时冻结。
+  - **唯一杠杆与其硬边界**：公开 `ISession` 无 `open()/resync()`；`clear()` 不动 stage
+    （`followCurrent()` 在 `current === undefined` 时直接 return），连接代际 reconnect 也
+    不重开 journal。可用杠杆只有 stage 迁移：`open(neighbor)` → `open(target)` 同步两步，
+    让 `followCurrent()` 在 `Session.open()` 上重跑 `doOpen()`——但只对
+    `openState !== 'open'` 生效；`'loading'`（`openPromise` 在途）与 `'open'`（状态短路）
+    都不可重开。
+  - **落地**：`packages/dsh-chamber-client-ui-open-in`（既有的 per-instance 头排座席宿主）
+    新增 `src/client/session-stream-health.ts`（纯决策：error 满 8s 自动 stage 迁移重开，
+    冷却 120s、滚动窗口 10 分钟 ≤3 次；loading 满 20s、或阶梯无杠杆时给「重新加载」提示）、
+    `src/client/session-stream-health-probe.ts`（stage 迁移与面形状读取，全部 fail-closed）、
+    `src/client/SessionStreamHealthChip.tsx`（`conversation.session.header.actions`，
+    list/session 作用域：只显示，绝不自行重载）、`src/client/session-stream-health-seat.ts`
+    （座席注册 + **按会话持有的阶梯状态** + 非抛错的 vendor 面读取）。两条 review 修正写进
+    契约：①**阶梯状态在座席而不在组件 ref**——会话子树按绑定 key 挂载，切会话即卸载，
+    ref 会让同一会话每次访问重获 grace/冷却/预算，storm bound 失效；②stage 迁移有**前置
+    条件**：target 必须“仍是 current 且在列表里”，否则拒绝（address-only 子代理会在首步
+    失去 eligible 被 `pruneScopes()` 拆 scope 并 release 输入壳附件；masked gap 会让回程
+    `open(target)` 抛错把用户留在邻居会话；未 flush 的旧 effect 会把 stage 抢回用户已切走的
+    会话），退化为提示臂。控制面侧只保留一条取证日志：握手完成前下游腿离开时记
+    `WebSocket upgrade <id> abandoned (downstream close before upstream handshake, Nms)`
+    （归因边界：控制面自身 `revokeTransportTraffic`/`closeAllStreams` 拆 socket 也走这一行，
+    不可单独据此判定“浏览器主动离开”）。
+  - **触发面：做完又被否掉的一条（2026-12 review 证据链）**。原设想是让控制面在上游腿
+    **代答宿主心跳 pong**（被动 `PingScanner` 扫宿主 ping → 自己写 pong），把宿主 2s×2 的
+    判死从浏览器网络进程解耦。实现后被两处**协议级**证据否定，已整体回退（chamber 的
+    “不改上游”边界下无从绕过）：①上游腿里代理是 **client**，RFC 6455 §5.3 要求 client 帧
+    必须掩码，pinned `ws` 服务器对未掩码帧直接 1002（`WS_ERR_EXPECTED_MASK`）——代答反而
+    在首个心跳（~2s）后杀掉每条 mux，正好制造它要消除的 churn；②pong 是在
+    `socket.pipe(upstreamSocket)` 的字节流**中间**插入的，浏览器帧跨 chunk 时会被劈开，
+    宿主解析器按 TCP 顺序读到 `[帧前半][pong][帧后半]`（实测 `invalid UTF-8 sequence`）。
+    正确实现需要“浏览器方向帧边界感知的写入路径 + 掩码”，代价与风险都落在被保护的传输层
+    上，收益只是降频，故不做。触发面的**残余选项**留在 STATUS「连接稳定性」条：托管实例
+    的 patch overlay 增一行 config 调宽 `websocketHeartbeatIntervalMs`（宿主侧 schema 有该键，
+    `api-gateway` 插件 `Config.websocketHeartbeatIntervalMs`，默认 2s；调宽它只动宿主自己的判死容错（~4–6s ⇒ 例如 30s×2），不注入任何字节。代理下行腿自己的心跳仍是 30s 周期、回答后才重新计时，最坏约 60s 才 onDead（`ws-heartbeat.ts`）。
+  - **拒绝替代**：整页自动重载（丢页面状态，且只能由用户点——本节与移动端
+    `session-stall.ts` 同纪律）；`session/follow` 盲空闲超时（合法长静默：实测 TTFT 75s
+    起、工具可数分钟，必然误报）；fork `ui-chat` 改错误行（82 文件，design 09 已拒）；
+    代理注入合成 `end`/未知帧逼客户端重试（未知帧会让客户端 `failAll` 并关 socket，且空闲
+    会话被周期性重放）；代理透明重放客户端流开帧（新宿主 socket 无流上下文，重放会触发
+    `RemoteJournalStream` 的「多次 opening cursor」协议错误）；**上游腿代答宿主 pong**
+    （理由见上一段：掩码与帧边界两条协议约束）。
+  - **未闭合**：`openState === 'open'` 但静默的半死形态仍无自动杠杆（无 applied cursor
+    水位时与合法长静默不可区分），收口两条：宿主侧流级 keepalive 仍未做；「让 carrier 失败永不终局」已落地（见下条）；自动重开的**实机验收未做**（判据 = 真机抖动后自查恢复，且 `local closed (upstream close, …)` 的频率不再随浏览器卡顿波动），阶梯阈值（8s/20s/120s/≤3）与 `presented` 判据的近似（document 级 `[data-chat-flow]` 存在性，非「实际可见」）同样待真机校准
+
+- **载体故障的用户可见面（2026-12）**：治因 = `packages/dsh-api-gateway/src/client/remote-stream.ts` 在活世代下用有界退避（250ms 起翻倍、10s 封顶，与连接车道自身 `backoffMaxMs` 同值）重开而不逃逸为 `gateway/internal`；信号面 = 该包 `$stream` 工厂组合 `carrierFailed` 成有界页面事实
+  `dsh-chamber:stream-carrier-failed`（`stream-carrier-fact.ts`：计数 + 时间 + 实例 id + 截断消息，dispatch 抛错被吞，绝不打断重连），由 open-in 的健康臂座席按实例过滤后喂进纯决策模块，chip 以 `role="status"` 显示「对话流正在重新连接…」（信息性、不给「重新加载」按钮，超过 `carrierChurnMs` 自行消退）。
+  - **拒绝替代**：（a）不做可见面——拒：去掉终局逃逸后，用户再也分不清「流在重连」与「会话本来就安静」，这是本补丁引入的静默窗口；（b）客户端插件在打包期 import 该 fork 的事件常量——拒：client plugin 不应加深进 fork 的 import 路径，故字面量复制并由 `stream-health-wiring.test.ts` 把两处拼写钉在一起（vendor-lockstep 先例）；（c）ctx service seam（fork 消费 chamber 提供的服务）——拒：fork 的探针面会被 chamber 插件的存在绑住，而页面事实在座席缺席时也无害；（d）让 carrier 失败重新终局——拒：正是本次要修的根因。
+  - **未闭合**：churn 提示窗口（10s）与按来源归属的粗粒度未在真机校准（STATUS ⑬）。
 ### D5 keep-awake（v1 设置项，默认关）
 
 - `powerSaveBlocker.start('prevent-app-suspension')`；settings 壳「通用」入口
@@ -363,9 +420,10 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 | `packages/desktop/preload.cts` | `settings` 面（get/set/onChanged，覆盖 chamber 级全部设置键）+ `systemResume` 订阅；`DshChamberBridge` 扩展 |
 | `packages/renderer` | App 层订阅 system-resume → 分发实例重连 + transport 即时重探；**D4 运行位活性守卫的决策与呈现**：`src/session-liveness.ts`（纯决策，含阈值/每会话计时/预算）+ App 内接线（staleness watchdog 内规划 → L1 广播 / L2 共享账本重连 / L3 横幅 + 忽略集合） |
 | `packages/dsh-chamber-client-ui-sidebar` | **D4 的执行半**：`shared/session-fact-reconcile.ts`（单飞 + 有界重试 + 相位超时 + 三值权威判定回执）；producer 订阅既有刷新通道并驱动它，回执经 `InstanceRuntimeReport.sessionFactReconcile` 回流（05 §3） |
+| `packages/dsh-chamber-client-ui-open-in` | **D4 对话流健康臂的座席宿主**（2026-12）：`src/client/session-stream-health.ts`（纯决策）+ `session-stream-health-probe.ts`（stage 迁移与面形状，fail-closed）+ `SessionStreamHealthChip.tsx`、`session-stream-health-seat.ts`（注册进 `conversation.session.header.actions`，list/session 作用域） |
 | settings-bridge 壳 | 「通用」视图（见设计 15：固定入口 `__general` 平铺） |
 | 测试 | `test:desktop`（关窗行为/退出确认/设置 store 单测）、`typecheck`、`build:renderer`（§6 验证门） |
-| 控制面 | loopback-only 与对外契约**无改动**；D4 的日志落盘包装（`createControlPlane` 无条件把注入 logger 包成 `<stateDir>/logs/control-plane.log`，规格见 02 §3.8）是本节新增的唯一控制面改动 |
+| 控制面 | loopback-only 与对外契约**无改动**；D4 的日志落盘包装（`createControlPlane` 无条件把注入 logger 包成 `<stateDir>/logs/control-plane.log`，规格见 02 §3.8）。2026-12 另加一处：「握手完成前下游腿离开」的取证日志（`WebSocket upgrade <id> abandoned (downstream close before upstream handshake, Nms)`，不动计数器；代答宿主 pong 的设想按同段证据整体回退） |
 
 ## 5. 安全与纪律
 
@@ -390,16 +448,20 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 由「关窗到托盘」覆盖）；会话级托盘（P2 纪律）。
 
 验证门：`pnpm run test:desktop`、`pnpm run typecheck`、`pnpm run build:renderer`；
-**D4 附加门**：`pnpm run test:renderer-shell`（`test/lifecycle/session-liveness.test.ts`、
-`test/lifecycle/session-liveness.test.ts`（行为契约；后续裁决已移除源码文本接线锁））、`test:sidebar`
+**D4 附加门**：`pnpm run test:renderer-shell`（`test/lifecycle/session-liveness.test.ts`（行为契约；后续裁决已移除源码文本接线锁））、`test:sidebar`
 （`test/session-state/session-fact-reconcile.test.ts`、`test/session-rows/completed-dots-signatures.test.ts`、
 `test/session-rows/workspace-membership.test.ts` 的回执投影边界）、`test:control-plane`
-（`test/log-file.test.ts`、`test/host-lifecycle/lifecycle.test.ts` 的落盘/reopen 端到端）、
+（`test/log-file.test.ts`、`test/host-lifecycle/lifecycle.test.ts` 的落盘/reopen 端到端、
+`test:open-in`
+（`test/session-health/session-stream-health.test.ts` 阶梯真值表 + `stream-health-wiring.test.ts` 座席接线锁 +
+`vendor-heal-contract.test.ts`：stage 迁移所依赖的三条 vendor 事实的 lockstep，pin 升级语义变化即红）、
 `verify:test-wiring`（**仓内全部 test manifest 必须登记在案**）、`test:swift`（NativeShellLogTests 全部用例，含新增的 sidecar 文件名/轮转名/落盘三条
 + CrossLanguageLockstepTests 的 sidecar sink 锁步）；
 手工清单：关窗 → 隧道存活 → 托盘恢复 → 退出确认（含**更新已下载时退出不弹
 确认**）→ 唤醒秒级重连 → 无窗口常驻期间 resume 补发 → **托盘缺失回退**
-（dev 模式关窗即退、窗口不消失）→ **运行位守卫可见性**（故意让某来源的 running 位不收敛：
+（dev 模式关窗即退、窗口不消失）→ **对话流健康臂可见性**（对同一来源反复拆 mux socket，制造
+`openState='error'`：不整页刷新即自动恢复，恢复后聊天面继续渲染；无第二个会话时只出现
+「重新加载」提示；`loading` 停滞满 20s 才出提示）→ **运行位守卫可见性**（故意让某来源的 running 位不收敛：
 不自动重载；横幅出现后「重新连接」生效、「忽略」在来源恢复前不再弹、「重新加载」才丢页面态；
 判据回 STATUS「会话运行位卡死」①）。
 

@@ -79,16 +79,19 @@ CSS `packages/renderer/src/styles.css` 引入）+ client 构面未列出的小�
 
 ### 2.3 `packages/dsh-api-gateway`（上游 `packages/api/gateway`，client 半）
 
-pure **6**（以脚本计数为准）。
+pure **5**（以脚本计数为准）。
 
 | 文件 | 标记 | 原因/补丁说明 |
 |---|---|---|
-| `package.json` | [patch-mod] | description/peer 集裁剪（host 依赖 dropped）；版本行随上游 |
+| `package.json` | [patch-mod] | description/peer 集裁剪（host 依赖 dropped）+ chamber test 脚本；版本行随上游 |
 | `src/client/index.ts` | [patch-mod] | `apply(ctx)` 读 `ctx.chamberBasePath` → `/api/remote.mux` 落到实例前缀 + `start(sinks, recoveryOverridesForTransport(transport))`（design 05 §6） |
+| `src/client/remote-stream.ts` | [patch-mod] | **载波重试策略**：活连接世代下的后续载波失败改走有界退避重开，不再逃逸为终局 `gateway/internal`（design 14 §D4；上游原逻辑在第二次快速失败即 `throw`，被 session controller 闩成 `failEventStream()`）；退避纯函数在 `src/client/remote-retry-policy.ts`，patch 形状由 `test/patch-lock/` 钉住 |
 | `src/client/stream-client.ts` | [patch-mod] | per-entry basePath（流载波 URL 拼装） |
-| `tsconfig.json` / `tsconfig.client.json` | [own-divergent] | chamber 构面 |
-| `tsconfig.check-base/client.json` | [own] | chamber erasable-only 校验构面 |
-| `test/` | [own] | chamber 自有测试（若有） |
+| `src/client/remote-retry-policy.ts` | [own] | chamber 载波退避纯函数 + 可中止等待（零 import，可脱离 vendor 图行为单测） |
+| `src/client/stream-carrier-fact.ts` | [own] | chamber 载波故障页面事实（有界计数 + `dsh-chamber:stream-carrier-failed`；零 import，可注入 dispatch 单测） |
+| `tsconfig.json` / `tsconfig.client.json` | [patch-mod] | chamber 构面（`files` 表随新增 client 文件同步） |
+| `tsconfig.check-base.json` / `tsconfig.check-client.json` | [own] | chamber erasable-only 校验构面（`files` 与 client 同步） |
+| `test/`、`scripts/test.mjs` | [own] | chamber 自有测试（退避真值表 + 可中止等待 + 载波事实契约 + patch 源文本锁；`verify:test-wiring` 校验可达性） |
 | `README.*`、`src/index.ts`、`src/stream-server.ts`、`src/types.ts`、`tsconfig.host.json` | [dropped] | host 半与上游文档不镜像（exports 保留 inert `./types` 子路径） |
 | `tsdown.config.ts`、上游 `tests/` | [dropped] | 同上 |
 
@@ -195,7 +198,7 @@ host 插件入口/半、上游 `tests/`、`tsdown.config.ts`、上游 README（a
 | dsh-api-remotes（client） | typert remote 装配（15）/ message-feedback、session-reference、subagent 等 wire 面 | gen-typert-remotes + C4 |
 | dsh-api-session-controller | api-gateway fork journal-stream 帧（无游标 notification） | **形状锁步 = C1**：帧词表与帧形状都在 `packages/dsh-api-gateway/src/stream-protocol.ts`（纯文件集内），C1 逐字节比对 pin，词表/键名漂移即硬失败；**行为复验 = fork 重放**：升级时人工跑一次 journal-stream 通路（C1 只证明形状未变，不证明重放语义） |
 | client/connection（recovery） | recovery-config 共享 schema（`DEFAULT_MIN_RESTART_INTERVAL_MS` 10_000 == schema 默认 backoffMaxMs） | liveness-triggers 钉值 + C1 |
-| dsh-api-session-controller（客户端半的会话事实语义；**人工登记，无 C 编号门**） | **运行位活性守卫押在三条上游事实上**（design 14 §D4）：① `sessions.refresh()` → `refreshList()` 单飞并把权威 summary 的 running 回灌已物化会话（`handleRunning`）；② `api-session/status` 是 `mode:'emit'` 转发事件（无重传/无 ack）；③ **`session.list` 拉取失败**（`result.ok===false`，含 carrier 失败被折叠成结果失败）时 `refreshList()` **照常 resolve**，只把 `listState` 置 `'error'`；非 remote 异常仍 reject（emit 本身不触发 `refreshList`）——故 chamber 的 L1 回执必须自带独立权威判定（`verify` seam） | 现有钉法：`packages/renderer/test/wiring/session-liveness-wiring.test.ts`（接线存在）+ `session-fact-reconcile.test.ts`（「resolve ≠ 成功」的语义锁）。**残**：尚无读 vendor 源的 lockstep 测试（仿 locale-vendor-contract），上游改语义时会 fail-open（回执仍 ok 而 L1 变 no-op）——已登记 STATUS 为未闭合门；升级 tag 时按 §7 人工复验这三条 |
+| dsh-api-session-controller（客户端半的会话事实语义；**人工登记，无 C 编号门**） | **运行位活性守卫押在三条上游事实上**（design 14 §D4）：① `sessions.refresh()` → `refreshList()` 单飞并把权威 summary 的 running 回灌已物化会话（`handleRunning`）；② `api-session/status` 是 `mode:'emit'` 转发事件（无重传/无 ack）；③ **`session.list` 拉取失败**（`result.ok===false`，含 carrier 失败被折叠成结果失败）时 `refreshList()` **照常 resolve**，只把 `listState` 置 `'error'`；非 remote 异常仍 reject（emit 本身不触发 `refreshList`）——故 chamber 的 L1 回执必须自带独立权威判定（`verify` seam） | 现有钉法：`packages/renderer/test/wiring/session-liveness-wiring.test.ts`（接线存在）+ `session-fact-reconcile.test.ts`（「resolve ≠ 成功」的语义锁）。**残**：尚无读 vendor 源的 lockstep 测试（仿 locale-vendor-contract），上游改语义时会 fail-open（回执仍 ok 而 L1 变 no-op）——已登记 STATUS 为未闭合门；升级 tag 时按 §7 人工复验这三条。**新增（2026-12）**：对话流健康臂的杠杆另押三条事实——`followCurrent()` 仅在 `current !== watched` 时 `session.open()`、`Session.open()` 在 `open`/在途 promise 上短路、`failEventStream()` 把 `openState` 锁成 `'error'` 并清空 promise——由 `packages/dsh-chamber-client-ui-open-in/test/session-health/vendor-heal-contract.test.ts` 读 vendor 源逐条钉住（去注释 + 归一化；语义一变即红，恢复臂须重推） |
 | dsh-runtime（激活探针域） | `HOST_DOMAIN_PROBE_NAMES` ↔ gateway `HOST_PACKAGE_PROBE_DOMAINS` | C7 + gateway 运行时 fail-loud |
 | interaction/commands（`commands/execute` 第三参数） | 激活探针载荷的键名 == 上游 `execute(agent, line, submittedAttachments, signal)` 的参数名（现行各代皆为 `submittedAttachments`；历史线曾用 `images`，`attachments` 从不是上游线名） | `runtime-probes.test.ts`：读 vendor 签名逐字比对 + 夹具按真实 typert gateway 校验参数键集（**2026-09 实机：一次升级中写错的 `attachments` 使每条激活探针失败、每次首装本地实例被隔离，直至验收轮才发现**） |
 | @deepseek-ai/dsh-client-ui-sidebar-right / -ui-layout / -ui-dockkit / -ui-conversation（移动插件锚点面） | **打包 fork 的锚点集**（设计 17 §18.4.3）：右栏呈现 `[data-sidebar-right-panel]`（`push\|fullscreen`，且**不得**用 `data-rightbar-collapsed` 当「已展开」——它是轨道标志 `cols.rightbar === 0`，`track = shown && !autoFullscreen`，手机档已展开时仍为假）、抽屉让位的两条臂 `:not([data-rightbar-collapsed])` + `[data-rightbar-fullscreen]`、dockkit 条 `[data-dockkit-strip]` 及其 chips（`data-dockkit-tab-close` 刻意排除 44px 底线）、会话头 `role="tablist"` 条、slot 出口是 `display:contents`（对「列的子元素」施加定位规则是静默 no-op） | mobile 不在 verify 脚本 `FORKS` 表内（C1/C3/C5 不适用），产物由 C8 盯陈旧；锚点由 `packages/dsh-chamber-client-ui-mobile/README.md`「Anchor baseline」+ `test/visual/breakpoints.test.ts` 逐条钉住，升级 pin 时按 §7 重锚——**含** `official-hover-card.ts` 的两个哈希 class token（`_root_1b2ny_*` / `_card_1b2ny_*`）与锚定几何（见该节末段）：纯 build-time 哈希、无属性形兜底，pin 一动即静默 no-op（fail closed），故必须写进重锚清单 |

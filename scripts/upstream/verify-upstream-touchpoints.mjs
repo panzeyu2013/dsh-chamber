@@ -185,8 +185,9 @@ const FORKS = [
     rel: 'packages/dsh-api-gateway',
     upstream: 'packages/api/gateway',
     patched: {
-      'package.json': '[patch-mod] description/peer 集裁剪（host 依赖 dropped）+ 版本行随上游推进',
-      'src/client/index.ts': '[patch-mod] apply(ctx) 读 ctx.chamberBasePath → /api/remote.mux 落到实例前缀 + start(sinks, recoveryOverridesForTransport(transport))（design 05 §6）',
+      'package.json': '[patch-mod] description/peer 集裁剪（host 依赖 dropped）+ chamber test 脚本 + 版本行随上游推进',
+      'src/client/index.ts': '[patch-mod] apply(ctx) 读 ctx.chamberBasePath → /api/remote.mux 落到实例前缀 + start(sinks, recoveryOverridesForTransport(transport))（design 05 §6）+ $stream 工厂组合 carrierFailed 发布 dsh-chamber:stream-carrier-failed 页面事实（design 14 §D4）',
+      'src/client/remote-stream.ts': '[patch-mod] 载波重试策略：活连接世代下的后续载波失败改走有界退避重开，不再逃逸为终局 gateway/internal（design 14 §D4；退避纯函数在同包 own 文件 remote-retry-policy.ts，patch 形状由 test/patch-lock 钉住）',
       'src/client/stream-client.ts': '[patch-mod] per-entry basePath（流载波 URL 拼装）',
       'tsconfig.json': '[patch-mod] chamber 构面',
       'tsconfig.client.json': '[patch-mod] chamber client 构面',
@@ -194,10 +195,13 @@ const FORKS = [
     own: {
       'tsconfig.check-base.json': 'chamber erasable-only 校验构面',
       'tsconfig.check-client.json': 'chamber erasable-only 校验构面',
+      'src/client/remote-retry-policy.ts': 'chamber 载波重试退避策略（纯函数、零 import，可脱离 vendor 图单测）',
+      'src/client/stream-carrier-fact.ts': 'chamber 载波故障页面事实（有界计数 + CustomEvent；零 import，可注入 dispatch 单测）',
+      'scripts/test.mjs': 'chamber 自有测试清单（verify:test-wiring 校验可达性）',
     },
     ownPrefix: ['test/'],
     ownNotes: {
-      'test/': 'chamber 自有测试（若有）',
+      'test/': 'chamber 自有测试（退避真值表 / 载波事实契约 / patch 源文本锁）',
     },
     dropped: [
       'README.md', 'README.zh.md', 'README.i18n.yaml',

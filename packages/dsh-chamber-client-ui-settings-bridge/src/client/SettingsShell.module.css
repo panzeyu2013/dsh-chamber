@@ -475,16 +475,14 @@
 /* Server-switch intermediate state: the content column switches to a
    dedicated loading view IMMEDIATELY (honest signal, no stale-content wait
    on slow targets); a source whose shell is already mounted renders its own
-   published face at once (no intermediate at all). The wrapper fade (keyed
-   per server) replays on each server switch, smoothing the swap. */
-.contentFade {
-  animation: contentFadeIn var(--ds-transition-duration) var(--ds-ease-in-out);
-}
-
-@keyframes contentFadeIn {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
+   published face at once (no intermediate at all).
+   2026-12: the wrapper fade that used to smooth that swap is retired. It was a
+   `from { opacity: 0 }` animation keyed by the selected server — it replayed
+   exactly on the switch where a suspended subtree can pin it at the first frame
+   and leave the panel body invisible-but-interactive (same class as the sidebar
+   entrance animations, see SidebarRoot.module.css). The swap is already carried
+   by the keyed remount; `.contentFade` stays mounted as that remount hook, and
+   content must never depend on a timeline to become visible. */
 
 .loadingView {
   display: flex;
@@ -806,7 +804,6 @@
   border: 0.5px solid var(--dsw-alias-border-l4);
   border-radius: 12px;
   background: var(--dsw-alias-bg-layer-3);
-  animation: contentFadeIn var(--ds-transition-duration) var(--ds-ease-in-out);
 }
 
 /* ---- 通知主开关（2026-09-11 upstream-alignment T9）----

@@ -78,8 +78,11 @@ const GROUPS = {
     'test/archive-purge/purged-convergence.test.ts',
     'test/archive-purge/purged-tracker.test.ts',
   ],
-  // visual-lock: the batch1/batch2/upstream-alignment visual and alignment locks (never merged)
+  // visual-lock: source locks over the sidebar's visual rules. No entrance animation may
+  // start invisible (a frozen timeline pins it at opacity 0 while staying hit-testable),
+  // and the renderer must refuse to create animations inside a shell nobody renders.
   'visual-lock': [
+    'test/visual-lock/sidebar-entrance-visibility.test.ts',
   ],
 }
 

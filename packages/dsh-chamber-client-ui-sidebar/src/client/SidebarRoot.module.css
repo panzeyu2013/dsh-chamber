@@ -49,40 +49,15 @@
   transition: opacity 150ms var(--ds-ease-in-out);
 }
 
-/* Wide-only content fades back in on expand remount. */
-.wide {
-  animation: wide-in 200ms var(--ds-ease-in-out);
-}
-
-@keyframes wide-in {
-  from { opacity: 0; }
-}
-
-/* At the 150ms rail settle, the four upper controls enter from the former
-   rail right edge over the remaining 150ms of the AppFrame track transition.
-   The bottom-pinned settings seat shares their opacity timeline but stays
-   horizontally fixed. Only a live collapse gets .railIn; a cold collapsed
-   render stays static. */
-.railIn .iconButton,
-.railIn .newSession,
-.railIn .regionArea {
-  animation: rail-in 150ms var(--ds-ease-in-out) backwards;
-}
-
-.railIn .footArea {
-  animation: rail-fade-in 150ms var(--ds-ease-in-out) backwards;
-}
-
-@keyframes rail-in {
-  from {
-    opacity: 0;
-    transform: translateX(49px);
-  }
-}
-
-@keyframes rail-fade-in {
-  from { opacity: 0; }
-}
+/* 2026-12「看不到但能点」的空白图标修复：宽/rail 的入场动画整组退役。
+   它们都以 `opacity: 0` 为首帧（`wide-in` / `rail-in` / `rail-fade-in`），而 CSS
+   动画只在所属子树被渲染时推进：被隐藏的实例壳（`.instance-hidden` →
+   `content-visibility: hidden`）或窗口被遮挡时，字标（`.wide`）与设置座席
+   （`.railIn .footArea`）会停在首帧——不可见、仍可命中、除重挂载外不自愈
+   （2026-12 定位与 WKWebView 实测见 STATUS 与 design 06/14）。
+   必要内容不再参与入场动画：折叠的位移与裁剪仍由 AppFrame 轨道过渡承担，
+   而 `.fading` 保留——它是**类驱动**且被 settle 定时器界定，不是时间线动画。
+   `.wide` / `.railIn` 仍作为布局/接线钩子由组件挂载，不再声明任何动画。 */
 
 /* Logo row (figma pad (4,8,4,8)): expanded keeps the panel toggle at the
    right edge; the rail gives every control the same base left anchor before
@@ -285,14 +260,10 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .wide,
-  .fading > *,
-  .railIn .iconButton,
-  .railIn .newSession,
-  .railIn .footArea,
-  .railIn .regionArea {
+  /* The entrance animations are gone outright (no opacity-0 first frame can be
+     frozen); only the state-driven collapse fade keeps a transition to drop. */
+  .fading > * {
     transition: none;
-    animation: none;
   }
 }
 

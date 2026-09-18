@@ -70,6 +70,7 @@
     "typecheck:host-archive-cleanup": "pnpm --filter @dsh-chamber/dsh-chamber-seed-archive-cleanup run typecheck",
     "typecheck:host-open-in": "pnpm --filter @dsh-chamber/dsh-chamber-seed-open-in run typecheck",
     "typecheck:open-in": "tsc -p packages/dsh-chamber-client-ui-open-in/tsconfig.json --noEmit",
+    "test:api-gateway": "pnpm --filter @deepseek-ai/dsh-api-gateway run test",
     "test:control-plane": "pnpm --filter @dsh-chamber/control-plane run test",
     "typecheck:gateway": "tsc -p packages/gateway/tsconfig.json --noEmit",
     "test:desktop": "pnpm --filter @dsh-chamber/desktop run test",

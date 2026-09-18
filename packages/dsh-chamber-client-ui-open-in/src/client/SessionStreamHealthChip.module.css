@@ -1,0 +1,40 @@
+/* Session stream-health chip (conversation header actions row).
+
+   A transient status control that exists only while the conversation stream
+   needs attention: the automatic stage-move heal is running, a parked loading
+   open tripped the stall threshold, or the ladder is out of levers and only a
+   reload remains. Geometry follows the same header row as the open-in control
+   (28px control height measured against the vendor utilities row), and the
+   colour is inherited from the row's own secondary label token — the chip is
+   information, never an alarm surface. */
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 4px 0 8px;
+  font-family: var(--dsw-font-family);
+  font-size: 12px;
+  line-height: 1;
+  color: var(--dsw-alias-label-secondary);
+  white-space: nowrap;
+}
+
+.action {
+  appearance: none;
+  -webkit-appearance: none;
+  font: inherit;
+  font-size: 12px;
+  border: none;
+  background: none;
+  padding: 0 8px;
+  min-height: 20px;
+  border-radius: 6px;
+  color: var(--dsw-alias-label-primary);
+  cursor: pointer;
+}
+
+.action:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}

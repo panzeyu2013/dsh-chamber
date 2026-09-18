@@ -13,6 +13,17 @@
 export const zh = {
   /** Neutral entry label (slot registrant diagnostics — not user-facing). */
   titleOpen: '在应用中打开当前工作区',
+  /** Session stream-health chip (diagnostics label — not user-facing). */
+  'streamHealth.label': '对话通道状态',
+  /** Automatic stage-move re-open is in flight. */
+  'streamHealth.healing': '正在恢复对话…',
+  /** The official open state has been `loading` past its stall threshold. */
+  'streamHealth.loadingStall': '对话载入停滞',
+  /** The ladder is out of levers: only a reload remains. */
+  'streamHealth.healFailed': '对话通道未恢复',
+  'streamHealth.carrierChurn': '对话流正在重新连接…',
+  /** The user's own recovery action. */
+  'streamHealth.reload': '重新加载',
   titleVscode: '在 VS Code 中打开当前工作区',
   titleFinder: '在 Finder 中打开当前工作区',
   titleExplorer: '在资源管理器中打开当前工作区',
@@ -68,6 +79,17 @@ export const zh = {
 export const en: Record<OpenInKey, string> = {
   /** Neutral entry label (slot registrant diagnostics — not user-facing). */
   titleOpen: 'Open current workspace in an app',
+  /** Session stream-health chip (diagnostics label — not user-facing). */
+  'streamHealth.label': 'Conversation stream status',
+  /** Automatic stage-move re-open is in flight. */
+  'streamHealth.healing': 'Recovering the conversation…',
+  /** The official open state has been `loading` past its stall threshold. */
+  'streamHealth.loadingStall': 'Conversation load stalled',
+  /** The ladder is out of levers: only a reload remains. */
+  'streamHealth.healFailed': 'Conversation stream not recovered',
+  'streamHealth.carrierChurn': 'Conversation stream reconnecting…',
+  /** The user's own recovery action. */
+  'streamHealth.reload': 'Reload',
   titleVscode: 'Open current workspace in VS Code',
   titleFinder: 'Open current workspace in Finder',
   titleExplorer: 'Open current workspace in Explorer',

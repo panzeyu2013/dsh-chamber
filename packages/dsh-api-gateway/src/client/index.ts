@@ -40,6 +40,7 @@ import {
   RemoteStream,
   type RemoteStreamOptions,
 } from './remote-stream.ts'
+import { createCarrierFailureReporter } from './stream-carrier-fact.ts'
 
 export { RemoteStreamCarrierError } from './stream-client.ts'
 export { RemoteJournalStream } from './journal-stream.ts'
@@ -161,11 +162,17 @@ class ClientRemoteService extends Service implements ClientRemote {
   private hostFacts: RemoteHostFacts | undefined
   private readonly streams: RemoteStreamMuxClient
   private readonly events: ClientRemoteEvents
+  /** chamber (design 14 §D4): page-level carrier-churn fact for the active source. */
+  private readonly reportCarrierFailure: (error: unknown) => void
   private mutations = Promise.resolve()
 
   constructor(ctx: Context, basePath = '') {
     super(ctx, 'remote')
     this.ownerCtx = ctx
+    this.reportCarrierFailure = createCarrierFailureReporter({
+      // Same seam the sidebar/layout forks read (published by the shell per boot).
+      instanceId: (ctx as { readonly chamberInstanceId?: string }).chamberInstanceId,
+    })
     this.streams = new RemoteStreamMuxClient(basePath)
     const connection = ctx.get('connection') as ConnectionHandle
     this.connection = connection
@@ -207,7 +214,19 @@ class ClientRemoteService extends Service implements ClientRemote {
   }
 
   $stream<Item>(options: RemoteStreamOptions<Item>): RemoteStream<Item> {
-    return new RemoteStream(this.connection, options)
+    // chamber (design 14 §D4): compose the caller's carrier hook with the page
+    // fact. Upstream plumbs `carrierFailed` but nothing consumes it, so with the
+    // retry patch (no terminal escape) a sustained carrier fault inside a live
+    // generation would be invisible; this is the one seam that owns the
+    // construction, so the fact is published here.
+    const carrierFailed = options.carrierFailed
+    return new RemoteStream(this.connection, {
+      ...options,
+      carrierFailed: (error: RemoteStreamCarrierError): void => {
+        carrierFailed?.(error)
+        this.reportCarrierFailure(error)
+      },
+    })
   }
 
   get $host(): RemoteHostFacts {
