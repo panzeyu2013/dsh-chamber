@@ -21,8 +21,8 @@
  * build-sidecar 缺省 darwin-arm64 而 swift build 跟随宿主——不一致的 .app 过去能
  * 签名打包、运行时才崩）→ Info.plist 渲染（plutil -lint）→ 嵌套签名
  * （sidecar/node，Developer ID 时带 hardened runtime + node 权限）→ 主签名
- * （--identity 缺省 ad-hoc `-`）→ zip（ditto）/ dmg（hdiutil，卷内含
- * /Applications 快捷方式）。
+ * （--identity 缺省 ad-hoc `-`）→ zip（ditto）/ dmg（dmg.mjs：可写镜像 +
+ * Finder 布局 + UDZO，卷内含 /Applications 快捷方式、背景箭头与图标定位）。
  *
  * 离线/沙箱：--skip-build 复用已有 .build 产物；--skip-sidecar 允许无 W-23
  * 产物时只验壳装配（此时不做 node 架构比对）；--no-sign/--no-dmg/--no-zip
@@ -70,6 +70,10 @@ import { copyTree, normalizeSymlinks } from '../../packages/desktop/scripts/buil
 // S-22：beta feed 的滚动 tag 单源在 release-artifacts.mjs（release.yml 的 job env
 // 与它逐字锁步）——装配脚本据此在 dry-run 计划里断言通道 URL 形状。
 import { NATIVE_BETA_ROLLING_TAG } from '../../scripts/release/release-artifacts.mjs'
+// 2026-09 P7 补强：样式化 DMG（Finder 背景箭头 + 图标定位 + /Applications 快捷
+// 方式）的**单一实现**。正式发布腿（release.yml 公证步）调用同文件的 CLI——
+// 两处各写一份必然漂移，实现与背景资产都收敛在 macos/scripts/dmg.mjs。
+import { createStyledDmg } from './dmg.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const macosDir = path.resolve(here, '..')
@@ -300,7 +304,7 @@ export function assemblePlan(options) {
   else steps.push(`[3] 拷贝 W-23 sidecar 装配 → ${layout.sidecarDir}`)
   steps.push(options.noSign ? '[4] 跳过签名（--no-sign）' : `[4] 签名（identity=${options.identity}）`)
   if (!options.noZip) steps.push(`[5] zip → ${layout.zipPath}`)
-  if (!options.noDmg) steps.push(`[6] dmg → ${layout.dmgPath}`)
+  if (!options.noDmg) steps.push(`[6] dmg → ${layout.dmgPath}（Finder 拖拽布局：背景图 + 图标定位 + /Applications 快捷方式）`)
   return steps
 }
 
@@ -590,22 +594,19 @@ export function machOArchs(file) {
   return archs
 }
 
-/** DMG 的 hdiutil argv（纯函数；卷名必须来自 --app-name，而非壳内定名）。 */
-export function dmgCreateArgs(options, stageDir, dmgPath) {
-  return ['create', '-volname', options.appName, '-srcfolder', stageDir, '-ov', '-format', 'UDZO', dmgPath]
-}
-
 /**
- * 搭 DMG 卷内容：.app 副本 + /Applications 快捷方式（Finder 拖拽安装惯例；
- * 缺它的 DMG 只能手动把 app 拖出，2026-12 P7）。ditto 保签名与资源分叉。
+ * DMG 的实现（卷内容 + Finder 布局 + 产物校验）已收敛到 macos/scripts/dmg.mjs
+ * —— 本地装配腿与 release.yml 正式腿共用同一份实现与同一张背景图。
+ * 这里只把纯函数面转发出去，供单测与发布腿按同一锚点断言。
  */
-export function stageDmgVolume(appDir, stageDir, appName, io = { log: () => {} }) {
-  rmSync(stageDir, { recursive: true, force: true })
-  mkdirSync(stageDir, { recursive: true })
-  run('ditto', [appDir, path.join(stageDir, `${appName}.app`)], io)
-  symlinkSync('/Applications', path.join(stageDir, 'Applications'))
-  return stageDir
-}
+export {
+  createStyledDmg,
+  dmgConvertArgs,
+  dmgCreateArgs,
+  finderLayoutScript,
+  stageDmgVolume,
+  verifyDmgLayout,
+} from './dmg.mjs'
 
 export async function runBuildSwiftApp(options, io = { log: console.log, error: console.error }) {
   const layout = appLayout(options.outDir, options.appName, options.artifactBasename)
@@ -826,16 +827,16 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
     run('ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', layout.appDir, layout.zipPath], io)
   }
   if (!options.noDmg) {
-    rmSync(layout.dmgPath, { force: true })
-    // 2026-12 P7：卷内容 = .app + /Applications 快捷方式；卷名来自 --app-name
-    // （旧实现固定 APP_NAME，与 --app-name dsh-chamber 的发布腿不符）。
-    const stageDir = path.join(layout.outDir, '.dmg-stage')
-    try {
-      stageDmgVolume(layout.appDir, stageDir, options.appName, io)
-      run('hdiutil', dmgCreateArgs(options, stageDir, layout.dmgPath), io)
-    } finally {
-      rmSync(stageDir, { recursive: true, force: true })
-    }
+    // P7（2026-12）+ 2026-09 补强：卷内容 = .app + /Applications 快捷方式
+    // **+ Finder 拖拽布局**（背景箭头 + 图标定位，写进卷内 .DS_Store）。
+    // 卷名/布局/背景资产全部由 dmg.mjs 单源；产出后立刻做产物级校验（挂载断言
+    // .DS_Store/.background/快捷方式），失败 loud——绝不发没有提示的 DMG。
+    createStyledDmg({
+      appDir: layout.appDir,
+      appName: options.appName,
+      outPath: layout.dmgPath,
+      io,
+    })
   }
 
   const size = statSync(layout.executable).size

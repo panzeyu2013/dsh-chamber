@@ -86,6 +86,11 @@
 - [ ] 视口越界策略实机目检（S-50）：GUI 会话里滚到端点 / 停在不可滚动 chrome 上滚动，确认整页不平移
       （无自动化探针，2026-12 裁决；判据见 design 25 §5.2）。
 - [ ] DMG 与 zip 均公证 + `stapler staple` + `stapler validate`（DMG 卷本身也要装订）。
+- [ ] DMG 拖拽引导（P7 / 2026-09）：卷内 `.DS_Store` + `.background/background.tiff`
+      存在且 `/Applications` 快捷方式是指向 /Applications 的软链；背景资产保持
+      electron-builder 同款**双 rep TIFF**（540×380@72dpi + 1080×760@144dpi，Retina
+      清晰）——`macos/scripts/dmg.mjs` 产完即自校验（失败 loud，不发无提示卷）；
+      实机目检一次：Finder 打开卷 = 背景箭头 + 两个图标就位。
 
 ## 4. 快速清单速查（当前基线，2026-12 复核；2026-12 合并后全量复核）
 

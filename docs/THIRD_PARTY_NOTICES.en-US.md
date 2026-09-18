@@ -45,8 +45,14 @@ Generated with `npm run gen:notices`.
 | `zod` | 4.4.3 | MIT |
 | `zustand` | 4.4.7 | MIT |
 
-## macOS native shell (SwiftPM)
+## macOS native shell (SwiftPM / packaging assets)
 
 | Package | Version | License |
 |---|---|---|
 | `Sparkle` | 2.10.0 | MIT |
+
+The native DMG's Finder background asset `macos/resources/dmg-background.tiff` is
+taken from `electron-builder`'s `dmg-builder/templates/background.tiff` (MIT,
+electron-userland/electron-builder; dual representation 540×380@72dpi +
+1080×760@144dpi) so the native DMG ships the same drag-to-install cue as the
+Electron leg (2026-09).

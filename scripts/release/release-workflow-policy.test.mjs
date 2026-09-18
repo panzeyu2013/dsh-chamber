@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { compareReleaseVersions, releaseChannel } from './release-semver.mjs'
 import {
   NATIVE_BETA_ROLLING_TAG,
@@ -144,7 +144,11 @@ const dmgSubmit = swiftBuild.indexOf('xcrun notarytool submit "${BASE}.dmg"')
 const appStaple = swiftBuild.indexOf('xcrun stapler staple "$APP"')
 const appValidate = swiftBuild.indexOf('xcrun stapler validate "$APP"')
 const zipWrite = swiftBuild.indexOf('ditto -c -k --sequesterRsrc --keepParent "$APP" "${BASE}.zip"')
-const dmgCreate = swiftBuild.indexOf('hdiutil create')
+// 2026-09 P7 补强：DMG 的卷内容与 Finder 拖拽布局由 macos/scripts/dmg.mjs
+// **单源**实现（本地装配腿 import 同模块），workflow 只调用该 CLI —— 顺序不变量
+// 因此锚在「调用点」上；卷内断言改锚共享模块（下方 dmgModule 段）。
+const dmgCreate = swiftBuild.indexOf(
+  'node macos/scripts/dmg.mjs --app "$APP" --app-name dsh-chamber --out "${BASE}.dmg"')
 const dmgStaple = swiftBuild.indexOf('xcrun stapler staple "${BASE}.dmg"')
 assert.ok(notarySubmit !== -1, 'the formal leg must submit the app to notarytool')
 assert.ok(appStaple !== -1, 'the formal leg must staple the app')
@@ -157,8 +161,46 @@ assert.ok(dmgSubmit > dmgCreate, 'the dmg notarization must follow its creation'
 assert.ok(dmgStaple > dmgSubmit, 'the dmg staple must follow its own notarization')
 assert.equal(swiftBuild.split('xcrun notarytool submit').length - 1, 2,
   'exactly two notarytool submissions: the .app and the .dmg')
-assert.ok(swiftBuild.includes('ln -s /Applications "$DMG_STAGE/Applications"'),
+// 卷内容断言改锚共享模块（workflow 不再内联 staging）。
+assert.doesNotMatch(swiftBuild, /hdiutil create/,
+  'the workflow must not inline hdiutil staging — single implementation lives in macos/scripts/dmg.mjs')
+assert.doesNotMatch(swiftBuild, /DMG_STAGE|ln -s \/Applications/,
+  'the workflow must not re-introduce the old inline dmg staging')
+const dmgModule = readFileSync(new URL('../../macos/scripts/dmg.mjs', import.meta.url), 'utf8')
+const swiftAssembler = readFileSync(new URL('../../macos/scripts/build-swift-app.mjs', import.meta.url), 'utf8')
+assert.match(swiftAssembler, /from '\.\/dmg\.mjs'/,
+  'the local assembly leg must import the same dmg module (single implementation)')
+assert.ok(dmgModule.includes("symlinkSync('/Applications'"),
   'the dmg volume must carry the /Applications symlink (P7)')
+assert.ok(dmgModule.includes("DMG_BACKGROUND_DIR_NAME = '.background'")
+  && dmgModule.includes("DMG_BACKGROUND_FILE_NAME = 'background.tiff'"),
+  'the dmg volume must carry the hidden .background/background.tiff (Finder background)')
+assert.match(dmgModule, /set background picture of viewOptions to file/,
+  'the Finder layout script must set the background picture')
+// 图标坐标在模块里是常量 + 模板插值，锚常量与插值点（源文本断言，非运行值）。
+assert.match(dmgModule, /DMG_WINDOW = \{ width: 540, height: 380 \}/,
+  'the Finder window size must stay pinned to the background image size')
+assert.match(dmgModule, /DMG_ICON_POSITIONS = \{ app: \{ x: 130, y: 220 \}, applications: \{ x: 410, y: 220 \} \}/,
+  'the Finder layout must pin both icon positions (electron-builder default contents)')
+assert.match(dmgModule, /set position of item "\$\{appName\}\.app" of container window to \$\{appPos\}/,
+  'the Finder layout script must place the app icon')
+assert.match(dmgModule, /set position of item "\$\{DMG_APPLICATIONS_LINK\}" of container window to \$\{appsPos\}/,
+  'the Finder layout script must place the Applications shortcut')
+assert.match(dmgModule, /'-format', 'UDRW'/,
+  'Finder needs a writable intermediate image to write .DS_Store')
+assert.match(dmgModule, /'-format', 'UDZO'/,
+  'the distribution image must still be compressed UDZO')
+const dmgBackground = new URL('../../macos/resources/dmg-background.tiff', import.meta.url)
+assert.ok(existsSync(dmgBackground), 'the in-repo dmg background asset must exist (nothing else paints the drag cue)')
+// 双 rep TIFF（electron-builder 同款 540×380@72dpi + 1080×760@144dpi）：这里钉形状
+// （TIFF magic「II* 」/「MM *」+ 非空），防资产被误换成 1x PNG 而 Retina 再次发虚。
+// 源模板是 big-endian（MM *），两种字节序都接受。
+const dmgBackgroundBytes = readFileSync(dmgBackground)
+assert.ok(dmgBackgroundBytes.length > 1024, 'the dmg background asset must not be an empty placeholder')
+assert.ok(
+  (dmgBackgroundBytes[0] === 0x49 && dmgBackgroundBytes[1] === 0x49)
+  || (dmgBackgroundBytes[0] === 0x4d && dmgBackgroundBytes[1] === 0x4d),
+  'the dmg background must stay a TIFF (multi-representation asset, not a 1x PNG)')
 // Fail-closed verification of the UPLOADED blobs, not only the staged .app.
 assert.ok(
   swiftBuild.split('\n').some((line) => line.trim() === 'node scripts/release/release-artifacts.mjs "$VERSION" --check-dir macos/release'),

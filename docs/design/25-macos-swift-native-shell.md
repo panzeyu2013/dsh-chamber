@@ -959,6 +959,22 @@ node 集成测试拉起 Swift harness 断言真实窗口/桥，loopback-http-tes
 
 ### 8.4 P3 边沿完整 + 发布管线（2–3 人周；已落地，真实 runner/凭据仍为外部阻断）
 
+- **DMG 拖拽引导（2026-09 收口，用户实测反馈驱动）**：原生 DMG 早先只有
+  `.app + /Applications` 快捷方式，Finder 窗口没有任何引导；Electron 腿由
+  electron-builder 给出背景箭头。现改为与 Electron **同款**：背景资产直接采用
+  `electron-builder` 模板的双 rep TIFF（540×380@72dpi + 1080×760@144dpi，
+  Retina 清晰；`macos/resources/dmg-background.tiff`，署名见 THIRD_PARTY_NOTICES），
+  图标坐标取 electron-builder 默认 contents（app 130,220 / Applications 410,220），
+  窗口尺寸 = 背景 1x 尺寸。实现单一来源 = `macos/scripts/dmg.mjs`
+  （本地装配腿 import，release.yml 正式腿调 CLI）：UDRW 可写镜像 → 挂载
+  `/Volumes/<卷名>` → osascript 驱动 Finder 写 `.DS_Store` → 等落盘 → detach →
+  UDZO → 产物级校验（.DS_Store/.background/快捷方式）。
+  **Rejected alternatives**：① 用 `dmg-builder` 下载的 dmgbuild（不驱动 Finder，
+  但要把 electron-builder 的内部下载器/缓存路径纳入发布依赖，且本机缓存实测为空）；
+  ② 手绘 1x PNG 背景（2026-09 首版，用户实测「分辨率低、不像 Electron」——已废弃，
+  该资产已删除）；③ 静态 `.DS_Store` 模板 + `hdiutil -srcfolder`（背景 alias 与
+  卷名/CNID 绑定，跨构建脆弱且无法自动验证）；④ 只保留软链不做引导（即用户报的
+  问题本身）。失败一律 loud：回退成「没有提示的 DMG」等于把缺陷重新发出。
 - 更新 v1 blocked-available 已落地（§7）；v2 Sparkle 按决策 3 未排期。sidecar
   打包布局 = `dist/control-plane/` + host 包 `dist/dsh-chamber-seed-*/` +
   内嵌 `vendor/dsh`/`pnpm` + 捆绑 `node`（§3.2）；build-swift-app.mjs；CI：

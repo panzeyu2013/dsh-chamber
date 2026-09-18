@@ -60,6 +60,7 @@ import {
   buildOutputDir,
   bundleVersionFor,
   codesignArgs,
+  dmgConvertArgs,
   dmgCreateArgs,
   dryRunPlanReport,
   findNestedMachOFiles,
@@ -70,6 +71,7 @@ import {
   renderInfoPlist,
   findEscapingSymlinks,
   runBuildSwiftApp,
+  finderLayoutScript,
   stageDmgVolume,
   findSparkleFramework,
   shouldCopyWebDistEntry,
@@ -652,7 +654,7 @@ test('⑫ lipo 输出解析：x86_64/arm64e 归一化 + 旧版 Non-fat 文案', 
   assert.deepEqual(parseLipoArchs('arm64e\n'), ['arm64'])
 })
 
-test('⑬ DMG 卷内容：/Applications 快捷方式 + 卷名来自 --app-name', () => {
+test('⑬ DMG 卷内容：.app + /Applications 快捷方式 + Finder 拖拽布局（背景/坐标）', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'dsh-dmg-stage-'))
   try {
     const app = path.join(dir, 'Fake.app')
@@ -665,11 +667,32 @@ test('⑬ DMG 卷内容：/Applications 快捷方式 + 卷名来自 --app-name',
     const link = path.join(stage, 'Applications')
     assert.ok(lstatSync(link).isSymbolicLink(), 'DMG 卷必须带 /Applications 快捷方式（P7）')
     assert.equal(readlinkSync(link), '/Applications')
+    // 2026-09 补强：背景图随卷走（卷内名固定 background.tiff = electron-builder 同款
+    // 双 rep TIFF），否则 Finder 布局落空。
+    assert.ok(existsSync(path.join(stage, '.background', 'background.tiff')),
+      'DMG 卷必须带 .background/background.tiff 背景图')
+    // 可写 UDRW 中间镜像（Finder 要写 .DS_Store；最终 UDZO 由 convert 产出）。
     assert.deepEqual(
-      dmgCreateArgs({ appName: 'dsh-chamber' }, '/tmp/stage', '/tmp/x.dmg'),
-      ['create', '-volname', 'dsh-chamber', '-srcfolder', '/tmp/stage', '-ov', '-format', 'UDZO', '/tmp/x.dmg'],
-      'hdiutil 卷名必须来自 --app-name（不再固定 APP_NAME）',
+      dmgCreateArgs('dsh-chamber', '/tmp/stage', '/tmp/x.rw.dmg'),
+      ['create', '-volname', 'dsh-chamber', '-srcfolder', '/tmp/stage', '-fs', 'HFS+', '-format', 'UDRW', '-ov', '/tmp/x.rw.dmg'],
+      'hdiutil 卷名必须来自 --app-name（不再固定 APP_NAME），且中间镜像必须是可写 UDRW',
     )
+    assert.deepEqual(
+      dmgConvertArgs('/tmp/x.rw.dmg', '/tmp/x.dmg'),
+      ['convert', '/tmp/x.rw.dmg', '-format', 'UDZO', '-ov', '-o', '/tmp/x.dmg'],
+      '最终分发镜像 = UDZO（保留 .DS_Store/.background）',
+    )
+    // Finder 脚本钉住窗口尺寸/图标大小/背景图/两个坐标（纯函数，无需 GUI）。
+    const script = finderLayoutScript('dsh-chamber', 'dsh-chamber')
+    for (const anchor of [
+      'set the bounds of container window to {200, 120, 740, 500}',
+      'set icon size of viewOptions to 128',
+      'set background picture of viewOptions to file ".background:background.tiff"',
+      'set position of item "dsh-chamber.app" of container window to {130, 220}',
+      'set position of item "Applications" of container window to {410, 220}',
+    ]) {
+      assert.ok(script.includes(anchor), `Finder 布局脚本缺锚点：${anchor}`)
+    }
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

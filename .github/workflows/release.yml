@@ -1056,16 +1056,15 @@ jobs:
           xcrun stapler validate "$APP"
           rm -f "$SUBMIT_ZIP" "${BASE}.zip" "${BASE}.dmg"
           ditto -c -k --sequesterRsrc --keepParent "$APP" "${BASE}.zip"
-          # P7：DMG 卷 = .app + /Applications 快捷方式（Finder 拖拽安装惯例），
-          # 且 DMG 本体也要公证+装订——只装订 .app 时离线 Gatekeeper 对挂载卷
-          # 仍报未公证。
-          DMG_STAGE="$RUNNER_TEMP/dsh-chamber-dmg"
-          rm -rf "$DMG_STAGE"
-          mkdir -p "$DMG_STAGE"
-          ditto "$APP" "$DMG_STAGE/dsh-chamber.app"
-          ln -s /Applications "$DMG_STAGE/Applications"
-          hdiutil create -volname dsh-chamber -srcfolder "$DMG_STAGE" \
-            -ov -format UDZO "${BASE}.dmg"
+          # P7：DMG 卷 = .app + /Applications 快捷方式（Finder 拖拽安装惯例）
+          # **+ Finder 拖拽布局**（背景箭头 + 图标定位，与 Electron/electron-builder
+          # 的卷观感对齐），且 DMG 本体也要公证+装订——只装订 .app 时离线
+          # Gatekeeper 对挂载卷仍报未公证。
+          # 实现只有一份：macos/scripts/dmg.mjs（本地装配腿 build-swift-app.mjs
+          # import 同一模块）；这里绝不内联 ditto/hdiutil 步骤，否则两腿漂移。
+          # 该脚本自带产物级校验（挂载断言 .DS_Store/.background/快捷方式），
+          # 失败 loud = 绝不发布没有拖拽提示的 DMG。
+          node macos/scripts/dmg.mjs --app "$APP" --app-name dsh-chamber --out "${BASE}.dmg"
           xcrun notarytool submit "${BASE}.dmg" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_APP_SPECIFIC_PASSWORD" \
