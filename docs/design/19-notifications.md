@@ -3,8 +3,9 @@
 > **状态：现行（桌面原生通知 + 未读徽标，2026-12）**——会话 complete / ask / request
 > 时推送原生通知，Dock/任务栏应用图标显示未读红气泡（均为主进程裁决的设置可选项）；
 > 检测端复用 renderer 既有事实通道，控制面零改动、无新 host 插件；
-> **未完成门禁**：macOS 权限/拒绝行为与打包态实机验收、Windows 任务栏 overlay 门控
-> （design 23 排期）——见 `docs/progress/STATUS.md`。
+> **未完成门禁**：macOS 权限/拒绝行为的**打包态实机走查**（拒绝态的设置页提示与
+> 「打开系统设置」恢复入口已实现，见 §3.3/§4 与 2026-09 修订）、Windows 任务栏
+> overlay 门控（design 23 排期）——见 `docs/progress/STATUS.md`。
 > 需求来源：用户要求「一个 session 在 complete、ask、request 时给用户推送通知」，
 > 做成设置中的可选项；未读徽标是同一投影的被动指示。
 > 本文先给出 **OpenChamber 通知功能调研**（外部参考，本地源码
@@ -444,16 +445,50 @@ completedBySource（App 完成未读蓝点集，06 §4.1，只读复用——徽
   ——注意**不是**「断连补发」，见 §3.5、同 tick 去重）；`badge-count` 投影用例。
 - `test:sidebar`：`projectRuntimeFacts` 的 subagent 行排除用例。
 - `test:settings-bridge`：通知设置纯函数（notifications-settings：缺省回落/
-  partial patch/未知键过滤/默认值镜像）+ 既有套件（入口解析不变——通知组
-  不新增固定入口）。
+  partial patch/未知键过滤/默认值镜像）+ 通知失败原因映射（notify-test-result：
+  成功不带原因、失败保留宿主/OS 原文、空串不制造假原因、reject 路径同样如实）
+  + 既有套件（入口解析不变——通知组不新增固定入口）。
 - `verify:i18n` 无 DRIFTED（settings-bridge 命名空间配对由
   `typecheck:settings-bridge` 编译期强制）；`typecheck`；
   `build:renderer`；`dist:desktop:mac` 打包态通知冒烟。
 - 最终 HEAD 的测试数字只见 `docs/progress/STATUS.md`。
 
-**实机验收（未完成）**：macOS 通知权限（未授权/被拒绝时的设置页提示）、文案定稿、
+**实机验收（未完成）**：macOS 通知权限的打包态走查（拒绝态 → 设置页原因 +
+「打开系统设置」→ 用户打开后重试成功这条闭环，代码面已落地）；文案定稿、
 打包态三形态（关窗/托盘/后台）+ 点击打开会话 + 窗口重建；徽标 macOS Dock 打包态
 三态（武装/解除/退役 + 重载与退出清零）；Windows 任务栏 overlay 门控（design 23 排期）。
+
+### 4.1 2026-09 修订：拒绝态的可见性与恢复入口（含被否决方案）
+
+现象：macOS 通知权限一旦落到 denied，系统**不再允许 App 弹出授权框**
+（`UNUserNotificationCenter.requestAuthorization` 只在 `.notDetermined` 弹），
+用户看到的是「测试通知发送失败」，而真正的原因（未授权/调度失败/超时）只进了
+sidecar 日志——设置页无从解释、也无恢复入口。
+
+契约（两个 flavor 共用，Swift 与 Electron 同一条 IPC 面）：
+
+- `dsh-chamber:notify` 的应答从 `boolean` 升级为 `{shown, error?}`：宿主/OS
+  原文（Swift 侧的 `swift-edge-notification-*` 码、Electron 侧的
+  `describeNativeNotificationFailure` 文案）与裁决侧抑制原因（设置/焦点/去重/
+  速率）都随应答返回；`error` 是**结果**而非拒绝（沿用 P-06 的 honest-show）。
+- `dsh-chamber:open-notification-settings`（新 invoke，无载荷）：主进程用**固定
+  常量** URL（`x-apple.systempreferences:com.apple.Notifications-Settings.extension`）
+  打开「系统设置 → 通知」，非 darwin 诚实回 false。renderer 不能传 URL —— 不把
+  `OPEN_RELEASE` 的白名单纪律扩成任意 URL 打开面。
+- 设置页失败态展示：原因原文（不翻译）+ 权限提示 + 「打开系统设置」按钮；
+  打开失败本身也 loud 展示。
+
+**Rejected alternatives**（审议于 2026-09）：
+
+1. **只在 Swift 侧加日志/对话框**：Electron 侧同一失败面同样静默，会造出一条
+   未登记的双端差异（deviations S 行），且原因已在 sidecar 计算出、只在 IPC
+   边界被丢掉——修错层。
+2. **把授权申请提前到启动/进设置页**：违反 design 25 S3·V1 的既定双端时机
+   （首次真正投递才申请），且对已 denied 的账户零作用（macOS 不会二次弹框）。
+3. **新增任意 URL 打开通道（复用一个通用 openUrl）**：把 release 页的严格
+   白名单扩成通用打开面，安全面净增；固定常量 + 单用途通道是更小的能力面。
+4. **denied 时回退成「应用内提示/响铃」**：超出 design 19 的投影边界（本设计
+   不做通知中心/历史），且与 Electron 现状不等价；本轮只做「诚实 + 可恢复」。
 
 ## 5. 关联
 

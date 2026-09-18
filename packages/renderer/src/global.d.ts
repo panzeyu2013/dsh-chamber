@@ -678,8 +678,9 @@ export interface NotificationRequest {
 /** window.dshChamber.notifications — 桌面原生通知（design 19 §3.3）。
  *  桥与 desktopSsh 同一批 expose，desktopSsh 存在则 notifications 必存在。 */
 export interface NotificationSurface {
-  /** invoke 'dsh-chamber:notify'；返回主进程是否实际显示了通知。 */
-  notify(payload: NotificationRequest): Promise<boolean>
+  /** invoke 'dsh-chamber:notify'；返回诚实结果 {shown, error?}——未显示时 error
+   *  说明原因（裁决抑制 / 宿主或 OS 拒绝原文），设置页据此给出可操作提示。 */
+  notify(payload: NotificationRequest): Promise<{ shown: boolean; error?: string }>
   /** 就绪信号（invoke 'dsh-chamber:notifications-ready'）：onOpen 监听注册后
    *  调用——主进程只在就绪后放行 notification-open 推送（did-finish-load 早于
    *  监听注册，窗口重建路径的事件不能丢）。 */
@@ -694,6 +695,9 @@ export interface NotificationSurface {
     deliveryId: number
     attempt: number
   }) => void): () => void
+  /** 打开 macOS「系统设置 → 通知」（invoke 'dsh-chamber:open-notification-settings'）：
+   *  权限被拒后 macOS 不再允许 App 弹窗，这是设置页给出的恢复入口；非 darwin 回 false。 */
+  openSystemSettings(): Promise<boolean>
 }
 
 /** window.dshChamber.openIn — registry capability negotiation + unified open action (open-in.ts). */

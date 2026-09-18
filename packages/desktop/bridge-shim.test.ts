@@ -86,12 +86,14 @@ test('④ vm 执行 stub：manifest 形状 + assert 正/负例', () => {
     push: string[]
     counts: { invoke: number; push: number; total: number }
   }
-  assert.ok(Array.isArray(manifest.invoke) && manifest.invoke.length === 60)
+  assert.ok(Array.isArray(manifest.invoke) && manifest.invoke.length === 61)
   assert.ok(Array.isArray(manifest.push) && manifest.push.length === 8)
-  assert.equal(manifest.counts.total, 68)
+  assert.equal(manifest.counts.total, 69)
   // 正例
   vm.runInContext('__dshChamberAssertMethod("dsh-chamber:info")', context)
   vm.runInContext('__dshChamberAssertEvent("dsh-chamber:settings-changed")', context)
+  // 通知设置恢复入口通道（design 19 §4）：stub 必须登记，否则 shim 调用被拒。
+  vm.runInContext('__dshChamberAssertMethod("dsh-chamber:open-notification-settings")', context)
   // 负例（表外/非字符串/事件当方法）
   assert.throws(() => vm.runInContext('__dshChamberAssertMethod("zzz.unknown")', context))
   assert.throws(() => vm.runInContext('__dshChamberAssertMethod("dsh-chamber:settings-changed")', context))

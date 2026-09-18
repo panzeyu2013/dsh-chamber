@@ -49,6 +49,10 @@
       "key": "OPEN_RELEASE"
     },
     {
+      "channel": "dsh-chamber:open-notification-settings",
+      "key": "OPEN_NOTIFICATION_SETTINGS"
+    },
+    {
       "channel": "dsh-chamber:open-in-apps",
       "key": "OPEN_IN_APPS"
     },
@@ -276,8 +280,8 @@
     }
   ],
   "counts": {
-    "invoke": 60,
+    "invoke": 61,
     "push": 8,
-    "total": 68
+    "total": 69
   }
 }

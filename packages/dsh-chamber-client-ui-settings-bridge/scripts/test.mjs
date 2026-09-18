@@ -25,6 +25,8 @@ const GROUPS = {
   settings: [
     'test/settings/settings-store.test.ts',
     'test/settings/settings-groups.test.ts',
+    // 测试通知失败原因映射（design 19 §3.3/§4 契约升级）
+    'test/settings/notify-test-result.test.ts',
   ],
   // update: 设计 11 更新按钮门与模块级 restart 单飞 store
   update: [

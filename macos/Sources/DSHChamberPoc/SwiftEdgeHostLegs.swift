@@ -391,7 +391,7 @@ public final class SwiftEdgeHostLegs {
             // 立即清除，绝不给用户留一条「已报失败」的通知。
             DispatchQueue.global().asyncAfter(deadline: .now() + self.config.notificationAddTimeout) {
                 guard replyGate.claim() else { return }
-                print("[native] 通知投递超时（\(self.config.notificationAddTimeout)s）——诚实回 {shown:false}")
+                shellLog("[native] 通知投递超时（\(self.config.notificationAddTimeout)s）——诚实回 {shown:false}")
                 completion(.object(["shown": .bool(false),
                                     "error": .string("swift-edge-notification-add-timeout")]), nil)
             }
@@ -431,16 +431,16 @@ public final class SwiftEdgeHostLegs {
         center.authorizationStatus { status in
             switch status {
             case .denied:
-                print("[native] 通知未授权（denied）——拒绝投递（P-06）")
+                shellLog("[native] 通知未授权（denied）——拒绝投递（P-06）")
                 fail("swift-edge-notification-not-authorized:denied")
             case .notDetermined:
                 if self.beginAuthorizationRequestIfNeeded() {
                     center.requestAuthorization { granted, error in
                         if let error {
-                            print("[native] 通知授权请求错误：\(error.localizedDescription)")
+                            shellLog("[native] 通知授权请求错误：\(error.localizedDescription)")
                             fail("swift-edge-notification-authorization-failed:\(error.localizedDescription)")
                         } else {
-                            print("[native] 通知授权 = \(granted)（首次通知时请求，S3·V1）")
+                            shellLog("[native] 通知授权 = \(granted)（首次通知时请求，S3·V1）")
                             if granted {
                                 deliver()
                             } else {

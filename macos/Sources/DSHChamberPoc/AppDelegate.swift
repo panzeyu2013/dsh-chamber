@@ -92,17 +92,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             shellLog("[native] 收到二次启动显窗请求（S-40）")
             self?.restoreMainWindow()
         }
-        if Bundle.main.bundleIdentifier != nil {
-            let center = UNUserNotificationCenter.current()
-            center.delegate = self
-            // 授权时机（2026-12 双端逐函数核对 S3·V1）：Electron 延后到**首次通知**
-            // 才向系统申请权限，Swift 此前首启即弹框（用户还没收到任何通知）。
-            // 授权请求现在发生在真正调度第一条通知时（SwiftEdgeHostLegs），这里只
-            // 接线 delegate（前台展示 + click 回灌）。
-            shellLog("[native] 通知 delegate 已接线（授权在首次通知时请求）")
-        } else {
-            shellLog("[native] 无 bundle id（swift run dev 态）——跳过通知授权接线")
-        }
         // 打包态判定 + 资源根（PackagedLayout 纯函数解析，见 ChamberResources）。
         let resourcesDir = Bundle.main.resourceURL?.path
         let executablePath = Bundle.main.executableURL?.path ?? CommandLine.arguments.first ?? ""
@@ -127,6 +116,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // 导航失败、更新相位、退出链的关键行都在其后。
         NativeShellLog.shared.configure(userDataDir: stateDir)
         shellLog("[native] 原生壳日志落盘：\(NativeShellLog.shared.filePath ?? "未启用（仅 stdout）")")
+        // W-21：通知授权与 delegate 接线（前台展示 + click 回灌；授权结果与调度
+        // 失败全部落盘，绝不静默假装成功）。请求失败/拒绝均不阻断装配。
+        // **顺序约束（2026-09 复核修复）**：本块必须在 NativeShellLog.configure
+        // 之后——接线时的 shellLog 才进得了 <userData>/logs/native-shell.log。此前
+        // 接线早于 configure，打包态（Finder 启动、stdout 不可见）这一行等于丢失，
+        // 通知排障没有壳侧证据。
+        // 注意：swift run（无 app bundle）下 UNUserNotificationCenter.current()
+        // 会崩（bundleProxyForCurrentProcess nil）——以 Bundle.main.bundleIdentifier
+        // 是否存在守卫；dev/无 bundle 态跳过通知接线（真机/打包态自动启用）。
+        if Bundle.main.bundleIdentifier != nil {
+            let center = UNUserNotificationCenter.current()
+            center.delegate = self
+            // 授权时机（2026-12 双端逐函数核对 S3·V1）：Electron 延后到**首次通知**
+            // 才向系统申请权限，Swift 此前首启即弹框（用户还没收到任何通知）。
+            // 授权请求现在发生在真正调度第一条通知时（SwiftEdgeHostLegs），这里只
+            // 接线 delegate（前台展示 + click 回灌）。
+            shellLog("[native] 通知 delegate 已接线（授权在首次通知时请求）")
+        } else {
+            shellLog("[native] 无 bundle id（swift run dev 态）——跳过通知授权接线")
+        }
         // 2026-12 取证修复：sidecar stderr 透传行独立落盘（<userData>/logs/sidecar.log）。
         // 控制面的 WS splice 归因行（WebSocket stream … closed / heartbeat lost …）
         // 的**权威**去向是控制面自己的 <stateDir>/logs/control-plane.log（两 flavor
@@ -489,8 +498,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // 关窗决策缓存失效钩子（2026-12 审查 major）：设置页改「关闭窗口行为」后，
         // 下一次关窗必须用**新**的 quitFacts，而不是缓存里的旧值。
         controller.onSettingsChanged = { [weak self] in
-            self?.cachedQuitFacts = nil
+            // A3（2026-09-18）：本回调可能由 B 桥**读线程**触发（routeNotify 在读
+            // 线程上调 onSettingsChanged），而 cachedQuitFacts 是主线程所有的状态
+            // （关窗路径同步读它，见 requestQuitFacts/closeAction 分支）——写必须
+            // 回落主线程，避免跨线程读写同一存储。日志仍在调用线程同步打印，
+            // 保持既有 debug 输出顺序不变。
             shellLog("[native] 设置变化 → 关窗决策缓存作废")
+            DispatchQueue.main.async { [weak self] in
+                self?.cachedQuitFacts = nil
+            }
         }
         shellLog("[native] 装配完成（主窗口等首个已提交内容后呈现，S-42）")
 

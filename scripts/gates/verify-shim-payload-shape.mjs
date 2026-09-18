@@ -48,14 +48,14 @@ export const INTERNAL_INVOKE_CHANNELS = new Set(['dsh-chamber:info'])
  */
 export const EXPECTED_SURFACE = {
   namespaces: 9,
-  members: 67,
-  invoke: 59,
+  members: 68,
+  invoke: 60,
   push: 8,
   perNamespace: {
     badge: 1,
     deepLink: 3,
     desktopSsh: 34,
-    notifications: 4,
+    notifications: 5,
     openIn: 2,
     runtime: 13,
     settings: 3,

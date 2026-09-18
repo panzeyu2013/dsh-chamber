@@ -8,8 +8,8 @@
  * (design 05 §7.4): 4 info scalars (controlPlaneUrl/dshVersion/version/
  * platform) + 9 namespaces (desktopSsh/update/settings/systemResume/openIn/
  * deepLink/runtime/notifications/badge). S-B（全表面实现）：每个方法的通道、
- * payload 形状与返回映射逐字对齐 preload.cts（59 个 invoke-backed 方法 →
- * 60 manifest invoke 通道（含 info）+ 8 个 on* 订阅 → 8 manifest push
+ * payload 形状与返回映射逐字对齐 preload.cts（60 个 invoke-backed 方法 →
+ * 61 manifest invoke 通道（含 info）+ 8 个 on* 订阅 → 8 manifest push
  * 通道），文件内零 poc-unimplemented 兜底。语义校验（payload schema、来源
  * 指纹、ACK 队列……）在 sidecar 原处理器（design 25 §4.4.1）；本文件是
  * 传输 + preload 逐字面。
@@ -55,9 +55,9 @@
  *     cleanupVersion {version} / clearFailure {version} /
  *     restorePreRollback {stashName}，其余无载荷）；onChanged →
  *     runtime-state-changed
- *   notifications（3 invoke + 1 订阅）→ dsh-chamber:notify {payload} /
- *     notifications-ready / notification-open-ack {deliveryId,attempt}；
- *     onOpen → notification-open
+ *   notifications（4 invoke + 1 订阅）→ dsh-chamber:notify {payload} /
+ *     open-notification-settings（无载荷）/ notifications-ready /
+ *     notification-open-ack {deliveryId,attempt}；onOpen → notification-open
  *   badge（1 invoke）→ badge-count {count}
  *
  * 宿主侧差异注记（shim 层照常 invoke，错误如实上抛；行为对齐待 S-D/验收批）：
@@ -568,6 +568,9 @@
    *  NOTIFICATION_OPEN_ACK 契约）。 */
   var notifications = {
     notify: function (payload) { return invoke('dsh-chamber:notify', { payload: payload }) },
+    // 权限被拒后的恢复入口（design 19 §3.3/§4）：打开 macOS「系统设置 → 通知」。
+    // 无载荷——目标 URL 固定在 main 侧（renderer 不能传 URL）；非 darwin 回 false。
+    openSystemSettings: function () { return invoke('dsh-chamber:open-notification-settings', null) },
     ready: function () { return invoke('dsh-chamber:notifications-ready', null) },
     ack: function (deliveryId, attempt) {
       return invoke('dsh-chamber:notification-open-ack', { deliveryId: deliveryId, attempt: attempt })

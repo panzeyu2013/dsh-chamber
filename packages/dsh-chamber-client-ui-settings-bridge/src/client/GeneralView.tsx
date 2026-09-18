@@ -64,6 +64,7 @@ import type { SettingsBridgeKey } from '../locales.ts'
 import type { ChamberSettingsStatus, NotificationSurface } from '../ambient/settings-bridge.d.ts'
 import { applySettingsPatch, getSettingsStatus, subscribeSettings } from './settings-store.ts'
 import { notificationsOf, notificationsPatch } from './notifications-settings.ts'
+import { testNotifyRejected, testNotifyResult, type TestNotifyResult } from './notify-test-result.ts'
 import { sessionTodoOf, sessionTodoPatch } from './session-todo-settings.ts'
 import { SegmentedControl } from './SegmentedControl.tsx'
 import { UpdateSection } from './UpdateSection.tsx'
@@ -182,6 +183,11 @@ function testNotifySurface(): NotificationSurface | null {
   return notifications !== undefined && notifications.notify !== undefined ? notifications : null
 }
 
+/** 当前是否 macOS（只有它需要「系统设置 → 通知」的恢复入口；平台事实来自桥）。 */
+function isMacPlatform(): boolean {
+  return typeof window !== 'undefined' && window.dshChamber?.platform === 'darwin'
+}
+
 /** The section content (rendered inside the settings options column). */
 export function GeneralView({ t }: { t: GeneralTranslate }) {
   const status = useSyncExternalStore(subscribeSettings, getSettingsStatus)
@@ -199,7 +205,9 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
   // Same scoping for the session-todo sub-settings card (aria-controls).
   const todoBodyId = useId()
   const [notifyBusy, setNotifyBusy] = useState(false)
-  const [notifyResult, setNotifyResult] = useState<'sent' | 'failed' | null>(null)
+  const [notifyResult, setNotifyResult] = useState<TestNotifyResult | null>(null)
+  /** 「打开系统设置」的结果：失败必须可见（绝不静默什么也没发生）。 */
+  const [openSettingsFailed, setOpenSettingsFailed] = useState(false)
 
   // Serial save queue: settings-store overlays each patch optimistically (the
   // control reflects the click immediately — no busy/disabled flash), so the
@@ -233,10 +241,23 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
       body: t('generalNotificationsTestBody'),
       requireHidden: false,
     })
-      .then((shown) => setNotifyResult(shown ? 'sent' : 'failed'))
-      .catch(() => setNotifyResult('failed'))
+      // 诚实结果必须带原因（design 19 §3.3/§4）：失败时把宿主/OS 原文交给
+      // 下面的提示区，用户才能知道要去系统设置里打开通知权限。
+      .then((outcome) => setNotifyResult(testNotifyResult(outcome)))
+      .catch((error: unknown) => setNotifyResult(testNotifyRejected(error)))
       .finally(() => setNotifyBusy(false))
   }, [t])
+
+  /** 权限被拒后的恢复入口（design 19 §4）：macOS 不再允许 App 主动弹授权框，
+   *  只能在「系统设置 → 通知」里打开。目标 URL 固定在主进程侧（无载荷）。 */
+  const openNotificationSettings = useCallback(() => {
+    const surface = testNotifySurface()
+    if (surface === null) return
+    setOpenSettingsFailed(false)
+    void surface.openSystemSettings()
+      .then((opened) => { if (!opened) setOpenSettingsFailed(true) })
+      .catch(() => setOpenSettingsFailed(true))
+  }, [])
 
   // No bridge yet (or the main process does not expose settings): render the
   // skeleton rows with placeholder values — never a fake "off". Controls stay
@@ -251,6 +272,8 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
   // Session-todo block (sidebar todo area): design defaults (ALL ON) while
   // absent — never a fake off.
   const sessionTodo = sessionTodoOf(settings)
+  // 平台事实来自桥（design 25）：仅 macOS 需要「系统设置 → 通知」恢复入口。
+  const isDarwin = isMacPlatform()
 
   // The dsh runtime block moved to the per-server「dsh 运行时」settings.section
   // (design 18 §3.6, 2026-09 修订). The full group set rendered below (启动与
@@ -487,13 +510,44 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
               </Button>
               {notifyResult !== null && (
                 <p
-                  className={notifyResult === 'sent' ? css.generalNotifyOk : css.generalError}
+                  className={notifyResult.kind === 'sent' ? css.generalNotifyOk : css.generalError}
                   aria-live="polite"
                 >
-                  {notifyResult === 'sent' ? t('generalNotificationsTestSent') : t('generalNotificationsTestFailed')}
+                  {notifyResult.kind === 'sent' ? t('generalNotificationsTestSent') : t('generalNotificationsTestFailed')}
                 </p>
               )}
             </div>
+
+            {/* 失败原因 + 恢复入口（design 19 §4 未完成门禁的收口）：macOS 通知
+                权限一旦被拒，App 不能再弹授权框——只显示「发送失败」会把用户留在
+                黑箱里。原因原文如实展示（宿主/OS 文案不翻译），并给出「系统设置 →
+                通知」的直达入口；非 darwin 平台没有该面板，只展示原因。 */}
+            {notifyResult?.kind === 'failed' && (
+              <div className={css.generalNotifyHint} data-testid="notify-permission-hint">
+                {notifyResult.error !== undefined && (
+                  <p className={css.generalNotifyDetail}>
+                    {t('generalNotificationsTestReason')}{notifyResult.error}
+                  </p>
+                )}
+                {isDarwin && (
+                  <>
+                    <p className={css.generalNotifyHintText}>
+                      {t('generalNotificationsPermissionHint')}
+                    </p>
+                    <Button variant="outline" size="sm"
+                      onClick={openNotificationSettings}
+                      disabled={testNotifySurface() === null}>
+                      {t('generalNotificationsOpenSettings')}
+                    </Button>
+                    {openSettingsFailed && (
+                      <p className={css.generalError} aria-live="polite">
+                        {t('generalNotificationsOpenSettingsFailed')}
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
           </div>
         )}
       </div>

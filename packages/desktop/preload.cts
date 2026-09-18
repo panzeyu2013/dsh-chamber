@@ -551,17 +551,21 @@ export interface NotificationOpenRequest {
 }
 
 /** The dsh-chamber notification surface (design 19 §3.3): notify() invokes the
- *  main-process decision chain (returns whether a native notification was
- *  actually shown); ready() signals that the renderer registered its onOpen
- *  listener (the main process only drains notification-open pushes after this);
- *  onOpen subscribes to the notification-click push and returns an
- *  unsubscribe. */
+ *  main-process decision chain and resolves with the honest outcome
+ *  ({shown} + the failure reason when not shown — the settings page renders it);
+ *  ready() signals that the renderer registered its onOpen listener (the main
+ *  process only drains notification-open pushes after this); onOpen subscribes
+ *  to the notification-click push and returns an unsubscribe; openSystemSettings()
+ *  opens the macOS notification pane (recovery entry after a denied permission,
+ *  the only remedy macOS offers once the status is denied). */
 export interface NotificationSurface {
-  notify(payload: NotificationRequest): Promise<boolean>
+  notify(payload: NotificationRequest): Promise<{ shown: boolean; error?: string }>
   ready(): Promise<boolean>
   /** Commit only after App has accepted/queued this exact click. */
   ack(deliveryId: number, attempt: number): Promise<boolean>
   onOpen(callback: (req: NotificationOpenRequest) => void): () => void
+  /** Open the macOS「System Settings → Notifications」pane (false off darwin). */
+  openSystemSettings(): Promise<boolean>
 }
 
 /** 未读徽标计数面（design 19 §3.7）：renderer 推当前「完成未读」会话数
@@ -827,6 +831,7 @@ function deepLinkApi(): DeepLinkSurface {
 function notificationsApi(): NotificationSurface {
   return {
     notify: payload => ipcRenderer.invoke('dsh-chamber:notify', { payload }),
+    openSystemSettings: () => ipcRenderer.invoke('dsh-chamber:open-notification-settings'),
     ready: () => ipcRenderer.invoke('dsh-chamber:notifications-ready'),
     ack: (deliveryId, attempt) => ipcRenderer.invoke('dsh-chamber:notification-open-ack', { deliveryId, attempt }),
     onOpen: callback => {

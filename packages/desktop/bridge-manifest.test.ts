@@ -127,19 +127,20 @@ test('② 重生成 Swift 与提交物 BridgeManifest.swift 逐字节一致', ()
   )
 })
 
-test('③ 通道数守恒：counts {invoke:60, push:8, total:68} 与两列表长度自洽', () => {
+test('③ 通道数守恒：counts {invoke:61, push:8, total:69} 与两列表长度自洽', () => {
   const { manifest } = regenerated()
-  // 当前仓库事实（68 = 60 + 8，与 ipc-surface-mirror.test.ts 的 B8 集合断言
-  // 同一批事实）；通道增删时须与两提交物同步更新。
-  assert.deepEqual(manifest.counts, { invoke: 60, push: 8, total: 68 })
+  // 当前仓库事实（69 = 61 + 8，与 ipc-surface-mirror.test.ts 的 B8 集合断言
+  // 同一批事实；2026-09 通知设置恢复入口 +1 invoke）；通道增删时须与两提交物
+  // 同步更新。
+  assert.deepEqual(manifest.counts, { invoke: 61, push: 8, total: 69 })
   assert.equal(manifest.invoke.length, manifest.counts.invoke)
   assert.equal(manifest.push.length, manifest.counts.push)
   assert.equal(manifest.invoke.length + manifest.push.length, manifest.counts.total)
 })
 
-test('④ 无死键：manifest 键/通道集 == ipc-events.ts IPC_CHANNELS 表（68 全覆盖、无重复、无交集）', () => {
+test('④ 无死键：manifest 键/通道集 == ipc-events.ts IPC_CHANNELS 表（69 全覆盖、无重复、无交集）', () => {
   const table = ipcChannelTable()
-  assert.equal(table.length, 68, 'IPC_CHANNELS 应恰为 68 键（当前事实）')
+  assert.equal(table.length, 69, 'IPC_CHANNELS 应恰为 69 键（当前事实）')
   const { manifest } = regenerated()
   const covered = [...manifest.invoke, ...manifest.push]
   assert.equal(covered.length, table.length, '两向条目总数必须 == 常量表键数（无死键/无幻影键）')

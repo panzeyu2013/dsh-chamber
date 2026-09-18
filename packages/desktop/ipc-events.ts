@@ -39,6 +39,10 @@ export const IPC_CHANNELS = {
   UPDATE_RESTART: 'dsh-chamber:update-restart',
   UPDATE_STATE_CHANGED: 'dsh-chamber:update-state-changed',
   OPEN_RELEASE: 'dsh-chamber:open-release',
+  /** 权限被拒后的恢复入口（design 19 §3.3/§4）：打开 macOS「系统设置 → 通知」
+   *  面板。renderer 不带 URL——目标地址固定在 main 侧（不把 OPEN_RELEASE 的
+   *  白名单语义扩成任意 URL 打开面）。 */
+  OPEN_NOTIFICATION_SETTINGS: 'dsh-chamber:open-notification-settings',
 
   OPEN_IN_APPS: 'dsh-chamber:open-in-apps',
   OPEN_IN: 'dsh-chamber:open-in',

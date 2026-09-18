@@ -619,7 +619,7 @@ test('the five remaining surfaces match their GOLDEN method baselines in BOTH mi
     SystemResumeSurface: ['onResume'],
     OpenInSurface: ['apps', 'open'],
     DeepLinkSurface: ['ack', 'onIntent', 'ready'],
-    NotificationSurface: ['ack', 'notify', 'onOpen', 'ready'],
+    NotificationSurface: ['ack', 'notify', 'onOpen', 'openSystemSettings', 'ready'],
     BadgeSurface: ['set'],
   }
   for (const surface of P2_SURFACES) {

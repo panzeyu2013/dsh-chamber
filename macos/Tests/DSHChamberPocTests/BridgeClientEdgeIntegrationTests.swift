@@ -154,9 +154,9 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
                             defaultEdgeResponder: defaultEdgeResponder)
     }
 
-    // MARK: - 60 通道清单（W-18 生成物单源）
+    // MARK: - invoke 通道清单（W-18 生成物单源）
 
-    /// 60 个 invoke 通道 = `BridgeManifest.invokeChannels`（Generated/
+    /// `BridgeManifest.invokeChannels`（Generated/
     /// BridgeManifest.swift；由 packages/desktop/scripts/emit-bridge-manifest.mjs
     /// 从 ipc-events.ts + main 侧注册事实生成，bridge-manifest.test.ts 守
     /// 「重生成 == 提交物」）。S16a：此前是手工转录的 80 行静态数组——本测试
@@ -573,7 +573,9 @@ final class BridgeClientEdgeIntegrationTests: XCTestCase {
         _ = try startBridgeAndWaitReady(bridge, expectedPort: 17920)
 
         let channels = Self.invokeChannels
-        XCTAssertEqual(channels.count, 60, "BridgeManifest.invokeChannels 应为 60 个 invoke 通道")
+        // 通道数不在此硬编码：单一事实源是生成物（BridgeManifestConsistencyTests 钉
+        // 精确计数 61），这里只钉「非空 + 无重复 + 全部被 smoke 覆盖」。
+        XCTAssertFalse(channels.isEmpty, "BridgeManifest.invokeChannels 不得为空")
         XCTAssertEqual(Set(channels).count, channels.count, "清单不得含重复通道")
 
         let report = await runSmokeLoop(bridge, channels: channels)

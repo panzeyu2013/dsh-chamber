@@ -791,6 +791,34 @@
   gap: 10px;
 }
 
+/* 测试通知失败区（design 19 §4）：原因原文 + 「打开系统设置」恢复入口。
+   低噪音排版——与 .generalHint 同字号，靠 token 颜色区分层级；只在失败时出现。 */
+.generalNotifyHint {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+/* 原因原文（宿主/OS 文案不翻译）：低调、可换行，仅供排障阅读。 */
+.generalNotifyDetail {
+  margin: 0;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-secondary);
+  word-break: break-word;
+  text-align: right;
+}
+
+.generalNotifyHintText {
+  margin: 0;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-secondary);
+  text-align: right;
+}
+
 /* 启用通知后展开的子设置容器（2026-12 边框修订；2026-09 batch 1 E1 follow-up
    把描边并到 l4）：通知组唯一的外边框卡片（border-l4 + layer-3 + r12，与
    .generalCard 同词汇）——主开关是

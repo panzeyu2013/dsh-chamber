@@ -303,6 +303,12 @@ import { listOpenInApps, runOpenInLaunch } from './open-in.ts';
 import type { OpenInLaunchContext, OpenInRequest } from './open-in.ts';
 import { openReleasePage } from './updater.ts';
 import type { UpdateController } from './updater.ts';
+
+/** macOS「系统设置 → 通知」面板深链（Ventura+ 的 Notifications 扩展）。
+ *  固定常量、只由 OPEN_NOTIFICATION_SETTINGS 注册体使用——renderer 不能传
+ *  URL，避免把 OPEN_RELEASE 的 URL 白名单纪律扩成任意打开面。 */
+export const MACOS_NOTIFICATION_SETTINGS_URL =
+  'x-apple.systempreferences:com.apple.Notifications-Settings.extension';
 import {
   BoundedRateLimiter,
   MAX_PENDING_NOTIFICATION_OPENS,
@@ -2194,15 +2200,21 @@ export function installIpcHandlers(deps: {
   /** 桌面原生通知主链路（design 19 §3.3；W-10 S2 迁入——宿主腿全在
    *  electron-edges：构造/登记/淘汰/click 腿/honest-show 结算 = showNativeNotification、
    *  能力探测 = notificationSupported、焦点事实 = isFocused）：payload 白名单 →
-   *  平台支持 → 设置裁决 → 有界 claim / 全局速率 → 显示。返回是否收到原生
-   *  `show` 事件（异步 failed/close/timeout 均为 false）。'test' 绕过 claim 与
-   *  设置门禁，但仍受全局宿主预算约束；通知失败降级且 loud，不误报成功，会话业
-   *  务/侧边栏蓝点不受影响。 */
-  async function maybeShowNativeNotification(payload: unknown): Promise<boolean> {
+   *  平台支持 → 设置裁决 → 有界 claim / 全局速率 → 显示。
+   *
+   *  返回 `{shown, error?}`（2026-09 契约升级）：`shown=false` 时 `error` 区分
+   *  裁决侧主动抑制（设置/焦点/去重/速率）与宿主/OS 拒绝（未授权/调度失败/
+   *  超时，宿主原文透传）——设置页据此给出可操作提示。此前只回 boolean，原因
+   *  在 IPC 边界被丢掉，用户只能看到「发送失败」。'test' 绕过 claim 与设置门禁，
+   *  但仍受全局宿主预算约束；通知失败降级且 loud，不误报成功，会话业务/侧边栏
+   *  蓝点不受影响。 */
+  async function maybeShowNativeNotification(
+    payload: unknown,
+  ): Promise<{ shown: boolean; error?: string }> {
     const validated = validateNotificationRequest(payload);
     if (!validated.ok) {
       console.warn(`[dsh-chamber] 拒绝非法通知 payload：${validated.error}`);
-      return false;
+      return { shown: false, error: `invalid notification request: ${validated.error}` };
     }
     const request = validated.request;
     // 设置权威在装配侧内存 holder（settingsIO.current——settings-set 即时更新）；
@@ -2221,15 +2233,17 @@ export function installIpcHandlers(deps: {
       settings,
       anyWindowFocused,
     });
-    if (decision.action === 'skip') return false;
+    if (decision.action === 'skip') {
+      return { shown: false, error: 'notification suppressed by settings or window focus' };
+    }
     if (!notificationSourceIncarnations.matches(request.sourceId, request.sourceFingerprint)) {
       console.warn(`[dsh-chamber] 通知来源 fingerprint 已过期：${request.sourceId}`);
-      return false;
+      return { shown: false, error: 'notification source fingerprint is stale' };
     }
     const sourceToken = request.kind === 'test' ? null : notificationSourceIncarnations.capture(request.sourceId);
     if (request.kind !== 'test' && sourceToken === null) {
       console.warn(`[dsh-chamber] 通知来源已不在当前 registry：${request.sourceId}`);
-      return false;
+      return { shown: false, error: 'notification source is no longer in the registry' };
     }
     // A disabled/kind/focus decision is terminal before consulting the host.
     // Unsupported-platform logging should describe an actual show attempt, not
@@ -2237,7 +2251,7 @@ export function installIpcHandlers(deps: {
     // 与不支持同值——实现侧异常安全；与搬迁前区分「探测失败」消息的有意收敛）。
     if (!deps.edges.notificationSupported()) {
       console.warn('[dsh-chamber] 通知裁决跳过：平台不支持原生通知');
-      return false;
+      return { shown: false, error: 'native notifications are not supported on this platform' };
     }
     // 去重 claim（5s TTL）：防同一事件双路径/重放双发；'test' 不走 claim。
     // 顺序在裁决之后：被设置/焦点跳过的请求不消费去重槽（design 19 §3.3）。
@@ -2246,12 +2260,12 @@ export function installIpcHandlers(deps: {
       if (claim.reason === 'saturated') {
         console.warn('[dsh-chamber] 通知去重窗口已达硬上限，拒绝新通知');
       }
-      return false;
+      return { shown: false, error: 'notification suppressed by the dedupe window' };
     }
     if (!nativeNotificationRateLimiter.tryAcquire()) {
       releaseNotificationClaim(claim.token);
       console.warn('[dsh-chamber] 原生通知发送速率达到硬上限，拒绝新通知');
-      return false;
+      return { shown: false, error: 'native notification rate limit reached' };
     }
     // 宿主腿（构造 + 有界登记/淘汰 + click 腿 + honest-show 结算全在实现侧，
     // B4——见 HostEdges.showNativeNotification 注释）：实现侧不 throw，shown 结
@@ -2278,9 +2292,9 @@ export function installIpcHandlers(deps: {
     if (!outcome.shown) {
       releaseNotificationClaim(claim.token);
       console.warn(`[dsh-chamber] 原生通知显示失败：${outcome.error}`);
-      return false;
+      return { shown: false, error: outcome.error };
     }
-    return true;
+    return { shown: true };
   }
 
   // ② A 组 3 个注册体（S1 迁自 main.ts；trustedIpc 围栏由装配侧在 ipc 注入点
@@ -3946,6 +3960,22 @@ export function installIpcHandlers(deps: {
   deps.ipc.handle(IPC_CHANNELS.OPEN_RELEASE, (payload: unknown) => {
     const { url } = payload as { url: unknown };
     return openReleasePage(url, value => deps.edges.openExternal(value));
+  });
+
+  // 通知权限被拒时的恢复入口（design 19 §3.3/§4）：打开「系统设置 → 通知」。
+  // 目标 URL 是本侧常量（renderer 不传 URL）；非 darwin 无该面板 → 诚实 false
+  // （设置页只在 darwin 显示该入口），打开失败 loud 且回 false，绝不假成功。
+  deps.ipc.handle(IPC_CHANNELS.OPEN_NOTIFICATION_SETTINGS, async () => {
+    if (hostFacts.platform !== 'darwin') return false;
+    try {
+      await deps.edges.openExternal(MACOS_NOTIFICATION_SETTINGS_URL);
+      return true;
+    } catch (error) {
+      console.error(
+        `[dsh-chamber] 打开通知设置失败：${error instanceof Error ? error.message : String(error)}`,
+      );
+      return false;
+    }
   });
 
   // OS 深链消费循环装配（design 16 §4.2；模块级 pendingIntents 队列见 S9 段）：
