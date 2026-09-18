@@ -206,15 +206,49 @@
     `upstream close`。下一步：DevTools 抓 close code + 节奏（1006/4000）；若为实例心跳，最小改动 = patch overlay 加
     config 行（ 现 `cordis-inserts.ts` 仅 id/name）调宽 `websocketHeartbeatIntervalMs`。否决替代：解析 close
     帧（实例侧 `terminate()` 不发）——日志不足改用上游 ping 间隔计数（~15 行）。另：桌面 idle 重连看门狗只按 transport
-    过滤（`App.tsx:1614-1627`/`:1634`，阈值 `aggregate-refresh.ts:119-123`：http 120s/ssh 300s/local
+    过滤（S2 臂在 `App.tsx:1776-1817`，阈值 `aggregate-refresh.ts:119-123`：http 120s/ssh 300s/local
     跳过），**gateway 目标（ 同属 direct-http）也吃 ~2min 连接 bounce**——「桌面也发生」若指桌面 App，此即解释。
-    bounce**——「桌面也发生」若指桌面 App，此即解释。
+  - **会话运行位卡死（ui-chat「深度求索中」）的剩余门**：机制与取舍见 design 14 §D4
+    （运行位只由 `$events` 上 emit 型 `api-session/status` 递送、无重传；官方无周期性
+    收敛触发点）。**未闭合（均为未判门，非已完成项）**：
+    ① 实机/浏览器 lane 的端到端复现未跑——fixture 已有 `__fxTiming.appendSilent` 与
+    `breakStreams` 两个 timing hook 可做确定性回归，未接 CI（失效判据 = 该场景进 CI）；
+    ② **HTTP 通路健康而 WS 逻辑流半盲**时运行位会收敛但 transcript 不收敛（需 fork 逐流交付
+    统计 + 宿主 `session/list` 的 `projections.asOfSeq` 对账，再以官方 `Session.resync()`
+    做单会话重放——失效判据 = 该对账落地并由 `appendSilent` 场景钉住）；
+    ③ 官方 `session.list` **单飞悬挂**时 L2 与横幅「重新连接」均无效，只有「重新加载」有效
+    （需上游给 fetch 超时或客户端可清除 in-flight——失效判据 = 悬挂后重连能恢复）；
+    ④ 子代理会话（`origin==='subagent'`）不在事实通道 ⇒ 该臂看不见（失效判据 = 该行进入
+    事实通道，或裁决为接受的盲区）；
+    ⑤ 隐藏期 watchdog 不 tick；恢复后首个补偿 tick 按**累计** running 时长判定（隐藏时长计入
+    `since`，不是「重新起算 120s」；若要后者须显式重置时段计时，当前不做）；
+    ⑥ 阈值（L1 门槛 120s / 等回执 150s / L2 退避 300s / L3 120s）未经实机校准，L1 配额为滚动窗口
+    （10 分钟 ≤3 次）；
+    ⑦ 上述三条上游语义依赖（refresh 回灌 / emit 无重传 / 失败也 resolve）只有接线测试
+    与语义测试，**尚无读 vendor 源的 lockstep 测试**（checklist §4 已登记，仿
+    locale-vendor-contract 的形态；失效判据 = 该测试落地并被 CI 运行）；
+    ⑧ 控制面 `<stateDir>/logs/control-plane.log` 与原生壳 `<userData>/logs/sidecar.log`
+    的取证价值未在一次真机事故里验证（失效判据 = 事故后能从这两处检索到
+    `WebSocket stream … closed` / `heartbeat lost …` 行）；
+    ⑨ **权威判定对「整行缺席」不作证**（`sessionFactsConverged` 的保守取舍）：官方
+    running=true 而独立 unary 权威快照里没有该行时判为收敛——若宿主返回的是**不完整
+    列表**，这就是「官方位卡住」的一个残余出口（失效判据 = 上游给权威读一个完整性信号
+    （`asOfSeq`/游标）后把缺席升级为「未收敛」；判成未收敛前会引入假升级，故刻意保留）；
+    ⑩ **守卫自己的动作（L1/L2/L3）只落 renderer console**，不进 `control-plane.log`
+    （后者只收控制面 logger）：下一场真机事故仍无法回答「L1 有没有触发、位有没有掉落」。
+    失效判据 = 三类动作与结果各写一行到某个持久面（实例环形日志新增 renderer 可写 verb，
+    或经既有 notify 通道落到 sidecar/native 日志）；
+    ⑪ **两处「更省形态」候选未落地**（下轮首选；2026-12 三轮复核把论据改写成硬约束，免得照旧方案重做踩同一个 race）：(a) 挂到 App 每 30s 兜底 unary pull 的提交点——
+    ① 挂载源的 `aggregates` 会被 producer push **整块覆盖**（push 与 runtimeFacts 同源于官方 store ⇒ 两份事实不独立，卡住的 running 会被写回）；② push 会作废在途 pull；③ 该 pull 只在源 stale 时发生，推流存活的源根本不拉——故它只在「源完全静默」子场景成立，覆盖本缺陷必须另加旁路采样面，净省 ≈450–500 行。(b) 用官方 store 自己暴露的 `state/phase/error`（`buildListSnapshot` 已带）替代独立 unary 探针：省一半 host 调用，但丢掉「refresh 成功而 running 未回灌」这一上游回归的检测面。
+    失效判据 = 任一形态落地并删掉相应生产端通道（并补上被删面的等价证据），或复核确认现形态更优并写回 design 14 §D4（本轮已写回其 Rejected alternatives）。
+
 - **会话打开停滞（「载入历史…」永久停留，2026-09-14 实机）**：大会话（`session-28e9eb86`）经 gateway 打开只显示
   `chat.loadingHistory`。根因未证实；唯一同构状态 = mux socket正常而 `session/follow`
   逻辑流永久无首帧，客户端与宿主都没有首帧超时；收口需设备侧帧证据（CDP WS Frames/抓包），入口
   `mobile-walkthrough.mjs`（`mobile-ws-frames.json` 落盘前脱敏）。插件侧「停滞提示 + 主动重载」兜底（
   `session-stall.ts`）判据全为属性锚点，**45s 阈值未经真机校准**；形态取值/误报边界见 `session-stall.ts` 头注与
-  `README.md`「Anchor baseline」。
+  `README.md`「Anchor baseline」。（同族另一面见上方「会话运行位卡死」条与 design 14 §D4；
+  本条的首帧期限与它共享同一类缺口——上游侧提案见 `docs/progress/todo/upstream-proposals.md` §4。）
 
 - **上游装载面三项待办（只登记，不改 upstream）**：① `dsh-client-modules` 的 `compose()`把全部非 bootstrap 行打成一个
   application 批次、只按 URL 3 KiB 切分（不按字节）⇒ 首屏~10.65 MiB 响应（`ui-sidebar-documentpreview` 内嵌 PDF.js 占

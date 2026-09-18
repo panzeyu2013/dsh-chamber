@@ -148,6 +148,29 @@ test('runtimeReportSignature distinguishes undefined, content, running bits and 
     runtimeReportSignature({ sessions: { p: { running: false } } }),
     runtimeReportSignature({ sessions: { p: { running: false, runningSubagents: 2 } } }),
   )
+  // 运行位活性守卫的 L1 对账回执必须进签名（2026-12）：App 的运行时事实提交按
+  // 本签名去重，回执若不入签名，一次「事实未变、只有回执结算」的上报会被整个
+  // 丢弃 ⇒ 守卫永远看不到结论，90s 后误判为「对账通道无回执」而假升级。
+  const stale: InstanceRuntimeReport = {
+    sessions: { p: { running: true } },
+    sessionFactReconcile: { requestedAt: 1_000, settledAt: 2_000, ok: true, attempts: 1 },
+  }
+  assert.notEqual(runtimeReportSignature({ sessions: { p: { running: true } } }), runtimeReportSignature(stale))
+  assert.notEqual(runtimeReportSignature(stale), runtimeReportSignature({
+    sessions: { p: { running: true } },
+    sessionFactReconcile: { requestedAt: 1_000, settledAt: 3_000, ok: false, attempts: 2 },
+  }))
+  assert.equal(runtimeReportSignature(stale), runtimeReportSignature({
+    sessions: { p: { running: true } },
+    sessionFactReconcile: { requestedAt: 1_000, settledAt: 2_000, ok: true, attempts: 1 },
+  }), '同一份回执必须稳定（不得每次上报都换签名）')
+  // 空报告（无行、无 current）但**只有回执**变化时也必须换签名：会话被清空那一瞬
+  // 结算的回执不能被「no runtime attached」的早退吞掉（2026-12 二轮复核）。
+  assert.notEqual(runtimeReportSignature({
+    sessions: {},
+    sessionFactReconcile: { requestedAt: 1_000, settledAt: 2_000, ok: true, attempts: 1 },
+  }), '', '回执本身就是内容：空报告 + 回执不得退化成「没有运行时事实」')
+  assert.equal(runtimeReportSignature({ sessions: {} }), '', '真正没有内容时仍是空签名')
   // Pending kinds drive the amber badges and the design-19 ask/request edges —
   // a pending change MUST re-sign (also with includeRunning=false, the
   // projection-signature mode).

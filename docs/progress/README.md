@@ -32,7 +32,7 @@ docs/progress/
 
 | 文件 | 主题 | 状态 |
 |---|---|---|
-| [upstream-proposals.md](todo/upstream-proposals.md) | 三条上游提案：N-壳宿主持久化 selection 的 scope、设置面声明式贡献通道（T3）、已归档会话的 wire 草案（根治 design 24 域） | 上游提案，未排期；chamber 侧不等待 |
+| [upstream-proposals.md](todo/upstream-proposals.md) | 四条上游提案：N-壳宿主持久化 selection 的 scope、设置面声明式贡献通道（T3）、已归档会话的 wire 草案（根治 design 24 域）、会话事实通道的静默丢帧自愈（design 14 §D4 的根治面） | 上游提案，未排期；chamber 侧不等待 |
 | [windows-v1.md](todo/windows-v1.md) | Windows v1 剩余外部门禁（M0–M5）+ 基线登记口径（原 windows-baseline.md）+ 仍生效取舍 | 待真实 Windows runner / 实机 / 产物 |
 | [open-in-superset-batches.md](todo/open-in-superset-batches.md) | open-in 超集分批 S1/S2/S3（S4 不做）+ S3/S4 降级留档形态 | 未排期（实机验收清单在 STATUS） |
 | [product-freshness-guards.md](todo/product-freshness-guards.md) | 产物新鲜度守卫：2026-12 产物普查 + G1–G8 最小守卫建议（P0/P1/P2） | 想法，未排期；缺口现状登记在 STATUS |

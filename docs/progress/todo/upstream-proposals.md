@@ -1,6 +1,6 @@
 # todo · 上游提案（chamber 不可改，等待 deepseek-harness 侧裁决）
 
-> 状态：**均为上游提案，未排期**；chamber 侧不等待、不绕过。三条提案各有一个真实驱动面的
+> 状态：**均为上游提案，未排期**；chamber 侧不等待、不绕过。四条提案各有真实驱动面的
 > 历史（见 git 历史），本文只保留**对上游的最小改法、动机事实与开放问题**。上游落地后按
 > `docs/progress/README.md` 的纪律逐条移出本表。
 
@@ -102,3 +102,38 @@ manager 只做 UI——dsh 三项全缺，chamber 无法只靠前端补全。
 
 > 其余与 design 24 相关的**chamber 侧**剩余面（浏览区 A 未排期、控制面特权层直删 B 冻结）见
 > `docs/progress/STATUS.md` 范围决策节与 `docs/design/24-archived-session-cleanup.md`。
+
+## 4. 会话事实通道的「静默丢帧」自愈（2026-12，Swift 原生版 ui-chat 卡死根因）
+
+> 驱动面：`dsh-client-ui-chat` 的 `chat.deepDiving`（`TurnStatus`）由官方 session 的
+> `running` 位驱动，而该位只由 mux `$events` 上一条 **emit 型转发事件**
+> `api-session/status` 递送（`dsh-api-session-controller` 客户端半
+> `handleSessionStatus` → `handleRunning`；白名单见 `dsh-api-remotes` 的
+> `remote-events.ts`，`mode: 'emit'`）。emit 无重传、`$events` 开场帧不重放会话
+> 状态，而官方唯一的收敛路径 `handleConnected() → refreshList()` 只挂在**连接代际
+> 重置**上 ⇒ 丢一帧或 carrier 静默半死（无 close/error）时运行位永久停在 true，
+> 客户端零超时、零出口。chamber 侧缓解（L1 只读对账 → L2 有界 reconnect → L3 用户
+> 可见提示）见 `docs/design/14-sleep-background.md` §D4；**这是缓解不是根治**。
+
+**上游最小改法（三选一或组合）**：
+
+1. **事实自愈**：emit 型会话事实改为周期性 summary 再断言，或客户端内建「running
+   为真但 `$events` 静默 ≥N 秒 ⇒ 触发一次 `session.list` 对账」——即把 chamber 的
+   L1 上移为默认行为（对上游是纯读）；
+2. **可观测心跳**：`/api/remote.mux` 现只有 WS 级 ping/pong（服务端
+   `websocketHeartbeatIntervalMs` 默认 2s、`MAX_MISSED_HEARTBEATS=2` 硬编码），
+   浏览器完全观测不到——增加应用级 keepalive item 可让页面自判「连接是否还在投递」，
+   不依赖任何 OS 事件；
+3. **流期限**：`session/follow` 加首帧/空闲期限（现永久无首帧即永久 loading，见
+   `STATUS.md`「会话打开停滞」）。
+4. **让 `refresh()` 可判成败**（最便宜、且不新增 API 面）：`SessionManager.refreshList()`
+   现在对「拉取失败」照常 resolve，只把 `listState` 置 `'error'`（`listError` 同存）——
+   `buildListSnapshot()` 其实已经把 `state/phase/error` 放进快照，但没有作为返回契约。
+   把结果显式化（`refresh(): Promise<{ ok: boolean; error?: … }>`，或文档化「失败看
+   `listState`」）后，chamber 一侧的独立 unary 探针即可删除（每次对账 2 次 host
+   `session.list` → 1 次）；代价是丢掉「refresh 成功但 running 未回灌」这一回归的检测面，
+   故仍建议配合第 1 条。
+
+**开放问题**：应用级 keepalive 的版本兼容（未知 item 必须被旧客户端忽略，而现客户端
+对未知帧会 `failAll` 并关 socket）；心跳的隐私/体积边界；`session.list` 对账在大会话
+语料上的宿主成本（chamber 一次 refresh = per-call disk walk）。

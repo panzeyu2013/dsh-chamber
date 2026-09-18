@@ -31,6 +31,8 @@ const GROUPS = {
   // session-state: the shared chamber store and the per-source view/search/todo state
   'session-state': [
     'test/session-state/aggregate-store.test.ts',
+    // 运行位对账链（官方 refresh + 权威判定 seam + 有界重试/单次尝试超时）。
+    'test/session-state/session-fact-reconcile.test.ts',
     'test/session-state/workspace-echo.test.ts',
     'test/session-state/session-echo.test.ts',
     'test/session-state/workspace-mutations.test.ts',

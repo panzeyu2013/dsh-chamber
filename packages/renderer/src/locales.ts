@@ -125,6 +125,16 @@ export const zh = {
   'notification.awaitingAnswer': '代理正在等待你的回答',
   /** Notification title: the agent requests approval. */
   'notification.awaitingApproval': '代理请求你的批准',
+  /** L3 of the session-liveness guard: the conversation stopped receiving facts. */
+  // 判据是「拿不到权威结论」（不是「沉默很久」）：长工具/长推理的合法静默与
+  // 真卡死在本层不可区分，文案必须只说「无法确认」，不得断言任务停了。
+  'sessionStall.text': '无法确认 {sources} 的会话状态：连接可能已停滞。',
+  /** L3 light recovery: reconnect the source's connection generation without a page reload. */
+  'sessionStall.reconnect': '重新连接',
+  /** L3 heavy recovery: reload the whole app page (loses page-local UI state). */
+  'sessionStall.reload': '重新加载应用页面',
+  /** L3 dismiss: hide the notice for this continuous stall (re-armed when it breaks). */
+  'sessionStall.dismiss': '忽略',
 } satisfies Record<string, string>
 
 /** The frame key union (dictionary keys, typed). */
@@ -161,6 +171,10 @@ export const en: Record<FrameKey, string> = {
   'notification.sessionComplete': 'Session complete',
   'notification.awaitingAnswer': 'The agent is waiting for your answer',
   'notification.awaitingApproval': 'The agent requests your approval',
+  'sessionStall.text': 'Cannot confirm the session state of {sources}: the connection may be stalled.',
+  'sessionStall.reconnect': 'Reconnect',
+  'sessionStall.reload': 'Reload the app page',
+  'sessionStall.dismiss': 'Dismiss',
 }
 
 /** Every dictionary keyed by locale (the frame's `t` seat). */

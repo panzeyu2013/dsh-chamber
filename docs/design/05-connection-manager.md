@@ -525,6 +525,13 @@ interface InstanceRuntimeReport {
     pending?: 'approval'|'plan-review'|'question'
     runningSubagents?: number     // 运行中子 agent 计数（>0 稀疏；06 §4.5）
   }>
+  sessionFactReconcile?: {        // design 14 §D4：运行位活性守卫的 L1 对账回执（可选；旧 producer 不带）
+    requestedAt: number           // producer 时钟；仅诊断（守卫只用 settledAt 水位）
+    settledAt?: number            // 缺省 = 在途（守卫忽略未结算回执）
+    ok: boolean                   // 是否拿到权威结论（false ≠ 一定失败，见 verdict）
+    attempts: number
+    verdict?: 'converged'|'stale'|'unknown'  // 三值：unknown（辅助探针失败/超时）不升级也不清等待；stale = 未收敛的失败结算（refresh 相位失败/超时、缺 verify seam，或 verify 正面证伪）——只有 verify 真跑过才代表「权威证伪」
+  }
 }
 export const chamberBridge: {
   getServers(): ChamberServerAggregate[]
@@ -542,7 +549,7 @@ export const chamberBridge: {
   onWorkspaceRemoved(listener: (fact: WorkspaceRemovedFact) => void): () => void
   reportWorkspaceRenamed(fact: WorkspaceRenamedFact): void     // 侧栏 rename 成功后上报（改名回声）
   onWorkspaceRenamed(listener: (fact: WorkspaceRenamedFact) => void): () => void
-  requestSessionListRefresh(sourceId: string): void       // design 24 §12：请求该来源挂载 ctx 重跑官方 session.list（purge 幽灵行收敛；§12 由生产端校验式收敛链处理：reject/hung 有界重试，越界一律保持抑制——resolve 不构成权威）
+  requestSessionListRefresh(sourceId: string): void       // design 24 §12：请求该来源挂载 ctx 重跑官方 session.list（purge 幽灵行收敛；§12 由生产端校验式收敛链处理：reject/hung 有界重试，越界一律保持抑制——resolve 不构成权威）。**第二消费者（design 14 §D4）**：运行位活性守卫的 L1 也经本通道请求对账；producer 订阅端另驱动 SessionFactReconciler，回执经上面的 sessionFactReconcile 字段回流
   onRequestSessionListRefresh(listener: (sourceId: string) => void): () => void // 各挂载 ctx 的 sidebar 插件订阅；仅 chamberInstanceId === sourceId 者动作（§12：插件自身观测到归档集收缩也会直接触发同一链，不依赖本通道送达）
   requestActivateSource(sourceId: string): void           // 点击来源分组头调用
   onActivateSource(listener: (sourceId: string) => void): () => void  // App 层订阅

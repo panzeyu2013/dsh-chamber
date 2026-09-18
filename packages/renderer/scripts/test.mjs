@@ -33,6 +33,8 @@ const GROUPS = {
     { file: 'test/lifecycle/shell-tail-wait-teardown.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-shell-register.mjs'] },
     { file: 'test/lifecycle/session-open-poll.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-shell-register.mjs'] },
     'test/lifecycle/page-read-path-lockstep.test.ts',
+    // 运行位活性守卫的决策纯模块契约（design 14 §D4）。
+    'test/lifecycle/session-liveness.test.ts',
   ],
   // aggregate: 多来源聚合状态与通知投影（聚合拉取/重连、通知边、角标计数）
   aggregate: [
@@ -54,6 +56,7 @@ const GROUPS = {
     'test/wiring/app-purged-memory-wiring.test.ts',
     'test/wiring/viewed-protection-wiring.test.ts',
     'test/wiring/hover-card-view-hide-wiring.test.ts',
+    'test/wiring/session-liveness-wiring.test.ts',
   ],
   // view-runtime: 视图运行时 —— 隐藏视图回收、视图过渡队列、侧栏滚动恢复
   'view-runtime': [

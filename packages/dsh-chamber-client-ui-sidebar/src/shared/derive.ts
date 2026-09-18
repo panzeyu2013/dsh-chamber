@@ -795,6 +795,10 @@ export function mergeRuntimeFacts(
       sessions[sessionId] = { ...row, completed: true }
     }
   }
+  // 刻意的形状收敛：`sessionFactReconcile` **不进**投影（侧边栏不渲染它，
+  // 且投影签名按此形状去重）——守卫读的是 App 原始 runtimeFacts（App.tsx 的
+  // setRuntimeFacts），不是 server.runtime。下一个想读回执的 consumer 请直接
+  // 读原始事实，不要以为投影里有。
   return { current: runtime?.current, sessions }
 }
 
@@ -900,11 +904,25 @@ export function runtimeReportSignature(
     .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
     .map(([id, facts]) =>
       `${id}:${includeRunning && facts.running === true ? 'r' : ''}${facts.completed === true ? 'c' : ''}${facts.pending ?? ''}:${facts.runningSubagents ?? 0}`)
-  // A report whose only rows were filtered out (no visible session, no
-  // current) contributes nothing to the projection signature — it must be
-  // indistinguishable from "no runtime attached".
-  if (rows.length === 0 && current === '') return ''
-  return `${current}|${rows.join(',')}`
+  // 2026-12 修复（运行位活性守卫）：L1 对账回执也是事实内容的一部分，必须进
+  // 签名——App 的运行时事实提交按本签名去重，回执若不入签名，一次「事实没变、
+  // 只有回执结算」的上报会被整个丢弃，守卫永远看不到结论（随后误判为「对账
+  // 通道无回执」并升级 reconnect/L3，属假升级风暴）。
+  //
+  // 只签在 `includeRunning`（= App 的身份校验路径）：**投影**签名
+  // （serversProjectionSignature，includeRunning=false）不得因回执变化而重发布
+  // ——侧边栏不渲染回执，回执变化对它永远是 churn（与「channel-only running
+  // flip 不得 re-publish」同一条纪律）。
+  const reconcile = report.sessionFactReconcile
+  const receipt = !includeRunning || reconcile === undefined
+    ? ''
+    : `#f:${reconcile.settledAt === undefined ? 'p' : String(reconcile.settledAt)}:${reconcile.ok ? '1' : '0'}:${String(reconcile.attempts)}`
+  // A report whose only rows were filtered out (no visible session, no current)
+  // contributes nothing to the projection signature — it must be
+  // indistinguishable from "no runtime attached" **unless** it carries a
+  // receipt (回执本身就是内容：会话被清空那一瞬的回执结算不得被去重吞掉).
+  if (rows.length === 0 && current === '' && receipt === '') return ''
+  return `${current}|${rows.join(',')}${receipt}`
 }
 
 /**

@@ -12,6 +12,7 @@
  */
 import type { InstanceSnapshot } from './instance-api.ts'
 import type { ArchivedSessionMetaRow } from './derive.ts'
+import type { SessionFactReconcileSnapshot } from './session-fact-reconcile.ts'
 import { assertSingletonModule } from './singleton.ts'
 
 assertSingletonModule('aggregate-store')
@@ -368,6 +369,13 @@ export interface InstanceRuntimeReport {
     /** Running subagent descendants (vendor runningSubagentCount semantics); absent = 0. */
     runningSubagents?: number
   }>
+  /**
+   * 运行位活性守卫（renderer/src/session-liveness.ts）最近一次 L1 对账的回执；
+   * 缺席 = 本记录内从未请求过。守卫只在「拿不到权威结论」（ok:false，或请求后
+   * 超时无回执）时升级 reconnect，因此回执必须与事实同源上报——执行端是
+   * shared/session-fact-reconcile.ts（单飞 + 有界重试）。
+   */
+  sessionFactReconcile?: SessionFactReconcileSnapshot
 }
 
 type Listener = () => void
@@ -541,7 +549,16 @@ export const chamberBridge = {
    * unary list, which is authoritative per call).
    */
   requestSessionListRefresh(sourceId: string): void {
-    for (const listener of [...sessionListRefreshListeners]) listener(sourceId)
+    // 逐监听器隔离（与 setActiveSource 同纪律）：这条广播现在同时驱动归档收敛链与
+    // 运行位活性守卫的 L1——一个抛错的监听器若中断整轮广播，守卫会拿不到对账请求并
+    // 把它误判成「对账通道无回执」而升级 L2（2026-12 三轮复核的结构性建议）。
+    for (const listener of [...sessionListRefreshListeners]) {
+      try {
+        listener(sourceId)
+      } catch (error) {
+        console.error(`[chamber] session-list refresh listener failed for ${sourceId}:`, error)
+      }
+    }
   },
 
   /** Sidebar-plugin subscription to session-list refresh requests; returns the unsubscribe. */
