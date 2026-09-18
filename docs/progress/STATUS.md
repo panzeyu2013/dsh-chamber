@@ -258,7 +258,7 @@
 
 - **会话创建/fork/归档的侧边栏收敛修复（会话回声 + 归档墓碑，2026-12 真机反馈；design 05 §2.2.1）**：唯一出口
   `shared/session-mutations.ts`；`withSessionEcho`、`withPendingArchives`、事实到达时的官方 session-list
-  刷新臂已落地。 **剩余本地 + 远程 SSH 实机验收**：① 在来源 A 会话里点 B workspace「+」或对 B fork：侧栏 **<1s**
+  刷新臂齐备；**剩余本地 + 远程 SSH 实机验收**：① 在来源 A 会话里点 B workspace「+」或对 B fork：侧栏 **<1s**
   出现新行（blank 随 current、fork 子行按普通行）、位置在工作区头部、不出现「先落未分组桶/尾部再跳位」；② 归档
   B的旧会话（B 未挂载）→ 行驶即消失、不留可点空视图入口；③ 权威归属/归档集到达后无重复行，切走切回/刷新后仍一行；④
   别处（另一客户端、宿主直接改 ）变更与归档墓碑租约到期（10min
@@ -278,6 +278,27 @@
   settle 的 veil 失配/CLS；②连点 ×10 冷挂载切换的单槽收敛 ≤2 节；③版本事务 sample 主进程无同步全树冻结；④更新模式侧栏写频 T4 防抖 250ms 窗；⑤H3 懒加载两段结构长任务真机复核；入口 `scripts/perf/`。**第二阶段（视图保留/后台门控/行窗口）剩余同环境 A/B**：`measure-ui.mjs`（DOM 分壳/堆/空闲长任务/合成输入帧/预热壳数）+「打开→切走→重开 ×3 堆无净增长」。**验收目标**：全视图 DOM ≤13,000（按 `dom.perInstanceNodes[]` 分壳对照）；JS 堆无净增长且随视图数线性下降；×3 堆无净增长；空闲 15s 无 >100ms 长任务（**首启基线收割窗口不计入**）；合成输入帧间隔无 >500ms；预热 1 壳且仅前台（与基线收割共享唯一槽位）。**已知取舍**：被回收壳内运行中任务的完成蓝点/通知边沿暂停至该源重开（60s 安全窗 +
   `RETAINED_HIDDEN_VIEWS=1` 限制损失面）；被回收源聚合降级到既有 30s unary兜底（05 §2.3）。证据：`retention.ts` +
   `App.tsx`、`measure-ui.mjs`、design 05 §4。
+
+- **Swift 原生壳性能整改的实机同环境 A/B 未闭合**（2026-12）：**启动 t0→首帧 / 大载荷 invoke p95 / 空闲 wakeups 的同环境 A/B 仍需打包态实例**（本机缺 node workspace 依赖，real-sidecar 集成用例环境阻塞）；本批次触达的桥热路径与空闲开销改动的实现契约散见对应源文件头注（信封尺寸门
+   Data 化、payload 单遍转换 + 深度上限、B 桥入站每行单次解析 + 严格判型、页面字面量单遍写出、POCDebug 启动期缓存、LineReader 游标化、
+   stderr 读取/环形独立锁）。观测入口 `macos/Sources/DSHChamberPoc/ShellPerf.swift`（`[perf] boot …` 行）与 `POC_DEBUG=1` 的 `[perf] invoke` 行；A/B 纪律见 `scripts/perf/README.md`。
+
+- **B 桥出站帧护栏的范围边界**：出站 4 MiB 门只覆盖产品入口 `packages/desktop/sidecar-entry.ts` 的
+  `writeProtocolLine`（`node-edges.ts` 的 `MAX_PROTOCOL_FRAME_BYTES`，与入站 P-01 同源）；POC 桩入口
+  `packages/desktop/poc-sidecar.ts` 仍是裸 stdout 写——它只服务测试夹具（`BridgeClientIntegrationTests`），
+  产品路径不经它。证据：全仓 `process.stdout.write` 审计（产品路径仅 `writeProtocolLine` 内三处回错帧：not-serializable / too-large /
+  backpressure，加一处正常写，全部在出站门与有界缓冲之内）。
+
+- **sidecar 的 console 通道退化**：`sidecar-console-redirect.ts` 把所有可能写 stdout 的 console 方法钉到 stderr
+  （stdout 纪律优先）；其中 `count/countReset/group/groupCollapsed/groupEnd/time/timeLog/timeEnd` 退化为普通日志行
+  （不维护计数/计时/缩进状态）。`assert` 已恢复 Node 语义（仅首参为假时打印、带 Assertion failed 前缀）。仓内无这些
+  方法的调用点；将来要用需改为带状态实现。证据：`sidecar-console-redirect.ts:45-70`。
+
+- **B 桥协议写端的验证面**：出站帧门、快判与有界缓冲（8 MiB 字节 + 4096 帧/轮双上限，拒发回帧每轮 ≤64 条）只在本机做
+  真解析门（`stripTypeScriptTypes`，见 `sidecar-stdio.test.ts` P-03）+ 逐字运行时探针验证（`node --check` 对 ESM .ts 是静默
+  no-op，不可作门——第七轮验证 BUG 即由此假绿交付过；门：恰 4 MiB 放行 / +1 拒绝 / 无 id 零写出 / 多字节中间带走精确路径；缓冲：300k 小帧下
+  排队恰 4096 帧、RSS 100k→300k 持平、SIGTERM 立即处理；edge 帧拒发时 node 内直接 reject，不再等 30s/660s 超时）。CI 里
+  `sidecar-stdio.test.ts` 目前只有静态锚点断言，**行为级用例仍缺**（补用例需能暂停 stdout 消费的夹具）。
 
 - **SSH 密码一键免密引导与系统钥匙串（05 §8）**：未实现（现行为 endpoint-bound 0600 明文镜像，见取舍）。
 
@@ -402,7 +423,8 @@
   **有意保留的零 core 消费者契约面**——`resolveResource`/`isPackaged`/`notifyClicked`/`trayAvailable`/
   `focusMainWindow`/`launchApp` 与 HostEdges 同步 `setKeepAwake`/`setLoginItem` 在 `desktop/shell-core.ts:679-762`
   只有声明与 doc、无调用点（settings 走装配 ctx 的 async叶）——flavor 契约，不是死代码；⑤ **`BridgeClient`
-  事件帧入站面保留**——`onEvent` 派发（`macos/Sources/DSHChamberPoc/BridgeClient.swift:214/605`）无生产接线，仅为
+  事件帧入站面保留**——`onEvent` 派发（`macos/Sources/DSHChamberPoc/BridgeClient.swift` 的 `onEvent` 声明与
+  `processStdoutOutcome` → `handleIncomingLine` 分发点）无生产接线，仅为
   `BridgeClientIntegrationTests` 夹具保留， 删除前须先处理该测试；⑥ **通知音效平台等价物**——Swift
   `silent → 无声`、否则系统默认声（`SwiftEdgeHostLegs.swift:219-222`），Electrondarwin 具名
   `Glass`，UNUserNotificationCenter 无该资源，差异已登记。
