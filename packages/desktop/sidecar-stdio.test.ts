@@ -950,7 +950,9 @@ test('P-02 跨语言锁步：出站帧上限与入站同源常量（writeProtoco
     /return false/,
     '背压拒发分支必须真实返回 false（谎报成功不得通过）',
   )
-  const returns = body.match(/\breturn (?:true|false)\b/g) ?? []
+  // TS 7：无捕获组的全局 match() 会把元素类型推成 never（.includes('return true')
+  // 因此报 TS2345）。显式标注回 string[]，语义不变。
+  const returns: string[] = body.match(/\breturn (?:true|false)\b/g) ?? []
   assert.ok(
     returns.filter((value) => value === 'return false').length >= 2,
     '拒发路径至少两条 return false（超限 / 不可序列化）',
