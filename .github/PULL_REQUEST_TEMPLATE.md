@@ -34,11 +34,13 @@
 
 ## Upstream touchpoint self-check
 
-<!-- 改动含下列任一项 ⇒ 必须登记/刷新 docs/checklists/upstream-touchpoints.md 与
-     scripts/upstream/verify-upstream-touchpoints.mjs（漏登 = CI C1/C3 硬失败）： -->
+<!-- 改动含下列任一项 ⇒ 必须登记/刷新单一来源 scripts/upstream/registry.json，并跑
+     registry-views.mjs --write 重生成 docs/checklists/upstream-touchpoints.md 的 GENERATED 块
+     （漏登 = CI C1/C3 硬失败；手改生成块 = verify:registry 硬失败）： -->
 
-- [ ] 无上游接触面改动（新增 `@deepseek-ai/*` 深导入、改 fork 副本、镜像 wire、新再生物、covered/assembly 行）——或已登记
+- [ ] 无上游接触面改动（新增 `@deepseek-ai/*` 深导入、改 fork 副本、镜像 wire、新再生物、covered/assembly 行）——或已登记进 `scripts/upstream/registry.json` 并重生成生成块
 - [ ] `node scripts/upstream/verify-upstream-touchpoints.mjs` 通过（若改动触及触点面）
+- [ ] `node scripts/upstream/verify-registry.mjs` 与 `node scripts/upstream/check-anchors.mjs` 通过（结构登记改动时；新锚点写 `path#symbol`）
 
 ## Risks and failure behavior
 

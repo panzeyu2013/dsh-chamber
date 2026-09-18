@@ -116,8 +116,9 @@ CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 ta
 - [ ] `git status --short` 无未跟踪文件（无 UPGRADE-*.md / .DS_Store / 临时文件）；`git stash list` 空。
 - [ ] 无冲突标记（用 `node scripts/release/release-preflight.mjs --offline` 的锚定行首扫描；
       裸 `grep '<<<<<<<' packages/ docs/ scripts/` 会自匹配本清单文件的字面示例行）。
-- [ ] 旧 dsh pin 残留扫描：`grep -rn "141eb6f\|0\.1\.0-rc\.8" packages/ scripts/ harness.commit`
-      （非 vendor/node_modules）仅剩历史文档/迁移条目。
+- [ ] 旧 dsh pin 残留扫描：`grep -rn "<上一版 pin 的版本字面量>\|<上一版 commit 短哈希>" packages/ scripts/ harness.commit`
+      （非 vendor/node_modules）仅剩历史文档/迁移条目（与本清单同目录的 `dsh-upgrade-checklist.md` §6 同一纪律：
+      清单本身只写占位符，不落任何版本值/短哈希）。
 
 ## 6. 签名/公证（全部由 CI 处理）
 

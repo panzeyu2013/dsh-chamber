@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "scanRoot": "docs",
+  "pattern": "[A-Za-z0-9_/.@-]+\\.(?:ts|tsx|mts|cts|mjs|js|swift|css|json|ya?ml|md):\\d+",
+  "legacyAnchors": 731,
+  "note": "遗留 文件:行 锚点预算棘轮（D15）：只降不升。首次落地由 --update-budget 记录实测值；新锚点一律写 path#symbol。"
+}

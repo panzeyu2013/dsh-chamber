@@ -78,10 +78,16 @@ decision value and is not already owned by a design document or `CHANGELOG.md`.
 
 - Execute `docs/checklists/dsh-upgrade-checklist.md`, then the per-tag maintenance loop in
   `docs/checklists/upstream-touchpoints.md` §7.
-- `docs/checklists/upstream-touchpoints.md` and `scripts/upstream/verify-upstream-touchpoints.mjs`
-  (gates C1–C15, run in CI: C11–C14 the plugin protected set, C15 the hover-port retirement gate)
-  are two sides of one registry — a change to either must be mirrored in
-  the other, and the pin-upgrade entry point reminds you of the freshness gate.
+- The upstream-touchpoint registry has **one machine source**: `scripts/upstream/registry.json`
+  (paths, per-file classification, criterion ids, deviation ids, one-sentence reasons).
+  `scripts/upstream/verify-upstream-touchpoints.mjs` reads it at startup (gates C1–C15, run in CI:
+  C11–C14 the plugin protected set, C15 the hover-port retirement gate), and
+  `docs/checklists/upstream-touchpoints.md` §2/§9 are its **generated views** — the
+  `<!-- GENERATED:registry:… -->` blocks are hand-edit forbidden
+  (`node scripts/upstream/registry-views.mjs --write` regenerates them; `verify:registry` is the
+  freshness gate). `verify:registry` (schema/canonical/references/coverage net/generated views) and
+  `verify:anchors` (symbol anchors + the legacy `file:line` budget, which may only go down) are
+  ordinary gates in `check:static` and on both CI paths; the pin-upgrade entry point lists them.
 - `docs/checklists/*` are **procedure only**: no version values — no pinned tags, commits, current
   baseline snapshots or per-tag delta logs — belong in them. The current anchor's single sources are
   `harness.commit` (source line), `packages/desktop/vendor/dsh/pnpm-lock.yaml` (runtime line) and each
@@ -112,8 +118,11 @@ surfaces, applicable guidance, validation, or failure/rollback considerations fr
   were genuinely weighed, so the reviewer checks it and the PR template asks for it. Labeling a rule
   review-only is deliberate: a green gate never means this one was satisfied.
 - Pick the evidence for a change with `node scripts/gates/run-checks.mjs <static|tests|typecheck|full>`
-  (or `--list` to see the plan) instead of recalling the set from CI YAML: the modes name the same
-  gates ci.yml and release validation run, so a local pass is the same evidence.
+  (or `--list` to see the plan) instead of recalling the set from CI YAML: the modes name the gates
+  ci.yml and release validation run, so a local pass is the same evidence. Two documented asymmetries
+  remain: `verify:shim-payload` executes in ci.yml's macOS leg as a direct script, and ci.yml's
+  `smoke` / `release-preflight --actions-only` have no mode (`smoke` is an explicit policy-test
+  exemption, not a silent omission).
 
 ## Runtime Boundaries
 

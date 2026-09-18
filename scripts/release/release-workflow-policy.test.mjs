@@ -43,7 +43,12 @@ const prepare = between(
 )
 const createJob = between('\n  create-release:', '\n  validation:')
 const create = between('      - name: Create GitHub Release (draft)', '\n  validation:')
+// 与 swiftBuild 同一纪律（2026-12 对抗复核）：整行注释必须剥掉，否则被 `#` 注释掉的
+// release 步骤仍能满足 "validation.includes(gate)"——命令保留在注释里就骗过了门。
 const validation = between('\n  validation:', '\n  build-gateway:')
+  .split('\n')
+  .filter((line) => !/^[ \t]*#/.test(line))
+  .join('\n')
 const gatewayBuild = between('\n  build-gateway:', '\n  build-macos:')
 const macBuild = between('\n  build-macos:', '\n  build-windows:')
 const windowsBuild = between('\n  build-windows:', '\n  build-linux:')

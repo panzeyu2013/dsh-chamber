@@ -18,7 +18,7 @@
     行与远端无该包目录、注入按钮门与「重启生效」态；N-ctx 三来源同页不串台； 打包态 `dist/host-open-in-package` seed
     成功；内置 0.1.2-rc.1 与 pin 0.1.5-rc.2 装载探针绿（**最大未验证风险**）。 **§2 仍开放**：机器目录 base64 体积/CSP
     实测；Windows 盘符/UNC 的 host 侧口径（design 23）；第三方编辑器 scheme 逐个验证（S1 前置）；上游升级时 fork
-    折入流程（`FORKS` 表豁免 + C1/C3 可执行性 + `patched` 是否足够重锚）。
+    折入流程（registry 条目豁免 + C1/C3 可执行性 + `patched` 是否足够重锚）。
   - **写入期终止失败后闩锁只能靠重启应用再证明（design 02 §3.4）**：`onWriterQuiescenceUnknown` 无扫描证据可依（记录可能已删），对本平面生命周期粘滞；触发 = 受管进程组信号被拒或子进程终止超时。
   - **实例写者静默门拦住自动启动恢复路径（同上验收）**：shell 被 `SIGKILL`/孤儿 dsh 占住 DSH_HOME 时如实拒绝（
     `409 connection_busy`）但「启动/停止」点不动（状态停 `starting`、端口 0），恢复 = 优雅重启应用；仅硬杀后出现。
@@ -29,7 +29,7 @@
 
 - **Swift 原生运行期监督（未实现；两条正交缺口，2026-12 复核）**：① **控制面**：原生壳只在首载前探一次 `/health`（S-45）；sidecar 进程活着而事件循环卡住时无人发现（`SidecarSupervisor` 只看进程退出码，stderr 仅作诊断）。候选收口 = 前台有界周期探测 + 「重启 sidecar / 重新加载」动作。**留在 STATUS 而非新增 deviations 行**：它无 Electron 对应面（Electron 控制面在进程内），恢复方向差异已由 P-09/S-02 覆盖。② **渲染器**：`RendererHangWatchdog` 是整页存活探针（`evaluateJavaScript("1")`），需"15s 无输入 + 3 次探测"，任意键鼠即重置，且 `didFinish` 前完全未武装——而窗口在 `didCommit` 就已呈现，于是"首帧脚本求值期冻结"与"用户持续点击期冻结"都没有原生超时（页面侧定时器同样停摆），只剩 ⌘R。与 05 §4.1 的页面级逃生正交；可选收口 = `didCommit` 后武装首载超时。
 
-- **宿主 cwd / 安装根（2026-09-17 实机事故，未修）**：宿主进程 cwd 落在打包 bundle 的 dsh 安装根（Swift 拼写 `…/sidecar/vendor/dsh`，Electron 为 `resourcesPath/vendor/dsh`；`packages/control-plane/src/spawn-dsh.ts:322,735-736`），该 bundle 被原地替换（dev 重装 / 自动更新）后旧 inode 被 unlink，`worker_threads` 共享 `process.cwd()` ⇒ 每个工具调用 `uv_cwd ENOENT`（session worktree 未被删，重启应用从新安装根起宿主后自愈）。修复三件（复核补充：**不是一行改**）：控制面 cwd 不落在可替换路径——但 dev 兜底以裸 `--import tsx/esm` 启动、Node 从 cwd 解析该裸说明符，全局改 cwd 会打断 dev 源码启动，须把说明符绝对化或只改装配态分支；worker 不依赖 `process.cwd()`（vendor 上游 → fork/补丁 + FORKS/C 门，按升级维护）；安装/更新原子化 + 运行中检测（宿主是 detached spawn，会活过控制面，替换前必须先停/重定宿主）。
+- **宿主 cwd / 安装根（2026-09-17 实机事故，未修）**：宿主进程 cwd 落在打包 bundle 的 dsh 安装根（Swift 拼写 `…/sidecar/vendor/dsh`，Electron 为 `resourcesPath/vendor/dsh`；`packages/control-plane/src/spawn-dsh.ts:322,735-736`），该 bundle 被原地替换（dev 重装 / 自动更新）后旧 inode 被 unlink，`worker_threads` 共享 `process.cwd()` ⇒ 每个工具调用 `uv_cwd ENOENT`（session worktree 未被删，重启应用从新安装根起宿主后自愈）。修复三件（复核补充：**不是一行改**）：控制面 cwd 不落在可替换路径——但 dev 兜底以裸 `--import tsx/esm` 启动、Node 从 cwd 解析该裸说明符，全局改 cwd 会打断 dev 源码启动，须把说明符绝对化或只改装配态分支；worker 不依赖 `process.cwd()`（vendor 上游 → fork/补丁 + registry/C 门，按升级维护）；安装/更新原子化 + 运行中检测（宿主是 detached spawn，会活过控制面，替换前必须先停/重定宿主）。
 
 - **ProMotion / 120Hz 实机验收（未完成；口径与退役判据见 deviations S-48 / design 25 §5.1）**：
   残余 = **打包态**三工况实机验收；另需确认 `POC_DEBUG=1` 的 `[native-fps]` 观测只在调试态
@@ -366,7 +366,7 @@
 
 ## 一致性债务与开放登记（低–中，未排期；均指回代码面注释/design 登记）
 
-- **docs 证据锚点过期（D15，2026-12 实测；低–中，未排期）**：`docs/**` 的 `文件:行` 证据锚点共 666 处（32 处指向 `MainWindowController.swift`），代码位移后大面积错位且偏移不均匀（同一文件净增 128 行，实测偏移 +5…+128），抽检 10 处全部错位。退役动作 = 待合并分支全部落地后按符号 grep 做一次语义化重锚；登记见 [deviations.md](deviations.md) D15。
+- **docs 证据锚点过期（D15，2026-12 实测；低–中，未排期）**：`docs/**` 的 `文件:行` 证据锚点实测 **731 处**（`check-anchors --report` 口径；旧快照的 666 不可复现），分布 deviations.md 491 / STATUS.md 107 / design 20 40 / design 25 37；代码位移后大面积错位且偏移不均匀（同一文件净增 128 行，实测偏移 +5…+128）。**已落地的机械化工具（2026-12）**：`check-anchors.mjs`（符号锚解析 + `anchors-budget.json` 棘轮，基线 731、只降不升；`--report` 出漂移与测试面三分类，`--fix` 只回写显式文件的唯一符号锚）+ `verify-registry.mjs`（registry 单一来源与生成块保鲜）已进 `check:static` 与 CI 两条路径。测试面实测 44 处注释 + 4 处非注释（3 处 runtime-lockstep 测试标题 + **1 处真实断言**：`WebPermissionPolicyTests.swift#testMediaCaptureIsDeniedLikeElectronsPermissionPolicy` 断言 Swift 源文本里含 Electron 权限策略锚点行（D13）；探针自身测试夹具另有 7 处命中（5 个示例字面量）、不计入；`--report` 现场打印为 注释 44 / 字符串 10 / 断言或其它 1）；数字随文件变动，以 `check-anchors --report` 现场为准，迁移时需同步改动的测试锚点只有这 1 处。**退役动作** = 待合并分支（timeout-loading / ui-chat-not-render / windows-slide / swift-sidebar-update 等）全部落地后，按符号 grep 分批语义化重锚并逐批调低预算；登记见 [deviations.md](deviations.md) D15。
 
 - **设置面残余登记（design 05 §5，2026-12 完整桥接修订后剩余项）**：壳渲染选中来源自己 boot ctx 的 `settings.section`
   台账与该 ctx 绑定的标准座（`settings-source-face.ts`）；原 child ctx 残余随其删除。剩余：①面板要求该来源壳处于挂载中（`setSettingsTarget` 保证后台挂载/不被回收；代价 = 付一次该来源 boot，失败只显示不可达/启动中，无独立降级面）；②
@@ -723,6 +723,7 @@
 
 - **不做 git 钩子（2026-12 决定）**：`core.hooksPath` 不随 clone 携带，装钩子等于要求每个 clone 重配；而钩子本要跑的检查都已是 CI 背书的普通门禁，`pnpm run check:static` 一条命令跑全。本仓不提供也不安装任何钩子，不引入 husky/lefthook
   类托管层。
+- **上游触点 registry 单一来源（2026-12 决定）**：`scripts/upstream/registry.json` 是触点登记的单一机器来源（路径/分类/判据 id/偏差 id/一句话原因）；`verify-upstream-touchpoints.mjs` 启动即读它，`upstream-touchpoints.md` §2/§9 的 `GENERATED` 块是生成视图（禁手改，`registry-views.mjs --write` 重生成，`verify:registry` 保鲜）。新增两道普通门禁：`verify:registry`（schema/canonical/引用存在性/deviations id/覆盖面网/生成块）与 `verify:anchors`（符号锚 + 遗留 `文件:行` 预算棘轮），已进 `pnpm run check:static`、ci.yml 的 ubuntu `test` 作业与 release validation（release proof 要求 registry 步骤名）。C4/C7–C15 的判据实现刻意保留在代码里，只按 id 引用。两道新门只在 ci.yml 的 ubuntu `test` 作业与 release validation 跑（win/mac 腿不跑）：这是有意取舍，但这两门的路径/JSON 解析因此在 CI 里**没有 Windows 执行覆盖**，属登记在案的残余盲区（同 registry 的 Windows 无覆盖由 C1–C15 触点门在 win 腿部分补足）。
 
 - **推迟：工程门禁 P2 项（2026-12）**：观察型 CI job（非阻塞只报数）、术语表、文档字数预算、`docs/checklists/*` 过程文件转可调用动作、`README.i18n.yaml` 三元组译文一致性门（现只有哈希记录）——均未排期。
 

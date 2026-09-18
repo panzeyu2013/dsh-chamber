@@ -285,11 +285,12 @@ jobs:
           submodules: true
       # Release CI proof (2026-09 CI-trigger revision): tag pushes no longer
       # re-run ci.yml — the release must PROVE its commit already passed the full
-      # chain on main, including the windows leg release.yml has no equivalent of.
+      # chain on main, including the windows and macOS legs release.yml has no
+      # equivalent of.
       # It needs only this checked-out script (no node_modules), so it stays
       # before the install: a commit main never validated fails immediately, one
       # still in flight is waited for (bounded).
-      - name: Release commit passed CI on main (linux + windows legs)
+      - name: Release commit passed CI on main (linux + windows + macOS legs)
         env:
           RELEASE_SHA: ${{ github.sha }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -345,6 +346,12 @@ jobs:
         run: pnpm run verify:test-wiring
       - name: Markdown link gate
         run: pnpm run verify:md-links
+      # Same two upstream-registry gates as ci.yml's push path (the policy test
+      # derives the release chain from ci.yml, so a missing command here is a red).
+      - name: Upstream registry integrity (schema/references/views)
+        run: pnpm run verify:registry
+      - name: Upstream anchor probe (symbol anchors + legacy budget)
+        run: pnpm run verify:anchors
       # Upstream design-token conformance (S1–S7) — same gate as ci.yml's push
       # path; needs the bootstrapped vendor tree above (2026-12 review P2: the
       # release validation job silently omitted it).

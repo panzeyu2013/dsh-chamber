@@ -428,7 +428,7 @@ http 直连只读。
   （`CAN_RUN_WAIT_MAX_MS=120_000`，plugins-exec.ts）、journal 最近
   50 笔（无时间窗）、上传前磁盘预检；文件夹 ≤32 MiB 独立流式路由 + 解包上限（≤4096 文件/解压 ≤256 MiB）；
   **受保护集合/代耦合判定模型层单一实现 + C11–C14 上游保鲜门**（§6.11；门的判据是谓词，
-  登记在 docs/checklists/upstream-touchpoints.md §6，与脚本两侧同步）；tasks 独立端点（不并入 installed）；执行窗口含停机态；
+  登记在 docs/checklists/upstream-touchpoints.md §6——**判据散文与代码判据同步**；触点结构数据（fork 面/分类/判据 id/偏差 id）的单一来源是 scripts/upstream/registry.json，checklist §2/§9 由它生成）；tasks 独立端点（不并入 installed）；执行窗口含停机态；
   暂存 tgz 保留语义见 §6.3。
 
 ### 6.10 明确不做

@@ -280,7 +280,7 @@ provider（本地目录不再是主进程的事，也不再是"官方宿主行"�
   filemanager、terminal/iterm/warp/kitty/ghostty/gnometerminal/konsole/windowsterminal/gitbash、
   vscode(+insiders)/cursor/windsurf/zed/sublimetext/xcode/androidstudio、JetBrains 家族 7 个、
   git GUI 家族 6 个），断言"每个 catalog id 都有 zh+en 标签"且"标签表没有多余行"。门的保鲜
-  对象从"上游客户端"变成"我们自己的目录"，与 `FORKS` 对上游 `catalog.ts` 的 C1 保鲜**不重叠**。
+  对象从"上游客户端"变成"我们自己的目录"，与 registry 的 `fork.*` 条目对上游 `catalog.ts` 的 C1 保鲜**不重叠**。
 
 ## 6. 实例内 host 包（`@dsh-chamber/dsh-chamber-seed-open-in`）
 
@@ -333,7 +333,7 @@ provider（本地目录不再是主进程的事，也不再是"官方宿主行"�
 5. `scripts/upstream/verify-upstream-touchpoints.mjs`：**C7** 文本哨兵（gateway 域值集 ↔ runtime 列表）；
    **C8** 的提交态产物清单已加入 `packages/dsh-chamber-seed-open-in/dist/index.js`
    （现为 host dist ×4，C8 共 6 组）并同步了脚本头注；
-   **C2** 的 tag 重放会自动纳入（`FORKS.map(f => f.upstream)`，advisory，缺目录可容忍）；
+   **C2** 的 tag 重放会自动纳入（按 registry 分类条目的 `upstream` 集合，advisory，缺目录可容忍）；
    **C6 排除表不动**：本 fork **不 shadow vendor 包名**，上游 `packages/host/open-in-app`
    必须留在 vendor 树里作 diff 锚（把它加进 `EXCLUDED_UPSTREAM_DIRS` 会让 C1 失去上游对照）；
 6. 桌面侧与**插件管理页的客户端投影**：`packages/desktop/main.ts:2325-2334` 的
@@ -477,23 +477,22 @@ chevron，不因只有一个 app 少画 chevron）。
 | 网关派生白名单 | `test:gateway`（feature-lifecycle / chamber-installed / runtime-routes） | **网关侧**的 `/chamber/plugins` 投影与 PUT 名单由注册表派生 ⇒ 该 localOnly 行自动出现（只要只有桌面在上传，该行 `version` 恒 null；这是 API 投影，插件页不在非本地目标列出它——桌面侧的上传**源清单**是另一回事，见 §6.2 第 6 条）；gateway load 断言的域集 == `HOST_DOMAIN_PROBE_NAMES`（本机实测：该断言在 shim 解析到旧 runtime 时当场抛错，正是它应有的行为） |
 | 注册表锁步 | `test/plugin-inventory/chamber-seed-drift.test.ts`（connections 包） | 客户端名字镜像 == `CHAMBER_HOST_PACKAGES` 行集，且每个注册表包必须被 `classifyInventoryEntry` 归为 chamber 行（2026-12：非本地目标不再列 localOnly 行后，第三方区对该行只余分类这一道网，故把分类也钉进同一门） |
 | 文案 | `pnpm run verify:i18n` | 新文案 zh/en 双份与记录一致 |
-| 触点门 | `verify-upstream-touchpoints.mjs` | C7（四域锁步）+ C8（含新 seed dist，重建-比对 6 组）+ C9（vendor 补丁集不变：open-in 不新增补丁）+ 新 fork 的 C1/C3/C5（`FORKS` 行 + `versionAnchor: 'chamber'` 豁免，见 §10） |
+| 触点门 | `verify-upstream-touchpoints.mjs` | C7（四域锁步）+ C8（含新 seed dist，重建-比对 6 组）+ C9（vendor 补丁集不变：open-in 不新增补丁）+ 新 fork 的 C1/C3/C5（registry 的 `seed.*` 条目 + `versionAnchor: 'chamber'` 豁免，见 §10） |
 
 ## 10. 已知边界与实机验收
 
 - **fork 的保鲜（机器门，不是人工 diff）**：新包已登记进
-  `scripts/upstream/verify-upstream-touchpoints.mjs` 的 `FORKS` 表
-  （`name: 'seed-open-in'`、`upstream: 'packages/host/open-in-app'`，与
-  `docs/checklists/upstream-touchpoints.md` §4 同源），从而获得三层保护：
+  `scripts/upstream/registry.json`（`seed.dsh-chamber-seed-open-in`，verifier 启动即读它；分类表
+  生成进 `docs/checklists/upstream-touchpoints.md` §2.5），从而获得三层保护：
   **C1** = 未登记差异即硬失败（上游漂移后我们的副本"不一致且未登记补丁"，门直接红）、
   **C3** = 每个上游文件必须有 pure/patched/own/dropped 裁决（上游新增文件漏裁决即红）、
   **C2** = tag 重放差异报告自动纳入本 fork 面（advisory）。
   **版本锚已豁免**：C5 的规则是 `fork/package.json.version == 上游同文件版本`——三个既有 copy 包
   正是这样携带上游版本（实测 0.1.5-rc.2），而 seed 包随 chamber 发版 bump（实测 0.2.4，
-  与 `dsh-runtime`/其他 seed 一致）。`FORKS` 每条登记现有
+  与 `dsh-runtime`/其他 seed 一致）。registry 每条登记现有
   `versionAnchor: 'upstream' | 'chamber'`（既有三条 = upstream，本 fork = chamber），
   C5 只对 `upstream` 做相等比较；脚本头注、C5 的日志文案与触点表 §4 已同步改写。
-  落地实测（本机跑门）：`✓ [seed-open-in] C1/C3: pure=3 patched=4 own=8 dropped=6`、
+  落地实测（本机跑门）：`✓ [seed-open-in] C1/C3: pure=3 patched=4 own=9 dropped=6`、
   `✓ C7 … openInApp/probe`、`✓ C8 提交态生成物与 src 一致（6 组）`。
   （被否决的替代：把 fork 做成携带上游版本的第四个 copy 包 + 一个 seed 包装包——那要求把
   `packages/host/open-in-app` 从 vendor 树排除（破坏 C1 锚），并新增"seed 引 copy 包源码"的

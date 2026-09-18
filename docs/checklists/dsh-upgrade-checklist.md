@@ -21,6 +21,8 @@
        一次给出「fork pure/replay/dropped + 深引 vendor seam 文件 + 上游包集合增删 +
        新增 client 行 + 运行时 npm 状态」；`--fail-on-replay` 可当硬门（fork 面需人工重放时
        先评估规模，再决定升级窗口）。
+- [ ] registry 现状照面：`node scripts/upstream/verify-registry.mjs`（schema/canonical/引用/网/生成块）
+      + `node scripts/upstream/check-anchors.mjs --report`（符号锚漂移与遗留锚预算基线；都不红）。
 - [ ] 用只读门禁先照一次现状：`node scripts/upstream/verify-upstream-touchpoints.mjs --no-artifact-rebuild`
       ——记住 C11–C14（插件受保护集合：F 族集合 / profile 契约锚 / 播种注册表 / manifest
       三方镜像）的**绿是升级后必须仍然绿**的那几条；升级后它们若变红，按 §6 的处置口径
@@ -141,11 +143,17 @@
       运行时的检出应打印 SKIP——冒烟门槛按 dsh CLI 入口存在性判定，仅有 lockfile
       的 `packages/desktop/vendor/dsh` 不算已安装）。
 - [ ] 触点与锚门禁：`node scripts/upstream/verify-upstream-touchpoints.mjs` 全绿
-      （C1/C3–C15；`--no-artifact-rebuild` 可跳过产物重建）。
+      （C1/C3–C15；`--no-artifact-rebuild` 可跳过产物重建；本地 `pnpm run check:static` 也跑
+      advisory 形态）。
       C11–C14 是**插件受保护集合**的保鲜门（F 族集合 / profile 契约锚 / 播种注册表 /
       manifest 三方镜像，见同目录 `upstream-touchpoints.md` §6 与 design 21 §6.11）：
       任一门变红时**不要**顺手改判据放行——先判定是上游漂移还是派生写错，再改派生
       （B₀ 快照、F 来源、S 注册表或 wire 镜像）。
+- [ ] registry 单一来源与生成视图：`node scripts/upstream/verify-registry.mjs` 全绿；改了
+      `scripts/upstream/registry.json` 后必须 `node scripts/upstream/registry-views.mjs --write`
+      重生成 `upstream-touchpoints.md` §2/§9 的 GENERATED 块（手改生成块 = 红）。
+- [ ] 锚点预算棘轮：`node scripts/upstream/check-anchors.mjs` 绿（registry 符号锚可解析；
+      遗留 `文件:行` 锚 ≤ `anchors-budget.json`，只降不升）；本轮迁移后 `--update-budget` 调低。
 - [ ] 残留扫描：`grep -rn "<上一版 pin 的版本字面量>\|<上一版 commit 短哈希>" packages/ scripts/ harness.commit`
       （非 vendor/node_modules/产物）仅剩注释里的历史叙述——生产源码/脚本/配置里的
       「活」版本字面量必须登记在 C10 白名单。
@@ -158,8 +166,8 @@
 - [ ] `CHANGELOG.md` + `docs/CHANGELOG.en-US.md` 的发布节补迁移条目
       （如「dsh 基线升级 … + 代理限额变化」），并 `node scripts/gates/verify-i18n.mjs --write`
       刷新 i18n 记录。
-- [ ] 触点表刷新：`docs/checklists/upstream-touchpoints.md` 受影响的**结构登记行**
-      （与 `scripts/upstream/verify-upstream-touchpoints.mjs` 内的登记表两侧同步）；**版本值不写进
+- [ ] 触点结构刷新：改 `scripts/upstream/registry.json` → `registry-views.mjs --write` 重生成
+      `upstream-touchpoints.md` §2/§9 的生成块 → `verify-registry.mjs` 绿（生成块禁手改）；**版本值不写进
       checklist**——逐 tag 的升级叙述写 `CHANGELOG.md` 发布节，仍 open 的偏差写 `STATUS.md`。
 - [ ] 引用基线版本的文档（design 09/11、README、DEVELOPMENT、本目录 checklist）中的
       版本号更新（历史叙述保留）。

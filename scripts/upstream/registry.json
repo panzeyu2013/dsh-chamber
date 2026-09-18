@@ -1,0 +1,270 @@
+{
+  "schema": 1,
+  "pins": {
+    "sourceLine": "harness.commit",
+    "runtimeLine": "packages/desktop/vendor/dsh/pnpm-lock.yaml",
+    "forkAnchors": [
+      "packages/*/package.json"
+    ]
+  },
+  "authorityEnum": [
+    "chamber",
+    "upstream"
+  ],
+  "chamberNamedForks": [
+    "packages/dsh-chamber-seed-open-in"
+  ],
+  "excludedUpstreamDirs": [
+    "packages/api/gateway",
+    "packages/client/connection",
+    "packages/client/web"
+  ],
+  "criteriaCodeOnly": [
+    "C10",
+    "C11",
+    "C12",
+    "C13",
+    "C14",
+    "C15",
+    "C4",
+    "C7",
+    "C8",
+    "C9"
+  ],
+  "generatedBlocks": [
+    "touchpoints.fork-mirror.api-gateway",
+    "touchpoints.fork-mirror.client-web",
+    "touchpoints.fork-mirror.connection",
+    "touchpoints.fork-mirror.seed-open-in",
+    "touchpoints.index"
+  ],
+  "entries": [
+    {
+      "id": "fork.dsh-client-connection",
+      "type": "fork",
+      "name": "connection",
+      "ours": "packages/dsh-client-connection",
+      "upstream": "packages/client/connection",
+      "versionAnchor": "upstream",
+      "classify": {
+        "patched": {
+          "package.json": "[patch-add] 仅追加 chamber test 脚本（其余与上游一致；版本行随上游推进）",
+          "src/api-path.ts": "[patch-mod] 追加 resolveInstanceBasePath + 头部 chamber 说明（basePath 语义，design 05 §6）",
+          "src/client/connection.ts": "[patch-mod] 仅 erasableSyntaxOnly 显式字段改写（两个构造参数属性）+ 顶部 chamber 说明；其余逐字节上游（Batch 2 重锚：loopEpoch 守卫与 CONNECTION_BACKOFF_MAX_MS 导出退役，改由原生 reconnect/setNetworkAvailable）",
+          "src/client/index.ts": "[patch-mod] apply(ctx) 读 ctx.chamberBasePath → 载波装配（design 05 §6）+ SYSTEM_RESUME_EVENT/liveness 触发（design 14 D4）+ recovery-policy 转出（/client barrel）+ 头部 chamber 说明",
+          "src/client/rpc.ts": "[patch-mod] basePath 前缀拼装 + WebConnectionRpcOptions（chamber 选项对象）+ 头部 chamber 说明",
+          "tsconfig.client.json": "[patch-mod] chamber 构面：extends ../../tsconfig.json + vendor paths + files 列表（与上游 files 增量同步维护）",
+          "tsconfig.host.json": "[patch-mod] 同上（host 构面）"
+        },
+        "own": {
+          "scripts/test.mjs": "chamber 自有测试清单（按域分组的显式 manifest；verify:test-wiring 校验可达性）",
+          "tsconfig.check-base.json": "chamber erasable-only 校验构面",
+          "tsconfig.check-client.json": "chamber erasable-only 校验构面（files 与 client 同步）",
+          "tsconfig.check-host.json": "chamber erasable-only 校验构面（files 与 host 同步）"
+        },
+        "ownPrefix": [
+          "src/client/carrier-assembly.ts",
+          "src/client/liveness-triggers.ts",
+          "src/client/recovery-policy.ts",
+          "test/"
+        ],
+        "ownNotes": {
+          "src/client/carrier-assembly.ts": "chamber 载波装配纯策略（basePath 扇出）",
+          "src/client/liveness-triggers.ts": "chamber sleep/wake 活性触发（design 14；原生 reconnect + 离线门 + 唤醒事件旁路）",
+          "src/client/recovery-policy.ts": "chamber 每来源恢复时序策略（远端 45s/5s，本地保持上游默认）",
+          "test/": "chamber 自有测试（api-path/carrier-assembly/liveness-triggers/client-apply + fixtures（含 schemastery/fixture/recovery-config 桩 loader））"
+        },
+        "dropped": [
+          "tests/",
+          "tsdown.config.ts"
+        ],
+        "droppedNotes": {
+          "tests/": "chamber 无 tsdown / 不镜像上游测试",
+          "tsdown.config.ts": "chamber 无 tsdown / 不镜像上游测试"
+        }
+      },
+      "authority": "upstream",
+      "criteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C5",
+        "C6"
+      ],
+      "deviations": [],
+      "relatedGates": [],
+      "symbols": [
+        "src/api-path.ts#resolveInstanceBasePath"
+      ],
+      "evidence": "node scripts/upstream/verify-upstream-touchpoints.mjs",
+      "status": "aligned"
+    },
+    {
+      "id": "fork.dsh-client-web",
+      "type": "fork",
+      "name": "client-web",
+      "ours": "packages/dsh-client-web",
+      "upstream": "packages/client/web",
+      "versionAnchor": "upstream",
+      "classify": {
+        "patched": {
+          "README.i18n.yaml": "[own-divergent] chamber README 对的哈希记录",
+          "README.md": "[own-divergent] chamber 说明（boot kernel 差异/维护约定），非上游镜像",
+          "README.zh.md": "[own-divergent] 同 README.md（中文镜像）",
+          "package.json": "[patch-mod] 描述/测试脚本/deps·peerDeps·files 面差异（版本行随上游推进）",
+          "src/boot.ts": "[patch-mod] N-ctx boot kernel（extraRows / __ModuleLoader__ / configureContext / 异步 dispose）",
+          "src/index.ts": "[patch-mod] 入口差异（module-system 宿主接线）",
+          "src/platform.ts": "[patch-mod] PLATFORM_MODULES/静态表 chamber 接线（C3 偏差：ui-primitives 不 seed）",
+          "src/seed.ts": "[patch-mod] seed 行 chamber 接线（extraRows/__ModuleLoader__；C3 偏差同步）",
+          "tsconfig.json": "[patch-mod] chamber 构面（vendor paths/检查面）"
+        },
+        "own": {
+          "src/boot-rows.ts": "chamber 每实例 boot-rows（design 09 module D）",
+          "src/boot-tolerance.ts": "chamber boot 容忍/恢复（design 09）"
+        },
+        "ownPrefix": [
+          "test/"
+        ],
+        "ownNotes": {
+          "test/": "chamber 自有测试（boot-tolerance/boot-rows/configure-context + fixtures）"
+        },
+        "dropped": [
+          "tests/",
+          "tsdown.config.ts"
+        ],
+        "droppedNotes": {}
+      },
+      "authority": "upstream",
+      "criteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C5",
+        "C6"
+      ],
+      "deviations": [],
+      "relatedGates": [],
+      "symbols": [
+        "src/boot.ts#AppWebEntry"
+      ],
+      "evidence": "node scripts/upstream/verify-upstream-touchpoints.mjs",
+      "status": "aligned"
+    },
+    {
+      "id": "fork.dsh-api-gateway",
+      "type": "fork",
+      "name": "api-gateway",
+      "ours": "packages/dsh-api-gateway",
+      "upstream": "packages/api/gateway",
+      "versionAnchor": "upstream",
+      "classify": {
+        "patched": {
+          "package.json": "[patch-mod] description/peer 集裁剪（host 依赖 dropped）+ 版本行随上游推进",
+          "src/client/index.ts": "[patch-mod] apply(ctx) 读 ctx.chamberBasePath → /api/remote.mux 落到实例前缀 + start(sinks, recoveryOverridesForTransport(transport))（design 05 §6）",
+          "src/client/stream-client.ts": "[patch-mod] per-entry basePath（流载波 URL 拼装）",
+          "tsconfig.client.json": "[patch-mod] chamber client 构面",
+          "tsconfig.json": "[patch-mod] chamber 构面"
+        },
+        "own": {
+          "tsconfig.check-base.json": "chamber erasable-only 校验构面",
+          "tsconfig.check-client.json": "chamber erasable-only 校验构面"
+        },
+        "ownPrefix": [
+          "test/"
+        ],
+        "ownNotes": {
+          "test/": "chamber 自有测试（若有）"
+        },
+        "dropped": [
+          "README.i18n.yaml",
+          "README.md",
+          "README.zh.md",
+          "src/index.ts",
+          "src/stream-server.ts",
+          "src/types.ts",
+          "tests/",
+          "tsconfig.host.json",
+          "tsdown.config.ts"
+        ],
+        "droppedNotes": {
+          "README*": "上游 README 不携带（fork 描述在 package.json）",
+          "src/index.ts": "上游 host 插件入口（chamber 不镜像 host 半）",
+          "src/stream-server.ts": "上游 host 半流服务器（dropped）",
+          "src/types.ts": "上游 host/aux 类型文件（exports 保留 inert ./types 子路径）",
+          "tsconfig.host.json": "host 构面不镜像"
+        }
+      },
+      "authority": "upstream",
+      "criteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C5",
+        "C6"
+      ],
+      "deviations": [],
+      "relatedGates": [],
+      "symbols": [
+        "src/client/stream-client.ts#RemoteStreamMuxClient"
+      ],
+      "evidence": "node scripts/upstream/verify-upstream-touchpoints.mjs",
+      "status": "aligned"
+    },
+    {
+      "id": "seed.dsh-chamber-seed-open-in",
+      "type": "seed",
+      "name": "seed-open-in",
+      "ours": "packages/dsh-chamber-seed-open-in",
+      "upstream": "packages/host/open-in-app",
+      "versionAnchor": "chamber",
+      "classify": {
+        "patched": {
+          "package.json": "[patch-mod] chamber seed package（自有名字/版本/构建入口；upstream 名与发布面不复制）",
+          "src/index.ts": "[patch-mod] typert 门面取代 webServer 路由 + Config schema + SSH 休眠门（design 20 §6.1）",
+          "src/shared.ts": "[patch-mod] wire 契约家：上游三条 webServer 路由常量 → typert Remote 方法名 + 域载体（design 20 §4.1/§6.1）",
+          "tsconfig.json": "[patch-mod] chamber 构面（vendor paths + 本包 files）"
+        },
+        "own": {
+          "dist/index.js": "chamber 提交态产物（C8 逐字节重建-比对；上游无对应文件）",
+          "scripts/build.mjs": "chamber esbuild 产物构建",
+          "src/core.ts": "chamber 域核心：上游 apply() 的目录/图标/拉起状态机（去掉路由与 SSH 门）"
+        },
+        "ownPrefix": [
+          "test/"
+        ],
+        "ownNotes": {
+          "test/": "chamber 自有测试（域契约 + 载荷拒绝矩阵 + vendor stub loader）"
+        },
+        "dropped": [
+          "README.i18n.yaml",
+          "README.md",
+          "README.zh.md",
+          "src/internals.ts",
+          "tests/",
+          "tsdown.config.ts"
+        ],
+        "droppedNotes": {
+          "README*": "上游 README 不携带（fork 描述在 package.json/源码首页）",
+          "src/internals.ts": "上游测试接缝（本包的接缝走 OpenInAppCore 构造注入，不需要它）",
+          "tests/": "上游测试不镜像（本包 test/ 覆盖域契约）",
+          "tsdown.config.ts": "上游打包配置（本包走 scripts/build.mjs）"
+        }
+      },
+      "authority": "upstream",
+      "criteria": [
+        "C1",
+        "C2",
+        "C3",
+        "C5"
+      ],
+      "deviations": [],
+      "relatedGates": [],
+      "symbols": [
+        "src/core.ts#OpenInAppError"
+      ],
+      "evidence": "node scripts/upstream/verify-upstream-touchpoints.mjs",
+      "status": "aligned"
+    }
+  ],
+  "notes": "machine facts only; prose lives in docs/checklists/upstream-touchpoints.md"
+}
