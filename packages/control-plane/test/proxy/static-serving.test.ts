@@ -239,30 +239,42 @@ test('static: /assets/* immutable cache policy; index.html no-cache; manifest.js
     // （"style-src 'none'; … style-src 'self' 'unsafe-inline'" —— CSP3 首次生效）或
     // "style-src 'none'; style-src-attr 'unsafe-inline'" 都能让注入的 <style> 被挡，
     // 而四条子串断言全绿。
-    const effectiveDirectives = (header: string): Map<string, string> => {
-      const map = new Map<string, string>()
-      for (const part of header.split(';')) {
-        const [rawName, ...values] = part.trim().split(/\s+/)
-        const name = (rawName ?? '').toLowerCase()
-        if (name !== '' && !map.has(name)) map.set(name, values.join(' '))
+    // 逗号分隔的每个 policy 都**同时生效**（CSP3 合取），同一 policy 内重复指令首次生效：
+    // 因此要收集**所有**生效的 style-src，任何一个缺 unsafe-inline 就算失败
+    // （2026-12 二轮独立复核：只解析第一条 policy 会被 "…, style-src 'none'" 绕过）。
+    const effectiveStyleSrcs = (header: string): string[] => {
+      const values: string[] = []
+      for (const policy of header.split(',')) {
+        const seen = new Set<string>()
+        for (const part of policy.split(';')) {
+          const [rawName, ...rest] = part.trim().split(/\s+/)
+          const name = (rawName ?? '').toLowerCase()
+          if (name === '' || seen.has(name)) continue
+          seen.add(name)
+          if (name === 'style-src') values.push(rest.join(' '))
+          if (name === 'style-src-elem' || name === 'style-src-attr') values.push('[overrides style-src]')
+        }
       }
-      return map
+      return values
     }
     // 解析器自证（否则这组断言只是换写法的子串匹配）。
-    assert.equal(
-      effectiveDirectives("default-src 'self'; style-src 'none'; style-src 'self' 'unsafe-inline'").get('style-src'),
-      "'none'",
-      '重复指令必须按首次生效解析（值保留引号，见 CSP 字面量）',
+    assert.deepEqual(
+      effectiveStyleSrcs("style-src 'none'; style-src 'self' 'unsafe-inline'"),
+      ["'none'"],
+      '同一 policy 内重复指令按首次生效解析（值保留引号）',
     )
-    const hostileAttr = effectiveDirectives("style-src 'none'; style-src-attr 'unsafe-inline'")
-    assert.equal(hostileAttr.get('style-src'), "'none'")
-    assert.ok(hostileAttr.has('style-src-attr'))
-    const directives = effectiveDirectives(html.headers['content-security-policy'] ?? '')
-    const styleSrc = directives.get('style-src') ?? ''
-    assert.match(styleSrc, /'unsafe-inline'/, '生效的 style-src 必须保留 unsafe-inline（S-50 注入的样式无 nonce）')
-    assert.doesNotMatch(styleSrc, /'nonce-/, "生效的 style-src 不得带 nonce（CSP3 下会忽略 unsafe-inline）")
-    assert.doesNotMatch(styleSrc, /'sha(256|384|512)-/)
-    assert.equal(directives.has('style-src-elem'), false, 'style-src-elem 会覆盖 style-src，使注入样式被挡')
+    assert.deepEqual(effectiveStyleSrcs("style-src 'none'; style-src-attr 'unsafe-inline'"),
+      ["'none'", '[overrides style-src]'])
+    assert.deepEqual(effectiveStyleSrcs("style-src 'self' 'unsafe-inline', style-src 'none'"),
+      ["'self' 'unsafe-inline'", "'none'"],
+      '逗号分隔的第二个 policy 也必须被看到')
+    const styleSrcs = effectiveStyleSrcs(html.headers['content-security-policy'] ?? '')
+    assert.ok(styleSrcs.length > 0, '响应头必须至少有一条生效的 style-src')
+    for (const styleSrc of styleSrcs) {
+      assert.match(styleSrc, /'unsafe-inline'/, '每条生效的 style-src 都必须保留 unsafe-inline（S-50 注入的样式无 nonce）')
+      assert.doesNotMatch(styleSrc, /'nonce-/, "生效的 style-src 不得带 nonce（CSP3 下会忽略 unsafe-inline）")
+      assert.doesNotMatch(styleSrc, /'sha(256|384|512)-/)
+    }
     assert.equal(html.headers['cross-origin-opener-policy'], 'same-origin')
     // same-origin (not no-referrer): no-referrer makes modern browsers send
     // Origin: null on same-origin form POSTs, which the origin fences reject

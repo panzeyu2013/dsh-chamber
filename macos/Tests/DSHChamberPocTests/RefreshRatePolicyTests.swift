@@ -155,12 +155,9 @@ final class RefreshRatePolicyTests: XCTestCase {
     /// 硬时序不变量：关偏好必须发生在构造 WKWebView 之前（建页后再改实测不生效）。
     /// 顺序被挪动时这里变红——注释不会响，这个断言会。
     func testRefreshRatePreferenceIsAppliedBeforeWebViewCreation() throws {
-        // 去掉注释行再断言（2026-12 独立复核发现）：被注释掉的 apply 调用会让
-        // 「出现 + 顺序」两条断言在策略实际被停用时仍然全绿。
-        let controller = try source("Sources/DSHChamberPoc/MainWindowController.swift")
-            .split(separator: "\n")
-            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
-            .joined(separator: "\n")
+        // 去注释（// 与 /* */）再断言：被注释掉的 apply 调用会让「出现 + 顺序」两条断言
+        // 在策略实际被停用时仍然全绿（2026-12 一轮/二轮独立复核）。
+        let controller = strippingComments(try source("Sources/DSHChamberPoc/MainWindowController.swift"))
         let applyIndex = try XCTUnwrap(
             controller.range(of: "RefreshRatePolicy.apply(to: configuration.preferences)")?.lowerBound,
             "MainWindowController 必须调用 RefreshRatePolicy.apply(to: configuration.preferences)")
@@ -174,6 +171,13 @@ final class RefreshRatePolicyTests: XCTestCase {
         // 只有一处 apply：多处时上面的"首个匹配"顺序断言会漏掉后来者。
         XCTAssertEqual(controller.components(separatedBy: "RefreshRatePolicy.apply(to:").count, 2,
                        "只应存在一处 RefreshRatePolicy.apply(to:) 调用点")
+        // **语句级**位置：被 if false 包住的同一行调用或块注释包裹的调用不得满足本锁
+        // （2026-12 二轮独立复核；跨行的 if false 块仍是源码锁的已知盲区，真正的运行时
+        // 证据是 POC_DEBUG 的 [native-fps] A/B 与 S-48 实机验收）。
+        let statement = "refreshRatePreference = RefreshRatePolicy.apply(to: configuration.preferences)"
+        XCTAssertTrue(controller.split(separator: "\n").contains {
+            $0.trimmingCharacters(in: .whitespaces).hasPrefix(statement)
+        }, "apply 必须是语句级调用，不能包在条件块/注释里")
     }
 
     /// S-48 打包面锁步：C support target 必须保持静态——一旦声明 type: .dynamic，可执行会多出
@@ -190,6 +194,37 @@ final class RefreshRatePolicyTests: XCTestCase {
         XCTAssertFalse(code.contains("type: .dynamic"),
                        "本包不应有 dynamic target——DSHChamberWebKitSupport 必须静态链入；"
                        + "若将来确实需要 dynamic，请把本断言收紧到该 target 的声明块并说明装配改动")
+    }
+
+    /// 去注释源码：整行 `//` 注释、单行 `/* … */`、跨行块注释（状态化）。装配锁只认
+    /// **代码**，注释里的同名调用串不得满足断言（2026-12 一轮/二轮独立复核）。
+    ///
+    /// 刻意**不**做行内 `//` 截断：本仓库的注释里出现过 `/api/i/*`、`http://…` 这类
+    /// 片段，行内截断会先命中它们而吞掉其后整块代码（二轮修复时实测把两个锁都弄红）。
+    private func strippingComments(_ source: String) -> String {
+        var out: [String] = []
+        var inBlock = false
+        for rawLine in source.split(separator: "\n", omittingEmptySubsequences: false) {
+            var line = String(rawLine)
+            if inBlock {
+                guard let end = line.range(of: "*/") else { out.append(""); continue }
+                line = String(line[end.upperBound...])
+                inBlock = false
+            } else if line.trimmingCharacters(in: .whitespaces).hasPrefix("//") {
+                out.append("")
+                continue
+            }
+            while let start = line.range(of: "/*") {
+                guard let end = line.range(of: "*/", range: start.upperBound..<line.endIndex) else {
+                    line = String(line[line.startIndex..<start.lowerBound])
+                    inBlock = true
+                    break
+                }
+                line.replaceSubrange(start.lowerBound..<end.upperBound, with: " ")
+            }
+            out.append(line)
+        }
+        return out.joined(separator: "\n")
     }
 
     private func source(_ relative: String) throws -> String {

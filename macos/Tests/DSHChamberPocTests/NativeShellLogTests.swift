@@ -208,6 +208,23 @@ final class NativeShellLogTests: XCTestCase {
         XCTAssertLessThan(size, 512, "降级后的文件不得涨到 ~2× 上限")
     }
 
+    /// 2026-12 二轮独立复核：打开时的轮转失败必须降级，**绝不**继续打开那个超限文件
+    /// （否则"已降级"的 sink 又被接上，append 路径之外还有一条写入口）。
+    func testOpenTimeRotationFailureDegradesInsteadOfOpeningTheOversizedFile() throws {
+        let directory = tempDir.appendingPathComponent(NativeShellLog.directoryName)
+        let url = directory.appendingPathComponent(NativeShellLog.fileName)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try Data(repeating: 0x61, count: 512).write(to: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: directory.path)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        }
+        let log = NativeShellLog(fileURL: url, maxBytes: 256)
+        XCTAssertFalse(log.isActive, "打开时轮转失败必须降级")
+        XCTAssertNil(log.filePath, "降级后不暴露文件路径")
+        log.append("must-not-grow")
+    }
+
     func testOpenFailureDegradesSilently() throws {
         // logs 路径被一个普通文件占住 → createDirectory 失败 → 只打印。
         let blocker = tempDir.appendingPathComponent(NativeShellLog.directoryName)

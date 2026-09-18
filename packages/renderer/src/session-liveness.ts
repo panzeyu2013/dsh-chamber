@@ -93,6 +93,11 @@ export interface SessionLivenessSourceInput {
    * ——被丢弃的派遣已经在守卫里记账（`lastReconnectDispatchAt` 置位、等待计时清零），
    * 会让这条臂静默整个退避窗且 L1 一并停摆，同时 no-op 账不增长（2026-12 独立
    * 复核抓出的记账缺口）。账本事实由 App 提供（它拥有 S2/fallback 两条臂的写入）。
+   *
+   * 边界（二轮复核记录为已知形态）：另一条臂**每 ≤60s 都在重连**时，这条臂始终不允许
+   * 派遣，L3 的 no-op 出口也不会增长——此时"自愈动作"由那条臂持续执行，本臂只保留 L1
+   * 只读对账。不把它计成假 L3：用户看到的应该是那条臂的失败面，而不是一条"我重连过但
+   * 没用"的重复横幅。
    */
   readonly reconnectBlocked?: boolean
 }
@@ -204,17 +209,20 @@ export interface SessionLivenessRecord {
    */
   awaitingOutcomeSince?: number
   /**
-   * 本等待周期是否已用一次 `unknown` 顺延过升级期限（一次性，绝不累积）。
+   * 第一次 `unknown` 被吸收的时刻（一次性，绝不累积）。
    *
-   * 生产常量下 `refreshOutcomeTimeoutMs`(150s) < `refreshCoalesceMs`(200s)：探针
-   * 一次无结论（502/代理重启/慢 session.list）若不顺延，期限必然抢在下一次 L1
-   * 之前到点，把「探针无法裁决」误判成「对账通道已坏」⇒ 必然一次假 L2 并吃掉
-   * 该 running 时段唯一的重连预算，之后真故障只剩横幅（2026-12 独立复核的时间线
-   * 仿真实测）。顺延只做一次：长期只有 unknown 的通道仍会在下一个期限到点时升级
-   * （有界：≤ 最近一次 L1 + 期限，绝不无限顺延）。拿到非 unknown 结论或真实 L2
-   * 之后清零。
+   * 生产常量下 `refreshOutcomeTimeoutMs`(150s) < `refreshCoalesceMs`(200s)：探针一次
+   * 无结论（502/代理重启/慢 session.list）若还让原期限生效，期限会比下一次 L1 先到点，
+   * 把「探针无法裁决」误判成「对账通道已坏」⇒ 一次假 L2 并吃掉该 running 时段唯一的
+   * 重连预算（2026-12 独立复核的时间线仿真）。因此门控是：**吸收过 unknown 之后，必须
+   * 再发过一次 L1（`lastRefreshRequestedAt > unknownAbsorbedAt`）才允许按期限升级**
+   * ——快 unknown（L1 后 1s 就结算）与慢 unknown 同判，绝不抢在下一次 L1 前面；单靠
+   * "从 unknown 时刻顺延"对快 unknown 无效（期限仍在下一次 L1 之前到点，二轮复核）。
+   * 顺延只做一次：之后仍长期无权威结论，由「unknown 之后那次 L1 + 期限」收口（有界：
+   * ≤ coalesce + 期限，配额耗尽时由滚动窗口的下一个 L1 兜底）。拿到非 unknown 结论或
+   * 真实 L2 之后清零。
    */
-  unknownAbsorbed?: boolean
+  unknownAbsorbedAt?: number
   /** 已消费的对账回执结算时刻（回执只被消费一次）。 */
   outcomeSeenAt?: number
   /** 已消费回执的成功与否。 */
@@ -344,17 +352,15 @@ export function planSessionLiveness(
       && (record.outcomeSeenAt === undefined || reconcile.settledAt > record.outcomeSeenAt)) {
       record.outcomeSeenAt = reconcile.settledAt
       if (reconcile.verdict === 'unknown') {
-        // 无结论：只推进水位、**一次性**把期限从这次无结论起重新起算（第二次
-        // unknown 不再顺延）。不清等待计时：持续拿不到权威结论仍会在超期后升级。
-        if (record.unknownAbsorbed !== true) {
-          record.unknownAbsorbed = true
-          record.awaitingOutcomeSince = now
-        }
+        // 无结论：只推进水位，并记下**第一次**被吸收的时刻（第二次起不再吸收）。
+        // 刻意不动 awaitingOutcomeSince——期限是否生效由 unknownAbsorbedAt 的门控决定
+        // （必须等到"吸收之后又发过一次 L1"）。
+        record.unknownAbsorbedAt ??= now
       } else {
         record.lastOutcomeOk = reconcile.ok
         record.awaitingOutcomeSince = undefined
-        // 等待周期结束：下一次 unknown 可以重新顺延一次。
-        record.unknownAbsorbed = undefined
+        // 等待周期结束：下一次 unknown 可以重新吸收一次。
+        record.unknownAbsorbedAt = undefined
         // 拿到健康结论 ⇒ 通道已恢复，撤下 L3 提示（否则一次恢复会把横幅永久
         // latch 到 running 结束，之后真断链也不再提示——2026-12 复核修复）。
         // 刻意**不**重置 ladderAnchorAt：梯子已到顶（自愈预算用尽）之后再次出现未收敛
@@ -370,8 +376,15 @@ export function planSessionLiveness(
     // 那一 tick 不再发 L1（重连会自己重放 baseline，再读一次没有意义）。
     // 计数**不在这里**自增：App 拿到 reconnectInstanceConnection 的真实返回值
     // 后才经 markSessionLivenessReconnect 记账（no-op 不得消耗唯一预算）。
+    // 被吸收的 unknown 之后**还没发过 L1** ⇒ 期限一律不生效：这是快 unknown（L1 后
+    // 一个 tick 内结算）也会假 L2 的根因（二轮独立复核的时间线仿真）；慢 unknown 由
+    // 这条一并覆盖，且不会无限推迟——下一次 L1 一到就重新起算期限。
+    const unknownAwaitingNextL1 = record.unknownAbsorbedAt !== undefined
+      && (record.lastRefreshRequestedAt === undefined
+        || record.lastRefreshRequestedAt <= record.unknownAbsorbedAt)
     const outcomeMissing = record.awaitingOutcomeSince !== undefined
       && now - record.awaitingOutcomeSince > config.refreshOutcomeTimeoutMs
+      && !unknownAwaitingNextL1
     // 「失败证据」必须是**本时段内、最近一次真实重连之后**的结论：重连前的 sticky
     // 失败若继续记账，会在重连后 +noticeAfterMs 先亮一条 30s 的假横幅（慢而最终
     // 健康的回执随后才到并撤下；2026-12 三轮复核的 flash 复现）。静默链仍由
@@ -395,7 +408,7 @@ export function planSessionLiveness(
       // 的仿真），而这份配额的意义正是「连重连都不能变成探测风暴」。
       record.lastRefreshRequestedAt = undefined
       record.awaitingOutcomeSince = undefined
-      record.unknownAbsorbed = undefined
+      record.unknownAbsorbedAt = undefined
       // 刻意**不**清 lastOutcomeOk：它是「最后一次权威结论」，正是重连之后
       // L3 门（要求未收敛证据）与 noticeAfterMs 宽限所依赖的事实；抹掉它会让
       // 守卫在重连后立刻失忆（提示永远不亮或立刻亮），也是 2026-12 二轮复核
@@ -417,7 +430,7 @@ export function planSessionLiveness(
         // 新的完整期限，否则顺延出的窗口会被慢宿主的对账链吃光（顺延本身只做一次，
         // 所以不会累积成"永不升级"）。
         if (record.awaitingOutcomeSince === undefined) record.awaitingOutcomeSince = now
-        else if (record.unknownAbsorbed === true) record.awaitingOutcomeSince = now
+        else if (record.unknownAbsorbedAt !== undefined) record.awaitingOutcomeSince = now
         actions.push({ kind: 'refresh', sourceId })
       } else {
         record.refreshHistory = history

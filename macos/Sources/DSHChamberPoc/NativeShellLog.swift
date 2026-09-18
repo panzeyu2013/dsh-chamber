@@ -187,10 +187,13 @@ public final class NativeShellLog {
         if (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) != nil {
             return
         }
-        // 打开前先轮转已超限的旧文件（不能一边追加一边超限）。
+        // 打开前先轮转已超限的旧文件（不能一边追加一边超限）。rotateLocked() 成功时
+        // 自己会重开新文件；**失败时它已降级**（句柄关掉）——此时必须直接返回，否则会
+        // 继续打开那个超限文件，把"已降级"的 sink 又接上（2026-12 二轮独立复核）。
         if let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
            let size = attributes[.size] as? NSNumber, size.intValue >= maxBytes {
             rotateLocked()
+            return
         }
         if !FileManager.default.fileExists(atPath: url.path) {
             FileManager.default.createFile(
@@ -221,8 +224,9 @@ public final class NativeShellLog {
         try? FileManager.default.removeItem(at: rotated)
         guard (try? FileManager.default.moveItem(at: url, to: rotated)) != nil else {
             // 轮转失败（.1 被占/权限/目录只读）：与 TS sink 同纪律——**降级为只写
-            // stderr**（句柄已关，append 变 no-op），而不是把水位归零。归零会让文件
-            // 在阻塞期间涨到 ~2× 上限，且每次写入都重试一次轮转（2026-12 独立复核）。
+            // stderr**（句柄在这里关掉，append 变成 no-op）。关键是"关句柄"这一步：
+            // 少了它就会继续往这个超限文件里追加（涨到 ~2× 上限，且每次写入都重试一次
+            // 轮转）。writtenBytes 归零只是不再需要的水位（2026-12 二轮独立复核）。
             writtenBytes = 0
             return
         }

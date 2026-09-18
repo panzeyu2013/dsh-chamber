@@ -63,6 +63,11 @@ test('App：守卫在既有 staleness watchdog 内规划，并把三级动作派
   // 守卫读的是**原始** runtimeFacts（投影 mergeRuntimeFacts 刻意丢掉回执）。
   assert.match(code, /watchdogRuntimeFactsRef\.current\[id\]/)
   assert.match(code, /sessions: report\?\.sessions/)
+  // App 必须把共享重连账本喂进守卫（同 tick 集合 + 跨 tick 退避两条子句都要在）：
+  // 缺任何一条都会让"派遣后被 App 丢弃"的记账缺口回来（2026-12 二轮独立复核）。
+  assert.match(code,
+    /reconnectBlocked: reconnectedThisTick\.has\(id\)\s*\|\| \(lastReconnectAtRef\.current\[id\] !== undefined\s*&& now - lastReconnectAtRef\.current\[id\] < AGGREGATE_RECONNECT_BACKOFF_MS\)/,
+    'the App must feed both ledger clauses into the planner')
   // 镜像写入本身也必须存在：删掉它守卫读到的永远是空事实（静默失效），
   // 而此前没有任何锁覆盖这一行（2026-12 独立复核）。
   assert.match(code, /watchdogRuntimeFactsRef\.current = runtimeFacts/,
@@ -151,6 +156,14 @@ test('跨模块不变量：等回执期限必须 > 对账链最坏回执时延�
     '生产构造点不得 override 相位/重试预算（否则与守卫的等回执期限脱钩）')
   assert.ok(outcomeTimeout > worstCase,
     `等回执期限 ${outcomeTimeout}ms 必须 > 最坏回执 ${worstCase}ms（相位预算拆开后 90s 不够）`)
+  // 第三条前提：等回执期限 < L1 coalesce —— 正是"单次 unknown 必须被吸收"的存在理由
+  // （期限比下一次探测还短时，一次 502 就会被判成"对账通道已坏"）。若将来翻转这组常量，
+  // 吸收逻辑可以撤，但必须**有意识**地撤（本锁会红；2026-12 二轮独立复核）。
+  const coalesce = number(planner, 'refreshCoalesceMs')
+  assert.ok(outcomeTimeout < coalesce,
+    `等回执期限 ${outcomeTimeout}ms 必须 < L1 coalesce ${coalesce}ms（否则 unknown 吸收无意义）`)
+  // 第四条前提：吸收之后必须等"下一次 L1 已发出"才允许期限生效（快 unknown 同判）。
+  assert.match(planner, /unknownAwaitingNextL1/, '吸收后的期限必须由"下一次 L1 已发出"门控')
 })
 
 test('文案与样式：双语字典齐备，横幅类名全部有样式', () => {

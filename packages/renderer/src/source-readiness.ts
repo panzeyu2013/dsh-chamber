@@ -87,6 +87,20 @@ export interface ServingGateDecision {
 }
 
 /**
+ * 就绪门的相位输入（纯函数，2026-12 二轮独立复核）。
+ *
+ * - **原始 transport 投影缺席**（`rawProjectionPresent === false`）= 事实未到 ⇒
+ *   `undefined`：门在预算内继续等，绝不把"投影还没到"读成手动断开；
+ * - 原始投影在场 ⇒ 取**合并后**的派生相位：网关形态的 `stopped`/`restart-exhausted`
+ *   （以及 `starting`/`restarting`）只存在于 `deriveServers` 的托管折叠里（原始
+ *   `SshPhase` 只有 idle/connecting/ready/degraded/error），直接用原始相位会让终态
+ *   词表在 App 路径上不可达、与 sidebar 姊妹门判得不一样。
+ */
+export function servingGatePhase(derivedPhase: string, rawProjectionPresent: boolean): string | undefined {
+  return rawProjectionPresent ? derivedPhase : undefined
+}
+
+/**
  * 就绪门判定（纯函数）：`serve` = 图通道可以取；`unavailable` = 该来源此刻
  * 供不了图，boot 走既有的「无图降级」；`wait` = 继续轮询（受调用方的绝对
  * 截止兜底）。

@@ -303,7 +303,7 @@
 
 - **会话创建/fork/归档的侧边栏收敛修复（会话回声 + 归档墓碑，2026-12 真机反馈；design 05 §2.2.1）**：唯一出口
   `shared/session-mutations.ts`；`withSessionEcho`、`withPendingArchives`、事实到达时的官方 session-list
-  刷新臂已落地。 **剩余本地 + 远程 SSH 实机验收**：① 在来源 A 会话里点 B workspace「+」或对 B fork：侧栏 **<1s**
+  **剩余本地 + 远程 SSH 实机验收**：① 在来源 A 会话里点 B workspace「+」或对 B fork：侧栏 **<1s**
   出现新行（blank 随 current、fork 子行按普通行）、位置在工作区头部、不出现「先落未分组桶/尾部再跳位」；② 归档
   B的旧会话（B 未挂载）→ 行驶即消失、不留可点空视图入口；③ 权威归属/归档集到达后无重复行，切走切回/刷新后仍一行；④
   别处（另一客户端、宿主直接改 ）变更与归档墓碑租约到期（10min

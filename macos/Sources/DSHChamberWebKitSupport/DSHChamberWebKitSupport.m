@@ -89,5 +89,9 @@ DSHChamberRefreshRatePreference DSHChamberPreferDisplayRefreshRate(WKPreferences
     } @catch (__unused NSException *exception) {
         return DSHChamberRefreshRatePreferenceUnknown;
     }
+    // 残余（2026-12 二轮独立复核记录）：若 setter 在**已经改掉偏好之后**才抛错、或改动
+    // 成功而这次回读抛错，本函数仍返回 Unknown，调用方会记「SPI 不可用(保持 WebKit 默认)」
+    // ——日志与事实不符。窗口要求 SPI 本身在改完之后变成 flaky，实测无法构造；真正的证据
+    // 仍是 POC_DEBUG 的 [native-fps] A/B（S-48 实机三工况）。
     return DSHChamberRefreshRatePreferenceState(preferences);
 }

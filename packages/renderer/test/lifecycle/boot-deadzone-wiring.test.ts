@@ -29,7 +29,7 @@ import { fileURLToPath } from 'node:url'
 import {
   SERVING_TERMINAL_GRACE_MS,
   VEIL_ACTIONS_AFTER_MS,
-  decideServingGate,
+  decideServingGate, servingGatePhase,
   isDeferredReclaimDue,
   isTerminalUnreadyPhase,
   shouldAnnounceRetryQueue,
@@ -115,6 +115,22 @@ test('serving gate: ready serves, idle is unavailable, a terminal phase fast-fai
   assert.equal(isTerminalUnreadyPhase(undefined), false)
 })
 
+test('serving gate: 投影缺席 → undefined（预算内等）；投影在场 → 合并派生相位（终态可达）', () => {
+  // 2026-12 二轮独立复核 F1：直接用原始相位会让网关形态的 stopped/restart-exhausted
+  // 在 App 路径上不可达（原始 SshPhase 没有这两个值），两侧门判得不一样。
+  assert.equal(servingGatePhase('idle', false), undefined, '投影未到 = 事实未到，不是手动断开')
+  assert.equal(servingGatePhase('idle', true), 'idle', '投影到场的手动断开仍立即不可服务')
+  assert.equal(servingGatePhase('stopped', true), 'stopped', '托管停机必须能进终态词表')
+  assert.equal(servingGatePhase('ready', true), 'ready')
+  assert.equal(decideServingGate({ phase: servingGatePhase('idle', false), nowMs: 0, terminalSinceMs: null }).action, 'wait')
+  assert.equal(decideServingGate({ phase: servingGatePhase('stopped', true), nowMs: 0, terminalSinceMs: null }).action, 'wait',
+    '终态仍走 1.5s 宽限（不是立即判死）')
+  // 接线：App 必须调纯函数（内联表达式锁不住这条契约）。
+  const app = read('../../src/App.tsx')
+  assert.ok(app.includes('servingGatePhase(server.phase, remoteStatus[rawId] !== undefined)'),
+    'the App must feed the pure phase input')
+})
+
 test('only a manual disconnect defers the boot; an unknown projection never does', () => {
   assert.equal(shouldDeferBootForSource('idle'), true)
   for (const phase of ['connecting', 'ready', 'degraded', 'error', undefined]) {
@@ -185,8 +201,8 @@ test('the deferred reclaim decision only takes never-settled, unhidden, unheld m
 
 test('the App gate consumes the pure decision and keeps the absolute deadline', () => {
   const app = read('../../src/App.tsx')
-  assert.ok(app.includes("import { decideServingGate, isDeferredReclaimDue, shouldDeferBootForSource } from './source-readiness.ts'"),
-    'the App must consume the pure module')
+  assert.ok(app.includes("import { decideServingGate, isDeferredReclaimDue, servingGatePhase, shouldDeferBootForSource } from './source-readiness.ts'"),
+    'the App must consume the pure module (including the serving-gate phase input)')
   assert.ok(app.includes('const SERVING_WAIT_MS = BOOT_TIMEOUT_MS'), 'the gate must reuse the boot budget')
   assert.ok(app.includes('const decision = decideServingGate({ phase, nowMs: Date.now(), terminalSinceMs: terminalSince })'),
     'the gate must consult the pure decision')
@@ -246,7 +262,15 @@ test('the veil escape switches first and reclaims only after the switch lands', 
   assert.ok(app.includes('if (fromViewId === targetId) return'), 'an identity switch is a no-op')
   assert.ok(app.includes('!liveServerIdsRef.current.has(targetId)) return'),
     'a retired target must not create an abandonment mark')
-  assert.ok(app.includes('abandonedViewsRef.current.add(fromViewId)'), 'the mark is recorded before the switch')
+  assert.ok(app.includes('abandonedViewsRef.current.set(fromViewId, targetId)'),
+    'the mark (with its target) is recorded before the switch')
+  // F2（二轮独立复核）：目标在落地前退役/被删时，apply 回调与同步 try/catch 都撤不掉标记
+  // ⇒ 必须有"目标已不在 live 名单"的落地校验臂。
+  assert.ok(app.includes('for (const [from, to] of [...abandonedViewsRef.current])'),
+    'a landing check must revoke marks whose target is no longer live')
+  assert.ok(app.includes('if (to === LOCAL_INSTANCE_ID || liveServerIds.has(to) || activeView === to) continue'),
+    'the landing check keeps live/active targets')
+  assert.ok(app.includes('}, [liveServerIds, activeView])'), 'the landing check re-runs on roster/view changes')
   // 撤回必须覆盖**没有异常**的"没落地"路径（注册表竞态早退 / apply 期目标被删除），
   // 否则该视图下一次离开会跳过保留宽限被立刻拆掉（2026-12 独立复核）。
   assert.ok(app.includes('const accepted = selectView(targetId, applied => { if (!applied) revoke() })'),
@@ -364,8 +388,8 @@ test('the view composes the pure decisions and owns no retry/reconnect sequence'
   // 覆盖层在场时遮罩退出 DOM，否则其按钮仍可聚焦/被读屏播报（2026-12 独立复核）。
   assert.ok(view.includes('const veilVisible = (!settled || holdVeil === true) && failureOverlayVisible !== true'))
   assert.ok(view.includes('failureOverlayVisible?: boolean'), 'the App-owned overlay fact is a declared prop')
-  assert.ok(read('../../src/App.tsx').includes('failureOverlayVisible={activeShellError !== null}'),
-    'the App must feed the overlay fact into every view (the overlay is app-global)')
+  assert.ok(read('../../src/App.tsx').includes('failureOverlayVisible={activeShellError !== null || controlUnreachable}'),
+    'the App must feed BOTH modal overlays (boot failure + control-plane unreachable) into every view')
   // 文案/动作三元组必须**同向**（存在性断言抓不到分支互换：deferred 分支绑定重试
   // 会让"未连接"的遮罩给出重试按钮 + "正在启动"文案，2026-12 独立复核）。
   assert.match(view, /veil === 'boot-deferred'\s*\?\s*frameText\(locale, 'boot\.deferred', \{ label \}\)\s*:\s*frameText\(locale, 'boot\.loading', \{ label \}\)/,

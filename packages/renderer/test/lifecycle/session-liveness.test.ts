@@ -164,37 +164,45 @@ test('L3 提示可被后续健康回执撤下，之后再次静默仍能重新�
   assert.ok(!recovered.actions.some(action => action.kind === 'notice'))
 })
 
-test('unknown 回执既不健康也不升级，且只顺延一次期限（持续无结论仍升级）', () => {
-  // coalesce 远大于期限：把"期限到点时下一次 L1 还发不出去"的生产形状固定下来。
-  const h = harness({ refreshOutcomeTimeoutMs: 400, refreshCoalesceMs: 200_000 })
-  const unknown: Reconcile = { requestedAt: 1_000, settledAt: 1_100, ok: false, attempts: 1, verdict: 'unknown' }
+test('unknown 回执既不健康也不升级；升级只能发生在 unknown 之后的下一次 L1 之后（有界）', () => {
+  const h = harness({ refreshAfterMs: 1_000, refreshCoalesceMs: 500, refreshOutcomeTimeoutMs: 400 })
+  const unknown: Reconcile = { requestedAt: 1_000, settledAt: 1_050, ok: false, attempts: 1, verdict: 'unknown' }
   h.at(0, { a: { running: true } })
-  h.at(1_000)
+  h.at(1_000) // L1 #1
   // 探针失败的当轮：不得升级（另一条载体的抖动不证明被守卫的 WS 通道坏）。
-  assert.deepEqual(h.at(1_100, { a: { running: true } }, unknown).actions, [])
-  assert.deepEqual(h.at(1_100, { a: { running: true } }, unknown).stalled, [])
-  // 一次性顺延：原期限（1_000 + 400）到点不得升级——否则单次 unknown 必然制造
-  // 假 L2 并吃掉该时段唯一预算（2026-12 独立复核的时间线仿真）。
-  assert.deepEqual(h.at(1_400, { a: { running: true } }, unknown).actions, [], '顺延后的期限未到')
-  // 第二次 unknown 不再顺延（期限仍是 1_100 + 400）：持续无结论仍会被收口，有界。
-  const unknown2: Reconcile = { requestedAt: 1_400, settledAt: 1_450, ok: false, attempts: 1, verdict: 'unknown' }
-  assert.deepEqual(h.at(1_450, { a: { running: true } }, unknown2).actions, [], '顺延只做一次，绝不无限推迟')
-  assert.deepEqual(h.at(1_501, { a: { running: true } }, unknown2).actions,
+  assert.deepEqual(h.at(1_050, { a: { running: true } }, unknown).actions, [])
+  assert.deepEqual(h.at(1_050, { a: { running: true } }, unknown).stalled, [])
+  // 原期限（1_000 + 400）到点也绝不升级：被吸收的 unknown 之后**还没发过 L1** ⇒ 期限不
+  // 生效（否则快 unknown 必然制造假 L2，2026-12 二轮独立复核的时间线仿真）。
+  assert.deepEqual(h.at(1_450, { a: { running: true } }, unknown).actions, [], '未发下一次 L1 前绝不升级')
+  // coalesce 到点 → L1 #2；自此期限从这次 L1 起算。
+  assert.deepEqual(h.at(1_500, { a: { running: true } }, unknown).actions,
+    [{ kind: 'refresh', sourceId: 'local' }])
+  // 第二次 unknown 不再吸收（但这次 L1 的期限仍然生效）：持续无结论会被收口，有界。
+  const unknown2: Reconcile = { requestedAt: 1_500, settledAt: 1_510, ok: false, attempts: 1, verdict: 'unknown' }
+  h.at(1_510, { a: { running: true } }, unknown2)
+  assert.deepEqual(h.at(1_900, { a: { running: true } }, unknown2).actions, [], '期限未到')
+  assert.deepEqual(h.at(1_901, { a: { running: true } }, unknown2).actions,
     [{ kind: 'reconnect', sourceId: 'local' }])
 })
 
-test('单次 unknown 不吞掉唯一预算：下一次 L1 的健康结论先到，绝不假重连', () => {
-  const h = harness({ refreshAfterMs: 1_000, refreshCoalesceMs: 200, refreshOutcomeTimeoutMs: 400 })
+test('快 unknown（L1 后立刻结算）不吞掉唯一预算：下一次 L1 的健康结论先到就不重连', () => {
+  // 生产关系（coalesce 200s > 期限 150s）+ 快探针失败（502/代理重启会在一个 tick 内
+  // 结算 unknown）。旧的"从 unknown 时刻顺延"仍让期限抢在下一次 L1 之前到点 ⇒ 假 L2
+  // （2026-12 二轮独立复核实测：L1#1@120s → L2@330s → L1#2@360s）。
+  const h = harness({ refreshAfterMs: 1_000, refreshCoalesceMs: 200, refreshOutcomeTimeoutMs: 150 })
   h.at(0, { a: { running: true } })
-  h.at(1_000)
-  const unknown: Reconcile = { requestedAt: 1_000, settledAt: 1_050, ok: false, attempts: 1, verdict: 'unknown' }
-  assert.deepEqual(h.at(1_050, { a: { running: true } }, unknown).actions, [], 'unknown 不得当场升级')
-  // coalesce 到点先发 L1 #2（期限已被一次性顺延，不抢在它前面判"通道已坏"）。
+  h.at(1_000) // L1 #1
+  const unknown: Reconcile = { requestedAt: 1_000, settledAt: 1_010, ok: false, attempts: 1, verdict: 'unknown' }
+  assert.deepEqual(h.at(1_010, { a: { running: true } }, unknown).actions, [], 'unknown 当场不升级')
+  // 原期限（1_150）早已过去，但还没有 unknown 之后的 L1 ⇒ 绝不重连（假 L2 就发生在这里）。
+  assert.deepEqual(h.at(1_160, { a: { running: true } }, unknown).actions, [], '不许抢在下一次 L1 前面')
+  // coalesce 到点先发 L1 #2，随后拿到健康结论 ⇒ 全程零重连（唯一预算不被虚耗）。
   assert.deepEqual(h.at(1_200, { a: { running: true } }, unknown).actions,
     [{ kind: 'refresh', sourceId: 'local' }])
   const healthy: Reconcile = { requestedAt: 1_200, settledAt: 1_250, ok: true, attempts: 1, verdict: 'converged' }
   h.at(1_260, { a: { running: true } }, healthy)
-  assert.deepEqual(h.at(1_600, { a: { running: true } }, healthy).actions, [], '健康结论之后不得重连')
+  assert.deepEqual(h.at(1_400, { a: { running: true } }, healthy).actions, [], '健康结论之后不得重连')
 })
 
 test('共享账本挡住 L2 时不派遣：预算与等待计时都不被消耗，放开即升级', () => {
@@ -216,6 +224,7 @@ test('请求后无回执超时同样升级 L2（对账通道静默）', () => {
   h.at(0)
   h.at(1_000)
   assert.deepEqual(h.at(1_300).actions, [], '期限内不升级')
+  assert.deepEqual(h.at(1_400).actions, [], '边界（恰好 = 期限）不升级——判据是 > 而不是 >=')
   assert.deepEqual(h.at(1_500).actions, [{ kind: 'reconnect', sourceId: 'local' }], '超期后升级')
 })
 

@@ -30,6 +30,7 @@ import {
   closeSync,
   constants,
   fchmodSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
   openSync,
@@ -81,16 +82,23 @@ export interface ControlLogSink {
 export function formatControlLogLine(args: readonly unknown[]): string {
   const parts: string[] = []
   for (const arg of args) {
-    if (typeof arg === 'string') parts.push(arg)
-    else if (arg instanceof Error) parts.push(arg.stack ?? `${arg.name}: ${arg.message}`)
-    else {
+    try {
+      if (typeof arg === 'string') { parts.push(arg); continue }
+      // `instanceof` 会触发 [[GetPrototypeOf]]：可撤销 Proxy 在这一步就抛（2026-12 二轮
+      // 独立复核实测 "Cannot perform 'getPrototypeOf' on a proxy that has been revoked"），
+      // 所以连类型判别也要在 try 里——日志序列化绝不允许把异常抛回调用方的 logger。
+      if (arg instanceof Error) {
+        parts.push(arg.stack ?? `${arg.name}: ${arg.message}`)
+        continue
+      }
       try {
         parts.push(JSON.stringify(arg) ?? String(arg))
       } catch {
-        // String() 本身也可能抛（null 原型 + 自定义 toString/BigInt 的宿主对象）：
-        // 日志序列化绝不允许把异常抛回调用方的 logger（2026-12 独立复核）。
+        // String() 本身也可能抛（null 原型 + 自定义 toString/BigInt 的宿主对象）。
         try { parts.push(String(arg)) } catch { parts.push('[unserializable log argument]') }
       }
+    } catch {
+      parts.push('[unserializable log argument]')
     }
   }
   const text = parts.join(' ').replaceAll(/\r?\n/g, ' ⏎ ')
@@ -128,7 +136,10 @@ export function createControlLogSink(options: {
     closeHandle()
     if (warned) return
     warned = true
-    warn(`[control-plane] log file disabled: ${reason} (persisting control-plane logs is unavailable this run)`)
+    // 告警通道（注入的 logger）本身也可能抛：日志降级绝不能再制造一个失败面。
+    try {
+      warn(`[control-plane] log file disabled: ${reason} (persisting control-plane logs is unavailable this run)`)
+    } catch { /* 告警失败即放弃告警 */ }
   }
   const closeHandle = (): void => {
     if (handle === undefined) return
@@ -146,12 +157,21 @@ export function createControlLogSink(options: {
    */
   const validateDirectory = (): boolean => {
     try {
+      // **先判链接再 chmod**：chmod(2) 会跟随符号链接，若顺序反过来，一次拒绝落盘之前
+      // 就已经把链接目标目录的权限改掉了（2026-12 二轮独立复核实测：目标 777 → 700）。
+      try {
+        if (lstatSync(directory).isSymbolicLink()) {
+          degrade('logs directory is a symbolic link: ' + directory)
+          return false
+        }
+      } catch { /* 目录尚不存在：由下面的 mkdir 创建 */ }
       mkdirSync(directory, { recursive: true, mode: 0o700 })
       // 0700 只在**创建**时生效：已存在的宽松目录必须显式收紧（文档承诺 0700，
       // 但 mode 参数不会改既有目录的位，2026-12 独立复核）。
       try { chmodSync(directory, 0o700) } catch { /* 非 POSIX 或无权限：不因此停写 */ }
+      // chmod 之后再验一次：lstat 与 mkdir/chmod 之间被换成链接（TOCTOU）也要挡住。
       if (lstatSync(directory).isSymbolicLink()) {
-        degrade('logs directory is a symbolic link: ' + directory)
+        degrade('logs directory became a symbolic link: ' + directory)
         return false
       }
       return true
@@ -175,19 +195,25 @@ export function createControlLogSink(options: {
     // 否则符号链接目录会在 reopen 时被重新激活（O_NOFOLLOW 只保护最后一段）。
     if (!validateDirectory()) return false
     try {
+      // O_NONBLOCK：叶子被换成 FIFO 时，同步 open(O_WRONLY) 会永久阻塞事件循环
+      // （2026-12 二轮独立复核实测）；无读者的 FIFO 直接 ENXIO ⇒ 降级。普通文件忽略该位。
       handle = openSync(path,
-        constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW, 0o600)
+        constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW
+        | constants.O_NONBLOCK, 0o600)
       // 0600 同样只在创建时生效：已存在的宽松文件（旧版本留下/手工改过）必须显式
       // 收紧，否则文档与 T-25 的"无条件 0600"是假的（2026-12 独立复核）。
       try { fchmodSync(handle, 0o600) } catch { /* 某些文件系统不支持：不因此停写 */ }
-      const stat = statSync(path)
+      // 身份取自**句柄本身**（fstat）而不是 path：open 与 stat(path) 之间被换文件时，
+      // 用 path 记下的身份会让 64 行巡检永久失明（2026-12 二轮独立复核的 preload 复现）。
+      const stat = fstatSync(handle)
       writtenBytes = stat.size
       handleDev = stat.dev
       handleIno = stat.ino
       return true
     } catch (error) {
-      handle = undefined
+      // degrade() 内部会 closeHandle()：必须先降级再清 handle，否则刚打开的 fd 泄漏。
       degrade(`cannot open ${path}: ${String(error)}`)
+      handle = undefined
       return false
     }
   }
@@ -246,8 +272,11 @@ export function createControlLogSink(options: {
         if (writesSinceIdentityCheck >= IDENTITY_CHECK_EVERY && !refreshHandleIdentity()) return
         if (writesSinceIdentityCheck >= IDENTITY_CHECK_EVERY) writesSinceIdentityCheck = 0
         const line = `${JSON.stringify(record)}\n`
-        writeSync(handle as number, line)
-        writtenBytes += Buffer.byteLength(line)
+        const bytes = Buffer.byteLength(line)
+        const written = writeSync(handle as number, line)
+        // 短写会让水位与磁盘脱节（后续按错误水位轮转）。普通文件不应发生，发生即降级。
+        if (written !== bytes) throw new Error(`short write (${String(written)}/${String(bytes)})`)
+        writtenBytes += bytes
       } catch (error) {
         degrade(`write failed: ${String(error)}`)
       }
@@ -281,9 +310,11 @@ export function withControlLogFile(
   stateDir: string,
   options: { maxBytes?: number; files?: number; now?: () => Date; warn?: (message: string) => void } = {},
 ): Logger & { close: () => void; reopen: () => void } {
-  // 降级告警走**注入的** logger（而不是硬编码 console.warn）：打包态从 Finder/Dock
-  // 启动时 stdout 不落盘，控制面的告警应当落在调用方的诊断面上（2026-12 独立复核）。
-  // 落盘失败后 sink 已 inactive，这条转发不会递归写回文件。
+  // 降级告警走**注入的** logger（而不是硬编码 console.warn）：调用方有诊断面时告警
+  // 应当落在那里。注意：Electron 两个生产调用点目前仍注入 console（桌面打包态 stdout
+  // 不落盘），所以这条只保证"不绕过调用方"，**不假装**解决了打包态告警的持久化
+  // （Swift flavor 侧由 stderr → sidecar.log 兜住；2026-12 二轮独立复核）。落盘失败后
+  // sink 已 inactive，这条转发不会递归写回文件。
   const sink = createControlLogSink({
     stateDir,
     ...options,

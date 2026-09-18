@@ -16,6 +16,37 @@ final class ShellOverscrollPolicyTests: XCTestCase {
 
     /// #filePath = <repo>/macos/Tests/DSHChamberPocTests/ShellOverscrollPolicyTests.swift
     /// （与 NativeIdentityTests 同款读源做法：让"装配点/文档字面量"这些无法在单测里构造的面也能被钉住。）
+    /// 去注释源码：整行 `//` 注释、单行 `/* … */`、跨行块注释（状态化）。装配锁只认
+    /// **代码**，注释里的同名调用串不得满足断言（2026-12 一轮/二轮独立复核）。
+    ///
+    /// 刻意**不**做行内 `//` 截断：本仓库的注释里出现过 `/api/i/*`、`http://…` 这类
+    /// 片段，行内截断会先命中它们而吞掉其后整块代码（二轮修复时实测把两个锁都弄红）。
+    private func strippingComments(_ source: String) -> String {
+        var out: [String] = []
+        var inBlock = false
+        for rawLine in source.split(separator: "\n", omittingEmptySubsequences: false) {
+            var line = String(rawLine)
+            if inBlock {
+                guard let end = line.range(of: "*/") else { out.append(""); continue }
+                line = String(line[end.upperBound...])
+                inBlock = false
+            } else if line.trimmingCharacters(in: .whitespaces).hasPrefix("//") {
+                out.append("")
+                continue
+            }
+            while let start = line.range(of: "/*") {
+                guard let end = line.range(of: "*/", range: start.upperBound..<line.endIndex) else {
+                    line = String(line[line.startIndex..<start.lowerBound])
+                    inBlock = true
+                    break
+                }
+                line.replaceSubrange(start.lowerBound..<end.upperBound, with: " ")
+            }
+            out.append(line)
+        }
+        return out.joined(separator: "\n")
+    }
+
     private func repoFile(_ relative: String) throws -> String {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()   // DSHChamberPocTests
@@ -205,12 +236,9 @@ final class ShellOverscrollPolicyTests: XCTestCase {
     /// 装配锁步：策略"有效"由探针证明，"壳真的装了它"只能在这里钉住——
     /// 删掉或后移 MainWindowController 的 install 调用，此前所有门禁仍绿而 S-50 原样回归。
     func testMainWindowInstallsPolicyBeforeWebViewConstruction() throws {
-        // 去掉注释行再断言（2026-12 独立复核发现）：被注释掉的 install 调用会让
-        // 「出现 + 顺序」断言在策略实际被停用时仍然全绿。
-        let source = try repoFile("macos/Sources/DSHChamberPoc/MainWindowController.swift")
-            .split(separator: "\n")
-            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
-            .joined(separator: "\n")
+        // 去注释（// 与 /* */）再断言：被注释掉的 install 调用会让「出现 + 顺序」断言
+        // 在策略实际被停用时仍然全绿（2026-12 一轮/二轮独立复核）。
+        let source = strippingComments(try repoFile("macos/Sources/DSHChamberPoc/MainWindowController.swift"))
         let install = try XCTUnwrap(
             source.range(of: "ShellOverscrollPolicy.install(config: configuration)"),
             "装配点消失：视口越界策略不再被壳安装")
@@ -226,6 +254,14 @@ final class ShellOverscrollPolicyTests: XCTestCase {
         let shim = try XCTUnwrap(
             source.range(of: "BridgeShimInjector.install("), "A 桥 shim 装配点消失")
         XCTAssertLessThan(shim.lowerBound, install.lowerBound, "注入顺序：shim 先于策略")
+        // **语句级**位置（2026-12 二轮独立复核）：被 if false 包住的同一行调用、或被块注释
+        // 包裹的调用不得满足本锁（跨行的 if false 块仍是源码锁的已知盲区——真正的运行时
+        // 证据是 overscroll 探针的 --assert 与 S-50 实机走查）。
+        let lines = source.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        XCTAssertTrue(lines.contains { $0.hasPrefix("ShellOverscrollPolicy.install(config: configuration)") },
+                      "install 必须是语句级调用，不能包在条件块/注释里")
+        XCTAssertTrue(lines.contains { $0.hasPrefix("BridgeShimInjector.install(") },
+                      "shim 也必须是语句级调用")
     }
 
     /// 文档字面量锁步：design 25 里硬写的规则文本与标记属性必须与常量一致，

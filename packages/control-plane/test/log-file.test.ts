@@ -20,6 +20,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -240,6 +241,36 @@ test('日志文件被外部删除后必须有界自愈（常驻句柄不得一�
     '重建后的文件必须继续接住后续日志')
   sink.close()
   rmSync(stateDir, { recursive: true, force: true })
+})
+
+test('符号链接目录：拒绝落盘之前绝不动链接目标的权限（chmod 在 lstat 之前会跟随链接）', () => {
+  const stateDir = tempDir()
+  const outside = tempDir()
+  chmodSync(outside, 0o755)
+  symlinkSync(outside, join(stateDir, CONTROL_LOG_DIR))
+  const sink = createControlLogSink({ stateDir, warn: () => undefined })
+  assert.equal(sink.isActive(), false, '符号链接目录必须降级')
+  assert.equal(statSync(outside).mode & 0o777, 0o755, '链接目标目录权限不得被 chmod 改掉')
+  sink.reopen()
+  assert.equal(statSync(outside).mode & 0o777, 0o755, 'reopen 路径同理（先判链接再 chmod）')
+})
+
+test('叶子被换成 FIFO：打开不得阻塞事件循环（O_NONBLOCK），只降级', () => {
+  const stateDir = tempDir()
+  const path = join(stateDir, CONTROL_LOG_DIR, CONTROL_LOG_FILE)
+  mkdirSync(join(stateDir, CONTROL_LOG_DIR), { recursive: true })
+  execFileSync('mkfifo', [path])
+  const sink = createControlLogSink({ stateDir, warn: () => undefined })
+  // 无读者的 FIFO：O_WRONLY 同步 open 会永久阻塞（旧实现），O_NONBLOCK 下立即 ENXIO。
+  sink.write({ ts: 't', level: 'log', line: 'must-not-block' })
+  assert.equal(sink.isActive(), false, 'FIFO 叶子必须降级而不是阻塞')
+})
+
+test('序列化永不抛回调用方：可撤销 Proxy 也不能（instanceof 本身会抛）', () => {
+  const { proxy, revoke } = Proxy.revocable({}, {})
+  revoke()
+  assert.doesNotThrow(() => formatControlLogLine([proxy]))
+  assert.equal(formatControlLogLine([proxy]), '[unserializable log argument]')
 })
 
 test('序列化永不抛回调用方（toJSON 与 toString 同时抛的宿主对象）', () => {

@@ -1100,5 +1100,13 @@ final class ShellStartupTests: XCTestCase {
             .joined(separator: "\n")
         XCTAssertTrue(code.contains("NSSize(width: 1280, height: 786)"),
                       "S-49：初始内容区必须是 1280×786 的折中值（改动请同步 deviations S-49）")
+        // 消费点也必须走同一个常量（2026-12 二轮独立复核：只钉定义时，把构造处的
+        // Self.windowSize 换成写死的另一个高度仍然全绿）。
+        XCTAssertEqual(code.components(separatedBy: "NSSize(width: 1280, height: 786)").count - 1, 1,
+                       "786 只应作为定义出现一次，消费点一律用 Self.windowSize")
+        XCTAssertTrue(code.contains("WKWebView(frame: NSRect(origin: .zero, size: Self.windowSize)"),
+                      "WKWebView 必须消费 windowSize")
+        XCTAssertTrue(code.contains("NSWindow(contentRect: NSRect(origin: .zero, size: Self.windowSize)"),
+                      "NSWindow 必须消费 windowSize")
     }
 }

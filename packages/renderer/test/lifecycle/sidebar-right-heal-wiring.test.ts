@@ -59,7 +59,8 @@ test('the phase mirror is written in an effect and feeds the bounded gate', () =
   // 同源），不再用 deriveServers 的折叠值——缺投影必须走 wait 而不是秒判无图。
   const mirror = /useEffect\(\(\) => \{\s*const phases: Record<string, string \| undefined> = \{\}[\s\S]*?serversPhaseRef\.current = phases\s*\}, \[servers, remoteStatus\]\)/
   assert.match(app, mirror, 'the mirror is effect-written (never during render) and tracks servers + the raw projection')
-  assert.match(app, /remoteStatus\[rawId\]\?\.phase/, 'remote sources read the raw transport phase')
+  assert.match(app, /servingGatePhase\(server\.phase, remoteStatus\[rawId\] !== undefined\)/,
+    'remote sources read the raw projection PRESENCE and the merged derived phase')
   assert.match(app, /const deadline = Date\.now\(\) \+ SERVING_WAIT_MS/)
   assert.match(app, /if \(Date\.now\(\) >= deadline\) \{ resolve\(false\); return \}/, 'the gate must time out, not hang')
 })

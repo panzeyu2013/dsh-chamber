@@ -180,7 +180,7 @@ import {
   VIEW_RECLAIM_GRACE_MS,
   VIEW_RECLAIM_TICK_MS,
 } from './retention.ts'
-import { decideServingGate, isDeferredReclaimDue, shouldDeferBootForSource } from './source-readiness.ts'
+import { decideServingGate, isDeferredReclaimDue, servingGatePhase, shouldDeferBootForSource } from './source-readiness.ts'
 import {
   HARVEST_ABANDON_MS,
   harvestAbandoned,
@@ -928,7 +928,11 @@ export default function App() {
     for (const server of servers) {
       if (server.id === LOCAL_INSTANCE_ID) { phases[server.id] = server.phase; continue }
       const rawId = rawInstanceIdFromSourceId(server.id)
-      phases[server.id] = rawId === null ? server.phase : remoteStatus[rawId]?.phase
+      // 纯函数决定语义（可单测）：原始投影缺席 → undefined（等）；在场 → 派生相位
+      // （含托管折叠的终态词表）。2026-12 二轮独立复核 F1。
+      phases[server.id] = rawId === null
+        ? server.phase
+        : servingGatePhase(server.phase, remoteStatus[rawId] !== undefined)
     }
     serversPhaseRef.current = phases
   }, [servers, remoteStatus])
@@ -1094,7 +1098,9 @@ export default function App() {
    * `selectView`（用户又点回它 = 撤回意图）或落地回收删除。声明位置必须在
    * `selectView` 之前——撤回就发生在那里。
    */
-  const abandonedViewsRef = useRef<Set<string>>(new Set())
+  // 放弃标记：被放弃的视图 → 当时要切去的目标。记目标是为了能在"切换没落地"
+  // （目标退役/被删）时撤回标记（2026-12 二轮独立复核 F2）。
+  const abandonedViewsRef = useRef<Map<string, string>>(new Map())
 
   /**
    * N-ctx 视图回收（设计 05 §4）：视图生命周期 = 注册表条目生命周期。
@@ -2537,7 +2543,7 @@ export default function App() {
   const switchSourceFromVeil = useCallback((fromViewId: string, targetId: string) => {
     if (fromViewId === targetId) return
     if (targetId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(targetId)) return
-    if (fromViewId !== LOCAL_INSTANCE_ID) abandonedViewsRef.current.add(fromViewId)
+    if (fromViewId !== LOCAL_INSTANCE_ID) abandonedViewsRef.current.set(fromViewId, targetId)
     // selectView 的"没落地"**不抛异常**（注册表竞态早退、apply 期目标被删除都只是
     // return），所以同步 try/catch 撤不掉标记：用一个"落地即回调"的返回值收口——
     // 只有切换真的被接受/落地，放弃标记才保留，否则撤回（2026-12 独立复核：
@@ -2918,12 +2924,24 @@ export default function App() {
   // 拆除与 reclaimView 同一条路：dispose + 同 commit 卸载 + 抑制自动预热。
   useEffect(() => {
     if (abandonedViewsRef.current.size === 0) return
-    for (const id of [...abandonedViewsRef.current]) {
+    for (const id of [...abandonedViewsRef.current.keys()]) {
       if (!mountedViews.includes(id)) { abandonedViewsRef.current.delete(id); continue }
       if (id === activeView || id === pendingViewRef.current) continue
       reclaimView(id, 'retention')
     }
   }, [activeView, mountedViews, reclaimView])
+
+  // 放弃标记的**落地校验**（2026-12 二轮独立复核 F2）：目标在切换落地之前退役/被删时，
+  // retireSources 会先清 pending，view-transition 的 apply 回调再也拿不到 onApply，
+  // 同步 try/catch 也撤不掉标记 ⇒ 这个"没落地的放弃"会让该视图下一次离开跳过保留宽限
+  // 被立刻拆掉。目标已不在 live 名单（且不是当前视图）⇒ 撤回。
+  useEffect(() => {
+    if (abandonedViewsRef.current.size === 0) return
+    for (const [from, to] of [...abandonedViewsRef.current]) {
+      if (to === LOCAL_INSTANCE_ID || liveServerIds.has(to) || activeView === to) continue
+      abandonedViewsRef.current.delete(from)
+    }
+  }, [liveServerIds, activeView])
 
   /** 保留策略检查：仅前台执行（窗口隐藏期不拆壳；恢复可见由
    * visibilitychange 补偿一轮）。守卫与上限见 decideReclaimCandidates。
@@ -4224,7 +4242,9 @@ const HEALTH_ERROR_GRACE_MS = 10_000
               bootDeferred={deferredBootIds.has(viewId)}
               // App 的全局失败覆盖层是模态的：覆盖层在场时遮罩退出 DOM（否则
               // 其按钮仍可聚焦/被读屏播报，2026-12 独立复核）。
-              failureOverlayVisible={activeShellError !== null}
+              // 两种模态覆盖层都要算：boot 失败（activeShellError）与控制面不可达
+              // （controlUnreachable 的 .fatal-overlay，同样不透明，2026-12 二轮复核 F3）。
+              failureOverlayVisible={activeShellError !== null || controlUnreachable}
               switchTargets={servers
                 .filter(server => server.id !== viewId)
                 .map(server => ({ id: server.id, label: server.label }))}
