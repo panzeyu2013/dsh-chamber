@@ -116,6 +116,13 @@ export interface InstanceViewProps {
    */
   bootDeferred?: boolean
   /**
+   * App 的全局失败覆盖层正在渲染（`activeShellError !== null`）：覆盖层是模态的
+   * 失败报告，此时遮罩（及其按钮/文案）必须**离开 DOM**——否则它仍可被 Tab 聚焦、
+   * 被读屏播报（overlay 只保证视觉不透明；veil 自身是 view 隔离层，两者在过渡
+   * 落地前的一两个帧内不同步，2026-12 独立复核）。
+   */
+  failureOverlayVisible?: boolean
+  /**
    * 可切换的来源（除本视图外的全部来源；与失败覆盖层的 `.fatal-servers` 同款
    * "chamber 级逃生通道"）。空数组 = 不渲染切换行。
    */
@@ -140,7 +147,7 @@ export interface InstanceViewProps {
 export default function InstanceView({
   instanceId, basePath, sourceFingerprint, transport, active, label, locale, onSettled, onStateChange,
   retryToken, waitForServing, holdVeil,
-  sourcePhase, bootDeferred, switchTargets, onSwitchSource, onConnectSource, onRequestRetry,
+  sourcePhase, bootDeferred, failureOverlayVisible, switchTargets, onSwitchSource, onConnectSource, onRequestRetry,
 }: InstanceViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const startedRef = useRef(false)
@@ -252,7 +259,9 @@ export default function InstanceView({
   // 打开意图揭示门。判定规则（含"壳已经显示请求的会话就不遮"与"壳失败不遮"）在
   // sidebar 包 shared/open-intent.ts 内单测覆盖；遮罩的生命周期由 open promise
   // 自身界定（dispatchOpen 8s 预算 + App 的 finally 释放），不会出现挂住的加载层。
-  const veilVisible = !settled || holdVeil === true
+  // 第三个合取项是 App 拥有的失败覆盖层事实（模态；覆盖层在场时遮罩退出 DOM，
+  // 2026-12 独立复核）。其余两项目仍是会话意图门（holdVeil）与本地 boot 状态的契约。
+  const veilVisible = (!settled || holdVeil === true) && failureOverlayVisible !== true
   // W1/W2/W4：遮罩呈现分类（决策全在 source-readiness.ts）。这里**不改**
   // veilVisible 的合成——它属于会话意图门（holdVeil）与本地 boot 状态的契约。
   const veil = veilState({ deferred: bootDeferred === true, settled, waitedMs })
@@ -301,9 +310,11 @@ export default function InstanceView({
       {/* a11y（2026-12 复核 F8）：动作出现后遮罩不再是"纯忙"区域——`aria-busy`
           会把区域的更新播报压后，正好盖住我们要用户看见的重试/连接/切换。
           （本节选位置必须是 JSX children，不能塞进 `{veilVisible && (…)}` 的
-          表达式位置——那是不合法语法，2026-12 复核 BLOCKER。） */}
+          表达式位置——那是不合法语法，2026-12 复核 BLOCKER。）
+          W4 排队文案同理：它在反馈窗**之外**，若容器仍是 aria-busy=true，读屏会把
+          这条恰好该立刻播报的更新压到 10s 后（2026-12 独立复核）。 */}
       {veilVisible && (
-        <div className="instance-loading" aria-busy={veilActions ? false : true}>
+        <div className="instance-loading" aria-busy={veilActions || retryQueued ? false : true}>
           <div className="instance-loading-main">
             {/* a11y (2026-09-11 upstream-alignment nit): the spinner is pure
                 decoration — the adjacent title already announces the state, so

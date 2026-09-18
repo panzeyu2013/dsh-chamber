@@ -235,10 +235,34 @@ test('static: /assets/* immutable cache policy; index.html no-cache; manifest.js
     // （design 25 §5.2；src/index.ts 同处有注释指向本条）。
     // 三条一起钉：只钉 unsafe-inline 的存在会漏掉另两种同样静默失效的改法
     // （同指令加 nonce/hash → CSP3 忽略 unsafe-inline；新增 style-src-elem → 覆盖 style-src）。
-    assert.match(html.headers['content-security-policy'] ?? '', /style-src[^;]*'unsafe-inline'/)
-    assert.doesNotMatch(html.headers['content-security-policy'] ?? '', /style-src[^;]*'nonce-/)
-    assert.doesNotMatch(html.headers['content-security-policy'] ?? '', /style-src[^;]*'sha(256|384|512)-/)
-    assert.doesNotMatch(html.headers['content-security-policy'] ?? '', /style-src-elem/)
+    // 指令级解析，而不是子串正则（2026-12 独立复核）：重复指令
+    // （"style-src 'none'; … style-src 'self' 'unsafe-inline'" —— CSP3 首次生效）或
+    // "style-src 'none'; style-src-attr 'unsafe-inline'" 都能让注入的 <style> 被挡，
+    // 而四条子串断言全绿。
+    const effectiveDirectives = (header: string): Map<string, string> => {
+      const map = new Map<string, string>()
+      for (const part of header.split(';')) {
+        const [rawName, ...values] = part.trim().split(/\s+/)
+        const name = (rawName ?? '').toLowerCase()
+        if (name !== '' && !map.has(name)) map.set(name, values.join(' '))
+      }
+      return map
+    }
+    // 解析器自证（否则这组断言只是换写法的子串匹配）。
+    assert.equal(
+      effectiveDirectives("default-src 'self'; style-src 'none'; style-src 'self' 'unsafe-inline'").get('style-src'),
+      "'none'",
+      '重复指令必须按首次生效解析（值保留引号，见 CSP 字面量）',
+    )
+    const hostileAttr = effectiveDirectives("style-src 'none'; style-src-attr 'unsafe-inline'")
+    assert.equal(hostileAttr.get('style-src'), "'none'")
+    assert.ok(hostileAttr.has('style-src-attr'))
+    const directives = effectiveDirectives(html.headers['content-security-policy'] ?? '')
+    const styleSrc = directives.get('style-src') ?? ''
+    assert.match(styleSrc, /'unsafe-inline'/, '生效的 style-src 必须保留 unsafe-inline（S-50 注入的样式无 nonce）')
+    assert.doesNotMatch(styleSrc, /'nonce-/, "生效的 style-src 不得带 nonce（CSP3 下会忽略 unsafe-inline）")
+    assert.doesNotMatch(styleSrc, /'sha(256|384|512)-/)
+    assert.equal(directives.has('style-src-elem'), false, 'style-src-elem 会覆盖 style-src，使注入样式被挡')
     assert.equal(html.headers['cross-origin-opener-policy'], 'same-origin')
     // same-origin (not no-referrer): no-referrer makes modern browsers send
     // Origin: null on same-origin form POSTs, which the origin fences reject

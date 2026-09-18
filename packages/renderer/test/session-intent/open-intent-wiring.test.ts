@@ -133,8 +133,9 @@ test('the view mount carries the decided boolean and the view only composes it w
   assert.match(view, /holdVeil\?: boolean/)
   assert.match(
     view,
-    /const veilVisible = !settled \|\| holdVeil === true/,
-    'the view owns only the boot window; the post-settle hold arrives decided',
+    /const veilVisible = \(!settled \|\| holdVeil === true\) && failureOverlayVisible !== true/,
+    'the view owns only the boot window; the post-settle hold arrives decided (and the App-owned '
+    + 'modal failure overlay removes the veil from the DOM — 2026-12 独立复核)',
   )
   assert.match(view, /\{veilVisible && \(/, 'the rendered veil must be driven by the combined condition')
   assert.doesNotMatch(

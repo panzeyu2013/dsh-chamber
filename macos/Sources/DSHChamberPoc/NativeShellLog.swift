@@ -177,6 +177,16 @@ public final class NativeShellLog {
         } catch {
             return
         }
+        // 目录本身不得是符号链接（与控制面 log-file.ts 的目录检查同纪律）：
+        // createDirectory 会接受已存在的链接，随后写入就落到壳外目录（2026-12 独立复核）。
+        if (try? FileManager.default.destinationOfSymbolicLink(atPath: directory.path)) != nil {
+            return
+        }
+        // 叶子文件同理：FileHandle(forWritingTo:) 会跟随链接（TS sink 用 O_NOFOLLOW
+        // 挡住这一类；此处用同一判据，判到即退回只写 stderr）。
+        if (try? FileManager.default.destinationOfSymbolicLink(atPath: url.path)) != nil {
+            return
+        }
         // 打开前先轮转已超限的旧文件（不能一边追加一边超限）。
         if let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
            let size = attributes[.size] as? NSNumber, size.intValue >= maxBytes {
@@ -209,7 +219,13 @@ public final class NativeShellLog {
         let rotated = url.deletingLastPathComponent()
             .appendingPathComponent(url.lastPathComponent + ".1")
         try? FileManager.default.removeItem(at: rotated)
-        try? FileManager.default.moveItem(at: url, to: rotated)
+        guard (try? FileManager.default.moveItem(at: url, to: rotated)) != nil else {
+            // 轮转失败（.1 被占/权限/目录只读）：与 TS sink 同纪律——**降级为只写
+            // stderr**（句柄已关，append 变 no-op），而不是把水位归零。归零会让文件
+            // 在阻塞期间涨到 ~2× 上限，且每次写入都重试一次轮转（2026-12 独立复核）。
+            writtenBytes = 0
+            return
+        }
         writtenBytes = 0
         FileManager.default.createFile(
             atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600])

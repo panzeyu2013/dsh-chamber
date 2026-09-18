@@ -150,7 +150,7 @@ test('runtimeReportSignature distinguishes undefined, content, running bits and 
   )
   // 运行位活性守卫的 L1 对账回执必须进签名（2026-12）：App 的运行时事实提交按
   // 本签名去重，回执若不入签名，一次「事实未变、只有回执结算」的上报会被整个
-  // 丢弃 ⇒ 守卫永远看不到结论，90s 后误判为「对账通道无回执」而假升级。
+  // 丢弃 ⇒ 守卫永远看不到结论，等回执期限（150s）后误判为「对账通道无回执」而假升级。
   const stale: InstanceRuntimeReport = {
     sessions: { p: { running: true } },
     sessionFactReconcile: { requestedAt: 1_000, settledAt: 2_000, ok: true, attempts: 1 },

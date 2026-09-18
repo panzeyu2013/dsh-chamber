@@ -78,6 +78,12 @@ DSHChamberRefreshRatePreference DSHChamberPreferDisplayRefreshRate(WKPreferences
     if (!feature || ![preferences respondsToSelector:@selector(_setEnabled:forFeature:)])
         return DSHChamberRefreshRatePreferenceUnknown;
 
+    // read-back 必须**先证可用**再改：只有 setter 而 read-back 缺失/抛错时"改完再报
+    // Unknown"会让调用方记「SPI 不可用(保持 WebKit 默认)」，而偏好其实已经被关掉
+    // ——日志与事实相反。安全方向 = 不动（不动即 WebKit 默认），2026-12 独立复核。
+    if (DSHChamberRefreshRatePreferenceState(preferences) == DSHChamberRefreshRatePreferenceUnknown)
+        return DSHChamberRefreshRatePreferenceUnknown;
+
     @try {
         [preferences _setEnabled:NO forFeature:feature];
     } @catch (__unused NSException *exception) {

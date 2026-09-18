@@ -246,11 +246,30 @@ test('the veil escape switches first and reclaims only after the switch lands', 
   assert.ok(app.includes('if (fromViewId === targetId) return'), 'an identity switch is a no-op')
   assert.ok(app.includes('!liveServerIdsRef.current.has(targetId)) return'),
     'a retired target must not create an abandonment mark')
-  assert.ok(app.includes('abandonedViewsRef.current.add(fromViewId) try { selectView(targetId)'),
-    'the mark is recorded before the switch, and a synchronous throw revokes it')
-  assert.ok(app.includes('catch (error) { abandonedViewsRef.current.delete(fromViewId)'))
+  assert.ok(app.includes('abandonedViewsRef.current.add(fromViewId)'), 'the mark is recorded before the switch')
+  // 撤回必须覆盖**没有异常**的"没落地"路径（注册表竞态早退 / apply 期目标被删除），
+  // 否则该视图下一次离开会跳过保留宽限被立刻拆掉（2026-12 独立复核）。
+  assert.ok(app.includes('const accepted = selectView(targetId, applied => { if (!applied) revoke() })'),
+    'the switch must report whether it landed; a landing failure revokes the mark')
+  assert.ok(app.includes('if (!accepted) revoke()'), 'a synchronously refused switch revokes the mark')
+  assert.ok(app.includes('onApply?.(false)'), 'the apply-time refusal (roster removal) reports "not landed"')
+  assert.ok(app.includes('onApply?.(true)'), 'the applied path reports "landed"')
+  assert.ok(app.includes('catch (error) {'), 'a synchronous throw still revokes the mark')
   assert.ok(app.includes('abandonedViewsRef.current.delete(viewId)'),
     'selectView revokes the mark (the user came back to that view)')
+  // 面板 hold 必须钉在 reclaimView **函数体内**：全文件存在性会被推迟臂的同名事实
+  // 字符串满足，删掉 reclaimView 里的守卫仍全绿（2026-12 独立复核）。
+  const reclaim = sliceFrom(app, 'const reclaimView = useCallback(', "reclaimView(id, 'retention')")
+  const reclaimSettingsGuard = reclaim.indexOf('if (id === settingsTargetRef.current) return')
+  assert.ok(reclaimSettingsGuard > 0, 'reclaimView must refuse the panel source (every teardown path)')
+  // 而且必须在**任何拆除副作用之前**（这里取收割槽释放这一最早副作用）：守卫若被挪到
+  // 副作用之后，"纯 no-op"的契约就破了（面板仍会被间接钉死，2026-12 独立复核）。
+  const earliestSideEffect = reclaim.indexOf("if (reason === 'harvest' && prewarmInflightRef.current === id)")
+  assert.ok(earliestSideEffect > 0 && reclaimSettingsGuard < earliestSideEffect,
+    'the panel hold must sit before every teardown side effect')
+  // 消费点也要锁：只锁过滤表达式时，把传进 retention 计划的集合换回未过滤版本仍全绿。
+  assert.ok(app.includes('const retentionMountedViews = unsettledDeferredIds.size === 0'))
+  assert.ok(app.includes('mountedViews: retentionMountedViews'), 'the retention planner consumes the filtered list')
   assert.ok(app.includes("if (id === activeView || id === pendingViewRef.current) continue reclaimView(id, 'retention')"),
     'the disposal arm runs only after the view left the active slot')
   // 显式连接：锁在**函数体内**——全文件存在性会被 ensureRemoteConnected 里的同名
@@ -292,6 +311,13 @@ test('the view composes the pure decisions and owns no retry/reconnect sequence'
     'the queue fact is sampled before the retry resets the local state (review F3)')
   // 推迟守卫 + 依赖：相位离开 idle 后 effect 必须自己重跑，否则 boot 永不开始。
   assert.ok(view.includes('if (bootDeferred === true) return'))
+  // 顺序断言（索引比较，而非存在性）：守卫被挪到 startedRef 置位之后，一次 deferred
+  // 视图会永久占用 started（相位离开 idle 后 effect 重跑也被挡回），boot 永不开始
+  // ——而存在性锁仍然全绿（2026-12 独立复核）。
+  const deferredGateAt = view.indexOf('if (bootDeferred === true) return')
+  const startedSetAt = view.indexOf('startedRef.current = true')
+  assert.ok(deferredGateAt >= 0 && startedSetAt >= 0 && deferredGateAt < startedSetAt,
+    'the deferred guard must sit before startedRef is set (else the boot is blocked forever)')
   assert.ok(view.includes('waitForServing, bootDeferred])'))
   // 动作只上报意图：重试/连接/切换的序列都在 App。
   assert.ok(view.includes('onClick={() => onRequestRetry?.()}'))
@@ -334,8 +360,24 @@ test('the view composes the pure decisions and owns no retry/reconnect sequence'
   // 重试复位必须同时清掉可见秒数（只在下一次 boot effect 里清会闪一帧旧值）。
   assert.equal((view.match(/setWaitedMs\(0\)/g) ?? []).length, 2,
     'both the boot start and the retry reset clear the visible clock')
-  // 遮罩合成与 holdVeil 语义不变——本轮只加呈现分支。
-  assert.ok(view.includes('const veilVisible = !settled || holdVeil === true'))
+  // 遮罩合成 = 会话意图门（holdVeil）+ 本地 boot 状态 + **App 的模态失败覆盖层**：
+  // 覆盖层在场时遮罩退出 DOM，否则其按钮仍可聚焦/被读屏播报（2026-12 独立复核）。
+  assert.ok(view.includes('const veilVisible = (!settled || holdVeil === true) && failureOverlayVisible !== true'))
+  assert.ok(view.includes('failureOverlayVisible?: boolean'), 'the App-owned overlay fact is a declared prop')
+  assert.ok(read('../../src/App.tsx').includes('failureOverlayVisible={activeShellError !== null}'),
+    'the App must feed the overlay fact into every view (the overlay is app-global)')
+  // 文案/动作三元组必须**同向**（存在性断言抓不到分支互换：deferred 分支绑定重试
+  // 会让"未连接"的遮罩给出重试按钮 + "正在启动"文案，2026-12 独立复核）。
+  assert.match(view, /veil === 'boot-deferred'\s*\?\s*frameText\(locale, 'boot\.deferred', \{ label \}\)\s*:\s*frameText\(locale, 'boot\.loading', \{ label \}\)/,
+    'the title must follow the deferred phase (not the other way round)')
+  assert.match(view, /veil === 'boot-deferred'\s*\?\s*frameText\(locale, 'boot\.deferredHint'\)\s*:\s*frameText\(locale, 'boot\.loadingHint'\)/,
+    'the hint must follow the deferred phase too')
+  const actionBlock = sliceFrom(view, '<div className="instance-loading-actions" role="status">', '{veilActions && veil ===')
+  assert.ok(actionBlock.length > 0, 'the action block must exist（本组断言的切片锚）')
+  assert.match(actionBlock, /veil === 'boot-deferred'\s*\?\s*\(\s*<Button variant="primary" onClick=\{\(\) => onConnectSource\?\.\(\)\}>\s*\{frameText\(locale, 'action\.connect'\)\}/,
+    'the deferred branch must bind the connect CTA + its label')
+  assert.match(actionBlock, /\)\s*:\s*\(\s*<Button variant="primary" onClick=\{\(\) => onRequestRetry\?\.\(\)\}>\s*\{frameText\(locale, 'action\.retry'\)\}/,
+    'the non-deferred branch must bind the retry CTA + its label')
 })
 
 test('the veil stays parseable-by-construction and the busy fact tracks actionability', () => {
@@ -349,8 +391,9 @@ test('the veil stays parseable-by-construction and the busy fact tracks actionab
   assert.doesNotMatch(raw, /\{\s*[\w.]+\s*&&\s*\(\s*\{/,
     'a comment/expression must never open a JSX expression right after "{cond && ("')
   const view = read('../../src/components/InstanceView.tsx')
-  assert.ok(view.includes('aria-busy={veilActions ? false : true}'),
-    'the busy fact must drop once the veil is actionable (review F8)')
+  assert.ok(view.includes('aria-busy={veilActions || retryQueued ? false : true}'),
+    'the busy fact must drop once the veil is actionable **or** carries the out-of-window queue note '
+    + '(review F8 + 2026-12 独立复核: aria-busy 会把 W4 文案压到 10s 后)')
 })
 
 test('the actionable veil chrome is actually styled (unstyled actions would be unreachable)', () => {

@@ -1929,6 +1929,12 @@ export default function App() {
       const report = watchdogRuntimeFactsRef.current[id]
       livenessSources[id] = {
         sessions: report?.sessions,
+        // 共享重连账本（同一 tick 的 S2/fallback 臂已经写过，见上方循环）：挡住时
+        // 守卫不派遣 L2，只继续 L1——被 App 丢弃的派遣会静默整个退避窗且停摆 L1
+        // （2026-12 独立复核的记账缺口）。
+        reconnectBlocked: reconnectedThisTick.has(id)
+          || (lastReconnectAtRef.current[id] !== undefined
+            && now - lastReconnectAtRef.current[id] < AGGREGATE_RECONNECT_BACKOFF_MS),
         // 代际指纹（registry 投影同源）：不变量是「A 结束、B 开始」若发生在两次
         // tick 之间（隐藏期跳过），新会话绝不能继承旧时段的配额/提示。
         ...(generationBySourceId.get(id) === undefined
@@ -1953,6 +1959,8 @@ export default function App() {
           // 被多条臂各重连一次；跨 tick 也要看账本——S2/fallback 臂可能刚在几十秒前
           // 重连过（它们各自会重放全部 baseline），此时 L2 应当让位而不是紧跟一次
           // （2026-12 三轮复核：账本此前是单向共享的）。
+          // 守卫已用同一账本事实（reconnectBlocked）提前排除被挡住的派遣，这两道
+          // 检查是防御性兜底（账本在同一 tick 的更早阶段被 S2/fallback 臂写入）。
           if (reconnectedThisTick.has(action.sourceId)) continue
           const lastReconnectAt = lastReconnectAtRef.current[action.sourceId]
           if (lastReconnectAt !== undefined && now - lastReconnectAt < AGGREGATE_RECONNECT_BACKOFF_MS) {
@@ -2446,7 +2454,7 @@ export default function App() {
    * 如过渡在途期间注册表删除）。绝不把已回收的视图重新挂成僵尸：一次完整
    * boot 很贵，且回收 effect 的回滚会造成一闪而过的幽灵骨架屏。local 常驻。
    */
-  const selectView = useCallback((viewId: string) => {
+  const selectView = useCallback((viewId: string, onApply?: (applied: boolean) => void): boolean => {
     // 用户又选中这个视图 = 撤回"放弃"意图（否则它下一次离开会跳过保留宽限被
     // 立即回收）。切换来源的动作把标记写在**另一个** id 上，不会被这里误删。
     abandonedViewsRef.current.delete(viewId)
@@ -2456,7 +2464,7 @@ export default function App() {
     // 用户点击 = 意图使用该来源：error/degraded 隧道立即再试（慢速重探的
     // 即时加速；idle 手动断开不触碰——见 ensureRemoteConnected）。
     ensureRemoteConnected(viewId)
-    if (viewId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(viewId)) return
+    if (viewId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(viewId)) return false
     autoPrewarmedRef.current.delete(viewId)
     // 用户主动点开 = 意图使用：解除"回收后不自动预热"抑制（此后闲置仍会被
     // 再次回收并再次抑制）。
@@ -2471,8 +2479,8 @@ export default function App() {
     // 意图（最后一次意图胜出，view-transition.ts），不能按当前态误丢。
     // 被回收来源在 apply 时被守卫否决后 pendingViewRef 已清空，重加后的点击
     // 不被残留意图误吞。
-    if (viewId === pendingViewRef.current) return
-    if (pendingViewRef.current === null && viewId === activeViewRef.current) return
+    if (viewId === pendingViewRef.current) return true
+    if (pendingViewRef.current === null && viewId === activeViewRef.current) return true
     // chamber (2026-08 scroll sync): anchor the outgoing shell's sidebar
     // scroll BEFORE the switch; the incoming shell's stale scrollTop would
     // otherwise make the whole sidebar jump (each N-ctx shell owns its own
@@ -2498,6 +2506,9 @@ export default function App() {
         // 视图重新挂成僵尸：一次完整 boot 很贵，且回收 effect 的回滚会造成
         // 一闪而过的幽灵骨架屏。local 常驻）。
         if (pendingViewRef.current === viewId) pendingViewRef.current = null
+        // 目标在 apply 期被删除 = 这次切换没有落地：通知调用方撤回放弃标记
+        // （2026-12 独立复核：此路径只是 return，不抛异常）。
+        onApply?.(false)
         return
       }
       // 仅当本次意图仍是最新时清掉 pending——更晚的意图（已入过渡链）继续
@@ -2509,7 +2520,9 @@ export default function App() {
       // teardown 不交错）；本视图的 hiddenSince 由 activeView 落地 effect 清除。
       setMountedViews(prev => (prev.includes(viewId) ? prev : [...prev, viewId]))
       if (scrollAnchor !== null) restoreSidebarScroll(viewId, scrollAnchor)
+      onApply?.(true)
     }, 'view')
+    return true
   }, [ensureRemoteConnected, probeRemoteReady])
 
   /**
@@ -2525,10 +2538,16 @@ export default function App() {
     if (fromViewId === targetId) return
     if (targetId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(targetId)) return
     if (fromViewId !== LOCAL_INSTANCE_ID) abandonedViewsRef.current.add(fromViewId)
+    // selectView 的"没落地"**不抛异常**（注册表竞态早退、apply 期目标被删除都只是
+    // return），所以同步 try/catch 撤不掉标记：用一个"落地即回调"的返回值收口——
+    // 只有切换真的被接受/落地，放弃标记才保留，否则撤回（2026-12 独立复核：
+    // 否则一次没落地的切换会让该视图下一次离开跳过 60s 保留宽限被立刻拆掉）。
+    const revoke = (): void => { abandonedViewsRef.current.delete(fromViewId) }
     try {
-      selectView(targetId)
+      const accepted = selectView(targetId, applied => { if (!applied) revoke() })
+      if (!accepted) revoke()
     } catch (error) {
-      abandonedViewsRef.current.delete(fromViewId)
+      revoke()
       console.error(`[renderer] veil switch ${fromViewId} -> ${targetId} failed:`, error)
     }
   }, [selectView])
@@ -2852,8 +2871,11 @@ export default function App() {
     // 面板关闭时 SettingsShell 显式 setSettingsTarget(undefined)，hold 不超期；
     // 来源退役的卸载走注册表删除臂（不经本函数），不存在"退役壳拆不掉"。
     // 守卫放在函数最前 = 命中即**纯 no-op**（连收割槽释放都不做）：不会造成
-    // 预热调度停滞——该挂载仍计入占用，`warmRemaining` 恒为 0，本来也不会
-    // 起新的后台 boot；面板关闭后下一个 tick 由放弃/收割/推迟任一臂照常恢复。
+    // 预热调度停滞——保留位里的挂载仍计入占用（`warmRemaining` 为 0，本就不起新的
+    // 后台 boot）；而"推迟 + 未结算"这种**不计入占用**的形状另有收口：135s 放弃臂
+    // 独立清 `prewarmInflightRef`（abandon 循环不读面板守卫），面板关闭后下一个 tick
+    // 由放弃/收割/推迟任一臂照常恢复。2026-12 独立复核修正：原文用"仍计入占用"
+    // 解释所有形状，对 deferred+未结算不成立（结论不变，理由曾错）。
     if (id === settingsTargetRef.current) return
     // 收割回收时后台槽就是它自己：boot 已产出首个推送（或已失败），先释放槽位
     // 再回收，否则 prewarmInflight 守卫会把自己挡回去（保留回收语义不变）。
@@ -4117,7 +4139,9 @@ const HEALTH_ERROR_GRACE_MS = 10_000
                 {t('sessionStall.text', {
                   sources: visibleStalls
                     .map(id => servers.find(server => server.id === id)?.label ?? id)
-                    .join('、'),
+                    // 分隔符按语言（en 用 ', '，zh 用 '、'）：此前硬写 '、' 会让英文
+                    // 文案里出现中文顿号（2026-12 独立复核的 i18n 细节）。
+                    .join(t('sessionStall.separator')),
                 })}
               </div>
               <div className="session-stall-actions">
@@ -4198,6 +4222,9 @@ const HEALTH_ERROR_GRACE_MS = 10_000
               // W1/W2/W4：遮罩的事实输入与动作（导航/回收顺序仍由 App 拥有）。
               sourcePhase={servers.find(server => server.id === viewId)?.phase}
               bootDeferred={deferredBootIds.has(viewId)}
+              // App 的全局失败覆盖层是模态的：覆盖层在场时遮罩退出 DOM（否则
+              // 其按钮仍可聚焦/被读屏播报，2026-12 独立复核）。
+              failureOverlayVisible={activeShellError !== null}
               switchTargets={servers
                 .filter(server => server.id !== viewId)
                 .map(server => ({ id: server.id, label: server.label }))}

@@ -216,13 +216,25 @@ test('dispose：取消已排期的重试与在途超时，且晚到的结算不�
     verify: alwaysTrue,
   })
   h.reconciler.request()
-  const attemptTimer = h.cancelled.length === 0 ? h.scheduled[0] : undefined
   h.reconciler.dispose()
   assert.ok(h.cancelled.length >= 1, 'dispose 必须取消在途尝试的超时定时器')
   resolveLate?.(undefined)
   await tick()
   assert.deepEqual(h.settled, [], 'dispose 后结算不得再回调 onSettled')
-  void attemptTimer
+})
+
+test('nextSettledAt：冻结时钟下连续两次结算仍单调推进（水位比较不得吞掉后一次）', async () => {
+  // 守卫只认「结算时刻严格大于上次消费水位」的回执；同一毫秒的第二次结算若不 +1，
+  // 就会被当成旧回执丢弃（守卫永远看不到结论）。此前的用例只执行到这条路径，
+  // 没有断言单调性（2026-12 独立复核）。
+  const h = harness({ refresh: () => Promise.resolve(undefined), verify: alwaysTrue })
+  h.reconciler.request()
+  await tick()
+  assert.equal(h.reconciler.snapshot()?.settledAt, 1_000, '冻结时钟下第一次结算取 now')
+  h.reconciler.request()
+  await tick()
+  assert.equal(h.reconciler.snapshot()?.settledAt, 1_001,
+    '同毫秒的第二次结算必须 +1，否则水位比较会吞掉它')
 })
 
 test('权威判定：官方与权威一致（都 running）⇒ 收敛（长工具/长推理不得升级）', () => {

@@ -49,8 +49,12 @@ test('App：守卫在既有 staleness watchdog 内规划，并把三级动作派
   assert.match(code, /const reconnectedThisTick = new Set<string>\(\)/)
   assert.match(code, /if \(reconnectedThisTick\.has\(action\.sourceId\)\) continue/)
   // **另有两条臂也要登记**：fallback-view 重建臂漏登记就会被守卫再重连一次
-  // （三轮复核抓出的同 tick 双重重连）。
-  assert.match(code, /if \(reconnectInstanceConnection\(id\)\) \{\n\s*lastReconnectAtRef\.current\[id\] = now\n\s*reconnectedThisTick\.add\(id\)/,
+  // （三轮复核抓出的同 tick 双重重连）。断言必须**切片到该臂内部**：同形状的登记块
+  // 在 S2 臂里同样成立，不切片时删掉这条臂的登记仍然全绿（2026-12 独立复核）。
+  const fallbackArmAt = code.lastIndexOf('if (!shouldRebaselineFallbackView({')
+  assert.ok(fallbackArmAt > 0, 'fallback-view 臂必须存在（本条锁的切片锚）')
+  assert.match(code.slice(fallbackArmAt),
+    /if \(reconnectInstanceConnection\(id\)\) \{\s*lastReconnectAtRef\.current\[id\] = now\s*reconnectedThisTick\.add\(id\)/,
     'fallback-view 臂执行 reconnect 后必须登记本 tick 集合')
   // 跨 tick：L2 必须看 S2/fallback 臂的 per-source 账本（否则几十秒内连发两次）。
   assert.match(code, /now - lastReconnectAt < AGGREGATE_RECONNECT_BACKOFF_MS/)
@@ -59,6 +63,10 @@ test('App：守卫在既有 staleness watchdog 内规划，并把三级动作派
   // 守卫读的是**原始** runtimeFacts（投影 mergeRuntimeFacts 刻意丢掉回执）。
   assert.match(code, /watchdogRuntimeFactsRef\.current\[id\]/)
   assert.match(code, /sessions: report\?\.sessions/)
+  // 镜像写入本身也必须存在：删掉它守卫读到的永远是空事实（静默失效），
+  // 而此前没有任何锁覆盖这一行（2026-12 独立复核）。
+  assert.match(code, /watchdogRuntimeFactsRef\.current = runtimeFacts/,
+    '原始回执必须在渲染期写进镜像')
   assert.match(code, /\{ reconcile: report\.sessionFactReconcile \}/)
   // 隐藏期门控继承：visibilitychange 补偿 tick 必须走同一个 watchdog 回调，
   // 否则隐藏期间到期的回执要等到下一次可见性变化才被消费。

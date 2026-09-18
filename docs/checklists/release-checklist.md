@@ -125,8 +125,10 @@ CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 ta
 - [ ] **原生壳更新密钥（Sparkle，S-01 / D-1 选 B）**：仓库 secrets 需配
       `SPARKLE_PUBLIC_ED_KEY`（EdDSA 公钥，注入 Info.plist）与 `SPARKLE_PRIVATE_KEY`
       （EdDSA 私钥，仅正式腿用它签 appcast）。两把钥匙与 Developer ID /
-      公证**互不替代**：签名/公证是分发信任，EdDSA 是更新通道鉴权。任一缺失时发布腿
-      loud 跳过（出包但不带安装腿）。资产核对：稳定通道 = release 里的
+      公证**互不替代**：签名/公证是分发信任，EdDSA 是更新通道鉴权。**发布门禁**
+      （策略测试逐条钉住）：公钥有而私钥缺 = FAIL（壳会轮询没人签的 feed）；私钥有而
+      beta/stable appcast 缺失 = FAIL；**两把都缺**才是 loud 降级（照常出包，客户端
+      看不到更新）。资产核对：稳定通道 = release 里的
       `appcast-swift.xml`；beta 通道 = 滚动 tag `appcast-swift-beta` 上的
       `appcast-swift-beta.xml` **以及它每条 enclosure 引用的 zip**（S-36：appcast 里
       的 zip 必须已在滚动 release 上，否则 beta 客户端能发现、下载 404）。

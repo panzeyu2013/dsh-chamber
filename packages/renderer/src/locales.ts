@@ -150,6 +150,8 @@ export const zh = {
   // 判据是「拿不到权威结论」（不是「沉默很久」）：长工具/长推理的合法静默与
   // 真卡死在本层不可区分，文案必须只说「无法确认」，不得断言任务停了。
   'sessionStall.text': '无法确认 {sources} 的会话状态：连接可能已停滞。',
+  /** L3 source-list separator: CJK enumeration comma (en uses ', '). */
+  'sessionStall.separator': '、',
   /** L3 light recovery: reconnect the source's connection generation without a page reload. */
   'sessionStall.reconnect': '重新连接',
   /** L3 heavy recovery: reload the whole app page (loses page-local UI state). */
@@ -201,6 +203,7 @@ export const en: Record<FrameKey, string> = {
   'notification.awaitingAnswer': 'The agent is waiting for your answer',
   'notification.awaitingApproval': 'The agent requests your approval',
   'sessionStall.text': 'Cannot confirm the session state of {sources}: the connection may be stalled.',
+  'sessionStall.separator': ', ',
   'sessionStall.reconnect': 'Reconnect',
   'sessionStall.reload': 'Reload the app page',
   'sessionStall.dismiss': 'Dismiss',

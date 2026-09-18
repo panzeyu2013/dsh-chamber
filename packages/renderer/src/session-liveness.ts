@@ -70,7 +70,9 @@ export interface SessionFactReconcileFacts {
    * 权威判定（三值；缺省 = 旧 producer 或未结算）。
    * `unknown` = 辅助探针自己失败（与被守卫的 WS 事实通道无关的载体抖动）：
    * **既不升级也不清等待**——守卫保留「等回执」计时，持续拿不到权威结论仍会在
-   * 超期后升级，而单次探针抖动不会制造假 reconnect（2026-12 二轮复核）。
+   * 超期后升级；同时**一次性**把升级期限从这次无结论起重新起算（见
+   * `unknownAbsorbed`），使单次探针抖动不会在 coalesce 允许下一次 L1 之前就
+   * 制造假 reconnect（2026-12 二轮复核 + 独立复核的时间线仿真）。
    */
   readonly verdict?: 'converged' | 'stale' | 'unknown'
   /** 本轮链内尝试次数（诊断用）。 */
@@ -85,6 +87,14 @@ export interface SessionLivenessSourceInput {
   readonly generation?: string
   /** 最近一次对账回执；缺席 = 从未请求过。 */
   readonly reconcile?: SessionFactReconcileFacts
+  /**
+   * App 侧共享重连账本的事实：该来源此刻**不可执行** L2（同一 tick 里另一条臂
+   * 刚重连过，或落在 60s 退避窗内）。守卫据此**不派遣**，而不是派遣后被 App 丢弃
+   * ——被丢弃的派遣已经在守卫里记账（`lastReconnectDispatchAt` 置位、等待计时清零），
+   * 会让这条臂静默整个退避窗且 L1 一并停摆，同时 no-op 账不增长（2026-12 独立
+   * 复核抓出的记账缺口）。账本事实由 App 提供（它拥有 S2/fallback 两条臂的写入）。
+   */
+  readonly reconnectBlocked?: boolean
 }
 
 /** 一次 tick 的输入。 */
@@ -144,6 +154,8 @@ export const SESSION_LIVENESS_DEFAULTS: SessionLivenessConfig = {
   // ≈ 111.5s，见 sidebar/src/shared/session-fact-reconcile.ts 的默认值）：相位预算
   // 拆开之后，90s 会在「一切正常但宿主很慢」时误判成「拿不到结论」⇒ 假 L2
   // （2026-12 三轮自审发现的跨模块不变量，由 wiring 测试锁住）。
+  // 本值 150s < coalesce 200s：单次「探针无结论」（unknown）由 unknownAbsorbed
+  // 一次性顺延期限，否则它必然抢在下一次 L1 之前到点（2026-12 独立复核实测）。
   refreshOutcomeTimeoutMs: 150_000,
   reconnectBackoffMs: 300_000,
   maxReconnects: 1,
@@ -187,9 +199,22 @@ export interface SessionLivenessRecord {
    * 若每次请求都重置它，只要 coalesce < 等回执期限（生产值 200s < 150s 不成立时
    * 才需要担心；此处的原始缺陷发生在早期 60s/90s 组合下），
    * 对账通道静默时这个计时器永不到期 ⇒ L2 永不触发（本守卫最初的实现缺陷，
-   * 由 lifecycle 测试抓出）。
+   * 由 lifecycle 测试抓出）。**唯一例外**是 {@link unknownAbsorbed} 的顺延与
+   * 「顺延之后新发 L1」的重新起算——两者都只发生一次。
    */
   awaitingOutcomeSince?: number
+  /**
+   * 本等待周期是否已用一次 `unknown` 顺延过升级期限（一次性，绝不累积）。
+   *
+   * 生产常量下 `refreshOutcomeTimeoutMs`(150s) < `refreshCoalesceMs`(200s)：探针
+   * 一次无结论（502/代理重启/慢 session.list）若不顺延，期限必然抢在下一次 L1
+   * 之前到点，把「探针无法裁决」误判成「对账通道已坏」⇒ 必然一次假 L2 并吃掉
+   * 该 running 时段唯一的重连预算，之后真故障只剩横幅（2026-12 独立复核的时间线
+   * 仿真实测）。顺延只做一次：长期只有 unknown 的通道仍会在下一个期限到点时升级
+   * （有界：≤ 最近一次 L1 + 期限，绝不无限顺延）。拿到非 unknown 结论或真实 L2
+   * 之后清零。
+   */
+  unknownAbsorbed?: boolean
   /** 已消费的对账回执结算时刻（回执只被消费一次）。 */
   outcomeSeenAt?: number
   /** 已消费回执的成功与否。 */
@@ -282,6 +307,10 @@ export function planSessionLiveness(
     // 重起算（否则新代际的第一个 tick 会带着旧代际的 since 立刻发 L1，与「代际围栏」
     // 的措辞不符——2026-12 三轮复核）。同代际内只有「整组换代（不相交）」重起算，
     // 部分重叠时存活会话保留自己的计时。
+    // 残余（2026-12 独立复核，已裁决**保留**）：一个卡住的会话若在某一 tick 里从
+    // 事实通道消失、下一 tick 又出现，它会重新 seed（检测最多推迟一个 refreshAfterMs）。
+    // 不保留"墓碑"是为了不把"退役后再以同 id 挂载/新会话复用同 id"的形态继承旧时钟
+    // ——那会把上一会话的年龄算到新会话头上（假升级方向），两害相权取假阴性。
     const runningSince: Record<string, number> = {}
     for (const id of runningIds) {
       runningSince[id] = generationChanged ? now : previousRunningSince[id] ?? now
@@ -315,13 +344,23 @@ export function planSessionLiveness(
       && (record.outcomeSeenAt === undefined || reconcile.settledAt > record.outcomeSeenAt)) {
       record.outcomeSeenAt = reconcile.settledAt
       if (reconcile.verdict === 'unknown') {
-        // 无结论：只推进水位。不置健康、不清「等回执」计时——持续 unknown 会在
-        // 超期后按「长期拿不到权威结论」升级，单次探针抖动则被自然吸收。
+        // 无结论：只推进水位、**一次性**把期限从这次无结论起重新起算（第二次
+        // unknown 不再顺延）。不清等待计时：持续拿不到权威结论仍会在超期后升级。
+        if (record.unknownAbsorbed !== true) {
+          record.unknownAbsorbed = true
+          record.awaitingOutcomeSince = now
+        }
       } else {
         record.lastOutcomeOk = reconcile.ok
         record.awaitingOutcomeSince = undefined
+        // 等待周期结束：下一次 unknown 可以重新顺延一次。
+        record.unknownAbsorbed = undefined
         // 拿到健康结论 ⇒ 通道已恢复，撤下 L3 提示（否则一次恢复会把横幅永久
         // latch 到 running 结束，之后真断链也不再提示——2026-12 复核修复）。
+        // 刻意**不**重置 ladderAnchorAt：梯子已到顶（自愈预算用尽）之后再次出现未收敛
+        // 证据就该立刻提示，不该再等一个 noticeAfterMs 宽限——否则用户在一个已耗尽自愈
+        // 的链路上看不到第二次故障。宽限只在梯子到顶的那一刻给一次（2026-12 独立复核
+        // 记为有意裁决，lifecycle 测试钉住）。
         if (reconcile.ok === true && record.noticed) record.noticed = false
       }
     }
@@ -339,7 +378,12 @@ export function planSessionLiveness(
     // outcomeMissing 收口，真卡死路径不受影响。
     const outcomeFailed = record.lastOutcomeOk === false
       && (record.outcomeSeenAt ?? 0) > (record.lastReconnectAt ?? 0)
-    const reconnectDue = (outcomeFailed || outcomeMissing)
+    // App 侧共享账本挡住派遣时**不派遣**：派遣会在守卫里记账（lastReconnectDispatchAt
+    // 置位、等待计时清零），被 App 丢弃后这条臂会静默一整个退避窗、连 L1 也一并停摆，
+    // 且 no-op 账不增长（2026-12 独立复核的记账缺口）。不派遣则本 tick 走 L1 路径，
+    // 退避窗一过即可升级。
+    const reconnectDue = source.reconnectBlocked !== true
+      && (outcomeFailed || outcomeMissing)
       && record.reconnectCount < config.maxReconnects
       && (record.lastReconnectDispatchAt === undefined
         || now - record.lastReconnectDispatchAt >= config.reconnectBackoffMs)
@@ -351,6 +395,7 @@ export function planSessionLiveness(
       // 的仿真），而这份配额的意义正是「连重连都不能变成探测风暴」。
       record.lastRefreshRequestedAt = undefined
       record.awaitingOutcomeSince = undefined
+      record.unknownAbsorbed = undefined
       // 刻意**不**清 lastOutcomeOk：它是「最后一次权威结论」，正是重连之后
       // L3 门（要求未收敛证据）与 noticeAfterMs 宽限所依赖的事实；抹掉它会让
       // 守卫在重连后立刻失忆（提示永远不亮或立刻亮），也是 2026-12 二轮复核
@@ -368,8 +413,11 @@ export function planSessionLiveness(
         record.refreshHistory = [...history, now]
         record.lastRefreshRequestedAt = now
         // 只有「还没有在等的回执」才开新计时器——coalesce 重复请求不得把
-        // 升级期限一路推迟。
-        record.awaitingOutcomeSince ??= now
+        // 升级期限一路推迟。唯一例外：上一次等待被 unknown 顺延过，新请求要开一个
+        // 新的完整期限，否则顺延出的窗口会被慢宿主的对账链吃光（顺延本身只做一次，
+        // 所以不会累积成"永不升级"）。
+        if (record.awaitingOutcomeSince === undefined) record.awaitingOutcomeSince = now
+        else if (record.unknownAbsorbed === true) record.awaitingOutcomeSince = now
         actions.push({ kind: 'refresh', sourceId })
       } else {
         record.refreshHistory = history

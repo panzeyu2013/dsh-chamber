@@ -23,7 +23,9 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  CONTROL_LOG_DIR, CONTROL_LOG_FILE, createControlLogSink, formatControlLogLine, withControlLogFile,
+  CONTROL_LOG_DIR, CONTROL_LOG_FILE, DEFAULT_CONTROL_LOG_FILES, DEFAULT_CONTROL_LOG_MAX_BYTES,
+  IDENTITY_CHECK_EVERY, MIN_CONTROL_LOG_FILES, createControlLogSink, formatControlLogLine,
+  withControlLogFile,
 } from '../src/log-file.ts'
 
 const tempDir = (): string => mkdtempSync(join(tmpdir(), 'cp-log-'))
@@ -193,6 +195,60 @@ test('行序列化：换行折叠、Error 取 stack、超长截断', () => {
   const long = formatControlLogLine(['y'.repeat(9_000)])
   assert.ok(long.length <= 8_193, '单行有界')
   assert.ok(long.endsWith('…'))
+})
+
+test('默认保留规格被钉住（文档记录的 2 MiB × 3 份 = 6 MiB 不得静默漂移）', () => {
+  // 设计 02 §3.8 / 设计 25 §3.1 / T-25 都以这些数字作跨 flavor 对照（Electron 2 MiB×3
+  // vs 原生 256 KiB×2）；常量此前只被 src 内部引用，改小会让文档与实现脱钩而零告警
+  // （2026-12 独立复核）。
+  assert.equal(DEFAULT_CONTROL_LOG_MAX_BYTES, 2 * 1024 * 1024)
+  assert.equal(DEFAULT_CONTROL_LOG_FILES, 3)
+  assert.equal(MIN_CONTROL_LOG_FILES, 2)
+  assert.equal(CONTROL_LOG_DIR, 'logs')
+  assert.equal(CONTROL_LOG_FILE, 'control-plane.log')
+})
+
+test('已存在的宽松目录/文件必须被显式收紧到 0700/0600（mode 只在创建时生效）', () => {
+  const stateDir = tempDir()
+  const directory = join(stateDir, CONTROL_LOG_DIR)
+  const path = join(directory, CONTROL_LOG_FILE)
+  mkdirSync(directory, { recursive: true })
+  chmodSync(directory, 0o755)
+  writeFileSync(path, '')
+  chmodSync(path, 0o644)
+  const sink = createControlLogSink({ stateDir, warn: () => undefined })
+  sink.write({ ts: 't', level: 'log', line: 'tightened' })
+  assert.equal(statSync(directory).mode & 0o777, 0o700, '既有目录必须收紧到 0700')
+  assert.equal(statSync(path).mode & 0o777, 0o600, '既有文件必须收紧到 0600')
+  sink.close()
+  rmSync(stateDir, { recursive: true, force: true })
+})
+
+test('日志文件被外部删除后必须有界自愈（常驻句柄不得一直写进已 unlink 的 inode）', () => {
+  const stateDir = tempDir()
+  const path = join(stateDir, CONTROL_LOG_DIR, CONTROL_LOG_FILE)
+  const sink = createControlLogSink({ stateDir, warn: () => undefined })
+  sink.write({ ts: 't', level: 'log', line: 'before-delete' })
+  rmSync(path, { force: true })
+  assert.ok(!existsSync(path))
+  // 身份巡检按行摊薄：IDENTITY_CHECK_EVERY 行内必须发现文件消失并重新创建。
+  for (let index = 0; index < IDENTITY_CHECK_EVERY; index += 1) {
+    sink.write({ ts: 't', level: 'log', line: 'after-' + String(index) })
+  }
+  assert.ok(existsSync(path), '巡检后必须重新创建日志文件')
+  assert.ok(readFileSync(path, 'utf8').includes('after-' + String(IDENTITY_CHECK_EVERY - 1)),
+    '重建后的文件必须继续接住后续日志')
+  sink.close()
+  rmSync(stateDir, { recursive: true, force: true })
+})
+
+test('序列化永不抛回调用方（toJSON 与 toString 同时抛的宿主对象）', () => {
+  const hostile = {
+    toJSON() { throw new Error('boom-json') },
+    toString() { throw new Error('boom-string') },
+  }
+  assert.doesNotThrow(() => formatControlLogLine([hostile]),
+    '日志序列化失败不得把异常抛回 logger（否则 logger.log 本身成为新的失败面）')
 })
 
 test('stateDir 下的 logs 目录被创建（与 host-logs 并列，不互相干扰）', () => {

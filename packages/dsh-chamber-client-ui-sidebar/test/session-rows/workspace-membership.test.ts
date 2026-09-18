@@ -444,6 +444,28 @@ test('mergeRuntimeFacts 刻意丢弃对账回执（投影不得携带守卫内�
   )
 })
 
+test('mergeRuntimeFacts：回执抖动（含 completedBySource=false 显式路径）绝不改动投影', () => {
+  const base = { current: 's1', sessions: { s1: { running: true } } }
+  const churned = {
+    ...base,
+    sessionFactReconcile: { requestedAt: 9, settledAt: 10, ok: false, attempts: 2, verdict: 'stale' as const },
+  }
+  // completedBySource=false 是「该来源未武装陈旧点」的**显式**输入（不是缺席）：
+  // 无论哪条路径，回执都不得进入投影面（2026-12 独立复核要求钉住这条边界）。
+  const completedInputs: (Record<string, boolean> | undefined)[] = [undefined, {}, { s1: false }]
+  for (const completed of completedInputs) {
+    assert.deepEqual(
+      mergeRuntimeFacts(churned, completed),
+      mergeRuntimeFacts(base, completed),
+      '回执抖动不得影响投影（含显式 false 路径）',
+    )
+    assert.ok(
+      !('sessionFactReconcile' in (mergeRuntimeFacts(churned, completed) ?? {})),
+      '投影绝不携带对账回执',
+    )
+  }
+})
+
 test('mergeRuntimeFacts overlays App-armed dots onto the report rows, preserving live extras', () => {
   const merged = mergeRuntimeFacts(
     {

@@ -1084,4 +1084,21 @@ final class ShellStartupTests: XCTestCase {
                        "http://127.0.0.1:17520/",
                        "dev 缺省控制面 URL 不变")
     }
+
+    /// S-49：初始窗口几何是本仓的**显式折中**（内容区 786 让两端各偏 ~14pt），
+    /// 不是随手值。此前没有任何测试覆盖它，改一行就能静默漂移（2026-12 独立复核）——
+    /// 这里钉住，任何改动都必须同时更新 deviations S-49 的裁决记录。
+    func testInitialWindowGeometryMatchesTheRecordedCompromise() throws {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/DSHChamberPoc/MainWindowController.swift")
+        let code = try String(contentsOf: url, encoding: .utf8)
+            .split(separator: "\n")
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
+        XCTAssertTrue(code.contains("NSSize(width: 1280, height: 786)"),
+                      "S-49：初始内容区必须是 1280×786 的折中值（改动请同步 deviations S-49）")
+    }
 }

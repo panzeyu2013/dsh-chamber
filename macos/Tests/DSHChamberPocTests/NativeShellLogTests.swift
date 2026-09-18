@@ -153,6 +153,61 @@ final class NativeShellLogTests: XCTestCase {
         log.note("note-to-stdout")  // print + no-op
     }
 
+    /// 2026-12 独立复核：叶子是符号链接时必须拒绝打开（FileHandle 会跟随链接把日志
+    /// 写进目标文件；控制面 sink 用 O_NOFOLLOW 挡这一类，原生侧用同判据）。
+    func testSymlinkedLeafIsRefusedInsteadOfWritingThroughTheLink() throws {
+        let outside = tempDir.appendingPathComponent("outside.log")
+        try Data().write(to: outside)
+        let link = tempDir.appendingPathComponent(NativeShellLog.directoryName)
+            .appendingPathComponent(NativeShellLog.fileName)
+        try FileManager.default.createDirectory(at: link.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+        let log = NativeShellLog(fileURL: link)
+        XCTAssertFalse(log.isActive, "符号链接叶子不得打开（会被跟随写出去）")
+        log.append("must-not-land-outside")
+        let written = try Data(contentsOf: outside)
+        XCTAssertTrue(written.isEmpty, "绝不透过符号链接写出去")
+    }
+
+    /// 目录本身是符号链接时同样拒绝（createDirectory 会接受已存在的链接）。
+    func testSymlinkedDirectoryIsRefused() throws {
+        let outsideDir = tempDir.appendingPathComponent("outside-dir")
+        try FileManager.default.createDirectory(at: outsideDir, withIntermediateDirectories: true)
+        let link = tempDir.appendingPathComponent(NativeShellLog.directoryName)
+        try FileManager.default.createSymbolicLink(
+            at: link, withDestinationURL: outsideDir)
+        let log = NativeShellLog(fileURL: link.appendingPathComponent(NativeShellLog.fileName))
+        XCTAssertFalse(log.isActive, "符号链接目录不得打开")
+        log.append("must-not-land-outside")
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: outsideDir.appendingPathComponent(NativeShellLog.fileName).path),
+            "绝不透过目录链接写出去")
+    }
+
+    /// 2026-12 独立复核：轮转失败不得把水位归零（那会让文件在阻塞期间涨到 ~2× 上限，
+    /// 且每次写入都重试轮转）——与 TS sink 同纪律，降级为只写 stderr。
+    func testRotationFailureDegradesInsteadOfGrowingToTwiceTheLimit() throws {
+        XCTAssertEqual(NativeShellLog.defaultMaxBytes, 256 * 1024, "文档记录的 256 KiB 上限被钉住")
+        let url = tempDir.appendingPathComponent(NativeShellLog.directoryName)
+            .appendingPathComponent(NativeShellLog.fileName)
+        let log = NativeShellLog(fileURL: url, maxBytes: 256)
+        XCTAssertTrue(log.isActive)
+        for _ in 0..<3 { log.append(String(repeating: "a", count: 48)) }
+        // 目录改成不可写：removeItem/moveItem/createFile 全部失败 ⇒ 轮转失败。
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o500], ofItemAtPath: url.deletingLastPathComponent().path)
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o700], ofItemAtPath: url.deletingLastPathComponent().path)
+        }
+        log.append(String(repeating: "b", count: 48))
+        XCTAssertFalse(log.isActive, "轮转失败必须降级为只写 stderr")
+        let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+        let size = (attributes[.size] as? NSNumber)?.intValue ?? 0
+        XCTAssertLessThan(size, 512, "降级后的文件不得涨到 ~2× 上限")
+    }
+
     func testOpenFailureDegradesSilently() throws {
         // logs 路径被一个普通文件占住 → createDirectory 失败 → 只打印。
         let blocker = tempDir.appendingPathComponent(NativeShellLog.directoryName)
