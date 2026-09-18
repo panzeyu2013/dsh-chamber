@@ -205,6 +205,59 @@ test('快 unknown（L1 后立刻结算）不吞掉唯一预算：下一次 L1 �
   assert.deepEqual(h.at(1_400, { a: { running: true } }, healthy).actions, [], '健康结论之后不得重连')
 })
 
+test('重连之后的 unknown 不得复活重连前的失败证据（假 L3 的整类形态）', () => {
+  // 2026-12 三轮独立复核：unknown 会被计入「已消费回执」水位，而 lastOutcomeOk=false
+  // 是刻意跨重连保留的；拿 outcomeSeenAt 当失败证据的时钟 ⇒ 重连前那次失败 + 重连后
+  // 一次**没有结论**的探针 = 看起来"重连之后仍然失败" ⇒ 假横幅（复现时间线：
+  // L1@1000 → stale@1005 → L2@1005 → L1@1100 → unknown@1200 → 假 notice@1310）。
+  const h = harness({ refreshAfterMs: 1_000, refreshCoalesceMs: 500, refreshOutcomeTimeoutMs: 400 })
+  h.at(0, { a: { running: true } })
+  h.at(1_000) // L1 #1
+  const stale: Reconcile = { requestedAt: 1_000, settledAt: 1_005, ok: false, attempts: 1, verdict: 'stale' }
+  assert.deepEqual(h.at(1_005, { a: { running: true } }, stale).actions,
+    [{ kind: 'reconnect', sourceId: 'local' }], '真实失败证据触发唯一一次重连')
+  h.mark(1_005)
+  assert.deepEqual(h.at(1_100, { a: { running: true } }, stale).actions,
+    [{ kind: 'refresh', sourceId: 'local' }], '重连后重放一次 L1')
+  const unknown: Reconcile = { requestedAt: 1_100, settledAt: 1_200, ok: false, attempts: 1, verdict: 'unknown' }
+  h.at(1_200, { a: { running: true } }, unknown)
+  assert.deepEqual(h.at(1_310, { a: { running: true } }, unknown).actions, [],
+    'unknown 没有给出任何结论：绝不能把重连前的失败证据续到重连之后')
+  assert.deepEqual(h.at(1_310, { a: { running: true } }, unknown).stalled, [])
+  // 阳性对照：真正的**重连之后**失败结论仍必须提示（修完不能把 L3 一起关掉）。
+  const staleAfter: Reconcile = { requestedAt: 1_100, settledAt: 1_320, ok: false, attempts: 1, verdict: 'stale' }
+  assert.deepEqual(h.at(1_320, { a: { running: true } }, staleAfter).actions,
+    [{ kind: 'notice', sourceId: 'local' }], '有结论的失败仍要提示')
+})
+
+test('与吸收同一 tick 发出的 L1 仍算"之前"：期限再多等一个 coalesce（边界由 <= 钉住）', () => {
+  const h = harness({ refreshAfterMs: 1_000, refreshCoalesceMs: 500, refreshOutcomeTimeoutMs: 400 })
+  h.at(0, { a: { running: true } })
+  // 同一 tick 里既消费到 unknown（settledAt = 1_000）又发出 L1 ⇒ 两个时间戳相等。
+  const unknown: Reconcile = { requestedAt: 1_000, settledAt: 1_000, ok: false, attempts: 1, verdict: 'unknown' }
+  assert.deepEqual(h.at(1_000, { a: { running: true } }, unknown).actions,
+    [{ kind: 'refresh', sourceId: 'local' }])
+  assert.deepEqual(h.at(1_401, { a: { running: true } }, unknown).actions, [],
+    '同 tick 的 L1 不改判成"之后"（改成 < 会在这里假 L2）')
+  assert.deepEqual(h.at(1_500, { a: { running: true } }, unknown).actions,
+    [{ kind: 'refresh', sourceId: 'local' }], 'coalesce 到点补发 L1，期限重新起算')
+})
+
+test('另一条臂持续挡住派遣时 L3 仍有出口（blockedReconnects 计入梯子）', () => {
+  // 三轮复核的 MEDIUM 缺口：App 的 S2 臂每 60s 静默重连一次 ⇒ reconnectBlocked 恒真、
+  // no-op 账不增长、真实预算也不消耗 ⇒ 旧实现永远不亮横幅（模拟 20 分钟零 L2/L3）。
+  const h = harness({ refreshOutcomeTimeoutMs: 400, refreshCoalesceMs: 200_000, noticeAfterMs: 200, maxNoopReconnects: 2 })
+  h.at(0, { a: { running: true } })
+  h.at(1_000) // L1
+  assert.deepEqual(h.at(1_500, { a: { running: true } }, undefined, undefined, true).actions, [],
+    '被挡住时不派遣（预算与计时都不动）')
+  assert.deepEqual(h.at(1_600, { a: { running: true } }, undefined, undefined, true).actions, [],
+    '连续被挡达到门槛：梯子到顶，但宽限未到')
+  assert.deepEqual(h.at(1_900, { a: { running: true } }, undefined, undefined, true).actions,
+    [{ kind: 'notice', sourceId: 'local' }], '宽限到点必须给出口，而不是永远静默')
+  assert.deepEqual(h.at(1_900, { a: { running: true } }, undefined, undefined, true).stalled, ['local'])
+})
+
 test('共享账本挡住 L2 时不派遣：预算与等待计时都不被消耗，放开即升级', () => {
   const h = harness({ refreshOutcomeTimeoutMs: 400, refreshCoalesceMs: 200_000 })
   h.at(0, { a: { running: true } })

@@ -441,3 +441,20 @@ test('the actionable veil chrome is actually styled (unstyled actions would be u
   assert.ok(textRule.includes('max-width') && textRule.includes('font-size'),
     'the veil text rows must keep their typography (a gutted body leaves them unstyled)')
 })
+
+test('放弃标记的三条撤回路径是语句级锁（R8/R14/R15：存在性检查会被整类坏实现骗过）', () => {
+  // 2026-12 三轮独立复核：删掉落地校验里的 delete、把 selectView 的注册表竞态
+  // return false 改成 true、或去掉 apply 拒绝后的 return，四个文件仍全绿——因为
+  // 旧断言只查"某个字符串出现过"。这里把每条撤回钉在**它所在的那段文本**里。
+  const app = read('../../src/App.tsx')
+  const selectView = sliceFrom(app, 'const selectView = useCallback', '}, [ensureRemoteConnected, probeRemoteReady])')
+  assert.ok(selectView.length > 0, 'selectView 必须仍以 useCallback 定义（切片锚点）')
+  assert.match(selectView, /!liveServerIdsRef\.current\.has\(viewId\)\) return false/,
+    '注册表竞态必须 return false（改成 true = 调用方以为切换已接受、放弃标记粘住）')
+  assert.match(app, /onApply\?\.\(false\) return/,
+    'apply 期目标被删除必须立刻 return（继续往下走会把已删除的视图重新挂成僵尸）')
+  const landing = sliceFrom(app, 'for (const [from, to] of [...abandonedViewsRef.current])', '}, [liveServerIds, activeView])')
+  assert.ok(landing.length > 0, '落地校验 effect 的迭代锚点必须仍在')
+  assert.match(landing, /abandonedViewsRef\.current\.delete\(from\)/,
+    '落地校验必须真的撤回标记（只遍历不删 = 标记永久粘住，保留宽限被跳过）')
+})

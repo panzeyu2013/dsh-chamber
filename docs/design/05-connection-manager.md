@@ -865,7 +865,7 @@ export const chamberBridge: {
   `TERMINAL_PHASES` 对齐；gateway 自动回滚期间 `restart-exhausted` 可能已在自愈，代价是
   一次无图挂载 + ready 世代自愈，与姊妹门同级。**`degraded`（重连在途）与 `connecting`
   一样继续在预算内等待**——把它也判死会把一次本可赶上的重连退化成"无图降级 +
-  事后冷重挂"。**门的相位输入取该来源的原始 transport 投影**（与推迟判定同源）：
+  事后冷重挂"。**原始 transport 投影只决定「是否在场」；相位值取合并后的派生 `phase`**（presence 与推迟判定同源）：
   `undefined`（投影未到）不是断开事实，在预算内继续等；只有真正的 `idle` 立即判
   不可服务——用 `deriveServers` 的 `?? 'idle'` 折叠值会把一次投影延迟/状态拉取失败
   秒判成"未连接"（2026-12 独立复核修正）。`idle`（手动断开）**不启动 boot**：

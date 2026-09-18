@@ -151,11 +151,26 @@ export class PageLanguageOwner {
    * successor mount", design 05 §4).
    * @param sourceId - the reporting entry's source id.
    * @param fact - the fact, or undefined when that mount is gone.
-   * @param serial - the reporting mount's generation; omitted = newest
-   * (direct callers, e.g. tests, own no mount identity).
+   * @param serial - the reporting mount's generation; omitted = no mount
+   * identity (direct callers, e.g. tests) — such a report always applies but
+   * **never pins** the generation.
    */
   report(sourceId: string, fact: EntryLanguageFact | undefined, serial?: number): void {
-    const generation = serial ?? Number.POSITIVE_INFINITY
+    // 无身份的报送不得把世代钉死：写入 Infinity 会让此后该来源所有真实挂载
+    // （有限世代）的报送与拆除被永久丢弃——一个 serial 缺省的 clear 之后，真挂载
+    // 再报也不生效（2026-12 三轮独立复核 D-R2 的 API 陷阱）。语义 = 总是生效、
+    // 且不动已记的世代（有身份的报送仍按世代排序）。
+    if (serial === undefined) {
+      if (fact === undefined) {
+        this.generations.delete(sourceId)
+        this.facts.delete(sourceId)
+      } else {
+        this.facts.set(sourceId, fact)
+      }
+      this.recompute()
+      return
+    }
+    const generation = serial
     const current = this.generations.get(sourceId)
     if (current !== undefined && generation < current) return
     if (fact === undefined) {

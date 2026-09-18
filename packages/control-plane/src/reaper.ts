@@ -527,9 +527,22 @@ async function processEntry(dir: string, name: string, log: LogFn, deps: Require
     return done('kept', pid, 'port-unverified')
   }
   if (identity !== null) {
-    // ps answered and the command is NOT the recorded host: the writer this
-    // record describes is gone (a stale record, or its pid was reused). The
-    // process itself is never signalled — only the record is at stake.
+    // ps answered, but "the command does not match" has two very different
+    // causes (2026-12 三轮独立复核 D-B1):
+    //  - the record carries a *recognizable* token (absolute bin.js/bin.ts) and
+    //    ps shows something else ⇒ the recorded writer is provably gone;
+    //  - the record's own token is unrecognizable (the legacy v0.1.x shape wrote
+    //    binary "dsh" with no absolute entry) ⇒ ps proves nothing about our
+    //    host. Treating that as "provably not ours" deleted the only durable
+    //    evidence for a host that may still be running, which opens the writer
+    //    latch and spawns a second host on one DSH_HOME. Fail closed.
+    const recordedToken = recognizedDshEntry(entry)
+      ? entry
+      : (recognizedDshEntry(binary) ? binary : null)
+    if (recordedToken === null) {
+      log(`reaper: ${pid} recorded token is not recognizable (legacy record); record kept`)
+      return done('kept', pid, 'identity-unverified', ownerProvenGone && portKnown)
+    }
     if (options.takeover && !ownerAlive) {
       await removeFile(file, recordIdentity!, recordValue!)
       log(`reaper: ${pid} does not run the recorded host; stale record removed (process untouched)`)

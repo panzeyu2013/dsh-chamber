@@ -143,3 +143,18 @@ test('the settings scope still reports loading only while the host has not answe
     'the terminal status the hook treats as settled (a host with no locale namespace)',
   )
 })
+test('hook 真正读取的两个字段被钉住：face 快照的 active 与两侧的 getSnapshot()', () => {
+  // 2026-12 三轮独立复核 D-R3：hook 的运行时读取是 face.getSnapshot()?.active 与
+  // scope.getSnapshot()?.status，而此前的契约只钉了 status 字面量。pin 升级把 active
+  // 改名（→ current）会让 hook 静默变成"无归属"（typeof active !== 'string'），
+  // 现有全部用例仍然绿——正是这块工作要防的静默失效类。
+  const locale = vendorClientProjection('dsh-client-locale')
+  assert.match(locale, /getSnapshot\s*\(\s*\)\s*:\s*LocaleSnapshot/,
+    'locale face 必须仍暴露 getSnapshot(): LocaleSnapshot')
+  assert.match(locale, /interface\s+LocaleSnapshot[\s\S]{0,240}?active\s*:/,
+    'LocaleSnapshot 必须仍带 active 字段（hook 的 locale 值来源）')
+  const settings = vendorClientProjection('dsh-client-ui-settings')
+  assert.match(settings, /getSnapshot\s*\(/,
+    'settings scope 必须仍暴露 getSnapshot()（hook 的 settled 判定来源）')
+})
+

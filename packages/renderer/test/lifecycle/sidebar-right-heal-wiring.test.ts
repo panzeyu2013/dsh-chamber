@@ -55,8 +55,9 @@ test('the App arms the serving gate, and it reaches the instance shell', () => {
 
 test('the phase mirror is written in an effect and feeds the bounded gate', () => {
   const app = read('../../src/App.tsx')
-  // 2026-12 独立复核修正：远端来源的相位取**原始 transport 投影**（与 deferredBootIds
-  // 同源），不再用 deriveServers 的折叠值——缺投影必须走 wait 而不是秒判无图。
+  // 2026-12 独立复核修正 + 三轮补正：远端来源的**在场判定**取原始 transport 投影
+  // （与 deferredBootIds 同源，缺投影必须走 wait）；**相位值**取合并后的派生 phase
+  // （stopped/restart-exhausted 等托管终态词只存在于派生相位）。
   const mirror = /useEffect\(\(\) => \{\s*const phases: Record<string, string \| undefined> = \{\}[\s\S]*?serversPhaseRef\.current = phases\s*\}, \[servers, remoteStatus\]\)/
   assert.match(app, mirror, 'the mirror is effect-written (never during render) and tracks servers + the raw projection')
   assert.match(app, /servingGatePhase\(server\.phase, remoteStatus\[rawId\] !== undefined\)/,

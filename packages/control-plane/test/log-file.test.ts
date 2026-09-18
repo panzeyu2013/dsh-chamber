@@ -282,6 +282,48 @@ test('序列化永不抛回调用方（toJSON 与 toString 同时抛的宿主对
     '日志序列化失败不得把异常抛回 logger（否则 logger.log 本身成为新的失败面）')
 })
 
+test('withControlLogFile 的降级告警走**注入的** logger，而不是硬编码 console.warn', () => {
+  // 2026-12 三轮独立复核（M7）：这条被宣称的修复此前没有任何测试——删掉
+  // `warn: options.warn ?? (m => base.warn(m))` 全套仍然绿。这里从**包装器**入口
+  // 触发一次真实降级（stateDir 指向一个普通文件），断言告警落在调用方的 logger 上。
+  const stateDir = tempDir()
+  const blocker = join(stateDir, 'not-a-dir')
+  writeFileSync(blocker, 'x')
+  const forwarded: string[] = []
+  const logger = withControlLogFile({
+    log: () => undefined,
+    warn: message => { forwarded.push(String(message)) },
+    error: () => undefined,
+  }, blocker)
+  logger.log('宿主行')
+  assert.equal(forwarded.length, 1, '降级告警必须经注入的 logger 转发（且只一次）')
+  assert.match(forwarded[0] ?? '', /disabled/, '转发的就是降级说明')
+  logger.close()
+  rmSync(stateDir, { recursive: true, force: true })
+})
+
+test('identity 巡检跨过门槛即发现外部替换并按新 inode 重开（回到可观测契约）', () => {
+  // 2026-12 三轮独立复核 M10：把 open 时的 fstatSync(handle) 换回 statSync(path)，
+  // 19 个用例全绿——因为真正的分歧只在"open 与记身份之间路径被换"的竞态里，而没有
+  // seam 就构造不出那一刻。这里至少锁住可观测契约（外部替换 → 巡检重绑），并把
+  // 该竞态的构造缺口如实记为已接受残余（见本条复核记录）。
+  const stateDir = tempDir()
+  const sink = createControlLogSink({ stateDir, warn: () => undefined })
+  const file = join(stateDir, CONTROL_LOG_DIR, CONTROL_LOG_FILE)
+  sink.write({ ts: 't', level: 'log', line: 'first' })
+  rmSync(file)
+  writeFileSync(file, 'external' + String.fromCharCode(10))
+  for (let i = 0; i < IDENTITY_CHECK_EVERY + 2; i += 1) {
+    sink.write({ ts: 't', level: 'log', line: `after-${i}` })
+  }
+  assert.equal(sink.isActive(), true, '巡检发现换手后按新文件重开（不是永久写进已 unlink 的 inode）')
+  const lines = readFileSync(file, 'utf8').trim().split(String.fromCharCode(10))
+  assert.equal(lines[0], 'external', '外部内容保留（巡检不截断新文件）')
+  assert.ok(lines.length > 1 && (lines[1] ?? '').includes('after-'), '门槛之后的行落在新文件里')
+  sink.close()
+  rmSync(stateDir, { recursive: true, force: true })
+})
+
 test('stateDir 下的 logs 目录被创建（与 host-logs 并列，不互相干扰）', () => {
   const stateDir = tempDir()
   mkdirSync(join(stateDir, 'host-logs'), { recursive: true })

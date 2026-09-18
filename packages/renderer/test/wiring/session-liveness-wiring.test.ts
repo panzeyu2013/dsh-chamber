@@ -172,6 +172,11 @@ test('文案与样式：双语字典齐备，横幅类名全部有样式', () =>
     const hits = locales.split(`'${key}':`).length - 1
     assert.equal(hits, 2, `${key} 必须同时存在于 zh 与 en 字典`)
   }
+  assert.equal(locales.split("'sessionStall.separator':").length - 1, 2,
+    '分隔符键必须双语齐备（zh 、 / en ", "）')
+  const app = read('../../src/App.tsx')
+  assert.match(app, /\.join\(t\('sessionStall\.separator'\)\)/,
+    '横幅必须用 locale 感知的分隔符（硬编码 、 会让英文界面串味；2026-12 三轮复核 R13）')
   const styles = stripComments(read('../../src/styles.css'))
   for (const cls of ['.session-stall-layer', '.session-stall', '.session-stall-text', '.session-stall-actions']) {
     assert.ok(styles.includes(`${cls} {`), `${cls} 必须有样式规则（verify:styles 的 S6 反向要求）`)

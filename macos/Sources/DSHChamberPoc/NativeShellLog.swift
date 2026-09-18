@@ -195,23 +195,50 @@ public final class NativeShellLog {
             rotateLocked()
             return
         }
-        if !FileManager.default.fileExists(atPath: url.path) {
-            FileManager.default.createFile(
-                atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600])
-        }
-        do {
-            let opened = try FileHandle(forWritingTo: url)
-            try opened.seekToEnd()
-            handle = opened
-            writtenBytes = Int((try? opened.offset()).map { Int($0) } ?? 0)
-            try? FileManager.default.setAttributes(
-                [.posixPermissions: 0o600], ofItemAtPath: url.path)
-        } catch {
+        // 目录权限在每次打开时收紧（创建参数只对新建生效；T-25 的 0700 声明要
+        // 对已存在的松目录也成立——2026-12 三轮独立复核的实测差异）。best-effort。
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        guard let opened = openLeafLocked(url) else {
             handle = nil
+            return
         }
+        handle = opened
+        writtenBytes = Int((try? opened.offset()).map { Int($0) } ?? 0)
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o600], ofItemAtPath: url.path)
     }
 
-    /// 轮转：关闭当前 → 删旧 .1 → 现文件改名为 .1 → 重开空文件。
+    /// 以 POSIX 语义打开日志叶子：**只接受常规文件**，且用 `O_NONBLOCK` 打开。
+    ///
+    /// 2026-12 三轮独立复核（BLOCKING）：FileHandle(forWritingTo:) 会跟随链接、
+    /// 也会在 FIFO 上永久阻塞——一个 <userData>/logs/native-shell.log FIFO 就能把
+    /// applicationDidFinishLaunching 钉死在主线程（与 TS sink 早已修掉的同族缺陷；
+    /// 本文件头注释的"日志写不进去绝不能成为新的致命面"被这一条直接推翻）。
+    /// lstat → open(O_NOFOLLOW|O_NONBLOCK) → fstat 三段判据：FIFO/socket/设备/目录/
+    /// 链接一律拒绝，lstat 与 open 之间被换掉也由 fstat 兜住。
+    private func openLeafLocked(_ url: URL) -> FileHandle? {
+        var info = stat()
+        // 已存在就必须是常规文件（FIFO/socket/设备/目录/链接一律拒绝，且在 open 之前
+        // 判掉——open 一个无读者的 FIFO 会永久阻塞）；不存在则由下面的 O_CREAT 建。
+        if lstat(url.path, &info) == 0 {
+            guard (info.st_mode & S_IFMT) == S_IFREG, info.st_nlink == 1 else { return nil }
+        }
+        let descriptor = open(
+            url.path, O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW | O_NONBLOCK, 0o600)
+        guard descriptor >= 0 else { return nil }
+        var opened = stat()
+        guard fstat(descriptor, &opened) == 0,
+              (opened.st_mode & S_IFMT) == S_IFREG,
+              opened.st_nlink == 1 else {
+            close(descriptor)
+            return nil
+        }
+        return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+    }
+
+    /// 轮转：关闭当前 → 现文件搬到 .rotating → 删旧 .1 → .rotating 改名为 .1 →
+    /// 重开空文件（先搬现文件再动备份：任何一步失败都不丢历史）。
     /// 调用方必须已持有 lock。轮转名按实例文件名派生（`<file>.1`）——main 与
     /// sidecar 两个实例共用本实现，写死主文件名会把 sidecar 轮转成
     /// `native-shell.log.1`（2026-12 加 sidecar 实例时必须改的点）。
@@ -219,27 +246,25 @@ public final class NativeShellLog {
         guard let url = fileURLStorage else { return }
         try? handle?.close()
         handle = nil
-        let rotated = url.deletingLastPathComponent()
-            .appendingPathComponent(url.lastPathComponent + ".1")
-        try? FileManager.default.removeItem(at: rotated)
-        guard (try? FileManager.default.moveItem(at: url, to: rotated)) != nil else {
-            // 轮转失败（.1 被占/权限/目录只读）：与 TS sink 同纪律——**降级为只写
-            // stderr**（句柄在这里关掉，append 变成 no-op）。关键是"关句柄"这一步：
-            // 少了它就会继续往这个超限文件里追加（涨到 ~2× 上限，且每次写入都重试一次
-            // 轮转）。writtenBytes 归零只是不再需要的水位（2026-12 二轮独立复核）。
+        let directory = url.deletingLastPathComponent()
+        let rotated = directory.appendingPathComponent(url.lastPathComponent + ".1")
+        // 先把现文件搬到暂存名，**再**动备份：顺序反了会在 move 失败时把唯一的历史
+        // （.1）删掉且现文件还在原地 ⇒ 备份凭空消失（2026-12 三轮独立复核 N3）。
+        // 任一步失败 = 降级（句柄已关），内容最坏留在 .rotating，绝不静默丢弃。
+        let staging = directory.appendingPathComponent(url.lastPathComponent + ".rotating")
+        try? FileManager.default.removeItem(at: staging)
+        guard (try? FileManager.default.moveItem(at: url, to: staging)) != nil else {
             writtenBytes = 0
             return
         }
-        writtenBytes = 0
-        FileManager.default.createFile(
-            atPath: url.path, contents: nil, attributes: [.posixPermissions: 0o600])
-        do {
-            let opened = try FileHandle(forWritingTo: url)
-            try opened.seekToEnd()
-            handle = opened
-        } catch {
-            handle = nil
+        try? FileManager.default.removeItem(at: rotated)
+        guard (try? FileManager.default.moveItem(at: staging, to: rotated)) != nil else {
+            writtenBytes = 0
+            return
         }
+        // 轮转成功：新文件由同一个受保护的开叶路径建立（失败 = 降级，同 TS 纪律）。
+        writtenBytes = 0
+        handle = openLeafLocked(url)
     }
 }
 

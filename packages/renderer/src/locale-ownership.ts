@@ -149,13 +149,25 @@ function installLocaleOwnership(ctx: Context): void {
     return { locale: active, settled: status !== undefined && status !== 'loading' }
   }
   const report = (): void => { reportPageLanguageEntry(instanceId, fact(), generation) }
+  // 形状对但会抛的 face/scope 也必须 fail-open（2026-12 三轮独立复核 D-R1）：
+  // 一次 getSnapshot 抛错会经 ctx.effect 逃出 vendor fiber，把 locale 插件整条
+  // 装起来失败（= 降级启动），与"无归属、语言不被采纳"的 fail-open 声明相反。
+  // 守卫包在**订阅与 effect 用的那层**：抛错时按"无事实"上报（撤回/不采纳）。
+  const safeReport = (): void => {
+    try {
+      report()
+    } catch (error) {
+      console.warn('[renderer] <html lang> ownership fact unavailable:', error)
+      reportPageLanguageEntry(instanceId, undefined, generation)
+    }
+  }
 
   ctx.effect(() => {
-    const offFace = face.subscribe(report)
-    const offScope = scope.subscribe(report)
+    const offFace = face.subscribe(safeReport)
+    const offScope = scope.subscribe(safeReport)
     // The vendor wrote the document during `apply()`, before this hook existed:
     // report (and let the owner restore) that write now.
-    report()
+    safeReport()
     return () => {
       offFace()
       offScope()

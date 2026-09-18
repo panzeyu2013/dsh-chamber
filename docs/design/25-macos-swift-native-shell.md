@@ -476,7 +476,7 @@ interface HostEdges {
   命名空间面（desktopSsh/update/settings/systemResume/openIn/deepLink/
   runtime/notifications/badge）**（preload.cts:888-925；合计 60 invoke + 8
   订阅）。Swift 注入 `bridge-shim.poc.js`（WKUserScript、.page world、
-  documentStart；资源名 = MainWindowController.swift:40）定义同形 API：
+  documentStart；资源名 = MainWindowController.swift:42）定义同形 API：
   - **挂出时机（D1，已按实现收敛）**：documentStart 定义内部管路（resolve/emit/
     rehydrate，带窗口随机令牌），**`dsh-chamber:info` 成功后**才暴露 `dshChamber`
     面；info 未就绪/失败期间 invoke 回 `ipc_not_ready`（1 次 + 10 次 50ms 重试），
@@ -563,7 +563,7 @@ interface HostEdges {
   扣掉路由（`showNativeNotification` 载荷携带 `sourceId`，:233-239），Swift
   侧 `NotificationDeliveryRegistry`（sourceId → identifier，FIFO 16）在
   retire 时用 `removeDeliveredNotifications` 真正移除已投递横幅
-  （MainWindowController.swift:515-536）。非 silent 通知用系统默认声
+  （MainWindowController.swift:1004）。非 silent 通知用系统默认声
   （Electron darwin 的具名 `Glass` 在 UNUserNotificationCenter 无对应资源——
   平台等价物差异已登记，SwiftEdgeHostLegs.swift:219-222）。
   **对象登记/淘汰（BoundedActiveNotifications 持 Electron Notification 宿主

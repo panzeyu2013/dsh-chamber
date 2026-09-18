@@ -91,7 +91,9 @@ DSHChamberRefreshRatePreference DSHChamberPreferDisplayRefreshRate(WKPreferences
     }
     // 残余（2026-12 二轮独立复核记录）：若 setter 在**已经改掉偏好之后**才抛错、或改动
     // 成功而这次回读抛错，本函数仍返回 Unknown，调用方会记「SPI 不可用(保持 WebKit 默认)」
-    // ——日志与事实不符。窗口要求 SPI 本身在改完之后变成 flaky，实测无法构造；真正的证据
+    // ——日志与事实不符。2026-12 三轮独立复核用 swizzling 构造出了这个窗口
+    // （改完偏好再让 setter 抛：调用方记"SPI 不可用"而偏好已被改掉），因此本残余
+    // **不是不可构造**，只是没有测试覆盖（测试需要在进程内换掉 objc 方法实现）。真正的证据
     // 仍是 POC_DEBUG 的 [native-fps] A/B（S-48 实机三工况）。
     return DSHChamberRefreshRatePreferenceState(preferences);
 }

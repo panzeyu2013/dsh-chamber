@@ -134,7 +134,12 @@ const selected = isWin32
   : entries
 for (const [index, entry] of selected.entries()) {
   if (index === 0 || selected[index - 1].group !== entry.group) console.log('\n=== ' + entry.group + ' ===')
-  const result = spawnSync(process.execPath, [...entry.nodeArgs, entry.file], { cwd: PACKAGE_ROOT, stdio: 'inherit' })
+  // timeout：一个会阻塞的回归（例如 log-file 的 FIFO 用例一旦丢了 O_NONBLOCK）
+  // 会把整套留在 open(2) 上，CI 默认 360 分钟才收尸。给每个文件一个上界，
+  // 超时即红（2026-12 三轮独立复核 A1）。
+  const result = spawnSync(process.execPath, [...entry.nodeArgs, entry.file], {
+    cwd: PACKAGE_ROOT, stdio: 'inherit', timeout: 120_000,
+  })
   if (result.status !== 0) {
     console.error(`[test:control-plane] ${entry.file} failed (exit ${result.status ?? `signal ${result.signal}`})`)
     process.exit(1)

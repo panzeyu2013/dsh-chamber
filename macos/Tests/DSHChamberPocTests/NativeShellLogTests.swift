@@ -185,6 +185,40 @@ final class NativeShellLogTests: XCTestCase {
             "绝不透过目录链接写出去")
     }
 
+    /// 2026-12 三轮独立复核（BLOCKING）：叶子是 FIFO 时 FileHandle(forWritingTo:) 会在
+    /// 主线程**永久阻塞**（applicationDidFinishLaunching 挂死，无需竞态）。POSIX 开叶
+    /// 判据只接受常规文件 + O_NONBLOCK：判到即退回只写 stderr。
+    func testFifoLeafIsRefusedInsteadOfBlockingTheMainThread() throws {
+        let url = tempDir.appendingPathComponent(NativeShellLog.directoryName)
+            .appendingPathComponent(NativeShellLog.fileName)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                withIntermediateDirectories: true)
+        let mkfifo = Process()
+        mkfifo.executableURL = URL(fileURLWithPath: "/usr/bin/mkfifo")
+        mkfifo.arguments = [url.path]
+        try mkfifo.run()
+        mkfifo.waitUntilExit()
+        XCTAssertEqual(mkfifo.terminationStatus, 0)
+        let log = NativeShellLog(fileURL: url, maxBytes: 256)
+        XCTAssertFalse(log.isActive, "FIFO 叶子不得打开（否则启动在主线程永久阻塞）")
+        XCTAssertNil(log.filePath)
+        log.append("must-not-block")
+    }
+
+    /// 2026-12 三轮独立复核：T-25 声明目录 0700，而创建参数只对新建目录生效——已存在
+    /// 的松目录必须在每次打开时收紧，否则声明与实际不符。
+    func testExistingLooseDirectoryIsTightenedTo0700() throws {
+        let directory = tempDir.appendingPathComponent(NativeShellLog.directoryName)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: directory.path)
+        let log = NativeShellLog(fileURL: directory.appendingPathComponent(NativeShellLog.fileName))
+        XCTAssertTrue(log.isActive)
+        let attributes = try FileManager.default.attributesOfItem(atPath: directory.path)
+        XCTAssertEqual((attributes[.posixPermissions] as? NSNumber)?.int16Value, 0o700,
+                       "已存在的松目录必须被收紧到 0700")
+    }
+
     /// 2026-12 独立复核：轮转失败不得把水位归零（那会让文件在阻塞期间涨到 ~2× 上限，
     /// 且每次写入都重试轮转）——与 TS sink 同纪律，降级为只写 stderr。
     func testRotationFailureDegradesInsteadOfGrowingToTwiceTheLimit() throws {

@@ -266,7 +266,7 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
      `200s`（**= refreshWindowMs / maxRefreshRequests**：把配额铺成均匀节拍——用 60s 会在
      120/180/240s 爆发用完窗口、之后失明 8 分钟；相等时平均成本不变而最坏未探测时长 = 200s），
      滚动窗口 10 分钟 ≤3 次。
-  ② **L2 有界 reconnect**：仅当**对账回执**证明**对账通道**已坏（**非 `unknown` 的**失败回执 `ok:false`，或请求后 150s；**第一次 `unknown` 被吸收**：在它之后再发出一次 L1 之前，期限一律不生效——见下
+  ② **L2 有界 reconnect**：仅当**对账回执**证明**对账通道**已坏（**非 `unknown` 的**失败回执 `ok:false`，或请求后 150s；与吸收 `unknown` 同一 tick 发出的 L1 也算"之前"——保守方向，最多多等一个 coalesce 窗；**第一次 `unknown` 被吸收**：在它之后再发出一次 L1 之前，期限一律不生效——见下
      无回执）才 `reconnectInstanceConnection`（复用 S2 watchdog 的杠杆与**同一份
      per-source 记账**：同 tick 去重集合 + 跨 tick 的 60s 账本；no-op 不消耗预算，但计入
      `noopReconnects` 供 L3 收口）；**local 刻意不排除**（本次缺陷现场就是

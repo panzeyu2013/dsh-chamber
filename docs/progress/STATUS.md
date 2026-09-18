@@ -251,7 +251,7 @@
     或经既有 notify 通道落到 sidecar/native 日志）；
     ⑪ **两处「更省形态」候选未落地**（下轮首选；2026-12 三轮复核把论据改写成硬约束，免得照旧方案重做踩同一个 race）：(a) 挂到 App 每 30s 兜底 unary pull 的提交点——
     ① 挂载源的 `aggregates` 会被 producer push **整块覆盖**（push 与 runtimeFacts 同源于官方 store ⇒ 两份事实不独立，卡住的 running 会被写回）；② push 会作废在途 pull；③ 该 pull 只在源 stale 时发生，推流存活的源根本不拉——故它只在「源完全静默」子场景成立，覆盖本缺陷必须另加旁路采样面，净省 ≈450–500 行。(b) 用官方 store 自己暴露的 `state/phase/error`（`buildListSnapshot` 已带）替代独立 unary 探针：省一半 host 调用，但丢掉「refresh 成功而 running 未回灌」这一上游回归的检测面。
-    失效判据 = 任一形态落地并删掉相应生产端通道（并补上被删面的等价证据），或复核确认现形态更优并写回 design 14 §D4（本轮已写回其 Rejected alternatives）。
+    失效判据 = 任一形态落地并删掉相应生产端通道（并补上被删面的等价证据），或复核确认现形态更优并写回 design 14 §D4。
 
 - **会话打开停滞（「载入历史…」永久停留，2026-09-14 实机）**：大会话（`session-28e9eb86`）经 gateway 打开只显示
   `chat.loadingHistory`。根因未证实；唯一同构状态 = mux socket正常而 `session/follow`

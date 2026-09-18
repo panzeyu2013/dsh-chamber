@@ -1112,12 +1112,14 @@ final class ShellStartupTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/DSHChamberPoc/MainWindowController.swift")
-        let code = try String(contentsOf: url, encoding: .utf8)
-            .split(separator: "\n")
-            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
-            .joined(separator: "\n")
-        XCTAssertTrue(code.contains("NSSize(width: 1280, height: 786)"),
-                      "S-49：初始内容区必须是 1280×786 的折中值（改动请同步 deviations S-49）")
+        let code = Self.strippingComments(try String(contentsOf: url, encoding: .utf8))
+        // 定义必须在**语句位置**：只查 "包含这个字面量" 会被尾注释/块注释里的同款
+        // 字面量满足（2026-12 三轮独立复核：windowSize 改 700 + 注释里留 786 全绿）。
+        let definition = code.split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .first { $0.hasSuffix("static let windowSize = NSSize(width: 1280, height: 786)") }
+        XCTAssertNotNil(definition,
+                        "S-49：定义必须是语句位置的 1280×786（注释里的同款字面量不算；改动请同步 deviations S-49）")
         // 消费点也必须走同一个常量（2026-12 二轮独立复核：只钉定义时，把构造处的
         // Self.windowSize 换成写死的另一个高度仍然全绿）。
         XCTAssertEqual(code.components(separatedBy: "NSSize(width: 1280, height: 786)").count - 1, 1,
@@ -1126,5 +1128,69 @@ final class ShellStartupTests: XCTestCase {
                       "WKWebView 必须消费 windowSize")
         XCTAssertTrue(code.contains("NSWindow(contentRect: NSRect(origin: .zero, size: Self.windowSize)"),
                       "NSWindow 必须消费 windowSize")
+    }
+
+    /// 去注释（本测试专用）：行尾/整行 `//`（字符串字面量内不算）+ 可嵌套的 `/* */`。
+    /// 已知边界（2026-12 三轮复核记录）：带内插的字符串若在插值里再写引号可能让
+    /// 字符串状态错位（本文件被检查的行没有这种形状）；多行字符串 `"""` 不特殊处理。
+    /// 足够挡住"把 786 藏进注释"的静默改法；真正的行为证据仍是 S-49 的实机验收。
+    private static func strippingComments(_ text: String) -> String {
+        var out = ""
+        var blockDepth = 0
+        var inString = false
+        var escaped = false
+        var index = text.startIndex
+        while index < text.endIndex {
+            let character = text[index]
+            let next = text.index(after: index)
+            let hasNext = next < text.endIndex
+            if blockDepth > 0 {
+                if character == "/" && hasNext && text[next] == "*" {
+                    blockDepth += 1
+                    index = text.index(after: next)
+                    continue
+                }
+                if character == "*" && hasNext && text[next] == "/" {
+                    blockDepth -= 1
+                    index = text.index(after: next)
+                    continue
+                }
+                if character == "\n" { out.append("\n") }
+                index = next
+                continue
+            }
+            if inString {
+                out.append(character)
+                if escaped {
+                    escaped = false
+                } else if character == "\\" {
+                    escaped = true
+                } else if character == "\"" {
+                    inString = false
+                }
+                index = next
+                continue
+            }
+            if character == "\"" {
+                inString = true
+                out.append(character)
+                index = next
+                continue
+            }
+            if character == "/" && hasNext && text[next] == "/" {
+                while index < text.endIndex && text[index] != "\n" {
+                    index = text.index(after: index)
+                }
+                continue
+            }
+            if character == "/" && hasNext && text[next] == "*" {
+                blockDepth = 1
+                index = text.index(after: next)
+                continue
+            }
+            out.append(character)
+            index = next
+        }
+        return out
     }
 }

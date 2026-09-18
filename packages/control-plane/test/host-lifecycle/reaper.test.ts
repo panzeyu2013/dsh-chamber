@@ -346,6 +346,30 @@ test('reaper takeover: a pid that provably runs something else drops only the re
   assert.equal(recordExists(dir, '4242.json'), false, 'the stale record is the only thing dropped')
 })
 
+test('reaper takeover: a legacy record without a recognizable token keeps the record', async t => {
+  const dir = tempStateDir(t)
+  // v0.1.x 的 spawn-dsh 写 binary: "dsh" 且没有绝对 entry 路径
+  // （git show 118c7e5a:packages/control-plane/src/spawn-dsh.ts）。
+  writeRecord(dir, '4242.json', { ...spawnRecord, binary: 'dsh', entry: undefined })
+  const signalled: string[] = []
+  const deps = dshDeps({
+    // ps 回答的其实是"这件事的宿主"本身：token 不可判定 ⇒ 不能当成"证明不是它"。
+    psIdentity: () => ({ ppid: '1', command: '/usr/bin/dsh --profile web --host 127.0.0.1 --port 17510' }),
+    alive: (pid: number) => pid !== spawnRecord.ownerPid,
+    signal: (_pid: number, sig: string) => { signalled.push(sig); return true },
+  })
+  const outcomes: any[] = []
+  const result = await runReaper({
+    stateDir: dir, deps, takeover: true, onEntry: outcome => outcomes.push(outcome),
+  })
+  assert.ok(recordExists(dir, '4242.json'),
+    'token 不可识别 ⇒ ps 证明不了任何事：唯一证据不得删除（否则可能两个 writer 共享一个 DSH_HOME）')
+  assert.deepEqual(signalled, [], '身份不可判定时绝不发信号')
+  assert.equal(outcomes[0].status, 'kept')
+  assert.equal(outcomes[0].reason, 'identity-unverified')
+  assert.deepEqual(result, { reclaimed: 0, kept: 1, errors: [] })
+})
+
 test('reaper takeover: a live foreign writer (owner alive) is neither killed nor cleared', async t => {
   const dir = tempStateDir(t)
   writeRecord(dir, '4242.json', spawnRecord)

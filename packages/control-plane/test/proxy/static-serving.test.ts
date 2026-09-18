@@ -242,38 +242,62 @@ test('static: /assets/* immutable cache policy; index.html no-cache; manifest.js
     // 逗号分隔的每个 policy 都**同时生效**（CSP3 合取），同一 policy 内重复指令首次生效：
     // 因此要收集**所有**生效的 style-src，任何一个缺 unsafe-inline 就算失败
     // （2026-12 二轮独立复核：只解析第一条 policy 会被 "…, style-src 'none'" 绕过）。
-    const effectiveStyleSrcs = (header: string): string[] => {
-      const values: string[] = []
+    // 每个 policy 的**生效样式源**按 CSP3 回退链取：
+    // style-src-elem（管 <style>/<link rel=stylesheet>）→ style-src → default-src；
+    // 同一 policy 内重复指令首次生效；没有任何相关指令 = 不限制（undefined）。
+    // style-src-attr 只管 style 属性，不参与 <style> 的判定（旧版本把它当覆盖是错的）。
+    // 2026-12 三轮独立复核补的两类静默绕过：① 只收 style-src 会漏掉
+    // ", default-src 'none'"（没有 style-src 时 default-src 才是生效源，实测 WebKit
+    // 整页样式被挡）；② nonce/hash 检查必须大小写不敏感（引擎把 'NONCE-abc' 当真
+    // nonce，反向静态正则漏判）。
+    const effectiveStyleSrcs = (header: string): (string | undefined)[] => {
+      const values: (string | undefined)[] = []
       for (const policy of header.split(',')) {
-        const seen = new Set<string>()
+        const directives = new Map<string, string>()
         for (const part of policy.split(';')) {
           const [rawName, ...rest] = part.trim().split(/\s+/)
           const name = (rawName ?? '').toLowerCase()
-          if (name === '' || seen.has(name)) continue
-          seen.add(name)
-          if (name === 'style-src') values.push(rest.join(' '))
-          if (name === 'style-src-elem' || name === 'style-src-attr') values.push('[overrides style-src]')
+          if (name === '' || directives.has(name)) continue
+          directives.set(name, rest.join(' '))
         }
+        values.push(
+          directives.get('style-src-elem')
+          ?? directives.get('style-src')
+          ?? directives.get('default-src'))
       }
       return values
     }
+    const styleAllowsUnsafeInline = (sources: string): boolean =>
+      /'unsafe-inline'/i.test(sources)
+      && !/'nonce-/i.test(sources)
+      && !/'sha(256|384|512)-/i.test(sources)
     // 解析器自证（否则这组断言只是换写法的子串匹配）。
     assert.deepEqual(
       effectiveStyleSrcs("style-src 'none'; style-src 'self' 'unsafe-inline'"),
       ["'none'"],
       '同一 policy 内重复指令按首次生效解析（值保留引号）',
     )
-    assert.deepEqual(effectiveStyleSrcs("style-src 'none'; style-src-attr 'unsafe-inline'"),
-      ["'none'", '[overrides style-src]'])
+    assert.deepEqual(effectiveStyleSrcs("style-src 'none'; style-src-elem 'unsafe-inline'"),
+      ["'unsafe-inline'"], 'style-src-elem 是回退链第一环，覆盖 style-src')
+    assert.deepEqual(effectiveStyleSrcs("style-src-attr 'none'"),
+      [undefined], 'style-src-attr 只管属性：<style> 不受它限制')
+    assert.deepEqual(effectiveStyleSrcs("default-src 'none'"),
+      ["'none'"], '没有 style-src 时 default-src 是 <style> 的生效源')
     assert.deepEqual(effectiveStyleSrcs("style-src 'self' 'unsafe-inline', style-src 'none'"),
       ["'self' 'unsafe-inline'", "'none'"],
       '逗号分隔的第二个 policy 也必须被看到')
+    // 判定器自证：关键字与 nonce/hash 都按大小写不敏感处理（引擎语义）。
+    assert.equal(styleAllowsUnsafeInline("'self' 'unsafe-inline'"), true)
+    assert.equal(styleAllowsUnsafeInline("'self' 'UNSAFE-INLINE'"), true, '关键字大小写不敏感')
+    assert.equal(styleAllowsUnsafeInline("'self' 'unsafe-inline' 'NONCE-abc'"), false,
+      '大写 nonce 同样让 unsafe-inline 失效')
+    assert.equal(styleAllowsUnsafeInline("'self' 'unsafe-inline' 'SHA256-AAAA'"), false)
     const styleSrcs = effectiveStyleSrcs(html.headers['content-security-policy'] ?? '')
-    assert.ok(styleSrcs.length > 0, '响应头必须至少有一条生效的 style-src')
+      .filter((value): value is string => value !== undefined)
+    assert.ok(styleSrcs.length > 0, '响应头必须至少有一个 policy 生效并约束 <style>')
     for (const styleSrc of styleSrcs) {
-      assert.match(styleSrc, /'unsafe-inline'/, '每条生效的 style-src 都必须保留 unsafe-inline（S-50 注入的样式无 nonce）')
-      assert.doesNotMatch(styleSrc, /'nonce-/, "生效的 style-src 不得带 nonce（CSP3 下会忽略 unsafe-inline）")
-      assert.doesNotMatch(styleSrc, /'sha(256|384|512)-/)
+      assert.ok(styleAllowsUnsafeInline(styleSrc),
+        '每个生效的样式源都必须保留 unsafe-inline、且不带 nonce/hash（S-50 注入的样式无 nonce）')
     }
     assert.equal(html.headers['cross-origin-opener-policy'], 'same-origin')
     // same-origin (not no-referrer): no-referrer makes modern browsers send
