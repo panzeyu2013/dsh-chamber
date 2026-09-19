@@ -1,178 +1,94 @@
 # 发布前 Checklist
 
-> 面向发布者：按序执行，任何 ❌ 都阻断发布。依据：`.github/workflows/release.yml`、
-> `docs/DEVELOPMENT.md` §5、本文件 §3。命令前先
-> `export PATH="$HOME/.nvm/versions/node/v24.20.0/bin:$PATH"`（node v24 / pnpm 11.21）。
-
-## 发布流程总览
+> 面向发布者：按序执行，任何 ❌ 都阻断发布。依据 `.github/workflows/release.yml` 与
+> `docs/DEVELOPMENT.md` §5。命令前先 `export PATH="$HOME/.nvm/versions/node/v24.20.0/bin:$PATH"`。
+> 本文件只写可复用流程：某次发布的叙述写 `CHANGELOG.md` 发布节，仍 open 的门禁写 `STATUS.md`。
 
 ```
-本地:  §0 内容确认 → §1.5 preflight（机械门禁）→ §2 changelog/i18n
-       → §3 全量测试套件（精确发布提交）→ §4 构建 → §5 健康 → §7a commit+tag
-CI:    §7b dry_run 先行（新路径必须验证过一次）→ §7c 正式 tag push → finalize
+本地: preflight → changelog/i18n → check:full（精确发布提交）→ 构建自检 → 工作区健康 → commit+tag
+CI:   dry_run 先行 → 正式 tag push → 监控 → 发布后核对
 ```
 
-**核心原则**：机械项一律脚本化（preflight）；
-测试套件绑定精确发布提交；**新增/修改的发布基础设施（workflow/脚本路径/action SHA）
-必须先被 dry-run 验证**；push 前重跑 preflight。
+**核心原则**：机械项一律脚本化（`release:preflight`）；测试绑定精确发布提交；新增/改动的发布基础设施
+（workflow / 脚本路径 / action SHA）必须先 dry-run 验证；push 前重跑 preflight。
 
 ## 0. 版本与内容确认
 
-- [ ] 目标版本号只允许 canonical stable `X.Y.Z` 或 beta `X.Y.Z-beta.N`（如
-      `X.Y.Z-beta.N`）；`alpha`、`rc` 与其他 prerelease 必须 fail closed；changelog
-      无 `[Unreleased]` 待收尾条目。
-- [ ] 发布内容（功能/迁移/修复）已全部合入发布分支且本地无未提交改动。
-- [ ] 自上次发布以来**修改过任何 workflow / 脚本路径 / action SHA** → 先安排
-      `workflow_dispatch` dry_run 全链验证（见 §7b），不要直接上正式 tag。
+- [ ] 版本号只允许 `X.Y.Z` 或 `X.Y.Z-beta.N`；`alpha`/`rc` 与其他 prerelease fail closed；changelog 无待收尾条目。
+- [ ] 发布内容已全部合入发布分支，本地无未提交改动。
+- [ ] 自上次发布以来改过 workflow / 脚本路径 / action SHA → 先 `workflow_dispatch` dry_run 全链（§7），不上正式 tag。
 
-## 1. 版本断言（release.yml create-release 会硬校验）
+## 1. 版本断言（release.yml 硬校验，preflight 同源扫描）
 
-- [ ] 根 `package.json` + 全部 `@dsh-chamber/*` 包（当前 17 个）version = 目标版本
-      （数据驱动，见 §1.5；release.yml 复用同一 preflight 扫描器硬断言根 +
-      全部非 fork chamber 包，新增包自动纳入）。
-- [ ] fork 副本例外：`@deepseek-ai/dsh-client-connection` / `dsh-client-web` /
-      `dsh-api-gateway` 版本 = 上游基线版本，**不随发布
-      版本**；release.yml
-      同样经 preflight 硬断言该基线。
-- [ ] **安装脚本 dsh 版本常量**：`scripts/install-gateway.sh` 内置的
-      `DSH_CHAMBER_DSH_VERSION` 与
-      `.github/workflows/release.yml` 的 `env.DSH_CHAMBER_DSH_VERSION`、
-      `packages/gateway/package.json` 的 `dshAnchorVersion` 三者一致
-      ——dsh 运行时版本变更时必须同步改脚本常量与 gateway 包字段
-      （脚本常量为全新安装默认装锚版本；`dshAnchorVersion` 随 gateway
-      tarball 携带，是 `update --dsh-upgrade`（默认开启）升级已有部署
-      内建锚的权威基线——旧资产无该字段时 update 回退运行脚本常量）。
-      三者一致性由 release-preflight 硬断言。
+- [ ] 根 `package.json` 与全部 `@dsh-chamber/*` 包 version = 目标版本（新增包自动纳入）。
+- [ ] 三个 fork 副本（`dsh-client-connection` / `dsh-client-web` / `dsh-api-gateway`）= 上游基线版本，**不随发布版本**。
+- [ ] dsh 运行时版本常量三源一致：`scripts/install-gateway.sh` 的 `DSH_CHAMBER_DSH_VERSION`、
+      `release.yml` 的 `env.DSH_CHAMBER_DSH_VERSION`、`packages/gateway/package.json` 的 `dshAnchorVersion`。
 
-## 1.5 机械门禁：release:preflight
+## 2. 机械门禁：release:preflight
 
-- [ ] `node scripts/release/release-preflight.mjs <版本>` 全绿（版本统一性含 fork 副本与
-      安装脚本/release.yml/gateway 包三源 dsh 常量、changelog 中英对等、verify:i18n、**全部 workflow action SHA
-      可解析上游**（`--offline` 跳过网络）、冲突标记、git 干净、frozen install、
-      test:release-workflow；最后提示 §3 全量测试套件须在**精确发布提交**上跑）。
-- [ ] 网络受限时 `--offline` 至少通过非网络检查；CI 的 test job 已内置
-      `--actions-only` 门禁（tag/PR 每次运行都会校验 action SHA）。
+- [ ] `node scripts/release/release-preflight.mjs <版本>` 全绿：版本统一性（含 fork 副本与三源 dsh 常量）、
+      changelog 中英对等、`verify:i18n`、全部 workflow action SHA 可解析（`--offline` 跳过网络）、冲突标记、
+      git 干净、frozen install、`test:release-workflow`。CI 的 test job 已内置 `--actions-only`。
+- [ ] push 前再跑一次（§7）。
 
-## 2. changelog 与 i18n
+## 3. changelog 与 i18n
 
-- [ ] `CHANGELOG.md` 与 `docs/CHANGELOG.en-US.md` 均有 `## [<version>]` 节
-      （release.yml 提取为发布正文，缺失即失败）；中英条目对等。
-- [ ] 版本节结构完整（`### 新增/修复/变更` 或 `### Added/Fixed/Changed`），
-      无重复版本标题。
-- [ ] `node scripts/gates/verify-i18n.mjs` → 5 对全部 `consistent`（改过 README/
-      DEVELOPMENT/CONTRIBUTING/CHANGELOG/THIRD_PARTY_NOTICES 任意文本后须
-      `node scripts/gates/verify-i18n.mjs --write` 刷新）。
+- [ ] `CHANGELOG.md` 与 `docs/CHANGELOG.en-US.md` 均有 `## [<version>]` 节且条目对等（release.yml 提取为发布正文，缺失即失败）。
+- [ ] 版本节结构完整，无重复版本标题。
+- [ ] `pnpm run verify:i18n` 全 `consistent`（改动任一语对后须 `-- --write` 刷新记录）。
 
-## 3. 测试与类型检查
+## 4. 测试与构建（在精确发布提交上执行）
 
-- [ ] **全量测试套件在精确发布提交（`git rev-parse HEAD`）上运行**——上一提交的记录
-      不算数。
-- [ ] `pnpm run test:control-plane`（以根脚本为唯一清单，含生命周期、reaper、RPC/cordis 等门）。
-- [ ] **原生壳视口越界策略实机目检**（S-50）：GUI 会话里滚到端点、把指针停在不可滚动
-      chrome 上滚动，确认整页不平移（无自动化探针，2026-12 裁决）。
-- [ ] `pnpm run test:runtime` + `typecheck:runtime`。
-- [ ] `pnpm run test:desktop`（transport/ssh/config/trust/plugin-sync/settings/notifications/
-      deep-link/open-in/ipc-surface-mirror/runtime-lockstep/dsh-runtime-controller；失败必须
-      定位，不能用重跑代替结论）。
-- [ ] `pnpm run test:gateway` + `typecheck:gateway` + `build:gateway`。
-- [ ] `pnpm run test:renderer-shell`、`test:git`、`test:host-git`、`test:sidebar`、`test:layout`、
-      `test:settings-bridge`、`test:connections`、`test:client-web`、`test:connection`、
-      `test:open-in`、`test:cli`
-- [ ] **本地可跑的 CI 步骤一个都不能少**（清单以 `ci.yml` 的步骤表为准，本节是它的投影；
-      2026-09-13 事故：`typecheck:mobile` 只在 CI 跑，v0.3.0-beta.4 的发布提交因此红在
-      `test` 腿的第 24 步，而本地"全量"套件是绿的）：`test:mobile`、`test:host-archive-cleanup`、
-      `test:host-open-in`、`test:upgrade-tools`、`test:gui-acceptance`、`verify:styles`、
-      `verify:test-wiring`、`verify:md-links`、`build:dsh-runtime`（windows 腿的
-      `test:win32` 只能由 CI 跑）。
-- [ ] 类型检查全套：`typecheck` + `typecheck:sidebar/layout/connections/settings-bridge/git/open-in/client-web/connection/host-graph/host-git/api-gateway/mobile`
-      + `typecheck:host-archive-cleanup` + `typecheck:host-open-in`
-- [ ] **旧版本号残留扫描**：`grep -rn "<上一发布版本>" packages/*/test* packages/*/scripts/*.test.mjs`
-      为空（测试硬编码旧 shellVersion 会在 bump 后误触发 F4 壳升级路径；`after-pack-adhoc-sign.test.mjs`
-      的版本钉曾因未纳入扫描而失配）。
-
-## 4. 构建
-
-- [ ] `pnpm install --frozen-lockfile` 通过（锁文件含 vendor importer 记录）。
-- [ ] `pnpm run build:renderer`、`pnpm run build:host-packages`、`pnpm run build:desktop` 通过。
-- [ ] **打包链校验在 tag 触发的 release.yml 构建腿执行**（afterPack 断言：vendor
-      dsh 平台、pnpm 模块、asar 内 dsh-runtime；跨平台路径形态见
-      packaging-closure-checklist §3）。改动打包链/构建脚本后，先用 §7b 的
-      `workflow_dispatch` dry_run 跑完整构建腿验证，再上正式 tag。
-- [ ] **打包完整性自检**（`docs/checklists/packaging-closure-checklist.md` §1–§2）：
-      main.ts 传递 import 闭包 ⊆ `build.files`；构建链产物齐全
-      （dist/control-plane、dist/preload.cjs、dist/host-*-package、vendor/dsh）。
-- [ ] **本地不做打包/签名/公证**：安装包/更新源由 release.yml 的
-      build-macos / build-windows / build-linux / build-swift 在 CI 生成，发布者本机无需
-      hdiutil/密钥。Swift 原生腿另产
-      `dsh-chamber-<版本>-macos-arm64.dmg/.zip`（与 Electron 产物同 draft；Electron 侧名字
-      带 `-electron`，两族前缀互不包含，故不碰撞）。
-- [ ] **Linux 腿（design 22）**：build-linux 在 ubuntu-22.04 构建 AppImage（x64）；
-      非 dry_run 断言 `latest-linux.yml`（或 beta 的 `beta-linux.yml`）存在且互斥、
-      无 .blockmap；打包 dsh runtime 平台前缀 `linux-`。
-- [ ] `pnpm run smoke` 通过（dsh 已封装时真跑；未安装时 SKIP 属正常）。
+- [ ] **全量套件**：`pnpm run check:full`（= `node scripts/gates/run-checks.mjs full`：static + typecheck +
+      全部包测试 + macOS/Swift 腿 + 打包前冒烟）。上一提交的记录不算数；失败必须定位，不能用重跑代替结论。
+- [ ] full 之外的发布项：`build:dsh-runtime`、`typecheck:host-graph` / `typecheck:host-git` /
+      `typecheck:host-archive-cleanup` / `typecheck:host-open-in`；`test:win32` 只能由 CI 跑。
+- [ ] **旧版本号残留扫描**：`grep -rn "<上一发布版本>" packages/*/test* packages/*/scripts/*.test.mjs` 为空
+      （硬编码旧 shellVersion 会误触发壳升级路径）。
+- [ ] `pnpm install --frozen-lockfile` 通过；`build:renderer`、`build:host-packages`、`build:desktop` 通过。
+- [ ] **打包完整性自检**（`packaging-closure-checklist.md` §1–§2）：main.ts 传递 import 闭包 ⊆ `build.files`；
+      产物齐全（dist/control-plane、dist/preload.cjs、dist/host-*-package、vendor/dsh）。tag 触发的构建腿另跑
+      afterPack 断言（vendor dsh 平台 / pnpm 模块 / asar 内 dsh-runtime）；改动打包链后先 dry-run（§7）。
+- [ ] **Linux 腿**（CI）：build-linux 产 AppImage(x64)；非 dry_run 断言 `latest-linux.yml`（beta 为 `beta-linux.yml`）
+      存在且互斥、无 `.blockmap`、runtime 平台前缀 `linux-`。
+- [ ] `pnpm run smoke` 通过（未封装 dsh 时 SKIP 属正常）。
+- [ ] **原生壳视口越界策略实机目检**（无自动化探针）：滚到端点、指针停在不可滚动 chrome 上滚动，整页不平移。
 
 ## 5. 工作区健康
 
 - [ ] `git status --short` 无未跟踪文件（无 UPGRADE-*.md / .DS_Store / 临时文件）；`git stash list` 空。
-- [ ] 无冲突标记（用 `node scripts/release/release-preflight.mjs --offline` 的锚定行首扫描；
-      裸 `grep '<<<<<<<' packages/ docs/ scripts/` 会自匹配本清单文件的字面示例行）。
-- [ ] 旧 dsh pin 残留扫描：`grep -rn "<上一版 pin 的版本字面量>\|<上一版 commit 短哈希>" packages/ scripts/ harness.commit`
-      （非 vendor/node_modules）仅剩历史文档/迁移条目（与本清单同目录的 `dsh-upgrade-checklist.md` §6 同一纪律：
-      清单本身只写占位符，不落任何版本值/短哈希）。
+- [ ] 无冲突标记（用 `release-preflight --offline` 的行首扫描；裸 `grep '<<<<<<<'` 会自匹配本清单示例行）。
+- [ ] 旧 pin 残留扫描：`grep -rn "<上一版 pin 的版本字面量>\|<上一版 commit 短哈希>" packages/ scripts/ harness.commit`
+      仅剩历史文档/迁移条目（与 `dsh-upgrade-checklist.md` §6 同一纪律，清单本身只写占位符）。
 
-## 6. 签名/公证（全部由 CI 处理）
+## 6. 签名 / 公证（全部由 CI 处理，本地不配密钥）
 
-- [ ] **原生壳更新密钥（Sparkle，S-01 / D-1 选 B）**：仓库 secrets 需配
-      `SPARKLE_PUBLIC_ED_KEY`（EdDSA 公钥，注入 Info.plist）与 `SPARKLE_PRIVATE_KEY`
-      （EdDSA 私钥，仅正式腿用它签 appcast）。两把钥匙与 Developer ID /
-      公证**互不替代**：签名/公证是分发信任，EdDSA 是更新通道鉴权。**发布门禁**
-      （策略测试逐条钉住）：公钥有而私钥缺 = FAIL（壳会轮询没人签的 feed）；私钥有而
-      beta/stable appcast 缺失 = FAIL；**两把都缺**才是 loud 降级（照常出包，客户端
-      看不到更新）。资产核对：稳定通道 = release 里的
-      `appcast-swift.xml`；beta 通道 = 滚动 tag `appcast-swift-beta` 上的
-      `appcast-swift-beta.xml` **以及它每条 enclosure 引用的 zip**（S-36：appcast 里
-      的 zip 必须已在滚动 release 上，否则 beta 客户端能发现、下载 404）。
-- [ ] 本地不配置任何签名密钥；macOS Developer ID 签名/公证由 release.yml 发布腿
-      处理。正式发布缺少五项凭据时在创建/变更 draft 前 fail-closed；构建后的 Developer
-      ID、stapler 与 spctl 任一校验失败时阻断公开 finalize（draft 已创建并不等于已公开）。
-      dry-run 即使仓库配置了正式 secrets，也必须强制 unset 全部签名/公证环境变量与
-      `GH_TOKEN`；它不创建/变更 Release、不上传资产，并只产 ad-hoc 签名验证包。Windows 首版
-      仍未签名，SmartScreen 提示是 design 11 §7 的明确让步，不把 sha512 误称为签名。
-- [ ] **Swift 原生腿（build-swift）同纪律**：正式腿 `CSC_LINK`/Developer ID 身份缺失即
-      fail-closed；staple 先于归档、上传 zip 解包后复核 codesign/stapler/spctl 与
-      arm64 架构；dry-run 剥离全部凭据走 ad-hoc、不发布。
+- [ ] **Sparkle 更新密钥**：公钥有而私钥缺 = FAIL；私钥有而 appcast 缺 = FAIL；两把都缺 = loud 降级（照常出包，
+      客户端看不到更新）。EdDSA 与 Developer ID/公证互不替代。资产：stable = `appcast-swift.xml`；
+      beta = 滚动 tag `appcast-swift-beta` 的 `appcast-swift-beta.xml` **及其每条 enclosure 引用的 zip**。
+- [ ] 正式腿缺 Developer ID/公证凭据 → 创建或变更 draft 前 fail-closed；构建后签名 / stapler / spctl 任一失败
+      阻断 finalize。Swift 腿同纪律：staple 先于归档、zip 解包后复核 codesign/stapler/spctl 与 arm64。
+- [ ] dry-run 强制 unset 全部签名/公证环境与 `GH_TOKEN`，只产 ad-hoc 包：不建/改 Release、不上传资产。
+      Windows 首版未签名（design 11 §7 的让步），不把 sha512 称作签名。
 
 ## 7. 提交、tag 与 CI
 
-- [ ] `git add -A && git commit -m "release(v<版本>): ..."`（amend 已推送提交时
-      `git commit --amend --no-edit` + `git push --force-with-lease`）。
-- [ ] `git tag -a v<版本> -m "..."`（同 tag 重推前先删旧：`git tag -d v<版本> && git push origin :v<版本>`）。
-- [ ] **push 前最后再跑一次 `release:preflight`**（含 git 干净检查）。
-- [ ] **发布提交的 CI 证明**：`release.yml` 的 `validation` 会硬断言该提交在 `main` 上
-      有成功的完整 `ci.yml` 运行（linux `test` + `test-windows` + macOS `test-macos`
-      三腿都绿，且各腿的承载步全部 success——`verify-release-ci-proof.mjs` 按步名判定；运行中有界
-      等待，从未经过 `main` 或失败即阻断）。本地可先自查：
+- [ ] `git commit -m "release(v<版本>): …"`；amend 已推送提交用 `--amend --no-edit` + `--force-with-lease`。
+- [ ] `git tag -a v<版本> -m "…"`（重推前先删旧 tag：`git tag -d v<版本> && git push origin :v<版本>`）。
+- [ ] **dry-run 先行**：push 分支 → Actions 手动 `release.yml`（`version=<版本>`、`dry_run=true`）→
+      create-release 断言 + validation + 全部构建腿绿。任一步失败：修复 → 本地复验 → 再 dry-run。
+- [ ] **发布提交的 CI 证明**：`validation` 硬断言该提交在 `main` 上有完整成功运行（linux `test` +
+      `test-windows` + `test-macos`，各腿承载步全 success）。本地可预检：
       `GITHUB_TOKEN=<token> node scripts/release/verify-release-ci-proof.mjs --sha <commit>`。
-      打 tag 前确认 main 的 CI 已收敛，避免 dry-run 在等待上耗时间。
-- [ ] **dry-run 先行**：`git push origin <分支>`（提交在分支上即可），
-      然后 GitHub Actions 手动运行 `release.yml`（`workflow_dispatch`）：
-      `version=<版本>`（不带 `v`，且仅 `X.Y.Z` / `X.Y.Z-beta.N`）、`dry_run=true` ——
-      验证 create-release 断言 + validation +
-      构建腿全链成功（强制清空签名/公证环境与 `GH_TOKEN`，只做 ad-hoc；**不**建正式
-      Release、不上传资产、无注册表变更）。
-      任何一步失败：修复 → 重新本地验证 → 再 dry-run，直到全绿。
-- [ ] 正式发布：`git push origin <分支> && git push origin v<版本>` → 触发 Release workflow。
-- [ ] 监控 `actions/runs`：create-release（版本断言/changelog/建 draft）→
-      validation → build-macos → build-windows → build-linux → build-gateway →
-      build-swift → finalize-release（draft 转公开；`finalize-release.needs` 含全部
-      五条构建腿）。**确认 validation job 的 "Set up job" 通过**
-      （action SHA 解析失败会在这一步暴露）。
+- [ ] 正式发布：`git push origin <分支> && git push origin v<版本>` → 监控 create-release → validation →
+      build-macos/windows/linux/gateway/swift → finalize-release；确认 validation 的 "Set up job" 通过
+      （action SHA 解析失败在此暴露）。
 
 ## 8. 发布后
 
-- [ ] GitHub Release 正文 = changelog `[<version>]` 节（自动提取）。
-- [ ] **CI 产物**齐全（本地不打包）：Electron mac `dsh-chamber-electron-*` `.dmg`/`.zip`，**Swift 原生
-      `dsh-chamber-*` `.dmg`/`.zip`**，win `.exe`，Gateway `.tgz` + 同名
-      `.tgz.sha256`；无 `.blockmap`，Gateway 不经 npm 发布。
-- [ ] 更新源严格按通道存在：stable 只有 `latest.yml`/`latest-mac.yml`，beta 只有
-      `beta.yml`/`beta-mac.yml`；beta Release 为 prerelease 且不占 GitHub latest。
+- [ ] Release 正文 = changelog `[<version>]` 节（自动提取）。
+- [ ] CI 产物齐全：Electron mac `dsh-chamber-electron-*` 与 Swift `dsh-chamber-*` 的 `.dmg`/`.zip`
+      （两族前缀互不包含，不碰撞）、win `.exe`、Gateway `.tgz` + `.tgz.sha256`；无 `.blockmap`；Gateway 不经 npm 发布。
+- [ ] 更新源按通道存在：stable 仅 `latest.yml`/`latest-mac.yml`，beta 仅 `beta.yml`/`beta-mac.yml`；
+      beta Release 为 prerelease 且不占 GitHub latest。
