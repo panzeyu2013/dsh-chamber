@@ -11,9 +11,14 @@
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
 
-## [0.3.2-beta.3] - 2026-09-18
+## [0.3.2-beta.4] - 2026-09-19
 
 ### 新增
+- **本地来源缺图端点现在给出病因，而不只是后果** —— 新增 boot-gap 事实 `local-graph-not-injected`（仅本地实例；远程与 gateway 逐字保留）：本机实例没有注入 chamber 的客户端图通道时，横幅先报「安装 / seed 完整性」这一病因，并以优先级压过 5 秒后到达的 `required-services-missing` 后果；同一 ready 世代内可撤销、可复查（判词后 +30s 有界复查，provider 迟到即清事实），不再长期挂着并白烧一次冷重挂。
+- **诊断点名缺失的提供方** —— 控制台诊断行由只报「等待者 ui-chat」升级为同时给出缺失提供方（`sidebarRight → @deepseek-ai/dsh-client-ui-sidebar-right`）；未登记的服务显式写 "provider row unknown"，缺行的病因不再零日志。
+- **Windows 腿开始跑前端契约，发布证明要求 Windows 打包彩排** —— ci.yml 的 Windows 腿新增 renderer 与 sidebar 的 `test:win32` 清单（根 `test:win32` 扇出到 5 个包，每包一个可点名的步骤），每个清单带「零测试即失败」守卫；`verify-release-ci-proof.mjs` 的 `REQUIRED_JOB_STEPS` 同步要求这两步与 Windows 打包彩排，删步/改名即红。
+- **通知失败不再是无解的死路（design 19 §3.3/§4.1）** —— `dsh-chamber:notify` 由布尔改为 `{ shown, error? }`：宿主/系统的拒绝原因与裁决侧抑制原因穿过 IPC 保留；新增 `dsh-chamber:open-notification-settings`（固定主进程侧 URL，不接受渲染端传入），设置页据此渲染原因、权限提示与「打开系统设置」按钮（中英）；映射纯函数有单测，Swift 壳把授权裁决与投递失败写入 native-shell.log。
+- **会话流健康臂（design 14 §D4）** —— api-gateway 流载体改为重试而非终态失败并投影页级 `stream-carrier-failed` 事实；open-in 插件渲染会话流健康 chip 座位；控制面记录被放弃的升级以便归因。
 - **macOS Swift 原生壳（design 25 路线 A，预览）** —— macOS 上新增第二只壳：Swift/AppKit 只做壳（窗口、WKWebView、菜单/通知/角标/深链/对话框/外部打开/隐藏恢复），**壳内不承载任何业务**；业务由打包成独立 Node 可执行文件的 sidecar 承载（现有 control-plane 与 desktop 的纯 Node 业务模块族原样运行），Swift 与 sidecar 之间走一条受信的 stdio JSON-RPC 通道，页面侧用与 preload 等价的注入 shim 顶替 `window.dshChamber`，web UI 100% 复用。与原 Electron 版**共存**：产物为 `dsh-chamber-<版本>-macos-arm64.dmg/.zip`（本版起命名归属反转，见「变更」），bundle id `com.dshchamber.native`（通知授权身份独立），双 flavor 共用同一 userData 根与目录锁（`<userData>/.dsh-chamber.lock`，darwin `flock`/`O_EXLOCK`，锁本身是唯一仲裁权威）。
 - **原生 flavor 的应用内更新链（design 25 §7，D-1 = B）** —— 改为 Sparkle 2：检查真实 appcast（EdDSA 签名；公钥/私钥由发布链配置），支持应用内下载、安装与重启，并保留用户手动的「检查更新…」；beta 通道用滚动 appcast 同时收当前 beta 与最新 final，让 beta 客户端也能看到 final（S-22/S-23/S-36）。更新面不可用、坏 feed/坏公钥或忙态点击都返回诚实错误而不是静默吞掉（S-37–S-39）。
 - **双 flavor 防漂移锁步与新 CI 腿** —— IPC 面镜像（main/preload 两侧字面量与结构）、桥 manifest（`bridge-manifest.json` ↔ 生成的 Swift 白名单，通道 68 = 60 invoke + 8 push）、注入 shim 表面、core 的 electron-free 传递闭包、打包清单与产物命名（`-native` 不含碰撞、更新 feed 归属唯一）各有独立门禁；新增 macOS CI 腿 `test-macos`（Swift 构建 + XCTest + 打包干跑 + darwin 目录锁与打包脚本套件），发布证明要求 linux/windows/macos 三腿同时通过。
@@ -28,6 +33,12 @@
 - **侧栏会话 running 位陈旧会自愈** —— 会话已被判定结束、running 位却没收敛时，聊天面此前会一直不渲染：现在由侧栏会话事实与渲染位活性守卫三层收敛，聊天面恢复挂载。
 
 ### 变更
+- **win32 私有状态读写不再要求 `O_NOFOLLOW`** —— 平台没有该旗标时改为身份回退：open 前后 lstat 拒符号链接并以 dev/ino 复验，不可证即 fail-closed（不再在事务首步抛错）；Windows 上 `<userData>/dsh-runtime` 已存在也不再被误判为 corrupt 而永久阻断。登记为 design 23 F8（身份回退的 TOCTOU 残余）。
+- **win32 插件打包改用 node 启动 pnpm** —— Windows 上不再直接 spawn `pnpm.cmd`（Node ≥ 20.12 拒绝 `.cmd`），改为 `node <pnpm.cjs>`，POSIX 保持裸 `pnpm`；`resolvePnpmBinDir` 补上 win32 候选与随包 pnpm。
+- **打包闭包 fail-closed** —— afterPack 对所有平台断言打包运行时树含 `ui-sidebar-right` / `client-resources` / `ui-chat`，启动期再做一次可执行路径抽检并 loud 记录；缺件的运行时不再能出厂。
+- **任务栏徽标开关按能力位门控** —— `supported.badgeSupported` 在 win32 为 false，设置页据此禁用开关并给出原因（此前是一个无解释的无效开关）。
+- **原生壳页路径的主线程序列化成本下降** —— `writeJSONString` 由逐标量拼接改为一次 UTF-8 扫描（纯 ASCII 约 10.9×，密集转义仍有 2–5×），信封先取可靠上界、只在边界回落精确测量（1 MB 信封的门禁 3.01 ms → 1.57 ms），输出逐字节不变。
+- **文档修正** —— README（中英）的 userData 路径改为 `%APPDATA%\@dsh-chamber\desktop`；DEVELOPMENT（中英）的用户可见 Windows 打包目标改为仅 nsis；打包清单计数校正。
 - **桌面主进程拆分为 electron-free 核心 + 两套宿主边沿实现** —— `main.ts` 的编排与业务逻辑抽到与 Electron 无关的 `shell-core.ts`，Electron 原生边沿留在 `electron-edges.ts`，Node/sidecar 侧边沿在 `node-edges.ts`；Electron 版行为不变（真实依赖 Electron 的仅 4 个文件，由传递闭包门禁断言），原生 flavor 复用同一业务代码。
 - **`dsh-chamber:info` 与宿主事实面提供 flavor 判别位**（页面可按 flavor 分支），宿主事实（焦点/窗口显示/系统唤醒）在两侧同源推送。
 - **macOS 最低支持版本抬到 14.4（S-30）** —— Electron `build.mac.minimumSystemVersion` 与原生壳 `LSMinimumSystemVersion` 同写精确 14.4，`Package.swift` 写 `.macOS(.v14)`（SwiftPM 只能写 major）。原因：原生壳跑 OS WebKit，出货 bundle 在审批决策、用户提问/计划评审、PDF 预览构造路径直接调用 `Promise.withResolvers`，该 API 自 Safari 17.4 / macOS 14.4 才存在，13.x 与 14.0–14.3 会构造期 `TypeError`；Electron 自带 V8 不受影响，但同一支持矩阵只保留一个下限（不加 polyfill）。
@@ -37,6 +48,15 @@
 - **发布命名归属反转：Swift 原生壳 = `dsh-chamber`，Electron = `dsh-chamber-electron`** —— 原生腿的 .app/DMG/zip/卷名去掉 `-native` 后缀改用裸名，Electron 腿的 app/安装器/产物名加上 `-electron`。appId、原生 CFBundleIdentifier、共享 userData 身份（`@dsh-chamber/desktop`）、目录锁与深链 scheme `dsh-chamber` 全部不变，因此权限、凭据与双 flavor 共存语义不受影响；既有安装的旧 .app 目录名不会自动改写（更新只替换当前 bundle），要清爽目录名需重装。
 
 ### 修复
+- **win32 存活探针不再只认英文 `LISTENING`** —— 新增 `Get-NetTCPConnection -State Listen` JSON 主探针（纯解析器有测试）+ 大小写不敏感的 netstat 回退，共用 500ms 缓存；非英文 Windows 不再把活着的端口判死。
+- **残余后代按 PID 直杀前先复验身份** —— 击杀前用同一张 CIM 表核对 ProcessId + CreationDate/CommandLine，不匹配跳过、不可证 fail-closed；`kill(pid, 0)` 在 win32 不再当作存活证据。
+- **icacls 校验不再恒假** —— flags 改为 token 集解析（真实 `(OI)(CI)(F)` 与 `/grant` 旧式渲染同集），ACE 尾按最后一个 `:` 锚定、空格路径不再污染 principal；继承 ACE、Everyone/Users/SYSTEM 与 DENY 一律判失败，隐私校验重新有判别力。
+- **win32 安装器的发布/备份 rename 走重试路径** —— 与运行时共用 `renameWithWindowsRetry`，不再因瞬时占用失败回滚整个事务。
+- **seed 产物缺件不再静默跳过** —— 源目录在而 `dist/index.js` 缺时点名 id/包/路径与后果（打包 host 条目按 error 记），全缺仍清 overlay 并返回 null。
+- **无法验证的 running 位不再长期保留** —— 事实读持续失败到界限后只清 running 断言（行/分组保留、不触发归档回流），并把来源交给既有的会话停滞横幅「无法确认会话状态」，下一次成功读取（push 或 unary）立即恢复；侧栏的陈旧远程 running 位由本地裁决清除（本地判词 + 独立 unary 权威读，确认后经上游公开的 `handleSessionStatus(id, false)` 写回），不再需要上游补丁。
+- **流抖动下聊天面与侧栏座位保持可见** —— 四个 `from-opacity:0` 入场动画在隐藏/被遮挡的 N-ctx 壳里可能冻在第一帧，让 HARNESS 标记与设置齿轮「不可见但仍可点」；这些动画已退役，隐藏壳门禁同步收紧。
+- **WebKit 下设置页的服务器选项按压不再丢失** —— WKWebView 不在 mousedown 聚焦按钮，下拉的搜索框随即 blur（relatedTarget: null）并关闭 portal，切换服务器的 click 到不了已卸载的行；现在抑制 mousedown 默认行为直到 click 生效（与上游 MenuView 同一手法），键盘 Enter、外部 pointerdown、遮罩与 Escape 语义不变。
+- **原生 dmg 带上拖拽安装提示** —— 原生 dmg 此前只有 app 与 /Applications 软链，Finder 打开是白面板；现在由 `macos/scripts/dmg.mjs` 统一产出带 electron-builder 同款背景与图标坐标的 UDZO 镜像，并在装配时挂载自检（.DS_Store、背景 tiff、软链），缺提示的 dmg 不再能出厂。
 - **系统唤醒后原生 flavor 的立即重连与补发从未生效** —— 唤醒通知此前注册在错误的通知中心，现已注册到 `NSWorkspace.shared.notificationCenter`。
 - **keep-awake 不再连带阻止显示器休眠** —— 与 Electron 的 `prevent-app-suspension` 语义（以及 design 14 D5）对齐：只防系统休眠。
 - **确认对话框不再把正文显示两遍**（调用点把标题与正文传同一文案时，原生壳此前两处都渲染）。
