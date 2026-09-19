@@ -31,6 +31,10 @@ const GROUPS = {
     'test/session-state/aggregate-store.test.ts',
     // 运行位对账链（官方 refresh + 权威判定 seam + 有界重试/单次尝试超时）。
     'test/session-state/session-fact-reconcile.test.ts',
+    // 权威写回 seam 的生产接线锁（只写 false / 能力守卫 / 写后自校验）。
+    'test/session-state/session-fact-reconcile-wiring.test.ts',
+    // 上游会话事实语义的源码 lockstep（vendor 树未物化时默认失败，显式 opt-out 才跳过）。
+    'test/session-state/vendor-session-fact-contract.test.ts',
     'test/session-state/workspace-echo.test.ts',
     'test/session-state/session-echo.test.ts',
     'test/session-state/workspace-mutations.test.ts',

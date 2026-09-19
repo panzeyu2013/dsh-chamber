@@ -98,17 +98,72 @@
   - 会话运行位卡死（ui-chat「深度求索中」）的剩余门：机制与取舍见design 14 §D4（运行位 = `$events` 上emit型 `api-session/status`、无重传）。未闭合：
     ① 实机/浏览器lane端到端复现未跑——fixture的 `__fxTiming.appendSilent` 与 `breakStreams` 两个timing hook可确定性回归，未接CI（失效判据 = 该场景进CI）；
     ② HTTP通路健康而WS逻辑流半盲时运行位收敛但transcript不收敛（需fork逐流交付统计 + 宿主 `session/list` `projections.asOfSeq` 对账，再以 `Session.resync()` 重放单会话——失效判据 = 该对账落地并由 `appendSilent` 场景钉住）。`openState='error'` 与 `'loading'` 两个可观测变体已由健康臂收口（见 ⑫），「流仍open而静默」未闭合（见 ⑬）；
-    ③ 官方 `session.list` 单飞悬挂时L2与横幅「重新连接」均无效，仅「重新加载」有效（需上游给fetch超时或客户端可清除in-flight——失效判据 = 悬挂后重连能恢复）；
+    ③ 官方 `session.list` **单飞悬挂**时 L2 无效、store 的 `listState` 永久 loading；2026-12
+    tier-3 写回已能纠正**事实**（侧栏/聊天面立即脱离陈旧位），但 store 级悬挂仍只能靠
+    「重新加载」收口（需上游给 fetch 超时或客户端可清除 in-flight——失效判据 = 悬挂后重连能恢复，
+    且写回路径在真机上被验证为「不依赖 store 收敛」）；
     ④ 子代理会话（`origin==='subagent'`）不在事实通道 ⇒ 该臂看不见（失效判据 = 该行进入事实通道，或裁决为接受的盲区）；
     ⑤ 隐藏期watchdog不tick；恢复后首个补偿tick按累计running时长判定（隐藏时长计入 `since`，非「重新起算120s」；若要后者须显式重置时段计时，当前不做）；
-    ⑥ 阈值（L1门槛120s / 等回执150s / L2退避300s / L3 120s）未经实机校准，L1配额滚动窗口（10分钟 ≤3次）；
-    ⑦ 上述三条上游语义依赖（refresh回灌 / emit无重传 / 失败也resolve）仅接线测试与语义测试，尚无读vendor源的lockstep测试（checklist §4登记；失效判据 = 该测试落地并被CI运行）；
+    ⑥ 阈值（L1 门槛 60s / 等回执 190s / L2 退避 300s / L3 120s）与 2026-12 新增的 N=2 确认、
+    写回链**未经实机校准**（60s 门槛的语义已由 `test/lifecycle/session-liveness.test.ts` 钉住，但
+    真机抖动/慢宿主下的误报率未测）；L1 配额为滚动窗口（10 分钟 ≤3 次）；
+    ⑦ 上游语义依赖（refresh 回灌 / emit 无重传 / 失败也 resolve / `mergeOrderedBaseline` 缺席即移除，
+    以及 `ClientSessions.handleSessionStatus` 公开且一次写 summaries、物化 Session 与 catalog
+    activity）由 `packages/dsh-chamber-client-ui-sidebar/test/session-state/vendor-session-fact-contract.test.ts`
+    读 pin 住的 vendor 源逐条钉住（语义一变即红，守卫/写回须重推）；该文件在 vendor 树未物化的检出里
+    **默认失败**（只有显式 `DSH_CHAMBER_VENDOR_ABSENT=skip` 才跳过，CI 不设该变量），升级 tag 时仍按
+    `docs/checklists/upstream-touchpoints.md` §7 人工复验；
     ⑧ 控制面 `<stateDir>/logs/control-plane.log` 与原生壳 `<userData>/logs/sidecar.log` 取证价值未在一次真机事故验证（失效判据 = 事故后能从这两处检索到 `WebSocket stream … closed` / `heartbeat lost …` 行）；
-    ⑨ 权威判定对「整行缺席」不作证（`sessionFactsConverged` 保守取舍）：官方running=true而独立unary快照无该行时判为收敛——若宿主返回不完整列表，即「官方位卡住」残余出口（失效判据 = 上游给权威读一个完整性信号（`asOfSeq`/游标）后把缺席升级为「未收敛」；未收敛引入假升级，故保留）；
+    ⑨ **权威判定对「整行缺席」一律按无结论处理**（`uncoveredRunningIds` + `decideAfterFirstAuthorityRead`）——严重性已下调
+    （2026-12 读 vendor 源码核实：`refreshList()` 的 `mergeOrderedBaseline` **会移除权威列表里
+    缺席的 id**，缺席行被 refresh 从 store 清掉，不会留下永久 running 的行；残留只是「缺席不触发
+    升级」这一保守方向；2026-12 五轮复核补充：「未覆盖的 running 行」**一律**按无结论（`unknown`）处理——官方 refresh 的失败会 resolve 成 `ok:false`（reconciliation 侧观察不到），不能按 refresh 成败 gate；成功的 refresh 会用 `mergeOrderedBaseline` 清掉缺席行，留下的未覆盖行本身就说明官方对账没落地）。若宿主返回**不完整列表**，这才是残余出口（失效判据 = 上游给权威读一个
+    完整性信号（`asOfSeq`/游标）后把缺席升级为「未收敛」；判成未收敛前会引入假升级，故刻意保留）；
     ⑩ 守卫自己动作（L1/L2/L3）只落renderer console，不进 `control-plane.log`：真机事故仍无法回答「L1有无触发、位有无掉落」。失效判据 = 三类动作与结果各写一行到持久面（实例环形日志新增renderer可写verb，或经既有notify通道落sidecar/native日志）；
-    ⑪ 两处「更省形态」候选未落地（首选）：(a) 挂到App每30s兜底unary pull的提交点——① `aggregates` 被producer push整块覆盖（与runtimeFacts同源 ⇒ 事实不独立，卡住的running被写回）；② push作废在途pull；③ 该pull只在源stale时发生 ⇒ 仅覆盖「源完全静默」子场景，本缺陷须另加旁路采样面，净省 ≈450–500行。(b) 用官方store `state/phase/error`（`buildListSnapshot` 已带）替代独立unary探针：省一半host调用，但丢掉「refresh成功而running未回灌」检测面。失效判据 = 任一形态落地并删相应生产端通道（补被删面的等价证据），或复核确认现形态更优并写回design 14 §D4。
-    ⑫ 对话流健康臂（design 14 §D4）实机验收未做（治因见 ⑬）：stage迁移重开（`error` 满8s、冷却120s、滚动窗口10分钟 ≤3次）与 `loading` 20s阈值只在headless复现与单测验过，未真机校准（`test/session-health/vendor-heal-contract.test.ts` 锁三条vendor语义：pin升级改stage/open/error语义即红，恢复臂须重推而非静默失效）；`error` 自动重开让聊天面重挂载（滚动回尾）——是否保持滚动位置看实机观感。该臂动作只呈现在chip上（ui-lock禁止 `src/client/**` 出现 `console.*`，与 ⑩ 同源、无落盘面）；`presented` 判据 = document级 `[data-chat-flow]` 存在性（非实际可见；多实例壳下隐藏实例ChatView也计入——取宽只多动作一次，取窄废臂，故取宽；失效判据 = 确认隐藏实例conversation树是否常驻DOM后按实例判定）；stage迁移前置条件：target须仍current且在列表，故address-only子代理会话与masked gap只留「重新加载」提示。失效判据 = 真机拆链后自查恢复且判据写回design 14 §D4。
-    ⑬ 静默半死（`openState === 'open'` 而事件不再投递）仍无自动杠杆：无applied cursor水位时与合法长静默（TTFT 75s起、工具可数分钟）不可区分，故刻意不做形状超时。治因与信号面（`dsh-chamber:stream-carrier-failed` → 健康臂chip）见design 14 §D4（含拒绝替代）。仍未闭合：①宿主侧流级keepalive+游标未做；②真机抖动验收（判据 = 拆链后 `openState` 不落 `error`、churn提示在真实mux抖动下出现并自行消退）；③churn提示窗口（10s）与「按来源而非按会话」的归属未经真机校准（多会话同源时提示同现于该源各会话——刻意接受）；④`ended(false)`（正常结束而未收下opening item）仍是终局，由健康臂兜底。失效判据 = ②③任一校准或裁决落地并写回design 14 §D4。
+    ⑪ **两处「更省形态」候选未落地**（下轮首选；2026-12 三轮复核把论据改写成硬约束，免得照旧方案重做踩同一个 race）：(a) 挂到 App 每 30s 兜底 unary pull 的提交点——
+    ① 挂载源的 `aggregates` 会被 producer push **整块覆盖**（push 与 runtimeFacts 同源于官方 store ⇒ 两份事实不独立，卡住的 running 会被写回）；② push 会作废在途 pull；③ 该 pull 只在源 stale 时发生，推流存活的源根本不拉——故它只在「源完全静默」子场景成立，覆盖本缺陷必须另加旁路采样面，净省 ≈450–500 行。(b) 用官方 store 自己暴露的 `state`/`phase`/`error` 替代独立 unary 探针以省一半 host 调用——
+    2026-12 读 vendor 源码**否掉**：`projectList()` 只把 ids/byId/current/phase/subagentsByParent/
+    jobsBySession/currentAddress 写进 store 快照，**`state`/`error` 不暴露**（`phase` 是到达生命周期），
+    故探针是「refresh 是否真的把位回灌」的唯一证据面，必须保留；该成本改由 ①b 的本地判定
+    （store 已无 running 行 ⇒ 本轮不发探针）收回。
+    失效判据 = 任一形态落地并删掉相应生产端通道（并补上被删面的等价证据），或复核确认现形态更优并写回 design 14 §D4。
+     ⑫ **对话流健康臂（design 14 §D4，2026-12）的实机验收未做**（治因已由 ⑬ 的 fork 补丁承担，本臂只兜 `ended(false)` 等剩余终局）：自动 stage 迁移重开
+     （`error` 满 8s、冷却 120s、滚动窗口 10 分钟 ≤3 次）与 `loading` 20s 提示阈值均只在
+     headless 复现与单测里验过，未在真机抖动下校准（杠杆所依赖的三条 vendor 事实已由
+     `test/session-health/vendor-heal-contract.test.ts` 锁住：pin 升级若改了 stage/open/error
+     语义，该测试即红，届时恢复臂须重推而不是静默失效）；`error` 的自动重开还会让聊天面重挂载
+     （滚动回尾）——是否需要「保持滚动位置」取决于实机观感。失效判据 = 真机拆链后自查恢复
+     该臂的动作**只呈现在 chip 上**：包内既有 ui-lock 源文本锁禁止 `src/client/**` 出现任何
+     `console.*`，所以它与 ⑩ 同源、仍无落盘面；`presented` 判据是 document 级 `[data-chat-flow]`
+     **存在性**（非「实际可见」，多实例壳下可能把隐藏实例的 ChatView 也算作已呈现——放宽只让动作多
+     发生一次，收窄会静默废掉恢复臂，故刻意取宽；失效判据 = 确认隐藏实例的 conversation 树是否常驻
+     DOM 后改为按实例判定）；stage 迁移有前置条件：target 必须仍是 **current 且在列表**，因此
+     address-only 子代理会话与 masked gap 只留「重新加载」提示（设计取舍，不是缺陷）。失效判据 = 真机拆链后自查恢复
+     且判据写回 design 14 §D4。
+     ⑬ **静默半死（`openState === 'open'` 而事件不再投递）仍无自动杠杆**：无 applied cursor 水位时与合法长静默（TTFT 75s 起、工具可数分钟）不可区分，故刻意不做形状超时。治因（fork 载波重试不再终局）与信号面（`dsh-chamber:stream-carrier-failed` 页面事实 → 健康臂 chip「对话流正在重新连接…」）属已实现基线，契约（含拒绝替代）见 design 14 §D4。**仍未闭合**：①宿主侧流级 keepalive+游标未做；②真机抖动验收（判据 = 拆链后 `openState` 不落 `error`，且 churn 提示在真实 mux 抖动下出现并自行消退）；③churn 提示窗口（10s）与「按来源而非按会话」的粗粒度归属均未经真机校准（多会话同源时提示会同时出现在该源各会话上——刻意接受）；④`ended(false)`（正常结束而未收下 opening item）仍是终局，由健康臂兜底。失效判据 = ②③任一校准或裁决落地并写回 design 14 §D4。
+    ⑭ **2026-12 彻底修复链（tier-1.5 本地判定 + 权威相位 + tier-3 写回，design 14 §D4 ①b）的未闭合项**：
+    ① 写回押在**非 `ISessions` 契约**的 `ClientSessions.handleSessionStatus` 上（运行时能力守卫 +
+    接线锁已就位；pin 升级移除/改名即降级为 WARN + 升级阶梯）；两个上游诉求（store 快照暴露
+    `state`/`error`；把该写面提升为契约）已写入 `docs/progress/todo/upstream-proposals.md` §4。
+    ② 未挂载/已回收来源没有 producer ⇒ 不在守卫输入内（其事实由 30s unary 兜底直供，本来就是权威读）：
+    保留视图按 90s 界限清位（design 05 §2.3；复用会话停滞横幅，三条出口同权）；
+    该界限**只在失败拉取分支里求值**（隐藏窗口/未到期的轮询不触发），残余 = 真机上「宿主其实仍在跑、
+    读路径坏掉」时用户会暂时无环；该出口只对**仍持有壳**的来源有效——已回收来源的「重新连接」是 no-op（可靠出口 = 「重新加载」/「忽略」），未经真机判。
+    ③ 门槛/预算（60s L1、190s 等回执、N=2 两次串行探针）与写回链的端到端时延、远端（ssh）实机
+    行为未跑（与 ⑥ 同批）。④ 两处已知窄缝：probe→写回之间可能有**新的**宿主 `running=true` 落地
+    （与该 id 的旧位不可区分，下一轮 L1 自愈，≤~200s）；`refresh()` 方法面缺失仍按永久失败结算
+    （不进权威相位）⇒ 该构建失去唯一的仓内纠正路径（上游契约若移除 `refresh` 须重裁）。
+    ⑤ App 侧与 producer 侧另有若干不变量**只有源码文本锁 + 纯函数单测**（无 DOM/React 环境跑
+    行为测试）：恢复路径的「记水位 + 撤标记」、dismiss 剪枝、来源退役清理、探针的两次独立读、
+    N=2 接线、未覆盖的 running 行 ⇒ `unknown` 的判定（2026-12 五轮复核补齐了其中原先缺失的
+    三条锁）；真实交互待 build 后的浏览器车道回归。
+    ⑥ 写回相位的 5s 上限之外仍有一处窄窗：`correct()` 若慢于上限，回执可能已按 `unknown`
+    发布而 store 已被写入（写幂等、无二次写，下一轮 L1 的 tier-1.5 即收敛）——真机未观测。
+    ⑦ 「官方基线里消失但移除事件丢失」时，侧栏行会被下一次 refresh 清掉，而**物化 Session
+    的聊天面 running 位**可能留着（`refreshList` 只对仍在 summaries 的会话下推 running，
+    移除靠事件）——仓内无纠正入口（缺失行不作证），登记待上游或真机。
+    ⑧ 保留视图的 90s 界限只清**聚合**的 running 位，不触碰 producer 的 runtimeFacts（蓝点/
+    通知边沿仍可能读到 running）：语义由守卫横幅与对话流健康臂覆盖，但两者口径不同，真机未判。
 
 - 会话打开停滞（「载入历史…」永久停留，2026-09-14实机）：大会话（`session-28e9eb86`）经gateway打开只显示 `chat.loadingHistory`。根因未证实；唯一同构状态 = mux socket正常而 `session/follow` 逻辑流永久无首帧，客户端与宿主均无首帧超时；收口需设备侧帧证据（CDP WS Frames/抓包），入口 `mobile-walkthrough.mjs`（`mobile-ws-frames.json` 落盘前脱敏）。插件侧「停滞提示 + 主动重载」兜底（`session-stall.ts`）判据全为属性锚点，45s阈值未经真机校准；桌面侧同形兜底 = `session-stream-health.ts` `loading` 臂（20s阈值，同未经真机校准），另加 `error` 臂自动stage迁移重开（见 ⑫）；形态取值/误报边界见 `session-stall.ts` 头注与 `README.md`「Anchor baseline」。（同族见上方「会话运行位卡死」与design 14 §D4；本首帧期限与之同缺口——上游提案见 `docs/progress/todo/upstream-proposals.md` §4。）
 

@@ -203,6 +203,19 @@ Electron 窗口（BrowserWindow，单 frame，loadURL http://127.0.0.1:17500）
 - 连接状态 = 非秘密投影（本地：控制面 /health；远程：desktopSsh status 推送），永不用持久化/推断值冒充。
 - 数据节奏：状态与已挂载来源聚合均走现有事件链。本地 `/health` 由 health-events EventSource 驱动；远程隧道相位走 onStatusChanged；每个已挂载 ctx 订阅自己的 `sessions.list` + `workspaces.list`，两份 reconnect baseline 于 idle + ready 后经 chamberBridge 上报完整快照；任一 store 进入 loading/error 即撤回旧快照并清除内容签名，使同内容 reconnect baseline 也重新上报。远端 ctx 的 host frames 仍经既有 SSH 隧道/实例反代 WebSocket 到达，**不增加协议、不修改上游 dsh**。
 - 只有未挂载或 reconnect baseline 不完整的 ready 来源走 30s unary 兜底；全部 ready 来源都有完整生产者时不建聚合定时器。连接/生产者状态变化立即重估；`requestRefresh` 对每个 live 来源无条件执行一次即时 mutation-pull（合并会话行、保留分组/归档集），mounted 来源亦然（host-store 推送为主，unary pull 并行通道）。not-ready → ready 连接代边沿固定执行一次 unary。App 断线分支**不清空**已推送来源的聚合（`shouldRetainPushedAggregate`；行渲染以 connected 为门，断连不显示；ready-edge 拉取为 sessions-only merge，归档集/工作区不丢失）。稳定 ready 代非零轮询：30s unary 兜底 watchdog 照常拉取 stale 来源；卡在降级视图（合成行）的来源由限流自愈臂（S2）重连并重放 workspace follow，使 producer 重发真实基线（`shouldRebaselineFallbackView`）。S2 臂陈旧阈值按传输分级（`packages/renderer/src/aggregate-refresh.ts`）：`http` = 120s（上游腿无应用心跳、仅 ~10min OS TCP keepalive）；`ssh` 隧道 = 300s（三个独立探活：反代浏览器腿 30s WS ping、host mux 2s/2-miss 心跳、ssh `ServerAliveInterval=30 × CountMax=3` ≈90s；故只作最后手段）；`local` 与未知传输取 `null`（本地由权威直接服务；未知传输已 fail-closed），该臂**不得触碰**它们。该拉取瞬时失败由 loading 撤回 + idle baseline 重发恢复，不永久停在 error。推快照按来源序号使较旧在途 pull 失效。
+  **保留视图有界化（2026-12 残留修复）**：已推送来源的聚合在 unary 反复失败时保留最后视图
+  （上面 `shouldRetainPushedAggregate`），此前是**无限**保留——旧 `running` 位会一直渲染成
+  「运行中」。现在：距最后一次**成功验证**（push 或 unary 提交，`factsAtRef`）**达到**
+  `AGGREGATE_UNVERIFIED_FACTS_MS`（90s ≈3 个 watchdog 周期；判定含边界）后，App 丢掉一个
+  **无法验证**的 running 断言（只清 running 位；行/分组/归档集照旧保留，不触发归档回流），并把
+  该来源交给既有的会话停滞横幅（`sessionStall.text` =「无法确认会话状态」）——横幅的三条出口
+  （重新连接 / 重新加载 / 忽略）对「无法验证」与停滞来源同权；下一次成功读取（push 或 unary）
+  立即恢复事实并撤下呈现。判定与界限在 `packages/renderer/src/aggregate-refresh.ts`
+  （`shouldDropUnverifiedRunningFacts`，纯函数 + 单测），接线（判定 → 只清 running 位 → 进同一
+  横幅）由 `packages/renderer/test/wiring/session-liveness-wiring.test.ts` 钉住。**取舍**：无法
+  验证时保留断言等于陈述一个没有证据的事实，而清位 + 可见提示是「不知道」的诚实表达，且恢复路径
+  无条件幂等；已知残余 = 宿主其实仍在跑、只是读路径坏掉时用户会暂时看不到运行环（由横幅的
+  「重新加载」收口；「重新连接」只对仍持有壳的来源有效——已回收来源的该出口是 no-op，见 STATUS ⑭）。
 - **首屏基线收割（`packages/renderer/src/baseline-harvest.ts`）**：首启仅 local 挂载 + 1 个不轮转预热槽、被回收来源点击前禁预热 ⇒ N-1 个 ready 远程源稳态停留在 unary 兜底视图（合成 cwd 分组 + 空归档集），自愈臂均要求 `mounted===true`（至少推过一次快照）。收割把这类来源在同一后台预热槽挂一次，首个权威推送（真实分组 + 归档集，`archiveSetKnown:true`）后即回收，转入"已回收来源"态（保留权威聚合，会话行由 30s unary merge 刷新）。纪律：收割候选优先于普通预热且不受"回收后禁预热"抑制；每源尝试上限 2 次、失败退避 120s、挂载后 `BOOT_TIMEOUT_MS+15s` 无推送且壳已 settle 判失败并释放槽位（截止值由 `boot-budget.ts` 的 boot 预算推导且高于它）；`HARVEST_ABANDON_MS`（截止值 + boot 预算）为绝对放弃上限：壳始终不 settle（挂死的 loader/fetch）时回收并停用该源（`harvestParked`）。语义边界：回收只拆**已注册**壳；从未注册的 boot 只能自行 settle 时拆除（页面生命周期内可残留），同 id 后续挂载不受影响（shell.ts 对"上一代 boot"的等待有 boot 预算上限）。同一上限也独立看管"在途挂载"（按挂载时刻、仅未 settle 的挂载，不依赖收割意图；已 settle 者仍走截止臂）。同 id boot 尾从不提前释放（generation 记录持有者，提前释放会致同号注册覆盖）；改由 shell.ts 对"等待上一代 boot"设绝对上限（前代起始 + 两个 boot 预算，后继共享同一截止）；producer 注册表按代际栅栏（`chamberBootGeneration` 经 ctx 注入），迟到的老 boot 注册作废，teardown 不能清空健康后继通道。活动/待开视图不可回收——标记失败，让既有失败覆盖层与「重试」出现；在途壳不计入 retention 隐藏壳数。存在任一收割候选时，候选集独占后台槽（`prewarmCandidates` 只返回收割候选且返回全部候选，含排在退避候选之后的"退避已满"者）；尝试耗尽且从未拿到基线的源（`harvestParked`）不得退回普通预热；托管 dsh 终态停机或瞬态 starting/restarting 的 gateway 源（投影事实 `managedRuntimeUnusable`）不预热/不收割（boot 必然 503）；用户点开正在收割的视图 = 采用（撤销收割意图，绝不回收）；来源退役时账本同源收敛。稳态 ≤1 个后台壳（含预热）。**收割独立预算线**：温壳使普通预热槽位预算恒为 0（retention 只保 1 个隐藏壳），收割壳不受其约束；代价是最坏多一个隐藏壳（用户温壳 + 收割壳）在收割窗口内共存。**代价与已知取舍**：首启每个 ready 来源各付一次后台 boot（N 次，串行于全局 boot 链，最坏受 60s boot 预算约束）；最后收割的壳保留为温壳（不额外付预热 boot，挂载期状态事实 pending/完成点保持在线），但遇到新收割候选必须**让位**（`shouldReclaimHarvestedShell`）——否则它作为 `autoPrewarmed` 占住唯一槽位（`remaining` 恒 0）。
 - **未挂载来源的 unary 兜底表达不了"空工作区"**（2026-12 修订，§2.2.1）：`fetchInstanceSnapshot` 只调 `session.list`，工作区分组由会话 cwd 反推（`__cwd__:` 合成行），刚建好、无会话的工作区在结构上不可见；已推送来源更彻底：聚合保留 pushed 工作区集（mounted merge），`planAggregateRefreshes` 只刷新"刚 ready"或"从未推送过"的来源，对它连 unary 轮询都不再发生。根因是**读通道缺失**：权威工作区集合只存在于挂载壳的 `workspace/follow` 基线（宿主把 `upsert` 广播给所有活跃 follower），chamber 补法是用户那次创建的回声（§2.2.1）——不新增 wire 读通道，也不把工作区事实搬进控制面。
 - **本修订的代码落点**：`packages/dsh-chamber-client-ui-sidebar/src/shared/open-intent.ts`（意图槽 + 投影/揭示纯规则）、`.../src/shared/aggregate-store.ts`（桥接单例 + 回声事实通道：`WorkspaceCreatedFact`/`reportWorkspaceCreated` 等）、`.../src/shared/workspace-echo.ts`（回声账本 + union/去重/锚点插入纯规则）、`.../src/shared/workspace-mutations.ts`（**唯一事实出口**：create/delete/rename 的 wire 调用与回声事实，2026-12 第二入口收口）、`.../src/client/early-open.ts`（boot 期早开臂）、`.../src/client/index.ts`（每个 ctx 挂一次早开臂）、`.../src/client/SidebarRoot.tsx`（三个变更点经唯一出口，自身不再直接上报）、`packages/dsh-chamber-client-ui-git/src/shared/coordinator.ts`（Git create / adopt / recovery 经唯一出口；create 带位置锚点，flag/未注册块由 beforePublish 装饰）、`packages/renderer/src/App.tsx`（arm/release、账本与退休含锚点、投影门、揭示门判定、holdVeil 传入）、`packages/renderer/src/components/InstanceView.tsx`（遮罩合成）、`packages/renderer/src/shell.ts`（被取代请求的丢弃：`lastRequestedSession`）。
@@ -254,7 +267,8 @@ interface InstanceRuntimeReport {
     settledAt?: number            // 缺省 = 在途（守卫忽略未结算回执）
     ok: boolean                   // 是否拿到权威结论（false ≠ 一定失败，见 verdict）
     attempts: number
-    verdict?: 'converged'|'stale'|'unknown'  // 三值：unknown（辅助探针失败/超时）不升级也不清等待；stale = 未收敛的失败结算（refresh 相位失败/超时、缺 verify seam，或 verify 正面证伪）——只有 verify 真跑过才代表「权威证伪」
+    verdict?: 'converged'|'stale'|'unknown'  // converged = 权威一致（可能经写回纠正）；stale = 权威正面证伪，或 refresh 相位失败/超时且缺 verify seam；unknown（探针失败/超时/两次读数不一致）不升级也不清等待
+    corrected?: boolean           // 本轮结束时 store 已无陈旧 running 位（写过 store，或 probe 与写回之间已自然收敛）⇒ 与 ok:true + converged 同现；守卫不据此升级
   }
 }
 export const chamberBridge: {

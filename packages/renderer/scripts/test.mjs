@@ -50,6 +50,9 @@ const GROUPS = {
   ],
   // wiring: 跨文件源码文本接线契约（App/InstanceView/侧栏桥）
   wiring: [
+    // 运行位活性守卫的跨模块不变量（design 14 §D4：最坏回执 < 等回执期限、
+    // verify 预算 ≥ 探针 30s 上限、生产装配不得 override）。
+    'test/wiring/session-liveness-wiring.test.ts',
   ],
   // view-runtime: 视图运行时 —— 隐藏视图回收、视图过渡队列、侧栏滚动恢复
   'view-runtime': [

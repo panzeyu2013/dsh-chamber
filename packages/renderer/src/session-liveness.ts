@@ -18,9 +18,13 @@
  *
  * 守卫的**纯决策半**（App 侧持有 refs、producer 侧执行动作）。三级阶梯：
  *
- * - **L1 只读**：请挂载 ctx 重跑官方 `session.list`（`ctx.sessions.refresh()`
+ * - **L1 对账**：请挂载 ctx 重跑官方 `session.list`（`ctx.sessions.refresh()`
  *   是 single-flight 的读操作，其内部 `refreshList()` 会把权威 summary 的
- *   running 回灌到每个已物化会话 ⇒ 卡死的位自然掉落）。
+ *   running 回灌到每个已物化会话 ⇒ 卡死的位自然掉落）；refresh 结算后先做**本地
+ *   判定**（store 已无 running 行 ⇒ 收工，省掉一次 host 读），仍有 running 行时才发
+ *   独立 unary 探针；**权威正面证伪而官方契约内纠正不了**时，由 tier-3 **写回**把
+ *   结论写进官方 store 自己的公开写路径（只写 false、写后自校验、无 TTL —— 见
+ *   shared/session-fact-reconcile.ts 的 `correct` seam）。
  * - **L2 有界**：仅当 L1 的**回执**证明对账通道已坏（refresh 失败，或请求后
  *   `refreshOutcomeTimeoutMs` 内没有回执）时，才升级
  *   `reconnectInstanceConnection`（复用既有 S2 watchdog 的纪律与记账）。
@@ -96,7 +100,7 @@ export interface SessionLivenessSourceInput {
    *
    * 边界（二轮复核记录为已知形态）：另一条臂**每 ≤60s 都在重连**时，这条臂始终不允许
    * 派遣，L3 的 no-op 出口也不会增长——此时"自愈动作"由那条臂持续执行，本臂只保留 L1
-   * 只读对账。不把它计成假 L3：用户看到的应该是那条臂的失败面，而不是一条"我重连过但
+   * 对账（读 + 可能的权威写回）。不把它计成假 L3：用户看到的应该是那条臂的失败面，而不是一条"我重连过但
    * 没用"的重复横幅。
    */
   readonly reconnectBlocked?: boolean
@@ -111,7 +115,8 @@ export interface SessionLivenessInput {
 
 /** 守卫时序参数（全部有界；单位为毫秒）。 */
 export interface SessionLivenessConfig {
-  /** running 连续保持多久后才值得做一次只读对账（L1 门槛）。 */
+  /** running 连续保持多久后才值得做一次对账（L1 门槛；动作是读 + 官方 refresh +
+   *  可能的权威写回，**不是升级**）。 */
   readonly refreshAfterMs: number
   /** 同一来源两次 L1 之间的最小间隔（限频；官方 refresh 是 disk walk）。 */
   readonly refreshCoalesceMs: number
@@ -139,29 +144,34 @@ export interface SessionLivenessConfig {
 /**
  * 默认时序。取值依据（2026-12 实测）：活跃 turn 期间宿主 durable 进展
  * 5–21s/次（median 11s，161s 13 次），而合法静默可达 75s（TTFT）到数分钟
- * （长工具）——所以 L1 门槛取 120s（比实测最大间隔高约 6 倍，且动作只是读）；
- * L1 等回执 150s 覆盖对账链最坏时延（2 次尝试 × (refresh 20s + verify 35s) +
- * 退避 1.5s ≈ 111.5s；相位预算拆开后不能再取 90s，否则慢宿主会被误判）；L2 退避
+ * （长工具）——L1 门槛取 60s（2026-12 彻底修复后由「事实年龄」驱动：动作只是读 +
+ * 官方 refresh，**不是**升级；每个 running 时段的探测次数仍由 coalesce/配额封顶，
+ * 60s 与 120s 的稳态次数相同，只是首次探测提前一个 coalesce 窗 ⇒ 陈旧位更快掉落）；
+ * L1 等回执 190s 覆盖对账链最坏时延（2 次尝试 × (refresh 20s + verify 65s) +
+ * 退避 1.5s ≈ 171.5s；相位预算拆开后不能再取 90s，否则慢宿主会被误判；verify 必须
+ * 覆盖 N=2 的两次串行探针，故 65s）；L2 退避
  * 300s 是「重连是重动作」的量级（同类的 S2 臂用 60s，但那条臂每 ~2min 就会自己重连，
  * 不需要同值）；L3 在 L2 后 120s。
  */
 export const SESSION_LIVENESS_DEFAULTS: SessionLivenessConfig = {
-  refreshAfterMs: 120_000,
-  // 生产 tick 30s（AGGREGATE_FALLBACK_POLL_MS）+ 门槛 120s ⇒ L1 落在 120/330/540s…
-  // （**均匀**铺开）。若用 60s（= 窗口/配额），
-  // 探测会在 120/180/240s 爆发用完窗口，之后 8 分钟零探测（2026-12 二轮复核的
-  // 成本/时延分析）；coalesce = refreshWindowMs / maxRefreshRequests 时平均成本
-  // 完全相同却把最坏未探测时长从 8 分钟压到 200s。
+  refreshAfterMs: 60_000,
+  // 生产 tick 30s（AGGREGATE_FALLBACK_POLL_MS）+ 门槛 60s ⇒ L1 落在 60/260/460s…
+  // （**均匀**铺开；coalesce = refreshWindowMs / maxRefreshRequests ⇒ 每 10 分钟仍
+  // 至多 3 次，与门槛 120s 的稳态成本相同，只是首次探测提前一个 coalesce 窗）。
+  // 2026-12 彻底修复：本轮动作从「只升级」变成「refresh + 本地判定 + 权威探针 +
+  // 写回」，修复成功后陈旧位立刻掉落、守卫记录随之清除 —— 更短的首探**不**增加稳态
+  // 成本，只把可见陈旧窗口从 ~200s 级压到 60s 级。
   refreshCoalesceMs: 200_000,
   maxRefreshRequests: 3,
   refreshWindowMs: 600_000,
-  // 必须 > 对账链最坏回执时延（2 次尝试 × (refresh 20s + verify 35s) + 退避 1.5s
-  // ≈ 111.5s，见 sidebar/src/shared/session-fact-reconcile.ts 的默认值）：相位预算
+  // 必须 > 对账链最坏回执时延（2 次尝试 × (refresh 20s + verify 65s) + 退避 1.5s
+  // ≈ 171.5s，见 sidebar/src/shared/session-fact-reconcile.ts 的默认值）：相位预算
   // 拆开之后，90s 会在「一切正常但宿主很慢」时误判成「拿不到结论」⇒ 假 L2
-  // （2026-12 三轮自审发现的跨模块不变量，由 wiring 测试锁住）。
-  // 本值 150s < coalesce 200s：单次「探针无结论」（unknown）由 unknownAbsorbedAt
+  // （2026-12 三轮自审发现的跨模块不变量，由 wiring 测试锁住；四轮复核把 verify
+  // 抬到覆盖 N=2 的两次串行探针后，本值同步抬到 190s）。
+  // 本值 190s < coalesce 200s：单次「探针无结论」（unknown）由 unknownAbsorbedAt
   // 挂起期限，直到下一次 L1 发出，否则它必然抢在下一次 L1 之前到点（2026-12 独立复核实测）。
-  refreshOutcomeTimeoutMs: 150_000,
+  refreshOutcomeTimeoutMs: 190_000,
   reconnectBackoffMs: 300_000,
   maxReconnects: 1,
   maxNoopReconnects: 3,
@@ -201,7 +211,7 @@ export interface SessionLivenessRecord {
   lastRefreshRequestedAt?: number
   /**
    * 「仍在等回执」的起始时刻（升级依据）。**刻意不被 coalesce 重复请求刷新**：
-   * 若每次请求都重置它，只要 coalesce < 等回执期限（生产值 200s < 150s 不成立时
+   * 若每次请求都重置它，只要 coalesce < 等回执期限（生产值 200s < 190s 不成立时
    * 才需要担心；此处的原始缺陷发生在早期 60s/90s 组合下），
    * 对账通道静默时这个计时器永不到期 ⇒ L2 永不触发（本守卫最初的实现缺陷，
    * 由 lifecycle 测试抓出）。**唯一例外**是 {@link SessionLivenessRecord.unknownAbsorbedAt}
@@ -211,7 +221,7 @@ export interface SessionLivenessRecord {
   /**
    * 第一次 `unknown` 被吸收的时刻（一次性，绝不累积）。
    *
-   * 生产常量下 `refreshOutcomeTimeoutMs`(150s) < `refreshCoalesceMs`(200s)：探针一次
+   * 生产常量下 `refreshOutcomeTimeoutMs`(190s) < `refreshCoalesceMs`(200s)：探针一次
    * 无结论（502/代理重启/慢 session.list）若还让原期限生效，期限会比下一次 L1 先到点，
    * 把「探针无法裁决」误判成「对账通道已坏」⇒ 一次假 L2 并吃掉该 running 时段唯一的
    * 重连预算（2026-12 独立复核的时间线仿真）。因此门控是：**吸收过 unknown 之后，必须
@@ -401,7 +411,7 @@ export function planSessionLiveness(
     // 这条一并覆盖，且不会无限推迟——下一次 L1 一到就重新起算期限。
     // 边界（三轮复核记录，保守方向）：与吸收**同一 tick** 发出的 L1 算「之前」
     // （两个时间戳相等），期限再多等一个 coalesce 窗口才生效——最多多等 200s，
-    // 换掉"同毫秒顺序歧义 ⇒ 可能重开假 L2"这类风险；生产常量下要求一次 >150s 的
+    // 换掉"同毫秒顺序歧义 ⇒ 可能重开假 L2"这类风险；生产常量下要求一次 >190s 的
     // 结算才可能走到，且仍在 coalesce 上界之内。
     const unknownAwaitingNextL1 = record.unknownAbsorbedAt !== undefined
       && (record.lastRefreshRequestedAt === undefined
@@ -446,7 +456,7 @@ export function planSessionLiveness(
       // 抓出的时序缺陷。
       actions.push({ kind: 'reconnect', sourceId })
     } else {
-      // L1：只读对账（幂等、单飞、限频、**滚动窗口**配额——总量封顶会让长
+      // L1：对账（幂等、单飞、限频、**滚动窗口**配额——总量封顶会让长
       // 任务的第 4 分钟之后彻底失明）。
       const history = record.refreshHistory.filter(at => now - at < config.refreshWindowMs)
       const refreshDue = age >= config.refreshAfterMs

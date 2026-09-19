@@ -60,13 +60,63 @@ chamber已落地缓解（不动上游事实面）：design 05 §2.2.1的open意�
 
 ## 4. 会话事实通道的「静默丢帧」自愈（2026-12，Swift 原生版 ui-chat 卡死根因）
 
-> 驱动面：`dsh-client-ui-chat` 的 `chat.deepDiving`（`TurnStatus`）由官方session的 `running` 位驱动，而该位只由mux `$events` 上一条emit型转发事件 `api-session/status` 递送（`dsh-api-session-controller` 客户端半 `handleSessionStatus`→`handleRunning`；白名单见 `dsh-api-remotes` 的 `remote-events.ts`，`mode: 'emit'`）。emit无重传、开场帧不重放会话状态，唯一收敛路径 `handleConnected() → refreshList()` 只挂连接代际重置 ⇒ 丢帧或carrier静默半死（无close/error）时运行位永停true，客户端零超时、零出口。chamber缓解（L1只读对账→L2有界reconnect→L3用户可见提示）见 `docs/design/14-sleep-background.md` §D4；缓解不是根治。
+> 驱动面：`dsh-client-ui-chat` 的 `chat.deepDiving`（`TurnStatus`）由官方 session 的
+> `running` 位驱动，而该位只由 mux `$events` 上一条 **emit 型转发事件**
+> `api-session/status` 递送（`dsh-api-session-controller` 客户端半
+> `handleSessionStatus` → `handleRunning`；白名单见 `dsh-api-remotes` 的
+> `remote-events.ts`，`mode: 'emit'`）。emit 无重传、`$events` 开场帧不重放会话
+> 状态，而官方唯一的收敛路径 `handleConnected() → refreshList()` 只挂在**连接代际
+> 重置**上 ⇒ 丢一帧或 carrier 静默半死（无 close/error）时运行位永久停在 true，
+> 客户端零超时、零出口。chamber 侧阶梯见 `docs/design/14-sleep-background.md` §D4：
+> 2026-12 起 L1 变成「对账 + 权威纠正」（tier-1.5 本地判定 + tier-3 用官方公开写面把权威结论
+> 写进 store；只写 false、无 TTL），因此**症状已能在仓内确定性收敛**；但事件源本身仍会丢帧
+> ——**源端根治仍在上游**（下面第 1、5、6 条）。
 
-上游最小改法（三选一或组合）：
+**上游最小改法（逐条独立、可组合）**：
 
-1. 事实自愈：emit型会话事实改周期性summary再断言，或客户端内建「running为真但 `$events` 静默 ≥N秒 ⇒ 触发一次 `session.list` 对账」——把chamber的L1上移为默认（对上游是纯读）。
-2. 可观测心跳：`/api/remote.mux` 现只有WS级ping/pong（`websocketHeartbeatIntervalMs` 默认2s、`MAX_MISSED_HEARTBEATS=2` 硬编码），浏览器观测不到——加应用级keepalive item，页面可自判「连接是否还在投递」，不依赖OS事件。
-3. 流期限：`session/follow` 加首帧/空闲期限（现永久无首帧即永久loading，见 `STATUS.md`「会话打开停滞」）。
-4. **让 `refresh()` 可判成败**（最便宜、不新增API面）：`SessionManager.refreshList()` 对「拉取失败」照常resolve，只把 `listState` 置 `'error'`（`listError` 同存）——`buildListSnapshot()` 已把 `state/phase/error` 放进快照，但没作为返回契约。显式化（`refresh(): Promise<{ ok: boolean; error?: … }>` 或文档化「失败看 `listState`」）后，chamber的独立unary探针可删（每次对账2次host `session.list`→1次）；代价是丢掉「refresh成功但running未回灌」的检测面，故仍建议配合第1条。
+1. **事实自愈**：emit 型会话事实改为周期性 summary 再断言，或客户端内建「running
+   为真但 `$events` 静默 ≥N 秒 ⇒ 触发一次 `session.list` 对账」——即把 chamber 的
+   L1 上移为默认行为（对上游是纯读）；
+2. **可观测心跳**：`/api/remote.mux` 现只有 WS 级 ping/pong（服务端
+   `websocketHeartbeatIntervalMs` 默认 2s、`MAX_MISSED_HEARTBEATS=2` 硬编码），
+   浏览器完全观测不到——增加应用级 keepalive item 可让页面自判「连接是否还在投递」，
+   不依赖任何 OS 事件；
+3. **流期限**：`session/follow` 加首帧/空闲期限（现永久无首帧即永久 loading，见
+   `STATUS.md`「会话打开停滞」）。
+4. **让 `refresh()` 可判成败**（最便宜、且不新增 API 面）：`SessionManager.refreshList()`
+   现在对「拉取失败」照常 resolve，只把 `listState` 置 `'error'`（`listError` 同存）。
+   把结果显式化（`refresh(): Promise<{ ok: boolean; error?: … }>`）后，chamber 的独立 unary
+   探针即可在「refresh 相位已判失败」这一半分支省掉；代价是丢掉「refresh 成功但 running 未
+   回灌」这一回归的检测面，故仍建议配合第 1 条。
+   **更正（2026-12 读 pin 源码核实）**：本提案旧文曾写「`buildListSnapshot()` 已把
+   `state/phase/error` 放进快照」——不成立：客户端 `projectList()` 只把
+   `ids/byId/current/phase/subagentsByParent/jobsBySession/currentAddress` 写进
+   `ctx.sessions.list` 的 store 快照（`phase` 是到达生命周期），`state`/`error` 不在其中，
+   因此 chamber **读不到**「refresh 是否成功」，只能靠第二条载体（独立 unary 探针）。
 
-开放问题：应用级keepalive的版本兼容（未知item必须被旧客户端忽略，而现客户端对未知帧会 `failAll` 并关socket）；心跳的隐私/体积边界；`session.list` 对账在大会话语料上的宿主成本（chamber一次refresh = per-call disk walk）。
+5. **把回执/状态暴露到 store 快照**（2026-12 新增诉求，最便宜）：把 `listState`/`listError`
+   （或 `refresh()` 的显式结果）投影进 `ctx.sessions.list` 的 store 快照。落地后 chamber 的
+   独立 unary 探针只需在「store 仍说 running」这一歧义支保留，「refresh 成功而 running 未回灌」
+   的检测也不再依赖第二条载体（现每次对账的 host 读：健康路径 = 官方 `refresh` 1 次（tier-1.5
+   本地判定直接收敛）；store 仍说 running 时 = `refresh` + 两次独立探针；两次尝试都不收敛的
+   病态路径上界 = 2 次 `refresh` + 4 次探针 = 6 次 host 读（外加 N=2 确认后至多一次
+   `handleSessionStatus` 写回）。落地本诉求后，探针只在「store 仍说 running」这一歧义支保留。
+6. **把客户端状态写面提升为契约**（2026-12 新增诉求）：`ClientSessions.handleSessionStatus(
+   sessionId, running)` 已是具体类的公开方法（`src/client/sessions/service.ts`），一次调用
+   同时写 list summaries、物化 Session 的 `running`（聊天面）与 catalog activity；但
+   `ISessions` 契约只暴露 `refresh()`。把它（或语义等价的 `reconcileSummaries(rows)`）写进
+   `contract/sessions.ts`，chamber 的 tier-3 写回即从「上游公开但非契约」变成受契约保护的面。
+
+> **chamber 侧现状与裁决（2026-12）**：在**不改上游、不新增 fork**（用户裁决）的前提下，
+> chamber 已用两条仓内杠杆把「丢帧 → 纠正」做成确定性收敛——① tier-1.5 本地判定（refresh 后
+> store 已无 running 行即收工，**省掉一次 host 读**，并据此确认 refresh 真的回灌了）；② tier-3
+> 写回（用上面第 6 条的公开方法把独立权威读的证伪结论写进官方 store；只写 false、写后自校验、
+> 无 TTL，host 基线永远可以覆盖回去）。第 1/5/6 条落地后 chamber 的写回与探针都可删除（上游事实
+> 通道自身可自愈）；第 2/3 条是另外两条正交的可见面/期限缺口。**曾评估但未采纳的第三条路**：
+> chamber 的 seed 宿主包监听 host 的 `agent/status` 并周期性再断言 `api-session/status`
+> （转发白名单是 host 全局的，`dsh-api-remotes` 的 `remote-events.ts`）——不改上游即可让所有
+> 客户端免于丢帧，但只覆盖能 seed 的实例且需重启生效，暂缓（见 design 14 §D4 被否替代）。
+
+**开放问题**：应用级 keepalive 的版本兼容（未知 item 必须被旧客户端忽略，而现客户端
+对未知帧会 `failAll` 并关 socket）；心跳的隐私/体积边界；`session.list` 对账在大会话
+语料上的宿主成本（chamber 一次 refresh = per-call disk walk）。

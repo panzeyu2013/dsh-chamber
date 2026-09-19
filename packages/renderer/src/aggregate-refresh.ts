@@ -224,6 +224,38 @@ export function commitAggregateFailure(mounted: boolean, errorText: string): Ins
   if (mounted) return null
   return { state: 'error', workspaces: [], sessions: [], archivedSessionIds: [], error: errorText }
 }
+
+/**
+ * 保留视图的「无法验证」界限（2026-12 残留修复，design 05 §2.3）。
+ *
+ * 已推送过的来源在每次 unary 拉取失败时**保留最后视图**（commitAggregateFailure
+ * → null）：这避免了归档回流与整段空白，但也意味着「事实读持续失败」时视图会被
+ * **无限**冻结——旧 running 位会一直渲染成「运行中」。本界限把保留有界化：距最后
+ * 一次**成功验证**（push 或 unary 提交）超过 AGGREGATE_UNVERIFIED_FACTS_MS 后，App
+ * 丢掉一个**无法验证**的「运行中」断言（只清 running 位，行/分组照旧保留，不触发
+ * 归档回流），并把该来源交给既有的会话停滞横幅（文案 = 「无法确认会话状态」）；
+ * 下一次成功读取（push 或 unary）立即恢复事实并撤下呈现。
+ *
+ * 为什么清位而不是只加标记：环是**断言**（「该会话正在跑」）。无法验证时保留断言就是
+ * 在陈述一个没有证据的事实；而清位 + 可见提示是「不知道」的诚实表达，恢复路径（下一份
+ * 权威读）无条件且幂等。已知残余（STATUS 登记）：若宿主其实仍在跑、只是读路径坏掉，
+ * 用户会暂时看到「无运行环」——由同一条横幅的「重新连接」出口收口。
+ * @param factsAt - 最后一次成功验证事实的时刻；undefined = 从未验证（无断言可丢）。
+ * @param now - 当前时刻。
+ * @param budgetMs - 界限（默认 {@link AGGREGATE_UNVERIFIED_FACTS_MS}）。
+ * @returns 是否应丢弃无法验证的 running 断言。
+ */
+export const AGGREGATE_UNVERIFIED_FACTS_MS = 90_000
+
+export function shouldDropUnverifiedRunningFacts(opts: {
+  factsAt: number | undefined
+  now: number
+  budgetMs?: number
+}): boolean {
+  if (opts.factsAt === undefined) return false
+  const budgetMs = opts.budgetMs ?? AGGREGATE_UNVERIFIED_FACTS_MS
+  return opts.now - opts.factsAt >= budgetMs
+}
 /**
  * Detect an archived-set SHRINK between the last committed aggregate and an
  * incoming snapshot (archive-cleanup convergence, design 24 §12). There is
