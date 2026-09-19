@@ -55,7 +55,7 @@ const rows = [...found.entries()]
   .sort(([a], [b]) => a.localeCompare(b))
   .map(([name, { version, license }]) => `| \`${name}\` | ${version} | ${license} |`)
 
-// macOS 原生壳的第三方依赖（SwiftPM，不在 npm 树里；2026-12 裁决「D-1 选 B」批准）。
+// macOS 原生壳的第三方依赖与打包资产（SwiftPM 不在 npm 树里；2026-12 裁决「D-1 选 B」批准）。
 // 版本与 macos/Package.swift 的钉值同步——改钉值时这里同改（许可证取自包自身 LICENSE）。
 const nativeRows = [
   '| `Sparkle` | 2.10.0 | MIT |',
@@ -70,11 +70,16 @@ dsh-chamber 重新分发以下第三方包。每个包的完整许可证文本�
 |---|---|---|
 ${rows.join('\n')}
 
-## macOS 原生壳（SwiftPM）
+## macOS 原生壳（SwiftPM / 打包资产）
 
 | 包 | 版本 | 许可证 |
 |---|---|---|
 ${nativeRows.join('\n')}
+
+原生 DMG 的 Finder 背景资产 \`macos/resources/dmg-background.tiff\` 取自
+\`electron-builder\` 的 \`dmg-builder/templates/background.tiff\`（MIT，
+electron-userland/electron-builder；双 rep 540×380@72dpi + 1080×760@144dpi），
+目的是让原生 DMG 与 Electron 腿的拖拽引导完全同款（2026-09）。
 `
 
 const bodyEn = `# Third-Party Notices
@@ -87,11 +92,17 @@ Generated with \`npm run gen:notices\`.
 |---|---|---|
 ${rows.join('\n')}
 
-## macOS native shell (SwiftPM)
+## macOS native shell (SwiftPM / packaging assets)
 
 | Package | Version | License |
 |---|---|---|
 ${nativeRows.join('\n')}
+
+The native DMG's Finder background asset \`macos/resources/dmg-background.tiff\` is
+taken from \`electron-builder\`'s \`dmg-builder/templates/background.tiff\` (MIT,
+electron-userland/electron-builder; dual representation 540×380@72dpi +
+1080×760@144dpi) so the native DMG ships the same drag-to-install cue as the
+Electron leg (2026-09).
 `
 
 const EN_OUT = join(ROOT, 'docs/THIRD_PARTY_NOTICES.en-US.md')
