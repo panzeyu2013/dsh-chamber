@@ -387,7 +387,7 @@
     **版本沿革**：≤0.2.4 自绘 6px 品牌蓝点 → 0.3.0-beta.1（2026-09-12，
     upstream-alignment T10）换成官方 `done` 绿点 → 2026-09 用户裁决**回到品牌
     蓝点**（本轮）。换色只动外观：武装/解除它的事实（完成未读）与通知边沿
-    逻辑始终未变；（原源码文本锁，已按 2026-12 裁决移除） 的 T10 锁按本裁决改钉
+    逻辑始终未变；该判据按本裁决改钉
     （蓝点必须存在、`StateDot state="done"` 不得回归、运行环仍是官方 ongoing）。
   - **活动定时任务标记（2026-09-11 upstream-alignment T7）**：行标题之后渲染官方
     `ActiveScheduleIndicator` 同形标记（16px 闹钟字形 + `role="img"`，可访问名与
@@ -690,12 +690,7 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   搜索 sanitize、`todo-attention` 派生、`todo-prefs` 水合
   （`test/session-rows/derive.test.ts`、`test/session-state/view-prefs.test.ts`、`test/session-rows/todo-attention.test.ts`、
   `test/session-state/todo-prefs.test.ts`，node:test 风格）。
-- **上游对齐源文本锁（2026-09-11 upstream-alignment；review-fix 扩充）**：
-  （原源码文本锁，已按 2026-12 裁决移除）（读源码文本，注释先剥离，只经
-  `test/support/source-lock.ts`——**不挂 vendor 载入桩**：包内 `scripts/test.mjs` 把
-  `node --import ./test/support/vendor-register.mjs`（→ `test/support/vendor-loader.mjs`）只接给
-  `test/plugin-kernel/panel-source.test.ts`，因为只有它要 import vendor 模块；
-  （原源码文本锁，已按 2026-12 裁决移除） 以普通 `node test/…` 运行）钉住本批的对齐面——归档
+- **上游对齐判据（2026-09-11 upstream-alignment；review-fix 扩充）**：以下对齐面仍是契约（判据见该包测试）——归档
   动词只在行菜单、全包无原生 confirm、workspace 删除是官方 `Modal` chrome（含对话框内
   `role="alert"` 失败行与「仅成功才关闭」）、**同一时刻至多一层 chamber Modal**（见下）、
   completed 走 chamber
@@ -865,9 +860,8 @@ await 中），我们单点只显示子 agent 计数文案，官方同快照显�
   `.sourceActions` 与 git 的 `.headerGit` 回到 v0.2.4 的 2px——它们的 4px 只出自该 pass
   （`46b522c9` 没碰它们）。**rail**：只回退该 pass 加宽的 `gap`（16→12px），点按钮化
   （2026-09-11 T7）自带的 `margin: -4px 0` 保留 ⇒ 20px 点距 / 12px 可见间隙 = v0.2.4
-  节奏；**不要只删 margin 而不改 gap**（点距会松成 28px/20px 间隙）。锁见 `test/visual-lock/
-  （原源码文本锁，已按 2026-12 裁决移除）` 与 git 包同名 V1 一例（含"scoped 重加 rim 也红"的
-  选择器扫描）。**不要再加回 rim**：加之前必须重测按钮命中盒与行/头部边缘之间的纯行带。
+  节奏；**不要只删 margin 而不改 gap**（点距会松成 28px/20px 间隙）。该几何有测试钉住
+  （含「scoped 重加 rim 也红」的选择器扫描）。**不要再加回 rim**：加之前必须重测按钮命中盒与行/头部边缘之间的纯行带。
 - **会话行窗口与展开条（2026-09-11 upstream-alignment T11；2026-09 batch 1 A10
   补几何）**：每个 workspace 只
   展开前 N 行（`sessionRowWindow`），其余由展开条揭示。展开条采用官方

@@ -719,7 +719,7 @@ macOS WebKit 在**视口层**实现弹性越界：指针停在不可滚动的 ch
 - **只落文档根**：不改任何滚动容器的滚动范围，也不改文档内链式滚动（`none` 管的是视口越界效果与向视口外链接）；页面结构、上游代码零改动。
 - **`!important` + 样式元素标记**（`data-dsh-shell-overscroll`）：`!important` 压过页面的普通声明；**层叠边界**（2026-12 对抗复核修正）——页面若在根上再声明同属性的 `!important`（同特异性、文档序靠后）或在根元素上设内联 `!important`，仍可翻转。当前上游**没有任何根级声明**（`packages/dsh-client-web` 全目录 `overscroll` 命中 0；其余命中都是滚动容器的 `contain`——移动端子树与设置确认框，无一定在文档根），故这是理论边界而非现状；author 源内也没有手段挡住页面 JS 主动改。若将来上游在根上声明该属性，升级手段是 documentEnd 再追加一次（文档序靠后）或对 documentElement 设内联 `important`。打包态可用一条 JS（`getComputedStyle(document.documentElement).overscrollBehavior`）自检。（测试面已按 2026-12 裁决移除，行为判据归实机目检。）
 - **时机与作用域**：documentStart、仅主 frame（iframe 子文档保持自身行为）；崩溃/卡死恢复只 reload，注入随每次导航生效。本机实测 documentStart 时序为 readyState=loading、documentElement 已存在、head 尚不存在；落点**始终优先 documentElement**（即使将来 head 已存在也不落 head，保住"页面重写 head 也删不掉"的免疫），两者都取不到时才走一次 DOMContentLoaded。
-- **证据**：**无自动化断言**（2026-12 裁决：探针与编译门禁已从正式测试面移除）——只做实机目检：滚到端点、或指针停在不可滚动 chrome 上滚动，整页不得平移；本节的注入串、装配时机/作用域与 CSP 依赖仍是实现契约，行为判据归 §8.5 实机矩阵与 deviations S-50。
+- **证据**：**无自动化断言**——只做实机目检：滚到端点、或指针停在不可滚动 chrome 上滚动，整页不得平移；本节的注入串、装配时机/作用域与 CSP 依赖仍是实现契约，行为判据归 §8.5 实机矩阵与 deviations S-50。
 - **范围**：只关视口越界与链式越界；内层滚动器自身的局部回弹（若有）不在本策略范围内，勿当回归。
 - **CSP 依赖（指令级守卫）**：注入的 `<style>` 依赖控制面 CSP 的 `style-src 'self' 'unsafe-inline'`（`packages/control-plane/src/index.ts:1136-1143`：注释 :1136-1142、指令 :1143）。页面当前**没有** meta CSP（全仓 0 处）；即便将来加入 meta `style-src 'self'`，documentStart 注入也早于其解析（本地 fixture 实测），唯一真实耦合是响应头 CSP。对抗复核用本地 HTTP fixture + 真实 WKWebView 实测出**三种同样静默失效**的改法：① 删掉 `'unsafe-inline'`；② 在同一 `style-src` 里再加 `'nonce-…'`/`'sha256-…'`（CSP3：出现 nonce/hash 即忽略 unsafe-inline）；③ 新增 `style-src-elem`（它覆盖 style-src 对 `<style>` 的管辖）——三者都让 computed 回 `auto`、整页回弹复现。现状安全：CSP 形成点有注释，`packages/control-plane/test/proxy/static-serving.test.ts` **按指令解析**响应头（同一 policy 内重复指令首次生效；逗号分隔的每个 policy 都同时生效），并要求**每一条生效的 style-src 都保留 `'unsafe-inline'`**、不得带 nonce/hash、不得出现 `style-src-elem`/`style-src-attr`——解析器本身另有自证用例（三种形态 + 逗号多 policy 全都判红）。2026-12 二轮独立复核：子串正则会被 "`style-src 'self' 'unsafe-inline', style-src 'none'`" 这类多 policy 写法整类绕过。改 CSP 必须同时复核本策略与 S-50。
 - **双 flavor 差异**：Electron 未同步，登记见 deviations S-50。
@@ -905,10 +905,10 @@ macOS WebKit 在**视口层**实现弹性越界：指针停在不可滚动的 ch
 
 ## 8. 实施阶段、测试与验收
 
-> 详细执行计划（M0–M5 六门、WBS W-01…W-32、P0 runbook、P1 四批施工单、
-> Swift 施工顺序、防漂移门禁清单、R10–R13/A1–A8/W1–W6 判定、D1–D7 日程、
-> 三档时间线 46–72 人-日）见 `docs/progress/todo/macos-swift-v1.md`，本节只
-> 留契约性要点。
+> companion `docs/progress/todo/macos-swift-v1.md` 持有 WBS 编号索引（W-01…W-32，代码/
+> 测试注释按号引用）、双线防漂移门禁清单、W1–W7 判定标准、双端性能/产物体积 A/B 协议、
+> 中止点 A1–A8 与 dev 侧约定；执行期的分批顺序、runbook 与工期估算已随收口删除
+> （git 历史），本节只留契约性要点。
 
 ### 8.1 P0 POC（1–2 人周）——先证伪再立项
 

@@ -5,7 +5,7 @@
 > 归档管理器交互与 purge 后会话列表收敛的权威契约；未完成门禁见 docs/progress/STATUS.md。
 >
 > 承接并修订原 `docs/progress/todo/12-todo-archived-sessions.md`（归档单向、不可见、
-> 上游无 delete/unarchive wire 的事实核实见 git 历史与该文）；该 todo 的方案 B
+> 上游无 delete/unarchive wire 的事实核实见 git 历史）；该 todo 的方案 B
 > （控制面/主进程特权层直删）继续冻结（STATUS「范围决策」），上游 wire 草案移入
 > `docs/progress/todo/upstream-proposals.md` §3。本方案用「实例进程内的 chamber
 > 宿主域」替代 B 的位置——不是 B 的翻版，理由见 §2。
@@ -666,8 +666,8 @@ vendor 源码）+ 薄 Remote 门面（`index.ts`），编排逻辑：
   accent-color（官方无 Checkbox 组件）——**勾选取色 = dsh 业务蓝**
   `--dsw-alias-state-business-primary`（2026-09 用户裁决：与设置页的"开/选中"态、
   侧栏选中/完成未读蓝点同一语言；官方中性 `--dsw-alias-brand-primary` 浅色主题下
-  近黑，勾选态会发黑。证据：`sidebar-chamber.module.css .archiveManagerCheck`，
-  锁在 （原源码文本锁，已按 2026-12 裁决移除））；footer Button/icon/字体均走 alias token；
+  近黑，勾选态会发黑。证据：`sidebar-chamber.module.css .archiveManagerCheck`）；
+  footer Button/icon/字体均走 alias token；
   spinner 13px（导航 12px）随所在行高；在途 spinner + `aria-busy`。
 - **运行结果内联呈现**（`role=status`/`role=alert`，zh 硬编码）：完成摘要
   （`deletedSessions+deletedSubagents > 0` 时「清理完成：删除 X 个会话 /
@@ -1104,7 +1104,7 @@ workspace follow `{type:'archived'}` 立即到达客户端（`api/workspace-cont
   （侧边栏据此继续过滤已归档行，管理器保持诚实的降级分支、不获得任何破坏性
   动作）。记忆集合永不单独构成权威。**顺序是承重的**：基线必须是**覆盖前**的
   旧值，否则 remembered ≡ 本次快照集合 ⇒ `archiveSetShrink` 恒为 []（F3(a)
-  死代码）。（源码文本接线锁已按 2026-12 裁决移除。）
+  死代码）。
 - **F4 宿主 registry-global 孤儿清扫**：见 §4 step 5——每次 purge 收尾清
   全集合无记录成员，双重确认 + fail-closed + 同一次集合写 + 独立计数
   （`clearedOrphanMembers?`，归档管理器 settle 文案呈现）。
@@ -1133,7 +1133,7 @@ workspace follow `{type:'archived'}` 立即到达客户端（`api/workspace-cont
 2. **探针依赖实例就绪**：官方刷新与 unary 探针都失败时保持抑制
    （fail-closed），实例长期不可达时官方 summaries 的收敛延后到连接代数——
    行不可见（用户可见正确性成立），属验证类缺口；
-3. **语义级接线**以目检代证（源码契约锁已按 2026-12 裁决移除）；
+3. **语义级接线**以目检代证（无自动化断言）；
 4. **归档集合 > `MAX_PURGE_SESSIONS`（65,536）** 时宿主不清扫（该规模全量
    purge 本就 `purge-capacity` 拒绝，不可重试、无逃生口直至上游 wire 收敛）；
 5. **宿主侧未对构建后的 vendor backend 跑过真实 `stat`**（本 worktree 的 vendor

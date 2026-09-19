@@ -87,8 +87,7 @@
   并把被更新关掉的窗口拉回主界面（失败/停滞文案的唯一诚实呈现面；窗口若是**重建**的，
   同一次订阅的 `UPDATE_STATE_CHANGED` 推送会落在还没装监听的 renderer 上，呈现靠
   renderer 挂载时的 `UPDATE_STATE` pull 补齐——2026-09-13 review C7b）。
-  回归契约（原源码文本锁已按 2026-12 裁决移除；main.ts 接线 + 武装标志
-  生命周期）+ `test/local-state/chamber-settings.test.ts`（两个纯判定，含
+  回归契约（main.ts 接线 + 武装标志生命周期）+ `test/local-state/chamber-settings.test.ts`（两个纯判定，含
   `shouldUpdaterQuitTakeOver` 的真值表）+ `test/desktop-shell/updater-restart-install.test.ts`（回调时序，含 native 退出
   事件必须把停滞 watchdog **重锚**——不是清除：它是该路径上单飞闸的唯一释放者，清掉就
   会出现「永远 restart in progress」，重锚则既不会在退出腿中途误报停滞、又保证腿走不完

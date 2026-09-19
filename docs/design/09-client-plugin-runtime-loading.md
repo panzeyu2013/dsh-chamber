@@ -17,7 +17,7 @@ dsh 官方 web 的客户端插件链路是完整的（已核 vendor 源码）：
    `window.__ModuleLoader__`，物化/缓存/依赖边齐全）。
 
 **chamber 侧的消费点在第 3 步**：控制面服务自建 dist（`packages/renderer` vite
-产物），注入的是**构建期写死的复合 entry 清单**（`scripts/gen-boot-manifest.mjs` 写
+产物），注入的是**构建期写死的复合 entry 清单**（`packages/renderer/scripts/gen-boot-manifest.mjs` 写
 `dist/manifest.json`，只有 `@dsh-chamber/app` 一个复合 entry，05 §6）；除此之外
 chamber 自有 host 行把宿主图按实例暴露给前端，前端**每实例合并**该图并加载复合
 bundle 未覆盖的 entry（方案 A，§3）。第 1、2 步在 chamber 托管的本地实例上照常运行
@@ -436,7 +436,7 @@ base path 从每个 entry 的私有 ctx 取。
   **零写入**；模块 id 同时接受软链形式与 `realpathSync` 后的子模块形式（vite 实际
   给的是后者）。
 - 落点（共 7 个文件 / 21 处锚点，逐锚点由触点表 C9 与
-  `scripts/vendor-patches.test.mjs` 校验）：
+  `packages/renderer/scripts/vendor-patches.test.mjs` 校验）：
   ① `ui-chat` 的 `chat/AssistantMarkdown.tsx` + `chat/AssistantNodeView.tsx` 读取新增
   root 标准 **prop** `chamberFileApiBase`（chamber layout fork 经
   `ctx.slots.provideRoot({ props })` 提供，值 = 本 entry 的 `ctx.chamberBasePath`；
@@ -451,7 +451,7 @@ base path 从每个 entry 的私有 ctx 取。
   不经过构建）。全部保留「base path 缺失 → 回落上游行为」的形状，读取一律用
   `ctx.get('chamberBasePath')`（cordis 代理对未 provide 的服务**抛错**，属性读取会炸）。
 - 保鲜门：`verify-upstream-touchpoints.mjs` **C9** 对 pin 住的 vendor 文件逐锚点校验
-  （硬失败），`scripts/vendor-patches.test.mjs` 另在 CI 侧验证锚点唯一、改写后的函数
+  （硬失败），`packages/renderer/scripts/vendor-patches.test.mjs` 另在 CI 侧验证锚点唯一、改写后的函数
   行为（含上游回落分支）与 id 形态匹配。
 
 登记纪律：新增补丁前先问「能否在 chamber 自己的包里修」；只有同源绝对 URL 一类

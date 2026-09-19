@@ -718,7 +718,7 @@ R2 只看**直接 spec**；官方层的**依赖闭包**同样会进入实例树�
 - **产物新鲜度的守卫覆盖面**（本轮 §6.11 漂移暴露）：只有 `packages/desktop/dist/control-plane/**` 与
   `packages/gateway/dist/**` 有"**存在但缺当前标记 ⇒ 失败**"的守卫（缺失才按需构建，绝不静默自愈）；
   `dist/web/**`、`dist/preload.cjs`、`dist/host-*-package/**` 陈旧时仍没有任何测试变红，CI 也从未真跑出
-  `SMOKE PASS`（smoke 恒 SKIP）。缺口清单与 8 条最小守卫建议（G1–G8）见
+  `SMOKE PASS`（smoke 恒 SKIP）。缺口清单与 7 条未落地的最小守卫建议（G2–G8；G1 已落地 `verify:test-wiring`）见
   `docs/progress/todo/product-freshness-guards.md`，开放状态与失效判据见 STATUS；
 - gateway 拒绝码→本地化文案映射未做（登记接受），范围是**全部**服务端拒绝码：409 族与
   §6.11 的 400 判定码（`protected`/`needs-version`/`needs-exact-version`/`generation-mismatch`/

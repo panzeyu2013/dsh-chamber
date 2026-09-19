@@ -208,7 +208,7 @@ slot，不由 renderer App 直接 import 领域组件。
   "该工作区暂无会话"提示行。**揭示态下 occupant 是行尾动作簇的最左成员**：它与
   `rowActions` 之间只有头部自身的 4px 间距，故簇内（`+` ↔ kebab）与之一致，同为
   4px（2026-09-13 修订——此前该段用官方 `Rows .rowActions` 的 12px，一簇被切成
-  4px + 12px；见 06 §7「行内操作」条与 （原源码文本锁，已按 2026-12 裁决移除） 的 A8b 锁）。
+  4px + 12px；见 06 §7「行内操作」条）。
 - **行内动作揭示 pointer-safe**：动作按钮的样式钩子是 **`data-git-action` 属性**
   （主行「分支+」创建 / worktree 行删除，`SidebarWorkspaceGitLine.tsx:387,400`），
   由 sidebar 侧的 hover / `:has(:focus-visible)` / kebab 展开
@@ -305,7 +305,7 @@ slot，不由 renderer App 直接 import 领域组件。
   这是对"从按钮上离开头部"这条主触发的**缓解**，不是根治。**20px/r5 视觉盒本身不是
   本次回退对象**——那是 batch 1 G1 的图标钮语言，v0.2.4 此处为 22px/r6，属既有的有意
   对齐。24px 目标尺寸重新成为本模块的已登记偏差，见 design 24 §13 第 17 条与
-  design 06 §7；锁见该包 （原源码文本锁，已按 2026-12 裁决移除） 的 V1 一例；
+  design 06 §7；
   行内动作钮命中区见 `SidebarGit.module.css` 的 `.unregisteredAction`：分支图标 +
   名称 + 健康徽标；非 ready 行的状态胶囊是
   官方 `Tag tone="warning"`（`SidebarWorkspaceGitLine.tsx:208`，官方 11px/17px
