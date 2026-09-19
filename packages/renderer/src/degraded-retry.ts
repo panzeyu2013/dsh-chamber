@@ -78,3 +78,28 @@ export function planDegradedRetries(facts: DegradedRetryFacts): DegradedRetryPla
   }
   return { retry: retry.sort(), retried }
 }
+
+/**
+ * Forget one instance's ready-epoch mark (2026-12 FIX 5).
+ *
+ * The mark is keyed by instance id, but it belongs to the MOUNT: reclaiming a
+ * view tears the shell down, and the next mount is a NEW boot (fresh serial,
+ * fresh shell state, fresh probe). Keeping the old mark would make that fresh
+ * mount permanently unable to auto-retry inside the same ready epoch — the
+ * exact opposite of what {@link planDegradedRetries} exists for. Purely
+ * functional so the App's `reclaimView` stays a one-liner and the rule stays
+ * unit-tested.
+ * @param retried - marks carried into the next pass.
+ * @param instanceId - the reclaimed instance.
+ * @returns a copy without that instance's mark (a NEW object: the App stores it
+ *   back into its ref, and an aliased return would mutate the marks the running
+ *   effect already read).
+ */
+export function forgetDegradedRetry(
+  retried: Readonly<Record<string, boolean>>,
+  instanceId: string,
+): Record<string, boolean> {
+  const next: Record<string, boolean> = { ...retried }
+  delete next[instanceId]
+  return next
+}

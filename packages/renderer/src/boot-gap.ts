@@ -9,6 +9,11 @@
  *  - `graph-unavailable`: the source never served its client plugin graph
  *    inside the boot window, so this entry runs without the profile's client
  *    plugins;
+ *  - `local-graph-not-injected`: the LOCAL instance's graph channel answered
+ *    404 / method-missing. The chamber-managed local host always injects its
+ *    graph (the seed row), so this is a chamber-side installation/seed fact —
+ *    unlike a gateway/mobile shape, whose missing endpoint is legitimate and
+ *    keeps producing no fact at all (2026-12 FIX 6);
  *  - `required-services-missing`: the graph arrived but a service the
  *    composite's first screen injects never materialized (the classic one is
  *    `ui-chat` pending on `sidebarRight`, which leaves the conversation view
@@ -74,8 +79,12 @@ export interface ShellDegradedFact {
 /** The frame dictionary keys this module selects (narrowed so a typo fails here). */
 export type BootGapBodyKey =
   | 'bootGap.body.graphUnavailable'
+  | 'bootGap.body.localGraphNotInjected'
   | 'bootGap.body.requiredServicesMissing'
   | 'bootGap.body.deferredRegistrationFailed'
+
+/** The frame's manual next-step keys (local vs remote advice, see bootGapNotice). */
+export type BootGapManualKey = 'bootGap.action.manual' | 'bootGap.action.manualLocal'
 
 /** One kind's presentation + retry verdict. A new kind MUST add an entry. */
 export interface BootGapKindPolicy {
@@ -83,8 +92,8 @@ export interface BootGapKindPolicy {
   bodyKey: BootGapBodyKey
   /**
    * Whether one cold re-mount per ready epoch can plausibly change the outcome.
-   * All three current kinds re-fetch the graph and re-apply the rows, so all
-   * three are worth exactly one attempt. A future kind whose cause a re-boot
+   * All four current kinds re-fetch the graph and re-apply the rows, so all
+   * four are worth exactly one attempt. A future kind whose cause a re-boot
    * cannot touch (e.g. a hard graph-channel rejection) MUST declare `false`
    * here: `planDegradedRetries` then leaves it alone instead of paying a cold
    * re-mount per ready epoch for a guaranteed no-op.
@@ -95,6 +104,11 @@ export interface BootGapKindPolicy {
 /** Per-kind verdict table (see the module header for why it is a `Record`). */
 export const BOOT_GAP_POLICY: Record<ShellDegradedKind, BootGapKindPolicy> = {
   'graph-unavailable': { bodyKey: 'bootGap.body.graphUnavailable', retryable: true },
+  // 2026-12 FIX 6: the local instance's missing graph endpoint is a chamber-side
+  // installation/seed fact. A re-mount re-runs the same graph fetch and journal
+  // state, which is the one cheap attempt that can clear a stale endpoint after
+  // a restart — worth the same single attempt as the channel-failure kind.
+  'local-graph-not-injected': { bodyKey: 'bootGap.body.localGraphNotInjected', retryable: true },
   'required-services-missing': { bodyKey: 'bootGap.body.requiredServicesMissing', retryable: true },
   'deferred-registration-failed': { bodyKey: 'bootGap.body.deferredRegistrationFailed', retryable: true },
 }
@@ -111,6 +125,47 @@ export const BOOT_GAP_POLICY: Record<ShellDegradedKind, BootGapKindPolicy> = {
  */
 export function isRetryableBootGap(kind: ShellDegradedKind): boolean {
   return BOOT_GAP_POLICY[kind].retryable
+}
+
+/**
+ * Relative CAUSE strength of one kind (2026-12 FIX 6 follow-up). The probe's
+ * `required-services-missing` is the CONSEQUENCE of a missing provider; the
+ * three other kinds name a CAUSE the user can act on (the local graph endpoint
+ * was never injected, the channel never answered, a deferred family never
+ * registered). When both are known, the single banner slot must show the cause —
+ * otherwise the actionable fact is replaced ~5s later by its own symptom, which
+ * is exactly what the real-machine report showed ("缺少 sidebarRight" with no
+ * hint that the local instance had no graph channel at all).
+ *
+ * Distinct by construction (the shell compares with `>`/`>=`, never equality),
+ * and exhaustive over the union so a new kind must declare its rank here.
+ */
+export function bootGapPriority(kind: ShellDegradedKind): number {
+  switch (kind) {
+    case 'local-graph-not-injected': return 3
+    case 'graph-unavailable': return 2
+    case 'deferred-registration-failed': return 1
+    case 'required-services-missing': return 0
+  }
+}
+
+/**
+ * Whether an incoming (non-clear) fact may replace the recorded one.
+ *
+ * Same kind always replaces (its payload may have grown — the probe can name a
+ * LARGER missing set). A strictly LOWER-priority kind never overwrites a
+ * higher-priority one that is still current; an equal-or-higher kind replaces.
+ * Retraction is unaffected: a clear must still match kind AND payload exactly
+ * ({@link bootGapClearMatchesFact}), so the suppressed consequence cannot erase
+ * the cause's fact either.
+ * @param current - the fact currently recorded on the holder, or null.
+ * @param incoming - the new non-clear fact.
+ * @returns whether the holder should replace its recorded fact.
+ */
+export function shouldReplaceBootGap(current: ShellDegradedFact | null, incoming: ShellDegradedFact): boolean {
+  if (current === null) return true
+  if (current.kind === incoming.kind) return true
+  return bootGapPriority(incoming.kind) >= bootGapPriority(current.kind)
 }
 
 /**
@@ -154,12 +209,68 @@ export function bootGapSignature(fact: ShellDegradedFact): string {
     .join('\u0001')
 }
 
+/**
+ * A producer's RETRACTION of a previously reported gap (2026-12 FIX 1/F2):
+ * the condition the fact named no longer holds — the motivating producer is the
+ * required-service probe, whose missing set can become empty when a provider
+ * finally materializes after the 5s verdict. The shell must REMOVE the fact
+ * instead of keeping a false banner for the rest of the mount.
+ *
+ * It rides the SAME seam as the fact (`chamberReportBootDegraded`): one channel,
+ * one boot-generation fence, one stash/replay path. The retraction names the
+ * EXACT fact it removes (kind + {@link bootGapSignature}), so a newer/richer
+ * verdict is never dropped by an older producer's late retraction.
+ */
+export interface ShellDegradedClear {
+  /** Discriminant: a retraction is not a fact (see {@link ShellDegradedReport}). */
+  cleared: true
+  /** The kind of the fact being retracted. */
+  kind: ShellDegradedKind
+  /** Signature of the exact fact being retracted ({@link bootGapSignature}). */
+  signature: string
+}
+
+/** What the shell's degrade seam may carry: a gap fact, or one retraction. */
+export type ShellDegradedReport = ShellDegradedFact | ShellDegradedClear
+
+/** Whether the report is a retraction, never a fact (typed, not a field sniff). */
+export function isShellDegradedClear(report: ShellDegradedReport): report is ShellDegradedClear {
+  return (report as ShellDegradedClear).cleared === true
+}
+
+/**
+ * Whether `clear` retracts exactly `current` — the shell's whole retraction gate.
+ *
+ * Both halves are load-bearing: the KIND stops one producer from clearing
+ * another producer's fact (the slot is single, so a kind-blind clear would erase
+ * an unrelated verdict), and the SIGNATURE stops a stale retraction from wiping
+ * a newer verdict of the same kind (the probe's re-armed pass can name a larger
+ * missing set, which is a different fact).
+ * @param current - the fact currently recorded on the shell, if any.
+ * @param clear - the retraction a producer reported.
+ * @returns whether the recorded fact must be removed.
+ */
+export function bootGapClearMatchesFact(
+  current: ShellDegradedFact | null,
+  clear: ShellDegradedClear,
+): boolean {
+  return current !== null && current.kind === clear.kind && bootGapSignature(current) === clear.signature
+}
+
 /** One source's readiness + self-heal marks, as the App knows them at render time. */
 export interface BootGapNoticeContext {
   /** The source's current phase (`'ready' | 'starting' | 'error' | …`). */
   phase: string | undefined
   /** The self-heal already re-mounted this source for the CURRENT ready epoch. */
   retried: boolean
+  /**
+   * The source id the fact belongs to (`'local'` = the app-managed local
+   * instance). The manual next-step copy branches on this STRUCTURED fact, never
+   * on the diagnostic sentence: on Windows the local runtime is a READ-ONLY
+   * projection, so the local copy must not send the user to "upgrade the dsh
+   * runtime" (2026-12 FIX 6c).
+   */
+  instanceId?: string
 }
 
 /** Everything the frame needs to render one gap, all of it decided here. */
@@ -170,6 +281,8 @@ export interface BootGapNotice {
   services: readonly string[]
   injectedBy: readonly string[]
   failedIds: readonly string[]
+  /** The manual next-step dictionary key for this source (local vs remote advice). */
+  manualKey: BootGapManualKey
   /** A retry affordance is worth offering (see {@link BootGapKindPolicy.retryable}). */
   retryable: boolean
   /**
@@ -201,6 +314,11 @@ export function bootGapNotice(fact: ShellDegradedFact, context: BootGapNoticeCon
     failedIds: fact.failedIds ?? [],
     retryable: isRetryableBootGap(fact.kind),
     autoRetryArmed: context.phase === 'ready' && !context.retried && isRetryableBootGap(fact.kind),
+    // 2026-12 FIX 6c: the local instance's runtime management is a read-only
+    // projection on Windows (`runtimeManagementSupported=false`), so the local
+    // advice is restart/re-mount/report-diagnostics. Remote sources keep the
+    // runtime-alignment wording: their runtime is managed on that host.
+    manualKey: context.instanceId === 'local' ? 'bootGap.action.manualLocal' : 'bootGap.action.manual',
   }
 }
 

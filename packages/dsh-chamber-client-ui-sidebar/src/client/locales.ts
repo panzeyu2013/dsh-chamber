@@ -115,6 +115,7 @@ export const zh = {
   // 与上面三条共用同一个 sourceNote live region（一个来源只应有一个），按优先级取一条。
   'source.bootGap.generic': '该服务器前端能力受限：部分界面可能缺席。',
   'source.bootGap.graphUnavailable': '该服务器前端能力受限：本次挂载没有加载它的前端插件（会话正文等界面可能缺席）。',
+  'source.bootGap.localGraphNotInjected': '该服务器前端能力受限：本地实例没有注入客户端插件图（接口 404 或缺少该方法）——这是应用侧安装/seed 产物问题，本次挂载没有加载它的前端插件。',
   'source.bootGap.requiredServicesMissing': '该服务器前端能力受限：没有提供本次页面所需的前端服务（{services}）。',
   'source.bootGap.deferredRegistrationFailed': '该服务器前端能力受限：{n} 个前端插件家族没有注册成功。',
   'search.sessions.aria': '搜索会话',
@@ -250,6 +251,7 @@ export const en = {
   'source.managedStarting': 'Managed dsh is starting ({state}): it recovers automatically once ready.',
   'source.bootGap.generic': 'This server’s interface is limited: some surfaces may be missing.',
   'source.bootGap.graphUnavailable': 'This server’s interface is limited: this mount loaded none of its frontend plugins (surfaces such as the conversation body may be missing).',
+  'source.bootGap.localGraphNotInjected': 'This server’s interface is limited: the local instance did not inject its client plugin graph (404 or missing method) — an app-side installation/seed problem, so this mount loaded none of its frontend plugins.',
   'source.bootGap.requiredServicesMissing': 'This server’s interface is limited: it did not provide the frontend service(s) this page needs ({services}).',
   'source.bootGap.deferredRegistrationFailed': 'This server’s interface is limited: {n} frontend plugin family/families did not register.',
   'search.sessions.aria': 'Search sessions',

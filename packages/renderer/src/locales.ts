@@ -95,6 +95,11 @@ export const zh = {
   /** Gap body: the source never served its client plugin graph inside the boot
    *  window, so this mount loaded none of its frontend plugins. */
   'bootGap.body.graphUnavailable': '该来源在启动窗口内没有提供客户端插件图，本次挂载没有加载它的前端插件；依赖这些插件的界面（例如会话正文）不会出现。',
+  /** Gap body (2026-12 FIX 6): the LOCAL instance's graph endpoint answered
+   *  404/method-missing. The app-managed local host always injects its graph, so
+   *  the cause is chamber-side (installation/seed integrity) — the copy must NOT
+   *  send the user to a runtime upgrade (read-only on Windows). */
+  'bootGap.body.localGraphNotInjected': '本地实例没有注入客户端插件图（接口返回 404 或缺少该方法）。应用托管的本地 dsh 总会注入该图，因此这是安装/seed 产物不完整或未生效；本次挂载没有加载它的前端插件，依赖这些插件的界面（例如会话正文）不会出现。',
   /** Gap body: the graph arrived, but a service the page's own frontend injects
    *  was never provided, so the fibers waiting on it never activated. */
   'bootGap.body.requiredServicesMissing': '该来源没有提供本次页面所需的前端服务，等待这些服务的界面（例如会话正文）不会注册。',
@@ -108,11 +113,18 @@ export const zh = {
   'bootGap.failedPlugins': '未注册的插件',
   /** Gap next-step line while the self-heal will still re-mount this mount. */
   'bootGap.action.autoRetry': '该来源就绪后会自动重挂一次；若重挂后仍然如此，需要在该来源上处理。',
-  /** Gap next-step line otherwise. Deliberately says 常见原因 — the app cannot
-   *  prove the cause — and deliberately asserts no COMPLETED re-mount: this line
-   *  is also what renders in the one frame between arming the self-heal and the
-   *  re-mount resetting the state, where "已重挂过" would not be true yet. */
+  /** Gap next-step line otherwise (REMOTE sources; the local branch is
+   *  `bootGap.action.manualLocal` — FIX 6c). Deliberately says 常见原因 — the app
+   *  cannot prove the cause — and deliberately asserts no COMPLETED re-mount:
+   *  this line is also what renders in the one frame between arming the
+   *  self-heal and the re-mount resetting the state, where "已重挂过" would not
+   *  be true yet. */
   'bootGap.action.manual': '若仍然如此，需要在该来源上处理。常见原因：该来源的 dsh 运行时与本次页面所需的前端插件不匹配（版本较旧或缺少插件）——在该来源上升级或对齐 dsh 运行时。',
+  /** Gap next-step line for the LOCAL instance (2026-12 FIX 6c): runtime
+   *  management there is a read-only projection on Windows, so the honest
+   *  actions are restarting the local dsh, re-mounting the source and reporting
+   *  diagnostics — never a runtime upgrade. */
+  'bootGap.action.manualLocal': '若仍然如此：先在 设置 → 连接 中重启本地 dsh，再重新挂载该来源；仍不恢复时，请在 设置 → 连接 中复制诊断信息反馈。本地实例的客户端插件图由应用自身注入，属于安装完整性问题。',
   /** Label of the raw producer diagnostic line shown under the gap copy. */
   'bootGap.detail': '诊断',
   /** Static first-frame skeleton hint (index.html; re-applied by main.tsx). */
@@ -179,6 +191,7 @@ export const en: Record<FrameKey, string> = {
   'action.connect': 'Connect',
   'bootGap.title': 'This source’s interface is limited',
   'bootGap.body.graphUnavailable': 'This source did not serve its client plugin graph inside the boot window, so this mount loaded none of its frontend plugins; the surfaces that depend on them (the conversation body, for example) will not appear.',
+  'bootGap.body.localGraphNotInjected': 'This local instance did not inject its client plugin graph (the endpoint answered 404 or has no such method). The app-managed local dsh always injects that graph, so the installation/seed artifacts are incomplete or did not take effect; this mount loaded none of its frontend plugins, so the surfaces that depend on them (the conversation body, for example) will not appear.',
   'bootGap.body.requiredServicesMissing': 'This source did not provide a frontend service this page needs, so the surfaces waiting on it (the conversation body, for example) never register.',
   'bootGap.body.deferredRegistrationFailed': 'A frontend plugin family failed to register in this mount, so the surfaces and slots it provides are missing here.',
   'bootGap.services': 'Missing services',
@@ -186,6 +199,7 @@ export const en: Record<FrameKey, string> = {
   'bootGap.failedPlugins': 'Plugins that did not register',
   'bootGap.action.autoRetry': 'It will be re-mounted once automatically when the source becomes ready; if the gap survives that, it has to be handled on that source.',
   'bootGap.action.manual': 'If the gap persists, it has to be handled on that source. Common cause: that source’s dsh runtime does not match the frontend plugins this page needs (older version, or plugins missing) — upgrade or align the dsh runtime there.',
+  'bootGap.action.manualLocal': 'If the gap persists: restart the local dsh in Settings → Connections, then re-mount this source; if it still does not recover, copy the diagnostics from Settings → Connections and report them. The local client plugin graph is injected by the app itself, so this is an installation-integrity problem.',
   'bootGap.detail': 'Diagnostic',
   'boot.starting': 'Starting…',
   'error.ui.title': 'Interface error',

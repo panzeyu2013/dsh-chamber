@@ -39,6 +39,11 @@ export function sourceBootGapNote(server: ChamberServerAggregate, t: Translate):
   switch (gap.kind) {
     case 'graph-unavailable':
       return t('source.bootGap.graphUnavailable')
+    // 2026-12 FIX 6: the LOCAL instance's 404/method-missing is a chamber-side
+    // installation/seed fact, so it gets its own sentence (no "upgrade that
+    // source's runtime" advice — the copy boundary keeps that in the frame).
+    case 'local-graph-not-injected':
+      return t('source.bootGap.localGraphNotInjected')
     case 'required-services-missing': {
       const services = gap.services ?? []
       return services.length === 0

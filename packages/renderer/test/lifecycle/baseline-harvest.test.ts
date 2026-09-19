@@ -178,6 +178,12 @@ test('the App arms an absolute cap for the in-flight background mount', () => {
   assert.match(appSource,
     /if \(!state\.booted && state\.error === null\) viewBootStartedAtRef\.current\[instanceId\] = Date\.now\(\)/,
     're-entering booting must re-arm the window')
+  // 2026-12 FIX 5：回收视图 = 拆壳，下一次挂载是**新的 boot**——自愈标记必须随
+  // 回收一并作废，否则同一 ready 世代内新挂载永远不会再自动重挂（只剩手动重试）。
+  // 纯规则在 degraded-retry.ts 的 forgetDegradedRetry（boot-degradation.test.ts
+  // 行为覆盖）；这里只钉 App 侧接线。
+  assert.match(appSource, /degradedRetriedRef\.current = forgetDegradedRetry\(degradedRetriedRef\.current, id\)/,
+    'reclaiming the view must forget the epoch mark so a fresh mount can auto-retry again')
 })
 
 test('the managed-runtime probe keeps its foreground cadence and single-flight seam', () => {

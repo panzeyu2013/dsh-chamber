@@ -641,6 +641,10 @@ export interface ChamberSettingsStatus {
     launchAtLogin: boolean
     /** false when no tray recovery surface exists (dev); macOS always safe. */
     closeToTray: boolean
+    /** Unread-badge overlay capability (design 19 §3.7 / design 23 M3): false on win32.
+     *  Optional so a differently-versioned shell stays compatible (absent = legacy
+     *  shape; consumers default to "supported" when the field is absent). */
+    badgeSupported?: boolean
   }
 }
 

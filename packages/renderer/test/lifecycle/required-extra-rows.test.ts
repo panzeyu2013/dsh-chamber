@@ -6,8 +6,8 @@
  * its imports resolve to source), so the decision and the message are pure
  * functions here and pinned by these cases; the chamber-entry WIRING is pinned
  * by source-text assertions at the bottom (the same pattern the repo uses for
- * App-level wiring, e.g. sidebar-right-heal-wiring.test.ts), because a missing
- * link there is a silent no-op.
+ * App-level wiring, e.g. test/session-intent/deep-link-activation.test.ts),
+ * because a missing link there is a silent no-op.
  */
 
 import { test } from 'node:test'
@@ -89,6 +89,11 @@ test('requiredServiceProbeMessage names each service, its injectors, the deadlin
   assert.ok(withInstance.includes('sidebarRight'), 'the missing service must be named')
   assert.ok(withInstance.includes('injected by @deepseek-ai/dsh-client-ui-chat'),
     'the registered plugin injecting it must be named')
+  assert.ok(withInstance.includes('provider row @deepseek-ai/dsh-client-ui-sidebar-right'),
+    'the missing PROVIDER row must be named so the line localizes the cause, not only the waiter')
+  assert.ok(
+    requiredServiceProbeMessage([{ service: 'someUnknownService', injectedBy: ['p'] }]).includes('provider row unknown'),
+    'a service with no known provider says so explicitly instead of silently omitting the provider half')
   assert.ok(withInstance.includes('still unprovided after'), 'the deadline phrasing is kept')
   assert.ok(withInstance.includes(`${REQUIRED_SERVICE_PROBE_DEADLINE_MS}ms`), 'the deadline must be named')
   assert.ok(withInstance.includes('PENDING'), 'the consequence (the fibers stay pending) must be stated')
@@ -528,7 +533,33 @@ test('chamber-entry derives the probed roster from the registered namespaces (no
   // copy can name the missing service instead of parsing the diagnostic line.
   assert.match(
     entry,
-    /degradedSeam\(\{ kind: 'required-services-missing', message, \.\.\.missingServiceFact\(missing\) \}\)/,
-    'the probe must report the structured fact (kind + services + injectors)',
+    /const fact: ShellDegradedFact = \{ kind: 'required-services-missing', message, \.\.\.missingServiceFact\(missing\) \}/,
+    'the probe must build the structured fact (kind + services + injectors)',
+  )
+  assert.match(entry, /degradedSeam\(fact\)/, 'the fact must reach the shell seam whole')
+  assert.match(
+    entry,
+    /reportedFactSignature = bootGapSignature\(fact\)/,
+    'the exact fact signature is what the retraction names (FIX 1)',
+  )
+})
+
+test('chamber-entry wires the probe lifecycle: per-member grace, monotonic clock, bounded re-check and retraction', () => {
+  const entry = normalize(stripComments(readSource('../../src/chamber-entry.ts')))
+  // FIX 4: the deadline is anchored per roster member, not per boot.
+  assert.match(entry, /new RequiredServiceProbeWindows\(\)/, 'the probe needs the per-member window bookkeeping')
+  assert.match(entry, /windows\.note\(roster, now\)/, 'every probed member records its own arrival')
+  assert.match(entry, /windows\.withinGrace\(roster, now\)/, 'the verdict waits for every member window')
+  // FIX 2: one monotonic clock for arrivals and deadlines (a wall-clock jump
+  // used to satisfy the deadline on the first pass).
+  assert.match(entry, /const now = monotonicNowMs\(\)/, 'the probe deadline must use the monotonic clock')
+  assert.doesNotMatch(entry, /const started = Date\.now\(\)/, 'the wall-clock boot anchor is retired')
+  // FIX 1: the verdict is not final — bounded re-check plus a retraction through
+  // the same seam when the missing set empties.
+  assert.match(entry, /windows\.recheckUntilMs\(\)/, 'the post-verdict re-check must be time-bounded')
+  assert.match(
+    entry,
+    /degradedSeam\(\{\s*cleared: true,\s*kind: 'required-services-missing',\s*signature: reportedFactSignature,?\s*\}\)/,
+    'an emptied missing set must retract the fact through the same seam',
   )
 })

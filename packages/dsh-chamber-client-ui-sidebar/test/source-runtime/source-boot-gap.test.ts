@@ -31,6 +31,7 @@ const spy = (key: string, params?: Record<string, string | number>): string =>
 /** The vocabulary the sidebar understands; a new kind must be added here AND mapped. */
 const KINDS: readonly ServerBootGapKind[] = [
   'graph-unavailable',
+  'local-graph-not-injected',
   'required-services-missing',
   'deferred-registration-failed',
 ]
@@ -44,6 +45,7 @@ test('sourceBootGapNote: each kind maps to its OWN key and carries its structure
   // generic sentence): the point is that three KINDS never share a sentence.
   const withPayload: Record<ServerBootGapKind, ChamberServerAggregate['bootGap']> = {
     'graph-unavailable': { kind: 'graph-unavailable' },
+    'local-graph-not-injected': { kind: 'local-graph-not-injected' },
     'required-services-missing': { kind: 'required-services-missing', services: ['sidebarRight'] },
     'deferred-registration-failed': { kind: 'deferred-registration-failed', failedIds: ['@deepseek-ai/dsh-client-ui-tool'] },
   }
@@ -67,6 +69,11 @@ test('sourceBootGapNote: each kind maps to its OWN key and carries its structure
     'source.bootGap.graphUnavailable',
     'a kind ignores payloads that belong to another kind',
   )
+  assert.equal(
+    sourceBootGapNote(row({ kind: 'local-graph-not-injected' }), spy),
+    'source.bootGap.localGraphNotInjected',
+    'the local 404 is a chamber-side fact with its own sentence (FIX 6)',
+  )
 })
 
 test('sourceBootGapNote: an empty payload degrades to the generic sentence, never to "  "', () => {
@@ -80,6 +87,7 @@ test('every gap key the sidebar can select exists in BOTH dictionaries, non-empt
   const keys = [
     'source.bootGap.generic',
     'source.bootGap.graphUnavailable',
+    'source.bootGap.localGraphNotInjected',
     'source.bootGap.requiredServicesMissing',
     'source.bootGap.deferredRegistrationFailed',
   ] as const

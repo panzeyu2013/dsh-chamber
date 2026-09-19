@@ -49,6 +49,10 @@ export function bootGapText(
   switch (gap.kind) {
     case 'graph-unavailable':
       return t('bootGapGraphUnavailable')
+    // 2026-12 FIX 6: the LOCAL instance's missing graph endpoint is a chamber-side
+    // installation/seed fact; its own sentence never advises a runtime upgrade.
+    case 'local-graph-not-injected':
+      return t('bootGapLocalGraphNotInjected')
     case 'required-services-missing': {
       const services = gap.services ?? []
       return services.length === 0

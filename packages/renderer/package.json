@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "node scripts/gen-typert-remotes.mjs && vite build && node scripts/gen-boot-manifest.mjs && node scripts/check-chunk-budgets.mjs && node scripts/verify-vendor-patch-applied.mjs",
     "preview": "vite preview",
-    "test": "node ./scripts/test.mjs"
+    "test": "node ./scripts/test.mjs",
+    "test:win32": "node ./scripts/test.mjs --win32"
   },
   "dependencies": {
     "react": "^19.0.0",

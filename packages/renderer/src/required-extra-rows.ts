@@ -203,15 +203,94 @@ export function missingInjectedServices(
 }
 
 /**
- * Probe deadline. The extra rows load after the composite and their applies
- * settle a few microtasks later; 5 s is generous for a cold chunk fetch while
- * staying well under the shell's own boot tolerance (30 s health window,
- * 15 s boot deadline).
+ * Probe deadline — PER ROSTER MEMBER, not per boot (2026-12 FIX 4): the window
+ * starts when the probe first sees a service in the roster, so a member the
+ * deferred cluster's re-arm adds at t=30s gets the same 5 s as a first-screen
+ * member instead of being judged instantly against the boot's t=0 start. The
+ * extra rows load after the composite and their applies settle a few microtasks
+ * later; 5 s is generous for a cold chunk fetch.
  */
 export const REQUIRED_SERVICE_PROBE_DEADLINE_MS = 5000
 
-/** Probe re-check interval. */
+/** Probe re-check interval (both the grace poll and the bounded re-check). */
 export const REQUIRED_SERVICE_PROBE_INTERVAL_MS = 250
+
+/**
+ * How long the probe keeps re-checking AFTER every member's deadline elapsed
+ * (2026-12 FIX 1): a provider that materializes too late for the verdict used to
+ * leave a permanent false banner, because the probe stopped at the verdict and
+ * the shell had no revocation path. The probe now polls for up to this long past
+ * the NEWEST member's deadline and reports a retraction once the missing set
+ * empties; the bound keeps a torn-down/abandoned mount from holding a live timer
+ * forever. 30 s is one health-window: long enough for a slow async provider
+ * chain, short enough to stay inside the shell's own boot/health budget.
+ */
+export const REQUIRED_SERVICE_PROBE_RECHECK_WINDOW_MS = 30_000
+
+/**
+ * The probe's clock (2026-12 FIX 2): `performance.now()` when the host has one,
+ * `Date.now()` otherwise. A wall-clock jump (a Windows sleep/resume plus a
+ * w32time correction moves `Date.now()` forward by more than the whole deadline
+ * in one step) used to satisfy the deadline on the first pass and judge a
+ * service that was ~250 ms from materializing; a monotonic clock cannot jump.
+ * The fallback keeps every non-browser host (plain-node tests) on the old
+ * semantics.
+ * @param source - injectable `performance`-like source (test seam).
+ * @returns milliseconds from an arbitrary but non-jumping origin.
+ */
+export function monotonicNowMs(source?: { now(): number }): number {
+  const perf = source ?? (globalThis as { performance?: { now?: () => number } }).performance
+  if (perf !== undefined && typeof perf.now === 'function') return perf.now()
+  return Date.now()
+}
+
+/**
+ * Per-member grace + revocation bookkeeping of the required-service probe
+ * (2026-12 FIX 1/FIX 4). The probe owns one instance per boot; the two pure
+ * questions it answers are:
+ *
+ *  - is any roster member still inside its OWN window ({@link withinGrace})? A
+ *    verdict may only be produced once every member had its full window — the
+ *    re-armed members used to be judged with ZERO grace against the boot's start;
+ *  - until when may the probe keep polling after a verdict
+ *    ({@link recheckUntilMs})? The bound is the newest member's deadline plus
+ *    {@link REQUIRED_SERVICE_PROBE_RECHECK_WINDOW_MS}, so the revocation path
+ *    (late provider → missing set empties → retraction) is time-bounded.
+ */
+export class RequiredServiceProbeWindows {
+  private readonly arrivalsMs = new Map<string, number>()
+
+  /**
+   * Record every member now present in the roster. The FIRST sighting is the
+   * member's arrival: a re-arm after the roster grew must not restart an
+   * already-probed member's window (that would defer a real verdict forever).
+   */
+  note(members: readonly string[], nowMs: number): void {
+    for (const member of members) {
+      if (!this.arrivalsMs.has(member)) this.arrivalsMs.set(member, nowMs)
+    }
+  }
+
+  /** The members whose own deadline has not elapsed at `nowMs`. */
+  withinGrace(members: readonly string[], nowMs: number): string[] {
+    return members.filter(member =>
+      nowMs - (this.arrivalsMs.get(member) ?? nowMs) < REQUIRED_SERVICE_PROBE_DEADLINE_MS)
+  }
+
+  /**
+   * When the probe may stop re-checking: the newest member's deadline plus the
+   * bounded revocation window. `undefined` while no member was ever noted.
+   */
+  recheckUntilMs(): number | undefined {
+    let latest: number | undefined
+    for (const arrival of this.arrivalsMs.values()) {
+      if (latest === undefined || arrival > latest) latest = arrival
+    }
+    return latest === undefined
+      ? undefined
+      : latest + REQUIRED_SERVICE_PROBE_DEADLINE_MS + REQUIRED_SERVICE_PROBE_RECHECK_WINDOW_MS
+  }
+}
 
 /**
  * The ids the composite's deferred cluster registers (chamber-entry.ts
@@ -304,12 +383,39 @@ export function missingServiceFact(
  * @returns one line naming each service, its injectors, the instance and the
  *   consequence.
  */
+/**
+ * The known NON-COVERED host-graph rows that PROVIDE a probed service, keyed by
+ * the cordis service name (2026-12 FIX 7). The roster only knows the INJECTORS —
+ * the composite plugins that stay pending on a service — while the actionable
+ * half of the fact is usually the missing PROVIDER row, which is exactly what
+ * the single banner slot could not name before (the real-machine report showed
+ * "缺少 sidebarRight" with the waiter named and never the provider).
+ *
+ * The ids are the host-graph row ids (upstream package names) and are pinned by
+ * the roster tests against the vendored declarations. A service with no known
+ * provider is named explicitly in the diagnostic rather than silently omitted,
+ * so the line never pretends to have localized the provider.
+ */
+export const KNOWN_SERVICE_PROVIDERS: Readonly<Record<string, string>> = {
+  // vendor ui-sidebar-right/src/client/index.ts: ctx.reflect.provide('sidebarRight', …)
+  sidebarRight: '@deepseek-ai/dsh-client-ui-sidebar-right',
+  // the extra chain the row itself waits on: ui-sidebar-right injects `resources`,
+  // whose only provider is the non-covered @deepseek-ai/dsh-client-resources row.
+  resources: '@deepseek-ai/dsh-client-resources',
+}
+
 export function requiredServiceProbeMessage(
   missing: readonly MissingRequiredService[],
   instanceId?: string,
 ): string {
   const detail = missing
-    .map(entry => `${entry.service} (injected by ${entry.injectedBy.join(', ')})`)
+    .map(entry => {
+      const provider = KNOWN_SERVICE_PROVIDERS[entry.service]
+      const providerText = provider === undefined
+        ? 'provider row unknown'
+        : `provider row ${provider}`
+      return `${entry.service} (injected by ${entry.injectedBy.join(', ')}; ${providerText})`
+    })
     .join('; ')
   return chamberEntryDiagnosticMessage(
     `composite service(s) still unprovided after ${REQUIRED_SERVICE_PROBE_DEADLINE_MS}ms: ${detail} — `

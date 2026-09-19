@@ -53,6 +53,9 @@ export const zh = {
   generalNotificationsModeDesc: '「始终通知」在窗口可见时也会发送，正在查看的会话除外',
   generalNotificationsEnabled: '启用桌面通知',
   generalNotificationsBadge: '图标未读角标',
+  // 平台能力门（design 19 §3.7 / design 23 M3）：win32 任务栏 overlay 角标 v1
+  // 未接线，设置页禁用开关并给出这条原因（与 badge.ts 的平台门原因同义）。
+  generalNotificationsBadgeUnsupported: '当前平台暂不支持任务栏未读角标，后续版本接入',
   generalNotificationsModeHidden: '仅窗口隐藏时',
   generalNotificationsModeAlways: '始终通知',
   generalNotifyOnComplete: '会话完成时',
@@ -313,6 +316,10 @@ export const en: Record<keyof typeof zh, string> = {
   generalNotificationsModeDesc: '"Always" also notifies while the window is visible, except for the session on screen',
   generalNotificationsEnabled: 'Enable desktop notifications',
   generalNotificationsBadge: 'Unread badge on the app icon',
+  // Platform capability gate (design 19 §3.7 / design 23 M3): the win32
+  // taskbar overlay is not wired in v1; the settings page disables the toggle
+  // and shows this reason (same meaning as badge.ts's platform-gate reason).
+  generalNotificationsBadgeUnsupported: 'Taskbar unread badge is not supported on this platform yet',
   generalNotificationsModeHidden: 'Only while hidden',
   generalNotificationsModeAlways: 'Always',
   generalNotifyOnComplete: 'When a session completes',
