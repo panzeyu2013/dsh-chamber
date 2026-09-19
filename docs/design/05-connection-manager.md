@@ -411,6 +411,21 @@ push 会拿还不含它的 store **整份替换**聚合，行随即消失；②�
   服务、无会冻结的推送通道；未知传输已在别处 fail-closed），该臂**不得触碰**它们。
   若该拉取瞬时失败，生产者的 loading 撤回 + idle baseline 重发负责恢复，不会永久停在
   error。推快照按来源序号使较旧在途 pull 失效。
+  **保留视图有界化（2026-12 残留修复）**：已推送来源的聚合在 unary 反复失败时保留
+  最后视图（上面 `shouldRetainPushedAggregate`），此前是**无限**保留——旧 `running`
+  位会一直渲染成「运行中」。现在：距最后一次**成功验证**（push 或 unary 提交，
+  `factsAtRef`）**达到** `AGGREGATE_UNVERIFIED_FACTS_MS`（90s ≈3 个 watchdog 周期；判定含边界）后，
+  App 丢掉一个**无法验证**的 running 断言（只清 running 位；行/分组/归档集照旧保留，
+  不触发归档回流），并把该来源交给既有的会话停滞横幅（`sessionStall.text` =
+  「无法确认会话状态」）——横幅的三条出口（重新连接 / 重新加载 / 忽略）对「无法验证」
+  与停滞来源同权；下一次成功读取（push 或 unary）立即恢复事实并撤下呈现。判定与界限在
+  `packages/renderer/src/aggregate-refresh.ts`（`shouldDropUnverifiedRunningFacts`，纯函数 + 单测），
+  接线（判定 → 只清 running 位 → 进同一横幅）由
+  `packages/renderer/test/wiring/session-liveness-wiring.test.ts` 钉住。
+  **取舍**：无法验证时保留断言等于陈述一个没有证据的事实，而清位 + 可见提示是
+  「不知道」的诚实表达，且恢复路径无条件幂等；已知残余 = 宿主其实仍在跑、只是读路径坏掉时
+  用户会暂时看不到运行环（由横幅的「重新加载」收口；「重新连接」只对仍持有壳的来源有效——
+  已回收来源的该出口是 no-op，见 STATUS ⑭）。
 - **首屏基线收割（`packages/renderer/src/baseline-harvest.ts`）**：
   首启只有 local 挂载 + 1 个预热槽且不轮转、被回收来源在用户点击前禁预热
   （"每个 ready 来源最终串行挂载"的旧通道已移除）⇒ N-1 个 ready 远程源
@@ -530,7 +545,8 @@ interface InstanceRuntimeReport {
     settledAt?: number            // 缺省 = 在途（守卫忽略未结算回执）
     ok: boolean                   // 是否拿到权威结论（false ≠ 一定失败，见 verdict）
     attempts: number
-    verdict?: 'converged'|'stale'|'unknown'  // 三值：unknown（辅助探针失败/超时）不升级也不清等待；stale = 未收敛的失败结算（refresh 相位失败/超时、缺 verify seam，或 verify 正面证伪）——只有 verify 真跑过才代表「权威证伪」
+    verdict?: 'converged'|'stale'|'unknown'  // converged = 权威一致（可能经写回纠正）；stale = 权威正面证伪，或 refresh 相位失败/超时且缺 verify seam；unknown（探针失败/超时/两次读数不一致）不升级也不清等待
+    corrected?: boolean           // 本轮结束时 store 已无陈旧 running 位（写过 store，或 probe 与写回之间已自然收敛）⇒ 与 ok:true + converged 同现；守卫不据此升级
   }
 }
 export const chamberBridge: {

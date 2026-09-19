@@ -175,8 +175,15 @@ export function isInstanceDomainMissing(err: unknown): boolean {
   return err instanceof InstanceDomainMissingError
 }
 
-/** Default timeout for bounded unary calls (mirrors the retired apiproxy 30s default). */
-const DEFAULT_TIMEOUT_MS = 30_000
+/**
+ * Default timeout for bounded unary calls (mirrors the retired apiproxy 30s default).
+ * **Exported** so the cross-module budget derivation has exactly one home: the renderer
+ * wiring test (`packages/renderer/test/wiring/session-liveness-wiring.test.ts`) imports
+ * this bound to check that the reconciler verify budget covers the N=2 authority probes
+ * (two sequential unary reads), instead of copying 30_000.
+ */
+export const INSTANCE_UNARY_TIMEOUT_MS = 30_000
+const DEFAULT_TIMEOUT_MS = INSTANCE_UNARY_TIMEOUT_MS
 
 /**
  * Purge call budget (design 24 §5): deleting many archived subtrees can far

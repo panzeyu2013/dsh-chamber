@@ -187,7 +187,7 @@ test('unknown 回执既不健康也不升级；升级只能发生在 unknown 之
 })
 
 test('快 unknown（L1 后立刻结算）不吞掉唯一预算：下一次 L1 的健康结论先到就不重连', () => {
-  // 生产关系（coalesce 200s > 期限 150s）+ 快探针失败（502/代理重启会在一个 tick 内
+  // 生产关系（coalesce 200s > 期限 190s）+ 快探针失败（502/代理重启会在一个 tick 内
   // 结算 unknown）。旧的"从 unknown 时刻顺延"仍让期限抢在下一次 L1 之前到点 ⇒ 假 L2
   // （2026-12 二轮独立复核实测：L1#1@120s → L2@330s → L1#2@360s）。
   const h = harness({ refreshAfterMs: 1_000, refreshCoalesceMs: 200, refreshOutcomeTimeoutMs: 150 })
@@ -241,6 +241,46 @@ test('与吸收同一 tick 发出的 L1 仍算"之前"：期限再多等一个 c
     '同 tick 的 L1 不改判成"之后"（改成 < 会在这里假 L2）')
   assert.deepEqual(h.at(1_500, { a: { running: true } }, unknown).actions,
     [{ kind: 'refresh', sourceId: 'local' }], 'coalesce 到点补发 L1，期限重新起算')
+})
+
+test('官方 refresh 持续坏（回执全为 unknown）不静默：期限到点升唯一一次 L2，梯子到顶后亮 L3', () => {
+  // 2026-12 五轮复核新增的覆盖规则会把「refresh 失败 + 权威对我们的运行行沉默」结算成
+  // `unknown`（而不是曾经的假健康 `converged`）。本测试钉住它的**下游后果**：unknown 流
+  // 必须仍被等回执期限收口——否则「官方对账永久坏」会变成一条无声链路（不升级、不提示）。
+  // 配额放宽到不干扰时间线：本测试锁的是「无结论也必须收口」，不是配额节拍。
+  const h = harness({
+    refreshAfterMs: 1_000,
+    refreshCoalesceMs: 200,
+    refreshOutcomeTimeoutMs: 150,
+    noticeAfterMs: 10,
+    maxRefreshRequests: 4,
+    refreshWindowMs: 10_000,
+  })
+  h.at(0, { a: { running: true } })
+  assert.deepEqual(h.at(1_000, { a: { running: true } }).actions,
+    [{ kind: 'refresh', sourceId: 'local' }])
+  const unknown: Reconcile = { requestedAt: 1_000, settledAt: 1_010, ok: false, attempts: 2, verdict: 'unknown' }
+  assert.deepEqual(h.at(1_010, { a: { running: true } }, unknown).actions, [], '首次 unknown 当场不升级')
+  assert.deepEqual(h.at(1_200, { a: { running: true } }, unknown).actions,
+    [{ kind: 'refresh', sourceId: 'local' }], '吸收之后必须再发一次 L1（期限重新起算）')
+  assert.deepEqual(h.at(1_360, { a: { running: true } }, unknown).actions,
+    [{ kind: 'reconnect', sourceId: 'local' }], '期限到点仍要升级：unknown 流不得无声')
+  h.mark(1_360)
+  assert.deepEqual(h.at(1_370, { a: { running: true } }, unknown).actions,
+    [{ kind: 'refresh', sourceId: 'local' }], '重连后重放 L1')
+  // 之后只允许「继续 L1 + 最终一次 L3」：重连预算已用尽 ⇒ 不得再刷重连，
+  // 且必须出现可见提示（有界收口，不无声）。扫一段窗口而不是钉死单点，避免
+  // 把配额/节拍的实现细节当成契约。
+  const timeline: string[] = []
+  for (let now = 1_400; now <= 2_600; now += 50) {
+    for (const action of h.at(now, { a: { running: true } }, unknown).actions) {
+      timeline.push(`${String(now)}:${action.kind}`)
+    }
+  }
+  assert.equal(timeline.some(entry => entry.endsWith(':reconnect')), false,
+    '唯一一次重连已消费：无结论流不得变成重连风暴')
+  assert.ok(timeline.some(entry => entry.endsWith(':notice')),
+    '自愈预算用尽 + 仍无结论 ⇒ L3 必须可见（否则「官方对账永久坏」就是无声链路）')
 })
 
 test('另一条臂持续挡住派遣时 L3 仍有出口（blockedReconnects 计入梯子）', () => {
@@ -396,4 +436,25 @@ test('默认节拍：coalesce == 窗口/配额（把爆发式探测铺成均匀�
     SESSION_LIVENESS_DEFAULTS.refreshCoalesceMs,
     SESSION_LIVENESS_DEFAULTS.refreshWindowMs / SESSION_LIVENESS_DEFAULTS.maxRefreshRequests,
   )
+})
+
+test('生产节拍：首次对账在事实年龄 60s（陈旧位不再等 120s/200s 才被发现）', () => {
+  // 事实年龄从**首次观测到 running** 的 tick 起算（不是绝对时刻）：t=0 首见、
+  // 60s 门槛到点即发 L1；tick 仍是生产 30s（AGGREGATE_FALLBACK_POLL_MS）。
+  // 每个 running 时段的探测总量仍由 coalesce/配额封顶，因此更短的首探不增加稳态
+  // 成本，只把「丢帧 → 纠正」的可见窗口从 ~200s 级压到 60s 级（2026-12 彻底修复）。
+  let state = createSessionLivenessState()
+  const at = (now: number) => {
+    const plan = planSessionLiveness(state, {
+      now,
+      sources: { local: { sessions: { a: { running: true } } } },
+    }, SESSION_LIVENESS_DEFAULTS)
+    state = plan.state
+    return plan
+  }
+  assert.deepEqual(at(0).actions, [])
+  assert.deepEqual(at(30_000).actions, [])
+  assert.deepEqual(at(59_999).actions, [])
+  assert.deepEqual(at(60_000).actions, [{ kind: 'refresh', sourceId: 'local' }],
+    '门槛到点的那一个 tick 必须发对账')
 })

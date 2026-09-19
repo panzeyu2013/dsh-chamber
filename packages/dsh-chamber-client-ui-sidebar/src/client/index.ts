@@ -25,7 +25,12 @@ import { createPanelSource } from './panel-source.ts'
 import { createPurgeTracker } from '../shared/purged-tracker.ts'
 import {
   SessionFactReconciler,
-  sessionFactsConverged,
+  confirmDeniedRunningIds,
+  deniedRunningIds,
+  hasReconcilableRunning,
+  decideAfterFirstAuthorityRead,
+  uncoveredRunningIds,
+  writeBackTargets,
   type SessionFactVerdict,
 } from '../shared/session-fact-reconcile.ts'
 import { fetchInstanceSnapshot, getInstanceClient, type InstanceSnapshot } from '../shared/instance-api.ts'
@@ -296,6 +301,50 @@ export function apply(ctx: ClientContext): void {
       return new Set(Object.keys(byId))
     }
 
+    /** 官方 store 的 byId 投影（本轮判定与写回共用的唯一事实读）。 */
+    const readStoreRunning = (): Record<string, { running?: boolean; origin?: string }> =>
+      (sessionsList.getSnapshot() as {
+        byId?: Record<string, { running?: boolean; origin?: string }>
+      }).byId ?? {}
+
+    /**
+     * 每轮 verify 的序号（本产者内单调）。证伪集带序号，只有**当前这一轮** verify
+     * 发布的集才允许写回。**纵深防御**（2026-12 五轮复核修正口径）：挡住「结算后写回」
+     * 的第一道栅栏是 reconciler 的 `attemptSettled/disposed`；本栅栏再挡住任何未来
+     * 形态的重叠 verify（失配即 fail-closed：不写、按 stale 结算允许升级）。
+     */
+    let verifySeq = 0
+    /**
+     * 最近一次**已确认**的正面证伪集与发布它的 verify 轮次（写回 seam 消费它，不重复
+     * 发 host 读）。每轮 verify 开头作废（早退路径也不留旧集），只有 N=2 确认才赋值。
+     */
+    let deniedRunning: { ids: ReadonlySet<string>; seq: number } | undefined
+
+    /** 一次独立权威读（另一条载体：控制面 HTTP 代理）。失败返回 undefined = 无结论。 */
+    const probeDeniedRunning = async (): Promise<{
+      /** 权威**正面证伪**（官方说 running、权威说没在跑）的 id。 */
+      denied: ReadonlySet<string>
+      /** 官方 store 说 running 但本次权威读**没有覆盖**的 id（沉默 ≠ 覆盖）。 */
+      uncovered: ReadonlySet<string>
+    } | undefined> => {
+      let snapshot: InstanceSnapshot
+      try {
+        snapshot = await fetchInstanceSnapshot(getInstanceClient(chamberInstanceId))
+      } catch (error) {
+        console.warn(`[chamber] authority probe failed for ${chamberInstanceId} (no verdict this round):`,
+          error instanceof Error ? error.message : String(error))
+        return undefined
+      }
+      // 判定规则（子代理行不作证、只有权威显式说「没在跑」才证伪、缺席 = 沉默）都是纯函数，
+      // 可被单测钉住：session-fact-reconcile.ts 的 deniedRunningIds / uncoveredRunningIds
+      // + decideAfterFirstAuthorityRead（沉默 ⇒ unknown；见其文档）。
+      const official = readStoreRunning()
+      return {
+        denied: deniedRunningIds(official, snapshot.sessions),
+        uncovered: uncoveredRunningIds(official, snapshot.sessions),
+      }
+    }
+
     /**
      * L1 对账的**权威判定**（2026-12 独立复核修复的致命缺陷）：官方
      * `refreshList()` 对「拉取失败」**照常 resolve**（vendor
@@ -303,33 +352,103 @@ export function apply(ctx: ClientContext): void {
      * `listState='error'` 后正常返回；carrier 失败在 api-gateway 里也被折叠成
      * `ok:false` 结果而非 reject）——所以「promise 解决」不能当「拿到权威结论」。
      *
-     * 这里复用本文件的**独立 unary 探针**（design 24 §12 终局步：不受官方
-     * single-flight / 客户端缓存影响）取权威 running 位，与官方 store 的 running
-     * 位对表。**三值**（2026-12 二轮复核）：
-     *  - `converged`：探针成功且官方位与权威一致（含「宿主确实还在跑」——长工具/
-     *    长推理的合法静默必须留在这里，升级会引入 reconnect 风暴）；
-     *  - `stale`：**权威正面证伪**（官方说 running、权威明确说该会话没在跑）⇒
-     *    官方对账没有收敛，允许守卫升级 L2/L3；
-     *  - `unknown`：**辅助探针自己失败/超时**。探针走的是控制面 HTTP 代理，而被
-     *    守卫的是 WS 事实通道——两条不同载体，探针失败不能证明被守卫的通道坏；
-     *    返回 unknown 让守卫「不升级也不抹掉等待」（持续拿不到权威结论仍会在
-     *    超期后升级），避免一次 502/代理重启就拆流重放 baseline。
+     * 本调用发生在官方 refresh **结算之后**，因此：
+     *  - **tier-1.5 本地判定**（2026-12 彻底修复）：store 里已没有任何「非子代理」
+     *    running 行 ⇒ 本轮没有对账对象，直接收敛，**省掉一次 host `session.list`**
+     *    （修复成功后的常见路径因此只需 refresh 的 1 次 host 读）；
+     *  - 仍有 running 行 ⇒ 用独立 unary 探针取权威 running 位对表。**三值**：
+     *    `converged`（一致，含「宿主确实还在跑」——长工具/长推理的合法静默必须留在
+     *    这里，升级会引入 reconnect 风暴）；`stale`（**权威正面证伪**，允许写回与
+     *    升级）；`unknown`（探针自己失败/两次读数不一致——两条不同载体，一次
+     *    502/代理重启不得拆流重放 baseline）。
+     *
+     * **N=2 确认**（2026-12 彻底修复）：只有两次独立读数都证伪同一个 id 才判 `stale`
+     * ——一次不完整列表既可能造成假写回（把真在跑的会话压成 false，比陈旧运行位更
+     * 糟），也可能造成假升级；不一致按 `unknown` 结算（不升级、不清等待）。
      */
     const verifySessionFactConvergence = async (): Promise<SessionFactVerdict> => {
-      let snapshot: InstanceSnapshot
-      try {
-        snapshot = await fetchInstanceSnapshot(getInstanceClient(chamberInstanceId))
-      } catch (error) {
-        console.warn(`[chamber] authority probe failed for ${chamberInstanceId} (no verdict this round):`,
-          error instanceof Error ? error.message : String(error))
-        return 'unknown'
+      // 每轮开头作废上一轮的证伪集并领新序号：任何早退路径（tier-1.5/无证伪/探针失败）
+      // 都不得让旧集被后到的写回消费（2026-12 四轮复核）。判定用纯函数（单测钉住）：
+      // hasReconcilableRunning / confirmDeniedRunningIds / deniedRunningIds。
+      verifySeq += 1
+      const seq = verifySeq
+      deniedRunning = undefined
+      if (!hasReconcilableRunning(readStoreRunning())) return 'converged'
+      const first = await probeDeniedRunning()
+      if (first === undefined) return 'unknown'
+      // 直接结论由纯函数给出（单测钉住；2026-12 五轮复核的 HIGH 就在这里）：
+      // 「权威沉默」不是「权威确认在跑」——未覆盖的 running 行**无条件**按 `unknown`
+      // 结算。官方 refresh 的失败会 resolve 成 ok:false（观察不到），所以不能用 refresh
+      // 的成败当门；否则升级阶梯会被永久关掉。
+      const firstVerdict = decideAfterFirstAuthorityRead({
+        denied: first.denied,
+        uncovered: first.uncovered,
+      })
+      if (firstVerdict !== 'needs-second-probe') return firstVerdict
+      const second = await probeDeniedRunning()
+      if (second === undefined) return 'unknown'
+      const confirmed = confirmDeniedRunningIds(first.denied, second.denied)
+      if (confirmed.size === 0) return 'unknown'
+      deniedRunning = { ids: confirmed, seq }
+      return 'stale'
+    }
+
+    /**
+     * tier-3 写回（2026-12 彻底修复，design 14 §D4）：把独立权威读的**正面证伪**写进
+     * 官方 store 自己的公开写路径（`ClientSessions.handleSessionStatus`）——一次调用
+     * 同时改侧栏摘要、物化 Session 的 `running`（聊天面「深度求索中」）与子代理
+     * activity，并让完成蓝点/通知边沿照常武装。
+     *
+     * 纪律：
+     *  - **只写 false，从不写 true**；只写同一轮 verify 已确认证伪、且此刻 store 仍
+     *    claiming running 的 id（幂等、最小写面）；
+     *  - **写后自校验**：store 是 manager 通知的微任务投影，等一个宏任务再读；投影迟一拍
+     *    时再等一拍，之后仍非全部掉落才算失败（失败按 `stale` 结算 ⇒ 允许升级）；
+     *  - **`corrected` 的口径**：返回 true = 「本轮结束时 store 里已没有已确认证伪的
+     *    running 位」——包括 probe 与写回之间已**自然收敛**（targets 为空）的情形；
+     *    因此回执的 `corrected` 读作「陈旧位已消失」，不是「我们一定写过 store」；
+     *  - **能力守卫**：`handleSessionStatus` 是上游公开但**非 `ISessions` 契约**的
+     *    方法面（`contract/sessions.ts` 只暴露 `refresh()`），缺席时 WARN 一次并降级到
+     *    既有升级阶梯，绝不静默；
+     *  - **host 永远赢**：后续任何成功的官方基线与状态事件都能覆盖写入，无 TTL、无 latch。
+     */
+    const writeBackDeniedRunning = async (): Promise<boolean> => {
+      const denied = deniedRunning
+      if (denied === undefined || denied.ids.size === 0) return false
+      // 只认当前轮 verify 发布的集：被遗弃的 verify 晚到发布 ⇒ 序号失配 ⇒ 拒绝写回
+      //（fail-closed：不写、仍按 stale 结算，允许升级；见 verifySeq 注释）。
+      if (denied.seq !== verifySeq) return false
+      // 目标 = 已确认证伪 ∩ 此刻 store 仍 claiming running（纯函数，单测钉住范围）。
+      // **先算目标再查能力**：probe 与本调用之间已自然收敛时，本轮按成功结算 ——
+      // 即使本构建没有写回方法面（否则已收敛的轮次会被误判成「没纠正」而升级）。
+      const targets = writeBackTargets(denied.ids, readStoreRunning())
+      if (targets.length === 0) return true
+      const service = ctx.sessions as unknown as {
+        handleSessionStatus?: (sessionId: string, running: boolean) => void
       }
-      const byId = (sessionsList.getSnapshot() as {
-        byId?: Record<string, { running?: boolean; origin?: string }>
-      }).byId ?? {}
-      // 判定规则（子代理/缺失行不作证、只有权威明确说「没在跑」才判未收敛）
-      // 是纯函数，可被单测钉住：session-fact-reconcile.ts 的 sessionFactsConverged。
-      return sessionFactsConverged(byId, snapshot.sessions) ? 'converged' : 'stale'
+      if (typeof service.handleSessionStatus !== 'function') {
+        if (!warnedMissingHandleSessionStatus) {
+          warnedMissingHandleSessionStatus = true
+          console.warn(`[chamber] official session client exposes no handleSessionStatus() (${chamberInstanceId}) — `
+            + 'authoritative running-bit write-back is unavailable; falling back to the reconnect/reload ladder')
+        }
+        return false
+      }
+      try {
+        for (const id of targets) service.handleSessionStatus(id, false)
+      } catch (error) {
+        console.warn(`[chamber] authoritative write-back threw for ${chamberInstanceId}:`,
+          error instanceof Error ? error.message : String(error))
+        return false
+      }
+      // 自校验：等一个宏任务覆盖官方 manager 的微任务投影；投影再迟一拍时重试一次，
+      // 免得把「尚未 flush」记成失败而误升级（2026-12 四轮复核）。
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        await new Promise(resolve => { setTimeout(resolve, 0) })
+        const after = readStoreRunning()
+        if (targets.every(id => after[id]?.running !== true)) return true
+      }
+      return false
     }
 
     /**
@@ -395,6 +514,8 @@ export function apply(ctx: ClientContext): void {
     // 运行位活性守卫的 L1 执行端（renderer/src/session-liveness.ts 的决策半）。
     // 先声明后装配：sync() 要读它的回执，而它的 onSettled 又要回调 sync()。
     let sessionFacts: SessionFactReconciler | undefined
+    /** 写回能力缺失只告警一次（永久性失败，不重试）。 */
+    let warnedMissingHandleSessionStatus = false
 
     const syncSnapshot = (): void => {
       snapshotQueued = false
@@ -483,6 +604,9 @@ export function apply(ctx: ClientContext): void {
       // 权威判定：没有它，「对账请求发出去了」会被当成「拿到了权威结论」，
       // 守卫在真正的半死通道上永不升级（2026-12 独立复核的致命发现）。
       verify: verifySessionFactConvergence,
+      // tier-3 写回：权威正面证伪而契约内纠正不了时，把结论写进官方 store 自己的
+      // 公开写路径（2026-12 彻底修复，design 14 §D4）。
+      correct: writeBackDeniedRunning,
       now: () => Date.now(),
       warn: (message) => { console.warn(`[chamber] ${message} (${chamberInstanceId})`) },
       onSettled: () => { sync() },

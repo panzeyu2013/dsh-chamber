@@ -148,6 +148,7 @@ import {
   refreshPullStillCurrent,
   remoteRetiredSourceIds,
   retireSelectedSource,
+  shouldDropUnverifiedRunningFacts,
   shouldRebaselineFallbackView,
   shouldReconnectStaleMounted,
   shouldRequestSessionListRefresh,
@@ -740,6 +741,10 @@ export default function App() {
   // client exposes no per-source connection state, and a silently dead push
   // channel never fires the producer withdrawal (aggregate-store clear()).
   const snapshotAtRef = useRef<Record<string, number>>({})
+  /** 最近一次**成功验证事实**（push 或 unary 提交）的时刻（2026-12 残留修复）：
+   *  保留视图据此有界化 —— 超过界限仍无法验证时，不再保留无法验证的 running 断言
+   *  （aggregate-refresh.ts 的 shouldDropUnverifiedRunningFacts，design 05 §2.3）。 */
+  const factsAtRef = useRef<Record<string, number>>({})
   // Last connection-reconnect timestamp per source (S2, ms epoch; absent =
   // never reconnected). The staleness watchdog records it so
   // shouldReconnectStaleMounted can bound repeat reconnects of one stale
@@ -1196,6 +1201,20 @@ export default function App() {
         delete snapshotAtRef.current[id]
       }
     }
+    // 事实水位/无法验证标记随来源退役（same-id re-add 必须是全新的可验证窗口）。
+    for (const id of Object.keys(factsAtRef.current)) {
+      if (!servers.some(server => server.id === id)) delete factsAtRef.current[id]
+    }
+    setUnverified(prev => {
+      const next = prev.filter(id => servers.some(server => server.id === id))
+      return next.length === prev.length ? prev : next
+    })
+    // 用户忽略（dismiss）也随来源退役：否则 same-id 再挂载的**新**代际会在下一个
+    // liveness tick 之前被旧忽略静默压住（2026-12 五轮复核的复挂窗口）。
+    setDismissedStalls(prev => {
+      const next = prev.filter(id => servers.some(server => server.id === id))
+      return next.length === prev.length ? prev : next
+    })
     // S2: last-reconnect recency is source-scoped too — a same-id re-add must
     // start a fresh reconnect-backoff window (mirrors the snapshotAtRef
     // lockstep above; the reconnect only ever ran for mounted sources).
@@ -1617,6 +1636,9 @@ export default function App() {
         }
         return { ...prev, [instanceId]: next }
       })
+      // 事实重新可验证（2026-12 残留修复）：记水位并撤下「无法确认」呈现。
+      factsAtRef.current[instanceId] = Date.now()
+      setUnverified(prev => (prev.includes(instanceId) ? prev.filter(id => id !== instanceId) : prev))
     } catch (err) {
       if (!stillOwnsSource()) return
       // A push/newer pull supersedes an error fact. Mutation success may cross
@@ -1644,6 +1666,32 @@ export default function App() {
         // 卫生：mounted 失败不再走 scheduleRetry，未推送期残留的失败计数
         // 一并清掉（成功路径与 roster 移除也会清，这里提前清无副作用）。
         delete aggregateFailuresRef.current[instanceId]
+        // 保留视图有界化（2026-12 残留修复，design 05 §2.3）：事实读持续失败到界限后，
+        // 不再保留一个**无法验证**的「运行中」断言 —— 只清 running 位（行/分组照旧保留，
+        // 不触发归档回流），并把该来源交给既有的会话停滞横幅（文案 = 「无法确认会话状态」）。
+        // 下一次成功读取（push 或 unary）立即恢复事实并撤下呈现。
+        const retained = watchdogAggregatesRef.current[instanceId]
+        if (retained !== undefined && retained.state === 'ok'
+          && retained.sessions.some(session => session.running === true)
+          && shouldDropUnverifiedRunningFacts({
+            factsAt: factsAtRef.current[instanceId],
+            now: Date.now(),
+          })) {
+          setAggregates(prev => {
+            const current = prev[instanceId]
+            if (current === undefined || current.state !== 'ok') return prev
+            if (!current.sessions.some(session => session.running === true)) return prev
+            return {
+              ...prev,
+              [instanceId]: {
+                ...current,
+                sessions: current.sessions.map(session => (
+                  session.running === true ? { ...session, running: false } : session)),
+              },
+            }
+          })
+          setUnverified(prev => (prev.includes(instanceId) ? prev : [...prev, instanceId]))
+        }
         return
       }
       setAggregates(prev => ({ ...prev, [instanceId]: failureAggregate }))
@@ -1800,6 +1848,24 @@ export default function App() {
   // session-stall.ts 的 dismiss 语义一致——误报不得反复打扰），来源恢复
   // （离开 stalled）时自动解除忽略。
   const [dismissedStalls, setDismissedStalls] = useState<readonly string[]>([])
+  /** 事实已越界无法验证的来源（2026-12 残留修复）：与 stalledSources 共用同一条
+   *  停滞横幅（文案本身即「无法确认会话状态」），下一次成功读取（push/unary）即移除。 */
+  const [unverifiedSources, setUnverifiedSources] = useState<readonly string[]>([])
+  // 渲染期镜像（与 watchdogAggregatesRef 同纪律）：watchdog 回调不因它重建定时器。
+  const unverifiedSourcesRef = useRef(unverifiedSources)
+  unverifiedSourcesRef.current = unverifiedSources
+  /**
+   * 唯一的标记写入口（2026-12 五轮复核）：除 setState 外**同步**更新 ref ——
+   * 同一 tick 的 dismiss 剪枝与失败分支都读 ref，若只等下一次渲染，刚被判「无法确认」
+   * 的来源会被旧快照误判成已恢复（忽略被提前剪掉、横幅反复重现）。
+   */
+  const setUnverified = (updater: (prev: readonly string[]) => readonly string[]): void => {
+    setUnverifiedSources(prev => {
+      const next = updater(prev)
+      unverifiedSourcesRef.current = next
+      return next
+    })
+  }
   // S2 (对齐 ssh 断链自动恢复): a stale MOUNTED direct-http source (registry
   // spec transport === 'http', whatever the target kind) additionally gets a
   // lightweight connection reconnect (bounded by lastReconnectAtRef) so the
@@ -1922,9 +1988,10 @@ export default function App() {
     // 「深度求索中」由官方 session 的 running 位驱动，而该位只由 mux 上一条
     // emit 型事件 api-session/status 递送（无重传），官方唯一的收敛路径
     // handleConnected() → refreshList() 又只挂在连接代际重置上 ⇒ 丢一帧或
-    // carrier 静默半死时 running 永久为 true。本臂：L1 只读对账（官方
-    // session.list，权威 running 回灌）→ 仅当回执证明对账通道坏掉才 L2
-    // reconnect → L3 可见提示。local 刻意不排除：本次缺陷的现场就是本地实例，
+    // carrier 静默半死时 running 永久为 true。本臂：L1 对账（官方 session.list →
+    // 本地判定 → 独立权威探针；权威正面证伪而契约内纠正不了时**回写官方 store**，
+    // 只写 false、写后自校验 —— design 14 §D4 ①b）→ 仅当回执证明对账通道坏掉才
+    // L2 reconnect → L3 可见提示。local 刻意不排除：本次缺陷的现场就是本地实例，
     // 且升级依据是「拿不到权威结论」而非「沉默很久」（长工具/长推理的合法
     // 静默与真卡死在本层不可区分，误升级会引入 reconnect 风暴）。
     const generationBySourceId = new Map(
@@ -1997,7 +2064,10 @@ export default function App() {
       ? prev
       : [...livenessPlan.stalled]))
     setDismissedStalls(prev => {
-      const next = prev.filter(id => livenessPlan.stalled.includes(id))
+      // 只在「既未停滞、也未被判无法验证」时解除忽略（2026-12 残留修复）：只看
+      // livenessPlan.stalled 会把「无法确认」来源的忽略立刻剪掉 ⇒ 横幅反复重现。
+      const next = prev.filter(id => livenessPlan.stalled.includes(id)
+        || unverifiedSourcesRef.current.includes(id))
       return next.length === prev.length ? prev : next
     })
   }, [health, remoteStatus, remoteInstances, runBoundedAggregateWave])
@@ -3673,6 +3743,9 @@ export default function App() {
       } else {
         snapshotSourcesRef.current[sourceId] = true
         snapshotAtRef.current[sourceId] = Date.now()
+        // 成功验证（2026-12 残留修复）：push 与 unary 提交同权，记水位并撤下呈现。
+        factsAtRef.current[sourceId] = Date.now()
+        setUnverified(prev => (prev.includes(sourceId) ? prev.filter(id => id !== sourceId) : prev))
       }
       setSnapshotSources(prev => {
         if (snapshot === undefined) {
@@ -4140,12 +4213,14 @@ const HEALTH_ERROR_GRACE_MS = 10_000
       })
 
   // 停滞提示的可见集合（用户已忽略的来源不再提示；来源恢复即自动解除忽略）。
-  const visibleStalls = stalledSources.filter(id => !dismissedStalls.includes(id))
+  // 停滞来源与「事实无法验证」来源共用同一横幅（文案 = 「无法确认会话状态」）。
+  const visibleStalls = [...new Set([...stalledSources, ...unverifiedSources])]
+    .filter(id => !dismissedStalls.includes(id))
   return (
     <ErrorBoundary>
       <div className="app">
-        {/* 运行位活性守卫的 L3（2026-12）：L1 只读对账与 L2 有界 reconnect 都
-            没能收敛时，只给用户两个选择——轻恢复（重新连接，不丢页面状态）与
+        {/* 运行位活性守卫的 L3（2026-12）：L1 对账（含权威写回）与 L2 有界
+            reconnect 都没能收敛时，只给用户两个选择——轻恢复（重新连接，不丢页面状态）与
             重恢复（重新加载应用页面）。绝不自动重载：与 mobile 的
             session-stall.ts 同纪律（观测者只呈现，动作由用户决定）。 */}
         {visibleStalls.length > 0 && !controlUnreachable && activeShellError === null && (

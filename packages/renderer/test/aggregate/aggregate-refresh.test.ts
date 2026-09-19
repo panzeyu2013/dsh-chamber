@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  AGGREGATE_UNVERIFIED_FACTS_MS,
   AggregateRefreshQueue,
   archiveSetShrink,
   commitAggregateFailure,
@@ -14,6 +15,7 @@ import {
   remoteRetiredSourceIds,
   retireSelectedSource,
   shouldRebaselineFallbackView,
+  shouldDropUnverifiedRunningFacts,
   shouldRequestSessionListRefresh,
   shouldRetainPushedAggregate,
   withoutRemovedSourceIds,
@@ -773,4 +775,36 @@ test('commitAggregatePull: the remembered set never leaks into the mounted merge
   const merged = commitAggregatePull(authoritative, fallbackSnapshot, true, ['remembered-x'])
   assert.deepEqual(merged.archivedSessionIds, authoritative.archivedSessionIds)
   assert.equal(merged.archiveSetKnown, true)
+})
+
+// ---- 保留视图的「无法验证」界限（2026-12 残留修复，design 05 §2.3）----
+
+test('shouldDropUnverifiedRunningFacts: 从未验证过就没有断言可丢（fail-open，不误伤首拉）', () => {
+  assert.equal(shouldDropUnverifiedRunningFacts({ factsAt: undefined, now: 1_000_000 }), false)
+})
+
+test('shouldDropUnverifiedRunningFacts: 界限内不丢（瞬时失败不得清掉运行环）', () => {
+  assert.equal(
+    shouldDropUnverifiedRunningFacts({ factsAt: 1_000_000, now: 1_000_000 + 89_999 }),
+    false,
+  )
+})
+
+test('shouldDropUnverifiedRunningFacts: 恰好到界即丢（边界含等号，与 90s 文档口径一致）', () => {
+  assert.equal(
+    shouldDropUnverifiedRunningFacts({ factsAt: 1_000_000, now: 1_000_000 + 90_000 }),
+    true,
+  )
+  assert.equal(AGGREGATE_UNVERIFIED_FACTS_MS, 90_000, '生产界限 = 90s（≈3 个 30s watchdog 周期）')
+})
+
+test('shouldDropUnverifiedRunningFacts: budgetMs 可注入（测试与未来调参用）', () => {
+  assert.equal(
+    shouldDropUnverifiedRunningFacts({ factsAt: 0, now: 5_000, budgetMs: 5_000 }),
+    true,
+  )
+  assert.equal(
+    shouldDropUnverifiedRunningFacts({ factsAt: 0, now: 4_999, budgetMs: 5_000 }),
+    false,
+  )
 })
