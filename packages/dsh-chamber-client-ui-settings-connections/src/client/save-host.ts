@@ -29,7 +29,7 @@ export function gatewayPasswordValidationError(password: string): 'length' | nul
 }
 /**
  * Plugin-side mirror of the desktop `transportTargetChanged`
- * (packages/desktop/transport-provider.ts, locked by transport-target.test.ts):
+ * (packages/desktop/transport-provider.ts, locked by transport-spec-binding.test.ts):
  * true when an EDIT changes the transport TARGET — kind or any
  * host/user/port field — while the id stays the same. Label-only edits are
  * not target changes; `insecureHttp` is deliberately excluded (design 17
