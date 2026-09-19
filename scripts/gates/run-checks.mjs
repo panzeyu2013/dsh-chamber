@@ -115,9 +115,7 @@ const STATIC_CHECKS = [
   // 结论——否则本地 static/full 可以在 C1/C3 失败（例如把 pure 文件挪进 patched）时全绿，
   // 与 AGENTS "本地 pass = CI 同证据" 的口径矛盾。CI 两处已直接调用同一命令。
   'node scripts/upstream/verify-upstream-touchpoints.mjs --no-artifact-rebuild',
-  'test:release-workflow',
-  'test:upgrade-tools',
-  'test:gui-acceptance',
+  'test:scripts',
 ]
 
 /** Named gate groups. Keep the names disjoint from script names to avoid confusion. */

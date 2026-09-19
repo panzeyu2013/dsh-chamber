@@ -18,6 +18,7 @@ import {
   findUnwiredSwiftTests,
   findUnwiredTests,
   parseSwiftTestTargets,
+  rootEntryPoints,
   swiftWiringProblems,
   TEST_FILE_PATTERN,
   UNWIRED_ALLOWLIST,
@@ -96,6 +97,26 @@ test('a repository-level test file needs a root reference, not a package referen
     evidence: evidenceOf({ root: 'node --test scripts/dev/other.test.mjs', packages: { alpha: 'gate.test.mjs' } }),
   })
   assert.deepEqual(verdict.unwired, ['scripts/dev/gate.test.mjs'])
+})
+
+test('root entry points are followed, deduped, and never a test file itself', () => {
+  // The scripts suites delegate their file list to one runner: without following
+  // it every scripts test reads as unwired. A `node --test <file>` form or a
+  // direct test path must not add evidence, or a test's own prose could name
+  // another test and hide a real gap.
+  assert.deepEqual(
+    rootEntryPoints({
+      'test:scripts': 'node scripts/gates/run-script-tests.mjs',
+      'test:scripts:release': 'node scripts/gates/run-script-tests.mjs --group release',
+      'test:direct': 'node --test scripts/upstream/one.test.mjs',
+      'test:bare': 'node scripts/upstream/two.test.mjs',
+      preinstall: 'node scripts/dev/ensure-harness-vendor.mjs',
+      weird: 42,
+    }),
+    ['scripts/gates/run-script-tests.mjs', 'scripts/dev/ensure-harness-vendor.mjs'],
+  )
+  assert.deepEqual(rootEntryPoints(undefined), [])
+  assert.deepEqual(rootEntryPoints({}), [])
 })
 
 test('an allowlisted file is accepted and reported separately', () => {

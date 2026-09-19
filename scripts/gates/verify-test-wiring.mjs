@@ -267,16 +267,68 @@ function helperText(directory) {
 }
 
 /**
+ * Extract the tool entry points a root manifest invokes via `node <scripts/…mjs>`.
+ *
+ * A declared entry point is wiring evidence: the scripts suites delegate their
+ * file list to `scripts/gates/run-script-tests.mjs`, whose whole purpose is to
+ * name every test. Test files themselves are never followed — their prose could
+ * name an unrelated test and turn a real gap green.
+ * @param {unknown} scripts - a package.json `scripts` map.
+ * @returns {string[]} unique repository-relative entry point paths, manifest order.
+ */
+export function rootEntryPoints(scripts) {
+  if (scripts === null || typeof scripts !== 'object') return []
+  const found = []
+  for (const command of Object.values(scripts)) {
+    if (typeof command !== 'string') continue
+    for (const match of command.matchAll(/\bnode\s+(scripts\/[^\s'"]+\.mjs)/gu)) {
+      if (match[1].endsWith('.test.mjs')) continue
+      if (!found.includes(match[1])) found.push(match[1])
+    }
+  }
+  return found
+}
+
+/**
+ * Read the root manifest's declared entry points as wiring text.
+ * @param {string} repoRoot - repository root.
+ * @returns {string} concatenated entry point text, empty when none is readable.
+ */
+function rootEntryPointText(repoRoot) {
+  const manifestPath = join(repoRoot, 'package.json')
+  if (!existsSync(manifestPath)) return ''
+  let scripts
+  try {
+    scripts = JSON.parse(readFileSync(manifestPath, 'utf8'))?.scripts
+  } catch {
+    /* an unreadable root manifest contributes no evidence */
+    return ''
+  }
+  const parts = []
+  for (const path of rootEntryPoints(scripts)) {
+    try {
+      parts.push(readFileSync(join(repoRoot, path), 'utf8'))
+    } catch {
+      /* an unreadable entry point contributes no evidence */
+    }
+  }
+  return parts.join('\n')
+}
+
+/**
  * Build the wiring-evidence map keyed by the package that owns each test file.
  * @param {string} repoRoot - repository root.
  * @param {string[]} testFiles - repository-relative test file paths.
  * @returns {{ root: string, byPackage: Map<string, string> }} wiring texts.
  */
 export function wiringEvidence(repoRoot, testFiles) {
-  // Root evidence is the root manifest only: every repository-level test file is
-  // wired from a root script, and reading `scripts/**` here would let an
-  // unrelated gate's prose count as wiring.
-  const root = manifestScripts(join(repoRoot, 'package.json'))
+  // Root evidence is the root manifest plus the tool entry points it declares:
+  // every repository-level test file is wired from a root script, and reading
+  // `scripts/**` wholesale would let an unrelated gate's prose count as wiring.
+  const root = [
+    manifestScripts(join(repoRoot, 'package.json')),
+    rootEntryPointText(repoRoot),
+  ].join('\n')
   const byPackage = new Map()
   const packages = new Set()
   for (const file of testFiles) {

@@ -1,7 +1,7 @@
 /**
  * Pure judgement layer of the GUI acceptance toolbox: every predicate and every
  * report renderer lives here, with no HTTP, DOM or CDP access — so the whole
- * judgement surface is unit-testable in CI (see gui-acceptance.test.mjs) while
+ * judgement surface is unit-testable in CI (see checks.test.mjs) while
  * only the driving layer stays local.
  */
 

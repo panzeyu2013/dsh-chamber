@@ -357,8 +357,12 @@ jobs:
       # release validation job silently omitted it).
       - name: Upstream design-token conformance (S1–S7)
         run: pnpm run verify:styles
-      - name: Release workflow safety policy
-        run: pnpm run test:release-workflow
+      # Every scripts/ suite through one entry (scripts/gates/run-script-tests.mjs;
+      # manifest + naming rules in scripts/README.md §分类规则 3) — the same
+      # command ci.yml runs, so a gate added to the push path cannot miss
+      # release validation.
+      - name: Script unit tests — single entry (gates / upstream / release / gui-acceptance)
+        run: pnpm run test:scripts
       # Action-pin resolution over the network (release-preflight --actions-only):
       # the file-only pin check above cannot see a pin that points at a
       # non-existent upstream commit. GITHUB_TOKEN here is the runner's own
@@ -370,18 +374,9 @@ jobs:
         run: node scripts/release/release-preflight.mjs --actions-only
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      # Upgrade tooling (pin preflight classification / lockfile vendor-record
-      # restore guard / upstream-gate CLI argument guard) — same gate as ci.yml.
-      - name: Dev tooling unit tests (CI change classifier included)
-        run: pnpm run test:upgrade-tools
-      # The GUI acceptance toolbox's pure judgement layer (the driving layer
-      # needs a display, so it stays a local gate — see
-      # docs/checklists/gui-acceptance-checklist.md).
-      - name: GUI acceptance toolbox unit tests
-        run: pnpm run test:gui-acceptance
       # Same single entries the push path runs (2026-12): the package test set and
       # the client typecheck set are named once in scripts/gates/run-checks.mjs, so
-      # `pnpm run test:release-workflow` proves validation and ci.yml cannot drift
+      # `pnpm run test:scripts:release` proves validation and ci.yml cannot drift
       # from each other by comparing these two commands.
       - name: Package unit tests (single entry)
         run: node scripts/gates/run-checks.mjs tests

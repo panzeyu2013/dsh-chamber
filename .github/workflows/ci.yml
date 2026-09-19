@@ -153,26 +153,21 @@ jobs:
         run: node scripts/release/release-preflight.mjs --actions-only
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Release workflow safety policy
-        run: pnpm run test:release-workflow
-      # Upgrade tooling (pin preflight classification + lockfile vendor-record
-      # restore guard + the upstream gate's CLI argument guard): advisory
-      # tooling, but its classification drives real pin-bump decisions, and the
-      # argument guard is what keeps a mistyped flag from silently triggering
-      # the gate's in-place artifact rebuild — so the pure helpers are pinned
-      # here.
-      - name: Dev tooling unit tests (pin preflight / lockfile restore guard / upstream gate CLI guard / CI change classifier)
-        run: pnpm run test:upgrade-tools
-      # The GUI acceptance toolbox's judgement layer only: the driving layer needs
-      # a display plus a running app, so it stays a local gate
-      # (docs/checklists/gui-acceptance-checklist.md). Every pass/fail predicate
-      # is pure and pinned here, exactly like the other scripts/ tools.
-      - name: GUI acceptance toolbox unit tests (pure judgement layer)
-        run: pnpm run test:gui-acceptance
+      # Every scripts/ suite through one entry (scripts/gates/run-script-tests.mjs;
+      # manifest + naming rules in scripts/README.md §分类规则 3): the gate suites
+      # (CI classifier, gate runners, doc/link/wiring gates, workflow scalars), the
+      # upstream pin/touchpoint tooling (pin preflight classification, lockfile
+      # vendor-record restore, the upstream gate's CLI guard — a mistyped flag must
+      # not silently trigger its in-place artifact rebuild), the release chain
+      # policy + packaging lockstep, and the GUI acceptance judgement layer (its
+      # driving layer needs a display, so it stays a local gate —
+      # docs/checklists/gui-acceptance-checklist.md).
+      - name: Script unit tests — single entry (gates / upstream / release / gui-acceptance)
+        run: pnpm run test:scripts
       # One entry for the package test set (2026-12): the same mode is what
       # `pnpm run check:tests` runs locally, so the push path and a developer's
       # terminal cannot drift. Adding or renaming a package suite means editing
-      # scripts/gates/run-checks.mjs once; `pnpm run test:release-workflow` keeps
+      # scripts/gates/run-checks.mjs once; `pnpm run test:scripts:release` keeps
       # release validation aligned with what this step runs.
       - name: Package unit tests — single entry (runtime / control-plane / desktop / gateway / renderer-shell / client+host plugins)
         if: steps.classify.outputs.code == 'true'

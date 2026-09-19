@@ -16,7 +16,7 @@
 | `launch.mjs` | `--dev`：一次性 dev 实例（隔离 user-data、固定控制面端口、CDP 端口） |
 | `cdp.mjs` | 零依赖 CDP 客户端（Node 内置 `WebSocket`/`fetch`） |
 | `checks.mjs` | **纯判据层**：全部 pass/fail 逻辑在此，无 IO，故可在 CI 单测 |
-| `gui-acceptance.test.mjs` | `checks.mjs` 的单测（`pnpm run test:gui-acceptance`，CI 跑） |
+| `checks.test.mjs` | `checks.mjs` 的单测（`pnpm run test:scripts:gui-acceptance`，CI 跑） |
 | `mobile-walkthrough.mjs` | 移动档 CDP 走查（独立 CLI）：设备尺寸/触控模拟 + 几何断言 + WS 帧采集（`--ws-frames off\|summary\|full`，落盘前脱敏）；`--require-run` 把「没目标/没会话」的 INFO 改判 FAIL |
 | `mobile-checks.mjs` | 移动档的**纯判据层**（含脱敏）：判据全部是纯函数，无 IO |
 | `mobile-checks.test.mjs` | `mobile-checks.mjs` 的单测（`pnpm run test:gui-acceptance` 一并跑） |
