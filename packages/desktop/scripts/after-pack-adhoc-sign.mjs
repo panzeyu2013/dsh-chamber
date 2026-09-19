@@ -93,6 +93,21 @@ export const PACKAGED_RUNTIME_MODULES = Object.freeze([
 ]);
 
 /**
+ * 上游 client-plugin 闭包抽样（S4 P1，2026-12 Windows 复核）。sidebarRight 行的
+ * 唯一 provider 是 `@deepseek-ai/dsh-client-ui-sidebar-right`，chat / resources
+ * 是该行首屏的注入面；`extraResources` 的 `node_modules/**` 是无界 glob，
+ * 部分安装（长路径 / Defender 中断 / pnpm 提前退出）丢包时旧断言全绿、前端
+ * 静默降级成永久 pending——这里按包 manifest 抽样 fail-closed。启动期对安装树
+ * 的同款抽样见 runtime-tree-check.ts（RUNTIME_CLIENT_CLOSURE_SAMPLE；两表由
+ * packages/desktop/test/local-state/runtime-tree-check.test.ts 锁步）。
+ */
+export const PACKAGED_CLIENT_CLOSURE_SAMPLE = Object.freeze([
+  '@deepseek-ai/dsh-client-ui-sidebar-right',
+  '@deepseek-ai/dsh-client-resources',
+  '@deepseek-ai/dsh-client-ui-chat',
+]);
+
+/**
  * Runtime-version support must be present on the real filesystem: pnpm is an
  * extraResource and the modules are deliberately asar-unpacked so afterPack
  * can assert the exact bytes that Electron will load.
@@ -347,7 +362,21 @@ export function verifyPackagedDshRuntime(resourcesDir, electronPlatformName) {
   if (typeof runtimeManifest.dsh?.platform !== 'string' || !runtimeManifest.dsh.platform.startsWith(`${expectedPlatform}-`)) {
     throw new Error(`wrong packaged dsh platform: expected ${expectedPlatform}-*, got ${JSON.stringify(runtimeManifest.dsh?.platform)}`);
   }
-  console.log(`[after-pack-adhoc-sign] packaged dsh verified: ${recordedVersion} (${runtimeManifest.dsh.platform})`);
+  // 上游 client-plugin 闭包抽样：缺一个包时 pnpm 安装/打包全绿，前端却只在
+  // 运行期静默少一行（sidebarRight 的唯一 provider 就在抽样里）。
+  const missingPlugins = PACKAGED_CLIENT_CLOSURE_SAMPLE.filter((name) =>
+    !existsSync(path.join(runtimeDir, 'node_modules', name, 'package.json')));
+  if (missingPlugins.length > 0) {
+    throw new Error(
+      `incomplete packaged dsh runtime: missing upstream client plugins ${missingPlugins.join(', ')} `
+      + '(extraResources node_modules/** is an unbounded glob — a partial install ships silently and the '
+      + 'sidebarRight/chat/resources rows never load; re-run bundle:dsh with the pinned pnpm)',
+    );
+  }
+  console.log(
+    `[after-pack-adhoc-sign] packaged dsh verified: ${recordedVersion} (${runtimeManifest.dsh.platform}, `
+    + `${PACKAGED_CLIENT_CLOSURE_SAMPLE.length} upstream client plugins)`,
+  );
 }
 
 /** @param {import('app-builder-lib').AfterPackContext} context */

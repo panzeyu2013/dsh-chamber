@@ -71,6 +71,9 @@ export const GROUPS = {
     'test/plugins/plugin-tarball.test.ts',
     'test/plugins/ssh-apply-rows.test.ts',
     'test/plugins/ssh-plugin-journal.test.ts',
+    // pnpm 启动器解析（design 21 §6.3 / design 23 D2，win32 .cmd 拒绝）——
+    // 其他流的模块，清单归属本流维护（S4 跨流接线）。
+    'test/plugins/pnpm-launcher.test.ts',
   ],
   // runtime: managed dsh runtime controller, renderer<->main action lockstep, and the main.ts decision gates
   runtime: [
@@ -109,17 +112,21 @@ export const GROUPS = {
     // swift-side headless update controller (design 25 §7)
     'update-headless.test.ts',
   ],
-  // local-state: durable local files — settings, audit log and owner-private ACLs
+  // local-state: durable local files — settings, audit log, owner-private ACLs and
+  // the installed-runtime closure sample (S4)
   'local-state': [
     'test/local-state/audit-log.test.ts',
     'test/local-state/chamber-settings.test.ts',
     'test/local-state/win-acl.test.ts',
+    // 安装树上游 client-plugin 闭包抽样（S4 P1）：纯函数 + 临时目录 fixture
+    'test/local-state/runtime-tree-check.test.ts',
     // swift-side main.ts directory-lock wiring source assertions (三审 #13)
     'chamber-lock-wiring.test.ts',
   ],
   // scripts: package build/packaging helper tests (stay in scripts/ by design)
   scripts: [
     'scripts/bundle-swap.test.mjs',
+    'scripts/bundle-pnpm-launcher.test.mjs',
     'scripts/after-pack-adhoc-sign.test.mjs',
     'scripts/before-pack.test.mjs',
     'scripts/build-host-graph-package.test.mjs',

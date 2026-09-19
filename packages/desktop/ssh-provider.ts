@@ -1396,7 +1396,7 @@ function runExec(
       resolve(result)
     }
     let child: SpawnedProcess
-    const spawnOptions: SpawnOptions = { stdio: ['ignore', 'pipe', 'pipe'] }
+    const spawnOptions: SpawnOptions = { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }
     // Password auth (design 05 §8): the exec spawn gets the same askpass env
     // as the tunnel — a password-only host must answer `systemctl` over ssh
     // just like the tunnel connects. Null = key/agent auth, no env merge.
@@ -1649,7 +1649,7 @@ function spawnRemote(
       resolve(result)
     }
     let child: SpawnedProcess
-    const spawnOptions: SpawnOptions = { stdio: [opts.stdin !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'] }
+    const spawnOptions: SpawnOptions = { stdio: [opts.stdin !== undefined ? 'pipe' : 'ignore', 'pipe', 'pipe'], windowsHide: true }
     const authLease = acquireSshAuthLease(spec)
     if (authLease !== null) spawnOptions.env = { ...process.env, ...authLease.env }
     try {

@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { commitBundleSwap, recoverBundleSwap } from './bundle-swap.mjs';
+import { bundlePnpmLaunch } from './bundle-pnpm-launcher.mjs';
 import { renderAllowBuildsBlock, pruneRuntimeArtifacts } from '@dsh-chamber/dsh-runtime';
 
 /**
@@ -133,8 +134,13 @@ writeFileSync(
  * npx 兜底（自动下载到 npx 缓存，不写入项目依赖）。
  */
 function resolvePnpmCommand() {
-  const probe = spawnSync(process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', ['--version'], {
+  // 与下方 run() 同一平台感知启动形状：Windows 上 pnpm 是 pnpm.cmd，只有经
+  // shell 才能从 PATH 解析（Node 拒绝直启 .cmd，2026-12 复核 P2）；直启会让
+  // PATH 上的精确版本被误判为"未检测到"，每次都走 npx 兜底。
+  const launcher = bundlePnpmLaunch();
+  const probe = spawnSync(launcher.command, ['--version'], {
     stdio: 'pipe',
+    shell: launcher.shell,
   });
   if (probe.error) {
     console.log(`[bundle-dsh] 未检测到 pnpm，改用 npx --yes pnpm@${BUNDLE_PNPM_VERSION} 兜底（首次自动下载）。`);
@@ -152,7 +158,7 @@ function run(args, what) {
   const result = spawnSync(args[0], args.slice(1), {
     cwd: work,
     stdio: 'inherit',
-    shell: process.platform === 'win32',
+    shell: bundlePnpmLaunch().shell,
   });
   if (result.error) {
     console.error(`[bundle-dsh] 无法执行 ${args[0]}：${result.error.message}`);

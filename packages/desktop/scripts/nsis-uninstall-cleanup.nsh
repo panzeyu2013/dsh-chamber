@@ -1,7 +1,8 @@
 ; design 21 M4 / C19: remove the per-user login-autostart Run value during
 ; uninstall. Electron's setLoginItemSettings on Windows writes the Run key
-; under the app's resolved name; delete both the product name and the
-; workspace-scoped fallback (absent values are a silent no-op).
+; under the app's resolved name; delete the product name, the workspace-scoped
+; fallback and the AppUserModelId default older builds wrote when no explicit
+; name was passed (absent values are a silent no-op).
 ;
 ; electron-builder NSIS build.nsis.include — the macro bodies below are
 ; invoked only when the packaged installer defines them; an unknown name here
@@ -11,4 +12,5 @@
 !macro customUnInstall
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "dsh-chamber"
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "@dsh-chamber/desktop"
+  DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "com.dshchamber.desktop"
 !macroend

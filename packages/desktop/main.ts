@@ -60,6 +60,7 @@ import type { TransportInstanceSpec } from './transport-provider.ts';
 import { sshProvider, probeChamberHostLive } from './ssh-provider.ts';
 import { cleanupStaleAskpassHelpers, configureSshPasswordStore } from './ssh-provider.ts';
 import { applyWindowsAclTightening } from './win-acl.ts';
+import { verifyRuntimeClientClosure } from './runtime-tree-check.ts';
 import { configureGatewaySecretStore, configureGatewaySessionProvider, gatewayProvider, getGatewayPassword, getGatewayToken, syncGatewayChamberPlugins } from './gateway-provider.ts';
 import type { LocalChamberHostPackage } from './gateway-provider.ts';
 import { setGatewaySyncRegistration } from './gateway-sync-registry.ts';
@@ -638,6 +639,13 @@ function setKeepAwakeActive(enabled: boolean): void {
   }
 }
 
+/** Windows 打包态身份（design 21 M3）：通知 AUMID、登录自启 Run 值名与卸载器
+ *  三处必须同一个字面量。Electron 43.4.0 的 setLoginItemSettings 在省略 `name`
+ *  时写 AppUserModelId()，而 getLoginItemSettings() 也只按该 AUMID 回读
+ *  （browser_win.cc），所以显式钉住它既不改写读回语义、又让卸载器有确定的键名
+ *  （scripts/nsis-uninstall-cleanup.nsh）。 */
+const WINDOWS_APP_USER_MODEL_ID = 'com.dshchamber.desktop';
+
 /**
  * 登录自启（design 14 D6）：macOS setLoginItemSettings；Linux XDG autostart
  * （手写最小 .desktop）；Windows setLoginItemSettings（HKCU Run 键,design 21
@@ -649,8 +657,15 @@ function applyLaunchAtLogin(enabled: boolean): { ok: true } | { ok: false; error
     if (process.platform === 'darwin' || process.platform === 'win32') {
       // Windows 上 Electron 写入 HKCU\...\Run（当前用户,无需管理员）;路径为
       // process.execPath(打包态=dsh-chamber.exe)。开发态同样可用,但仅打包
-      // 形态属于产品承诺(design 14 D6 / 21 M4)。
-      app.setLoginItemSettings({ openAtLogin: enabled });
+      // 形态属于产品承诺(design 14 D6 / 21 M4)。Windows 显式钉 `name` = AUMID：
+      // 与省略 name 时 Electron 的默认键名逐字相同（回读不受影响），但键名从此
+      // 由本仓单一常量决定，卸载器按同一名字清理（design 21 M4 / C19）。
+      // macOS 保持 openAtLogin-only 调用不变（`name` 是 Windows 专属选项）。
+      if (process.platform === 'win32') {
+        app.setLoginItemSettings({ openAtLogin: enabled, name: WINDOWS_APP_USER_MODEL_ID });
+      } else {
+        app.setLoginItemSettings({ openAtLogin: enabled });
+      }
       // P-20（2026-12 审计）：写完必须回读——OS 可能静默拒绝，macOS 还可能
       // 把条目停在 requires-approval（系统设置里等用户批准，此时根本不会
       // 自启）。Swift 腿的 SMAppService status 预检 + apply-failed 是这里的
@@ -1253,7 +1268,7 @@ if (!gotTheLock) {
     // so packaged builds bind Action Center reliably. Dev/portable builds
     // stay best-effort (Electron toasts without a shortcut may be suppressed
     // by Action Center — documented in design 21 F5). POSIX unaffected.
-    if (process.platform === 'win32') app.setAppUserModelId('com.dshchamber.desktop');
+    if (process.platform === 'win32') app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
     // 冷启动深链 argv（design 16 §4.2）：macOS argv 含 -psn_ 噪声，防御式扫描
     // （非深链 argv 零副作用、绝不 throw 打断启动）；与 open-url 双触发由去重兜底。
     for (const url of scanDeepLinkUrls(process.argv)) enqueueDeepLink(url);
@@ -1618,6 +1633,22 @@ if (!gotTheLock) {
         { path: auditLogFilePath(runtimeBaseDir), kind: 'file' },
       ]);
       for (const aclError of aclErrors) console.error(`[dsh-chamber] windows ACL tightening failed: ${aclError}`);
+    }
+    // 安装树上游 client-plugin 闭包抽样（S4 P1，2026-12 Windows 复核；全平台）：
+    // afterPack 只证构建树，NSIS 长路径 / Defender 中断 / 部分安装丢掉一个上游
+    // 包时，前端只静默少一行（sidebarRight 的唯一 provider 就在抽样里）。这里对
+    // 已安装运行树做同一抽样，缺件大声报出且绝不阻断启动（与上面 ACL 收紧同一
+    // 纪律）。dev 形态的 ref-dsh / vendor/dsh 是源码树与锁文件锚、不是"装出来的
+    // 树"，所以只在打包态断言；未解析到内建树时 resolveBuiltinDshWorkspace 已有
+    // 自己的 loud 警告。
+    if (app.isPackaged) {
+      const runtimeClosure = verifyRuntimeClientClosure(builtinDshWorkspace);
+      if (!runtimeClosure.ok) {
+        console.error(
+          `[dsh-chamber] 已安装 dsh 运行树缺少上游 client-plugin：missing ${runtimeClosure.missing.join(', ')} — `
+          + '请重装应用或删除 resources/vendor/dsh 后重跑 bundle:dsh；否则 sidebarRight/chat/resources 行会静默不可用',
+        );
+      }
     }
     // Gateway password-session manager (design 17 §7.1/§9.3): the login
     // exchange (POST /auth/login → 3xx + dsh_gateway_session cookie) and the
