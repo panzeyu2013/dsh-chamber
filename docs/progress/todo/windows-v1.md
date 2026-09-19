@@ -16,6 +16,7 @@
   实证）；design 02 §5.1 落地契约改写；mac/linux 全量回归。
 - **M2a**：Windows runner 上事务矩阵（安装→切换→探针失败→回滚→恢复，env 门控开启态）
   + `win32-readonly-rm` 决策门结果（Node rm 对只读树行为）+ icacls 实机输出核对。
+  （2026-12：私有状态读写的 win32 身份回退已落地，事务首步不再因缺 `O_NOFOLLOW` 抛错；矩阵本身仍需 runner。）
 - **M2b（纪律门禁：M2a 全绿前不做）**：`DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS` 门控
   翻转（main.ts/dsh-runtime-controller/apply-now-gate/UI/i18n/版本 chip）；win32 测试
   diff 对照基线全归因；Windows 11 实机故障注入全链 + 只读投影文案移除。

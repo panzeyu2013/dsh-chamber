@@ -126,7 +126,7 @@ pnpm run build:host-packages # build both host-graph and host-git-worktree packa
 pnpm run build:renderer      # build the dsh-frontend bundle (vite over the dsh workspace source)
 pnpm run build:desktop       # host packages → renderer → control-plane/copy → preload → bundle:dsh
 pnpm run dist:desktop:mac    # package the macOS app (dmg + zip)
-pnpm run dist:desktop:win    # package the Windows app (nsis + zip; must run on Windows — dsh runtime bundling is platform-specific)
+pnpm run dist:desktop:win    # package the Windows app (nsis only; must run on Windows — dsh runtime bundling is platform-specific)
 ```
 
 Artifacts land in `packages/desktop/release/` (electron-builder `directories.output`). A formal macOS release requires all five Apple/Developer ID credentials: a missing value fails closed before any GitHub Release mutation, and the built app must then pass Developer ID signing, notarization, stapler, and spctl checks before its draft can be finalized publicly. Even when formal secrets exist, `workflow_dispatch dry_run` unconditionally clears all signing/notarization variables and `GH_TOKEN`, uses `--publish=never`, performs no Release creation/update or asset upload, and produces an ad-hoc-signed validation package through the afterPack hook. The first Windows release remains unsigned (the SmartScreen warning is the explicit Design 11 §7 tradeoff).
@@ -236,7 +236,7 @@ vendor/
 | `pnpm run test:git` | Run the Git worktree client-plugin tests |
 | `pnpm run test:host-git` | Run the Git host core lifecycle and safety-guard tests |
 | `pnpm run dist:desktop:mac` | Package the macOS app (dmg + zip) |
-| `pnpm run dist:desktop:win` | Package the Windows app (nsis + zip; must run on Windows) |
+| `pnpm run dist:desktop:win` | Package the Windows app (nsis only; must run on Windows) |
 | `pnpm run cli -- <args>` | In-repo CLI thin shell (serve/status/connections/host logs) |
 | `pnpm run verify:i18n` | Fail when an EN ↔ ZH pair drifts (re-record with `-- --write`) |
 | `pnpm run verify:styles` | Upstream design-token conformance (S1 undeclared `--dsw-*` reference / S2 namespace overreach / S3 0.5px hairline / S4 literal fallback / S5 border-beside-shadow pairing / S6 dead declaration / S7 full-round radius pairing) across every chamber package and every CSS-carrying file kind |

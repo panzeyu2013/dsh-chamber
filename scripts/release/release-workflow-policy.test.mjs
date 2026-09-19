@@ -963,6 +963,40 @@ assert.equal(
   'failed',
   'deleting the mac packaging rehearsal step must fail the release proof',
 )
+// 2026-12 P2: the WINDOWS packaging rehearsal is the win32 mirror of the mac
+// one — the NSIS pack used to be first executed inside release.yml (with the
+// release credentials loaded) and the proof did not require its ci.yml
+// rehearsal, so deleting or classifier-skipping that step left a release able
+// to ship a win32 pack no push-path gate had ever produced. Pin the same shape
+// as the mac rehearsal: push-only, classifier-gated, --publish=never, nothing
+// uploaded — and require it by name in the proof.
+const WIN_REHEARSAL_STEP = 'Windows packaging rehearsal (no publish, no credentials)'
+assert.ok(
+  REQUIRED_JOB_STEPS['test-windows'].includes(WIN_REHEARSAL_STEP),
+  'G25/P2: the proof must require the Windows packaging rehearsal step',
+)
+const winRehearsal = jobBlock(ciWorkflow, 'test-windows').slice(
+  jobBlock(ciWorkflow, 'test-windows').indexOf(`- name: ${WIN_REHEARSAL_STEP}`),
+)
+assert.notEqual(winRehearsal, '', 'ci.yml test-windows must define the Windows packaging rehearsal step')
+assert.match(winRehearsal,
+  /if: github\.event_name == 'push' && github\.ref == 'refs\/heads\/main' && steps\.classify\.outputs\.code == 'true'/,
+  'the win rehearsal is push-only and classifier-gated: never minutes of NSIS work per pull request')
+assert.ok(
+  winRehearsal.includes('pnpm --filter @dsh-chamber/desktop exec electron-builder --win --x64 --publish=never'),
+  'the win rehearsal must run the release packaging invocation with --publish=never',
+)
+assert.doesNotMatch(winRehearsal, /--publish=always|gh release upload/,
+  'the win rehearsal must not publish or upload anything')
+assert.equal(
+  judgeRun(GREEN_RUN, [
+    job('test', 'success'),
+    jobWithoutStep('test-windows', WIN_REHEARSAL_STEP),
+    job('test-macos', 'success'),
+  ]).state,
+  'failed',
+  'deleting the windows packaging rehearsal step must fail the release proof',
+)
 assert.equal(
   judgeRun(GREEN_RUN, [
     { name: 'test', conclusion: 'success' },
