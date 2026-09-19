@@ -2,48 +2,44 @@
 
 ## Purpose
 
-dsh-chamber is the local desktop **connection manager** for dsh. It hosts one local dsh instance
-(web profile) and attaches remote dsh instances over SSH tunnels, inside a single Electron window
-that runs the dsh official frontend — source-reused, self-built, one N-ctx shell per instance. The
-control plane owns connection management, per-instance same-origin reverse proxying and static
-frontend serving (v1: anonymous, loopback-only). Host-native capabilities (goals, jobs, terminals,
-settings, plugin inventory, …) stay the dsh host's and its frontend's job: the control plane
-attaches and serves, and never re-implements an execution surface. **Session business belongs
-entirely to the dsh frontend runtime — the desktop control plane consumes no host frames.**
+dsh-chamber is the local desktop **connection manager** for dsh: it hosts one local dsh instance
+(web profile) and attaches remote dsh instances over SSH tunnels inside a single Electron window that
+runs the dsh official frontend — source-reused, self-built, one N-ctx shell per instance. The control
+plane owns connection management, per-instance same-origin reverse proxying and static frontend
+serving (v1: anonymous, loopback-only). Host-native capabilities (goals, jobs, terminals, settings,
+plugin inventory, …) stay the dsh host's and its frontend's job: the control plane attaches and
+serves, and never re-implements an execution surface. **Session business belongs entirely to the dsh
+frontend runtime — the desktop control plane consumes no host frames.**
 
 `packages/gateway` is a second, explicitly invoked **server deployment shape** (design 17): the same
 local-host manager behind an authenticated-by-default public request boundary. It is never
-auto-started or imported by the desktop control plane, and it never becomes authoritative for dsh
-facts.
+auto-started or imported by the desktop control plane, and never becomes authoritative for dsh facts.
 
 This file is an action guide, not a record: it carries the purpose, the recording rules for
-`docs/progress/STATUS.md`, and the flows that have a fixed procedure. Design lives in `docs/design/`
+`docs/progress/STATUS.md`, and the flows with a fixed procedure. Design lives in `docs/design/`
 (entry point `01-overview.md`), unimplemented ideas in `docs/progress/todo/`. The Electron↔Swift
-dual-flavor deviation register is `docs/progress/deviations.md` (S/T/P/G/D rows plus the reachability
+deviation register is `docs/progress/deviations.md` (S/T/P/G/D rows plus the reachability
 discipline); STATUS keeps a one-line pointer to it instead of duplicating dual-flavor rows.
 
 ## STATUS.md — what to record
 
 `docs/progress/STATUS.md` is the repository's only progress record, and it holds **open** work only:
 
-- 未完成 / 部分完成 items, including real-machine / on-device acceptance gates still outstanding;
+- 未完成 / 部分完成 items, including outstanding real-machine / on-device acceptance gates;
 - 设计未决 — open design questions;
 - 必要取舍 that still hold today: scope decisions (不做 / 推迟 / 移出) and known deviations or
   degradations, each with the evidence that keeps it checkable (path, command, design reference).
 
-Change scope:
+Change scope: **Add** an entry when open work appears or a deviation is registered; **Remove** it once
+the work lands or the deviation stops being true — the implemented baseline then lives in git history,
+`CHANGELOG.md` and `docs/design/`, never as a "completed" record here; **Update** it when module
+ownership, contracts or invariants change. Nothing else obliges an edit.
 
-- **Add** an entry when open work appears or a deviation is registered.
-- **Remove** the entry once the work lands or the deviation stops being true. The implemented
-  baseline then lives in git history, `CHANGELOG.md` and `docs/design/` — never as a "completed"
-  record in STATUS.md.
-- **Update** it when module ownership, contracts or invariants change. Nothing else obliges an edit.
-
-Do not record blindly. STATUS.md is not a log, a changelog draft or a verification report: no
-`✅ 已完成 / 已落地 / 已合入` narrative, no batch or round ledgers, no test counts or green-gate
-lists, no commit hashes, no retelling of how something was implemented, and no temporary "baseline
-alignment" blocks — those belong in the CHANGELOG release section. Record only what still carries
-decision value and is not already owned by a design document or `CHANGELOG.md`.
+STATUS.md is not a log, a changelog draft or a verification report: no `✅ 已完成 / 已落地 / 已合入`
+narrative, no batch or round ledgers, no test counts or green-gate lists, no commit hashes, no
+retelling of how something was implemented, no temporary "baseline alignment" blocks — those belong to
+the CHANGELOG release section. Record only what still carries decision value and is not already owned
+by a design document or `CHANGELOG.md`.
 
 ## Execution Flows
 
@@ -52,12 +48,11 @@ decision value and is not already owned by a design document or `CHANGELOG.md`.
 - Read and execute `docs/checklists/release-checklist.md` — any ❌ blocks the release (version
   assertions, release preflight, changelog/i18n, the full test suite on the exact release commit,
   build, tag, and a CI dry-run first).
-- **Release-blocking markers**: `FIXME` marks an issue that should block a release — a release does
-  not ship with an open `FIXME` unless the reviewers explicitly agree the change can merge anyway;
-  `TODO` means fix soon; `XXX` means someday, no commitment. Pick the tag that matches the urgency so
-  anyone scanning the code can tell a release blocker from a someday-maybe. `release-preflight`
-  reports open `FIXME` markers and requires the explicit `--allow-fixme` opt-out, so shipping one is
-  a recorded decision rather than an oversight.
+- **Release-blocking markers**: `FIXME` should block a release — it does not ship with an open
+  `FIXME` unless the reviewers explicitly agree the change can merge anyway; `TODO` means fix soon;
+  `XXX` means someday, no commitment. Pick the tag matching the urgency so anyone scanning the code
+  can tell a release blocker from a someday-maybe. `release-preflight` reports open `FIXME` markers
+  and requires the explicit `--allow-fixme` opt-out, so shipping one is a recorded decision.
 - Changes to packaged modules, build scripts, `build.files` or `extraResources` additionally require
   `docs/checklists/packaging-closure-checklist.md`.
 - The release workflow is policy-tested: `pnpm run test:release-workflow`.
@@ -65,14 +60,13 @@ decision value and is not already owned by a design document or `CHANGELOG.md`.
   at RELEASE time only — never add `[Unreleased]` entries while implementing.
 - `CHANGELOG.md` records **only the difference between adjacent formal releases** (`X.Y.Z` against the
   previous `X.Y.Z`): what someone running the previous formal release sees changed. A formal release
-  whose name was preceded by a beta series is therefore **never** the delta from the last beta
+  preceded by a beta series is therefore **never** the delta from the last beta
   (`X.Y.Z` against `X.Y.Z-beta.N`): it aggregates that whole series into one release-level delta,
-  expressed once, with the beta-to-beta steps left out. A beta section obeys the same rule (it too is
-  written against the previous formal release), so a reader of the previous formal release can use
-  either section; a section still has to exist for a beta because `release.yml` extracts it as the
-  release body. The internal path taken to get there — intermediate dsh pins, beta-to-beta deltas,
-  batch/round codenames, gate counts, lockfile-regeneration notes, verification reports — never goes in:
-  it belongs to git history and, while still open, `docs/progress/STATUS.md`.
+  expressed once, with the beta-to-beta steps left out. A beta section obeys the same rule (it is
+  written against the previous formal release) and must still exist because `release.yml` extracts it
+  as the release body. The internal path — intermediate dsh pins, beta-to-beta deltas, batch/round
+  codenames, gate counts, lockfile-regeneration notes, verification reports — never goes in: it belongs
+  to git history and, while still open, `docs/progress/STATUS.md`.
 
 ### Before a dsh (upstream) upgrade
 
@@ -88,21 +82,21 @@ decision value and is not already owned by a design document or `CHANGELOG.md`.
   freshness gate). `verify:registry` (schema/canonical/references/coverage net/generated views) and
   `verify:anchors` (symbol anchors + the legacy `file:line` budget, which may only go down) are
   ordinary gates in `check:static` and on both CI paths; the pin-upgrade entry point lists them.
-- `docs/checklists/*` are **procedure only**: no version values — no pinned tags, commits, current
-  baseline snapshots or per-tag delta logs — belong in them. The current anchor's single sources are
-  `harness.commit` (source line), `packages/desktop/vendor/dsh/pnpm-lock.yaml` (runtime line) and each
-  fork's `package.json`; a tag's upgrade narrative goes to the `CHANGELOG.md` release section, and
-  still-open deviations to `docs/progress/STATUS.md`. `upstream-touchpoints.md` keeps only the
-  structural registry (file classifications, contract mirrors, artifacts, gate criteria).
+- `docs/checklists/*` are **procedure only**: no version values — no pinned tags, commits, baseline
+  snapshots or per-tag delta logs. The current anchor's single sources are `harness.commit` (source
+  line), `packages/desktop/vendor/dsh/pnpm-lock.yaml` (runtime line) and each fork's `package.json`;
+  a tag's upgrade narrative goes to the `CHANGELOG.md` release section, and still-open deviations to
+  `docs/progress/STATUS.md`. `upstream-touchpoints.md` keeps only the structural registry (file
+  classifications, contract mirrors, artifacts, gate criteria).
 
 ### Before changing the Swift native shell (`macos/`)
 
 - Assemble the sidecar payload and the app with `pnpm run build:sidecar` then
-  `pnpm run build:swift-app` (`build:sidecar` takes `--out`/`--dry-run` plus its
-  `--skip-*` switches — it has no `--no-sign`; `build:swift-app` takes
-  `--dry-run`/`--no-sign`/`--out`); the native artifacts
-  ship from the same tag as the Electron ones, so a signed build must pass the assembly's own
-  `codesign --verify --deep --strict` and the bundle must stay free of symlinks that escape it.
+  `pnpm run build:swift-app` (`build:sidecar` takes `--out`/`--dry-run` plus its `--skip-*`
+  switches — it has no `--no-sign`; `build:swift-app` takes `--dry-run`/`--no-sign`/`--out`).
+  Native artifacts ship from the same tag as the Electron ones, so a signed build must pass the
+  assembly's own `codesign --verify --deep --strict` and the bundle must stay free of symlinks that
+  escape it.
 - `pnpm run test:macos` is the macOS-only leg (darwin lock assertions plus the packaging-script
   suites); it runs in the ci.yml `test-macos` job, never on the ubuntu leg.
 
@@ -150,31 +144,30 @@ surfaces, applicable guidance, validation, or failure/rollback considerations fr
 ## Hard Facts
 
 - `vendor/harness-packages` is a read-only symlink tree into the pinned submodule
-  `vendor/harness-checkout`; upgrade the pin only via `scripts/upstream/update-vendor.mjs <tag>`, never by
-  editing `harness.commit` or the gitlink. Of the dsh sources, only the chamber packages are ours to
-  change (see Runtime Boundaries).
+  `vendor/harness-checkout`; upgrade the pin only via `scripts/upstream/update-vendor.mjs <tag>`,
+  never by editing `harness.commit` or the gitlink. Of the dsh sources, only the chamber packages are
+  ours to change (see Runtime Boundaries).
 - Do not run git or GitHub commands unless the user explicitly asks.
 - This repository installs **no git hooks**, and adding one is a decision to raise rather than a
   convenience to add: `core.hooksPath` is not carried by a clone, so every clone and machine would
-  have to configure it again. The cheap checks live as ordinary gates instead — `pnpm run
-  check:static` runs that set (registration: `docs/progress/STATUS.md`, 范围决策).
-- Credentials and connection secrets never enter the renderer, logs or any persistence layer — only
-  the documented transient write-only form inputs (design 05 §8, design 17).
+  have to configure it again. The cheap checks live as ordinary gates instead — `pnpm run check:static`
+  runs that set (registration: `docs/progress/STATUS.md`, 范围决策).
+- Credentials and connection secrets never enter the renderer, logs or any persistence layer — only the
+  documented transient write-only form inputs (design 05 §8, design 17).
 - Both flavors resolve one userData root; on Darwin they share one directory lock
   (`<userData>/.dsh-chamber.lock`: Swift `flock(LOCK_EX|LOCK_NB)`, Electron Darwin
-  `O_EXLOCK|O_NONBLOCK`; non-Darwin Electron returns `unsupported` and passes, and the
-  Swift flavor is macOS-only). The root derivation is pinned by the `chamber-lock.test.ts`
-  lockstep assertion; the lock file carries no secrets and is **never the arbitration
-  authority** — the exclusive lock itself is, and the recorded pid/start time are diagnostics
-  only (design 25 §6.3).
-- Package manager is pnpm, and runtime dependencies are not added without an explicit request
-  (current set: `ws`, `electron-updater`, React/Vite, Electron, the embedded pinned `pnpm`, the dsh
-  client workspace packages; `Sparkle` 2.10.0 is the Swift native shell's only SwiftPM dependency
-  — the in-app update chain, added on the user's explicit 2026-12 ruling "D-1 = B");
-  `typescript` / `@types/*` / `node-pty` are devDependencies — `node-pty`
-  is the root resolution target for `@deepseek-ai/dsh-subprocess-local`'s workspace postinstall
-  (`pnpm-workspace.yaml` allowBuilds note + `scripts/dev/ensure-harness-vendor.mjs` shim), not a
-  runtime dependency of the chamber tree; it heads the runtime tree's `ALLOW_BUILDS`).
+  `O_EXLOCK|O_NONBLOCK`; non-Darwin Electron returns `unsupported` and passes, and the Swift flavor
+  is macOS-only). The root derivation is pinned by the `chamber-lock.test.ts` lockstep assertion; the
+  lock file carries no secrets and is **never the arbitration authority** — the exclusive lock itself
+  is, and the recorded pid/start time are diagnostics only (design 25 §6.3).
+- Package manager is pnpm, and runtime dependencies are not added without an explicit request (current
+  set: `ws`, `electron-updater`, React/Vite, Electron, the embedded pinned `pnpm`, the dsh client
+  workspace packages; `Sparkle` 2.10.0 is the Swift native shell's only SwiftPM dependency — the
+  in-app update chain, added on the user's explicit 2026-12 ruling "D-1 = B"). `typescript` /
+  `@types/*` / `node-pty` are devDependencies — `node-pty` is the root resolution target for
+  `@deepseek-ai/dsh-subprocess-local`'s workspace postinstall (`pnpm-workspace.yaml` allowBuilds note
+  + `scripts/dev/ensure-harness-vendor.mjs` shim), not a runtime dependency of the chamber tree; it
+  heads the runtime tree's `ALLOW_BUILDS`.
 - Removed domains and the bounded exceptions (designs 08, 17, 19, 20, 24 — narrowest boundaries in
   design 24 §2, and for the open-in host domain in design 20 §6.3) are stated in
   `docs/design/01-overview.md` §4 and §5.
