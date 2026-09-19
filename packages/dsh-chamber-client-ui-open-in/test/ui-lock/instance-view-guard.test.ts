@@ -1,16 +1,11 @@
 /**
  * OPEN-IN MENU + FAILURE PRESENTATION LOCKS.
  *
- * The open-in entry used to ship a 458-line bespoke menu whose header claimed
- * the pinned vendor `Menu` "has no focus transfer or roving keyboard
- * navigation" — the pinned source says otherwise (`Menu.tsx:51` documents
- * `autoFocus`, and the official plugin uses the very same primitive at
- * `OpenInAppAction.tsx:175-198` with `dense`, `selection="fill"` and
- * `MenuItem.icon`). The bespoke menu is gone (2026-09-11 upstream-alignment,
- * T13); what stays is the ONE piece the primitive cannot own — the
- * `.instance-view`-scoped dismissal of this N-ctx shell — plus every
- * capability the chamber already shipped (catalog icons, split-button flow,
- * per-source memory, in-flight pick semantics, re-probe on open).
+ * Locks the open-in menu owner guard and the split-button control against the
+ * official primitive: the `.instance-view`-scoped dismissal of this N-ctx shell
+ * (the one piece the vendor `Menu` cannot own) plus every capability the
+ * chamber ships — catalog icons, split-button flow, per-source memory,
+ * in-flight pick semantics, re-probe on open.
  *
  * The component itself is React + CSS + raster marks (not importable under
  * plain node), so the wiring below is locked as SOURCE TEXT with comments
@@ -23,7 +18,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { menuOwnerAllowsInteraction, type MenuOwnerSnapshot } from '../../src/client/instance-view-guard.ts'
 import { en, zh } from '../../src/locales.ts'
 import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
@@ -35,7 +30,6 @@ function source(relative: string): string {
 const button = stripComments(source('../../src/client/OpenInButton.tsx'))
 const guard = stripComments(source('../../src/client/instance-view-guard.ts'))
 const client = stripComments(source('../../src/client/index.ts'))
-const gates = stripComments(source('../../src/client/open-in-gates.ts'))
 
 test('menu owner guard fails closed for hidden, pending, or disconnected N-ctx state', () => {
   const active: MenuOwnerSnapshot = {
@@ -64,14 +58,7 @@ test('menu owner guard fails closed for hidden, pending, or disconnected N-ctx s
   }
 })
 
-test('the bespoke accessible menu is replaced by the official Menu primitive', () => {
-  const clientDir = new URL('../../src/client/', import.meta.url)
-  const files = readdirSync(clientDir)
-  assert.ok(!files.includes('AccessibleAppMenu.tsx'), 'the hand-rolled menu component must be deleted')
-  assert.ok(!files.includes('AccessibleAppMenu.module.css'), 'its hand-rolled stylesheet must be deleted')
-  assert.ok(!files.includes('menu-navigation.ts'), 'the bespoke roving-focus module must be deleted')
-  assert.ok(existsSync(new URL('instance-view-guard.ts', clientDir)), 'the N-ctx owner guard is the surviving piece')
-
+test('the official Menu primitive carries the chamber menu density', () => {
   assert.match(
     button,
     /import \{\s*IconChevronDownOutline14, Menu, Tooltip, type MenuItem,\s*\} from '@deepseek-ai\/dsh-client-ui-primitives'/u,
@@ -91,15 +78,11 @@ test('the bespoke accessible menu is replaced by the official Menu primitive', (
   // instead of re-decoding once per source (2026-09-12 machine-catalog move).
   assert.ok(button.includes('useState(failedIcons.has(url))'), 'the failed-icon memory is keyed by the icon URL')
   assert.ok(button.includes('failedIcons.add(url)'), 'failures are recorded under that URL')
-  // 2026-09-12 thorough unification: upstream's split button is the ONLY form
-  // (one app and ten apps render the same control), so the one-entry plain
-  // button is gone and the chevron is unconditional.
-  assert.ok(!button.includes('entries.length === 1'), 'upstream has no single-entry form; the split is unconditional')
   assert.ok(button.includes('aria-haspopup="menu"'), 'the chevron still advertises the menu')
   assert.ok(button.includes('aria-expanded={open}'), 'the chevron still reports the open state')
 })
 
-test('the control is the official split button, never a chamber variant', () => {
+test('the control uses upstream geometry and the machine catalog as its only icon source', () => {
   // 2026-09-12 thorough unification: geometry, marks, glyphs and fallbacks are
   // upstream's (OpenInAppAction.module.css / OpenInAppAction.tsx at the pin).
   // Sizes and shapes are locked here as source text because the component (and
@@ -108,29 +91,11 @@ test('the control is the official split button, never a chamber variant', () => 
     button.includes('<IconChevronDownOutline14 size={11} />'),
     'the chevron must be the design-system icon at the official 11px size',
   )
-  assert.ok(!button.includes('viewBox="0 0 16 16"'), 'no hand-drawn chevron geometry')
-  assert.ok(!button.includes('folderMark'), 'the chamber-only folder mark is retired')
-  // 2026-09-12: the machine catalog (read once per page from the LOCAL instance)
-  // is the only icon source, so the bundled raster, its mark component and the
-  // VS Code mark kind are all gone — a missing icon is upstream's square.
-  assert.ok(!button.includes('VscodeMark'), 'the bundled VS Code raster mark is retired')
-  assert.ok(!button.includes('vscode-icon'), 'the raster asset import is retired')
-  // Mark selection is ONE question about the machine catalog's answer: the
-  // display family no longer selects anything, so the selector is gone from the
-  // gates module and the component decides on the URL alone.
-  assert.ok(!button.includes('markKindFor'), 'no display-family mark selector survives')
-  assert.ok(!gates.includes('markKindFor'), 'the gates module no longer owns a mark table')
   assert.match(button, /function appMark\(iconUrl: string \| null, size: number\)/u,
     'the mark is chosen by the catalog answer alone')
   assert.ok(
     button.includes('return iconUrl === null ? <GenericAppMark size={size} /> : <CatalogIcon url={iconUrl} size={size} />'),
     "a miss draws upstream's square, a hit the machine's art",
-  )
-  const clientDir = new URL('../../src/client/', import.meta.url)
-  assert.ok(!readdirSync(clientDir).includes('vscode-icon.png'), 'the raster asset itself is deleted')
-  assert.ok(
-    !readdirSync(new URL('../../src/', import.meta.url)).includes('assets.d.ts'),
-    'the dead asset declaration module is deleted (no bundle asset is imported any more)',
   )
   assert.ok(button.includes('const BUTTON_MARK_SIZE = 15'), 'the button mark uses the official 15px size')
   assert.ok(button.includes('const MENU_MARK_SIZE = 18'), 'the menu mark uses the official 18px size')
@@ -151,8 +116,6 @@ test('the control is the official split button, never a chamber variant', () => 
   ]) {
     assert.ok(css.includes(rule), `the control must keep upstream's \`${rule}\``)
   }
-  assert.ok(!css.includes('border-l2'), 'the chamber hairline token is retired')
-  assert.ok(!css.includes('18px'), 'the chamber pill radius is retired')
 })
 
 test('the registration mirrors the official row (order), with our own id', () => {

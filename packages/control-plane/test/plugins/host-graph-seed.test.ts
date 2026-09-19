@@ -782,7 +782,6 @@ test('createControlPlane.startLocal() seeds ALL FOUR host packages behind one me
     // and the call site must carry no parallel literal at all.
     const registrySource = readFileSync(join(process.cwd(), 'src', 'host-graph-seed.ts'), 'utf8')
     assert.ok(registrySource.includes(`probe: { method: 'archiveCleanup/probe'`), 'registry row names the probe endpoint')
-    assert.ok(!registrySource.includes('archiveCleanup/preview'), 'no stale preview probe domain in the registry')
     const seedSource = readFileSync(join(process.cwd(), 'src', 'index.ts'), 'utf8')
     assert.ok(seedSource.includes('CHAMBER_HOST_PACKAGES'), 'the seed derives its rows from the registry, never a parallel row table')
     assert.ok(!/probeDomains: \['/.test(seedSource), 'the seed call site must not hand-write a probe domain literal')

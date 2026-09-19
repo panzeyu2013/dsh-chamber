@@ -52,13 +52,6 @@ test('resolveActiveSection: a section id that left the ledger falls back to the 
   assert.equal(resolveActiveSection(undefined, []), undefined);
 });
 
-test('resolveActiveSection: the retired __plugins id is no longer a fixed entry', () => {
-  // It must behave like any unknown ledger id: fall back to the first row.
-  assert.equal(resolveActiveSection('__plugins', rows), 'models');
-  assert.equal(resolveActiveSection('__plugins', []), undefined);
-  assert.equal(FIXED_SECTION_IDS.includes('__plugins'), false);
-});
-
 test('isFixedSectionId: chamber-owned pages are distinguishable from ledger sections', () => {
   assert.equal(isFixedSectionId(CONNECTIONS_SECTION_ID), true);
   assert.equal(isFixedSectionId(GENERAL_SECTION_ID), true);

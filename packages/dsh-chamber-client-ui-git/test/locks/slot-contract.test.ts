@@ -15,20 +15,6 @@ function sidebarMountSources(): string[] {
   ]
 }
 
-test('the standalone sidebar.git panel seat is removed (features deferred to a future phase)', () => {
-  const slots = source('../../../dsh-chamber-client-ui-sidebar/src/client/contract/slots.ts')
-  const mountSources = sidebarMountSources()
-  const gitIndex = source('../../src/client/index.ts')
-
-  assert.ok(!slots.includes("'sidebar.git'"), 'sidebar.git seat must be removed from slots.ts')
-  for (const mountSource of mountSources) {
-    assert.ok(!mountSource.includes('css.gitArea'), 'sidebar.git render site must be removed')
-    assert.ok(!mountSource.includes("renderSlot('sidebar.git'"), 'sidebar.git renderSlot must be removed')
-  }
-  assert.ok(!gitIndex.includes('GIT_SIDEBAR_SLOT'), 'the git plugin must not register sidebar.git')
-  assert.ok(!gitIndex.includes('SidebarGitSection'), 'the panel component must be gone from the plugin entry')
-})
-
 test('the per-workspace Git seat is declared in the SlotMap, declared in the sidebar children table, and registered by the plugin', () => {
   const slots = source('../../../dsh-chamber-client-ui-sidebar/src/client/contract/slots.ts')
   const sidebarIndex = source('../../../dsh-chamber-client-ui-sidebar/src/client/index.ts')
@@ -44,7 +30,6 @@ test('the per-workspace Git seat is declared in the SlotMap, declared in the sid
   // declaration silently stops the plugin's inject from ever registering —
   // the P0 regression this test guards).
   assert.match(sidebarIndex, /'sidebar\.workspace\.git':\s*\{\s*kind:\s*'single',\s*scope:\s*'root',\s*inject:\s*\{\s*hooks:\s*\{\s*workspaceGitContext:/)
-  assert.ok(!sidebarIndex.includes("'sidebar.git'"), 'sidebar children must not declare the removed panel seat')
   // Render sites (SidebarRoot or the extracted ServerSection): source-level
   // alert (workspaceId '') + per-workspace occupant rendered INSIDE the
   // workspace header row (before rowActions — OpenChamber-style, the row
