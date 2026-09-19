@@ -281,6 +281,18 @@ function ServerDropdown({
                 aria-selected={selectedId === server.id}
                 aria-label={`${server.label}, ${server.connected ? t('serverConnected') : t('serverOffline')}${server.id === chamberInstanceId ? `, ${t('current')}` : ''}`}
                 className={clsx(css.dropdownItem, selectedId === server.id && css.selected)}
+                // WebKit does not focus a <button> on mouse-down, so pressing
+                // this row would blur the focused search input above with
+                // `relatedTarget: null`; onRootBlur would then close the portal
+                // and unmount the row BEFORE the click landed — the dropdown
+                // closed without switching servers (WKWebView 27 + React 18
+                // portal reproduction: the press reports focusout with a null
+                // relatedTarget; Chromium focuses the row instead, so the
+                // Electron flavor never took that path). Suppressing the default
+                // keeps the focus — and the row — alive until the click activates
+                // it, the same device upstream ui-input-trigger MenuView uses for
+                // its pick rows.
+                onMouseDown={event => event.preventDefault()}
                 onClick={() => {
                   onSelect(server.id)
                   close(true)
