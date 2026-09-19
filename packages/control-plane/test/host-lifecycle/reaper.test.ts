@@ -251,6 +251,46 @@ test('reaper: killAndConfirm gives up after SIGTERM + SIGKILL grace windows and 
   assert.ok(recordExists(dir, '4242.json'), 'a process that refused to die keeps its record')
 })
 
+test('reaper: an async managedTreeAlive verdict is awaited before reclaiming (S5 win32 seam)', async t => {
+  const dir = tempStateDir(t)
+  writeRecord(dir, '4242.json', spawnRecord)
+  const signals: NodeJS.Signals[] = []
+  let proofs = 0
+  const deps = dshDeps({
+    signal: (_pid, sig) => { signals.push(sig); return true },
+    // The pid still looks alive to the synchronous kill(0) seam (the win32
+    // terminated-but-held handle shape); only the awaited CIM proof reports it
+    // gone. An unawaited Promise is truthy, so this asserts the await.
+    alive: (pid: number) => pid === 4242,
+    managedTreeAlive: async (pid: number) => {
+      assert.equal(pid, 4242)
+      proofs++
+      await Promise.resolve()
+      return false
+    },
+  })
+  const result = await runReaper({ stateDir: dir, deps })
+  assert.deepEqual(result, { reclaimed: 1, kept: 0, errors: [] })
+  assert.deepEqual(signals, ['SIGTERM'], 'an awaited dead verdict ends the kill sequence after SIGTERM')
+  assert.equal(proofs, 1, 'the async proof is awaited, not treated as a truthy promise')
+  assert.equal(recordExists(dir, '4242.json'), false)
+})
+
+test('reaper: the dead-leader residual gate awaits an async tree proof too (S5 win32 seam)', async t => {
+  const dir = tempStateDir(t)
+  writeRecord(dir, '4242.json', spawnRecord)
+  const deps = dshDeps({
+    alive: () => false, // the recorded pid and its owner are both gone
+    managedTreeAlive: async () => {
+      await Promise.resolve()
+      return false // no residual descendant: the record must be dropped
+    },
+  })
+  const result = await runReaper({ stateDir: dir, deps })
+  assert.deepEqual(result, { reclaimed: 0, kept: 0, errors: [] })
+  assert.equal(recordExists(dir, '4242.json'), false, 'an awaited absence proof removes the record')
+})
+
 test('reaper: dead pid records are removed while corrupt/invalid records remain as writer evidence', async t => {
   const dir = tempStateDir(t)
   writeRecord(dir, '1111.json', { ...spawnRecord, pid: 1111 })

@@ -31,6 +31,7 @@ import {
 } from './private-file.ts'
 import type { Logger } from './types.ts'
 import {
+  cimPidLiveness,
   hasWindowsResidualTree,
   treeKillWindows,
   windowsIdentity,
@@ -93,8 +94,10 @@ export interface ReaperDeps {
   signal?: (pid: number, sig: NodeJS.Signals) => boolean
   /** Whether a pid is alive (kill(pid, 0) semantics; EPERM counts as alive). */
   alive?: (pid: number) => boolean
-  /** Whether the managed process group or its leader remains alive. */
-  managedTreeAlive?: (pid: number) => boolean
+  /** Whether the managed process group or its leader remains alive. May be
+   *  async: the win32 default proves a dead pid from the CIM table (S5) and
+   *  the callers await it, while POSIX/injected sync seams keep working. */
+  managedTreeAlive?: (pid: number) => boolean | Promise<boolean>
   /** Sleep for the alive-poll interval. */
   sleep?: (ms: number) => Promise<void>
   /** SIGTERM grace window before SIGKILL (default 1500ms). */
@@ -105,6 +108,11 @@ export interface ReaperDeps {
 
 const realSleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 
+/** kill(0)-style liveness. Residual (S5, documented): on win32 this is an
+ *  OpenProcess probe that can read a terminated-but-held process object as
+ *  alive; it stays the synchronous owner/claim-liveness seam, while the
+ *  awaitable kill-confirmation path proves absence through the CIM table
+ *  (realManagedTreeAlive → cimPidLiveness). */
 function realAlive(pid: number): boolean {
   try {
     process.kill(pid, 0)
@@ -133,8 +141,16 @@ function realManagedTreeAlive(pid: number): boolean {
   if (process.platform === 'win32') {
     // Windows: no process groups — the leader pid + any CIM-discoverable
     // residual descendants are the tree (design 02 §5.1 parity work, M1).
-    // The residual probe fails closed (true on doubt) so orphan evidence is
+    // S5: the leader's liveness comes from the CIM table, not from
+    // process.kill(pid, 0) — an OpenProcess probe that still answers while a
+    // terminated process object survives on an unreleased handle, which made
+    // a successful taskkill read as "not quiesced" and kept the writer latch
+    // closed. An unavailable table (null) keeps the old kill(0) answer, and
+    // the residual probe fails closed (true on doubt), so orphan evidence is
     // never erased because PowerShell hiccupped.
+    const verdict = cimPidLiveness(pid)
+    if (verdict === true) return true
+    if (verdict === false) return hasWindowsResidualTree(pid)
     return realAlive(pid) || hasWindowsResidualTree(pid)
   }
   return groupAlive(pid) || realAlive(pid)
@@ -292,13 +308,13 @@ async function killAndConfirm(pid: number, deps: Required<ReaperDeps>): Promise<
   let deadline = Date.now() + deps.termWaitMs
   while (Date.now() < deadline) {
     await deps.sleep(deps.termPollMs)
-    if (!deps.managedTreeAlive(pid)) return
+    if (!(await deps.managedTreeAlive(pid))) return
   }
   if (!deps.signal(pid, 'SIGKILL')) return
   deadline = Date.now() + deps.termWaitMs
   while (Date.now() < deadline) {
     await deps.sleep(deps.termPollMs)
-    if (!deps.managedTreeAlive(pid)) return
+    if (!(await deps.managedTreeAlive(pid))) return
   }
   throw new Error(`process group ${pid} still alive after SIGTERM + SIGKILL`)
 }
@@ -459,7 +475,7 @@ async function processEntry(dir: string, name: string, log: LogFn, deps: Require
     // group. We can no longer re-verify the leader identity safely, so keep
     // the ledger and fail writer-quiescence closed instead of deleting the
     // only evidence and racing a runtime snapshot.
-    if (deps.managedTreeAlive(pid)) {
+    if (await deps.managedTreeAlive(pid)) {
       log(`reaper: ${pid} leader dead but residual process group alive; record kept`)
       return done('kept', pid, 'residual-group')
     }

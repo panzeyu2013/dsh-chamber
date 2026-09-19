@@ -57,6 +57,26 @@ export const CONTROL_LOG_DIR = 'logs'
 /** 日志文件名。 */
 export const CONTROL_LOG_FILE = 'control-plane.log'
 
+/** 平台暴露 O_NOFOLLOW / O_NONBLOCK 时取其值，否则显式 0。win32 两个常量都
+ *  不存在：不能依赖位或把 `undefined` 静默转成 0（那正是守卫消失而无告警的原因）。 */
+const CONTROL_LOG_NOFOLLOW_FLAG = typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0
+const CONTROL_LOG_NONBLOCK_FLAG = typeof constants.O_NONBLOCK === 'number' ? constants.O_NONBLOCK : 0
+
+/**
+ * win32 回退（无 O_NOFOLLOW）：open 标志退化为 O_WRONLY|O_APPEND|O_CREAT，内核不会
+ * 拒绝符号链接叶子。open 后把 path 重新 lstat 并与句柄自身 fstat 的 (dev, ino) 复验，
+ * 链接或换文件一律抛错（调用方的降级包装把它变成拒绝落盘）——与 private-fs.ts
+ * openPrivateNoFollowSync 的保证相同。POSIX 分支不调用（O_NOFOLLOW 已由内核拒绝），
+ * syscall 序列不变；导出以便平台回退单测直接驱动（该模块没有 constants 注入 seam）。
+ */
+export function verifyOpenedLeafIdentity(path: string, handle: number): void {
+  const atPath = lstatSync(path)
+  const opened = fstatSync(handle)
+  if (atPath.isSymbolicLink() || atPath.dev !== opened.dev || atPath.ino !== opened.ino) {
+    throw new Error('log leaf is a symbolic link or changed while being opened')
+  }
+}
+
 /** 一行日志的封装（单行、有界；调用方保证无换行注入）。 */
 export interface ControlLogRecord {
   readonly ts: string
@@ -199,8 +219,11 @@ export function createControlLogSink(options: {
       // O_NONBLOCK：叶子被换成 FIFO 时，同步 open(O_WRONLY) 会永久阻塞事件循环
       // （2026-12 二轮独立复核实测）；无读者的 FIFO 直接 ENXIO ⇒ 降级。普通文件忽略该位。
       handle = openSync(path,
-        constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW
-        | constants.O_NONBLOCK, 0o600)
+        constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | CONTROL_LOG_NOFOLLOW_FLAG
+        | CONTROL_LOG_NONBLOCK_FLAG, 0o600)
+      // 无 O_NOFOLLOW 的平台（win32）：先复验 path 仍指向刚打开的 inode，再 chmod
+      // ——顺序反过来会先对攻击者选定的链接目标做 0600 收紧（C2）。
+      if (CONTROL_LOG_NOFOLLOW_FLAG === 0) verifyOpenedLeafIdentity(path, handle)
       // 0600 同样只在创建时生效：已存在的宽松文件（旧版本留下/手工改过）必须显式
       // 收紧，否则文档与 T-25 的"无条件 0600"是假的（2026-12 独立复核）。
       try { fchmodSync(handle, 0o600) } catch { /* 某些文件系统不支持：不因此停写 */ }

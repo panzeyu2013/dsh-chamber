@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  constants,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -20,6 +21,17 @@ import {
   type RuntimeProbeCall,
 } from '../../src/runtime-probes.ts'
 import { sanitizeErrorText } from '../../src/sanitize-error.ts'
+import type { NoFollowConstantsLike } from '../../src/private-fs.ts'
+
+/** Windows constants shape: the read/create flags exist, O_NOFOLLOW (and
+ *  O_DIRECTORY) do not — the same table private-fs-nofollow.test.ts uses. The
+ *  settings reader must fall back to the user-space lstat identity proof. */
+const FALLBACK_CONSTANTS: NoFollowConstantsLike = {
+  O_RDONLY: constants.O_RDONLY,
+  O_WRONLY: constants.O_WRONLY,
+  O_CREAT: constants.O_CREAT,
+  O_EXCL: constants.O_EXCL,
+}
 
 interface Fixture {
   root: string
@@ -637,6 +649,43 @@ test('settings.yaml rejects directories and symlinks instead of following non-re
     }
   }
 })
+
+test('settings.yaml symlink is refused through the win32 no-O_NOFOLLOW fallback branch (C1)', async () => {
+  const fx = fixture()
+  try {
+    const target = join(fx.root, 'outside-settings.yaml')
+    writeFileSync(target, 'locale:\n  preference: zh\n')
+    rmSync(fx.settingsPath)
+    symlinkSync(target, fx.settingsPath)
+    const results = await runRuntimeActivationProbes({
+      baseUrl: 'http://127.0.0.1:1',
+      dshHome: fx.dshHome,
+      call: successfulCall(fx),
+      settingsNoFollowConstants: FALLBACK_CONSTANTS,
+    })
+    const settings = results.find(result => result.name === 'data.settings')
+    assert.equal(settings?.ok, false)
+    assert.match(settings?.error ?? '', /symbolic link/)
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
+test('the win32 no-O_NOFOLLOW fallback branch still reads a regular settings.yaml (C1)', async () => {
+  const fx = fixture()
+  try {
+    const results = await runRuntimeActivationProbes({
+      baseUrl: 'http://127.0.0.1:1',
+      dshHome: fx.dshHome,
+      call: successfulCall(fx),
+      settingsNoFollowConstants: FALLBACK_CONSTANTS,
+    })
+    assert.equal(results.find(result => result.name === 'data.settings')?.ok, true)
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
 
 test('probe layer enforces per-RPC and whole-window timeouts when call ignores its signal', async () => {
   const fx = fixture()

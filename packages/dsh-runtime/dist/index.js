@@ -170,7 +170,7 @@ function shouldAutoRollback(restartExhausted, activeIsOverride) {
 }
 
 // src/apply-phase.ts
-import { basename } from "node:path";
+import { basename as basename2 } from "node:path";
 
 // src/rollback-facts.ts
 var ROLLBACK_CONTINUATION_PHASES = /* @__PURE__ */ new Set([
@@ -188,10 +188,511 @@ function delayedRollbackTarget(journal) {
 }
 
 // src/runtime-probes.ts
-import { constants } from "node:fs";
-import { open } from "node:fs/promises";
-import { join } from "node:path";
+import { constants as constants2 } from "node:fs";
+import { lstat, open } from "node:fs/promises";
+import { join as join2 } from "node:path";
 import { TextDecoder } from "node:util";
+
+// src/private-fs.ts
+import {
+  closeSync,
+  constants,
+  fchmodSync,
+  fstatSync,
+  fsyncSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync
+} from "node:fs";
+import { randomBytes } from "node:crypto";
+import { basename, dirname, join, relative, sep } from "node:path";
+var PRIVATE_RUNTIME_DIR_MODE = 448;
+var PRIVATE_RUNTIME_FILE_MODE = 384;
+function sameIdentity(left, right) {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+function sameFileSnapshot(left, right) {
+  return sameIdentity(left, right) && left.isFile() && right.isFile() && left.nlink === 1 && right.nlink === 1 && left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
+}
+function samePreciseFileSnapshot(left, right) {
+  return left.dev === right.dev && left.ino === right.ino && left.isFile() && right.isFile() && left.nlink === 1n && right.nlink === 1n && left.size === right.size && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
+}
+function resolveNoFollowFlags(kind, constantsLike = constants) {
+  const noFollow = typeof constantsLike.O_NOFOLLOW === "number" ? constantsLike.O_NOFOLLOW : 0;
+  if (kind === "write") {
+    return {
+      flags: (constantsLike.O_WRONLY ?? 0) | (constantsLike.O_CREAT ?? 0) | (constantsLike.O_EXCL ?? 0) | noFollow,
+      kernelNoFollow: noFollow !== 0
+    };
+  }
+  const directory = kind === "directory" && typeof constantsLike.O_DIRECTORY === "number" ? constantsLike.O_DIRECTORY : 0;
+  return {
+    flags: (constantsLike.O_RDONLY ?? 0) | directory | noFollow,
+    kernelNoFollow: noFollow !== 0
+  };
+}
+function openPrivateNoFollowSync(path, kind, options = {}) {
+  const { flags, kernelNoFollow } = resolveNoFollowFlags(kind, options.constantsLike);
+  if (!kernelNoFollow && kind !== "write") {
+    const before = lstatSync(path);
+    if (before.isSymbolicLink()) {
+      throw new Error(`\u79C1\u6709\u8DEF\u5F84\u7684\u6700\u7EC8\u7EC4\u4EF6\u662F\u7B26\u53F7\u94FE\u63A5\uFF0C\u62D2\u7EDD\u6253\u5F00\uFF1A${basename(path)}`);
+    }
+  }
+  const fd = kind === "write" ? openSync(path, flags, options.mode ?? PRIVATE_RUNTIME_FILE_MODE) : openSync(path, flags);
+  try {
+    const stats = fstatSync(fd);
+    if (!kernelNoFollow) {
+      const atPath = lstatSync(path);
+      if (atPath.isSymbolicLink() || !sameIdentity(stats, atPath)) {
+        throw new Error(`\u79C1\u6709\u8DEF\u5F84\u6253\u5F00\u540E\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25\uFF1A${basename(path)}`);
+      }
+    }
+    return { fd, stats };
+  } catch (error) {
+    try {
+      closeSync(fd);
+    } catch {
+    }
+    throw error;
+  }
+}
+function syncFd(fd, deps) {
+  const sync = deps?.fsync ?? fsyncSync;
+  sync(fd);
+}
+function verifyPinnedDirectory(pin, message) {
+  const opened = fstatSync(pin.fd);
+  const atPath = lstatSync(pin.path);
+  const parent = lstatSync(pin.parentPath);
+  if (!opened.isDirectory() || atPath.isSymbolicLink() || !atPath.isDirectory() || !sameIdentity(pin.identity, opened) || !sameIdentity(opened, atPath) || parent.isSymbolicLink() || !parent.isDirectory() || !sameIdentity(pin.parentIdentity, parent)) {
+    throw new Error(message);
+  }
+  return atPath;
+}
+function pinRealDirectory(path, tighten) {
+  const parentPath = dirname(path);
+  const parentBefore = lstatSync(parentPath);
+  if (parentBefore.isSymbolicLink() || !parentBefore.isDirectory()) {
+    throw new Error(`\u4E0D\u5B89\u5168\u7684\u79C1\u6709\u76EE\u5F55\u7236\u7EA7\uFF1A${basename(path)}`);
+  }
+  const before = lstatSync(path);
+  if (before.isSymbolicLink() || !before.isDirectory()) {
+    throw new Error(`\u4E0D\u5B89\u5168\u7684\u79C1\u6709\u76EE\u5F55\uFF1A${basename(path)}`);
+  }
+  let fd = null;
+  try {
+    const openedDirectory = openPrivateNoFollowSync(path, "directory");
+    fd = openedDirectory.fd;
+    const opened = openedDirectory.stats;
+    if (!opened.isDirectory() || !sameIdentity(before, opened)) {
+      throw new Error(`\u79C1\u6709\u76EE\u5F55\u8EAB\u4EFD\u4E0D\u7A33\u5B9A\uFF1A${basename(path)}`);
+    }
+    if (tighten && (opened.mode & 511) !== PRIVATE_RUNTIME_DIR_MODE) {
+      fchmodSync(fd, PRIVATE_RUNTIME_DIR_MODE);
+    }
+    const pin = {
+      path,
+      parentPath,
+      fd,
+      identity: { dev: opened.dev, ino: opened.ino },
+      parentIdentity: { dev: parentBefore.dev, ino: parentBefore.ino }
+    };
+    verifyPinnedDirectory(pin, `\u79C1\u6709\u76EE\u5F55\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25\uFF1A${basename(path)}`);
+    fd = null;
+    return pin;
+  } finally {
+    if (fd !== null) closeSync(fd);
+  }
+}
+function closePinnedDirectory(pin) {
+  closeSync(pin.fd);
+}
+function syncPinnedDirectory(pin, deps) {
+  verifyPinnedDirectory(pin, `\u79C1\u6709\u76EE\u5F55 fsync \u524D\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25\uFF1A${basename(pin.path)}`);
+  syncFd(pin.fd, deps);
+  verifyPinnedDirectory(pin, `\u79C1\u6709\u76EE\u5F55 fsync \u540E\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25\uFF1A${basename(pin.path)}`);
+}
+function inspectRealDirectory(path, tighten) {
+  const pin = pinRealDirectory(path, tighten);
+  try {
+    return verifyPinnedDirectory(pin, `\u79C1\u6709\u76EE\u5F55\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25\uFF1A${basename(path)}`);
+  } finally {
+    closePinnedDirectory(pin);
+  }
+}
+function ensurePrivateDirectoryNoFollow(path, deps) {
+  const parent = dirname(path);
+  const parentPin = pinRealDirectory(parent, false);
+  let childPin = null;
+  try {
+    verifyPinnedDirectory(parentPin, `\u79C1\u6709\u76EE\u5F55\u521B\u5EFA\u524D\u7236\u76EE\u5F55\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25\uFF1A${basename(path)}`);
+    try {
+      mkdirSync(path, { recursive: false, mode: PRIVATE_RUNTIME_DIR_MODE });
+    } catch (error) {
+      if (error.code !== "EEXIST") throw error;
+    }
+    childPin = pinRealDirectory(path, true);
+    syncPinnedDirectory(parentPin, deps);
+    verifyPinnedDirectory(childPin, `\u79C1\u6709\u76EE\u5F55\u521B\u5EFA\u540E\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25\uFF1A${basename(path)}`);
+  } finally {
+    if (childPin !== null) closePinnedDirectory(childPin);
+    closePinnedDirectory(parentPin);
+  }
+}
+function createPrivateDirectoryNoFollow(path, deps) {
+  const parentPin = pinRealDirectory(dirname(path), false);
+  let childPin = null;
+  try {
+    verifyPinnedDirectory(parentPin, `\u79C1\u6709\u76EE\u5F55\u521B\u5EFA\u524D\u7236\u76EE\u5F55\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25\uFF1A${basename(path)}`);
+    mkdirSync(path, { recursive: false, mode: PRIVATE_RUNTIME_DIR_MODE });
+    childPin = pinRealDirectory(path, true);
+    syncPinnedDirectory(parentPin, deps);
+    verifyPinnedDirectory(childPin, `\u79C1\u6709\u76EE\u5F55\u521B\u5EFA\u540E\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25\uFF1A${basename(path)}`);
+  } finally {
+    if (childPin !== null) closePinnedDirectory(childPin);
+    closePinnedDirectory(parentPin);
+  }
+}
+function runtimeRootPath(baseDir) {
+  return join(baseDir, "dsh-runtime");
+}
+function ensureRuntimeRootNoFollow(baseDir, deps) {
+  inspectRealDirectory(baseDir, false);
+  const root = runtimeRootPath(baseDir);
+  ensurePrivateDirectoryNoFollow(root, deps);
+  return root;
+}
+function assertRuntimeRootNoFollow(baseDir) {
+  inspectRealDirectory(baseDir, false);
+  const root = runtimeRootPath(baseDir);
+  inspectRealDirectory(root, true);
+  return root;
+}
+function ensureRuntimeSubdirectoryNoFollow(baseDir, ...segments) {
+  let current = ensureRuntimeRootNoFollow(baseDir);
+  for (const segment of segments) {
+    if (segment === "" || segment === "." || segment === ".." || basename(segment) !== segment) {
+      throw new Error(`\u4E0D\u5B89\u5168\u7684 runtime \u5B50\u76EE\u5F55\u540D\uFF1A${JSON.stringify(segment)}`);
+    }
+    current = join(current, segment);
+    ensurePrivateDirectoryNoFollow(current);
+  }
+  return current;
+}
+function ensureOwnedParent(baseDir, filePath, deps) {
+  const root = ensureRuntimeRootNoFollow(baseDir, deps);
+  const parent = dirname(filePath);
+  const rel = relative(root, parent);
+  if (rel === ".." || rel.startsWith(`..${sep}`)) {
+    throw new Error("runtime \u79C1\u6709\u6587\u4EF6\u8D8A\u51FA\u53D7\u63A7\u6839\u76EE\u5F55");
+  }
+  if (rel === "") {
+    inspectRealDirectory(root, true);
+    return;
+  }
+  const segments = rel.split(sep);
+  ensureRuntimeSubdirectoryNoFollow(baseDir, ...segments);
+}
+function assertReplaceableLeaf(filePath) {
+  try {
+    const info = lstatSync(filePath);
+    if (info.isSymbolicLink() || !info.isFile() || info.nlink !== 1) {
+      throw new Error(`runtime \u79C1\u6709\u6587\u4EF6\u4E0D\u662F\u5355\u94FE\u63A5\u666E\u901A\u6587\u4EF6\uFF1A${basename(filePath)}`);
+    }
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    throw error;
+  }
+}
+function removePinnedLeafBestEffort(parentPin, filePath, identity) {
+  if (identity === null) return;
+  try {
+    verifyPinnedDirectory(parentPin, "runtime \u4E34\u65F6\u6587\u4EF6\u6E05\u7406\u524D\u7236\u76EE\u5F55\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25");
+    const leaf = lstatSync(filePath);
+    if (leaf.isSymbolicLink() || !leaf.isFile() || leaf.nlink !== 1 || !sameIdentity(identity, leaf)) return;
+    unlinkSync(filePath);
+    verifyPinnedDirectory(parentPin, "runtime \u4E34\u65F6\u6587\u4EF6\u6E05\u7406\u540E\u7236\u76EE\u5F55\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25");
+  } catch {
+  }
+}
+function atomicWriteRuntimeFileNoFollow(baseDir, filePath, data, deps) {
+  ensureOwnedParent(baseDir, filePath, deps);
+  assertReplaceableLeaf(filePath);
+  const parent = dirname(filePath);
+  const tmp = join(parent, `.${basename(filePath)}.tmp-${randomBytes(6).toString("hex")}`);
+  const parentPin = pinRealDirectory(parent, true);
+  let fd = null;
+  let tmpIdentity = null;
+  try {
+    fd = openPrivateNoFollowSync(tmp, "write").fd;
+    fchmodSync(fd, PRIVATE_RUNTIME_FILE_MODE);
+    const created = fstatSync(fd);
+    if (!created.isFile() || created.nlink !== 1) throw new Error("runtime \u4E34\u65F6\u6587\u4EF6\u8EAB\u4EFD\u4E0D\u5B89\u5168");
+    tmpIdentity = { dev: created.dev, ino: created.ino };
+    writeFileSync(fd, data);
+    syncFd(fd, deps);
+    const written = fstatSync(fd);
+    if (!written.isFile() || written.nlink !== 1 || !sameIdentity(tmpIdentity, written)) {
+      throw new Error("runtime \u4E34\u65F6\u6587\u4EF6\u8EAB\u4EFD\u4E0D\u5B89\u5168");
+    }
+    closeSync(fd);
+    fd = null;
+    verifyPinnedDirectory(parentPin, "runtime \u539F\u5B50\u5199\u63D0\u4EA4\u524D\u7236\u76EE\u5F55\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25");
+    const tmpAtCommit = lstatSync(tmp);
+    if (tmpAtCommit.isSymbolicLink() || !tmpAtCommit.isFile() || tmpAtCommit.nlink !== 1 || !sameIdentity(tmpIdentity, tmpAtCommit)) {
+      throw new Error("runtime \u539F\u5B50\u5199\u63D0\u4EA4\u524D\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25");
+    }
+    renameSync(tmp, filePath);
+    const published = lstatSync(filePath);
+    const parentAfter = lstatSync(parent);
+    if (published.isSymbolicLink() || !published.isFile() || published.nlink !== 1 || !sameIdentity(tmpIdentity, published) || parentAfter.isSymbolicLink() || !parentAfter.isDirectory() || !sameIdentity(parentPin.identity, parentAfter)) {
+      throw new Error("runtime \u539F\u5B50\u5199\u53D1\u5E03\u540E\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25");
+    }
+    syncPinnedDirectory(parentPin, deps);
+    const publishedAfterSync = lstatSync(filePath);
+    if (publishedAfterSync.isSymbolicLink() || !publishedAfterSync.isFile() || publishedAfterSync.nlink !== 1 || !sameIdentity(tmpIdentity, publishedAfterSync)) {
+      throw new Error("runtime \u539F\u5B50\u5199 fsync \u540E\u6587\u4EF6\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25");
+    }
+  } catch (error) {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {
+      }
+      fd = null;
+    }
+    removePinnedLeafBestEffort(parentPin, tmp, tmpIdentity);
+    throw error;
+  } finally {
+    closePinnedDirectory(parentPin);
+  }
+}
+function createRuntimeFileExclusiveNoFollow(baseDir, filePath, data, deps) {
+  ensureOwnedParent(baseDir, filePath, deps);
+  const parent = dirname(filePath);
+  const parentPin = pinRealDirectory(parent, true);
+  let fd = null;
+  let identity = null;
+  try {
+    verifyPinnedDirectory(parentPin, "runtime \u72EC\u5360\u521B\u5EFA\u524D\u7236\u76EE\u5F55\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25");
+    fd = openPrivateNoFollowSync(filePath, "write").fd;
+    const created = fstatSync(fd);
+    if (!created.isFile() || created.nlink !== 1) {
+      throw new Error("runtime \u72EC\u5360\u521B\u5EFA\u6587\u4EF6\u8EAB\u4EFD\u4E0D\u5B89\u5168");
+    }
+    identity = { dev: created.dev, ino: created.ino };
+    fchmodSync(fd, PRIVATE_RUNTIME_FILE_MODE);
+    writeFileSync(fd, data);
+    syncFd(fd, deps);
+    const written = fstatSync(fd);
+    const atPath = lstatSync(filePath);
+    if (!written.isFile() || written.nlink !== 1 || !sameIdentity(identity, written) || atPath.isSymbolicLink() || !atPath.isFile() || atPath.nlink !== 1 || !sameIdentity(identity, atPath)) {
+      throw new Error("runtime \u72EC\u5360\u521B\u5EFA\u6587\u4EF6\u5199\u5165\u540E\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25");
+    }
+    verifyPinnedDirectory(parentPin, "runtime \u72EC\u5360\u521B\u5EFA\u540E\u7236\u76EE\u5F55\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25");
+    syncPinnedDirectory(parentPin, deps);
+    const after = fstatSync(fd);
+    const atPathAfterSync = lstatSync(filePath);
+    if (!after.isFile() || after.nlink !== 1 || !sameIdentity(identity, after) || atPathAfterSync.isSymbolicLink() || !atPathAfterSync.isFile() || atPathAfterSync.nlink !== 1 || !sameIdentity(identity, atPathAfterSync)) {
+      throw new Error("runtime \u72EC\u5360\u521B\u5EFA fsync \u540E\u6587\u4EF6\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25");
+    }
+  } finally {
+    if (fd !== null) closeSync(fd);
+    closePinnedDirectory(parentPin);
+  }
+}
+function assertLeafMissing(filePath, message) {
+  try {
+    lstatSync(filePath);
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    throw error;
+  }
+  throw new Error(message);
+}
+function removeRuntimeFileNoFollow(baseDir, filePath, deps) {
+  inspectRealDirectory(baseDir, false);
+  const root = runtimeRootPath(baseDir);
+  let rootInfo;
+  try {
+    rootInfo = lstatSync(root);
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    throw error;
+  }
+  if (rootInfo.isSymbolicLink() || !rootInfo.isDirectory()) {
+    throw new Error("dsh-runtime \u6839\u76EE\u5F55\u4E0D\u5B89\u5168\uFF0C\u62D2\u7EDD\u5220\u9664\u79C1\u6709\u6587\u4EF6");
+  }
+  inspectRealDirectory(root, true);
+  const parent = dirname(filePath);
+  const rel = relative(root, parent);
+  if (rel === ".." || rel.startsWith(`..${sep}`)) throw new Error("runtime \u79C1\u6709\u6587\u4EF6\u8D8A\u51FA\u53D7\u63A7\u6839\u76EE\u5F55");
+  let parentPin;
+  try {
+    parentPin = pinRealDirectory(parent, true);
+  } catch (error) {
+    if (error.code === "ENOENT") return;
+    throw error;
+  }
+  try {
+    let leaf;
+    try {
+      leaf = lstatSync(filePath);
+    } catch (error) {
+      if (error.code === "ENOENT") return;
+      throw error;
+    }
+    if (leaf.isSymbolicLink() || !leaf.isFile() || leaf.nlink !== 1) {
+      throw new Error(`runtime \u79C1\u6709\u6587\u4EF6\u4E0D\u5B89\u5168\uFF0C\u62D2\u7EDD\u5220\u9664\uFF1A${basename(filePath)}`);
+    }
+    if (deps?.expectedIdentity !== void 0 && !sameIdentity(leaf, deps.expectedIdentity)) {
+      throw new Error(`runtime \u79C1\u6709\u6587\u4EF6\u8EAB\u4EFD\u5DF2\u66FF\u6362\uFF0C\u62D2\u7EDD\u5220\u9664\uFF1A${basename(filePath)}`);
+    }
+    verifyPinnedDirectory(parentPin, "runtime \u79C1\u6709\u6587\u4EF6\u5220\u9664\u524D\u7236\u76EE\u5F55\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25");
+    const leafAtCommit = lstatSync(filePath);
+    if (leafAtCommit.isSymbolicLink() || !leafAtCommit.isFile() || leafAtCommit.nlink !== 1 || !sameIdentity(leaf, leafAtCommit) || deps?.expectedIdentity !== void 0 && !sameIdentity(leafAtCommit, deps.expectedIdentity)) {
+      throw new Error(`runtime \u79C1\u6709\u6587\u4EF6\u5220\u9664\u63D0\u4EA4\u524D\u8EAB\u4EFD\u5DF2\u66FF\u6362\uFF1A${basename(filePath)}`);
+    }
+    unlinkSync(filePath);
+    assertLeafMissing(filePath, "runtime \u79C1\u6709\u6587\u4EF6\u5220\u9664\u540E\u4ECD\u5B58\u5728");
+    verifyPinnedDirectory(parentPin, "runtime \u79C1\u6709\u6587\u4EF6\u5220\u9664\u540E\u7236\u76EE\u5F55\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25");
+    syncPinnedDirectory(parentPin, deps);
+    assertLeafMissing(filePath, "runtime \u79C1\u6709\u6587\u4EF6 fsync \u540E\u91CD\u65B0\u51FA\u73B0");
+  } finally {
+    closePinnedDirectory(parentPin);
+  }
+}
+function sameLeafKind(left, right) {
+  return left.isFile() === right.isFile() && left.isSymbolicLink() === right.isSymbolicLink() && left.isDirectory() === right.isDirectory();
+}
+function quarantineRuntimeFileNoFollow(baseDir, filePath, destinationPath, deps) {
+  inspectRealDirectory(baseDir, false);
+  const root = assertRuntimeRootNoFollow(baseDir);
+  const parent = dirname(filePath);
+  if (dirname(destinationPath) !== parent || destinationPath === filePath) {
+    throw new Error("runtime \u9694\u79BB\u76EE\u6807\u5FC5\u987B\u662F\u540C\u4E00\u79C1\u6709\u76EE\u5F55\u4E2D\u7684\u4E0D\u540C\u6587\u4EF6");
+  }
+  const rel = relative(root, parent);
+  if (rel === ".." || rel.startsWith(`..${sep}`)) {
+    throw new Error("runtime \u9694\u79BB\u6587\u4EF6\u8D8A\u51FA\u53D7\u63A7\u6839\u76EE\u5F55");
+  }
+  if (rel !== "") {
+    let current = root;
+    for (const segment of rel.split(sep)) {
+      if (segment === "" || segment === "." || segment === ".." || basename(segment) !== segment) {
+        throw new Error("runtime \u9694\u79BB\u6587\u4EF6\u7236\u76EE\u5F55\u4E0D\u5B89\u5168");
+      }
+      current = join(current, segment);
+      inspectRealDirectory(current, true);
+    }
+  }
+  const parentPin = pinRealDirectory(parent, true);
+  try {
+    const source = lstatSync(filePath);
+    if (source.isDirectory()) throw new Error(`runtime \u9694\u79BB\u6E90\u4E0D\u80FD\u662F\u76EE\u5F55\uFF1A${basename(filePath)}`);
+    if (deps?.expectedIdentity !== void 0 && !sameIdentity(source, deps.expectedIdentity)) {
+      throw new Error(`runtime \u9694\u79BB\u6E90\u8EAB\u4EFD\u5DF2\u66FF\u6362\uFF1A${basename(filePath)}`);
+    }
+    const identity = { dev: source.dev, ino: source.ino };
+    assertLeafMissing(destinationPath, `runtime \u9694\u79BB\u76EE\u6807\u5DF2\u5B58\u5728\uFF1A${basename(destinationPath)}`);
+    verifyPinnedDirectory(parentPin, "runtime \u9694\u79BB\u63D0\u4EA4\u524D\u7236\u76EE\u5F55\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25");
+    const sourceAtCommit = lstatSync(filePath);
+    if (!sameIdentity(sourceAtCommit, identity) || !sameLeafKind(source, sourceAtCommit)) {
+      throw new Error(`runtime \u9694\u79BB\u63D0\u4EA4\u524D\u6E90\u8EAB\u4EFD\u5DF2\u66FF\u6362\uFF1A${basename(filePath)}`);
+    }
+    deps?.beforeRename?.();
+    renameSync(filePath, destinationPath);
+    assertLeafMissing(filePath, "runtime \u9694\u79BB\u63D0\u4EA4\u540E\u6E90\u6587\u4EF6\u4ECD\u5B58\u5728");
+    const moved = lstatSync(destinationPath);
+    if (!sameIdentity(moved, identity) || !sameLeafKind(source, moved)) {
+      throw new Error("runtime \u9694\u79BB\u63D0\u4EA4\u540E\u8BC1\u636E\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25");
+    }
+    syncPinnedDirectory(parentPin, deps);
+    assertLeafMissing(filePath, "runtime \u9694\u79BB fsync \u540E\u6E90\u6587\u4EF6\u91CD\u65B0\u51FA\u73B0");
+    const movedAfterSync = lstatSync(destinationPath);
+    if (!sameIdentity(movedAfterSync, identity) || !sameLeafKind(source, movedAfterSync)) {
+      throw new Error("runtime \u9694\u79BB fsync \u540E\u8BC1\u636E\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25");
+    }
+    return identity;
+  } finally {
+    closePinnedDirectory(parentPin);
+  }
+}
+function readPrivateFileNoFollow(filePath, maxBytes, options = {}) {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) return { kind: "unsafe" };
+  const parent = dirname(filePath);
+  let parentBefore;
+  try {
+    parentBefore = inspectRealDirectory(parent, options.tightenMode !== false);
+  } catch (error) {
+    return error.code === "ENOENT" ? { kind: "missing" } : { kind: "unsafe" };
+  }
+  let leafBefore;
+  try {
+    leafBefore = lstatSync(filePath);
+  } catch (error) {
+    if (error.code !== "ENOENT") return { kind: "unsafe" };
+    try {
+      const parentAfter = lstatSync(parent);
+      return parentAfter.isDirectory() && !parentAfter.isSymbolicLink() && sameIdentity(parentBefore, parentAfter) ? { kind: "missing" } : { kind: "unsafe" };
+    } catch {
+      return { kind: "unsafe" };
+    }
+  }
+  if (leafBefore.isSymbolicLink() || !leafBefore.isFile() || leafBefore.nlink !== 1 || leafBefore.size > maxBytes) {
+    return { kind: "unsafe" };
+  }
+  let fd = null;
+  try {
+    const openedFile = openPrivateNoFollowSync(filePath, "read");
+    fd = openedFile.fd;
+    const opened = openedFile.stats;
+    if (!opened.isFile() || opened.nlink !== 1 || !sameIdentity(leafBefore, opened) || opened.size > maxBytes) {
+      return { kind: "unsafe" };
+    }
+    if (options.tightenMode !== false && (opened.mode & 511) !== PRIVATE_RUNTIME_FILE_MODE) {
+      fchmodSync(fd, PRIVATE_RUNTIME_FILE_MODE);
+    }
+    const beforeRead = fstatSync(fd);
+    const beforeReadPrecise = fstatSync(fd, { bigint: true });
+    if (!beforeRead.isFile() || beforeRead.nlink !== 1 || beforeRead.size > maxBytes) {
+      return { kind: "unsafe" };
+    }
+    const buffer = Buffer.allocUnsafe(maxBytes + 1);
+    const read = options.read ?? readSync;
+    let offset = 0;
+    while (offset <= maxBytes) {
+      const count = read(fd, buffer, offset, maxBytes + 1 - offset, null);
+      if (count === 0) break;
+      offset += count;
+    }
+    if (offset > maxBytes || offset !== beforeRead.size) return { kind: "unsafe" };
+    const after = fstatSync(fd);
+    const afterPrecise = fstatSync(fd, { bigint: true });
+    const leafAfter = lstatSync(filePath);
+    const parentAfter = lstatSync(parent);
+    if (!sameFileSnapshot(beforeRead, after) || !samePreciseFileSnapshot(beforeReadPrecise, afterPrecise) || !sameIdentity(after, leafAfter) || parentAfter.isSymbolicLink() || !parentAfter.isDirectory() || !sameIdentity(parentBefore, parentAfter)) return { kind: "unsafe" };
+    return {
+      kind: "valid",
+      raw: buffer.subarray(0, offset).toString("utf8"),
+      identity: { dev: after.dev, ino: after.ino }
+    };
+  } catch {
+    return { kind: "unsafe" };
+  } finally {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {
+      }
+    }
+  }
+}
 
 // src/sanitize-error.ts
 function sanitizeErrorText(message, keep = []) {
@@ -256,11 +757,21 @@ function safeFsCode(error) {
   const code = error !== null && typeof error === "object" && "code" in error ? error.code : void 0;
   return typeof code === "string" && /^[A-Z0-9_]{1,32}$/u.test(code) ? ` (${code})` : "";
 }
-async function readBoundedRegularUtf8File(filePath, signal) {
+async function readBoundedRegularUtf8File(filePath, signal, constantsLike = constants2) {
   signal.throwIfAborted();
+  const { flags, kernelNoFollow } = resolveNoFollowFlags("read", constantsLike);
+  if (!kernelNoFollow) {
+    let before;
+    try {
+      before = await lstat(filePath);
+    } catch (error) {
+      throw new Error(`settings.yaml could not be opened${safeFsCode(error)}`);
+    }
+    if (before.isSymbolicLink()) throw new Error("settings.yaml is a symbolic link");
+  }
   let handle;
   try {
-    handle = await open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW);
+    handle = await open(filePath, flags);
   } catch (error) {
     throw new Error(`settings.yaml could not be opened${safeFsCode(error)}`);
   }
@@ -270,6 +781,17 @@ async function readBoundedRegularUtf8File(filePath, signal) {
       info = await handle.stat();
     } catch (error) {
       throw new Error(`settings.yaml could not be inspected${safeFsCode(error)}`);
+    }
+    if (!kernelNoFollow) {
+      let atPath;
+      try {
+        atPath = await lstat(filePath);
+      } catch (error) {
+        throw new Error(`settings.yaml could not be inspected${safeFsCode(error)}`);
+      }
+      if (atPath.isSymbolicLink() || atPath.dev !== info.dev || atPath.ino !== info.ino) {
+        throw new Error("settings.yaml changed while being opened or is a symbolic link");
+      }
     }
     if (!info.isFile()) throw new Error("settings.yaml is not a regular file");
     if (!Number.isSafeInteger(info.size) || info.size < 0 || info.size > SETTINGS_FILE_MAX_BYTES) {
@@ -467,7 +989,7 @@ async function runRuntimeActivationProbes(opts) {
   }
   let dataSettings;
   try {
-    await readBoundedRegularUtf8File(join(opts.dshHome, "settings.yaml"), signal);
+    await readBoundedRegularUtf8File(join2(opts.dshHome, "settings.yaml"), signal, opts.settingsNoFollowConstants);
     if (!settingsRpcOk) throw new Error("settings RPC could not parse the active profile");
     dataSettings = { name: "data.settings", ok: true };
   } catch (error) {
@@ -664,9 +1186,9 @@ async function prepareJournal(opts) {
     sourceIsBuiltin: opts.sourceIsBuiltin === true,
     sourceWasKnownGood: opts.sourceWasKnownGood === true,
     knownGoodVersion: opts.knownGoodVersion,
-    preSwapSnapshotName: basename(preSwapSnapshot),
-    manualDataSnapshotName: manual.snapshotPath === null ? null : basename(manual.snapshotPath),
-    preRollbackStashName: manual.stashPath === null ? null : basename(manual.stashPath),
+    preSwapSnapshotName: basename2(preSwapSnapshot),
+    manualDataSnapshotName: manual.snapshotPath === null ? null : basename2(manual.snapshotPath),
+    preRollbackStashName: manual.stashPath === null ? null : basename2(manual.stashPath),
     rollbackTarget: null,
     nextIntent: null,
     startedAt: existing?.startedAt ?? now.toISOString(),
@@ -1252,18 +1774,18 @@ function assertSafeVersion(raw) {
 
 // src/runtime-critical-files.ts
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync, realpathSync } from "node:fs";
-import { isAbsolute, relative } from "node:path";
+import { lstatSync as lstatSync2, readFileSync, realpathSync } from "node:fs";
+import { isAbsolute, relative as relative2 } from "node:path";
 var CRITICAL_RUNTIME_FILES = [
   "node_modules/@deepseek-ai/dsh/package.json",
   "node_modules/@deepseek-ai/dsh/lib/bin.js"
 ];
 var CRITICAL_FILE_DIGEST_PATTERN = /^sha256-[A-Za-z0-9+/]{43}=$/;
 function openCriticalRuntimeFile(rootReal, candidate) {
-  const info = lstatSync(candidate);
+  const info = lstatSync2(candidate);
   if (!info.isFile() || info.isSymbolicLink()) return { kind: "not-regular-file" };
   const fileReal = realpathSync(candidate);
-  const fromRoot = relative(rootReal, fileReal);
+  const fromRoot = relative2(rootReal, fileReal);
   if (fromRoot === "" || fromRoot === ".." || fromRoot.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) || isAbsolute(fromRoot)) {
     return { kind: "escapes-tree" };
   }
@@ -1274,16 +1796,16 @@ function sha256FileDigest(filePath) {
 }
 
 // src/tree-writable.ts
-import { chmodSync, existsSync, lstatSync as lstatSync2, readdirSync } from "node:fs";
-import { join as join2 } from "node:path";
+import { chmodSync, existsSync, lstatSync as lstatSync3, readdirSync } from "node:fs";
+import { join as join3 } from "node:path";
 function makeOwnedTreeWritable(treePath) {
   if (!existsSync(treePath)) return;
   const visit = (entryPath) => {
-    const info = lstatSync2(entryPath);
+    const info = lstatSync3(entryPath);
     if (info.isSymbolicLink()) return;
     if (info.isDirectory()) {
       chmodSync(entryPath, info.mode | 448);
-      for (const entry of readdirSync(entryPath)) visit(join2(entryPath, entry));
+      for (const entry of readdirSync(entryPath)) visit(join3(entryPath, entry));
     } else if (info.isFile()) {
       chmodSync(entryPath, info.mode | 384);
     }
@@ -1291,485 +1813,6 @@ function makeOwnedTreeWritable(treePath) {
   try {
     visit(treePath);
   } catch {
-  }
-}
-
-// src/private-fs.ts
-import {
-  closeSync,
-  constants as constants2,
-  fchmodSync,
-  fstatSync,
-  fsyncSync,
-  lstatSync as lstatSync3,
-  mkdirSync,
-  openSync,
-  readSync,
-  renameSync,
-  unlinkSync,
-  writeFileSync
-} from "node:fs";
-import { randomBytes } from "node:crypto";
-import { basename as basename2, dirname, join as join3, relative as relative2, sep } from "node:path";
-var PRIVATE_RUNTIME_DIR_MODE = 448;
-var PRIVATE_RUNTIME_FILE_MODE = 384;
-function sameIdentity(left, right) {
-  return left.dev === right.dev && left.ino === right.ino;
-}
-function sameFileSnapshot(left, right) {
-  return sameIdentity(left, right) && left.isFile() && right.isFile() && left.nlink === 1 && right.nlink === 1 && left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
-}
-function samePreciseFileSnapshot(left, right) {
-  return left.dev === right.dev && left.ino === right.ino && left.isFile() && right.isFile() && left.nlink === 1n && right.nlink === 1n && left.size === right.size && left.mtimeNs === right.mtimeNs && left.ctimeNs === right.ctimeNs;
-}
-function noFollowReadFlags() {
-  if (typeof constants2.O_NOFOLLOW !== "number") {
-    throw new Error("\u5F53\u524D\u5E73\u53F0\u7F3A\u5C11 O_NOFOLLOW\uFF0C\u62D2\u7EDD\u8BBF\u95EE runtime \u79C1\u6709\u72B6\u6001");
-  }
-  return constants2.O_RDONLY | constants2.O_NOFOLLOW;
-}
-function noFollowWriteFlags() {
-  if (typeof constants2.O_NOFOLLOW !== "number") {
-    throw new Error("\u5F53\u524D\u5E73\u53F0\u7F3A\u5C11 O_NOFOLLOW\uFF0C\u62D2\u7EDD\u5199\u5165 runtime \u79C1\u6709\u72B6\u6001");
-  }
-  return constants2.O_WRONLY | constants2.O_CREAT | constants2.O_EXCL | constants2.O_NOFOLLOW;
-}
-function noFollowDirectoryFlags() {
-  const directory = typeof constants2.O_DIRECTORY === "number" ? constants2.O_DIRECTORY : 0;
-  return noFollowReadFlags() | directory;
-}
-function syncFd(fd, deps) {
-  const sync = deps?.fsync ?? fsyncSync;
-  sync(fd);
-}
-function verifyPinnedDirectory(pin, message) {
-  const opened = fstatSync(pin.fd);
-  const atPath = lstatSync3(pin.path);
-  const parent = lstatSync3(pin.parentPath);
-  if (!opened.isDirectory() || atPath.isSymbolicLink() || !atPath.isDirectory() || !sameIdentity(pin.identity, opened) || !sameIdentity(opened, atPath) || parent.isSymbolicLink() || !parent.isDirectory() || !sameIdentity(pin.parentIdentity, parent)) {
-    throw new Error(message);
-  }
-  return atPath;
-}
-function pinRealDirectory(path, tighten) {
-  const parentPath = dirname(path);
-  const parentBefore = lstatSync3(parentPath);
-  if (parentBefore.isSymbolicLink() || !parentBefore.isDirectory()) {
-    throw new Error(`\u4E0D\u5B89\u5168\u7684\u79C1\u6709\u76EE\u5F55\u7236\u7EA7\uFF1A${basename2(path)}`);
-  }
-  const before = lstatSync3(path);
-  if (before.isSymbolicLink() || !before.isDirectory()) {
-    throw new Error(`\u4E0D\u5B89\u5168\u7684\u79C1\u6709\u76EE\u5F55\uFF1A${basename2(path)}`);
-  }
-  let fd = null;
-  try {
-    fd = openSync(path, noFollowDirectoryFlags());
-    const opened = fstatSync(fd);
-    if (!opened.isDirectory() || !sameIdentity(before, opened)) {
-      throw new Error(`\u79C1\u6709\u76EE\u5F55\u8EAB\u4EFD\u4E0D\u7A33\u5B9A\uFF1A${basename2(path)}`);
-    }
-    if (tighten && (opened.mode & 511) !== PRIVATE_RUNTIME_DIR_MODE) {
-      fchmodSync(fd, PRIVATE_RUNTIME_DIR_MODE);
-    }
-    const pin = {
-      path,
-      parentPath,
-      fd,
-      identity: { dev: opened.dev, ino: opened.ino },
-      parentIdentity: { dev: parentBefore.dev, ino: parentBefore.ino }
-    };
-    verifyPinnedDirectory(pin, `\u79C1\u6709\u76EE\u5F55\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25\uFF1A${basename2(path)}`);
-    fd = null;
-    return pin;
-  } finally {
-    if (fd !== null) closeSync(fd);
-  }
-}
-function closePinnedDirectory(pin) {
-  closeSync(pin.fd);
-}
-function syncPinnedDirectory(pin, deps) {
-  verifyPinnedDirectory(pin, `\u79C1\u6709\u76EE\u5F55 fsync \u524D\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25\uFF1A${basename2(pin.path)}`);
-  syncFd(pin.fd, deps);
-  verifyPinnedDirectory(pin, `\u79C1\u6709\u76EE\u5F55 fsync \u540E\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25\uFF1A${basename2(pin.path)}`);
-}
-function inspectRealDirectory(path, tighten) {
-  const pin = pinRealDirectory(path, tighten);
-  try {
-    return verifyPinnedDirectory(pin, `\u79C1\u6709\u76EE\u5F55\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25\uFF1A${basename2(path)}`);
-  } finally {
-    closePinnedDirectory(pin);
-  }
-}
-function ensurePrivateDirectoryNoFollow(path, deps) {
-  const parent = dirname(path);
-  const parentPin = pinRealDirectory(parent, false);
-  let childPin = null;
-  try {
-    verifyPinnedDirectory(parentPin, `\u79C1\u6709\u76EE\u5F55\u521B\u5EFA\u524D\u7236\u76EE\u5F55\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25\uFF1A${basename2(path)}`);
-    try {
-      mkdirSync(path, { recursive: false, mode: PRIVATE_RUNTIME_DIR_MODE });
-    } catch (error) {
-      if (error.code !== "EEXIST") throw error;
-    }
-    childPin = pinRealDirectory(path, true);
-    syncPinnedDirectory(parentPin, deps);
-    verifyPinnedDirectory(childPin, `\u79C1\u6709\u76EE\u5F55\u521B\u5EFA\u540E\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25\uFF1A${basename2(path)}`);
-  } finally {
-    if (childPin !== null) closePinnedDirectory(childPin);
-    closePinnedDirectory(parentPin);
-  }
-}
-function createPrivateDirectoryNoFollow(path, deps) {
-  const parentPin = pinRealDirectory(dirname(path), false);
-  let childPin = null;
-  try {
-    verifyPinnedDirectory(parentPin, `\u79C1\u6709\u76EE\u5F55\u521B\u5EFA\u524D\u7236\u76EE\u5F55\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25\uFF1A${basename2(path)}`);
-    mkdirSync(path, { recursive: false, mode: PRIVATE_RUNTIME_DIR_MODE });
-    childPin = pinRealDirectory(path, true);
-    syncPinnedDirectory(parentPin, deps);
-    verifyPinnedDirectory(childPin, `\u79C1\u6709\u76EE\u5F55\u521B\u5EFA\u540E\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25\uFF1A${basename2(path)}`);
-  } finally {
-    if (childPin !== null) closePinnedDirectory(childPin);
-    closePinnedDirectory(parentPin);
-  }
-}
-function runtimeRootPath(baseDir) {
-  return join3(baseDir, "dsh-runtime");
-}
-function ensureRuntimeRootNoFollow(baseDir, deps) {
-  inspectRealDirectory(baseDir, false);
-  const root = runtimeRootPath(baseDir);
-  ensurePrivateDirectoryNoFollow(root, deps);
-  return root;
-}
-function assertRuntimeRootNoFollow(baseDir) {
-  inspectRealDirectory(baseDir, false);
-  const root = runtimeRootPath(baseDir);
-  inspectRealDirectory(root, true);
-  return root;
-}
-function ensureRuntimeSubdirectoryNoFollow(baseDir, ...segments) {
-  let current = ensureRuntimeRootNoFollow(baseDir);
-  for (const segment of segments) {
-    if (segment === "" || segment === "." || segment === ".." || basename2(segment) !== segment) {
-      throw new Error(`\u4E0D\u5B89\u5168\u7684 runtime \u5B50\u76EE\u5F55\u540D\uFF1A${JSON.stringify(segment)}`);
-    }
-    current = join3(current, segment);
-    ensurePrivateDirectoryNoFollow(current);
-  }
-  return current;
-}
-function ensureOwnedParent(baseDir, filePath, deps) {
-  const root = ensureRuntimeRootNoFollow(baseDir, deps);
-  const parent = dirname(filePath);
-  const rel = relative2(root, parent);
-  if (rel === ".." || rel.startsWith(`..${sep}`)) {
-    throw new Error("runtime \u79C1\u6709\u6587\u4EF6\u8D8A\u51FA\u53D7\u63A7\u6839\u76EE\u5F55");
-  }
-  if (rel === "") {
-    inspectRealDirectory(root, true);
-    return;
-  }
-  const segments = rel.split(sep);
-  ensureRuntimeSubdirectoryNoFollow(baseDir, ...segments);
-}
-function assertReplaceableLeaf(filePath) {
-  try {
-    const info = lstatSync3(filePath);
-    if (info.isSymbolicLink() || !info.isFile() || info.nlink !== 1) {
-      throw new Error(`runtime \u79C1\u6709\u6587\u4EF6\u4E0D\u662F\u5355\u94FE\u63A5\u666E\u901A\u6587\u4EF6\uFF1A${basename2(filePath)}`);
-    }
-  } catch (error) {
-    if (error.code === "ENOENT") return;
-    throw error;
-  }
-}
-function removePinnedLeafBestEffort(parentPin, filePath, identity) {
-  if (identity === null) return;
-  try {
-    verifyPinnedDirectory(parentPin, "runtime \u4E34\u65F6\u6587\u4EF6\u6E05\u7406\u524D\u7236\u76EE\u5F55\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25");
-    const leaf = lstatSync3(filePath);
-    if (leaf.isSymbolicLink() || !leaf.isFile() || leaf.nlink !== 1 || !sameIdentity(identity, leaf)) return;
-    unlinkSync(filePath);
-    verifyPinnedDirectory(parentPin, "runtime \u4E34\u65F6\u6587\u4EF6\u6E05\u7406\u540E\u7236\u76EE\u5F55\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25");
-  } catch {
-  }
-}
-function atomicWriteRuntimeFileNoFollow(baseDir, filePath, data, deps) {
-  ensureOwnedParent(baseDir, filePath, deps);
-  assertReplaceableLeaf(filePath);
-  const parent = dirname(filePath);
-  const tmp = join3(parent, `.${basename2(filePath)}.tmp-${randomBytes(6).toString("hex")}`);
-  const parentPin = pinRealDirectory(parent, true);
-  let fd = null;
-  let tmpIdentity = null;
-  try {
-    fd = openSync(
-      tmp,
-      noFollowWriteFlags(),
-      PRIVATE_RUNTIME_FILE_MODE
-    );
-    fchmodSync(fd, PRIVATE_RUNTIME_FILE_MODE);
-    const created = fstatSync(fd);
-    if (!created.isFile() || created.nlink !== 1) throw new Error("runtime \u4E34\u65F6\u6587\u4EF6\u8EAB\u4EFD\u4E0D\u5B89\u5168");
-    tmpIdentity = { dev: created.dev, ino: created.ino };
-    writeFileSync(fd, data);
-    syncFd(fd, deps);
-    const written = fstatSync(fd);
-    if (!written.isFile() || written.nlink !== 1 || !sameIdentity(tmpIdentity, written)) {
-      throw new Error("runtime \u4E34\u65F6\u6587\u4EF6\u8EAB\u4EFD\u4E0D\u5B89\u5168");
-    }
-    closeSync(fd);
-    fd = null;
-    verifyPinnedDirectory(parentPin, "runtime \u539F\u5B50\u5199\u63D0\u4EA4\u524D\u7236\u76EE\u5F55\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25");
-    const tmpAtCommit = lstatSync3(tmp);
-    if (tmpAtCommit.isSymbolicLink() || !tmpAtCommit.isFile() || tmpAtCommit.nlink !== 1 || !sameIdentity(tmpIdentity, tmpAtCommit)) {
-      throw new Error("runtime \u539F\u5B50\u5199\u63D0\u4EA4\u524D\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25");
-    }
-    renameSync(tmp, filePath);
-    const published = lstatSync3(filePath);
-    const parentAfter = lstatSync3(parent);
-    if (published.isSymbolicLink() || !published.isFile() || published.nlink !== 1 || !sameIdentity(tmpIdentity, published) || parentAfter.isSymbolicLink() || !parentAfter.isDirectory() || !sameIdentity(parentPin.identity, parentAfter)) {
-      throw new Error("runtime \u539F\u5B50\u5199\u53D1\u5E03\u540E\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25");
-    }
-    syncPinnedDirectory(parentPin, deps);
-    const publishedAfterSync = lstatSync3(filePath);
-    if (publishedAfterSync.isSymbolicLink() || !publishedAfterSync.isFile() || publishedAfterSync.nlink !== 1 || !sameIdentity(tmpIdentity, publishedAfterSync)) {
-      throw new Error("runtime \u539F\u5B50\u5199 fsync \u540E\u6587\u4EF6\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25");
-    }
-  } catch (error) {
-    if (fd !== null) {
-      try {
-        closeSync(fd);
-      } catch {
-      }
-      fd = null;
-    }
-    removePinnedLeafBestEffort(parentPin, tmp, tmpIdentity);
-    throw error;
-  } finally {
-    closePinnedDirectory(parentPin);
-  }
-}
-function createRuntimeFileExclusiveNoFollow(baseDir, filePath, data, deps) {
-  ensureOwnedParent(baseDir, filePath, deps);
-  const parent = dirname(filePath);
-  const parentPin = pinRealDirectory(parent, true);
-  let fd = null;
-  let identity = null;
-  try {
-    verifyPinnedDirectory(parentPin, "runtime \u72EC\u5360\u521B\u5EFA\u524D\u7236\u76EE\u5F55\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25");
-    fd = openSync(filePath, noFollowWriteFlags(), PRIVATE_RUNTIME_FILE_MODE);
-    const created = fstatSync(fd);
-    if (!created.isFile() || created.nlink !== 1) {
-      throw new Error("runtime \u72EC\u5360\u521B\u5EFA\u6587\u4EF6\u8EAB\u4EFD\u4E0D\u5B89\u5168");
-    }
-    identity = { dev: created.dev, ino: created.ino };
-    fchmodSync(fd, PRIVATE_RUNTIME_FILE_MODE);
-    writeFileSync(fd, data);
-    syncFd(fd, deps);
-    const written = fstatSync(fd);
-    const atPath = lstatSync3(filePath);
-    if (!written.isFile() || written.nlink !== 1 || !sameIdentity(identity, written) || atPath.isSymbolicLink() || !atPath.isFile() || atPath.nlink !== 1 || !sameIdentity(identity, atPath)) {
-      throw new Error("runtime \u72EC\u5360\u521B\u5EFA\u6587\u4EF6\u5199\u5165\u540E\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25");
-    }
-    verifyPinnedDirectory(parentPin, "runtime \u72EC\u5360\u521B\u5EFA\u540E\u7236\u76EE\u5F55\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25");
-    syncPinnedDirectory(parentPin, deps);
-    const after = fstatSync(fd);
-    const atPathAfterSync = lstatSync3(filePath);
-    if (!after.isFile() || after.nlink !== 1 || !sameIdentity(identity, after) || atPathAfterSync.isSymbolicLink() || !atPathAfterSync.isFile() || atPathAfterSync.nlink !== 1 || !sameIdentity(identity, atPathAfterSync)) {
-      throw new Error("runtime \u72EC\u5360\u521B\u5EFA fsync \u540E\u6587\u4EF6\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25");
-    }
-  } finally {
-    if (fd !== null) closeSync(fd);
-    closePinnedDirectory(parentPin);
-  }
-}
-function assertLeafMissing(filePath, message) {
-  try {
-    lstatSync3(filePath);
-  } catch (error) {
-    if (error.code === "ENOENT") return;
-    throw error;
-  }
-  throw new Error(message);
-}
-function removeRuntimeFileNoFollow(baseDir, filePath, deps) {
-  inspectRealDirectory(baseDir, false);
-  const root = runtimeRootPath(baseDir);
-  let rootInfo;
-  try {
-    rootInfo = lstatSync3(root);
-  } catch (error) {
-    if (error.code === "ENOENT") return;
-    throw error;
-  }
-  if (rootInfo.isSymbolicLink() || !rootInfo.isDirectory()) {
-    throw new Error("dsh-runtime \u6839\u76EE\u5F55\u4E0D\u5B89\u5168\uFF0C\u62D2\u7EDD\u5220\u9664\u79C1\u6709\u6587\u4EF6");
-  }
-  inspectRealDirectory(root, true);
-  const parent = dirname(filePath);
-  const rel = relative2(root, parent);
-  if (rel === ".." || rel.startsWith(`..${sep}`)) throw new Error("runtime \u79C1\u6709\u6587\u4EF6\u8D8A\u51FA\u53D7\u63A7\u6839\u76EE\u5F55");
-  let parentPin;
-  try {
-    parentPin = pinRealDirectory(parent, true);
-  } catch (error) {
-    if (error.code === "ENOENT") return;
-    throw error;
-  }
-  try {
-    let leaf;
-    try {
-      leaf = lstatSync3(filePath);
-    } catch (error) {
-      if (error.code === "ENOENT") return;
-      throw error;
-    }
-    if (leaf.isSymbolicLink() || !leaf.isFile() || leaf.nlink !== 1) {
-      throw new Error(`runtime \u79C1\u6709\u6587\u4EF6\u4E0D\u5B89\u5168\uFF0C\u62D2\u7EDD\u5220\u9664\uFF1A${basename2(filePath)}`);
-    }
-    if (deps?.expectedIdentity !== void 0 && !sameIdentity(leaf, deps.expectedIdentity)) {
-      throw new Error(`runtime \u79C1\u6709\u6587\u4EF6\u8EAB\u4EFD\u5DF2\u66FF\u6362\uFF0C\u62D2\u7EDD\u5220\u9664\uFF1A${basename2(filePath)}`);
-    }
-    verifyPinnedDirectory(parentPin, "runtime \u79C1\u6709\u6587\u4EF6\u5220\u9664\u524D\u7236\u76EE\u5F55\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25");
-    const leafAtCommit = lstatSync3(filePath);
-    if (leafAtCommit.isSymbolicLink() || !leafAtCommit.isFile() || leafAtCommit.nlink !== 1 || !sameIdentity(leaf, leafAtCommit) || deps?.expectedIdentity !== void 0 && !sameIdentity(leafAtCommit, deps.expectedIdentity)) {
-      throw new Error(`runtime \u79C1\u6709\u6587\u4EF6\u5220\u9664\u63D0\u4EA4\u524D\u8EAB\u4EFD\u5DF2\u66FF\u6362\uFF1A${basename2(filePath)}`);
-    }
-    unlinkSync(filePath);
-    assertLeafMissing(filePath, "runtime \u79C1\u6709\u6587\u4EF6\u5220\u9664\u540E\u4ECD\u5B58\u5728");
-    verifyPinnedDirectory(parentPin, "runtime \u79C1\u6709\u6587\u4EF6\u5220\u9664\u540E\u7236\u76EE\u5F55\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25");
-    syncPinnedDirectory(parentPin, deps);
-    assertLeafMissing(filePath, "runtime \u79C1\u6709\u6587\u4EF6 fsync \u540E\u91CD\u65B0\u51FA\u73B0");
-  } finally {
-    closePinnedDirectory(parentPin);
-  }
-}
-function sameLeafKind(left, right) {
-  return left.isFile() === right.isFile() && left.isSymbolicLink() === right.isSymbolicLink() && left.isDirectory() === right.isDirectory();
-}
-function quarantineRuntimeFileNoFollow(baseDir, filePath, destinationPath, deps) {
-  inspectRealDirectory(baseDir, false);
-  const root = assertRuntimeRootNoFollow(baseDir);
-  const parent = dirname(filePath);
-  if (dirname(destinationPath) !== parent || destinationPath === filePath) {
-    throw new Error("runtime \u9694\u79BB\u76EE\u6807\u5FC5\u987B\u662F\u540C\u4E00\u79C1\u6709\u76EE\u5F55\u4E2D\u7684\u4E0D\u540C\u6587\u4EF6");
-  }
-  const rel = relative2(root, parent);
-  if (rel === ".." || rel.startsWith(`..${sep}`)) {
-    throw new Error("runtime \u9694\u79BB\u6587\u4EF6\u8D8A\u51FA\u53D7\u63A7\u6839\u76EE\u5F55");
-  }
-  if (rel !== "") {
-    let current = root;
-    for (const segment of rel.split(sep)) {
-      if (segment === "" || segment === "." || segment === ".." || basename2(segment) !== segment) {
-        throw new Error("runtime \u9694\u79BB\u6587\u4EF6\u7236\u76EE\u5F55\u4E0D\u5B89\u5168");
-      }
-      current = join3(current, segment);
-      inspectRealDirectory(current, true);
-    }
-  }
-  const parentPin = pinRealDirectory(parent, true);
-  try {
-    const source = lstatSync3(filePath);
-    if (source.isDirectory()) throw new Error(`runtime \u9694\u79BB\u6E90\u4E0D\u80FD\u662F\u76EE\u5F55\uFF1A${basename2(filePath)}`);
-    if (deps?.expectedIdentity !== void 0 && !sameIdentity(source, deps.expectedIdentity)) {
-      throw new Error(`runtime \u9694\u79BB\u6E90\u8EAB\u4EFD\u5DF2\u66FF\u6362\uFF1A${basename2(filePath)}`);
-    }
-    const identity = { dev: source.dev, ino: source.ino };
-    assertLeafMissing(destinationPath, `runtime \u9694\u79BB\u76EE\u6807\u5DF2\u5B58\u5728\uFF1A${basename2(destinationPath)}`);
-    verifyPinnedDirectory(parentPin, "runtime \u9694\u79BB\u63D0\u4EA4\u524D\u7236\u76EE\u5F55\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25");
-    const sourceAtCommit = lstatSync3(filePath);
-    if (!sameIdentity(sourceAtCommit, identity) || !sameLeafKind(source, sourceAtCommit)) {
-      throw new Error(`runtime \u9694\u79BB\u63D0\u4EA4\u524D\u6E90\u8EAB\u4EFD\u5DF2\u66FF\u6362\uFF1A${basename2(filePath)}`);
-    }
-    deps?.beforeRename?.();
-    renameSync(filePath, destinationPath);
-    assertLeafMissing(filePath, "runtime \u9694\u79BB\u63D0\u4EA4\u540E\u6E90\u6587\u4EF6\u4ECD\u5B58\u5728");
-    const moved = lstatSync3(destinationPath);
-    if (!sameIdentity(moved, identity) || !sameLeafKind(source, moved)) {
-      throw new Error("runtime \u9694\u79BB\u63D0\u4EA4\u540E\u8BC1\u636E\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25");
-    }
-    syncPinnedDirectory(parentPin, deps);
-    assertLeafMissing(filePath, "runtime \u9694\u79BB fsync \u540E\u6E90\u6587\u4EF6\u91CD\u65B0\u51FA\u73B0");
-    const movedAfterSync = lstatSync3(destinationPath);
-    if (!sameIdentity(movedAfterSync, identity) || !sameLeafKind(source, movedAfterSync)) {
-      throw new Error("runtime \u9694\u79BB fsync \u540E\u8BC1\u636E\u8EAB\u4EFD\u590D\u9A8C\u5931\u8D25");
-    }
-    return identity;
-  } finally {
-    closePinnedDirectory(parentPin);
-  }
-}
-function readPrivateFileNoFollow(filePath, maxBytes, options = {}) {
-  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) return { kind: "unsafe" };
-  const parent = dirname(filePath);
-  let parentBefore;
-  try {
-    parentBefore = inspectRealDirectory(parent, options.tightenMode !== false);
-  } catch (error) {
-    return error.code === "ENOENT" ? { kind: "missing" } : { kind: "unsafe" };
-  }
-  let leafBefore;
-  try {
-    leafBefore = lstatSync3(filePath);
-  } catch (error) {
-    if (error.code !== "ENOENT") return { kind: "unsafe" };
-    try {
-      const parentAfter = lstatSync3(parent);
-      return parentAfter.isDirectory() && !parentAfter.isSymbolicLink() && sameIdentity(parentBefore, parentAfter) ? { kind: "missing" } : { kind: "unsafe" };
-    } catch {
-      return { kind: "unsafe" };
-    }
-  }
-  if (leafBefore.isSymbolicLink() || !leafBefore.isFile() || leafBefore.nlink !== 1 || leafBefore.size > maxBytes) {
-    return { kind: "unsafe" };
-  }
-  let fd = null;
-  try {
-    fd = openSync(filePath, noFollowReadFlags());
-    const opened = fstatSync(fd);
-    if (!opened.isFile() || opened.nlink !== 1 || !sameIdentity(leafBefore, opened) || opened.size > maxBytes) {
-      return { kind: "unsafe" };
-    }
-    if (options.tightenMode !== false && (opened.mode & 511) !== PRIVATE_RUNTIME_FILE_MODE) {
-      fchmodSync(fd, PRIVATE_RUNTIME_FILE_MODE);
-    }
-    const beforeRead = fstatSync(fd);
-    const beforeReadPrecise = fstatSync(fd, { bigint: true });
-    if (!beforeRead.isFile() || beforeRead.nlink !== 1 || beforeRead.size > maxBytes) {
-      return { kind: "unsafe" };
-    }
-    const buffer = Buffer.allocUnsafe(maxBytes + 1);
-    const read = options.read ?? readSync;
-    let offset = 0;
-    while (offset <= maxBytes) {
-      const count = read(fd, buffer, offset, maxBytes + 1 - offset, null);
-      if (count === 0) break;
-      offset += count;
-    }
-    if (offset > maxBytes || offset !== beforeRead.size) return { kind: "unsafe" };
-    const after = fstatSync(fd);
-    const afterPrecise = fstatSync(fd, { bigint: true });
-    const leafAfter = lstatSync3(filePath);
-    const parentAfter = lstatSync3(parent);
-    if (!sameFileSnapshot(beforeRead, after) || !samePreciseFileSnapshot(beforeReadPrecise, afterPrecise) || !sameIdentity(after, leafAfter) || parentAfter.isSymbolicLink() || !parentAfter.isDirectory() || !sameIdentity(parentBefore, parentAfter)) return { kind: "unsafe" };
-    return {
-      kind: "valid",
-      raw: buffer.subarray(0, offset).toString("utf8"),
-      identity: { dev: after.dev, ino: after.ino }
-    };
-  } catch {
-    return { kind: "unsafe" };
-  } finally {
-    if (fd !== null) {
-      try {
-        closeSync(fd);
-      } catch {
-      }
-    }
   }
 }
 
@@ -3732,7 +3775,6 @@ import {
   readFileSync as readFileSync3,
   readdirSync as readdirSync4,
   realpathSync as realpathSync3,
-  renameSync as renameSync2,
   rmSync as rmSync3,
   writeFileSync as writeFileSync2
 } from "node:fs";
@@ -3754,6 +3796,42 @@ function renderAllowBuildsBlock() {
     ...ALLOW_BUILDS.map((name) => `  ${JSON.stringify(name)}: true`),
     ...DENY_BUILDS.map((name) => `  ${JSON.stringify(name)}: false`)
   ].join("\n");
+}
+
+// src/rename-retry.ts
+import { rename as renameFile } from "node:fs/promises";
+var WINDOWS_RENAME_RETRY_DELAYS_MS = [100, 250, 500, 1e3];
+function isTransientWindowsRenameError(error) {
+  const code = error?.code;
+  return code === "EPERM" || code === "EBUSY" || code === "EACCES";
+}
+function delay(ms) {
+  return new Promise((resolve3) => {
+    setTimeout(resolve3, ms);
+  });
+}
+async function renameWithWindowsRetry(from, to, deps = {}) {
+  const rename = deps.renameFn ?? renameFile;
+  const isWindows = deps.isWindows ?? process.platform === "win32";
+  if (!isWindows) {
+    await rename(from, to);
+    return;
+  }
+  const sleep = deps.sleep ?? delay;
+  let lastError;
+  for (let attempt = 0; attempt <= WINDOWS_RENAME_RETRY_DELAYS_MS.length; attempt++) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!isTransientWindowsRenameError(error)) throw error;
+      if (attempt < WINDOWS_RENAME_RETRY_DELAYS_MS.length) {
+        await sleep(WINDOWS_RENAME_RETRY_DELAYS_MS[attempt]);
+      }
+    }
+  }
+  throw lastError;
 }
 
 // src/windows-process.ts
@@ -3793,7 +3871,12 @@ function parseProcessTable(text) {
     const record = value;
     const pid = toInt(record.ProcessId);
     if (pid === null) return;
-    rows.push({ pid, ppid: toInt(record.ParentProcessId) });
+    rows.push({
+      pid,
+      ppid: toInt(record.ParentProcessId),
+      command: toScalarString(record.CommandLine),
+      createdAt: toScalarString(record.CreationDate)
+    });
   };
   visit(parsed);
   return rows;
@@ -3805,6 +3888,9 @@ function toInt(value) {
     if (Number.isInteger(parsed)) return parsed;
   }
   return null;
+}
+function toScalarString(value) {
+  return typeof value === "string" && value !== "" ? value : null;
 }
 function descendantPidsOf(rows, rootPid) {
   const childrenOf = /* @__PURE__ */ new Map();
@@ -3839,7 +3925,7 @@ function classifyTaskkill(status, combined) {
 function processTableCommand() {
   return [
     "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8",
-    "$rows = @(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId)",
+    "$rows = @(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine,CreationDate)",
     "ConvertTo-Json -InputObject $rows -Compress"
   ].join("; ");
 }
@@ -3847,6 +3933,13 @@ function queryWindowsProcessTable() {
   assertWindows();
   const now = Date.now();
   if (tableCache !== null && now - tableCache.at < TABLE_CACHE_TTL_MS) return tableCache.rows;
+  return probeWindowsProcessTable();
+}
+function queryWindowsProcessTableFresh() {
+  assertWindows();
+  return probeWindowsProcessTable();
+}
+function probeWindowsProcessTable() {
   const { status, stdout, stderr } = execWindowsTool("powershell.exe", [
     "-NoProfile",
     "-NonInteractive",
@@ -3863,6 +3956,16 @@ function queryWindowsProcessTable() {
   return rows;
 }
 var tableCache = null;
+function cimRowStillIdentifies(original, current) {
+  if (current === null || current.pid !== original.pid) return "mismatch";
+  if (original.createdAt !== null && current.createdAt !== null) {
+    return original.createdAt === current.createdAt ? "match" : "mismatch";
+  }
+  if (original.command !== null && current.command !== null) {
+    return original.command === current.command ? "match" : "mismatch";
+  }
+  return "unprovable";
+}
 function hasWindowsDescendants(pid) {
   assertWindows();
   let rows;
@@ -3906,8 +4009,22 @@ function killWindowsTreeWithResidual(pid) {
   }
   const residual = descendantPidsOf(rows, pid);
   let killedAny = false;
-  for (const childPid of residual) {
-    if (killWindowsTree(childPid)) killedAny = true;
+  if (residual.length > 0) {
+    const scanned = new Map(rows.map((row) => [row.pid, row]));
+    let fresh;
+    try {
+      fresh = new Map(queryWindowsProcessTableFresh().map((row) => [row.pid, row]));
+    } catch (error) {
+      throw new Error(`taskkill tree ${pid}: residual identity probe unavailable: ${String(error)}`);
+    }
+    for (const childPid of residual) {
+      const verdict = cimRowStillIdentifies(scanned.get(childPid), fresh.get(childPid) ?? null);
+      if (verdict === "mismatch") continue;
+      if (verdict === "unprovable") {
+        throw new Error(`taskkill residual ${childPid} (tree ${pid}): identity cannot be re-established; refusing to terminate`);
+      }
+      if (killWindowsTree(childPid)) killedAny = true;
+    }
   }
   return killedAny;
 }
@@ -4039,7 +4156,7 @@ function removeOwnedTree(root) {
 function failedScenePath(runtimeDir, version) {
   return join7(runtimeDir, `${assertSafeVersion(version)}.failed`);
 }
-function writeFailedScene(runtimeDir, version, stage, error) {
+async function writeFailedScene(runtimeDir, version, stage, error, renameFn) {
   const destination = failedScenePath(runtimeDir, version);
   const tmp = join7(runtimeDir, `.${version}.failed-tmp-${randomBytes3(4).toString("hex")}`);
   try {
@@ -4054,7 +4171,7 @@ function writeFailedScene(runtimeDir, version, stage, error) {
     }, null, 2)}
 `, { mode: 384 });
     removeOwnedTree(destination);
-    renameSync2(tmp, destination);
+    await renameFn(tmp, destination);
     chmodSync2(destination, 448);
   } catch {
     try {
@@ -4105,7 +4222,7 @@ function abortError(signal) {
   error.name = "AbortError";
   return error;
 }
-function delay(ms) {
+function delay2(ms) {
   return new Promise((resolve3) => {
     setTimeout(resolve3, ms);
   });
@@ -4190,7 +4307,7 @@ var RuntimeInstallerSupervisor = class {
       if (this.processGroupState(tracked) === "quiet") return true;
       const remaining = deadline - Date.now();
       if (remaining <= 0) return false;
-      await delay(Math.min(25, remaining));
+      await delay2(Math.min(25, remaining));
     }
   }
   async quiesceProcessGroup(tracked) {
@@ -4627,14 +4744,14 @@ async function installRuntimeVersion(opts) {
   let workPublished = false;
   let completed = false;
   let preserveWorkDir = false;
-  const restorePreviousTree = (renameFn) => {
+  const restorePreviousTree = async (renameFn) => {
     assertRuntimeRootNoFollow(opts.baseDir);
     if (workPublished && existsSync4(versionTreeDir)) {
       removeOwnedTree(versionTreeDir);
       workPublished = false;
     }
     if (previousTreeBackedUp && existsSync4(backupDir)) {
-      renameFn(backupDir, versionTreeDir);
+      await renameFn(backupDir, versionTreeDir);
       previousTreeBackedUp = false;
     }
   };
@@ -4644,7 +4761,7 @@ async function installRuntimeVersion(opts) {
     const runFn = opts.deps?.run ?? ((args, runOpts) => defaultSupervisor.run(args, runOpts));
     const downloadFn = opts.deps?.download ?? downloadVerifiedRegistryTarball;
     const pruneFn = opts.deps?.prune ?? defaultPrune;
-    const renameFn = opts.deps?.rename ?? renameSync2;
+    const renameFn = opts.deps?.rename ?? renameWithWindowsRetry;
     const makeReadOnlyFn = opts.deps?.makeReadOnly ?? makeRuntimeTreeReadOnly;
     const verifyPublishedFn = opts.deps?.verifyPublished ?? verifyRuntimeTreeCriticalFiles;
     const storeDir = join7(runtimeDir, ".pnpm-store");
@@ -4774,15 +4891,15 @@ ${renderAllowBuildsBlock()}
       if (existingRuntimeTreeIsValid(opts.baseDir, version)) {
         throw new Error(`dsh runtime ${version} became valid during install; refusing to overwrite it`);
       }
-      renameFn(versionTreeDir, backupDir);
+      await renameFn(versionTreeDir, backupDir);
       previousTreeBackedUp = true;
     }
     try {
-      renameFn(workDir, versionTreeDir);
+      await renameFn(workDir, versionTreeDir);
       workPublished = true;
     } catch (publishError) {
       try {
-        restorePreviousTree(renameFn);
+        await restorePreviousTree(renameFn);
       } catch (restoreError) {
         throw new Error(`runtime publish failed and the previous tree could not be restored: ${sanitizeInstallerOutput(errorMessage(restoreError), 500)}`, { cause: publishError });
       }
@@ -4795,7 +4912,7 @@ ${renderAllowBuildsBlock()}
       deadline.signal.throwIfAborted();
     } catch (finalizeError) {
       try {
-        restorePreviousTree(renameFn);
+        await restorePreviousTree(renameFn);
       } catch (restoreError) {
         throw new Error(`runtime finalization failed and the previous tree could not be restored: ${sanitizeInstallerOutput(errorMessage(restoreError), 500)}`, { cause: finalizeError });
       }
@@ -4819,15 +4936,15 @@ ${renderAllowBuildsBlock()}
     preserveWorkDir = isRuntimeInstallerWriterSafetyError(error);
     if (!completed) {
       if (previousTreeBackedUp || workPublished) {
-        const renameFn = opts.deps?.rename ?? renameSync2;
+        const renameFn = opts.deps?.rename ?? renameWithWindowsRetry;
         try {
-          restorePreviousTree(renameFn);
+          await restorePreviousTree(renameFn);
         } catch {
         }
       }
       try {
         assertRuntimeRootNoFollow(opts.baseDir);
-        writeFailedScene(runtimeDir, version, stage, error);
+        await writeFailedScene(runtimeDir, version, stage, error, opts.deps?.rename ?? renameWithWindowsRetry);
       } catch {
       }
     }
@@ -4848,19 +4965,19 @@ ${renderAllowBuildsBlock()}
 import {
   chmodSync as chmodSync3,
   closeSync as closeSync3,
-  constants as constants4,
+  constants as constants3,
   existsSync as existsSync6,
   fstatSync as fstatSync3,
   fsyncSync as fsyncSync2,
   lstatSync as lstatSync7,
   mkdirSync as mkdirSync2,
-  openSync as openSync3,
+  openSync as openSync2,
   readFileSync as readFileSync4,
   readlinkSync,
   readSync as readSync2,
   readdirSync as readdirSync5,
   realpathSync as realpathSync4,
-  renameSync as renameSync3,
+  renameSync as renameSync2,
   rmSync as rmSync4,
   symlinkSync,
   writeFileSync as writeFileSync3,
@@ -4873,56 +4990,16 @@ import { basename as basename6, dirname as dirname4, isAbsolute as isAbsolute2, 
 var RESTORE_MARKER_BASENAME = "restore-in-progress";
 
 // src/snapshot-store.ts
-import { cp, lstat, mkdir, readdir, rm } from "node:fs/promises";
+import { cp, lstat as lstat2, mkdir, readdir, rm } from "node:fs/promises";
 import {
   closeSync as closeSync2,
-  constants as constants3,
   existsSync as existsSync5,
   fchmodSync as fchmodSync2,
   fstatSync as fstatSync2,
-  lstatSync as lstatSync6,
-  openSync as openSync2
+  lstatSync as lstatSync6
 } from "node:fs";
 import { basename as basename5, dirname as dirname3, join as join8, resolve, sep as sep2 } from "node:path";
 import { randomBytes as randomBytes4 } from "node:crypto";
-
-// src/rename-retry.ts
-import { rename as renameFile } from "node:fs/promises";
-var WINDOWS_RENAME_RETRY_DELAYS_MS = [100, 250, 500, 1e3];
-function isTransientWindowsRenameError(error) {
-  const code = error?.code;
-  return code === "EPERM" || code === "EBUSY" || code === "EACCES";
-}
-function delay2(ms) {
-  return new Promise((resolve3) => {
-    setTimeout(resolve3, ms);
-  });
-}
-async function renameWithWindowsRetry(from, to, deps = {}) {
-  const rename = deps.renameFn ?? renameFile;
-  const isWindows = deps.isWindows ?? process.platform === "win32";
-  if (!isWindows) {
-    await rename(from, to);
-    return;
-  }
-  const sleep = deps.sleep ?? delay2;
-  let lastError;
-  for (let attempt = 0; attempt <= WINDOWS_RENAME_RETRY_DELAYS_MS.length; attempt++) {
-    try {
-      await rename(from, to);
-      return;
-    } catch (error) {
-      lastError = error;
-      if (!isTransientWindowsRenameError(error)) throw error;
-      if (attempt < WINDOWS_RENAME_RETRY_DELAYS_MS.length) {
-        await sleep(WINDOWS_RENAME_RETRY_DELAYS_MS[attempt]);
-      }
-    }
-  }
-  throw lastError;
-}
-
-// src/snapshot-store.ts
 var PRIVATE_DIR_MODE = 448;
 var MAX_RESTORE_MARKER_BYTES = 128 * 1024;
 function sameIdentity3(left, right) {
@@ -4971,7 +5048,7 @@ async function atomicWriteMarker(baseDir, filePath, marker) {
 }
 async function pathIsDirectoryNoFollow(path) {
   try {
-    return (await lstat(path)).isDirectory();
+    return (await lstat2(path)).isDirectory();
   } catch {
     return false;
   }
@@ -5026,8 +5103,9 @@ function tightenOwnedDirectory(path) {
   if (before.isSymbolicLink() || !before.isDirectory()) return false;
   let fd = null;
   try {
-    fd = openSync2(path, constants3.O_RDONLY | constants3.O_NOFOLLOW);
-    const opened = fstatSync2(fd);
+    const openedDirectory = openPrivateNoFollowSync(path, "read");
+    fd = openedDirectory.fd;
+    const opened = openedDirectory.stats;
     if (!opened.isDirectory() || !sameIdentity3(before, opened)) return false;
     fchmodSync2(fd, PRIVATE_DIR_MODE);
     const afterFd = fstatSync2(fd);
@@ -5129,7 +5207,7 @@ async function cleanupSnapshotArtifacts(baseDir, dshHome) {
     const path = join8(homeParent, entry.name);
     let info;
     try {
-      info = await lstat(path);
+      info = await lstat2(path);
     } catch {
       result.restoreBackupCleanup = "blocked-unsafe-entry";
       return result;
@@ -5743,10 +5821,10 @@ function fsyncRegularFileNoFollow(path, label) {
   if (pathInfo.isSymbolicLink() || !pathInfo.isFile() || pathInfo.nlink !== 1) {
     throw new Error(`${label} is not a uniquely linked real file`);
   }
-  const noFollow = typeof constants4.O_NOFOLLOW === "number" ? constants4.O_NOFOLLOW : 0;
+  const noFollow = typeof constants3.O_NOFOLLOW === "number" ? constants3.O_NOFOLLOW : 0;
   let descriptor = null;
   try {
-    descriptor = openSync3(path, constants4.O_RDONLY | noFollow);
+    descriptor = openSync2(path, constants3.O_RDONLY | noFollow);
     const info = fstatSync3(descriptor);
     if (!info.isFile() || info.nlink !== 1 || info.dev !== pathInfo.dev || info.ino !== pathInfo.ino) {
       throw new Error(`${label} identity changed before sync`);
@@ -5759,11 +5837,11 @@ function fsyncRegularFileNoFollow(path, label) {
 function fsyncRealDirectory(path, label) {
   const info = lstatSync7(path);
   if (info.isSymbolicLink() || !info.isDirectory()) throw new Error(`${label} is not a real directory`);
-  const noFollow = typeof constants4.O_NOFOLLOW === "number" ? constants4.O_NOFOLLOW : 0;
-  const directoryOnly = typeof constants4.O_DIRECTORY === "number" ? constants4.O_DIRECTORY : 0;
+  const noFollow = typeof constants3.O_NOFOLLOW === "number" ? constants3.O_NOFOLLOW : 0;
+  const directoryOnly = typeof constants3.O_DIRECTORY === "number" ? constants3.O_DIRECTORY : 0;
   let descriptor = null;
   try {
-    descriptor = openSync3(path, constants4.O_RDONLY | noFollow | directoryOnly);
+    descriptor = openSync2(path, constants3.O_RDONLY | noFollow | directoryOnly);
     const opened = fstatSync3(descriptor);
     if (!opened.isDirectory() || opened.dev !== info.dev || opened.ino !== info.ino) {
       throw new Error(`${label} identity changed before sync`);
@@ -5892,13 +5970,13 @@ function sameOpaqueBytes(left, right) {
   return left.byteLength === right.byteLength && left.sha256 === right.sha256;
 }
 function fingerprintRegularFile(filePath, retainContent, requireNoFollow = true) {
-  if (requireNoFollow && typeof constants4.O_NOFOLLOW !== "number") {
+  if (requireNoFollow && typeof constants3.O_NOFOLLOW !== "number") {
     throw new Error("this platform cannot safely open recovery-marker evidence");
   }
-  const noFollow = typeof constants4.O_NOFOLLOW === "number" ? constants4.O_NOFOLLOW : 0;
+  const noFollow = typeof constants3.O_NOFOLLOW === "number" ? constants3.O_NOFOLLOW : 0;
   let descriptor = null;
   try {
-    descriptor = openSync3(filePath, constants4.O_RDONLY | noFollow);
+    descriptor = openSync2(filePath, constants3.O_RDONLY | noFollow);
     const before = fstatSync3(descriptor);
     if (!before.isFile() || before.nlink !== 1 || !Number.isSafeInteger(before.size) || before.size < 0) {
       throw new Error("recovery marker is not a bounded regular file");
@@ -5970,11 +6048,11 @@ function assertCopySourceConstraint(source, constraint, openedDevice, openedInod
   if (!isContained(realRoot, realSource)) throw new Error("copy source escaped its pinned root");
 }
 function defaultCopyFile(source, destination, constraint) {
-  const noFollow = constants4.O_NOFOLLOW ?? 0;
+  const noFollow = constants3.O_NOFOLLOW ?? 0;
   let sourceFd = null;
   let destinationFd = null;
   try {
-    sourceFd = openSync3(source, constants4.O_RDONLY | noFollow);
+    sourceFd = openSync2(source, constants3.O_RDONLY | noFollow);
     const sourceInfo = fstatSync3(sourceFd);
     if (!sourceInfo.isFile() || sourceInfo.nlink !== 1) {
       throw new Error("source file is not a uniquely linked regular file");
@@ -5983,9 +6061,9 @@ function defaultCopyFile(source, destination, constraint) {
       throw new Error("copy source changed before it was read");
     }
     assertCopySourceConstraint(source, constraint, sourceInfo.dev, sourceInfo.ino);
-    destinationFd = openSync3(
+    destinationFd = openSync2(
       destination,
-      constants4.O_WRONLY | constants4.O_CREAT | constants4.O_EXCL | noFollow,
+      constants3.O_WRONLY | constants3.O_CREAT | constants3.O_EXCL | noFollow,
       PRIVATE_FILE_MODE
     );
     const buffer = Buffer.allocUnsafe(1024 * 1024);
@@ -6018,7 +6096,7 @@ function defaultCopyFile(source, destination, constraint) {
 }
 var DEFAULT_OPERATIONS = {
   copyFile: defaultCopyFile,
-  renamePath: (source, destination) => renameSync3(source, destination),
+  renamePath: (source, destination) => renameSync2(source, destination),
   now: () => /* @__PURE__ */ new Date(),
   randomHex: () => randomBytes5(8).toString("hex"),
   afterCheckpoint: () => void 0
@@ -7660,6 +7738,7 @@ export {
   markKnownGood,
   markStorePruneNeeded,
   noteBoot,
+  openPrivateNoFollowSync,
   overridePath,
   planRestartExhaustedRollback,
   prepareManualRollbackData,
@@ -7692,6 +7771,7 @@ export {
   replayDecision,
   rescueCorruptMetadataRecoveryMarker,
   resetCandidateHealthWindow,
+  resolveNoFollowFlags,
   resolveSnapshotName,
   restoreMarkerAuthorityStatus,
   restorePreRollback,

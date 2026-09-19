@@ -17,7 +17,6 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
-  renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
@@ -37,6 +36,7 @@ import {
 } from './runtime-critical-files.ts'
 import { canonicalRegistryOrigin, isAllowedRegistryUrl, registryRedirectOrigins } from './registry-url.ts'
 import { PROBE_TEXT_KEEP_TOKENS } from './runtime-probes.ts'
+import { renameWithWindowsRetry } from './rename-retry.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
 import { makeOwnedTreeWritable } from './tree-writable.ts'
 import { assertSafeVersion } from './version-safety.ts'
@@ -110,8 +110,10 @@ export interface InstallerDeps {
   prune: (root: string) => Promise<PruneResult>
   /** Smoke: assert the installed CLI reports exactly `version`. */
   smoke: (workDir: string, version: string, context: SmokeContext) => Promise<void>
-  /** Filesystem seams keep the publish transaction fault-injectable. */
-  rename: (source: string, destination: string) => void
+  /** Filesystem seams keep the publish transaction fault-injectable. The
+   *  default routes through renameWithWindowsRetry (design 21 M2a) and callers
+   *  await every rename, so an injected async seam is honoured too. */
+  rename: (source: string, destination: string) => void | Promise<void>
   makeReadOnly: (root: string) => void
   verifyPublished: (root: string, version: string) => void
 }
@@ -298,8 +300,18 @@ function failedScenePath(runtimeDir: string, version: string): string {
 /** Keep exactly one compact, path-free scene per failed version. Partial
  * node_modules/tarballs/PIDs are intentionally excluded, bounding both disk
  * use and accidental capability leakage. Failure recording is best effort and
- * never masks the installation error. */
-function writeFailedScene(runtimeDir: string, version: string, stage: InstallFailureStage, error: unknown): void {
+ * never masks the installation error. The publish rename goes through the
+ * caller's rename seam (production: renameWithWindowsRetry, design 21 M2a) so
+ * a Windows third-party handle cannot silently drop the scene.
+ * @param renameFn - InstallerDeps.rename (source, destination) => void|Promise.
+ */
+async function writeFailedScene(
+  runtimeDir: string,
+  version: string,
+  stage: InstallFailureStage,
+  error: unknown,
+  renameFn: InstallerDeps['rename'],
+): Promise<void> {
   const destination = failedScenePath(runtimeDir, version)
   const tmp = join(runtimeDir, `.${version}.failed-tmp-${randomBytes(4).toString('hex')}`)
   try {
@@ -313,7 +325,7 @@ function writeFailedScene(runtimeDir: string, version: string, stage: InstallFai
       error: detail,
     }, null, 2)}\n`, { mode: 0o600 })
     removeOwnedTree(destination)
-    renameSync(tmp, destination)
+    await renameFn(tmp, destination)
     chmodSync(destination, 0o700)
   } catch {
     try { removeOwnedTree(tmp) } catch { /* best effort */ }
@@ -1053,14 +1065,14 @@ export async function installRuntimeVersion(opts: InstallOptions): Promise<Insta
   let completed = false
   let preserveWorkDir = false
 
-  const restorePreviousTree = (renameFn: InstallerDeps['rename']): void => {
+  const restorePreviousTree = async (renameFn: InstallerDeps['rename']): Promise<void> => {
     assertRuntimeRootNoFollow(opts.baseDir)
     if (workPublished && existsSync(versionTreeDir)) {
       removeOwnedTree(versionTreeDir)
       workPublished = false
     }
     if (previousTreeBackedUp && existsSync(backupDir)) {
-      renameFn(backupDir, versionTreeDir)
+      await renameFn(backupDir, versionTreeDir)
       previousTreeBackedUp = false
     }
   }
@@ -1071,7 +1083,7 @@ export async function installRuntimeVersion(opts: InstallOptions): Promise<Insta
     const runFn = opts.deps?.run ?? ((args, runOpts) => defaultSupervisor.run(args, runOpts))
     const downloadFn = opts.deps?.download ?? downloadVerifiedRegistryTarball
     const pruneFn = opts.deps?.prune ?? defaultPrune
-    const renameFn = opts.deps?.rename ?? renameSync
+    const renameFn = opts.deps?.rename ?? renameWithWindowsRetry
     const makeReadOnlyFn = opts.deps?.makeReadOnly ?? makeRuntimeTreeReadOnly
     const verifyPublishedFn = opts.deps?.verifyPublished ?? verifyRuntimeTreeCriticalFiles
     const storeDir = join(runtimeDir, '.pnpm-store')
@@ -1212,15 +1224,15 @@ export async function installRuntimeVersion(opts: InstallOptions): Promise<Insta
       if (existingRuntimeTreeIsValid(opts.baseDir, version)) {
         throw new Error(`dsh runtime ${version} became valid during install; refusing to overwrite it`)
       }
-      renameFn(versionTreeDir, backupDir)
+      await renameFn(versionTreeDir, backupDir)
       previousTreeBackedUp = true
     }
     try {
-      renameFn(workDir, versionTreeDir)
+      await renameFn(workDir, versionTreeDir)
       workPublished = true
     } catch (publishError) {
       try {
-        restorePreviousTree(renameFn)
+        await restorePreviousTree(renameFn)
       } catch (restoreError) {
         throw new Error(`runtime publish failed and the previous tree could not be restored: ${sanitizeInstallerOutput(errorMessage(restoreError), 500)}`, { cause: publishError })
       }
@@ -1234,7 +1246,7 @@ export async function installRuntimeVersion(opts: InstallOptions): Promise<Insta
       deadline.signal.throwIfAborted()
     } catch (finalizeError) {
       try {
-        restorePreviousTree(renameFn)
+        await restorePreviousTree(renameFn)
       } catch (restoreError) {
         throw new Error(`runtime finalization failed and the previous tree could not be restored: ${sanitizeInstallerOutput(errorMessage(restoreError), 500)}`, { cause: finalizeError })
       }
@@ -1256,12 +1268,12 @@ export async function installRuntimeVersion(opts: InstallOptions): Promise<Insta
       // so its error can be reported. This covers unexpected exceptions after
       // backup/publish without hiding the original failure.
       if (previousTreeBackedUp || workPublished) {
-        const renameFn = opts.deps?.rename ?? renameSync
-        try { restorePreviousTree(renameFn) } catch { /* backup remains durable for manual recovery */ }
+        const renameFn = opts.deps?.rename ?? renameWithWindowsRetry
+        try { await restorePreviousTree(renameFn) } catch { /* backup remains durable for manual recovery */ }
       }
       try {
         assertRuntimeRootNoFollow(opts.baseDir)
-        writeFailedScene(runtimeDir, version, stage, error)
+        await writeFailedScene(runtimeDir, version, stage, error, opts.deps?.rename ?? renameWithWindowsRetry)
       } catch { /* never mask the original install failure */ }
     }
     throw error

@@ -14,12 +14,10 @@
 import { cp, lstat, mkdir, readdir, rm } from 'node:fs/promises'
 import {
   closeSync,
-  constants,
   existsSync,
   fchmodSync,
   fstatSync,
   lstatSync,
-  openSync,
 } from 'node:fs'
 import { basename, dirname, join, resolve, sep } from 'node:path'
 import { randomBytes } from 'node:crypto'
@@ -29,6 +27,7 @@ import { RESTORE_MARKER_BASENAME } from './restore-marker.ts'
 import { assertSafeVersion, isSafeVersion } from './version-safety.ts'
 import {
   atomicWriteRuntimeFileNoFollow,
+  openPrivateNoFollowSync,
   readPrivateFileNoFollow,
 } from './private-fs.ts'
 
@@ -229,8 +228,12 @@ function tightenOwnedDirectory(path: string): boolean {
   if (before.isSymbolicLink() || !before.isDirectory()) return false
   let fd: number | null = null
   try {
-    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW)
-    const opened = fstatSync(fd)
+    // kind 'read' keeps the historical POSIX flags exactly (O_RDONLY|O_NOFOLLOW
+    // — this site never passed O_DIRECTORY); the win32 fallback re-proves
+    // identity around the open instead of following a link (audit S1/D4).
+    const openedDirectory = openPrivateNoFollowSync(path, 'read')
+    fd = openedDirectory.fd
+    const opened = openedDirectory.stats
     if (!opened.isDirectory() || !sameIdentity(before, opened)) return false
     fchmodSync(fd, PRIVATE_DIR_MODE)
     const afterFd = fstatSync(fd)
