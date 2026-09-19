@@ -42,6 +42,15 @@ import {
 } from '../../src/private-fs.ts';
 import { freshBase, journalFixture } from '../support/store-fixtures.ts';
 
+/** Skip the case when the platform cannot create symlinks. */
+function skipUnlessSymlinks(t: { skip(message: string): void }): boolean {
+  if (process.platform === 'win32') {
+    t.skip('symlink creation requires platform privileges on Windows');
+    return true;
+  }
+  return false;
+}
+
 test('private filesystem namespace commits fsync the pinned parent after mkdir/rename/create/unlink', () => {
   const base = freshBase();
   const runtimeDir = path.join(base, 'dsh-runtime');
@@ -368,10 +377,7 @@ test('override: 损坏 → 保留 *.corrupt 并返回 null（可逆，绝不静�
 });
 
 test('authority readers reject symlink leaves without reading, chmodding, or quarantining their targets', t => {
-  if (process.platform === 'win32') {
-    t.skip('symlink creation requires platform privileges on Windows');
-    return;
-  }
+  if (skipUnlessSymlinks(t)) return;
   const base = freshBase();
   const runtimeDir = path.join(base, 'dsh-runtime');
   mkdirSync(runtimeDir, { recursive: true });
@@ -426,10 +432,7 @@ test('authority readers reject multiply linked leaves without mutating old evide
 });
 
 test('authority readers reject a symlinked runtime directory without touching external metadata', t => {
-  if (process.platform === 'win32') {
-    t.skip('symlink creation requires platform privileges on Windows');
-    return;
-  }
+  if (skipUnlessSymlinks(t)) return;
   const base = freshBase();
   const outsideDir = mkdtempSync(path.join(tmpdir(), 'dsh-runtime-store-parent-outside-'));
   const outsideFiles = [
@@ -454,10 +457,7 @@ test('authority readers reject a symlinked runtime directory without touching ex
 });
 
 test('all metadata mutations reject symlinked runtime roots and critical leaves without touching targets', t => {
-  if (process.platform === 'win32') {
-    t.skip('symlink creation requires platform privileges on Windows');
-    return;
-  }
+  if (skipUnlessSymlinks(t)) return;
 
   const rootBase = freshBase();
   const outsideRoot = mkdtempSync(path.join(tmpdir(), 'dsh-runtime-store-write-outside-'));

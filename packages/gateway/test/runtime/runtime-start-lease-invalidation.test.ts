@@ -6,7 +6,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createGatewayRuntimeManager } from '../../src/runtime-manager.ts'
@@ -28,14 +28,52 @@ import {
   config,
   fakePlane,
   runRoute,
-  probeResultsFor,
   makeValidTree,
+  writeVersionSwitchIntent,
+  writeDshHome,
+  runtimeManager,
+  derivedProbe,
 } from '../support/runtime-routes-harness.ts'
 
 // ---------------------------------------------------------------------------
 // Design 21 decision 12 + §6.3 (Phase 4.1/4.5): start primitive and the
 // managed profile-write lease (lifecycle writer barrier)
 // ---------------------------------------------------------------------------
+
+/** The stranded/settled F4 invalidation record: the pre-update shell version,
+ *  the retained selection and the full lastInvalidated* history. */
+function writeF4Override(
+  stateDir: string,
+  fields: { swapAttempted?: boolean; lastOutcome?: string; lastError?: string | null } = {},
+): void {
+  writeOverride(stateDir, {
+    shellVersion: '0.2.0-beta.8',
+    chosenVersion: '1.0.0',
+    resolvedVersion: '1.0.0',
+    pending: null,
+    swapAttempted: false,
+    selectedOnly: false,
+    invalidatedAt: '2026-09-03T07:28:00.000Z',
+    invalidatedReason: 'shell-version-changed',
+    lastInvalidatedAt: '2026-09-03T07:28:00.000Z',
+    lastInvalidatedReason: 'shell-version-changed',
+    lastInvalidatedFromVersion: '1.0.0',
+    lastInvalidationRecovered: false,
+    ...fields,
+  })
+}
+
+/** The builtin root the probe-gated switch leaves authoritative. */
+function assertBuiltinWorkspace(
+  manager: { resolveWorkspace(): unknown },
+  stateDir: string,
+  message?: string,
+): void {
+  const actual = manager.resolveWorkspace()
+  const expected = { path: join(stateDir, 'builtin-anchor'), version: TEST_BUILTIN_VERSION, source: 'builtin' }
+  if (message === undefined) assert.deepEqual(actual, expected)
+  else assert.deepEqual(actual, expected, message)
+}
 
 test('start route: 202 from stopped/error/restart-exhausted; 409 while running/starting; double start 409', async () => {
   let connectionState = 'stopped'
@@ -193,7 +231,7 @@ test('route inventory lists start and /status passes the start field through', a
 test('profile-write lease: acquisition, projection, nested release, underflow guard and post-dispose refusal', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-lease-'))
   try {
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    const manager = runtimeManager(stateDir, fakePlane())
     assert.equal(manager.profileWriteInFlight(), false)
     const first = manager.beginProfileWrite()
     assert.equal(first.ok, true)
@@ -232,7 +270,7 @@ test('beginProfileWrite refuses while a restart, install or start is in flight a
     const restartGate = new Promise<void>((resolve) => { releaseRestart = resolve })
     const plane = fakePlane()
     plane.restartLocal = async () => { plane._state.connectionState = 'ready'; await restartGate }
-    const manager = createGatewayRuntimeManager({ config: config(restartDir), plane, logger: silentLogger })
+    const manager = runtimeManager(restartDir, plane)
     const inflight = manager.restart()
     const lease = manager.beginProfileWrite()
     assert.equal(lease.ok, false)
@@ -299,7 +337,7 @@ test('beginProfileWrite refuses while a restart, install or start is in flight a
     const startGate = new Promise<void>((resolve) => { releaseStart = resolve })
     const plane = fakePlane()
     plane.startLocal = async () => { plane._state.connectionState = 'ready'; await startGate }
-    const manager = createGatewayRuntimeManager({ config: config(startDir), plane, logger: silentLogger })
+    const manager = runtimeManager(startDir, plane)
     const start = manager.start()
     const lease = manager.beginProfileWrite()
     assert.equal(lease.ok, false)
@@ -317,7 +355,7 @@ test('beginProfileWrite refuses while a restart, install or start is in flight a
   const windowDir = mkdtempSync(join(tmpdir(), 'gw-rt-lease-window-'))
   try {
     const plane = fakePlane()
-    const manager = createGatewayRuntimeManager({ config: config(windowDir), plane, logger: silentLogger })
+    const manager = runtimeManager(windowDir, plane)
     for (const state of ['starting', 'restarting'] as const) {
       plane._state.connectionState = state
       const lease = manager.beginProfileWrite()
@@ -344,7 +382,7 @@ test('beginProfileWrite refuses pending and recovery phases (runtime_pending / r
       shellVersion: gatewayPackageVersion, chosenVersion: '1.2.3', resolvedVersion: '1.2.3',
       pending: '1.2.3', swapAttempted: false,
     })
-    const manager = createGatewayRuntimeManager({ config: config(pendingDir), plane: fakePlane(), logger: silentLogger })
+    const manager = runtimeManager(pendingDir, fakePlane())
     const lease = manager.beginProfileWrite()
     assert.equal(lease.ok, false)
     if (!lease.ok) {
@@ -364,7 +402,7 @@ test('beginProfileWrite refuses pending and recovery phases (runtime_pending / r
       pending: '1.2.3', swapAttempted: true,
     })
     const plane = fakePlane()
-    const manager = createGatewayRuntimeManager({ config: config(recoveryDir), plane, logger: silentLogger })
+    const manager = runtimeManager(recoveryDir, plane)
     // Derive the authoritative in-memory block exactly like gateway boot does.
     const startup = await manager.startupTransaction()
     assert.equal(startup.blockedReason, 'swap-attempted')
@@ -389,7 +427,7 @@ test('runtime mutations and start/restart refuse while the profile-write lease i
     plane._state.connectionState = 'stopped'
     plane.restartLocal = async () => { plane._state.connectionState = 'ready' }
     plane.startLocal = async () => { plane._state.connectionState = 'ready' }
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane, logger: silentLogger })
+    const manager = runtimeManager(stateDir, plane)
     const lease = manager.beginProfileWrite()
     assert.equal(lease.ok, true)
     const busyRefusal = (error: unknown): boolean =>
@@ -419,7 +457,7 @@ test('start() state matrix: stopped/error/restart-exhausted reach ok; running/st
   try {
     const plane = fakePlane()
     plane.startLocal = async () => { plane._state.connectionState = 'ready' }
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane, logger: silentLogger })
+    const manager = runtimeManager(stateDir, plane)
     await manager.start()
     assert.equal((await manager.status()).start, 'ok')
     assert.equal((await manager.status()).operationError, null, 'a successful start clears the stale operationError')
@@ -464,7 +502,7 @@ test('start() outcome lifecycle: status().start projects running → ok; double 
     const gate = new Promise<void>((resolve) => { release = resolve })
     const plane = fakePlane()
     plane.startLocal = async () => { plane._state.connectionState = 'ready'; await gate }
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane, logger: silentLogger })
+    const manager = runtimeManager(stateDir, plane)
     // A prior restart verdict must not linger across a fresh start epoch.
     await manager.restart()
     assert.equal((await manager.status()).restart, 'ok')
@@ -495,7 +533,7 @@ test('start() never bypasses the recovery gate or an ordinary pending', async ()
     })
     const plane = fakePlane()
     plane.startLocal = async () => { plane._state.connectionState = 'ready' }
-    const manager = createGatewayRuntimeManager({ config: config(pendingDir), plane, logger: silentLogger })
+    const manager = runtimeManager(pendingDir, plane)
     await assert.rejects(manager.start(), (error: unknown) =>
       (error as { code?: string }).code === 'runtime_pending'
       && /only restore-builtin is allowed until the next startup/.test((error as Error).message))
@@ -514,7 +552,7 @@ test('start() never bypasses the recovery gate or an ordinary pending', async ()
     })
     const plane = fakePlane()
     plane.startLocal = async () => { plane._state.connectionState = 'ready' }
-    const manager = createGatewayRuntimeManager({ config: config(recoveryDir), plane, logger: silentLogger })
+    const manager = runtimeManager(recoveryDir, plane)
     const startup = await manager.startupTransaction()
     assert.equal(startup.blockedReason, 'swap-attempted')
     await assert.rejects(manager.start(), (error: unknown) =>
@@ -538,39 +576,16 @@ test('a stranded F4 invalidation (pointer + invalidatedAt, journal lost) self-he
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-stranded-f4-'))
   try {
     makeValidTree(stateDir, '1.0.0')
-    mkdirSync(join(stateDir, 'dsh-home'), { recursive: true })
-    writeFileSync(join(stateDir, 'dsh-home', 'settings.json'), '{"source":"v1"}')
+    writeDshHome(stateDir, '{"source":"v1"}')
     writeCurrentPointer(stateDir, '1.0.0')
-    writeOverride(stateDir, {
-      shellVersion: '0.2.0-beta.8', // the pre-update gateway shell
-      chosenVersion: '1.0.0',
-      resolvedVersion: '1.0.0',
-      pending: null,
-      swapAttempted: false,
-      selectedOnly: false,
-      invalidatedAt: '2026-09-03T07:28:00.000Z',
-      invalidatedReason: 'shell-version-changed',
-      lastInvalidatedAt: '2026-09-03T07:28:00.000Z',
-      lastInvalidatedReason: 'shell-version-changed',
-      lastInvalidatedFromVersion: '1.0.0',
-      lastInvalidationRecovered: false,
-    })
+    writeF4Override(stateDir)
     assert.equal(readActivationJournalState(stateDir).kind, 'missing', 'the stranded state has no resumable journal')
 
-    const manager = createGatewayRuntimeManager({
-      config: config(stateDir),
-      plane: fakePlane(),
-      logger: silentLogger,
-      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
-    })
+    const manager = runtimeManager(stateDir, fakePlane())
     try {
       const startup = await manager.startupTransaction()
       assert.deepEqual(startup, { blockedReason: null }, 'the re-armed F4 transaction completes cleanly')
-      assert.deepEqual(manager.resolveWorkspace(), {
-        path: join(stateDir, 'builtin-anchor'),
-        version: TEST_BUILTIN_VERSION,
-        source: 'builtin',
-      }, 'the stranded pointer was cleared through the probe-gated builtin switch — no resolveWorkspace crash')
+      assertBuiltinWorkspace(manager, stateDir, 'the stranded pointer was cleared through the probe-gated builtin switch — no resolveWorkspace crash')
       assert.equal(readCurrentPointer(stateDir), null, 'current pointer cleared by the builtin switch')
       assert.equal(readActivationJournalState(stateDir).kind, 'missing', 'transaction journal consumed')
       const preserved = readOverride(stateDir)
@@ -588,21 +603,7 @@ test('a settled F4 invalidation (pointer cleared) is NOT re-armed on later boots
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-settled-f4-'))
   try {
     makeValidTree(stateDir, '1.0.0')
-    writeOverride(stateDir, {
-      shellVersion: '0.2.0-beta.8',
-      chosenVersion: '1.0.0',
-      resolvedVersion: '1.0.0',
-      pending: null,
-      swapAttempted: false,
-      selectedOnly: false,
-      invalidatedAt: '2026-09-03T07:28:00.000Z',
-      invalidatedReason: 'shell-version-changed',
-      lastInvalidatedAt: '2026-09-03T07:28:00.000Z',
-      lastInvalidatedReason: 'shell-version-changed',
-      lastInvalidatedFromVersion: '1.0.0',
-      lastInvalidationRecovered: false,
-      lastOutcome: 'applied',
-    })
+    writeF4Override(stateDir, { lastOutcome: 'applied' })
     const manager = createGatewayRuntimeManager({
       config: config(stateDir),
       plane: fakePlane(),
@@ -616,11 +617,7 @@ test('a settled F4 invalidation (pointer cleared) is NOT re-armed on later boots
       const startup = await manager.startupTransaction()
       assert.deepEqual(startup, { blockedReason: null })
       assert.equal(readActivationJournalState(stateDir).kind, 'missing', 'no transaction was manufactured')
-      assert.deepEqual(manager.resolveWorkspace(), {
-        path: join(stateDir, 'builtin-anchor'),
-        version: TEST_BUILTIN_VERSION,
-        source: 'builtin',
-      }, 'builtin stays authoritative with no extra snapshot/switch cycle')
+      assertBuiltinWorkspace(manager, stateDir, 'builtin stays authoritative with no extra snapshot/switch cycle')
     } finally {
       await manager.dispose()
     }
@@ -640,8 +637,7 @@ test('a FRESH shell-version mismatch over an APPLIED override with a settled app
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-fresh-f4-'))
   try {
     makeValidTree(stateDir, '1.0.0')
-    mkdirSync(join(stateDir, 'dsh-home'), { recursive: true })
-    writeFileSync(join(stateDir, 'dsh-home', 'settings.json'), '{"source":"v1"}')
+    writeDshHome(stateDir, '{"source":"v1"}')
     writeCurrentPointer(stateDir, '1.0.0')
     writeOverride(stateDir, {
       shellVersion: '0.2.0-beta.8', // the pre-update gateway shell
@@ -675,20 +671,11 @@ test('a FRESH shell-version mismatch over an APPLIED override with a settled app
     writeActivationJournal(stateDir, monitoring)
     assert.equal(readOverride(stateDir)?.invalidatedAt, undefined, 'the override is NOT yet invalidated (fresh mismatch)')
 
-    const manager = createGatewayRuntimeManager({
-      config: config(stateDir),
-      plane: fakePlane(),
-      logger: silentLogger,
-      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
-    })
+    const manager = runtimeManager(stateDir, fakePlane())
     try {
       const startup = await manager.startupTransaction()
       assert.deepEqual(startup, { blockedReason: null }, 'the armed F4 transaction completes cleanly')
-      assert.deepEqual(manager.resolveWorkspace(), {
-        path: join(stateDir, 'builtin-anchor'),
-        version: TEST_BUILTIN_VERSION,
-        source: 'builtin',
-      }, 'the fresh mismatch resolved through the probe-gated builtin switch — no resolveWorkspace crash')
+      assertBuiltinWorkspace(manager, stateDir, 'the fresh mismatch resolved through the probe-gated builtin switch — no resolveWorkspace crash')
       assert.equal(readCurrentPointer(stateDir), null, 'current pointer cleared by the builtin switch')
       assert.equal(readActivationJournalState(stateDir).kind, 'missing', 'transaction journal consumed')
       const preserved = readOverride(stateDir)
@@ -712,8 +699,7 @@ test('a FRESH shell mismatch with an intent-phase old-shell transaction replaces
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-fresh-f4-intent-'))
   try {
     makeValidTree(stateDir, '1.0.0')
-    mkdirSync(join(stateDir, 'dsh-home'), { recursive: true })
-    writeFileSync(join(stateDir, 'dsh-home', 'settings.json'), '{"source":"v1"}')
+    writeDshHome(stateDir, '{"source":"v1"}')
     writeCurrentPointer(stateDir, '1.0.0')
     writeOverride(stateDir, {
       shellVersion: '0.2.0-beta.8',
@@ -724,25 +710,14 @@ test('a FRESH shell mismatch with an intent-phase old-shell transaction replaces
       selectedOnly: false,
       lastOutcome: 'applied',
     })
-    writeActivationIntent(stateDir, {
-      targetVersion: '1.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
-    })
+    writeVersionSwitchIntent(stateDir, '1.0.0')
     assert.equal(readOverride(stateDir)?.invalidatedAt, undefined, 'fresh mismatch')
 
-    const manager = createGatewayRuntimeManager({
-      config: config(stateDir),
-      plane: fakePlane(),
-      logger: silentLogger,
-      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
-    })
+    const manager = runtimeManager(stateDir, fakePlane())
     try {
       const startup = await manager.startupTransaction()
       assert.deepEqual(startup, { blockedReason: null }, 'the replaced F4 transaction completes cleanly')
-      assert.deepEqual(manager.resolveWorkspace(), {
-        path: join(stateDir, 'builtin-anchor'),
-        version: TEST_BUILTIN_VERSION,
-        source: 'builtin',
-      }, 'the old-shell intent was superseded by the probe-gated builtin switch')
+      assertBuiltinWorkspace(manager, stateDir, 'the old-shell intent was superseded by the probe-gated builtin switch')
       assert.equal(readCurrentPointer(stateDir), null, 'pointer cleared through the builtin switch')
       const preserved = readOverride(stateDir)
       assert.equal(preserved?.chosenVersion, '1.0.0', 'the historical selection is preserved')
@@ -772,8 +747,7 @@ test('a FRESH shell mismatch with a LIVE old-shell transaction journal (prepared
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-fresh-f4-live-'))
   try {
     makeValidTree(stateDir, '1.0.0')
-    mkdirSync(join(stateDir, 'dsh-home'), { recursive: true })
-    writeFileSync(join(stateDir, 'dsh-home', 'settings.json'), '{"source":"v1"}')
+    writeDshHome(stateDir, '{"source":"v1"}')
     // Builtin (0.9.0) is still the active source — the old shell died BEFORE
     // the pointer switch, so no current pointer exists yet.
     writeOverride(stateDir, {
@@ -859,39 +833,14 @@ test('a stranded F4 invalidation carrying stale failure markers still self-heals
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-stranded-markers-'))
   try {
     makeValidTree(stateDir, '1.0.0')
-    mkdirSync(join(stateDir, 'dsh-home'), { recursive: true })
-    writeFileSync(join(stateDir, 'dsh-home', 'settings.json'), '{}')
+    writeDshHome(stateDir, '{}')
     writeCurrentPointer(stateDir, '1.0.0')
-    writeOverride(stateDir, {
-      shellVersion: '0.2.0-beta.8',
-      chosenVersion: '1.0.0',
-      resolvedVersion: '1.0.0',
-      pending: null,
-      swapAttempted: true,
-      selectedOnly: false,
-      invalidatedAt: '2026-09-03T07:28:00.000Z',
-      invalidatedReason: 'shell-version-changed',
-      lastInvalidatedAt: '2026-09-03T07:28:00.000Z',
-      lastInvalidatedReason: 'shell-version-changed',
-      lastInvalidatedFromVersion: '1.0.0',
-      lastInvalidationRecovered: false,
-      lastOutcome: 'snapshot-failed',
-      lastError: 'stale snapshot failure from before the interruption',
-    })
-    const manager = createGatewayRuntimeManager({
-      config: config(stateDir),
-      plane: fakePlane(),
-      logger: silentLogger,
-      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
-    })
+    writeF4Override(stateDir, { swapAttempted: true, lastOutcome: 'snapshot-failed', lastError: 'stale snapshot failure from before the interruption' })
+    const manager = runtimeManager(stateDir, fakePlane(), { probeCandidate: derivedProbe(stateDir) })
     try {
       const startup = await manager.startupTransaction()
       assert.deepEqual(startup, { blockedReason: null }, 'stale failure markers must not block the re-armed transaction')
-      assert.deepEqual(manager.resolveWorkspace(), {
-        path: join(stateDir, 'builtin-anchor'),
-        version: TEST_BUILTIN_VERSION,
-        source: 'builtin',
-      })
+      assertBuiltinWorkspace(manager, stateDir)
       assert.equal(readCurrentPointer(stateDir), null, 'pointer cleared through the builtin switch')
       const record = readOverride(stateDir)
       assert.equal(record?.lastOutcome, 'applied', 'the re-armed transaction ran and committed its own verdict (stale snapshot-failed superseded)')
@@ -919,8 +868,7 @@ test('an interrupted F4 apply that failed at snapshot (intent journal + stale ma
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-intent-snapshot-fail-'))
   try {
     makeValidTree(stateDir, '1.0.0')
-    mkdirSync(join(stateDir, 'dsh-home'), { recursive: true })
-    writeFileSync(join(stateDir, 'dsh-home', 'settings.json'), '{"source":"v1"}')
+    writeDshHome(stateDir, '{"source":"v1"}')
     writeCurrentPointer(stateDir, '1.0.0')
     writeActivationIntent(stateDir, {
       targetVersion: TEST_BUILTIN_VERSION,
@@ -928,36 +876,12 @@ test('an interrupted F4 apply that failed at snapshot (intent journal + stale ma
       manualRollback: false,
       intentKind: 'shell-invalidation',
     })
-    writeOverride(stateDir, {
-      shellVersion: '0.2.0-beta.8',
-      chosenVersion: '1.0.0',
-      resolvedVersion: '1.0.0',
-      pending: null,
-      swapAttempted: true,
-      selectedOnly: false,
-      invalidatedAt: '2026-09-03T07:28:00.000Z',
-      invalidatedReason: 'shell-version-changed',
-      lastInvalidatedAt: '2026-09-03T07:28:00.000Z',
-      lastInvalidatedReason: 'shell-version-changed',
-      lastInvalidatedFromVersion: '1.0.0',
-      lastInvalidationRecovered: false,
-      lastOutcome: 'snapshot-failed',
-      lastError: 'snapshot kept failing while the cause (disk/DSH_HOME) was present',
-    })
-    const manager = createGatewayRuntimeManager({
-      config: config(stateDir),
-      plane: fakePlane(),
-      logger: silentLogger,
-      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
-    })
+    writeF4Override(stateDir, { swapAttempted: true, lastOutcome: 'snapshot-failed', lastError: 'snapshot kept failing while the cause (disk/DSH_HOME) was present' })
+    const manager = runtimeManager(stateDir, fakePlane(), { probeCandidate: derivedProbe(stateDir) })
     try {
       const startup = await manager.startupTransaction()
       assert.deepEqual(startup, { blockedReason: null }, 'stale markers must not block the journaled resume')
-      assert.deepEqual(manager.resolveWorkspace(), {
-        path: join(stateDir, 'builtin-anchor'),
-        version: TEST_BUILTIN_VERSION,
-        source: 'builtin',
-      })
+      assertBuiltinWorkspace(manager, stateDir)
       assert.equal(readCurrentPointer(stateDir), null)
       assert.equal(readActivationJournalState(stateDir).kind, 'missing', 'intent journal consumed')
       const record = readOverride(stateDir)

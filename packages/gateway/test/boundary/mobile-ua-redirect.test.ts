@@ -13,7 +13,7 @@ import type { AuthProvider } from '../../src/auth.ts'
 import { DEFAULT_MOBILE_ENTRY_PATH, parseGatewayConfig } from '../../src/config.ts'
 import { createGatewayDispatch } from '../../src/dispatch.ts'
 import { createGatewayRequestPolicy } from '../../src/middleware.ts'
-import { FakeRequest, FakeResponse } from '../support/utils.ts'
+import { FakeRequest, FakeResponse, gatewayRequest } from '../support/utils.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
 const PASSWORD = 'correct-horse-battery'
@@ -95,10 +95,7 @@ async function runHttp(
 
 test('enabled: mobile UA GET / answers 302 to the default mobile entry with no-store', async () => {
   const s = setup({ auth: authenticatedAuth(), mobileUaRedirect: true })
-  const res = await runHttp(s.dispatch, new FakeRequest('GET', '/', {
-    host: 'gateway.example:3000',
-    'user-agent': MOBILE_UA,
-  }))
+  const res = await runHttp(s.dispatch, gatewayRequest('GET', '/', { 'user-agent': MOBILE_UA }))
   assert.equal(res.status, 302)
   assert.equal(res.headers.location, DEFAULT_MOBILE_ENTRY_PATH)
   assert.equal(res.headers['cache-control'], 'no-store')
@@ -107,20 +104,14 @@ test('enabled: mobile UA GET / answers 302 to the default mobile entry with no-s
 
 test('enabled: a custom --mobile-entry target is honored', async () => {
   const s = setup({ auth: authenticatedAuth(), mobileUaRedirect: true, mobileEntryPath: '/m' })
-  const res = await runHttp(s.dispatch, new FakeRequest('GET', '/', {
-    host: 'gateway.example:3000',
-    'user-agent': 'iPhone; Mobile/15E148 Safari',
-  }))
+  const res = await runHttp(s.dispatch, gatewayRequest('GET', '/', { 'user-agent': 'iPhone; Mobile/15E148 Safari' }))
   assert.equal(res.status, 302)
   assert.equal(res.headers.location, '/m')
 })
 
 test('enabled: HEAD / with a mobile UA shunts too (no body)', async () => {
   const s = setup({ auth: authenticatedAuth(), mobileUaRedirect: true })
-  const res = await runHttp(s.dispatch, new FakeRequest('HEAD', '/', {
-    host: 'gateway.example:3000',
-    'user-agent': MOBILE_UA,
-  }))
+  const res = await runHttp(s.dispatch, gatewayRequest('HEAD', '/', { 'user-agent': MOBILE_UA }))
   assert.equal(res.status, 302)
   assert.equal(res.headers.location, DEFAULT_MOBILE_ENTRY_PATH)
   assert.equal(res.body, '')
@@ -128,10 +119,7 @@ test('enabled: HEAD / with a mobile UA shunts too (no body)', async () => {
 
 test('enabled: non-mobile UA GET / is proxied, not shunted', async () => {
   const s = setup({ auth: authenticatedAuth(), mobileUaRedirect: true })
-  const res = await runHttp(s.dispatch, new FakeRequest('GET', '/', {
-    host: 'gateway.example:3000',
-    'user-agent': DESKTOP_UA,
-  }))
+  const res = await runHttp(s.dispatch, gatewayRequest('GET', '/', { 'user-agent': DESKTOP_UA }))
   assert.equal(res.status, 200)
   assert.equal(res.body, 'proxied')
   assert.equal(s.httpProxyCalls, 1)
@@ -139,20 +127,14 @@ test('enabled: non-mobile UA GET / is proxied, not shunted', async () => {
 
 test('enabled: POST / with a mobile UA is proxied (shunting is GET/HEAD only)', async () => {
   const s = setup({ auth: authenticatedAuth(), mobileUaRedirect: true })
-  const res = await runHttp(s.dispatch, new FakeRequest('POST', '/', {
-    host: 'gateway.example:3000',
-    'user-agent': MOBILE_UA,
-  }))
+  const res = await runHttp(s.dispatch, gatewayRequest('POST', '/', { 'user-agent': MOBILE_UA }))
   assert.equal(res.status, 200)
   assert.equal(s.httpProxyCalls, 1)
 })
 
 test('enabled: mobile UA on a non-root path never shunts (chamber surface still wins)', async () => {
   const s = setup({ auth: authenticatedAuth(), mobileUaRedirect: true })
-  const res = await runHttp(s.dispatch, new FakeRequest('GET', '/chamber/', {
-    host: 'gateway.example:3000',
-    'user-agent': MOBILE_UA,
-  }))
+  const res = await runHttp(s.dispatch, gatewayRequest('GET', '/chamber/', { 'user-agent': MOBILE_UA }))
   assert.equal(res.status, 200)
   assert.equal(res.body, 'feature')
   assert.equal(s.httpProxyCalls, 0)
@@ -160,10 +142,7 @@ test('enabled: mobile UA on a non-root path never shunts (chamber surface still 
 
 test('disabled (default): mobile UA GET / is proxied normally', async () => {
   const s = setup({ auth: authenticatedAuth() })
-  const res = await runHttp(s.dispatch, new FakeRequest('GET', '/', {
-    host: 'gateway.example:3000',
-    'user-agent': MOBILE_UA,
-  }))
+  const res = await runHttp(s.dispatch, gatewayRequest('GET', '/', { 'user-agent': MOBILE_UA }))
   assert.equal(res.status, 200)
   assert.equal(res.body, 'proxied')
   assert.equal(s.httpProxyCalls, 1)
@@ -171,10 +150,7 @@ test('disabled (default): mobile UA GET / is proxied normally', async () => {
 
 test('a forged mobile UA cannot bypass the auth gate (401 before any shunting)', async () => {
   const s = setup({ auth: deniedAuth(), mobileUaRedirect: true })
-  const res = await runHttp(s.dispatch, new FakeRequest('GET', '/', {
-    host: 'gateway.example:3000',
-    'user-agent': MOBILE_UA,
-  }))
+  const res = await runHttp(s.dispatch, gatewayRequest('GET', '/', { 'user-agent': MOBILE_UA }))
   // Unauthenticated: the gate answers 401 — never the mobile 302, never the proxy.
   assert.equal(res.status, 401)
   assert.equal(JSON.parse(res.body).code, 'unauthorized')
@@ -184,11 +160,7 @@ test('a forged mobile UA cannot bypass the auth gate (401 before any shunting)',
 
 test('the login flow wins: mobile UA GET /auth/login still serves the login page', async () => {
   const s = setup({ auth: deniedAuth(), mobileUaRedirect: true })
-  const res = await runHttp(s.dispatch, new FakeRequest('GET', '/auth/login', {
-    host: 'gateway.example:3000',
-    'user-agent': MOBILE_UA,
-    accept: 'text/html',
-  }))
+  const res = await runHttp(s.dispatch, gatewayRequest('GET', '/auth/login', { 'user-agent': MOBILE_UA, accept: 'text/html' }))
   assert.equal(res.status, 200)
   assert.match(String(res.headers['content-type']), /text\/html/)
   assert.equal(s.httpProxyCalls, 0)
@@ -199,10 +171,7 @@ test('enabled: the ?desktop=1 escape hatch bypasses the shunting (mobile entry e
   // /?desktop=1 — without the bypass the mobile UA would be bounced right
   // back into the shunting loop.
   const s = setup({ auth: authenticatedAuth(), mobileUaRedirect: true })
-  const res = await runHttp(s.dispatch, new FakeRequest('GET', '/?desktop=1', {
-    host: 'gateway.example:3000',
-    'user-agent': MOBILE_UA,
-  }))
+  const res = await runHttp(s.dispatch, gatewayRequest('GET', '/?desktop=1', { 'user-agent': MOBILE_UA }))
   assert.equal(res.status, 200)
   assert.equal(res.body, 'proxied')
   assert.equal(res.headers.location, undefined)
@@ -211,10 +180,7 @@ test('enabled: the ?desktop=1 escape hatch bypasses the shunting (mobile entry e
 
 test('enabled: a stale principal (rotated generation) is rejected before the shunting answers', async () => {
   const s = setup({ auth: staleGenerationAuth(), mobileUaRedirect: true })
-  const res = await runHttp(s.dispatch, new FakeRequest('GET', '/', {
-    host: 'gateway.example:3000',
-    'user-agent': MOBILE_UA,
-  }))
+  const res = await runHttp(s.dispatch, gatewayRequest('GET', '/', { 'user-agent': MOBILE_UA }))
   assert.equal(res.status, 401)
   assert.equal(res.headers.location, undefined, 'no shunting 302 may answer for a revoked principal')
   assert.equal(s.httpProxyCalls, 0)
@@ -222,11 +188,7 @@ test('enabled: a stale principal (rotated generation) is rejected before the shu
 
 test('a forged mobile UA with an API Accept header still gets the 401 JSON shape, never a redirect', async () => {
   const s = setup({ auth: deniedAuth(), mobileUaRedirect: true })
-  const res = await runHttp(s.dispatch, new FakeRequest('GET', '/', {
-    host: 'gateway.example:3000',
-    'user-agent': MOBILE_UA,
-    accept: 'application/json',
-  }))
+  const res = await runHttp(s.dispatch, gatewayRequest('GET', '/', { 'user-agent': MOBILE_UA, accept: 'application/json' }))
   assert.equal(res.status, 401)
   assert.equal(JSON.parse(res.body).code, 'unauthorized')
   assert.equal(res.headers.location, undefined)
@@ -239,21 +201,12 @@ test('the desktop escape survives the login round-trip (unauthenticated /?deskto
   // carry the marker, and the POST (form action /auth/login?desktop=1) must
   // land back on /?desktop=1 — not on '/' which would be shunted again.
   const s = setup({ auth: deniedAuth(), mobileUaRedirect: true })
-  const pre = await runHttp(s.dispatch, new FakeRequest('GET', '/?desktop=1', {
-    host: 'gateway.example:3000',
-    'user-agent': MOBILE_UA,
-    accept: 'text/html',
-  }))
+  const pre = await runHttp(s.dispatch, gatewayRequest('GET', '/?desktop=1', { 'user-agent': MOBILE_UA, accept: 'text/html' }))
   assert.equal(pre.status, 302)
   assert.equal(pre.headers.location, '/auth/login?desktop=1')
   assert.equal(s.httpProxyCalls, 0)
 
-  const postReq = new FakeRequest('POST', '/auth/login?desktop=1', {
-    host: 'gateway.example:3000',
-    'user-agent': MOBILE_UA,
-    accept: 'text/html',
-    'content-type': 'application/x-www-form-urlencoded',
-  })
+  const postReq = gatewayRequest('POST', '/auth/login?desktop=1', { 'user-agent': MOBILE_UA, accept: 'text/html', 'content-type': 'application/x-www-form-urlencoded' })
   // Paused-mode body (test/support/utils.ts): emitted before the dispatch middleware
   // attaches its 'data' listener, replayed when readBody() subscribes.
   postReq.emit('data', Buffer.from(`password=${encodeURIComponent(PASSWORD)}`))

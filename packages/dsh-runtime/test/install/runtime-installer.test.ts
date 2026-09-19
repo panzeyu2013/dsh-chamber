@@ -17,6 +17,7 @@ import {
 import type { InstallerDeps, RunOptions, RunResult } from '../../src/runtime-installer.ts'
 import type { RuntimeInstallResolution } from '../../src/dsh-runtime-updater.ts'
 import { markStorePruneNeeded } from '../../src/dsh-runtime-store.ts'
+import { criticalFilesFor } from '../support/store-fixtures.ts'
 
 const VERSION = '0.1.1-rc.2'
 const TARBALL = Buffer.from('controlled top-level dsh tarball fixture')
@@ -35,6 +36,14 @@ async function waitForEsrch(pid: number, what: string): Promise<void> {
     await new Promise(resolve => setTimeout(resolve, 20))
   }
   assert.fail(`${what} (pid ${pid}) still alive after the reaping window`)
+}
+
+/** A fresh base dir with its dsh-runtime directory created (prune fixtures). */
+function baseDirWithRuntime(): { baseDir: string; runtimeDir: string } {
+  const baseDir = makeBaseDir()
+  const runtimeDir = path.join(baseDir, 'dsh-runtime')
+  mkdirSync(runtimeDir, { recursive: true })
+  return { baseDir, runtimeDir }
 }
 
 function makeBaseDir(): string {
@@ -65,6 +74,22 @@ async function withPatchedFileHandleWrite<T>(
   }
 }
 
+/** installRuntimeVersion over the fixture base dir, the resolved version and the
+ *  fake pnpm entry; callers pass the deps wire plus any extra options. */
+function install(
+  baseDir: string,
+  deps: Partial<InstallerDeps>,
+  overrides: Partial<Parameters<typeof installRuntimeVersion>[0]> = {},
+): ReturnType<typeof installRuntimeVersion> {
+  return installRuntimeVersion({
+    baseDir,
+    resolution: resolution(),
+    pnpmEntry: '/pnpm/bin/pnpm.cjs',
+    deps,
+    ...overrides,
+  })
+}
+
 function makeExistingTree(baseDir: string, version: string, valid: boolean): string {
   const tree = path.join(baseDir, 'dsh-runtime', version)
   mkdirSync(path.join(tree, 'node_modules', '@deepseek-ai', 'dsh', 'lib'), { recursive: true })
@@ -73,13 +98,7 @@ function makeExistingTree(baseDir: string, version: string, valid: boolean): str
   writeFileSync(path.join(tree, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), JSON.stringify({
     name: '@deepseek-ai/dsh', version,
   }))
-  const criticalFiles = Object.fromEntries([
-    'node_modules/@deepseek-ai/dsh/package.json',
-    'node_modules/@deepseek-ai/dsh/lib/bin.js',
-  ].map(relativePath => [
-    relativePath,
-    `sha256-${createHash('sha256').update(readFileSync(path.join(tree, relativePath))).digest('base64')}`,
-  ]))
+  const criticalFiles = criticalFilesFor(tree)
   writeFileSync(path.join(tree, 'package.json'), JSON.stringify(valid ? {
     dependencies: { '@deepseek-ai/dsh': version },
     dsh: { platform: `${process.platform}-${process.arch}`, criticalFiles },
@@ -110,6 +129,15 @@ const smokeOk: InstallerDeps['smoke'] = async (workDir, version) => {
   writeFileSync(path.join(packageDir, 'lib', 'bin.js'), `console.log(${JSON.stringify(version)})\n`)
 }
 
+/** pruneRuntimeStore over the fake pnpm entry and a zero-status install run. */
+function pruneStore(baseDir: string, deps: Partial<InstallerDeps> = {}): ReturnType<typeof pruneRuntimeStore> {
+  return pruneRuntimeStore({
+    baseDir,
+    pnpmEntry: '/pnpm/bin/pnpm.cjs',
+    deps: { node: nodeFn, run: async () => ({ status: 0, stdout: '', stderr: '' }), ...deps },
+  })
+}
+
 function depsWithRun(run: InstallerDeps['run']): Partial<InstallerDeps> {
   return { node: nodeFn, run, download: downloadOk, prune: pruneOk, smoke: smokeOk }
 }
@@ -134,17 +162,12 @@ test('installRuntimeVersion: consumes a bound local tarball and pins the registr
       .dependencies['@deepseek-ai/dsh']
     return { status: 0, stdout: '', stderr: '' }
   }
-  await installRuntimeVersion({
-    baseDir,
-    resolution: resolution(),
-    pnpmEntry: '/pnpm/bin/pnpm.cjs',
-    deps: {
+  await install(baseDir, {
       ...depsWithRun(run),
       download: async (bound, destination) => {
         downloaded = bound
         writeFileSync(destination, TARBALL)
       },
-    },
   })
 
   assert.deepEqual(downloaded, resolution())
@@ -177,12 +200,7 @@ test('installRuntimeVersion: writes allowBuilds before pnpm and publishes no tar
     }
     return { status: 0, stdout: '', stderr: '' }
   }
-  const result = await installRuntimeVersion({
-    baseDir,
-    resolution: resolution(),
-    pnpmEntry: '/pnpm/bin/pnpm.cjs',
-    deps: depsWithRun(run),
-  })
+  const result = await install(baseDir, depsWithRun(run))
   assert.equal(pidDuringRun, '424242', 'work marker records the actual child pid reported by run')
   assert.equal(existsSync(path.join(result.versionTreeDir, 'pid')), false)
   assert.equal(existsSync(path.join(result.versionTreeDir, 'dsh-runtime-package.tgz')), false)
@@ -200,12 +218,7 @@ test('installRuntimeVersion: rejects unsafe/unbound resolution before download',
       download: async () => { downloads += 1 },
     },
   }))
-  await assert.rejects(installRuntimeVersion({
-    baseDir,
-    resolution: resolution({ integrity: 'sha512-invalid' }),
-    pnpmEntry: '/pnpm/bin/pnpm.cjs',
-    deps: depsWithRun(async () => ({ status: 0, stdout: '', stderr: '' })),
-  }), /integrity/)
+  await assert.rejects(install(baseDir, depsWithRun(async () => ({ status: 0, stdout: '', stderr: '' })), { resolution: resolution({ integrity: 'sha512-invalid' }) }), /integrity/)
   assert.equal(downloads, 0)
 })
 
@@ -218,12 +231,7 @@ test('installRuntimeVersion: retries a nonzero install once, then succeeds', asy
       ? { status: 1, stdout: '', stderr: 'transient koffi fetch fail' }
       : { status: 0, stdout: '', stderr: '' }
   }
-  const result = await installRuntimeVersion({
-    baseDir,
-    resolution: resolution(),
-    pnpmEntry: '/pnpm/bin/pnpm.cjs',
-    deps: depsWithRun(run),
-  })
+  const result = await install(baseDir, depsWithRun(run))
   assert.equal(calls, 2)
   assert.equal(result.resolvedVersion, VERSION)
 })
@@ -235,12 +243,7 @@ test('installRuntimeVersion: retry failure and smoke failure remain loud', async
     stdout: '',
     stderr: 'ERR_PNPM_IGNORED_BUILDS /abs/path',
   })
-  await assert.rejects(installRuntimeVersion({
-    baseDir,
-    resolution: resolution(),
-    pnpmEntry: '/pnpm/bin/pnpm.cjs',
-    deps: depsWithRun(failedRun),
-  }), /dsh runtime install failed/)
+  await assert.rejects(install(baseDir, depsWithRun(failedRun)), /dsh runtime install failed/)
 
   await assert.rejects(installRuntimeVersion({
     baseDir: makeBaseDir(),
@@ -255,12 +258,7 @@ test('installRuntimeVersion: retry failure and smoke failure remain loud', async
 
 test('installRuntimeVersion: success publishes exact version/source manifest atomically', async () => {
   const baseDir = makeBaseDir()
-  const result = await installRuntimeVersion({
-    baseDir,
-    resolution: resolution(),
-    pnpmEntry: '/pnpm/bin/pnpm.cjs',
-    deps: depsWithRun(okRun({ args: [], opts: [] })),
-  })
+  const result = await install(baseDir, depsWithRun(okRun({ args: [], opts: [] })))
   const tree = path.join(baseDir, 'dsh-runtime', VERSION)
   assert.equal(result.versionTreeDir, tree)
   const manifest = JSON.parse(readFileSync(path.join(tree, 'package.json'), 'utf8'))
@@ -282,15 +280,10 @@ test('installRuntimeVersion: refuses to overwrite or reuse an already-valid tree
   const baseDir = makeBaseDir()
   const tree = makeExistingTree(baseDir, VERSION, true)
   let downloads = 0
-  await assert.rejects(installRuntimeVersion({
-    baseDir,
-    resolution: resolution(),
-    pnpmEntry: '/pnpm/bin/pnpm.cjs',
-    deps: {
+  await assert.rejects(install(baseDir, {
       ...depsWithRun(async () => ({ status: 0, stdout: '', stderr: '' })),
       download: async () => { downloads += 1 },
-    },
-  }), /already installed and valid/)
+  }))
   assert.equal(downloads, 0)
   assert.equal(readFileSync(path.join(tree, 'sentinel.txt'), 'utf8'), 'previous tree')
   assert.equal(existsSync(path.join(baseDir, 'dsh-runtime', `${VERSION}.failed`)), false)
@@ -302,12 +295,7 @@ test('installRuntimeVersion: safely replaces a legacy tree without critical-file
   const legacy = JSON.parse(readFileSync(path.join(tree, 'package.json'), 'utf8'))
   delete legacy.dsh.criticalFiles
   writeFileSync(path.join(tree, 'package.json'), JSON.stringify(legacy))
-  const result = await installRuntimeVersion({
-    baseDir,
-    resolution: resolution(),
-    pnpmEntry: '/pnpm/bin/pnpm.cjs',
-    deps: depsWithRun(async () => ({ status: 0, stdout: '', stderr: '' })),
-  })
+  const result = await install(baseDir, depsWithRun(async () => ({ status: 0, stdout: '', stderr: '' })))
   assert.equal(result.versionTreeDir, tree)
   assert.equal(existsSync(path.join(tree, 'sentinel.txt')), false)
   verifyRuntimeTreeCriticalFiles(tree, VERSION)
@@ -316,12 +304,7 @@ test('installRuntimeVersion: safely replaces a legacy tree without critical-file
 test('installRuntimeVersion: invalid old tree is backed up until a verified publish commits', async () => {
   const baseDir = makeBaseDir()
   const tree = makeExistingTree(baseDir, VERSION, false)
-  const result = await installRuntimeVersion({
-    baseDir,
-    resolution: resolution(),
-    pnpmEntry: '/pnpm/bin/pnpm.cjs',
-    deps: depsWithRun(okRun({ args: [], opts: [] })),
-  })
+  const result = await install(baseDir, depsWithRun(okRun({ args: [], opts: [] })))
   assert.equal(result.versionTreeDir, tree)
   assert.equal(existsSync(path.join(tree, 'sentinel.txt')), false)
   assert.equal(readdirSync(path.dirname(tree)).some((name) => name.includes('.publish-backup-')), false)
@@ -330,11 +313,7 @@ test('installRuntimeVersion: invalid old tree is backed up until a verified publ
 test('installRuntimeVersion: injected publish failure restores the invalid old tree', async () => {
   const baseDir = makeBaseDir()
   const tree = makeExistingTree(baseDir, VERSION, false)
-  await assert.rejects(installRuntimeVersion({
-    baseDir,
-    resolution: resolution(),
-    pnpmEntry: '/pnpm/bin/pnpm.cjs',
-    deps: {
+  await assert.rejects(install(baseDir, {
       ...depsWithRun(okRun({ args: [], opts: [] })),
       rename: (source, destination) => {
         if (path.basename(source).startsWith('.work-') && destination === tree) {
@@ -342,8 +321,7 @@ test('installRuntimeVersion: injected publish failure restores the invalid old t
         }
         renameSync(source, destination)
       },
-    },
-  }), /injected publish rename failure/)
+  }))
   assert.equal(readFileSync(path.join(tree, 'sentinel.txt'), 'utf8'), 'previous tree')
   assert.equal(readdirSync(path.dirname(tree)).some((name) => name.includes('.publish-backup-')), false)
 })
@@ -351,15 +329,10 @@ test('installRuntimeVersion: injected publish failure restores the invalid old t
 test('installRuntimeVersion: injected post-publish verification failure restores the old tree', async () => {
   const baseDir = makeBaseDir()
   const tree = makeExistingTree(baseDir, VERSION, false)
-  await assert.rejects(installRuntimeVersion({
-    baseDir,
-    resolution: resolution(),
-    pnpmEntry: '/pnpm/bin/pnpm.cjs',
-    deps: {
+  await assert.rejects(install(baseDir, {
       ...depsWithRun(okRun({ args: [], opts: [] })),
       verifyPublished: () => { throw new Error('injected digest verification failure') },
-    },
-  }), /injected digest verification failure/)
+  }))
   assert.equal(readFileSync(path.join(tree, 'sentinel.txt'), 'utf8'), 'previous tree')
   assert.equal(readdirSync(path.dirname(tree)).some((name) => name.includes('.publish-backup-')), false)
 })
@@ -368,12 +341,7 @@ test('installRuntimeVersion: published tree is recursively read-only', {
   skip: process.platform === 'win32' ? 'Unix immutable-tree contract' : false,
 }, async () => {
   const baseDir = makeBaseDir()
-  const result = await installRuntimeVersion({
-    baseDir,
-    resolution: resolution(),
-    pnpmEntry: '/pnpm/bin/pnpm.cjs',
-    deps: depsWithRun(okRun({ args: [], opts: [] })),
-  })
+  const result = await install(baseDir, depsWithRun(okRun({ args: [], opts: [] })))
   for (const entryPath of [
     result.versionTreeDir,
     path.join(result.versionTreeDir, 'package.json'),
@@ -386,12 +354,7 @@ test('installRuntimeVersion: published tree is recursively read-only', {
 
 test('verifyRuntimeTreeCriticalFiles: detects post-publication critical-file drift', async () => {
   const baseDir = makeBaseDir()
-  const result = await installRuntimeVersion({
-    baseDir,
-    resolution: resolution(),
-    pnpmEntry: '/pnpm/bin/pnpm.cjs',
-    deps: depsWithRun(okRun({ args: [], opts: [] })),
-  })
+  const result = await install(baseDir, depsWithRun(okRun({ args: [], opts: [] })))
   const bin = path.join(result.versionTreeDir, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
   chmodSync(bin, 0o600)
   writeFileSync(bin, '// corrupted after publish')
@@ -406,12 +369,7 @@ test('installRuntimeVersion: failure scene is compact, owner-only, and sanitized
     stdout: '',
     stderr: `password=${secret} https://user:${secret}@registry.example/private/pkg?token=${secret} /Users/alice/private/${'x'.repeat(10_000)}`,
   })
-  await assert.rejects(installRuntimeVersion({
-    baseDir,
-    resolution: resolution(),
-    pnpmEntry: '/pnpm/bin/pnpm.cjs',
-    deps: depsWithRun(failedRun),
-  }), /dsh runtime install failed/)
+  await assert.rejects(install(baseDir, depsWithRun(failedRun)), /dsh runtime install failed/)
 
   const scene = path.join(baseDir, 'dsh-runtime', `${VERSION}.failed`)
   const recordPath = path.join(scene, 'failure.json')
@@ -785,9 +743,7 @@ test('pruneRuntimeStore: uses the supervised embedded pnpm and private store pat
 })
 
 test('pruneRuntimeStore: reclaims .pnpm-cache/.xdg-cache content after a successful prune when the durable request carries cache-reclaim', async () => {
-  const baseDir = makeBaseDir()
-  const runtimeDir = path.join(baseDir, 'dsh-runtime')
-  mkdirSync(runtimeDir, { recursive: true })
+  const { baseDir, runtimeDir } = baseDirWithRuntime()
   const cacheFile = path.join(runtimeDir, '.pnpm-cache', 'metadata', 'registry.json')
   const xdgFile = path.join(runtimeDir, '.xdg-cache', 'dl', 'tarball')
   mkdirSync(path.dirname(cacheFile), { recursive: true })
@@ -795,11 +751,7 @@ test('pruneRuntimeStore: reclaims .pnpm-cache/.xdg-cache content after a success
   writeFileSync(cacheFile, 'cache-entry')
   writeFileSync(xdgFile, 'xdg-entry')
   markStorePruneNeeded(baseDir, 'cache-reclaim')
-  await pruneRuntimeStore({
-    baseDir,
-    pnpmEntry: '/pnpm/bin/pnpm.cjs',
-    deps: { node: nodeFn, run: async () => ({ status: 0, stdout: '', stderr: '' }) },
-  })
+  await pruneStore(baseDir)
   // The cache directories themselves stay (installers keep state inside them).
   assert.equal(existsSync(path.join(runtimeDir, '.pnpm-cache')), true)
   assert.equal(existsSync(path.join(runtimeDir, '.xdg-cache')), true)
@@ -808,18 +760,12 @@ test('pruneRuntimeStore: reclaims .pnpm-cache/.xdg-cache content after a success
 })
 
 test('pruneRuntimeStore: leaves the private caches byte-for-byte intact without a cache-reclaim reason', async () => {
-  const baseDir = makeBaseDir()
-  const runtimeDir = path.join(baseDir, 'dsh-runtime')
-  mkdirSync(runtimeDir, { recursive: true })
+  const { baseDir, runtimeDir } = baseDirWithRuntime()
   const cacheFile = path.join(runtimeDir, '.pnpm-cache', 'keep.json')
   mkdirSync(path.dirname(cacheFile), { recursive: true })
   writeFileSync(cacheFile, 'keep-me')
   markStorePruneNeeded(baseDir, 'explicit-cleanup:1.0.0')
-  await pruneRuntimeStore({
-    baseDir,
-    pnpmEntry: '/pnpm/bin/pnpm.cjs',
-    deps: { node: nodeFn, run: async () => ({ status: 0, stdout: '', stderr: '' }) },
-  })
+  await pruneStore(baseDir)
   assert.equal(readFileSync(cacheFile, 'utf8'), 'keep-me',
     'a plain prune must never touch the private caches')
 })
@@ -827,28 +773,20 @@ test('pruneRuntimeStore: leaves the private caches byte-for-byte intact without 
 test('pruneRuntimeStore: cache reclaim removes a symlink entry itself and never follows it out of the private dirs', {
   skip: process.platform === 'win32' ? 'symlink fixture requires Unix permissions' : false,
 }, async () => {
-  const baseDir = makeBaseDir()
-  const runtimeDir = path.join(baseDir, 'dsh-runtime')
-  mkdirSync(runtimeDir, { recursive: true })
+  const { baseDir, runtimeDir } = baseDirWithRuntime()
   const outside = path.join(baseDir, 'outside-cache-target')
   writeFileSync(outside, 'DO_NOT_DELETE')
   const link = path.join(runtimeDir, '.pnpm-cache', 'evil-link')
   mkdirSync(path.dirname(link), { recursive: true })
   symlinkSync(outside, link)
   markStorePruneNeeded(baseDir, 'cache-reclaim')
-  await pruneRuntimeStore({
-    baseDir,
-    pnpmEntry: '/pnpm/bin/pnpm.cjs',
-    deps: { node: nodeFn, run: async () => ({ status: 0, stdout: '', stderr: '' }) },
-  })
+  await pruneStore(baseDir)
   assert.equal(existsSync(link), false, 'the symlink entry itself is removed')
   assert.equal(readFileSync(outside, 'utf8'), 'DO_NOT_DELETE', 'the external target is untouched')
 })
 
 test('pruneRuntimeStore: a failed prune performs no cache reclamation even with the reason present', async () => {
-  const baseDir = makeBaseDir()
-  const runtimeDir = path.join(baseDir, 'dsh-runtime')
-  mkdirSync(runtimeDir, { recursive: true })
+  const { baseDir, runtimeDir } = baseDirWithRuntime()
   const cacheFile = path.join(runtimeDir, '.pnpm-cache', 'survive.json')
   mkdirSync(path.dirname(cacheFile), { recursive: true })
   writeFileSync(cacheFile, 'survive')
@@ -864,9 +802,7 @@ test('pruneRuntimeStore: a failed prune performs no cache reclamation even with 
 test('pruneRuntimeStore: rejects a symlinked .npmrc without truncating its target or spawning pnpm', {
   skip: process.platform === 'win32' ? 'symlink fixture requires Unix permissions' : false,
 }, async () => {
-  const baseDir = makeBaseDir()
-  const runtimeDir = path.join(baseDir, 'dsh-runtime')
-  mkdirSync(runtimeDir, { recursive: true })
+  const { baseDir, runtimeDir } = baseDirWithRuntime()
   const outsideDir = mkdtempSync(path.join(tmpdir(), 'dsh-rt-installer-npmrc-outside-'))
   const target = path.join(outsideDir, 'user-npmrc')
   writeFileSync(target, 'registry=https://private.example/\n_authToken=DO_NOT_TRUNCATE\n', { mode: 0o644 })
@@ -905,15 +841,10 @@ test('installRuntimeVersion: rejects a symlinked runtime root before download an
   symlinkSync(outsideRoot, path.join(baseDir, 'dsh-runtime'))
   let downloads = 0
 
-  await assert.rejects(installRuntimeVersion({
-    baseDir,
-    resolution: resolution(),
-    pnpmEntry: '/pnpm/bin/pnpm.cjs',
-    deps: {
+  await assert.rejects(install(baseDir, {
       ...depsWithRun(async () => ({ status: 0, stdout: '', stderr: '' })),
       download: async () => { downloads += 1 },
-    },
-  }), /不安全/)
+  }))
 
   assert.equal(downloads, 0)
   assert.deepEqual(statSync(sentinel), before)
@@ -988,17 +919,12 @@ test('installRuntimeVersion preserves work/PID evidence when a child process gro
   const groupError = Object.assign(new Error('runtime installer child process group did not exit'), {
     code: 'ERR_DSH_RESIDUAL_PROCESS_GROUP',
   })
-  await assert.rejects(installRuntimeVersion({
-    baseDir,
-    resolution: resolution(),
-    pnpmEntry: '/pnpm/bin/pnpm.cjs',
-    deps: {
+  await assert.rejects(install(baseDir, {
       ...depsWithRun(async (_args, opts) => {
         opts.onSpawn?.(process.pid)
         throw groupError
       }),
-    },
-  }), /process group did not exit/)
+  }))
   const runtimeDir = path.join(baseDir, 'dsh-runtime')
   const work = readdirSync(runtimeDir).find(name => name.startsWith('.work-'))
   assert.ok(work !== undefined)
@@ -1009,11 +935,7 @@ test('disposeRuntimeInstaller: aborts and awaits an active download before clean
   const baseDir = makeBaseDir()
   let notifyStarted!: () => void
   const started = new Promise<void>((resolve) => { notifyStarted = resolve })
-  const installation = installRuntimeVersion({
-    baseDir,
-    resolution: resolution(),
-    pnpmEntry: '/pnpm/bin/pnpm.cjs',
-    deps: {
+  const installation = install(baseDir, {
       ...depsWithRun(async () => ({ status: 0, stdout: '', stderr: '' })),
       download: async (_bound, _destination, { signal }) => {
         notifyStarted()
@@ -1022,7 +944,6 @@ test('disposeRuntimeInstaller: aborts and awaits an active download before clean
           else signal.addEventListener('abort', () => reject(signal.reason), { once: true })
         })
       },
-    },
   })
   const rejection = assert.rejects(installation, /runtime installer is shutting down/)
   await started
@@ -1069,12 +990,7 @@ test('createOperationDeadline refuses new operations with the writer-safety code
   // (owners switch on the code, not the message).
   const disposing = disposeRuntimeInstaller() // sets the latch synchronously
   await assert.rejects(
-    installRuntimeVersion({
-      baseDir: makeBaseDir(),
-      resolution: resolution(),
-      pnpmEntry: '/pnpm/bin/pnpm.cjs',
-      deps: depsWithRun(async () => ({ status: 0, stdout: '', stderr: '' })),
-    }),
+    install(makeBaseDir(), depsWithRun(async () => ({ status: 0, stdout: '', stderr: '' }))),
     (error: unknown) => {
       assert.equal((error as Error & { code?: string }).code, 'ERR_DSH_WRITER_UNSAFE')
       assert.match(error instanceof Error ? error.message : String(error), /runtime installer is shutting down/)

@@ -36,6 +36,7 @@ import { createChamberPlugins, SYNCED_ARTIFACT_MAX_BYTES, SYNCED_PACKAGE_MAX_BYT
 import { createChamberInstalled } from '../../src/plugins-installed.ts'
 import { createChamberSurface } from '../../src/routes.ts'
 import { createDashboardHarness, type DashboardHarness, type DashboardRequest } from '../support/dashboard-harness.ts'
+import { seedCacheProjection } from '../support/chamber-surface-fixtures.ts'
 import { FakeRequest, FakeResponse, stubPluginTasks } from '../support/utils.ts'
 
 const logger = {
@@ -642,18 +643,7 @@ test('chamber plugins sync caches desktop-provided host packages (2026-12 Phase 
 
   const before = await handle(host, 'GET', '/chamber/plugins')
   assert.equal(before.status, 200)
-  assert.deepEqual(before.json(), {
-    items: [
-      { name: '@dsh-chamber/dsh-chamber-seed-client-graph', version: null },
-      { name: '@dsh-chamber/dsh-chamber-seed-git-worktree', version: null },
-      { name: '@dsh-chamber/dsh-chamber-seed-archive-cleanup', version: null },
-      // The projection is REGISTRY-DERIVED, so a new host package row appears
-      // here without a gateway edit. The open-in row (design 20 §6) is
-      // `localOnly`: it is in the derived whitelist but the desktop never
-      // uploads it, so its cache — and therefore its version — stays absent.
-      { name: '@dsh-chamber/dsh-chamber-seed-open-in', version: null },
-    ],
-  })
+  assert.deepEqual(before.json(), seedCacheProjection())
 
   const upload = (body: unknown): Promise<FakeResponse> => uploadVia(host, body)
 
@@ -662,14 +652,7 @@ test('chamber plugins sync caches desktop-provided host packages (2026-12 Phase 
   assert.deepEqual(first.json(), { ok: true, changed: true })
 
   const after = await handle(host, 'GET', '/chamber/plugins')
-  assert.deepEqual(after.json(), {
-    items: [
-      { name: '@dsh-chamber/dsh-chamber-seed-client-graph', version: '1.2.3' },
-      { name: '@dsh-chamber/dsh-chamber-seed-git-worktree', version: null },
-      { name: '@dsh-chamber/dsh-chamber-seed-archive-cleanup', version: null },
-      { name: '@dsh-chamber/dsh-chamber-seed-open-in', version: null },
-    ],
-  })
+  assert.deepEqual(after.json(), seedCacheProjection({ '@dsh-chamber/dsh-chamber-seed-client-graph': '1.2.3' }))
 
   // Idempotent re-upload: identical bytes → changed:false, no rewrite.
   const second = await upload({ name: '@dsh-chamber/dsh-chamber-seed-client-graph', files: { 'package.json': manifest, 'dist/index.js': artifact } })
@@ -717,18 +700,7 @@ test('chamber plugins upload enforces the body and per-file size bounds', async 
   assert.equal(request.destroyed, true, 'an oversized upload must destroy the socket, not drain it')
   // Nothing was cached by the rejected upload.
   const after = await handle(host, 'GET', '/chamber/plugins')
-  assert.deepEqual(after.json(), {
-    items: [
-      { name: '@dsh-chamber/dsh-chamber-seed-client-graph', version: null },
-      { name: '@dsh-chamber/dsh-chamber-seed-git-worktree', version: null },
-      { name: '@dsh-chamber/dsh-chamber-seed-archive-cleanup', version: null },
-      // The projection is REGISTRY-DERIVED, so a new host package row appears
-      // here without a gateway edit. The open-in row (design 20 §6) is
-      // `localOnly`: it is in the derived whitelist but the desktop never
-      // uploads it, so its cache — and therefore its version — stays absent.
-      { name: '@dsh-chamber/dsh-chamber-seed-open-in', version: null },
-    ],
-  })
+  assert.deepEqual(after.json(), seedCacheProjection())
 
   // Per-file caps: manifest > 64 KiB → 400 invalid_input; artifact > 4 MiB → 400.
   const bigManifest = await uploadVia(host, {

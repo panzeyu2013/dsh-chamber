@@ -26,34 +26,24 @@ import {
   readActivationJournalState,
   readCurrentPointer,
   readOverride,
-  writeActivationIntent,
-  writeOverride,
 } from '@dsh-chamber/dsh-runtime'
 import {
   silentLogger,
   TEST_BUILTIN_VERSION,
-  gatewayPackageVersion,
   config,
   fakePlane,
   waitForSettle,
   probeResultsFor,
   makeValidTree,
+  armPendingSwitch,
+  writeOverrideRow,
+  writeVersionSwitchIntent,
 } from '../support/runtime-routes-harness.ts'
 
 test('applyNow runs the version-switch activation transaction in stop → transaction → start order', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-applynow-order-'))
   try {
-    makeValidTree(stateDir, '1.0.0')
-    const home = join(stateDir, 'dsh-home')
-    mkdirSync(home, { recursive: true })
-    writeFileSync(join(home, 'settings.json'), '{"pending":true}')
-    writeActivationIntent(stateDir, {
-      targetVersion: '1.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
-    })
-    writeOverride(stateDir, {
-      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
-      pending: '1.0.0', swapAttempted: false, selectedOnly: false,
-    })
+    const home = armPendingSwitch(stateDir, '1.0.0')
     const order: string[] = []
     const plane = fakePlane({
       stopLocal: async () => { order.push('stop') },
@@ -159,13 +149,8 @@ test('real manager: the B1 16 MiB settings/describe cap reaches the wire carrier
     mkdirSync(home, { recursive: true })
     // The data.settings probe reads settings.yaml (never settings.json).
     writeFileSync(join(home, 'settings.yaml'), 'locale:\n  preference: zh\n')
-    writeActivationIntent(stateDir, {
-      targetVersion: '1.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
-    })
-    writeOverride(stateDir, {
-      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
-      pending: '1.0.0', swapAttempted: false, selectedOnly: false,
-    })
+    writeVersionSwitchIntent(stateDir, '1.0.0')
+    writeOverrideRow(stateDir, { chosenVersion: '1.0.0', pending: '1.0.0', selectedOnly: false })
     const plane = fakePlane({
       getLocalDshPort: () => port,
       localDshPort: port,
@@ -224,10 +209,7 @@ test('2026-12 shape gate: a synced seed cache flips the activation to the FULL p
     const home = join(stateDir, 'dsh-home')
     mkdirSync(home, { recursive: true })
     writeFileSync(join(home, 'settings.json'), '{"pending":true}')
-    writeOverride(stateDir, {
-      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
-      pending: null, swapAttempted: false, selectedOnly: true,
-    })
+    writeOverrideRow(stateDir, { chosenVersion: '1.0.0', pending: null, selectedOnly: true })
 
     // Full-set candidate (the synced shape) → activation PASSES.
     const passingPlane = fakePlane()
@@ -250,10 +232,7 @@ test('2026-12 shape gate: a synced seed cache flips the activation to the FULL p
     // activation must FAIL CLOSED, never pass on a partial probe set.
     clearActivationJournal(stateDir)
     makeValidTree(stateDir, '2.0.0')
-    writeOverride(stateDir, {
-      shellVersion: gatewayPackageVersion, chosenVersion: '2.0.0', resolvedVersion: '2.0.0',
-      pending: null, swapAttempted: false, lastOutcome: 'applied', selectedOnly: true,
-    })
+    writeOverrideRow(stateDir, { chosenVersion: '2.0.0', pending: null, selectedOnly: true, lastOutcome: 'applied' })
     const driftingPlane = fakePlane()
     driftingPlane._state.connectionState = 'ready'
     const drifting = createGatewayRuntimeManager({

@@ -16,7 +16,7 @@ import { parseGatewayConfig } from '../../src/config.ts'
 import { createGatewayDispatch } from '../../src/dispatch.ts'
 import { createGatewayRequestPolicy } from '../../src/middleware.ts'
 import { createGatewayStore, hashCredential, type GatewayStore } from '../../src/store.ts'
-import { FakeRequest, FakeResponse } from '../support/utils.ts'
+import { FakeRequest, FakeResponse, gatewayRequest } from '../support/utils.ts'
 import {
   silentLogger,
   PASSWORD,
@@ -279,11 +279,7 @@ test('dispatch quiescence aborts and drains a credential request whose body neve
     },
   }
   const { dispatch } = setup(auth)
-  const request = new FakeRequest('POST', '/auth/change-token', {
-    host: 'gateway.example:3000',
-    authorization: `Bearer ${TOKEN}`,
-    'content-type': 'application/json',
-  })
+  const request = gatewayRequest('POST', '/auth/change-token', { authorization: `Bearer ${TOKEN}`, 'content-type': 'application/json' })
   const response = new FakeResponse()
   const route = dispatch.middleware(
     request as unknown as ApiRequest,
@@ -329,13 +325,10 @@ test('/chamber/runtime requires auth end-to-end (S20): 401 unauthenticated, clai
     },
   }
   const { dispatch } = setup(auth, runtime)
-  const denied = await runHttp(dispatch, new FakeRequest('GET', '/chamber/runtime/status', { host: 'gateway.example:3000' }))
+  const denied = await runHttp(dispatch, gatewayRequest('GET', '/chamber/runtime/status'))
   assert.equal(denied.status, 401)
   assert.deepEqual(seen, [])
-  const ok = await runHttp(dispatch, new FakeRequest('GET', '/chamber/runtime/status', {
-    host: 'gateway.example:3000',
-    authorization: 'Bearer secret',
-  }))
+  const ok = await runHttp(dispatch, gatewayRequest('GET', '/chamber/runtime/status', { authorization: 'Bearer secret' }))
   assert.equal(ok.status, 200)
   assert.deepEqual(seen, ['/chamber/runtime/status'])
 })
@@ -361,13 +354,10 @@ test('/chamber/plugins requires auth end-to-end (S20): 401 unauthenticated, clai
   const { dispatch } = setup(auth, undefined, undefined, surface)
   // The plugin-sync seed cache rides the same mandatory auth gate as every
   // other /chamber writer — an unauthenticated GET must never reach it.
-  const denied = await runHttp(dispatch, new FakeRequest('GET', '/chamber/plugins', { host: 'gateway.example:3000' }))
+  const denied = await runHttp(dispatch, gatewayRequest('GET', '/chamber/plugins'))
   assert.equal(denied.status, 401)
   assert.deepEqual(seen, [])
-  const ok = await runHttp(dispatch, new FakeRequest('GET', '/chamber/plugins', {
-    host: 'gateway.example:3000',
-    authorization: 'Bearer secret',
-  }))
+  const ok = await runHttp(dispatch, gatewayRequest('GET', '/chamber/plugins', { authorization: 'Bearer secret' }))
   assert.equal(ok.status, 200)
   assert.deepEqual(seen, ['/chamber/plugins'])
 })
@@ -392,14 +382,11 @@ test('the credential management routes are authenticated and OPTIONS stays publi
     ['GET', '/auth/credentials'],
     ['POST', '/auth/credentials'],
   ] as const) {
-    const res = await runHttp(dispatch, new FakeRequest(method, path, { host: 'gateway.example:3000' }))
+    const res = await runHttp(dispatch, gatewayRequest(method, path))
     assert.equal(res.status, 401, `${method} ${path}`)
   }
   const beforePreflight = verifyCalls
-  const preflight = await runHttp(dispatch, new FakeRequest('OPTIONS', '/auth/change-password', {
-    host: 'gateway.example:3000',
-    origin: 'capacitor://localhost',
-  }))
+  const preflight = await runHttp(dispatch, gatewayRequest('OPTIONS', '/auth/change-password', { origin: 'capacitor://localhost' }))
   assert.equal(preflight.status, 204)
   assert.equal(preflight.headers['access-control-allow-origin'], 'capacitor://localhost')
   assert.equal(verifyCalls, beforePreflight, 'OPTIONS preflight never reaches auth')
@@ -410,19 +397,12 @@ test('POST /auth/change-password: a bearer-token principal changes the password,
   try {
     const cookie = await loginCookie(auth, PASSWORD)
     const state = setup(auth, undefined, auditFile)
-    const res = await runHttp(state.dispatch, new FakeRequest('POST', '/auth/change-password', {
-      host: 'gateway.example:3000',
-      'content-type': 'application/json',
-      authorization: `Bearer ${TOKEN}`,
-    }), JSON.stringify({ newPassword: NEW_PASSWORD }))
+    const res = await runHttp(state.dispatch, gatewayRequest('POST', '/auth/change-password', { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` }), JSON.stringify({ newPassword: NEW_PASSWORD }))
     assert.equal(res.status, 200)
     assert.deepEqual(JSON.parse(res.body), { changed: true, kind: 'password', source: 'runtime' })
     assert.equal(res.headers['cache-control'], 'no-store')
     // The jwt-secret was rotated FIRST: the old cookie is immediately dead.
-    const oldCookie = await runHttp(state.dispatch, new FakeRequest('GET', '/', {
-      host: 'gateway.example:3000',
-      cookie: `dsh_gateway_session=${cookie}`,
-    }))
+    const oldCookie = await runHttp(state.dispatch, gatewayRequest('GET', '/', { cookie: `dsh_gateway_session=${cookie}` }))
     assert.equal(oldCookie.status, 401, 'the old session cookie is invalidated by the change')
 
     // The success audit carries ONLY the non-secret detail (S24). The stale
@@ -440,10 +420,7 @@ test('POST /auth/change-password: a bearer-token principal changes the password,
     assert.equal(raw.includes(NEW_PASSWORD), false, 'the new password never enters the audit log')
 
     // The new password logs in through the wire.
-    const relogin = await runHttp(state.dispatch, new FakeRequest('POST', '/auth/login', {
-      host: 'gateway.example:3000',
-      'content-type': 'application/json',
-    }), JSON.stringify({ password: NEW_PASSWORD }))
+    const relogin = await runHttp(state.dispatch, gatewayRequest('POST', '/auth/login', { 'content-type': 'application/json' }), JSON.stringify({ password: NEW_PASSWORD }))
     assert.equal(relogin.status, 302)
     assert.equal(state.httpProxyCalls, 0, 'the change route never falls through to the dsh proxy')
   } finally { cleanup() }
@@ -454,11 +431,7 @@ test('POST /auth/change-password: a cookie-only principal without the current pa
   try {
     const cookie = await loginCookie(auth, PASSWORD)
     const { dispatch } = setup(auth, undefined, auditFile)
-    const res = await runHttp(dispatch, new FakeRequest('POST', '/auth/change-password', {
-      host: 'gateway.example:3000',
-      'content-type': 'application/json',
-      cookie: `dsh_gateway_session=${cookie}`,
-    }), JSON.stringify({ newPassword: NEW_PASSWORD }))
+    const res = await runHttp(dispatch, gatewayRequest('POST', '/auth/change-password', { 'content-type': 'application/json', cookie: `dsh_gateway_session=${cookie}` }), JSON.stringify({ newPassword: NEW_PASSWORD }))
     assert.equal(res.status, 403)
     assert.equal(JSON.parse(res.body).code, 'ambient_principal_rejected')
     const events = readAudit(auditFile)
@@ -507,11 +480,7 @@ test('POST /auth/change-password: removing the last credential with no config re
     assert.equal(auth.kind, 'password', 'the runtime credential survives config seeding')
     const cookie = await loginCookie(auth, NEW_PASSWORD, '203.0.113.8')
     const { dispatch } = setup(auth)
-    const res = await runHttp(dispatch, new FakeRequest('POST', '/auth/change-password', {
-      host: 'gateway.example:3000',
-      'content-type': 'application/json',
-      cookie: `dsh_gateway_session=${cookie}`,
-    }), JSON.stringify({ remove: true, currentPassword: NEW_PASSWORD }))
+    const res = await runHttp(dispatch, gatewayRequest('POST', '/auth/change-password', { 'content-type': 'application/json', cookie: `dsh_gateway_session=${cookie}` }), JSON.stringify({ remove: true, currentPassword: NEW_PASSWORD }))
     assert.equal(res.status, 409)
     assert.equal(JSON.parse(res.body).code, 'last_credential')
   } finally {
@@ -529,11 +498,7 @@ test('oversized credential-change bodies are 413 and destroy the request socket'
     async changeToken() { changeCalls += 1; return { changed: true, kind: 'token', source: 'runtime', token: 'x' } },
   }
   const { dispatch } = setup(auth)
-  const req = new FakeRequest('POST', '/auth/change-password', {
-    host: 'gateway.example:3000',
-    'content-type': 'application/json',
-    authorization: 'Bearer secret',
-  })
+  const req = gatewayRequest('POST', '/auth/change-password', { 'content-type': 'application/json', authorization: 'Bearer secret' })
   const res = new FakeResponse()
   const pending = dispatch.middleware(
     req as unknown as ApiRequest,
@@ -557,11 +522,7 @@ test('POST /auth/change-token returns the new plaintext token exactly once and i
   const { auth, cleanup } = realAuth({ config: { kind: 'token', token: TOKEN } })
   try {
     const { dispatch } = setup(auth)
-    const res = await runHttp(dispatch, new FakeRequest('POST', '/auth/change-token', {
-      host: 'gateway.example:3000',
-      'content-type': 'application/json',
-      authorization: `Bearer ${TOKEN}`,
-    }), JSON.stringify({}))
+    const res = await runHttp(dispatch, gatewayRequest('POST', '/auth/change-token', { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` }), JSON.stringify({}))
     assert.equal(res.status, 200)
     assert.equal(res.headers['cache-control'], 'no-store')
     const body = JSON.parse(res.body) as { changed: true; kind: 'token'; source: 'runtime'; token?: string }
@@ -572,15 +533,9 @@ test('POST /auth/change-token returns the new plaintext token exactly once and i
     assert.match(body.token, /^[\x20-\x7e]+$/)
 
     // The old token is dead; the new one authenticates through the wire.
-    const oldToken = await runHttp(dispatch, new FakeRequest('GET', '/', {
-      host: 'gateway.example:3000',
-      authorization: `Bearer ${TOKEN}`,
-    }))
+    const oldToken = await runHttp(dispatch, gatewayRequest('GET', '/', { authorization: `Bearer ${TOKEN}` }))
     assert.equal(oldToken.status, 401)
-    const newToken = await runHttp(dispatch, new FakeRequest('GET', '/', {
-      host: 'gateway.example:3000',
-      authorization: `Bearer ${body.token}`,
-    }))
+    const newToken = await runHttp(dispatch, gatewayRequest('GET', '/', { authorization: `Bearer ${body.token}` }))
     assert.equal(newToken.status, 200)
     assert.equal(newToken.body, 'proxied')
   } finally { cleanup() }
@@ -599,11 +554,7 @@ test('credential change reuses the generation-bound gate proof: one bearer verif
   })
   try {
     const { dispatch } = setup(state.auth)
-    const res = await runHttp(dispatch, new FakeRequest('POST', '/auth/change-token', {
-      host: 'gateway.example:3000',
-      'content-type': 'application/json',
-      authorization: `Bearer ${TOKEN}`,
-    }), JSON.stringify({ newToken: 'proof-reuse-token-0123456789abcdef' }))
+    const res = await runHttp(dispatch, gatewayRequest('POST', '/auth/change-token', { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` }), JSON.stringify({ newToken: 'proof-reuse-token-0123456789abcdef' }))
 
     assert.equal(res.status, 200)
     assert.equal(verifierCalls, 1,
@@ -615,10 +566,7 @@ test('GET /auth/credentials returns the non-secret projection without any secret
   const { auth, cleanup } = realAuth({ config: { kind: 'password+token', password: PASSWORD, token: TOKEN } })
   try {
     const { dispatch } = setup(auth)
-    const res = await runHttp(dispatch, new FakeRequest('GET', '/auth/credentials', {
-      host: 'gateway.example:3000',
-      authorization: `Bearer ${TOKEN}`,
-    }))
+    const res = await runHttp(dispatch, gatewayRequest('GET', '/auth/credentials', { authorization: `Bearer ${TOKEN}` }))
     assert.equal(res.status, 200)
     assert.equal(res.headers['cache-control'], 'no-store')
     const body = JSON.parse(res.body) as {
@@ -636,10 +584,7 @@ test('GET /auth/credentials returns the non-secret projection without any secret
     assert.equal(res.body.includes(TOKEN), false, 'the plaintext token never appears in the projection')
 
     // The projection is read-only: only GET/HEAD are allowed (405, allow: GET, HEAD).
-    const put = await runHttp(dispatch, new FakeRequest('PUT', '/auth/credentials', {
-      host: 'gateway.example:3000',
-      authorization: `Bearer ${TOKEN}`,
-    }))
+    const put = await runHttp(dispatch, gatewayRequest('PUT', '/auth/credentials', { authorization: `Bearer ${TOKEN}` }))
     assert.equal(put.status, 405)
     assert.equal(put.headers.allow, 'GET, HEAD')
     assert.equal(JSON.parse(put.body).code, 'method_not_allowed')
@@ -650,10 +595,7 @@ test('GET /auth/credentials reports a null dimension when no credential is confi
   const { auth, cleanup } = realAuth({ config: { kind: 'token', token: TOKEN } })
   try {
     const { dispatch } = setup(auth)
-    const res = await runHttp(dispatch, new FakeRequest('GET', '/auth/credentials', {
-      host: 'gateway.example:3000',
-      authorization: `Bearer ${TOKEN}`,
-    }))
+    const res = await runHttp(dispatch, gatewayRequest('GET', '/auth/credentials', { authorization: `Bearer ${TOKEN}` }))
     const body = JSON.parse(res.body) as { password: unknown; token: { set: true; source: string } }
     assert.equal(body.password, null)
     assert.equal(body.token.set, true)
@@ -666,13 +608,10 @@ test('a token-only deployment answers 404 on /auth/login (the route exists only 
   try {
     assert.equal(auth.kind, 'token')
     const { dispatch } = setup(auth)
-    const post = await runHttp(dispatch, new FakeRequest('POST', '/auth/login', {
-      host: 'gateway.example:3000',
-      'content-type': 'application/json',
-    }), JSON.stringify({ password: 'whatever' }))
+    const post = await runHttp(dispatch, gatewayRequest('POST', '/auth/login', { 'content-type': 'application/json' }), JSON.stringify({ password: 'whatever' }))
     assert.equal(post.status, 404)
     assert.equal(JSON.parse(post.body).code, 'not_found')
-    const get = await runHttp(dispatch, new FakeRequest('GET', '/auth/login', { host: 'gateway.example:3000' }))
+    const get = await runHttp(dispatch, gatewayRequest('GET', '/auth/login'))
     assert.equal(get.status, 404)
   } finally { cleanup() }
 })
@@ -688,10 +627,7 @@ test('a no_password login error (kind race fallback) maps to 404', async () => {
     },
   }
   const { dispatch } = setup(auth)
-  const res = await runHttp(dispatch, new FakeRequest('POST', '/auth/login', {
-    host: 'gateway.example:3000',
-    'content-type': 'application/json',
-  }), JSON.stringify({ password: 'x' }))
+  const res = await runHttp(dispatch, gatewayRequest('POST', '/auth/login', { 'content-type': 'application/json' }), JSON.stringify({ password: 'x' }))
   assert.equal(res.status, 404)
   assert.equal(JSON.parse(res.body).code, 'not_found')
 })
@@ -700,17 +636,10 @@ test('the credential routes are claimed by dispatch and never reach the dsh prox
   const { auth, cleanup } = realAuth({ config: { kind: 'password+token', password: PASSWORD, token: TOKEN } })
   try {
     const state = setup(auth)
-    const change = await runHttp(state.dispatch, new FakeRequest('POST', '/auth/change-password', {
-      host: 'gateway.example:3000',
-      'content-type': 'application/json',
-      authorization: `Bearer ${TOKEN}`,
-    }), JSON.stringify({ newPassword: NEW_PASSWORD }))
+    const change = await runHttp(state.dispatch, gatewayRequest('POST', '/auth/change-password', { 'content-type': 'application/json', authorization: `Bearer ${TOKEN}` }), JSON.stringify({ newPassword: NEW_PASSWORD }))
     assert.equal(change.status, 200)
     assert.equal(state.httpProxyCalls, 0, '/auth/change-password never falls through to the proxy')
-    const credentials = await runHttp(state.dispatch, new FakeRequest('GET', '/auth/credentials', {
-      host: 'gateway.example:3000',
-      authorization: `Bearer ${TOKEN}`,
-    }))
+    const credentials = await runHttp(state.dispatch, gatewayRequest('GET', '/auth/credentials', { authorization: `Bearer ${TOKEN}` }))
     assert.equal(credentials.status, 200)
     assert.equal(state.httpProxyCalls, 0, '/auth/credentials never falls through to the proxy')
   } finally { cleanup() }
@@ -723,10 +652,7 @@ test('S25 wire: an anonymous (kind none) deployment cannot plant credentials via
     // The auth gate passes the anonymous none principal, then the change
     // proof gate refuses — the wire answer is 401 invalid_credentials and
     // nothing is persisted.
-    const res = await runHttp(dispatch, new FakeRequest('POST', '/auth/change-password', {
-      host: 'gateway.example:3000',
-      'content-type': 'application/json',
-    }), JSON.stringify({ newPassword: NEW_PASSWORD }))
+    const res = await runHttp(dispatch, gatewayRequest('POST', '/auth/change-password', { 'content-type': 'application/json' }), JSON.stringify({ newPassword: NEW_PASSWORD }))
     assert.equal(res.status, 401)
     assert.equal(JSON.parse(res.body).code, 'invalid_credentials')
     assert.equal(auth.credentialProjection?.().password, null)
@@ -738,17 +664,10 @@ test('HEAD /auth/credentials is the no-body twin of GET', async () => {
   try {
     const cookie = await loginCookie(auth, PASSWORD)
     const { dispatch } = setup(auth)
-    const head = await runHttp(dispatch, new FakeRequest('HEAD', '/auth/credentials', {
-      host: 'gateway.example:3000',
-      cookie: `dsh_gateway_session=${cookie}`,
-      accept: 'text/html',
-    }))
+    const head = await runHttp(dispatch, gatewayRequest('HEAD', '/auth/credentials', { cookie: `dsh_gateway_session=${cookie}`, accept: 'text/html' }))
     assert.equal(head.status, 200)
     assert.equal(head.body, '', 'HEAD carries no body')
-    const get = await runHttp(dispatch, new FakeRequest('GET', '/auth/credentials', {
-      host: 'gateway.example:3000',
-      cookie: `dsh_gateway_session=${cookie}`,
-    }))
+    const get = await runHttp(dispatch, gatewayRequest('GET', '/auth/credentials', { cookie: `dsh_gateway_session=${cookie}` }))
     assert.equal(get.status, 200)
     assert.equal(JSON.parse(get.body).password.set, true)
   } finally { cleanup() }
@@ -760,10 +679,7 @@ test('unauthenticated HTML-accept requests to /auth/* answer 401 JSON, not a log
     const { dispatch } = setup(auth)
     // /auth/* is a JSON API surface: an unauthenticated browser navigation
     // must not be silently redirected to the login page (fix round).
-    const res = await runHttp(dispatch, new FakeRequest('GET', '/auth/credentials', {
-      host: 'gateway.example:3000',
-      accept: 'text/html',
-    }))
+    const res = await runHttp(dispatch, gatewayRequest('GET', '/auth/credentials', { accept: 'text/html' }))
     assert.equal(res.status, 401)
     assert.equal(JSON.parse(res.body).code, 'unauthorized')
     assert.equal(res.headers.location, undefined, 'no login redirect for /auth/*')
@@ -787,11 +703,7 @@ test('credential audit reuses the authenticated gate principal without a verifie
   }
   try {
     const { dispatch } = setup(auth, undefined, auditFile)
-    const res = await runHttp(dispatch, new FakeRequest('POST', '/auth/change-token', {
-      host: 'gateway.example:3000',
-      authorization: 'Bearer token-value',
-      'content-type': 'application/json',
-    }), '{}')
+    const res = await runHttp(dispatch, gatewayRequest('POST', '/auth/change-token', { authorization: 'Bearer token-value', 'content-type': 'application/json' }), '{}')
     assert.equal(res.status, 200)
     assert.equal(verifyCalls, 1, 'the audit kind comes from the dispatch admission verdict')
     const events = readAudit(auditFile)
@@ -807,10 +719,7 @@ test('authenticated non-POST requests to the change routes answer 405 allow: POS
   const { auth, cleanup } = realAuth({ config: { kind: 'token', token: TOKEN } })
   try {
     const { dispatch } = setup(auth)
-    const get = await runHttp(dispatch, new FakeRequest('GET', '/auth/change-password', {
-      host: 'gateway.example:3000',
-      authorization: `Bearer ${TOKEN}`,
-    }))
+    const get = await runHttp(dispatch, gatewayRequest('GET', '/auth/change-password', { authorization: `Bearer ${TOKEN}` }))
     assert.equal(get.status, 405)
     assert.equal(get.headers.allow, 'POST')
     assert.equal(JSON.parse(get.body).code, 'method_not_allowed')
@@ -821,10 +730,7 @@ test('HEAD /auth/login is the no-body twin of GET', async () => {
   const { auth, cleanup } = realAuth({ config: { kind: 'password', password: PASSWORD } })
   try {
     const { dispatch } = setup(auth)
-    const head = await runHttp(dispatch, new FakeRequest('HEAD', '/auth/login', {
-      host: 'gateway.example:3000',
-      accept: 'text/html',
-    }))
+    const head = await runHttp(dispatch, gatewayRequest('HEAD', '/auth/login', { accept: 'text/html' }))
     assert.equal(head.status, 200)
     assert.equal(head.body, '', 'HEAD carries no login-page body')
   } finally { cleanup() }

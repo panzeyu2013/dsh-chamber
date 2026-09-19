@@ -29,6 +29,7 @@ import {
   fakeSocket,
   makeProxy,
   quietLogger,
+  proxyFor,
 } from '../support/proxy-fakes.ts'
 
 // ---------------------------------------------------------------------------
@@ -55,12 +56,7 @@ test('response header convergence preserves representation metadata and rewrites
       body: '{}',
     },
   }))
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
-    httpRequest: upstream.fn,
-  })
+  const proxy = proxyFor(upstream.fn)
   const res = fakeResponse()
   res._corsHeaders = { 'access-control-allow-origin': 'https://client.example', vary: 'Origin' }
   await proxy.handleHttp(fakeRequest('/api/i/local/api/session/list', 'GET'), res)
@@ -182,12 +178,7 @@ test("http: a compressed non-document reply keeps its content-encoding + vary, a
       body: 'compressed-bytes',
     },
   }))
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
-    httpRequest: upstream.fn,
-  })
+  const proxy = proxyFor(upstream.fn)
   const asset = fakeResponse()
   await proxy.handleHttp(fakeRequest('/api/i/local/assets/index-BKQ_L1z6.js', 'GET', { 'accept-encoding': 'gzip' }), asset)
   assert.equal(asset.headers['content-encoding'], 'gzip')
@@ -203,12 +194,7 @@ test("upgrade: accept-encoding never rides the WS handshake (M3-2' leaves the 10
   const upstream = fakeHttpRequest(() => ({
     upgrade: { status: 101, headers: { upgrade: 'websocket', connection: 'Upgrade', 'sec-websocket-accept': 'accepted' } },
   }))
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
-    httpRequest: upstream.fn,
-  })
+  const proxy = proxyFor(upstream.fn)
   const socket = fakeSocket()
   await proxy.handleUpgrade(
     fakeRequest('/api/i/local/api/remote.mux', 'GET', {
@@ -443,12 +429,7 @@ test('http: a content-encoding upstream header rides through so the browser deco
   const upstream = fakeHttpRequest(() => ({
     response: { status: 200, headers: { 'content-type': 'application/json', 'content-encoding': 'gzip' }, body: 'gzipped-bytes' },
   }))
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
-    httpRequest: upstream.fn,
-  })
+  const proxy = proxyFor(upstream.fn)
   const res = fakeResponse()
   await proxy.handleHttp(fakeRequest('/api/i/local/api/session/list', 'GET'), res)
   assert.equal(res.status, 200)
@@ -495,12 +476,7 @@ test('local activation quarantine rejects HTTP and WebSocket before either reach
 
 test('upstream connect failure answers 502 upstream_failed (masked)', async () => {
   const upstream = fakeHttpRequest(() => ({ error: new Error(`ECONNREFUSED 127.0.0.1:${DEFAULT_DSH_START_PORT}`) }))
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
-    httpRequest: upstream.fn,
-  })
+  const proxy = proxyFor(upstream.fn)
   const res = fakeResponse()
   await proxy.handleHttp(fakeRequest('/api/i/local/api/session/list', 'GET'), res)
   assert.equal(res.status, 502)

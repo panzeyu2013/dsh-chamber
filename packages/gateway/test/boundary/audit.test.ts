@@ -34,7 +34,7 @@ import {
   type AuthRejectionDebounce,
 } from '../../src/dispatch.ts'
 import { createGatewayRequestPolicy } from '../../src/middleware.ts'
-import { FakeRequest, FakeResponse } from '../support/utils.ts'
+import { FakeRequest, FakeResponse, gatewayRequest } from '../support/utils.ts'
 
 // ---------------------------------------------------------------------------
 // appendAuditEvent unit surface
@@ -244,10 +244,7 @@ async function runLogin(
   dispatch: ReturnType<typeof setup>['dispatch'],
   password: string,
 ): Promise<FakeResponse> {
-  const req = new FakeRequest('POST', '/auth/login', {
-    host: 'gateway.example:3000',
-    'content-type': 'application/x-www-form-urlencoded',
-  })
+  const req = gatewayRequest('POST', '/auth/login', { 'content-type': 'application/x-www-form-urlencoded' })
   const res = new FakeResponse()
   const pending = dispatch.middleware(req as unknown as ApiRequest, res as unknown as ApiResponse, new URL(req.url, 'http://localhost'), {} as never)
   queueMicrotask(() => {
@@ -263,11 +260,7 @@ async function runChange(
   path: '/auth/change-password' | '/auth/change-token',
   body: string,
 ): Promise<FakeResponse> {
-  const req = new FakeRequest('POST', path, {
-    host: 'gateway.example:3000',
-    'content-type': 'application/json',
-    authorization: 'Bearer secret',
-  })
+  const req = gatewayRequest('POST', path, { 'content-type': 'application/json', authorization: 'Bearer secret' })
   const res = new FakeResponse()
   const pending = dispatch.middleware(req as unknown as ApiRequest, res as unknown as ApiResponse, new URL(req.url, 'http://localhost'), {} as never)
   queueMicrotask(() => {
@@ -460,7 +453,7 @@ test('auth-gate rejections are audited once each: 400/401/403/421 with code + cl
   const misdirected = await runRequest(dispatch, 'GET', '/api/connections', { host: 'attacker.example' })
   assert.equal(misdirected.status, 421)
   // 400 — duplicate Authorization field lines (raw-header boundary).
-  const malformed = new FakeRequest('GET', '/plugins/index.js', { host: 'gateway.example:3000' })
+  const malformed = gatewayRequest('GET', '/plugins/index.js')
   Object.assign(malformed, { rawHeaders: ['authorization', 'Bearer one', 'authorization', 'Bearer two'] })
   const malformedRes = new FakeResponse()
   const pendingMalformed = dispatch.middleware(
@@ -529,13 +522,23 @@ test('a rejected request writes exactly one event; a successful login adds no ga
   assert.equal(events[2]!.detail, 'code:unauthorized,client:203.0.113.8,path:api,count:2')
 })
 
-test('in-window duplicate refusals coalesce into one record with count:N; the first lands immediately (M3-5)', async t => {
-  const dir = tmpDir('gateway-audit-debounce-')
+/** The debounced-audit fixture: a rejected-login provider, a fresh audit file
+ *  and a controllable clock; returns the dispatch plus both fixtures. */
+function auditFixture(
+  t: { after(fn: () => void): void },
+  prefix = 'gateway-audit-debounce-',
+  auth: AuthProvider = { kind: 'password', async verify() { return null } },
+): { file: string; clock: ReturnType<typeof debounceHarness>; dispatch: ReturnType<typeof setup>['dispatch'] } {
+  const dir = tmpDir(prefix)
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const file = join(dir, 'audit.log')
-  const auth: AuthProvider = { kind: 'password', async verify() { return null } }
   const clock = debounceHarness()
   const { dispatch } = setup(auth, file, clock.options)
+  return { file, clock, dispatch }
+}
+
+test('in-window duplicate refusals coalesce into one record with count:N; the first lands immediately (M3-5)', async t => {
+  const { file, clock, dispatch } = auditFixture(t)
 
   // The named window constant is the window the dispatch actually uses.
   assert.equal(AUTH_REJECTION_DEBOUNCE_MS, 1000)
@@ -579,12 +582,7 @@ test('in-window duplicate refusals coalesce into one record with count:N; the fi
 })
 
 test('the rejection debounce never merges different clients, codes or path categories (M3-5)', async t => {
-  const dir = tmpDir('gateway-audit-debounce-keys-')
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
-  const file = join(dir, 'audit.log')
-  const auth: AuthProvider = { kind: 'password', async verify() { return null } }
-  const clock = debounceHarness()
-  const { dispatch } = setup(auth, file, clock.options)
+  const { file, clock, dispatch } = auditFixture(t, 'gateway-audit-debounce-keys-')
 
   // Same client + code, a DIFFERENT path category.
   assert.equal((await runRequest(dispatch, 'GET', '/api/connections')).status, 401)
@@ -609,12 +607,7 @@ test('the rejection debounce never merges different clients, codes or path categ
 })
 
 test('dispatch quiesce drains an open debounce window so its count is not lost (M3-5)', async t => {
-  const dir = tmpDir('gateway-audit-debounce-quiesce-')
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
-  const file = join(dir, 'audit.log')
-  const auth: AuthProvider = { kind: 'password', async verify() { return null } }
-  const clock = debounceHarness()
-  const { dispatch } = setup(auth, file, clock.options)
+  const { file, clock, dispatch } = auditFixture(t, 'gateway-audit-debounce-quiesce-')
 
   for (let attempt = 0; attempt < 3; attempt += 1) {
     assert.equal((await runRequest(dispatch, 'GET', '/api/connections')).status, 401)
@@ -630,12 +623,7 @@ test('dispatch quiesce drains an open debounce window so its count is not lost (
 })
 
 test('a refusal after the window elapsed but before its timer publishes the old count first (M3-5)', async t => {
-  const dir = tmpDir('gateway-audit-debounce-elapsed-')
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
-  const file = join(dir, 'audit.log')
-  const auth: AuthProvider = { kind: 'password', async verify() { return null } }
-  const clock = debounceHarness()
-  const { dispatch } = setup(auth, file, clock.options)
+  const { file, clock, dispatch } = auditFixture(t, 'gateway-audit-debounce-elapsed-')
 
   assert.equal((await runRequest(dispatch, 'GET', '/api/connections')).status, 401)
   clock.advance(10)
@@ -659,12 +647,7 @@ test('a refusal after the window elapsed but before its timer publishes the old 
 })
 
 test('flushAuditWindows publishes a window opened after the fence-time drain (M3-5)', async t => {
-  const dir = tmpDir('gateway-audit-debounce-post-close-')
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
-  const file = join(dir, 'audit.log')
-  const auth: AuthProvider = { kind: 'password', async verify() { return null } }
-  const clock = debounceHarness()
-  const { dispatch } = setup(auth, file, clock.options)
+  const { file, clock, dispatch } = auditFixture(t, 'gateway-audit-debounce-post-close-')
 
   // Nothing open at the fence: no window existed, so no audit file was written.
   await dispatch.quiesce()
@@ -686,12 +669,7 @@ test('flushAuditWindows publishes a window opened after the fence-time drain (M3
 })
 
 test('the window map is bounded: at the cap the oldest window is published early (M3-5)', async t => {
-  const dir = tmpDir('gateway-audit-debounce-cap-')
-  t.after(() => rmSync(dir, { recursive: true, force: true }))
-  const file = join(dir, 'audit.log')
-  const auth: AuthProvider = { kind: 'password', async verify() { return null } }
-  const clock = debounceHarness()
-  const { dispatch } = setup(auth, file, clock.options)
+  const { file, dispatch } = auditFixture(t, 'gateway-audit-debounce-cap-')
 
   // The oldest key carries two refusals, so its early publication is visible.
   assert.equal((await runRequest(dispatch, 'GET', '/api/connections')).status, 401)

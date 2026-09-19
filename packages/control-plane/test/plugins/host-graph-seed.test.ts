@@ -20,7 +20,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdirSync, readFileSync, readdirSync, statSync, symlinkSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { tempDir } from '../support/utils.ts'
+import { hostGraphPlane, skipSymlinksUnavailable, tempDir, writeLocalProfileFixture } from '../support/utils.ts'
 import {
   CHAMBER_HOST_PACKAGES,
   assertHostSeedEntryNaming,
@@ -39,7 +39,7 @@ import {
 } from '../../src/host-graph-seed.ts'
 import { webProfileArgs, DEFAULT_DSH_START_PORT } from '../../src/spawn-dsh.ts'
 import { createLocalConnection } from '../../src/local-connection.ts'
-import { createControlPlane, resolveLocalHostGraphOverlay } from '../../src/index.ts'
+import { resolveLocalHostGraphOverlay } from '../../src/index.ts'
 import type { SpawnedDsh } from '../../src/local-connection.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
@@ -110,10 +110,7 @@ test('buildPatchOverlay rejects a symlinked state root without writing through i
   try {
     symlinkSync(outside, stateDir, 'dir')
   } catch (error) {
-    if (['EPERM', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) {
-      t.skip('symbolic links are unavailable on this platform')
-      return
-    }
+    if (skipSymlinksUnavailable(error, t)) return
     throw error
   }
   assert.throws(() => buildPatchOverlay(stateDir), /not a real directory/)
@@ -129,10 +126,7 @@ test('buildPatchOverlay rejects a preplanted leaf symlink and leaves its target 
   try {
     symlinkSync(victim, path, 'file')
   } catch (error) {
-    if (['EPERM', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) {
-      t.skip('symbolic links are unavailable on this platform')
-      return
-    }
+    if (skipSymlinksUnavailable(error, t)) return
     throw error
   }
   assert.throws(() => buildPatchOverlay(dir), /private state leaf is unsafe/)
@@ -290,10 +284,7 @@ test('ensureSeedPackage (host-graph) rejects a symlinked profile node_modules an
   try {
     symlinkSync(outside, modulesDir, 'dir')
   } catch (error) {
-    if (['EPERM', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) {
-      t.skip('symbolic links are unavailable on this platform')
-      return
-    }
+    if (skipSymlinksUnavailable(error, t)) return
     throw error
   }
   assert.throws(() => ensureSeedPackage(dshHome, HOST_GRAPH_PACKAGE_NAME, source), /not a real directory/)
@@ -312,10 +303,7 @@ test('ensureSeedPackage (host-graph) rejects a symlinked chamber scope without c
   try {
     symlinkSync(outside, join(modulesDir, '@dsh-chamber'), 'dir')
   } catch (error) {
-    if (['EPERM', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) {
-      t.skip('symbolic links are unavailable on this platform')
-      return
-    }
+    if (skipSymlinksUnavailable(error, t)) return
     throw error
   }
   assert.throws(() => ensureSeedPackage(dshHome, HOST_GRAPH_PACKAGE_NAME, source), /not a real directory/)
@@ -334,10 +322,7 @@ test('ensureSeedPackage (host-graph) rejects a symlinked chamber package directo
   try {
     symlinkSync(outside, target, 'dir')
   } catch (error) {
-    if (['EPERM', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) {
-      t.skip('symbolic links are unavailable on this platform')
-      return
-    }
+    if (skipSymlinksUnavailable(error, t)) return
     throw error
   }
   assert.throws(() => ensureSeedPackage(dshHome, HOST_GRAPH_PACKAGE_NAME, source), /not a real directory/)
@@ -353,10 +338,7 @@ test('ensureSeedPackage (host-graph) retains the ordinary source boundary for a 
   try {
     symlinkSync(source, sourceLink, 'dir')
   } catch (error) {
-    if (['EPERM', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) {
-      t.skip('symbolic links are unavailable on this platform')
-      return
-    }
+    if (skipSymlinksUnavailable(error, t)) return
     throw error
   }
   assert.equal(ensureSeedPackage(dshHome, HOST_GRAPH_PACKAGE_NAME, sourceLink), true)
@@ -412,11 +394,6 @@ test('webProfileArgs injects --patch before the web app flags when a patch overl
 
 function mockSpawned(): SpawnedDsh {
   return { child: { on() {}, exitCode: null }, port: DEFAULT_DSH_START_PORT, stop: async () => {} }
-}
-
-const healthyLocalConnectionDeps = {
-  spawnDsh: async () => mockSpawned(),
-  probeHostIdentity: async () => true,
 }
 
 test('createLocalConnection passes the resolved patchPath to the spawn fn', async t => {
@@ -518,21 +495,6 @@ test('createLocalConnection re-resolves the patchPath thunk on the restart path'
 // pass it would report a row the current spawn does NOT mount (T20).
 // ---------------------------------------------------------------------------
 
-/** A managed profile whose own user patch layer carries `patchContent`. */
-function writeLocalProfileFixture(dir: string, patchContent: string | null): string {
-  const dshHome = join(dir, 'dsh-home')
-  const profileDir = join(dshHome, 'profiles', 'web')
-  mkdirSync(profileDir, { recursive: true })
-  writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
-    name: 'dsh-profile-web',
-    private: true,
-    dependencies: {},
-    dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'], patchReload: 'live' } },
-  }))
-  if (patchContent !== null) writeFileSync(join(profileDir, 'cordis.patch.yml'), patchContent)
-  return dshHome
-}
-
 /** A built host-graph source dir (package.json + dist/index.js). */
 function writeBuiltSeedSource(dir: string, built: boolean): string {
   const sourceDir = join(dir, 'built-seed-source')
@@ -609,18 +571,13 @@ test('seededProbeDomains 按实际 seed 派生（全/部分/空三态；2026-09 
   const dir = tempDir(t)
   const graphSource = stageSource(t, 'export const v = 1\n')
   // 部分 seed：graph 在、git/archive 源缺失
-  const partial = createControlPlane({
-    stateDir: dir,
-    port: 0,
-    dshWorkspacePath: join(dir, 'dsh'),
+  const partial = hostGraphPlane(dir, {
     hostGraphPackageSourceDir: graphSource,
     hostGitWorktreePackageSourceDir: join(dir, 'no-git'),
     hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive'),
     // open-in 是 localOnly 行，其源码包在仓库里真实存在：不显式指向缺失目录的话
     // 缺省目录会被播种，本用例就不再是"部分 seed"（2026-09 四包化后的 P1 复核）。
     hostOpenInPackageSourceDir: join(dir, 'no-open-in'),
-    logger: silentLogger,
-    localConnectionDeps: healthyLocalConnectionDeps,
   })
   try {
     await partial.start()
@@ -633,16 +590,11 @@ test('seededProbeDomains 按实际 seed 派生（全/部分/空三态；2026-09 
 
   // 空 seed：三源全缺 → 空集（激活期望集退化为无宿主域，不误判失败）
   const emptyDir = tempDir(t)
-  const empty = createControlPlane({
-    stateDir: emptyDir,
-    port: 0,
-    dshWorkspacePath: join(emptyDir, 'dsh'),
+  const empty = hostGraphPlane(emptyDir, {
     hostGraphPackageSourceDir: join(emptyDir, 'no-graph'),
     hostGitWorktreePackageSourceDir: join(emptyDir, 'no-git'),
     hostArchiveCleanupPackageSourceDir: join(emptyDir, 'no-archive'),
     hostOpenInPackageSourceDir: join(emptyDir, 'no-open-in'),
-    logger: silentLogger,
-    localConnectionDeps: healthyLocalConnectionDeps,
   })
   try {
     await empty.start()
@@ -656,16 +608,11 @@ test('seededProbeDomains 按实际 seed 派生（全/部分/空三态；2026-09 
   const fullDir = tempDir(t)
   const gitFull = stageSource(t, 'export const v = 3\n')
   const archiveFull = stageSource(t, 'export const v = 4\n')
-  const full = createControlPlane({
-    stateDir: fullDir,
-    port: 0,
-    dshWorkspacePath: join(fullDir, 'dsh'),
+  const full = hostGraphPlane(fullDir, {
     hostGraphPackageSourceDir: stageSource(t, 'export const v = 5\n'),
     hostGitWorktreePackageSourceDir: gitFull,
     hostArchiveCleanupPackageSourceDir: archiveFull,
     hostOpenInPackageSourceDir: stageSource(t, 'export const v = 6\n'),
-    logger: silentLogger,
-    localConnectionDeps: healthyLocalConnectionDeps,
   })
   try {
     await full.start()
@@ -684,16 +631,8 @@ test('seededProbeDomains 按实际 seed 派生（全/部分/空三态；2026-09 
 test('createControlPlane.startLocal() seeds the host package and materializes the overlay when dist/index.js exists', async t => {
   const dir = tempDir(t)
   const source = stageSource(t, 'export const v = 1\n')
-  const plane = createControlPlane({
-    stateDir: dir,
-    port: 0,
-    dshWorkspacePath: join(dir, 'dsh'),
+  const plane = hostGraphPlane(dir, {
     hostGraphPackageSourceDir: source,
-    hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
-    hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive-cleanup-package'),
-    hostOpenInPackageSourceDir: join(dir, 'no-open-in-package'),
-    logger: silentLogger,
-    localConnectionDeps: healthyLocalConnectionDeps,
   })
   try {
     await plane.start()
@@ -718,16 +657,9 @@ test('createControlPlane.startLocal() seeds both host packages behind one merged
   mkdirSync(join(gitSource, 'dist'), { recursive: true })
   writeFileSync(join(gitSource, 'package.json'), JSON.stringify({ name: HOST_GIT_WORKTREE_PACKAGE_NAME }))
   writeFileSync(join(gitSource, 'dist', 'index.js'), 'export const git = 1\n')
-  const plane = createControlPlane({
-    stateDir: dir,
-    port: 0,
-    dshWorkspacePath: join(dir, 'dsh'),
+  const plane = hostGraphPlane(dir, {
     hostGraphPackageSourceDir: graphSource,
     hostGitWorktreePackageSourceDir: gitSource,
-    hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive-cleanup-package'),
-    hostOpenInPackageSourceDir: join(dir, 'no-open-in-package'),
-    logger: silentLogger,
-    localConnectionDeps: healthyLocalConnectionDeps,
   })
   try {
     await plane.start()
@@ -757,16 +689,11 @@ test('createControlPlane.startLocal() seeds ALL FOUR host packages behind one me
   mkdirSync(join(openInSource, 'dist'), { recursive: true })
   writeFileSync(join(openInSource, 'package.json'), JSON.stringify({ name: HOST_OPEN_IN_PACKAGE_NAME }))
   writeFileSync(join(openInSource, 'dist', 'index.js'), 'export const openIn = 1\n')
-  const plane = createControlPlane({
-    stateDir: dir,
-    port: 0,
-    dshWorkspacePath: join(dir, 'dsh'),
+  const plane = hostGraphPlane(dir, {
     hostGraphPackageSourceDir: graphSource,
     hostGitWorktreePackageSourceDir: gitSource,
     hostArchiveCleanupPackageSourceDir: archiveSource,
     hostOpenInPackageSourceDir: openInSource,
-    logger: silentLogger,
-    localConnectionDeps: healthyLocalConnectionDeps,
   })
   try {
     await plane.start()
@@ -808,16 +735,8 @@ test('createControlPlane.startLocal() reuses an exact user profile row without a
   const profileDir = join(dir, 'dsh-home', 'profiles', 'web')
   mkdirSync(profileDir, { recursive: true })
   writeFileSync(join(profileDir, 'cordis.patch.yml'), `- insert:\n    - id: client-graph\n      name: '${HOST_GRAPH_PACKAGE_NAME}'\n`)
-  const plane = createControlPlane({
-    stateDir: dir,
-    port: 0,
-    dshWorkspacePath: join(dir, 'dsh'),
+  const plane = hostGraphPlane(dir, {
     hostGraphPackageSourceDir: source,
-    hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
-    hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive-cleanup-package'),
-    hostOpenInPackageSourceDir: join(dir, 'no-open-in-package'),
-    logger: silentLogger,
-    localConnectionDeps: healthyLocalConnectionDeps,
   })
   try {
     await plane.start()
@@ -838,16 +757,8 @@ test('createControlPlane.startLocal() rejects a profile loader collision before 
   const profileDir = join(dir, 'dsh-home', 'profiles', 'web')
   mkdirSync(profileDir, { recursive: true })
   writeFileSync(join(profileDir, 'cordis.patch.yml'), `- insert:\n    - id: client-graph\n      name: '@dsh-chamber/not-client-graph'\n`)
-  const plane = createControlPlane({
-    stateDir: dir,
-    port: 0,
-    dshWorkspacePath: join(dir, 'dsh'),
+  const plane = hostGraphPlane(dir, {
     hostGraphPackageSourceDir: source,
-    hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
-    hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive-cleanup-package'),
-    hostOpenInPackageSourceDir: join(dir, 'no-open-in-package'),
-    logger: silentLogger,
-    localConnectionDeps: healthyLocalConnectionDeps,
   })
   try {
     await plane.start()
@@ -865,16 +776,8 @@ test('createControlPlane.startLocal() keeps the v4 baseline when dist/index.js i
   // "not shipped" (skip + no overlay), never throw the seed's fail-loud
   // missing-file error.
   const source = tempDir(t)
-  const plane = createControlPlane({
-    stateDir: dir,
-    port: 0,
-    dshWorkspacePath: join(dir, 'dsh'),
+  const plane = hostGraphPlane(dir, {
     hostGraphPackageSourceDir: source,
-    hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
-    hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive-cleanup-package'),
-    hostOpenInPackageSourceDir: join(dir, 'no-open-in-package'),
-    logger: silentLogger,
-    localConnectionDeps: healthyLocalConnectionDeps,
   })
   try {
     await plane.start()
@@ -897,22 +800,14 @@ test('createControlPlane.startLocal() merges extra seed entries (client plugin) 
   mkdirSync(join(mobileSource, 'dist'), { recursive: true })
   writeFileSync(join(mobileSource, 'package.json'), JSON.stringify({ name: '@dsh-chamber/dsh-client-ui-mobile', version: '0.0.0', main: 'dist/index.js' }) + '\n')
   writeFileSync(join(mobileSource, 'dist', 'index.js'), 'export const mobile = 1\n')
-  const plane = createControlPlane({
-    stateDir: dir,
-    port: 0,
-    dshWorkspacePath: join(dir, 'dsh'),
+  const plane = hostGraphPlane(dir, {
     hostGraphPackageSourceDir: graphSource,
-    hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
-    hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive-cleanup-package'),
-    hostOpenInPackageSourceDir: join(dir, 'no-open-in-package'),
     extraSeedEntries: [{
       insert: { id: 'mobile', name: '@dsh-chamber/dsh-client-ui-mobile' },
       kind: 'client',
       source: 'packaged',
       sourceDir: mobileSource,
     }],
-    logger: silentLogger,
-    localConnectionDeps: healthyLocalConnectionDeps,
   })
   try {
     await plane.start()
@@ -936,14 +831,8 @@ test('createControlPlane.startLocal() skips an absent extra seed entry (stub) wi
   const dir = tempDir(t)
   const source = stageSource(t, 'export const graph = 1\n')
   const warns: string[] = []
-  const plane = createControlPlane({
-    stateDir: dir,
-    port: 0,
-    dshWorkspacePath: join(dir, 'dsh'),
+  const plane = hostGraphPlane(dir, {
     hostGraphPackageSourceDir: source,
-    hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
-    hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive-cleanup-package'),
-    hostOpenInPackageSourceDir: join(dir, 'no-open-in-package'),
     extraSeedEntries: [{
       insert: { id: 'mobile', name: '@dsh-chamber/dsh-client-ui-mobile' },
       kind: 'client',
@@ -951,7 +840,6 @@ test('createControlPlane.startLocal() skips an absent extra seed entry (stub) wi
       sourceDir: join(dir, 'no-mobile-package'),
     }],
     logger: { log() {}, warn: (message: unknown) => { warns.push(String(message)) }, error() {} },
-    localConnectionDeps: healthyLocalConnectionDeps,
   })
   try {
     await plane.start()
@@ -1051,14 +939,8 @@ test('createControlPlane.startLocal() lets an extra seed entry shadow the base h
   mkdirSync(join(syncedSource, 'dist'), { recursive: true })
   writeFileSync(join(syncedSource, 'package.json'), JSON.stringify({ name: HOST_GRAPH_PACKAGE_NAME, version: '9.9.9', main: 'dist/index.js' }) + '\n')
   writeFileSync(join(syncedSource, 'dist', 'index.js'), 'export const synced = 1\n')
-  const plane = createControlPlane({
-    stateDir: dir,
-    port: 0,
-    dshWorkspacePath: join(dir, 'dsh'),
+  const plane = hostGraphPlane(dir, {
     hostGraphPackageSourceDir: baseSource,
-    hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
-    hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive-cleanup-package'),
-    hostOpenInPackageSourceDir: join(dir, 'no-open-in-package'),
     extraSeedEntries: [{
       insert: HOST_GRAPH_INSERT,
       kind: 'host',
@@ -1066,8 +948,6 @@ test('createControlPlane.startLocal() lets an extra seed entry shadow the base h
       sourceDir: syncedSource,
       probeDomains: ['clientGraph/graph'],
     }],
-    logger: silentLogger,
-    localConnectionDeps: healthyLocalConnectionDeps,
   })
   try {
     await plane.start()
@@ -1129,22 +1009,14 @@ test('assertHostSeedEntryNaming binds kind host only — the client mobile slot 
 
 test('the seed registry refuses a non-canonical host entry before any profile write', async t => {
   const dir = tempDir(t)
-  const plane = createControlPlane({
-    stateDir: dir,
-    port: 0,
-    dshWorkspacePath: join(dir, 'dsh'),
+  const plane = hostGraphPlane(dir, {
     hostGraphPackageSourceDir: stageSource(t),
-    hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
-    hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive-cleanup-package'),
-    hostOpenInPackageSourceDir: join(dir, 'no-open-in-package'),
     extraSeedEntries: [{
       insert: { id: 'client-graph', name: '@dsh-chamber/dsh-host-client-graph' },
       kind: 'host',
       source: 'desktop-synced',
       sourceDir: null,
     }],
-    logger: silentLogger,
-    localConnectionDeps: healthyLocalConnectionDeps,
   })
   try {
     // The registry is resolved at plane start (the artifact diagnostic loop)

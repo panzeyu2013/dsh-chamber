@@ -15,8 +15,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { applyPendingVersion } from '../../src/apply-phase.ts'
-import type { ActivationJournal } from '../../src/dsh-runtime-store.ts'
 import { REQUIRED_ACTIVATION_PROBES, type ProbeResult } from '../../src/activation-gate.ts'
+import { journalBuilder } from '../support/store-fixtures.ts'
 import { RunPhaseFixture, type RunPhaseEvent } from '../support/run-phase-fixture.ts'
 
 const pass = (): ProbeResult[] => REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: true }))
@@ -36,44 +36,38 @@ function scriptProbes(fixture: RunPhaseFixture, script: ProbeScriptEntry[]): voi
   })
 }
 
+/** applyPendingVersion over the canonical apply-phase fixture fields; callers
+ *  override only the field their case varies. */
+function apply(
+  fixture: RunPhaseFixture,
+  overrides: Partial<Parameters<typeof applyPendingVersion>[0]> = {},
+): ReturnType<typeof applyPendingVersion> {
+  return applyPendingVersion({
+    pendingVersion: '0.2.0',
+    builtinVersion: '0.1.1-rc.2',
+    sourceVersion: '0.1.1-rc.2',
+    knownGoodVersion: null,
+    deps: fixture.makeApplyDeps(),
+    ...overrides,
+  })
+}
+
 function switchVersions(fixture: RunPhaseFixture): Array<string | null> {
   return fixture.events
     .filter((e): e is Extract<RunPhaseEvent, { kind: 'switch' }> => e.kind === 'switch')
     .map(e => e.version)
 }
 
-function durableJournal(
-  phase: ActivationJournal['phase'],
-  patch: Partial<ActivationJournal> = {},
-): ActivationJournal {
-  return {
-    schemaVersion: 1,
-    phase,
-    targetVersion: '0.2.0',
-    targetIsBuiltin: false,
-    manualRollback: false,
-    intentKind: 'version-switch',
-    sourceVersion: '0.1.0',
-    sourceIsBuiltin: false,
-    sourceWasKnownGood: true,
-    knownGoodVersion: '0.1.0',
-    preSwapSnapshotName: '0.1.0-pre',
-    manualDataSnapshotName: null,
-    preRollbackStashName: null,
-    rollbackTarget: null,
-    nextIntent: null,
-    startedAt: '2026-08-23T00:00:00.000Z',
-    updatedAt: '2026-08-23T00:00:00.000Z',
-    ...patch,
-  }
-}
+const durableJournal = journalBuilder({
+  targetVersion: '0.2.0',
+  sourceVersion: '0.1.0',
+  knownGoodVersion: '0.1.0',
+  preSwapSnapshotName: '0.1.0-pre',
+})
 
 test('snapshot failure aborts — no switchPointer, status failed', async () => {
   const fixture = new RunPhaseFixture({ snapshotThrows: true, pointer: '0.1.1-rc.2' })
-  const outcome = await applyPendingVersion({
-    pendingVersion: '0.2.0', builtinVersion: '0.1.1-rc.2', sourceVersion: '0.1.1-rc.2', knownGoodVersion: null,
-    deps: fixture.makeApplyDeps(),
-  })
+  const outcome = await apply(fixture)
   assert.equal(outcome.status, 'snapshot-failed')
   assert.equal(fixture.switchCalls, 0)
 })
@@ -97,10 +91,7 @@ test('validateTarget rejection is a loud target-invalid failure — no snapshot,
 
 test('probe pass → applied, marks known-good, switches to pending', async () => {
   const fixture = new RunPhaseFixture({ probeResults: pass(), pointer: '0.1.1-rc.2' })
-  const outcome = await applyPendingVersion({
-    pendingVersion: '0.2.0', builtinVersion: '0.1.1-rc.2', sourceVersion: '0.1.1-rc.2', knownGoodVersion: null,
-    deps: fixture.makeApplyDeps(),
-  })
+  const outcome = await apply(fixture)
   assert.equal(outcome.status, 'applied')
   assert.deepEqual(switchVersions(fixture), ['0.2.0'])
   assert.deepEqual(fixture.knownGoodCalls, ['0.2.0'])
@@ -109,10 +100,7 @@ test('probe pass → applied, marks known-good, switches to pending', async () =
 test('probe fail → rolled-back, restore called, switch back to source (known-good)', async () => {
   const fixture = new RunPhaseFixture({ pointer: '0.1.1-rc.2' })
   scriptProbes(fixture, ['fail', 'fail', 'pass'])
-  const outcome = await applyPendingVersion({
-    pendingVersion: '0.2.0', builtinVersion: '0.1.1-rc.2', sourceVersion: '0.1.1-rc.2', knownGoodVersion: '0.1.1-rc.2',
-    deps: fixture.makeApplyDeps(),
-  })
+  const outcome = await apply(fixture, { knownGoodVersion: '0.1.1-rc.2' })
   assert.equal(outcome.status, 'rolled-back')
   assert.equal(fixture.restoreCalls, 1)
   // The rollback restores the resolved pre-swap snapshot of the SOURCE tree
@@ -125,10 +113,7 @@ test('probe fail → rolled-back, restore called, switch back to source (known-g
 test('probe failure stops the host before pointer/data rollback', async () => {
   const fixture = new RunPhaseFixture({ pointer: null })
   scriptProbes(fixture, ['fail', 'fail', 'pass'])
-  await applyPendingVersion({
-    pendingVersion: '0.2.0', builtinVersion: '0.1.0', sourceVersion: '0.1.0', sourceIsBuiltin: true, knownGoodVersion: null,
-    deps: fixture.makeApplyDeps(),
-  })
+  await apply(fixture, { builtinVersion: '0.1.0', sourceVersion: '0.1.0', sourceIsBuiltin: true })
   assert.deepEqual(fixture.events.map(e => e.kind), ['snapshot', 'switch', 'probe', 'probe', 'stop', 'switch', 'restore', 'probe'])
   assert.deepEqual(switchVersions(fixture), ['0.2.0', null])
 })
@@ -136,10 +121,7 @@ test('probe failure stops the host before pointer/data rollback', async () => {
 test('failed host stop preserves pointer and snapshot data', async () => {
   const fixture = new RunPhaseFixture({ stopHostThrows: true, pointer: '0.1.0' })
   scriptProbes(fixture, ['fail', 'fail'])
-  const outcome = await applyPendingVersion({
-    pendingVersion: '0.2.0', builtinVersion: '0.1.1-rc.2', sourceVersion: '0.1.0', knownGoodVersion: '0.1.0',
-    deps: fixture.makeApplyDeps(),
-  })
+  const outcome = await apply(fixture, { sourceVersion: '0.1.0', knownGoodVersion: '0.1.0' })
   assert.equal(outcome.status, 'failed')
   assert.equal(fixture.switchCalls, 1)
   assert.equal(fixture.restoreCalls, 0)
@@ -153,10 +135,7 @@ test('probe observe then fail → still rolled-back (delayed verdict)', async ()
     calls += 1
     return calls === 3 ? pass() : fail()
   })
-  const outcome = await applyPendingVersion({
-    pendingVersion: '0.2.0', builtinVersion: '0.1.1-rc.2', sourceVersion: '0.1.1-rc.2', knownGoodVersion: '0.1.1-rc.2',
-    deps: fixture.makeApplyDeps(),
-  })
+  const outcome = await apply(fixture, { knownGoodVersion: '0.1.1-rc.2' })
   assert.equal(outcome.status, 'rolled-back')
   assert.equal(calls, 3) // observe, final candidate verdict, rollback verification
 })
@@ -164,10 +143,7 @@ test('probe observe then fail → still rolled-back (delayed verdict)', async ()
 test('rollback target probe failure falls to builtin once and ends loud', async () => {
   const fixture = new RunPhaseFixture({ pointer: '0.2.0' })
   fixture.setProbe(async () => fail())
-  const outcome = await applyPendingVersion({
-    pendingVersion: '0.3.0', builtinVersion: '0.1.1-rc.2', sourceVersion: '0.2.0', sourceWasKnownGood: true,
-    knownGoodVersion: '0.2.0', deps: fixture.makeApplyDeps(),
-  })
+  const outcome = await apply(fixture, { pendingVersion: '0.3.0', sourceVersion: '0.2.0', sourceWasKnownGood: true, knownGoodVersion: '0.2.0' })
   assert.equal(outcome.status, 'failed')
   assert.deepEqual(switchVersions(fixture), ['0.3.0', '0.2.0', null])
   assert.match(outcome.error ?? '', /内建运行时探针均失败/)
@@ -185,10 +161,7 @@ test('a resumed builtin fallback that fails again names the failing probe', asyn
   const journal = durableJournal('rollback-needed', { rollbackTarget: null })
   const fixture = new RunPhaseFixture({ pointer: '0.2.0', journal: { kind: 'valid', journal } })
   fixture.setProbe(async () => fail())
-  const outcome = await applyPendingVersion({
-    pendingVersion: journal.targetVersion, builtinVersion: '0.1.1-rc.2', sourceVersion: '0.2.0', sourceWasKnownGood: true,
-    knownGoodVersion: '0.2.0', journal, deps: fixture.makeApplyDeps(),
-  })
+  const outcome = await apply(fixture, { pendingVersion: journal.targetVersion, sourceVersion: '0.2.0', sourceWasKnownGood: true, knownGoodVersion: '0.2.0', journal })
   assert.equal(outcome.status, 'failed')
   assert.equal(outcome.failureKind, 'terminal')
   assert.match(outcome.error ?? '', /内建回退运行时探针失败/)
@@ -198,10 +171,7 @@ test('a resumed builtin fallback that fails again names the failing probe', asyn
 test('rollback target falls to known-good when source not trusted', async () => {
   const fixture = new RunPhaseFixture({ pointer: '0.2.0' })
   scriptProbes(fixture, ['fail', 'fail', 'pass'])
-  const outcome = await applyPendingVersion({
-    pendingVersion: '0.3.0', builtinVersion: '0.1.1-rc.2', sourceVersion: '0.2.0', knownGoodVersion: '0.1.1-rc.2',
-    deps: fixture.makeApplyDeps(),
-  })
+  const outcome = await apply(fixture, { pendingVersion: '0.3.0', sourceVersion: '0.2.0', knownGoodVersion: '0.1.1-rc.2' })
   assert.equal(outcome.status, 'rolled-back')
   assert.deepEqual(switchVersions(fixture), ['0.3.0', '0.1.1-rc.2']) // source not trusted → known-good
 })
@@ -209,10 +179,7 @@ test('rollback target falls to known-good when source not trusted', async () => 
 test('restore incomplete → rolled-back with loud error', async () => {
   const fixture = new RunPhaseFixture({ restoreOutcome: 'incomplete', pointer: '0.1.1-rc.2' })
   scriptProbes(fixture, ['fail', 'fail'])
-  const outcome = await applyPendingVersion({
-    pendingVersion: '0.2.0', builtinVersion: '0.1.1-rc.2', sourceVersion: '0.1.1-rc.2', knownGoodVersion: '0.1.1-rc.2',
-    deps: fixture.makeApplyDeps(),
-  })
+  const outcome = await apply(fixture, { knownGoodVersion: '0.1.1-rc.2' })
   assert.equal(outcome.status, 'rolled-back')
   assert.match(outcome.error ?? '', /数据恢复未完成/)
   assert.equal(outcome.retainPending, true)
@@ -224,10 +191,7 @@ test('prepared crash replay at target performs no new snapshot or pointer write'
   const journal = durableJournal('prepared')
   const fixture = new RunPhaseFixture({ pointer: '0.2.0', journal: { kind: 'valid', journal } })
   fixture.setProbe(async () => pass())
-  const outcome = await applyPendingVersion({
-    pendingVersion: '0.2.0', builtinVersion: '0.1.1-rc.2', sourceVersion: '0.1.0',
-    sourceWasKnownGood: true, knownGoodVersion: '0.1.0', journal, deps: fixture.makeApplyDeps(),
-  })
+  const outcome = await apply(fixture, { sourceVersion: '0.1.0', sourceWasKnownGood: true, knownGoodVersion: '0.1.0', journal })
   assert.equal(outcome.status, 'applied')
   assert.equal(fixture.snapshotCalls, 0)
   assert.equal(fixture.switchCalls, 0)
@@ -245,10 +209,7 @@ test('phase writes preserve a concurrently queued reset-builtin intent', async (
     journal: { kind: 'valid', journal: { ...active, nextIntent: queued } },
   })
   fixture.setProbe(async () => pass())
-  const outcome = await applyPendingVersion({
-    pendingVersion: '0.2.0', builtinVersion: '0.1.1-rc.2', sourceVersion: '0.1.0',
-    sourceWasKnownGood: true, knownGoodVersion: '0.1.0', journal: active, deps: fixture.makeApplyDeps(),
-  })
+  const outcome = await apply(fixture, { sourceVersion: '0.1.0', sourceWasKnownGood: true, knownGoodVersion: '0.1.0', journal: active })
   assert.equal(outcome.status, 'applied')
   assert.deepEqual(fixture.journalWrites.at(-1)?.nextIntent, queued)
 })
@@ -259,10 +220,7 @@ test('manual rollback journals target snapshot and stash before switching, then 
     probeResults: pass(),
     manualRollbackPaths: { snapshotPath: '/snap/0.1.0-historical', stashPath: '/stash/0.1.0-current' },
   })
-  const outcome = await applyPendingVersion({
-    pendingVersion: '0.1.0', builtinVersion: '0.1.1-rc.2', sourceVersion: '0.2.0',
-    sourceWasKnownGood: true, knownGoodVersion: '0.2.0', manualRollback: true, deps: fixture.makeApplyDeps(),
-  })
+  const outcome = await apply(fixture, { pendingVersion: '0.1.0', sourceVersion: '0.2.0', sourceWasKnownGood: true, knownGoodVersion: '0.2.0', manualRollback: true })
   assert.equal(outcome.status, 'applied')
   assert.deepEqual(fixture.events.slice(0, 3).map(e => e.kind), ['snapshot', 'prepare-manual', 'switch'])
   assert.deepEqual(fixture.journalWrites.slice(0, 3).map(j => j.phase), ['prepared', 'switched', 'manual-restoring'])
@@ -294,10 +252,7 @@ test('a timed-out first probe can recover on a fresh, bounded second probe attem
     fixture.adapter.advanceClock(1)
     return pass()
   })
-  const outcome = await applyPendingVersion({
-    pendingVersion: '0.2.0', builtinVersion: '0.1.1-rc.2', sourceVersion: '0.1.0',
-    sourceWasKnownGood: true, knownGoodVersion: '0.1.0', deps: fixture.makeApplyDeps(),
-  })
+  const outcome = await apply(fixture, { sourceVersion: '0.1.0', sourceWasKnownGood: true, knownGoodVersion: '0.1.0' })
   assert.equal(outcome.status, 'applied')
   assert.equal(calls, 2)
   assert.equal(fixture.switchCalls, 1)
@@ -313,10 +268,7 @@ test('rollback probe is routed to rollback version, never the adjudicated target
     attempt += 1
     return attempt <= 2 ? fail() : pass()
   })
-  const outcome = await applyPendingVersion({
-    pendingVersion: '0.3.0', builtinVersion: '0.1.1-rc.2', sourceVersion: '0.2.0',
-    sourceWasKnownGood: true, knownGoodVersion: '0.2.0', deps: fixture.makeApplyDeps(),
-  })
+  const outcome = await apply(fixture, { pendingVersion: '0.3.0', sourceVersion: '0.2.0', sourceWasKnownGood: true, knownGoodVersion: '0.2.0' })
   assert.equal(outcome.status, 'rolled-back')
   assert.deepEqual(calls, [
     ['0.3.0', false],

@@ -26,8 +26,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DEFAULT_PROBE_WINDOW_MS, REQUIRED_ACTIVATION_PROBES, type ProbeResult } from '../../src/activation-gate.ts'
@@ -46,10 +45,45 @@ import {
   RunPhaseFixture,
   type RunPhaseEvent,
 } from '../support/run-phase-fixture.ts'
+import { criticalFilesFor } from '../support/store-fixtures.ts'
+
+/** applyPendingVersion over the canonical pending fixture fields and the
+ *  fixture's own apply deps; callers override only what their case varies. */
+function applyPending(
+  fixture: RunPhaseFixture,
+  overrides: Partial<Parameters<typeof applyPendingVersion>[0]> = {},
+): ReturnType<typeof applyPendingVersion> {
+  return applyPendingVersion({
+    pendingVersion: '0.2.0',
+    builtinVersion: fixture.builtinVersion,
+    sourceVersion: '0.1.0',
+    sourceWasKnownGood: true,
+    knownGoodVersion: '0.1.0',
+    deps: fixture.makeApplyDeps(),
+    ...overrides,
+  })
+}
 
 const passProbes = (): ProbeResult[] => REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: true }))
 const failProbes = (): ProbeResult[] =>
   passProbes().map(p => p.name === 'session/canOpenWorkspacePath' ? { ...p, ok: false } : p)
+
+/** Resume a crashed fixture's durable state in a fresh fixture and run its entry. */
+async function resumeCrashed(crashed: Parameters<typeof RunPhaseFixture.fromState>[0]): Promise<{ resumed: RunPhaseFixture; result: Awaited<ReturnType<RunPhaseFixture['runEntry']>> }> {
+  const resumed = RunPhaseFixture.fromState(crashed)
+  return { resumed, result: await resumed.runEntry() }
+}
+
+/** A cancelled entry's zero-side-effect invariant: no snapshot/switch/probe/stop
+ *  and no journal write, with the pointer left where it was. */
+function assertZeroSideEffects(fixture: RunPhaseFixture): void {
+  assert.equal(fixture.snapshotCalls, 0)
+  assert.equal(fixture.switchCalls, 0)
+  assert.equal(eventCount(fixture, 'probe'), 0)
+  assert.equal(eventCount(fixture, 'stop'), 0)
+  assert.equal(fixture.currentState().journal.kind, 'missing')
+  assert.equal(fixture.currentState().pointer, '0.1.0')
+}
 
 const switchVersions = (fixture: RunPhaseFixture): Array<string | null> =>
   fixture.events
@@ -68,13 +102,7 @@ function makeVersionTree(base: string, version: string): void {
   writeFileSync(join(tree, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), JSON.stringify({
     name: '@deepseek-ai/dsh', version,
   }), 'utf8')
-  const criticalFiles = Object.fromEntries([
-    'node_modules/@deepseek-ai/dsh/package.json',
-    'node_modules/@deepseek-ai/dsh/lib/bin.js',
-  ].map(relativePath => [
-    relativePath,
-    `sha256-${createHash('sha256').update(readFileSync(join(tree, relativePath))).digest('base64')}`,
-  ]))
+  const criticalFiles = criticalFilesFor(tree)
   writeFileSync(join(tree, 'package.json'), JSON.stringify({
     dependencies: { '@deepseek-ai/dsh': version },
     dsh: { platform: `${process.platform}-${process.arch}`, criticalFiles },
@@ -132,8 +160,7 @@ test('crash after the pre-swap snapshot: re-entry reuses the journal snapshot, n
     assert.equal(crashed.journal.journal.preSwapSnapshotName, '0.1.0-pre-swap')
   }
 
-  const second = RunPhaseFixture.fromState(crashed)
-  const result = await second.runEntry()
+  const { resumed: second, result } = await resumeCrashed(crashed)
   assert.equal(result.applyOutcome?.status, 'applied')
   assert.equal(first.snapshotCalls + second.snapshotCalls, 1)
   assert.equal(second.snapshotCalls, 0)
@@ -157,8 +184,7 @@ test('crash right after switchPointer: re-entry skips the re-switch and complete
   assert.equal(crashed.journal.kind, 'valid')
   if (crashed.journal.kind === 'valid') assert.equal(crashed.journal.journal.phase, 'prepared')
 
-  const second = RunPhaseFixture.fromState(crashed)
-  const result = await second.runEntry()
+  const { resumed: second, result } = await resumeCrashed(crashed)
   assert.equal(result.applyOutcome?.status, 'applied')
   assert.equal(first.snapshotCalls + second.snapshotCalls, 1)
   assert.equal(first.switchCalls + second.switchCalls, 1)
@@ -174,8 +200,7 @@ test('crash during the activation probe: re-entry probes again but never re-snap
   assert.equal(crashed.journal.kind, 'valid')
   if (crashed.journal.kind === 'valid') assert.equal(crashed.journal.journal.phase, 'switched')
 
-  const second = RunPhaseFixture.fromState(crashed)
-  const result = await second.runEntry()
+  const { resumed: second, result } = await resumeCrashed(crashed)
   assert.equal(result.applyOutcome?.status, 'applied')
   assert.equal(first.snapshotCalls + second.snapshotCalls, 1)
   assert.equal(first.switchCalls + second.switchCalls, 1)
@@ -195,8 +220,7 @@ test('crash after the rollback stopHost: re-entry continues the same rollback ex
     assert.equal(crashed.journal.journal.rollbackTarget, '0.1.0')
   }
 
-  const second = RunPhaseFixture.fromState(crashed)
-  const result = await second.runEntry()
+  const { resumed: second, result } = await resumeCrashed(crashed)
   assert.equal(result.applyOutcome?.status, 'rolled-back')
   assert.equal(first.snapshotCalls + second.snapshotCalls, 1)
   assert.equal(first.restoreCalls + second.restoreCalls, 1)
@@ -223,14 +247,7 @@ test('advanceClock pushes the first probe beyond the window; a fresh second prob
     }
     return passProbes()
   })
-  const outcome = await applyPendingVersion({
-    pendingVersion: '0.2.0',
-    builtinVersion: fixture.builtinVersion,
-    sourceVersion: '0.1.0',
-    sourceWasKnownGood: true,
-    knownGoodVersion: '0.1.0',
-    deps: fixture.makeApplyDeps(),
-  })
+  const outcome = await applyPending(fixture)
   assert.equal(outcome.status, 'applied')
   assert.equal(calls, 2)
   assert.equal(eventCount(fixture, 'probe'), 2)
@@ -254,14 +271,7 @@ test('advanceClock + a still-failing second probe rolls back after the delayed v
     }
     return passProbes()
   })
-  const outcome = await applyPendingVersion({
-    pendingVersion: '0.2.0',
-    builtinVersion: fixture.builtinVersion,
-    sourceVersion: '0.1.0',
-    sourceWasKnownGood: true,
-    knownGoodVersion: '0.1.0',
-    deps: fixture.makeApplyDeps(),
-  })
+  const outcome = await applyPending(fixture)
   assert.equal(outcome.status, 'rolled-back')
   assert.equal(calls, 3) // observe, final candidate verdict, rollback-target verification
   assert.equal(fixture.restoreCalls, 1)
@@ -281,14 +291,7 @@ test('an all-ok first probe beyond the probe window still observes — the windo
     if (calls === 1) fixture.adapter.advanceClock(DEFAULT_PROBE_WINDOW_MS + 1)
     return passProbes()
   })
-  const outcome = await applyPendingVersion({
-    pendingVersion: '0.2.0',
-    builtinVersion: fixture.builtinVersion,
-    sourceVersion: '0.1.0',
-    sourceWasKnownGood: true,
-    knownGoodVersion: '0.1.0',
-    deps: fixture.makeApplyDeps(),
-  })
+  const outcome = await applyPending(fixture)
   assert.equal(outcome.status, 'applied')
   assert.equal(calls, 2)
   assert.equal(eventCount(fixture, 'probe'), 2)
@@ -394,15 +397,7 @@ test('apply-now snapshot failure is a terminal snapshot-failed state with a retr
 test('the ApplyOptions.signal is forwarded verbatim to every candidate probe (S1 seam)', async () => {
   const fixture = new RunPhaseFixture()
   const controller = new AbortController()
-  const outcome = await applyPendingVersion({
-    pendingVersion: '0.2.0',
-    builtinVersion: fixture.builtinVersion,
-    sourceVersion: '0.1.0',
-    sourceWasKnownGood: true,
-    knownGoodVersion: '0.1.0',
-    signal: controller.signal,
-    deps: fixture.makeApplyDeps(),
-  })
+  const outcome = await applyPending(fixture, { signal: controller.signal })
   assert.equal(outcome.status, 'applied')
   // The seam forwards the exact host signal object — never wraps or drops it.
   assert.ok(fixture.probeSignals.length >= 1)
@@ -413,15 +408,7 @@ test('a pre-aborted signal cancels the transaction immediately with zero side ef
   const fixture = new RunPhaseFixture({ override: pendingOverride() })
   const controller = new AbortController()
   controller.abort()
-  const result = await applyPendingVersion({
-    pendingVersion: '0.2.0',
-    builtinVersion: fixture.builtinVersion,
-    sourceVersion: '0.1.0',
-    sourceWasKnownGood: true,
-    knownGoodVersion: '0.1.0',
-    signal: controller.signal,
-    deps: fixture.makeApplyDeps(),
-  })
+  const result = await applyPending(fixture, { signal: controller.signal })
   // Defined failure outcome: host-abort message, pending retained, runtime
   // not blocked, no failure kind — the durable journal stays for the next
   // startup to resume idempotently.
@@ -433,12 +420,7 @@ test('a pre-aborted signal cancels the transaction immediately with zero side ef
   assert.ok(result.error !== null && result.error.includes('中止'))
   // Zero side effects: no snapshot, no pointer switch, no probe, no stop, no
   // journal write — durable state is untouched.
-  assert.equal(fixture.snapshotCalls, 0)
-  assert.equal(fixture.switchCalls, 0)
-  assert.equal(eventCount(fixture, 'probe'), 0)
-  assert.equal(eventCount(fixture, 'stop'), 0)
-  assert.equal(fixture.currentState().journal.kind, 'missing')
-  assert.equal(fixture.currentState().pointer, '0.1.0')
+  assertZeroSideEffects(fixture)
   assert.equal(fixture.currentState().override?.pending, '0.2.0')
 })
 
@@ -455,15 +437,7 @@ test('an abort after the candidate verdict does not poison the rollback verifica
     controller.abort()
     await stopHost()
   }
-  const result = await applyPendingVersion({
-    pendingVersion: '0.2.0',
-    builtinVersion: fixture.builtinVersion,
-    sourceVersion: '0.1.0',
-    sourceWasKnownGood: true,
-    knownGoodVersion: '0.1.0',
-    signal: controller.signal,
-    deps,
-  })
+  const result = await applyPending(fixture, { signal: controller.signal, deps })
   // The rollback target is still honestly verified (with an un-aborted signal)
   // and passes: rolled-back — never the "candidate + fallback + builtin all
   // failed" terminal state.
@@ -505,12 +479,7 @@ test('runStartupPhase entry abort: a pre-aborted signal cancels the apply with z
   // Zero side effects at the apply entry: no snapshot, no pointer switch, no
   // probe, no stop, no journal write — durable state is untouched apart from
   // the verdict record retaining pending.
-  assert.equal(fixture.snapshotCalls, 0)
-  assert.equal(fixture.switchCalls, 0)
-  assert.equal(eventCount(fixture, 'probe'), 0)
-  assert.equal(eventCount(fixture, 'stop'), 0)
-  assert.equal(fixture.currentState().journal.kind, 'missing')
-  assert.equal(fixture.currentState().pointer, '0.1.0')
+  assertZeroSideEffects(fixture)
   assert.equal(fixture.currentState().override?.pending, '0.2.0')
 })
 
@@ -521,12 +490,7 @@ test('runStartupPhase entry abort with no pending: the signal is never consulted
   const result = await fixture.runEntry(controller.signal)
   assert.equal(result.applyOutcome, null)
   assert.equal(result.blockedReason, null)
-  assert.equal(fixture.snapshotCalls, 0)
-  assert.equal(fixture.switchCalls, 0)
-  assert.equal(eventCount(fixture, 'probe'), 0)
-  assert.equal(eventCount(fixture, 'stop'), 0)
-  assert.equal(fixture.currentState().journal.kind, 'missing')
-  assert.equal(fixture.currentState().pointer, '0.1.0')
+  assertZeroSideEffects(fixture)
 })
 
 test('runDelayedRollback forwards the signal: a pre-aborted signal cancels after the durable F7 latch', async () => {

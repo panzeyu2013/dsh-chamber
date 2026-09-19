@@ -4,16 +4,14 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { PlaneHandle } from '@dsh-chamber/control-plane'
-import { writeOverride } from '@dsh-chamber/dsh-runtime'
 import { createGateway } from '../../src/index.ts'
 import type { GatewayConfig } from '../../src/config.ts'
 import type { GatewayRuntimeManager, GatewayRuntimeManagerOptions } from '../../src/runtime-manager.ts'
 import { createGatewayStore, hashCredential } from '../../src/store.ts'
-
-const silentLogger = { log() {}, warn() {}, error() {} }
-const gatewayPackageVersion = (JSON.parse(
-  readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
-) as { version: string }).version
+import {
+  silentLogger,
+  writeOverrideRow,
+} from '../support/runtime-routes-harness.ts'
 
 /** Minimal plane fake for composition tests: startLocal/stopLocal/restartLocal
  * are no-ops; the real runtime manager's startup transaction drives the state
@@ -39,6 +37,24 @@ function compositionPlane(state: { connectionState: string }, order: string[]): 
   }
 }
 
+/** GatewayRuntimeManager seam stub for the composition tests: the real startup
+ *  transaction drives the state dir, so only the manager's seam behavior varies. */
+function runtimeStub(
+  stateDir: string,
+  overrides: Partial<Record<keyof GatewayRuntimeManager, unknown>> = {},
+): GatewayRuntimeManager {
+  return {
+    transactionWorkspace: null,
+    resolveWorkspace: () => ({ path: config(stateDir).plane.dshWorkspacePath, version: '1.0.0', source: 'builtin' }),
+    startupTransaction: async () => ({ blockedReason: null }),
+    activationInProgress: () => false,
+    mutationInProgress: () => false,
+    internalSpawnActive: () => false,
+    dispose: async () => {},
+    ...overrides,
+  } as unknown as GatewayRuntimeManager
+}
+
 const compositionDeps = (plane: PlaneHandle): never => ({
   createPlane: (() => plane) as never,
   createProxy: (() => ({ async handleHttp() {}, async handleUpgrade() {}, closeAllStreams() {} })) as never,
@@ -49,16 +65,9 @@ test('gateway start: a swap-attempted block keeps the gateway up with dsh stoppe
   try {
     // Seed the interrupted-switch marker BEFORE start(): runStartupPhase then
     // returns 'swap-attempted' without spawning or exposing the tree.
-    writeOverride(stateDir, {
-      // Keep the interruption fixture on the current shell generation. A
-      // stale hard-coded package version exercises shell invalidation instead
-      // of the swap-attempted recovery branch this test owns.
-      shellVersion: gatewayPackageVersion,
-      chosenVersion: '1.2.3',
-      resolvedVersion: '1.2.3',
-      pending: '1.2.3',
-      swapAttempted: true,
-    })
+    // Keep the fixture on the current shell generation: a stale version would
+    // exercise shell invalidation instead of the swap-attempted branch.
+    writeOverrideRow(stateDir, { chosenVersion: '1.2.3', pending: '1.2.3', swapAttempted: true })
     const order: string[] = []
     const state = { connectionState: 'stopped' }
     const gateway = createGateway({
@@ -98,20 +107,15 @@ test('gateway start quarantines and stops a blocked verdict that left its probe 
     get localDshPort() { return state === 'ready' ? 17510 : null }, instanceId: 'blocked-ready', seededProbeDomains: [],
   }
   let blocked = false
-  const runtime = {
-    transactionWorkspace: null,
+  const runtime = runtimeStub(stateDir, {
     resolveWorkspace: () => ({ path: config(stateDir).plane.dshWorkspacePath, version: '2.0.0', source: 'override' }),
     startupTransaction: async () => {
       state = 'ready' // model a fallback probe that failed after startLocal()
       blocked = true
       return { blockedReason: 'swap-attempted' }
     },
-    activationInProgress: () => false,
     exposureQuarantined: () => blocked,
-    mutationInProgress: () => false,
-    internalSpawnActive: () => false,
-    dispose: async () => {},
-  } as unknown as GatewayRuntimeManager
+  })
   try {
     const gateway = createGateway({
       config: config(stateDir), logger: silentLogger,
@@ -234,18 +238,13 @@ test('stop() begins runtime quiescence before a deferred startup transaction set
   const order: string[] = []
   const state = { connectionState: 'stopped' }
   const plane = compositionPlane(state, order)
-  const runtime = {
-    transactionWorkspace: null,
-    resolveWorkspace: () => ({ path: config(stateDir).plane.dshWorkspacePath, version: '1.0.0', source: 'builtin' }),
+  const runtime = runtimeStub(stateDir, {
     startupTransaction: async () => {
       order.push('runtime:startup')
       startupEntered()
       await startupGate
       return { blockedReason: null }
     },
-    activationInProgress: () => false,
-    mutationInProgress: () => false,
-    internalSpawnActive: () => false,
     dispose: () => {
       if (disposal === null) {
         disposalBegins += 1
@@ -257,7 +256,7 @@ test('stop() begins runtime quiescence before a deferred startup transaction set
       }
       return disposal
     },
-  } as unknown as GatewayRuntimeManager
+  })
   try {
     const gateway = createGateway({
       config: config(stateDir),
@@ -290,20 +289,11 @@ test('stop() begins runtime quiescence before a deferred startup transaction set
   }
 })
 
-test('stop keeps the proxy quarantined when a rollback finishes during disposal', async () => {
-  const stateDir = mkdtempSync(join(tmpdir(), 'gateway-stop-quarantine-'))
-  const order: string[] = []
+/** The listener-backed plane fake: records lifecycle order and re-emits state
+ *  snapshots to every registered local-state listener. */
+function listenerPlane(order: string[]): { plane: PlaneHandle; emit: (status: string) => void } {
   const listeners = new Set<(snapshot: { status: string; port: number | null; error: string | null }) => void>()
   let state = 'stopped'
-  let planeOptions: { canExposeLocal(): boolean; canStartLocal(): { ok: boolean } } | null = null
-  let proxyOptions: { canExposeLocal(): boolean } | null = null
-  let quarantineChange: GatewayRuntimeManagerOptions['onActivationQuarantineChange']
-  let activation = false
-  let releaseRollback!: () => void
-  const rollbackGate = new Promise<void>(resolve => { releaseRollback = resolve })
-  let rollbackEntered!: () => void
-  const rollingBack = new Promise<void>(resolve => { rollbackEntered = resolve })
-  let disposal: Promise<void> | null = null
   const emit = (status: string) => {
     state = status
     for (const listener of listeners) listener({ status, port: 17510, error: null })
@@ -320,13 +310,25 @@ test('stop keeps the proxy quarantined when a rollback finishes during disposal'
     get connectionState() { return state }, get localProcessAlive() { return state === 'ready' },
     get localWritersQuiescent() { return true }, get localDshPort() { return 17510 }, instanceId: 'test', seededProbeDomains: [],
   }
-  const runtime = {
-    transactionWorkspace: null,
-    resolveWorkspace: () => ({ path: config(stateDir).plane.dshWorkspacePath, version: '1.0.0', source: 'builtin' }),
-    startupTransaction: async () => ({ blockedReason: null }),
+  return { plane, emit }
+}
+
+test('stop keeps the proxy quarantined when a rollback finishes during disposal', async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), 'gateway-stop-quarantine-'))
+  const order: string[] = []
+  const { plane } = listenerPlane(order)
+  let planeOptions: { canExposeLocal(): boolean; canStartLocal(): { ok: boolean } } | null = null
+  let proxyOptions: { canExposeLocal(): boolean } | null = null
+  let quarantineChange: GatewayRuntimeManagerOptions['onActivationQuarantineChange']
+  let activation = false
+  let releaseRollback!: () => void
+  const rollbackGate = new Promise<void>(resolve => { releaseRollback = resolve })
+  let rollbackEntered!: () => void
+  const rollingBack = new Promise<void>(resolve => { rollbackEntered = resolve })
+  let disposal: Promise<void> | null = null
+  const runtime = runtimeStub(stateDir, {
     activationInProgress: () => activation,
     mutationInProgress: () => activation,
-    internalSpawnActive: () => false,
     dispose: () => {
       if (disposal === null) {
         disposal = (async () => {
@@ -342,7 +344,7 @@ test('stop keeps the proxy quarantined when a rollback finishes during disposal'
       }
       return disposal
     },
-  } as unknown as GatewayRuntimeManager
+  })
   try {
     const gateway = createGateway({
       config: config(stateDir),
@@ -387,15 +389,10 @@ test('install single-flight does not quarantine the active proxy exposure seam',
   const state = { connectionState: 'stopped' }
   const order: string[] = []
   const plane = compositionPlane(state, order)
-  const runtime = {
-    transactionWorkspace: null,
-    resolveWorkspace: () => ({ path: config(stateDir).plane.dshWorkspacePath, version: '1.0.0', source: 'builtin' }),
-    startupTransaction: async () => ({ blockedReason: null }),
+  const runtime = runtimeStub(stateDir, {
     activationInProgress: () => activation,
     mutationInProgress: () => mutation,
-    internalSpawnActive: () => false,
-    dispose: async () => {},
-  } as unknown as GatewayRuntimeManager
+  })
   try {
     const gateway = createGateway({
       config: config(stateDir),
@@ -430,33 +427,12 @@ test('install single-flight does not quarantine the active proxy exposure seam',
 test('live activation keeps candidate and rollback ready edges detached, then explicitly resyncs after verdict', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gateway-candidate-isolation-'))
   const order: string[] = []
-  const listeners = new Set<(snapshot: { status: string; port: number | null; error: string | null }) => void>()
-  let connectionState = 'stopped'
+  const { plane, emit } = listenerPlane(order)
   let activation = false
   let quarantineChange: GatewayRuntimeManagerOptions['onActivationQuarantineChange']
-  const emit = (status: string) => {
-    connectionState = status
-    for (const listener of listeners) listener({ status, port: 17510, error: null })
-  }
-  const plane: PlaneHandle = {
-    async start() { order.push('plane:start') },
-    async startLocal() { order.push('local:start'); emit('ready') },
-    async stop() { order.push('plane:stop'); emit('stopped') },
-    async stopLocal() { emit('stopped') },
-    async restartLocal() {},
-    onLocalStateChange(listener) { listeners.add(listener); return () => listeners.delete(listener) },
-    refreshLocalExposure() {}, registerInstanceTransport() {}, unregisterInstanceTransport() {},
-    getLocalDshPort() { return 17510 }, get port() { return 3000 },
-    get connectionState() { return connectionState }, get localProcessAlive() { return connectionState === 'ready' },
-    get localWritersQuiescent() { return true }, get localDshPort() { return 17510 }, instanceId: 'test', seededProbeDomains: [],
-  }
-  const runtime = {
-    transactionWorkspace: null,
-    resolveWorkspace: () => ({ path: config(stateDir).plane.dshWorkspacePath, version: '1.0.0', source: 'builtin' }),
-    startupTransaction: async () => ({ blockedReason: null }),
+  const runtime = runtimeStub(stateDir, {
     activationInProgress: () => activation,
     mutationInProgress: () => activation,
-    internalSpawnActive: () => false,
     restoreBuiltin: async () => {
       activation = true
       quarantineChange?.(true)
@@ -471,8 +447,7 @@ test('live activation keeps candidate and rollback ready edges detached, then ex
       quarantineChange?.(false)
       return { accepted: true }
     },
-    dispose: async () => {},
-  } as unknown as GatewayRuntimeManager
+  })
   try {
     const gateway = createGateway({
       config: config(stateDir), logger: silentLogger,
@@ -503,33 +478,12 @@ test('live activation keeps candidate and rollback ready edges detached, then ex
 test('apply-now keeps candidate ready edges detached and explicitly resyncs after the verdict', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gateway-applynow-isolation-'))
   const order: string[] = []
-  const listeners = new Set<(snapshot: { status: string; port: number | null; error: string | null }) => void>()
-  let connectionState = 'stopped'
+  const { plane, emit } = listenerPlane(order)
   let activation = false
   let quarantineChange: GatewayRuntimeManagerOptions['onActivationQuarantineChange']
-  const emit = (status: string) => {
-    connectionState = status
-    for (const listener of listeners) listener({ status, port: 17510, error: null })
-  }
-  const plane: PlaneHandle = {
-    async start() { order.push('plane:start') },
-    async startLocal() { order.push('local:start'); emit('ready') },
-    async stop() { order.push('plane:stop'); emit('stopped') },
-    async stopLocal() { emit('stopped') },
-    async restartLocal() {},
-    onLocalStateChange(listener) { listeners.add(listener); return () => listeners.delete(listener) },
-    refreshLocalExposure() {}, registerInstanceTransport() {}, unregisterInstanceTransport() {},
-    getLocalDshPort() { return 17510 }, get port() { return 3000 },
-    get connectionState() { return connectionState }, get localProcessAlive() { return connectionState === 'ready' },
-    get localWritersQuiescent() { return true }, get localDshPort() { return 17510 }, instanceId: 'test', seededProbeDomains: [],
-  }
-  const runtime = {
-    transactionWorkspace: null,
-    resolveWorkspace: () => ({ path: config(stateDir).plane.dshWorkspacePath, version: '1.0.0', source: 'builtin' }),
-    startupTransaction: async () => ({ blockedReason: null }),
+  const runtime = runtimeStub(stateDir, {
     activationInProgress: () => activation,
     mutationInProgress: () => activation,
-    internalSpawnActive: () => false,
     applyNow: async () => {
       activation = true
       quarantineChange?.(true)
@@ -540,8 +494,7 @@ test('apply-now keeps candidate ready edges detached and explicitly resyncs afte
       quarantineChange?.(false)
       return { accepted: true }
     },
-    dispose: async () => {},
-  } as unknown as GatewayRuntimeManager
+  })
   try {
     const gateway = createGateway({
       config: config(stateDir), logger: silentLogger,
@@ -809,15 +762,7 @@ test('stop() retains the stateDir lock when runtime writer disposal is unsafe', 
     const state = { connectionState: 'stopped' }
     const order: string[] = []
     const plane = compositionPlane(state, order)
-    const runtime = {
-      transactionWorkspace: null,
-      resolveWorkspace: () => ({ path: config(stateDir).plane.dshWorkspacePath, version: '1.0.0', source: 'builtin' }),
-      startupTransaction: async () => ({ blockedReason: null }),
-      activationInProgress: () => false,
-      mutationInProgress: () => false,
-      internalSpawnActive: () => false,
-      dispose: async () => { throw new Error('runtime writer unsafe') },
-    } as unknown as GatewayRuntimeManager
+    const runtime = runtimeStub(stateDir, { dispose: async () => { throw new Error('runtime writer unsafe') } })
     const gateway = createGateway({
       config: config(stateDir),
       logger: silentLogger,

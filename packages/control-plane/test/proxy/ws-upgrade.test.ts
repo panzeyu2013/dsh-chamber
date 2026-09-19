@@ -8,7 +8,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { createInstanceProxy } from '../../src/instance-proxy.ts'
 import { DEFAULT_DSH_START_PORT } from '../../src/spawn-dsh.ts'
 import {
   fakeHttpRequest,
@@ -16,7 +15,7 @@ import {
   fakeResponse,
   fakeSocket,
   makeProxy,
-  quietLogger,
+  proxyFor,
 } from '../support/proxy-fakes.ts'
 
 // ---------------------------------------------------------------------------
@@ -94,12 +93,7 @@ test('S2: a gateway-<id> WS upgrade arms TCP keepalive on the upstream leg befor
   // half-open connection eventually surfaces (or stays NAT-alive) instead of
   // freezing the splice silently.
   const factory = keepAliveUpgradeFactory()
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => 17510,
-    httpRequest: factory.fn,
-  })
+  const proxy = proxyFor(factory.fn, { getLocalDshPort: () => 17510 })
   proxy.registerTransport('gateway:gw-s2', 'http://192.0.2.10:30801', undefined, { transport: 'http' })
   const down = fakeSocket()
   await proxy.handleUpgrade(fakeRequest('/api/i/gateway-gw-s2/api/remote.mux', 'GET'), down, Buffer.alloc(0))
@@ -114,12 +108,7 @@ test('S2: a dsh-<id> direct-http (non-loopback) WS upgrade also arms TCP keepali
   // a non-loopback base URL) has the same no-ssh-keepalive freeze class as a
   // gateway-kind direct target and must arm keepalive too.
   const factory = keepAliveUpgradeFactory()
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => 17510,
-    httpRequest: factory.fn,
-  })
+  const proxy = proxyFor(factory.fn, { getLocalDshPort: () => 17510 })
   proxy.registerTransport('dsh:direct-http', 'http://192.0.2.20:30800', undefined, { transport: 'http' })
   const down = fakeSocket()
   await proxy.handleUpgrade(fakeRequest('/api/i/dsh-direct-http/api/remote.mux', 'GET'), down, Buffer.alloc(0))
@@ -134,12 +123,7 @@ test('S2: local / dsh-<id> / ssh-<id> WS upgrades leave the upstream leg keepali
   // design (proxy-forward.ts WS_PING_* note); the keepalive must only be
   // armed when tcpKeepAliveMs is configured.
   const factory = keepAliveUpgradeFactory()
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
-    httpRequest: factory.fn,
-  })
+  const proxy = proxyFor(factory.fn)
   proxy.registerTransport('dsh:rem', 'http://127.0.0.1:22011')
   proxy.registerTransport('ssh:legacy', 'http://127.0.0.1:22012')
   const localSocket = fakeSocket()
@@ -173,12 +157,7 @@ test('upgrade: a non-101 upstream reply rejects explicitly (no unhandled stream)
   const upstream = fakeHttpRequest(() => ({
     response: { status: 404, headers: { 'content-type': 'application/json' }, body: '{"error":"nope"}' },
   }))
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
-    httpRequest: upstream.fn,
-  })
+  const proxy = proxyFor(upstream.fn)
   const socket = fakeSocket()
   await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux', 'GET'), socket, Buffer.alloc(0))
   assert.match(socket.written, /502 Bad Gateway/)
@@ -191,12 +170,7 @@ test('upgrade: an upstream connect failure rejects 502 upstream_failed (matches 
   // leg used to answer 503 instance_unavailable (reserved for "no tunnel /
   // not ready"), which misled operators into debugging the wrong layer.
   const upstream = fakeHttpRequest(() => ({ error: new Error('ECONNREFUSED 127.0.0.1:17510') }))
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => 17510,
-    httpRequest: upstream.fn,
-  })
+  const proxy = proxyFor(upstream.fn, { getLocalDshPort: () => 17510 })
   const socket = fakeSocket()
   await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux', 'GET'), socket, Buffer.alloc(0))
   assert.match(socket.written, /502 Bad Gateway/)
@@ -233,12 +207,7 @@ function fakeUpgradeRequest() {
 
 test('upgrade splice: an error on the upstream end tears both down exactly once', async () => {
   const factory = fakeUpgradeRequest()
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
-    httpRequest: factory.fn,
-  })
+  const proxy = proxyFor(factory.fn)
   const down = fakeSocket()
   await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux', 'GET'), down, Buffer.alloc(0))
   const up = factory.upstreamSocket
@@ -259,12 +228,7 @@ test('upgrade splice: an error on the upstream end tears both down exactly once'
 
 test('upgrade splice: an error on the downstream end tears both down exactly once', async () => {
   const factory = fakeUpgradeRequest()
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
-    httpRequest: factory.fn,
-  })
+  const proxy = proxyFor(factory.fn)
   const down = fakeSocket()
   await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux', 'GET'), down, Buffer.alloc(0))
   const up = factory.upstreamSocket
@@ -298,12 +262,7 @@ test('http stream: a client response error aborts the upstream, never uncaught',
     }
     return request
   }
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => 17510,
-    httpRequest: fn,
-  })
+  const proxy = proxyFor(fn, { getLocalDshPort: () => 17510 })
   const res = fakeResponse()
   await proxy.handleHttp(fakeRequest('/api/i/local/api/session/list', 'GET'), res)
   assert.equal(captured.signal?.aborted, false)
@@ -380,12 +339,7 @@ test('upgrade response forwards only WebSocket handshake headers', async () => {
       },
     },
   }))
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
-    httpRequest: upstream.fn,
-  })
+  const proxy = proxyFor(upstream.fn)
   const socket = fakeSocket()
   await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux', 'GET'), socket, Buffer.alloc(0))
   assert.match(socket.written, /sec-websocket-accept: accepted/i)

@@ -27,6 +27,7 @@ import {
   inspectCorruptMetadataRecoveryMarker,
   readMetadataRecoveryState,
   recoverRuntimeMetadata,
+  type RecoverRuntimeMetadataOptions,
   rescueCorruptMetadataRecoveryMarker,
   resumeMetadataRecoveryCore,
   type RuntimeMetadataRecoveryOperations,
@@ -49,6 +50,42 @@ function fixture(): Fixture {
   writeFileSync(path.join(dshHome, 'settings.yaml'), 'theme: dark\n', { mode: 0o644 })
   writeFileSync(path.join(dshHome, 'nested', 'session.json'), '{"id":"s1"}\n', { mode: 0o644 })
   return { root, baseDir, runtimeDir, dshHome }
+}
+
+/** The shared host seams every recovery entry needs (no-op stop, 'none'
+ *  restore, OK builtin probe) over a fixture's dirs. */
+function hostSeams(f: Fixture): RecoverRuntimeMetadataOptions {
+  return {
+    baseDir: f.baseDir,
+    dshHome: f.dshHome,
+    builtinVersion: '1.0.0',
+    stopHost: async () => undefined,
+    completeRestore: async () => 'none' as const,
+    probeBuiltin: async () => ({ ok: true }),
+  }
+}
+
+/** rescueCorruptMetadataRecoveryMarker over the shared host seams with
+ *  injected recovery operations. */
+function rescueMarker(
+  f: Fixture,
+  operations: Partial<RuntimeMetadataRecoveryOperations>,
+): ReturnType<typeof rescueCorruptMetadataRecoveryMarker> {
+  return rescueCorruptMetadataRecoveryMarker({ ...hostSeams(f), operations })
+}
+
+/** recoverRuntimeMetadata over the fixture dirs and the default host seams
+ *  (no-op stop, 'none' restore, OK builtin probe); callers override as needed. */
+function recover(
+  f: Fixture,
+  overrides: Partial<Parameters<typeof recoverRuntimeMetadata>[0]> = {},
+): ReturnType<typeof recoverRuntimeMetadata> {
+  return recoverRuntimeMetadata({ ...hostSeams(f), ...overrides })
+}
+
+/** The metadata-health status of a fixture's base dir. */
+function assertHealth(f: Fixture, status: string): void {
+  assert.equal(detectRuntimeMetadataHealth(f.baseDir).status, status)
 }
 
 function writeSelectionEvidence(f: Fixture): string[] {
@@ -139,8 +176,7 @@ test('detect health combines tri-state reads with durable corrupt sentinels', ()
   writeFileSync(path.join(f.runtimeDir, 'override.json'), '{ malformed')
   writeFileSync(path.join(f.runtimeDir, 'activation-journal.json.corrupt-old'), 'journal evidence')
 
-  const health = detectRuntimeMetadataHealth(f.baseDir)
-  assert.equal(health.status, 'selection-corrupt')
+  const health = detectRuntimeMetadataHealth(f.baseDir); assert.equal(health.status, 'selection-corrupt')
   assert.equal(health.current.kind, 'valid')
   assert.equal(health.override.kind, 'corrupt')
   assert.equal(health.activationJournal.kind, 'missing')
@@ -190,8 +226,7 @@ test('detect health flags a semantically-mismatched journal target as selection-
   writePendingOverride(f, '2.0.0')
   writeValidPreparedJournal(f, '1.0.0') // journal target 1.0.0 ≠ pending 2.0.0
 
-  const health = detectRuntimeMetadataHealth(f.baseDir)
-  assert.equal(health.status, 'selection-corrupt')
+  const health = detectRuntimeMetadataHealth(f.baseDir); assert.equal(health.status, 'selection-corrupt')
   assert.equal(health.current.kind, 'valid')
   assert.equal(health.override.kind, 'valid')
   assert.equal(health.activationJournal.kind, 'valid')
@@ -204,8 +239,7 @@ test('detect health flags a missing journal with an already-advanced pointer as 
   // no activation-journal.json — the pre-swap journal is missing while the
   // pointer already advanced to pending (runtime-startup journal-mismatch).
 
-  const health = detectRuntimeMetadataHealth(f.baseDir)
-  assert.equal(health.status, 'selection-corrupt')
+  const health = detectRuntimeMetadataHealth(f.baseDir); assert.equal(health.status, 'selection-corrupt')
   assert.equal(health.activationJournal.kind, 'missing')
 })
 
@@ -249,8 +283,7 @@ test('detect health flags a restoring journal whose restore snapshot is gone', (
   // restore can never complete (startup blocks 'restore-incomplete').
   writeRestoringJournal(f, '2.0.0-1700000000000')
 
-  const health = detectRuntimeMetadataHealth(f.baseDir)
-  assert.equal(health.status, 'selection-corrupt')
+  assertHealth(f, 'selection-corrupt')
 })
 
 test('detect health leaves a restoring journal healthy while its snapshot exists', () => {
@@ -291,10 +324,7 @@ test('full recovery stashes DSH_HOME, preserves every metadata byte, probes, and
   let stopped = 0
   let probed = 0
 
-  const result = await recoverRuntimeMetadata({
-    baseDir: f.baseDir,
-    dshHome: f.dshHome,
-    builtinVersion: '1.0.0',
+  const result = await recover(f, {
     stopHost: async () => { stopped += 1 },
     completeRestore: async () => 'none',
     probeBuiltin: async () => {
@@ -344,13 +374,7 @@ test('copy crash leaves every metadata source untouched; restart discards partia
       if (copies === 1) throw new Error('injected copy crash')
     },
   }
-  await assert.rejects(() => recoverRuntimeMetadata({
-    baseDir: f.baseDir,
-    dshHome: f.dshHome,
-    builtinVersion: '1.0.0',
-    stopHost: async () => undefined,
-    completeRestore: async () => 'none',
-    probeBuiltin: async () => ({ ok: true }),
+  await assert.rejects(() => recover(f, {
     operations: copyCrash,
   }), /injected copy crash/)
 
@@ -363,14 +387,7 @@ test('copy crash leaves every metadata source untouched; restart discards partia
   assert.ok(!existsSync(paths.stash), 'no published stash after a copy crash')
   assert.deepEqual(readdirSync(paths.evidence), [], 'no metadata is archived without a stash')
 
-  const resumed = await recoverRuntimeMetadata({
-    baseDir: f.baseDir,
-    dshHome: f.dshHome,
-    builtinVersion: '1.0.0',
-    stopHost: async () => undefined,
-    completeRestore: async () => 'none',
-    probeBuiltin: async () => ({ ok: true }),
-  })
+  const resumed = await recover(f)
   assert.equal(resumed.status, 'finalized')
   assert.equal(resumed.record.id, interrupted.record.id)
   assert.ok(!existsSync(paths.stashTmp))
@@ -390,13 +407,7 @@ test('rename crash after filesystem effect resumes per file without overwriting 
       }
     },
   }
-  await assert.rejects(() => recoverRuntimeMetadata({
-    baseDir: f.baseDir,
-    dshHome: f.dshHome,
-    builtinVersion: '1.0.0',
-    stopHost: async () => undefined,
-    completeRestore: async () => 'none',
-    probeBuiltin: async () => ({ ok: true }),
+  await assert.rejects(() => recover(f, {
     operations: renameCrash,
   }), /injected rename crash/)
 
@@ -408,14 +419,7 @@ test('rename crash after filesystem effect resumes per file without overwriting 
   assert.ok(!existsSync(path.join(f.runtimeDir, 'current')))
   assert.ok(existsSync(path.join(paths.evidence, 'current')))
 
-  const resumed = await recoverRuntimeMetadata({
-    baseDir: f.baseDir,
-    dshHome: f.dshHome,
-    builtinVersion: '1.0.0',
-    stopHost: async () => undefined,
-    completeRestore: async () => 'none',
-    probeBuiltin: async () => ({ ok: true }),
-  })
+  const resumed = await recover(f)
   assert.equal(resumed.status, 'finalized')
   assert.deepEqual(readdirSync(paths.evidence).sort(), expectedEvidence)
 })
@@ -424,13 +428,7 @@ test('phase crash after probe-required persists the checkpoint and resumes direc
   const f = fixture()
   writeSelectionEvidence(f)
   let crashed = false
-  await assert.rejects(() => recoverRuntimeMetadata({
-    baseDir: f.baseDir,
-    dshHome: f.dshHome,
-    builtinVersion: '1.0.0',
-    stopHost: async () => undefined,
-    completeRestore: async () => 'none',
-    probeBuiltin: async () => ({ ok: true }),
+  await assert.rejects(() => recover(f, {
     operations: {
       afterCheckpoint: checkpoint => {
         if (!crashed && checkpoint === 'probe-required') {
@@ -446,11 +444,7 @@ test('phase crash after probe-required persists the checkpoint and resumes direc
   assert.equal(interrupted.record.phase, 'probe-required')
 
   let probes = 0
-  const resumed = await recoverRuntimeMetadata({
-    baseDir: f.baseDir,
-    dshHome: f.dshHome,
-    builtinVersion: '1.0.0',
-    stopHost: async () => undefined,
+  const resumed = await recover(f, {
     completeRestore: async () => 'none',
     probeBuiltin: async () => { probes += 1; return { ok: true } },
   })
@@ -463,10 +457,7 @@ test('probe failure retains marker, stash, and evidence; a later successful prob
   const f = fixture()
   const expectedEvidence = writeSelectionEvidence(f)
   let stopCalls = 0
-  const failed = await recoverRuntimeMetadata({
-    baseDir: f.baseDir,
-    dshHome: f.dshHome,
-    builtinVersion: '1.0.0',
+  const failed = await recover(f, {
     stopHost: async () => { stopCalls += 1 },
     completeRestore: async () => 'complete',
     probeBuiltin: async () => ({ ok: false, error: `${f.dshHome}/settings.yaml failed` }),
@@ -481,14 +472,7 @@ test('probe failure retains marker, stash, and evidence; a later successful prob
   assert.deepEqual(readdirSync(paths.evidence).sort(), expectedEvidence)
   assert.ok(!existsSync(paths.finalized))
 
-  const passed = await recoverRuntimeMetadata({
-    baseDir: f.baseDir,
-    dshHome: f.dshHome,
-    builtinVersion: '1.0.0',
-    stopHost: async () => undefined,
-    completeRestore: async () => 'none',
-    probeBuiltin: async () => ({ ok: true }),
-  })
+  const passed = await recover(f)
   assert.equal(passed.status, 'finalized')
   assert.equal(passed.record.id, failed.record.id)
   assert.equal(passed.record.probeAttempts, 2)
@@ -504,13 +488,9 @@ test('corrupt recovery marker blocks before lifecycle callbacks and preserves se
   let stopped = 0
 
   assert.equal(detectRuntimeMetadataHealth(f.baseDir).status, 'recovery-marker-corrupt')
-  await assert.rejects(() => recoverRuntimeMetadata({
-    baseDir: f.baseDir,
-    dshHome: f.dshHome,
-    builtinVersion: '1.0.0',
+  await assert.rejects(() => recover(f, {
     stopHost: async () => { stopped += 1 },
     completeRestore: async () => 'none',
-    probeBuiltin: async () => ({ ok: true }),
   }), /marker/)
   assert.equal(stopped, 0)
   assert.ok(existsSync(path.join(f.runtimeDir, 'current')))
@@ -527,14 +507,7 @@ test('unsafe recovery id and a symlinked DSH_HOME root fail closed without archi
   writeSelectionEvidence(f)
   const linkedHome = path.join(f.baseDir, 'linked-dsh-home')
   symlinkSync(f.dshHome, linkedHome)
-  await assert.rejects(() => recoverRuntimeMetadata({
-    baseDir: f.baseDir,
-    dshHome: linkedHome,
-    builtinVersion: '1.0.0',
-    stopHost: async () => undefined,
-    completeRestore: async () => 'none',
-    probeBuiltin: async () => ({ ok: true }),
-  }), /real directory/)
+  await assert.rejects(() => recover(f, { dshHome: linkedHome }), /real directory/)
   assert.ok(existsSync(path.join(f.runtimeDir, 'current')))
   const state = readMetadataRecoveryState(f.baseDir)
   assert.equal(state.kind, 'missing')
@@ -559,11 +532,7 @@ test('unsafe recovery id and a symlinked DSH_HOME root fail closed without archi
 test('half/incomplete restore blocks before stash creation or evidence archival', async () => {
   const f = fixture()
   const expectedEvidence = writeSelectionEvidence(f)
-  const result = await recoverRuntimeMetadata({
-    baseDir: f.baseDir,
-    dshHome: f.dshHome,
-    builtinVersion: '1.0.0',
-    stopHost: async () => undefined,
+  const result = await recover(f, {
     completeRestore: async () => 'half',
     probeBuiltin: async () => { throw new Error('probe must not run') },
   })
@@ -578,11 +547,7 @@ test('missing-snapshot incomplete restore is recoverable via metadata recovery w
   // and metadata recovery must not archive over it.
   const half = fixture()
   writeSelectionEvidence(half)
-  const blocked = await recoverRuntimeMetadata({
-    baseDir: half.baseDir,
-    dshHome: half.dshHome,
-    builtinVersion: '1.0.0',
-    stopHost: async () => undefined,
+  const blocked = await recover(half, {
     completeRestore: async () => 'half',
     probeBuiltin: async () => { throw new Error('probe must not run') },
   })
@@ -600,14 +565,7 @@ test('missing-snapshot incomplete restore is recoverable via metadata recovery w
     phase: 'copying',
     snapshotPath: 'unresolvable-snapshot',
   }), 'utf8')
-  const result = await recoverRuntimeMetadata({
-    baseDir: incomplete.baseDir,
-    dshHome: incomplete.dshHome,
-    builtinVersion: '1.0.0',
-    stopHost: async () => undefined,
-    completeRestore: async () => 'incomplete',
-    probeBuiltin: async () => ({ ok: true }),
-  })
+  const result = await recover(incomplete, { completeRestore: async () => 'incomplete' })
   assert.equal(result.status, 'finalized')
   const paths = pathsFor(incomplete, result.record.id)
   assert.deepEqual(
@@ -687,14 +645,7 @@ test('stash preserves normal and dangling profile symlinks without reading their
   symlinkSync(packageTarget, path.join(nodeModules, 'dsh-app'))
   symlinkSync(danglingTarget, path.join(nodeModules, 'dangling-app'))
 
-  const result = await recoverRuntimeMetadata({
-    baseDir: f.baseDir,
-    dshHome: f.dshHome,
-    builtinVersion: '1.0.0',
-    stopHost: async () => undefined,
-    completeRestore: async () => 'none',
-    probeBuiltin: async () => ({ ok: true }),
-  })
+  const result = await recover(f)
 
   assert.equal(result.status, 'finalized')
   const stashNodeModules = path.join(pathsFor(f, result.record.id).stash, 'profiles', 'node_modules')
@@ -718,14 +669,7 @@ test('stash rejects unsupported special filesystem entries before metadata archi
   const expectedEvidence = writeSelectionEvidence(f)
   const fifoPath = path.join(f.dshHome, 'unsupported.fifo')
   execFileSync('/usr/bin/mkfifo', [fifoPath])
-  await assert.rejects(() => recoverRuntimeMetadata({
-    baseDir: f.baseDir,
-    dshHome: f.dshHome,
-    builtinVersion: '1.0.0',
-    stopHost: async () => undefined,
-    completeRestore: async () => 'none',
-    probeBuiltin: async () => ({ ok: true }),
-  }), /non-file, non-directory/)
+  await assert.rejects(() => recover(f), /non-file, non-directory/)
   assert.deepEqual(exactMetadataSources(f), expectedEvidence)
 })
 
@@ -748,13 +692,7 @@ test('stash detects an ancestor directory replaced by a symlink and never publis
   writeFileSync(path.join(outsideDirectory, 'z-victim'), outsideSecret)
   let swapped = false
 
-  await assert.rejects(() => recoverRuntimeMetadata({
-    baseDir: f.baseDir,
-    dshHome: f.dshHome,
-    builtinVersion: '1.0.0',
-    stopHost: async () => undefined,
-    completeRestore: async () => 'none',
-    probeBuiltin: async () => ({ ok: true }),
+  await assert.rejects(() => recover(f, {
     operations: {
       copyFile: (source, destination) => {
         copyFileSync(source, destination)
@@ -793,14 +731,7 @@ test('multiply linked marker or selection metadata fails closed without changing
   const selectionBefore = statSync(legacySelectionFile)
   const selectionBytes = readFileSync(legacySelectionFile)
 
-  await assert.rejects(() => rescueCorruptMetadataRecoveryMarker({
-    baseDir: selection.baseDir,
-    dshHome: selection.dshHome,
-    builtinVersion: '1.0.0',
-    stopHost: async () => undefined,
-    completeRestore: async () => 'none',
-    probeBuiltin: async () => ({ ok: true }),
-  }), /metadata evidence/)
+  await assert.rejects(() => rescueCorruptMetadataRecoveryMarker({ ...hostSeams(selection) }), /metadata evidence/)
   const selectionAfter = statSync(legacySelectionFile)
   assert.deepEqual(readFileSync(legacySelectionFile), selectionBytes)
   assert.equal(selectionAfter.mode, selectionBefore.mode)
@@ -822,14 +753,7 @@ test('multiply linked marker or selection metadata fails closed without changing
     recoverable: false,
     reason: 'marker-unsafe',
   })
-  await assert.rejects(() => rescueCorruptMetadataRecoveryMarker({
-    baseDir: marker.baseDir,
-    dshHome: marker.dshHome,
-    builtinVersion: '1.0.0',
-    stopHost: async () => undefined,
-    completeRestore: async () => 'none',
-    probeBuiltin: async () => ({ ok: true }),
-  }), /marker-unsafe/)
+  await assert.rejects(() => rescueCorruptMetadataRecoveryMarker({ ...hostSeams(marker) }), /marker-unsafe/)
   const markerAfter = statSync(legacyMarkerFile)
   assert.deepEqual(readFileSync(legacyMarkerFile), markerBytes)
   assert.equal(markerAfter.mode, markerBefore.mode)
@@ -850,8 +774,7 @@ test('health detection rejects a hard-linked authority leaf without changing old
   const before = statSync(evidence)
   const beforeBytes = readFileSync(evidence)
 
-  const health = detectRuntimeMetadataHealth(f.baseDir)
-  assert.equal(health.status, 'selection-corrupt')
+  const health = detectRuntimeMetadataHealth(f.baseDir); assert.equal(health.status, 'selection-corrupt')
   assert.deepEqual(health.current, { kind: 'corrupt' })
 
   const after = statSync(evidence)
@@ -960,14 +883,7 @@ test('marker-only second-order rescue is valid and does not infer missing select
   const paths = rescuePathsFor(f, bootstrapped.record.id)
   assert.deepEqual(readFileSync(path.join(paths.evidence, 'metadata-recovery.json.prior-corrupt')), corruptMarker)
 
-  const resumed = await recoverRuntimeMetadata({
-    baseDir: f.baseDir,
-    dshHome: f.dshHome,
-    builtinVersion: '1.0.0',
-    stopHost: async () => undefined,
-    completeRestore: async () => 'none',
-    probeBuiltin: async () => ({ ok: true }),
-  })
+  const resumed = await recover(f)
   assert.equal(resumed.status, 'finalized')
   assert.equal(resumed.record.id, bootstrapped.record.id)
 })
@@ -981,21 +897,14 @@ test('second-order rescue copy crash leaves active marker and old recovery tree 
   const legacy = writeLegacyRecoveryTree(f)
   let copied = 0
 
-  await assert.rejects(() => rescueCorruptMetadataRecoveryMarker({
-    baseDir: f.baseDir,
-    dshHome: f.dshHome,
-    builtinVersion: '1.0.0',
-    stopHost: async () => undefined,
-    completeRestore: async () => 'none',
-    probeBuiltin: async () => ({ ok: true }),
-    operations: {
+  await assert.rejects(() => rescueMarker(f, {
       copyFile: (source, destination) => {
         copyFileSync(source, destination)
         copied += 1
         if (copied === 1) throw new Error('injected rescue stash copy crash')
       },
     },
-  }), /injected rescue stash copy crash/)
+  ), /injected rescue stash copy crash/)
 
   assert.deepEqual(readFileSync(marker), corruptMarker)
   assert.deepEqual(exactMetadataSources(f), expectedEvidence)
@@ -1011,20 +920,13 @@ test('second-order rescue revalidates marker identity and bytes after opaque cop
   const marker = path.join(f.runtimeDir, 'metadata-recovery.json')
   writeFileSync(marker, original)
 
-  await assert.rejects(() => rescueCorruptMetadataRecoveryMarker({
-    baseDir: f.baseDir,
-    dshHome: f.dshHome,
-    builtinVersion: '1.0.0',
-    stopHost: async () => undefined,
-    completeRestore: async () => 'none',
-    probeBuiltin: async () => ({ ok: true }),
-    operations: {
+  await assert.rejects(() => rescueMarker(f, {
       copyFile: (source, destination) => {
         copyFileSync(source, destination)
         if (source === marker) writeFileSync(marker, changed)
       },
     },
-  }), /changed while its evidence was copied/)
+  ), /changed while its evidence was copied/)
 
   assert.deepEqual(readFileSync(marker), changed)
   assert.equal(readMetadataRecoveryState(f.baseDir).kind, 'corrupt')
@@ -1037,20 +939,13 @@ test('atomic marker rescue commit is restartable both before and after rename ef
   const beforeBytes = Buffer.from('{ corrupt-before-commit')
   const beforeMarker = path.join(before.runtimeDir, 'metadata-recovery.json')
   writeFileSync(beforeMarker, beforeBytes)
-  await assert.rejects(() => rescueCorruptMetadataRecoveryMarker({
-    baseDir: before.baseDir,
-    dshHome: before.dshHome,
-    builtinVersion: '1.0.0',
-    stopHost: async () => undefined,
-    completeRestore: async () => 'none',
-    probeBuiltin: async () => ({ ok: true }),
-    operations: {
+  await assert.rejects(() => rescueMarker(before, {
       renamePath: (source, destination, kind) => {
         if (kind === 'marker-rescue-commit') throw new Error('injected pre-commit rename crash')
         renameSync(source, destination)
       },
     },
-  }), /injected pre-commit rename crash/)
+  ), /injected pre-commit rename crash/)
   assert.deepEqual(readFileSync(beforeMarker), beforeBytes)
   assert.equal(readMetadataRecoveryState(before.baseDir).kind, 'corrupt')
   const orphanId = readdirSync(path.join(before.runtimeDir, 'metadata-recovery-rescue-data'))[0]
@@ -1061,14 +956,7 @@ test('atomic marker rescue commit is restartable both before and after rename ef
     beforeBytes,
   )
 
-  const beforeRestarted = await rescueCorruptMetadataRecoveryMarker({
-    baseDir: before.baseDir,
-    dshHome: before.dshHome,
-    builtinVersion: '1.0.0',
-    stopHost: async () => undefined,
-    completeRestore: async () => 'none',
-    probeBuiltin: async () => ({ ok: true }),
-  })
+  const beforeRestarted = await rescueCorruptMetadataRecoveryMarker({ ...hostSeams(before) })
   assert.equal(beforeRestarted.status, 'finalized')
 
   const after = fixture()
@@ -1076,14 +964,7 @@ test('atomic marker rescue commit is restartable both before and after rename ef
   const afterBytes = Buffer.from('{ corrupt-after-commit')
   writeFileSync(path.join(after.runtimeDir, 'metadata-recovery.json'), afterBytes)
   let injected = false
-  await assert.rejects(() => rescueCorruptMetadataRecoveryMarker({
-    baseDir: after.baseDir,
-    dshHome: after.dshHome,
-    builtinVersion: '1.0.0',
-    stopHost: async () => undefined,
-    completeRestore: async () => 'none',
-    probeBuiltin: async () => ({ ok: true }),
-    operations: {
+  await assert.rejects(() => rescueMarker(after, {
       renamePath: (source, destination, kind) => {
         renameSync(source, destination)
         if (!injected && kind === 'marker-rescue-commit') {
@@ -1092,21 +973,14 @@ test('atomic marker rescue commit is restartable both before and after rename ef
         }
       },
     },
-  }), /injected post-commit rename crash/)
+  ), /injected post-commit rename crash/)
   const committed = readMetadataRecoveryState(after.baseDir)
   assert.equal(committed.kind, 'valid')
   if (committed.kind !== 'valid') throw new Error('unreachable')
   assert.equal(committed.record.phase, 'archiving')
   assert.equal(committed.record.storageKind, 'marker-rescue')
 
-  const afterRestarted = await recoverRuntimeMetadata({
-    baseDir: after.baseDir,
-    dshHome: after.dshHome,
-    builtinVersion: '1.0.0',
-    stopHost: async () => undefined,
-    completeRestore: async () => 'none',
-    probeBuiltin: async () => ({ ok: true }),
-  })
+  const afterRestarted = await recover(after)
   assert.equal(afterRestarted.status, 'finalized')
   assert.equal(afterRestarted.record.id, committed.record.id)
   assert.deepEqual(
@@ -1158,14 +1032,7 @@ test('second-order restore block makes no rescue transaction and probe failure r
   assert.ok(!existsSync(paths.finalized))
   assertLegacyRecoveryTreeUnchanged(legacy.root, legacy.files)
 
-  const passed = await recoverRuntimeMetadata({
-    baseDir: retryable.baseDir,
-    dshHome: retryable.dshHome,
-    builtinVersion: '1.0.0',
-    stopHost: async () => undefined,
-    completeRestore: async () => 'none',
-    probeBuiltin: async () => ({ ok: true }),
-  })
+  const passed = await recover(retryable)
   assert.equal(passed.status, 'finalized')
   assert.equal(passed.record.id, failed.record.id)
   assertLegacyRecoveryTreeUnchanged(legacy.root, legacy.files)

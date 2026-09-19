@@ -20,27 +20,14 @@
  *   exhaust, and recovery is start().
  */
 
-import { after, test } from 'node:test'
+import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createLocalConnection } from '../../src/local-connection.ts'
 import type { SpawnedDsh } from '../../src/local-connection.ts'
 import { createControlPlane } from '../../src/index.ts'
-import { mockIdentityProbe, waitFor } from '../support/utils.ts'
-
-const quietLogger = { log: () => {}, warn: () => {}, error: () => {} }
-
-/**
- * The "no such path" sentinel this suite passes as state dir / dshHome /
- * workspace. It must not exist, but it also must not sit in the shared `/tmp`:
- * a real spawned host writes its logs under `stateDir` (2026-09 cleanup: the
- * control-plane suites used to leave `/tmp/none/host-logs` behind per run).
- */
-const ABSENT_ROOT = mkdtempSync(join(tmpdir(), 'dsh-chamber-restart-absent-'))
-const ABSENT_PATH = join(ABSENT_ROOT, 'none')
-after(() => { rmSync(ABSENT_ROOT, { recursive: true, force: true }) })
+import { absentConnection, mockIdentityProbe, quietLogger, waitFor } from '../support/utils.ts'
 
 /** A ready child on a fixed port; the exit listener is captured for death injection. */
 function controllableChild(port: number, exitHook: { fire?: (code: number | null, sig: string | null) => void }): SpawnedDsh {
@@ -64,11 +51,7 @@ test('restartLocal merges into an in-flight automatic restart (single spawn, no 
   const restartRelease = new Promise<void>(resolve => { releaseRestart = resolve })
   const exitHook: { fire?: (code: number | null, sig: string | null) => void } = {}
 
-  const connection = createLocalConnection({
-    stateDir: ABSENT_PATH,
-    dshHome: ABSENT_PATH,
-    dshWorkspacePath: ABSENT_PATH,
-    logger: quietLogger,
+  const connection = absentConnection({
     options: { healthIntervalMs: 0 },
     deps: {
       spawnDsh: async () => {
@@ -115,11 +98,7 @@ test('an automatic restart trigger suspends while a user restart is in flight (s
   const restartRelease = new Promise<void>(resolve => { releaseRestart = resolve })
   const exitHook: { fire?: (code: number | null, sig: string | null) => void } = {}
 
-  const connection = createLocalConnection({
-    stateDir: ABSENT_PATH,
-    dshHome: ABSENT_PATH,
-    dshWorkspacePath: ABSENT_PATH,
-    logger: quietLogger,
+  const connection = absentConnection({
     options: { healthIntervalMs: 0 },
     deps: {
       spawnDsh: async () => {
@@ -158,11 +137,7 @@ test('an automatic restart trigger suspends while a user restart is in flight (s
 test('a successful user restart clears the failure counter (degraded → ready)', async () => {
   const probe = mockIdentityProbe()
   let spawnCalls = 0
-  const connection = createLocalConnection({
-    stateDir: ABSENT_PATH,
-    dshHome: ABSENT_PATH,
-    dshWorkspacePath: ABSENT_PATH,
-    logger: quietLogger,
+  const connection = absentConnection({
     options: { healthIntervalMs: 100, healthProbeTimeoutMs: 1000, restartFailureThreshold: 100, failureThrottleMs: 0 },
     deps: {
       spawnDsh: async () => {
@@ -200,11 +175,7 @@ test('a second restartLocal during an in-flight restart shares the same promise'
   const restartEntered = new Promise<void>(resolve => { announceRestart = resolve })
   const restartRelease = new Promise<void>(resolve => { releaseRestart = resolve })
   let spawnCalls = 0
-  const connection = createLocalConnection({
-    stateDir: ABSENT_PATH,
-    dshHome: ABSENT_PATH,
-    dshWorkspacePath: ABSENT_PATH,
-    logger: quietLogger,
+  const connection = absentConnection({
     options: { healthIntervalMs: 0 },
     deps: {
       spawnDsh: async () => {
@@ -240,11 +211,7 @@ test('a second restartLocal during an in-flight restart shares the same promise'
 
 test('a failed user restart counts into the shared restart-exhausted window', async () => {
   let spawnCalls = 0
-  const connection = createLocalConnection({
-    stateDir: ABSENT_PATH,
-    dshHome: ABSENT_PATH,
-    dshWorkspacePath: ABSENT_PATH,
-    logger: quietLogger,
+  const connection = absentConnection({
     options: {
       healthIntervalMs: 0,
       restartBackoffFloorMs: 5,
@@ -274,11 +241,7 @@ test('a failed user restart counts into the shared restart-exhausted window', as
 
 test('restartLocal rejects under a closed spawn gate without spawning', async () => {
   let spawns = 0
-  const connection = createLocalConnection({
-    stateDir: ABSENT_PATH,
-    dshHome: ABSENT_PATH,
-    dshWorkspacePath: ABSENT_PATH,
-    logger: quietLogger,
+  const connection = absentConnection({
     options: { canSpawn: () => ({ ok: false, reason: 'applying dsh vY' }) },
     deps: {
       spawnDsh: async () => {
@@ -306,11 +269,7 @@ test('restartLocal rejects during an in-progress stop; final state stays stopped
     port: 18600,
     stop: async () => { stopCalls += 1; await stopGate },
   }
-  const connection = createLocalConnection({
-    stateDir: ABSENT_PATH,
-    dshHome: ABSENT_PATH,
-    dshWorkspacePath: ABSENT_PATH,
-    logger: quietLogger,
+  const connection = absentConnection({
     deps: {
       spawnDsh: async () => child,
       probeHostIdentity: mockIdentityProbe().probeHostIdentity,
@@ -343,11 +302,7 @@ test('stop() reclaims an in-flight user restart without leaking a process', asyn
   const restartSpawnRelease = new Promise<SpawnedDsh>(resolve => { releaseRestartSpawn = resolve })
   let spawnCalls = 0
   let staleStops = 0
-  const connection = createLocalConnection({
-    stateDir: ABSENT_PATH,
-    dshHome: ABSENT_PATH,
-    dshWorkspacePath: ABSENT_PATH,
-    logger: quietLogger,
+  const connection = absentConnection({
     options: { healthIntervalMs: 0 },
     deps: {
       spawnDsh: async () => {
@@ -422,11 +377,7 @@ test('restartLocal rejects while a start is in flight (no spawn, no backoff-wind
   let releaseStart!: () => void
   const startEntered = new Promise<void>(resolve => { announceStart = resolve })
   const startGate = new Promise<void>(resolve => { releaseStart = resolve })
-  const connection = createLocalConnection({
-    stateDir: ABSENT_PATH,
-    dshHome: ABSENT_PATH,
-    dshWorkspacePath: ABSENT_PATH,
-    logger: quietLogger,
+  const connection = absentConnection({
     options: { healthIntervalMs: 0 },
     deps: {
       spawnDsh: async () => {
@@ -461,11 +412,7 @@ test('restartLocal rejects while a start is in flight (no spawn, no backoff-wind
 })
 
 test('restartLocal rejects from error state (spawn failure) with the honest not-running code', async () => {
-  const connection = createLocalConnection({
-    stateDir: ABSENT_PATH,
-    dshHome: ABSENT_PATH,
-    dshWorkspacePath: ABSENT_PATH,
-    logger: quietLogger,
+  const connection = absentConnection({
     options: { healthIntervalMs: 0 },
     deps: {
       spawnDsh: async () => { throw new Error('mock spawn failure') },
@@ -480,11 +427,7 @@ test('restartLocal rejects from error state (spawn failure) with the honest not-
 
 test('restartLocal rejects again once the shared window is exhausted (honest recover-with-start)', async () => {
   let spawnCalls = 0
-  const connection = createLocalConnection({
-    stateDir: ABSENT_PATH,
-    dshHome: ABSENT_PATH,
-    dshWorkspacePath: ABSENT_PATH,
-    logger: quietLogger,
+  const connection = absentConnection({
     options: { healthIntervalMs: 0, maxRestartsInWindow: 2 },
     deps: {
       spawnDsh: async () => {
@@ -508,11 +451,8 @@ test('restartLocal rejects again once the shared window is exhausted (honest rec
 test('restart resolves the workspace thunk afresh (restart uses the current activation tree, not a stale path)', async () => {
   let workspace = '/tmp/tree-a'
   const seen: string[] = []
-  const connection = createLocalConnection({
-    stateDir: ABSENT_PATH,
-    dshHome: ABSENT_PATH,
+  const connection = absentConnection({
     dshWorkspacePath: () => workspace,
-    logger: quietLogger,
     options: { healthIntervalMs: 0 },
     deps: {
       spawnDsh: async (opts: { dshWorkspacePath: string }) => {
@@ -532,11 +472,7 @@ test('restart resolves the workspace thunk afresh (restart uses the current acti
 
 test('restartLocal rejects from stopped (never started) without spawning a ghost instance', async () => {
   let spawnCalls = 0
-  const connection = createLocalConnection({
-    stateDir: ABSENT_PATH,
-    dshHome: ABSENT_PATH,
-    dshWorkspacePath: ABSENT_PATH,
-    logger: quietLogger,
+  const connection = absentConnection({
     options: { healthIntervalMs: 0 },
     deps: {
       spawnDsh: async () => {
@@ -588,11 +524,7 @@ test('R3: a process-death exit during the stop() window is inert (no restart res
   let releaseStop!: () => void
   const stopGate = new Promise<void>(resolve => { releaseStop = resolve })
   const exitHook: { fire?: (code: number | null, sig: string | null) => void } = {}
-  const connection = createLocalConnection({
-    stateDir: ABSENT_PATH,
-    dshHome: ABSENT_PATH,
-    dshWorkspacePath: ABSENT_PATH,
-    logger: quietLogger,
+  const connection = absentConnection({
     options: { healthIntervalMs: 0 },
     deps: {
       spawnDsh: async () => {
@@ -638,11 +570,7 @@ test('R3: a process-death exit during the stop() window is inert (no restart res
 
 test('a closed canSpawn gate (applying window) rejects start() and restartLocal with connection_busy, from stopped', async () => {
   let spawns = 0
-  const connection = createLocalConnection({
-    stateDir: ABSENT_PATH,
-    dshHome: ABSENT_PATH,
-    dshWorkspacePath: ABSENT_PATH,
-    logger: quietLogger,
+  const connection = absentConnection({
     options: { canSpawn: () => ({ ok: false, reason: 'applying dsh vY' }) },
     deps: {
       spawnDsh: async () => {
@@ -700,11 +628,7 @@ test('createControlPlane.startLocal rejects connection_busy under a closed canSt
 test('D2: the restart window counts only triggerRestart (start()/stop() never push into it; recovery consumes nothing) — M=5 exhausts, start() recovers', async () => {
   const hooks: Array<{ fire?: (code: number | null, sig: string | null) => void }> = []
   let spawnCalls = 0
-  const connection = createLocalConnection({
-    stateDir: ABSENT_PATH,
-    dshHome: ABSENT_PATH,
-    dshWorkspacePath: ABSENT_PATH,
-    logger: quietLogger,
+  const connection = absentConnection({
     options: {
       healthIntervalMs: 0,
       restartBackoffFloorMs: 5,
@@ -770,11 +694,7 @@ test('D2: the restart window counts only triggerRestart (start()/stop() never pu
 test('D2: restart counts do not survive a stop()/start() cycle (stop clears the window)', async () => {
   const hooks: Array<{ fire?: (code: number | null, sig: string | null) => void }> = []
   let spawnCalls = 0
-  const connection = createLocalConnection({
-    stateDir: ABSENT_PATH,
-    dshHome: ABSENT_PATH,
-    dshWorkspacePath: ABSENT_PATH,
-    logger: quietLogger,
+  const connection = absentConnection({
     options: {
       healthIntervalMs: 0,
       restartBackoffFloorMs: 5,

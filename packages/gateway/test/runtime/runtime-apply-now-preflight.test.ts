@@ -14,49 +14,36 @@ import {
   readActivationJournalState,
   readCurrentPointer,
   readOverride,
-  writeActivationIntent,
   writeCurrentPointer,
-  writeOverride,
 } from '@dsh-chamber/dsh-runtime'
 import { createRuntimeRoutes } from '../../src/runtime-routes.ts'
 import {
   silentLogger,
   TEST_BUILTIN_VERSION,
-  gatewayPackageVersion,
   config,
   fakePlane,
   runRoute,
   waitForSettle,
   probeResultsFor,
   makeValidTree,
+  armPendingSwitch,
+  writeOverrideRow,
+  writeVersionSwitchIntent,
+  runtimeManager,
+  derivedProbe,
 } from '../support/runtime-routes-harness.ts'
 
 test('ordinary pending is a core+route terminal gate: apply-now is allowed (202, pending untouched), every other action is 409 and non-mutating', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-pending-gate-'))
   try {
-    makeValidTree(stateDir, '1.0.0')
-    const home = join(stateDir, 'dsh-home')
-    mkdirSync(home, { recursive: true })
-    writeFileSync(join(home, 'settings.json'), '{"pending":true}')
-    writeActivationIntent(stateDir, {
-      targetVersion: '1.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
-    })
-    writeOverride(stateDir, {
-      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
-      pending: '1.0.0', swapAttempted: false, selectedOnly: false,
-    })
+    armPendingSwitch(stateDir, '1.0.0')
     // The apply-now transaction must not race the assertions below: hold the
     // quiesce step until the durable pending/override are verified untouched.
     let releaseStop!: () => void
     const stopGate = new Promise<void>(resolve => { releaseStop = resolve })
     const plane = fakePlane({ stopLocal: async () => { await stopGate } })
     plane._state.connectionState = 'ready'
-    const manager = createGatewayRuntimeManager({
-      config: config(stateDir),
-      plane,
-      logger: silentLogger,
-      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
-    })
+    const manager = runtimeManager(stateDir, plane, { probeCandidate: derivedProbe(stateDir) })
     const routes = createRuntimeRoutes(() => manager, silentLogger)
     assert.equal((await manager.status()).phase, 'pending')
 
@@ -214,13 +201,10 @@ test('apply-now preflight refuses an invalidated (stale-shell) selection synchro
     // RETAINS chosenVersion: status.selectedVersion is still set while
     // status.pending is null (effectivePending filters the invalidation). The
     // old status-based no_selection gate let this through to a fake 202.
-    writeOverride(stateDir, {
-      shellVersion: '0.0.1', chosenVersion: '2.0.0', resolvedVersion: '2.0.0',
-      pending: null, swapAttempted: false,
-    })
+    writeOverrideRow(stateDir, { shellVersion: '0.0.1', chosenVersion: '2.0.0', pending: null })
     const plane = fakePlane()
     plane._state.connectionState = 'ready'
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane, logger: silentLogger })
+    const manager = runtimeManager(stateDir, plane)
     const routes = createRuntimeRoutes(() => manager, silentLogger)
     const status = await manager.status()
     assert.equal(status.selectedVersion, '2.0.0', 'the invalidated record retains its choice')
@@ -247,16 +231,11 @@ test('apply-now preflight refuses a pending target with no valid version tree sy
     // pending points at a version whose tree is gone (e.g. evicted). The old
     // flow 202'd first and only then failed inside the async job â€” the
     // preflight must refuse before any 202 can go out.
-    writeActivationIntent(stateDir, {
-      targetVersion: '3.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
-    })
-    writeOverride(stateDir, {
-      shellVersion: gatewayPackageVersion, chosenVersion: '3.0.0', resolvedVersion: '3.0.0',
-      pending: '3.0.0', swapAttempted: false,
-    })
+    writeVersionSwitchIntent(stateDir, '3.0.0')
+    writeOverrideRow(stateDir, { chosenVersion: '3.0.0', pending: '3.0.0' })
     const plane = fakePlane()
     plane._state.connectionState = 'ready'
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane, logger: silentLogger })
+    const manager = runtimeManager(stateDir, plane)
     const routes = createRuntimeRoutes(() => manager, silentLogger)
     assert.equal((await manager.status()).phase, 'pending')
     const response = await runRoute(routes, 'POST', '/chamber/runtime/apply-now')
@@ -276,13 +255,10 @@ test('apply-now preflight rejects a no-op re-application of the active runtime â
   try {
     makeValidTree(stateDir, '1.0.0')
     writeCurrentPointer(stateDir, '1.0.0')
-    writeOverride(stateDir, {
-      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
-      pending: null, swapAttempted: false, lastOutcome: 'applied',
-    })
+    writeOverrideRow(stateDir, { chosenVersion: '1.0.0', pending: null, lastOutcome: 'applied' })
     const plane = fakePlane()
     plane._state.connectionState = 'ready'
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane, logger: silentLogger })
+    const manager = runtimeManager(stateDir, plane)
     const routes = createRuntimeRoutes(() => manager, silentLogger)
     const response = await runRoute(routes, 'POST', '/chamber/runtime/apply-now')
     assert.equal(response.status, 409)
@@ -303,27 +279,12 @@ test('apply-now preflight rejects a no-op re-application of the active runtime â
 test('applyNowInFlight fences every other runtime mutation at the manager level (assertMutationIdle, R3/R5)', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-applynow-fence-'))
   try {
-    makeValidTree(stateDir, '1.0.0')
-    const home = join(stateDir, 'dsh-home')
-    mkdirSync(home, { recursive: true })
-    writeFileSync(join(home, 'settings.json'), '{"pending":true}')
-    writeActivationIntent(stateDir, {
-      targetVersion: '1.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
-    })
-    writeOverride(stateDir, {
-      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
-      pending: '1.0.0', swapAttempted: false, selectedOnly: false,
-    })
+    armPendingSwitch(stateDir, '1.0.0')
     let releaseStop!: () => void
     const stopGate = new Promise<void>(resolve => { releaseStop = resolve })
     const plane = fakePlane({ stopLocal: async () => { await stopGate } })
     plane._state.connectionState = 'ready'
-    const manager = createGatewayRuntimeManager({
-      config: config(stateDir),
-      plane,
-      logger: silentLogger,
-      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
-    })
+    const manager = runtimeManager(stateDir, plane, { probeCandidate: derivedProbe(stateDir) })
     await manager.applyNow()
     assert.equal(manager.applyNowInFlight(), true)
     // The managed profile-write lease is refused for the whole apply-now
@@ -367,20 +328,12 @@ test('applyNow F2 arm mirrors the apply() manualRollback formula: a staged downg
     // preflight arms the pending switch journal-first and must record the
     // downgrade as a manual rollback, exactly like apply() :1084 (review fix:
     // it used to be hardcoded false).
-    writeOverride(stateDir, {
-      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
-      pending: null, swapAttempted: false, selectedOnly: false, lastOutcome: 'applied',
-    })
+    writeOverrideRow(stateDir, { chosenVersion: '1.0.0', pending: null, lastOutcome: 'applied' })
     let releaseStop!: () => void
     const stopGate = new Promise<void>(resolve => { releaseStop = resolve })
     const plane = fakePlane({ stopLocal: async () => { await stopGate } })
     plane._state.connectionState = 'ready'
-    const manager = createGatewayRuntimeManager({
-      config: config(stateDir),
-      plane,
-      logger: silentLogger,
-      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
-    })
+    const manager = runtimeManager(stateDir, plane, { probeCandidate: derivedProbe(stateDir) })
     const accepted = await manager.applyNow()
     assert.equal(accepted.accepted, true)
     const armed = readOverride(stateDir)
@@ -407,17 +360,7 @@ test('applyNow F2 arm mirrors the apply() manualRollback formula: a staged downg
 test('apply-now 202: the window polls as applying with connectionState stopped, then the switch commits', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-applynow-window-'))
   try {
-    makeValidTree(stateDir, '1.0.0')
-    const home = join(stateDir, 'dsh-home')
-    mkdirSync(home, { recursive: true })
-    writeFileSync(join(home, 'settings.json'), '{"pending":true}')
-    writeActivationIntent(stateDir, {
-      targetVersion: '1.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
-    })
-    writeOverride(stateDir, {
-      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
-      pending: '1.0.0', swapAttempted: false, selectedOnly: false,
-    })
+    armPendingSwitch(stateDir, '1.0.0')
     let releaseStop!: () => void
     const stopGate = new Promise<void>(resolve => { releaseStop = resolve })
     const plane = fakePlane({
@@ -425,12 +368,7 @@ test('apply-now 202: the window polls as applying with connectionState stopped, 
       startLocal: async () => { plane._state.connectionState = 'ready' },
     })
     plane._state.connectionState = 'ready'
-    const manager = createGatewayRuntimeManager({
-      config: config(stateDir),
-      plane,
-      logger: silentLogger,
-      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
-    })
+    const manager = runtimeManager(stateDir, plane, { probeCandidate: derivedProbe(stateDir) })
     const routes = createRuntimeRoutes(() => manager, silentLogger)
     assert.equal((await manager.status()).phase, 'pending')
     const response = await runRoute(routes, 'POST', '/chamber/runtime/apply-now')
@@ -459,10 +397,7 @@ test('restoreBuiltin runs the full shared activation transaction before deleting
   try {
     makeValidTree(stateDir, '2.0.0')
     writeCurrentPointer(stateDir, '2.0.0')
-    writeOverride(stateDir, {
-      shellVersion: gatewayPackageVersion, chosenVersion: '2.0.0', resolvedVersion: '2.0.0',
-      pending: null, swapAttempted: false, lastOutcome: 'applied',
-    })
+    writeOverrideRow(stateDir, { chosenVersion: '2.0.0', pending: null, lastOutcome: 'applied' })
     const home = join(stateDir, 'dsh-home')
     mkdirSync(home, { recursive: true })
     writeFileSync(join(home, 'settings.json'), '{"kept":true}')
@@ -508,10 +443,7 @@ test('restoreBuiltin preserves the override and rolls data back when the builtin
   try {
     makeValidTree(stateDir, '2.0.0')
     writeCurrentPointer(stateDir, '2.0.0')
-    writeOverride(stateDir, {
-      shellVersion: gatewayPackageVersion, chosenVersion: '2.0.0', resolvedVersion: '2.0.0',
-      pending: null, swapAttempted: false, lastOutcome: 'applied',
-    })
+    writeOverrideRow(stateDir, { chosenVersion: '2.0.0', pending: null, lastOutcome: 'applied' })
     const home = join(stateDir, 'dsh-home')
     mkdirSync(home, { recursive: true })
     writeFileSync(join(home, 'settings.json'), '{"source":"preserved"}')

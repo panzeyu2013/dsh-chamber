@@ -18,16 +18,18 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createGatewayRuntimeManager } from '../../src/runtime-manager.ts'
-import { writeOverride } from '@dsh-chamber/dsh-runtime'
 import { createRuntimeRoutes, sanitizeRouteError } from '../../src/runtime-routes.ts'
 import {
   silentLogger,
   TEST_BUILTIN_VERSION,
-  gatewayPackageVersion,
   config,
   fakePlane,
   runRoute,
   probeResultsFor,
+  writeOverrideRow,
+  writeDshHome,
+  runtimeManager,
+  derivedProbe,
 } from '../support/runtime-routes-harness.ts'
 
 // ---------------------------------------------------------------------------
@@ -146,7 +148,7 @@ test('resolution chain: env → override (valid tree) → builtin anchor', () =>
   const oldEnv = process.env.DSH_GATEWAY_DSH_PATH
   try {
     process.env.DSH_GATEWAY_DSH_PATH = '/tmp/env-dsh'
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    const manager = runtimeManager(stateDir, fakePlane())
     assert.deepEqual(manager.resolveWorkspace(), { path: '/tmp/env-dsh', version: null, source: 'env' })
   } finally {
     if (oldEnv === undefined) delete process.env.DSH_GATEWAY_DSH_PATH
@@ -160,7 +162,7 @@ test('resolution falls back to the builtin anchor without env or pointer', () =>
   const oldEnv = process.env.DSH_GATEWAY_DSH_PATH
   try {
     delete process.env.DSH_GATEWAY_DSH_PATH
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    const manager = runtimeManager(stateDir, fakePlane())
     assert.deepEqual(manager.resolveWorkspace(), {
       path: join(stateDir, 'builtin-anchor'), version: TEST_BUILTIN_VERSION, source: 'builtin',
     })
@@ -237,6 +239,8 @@ test('real manager: cleanup refuses non-ledger versions; metadata corruption is 
   let manager: ReturnType<typeof createGatewayRuntimeManager> | null = null
   try {
     delete process.env.DSH_GATEWAY_DSH_PATH
+    // No probe seam: the fake plane has no dsh listener, so the builtin-anchor
+    // probe fails for real and the metadata-probe-failed sentinel is pinned.
     manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
     const healthy = await manager.status()
     assert.equal(healthy.canRecoverMetadata, false)
@@ -273,7 +277,7 @@ test('real manager: cleanup/restore/recover refuse env+win32 and recover refuses
     // escape (restore-pre-rollback) stays env-independent and only fails on
     // its own stash validation.
     process.env.DSH_GATEWAY_DSH_PATH = '/tmp/env-dsh'
-    const envManager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    const envManager = runtimeManager(stateDir, fakePlane())
     await assert.rejects(envManager.cleanupVersion('1.0.0'), /DSH_GATEWAY_DSH_PATH/)
     await assert.rejects(envManager.recoverMetadata(), /DSH_GATEWAY_DSH_PATH/)
     await assert.rejects(envManager.restorePreRollback('1700000000000-deadbeef'), /no longer exists or is untrustworthy/)
@@ -288,14 +292,11 @@ test('real manager: cleanup/restore/recover refuse env+win32 and recover refuses
     await win32Manager.dispose()
     // Healthy state: recover refuses loudly.
     delete process.env.DSH_GATEWAY_DSH_PATH
-    const healthy = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    const healthy = runtimeManager(stateDir, fakePlane())
     await assert.rejects(healthy.recoverMetadata(), /no corrupt metadata to recover/)
     // Non-FATAL startup block (swap-attempted): recover refuses with the
     // recovery-required code — the swap/restore retry surface owns it.
-    writeOverride(stateDir, {
-      shellVersion: gatewayPackageVersion, chosenVersion: '1.2.3', resolvedVersion: '1.2.3',
-      pending: '1.2.3', swapAttempted: true,
-    })
+    writeOverrideRow(stateDir, { chosenVersion: '1.2.3', pending: '1.2.3', swapAttempted: true })
     const swap = await healthy.startupTransaction()
     assert.equal(swap.blockedReason, 'swap-attempted')
     await assert.rejects(healthy.recoverMetadata(), { code: 'runtime_recovery_required' })
@@ -318,9 +319,7 @@ test('real manager: recoverMetadata finalizes on ok probes and brings the builti
     delete process.env.DSH_GATEWAY_DSH_PATH
     mkdirSync(join(stateDir, 'dsh-runtime'), { recursive: true })
     writeFileSync(join(stateDir, 'dsh-runtime', 'activation-journal.json'), '{corrupt', { mode: 0o600 })
-    const home = join(stateDir, 'dsh-home')
-    mkdirSync(home, { recursive: true })
-    writeFileSync(join(home, 'settings.json'), '{"source":"preserved"}')
+    const home = writeDshHome(stateDir, '{"source":"preserved"}')
     const order: string[] = []
     const probed: string[] = []
     const plane = fakePlane({
@@ -366,26 +365,16 @@ test('mid-run metadata drift: recover-metadata opens through the free-text block
     // text AND reports canRecoverMetadata — the route gate must classify by
     // the flag, not the free text (the old gate refused the very recovery
     // route it advertised, locking every mutation until a gateway restart).
-    writeOverride(stateDir, {
-      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
-      pending: null, swapAttempted: false,
-    })
+    writeOverrideRow(stateDir, { chosenVersion: '1.0.0', pending: null })
     writeFileSync(join(stateDir, 'dsh-runtime', 'current'), '{corrupt', { mode: 0o600 })
-    const home = join(stateDir, 'dsh-home')
-    mkdirSync(home, { recursive: true })
-    writeFileSync(join(home, 'settings.json'), '{"source":"preserved"}')
+    const home = writeDshHome(stateDir, '{"source":"preserved"}')
     const order: string[] = []
     const plane = fakePlane({
       stopLocal: async () => { order.push('stop') },
       startLocal: async () => { order.push('start') },
     })
     plane._state.connectionState = 'ready'
-    const manager = createGatewayRuntimeManager({
-      config: config(stateDir),
-      plane,
-      logger: silentLogger,
-      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
-    })
+    const manager = runtimeManager(stateDir, plane, { probeCandidate: derivedProbe(stateDir) })
     const before = await manager.status()
     assert.equal(before.phase, 'idle')
     assert.match(before.startupBlockedReason ?? '', /current pointer is corrupt/, 'the drift surfaces as a free-text block')

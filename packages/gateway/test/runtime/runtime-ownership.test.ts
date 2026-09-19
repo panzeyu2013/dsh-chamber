@@ -23,15 +23,13 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createGatewayRuntimeManager } from '../../src/runtime-manager.ts'
-import { writeActivationIntent, writeOverride } from '@dsh-chamber/dsh-runtime'
 import {
   silentLogger,
   TEST_BUILTIN_VERSION,
-  gatewayPackageVersion,
   config,
   fakePlane,
   probeResultsFor,
-  makeValidTree,
+  armPendingSwitch,
 } from '../support/runtime-routes-harness.ts'
 
 test('gateway runtime ownership fails closed when dsh-runtime root is a symlink', () => {
@@ -303,17 +301,7 @@ test('a disposed manager cannot read/quarantine authority owned by its replaceme
 test('dispose() aborts and drains an apply-now probe before releasing runtime ownership', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-dispose-applynow-'))
   try {
-    makeValidTree(stateDir, '1.0.0')
-    const home = join(stateDir, 'dsh-home')
-    mkdirSync(home, { recursive: true })
-    writeFileSync(join(home, 'settings.json'), '{"pending":true}')
-    writeActivationIntent(stateDir, {
-      targetVersion: '1.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
-    })
-    writeOverride(stateDir, {
-      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
-      pending: '1.0.0', swapAttempted: false, selectedOnly: false,
-    })
+    armPendingSwitch(stateDir, '1.0.0')
 
     let probeEntered!: () => void
     const entered = new Promise<void>(resolve => { probeEntered = resolve })

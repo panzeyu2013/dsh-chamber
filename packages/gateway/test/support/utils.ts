@@ -124,6 +124,16 @@ export class FakeResponse extends EventEmitter {
   }
 }
 
+/** A FakeRequest addressed to the public gateway origin: the boundary suites
+ *  always send `host: gateway.example:3000` (the configured publicOrigin host). */
+export function gatewayRequest(
+  method: string,
+  url: string,
+  headers: Record<string, string | string[] | undefined> = {},
+): FakeRequest {
+  return new FakeRequest(method, url, { host: 'gateway.example:3000', ...headers })
+}
+
 /** No-op orchestrator stub for surfaces that do not exercise the A1 write
  * routes (design 21 §6.2; plan Phase 4.4): submit/tasks exist so the
  * structural ChamberSurfaceDeps check passes; every submit is refused with

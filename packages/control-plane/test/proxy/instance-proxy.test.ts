@@ -14,7 +14,6 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import {
-  createInstanceProxy,
   parseInstanceId,
   parseInstancePath,
   tcpKeepAliveMsForUpstream,
@@ -29,7 +28,7 @@ import {
   fakeSocket,
   GATEWAY_AUTHORIZATION,
   makeProxy,
-  quietLogger,
+  proxyFor,
 } from '../support/proxy-fakes.ts'
 
 /**
@@ -339,12 +338,7 @@ test('gateway WS upgrade: the sanctioned Cookie rides the handshake too', async 
   const upstream = fakeHttpRequest(url => url.pathname.startsWith('/api/remote.mux')
     ? { upgrade: { status: 101, headers: { upgrade: 'websocket', connection: 'Upgrade' } } }
     : undefined)
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => 17510,
-    httpRequest: upstream.fn,
-  })
+  const proxy = proxyFor(upstream.fn, { getLocalDshPort: () => 17510 })
   proxy.registerTransport('gateway:gws', 'https://gw.example.com', { cookie: 'dsh_gateway_session=abc.def' })
   const socket = fakeSocket()
   await proxy.handleUpgrade(fakeRequest('/api/i/gateway-gws/api/remote.mux', 'GET'), socket, Buffer.alloc(0))
@@ -359,12 +353,7 @@ test('local WS upgrade carries the 0.1.2 browser-auth cookie when bootstrapped',
   const upstream = fakeHttpRequest(url => url.pathname.startsWith('/api/remote.mux')
     ? { upgrade: { status: 101, headers: { upgrade: 'websocket', connection: 'Upgrade' } } }
     : undefined)
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => 17510,
-    httpRequest: upstream.fn,
-  })
+  const proxy = proxyFor(upstream.fn, { getLocalDshPort: () => 17510 })
   try {
     registerAuthCookie('http://127.0.0.1:17510', `${browserAuthCookieName('127.0.0.1:17510')}=sess`)
     const socket = fakeSocket()
@@ -381,12 +370,7 @@ test('transport replacement and unregister revoke already-open HTTP/SSE and WS c
   const upstream = fakeHttpRequest(url => url.pathname.startsWith('/api/remote.mux')
     ? { upgrade: { status: 101, headers: { upgrade: 'websocket', connection: 'Upgrade' } } }
     : { response: { status: 200, headers: { 'content-type': 'text/event-stream' }, body: null } })
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => 17510,
-    httpRequest: upstream.fn,
-  })
+  const proxy = proxyFor(upstream.fn, { getLocalDshPort: () => 17510 })
   proxy.registerTransport('ssh:rotating', 'http://127.0.0.1:22001')
 
   const oldSse = fakeResponse()

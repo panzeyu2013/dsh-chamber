@@ -9,7 +9,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import type { ApiRequest, ApiResponse } from '@dsh-chamber/control-plane'
 import { type AuthProvider } from '../../src/auth.ts'
-import { FakeRequest, FakeResponse } from '../support/utils.ts'
+import { FakeRequest, FakeResponse, gatewayRequest } from '../support/utils.ts'
 import { TOKEN, setup, realAuth, runHttp } from '../support/dispatch-harness.ts'
 
 // ── Proxied dsh frontend CSP (M2-4a) ──
@@ -18,10 +18,7 @@ test('the proxied frontend CSP keeps base-uri on self so the upstream <base href
   const { auth, cleanup } = realAuth({ config: { kind: 'token', token: TOKEN } })
   try {
     const { dispatch } = setup(auth)
-    const res = await runHttp(dispatch, new FakeRequest('GET', '/', {
-      host: 'gateway.example:3000',
-      authorization: `Bearer ${TOKEN}`,
-    }))
+    const res = await runHttp(dispatch, gatewayRequest('GET', '/', { authorization: `Bearer ${TOKEN}` }))
     assert.equal(res.status, 200)
     assert.equal(res.body, 'proxied')
     const csp = String(res.headers['content-security-policy'])
@@ -96,11 +93,7 @@ test('document navigation with an expired session cookie redirects to the expire
     async login() { return {} },
   }
   const { dispatch } = setup(auth)
-  const res = await runHttp(dispatch, new FakeRequest('GET', '/', {
-    host: 'gateway.example:3000',
-    accept: 'text/html',
-    cookie: 'dsh_gateway_session=eyJ.old',
-  }))
+  const res = await runHttp(dispatch, gatewayRequest('GET', '/', { accept: 'text/html', cookie: 'dsh_gateway_session=eyJ.old' }))
   assert.equal(res.status, 302)
   assert.equal(res.headers.location, '/auth/login?expired=1')
 })
@@ -112,22 +105,13 @@ test('GET /auth/login renders the expired hint only for expired=1', async () => 
     async login() { return {} },
   }
   const { dispatch } = setup(auth)
-  const expired = await runHttp(dispatch, new FakeRequest('GET', '/auth/login?expired=1', {
-    host: 'gateway.example:3000',
-    accept: 'text/html',
-  }))
+  const expired = await runHttp(dispatch, gatewayRequest('GET', '/auth/login?expired=1', { accept: 'text/html' }))
   assert.equal(expired.status, 200)
   assert.ok(String(expired.body).includes('session expired'))
-  const zero = await runHttp(dispatch, new FakeRequest('GET', '/auth/login?expired=0', {
-    host: 'gateway.example:3000',
-    accept: 'text/html',
-  }))
+  const zero = await runHttp(dispatch, gatewayRequest('GET', '/auth/login?expired=0', { accept: 'text/html' }))
   assert.equal(zero.status, 200)
   assert.ok(!String(zero.body).includes('session expired'))
-  const other = await runHttp(dispatch, new FakeRequest('GET', '/auth/login?expired=not1', {
-    host: 'gateway.example:3000',
-    accept: 'text/html',
-  }))
+  const other = await runHttp(dispatch, gatewayRequest('GET', '/auth/login?expired=not1', { accept: 'text/html' }))
   assert.equal(other.status, 200)
   assert.ok(!String(other.body).includes('session expired'))
 })
@@ -139,10 +123,7 @@ test('the login page shows the plaintext warning on an unencrypted socket', asyn
     async login() { return {} },
   }
   const { dispatch } = setup(auth)
-  const res = await runHttp(dispatch, new FakeRequest('GET', '/auth/login', {
-    host: 'gateway.example:3000',
-    accept: 'text/html',
-  }))
+  const res = await runHttp(dispatch, gatewayRequest('GET', '/auth/login', { accept: 'text/html' }))
   assert.equal(res.status, 200)
   assert.ok(String(res.body).includes('Unencrypted connection'))
 })
@@ -154,11 +135,7 @@ test('browser form login failure renders an HTML 401 without echoing the passwor
     async login() { throw new Error('invalid password') },
   }
   const { dispatch } = setup(auth)
-  const res = await runHttp(dispatch, new FakeRequest('POST', '/auth/login', {
-    host: 'gateway.example:3000',
-    'content-type': 'application/x-www-form-urlencoded',
-    accept: 'text/html',
-  }), 'password=hunter2')
+  const res = await runHttp(dispatch, gatewayRequest('POST', '/auth/login', { 'content-type': 'application/x-www-form-urlencoded', accept: 'text/html' }), 'password=hunter2')
   assertLoginHtmlResponse(res, 401)
   assert.ok(String(res.body).includes('Incorrect password'))
   assert.ok(!String(res.body).includes('hunter2'))
@@ -171,11 +148,7 @@ test('API login failure keeps the JSON shape', async () => {
     async login() { throw new Error('invalid password') },
   }
   const { dispatch } = setup(auth)
-  const res = await runHttp(dispatch, new FakeRequest('POST', '/auth/login', {
-    host: 'gateway.example:3000',
-    'content-type': 'application/json',
-    accept: 'application/json',
-  }), '{"password":"hunter2"}')
+  const res = await runHttp(dispatch, gatewayRequest('POST', '/auth/login', { 'content-type': 'application/json', accept: 'application/json' }), '{"password":"hunter2"}')
   assert.equal(res.status, 401)
   assert.deepEqual(JSON.parse(res.body), { error: 'invalid credentials', code: 'invalid_credentials' })
 })
@@ -187,10 +160,7 @@ test('form-urlencoded without an Accept header stays JSON (conservative)', async
     async login() { throw new Error('invalid password') },
   }
   const { dispatch } = setup(auth)
-  const res = await runHttp(dispatch, new FakeRequest('POST', '/auth/login', {
-    host: 'gateway.example:3000',
-    'content-type': 'application/x-www-form-urlencoded',
-  }), 'password=hunter2')
+  const res = await runHttp(dispatch, gatewayRequest('POST', '/auth/login', { 'content-type': 'application/x-www-form-urlencoded' }), 'password=hunter2')
   assert.equal(res.status, 401)
   assert.equal(JSON.parse(res.body).code, 'invalid_credentials')
 })
@@ -205,20 +175,12 @@ test('rate-limited login answers 429 with Retry-After and an HTML wait message',
   }
   const { dispatch } = setup(auth)
 
-  const html = await runHttp(dispatch, new FakeRequest('POST', '/auth/login', {
-    host: 'gateway.example:3000',
-    'content-type': 'application/x-www-form-urlencoded',
-    accept: 'text/html',
-  }), 'password=hunter2')
+  const html = await runHttp(dispatch, gatewayRequest('POST', '/auth/login', { 'content-type': 'application/x-www-form-urlencoded', accept: 'text/html' }), 'password=hunter2')
   assertLoginHtmlResponse(html, 429)
   assert.equal(html.headers['retry-after'], '900')
   assert.ok(String(html.body).includes('~900s'))
 
-  const json = await runHttp(dispatch, new FakeRequest('POST', '/auth/login', {
-    host: 'gateway.example:3000',
-    'content-type': 'application/json',
-    accept: 'application/json',
-  }), '{"password":"hunter2"}')
+  const json = await runHttp(dispatch, gatewayRequest('POST', '/auth/login', { 'content-type': 'application/json', accept: 'application/json' }), '{"password":"hunter2"}')
   assert.equal(json.status, 429)
   assert.equal(json.headers['retry-after'], '900')
   assert.deepEqual(JSON.parse(json.body), { error: 'too many login attempts', code: 'rate_limited' })
@@ -233,11 +195,7 @@ test('rate-limited without retryAfterMs still answers 429 with a sane floor', as
     },
   }
   const { dispatch } = setup(auth)
-  const html = await runHttp(dispatch, new FakeRequest('POST', '/auth/login', {
-    host: 'gateway.example:3000',
-    'content-type': 'application/x-www-form-urlencoded',
-    accept: 'text/html',
-  }), 'password=hunter2')
+  const html = await runHttp(dispatch, gatewayRequest('POST', '/auth/login', { 'content-type': 'application/x-www-form-urlencoded', accept: 'text/html' }), 'password=hunter2')
   assertLoginHtmlResponse(html, 429)
   // Math.max(1, …) floors a missing/zero retryAfterMs at one second.
   assert.equal(html.headers['retry-after'], '1')
@@ -253,19 +211,11 @@ test('auth_busy login answers 503 HTML for browsers, JSON for API clients', asyn
     },
   }
   const { dispatch } = setup(auth)
-  const html = await runHttp(dispatch, new FakeRequest('POST', '/auth/login', {
-    host: 'gateway.example:3000',
-    'content-type': 'application/x-www-form-urlencoded',
-    accept: 'text/html',
-  }), 'password=hunter2')
+  const html = await runHttp(dispatch, gatewayRequest('POST', '/auth/login', { 'content-type': 'application/x-www-form-urlencoded', accept: 'text/html' }), 'password=hunter2')
   assertLoginHtmlResponse(html, 503)
   assert.ok(String(html.body).includes('Authentication service is busy'))
 
-  const json = await runHttp(dispatch, new FakeRequest('POST', '/auth/login', {
-    host: 'gateway.example:3000',
-    'content-type': 'application/json',
-    accept: 'application/json',
-  }), '{"password":"hunter2"}')
+  const json = await runHttp(dispatch, gatewayRequest('POST', '/auth/login', { 'content-type': 'application/json', accept: 'application/json' }), '{"password":"hunter2"}')
   assert.equal(json.status, 503)
   assert.deepEqual(JSON.parse(json.body), { error: 'authentication service is busy', code: 'auth_busy' })
 })
@@ -274,18 +224,12 @@ test('token-only deployments answer 404: HTML explanation for browsers, JSON for
   const auth: AuthProvider = { kind: 'token', async verify() { return null } }
   const { dispatch } = setup(auth)
 
-  const html = await runHttp(dispatch, new FakeRequest('GET', '/auth/login', {
-    host: 'gateway.example:3000',
-    accept: 'text/html',
-  }))
+  const html = await runHttp(dispatch, gatewayRequest('GET', '/auth/login', { accept: 'text/html' }))
   assertLoginHtmlResponse(html, 404)
   assert.ok(String(html.body).includes('token authentication'))
   assert.ok(!String(html.body).includes('no password login'))
 
-  const json = await runHttp(dispatch, new FakeRequest('GET', '/auth/login', {
-    host: 'gateway.example:3000',
-    accept: 'application/json',
-  }))
+  const json = await runHttp(dispatch, gatewayRequest('GET', '/auth/login', { accept: 'application/json' }))
   assert.equal(json.status, 404)
   assert.deepEqual(JSON.parse(json.body), { error: 'not_found', code: 'not_found' })
 })
@@ -296,10 +240,7 @@ test('no-auth deployments answer 404 with the no-password variant, never claimin
     async verify() { return { kind: 'none', id: 'anonymous', issuedAt: 0 } },
   }
   const { dispatch } = setup(auth)
-  const html = await runHttp(dispatch, new FakeRequest('GET', '/auth/login', {
-    host: 'gateway.example:3000',
-    accept: 'text/html',
-  }))
+  const html = await runHttp(dispatch, gatewayRequest('GET', '/auth/login', { accept: 'text/html' }))
   assertLoginHtmlResponse(html, 404)
   assert.ok(String(html.body).includes('no password login'))
   assert.ok(!String(html.body).includes('token'), 'a --no-auth deployment must not claim token auth')
@@ -313,11 +254,7 @@ test('oversized browser form login stays a JSON 413 and destroys the socket', as
     async login() { loginCalls += 1; return {} },
   }
   const { dispatch } = setup(auth)
-  const req = new FakeRequest('POST', '/auth/login', {
-    host: 'gateway.example:3000',
-    'content-type': 'application/x-www-form-urlencoded',
-    accept: 'text/html',
-  })
+  const req = gatewayRequest('POST', '/auth/login', { 'content-type': 'application/x-www-form-urlencoded', accept: 'text/html' })
   const res = new FakeResponse()
   const pending = dispatch.middleware(
     req as unknown as ApiRequest,
@@ -383,19 +320,13 @@ test('HEAD /auth/login answers headers without a body (password and token-only m
     async login() { return {} },
   }
   const { dispatch } = setup(passwordAuth)
-  const head = await runHttp(dispatch, new FakeRequest('HEAD', '/auth/login', {
-    host: 'gateway.example:3000',
-    accept: 'text/html',
-  }))
+  const head = await runHttp(dispatch, gatewayRequest('HEAD', '/auth/login', { accept: 'text/html' }))
   assertLoginHtmlResponse(head, 200)
   assert.equal(head.body, '')
 
   const tokenAuth: AuthProvider = { kind: 'token', async verify() { return null } }
   const { dispatch: tokenDispatch } = setup(tokenAuth)
-  const head404 = await runHttp(tokenDispatch, new FakeRequest('HEAD', '/auth/login', {
-    host: 'gateway.example:3000',
-    accept: 'text/html',
-  }))
+  const head404 = await runHttp(tokenDispatch, gatewayRequest('HEAD', '/auth/login', { accept: 'text/html' }))
   assertLoginHtmlResponse(head404, 404)
   assert.equal(head404.body, '')
 })
@@ -408,11 +339,7 @@ test('unsupported login media is a JSON 400, never a form render', async () => {
     async login() { loginCalls += 1; return {} },
   }
   const { dispatch } = setup(auth)
-  const res = await runHttp(dispatch, new FakeRequest('POST', '/auth/login', {
-    host: 'gateway.example:3000',
-    'content-type': 'text/plain',
-    accept: 'text/html',
-  }), 'password=hunter2')
+  const res = await runHttp(dispatch, gatewayRequest('POST', '/auth/login', { 'content-type': 'text/plain', accept: 'text/html' }), 'password=hunter2')
   assert.equal(res.status, 400)
   assert.match(String(res.headers['content-type']), /^application\/json/)
   assert.deepEqual(JSON.parse(res.body), { error: 'bad request', code: 'bad_request' })
@@ -427,9 +354,7 @@ test('login method exposure is narrow: 405 carries allow and a JSON body', async
     async login() { return {} },
   }
   const { dispatch } = setup(auth)
-  const unsupported = await runHttp(dispatch, new FakeRequest('PUT', '/auth/login', {
-    host: 'gateway.example:3000',
-  }))
+  const unsupported = await runHttp(dispatch, gatewayRequest('PUT', '/auth/login'))
   assert.equal(unsupported.status, 405)
   assert.equal(unsupported.headers.allow, 'GET, HEAD, POST')
   assert.match(String(unsupported.headers['content-type']), /^application\/json/)
@@ -444,11 +369,7 @@ test('a cookie with a different name never triggers the expired hint', async () 
     async login() { return {} },
   }
   const { dispatch } = setup(auth)
-  const res = await runHttp(dispatch, new FakeRequest('GET', '/', {
-    host: 'gateway.example:3000',
-    accept: 'text/html',
-    cookie: 'other_session=eyJ.x',
-  }))
+  const res = await runHttp(dispatch, gatewayRequest('GET', '/', { accept: 'text/html', cookie: 'other_session=eyJ.x' }))
   assert.equal(res.status, 302)
   assert.equal(res.headers.location, '/auth/login')
 })
@@ -460,11 +381,7 @@ test('GET /auth/login with a valid session cookie still serves the page (public 
     async login() { return {} },
   }
   const { dispatch } = setup(auth)
-  const res = await runHttp(dispatch, new FakeRequest('GET', '/auth/login', {
-    host: 'gateway.example:3000',
-    accept: 'text/html',
-    cookie: 'dsh_gateway_session=eyJ.valid',
-  }))
+  const res = await runHttp(dispatch, gatewayRequest('GET', '/auth/login', { accept: 'text/html', cookie: 'dsh_gateway_session=eyJ.valid' }))
   assert.equal(res.status, 200)
   assert.ok(String(res.body).includes('action="/auth/login"'))
 })
@@ -476,11 +393,7 @@ test('uppercase Accept still negotiates HTML for browser forms', async () => {
     async login() { throw new Error('invalid password') },
   }
   const { dispatch } = setup(auth)
-  const res = await runHttp(dispatch, new FakeRequest('POST', '/auth/login', {
-    host: 'gateway.example:3000',
-    'content-type': 'application/x-www-form-urlencoded',
-    accept: 'TEXT/HTML',
-  }), 'password=hunter2')
+  const res = await runHttp(dispatch, gatewayRequest('POST', '/auth/login', { 'content-type': 'application/x-www-form-urlencoded', accept: 'TEXT/HTML' }), 'password=hunter2')
   assertLoginHtmlResponse(res, 401)
   assert.ok(String(res.body).includes('Incorrect password'))
 })

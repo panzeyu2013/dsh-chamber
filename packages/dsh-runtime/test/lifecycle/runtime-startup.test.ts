@@ -24,6 +24,7 @@ import {
   shouldProbeEnvWithDormantCorruptSelection,
 } from '../../src/runtime-startup.ts'
 import { REQUIRED_ACTIVATION_PROBES, type ProbeResult } from '../../src/activation-gate.ts'
+import { journalBuilder } from '../support/store-fixtures.ts'
 import type { ActivationJournal, OverrideRecord } from '../../src/dsh-runtime-store.ts'
 import { RunPhaseFixture, type RunPhaseEvent } from '../support/run-phase-fixture.ts'
 
@@ -31,34 +32,25 @@ const record = (pending: string | null): OverrideRecord => ({
   shellVersion: '0.1.4', chosenVersion: pending, resolvedVersion: pending,
   pending, swapAttempted: false,
 })
+/** makeStartupDeps with deleteOverride instrumented: reports how often the
+ *  re-arm cleared the durable override. */
+function countingStartupDeps(fixture: RunPhaseFixture): { deps: ReturnType<RunPhaseFixture['makeStartupDeps']>; deleted: () => number } {
+  let deleted = 0
+  const deps = fixture.makeStartupDeps()
+  const clear = deps.deleteOverride
+  deps.deleteOverride = () => { deleted += 1; clear() }
+  return { deps, deleted: () => deleted }
+}
+
 const pass = (): ProbeResult[] => REQUIRED_ACTIVATION_PROBES.map(name => ({ name, ok: true }))
 const fail = (): ProbeResult[] => pass().map(item => item.name === 'session/canOpenWorkspacePath' ? { ...item, ok: false } : item)
 
-function journal(
-  phase: ActivationJournal['phase'],
-  patch: Partial<ActivationJournal> = {},
-): ActivationJournal {
-  return {
-    schemaVersion: 1,
-    phase,
-    targetVersion: '0.2.0',
-    targetIsBuiltin: false,
-    manualRollback: false,
-    intentKind: 'version-switch',
-    sourceVersion: '0.1.0',
-    sourceIsBuiltin: false,
-    sourceWasKnownGood: true,
-    knownGoodVersion: '0.1.0',
-    preSwapSnapshotName: '0.1.0-pre-swap',
-    manualDataSnapshotName: null,
-    preRollbackStashName: null,
-    rollbackTarget: null,
-    nextIntent: null,
-    startedAt: '2026-08-23T00:00:00.000Z',
-    updatedAt: '2026-08-23T00:00:00.000Z',
-    ...patch,
-  }
-}
+const journal = journalBuilder({
+  targetVersion: '0.2.0',
+  sourceVersion: '0.1.0',
+  knownGoodVersion: '0.1.0',
+  preSwapSnapshotName: '0.1.0-pre-swap',
+})
 
 function intent(
   targetVersion = '0.2.0',
@@ -180,10 +172,7 @@ test('builtin applied-monitoring crash commit distinguishes reset from shell inv
         }),
       },
     })
-    const deps = fixture.makeStartupDeps()
-    let deleted = 0
-    const clear = deps.deleteOverride
-    deps.deleteOverride = () => { deleted += 1; clear() }
+    const { deps, deleted } = countingStartupDeps(fixture)
     const result = await runStartupPhase(deps)
     assert.equal(result.blockedReason, null)
     assert.equal(fixture.snapshotCalls, 0)
@@ -191,10 +180,10 @@ test('builtin applied-monitoring crash commit distinguishes reset from shell inv
     assert.equal(probeEvents(fixture).length, 0)
     assert.equal(fixture.currentState().journal.kind, 'missing')
     if (kind === 'reset-builtin') {
-      assert.equal(deleted, 1)
+      assert.equal(deleted(), 1)
       assert.equal(fixture.currentState().override, null)
     } else {
-      assert.equal(deleted, 0)
+      assert.equal(deleted(), 0)
       const stored = fixture.currentState().override
       assert.equal(stored?.invalidatedReason, 'shell-version-changed')
       assert.ok(stored?.invalidatedAt)
@@ -396,16 +385,13 @@ test('reset-builtin applies transactionally and deletes override only after buil
     pointer: '0.2.0',
     journal: { kind: 'valid', journal: intent('0.1.1-rc.2', true, 'reset-builtin') },
   })
-  const deps = fixture.makeStartupDeps()
-  let deleted = 0
-  const clear = deps.deleteOverride
-  deps.deleteOverride = () => { deleted += 1; clear() }
+  const { deps, deleted } = countingStartupDeps(fixture)
   deps.activationFacts = () => ({ sourceVersion: '0.2.0', sourceIsBuiltin: false, sourceWasKnownGood: true, knownGoodVersion: '0.2.0' })
   const result = await runStartupPhase(deps)
   assert.equal(result.applyOutcome?.status, 'applied')
   assert.equal(fixture.currentState().pointer, null)
   assert.deepEqual(probeEvents(fixture), [['0.1.1-rc.2', true]])
-  assert.equal(deleted, 1)
+  assert.equal(deleted(), 1)
   assert.equal(fixture.currentState().override, null)
   assert.equal(fixture.currentState().journal.kind, 'missing')
 })
@@ -419,16 +405,13 @@ test('reset-builtin supersedes and clears an existing pending selection transact
     pointer: '0.2.0',
     journal: { kind: 'valid', journal: intent('0.1.1-rc.2', true, 'reset-builtin') },
   })
-  const deps = fixture.makeStartupDeps()
-  let deleted = 0
-  const clear = deps.deleteOverride
-  deps.deleteOverride = () => { deleted += 1; clear() }
+  const { deps, deleted } = countingStartupDeps(fixture)
   deps.activationFacts = () => ({ sourceVersion: '0.2.0', sourceIsBuiltin: false, sourceWasKnownGood: true, knownGoodVersion: '0.2.0' })
   const result = await runStartupPhase(deps)
   assert.equal(result.applyOutcome?.status, 'applied')
   assert.equal(fixture.snapshotCalls, 1)
   assert.equal(fixture.currentState().pointer, null)
-  assert.equal(deleted, 1)
+  assert.equal(deleted(), 1)
   assert.equal(fixture.currentState().override, null)
   assert.equal(fixture.currentState().journal.kind, 'missing')
 })

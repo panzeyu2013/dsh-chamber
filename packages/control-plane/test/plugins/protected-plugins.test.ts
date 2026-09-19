@@ -35,6 +35,7 @@ import {
   suggestExactSpec,
   type ProtectedFacts,
 } from '../../src/protected-plugins.ts'
+import { putProfilePackage } from '../support/utils.ts'
 
 const SEEDS = ['@dsh-chamber/dsh-chamber-seed-client-graph', '@dsh-chamber/dsh-chamber-seed-git-worktree']
 const FAMILY = ['@deepseek-ai/dsh', '@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app', '@deepseek-ai/dsh-session']
@@ -515,19 +516,14 @@ test('decidePluginMutation: 空/非法名字是输入错误（invalid-name），
 
 test('verifyProfileFamilyConsistency: 传递副本必须 ∈ F 且同代；直接依赖（层本身）豁免', () => {
   const profileDir = mkdtempSync(join(tmpdir(), 'dsh-verify-'))
-  const put = (name: string, version: string) => {
-    const dir = join(profileDir, 'node_modules', name)
-    mkdirSync(dir, { recursive: true })
-    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name, version }))
-  }
   try {
     writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
       dependencies: { '@deepseek-ai/dsh-experimental-agent-team-profile': '0.1.5-rc.2' },
     }))
     // The explicitly requested layer is official-scope but NOT in F — exempt.
-    put('@deepseek-ai/dsh-experimental-agent-team-profile', '0.1.5-rc.2')
+    putProfilePackage(profileDir, '@deepseek-ai/dsh-experimental-agent-team-profile', { version: '0.1.5-rc.2' })
     // A hoisted transitive family copy at the right generation: fine.
-    put('@deepseek-ai/dsh-brand', '0.1.5-rc.2')
+    putProfilePackage(profileDir, '@deepseek-ai/dsh-brand', { version: '0.1.5-rc.2' })
     const clean = verifyProfileFamilyConsistency({
       profileDir,
       familyNames: ['@deepseek-ai/dsh-brand', ...PROFILE_BUNDLES_SNAPSHOT],
@@ -536,7 +532,7 @@ test('verifyProfileFamilyConsistency: 传递副本必须 ∈ F 且同代；直�
     assert.deepEqual(clean, { ok: true, checked: 1 })
 
     // A cross-generation copy is a finding...
-    put('@deepseek-ai/dsh-session', '0.1.4')
+    putProfilePackage(profileDir, '@deepseek-ai/dsh-session', { version: '0.1.4' })
     const drifted = verifyProfileFamilyConsistency({
       profileDir,
       familyNames: ['@deepseek-ai/dsh-brand', '@deepseek-ai/dsh-session', ...PROFILE_BUNDLES_SNAPSHOT],
@@ -549,7 +545,7 @@ test('verifyProfileFamilyConsistency: 传递副本必须 ∈ F 且同代；直�
     }
 
     // ...and a family-name copy the pinned release does not provide is one too.
-    put('@deepseek-ai/dsh-not-in-release', '1.0.0')
+    putProfilePackage(profileDir, '@deepseek-ai/dsh-not-in-release', { version: '1.0.0' })
     const outside = verifyProfileFamilyConsistency({ profileDir, familyNames: ['@deepseek-ai/dsh-brand'], runtimeVersion: '0.1.5-rc.2' })
     assert.equal(outside.ok, false)
     if (!outside.ok) {
@@ -591,11 +587,6 @@ test('familyVersionsFromLockfileClosure: v9/v6 键形、peer 后缀与多版本�
 
 test('verifyProfileFamilyConsistency: 真实安装树形状 —— opt-in 层的传递实现包由闭包豁免，改域 vendored 包按运行时提供的版本放行', () => {
   const profileDir = mkdtempSync(join(tmpdir(), 'dsh-verify-team-'))
-  const put = (name: string, manifest: Record<string, unknown>) => {
-    const dir = join(profileDir, 'node_modules', name)
-    mkdirSync(dir, { recursive: true })
-    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name, ...manifest }))
-  }
   try {
     // 实测形状（~/Library/Application Support/@dsh-chamber/desktop/state/dsh-home/profiles/web）：
     // 两个 bundle 是直接依赖，其余 6 个条目由 pnpm 提升上来。
@@ -605,26 +596,26 @@ test('verifyProfileFamilyConsistency: 真实安装树形状 —— opt-in 层的
         '@deepseek-ai/dsh-experimental-agent-team-web-profile': '0.1.5-rc.2',
       },
     }))
-    put('@deepseek-ai/dsh-experimental-agent-team-profile', {
+    putProfilePackage(profileDir, '@deepseek-ai/dsh-experimental-agent-team-profile', {
       version: '0.1.5-rc.2',
       dependencies: {
         '@deepseek-ai/dsh-experimental-agent-team': '0.1.5-rc.2',
         '@deepseek-ai/dsh-experimental-tool-agent-team': '0.1.5-rc.2',
       },
     })
-    put('@deepseek-ai/dsh-experimental-agent-team-web-profile', {
+    putProfilePackage(profileDir, '@deepseek-ai/dsh-experimental-agent-team-web-profile', {
       version: '0.1.5-rc.2',
       dependencies: { '@deepseek-ai/dsh-experimental-client-ui-agent-team': '0.1.5-rc.2' },
     })
-    put('@deepseek-ai/dsh-experimental-agent-team', {
+    putProfilePackage(profileDir, '@deepseek-ai/dsh-experimental-agent-team', {
       version: '0.1.5-rc.2',
       dependencies: { '@deepseek-ai/dsh-brand': '0.1.5-rc.2', '@deepseek-ai/schemastery': '^3.18.2' },
     })
-    put('@deepseek-ai/dsh-experimental-tool-agent-team', { version: '0.1.5-rc.2' })
-    put('@deepseek-ai/dsh-experimental-client-ui-agent-team', { version: '0.1.5-rc.2' })
-    put('@deepseek-ai/dsh-brand', { version: '0.1.5-rc.2' })
-    put('@deepseek-ai/schemastery', { version: '3.18.2', dependencies: { '@deepseek-ai/cosmokit': '^1.8.3' } })
-    put('@deepseek-ai/cosmokit', { version: '1.8.3' })
+    putProfilePackage(profileDir, '@deepseek-ai/dsh-experimental-tool-agent-team', { version: '0.1.5-rc.2' })
+    putProfilePackage(profileDir, '@deepseek-ai/dsh-experimental-client-ui-agent-team', { version: '0.1.5-rc.2' })
+    putProfilePackage(profileDir, '@deepseek-ai/dsh-brand', { version: '0.1.5-rc.2' })
+    putProfilePackage(profileDir, '@deepseek-ai/schemastery', { version: '3.18.2', dependencies: { '@deepseek-ai/cosmokit': '^1.8.3' } })
+    putProfilePackage(profileDir, '@deepseek-ai/cosmokit', { version: '1.8.3' })
 
     const verdict = verifyProfileFamilyConsistency({
       profileDir,
@@ -650,19 +641,14 @@ test('verifyProfileFamilyConsistency: 真实安装树形状 —— opt-in 层的
 
 test('verifyProfileFamilyConsistency: 闭包豁免不得掩盖版本歪斜（先版本、后闭包）', () => {
   const profileDir = mkdtempSync(join(tmpdir(), 'dsh-verify-skew-'))
-  const put = (name: string, manifest: Record<string, unknown>) => {
-    const dir = join(profileDir, 'node_modules', name)
-    mkdirSync(dir, { recursive: true })
-    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name, ...manifest }))
-  }
   try {
     writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
       dependencies: { 'third-party-layer': '1.0.0' },
     }))
-    put('third-party-layer', { version: '1.0.0', dependencies: { '@deepseek-ai/schemastery': '^3.17.0' } })
+    putProfilePackage(profileDir, 'third-party-layer', { version: '1.0.0', dependencies: { '@deepseek-ai/schemastery': '^3.17.0' } })
     // Reachable from the user's own layer (so the closure would exempt it) AND
     // runtime-provided at another version ⇒ version skew still reports.
-    put('@deepseek-ai/schemastery', { version: '3.17.0' })
+    putProfilePackage(profileDir, '@deepseek-ai/schemastery', { version: '3.17.0' })
     const skewed = verifyProfileFamilyConsistency({
       profileDir,
       familyNames: ['@deepseek-ai/schemastery'],
@@ -686,24 +672,19 @@ test('verifyProfileFamilyConsistency: 闭包豁免不得掩盖版本歪斜（先
 
 test('verifyProfileFamilyConsistency: 无版本事实时回退世代比较（闭包豁免仍独立生效）', () => {
   const profileDir = mkdtempSync(join(tmpdir(), 'dsh-verify-fallback-'))
-  const put = (name: string, manifest: Record<string, unknown>) => {
-    const dir = join(profileDir, 'node_modules', name)
-    mkdirSync(dir, { recursive: true })
-    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name, ...manifest }))
-  }
   try {
     writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
       dependencies: { '@deepseek-ai/dsh-experimental-agent-team-profile': '0.1.5-rc.2' },
     }))
-    put('@deepseek-ai/dsh-experimental-agent-team-profile', {
+    putProfilePackage(profileDir, '@deepseek-ai/dsh-experimental-agent-team-profile', {
       version: '0.1.5-rc.2',
       dependencies: { '@deepseek-ai/dsh-experimental-agent-team': '0.1.5-rc.2' },
     })
-    put('@deepseek-ai/dsh-experimental-agent-team', { version: '0.1.5-rc.2' })
+    putProfilePackage(profileDir, '@deepseek-ai/dsh-experimental-agent-team', { version: '0.1.5-rc.2' })
     // A family member WITHOUT a version fact falls back to the generation arm
     // (the pre-2026-12 behaviour), so the vendored package is still flagged —
     // the fix is the fact, not a blanket exemption.
-    put('@deepseek-ai/cosmokit', { version: '1.8.3' })
+    putProfilePackage(profileDir, '@deepseek-ai/cosmokit', { version: '1.8.3' })
     const verdict = verifyProfileFamilyConsistency({
       profileDir,
       familyNames: ['@deepseek-ai/cosmokit', ...PROFILE_BUNDLES_SNAPSHOT],
@@ -725,20 +706,15 @@ test('verifyProfileFamilyConsistency: 无版本事实时回退世代比较（闭
 
 test('verifyProfileFamilyConsistency: 部分族名字一次臂都没跑成时如实报 skipped（绝不聚合成无声通过）', () => {
   const profileDir = mkdtempSync(join(tmpdir(), 'dsh-verify-partial-'))
-  const put = (name: string, manifest: Record<string, unknown>) => {
-    const dir = join(profileDir, 'node_modules', name)
-    mkdirSync(dir, { recursive: true })
-    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name, ...manifest }))
-  }
   try {
     writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
       dependencies: { 'third-party-layer': '1.0.0' },
     }))
-    put('third-party-layer', { version: '1.0.0' })
-    put('@deepseek-ai/schemastery', { version: '3.18.2' })
+    putProfilePackage(profileDir, 'third-party-layer', { version: '1.0.0' })
+    putProfilePackage(profileDir, '@deepseek-ai/schemastery', { version: '3.18.2' })
     // Obviously skewed, but neither a version fact nor a runtime generation
     // exists for it ⇒ this name's arm NEVER runs.
-    put('@deepseek-ai/cosmokit', { version: '9.9.9' })
+    putProfilePackage(profileDir, '@deepseek-ai/cosmokit', { version: '9.9.9' })
     const facts = {
       profileDir,
       familyNames: ['@deepseek-ai/schemastery', '@deepseek-ai/cosmokit'],
@@ -823,11 +799,6 @@ test('resolveRuntimeFamily: 两条来源都产出 name→version（锁文件取 
 
 test('verifyProfileFamilyConsistency: 第三方层夹带官方 scope 名字不再被闭包豁免（2026-12 review 收紧）', () => {
   const profileDir = mkdtempSync(join(tmpdir(), 'dsh-verify-carry-'))
-  const put = (name: string, manifest: Record<string, unknown>) => {
-    const dir = join(profileDir, 'node_modules', name)
-    mkdirSync(dir, { recursive: true })
-    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name, ...manifest }))
-  }
   try {
     // A plain third-party layer whose closure carries an official-scope name the
     // runtime line does not provide. Only the closure of an OFFICIAL direct
@@ -836,8 +807,8 @@ test('verifyProfileFamilyConsistency: 第三方层夹带官方 scope 名字不�
     writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
       dependencies: { 'evil-layer': '1.0.0' },
     }))
-    put('evil-layer', { version: '1.0.0', dependencies: { '@deepseek-ai/dsh-session-helper': '0.1.5-rc.2' } })
-    put('@deepseek-ai/dsh-session-helper', { version: '0.1.5-rc.2' })
+    putProfilePackage(profileDir, 'evil-layer', { version: '1.0.0', dependencies: { '@deepseek-ai/dsh-session-helper': '0.1.5-rc.2' } })
+    putProfilePackage(profileDir, '@deepseek-ai/dsh-session-helper', { version: '0.1.5-rc.2' })
     const carried = verifyProfileFamilyConsistency({
       profileDir,
       familyNames: [...PROFILE_BUNDLES_SNAPSHOT],
@@ -856,11 +827,11 @@ test('verifyProfileFamilyConsistency: 第三方层夹带官方 scope 名字不�
     writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
       dependencies: { '@deepseek-ai/dsh-experimental-agent-team-profile': '0.1.5-rc.2' },
     }))
-    put('@deepseek-ai/dsh-experimental-agent-team-profile', {
+    putProfilePackage(profileDir, '@deepseek-ai/dsh-experimental-agent-team-profile', {
       version: '0.1.5-rc.2',
       dependencies: { '@deepseek-ai/dsh-experimental-agent-team': '0.1.5-rc.2' },
     })
-    put('@deepseek-ai/dsh-experimental-agent-team', {
+    putProfilePackage(profileDir, '@deepseek-ai/dsh-experimental-agent-team', {
       version: '0.1.5-rc.2',
       dependencies: { '@deepseek-ai/dsh-session-helper': '0.1.5-rc.2' },
     })
@@ -873,11 +844,11 @@ test('verifyProfileFamilyConsistency: 第三方层夹带官方 scope 名字不�
 
     // ...but a THIRD-PARTY intermediary inside an official layer's closure must
     // not be able to explain an official name (real closures carry zod/react).
-    put('@deepseek-ai/dsh-experimental-agent-team', {
+    putProfilePackage(profileDir, '@deepseek-ai/dsh-experimental-agent-team', {
       version: '0.1.5-rc.2',
       dependencies: { zod: '4.6.4' },
     })
-    put('zod', { version: '4.6.4', dependencies: { '@deepseek-ai/dsh-session-helper': '0.1.5-rc.2' } })
+    putProfilePackage(profileDir, 'zod', { version: '4.6.4', dependencies: { '@deepseek-ai/dsh-session-helper': '0.1.5-rc.2' } })
     const deep = verifyProfileFamilyConsistency({
       profileDir,
       familyNames: [...PROFILE_BUNDLES_SNAPSHOT],

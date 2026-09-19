@@ -8,7 +8,7 @@
  * process test proves detached-group reclamation when the leader exits first.
  */
 
-import { after, test } from 'node:test'
+import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
@@ -22,21 +22,9 @@ import {
   RpcTransportError,
   pendingStats,
 } from '../../src/dsh-client.ts'
-import { createLocalConnection } from '../../src/local-connection.ts'
 import type { SpawnedDsh } from '../../src/local-connection.ts'
 import { seedDshHomeDefaults } from '../../src/index.ts'
 
-/**
- * The "no such path" sentinel these protocol tests pass as state dir /
- * dshHome / workspace: the paths must NOT exist (that is the case under test),
- * but a real spawned host still writes its own logs under `stateDir`, so the
- * sentinel lives inside a per-run temp root instead of the shared `/tmp`
- * (2026-09 cleanup: `test:control-plane` used to leave `/tmp/none/host-logs`
- * behind on every run).
- */
-const ABSENT_ROOT = mkdtempSync(join(tmpdir(), 'dsh-chamber-protocol-absent-'))
-const ABSENT_PATH = join(ABSENT_ROOT, 'none')
-after(() => { rmSync(ABSENT_ROOT, { recursive: true, force: true }) })
 import {
   DEFAULT_DSH_START_PORT,
   DSH_SPAWN_NON_RETRYABLE_CODE,
@@ -47,7 +35,7 @@ import {
   writePidRecord,
 } from '../../src/spawn-dsh.ts'
 import { commandMatchesEntry, runReaper } from '../../src/reaper.ts'
-import { jsonResponse, mockIdentityProbe, waitFor } from '../support/utils.ts'
+import { absentConnection, jsonResponse, mockIdentityProbe, quietLogger, waitFor } from '../support/utils.ts'
 
 const HOST = `http://127.0.0.1:${DEFAULT_DSH_START_PORT}`
 
@@ -294,7 +282,6 @@ test('malformed error branch degrades to unknown_rpc_code instead of dropping', 
 // local-connection (v4 host management): spawn/ready, health, restart, stop
 // ---------------------------------------------------------------------------
 
-const quietLogger = { log: () => {}, warn: () => {}, error: () => {} }
 
 /**
  * A dsh port base that is free right now. spawnDsh's default base (17510) is the
@@ -337,11 +324,7 @@ function mockSpawn(): Promise<SpawnedDsh> {
 
 test('start spawns and lands on ready; stop terminates and lands on stopped', async () => {
   const probe = mockIdentityProbe()
-  const connection = createLocalConnection({
-    stateDir: ABSENT_PATH,
-    dshHome: ABSENT_PATH,
-    dshWorkspacePath: ABSENT_PATH,
-    logger: quietLogger,
+  const connection = absentConnection({
     deps: { spawnDsh: mockSpawn, probeHostIdentity: probe.probeHostIdentity },
   })
   assert.equal(connection.getState(), 'stopped')
@@ -357,11 +340,7 @@ test('start spawns and lands on ready; stop terminates and lands on stopped', as
 })
 
 test('a spawn failure is fail-loud: state lands on error and start() rejects', async () => {
-  const connection = createLocalConnection({
-    stateDir: ABSENT_PATH,
-    dshHome: ABSENT_PATH,
-    dshWorkspacePath: ABSENT_PATH,
-    logger: quietLogger,
+  const connection = absentConnection({
     deps: {
       spawnDsh: async () => { throw new Error('port occupied after 5 attempts') },
       probeHostIdentity: mockIdentityProbe().probeHostIdentity,
@@ -380,11 +359,7 @@ test('a runtime gate closed after queueing is re-read before seed and spawn', as
   let releaseCheckpoint!: () => void
   const checkpointReached = new Promise<void>(resolve => { announceCheckpoint = resolve })
   const checkpointRelease = new Promise<void>(resolve => { releaseCheckpoint = resolve })
-  const connection = createLocalConnection({
-    stateDir: ABSENT_PATH,
-    dshHome: ABSENT_PATH,
-    dshWorkspacePath: ABSENT_PATH,
-    logger: quietLogger,
+  const connection = absentConnection({
     options: {
       canSpawn: () => blocked ? { ok: false, reason: 'runtime restore in progress' } : { ok: true },
       patchPath: () => { seeds += 1; return null },
@@ -416,11 +391,7 @@ test('a runtime gate closed after queueing is re-read before seed and spawn', as
 
 test('health failures count into degraded; success resets; threshold triggers a restart', async () => {
   const probe = mockIdentityProbe()
-  const connection = createLocalConnection({
-    stateDir: ABSENT_PATH,
-    dshHome: ABSENT_PATH,
-    dshWorkspacePath: ABSENT_PATH,
-    logger: quietLogger,
+  const connection = absentConnection({
     options: { healthIntervalMs: 30, healthProbeTimeoutMs: 1000, restartFailureThreshold: 3, failureThrottleMs: 0 },
     deps: { spawnDsh: mockSpawn, probeHostIdentity: probe.probeHostIdentity },
   })
@@ -464,11 +435,7 @@ test('a dead child skips counting and restarts immediately', async () => {
     stop: async () => {},
   }
   const spawns: () => Promise<SpawnedDsh> = async () => child
-  const connection = createLocalConnection({
-    stateDir: ABSENT_PATH,
-    dshHome: ABSENT_PATH,
-    dshWorkspacePath: ABSENT_PATH,
-    logger: quietLogger,
+  const connection = absentConnection({
     options: { healthIntervalMs: 0, restartWindowMs: 5000 },
     deps: { spawnDsh: spawns, probeHostIdentity: probe.probeHostIdentity },
   })
@@ -502,11 +469,7 @@ test('stop waits for and reclaims an inside-spawn automatic restart', async () =
   const restartSpawnRelease = new Promise<SpawnedDsh>(resolve => { releaseRestartSpawn = resolve })
   let restartSignal: AbortSignal | undefined
   let staleStops = 0
-  const connection = createLocalConnection({
-    stateDir: ABSENT_PATH,
-    dshHome: ABSENT_PATH,
-    dshWorkspacePath: ABSENT_PATH,
-    logger: quietLogger,
+  const connection = absentConnection({
     options: { healthIntervalMs: 0 },
     deps: {
       spawnDsh: async options => {
@@ -732,11 +695,7 @@ test('restart window exhaustion lands on restart-exhausted (manual start require
       stop: async () => {},
     }
   }
-  const connection = createLocalConnection({
-    stateDir: ABSENT_PATH,
-    dshHome: ABSENT_PATH,
-    dshWorkspacePath: ABSENT_PATH,
-    logger: quietLogger,
+  const connection = absentConnection({
     options: {
       healthIntervalMs: 20,
       healthProbeTimeoutMs: 500,

@@ -22,13 +22,40 @@
  *                          local-connection / spawn-dsh do not); the shared
  *                          copy registers cleanup iff a context is passed
  */
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { TestContext } from 'node:test'
+import { after, type TestContext } from 'node:test'
 
 import { DEFAULT_DSH_START_PORT } from '../../src/spawn-dsh.ts'
+import { createControlPlane } from '../../src/index.ts'
+import { createLocalConnection } from '../../src/local-connection.ts'
 import type { SpawnedDsh } from '../../src/local-connection.ts'
+
+export const quietLogger = { log: () => {}, warn: () => {}, error: () => {} }
+
+/**
+ * The "no such path" sentinel shared by the suites that must not touch a real
+ * state dir. It must not exist, and it must not sit in the shared `/tmp`: a
+ * real spawned host writes its logs under `stateDir` (2026-09 cleanup).
+ */
+export const ABSENT_ROOT = mkdtempSync(join(tmpdir(), 'dsh-cp-absent-'))
+export const ABSENT_PATH = join(ABSENT_ROOT, 'none')
+after(() => { rmSync(ABSENT_ROOT, { recursive: true, force: true }) })
+
+/** createLocalConnection over the absent-path sentinel and the quiet logger;
+ *  the caller supplies the options and the per-test spawn/probe `deps` wire. */
+export function absentConnection(
+  fields: Partial<Omit<Parameters<typeof createLocalConnection>[0], 'stateDir' | 'dshHome' | 'logger'>>,
+): ReturnType<typeof createLocalConnection> {
+  return createLocalConnection({
+    stateDir: ABSENT_PATH,
+    dshHome: ABSENT_PATH,
+    dshWorkspacePath: ABSENT_PATH,
+    logger: quietLogger,
+    ...fields,
+  })
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
@@ -54,6 +81,72 @@ export function tempDir(t?: TestContext, prefix = 'dsh-cp-test-'): string {
   const dir = mkdtempSync(join(tmpdir(), prefix))
   t?.after(() => rmSync(dir, { recursive: true, force: true }))
   return dir
+}
+
+
+/** Windows without developer mode (or an fs that forbids symlinks) cannot run
+ *  the symlink fixtures: skip that single case instead of failing the suite.
+ *  Returns true when the case was skipped. */
+export function skipSymlinksUnavailable(error: unknown, t: TestContext): boolean {
+  if (['EPERM', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+    t.skip('symbolic links are unavailable on this platform')
+    return true
+  }
+  return false
+}
+
+
+/** A managed dsh profile whose own user patch layer carries `patchContent`
+ *  (web profile: package.json + optional cordis.patch.yml). Returns dshHome. */
+export function writeLocalProfileFixture(dir: string, patchContent: string | null): string {
+  const dshHome = join(dir, 'dsh-home')
+  const profileDir = join(dshHome, 'profiles', 'web')
+  mkdirSync(profileDir, { recursive: true })
+  writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
+    name: 'dsh-profile-web',
+    private: true,
+    dependencies: {},
+    dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'], patchReload: 'live' } },
+  }))
+  if (patchContent !== null) writeFileSync(join(profileDir, 'cordis.patch.yml'), patchContent)
+  return dshHome
+}
+
+/** Write a package.json into the managed profile's node_modules. */
+export function putProfilePackage(profileDir: string, name: string, manifest: Record<string, unknown> = {}): void {
+  const dir = join(profileDir, 'node_modules', name)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ name, ...manifest }))
+}
+
+/** A healthy localConnectionDeps wire for createControlPlane suites. */
+export const healthyLocalConnectionDeps = {
+  spawnDsh: async (): Promise<SpawnedDsh> => ({
+    child: { on() {}, exitCode: null },
+    port: DEFAULT_DSH_START_PORT,
+    stop: async () => {},
+  }),
+  probeHostIdentity: async () => true,
+}
+
+/** createControlPlane over a temp state dir; a suite stages only the host
+ *  package it seeds, so the other host-package source dirs stay non-existent. */
+export function hostGraphPlane(
+  dir: string,
+  overrides: Partial<Parameters<typeof createControlPlane>[0]> = {},
+): ReturnType<typeof createControlPlane> {
+  return createControlPlane({
+    stateDir: dir,
+    port: 0,
+    dshWorkspacePath: join(dir, 'dsh'),
+    hostGraphPackageSourceDir: join(dir, 'no-graph-package'),
+    hostGitWorktreePackageSourceDir: join(dir, 'no-git-package'),
+    hostArchiveCleanupPackageSourceDir: join(dir, 'no-archive-cleanup-package'),
+    hostOpenInPackageSourceDir: join(dir, 'no-open-in-package'),
+    logger: quietLogger,
+    localConnectionDeps: healthyLocalConnectionDeps,
+    ...overrides,
+  })
 }
 
 /** A fake spawn: immediate ready on a fixed port; counts spawn attempts. */

@@ -14,9 +14,19 @@ import {
   type Logger,
   type PlaneHandle,
 } from '@dsh-chamber/control-plane'
+import {
+  activationProbeNamesForDomains,
+  writeActivationIntent,
+  writeCurrentPointer,
+  writeOverride,
+} from '@dsh-chamber/dsh-runtime'
 import type { GatewayConfig } from '../../src/config.ts'
 import { syncedHostDomainProbeNames } from '../../src/plugins.ts'
-import { activationProbeNamesForDomains } from '@dsh-chamber/dsh-runtime'
+import {
+  createGatewayRuntimeManager,
+  type GatewayRuntimeManager,
+  type GatewayRuntimeManagerOptions,
+} from '../../src/runtime-manager.ts'
 import { type RuntimeRoutes } from '../../src/runtime-routes.ts'
 import { FakeRequest, FakeResponse } from './utils.ts'
 
@@ -114,6 +124,83 @@ export async function waitForMutationSettle(manager: { mutationInProgress(): boo
  * seeds every registry package (full 7-name closed set). */
 export function probeResultsFor(stateDir: string): readonly string[] {
   return activationProbeNamesForDomains(syncedHostDomainProbeNames(stateDir))
+}
+
+/** Create <stateDir>/dsh-home and write its settings.json; returns the home path. */
+export function writeDshHome(stateDir: string, settingsJson: string): string {
+  const home = join(stateDir, 'dsh-home')
+  mkdirSync(home, { recursive: true })
+  writeFileSync(join(home, 'settings.json'), settingsJson)
+  return home
+}
+
+/** Arm the canonical non-builtin version-switch intent. */
+export function writeVersionSwitchIntent(stateDir: string, targetVersion: string): void {
+  writeActivationIntent(stateDir, {
+    targetVersion, targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
+  })
+}
+
+/** Shell-pinned override row (shellVersion = the running gateway package version).
+ *  resolvedVersion defaults to chosenVersion; swapAttempted defaults to false. */
+export function writeOverrideRow(stateDir: string, fields: {
+  chosenVersion: string | null
+  pending: string | null
+  shellVersion?: string
+  resolvedVersion?: string
+  swapAttempted?: boolean
+  selectedOnly?: boolean
+  lastOutcome?: string
+  lastError?: string | null
+  restoreOutcome?: 'none' | 'complete' | 'half' | 'incomplete' | null
+}): void {
+  writeOverride(stateDir, {
+    shellVersion: gatewayPackageVersion,
+    resolvedVersion: fields.chosenVersion,
+    swapAttempted: false,
+    ...fields,
+  })
+}
+
+/** The canonical pending version-switch fixture: valid tree, pending settings.json,
+ *  armed intent and the matching override row. Returns the dsh-home path. */
+export function armPendingSwitch(stateDir: string, version: string, settingsJson = '{"pending":true}'): string {
+  makeValidTree(stateDir, version)
+  const home = writeDshHome(stateDir, settingsJson)
+  writeVersionSwitchIntent(stateDir, version)
+  writeOverrideRow(stateDir, { chosenVersion: version, pending: version, selectedOnly: false })
+  return home
+}
+
+/** F7 fixture: an applied candidate version over a still-current older tree, with its
+ *  dsh-home settings.json. Returns the dsh-home path for later migration assertions. */
+export function armAppliedCandidate(
+  stateDir: string,
+  current = '1.0.0',
+  candidate = '2.0.0',
+  settingsJson = '{"source":"v1"}',
+): string {
+  makeValidTree(stateDir, current)
+  makeValidTree(stateDir, candidate)
+  writeCurrentPointer(stateDir, current)
+  writeVersionSwitchIntent(stateDir, candidate)
+  writeOverrideRow(stateDir, { chosenVersion: candidate, resolvedVersion: current, pending: candidate, lastOutcome: 'applied' })
+  return writeDshHome(stateDir, settingsJson)
+}
+
+/** The test probe seam: answer exactly the derived visible probe-name set as OK. */
+export function derivedProbe(stateDir: string): NonNullable<GatewayRuntimeManagerOptions['probeCandidate']> {
+  return async () => probeResultsFor(stateDir).map(name => ({ name, ok: true }))
+}
+
+/** Runtime manager over the shared config/plane/logger. The probe seam stays
+ *  real unless the caller injects one (derivedProbe for the derived-set shape). */
+export function runtimeManager(
+  stateDir: string,
+  plane: PlaneHandle,
+  overrides: Partial<GatewayRuntimeManagerOptions> = {},
+): GatewayRuntimeManager {
+  return createGatewayRuntimeManager({ config: config(stateDir), plane, logger: silentLogger, ...overrides })
 }
 
 export function makeValidTree(stateDir: string, version: string): void {

@@ -1,10 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
 import { chmodSync, mkdtempSync, existsSync, lstatSync, mkdirSync, readFileSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { shouldPromote, recordProbePass, noteBoot, promoteDueCandidates, removeKnownGoodCandidate, resetCandidateHealthWindow, knownGoodCandidatesPath, DEFAULT_HEALTH_POLICY } from '../../src/known-good-monitor.ts';
+import { criticalFilesFor } from '../support/store-fixtures.ts';
+
+/** A base dir holding one probed 0.2.0 tree (the promotion fixture). */
+function kgFixture(t0 = 1_000_000_000_000): { base: string; t0: number } {
+  const base = mkdtempSync(join(tmpdir(), 'dsh-kg-'));
+  makeVersionTree(base, '0.2.0');
+  recordProbePass(base, '0.2.0', t0);
+  return { base, t0 };
+}
 
 function makeVersionTree(base: string, version: string) {
   const tree = join(base, 'dsh-runtime', version);
@@ -15,13 +23,7 @@ function makeVersionTree(base: string, version: string) {
     name: '@deepseek-ai/dsh',
     version,
   }));
-  const criticalFiles = Object.fromEntries([
-    'node_modules/@deepseek-ai/dsh/package.json',
-    'node_modules/@deepseek-ai/dsh/lib/bin.js',
-  ].map(relativePath => [
-    relativePath,
-    `sha256-${createHash('sha256').update(readFileSync(join(tree, relativePath))).digest('base64')}`,
-  ]));
+  const criticalFiles = criticalFilesFor(tree);
   writeFileSync(join(tree, 'package.json'), JSON.stringify({
     dependencies: { '@deepseek-ai/dsh': version },
     dsh: { platform: `${process.platform}-${process.arch}`, criticalFiles },
@@ -51,10 +53,7 @@ test('shouldPromote: requires BOTH min uptime AND min boots (§3.4 sustained-hea
 });
 
 test('recordProbePass → noteBoot → promoteDueCandidates: candidate becomes known-good only when due', () => {
-  const base = mkdtempSync(join(tmpdir(), 'dsh-kg-'));
-  const t0 = 1_000_000_000_000;
-  makeVersionTree(base, '0.2.0');
-  recordProbePass(base, '0.2.0', t0);
+  const { base, t0 } = kgFixture();
   // Not due (0 boots, < 24h) → no promotion
   assert.deepEqual(promoteDueCandidates(base, t0 + 1000), []);
   noteBoot(base, '0.2.0', t0 + 500);
@@ -67,10 +66,7 @@ test('recordProbePass → noteBoot → promoteDueCandidates: candidate becomes k
 });
 
 test('offline wall clock: reopening after 24h resets the window and does not promote', () => {
-  const base = mkdtempSync(join(tmpdir(), 'dsh-kg-'));
-  const t0 = 1_000_000_000_000;
-  makeVersionTree(base, '0.2.0');
-  recordProbePass(base, '0.2.0', t0);
+  const { base, t0 } = kgFixture();
   noteBoot(base, '0.2.0', t0 + 1000);
 
   // The app/host was offline. Main invokes this at the next startup before
@@ -83,10 +79,7 @@ test('offline wall clock: reopening after 24h resets the window and does not pro
 });
 
 test('continuous healthy window: 24h plus a successful boot promotes', () => {
-  const base = mkdtempSync(join(tmpdir(), 'dsh-kg-'));
-  const t0 = 1_000_000_000_000;
-  makeVersionTree(base, '0.2.0');
-  recordProbePass(base, '0.2.0', t0);
+  const { base, t0 } = kgFixture();
   noteBoot(base, '0.2.0', t0 + 1000);
   assert.deepEqual(promoteDueCandidates(base, t0 + DEFAULT_HEALTH_POLICY.minUptimeMs - 1), []);
   assert.deepEqual(promoteDueCandidates(base, t0 + DEFAULT_HEALTH_POLICY.minUptimeMs), ['0.2.0']);
@@ -126,10 +119,7 @@ test('legacy candidate is retained but cannot promote from offline age', () => {
 });
 
 test('promoteDueCandidates: unsafe version never promoted', () => {
-  const base = mkdtempSync(join(tmpdir(), 'dsh-kg-'));
-  const t0 = 1_000_000_000_000;
-  makeVersionTree(base, '0.2.0');
-  recordProbePass(base, '0.2.0', t0);
+  const { base, t0 } = kgFixture();
   // A second candidate that is unsafe would be written by recordProbePass's
   // assertSafeVersion throwing, so verify that path throws instead.
   assert.throws(() => recordProbePass(base, '../evil', t0));

@@ -21,6 +21,7 @@ import {
   makeProxy,
   quietLogger,
   sleep,
+  proxyFor,
 } from '../support/proxy-fakes.ts'
 
 // ---------------------------------------------------------------------------
@@ -29,13 +30,7 @@ import {
 
 test('http: an upstream that never answers headers → explicit 504 upstream_timeout', async () => {
   const upstream = fakeHttpRequest(() => undefined) // hang: no response, no error
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
-    httpRequest: upstream.fn,
-    upstreamTimeoutMs: 40,
-  })
+  const proxy = proxyFor(upstream.fn, { upstreamTimeoutMs: 40 })
   const res = fakeResponse()
   await proxy.handleHttp(fakeRequest('/api/i/local/api/session/list', 'GET'), res)
   assert.equal(res.status, null) // not answered synchronously — the timeout decides
@@ -66,13 +61,7 @@ test('http: IncomingMessage close after parsing does not abort a live upstream r
     request.end = () => { pending = request }
     return request
   }
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => 17510,
-    httpRequest: fn,
-    upstreamTimeoutMs: 200,
-  })
+  const proxy = proxyFor(fn, { upstreamTimeoutMs: 200, getLocalDshPort: () => 17510 })
   const request = fakeRequest('/api/i/local/api/session/list', 'GET')
   const response = fakeResponse()
   await proxy.handleHttp(request, response)
@@ -105,13 +94,7 @@ test('http: unfinished downstream response close aborts upstream and clears time
     request.end = () => {}
     return request
   }
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => 17510,
-    httpRequest: fn,
-    upstreamTimeoutMs: 30,
-  })
+  const proxy = proxyFor(fn, { upstreamTimeoutMs: 30, getLocalDshPort: () => 17510 })
   const response = fakeResponse()
   await proxy.handleHttp(fakeRequest('/api/i/local/api/session/list', 'GET'), response)
   ;(response as unknown as EventEmitter).emit('close')
@@ -123,14 +106,7 @@ test('http: unfinished downstream response close aborts upstream and clears time
 
 test('http: concurrent request budget rejects excess work before opening another upstream', async () => {
   const upstream = fakeHttpRequest(() => undefined)
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
-    httpRequest: upstream.fn,
-    maxConcurrentHttpRequests: 1,
-    upstreamTimeoutMs: 30,
-  })
+  const proxy = proxyFor(upstream.fn, { maxConcurrentHttpRequests: 1, upstreamTimeoutMs: 30 })
   const first = fakeResponse()
   await proxy.handleHttp(fakeRequest('/api/i/local/api/session/list', 'GET'), first)
   assert.equal(proxy.getDiagnostics().activeHttpRequests, 1)
@@ -163,13 +139,7 @@ test('http: a stalled client upload releases its body and request budgets with 4
       }
     },
   }) as unknown as ProxyRequest
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
-    httpRequest: upstream.fn,
-    clientBodyIdleTimeoutMs: 30,
-  })
+  const proxy = proxyFor(upstream.fn, { clientBodyIdleTimeoutMs: 30 })
   const response = fakeResponse()
   await proxy.handleHttp(stalled, response)
   assert.equal(response.status, 408)
@@ -205,13 +175,7 @@ test('http: request-body bytes stay reserved while upstream write is backpressur
     }
     return req
   }
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => 17510,
-    httpRequest: fn,
-    maxBufferedRequestBytes: 3,
-  })
+  const proxy = proxyFor(fn, { maxBufferedRequestBytes: 3, getLocalDshPort: () => 17510 })
   const response = fakeResponse()
   await proxy.handleHttp(fakeRequest('/api/i/local/api/upload', 'POST', { 'content-length': '3' }, 'abc'), response)
   assert.equal(response.status, null)
@@ -341,14 +305,7 @@ function delayedHttpRequest(delayMs: number, body = '{"ok":true}') {
 
 test('long-RPC window: commands/execute answers after the ordinary idle window', async () => {
   const upstream = delayedHttpRequest(150)
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
-    httpRequest: upstream.fn,
-    upstreamTimeoutMs: 40,
-    longRpcUpstreamTimeoutMs: 400,
-  })
+  const proxy = proxyFor(upstream.fn, { upstreamTimeoutMs: 40, longRpcUpstreamTimeoutMs: 400 })
   const res = fakeResponse()
   await proxy.handleHttp(fakeRequest('/api/i/local/api/commands/execute', 'POST'), res)
   assert.equal(res.status, null)
@@ -367,14 +324,7 @@ test('long-RPC window: commands/execute answers after the ordinary idle window',
 
 test('long-RPC window is path-scoped: POST on an ordinary endpoint keeps the ordinary idle window', async () => {
   const upstream = delayedHttpRequest(150)
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
-    httpRequest: upstream.fn,
-    upstreamTimeoutMs: 40,
-    longRpcUpstreamTimeoutMs: 400,
-  })
+  const proxy = proxyFor(upstream.fn, { upstreamTimeoutMs: 40, longRpcUpstreamTimeoutMs: 400 })
   const res = fakeResponse()
   await proxy.handleHttp(fakeRequest('/api/i/local/api/session/list', 'POST'), res)
   assert.equal(res.status, null)
@@ -387,14 +337,7 @@ test('long-RPC window is path-scoped: POST on an ordinary endpoint keeps the ord
 
 test('long-RPC window is method-scoped: GET on commands/execute keeps the ordinary idle window', async () => {
   const upstream = delayedHttpRequest(150)
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
-    httpRequest: upstream.fn,
-    upstreamTimeoutMs: 40,
-    longRpcUpstreamTimeoutMs: 400,
-  })
+  const proxy = proxyFor(upstream.fn, { upstreamTimeoutMs: 40, longRpcUpstreamTimeoutMs: 400 })
   const res = fakeResponse()
   await proxy.handleHttp(fakeRequest('/api/i/local/api/commands/execute', 'GET'), res)
   assert.equal(res.status, null)
@@ -407,14 +350,7 @@ test('long-RPC window is method-scoped: GET on commands/execute keeps the ordina
 
 test('long-RPC window keeps a fuse: total silence → explicit 504 upstream_timeout', async () => {
   const upstream = fakeHttpRequest(() => undefined) // hang: no response, no error
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
-    httpRequest: upstream.fn,
-    upstreamTimeoutMs: 40,
-    longRpcUpstreamTimeoutMs: 80,
-  })
+  const proxy = proxyFor(upstream.fn, { upstreamTimeoutMs: 40, longRpcUpstreamTimeoutMs: 80 })
   const res = fakeResponse()
   try {
     await proxy.handleHttp(fakeRequest('/api/i/local/api/commands/execute', 'POST'), res)
@@ -438,15 +374,7 @@ test('long-RPC window keeps a fuse: total silence → explicit 504 upstream_time
 
 test('long-RPC window: an explicit empty path list disables the exemption', async () => {
   const upstream = fakeHttpRequest(() => undefined) // hang
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
-    httpRequest: upstream.fn,
-    upstreamTimeoutMs: 40,
-    longRpcUpstreamTimeoutMs: 400,
-    longRpcPaths: [],
-  })
+  const proxy = proxyFor(upstream.fn, { upstreamTimeoutMs: 40, longRpcUpstreamTimeoutMs: 400, longRpcPaths: [] })
   const res = fakeResponse()
   await proxy.handleHttp(fakeRequest('/api/i/local/api/commands/execute', 'POST'), res)
   assert.equal(res.status, null)
@@ -458,14 +386,7 @@ test('long-RPC window: an explicit empty path list disables the exemption', asyn
 
 test('long-RPC window: archiveCleanup/purge (chamber host domain) is exempted too', async () => {
   const upstream = delayedHttpRequest(150)
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
-    httpRequest: upstream.fn,
-    upstreamTimeoutMs: 40,
-    longRpcUpstreamTimeoutMs: 400,
-  })
+  const proxy = proxyFor(upstream.fn, { upstreamTimeoutMs: 40, longRpcUpstreamTimeoutMs: 400 })
   const res = fakeResponse()
   await proxy.handleHttp(fakeRequest('/api/i/local/api/archiveCleanup/purge', 'POST'), res)
   assert.equal(res.status, null)
@@ -495,14 +416,7 @@ test('long-RPC window: after headers, a sparse non-SSE body idles across ordinar
     }
     return request
   }
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
-    httpRequest: fn,
-    upstreamTimeoutMs: 40,
-    longRpcUpstreamTimeoutMs: 400,
-  })
+  const proxy = proxyFor(fn, { upstreamTimeoutMs: 40, longRpcUpstreamTimeoutMs: 400 })
   const res = fakeResponse()
   await proxy.handleHttp(fakeRequest('/api/i/local/api/commands/execute', 'POST'), res)
   await sleep(120) // past two ordinary windows; second chunk not yet sent
@@ -517,13 +431,7 @@ test('long-RPC window: after headers, a sparse non-SSE body idles across ordinar
 
 test('upgrade: a WebSocket handshake that never completes → explicit 504 on the socket', async () => {
   const upstream = fakeHttpRequest(() => undefined) // hang
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
-    httpRequest: upstream.fn,
-    upstreamTimeoutMs: 40,
-  })
+  const proxy = proxyFor(upstream.fn, { upstreamTimeoutMs: 40 })
   const socket = fakeSocket()
   await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux'), socket, Buffer.alloc(0))
   await sleep(80)
@@ -541,13 +449,7 @@ test('upgrade: request close does not abort the handshake; downstream socket clo
     request.end = () => {}
     return request
   }
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => 17510,
-    httpRequest: fn,
-    upstreamTimeoutMs: 200,
-  })
+  const proxy = proxyFor(fn, { upstreamTimeoutMs: 200, getLocalDshPort: () => 17510 })
   const request = fakeRequest('/api/i/local/api/remote.mux')
   const socket = fakeSocket()
   await proxy.handleUpgrade(request, socket, Buffer.alloc(0))
@@ -559,13 +461,7 @@ test('upgrade: request close does not abort the handshake; downstream socket clo
 
 test('transport revoke is owner-scoped and closeAllStreams aborts every remaining pending WebSocket handshake', async () => {
   const upstream = fakeHttpRequest(() => undefined)
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
-    httpRequest: upstream.fn,
-    upstreamTimeoutMs: 5_000,
-  })
+  const proxy = proxyFor(upstream.fn, { upstreamTimeoutMs: 5_000 })
   proxy.registerTransport('dsh:pending', 'http://127.0.0.1:19191')
   const local = fakeSocket()
   const remote = fakeSocket()
@@ -621,14 +517,7 @@ function heartbeatUpgradeFactory() {
 
 test('heartbeat: pings the browser only and keeps a ponging stream alive', async () => {
   const factory = heartbeatUpgradeFactory()
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
-    httpRequest: factory.fn,
-    wsPingIntervalMs: 20,
-    wsPingMissesBeforeTeardown: 1,
-  })
+  const proxy = proxyFor(factory.fn, { wsPingIntervalMs: 20, wsPingMissesBeforeTeardown: 1 })
   const down = fakeSocket()
   await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux', 'GET'), down, Buffer.alloc(0))
   const up = factory.upstreamSocket
@@ -659,14 +548,7 @@ test('heartbeat: pings the browser only and keeps a ponging stream alive', async
 
 test('heartbeat: missed pongs tear the splice down so the browser reconnects', async () => {
   const factory = heartbeatUpgradeFactory()
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
-    httpRequest: factory.fn,
-    wsPingIntervalMs: 20,
-    wsPingMissesBeforeTeardown: 1,
-  })
+  const proxy = proxyFor(factory.fn, { wsPingIntervalMs: 20, wsPingMissesBeforeTeardown: 1 })
   const down = fakeSocket()
   await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux', 'GET'), down, Buffer.alloc(0))
   const up = factory.upstreamSocket
@@ -681,14 +563,7 @@ test('heartbeat: missed pongs tear the splice down so the browser reconnects', a
 
 test('heartbeat: teardown by other means stops the heartbeat (no stray pings after)', async () => {
   const factory = heartbeatUpgradeFactory()
-  const proxy = createInstanceProxy({
-    logger: quietLogger,
-    getLocalState: () => 'ready',
-    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
-    httpRequest: factory.fn,
-    wsPingIntervalMs: 20,
-    wsPingMissesBeforeTeardown: 1,
-  })
+  const proxy = proxyFor(factory.fn, { wsPingIntervalMs: 20, wsPingMissesBeforeTeardown: 1 })
   const down = fakeSocket()
   await proxy.handleUpgrade(fakeRequest('/api/i/local/api/remote.mux', 'GET'), down, Buffer.alloc(0))
   const up = factory.upstreamSocket

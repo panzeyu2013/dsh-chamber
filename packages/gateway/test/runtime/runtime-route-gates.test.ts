@@ -17,17 +17,17 @@ import {
   readActivationJournalState,
   readOverride,
   writeCurrentPointer,
-  writeOverride,
 } from '@dsh-chamber/dsh-runtime'
 import { createRuntimeRoutes } from '../../src/runtime-routes.ts'
 import { FakeRequest, FakeResponse } from '../support/utils.ts'
 import {
   silentLogger,
-  gatewayPackageVersion,
   config,
   fakePlane,
   runRoute,
   makeValidTree,
+  writeOverrideRow,
+  runtimeManager,
 } from '../support/runtime-routes-harness.ts'
 
 test('a rejected plane.restartLocal() surfaces as status().operationError (sanitized)', async () => {
@@ -35,7 +35,7 @@ test('a rejected plane.restartLocal() surfaces as status().operationError (sanit
   try {
     const plane = fakePlane()
     plane._state.restartError = 'spawn denied /secret/token=abc'
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane, logger: silentLogger })
+    const manager = runtimeManager(stateDir, plane)
     await assert.rejects(manager.restart(), /spawn denied/)
     const operationError = (await manager.status()).operationError
     assert.equal(typeof operationError, 'string')
@@ -50,7 +50,7 @@ test('a rejected plane.restartLocal() surfaces as status().operationError (sanit
 test('gateway-owned files land in <stateDir>/dsh-runtime (single nesting, F1 regression)', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-layout-'))
   try {
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    const manager = runtimeManager(stateDir, fakePlane())
     await manager.setRegistry('https://registry.npmmirror.com')
     assert.ok(existsSync(join(stateDir, 'dsh-runtime', 'registry.json')), 'registry.json single-nested')
     assert.equal(statSync(join(stateDir, 'dsh-runtime', 'registry.json')).mode & 0o777, 0o600, 'registry.json owner-only')
@@ -149,7 +149,7 @@ test('restart outcome lifecycle: status().restart projects running → ok, and f
       plane._state.connectionState = 'ready'
       await gate
     }
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane, logger: silentLogger })
+    const manager = runtimeManager(stateDir, plane)
     // 'running' must be visible the moment the 202 poll can read status: a
     // restart accepted but rejected at entry (operationError set, connection
     // state still 'ready') is distinguishable from success by this field.
@@ -186,7 +186,7 @@ test('version mutations are refused while a restart is in flight (review fix: bo
       plane._state.connectionState = 'ready'
       await gate
     }
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane, logger: silentLogger })
+    const manager = runtimeManager(stateDir, plane)
     const inflight = manager.restart()
     await assert.rejects(manager.select('1.2.3'), /restart is in flight/)
     await assert.rejects(manager.apply(), /restart is in flight/)
@@ -255,7 +255,7 @@ test('rollback pending cannot be silently superseded by re-select/apply', async 
     // v2 active, rollback to installed v1 = a real downgrade (the rollback
     // direction guard refuses calls without an active pointer).
     writeCurrentPointer(stateDir, '2.0.0')
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    const manager = runtimeManager(stateDir, fakePlane())
     // Rollback to 1.0.0 writes an intent journal targeting 1.0.0.
     await manager.rollback('1.0.0')
     const journalAfterRollback = readActivationJournalState(stateDir)
@@ -283,18 +283,12 @@ test('rollback pending cannot be silently superseded by re-select/apply', async 
 test('real manager: retry-apply/retry-restore refuse without a matching blocked state; retry-apply resumes a swap-attempted override', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-retry-real-'))
   try {
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    const manager = runtimeManager(stateDir, fakePlane())
     await assert.rejects(manager.retryApply(), /no interrupted apply to retry/)
     await assert.rejects(manager.retryRestore(), /no interrupted restore to retry/)
     // A swap-attempted override: retry-apply clears the marker, re-runs the
     // startup transaction (no pending → not blocked) and brings dsh up.
-    writeOverride(stateDir, {
-      shellVersion: gatewayPackageVersion,
-      chosenVersion: '1.2.3',
-      resolvedVersion: '1.2.3',
-      pending: null,
-      swapAttempted: true,
-    })
+    writeOverrideRow(stateDir, { chosenVersion: '1.2.3', pending: null, swapAttempted: true })
     const result = await manager.retryApply()
     assert.equal(result.accepted, true)
     assert.equal(result.blockedReason, null)
@@ -303,15 +297,7 @@ test('real manager: retry-apply/retry-restore refuse without a matching blocked 
     // snapshot-failed (review fix): a non-destructive recovery exists too —
     // retryApply accepts lastOutcome === 'snapshot-failed', clears it and
     // re-runs the startup transaction (desktop canRetryApply parity).
-    writeOverride(stateDir, {
-      shellVersion: gatewayPackageVersion,
-      chosenVersion: '1.2.3',
-      resolvedVersion: '1.2.3',
-      pending: null,
-      swapAttempted: false,
-      lastOutcome: 'snapshot-failed',
-      lastError: 'snapshot failed',
-    })
+    writeOverrideRow(stateDir, { chosenVersion: '1.2.3', pending: null, lastOutcome: 'snapshot-failed', lastError: 'snapshot failed' })
     const snapshotRetry = await manager.retryApply()
     assert.equal(snapshotRetry.accepted, true)
     assert.equal(snapshotRetry.blockedReason, null)
@@ -333,7 +319,7 @@ test('rollback direction guard: only an installed version OLDER than the active 
     makeValidTree(stateDir, '1.0.0')
     makeValidTree(stateDir, '2.0.0')
     makeValidTree(stateDir, '3.0.0')
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    const manager = runtimeManager(stateDir, fakePlane())
     const directionRefusal = (error: unknown): boolean =>
       (error as { code?: string }).code === 'invalid_target'
       && /not older than the active runtime/.test((error as Error).message)
@@ -358,13 +344,7 @@ test('rollback direction guard: only an installed version OLDER than the active 
     assert.equal(readOverride(stateDir)?.pending, '0.8.0')
     // Reset the armed pending before the pointer cases below.
     clearActivationJournal(stateDir)
-    writeOverride(stateDir, {
-      shellVersion: gatewayPackageVersion,
-      chosenVersion: null,
-      resolvedVersion: null,
-      pending: null,
-      swapAttempted: false,
-    })
+    writeOverrideRow(stateDir, { chosenVersion: null, pending: null })
 
     // Active v2 (pointer): same-as-active and newer installed targets are
     // refusals; older targets (including older than the builtin) are accepted.
@@ -398,16 +378,10 @@ test('apply() journals manualRollback for staged downgrades (pointer and builtin
     makeValidTree(stateDir, '1.0.0')
     makeValidTree(stateDir, '2.0.0')
     makeValidTree(stateDir, '3.0.0')
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    const manager = runtimeManager(stateDir, fakePlane())
     const reset = (): void => {
       clearActivationJournal(stateDir)
-      writeOverride(stateDir, {
-        shellVersion: gatewayPackageVersion,
-        chosenVersion: null,
-        resolvedVersion: null,
-        pending: null,
-        swapAttempted: false,
-      })
+      writeOverrideRow(stateDir, { chosenVersion: null, pending: null })
     }
 
     // Builtin authority (no pointer, effective active v0.9.0): a staged
@@ -578,11 +552,8 @@ test('real manager: FATAL journal + stale pending projects idle+blocked with rec
     delete process.env.DSH_GATEWAY_DSH_PATH
     mkdirSync(join(stateDir, 'dsh-runtime'), { recursive: true })
     writeFileSync(join(stateDir, 'dsh-runtime', 'activation-journal.json'), '{corrupt', { mode: 0o600 })
-    writeOverride(stateDir, {
-      shellVersion: gatewayPackageVersion, chosenVersion: '1.2.3', resolvedVersion: '1.2.3',
-      pending: '1.2.3', swapAttempted: false,
-    })
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    writeOverrideRow(stateDir, { chosenVersion: '1.2.3', pending: '1.2.3' })
+    const manager = runtimeManager(stateDir, fakePlane())
     const startup = await manager.startupTransaction()
     assert.equal(startup.blockedReason, 'journal-corrupt')
     const status = await manager.status()

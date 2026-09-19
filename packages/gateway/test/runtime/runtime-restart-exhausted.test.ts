@@ -17,28 +17,30 @@ import {
   readCurrentPointer,
   readOverride,
   recordProbePass,
-  writeActivationIntent,
   writeActivationJournal,
   writeCurrentPointer,
-  writeOverride,
   type ActivationJournal,
 } from '@dsh-chamber/dsh-runtime'
 import {
   silentLogger,
-  gatewayPackageVersion,
   config,
   fakePlane,
   waitForSettle,
   waitForMutationSettle,
   probeResultsFor,
   makeValidTree,
+  armAppliedCandidate,
+  writeOverrideRow,
+  writeVersionSwitchIntent,
+  runtimeManager,
+  derivedProbe,
 } from '../support/runtime-routes-harness.ts'
 
 test('manager.status() projects the live plane connectionState (ready/restarting/stopped)', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-live-conn-'))
   try {
     const plane = fakePlane()
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane, logger: silentLogger })
+    const manager = runtimeManager(stateDir, plane)
     assert.equal((await manager.status()).connectionState, 'stopped')
     plane._state.connectionState = 'restarting'
     assert.equal((await manager.status()).connectionState, 'restarting')
@@ -57,10 +59,7 @@ test('gateway host state edges maintain and promote the full 24h + one-boot know
     let schedulerCancelled = 0
     makeValidTree(stateDir, '1.0.0')
     writeCurrentPointer(stateDir, '1.0.0')
-    writeOverride(stateDir, {
-      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
-      pending: null, swapAttempted: false, selectedOnly: false, lastOutcome: 'applied',
-    })
+    writeOverrideRow(stateDir, { chosenVersion: '1.0.0', pending: null, lastOutcome: 'applied' })
     recordProbePass(stateDir, '1.0.0', nowMs)
     const candidatesPath = join(stateDir, 'dsh-runtime', 'known-good-candidates.json')
     const readCandidate = () => (JSON.parse(readFileSync(candidatesPath, 'utf8')) as {
@@ -116,13 +115,8 @@ test('activation-quarantine ready edges do not count a candidate boot', async ()
     const nowMs = 20_000
     makeValidTree(stateDir, '1.0.0')
     recordProbePass(stateDir, '1.0.0', nowMs)
-    writeActivationIntent(stateDir, {
-      targetVersion: '1.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
-    })
-    writeOverride(stateDir, {
-      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
-      pending: '1.0.0', swapAttempted: false, selectedOnly: false,
-    })
+    writeVersionSwitchIntent(stateDir, '1.0.0')
+    writeOverrideRow(stateDir, { chosenVersion: '1.0.0', pending: '1.0.0' })
     const candidatesPath = join(stateDir, 'dsh-runtime', 'known-good-candidates.json')
     const bootCount = () => (JSON.parse(readFileSync(candidatesPath, 'utf8')) as {
       versions: Record<string, { bootCount: number }>
@@ -161,19 +155,7 @@ test('activation-quarantine ready edges do not count a candidate boot', async ()
 test('authoritative restart-exhausted rolls an active override back exactly once with a durable pre-effect latch (F7)', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-f7-'))
   try {
-    makeValidTree(stateDir, '1.0.0')
-    makeValidTree(stateDir, '2.0.0')
-    writeCurrentPointer(stateDir, '1.0.0')
-    writeActivationIntent(stateDir, {
-      targetVersion: '2.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
-    })
-    writeOverride(stateDir, {
-      shellVersion: gatewayPackageVersion, chosenVersion: '2.0.0', resolvedVersion: '1.0.0',
-      pending: '2.0.0', swapAttempted: false, selectedOnly: false, lastOutcome: 'applied',
-    })
-    const home = join(stateDir, 'dsh-home')
-    mkdirSync(home, { recursive: true })
-    writeFileSync(join(home, 'settings.json'), '{"source":"v1"}')
+    const home = armAppliedCandidate(stateDir)
 
     let phase: 'initial-apply' | 'f7' | 'cleanup' = 'initial-apply'
     let f7Stops = 0
@@ -199,13 +181,8 @@ test('authoritative restart-exhausted rolls an active override back exactly once
       plane._state.connectionState = 'stopped'
     }
     plane.startLocal = async () => { plane._state.connectionState = 'ready' }
-    const manager = createGatewayRuntimeManager({
-      config: config(stateDir),
-      plane,
-      logger: silentLogger,
-      waitBeforeRetry: async () => {},
-      scheduleKnownGoodPromotion: () => () => {},
-      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
+    const manager = runtimeManager(stateDir, plane, { probeCandidate: derivedProbe(stateDir),
+      waitBeforeRetry: async () => {}, scheduleKnownGoodPromotion: () => () => {},
     })
 
     await manager.applyNow()
@@ -267,19 +244,7 @@ test('authoritative restart-exhausted rolls an active override back exactly once
 test('gateway F7 keeps a failed fallback probe stopped behind a sticky exposure quarantine', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-f7-probe-fail-'))
   try {
-    makeValidTree(stateDir, '1.0.0')
-    makeValidTree(stateDir, '2.0.0')
-    writeCurrentPointer(stateDir, '1.0.0')
-    writeActivationIntent(stateDir, {
-      targetVersion: '2.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
-    })
-    writeOverride(stateDir, {
-      shellVersion: gatewayPackageVersion, chosenVersion: '2.0.0', resolvedVersion: '1.0.0',
-      pending: '2.0.0', swapAttempted: false, selectedOnly: false, lastOutcome: 'applied',
-    })
-    const home = join(stateDir, 'dsh-home')
-    mkdirSync(home, { recursive: true })
-    writeFileSync(join(home, 'settings.json'), '{"source":"v1"}')
+    armAppliedCandidate(stateDir)
 
     let phase: 'initial-apply' | 'f7' = 'initial-apply'
     let starts = 0
@@ -336,10 +301,7 @@ test('F7 journal persistence failure is fail-closed before candidate or host eff
     makeValidTree(stateDir, '1.0.0')
     makeValidTree(stateDir, '2.0.0')
     writeCurrentPointer(stateDir, '2.0.0')
-    writeOverride(stateDir, {
-      shellVersion: gatewayPackageVersion, chosenVersion: '2.0.0', resolvedVersion: '2.0.0',
-      pending: null, swapAttempted: false, selectedOnly: false, lastOutcome: 'applied',
-    })
+    writeOverrideRow(stateDir, { chosenVersion: '2.0.0', pending: null, lastOutcome: 'applied' })
     const monitoring: ActivationJournal = {
       schemaVersion: 1,
       phase: 'applied-monitoring',
@@ -452,19 +414,7 @@ test('restart-exhausted on builtin or env runtime never arms F7 or writes runtim
 test('dispose drains a persisted F7 rollback and final-stop fences its fallback probe before owner release', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-f7-dispose-'))
   try {
-    makeValidTree(stateDir, '1.0.0')
-    makeValidTree(stateDir, '2.0.0')
-    writeCurrentPointer(stateDir, '1.0.0')
-    writeActivationIntent(stateDir, {
-      targetVersion: '2.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
-    })
-    writeOverride(stateDir, {
-      shellVersion: gatewayPackageVersion, chosenVersion: '2.0.0', resolvedVersion: '1.0.0',
-      pending: '2.0.0', swapAttempted: false, selectedOnly: false, lastOutcome: 'applied',
-    })
-    const home = join(stateDir, 'dsh-home')
-    mkdirSync(home, { recursive: true })
-    writeFileSync(join(home, 'settings.json'), '{"source":"v1"}')
+    const home = armAppliedCandidate(stateDir)
 
     let phase: 'initial-apply' | 'f7' = 'initial-apply'
     let f7StopEntered!: () => void
@@ -486,13 +436,8 @@ test('dispose drains a persisted F7 rollback and final-stop fences its fallback 
         await stopGate
       }
     }
-    const manager = createGatewayRuntimeManager({
-      config: config(stateDir),
-      plane,
-      logger: silentLogger,
-      waitBeforeRetry: async () => {},
-      scheduleKnownGoodPromotion: () => () => {},
-      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
+    const manager = runtimeManager(stateDir, plane, { probeCandidate: derivedProbe(stateDir),
+      waitBeforeRetry: async () => {}, scheduleKnownGoodPromotion: () => () => {},
     })
     await manager.applyNow()
     await waitForSettle(manager)
@@ -532,19 +477,7 @@ test('dispose drains a persisted F7 rollback and final-stop fences its fallback 
 test('restart-exhausted rollback holds every write while the profile-write lease is held and completes after release (F7 lease gate)', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-f7-lease-'))
   try {
-    makeValidTree(stateDir, '1.0.0')
-    makeValidTree(stateDir, '2.0.0')
-    writeCurrentPointer(stateDir, '1.0.0')
-    writeActivationIntent(stateDir, {
-      targetVersion: '2.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
-    })
-    writeOverride(stateDir, {
-      shellVersion: gatewayPackageVersion, chosenVersion: '2.0.0', resolvedVersion: '1.0.0',
-      pending: '2.0.0', swapAttempted: false, selectedOnly: false, lastOutcome: 'applied',
-    })
-    const home = join(stateDir, 'dsh-home')
-    mkdirSync(home, { recursive: true })
-    writeFileSync(join(home, 'settings.json'), '{"source":"v1"}')
+    const home = armAppliedCandidate(stateDir)
 
     let phase: 'initial-apply' | 'f7' | 'cleanup' = 'initial-apply'
     let f7Stops = 0
@@ -555,13 +488,8 @@ test('restart-exhausted rollback holds every write while the profile-write lease
       plane._state.connectionState = 'stopped'
     }
     plane.startLocal = async () => { plane._state.connectionState = 'ready' }
-    const manager = createGatewayRuntimeManager({
-      config: config(stateDir),
-      plane,
-      logger: silentLogger,
-      waitBeforeRetry: async () => {},
-      scheduleKnownGoodPromotion: () => () => {},
-      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
+    const manager = runtimeManager(stateDir, plane, { probeCandidate: derivedProbe(stateDir),
+      waitBeforeRetry: async () => {}, scheduleKnownGoodPromotion: () => () => {},
     })
 
     await manager.applyNow()
@@ -622,19 +550,7 @@ test('restart-exhausted rollback holds every write while the profile-write lease
 test('restart-exhausted rollback defers with no writes when the lease outlives the wait bound; the next exhausted edge re-arms it', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-f7-lease-timeout-'))
   try {
-    makeValidTree(stateDir, '1.0.0')
-    makeValidTree(stateDir, '2.0.0')
-    writeCurrentPointer(stateDir, '1.0.0')
-    writeActivationIntent(stateDir, {
-      targetVersion: '2.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
-    })
-    writeOverride(stateDir, {
-      shellVersion: gatewayPackageVersion, chosenVersion: '2.0.0', resolvedVersion: '1.0.0',
-      pending: '2.0.0', swapAttempted: false, selectedOnly: false, lastOutcome: 'applied',
-    })
-    const home = join(stateDir, 'dsh-home')
-    mkdirSync(home, { recursive: true })
-    writeFileSync(join(home, 'settings.json'), '{"source":"v1"}')
+    const home = armAppliedCandidate(stateDir)
 
     let phase: 'initial-apply' | 'f7' | 'cleanup' = 'initial-apply'
     let f7Stops = 0

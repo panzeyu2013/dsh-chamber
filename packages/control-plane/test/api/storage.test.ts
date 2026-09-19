@@ -19,7 +19,7 @@ import { createCatalog, CATALOG_BACKUP_FILE, CATALOG_FILE } from '../../src/cata
 import type { CatalogConnectionRow } from '../../src/catalog.ts'
 import { ensureInstanceId } from '../../src/instance-id.ts'
 import { ensurePrivateDirectoryNoFollow, readPrivateFileNoFollow } from '../../src/private-file.ts'
-import { tempDir } from '../support/utils.ts'
+import { skipSymlinksUnavailable, tempDir } from '../support/utils.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
 
@@ -134,10 +134,7 @@ test('instance-id rejects symlinks and bounded/full-width invalid evidence witho
   try {
     symlinkSync(victim, file, 'file')
   } catch (error) {
-    if (['EPERM', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) {
-      t.skip('symbolic links are unavailable on this platform')
-      return
-    }
+    if (skipSymlinksUnavailable(error, t)) return
     throw error
   }
   assert.throws(() => ensureInstanceId(stateDir, { retryAttempts: 0 }), /unsafe/)
@@ -204,10 +201,7 @@ test('atomic JSON persistence never follows predictable temp or backup symlinks'
     // must ignore it rather than opening/truncating its target.
     symlinkSync(tempVictim, `${path}.tmp`, 'file')
   } catch (error) {
-    if (['EPERM', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) {
-      t.skip('symbolic links are unavailable on this platform')
-      return
-    }
+    if (skipSymlinksUnavailable(error, t)) return
     throw error
   }
   const store = createJsonStore({ filePath: path, logger: silentLogger, initial: { revision: 0, items: [] }, fileMode: 0o600 })
@@ -351,10 +345,7 @@ test('missing main with an unsafe .bak fails loudly without following its target
   try {
     symlinkSync(victim, `${path}.bak`, 'file')
   } catch (error) {
-    if (['EPERM', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) {
-      t.skip('symbolic links are unavailable on this platform')
-      return
-    }
+    if (skipSymlinksUnavailable(error, t)) return
     throw error
   }
   const store = createJsonStore({ filePath: path, logger: silentLogger, initial: { revision: 0, items: [] } })
@@ -549,10 +540,7 @@ test('private-directory primitive converges fresh/loose dirs and honors require/
   try {
     symlinkSync(target, link, 'dir')
   } catch (error) {
-    if (['EPERM', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) {
-      t.skip('symbolic links are unavailable on this platform')
-      return
-    }
+    if (skipSymlinksUnavailable(error, t)) return
     throw error
   }
   assert.throws(() => ensurePrivateDirectoryNoFollow(link), /not a real directory/)

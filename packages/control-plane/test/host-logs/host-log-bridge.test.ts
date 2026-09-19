@@ -24,7 +24,7 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { tempDir } from '../support/utils.ts'
+import { tempDir, writeLocalProfileFixture } from '../support/utils.ts'
 import {
   DEFAULT_HOST_LOG_BRIDGE_LEVEL,
   HOST_LOG_BRIDGE_ENV,
@@ -64,21 +64,6 @@ const EXPECTED_BRIDGE_OVERLAY = `- insert:
     - id: host-log-bridge
       name: '@dsh-chamber/dsh-chamber-seed-host-log-bridge'
 `
-
-/** A managed profile whose own user patch layer carries `patchContent`. */
-function writeLocalProfileFixture(dir: string, patchContent: string | null): string {
-  const dshHome = join(dir, 'dsh-home')
-  const profileDir = join(dshHome, 'profiles', 'web')
-  mkdirSync(profileDir, { recursive: true })
-  writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
-    name: 'dsh-profile-web',
-    private: true,
-    dependencies: {},
-    dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'], patchReload: 'live' } },
-  }))
-  if (patchContent !== null) writeFileSync(join(profileDir, 'cordis.patch.yml'), patchContent)
-  return dshHome
-}
 
 /** A built host-graph source dir (package.json + dist/index.js). */
 function writeBuiltSeedSource(dir: string): string {

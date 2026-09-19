@@ -22,20 +22,21 @@ import {
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { createGatewayRuntimeManager } from '../../src/runtime-manager.ts'
-import { recordRuntimeFailure, writeCurrentPointer, writeOverride } from '@dsh-chamber/dsh-runtime'
+import { recordRuntimeFailure, writeCurrentPointer } from '@dsh-chamber/dsh-runtime'
 import {
   silentLogger,
   TEST_BUILTIN_VERSION,
-  gatewayPackageVersion,
   config,
   fakePlane,
   makeValidTree,
+  writeOverrideRow,
+  runtimeManager,
 } from '../support/runtime-routes-harness.ts'
 
 test('registry origin validation lives in the manager (bad origin rejected)', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-registry-'))
   try {
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    const manager = runtimeManager(stateDir, fakePlane())
     await assert.rejects(manager.setRegistry('not a url'), /invalid registry origin/)
     const good = await manager.setRegistry('https://registry.npmmirror.com')
     assert.equal(good.origin, 'https://registry.npmmirror.com')
@@ -48,7 +49,7 @@ test('registry origin validation lives in the manager (bad origin rejected)', as
 test('corrupt registry configuration fails loud, preserves evidence, and never falls back to npmjs', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-registry-corrupt-'))
   try {
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    const manager = runtimeManager(stateDir, fakePlane())
     assert.equal(manager.getRegistry().origin, 'https://registry.npmjs.org', 'only a genuinely missing file uses the default')
     const file = join(stateDir, 'dsh-runtime', 'registry.json')
     writeFileSync(file, '{broken-json', { mode: 0o600 })
@@ -73,7 +74,7 @@ test('corrupt registry configuration fails loud, preserves evidence, and never f
 test('quarantining a hard-linked registry never chmods or rewrites the external inode', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-registry-hardlink-'))
   try {
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    const manager = runtimeManager(stateDir, fakePlane())
     const external = join(stateDir, 'external-registry-bytes')
     writeFileSync(external, '{"origin":"https://registry.npmjs.org"}')
     chmodSync(external, 0o644)
@@ -96,10 +97,7 @@ test('offline version listing retains every valid local cache tree', async () =>
     makeValidTree(stateDir, '1.0.0')
     makeValidTree(stateDir, '2.0.0')
     let fetches = 0
-    const manager = createGatewayRuntimeManager({
-      config: config(stateDir),
-      plane: fakePlane(),
-      logger: silentLogger,
+    const manager = runtimeManager(stateDir, fakePlane(), {
       fetchMetadata: async () => { fetches += 1; throw new Error('registry offline') },
     })
     const result = await manager.listVersions() as {
@@ -132,10 +130,7 @@ test('fresh installs fail closed at the logical disk soft limit while cached ver
     writeFileSync(sparse, '')
     truncateSync(sparse, 10 * 1024 ** 3)
     let fetches = 0
-    const manager = createGatewayRuntimeManager({
-      config: config(stateDir),
-      plane: fakePlane(),
-      logger: silentLogger,
+    const manager = runtimeManager(stateDir, fakePlane(), {
       fetchMetadata: async () => { fetches += 1; throw new Error('must not fetch above quota') },
     })
     await assert.rejects(manager.select('2.0.0'), (error: unknown) =>
@@ -154,10 +149,7 @@ test('status projects effective override selection plus snapshot, failure, and g
   try {
     makeValidTree(stateDir, '2.0.0')
     writeCurrentPointer(stateDir, '2.0.0')
-    writeOverride(stateDir, {
-      shellVersion: gatewayPackageVersion, chosenVersion: '2.0.0', resolvedVersion: '2.0.0',
-      pending: null, swapAttempted: false, lastOutcome: 'applied', restoreOutcome: 'complete',
-    })
+    writeOverrideRow(stateDir, { chosenVersion: '2.0.0', pending: null, lastOutcome: 'applied', restoreOutcome: 'complete' })
     const snapshotAt = Date.now()
     const snapshotFile = join(stateDir, 'dsh-runtime', 'snapshots', `2.0.0-${snapshotAt}`, 'data')
     mkdirSync(dirname(snapshotFile), { recursive: true })
@@ -166,7 +158,7 @@ test('status projects effective override selection plus snapshot, failure, and g
     mkdirSync(dirname(restoreBackup), { recursive: true })
     writeFileSync(restoreBackup, 'gateway-restore-backup')
     recordRuntimeFailure(stateDir, { version: '3.0.0', phase: 'install', error: 'registry install failed' })
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    const manager = runtimeManager(stateDir, fakePlane())
     const status = await manager.status()
     assert.equal(status.kind, 'dsh-chamber-gateway-runtime')
     assert.equal(status.activeVersion, '2.0.0')
@@ -205,7 +197,7 @@ test('status reads the real version from an effective env workspace', async () =
     mkdirSync(pkg, { recursive: true })
     writeFileSync(join(pkg, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '4.5.6' }))
     process.env.DSH_GATEWAY_DSH_PATH = envAnchor
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    const manager = runtimeManager(stateDir, fakePlane())
     const status = await manager.status()
     assert.equal(status.activeVersion, '4.5.6')
     assert.equal(status.source, 'env')
@@ -255,7 +247,7 @@ test('registry source changes are fenced while an install is in flight', async (
 test('startup transaction with no pending switches nothing and does not block', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-startup-'))
   try {
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    const manager = runtimeManager(stateDir, fakePlane())
     const result = await manager.startupTransaction()
     assert.equal(result.blockedReason, null)
     assert.equal((await manager.status()).phase, 'idle')
@@ -267,7 +259,7 @@ test('startup transaction with no pending switches nothing and does not block', 
 test('select→apply semantics: apply without a selection rejects; rollback rejects an invalid target', async () => {
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-semantics-'))
   try {
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    const manager = runtimeManager(stateDir, fakePlane())
     await assert.rejects(manager.apply(), /no runtime version selected/)
     await assert.rejects(manager.rollback('9.9.9'), /no valid version tree/)
   } finally {

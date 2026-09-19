@@ -33,29 +33,11 @@ import {
   MAX_SPAWN_ATTEMPTS,
 } from '../../src/spawn-dsh.ts'
 import { authCookieFor, clearAuthCookie, exchangeLaunchToken } from '../../src/browser-auth-cookie.ts'
-import { tempDir } from '../support/utils.ts'
+import { FAKE_DSH_PREAMBLE, freeDshPortBase, reapSpawned, spawnHost } from '../support/spawn-fixtures.ts'
+import { skipSymlinksUnavailable, tempDir } from '../support/utils.ts'
 
 const silentLogger = { log() {}, warn() {}, error() {} }
 
-/**
- * A dsh port base that is free right now. spawnDsh defaults to 17510, which is
- * the live chamber instance range: on a developer machine already running the
- * app every candidate port (17510..17514) is taken, and these cleanup and
- * browser-auth tests then die with "failed to start after 5 attempts" before
- * reaching the path they assert. The contracts under test are port-agnostic, so
- * bind an ephemeral port and hand it over explicitly.
- */
-async function freeDshPortBase(): Promise<number> {
-  return await new Promise<number>((resolvePort, rejectPort) => {
-    const server = createNetServer()
-    server.on('error', rejectPort)
-    server.listen(0, '127.0.0.1', () => {
-      const address = server.address()
-      const port = typeof address === 'object' && address !== null ? address.port : 0
-      server.close(() => resolvePort(port))
-    })
-  })
-}
 
 /**
  * The upstream browser-auth cookie NAME for one request authority
@@ -74,10 +56,6 @@ function browserAuthCookieName(authority: string): string {
  * script): the host mints its cookie from the Host header it actually
  * received, exactly like the real BrowserAuth.authorizeIndex does.
  */
-const FAKE_DSH_COOKIE_NAME_JS = [
-  "const { createHash } = require('node:crypto')",
-  "const authCookieName = host => 'dsh-auth-' + createHash('sha256').update(host).digest('base64').replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/, '')",
-]
 
 /** A fake dsh CLI entry under a fake workspace (node runs it directly). */
 function writeFakeDshEntry(dshWorkspacePath: string, body: string): string {
@@ -265,10 +243,7 @@ test('pid-ledger publication rejects symlinked roots/leaves without touching ext
     try {
       symlinkSync(victim, join(recordsDir, '4242.json'), 'file')
     } catch (error) {
-      if (['EPERM', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) {
-        t.skip('symbolic links are unavailable on this platform')
-        return
-      }
+      if (skipSymlinksUnavailable(error, t)) return
       throw error
     }
     assert.equal(readPidRecord(stateDir, 4242), null, 'pid-ledger reads never follow an unsafe leaf')
@@ -372,13 +347,7 @@ test('spawnDsh: abort during the post-TCP host-identity probe wait kills the det
   const controller = new AbortController()
   try {
     const startedAt = Date.now()
-    const spawning = spawnDsh({ dshPortBase: await freeDshPortBase(),
-      stateDir,
-      dshHome: join(stateDir, 'home'),
-      dshWorkspacePath,
-      logger: silentLogger,
-      signal: controller.signal,
-    })
+    const spawning = spawnHost(stateDir, dshWorkspacePath, controller.signal)
     await waitUntil(() => existsSync(listeningMarker), 3000)
     await waitUntil(() => existsSync(identityMarker), 3000)
     controller.abort()
@@ -409,10 +378,7 @@ test('spawnDsh: the 0.1.2 browser-auth bootstrap mints the cookie and the host-i
   const stateDir = tempDir()
   const dshWorkspacePath = join(stateDir, 'ws')
   writeFakeDshEntry(dshWorkspacePath, [
-    ...FAKE_DSH_COOKIE_NAME_JS,
-    "const { createServer } = require('node:http')",
-    "const args = process.argv.slice(2)",
-    "const port = Number(args[args.indexOf('--port') + 1])",
+    ...FAKE_DSH_PREAMBLE,
     "console.log('dsh web: http://127.0.0.1:' + port + '/?token=launch-1')",
     "createServer((req, res) => {",
     "  if (req.url === '/?token=launch-1') {",
@@ -438,13 +404,7 @@ test('spawnDsh: the 0.1.2 browser-auth bootstrap mints the cookie and the host-i
   ].join('\n'))
   const controller = new AbortController()
   try {
-    const spawned = await spawnDsh({ dshPortBase: await freeDshPortBase(),
-      stateDir,
-      dshHome: join(stateDir, 'home'),
-      dshWorkspacePath,
-      logger: silentLogger,
-      signal: controller.signal,
-    })
+    const spawned = await spawnHost(stateDir, dshWorkspacePath, controller.signal)
     assert.equal(spawned.port > 0, true)
     const cookie = authCookieFor(`http://127.0.0.1:${spawned.port}`)
     // The name is the authority-bound upstream name for THIS instance, not an
@@ -452,8 +412,7 @@ test('spawnDsh: the 0.1.2 browser-auth bootstrap mints the cookie and the host-i
     // authority the proxy later forwards as Host.
     assert.equal(cookie, `${browserAuthCookieName(`127.0.0.1:${spawned.port}`)}=sess`)
     // The SpawnAttemptResult child must be reaped by the caller.
-    spawned.child.kill()
-    await new Promise<void>(resolve => spawned.child.once('exit', () => resolve()))
+    await reapSpawned(spawned)
   } finally {
     controller.abort()
     clearAuthCookie(`http://127.0.0.1:${DEFAULT_DSH_START_PORT}`)
@@ -478,7 +437,7 @@ test('spawnDsh: a gated host with no launch token fails loud with the browser-au
   const controller = new AbortController()
   try {
     await assert.rejects(
-      async () => spawnDsh({ dshPortBase: await freeDshPortBase(), stateDir, dshHome: join(stateDir, 'home'), dshWorkspacePath, logger: silentLogger, signal: controller.signal, authBootstrapWaitMs: 50 }),
+      async () => spawnHost(stateDir, dshWorkspacePath, controller.signal, { authBootstrapWaitMs: 50 }),
       /browser-auth cookie, but the bootstrap failed/,
     )
   } finally {
@@ -503,10 +462,7 @@ test('spawnDsh: a 401 that arrives before the launch-token line re-arms the boun
   const firstProbe401DelayMs = 700
   const tokenLineDelayAfter401Ms = 150
   writeFakeDshEntry(dshWorkspacePath, [
-    ...FAKE_DSH_COOKIE_NAME_JS,
-    "const { createServer } = require('node:http')",
-    "const args = process.argv.slice(2)",
-    "const port = Number(args[args.indexOf('--port') + 1])",
+    ...FAKE_DSH_PREAMBLE,
     `const firstProbe401DelayMs = ${firstProbe401DelayMs}`,
     `const tokenLineDelayAfter401Ms = ${tokenLineDelayAfter401Ms}`,
     "let printedTokenLine = false",
@@ -536,16 +492,13 @@ test('spawnDsh: a 401 that arrives before the launch-token line re-arms the boun
   ].join('\n'))
   const controller = new AbortController()
   try {
-    const spawned = await spawnDsh({ dshPortBase: await freeDshPortBase(),
-      stateDir, dshHome: join(stateDir, 'home'), dshWorkspacePath, logger: silentLogger, signal: controller.signal, authBootstrapWaitMs,
-    })
+    const spawned = await spawnHost(stateDir, dshWorkspacePath, controller.signal, { authBootstrapWaitMs })
     assert.equal(
       authCookieFor(`http://127.0.0.1:${spawned.port}`),
       `${browserAuthCookieName(`127.0.0.1:${spawned.port}`)}=sess`,
       'the late launch-token line is exchanged into the authority-bound cookie',
     )
-    spawned.child.kill()
-    await new Promise<void>(resolve => spawned.child.once('exit', () => resolve()))
+    await reapSpawned(spawned)
   } finally {
     controller.abort()
     clearAuthCookie(`http://127.0.0.1:${DEFAULT_DSH_START_PORT}`)
@@ -561,10 +514,7 @@ test('spawnDsh: a readiness line split across chunks is still fully redacted and
   const stateDir = tempDir()
   const dshWorkspacePath = join(stateDir, 'ws')
   writeFakeDshEntry(dshWorkspacePath, [
-    ...FAKE_DSH_COOKIE_NAME_JS,
-    "const { createServer } = require('node:http')",
-    "const args = process.argv.slice(2)",
-    "const port = Number(args[args.indexOf('--port') + 1])",
+    ...FAKE_DSH_PREAMBLE,
     // Three small writes: the URL line is fragmented mid-token.
     "process.stdout.write('dsh web: http://127.0.0.1:' + port + '/?to')",
     "process.stdout.write('ken=launch-secret (LAN: http://10.0.0.5:' + port + '/?token=launch-secret)\\n')",
@@ -583,9 +533,9 @@ test('spawnDsh: a readiness line split across chunks is still fully redacted and
   try {
     let spawned: Awaited<ReturnType<typeof spawnDsh>>
     try {
-      spawned = await spawnDsh({ dshPortBase: await freeDshPortBase(),
-        stateDir, dshHome: join(stateDir, 'home'), dshWorkspacePath, signal: controller.signal, authBootstrapWaitMs: 200,
-        logger: { log(line) { logged.push(String(line)) }, warn(line) { logged.push('WARN:' + String(line)) }, error(line) { logged.push('ERR:' + String(line)) } },
+      spawned = await spawnHost(stateDir, dshWorkspacePath, controller.signal, {
+        authBootstrapWaitMs: 200,
+        logger: { log(line: string) { logged.push(String(line)) }, warn(line: string) { logged.push('WARN:' + String(line)) }, error(line: string) { logged.push('ERR:' + String(line)) } },
       })
     } catch (error) {
       throw new Error(`spawn failed; logged: ${JSON.stringify(logged.slice(0, 10))}; cause: ${String(error)}`)
@@ -595,8 +545,7 @@ test('spawnDsh: a readiness line split across chunks is still fully redacted and
     const logLines = logged.join('\n')
     assert.equal(logLines.includes('launch-secret'), false)
     assert.equal(/token=[^\s]*launch-secret/.test(logLines), false)
-    spawned.child.kill()
-    await new Promise<void>(resolve => spawned.child.once('exit', () => resolve()))
+    await reapSpawned(spawned)
   } finally {
     controller.abort()
     clearAuthCookie(`http://127.0.0.1:${DEFAULT_DSH_START_PORT}`)
@@ -611,10 +560,7 @@ test('spawnDsh: the launch token never reaches the control-plane log or host-log
   const stateDir = tempDir()
   const dshWorkspacePath = join(stateDir, 'ws')
   writeFakeDshEntry(dshWorkspacePath, [
-    ...FAKE_DSH_COOKIE_NAME_JS,
-    "const { createServer } = require('node:http')",
-    "const args = process.argv.slice(2)",
-    "const port = Number(args[args.indexOf('--port') + 1])",
+    ...FAKE_DSH_PREAMBLE,
     "console.log('dsh web: http://127.0.0.1:' + port + '/?token=launch-secret (LAN: http://10.0.0.5:' + port + '/?token=launch-secret)')",
     "createServer((req, res) => {",
     "  if (req.url === '/?token=launch-secret') { res.writeHead(303, { location: '/', 'set-cookie': authCookieName(req.headers.host) + '=sess; Max-Age=3600; Path=/; HttpOnly; SameSite=Strict' }); res.end(); return }",
@@ -646,8 +592,7 @@ test('spawnDsh: the launch token never reaches the control-plane log or host-log
     const persisted = readFileSync(join(hostLogDir, files[0]), 'utf8')
     assert.equal(persisted.includes('launch-secret'), false)
     assert.equal(/token=[^\s]*launch-secret/.test(persisted), false)
-    spawned.child.kill()
-    await new Promise<void>(resolve => spawned.child.once('exit', () => resolve()))
+    await reapSpawned(spawned)
   } finally {
     controller.abort()
     clearAuthCookie(`http://127.0.0.1:${DEFAULT_DSH_START_PORT}`)
@@ -675,7 +620,7 @@ test('spawnDsh: a token line with a failed exchange fails loud with the browser-
   const controller = new AbortController()
   try {
     await assert.rejects(
-      async () => spawnDsh({ dshPortBase: await freeDshPortBase(), stateDir, dshHome: join(stateDir, 'home'), dshWorkspacePath, logger: silentLogger, signal: controller.signal, authBootstrapWaitMs: 50 }),
+      async () => spawnHost(stateDir, dshWorkspacePath, controller.signal, { authBootstrapWaitMs: 50 }),
       /browser-auth cookie, but the bootstrap failed/,
     )
   } finally {
@@ -710,10 +655,9 @@ test('spawnDsh: an old runtime tree (only session/list, no launch token) spawns 
   ].join('\n'))
   const controller = new AbortController()
   try {
-    const spawned = await spawnDsh({ dshPortBase: await freeDshPortBase(), stateDir, dshHome: join(stateDir, 'home'), dshWorkspacePath, logger: silentLogger, signal: controller.signal, authBootstrapWaitMs: 50 })
+    const spawned = await spawnHost(stateDir, dshWorkspacePath, controller.signal, { authBootstrapWaitMs: 50 })
     assert.equal(authCookieFor(`http://127.0.0.1:${spawned.port}`), undefined)
-    spawned.child.kill()
-    await new Promise<void>(resolve => spawned.child.once('exit', () => resolve()))
+    await reapSpawned(spawned)
   } finally {
     controller.abort()
     clearAuthCookie(`http://127.0.0.1:${DEFAULT_DSH_START_PORT}`)

@@ -15,7 +15,6 @@ import {
   readActivationJournalState,
   readCurrentPointer,
   readOverride,
-  writeActivationIntent,
   writeCurrentPointer,
   writeOverride,
   stashPreRollback,
@@ -30,6 +29,10 @@ import {
   waitForSettle,
   probeResultsFor,
   makeValidTree,
+  writeOverrideRow,
+  writeVersionSwitchIntent,
+  runtimeManager,
+  derivedProbe,
 } from '../support/runtime-routes-harness.ts'
 
 test('restore-pre-rollback complete keeps an env-probe-failed resume verdict (MAJOR-1 regression)', async () => {
@@ -162,7 +165,7 @@ test('builtin-active cached selection stays staged across restart without weaken
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-reselect-'))
   try {
     makeValidTree(stateDir, '1.0.0')
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    const manager = runtimeManager(stateDir, fakePlane())
     const result = await manager.select('1.0.0')
     assert.equal(result.accepted, true)
     const { readOverride } = await import('@dsh-chamber/dsh-runtime')
@@ -173,7 +176,7 @@ test('builtin-active cached selection stays staged across restart without weaken
     assert.equal(manager.resolveWorkspace().source, 'builtin')
     await manager.dispose()
 
-    const restarted = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    const restarted = runtimeManager(stateDir, fakePlane())
     assert.deepEqual(await restarted.startupTransaction(), { blockedReason: null })
     assert.equal(restarted.resolveWorkspace().source, 'builtin', 'staged selection survives a healthy gateway restart')
     assert.equal((await restarted.status()).selectedVersion, '1.0.0')
@@ -209,12 +212,7 @@ test('a post-update re-selection consumes the invalidation stamp instead of stra
     })
     const plane = fakePlane()
     plane._state.connectionState = 'ready'
-    const manager = createGatewayRuntimeManager({
-      config: config(stateDir),
-      plane,
-      logger: silentLogger,
-      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
-    })
+    const manager = runtimeManager(stateDir, plane, { probeCandidate: derivedProbe(stateDir) })
     const routes = createRuntimeRoutes(() => manager, silentLogger)
 
     // apply() on an invalidated record must refuse honestly instead of arming a
@@ -262,9 +260,7 @@ test('an instance already stranded in post-update selection-corrupt metadata hea
     // switch attempt: a version-switch intent journal + armed pending written by
     // apply(), sitting next to an override that still carries the app-update
     // stamp — and NO lastInvalidated* history (the backfill case).
-    writeActivationIntent(stateDir, {
-      targetVersion: '1.0.0', targetIsBuiltin: false, manualRollback: false, intentKind: 'version-switch',
-    })
+    writeVersionSwitchIntent(stateDir, '1.0.0')
     writeOverride(stateDir, {
       shellVersion: gatewayPackageVersion,
       chosenVersion: '1.0.0',
@@ -277,12 +273,7 @@ test('an instance already stranded in post-update selection-corrupt metadata hea
     })
     const plane = fakePlane()
     plane._state.connectionState = 'ready'
-    const manager = createGatewayRuntimeManager({
-      config: config(stateDir),
-      plane,
-      logger: silentLogger,
-      probeCandidate: async () => probeResultsFor(stateDir).map(name => ({ name, ok: true })),
-    })
+    const manager = runtimeManager(stateDir, plane, { probeCandidate: derivedProbe(stateDir) })
     const routes = createRuntimeRoutes(() => manager, silentLogger)
 
     // Faithful reproduction of the reported symptom: semantic-mismatch
@@ -326,11 +317,8 @@ test('staging v2 from active user v1 never authorizes builtin if v1 current poin
     makeValidTree(stateDir, '1.0.0')
     makeValidTree(stateDir, '2.0.0')
     writeCurrentPointer(stateDir, '1.0.0')
-    writeOverride(stateDir, {
-      shellVersion: gatewayPackageVersion, chosenVersion: '1.0.0', resolvedVersion: '1.0.0',
-      pending: null, swapAttempted: false, lastOutcome: 'applied', selectedOnly: false,
-    })
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    writeOverrideRow(stateDir, { chosenVersion: '1.0.0', pending: null, lastOutcome: 'applied' })
+    const manager = runtimeManager(stateDir, fakePlane())
     await manager.select('2.0.0')
     assert.equal(readOverride(stateDir)?.selectedOnly, false)
     assert.equal(manager.resolveWorkspace().version, '1.0.0', 'the active pointer, not the staged choice, remains authoritative')
@@ -348,7 +336,7 @@ test('an empty DSH_GATEWAY_DSH_PATH counts as unset (resolves builtin)', () => {
   process.env.DSH_GATEWAY_DSH_PATH = ''
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-empty-env-'))
   try {
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    const manager = runtimeManager(stateDir, fakePlane())
     assert.equal(manager.resolveWorkspace().source, 'builtin')
   } finally {
     if (previous === undefined) delete process.env.DSH_GATEWAY_DSH_PATH
@@ -362,7 +350,7 @@ test('version mutations refuse while the env anchor is active (env always wins)'
   process.env.DSH_GATEWAY_DSH_PATH = '/tmp/env-dsh'
   const stateDir = mkdtempSync(join(tmpdir(), 'gw-rt-env-mutate-'))
   try {
-    const manager = createGatewayRuntimeManager({ config: config(stateDir), plane: fakePlane(), logger: silentLogger })
+    const manager = runtimeManager(stateDir, fakePlane())
     assert.equal(manager.resolveWorkspace().source, 'env')
     await assert.rejects(manager.select('1.2.3'), /env always wins/)
     await assert.rejects(manager.apply(), /env always wins/)

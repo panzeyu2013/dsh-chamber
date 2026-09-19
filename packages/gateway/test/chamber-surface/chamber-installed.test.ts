@@ -32,6 +32,7 @@ import {
   type InstalledResult,
 } from '../../src/plugins-installed.ts'
 import { createChamberSurface } from '../../src/routes.ts'
+import { seedCacheProjection } from '../support/chamber-surface-fixtures.ts'
 import { FakeRequest, FakeResponse, stubPluginTasks } from '../support/utils.ts'
 
 const logger = {
@@ -411,18 +412,7 @@ test('route: GET /chamber/plugins (seed-cache projection) still works; unknown s
   const host = surface(t, stateDir)
   const plugins = await handle(host, 'GET', '/chamber/plugins')
   assert.equal(plugins.status, 200)
-  assert.deepEqual(plugins.json(), {
-    items: [
-      { name: '@dsh-chamber/dsh-chamber-seed-client-graph', version: null },
-      { name: '@dsh-chamber/dsh-chamber-seed-git-worktree', version: null },
-      { name: '@dsh-chamber/dsh-chamber-seed-archive-cleanup', version: null },
-      // The projection is REGISTRY-DERIVED, so a new host package row appears
-      // here without a gateway edit. The open-in row (design 20 §6) is
-      // `localOnly`: it is in the derived whitelist but the desktop never
-      // uploads it, so its cache — and therefore its version — stays absent.
-      { name: '@dsh-chamber/dsh-chamber-seed-open-in', version: null },
-    ],
-  })
+  assert.deepEqual(plugins.json(), seedCacheProjection())
   const deep = await handle(host, 'GET', '/chamber/plugins/installed/extra')
   assert.equal(deep.status, 404)
   assert.deepEqual(deep.json(), { error: 'not_found', code: 'not_found' })

@@ -7,7 +7,7 @@
 import { EventEmitter } from 'node:events'
 import { createInstanceProxy } from '../../src/instance-proxy.ts'
 import { DEFAULT_DSH_START_PORT } from '../../src/spawn-dsh.ts'
-import type { ProxyRequest, ProxyResponse, ProxySocket } from '../../src/instance-proxy.ts'
+import type { InstanceProxy, InstanceProxyDeps, ProxyRequest, ProxyResponse, ProxySocket } from '../../src/instance-proxy.ts'
 
 export const quietLogger = { log: () => {}, warn: () => {}, error: () => {} }
 
@@ -167,6 +167,21 @@ export function makeProxy(options: { state?: string; port?: number | null } = {}
     httpRequest: upstream.fn,
   })
   return { proxy, upstream }
+}
+
+/** createInstanceProxy over the shared quiet logger + ready local state. The
+ *  httpRequest seam stays explicit: each suite owns its upstream behavior. */
+export function proxyFor(
+  httpRequest: InstanceProxyDeps['httpRequest'],
+  overrides: Partial<InstanceProxyDeps> = {},
+): InstanceProxy {
+  return createInstanceProxy({
+    logger: quietLogger,
+    getLocalState: () => 'ready',
+    getLocalDshPort: () => DEFAULT_DSH_START_PORT,
+    httpRequest,
+    ...overrides,
+  })
 }
 
 export const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
