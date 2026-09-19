@@ -9,6 +9,7 @@
 - [ ] 核对 `main.ts` 的全部运行时路径引用：preload（`dist/preload.cjs`，无 `preload.cts` 回退）、`dist/control-plane/index.js`、图标/tray、crashReporter目录、`existsSync`/`readFileSync` 引用的打包内文件。
 - [ ] 核对 `preload.cts` 本地依赖闭包（有跨文件import时 `dist/preload.cjs` 必须包含）。
 - [ ] 核对 `extraResources`：`vendor/dsh` 两段（manifest三件套 + `node_modules/**`）与 `bundle-dsh.mjs` 产物、`spawn-dsh.ts` 的运行时解析路径一致。
+- [ ] 上游client-plugin闭包抽样：afterPack断言 `resources/vendor/dsh/node_modules/@deepseek-ai/` 下 `dsh-client-ui-sidebar-right`（sidebarRight行唯一provider）/ `dsh-client-resources` / `dsh-client-ui-chat` 三个包的 `package.json` 都在（`after-pack-adhoc-sign.mjs` 的 `PACKAGED_CLIENT_CLOSURE_SAMPLE`）—— `node_modules/**` 是无界glob，缺一个上游包时安装/打包全绿、前端只在运行期静默少一行；启动期 `runtime-tree-check.ts` 对已安装树做同一抽样，缺件大声 `console.error`。
 
 ## 2. 构建链产物（改构建脚本后必查）
 
@@ -57,8 +58,8 @@ glob即闭包：`packages/desktop/package.json` 的 `build.files` 用包根三�
 `gateway-session.ts`、`gateway-sync-registry.ts`、`host-package-dirs.ts`、
 `node-edges.ts`、
 `notifications.ts`、`open-in.ts`、`owner-only-secret-file.ts`、`plugin-sync.ts`、
-`plugin-tarball.ts`、`sidecar-stub.ts`、`registry-password-commit.ts`、
-`renderer-trust.ts`、`runtime-probe-detail.ts`、`sanitize-error.ts`、
+`plugin-tarball.ts`、`pnpm-launcher.ts`、`sidecar-stub.ts`、`registry-password-commit.ts`、
+`renderer-trust.ts`、`runtime-probe-detail.ts`、`runtime-tree-check.ts`、`sanitize-error.ts`、
 `shell-core.ts`、`sidecar-console-redirect.ts`、`sidecar-ctx.ts`、
 `sidecar-entry.ts`、`sidecar-exit-codes.ts`、`ssh-apply-rows.ts`、`ssh-config.ts`、
 `ssh-plugin-journal.ts`、`ssh-provider.ts`、`store-file-hygiene.ts`、
@@ -72,7 +73,7 @@ count=$(ls -1 packages/desktop/*.ts packages/desktop/*.cts packages/desktop/*.mj
   | grep -vE '/(gateway-session-test-hooks|loopback-http-test-server)\.ts$' \
   | grep -vc '\.test\.ts$')
 echo "root-level collected modules: $count"
-test "$count" = 49 || { echo "STALE: 名单/计数需同步（见上方 49 个）"; exit 1; }
+test "$count" = 51 || { echo "STALE: 名单/计数需同步（见上方 51 个）"; exit 1; }
 ```
 
 **例外名单 = `build.files` 的9条negate（勿删；顺序同package.json）**：

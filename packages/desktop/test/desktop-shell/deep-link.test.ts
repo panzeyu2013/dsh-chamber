@@ -8,6 +8,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { register } from 'node:module'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -838,4 +839,41 @@ test('ensureLinuxProtocolDesktopFile default fs branch writes a real 0644 file a
   } finally {
     rmSync(base, { recursive: true, force: true })
   }
+})
+/**
+ * N4 回归（2026-09 Windows/Electron 审计）：scanDeepLinkUrls 位于 shell-core.ts，
+ * 其 import 闭包经 sanitize-error → `@dsh-chamber/dsh-runtime`（以及 control-plane
+ * facade）这类 workspace 裸包名；没有 node_modules 时解析不到。argv 深链扫描是纯
+ * 函数且正是本套件的契约，因此用 resolve 钩子把这两个裸包名映射回仓内源码
+ * （完整 checkout 里由 pnpm symlink 完成的同一件事），被测实现仍是唯一真身。
+ */
+const REPO_ROOT = new URL('../../../../', import.meta.url)
+
+async function loadScanDeepLinkUrls(): Promise<(argv: readonly string[]) => string[]> {
+  const loaderSource = [
+    `const ROOT = ${JSON.stringify(REPO_ROOT.href)};`,
+    'export async function resolve(specifier, context, nextResolve) {',
+    "  if (specifier === '@dsh-chamber/dsh-runtime') return { url: new URL('packages/dsh-runtime/src/index.ts', ROOT).href, shortCircuit: true };",
+    "  if (specifier === '@dsh-chamber/control-plane') return { url: new URL('packages/control-plane/src/index.ts', ROOT).href, shortCircuit: true };",
+    '  return nextResolve(specifier, context);',
+    '}',
+  ].join('\n')
+  register(`data:text/javascript,${encodeURIComponent(loaderSource)}`)
+  const shellCore = await import('../../shell-core.ts')
+  return shellCore.scanDeepLinkUrls
+}
+
+test('scanDeepLinkUrls 接受大小写不敏感的 scheme，且不改动 URI 其余部分（N4）', async () => {
+  const scan = await loadScanDeepLinkUrls()
+  const lower = 'dsh-chamber://open-vscode?instance=web-1&path=%2Fhome%2Fuser'
+  assert.deepEqual(scan([process.execPath, lower]), [lower])
+  const upper = 'DSH-CHAMBER://open-vscode?instance=web-1&path=%2Ftmp'
+  assert.deepEqual(scan([upper]), [upper], 'RFC 3986 §3.1：scheme 大小写不敏感，path/query 原样保留')
+  const mixed = 'Dsh-Chamber://open-vscode?Instance=MiXeD'
+  assert.deepEqual(scan([mixed]), [mixed])
+  // 接受集合不变：非 dsh-chamber scheme、以及中段出现的同名前缀一律不收。
+  assert.deepEqual(
+    scan(['https://dsh-chamber://x', 'x-dsh-chamber://y', 'dsh-chamber:', 'dsh-chamber://', ' DSH-CHAMBER://z']),
+    ['dsh-chamber://'],
+  )
 })

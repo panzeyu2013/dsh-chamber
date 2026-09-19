@@ -10,6 +10,7 @@ import {
   MAC_DISABLE_LIBRARY_VALIDATION,
   MAC_ENTITLEMENTS_PATH,
   MAC_FRAMEWORK_LOCALES_RELATIVE,
+  PACKAGED_CLIENT_CLOSURE_SAMPLE,
   PACKAGED_PNPM_VERSION,
   PACKAGED_RUNTIME_MODULES,
   configuredElectronLanguages,
@@ -30,6 +31,10 @@ import { MAC_APP_ENV, resolvePackagedMacApp } from '../../../scripts/gates/verif
 // Cross-module pin lockstep (G18): the Swift sidecar assembly reads the same
 // desktop manifest field, so a drift between the two builds fails HERE.
 import { PNPM_PINNED_VERSION } from './build-sidecar.mjs';
+// 安装期抽样（S4）与本文件的打包期抽样必须一一对应：两个模块不能各写一份
+// 名单后各自漂移（.mjs import .ts 运行时由 node 类型擦除支持；typecheck 面
+// 不含 scripts/，故这里不会给 tsc 引入 .mjs 声明问题）。
+import { RUNTIME_CLIENT_CLOSURE_SAMPLE } from '../runtime-tree-check.ts';
 
 const require = createRequire(import.meta.url);
 const builderRequire = createRequire(require.resolve('electron-builder'));
@@ -44,6 +49,14 @@ function fixture(platform = 'darwin-arm64', version = '0.1.1-rc.2') {
     dsh: { platform },
   }));
   writeFileSync(path.join(dshDir, 'package.json'), JSON.stringify({ version }));
+  // 上游 client-plugin 闭包抽样（S4）：真实封装里这些包由 pnpm 安装进
+  // node_modules/@deepseek-ai/，fixture 必须造出同一形态，否则"完整运行时"
+  // 用例本身就缺件。
+  for (const name of PACKAGED_CLIENT_CLOSURE_SAMPLE) {
+    const pluginDir = path.join(runtimeDir, 'node_modules', ...name.split('/'));
+    mkdirSync(pluginDir, { recursive: true });
+    writeFileSync(path.join(pluginDir, 'package.json'), JSON.stringify({ name, version: '0.1.5-rc.2' }));
+  }
   return resourcesDir;
 }
 
@@ -119,6 +132,38 @@ test('packaged runtime verification rejects version or platform drift', () => {
     assert.throws(() => verifyPackagedDshRuntime(resourcesDir, 'darwin'), /version mismatch/);
     writeFileSync(dshManifest, JSON.stringify({ version: '0.1.1-rc.2' }));
     assert.throws(() => verifyPackagedDshRuntime(resourcesDir, 'win32'), /wrong packaged dsh platform/);
+  } finally {
+    rmSync(resourcesDir, { recursive: true, force: true });
+  }
+});
+
+test('upstream client-plugin closure sample pins the sidebarRight provider and its first-screen deps (S4)', () => {
+  // 收缩抽样 = 有意删门禁：这个断言让删除/改写必须是一次显式编辑。
+  assert.deepEqual([...PACKAGED_CLIENT_CLOSURE_SAMPLE], [
+    '@deepseek-ai/dsh-client-ui-sidebar-right',
+    '@deepseek-ai/dsh-client-resources',
+    '@deepseek-ai/dsh-client-ui-chat',
+  ]);
+});
+
+test('startup and packaging closure samples stay in lockstep (S4)', () => {
+  assert.deepEqual(
+    RUNTIME_CLIENT_CLOSURE_SAMPLE.map((entry) => entry.split('/').slice(0, 3).join('/')),
+    PACKAGED_CLIENT_CLOSURE_SAMPLE.map((name) => `node_modules/${name}`),
+    'runtime-tree-check.ts 的安装期抽样与 after-pack-adhoc-sign.mjs 的打包期抽样必须一一对应',
+  );
+});
+
+test('packaged runtime verification rejects a missing upstream client-plugin closure entry (S4)', () => {
+  const resourcesDir = fixture();
+  try {
+    rmSync(path.join(resourcesDir, 'vendor', 'dsh', 'node_modules', '@deepseek-ai', 'dsh-client-ui-sidebar-right'),
+      { recursive: true, force: true });
+    assert.throws(
+      () => verifyPackagedDshRuntime(resourcesDir, 'darwin'),
+      /missing upstream client plugins @deepseek-ai\/dsh-client-ui-sidebar-right/,
+      '缺 sidebarRight 唯一 provider 的封装不得通过 afterPack',
+    );
   } finally {
     rmSync(resourcesDir, { recursive: true, force: true });
   }

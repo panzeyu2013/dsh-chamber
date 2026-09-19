@@ -5,6 +5,11 @@
  * by no-follow identity checks. In particular, an existing `dsh-runtime`
  * entry must be a real directory: callers never chmod, write through, or
  * recursively delete a symlinked runtime root.
+ *
+ * Platforms without O_NOFOLLOW/O_DIRECTORY (win32) resolve portable flags
+ * through resolveNoFollowFlags() instead of refusing to start; every open then
+ * carries the no-follow guarantee through lstat identity checks immediately
+ * before and after the descriptor (see openPrivateNoFollowSync).
  */
 import {
   closeSync,
@@ -100,23 +105,115 @@ function samePreciseFileSnapshot(left: BigIntStats, right: BigIntStats): boolean
     && left.ctimeNs === right.ctimeNs
 }
 
-function noFollowReadFlags(): number {
-  if (typeof constants.O_NOFOLLOW !== 'number') {
-    throw new Error('当前平台缺少 O_NOFOLLOW，拒绝访问 runtime 私有状态')
-  }
-  return constants.O_RDONLY | constants.O_NOFOLLOW
+/** The node:fs `constants` subset the no-follow strategy reads. Injectable
+ *  so the POSIX branch (O_NOFOLLOW present) and the no-flag fallback branch are
+ *  both unit-testable without a win32 host. */
+export interface NoFollowConstantsLike {
+  O_RDONLY?: number
+  O_WRONLY?: number
+  O_CREAT?: number
+  O_EXCL?: number
+  O_NOFOLLOW?: number
+  O_DIRECTORY?: number
 }
 
-function noFollowWriteFlags(): number {
-  if (typeof constants.O_NOFOLLOW !== 'number') {
-    throw new Error('当前平台缺少 O_NOFOLLOW，拒绝写入 runtime 私有状态')
-  }
-  return constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW
+export type NoFollowOpenKind = 'read' | 'write' | 'directory'
+
+export interface ResolvedNoFollowFlags {
+  /** `open(2)` flags for the requested kind. */
+  flags: number
+  /** True when the kernel itself refuses a symlinked final component because
+   *  O_NOFOLLOW rides in `flags`; false when the platform does not expose the
+   *  constant and the open helper below must re-prove identity in user space. */
+  kernelNoFollow: boolean
 }
 
-function noFollowDirectoryFlags(): number {
-  const directory = typeof constants.O_DIRECTORY === 'number' ? constants.O_DIRECTORY : 0
-  return noFollowReadFlags() | directory
+/**
+ * Platform-aware no-follow strategy.
+ *
+ * POSIX keeps the historical O_NOFOLLOW/O_DIRECTORY flags byte-for-byte. Windows
+ * exposes neither constant (`typeof undefined`); hard-failing there is what
+ * made an existing <userData>/dsh-runtime unreadable and killed the gated
+ * runtime transaction. The gateway already treats win32 as a separate shape and
+ * skips the POSIX primitives rather than throwing
+ * (packages/gateway/src/runtime-manager.ts:632-648), and control-plane's
+ * identity-only pin proves the same guarantee without a descriptor
+ * (packages/control-plane/src/private-file.ts:85-107,182-209). The fallback
+ * flags therefore drop O_NOFOLLOW/O_DIRECTORY and openPrivateNoFollowSync()
+ * restores the guarantee with lstat identity checks around the open.
+ */
+export function resolveNoFollowFlags(
+  kind: NoFollowOpenKind,
+  constantsLike: NoFollowConstantsLike = constants,
+): ResolvedNoFollowFlags {
+  const noFollow = typeof constantsLike.O_NOFOLLOW === 'number' ? constantsLike.O_NOFOLLOW : 0
+  if (kind === 'write') {
+    // O_WRONLY|O_CREAT|O_EXCL mirrors the historical writer flags. O_EXCL is
+    // also the fallback freshness proof: an already-present leaf (symlink or
+    // hard link included) fails the open itself with the raw EEXIST contention
+    // signal, so there is no final component left to follow.
+    return {
+      flags: (constantsLike.O_WRONLY ?? 0)
+        | (constantsLike.O_CREAT ?? 0)
+        | (constantsLike.O_EXCL ?? 0)
+        | noFollow,
+      kernelNoFollow: noFollow !== 0,
+    }
+  }
+  const directory = kind === 'directory' && typeof constantsLike.O_DIRECTORY === 'number'
+    ? constantsLike.O_DIRECTORY
+    : 0
+  return {
+    flags: (constantsLike.O_RDONLY ?? 0) | directory | noFollow,
+    kernelNoFollow: noFollow !== 0,
+  }
+}
+
+export interface NoFollowOpenOptions {
+  /** Create mode for the 'write' kind (O_CREAT|O_EXCL is always included). */
+  mode?: number
+  /** Deterministic fallback-path seam; production callers omit it. */
+  constantsLike?: NoFollowConstantsLike
+}
+
+/**
+ * Open one private path through the platform no-follow strategy. POSIX hands
+ * O_NOFOLLOW to open(2) itself, exactly as before. Without it the guarantee is
+ * re-established in user space, mirroring control-plane private-file.ts:85-107:
+ * (a) the leaf is lstat-ed immediately before the open and a symlinked final
+ * component is refused, and (b) after the open the path is lstat-ed again and
+ * must still name the exact inode (dev/ino) the descriptor returned. Anything
+ * the fallback cannot prove throws, and every caller's fail-closed wrapper
+ * turns that into a refusal or 'unsafe'.
+ */
+export function openPrivateNoFollowSync(
+  path: string,
+  kind: NoFollowOpenKind,
+  options: NoFollowOpenOptions = {},
+): { fd: number; stats: Stats } {
+  const { flags, kernelNoFollow } = resolveNoFollowFlags(kind, options.constantsLike)
+  if (!kernelNoFollow && kind !== 'write') {
+    const before = lstatSync(path)
+    if (before.isSymbolicLink()) {
+      throw new Error(`私有路径的最终组件是符号链接，拒绝打开：${basename(path)}`)
+    }
+  }
+  const fd = kind === 'write'
+    ? openSync(path, flags, options.mode ?? PRIVATE_RUNTIME_FILE_MODE)
+    : openSync(path, flags)
+  try {
+    const stats = fstatSync(fd)
+    if (!kernelNoFollow) {
+      const atPath = lstatSync(path)
+      if (atPath.isSymbolicLink() || !sameIdentity(stats, atPath)) {
+        throw new Error(`私有路径打开后身份复验失败：${basename(path)}`)
+      }
+    }
+    return { fd, stats }
+  } catch (error) {
+    try { closeSync(fd) } catch { /* already closed */ }
+    throw error
+  }
 }
 
 function syncFd(fd: number, deps?: PrivateFsDurabilityDeps): void {
@@ -157,8 +254,9 @@ function pinRealDirectory(path: string, tighten: boolean): PinnedDirectory {
 
   let fd: number | null = null
   try {
-    fd = openSync(path, noFollowDirectoryFlags())
-    const opened = fstatSync(fd)
+    const openedDirectory = openPrivateNoFollowSync(path, 'directory')
+    fd = openedDirectory.fd
+    const opened = openedDirectory.stats
     if (!opened.isDirectory() || !sameIdentity(before, opened)) {
       throw new Error(`私有目录身份不稳定：${basename(path)}`)
     }
@@ -342,11 +440,7 @@ export function atomicWriteRuntimeFileNoFollow(
   let fd: number | null = null
   let tmpIdentity: RuntimeFileIdentity | null = null
   try {
-    fd = openSync(
-      tmp,
-      noFollowWriteFlags(),
-      PRIVATE_RUNTIME_FILE_MODE,
-    )
+    fd = openPrivateNoFollowSync(tmp, 'write').fd
     fchmodSync(fd, PRIVATE_RUNTIME_FILE_MODE)
     const created = fstatSync(fd)
     if (!created.isFile() || created.nlink !== 1) throw new Error('runtime 临时文件身份不安全')
@@ -423,7 +517,7 @@ export function createRuntimeFileExclusiveNoFollow(
     verifyPinnedDirectory(parentPin, 'runtime 独占创建前父目录身份复验失败')
     // Keep the raw EEXIST from O_EXCL: owners use it as the authoritative
     // contention signal, including for existing symlink/hard-link leaves.
-    fd = openSync(filePath, noFollowWriteFlags(), PRIVATE_RUNTIME_FILE_MODE)
+    fd = openPrivateNoFollowSync(filePath, 'write').fd
     const created = fstatSync(fd)
     if (!created.isFile() || created.nlink !== 1) {
       throw new Error('runtime 独占创建文件身份不安全')
@@ -644,8 +738,9 @@ export function readPrivateFileNoFollow(
 
   let fd: number | null = null
   try {
-    fd = openSync(filePath, noFollowReadFlags())
-    const opened = fstatSync(fd)
+    const openedFile = openPrivateNoFollowSync(filePath, 'read')
+    fd = openedFile.fd
+    const opened = openedFile.stats
     if (!opened.isFile() || opened.nlink !== 1 || !sameIdentity(leafBefore, opened) || opened.size > maxBytes) {
       return { kind: 'unsafe' }
     }

@@ -623,11 +623,11 @@ test('P-12: a persisted strict-rejected origin is preserved as corrupt (read pat
 })
 test('computeSupported: launchAtLogin on all shipping platforms; closeToTray follows tray availability, always on darwin', () => {
   // design 21 M4: win32 launchAtLogin unlocked (HKCU Run key).
-  assert.deepEqual(computeSupported('win32', true), { launchAtLogin: true, closeToTray: true });
-  assert.deepEqual(computeSupported('win32', false), { launchAtLogin: true, closeToTray: false });
-  assert.deepEqual(computeSupported('darwin', false), { launchAtLogin: true, closeToTray: true });
-  assert.deepEqual(computeSupported('linux', true), { launchAtLogin: true, closeToTray: true });
-  assert.deepEqual(computeSupported('linux', false), { launchAtLogin: true, closeToTray: false });
+  assert.deepEqual(computeSupported('win32', true), { launchAtLogin: true, closeToTray: true, badgeSupported: false });
+  assert.deepEqual(computeSupported('win32', false), { launchAtLogin: true, closeToTray: false, badgeSupported: false });
+  assert.deepEqual(computeSupported('darwin', false), { launchAtLogin: true, closeToTray: true, badgeSupported: true });
+  assert.deepEqual(computeSupported('linux', true), { launchAtLogin: true, closeToTray: true, badgeSupported: true });
+  assert.deepEqual(computeSupported('linux', false), { launchAtLogin: true, closeToTray: false, badgeSupported: true });
 });
 
 test('closeToTrayRecoveryAvailable: macOS Dock always recovers; elsewhere the tray is the gate', () => {

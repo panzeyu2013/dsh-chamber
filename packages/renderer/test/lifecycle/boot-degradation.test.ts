@@ -16,20 +16,25 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   BOOT_GAP_POLICY,
+  bootGapPriority,
+  shouldReplaceBootGap,
+  bootGapClearMatchesFact,
   bootGapNotice,
   bootGapSignature,
   isRetryableBootGap,
+  isShellDegradedClear,
   toServerBootGap,
   type ShellDegradedFact,
   type ShellDegradedKind,
 } from '../../src/boot-gap.ts'
 import { en, zh } from '../../src/locales.ts'
-import { planDegradedRetries, type DegradedMountFact } from '../../src/degraded-retry.ts'
+import { forgetDegradedRetry, planDegradedRetries, type DegradedMountFact } from '../../src/degraded-retry.ts'
 
 // --- merged from test/boot-gap.test.ts ---
 
 const KINDS: readonly ShellDegradedKind[] = [
   'graph-unavailable',
+  'local-graph-not-injected',
   'required-services-missing',
   'deferred-registration-failed',
 ]
@@ -69,6 +74,20 @@ test('bootGapSignature: kind AND payload make the fact (same kind, richer payloa
     bootGapSignature({ kind: 'deferred-registration-failed', message: 'm', failedIds: ['a'] }),
     bootGapSignature({ kind: 'deferred-registration-failed', message: 'm', failedIds: ['a', 'b'] }),
   )
+})
+
+test('the local-graph-not-injected kind names the chamber-side cause, never a runtime upgrade (FIX 6)', () => {
+  const policy = BOOT_GAP_POLICY['local-graph-not-injected']
+  assert.equal(policy.retryable, true, 'a re-mount re-runs the graph fetch — one attempt is worth it')
+  assert.equal(policy.bodyKey, 'bootGap.body.localGraphNotInjected')
+  assert.notEqual(policy.bodyKey, BOOT_GAP_POLICY['graph-unavailable'].bodyKey)
+  for (const [locale, dict] of [['zh', zh], ['en', en]] as const) {
+    const body = dict['bootGap.body.localGraphNotInjected']
+    assert.notEqual(body.trim(), '', locale)
+    // The cause is chamber-side (installation/seed), so the ONLY repair path this
+    // copy may point at is not a dsh runtime upgrade (read-only on Windows).
+    assert.doesNotMatch(body, /升级|upgrade/i, `${locale} body must not advise a runtime upgrade`)
+  }
 })
 
 test('bootGapNotice: structured fields are carried whole, absent ones default to empty', () => {
@@ -125,6 +144,58 @@ test('bootGapNotice: the auto-retry promise needs a ready source with an unspent
   }
 })
 
+test('bootGapNotice: the manual next-step copy branches on the source kind (local vs remote, FIX 6c)', () => {
+  const fact: ShellDegradedFact = { kind: 'required-services-missing', message: 'm', services: ['sidebarRight'] }
+  // Remote (or unknown) sources keep the runtime-alignment advice; the local
+  // instance gets the actions that actually exist there — restart the local dsh,
+  // re-mount, report diagnostics. On Windows runtime management is read-only.
+  assert.equal(bootGapNotice(fact, { phase: 'ready', retried: true }).manualKey, 'bootGap.action.manual')
+  assert.equal(
+    bootGapNotice(fact, { phase: 'ready', retried: true, instanceId: 'ssh-a' }).manualKey,
+    'bootGap.action.manual',
+  )
+  assert.equal(
+    bootGapNotice(fact, { phase: 'ready', retried: true, instanceId: 'local' }).manualKey,
+    'bootGap.action.manualLocal',
+  )
+  for (const [locale, dict] of [['zh', zh], ['en', en]] as const) {
+    assert.notEqual(dict['bootGap.action.manualLocal'].trim(), '', locale)
+    assert.notEqual(
+      dict['bootGap.action.manualLocal'],
+      dict['bootGap.action.manual'],
+      `${locale}: the local advice must not reuse the remote sentence`,
+    )
+  }
+  assert.match(zh['bootGap.action.manualLocal'], /重启|重新挂载|诊断/)
+  assert.match(en['bootGap.action.manualLocal'], /restart/i)
+  assert.doesNotMatch(zh['bootGap.action.manualLocal'], /升级/, 'the local advice must not point at the read-only runtime upgrade')
+  assert.doesNotMatch(en['bootGap.action.manualLocal'], /upgrade/i, 'the local advice must not point at the read-only runtime upgrade')
+})
+
+test('bootGapClearMatchesFact: a retraction clears exactly the fact it names (kind + payload, FIX 1)', () => {
+  const fact: ShellDegradedFact = {
+    kind: 'required-services-missing',
+    message: 'm',
+    services: ['sidebarRight'],
+    injectedBy: ['@deepseek-ai/dsh-client-ui-chat'],
+  }
+  const clear = {
+    cleared: true as const,
+    kind: 'required-services-missing' as const,
+    signature: bootGapSignature(fact),
+  }
+  assert.equal(isShellDegradedClear(clear), true)
+  assert.equal(isShellDegradedClear(fact), false, 'a fact is not a retraction')
+  assert.equal(bootGapClearMatchesFact(fact, clear), true)
+  // A richer payload of the same kind is a DIFFERENT fact: an older retraction
+  // must never erase the newer verdict.
+  assert.equal(bootGapClearMatchesFact({ ...fact, services: ['sidebarRight', 'slots'] }, clear), false)
+  // Another kind's fact is never touched by this retraction.
+  assert.equal(bootGapClearMatchesFact({ kind: 'graph-unavailable', message: 'g' }, clear), false)
+  // Nothing recorded → a retraction is a no-op.
+  assert.equal(bootGapClearMatchesFact(null, clear), false)
+})
+
 test('bootGapNotice: the deferred-cluster fact names its row ids, not services', () => {
   const notice = bootGapNotice(
     {
@@ -179,8 +250,9 @@ test('no frame gap key carries a placeholder — the frame renders facts as elem
   // tests; here the correct lock is the absence of them.
   const keys = [
     'bootGap.title', 'bootGap.detail', 'bootGap.services', 'bootGap.injectedBy', 'bootGap.failedPlugins',
-    'bootGap.action.autoRetry', 'bootGap.action.manual',
-    'bootGap.body.graphUnavailable', 'bootGap.body.requiredServicesMissing', 'bootGap.body.deferredRegistrationFailed',
+    'bootGap.action.autoRetry', 'bootGap.action.manual', 'bootGap.action.manualLocal',
+    'bootGap.body.graphUnavailable', 'bootGap.body.localGraphNotInjected',
+    'bootGap.body.requiredServicesMissing', 'bootGap.body.deferredRegistrationFailed',
   ] as const
   for (const [locale, dict] of [['zh', zh], ['en', en]] as const) {
     for (const key of keys) {
@@ -275,3 +347,68 @@ test('planDegradedRetries: a kind a re-mount cannot fix never earns a re-mount',
     BOOT_GAP_POLICY['deferred-registration-failed'].retryable = original
   }
 })
+
+test('forgetDegradedRetry: a reclaimed view re-earns its automatic re-mount in the same epoch (FIX 5)', () => {
+  const first = planDegradedRetries({ degraded: [mount('ssh-a')], phaseOf: () => 'ready', retried: {} })
+  assert.deepEqual(first.retry, ['ssh-a'])
+  // The mark survives the retry's own idle reset (that is what prevents a loop)…
+  const idle = planDegradedRetries({ degraded: [], phaseOf: () => 'ready', retried: first.retried })
+  assert.deepEqual(
+    planDegradedRetries({ degraded: [mount('ssh-a')], phaseOf: () => 'ready', retried: idle.retried }).retry,
+    [],
+    'a second degrade inside the same epoch must not re-boot again',
+  )
+  // …and is forgotten exactly when the view is reclaimed: the next mount is a NEW
+  // boot (fresh serial, fresh shell state), so it must be allowed its own
+  // automatic re-mount again.
+  const reclaimed = forgetDegradedRetry(idle.retried, 'ssh-a')
+  assert.deepEqual(reclaimed, {})
+  assert.deepEqual(
+    planDegradedRetries({ degraded: [mount('ssh-a')], phaseOf: () => 'ready', retried: reclaimed }).retry,
+    ['ssh-a'],
+  )
+  // Other sources' marks are untouched, and the input is never mutated (the App
+  // stores the return value back into its ref).
+  const mixed = { 'ssh-a': true, 'ssh-b': true }
+  assert.deepEqual(forgetDegradedRetry(mixed, 'ssh-a'), { 'ssh-b': true })
+  assert.deepEqual(mixed, { 'ssh-a': true, 'ssh-b': true })
+  // A source with no mark is a no-op copy.
+  assert.deepEqual(forgetDegradedRetry({ 'ssh-b': true }, 'ssh-a'), { 'ssh-b': true })
+})
+
+// --- 2026-12 FIX 6 follow-up: cause outranks consequence in the single slot ---
+
+function factOf(kind: ShellDegradedKind, services?: readonly string[]): ShellDegradedFact {
+  return { kind, message: `${kind} (test)`, ...(services === undefined ? {} : { services }) }
+}
+
+test('bootGapPriority: cause kinds strictly outrank the missing-service consequence', () => {
+  assert.ok(bootGapPriority('local-graph-not-injected') > bootGapPriority('graph-unavailable'))
+  assert.ok(bootGapPriority('graph-unavailable') > bootGapPriority('deferred-registration-failed'))
+  assert.ok(bootGapPriority('deferred-registration-failed') > bootGapPriority('required-services-missing'))
+  // The rank table is a total order over the union (no ties), so the shell's
+  // "replace when >= current" rule can never flip-flop between two kinds.
+  const ranks = KINDS.map(kind => bootGapPriority(kind))
+  assert.equal(new Set(ranks).size, KINDS.length)
+})
+
+test('shouldReplaceBootGap: a recorded cause is not overwritten by its own symptom', () => {
+  // Nothing recorded -> always replace.
+  assert.equal(shouldReplaceBootGap(null, factOf('required-services-missing', ['sidebarRight'])), true)
+  // Same kind -> replace (the payload may have grown).
+  assert.equal(
+    shouldReplaceBootGap(factOf('required-services-missing', ['sidebarRight']), factOf('required-services-missing', ['sidebarRight', 'slots'])),
+    true,
+  )
+  // Cause recorded, consequence arrives 5s later -> keep the cause.
+  assert.equal(shouldReplaceBootGap(factOf('local-graph-not-injected'), factOf('required-services-missing', ['sidebarRight'])), false)
+  assert.equal(shouldReplaceBootGap(factOf('graph-unavailable'), factOf('required-services-missing', ['sidebarRight'])), false)
+  assert.equal(shouldReplaceBootGap(factOf('deferred-registration-failed'), factOf('required-services-missing', ['sidebarRight'])), false)
+  // Consequence recorded first, cause arrives later -> upgrade to the cause.
+  assert.equal(shouldReplaceBootGap(factOf('required-services-missing', ['sidebarRight']), factOf('graph-unavailable')), true)
+  assert.equal(shouldReplaceBootGap(factOf('graph-unavailable'), factOf('local-graph-not-injected')), true)
+  // A lower-priority cause does not downgrade a higher-priority one either.
+  assert.equal(shouldReplaceBootGap(factOf('local-graph-not-injected'), factOf('graph-unavailable')), false)
+  assert.equal(shouldReplaceBootGap(factOf('graph-unavailable'), factOf('deferred-registration-failed')), false)
+})
+

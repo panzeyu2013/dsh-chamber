@@ -177,7 +177,7 @@
 - Linux桌面（design 22）：剩余实机门禁按 §7清单（GNOME X11+Wayland/KDE抽验：XDG自启、深链冷/热与
   CHROME_DESKTOP/xdg-mime路由及升级后重注册、托盘/通知点击、safeStorage keyring、SSH密码全链、运行时打包态全链、自动更新端到端、AppImage沙箱与Wayland焦点；另复核before-quit无头挂住）；release.yml dry_run全链（需GitHub可达）；deb/arm64后续；未动项见design 22 §5。
 
-- 桌面通知 / 未读徽标（design 19）：通知剩余macOS权限/拒绝行为的打包态实机走查（见design 19 §3.3/§4.1）、点击打开、关窗/托盘/后台三形态；徽标剩余macOS Dock打包态三态（武装/解除/退役 + 重载与退出清零）实机；Linux仅Unity launcher家族可见；Windows任务栏overlay v1门控未接线（design 23实机矩阵排期）。
+- 桌面通知 / 未读徽标（design 19）：通知剩余macOS权限/拒绝行为的打包态实机走查（见design 19 §3.3/§4.1）、点击打开、关窗/托盘/后台三形态；徽标剩余macOS Dock打包态三态（武装/解除/退役 + 重载与退出清零）实机；Linux仅Unity launcher家族可见；Windows任务栏overlay已接线能力位（`supported.badgeSupported` 在 win32 为 false，设置页据此禁用并给出原因，2026-12），其实机可见性随 design 23 M3 矩阵复核。
 
 - 会话待办区（design 06 §8）：剩余实机门禁——通用页开关即时生效、同源/跨来源/未常驻跳转与权威移除、折叠来源中目标、断连→重连重现、rail不渲染、「还有N项」展开/收起与自动收起、展开内滚动（8行上限）、拖拽尾随点击不误开、同会话内联重命名不打断、打包态。
 

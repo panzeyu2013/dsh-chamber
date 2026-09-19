@@ -128,7 +128,7 @@ import {
   type FrameKey, type FrameLocale,
 } from './locales.ts'
 import { BOOT_TIMEOUT_MS } from './boot-budget.ts'
-import { planDegradedRetries } from './degraded-retry.ts'
+import { forgetDegradedRetry, planDegradedRetries } from './degraded-retry.ts'
 // Settled-boot gap → render decision (design 05 §4 「降级呈现」). The pure module
 // owns the copy key, the retry verdict and the "will the self-heal re-mount
 // this?" rule; the frame only maps its keys through `t`.
@@ -2984,6 +2984,12 @@ export default function App() {
     // reclaimView 头注随 producer 通道撤回自行收敛。
     chamberBridge.clearPluginDiagnostic(id)
     delete hiddenSinceRef.current[id]
+    // 2026-12 FIX 5: the once-per-ready-epoch self-heal mark belongs to the
+    // MOUNT, not to the id. Reclaiming the view tears the shell down, and the
+    // next mount is a NEW boot (fresh serial, fresh state) — keeping the old
+    // mark would silently forbid the fresh mount its automatic re-mount for the
+    // rest of the ready epoch (manual retry only).
+    degradedRetriedRef.current = forgetDegradedRetry(degradedRetriedRef.current, id)
     setMountedViews(prev => withoutRemovedSourceIds(prev, new Set([id])))
     setShellStates(prev => withoutRemovedSourceKeys(prev, new Set([id])))
     setRetryTokens(prev => withoutRemovedSourceKeys(prev, new Set([id])))
@@ -4210,6 +4216,10 @@ const HEALTH_ERROR_GRACE_MS = 10_000
     : bootGapNotice(activeShellGap, {
         phase: servers.find(server => server.id === activeView)?.phase,
         retried: degradedRetriedRef.current[activeView] === true,
+        // 2026-12 FIX 6c: the manual next-step copy branches on this STRUCTURED
+        // fact (local runtime management is read-only on Windows), never on the
+        // producer's diagnostic sentence.
+        instanceId: activeView,
       })
 
   // 停滞提示的可见集合（用户已忽略的来源不再提示；来源恢复即自动解除忽略）。
@@ -4397,7 +4407,11 @@ const HEALTH_ERROR_GRACE_MS = 10_000
                 </div>
               )}
               <div className="boot-gap-action">
-                {t(activeBootGap.autoRetryArmed ? 'bootGap.action.autoRetry' : 'bootGap.action.manual')}
+                {/* The manual half is decided by boot-gap.ts (kind + source id);
+                    autoRetryArmed keeps its own honest promise. Local and remote
+                    sources get DIFFERENT manual copy (FIX 6c): the local runtime
+                    is a read-only projection on Windows. */}
+                {t(activeBootGap.autoRetryArmed ? 'bootGap.action.autoRetry' : activeBootGap.manualKey)}
               </div>
               {activeBootGap.detail !== '' && (
                 <div className="boot-gap-detail">{t('bootGap.detail')}: {activeBootGap.detail}</div>

@@ -39,7 +39,8 @@
  *   代理提问时 / 审批请求时，与通知组共用同一组文案，2026-09 措辞统一），
  *   默认全开——被动呈现（仅在有内容时出现，零占用）;
  * - 通知 (design 19, merged into General — no new nav entry): 主开关 + 未读
- *   徽标开关（design 19 §3.7，独立于主开关、始终可见）+ 启用后展开的子设置
+ *   徽标开关（design 19 §3.7，独立于主开关；平台能力门 design 23 M3——
+ *   win32 无任务栏 overlay，badgeSupported=false 时禁用并给出原因）+ 启用后展开的子设置
  *   (通知时机 hidden-only / always + 事件开关 complete / ask / request +
  *   「发送测试通知」);
  * - 更新 (design 11, merged into General): current version +「检查更新」+
@@ -73,6 +74,17 @@ import css from './SettingsShell.module.css'
 
 /** The shell's bound translate (params supported). */
 type GeneralTranslate = (key: SettingsBridgeKey, params?: Record<string, unknown>) => string
+
+/**
+ * The platform-capability projection, with the unread-badge fact read as an
+ * OPTIONAL field: the desktop main process now always sets
+ * `badgeSupported` (false on win32, design 19 §3.7 / design 23 M3), while an
+ * older main process — or the shared renderer contract before it carries the
+ * field — omits it. Absent therefore means "assume supported", which is
+ * exactly the pre-capability rendering (backward compatible); only an
+ * explicit false disables the control.
+ */
+type SupportedGates = ChamberSettingsStatus['supported'] & { badgeSupported?: boolean }
 
 /** One checkbox toggle in a card (grid): title + optional hint left, native
  *  checkbox right; the WHOLE card is the label so the hit target is the card.
@@ -264,8 +276,12 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
   // disabled until hydrated (a click before hydration would save a value the
   // UI never showed).
   const settings = status?.settings
-  const supported = status?.supported
+  const supported: SupportedGates | undefined = status?.supported
   const hydrated = status !== null
+  // 未读徽标平台能力（design 19 §3.7 / design 23 M3）：win32 的任务栏 overlay
+  // v1 未接线，主进程能力事实为 false——开关禁用并显示短原因。字段缺失
+  // （旧主进程）按支持渲染，保持向后兼容。
+  const badgeSupported = supported?.badgeSupported !== false
   // Notifications block (design 19 §3.4): design defaults while absent — never
   // a fake off (unknown/future keys filtered in notificationsOf).
   const notifications = notificationsOf(settings)
@@ -448,16 +464,21 @@ export function GeneralView({ t }: { t: GeneralTranslate }) {
             Dock/任务栏应用图标上的红色数字气泡（未读会话数）。关闭时主进程
             裁决强制清零（开关一切立即清除，行为诚实）。同样用无边框披露行
             （.generalSwitchRow），与主开关同节奏，不增加边框层数——本行不展开
-            任何子设置，因此用原语本身（无披露属性）。 */}
-        <label className={clsx(css.generalSwitchRow, !hydrated && css.generalDisabled)}>
+            任何子设置，因此用原语本身（无披露属性）。平台能力门（design 23
+            M3）：win32 的任务栏 overlay 未接线，badgeSupported===false 时禁用
+            开关并给出短原因，绝不呈现一个永远无效的开关。 */}
+        <label className={clsx(css.generalSwitchRow, (!hydrated || !badgeSupported) && css.generalDisabled)}>
           <div className={css.generalCardText}>
             <span className={css.generalFieldLabel}>{t('generalNotificationsBadge')}</span>
+            {!badgeSupported && (
+              <p className={css.generalHint}>{t('generalNotificationsBadgeUnsupported')}</p>
+            )}
           </div>
           <span className={css.generalSwitchBox}>
             <Switch
               checked={notifications.badgeEnabled !== false}
               label={t('generalNotificationsBadge')}
-              disabled={!hydrated}
+              disabled={!hydrated || !badgeSupported}
               onChange={(next) => save(notificationsPatch({ badgeEnabled: next }))}
             />
           </span>

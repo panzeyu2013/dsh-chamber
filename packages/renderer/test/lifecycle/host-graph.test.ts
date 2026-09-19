@@ -432,6 +432,43 @@ test('collectExtraRows: a missing graph endpoint reports not-injected', async (t
   assert.equal(diagnostic?.state, 'not-injected')
 })
 
+test('collectExtraRows: a local 404 is a chamber-side gap; a remote 404 keeps the no-graph exemption (FIX 6)', async (t) => {
+  // The chamber-managed local host always injects its client graph (seed row):
+  // a 404 / method-missing answer on `local` is an installation/seed fact, so it
+  // must reach the App with its OWN kind and the self-heal. A remote/gateway
+  // source may legitimately serve no graph at all — its 404 stays fact-free.
+  const localGaps: { message: string; kind: string }[] = []
+  stubFetch(t, 404, {})
+  captureConsoleError(t)
+  assert.deepEqual(await collectExtraRows('local', '/api/i/local', {
+    loadModuleBundle: async () => {},
+    onGraphUnavailable: (message, kind) => localGaps.push({ message, kind }),
+  }), [])
+  assert.equal(localGaps.length, 1, 'the local 404 must not stay silent any more')
+  assert.equal(localGaps[0]!.kind, 'local-graph-not-injected')
+  assert.match(localGaps[0]!.message, /no profile client plugins/)
+  // Same for the envelope's "unknown method" classification (not only HTTP 404).
+  const methodGaps: string[] = []
+  stubFetch(t, 200, {
+    rpcId: 'r1',
+    result: { ok: false, error: { code: 'rpc_failed', message: 'unknown method clientGraph/graph' } },
+  })
+  captureConsoleError(t)
+  assert.deepEqual(await collectExtraRows('local', '/api/i/local', {
+    loadModuleBundle: async () => {},
+    onGraphUnavailable: (_message, kind) => methodGaps.push(kind),
+  }), [])
+  assert.deepEqual(methodGaps, ['local-graph-not-injected'])
+  const remoteGaps: string[] = []
+  stubFetch(t, 404, {})
+  captureConsoleError(t)
+  assert.deepEqual(await collectExtraRows('ssh-remote', '/api/i/ssh-remote', {
+    loadModuleBundle: async () => {},
+    onGraphUnavailable: (message) => remoteGaps.push(message),
+  }), [])
+  assert.deepEqual(remoteGaps, [], 'a remote 404 is the legitimate no-endpoint shape — never a degrade')
+})
+
 test('collectExtraRows: an exhausted 503 budget names itself, publishes the diagnostic and returns []', async (t) => {
   // 2026-09-10 (sidebarRight 彻底修复): this used to degrade in TOTAL silence —
   // the operator saw nothing, the connections page still said 正常, and the App
@@ -442,11 +479,12 @@ test('collectExtraRows: an exhausted 503 budget names itself, publishes the diag
   const noSleep = async () => {}
   const diagnostics: { sourceId: string; state: string }[] = []
   const unavailable: string[] = []
+  const gapKinds: string[] = []
   assert.deepEqual(await collectExtraRows('local', '/api/i/local', {
     loadModuleBundle: async () => {},
     retry: { attempts: 3, delayMs: 1, sleep: noSleep },
     reportDiagnostic: (sourceId, diagnostic) => diagnostics.push({ sourceId, state: diagnostic.state }),
-    onGraphUnavailable: (message) => unavailable.push(message),
+    onGraphUnavailable: (message, kind) => { unavailable.push(message); gapKinds.push(kind) },
   }), [])
   // The transient pre-ready 503 is retried up to the budget, not one-shot.
   assert.equal(stub.calls.length, 3)
@@ -455,6 +493,8 @@ test('collectExtraRows: an exhausted 503 budget names itself, publishes the diag
   assert.deepEqual(diagnostics, [{ sourceId: 'local', state: 'graph-unreachable' }])
   assert.equal(unavailable.length, 1)
   assert.match(unavailable[0], /no profile client plugins/)
+  // The 503 exhaustion is a channel failure, never the local-404 kind.
+  assert.deepEqual(gapKinds, ['graph-unavailable'])
 })
 
 test('collectExtraRows: a slow source is waited for, then served on a fresh budget (2026-09-10)', async (t) => {
@@ -498,22 +538,50 @@ test('collectExtraRows: a gate that never sees the source serve ends degraded (n
   assert.equal(unavailable.length, 1)
 })
 
-test('collectExtraRows: a 404 endpoint (no graph injected) stays a documented non-degrade', async (t) => {
+test('collectExtraRows: a REMOTE 404 endpoint (no graph injected) stays a documented non-degrade', async (t) => {
   // The gateway/mobile shape legitimately runs without the graph — that is not
   // a degrade, and the App must NOT be asked to re-boot for it. 2026-12 (boot
   // 死区收敛 W3) narrowed this boundary to the 404 shape ONLY: every other
   // channel failure now reports the degrade fact, because that mount ships a
   // plugin-less shell whose only explanation was a diagnostic rendered by the
   // packages this very boot failed to load (see the new test below).
+  // FIX 6 (2026-12): the exemption is REMOTE-only — the chamber-managed local
+  // instance's 404 is its own local-graph-not-injected fact, owned by the
+  // sibling test below through the same onGraphUnavailable seam.
   stubFetch(t, 404, { code: 'not_found', error: 'unknown method' })
   const unavailable: string[] = []
   captureConsoleError(t)
-  assert.deepEqual(await collectExtraRows('local', '/api/i/local', {
+  assert.deepEqual(await collectExtraRows('gateway-test-404', '/api/i/gateway-test-404', {
     loadModuleBundle: async () => {},
     retry: { attempts: 2, delayMs: 1, sleep: async () => {} },
     onGraphUnavailable: (message) => unavailable.push(message),
   }), [])
-  assert.deepEqual(unavailable, [], 'a missing graph endpoint is not a serving degrade')
+  assert.deepEqual(unavailable, [], 'a remote missing graph endpoint is not a serving degrade')
+})
+
+test('collectExtraRows: a local 404 surfaces the local-graph-not-injected gap through the seam (FIX 6)', async (t) => {
+  // Same 404 wire answer as the REMOTE case above — only the SOURCE differs.
+  // The chamber-managed local host always injects its client graph (seed row),
+  // so a 404 / method-missing answer on 'local' is a chamber-side
+  // installation/seed fact: it must reach the App as local-graph-not-injected
+  // through the SAME onGraphUnavailable(message, kind) seam every degrade kind
+  // uses (the App mirrors that fact into the boot-gap banner and the
+  // self-heal), while the connections-page diagnostic stays the raw channel
+  // classification.
+  stubFetch(t, 404, { code: 'not_found', error: 'unknown method' })
+  captureConsoleError(t)
+  const gaps: { message: string; kind: string }[] = []
+  const diagnostics: { state: string }[] = []
+  assert.deepEqual(await collectExtraRows('local', '/api/i/local', {
+    loadModuleBundle: async () => {},
+    retry: { attempts: 2, delayMs: 1, sleep: async () => {} },
+    reportDiagnostic: (_sourceId, diagnostic) => { diagnostics.push({ state: diagnostic.state }) },
+    onGraphUnavailable: (message, kind) => gaps.push({ message, kind }),
+  }), [])
+  assert.deepEqual(gaps.map(gap => gap.kind), ['local-graph-not-injected'])
+  assert.match(gaps[0]!.message, /did not answer its client plugin graph request/)
+  assert.match(gaps[0]!.message, /404/)
+  assert.deepEqual(diagnostics, [{ state: 'not-injected' }])
 })
 
 test('collectExtraRows: a 502/504 channel failure reports the App-facing degrade fact (2026-12 W3)', async (t) => {

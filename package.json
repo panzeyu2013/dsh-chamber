@@ -101,7 +101,7 @@
     "test:connection": "pnpm --filter @deepseek-ai/dsh-client-connection run test",
     "test:cli": "pnpm --filter @dsh-chamber/cli run test",
     "test:gateway": "pnpm --filter @dsh-chamber/gateway run test",
-    "test:win32": "pnpm --filter @dsh-chamber/dsh-runtime run test:win32 && pnpm --filter @dsh-chamber/control-plane run test:win32 && pnpm --filter @dsh-chamber/desktop run test:win32",
+    "test:win32": "pnpm --filter @dsh-chamber/dsh-runtime run test:win32 && pnpm --filter @dsh-chamber/control-plane run test:win32 && pnpm --filter @dsh-chamber/desktop run test:win32 && pnpm --filter @dsh-chamber/renderer run test:win32 && pnpm --filter @dsh-chamber/dsh-chamber-client-ui-sidebar run test:win32",
     "release:preflight": "node scripts/release/release-preflight.mjs",
     "typecheck:api-gateway": "node scripts/dev/typecheck-api-gateway.mjs"
   },

@@ -12,6 +12,14 @@
  * the root `smoke` script runs that exact path directly (root package.json),
  * so it stays at the test/ top level.
  *
+ * Zero-test guard (S5 / review/windows FIX C, ported from
+ * packages/desktop/scripts/test.mjs:207-223): each child's node:test summary
+ * is parsed; a listed file that exits 0 without a summary line or with
+ * `tests 0` fails the run, so a manifest entry that was silently skipped can
+ * no longer be green. A file whose registered tests are all platform-skipped
+ * still prints a summary (tests > 0) and stays green — the listed set and its
+ * selection semantics are unchanged.
+ *
  * Platform split (2026-09, structural — no file lists in workflow YAML): the
  * POSIX-semantics suites (private-fs O_NOFOLLOW/0700 etc., fail-closed on
  * win32 by design) run on the POSIX legs via `test`. The Windows CI leg runs
@@ -93,6 +101,9 @@ const GROUPS = {
     // CI leg (design 02 §5.1 parity work, M1).
     'test/windows/win-probes.test.ts',
     'test/windows/win32-lifecycle.integration.test.ts',
+    // Zero-test guard of this manifest (S5 / review/windows FIX C), pinned on
+    // every leg and on the Windows one.
+    'test/windows/test-runner-guard.test.mjs',
   ],
 }
 
@@ -103,45 +114,90 @@ const WIN32_FILES = [
   // runs the real CIM/netstat/taskkill gates on windows-2022.
   'test/windows/win-probes.test.ts',
   'test/windows/win32-lifecycle.integration.test.ts',
+  // Zero-test guard of this manifest (S5 / review/windows FIX C); it is
+  // platform-neutral and fast, so the Windows leg pins it too.
+  'test/windows/test-runner-guard.test.mjs',
   // The §6.11 judgement face is platform-neutral (join/mkdtemp/tmpdir only) and
   // runs in ~25 ms, so the Windows leg gets the same pins as the POSIX legs —
   // including symlink/junction semantics of readInstalledVersion.
   'test/plugins/protected-plugins.test.ts',
 ]
 
-const isWin32 = process.argv.includes('--win32')
-// `--win32` selects the set; it does not require Windows. The lifecycle
-// integration self-skips on POSIX anyway, so a POSIX machine still exercises
-// the parsers and the skip path.
-const entries = Object.entries(GROUPS).flatMap(([group, list]) =>
-  list.map(entry => (typeof entry === 'string' ? { group, file: entry, nodeArgs: [] } : { group, nodeArgs: [], ...entry })),
-)
-const missing = entries.filter(entry => !existsSync(join(PACKAGE_ROOT, entry.file)))
-if (missing.length > 0) {
-  console.error('[test:control-plane] listed test file(s) missing:')
-  for (const entry of missing) console.error('  - ' + entry.file)
-  process.exit(1)
+/** node:test summary lines: the spec reporter prints "ℹ tests N" and TAP
+ *  prints the same key behind "#". */
+const SUMMARY_LINE = /^(?:ℹ|#) tests (\d+)\s*$/gm
+
+/**
+ * The LAST node:test `tests` total in `output`, or null when the child never
+ * printed a runner summary. `tests` counts REGISTERED tests (skipped/todo
+ * included), so this deliberately mirrors the desktop runner's verdict and
+ * not the stricter pass+fail check: a fully platform-skipped listed file
+ * (e.g. the win32-only lifecycle integration test on a POSIX leg) still has a
+ * summary and must stay green, while a child that never entered node:test has
+ * no summary at all — the silently skipped manifest entry this guard stops.
+ * @param {string} output - combined child stdout + stderr.
+ * @returns {number | null}
+ */
+export function parseReportedTestCount(output) {
+  let count = null
+  for (const match of output.matchAll(SUMMARY_LINE)) count = Number(match[1])
+  return count
 }
-const selected = isWin32
-  ? WIN32_FILES.map(file => {
-      const entry = entries.find(candidate => candidate.file === file)
-      if (entry === undefined) {
-        console.error(`[test:control-plane] --win32 lists a file outside GROUPS: ${file}`)
-        process.exit(1)
-      }
-      return { ...entry, group: 'win32' }
-    })
-  : entries
-for (const [index, entry] of selected.entries()) {
-  if (index === 0 || selected[index - 1].group !== entry.group) console.log('\n=== ' + entry.group + ' ===')
-  // timeout：一个会阻塞的回归（例如 log-file 的 FIFO 用例一旦丢了 O_NONBLOCK）
-  // 会把整套留在 open(2) 上，CI 默认 360 分钟才收尸。给每个文件一个上界，
-  // 超时即红（2026-12 三轮独立复核 A1）。
-  const result = spawnSync(process.execPath, [...entry.nodeArgs, entry.file], {
-    cwd: PACKAGE_ROOT, stdio: 'inherit', timeout: 120_000,
-  })
-  if (result.status !== 0) {
-    console.error(`[test:control-plane] ${entry.file} failed (exit ${result.status ?? `signal ${result.signal}`})`)
+
+function main() {
+  const isWin32 = process.argv.includes('--win32')
+  // `--win32` selects the set; it does not require Windows. The lifecycle
+  // integration self-skips on POSIX anyway, so a POSIX machine still exercises
+  // the parsers and the skip path.
+  const entries = Object.entries(GROUPS).flatMap(([group, list]) =>
+    list.map(entry => (typeof entry === 'string' ? { group, file: entry, nodeArgs: [] } : { group, nodeArgs: [], ...entry })),
+  )
+  const missing = entries.filter(entry => !existsSync(join(PACKAGE_ROOT, entry.file)))
+  if (missing.length > 0) {
+    console.error('[test:control-plane] listed test file(s) missing:')
+    for (const entry of missing) console.error('  - ' + entry.file)
     process.exit(1)
   }
+  const selected = isWin32
+    ? WIN32_FILES.map(file => {
+        const entry = entries.find(candidate => candidate.file === file)
+        if (entry === undefined) {
+          console.error(`[test:control-plane] --win32 lists a file outside GROUPS: ${file}`)
+          process.exit(1)
+        }
+        return { ...entry, group: 'win32' }
+      })
+    : entries
+  for (const [index, entry] of selected.entries()) {
+    if (index === 0 || selected[index - 1].group !== entry.group) console.log('\n=== ' + entry.group + ' ===')
+    // timeout：一个会阻塞的回归（例如 log-file 的 FIFO 用例一旦丢了 O_NONBLOCK）
+    // 会把整套留在 open(2) 上，CI 默认 360 分钟才收尸。给每个文件一个上界，
+    // 超时即红（2026-12 三轮独立复核 A1）。
+    const result = spawnSync(process.execPath, [...entry.nodeArgs, entry.file], {
+      cwd: PACKAGE_ROOT,
+      // Piped stdio, written through below: the zero-test guard must read the
+      // node:test summary, and the transcript stays intact.
+      stdio: ['inherit', 'pipe', 'pipe'],
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+      timeout: 120_000,
+    })
+    if (typeof result.stdout === 'string' && result.stdout !== '') process.stdout.write(result.stdout)
+    if (typeof result.stderr === 'string' && result.stderr !== '') process.stderr.write(result.stderr)
+    if (result.status !== 0) {
+      console.error(`[test:control-plane] ${entry.file} failed (exit ${result.status ?? `signal ${result.signal}`})`)
+      process.exit(1)
+    }
+    const reported = parseReportedTestCount(`${result.stdout ?? ''}\n${result.stderr ?? ''}`)
+    if (reported === null || reported === 0) {
+      console.error(`[test:control-plane] ${entry.file} ran no node:test tests (missing runner summary or tests 0); zero-test files must not pass`)
+      process.exit(1)
+    }
+  }
 }
+
+// Import guard: the manifest is also imported by
+// test/windows/test-runner-guard.test.mjs as a pure module (zero-test verdict
+// + wiring source lock); the CLI only runs as the entry point.
+const isMain = process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+if (isMain) main()

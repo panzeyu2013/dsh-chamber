@@ -115,7 +115,7 @@ pnpm run build:host-packages # 构建 host-graph + host-git-worktree 两个宿�
 pnpm run build:renderer      # 构建 dsh 前端 bundle（vite 构建 dsh workspace 源码）
 pnpm run build:desktop       # host 包 → renderer → 控制面/host 包复制 → preload → bundle:dsh
 pnpm run dist:desktop:mac    # 打包 macOS 应用（dmg + zip）
-pnpm run dist:desktop:win    # 打包 Windows 应用（nsis + zip；须在 Windows 上运行——dsh 运行时封装按平台区分）
+pnpm run dist:desktop:win    # 打包 Windows 应用（仅 nsis；须在 Windows 上运行——dsh 运行时封装按平台区分）
 ```
 
 打包产物在 `packages/desktop/release/` 下（electron-builder `directories.output`）。正式发布的macOS腿须具备五项Apple/Developer ID凭据，缺项即在任何GitHub Release变更前fail-closed；构建后还须过Developer ID签名、公证、stapler与spctl校验，任一失败阻断draft公开finalize。`workflow_dispatch dry_run` 即使配置正式secrets也无条件清空签名/公证环境与 `GH_TOKEN`，用 `--publish=never`，不创建/修改Release、不上传资产，并由afterPack钩子产生ad-hoc签名验证包。Windows首版仍未签名（SmartScreen警告，design 11 §7的明确权衡）。
@@ -221,7 +221,7 @@ vendor/
 |`pnpm run test:git`|运行Git worktree客户端插件测试|
 |`pnpm run test:host-git`|运行Git host core生命周期与安全守卫测试|
 |`pnpm run dist:desktop:mac`|打包macOS应用（dmg+zip）|
-|`pnpm run dist:desktop:win`|打包Windows应用（nsis+zip；须在Windows上运行）|
+|`pnpm run dist:desktop:win`|打包Windows应用（仅nsis；须在Windows上运行）|
 |`pnpm run cli -- <args>`|仓库内CLI薄壳（serve/status/connections/host logs）|
 |`pnpm run verify:i18n`|EN ↔中文对漂移时报错（同步后用 `-- --write` 重新记录）|
 |`pnpm run verify:styles`|上游设计token合规门（S1未声明 `--dsw-*` 引用/ S2命名空间越界/ S3 0.5px发丝线/ S4字面量fallback/S5边框+阴影配对/ S6死声明/ S7全圆角配对），扫全部chamber包与可承载CSS的文件类型|

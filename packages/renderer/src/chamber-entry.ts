@@ -125,12 +125,14 @@
 import type { Context } from '@deepseek-ai/cordis'
 
 import { CHAMBER_COVERED_FACTORY_IDS, CHAMBER_COVERED_IDS } from './chamber-covered.ts'
-import type { ShellDegradedFact } from './boot-gap.ts'
+import { bootGapSignature, type ShellDegradedFact, type ShellDegradedReport } from './boot-gap.ts'
 import {
   deferredRegistrationFailureMessage,
   DEFERRED_EXTRA_ROW_IDS,
-  missingInjectedServices, missingServiceFact, registeredInjectMembers, requiredServiceProbeMessage,
-  REQUIRED_SERVICE_PROBE_DEADLINE_MS, REQUIRED_SERVICE_PROBE_INTERVAL_MS,
+  injectedServices,
+  missingInjectedServices, missingServiceFact, monotonicNowMs, registeredInjectMembers,
+  requiredServiceProbeMessage, RequiredServiceProbeWindows,
+  REQUIRED_SERVICE_PROBE_INTERVAL_MS,
   type RegisteredPluginInject,
 } from './required-extra-rows.ts'
 import { withLocaleOwnership } from './locale-ownership.ts'
@@ -600,16 +602,21 @@ function assertDeferredRosterLockstep(): void {
  * the diagnostic message to learn which service is missing. This module also
  * never writes the fact itself — the seam is the only writer, so the shell's
  * boot-generation fence applies to every producer.
+ *
+ * The seam also carries the producers' RETRACTIONS ({@link ShellDegradedClear},
+ * 2026-12 FIX 1): the probe emits one when its missing set empties, so the shell
+ * removes a fact that stopped being true instead of showing a false banner for
+ * the rest of the mount. Same channel, same fence, same stash/replay path.
  * @param ctx - the per-entry client root context.
  * @returns the reporter: logs nothing itself, never throws.
  */
-function createDegradedSeam(ctx: Context): (fact: ShellDegradedFact) => void {
+function createDegradedSeam(ctx: Context): (report: ShellDegradedReport) => void {
   // Shell-provided seam (shell.ts createChamberContextSetup): reports a
   // post-settle degrade to the App. Absent in plain-node tests / other hosts.
-  const reportBootDegraded = (ctx as { chamberReportBootDegraded?: (fact: ShellDegradedFact) => void })
+  const reportBootDegraded = (ctx as { chamberReportBootDegraded?: (report: ShellDegradedReport) => void })
     .chamberReportBootDegraded
-  return (fact: ShellDegradedFact): void => {
-    try { reportBootDegraded?.(fact) } catch (error) {
+  return (report: ShellDegradedReport): void => {
+    try { reportBootDegraded?.(report) } catch (error) {
       console.error('[chamber-entry] failed to report a post-settle degrade fact:', error)
     }
   }
@@ -828,6 +835,13 @@ interface ProbeRearmSlot {
  * legitimately run without the rows (the mobile deployment loads no sidebar
  * surface), so the boot must not fail — the operator-facing log is the signal.
  * The timer is owned by the ctx effect, so a torn-down instance stops probing.
+ *
+ * Lifecycle since 2026-12: the deadline is PER ROSTER MEMBER (each member's own
+ * first sighting starts its 5 s window — FIX 4), and a verdict is no longer
+ * final — the probe keeps a bounded re-check until the newest member's deadline
+ * plus `REQUIRED_SERVICE_PROBE_RECHECK_WINDOW_MS` and RETRACTS its fact when the
+ * missing set empties, so a late provider removes the false banner instead of
+ * leaving it for the rest of the mount (FIX 1).
  * @param ctx - the per-entry client root context.
  * @param degradedSeam - the shell's post-settle degrade reporter (see
  *   {@link createDegradedSeam}).
@@ -839,59 +853,101 @@ interface ProbeRearmSlot {
  */
 function assertRequiredExtraRowServices(
   ctx: Context,
-  degradedSeam: (fact: ShellDegradedFact) => void,
+  degradedSeam: (report: ShellDegradedReport) => void,
   registered: readonly RegisteredPluginInject[],
   probeRearm: ProbeRearmSlot,
 ): void {
-  const started = Date.now()
+  // Per-member grace bookkeeping (2026-12 FIX 4): the deadline is anchored to
+  // each member's OWN arrival, not to the boot's start, so the members the
+  // deferred re-arm adds are not judged with zero grace.
+  const windows = new RequiredServiceProbeWindows()
   const isProvided = (name: string): boolean =>
     (ctx as { get: (key: string) => unknown }).get(name) !== undefined
   const instanceId = (ctx as { chamberInstanceId?: string }).chamberInstanceId
   ctx.effect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined
-    /** The last verdict's service set: a re-armed pass must not re-report it
-     *  verbatim (one report per fact is what the App's self-heal consumes). */
-    let reportedSignature: string | undefined
+    /** The last verdict's missing-service set: a re-armed pass must not
+     *  re-report it verbatim (one report per fact is what the App's self-heal
+     *  consumes). */
+    let reportedServices: string | undefined
+    /** The EXACT fact signature of the last verdict — what the retraction below
+     *  names. The shell only clears the fact whose kind + payload match, so a
+     *  stale retraction can never erase a newer/richer verdict. */
+    let reportedFactSignature: string | undefined
+    const schedule = (delayMs: number): void => {
+      if (timer !== undefined) clearTimeout(timer)
+      timer = setTimeout(probe, delayMs)
+    }
     const probe = (): void => {
+      timer = undefined
+      const roster = injectedServices(registered)
+      // FIX 2: one monotonic clock for arrivals and deadlines. A wall-clock jump
+      // used to satisfy the deadline mid-poll and judge a service that was about
+      // to materialize.
+      const now = monotonicNowMs()
+      windows.note(roster, now)
       const missing = missingInjectedServices(registered, isProvided)
-      if (missing.length === 0) return
-      if (Date.now() - started < REQUIRED_SERVICE_PROBE_DEADLINE_MS) {
-        timer = setTimeout(probe, REQUIRED_SERVICE_PROBE_INTERVAL_MS)
+      if (missing.length === 0) {
+        // 2026-12 FIX 1 (revocation): the provider materialized after the
+        // verdict. Retract the fact the shell holds — without this the banner
+        // would keep claiming a gap that no longer exists for the rest of the
+        // mount, and the App would burn its once-per-epoch re-mount on a healthy
+        // mount.
+        if (reportedFactSignature !== undefined) {
+          degradedSeam({
+            cleared: true,
+            kind: 'required-services-missing',
+            signature: reportedFactSignature,
+          })
+          reportedFactSignature = undefined
+          reportedServices = undefined
+        }
+        return
+      }
+      // FIX 4: a roster member the re-arm just added gets its OWN full window.
+      // No verdict while ANY probed member is still inside it — otherwise a
+      // late-added member would be judged on the very next pass.
+      if (windows.withinGrace(roster, now).length > 0) {
+        schedule(REQUIRED_SERVICE_PROBE_INTERVAL_MS)
         return
       }
       const signature = missing.map(entry => entry.service).join('\u0000')
-      if (signature === reportedSignature) return
-      reportedSignature = signature
-      const message = requiredServiceProbeMessage(missing, instanceId)
-      console.error(message)
-      // 2026-09-10: a mount whose conversation view never registers has to be
-      // recoverable without a manual reload. The probe's verdict is the only
-      // place that KNOWS the graph arrived yet the row did not apply, so report
-      // it through the shell seam: the App re-boots the instance on the next
-      // ready transition (a fresh boot re-fetches the graph and re-applies the
-      // rows — the same effect a full page reload had).
-      //
-      // Structured since 2026-12 (design 05 §4): the fact carries the service
-      // names and their injectors so the frame's copy can name what is missing
-      // (`sidebarRight`) instead of parsing the diagnostic line.
-      degradedSeam({ kind: 'required-services-missing', message, ...missingServiceFact(missing) })
+      if (signature !== reportedServices) {
+        reportedServices = signature
+        const message = requiredServiceProbeMessage(missing, instanceId)
+        console.error(message)
+        // 2026-09-10: a mount whose conversation view never registers has to be
+        // recoverable without a manual reload. The probe's verdict is the only
+        // place that KNOWS the graph arrived yet the row did not apply, so report
+        // it through the shell seam: the App re-boots the instance on the next
+        // ready transition (a fresh boot re-fetches the graph and re-applies the
+        // rows — the same effect a full page reload had).
+        //
+        // Structured since 2026-12 (design 05 §4): the fact carries the service
+        // names and their injectors so the frame's copy can name what is missing
+        // (`sidebarRight`) instead of parsing the diagnostic line. The exact
+        // signature is kept for the retraction above.
+        const fact: ShellDegradedFact = { kind: 'required-services-missing', message, ...missingServiceFact(missing) }
+        degradedSeam(fact)
+        reportedFactSignature = bootGapSignature(fact)
+      }
+      // 2026-12 FIX 1 (bounded re-check): the verdict is no longer final. Keep
+      // polling until the newest member's deadline + the bounded revocation
+      // window, so a late provider clears the fact instead of leaving a
+      // permanent false banner.
+      const recheckUntil = windows.recheckUntilMs()
+      if (recheckUntil !== undefined && now < recheckUntil) schedule(REQUIRED_SERVICE_PROBE_INTERVAL_MS)
     }
-    // Re-arm (2026-09-11 review-fix, finding 1): one extra pass over the roster
-    // the deferred cluster just extended. `started` is deliberately NOT reset —
-    // the deadline is an invariant of the BOOT ("every probed service must have
-    // materialized within 5s of apply"), and the deferred members' providers are
-    // first-screen composite plugins that mounted long before the cluster's
-    // chunks arrived, so re-armed members get exactly the same window as the
-    // first-screen ones (a verdict for the pre-cluster members is therefore
-    // never delayed either). A pass that finds the same set the last verdict
-    // already named reports nothing (`reportedSignature`), while a NEW member
-    // that is missing gets its own report — the App's self-heal is marked once
-    // per ready epoch, so that is one more fact, never one more re-boot.
-    probeRearm.reArm = () => {
-      if (timer !== undefined) clearTimeout(timer)
-      timer = setTimeout(probe, 0)
-    }
-    timer = setTimeout(probe, 0)
+    // Re-arm (2026-09-11 review-fix, finding 1; FIX 4): one extra pass over the
+    // roster the deferred cluster just extended. The per-member windows above are
+    // what gives a NEW member its own full grace; the pre-cluster members keep
+    // their own (already elapsed) windows, so their verdict is not delayed. A
+    // pass that finds the same set the last verdict already named reports nothing
+    // (`reportedServices`), while a new missing member gets its own report — the
+    // App's self-heal is marked once per ready epoch, so that is one more fact,
+    // never one more re-boot.
+    probeRearm.reArm = () => { schedule(0) }
+    schedule(0)
     return () => {
       if (timer !== undefined) clearTimeout(timer)
       if (probeRearm.reArm !== undefined) probeRearm.reArm = undefined

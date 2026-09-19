@@ -542,23 +542,35 @@ test('resolveLocalHostGraphOverlay: a row already owned by the profile patch yie
   assert.equal(existsSync(join(seedTarget(dshHome), 'dist', 'index.js')), true)
 })
 
-test('resolveLocalHostGraphOverlay: no built artifact yields no overlay AND clears the leftover file', t => {
+test('resolveLocalHostGraphOverlay: no built artifact yields no overlay, clears the leftover file AND logs the error', t => {
   const dir = tempDir(t)
   const stale = join(dir, HOST_GRAPH_PATCH_FILENAME)
   writeFileSync(stale, EXPECTED_OVERLAY)
   const dshHome = writeLocalProfileFixture(dir, '# user layer\n[]\n')
   const sourceDir = writeBuiltSeedSource(dir, false)
+  const warns: string[] = []
+  const errors: string[] = []
   const overlay = resolveLocalHostGraphOverlay({
     stateDir: dir,
     dshHome,
     entries: [{ insert: HOST_GRAPH_INSERT, kind: 'host', source: 'packaged', sourceDir, probeDomains: [] }],
     log() {},
-    warn() {},
+    warn: message => { warns.push(message) },
+    error: message => { errors.push(message) },
   })
   assert.equal(overlay, null, 'the v4 baseline spawn passes no --patch')
   assert.equal(existsSync(stale), false,
     'the stale overlay records a mount this spawn does not perform')
   assert.equal(existsSync(join(seedTarget(dshHome), 'package.json')), false, 'nothing is seeded without the artifact')
+  // D6a: an existing-but-unbuilt packaged host source is a packaging defect,
+  // not a stub — the skip must name the entry, package, artifact and effect.
+  assert.ok(!warns.some(message => message.includes('stub')),
+    `the unbuilt packaged source is an error, not a stub warn: ${warns.join(' | ')}`)
+  assert.equal(errors.length, 1)
+  assert.ok(errors[0].includes(`seed entry 'client-graph'`), errors[0])
+  assert.ok(errors[0].includes(HOST_GRAPH_PACKAGE_NAME), errors[0])
+  assert.ok(errors[0].includes(join(sourceDir, 'dist', 'index.js')), errors[0])
+  assert.ok(errors[0].includes('no --patch row for it'), errors[0])
 })
 
 // ---------------------------------------------------------------------------
@@ -774,16 +786,21 @@ test('createControlPlane.startLocal() keeps the v4 baseline when dist/index.js i
   // A fake source dir that EXISTS but has no built artifact — the gate is the
   // artifact, not the directory: an unbuilt module A must behave exactly like
   // "not shipped" (skip + no overlay), never throw the seed's fail-loud
-  // missing-file error.
+  // missing-file error. It must still be visible in the plane log (D6a).
   const source = tempDir(t)
+  const errors: string[] = []
   const plane = hostGraphPlane(dir, {
     hostGraphPackageSourceDir: source,
+    logger: { log() {}, warn() {}, error: message => { errors.push(String(message)) } },
   })
   try {
     await plane.start()
     await plane.startLocal()
     assert.equal(existsSync(join(dir, HOST_GRAPH_PATCH_FILENAME)), false)
     assert.equal(existsSync(seedTarget(join(dir, 'dsh-home'))), false)
+    assert.ok(errors.some(message => message.includes('client-graph')
+      && message.includes('built artifact missing')
+      && message.includes('no --patch row for it')), `seed artifact diagnostic missing from: ${errors.join(' | ')}`)
   } finally {
     await plane.stop()
   }

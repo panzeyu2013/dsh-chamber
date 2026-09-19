@@ -19,12 +19,17 @@
  *     纯转圈升级为可操作态，以及重试在途时是否必须如实播报排队。
  *  4. `isDeferredReclaimDue`：被推迟（来源未连接）挂载的回收裁决——只接管
  *     从未 settle 的挂载，且绝不碰设置面板正在编辑的来源。
- *  5. `shouldReportGraphUnavailable`：W3 的上浮边界（只有 `not-injected` 豁免）。
+ *  5. `graphGapKindFor` / `shouldReportGraphUnavailable`：W3 的上浮边界——非本地来源的
+ *     `not-injected` 豁免，本地实例的 `not-injected` 收敛为 `local-graph-not-injected`
+ *     （FIX 6：chamber 侧安装/seed 事实，仍可自愈）。
  *
- * 纪律：本模块是叶子（零运行时 import），被 App.tsx 与 InstanceView.tsx
- * 同时引用时不会形成环；文案一律走 locales.ts 的 typed 字典，本模块只输出
- * 决策与结构化事实，不产出用户可见句子（跨边界诊断文案规则）。
+ * 纪律：本模块是叶子（零运行时 import——下面的 kind 类型是 `import type`，被类型
+ * 擦除），被 App.tsx 与 InstanceView.tsx 同时引用时不会形成环；文案一律走
+ * locales.ts 的 typed 字典，本模块只输出决策与结构化事实，不产出用户可见句子
+ * （跨边界诊断文案规则）。
  */
+
+import type { ShellDegradedKind } from './boot-gap.ts'
 
 /** 来源相位的拼写与服务端 `SshStatusProjection.phase` / global.d.ts 一致：
  *  `idle | connecting | ready | degraded | error`（gateway 形态还会带上托管运行时的
@@ -125,18 +130,43 @@ export function decideServingGate(facts: ServingGateFacts): ServingGateDecision 
   return { action: 'wait', terminalSinceMs: null }
 }
 
+/** 图通道失败在 App 侧应上浮的降级事实种类（FIX 6 的返回面，只产出这两种）。 */
+export type GraphGapKind = Extract<ShellDegradedKind, 'graph-unavailable' | 'local-graph-not-injected'>
+
 /**
- * 图通道失败是否要上浮成 App 侧的降级事实（W3，2026-12）。
+ * 图通道失败 → App 侧降级事实的**唯一裁决**（W3，2026-12；FIX 6 增补本地形态）。
  *
- * 边界只有一种豁免：`not-injected`（HTTP 404，或通道答 method 缺失）——
+ * 上浮面必须让用户停在 boot 表面时也能读到解释并拿到自愈：旧契约只把通道失败
+ * 写进连接页的 pluginDiagnostic 一行（侧栏已不渲染它），用户既看不到解释也拿不到
+ * 自愈（2026-12 复核更正了"零解释"的口径）。
+ *
+ * 唯一豁免是**非本地**来源的 `not-injected`（HTTP 404，或通道答 method 缺失）——
  * gateway/mobile 形态合法地没有图端点，那不是降级，App 也不该为它重挂。
- * 其余通道失败（502/504、网络错误、图形非法）都是"这一轮挂载缺掉了整套
- * profile 客户端插件"，必须让 App 的非阻断 boot-gap 横幅说得出话：旧契约只把
- * 事实写进连接页的 pluginDiagnostic 一行（侧栏已不渲染它），用户停在 boot
- * 表面时既看不到解释也拿不到自愈（2026-12 复核更正了"零解释"的口径）。
+ * **本地实例不在此列**（FIX 6）：chamber 托管的本地宿主总会注入客户端图
+ * （seed 行），404/method 缺失只可能是 chamber 自己的安装/seed 破损，属于可由
+ * 重挂/重启本地 dsh 处理的事实，因此走独立的 `local-graph-not-injected`——其文案
+ * 指向 chamber 侧原因，绝不建议"升级该来源的 dsh 运行时"（win32 上运行时管理是
+ * 只读投影）。
+ * @param diagnosticState - 通道分类结果（`not-injected` | `graph-unreachable`）。
+ * @param instanceId - 来源 id（`'local'` 是 App 托管的本地实例）。
+ * @returns 上浮的 kind，或 null（该形态按设计不上浮）。
  */
-export function shouldReportGraphUnavailable(diagnosticState: string): boolean {
-  return diagnosticState !== 'not-injected'
+export function graphGapKindFor(diagnosticState: string, instanceId: string): GraphGapKind | null {
+  if (diagnosticState !== 'not-injected') return 'graph-unavailable'
+  return instanceId === 'local' ? 'local-graph-not-injected' : null
+}
+
+/**
+ * 图通道失败是否上浮（旧签名，保留给只关心"是否上浮"的读者）。
+ *
+ * `instanceId` 缺省时本地形态同样豁免——与旧行为逐字节一致；调用方要拿 kind
+ * 时用 {@link graphGapKindFor}，本函数只是它的布尔投影。
+ * @param diagnosticState - 通道分类结果。
+ * @param instanceId - 来源 id；缺省 = 只按通道分类判断。
+ * @returns 是否上浮。
+ */
+export function shouldReportGraphUnavailable(diagnosticState: string, instanceId?: string): boolean {
+  return graphGapKindFor(diagnosticState, instanceId ?? '') !== null
 }
 
 /**

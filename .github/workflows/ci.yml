@@ -343,11 +343,14 @@ jobs:
       # legs; each package's test:win32 lists its win32-real / platform-
       # neutral gates and is extended as Windows semantics land (M2b) — in
       # the package, next to the tests, never here.
-      # The three manifests are also reachable as one root fan-out
+      # The five manifests are also reachable as one root fan-out
       # (`pnpm run test:win32`, root package.json — 2026-12 review P2: without
       # it the Windows list could not be reproduced from a local checkout at
-      # all). This leg keeps the three named steps so a failure names the
-      # owning package.
+      # all). This leg keeps the five named steps so a failure names the
+      # owning package. The renderer/sidebar manifests are the boot-gap
+      # mechanism's platform-neutral decision face (host-graph merge → required
+      # row probe → degraded presentation / sidebar copy): before them the
+      # sidebarRight miss was only ever exercised on the POSIX legs.
       - name: dsh-runtime test:win32 manifest
         if: steps.classify.outputs.code == 'true'
         run: pnpm --filter @dsh-chamber/dsh-runtime run test:win32
@@ -357,6 +360,12 @@ jobs:
       - name: desktop test:win32 manifest (real icacls)
         if: steps.classify.outputs.code == 'true'
         run: pnpm --filter @dsh-chamber/desktop run test:win32
+      - name: renderer test:win32 manifest (boot-gap + extra-row decisions)
+        if: steps.classify.outputs.code == 'true'
+        run: pnpm --filter @dsh-chamber/renderer run test:win32
+      - name: sidebar test:win32 manifest (source boot-gap copy)
+        if: steps.classify.outputs.code == 'true'
+        run: pnpm --filter @dsh-chamber/dsh-chamber-client-ui-sidebar run test:win32
       # Credential-free packaging rehearsal (2026-12). Until now the first place a
       # Windows packaging regression could surface was inside release.yml — the
       # workflow that already holds the release credentials. This leg builds the

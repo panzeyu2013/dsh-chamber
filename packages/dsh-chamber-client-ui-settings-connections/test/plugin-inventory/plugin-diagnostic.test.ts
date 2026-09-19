@@ -78,20 +78,22 @@ test('bootGapText: each kind maps to its own key and carries its structured fact
   const kt = (key: string, params?: Record<string, string | number>): string =>
     params === undefined ? key : `${key}(${JSON.stringify(params)})`
   const kinds: readonly ServerBootGap['kind'][] = [
-    'graph-unavailable', 'required-services-missing', 'deferred-registration-failed',
+    'graph-unavailable', 'local-graph-not-injected', 'required-services-missing', 'deferred-registration-failed',
   ]
   const withPayload: Record<ServerBootGap['kind'], ServerBootGap> = {
     'graph-unavailable': { kind: 'graph-unavailable' },
+    'local-graph-not-injected': { kind: 'local-graph-not-injected' },
     'required-services-missing': { kind: 'required-services-missing', services: ['sidebarRight'] },
     'deferred-registration-failed': { kind: 'deferred-registration-failed', failedIds: ['@deepseek-ai/dsh-client-ui-tool'] },
   }
   const texts = kinds.map(kind => bootGapText(withPayload[kind], kt))
   for (let i = 0; i < kinds.length; i += 1) assert.match(texts[i]!, /^bootGap[A-Z]/, kinds[i])
-  assert.equal(new Set(texts).size, kinds.length, 'three kinds must never share one sentence')
+  assert.equal(new Set(texts).size, kinds.length, 'kinds must never share one sentence')
   // Positive per-kind pins: a collapse onto the GENERIC key would still satisfy
   // the two checks above (every candidate matches /^bootGap[A-Z]/ and the set
   // stays size 3 — 2026-12 falsification round), so pin the exact key.
   assert.equal(bootGapText({ kind: 'graph-unavailable' }, kt), 'bootGapGraphUnavailable')
+  assert.equal(bootGapText({ kind: 'local-graph-not-injected' }, kt), 'bootGapLocalGraphNotInjected')
   assert.equal(
     bootGapText({ kind: 'required-services-missing', services: ['sidebarRight', 'slots'] }, kt),
     'bootGapRequiredServicesMissing({"services":"sidebarRight, slots"})',
@@ -109,7 +111,7 @@ test('bootGapText: each kind maps to its own key and carries its structured fact
 
 test('every gap key exists in BOTH dictionaries with its placeholders', () => {
   const keys = [
-    'bootGapLabel', 'bootGapGeneric', 'bootGapGraphUnavailable',
+    'bootGapLabel', 'bootGapGeneric', 'bootGapGraphUnavailable', 'bootGapLocalGraphNotInjected',
     'bootGapRequiredServicesMissing', 'bootGapDeferredRegistrationFailed', 'bootGapHint',
   ] as const
   for (const key of keys) {

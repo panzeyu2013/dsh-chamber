@@ -89,6 +89,12 @@ export interface ChamberSettingsStatus {
     /** false when no tray recovery surface exists (dev, no icons); macOS is
      *  always safe (Dock icon recovery), so darwin reports true. */
     closeToTray: boolean
+    /** 未读徽标平台能力（design 19 §3.7 / design 23 M3）：与 badge.ts 的
+     *  badgePlatformGate 同平台集合——win32 的任务栏 overlay 角标 v1 未接线，
+     *  设置页据此禁用开关并给出原因（绝不呈现一个永远无效的开关）；
+     *  darwin/linux 的 Electron API 缺失仍由主进程平台门 loud 记录，不在此
+     *  冒充为「不支持的平台」。 */
+    badgeSupported: boolean
   }
 }
 
@@ -572,7 +578,12 @@ export function closeToTrayRecoveryAvailable(
 }
 
 /** Platform capability gates (design 14 D6/D1; design 21 M4: launchAtLogin
- *  unlocked on win32 — setLoginItemSettings writes the HKCU Run key). */
+ *  unlocked on win32 — setLoginItemSettings writes the HKCU Run key).
+ *  `badgeSupported` mirrors the badge.ts platform gate: the unread badge is
+ *  wired on macOS (Dock) and Linux (Unity-launcher family) only; the Windows
+ *  taskbar overlay is not wired in v1 (design 23 M3), so the settings page
+ *  must disable the switch instead of offering one that can never take
+ *  effect. */
 export function computeSupported(
   platform: NodeJS.Platform,
   trayAvailable: boolean,
@@ -580,6 +591,7 @@ export function computeSupported(
   return {
     launchAtLogin: true,
     closeToTray: closeToTrayRecoveryAvailable(platform, trayAvailable),
+    badgeSupported: platform === 'darwin' || platform === 'linux',
   };
 }
 

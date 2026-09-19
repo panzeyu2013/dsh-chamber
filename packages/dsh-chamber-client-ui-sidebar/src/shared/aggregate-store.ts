@@ -161,6 +161,13 @@ export interface ChamberServerAggregate {
 /** Why a mounted shell is known to be incomplete (see {@link ChamberServerAggregate.bootGap}). */
 export type ServerBootGapKind =
   | 'graph-unavailable'
+  /**
+   * The LOCAL instance's client-graph endpoint answered 404 / method-missing.
+   * The chamber-managed local host always injects its graph (the seed row), so
+   * this is a chamber-side installation/seed fact — the gateway/mobile shapes,
+   * whose missing endpoint is legitimate, keep producing NO fact (2026-12 FIX 6).
+   */
+  | 'local-graph-not-injected'
   | 'required-services-missing'
   | 'deferred-registration-failed'
 

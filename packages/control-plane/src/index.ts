@@ -372,6 +372,10 @@ export interface LocalHostGraphOverlayInput {
   readonly log?: (message: string) => void
   /** Warning sink (absent/stub seed sources). */
   readonly warn?: (message: string) => void
+  /** Error sink for a packaged host entry whose sourceDir exists but lacks its
+   *  built artifact (a packaging defect, not a stub). Defaults to `warn` so a
+   *  caller that wires only the warn sink still sees the message. */
+  readonly error?: (message: string) => void
   /**
    * Environment that decides the opt-in host-log bridge
    * (DSH_CHAMBER_HOST_LOG_LEVEL — host-log-bridge.ts). Defaults to an EMPTY
@@ -412,6 +416,7 @@ export function resolveLocalHostGraphOverlay(input: LocalHostGraphOverlayInput):
   const { stateDir, dshHome, entries: baseEntries } = input
   const log = input.log ?? (() => {})
   const warn = input.warn ?? (() => {})
+  const error = input.error ?? warn
   // Opt-in managed-dsh application-log bridge (host-log-bridge.ts): ONE extra
   // seed entry while DSH_CHAMBER_HOST_LOG_LEVEL is set for this spawn, carrying
   // the generated logger-exporter plugin. With the switch absent the entry list
@@ -430,6 +435,17 @@ export function resolveLocalHostGraphOverlay(input: LocalHostGraphOverlayInput):
       const message = `seed entry '${entry.insert.id}' (${entry.insert.name}): source absent; skipped`
       if (entry.source === 'desktop-synced') log(`${message} (awaiting the first desktop sync)`)
       else warn(`${message} (stub: package not shipped in this runtime)`)
+      continue
+    }
+    // A sourceDir that EXISTS without <sourceDir>/dist/index.js is filtered out
+    // of `available` below (no seed, no --patch row). Only the fully ABSENT
+    // source used to be loud; a packaged host package missing its artifact is a
+    // real packaging defect and must not disappear silently (2026-09 D6a).
+    const artifact = join(entry.sourceDir, 'dist', 'index.js')
+    if (!existsSync(artifact)) {
+      const message = `seed entry '${entry.insert.id}' (${entry.insert.name}): built artifact missing at ${artifact}; skipped — this spawn has no --patch row for it`
+      if (entry.kind === 'host' && entry.source === 'packaged') error(message)
+      else warn(message)
     }
   }
   // 影子条目（extraSeedEntries 覆盖同 id）若缺 probeDomains，会让该宿主域在
@@ -751,6 +767,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
       entries: seedEntries(),
       log: message => logger.log(message),
       warn: message => logger.warn(message),
+      error: message => logger.error(message),
       // The opt-in host-log bridge switch is read from the plane's own
       // environment at each spawn (the managed host inherits it, and the
       // generated plugin needs nothing from the child env). Passing it here is

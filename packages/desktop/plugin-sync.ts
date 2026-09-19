@@ -43,6 +43,7 @@ import {
 } from 'node:fs'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { homedir, tmpdir } from 'node:os'
+import { fileURLToPath } from 'node:url'
 // The cordis loader insert render/parse/conflict logic is single-sourced in
 // control-plane (cordis-inserts.ts, A2 cross-package protocol single-
 // sourcing) — consumed through control-plane-module.ts (the desktop
@@ -104,6 +105,11 @@ import { ENOENT_PATTERN } from './ssh-provider.ts'
 // imports, so this pulls no transport-manager/electron surface). The copied
 // union used to drift ('base64'/'mkdir' went missing from the copy).
 import type { TransportExecAction, TransportRunPayload } from './transport-provider.ts'
+// pnpm launcher resolution (design 21 §6.3 / design 23 D2): win32 must run the
+// pnpm.cjs script through node/Electron — Node >=18.20.2/20.12.2 refuses to
+// spawn a .cmd without a shell (CVE-2024-27980). Pure module, unit-tested in
+// test/plugins/pnpm-launcher.test.ts.
+import { pnpmScriptEntryCandidates, resolvePnpmLauncher, windowsPnpmSearchDirs } from './pnpm-launcher.ts'
 import {
   RuntimeInstallerSupervisor,
   isRuntimeInstallerWriterSafetyError,
@@ -2258,14 +2264,68 @@ export function buildPnpmPackArgs(outDir: string): string[] {
   return ['pack', '--config.ignore-scripts=true', '--pack-destination', outDir]
 }
 
+/** The desktop module's own directory (packaged: inside the asar; dev: the
+ *  workspace package dir) — the anchor for the dev pnpm entry probe. */
+const desktopModuleDir = dirname(fileURLToPath(import.meta.url))
+
+/** Electron's `process.resourcesPath`, or null outside a packaged app. Cast-
+ *  based so this pure-node module never imports electron just to find pnpm. */
+function packagedResourcesPath(): string | null {
+  const resourcesPath = (process as NodeJS.Process & { resourcesPath?: string }).resourcesPath
+  return typeof resourcesPath === 'string' && resourcesPath !== '' ? resourcesPath : null
+}
+
+/** The app's bundled pnpm bin directory (packaged extraResources
+ *  `<resources>/pnpm/bin`, dev `node_modules/pnpm/bin`), or null. */
+function bundledPnpmBinDir(): string | null {
+  const resourcesPath = packagedResourcesPath()
+  if (resourcesPath !== null) {
+    const packaged = join(resourcesPath, 'pnpm', 'bin')
+    if (existsSync(packaged)) return packaged
+  }
+  const dev = join(desktopModuleDir, 'node_modules', 'pnpm', 'bin')
+  return existsSync(dev) ? dev : null
+}
+
+/** The first existing pnpm.cjs entry (the bundled copy preferred), or null. */
+function resolvePnpmScriptEntry(): string | null {
+  for (const entry of pnpmScriptEntryCandidates({
+    platform: process.platform,
+    moduleDir: desktopModuleDir,
+    resourcesPath: packagedResourcesPath(),
+    env: process.env,
+    execPath: process.execPath,
+  })) {
+    if (existsSync(entry)) return entry
+  }
+  return null
+}
+
 async function packDirectory(localDir: string): Promise<{ bytes: Buffer } | null> {
   const outDir = mkdtempSync(join(tmpdir(), 'dsh-materialize-'))
   try {
+    // win32: never spawn `pnpm.cmd`. Node >=18.20.2/20.12.2 refuses to spawn
+    // .cmd/.bat without a shell (CVE-2024-27980 hardening) — exactly why the
+    // pre-fix path failed. Run the pnpm.cjs entry through the current
+    // node/Electron binary instead (the same [execPath, pnpm.cjs] shape main.ts
+    // injects into the runtime installer); POSIX keeps the bare `pnpm` name.
+    // No script entry → null: the caller reports the existing honest「pnpm pack
+    // failed」rather than falling back to a .cmd shim.
+    const launcher = resolvePnpmLauncher({
+      platform: process.platform,
+      execPath: process.execPath,
+      scriptEntry: resolvePnpmScriptEntry(),
+      electron: process.versions.electron !== undefined,
+    })
+    if (launcher === null) return null
     const pnpmBin = resolvePnpmBinDir()
-    const env = pnpmBin === null
-      ? process.env
-      : { ...process.env, PATH: `${pnpmBin}${pathDelimiter()}${process.env.PATH ?? ''}` }
-    const result = await runChild(process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm', buildPnpmPackArgs(outDir), {
+    const env = {
+      ...(pnpmBin === null
+        ? process.env
+        : { ...process.env, PATH: `${pnpmBin}${pathDelimiter()}${process.env.PATH ?? ''}` }),
+      ...launcher.env,
+    }
+    const result = await runChild(launcher.command, [...launcher.args, ...buildPnpmPackArgs(outDir)], {
       cwd: localDir,
       timeoutMs: 120_000,
       env,
@@ -2424,31 +2484,46 @@ function pathDelimiter(): string {
  * Resolve a directory holding a `pnpm` executable (for local `dsh plugin` and
  * `pnpm pack` under a desktop-launched packaged app, whose PATH is minimal —
  * `/usr/bin:/bin:/usr/sbin:/sbin` — and lacks pnpm). Scans PATH first, then
- * well-known install roots (nvm versions, volta, homebrew, and the Linux
- * official-installer roots ~/.local/share/pnpm and ~/.local/bin — design 21).
- * Returns null when no pnpm is found — the caller then fails with an honest
- * "pnpm not found".
+ * well-known install roots: nvm versions / volta / homebrew / the Linux
+ * official-installer roots on POSIX (unchanged), and on win32 the official
+ * installer roots (`%LOCALAPPDATA%\pnpm` standalone, `%APPDATA%\npm` global
+ * prefix, the node install dir) plus the app's own bundled pnpm bin dir
+ * (design 21 §6.3 / design 23 D2). The win32 probe also accepts the bundled
+ * script form `pnpm.cjs`; the POSIX candidate list is byte-for-byte the
+ * previous one. Returns null when no pnpm is found — the caller then fails
+ * with an honest "pnpm not found".
  */
 export function resolvePnpmBinDir(): string | null {
-  const name = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
+  const windows = process.platform === 'win32'
+  const names = windows ? ['pnpm.cmd', 'pnpm.exe', 'pnpm.cjs'] : ['pnpm']
   const candidates: string[] = []
   for (const dir of (process.env.PATH ?? '').split(pathDelimiter())) {
     if (dir !== '') candidates.push(dir)
   }
-  const nvmRoot = join(homedir(), '.nvm', 'versions', 'node')
-  if (existsSync(nvmRoot)) {
-    for (const version of readdirSync(nvmRoot)) candidates.push(join(nvmRoot, version, 'bin'))
+  if (windows) {
+    candidates.push(...windowsPnpmSearchDirs({
+      env: process.env,
+      execPath: process.execPath,
+      bundledBinDir: bundledPnpmBinDir(),
+    }))
+  } else {
+    const nvmRoot = join(homedir(), '.nvm', 'versions', 'node')
+    if (existsSync(nvmRoot)) {
+      for (const version of readdirSync(nvmRoot)) candidates.push(join(nvmRoot, version, 'bin'))
+    }
+    candidates.push(
+      join(homedir(), '.volta', 'bin'),
+      join(homedir(), '.local', 'share', 'pnpm'),
+      join(homedir(), '.local', 'bin'),
+      '/opt/homebrew/bin',
+      '/usr/local/bin',
+      '/usr/bin',
+    )
   }
-  candidates.push(
-    join(homedir(), '.volta', 'bin'),
-    join(homedir(), '.local', 'share', 'pnpm'),
-    join(homedir(), '.local', 'bin'),
-    '/opt/homebrew/bin',
-    '/usr/local/bin',
-    '/usr/bin',
-  )
   for (const dir of candidates) {
-    if (existsSync(join(dir, name))) return dir
+    for (const name of names) {
+      if (existsSync(join(dir, name))) return dir
+    }
   }
   return null
 }

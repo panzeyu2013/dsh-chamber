@@ -73,7 +73,7 @@ import {
 } from './private-file.ts'
 import type { Logger } from './types.ts'
 import { ensureInstanceId, isValidInstanceId } from './instance-id.ts'
-import { treeKillWindows } from './win-probes.ts'
+import { cimPidLiveness, hasWindowsResidualTree, treeKillWindows } from './win-probes.ts'
 
 /**
  * Default first port attempted for a managed local dsh host (the local
@@ -1164,7 +1164,12 @@ function signalManagedGroup(child: ChildProcess, pid: number, signal: NodeJS.Sig
 }
 
 /** Whether the owned process group (or Windows direct child) still exists.
- * EPERM proves existence without permission; only ESRCH proves quiescence. */
+ * EPERM proves existence without permission; only ESRCH proves quiescence.
+ * Residual (S5, documented): the win32 branch is process.kill(pid, 0), an
+ * OpenProcess probe that can read a terminated-but-held process object as
+ * alive. It stays exported for synchronous callers and tests; the async
+ * termination paths use managedTreeAliveProved, which proves absence from the
+ * CIM table. */
 export function managedProcessGroupAlive(child: ChildProcess): boolean {
   const pid = child.pid
   if (pid === undefined) return false
@@ -1190,11 +1195,37 @@ export function managedProcessGroupAlive(child: ChildProcess): boolean {
   }
 }
 
+/**
+ * Awaitable tree-quiescence proof for the termination paths (S5 fix). POSIX
+ * returns exactly managedProcessGroupAlive(). On win32 that helper is
+ * process.kill(pid, 0) — an OpenProcess probe that still answers while a
+ * terminated process object survives on an unreleased handle, so a successful
+ * taskkill could read as "not quiesced" forever and keep the writer latch
+ * closed. The CIM table only enumerates active processes: a readable table
+ * without the pid is the absence proof, an unreadable table falls back to the
+ * old kill(0) answer (unknown ⇒ fail closed), and a dead leader with residual
+ * CIM descendants still counts as alive (the tree is the leader plus its
+ * descendants, the same rule reaper.ts applies). The CIM absence proof is
+ * re-proved against a FRESH table before it is trusted (cimPidLiveness): the
+ * 500ms table cache can predate the pid, and this is the gate whose false
+ * "dead" would let terminateChild return without signalling a live host while
+ * its caller drops the pid record.
+ */
+async function managedTreeAliveProved(child: ChildProcess): Promise<boolean> {
+  if (process.platform !== 'win32') return managedProcessGroupAlive(child)
+  const pid = child.pid
+  if (pid === undefined) return false
+  const verdict = cimPidLiveness(pid)
+  if (verdict === null) return managedProcessGroupAlive(child)
+  if (verdict) return true
+  return hasWindowsResidualTree(pid)
+}
+
 const PROCESS_GROUP_POLL_MS = 25
 
 async function waitForManagedGroupExit(child: ChildProcess, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + Math.max(0, timeoutMs)
-  while (managedProcessGroupAlive(child)) {
+  while (await managedTreeAliveProved(child)) {
     const remaining = deadline - Date.now()
     if (remaining <= 0) return false
     await new Promise(resolve => setTimeout(resolve, Math.min(PROCESS_GROUP_POLL_MS, remaining)))
@@ -1238,7 +1269,7 @@ export async function terminateChild(child: ChildProcess, graceMs = TERMINATE_GR
   const pid = child.pid
   if (pid === undefined) return
   try {
-    if (!managedProcessGroupAlive(child)) return
+    if (!(await managedTreeAliveProved(child))) return
     signalManagedGroup(child, pid, 'SIGTERM')
     if (await waitForManagedGroupExit(child, graceMs)) return
     signalManagedGroup(child, pid, 'SIGKILL')

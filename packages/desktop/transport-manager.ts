@@ -1171,6 +1171,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
       try {
         child = doSpawn('ssh', args!, {
           stdio: ['ignore', 'pipe', 'pipe'],
+          windowsHide: true,
           env: transportLease === null ? undefined : { ...process.env, ...transportLease.env },
         })
       } catch (spawnError) {

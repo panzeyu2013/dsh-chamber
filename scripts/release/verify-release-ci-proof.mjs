@@ -68,6 +68,20 @@ export const REQUIRED_JOB_STEPS = {
     'dsh-runtime test:win32 manifest',
     'control-plane test:win32 manifest (real CIM/netstat/taskkill integration)',
     'desktop test:win32 manifest (real icacls)',
+    // 2026-12: the renderer/sidebar manifests carry the boot-gap + extra-row
+    // decisions (the surface the real-machine sidebarRight gap lived on); the
+    // proof must require them for the same reason it requires the three older
+    // manifests — a deleted step cannot stay green.
+    'renderer test:win32 manifest (boot-gap + extra-row decisions)',
+    'sidebar test:win32 manifest (source boot-gap copy)',
+    // 2026-12 P2: the macOS rehearsal was pinned at :100 while the Windows one
+    // (ci.yml:369-378, added by the same rehearsal round) was not — deleting or
+    // classifier-skipping it left the release proof green even though the NSIS
+    // pack (the only packaging path release.yml had never rehearsed on a push)
+    // then ran for the first time inside release.yml. Same rule as the mac leg:
+    // a green job whose win rehearsal was deleted cannot prove the win32
+    // packaging path was ever exercised.
+    'Windows packaging rehearsal (no publish, no credentials)',
   ],
   'test-macos': [
     'Assert lockfile not rewritten',

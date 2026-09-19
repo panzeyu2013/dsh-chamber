@@ -8,6 +8,11 @@
  * dsh-runtime stays self-contained and must not import control-plane). Keep
  * behavior identical across both; the Windows CI leg runs both test sets.
  *
+ * S5 parity port (2026): WinProcessRow carries CommandLine/CreationDate and
+ * killWindowsTreeWithResidual re-proves every scanned residual pid against a
+ * fresh CIM table before taskkill — the control-plane twin's S1 rule
+ * (review/windows/fixes/s5-win32-liveness.md).
+ *
  * Parity target: on Unix the supervisor signals the detached install group
  * (TERM→KILL) and treats "group alive" as "writer alive". Windows has no
  * POSIX signals and no process groups, so:
@@ -31,10 +36,18 @@ import { spawnSync } from 'node:child_process'
 const PROBE_TIMEOUT_MS = 30_000
 const TABLE_CACHE_TTL_MS = 500
 
-/** One normalized Win32_Process row (pid + stale parent chain only). */
+/** One normalized Win32_Process row: pid, stale parent chain and the stable
+ *  identity fields (S5) a fresh probe must match before a residual pid is
+ *  terminated. */
 export interface WinProcessRow {
   pid: number
   ppid: number | null
+  /** Full command line; null when the query could not read it (e.g. an
+   *  elevated peer). A null/empty command fails closed at the caller. */
+  command: string | null
+  /** CreationDate; null when the property is absent/unreadable. Pid reuse
+   *  must never authorize a kill, so the re-proof prefers this field. */
+  createdAt: string | null
 }
 
 function assertWindows(): void {
@@ -58,8 +71,9 @@ function execWindowsTool(file: string, args: string[]): { status: number | null;
 // Pure parsers / builders (unit-tested on every platform)
 // ---------------------------------------------------------------------------
 
-/** Parse `ConvertTo-Json` output of a Win32_Process ProcessId/ParentProcessId
- *  projection into normalized rows; unparseable input yields []. */
+/** Parse `ConvertTo-Json` output of a Win32_Process
+ *  ProcessId/ParentProcessId/CommandLine/CreationDate projection into
+ *  normalized rows; unparseable input yields []. */
 export function parseProcessTable(text: string): WinProcessRow[] {
   if (typeof text !== 'string' || text.trim() === '') return []
   let parsed: unknown
@@ -78,7 +92,12 @@ export function parseProcessTable(text: string): WinProcessRow[] {
     const record = value as Record<string, unknown>
     const pid = toInt(record.ProcessId)
     if (pid === null) return
-    rows.push({ pid, ppid: toInt(record.ParentProcessId) })
+    rows.push({
+      pid,
+      ppid: toInt(record.ParentProcessId),
+      command: toScalarString(record.CommandLine),
+      createdAt: toScalarString(record.CreationDate),
+    })
   }
   visit(parsed)
   return rows
@@ -91,6 +110,12 @@ function toInt(value: unknown): number | null {
     if (Number.isInteger(parsed)) return parsed
   }
   return null
+}
+
+/** PowerShell ConvertTo-Json renders DateTime as a string (PS 5.1:
+ *  `\/Date(…)\/`, PS 7: ISO-8601); anything else is unreadable and null. */
+function toScalarString(value: unknown): string | null {
+  return typeof value === 'string' && value !== '' ? value : null
 }
 
 /** Descendant pids whose stale ParentProcessId chain reaches `rootPid`
@@ -131,11 +156,11 @@ export function classifyTaskkill(status: number | null, combined: string): 'sign
   return 'error'
 }
 
-/** The read-only, UTF-8-pinned CIM pid/parent table command. */
+/** The read-only, UTF-8-pinned CIM pid/parent/identity table command. */
 export function processTableCommand(): string {
   return [
     '[Console]::OutputEncoding = [System.Text.Encoding]::UTF8',
-    '$rows = @(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId)',
+    '$rows = @(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine,CreationDate)',
     'ConvertTo-Json -InputObject $rows -Compress',
   ].join('; ')
 }
@@ -150,6 +175,17 @@ export function queryWindowsProcessTable(): WinProcessRow[] {
   assertWindows()
   const now = Date.now()
   if (tableCache !== null && now - tableCache.at < TABLE_CACHE_TTL_MS) return tableCache.rows
+  return probeWindowsProcessTable()
+}
+
+/** Force a fresh CIM probe, bypassing the TTL cache: a pid identity must be
+ *  re-proved from current state, never from the scan that found it. */
+function queryWindowsProcessTableFresh(): WinProcessRow[] {
+  assertWindows()
+  return probeWindowsProcessTable()
+}
+
+function probeWindowsProcessTable(): WinProcessRow[] {
   const { status, stdout, stderr } = execWindowsTool('powershell.exe', [
     '-NoProfile',
     '-NonInteractive',
@@ -167,6 +203,29 @@ export function queryWindowsProcessTable(): WinProcessRow[] {
 }
 
 let tableCache: { at: number; rows: WinProcessRow[] } | null = null
+
+/** Verdict of re-proving one scanned residual pid against a fresh table. */
+export type CimIdentityVerdict = 'match' | 'mismatch' | 'unprovable'
+
+/**
+ * Re-prove that `current` is still the process `original` described (same
+ * rule as the control-plane twin's cimRowStillIdentifies): pid reuse makes the
+ * numeric ProcessId alone insufficient, so the stable CreationDate (or, when
+ * the date is unreadable on either side, the full command line) must match. A
+ * different value and a missing current row are 'mismatch' (never kill); an
+ * identity no shared field can prove is 'unprovable' and the caller fails
+ * closed.
+ */
+export function cimRowStillIdentifies(original: WinProcessRow, current: WinProcessRow | null): CimIdentityVerdict {
+  if (current === null || current.pid !== original.pid) return 'mismatch'
+  if (original.createdAt !== null && current.createdAt !== null) {
+    return original.createdAt === current.createdAt ? 'match' : 'mismatch'
+  }
+  if (original.command !== null && current.command !== null) {
+    return original.command === current.command ? 'match' : 'mismatch'
+  }
+  return 'unprovable'
+}
 
 /** Whether any descendant of `pid` (dead or alive leader) remains. Fail
  *  closed: a probe failure reports true (writer evidence is never erased on
@@ -199,7 +258,11 @@ export function killWindowsTree(pid: number): boolean {
   return false
 }
 
-/** kill(0)-style liveness; EPERM counts as alive; only ESRCH is absence. */
+/** kill(0)-style liveness; EPERM counts as alive; only ESRCH is absence.
+ *  Residual (S5, documented, sibling parity with win-probes.ts): this
+ *  OpenProcess probe can read a terminated-but-held process object as alive;
+ *  it is only used to classify a non-zero taskkill result, and the callers
+ *  that prove quiescence after a kill consult the CIM table. */
 function windowsPidExists(pid: number): boolean {
   try {
     process.kill(pid, 0)
@@ -213,9 +276,10 @@ function windowsPidExists(pid: number): boolean {
 
 /** Tree kill including residual descendants of an already-dead leader:
  *  taskkill the root tree; when the root is gone, discover descendants
- *  through CIM and kill each. Returns true when anything was signalled,
- *  false when nothing existed; throws loudly on failure (probe failure fails
- *  closed). win32-only. */
+ *  through CIM, re-prove each scanned pid's identity against a FRESH table
+ *  (pid reuse must never authorize a kill) and kill the matching ones.
+ *  Returns true when anything was signalled, false when nothing existed;
+ *  throws loudly on failure (probe failure fails closed). win32-only. */
 export function killWindowsTreeWithResidual(pid: number): boolean {
   assertWindows()
   if (killWindowsTree(pid)) return true
@@ -227,8 +291,27 @@ export function killWindowsTreeWithResidual(pid: number): boolean {
   }
   const residual = descendantPidsOf(rows, pid)
   let killedAny = false
-  for (const childPid of residual) {
-    if (killWindowsTree(childPid)) killedAny = true
+  if (residual.length > 0) {
+    // Pids are recycled: re-probe the TABLE (bypassing the 500ms cache)
+    // immediately before terminating and kill only rows that still carry the
+    // scanned identity. A row that no longer matches is a different process
+    // and is skipped; an identity the fresh probe cannot establish fails
+    // closed (throw) instead of terminating on doubt.
+    const scanned = new Map(rows.map(row => [row.pid, row]))
+    let fresh: Map<number, WinProcessRow>
+    try {
+      fresh = new Map(queryWindowsProcessTableFresh().map(row => [row.pid, row]))
+    } catch (error) {
+      throw new Error(`taskkill tree ${pid}: residual identity probe unavailable: ${String(error)}`)
+    }
+    for (const childPid of residual) {
+      const verdict = cimRowStillIdentifies(scanned.get(childPid) as WinProcessRow, fresh.get(childPid) ?? null)
+      if (verdict === 'mismatch') continue
+      if (verdict === 'unprovable') {
+        throw new Error(`taskkill residual ${childPid} (tree ${pid}): identity cannot be re-established; refusing to terminate`)
+      }
+      if (killWindowsTree(childPid)) killedAny = true
+    }
   }
   return killedAny
 }

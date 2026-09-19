@@ -48,7 +48,7 @@
 
 - **打包态身份**:`app.setAppUserModelId('com.dshchamber.desktop')`(win32)——通知/Action Center 归属与任务栏分组的前提。
 - **托盘与 preload**:托盘图标候选收敛为只留真实打包资源(两条永不随包的候选路径为跨平台既有 P2，见 STATUS 与 design 22 §5);preload 缺失 loud 失败,不静默回退源码 `.cts`。
-- **登录自启**:win32 走 `app.setLoginItemSettings({ openAtLogin })`(Electron 写 HKCU `...\Run`,当前用户、无需管理员),`supported` 恒 true;NSIS 卸载段 include(`packages/desktop/scripts/nsis-uninstall-cleanup.nsh`)清 `dsh-chamber` 与 `@dsh-chamber/desktop` 两个 Run 值。
+- **登录自启**:win32 走 `app.setLoginItemSettings({ openAtLogin, name: WINDOWS_APP_USER_MODEL_ID })`(Electron 43.4.0 在 win32 以该 name 写 HKCU `...\Run`,当前用户、无需管理员;`getLoginItemSettings` 的读回键同为该 name,故 P-20 读回校验一致——传其它 name 会让读回永久失败),`supported` 恒 true;NSIS 卸载段 include(`packages/desktop/scripts/nsis-uninstall-cleanup.nsh`)清 `dsh-chamber`、`@dsh-chamber/desktop` 与 AUMID `com.dshchamber.desktop` 三个 Run 值(前两个覆盖旧版本/双 flavor 残留)。
 - **深链**:打包态走无参数 `setAsDefaultProtocolClient` 注册(dev 不注册);`build.protocols` 键已声明(name `dsh-chamber` / scheme `dsh-chamber`),NSIS 是否写 `HKCU\Software\Classes` 待 runner 实证(§6)。
 - **open-in 本地路径**:本地实例(`instanceId='local'`)走 `validateLocalPath`(盘符/UNC),远程实例走 POSIX 口径 `validateRemotePath`。
 - **SSH 密码门**:win32 无密码字段;密码认证被拒并给出主路径引导(密钥 / ssh-agent / Pageant)。一键免密(密钥推送)UI 为后续独立特性,未排期。
@@ -63,6 +63,12 @@
 **F5** 非安装形态(便携)不承诺通知/托盘(AUMID/图标依赖安装形态,行业惯例)。
 **F6** Authenticode 未签名(等待 Azure Trusted Signing;资源决策)。
 **F7** 目录 rename 被第三方句柄占用时的瞬时重试窗口(续作 + 惰性删除后残余极小)。
+**F8** win32 无 `O_NOFOLLOW`/`O_DIRECTORY`:dsh-runtime 私有状态读写退化为**身份校验回退**
+(open 前后 `lstat` 拒符号链接 + dev/ino 复验,任一步不可证即 fail-closed),不再直接抛错
+(`packages/dsh-runtime/src/private-fs.ts` `resolveNoFollowFlags`/`openPrivateNoFollowSync`;
+与 gateway 的 win32 旁路 `runtime-manager.ts:632-648` 及 control-plane `private-file.ts:85-107` 同构)。
+残余:非写路径在 `lstat` 与 `open` 之间存在 TOCTOU 窗口(无内核旗标可消除);打开后复验失败即拒绝,
+故只影响并发替换攻击面,不影响普通读写与只读投影。
 
 审计标识对照(2026 审计 C1–C23 → 现行处置;审计 ID 供其他文档引用):
 

@@ -10,9 +10,12 @@ import assert from 'node:assert/strict'
 import {
   appendFileSync,
   chmodSync,
+  closeSync,
+  constants,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  openSync,
   readdirSync,
   readFileSync,
   rmSync,
@@ -26,7 +29,7 @@ import { join } from 'node:path'
 import {
   CONTROL_LOG_DIR, CONTROL_LOG_FILE, DEFAULT_CONTROL_LOG_FILES, DEFAULT_CONTROL_LOG_MAX_BYTES,
   IDENTITY_CHECK_EVERY, MIN_CONTROL_LOG_FILES, createControlLogSink, formatControlLogLine,
-  withControlLogFile,
+  verifyOpenedLeafIdentity, withControlLogFile,
 } from '../src/log-file.ts'
 
 const tempDir = (): string => mkdtempSync(join(tmpdir(), 'cp-log-'))
@@ -333,3 +336,25 @@ test('stateDir 下的 logs 目录被创建（与 host-logs 并列，不互相干
   assert.ok(existsSync(join(stateDir, 'host-logs')), 'host-logs/ 不受影响')
   rmSync(stateDir, { recursive: true, force: true })
 })
+
+test('win32 回退身份复验：符号链接叶子与换文件被拒绝，真实叶子通过（C2）', () => {
+  // win32 无 O_NOFOLLOW：open 后必须按 (dev, ino) 复验 path 仍是刚打开的叶子，
+  // 否则 logs/control-plane.log 被换成链接时会跟随写入并对目标 fchmod 0600。
+  const stateDir = tempDir()
+  const real = join(stateDir, 'real.log')
+  writeFileSync(real, 'x' + String.fromCharCode(10))
+  const fd = openSync(real, constants.O_WRONLY | constants.O_APPEND)
+  try {
+    verifyOpenedLeafIdentity(real, fd)
+    const link = join(stateDir, 'link.log')
+    symlinkSync(real, link)
+    assert.throws(() => verifyOpenedLeafIdentity(link, fd), /symbolic link/)
+    const other = join(stateDir, 'other.log')
+    writeFileSync(other, 'y' + String.fromCharCode(10))
+    assert.throws(() => verifyOpenedLeafIdentity(other, fd), /changed while being opened/)
+  } finally {
+    closeSync(fd)
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+

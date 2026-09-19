@@ -9,7 +9,7 @@
 - M0：push后 `test-windows` 首跑绿（连续3次）；按 §基线登记口径把首份真实数据填入下表。
 - M0.5：上游 `@deepseek-ai/dsh` win32-x64最小复现spawn + ready（阻断级R1）；NSIS是否写HKCU\Software\Classes（决定C17，需windows-2022最小构建实证）；Defender实扫计时；原生依赖预构建核对（koffi称预构建随包，仍以安装实测为准）。
 - M1：test-windows腿上 `win32-lifecycle` 集成测试真实跑绿（CIM/netstat/taskkill实证）；design 02 §5.1落地契约改写；mac/linux全量回归。
-- M2a：Windows runner上事务矩阵（安装→切换→探针失败→回滚→恢复，env门控开启态）+ `win32-readonly-rm` 决策门（Node rm对只读树行为）+ icacls实机输出核对。
+- M2a：Windows runner上事务矩阵（安装→切换→探针失败→回滚→恢复，env门控开启态）+ `win32-readonly-rm` 决策门（Node rm对只读树行为）+ icacls实机输出核对。（2026-12：私有状态读写的win32身份回退已落地，事务首步不再因缺 `O_NOFOLLOW` 抛错；矩阵本身仍需runner。）
 - M2b（纪律门禁：M2a全绿前不做）：`DSH_CHAMBER_WINDOWS_RUNTIME_MUTATIONS` 门控翻转（main.ts/dsh-runtime-controller/apply-now-gate/UI/i18n/版本chip）；win32测试diff对照基线全归因；Windows 11实机故障注入全链 + 只读投影文案移除。
 - M3：design 23 §7实机矩阵全勾（托盘/关窗/唤醒/SSH密钥隧道/updater stable+beta/深链特殊字符URL/防火墙loopback无弹窗/ACL查询）+ 打包产物核对（图标/preload）。
 - M4：登录自启注册表实测/卸载残留（nsis-uninstall-cleanup）、深链冷热启动 + `&` 字符URL、open-in盘符实机、NSIS protocols实证（与M0.5合并）。

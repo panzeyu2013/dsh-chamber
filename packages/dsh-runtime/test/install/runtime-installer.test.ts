@@ -326,6 +326,32 @@ test('installRuntimeVersion: injected publish failure restores the invalid old t
   assert.equal(readdirSync(path.dirname(tree)).some((name) => name.includes('.publish-backup-')), false)
 })
 
+test('installRuntimeVersion: awaits an injected async rename seam (Windows retry path) before verification', async () => {
+  const baseDir = makeBaseDir()
+  const tree = makeExistingTree(baseDir, VERSION, false)
+  const events: string[] = []
+  const result = await installRuntimeVersion({
+    baseDir,
+    resolution: resolution(),
+    pnpmEntry: '/pnpm/bin/pnpm.cjs',
+    deps: {
+      ...depsWithRun(okRun({ args: [], opts: [] })),
+      // The production default is the async renameWithWindowsRetry: every
+      // publish/backup rename must be awaited before makeReadOnly/verify see
+      // the tree, or a retried win32 rename would race the verification.
+      rename: async (source, destination) => {
+        await Promise.resolve()
+        renameSync(source, destination)
+        events.push(destination === tree ? 'publish' : 'backup')
+      },
+      verifyPublished: () => { events.push('verify') },
+    },
+  })
+  assert.equal(result.versionTreeDir, tree)
+  assert.deepEqual(events, ['backup', 'publish', 'verify'],
+    'an async rename seam is fully awaited before the published tree is verified')
+})
+
 test('installRuntimeVersion: injected post-publish verification failure restores the old tree', async () => {
   const baseDir = makeBaseDir()
   const tree = makeExistingTree(baseDir, VERSION, false)

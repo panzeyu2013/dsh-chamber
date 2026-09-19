@@ -50,7 +50,7 @@
  */
 
 import { CHAMBER_COVERED_IDS } from './chamber-covered.ts'
-import { shouldReportGraphUnavailable } from './source-readiness.ts'
+import { graphGapKindFor, type GraphGapKind } from './source-readiness.ts'
 // A4 (2026-09-11 upstream-alignment): the boot-graph wire validators are
 // UPSTREAM's own — never a hand-rolled copy. manifest.ts is the browser-safe
 // contract face of the pinned dsh-client-modules (zero runtime imports), the
@@ -466,14 +466,17 @@ export interface CollectExtraRowsDeps {
    */
   waitForServing?(instanceId: string): Promise<boolean>
   /**
-   * This boot settled WITHOUT the host graph (503 budget + serving wait both
-   * exhausted). The rows are gone for this boot, but the source is expected to
-   * serve later, so the shell records the fact and the App re-boots the
-   * instance once the source turns ready (2026-09-10). Never called for a
-   * non-503 channel failure: an instance that does not inject the graph at all
-   * (gateway/mobile shapes) is legitimate, not degraded.
+   * This boot settled WITHOUT the host graph — the 503 budget + serving wait
+   * were both exhausted (the source is expected to serve later), or the channel
+   * answered a hard failure. The shell records the fact and the App re-boots
+   * the instance once the source turns ready (2026-09-10). `kind` is the
+   * decision of {@link graphGapKindFor}: `graph-unavailable` for every channel
+   * failure, `local-graph-not-injected` for the LOCAL instance's 404 /
+   * method-missing (a chamber-side installation/seed fact — 2026-12 FIX 6).
+   * Never called for a NON-LOCAL instance that does not inject the graph at all
+   * (gateway/mobile shapes): that is legitimate, not degraded.
    */
-  onGraphUnavailable?(message: string): void
+  onGraphUnavailable?(message: string, kind: GraphGapKind): void
   /**
    * The authoritative roster proof this boot belongs to (2026-12): the fetched
    * graph is published into the page-level cache under it, so the settings
@@ -502,7 +505,7 @@ export interface CollectExtraRowsDeps {
    * no extra plugins for this boot; since the 2026-12 W3 change that outcome is
    * no longer silent — a non-404 channel failure reports a named
    * `graph-unreachable` diagnostic and upfloats the App-facing degrade fact
-   * (see `shouldReportGraphUnavailable`), and the boot-gap banner explains it.
+   * (see `graphGapKindFor`), and the boot-gap banner explains it.
    * The
    * 10-attempt default was widened from 6 (2026-08 review): the observed
    * local spawn→ready window is ~3s (control-plane host logs), which the
@@ -532,9 +535,11 @@ export interface CollectExtraRowsDeps {
  * non-2xx / malformed graph): the boot proceeds without extra plugins. Since
  * 2026-12 that channel failure ALSO reports the App-facing degrade fact
  * (`onGraphUnavailable`) unless the channel answered 404 — the legitimate
- * "no graph endpoint" shapes (gateway/mobile) must never be labeled a degrade,
- * while a 502/504 mount would otherwise ship a plugin-less shell with no
- * user-visible explanation at all (see the branch comment). That is
+ * "no graph endpoint" shapes (NON-LOCAL gateway/mobile) must never be labeled a
+ * degrade; the LOCAL instance's 404 is the exception (chamber-side
+ * installation/seed fact with its own kind — 2026-12 FIX 6) — while a 502/504
+ * mount would otherwise ship a plugin-less shell with no user-visible
+ * explanation at all (see the branch comment). That is
  * NOT a complete shell any more (2026-09 二轮, alpha.2 sources): the composite's
  * own first-screen families inject services that a non-covered official row
  * provides (the derived probe roster — `required-extra-rows.ts`, the single
@@ -549,7 +554,7 @@ export interface CollectExtraRowsDeps {
  * proxy stops answering 503 — see CollectExtraRowsDeps.retry) and only then gives
  * up on this boot's extra rows: no longer a silent degrade since the 2026-12 W3
  * change routes the non-404 channel failure to a named `graph-unreachable`
- * diagnostic plus the App-facing degrade fact (`shouldReportGraphUnavailable`),
+ * diagnostic plus the App-facing degrade fact (`graphGapKindFor`),
  * so a shell that boots inside the spawn window still gets its profile plugins
  * instead of losing them for the rest of the boot.
  *
@@ -663,7 +668,7 @@ export async function collectExtraRows(
       + 'this boot carries no profile client plugins'
     console.error(`[shell] instance ${instanceId} boot-graph unavailable: ${message}`)
     reportDiagnostic(instanceId, 'graph-unreachable', { message }, deps.reportDiagnostic)
-    deps.onGraphUnavailable?.(message)
+    deps.onGraphUnavailable?.(message, 'graph-unavailable')
     return []
   }
   if (firstFetch.error !== null) {
@@ -682,12 +687,17 @@ export async function collectExtraRows(
     // 没有出口，但用户停在 boot 表面时看不到解释、也拿不到自愈（2026-12 复核更正
     // 了口径）。上浮成 ShellState.degraded 后，App 的非阻断 boot-gap 横幅才说得
     // 出口，且 graph-unavailable 的 retryable 裁决给出每个 ready 世代一次的冷重挂。
-    // 边界：`not-injected`（404 或通道答 method 缺失）仍然是"没注入图"的合法形态，
-    // 绝不当作降级（见 host-graph.test.ts 的 not-injected 用例）。
-    if (shouldReportGraphUnavailable(state)) {
+    // 边界（FIX 6 修订）：**非本地**来源的 `not-injected`（404 或通道答 method 缺失）
+    // 仍然是"没注入图"的合法形态，绝不上浮；本地实例的同一形态相反——chamber 托管
+    // 宿主总会注入客户端图（seed 行），404/method 缺失只可能是 chamber 自己的
+    // 安装/seed 破损，因此走 local-graph-not-injected 并进入同一自愈面
+    // （见 host-graph.test.ts 的两个 not-injected 用例）。
+    const gapKind = graphGapKindFor(state, instanceId)
+    if (gapKind !== null) {
       deps.onGraphUnavailable?.(
         `instance did not answer its client plugin graph request (${detail}); `
         + 'this boot carries no profile client plugins',
+        gapKind,
       )
     }
     return []

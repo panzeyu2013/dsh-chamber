@@ -24,10 +24,11 @@ import { chamberBridge } from '../../../dsh-chamber-client-ui-sidebar/src/shared
 // The settled-boot fact the seam carries (type-only: erased at runtime, so the
 // loader hook never sees the specifier). Typing the test's ctx cast from the
 // producer's own interface keeps a payload field from drifting out of the test.
-import type { ShellDegradedFact } from '../../src/boot-gap.ts'
+import { bootGapSignature, type ShellDegradedFact, type ShellDegradedReport } from '../../src/boot-gap.ts'
 import {
   FIBER_STATE,
   __testConfiguredContexts, __testDisposedCount, __testEventLog,
+  __testQueueRunGate,
   __testResetConfiguredContexts, __testResetDisposed, __testResetEventLog,
   __testSetBootError, __testSetLoaderEntries, __testSetModuleSystemError,
   __testSetRunError, __testSetSessionsReadError,
@@ -177,12 +178,14 @@ test('bootInstanceShell: the serving gate is threaded into the host-graph fetch 
   }
 })
 
-test('bootInstanceShell: a graph-less boot settles degraded and republishes a late probe verdict', async (t) => {
+test('bootInstanceShell: a graph-less boot keeps its cause over a late lower-priority probe verdict', async (t) => {
   // 2026-09-10（sidebarRight 彻底修复）：取图在启动窗口内拿不到时，boot 仍成功但
   // 必须带上「已知不完整」这个事实（App 据此在来源 ready 后自动重挂）；条目里
   // 5s 必需服务探针的判词晚于 settle：经 onState 补发给**视图**，并经
   // options.onRepublish 投给 **App 镜像**（2026-12 BLOCKER 修复——只发前者时
-  // 横幅/侧栏投射/自愈全都收不到，见下方 republished 断言）。
+  // 横幅/侧栏投射/自愈全都收不到，见下方 republished 断言）。2026-12 priority
+  // （FIX 6 follow-up）：单槽按 bootGapPriority 比较，settle 的病因压过 5s 探针
+  // 的后果；本用例同时钉住「病因撤销后后果才被记录」与两个 sink 的补发。
   shellTestScope(t, { graph: 'unavailable', timers: false, silentConsole: false })
   __testResetConfiguredContexts()
   const states: Array<{ booted: boolean; degraded: { kind: string } | null }> = []
@@ -206,34 +209,62 @@ test('bootInstanceShell: a graph-less boot settles degraded and republishes a la
     assert.equal(state.error, null)
     assert.equal(state.degraded?.kind, 'graph-unavailable')
     const ctx = __testConfiguredContexts().at(-1) as {
-      chamberReportBootDegraded?: (fact: ShellDegradedFact) => void
+      chamberReportBootDegraded?: (report: ShellDegradedReport) => void
     }
     assert.equal(typeof ctx.chamberReportBootDegraded, 'function', 'the entry needs the degrade seam')
-    // The seam carries the STRUCTURED fact (2026-12, design 05 §4): the frame
-    // renders its own copy from the kind + the named services, so a producer
-    // must not flatten its verdict into a sentence.
+    // The probe's verdict names a CONSEQUENCE (a required provider never
+    // materialized — the classic ui-chat/sidebarRight case); the settled
+    // graph-unavailable fact names its CAUSE (the graph channel never
+    // answered). bootGapPriority ranks required-services-missing 0 below
+    // graph-unavailable 2, so the symptom must not replace the cause that
+    // explains it (shouldReplaceBootGap).
+    const settledFact = state.degraded as ShellDegradedFact
+    const settledStates = states.length
+    const settledRepublishes = republished.length
     ctx.chamberReportBootDegraded?.({
       kind: 'required-services-missing',
       message: 'required extra-row service(s) missing after 5000ms: sidebarRight',
       services: ['sidebarRight'],
       injectedBy: ['@deepseek-ai/dsh-client-ui-chat'],
     })
-    const last = states.at(-1)!
-    assert.equal(last.booted, true)
-    assert.equal(last.degraded?.kind, 'required-services-missing')
-    assert.equal(
-      republished.at(-1)?.degraded?.kind,
-      'required-services-missing',
-      'the App-owned sink must receive the post-settle verdict (the user surfaces read the App mirror)',
-    )
-    assert.deepEqual(
-      (last.degraded as unknown as { services?: readonly string[] }).services,
-      ['sidebarRight'],
-      'the structured services must survive the republish (the copy names them)',
-    )
-    // Identity = kind + payload: an identical repeat (even with a drifting
-    // message, which the signature deliberately ignores) must not churn the
-    // App's state …
+    assert.equal(states.length, settledStates, 'a suppressed consequence must not republish to the view')
+    assert.equal(republished.length, settledRepublishes, 'a suppressed consequence must not reach the App-owned sink')
+    // An identical repeat is still suppressed (the same lower-priority kind
+    // facing the same recorded cause; message drift is not part of identity).
+    ctx.chamberReportBootDegraded?.({
+      kind: 'required-services-missing',
+      message: 'a re-worded but structurally identical verdict',
+      services: ['sidebarRight'],
+      injectedBy: ['@deepseek-ai/dsh-client-ui-chat'],
+    })
+    assert.equal(states.length, settledStates, 'the repeating symptom must stay suppressed')
+    assert.equal(republished.length, settledRepublishes)
+    // Retracting the recorded cause with its EXACT kind + signature republishes
+    // the cleared state on both sinks (bootGapClearMatchesFact). The booted
+    // state proves the slot still held graph-unavailable after those
+    // suppressed reports: had a consequence replaced it, this retraction would
+    // not match and the sinks would stay untouched.
+    ctx.chamberReportBootDegraded?.({
+      cleared: true,
+      kind: 'graph-unavailable',
+      signature: bootGapSignature(settledFact),
+    })
+    assert.equal(states.at(-1)!.booted, true, 'the cause retraction reaches the live holder')
+    assert.equal(states.at(-1)!.degraded, null, 'the retraction removes the fact from the view state')
+    assert.equal(republished.at(-1)!.degraded, null, '…and from the App mirror')
+    // Now nothing outranks the consequence: it is recorded …
+    ctx.chamberReportBootDegraded?.({
+      kind: 'required-services-missing',
+      message: 'required extra-row service(s) missing after 5000ms: sidebarRight',
+      services: ['sidebarRight'],
+      injectedBy: ['@deepseek-ai/dsh-client-ui-chat'],
+    })
+    const recorded = states.at(-1)!.degraded as unknown as ShellDegradedFact
+    assert.equal(recorded.kind, 'required-services-missing')
+    assert.equal(republished.at(-1)?.degraded?.kind, 'required-services-missing')
+    assert.deepEqual(recorded.services, ['sidebarRight'], 'the structured services survive the republish (the copy names them)')
+    // … and an identical repeat (message drift ignored by the signature) still
+    // must not republish.
     const published = states.length
     ctx.chamberReportBootDegraded?.({
       kind: 'required-services-missing',
@@ -258,8 +289,9 @@ test('bootInstanceShell: a graph-less boot settles degraded and republishes a la
       ['sidebarRight', 'slots'],
       'the richer verdict must be the recorded one',
     )
-    // … while a DIFFERENT kind replaces the single slot (the last verdict wins;
-    // both producers stay on console — the bound is registered in STATUS).
+    // … while a HIGHER-priority kind replaces the single slot: deferred rank 1
+    // outranks the recorded required-services rank 0. Lower kinds could not
+    // (both producers stay on console — the bound is registered in STATUS).
     ctx.chamberReportBootDegraded?.({
       kind: 'deferred-registration-failed',
       message: 'deferred plugin registration failed for 1 id(s): ui-tool',
@@ -268,8 +300,133 @@ test('bootInstanceShell: a graph-less boot settles degraded and republishes a la
     assert.equal(
       states.at(-1)!.degraded?.kind,
       'deferred-registration-failed',
-      'the fact slot is single: a new kind replaces the previous verdict',
+      'a higher-priority cause replaces the recorded consequence',
     )
+  } finally {
+    __testResetConfiguredContexts()
+  }
+})
+
+test('bootInstanceShell: pre-settle reports are LAST-wins under priority and a retraction clears the settled fact (FIX 1/FIX 3)', async (t) => {
+  // A slow boot (cold SSH bundle/extra-row loads) can outlive the probe's 5s
+  // timer, so reports arriving BEFORE the settle wait in a per-serial stash. That
+  // stash used to keep the FIRST report while the live path keeps the LAST — a
+  // 0ms deferred-cluster verdict could shadow the probe's later, richer verdict.
+  // 2026-12 priority: the replayed LAST report must ALSO pass
+  // shouldReplaceBootGap against the settled graph-unavailable fact, so this
+  // test stashes a lower-priority consequence first and a HIGHER-priority cause
+  // second (local-graph-not-injected rank 3 > graph-unavailable rank 2): only
+  // last-wins + the priority gate together produce that replay. The same seam
+  // now also carries the probe's RETRACTION when the missing set empties
+  // (FIX 1): the shell must remove the fact it holds, and only when the
+  // retraction names exactly that fact.
+  shellTestScope(t, { graph: 'unavailable', timers: false, silentConsole: false })
+  __testResetConfiguredContexts()
+  const gate = __testQueueRunGate('degrade-stash-window')
+  const states: Array<{ booted: boolean; degraded: { kind: string } | null }> = []
+  const republished: Array<{ booted: boolean; degraded: { kind: string } | null }> = []
+  try {
+    const boot = shellModule.bootInstanceShell(
+      'ssh-test-stash-9', '/api/i/ssh-test-stash-9', {} as HTMLElement,
+      (next) => states.push(next as unknown as { booted: boolean; degraded: { kind: string } | null }),
+      testSourceFingerprint('ssh-test-stash-9'), undefined,
+      {
+        onRepublish: (_id, next) => {
+          republished.push(next as unknown as { booted: boolean; degraded: { kind: string } | null })
+        },
+      },
+    )
+    // The fixture consumes the run gate AFTER configureContext, so the seam is
+    // available while the boot is still loading (no holder yet → the stash path).
+    await gate.started
+    const ctx = __testConfiguredContexts().at(-1) as {
+      chamberReportBootDegraded?: (report: unknown) => void
+    }
+    ctx.chamberReportBootDegraded?.({
+      kind: 'required-services-missing',
+      message: 'the probe named the real blocker',
+      services: ['sidebarRight'],
+      injectedBy: ['@deepseek-ai/dsh-client-ui-chat'],
+    })
+    ctx.chamberReportBootDegraded?.({
+      kind: 'local-graph-not-injected',
+      message: 'the local graph endpoint answered 404',
+    })
+    gate.release()
+    const state = await boot
+    assert.equal(state.booted, true)
+    // The returned state is the boot's OWN settled state (the 503 graph fact)…
+    assert.equal(state.degraded?.kind, 'graph-unavailable')
+    // …while the LAST stashed report is replayed onto the live holder and the
+    // App-owned sink (last-wins) AND clears the priority gate: the
+    // local-graph-not-injected cause (rank 3) replaces the settled
+    // graph-unavailable fact (rank 2). A first-wins stash would replay the
+    // lower-priority consequence instead, which shouldReplaceBootGap then
+    // suppresses — the replay below is what pins both halves.
+    const replayed = states.at(-1)!.degraded as unknown as ShellDegradedFact
+    assert.equal(replayed.kind, 'local-graph-not-injected')
+    assert.equal(republished.at(-1)?.degraded?.kind, 'local-graph-not-injected')
+    // The exact retraction of the replayed cause frees the slot on both sinks
+    // (kind + signature); the assertions below then exercise the retraction
+    // rules against the consequence recorded in the now-free slot.
+    ctx.chamberReportBootDegraded?.({
+      cleared: true,
+      kind: 'local-graph-not-injected',
+      signature: bootGapSignature(replayed),
+    })
+    assert.equal(states.at(-1)!.degraded, null, 'the exact retraction removes the replayed cause')
+    assert.equal(republished.at(-1)!.degraded, null, '…and from the App mirror')
+    // With the cause retracted, the probe's consequence is recorded.
+    ctx.chamberReportBootDegraded?.({
+      kind: 'required-services-missing',
+      message: 'the probe named the real blocker',
+      services: ['sidebarRight'],
+      injectedBy: ['@deepseek-ai/dsh-client-ui-chat'],
+    })
+    const recorded = states.at(-1)!.degraded as unknown as ShellDegradedFact
+    assert.equal(recorded.kind, 'required-services-missing')
+    assert.deepEqual(recorded.services, ['sidebarRight'])
+    assert.equal(republished.at(-1)?.degraded?.kind, 'required-services-missing')
+    // A retraction that names a DIFFERENT payload of the same kind is ignored
+    // (message is not part of the identity): a newer/richer verdict must survive
+    // a stale retraction of an older set.
+    ctx.chamberReportBootDegraded?.({
+      cleared: true,
+      kind: 'required-services-missing',
+      signature: bootGapSignature({
+        kind: 'required-services-missing',
+        message: 'an older, larger verdict',
+        services: ['sidebarRight', 'slots'],
+        injectedBy: ['@deepseek-ai/dsh-client-ui-chat'],
+      }),
+    })
+    assert.equal(states.at(-1)!.degraded?.kind, 'required-services-missing', 'a stale retraction changes nothing')
+    // A retraction of ANOTHER kind is ignored too, even with a well-formed
+    // graph-unavailable signature (the slot is single: one producer's kind must
+    // never clear another producer's fact).
+    ctx.chamberReportBootDegraded?.({
+      cleared: true,
+      kind: 'graph-unavailable',
+      signature: bootGapSignature({ kind: 'graph-unavailable', message: 'the settled 503 fact' }),
+    })
+    assert.equal(states.at(-1)!.degraded?.kind, 'required-services-missing')
+    // The EXACT retraction clears the fact on both sinks — the false banner goes
+    // away instead of living until the next mount.
+    ctx.chamberReportBootDegraded?.({
+      cleared: true,
+      kind: 'required-services-missing',
+      signature: bootGapSignature(recorded),
+    })
+    assert.equal(states.at(-1)!.degraded, null, 'the retraction removes the fact from the view state')
+    assert.equal(republished.at(-1)!.degraded, null, '…and from the App mirror')
+    // Repeating the same retraction publishes nothing new.
+    const published = states.length
+    ctx.chamberReportBootDegraded?.({
+      cleared: true,
+      kind: 'required-services-missing',
+      signature: bootGapSignature(recorded),
+    })
+    assert.equal(states.length, published, 'an already-cleared retraction must not republish')
   } finally {
     __testResetConfiguredContexts()
   }

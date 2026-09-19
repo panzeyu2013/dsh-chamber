@@ -10,7 +10,10 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { ChamberSettings } from '../../src/ambient/settings-bridge.d.ts';
+import { en, zh } from '../../src/locales.ts';
 import { NOTIFICATIONS_DEFAULTS, notificationsOf, notificationsPatch } from '../../src/client/notifications-settings.ts';
 import { SESSION_TODO_DEFAULTS, sessionTodoOf, sessionTodoPatch } from '../../src/client/session-todo-settings.ts';
 
@@ -145,4 +148,42 @@ test('sessionTodoPatch: rides as a PARTIAL nested object (siblings never clobber
   const patch = sessionTodoPatch({ enabled: false });
   assert.deepEqual(patch, { sessionTodo: { enabled: false } });
   assert.equal('onComplete' in (patch.sessionTodo as object), false, 'untouched switches do not ride the wire');
+});
+
+// --- 未读徽标平台能力门（design 19 §3.7 / design 23 M3，2026-12 windows 修复） ---
+
+/**
+ * 主进程 status 投影新增 supported.badgeSupported（win32=false：任务栏
+ * overlay 角标 v1 未接线），GeneralView 的未读徽标开关在 false 时禁用并显示
+ * 原因。GeneralView 是 React 组件（引 primitives/CSS），因此这里钉两件纯 node
+ * 可测的事：zh/en 字典键镜像，以及组件的源码级能力门（仓库既有的
+ * source-assertion 纪律，同 IPC surface mirror）。
+ */
+const generalViewSource = readFileSync(
+  join(import.meta.dirname, '..', '..', 'src', 'client', 'GeneralView.tsx'),
+  'utf8',
+);
+
+test('badge capability: the unsupported reason exists in both dictionaries (zh is the key-set source)', () => {
+  assert.equal(typeof zh.generalNotificationsBadgeUnsupported, 'string');
+  assert.equal(typeof en.generalNotificationsBadgeUnsupported, 'string');
+  assert.notEqual(zh.generalNotificationsBadgeUnsupported.trim(), '');
+  assert.notEqual(en.generalNotificationsBadgeUnsupported.trim(), '');
+  assert.deepEqual(Object.keys(en).sort(), Object.keys(zh).sort(), 'en/zh key sets must mirror');
+});
+
+test('badge capability: GeneralView reads badgeSupported as an optional fact (old main process = supported)', () => {
+  // 局部可选交叉类型：能力字段加入前的旧主进程缺该字段时保持原渲染（开关
+  // 启用）——向后兼容；只有显式 false 才禁用。
+  assert.match(generalViewSource, /badgeSupported\?: boolean/);
+  assert.match(generalViewSource, /supported\?\.badgeSupported !== false/);
+});
+
+test('badge capability: GeneralView disables the badge toggle and shows the reason when unsupported', () => {
+  // 徽标开关自身携带能力门（通知主开关 / 会话待办开关仍只受 hydration 门）。
+  assert.match(generalViewSource, /disabled=\{!hydrated \|\| !badgeSupported\}/);
+  // 行变淡，且标签旁渲染一条短原因。
+  assert.match(generalViewSource, /\(!hydrated \|\| !badgeSupported\) && css\.generalDisabled/);
+  assert.match(generalViewSource, /!badgeSupported && \(/);
+  assert.match(generalViewSource, /t\('generalNotificationsBadgeUnsupported'\)/);
 });

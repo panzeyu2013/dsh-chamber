@@ -680,11 +680,19 @@ export function resolveSidecarBuiltinDshWorkspace(input: {
 // 守卫在 stop() 时终止（绝不孤儿化），故「无进程则不确认」是安全的。
 export const LOCAL_RUNNING_STATES: ReadonlySet<string> = new Set(['starting', 'ready', 'degraded', 'restarting']);
 
+/** 深链 scheme 前缀（小写基准；比较时对 argv 前缀做 lower-case）。 */
+export const DEEP_LINK_SCHEME_PREFIX = 'dsh-chamber://';
+
 /** 扫描 argv 中的 dsh-chamber:// 深链（防御式：非深链 argv 零副作用、绝不 throw）。 */
 export function scanDeepLinkUrls(argv: readonly string[]): string[] {
   const urls: string[] = [];
   for (const arg of argv) {
-    if (typeof arg === 'string' && arg.startsWith('dsh-chamber://')) urls.push(arg);
+    // Scheme 按 RFC 3986 §3.1 大小写不敏感（WHATWG `new URL()` 也把 url.protocol
+    // 小写化），Windows 注册表查找同样不区分大小写：`DSH-CHAMBER://…` 会唤起本应用，
+    // 必须在此被收集。只比较前缀，path/query 原样保留、不参与小写化。
+    if (typeof arg === 'string' && arg.slice(0, DEEP_LINK_SCHEME_PREFIX.length).toLowerCase() === DEEP_LINK_SCHEME_PREFIX) {
+      urls.push(arg);
+    }
   }
   return urls;
 }

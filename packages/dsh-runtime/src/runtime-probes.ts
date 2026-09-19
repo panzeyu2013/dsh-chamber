@@ -38,7 +38,7 @@
  * vendor-lockstep test pins the name to the upstream signature.
  */
 import { constants } from 'node:fs'
-import { open } from 'node:fs/promises'
+import { lstat, open } from 'node:fs/promises'
 import { join } from 'node:path'
 import { TextDecoder } from 'node:util'
 import {
@@ -47,6 +47,7 @@ import {
   activationProbeNamesForDomains,
   type ProbeResult,
 } from './activation-gate.ts'
+import { resolveNoFollowFlags, type NoFollowConstantsLike } from './private-fs.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
 
 export interface RuntimeProbeRpcOptions {
@@ -108,6 +109,14 @@ export interface RuntimeProbeOptions {
    * and the verdict expectation are both derived from this list.
    */
   hostDomainNames?: readonly string[]
+  /**
+   * Deterministic no-follow fallback seam (private-fs.ts NoFollowConstantsLike
+   * precedent): win32 exports neither O_NOFOLLOW nor O_DIRECTORY, so the
+   * settings reader re-proves the leaf in user space instead. Tests pass a
+   * constants table without O_NOFOLLOW to exercise that branch on any host;
+   * production callers omit it.
+   */
+  settingsNoFollowConstants?: NoFollowConstantsLike
 }
 
 /**
@@ -205,12 +214,37 @@ function safeFsCode(error: unknown): string {
  * Read one regular, non-symlink UTF-8 file without ever allocating from an
  * attacker-controlled size. `fstat` happens before allocation; reads stop at
  * the validated size plus one byte, so growth races fail closed too.
+ *
+ * A host whose constants lack O_NOFOLLOW (win32) would otherwise open the bare
+ * O_RDONLY meaning and silently follow a symlinked leaf. The async reader uses
+ * the landed fallback strategy inline (private-fs.ts resolveNoFollowFlags /
+ * openPrivateNoFollowSync semantics): the leaf is lstat-ed immediately before
+ * the open, a symlink is refused, and after the open the path must still name
+ * the exact (dev, ino) the descriptor returned. POSIX keeps the historical
+ * O_RDONLY|O_NOFOLLOW flags and performs no extra syscall.
+ *
+ * @param constantsLike - deterministic fallback-path seam; production callers
+ *   omit it (RuntimeProbeOptions.settingsNoFollowConstants is the test entry).
  */
-async function readBoundedRegularUtf8File(filePath: string, signal: AbortSignal): Promise<void> {
+async function readBoundedRegularUtf8File(
+  filePath: string,
+  signal: AbortSignal,
+  constantsLike: NoFollowConstantsLike = constants,
+): Promise<void> {
   signal.throwIfAborted()
+  const { flags, kernelNoFollow } = resolveNoFollowFlags('read', constantsLike)
+  if (!kernelNoFollow) {
+    let before
+    try {
+      before = await lstat(filePath)
+    } catch (error) {
+      throw new Error(`settings.yaml could not be opened${safeFsCode(error)}`)
+    }
+    if (before.isSymbolicLink()) throw new Error('settings.yaml is a symbolic link')
+  }
   let handle
   try {
-    handle = await open(filePath, constants.O_RDONLY | constants.O_NOFOLLOW)
+    handle = await open(filePath, flags)
   } catch (error) {
     // Never project the OS message: it embeds the absolute userData path and
     // generic regex redaction cannot perfectly cover quoted paths with spaces.
@@ -222,6 +256,19 @@ async function readBoundedRegularUtf8File(filePath: string, signal: AbortSignal)
       info = await handle.stat()
     } catch (error) {
       throw new Error(`settings.yaml could not be inspected${safeFsCode(error)}`)
+    }
+    if (!kernelNoFollow) {
+      // The kernel could not refuse a symlinked leaf, so re-prove that the path
+      // still names exactly the opened inode (lstat never follows the leaf).
+      let atPath
+      try {
+        atPath = await lstat(filePath)
+      } catch (error) {
+        throw new Error(`settings.yaml could not be inspected${safeFsCode(error)}`)
+      }
+      if (atPath.isSymbolicLink() || atPath.dev !== info.dev || atPath.ino !== info.ino) {
+        throw new Error('settings.yaml changed while being opened or is a symbolic link')
+      }
     }
     if (!info.isFile()) throw new Error('settings.yaml is not a regular file')
     if (!Number.isSafeInteger(info.size) || info.size < 0 || info.size > SETTINGS_FILE_MAX_BYTES) {
@@ -509,7 +556,7 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
 
   let dataSettings: ProbeResult
   try {
-    await readBoundedRegularUtf8File(join(opts.dshHome, 'settings.yaml'), signal)
+    await readBoundedRegularUtf8File(join(opts.dshHome, 'settings.yaml'), signal, opts.settingsNoFollowConstants)
     if (!settingsRpcOk) throw new Error('settings RPC could not parse the active profile')
     dataSettings = { name: 'data.settings', ok: true }
   } catch (error) {

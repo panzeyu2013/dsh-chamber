@@ -16,6 +16,7 @@ import {
   shouldAnnounceRetryQueue,
   shouldDeferBootForSource,
   shouldReportGraphUnavailable,
+  graphGapKindFor,
   veilShowsActions,
   veilState,
 } from '../../src/source-readiness.ts'
@@ -120,6 +121,15 @@ test('every channel failure but the 404 "no graph injected" shape reaches the Ap
     'gateway/mobile shapes legitimately run without a graph — never a degrade')
   assert.equal(shouldReportGraphUnavailable('graph-unreachable'), true)
   assert.equal(shouldReportGraphUnavailable('anything-else'), true, 'unknown states fail toward honesty')
+  // The caller that carries a source id gets the KIND, not just a boolean.
+  assert.equal(graphGapKindFor('not-injected', 'local'), 'local-graph-not-injected',
+    'the LOCAL instance always injects its graph — a 404 there is a chamber-side installation/seed fact (FIX 6)')
+  assert.equal(graphGapKindFor('not-injected', 'ssh-a'), null,
+    'a remote/gateway source may legitimately run without a graph — its exemption stays')
+  assert.equal(graphGapKindFor('not-injected', 'gateway-x'), null)
+  assert.equal(graphGapKindFor('graph-unreachable', 'local'), 'graph-unavailable')
+  assert.equal(graphGapKindFor('graph-unreachable', 'ssh-a'), 'graph-unavailable')
+  assert.equal(graphGapKindFor('anything-else', 'local'), 'graph-unavailable')
 })
 
 test('the retry queue note is honest: only an UNSETTLED predecessor queues a retry', () => {

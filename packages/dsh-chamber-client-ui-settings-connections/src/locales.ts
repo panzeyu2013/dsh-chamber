@@ -198,9 +198,14 @@ export const zh = {
   bootGapLabel: '前端能力受限',
   bootGapGeneric: '部分界面可能缺席',
   bootGapGraphUnavailable: '本次挂载没有加载该实例的前端插件（会话正文等界面可能缺席）',
+  bootGapLocalGraphNotInjected: '本地实例没有注入客户端插件图（接口 404 或缺少该方法）——这是应用侧安装/seed 产物不完整，本次挂载没有加载它的前端插件',
   bootGapRequiredServicesMissing: '没有提供本页所需的前端服务（{services}）；等待它们的界面不会注册',
   bootGapDeferredRegistrationFailed: '{n} 个前端插件家族没有注册成功（它们的界面与插槽本次缺失）',
-  bootGapHint: '常见原因：该实例的 dsh 运行时与本次页面所需的前端插件不匹配。在「本地实例」或该连接的设置中打开 dsh 运行时 分节，升级/对齐到一致版本；随后重新挂载该来源——就绪来源通常会自动重挂一次，也可以在该来源页面上用「重试」。重开只是重新挂载，缺口仍在时此提示会再次出现。',
+  // 2026-12 FIX 6c：本地实例的运行时管理在 win32 上是只读投影，所以本地分支
+  // 只给可执行动作（重启本地 dsh / 重新挂载 / 提交诊断）；"升级/对齐运行时"
+  // 只出现在远程来源分支。本组件拿不到来源种类（连接卡片与插件对话框共用），
+  // 因此这里把两个分支都写清楚，用户按自己的来源种类对号入座。
+  bootGapHint: '本地实例：先在 设置 → 连接 中重启本地 dsh，再重新挂载该来源；仍不恢复时复制诊断信息反馈（本地实例的客户端插件图由应用自身注入，属于安装完整性问题）。远程来源：常见原因是该实例的 dsh 运行时与本次页面所需的前端插件不匹配——在该连接的设置中打开 dsh 运行时 分节，升级/对齐到一致版本，然后重新挂载该来源（就绪来源通常会自动重挂一次，也可以在该来源页面上用「重试」）。',
   pluginsOpen: '管理插件',
   pluginsTitle: '插件',
   pluginsLoading: '正在读取插件清单…',
@@ -571,9 +576,10 @@ export const en: Record<SettingsConnectionsKey, string> = {
   bootGapLabel: 'Interface limited',
   bootGapGeneric: 'Some surfaces may be missing',
   bootGapGraphUnavailable: 'This mount loaded none of the instance’s frontend plugins (surfaces such as the conversation body may be missing)',
+  bootGapLocalGraphNotInjected: 'The local instance did not inject its client plugin graph (404 or missing method) — an app-side installation/seed problem, so this mount loaded none of its frontend plugins',
   bootGapRequiredServicesMissing: 'It did not provide the frontend service(s) this page needs ({services}); the surfaces waiting on them never register',
   bootGapDeferredRegistrationFailed: '{n} frontend plugin family/families did not register (their surfaces and slots are missing here)',
-  bootGapHint: 'Common cause: this instance’s dsh runtime does not match the frontend plugins this page needs. Open the dsh runtime section in the settings of the local instance or of that connection and upgrade/align to a matching version; then re-mount that source — a ready source usually re-mounts once by itself, and the source page offers “Retry”. Re-mounting alone does not fix it, so the notice returns if the gap is still there.',
+  bootGapHint: 'Local instance: restart the local dsh in Settings → Connections, then re-mount this source; if it still does not recover, copy the diagnostics and report them (the local client plugin graph is injected by the app itself, so this is an installation-integrity problem). Remote source: the common cause is that the instance’s dsh runtime does not match the frontend plugins this page needs — open the dsh runtime section in that connection’s settings, upgrade/align to a matching version, then re-mount the source (a ready source usually re-mounts once by itself, and the source page offers “Retry”).',
   pluginsOpen: 'Manage plugins',
   pluginsTitle: 'Plugins',
   pluginsLoading: 'Reading plugin manifests…',
