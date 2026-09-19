@@ -198,8 +198,8 @@ assert.match(dmgModule, /'-format', 'UDZO'/,
 const dmgBackground = new URL('../../macos/resources/dmg-background.tiff', import.meta.url)
 assert.ok(existsSync(dmgBackground), 'the in-repo dmg background asset must exist (nothing else paints the drag cue)')
 // 双 rep TIFF（electron-builder 同款 540×380@72dpi + 1080×760@144dpi）：这里钉形状
-// （TIFF magic「II* 」/「MM *」+ 非空），防资产被误换成 1x PNG 而 Retina 再次发虚。
-// 源模板是 big-endian（MM *），两种字节序都接受。
+// （TIFF magic「II*\0」/「MM\0*」+ 非空），防资产被误换成 1x PNG 而 Retina 再次发虚。
+// 源模板是 big-endian（MM\0*），两种字节序都接受。
 const dmgBackgroundBytes = readFileSync(dmgBackground)
 assert.ok(dmgBackgroundBytes.length > 1024, 'the dmg background asset must not be an empty placeholder')
 assert.ok(
