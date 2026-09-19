@@ -12,7 +12,6 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { collectAnchors, collectDocuments, collectLinkFailures, linkFailure, MIRRORED_DOCUMENTS, slugify } from './verify-md-links.mjs'
-
 /** Run a body against a throwaway repository layout. */
 function withTempRepo(files, body) {
   const root = mkdtempSync(join(tmpdir(), 'md-links-'))
@@ -27,17 +26,14 @@ function withTempRepo(files, body) {
     rmSync(root, { recursive: true, force: true })
   }
 }
-
 test('slugify matches GitHub for punctuation, casing and spaces', () => {
   assert.equal(slugify('Pre-flight: findings (2026-12)'), 'pre-flight-findings-2026-12')
   assert.equal(slugify('`code` and *emphasis*'), 'code-and-emphasis')
   assert.equal(slugify('[link](target) text'), 'link-text')
 })
-
 test('slugify keeps CJK and drops other punctuation', () => {
   assert.equal(slugify('设计 09 · 客户端插件'), '设计-09-客户端插件')
 })
-
 test('collectAnchors adds duplicate suffixes and explicit anchors', () => {
   const anchors = collectAnchors([
     '# Title',
@@ -56,7 +52,6 @@ test('collectAnchors adds duplicate suffixes and explicit anchors', () => {
   assert.equal(anchors.has('named'), true)
   assert.equal(anchors.has('not-a-heading'), false)
 })
-
 test('link failures cover a missing file and a dead anchor', () => {
   withTempRepo({
     'docs/target.md': '# Present Heading\n',
@@ -75,7 +70,6 @@ test('link failures cover a missing file and a dead anchor', () => {
     assert.deepEqual(failures.map(failure => failure.target), ['./gone.md', './target.md#absent'])
   })
 })
-
 test('a fragment on a non-Markdown target is not treated as an anchor', () => {
   withTempRepo({ 'docs/asset.txt': 'x\n' }, (root) => {
     const reason = linkFailure({
@@ -86,7 +80,6 @@ test('a fragment on a non-Markdown target is not treated as an anchor', () => {
     assert.equal(reason, null)
   })
 })
-
 test('an empty documentation set is a failure, not a pass', () => {
   withTempRepo({}, (root) => {
     const { documents, links, failures } = collectLinkFailures(root)
@@ -95,7 +88,6 @@ test('an empty documentation set is a failure, not a pass', () => {
     assert.deepEqual(failures, [])
   })
 })
-
 test('local dev-instance state under the scan roots is not scanned', () => {
   withTempRepo({
     'packages/desktop/.dev-user-data/state/dsh-home/notes/dead.md': '[dead](../../../../../../docs/nope.md)\n',
@@ -108,14 +100,12 @@ test('local dev-instance state under the scan roots is not scanned', () => {
     assert.deepEqual(failures.failures, [], 'the ignored dir contributes no failures')
   })
 })
-
 test('a dead link in a tracked document is still reported', () => {
   withTempRepo({ 'docs/a.md': '[dead](./nope.md)\n' }, (root) => {
     const failures = collectLinkFailures(root)
     assert.equal(failures.failures.length, 1)
   })
 })
-
 test('frozen upstream mirrors are excluded from the checked set and reported', () => {
   const { mirrored } = collectDocuments(join(import.meta.dirname, '..', '..'))
   for (const path of MIRRORED_DOCUMENTS.keys()) {

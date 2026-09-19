@@ -12,38 +12,18 @@ import { actionHintKey, isUserActionPhase } from '../../src/client/action-hint.t
 
 function spec(overrides: Partial<SshInstanceSpec> = {}): SshInstanceSpec {
   return {
-    id: 's1',
-    label: 's1',
-    kind: 'dsh',
-    transport: 'ssh',
-    host: 'example.com',
-    user: null,
-    sshPort: null,
-    remotePort: 30800,
-    serviceName: null,
-    remoteDshHome: null,
-    sourceFingerprint: 'test',
-    insecureHttp: false,
-    ...overrides,
+    id: 's1', label: 's1', kind: 'dsh', transport: 'ssh', host: 'example.com',
+    user: null, sshPort: null, remotePort: 30800, serviceName: null, remoteDshHome: null,
+    sourceFingerprint: 'test', insecureHttp: false, ...overrides,
   }
 }
 
 function status(overrides: Partial<SshStatusProjection> = {}): SshStatusProjection {
   return {
-    kind: 'dsh',
-    transport: 'ssh',
-    insecureHttp: false,
-    phase: 'error',
-    localPort: null,
-    sshPort: null,
-    remotePort: 30800,
-    retryAttempt: 0,
-    requiresUserAction: true,
-    userActionKind: 'endpoint',
-    serviceActive: null,
-    remoteDshHome: null,
-    logSummary: 'the destination answered HTTP 404 to the dsh identity probe',
-    ...overrides,
+    kind: 'dsh', transport: 'ssh', insecureHttp: false, phase: 'error',
+    localPort: null, sshPort: null, remotePort: 30800, retryAttempt: 0,
+    requiresUserAction: true, userActionKind: 'endpoint', serviceActive: null, remoteDshHome: null,
+    logSummary: 'the destination answered HTTP 404 to the dsh identity probe', ...overrides,
   }
 }
 

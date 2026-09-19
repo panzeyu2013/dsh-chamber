@@ -1,10 +1,7 @@
 /**
- * restore-lockfile-vendor-records.mjs unit tests (plain node:test, no repo
- * mutation): the pnpm-11 pruning repair must补回 records that pnpm dropped,
- * but MUST NOT resurrect a member that upstream removed from its workspace
- * (2026-09 fix — the 0.1.5 landlock removal made frozen installs fail with
- * "锁文件有、链接缺" because the script blindly replayed HEAD's records).
- *
+ * restore-lockfile-vendor-records.mjs unit tests (plain node:test, no repo mutation): the pnpm-11 pruning
+ * repair must补回 dropped records but MUST NOT resurrect a member upstream removed from its workspace — the
+ * 0.1.5 landlock removal made frozen installs fail with "锁文件有、链接缺" (the script replayed HEAD blindly).
  * Runs the script as a child process through its documented test overrides:
  *   RESTORE_LOCKFILE_PATH / RESTORE_LOCKFILE_HEAD / RESTORE_VENDOR_LINK_DIR
  */
@@ -44,7 +41,6 @@ function lockfile(importers) {
     '',
   ].join('\n')
 }
-
 function run(env) {
   try {
     const stdout = execFileSync(process.execPath, [scriptPath], {
@@ -56,7 +52,6 @@ function run(env) {
     return { code: error.status ?? 1, stdout: `${error.stdout ?? ''}${error.stderr ?? ''}` }
   }
 }
-
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), 'restore-lockfile-'))
   const linkDir = join(dir, 'links')

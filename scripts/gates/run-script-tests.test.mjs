@@ -13,7 +13,6 @@ test('no arguments select every group in declaration order', () => {
   assert.deepEqual(selection.groups, Object.keys(GROUPS))
   assert.equal(selection.list, false)
 })
-
 test('--group selects one group, repeats dedupe, and unknown names are usage errors', () => {
   assert.deepEqual(resolveSelection(['--group', 'upstream']).groups, ['upstream'])
   assert.deepEqual(resolveSelection(['--group', 'upstream', '--group', 'release']).groups, ['upstream', 'release'])
@@ -23,7 +22,6 @@ test('--group selects one group, repeats dedupe, and unknown names are usage err
   assert.deepEqual(resolveSelection(['--verbose']).problems, [`unknown argument '--verbose'`])
   assert.equal(resolveSelection(['--list']).list, true)
 })
-
 test('a manifest that matches the tree reports nothing', () => {
   const problems = manifestProblems({
     listed: [{ group: 'gates', path: 'scripts/gates/a.test.mjs' }],
@@ -33,7 +31,6 @@ test('a manifest that matches the tree reports nothing', () => {
   })
   assert.deepEqual(problems, [])
 })
-
 test('both directions of drift are failures: listed-but-missing and on-disk-but-unlisted', () => {
   const problems = manifestProblems({
     listed: [
@@ -51,7 +48,6 @@ test('both directions of drift are failures: listed-but-missing and on-disk-but-
     'scripts/upstream/orphan.test.mjs exists but no group lists it',
   ])
 })
-
 test('a non-mjs test under scripts/ is reported instead of silently ignored', () => {
   const problems = manifestProblems({
     listed: [],
@@ -61,7 +57,6 @@ test('a non-mjs test under scripts/ is reported instead of silently ignored', ()
   })
   assert.deepEqual(problems, ['scripts/gates/legacy.test.ts must be a .test.mjs: the scripts suites are ESM files this manifest owns (scripts/README.md §分类规则 3)'])
 })
-
 test('a stem without a sibling module must be an accepted subject lock', () => {
   const listed = [{ group: 'release', path: 'scripts/release/policy.test.mjs' }]
   const onDisk = ['scripts/release/policy.test.mjs']
@@ -78,7 +73,6 @@ test('a stem without a sibling module must be an accepted subject lock', () => {
     [],
   )
 })
-
 test('a stale SUBJECT_TESTS entry is a failure, so the allowlist cannot rot', () => {
   const problems = manifestProblems({
     listed: [{ group: 'gates', path: 'scripts/gates/a.test.mjs' }],
@@ -88,7 +82,6 @@ test('a stale SUBJECT_TESTS entry is a failure, so the allowlist cannot rot', ()
   })
   assert.deepEqual(problems, ['SUBJECT_TESTS lists scripts/gates/vanish.test.mjs, but no group carries it — drop the entry'])
 })
-
 test('the shipped manifest is self-consistent: unique entries, real reasons, no stale subject lock', () => {
   const listed = Object.entries(GROUPS).flatMap(([group, files]) => files.map(path => ({ group, path })))
   const paths = listed.map(entry => entry.path)

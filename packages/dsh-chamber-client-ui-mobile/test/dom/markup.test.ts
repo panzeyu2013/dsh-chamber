@@ -2,62 +2,16 @@
  * Markup helper tests: frame/column stamping plus the re-stamp predicate
  * (isStructuralTarget/shouldRestamp) against the empirical 0.1.5-alpha.2 DOM
  * shape (the centre column is the keyed `main` slot, the right column is
- * `rightbar`), exercised with a minimal ElementLike/StructuralNodeLike fake
- * (plain node has no DOM).
+ * `rightbar`), exercised with the shared plain-node double
+ * (test/support/dom-double.ts; plain node has no DOM).
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import type { ElementLike } from '../../src/client/markup.ts'
 import {
   findFrame, findColumn, stampFrame, ROLE_SLOT_KEYS,
   isStructuralTarget, isElementNode, shouldRestamp,
 } from '../../src/client/markup.ts'
-
-/**
- * Minimal ElementLike/StructuralNodeLike fake: tag + attributes + children
- * with a wired parent chain and attribute-selector matching.
- */
-class FakeElement implements ElementLike {
-  readonly children: FakeElement[] = []
-  readonly attributes = new Map<string, string>()
-  readonly tag: string
-  parent: FakeElement | null = null
-  /** Text copy for label matching (real DOM: Element.textContent). */
-  textContent = ''
-  constructor(tag: string) { this.tag = tag }
-  setAttribute(name: string, value: string): void { this.attributes.set(name, value) }
-  getAttribute(name: string): string | null { return this.attributes.get(name) ?? null }
-  hasAttribute(name: string): boolean { return this.attributes.has(name) }
-  get firstElementChild(): FakeElement | null { return this.children[0] ?? null }
-  get parentElement(): FakeElement | null { return this.parent }
-  matches(selector: string): boolean {
-    // Only the plugin's own attribute selectors are ever evaluated on fakes:
-    // '[attr]' presence and '[attr="value"]' equality.
-    const parsed = /^\[([a-z][a-z-]*)(?:="([^"]*)")?\]$/.exec(selector)
-    if (parsed === null) return false
-    const [, name, value] = parsed
-    if (value === undefined) return this.attributes.has(name)
-    return this.attributes.get(name) === value
-  }
-  querySelectorAll(selector: string): FakeElement[] {
-    const out: FakeElement[] = []
-    const walk = (el: FakeElement): void => {
-      for (const child of el.children) {
-        if (child.tag === selector) out.push(child)
-        walk(child)
-      }
-    }
-    walk(this)
-    return out
-  }
-}
-
-/** Attach child to parent, wiring the parent chain (matches() needs it). */
-function attach(parent: FakeElement, child: FakeElement): FakeElement {
-  parent.children.push(child)
-  child.parent = parent
-  return child
-}
+import { FakeNode as FakeElement, attach } from '../support/dom-double.ts'
 
 /** The inner [data-slot] outlet container (slot scope outlet). */
 function outlet(slot: string): FakeElement {

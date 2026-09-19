@@ -4,6 +4,7 @@
  */
 
 import { createHash } from 'node:crypto'
+import { EventEmitter } from 'node:events'
 import {
   basename,
   dirname,
@@ -13,6 +14,7 @@ import {
   GitWorktreeCore,
   GitWorktreeError,
   type AgentFact,
+  type GitChildProcess,
   type GitCommandRequest,
   type GitCommandResult,
   type GitRunner,
@@ -374,3 +376,80 @@ export function addStaleRecord(repo: FakeRepository): void {
   // The drill deletes the directory; the git metadata record survives.
   repo.existing.delete(STALE)
 }
+
+/**
+ * Snapshot the first repository and resolve one row by path, with the wire
+ * identity object every removal call needs. The missing-row lookup is a test
+ * bug: fixtures must register the path they target.
+ */
+export async function targetOf(core: GitWorktreeCore, path: string = LINKED) {
+  const snapshot = await core.snapshot()
+  const repository = snapshot.repos[0]!
+  const row = repository.worktrees.find(worktree => worktree.path === path)!
+  return {
+    snapshot,
+    repository,
+    row,
+    expected: { repoId: repository.repoId, worktreeId: row.worktreeId, branch: row.branch!, head: row.head },
+  }
+}
+
+/** assert.rejects predicate for a typed core refusal, optionally matching the message. */
+export function refuses(code: string, message?: RegExp) {
+  return (error: unknown): boolean => error instanceof GitWorktreeError
+    && error.code === code
+    && (message === undefined || message.test(error.message))
+}
+
+/** Minimal filesystem over a path set: only registered paths exist, .git never reads. */
+export function pathSetFs(paths: ReadonlySet<string>): WorktreeFileSystem {
+  return {
+    realpath: async path => {
+      if (!paths.has(path)) throw new MissingPathError(path)
+      return path
+    },
+    lstat: async path => {
+      if (!paths.has(path)) throw new MissingPathError(path)
+      return { isDirectory: () => true }
+    },
+    exists: async path => paths.has(path),
+    mkdir: async () => {},
+    readFile: async () => { throw new MissingPathError('.git') },
+  }
+}
+
+/** Core over an explicit workspace/agent source plus an optional runner and fs. */
+export function coreOver(options: {
+  workspaces: WorkspaceFact[]
+  agents?: AgentFact[]
+  archived?: readonly string[]
+  git?: GitRunner
+  fs?: WorktreeFileSystem
+  now?: () => number
+  token?: () => string
+}): GitWorktreeCore {
+  return new GitWorktreeCore({
+    source: {
+      listWorkspaces: () => options.workspaces,
+      listAgents: () => options.agents ?? [],
+      listArchivedSessionIds: () => [...(options.archived ?? [])],
+    },
+    ...(options.git === undefined ? {} : { git: options.git }),
+    ...(options.fs === undefined ? {} : { fs: options.fs }),
+    ...(options.now === undefined ? {} : { now: options.now }),
+    ...(options.token === undefined ? {} : { token: options.token }),
+  })
+}
+
+/** Git child process whose streams the local-runner tests drive by hand. */
+export class FakeGitChild extends EventEmitter implements GitChildProcess {
+  readonly stdout = new EventEmitter()
+  readonly stderr = new EventEmitter()
+  killed = false
+
+  kill(): boolean {
+    this.killed = true
+    return true
+  }
+}
+

@@ -1,22 +1,6 @@
-/**
- * verify-upstream-touchpoints.mjs sibling tests.
- *
- * Three parts, because they answer three different questions:
- *   0. PURE: `parseVerifyArgs` pins the accepted surface and every rejection
- *      reason (the gate script itself is a top-level program — importing it
- *      would run C1/C3–C15, so the decision logic lives in its own module, the
- *      same split artifact-gate.mjs uses).
- *   1. WIRING (subprocess): the script must actually consult the guard BEFORE
- *      any gate runs. That matters more than the parse result: the default mode
- *      rebuilds and restores the committed artifacts in place, so a silently
- *      ignored argument means a full write pass the caller never asked for. The
- *      regression therefore also asserts that a usage error leaves an artifact's
- *      mtime untouched and prints no gate marker.
- *   2. PURE: the C15 hover-port verdict (`verify-upstream-touchpoints-hover.mjs`)
- *      — the machine judgment behind the "upstream fixes the race ⇒ retire the
- *      port" deviation. It rides this file, not a new one, because
- *      `package.json`'s `test:upgrade-tools` names its test files explicitly.
- */
+// verify-upstream-touchpoints.mjs sibling tests: parse surface + guard wiring (no
+// C1/C3–C15 gate or rebuild before the argument guard) + the C15 hover-port verdict
+// (`verify-upstream-touchpoints-hover.mjs`); `test:upgrade-tools` lists its test files explicitly.
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -69,8 +53,7 @@ test('--tags requires exactly two tag values', () => {
 })
 
 test('every unrecognized argument is an error — a typo can never be ignored', () => {
-  // The near-miss that motivated the guard: one missing letter in the only
-  // flag that suppresses the in-place artifact rebuild.
+  // The near-miss that motivated the guard: one missing letter in the only flag that suppresses the rebuild.
   assert.deepEqual(parseVerifyArgs(['--no-artifact-rebuid']).errors, [
     '未知参数 --no-artifact-rebuid（已知：--no-artifact-rebuild, --tags, --help, -h）',
   ])
@@ -141,11 +124,8 @@ function dynamicImportArguments(source) {
 }
 
 test('every dynamic import in the gate goes through pathToFileURL (Windows ESM scheme trap)', () => {
-  // Regression lock for the test-windows leg: Node's ESM loader accepts only
-  // file:/data:/node: URLs, so `import(join(ROOT, 'x.mjs'))` reads a Windows
-  // absolute path as the scheme 'd:' and the gate dies instantly with
-  // ERR_UNSUPPORTED_ESM_URL_SCHEME — while staying green on every POSIX leg
-  // (2026-09-11 CI: C1/C3/C4 green, then the C4 assembly-contract import).
+  // Windows ESM trap: Node accepts only file:/data:/node: URLs, so a raw path reads as scheme 'd:'
+  // and dies with ERR_UNSUPPORTED_ESM_URL_SCHEME while every POSIX leg stays green.
   const args = dynamicImportArguments(readFileSync(scriptPath, 'utf8'))
   assert.ok(args.length >= 3, `expected the gate's dynamic imports, found ${args.length}`)
   for (const argument of args) {
@@ -157,14 +137,8 @@ test('every dynamic import in the gate goes through pathToFileURL (Windows ESM s
   }
 })
 
-// ---------------------------------------------------------------------------
-// C15 — hover-port verdict (pure). Second pure half, same rationale as above:
-// the gate script is a top-level program, so the decision logic lives in
-// `verify-upstream-touchpoints-hover.mjs`. The coverage rides THIS file on
-// purpose — `package.json`'s `test:upgrade-tools` lists its test files
-// explicitly, and a new `*.test.mjs` would not run in CI without an edit
-// outside this change's file ownership.
-// ---------------------------------------------------------------------------
+// C15 — hover-port verdict (pure): decision logic lives in
+// `verify-upstream-touchpoints-hover.mjs`; coverage rides THIS file because `test:upgrade-tools` lists its test files explicitly.
 
 /** Upstream atom as pinned: the grace arm is guarded by the committed `open`. */
 const PINNED_HOVER_CARD = `import { usePointerGrace } from './pointer-grace.ts'
@@ -192,12 +166,8 @@ export function HoverCard({ anchor, openDelayMs = 500 }) {
 }
 `
 
-/**
- * The pin's real `pointer-grace.ts`, verbatim (the whole file, from
- * `harness.commit`; sha256 cba1529e052cf3ea09fd3851990219e2b80d61fa4b3d35da490f28ba9f9965c6).
- * C15 reads `POINTER_GRACE_MS` from exactly this text, so the constants side of
- * the fixture IS the pinned file.
- */
+/** The pin's real `pointer-grace.ts`, verbatim (whole file, from `harness.commit`): C15 reads
+ * `POINTER_GRACE_MS` from exactly this text, sha256 cba1529e052cf3ea09fd3851990219e2b80d61fa4b3d35da490f28ba9f9965c6. */
 const PINNED_POINTER_GRACE = `import { useCallback, useEffect, useRef } from 'react'
 
 /**
@@ -247,11 +217,8 @@ export function usePointerGrace(close: () => void): PointerGrace {
 }
 `
 
-/**
- * The pin's real `onPointerLeave` attribute, verbatim (comments included) — the
- * exact text C15's shape rule has to read. Mutants below are built by replacing
- * `if (open) armClose()` inside it.
- */
+/** The pin's real `onPointerLeave` attribute, verbatim (comments included): the exact text
+ * C15's shape rule reads; mutants below replace `if (open) armClose()` inside it. */
 const PINNED_ON_POINTER_LEAVE = `      onPointerLeave={() => {
         clearTimer()
         // Leaving a closed card schedules a no-op close; only arm while
@@ -259,15 +226,10 @@ const PINNED_ON_POINTER_LEAVE = `      onPointerLeave={() => {
         if (open) armClose()
       }}`
 
-/** The fixture card with its real close handler replaced (mutant helper). */
 const withHandler = (handler) => PINNED_HOVER_CARD.replace(PINNED_ON_POINTER_LEAVE, handler)
 
-/**
- * The pin's real `onPointerEnter` attribute, verbatim — the OPEN half of the
- * race (dwell timer → `setOpen(true)`, with no pointer re-check). Mutants below
- * replace it whole: the gate's OPEN rule reads this region, and it is the region
- * an upstream fix from that side would have to touch.
- */
+/** The pin's real `onPointerEnter` attribute, verbatim — the OPEN half of the race
+ * (dwell timer → `setOpen(true)`, no pointer re-check); mutants below replace it whole. */
 const PINNED_ON_POINTER_ENTER = `      onPointerEnter={() => {
         cancelClose()
         if (open) return
@@ -275,7 +237,6 @@ const PINNED_ON_POINTER_ENTER = `      onPointerEnter={() => {
         timerRef.current = setTimeout(() => { setOpen(true) }, openDelayMs)
       }}`
 
-/** The fixture card with its real enter handler replaced (mutant helper). */
 const withEnter = (handler) => PINNED_HOVER_CARD.replace(PINNED_ON_POINTER_ENTER, handler)
 
 const CHAMBER_HOVER_INTENT = `export const HOVER_OPEN_DELAY_MS = 500
@@ -283,7 +244,6 @@ const CHAMBER_HOVER_INTENT = `export const HOVER_OPEN_DELAY_MS = 500
 export const HOVER_CLOSE_GRACE_MS = 200
 `
 
-/** The three sources the gate hands to the verdict, with per-test overrides. */
 const hoverSources = (overrides = {}) => ({
   upstreamHoverCard: { path: 'up/HoverCard.tsx', text: PINNED_HOVER_CARD },
   upstreamPointerGrace: { path: 'up/pointer-grace.ts', text: PINNED_POINTER_GRACE },
@@ -297,10 +257,8 @@ test('C15: the pinned racy shape passes and the locked timings are reported', ()
   assert.match(verdict.summary, /竞态两侧形状仍在/)
   assert.match(verdict.summary, /grace=200ms dwell=500ms/)
 })
-
 test('C15 (OPEN side): the dwell callback opens without re-checking the pointer', () => {
-  // The pinned open path, read directly: one dwell timer, and its callback does
-  // nothing but open. This is the half a close-side-only gate could not see.
+  // The pinned open path, read directly: one dwell timer whose callback does nothing but open.
   const body = componentBody(stripComments(PINNED_HOVER_CARD), 'HoverCard').text
   const timers = dwellOpenTimers(body)
   assert.equal(timers.length, 1, 'exactly one dwell timer opens the card')
@@ -308,12 +266,9 @@ test('C15 (OPEN side): the dwell callback opens without re-checking the pointer'
   assert.equal(racyOpenPathShape(body).racy, true)
   assert.deepEqual(callbackStatements(timers[0].callback), ['setOpen(true)'])
 })
-
 test('C15 (OPEN side): the callback is classified by SHAPE, so no naming scheme can slip through', () => {
-  // Round-2 review F2: a word blacklist only catches the names it lists, so the
-  // minimal upstream fix written as `isPointerOnAnchor` / `anchorContainsPointer`
-  // / `pointerState.on` passed the gate silently while the race was already gone.
-  // Statement-level classification catches every naming scheme.
+  // Round-2 review F2: a word blacklist only catches the names it lists — `isPointerOnAnchor` /
+  // `anchorContainsPointer` / `pointerState.on` passed while the race was gone, so classify by shape.
   for (const guard of [
     'if (!insideRef.current) return',
     'if (!pointerInside) return',
@@ -339,11 +294,9 @@ test('C15 (OPEN side): the callback is classified by SHAPE, so no naming scheme 
     assert.match(verdict.failures.join('\n'), /退役移植/)
   }
 })
-
 test('C15 (OPEN side): an unmount guard is reported as drift with a NEUTRAL diagnosis', () => {
   // Round-2 review F1: `if (!mountedRef.current) return` is the commonest React
-  // unmount guard and has nothing to do with the pointer. The gate must still
-  // refuse to auto-pass it — it cannot tell it apart from a real presence check —
+  // unmount guard, not a pointer check — the gate must still refuse to auto-pass it,
   // but the diagnosis may NOT assert "upstream fixed the race", because acting on
   // that claim would retire a port that is still needed.
   const text = withEnter(`      onPointerEnter={() => {
@@ -360,11 +313,9 @@ test('C15 (OPEN side): an unmount guard is reported as drift with a NEUTRAL diag
   assert.doesNotMatch(detail, /上游可能已从 OPEN 侧修掉竞态/,
     'the superseded diagnosis asserted a fact the gate cannot know')
 })
-
 test('C15 (OPEN side): clearing its own expired timer ref is cleanup, not a statement to adjudicate', () => {
-  // An upstream refactor that nulls the expired timer ref inside the dwell
-  // callback is ordinary hygiene. Failing the gate on it would push maintainers
-  // to weaken the gate instead of trusting it.
+  // Nulling the expired timer ref inside the dwell callback is ordinary hygiene: failing
+  // the gate on it would push maintainers to weaken the gate instead of trusting it.
   const text = withEnter(`      onPointerEnter={() => {
         cancelClose()
         if (open) return
@@ -374,10 +325,8 @@ test('C15 (OPEN side): clearing its own expired timer ref is cleanup, not a stat
   const verdict = hoverPortVerdict(hoverSources({ upstreamHoverCard: { path: 'up/HoverCard.tsx', text } }))
   assert.equal(verdict.ok, true, verdict.failures.join('\n'))
 })
-
 test('C15 (OPEN side): a read-modify-write of any ref is drift, not cleanup', () => {
-  // `x.current += 1` READS the old value, so it is not the pure write the
-  // whitelist admits.
+  // `x.current += 1` READS the old value, so it is not the pure write the whitelist admits.
   const text = withEnter(`      onPointerEnter={() => {
         cancelClose()
         if (open) return
@@ -387,7 +336,6 @@ test('C15 (OPEN side): a read-modify-write of any ref is drift, not cleanup', ()
   const verdict = hoverPortVerdict(hoverSources({ upstreamHoverCard: { path: 'up/HoverCard.tsx', text } }))
   assert.equal(verdict.ok, false, 'a compound assignment must not count as cleanup')
 })
-
 test('C15 (OPEN side): the statement classifier is exact about bodies and splitting', () => {
   assert.deepEqual(callbackStatements('() => { setOpen(true) }'), ['setOpen(true)'])
   assert.deepEqual(callbackStatements('() => setOpen(true)'), ['setOpen(true)'])
@@ -400,11 +348,8 @@ test('C15 (OPEN side): the statement classifier is exact about bodies and splitt
   assert.equal(openCallbackDrift('() => { if (x) setOpen(true) }').drift, true,
     'a conditional open is exactly the shape the port compensates for')
 })
-
 test('C15 (OPEN side): a comment or a string naming an inside flag cannot trip the rule', () => {
-  // The mirror of the close-side decoy test: comments are stripped, so a note
-  // about the guard is not the guard. A false positive here would fail the gate
-  // on a cosmetic edit.
+  // Mirror of the close-side decoy test: comments are stripped, so a note about the guard is not the guard.
   const text = withEnter(`      onPointerEnter={() => {
         cancelClose()
         if (open) return
@@ -415,7 +360,6 @@ test('C15 (OPEN side): a comment or a string naming an inside flag cannot trip t
   const verdict = hoverPortVerdict(hoverSources({ upstreamHoverCard: { path: 'up/HoverCard.tsx', text } }))
   assert.equal(verdict.ok, true, verdict.failures.join('\n'))
 })
-
 test('C15 (OPEN side): a rewritten or ambiguous open path is drift, never a silent pass', () => {
   const rewritten = withEnter(`      onPointerEnter={() => {
         cancelClose()
@@ -438,10 +382,8 @@ test('C15 (OPEN side): a rewritten or ambiguous open path is drift, never a sile
   assert.equal(ambiguous.ok, false, 'two opening timers are ambiguous, not a pass')
   assert.match(ambiguous.failures.join('\n'), /生效点不唯一/)
 })
-
 test('C15: a guard that only exists in a comment cannot satisfy the gate', () => {
-  // The shape the pin has, plus a comment claiming it — but the real handler
-  // arms unconditionally. Comment stripping is what makes this fail loud.
+  // The pin's shape plus a comment claiming it, while the real handler arms unconditionally.
   const text = PINNED_HOVER_CARD.replace(
     'if (open) armClose()',
     'armClose() // was: if (open) armClose()',
@@ -453,7 +395,6 @@ test('C15: a guard that only exists in a comment cannot satisfy the gate', () =>
   assert.match(verdict.failures.join('\n'), /up\/HoverCard\.tsx/)
   assert.match(verdict.failures.join('\n'), /退役移植/)
 })
-
 test('C15: the day upstream arms on a ref (or unconditionally), the gate forces the decision', () => {
   for (const replacement of ['if (openRef.current) armClose()', 'armClose()']) {
     const text = PINNED_HOVER_CARD.replace('if (open) armClose()', replacement)
@@ -521,8 +462,7 @@ test('C15: an unmaterialized pin tree is a hard failure, never "no race"', () =>
 })
 
 test('C15: the gate actually consults the verdict on the pinned tree (wiring scan)', () => {
-  // The full gate cannot run in a bare worktree (an empty `vendor/harness-checkout`
-  // makes C1 throw before C15), so this scan is what proves the block is wired.
+  // The full gate cannot run in a bare worktree (empty `vendor/harness-checkout` makes C1 throw before C15), so this scan proves the wiring.
   const source = readFileSync(scriptPath, 'utf8')
   assert.match(source, /import \{ HOVER_PORT_SOURCES, hoverPortVerdict \} from '\.\/verify-upstream-touchpoints-hover\.mjs'/)
   assert.match(source, /hoverPortVerdict\(\{/)
@@ -532,17 +472,10 @@ test('C15: the gate actually consults the verdict on the pinned tree (wiring sca
   assert.match(source, /else for \(const failure of verdict\.failures\) fail\(failure\)/)
 })
 
-// ---------------------------------------------------------------------------
-// C15 adversarial-review regressions (2026-09-13): the three executed
-// false-passes plus the reasoned "second component" hole. Each mutant below
-// fixes the race (or moves the timing) while leaving decoy text behind; the
-// hardened module must fail all of them.
-// ---------------------------------------------------------------------------
+// C15 adversarial-review regressions: each mutant below fixes the race (or moves the timing) while leaving decoy text behind; the hardened module must fail all of them.
 
 test('C15 mutant (a): a decoy string cannot stand in for the missing guard', () => {
-  // The race is FIXED (unconditional arm) but a log/telemetry string still
-  // spells out the old shape. String literals are neutralized before matching,
-  // so only the real code decides.
+  // The race is FIXED (unconditional arm) but a log/telemetry string still spells the old shape; string literals are neutralized first.
   const text = withHandler(`      onPointerLeave={() => {
         clearTimer()
         console.log('legacy shape: if (open) armClose()')
@@ -565,7 +498,6 @@ test('C15 mutant (b): an unrelated `open` expression in another statement does n
         open && void 0
         armClose()
       }}`,
-    // Explicit-statement form: identical semantics.
     '      onPointerLeave={() => { clearTimer(); open && void 0; armClose() }}',
   ]) {
     const verdict = hoverPortVerdict(hoverSources({
@@ -603,9 +535,7 @@ test('C15: several distinct assignments are ambiguous — never silently one of 
 })
 
 test('C15: a decoy component above HoverCard cannot supply the guarded shape', () => {
-  // The shape check is scoped to the HoverCard component body, so a second
-  // component carrying the old guarded handler cannot vouch for a fixed
-  // HoverCard below it.
+  // The shape check is scoped to the HoverCard body, so a second component's guarded handler cannot vouch for a fixed HoverCard.
   const decoy = `function LegacyPreview({ open, armClose }) {
   return <span onPointerLeave={() => { if (open) armClose() }} />
 }
@@ -645,8 +575,7 @@ test('C15: one bare occurrence among guarded ones is drift at the occurrence lev
 })
 
 test('C15: a negated or removed guard is drift, never the known shape', () => {
-  // `!open` inverts the racy intent; a removed/renamed hook leaves no proven
-  // arm. Both must force the adjudication.
+  // `!open` inverts the racy intent; a removed/renamed hook leaves no proven arm — both force the adjudication.
   for (const body of ['clearTimer(); if (!open) armClose()', 'clearTimer(); !open && armClose()']) {
     assert.equal(racyGraceArmShape(body, 'armClose').racy, false, body)
   }
@@ -695,8 +624,7 @@ test('C15: a sign or comparison is never read as the constant value', () => {
 })
 
 test('C15: calling the arm through an alias is drift too (only direct calls are proven)', () => {
-  // Fail-closed: an aliased arm cannot be proven guarded, so it must force the
-  // adjudication rather than pass silently.
+  // Fail-closed: an aliased arm cannot be proven guarded, so it must force the adjudication.
   assert.equal(racyGraceArmShape('const a = armClose; clearTimer(); a()', 'armClose').racy, false)
 })
 
@@ -718,17 +646,13 @@ const d = armClose()
 })
 
 test('C15: a JSX closing tag is not mistaken for a regex (no code is swallowed)', () => {
-  // Regression for the regex branch: `</span>` puts a `/` where a value may
-  // start, but there is no closing `/` before the line ends — the text must be
-  // kept verbatim, or the rest of the line (braces included) disappears and the
-  // component body can no longer be parsed.
+  // `</span>` puts a `/` where a value may start with no closing `/`: the text must be kept, or the rest of the line disappears.
   const stripped = stripComments(`const x = <span>{copied ? label : content}</span>
 const y = armClose()
 `)
   assert.match(stripped, /\{copied \? label : content\}/)
   assert.match(stripped, /const y = armClose\(\)/)
 
-  // A real regex literal IS neutralized.
   const regex = stripComments(`const re = /if \\(open\\) armClose()/
 const z = 1
 `)

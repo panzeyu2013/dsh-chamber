@@ -1,13 +1,9 @@
 /**
- * `settings.onboarding` coordinator tests (2026-09-11 upstream-alignment T3):
- * pure facts only, no DOM, no renderer. The stage mounts exactly one ordered
- * step, and only while the instance's current session is blank or absent —
- * upstream's readiness selector, verbatim.
- *
- * The React wiring (`onboarding-hooks.ts`, which imports the renderer's hook
- * factory) is pinned by the source-text locks in
- * `upstream-alignment-locks.test.ts`; the truth table and the projection are
- * asserted here for real.
+ * `settings.onboarding` coordinator tests (2026-09-11 upstream-alignment T3): pure
+ * facts only, no DOM, no renderer. The stage mounts exactly one ordered step, and only
+ * while the instance's current session is blank or absent — upstream's readiness
+ * selector, verbatim. The React wiring is pinned by the source-text locks in
+ * `upstream-alignment-locks.test.ts`; the truth table and projection are here.
  */
 
 import { test } from 'node:test';
@@ -99,12 +95,9 @@ test('seat narrowing: only a delivered function counts as the sessions seat', ()
 });
 
 // ---- F1 (2026-09-11 review): the two axes of the stage ----
-//
-// The probe that found the two-axis bug, replayed against the pure projection:
-// mount(blank, local) → welcome-notice; complete it → deepseek-official; switch
-// the view to another source; switch back → welcome-notice used to mount AGAIN
-// while the session was still blank, because the reset was derived from the
-// COMPOSITE (sessions AND active view) instead of upstream's sessions fact.
+// The probe: switch the view away and back while the session is still blank — the
+// reset must follow the SESSIONS fact alone, never the composite (sessions AND
+// active view), or an acknowledged step re-mounts.
 
 /** The two shipped steps, in ledger order (welcome-notice first). */
 const SHIPPED_STEPS = onboardingSteps(ledger([

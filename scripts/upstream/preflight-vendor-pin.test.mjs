@@ -1,9 +1,6 @@
 /**
- * preflight-vendor-pin.mjs unit tests (plain node:test, read-only): the pre-bump
- * report is advisory tooling, but its classification drives real upgrade
- * decisions (which fork files must be replayed, which vendor files are seam
- * risk, which upstream members appeared/disappeared), so the pure helpers are
- * pinned here. No repo mutation: `classifyChange` only reads existing fork files.
+ * preflight-vendor-pin.mjs unit tests (plain node:test, read-only): the pre-bump report is advisory, but its classification
+ * drives real upgrade decisions (fork replay, vendor seam risk, upstream member drift); the pure helpers are pinned here, no repo mutation.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

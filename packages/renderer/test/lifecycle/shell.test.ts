@@ -32,41 +32,29 @@ import {
   __testSetBootError, __testSetLoaderEntries, __testSetModuleSystemError,
   __testSetRunError, __testSetSessionsReadError,
   bootInstanceShell, collectFailedEntries, createChamberContextSetup, disposeInstanceShell,
-  hostileThrownValue, shellModule, stubUnavailableGraph, stubWindow, testSourceFingerprint,
+  hostileThrownValue, shellModule, shellTestScope, testSourceFingerprint,
 } from '../support/shell-harness.ts'
 
-test('bootInstanceShell: a resolved-but-failed run (bootError set) settles as a failure and disposes the entry', async () => {
-  const restoreFetch = stubUnavailableGraph()
-  const restoreWindow = stubWindow()
-  __testResetDisposed()
+test('bootInstanceShell: a resolved-but-failed run (bootError set) settles as a failure and disposes the entry', async (t) => {
+  shellTestScope(t, { graph: 'unavailable', timers: false, silentConsole: false })
   __testSetBootError('client-modules: require("@deepseek-ai/dsh-client-store") missed the module table')
-  __testSetRunError(undefined)
-  try {
-    const state = await bootInstanceShell('ssh-test-fail-1', '/api/i/ssh-test-fail-1', {} as HTMLElement, () => {})
-    assert.equal(state.booted, false)
-    assert.equal(state.error, 'client-modules: require("@deepseek-ai/dsh-client-store") missed the module table')
-    // The failed entry was disposed: a retry re-boots the container cleanly
-    // (no duplicate React root / zombie ctx).
-    assert.equal(__testDisposedCount(), 1)
-  } finally {
-    __testSetBootError(undefined)
-    restoreFetch()
-    restoreWindow()
-  }
+  const state = await bootInstanceShell('ssh-test-fail-1', '/api/i/ssh-test-fail-1', {} as HTMLElement, () => {})
+  assert.equal(state.booted, false)
+  assert.equal(state.error, 'client-modules: require("@deepseek-ai/dsh-client-store") missed the module table')
+  // The failed entry was disposed: a retry re-boots the container cleanly
+  // (no duplicate React root / zombie ctx).
+  assert.equal(__testDisposedCount(), 1)
 })
 
-test('bootInstanceShell: the failure report names the plugin ids that did not activate (T15)', async () => {
+test('bootInstanceShell: the failure report names the plugin ids that did not activate (T15)', async (t) => {
   // 2026-09-11 upstream-alignment (T15): upstream's boot page lists one item per
   // failed plugin id (boot-page.ts `Failed to load plugins`) and its post-settle
   // sweep names the same entries. The chamber overlay replaced that in-shell
   // page, so the shell reads the SAME live loader (ctx.loader.entries(), the
   // sweep's own source) before teardown and projects the ids on the ShellState
   // the App already consumes.
-  const restoreFetch = stubUnavailableGraph()
-  const restoreWindow = stubWindow()
-  __testResetDisposed()
+  shellTestScope(t, { graph: 'unavailable', timers: false, silentConsole: false })
   __testSetBootError('web boot: 2 entries did not activate\n@deepseek-ai/dsh-client-ui-tool: pending (waiting for service: sidebarRight)')
-  __testSetRunError(undefined)
   __testSetLoaderEntries([
     { options: { name: '@dsh-chamber/app' }, fiber: { state: FIBER_STATE.ACTIVE } },
     { options: { name: '@deepseek-ai/dsh-client-ui-tool' }, fiber: { state: FIBER_STATE.PENDING } },
@@ -74,30 +62,20 @@ test('bootInstanceShell: the failure report names the plugin ids that did not ac
     { options: { name: '@scope/third-party' } },
     { options: { name: '@scope/third-party' } },
   ])
-  try {
-    const state = await bootInstanceShell('ssh-test-fail-ids', '/api/i/ssh-test-fail-ids', {} as HTMLElement, () => {})
-    assert.equal(state.booted, false)
-    assert.deepEqual(state.failedEntries,
-      ['@deepseek-ai/dsh-client-ui-tool', '@scope/third-party'],
-      'the non-active entry ids travel in loader order, deduped')
-  } finally {
-    __testSetLoaderEntries(undefined)
-    __testSetBootError(undefined)
-    restoreFetch()
-    restoreWindow()
-  }
+  const state = await bootInstanceShell('ssh-test-fail-ids', '/api/i/ssh-test-fail-ids', {} as HTMLElement, () => {})
+  assert.equal(state.booted, false)
+  assert.deepEqual(state.failedEntries,
+    ['@deepseek-ai/dsh-client-ui-tool', '@scope/third-party'],
+    'the non-active entry ids travel in loader order, deduped')
 })
 
-test('bootInstanceShell: a hostile runtimeCtx read never replaces the boot failure report (T15)', async () => {
+test('bootInstanceShell: a hostile runtimeCtx read never replaces the boot failure report (T15)', async (t) => {
   // The sweep is an external-boundary read: the failure report the shell
   // already holds must survive a throwing runtimeCtx getter (same discipline as
   // describeShellError / the dispatchOpen hostile-read arm) — otherwise the
   // overlay would show the trap's error instead of the boot failure.
-  const restoreFetch = stubUnavailableGraph()
-  const restoreWindow = stubWindow()
-  __testResetDisposed()
+  shellTestScope(t, { graph: 'unavailable', timers: false, silentConsole: false })
   __testSetBootError('web boot: 1 entry did not activate')
-  __testSetRunError(undefined)
   __testSetSessionsReadError(new Error('hostile runtimeCtx trap'))
   try {
     const state = await bootInstanceShell('ssh-test-fail-hostile', '/api/i/ssh-test-fail-hostile', {} as HTMLElement, () => {})
@@ -106,10 +84,6 @@ test('bootInstanceShell: a hostile runtimeCtx read never replaces the boot failu
     assert.equal(state.failedEntries, undefined, 'no list is invented when the sweep cannot be read')
   } finally {
     __testSetSessionsReadError(undefined)
-    __testSetLoaderEntries(undefined)
-    __testSetBootError(undefined)
-    restoreFetch()
-    restoreWindow()
   }
 })
 
@@ -136,13 +110,9 @@ test('collectFailedEntries mirrors the official sweep and tolerates extra rows',
   assert.deepEqual(collectFailedEntries({ loader: { entries() { throw new Error('hostile loader') } } }), [])
 })
 
-test('bootInstanceShell: a clean run settles booted with no error and keeps the entry', async () => {
-  const restoreFetch = stubUnavailableGraph()
-  const restoreWindow = stubWindow()
-  __testResetDisposed()
+test('bootInstanceShell: a clean run settles booted with no error and keeps the entry', async (t) => {
+  shellTestScope(t, { graph: 'unavailable', timers: false, silentConsole: false })
   __testResetConfiguredContexts()
-  __testSetBootError(undefined)
-  __testSetRunError(undefined)
   try {
     const state = await bootInstanceShell('ssh-test-clean-2', '/api/i/ssh-test-clean-2', {} as HTMLElement, () => {})
     assert.equal(state.booted, true)
@@ -168,12 +138,10 @@ test('bootInstanceShell: a clean run settles booted with no error and keeps the 
     assert.equal(typeof machineCatalog.iconUrl, 'function')
   } finally {
     __testResetConfiguredContexts()
-    restoreFetch()
-    restoreWindow()
   }
 })
 
-test('bootInstanceShell: the serving gate is threaded into the host-graph fetch (rows after a wait)', async () => {
+test('bootInstanceShell: the serving gate is threaded into the host-graph fetch (rows after a wait)', async (t) => {
   // The App injects `waitForServing`; the boot must pass it to collectExtraRows
   // so a source that is still starting (503) is waited for instead of costing
   // the boot its whole profile client-plugin set — and the settle must then be
@@ -190,7 +158,7 @@ test('bootInstanceShell: the serving gate is threaded into the host-graph fetch 
       status: starting ? 503 : 200, headers: { 'content-type': 'application/json' },
     })
   }) as typeof fetch
-  const restoreWindow = stubWindow()
+  shellTestScope(t, { graph: 'none', timers: false, silentConsole: false })
   __testResetDisposed(); __testResetConfiguredContexts(); __testSetBootError(undefined); __testSetRunError(undefined)
   const waits: string[] = []
   try {
@@ -206,22 +174,17 @@ test('bootInstanceShell: the serving gate is threaded into the host-graph fetch 
   } finally {
     __testResetConfiguredContexts()
     globalThis.fetch = original
-    restoreWindow()
   }
 })
 
-test('bootInstanceShell: a graph-less boot settles degraded and republishes a late probe verdict', async () => {
+test('bootInstanceShell: a graph-less boot settles degraded and republishes a late probe verdict', async (t) => {
   // 2026-09-10（sidebarRight 彻底修复）：取图在启动窗口内拿不到时，boot 仍成功但
   // 必须带上「已知不完整」这个事实（App 据此在来源 ready 后自动重挂）；条目里
   // 5s 必需服务探针的判词晚于 settle：经 onState 补发给**视图**，并经
   // options.onRepublish 投给 **App 镜像**（2026-12 BLOCKER 修复——只发前者时
   // 横幅/侧栏投射/自愈全都收不到，见下方 republished 断言）。
-  const restoreFetch = stubUnavailableGraph()
-  const restoreWindow = stubWindow()
-  __testResetDisposed()
+  shellTestScope(t, { graph: 'unavailable', timers: false, silentConsole: false })
   __testResetConfiguredContexts()
-  __testSetBootError(undefined)
-  __testSetRunError(undefined)
   const states: Array<{ booted: boolean; degraded: { kind: string } | null }> = []
   // 2026-12 BLOCKER fix: the post-settle verdict must reach the APP-owned sink as
   // well, because the `onState` argument above is the view's local setter in
@@ -309,8 +272,6 @@ test('bootInstanceShell: a graph-less boot settles degraded and republishes a la
     )
   } finally {
     __testResetConfiguredContexts()
-    restoreFetch()
-    restoreWindow()
   }
 })
 
@@ -393,25 +354,18 @@ test('createChamberContextSetup: immutable entry facts cannot cross when boots a
   )
 })
 
-test('bootInstanceShell: rejects an invalid source before any host-graph request', () => {
+test('bootInstanceShell: rejects an invalid source before any host-graph request', (t) => {
   let fetched = false
-  const restoreFetch = stubUnavailableGraph(() => { fetched = true })
-  try {
-    assert.throws(
-      () => bootInstanceShell('ssh-local', '/api/i/ssh-local', {} as HTMLElement, () => {}),
-      /invalid instance id/,
-    )
-    assert.equal(fetched, false)
-  } finally {
-    restoreFetch()
-  }
+  shellTestScope(t, { graph: 'unavailable', onFetch: () => { fetched = true }, timers: false, silentConsole: false })
+  assert.throws(
+    () => bootInstanceShell('ssh-local', '/api/i/ssh-local', {} as HTMLElement, () => {}),
+    /invalid instance id/,
+  )
+  assert.equal(fetched, false)
 })
 
-test('bootInstanceShell: a throwing run settles as a failure (legacy rejection path) and disposes the entry', async () => {
-  const restoreFetch = stubUnavailableGraph()
-  const restoreWindow = stubWindow()
-  __testResetDisposed()
-  __testSetBootError(undefined)
+test('bootInstanceShell: a throwing run settles as a failure (legacy rejection path) and disposes the entry', async (t) => {
+  shellTestScope(t, { graph: 'unavailable', timers: false, silentConsole: false })
   __testSetRunError(new Error('loader exploded'))
   // 2026-09-11 review-fix (finding 4g): this last-resort arm names the failed
   // loader entries too — the same live-loader read the bootError arm performs,
@@ -422,112 +376,72 @@ test('bootInstanceShell: a throwing run settles as a failure (legacy rejection p
     { options: { name: '@dsh-chamber/app' }, fiber: { state: FIBER_STATE.ACTIVE } },
     { options: { name: '@deepseek-ai/dsh-client-ui-tool' }, fiber: { state: FIBER_STATE.PENDING } },
   ])
-  try {
-    const state = await bootInstanceShell('ssh-test-throw-3', '/api/i/ssh-test-throw-3', {} as HTMLElement, () => {})
-    assert.equal(state.booted, false)
-    assert.equal(state.error, 'loader exploded')
-    assert.deepEqual(state.failedEntries, ['@deepseek-ai/dsh-client-ui-tool'],
-      'the rejection arm must list the non-active entries like the bootError arm')
-    assert.equal(__testDisposedCount(), 1)
-  } finally {
-    __testSetLoaderEntries(undefined)
-    __testSetRunError(undefined)
-    restoreFetch()
-    restoreWindow()
-  }
+  const state = await bootInstanceShell('ssh-test-throw-3', '/api/i/ssh-test-throw-3', {} as HTMLElement, () => {})
+  assert.equal(state.booted, false)
+  assert.equal(state.error, 'loader exploded')
+  assert.deepEqual(state.failedEntries, ['@deepseek-ai/dsh-client-ui-tool'],
+    'the rejection arm must list the non-active entries like the bootError arm')
+  assert.equal(__testDisposedCount(), 1)
 })
 
-test('bootInstanceShell: a hostile thrown value still settles as a contained failure', async () => {
-  const restoreFetch = stubUnavailableGraph()
-  const restoreWindow = stubWindow()
+test('bootInstanceShell: a hostile thrown value still settles as a contained failure', async (t) => {
+  shellTestScope(t, { graph: 'unavailable', timers: false, silentConsole: false })
   const hostile = hostileThrownValue()
-  __testResetDisposed()
-  __testSetBootError(undefined)
   __testSetModuleSystemError(hostile)
   __testSetRunError(hostile)
-  try {
-    const state = await bootInstanceShell(
-      'ssh-test-hostile-boot',
-      '/api/i/ssh-test-hostile-boot',
-      {} as HTMLElement,
-      () => {},
-    )
-    assert.equal(state.booted, false)
-    assert.equal(state.error, 'unknown error')
-    assert.equal(__testDisposedCount(), 1)
-  } finally {
-    __testSetModuleSystemError(undefined)
-    __testSetRunError(undefined)
-    restoreFetch()
-    restoreWindow()
-  }
+  const state = await bootInstanceShell(
+    'ssh-test-hostile-boot',
+    '/api/i/ssh-test-hostile-boot',
+    {} as HTMLElement,
+    () => {},
+  )
+  assert.equal(state.booted, false)
+  assert.equal(state.error, 'unknown error')
+  assert.equal(__testDisposedCount(), 1)
 })
 
-test('bootInstanceShell: installs the module system BEFORE any host-graph fetch (first-boot race fix)', async () => {
+test('bootInstanceShell: installs the module system BEFORE any host-graph fetch (first-boot race fix)', async (t) => {
   // The race: an extra bundle's script evaluates at load and registers its
   // factory through the __ModuleLoader__ sink, so the sink must exist before
   // the host-graph channel is even contacted (collectExtraRows's first step is
   // the graph fetch; bundle scripts are only appended after it resolves).
-  const restoreFetch = stubUnavailableGraph(() => { __testEventLog().push('fetch') })
-  const restoreWindow = stubWindow()
-  __testResetDisposed()
+  shellTestScope(t, { graph: 'unavailable', onFetch: () => { __testEventLog().push('fetch') }, timers: false, silentConsole: false })
   __testResetEventLog()
-  __testSetBootError(undefined)
-  __testSetRunError(undefined)
-  __testSetModuleSystemError(undefined)
-  try {
-    const state = await bootInstanceShell('ssh-test-order-5', '/api/i/ssh-test-order-5', {} as HTMLElement, () => {})
-    assert.equal(state.booted, true)
-    // The fixture's ensureWebModuleSystem records 'ensure' synchronously at
-    // bootInstanceShell entry; the C3 gate's chamber prefetch fires right
-    // after (its event is pushed synchronously); the fetch is
-    // collectExtraRows's first step.
-    // collectExtraRows now retries the pre-ready 503 on a bounded budget, so
-    // the event log carries repeated 'fetch' entries — the invariant under
-    // test is the ORDER (module system installed before the FIRST fetch, and
-    // the chamber prefetch between the two — C3 gate, 2026-09).
-    const events = __testEventLog()
-    assert.deepEqual(events.slice(0, 3), ['ensure', 'prefetch:@dsh-chamber/app', 'fetch'])
-  } finally {
-    __testResetEventLog()
-    restoreFetch()
-    restoreWindow()
-  }
+  const state = await bootInstanceShell('ssh-test-order-5', '/api/i/ssh-test-order-5', {} as HTMLElement, () => {})
+  assert.equal(state.booted, true)
+  // The fixture's ensureWebModuleSystem records 'ensure' synchronously at
+  // bootInstanceShell entry; the C3 gate's chamber prefetch fires right
+  // after (its event is pushed synchronously); the fetch is
+  // collectExtraRows's first step.
+  // collectExtraRows now retries the pre-ready 503 on a bounded budget, so
+  // the event log carries repeated 'fetch' entries — the invariant under
+  // test is the ORDER (module system installed before the FIRST fetch, and
+  // the chamber prefetch between the two — C3 gate, 2026-09).
+  const events = __testEventLog()
+  assert.deepEqual(events.slice(0, 3), ['ensure', 'prefetch:@dsh-chamber/app', 'fetch'])
 })
 
-test('bootInstanceShell: a module-system install failure skips the host-graph channel and settles with the same error', async () => {
+test('bootInstanceShell: a module-system install failure skips the host-graph channel and settles with the same error', async (t) => {
   // Malformed/missing boot manifest: ensureWebModuleSystem throws → the extras
   // preload is skipped (no sink ⇒ no bundle must execute) and run() rethrows
   // the same parse error (simulated here via the run knob with the same text).
-  const restoreFetch = stubUnavailableGraph(() => { __testEventLog().push('fetch') })
-  const restoreWindow = stubWindow()
-  __testResetDisposed()
+  shellTestScope(t, { graph: 'unavailable', onFetch: () => { __testEventLog().push('fetch') }, timers: false, silentConsole: false })
   __testResetEventLog()
-  __testSetBootError(undefined)
   __testSetModuleSystemError(new Error('missing boot manifest'))
   __testSetRunError(new Error('missing boot manifest'))
-  try {
-    const state = await bootInstanceShell('ssh-test-manifest-6', '/api/i/ssh-test-manifest-6', {} as HTMLElement, () => {})
-    assert.equal(state.booted, false)
-    assert.equal(state.error, 'missing boot manifest')
-    // No host-graph fetch at all: with no sink, no bundle may be requested.
-    assert.deepEqual(__testEventLog(), ['ensure'])
-    // The entry was constructed and disposed via the run()-rejection path.
-    assert.equal(__testDisposedCount(), 1)
-  } finally {
-    __testSetModuleSystemError(undefined)
-    __testSetRunError(undefined)
-    __testResetEventLog()
-    restoreFetch()
-    restoreWindow()
-  }
+  const state = await bootInstanceShell('ssh-test-manifest-6', '/api/i/ssh-test-manifest-6', {} as HTMLElement, () => {})
+  assert.equal(state.booted, false)
+  assert.equal(state.error, 'missing boot manifest')
+  // No host-graph fetch at all: with no sink, no bundle may be requested.
+  assert.deepEqual(__testEventLog(), ['ensure'])
+  // The entry was constructed and disposed via the run()-rejection path.
+  assert.equal(__testDisposedCount(), 1)
 })
 
-test('bootInstanceShell: a cancelled generation cannot overwrite the retry plugin diagnostic', async () => {
+test('bootInstanceShell: a cancelled generation cannot overwrite the retry plugin diagnostic', async (t) => {
   const sourceId = 'ssh-test-diagnostic-generation-7'
   const originalFetch = globalThis.fetch
-  const originalConsoleError = console.error
-  const restoreWindow = stubWindow()
+  shellTestScope(t, { graph: 'none', timers: false }, sourceId)
   let releaseFirst!: () => void
   let calls = 0
   globalThis.fetch = (() => {
@@ -541,10 +455,6 @@ test('bootInstanceShell: a cancelled generation cannot overwrite the retry plugi
       rpcId: 'retry', result: { ok: true, value: { entries: [] } },
     }), { status: 200, headers: { 'content-type': 'application/json' } }))
   }) as typeof fetch
-  console.error = () => {}
-  __testSetBootError(undefined)
-  __testSetRunError(undefined)
-  __testSetModuleSystemError(undefined)
   const states: string[] = []
   const unsubscribe = chamberBridge.onPluginDiagnostic((id, diagnostic) => {
     if (id === sourceId && diagnostic !== undefined) states.push(diagnostic.state)
@@ -561,10 +471,7 @@ test('bootInstanceShell: a cancelled generation cannot overwrite the retry plugi
   } finally {
     unsubscribe()
     chamberBridge.clearPluginDiagnostic(sourceId)
-    disposeInstanceShell(sourceId)
     globalThis.fetch = originalFetch
-    console.error = originalConsoleError
-    restoreWindow()
   }
 })
 

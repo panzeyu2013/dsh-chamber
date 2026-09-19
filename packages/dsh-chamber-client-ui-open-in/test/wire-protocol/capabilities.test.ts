@@ -10,11 +10,7 @@ import {
   usableOpenInApps,
   type OpenInApp,
 } from '../../src/shared/capabilities.ts'
-
-const validApps: OpenInApp[] = [
-  { id: 'finder', displayKind: 'file-manager', remoteCapable: false, available: true },
-  { id: 'vscode', displayKind: 'vscode', remoteCapable: true, available: true },
-]
+import { VALID_APPS as validApps } from '../support/harness.ts'
 
 test('parseOpenInApps strictly accepts the capability projection', () => {
   assert.deepEqual(parseOpenInApps(validApps), validApps)
@@ -55,30 +51,10 @@ test('parseOpenInResult accepts only the documented success/error union', () => 
 })
 
 test('parseOpenInSource accepts canonical kind × transport pairs plus the legacy ssh source alias', () => {
-  assert.deepEqual(parseOpenInSource('local', 'local'), {
-    sourceId: 'local',
-    instanceId: 'local',
-    local: true,
-    transport: 'local',
-  })
-  assert.deepEqual(parseOpenInSource('dsh-dev_01', 'ssh'), {
-    sourceId: 'dsh-dev_01',
-    instanceId: 'dev_01',
-    local: false,
-    transport: 'ssh',
-  })
-  assert.deepEqual(parseOpenInSource('gateway-dev_01', 'http'), {
-    sourceId: 'gateway-dev_01',
-    instanceId: 'dev_01',
-    local: false,
-    transport: 'http',
-  })
-  assert.deepEqual(parseOpenInSource('ssh-dev_01', 'ssh'), {
-    sourceId: 'ssh-dev_01',
-    instanceId: 'dev_01',
-    local: false,
-    transport: 'ssh',
-  })
+  assert.deepEqual(parseOpenInSource('local', 'local'), { sourceId: 'local', instanceId: 'local', local: true, transport: 'local' })
+  assert.deepEqual(parseOpenInSource('dsh-dev_01', 'ssh'), { sourceId: 'dsh-dev_01', instanceId: 'dev_01', local: false, transport: 'ssh' })
+  assert.deepEqual(parseOpenInSource('gateway-dev_01', 'http'), { sourceId: 'gateway-dev_01', instanceId: 'dev_01', local: false, transport: 'http' })
+  assert.deepEqual(parseOpenInSource('ssh-dev_01', 'ssh'), { sourceId: 'ssh-dev_01', instanceId: 'dev_01', local: false, transport: 'ssh' })
 
   for (const sourceId of [undefined, null, '', 'remote-1', 'ssh-', 'ssh-local', 'ssh-bad/id', 'ssh-a.b', `ssh-${'a'.repeat(65)}`]) {
     assert.equal(parseOpenInSource(sourceId, 'ssh'), null, `expected ${String(sourceId)} to be rejected`)

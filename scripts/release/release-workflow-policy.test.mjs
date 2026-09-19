@@ -43,8 +43,7 @@ const prepare = between(
 )
 const createJob = between('\n  create-release:', '\n  validation:')
 const create = between('      - name: Create GitHub Release (draft)', '\n  validation:')
-// 与 swiftBuild 同一纪律（2026-12 对抗复核）：整行注释必须剥掉，否则被 `#` 注释掉的
-// release 步骤仍能满足 "validation.includes(gate)"——命令保留在注释里就骗过了门。
+// 与 swiftBuild 同一纪律（2026-12 对抗复核）：整行注释必须先剥掉，否则被 `#` 注释掉的 release 步骤仍能满足 includes(gate) 断言。
 const validation = between('\n  validation:', '\n  build-gateway:')
   .split('\n')
   .filter((line) => !/^[ \t]*#/.test(line))
@@ -53,8 +52,7 @@ const gatewayBuild = between('\n  build-gateway:', '\n  build-macos:')
 const macBuild = between('\n  build-macos:', '\n  build-windows:')
 const windowsBuild = between('\n  build-windows:', '\n  build-linux:')
 const linuxBuild = between('\n  build-linux:', '\n  build-swift:')
-// 2026-12 验证轮：整行注释必须先剥掉，否则被 `#` 注释掉的命令仍能满足锚点
-// 断言（notarytool 提交被注释后测试仍绿）。所有 swiftBuild.* 断言因此只看代码行。
+// 2026-12 验证轮：整行注释必须先剥掉，否则被 `#` 注释掉的命令仍能满足锚点断言（notarytool 提交被注释后测试仍绿）；所有 swiftBuild.* 断言只看代码行。
 const swiftBuild = between('\n  build-swift:', '\n  finalize-release:')
   .split('\n')
   .filter((line) => !/^[ \t]*#/.test(line))
@@ -95,17 +93,12 @@ assert.match(gatewayBuild, /sha256sum/)
 assert.match(gatewayBuild, /packages\/gateway\/release\/\*\.tgz\.sha256/)
 assert.match(gatewayBuild, /Upload gateway package to the draft release/)
 // --- Swift native shell leg (design 25, W-26) -----------------------------
-// The native artifacts ship from the same tag under a -native name; the dry
-// run must be credential-free and the formal run fail-closed on the signing
-// identity (A6: missing Apple credentials block the release, never silently
-// downgrade to an ad-hoc build). The leg sits between build-linux and
-// finalize-release, so the linux slice above must stop at its boundary.
-//
-// 2026-12 audit (P1): the old block was satisfiable by the wrong code —
-// `--app-name dsh-chamber` alone matched the "native artifact names"
-// alternation, `--identity` alone matched the "identity|notarytool"
-// alternation, and nothing pinned the staple-before-archive order. Every claim
-// is now an exact-string or an order assertion.
+// Native artifacts ship from the same tag under a -native name; the dry run is
+// credential-free and the formal run fail-closed on the signing identity (A6: missing Apple
+// credentials block the release, never an ad-hoc downgrade), and the leg sits between
+// build-linux and finalize-release. 2026-12 audit P1: the old alternation matches were
+// satisfiable by the wrong code and staple-before-archive order was unpinned, so every claim
+// is now an exact string or an order assertion.
 assert.match(swiftBuild, /pnpm run build:sidecar/)
 assert.match(swiftBuild, /pnpm run build:swift-app --out macos\/release/)
 assert.ok(swiftBuild.includes('--app-name dsh-chamber'))
@@ -114,21 +107,19 @@ assert.ok(swiftBuild.includes('--artifact-basename "dsh-chamber-${VERSION}-macos
 assert.ok(swiftBuild.includes('--identity "$IDENTITY"'),
   'the resolved Developer ID identity must actually be passed to build:swift-app')
 assert.match(swiftBuild, /dry_run/, 'the native leg must branch on the dry-run input')
-// Formal leg is credential fail-closed: no CSC_LINK → red; no Developer ID
-// identity inside the imported p12 → red. The no-credentials path is the
-// explicit dry-run branch only.
+// Formal leg is credential fail-closed: no CSC_LINK or no Developer ID identity in the
+// imported p12 → red; the no-credentials path is the explicit dry-run branch only.
 assert.ok(
   swiftBuild.includes('test -n "${CSC_LINK:-}" || { echo "::error::formal Swift release requires CSC_LINK"; exit 1; }'),
   'formal native release must fail closed when CSC_LINK is absent',
 )
 assert.ok(swiftBuild.includes('no Developer ID Application identity in CSC_LINK'),
   'formal native release must fail closed when the p12 carries no Developer ID identity')
-// Formal leg assembles+signs only (--no-zip --no-dmg): the archives are made
-// AFTER notarization+stapling, otherwise the uploaded .app has no ticket.
-// The array is used through the bash-3.2-safe guarded expansion (macOS runner
-// default bash + `set -u`: a bare "${ARTIFACT_ARGS[@]}" on the empty dry-run
-// array is an unbound-variable error). Pin the value and exactly two
-// expansions.
+// Formal leg assembles+signs only (--no-zip --no-dmg): archives are made AFTER
+// notarization+stapling, otherwise the uploaded .app has no ticket. The array uses the
+// bash-3.2-safe guarded expansion (macOS runner bash + `set -u`: a bare
+// "${ARTIFACT_ARGS[@]}" on the empty dry-run array is an unbound-variable error), so pin
+// the value and exactly two expansions.
 assert.ok(swiftBuild.includes('ARTIFACT_ARGS=(--no-zip --no-dmg)'),
   'the formal leg must defer zip/dmg creation until after stapling')
 assert.ok(
@@ -141,17 +132,15 @@ assert.ok(swiftBuild.includes('${ARTIFACT_ARGS[@]+"${ARTIFACT_ARGS[@]}"}'),
   'the artifact args must use the bash-3.2-guarded array expansion')
 assert.equal((swiftBuild.split('ARTIFACT_ARGS[@]').length - 1), 2,
   'ARTIFACT_ARGS[@] must be expanded exactly twice (guard + value)')
-// Notarize then staple the .app BEFORE any distribution archive is written:
-// a zip/dmg generated before stapling ships an unticketed app (offline
-// Gatekeeper rejects it). The DMG itself is notarized+stapled after creation.
+// Notarize+staple the .app BEFORE any distribution archive: a zip/dmg generated earlier
+// ships an unticketed app (offline Gatekeeper rejects it). The .dmg is stapled after creation.
 const notarySubmit = swiftBuild.indexOf('xcrun notarytool submit')
 const dmgSubmit = swiftBuild.indexOf('xcrun notarytool submit "${BASE}.dmg"')
 const appStaple = swiftBuild.indexOf('xcrun stapler staple "$APP"')
 const appValidate = swiftBuild.indexOf('xcrun stapler validate "$APP"')
 const zipWrite = swiftBuild.indexOf('ditto -c -k --sequesterRsrc --keepParent "$APP" "${BASE}.zip"')
-// 2026-09 P7 补强：DMG 的卷内容与 Finder 拖拽布局由 macos/scripts/dmg.mjs
-// **单源**实现（本地装配腿 import 同模块），workflow 只调用该 CLI —— 顺序不变量
-// 因此锚在「调用点」上；卷内断言改锚共享模块（下方 dmgModule 段）。
+// 2026-09 P7 补强：DMG 卷内容与 Finder 拖拽布局由 macos/scripts/dmg.mjs **单源**实现
+// （本地装配腿 import 同模块），workflow 只调用该 CLI；顺序不变量锚调用点，卷内断言锚共享模块。
 const dmgCreate = swiftBuild.indexOf(
   'node macos/scripts/dmg.mjs --app "$APP" --app-name dsh-chamber --out "${BASE}.dmg"')
 const dmgStaple = swiftBuild.indexOf('xcrun stapler staple "${BASE}.dmg"')
@@ -197,9 +186,8 @@ assert.match(dmgModule, /'-format', 'UDZO'/,
   'the distribution image must still be compressed UDZO')
 const dmgBackground = new URL('../../macos/resources/dmg-background.tiff', import.meta.url)
 assert.ok(existsSync(dmgBackground), 'the in-repo dmg background asset must exist (nothing else paints the drag cue)')
-// 双 rep TIFF（electron-builder 同款 540×380@72dpi + 1080×760@144dpi）：这里钉形状
-// （TIFF magic「II*\0」/「MM\0*」+ 非空），防资产被误换成 1x PNG 而 Retina 再次发虚。
-// 源模板是 big-endian（MM\0*），两种字节序都接受。
+// 双 rep TIFF（electron-builder 同款 540×380@72dpi + 1080×760@144dpi）：钉 TIFF magic
+//（「II*\0」/「MM\0*」+ 非空，big-endian 源模板，两种字节序都接受），防资产被误换成 1x PNG。
 const dmgBackgroundBytes = readFileSync(dmgBackground)
 assert.ok(dmgBackgroundBytes.length > 1024, 'the dmg background asset must not be an empty placeholder')
 assert.ok(
@@ -221,14 +209,12 @@ assert.ok(swiftBuild.includes('lipo -archs "$APP/Contents/MacOS/dsh-chamber"'),
   'the .app binary architecture must be asserted')
 assert.ok(swiftBuild.includes('lipo -archs "$APP/Contents/Resources/sidecar/node"'),
   'the bundled node architecture must be asserted')
-// Closure: the .app must carry the sidecar entrypoint, the assembly
-// package.json, the control-plane relative entry and all four host packages.
+// Closure: the .app must carry the sidecar entrypoint, assembly package.json, the control-plane relative entry and all four host packages.
 assert.ok(swiftBuild.includes('test -f "$APP/Contents/Resources/sidecar/package.json"'))
 assert.ok(swiftBuild.includes('test -f "$APP/Contents/Resources/sidecar/dist/control-plane/index.js"'))
-// The loop's package list is pinned as an EXACT token set: a substring assertion
-// would stay green if a name gained a suffix (…-open-in → …-open-in-x), which is
-// exactly the drift the 2026-12 verification round found (exactness, not
-// mutation-proven text).
+// The loop's package list is pinned as an EXACT token set: a substring assertion would
+// stay green if a name gained a suffix (…-open-in → …-open-in-x) — the drift the 2026-12
+// verification round found. Exactness, not mutation-proven text.
 const hostLoop = swiftBuild.match(/for HOST in ([^;]*); do/)
 assert.ok(hostLoop !== null, 'the closure check must iterate the host packages through $HOST')
 assert.deepEqual(
@@ -240,24 +226,20 @@ assert.ok(swiftBuild.includes('test -f "$APP/Contents/Resources/sidecar/dist/$HO
   'the closure loop must test the per-host dist entry inside the .app')
 
 // ---------------------------------------------------------------- G16 / S-22 / S-36
-// G16 (release blocker): the appcast used to run BEFORE notarize/staple, while
-// the formal leg assembles with --no-zip --no-dmg — its `test -f "$ZIP"` could
-// never see the zip that only exists after stapling, so every formal release
-// with SPARKLE_PRIVATE_KEY configured went red (or signed a stale, un-notarized
-// zip). It must follow the stapler step, sign the FINAL zip, and be unable to
-// run before any artifact exists.
+// G16 (release blocker): the appcast used to run BEFORE notarize/staple, while the formal
+// leg assembles with --no-zip --no-dmg, so its `test -f "$ZIP"` could never see the zip that
+// only exists after stapling (every formal release with SPARKLE_PRIVATE_KEY configured went
+// red or signed a stale, un-notarized zip). It must follow the stapler step and sign the FINAL zip.
 //
-// S-36 (2026-12 audit, top severity): the beta appcast's enclosure resolved to
-// the ROLLING tag while the zip was only uploaded to v<version> — discovering
-// beta.N+1 then 404ing on download. The fixed shape has three load-bearing
-// parts, all pinned below: (1) every archive the appcast references (current
-// beta + the latest final zip for S-22/S-23) is staged into the generate_appcast
-// input dir; (2) beta generation passes --download-url-prefix pinned to the
-// rolling download dir so every enclosure URL resolves there; (3) the rolling
-// release — the PUBLIC beta discovery surface — receives those archives BEFORE
-// the appcast, and only after the fail-closed verification step. The stable
-// channel passes no prefix and never touches the rolling release, so its
-// enclosure shape (releases/latest/download/<zip>) stays byte-identical.
+// S-36 (2026-12 audit, top severity): the beta appcast's enclosure resolved to the ROLLING
+// tag while the zip was only uploaded to v<version> (discovering beta.N+1 then 404ed). Three
+// load-bearing parts are pinned below: (1) every archive the appcast references (current beta
+// + the latest final zip for S-22/S-23) is staged into the generate_appcast input dir; (2)
+// beta generation passes --download-url-prefix pinned to the rolling download dir so every
+// enclosure URL resolves there; (3) the rolling release — the PUBLIC beta discovery surface —
+// receives those archives BEFORE the appcast, only after the fail-closed verification step.
+// The stable channel passes no prefix and never touches the rolling release, so its enclosure
+// shape (releases/latest/download/<zip>) stays byte-identical.
 const appcastStep = between(
   '      - name: Generate + sign the Sparkle appcast',
   '      - name: Verify native app + uploaded archives',
@@ -290,10 +272,8 @@ assert.match(appcastStep, /if: \$\{\{ github\.event\.inputs\.dry_run != 'true' \
   'the appcast step is release-only: the dry run must skip it')
 assert.match(appcastStep, /::warning::SPARKLE_PRIVATE_KEY absent/,
   'a missing SPARKLE_PRIVATE_KEY must skip loudly, never publish an unsigned appcast')
-// 2026-12 A2 key gate. A keyless repo keeps the loud skip above; a repo whose
-// PUBLIC key is configured but whose private key is missing would ship a shell
-// polling a feed nobody signs ("release green, clients never see an update") —
-// that arm must FAIL, and the check must read the public key to see it.
+// 2026-12 A2 key gate: a keyless repo keeps the loud skip above; a repo with the PUBLIC key
+// configured but no private key ships a feed nobody signs — that arm must FAIL.
 assert.match(appcastStep, /::error::SPARKLE_PUBLIC_ED_KEY is configured but SPARKLE_PRIVATE_KEY is missing/,
   'public key without private key must fail closed, never ship a dead update chain')
 assert.match(appcastStep, /SPARKLE_PUBLIC_ED_KEY: \$\{\{ secrets\.SPARKLE_PUBLIC_ED_KEY \}\}/,
@@ -307,11 +287,9 @@ assert.ok(appcastStep.indexOf('generate_appcast') > appcastZipGuard,
 assert.ok(appcastStep.indexOf('curl') > appcastZipGuard,
   'nothing may be fetched before the final zip exists (the step cannot run before any artifact)')
 
-// S-22/S-36: beta releases are GitHub prereleases, so releases/latest/download
-// never resolves for them — and a version-fixed URL (releases/download/v<ver>/…)
-// would only ever show beta.N its own asset. beta.N must discover beta.N+1 AND
-// download it: the feed points at the ROLLING tag/release asset and the archive
-// set the appcast references is uploaded there too.
+// S-22/S-36: beta releases are prereleases, so releases/latest/download never resolves for
+// them and a version-fixed URL would only show beta.N its own asset: the feed points at the
+// ROLLING tag/release asset, which also carries the archives the appcast references.
 assert.ok(swiftBuild.includes('https://github.com/${GITHUB_REPOSITORY}/releases/latest/download/appcast-swift.xml'),
   'the stable feed URL must stay unchanged')
 assert.ok(!swiftBuild.includes('/releases/download/v${VERSION}/appcast-swift-beta.xml'),
@@ -331,11 +309,10 @@ assert.equal(
   'https://github.com/panzeyu2013/dsh-chamber/releases/latest/download/appcast-swift.xml',
   'the stable feed URL (single-sourced) must stay releases/latest')
 
-// S-36 enclosure resolution, locked to Sparkle's own algorithm
-// (ArchiveItem.archiveURL: URL(filename, relativeTo: prefix ?? embedded
-// SUFeedURL)). With the prefix pinned to the rolling download dir every beta
-// enclosure lands next to the appcast; the same URL falls out of the embedded
-// feed, which is exactly why the zip must ALSO live on the rolling release.
+// S-36 enclosure resolution, locked to Sparkle's own algorithm (ArchiveItem.archiveURL:
+// URL(filename, relativeTo: prefix ?? embedded SUFeedURL)): with the prefix pinned to the
+// rolling download dir every beta enclosure lands next to the appcast, so the zip must ALSO
+// live on the rolling release.
 const betaZip = nativeMacArtifacts('0.3.2-beta.1')[1]
 const betaFeed = nativeMacFeedUrl('0.3.2-beta.1', 'panzeyu2013/dsh-chamber')
 const betaRollingPrefix = nativeBetaRollingDownloadPrefix('panzeyu2013/dsh-chamber')
@@ -355,9 +332,8 @@ assert.equal(nativeEnclosureUrl(stableZip, nativeMacFeedUrl('0.3.2', 'panzeyu201
   `https://github.com/panzeyu2013/dsh-chamber/releases/latest/download/${stableZip}`,
   'the stable enclosure stays on releases/latest (byte-identical generation)')
 
-// Staging: the signed beta zip always enters the generate_appcast input dir, and
-// a beta release also pulls the latest final native zip from releases/latest so
-// the beta appcast carries the final item too (S-22/S-23).
+// Staging: the signed beta zip always enters the generate_appcast input dir, and a beta
+// release also pulls the latest final native zip so the appcast carries the final item (S-22/S-23).
 assert.ok(appcastStep.includes('cp "$ZIP" /tmp/appcast-in/'),
   'the final signed beta zip must be staged into the appcast input dir (S-36)')
 assert.ok(appcastStep.includes(`--pattern '${NATIVE_STABLE_ZIP_PATTERN}'`),
@@ -366,13 +342,10 @@ assert.ok(appcastStep.includes('gh release download "$STABLE_TAG"'),
   'the final zip must actually be fetched from the latest release')
 assert.ok(appcastStep.includes('repos/${GITHUB_REPOSITORY}/releases/latest'),
   'the final tag must come from /releases/latest (never an implicit/possibly-prerelease latest)')
-// 2026-12 A2 fail-closed rewrite of that staging. Exactly ONE degradation stays
-// allowed, and it is mechanically observable: the latest final release carries
-// NO native zip asset at all (the native chain has never produced a final — the
-// v0.3.1 state). Every other outcome fails closed while the EdDSA key is
-// configured: an unresolvable /releases/latest (non-404), an unreadable asset
-// list, or a download that fails although the asset exists. The old single
-// warning swallowed all of them into "release green, feed incomplete".
+// 2026-12 A2 fail-closed rewrite: exactly ONE degradation stays allowed and is mechanically
+// observable — the latest final release carries NO native zip at all (the v0.3.1 state). Every
+// other outcome fails closed while the EdDSA key is configured: a non-404 /releases/latest
+// failure, an unreadable asset list, or a download that fails although the asset exists.
 assert.match(appcastStep, /::warning::latest final release [^\n]*没有 native zip/,
   'only "no native zip exists upstream" may degrade, and it must be loud')
 assert.match(appcastStep, /::error::[^\n]*有 native zip 但下载失败/,
@@ -385,16 +358,13 @@ assert.match(appcastStep, /if STABLE_TAG="\$\(gh api/,
   'the /releases/latest lookup must distinguish 404 (no final release) from real failures')
 assert.match(appcastStep, /elif grep -q 'Not Found' \/tmp\/stable-latest\.err/,
   'only an explicit 404 may be treated as "no final release yet"')
-// 2026-12 A2 content gate: the generated appcast merely EXISTING was the whole
-// assertion; the signed feed must be proven to advertise THIS version
-// (sparkle:shortVersionString + sparkle:version = the .app CFBundleVersion +
-// its zip enclosure) before it is copied and uploaded.
+// 2026-12 A2 content gate: the signed feed must be proven to advertise THIS version
+// (sparkle:shortVersionString + sparkle:version = the .app CFBundleVersion + its zip enclosure).
 assert.match(appcastStep, /node scripts\/release\/verify-native-appcast\.mjs "\$VERSION" \/tmp\/appcast-out\/appcast\.xml/,
   'the signed appcast must be proven to carry this version before it is uploaded')
 
-// Generation: exactly one generate_appcast call, without a prefix for stable and
-// with the rolling prefix for beta (the guarded bash-3.2 array expansion keeps
-// the stable command byte-identical).
+// Generation: exactly one generate_appcast call — no prefix for stable, the rolling prefix
+// for beta (the guarded bash-3.2 array expansion keeps the stable command byte-identical).
 assert.equal(appcastStep.split('/tmp/sparkle-bin/bin/generate_appcast').length - 1, 1,
   'exactly one generate_appcast invocation')
 assert.ok(appcastStep.includes('PREFIX_ARGS=()'),
@@ -412,9 +382,8 @@ assert.ok(appcastStep.includes('${PREFIX_ARGS[@]+"${PREFIX_ARGS[@]}"}'),
   'the optional prefix must use the bash-3.2-guarded array expansion')
 assert.ok(swiftBuild.includes('gh release upload "v${VERSION}" "macos/release/${APPCAST}" --clobber'),
   'the channel appcast must actually be uploaded to the draft release')
-// The first real release run died here: Sparkle's -o takes the output FILE, not a
-// directory ("Is a directory" / "The file appcast-out couldn't be opened"). Pin the
-// file form so the fixed invocation cannot silently regress.
+// Sparkle's -o takes the output FILE, not a directory ("Is a directory" / "The file
+// appcast-out couldn't be opened"), so pin the file form against silent regression.
 assert.match(appcastStep, /generate_appcast .*-o \/tmp\/appcast-out\/appcast\.xml \/tmp\/appcast-in/,
   'the beta appcast must be written to an explicit .xml file path (-o takes a filename)')
 assert.doesNotMatch(appcastStep, /-o \/tmp\/appcast-out /,
@@ -433,10 +402,9 @@ assert.ok(
   'the appcast output name must be channel-selected to match the injected feed',
 )
 
-// Rolling publish happens in the POST-verify upload step: archives first, then
-// the appcast that references them. The probe/create-if-absent guard is
-// unchanged (prerelease → never releases/latest); the stable branch never
-// touches the rolling release.
+// Rolling publish happens in the POST-verify upload step: archives first, then the appcast
+// that references them. The probe/create-if-absent guard is unchanged (prerelease → never
+// releases/latest); the stable branch never touches the rolling release.
 assert.match(appcastStep, /ROLLING_TAG=""/,
   'the stable branch must not touch the rolling release (only beta republishes it)')
 assert.doesNotMatch(appcastStep, /gh release upload "\$ROLLING_TAG"/,
@@ -470,29 +438,24 @@ assert.ok(uploadStep.includes('STAGED_ZIP="/tmp/appcast-in/$(basename "${BASE}.z
   'the appcast-referenced beta zip must be located by its exact basename')
 assert.match(uploadStep, /::error::appcast 引用的 beta zip 不在收件目录/,
   'an appcast whose staged zip vanished must fail closed, never publish a 404 enclosure')
-// 2026-12 A2 key gate, both arms in the UPLOAD step too: the keyless repo
-// keeps the loud skip (release still ships without an install leg), but a
-// CONFIGURED private key with a missing appcast is a broken chain (the appcast
-// step must have failed already) and must never be silently skipped.
+// 2026-12 A2 key gate, both arms in the UPLOAD step too: the keyless repo keeps the loud
+// skip, but a CONFIGURED private key with a missing appcast must never be silently skipped.
 assert.match(uploadStep, /::warning::beta appcast 缺失（SPARKLE_PRIVATE_KEY 未配置）/,
   'a missing SPARKLE_PRIVATE_KEY stays a loud skip (release still ships)')
 assert.match(uploadStep, /::error::SPARKLE_PRIVATE_KEY 已配置但 \$BETA_APPCAST 缺失/,
   'a configured key with no beta appcast must fail closed, never skip the rolling publish')
 
-// S-23: a FINAL release also refreshes the rolling beta appcast (preserving the
-// newest beta item), so a beta client discovers the final version even when the
-// final ships after the last beta — the native analog of Electron's latest.yml
-// fallback. The refresh is gated on the rolling release already existing and on
-// the stable appcast having actually been generated (missing key → loud skip);
-// the stable appcast asset itself is never rewritten (byte-identical channel).
+// S-23: a FINAL release also refreshes the rolling beta appcast (preserving the newest beta
+// item), so a beta client discovers the final version even when the final ships after the last
+// beta (the native analog of Electron's latest.yml fallback). The refresh is gated on the
+// rolling release existing and the stable appcast being generated; the stable asset is never rewritten.
 assert.ok(uploadStep.includes('STABLE_APPCAST="macos/release/appcast-swift.xml"'),
   'the stable branch must gate the rolling refresh on the generated stable appcast')
 assert.match(uploadStep, /::warning::stable appcast 缺失（SPARKLE_PRIVATE_KEY 未配置）/,
   'a missing stable appcast (no private key) must skip the refresh loudly, never red the release')
 assert.match(uploadStep, /::error::SPARKLE_PRIVATE_KEY 已配置但 \$STABLE_APPCAST 缺失/,
   'a configured key with no stable appcast must fail closed, never skip the refresh silently')
-// A2 content gate: the refreshed rolling appcast must ALSO advertise this final
-// version (final item + its zip enclosure) — test -f alone proved nothing.
+// A2 content gate: the refreshed rolling appcast must ALSO advertise this final version (final item + its zip enclosure) — test -f alone proved nothing.
 assert.match(uploadStep, /node scripts\/release\/verify-native-appcast\.mjs "\$VERSION" \/tmp\/appcast-stable-refresh-out\/appcast\.xml/,
   'the refreshed rolling appcast must be proven to carry this version before upload')
 assert.ok(uploadStep.includes('BETA_ZIP_NAME=') && uploadStep.includes('--json assets')
@@ -507,9 +470,9 @@ assert.ok(uploadStep.includes(
   'the refreshed rolling appcast must pin the same rolling download prefix')
 assert.ok(uploadStep.includes('/tmp/appcast-stable-refresh-out/appcast-swift-beta.xml'),
   'the refreshed feed must be uploaded under the exact SUFeedURL asset name')
-// V1 re-verification: generate_appcast also references .delta archives; uploading
-// only *.zip leaves delta enclosures unresolved (Sparkle falls back to the full
-// zip, but the appcast must not advertise unreachable assets).
+// V1 re-verification: generate_appcast also references .delta archives, so uploading only
+// *.zip leaves delta enclosures unresolved (Sparkle falls back to the full zip, but the
+// appcast must not advertise unreachable assets).
 assert.match(uploadStep, /for ARCHIVE in \/tmp\/appcast-in\/\*\.zip \/tmp\/appcast-in\/\*\.delta; do/,
   'the beta upload must publish zip AND delta archives before the appcast')
 assert.match(uploadStep, /for ARCHIVE in \/tmp\/appcast-stable-refresh\/\*\.zip \/tmp\/appcast-stable-refresh\/\*\.delta; do/,
@@ -520,9 +483,8 @@ assert.ok(
   'the refresh must publish archives before the refreshed appcast too',
 )
 
-// G29: a reused output dir can hold older versions side by side (0.3.1 +
-// 0.3.2-beta.1 reproduced locally); the leg never globs — every native
-// reference and the upload are exact artifactBasename paths.
+// G29: a reused output dir can hold older versions side by side (0.3.1 + 0.3.2-beta.1
+// reproduced locally), so the leg never globs — every reference and the upload are exact paths.
 assert.doesNotMatch(swiftBuild, /macos\/release\/\*\.(dmg|zip)/,
   'the native leg must never glob macos/release for dmg/zip')
 assert.ok(swiftBuild.includes('test -f "${BASE}.dmg"') && swiftBuild.includes('test -f "${BASE}.zip"'),
@@ -530,11 +492,9 @@ assert.ok(swiftBuild.includes('test -f "${BASE}.dmg"') && swiftBuild.includes('t
 assert.ok(swiftBuild.includes('"${BASE}.dmg" "${BASE}.zip" --clobber'),
   'the upload must name exactly the manifest artifacts (no stale sibling swept in)')
 
-
-// G36: the Electron leg must not glob its own output dir either (G29 fixed the
-// Swift leg only). A reused packages/desktop/release can hold older versions
-// side by side; every reference now names the exact staged artifact, and the
-// zip verify step must carry the VERSION env its path interpolation needs.
+// G36: the Electron leg must not glob its own output dir either (G29 fixed the Swift leg
+// only). A reused packages/desktop/release can hold older versions side by side, so every
+// reference names the exact staged artifact and the zip verify step must carry VERSION.
 assert.ok(macBuild.includes('BASE="packages/desktop/release/dsh-chamber-electron-${VERSION}-arm64"'),
   'G36: the mac leg must derive the exact artifact base from VERSION')
 assert.ok(macBuild.includes('APP_DIR="packages/desktop/release/mac-arm64/dsh-chamber-electron.app"'),
@@ -551,10 +511,9 @@ assert.match(between('      - name: Verify mac zip contents', '  build-windows:'
   'G36: the zip verify step must receive VERSION (its path interpolation uses it)')
 
 // ---------------------------------------------------------------- S-31 + G28
-// S-31: electron-builder notarizes the .app only; the dmg itself needs its own
-// notarytool submit + staple (+ validate) or offline Gatekeeper rejects the
-// mounted volume. The build step already published the unstapled dmg, so the
-// stapled file is re-uploaded over it.
+// S-31: electron-builder notarizes the .app only; the dmg needs its own notarytool submit +
+// staple (+ validate) or offline Gatekeeper rejects the mounted volume. The build step
+// already published the unstapled dmg, so the stapled file is re-uploaded over it.
 const dmgStep = between(
   '      - name: Notarize + staple the Electron dmg',
   '      - name: Verify mac zip contents',
@@ -572,18 +531,16 @@ assert.ok(dmgStep.indexOf('xcrun stapler staple "$DMG"') > dmgSubmitIndex,
   'the dmg staple must follow its own notarization')
 assert.ok(dmgStep.indexOf('xcrun stapler validate "$DMG"') > dmgStep.indexOf('xcrun stapler staple "$DMG"'),
   'the stapled dmg must be validated')
-// Real-release check: electron-builder signs only the .app, so an unsigned but
-// stapled dmg is rejected by `spctl --type open --context primary-signature`
-// ("source=no usable signature"). The assertion must stay fail-closed for a
-// signed image and degrade loudly for an unsigned one.
+// Real-release check: electron-builder signs only the .app, so an unsigned but stapled dmg
+// is rejected by `spctl --type open --context primary-signature`; stay fail-closed for a signed
+// image and degrade loudly for an unsigned one.
 assert.match(dmgStep, /if codesign -dv "\$DMG" >\/dev\/null 2>&1; then\n\s+spctl --assess --type open[^\n]*"\$DMG"/,
   'the dmg Gatekeeper assessment must be gated on the dmg actually carrying a signature')
 assert.match(dmgStep, /stapled but unsigned[^\n]*primary-signature assertion/,
   'an unsigned dmg must degrade loudly instead of failing the release')
 assert.match(dmgStep, /gh release upload "v\$\{VERSION\}" "\$DMG" --clobber/,
   'the stapled dmg must replace the unstapled asset electron-builder published')
-// G28: the uploaded zip is not just `test -n`-ed — it is extracted and the .app
-// inside is re-verified (mirrors the Swift leg's P4(b)).
+// G28: the uploaded zip is not just `test -n`-ed — it is extracted and the .app inside re-verified (mirrors the Swift leg's P4(b)).
 const zipVerifyStep = between(
   '      - name: Verify mac zip contents',
   '\n  build-windows:',
@@ -617,22 +574,16 @@ assert.match(linuxBuild, /latest-linux\.yml/)
 assert.match(workflow, /make_latest=false/)
 assert.match(workflow, /make_latest=true/)
 assert.match(workflow, /needs: \[create-release, build-gateway, build-macos, build-windows, build-linux, build-swift\]/)
-// The release path validates itself because a tag push runs ci.yml and
-// release.yml in PARALLEL — publishing an untested commit must be impossible.
-// The list below therefore has to track ci.yml's gate set: the 2026-12 review
-// P2 found gates that only ci.yml ran (design-token conformance, upgrade
-// tooling, the third-party-notices diff, the desktop packaging sub-builds, and
-// the upstream-touchpoint registry/C8 gate), so a release could ship a commit
-// that the push path would have rejected.
-// ---------------------------------------------------------------- mechanical
-// alignment contract (2026-09)
-//
-// The release validation chain and the push chain used to be two hand-written
-// lists kept aligned by a hand-written list of gate names HERE. That is how a
-// gate added to ci.yml alone slips through: `test:gui-acceptance` did exactly
-// that. So the contract is now derived FROM ci.yml — every gate command the push
-// path runs must appear in release validation, or be listed in EXEMPT with the
-// reason and where its coverage lives instead.
+// The release path validates itself because a tag push runs ci.yml and release.yml in
+// PARALLEL — publishing an untested commit must be impossible. The list below must therefore
+// track ci.yml's gate set: the 2026-12 review P2 found gates only ci.yml ran (design-token
+// conformance, upgrade tooling, the third-party-notices diff, desktop packaging sub-builds,
+// the upstream-touchpoint registry/C8 gate).
+// ---------------------------------------------------------------- mechanical alignment contract (2026-09)
+// The two chains used to be hand-written lists kept aligned by a hand-written list of gate
+// names HERE (`test:gui-acceptance` slipped through that way). The contract is now derived
+// FROM ci.yml — every gate command the push path runs must appear in release validation, or
+// be listed in EXEMPT with the reason and where its coverage lives instead.
 const ciWorkflow = readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8')
 const ciTestJob = jobBlock(ciWorkflow, 'test')
 
@@ -657,11 +608,8 @@ function gateCommands(jobText) {
   return [...commands].sort()
 }
 
-/**
- * Gates the push path runs that release validation deliberately does NOT: each
- * entry names the reason and where the coverage lives instead. A gate that is
- * simply missing is a failure, not an exemption.
- */
+/** Gates the push path runs that release validation deliberately does NOT: each entry names
+ * the reason and where the coverage lives instead; a gate simply missing is a failure. */
 const EXEMPT = new Map([
   ['pnpm run smoke', 'the release path has never wired smoke (ci.yml says so at its own step): a checkout carries no bundled dsh runtime, so it would only print SKIP. Real gap — a post-bundle smoke inside the build legs — is a separate change, not a silent exemption.'],
   ['node scripts/gates/classify-ci-changes.mjs', 'push-path plumbing, not a gate: it only decides whether the expensive chain is worth running, and release validation always runs that chain in full, so there is nothing to classify.'],
@@ -673,8 +621,7 @@ assert.deepEqual(
   [],
   `release validation must run every gate the push path runs (or list it in EXEMPT with a reason). Missing: ${missingGates.join(', ')}`,
 )
-// An exemption that stops being needed must be removed, not left to rot: the
-// gate is either back in the push path or now covered by validation.
+// An exemption that stops being needed must be removed, not left to rot.
 for (const gate of EXEMPT.keys()) {
   assert.ok(
     gateCommands(ciTestJob).includes(gate),
@@ -687,14 +634,10 @@ for (const gate of EXEMPT.keys()) {
 }
 
 // ---------------------------------------------------------------- T1/T2/T3
-// A release PROVES its commit passed CI instead of re-running the chain on the
-// tag (2026-09 CI-trigger revision). The old shape had the linux chain step aside
-// for tags while the windows leg re-ran the identical SHA — and tagging a commit
-// that never went through main skipped the linux chain entirely, so "no release
-// from an untested commit" rested on procedure rather than an assertion. Now
-// ci.yml has no tag path at all and release validation carries the proof. The
-// classifier must stay frozen so widening the prose allowlist (which SKIPS gates)
-// cannot happen by accident.
+// A release PROVES its commit passed CI instead of re-running the chain on the tag (2026-09
+// CI-trigger revision): tagging a commit that never went through main used to skip the linux
+// chain entirely. ci.yml now has no tag path at all and release validation carries the proof.
+// The classifier stays frozen so widening the prose allowlist (which SKIPS gates) is deliberate.
 assert.doesNotMatch(
   ciWorkflow,
   /github\.ref_type/,
@@ -706,8 +649,7 @@ assert.doesNotMatch(
   'ci.yml must not trigger on tag pushes: release.yml owns the tag path and rejects a commit main never validated',
 )
 const ciWindowsJob = jobBlock(ciWorkflow, 'test-windows')
-// The proof names every required leg explicitly, so release validation cannot pass on a
-// commit whose linux chain or windows leg never ran.
+// The proof names every required leg explicitly, so release validation cannot pass on a commit whose linux chain or windows leg never ran.
 assert.match(
   validation,
   /- name: Release commit passed CI on main[\s\S]{0,400}?run: node scripts\/release\/verify-release-ci-proof\.mjs --sha/,
@@ -729,11 +671,9 @@ assert.match(
   /^concurrency:\n  group:\s*ci-\$\{\{\s*github\.ref\s*\}\}\n  cancel-in-progress:\s*\$\{\{\s*github\.event_name\s*==\s*'pull_request'\s*\}\}$/m,
   'the push chain must serialize per ref and cancel ONLY pull-request runs: cancelling a branch push could drop the validation of a code commit when a prose-only push follows it (the classifier spares prose the heavy chain, so nothing would re-validate that commit)',
 )
-// 2026-12 single-entry collapse: the package test set and the client typecheck
-// set are each invoked through `scripts/gates/run-checks.mjs`, so the number of
-// conditioned steps is no longer a proxy for how much heavy work the classifier
-// gates. Pin both facts: the concentrated entries themselves must be gated, and
-// the gated step count must not fall below the post-collapse floor.
+// 2026-12 single-entry collapse: the package test set and the client typecheck set are each
+// invoked through `scripts/gates/run-checks.mjs`, so the gated step count must not fall below
+// the post-collapse floor while both concentrated entries stay classifier-gated.
 for (const entry of ['node scripts/gates/run-checks.mjs tests', 'node scripts/gates/run-checks.mjs typecheck']) {
   assert.match(
     ciTestJob,
@@ -751,8 +691,7 @@ function classifiesHeavySteps(jobText) {
   return [...jobText.matchAll(/^\s+if:\s*steps\.classify\.outputs\.code\s*==\s*'true'\s*$/gm)].length
 }
 
-// The prose allowlist decides what SKIPS the heavy chain, so freeze it here:
-// widening it must be a deliberate edit to this assertion.
+// The prose allowlist decides what SKIPS the heavy chain: widening it must be a deliberate edit to this assertion.
 const classifier = readFileSync(new URL('../gates/classify-ci-changes.mjs', import.meta.url), 'utf8')
 const prefixes = classifier.match(/export const PROSE_ONLY_PREFIXES = \[([^\]]*)\]/)
 const files = classifier.match(/export const PROSE_ONLY_FILES = \[([^\]]*)\]/)
@@ -767,11 +706,9 @@ assert.deepEqual(
   ['README.md', 'AGENTS.md', 'CONTRIBUTING.md', 'CHANGELOG.md', 'LICENSE', 'SECURITY.md', 'CODE_OF_CONDUCT.md'],
   'prose files decide which pushes skip gates — widen deliberately, in this test',
 )
-// The upstream-touchpoint registry gate runs in TWO passes, and both are
-// load-bearing: a substring check on the script path alone would pass with
-// either one missing, so pin the exact command lines AND their order relative
-// to the install (the advisory pass is file-only and must fail fast before it;
-// the C8 rebuild pass needs esbuild from node_modules and must come after).
+// The upstream-touchpoint registry gate runs in TWO passes, both load-bearing: a substring
+// check on the script path alone would pass with either missing, so pin the exact command
+// lines AND their order around the install (advisory file-only before, C8 rebuild after).
 const upstreamGateRuns = validation.match(/^\s+run: node scripts\/upstream\/verify-upstream-touchpoints\.mjs.*$/gm) ?? []
 assert.equal(
   upstreamGateRuns.length,
@@ -787,8 +724,7 @@ assert.ok(
   advisoryGate < installStep && installStep < rebuildGate,
   'the upstream gate must run file-only before the install and its C8 rebuild pass after it (ci.yml order)',
 )
-// Regenerating the notices file is not a gate by itself — the committed file
-// must be proven current, on both the English mirror and the canonical one.
+// Regenerating the notices file is not a gate by itself — the committed file must be proven current, on both the English mirror and the canonical one.
 assert.match(
   validation,
   /git diff --exit-code -- THIRD_PARTY_NOTICES\.md docs\/THIRD_PARTY_NOTICES\.en-US\.md/,
@@ -808,17 +744,14 @@ assert.equal(
   undefined,
   'formal desktop builds must not trust a committed third-party Electron mirror',
 )
-// S-30 support-matrix floor: the native shell runs the SHIPPED BUNDLE on the OS
-// WebKit, so the floor is the JS baseline that bundle needs — not the Electron
-// runtime's own floor (12.0 in Electron 43.x). The bundle calls
-// Promise.withResolvers unconditionally (approval / user-question / PDF-preview
-// construction paths, A3-1) and that API first ships in Safari 17.4 / macOS 14.4,
-// so 13.x and 14.0–14.3 are unservable and the floor is 14.4. Both flavors ship
-// from the same tag, so Electron must declare the SAME floor: pin the Electron
-// declaration, the Swift plist and the SwiftPM platform together. There is no
-// pre-14.4 fallback on either leg — raising the floor is a deliberate edit in all
-// three places. SwiftPM can only name a major (.macOS(.v14)); the plist carries
-// the EXACT 14.4, so the plist assertion below is the exact-floor check.
+// S-30 support-matrix floor: the native shell runs the SHIPPED BUNDLE on the OS WebKit, so
+// the floor is the JS baseline that bundle needs, not the Electron runtime's own floor (12.0
+// in Electron 43.x). The bundle calls Promise.withResolvers unconditionally (approval /
+// user-question / PDF-preview paths, A3-1), which first ships in Safari 17.4 / macOS 14.4, so
+// 13.x and 14.0–14.3 are unservable and the floor is 14.4. Both flavors ship from the same
+// tag, so pin Electron's declaration, the Swift plist and the SwiftPM platform together; no
+// pre-14.4 fallback on either leg. SwiftPM names a major (.macOS(.v14)) while the plist
+// carries the EXACT 14.4, so the plist assertion below is the exact-floor check.
 const nativeInfoPlistTemplate = readFileSync(new URL('../../macos/Info.plist.template', import.meta.url), 'utf8')
 const swiftPackageManifest = readFileSync(new URL('../../macos/Package.swift', import.meta.url), 'utf8')
 assert.equal(
@@ -840,14 +773,11 @@ assert.doesNotMatch(nativeInfoPlistTemplate, /<string>1[23]\.0<\/string>/,
   'no pre-14.4 fallback may be reintroduced in the native plist')
 assert.doesNotMatch(swiftPackageManifest, /\.macOS\(\.v1[23]\)/,
   'no pre-14.4 fallback may be reintroduced in the Swift package')
-// A1: app-builder-lib keeps a locale only when wanted === basename or
-// wanted.startsWith(basename + '-' | '_') (ElectronFramework.js:81-88). Mac
-// locale dirs are named <locale>.lproj with an UNDERSCORE (zh_CN.lproj; verified
-// against the pinned Electron dist), so the hyphenated "zh-CN" that works for the
-// win/linux locales/*.pak legs can never match it and silently deletes the
-// packaged Chinese resources. The mac leg therefore overrides electronLanguages
-// with the real lproj basenames; the top-level value keeps the hyphenated
-// spelling for the .pak legs.
+// A1: app-builder-lib keeps a locale only when wanted === basename or wanted.startsWith(
+// basename + '-' | '_') (ElectronFramework.js:81-88). Mac locale dirs use an UNDERSCORE
+// (zh_CN.lproj), so the hyphenated "zh-CN" of the win/linux .pak legs can never match and
+// silently deletes the packaged Chinese resources; the mac leg overrides electronLanguages
+// with the real lproj basenames while the top-level value keeps the hyphenated spelling.
 assert.ok(
   Array.isArray(desktopPackage.build?.mac?.electronLanguages)
   && desktopPackage.build.mac.electronLanguages.includes('zh_CN'),
@@ -859,11 +789,9 @@ assert.ok(
   'the win/linux .pak legs keep the hyphenated zh-CN spelling',
 )
 
-// Every build job (build-gateway / build-macos / build-windows / build-linux /
-// build-swift)
-// must build from the exact SHA the create-release job validated and bound
-// the tag to; a default-branch advance between jobs must never ship an
-// unvalidated commit under a validated tag (S16).
+// Every build job (build-gateway / build-macos / build-windows / build-linux / build-swift)
+// must build from the exact SHA create-release validated and bound the tag to; a default-branch
+// advance must never ship an unvalidated commit under a validated tag (S16).
 const buildJobs = workflow.slice(workflow.indexOf('  build-gateway:'))
 const buildRefPins = buildJobs.match(/ref: \$\{\{ github\.sha \}\}/g) ?? []
 assert.equal(
@@ -878,10 +806,8 @@ assert.match(
 )
 
 // --------------------------------------------------------- proof decision logic
-// The proof gate's decision surface is pure, so every arm is covered here (the
-// network poll itself only runs in release.yml): green run with both legs, a run
-// still in flight, a failed run, a failed leg, a missing leg, and "a flaky
-// failure re-run green still proves the commit".
+// The proof gate's decision surface is pure, so every arm is covered here (the network poll
+// only runs in release.yml): green, in-flight, failed run, failed leg, missing leg, flaky re-run.
 const GREEN_RUN = {
   id: 1,
   status: 'completed',
@@ -912,9 +838,8 @@ assert.equal(judgeRun({ ...GREEN_RUN, status: 'in_progress', conclusion: null },
   'a run still in flight keeps the release waiting instead of failing')
 assert.equal(judgeRun({ ...GREEN_RUN, conclusion: 'failure' }, []).state, 'failed')
 assert.equal(judgeRun(null, []).state, 'failed', 'a missing run entry must fail closed')
-// G25: job names alone are not a proof — the load-bearing steps must exist and
-// be green. The proof used to accept a green job whose `swift test` step had
-// been deleted, or whose heavy step the prose-only classifier skipped.
+// G25: job names alone are not a proof — the load-bearing steps must exist and be green,
+// not a green job whose `swift test` step was deleted or prose-classifier-skipped.
 assert.equal(
   judgeRun(GREEN_RUN, [
     job('test', 'success'),
@@ -950,10 +875,8 @@ assert.equal(
   'failed',
   'a step the classifier skipped does not prove that gate ran on the release commit',
 )
-// A2 high: the mac packaging rehearsal is in the required table, so a run whose
-// rehearsal was deleted (or classifier-skipped on a prose-only push) fails the
-// proof even with all three jobs green — the release can no longer ship a mac
-// pack no push-path gate ever exercised.
+// A2 high: the mac packaging rehearsal is in the required table, so a run whose rehearsal was
+// deleted (or classifier-skipped on a prose-only push) fails the proof even with all jobs green.
 assert.equal(
   judgeRun(GREEN_RUN, [
     job('test', 'success'),
@@ -993,18 +916,15 @@ assert.equal(
 assert.equal(judgeCandidates([{ ...GREEN_RUN, status: 'queued', conclusion: null }], new Map()).state, 'pending')
 assert.equal(judgeCandidates([], new Map()).state, 'pending', 'no run yet is "not proven yet", never a failure')
 
-// The proof's required set is the release's platform contract: freezing it here
-// means dropping a leg has to be a deliberate edit, and adding the native leg
-// to the SHIPPED set without adding it here is exactly the hole this asserts
-// against (the native artifacts ship from the same tag).
+// The proof's required set is the release's platform contract: freezing it here makes dropping
+// a leg a deliberate edit, and the native artifacts ship from the same tag.
 assert.deepEqual(
   REQUIRED_JOBS,
   ['test', 'test-windows', 'test-macos'],
   'the proof must require the push chain plus both platform contract legs, including the macOS leg that validates the native artifacts',
 )
-// G25: the job-name-only proof is gone. Every required job pins its load-bearing
-// steps, and those names must exist verbatim in the ci.yml job the proof watches
-// (a rename/deletion is then a deliberate two-file edit instead of silent drift).
+// G25: the job-name-only proof is gone. Every required job pins its load-bearing steps, and
+// those names must exist verbatim in the ci.yml job the proof watches (rename => two-file edit).
 assert.deepEqual(
   Object.keys(REQUIRED_JOB_STEPS).sort(),
   [...REQUIRED_JOBS].sort(),
@@ -1018,15 +938,12 @@ assert.ok(
   REQUIRED_JOB_STEPS['test-macos'].includes('Compiled sidecar smoke (shipped sidecar.js executes)'),
   'the proof must require the step that executes the shipped sidecar',
 )
-// A2 高危: the Electron mac pack used to be first really executed inside
-// release.yml (after the draft existed, with the Apple credentials loaded) —
-// both real failures of the 0.3.2-beta series landed there. ci.yml now
-// rehearses the exact chain on an ordinary main push, and the release proof
-// must require that rehearsal by name (a deleted or classifier-skipped
-// rehearsal then fails the proof instead of silently shrinking the coverage).
-// Pin the shape that makes it a rehearsal and not a second release: push-only,
-// classifier-gated, ad-hoc (no identity auto-discovery), --publish=never, and
-// no notarization/upload command anywhere in the step.
+// A2 高危: the Electron mac pack used to be first really executed inside release.yml (after
+// the draft existed, with Apple credentials loaded) — both real failures of the 0.3.2-beta
+// series landed there. ci.yml now rehearses the exact chain on an ordinary main push and the
+// release proof must require that rehearsal by name, else a deleted or classifier-skipped
+// rehearsal silently shrinks coverage. Pin the rehearsal shape: push-only, classifier-gated,
+// ad-hoc, --publish=never, no notarization/upload command anywhere in the step.
 const MAC_REHEARSAL_STEP = 'macOS packaging rehearsal (ad-hoc, no publish, no credentials)'
 assert.ok(
   REQUIRED_JOB_STEPS['test-macos'].includes(MAC_REHEARSAL_STEP),
@@ -1047,14 +964,11 @@ assert.ok(
 )
 assert.doesNotMatch(macRehearsal, /--publish=always|notarytool|gh release upload/,
   'the rehearsal must not publish, notarize or upload anything')
-// G32: the two EXECUTED-assembly gates are the only steps that prove the
-// shipped artifacts actually boot; a proof that watched only their ci.yml
-// presence would stay green after the step (or its build prerequisite) was
-// deleted. Both must be in the required table, and the local gate entry
-// (run-checks) must expose the same two gates so a developer's terminal runs
-// what the proof demands — one of them has no package.json alias by design
-// (the gate lives in scripts/gates/), so the run-checks entry is a direct
-// command; pin the exact strings rather than a substring.
+// G32: the two EXECUTED-assembly gates are the only steps that prove the shipped artifacts
+// actually boot; a proof watching only their ci.yml presence would stay green after the step
+// (or its build prerequisite) was deleted. Both must be in the required table, and run-checks
+// must expose the same two gates so a developer's terminal runs what the proof demands — one
+// has no package.json alias by design, so its entry is a direct command; pin exact strings.
 for (const step of [
   'Electron compiled artifacts smoke (control-plane boot + preload surface)',
   'Native assembly acceptance (spawned sidecar boots + serves)',

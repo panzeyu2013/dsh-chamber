@@ -6,7 +6,6 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   ArchiveCleanupCore,
-  ArchiveCleanupError,
   orphanArchivedMembers,
   MAX_PURGE_SESSIONS,
   MAX_PURGE_ERROR_RECORDS,
@@ -17,6 +16,7 @@ import {
   subagent,
   FakeHost,
   buildHost,
+  codeIs,
 } from './support/archive-host.ts'
 
 test('purge subset: a single selected root deletes only its deletable tree; the registry-global orphan sweep still clears record-less members outside the selection', async () => {
@@ -110,17 +110,11 @@ test('purge subset: an orphan member selected in the filter is cleared with the 
 test('purge subset: malformed filters refuse loudly before any mutation', async () => {
   const host = buildHost()
   const core = new ArchiveCleanupCore(host)
-  await assert.rejects(() => core.purge(['s1', 42 as never]), (error: unknown) => {
-    return error instanceof ArchiveCleanupError && error.code === 'invalid-request'
-  })
-  await assert.rejects(() => core.purge(['']), (error: unknown) => {
-    return error instanceof ArchiveCleanupError && error.code === 'invalid-request'
-  })
+  await assert.rejects(() => core.purge(['s1', 42 as never]), codeIs('invalid-request'))
+  await assert.rejects(() => core.purge(['']), codeIs('invalid-request'))
   const oversized: string[] = []
   for (let i = 0; i < MAX_PURGE_SESSIONS + 1; i += 1) oversized.push(`bulk-${i}`)
-  await assert.rejects(() => core.purge(oversized), (error: unknown) => {
-    return error instanceof ArchiveCleanupError && error.code === 'invalid-request'
-  })
+  await assert.rejects(() => core.purge(oversized), codeIs('invalid-request'))
   assert.equal(host.deleteLog.length, 0)
   assert.equal(host.removalCalls.length, 0)
 })
@@ -160,9 +154,7 @@ test('capacity guard: an oversized archived set still allows bounded subset purg
   }
   const core = new ArchiveCleanupCore(host)
   // The full-set purge refuses (purge-capacity)…
-  await assert.rejects(() => core.purge(), (error: unknown) => {
-    return error instanceof ArchiveCleanupError && error.code === 'purge-capacity'
-  })
+  await assert.rejects(() => core.purge(), codeIs('purge-capacity'))
   // …but a bounded subset of the same oversized set still runs.
   const result = await core.purge(['bulk-0', 'bulk-1'])
   assert.equal(result.errors.length, 0)
@@ -249,9 +241,7 @@ test('purge subset: duplicate filter ids delete once and keep counts honest', as
 test('purge subset: a malformed filter refuses BEFORE any authoritative read (validation-first)', async () => {
   const host = buildHost()
   const core = new ArchiveCleanupCore(host)
-  await assert.rejects(() => core.purge([42 as never]), (error: unknown) => {
-    return error instanceof ArchiveCleanupError && error.code === 'invalid-request'
-  })
+  await assert.rejects(() => core.purge([42 as never]), codeIs('invalid-request'))
   assert.equal(host.stateReadAttempts, 0, 'no corpus read for a malformed request')
   assert.equal(host.removalCalls.length, 0)
 })

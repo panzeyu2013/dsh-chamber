@@ -6,9 +6,11 @@
  *
  * Parts: shell.test.ts, shell-tail-wait-teardown.test.ts, session-open-poll.test.ts.
  */
+import type { TestContext } from 'node:test'
+
 // Test knobs — same module instance shell.ts sees (the loader maps the bare
 // specifier to this URL; the relative import resolves to the same file).
-export {
+import {
   FIBER_STATE,
   __testConfiguredContexts, __testDisposedCount, __testEventLog,
   __testEntryStates, __testOpenedSessions, __testQueueDisposeGate, __testQueueRunGate,
@@ -19,6 +21,18 @@ export {
   __testSetBootError, __testSetChamberPrefetchError, __testSetModuleSystemError,
   __testSetRunError,
 } from '../../test-fixtures/dsh-client-web.mjs'
+
+export {
+  FIBER_STATE,
+  __testConfiguredContexts, __testDisposedCount, __testEventLog,
+  __testEntryStates, __testOpenedSessions, __testQueueDisposeGate, __testQueueRunGate,
+  __testResetConfiguredContexts, __testResetDisposed, __testResetEventLog,
+  __testResetLifecycle, __testSetSessionsAvailable, __testSetSessionsListed,
+  __testSetSessionsOpenError, __testSetSessionsReadError,
+  __testSetSessionsSnapshotError, __testSetLoaderEntries,
+  __testSetBootError, __testSetChamberPrefetchError, __testSetModuleSystemError,
+  __testSetRunError,
+}
 
 export const shellModule = await import('../../src/shell.ts')
 export const {
@@ -92,5 +106,57 @@ export function hostileThrownValue(): unknown {
       }
       return undefined
     },
+  })
+}
+
+// ── Per-test scope ─────────────────────────────────────────────────────────
+
+export interface ShellTestScopeOptions {
+  /** Graph stub: 'ready' (default), 'unavailable' (pre-ready 503), 'none' (caller installs fetch). */
+  graph?: 'ready' | 'unavailable' | 'none'
+  /** Records a graph fetch; called by the graph stub with the fetched url. */
+  onFetch?: (url: string) => void
+  /** Enable fake setTimeout+Date timers (default true). */
+  timers?: boolean
+  /** Silence console.error for the test (default true). */
+  silentConsole?: boolean
+}
+
+/** `__testResetLifecycle` plus the fixture knobs it leaves behind. */
+function resetLifecycle(): void {
+  __testResetLifecycle()
+  __testResetDisposed()
+  __testSetBootError(undefined)
+  __testSetRunError(undefined)
+  __testSetModuleSystemError(undefined)
+}
+
+/**
+ * One shell-test scope: graph/window stubs, lifecycle reset, fake timers and
+ * console silence, with a t.after teardown that disposes `instanceId` (every
+ * shell when omitted) and restores all of it.
+ */
+export function shellTestScope(
+  t: TestContext,
+  options: ShellTestScopeOptions = {},
+  instanceId?: string,
+): void {
+  const { graph = 'ready', onFetch, timers = true, silentConsole = true } = options
+  const restoreFetch = graph === 'unavailable' ? stubUnavailableGraph(() => onFetch?.(''))
+    : graph === 'ready' ? stubReadyGraph(url => onFetch?.(url))
+    : (): void => {}
+  const restoreWindow = stubWindow()
+  const originalConsoleError = console.error
+  if (silentConsole) console.error = () => {}
+  resetLifecycle()
+  if (timers) t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  t.after(() => {
+    if (instanceId === undefined) disposeAllShells()
+    else disposeInstanceShell(instanceId)
+    resetLifecycle()
+    if (timers) t.mock.timers.reset()
+    console.error = originalConsoleError
+    restoreFetch()
+    restoreWindow()
   })
 }

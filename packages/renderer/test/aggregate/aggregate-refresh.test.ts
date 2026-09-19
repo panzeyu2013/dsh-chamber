@@ -31,6 +31,17 @@ import type { InstanceAggregate, InstanceSnapshot } from '@dsh-chamber/dsh-chamb
 
 // ---- commitAggregatePull (2026-09 beta regression: archived-resurfacing) ----
 
+/** A session row as the aggregate/snapshot wire carries it, with blank defaulting false. */
+const sessionRow = (sessionId: string, running = false): InstanceAggregate['sessions'][number] => ({ sessionId, running, blank: false })
+
+/** A fallback (unary-pull) workspace row: '__cwd__:'-prefixed id, marked synthetic. */
+const syntheticWorkspace = (path: string, title: string, sessionIds: string[] = []): InstanceSnapshot['workspaces'][number] =>
+  ({ workspaceId: '__cwd__:' + path, path, title, sessionIds, createdAt: '', updatedAt: '', synthetic: true })
+
+/** ok aggregate over an empty workspace/session set; `over` carries per-case state/provenance. */
+const okAggregate = (archivedSessionIds: string[], archiveSetKnown = true, over: Partial<InstanceAggregate> = {}): InstanceAggregate =>
+  ({ state: 'ok', workspaces: [], sessions: [], archivedSessionIds, archiveSetKnown, error: null, ...over })
+
 const mountedAggregate: InstanceAggregate = {
   state: 'ok',
   workspaces: [{
@@ -41,14 +52,14 @@ const mountedAggregate: InstanceAggregate = {
     createdAt: 't0',
     updatedAt: 't1',
   }],
-  sessions: [{ sessionId: 's1', running: true, blank: false }],
+  sessions: [sessionRow('s1', true)],
   archivedSessionIds: ['archived-1', 'archived-2'],
   error: null,
 }
 
 const fallbackSnapshot: InstanceSnapshot = {
-  workspaces: [{ workspaceId: '__cwd__:/real', path: '/real', title: 'Real', sessionIds: ['s1'], createdAt: '', updatedAt: '', synthetic: true }],
-  sessions: [{ sessionId: 's1', running: false, blank: false }, { sessionId: 'archived-1', running: false, blank: false }],
+  workspaces: [syntheticWorkspace('/real', 'Real', ['s1'])],
+  sessions: [sessionRow('s1'), sessionRow('archived-1')],
   archivedSessionIds: [],
 }
 
@@ -78,14 +89,9 @@ test('commitAggregatePull: the mounted merge preserves archive-set provenance (a
   assert.deepEqual(merged.archivedSessionIds, authoritative.archivedSessionIds)
   // An authoritative-but-EMPTY archive set must also stay "known" — [] is the
   // true "nothing archived" fact, never the degraded unknown state.
-  const authoritativeEmpty: InstanceAggregate = {
-    state: 'ok',
-    workspaces: mountedAggregate.workspaces,
-    sessions: [{ sessionId: 's1', running: true, blank: false }],
-    archivedSessionIds: [],
-    archiveSetKnown: true,
-    error: null,
-  }
+  const authoritativeEmpty: InstanceAggregate = okAggregate([], true, {
+    workspaces: mountedAggregate.workspaces, sessions: mountedAggregate.sessions,
+  })
   const mergedEmpty = commitAggregatePull(authoritativeEmpty, { ...fallbackSnapshot, archivedSessionIds: [] }, true)
   assert.equal(mergedEmpty.archiveSetKnown, true)
   assert.deepEqual(mergedEmpty.archivedSessionIds, [])
@@ -107,46 +113,30 @@ test('commitAggregatePull: never-pushed / unmounted sources keep the full degrad
 })
 
 test('commitAggregatePull: a mounted source without an ok aggregate falls back to the full commit (not-connected/error are authoritative states)', () => {
-  const notConnected: InstanceAggregate = { state: 'not-connected', workspaces: [], sessions: [], archivedSessionIds: [], error: null }
+  const notConnected: InstanceAggregate = okAggregate([], true, { state: 'not-connected' })
   const committed = commitAggregatePull(notConnected, fallbackSnapshot, true)
   assert.deepEqual(committed, { state: 'ok', ...fallbackSnapshot, error: null })
 })
 
 test('commitAggregatePull: mounted × error-state current and mounted × never-committed (undefined) both take the full commit', () => {
-  const errorState: InstanceAggregate = {
-    state: 'error',
-    workspaces: [],
-    sessions: [],
-    archivedSessionIds: [],
-    error: 'transient',
-  }
+  const errorState: InstanceAggregate = okAggregate([], true, { state: 'error', error: 'transient' })
   assert.deepEqual(commitAggregatePull(errorState, fallbackSnapshot, true), { state: 'ok', ...fallbackSnapshot, error: null })
   assert.deepEqual(commitAggregatePull(undefined, fallbackSnapshot, true), { state: 'ok', ...fallbackSnapshot, error: null })
 })
 
 test('commitAggregatePull: an all-synthetic current (last commit came from the fallback) keeps receiving full commits — never freezes the degraded view', () => {
-  const syntheticCurrent: InstanceAggregate = {
-    state: 'ok',
-    workspaces: [{ workspaceId: '__cwd__:/real', path: '/real', title: 'Real', sessionIds: ['s1'], createdAt: '', updatedAt: '', synthetic: true }],
-    sessions: [{ sessionId: 's1', running: false, blank: false }],
-    archivedSessionIds: [],
-    error: null,
-  }
+  const syntheticCurrent: InstanceAggregate = okAggregate([], true, {
+    workspaces: [syntheticWorkspace('/real', 'Real', ['s1'])], sessions: [sessionRow('s1')],
+  })
   const committed = commitAggregatePull(syntheticCurrent, fallbackSnapshot, true)
   assert.deepEqual(committed, { state: 'ok', ...fallbackSnapshot, error: null })
 })
 
 test('commitAggregatePull: ANY synthetic row marks the current as fallback-derived (mixed sets — unreachable by construction — stay on full commits)', () => {
-  const mixedCurrent: InstanceAggregate = {
-    state: 'ok',
-    workspaces: [
-      { workspaceId: 'w-real', path: '/real', title: 'Real', sessionIds: ['s1'], createdAt: 't0', updatedAt: 't1' },
-      { workspaceId: '__cwd__:/other', path: '/other', title: 'Other', sessionIds: ['s2'], createdAt: '', updatedAt: '', synthetic: true },
-    ],
-    sessions: [{ sessionId: 's1', running: true, blank: false }, { sessionId: 's2', running: false, blank: false }],
-    archivedSessionIds: ['archived-1'],
-    error: null,
-  }
+  const mixedCurrent: InstanceAggregate = okAggregate(['archived-1'], true, {
+    workspaces: [mountedAggregate.workspaces[0] as NonNullable<InstanceAggregate['workspaces'][number]>, syntheticWorkspace('/other', 'Other', ['s2'])],
+    sessions: [sessionRow('s1', true), sessionRow('s2')],
+  })
   const committed = commitAggregatePull(mixedCurrent, fallbackSnapshot, true)
   assert.deepEqual(committed, { state: 'ok', ...fallbackSnapshot, error: null })
 })
@@ -166,31 +156,15 @@ test('commitAggregateFailure: never-pushed / unmounted sources get the error agg
 })
 
 test('commitAggregatePull: an empty workspace set is a legitimate mounted state and is never treated as synthetic', () => {
-  const emptyWorkspaces: InstanceAggregate = {
-    state: 'ok',
-    workspaces: [],
-    sessions: [{ sessionId: 's1', running: true, blank: false }],
-    archivedSessionIds: ['archived-1'],
-    error: null,
-  }
+  const emptyWorkspaces: InstanceAggregate = okAggregate(['archived-1'], true, { sessions: [sessionRow('s1', true)] })
   const committed = commitAggregatePull(emptyWorkspaces, fallbackSnapshot, true)
   assert.deepEqual(committed.workspaces, [])
   assert.deepEqual(committed.archivedSessionIds, ['archived-1'])
 })
 
 test('commitAggregatePull: identical sessions keep the aggregate identity stable (watchdog re-pulls cause no churn)', () => {
-  const current: InstanceAggregate = {
-    state: 'ok',
-    workspaces: mountedAggregate.workspaces,
-    sessions: [{ sessionId: 's1', running: true, blank: false }],
-    archivedSessionIds: mountedAggregate.archivedSessionIds,
-    archiveSetKnown: true,
-    error: null,
-  }
-  const fallbackWithSameSessions: InstanceSnapshot = {
-    ...fallbackSnapshot,
-    sessions: [{ sessionId: 's1', running: true, blank: false }],
-  }
+  const current: InstanceAggregate = { ...mountedAggregate, archiveSetKnown: true }
+  const fallbackWithSameSessions: InstanceSnapshot = { ...fallbackSnapshot, sessions: [sessionRow('s1', true)] }
   const merged = commitAggregatePull(current, fallbackWithSameSessions, true)
   // The merged object is byte-identical to the current aggregate, so the
   // App's instanceSnapshotSignature dedupe keeps the same state object —
@@ -322,56 +296,30 @@ test('chamber source-id validation accepts canonical and legacy prefixes but rej
 test('isFallbackDerivedView: only ok aggregates with synthetic rows are the degraded unary view', () => {
   assert.equal(isFallbackDerivedView(undefined), false)
   assert.equal(isFallbackDerivedView({ ...mountedAggregate }), false)
-  assert.equal(isFallbackDerivedView({
-    state: 'ok',
-    workspaces: [],
-    sessions: [],
-    archivedSessionIds: [],
-    error: null,
-  }), false, 'an EMPTY workspace set is a legitimate mounted state, never synthetic')
-  assert.equal(isFallbackDerivedView({
-    state: 'not-connected',
-    workspaces: [{ workspaceId: '__cwd__:/x', path: '/x', title: 'x', sessionIds: [], createdAt: '', updatedAt: '', synthetic: true }],
-    sessions: [],
-    archivedSessionIds: [],
-    error: null,
-  }), false, 'not-connected/error states are not an ok fallback VIEW')
-  assert.equal(isFallbackDerivedView({
-    state: 'ok',
-    workspaces: [{ workspaceId: '__cwd__:/x', path: '/x', title: 'x', sessionIds: [], createdAt: '', updatedAt: '', synthetic: true }],
-    sessions: [],
-    archivedSessionIds: [],
-    error: null,
-  }), true)
+  assert.equal(isFallbackDerivedView(okAggregate([])), false, 'an EMPTY workspace set is a legitimate mounted state, never synthetic')
+  assert.equal(isFallbackDerivedView(okAggregate([], true, {
+    state: 'not-connected', workspaces: [syntheticWorkspace('/x', 'x')],
+  })), false, 'not-connected/error states are not an ok fallback VIEW')
+  assert.equal(isFallbackDerivedView(okAggregate([], true, { workspaces: [syntheticWorkspace('/x', 'x')] })), true)
 })
 
 test('shouldRetainPushedAggregate: a previously-pushed mounted source keeps its ok aggregate through a transport outage', () => {
   assert.equal(shouldRetainPushedAggregate(true, mountedAggregate), true)
   assert.equal(shouldRetainPushedAggregate(true, { ...mountedAggregate, archiveSetKnown: true }), true)
   // Legitimate empty workspaces (fresh mounted instance) stay retainable.
-  assert.equal(shouldRetainPushedAggregate(true, {
-    state: 'ok',
-    workspaces: [],
-    sessions: [],
-    archivedSessionIds: [],
-    error: null,
-  }), true)
+  assert.equal(shouldRetainPushedAggregate(true, okAggregate([])), true)
 })
 
 test('shouldRetainPushedAggregate: never-pushed / unmounted / degraded / non-ok currents are NOT retainable', () => {
   assert.equal(shouldRetainPushedAggregate(false, mountedAggregate), false, 'unmounted sources keep the fallback scope')
   assert.equal(shouldRetainPushedAggregate(true, undefined), false)
-  assert.equal(shouldRetainPushedAggregate(true, { state: 'not-connected', workspaces: [], sessions: [], archivedSessionIds: [], error: null }), false)
-  assert.equal(shouldRetainPushedAggregate(true, { state: 'error', workspaces: [], sessions: [], archivedSessionIds: [], error: 'x' }), false)
+  assert.equal(shouldRetainPushedAggregate(true, okAggregate([], true, { state: 'not-connected' })), false)
+  assert.equal(shouldRetainPushedAggregate(true, okAggregate([], true, { state: 'error', error: 'x' })), false)
   // A current ALREADY degraded to the fallback view is not retainable — the
   // retention fix prevents NEW degraded views, it must not freeze existing ones.
-  assert.equal(shouldRetainPushedAggregate(true, {
-    state: 'ok',
-    workspaces: [{ workspaceId: '__cwd__:/real', path: '/real', title: 'Real', sessionIds: ['s1'], createdAt: '', updatedAt: '', synthetic: true }],
-    sessions: [{ sessionId: 's1', running: false, blank: false }],
-    archivedSessionIds: [],
-    error: null,
-  }), false)
+  assert.equal(shouldRetainPushedAggregate(true, okAggregate([], true, {
+    workspaces: [syntheticWorkspace('/real', 'Real', ['s1'])], sessions: [sessionRow('s1')],
+  })), false)
 })
 
 test('retention closes the ready-edge full-commit: a retained ok aggregate merges sessions-only (archive set survives the reconnect pull)', () => {
@@ -610,15 +558,6 @@ test('authoritative removal delta survives two pulls that both observe the final
 // ---- archiveSetShrink / shouldRequestSessionListRefresh (design 24 §12:
 // purge-completed signal + official session-list refresh coalescing) ----
 
-const okAggregate = (archivedSessionIds: string[], archiveSetKnown = true): InstanceAggregate => ({
-  state: 'ok',
-  workspaces: [],
-  sessions: [],
-  archivedSessionIds,
-  archiveSetKnown,
-  error: null,
-})
-
 test('archiveSetShrink returns exactly the ids a known ok aggregate lost to the next known snapshot', () => {
   const previous = okAggregate(['a1', 'a2', 'a3'])
   assert.deepEqual(
@@ -640,9 +579,9 @@ test('archiveSetShrink never triggers from unknown provenance or non-ok aggregat
   assert.deepEqual(archiveSetShrink(undefined, { archivedSessionIds: ['a1'], archiveSetKnown: true }), [])
   // A legacy aggregate without the provenance flag stays untrusted.
   assert.deepEqual(archiveSetShrink(okAggregate(['a1'], false), { archivedSessionIds: [], archiveSetKnown: true }), [])
-  const notConnected: InstanceAggregate = { state: 'not-connected', workspaces: [], sessions: [], archivedSessionIds: [], error: null }
+  const notConnected: InstanceAggregate = okAggregate([], true, { state: 'not-connected' })
   assert.deepEqual(archiveSetShrink(notConnected, { archivedSessionIds: [], archiveSetKnown: true }), [])
-  const errorState: InstanceAggregate = { state: 'error', workspaces: [], sessions: [], archivedSessionIds: [], error: 'x' }
+  const errorState: InstanceAggregate = okAggregate([], true, { state: 'error', error: 'x' })
   assert.deepEqual(archiveSetShrink(errorState, { archivedSessionIds: [], archiveSetKnown: true }), [])
 })
 
@@ -657,7 +596,7 @@ test('shouldRequestSessionListRefresh opens on absent history and reopens only p
 
 const snapshotWithRows = (archivedSessionIds: string[], rowIds: string[], archiveSetKnown = true): InstanceSnapshot => ({
   workspaces: [],
-  sessions: rowIds.map(sessionId => ({ sessionId, running: false, blank: false })),
+  sessions: rowIds.map(sessionId => sessionRow(sessionId)),
   archivedSessionIds,
   archiveSetKnown,
 })
@@ -713,7 +652,7 @@ test('planSessionListRefresh: unknown provenance or non-ok previous never reques
   // carried pending semantics are unaffected (untrusted shrink only).
   const legacy = okAggregate(['a1', 'a2'], false)
   assert.deepEqual(planSessionListRefresh(legacy, snapshotWithRows(['a2'], ['a2']), undefined), { request: false, pending: [] })
-  const notConnected: InstanceAggregate = { state: 'not-connected', workspaces: [], sessions: [], archivedSessionIds: [], error: null }
+  const notConnected: InstanceAggregate = okAggregate([], true, { state: 'not-connected' })
   assert.deepEqual(planSessionListRefresh(notConnected, snapshotWithRows(['a2'], ['s0', 'a2']), ['a2']), { request: true, pending: ['a2'] })
 })
 
@@ -741,7 +680,7 @@ test('archiveSetShrink: a remembered authoritative set is the baseline when the 
 
 test('planSessionListRefresh: a remembered baseline makes a shrink observable from a degraded view', () => {
   const degraded = okAggregate([], false)
-  const push = { archivedSessionIds: [] as string[], archiveSetKnown: true, sessions: [{ sessionId: 'g1', running: false, blank: false }] }
+  const push = { archivedSessionIds: [] as string[], archiveSetKnown: true, sessions: [sessionRow('g1')] }
   assert.deepEqual(planSessionListRefresh(degraded, push, undefined), { request: false, pending: [] })
   assert.deepEqual(
     planSessionListRefresh(degraded, push, undefined, ['g1']),

@@ -19,157 +19,105 @@ import {
 } from '../../src/shared/derive.ts'
 import { session, snapshot, workspace } from '../support/derive-fixtures.ts'
 
+/** deriveServerWorkspaces over a snapshot for the pinned 'srv-a' source. */
+const derive = (
+  workspaces: Parameters<typeof snapshot>[0],
+  sessions: Parameters<typeof snapshot>[1],
+  ungroupedTitle = '',
+) => deriveServerWorkspaces(snapshot(workspaces, sessions), 'srv-a', ungroupedTitle)
+
+/** A rendered session row as deriveServerWorkspaces emits it (title/displayTitle default to ''/id). */
+const row = (id: string, updatedAt: number, extra: Record<string, unknown> = {}) =>
+  ({ id, title: '', displayTitle: id, running: false, updatedAt, ...extra })
+
 test('subagent sessions are hidden from workspaces and from the ungrouped bucket', () => {
-  const result = deriveServerWorkspaces(
-    snapshot(
-      [workspace('w1', 'Work', ['a', 'b'])],
-      [session('a', 1), session('b', 2, { origin: 'subagent' })],
-    ),
-    'srv-a',
-    '',
-  )
+  const result = derive([workspace('w1', 'Work', ['a', 'b'])], [session('a', 1), session('b', 2, { origin: 'subagent' })])
   assert.equal(result.length, 1)
-  assert.deepEqual(result[0].sessions, [{ id: 'a', title: '', displayTitle: 'a', running: false, updatedAt: 1 }])
+  assert.deepEqual(result[0].sessions, [row('a', 1)])
 })
 
 test('workspace membership maps in sessionIds order with titles from the snapshot', () => {
-  const result = deriveServerWorkspaces(
-    snapshot(
-      [workspace('w1', 'Alpha', ['s3', 's1', 's2'])],
-      [
-        session('s1', 10, { title: 'One' }),
-        session('s2', 20, { title: 'Two' }),
-        session('s3', 30, { title: 'Three' }),
-      ],
-    ),
-    'srv-a',
-    '',
+  const result = derive(
+    [workspace('w1', 'Alpha', ['s3', 's1', 's2'])],
+    [session('s1', 10, { title: 'One' }), session('s2', 20, { title: 'Two' }), session('s3', 30, { title: 'Three' })],
   )
   assert.deepEqual(result, [
     {
       id: 'w1',
       title: 'Alpha',
       sessions: [
-        { id: 's3', title: 'Three', displayTitle: 'Three', running: false, updatedAt: 30 },
-        { id: 's1', title: 'One', displayTitle: 'One', running: false, updatedAt: 10 },
-        { id: 's2', title: 'Two', displayTitle: 'Two', running: false, updatedAt: 20 },
+        row('s3', 30, { title: 'Three', displayTitle: 'Three' }),
+        row('s1', 10, { title: 'One', displayTitle: 'One' }),
+        row('s2', 20, { title: 'Two', displayTitle: 'Two' }),
       ],
     },
   ])
 })
 
 test('visible sessions not accounted by any workspace trail in one ungrouped bucket, recency then id tiebreak', () => {
-  const result = deriveServerWorkspaces(
-    snapshot(
-      [workspace('w1', 'Work', ['a'])],
-      [
-        session('x', 100),
-        session('y', 200),
-        session('z', 200),
-        session('a', 1),
-        session('blank-stray', 300, { blank: true }),
-        session('sub-stray', 300, { origin: 'subagent' }),
-      ],
-    ),
-    'srv-a',
-    '',
+  const result = derive(
+    [workspace('w1', 'Work', ['a'])],
+    [
+      session('x', 100), session('y', 200), session('z', 200),
+      session('a', 1), session('blank-stray', 300, { blank: true }), session('sub-stray', 300, { origin: 'subagent' }),
+    ],
   )
   assert.equal(result.length, 2)
   const ungrouped = result[1]
   assert.equal(ungrouped.id, UNGROUPED_WORKSPACE_ID)
   assert.equal(ungrouped.title, '')
   assert.equal(ungrouped.ungrouped, true)
-  assert.deepEqual(ungrouped.sessions, [
-    { id: 'y', title: '', displayTitle: 'y', running: false, updatedAt: 200 },
-    { id: 'z', title: '', displayTitle: 'z', running: false, updatedAt: 200 },
-    { id: 'x', title: '', displayTitle: 'x', running: false, updatedAt: 100 },
-  ])
+  assert.deepEqual(ungrouped.sessions, [row('y', 200), row('z', 200), row('x', 100)])
 })
 
 test('the ungrouped bucket carries the caller-provided title', () => {
-  const result = deriveServerWorkspaces(
-    snapshot([workspace('w1', 'Work', ['a'])], [session('x', 100), session('a', 1)]),
-    'srv-a',
-    'Ungrouped',
-  )
+  const result = derive([workspace('w1', 'Work', ['a'])], [session('x', 100), session('a', 1)], 'Ungrouped')
   assert.equal(result[1].title, 'Ungrouped')
   assert.equal(result[1].ungrouped, true)
 })
 
 test('no stray sessions means no ungrouped bucket', () => {
-  const result = deriveServerWorkspaces(
-    snapshot([workspace('w1', 'Work', ['a', 'b'])], [session('a', 1), session('b', 2)]),
-    'srv-a',
-    '',
-  )
+  const result = derive([workspace('w1', 'Work', ['a', 'b'])], [session('a', 1), session('b', 2)])
   assert.equal(result.length, 1)
   assert.equal(result[0].id, 'w1')
 })
 
 test('empty snapshot derives to an empty list', () => {
-  assert.deepEqual(deriveServerWorkspaces(snapshot([], []), 'srv-a', ''), [])
+  assert.deepEqual(derive([], []), [])
 })
 
 test('members not present in the session list are skipped without breaking workspace order', () => {
-  const result = deriveServerWorkspaces(
-    snapshot(
-      [workspace('w1', 'Work', ['missing', 'a'])],
-      [session('a', 1, { title: 'A' })],
-    ),
-    'srv-a',
-    '',
-  )
-  assert.deepEqual(result[0].sessions, [{ id: 'a', title: 'A', displayTitle: 'A', running: false, updatedAt: 1 }])
+  const result = derive([workspace('w1', 'Work', ['missing', 'a'])], [session('a', 1, { title: 'A' })])
+  assert.deepEqual(result[0].sessions, [row('a', 1, { title: 'A', displayTitle: 'A' })])
 })
 
 test('archived sessions are hidden from workspaces and from the ungrouped bucket', () => {
-  const result = deriveServerWorkspaces(
-    {
-      workspaces: [workspace('w1', 'Work', ['a', 'b'])],
-      sessions: [session('a', 1), session('b', 2), session('archived-stray', 3)],
-      archivedSessionIds: ['b', 'archived-stray'],
-    },
-    'srv-a',
-    '',
-  )
+  const result = deriveServerWorkspaces({
+    ...snapshot([workspace('w1', 'Work', ['a', 'b'])], [session('a', 1), session('b', 2), session('archived-stray', 3)]),
+    archivedSessionIds: ['b', 'archived-stray'],
+  }, 'srv-a', '')
   assert.equal(result.length, 1)
-  assert.deepEqual(result[0].sessions, [{ id: 'a', title: '', displayTitle: 'a', running: false, updatedAt: 1 }])
+  assert.deepEqual(result[0].sessions, [row('a', 1)])
   assert.equal(result[0].ungrouped, undefined)
 })
 
 test('archived members keep their accounting slot: only non-archived strays surface', () => {
-  const result = deriveServerWorkspaces(
-    {
-      workspaces: [workspace('w1', 'Work', ['a', 'archived'])],
-      sessions: [session('a', 1), session('archived', 2), session('x', 3)],
-      archivedSessionIds: ['archived'],
-    },
-    'srv-a',
-    '',
-  )
+  const result = deriveServerWorkspaces({
+    ...snapshot([workspace('w1', 'Work', ['a', 'archived'])], [session('a', 1), session('archived', 2), session('x', 3)]),
+    archivedSessionIds: ['archived'],
+  }, 'srv-a', '')
   assert.equal(result.length, 2)
-  assert.deepEqual(result[0].sessions, [{ id: 'a', title: '', displayTitle: 'a', running: false, updatedAt: 1 }])
-  assert.deepEqual(result[1].sessions, [{ id: 'x', title: '', displayTitle: 'x', running: false, updatedAt: 3 }])
+  assert.deepEqual(result[0].sessions, [row('a', 1)])
+  assert.deepEqual(result[1].sessions, [row('x', 3)])
 })
 
 test('running and updatedAt pass through to workspace members and strays', () => {
-  const result = deriveServerWorkspaces(
-    snapshot(
-      [workspace('w1', 'Work', ['a', 'b'])],
-      [
-        session('a', 42, { title: 'A', running: true }),
-        session('b', 7),
-        session('s', 99, { running: true }),
-      ],
-    ),
-    'srv-a',
-    '',
+  const result = derive(
+    [workspace('w1', 'Work', ['a', 'b'])],
+    [session('a', 42, { title: 'A', running: true }), session('b', 7), session('s', 99, { running: true })],
   )
-  assert.deepEqual(result[0].sessions, [
-    { id: 'a', title: 'A', displayTitle: 'A', running: true, updatedAt: 42 },
-    { id: 'b', title: '', displayTitle: 'b', running: false, updatedAt: 7 },
-  ])
-  assert.deepEqual(result[1].sessions, [{ id: 's', title: '', displayTitle: 's', running: true, updatedAt: 99 }])
+  assert.deepEqual(result[0].sessions, [row('a', 42, { title: 'A', displayTitle: 'A', running: true }), row('b', 7)])
+  assert.deepEqual(result[1].sessions, [row('s', 99, { running: true })])
 })
 
 test('relativeTimeBucket boundaries mirror the official relativeTime algorithm', () => {
@@ -250,21 +198,11 @@ test('reconciledSessionOrder edge pairs: empty stored + empty wire stays empty; 
 test('projectRuntimeFacts passes current through and emits every session with its live running bit', () => {
   const report = projectRuntimeFacts({
     current: 's1',
-    byId: {
-      s1: { running: true, completed: true },
-      s2: { running: false },
-      s3: { running: true },
-      s4: { running: false },
-    },
+    byId: { s1: { running: true, completed: true }, s2: { running: false }, s3: { running: true }, s4: { running: false } },
   })
   assert.deepEqual(report, {
     current: 's1',
-    sessions: {
-      s1: { running: true, completed: true },
-      s2: { running: false },
-      s3: { running: true },
-      s4: { running: false },
-    },
+    sessions: { s1: { running: true, completed: true }, s2: { running: false }, s3: { running: true }, s4: { running: false } },
   })
 })
 
@@ -284,12 +222,8 @@ test('projectRuntimeFacts projects pending from the ui-session registry (officia
   const report = projectRuntimeFacts(
     {
       byId: {
-        a: { running: true },
-        b: { running: false },
-        c: { running: false },
-        d: { running: true },
-        e: { running: false },
-        f: { running: false },
+        a: { running: true }, b: { running: false }, c: { running: false },
+        d: { running: true }, e: { running: false }, f: { running: false },
       },
     },
     undefined,
@@ -301,8 +235,7 @@ test('projectRuntimeFacts projects pending from the ui-session registry (officia
       ['missing-row', { key: 'k5', kind: 'approval', sessionId: 'missing-row' }],
     ]),
   )
-  // 三个已知 kind 投影为 pending；未知 kind 恒 undefined（未来上游 kind 不得
-  // 漏进 UI，与官方 visiblePendingKind 一致）；不在 byId 的会话不产生行。
+  // 三个已知 kind 投影为 pending；未知 kind 恒 undefined（与官方 visiblePendingKind 一致）；不在 byId 的会话不产生行。
   assert.deepEqual(report.sessions, {
     a: { running: true, pending: 'approval' },
     b: { running: false, pending: 'plan-review' },
@@ -317,10 +250,7 @@ test('projectRuntimeFacts keeps pending alongside completed and subagent rows st
   const report = projectRuntimeFacts(
     {
       current: 's1',
-      byId: {
-        s1: { running: true, completed: true },
-        sub1: { running: false, origin: 'subagent' },
-      },
+      byId: { s1: { running: true, completed: true }, sub1: { running: false, origin: 'subagent' } },
     },
     undefined,
     new Map([
@@ -344,10 +274,8 @@ test('projectRuntimeFacts drops subagent-origin rows (no notification edge / no 
   const report = projectRuntimeFacts({
     current: 's1',
     byId: {
-      s1: { running: true },
-      sub1: { running: true, origin: 'subagent' },
-      sub2: { running: false, completed: true, origin: 'subagent' },
-      s2: { running: false, completed: true },
+      s1: { running: true }, sub1: { running: true, origin: 'subagent' },
+      sub2: { running: false, completed: true, origin: 'subagent' }, s2: { running: false, completed: true },
     },
   })
   // subagent 行（无论 running/completed/pending 如何）不进入事实报告——
@@ -361,37 +289,21 @@ test('projectRuntimeFacts drops subagent-origin rows (no notification edge / no 
 
 test('projectRuntimeFacts treats missing running bits as false (the App edge memory uses === true)', () => {
   const report = projectRuntimeFacts({
-    byId: {
-      a: {},
-      b: { running: undefined },
-      c: { completed: false },
-    },
+    byId: { a: {}, b: { running: undefined }, c: { completed: false } },
   })
-  assert.deepEqual(report.sessions, {
-    a: { running: false },
-    b: { running: false },
-    c: { running: false },
-  })
+  assert.deepEqual(report.sessions, { a: { running: false }, b: { running: false }, c: { running: false } })
 })
 
 test('projectRuntimeFacts attaches running subagent counts (sparse, vendor lineage semantics)', () => {
-  const subagentRunning = new Map<string, number>([
-    ['parent1', 2],
-    ['parent2', 1],
-  ])
+  const subagentRunning = new Map<string, number>([['parent1', 2], ['parent2', 1]])
   const report = projectRuntimeFacts({
     current: 'parent1',
-    byId: {
-      parent1: { running: false },
-      parent2: { running: true },
-      plain: { running: false },
-    },
+    byId: { parent1: { running: false }, parent2: { running: true }, plain: { running: false } },
   }, subagentRunning)
   assert.deepEqual(report, {
     current: 'parent1',
     sessions: {
-      parent1: { running: false, runningSubagents: 2 },
-      parent2: { running: true, runningSubagents: 1 },
+      parent1: { running: false, runningSubagents: 2 }, parent2: { running: true, runningSubagents: 1 },
       plain: { running: false },
     },
   })
@@ -403,10 +315,7 @@ test('projectRuntimeFacts omits runningSubagents without the lineage map or for 
   const zero = projectRuntimeFacts({ byId: { a: { running: false } } }, new Map([['a', 0]]))
   assert.deepEqual(zero.sessions.a, { running: false })
   // The count coexists with the sparse completed extra (pending is gone in 0.1.2).
-  const combined = projectRuntimeFacts(
-    { byId: { a: { running: false, completed: true } } },
-    new Map([['a', 3]]),
-  )
+  const combined = projectRuntimeFacts({ byId: { a: { running: false, completed: true } } }, new Map([['a', 3]]))
   assert.deepEqual(combined.sessions.a, { running: false, completed: true, runningSubagents: 3 })
 })
 
@@ -421,19 +330,15 @@ test('mergeRuntimeFacts returns undefined with no report and no armed dots', () 
 test('mergeRuntimeFacts passes the report through when no App dots are armed', () => {
   const runtime = {
     current: 's1',
-    sessions: {
-      s1: { running: true },
-      s2: { running: false, completed: true, runningSubagents: 2 },
-    },
+    sessions: { s1: { running: true }, s2: { running: false, completed: true, runningSubagents: 2 } },
   }
   assert.deepEqual(mergeRuntimeFacts(runtime, undefined), runtime)
   assert.deepEqual(mergeRuntimeFacts(runtime, {}), runtime)
 })
 
 test('mergeRuntimeFacts 刻意丢弃对账回执（投影不得携带守卫内部事实）', () => {
-  // 回执是守卫与 App 之间的**原始**通道事实（App 读 setRuntimeFacts 原始态）；一旦
-  // 它随投影进入 runtime 面，status 签名/消费点会把内部诊断当作用户可见事实
-  // （2026-12 三轮复核要求钉住这条边界）。
+  // 回执是守卫与 App 之间的**原始**通道事实（App 读 setRuntimeFacts 原始态）；一旦随投影进入
+  // runtime 面，status 签名/消费点会把内部诊断当作用户可见事实（2026-12 三轮复核要求钉住这条边界）。
   assert.deepEqual(
     mergeRuntimeFacts({
       current: 's1',
@@ -450,8 +355,7 @@ test('mergeRuntimeFacts：回执抖动（含 completedBySource=false 显式路�
     ...base,
     sessionFactReconcile: { requestedAt: 9, settledAt: 10, ok: false, attempts: 2, verdict: 'stale' as const },
   }
-  // completedBySource=false 是「该来源未武装陈旧点」的**显式**输入（不是缺席）：
-  // 无论哪条路径，回执都不得进入投影面（2026-12 独立复核要求钉住这条边界）。
+  // completedBySource=false 是「该来源未武装陈旧点」的**显式**输入（不是缺席）：两条路径都不得让回执进入投影面（2026-12 独立复核要求钉住这条边界）。
   const completedInputs: (Record<string, boolean> | undefined)[] = [undefined, {}, { s1: false }]
   for (const completed of completedInputs) {
     assert.deepEqual(
@@ -470,10 +374,7 @@ test('mergeRuntimeFacts overlays App-armed dots onto the report rows, preserving
   const merged = mergeRuntimeFacts(
     {
       current: 's1',
-      sessions: {
-        s1: { running: false },
-        s2: { running: false, pending: 'question', runningSubagents: 1 },
-      },
+      sessions: { s1: { running: false }, s2: { running: false, pending: 'question', runningSubagents: 1 } },
     },
     { s1: true, s3: true, s4: false },
   )

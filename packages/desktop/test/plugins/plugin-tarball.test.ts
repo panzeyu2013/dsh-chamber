@@ -1,23 +1,16 @@
 /**
  * plugin-tarball unit tests (design 21 §6.5, plan Phase 4.6): the desktop
- * plugin-source tarball builder + bounded tgz manifest reader — archive
- * layout (npm-pack `package/` root, dirs before files, normalized modes),
- * honest skips (symlinks, node_modules/.git), cap errors with machine codes
- * (entries / unpacked footprint / final archive size), the package.json
- * manifest projection (name + strict x-plugin-version grammar; the
- * protected-set judgement is a separate step), the gzip roundtrip through listTgzManifest, and
- * the TEXTUAL LOCKSTEP tests pinning every cap + the version grammar to the
- * gateway route's own literals (routes.ts MATERIALIZE_MAX_BYTES /
- * PLUGIN_VERSION_PATTERN, tgz-scan.ts TGZ_MAX_ENTRIES /
- * TGZ_MAX_UNPACKED_BYTES) so the desktop archive can never drift past what
- * the upload route accepts.
+ * plugin-source tarball builder + bounded tgz manifest reader — npm-pack
+ * archive layout, honest skips, cap errors with machine codes, the manifest
+ * projection, and the TEXTUAL LOCKSTEP tests pinning every cap + the version
+ * grammar to the gateway route's own literals.
+ * Sibling parts: plugin-sync.test.ts, plugin-sync-remote-read.test.ts.
  */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { randomBytes } from 'node:crypto'
-import { closeSync, ftruncateSync, mkdtempSync, mkdirSync, openSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { closeSync, ftruncateSync, mkdirSync, openSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { scanTgzMetadata } from '../../../gateway/src/tgz-scan.ts'
@@ -33,21 +26,9 @@ import {
   TARBALL_MAX_ENTRIES,
   TARBALL_MAX_UNPACKED_BYTES,
 } from '../../plugin-tarball.ts'
+import { tempDir } from './plugin-sync-fixtures.ts'
 
 const ROOT = join(import.meta.dirname, '..', '..', '..', '..')
-
-interface FixtureFolder {
-  path: string
-  cleanup(): void
-}
-
-function makeFolder(): FixtureFolder {
-  const path = mkdtempSync(join(tmpdir(), 'plugin-tarball-'))
-  return {
-    path,
-    cleanup: () => rmSync(path, { recursive: true, force: true }),
-  }
-}
 
 function write(root: string, relative: string, content: string | Buffer): void {
   const full = join(root, relative)
@@ -79,10 +60,6 @@ function tarHeaderEntries(tar: Buffer): Array<{ name: string; mode: number; type
   return entries
 }
 
-function gzipBytes(archive: Buffer): Buffer {
-  return gunzipSync(archive)
-}
-
 /** Test-side single-entry ustar block (name/size/typeflag only — neither
  *  reader validates the checksum). Used ONLY to splice a decoy entry in front
  *  of a REAL `buildPluginTarball` archive; the builder is the only production
@@ -111,121 +88,79 @@ function prependRootManifestDecoy(archive: Buffer, manifest: { name: string; ver
 }
 
 test('buildPluginTarball packs a folder in the npm-pack layout with normalized modes and a valid manifest', async () => {
-  const fixture = makeFolder()
-  try {
-    write(fixture.path, 'package.json', JSON.stringify({ name: 'my-test-plugin', version: '1.2.3' }))
-    write(fixture.path, 'lib/index.js', 'export const x = 1\n')
-    write(fixture.path, 'assets/data.txt', 'payload')
-    mkdirSync(join(fixture.path, 'docs', 'empty'), { recursive: true })
-    const result = await buildPluginTarball(fixture.path)
-    assert.deepEqual(result.manifest, { ok: true, name: 'my-test-plugin', version: '1.2.3' })
-    assert.deepEqual(result.entries, [
-      'package/',
-      'package/assets/',
-      'package/assets/data.txt',
-      'package/docs/',
-      'package/docs/empty/',
-      'package/lib/',
-      'package/lib/index.js',
-      'package/package.json',
-    ])
-    assert.deepEqual(result.skipped, [])
-    // gzip magic + valid gzip stream.
-    assert.equal(result.buffer[0], 0x1f)
-    assert.equal(result.buffer[1], 0x8b)
-    const entries = tarHeaderEntries(gzipBytes(result.buffer))
-    const modes = new Map(entries.map(entry => [entry.name, entry.mode]))
-    assert.equal(modes.get('package/package.json'), 0o644)
-    assert.equal(modes.get('package/lib/index.js'), 0o644)
-    assert.equal(modes.get('package/'), 0o755)
-    assert.equal(modes.get('package/docs/empty/'), 0o755)
-    assert.equal(entries.find(entry => entry.name === 'package/')?.typeflag, '5')
-    assert.equal(entries.find(entry => entry.name === 'package/lib/index.js')?.typeflag, '0')
-  } finally {
-    fixture.cleanup()
-  }
+  const fixture = tempDir('plugin-tarball-')
+  write(fixture, 'package.json', JSON.stringify({ name: 'my-test-plugin', version: '1.2.3' }))
+  write(fixture, 'lib/index.js', 'export const x = 1\n')
+  write(fixture, 'assets/data.txt', 'payload')
+  mkdirSync(join(fixture, 'docs', 'empty'), { recursive: true })
+  const result = await buildPluginTarball(fixture)
+  assert.deepEqual(result.manifest, { ok: true, name: 'my-test-plugin', version: '1.2.3' })
+  assert.deepEqual(result.entries, ['package/', 'package/assets/', 'package/assets/data.txt', 'package/docs/', 'package/docs/empty/',
+    'package/lib/', 'package/lib/index.js', 'package/package.json'])
+  assert.deepEqual(result.skipped, [])
+  // gzip magic + valid gzip stream.
+  assert.equal(result.buffer[0], 0x1f)
+  assert.equal(result.buffer[1], 0x8b)
+  const entries = tarHeaderEntries(gunzipSync(result.buffer))
+  const modes = new Map(entries.map(entry => [entry.name, entry.mode]))
+  assert.equal(modes.get('package/package.json'), 0o644)
+  assert.equal(modes.get('package/lib/index.js'), 0o644)
+  assert.equal(modes.get('package/'), 0o755)
+  assert.equal(modes.get('package/docs/empty/'), 0o755)
+  assert.equal(entries.find(entry => entry.name === 'package/')?.typeflag, '5')
+  assert.equal(entries.find(entry => entry.name === 'package/lib/index.js')?.typeflag, '0')
 })
-
 test('buildPluginTarball: the gzip archive roundtrips through listTgzManifest', async () => {
-  const fixture = makeFolder()
-  try {
-    write(fixture.path, 'package.json', JSON.stringify({ name: '@scope/dsh-plugin-x', version: '2.0.0-beta.1+build.5' }))
-    const result = await buildPluginTarball(fixture.path)
-    assert.deepEqual(listTgzManifest(result.buffer), { name: '@scope/dsh-plugin-x', version: '2.0.0-beta.1+build.5' })
-  } finally {
-    fixture.cleanup()
-  }
+  const fixture = tempDir('plugin-tarball-')
+  write(fixture, 'package.json', JSON.stringify({ name: '@scope/dsh-plugin-x', version: '2.0.0-beta.1+build.5' }))
+  const result = await buildPluginTarball(fixture)
+  assert.deepEqual(listTgzManifest(result.buffer), { name: '@scope/dsh-plugin-x', version: '2.0.0-beta.1+build.5' })
 })
-
 test('listTgzManifest returns null for garbage, non-gzip and manifest-less archives — never a guess', async () => {
   assert.equal(listTgzManifest(Buffer.from('not a tarball at all')), null)
   assert.equal(listTgzManifest(Buffer.from([0x1f, 0x8b, 0x00, 0x01])), null)
-  const emptyDir = makeFolder()
-  try {
-    mkdirSync(join(emptyDir.path, 'lib'), { recursive: true })
-    const result = await buildPluginTarball(emptyDir.path)
-    assert.equal(result.manifest.ok, false, 'a folder without package.json has no manifest')
-    assert.equal(listTgzManifest(result.buffer), null, 'an archive without package.json has no manifest')
-    assert.deepEqual(result.entries, ['package/', 'package/lib/'])
-  } finally {
-    emptyDir.cleanup()
-  }
+  const emptyDir = tempDir('plugin-tarball-')
+  mkdirSync(join(emptyDir, 'lib'), { recursive: true })
+  const result = await buildPluginTarball(emptyDir)
+  assert.equal(result.manifest.ok, false, 'a folder without package.json has no manifest')
+  assert.equal(listTgzManifest(result.buffer), null, 'an archive without package.json has no manifest')
+  assert.deepEqual(result.entries, ['package/', 'package/lib/'])
 })
-
 test('buildPluginTarball skips symlinks and node_modules/.git subtrees with honest notes', async () => {
-  const fixture = makeFolder()
-  try {
-    write(fixture.path, 'package.json', JSON.stringify({ name: 'skips', version: '1.0.0' }))
-    write(fixture.path, 'real.js', 'x')
-    symlinkSync(join(fixture.path, 'real.js'), join(fixture.path, 'link.js'))
-    write(fixture.path, 'node_modules/dep/index.js', 'nested install tree')
-    write(fixture.path, '.git/config', '[core]')
-    mkdirSync(join(fixture.path, 'src', '.git'), { recursive: true })
-    write(fixture.path, 'src/.git/HEAD', 'ref: refs/heads/main')
-    const result = await buildPluginTarball(fixture.path)
-    assert.ok(!result.entries.some(name => name.includes('link.js') || name.includes('node_modules') || name.includes('.git')),
-      `archive must not contain skipped paths: ${result.entries.join(', ')}`)
-    assert.deepEqual(result.skipped, [
-      'package/.git/ (.git excluded)',
-      'package/node_modules/ (node_modules excluded)',
-      'package/src/.git/ (.git excluded)',
-      'package/link.js (symbolic link, not packed)',
-    ])
-  } finally {
-    fixture.cleanup()
-  }
+  const fixture = tempDir('plugin-tarball-')
+  write(fixture, 'package.json', JSON.stringify({ name: 'skips', version: '1.0.0' }))
+  write(fixture, 'real.js', 'x')
+  symlinkSync(join(fixture, 'real.js'), join(fixture, 'link.js'))
+  write(fixture, 'node_modules/dep/index.js', 'nested install tree')
+  write(fixture, '.git/config', '[core]')
+  mkdirSync(join(fixture, 'src', '.git'), { recursive: true })
+  write(fixture, 'src/.git/HEAD', 'ref: refs/heads/main')
+  const result = await buildPluginTarball(fixture)
+  assert.ok(!result.entries.some(name => name.includes('link.js') || name.includes('node_modules') || name.includes('.git')),
+    `archive must not contain skipped paths: ${result.entries.join(', ')}`)
+  assert.deepEqual(result.skipped, ['package/.git/ (.git excluded)', 'package/node_modules/ (node_modules excluded)',
+    'package/src/.git/ (.git excluded)', 'package/link.js (symbolic link, not packed)'])
 })
-
 test('buildPluginTarball: a symlinked package.json can never contradict the upload headers', async () => {
-  const fixture = makeFolder()
-  try {
-    write(fixture.path, 'real-manifest.json', JSON.stringify({ name: 'sym-pkg', version: '1.0.0' }))
-    symlinkSync(join(fixture.path, 'real-manifest.json'), join(fixture.path, 'package.json'))
-    await assert.rejects(buildPluginTarball(fixture.path), (error: unknown) => {
-      assert.equal((error as Error & { code?: string }).code, 'folder_changed')
-      return true
-    })
-  } finally {
-    fixture.cleanup()
-  }
+  const fixture = tempDir('plugin-tarball-')
+  write(fixture, 'real-manifest.json', JSON.stringify({ name: 'sym-pkg', version: '1.0.0' }))
+  symlinkSync(join(fixture, 'real-manifest.json'), join(fixture, 'package.json'))
+  await assert.rejects(buildPluginTarball(fixture), (error: unknown) => {
+    assert.equal((error as Error & { code?: string }).code, 'folder_changed')
+    return true
+  })
 })
-
 test('buildPluginTarball: a relative entry path beyond 100 bytes is an honest path_too_long error', async () => {
-  const fixture = makeFolder()
-  try {
-    const deep = `dir/${'segment'.repeat(14)}/file.js` // > 100 bytes relative
-    write(fixture.path, deep, 'x')
-    write(fixture.path, 'package.json', JSON.stringify({ name: 'deep-pkg', version: '1.0.0' }))
-    await assert.rejects(buildPluginTarball(fixture.path), (error: unknown) => {
-      assert.equal((error as Error & { code?: string }).code, 'path_too_long')
-      assert.match((error as Error).message, /100-byte ustar/)
-      return true
-    })
-  } finally {
-    fixture.cleanup()
-  }
+  const fixture = tempDir('plugin-tarball-')
+  const deep = `dir/${'segment'.repeat(14)}/file.js` // > 100 bytes relative
+  write(fixture, deep, 'x')
+  write(fixture, 'package.json', JSON.stringify({ name: 'deep-pkg', version: '1.0.0' }))
+  await assert.rejects(buildPluginTarball(fixture), (error: unknown) => {
+    assert.equal((error as Error & { code?: string }).code, 'path_too_long')
+    assert.match((error as Error).message, /100-byte ustar/)
+    return true
+  })
 })
-
 test('buildPluginTarball: the ustar 100-byte name bound is measured in UTF-8 bytes, not UTF-16 units', async () => {
   // 'package/' (8 bytes) + 30 CJK chars (90 bytes) + suffix. The retired
   // `archivePath.length > 100` check read 40/41 UTF-16 units for these paths,
@@ -235,181 +170,130 @@ test('buildPluginTarball: the ustar 100-byte name bound is measured in UTF-8 byt
   const overFile = `${'中'.repeat(30)}abc` // archive path: 101 bytes
   const exactDir = `${'中'.repeat(30)}a/` // archive path: exactly 100 bytes
   const overDir = `${'中'.repeat(30)}ab/` // archive path: 101 bytes
-
-  const atBoundary = makeFolder()
-  try {
-    write(atBoundary.path, exactFile, 'x')
-    mkdirSync(join(atBoundary.path, exactDir), { recursive: true })
-    write(atBoundary.path, 'package.json', JSON.stringify({ name: 'cjk-boundary', version: '1.0.0' }))
-    const result = await buildPluginTarball(atBoundary.path)
-    const headerNames = tarHeaderEntries(gzipBytes(result.buffer)).map(entry => entry.name)
-    for (const target of [`package/${exactDir}`, `package/${exactFile}`]) {
-      assert.equal(Buffer.byteLength(target, 'utf8'), 100, `fixture must sit exactly on the byte bound: ${target}`)
-      assert.ok(target.length < 100, 'the retired UTF-16 check would have accepted this path')
-      assert.ok(result.entries.includes(target), `entries must report the full 100-byte path: ${target}`)
-      assert.ok(headerNames.includes(target), `the header name must be the full 100-byte path, not truncated: ${headerNames.join(', ')}`)
-    }
-  } finally {
-    atBoundary.cleanup()
+  const atBoundary = tempDir('plugin-tarball-')
+  write(atBoundary, exactFile, 'x')
+  mkdirSync(join(atBoundary, exactDir), { recursive: true })
+  write(atBoundary, 'package.json', JSON.stringify({ name: 'cjk-boundary', version: '1.0.0' }))
+  const result = await buildPluginTarball(atBoundary)
+  const headerNames = tarHeaderEntries(gunzipSync(result.buffer)).map(entry => entry.name)
+  for (const target of [`package/${exactDir}`, `package/${exactFile}`]) {
+    assert.equal(Buffer.byteLength(target, 'utf8'), 100, `fixture must sit exactly on the byte bound: ${target}`)
+    assert.ok(target.length < 100, 'the retired UTF-16 check would have accepted this path')
+    assert.ok(result.entries.includes(target), `entries must report the full 100-byte path: ${target}`)
+    assert.ok(headerNames.includes(target), `the header name must be the full 100-byte path, not truncated: ${headerNames.join(', ')}`)
   }
-
   for (const kind of ['file', 'directory'] as const) {
-    const fixture = makeFolder()
-    try {
-      const over = kind === 'file' ? overFile : overDir
-      if (kind === 'file') write(fixture.path, over, 'x')
-      else mkdirSync(join(fixture.path, over), { recursive: true })
-      write(fixture.path, 'package.json', JSON.stringify({ name: 'cjk-boundary', version: '1.0.0' }))
-      assert.equal(Buffer.byteLength(`package/${over}`, 'utf8'), 101, kind)
-      await assert.rejects(buildPluginTarball(fixture.path), (error: unknown) => {
-        assert.equal((error as Error & { code?: string }).code, 'path_too_long', kind)
-        assert.match((error as Error).message, /100-byte ustar name field/, kind)
-        return true
-      })
-    } finally {
-      fixture.cleanup()
-    }
+    const fixture = tempDir('plugin-tarball-')
+    const over = kind === 'file' ? overFile : overDir
+    if (kind === 'file') write(fixture, over, 'x')
+    else mkdirSync(join(fixture, over), { recursive: true })
+    write(fixture, 'package.json', JSON.stringify({ name: 'cjk-boundary', version: '1.0.0' }))
+    assert.equal(Buffer.byteLength(`package/${over}`, 'utf8'), 101, kind)
+    await assert.rejects(buildPluginTarball(fixture), (error: unknown) => {
+      assert.equal((error as Error & { code?: string }).code, 'path_too_long', kind)
+      assert.match((error as Error).message, /100-byte ustar name field/, kind)
+      return true
+    })
   }
 })
-
 test('buildPluginTarball: injected entry-cap and unpacked-byte limits error with the mirror codes', async () => {
-  const many = makeFolder()
-  try {
-    for (let index = 0; index < 10; index += 1) write(many.path, `f${index}.js`, 'x')
-    write(many.path, 'package.json', JSON.stringify({ name: 'cap-pkg', version: '1.0.0' }))
-    await assert.rejects(
-      buildPluginTarball(many.path, { limits: { maxEntries: 4 } }),
-      (error: unknown) => (error as Error & { code?: string }).code === 'too_many_entries',
-    )
-  } finally {
-    many.cleanup()
-  }
-
-  const big = makeFolder()
-  try {
-    write(big.path, 'big.bin', Buffer.alloc(2000, 7))
-    write(big.path, 'package.json', JSON.stringify({ name: 'cap-pkg', version: '1.0.0' }))
-    await assert.rejects(
-      buildPluginTarball(big.path, { limits: { maxUnpackedBytes: 1000 } }),
-      (error: unknown) => (error as Error & { code?: string }).code === 'too_large',
-    )
-  } finally {
-    big.cleanup()
-  }
-
-  const gz = makeFolder()
-  try {
-    // True-random content so gzip cannot shrink it under the archive cap.
-    write(gz.path, 'blob.bin', randomBytes(8192))
-    write(gz.path, 'package.json', JSON.stringify({ name: 'cap-pkg', version: '1.0.0' }))
-    await assert.rejects(
-      buildPluginTarball(gz.path, { limits: { maxArchiveBytes: 1024 } }),
-      (error: unknown) => (error as Error & { code?: string }).code === 'archive_too_large',
-    )
-  } finally {
-    gz.cleanup()
-  }
+  const many = tempDir('plugin-tarball-')
+  for (let index = 0; index < 10; index += 1) write(many, `f${index}.js`, 'x')
+  write(many, 'package.json', JSON.stringify({ name: 'cap-pkg', version: '1.0.0' }))
+  await assert.rejects(
+    buildPluginTarball(many, { limits: { maxEntries: 4 } }),
+    (error: unknown) => (error as Error & { code?: string }).code === 'too_many_entries',
+  )
+  const big = tempDir('plugin-tarball-')
+  write(big, 'big.bin', Buffer.alloc(2000, 7))
+  write(big, 'package.json', JSON.stringify({ name: 'cap-pkg', version: '1.0.0' }))
+  await assert.rejects(
+    buildPluginTarball(big, { limits: { maxUnpackedBytes: 1000 } }),
+    (error: unknown) => (error as Error & { code?: string }).code === 'too_large',
+  )
+  const gz = tempDir('plugin-tarball-')
+  // True-random content so gzip cannot shrink it under the archive cap.
+  write(gz, 'blob.bin', randomBytes(8192))
+  write(gz, 'package.json', JSON.stringify({ name: 'cap-pkg', version: '1.0.0' }))
+  await assert.rejects(
+    buildPluginTarball(gz, { limits: { maxArchiveBytes: 1024 } }),
+    (error: unknown) => (error as Error & { code?: string }).code === 'archive_too_large',
+  )
 })
-
 test('buildPluginTarball: padded-footprint accounting (gateway-scan parity) rejects the raw-bytes acceptance window', async () => {
-  const fixture = makeFolder()
-  try {
-    // 1 directory + package.json + 6 one-byte files: 8 headers × 512 +
-    // padded data. RAW accounting (headers + unpadded body bytes ≈ 4138)
-    // fits a 5000-byte bound, but padded accounting (7680 bytes without
-    // the end marker, 8704 with it) does not — the padded-vs-raw divergence
-    // is what this window pins. The dedicated marker case below pins the
-    // 1024-byte end-marker reservation itself.
-    write(fixture.path, 'package.json', JSON.stringify({ name: 'cap-pkg', version: '1.0.0' }))
-    for (let index = 0; index < 6; index += 1) write(fixture.path, `f${index}.js`, 'x')
-    await assert.rejects(
-      buildPluginTarball(fixture.path, { limits: { maxUnpackedBytes: 5000 } }),
-      (error: unknown) => (error as Error & { code?: string }).code === 'too_large',
-    )
-  } finally {
-    fixture.cleanup()
-  }
+  // 1 directory + package.json + 6 one-byte files: 8 headers × 512 +
+  // padded data. RAW accounting (headers + unpadded body bytes ≈ 4138)
+  // fits a 5000-byte bound, but padded accounting (7680 bytes without
+  // the end marker, 8704 with it) does not — the padded-vs-raw divergence
+  // is what this window pins. The dedicated marker case below pins the
+  // 1024-byte end-marker reservation itself.
+  const fixture = tempDir('plugin-tarball-')
+  write(fixture, 'package.json', JSON.stringify({ name: 'cap-pkg', version: '1.0.0' }))
+  for (let index = 0; index < 6; index += 1) write(fixture, `f${index}.js`, 'x')
+  await assert.rejects(
+    buildPluginTarball(fixture, { limits: { maxUnpackedBytes: 5000 } }),
+    (error: unknown) => (error as Error & { code?: string }).code === 'too_large',
+  )
 })
-
 test('every archive the desktop builder accepts is accepted by the real gateway tgz scan', async () => {
-  const fixture = makeFolder()
-  try {
-    // A deliberately tight builder bound (default caps would need hundreds
-    // of MiB of fixtures). Any archive that passes the builder's padded
-    // pre-check must also pass the gateway route's scan with the DEFAULT
-    // caps — the two accounting formulas must agree, end marker included.
-    for (let index = 0; index < 12; index += 1) write(fixture.path, `lib/m${index}.js`, `export const m${index} = ${index}\n`)
-    write(fixture.path, 'package.json', JSON.stringify({ name: 'parity-pkg', version: '0.1.0' }))
-    const result = await buildPluginTarball(fixture.path, { limits: { maxUnpackedBytes: 16 * 1024 } })
-    const scanned = await scanTgzMetadata(result.buffer)
-    assert.deepEqual(
-      { ok: scanned.ok, entries: scanned.ok ? scanned.entries : null, error: scanned.ok ? null : scanned.error },
-      { ok: true, entries: 15, error: null },
-      'a desktop-built archive must always pass the gateway materialize scan (entries: package/ + package/lib/ + package.json + 12 files)',
-    )
-  } finally {
-    fixture.cleanup()
-  }
+  // A deliberately tight builder bound (default caps would need hundreds
+  // of MiB of fixtures). Any archive that passes the builder's padded
+  // pre-check must also pass the gateway route's scan with the DEFAULT
+  // caps — the two accounting formulas must agree, end marker included.
+  const fixture = tempDir('plugin-tarball-')
+  for (let index = 0; index < 12; index += 1) write(fixture, `lib/m${index}.js`, `export const m${index} = ${index}\n`)
+  write(fixture, 'package.json', JSON.stringify({ name: 'parity-pkg', version: '0.1.0' }))
+  const result = await buildPluginTarball(fixture, { limits: { maxUnpackedBytes: 16 * 1024 } })
+  const scanned = await scanTgzMetadata(result.buffer)
+  assert.deepEqual(
+    { ok: scanned.ok, entries: scanned.ok ? scanned.entries : null, error: scanned.ok ? null : scanned.error },
+    { ok: true, entries: 15, error: null },
+    'a desktop-built archive must always pass the gateway materialize scan (entries: package/ + package/lib/ + package.json + 12 files)',
+  )
 })
-
 test('a real desktop-built archive with an entry AFTER package/package.json still projects its manifest to the gateway scan', async () => {
-  const fixture = makeFolder()
-  try {
-    write(fixture.path, 'package.json', JSON.stringify({ name: 'e2e-capture-pkg', version: '1.2.3' }))
-    write(fixture.path, 'a.js', 'x')
-    // Sorted after package.json, so the archive's LAST file entry is zzz.txt —
-    // the exact shape the gateway scan used to reject as tgz_invalid.
-    write(fixture.path, 'zzz.txt', 'y')
-    const result = await buildPluginTarball(fixture.path)
-    assert.ok(
-      result.entries.indexOf('package/zzz.txt') > result.entries.indexOf('package/package.json'),
-      'fixture must carry an entry after package/package.json',
-    )
-    const scanned = await scanTgzMetadata(result.buffer)
-    assert.equal(scanned.ok, true)
-    if (scanned.ok) {
-      assert.deepEqual(scanned.manifest, { name: 'e2e-capture-pkg', version: '1.2.3' })
-      assert.equal(scanned.manifestError, undefined)
-    }
-    assert.deepEqual(listTgzManifest(result.buffer), { name: 'e2e-capture-pkg', version: '1.2.3' })
-  } finally {
-    fixture.cleanup()
+  const fixture = tempDir('plugin-tarball-')
+  write(fixture, 'package.json', JSON.stringify({ name: 'e2e-capture-pkg', version: '1.2.3' }))
+  write(fixture, 'a.js', 'x')
+  // Sorted after package.json, so the archive's LAST file entry is zzz.txt —
+  // the exact shape the gateway scan used to reject as tgz_invalid.
+  write(fixture, 'zzz.txt', 'y')
+  const result = await buildPluginTarball(fixture)
+  assert.ok(
+    result.entries.indexOf('package/zzz.txt') > result.entries.indexOf('package/package.json'),
+    'fixture must carry an entry after package/package.json',
+  )
+  const scanned = await scanTgzMetadata(result.buffer)
+  assert.equal(scanned.ok, true)
+  if (scanned.ok) {
+    assert.deepEqual(scanned.manifest, { name: 'e2e-capture-pkg', version: '1.2.3' })
+    assert.equal(scanned.manifestError, undefined)
   }
+  assert.deepEqual(listTgzManifest(result.buffer), { name: 'e2e-capture-pkg', version: '1.2.3' })
 })
-
 test('the 1024-byte end-of-archive marker is part of the unpacked budget (gateway inflated-bytes parity)', async () => {
-  const fixture = makeFolder()
-  try {
-    // Same folder shape as the parity test: 15 entries (headers 15×512) +
-    // 13 padded file bodies (13×512) = 14336 bytes WITHOUT the two-block
-    // end marker, 15360 WITH it. A 15000-byte cap therefore accepts the
-    // padded bodies and rejects ONLY because the marker is reserved — this
-    // pins the marker accounting itself (the gateway's actual-inflated-bytes
-    // guard counts the marker as real inflate output; its declared
-    // totalBytes stops at the end marker).
-    for (let index = 0; index < 12; index += 1) write(fixture.path, `lib/m${index}.js`, `export const m${index} = ${index}\n`)
-    write(fixture.path, 'package.json', JSON.stringify({ name: 'marker-pkg', version: '0.1.0' }))
-    await assert.rejects(
-      buildPluginTarball(fixture.path, { limits: { maxUnpackedBytes: 15000 } }),
-      (error: unknown) => (error as Error & { code?: string }).code === 'too_large',
-    )
-  } finally {
-    fixture.cleanup()
-  }
+  // Same folder shape as the parity test: 15 entries (headers 15×512) +
+  // 13 padded file bodies (13×512) = 14336 bytes WITHOUT the two-block
+  // end marker, 15360 WITH it. A 15000-byte cap therefore accepts the
+  // padded bodies and rejects ONLY because the marker is reserved — this
+  // pins the marker accounting itself (the gateway's actual-inflated-bytes
+  // guard counts the marker as real inflate output; its declared
+  // totalBytes stops at the end marker).
+  const fixture = tempDir('plugin-tarball-')
+  for (let index = 0; index < 12; index += 1) write(fixture, `lib/m${index}.js`, `export const m${index} = ${index}\n`)
+  write(fixture, 'package.json', JSON.stringify({ name: 'marker-pkg', version: '0.1.0' }))
+  await assert.rejects(
+    buildPluginTarball(fixture, { limits: { maxUnpackedBytes: 15000 } }),
+    (error: unknown) => (error as Error & { code?: string }).code === 'too_large',
+  )
 })
-
 test('buildPluginTarball: non-directory and missing paths are loud errors', async () => {
-  const fixture = makeFolder()
-  try {
-    const file = join(fixture.path, 'plain.txt')
-    writeFileSync(file, 'x')
-    await assert.rejects(buildPluginTarball(file), (error: unknown) => (error as Error & { code?: string }).code === 'not_a_directory')
-    await assert.rejects(buildPluginTarball(join(fixture.path, 'nope')), (error: unknown) => (error as Error & { code?: string }).code === 'unreadable')
-  } finally {
-    fixture.cleanup()
-  }
+  const fixture = tempDir('plugin-tarball-')
+  const file = join(fixture, 'plain.txt')
+  writeFileSync(file, 'x')
+  await assert.rejects(buildPluginTarball(file), (error: unknown) => (error as Error & { code?: string }).code === 'not_a_directory')
+  await assert.rejects(buildPluginTarball(join(fixture, 'nope')), (error: unknown) => (error as Error & { code?: string }).code === 'unreadable')
 })
-
 test('buildPluginTarball manifest validation: name/version whitelists + JSON honesty (shape only)', async () => {
   // The retired domain deny (design 21 §6.11.5): building an upload is SHAPE
   // validation only — an official/chamber-scope package may be packed, staged
@@ -426,34 +310,25 @@ test('buildPluginTarball manifest validation: name/version whitelists + JSON hon
     { pkg: '{broken json', manifestName: null, nameOnly: null, errorMatch: /not valid JSON/ },
   ]
   for (const entry of manifestTests) {
-    const fixture = makeFolder()
-    try {
-      write(fixture.path, 'package.json', typeof entry.pkg === 'string' ? entry.pkg : JSON.stringify(entry.pkg))
-      write(fixture.path, 'index.js', 'x')
-      const result = await buildPluginTarball(fixture.path)
-      assert.equal(result.manifest.ok, entry.manifestName !== null)
-      if (entry.manifestName !== null && result.manifest.ok) assert.equal(result.manifest.name, entry.manifestName)
-      if (!result.manifest.ok) assert.match(result.manifest.error, entry.errorMatch)
-      // pluginNameFromFolder is the NAME-ONLY read (plan §6.5): it applies the
-      // registry name whitelist and nothing else (no version, no domain rule).
-      assert.equal(pluginNameFromFolder(fixture.path), entry.nameOnly)
-    } finally {
-      fixture.cleanup()
-    }
+    const fixture = tempDir('plugin-tarball-')
+    write(fixture, 'package.json', typeof entry.pkg === 'string' ? entry.pkg : JSON.stringify(entry.pkg))
+    write(fixture, 'index.js', 'x')
+    const result = await buildPluginTarball(fixture)
+    assert.equal(result.manifest.ok, entry.manifestName !== null)
+    if (entry.manifestName !== null && result.manifest.ok) assert.equal(result.manifest.name, entry.manifestName)
+    if (!result.manifest.ok) assert.match(result.manifest.error, entry.errorMatch)
+    // pluginNameFromFolder is the NAME-ONLY read (plan §6.5): it applies the
+    // registry name whitelist and nothing else (no version, no domain rule).
+    assert.equal(pluginNameFromFolder(fixture), entry.nameOnly)
   }
 })
-
 test('pluginNameFromFolder: an oversized package.json is refused, a plain-name read succeeds', async () => {
-  const fixture = makeFolder()
-  try {
-    const path = join(fixture.path, 'package.json')
-    writeFileSync(path, `{"name":"x","version":"1.0.0"}`.padEnd(PLUGIN_MANIFEST_MAX_BYTES + 10, ' '))
-    assert.equal(pluginNameFromFolder(fixture.path), null, 'the 64 KiB read bound must hold')
-    writeFileSync(path, JSON.stringify({ name: 'plain-name', version: '0.0.1' }))
-    assert.equal(pluginNameFromFolder(fixture.path), 'plain-name')
-  } finally {
-    fixture.cleanup()
-  }
+  const fixture = tempDir('plugin-tarball-')
+  const path = join(fixture, 'package.json')
+  writeFileSync(path, `{"name":"x","version":"1.0.0"}`.padEnd(PLUGIN_MANIFEST_MAX_BYTES + 10, ' '))
+  assert.equal(pluginNameFromFolder(fixture), null, 'the 64 KiB read bound must hold')
+  writeFileSync(path, JSON.stringify({ name: 'plain-name', version: '0.0.1' }))
+  assert.equal(pluginNameFromFolder(fixture), 'plain-name')
 })
 
 // ---------------------------------------------------------------------------
@@ -463,78 +338,61 @@ test('pluginNameFromFolder: an oversized package.json is refused, a plain-name r
 // ---------------------------------------------------------------------------
 
 test('classifyPluginPick: a directory is a dir source; a ready tgz archive is read with its manifest', async () => {
-  const fixture = makeFolder()
-  try {
-    // Directory → dir source, no read.
-    const dirPick = classifyPluginPick(fixture.path)
-    assert.deepEqual(dirPick, { ok: true, source: { kind: 'dir', path: fixture.path } })
-
-    // A real plugin source folder packed by the builder → written out as a
-    // .tgz → classified as a verbatim archive whose bytes roundtrip.
-    write(fixture.path, 'package.json', JSON.stringify({ name: 'pick-ok-pkg', version: '0.0.1' }))
-    write(fixture.path, 'index.js', 'x')
-    const built = await buildPluginTarball(fixture.path)
-    assert.equal(built.manifest.ok, true)
-    const archivePath = join(fixture.path, '..', 'pick-ok-pkg-0.0.1.tgz')
-    writeFileSync(archivePath, built.buffer)
-    const pick = classifyPluginPick(archivePath)
-    assert.equal(pick.ok, true)
-    if (pick.ok) {
-      assert.equal(pick.source.kind, 'tgz')
-      if (pick.source.kind === 'tgz') {
-        assert.equal(pick.source.path, archivePath)
-        assert.equal(pick.source.name, 'pick-ok-pkg')
-        assert.equal(pick.source.version, '0.0.1')
-        assert.ok(pick.source.bytes.equals(built.buffer), 'the archive bytes are preserved verbatim')
-        assert.deepEqual(listTgzManifest(pick.source.bytes), { name: 'pick-ok-pkg', version: '0.0.1' })
-      }
+  const fixture = tempDir('plugin-tarball-')
+  // Directory → dir source, no read.
+  const dirPick = classifyPluginPick(fixture)
+  assert.deepEqual(dirPick, { ok: true, source: { kind: 'dir', path: fixture } })
+  // A real plugin source folder packed by the builder → written out as a
+  // .tgz → classified as a verbatim archive whose bytes roundtrip.
+  write(fixture, 'package.json', JSON.stringify({ name: 'pick-ok-pkg', version: '0.0.1' }))
+  write(fixture, 'index.js', 'x')
+  const built = await buildPluginTarball(fixture)
+  assert.equal(built.manifest.ok, true)
+  const archivePath = join(fixture, '..', 'pick-ok-pkg-0.0.1.tgz')
+  writeFileSync(archivePath, built.buffer)
+  const pick = classifyPluginPick(archivePath)
+  assert.equal(pick.ok, true)
+  if (pick.ok) {
+    assert.equal(pick.source.kind, 'tgz')
+    if (pick.source.kind === 'tgz') {
+      assert.equal(pick.source.path, archivePath)
+      assert.equal(pick.source.name, 'pick-ok-pkg')
+      assert.equal(pick.source.version, '0.0.1')
+      assert.ok(pick.source.bytes.equals(built.buffer), 'the archive bytes are preserved verbatim')
+      assert.deepEqual(listTgzManifest(pick.source.bytes), { name: 'pick-ok-pkg', version: '0.0.1' })
     }
-  } finally {
-    fixture.cleanup()
   }
 })
-
 test('classifyPluginPick: refusals — missing path, non-tgz file, garbage tgz, empty pick', () => {
-  const fixture = makeFolder()
-  try {
-    assert.equal(classifyPluginPick('').ok, false)
-    const missing = classifyPluginPick(join(fixture.path, 'nope.tgz'))
-    assert.equal(missing.ok, false)
-    if (!missing.ok) assert.match(missing.error, /no longer exists/)
-
-    const plain = join(fixture.path, 'notes.txt')
-    writeFileSync(plain, 'not an archive')
-    const notTgz = classifyPluginPick(plain)
-    assert.equal(notTgz.ok, false)
-    if (!notTgz.ok) assert.match(notTgz.error, /source folder or a \.tgz plugin archive/)
-
-    const garbage = join(fixture.path, 'garbage.tgz')
-    writeFileSync(garbage, randomBytes(256))
-    const bad = classifyPluginPick(garbage)
-    assert.equal(bad.ok, false)
-    if (!bad.ok) assert.match(bad.error, /not a valid plugin archive/)
-  } finally {
-    fixture.cleanup()
-  }
+  const fixture = tempDir('plugin-tarball-')
+  assert.equal(classifyPluginPick('').ok, false)
+  const missing = classifyPluginPick(join(fixture, 'nope.tgz'))
+  assert.equal(missing.ok, false)
+  if (!missing.ok) assert.match(missing.error, /no longer exists/)
+  const plain = join(fixture, 'notes.txt')
+  writeFileSync(plain, 'not an archive')
+  const notTgz = classifyPluginPick(plain)
+  assert.equal(notTgz.ok, false)
+  if (!notTgz.ok) assert.match(notTgz.error, /source folder or a \.tgz plugin archive/)
+  const garbage = join(fixture, 'garbage.tgz')
+  writeFileSync(garbage, randomBytes(256))
+  const bad = classifyPluginPick(garbage)
+  assert.equal(bad.ok, false)
+  if (!bad.ok) assert.match(bad.error, /not a valid plugin archive/)
 })
-
 test('classifyPluginPick: an archive beyond TARBALL_MAX_ARCHIVE_BYTES is refused before any read', () => {
-  const fixture = makeFolder()
+  const fixture = tempDir('plugin-tarball-')
+  const oversized = join(fixture, 'huge.tgz')
+  const fd = openSync(oversized, 'w')
   try {
-    const oversized = join(fixture.path, 'huge.tgz')
-    const fd = openSync(oversized, 'w')
-    try {
-      // Truncate to cap+1 — no 33 MiB allocation needed; stat is the gate.
-      ftruncateSync(fd, TARBALL_MAX_ARCHIVE_BYTES + 1)
-    } finally {
-      closeSync(fd)
-    }
-    const pick = classifyPluginPick(oversized)
-    assert.equal(pick.ok, false)
-    if (!pick.ok) assert.match(pick.error, new RegExp(`beyond the ${TARBALL_MAX_ARCHIVE_BYTES}-byte plugin archive cap`))
+    // Truncate to cap+1 — no 33 MiB allocation needed; stat is the gate.
+    ftruncateSync(fd, TARBALL_MAX_ARCHIVE_BYTES + 1)
   } finally {
-    fixture.cleanup()
+    closeSync(fd)
   }
+  const pick = classifyPluginPick(oversized)
+  assert.equal(pick.ok, false)
+  if (!pick.ok) assert.match(pick.error, new RegExp(`beyond the ${TARBALL_MAX_ARCHIVE_BYTES}-byte plugin archive cap`))
 })
 
 // ---------------------------------------------------------------------------
@@ -544,58 +402,48 @@ test('classifyPluginPick: an archive beyond TARBALL_MAX_ARCHIVE_BYTES is refused
 // ---------------------------------------------------------------------------
 
 test('classifyPluginPick: a stray root package.json can never mask the installed package/package.json identity', async () => {
-  const fixture = makeFolder()
-  const archivePath = join(tmpdir(), `decoy-root-manifest-${randomBytes(6).toString('hex')}.tgz`)
-  try {
-    write(fixture.path, 'package.json', JSON.stringify({ name: '@dsh-chamber/taken-seed', version: '9.9.9' }))
-    write(fixture.path, 'index.js', 'x')
-    const built = await buildPluginTarball(fixture.path)
-    assert.equal(built.manifest.ok, true)
-    // Decoy FIRST in archive order: the retired reader returned the first
-    // parseable candidate, i.e. this innocent third-party name — and the ssh /
-    // local write faces judged the protected-set on THAT name.
-    const decoy = prependRootManifestDecoy(built.buffer, { name: 'innocent-third-party', version: '1.0.0' })
-    writeFileSync(archivePath, decoy)
-    const pick = classifyPluginPick(archivePath)
-    assert.equal(
-      pick.ok,
-      false,
-      pick.ok ? `wrongly accepted as ${pick.source.kind === 'tgz' ? pick.source.name : pick.source.path}` : '',
-    )
-    if (!pick.ok) {
-      assert.ok(pick.error.includes('innocent-third-party'), pick.error)
-      assert.ok(pick.error.includes('@dsh-chamber/taken-seed'), pick.error)
-    }
-    // The bounded reader itself exposes BOTH names structurally.
-    const inspection = inspectTgzManifest(readFileSync(archivePath))
-    assert.equal(inspection.ok, false)
-    if (!inspection.ok && inspection.reason === 'identity_mismatch') {
-      assert.deepEqual(inspection.installed, { name: '@dsh-chamber/taken-seed', version: '9.9.9' })
-      assert.deepEqual(inspection.declared, { name: 'innocent-third-party', version: '1.0.0' })
-    } else {
-      assert.fail(`expected identity_mismatch, got ${JSON.stringify(inspection)}`)
-    }
-  } finally {
-    fixture.cleanup()
-    rmSync(archivePath, { force: true })
+  const fixture = tempDir('plugin-tarball-')
+  const archivePath = join(fixture, 'decoy.tgz')
+  write(fixture, 'package.json', JSON.stringify({ name: '@dsh-chamber/taken-seed', version: '9.9.9' }))
+  write(fixture, 'index.js', 'x')
+  const built = await buildPluginTarball(fixture)
+  assert.equal(built.manifest.ok, true)
+  // Decoy FIRST in archive order: the retired reader returned the first
+  // parseable candidate, i.e. this innocent third-party name — and the ssh /
+  // local write faces judged the protected-set on THAT name.
+  const decoy = prependRootManifestDecoy(built.buffer, { name: 'innocent-third-party', version: '1.0.0' })
+  writeFileSync(archivePath, decoy)
+  const pick = classifyPluginPick(archivePath)
+  assert.equal(
+    pick.ok,
+    false,
+    pick.ok ? `wrongly accepted as ${pick.source.kind === 'tgz' ? pick.source.name : pick.source.path}` : '',
+  )
+  if (!pick.ok) {
+    assert.ok(pick.error.includes('innocent-third-party'), pick.error)
+    assert.ok(pick.error.includes('@dsh-chamber/taken-seed'), pick.error)
+  }
+  // The bounded reader itself exposes BOTH names structurally.
+  const inspection = inspectTgzManifest(readFileSync(archivePath))
+  assert.equal(inspection.ok, false)
+  if (!inspection.ok && inspection.reason === 'identity_mismatch') {
+    assert.deepEqual(inspection.installed, { name: '@dsh-chamber/taken-seed', version: '9.9.9' })
+    assert.deepEqual(inspection.declared, { name: 'innocent-third-party', version: '1.0.0' })
+  } else {
+    assert.fail(`expected identity_mismatch, got ${JSON.stringify(inspection)}`)
   }
 })
-
 test('classifyPluginPick: a root package.json alone is still the fallback identity (no installed-path manifest)', () => {
-  const archivePath = join(tmpdir(), `root-manifest-only-${randomBytes(6).toString('hex')}.tgz`)
-  try {
-    writeFileSync(archivePath, gzipSync(Buffer.concat([
-      ustarEntry('package.json', JSON.stringify({ name: 'legacy-root-only', version: '0.1.0' })),
-      Buffer.alloc(1024),
-    ])))
-    const pick = classifyPluginPick(archivePath)
-    assert.equal(pick.ok, true, pick.ok ? '' : pick.error)
-    if (pick.ok && pick.source.kind === 'tgz') {
-      assert.equal(pick.source.name, 'legacy-root-only')
-      assert.equal(pick.source.version, '0.1.0')
-    }
-  } finally {
-    rmSync(archivePath, { force: true })
+  const archivePath = join(tempDir('plugin-tarball-'), 'root-only.tgz')
+  writeFileSync(archivePath, gzipSync(Buffer.concat([
+    ustarEntry('package.json', JSON.stringify({ name: 'legacy-root-only', version: '0.1.0' })),
+    Buffer.alloc(1024),
+  ])))
+  const pick = classifyPluginPick(archivePath)
+  assert.equal(pick.ok, true, pick.ok ? '' : pick.error)
+  if (pick.ok && pick.source.kind === 'tgz') {
+    assert.equal(pick.source.name, 'legacy-root-only')
+    assert.equal(pick.source.version, '0.1.0')
   }
 })
 
@@ -612,7 +460,6 @@ test('TARBALL_MAX_ARCHIVE_BYTES stays locked to routes.ts MATERIALIZE_MAX_BYTES'
   assert.ok(match !== null, 'routes.ts MATERIALIZE_MAX_BYTES literal not found')
   assert.equal(TARBALL_MAX_ARCHIVE_BYTES, Number(match[1]) * 1024 * 1024)
 })
-
 test('TARBALL_MAX_ENTRIES / TARBALL_MAX_UNPACKED_BYTES stay locked to tgz-scan.ts caps', () => {
   const entries = /export const TGZ_MAX_ENTRIES = (\d+)/.exec(gatewayTgzScanSource)
   assert.ok(entries !== null, 'tgz-scan.ts TGZ_MAX_ENTRIES literal not found')
@@ -621,7 +468,6 @@ test('TARBALL_MAX_ENTRIES / TARBALL_MAX_UNPACKED_BYTES stay locked to tgz-scan.t
   assert.ok(bytes !== null, 'tgz-scan.ts TGZ_MAX_UNPACKED_BYTES literal not found')
   assert.equal(TARBALL_MAX_UNPACKED_BYTES, Number(bytes[1]) * 1024 * 1024)
 })
-
 test('GATEWAY_PLUGIN_VERSION_PATTERN stays locked to routes.ts PLUGIN_VERSION_PATTERN', () => {
   const line = gatewayRoutesSource.split('\n').find(sourceLine => sourceLine.includes('PLUGIN_VERSION_PATTERN = /'))
   assert.ok(line !== undefined, 'routes.ts PLUGIN_VERSION_PATTERN literal not found')

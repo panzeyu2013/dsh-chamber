@@ -11,13 +11,10 @@ import assert from 'node:assert/strict'
 import { createOpenInSourceAdapter, type OpenInChoiceStore, type OpenInMainPool } from '../../src/client/source-adapter.ts'
 import type { MachineCatalog } from '../../src/client/machine-catalog.ts'
 import { parseOpenInSource, type OpenInApp } from '../../src/shared/capabilities.ts'
-import type { OpenInBridgeSurface, Translate } from '../../src/shared/coordinator.ts'
+import type { OpenInBridgeSurface } from '../../src/shared/coordinator.ts'
+import { FINDER, VSCODE, settle, t } from '../support/harness.ts'
 
-const FINDER: OpenInApp = { id: 'finder', displayKind: 'file-manager', remoteCapable: false, available: true }
-const VSCODE: OpenInApp = { id: 'vscode', displayKind: 'vscode', remoteCapable: true, available: true }
-const GHOST_VSCODE: OpenInApp = { id: 'vscode', displayKind: 'vscode', remoteCapable: true, available: false }
-
-const t: Translate = (key, params) => (params === undefined ? key : `${key}:${JSON.stringify(params)}`)
+const GHOST_VSCODE = { ...VSCODE, available: false }
 
 function mainPool(initial: readonly OpenInApp[] | null): { pool: OpenInMainPool; set(next: readonly OpenInApp[] | null): void; refreshes(): number } {
   let apps = initial
@@ -106,21 +103,23 @@ function bridge(openImpl: OpenInBridge['open']): OpenInBridgeRoot {
   return { openIn: { apps: async () => [], open: openImpl } }
 }
 
-async function settle(): Promise<void> {
-  await new Promise(resolve => setTimeout(resolve, 0))
+type AdapterDeps = Parameters<typeof createOpenInSourceAdapter>[0]
+
+/** The adapter under test with the local-source defaults, overridable per case. */
+function localAdapter(over: Partial<AdapterDeps> = {}): ReturnType<typeof createOpenInSourceAdapter> {
+  return createOpenInSourceAdapter({
+    source: parseOpenInSource('local', 'local')!,
+    sourceFingerprint: 'local',
+    translate: t,
+    choice: choiceStore().store,
+    ...over,
+  } as AdapterDeps)
 }
 
 test('adapter: the machine catalog is merged with the main pool for a local source', async () => {
   const main = mainPool([VSCODE])
   const { machine, calls } = fakeMachine([FINDER, VSCODE], { finder: 'data:image/png;base64,FINDER' })
-  const adapter = createOpenInSourceAdapter({
-    source: parseOpenInSource('local', 'local')!,
-    sourceFingerprint: 'local',
-    translate: t,
-    machineCatalog: machine,
-    mainPool: main.pool,
-    choice: choiceStore().store,
-  })
+  const adapter = localAdapter({ machineCatalog: machine, mainPool: main.pool })
   await settle()
   assert.equal(calls.refreshes, 1, 'the adapter probes the page catalog on boot')
   const model = adapter.getViewModel()
@@ -155,17 +154,10 @@ test('adapter: local launches call the host domain, main launches ride the IPC p
   const main = mainPool([VSCODE])
   const { machine, calls } = fakeMachine([FINDER])
   const opened: Array<{ args: string[] }> = []
-  const adapter = createOpenInSourceAdapter({
-    source: parseOpenInSource('local', 'local')!,
-    sourceFingerprint: 'local',
-    translate: t,
+  const adapter = localAdapter({
     machineCatalog: machine,
     mainPool: main.pool,
-    choice: choiceStore().store,
-    bridge: () => bridge(async (...args: string[]) => {
-      opened.push({ args })
-      return { ok: true }
-    }),
+    bridge: () => bridge(async (...args: string[]) => { opened.push({ args }); return { ok: true } }),
   })
   await settle()
   const [finder, vscode] = adapter.getViewModel().entries
@@ -178,13 +170,7 @@ test('adapter: local launches call the host domain, main launches ride the IPC p
 
 test('adapter: a page without a machine reader keeps the local pool empty', async () => {
   const main = mainPool([])
-  const adapter = createOpenInSourceAdapter({
-    source: parseOpenInSource('local', 'local')!,
-    sourceFingerprint: 'local',
-    translate: t,
-    mainPool: main.pool,
-    choice: choiceStore().store,
-  })
+  const adapter = localAdapter({ mainPool: main.pool })
   await settle()
   assert.equal(adapter.getViewModel().visible, false)
   assert.equal(adapter.iconUrl('finder'), null)
@@ -196,20 +182,13 @@ test('adapter: a page without a machine reader keeps the local pool empty', asyn
 test('adapter: a missing or malformed bridge is a loud structured failure', async () => {
   const main = mainPool([VSCODE])
   const { machine } = fakeMachine([])
-  const base = {
-    source: parseOpenInSource('local', 'local')!,
-    sourceFingerprint: 'local',
-    translate: t,
-    machineCatalog: machine,
-    mainPool: main.pool,
-    choice: choiceStore().store,
-  }
-  const missing = createOpenInSourceAdapter({ ...base, bridge: () => undefined })
+  const base = { machineCatalog: machine, mainPool: main.pool }
+  const missing = localAdapter({ ...base, bridge: () => undefined })
   await settle()
   assert.deepEqual(await missing.launch(missing.getViewModel().entries[0]!, '/ws'), { ok: false, error: 'bridgeUnavailable' })
   missing.dispose()
 
-  const malformed = createOpenInSourceAdapter({ ...base, bridge: () => bridge(async () => ({ nope: true })) })
+  const malformed = localAdapter({ ...base, bridge: () => bridge(async () => ({ nope: true })) })
   await settle()
   assert.deepEqual(await malformed.launch(malformed.getViewModel().entries[0]!, '/ws'), { ok: false, error: 'invalidResponse' })
   malformed.dispose()
@@ -234,14 +213,7 @@ test('adapter / http transport: nothing renders', async () => {
 test('adapter: an unavailable main override falls back to the machine entry', async () => {
   const main = mainPool([GHOST_VSCODE])
   const { machine } = fakeMachine([VSCODE])
-  const adapter = createOpenInSourceAdapter({
-    source: parseOpenInSource('local', 'local')!,
-    sourceFingerprint: 'local',
-    translate: t,
-    machineCatalog: machine,
-    mainPool: main.pool,
-    choice: choiceStore().store,
-  })
+  const adapter = localAdapter({ machineCatalog: machine, mainPool: main.pool })
   await settle()
   assert.deepEqual(adapter.getViewModel().entries.map(entry => `${entry.id}:${entry.channel}`), ['vscode:local'])
   adapter.dispose()
@@ -251,14 +223,7 @@ test('adapter / refresh re-probes both pools; subscribe fans out pool, machine a
   const main = mainPool([VSCODE])
   const { machine, calls, setEntries } = fakeMachine([FINDER])
   const choice = choiceStore()
-  const adapter = createOpenInSourceAdapter({
-    source: parseOpenInSource('local', 'local')!,
-    sourceFingerprint: 'local',
-    translate: t,
-    machineCatalog: machine,
-    mainPool: main.pool,
-    choice: choice.store,
-  })
+  const adapter = localAdapter({ machineCatalog: machine, mainPool: main.pool, choice: choice.store })
   await settle()
   let notified = 0
   const unsubscribe = adapter.subscribe(() => { notified += 1 })

@@ -19,18 +19,7 @@ import { prepareRegistryPasswordCommit } from '../../registry-password-commit.ts
 import { MAX_TRANSPORT_INSTANCES } from '../../transport-provider.ts'
 import type { TransportInstanceInput, TransportInstanceSpec, TransportProvider } from '../../transport-provider.ts'
 import { redactSshStderr, SERVER_ALIVE_COUNT_MAX, SERVER_ALIVE_INTERVAL_SECONDS, sshProvider } from '../../ssh-provider.ts'
-import { silentLogger, makeManager, tempDir, sleep, waitFor, type StatusWithNoUrlLeak } from '../support/transport-manager-harness.ts'
-
-/** A second instance with a managed systemd service, for the exec tests. */
-const EXEC_INSTANCE: TransportInstanceInput = {
-  id: 's2',
-  label: 'lab-server',
-  host: 'lab.example.com',
-  user: 'bob',
-  remotePort: 3080,
-  serviceName: 'dsh-chamber',
-}
-
+import { silentLogger, makeManager, tempDir, sleep, waitFor, EXEC_INSTANCE, type StatusWithNoUrlLeak } from '../support/transport-manager-harness.ts'
 test('registry delta preserves removals while same-id edits are not tombstones', () => {
   assert.deepEqual(
     computeRemovedInstanceIds(
@@ -45,7 +34,6 @@ test('registry delta preserves removals while same-id edits are not tombstones',
     ['first', 'second'],
   )
 })
-
 test('registry lifecycle retires deletion and transport identity edits, but not presentation/service/home edits', () => {
   const before: TransportInstanceSpec[] = [{
     id: 'same', label: 'old label', kind: 'dsh', transport: 'ssh', insecureHttp: false,
@@ -62,7 +50,6 @@ test('registry lifecycle retires deletion and transport identity edits, but not 
   assert.deepEqual(computeRetiredInstanceIds(before, [{ ...before[0], remotePort: 4080 }]), ['same'])
   assert.deepEqual(computeRetiredInstanceIds(before, []), ['same'])
 })
-
 test('password ownership follows the SSH authentication peer, not unrelated host metadata', () => {
   const before: TransportInstanceSpec[] = [{
     id: 'same', label: 'old label', kind: 'dsh', transport: 'ssh', insecureHttp: false,
@@ -78,7 +65,6 @@ test('password ownership follows the SSH authentication peer, not unrelated host
   }]
   assert.deepEqual(computePasswordRetirementIds(before, nonAuthenticationEdit), [])
 })
-
 test('endpoint edit commits replacement password before restart, including other retirements in one write', async (t) => {
   const secrets = new Map([['s1', 'old-password'], ['retired', 'retired-password']])
   const provider: TransportProvider = {
@@ -130,7 +116,6 @@ test('endpoint edit commits replacement password before restart, including other
   assert.equal(runtime.spawnCalls[1].options.env?.CHAMBER_TEST_PASSWORD, 'new-password')
   assert.deepEqual(runtime.children[0].killCalls, ['SIGTERM'])
 })
-
 test('password commit failure restores the old registry and leaves its live transport and secret untouched', async (t) => {
   const runtime = makeManager(t)
   runtime.setProbe(true)
@@ -161,7 +146,6 @@ test('password commit failure restores the old registry and leaves its live tran
   assert.deepEqual(runtime.children[0].killCalls, [])
   assert.equal(runtime.spawnCalls.length, 1)
 })
-
 test('replacement owner is validated against the complete normalized proposal before registry persistence', (t) => {
   const runtime = makeManager(t)
   const before = runtime.manager.listInstances()
@@ -178,7 +162,6 @@ test('replacement owner is validated against the complete normalized proposal be
   assert.deepEqual(runtime.manager.listInstances(), before)
   assert.equal(readFileSync(runtime.instancesFile, 'utf8'), beforeFile)
 })
-
 test('authentication-owner edit without a replacement retires the old secret', (t) => {
   const runtime = makeManager(t)
   const before = runtime.manager.listInstances()
@@ -197,7 +180,6 @@ test('authentication-owner edit without a replacement retires the old secret', (
   assert.deepEqual(clearIds, ['s1'])
   assert.equal(secret, null)
 })
-
 test('non-authentication edit does not touch the password store', (t) => {
   const runtime = makeManager(t)
   const before = runtime.manager.listInstances()
@@ -210,7 +192,6 @@ test('non-authentication edit does not touch the password store', (t) => {
   )
   assert.equal(updateCalls, 0)
 })
-
 test('a renderer send throw after registry commit is a loud delivery miss, never a save failure', () => {
   const hostile = new Proxy({}, {
     get() { throw new Error('formatter trap') },
@@ -229,7 +210,6 @@ test('a renderer send throw after registry commit is a loud delivery miss, never
   assert.equal(delivered, true)
 })
 
-
 test('instances persistence round-trips through the atomic-write file', () => {
   const dir = tempDir()
   const file = join(dir, 'ssh-instances.json')
@@ -245,7 +225,6 @@ test('instances persistence round-trips through the atomic-write file', () => {
   const reopened = createTransportManager({ provider: sshProvider, instancesFile: file, logger: silentLogger })
   assert.deepEqual(reopened.loadInstances(), saved)
 })
-
 test('renderer lifecycle proofs are never accepted into or persisted with registry data', () => {
   const dir = tempDir()
   const file = join(dir, 'ssh-instances.json')
@@ -260,7 +239,6 @@ test('renderer lifecycle proofs are never accepted into or persisted with regist
   assert.equal('sourceFingerprint' in saved[0], false)
   assert.equal(readFileSync(file, 'utf8').includes('sourceFingerprint'), false)
 })
-
 test('saveInstances atomically replaces a valid set and disconnects removed instances', t => {
   const { manager } = makeManager(t)
   manager.connect('s1')
@@ -270,7 +248,6 @@ test('saveInstances atomically replaces a valid set and disconnects removed inst
   assert.equal(manager.listInstances().length, 1)
   assert.throws(() => manager.saveInstances('nope' as unknown as TransportInstanceInput[]), /array/)
 })
-
 test('unique-id registry churn retires every runtime state instead of retaining an unbounded history', t => {
   const { manager } = makeManager(t)
   const base = manager.listInstances()[0]
@@ -284,7 +261,6 @@ test('unique-id registry churn retires every runtime state instead of retaining 
     assert.equal(manager.appendLog(id, 'info', 'zombie'), false)
   }
 })
-
 test('same-id re-add starts with fresh status, service projection, and logs', async t => {
   const { manager, spawnCalls } = makeManager(t, { instances: [EXEC_INSTANCE] })
   const base = manager.listInstances().find(instance => instance.id === 's1')!
@@ -315,7 +291,6 @@ test('same-id re-add starts with fresh status, service projection, and logs', as
   })
   assert.deepEqual(manager.logs('s2'), [])
 })
-
 test('a late exec from a removed incarnation cannot write into a same-id re-add', async t => {
   const { manager, spawnCalls } = makeManager(t, { instances: [EXEC_INSTANCE] })
   const base = manager.listInstances().find(instance => instance.id === 's1')!
@@ -338,7 +313,6 @@ test('a late exec from a removed incarnation cannot write into a same-id re-add'
     'old exec logs are generation-fenced',
   )
 })
-
 test('a same-id transport edit retires old exec ownership and the next exec uses a fresh spec', async t => {
   const { manager, spawnCalls } = makeManager(t, { instances: [EXEC_INSTANCE] })
   const base = manager.listInstances().find(instance => instance.id === 's1')!
@@ -366,7 +340,6 @@ test('a same-id transport edit retires old exec ownership and the next exec uses
   assert.equal((await freshExec).ok, true)
   assert.equal(manager.status('s2')?.serviceActive, true)
 })
-
 test('saveInstances refuses an oversized registry before validation or persistence', () => {
   const file = join(tempDir(), 'ssh-instances.json')
   const manager = createTransportManager({ provider: sshProvider, instancesFile: file, logger: silentLogger })
@@ -380,7 +353,6 @@ test('saveInstances refuses an oversized registry before validation or persisten
   assert.equal(manager.listInstances().length, 0)
   assert.equal(existsSync(file), false)
 })
-
 test('connecting → ready on tunnel-up, with the documented ssh args and a localUrl only when ready', async t => {
   const { manager, spawnCalls, setProbe } = makeManager(t)
   setProbe(false)
@@ -407,7 +379,6 @@ test('connecting → ready on tunnel-up, with the documented ssh args and a loca
   assert.equal(manager.readyUrl('s1'), `http://127.0.0.1:${localPort}`)
   assert.equal(status.phase, 'ready')
 })
-
 test('a configured sshPort rides the tunnel and the systemd exec as `-p <port>`', async t => {
   const { manager, spawnCalls, setProbe } = makeManager(t, {
     instances: [{
@@ -432,7 +403,6 @@ test('a configured sshPort rides the tunnel and the systemd exec as `-p <port>`'
   assert.equal(result.ok, true)
   if (result.ok) assert.equal(result.status.serviceActive, true)
 })
-
 test('invalid sshPort rejects the whole save without creating a partial registry', () => {
   const dir = tempDir()
   const file = join(dir, 'ssh-instances.json')
@@ -446,7 +416,6 @@ test('invalid sshPort rejects the whole save without creating a partial registry
   assert.deepEqual(manager.listInstances(), [])
   assert.equal(existsSync(file), false)
 })
-
 test('an invalid edit cannot delete the existing host from memory or disk', () => {
   const dir = tempDir()
   const file = join(dir, 'ssh-instances.json')
@@ -461,7 +430,6 @@ test('an invalid edit cannot delete the existing host from memory or disk', () =
   assert.deepEqual(manager.listInstances(), before)
   assert.deepEqual(JSON.parse(readFileSync(file, 'utf8')), before)
 })
-
 test('option-injection guards: id/host/user must match the whitelists (no leading -)', () => {
   const dir = tempDir()
   const file = join(dir, 'ssh-instances.json')
@@ -477,7 +445,6 @@ test('option-injection guards: id/host/user must match the whitelists (no leadin
   ]), /instance at index 0 is invalid/)
   assert.deepEqual(manager.listInstances(), [])
 })
-
 test('hyphenated hostnames and bracketed IPv6 literals are accepted', () => {
   const dir = tempDir()
   const file = join(dir, 'ssh-instances.json')
@@ -493,7 +460,6 @@ test('hyphenated hostnames and bracketed IPv6 literals are accepted', () => {
   )
   assert.deepEqual(manager.listInstances(), saved)
 })
-
 test('ssh stderr lines with key/passphrase material are redacted from the ring buffer', async t => {
   const { manager, children, spawnCalls, setProbe } = makeManager(t)
   setProbe(false)
@@ -508,7 +474,6 @@ test('ssh stderr lines with key/passphrase material are redacted from the ring b
   assert.ok(lines.every(entry => !entry.message.includes('.ssh/') && !entry.message.includes('id_ed25519')), 'no key path in logs')
   assert.ok(lines.some(entry => entry.message.includes('Permission denied')), 'non-sensitive stderr kept')
 })
-
 test('a throwing provider classifier drops output without logging its sensitive input', async t => {
   const warnings: string[] = []
   const throwingProvider: TransportProvider = {
@@ -530,7 +495,6 @@ test('a throwing provider classifier drops output without logging its sensitive 
   assert.ok(visible.every(line => !line.includes(secret) && !line.includes('.ssh/')))
   manager.disconnect('s1')
 })
-
 test('redactSshStderr covers key-path diagnostics without over-redacting banners', () => {
   const redacted = [
     'Enter passphrase for key \'/Users/x/.ssh/id_ed25519\':',
@@ -549,7 +513,6 @@ test('redactSshStderr covers key-path diagnostics without over-redacting banners
   ]
   for (const line of kept) assert.notEqual(redactSshStderr(line), '[ssh material redacted]', line)
 })
-
 test('disconnect clears the stale localPort from the projection', async t => {
   const { manager, setProbe } = makeManager(t)
   setProbe(true)
@@ -560,7 +523,6 @@ test('disconnect clears the stale localPort from the projection', async t => {
   assert.equal(manager.status('s1')!.phase, 'idle')
   assert.equal(manager.status('s1')!.localPort, null)
 })
-
 test('editing tunnel parameters of a live instance restarts its tunnel', async t => {
   const { manager, spawnCalls, setProbe } = makeManager(t, {
     instances: [{ id: 's4', label: 'editable', host: 'first.example.com', user: 'amy', remotePort: 3080 }],
@@ -578,7 +540,6 @@ test('editing tunnel parameters of a live instance restarts its tunnel', async t
   assert.equal(spawnCalls[1].args[spawnCalls[1].args.length - 1], 'amy@second.example.com')
   assert.equal(manager.status('s4')!.phase, 'ready')
 })
-
 test('a delayed exit of the replaced tunnel never kills or degrades the fresh one', async t => {
   const { manager, children, spawnCalls, setProbe } = makeManager(t, {
     instances: [{ id: 's5', label: 'switch', host: 'old.example.com', remotePort: 3080 }],
@@ -600,7 +561,6 @@ test('a delayed exit of the replaced tunnel never kills or degrades the fresh on
   assert.equal(manager.status('s5')!.phase, 'ready')
   assert.equal(children[1].killCalls.length, 0, 'the fresh tunnel is never SIGTERMed')
 })
-
 test('editing sshPort of a live instance restarts the tunnel with the new -p', async t => {
   const { manager, spawnCalls, setProbe } = makeManager(t, {
     instances: [{ id: 's6', label: 'portswitch', host: 'box.example.com', user: 'carol', remotePort: 3080 }],

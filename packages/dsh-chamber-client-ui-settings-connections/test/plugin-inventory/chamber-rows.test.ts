@@ -1,15 +1,10 @@
 /**
- * deriveChamberRows (plugin-inventory-text.ts) — the chamber table's full
- * input matrix, plain node:test with no dsh and no React.
- *
- * WHY this file exists (2026-09 P1 round): the row derivation used to live
- * inline in PluginDialog.tsx with NO test, and one untested branch read the
- * WRONG manifest source for the LOCAL target (the desktop's projection instead
- * of the instance's own profile manifest). Every data-source rule the
- * component relies on is pinned here: per-target expected/local/version
- * sources, the ssh remote-probe preference, the gateway seed-cache states, the
- * empty-expected-list honesty rule, and the inventory-derived chamber CLIENT
- * rows (P2.7 — never a hardcoded package name).
+ * deriveChamberRows (plugin-inventory-text.ts) — the chamber table's full input
+ * matrix, plain node:test with no dsh and no React. Every data-source rule the
+ * component relies on is pinned here: per-target expected/local/version sources,
+ * the ssh remote-probe preference, the gateway seed-cache states, the
+ * empty-expected-list honesty rule, and the inventory-derived chamber CLIENT rows
+ * (P2.7 — never a hardcoded package name).
  */
 
 import { test } from 'node:test'
@@ -53,17 +48,10 @@ function byName(rows: readonly ChamberRowDescriptor[], name: string): ChamberRow
 /* ---- local: its OWN profile manifest is the only source ---- */
 
 test('local: expected + local column + version all come from the instance own profile manifest', () => {
-  const rows = deriveChamberRows({
-    target: 'local',
-    expected: LOCAL_MANIFEST,
+  const rows = deriveChamberRows({ target: 'local', expected: LOCAL_MANIFEST,
     // The desktop-side projection is a DIFFERENT read: it must be ignored for
     // the local target (the regression this file pins).
-    localManifestChamber: POISON,
-    remoteChamber: null,
-    inventory: null,
-    seedCache: null,
-    localSideFailed: false,
-  })
+    localManifestChamber: POISON, remoteChamber: null, inventory: null, seedCache: null, localSideFailed: false })
   assert.deepEqual(rows.map(row => row.name), [HOST_GRAPH_PACKAGE, GIT_WORKTREE_PACKAGE, ARCHIVE_CLEANUP_PACKAGE])
   assert.deepEqual(byName(rows, HOST_GRAPH_PACKAGE).localBadge, { labelKey: 'chamberBadgeInjected', tone: 'ok' })
   assert.equal(byName(rows, HOST_GRAPH_PACKAGE).versionText, 'v1.2.3', 'the poisoned 9.9.9 never leaks into a local row')
@@ -81,30 +69,17 @@ test('local: expected + local column + version all come from the instance own pr
 })
 
 test('local: an unreadable own manifest yields NO rows and never claims a seed-cache state', () => {
-  const rows = deriveChamberRows({
-    target: 'local',
-    expected: null,
-    localManifestChamber: LOCAL_MANIFEST,
-    remoteChamber: null,
-    inventory: null,
-    seedCache: {},
-    localSideFailed: true,
-  })
+  const rows = deriveChamberRows({ target: 'local', expected: null, localManifestChamber: LOCAL_MANIFEST,
+    remoteChamber: null, inventory: null, seedCache: {}, localSideFailed: true })
   assert.deepEqual(rows, [], 'an empty expected list must not fabricate rows from another source')
 })
 
 /* ---- ssh: remote probe preferred, desktop projection as the local column ---- */
 
 test('ssh: the remote probe list wins over the caller expected list, and the local column reads the desktop projection', () => {
-  const rows = deriveChamberRows({
-    target: 'ssh',
-    expected: POISON,
-    localManifestChamber: LOCAL_MANIFEST,
+  const rows = deriveChamberRows({ target: 'ssh', expected: POISON, localManifestChamber: LOCAL_MANIFEST,
     remoteChamber: { ok: true, packages: [pkg(HOST_GRAPH_PACKAGE, INJECTED), pkg(GIT_WORKTREE_PACKAGE, HALF)] },
-    inventory: null,
-    seedCache: null,
-    localSideFailed: false,
-  })
+    inventory: null, seedCache: null, localSideFailed: false })
   assert.deepEqual(rows.map(row => row.name), [HOST_GRAPH_PACKAGE, GIT_WORKTREE_PACKAGE])
   assert.deepEqual(byName(rows, HOST_GRAPH_PACKAGE).remoteBadge, { labelKey: 'chamberBadgeLive', tone: 'ok' })
   assert.deepEqual(byName(rows, GIT_WORKTREE_PACKAGE).remoteBadge, { labelKey: 'chamberBadgeInjected', tone: 'warn' },
@@ -115,15 +90,8 @@ test('ssh: the remote probe list wins over the caller expected list, and the loc
 })
 
 test('ssh: a failed probe keeps the caller list visible and every remote badge unknown', () => {
-  const rows = deriveChamberRows({
-    target: 'ssh',
-    expected: LOCAL_MANIFEST,
-    localManifestChamber: LOCAL_MANIFEST,
-    remoteChamber: { ok: false, error: 'ssh exec failed' },
-    inventory: null,
-    seedCache: null,
-    localSideFailed: false,
-  })
+  const rows = deriveChamberRows({ target: 'ssh', expected: LOCAL_MANIFEST, localManifestChamber: LOCAL_MANIFEST,
+    remoteChamber: { ok: false, error: 'ssh exec failed' }, inventory: null, seedCache: null, localSideFailed: false })
   assert.equal(rows.length, LOCAL_MANIFEST.length, 'a remote-only read failure must not empty the table')
   for (const row of rows) {
     assert.deepEqual(row.remoteBadge, { labelKey: 'chamberBadgeUnknown', tone: 'warn' },
@@ -132,41 +100,21 @@ test('ssh: a failed probe keeps the caller list visible and every remote badge u
 })
 
 test('ssh: an absent local projection leaves the local column unknown (failed read) or muted (still loading)', () => {
-  const failed = deriveChamberRows({
-    target: 'ssh',
-    expected: [pkg(HOST_GRAPH_PACKAGE, INJECTED)],
-    localManifestChamber: null,
-    remoteChamber: { ok: true, packages: [pkg(HOST_GRAPH_PACKAGE, INJECTED)] },
-    inventory: null,
-    seedCache: null,
-    localSideFailed: true,
-  })
+  const failed = deriveChamberRows({ target: 'ssh', expected: [pkg(HOST_GRAPH_PACKAGE, INJECTED)],
+    localManifestChamber: null, remoteChamber: { ok: true, packages: [pkg(HOST_GRAPH_PACKAGE, INJECTED)] },
+    inventory: null, seedCache: null, localSideFailed: true })
   assert.deepEqual(byName(failed, HOST_GRAPH_PACKAGE).localBadge, { labelKey: 'chamberBadgeUnknown', tone: 'warn' })
-  const loading = deriveChamberRows({
-    target: 'ssh',
-    expected: [pkg(HOST_GRAPH_PACKAGE, INJECTED)],
-    localManifestChamber: null,
-    remoteChamber: { ok: true, packages: [pkg(HOST_GRAPH_PACKAGE, INJECTED)] },
-    inventory: null,
-    seedCache: null,
-    localSideFailed: false,
-  })
+  const loading = deriveChamberRows({ target: 'ssh', expected: [pkg(HOST_GRAPH_PACKAGE, INJECTED)],
+    localManifestChamber: null, remoteChamber: { ok: true, packages: [pkg(HOST_GRAPH_PACKAGE, INJECTED)] },
+    inventory: null, seedCache: null, localSideFailed: false })
   assert.deepEqual(byName(loading, HOST_GRAPH_PACKAGE).localBadge, { labelKey: 'chamberBadgeUnknown', tone: 'muted' })
 })
 
 /* ---- gateway: desktop projection + seed-cache comparison + client rows ---- */
 
 function gatewayRows(over: Partial<Parameters<typeof deriveChamberRows>[0]> = {}): ChamberRowDescriptor[] {
-  return deriveChamberRows({
-    target: 'gateway',
-    expected: LOCAL_MANIFEST,
-    localManifestChamber: LOCAL_MANIFEST,
-    remoteChamber: null,
-    inventory: null,
-    seedCache: null,
-    localSideFailed: false,
-    ...over,
-  })
+  return deriveChamberRows({ target: 'gateway', expected: LOCAL_MANIFEST, localManifestChamber: LOCAL_MANIFEST,
+    remoteChamber: null, inventory: null, seedCache: null, localSideFailed: false, ...over })
 }
 
 test('gateway: an unread seed cache renders no cache columns at all', () => {
@@ -320,15 +268,9 @@ test('gateway: a readable inventory with NO chamber client entry renders ONE mut
 /* ---- http: read-only Loader view, no cache and no client rows ---- */
 
 test('http: the local column and version read the desktop projection; the remote badge reads the inventory', () => {
-  const rows = deriveChamberRows({
-    target: 'http',
-    expected: LOCAL_MANIFEST,
-    localManifestChamber: LOCAL_MANIFEST,
-    remoteChamber: null,
-    inventory: { entries: [{ moduleName: HOST_GRAPH_PACKAGE, enabled: true, fiberPhase: 'active' }] },
-    seedCache: null,
-    localSideFailed: false,
-  })
+  const rows = deriveChamberRows({ target: 'http', expected: LOCAL_MANIFEST, localManifestChamber: LOCAL_MANIFEST,
+    remoteChamber: null, inventory: { entries: [{ moduleName: HOST_GRAPH_PACKAGE, enabled: true, fiberPhase: 'active' }] },
+    seedCache: null, localSideFailed: false })
   const row = byName(rows, HOST_GRAPH_PACKAGE)
   assert.equal(row.versionText, 'v1.2.3')
   assert.deepEqual(row.remoteBadge, { labelKey: 'chamberBadgeLive', tone: 'ok' })
@@ -343,15 +285,8 @@ test('http: the local column and version read the desktop projection; the remote
 
 test('every target: an empty expected list yields no REGISTRY rows', () => {
   for (const target of ['local', 'ssh', 'gateway', 'http'] as const) {
-    const rows = deriveChamberRows({
-      target,
-      expected: [],
-      localManifestChamber: [],
-      remoteChamber: null,
-      inventory: null,
-      seedCache: null,
-      localSideFailed: false,
-    })
+    const rows = deriveChamberRows({ target, expected: [], localManifestChamber: [], remoteChamber: null,
+      inventory: null, seedCache: null, localSideFailed: false })
     assert.deepEqual(rows.filter(row => row.name !== null), [], `${target} with an empty expected list`)
     // The gateway's inventory-derived client row is independent of the
     // registry list: with no inventory it is the single unknown-state row.
@@ -359,12 +294,9 @@ test('every target: an empty expected list yields no REGISTRY rows', () => {
   }
 })
 
-/* ---- localOnly registry rows (design 20 §6; 2026-12 user decision): listed
- * for the LOCAL target only, OMITTED on every remote target. The earlier rule
- * rendered the row on remote targets with a "local shape only" badge in both
- * state columns; asking "why is a local plugin in my remote plugin list?" is
- * what retired it — a per-target table must not list a row that no action on
- * that target could ever produce. ---- */
+/* ---- localOnly registry rows (design 20 §6; 2026-12 user decision): listed on
+ * the LOCAL target only, OMITTED everywhere else — a per-target table must not
+ * list a row that no action on that target could ever produce. ---- */
 
 /** The registry's four rows as the desktop projects them (open-in flagged). */
 const FOUR_ROWS = [
@@ -373,15 +305,8 @@ const FOUR_ROWS = [
 ]
 
 test('local: a localOnly registry row is an ORDINARY row there — its state is real on the one shape it applies to', () => {
-  const rows = deriveChamberRows({
-    target: 'local',
-    expected: FOUR_ROWS,
-    localManifestChamber: POISON,
-    remoteChamber: null,
-    inventory: null,
-    seedCache: null,
-    localSideFailed: false,
-  })
+  const rows = deriveChamberRows({ target: 'local', expected: FOUR_ROWS, localManifestChamber: POISON,
+    remoteChamber: null, inventory: null, seedCache: null, localSideFailed: false })
   assert.deepEqual(rows.map(row => row.name),
     [HOST_GRAPH_PACKAGE, GIT_WORKTREE_PACKAGE, ARCHIVE_CLEANUP_PACKAGE, OPEN_IN_PACKAGE],
     'the local target lists all four registry rows')
@@ -395,15 +320,9 @@ test('ssh/gateway/http: a localOnly registry row is OMITTED, never badged — no
   // Neither may turn it into a table row on a target that can never seed it.
   const localOnlyProbe = pkg(OPEN_IN_PACKAGE, { installed: false, patched: false, live: null, localOnly: true })
   for (const target of ['ssh', 'gateway', 'http'] as const) {
-    const rows = deriveChamberRows({
-      target,
-      expected: FOUR_ROWS,
-      localManifestChamber: FOUR_ROWS,
+    const rows = deriveChamberRows({ target, expected: FOUR_ROWS, localManifestChamber: FOUR_ROWS,
       remoteChamber: target === 'ssh' ? { ok: true, packages: [...LOCAL_MANIFEST, localOnlyProbe] } : null,
-      inventory: null,
-      seedCache: null,
-      localSideFailed: false,
-    })
+      inventory: null, seedCache: null, localSideFailed: false })
     const registryRows = rows.filter(row => row.name !== null)
     assert.deepEqual(registryRows.map(row => row.name),
       [HOST_GRAPH_PACKAGE, GIT_WORKTREE_PACKAGE, ARCHIVE_CLEANUP_PACKAGE],
@@ -414,22 +333,11 @@ test('ssh/gateway/http: a localOnly registry row is OMITTED, never badged — no
 })
 
 test('ssh: the synthesized localOnly probe row speaks for nothing — the probed rows keep their own states', () => {
-  const rows = deriveChamberRows({
-    target: 'ssh',
-    expected: FOUR_ROWS,
-    localManifestChamber: FOUR_ROWS,
-    remoteChamber: {
-      ok: true,
-      packages: [
-        pkg(HOST_GRAPH_PACKAGE, INJECTED),
-        pkg(GIT_WORKTREE_PACKAGE, HALF),
-        pkg(OPEN_IN_PACKAGE, { localOnly: true }),
-      ],
-    },
-    inventory: null,
-    seedCache: null,
-    localSideFailed: false,
-  })
+  const rows = deriveChamberRows({ target: 'ssh', expected: FOUR_ROWS, localManifestChamber: FOUR_ROWS,
+    remoteChamber: { ok: true, packages: [
+      pkg(HOST_GRAPH_PACKAGE, INJECTED), pkg(GIT_WORKTREE_PACKAGE, HALF), pkg(OPEN_IN_PACKAGE, { localOnly: true }),
+    ] },
+    inventory: null, seedCache: null, localSideFailed: false })
   assert.deepEqual(rows.map(row => row.name), [HOST_GRAPH_PACKAGE, GIT_WORKTREE_PACKAGE])
   assert.deepEqual(byName(rows, HOST_GRAPH_PACKAGE).remoteBadge, { labelKey: 'chamberBadgeLive', tone: 'ok' })
   assert.deepEqual(byName(rows, GIT_WORKTREE_PACKAGE).remoteBadge, { labelKey: 'chamberBadgeInjected', tone: 'warn' },

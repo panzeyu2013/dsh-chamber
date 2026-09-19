@@ -1,28 +1,24 @@
 /**
  * plugin-sync — part 3: exact ownership fences (ExactOwnershipRegistry,
  * scopeExecToOwnership, runWithFinalOwnership, ReadyPhaseEdges), applyPlugins
- * (whitelist, remove-before-add, single-flight, failure isolation, restart/
- * verify), materializeAndAdd / materializeArchiveAndAdd and the local writer
- * reaper.
- *
- * Sibling parts: plugin-sync.test.ts, plugin-sync-remote-read.test.ts,
- * plugin-sync-seed.test.ts, plugin-sync-renderer-projection.test.ts.
+ * (whitelist, remove-before-add, single-flight, failure isolation, restart/verify),
+ * materializeAndAdd / materializeArchiveAndAdd and the local writer reaper.
+ * Sibling parts: plugin-sync.test.ts, plugin-sync-remote-read.test.ts, plugin-sync-seed.test.ts, plugin-sync-renderer-projection.test.ts.
  */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { spawn } from 'node:child_process'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { applyPlugins, ExactOwnershipRegistry, localPluginWriterLedgerPath, materializeAbsolutePath, materializeAndAdd, materializeArchiveAndAdd, materializePluginsDir, remoteManifestPath, ReadyPhaseEdges, reapStaleLocalPluginWriters, scopeExecToOwnership, runWithFinalOwnership } from '../../plugin-sync.ts'
-import type { ExecFn, ExecResult, SshApplyJournalSink, StatusFn, RemoteSpec } from '../../plugin-sync.ts'
+import type { ExecFn, ExecResult, SshApplyJournalSink, StatusFn } from '../../plugin-sync.ts'
 import { buildSshApplyRows, defaultSshProtectionFacts } from '../../ssh-apply-rows.ts'
 import { NotificationSourceIncarnations } from '../../notifications.ts'
+import { err, ok, readyStatus, SEED_SPEC, tempDir } from './plugin-sync-fixtures.ts'
 
-/** Bounded wait for pid to be reaped (kill(pid, 0) → ESRCH): the descendant
- * of a killed leader is a zombie until init reaps it — a single-shot ESRCH
- * assertion flaked under CI pauses. */
+/** Bounded wait for pid to be reaped (kill(pid, 0) → ESRCH): a killed leader's
+ *  descendant is a zombie until init reaps it, so a single-shot assertion flaked. */
 async function waitForEsrch(pid: number, what: string): Promise<void> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     try {
@@ -36,21 +32,23 @@ async function waitForEsrch(pid: number, what: string): Promise<void> {
   assert.fail(`${what} (pid ${pid}) still alive after the reaping window`)
 }
 
-function tempDir(): string {
-  return mkdtempSync(join(tmpdir(), 'dsh-plugin-sync-'))
+/** An applyPlugins exec fake: `dsh` ops succeed or follow `onDsh`, the verify
+ *  `cat` returns `manifest`, `restart` follows `onRestart`; else loud. */
+function applyExec(options: { manifest?: string; onDsh?: (spec?: string) => ExecResult; onRestart?: () => ExecResult } = {}): ExecFn {
+  return async (_id, action, payload) => {
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'dsh') return options.onDsh?.(payload.argv?.[4]) ?? ok()
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') return ok(options.manifest)
+    if (action === 'restart') return options.onRestart?.() ?? ok()
+    return err(`unexpected ${action}`)
+  }
 }
 
-function ok(stdout?: string): ExecResult {
-  return { ok: true, status: { phase: 'ready' }, stdout }
-}
+/** The remote profile manifest JSON: `dependencies` installed, `bundles` activated. */
+const manifestJson = (dependencies: Record<string, string>, bundles: string[] = []): string =>
+  JSON.stringify({ dependencies, dsh: { profile: { bundles } } })
 
-function err(error: string): ExecResult {
-  return { ok: false, error }
-}
-
-const readyStatus: StatusFn = () => ({ phase: 'ready' })
-
-const SEED_SPEC: RemoteSpec = { id: 's1', remoteDshHome: null }
+/** The 8-byte gzip-magic blob a materialize pack fixture returns. */
+const TARBALL_BYTES = Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0xff, 0xfe, 0x00, 0x01])
 
 test('exact ownership lets a changed incarnation supersede and stale finally cannot clear it', () => {
   const owners = new ExactOwnershipRegistry()
@@ -64,14 +62,12 @@ test('exact ownership lets a changed incarnation supersede and stale finally can
   assert.equal(owners.finish(first.token), false, 'old finally cannot delete new ownership')
   assert.equal(owners.owns(replacement.token), true)
   assert.equal(owners.finish(replacement.token), true)
-
   const removed = owners.begin('same', 'host-b')
   assert.equal(removed.accepted, true)
   assert.equal(owners.revoke('same'), true)
   assert.equal(owners.owns(removed.token), false)
   assert.equal(owners.begin('same', 'host-b').accepted, true, 'remove/re-add gets fresh ownership even with same fingerprint')
 })
-
 test('scoped exec checks exact ownership before and after every remote step', async () => {
   let owner = true
   let calls = 0
@@ -89,7 +85,6 @@ test('scoped exec checks exact ownership before and after every remote step', as
   assert.deepEqual(await scoped('other', 'restart'), { ok: false, error: 'ssh instance changed while operation was in progress' })
   assert.equal(calls, 1, 'stale ownership never starts another saga step')
 })
-
 test('remote saga ownership cannot revive after byte-identical same-id re-add', async () => {
   const sources = new NotificationSourceIncarnations()
   const sourceId = 'ssh-same'
@@ -100,7 +95,6 @@ test('remote saga ownership cannot revive after byte-identical same-id re-add', 
   let currentOperationalFingerprint = operationalFingerprint
   const owns = (): boolean =>
     sources.owns(sourceToken) && currentOperationalFingerprint === operationalFingerprint
-
   let calls = 0
   let settle!: (result: ExecResult) => void
   const scoped = scopeExecToOwnership(async () => {
@@ -108,20 +102,16 @@ test('remote saga ownership cannot revive after byte-identical same-id re-add', 
     return await new Promise<ExecResult>(resolve => { settle = resolve })
   }, 'same', owns)
   const firstStep = scoped('same', 'run', { op: 'exec', command: 'cat', argv: ['first'] })
-
   sources.replaceRemoteSources([])
   sources.replaceRemoteSources([{ sourceId, fingerprint }])
   assert.equal(currentOperationalFingerprint, operationalFingerprint)
   assert.equal(owns(), false, 'reusable fields do not restore exact lifecycle ownership')
   settle(ok())
   assert.deepEqual(await firstStep, { ok: false, error: 'ssh instance changed while operation was in progress' })
-  assert.deepEqual(
-    await scoped('same', 'run', { op: 'exec', command: 'cat', argv: ['second'] }),
-    { ok: false, error: 'ssh instance changed while operation was in progress' },
-  )
+  const secondStep = await scoped('same', 'run', { op: 'exec', command: 'cat', argv: ['second'] })
+  assert.deepEqual(secondStep, { ok: false, error: 'ssh instance changed while operation was in progress' })
   assert.equal(calls, 1, 'a later saga step never runs on the replacement host')
 })
-
 test('final ownership fence rejects a deferred completion after same-id replacement', async () => {
   let owner = true
   let settle!: (value: { ok: true; manifest: string }) => void
@@ -133,7 +123,6 @@ test('final ownership fence rejects a deferred completion after same-id replacem
   settle({ ok: true, manifest: 'old-host' })
   assert.deepEqual(await pending, { ok: false, error: 'ssh instance changed while operation was in progress' })
 })
-
 test('ready edge tracker fires only non-ready to ready and forgets removed ids', () => {
   const edges = new ReadyPhaseEdges()
   assert.equal(edges.observe('same', 'connecting'), false)
@@ -152,40 +141,28 @@ test('ready edge tracker fires only non-ready to ready and forgets removed ids',
 
 test('applyPlugins: re-validates add/remove against the whitelist (untrusted renderer)', async () => {
   const noop: ExecFn = async () => ok()
-  const spec: RemoteSpec = { id: 's1', remoteDshHome: null }
-  assert.deepEqual(
-    await applyPlugins(noop, readyStatus, spec, { add: ['file:/tmp/x.tgz'], remove: [] }),
-    { ok: false, error: 'invalid add spec: "file:/tmp/x.tgz"' },
-  )
-  assert.deepEqual(
-    await applyPlugins(noop, readyStatus, spec, { add: ['foo; rm -rf /'], remove: [] }),
-    { ok: false, error: 'invalid add spec: "foo; rm -rf /"' },
-  )
-  assert.deepEqual(
-    await applyPlugins(noop, readyStatus, spec, { add: [], remove: ['../evil'] }),
-    { ok: false, error: 'invalid remove name: "../evil"' },
-  )
+  assert.deepEqual(await applyPlugins(noop, readyStatus, SEED_SPEC, { add: ['file:/tmp/x.tgz'], remove: [] }),
+    { ok: false, error: 'invalid add spec: "file:/tmp/x.tgz"' })
+  assert.deepEqual(await applyPlugins(noop, readyStatus, SEED_SPEC, { add: ['foo; rm -rf /'], remove: [] }),
+    { ok: false, error: 'invalid add spec: "foo; rm -rf /"' })
+  assert.deepEqual(await applyPlugins(noop, readyStatus, SEED_SPEC, { add: [], remove: ['../evil'] }),
+    { ok: false, error: 'invalid remove name: "../evil"' })
 })
-
 test('applyPlugins: remove runs before add, serial, per-item isolation, restart + verify', async () => {
   const order: string[] = []
   const exec: ExecFn = async (_id, action, payload) => {
     if (action === 'run' && payload?.op === 'exec' && payload.command === 'dsh') {
-      const verb = payload.argv?.[0] === 'plugin' ? payload.argv[3] : '?'
-      order.push(`${verb}:${payload.argv?.[4]}`)
+      order.push(`${payload.argv?.[0] === 'plugin' ? payload.argv[3] : '?'}:${payload.argv?.[4]}`)
       return ok()
     }
     if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
       // verification read-back: `new-pkg` present, `old-pkg` absent
-      return ok(JSON.stringify({ dependencies: { 'new-pkg': '^1.0.0' }, dsh: { profile: { bundles: [] } } }))
+      return ok(manifestJson({ 'new-pkg': '^1.0.0' }))
     }
     if (action === 'restart') return ok()
     return err(`unexpected ${action}`)
   }
-  const result = await applyPlugins(exec, readyStatus, { id: 's1', remoteDshHome: null }, {
-    add: ['new-pkg@^1.0.0'],
-    remove: ['old-pkg'],
-  })
+  const result = await applyPlugins(exec, readyStatus, SEED_SPEC, { add: ['new-pkg@^1.0.0'], remove: ['old-pkg'] })
   assert.equal(result.ok, true)
   if (result.ok) {
     assert.equal(result.result.applied, 2)
@@ -197,18 +174,15 @@ test('applyPlugins: remove runs before add, serial, per-item isolation, restart 
   }
   assert.deepEqual(order, ['remove:old-pkg', 'add:new-pkg@^1.0.0'])
 })
-
 test('applyPlugins: restart===false defers and skips the ready recheck', async () => {
   const actions: string[] = []
   const exec: ExecFn = async (_id, action, payload) => {
     if (action === 'run' && payload?.op === 'exec' && payload.command === 'dsh') { actions.push('dsh'); return ok() }
-    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
-      return ok(JSON.stringify({ dependencies: { pkg: '^1.0.0' }, dsh: { profile: { bundles: [] } } }))
-    }
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') return ok(manifestJson({ pkg: '^1.0.0' }))
     actions.push(action)
     return ok()
   }
-  const result = await applyPlugins(exec, readyStatus, { id: 's1', remoteDshHome: null }, { add: ['pkg@^1.0.0'], remove: [], restart: false })
+  const result = await applyPlugins(exec, readyStatus, SEED_SPEC, { add: ['pkg@^1.0.0'], remove: [], restart: false })
   assert.equal(result.ok, true)
   if (result.ok) {
     assert.equal(result.result.deferred, true)
@@ -217,7 +191,6 @@ test('applyPlugins: restart===false defers and skips the ready recheck', async (
   }
   assert.ok(!actions.includes('restart'))
 })
-
 test('applyPlugins: single-flight refuses a concurrent apply for the same instance', async t => {
   const pending: Array<(r: ExecResult) => void> = []
   let auto = false
@@ -225,8 +198,7 @@ test('applyPlugins: single-flight refuses a concurrent apply for the same instan
     if (auto) return Promise.resolve(ok())
     return new Promise(resolve => { pending.push(resolve) })
   }
-  const spec: RemoteSpec = { id: 's1', remoteDshHome: null }
-  const first = applyPlugins(exec, readyStatus, spec, { add: ['x@1.0.0'], remove: [] })
+  const first = applyPlugins(exec, readyStatus, SEED_SPEC, { add: ['x@1.0.0'], remove: [] })
   // Natural single-flight cleanup, registered BEFORE any assertion: even on
   // a mid-test failure, completing the held apply lets the production
   // finally-block release the guard (no production test backdoor; state
@@ -236,19 +208,17 @@ test('applyPlugins: single-flight refuses a concurrent apply for the same instan
     for (const resolve of pending) resolve(ok())
     await Promise.allSettled([first])
   })
-  const second = await applyPlugins(exec, readyStatus, spec, { add: ['y@1.0.0'], remove: [] })
+  const second = await applyPlugins(exec, readyStatus, SEED_SPEC, { add: ['y@1.0.0'], remove: [] })
   assert.deepEqual(second, { ok: false, error: 'apply in progress' })
 })
-
 test('applyPlugins: a changed operational owner is not blocked by the reusable id', async t => {
   const pending: Array<(r: ExecResult) => void> = []
   let auto = false
   const exec: ExecFn = () => auto
     ? Promise.resolve(ok('{}'))
     : new Promise(resolve => { pending.push(resolve) })
-  const spec: RemoteSpec = { id: 'same', remoteDshHome: null }
-  const oldApply = applyPlugins(exec, readyStatus, spec, { add: ['old@1.0.0'], remove: [] }, { ownershipKey: 'host-a' })
-  const newApply = applyPlugins(exec, readyStatus, spec, { add: ['new@1.0.0'], remove: [] }, { ownershipKey: 'host-b' })
+  const oldApply = applyPlugins(exec, readyStatus, SEED_SPEC, { add: ['old@1.0.0'], remove: [] }, { ownershipKey: 'host-a' })
+  const newApply = applyPlugins(exec, readyStatus, SEED_SPEC, { add: ['new@1.0.0'], remove: [] }, { ownershipKey: 'host-b' })
   // Natural single-flight cleanup (see the single-flight test), registered
   // before the assertions so a mid-test failure still releases the guard.
   t.after(async () => {
@@ -258,47 +228,36 @@ test('applyPlugins: a changed operational owner is not blocked by the reusable i
   })
   await Promise.resolve()
   assert.equal(pending.length, 2, 'replacement owner starts immediately')
-  assert.deepEqual(
-    await applyPlugins(exec, readyStatus, spec, { add: ['duplicate@1.0.0'], remove: [] }, { ownershipKey: 'host-b' }),
-    { ok: false, error: 'apply in progress' },
-  )
+  const duplicate = await applyPlugins(exec, readyStatus, SEED_SPEC, { add: ['duplicate@1.0.0'], remove: [] }, { ownershipKey: 'host-b' })
+  assert.deepEqual(duplicate, { ok: false, error: 'apply in progress' })
 })
-
 test('applyPlugins: protected names refuse the WHOLE batch before any exec (design 21 §6.11)', async () => {
   // ssh facts = B₀ ∪ S with NO family source: a chamber seed / composition
   // member is `protected`, and ANY official-scope install is conservative-
   // refused. The refusal must happen before ANY remote change and must name
   // each refused row with its code.
   let execCalls = 0
-  const exec: ExecFn = async () => {
-    execCalls += 1
-    return ok()
-  }
-  const spec: RemoteSpec = { id: 's1', remoteDshHome: null }
-
-  const seedAdd = await applyPlugins(exec, readyStatus, spec, { add: ['@dsh-chamber/dsh-chamber-seed-client-graph@1.2.3'], remove: [] })
+  const exec: ExecFn = async () => { execCalls += 1; return ok() }
+  const seedAdd = await applyPlugins(exec, readyStatus, SEED_SPEC, { add: ['@dsh-chamber/dsh-chamber-seed-client-graph@1.2.3'], remove: [] })
   assert.equal(seedAdd.ok, false)
   if (!seedAdd.ok) {
     assert.match(seedAdd.error, /@dsh-chamber\/dsh-chamber-seed-client-graph \[protected\]/)
   }
-
-  const compositionRemove = await applyPlugins(exec, readyStatus, spec, { add: [], remove: ['@deepseek-ai/dsh-base'] })
+  const compositionRemove = await applyPlugins(exec, readyStatus, SEED_SPEC, { add: [], remove: ['@deepseek-ai/dsh-base'] })
   assert.equal(compositionRemove.ok, false)
   if (!compositionRemove.ok) {
     assert.match(compositionRemove.error, /@deepseek-ai\/dsh-base \[protected\]/)
   }
-
   // ssh install face is conservative: an official-scope row is refused even
   // when the name is NOT in B₀ ∪ S (no remote family facts can bound it).
-  const officialAdd = await applyPlugins(exec, readyStatus, spec, { add: ['@deepseek-ai/dsh-experimental-agent-team-profile@0.1.5-rc.2'], remove: [] })
+  const officialAdd = await applyPlugins(exec, readyStatus, SEED_SPEC, { add: ['@deepseek-ai/dsh-experimental-agent-team-profile@0.1.5-rc.2'], remove: [] })
   assert.equal(officialAdd.ok, false)
   if (!officialAdd.ok) {
     assert.match(officialAdd.error, /@deepseek-ai\/dsh-experimental-agent-team-profile \[protected\]/)
   }
-
   // A MIXED batch (valid rows alongside a refused one) is refused in full:
   // the valid rows must never execute around the refused row.
-  const mixed = await applyPlugins(exec, readyStatus, spec, {
+  const mixed = await applyPlugins(exec, readyStatus, SEED_SPEC, {
     add: ['fine-pkg@1.0.0', '@deepseek-ai/official@0.1.5-rc.2'],
     remove: ['@dsh-chamber/dsh-chamber-seed-git-worktree'],
   })
@@ -308,7 +267,6 @@ test('applyPlugins: protected names refuse the WHOLE batch before any exec (desi
     assert.match(mixed.error, /@dsh-chamber\/dsh-chamber-seed-git-worktree/)
   }
   assert.equal(execCalls, 0, 'no exec (not even a snapshot read) may run for a refused batch')
-
   // Removal is judged by B₀ ∪ S alone: an unexpected official-scope row that is
   // NOT part of the baseline may be removed (removing a shadow copy is
   // restorative). The guard decides this without any exec — asserted directly
@@ -317,7 +275,6 @@ test('applyPlugins: protected names refuse the WHOLE batch before any exec (desi
   assert.deepEqual(rows.refusals, [])
   assert.deepEqual(rows.rows.map(row => `${row.kind}:${row.name}`), ['remove:@deepseek-ai/dsh-session'])
 })
-
 test('applyPlugins: with a journal sink, every executed row records its PRE-CHANGE spec (snapshot first)', async () => {
   const order: string[] = []
   let manifestCats = 0
@@ -347,11 +304,8 @@ test('applyPlugins: with a journal sink, every executed row records its PRE-CHAN
   const journal: SshApplyJournalSink = {
     record: entry => recorded.push({ name: entry.name, kind: entry.kind, specBefore: entry.specBefore, ok: entry.ok }),
   }
-  const result = await applyPlugins(exec, readyStatus, { id: 's1', remoteDshHome: null }, {
-    remove: ['old-pkg'],
-    add: ['new-pkg@^1.0.0', 'up-pkg@^2.0.0'],
-    restart: false,
-  }, { journal })
+  const result = await applyPlugins(exec, readyStatus, SEED_SPEC,
+    { remove: ['old-pkg'], add: ['new-pkg@^1.0.0', 'up-pkg@^2.0.0'], restart: false }, { journal })
   assert.equal(result.ok, true)
   if (result.ok) {
     assert.equal(result.result.applied, 3)
@@ -373,29 +327,21 @@ test('applyPlugins: with a journal sink, every executed row records its PRE-CHAN
     { name: 'up-pkg', kind: 'add', specBefore: '^1.0.0', ok: true },
   ])
 })
-
 test('applyPlugins: failed rows are journaled with ok:false and their error, never undoable', async () => {
   const order: string[] = []
   const exec: ExecFn = async (_id, action, payload) => {
     if (action === 'run' && payload?.op === 'exec' && payload.command === 'dsh') {
       const spec = payload.argv?.[4]
       order.push(`add:${spec}`)
-      return spec === 'bad-pkg@1.0.0'
-        ? err('remote: bad package name')
-        : ok()
+      return spec === 'bad-pkg@1.0.0' ? err('remote: bad package name') : ok()
     }
-    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
-      return ok(JSON.stringify({ dependencies: {} }))
-    }
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') return ok(manifestJson({}))
     return ok()
   }
   const recorded: Array<{ name: string; ok: boolean; error?: string }> = []
   const journal: SshApplyJournalSink = { record: entry => recorded.push(entry) }
-  const result = await applyPlugins(exec, readyStatus, { id: 's1', remoteDshHome: null }, {
-    add: ['good-pkg@1.0.0', 'bad-pkg@1.0.0'],
-    remove: [],
-    restart: false,
-  }, { journal })
+  const result = await applyPlugins(exec, readyStatus, SEED_SPEC,
+    { add: ['good-pkg@1.0.0', 'bad-pkg@1.0.0'], remove: [], restart: false }, { journal })
   assert.equal(result.ok, true)
   if (result.ok) assert.deepEqual(result.result.failed, [{ spec: 'bad-pkg@1.0.0', error: 'remote: bad package name' }])
   assert.deepEqual(recorded, [
@@ -403,7 +349,6 @@ test('applyPlugins: failed rows are journaled with ok:false and their error, nev
     { instanceId: 's1', name: 'bad-pkg', kind: 'add', specBefore: null, ok: false, error: 'remote: bad package name' },
   ])
 })
-
 test('applyPlugins: without a journal sink the historical exec sequence is unchanged (no snapshot read)', async () => {
   const order: string[] = []
   const exec: ExecFn = async (_id, action, payload) => {
@@ -413,7 +358,7 @@ test('applyPlugins: without a journal sink the historical exec sequence is uncha
     }
     if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
       order.push('cat:verify')
-      return ok(JSON.stringify({ dependencies: { 'pkg-a': '^1.0.0' }, dsh: { profile: { bundles: [] } } }))
+      return ok(manifestJson({ 'pkg-a': '^1.0.0' }))
     }
     if (action === 'restart') {
       order.push('restart')
@@ -421,38 +366,31 @@ test('applyPlugins: without a journal sink the historical exec sequence is uncha
     }
     return err(`unexpected ${action}`)
   }
-  const result = await applyPlugins(exec, readyStatus, { id: 's1', remoteDshHome: null }, { add: ['pkg-a@^1.0.0'], remove: [] })
+  const result = await applyPlugins(exec, readyStatus, SEED_SPEC, { add: ['pkg-a@^1.0.0'], remove: [] })
   assert.equal(result.ok, true)
   assert.deepEqual(order[0], 'dsh:add:pkg-a@^1.0.0', 'the first exec is the change itself — no snapshot read without a journal')
 })
-
 test('materializeAndAdd: a folder claiming a protected name (or an unpinned official one) is refused before any exec', async () => {
   // ssh facts: B₀ ∪ S protection + conservative official-scope installs.
   // A chamber *seed* name can never be smuggled in through a folder pick...
   const root = tempDir()
   let execCalls = 0
-  const exec: ExecFn = async () => {
-    execCalls += 1
-    return ok()
-  }
+  const exec: ExecFn = async () => { execCalls += 1; return ok() }
   const noPack = async (): Promise<never> => { throw new Error('pack must not run for a refused materialize') }
-
   const seedDir = join(root, 'seed')
   mkdirSync(seedDir)
   writeFileSync(join(seedDir, 'package.json'), JSON.stringify({ name: '@dsh-chamber/dsh-chamber-seed-client-graph', version: '1.0.0' }))
-  const seedPick = await materializeAndAdd(exec, { id: 's1', remoteDshHome: null }, seedDir, noPack)
+  const seedPick = await materializeAndAdd(exec, SEED_SPEC, seedDir, noPack)
   assert.equal(seedPick.ok, false)
   if (!seedPick.ok) assert.match(seedPick.error, /\[protected\]/)
-
   // ...and an official-scope folder is refused on the ssh install face even
   // when the name is not part of the baseline.
   const officialDir = join(root, 'official')
   mkdirSync(officialDir)
   writeFileSync(join(officialDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh-experimental-agent-team-profile', version: '0.1.5-rc.2' }))
-  const officialPick = await materializeAndAdd(exec, { id: 's1', remoteDshHome: null }, officialDir, noPack)
+  const officialPick = await materializeAndAdd(exec, SEED_SPEC, officialDir, noPack)
   assert.equal(officialPick.ok, false)
   if (!officialPick.ok) assert.match(officialPick.error, /\[protected\]/)
-
   assert.equal(execCalls, 0, 'the remote write/add chain never runs')
 })
 
@@ -461,22 +399,11 @@ test('materializeAndAdd: a folder claiming a protected name (or an unpinned offi
 // ============================================================================
 
 test('applyPlugins: per-item failure isolation — one failing add never blocks the rest', async () => {
-  const exec: ExecFn = async (_id, action, payload) => {
-    if (action === 'run' && payload?.op === 'exec' && payload.command === 'dsh') {
-      const specArg = payload.argv?.[4]
-      if (specArg === 'bad@1.0.0') return err('pnpm error: 404 Not Found')
-      return ok()
-    }
-    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
-      return ok(JSON.stringify({ dependencies: { good: '^1.0.0' }, dsh: { profile: { bundles: [] } } }))
-    }
-    return err(`unexpected ${action}`)
-  }
-  const result = await applyPlugins(exec, readyStatus, { id: 's1', remoteDshHome: null }, {
-    add: ['good@^1.0.0', 'bad@1.0.0'],
-    remove: [],
-    restart: false,
+  const exec = applyExec({
+    manifest: manifestJson({ good: '^1.0.0' }),
+    onDsh: spec => spec === 'bad@1.0.0' ? err('pnpm error: 404 Not Found') : ok(),
   })
+  const result = await applyPlugins(exec, readyStatus, SEED_SPEC, { add: ['good@^1.0.0', 'bad@1.0.0'], remove: [], restart: false })
   assert.equal(result.ok, true)
   if (result.ok) {
     assert.equal(result.result.applied, 1, 'only the successful add counts')
@@ -486,41 +413,19 @@ test('applyPlugins: per-item failure isolation — one failing add never blocks 
     assert.equal(result.result.verified, true, 'failed items are excluded from the assertion')
   }
 })
-
 test('applyPlugins: verified:false when an add did not land in the remote manifest (fail-loud)', async () => {
-  const exec: ExecFn = async (_id, action, payload) => {
-    if (action === 'run' && payload?.op === 'exec' && payload.command === 'dsh') return ok()
-    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
-      // The add "succeeded" on the wire but never reached dependencies.
-      return ok(JSON.stringify({ dependencies: {}, dsh: { profile: { bundles: [] } } }))
-    }
-    return err(`unexpected ${action}`)
-  }
-  const result = await applyPlugins(exec, readyStatus, { id: 's1', remoteDshHome: null }, {
-    add: ['pkg@^1.0.0'],
-    remove: [],
-    restart: false,
-  })
+  // The add "succeeded" on the wire but never reached dependencies.
+  const exec = applyExec({ manifest: manifestJson({}) })
+  const result = await applyPlugins(exec, readyStatus, SEED_SPEC, { add: ['pkg@^1.0.0'], remove: [], restart: false })
   assert.equal(result.ok, true)
   if (result.ok) {
     assert.equal(result.result.applied, 1)
     assert.equal(result.result.verified, false)
   }
 })
-
 test('applyPlugins: restart failure → {restarted:false, ready:null}, honest report, never a fake success', async () => {
-  const exec: ExecFn = async (_id, action, payload) => {
-    if (action === 'run' && payload?.op === 'exec' && payload.command === 'dsh') return ok()
-    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
-      return ok(JSON.stringify({ dependencies: { pkg: '^1.0.0' }, dsh: { profile: { bundles: [] } } }))
-    }
-    if (action === 'restart') return err('systemctl restart failed (exit 5)')
-    return err(`unexpected ${action}`)
-  }
-  const result = await applyPlugins(exec, readyStatus, { id: 's1', remoteDshHome: null }, {
-    add: ['pkg@^1.0.0'],
-    remove: [],
-  })
+  const exec = applyExec({ manifest: manifestJson({ pkg: '^1.0.0' }), onRestart: () => err('systemctl restart failed (exit 5)') })
+  const result = await applyPlugins(exec, readyStatus, SEED_SPEC, { add: ['pkg@^1.0.0'], remove: [] })
   assert.equal(result.ok, true)
   if (result.ok) {
     assert.equal(result.result.restarted, false)
@@ -528,45 +433,23 @@ test('applyPlugins: restart failure → {restarted:false, ready:null}, honest re
     assert.equal(result.result.deferred, false)
   }
 })
-
 test('applyPlugins: ready recheck failure after a restart → {ready:false}', async () => {
   // The instance is CONNECTED before the apply (ready), then the restart
   // leaves it down and it never recovers — the bounded recheck must time out.
   let phase: 'ready' | 'error' = 'ready'
   const status: StatusFn = () => ({ phase })
-  const exec: ExecFn = async (_id, action, payload) => {
-    if (action === 'run' && payload?.op === 'exec' && payload.command === 'dsh') return ok()
-    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
-      return ok(JSON.stringify({ dependencies: { pkg: '^1.0.0' }, dsh: { profile: { bundles: [] } } }))
-    }
-    if (action === 'restart') { phase = 'error'; return ok() }
-    return err(`unexpected ${action}`)
-  }
-  const result = await applyPlugins(exec, status, { id: 's1', remoteDshHome: null }, {
-    add: ['pkg@^1.0.0'],
-    remove: [],
-  }, { verifyReadyTimeoutMs: 20, verifyReadyIntervalMs: 5 })
+  const exec = applyExec({ manifest: manifestJson({ pkg: '^1.0.0' }), onRestart: () => { phase = 'error'; return ok() } })
+  const result = await applyPlugins(exec, status, SEED_SPEC, { add: ['pkg@^1.0.0'], remove: [] }, { verifyReadyTimeoutMs: 20, verifyReadyIntervalMs: 5 })
   assert.equal(result.ok, true)
   if (result.ok) {
     assert.equal(result.result.restarted, true)
     assert.equal(result.result.ready, false)
   }
 })
-
 test('applyPlugins: restart on a NOT-connected instance reports ready:null + readyNote, never a misleading ready:false', async () => {
   const idleStatus: StatusFn = () => ({ phase: 'idle' })
-  const exec: ExecFn = async (_id, action, payload) => {
-    if (action === 'run' && payload?.op === 'exec' && payload.command === 'dsh') return ok()
-    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
-      return ok(JSON.stringify({ dependencies: { pkg: '^1.0.0' }, dsh: { profile: { bundles: [] } } }))
-    }
-    if (action === 'restart') return ok()
-    return err(`unexpected ${action}`)
-  }
-  const result = await applyPlugins(exec, idleStatus, { id: 's1', remoteDshHome: null }, {
-    add: ['pkg@^1.0.0'],
-    remove: [],
-  })
+  const exec = applyExec({ manifest: manifestJson({ pkg: '^1.0.0' }) })
+  const result = await applyPlugins(exec, idleStatus, SEED_SPEC, { add: ['pkg@^1.0.0'], remove: [] })
   assert.equal(result.ok, true)
   if (result.ok) {
     assert.equal(result.result.restarted, true)
@@ -575,51 +458,22 @@ test('applyPlugins: restart on a NOT-connected instance reports ready:null + rea
     assert.match(result.result.readyNote, /not connected/)
   }
 })
-
 test('applyPlugins: a non-boolean restart is refused (string "false" must never trigger a restart)', async () => {
   const exec: ExecFn = async () => { throw new Error('no exec may run for an invalid apply') }
-  const result = await applyPlugins(exec, readyStatus, { id: 's1', remoteDshHome: null }, {
-    add: ['pkg@^1.0.0'],
-    remove: [],
-    restart: 'false' as unknown as boolean,
-  })
+  const result = await applyPlugins(exec, readyStatus, SEED_SPEC, { add: ['pkg@^1.0.0'], remove: [], restart: 'false' as unknown as boolean })
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /restart must be a boolean/)
 })
-
 test('applyPlugins: a known bundle add missing from the remote bundles layer → verified:false (design 13 §3)', async () => {
-  const exec: ExecFn = async (_id, action, payload) => {
-    if (action === 'run' && payload?.op === 'exec' && payload.command === 'dsh') return ok()
-    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
-      // dependency present but the bundle activation layer is empty.
-      return ok(JSON.stringify({ dependencies: { 'bundle-pkg': '^1.0.0' }, dsh: { profile: { bundles: [] } } }))
-    }
-    if (action === 'restart') return ok()
-    return err(`unexpected ${action}`)
-  }
-  const result = await applyPlugins(exec, readyStatus, { id: 's1', remoteDshHome: null }, {
-    add: ['bundle-pkg@^1.0.0'],
-    remove: [],
-    restart: false,
-  }, { knownBundles: ['bundle-pkg'] })
+  // dependency present but the bundle activation layer is empty.
+  const exec = applyExec({ manifest: manifestJson({ 'bundle-pkg': '^1.0.0' }) })
+  const result = await applyPlugins(exec, readyStatus, SEED_SPEC, { add: ['bundle-pkg@^1.0.0'], remove: [], restart: false }, { knownBundles: ['bundle-pkg'] })
   assert.equal(result.ok, true)
   if (result.ok) assert.equal(result.result.verified, false)
 })
-
 test('applyPlugins: a known bundle add in dependencies AND bundles → verified:true', async () => {
-  const exec: ExecFn = async (_id, action, payload) => {
-    if (action === 'run' && payload?.op === 'exec' && payload.command === 'dsh') return ok()
-    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
-      return ok(JSON.stringify({ dependencies: { 'bundle-pkg': '^1.0.0' }, dsh: { profile: { bundles: ['bundle-pkg'] } } }))
-    }
-    if (action === 'restart') return ok()
-    return err(`unexpected ${action}`)
-  }
-  const result = await applyPlugins(exec, readyStatus, { id: 's1', remoteDshHome: null }, {
-    add: ['bundle-pkg@^1.0.0'],
-    remove: [],
-    restart: false,
-  }, { knownBundles: ['bundle-pkg'] })
+  const exec = applyExec({ manifest: manifestJson({ 'bundle-pkg': '^1.0.0' }, ['bundle-pkg']) })
+  const result = await applyPlugins(exec, readyStatus, SEED_SPEC, { add: ['bundle-pkg@^1.0.0'], remove: [], restart: false }, { knownBundles: ['bundle-pkg'] })
   assert.equal(result.ok, true)
   if (result.ok) assert.equal(result.result.verified, true)
 })
@@ -633,7 +487,6 @@ test('materializePluginsDir is the stable literal dir for every remoteDshHome (d
   assert.equal(materializePluginsDir('~/.dsh'), '~/.dsh-chamber/plugins')
   assert.equal(materializePluginsDir('/opt/dsh'), '~/.dsh-chamber/plugins')
 })
-
 test('materializeAbsolutePath resolves ~ via the REMOTE $HOME (printf), never the local home', async () => {
   const exec: ExecFn = async (_id, action, payload) => {
     if (action === 'run' && payload?.op === 'exec' && payload.command === 'printf') {
@@ -645,7 +498,6 @@ test('materializeAbsolutePath resolves ~ via the REMOTE $HOME (printf), never th
   const resolved = await materializeAbsolutePath(exec, SEED_SPEC, '~/.dsh-chamber/plugins/pkg-a1b2.tgz')
   assert.deepEqual(resolved, { ok: true, path: '/home/remote-user/.dsh-chamber/plugins/pkg-a1b2.tgz' })
 })
-
 test('materializeAbsolutePath: absolute paths pass through; an unsafe remote $HOME fails loud', async () => {
   const passthrough = await materializeAbsolutePath(async () => err('unexpected'), SEED_SPEC, '/opt/x.tgz')
   assert.deepEqual(passthrough, { ok: true, path: '/opt/x.tgz' })
@@ -686,9 +538,8 @@ test('materializeAndAdd: pack → write-file → remote $HOME → add file:<abso
   const pkgDir = join(root, 'pkg')
   mkdirSync(pkgDir, { recursive: true })
   writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: '@scope/my-plugin', version: '1.0.0' }))
-  const tarball = Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0xff, 0xfe, 0x00, 0x01])
   const remote = makeMaterializeExec()
-  const result = await materializeAndAdd(remote.exec, SEED_SPEC, pkgDir, () => ({ bytes: tarball }))
+  const result = await materializeAndAdd(remote.exec, SEED_SPEC, pkgDir, () => ({ bytes: TARBALL_BYTES }))
   assert.equal(result.ok, true)
   if (!result.ok) return
   // write target: the stable literal dir + the NORMALIZED scoped filename.
@@ -696,7 +547,7 @@ test('materializeAndAdd: pack → write-file → remote $HOME → add file:<abso
   const writePath = remote.written[0].path
   assert.ok(writePath.startsWith('~/.dsh-chamber/plugins/scope-my-plugin-'), `normalized filename, got ${writePath}`)
   assert.ok(writePath.endsWith('.tgz'))
-  assert.ok(remote.written[0].bytes.equals(tarball), 'the tarball bytes are preserved verbatim')
+  assert.ok(remote.written[0].bytes.equals(TARBALL_BYTES), 'the tarball bytes are preserved verbatim')
   // add spec: absolute file: under the remote $HOME — never a local path.
   const addCall = remote.calls.find(entry => entry.op === 'exec' && entry.argv?.[0] === 'plugin')
   assert.ok(addCall !== undefined)
@@ -705,7 +556,6 @@ test('materializeAndAdd: pack → write-file → remote $HOME → add file:<abso
   assert.equal(result.remotePath, writePath)
   assert.equal(result.spec, addSpec)
 })
-
 test('materializeAndAdd: an unresolvable remote $HOME fails loud (never the LOCAL home path)', async () => {
   const root = tempDir()
   const pkgDir = join(root, 'pkg')
@@ -722,7 +572,6 @@ test('materializeAndAdd: an unresolvable remote $HOME fails loud (never the LOCA
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /cannot resolve the remote \$HOME/)
 })
-
 test('materializeAndAdd: a write-file failure fails loud before the add', async () => {
   const root = tempDir()
   const pkgDir = join(root, 'pkg')
@@ -741,16 +590,15 @@ test('materializeAndAdd: a write-file failure fails loud before the add', async 
 // verbatim — no local package.json read, no pnpm pack — through the same
 // write-file → remote $HOME → add file: tail.
 test('materializeArchiveAndAdd: archive bytes → write-file → remote $HOME → add file:<absolute>', async () => {
-  const tarball = Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0xff, 0xfe, 0x00, 0x01])
   const remote = makeMaterializeExec()
-  const result = await materializeArchiveAndAdd(remote.exec, SEED_SPEC, { name: 'pkg', bytes: tarball })
+  const result = await materializeArchiveAndAdd(remote.exec, SEED_SPEC, { name: 'pkg', bytes: TARBALL_BYTES })
   assert.equal(result.ok, true)
   if (!result.ok) return
   assert.equal(remote.written.length, 1)
   const writePath = remote.written[0].path
   assert.ok(writePath.startsWith('~/.dsh-chamber/plugins/pkg-'), `name-derived filename, got ${writePath}`)
   assert.ok(writePath.endsWith('.tgz'))
-  assert.ok(remote.written[0].bytes.equals(tarball), 'the archive bytes are preserved verbatim (no repack)')
+  assert.ok(remote.written[0].bytes.equals(TARBALL_BYTES), 'the archive bytes are preserved verbatim (no repack)')
   const addCall = remote.calls.find(entry => entry.op === 'exec' && entry.argv?.[0] === 'plugin')
   assert.ok(addCall !== undefined)
   const addSpec = addCall.argv?.[4] ?? ''
@@ -758,7 +606,6 @@ test('materializeArchiveAndAdd: archive bytes → write-file → remote $HOME �
   assert.equal(result.remotePath, writePath)
   assert.equal(result.spec, addSpec)
 })
-
 test('materializeArchiveAndAdd: protected / unpinned-official / malformed names are refused before any exec', async () => {
   const exec: ExecFn = async () => err('unexpected exec — a refused archive must not touch the remote')
   const bytes = Buffer.from([0x1f, 0x8b, 0x08])
@@ -776,7 +623,6 @@ test('materializeArchiveAndAdd: protected / unpinned-official / malformed names 
   assert.equal(official.ok, false)
   if (!official.ok) assert.match(official.error, /\[protected\]/)
 })
-
 test('materializeArchiveAndAdd: an oversized or empty archive is refused before any exec', async () => {
   const exec: ExecFn = async () => err('unexpected exec')
   const empty = await materializeArchiveAndAdd(exec, SEED_SPEC, { name: 'pkg', bytes: Buffer.alloc(0) })
@@ -812,7 +658,6 @@ test('local plugin writer reaper fail-closes on PID identity reuse', async () =>
   assert.deepEqual(signals, [])
   assert.equal(existsSync(localPluginWriterLedgerPath(home)), true)
 })
-
 test('local plugin writer reaper kills a daemonized descendant after its group leader exited', {
   skip: process.platform === 'win32',
   timeout: 15_000,

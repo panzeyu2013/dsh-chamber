@@ -1,8 +1,7 @@
 /**
- * Shared transport-manager test harness: the silent logger, the status
- * projection type without a URL leak, the fake ssh child and the manager
- * factory (temporary instances file, fake port probe, injected timings),
- * plus the askpass-env provider fixture.
+ * Shared transport-manager test harness: the silent logger, the status projection type without a URL
+ * leak, the fake ssh child, the manager factory (temporary instances file, fake port probe, injected
+ * timings), the askpass-env provider fixture, the shared EXEC_INSTANCE and the ready-then-drop driver.
  * Bare helper file — never registered in scripts/test.mjs.
  */
 
@@ -136,6 +135,24 @@ export function makeManager(t: TestContext, overrides: {
       probeOk = ok
     },
   }
+}
+
+/** The manager bundle makeManager returns (for helper signatures). */
+export type ManagerHarness = ReturnType<typeof makeManager>
+
+/** A second instance with a managed systemd service, for the exec tests. */
+export const EXEC_INSTANCE: TransportInstanceInput = {
+  id: 's2', label: 'lab-server', host: 'lab.example.com', user: 'bob', remotePort: 3080, serviceName: 'dsh-chamber',
+}
+
+/** Drive s1 to ready, drop its first tunnel and wait for the retry spawn. */
+export async function readyThenDrop(harness: ManagerHarness, drop: (child: FakeChild) => void = child => child.simulateExit(0)) {
+  harness.setProbe(true)
+  harness.manager.connect('s1')
+  await waitFor(() => harness.manager.status('s1')!.phase === 'ready')
+  harness.setProbe(false)
+  drop(harness.children[0])
+  await waitFor(() => harness.spawnCalls.length === 2, 3000, 'retry spawn')
 }
 
 export function tempDir(t?: TestContext) {

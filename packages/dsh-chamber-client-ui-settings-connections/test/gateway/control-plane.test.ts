@@ -17,38 +17,7 @@ import {
 } from '../../src/client/control-plane.ts'
 import { gatewayReadFenceText, type GatewayReadFenceKey } from '../../src/client/managed-restart.ts'
 import { en, zh } from '../../src/locales.ts'
-
-/** Define the page origin the shared client reads (controlPlaneUrl prefers
- *  window.location.origin; the browser shell is served by the control plane). */
-function withPageOrigin(origin: string): () => void {
-  const previous = Object.getOwnPropertyDescriptor(globalThis, 'window')
-  Object.defineProperty(globalThis, 'window', {
-    configurable: true,
-    value: { location: { origin } },
-  })
-  return () => {
-    if (previous === undefined) delete (globalThis as { window?: unknown }).window
-    else Object.defineProperty(globalThis, 'window', previous)
-  }
-}
-
-interface FetchCall { url: string; init: RequestInit }
-
-function stubFetch(status: number, body: unknown): { calls: FetchCall[]; restore(): void } {
-  const calls: FetchCall[] = []
-  const original = globalThis.fetch
-  globalThis.fetch = ((input: unknown, init?: RequestInit) => {
-    calls.push({ url: String(input), init: init ?? {} })
-    return Promise.resolve(new Response(typeof body === 'string' ? body : JSON.stringify(body), {
-      status,
-      headers: { 'content-type': 'application/json' },
-    }))
-  }) as typeof fetch
-  return {
-    calls,
-    restore(): void { globalThis.fetch = original },
-  }
-}
+import { FENCE_BODY, stubFetch, withPageOrigin, type FetchCall } from '../support/fixtures.ts'
 
 /** A stub that consumes its answers in order and repeats the LAST one for any
  *  further call — the read fence's retry needs a 409 → 200 sequence, and the
@@ -70,14 +39,10 @@ function stubFetchSequence(answers: Array<{ status: number; body: unknown }>): {
   }
 }
 
-const hostLogsBody = {
-  port: 30801,
-  lines: [
-    { ts: 1753000000000, stream: 'stdout', line: 'gateway dsh boot line' },
-    { ts: 1753000001000, stream: 'stderr', line: 'gateway dsh warn' },
-  ],
-  truncated: false,
-}
+const hostLogsBody = { port: 30801, lines: [
+  { ts: 1753000000000, stream: 'stdout', line: 'gateway dsh boot line' },
+  { ts: 1753000001000, stream: 'stderr', line: 'gateway dsh warn' },
+], truncated: false }
 
 test('cp.gatewayHostLogs: targets the instance proxy with limit/offset and parses the local-compatible shape', async () => {
   const restoreOrigin = withPageOrigin('http://127.0.0.1:17500')
@@ -126,9 +91,7 @@ test('cp.gatewayHostLogs: a gateway refusal surfaces loud as an ApiError with st
   try {
     await assert.rejects(cp.gatewayHostLogs('gw-prod', 200, 0), (err: unknown) => {
       const apiError = err as { status?: number; body?: { code?: string } | null }
-      assert.equal(apiError.status, 503)
-      assert.equal(apiError.body?.code, 'quarantined')
-      return true
+      return apiError.status === 503 && apiError.body?.code === 'quarantined'
     })
   } finally {
     stub.restore()
@@ -141,10 +104,8 @@ test('cp.gatewayHostLogs: a gateway refusal surfaces loud as an ApiError with st
  * proxy, plus the gateway_plugin_sync IPC wrapper (design 21 §6.5). ---- */
 
 const installedOkBody = {
-  ok: true,
-  dependencies: { '@deepseek-ai/dsh-demo': '^1.0.0', '@dsh-chamber/picked': 'file:<hidden>' },
-  bundles: ['@dsh-chamber/picked'],
-  profileExists: true,
+  ok: true, dependencies: { '@deepseek-ai/dsh-demo': '^1.0.0', '@dsh-chamber/picked': 'file:<hidden>' },
+  bundles: ['@dsh-chamber/picked'], profileExists: true,
 }
 
 test('gatewayChamberSeedCache: GETs the seed cache through the instance proxy', async () => {
@@ -173,10 +134,7 @@ test('gatewayChamberSeedCache: a non-2xx answer throws the shared ApiError, neve
   const restoreOrigin = withPageOrigin('http://127.0.0.1:17500')
   const stub = stubFetch(503, { error: 'quarantined', code: 'quarantined' })
   try {
-    await assert.rejects(gatewayChamberSeedCache('gw-prod'), (err: unknown) => {
-      assert.equal((err as { status?: number }).status, 503)
-      return true
-    })
+    await assert.rejects(gatewayChamberSeedCache('gw-prod'), (err: unknown) => (err as { status?: number }).status === 503)
   } finally {
     stub.restore()
     restoreOrigin()
@@ -220,10 +178,7 @@ test('gatewayInstalled: any other refusal (503 …) rethrows the ApiError, never
   const restoreOrigin = withPageOrigin('http://127.0.0.1:17500')
   const stub = stubFetch(503, { error: 'quarantined', code: 'quarantined' })
   try {
-    await assert.rejects(gatewayInstalled('gw-prod'), (err: unknown) => {
-      assert.equal((err as { status?: number }).status, 503)
-      return true
-    })
+    await assert.rejects(gatewayInstalled('gw-prod'), (err: unknown) => (err as { status?: number }).status === 503)
     assert.equal(stub.calls.length, 1, 'only the fence 409 retries — a 503 stays a loud read failure')
   } finally {
     stub.restore()
@@ -232,20 +187,11 @@ test('gatewayInstalled: any other refusal (503 …) rethrows the ApiError, never
 })
 
 /* ---- design 21 §6.2 读/写面共享栅栏 (2026-12 接线) ----------------------------
- * The gateway withholds `GET /chamber/plugins/installed` with 409
- * `runtime_busy` while a plugin mutation holds the managed-profile write lease.
- * Before this wiring the client mapped only 404/500, so that 409 surfaced as a
- * generic read failure ("请求失败 409 …") AND was never retried. The tests below
- * pin both halves: a transient fence still yields the real projection with NO
- * error path (the promise resolves → the dialog's .catch never runs → no error
- * prompt), and a persistent fence yields the typed busy arm whose copy comes
- * from the DEDICATED dictionary key — never a profile/read-error key. ---- */
-
-/** The fence refusal exactly as routes.ts answers it. */
-const fenceBody = {
-  error: 'managed profile write in flight (plugin mutation); the installed projection is fenced — retry after the task settles',
-  code: 'runtime_busy',
-}
+ * The gateway withholds `GET /chamber/plugins/installed` with 409 `runtime_busy`
+ * while a plugin mutation holds the managed-profile write lease. The tests below pin
+ * both halves: a transient fence still yields the real projection with NO error path,
+ * and a persistent fence yields the typed busy arm whose copy comes from the
+ * DEDICATED dictionary key — never a profile/read-error key. ---- */
 
 /** The fence locale key + its projection (the dialog's call shape). */
 const FENCE_KEY: GatewayReadFenceKey = 'gatewayReadFencedBusy'
@@ -261,7 +207,7 @@ function assertFenceArm(result: GatewayInstalledProjection): asserts result is F
 
 test('gatewayInstalled: a fenced 409 then 200 lands the real projection, with no error path', async () => {
   const restoreOrigin = withPageOrigin('http://127.0.0.1:17500')
-  const stub = stubFetchSequence([{ status: 409, body: fenceBody }, { status: 200, body: installedOkBody }])
+  const stub = stubFetchSequence([{ status: 409, body: FENCE_BODY }, { status: 200, body: installedOkBody }])
   try {
     const result = await gatewayInstalled('gw-prod')
     // Resolving (not rejecting) is exactly "no error prompt": the dialog's
@@ -282,7 +228,7 @@ test('gatewayInstalled: a fenced 409 then 200 lands the real projection, with no
 
 test('gatewayInstalled: a persistent fence yields the busy arm + the DEDICATED key (never a read-error key)', async () => {
   const restoreOrigin = withPageOrigin('http://127.0.0.1:17500')
-  const stub = stubFetchSequence([{ status: 409, body: fenceBody }])
+  const stub = stubFetchSequence([{ status: 409, body: FENCE_BODY }])
   try {
     const result = await gatewayInstalled('gw-prod')
     assert.deepEqual(result, { ok: false, code: 'runtime_busy', refusalCode: 'runtime_busy' })
@@ -333,7 +279,7 @@ test('gatewayInstalled: an aborted read stays single-shot (an unmounted dialog f
   const restoreOrigin = withPageOrigin('http://127.0.0.1:17500')
   const controller = new AbortController()
   controller.abort()
-  const stub = stubFetchSequence([{ status: 409, body: fenceBody }])
+  const stub = stubFetchSequence([{ status: 409, body: FENCE_BODY }])
   try {
     const result = await gatewayInstalled('gw-prod', { signal: controller.signal })
     assert.deepEqual(result, { ok: false, code: 'runtime_busy', refusalCode: 'runtime_busy' })
@@ -345,15 +291,12 @@ test('gatewayInstalled: an aborted read stays single-shot (an unmounted dialog f
 })
 
 const tasksBody = {
-  ok: true,
+  ok: true, busy: false,
   tasks: [
     { id: 'op-1', ts: 1753000002000, kind: 'install', name: 'pkg-a', spec: 'pkg-a@^1.0.0', preImage: 'backups/op-1', initiator: 'my-desktop', status: 'ok', restarted: 'ok' },
     { id: 'op-2', ts: 1753000001000, kind: 'remove', name: 'pkg-b', preImage: null, initiator: 'another-desktop', status: 'failed', error: 'pnpm refused' },
   ],
-  deferred: [
-    { id: 'intent-1', ts: 1753000003000, kind: 'install', name: 'pkg-c', spec: 'pkg-c@^2.0.0', initiator: 'my-desktop' },
-  ],
-  busy: false,
+  deferred: [{ id: 'intent-1', ts: 1753000003000, kind: 'install', name: 'pkg-c', spec: 'pkg-c@^2.0.0', initiator: 'my-desktop' }],
 }
 
 test('gatewayTasks: GETs the task projection (journal + deferred + busy) through the instance proxy', async () => {
@@ -374,18 +317,27 @@ test('gatewayTasks: a non-2xx refusal throws the shared ApiError, never a silent
   const restoreOrigin = withPageOrigin('http://127.0.0.1:17500')
   const stub = stubFetch(503, { error: 'quarantined', code: 'quarantined' })
   try {
-    await assert.rejects(gatewayTasks('gw-prod'), (err: unknown) => {
-      assert.equal((err as { status?: number }).status, 503)
-      return true
-    })
+    await assert.rejects(gatewayTasks('gw-prod'), (err: unknown) => (err as { status?: number }).status === 503)
   } finally {
     stub.restore()
     restoreOrigin()
   }
 })
 
-test('gatewayPluginApply: forwards the RAW registry id and the add/remove/deferRestart input verbatim', async () => {
+/** Install a `window.dshChamber.desktopSsh` stub for the duration of `run`. */
+async function withDesktopSsh<T>(desktopSsh: Record<string, unknown>, run: () => Promise<T>): Promise<T> {
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window')
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    value: { location: { origin: 'http://127.0.0.1:17500' }, dshChamber: { desktopSsh } },
+  })
+  try { return await run() } finally {
+    if (previous === undefined) delete (globalThis as { window?: unknown }).window
+    else Object.defineProperty(globalThis, 'window', previous)
+  }
+}
+
+test('gatewayPluginApply: forwards the RAW registry id and the add/remove/deferRestart input verbatim', async () => {
   const seen: Array<{ id: string; input: unknown }> = []
   const desktopSshStub = {
     gateway_plugin_apply: async (id: string, input: unknown): Promise<unknown> => {
@@ -395,11 +347,7 @@ test('gatewayPluginApply: forwards the RAW registry id and the add/remove/deferR
         : { ok: false, error: 'no active gateway registration' }
     },
   }
-  Object.defineProperty(globalThis, 'window', {
-    configurable: true,
-    value: { location: { origin: 'http://127.0.0.1:17500' }, dshChamber: { desktopSsh: desktopSshStub } },
-  })
-  try {
+  await withDesktopSsh(desktopSshStub, async () => {
     const executed = await gatewayPluginApply('gw-prod', { add: [], remove: ['pkg-a'], deferRestart: false })
     assert.deepEqual(executed, { ok: true, installed: [], removed: ['pkg-a'], restarted: true })
     const refused = await gatewayPluginApply('gw-missing', { add: [], remove: ['pkg-a'] })
@@ -408,14 +356,10 @@ test('gatewayPluginApply: forwards the RAW registry id and the add/remove/deferR
       { id: 'gw-prod', input: { add: [], remove: ['pkg-a'], deferRestart: false } },
       { id: 'gw-missing', input: { add: [], remove: ['pkg-a'] } },
     ])
-  } finally {
-    if (previous === undefined) delete (globalThis as { window?: unknown }).window
-    else Object.defineProperty(globalThis, 'window', previous)
-  }
+  })
 })
 
 test('gatewayPluginSync: forwards the RAW registry id and passes the ok/error unions through', async () => {
-  const previous = Object.getOwnPropertyDescriptor(globalThis, 'window')
   const seen: string[] = []
   const desktopSshStub = {
     gateway_plugin_sync: async (id: string): Promise<unknown> => {
@@ -425,31 +369,23 @@ test('gatewayPluginSync: forwards the RAW registry id and passes the ok/error un
         : { ok: false, error: 'no active gateway registration' }
     },
   }
-  Object.defineProperty(globalThis, 'window', {
-    configurable: true,
-    value: { location: { origin: 'http://127.0.0.1:17500' }, dshChamber: { desktopSsh: desktopSshStub } },
-  })
-  try {
+  await withDesktopSsh(desktopSshStub, async () => {
     const uploaded = await gatewayPluginSync('gw-prod')
     assert.deepEqual(uploaded, { ok: true, uploaded: true, skipped: false })
     const refused = await gatewayPluginSync('gw-missing')
     assert.deepEqual(refused, { ok: false, error: 'no active gateway registration' })
     assert.deepEqual(seen, ['gw-prod', 'gw-missing'])
-  } finally {
-    if (previous === undefined) delete (globalThis as { window?: unknown }).window
-    else Object.defineProperty(globalThis, 'window', previous)
-  }
+  })
 })
 
 // ── writer-quiescence surface (2026-09-10, design 02 §3.4 / 04 §3.2) ───────
 
 const writerBody = {
-  quiescent: false,
+  quiescent: false, errors: ['a probe failed', 42],
   writers: [
     { name: '4242.json', status: 'kept', pid: 4242, reason: 'identity-unverified', takeOverAvailable: true },
     { name: 'garbage', status: 'nonsense', pid: 'x', reason: 7 },
   ],
-  errors: ['a probe failed', 42],
 }
 
 test('cp.localWriters: normalizes the diagnosis and drops malformed rows', async () => {

@@ -1,10 +1,8 @@
 /**
- * ssh provider password-auth unit tests (design 05 §8) — part 1: the in-memory
- * password store, the ephemeral askpass helper script (single-quote escaping,
- * host-key yes answers, executable 0700 file, dispose cleanup) and password
- * persistence. Pure-Node: the helper is executed against ssh-style prompts.
- *
- * Sibling parts: ssh-provider-exec.test.ts (remote argv/run channel),
+ * ssh provider password-auth unit tests (design 05 §8) — part 1: the in-memory password store, the
+ * ephemeral askpass helper script (single-quote escaping, host-key yes answers, executable 0700
+ * file, dispose cleanup) and password persistence. Pure-Node: the helper is executed against
+ * ssh-style prompts. Sibling parts: ssh-provider-exec.test.ts (remote argv/run channel),
  * ssh-provider-endpoint-auth.test.ts (probeDshSignature / verifyUp auth).
  */
 
@@ -17,14 +15,7 @@ import { dirname, join } from 'node:path'
 import { acquireSshAuthLease, buildAskpassScript, chmodAskpassDirOwnerOnly, configureSshPasswordStore, cleanupStaleAskpassHelpers, createAskpassHelper, disposeSshAuth, purgeSshAuth, getSshPassword, setSshPassword, sshPasswordSupported, sshProvider, MAX_SSH_PASSWORD_CHARS } from '../../ssh-provider.ts'
 import type { TransportInstanceSpec } from '../../transport-provider.ts'
 import { sshCredentialBinding } from '../../credential-binding.ts'
-import { runDeps } from '../support/ssh-provider-run-deps.ts'
-
-/** A minimal valid ssh spec for provider-surface tests (v2: kind = target
- *  type 'dsh', transport = mechanism 'ssh' — design 17 §2). */
-function spec(id: string): TransportInstanceSpec {
-  return { id, label: 'h', kind: 'dsh', transport: 'ssh', host: 'h.example.com', user: 'u', sshPort: null, remotePort: 3080, serviceName: null, remoteDshHome: null, insecureHttp: false }
-}
-
+import { runDeps, spec } from '../support/ssh-provider-run-deps.ts'
 test('buildAskpassScript escapes single quotes and keeps password/passphrase prompts apart from host-key confirmations', () => {
   const script = buildAskpassScript("it's-a-pass'word")
   // The password must be embedded sh-safely: every ' becomes '\'' so the
@@ -35,7 +26,6 @@ test('buildAskpassScript escapes single quotes and keeps password/passphrase pro
   assert.ok(script.includes('echo yes'), 'host-key prompts answer yes')
   assert.ok(!script.includes("it's-a-pass"), 'the raw password never appears in the host-key branch')
 })
-
 test('the askpass helper answers host-key prompts with yes and password prompts with the password', () => {
   // A restrictive umask must not strip the execute bit OpenSSH requires.
   const previousUmask = process.umask(0o177)
@@ -103,12 +93,10 @@ test('the askpass helper answers host-key prompts with yes and password prompts 
     rmSync(path, { force: true })
   }
 })
-
 test('createAskpassHelper refuses instance ids outside the registry whitelist', () => {
   assert.throws(() => createAskpassHelper('bad/id', 'pw'), /invalid instance id/)
   assert.throws(() => createAskpassHelper('../escape', 'pw'), /invalid instance id/)
 })
-
 test('startup cleanup preserves helpers owned by this live process', () => {
   const path = createAskpassHelper('t-live-owner', 'pw')
   try {
@@ -118,7 +106,6 @@ test('startup cleanup preserves helpers owned by this live process', () => {
     rmSync(path, { force: true })
   }
 })
-
 test('askpass directory gate tightens an owned directory and fails closed on an untrusted path', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-askpass-mode-test-'))
   try {
@@ -133,7 +120,6 @@ test('askpass directory gate tightens an owned directory and fails closed on an 
     rmSync(dir, { recursive: true, force: true })
   }
 })
-
 test('setSshPassword/getSshPassword round-trip and clear (empty string and null both clear)', () => {
   const owner = spec('t-store-1')
   setSshPassword(owner, 'pw')
@@ -144,7 +130,6 @@ test('setSshPassword/getSshPassword round-trip and clear (empty string and null 
   setSshPassword(owner, null)
   assert.equal(getSshPassword(owner), null, 'null clears')
 })
-
 test('acquireSshAuthLease returns a child-scoped askpass env only when a password is stored', () => {
   const owner = spec('t-env-1')
   setSshPassword(owner, 'pw')
@@ -168,7 +153,6 @@ test('acquireSshAuthLease returns a child-scoped askpass env only when a passwor
     purgeSshAuth('t-env-2')
   }
 })
-
 test('every askpass spawn requires the exact persisted host/user/sshPort owner', () => {
   const owner = spec('t-owner-bound')
   setSshPassword(owner, 'pw')
@@ -191,18 +175,13 @@ test('every askpass spawn requires the exact persisted host/user/sshPort owner',
       serviceName: 'other.service',
       remoteDshHome: '/srv/dsh',
     }
-    assert.equal(
-      getSshPassword(nonAuthenticationEdit),
-      'pw',
-      'non-authentication metadata is outside password ownership',
-    )
+    assert.equal(getSshPassword(nonAuthenticationEdit), 'pw', 'non-authentication metadata is outside password ownership')
   } finally {
     exactLease?.release()
     setSshPassword(owner, null)
     purgeSshAuth(owner.id)
   }
 })
-
 test('dispose/purge never delete a helper before its child lease releases', () => {
   const owner = spec('t-env-3')
   setSshPassword(owner, 'pw')
@@ -229,7 +208,6 @@ test('dispose/purge never delete a helper before its child lease releases', () =
     purgeSshAuth(owner.id)
   }
 })
-
 test('more than five concurrent askpass generations stay alive and clean up by child lifecycle', () => {
   // Regression: the old fixed cap deleted the tunnel helper once enough
   // concurrent systemd/run children created newer generations.
@@ -260,7 +238,6 @@ test('more than five concurrent askpass generations stay alive and clean up by c
     purgeSshAuth(owner.id)
   }
 })
-
 test('a synchronous exec spawn failure releases its freshly-created askpass helper', async () => {
   configureSshPasswordStore(null)
   const execSpec = { ...spec('t-env-spawn-fail'), serviceName: 'dsh-chamber' }
@@ -279,11 +256,9 @@ test('a synchronous exec spawn failure releases its freshly-created askpass help
     purgeSshAuth(execSpec.id)
   }
 })
-
 test('sshPasswordSupported is false on win32 (askpass unreliability gate)', () => {
   assert.equal(sshPasswordSupported(), process.platform !== 'win32')
 })
-
 test('configureSshPasswordStore persists to and reloads from the plaintext file (0600, atomic)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-'))
   const file = join(dir, 'ssh-passwords.json')
@@ -323,7 +298,6 @@ test('configureSshPasswordStore persists to and reloads from the plaintext file 
     rmSync(dir, { recursive: true, force: true })
   }
 })
-
 test('password-store load tightens a broad mode before reading owner-bound secrets', t => {
   if (process.platform === 'win32') { t.skip('POSIX permission contract'); return }
   const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-'))
@@ -344,7 +318,6 @@ test('password-store load tightens a broad mode before reading owner-bound secre
     rmSync(dir, { recursive: true, force: true })
   }
 })
-
 test('schema v1 passwords are preserved but loudly retired because they have no endpoint owner', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-'))
   const file = join(dir, 'ssh-passwords.json')
@@ -364,7 +337,6 @@ test('schema v1 passwords are preserved but loudly retired because they have no 
     rmSync(dir, { recursive: true, force: true })
   }
 })
-
 test('password-store load refuses symlinks instead of following them', t => {
   if (process.platform === 'win32') { t.skip('POSIX permission contract'); return }
   const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-'))
@@ -385,7 +357,6 @@ test('password-store load refuses symlinks instead of following them', t => {
     rmSync(dir, { recursive: true, force: true })
   }
 })
-
 test('SSH password binding fails closed across the secret-fsync → registry-fsync crash window', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-binding-'))
   const file = join(dir, 'ssh-passwords.json')
@@ -406,7 +377,6 @@ test('SSH password binding fails closed across the secret-fsync → registry-fsy
     rmSync(dir, { recursive: true, force: true })
   }
 })
-
 test('non-empty legacy SSH password files are uniquely preserved and never auto-bound', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-legacy-'))
   const file = join(dir, 'ssh-passwords.json')
@@ -422,7 +392,6 @@ test('non-empty legacy SSH password files are uniquely preserved and never auto-
     rmSync(dir, { recursive: true, force: true })
   }
 })
-
 test('SSH password load tightens an existing regular file before reading and refuses symlinks', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-load-mode-'))
   const file = join(dir, 'ssh-passwords.json')
@@ -456,7 +425,6 @@ test('SSH password load tightens an existing regular file before reading and ref
     rmSync(dir, { recursive: true, force: true })
   }
 })
-
 test('password persistence tightens a pre-existing plaintext tmp file before replacing the store', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-'))
   const file = join(dir, 'ssh-passwords.json')
@@ -472,7 +440,6 @@ test('password persistence tightens a pre-existing plaintext tmp file before rep
     rmSync(dir, { recursive: true, force: true })
   }
 })
-
 test('a corrupt password file is preserved as *.corrupt and fails loud, never silent-empty', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-'))
   const file = join(dir, 'ssh-passwords.json')
@@ -487,7 +454,6 @@ test('a corrupt password file is preserved as *.corrupt and fails loud, never si
     rmSync(dir, { recursive: true, force: true })
   }
 })
-
 test('a syntactically valid password file with an invalid schema is preserved and rejected', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-'))
   const file = join(dir, 'ssh-passwords.json')
@@ -509,7 +475,6 @@ test('a syntactically valid password file with an invalid schema is preserved an
     rmSync(dir, { recursive: true, force: true })
   }
 })
-
 test('password persistence failure rolls back memory and removes the plaintext tmp file', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-'))
   const file = join(dir, 'ssh-passwords.json')
@@ -550,7 +515,6 @@ test('password persistence failure rolls back memory and removes the plaintext t
     rmSync(dir, { recursive: true, force: true })
   }
 })
-
 test('clearing an id with no stored password is a true no-op even when the store is unwritable', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-passwd-'))
   const file = join(dir, 'ssh-passwords.json')
@@ -567,13 +531,11 @@ test('clearing an id with no stored password is a true no-op even when the store
     rmSync(dir, { recursive: true, force: true })
   }
 })
-
 test('setSshPassword refuses reserved ids; provider validation rejects malformed authentication owners', () => {
   assert.throws(() => setSshPassword(spec('local'), 'pw'), /invalid instance id/)
   assert.throws(() => setSshPassword(spec('../escape'), 'pw'), /invalid instance id/)
   assert.equal(sshProvider.validateSpec({ ...spec('valid-owner'), host: '-oProxyCommand=evil' }), null)
 })
-
 test('password and instance metadata limits are enforced in the provider', () => {
   assert.throws(() => setSshPassword(spec('t-too-long'), 'x'.repeat(MAX_SSH_PASSWORD_CHARS + 1)), /longer/)
   assert.equal(sshProvider.validateSpec({ id: 'x'.repeat(65), label: 'h', host: 'h', remotePort: 3080 }), null)
@@ -585,7 +547,6 @@ test('password and instance metadata limits are enforced in the provider', () =>
   assert.ok(sshProvider.validateSpec({ id: 'hyphen-unit', label: 'h', host: 'h', remotePort: 3080, serviceName: 'my-unit.service' }) !== null)
   assert.ok(sshProvider.validateSpec({ id: 'valid', label: 'h', host: 'h', remotePort: 3080 }) !== null)
 })
-
 test('the ssh provider serves both target kinds over the ssh transport (v2, design 17 §2)', () => {
   // Accepted v2 forms: kind 'dsh' / transport 'ssh' normalize into the
   // canonical { kind:'dsh', transport:'ssh', insecureHttp:false } spec.
@@ -617,7 +578,6 @@ test('the ssh provider serves both target kinds over the ssh transport (v2, desi
   assert.equal(sshProvider.validateSpec({ id: 'e', label: 'h', host: 'h', remotePort: 3080, insecureHttp: true }), null)
   assert.equal(sshProvider.validateSpec({ id: 'e2', label: 'h', kind: 'gateway', host: 'h', remotePort: 30801, insecureHttp: true }), null)
 })
-
 test('the ssh provider refuses an S23 pin instead of silently dropping an inapplicable trust anchor', () => {
   assert.equal(sshProvider.validateSpec({
     id: 'ssh-pin',

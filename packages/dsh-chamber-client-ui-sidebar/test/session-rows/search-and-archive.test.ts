@@ -23,35 +23,26 @@ import { session, snapshot, workspace } from '../support/derive-fixtures.ts'
 // The pre-filter tests simulate a projection where every row is visible.
 const ALL_VISIBLE = new Set(['l1', 'l2', 'l3', 'r1', 'r2', 'both', 'x', 'y'])
 
+/** A remote search leg as the wire carries it (hasMore defaults to false). */
+const remoteOf = (items: SearchRow[], hasMore = false) => ({ items, hasMore })
+
+/** A minimal aggregate row for the publish-gate probes (overrides carry the fact under test). */
+const bareServer = (overrides: Record<string, unknown> = {}) => ({
+  id: 'local', sourceFingerprint: 'fp', kind: 'local' as const, transport: 'local' as const,
+  label: 'local', connected: true, phase: 'ready', workspaces: [], updatedAt: 1, ...overrides,
+})
+
 test('mergeSearchResults leads with local hits then appends remote-only rows', () => {
-  const local: SearchRow[] = [
-    { sessionId: 'l1', snippet: '' },
-    { sessionId: 'l2', snippet: '' },
-  ]
-  const remote = {
-    items: [
-      { sessionId: 'r1', snippet: 'remote one' },
-      { sessionId: 'r2', snippet: 'remote two' },
-    ],
-    hasMore: false,
-  }
+  const local: SearchRow[] = [{ sessionId: 'l1', snippet: '' }, { sessionId: 'l2', snippet: '' }]
+  const remote = remoteOf([{ sessionId: 'r1', snippet: 'remote one' }, { sessionId: 'r2', snippet: 'remote two' }])
   const merged = mergeSearchResults(local, remote, 20, ALL_VISIBLE, true)
   assert.deepEqual(merged.items.map(row => row.sessionId), ['l1', 'l2', 'r1', 'r2'])
   assert.equal(merged.hasMore, false)
 })
 
 test('mergeSearchResults adopts the remote snippet for sessions hit in both legs', () => {
-  const local: SearchRow[] = [
-    { sessionId: 'l1', snippet: '' },
-    { sessionId: 'both', snippet: '' },
-  ]
-  const remote = {
-    items: [
-      { sessionId: 'both', snippet: 'content snippet' },
-      { sessionId: 'r1', snippet: 'remote one' },
-    ],
-    hasMore: false,
-  }
+  const local: SearchRow[] = [{ sessionId: 'l1', snippet: '' }, { sessionId: 'both', snippet: '' }]
+  const remote = remoteOf([{ sessionId: 'both', snippet: 'content snippet' }, { sessionId: 'r1', snippet: 'remote one' }])
   const merged = mergeSearchResults(local, remote, 20, ALL_VISIBLE, true)
   assert.deepEqual(merged.items, [
     { sessionId: 'l1', snippet: '' },
@@ -61,14 +52,7 @@ test('mergeSearchResults adopts the remote snippet for sessions hit in both legs
 })
 
 test('mergeSearchResults dedupes sessionIds within the remote leg', () => {
-  const remote = {
-    items: [
-      { sessionId: 'x', snippet: 'first' },
-      { sessionId: 'x', snippet: 'second' },
-      { sessionId: 'y', snippet: 'other' },
-    ],
-    hasMore: false,
-  }
+  const remote = remoteOf([{ sessionId: 'x', snippet: 'first' }, { sessionId: 'x', snippet: 'second' }, { sessionId: 'y', snippet: 'other' }])
   const merged = mergeSearchResults([], remote, 20, ALL_VISIBLE, true)
   assert.deepEqual(merged.items, [
     { sessionId: 'x', snippet: 'first' },
@@ -77,52 +61,32 @@ test('mergeSearchResults dedupes sessionIds within the remote leg', () => {
 })
 
 test('mergeSearchResults sets hasMore from the remote hint', () => {
-  const merged = mergeSearchResults(
-    [],
-    { items: [{ sessionId: 'x', snippet: '' }], hasMore: true },
-    20,
-    ALL_VISIBLE, true)
+  const merged = mergeSearchResults([], remoteOf([{ sessionId: 'x', snippet: '' }], true), 20, ALL_VISIBLE, true)
   assert.equal(merged.hasMore, true)
 })
 
 test('mergeSearchResults sets hasMore when the merged result exceeds the limit', () => {
   const merged = mergeSearchResults(
-    [
-      { sessionId: 'l1', snippet: '' },
-      { sessionId: 'l2', snippet: '' },
-    ],
-    { items: [{ sessionId: 'r1', snippet: '' }], hasMore: false },
-    2,
-    ALL_VISIBLE, true)
+    [{ sessionId: 'l1', snippet: '' }, { sessionId: 'l2', snippet: '' }],
+    remoteOf([{ sessionId: 'r1', snippet: '' }]), 2, ALL_VISIBLE, true)
   assert.deepEqual(merged.items.map(row => row.sessionId), ['l1', 'l2'])
   assert.equal(merged.hasMore, true) // 3 merged rows > limit 2
 })
 
 test('mergeSearchResults bounds the items to the limit', () => {
   const merged = mergeSearchResults(
-    [
-      { sessionId: 'l1', snippet: '' },
-      { sessionId: 'l2', snippet: '' },
-      { sessionId: 'l3', snippet: '' },
-    ],
-    { items: [{ sessionId: 'r1', snippet: '' }], hasMore: false },
-    2,
-    ALL_VISIBLE, true)
+    [{ sessionId: 'l1', snippet: '' }, { sessionId: 'l2', snippet: '' }, { sessionId: 'l3', snippet: '' }],
+    remoteOf([{ sessionId: 'r1', snippet: '' }]), 2, ALL_VISIBLE, true)
   assert.deepEqual(merged.items.map(row => row.sessionId), ['l1', 'l2'])
 })
 
 // ---- P1-2: remote hits are filtered by the visible set ----
 
 test('mergeSearchResults drops remote hits outside the visible set (archived/subagent/blank 混入)', () => {
-  const remote = {
-    items: [
-      { sessionId: 'visible-hit', snippet: 'kept' },
-      { sessionId: 'archived-hit', snippet: 'dropped' },
-      { sessionId: 'subagent-hit', snippet: 'dropped' },
-      { sessionId: 'blank-hit', snippet: 'dropped' },
-    ],
-    hasMore: false,
-  }
+  const remote = remoteOf([
+    { sessionId: 'visible-hit', snippet: 'kept' }, { sessionId: 'archived-hit', snippet: 'dropped' },
+    { sessionId: 'subagent-hit', snippet: 'dropped' }, { sessionId: 'blank-hit', snippet: 'dropped' },
+  ])
   const merged = mergeSearchResults([], remote, 20, new Set(['visible-hit']), true)
   assert.deepEqual(merged.items, [{ sessionId: 'visible-hit', snippet: 'kept' }])
   assert.equal(merged.hasMore, false)
@@ -130,14 +94,10 @@ test('mergeSearchResults drops remote hits outside the visible set (archived/sub
 
 test('mergeSearchResults keeps visible remote hits and adopts their snippet for local hits', () => {
   const local: SearchRow[] = [{ sessionId: 'both', snippet: '' }]
-  const remote = {
-    items: [
-      { sessionId: 'both', snippet: 'content snippet' },
-      { sessionId: 'visible-only', snippet: 'remote snippet' },
-      { sessionId: 'hidden', snippet: 'dropped' },
-    ],
-    hasMore: false,
-  }
+  const remote = remoteOf([
+    { sessionId: 'both', snippet: 'content snippet' }, { sessionId: 'visible-only', snippet: 'remote snippet' },
+    { sessionId: 'hidden', snippet: 'dropped' },
+  ])
   const merged = mergeSearchResults(local, remote, 20, new Set(['both', 'visible-only']), true)
   assert.deepEqual(merged.items, [
     { sessionId: 'both', snippet: 'content snippet' },
@@ -146,25 +106,13 @@ test('mergeSearchResults keeps visible remote hits and adopts their snippet for 
 })
 
 test('mergeSearchResults: a READY projection with an empty visible set filters ALL remote hits (M7 — 合法空集合不再放行隐藏会话)', () => {
-  const remote = {
-    items: [
-      { sessionId: 'x', snippet: 'hidden' },
-      { sessionId: 'y', snippet: 'also hidden' },
-    ],
-    hasMore: false,
-  }
+  const remote = remoteOf([{ sessionId: 'x', snippet: 'hidden' }, { sessionId: 'y', snippet: 'also hidden' }])
   const merged = mergeSearchResults([], remote, 20, new Set(), true)
   assert.deepEqual(merged.items, [])
 })
 
 test('mergeSearchResults: a NOT-ready projection keeps remote hits (degrade — 投影未就绪不误杀命中)', () => {
-  const remote = {
-    items: [
-      { sessionId: 'x', snippet: 'kept' },
-      { sessionId: 'y', snippet: 'also kept' },
-    ],
-    hasMore: false,
-  }
+  const remote = remoteOf([{ sessionId: 'x', snippet: 'kept' }, { sessionId: 'y', snippet: 'also kept' }])
   const merged = mergeSearchResults([], remote, 20, new Set(), false)
   assert.deepEqual(merged.items, [
     { sessionId: 'x', snippet: 'kept' },
@@ -325,30 +273,19 @@ test('instanceSnapshotSignature changes when archiveSetKnown changes', () => {
 })
 
 test('serversProjectionSignature: archivedSessions and archiveSetKnown participate in the publish gate', () => {
-  const makeServer = (overrides: Record<string, unknown> = {}) => ({
-    id: 'local',
-    sourceFingerprint: 'fp',
-    kind: 'local' as const,
-    transport: 'local' as const,
-    label: 'local',
-    connected: true,
-    phase: 'ready',
-    workspaces: [],
-    updatedAt: 1,
-    ...overrides,
-  })
-  const plain = makeServer()
-  const withRows = makeServer({ archivedSessions: [{ sessionId: 's1', updatedAt: 5 }] })
-  const withoutRows = makeServer({ archivedSessions: [] })
-  const degraded = makeServer({ archivedSessions: [], archiveSetKnown: false })
-  const authoritative = makeServer({ archivedSessions: [], archiveSetKnown: true })
+  const plain = bareServer()
+  const withRows = bareServer({ archivedSessions: [{ sessionId: 's1', updatedAt: 5 }] })
+  const withoutRows = bareServer({ archivedSessions: [] })
+  const degraded = bareServer({ archivedSessions: [], archiveSetKnown: false })
+  const authoritative = bareServer({ archivedSessions: [], archiveSetKnown: true })
   // Rows presence/absence and provenance all move the signature…
   assert.notEqual(serversProjectionSignature([plain] as never), serversProjectionSignature([withRows] as never))
   assert.notEqual(serversProjectionSignature([withoutRows] as never), serversProjectionSignature([withRows] as never))
   assert.notEqual(serversProjectionSignature([degraded] as never), serversProjectionSignature([authoritative] as never))
   // …and identical inputs stay identical (null normalization).
-  assert.equal(serversProjectionSignature([plain] as never), serversProjectionSignature([makeServer()] as never))
-  assert.equal(serversProjectionSignature([degraded] as never), serversProjectionSignature([makeServer({ archivedSessions: [], archiveSetKnown: false })] as never))
+  assert.equal(serversProjectionSignature([plain] as never), serversProjectionSignature([bareServer()] as never))
+  assert.equal(serversProjectionSignature([degraded] as never),
+    serversProjectionSignature([bareServer({ archivedSessions: [], archiveSetKnown: false })] as never))
 })
 
 // 2026-09-11 review-fix finding 1: the active-Schedule marker is rendered by
@@ -359,17 +296,9 @@ test('serversProjectionSignature: archivedSessions and archiveSetKnown participa
 // shell's own subscription). Without it the marker freezes at its first-seen
 // value until an unrelated change re-publishes.
 test('serversProjectionSignature: a schedule-only flip republishes, reverting restores identical bytes', () => {
-  const makeServer = (hasActiveSchedule: boolean) => ({
-    id: 'local',
-    sourceFingerprint: 'fp',
-    kind: 'local' as const,
-    transport: 'local' as const,
-    label: 'local',
-    connected: true,
-    phase: 'ready',
+  const makeServer = (hasActiveSchedule: boolean) => bareServer({
     workspaces: [{
-      id: 'w1',
-      title: 'Work',
+      id: 'w1', title: 'Work',
       // Everything else byte-identical: the schedule bit is the only delta.
       sessions: [{ id: 's1', title: 'One', displayTitle: 'One', running: false, blank: false, updatedAt: 5, hasActiveSchedule }],
     }],

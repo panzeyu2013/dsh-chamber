@@ -1,11 +1,6 @@
-/**
- * gateway provider — part 3: syncGatewayChamberPlugins — the desktop→gateway
- * chamber host package upload (changed-package PUT, idempotence, controlled
- * restart, ssh-tunnel authority, SPKI check before any application bytes).
- *
- * Sibling parts: gateway-provider.test.ts, gateway-session-spki.test.ts,
- * gateway-chamber-apply-materialize.test.ts.
- */
+/** gateway provider — part 3: syncGatewayChamberPlugins — the desktop→gateway chamber host package
+ *  upload (changed-package PUT, idempotence, controlled restart, tunnel authority, pre-PUT SPKI
+ *  check) (siblings: gateway-provider / gateway-session-spki / gateway-chamber-apply-materialize). */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

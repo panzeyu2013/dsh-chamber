@@ -1,10 +1,8 @@
 /**
- * ssh provider — part 2: the remote argv whitelist (buildRemoteExecArgv,
- * resolveWriteTarget), the run/write-file channel, stdout/stderr bounding and
- * redacted failure detail.
- *
- * Sibling parts: ssh-provider.test.ts, ssh-provider-endpoint-auth.test.ts
- * (shared TransportExecDeps fake in test/support/ssh-provider-run-deps.ts).
+ * ssh provider — part 2: the remote argv whitelist (buildRemoteExecArgv, resolveWriteTarget), the
+ * run/write-file channel, stdout/stderr bounding and redacted failure detail. Sibling parts:
+ * ssh-provider.test.ts, ssh-provider-endpoint-auth.test.ts (shared TransportExecDeps fake in
+ * test/support/ssh-provider-run-deps.ts).
  */
 
 import { test } from 'node:test'
@@ -14,22 +12,11 @@ import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
 import { existsSync } from 'node:fs'
 import { buildRemoteExecArgv, configureSshPasswordStore, purgeSshAuth, resolveWriteTarget, setSshPassword, sshProvider, RUN_STDOUT_MAX_BYTES, WRITE_FILE_MAX_BYTES } from '../../ssh-provider.ts'
-import type { TransportInstanceSpec, SpawnedProcess } from '../../transport-provider.ts'
+import type { SpawnedProcess, TransportExecDeps } from '../../transport-provider.ts'
 import { CHILD_LINE_MAX_CHARS } from '../../bounded-lines.ts'
-import { runDeps } from '../support/ssh-provider-run-deps.ts'
-
-/** A minimal valid ssh spec for provider-surface tests (v2: kind = target
- *  type 'dsh', transport = mechanism 'ssh' — design 17 §2). */
-function spec(id: string): TransportInstanceSpec {
-  return { id, label: 'h', kind: 'dsh', transport: 'ssh', host: 'h.example.com', user: 'u', sshPort: null, remotePort: 3080, serviceName: null, remoteDshHome: null, insecureHttp: false }
-}
+import { runDeps, spec, specWithHome } from '../support/ssh-provider-run-deps.ts'
 
 // --- design 13 §7.2 exec whitelist tests (M1) ---
-
-function specWithHome(id: string, remoteDshHome: string): TransportInstanceSpec {
-  return { id, label: 'h', kind: 'dsh', transport: 'ssh', host: 'h.example.com', user: 'u', sshPort: null, remotePort: 3080, serviceName: null, remoteDshHome, insecureHttp: false }
-}
-
 test('buildRemoteExecArgv accepts a whitelisted dsh plugin add/remove', () => {
   assert.deepEqual(
     buildRemoteExecArgv(spec('w1'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'add', '@scope/name@^1.2.3'] }),
@@ -40,14 +27,12 @@ test('buildRemoteExecArgv accepts a whitelisted dsh plugin add/remove', () => {
     ['dsh', 'plugin', '--profile', 'web', 'remove', 'name'],
   )
 })
-
 test('buildRemoteExecArgv prepends DSH_HOME when remoteDshHome is set', () => {
   assert.deepEqual(
     buildRemoteExecArgv(specWithHome('w2', '/opt/dsh'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'add', 'name@1.2.3'] }),
     ['DSH_HOME=/opt/dsh', 'dsh', 'plugin', '--profile', 'web', 'add', 'name@1.2.3'],
   )
 })
-
 test('buildRemoteExecArgv refuses injection / non-registry specs', () => {
   const bad = [
     '-oProxyCommand=x',
@@ -67,14 +52,12 @@ test('buildRemoteExecArgv refuses injection / non-registry specs', () => {
     assert.equal(buildRemoteExecArgv(spec('w3'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'add', s] }), null, `refuses ${JSON.stringify(s)}`)
   }
 })
-
 test('buildRemoteExecArgv refuses wrong dsh argv structure', () => {
   assert.equal(buildRemoteExecArgv(spec('w4'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'update', 'name'] }), null, 'refuses non-whitelisted action')
   assert.equal(buildRemoteExecArgv(spec('w4'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'add'] }), null, 'refuses missing spec')
   assert.equal(buildRemoteExecArgv(spec('w4'), { op: 'exec', command: 'dsh', argv: ['other', '--profile', 'web', 'add', 'name'] }), null, 'refuses wrong subcommand')
   assert.equal(buildRemoteExecArgv(spec('w4'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'remove', 'name@1.2.3'] }), null, 'remove refuses @version')
 })
-
 test('buildRemoteExecArgv allows only the two whitelisted cat paths (always under LC_ALL=C)', () => {
   // LC_ALL=C forces the REMOTE coreutils to English regardless of the remote
   // locale — the general fix for localized ENOENT messages (zh_CN 没有那个文件
@@ -84,7 +67,6 @@ test('buildRemoteExecArgv allows only the two whitelisted cat paths (always unde
   assert.equal(buildRemoteExecArgv(spec('w5'), { op: 'exec', command: 'cat', argv: ['/etc/passwd'] }), null, 'refuses arbitrary cat path')
   assert.equal(buildRemoteExecArgv(spec('w5'), { op: 'exec', command: 'cat', argv: ['~/.dsh/profiles/web/package.json', 'extra'] }), null, 'refuses extra argv')
 })
-
 test('resolveWriteTarget allows the three prefixes and rejects traversal', () => {
   assert.equal(resolveWriteTarget(spec('w6'), '~/.dsh-chamber/plugins/pkg-abc123.tgz'), '~/.dsh-chamber/plugins/pkg-abc123.tgz')
   assert.equal(resolveWriteTarget(spec('w6'), '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/package.json'), '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/package.json')
@@ -94,12 +76,10 @@ test('resolveWriteTarget allows the three prefixes and rejects traversal', () =>
   assert.equal(resolveWriteTarget(spec('w6'), '~/.dsh-chamber/plugins/../evil.tgz'), null, 'refuses dot-dot')
   assert.equal(resolveWriteTarget(spec('w6'), '~/.dsh/profiles/web/package.json'), null, 'refuses non-whitelisted profile file')
 })
-
 test('resolveWriteTarget honors a custom remoteDshHome', () => {
   assert.equal(resolveWriteTarget(specWithHome('w7', '/opt/dsh'), '/opt/dsh/profiles/web/cordis.patch.yml'), '/opt/dsh/profiles/web/cordis.patch.yml')
   assert.equal(resolveWriteTarget(specWithHome('w7', '/opt/dsh'), '~/.dsh/profiles/web/cordis.patch.yml'), null, 'default-home path rejected when a custom home is set')
 })
-
 test('resolveWriteTarget rejects traversal inside the seed subtree (shared SEED_RELATIVE_PATTERN)', () => {
   const seed = '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/package.json'
   assert.equal(resolveWriteTarget(spec('w7b'), seed), seed)
@@ -114,16 +94,11 @@ test('resolveWriteTarget rejects traversal inside the seed subtree (shared SEED_
     'self-segment is refused too',
   )
 })
-
 test('buildRemoteExecArgv accepts the fixed printf $HOME lookup (materialize remote-home resolution)', () => {
-  assert.deepEqual(
-    buildRemoteExecArgv(spec('w8'), { op: 'exec', command: 'printf', argv: ['%s', '$HOME'] }),
-    ['printf', '%s', '$HOME'],
-  )
+  assert.deepEqual(buildRemoteExecArgv(spec('w8'), { op: 'exec', command: 'printf', argv: ['%s', '$HOME'] }), ['printf', '%s', '$HOME'])
   assert.equal(buildRemoteExecArgv(spec('w8'), { op: 'exec', command: 'printf', argv: ['%s', 'HOME'] }), null, 'refuses any argv other than the fixed form')
   assert.equal(buildRemoteExecArgv(spec('w8'), { op: 'exec', command: 'printf', argv: ['$HOME', '%s'] }), null)
 })
-
 test('buildRemoteExecArgv allows the converged seed-subtree cat read (seed hash-skip)', () => {
   const seedPkg = '~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/package.json'
   assert.deepEqual(buildRemoteExecArgv(spec('w9'), { op: 'exec', command: 'cat', argv: [seedPkg] }), ['LC_ALL=C', 'cat', seedPkg])
@@ -142,7 +117,6 @@ test('buildRemoteExecArgv allows the converged seed-subtree cat read (seed hash-
     'traversal beyond the seed subtree refused',
   )
 })
-
 test('buildRemoteExecArgv accepts the materialize file: add spec, constrained to the materialize dir', () => {
   const ok = buildRemoteExecArgv(spec('w10'), { op: 'exec', command: 'dsh', argv: ['plugin', '--profile', 'web', 'add', 'file:/home/u/.dsh-chamber/plugins/pkg-a1b2c3d4.tgz'] })
   assert.deepEqual(ok, ['dsh', 'plugin', '--profile', 'web', 'add', 'file:/home/u/.dsh-chamber/plugins/pkg-a1b2c3d4.tgz'])
@@ -188,7 +162,15 @@ class FakeRunChild extends EventEmitter implements SpawnedProcess {
   }
 }
 
-/** Minimal TransportExecDeps driving the provider's `run` channel. */
+/** A spawnFn whose fake child fails immediately with `text` on stderr. */
+function failingRemote(text: string, code = 1): TransportExecDeps['spawnFn'] {
+  return () => {
+    const child = new FakeRunChild()
+    setImmediate(() => { child.stderrWrite(text); child.simulateExit(code) })
+    return child
+  }
+}
+
 /** Bounded poll for observable side effects (the timeout timer is unref'ed;
  * racing it with a fixed keep-alive flaked under CI stalls). */
 async function waitFor(predicate: () => boolean, what: string, timeoutMs = 5_000): Promise<void> {
@@ -199,8 +181,6 @@ async function waitFor(predicate: () => boolean, what: string, timeoutMs = 5_000
   }
   assert.fail(`${what} did not become true within ${timeoutMs}ms`)
 }
-
-
 test('a run timeout resolves without releasing askpass before the real child exit', async () => {
   configureSshPasswordStore(null)
   const runSpec = spec('t-run-timeout-lease')
@@ -296,7 +276,6 @@ function makeRemoteHost(home = '/home/u') {
   }
   return { spawns, files, tamper, spawnFn }
 }
-
 test('write-file: streams base64 over ssh stdin and verifies the read-back in the BYTE domain', async () => {
   const remote = makeRemoteHost()
   // Binary content with invalid UTF-8 sequences: the lossy `toString('utf8')`
@@ -322,7 +301,6 @@ test('write-file: streams base64 over ssh stdin and verifies the read-back in th
   assert.equal(result.stdoutBytes, undefined)
   assert.equal(result.stdout, undefined)
 })
-
 test('write-file: a tampered read-back fails loud (never a fake success)', async () => {
   const remote = makeRemoteHost()
   const content = Buffer.from('hello')
@@ -337,7 +315,6 @@ test('write-file: a tampered read-back fails loud (never a fake success)', async
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /verification failed: remote SHA-256 mismatch/)
 })
-
 test('write-file: a payload sha256 mismatch is refused before any spawn', async () => {
   const remote = makeRemoteHost()
   const result = await sshProvider.exec!(spec('wf3'), 'run', runDeps(remote.spawnFn), {
@@ -350,7 +327,6 @@ test('write-file: a payload sha256 mismatch is refused before any spawn', async 
   if (!result.ok) assert.match(result.error, /content does not match sha256/)
   assert.equal(remote.spawns.length, 0)
 })
-
 test('write-file: content over the 50MiB cap is refused before any spawn', async () => {
   const remote = makeRemoteHost()
   const big = Buffer.alloc(WRITE_FILE_MAX_BYTES + 1, 0x61)
@@ -364,7 +340,6 @@ test('write-file: content over the 50MiB cap is refused before any spawn', async
   if (!result.ok) assert.match(result.error, /exceeds the .*byte limit/)
   assert.equal(remote.spawns.length, 0, 'no ssh process may spawn for an oversized write')
 })
-
 test('run: captured remote stdout is bounded before buffering', async () => {
   const remote = makeRemoteHost()
   const path = '~/.dsh/profiles/web/package.json'
@@ -378,7 +353,6 @@ test('run: captured remote stdout is bounded before buffering', async () => {
   if (!result.ok) assert.match(result.error, /stdout exceeds the .*byte limit/)
   assert.ok(remote.spawns[0].child.killCalls.includes('SIGTERM'), 'oversized producer is terminated')
 })
-
 test('run: an unterminated stderr line is bounded and discarded before redaction detail assembly', async () => {
   const child = new FakeRunChild()
   const logs: Array<{ level: string; message: string }> = []
@@ -402,7 +376,6 @@ test('run: an unterminated stderr line is bounded and discarded before redaction
   assert.ok(logs.some(entry => entry.level === 'error' && entry.message.includes('output line dropped')))
   assert.ok(logs.every(entry => !entry.message.includes('xxxxx')), 'raw overlong stderr never reaches logs')
 })
-
 test('run: many newline-delimited stderr lines are bounded while the process is still running', async () => {
   const child = new FakeRunChild()
   const running = sshProvider.exec!(spec('wf-stderr-count-cap'), 'run', runDeps(() => child), {
@@ -419,7 +392,6 @@ test('run: many newline-delimited stderr lines are bounded while the process is 
     assert.match(result.error, /failure-0/)
   }
 })
-
 test('run: a non-zero exit carries the REDACTED remote stderr text (ENOENT → profile not initialized)', async () => {
   const remote = makeRemoteHost()
   const result = await sshProvider.exec!(spec('wf5'), 'run', runDeps(remote.spawnFn), {
@@ -433,7 +405,6 @@ test('run: a non-zero exit carries the REDACTED remote stderr text (ENOENT → p
     assert.match(result.error, /No such file or directory/, 'the ENOENT stderr text rides the run error')
   }
 })
-
 test('run: a non-quiet failure is logged at ERROR level (loud by default)', async () => {
   const remote = makeRemoteHost()
   const logs: Array<{ level: string; message: string }> = []
@@ -450,7 +421,6 @@ test('run: a non-quiet failure is logged at ERROR level (loud by default)', asyn
     'the ERROR log line is present for a non-quiet failure',
   )
 })
-
 test('run: a QUIET failure keeps the ENOENT error text but suppresses the ERROR log and the stderr INFO echo', async () => {
   const remote = makeRemoteHost()
   const logs: Array<{ level: string; message: string }> = []
@@ -471,26 +441,15 @@ test('run: a QUIET failure keeps the ENOENT error text but suppresses the ERROR 
     !logs.some(entry => entry.level === 'error' && entry.message.startsWith('run command failed')),
     'no ERROR log for a quiet expected failure',
   )
-  assert.ok(
-    !logs.some(entry => entry.message.includes('No such file or directory')),
-    'no raw-stderr INFO echo for a quiet run',
-  )
+  assert.ok(!logs.some(entry => entry.message.includes('No such file or directory')), 'no raw-stderr INFO echo for a quiet run')
 })
-
 test('run: a QUIET ENOENT probe under a `.ssh`-named home stays ENOENT-classified (redacted display still hides the path)', async () => {
   // A whitelist-valid remoteDshHome like /root/.ssh-custom (design 13 §7.2)
   // makes redactSshStderr replace the whole ENOENT line with the redacted
   // summary — the absent-file signal must survive (classified on the RAW
   // stderr), so the plugin-sync caller still reads "file absent", never a
   // loud ssh failure — while the display text still hides the path.
-  const spawnFn = (_command: string, _args: readonly string[], _options: SpawnOptions): SpawnedProcess => {
-    const child = new FakeRunChild()
-    setImmediate(() => {
-      child.stderrWrite('cat: /root/.ssh-custom/profiles/web/package.json: No such file or directory\n')
-      child.simulateExit(1)
-    })
-    return child
-  }
+  const spawnFn = failingRemote('cat: /root/.ssh-custom/profiles/web/package.json: No such file or directory\n')
   const result = await sshProvider.exec!(specWithHome('wf9', '/root/.ssh-custom'), 'run', runDeps(spawnFn), {
     op: 'exec',
     command: 'cat',
@@ -505,21 +464,13 @@ test('run: a QUIET ENOENT probe under a `.ssh`-named home stays ENOENT-classifie
     assert.ok(result.error.includes('[ssh material redacted]'), 'the redacted summary is what is displayed')
   }
 })
-
 test('run: a zh_CN-locale ENOENT ("没有那个文件或目录") is classified as absent — a quiet probe, never a loud failure', async () => {
   // Real-world case (2026-08 user report): coreutils on a zh_CN-locale host
   // prints `没有那个文件或目录` for a missing file. classifyStderr must flag
   // it ENOENT (classified on the RAW line) so the plugin-sync caller reads
   // "file absent" (未注入) instead of a loud ssh failure — while the quiet
   // run stays log-free.
-  const spawnFn = (_command: string, _args: readonly string[], _options: SpawnOptions): SpawnedProcess => {
-    const child = new FakeRunChild()
-    setImmediate(() => {
-      child.stderrWrite('cat: ~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-git-worktree/package.json: 没有那个文件或目录\n')
-      child.simulateExit(1)
-    })
-    return child
-  }
+  const spawnFn = failingRemote('cat: ~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-git-worktree/package.json: 没有那个文件或目录\n')
   const logs: Array<{ level: string; message: string }> = []
   const deps = runDeps(spawnFn)
   deps.log = (level, message) => { logs.push({ level, message }) }
@@ -537,24 +488,13 @@ test('run: a zh_CN-locale ENOENT ("没有那个文件或目录") is classified a
     !logs.some(entry => entry.level === 'error' && entry.message.startsWith('run command failed')),
     'no ERROR log for a quiet zh_CN ENOENT probe',
   )
-  assert.ok(
-    !logs.some(entry => entry.message.includes('没有那个文件或目录')),
-    'no raw-stderr INFO echo for a quiet run',
-  )
+  assert.ok(!logs.some(entry => entry.message.includes('没有那个文件或目录')), 'no raw-stderr INFO echo for a quiet run')
 })
-
 test('run: a QUIET exec with an auth failure stays LOUD (ERROR log + authentication-failure result)', async () => {
   // quiet suppresses EXPECTED failures only (ENOENT probes) — an auth failure
   // is never expected, so it must still log the ERROR line and return the
   // authentication-failure result, never a generic quieted failure.
-  const spawnFn = (_command: string, _args: readonly string[], _options: SpawnOptions): SpawnedProcess => {
-    const child = new FakeRunChild()
-    setImmediate(() => {
-      child.stderrWrite('Permission denied (publickey).\n')
-      child.simulateExit(255)
-    })
-    return child
-  }
+  const spawnFn = failingRemote('Permission denied (publickey).\n', 255)
   const logs: Array<{ level: string; message: string }> = []
   const deps = runDeps(spawnFn)
   deps.log = (level, message) => { logs.push({ level, message }) }
@@ -571,16 +511,8 @@ test('run: a QUIET exec with an auth failure stays LOUD (ERROR log + authenticat
     'quiet never silences an auth failure — the ERROR line is still logged',
   )
 })
-
 test('run: private material in stderr is redacted from the failure detail', async () => {
-  const spawnFn = (_command: string, _args: readonly string[], _options: SpawnOptions): SpawnedProcess => {
-    const child = new FakeRunChild()
-    setImmediate(() => {
-      child.stderrWrite('Load key "/Users/alice/.ssh/id_ed25519": invalid format\n')
-      child.simulateExit(1)
-    })
-    return child
-  }
+  const spawnFn = failingRemote('Load key "/Users/alice/.ssh/id_ed25519": invalid format\n')
   const result = await sshProvider.exec!(spec('wf6'), 'run', runDeps(spawnFn), {
     op: 'exec',
     command: 'cat',

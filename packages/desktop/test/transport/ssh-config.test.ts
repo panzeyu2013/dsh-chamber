@@ -19,7 +19,6 @@ function tempDir() {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-ssh-config-'))
   return dir
 }
-
 test('parses Host entries with HostName/User/Port', () => {
   const hosts = parseSshConfig(`
     Host home
@@ -36,12 +35,10 @@ test('parses Host entries with HostName/User/Port', () => {
     { alias: 'lab', hostName: '10.0.0.5', user: 'bob', port: null },
   ])
 })
-
 test('alias without HostName falls back to the alias itself', () => {
   const hosts = parseSshConfig('Host bare\n  User root\n')
   assert.deepEqual(hosts, [{ alias: 'bare', hostName: 'bare', user: 'root', port: null }])
 })
-
 test('wildcard Host patterns are skipped as entries', () => {
   const hosts = parseSshConfig(`
     Host *
@@ -55,7 +52,6 @@ test('wildcard Host patterns are skipped as entries', () => {
   `)
   assert.deepEqual(hosts, [{ alias: 'real', hostName: 'real.example.com', user: null, port: null }])
 })
-
 test('global-section User/Port become defaults for every entry', () => {
   const hosts = parseSshConfig(`
     User globaluser
@@ -71,7 +67,6 @@ test('global-section User/Port become defaults for every entry', () => {
     { alias: 'b', hostName: 'b.example.com', user: 'globaluser', port: 2300 },
   ])
 })
-
 test('comments, blank lines, and backslash continuations are handled', () => {
   const hosts = parseSshConfig([
     '# leading comment',
@@ -86,7 +81,6 @@ test('comments, blank lines, and backslash continuations are handled', () => {
     { alias: 'continued', hostName: 'continued.example.com', user: 'carol', port: null },
   ])
 })
-
 test('multi-alias Host lines expand to one entry per alias; quoted args are unquoted', () => {
   const hosts = parseSshConfig(`
     Host "web" app db
@@ -99,7 +93,6 @@ test('multi-alias Host lines expand to one entry per alias; quoted args are unqu
     { alias: 'db', hostName: 'svc.example.com', user: 'deploy', port: null },
   ])
 })
-
 test('duplicate aliases on one Host line collapse to a single entry; quoted ports parse', () => {
   const hosts = parseSshConfig(`
     Host dup dup again
@@ -114,7 +107,6 @@ test('duplicate aliases on one Host line collapse to a single entry; quoted port
     { alias: 'qp', hostName: 'qp', user: null, port: 2333 },
   ])
 })
-
 test('a valueless Host keyword and semicolons produce no entries (OpenSSH: # only)', () => {
   const hosts = parseSshConfig([
     'Host',
@@ -129,7 +121,6 @@ test('a valueless Host keyword and semicolons produce no entries (OpenSSH: # onl
     { alias: 'ok', hostName: 'ok', user: null, port: null },
   ])
 })
-
 test('Match blocks are skipped entirely and never leak into entries', () => {
   const hosts = parseSshConfig(`
     Host before
@@ -145,7 +136,6 @@ test('Match blocks are skipped entirely and never leak into entries', () => {
     { alias: 'after', hostName: 'after.example.com', user: null, port: null },
   ])
 })
-
 test('keywords are case-insensitive and only Host/HostName/User/Port are projected', () => {
   const hosts = parseSshConfig(`
     host mixed
@@ -157,7 +147,6 @@ test('keywords are case-insensitive and only Host/HostName/User/Port are project
   `)
   assert.deepEqual(hosts, [{ alias: 'mixed', hostName: 'Mixed.Example.COM', user: 'dave', port: null }])
 })
-
 test('first obtained value wins for each field (ssh semantics)', () => {
   const hosts = parseSshConfig(`
     Host dup
@@ -168,7 +157,6 @@ test('first obtained value wins for each field (ssh semantics)', () => {
   `)
   assert.deepEqual(hosts, [{ alias: 'dup', hostName: 'dup', user: 'first', port: 2000 }])
 })
-
 test('invalid and non-decimal ports are ignored (OpenSSH accepts decimal only)', () => {
   const hosts = parseSshConfig(`
     User 
@@ -187,13 +175,11 @@ test('invalid and non-decimal ports are ignored (OpenSSH accepts decimal only)',
     { alias: 'hex', hostName: 'hex', user: null, port: null },
   ])
 })
-
 test('a missing config file is an empty set, never an error', () => {
   const dir = tempDir()
   const result = discoverSshConfigHosts(join(dir, 'nope', 'config'))
   assert.deepEqual(result, { hosts: [] })
 })
-
 test('an unreadable config file is a loud {error}, never a silent empty', () => {
   const dir = tempDir()
   const file = join(dir, 'config')
@@ -203,7 +189,6 @@ test('an unreadable config file is a loud {error}, never a silent empty', () => 
   if ('error' in result) assert.match(result.error, /could not read ssh config/)
   rmSync(dir, { recursive: true, force: true })
 })
-
 test('discovery reads the file and projects hosts', () => {
   const dir = tempDir()
   const file = join(dir, 'config')

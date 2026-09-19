@@ -1,11 +1,11 @@
 /**
  * Source lock for the chamber carrier-retry patch (design 14 §D4).
  *
- * An upstream re-sync replaces `src/client/remote-stream.ts` wholesale, so the
- * patch cannot rely on review alone: this lock fails loudly when the replayed
- * file drops the live-generation retry branch (the regression that froze the
- * conversation surface: second rapid carrier failure => `gateway/internal` =>
- * `failEventStream()` latch with no retry).
+ * An upstream re-sync replaces `src/client/remote-stream.ts` wholesale, so review
+ * alone cannot hold the patch: this lock fails loudly when the replayed file drops
+ * the live-generation retry branch (the regression that froze the conversation
+ * surface: second rapid carrier failure => gateway/internal => a failEventStream()
+ * latch with no retry).
  */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'

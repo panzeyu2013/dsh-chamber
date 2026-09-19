@@ -16,19 +16,9 @@ import {
 
 function specGatewaySsh(overrides: Partial<SshInstanceSpec> = {}): SshInstanceSpec {
   return {
-    id: 'gateway-ssh',
-    label: 'Gateway SSH',
-    kind: 'gateway',
-    transport: 'ssh',
-    host: 'ssh.example.com',
-    user: 'alice',
-    sshPort: 22,
-    remotePort: 30801,
-    serviceName: 'gateway',
-    remoteDshHome: null,
-    insecureHttp: false,
-    sourceFingerprint: 'test-proof:gateway-ssh',
-    ...overrides,
+    id: 'gateway-ssh', label: 'Gateway SSH', kind: 'gateway', transport: 'ssh', host: 'ssh.example.com',
+    user: 'alice', sshPort: 22, remotePort: 30801, serviceName: 'gateway', remoteDshHome: null,
+    insecureHttp: false, sourceFingerprint: 'test-proof:gateway-ssh', ...overrides,
   }
 }
 
@@ -36,9 +26,7 @@ function normalizeConnectionInput(input: SshInstanceInput): SshInstanceSpec {
   const kind = input.kind ?? 'dsh'
   const transport = input.transport ?? (kind === 'gateway' ? 'http' : 'ssh')
   return {
-    ...input,
-    kind,
-    transport,
+    ...input, kind, transport,
     user: transport === 'ssh' ? (input.user ?? null) : null,
     sshPort: transport === 'ssh' ? (input.sshPort ?? null) : null,
     serviceName: transport === 'ssh' ? (input.serviceName ?? null) : null,
@@ -79,11 +67,7 @@ function connectionBridge(overrides: {
 }
 
 test('renderer save filters all four target/transport combinations into one main-owned transaction', async () => {
-  const cases: Array<{
-    kind: 'dsh' | 'gateway'
-    transport: 'ssh' | 'http'
-    expected: ConnectionCredentialMutations
-  }> = [
+  const cases: Array<{ kind: 'dsh' | 'gateway'; transport: 'ssh' | 'http'; expected: ConnectionCredentialMutations }> = [
     { kind: 'dsh', transport: 'ssh', expected: { sshPassword: 'ssh-secret' } },
     { kind: 'dsh', transport: 'http', expected: {} },
     { kind: 'gateway', transport: 'http', expected: { gatewayToken: 'gateway-token', gatewayPassword: 'gateway-password' } },

@@ -1,11 +1,6 @@
-/**
- * gateway-session — part 2: cookie parsing among multiple set-cookie headers,
- * per-origin session isolation, invalidate/invalidateScope races, held logins
- * and fallbacks, dispose and expiresAt.
- *
- * Sibling parts: gateway-session.test.ts, gateway-session-refresh.test.ts
- * (shared fixtures in test/support/gateway-session-fixtures.ts).
- */
+/** gateway-session — part 2: cookie parsing among multiple set-cookie headers, per-origin session
+ *  isolation, invalidate/invalidateScope races, held logins and fallbacks, dispose and expiresAt
+ *  (siblings: gateway-session.test.ts, gateway-session-refresh.test.ts; shared fixtures in support). */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -16,7 +11,7 @@ import {
   configureGatewaySessionProvider,
   verifyGatewayPasswordSession,
 } from '../../gateway-provider.ts'
-import { COOKIE, PASSWORD, loginHandler, startGateway, stubRequestFactory, assertFailure, type LoginRecord } from '../support/gateway-session-fixtures.ts'
+import { COOKIE, PASSWORD, bindSessionManager, loginHandler, startGateway, stubRequestFactory, assertFailure, type LoginRecord } from '../support/gateway-session-fixtures.ts'
 
 /** Request factory whose responses are released explicitly by the test. */
 function deferredLoginFactory(responders: Array<() => void>): GatewayHttpRequest {
@@ -220,14 +215,7 @@ test('invalidation of a held login returns stale and prevents cookie probe, bear
   const origin = { baseUrl: 'http://gateway.example.com:30801', insecureHttp: true, scope: 'test:held-login' }
   let probes = 0
   let bearerFallbacks = 0
-  configureGatewaySessionProvider({
-    ensureSession: (target, password) => mgr.ensureSession(target, password),
-    generation: target => mgr.generation(target),
-    registrationAuthProof: target => mgr.registrationAuthProof(target),
-    setRegistrationAuthProof: (target, proof) => mgr.setRegistrationAuthProof(target, proof),
-    cachedCookie: target => mgr.cachedCookie(target),
-    invalidate: target => mgr.invalidate(target),
-  })
+  bindSessionManager(mgr)
   try {
     const verification = verifyGatewayPasswordSession(
       origin,
@@ -254,14 +242,7 @@ test('invalidation of a held login returns stale and prevents cookie probe, bear
 test('scope invalidation during a held bearer fallback supersedes the old captured token proof', async () => {
   const mgr = createGatewaySessionManager({ request: stubRequestFactory({ status: 401, setCookie: null }) })
   const origin = { baseUrl: 'http://gateway.example.com:30804', insecureHttp: true, scope: 'test:held-fallback' }
-  configureGatewaySessionProvider({
-    ensureSession: (target, password) => mgr.ensureSession(target, password),
-    generation: target => mgr.generation(target),
-    registrationAuthProof: target => mgr.registrationAuthProof(target),
-    setRegistrationAuthProof: (target, proof) => mgr.setRegistrationAuthProof(target, proof),
-    cachedCookie: target => mgr.cachedCookie(target),
-    invalidate: target => mgr.invalidate(target),
-  })
+  bindSessionManager(mgr)
   try {
     let markFallbackStarted!: () => void
     const fallbackStarted = new Promise<void>(resolve => { markFallbackStarted = resolve })
@@ -289,14 +270,7 @@ test('external invalidation while the first cookie probe is pending prevents a 4
   const responders: Array<() => void> = []
   const mgr = createGatewaySessionManager({ request: deferredLoginFactory(responders) })
   const origin = { baseUrl: 'http://gateway.example.com:30802', insecureHttp: true, scope: 'test:pending-probe' }
-  configureGatewaySessionProvider({
-    ensureSession: (target, password) => mgr.ensureSession(target, password),
-    generation: target => mgr.generation(target),
-    registrationAuthProof: target => mgr.registrationAuthProof(target),
-    setRegistrationAuthProof: (target, proof) => mgr.setRegistrationAuthProof(target, proof),
-    cachedCookie: target => mgr.cachedCookie(target),
-    invalidate: target => mgr.invalidate(target),
-  })
+  bindSessionManager(mgr)
   try {
     const initial = mgr.ensureSession(origin, PASSWORD)
     responders.shift()!()
@@ -327,14 +301,7 @@ test('a successful cookie probe is not accepted after its scoped cache proof was
   const responders: Array<() => void> = []
   const mgr = createGatewaySessionManager({ request: deferredLoginFactory(responders) })
   const origin = { baseUrl: 'http://gateway.example.com:30803', insecureHttp: true, scope: 'v1:proof:' + '9'.repeat(64) }
-  configureGatewaySessionProvider({
-    ensureSession: (target, password) => mgr.ensureSession(target, password),
-    generation: target => mgr.generation(target),
-    registrationAuthProof: target => mgr.registrationAuthProof(target),
-    setRegistrationAuthProof: (target, proof) => mgr.setRegistrationAuthProof(target, proof),
-    cachedCookie: target => mgr.cachedCookie(target),
-    invalidate: target => mgr.invalidate(target),
-  })
+  bindSessionManager(mgr)
   try {
     const initial = mgr.ensureSession(origin, PASSWORD)
     responders.shift()!()

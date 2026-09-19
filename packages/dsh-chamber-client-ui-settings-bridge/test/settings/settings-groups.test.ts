@@ -6,10 +6,6 @@
  * partial nested keys and applySettingsPatch deep-merges, so a stale
  * full-object snapshot from another N-ctx shell can never clobber the sibling
  * switches). Plain node:test, no DOM.
- *
- * merged 2026-12 test reorg: test/notifications-settings.test.ts +
- * test/session-todo-settings.test.ts. The two sources declared the identical
- * `settings` fixture; it is declared once below. Test bodies are unchanged.
  */
 
 import { test } from 'node:test';
@@ -18,22 +14,9 @@ import type { ChamberSettings } from '../../src/ambient/settings-bridge.d.ts';
 import { NOTIFICATIONS_DEFAULTS, notificationsOf, notificationsPatch } from '../../src/client/notifications-settings.ts';
 import { SESSION_TODO_DEFAULTS, sessionTodoOf, sessionTodoPatch } from '../../src/client/session-todo-settings.ts';
 
-// Loose fixtures: cast through unknown so these tests stay valid whether or
-// not the renderer ChamberSettings type has gained the `notifications` key.
-// Both merged sources declared this fixture identically; it is declared once.
+// Loose fixture: cast through unknown so these tests stay valid whether or not
+// the renderer ChamberSettings type has gained the `notifications` key.
 const settings = (extra: object): ChamberSettings => ({ ...extra }) as unknown as ChamberSettings;
-
-// --- merged from test/notifications-settings.test.ts ---
-
-/**
- * notifications-settings.ts pure-logic tests (design 19 §3.4, merged into the
- *「通用」notifications control group) — node:test, no DOM. Covers the group's
- * settings access: an absent notifications block reads as the design defaults,
- * and patches ride as PARTIAL nested objects — the main-process validatePatch
- * accepts partial nested keys and applySettingsPatch deep-merges them, so a
- * stale full-object snapshot from another N-ctx shell can never clobber the
- * sibling switches.
- */
 
 test('notificationsOf: an absent block reads as the design defaults', () => {
   assert.deepEqual(notificationsOf(undefined), NOTIFICATIONS_DEFAULTS);
@@ -113,19 +96,6 @@ test('NOTIFICATIONS_DEFAULTS mirrors the desktop store defaults (chamber-setting
     badgeEnabled: true,
   });
 });
-
-// --- merged from test/session-todo-settings.test.ts ---
-
-/**
- * session-todo-settings.ts pure-logic tests (sidebar todo area control group)
- * — node:test, no DOM. Covers the group's settings access: an absent
- * sessionTodo block reads as the design defaults (ALL ON — passive
- * presentation, unlike the opt-in notifications master switch), and patches
- * ride as PARTIAL nested objects — the main-process validatePatch accepts
- * partial nested keys and applySettingsPatch deep-merges them, so a stale
- * full-object snapshot from another N-ctx shell can never clobber the sibling
- * switches.
- */
 
 test('sessionTodo defaults are ALL ON and mirror the desktop store defaults', () => {
   // Mirror assertion: desktop DEFAULT_CHAMBER_SETTINGS.sessionTodo is

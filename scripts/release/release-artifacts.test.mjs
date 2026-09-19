@@ -1,10 +1,7 @@
 /**
- * release-artifacts.test.mjs —— 双端同 tag 产物清单断言（W-27）
- *
- * 演练清单的可执行面：两族产物名不碰撞、feed 归属唯一（Electron 腿的 yml feed
- * vs Swift 腿的 Sparkle appcast，S-22 双通道）、命名规则可预测（stable/beta
- * 通道），并与 release.yml 的实际命名参数一致（Swift 腿
- * `--artifact-basename dsh-chamber-${VERSION}-macos-arm64`）。
+ * release-artifacts.test.mjs —— 双端同 tag 产物清单断言（W-27）：两族产物名不碰撞、feed
+ * 归属唯一（Electron 腿 yml feed vs Swift 腿 Sparkle appcast，S-22 双通道）、命名规则可预测
+ * （stable/beta 通道），并与 release.yml 的 --artifact-basename 命名参数一致。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -34,8 +31,7 @@ import {
   releaseManifest,
 } from './release-artifacts.mjs'
 import { APPCAST_USAGE, verifyNativeAppcast } from './verify-native-appcast.mjs'
-// The appcast's sparkle:version is the .app CFBundleVersion; the mapping must
-// stay single-sourced with the Swift builder (lockstep asserted below).
+// The appcast's sparkle:version is the .app CFBundleVersion; the mapping stays single-sourced with the Swift builder (lockstep asserted below).
 import { bundleVersionFor } from '../../macos/scripts/build-swift-app.mjs'
 
 const script = fileURLToPath(new URL('./release-artifacts.mjs', import.meta.url))
@@ -78,7 +74,6 @@ test('feed 归属唯一：Electron 产出 yml，Swift 产出 appcast（S-22 双�
   assert.equal(nativeMacFeedPath('0.3.0'), 'releases/latest/download/appcast-swift.xml')
   assert.equal(nativeMacFeedPath('0.3.0-beta.2'),
     'releases/download/appcast-swift-beta/appcast-swift-beta.xml')
-
   const stable = releaseManifest('0.3.0')
   assert.equal(stable.electron.feed, 'latest-mac.yml')
   assert.equal(stable.native.feed, 'appcast-swift.xml',
@@ -102,9 +97,8 @@ test('release.yml 的 Swift 命名参数与本清单一致', () => {
   for (const name of native) {
     assert.ok(name.startsWith('dsh-chamber-1.2.3-macos-arm64'), name)
   }
-  // Electron/Squirrel 的 feed 仍归 Electron 腿；Swift 腿的更新源是 Sparkle appcast
-  // （S-01 / 裁决 D-1 选 B；S-22 双通道），必须由 EdDSA 私钥签名，且 dry-run 不进
-  // 入该步。
+  // Electron/Squirrel 的 feed 仍归 Electron 腿；Swift 腿的更新源是 Sparkle appcast（S-01 /
+  // 裁决 D-1 选 B；S-22 双通道），必须由 EdDSA 私钥签名，dry-run 不进入该步。
   const swiftJob = workflow.slice(
     workflow.indexOf('\n  build-swift:'),
     workflow.indexOf('\n  finalize-release:'),
@@ -120,10 +114,9 @@ test('release.yml 的 Swift 命名参数与本清单一致', () => {
     'beta feed URL 必须解析到滚动 tag 的 beta appcast（S-22）')
   assert.ok(swiftJob.includes(`SPARKLE_BETA_ROLLING_TAG: ${NATIVE_BETA_ROLLING_TAG}`),
     '滚动 tag 必须在 build-swift job env 单一定义，且与 release-artifacts.mjs 逐字锁步')
-  // 滚动发布：tag/release 缺失即幂等创建（prerelease，绝不影响 releases/latest），
-  // 每次 beta --clobber 覆盖同一 appcast；S-36：appcast 引用的每个 zip 也上传到该
-  // release（enclosure 可下载），发布发生在 verify 之后的 upload 步。只看代码行
-  // （注释文案不构成断言满足——与 release-workflow-policy 同纪律）。
+  // 滚动发布：tag/release 缺失即幂等创建（prerelease，不影响 releases/latest），beta 每次
+  // --clobber 覆盖同一 appcast；S-36：appcast 引用的 zip 也上传到该 release（enclosure 可下载），
+  // 发布发生在 verify 之后的 upload 步。只看代码行（注释文案不构成断言满足，同 release-workflow-policy 纪律）。
   const swiftJobCode = swiftJob.split('\n').filter((line) => !/^[ \t]*#/.test(line)).join('\n')
   assert.match(swiftJobCode, /ROLLING_TAG="\$\{SPARKLE_BETA_ROLLING_TAG\}"/)
   assert.match(swiftJobCode, /gh release view "\$ROLLING_TAG" --repo "\$GITHUB_REPOSITORY"/)
@@ -207,9 +200,8 @@ test('--check-dir：清单成为真实消费者的断言，缺一即红（W-26 �
 })
 
 // ------------------------------------------------- 2026-12 A2 appcast 本版本门禁
-// generate_appcast 的**真实输出形状**（0.3.2-beta.1 的线上 appcast 逐字段）：
-// item 元素 + <sparkle:version>（CFBundleVersion）+ <sparkle:shortVersionString>
-// + <enclosure url=... sparkle:edSignature=...>。
+// generate_appcast 的**真实输出形状**（0.3.2-beta.1 线上 appcast 逐字段）：item +
+// <sparkle:version>（CFBundleVersion）+ <sparkle:shortVersionString> + <enclosure url=... edSignature=...>。
 function appcastItem({ version, bundleVersion, zip, prefix = 'https://github.com/o/r/releases/latest/download' }) {
   return [
     '        <item>',

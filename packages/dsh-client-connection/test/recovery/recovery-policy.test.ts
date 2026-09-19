@@ -13,12 +13,8 @@ import {
 } from '../../src/client/recovery-policy.ts'
 
 test('recovery policy: ssh and http sources get the widened readiness window', () => {
-  for (const transport of ['ssh', 'http']) {
-    assert.deepEqual(recoveryOverridesForTransport(transport), {
-      generationReadyWarnMs: REMOTE_GENERATION_READY_WARN_MS,
-      generationReadyTimeoutMs: REMOTE_GENERATION_READY_TIMEOUT_MS,
-    }, transport)
-  }
+  const widened = { generationReadyWarnMs: REMOTE_GENERATION_READY_WARN_MS, generationReadyTimeoutMs: REMOTE_GENERATION_READY_TIMEOUT_MS }
+  for (const transport of ['ssh', 'http']) assert.deepEqual(recoveryOverridesForTransport(transport), widened, transport)
   assert.equal(REMOTE_GENERATION_READY_TIMEOUT_MS, 45_000)
   assert.equal(REMOTE_GENERATION_READY_WARN_MS, 5_000)
   // The widened deadline must stay strictly larger than the upstream default

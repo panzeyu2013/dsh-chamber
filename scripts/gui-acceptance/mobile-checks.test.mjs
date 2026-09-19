@@ -1,11 +1,8 @@
 /**
- * mobile-checks.test.mjs — CDP 移动走查**判定层**的负例测试（纯函数，无 CDP、
- * 无浏览器）。跑法：`node --test scripts/gui-acceptance/mobile-checks.test.mjs`。
- *
- * 为什么需要：走查的判定最容易写成「看着截图说没问题」。这里把每一条断言喂
- * 合成事实（好/坏两档），要求判定**必须**在坏档变红、在无法判定时给 INFO 而不是
- * PASS。真实浏览器侧只能由 `mobile-walkthrough.mjs` 对活页面跑出来（需要 CDP 目标，
- * 不在 CI）；这里只锁判定语义，不代替那次运行。
+ * mobile-checks.test.mjs — CDP 移动走查**判定层**的负例测试（纯函数，无 CDP、无浏览器）。
+ * 每条断言喂好/坏两档合成事实：判定**必须**在坏档变红、无法判定时给 INFO 而不是 PASS。
+ * 真实浏览器侧只能由 `mobile-walkthrough.mjs` 对活页面跑出来（需要 CDP 目标，不在 CI）；
+ * 这里只锁判定语义。跑法：`node --test scripts/gui-acceptance/mobile-checks.test.mjs`。
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
@@ -14,7 +11,6 @@ import {
   headerFirstRowVerdict, headerWrapVerdict, hitBoxVerdict, overflowVerdict, pluginActivationVerdict,
   redactSecrets, summarizeWebSocketFrames,
 } from './mobile-checks.mjs'
-
 /** 一台「模拟成功 + 390 宽 + 无溢出」的设备事实。 */
 const deviceFacts = (over = {}) => ({
   innerWidth: 390, innerHeight: 844, clientWidth: 390, clientHeight: 844,
@@ -25,14 +21,12 @@ const deviceFacts = (over = {}) => ({
   rootSlots: 1, mobileFrames: 1, mobileRoles: ['sidebar', 'conversation', 'details'], pluginStyle: true,
   ...over,
 })
-
 /** 一条会话头文本事实。 */
 const text = (over = {}) => ({
   text: '12', tag: 'div', display: 'block', elementChildren: 0, interactive: false,
   seat: 'conversation.session.header.lineage', lineBoxes: 1, height: 20, lineHeight: 20,
   lineHeightSource: 'computed', whiteSpace: 'normal', fontSize: 14, ...over,
 })
-
 const headerFacts = (over = {}) => ({
   hasOutlet: true, hasHeader: true,
   headerBox: { w: 390, h: 44, top: 0, left: 0 },
@@ -143,8 +137,7 @@ test('WS 帧摘要：有上行无下行 = 停滞形态；计数与 URL 去参数
 })
 
 test('applyRequireRun：INFO 在 --require-run 下改判 FAIL，已判定的结论原样保留', () => {
-  // 2026-12 self-review：这条规则原先写在 walkthrough 驱动里（无 IO 的判据层
-  // 才是它的家，CI 才测得到）。语义与桌面档 checks.mjs 的 applyRequireHover 同构。
+  // 规则住在无 IO 的判据层才测得到（CI）；语义与桌面档 checks.mjs 的 applyRequireHover 同构。
   const info = { ok: null, evidence: '本次没有 CDP 目标' }
   assert.deepEqual(applyRequireRun(info, false), info, '默认档：INFO 保持 INFO')
   const strict = applyRequireRun(info, true)
@@ -167,10 +160,8 @@ test('脱敏：环境变量凭据值被抹掉，token/authorization/cookie 键�
 })
 
 test('脱敏：Bearer/Basic/Cookie 的**值**整段抹掉（只抹方案词等于没抹）', () => {
-  // 2026-12 review（P1）：旧规则的值类在第一个空格处停下，于是
-  // `"Authorization":"Bearer SECRET"` 变成 `"Authorization":"*** SECRET"`——
-  // 凭据本身原样落盘；嵌入在外层 JSON 里的转义引号形（`\"token\":\"x\"`）
-  // 更是一个字符都没抹。这些都是真会出现在 WS 帧里的形状。
+  // 2026-12 review（P1）：值必须整段抹掉——只抹方案词等于没抹（`"Authorization":"*** SECRET"` 仍把
+  // 凭据写进持久层）；外层 JSON 里的转义引号形（`\"token\":\"x\"`）同样是 WS 帧里真会出现的形状。
   const secret = 'SECRETFRAMETOKEN'
   for (const [name, input] of [
     ['quoted', `{"Authorization":"Bearer ${secret}"}`],
@@ -191,8 +182,7 @@ test('脱敏：Bearer/Basic/Cookie 的**值**整段抹掉（只抹方案词等�
 })
 
 test('帧摘要里的 payload 片段也过脱敏（它同样会被落盘/打印）', () => {
-  // 2026-12 review（P1）：脱敏只覆盖了帧文件的 payload 字段，摘要里的
-  // 「最后一帧上/下行」是另一条落盘通道（报告 md+json + M-8 证据 + stdout）。
+  // 2026-12 review（P1）：摘要里的「最后一帧上/下行」是另一条落盘通道（报告 md+json + M-8 证据 + stdout）。
   const frames = [
     { direction: 'sent', opcode: 1, payload: '{"Authorization":"Bearer SECRETFRAMETOKEN"}' },
     { direction: 'received', opcode: 1, payload: '{"token":"abc12345"}' },
@@ -207,8 +197,7 @@ test('帧摘要里的 payload 片段也过脱敏（它同样会被落盘/打印�
 })
 
 test('脱敏：URL 查询串里的凭据也抹掉（长度不限——短 token 同样是凭据）', () => {
-  // 2026-12 review：帧的 url / 报告 meta / 网络记录都会落盘，只脱敏 payload
-  // 等于把 `?token=…` 写进持久层；键值规则要求 ≥4 字符，`token=1` 会漏。
+  // 2026-12 review：帧 url / 报告 meta / 网络记录都会落盘，只脱敏 payload 等于把 `?token=…` 写进持久层；键值规则要求 ≥4 字符，`token=1` 会漏。
   const redacted = redactSecrets('ws://127.0.0.1:17510/api/remote.mux?token=1&keep=1', [])
   assert.ok(!redacted.includes('token=1'), redacted)
   assert.match(redacted, /token=\*\*\*/)
@@ -216,8 +205,7 @@ test('脱敏：URL 查询串里的凭据也抹掉（长度不限——短 token 
   const headers = redactSecrets('https://h/p?password=pw&cookie=session-abc', [])
   assert.ok(!headers.includes('password=pw'), headers)
   assert.ok(!headers.includes('cookie=session-abc'), headers)
-  // A query VALUE is one unit even when it contains characters the bare-header
-  // rule stops at (`,` and `;` are legal in a URL): only the query rule can take
+  // A query VALUE is one unit even though `,` and `;` are legal in a URL: only the query rule can take
   // the whole thing, so this is the case that pins it (2026-12 self-review: a
   // plain `?token=1` is already covered by the bare-value rule, which made the
   // mutation of the query rule invisible).
@@ -225,10 +213,8 @@ test('脱敏：URL 查询串里的凭据也抹掉（长度不限——短 token 
   assert.ok(!comma.includes('def'), comma)
   assert.match(comma, /token=\*\*\*&keep=1/)
   assert.ok(!redactSecrets('ws://h/x?token=a;b', []).includes(';b'))
-  // The FRAGMENT half needs its own case: a `?`-query one cannot fail when the
-  // fragment support is removed (2026-12 self-review: the old `#token=SECRET`
-  // case was caught by the bare-value rule, and the `?token=abc,def` case by the
-  // query rule — neither pinned `#`).
+  // The FRAGMENT half needs its own case (2026-12 self-review: a `?token=` one cannot fail when
+  // fragment support is removed; neither the `#token=SECRET` case nor `?token=abc,def` pinned `#`).
   const fragment = redactSecrets('https://h/#token=abc,def', [])
   assert.ok(!fragment.includes('def'), fragment)
   assert.match(fragment, /#token=\*\*\*/)

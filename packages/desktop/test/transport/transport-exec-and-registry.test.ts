@@ -14,7 +14,7 @@ import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { commitTransportCredentialUpdate, createTransportManager } from '../../transport-manager.ts'
 import type { TransportManager } from '../../transport-manager.ts'
-import type { TransportInstanceInput, TransportKind, TransportProvider, TransportStatusProjection } from '../../transport-provider.ts'
+import type { TransportKind, TransportProvider, TransportStatusProjection } from '../../transport-provider.ts'
 import { sshProvider } from '../../ssh-provider.ts'
 import {
   configureGatewayTokenStore,
@@ -23,18 +23,7 @@ import {
   getGatewayToken,
   setGatewayToken,
 } from '../../gateway-provider.ts'
-import { silentLogger, makeManager, tempDir, sleep, waitFor, fakeEnvProvider } from '../support/transport-manager-harness.ts'
-
-/** A second instance with a managed systemd service, for the exec tests. */
-const EXEC_INSTANCE: TransportInstanceInput = {
-  id: 's2',
-  label: 'lab-server',
-  host: 'lab.example.com',
-  user: 'bob',
-  remotePort: 3080,
-  serviceName: 'dsh-chamber',
-}
-
+import { silentLogger, makeManager, tempDir, sleep, waitFor, fakeEnvProvider, EXEC_INSTANCE } from '../support/transport-manager-harness.ts'
 test('startService spawns `ssh user@host systemctl start -- <service>` and lands serviceActive', async t => {
   const { manager, spawnCalls } = makeManager(t, { instances: [EXEC_INSTANCE] })
   const resultPromise = manager.exec('s2', 'start')
@@ -50,7 +39,6 @@ test('startService spawns `ssh user@host systemctl start -- <service>` and lands
     assert.equal(result.status.serviceActive, true)
   }
 })
-
 test('stopService spawns `ssh user@host systemctl stop -- <service>`; non-zero exit is loud', async t => {
   const { manager, spawnCalls } = makeManager(t, { instances: [EXEC_INSTANCE] })
   const resultPromise = manager.exec('s2', 'stop')
@@ -67,7 +55,6 @@ test('stopService spawns `ssh user@host systemctl stop -- <service>`; non-zero e
   assert.equal(failure.ok, false)
   if (!failure.ok) assert.match(failure.error, /failed/)
 })
-
 test('isActive maps exit 0 → serviceActive true, non-zero → serviceActive false', async t => {
   const { manager, spawnCalls } = makeManager(t, { instances: [EXEC_INSTANCE] })
   const activePromise = manager.exec('s2', 'is-active')
@@ -83,7 +70,6 @@ test('isActive maps exit 0 → serviceActive true, non-zero → serviceActive fa
   assert.equal(inactive.ok, true, 'non-zero is-active is a valid answer, not a failure')
   if (inactive.ok) assert.equal(inactive.status.serviceActive, false)
 })
-
 test('is-active distinguishes unit-not-found and ssh-exec failures from inactive', async t => {
   const { manager, spawnCalls } = makeManager(t, { instances: [EXEC_INSTANCE] })
   // exit 4 = no such unit: an explicit error, and serviceActive falls back
@@ -112,7 +98,6 @@ test('is-active distinguishes unit-not-found and ssh-exec failures from inactive
   assert.equal(killed.ok, false)
   if (!killed.ok) assert.match(killed.error, /could not reach/)
 })
-
 test('registry refuses option-shaped serviceName values atomically and accepts a normal hyphenated unit', async t => {
   const { manager, spawnCalls } = makeManager(t)
   const before = manager.listInstances()
@@ -132,7 +117,6 @@ test('registry refuses option-shaped serviceName values atomically and accepts a
   spawnCalls[0].child.simulateExit(0)
   assert.equal((await validPromise).ok, true)
 })
-
 test('exec without a configured serviceName returns an error without spawning', async t => {
   const { manager, spawnCalls } = makeManager(t)
   const result = await manager.exec('s1', 'start')
@@ -140,7 +124,6 @@ test('exec without a configured serviceName returns an error without spawning', 
   if (!result.ok) assert.match(result.error, /no systemd service/)
   assert.equal(spawnCalls.length, 0)
 })
-
 test('exec times out (SIGTERM) and resolves as an error, logged to the ring buffer', async t => {
   const { manager, spawnCalls } = makeManager(t, {
     options: { execTimeoutMs: 20, disconnectGraceMs: 10 },
@@ -154,7 +137,6 @@ test('exec times out (SIGTERM) and resolves as an error, logged to the ring buff
   assert.ok(spawnCalls[0].child.killCalls.includes('SIGTERM'))
   assert.ok(manager.logs('s2').some(entry => entry.level === 'error' && /timed out/.test(entry.message)))
 })
-
 test('exec auth failure returns an error but never touches the tunnel terminal state', async t => {
   const { manager, spawnCalls } = makeManager(t, { instances: [EXEC_INSTANCE] })
   const resultPromise = manager.exec('s2', 'start')
@@ -170,7 +152,6 @@ test('exec auth failure returns an error but never touches the tunnel terminal s
   assert.equal(manager.status('s2')!.requiresUserAction, false)
   assert.equal(manager.status('s2')!.phase, 'idle')
 })
-
 test('exec for an unknown instance is an explicit error; exec never touches the tunnel child', async t => {
   const { manager, spawnCalls, children, setProbe } = makeManager(t, { instances: [EXEC_INSTANCE] })
   setProbe(true)
@@ -183,7 +164,6 @@ test('exec for an unknown instance is an explicit error; exec never touches the 
   assert.equal(spawnCalls.length, 1, 'the exec channel spawns its own process and leaves the tunnel alone')
   assert.equal(children[0].killCalls.length, 0)
 })
-
 test('exec run: the run payload passes through to the provider and captures stdout', async t => {
   const { manager, spawnCalls } = makeManager(t, { instances: [EXEC_INSTANCE] })
   const resultPromise = manager.exec('s2', 'run', {
@@ -203,7 +183,6 @@ test('exec run: the run payload passes through to the provider and captures stdo
     assert.ok(result.stdoutBytes !== undefined && result.stdoutBytes.equals(Buffer.from('packed')), 'raw stdout bytes ride the result')
   }
 })
-
 test('exec run: a whitelist-refused payload never spawns a process', async t => {
   const { manager, spawnCalls } = makeManager(t, { instances: [EXEC_INSTANCE] })
   const result = await manager.exec('s2', 'run', {
@@ -215,7 +194,6 @@ test('exec run: a whitelist-refused payload never spawns a process', async t => 
   if (!result.ok) assert.match(result.error, /whitelist/)
   assert.equal(spawnCalls.length, 0, 'no ssh process may spawn for a refused run payload')
 })
-
 test('removing an instance cancels its in-flight exec; its late callbacks never pollute a same-id reuse', async t => {
   // Review 2026-08: an instance removed while an exec is in flight must not
   // leave the exec running (disconnect SIGTERMs it), and the exec's LATE
@@ -243,7 +221,6 @@ test('removing an instance cancels its in-flight exec; its late callbacks never 
   assert.equal(manager.status('s2')!.serviceActive, null, 'late setProjection never pollutes the reused instance')
   assert.equal(manager.logs('s2').some(entry => /systemctl start/.test(entry.message)), false, 'late exec logs never reach the reused instance')
 })
-
 test('an idle-phase exec is torn down before a same-id endpoint retarget and cannot pollute the replacement', async t => {
   const { manager, spawnCalls } = makeManager(t, { instances: [EXEC_INSTANCE] })
   const resultPromise = manager.exec('s2', 'start')
@@ -265,7 +242,6 @@ test('an idle-phase exec is torn down before a same-id endpoint retarget and can
   assert.equal(manager.status('s2')!.serviceActive, null, 'late projection is generation-guarded')
   assert.equal(manager.logs('s2').some(entry => /systemctl start/.test(entry.message)), false, 'late log is generation-guarded')
 })
-
 test('an exec callback between child stages is fenced by service identity even without an epoch bump', async t => {
   let finishProvider!: () => void
   const providerGate = new Promise<void>(resolve => { finishProvider = resolve })
@@ -292,7 +268,6 @@ test('an exec callback between child stages is fenced by service identity even w
   assert.equal(manager.status('s2')!.serviceActive, null, 'old service callback cannot restore the reset projection')
   assert.equal(manager.logs('s2').some(entry => entry.message === 'stale service callback'), false)
 })
-
 test('exec run: the write-file payload drives the provider flow (stdin write + byte-domain read-back)', async t => {
   const { manager, spawnCalls } = makeManager(t, { instances: [EXEC_INSTANCE] })
   const resultPromise = manager.exec('s2', 'run', {
@@ -313,7 +288,6 @@ test('exec run: the write-file payload drives the provider flow (stdin write + b
   const result = await resultPromise
   assert.equal(result.ok, true)
 })
-
 test('a multi-stage write-file cannot spawn its second old-spec child after a home retarget', async t => {
   const { manager, spawnCalls } = makeManager(t, { instances: [EXEC_INSTANCE] })
   const resultPromise = manager.exec('s2', 'run', {
@@ -333,7 +307,6 @@ test('a multi-stage write-file cannot spawn its second old-spec child after a ho
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /superseded/)
 })
-
 test('legacy persisted instances without serviceName/sshPort migrate to null (v2 kind/transport)', () => {
   const dir = tempDir()
   const file = join(dir, 'ssh-instances.json')
@@ -348,7 +321,6 @@ test('legacy persisted instances without serviceName/sshPort migrate to null (v2
   assert.equal(instances[0].transport, 'ssh')
   assert.equal(instances[0].insecureHttp, false)
 })
-
 test('v2 migration: legacy kinds normalize on load and save (design 17 §2.2)', () => {
   const dir = tempDir()
   const file = join(dir, 'ssh-instances.json')
@@ -392,7 +364,6 @@ test('v2 migration: legacy kinds normalize on load and save (design 17 §2.2)', 
   assert.equal(saved[0].transport, 'ssh')
   assert.equal(saved[0].insecureHttp, false)
 })
-
 test('an auth phrase on the final newline-less stderr line is flushed before exit (tunnel)', async t => {
   const { manager, children, spawnCalls, setProbe } = makeManager(t)
   setProbe(false)
@@ -404,7 +375,6 @@ test('an auth phrase on the final newline-less stderr line is flushed before exi
   assert.equal(manager.status('s1')!.requiresUserAction, true)
   assert.equal(spawnCalls.length, 1, 'no reconnect after a terminal auth failure')
 })
-
 test('an auth phrase on the final newline-less stderr line is flushed before exit (exec)', async t => {
   const { manager, spawnCalls } = makeManager(t, { instances: [EXEC_INSTANCE] })
   const resultPromise = manager.exec('s2', 'start')
@@ -416,7 +386,6 @@ test('an auth phrase on the final newline-less stderr line is flushed before exi
   if (!result.ok) assert.match(result.error, /authentication/)
   assert.equal(manager.status('s2')!.requiresUserAction, false)
 })
-
 test('a SIGTERM-ignoring child gets its SIGKILL escalation after the disconnect grace', async t => {
   const { manager, children, setProbe } = makeManager(t, { options: { disconnectGraceMs: 60 } })
   setProbe(true)
@@ -426,7 +395,6 @@ test('a SIGTERM-ignoring child gets its SIGKILL escalation after the disconnect 
   assert.ok(children[0].killCalls.includes('SIGTERM'))
   await waitFor(() => children[0].killCalls.includes('SIGKILL'), 3000, 'SIGKILL escalation')
 })
-
 test('a replaced child\u2019s late spawn error never failTerminals the fresh transport', async t => {
   const { manager, children, spawnCalls, setProbe } = makeManager(t)
   setProbe(true)
@@ -442,7 +410,6 @@ test('a replaced child\u2019s late spawn error never failTerminals the fresh tra
   setProbe(true)
   await waitFor(() => manager.status('s1')!.phase === 'ready', 3000, 'fresh transport ready')
 })
-
 test('saveInstances rejects duplicate ids atomically', () => {
   const dir = tempDir()
   const file = join(dir, 'ssh-instances.json')
@@ -454,7 +421,6 @@ test('saveInstances rejects duplicate ids atomically', () => {
   assert.deepEqual(manager.listInstances(), [])
   assert.equal(existsSync(file), false)
 })
-
 test('loadInstances drops duplicate persisted ids loudly (first wins)', () => {
   const dir = tempDir()
   const file = join(dir, 'ssh-instances.json')
@@ -487,7 +453,6 @@ test('kind mismatches reject saves atomically while load-time recovery still dro
   const reopened = createTransportManager({ provider: fakeEnvProvider, instancesFile: file, logger: silentLogger })
   assert.deepEqual(reopened.loadInstances().map(entry => entry.id), [])
 })
-
 test('desktop package includes the gateway provider required by main.ts', () => {
   const pkg = JSON.parse(readFileSync(new URL('../../package.json', import.meta.url), 'utf8')) as {
     build?: { files?: unknown[] }
@@ -510,7 +475,6 @@ test('desktop package includes the gateway provider required by main.ts', () => 
   assert.match(core, /desktop_ssh_set_password is clear-only/, 'legacy SSH credential IPC cannot bypass the main-owned save transaction')
   assert.match(main, /status\.kind === 'dsh' && status\.transport === 'ssh'/, 'the chamber host seed gate keys on dsh+ssh (v2)')
 })
-
 test('credential updates reconnect live transports and restore the old transport after a failed write', () => {
   const events: string[] = []
   let status: TransportStatusProjection | null = {
@@ -559,7 +523,6 @@ test('credential updates reconnect live transports and restore the old transport
   commitTransportCredentialUpdate(transport, 'host', belongsToGateway, () => { events.push('commit:token') })
   assert.deepEqual(events, ['clear-old-ssh', 'disconnect', 'commit:token', 'connect'], 'a gateway token update rebuilds a live gateway transport')
 })
-
 test('gateway identity HTTP classification keeps every 5xx transient', () => {
   for (const status of [500, 502, 503, 504, 599, 408, 425, 429]) {
     assert.equal(gatewayHttpFailureIsTerminal(status), false, `HTTP ${status} is retried`)
@@ -568,7 +531,6 @@ test('gateway identity HTTP classification keeps every 5xx transient', () => {
     assert.equal(gatewayHttpFailureIsTerminal(status), true, `HTTP ${status} requires a config/auth fix`)
   }
 })
-
 test('gateway tokens stay outside registry projections and clear durably', t => {
   const token = 'write-only-secret-0123456789abcdef'
   const file = join(tempDir(t), 'gateway-tokens.json')
@@ -599,7 +561,6 @@ test('gateway tokens stay outside registry projections and clear durably', t => 
   const persisted = JSON.parse(readFileSync(file, 'utf8')) as { tokens: Record<string, string> }
   assert.deepEqual(persisted.tokens, {})
 })
-
 test('a corrupt gateway-token file is preserved and never treated as a valid empty store', t => {
   const file = join(tempDir(t), 'gateway-tokens.json')
   t.after(() => { configureGatewayTokenStore(null) })

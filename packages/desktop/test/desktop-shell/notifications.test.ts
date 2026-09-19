@@ -1,9 +1,7 @@
 /**
- * notifications.ts pure-logic tests (design 19 §3.3) — node:test, no
- * electron. Covers the decideNotification matrix (test bypass / disabled /
- * kind switches / requireHidden / mode) / dedupe claim (5s TTL) / payload
- * whitelist validation / bounded active-notification registry (FIFO
- * eviction instead of reject-on-full).
+ * notifications.ts pure-logic tests (design 19 §3.3) — node:test, no electron.
+ * Covers decideNotification (test bypass / gates / requireHidden / mode), the
+ * 5s-TTL dedupe claim, payload whitelist validation and the bounded registry.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -11,6 +9,7 @@ import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { BoundedAckDeliveryQueue } from '../../deep-link.ts';
 import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts';
+import { hostileThrownValue } from './hostile.ts'
 import {
   BoundedActiveNotifications,
   BoundedRateLimiter,
@@ -86,7 +85,6 @@ function makeSettings(overrides: Partial<NotificationSettingsLike> = {}): Notifi
 
 const show = (request: NotificationRequest, settings: NotificationSettingsLike, anyWindowFocused: boolean) =>
   decideNotification({ request, settings, anyWindowFocused });
-
 test('decideNotification: kind=test bypasses every settings gate', () => {
   const testReq = makeRequest({ kind: 'test' });
   // 主开关关 + 事件开关关 + 窗口聚焦 + hidden-only → 仍 show（测试按钮语义）。
@@ -94,14 +92,12 @@ test('decideNotification: kind=test bypasses every settings gate', () => {
   assert.deepEqual(show(testReq, gated, true), { action: 'show' });
   assert.deepEqual(show(testReq, gated, false), { action: 'show' });
 });
-
 test('decideNotification: kind=test not affected by requireHidden', () => {
   const testReq = makeRequest({ kind: 'test', requireHidden: true });
   const settings = makeSettings();
   assert.deepEqual(show(testReq, settings, true), { action: 'show' });
   assert.deepEqual(show(testReq, settings, false), { action: 'show' });
 });
-
 test('decideNotification: enabled=false skips every kind', () => {
   const settings = makeSettings({ enabled: false });
   for (const kind of ['complete', 'ask', 'request'] as const) {
@@ -109,7 +105,6 @@ test('decideNotification: enabled=false skips every kind', () => {
     assert.deepEqual(show(makeRequest({ kind }), settings, true), { action: 'skip', reason: 'disabled' });
   }
 });
-
 test('decideNotification: kind switches gate their own kind only', () => {
   // complete 关 → 仅 complete skip；ask/request 不受影响。
   const noComplete = makeSettings({ onComplete: false });
@@ -127,7 +122,6 @@ test('decideNotification: kind switches gate their own kind only', () => {
   assert.deepEqual(show(makeRequest({ kind: 'complete' }), noRequest, false), { action: 'show' });
   assert.deepEqual(show(makeRequest({ kind: 'ask' }), noRequest, false), { action: 'show' });
 });
-
 test('decideNotification: requireHidden && focused → skip on-screen', () => {
   const settings = makeSettings();
   const req = makeRequest({ requireHidden: true });
@@ -137,14 +131,12 @@ test('decideNotification: requireHidden && focused → skip on-screen', () => {
   // requireHidden=false 聚焦 → 不被 on-screen 拦（由 mode 规则决定）。
   assert.deepEqual(show(makeRequest({ requireHidden: false }), settings, true), { action: 'skip', reason: 'focused-hidden-only' });
 });
-
 test('decideNotification: hidden-only + focused → skip focused-hidden-only; unfocused → show', () => {
   const settings = makeSettings({ mode: 'hidden-only' });
   const req = makeRequest({ requireHidden: false });
   assert.deepEqual(show(req, settings, true), { action: 'skip', reason: 'focused-hidden-only' });
   assert.deepEqual(show(req, settings, false), { action: 'show' });
 });
-
 test('decideNotification: mode=always lets focused-through (except on-screen exemption)', () => {
   const settings = makeSettings({ mode: 'always' });
   // 普通请求：聚焦也放行。
@@ -153,14 +145,12 @@ test('decideNotification: mode=always lets focused-through (except on-screen exe
   // 正在查看的会话（requireHidden）仍豁免——always 不覆盖 on-screen。
   assert.deepEqual(show(makeRequest({ requireHidden: true }), settings, true), { action: 'skip', reason: 'on-screen' });
 });
-
 test('decideNotification: happy path shows', () => {
   const settings = makeSettings();
   for (const kind of ['complete', 'ask', 'request'] as const) {
     assert.deepEqual(show(makeRequest({ kind }), settings, false), { action: 'show' });
   }
 });
-
 test('notification-open delivery retains send-return work, replays FIFO after reload, and frees capacity only on ACK', () => {
   const queue = new BoundedAckDeliveryQueue<NotificationOpenIntent>(2)
   const a = { sourceId: 'local', sourceFingerprint: 'local', sessionId: 's1', sourceGeneration: 1 }
@@ -185,7 +175,6 @@ test('notification-open delivery retains send-return work, replays FIFO after re
   assert.equal(oldB.attempt + 1, replayB.attempt)
   assert.equal(MAX_PENDING_NOTIFICATION_OPENS, 64)
 });
-
 test('source incarnation retires old native clicks and pending/in-flight opens on remove or identity edit', () => {
   const sources = new NotificationSourceIncarnations()
   sources.replaceRemoteSources([{ sourceId: 'ssh-same', fingerprint: 'host-a' }])
@@ -219,7 +208,6 @@ test('source incarnation retires old native clicks and pending/in-flight opens o
   assert.notEqual(sources.capture('ssh-same')!.generation, replacement.generation, 'same-fingerprint re-add is still fresh')
   assert.equal(sources.owns(sources.capture('local')!), true, 'local source is never retired by remote roster changes')
 });
-
 test('source-incarnation unique-id churn leaves no generation tombstones', () => {
   const sources = new NotificationSourceIncarnations()
   for (let index = 0; index < 10_000; index += 1) {
@@ -337,9 +325,8 @@ test('NotificationClaimWindow has a hard cap, O(1) expiry queue, and conditional
   assert.equal(claims.size, 1, 'expired claims are pruned before admission')
   assert.equal(MAX_NOTIFICATION_CLAIMS, 64)
 
-  // Keep one live head claim while thousands of same-window claims behind it
-  // are immediately released. Tombstones must compact below 2*limit instead
-  // of accumulating until the head TTL expires.
+  // One live head claim with thousands of immediately released same-window
+  // claims: tombstones must compact below 2*limit, not accumulate.
   const churn = new NotificationClaimWindow(4, 10_000)
   assert.equal(churn.claim(makeRequest({ sessionId: 'live-head' }), 5_000).accepted, true)
   for (let index = 0; index < 10_000; index += 1) {
@@ -420,7 +407,6 @@ test('interpretNativeNotificationReply: explicit outcomes are authoritative; unk
     assert.equal(interpretNativeNotificationReply(weird).shown, false, `${JSON.stringify(weird)} 不得被采信为成功`);
   }
 });
-
 test('showNativeNotificationHonestly settles true only on the native show event', async () => {
   const shown = new FakeNativeNotification(self => setImmediate(() => self.emit('show')))
   assert.deepEqual(await showNativeNotificationHonestly(shown, 100), { shown: true })
@@ -437,13 +423,8 @@ test('showNativeNotificationHonestly settles true only on the native show event'
     { shown: false, error: 'constructor bridge failed', reason: 'threw' },
   )
 })
-
 test('showNativeNotificationHonestly never hangs or rethrows a hostile failed value', async () => {
-  const hostile = new Proxy({}, {
-    getPrototypeOf() { throw new Error('getPrototypeOf trap') },
-    get() { throw new Error('get trap') },
-  })
-  const failed = new FakeNativeNotification(self => queueMicrotask(() => self.emit('failed', {}, hostile)))
+  const failed = new FakeNativeNotification(self => queueMicrotask(() => self.emit('failed', {}, hostileThrownValue())))
   assert.deepEqual(
     await showNativeNotificationHonestly(failed, 100),
     { shown: false, error: 'unknown error', reason: 'failed' },
@@ -456,7 +437,6 @@ test('showNativeNotificationHonestly never hangs or rethrows a hostile failed va
   )
   assert.equal(silent.closed, true)
 })
-
 test('showNativeNotificationHonestly rolls back partial listener setup and contains hostile cleanup', async () => {
   const listeners = new Map<string, (...args: unknown[]) => void>()
   let showCalls = 0
@@ -481,13 +461,11 @@ test('showNativeNotificationHonestly rolls back partial listener setup and conta
   hostileCleanup.removeListener = () => { throw new Error('removeListener boom') }
   assert.deepEqual(await showNativeNotificationHonestly(hostileCleanup, 20), { shown: true })
 })
-
 test('Darwin application focus policy is explicit and platform-scoped', () => {
   assert.equal(shouldFocusApplicationBeforeShowing('darwin'), true)
   assert.equal(shouldFocusApplicationBeforeShowing('linux'), false)
   assert.equal(shouldFocusApplicationBeforeShowing('win32'), false)
 })
-
 test('validateNotificationRequest: accepts a valid payload', () => {
   const valid = validateNotificationRequest(makeRequest());
   assert.ok(valid.ok);
@@ -508,10 +486,7 @@ test('notification host boolean probes contain throws, hostile values, and inval
     ok: false,
     error: 'notification host probe returned a non-boolean value',
   })
-  const hostile = new Proxy({}, {
-    get() { throw new Error('formatter trap') },
-    getPrototypeOf() { throw new Error('instanceof trap') },
-  })
+  const hostile = hostileThrownValue()
   assert.deepEqual(readNotificationHostBoolean(() => { throw hostile }), { ok: false, error: 'unknown error' })
 });
 
@@ -537,7 +512,6 @@ test('validateNotificationRequest: sourceId is local, canonical dsh/gateway, or 
     assert.equal(validateNotificationRequest(makeRequest({ sourceId })).ok, false, sourceId);
   }
 });
-
 test('validateNotificationRequest accepts only the authoritative proof wire format', () => {
   assert.equal(validateNotificationRequest(makeRequest({ sourceId: 'local', sourceFingerprint: 'local' })).ok, true)
   assert.equal(validateNotificationRequest(makeRequest({ sourceId: 'local', sourceFingerprint: 'a'.repeat(64) })).ok, false)
@@ -548,7 +522,6 @@ test('validateNotificationRequest accepts only the authoritative proof wire form
     assert.equal(validateNotificationRequest(makeRequest({ sourceId: 'gateway-valid', sourceFingerprint })).ok, false, sourceFingerprint)
   }
 });
-
 test('validateNotificationRequest: rejects non-object payloads', () => {
   assert.equal(validateNotificationRequest(null).ok, false);
   assert.equal(validateNotificationRequest(undefined).ok, false);
@@ -556,7 +529,6 @@ test('validateNotificationRequest: rejects non-object payloads', () => {
   assert.equal(validateNotificationRequest(42).ok, false);
   assert.equal(validateNotificationRequest(['a']).ok, false);
 });
-
 test('validateNotificationRequest: rejects empty/missing string fields', () => {
   assert.equal(validateNotificationRequest(makeRequest({ sourceId: '' })).ok, false);
   assert.equal(validateNotificationRequest(makeRequest({ sourceId: undefined as unknown as string })).ok, false);
@@ -567,7 +539,6 @@ test('validateNotificationRequest: rejects empty/missing string fields', () => {
   assert.equal(validateNotificationRequest(makeRequest({ body: '' })).ok, false);
   assert.equal(validateNotificationRequest(makeRequest({ body: null as unknown as string })).ok, false);
 });
-
 test('validateNotificationRequest: test kind exempts the empty sessionId (settings-page test button)', () => {
   // 设置页「发送测试通知」没有会话上下文（sessionId: ''）——'test' 是唯一豁免。
   const testEmpty = validateNotificationRequest(makeRequest({ kind: 'test', sessionId: '' }));
@@ -578,7 +549,6 @@ test('validateNotificationRequest: test kind exempts the empty sessionId (settin
   // test 的 sourceId/title/body 仍受非空与长度约束（豁免只限 sessionId）。
   assert.equal(validateNotificationRequest(makeRequest({ kind: 'test', title: '' })).ok, false);
 });
-
 test('validateNotificationRequest: enforces field length caps after source semantics', () => {
   const longSource = makeRequest({ sourceId: 'x'.repeat(257) });
   assert.equal(validateNotificationRequest(longSource).ok, false);
@@ -595,7 +565,6 @@ test('validateNotificationRequest: enforces field length caps after source seman
   assert.equal(validateNotificationRequest(longBody).ok, false);
   assert.ok(validateNotificationRequest(makeRequest({ body: 'w'.repeat(512) })).ok, '512 边界合法');
 });
-
 test('validateNotificationRequest: rejects bad kind and non-boolean requireHidden', () => {
   assert.equal(validateNotificationRequest(makeRequest({ kind: 'error' as NotificationRequest['kind'] })).ok, false);
   assert.equal(validateNotificationRequest(makeRequest({ kind: 'completed' as NotificationRequest['kind'] })).ok, false);
@@ -604,20 +573,17 @@ test('validateNotificationRequest: rejects bad kind and non-boolean requireHidde
   assert.equal(validateNotificationRequest(makeRequest({ requireHidden: 1 as unknown as boolean })).ok, false);
   assert.equal(validateNotificationRequest(makeRequest({ requireHidden: undefined as unknown as boolean })).ok, false);
 });
-
 test('validateNotificationRequest: unknown extra fields ignored (whitelist semantics)', () => {
   const extra = { ...makeRequest(), futureField: 'x', secret: 42 };
   const result = validateNotificationRequest(extra);
   assert.ok(result.ok, '白名单校验只检查必要字段');
 });
-
 test('BoundedActiveNotifications: constructor rejects non-positive or fractional limits', () => {
   assert.throws(() => new BoundedActiveNotifications(0), RangeError);
   assert.throws(() => new BoundedActiveNotifications(-1), RangeError);
   assert.throws(() => new BoundedActiveNotifications(1.5), RangeError);
   assert.equal(new BoundedActiveNotifications(1).size, 0);
 });
-
 test('BoundedActiveNotifications: grows below the limit without evicting', () => {
   const registry = new BoundedActiveNotifications<string>(3);
   assert.equal(registry.add('a', null), null);
@@ -626,7 +592,6 @@ test('BoundedActiveNotifications: grows below the limit without evicting', () =>
   assert.equal(registry.size, 3);
   assert.ok(registry.has('a') && registry.has('b') && registry.has('c'));
 });
-
 test('BoundedActiveNotifications: full add evicts the oldest (FIFO) and returns it — never rejects', () => {
   const registry = new BoundedActiveNotifications<string>(3);
   registry.add('a', null);
@@ -643,7 +608,6 @@ test('BoundedActiveNotifications: full add evicts the oldest (FIFO) and returns 
   assert.equal(registry.add('g', null), 'd');
   assert.equal(registry.size, 3);
 });
-
 test('BoundedActiveNotifications: delete frees capacity so the next add evicts nothing', () => {
   const registry = new BoundedActiveNotifications<string>(3);
   registry.add('a', null);
@@ -655,7 +619,6 @@ test('BoundedActiveNotifications: delete frees capacity so the next add evicts n
   assert.equal(registry.size, 3);
   assert.ok(registry.has('b') && registry.has('c') && registry.has('d'));
 });
-
 test('BoundedActiveNotifications: eviction order follows surviving insertion order', () => {
   const registry = new BoundedActiveNotifications<string>(3);
   registry.add('a', null);
@@ -671,7 +634,6 @@ test('BoundedActiveNotifications: eviction order follows surviving insertion ord
   assert.equal(registry.size, 3);
   assert.ok(registry.has('e') && registry.has('f') && registry.has('g'));
 });
-
 test('BoundedActiveNotifications: duplicate add is a no-op that keeps the original token', () => {
   const registry = new BoundedActiveNotifications<string>(2);
   const token = { sourceId: 'dsh-x1', fingerprint: 'a'.repeat(64), generation: 7 };
@@ -681,7 +643,6 @@ test('BoundedActiveNotifications: duplicate add is a no-op that keeps the origin
   assert.equal(pairs.length, 1);
   assert.deepEqual(pairs[0][1], token, '原 token 保留（click 路由不受影响）');
 });
-
 test('BoundedActiveNotifications: entries() yields live insertion-ordered pairs and tolerates delete-during-iteration', () => {
   const registry = new BoundedActiveNotifications<string>(5);
   registry.add('a', null);
@@ -699,16 +660,11 @@ test('BoundedActiveNotifications: entries() yields live insertion-ordered pairs 
 });
 
 // ---------------------------------------------------------------------------
-// S-44（2026-12 审计）：Electron 侧 macOS 通知授权的诚实面。
-//
-// Electron 43.4.0 主进程没有授权查询/申请 API（Notification 仅 isSupported/
-// show…；systemPreferences.getMediaAccessStatus 只接受 microphone/camera/
-// screen；Electron 自己的 cocoa_notification.mm 从不 requestAuthorization——
-// 授权状态只经 addNotificationRequest 的 completion handler 回话，非 nil
-// error → 原生 failed 事件）。因此唯一可得的诚实面 = 把 OS 拒绝投递/限时无
-// 回执如实表述为「可能未授权/被抑制」；预检查询/申请仍是登记在案的残余。
+// S-44：Electron 侧 macOS 通知授权的诚实面——主进程没有授权查询/申请 API，
+// 授权状态只经 addNotificationRequest 的 completion handler 回话（非 nil
+// error → 原生 failed 事件）。唯一可得的诚实面 = 把 OS 拒绝投递/限时无回执
+// 如实表述为「可能未授权/被抑制」；预检查询/申请仍是登记在案的残余。
 // ---------------------------------------------------------------------------
-
 test('S-44 describeNativeNotificationFailure: OS refusal/doubt is named honestly, local artifacts are not', () => {
   const refused = describeNativeNotificationFailure('darwin', 'failed', 'Notifications are not allowed for this application.');
   assert.match(refused, /authorization may be denied/);
@@ -717,24 +673,20 @@ test('S-44 describeNativeNotificationFailure: OS refusal/doubt is named honestly
   assert.match(timedOut, /authorization may be denied/);
   assert.match(timedOut, /Focus\/Do Not Disturb/);
   assert.match(timedOut, /notification show timed out/);
-  // Local construction/eviction failures must NOT be dressed as an OS
-  // authorization verdict (a capped-registry eviction closes before show, and
-  // a listener-install throw is our own bug).
+  // Local construction/eviction failures are NOT an OS authorization verdict
+  // (a capped-registry eviction closes before show; a listener throw is our bug).
   assert.equal(describeNativeNotificationFailure('darwin', 'threw', 'listener boom'), 'listener boom');
   assert.equal(describeNativeNotificationFailure('darwin', 'closed', 'notification closed before show'), 'notification closed before show');
   assert.equal(describeNativeNotificationFailure('darwin', undefined, 'plain'), 'plain');
-  // Non-darwin platforms keep the raw error (Windows' failed is a delivery
-  // error, not an authorization state).
+  // Non-darwin keeps the raw error (Windows' failed is a delivery error, not auth).
   assert.equal(describeNativeNotificationFailure('win32', 'failed', 'toast failed'), 'toast failed');
   assert.equal(describeNativeNotificationFailure('linux', 'timed-out', 'timeout'), 'timeout');
   // An empty OS detail still has to describe the failure itself.
   assert.match(describeNativeNotificationFailure('darwin', 'failed', '   '), /no detail/);
 });
-
 test('S-44 electron-edges routes every macOS delivery failure through the honest describer', () => {
-  // electron-edges imports electron (cannot be imported here), so the wiring is
-  // pinned on the comment-stripped source: the raw honest-show outcome must be
-  // translated before it reaches core's claim release / IPC boolean.
+  // electron-edges imports electron, so the wiring is pinned on comment-stripped
+  // source: the raw outcome must be translated before core's claim release.
   const source = stripComments(readFileSync(new URL('../../electron-edges.ts', import.meta.url), 'utf8'));
   assert.match(source, /describeNativeNotificationFailure\(process\.platform, outcome\.reason, outcome\.error\)/,
     'the NOTIFY host leg must surface why the OS refused/never confirmed the banner');

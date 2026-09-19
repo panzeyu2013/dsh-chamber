@@ -46,37 +46,23 @@ test('instance switch aborts both request owners and returns visible idle flags'
 
 function status(overrides: Partial<RemoteRuntimeStatus> = {}): RemoteRuntimeStatus {
   return {
-    kind: 'dsh-chamber-gateway-runtime',
-    activeVersion: '1.0.0',
-    builtinVersion: '0.9.0',
-    currentVersion: '1.0.0',
-    selectedVersion: '1.0.0',
-    hasOverride: true,
-    source: 'builtin-anchor',
-    phase: 'idle',
-    startupBlockedReason: null,
-    pending: null,
-    connectionState: 'ready',
-    registry: 'https://registry.npmjs.org',
-    registryError: null,
-    platform: 'darwin',
-    mutationsAllowed: true,
-    operationError: null,
-    restart: null,
-    restoreOutcome: null,
-    snapshotCount: 0,
-    latestSnapshotAt: null,
-    snapshotError: null,
-    restoreInProgress: false,
-    preRollbackCount: 0,
-    preRollbackLatestName: null,
-    failure: null,
-    diskUsage: null,
-    diskError: null,
-    diskLimitBytes: 10 * 1024 ** 3,
-    diskLimitExceeded: false,
-    progress: null,
-    ...overrides,
+    kind: 'dsh-chamber-gateway-runtime', activeVersion: '1.0.0', builtinVersion: '0.9.0',
+    currentVersion: '1.0.0', selectedVersion: '1.0.0', hasOverride: true, source: 'builtin-anchor',
+    phase: 'idle', startupBlockedReason: null, pending: null, connectionState: 'ready',
+    registry: 'https://registry.npmjs.org', registryError: null, platform: 'darwin', mutationsAllowed: true,
+    operationError: null, restart: null, restoreOutcome: null, snapshotCount: 0, latestSnapshotAt: null,
+    snapshotError: null, restoreInProgress: false, preRollbackCount: 0, preRollbackLatestName: null,
+    failure: null, diskUsage: null, diskError: null, diskLimitBytes: 10 * 1024 ** 3,
+    diskLimitExceeded: false, progress: null, ...overrides,
+  }
+}
+
+/** Expected action-gate vector: every field defaults to locked, override only the escapes under test. */
+function gates(overrides: Partial<ReturnType<typeof remoteRuntimeActionGates>> = {}): ReturnType<typeof remoteRuntimeActionGates> {
+  return {
+    mutationDisabled: true, restoreBuiltinDisabled: true, retryApplyDisabled: true,
+    retryRestoreDisabled: true, recoverMetadataDisabled: true, restartDisabled: true,
+    applyNowDisabled: true, ...overrides,
   }
 }
 
@@ -96,114 +82,50 @@ function fetchSequence(responses: Array<{ payload: unknown; status?: number }>) 
 }
 
 test('remote action gates lock pending/installing in step with the server and preserve the sole pending escape', () => {
-  assert.deepEqual(remoteRuntimeActionGates(status({ phase: 'pending', pending: '1.1.0' })), {
-    mutationDisabled: true,
-    restoreBuiltinDisabled: false,
-    retryApplyDisabled: true,
-    retryRestoreDisabled: true,
-    recoverMetadataDisabled: true,
-    restartDisabled: true,
-    applyNowDisabled: false,
-  })
-  assert.deepEqual(remoteRuntimeActionGates(status({ phase: 'installing' })), {
-    mutationDisabled: true,
-    restoreBuiltinDisabled: true,
-    retryApplyDisabled: true,
-    retryRestoreDisabled: true,
-    recoverMetadataDisabled: true,
-    restartDisabled: true,
-    applyNowDisabled: true,
-  })
-  assert.deepEqual(remoteRuntimeActionGates(status({ source: 'env' })), {
-    mutationDisabled: true,
-    restoreBuiltinDisabled: true,
-    retryApplyDisabled: true,
-    retryRestoreDisabled: true,
-    recoverMetadataDisabled: true,
-    restartDisabled: false,
-    applyNowDisabled: true,
-  }, 'env pins version management but still permits the source-independent dsh restart')
-  assert.deepEqual(remoteRuntimeActionGates(status(), true), {
-    mutationDisabled: true,
-    restoreBuiltinDisabled: true,
-    retryApplyDisabled: true,
-    retryRestoreDisabled: true,
-    recoverMetadataDisabled: true,
-    restartDisabled: true,
-    applyNowDisabled: true,
-  })
-  assert.deepEqual(remoteRuntimeActionGates(status({ phase: 'future-phase' as never })), {
-    mutationDisabled: true,
-    restoreBuiltinDisabled: true,
-    retryApplyDisabled: true,
-    retryRestoreDisabled: true,
-    recoverMetadataDisabled: true,
-    restartDisabled: true,
-    applyNowDisabled: true,
-  }, 'a direct caller cannot enable actions for an unknown future phase')
-  assert.deepEqual(remoteRuntimeActionGates(status({ phase: 'swap-attempted', pending: '1.1.0' })), {
-    mutationDisabled: true,
-    restoreBuiltinDisabled: true,
-    retryApplyDisabled: false,
-    retryRestoreDisabled: true,
-    recoverMetadataDisabled: true,
-    restartDisabled: true,
-    applyNowDisabled: true,
-  })
+  assert.deepEqual(
+    remoteRuntimeActionGates(status({ phase: 'pending', pending: '1.1.0' })),
+    gates({ restoreBuiltinDisabled: false, applyNowDisabled: false }),
+  )
+  assert.deepEqual(remoteRuntimeActionGates(status({ phase: 'installing' })), gates())
+  assert.deepEqual(
+    remoteRuntimeActionGates(status({ source: 'env' })),
+    gates({ restartDisabled: false }),
+    'env pins version management but still permits the source-independent dsh restart',
+  )
+  assert.deepEqual(remoteRuntimeActionGates(status(), true), gates())
+  assert.deepEqual(
+    remoteRuntimeActionGates(status({ phase: 'future-phase' as never })),
+    gates(),
+    'a direct caller cannot enable actions for an unknown future phase',
+  )
+  assert.deepEqual(remoteRuntimeActionGates(status({ phase: 'swap-attempted', pending: '1.1.0' })), gates({ retryApplyDisabled: false }))
   // WIRE-REAL co-projection (2026 audit R4 F1): on the real wire the recovery
   // phase carries its startupBlockedReason too (same in-memory block) — the
   // matching retry must STAY ENABLED despite the reason (the phase, not the
   // reason, is the server's selector for the retry route).
-  assert.deepEqual(remoteRuntimeActionGates(status({ phase: 'swap-attempted', pending: '1.1.0', startupBlockedReason: 'swap-attempted' })), {
-    mutationDisabled: true,
-    restoreBuiltinDisabled: true,
-    retryApplyDisabled: false,
-    retryRestoreDisabled: true,
-    recoverMetadataDisabled: true,
-    restartDisabled: true,
-    applyNowDisabled: true,
-  })
-  assert.deepEqual(remoteRuntimeActionGates(status({ phase: 'restore-blocked', pending: '1.1.0' })), {
-    mutationDisabled: true,
-    restoreBuiltinDisabled: true,
-    retryApplyDisabled: true,
-    retryRestoreDisabled: false,
-    recoverMetadataDisabled: true,
-    restartDisabled: true,
-    applyNowDisabled: true,
-  })
-  assert.deepEqual(remoteRuntimeActionGates(status({ phase: 'restore-blocked', pending: '1.1.0', startupBlockedReason: 'restore-half' })), {
-    mutationDisabled: true,
-    restoreBuiltinDisabled: true,
-    retryApplyDisabled: true,
-    retryRestoreDisabled: false,
-    recoverMetadataDisabled: true,
-    restartDisabled: true,
-    applyNowDisabled: true,
-  })
+  assert.deepEqual(
+    remoteRuntimeActionGates(status({ phase: 'swap-attempted', pending: '1.1.0', startupBlockedReason: 'swap-attempted' })),
+    gates({ retryApplyDisabled: false }),
+  )
+  assert.deepEqual(remoteRuntimeActionGates(status({ phase: 'restore-blocked', pending: '1.1.0' })), gates({ retryRestoreDisabled: false }))
+  assert.deepEqual(
+    remoteRuntimeActionGates(status({ phase: 'restore-blocked', pending: '1.1.0', startupBlockedReason: 'restore-half' })),
+    gates({ retryRestoreDisabled: false }),
+  )
   // A projected PHASE-LESS startup block (FATAL metadata, env-probe-failed,
   // …) outranks a lingering pending and locks every mutation + restore
   // escape (2026 audit R3 — the server gate honors blockOutranksPending).
   // recover-metadata — the ONLY action the FATAL block leaves open — must
   // stay enabled whenever the status advertises canRecoverMetadata (R4 F2).
-  assert.deepEqual(remoteRuntimeActionGates(status({ phase: 'idle', pending: '1.1.0', startupBlockedReason: 'journal-corrupt', canRecoverMetadata: true })), {
-    mutationDisabled: true,
-    restoreBuiltinDisabled: true,
-    retryApplyDisabled: true,
-    retryRestoreDisabled: true,
-    recoverMetadataDisabled: false,
-    restartDisabled: true,
-    applyNowDisabled: true,
-  })
-  assert.deepEqual(remoteRuntimeActionGates(status({ phase: 'idle', pending: '1.1.0', startupBlockedReason: 'env-probe-failed' })), {
-    mutationDisabled: true,
-    restoreBuiltinDisabled: true,
-    retryApplyDisabled: true,
-    retryRestoreDisabled: true,
-    recoverMetadataDisabled: true,
-    restartDisabled: true,
-    applyNowDisabled: true,
-  }, 'env-probe-failed advertises no recoverability — every action incl. recover-metadata stays disabled')
+  assert.deepEqual(
+    remoteRuntimeActionGates(status({ phase: 'idle', pending: '1.1.0', startupBlockedReason: 'journal-corrupt', canRecoverMetadata: true })),
+    gates({ recoverMetadataDisabled: false }),
+  )
+  assert.deepEqual(
+    remoteRuntimeActionGates(status({ phase: 'idle', pending: '1.1.0', startupBlockedReason: 'env-probe-failed' })),
+    gates(),
+    'env-probe-failed advertises no recoverability — every action incl. recover-metadata stays disabled',
+  )
   assert.equal(remoteRuntimeActionGates(status({ phase: 'snapshot-failed', startupBlockedReason: 'snapshot-failed' })).restoreBuiltinDisabled, true, 'recovery phases never offer restore-builtin (server parity, R2)')
   assert.equal(remoteRuntimeActionGates(status({ phase: 'snapshot-failed', startupBlockedReason: 'snapshot-failed' })).retryApplyDisabled, false, 'the matching retry stays enabled with its co-projected reason (R4 F1)')
 })
@@ -616,30 +538,13 @@ test('select settle ignores persistent activation history and keeps install-only
 
 test('status parsing: documented contract, backward defaults, unknown safety enums fail closed', () => {
   const parsed = parseRemoteRuntimeStatus({
-    kind: 'dsh-chamber-gateway-runtime',
-    activeVersion: '1.0.0',
-    builtinVersion: '0.9.0',
-    currentVersion: '1.0.0',
-    selectedVersion: '1.0.0',
-    hasOverride: true,
-    source: 'user-selected',
-    phase: 'idle',
-    startupBlockedReason: null,
-    pending: '1.1.0',
-    connectionState: 'starting',
-    registry: 'https://registry.npmjs.org',
-    registryError: null,
-    platform: 'linux',
-    mutationsAllowed: false,
-    operationError: null,
-    restart: 'ok',
-    restoreOutcome: 'complete',
-    snapshotCount: 2,
-    latestSnapshotAt: '2026-08-28T00:00:00.000Z',
-    snapshotError: null,
-    restoreInProgress: false,
-    preRollbackCount: 1,
-    preRollbackLatestName: '1735344000000',
+    kind: 'dsh-chamber-gateway-runtime', activeVersion: '1.0.0', builtinVersion: '0.9.0',
+    currentVersion: '1.0.0', selectedVersion: '1.0.0', hasOverride: true, source: 'user-selected',
+    phase: 'idle', startupBlockedReason: null, pending: '1.1.0', connectionState: 'starting',
+    registry: 'https://registry.npmjs.org', registryError: null, platform: 'linux', mutationsAllowed: false,
+    operationError: null, restart: 'ok', restoreOutcome: 'complete', snapshotCount: 2,
+    latestSnapshotAt: '2026-08-28T00:00:00.000Z', snapshotError: null, restoreInProgress: false,
+    preRollbackCount: 1, preRollbackLatestName: '1735344000000',
     failure: { version: '0.8.0', at: '2026-08-27T00:00:00.000Z', reason: 'probe failed' },
     diskUsage: {
       versionTrees: 2, versionTreeBytes: 100, storeBytes: 200, cacheBytes: 30,
@@ -647,9 +552,7 @@ test('status parsing: documented contract, backward defaults, unknown safety enu
       snapshotBytes: 8, preRollbackBytes: 9, restoreBackupBytes: 10,
       unclassifiedBytes: 11, totalBytes: 390, storePruneNeeded: false,
     },
-    diskError: null,
-    diskLimitBytes: 10 * 1024 ** 3,
-    diskLimitExceeded: false,
+    diskError: null, diskLimitBytes: 10 * 1024 ** 3, diskLimitExceeded: false,
     progress: { stage: 'download', received: 50, total: 100 },
   })
   assert.equal(parsed.phase, 'idle')
@@ -702,38 +605,22 @@ test('status parsing: documented contract, backward defaults, unknown safety enu
 })
 
 test('versions parsing: whitelist projection, error field preserved, malformed entries fail loud', () => {
-  assert.deepEqual(parseRemoteVersions({
-    registryOrigin: 'https://registry.npmjs.org',
-    versions: [
-      { version: '1.2.0', latest: true, cached: false, belowBaseline: false },
-      { version: '1.0.0', latest: false, cached: true, belowBaseline: true },
-    ],
-  }), {
-    registryOrigin: 'https://registry.npmjs.org',
-    versions: [
-      { version: '1.2.0', latest: true, cached: false, belowBaseline: false },
-      { version: '1.0.0', latest: false, cached: true, belowBaseline: true },
-    ],
-    removableVersions: [],
+  const versionRows = [
+    { version: '1.2.0', latest: true, cached: false, belowBaseline: false },
+    { version: '1.0.0', latest: false, cached: true, belowBaseline: true },
+  ]
+  assert.deepEqual(parseRemoteVersions({ registryOrigin: 'https://registry.npmjs.org', versions: versionRows }), {
+    registryOrigin: 'https://registry.npmjs.org', versions: versionRows, removableVersions: [],
   })
   assert.deepEqual(parseRemoteVersions({
-    registryOrigin: 'https://registry.npmmirror.com',
-    versions: [],
-    error: 'registry unreachable',
+    registryOrigin: 'https://registry.npmmirror.com', versions: [], error: 'registry unreachable',
   }), {
-    registryOrigin: 'https://registry.npmmirror.com',
-    versions: [],
-    removableVersions: [],
-    error: 'registry unreachable',
+    registryOrigin: 'https://registry.npmmirror.com', versions: [], removableVersions: [], error: 'registry unreachable',
   })
   assert.deepEqual(parseRemoteVersions({
-    registryOrigin: 'https://registry.npmjs.org',
-    versions: [],
-    removableVersions: ['1.0.0', '0.9.0'],
+    registryOrigin: 'https://registry.npmjs.org', versions: [], removableVersions: ['1.0.0', '0.9.0'],
   }), {
-    registryOrigin: 'https://registry.npmjs.org',
-    versions: [],
-    removableVersions: ['1.0.0', '0.9.0'],
+    registryOrigin: 'https://registry.npmjs.org', versions: [], removableVersions: ['1.0.0', '0.9.0'],
   })
   assert.throws(
     () => parseRemoteVersions({ registryOrigin: 'x', versions: [{ version: 1 }] }),

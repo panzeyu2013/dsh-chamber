@@ -1,16 +1,12 @@
 /**
- * settings-shell.ts tests (2026-12): the reserved `sidebar.settings` seat
- * contract. The failure mode under test is a third-party plugin registering
- * BELOW the reserved shadow range and silently replacing the whole chamber
+ * settings-shell.ts tests (2026-12): the reserved `sidebar.settings` seat contract. The failure mode under test
+ * is a third-party plugin registering BELOW the reserved shadow range and silently replacing the whole chamber
  * settings surface (server dropdown + every per-source plugin section).
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  SETTINGS_SHELL_ENTRY_ID,
-  SETTINGS_SHELL_SHADOW_PRIORITY,
-  classifySettingsSeatOccupant,
-  settingsSeatTakeoverMessage,
+  SETTINGS_SHELL_ENTRY_ID, SETTINGS_SHELL_SHADOW_PRIORITY, classifySettingsSeatOccupant, settingsSeatTakeoverMessage,
 } from '../../src/shared/settings-shell.ts';
 
 test('classifySettingsSeatOccupant: the chamber shell owns the seat', () => {
@@ -26,9 +22,7 @@ test('classifySettingsSeatOccupant: no occupant / official SettingsRoot / higher
 });
 
 test('classifySettingsSeatOccupant: a registrant BELOW the reserved range is a takeover', () => {
-  assert.equal(classifySettingsSeatOccupant({
-    options: { id: 'rogue-shell', priority: SETTINGS_SHELL_SHADOW_PRIORITY - 1 },
-  }), 'taken-over');
+  assert.equal(classifySettingsSeatOccupant({ options: { id: 'rogue-shell', priority: SETTINGS_SHELL_SHADOW_PRIORITY - 1 } }), 'taken-over');
 });
 
 test('settingsSeatTakeoverMessage: names the occupant and the reserved range', () => {

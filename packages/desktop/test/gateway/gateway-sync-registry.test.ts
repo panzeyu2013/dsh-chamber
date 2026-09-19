@@ -1,10 +1,6 @@
-/**
- * gateway-sync-registry unit tests (design 21 §6.5, Phase 3b): the pure
- * in-memory store of manual gateway_plugin_sync re-entry parameters —
- * set/get roundtrip, overwrite on re-registration, clear-on-null, and the
- * test-only full reset. Security property pinned: the stored headers are
- * exactly what was stored (never widened); nothing else is exported.
- */
+/** gateway-sync-registry (design 21 §6.5, Phase 3b): the pure in-memory store of manual
+ *  gateway_plugin_sync re-entry parameters — roundtrip, overwrite, clear-on-null, test-only reset.
+ *  Pinned: stored headers are exactly what was stored (never widened); nothing else is exported. */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

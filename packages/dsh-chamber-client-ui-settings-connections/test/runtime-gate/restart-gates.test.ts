@@ -1,31 +1,17 @@
 /**
- * Merged gateway restart surface tests (design 21 §5.1/§5.3/§6.3/§6.8 r1):
- * managed-restart.ts result/refusal classification and the connections-card
- * RESTART gate / PROBE projection / 409 localization built on it. Plain
- * node:test, no dsh, no React - the poll errors under test are the English
- * strings thrown by the sidebar shared pollGatewayReady (gateway-runtime-poll.ts);
- * unlocalized copy is a registered deviation (design 21 §5.2).
- *
- * merged 2026-12 test reorg: test/managed-restart.test.ts +
- * test/runtime-gate.test.ts (the gate file imports managed-restart.ts, so the
- * two are one contract chain). Test bodies are unchanged; only the shared
- * imports were hoisted and merged per module.
+ * Gateway restart surface tests (design 21 §5.1/§5.3/§6.3/§6.8 r1):
+ * managed-restart.ts result/refusal classification plus the connections-card
+ * RESTART gate / PROBE projection / 409 localization built on it. Plain node:test,
+ * no dsh, no React — the poll errors under test are the English strings thrown by
+ * the sidebar shared pollGatewayReady (gateway-runtime-poll.ts); unlocalized copy
+ * is a registered deviation (design 21 §5.2).
  */
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { classifyRestartError, serverRefusalText, applyRuntimeProbe, classifyGatewayReadFence, classifyRuntimeRefusal, gatewayReadFenceText, runtimeBlocksRestart, runtimeRefusalText } from '../../src/client/managed-restart.ts';
 import { en, zh } from '../../src/locales.ts';
-
-// --- merged from test/managed-restart.test.ts ---
-
-/**
- * managed-restart.ts tests (plain node:test, no dsh, no React): gateway
- * managed-dsh restart result classification and server-refusal projection
- * (design 21 §5.1/§5.3). The poll errors under test are the English strings
- * thrown by the sidebar shared pollGatewayReady (gateway-runtime-poll.ts) —
- * unlocalized copy is a registered deviation (design 21 §5.2).
- */
+import { FENCE_BODY } from '../support/fixtures.ts';
 
 test('classifyRestartError: the poll timeout is accepted-timeout with an empty detail', () => {
   const result = classifyRestartError(new Error('restart accepted but the gateway did not reach ready in time'))
@@ -58,22 +44,6 @@ test('serverRefusalText: an empty or non-string error falls back to the status-a
   assert.equal(serverRefusalText('refused', 400), 'restart refused (400)')
 })
 
-// --- merged from test/runtime-gate.test.ts ---
-
-/**
- * Connections-card runtime gates (design 21 §5.1/§6.3/§6.8 r1): the RESTART
- * gate, the PROBE projection and the 409 refusal localization, all as pure
- * projections of managed-restart.ts — plain node:test, no dsh, no React.
- *
- * WHY this file exists: the card's restart button was gated on the TUNNEL
- * phase only while the core route (/chamber/runtime/restart, runtime-routes.ts)
- * accepts `ready`/`degraded` and nothing else — in a stopped/error/
- * restart-exhausted runtime the click was a guaranteed 409 whose English
- * `body.error` was then shown verbatim. The same probe, on a failed read, kept
- * the previous entry, so a stale `stopped` kept the「启动实例」action alive
- * forever (another guaranteed 409). Both gates are pinned here.
- */
-
 /* ------------------------------------------------------------------ */
 /* 1. The restart gate mirrors the core route                          */
 /* ------------------------------------------------------------------ */
@@ -98,9 +68,7 @@ test('runtimeBlocksRestart: only ready/degraded pass, an absent probe never bloc
   assert.equal(runtimeBlocksRestart(''), false)
 })
 
-/* ------------------------------------------------------------------ */
-/* 2. The probe projection: an unavailable probe DELETES the entry      */
-/* ------------------------------------------------------------------ */
+/* ---- 2. The probe projection: an unavailable probe DELETES the entry ---- */
 
 test('applyRuntimeProbe: a known state writes the entry, an unchanged state keeps the same object', () => {
   const start: Record<string, string | undefined> = {}
@@ -123,9 +91,7 @@ test('applyRuntimeProbe: an unavailable probe (null) DELETES the entry instead o
   assert.equal(applyRuntimeProbe({}, 'a', null).a, undefined)
 })
 
-/* ------------------------------------------------------------------ */
-/* 3. 409 refusals: classified, then localized                         */
-/* ------------------------------------------------------------------ */
+/* ---- 3. 409 refusals: classified, then localized ---- */
 
 test('classifyRuntimeRefusal: the not-running refusal is distinguished from every busy refusal', () => {
   // runtime-routes.ts /restart: `managed dsh is not running (<state>); start the
@@ -182,19 +148,11 @@ test('runtimeRefusalText: a 409 becomes localized copy with the code; every othe
   assert.equal(runtimeRefusalText(null, 400, keys, t), serverRefusalText(null, 400))
 })
 
-/* ------------------------------------------------------------------ */
-/* 4. The READ-side fence (design 21 §6.2 读/写面共享栅栏, 2026-12 接线) */
-/* ------------------------------------------------------------------ */
-
-/** The gateway's fence refusal on GET /chamber/plugins/installed (routes.ts). */
-const fenceBody = {
-  error: 'managed profile write in flight (plugin mutation); the installed projection is fenced — retry after the task settles',
-  code: 'runtime_busy',
-}
+/* ---- 4. The READ-side fence (design 21 §6.2 读/写面共享栅栏, 2026-12 接线) ---- */
 
 test('classifyGatewayReadFence: only the 409 fence family is classified, with the server code', () => {
   // The SAME 409 classifier as the runtime actions — one taxonomy, not two.
-  assert.deepEqual(classifyGatewayReadFence(fenceBody, 409), { code: 'runtime_busy' })
+  assert.deepEqual(classifyGatewayReadFence(FENCE_BODY, 409), { code: 'runtime_busy' })
   assert.deepEqual(classifyGatewayReadFence(null, 409), { code: null },
     'a body-less 409 is still the fence: the read is busy, not failed')
   assert.deepEqual(classifyGatewayReadFence({ code: 42 }, 409), { code: null },
@@ -223,7 +181,7 @@ test('gatewayReadFenceText: the fence key with {code}, the status standing in wh
   // renders for every other status.
   assert.notEqual(text, zh.profileAbsentBanner)
   assert.notEqual(text, zh.profileCorruptBanner)
-  assert.notEqual(text, serverRefusalText(fenceBody, 409))
+  assert.notEqual(text, serverRefusalText(FENCE_BODY, 409))
   assert.notEqual(text, serverRefusalText(null, 409))
 
   // zh + en in sync at the copy level too.

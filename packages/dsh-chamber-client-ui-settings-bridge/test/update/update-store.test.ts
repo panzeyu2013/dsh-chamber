@@ -2,24 +2,18 @@
  * update-store.ts module-level restart recovery-rule tests (design 11,
  * 2026-12 review round-2 coverage gap (a)) — node:test, no DOM.
  *
- * The store's module restart single-flight (mirroring the main-process
- * single-flight) is deliberately NOT reset when the main process ACCEPTED a
- * restart ({ok:true} — quitAndInstall armed, the app is on its way out). It
- * MUST release when a PUSHED state proves the restart actually failed, or
- * every later click would be silently refused ('restart already in progress')
- * until an app reload. Failure proof per the recovery rule: the pushed state
- * carries restartFailureText (main keeps phase `downloaded` there), or the
- * phase left {downloaded, downloading} toward 'error'/'up-to-date' (belt).
- * The module is node-importable without a DOM: its only ambient import is
- * type-only (erased at runtime) and every window access is typeof-guarded —
- * tests install a fake window.dshChamber.update BEFORE importing a fresh
- * module instance (query-cache-busted, same pattern as settings-store.test.ts)
- * and drive the recovery rule through the fake surface's onChanged push.
+ * The module restart single-flight (mirroring the main process) is deliberately NOT
+ * reset when main ACCEPTED a restart ({ok:true} — quitAndInstall armed). It MUST
+ * release when a PUSHED state proves the restart failed, or every later click would
+ * be silently refused until an app reload. Failure proof per the recovery rule: the
+ * push carries restartFailureText (main keeps phase `downloaded`), or the phase left
+ * {downloaded, downloading} toward 'error'/'up-to-date' (belt). The module needs no
+ * DOM; tests install a fake window.dshChamber.update BEFORE importing a fresh module
+ * instance (query-cache-busted) and drive the rule through the onChanged push.
  *
- * S-21 coverage (append-only, below): the「检查更新」invoke is module
- * single-flight (one bridge edge per click across N-ctx shells), the page does
- * no discovery of its own, and the snapshot merely mirrors the shell-pushed
- * phases (checking → available/up-to-date/error).
+ * S-21 coverage: the「检查更新」invoke is module single-flight (one bridge edge per
+ * click across N-ctx shells), the page runs no discovery, and the snapshot mirrors
+ * the shell-pushed phases (checking → available/up-to-date/error).
  */
 
 import { test } from 'node:test'
@@ -30,15 +24,9 @@ import { updateCheckDisabled, updateRestartAvailable } from '../../src/client/up
 /** A completed-download state (the phase a restart arm requires). */
 function downloadedState(overrides: Partial<UpdateState> = {}): UpdateState {
   return {
-    phase: 'downloaded',
-    currentVersion: '0.2.2',
-    latestVersion: '0.3.0',
-    channel: 'stable',
-    downloadPercent: 100,
+    phase: 'downloaded', currentVersion: '0.2.2', latestVersion: '0.3.0', channel: 'stable',
+    downloadPercent: 100, installBlockedReason: null, error: null, ...overrides,
     releaseUrl: 'https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.3.0',
-    installBlockedReason: null,
-    error: null,
-    ...overrides,
   }
 }
 
@@ -83,6 +71,12 @@ function freshStore(): Promise<typeof import('../../src/client/update-store.ts')
   return import(`../../src/client/update-store.ts?case=${Math.random().toString(36).slice(2)}`)
 }
 
+/** Install the fake surface as the page bridge; returns the cleanup. */
+function installUpdateSurface(surface: UpdateSurface): () => void {
+  ;(globalThis as Record<string, unknown>).window = { dshChamber: { update: surface } }
+  return () => { delete (globalThis as Record<string, unknown>).window }
+}
+
 async function waitHydrated(store: typeof import('../../src/client/update-store.ts')): Promise<void> {
   const deadline = Date.now() + 2_000
   while (store.getUpdateState() === null && Date.now() < deadline) {
@@ -93,7 +87,7 @@ async function waitHydrated(store: typeof import('../../src/client/update-store.
 
 test('restart recovery rule: a pushed state carrying restartFailureText releases the module gate', async () => {
   const { surface, push } = fakeUpdateSurface()
-  ;(globalThis as Record<string, unknown>).window = { dshChamber: { update: surface } }
+  const cleanup = installUpdateSurface(surface)
   const store = await freshStore()
   try {
     await waitHydrated(store)
@@ -111,14 +105,12 @@ test('restart recovery rule: a pushed state carrying restartFailureText releases
     const retry = await store.requestUpdateRestart()
     assert.equal(retry.ok, true, 'a failure-carrying push must release the module gate for an in-place retry')
     assert.equal(surface.restartCalls, 2)
-  } finally {
-    delete (globalThis as Record<string, unknown>).window
-  }
+  } finally { cleanup() }
 })
 
 test('restart recovery rule: a plain downloaded push WITHOUT a failure keeps the gate armed', async () => {
   const { surface, push } = fakeUpdateSurface()
-  ;(globalThis as Record<string, unknown>).window = { dshChamber: { update: surface } }
+  const cleanup = installUpdateSurface(surface)
   const store = await freshStore()
   try {
     await waitHydrated(store)
@@ -132,14 +124,12 @@ test('restart recovery rule: a plain downloaded push WITHOUT a failure keeps the
     assert.deepEqual(again, { ok: false, error: 'restart already in progress' },
       'a plain downloaded push must NOT release the gate (the quit is still expected)')
     assert.equal(surface.restartCalls, 1)
-  } finally {
-    delete (globalThis as Record<string, unknown>).window
-  }
+  } finally { cleanup() }
 })
 
 test('restart recovery rule: a pushed phase error releases the module gate (belt leg)', async () => {
   const { surface, push } = fakeUpdateSurface()
-  ;(globalThis as Record<string, unknown>).window = { dshChamber: { update: surface } }
+  const cleanup = installUpdateSurface(surface)
   const store = await freshStore()
   try {
     await waitHydrated(store)
@@ -151,14 +141,12 @@ test('restart recovery rule: a pushed phase error releases the module gate (belt
     const retry = await store.requestUpdateRestart()
     assert.equal(retry.ok, true, 'an error-phase push must release the module gate')
     assert.equal(surface.restartCalls, 2)
-  } finally {
-    delete (globalThis as Record<string, unknown>).window
-  }
+  } finally { cleanup() }
 })
 
 test('restart recovery rule: a pushed up-to-date phase releases the module gate (belt leg)', async () => {
   const { surface, push } = fakeUpdateSurface()
-  ;(globalThis as Record<string, unknown>).window = { dshChamber: { update: surface } }
+  const cleanup = installUpdateSurface(surface)
   const store = await freshStore()
   try {
     await waitHydrated(store)
@@ -171,14 +159,12 @@ test('restart recovery rule: a pushed up-to-date phase releases the module gate 
     const retry = await store.requestUpdateRestart()
     assert.equal(retry.ok, true, 'an up-to-date push must release the module gate')
     assert.equal(surface.restartCalls, 2)
-  } finally {
-    delete (globalThis as Record<string, unknown>).window
-  }
+  } finally { cleanup() }
 })
 
 test('native (Sparkle) phase pushes hydrate the same snapshot the Electron path consumes', async () => {
   const { surface, push } = fakeUpdateSurface()
-  ;(globalThis as Record<string, unknown>).window = { dshChamber: { update: surface } }
+  const cleanup = installUpdateSurface(surface)
   const store = await freshStore()
   try {
     await waitHydrated(store)
@@ -205,9 +191,7 @@ test('native (Sparkle) phase pushes hydrate the same snapshot the Electron path 
     assert.equal(store.getUpdateState()?.error, 'sparkle boom')
     assert.deepEqual(await store.requestUpdateRestart(), { ok: true })
     assert.equal(surface.restartCalls, 2)
-  } finally {
-    delete (globalThis as Record<string, unknown>).window
-  }
+  } finally { cleanup() }
 })
 
 test('S-21: one「检查更新」invoke emits exactly one bridge check — N-ctx shells share the module gate', async () => {
@@ -218,7 +202,7 @@ test('S-21: one「检查更新」invoke emits exactly one bridge check — N-ctx
     checkCalls += 1
     releases.push(() => resolve({ ok: true }))
   })
-  ;(globalThis as Record<string, unknown>).window = { dshChamber: { update: surface } }
+  const cleanup = installUpdateSurface(surface)
   const store = await freshStore()
   try {
     await waitHydrated(store)
@@ -240,9 +224,7 @@ test('S-21: one「检查更新」invoke emits exactly one bridge check — N-ctx
     surface.check = async () => { recovered += 1; return { ok: true } }
     assert.deepEqual(await store.requestUpdateCheck(), { ok: true })
     assert.equal(recovered, 1, '抛错后单飞复位：按钮可重试')
-  } finally {
-    delete (globalThis as Record<string, unknown>).window
-  }
+  } finally { cleanup() }
 })
 
 test('S-21: the page renders the shell-pushed phases (checking → available) and runs no discovery of its own', async () => {
@@ -258,7 +240,7 @@ test('S-21: the page renders the shell-pushed phases (checking → available) an
   surface.download = async () => { extraCalls.push('download'); return realDownload() }
   const realOpen = surface.openReleasePage.bind(surface)
   surface.openReleasePage = async (url: string) => { extraCalls.push('openReleasePage'); return realOpen(url) }
-  ;(globalThis as Record<string, unknown>).window = { dshChamber: { update: surface } }
+  const cleanup = installUpdateSurface(surface)
   const store = await freshStore()
   try {
     await waitHydrated(store)
@@ -282,7 +264,5 @@ test('S-21: the page renders the shell-pushed phases (checking → available) an
     assert.equal(updateCheckDisabled(store.getUpdateState()?.phase), false)
     assert.deepEqual(seen, ['checking', 'available'], '页面相位序列 = 壳推送序列（无自有发现）')
     assert.deepEqual(extraCalls, [], '检查路径绝不触碰 download/openReleasePage 等其它面')
-  } finally {
-    delete (globalThis as Record<string, unknown>).window
-  }
+  } finally { cleanup() }
 })

@@ -1,14 +1,11 @@
 /**
- * Cell dispatch tests (2026-09-11 upstream-alignment T4): the official outlet's
- * keyed and list branches, as plain unit tests.
- *
- * The contract under test is the difference between the raw ledger
- * (`entries`: every live registration) and the shadowing winners per cell
- * (`entriesOfSlot`) — a cell whose registrations all abdicated has no winner but
- * is still OCCUPIED, and the official outlet renders an addressable crash face
- * for it instead of the owner's natural-empty fallback. The chamber panel's
- * outlet used to fall through to the fallback there, which made a crashed
- * section indistinguishable from an unregistered one.
+ * Cell dispatch tests (2026-09-11 upstream-alignment T4): the official outlet's keyed
+ * and list branches, as plain unit tests. The contract is the difference between the
+ * raw ledger (`entries`: every live registration) and the shadowing winners per cell
+ * (`entriesOfSlot`) — a cell whose registrations all abdicated has no winner but is
+ * still OCCUPIED, and the outlet renders an addressable crash face instead of the
+ * owner's natural-empty fallback (otherwise a crashed section is indistinguishable
+ * from an unregistered one).
  */
 
 import { test } from 'node:test';

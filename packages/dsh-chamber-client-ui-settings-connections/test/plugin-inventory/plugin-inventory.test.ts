@@ -16,37 +16,7 @@ import {
   chamberRemoteKey,
   thirdPartyEntries,
 } from '../../src/client/plugin-inventory-text.ts'
-
-function withPageOrigin(origin: string): () => void {
-  const previous = Object.getOwnPropertyDescriptor(globalThis, 'location')
-  Object.defineProperty(globalThis, 'location', {
-    configurable: true,
-    value: { origin },
-  })
-  return () => {
-    if (previous === undefined) delete (globalThis as { location?: unknown }).location
-    else Object.defineProperty(globalThis, 'location', previous)
-  }
-}
-
-interface FetchCall { url: string; init: RequestInit }
-
-function stubFetch(status: number, body: unknown, reject = false): { calls: FetchCall[]; restore(): void } {
-  const calls: FetchCall[] = []
-  const original = globalThis.fetch
-  globalThis.fetch = ((input: unknown, init?: RequestInit) => {
-    calls.push({ url: String(input), init: init ?? {} })
-    if (reject) return Promise.reject(new TypeError('fetch failed'))
-    return Promise.resolve(new Response(typeof body === 'string' ? body : JSON.stringify(body), {
-      status,
-      headers: { 'content-type': 'application/json' },
-    }))
-  }) as typeof fetch
-  return {
-    calls,
-    restore(): void { globalThis.fetch = original },
-  }
-}
+import { stubFetch, withPageOrigin } from '../support/fixtures.ts'
 
 function serverResponse(rpcId: string, result: unknown): unknown {
   return { type: 'server-response', rpcId, result }
@@ -65,7 +35,7 @@ const okSnapshot: PluginInventorySnapshot = {
 }
 
 test('loadPluginInventory: posts the client-request envelope to the per-instance proxy and parses the snapshot', async () => {
-  const restoreOrigin = withPageOrigin('http://127.0.0.1:17500')
+  const restoreOrigin = withPageOrigin('http://127.0.0.1:17500', 'location')
   const stub = stubFetch(200, serverResponse('rpc-1', { ok: true, value: okSnapshot }))
   try {
     const snapshot = await loadPluginInventory('gateway-west')

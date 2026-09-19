@@ -9,19 +9,15 @@ import {
 
 const LIMIT = SESSION_ROWS_VISIBLE_FIRST
 
-function window(over: Partial<{
-  total: number
-  currentIndex: number
-  expanded: boolean
-  visibleFirst: number
-}> = {}) {
-  return sessionRowWindow({
-    total: over.total ?? 10,
-    currentIndex: over.currentIndex ?? -1,
-    expanded: over.expanded ?? false,
-    visibleFirst: over.visibleFirst ?? LIMIT,
-  })
-}
+type Over = Partial<{ total: number; currentIndex: number; expanded: boolean; visibleFirst: number }>
+
+const paramsOf = (over: Over) => ({
+  total: over.total ?? 10, currentIndex: over.currentIndex ?? -1,
+  expanded: over.expanded ?? false, visibleFirst: over.visibleFirst ?? LIMIT,
+})
+const window = (over: Over = {}) => sessionRowWindow(paramsOf(over))
+const disclosure = (over: Over = {}) =>
+  sessionRowDisclosure({ total: over.total ?? 10, currentIndex: over.currentIndex ?? -1, visibleFirst: over.visibleFirst ?? LIMIT })
 
 test('小于等于上限全量渲染、无隐藏', () => {
   assert.deepEqual(window({ total: LIMIT }), { renderCount: LIMIT, hiddenCount: 0 })
@@ -40,10 +36,7 @@ test('展开后全量渲染', () => {
 })
 
 test('当前会话行不得被窗口藏匿（在截断区内不影响窗口）', () => {
-  assert.deepEqual(
-    window({ total: LIMIT + 300, currentIndex: 150 }),
-    { renderCount: LIMIT, hiddenCount: 300 },
-  )
+  assert.deepEqual(window({ total: LIMIT + 300, currentIndex: 150 }), { renderCount: LIMIT, hiddenCount: 300 })
 })
 
 test('当前会话行在截断区外时窗口放大到覆盖它', () => {
@@ -73,24 +66,15 @@ test('幂等与纯函数（同输入同输出、不共享状态）', () => {
 // 未展开窗口的隐藏数，展开条因此能留在原地并提供「收起」。
 test('展开条窗口与展开态无关：展开态下仍报出隐藏数（可收起）', () => {
   const total = LIMIT + 300
-  const collapsed = sessionRowDisclosure({ total, currentIndex: -1, visibleFirst: LIMIT })
-  assert.deepEqual(collapsed, { renderCount: LIMIT, hiddenCount: 300 })
+  assert.deepEqual(disclosure({ total }), { renderCount: LIMIT, hiddenCount: 300 })
   // 展开后的渲染窗口是空的隐藏数（全量渲染）……
   assert.deepEqual(window({ total, expanded: true }), { renderCount: total, hiddenCount: 0 })
   // ……而展开条读的是自己的窗口：同一个控件在展开态仍能报出 300 并可收起。
-  assert.deepEqual(
-    sessionRowDisclosure({ total, currentIndex: -1, visibleFirst: LIMIT }),
-    { renderCount: LIMIT, hiddenCount: 300 },
-  )
+  assert.deepEqual(disclosure({ total }), { renderCount: LIMIT, hiddenCount: 300 })
 })
 
 test('展开条窗口继承当前会话的保持可见规则（与渲染窗口同源）', () => {
-  assert.deepEqual(
-    sessionRowDisclosure({ total: LIMIT + 300, currentIndex: LIMIT + 100, visibleFirst: LIMIT }),
-    { renderCount: LIMIT + 101, hiddenCount: 199 },
-  )
-  assert.deepEqual(
-    sessionRowDisclosure({ total: 5, currentIndex: -1, visibleFirst: LIMIT }),
-    { renderCount: 5, hiddenCount: 0 },
-  )
+  assert.deepEqual(disclosure({ total: LIMIT + 300, currentIndex: LIMIT + 100 }),
+    { renderCount: LIMIT + 101, hiddenCount: 199 })
+  assert.deepEqual(disclosure({ total: 5 }), { renderCount: 5, hiddenCount: 0 })
 })

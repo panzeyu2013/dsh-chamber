@@ -1,9 +1,6 @@
 /**
- * Unit tests for the C8 artifact-gate helpers (design 09 §3.6 / C8).
- *
- * The gate script itself is a top-level program; these tests pin the decision
- * semantics that a silent pass could hide: a skipped build is a failure, a
- * missing artifact is a failure, restore is byte-exact and removes extras.
+ * Unit tests for the C8 artifact-gate helpers (design 09 §3.6 / C8). The gate script is a top-level program, so these tests pin
+ * the decision semantics a silent pass could hide: a skipped build or missing artifact is a failure; restore is byte-exact and removes extras.
  */
 
 import { test } from 'node:test'
@@ -93,8 +90,7 @@ test('an unreadable artifact throws instead of comparing nothing', () => {
     const dist = join(dir, 'dist')
     mkdirSync(dist, { recursive: true })
     writeFileSync(join(dist, 'index.js'), 'x')
-    // A dangling symlink is the portable "present but unreadable" case (a
-    // chmod-based case is meaningless when the tests may run as root).
+    // A dangling symlink is the portable "present but unreadable" case (chmod is meaningless when tests may run as root).
     symlinkSync(join(dir, 'missing-target.js'), join(dist, 'broken.js'))
     assert.throws(() => snapshotDir(dist), /ENOENT/)
   })

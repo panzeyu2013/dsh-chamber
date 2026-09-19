@@ -6,10 +6,7 @@ test('control-plane requests use the shell page origin before the async bridge',
   const previous = Object.getOwnPropertyDescriptor(globalThis, 'window')
   Object.defineProperty(globalThis, 'window', {
     configurable: true,
-    value: {
-      location: { origin: 'http://127.0.0.1:17520' },
-      dshChamber: { controlPlaneUrl: 'http://127.0.0.1:17500' },
-    },
+    value: { location: { origin: 'http://127.0.0.1:17520' }, dshChamber: { controlPlaneUrl: 'http://127.0.0.1:17500' } },
   })
 
   try {

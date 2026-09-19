@@ -1,10 +1,6 @@
-/**
- * gateway-ipc-shared unit tests (design 21 §6.5, plan Phase 4.6): the pure
- * main-process apply payload validator (bounds + whitelists + deferRestart
- * boolean honesty), the registry-spec name parser, and the confirmation
- * copy builder (batch install/remove + restart-to-apply / multi-desktop
- * honesty lines). All pure Node — no Electron.
- */
+/** gateway-ipc-shared (design 21 §6.5, plan Phase 4.6): the pure main-process apply payload
+ *  validator (bounds, whitelists, deferRestart honesty), the registry-spec name parser and the
+ *  confirmation copy builder. All pure Node — no Electron. */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

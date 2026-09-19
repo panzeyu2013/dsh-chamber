@@ -6,8 +6,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   createSshPluginJournal,
@@ -15,6 +14,7 @@ import {
   SSH_PLUGIN_JOURNAL_RETENTION,
   sshPluginJournalFile,
 } from '../../ssh-plugin-journal.ts'
+import { tempDir } from './plugin-sync-fixtures.ts'
 
 interface Logged {
   level: 'log' | 'warn'
@@ -32,13 +32,8 @@ function silentLogger(): { logger: { log(...args: unknown[]): void; warn(...args
   }
 }
 
-function journalDir(): string {
-  return mkdtempSync(join(tmpdir(), 'dsh-ssh-journal-'))
-}
-
-function warns(logs: Logged[]): Logged[] {
-  return logs.filter(entry => entry.level === 'warn')
-}
+const journalDir = (): string => tempDir('dsh-ssh-journal-')
+const warns = (logs: Logged[]): Logged[] => logs.filter(entry => entry.level === 'warn')
 
 // ============================================================================
 // record / latestOk
@@ -51,7 +46,6 @@ test('journal: record + latestOk return the newest OK op of one instance only', 
   journal.record({ instanceId: 's1', name: 'pkg-a', kind: 'add', specBefore: null, ok: true })
   journal.record({ instanceId: 's1', name: 'pkg-b', kind: 'remove', specBefore: '^2.0.0', ok: true })
   journal.record({ instanceId: 's2', name: 'pkg-c', kind: 'add', specBefore: null, ok: true })
-
   const latest = journal.latestOk('s1')
   assert.ok(latest !== null)
   if (latest !== null) {
@@ -68,7 +62,6 @@ test('journal: record + latestOk return the newest OK op of one instance only', 
   // recent() is newest-first across instances.
   assert.deepEqual(journal.recent().map(op => op.name), ['pkg-c', 'pkg-b', 'pkg-a'])
 })
-
 test('journal: failed rows are recorded but never undoable (latestOk skips them)', () => {
   const dir = journalDir()
   const journal = createSshPluginJournal(dir, silentLogger().logger)
@@ -81,7 +74,6 @@ test('journal: failed rows are recorded but never undoable (latestOk skips them)
   assert.equal(failed?.ok, false)
   assert.equal(failed?.error, 'remote add failed')
 })
-
 test('journal: specBefore round-trips unmasked (the undoable fact)', () => {
   const dir = journalDir()
   const journal = createSshPluginJournal(dir, silentLogger().logger)
@@ -89,7 +81,6 @@ test('journal: specBefore round-trips unmasked (the undoable fact)', () => {
   const latest = journal.latestOk('s1')
   assert.equal(latest?.specBefore, 'file:/root/.dsh-chamber/plugins/mat-pkg-1.tgz')
 })
-
 test('journal: clear drops only the ops of the cleared instance', () => {
   const dir = journalDir()
   const journal = createSshPluginJournal(dir, silentLogger().logger)
@@ -99,14 +90,12 @@ test('journal: clear drops only the ops of the cleared instance', () => {
   assert.equal(journal.latestOk('s1'), null)
   assert.equal(journal.latestOk('s2')?.name, 'b')
 })
-
 test('journal: ops carry their operational target fingerprint; latestOkForTarget binds undo to the CURRENT target', () => {
   const dir = journalDir()
   const journal = createSshPluginJournal(dir, silentLogger().logger)
   journal.record({ instanceId: 's1', name: 'pkg-a', kind: 'add', fingerprint: 'fp-host-a', specBefore: null, ok: true })
   journal.record({ instanceId: 's1', name: 'pkg-b', kind: 'remove', fingerprint: 'fp-host-b', specBefore: '^1.0.0', ok: true })
   journal.record({ instanceId: 's1', name: 'legacy', kind: 'add', specBefore: null, ok: true })
-
   // The newest op of the CURRENT target is undoable...
   assert.equal(journal.latestOkForTarget('s1', 'fp-host-b')?.name, 'pkg-b')
   // ...an older op of the SAME target is reachable once the newer one of a
@@ -140,7 +129,6 @@ test('journal: the file keeps only the newest RETENTION ops (per file, across in
   const raw = JSON.parse(readFileSync(sshPluginJournalFile(dir), 'utf8')) as { ops: unknown[] }
   assert.equal(raw.ops.length, SSH_PLUGIN_JOURNAL_RETENTION, 'the on-disk array is pruned too')
 })
-
 test('journal: writes are atomic, 0600 and versioned', () => {
   const dir = journalDir()
   const journal = createSshPluginJournal(dir, silentLogger().logger)
@@ -176,7 +164,6 @@ test('journal: a corrupt journal is moved aside with a warn and a fresh journal 
   }
   assert.equal(asideFiles.size, 1, 'the corrupt journal is retained as evidence beside the fresh one')
 })
-
 test('journal: an oversized journal (over the 64 KiB bound) is treated as corrupt evidence', () => {
   const dir = journalDir()
   const file = sshPluginJournalFile(dir)
@@ -185,14 +172,11 @@ test('journal: an oversized journal (over the 64 KiB bound) is treated as corrup
   const { logger, logs } = silentLogger()
   const journal = createSshPluginJournal(dir, logger)
   assert.equal(journal.latestOk('s1'), null)
-  assert.ok(
-    warns(logs).some(entry => String(entry.args[0]).includes('corrupt or unreadable')),
-    'oversized reads must be loud, never silently truncated',
-  )
+  assert.ok(warns(logs).some(entry => String(entry.args[0]).includes('corrupt or unreadable')),
+    'oversized reads must be loud, never silently truncated')
   journal.record({ instanceId: 's1', name: 'pkg', kind: 'add', specBefore: null, ok: true })
   assert.equal(journal.latestOk('s1')?.name, 'pkg')
 })
-
 test('journal: an unsupported schema version is moved aside, not guessed at', () => {
   const dir = journalDir()
   const file = sshPluginJournalFile(dir)

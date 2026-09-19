@@ -1,17 +1,13 @@
 /**
- * plugin-inventory-text.ts pure display projections (plain node:test, no
- * dsh, no React): the entry classification (plan 24 D7-A — the gateway's
- * cordis.patch.yml insert rows are reported by the host inventory under
- * the raw 'cordis:include <name>' patch syntax; the mobile packaged entry
- * is a chamber row, never third-party), the chamber row badge mappings
- * (plan 24 B1.5 — local manifest truth + remote live-Loader state badge-
- * ized into {labelKey, tone}) and the third-party row live-state chips
- * (Loader-snapshot derived 生效状态 for the local/gateway/http installed
- * lists — liveness only from an enabled + active fiber of the SAME name, a
- * missing entry stays neutral: a bundle layer mounts the rows its
- * cordis.patch.yml inserts, never an entry named after the bundle, so the
- * old "no entry + bundle layer → 重启后生效" claim was a permanent false
- * warning; an unreadable snapshot stays neutral).
+ * plugin-inventory-text.ts pure display projections (plain node:test, no dsh, no
+ * React): the entry classification (plan 24 D7-A — the gateway's cordis.patch.yml
+ * insert rows arrive under the raw 'cordis:include <name>' syntax; the mobile
+ * packaged entry is a chamber row, never third-party), the chamber row badge
+ * mappings (plan 24 B1.5 — {labelKey, tone} from local manifest truth + remote
+ * live-Loader state) and the third-party row live-state chips (liveness only from
+ * an enabled + active fiber of the SAME name; a missing or unreadable entry stays
+ * neutral — a bundle layer mounts its insert rows, never a row named after the
+ * bundle, so "no entry + bundle layer → 重启后生效" was a permanent false warning).
  */
 
 import { test } from 'node:test'
@@ -146,9 +142,8 @@ test('remoteChamberBadge: the raw cordis patch-insert report of a chamber row st
 })
 
 test('installedRowLiveState: protected composition/seed rows never claim a Loader state', () => {
-  // 受保护行（安装自带基线）从不是 Loader 客户端入口：对它们要 Loader 状态会在每次
-  // 打开对话框时给出假告警（2026-12 review）。§6.11.5 的 2026-09 行集修订后，这类行只在
-  // profile 自己把该名字声明为依赖时出现，但判据本身（受保护/组合/播种 ⇒ 不索要状态）不变。
+  // 受保护行（安装自带基线）从不是 Loader 客户端入口：对它们要 Loader 状态会在每次打开
+  // 对话框时给出假告警（2026-12 review）。判据不变：受保护/组合/播种 ⇒ 不索要状态（§6.11.5）。
   const snapshot = { entries: [
     { moduleName: 'third-party-live', enabled: true, fiberPhase: 'active' },
   ] } as unknown as PluginInventorySnapshot
@@ -193,12 +188,10 @@ test('thirdPartyLiveState: only an enabled + active Loader entry claims live, ne
 })
 
 test('thirdPartyLiveState: a bundle-layer row is neutral without a name match and live only from its own entry', () => {
-  // 真实报告形态（2026-12 review）：`@deepseek-ai/dsh-experimental-agent-team-profile`
-  // 是 bundle 层，实例的挂载行来自它 cordis.patch.yml 的 insert 列表 ——
-  // @deepseek-ai/dsh-experimental-agent-team / @deepseek-ai/dsh-experimental-tool-agent-team；
-  // profile 根 cordis.yml 是空条目列表，bundle 包名从不成为 Loader 行。旧实现按
-  // 「快照无同名行 + 是 bundle 层」给出「重启后生效」，对每个 bundle 层永久为真
-  // （实例已重启并实际生效也不消失）。
+  // 真实报告形态（2026-12 review）：`…-agent-team-profile` 是 bundle 层，实例的挂载行
+  // 来自它 cordis.patch.yml 的 insert 列表（…-agent-team / …-tool-agent-team），bundle 包名
+  // 从不成为 Loader 行。旧实现按「无同名行 + bundle 层」给出「重启后生效」，对每个 bundle
+  // 层永久为真——实例已重启并实际生效也不消失。
   const bundleRow = '@deepseek-ai/dsh-experimental-agent-team-profile'
   const composedWithoutBundleName: PluginInventorySnapshot = {
     entries: [

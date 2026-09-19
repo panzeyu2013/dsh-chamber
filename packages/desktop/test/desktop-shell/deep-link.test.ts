@@ -1,11 +1,9 @@
 /**
- * VS Code deep-link core (design 16 §3/§4/§5) unit tests — pure Node, no
- * electron, no real VS Code. The OS-level deep link is untrusted input, so
- * the suite drives parseOpenVscodeIntent / buildVscodeRemoteUrl with malicious
- * and boundary inputs, drives detectVscodeAvailability through injected
- * platform + PATH + fs stubs, and drives runVscodeLaunch through an injected
- * VscodeLaunchContext (registry lookup / availability / openExternal are all
- * faked — no real SSH host, no real VS Code).
+ * VS Code deep-link core (design 16 §3/§4/§5) — pure Node, no VS Code. The
+ * OS-level deep link is untrusted input, so the suite drives
+ * parseOpenVscodeIntent / buildVscodeRemoteUrl with malicious and boundary
+ * inputs, detectVscodeAvailability through injected platform + PATH + fs stubs,
+ * and runVscodeLaunch through an injected VscodeLaunchContext (all faked).
  */
 
 import { test } from 'node:test'
@@ -35,9 +33,9 @@ import {
 } from '../../deep-link.ts'
 import type { VscodeLaunchContext, VscodeLaunchRequest } from '../../deep-link.ts'
 import { NotificationSourceIncarnations } from '../../notifications.ts'
+import { hostileThrownValue } from './hostile.ts'
 
-/** A minimal valid ssh instance for runVscodeLaunch context fakes (v2: the
- *  vscode-remote URL is an ssh-TRANSPORT feature — design 17 §2). */
+/** A minimal ssh instance for context fakes (vscode-remote URL = ssh transport, design 17 §2). */
 const sshInstance = { id: 'web-1', host: 'h.example.com', user: 'root', sshPort: null, transport: 'ssh' }
 
 function context(overrides: Partial<VscodeLaunchContext> & { lookup?: VscodeLaunchContext['lookupInstance'] } = {}): VscodeLaunchContext {
@@ -48,7 +46,6 @@ function context(overrides: Partial<VscodeLaunchContext> & { lookup?: VscodeLaun
     vscodeOpenInNewWindow: overrides.vscodeOpenInNewWindow,
   }
 }
-
 test('parseOpenVscodeIntent accepts a well-formed deep link', () => {
   const result = parseOpenVscodeIntent('dsh-chamber://open-vscode?instance=web-1&path=%2Fhome%2Fuser%2Fproj')
   assert.equal(result.ok, true)
@@ -56,67 +53,56 @@ test('parseOpenVscodeIntent accepts a well-formed deep link', () => {
     assert.deepEqual(result.intent, { instanceId: 'web-1', path: '/home/user/proj' })
   }
 })
-
 test('parseOpenVscodeIntent rejects a non-dsh-chamber scheme', () => {
   const result = parseOpenVscodeIntent('https://open-vscode?instance=web-1&path=/foo')
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /scheme/i)
 })
-
 test('parseOpenVscodeIntent rejects an unexpected host', () => {
   const result = parseOpenVscodeIntent('dsh-chamber://evil?instance=web-1&path=/foo')
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /host/i)
 })
-
 test('parseOpenVscodeIntent rejects a missing instance', () => {
   const result = parseOpenVscodeIntent('dsh-chamber://open-vscode?path=/foo')
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /instance/i)
 })
-
 test('parseOpenVscodeIntent rejects an invalid instance id', () => {
   const result = parseOpenVscodeIntent('dsh-chamber://open-vscode?instance=bad%2Fid&path=/foo')
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /instance/i)
 })
-
 test('parseOpenVscodeIntent accepts the reserved local instance id (user decision 2026-08)', () => {
   const result = parseOpenVscodeIntent('dsh-chamber://open-vscode?instance=local&path=/foo')
   assert.equal(result.ok, true)
   if (result.ok) assert.equal(result.intent.instanceId, 'local')
 })
-
 test('parseOpenVscodeIntent rejects userinfo in the authority (P2-2)', () => {
   const result = parseOpenVscodeIntent('dsh-chamber://user:pass@open-vscode?instance=web-1&path=/foo')
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /userinfo/i)
 })
-
 test('parseOpenVscodeIntent rejects a port in the authority (P2-2)', () => {
   const result = parseOpenVscodeIntent('dsh-chamber://open-vscode:9999?instance=web-1&path=/foo')
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /port/i)
 })
-
 test('parseOpenVscodeIntent rejects a missing path', () => {
   const result = parseOpenVscodeIntent('dsh-chamber://open-vscode?instance=web-1')
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /path/i)
 })
-
 test('parseOpenVscodeIntent rejects a relative path', () => {
   const result = parseOpenVscodeIntent('dsh-chamber://open-vscode?instance=web-1&path=foo')
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /absolute|leading \//i)
 })
-
 test('parseOpenVscodeIntent rejects a path with control characters', () => {
   const result = parseOpenVscodeIntent('dsh-chamber://open-vscode?instance=web-1&path=%2Ffoo%0Abar')
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /control/i)
 })
-
 test('parseOpenVscodeIntent rejects an overlong path', () => {
   const longPath = '/' + 'a'.repeat(4096)
   const result = parseOpenVscodeIntent(`dsh-chamber://open-vscode?instance=web-1&path=${encodeURIComponent(longPath)}`)
@@ -360,21 +346,17 @@ test('packaged protocol registration never persists a cold-start URL as a fixed 
   assert.deepEqual(decideDeepLinkProtocolRegistration({ isPackaged: true, platform: 'linux' }), { action: 'register' })
   assert.deepEqual(decideDeepLinkProtocolRegistration({ isPackaged: true, platform: 'darwin' }), { action: 'register' })
   // design 21 M4: the win32 v1 gate is lifted — packaged Windows registers the
-  // no-args form too (NSIS `protocols` registry entries, when present, are
-  // the same target; runtime registration is idempotent).
+  // no-args form too (NSIS `protocols` entries share the target; idempotent).
   assert.deepEqual(decideDeepLinkProtocolRegistration({ isPackaged: true, platform: 'win32' }), { action: 'register' })
   assert.deepEqual(decideDeepLinkProtocolRegistration({ isPackaged: false, platform: 'linux' }), { action: 'skip' })
   assert.deepEqual(decideDeepLinkProtocolRegistration({ isPackaged: false, platform: 'win32' }), { action: 'skip' })
-  // The decision intentionally exposes no executable/args fields: packaged
-  // registration always calls Electron's no-args form.
+  // The decision exposes no executable/args: registration is Electron's no-args form.
   assert.deepEqual(Object.keys(decideDeepLinkProtocolRegistration({ isPackaged: true, platform: 'linux' })), ['action'])
 })
-
 test('window restore is terminally fenced once quit is requested', () => {
   assert.equal(canRestoreMainWindow(false), true)
   assert.equal(canRestoreMainWindow(true), false)
 })
-
 test('attemptDeepLinkProtocolRegistration reports false/throw without throwing itself', () => {
   assert.deepEqual(attemptDeepLinkProtocolRegistration(() => true), { ok: true })
   assert.deepEqual(
@@ -386,48 +368,40 @@ test('attemptDeepLinkProtocolRegistration reports false/throw without throwing i
     { ok: false, error: 'setAsDefaultProtocolClient failed: registry denied' },
   )
 })
-
 test('buildVscodeRemoteUrl omits the user when null', () => {
   const result = buildVscodeRemoteUrl('h.example.com', null, null, '/foo')
   assert.equal(result.ok, true)
   if (result.ok) assert.equal(result.url, 'vscode://vscode-remote/ssh-remote+h.example.com/foo')
 })
-
 test('buildVscodeRemoteUrl includes the user when present', () => {
   const result = buildVscodeRemoteUrl('h.example.com', 'root', null, '/foo')
   assert.equal(result.ok, true)
   if (result.ok) assert.match(result.url, /ssh-remote\+root@h\.example\.com\//)
 })
-
 test('buildVscodeRemoteUrl brackets an IPv6 literal', () => {
   const result = buildVscodeRemoteUrl('[::1]', null, null, '/foo')
   assert.equal(result.ok, true)
   if (result.ok) assert.equal(result.url, 'vscode://vscode-remote/ssh-remote+[::1]/foo')
 })
-
 test('buildVscodeRemoteUrl re-brackets an unbracketed IPv6 literal', () => {
   const result = buildVscodeRemoteUrl('::1', null, null, '/foo')
   assert.equal(result.ok, true)
   if (result.ok) assert.match(result.url, /ssh-remote\+\[::1\]\//)
 })
-
 test('buildVscodeRemoteUrl rejects a host:port ambiguity', () => {
   const result = buildVscodeRemoteUrl('host:22', null, null, '/foo')
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /IPv6|host:port|冒号/i)
 })
-
 test('buildVscodeRemoteUrl accepts sshPort 22', () => {
   const result = buildVscodeRemoteUrl('h.example.com', null, 22, '/foo')
   assert.equal(result.ok, true)
 })
-
 test('buildVscodeRemoteUrl rejects a non-22 sshPort with the config guidance', () => {
   const result = buildVscodeRemoteUrl('h.example.com', null, 2222, '/foo')
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /~\/\.ssh\/config/)
 })
-
 test('buildVscodeRemoteUrl encodes path segments (space / CJK / # / ? / %)', () => {
   const result = buildVscodeRemoteUrl('h.example.com', null, null, '/a b/中文/c#d?e%f')
   assert.equal(result.ok, true)
@@ -441,25 +415,21 @@ test('buildVscodeRemoteUrl encodes path segments (space / CJK / # / ? / %)', () 
     assert.ok(!result.url.includes('?'), 'no raw ? survives')
   }
 })
-
 test('buildVscodeRemoteUrl hardcodes the vscode: scheme prefix', () => {
   const result = buildVscodeRemoteUrl('h.example.com', 'u', null, '/foo')
   assert.equal(result.ok, true)
   if (result.ok) assert.ok(result.url.startsWith('vscode://vscode-remote/ssh-remote+'), 'scheme is hardcoded vscode:')
 })
-
 test('buildVscodeRemoteUrl rejects a non-absolute path', () => {
   const result = buildVscodeRemoteUrl('h.example.com', null, null, 'relative')
   assert.equal(result.ok, false)
 })
-
 test('detectVscodeAvailability finds the macOS app bundle', () => {
   const result = detectVscodeAvailability('darwin', {
     exists: target => target === '/Applications/Visual Studio Code.app',
   })
   assert.deepEqual(result, { available: true })
 })
-
 test('detectVscodeAvailability finds the per-user macOS app bundle', () => {
   const result = detectVscodeAvailability('darwin', {
     homeDir: '/home/u',
@@ -467,7 +437,6 @@ test('detectVscodeAvailability finds the per-user macOS app bundle', () => {
   })
   assert.deepEqual(result, { available: true })
 })
-
 test('detectVscodeAvailability finds an executable code in PATH (linux)', () => {
   const result = detectVscodeAvailability('linux', {
     pathEnv: '/a:/b',
@@ -475,7 +444,6 @@ test('detectVscodeAvailability finds an executable code in PATH (linux)', () => 
   })
   assert.deepEqual(result, { available: true })
 })
-
 test('detectVscodeAvailability treats missing/empty PATH as not found', () => {
   const result = detectVscodeAvailability('linux', {
     pathEnv: '',
@@ -483,11 +451,9 @@ test('detectVscodeAvailability treats missing/empty PATH as not found', () => {
   })
   assert.deepEqual(result, { available: false })
 })
-
 test('detectVscodeAvailability treats a DIRECTORY named code as NOT available (real fs, P1-2)', () => {
-  // POSIX directories pass access(X_OK); the executable check must also
-  // require isFile() — a PATH entry named `code` that is a directory is not
-  // VS Code (security-review P1-2).
+  // POSIX directories pass access(X_OK); the check must also require isFile()
+  // — a PATH entry named `code` that is a directory is not VS Code (P1-2).
   const dir = mkdtempSync(join(tmpdir(), 'dsh-deeplink-dir-'))
   try {
     mkdirSync(join(dir, 'code'))
@@ -497,7 +463,6 @@ test('detectVscodeAvailability treats a DIRECTORY named code as NOT available (r
     rmSync(dir, { recursive: true, force: true })
   }
 })
-
 test('detectVscodeAvailability finds a real executable file named code (real fs)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-deeplink-exe-'))
   try {
@@ -510,7 +475,6 @@ test('detectVscodeAvailability finds a real executable file named code (real fs)
     rmSync(dir, { recursive: true, force: true })
   }
 })
-
 test('detectVscodeAvailability finds Code.exe via LOCALAPPDATA (win32, isFile)', () => {
   const result = detectVscodeAvailability('win32', {
     localAppData: 'C:\\Users\\u\\AppData\\Local',
@@ -519,7 +483,6 @@ test('detectVscodeAvailability finds Code.exe via LOCALAPPDATA (win32, isFile)',
   })
   assert.deepEqual(result, { available: true })
 })
-
 test('detectVscodeAvailability rejects a DIRECTORY at the Code.exe path (win32)', () => {
   const result = detectVscodeAvailability('win32', {
     localAppData: 'C:\\Users\\u\\AppData\\Local',
@@ -528,7 +491,6 @@ test('detectVscodeAvailability rejects a DIRECTORY at the Code.exe path (win32)'
   })
   assert.deepEqual(result, { available: false })
 })
-
 test('detectVscodeAvailability finds code.cmd in PATH (win32)', () => {
   const result = detectVscodeAvailability('win32', {
     pathEnv: 'C:\\x;D:\\y',
@@ -536,18 +498,15 @@ test('detectVscodeAvailability finds code.cmd in PATH (win32)', () => {
   })
   assert.deepEqual(result, { available: true })
 })
-
 test('detectVscodeAvailability returns false for an unknown platform', () => {
   const result = detectVscodeAvailability('sunos', { pathEnv: '', accessX: () => false })
   assert.deepEqual(result, { available: false })
 })
-
 test('runVscodeLaunch fails loudly for an unknown instance', async () => {
   const result = await runVscodeLaunch({ instanceId: 'ghost', path: '/foo' }, context({ lookupInstance: () => null }))
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /not found/i)
 })
-
 test('runVscodeLaunch rejects an instanceId that fails INSTANCE_ID_PATTERN (P2-3)', async () => {
   const result = await runVscodeLaunch(
     { instanceId: '!!weird!!', path: '/foo' },
@@ -556,7 +515,6 @@ test('runVscodeLaunch rejects an instanceId that fails INSTANCE_ID_PATTERN (P2-3
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /instance/i)
 })
-
 test('runVscodeLaunch fails loudly for a non-ssh instance transport', async () => {
   const result = await runVscodeLaunch(
     { instanceId: 'web-1', path: '/foo' },
@@ -565,7 +523,6 @@ test('runVscodeLaunch fails loudly for a non-ssh instance transport', async () =
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /not an ssh transport/i)
 })
-
 test('runVscodeLaunch fails loudly when VS Code is not detected', async () => {
   const result = await runVscodeLaunch(
     { instanceId: 'web-1', path: '/foo' },
@@ -574,7 +531,6 @@ test('runVscodeLaunch fails loudly when VS Code is not detected', async () => {
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /vscode not detected/i)
 })
-
 test('runVscodeLaunch passes through an openVscodeUrl failure loudly', async () => {
   const result = await runVscodeLaunch(
     { instanceId: 'web-1', path: '/foo' },
@@ -583,7 +539,6 @@ test('runVscodeLaunch passes through an openVscodeUrl failure loudly', async () 
   assert.equal(result.ok, false)
   if (!result.ok) assert.equal(result.error, 'open failed')
 })
-
 test('runVscodeLaunch succeeds end-to-end and opens the constructed URL', async () => {
   let opened: string | null = null
   const result = await runVscodeLaunch(
@@ -599,18 +554,15 @@ test('runVscodeLaunch succeeds end-to-end and opens the constructed URL', async 
   assert.equal(result.ok, true)
   assert.equal(opened, 'vscode://vscode-remote/ssh-remote+root@h.example.com/home/user/proj')
 })
-
 test('buildVscodeFileUrl builds a local file target with encoded path', () => {
   const result = buildVscodeFileUrl('/home/user/我的 项目')
   assert.equal(result.ok, true)
   if (result.ok) assert.equal(result.url, 'vscode://file/home/user/%E6%88%91%E7%9A%84%20%E9%A1%B9%E7%9B%AE')
 })
-
 test('buildVscodeFileUrl rejects a relative path', () => {
   const result = buildVscodeFileUrl('relative/path')
   assert.equal(result.ok, false)
 })
-
 test('runVscodeLaunch opens a local file URL for instance=local (user decision 2026-08)', async () => {
   let opened: string | null = null
   const result = await runVscodeLaunch(
@@ -626,7 +578,6 @@ test('runVscodeLaunch opens a local file URL for instance=local (user decision 2
   assert.equal(result.ok, true)
   assert.equal(opened, 'vscode://file/home/user/local-ws')
 })
-
 test('runVscodeLaunch local branch still re-checks availability', async () => {
   const result = await runVscodeLaunch(
     { instanceId: 'local', path: '/home/user/local-ws' },
@@ -635,7 +586,6 @@ test('runVscodeLaunch local branch still re-checks availability', async () => {
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /vscode not detected/i)
 })
-
 test('runVscodeLaunch converts availability and registry adapter exceptions into structured failures', async () => {
   const availability = await runVscodeLaunch(
     { instanceId: 'local', path: '/home/user/local-ws' },
@@ -649,24 +599,17 @@ test('runVscodeLaunch converts availability and registry adapter exceptions into
   )
   assert.deepEqual(registry, { ok: false, error: 'vscode launch failed: registry exploded' })
 })
-
 test('runVscodeLaunch cannot be made to reject by a hostile thrown value', async () => {
-  const hostile = new Proxy({}, {
-    getPrototypeOf() { throw new Error('getPrototypeOf trap') },
-    get() { throw new Error('get trap') },
-  })
   const result = await runVscodeLaunch(
     { instanceId: 'local', path: '/home/user/local-ws' },
-    context({ openVscodeUrl: async () => Promise.reject(hostile) }),
+    context({ openVscodeUrl: async () => Promise.reject(hostileThrownValue()) }),
   )
   assert.deepEqual(result, { ok: false, error: 'open vscode url failed: unknown error' })
 })
-
 test('appendVscodeNewWindowParam appends the directive, preserving an existing query', () => {
   assert.equal(appendVscodeNewWindowParam('vscode://file/foo'), 'vscode://file/foo?windowId=_blank')
   assert.equal(appendVscodeNewWindowParam('vscode://file/foo?x=1'), 'vscode://file/foo?x=1&windowId=_blank')
 })
-
 test('buildVscodeRemoteUrl appends the new-window directive only when requested (design 16 §3.3)', () => {
   const bare = buildVscodeRemoteUrl('h.example.com', 'root', null, '/foo')
   assert.equal(bare.ok, true)
@@ -676,15 +619,13 @@ test('buildVscodeRemoteUrl appends the new-window directive only when requested 
   if (newWindow.ok) {
     assert.equal(newWindow.url, 'vscode://vscode-remote/ssh-remote+root@h.example.com/foo?windowId=_blank')
   }
-  // The directive lands after the fully-encoded path — segment encoding stays
-  // intact and the query never touches the path bytes.
+  // The directive lands after the fully-encoded path; query never touches path bytes.
   const encoded = buildVscodeRemoteUrl('h.example.com', null, null, '/a b/中文', true)
   assert.equal(encoded.ok, true)
   if (encoded.ok) {
     assert.equal(encoded.url, 'vscode://vscode-remote/ssh-remote+h.example.com/a%20b/%E4%B8%AD%E6%96%87?windowId=_blank')
   }
 })
-
 test('buildVscodeFileUrl appends the new-window directive only when requested', () => {
   const bare = buildVscodeFileUrl('/home/user/local-ws')
   assert.equal(bare.ok, true)
@@ -693,10 +634,8 @@ test('buildVscodeFileUrl appends the new-window directive only when requested', 
   assert.equal(newWindow.ok, true)
   if (newWindow.ok) assert.equal(newWindow.url, 'vscode://file/home/user/local-ws?windowId=_blank')
 })
-
 test('runVscodeLaunch honors the per-launch new-window preference; absent preference keeps the bare URL', async () => {
-  // Absent preference (default ctx) → bare URL; VS Code's own reuse/replace
-  // policy applies (chamber setting vscodeOpenInNewWindow=false semantics).
+  // Absent preference → bare URL (vscodeOpenInNewWindow=false: VS Code's policy).
   let bareOpened: string | null = null
   await runVscodeLaunch(
     { instanceId: 'web-1', path: '/home/user/proj' },
@@ -704,8 +643,7 @@ test('runVscodeLaunch honors the per-launch new-window preference; absent prefer
   )
   assert.equal(bareOpened, 'vscode://vscode-remote/ssh-remote+root@h.example.com/home/user/proj')
 
-  // Preference on → the new-window directive reaches openVscodeUrl for both
-  // the remote and the local branch (button + OS deep link share runVscodeLaunch).
+  // Preference on → both branches carry the directive (button and deep link share this path).
   let remoteOpened: string | null = null
   const remote = await runVscodeLaunch(
     { instanceId: 'web-1', path: '/home/user/proj' },
@@ -729,20 +667,17 @@ test('runVscodeLaunch honors the per-launch new-window preference; absent prefer
   assert.equal(local.ok, true)
   assert.equal(localOpened, 'vscode://file/home/user/local-ws?windowId=_blank')
 })
-
 test('runVscodeLaunch: a hostile vscodeOpenInNewWindow preference still resolves loudly', async () => {
-  const hostile = new Proxy({}, { get() { throw new Error('settings trap') } })
   const result = await runVscodeLaunch(
     { instanceId: 'local', path: '/home/user/local-ws' },
     context({
       lookupInstance: () => null,
-      vscodeOpenInNewWindow: () => { throw hostile },
+      vscodeOpenInNewWindow: () => { throw hostileThrownValue() },
       openVscodeUrl: async () => { throw new Error('must not be reached') },
     }),
   )
   assert.deepEqual(result, { ok: false, error: 'vscode launch failed: unknown error' })
 })
-
 test('quoteDesktopExecValue quotes only when needed and escapes spec-reserved characters', () => {
   assert.equal(quoteDesktopExecValue('/opt/dsh-chamber.AppImage'), '/opt/dsh-chamber.AppImage')
   assert.equal(quoteDesktopExecValue('/opt/my app/dsh-chamber'), '"/opt/my app/dsh-chamber"')
@@ -752,7 +687,6 @@ test('quoteDesktopExecValue quotes only when needed and escapes spec-reserved ch
   assert.equal(quoteDesktopExecValue('/opt/100%cute dir/dsh'), '"/opt/100%%cute dir/dsh"')
   assert.equal(quoteDesktopExecValue('/opt/%c'), '/opt/%%c')
 })
-
 test('linuxAutostartDirectory honors only an absolute XDG_CONFIG_HOME', () => {
   const home = '/home/user'
   assert.equal(linuxAutostartDirectory({ env: {}, homeDir: home }), '/home/user/.config/autostart')
@@ -771,7 +705,6 @@ test('linuxAutostartDirectory honors only an absolute XDG_CONFIG_HOME', () => {
     '/home/user/.config/autostart',
   )
 })
-
 test('resolveLinuxLaunchExecutable prefers an absolute APPIMAGE over execPath', () => {
   const execPath = '/tmp/.mount-dsh-chamber-xxx/dsh-chamber'
   assert.equal(resolveLinuxLaunchExecutable({ env: {}, execPath }), execPath)
@@ -783,7 +716,6 @@ test('resolveLinuxLaunchExecutable prefers an absolute APPIMAGE over execPath', 
   assert.equal(resolveLinuxLaunchExecutable({ env: { APPIMAGE: 'dsh-chamber.AppImage' }, execPath }), execPath)
   assert.equal(resolveLinuxLaunchExecutable({ env: { APPIMAGE: '' }, execPath }), execPath)
 })
-
 test('linuxAutostartDesktopEntry targets the launch binary with XDG autostart keys', () => {
   const entry = linuxAutostartDesktopEntry({ executable: '/home/user/bin/dsh-chamber.AppImage' })
   assert.ok(entry !== null)
@@ -829,7 +761,6 @@ test('linuxProtocolDesktopEntry declares the x-scheme-handler MimeType with %u',
   assert.equal(linuxProtocolDesktopEntry({ scheme: '1dsh', executable: '/opt/x' }), null)
   assert.equal(linuxProtocolDesktopEntry({ scheme: '-dsh', executable: '/opt/x' }), null)
 })
-
 test('ensureLinuxProtocolDesktopFile writes into XDG_DATA_HOME applications and reports loud failures', () => {
   const base = mkdtempSync(join(tmpdir(), 'dsh-linux-proto-'))
   try {
@@ -846,8 +777,7 @@ test('ensureLinuxProtocolDesktopFile writes into XDG_DATA_HOME applications and 
     assert.ok(written[0].file.endsWith(join('.local', 'share', 'applications', 'dsh-chamber.desktop')))
     assert.ok(written[0].data.includes('MimeType=x-scheme-handler/dsh-chamber;'))
 
-    // A RELATIVE XDG_DATA_HOME is treated as unset (XDG Base Dir Spec) —
-    // never a silent write under the cwd.
+    // A RELATIVE XDG_DATA_HOME is unset (XDG Base Dir Spec) — never a cwd write.
     written.length = 0
     const relative = ensureLinuxProtocolDesktopFile({
       executable: '/home/user/bin/dsh-chamber.AppImage',
@@ -881,7 +811,6 @@ test('ensureLinuxProtocolDesktopFile writes into XDG_DATA_HOME applications and 
     rmSync(base, { recursive: true, force: true })
   }
 })
-
 test('ensureLinuxProtocolDesktopFile default fs branch writes a real 0644 file and fails loud on mkdir errors', () => {
   const base = mkdtempSync(join(tmpdir(), 'dsh-linux-proto-real-'))
   try {

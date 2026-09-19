@@ -163,17 +163,10 @@ test('fatal main-process boundary claims ownership before every hostile host cal
 })
 
 test('committed settings, registry and held-resume pushes use the non-throwing send boundary', () => {
-  // W-10 S1: pushSettingsChanged（SETTINGS_CHANGED send 源）随 info+settings
-  // 批迁入 shell-core（installIpcHandlers 内；最内 send 叶改 HostEdges
-  // rendererPush，attemptCommittedRegistryPush 非-throw 包装随迁）。
-  // W-10 S2: held-resume（pushHeldSystemResume + lastResume 补发）随渲染器投递
-  // 状态机迁入 shell-core（SYSTEM_RESUME send 叶同改 rendererPush）——两锚的
-  // 读取源都指向 shell-core.ts，断言意图原样保留。
-  // W-10 S9: updater 状态 push（updater.subscribe + UPDATE_STATE_CHANGED send
-  // 源）随 I 组 update 注册体迁入 shell-core（committed-push 包装同款；原
-  // main.ts 的 updateWindow 主窗身份复查折算为主窗门 + rendererPush 求值，见
-  // installIpcHandlers I 组段注释）——该锚读取源随之指向 shell-core.ts。
-  // 其余推送锚（instances / status）仍在 main.ts。
+  // W-10 S1/S2/S9: pushSettingsChanged, the held-resume push and the updater state push moved into
+  // shell-core.installIpcHandlers (their send leaves now go through HostEdges rendererPush with the
+  // non-throwing attemptCommittedRegistryPush wrapper); the assertions read shell-core.ts and keep
+  // their intent unchanged. The remaining push anchors (instances / status) still live in main.ts.
   const core = readFileSync(new URL('../../shell-core.ts', import.meta.url), 'utf8')
   const main = readFileSync(new URL('../../main.ts', import.meta.url), 'utf8')
   assert.match(core, /function pushSettingsChanged\(\): void \{[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{/)

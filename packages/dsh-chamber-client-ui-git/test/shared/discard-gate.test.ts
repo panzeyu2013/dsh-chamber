@@ -10,8 +10,8 @@
  * (the removal needed a second `Remove` click). The cases below pin both halves
  * of the contract — which acknowledgement a click still has to collect, and
  * whether the single `discardChanges` wire flag (the host's `--force`) may be
- * sent — while `test/locks/upstream-alignment.test.ts` pins the state wiring the pure
- * functions cannot see.
+ * sent (the state-wiring lock that used to pin the same flow was retired by the
+ * 2026-12 ruling; the cases here are the remaining contract).
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

@@ -11,6 +11,8 @@ import {
   FEATURE_HEAD,
   FakeRepository,
   setup,
+  targetOf,
+  refuses,
   mutationCalls,
   STALE,
   addStaleRecord,
@@ -18,29 +20,14 @@ import {
 
 test('remove rejects running agent and stale expected state, then returns Git-first recovery data', async () => {
   const { core, repo, agents, workspaces } = setup({ linked: true })
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const linked = repository.worktrees.find(worktree => worktree.path === LINKED)!
-  const expected = {
-    repoId: repository.repoId,
-    worktreeId: linked.worktreeId,
-    branch: linked.branch!,
-    head: linked.head,
-  }
+  const { expected } = await targetOf(core)
   repo.existing.add(`${LINKED}/subagent`)
   agents.push({ sessionId: 's-unaccounted', status: 'running', cwd: `${LINKED}/subagent` })
-  await assert.rejects(
-    core.remove({ operationId: 'remove-running', workspaceId: 'ws-feature', expected }),
-    error => error instanceof GitWorktreeError && error.code === 'running-agent',
-  )
+  await assert.rejects(core.remove({ operationId: 'remove-running', workspaceId: 'ws-feature', expected }), refuses('running-agent'))
   agents.length = 0
   await assert.rejects(
-    core.remove({
-      operationId: 'remove-stale',
-      workspaceId: 'ws-feature',
-      expected: { ...expected, head: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' },
-    }),
-    error => error instanceof GitWorktreeError && error.code === 'expected-mismatch',
+    core.remove({ operationId: 'remove-stale', workspaceId: 'ws-feature', expected: { ...expected, head: 'a'.repeat(40) } }),
+    refuses('expected-mismatch'),
   )
 
   const removed = await core.remove({ operationId: 'remove-ok', workspaceId: 'ws-feature', expected })
@@ -69,24 +56,11 @@ test('remove rejects running agent and stale expected state, then returns Git-fi
 
 test('the running guard is archived-aware: an archived running session is INERT and does not block (2026-09 user decision)', async () => {
   const { core, repo, agents, workspaces, archived } = setup({ linked: true })
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const linked = repository.worktrees.find(worktree => worktree.path === LINKED)!
-  const expected = {
-    repoId: repository.repoId,
-    worktreeId: linked.worktreeId,
-    branch: linked.branch!,
-    head: linked.head,
-  }
+  const { expected } = await targetOf(core)
   // A running workspace MEMBER: without an archived fact it blocks, exactly as
   // before (same code, same message).
   agents.push({ sessionId: 's-feature', status: 'running', cwd: LINKED })
-  await assert.rejects(
-    core.remove({ operationId: 'running-non-archived', workspaceId: 'ws-feature', expected }),
-    error => error instanceof GitWorktreeError
-      && error.code === 'running-agent'
-      && /s-feature/.test(error.message),
-  )
+  await assert.rejects(core.remove({ operationId: 'running-non-archived', workspaceId: 'ws-feature', expected }), refuses('running-agent', /s-feature/))
   assert.equal(mutationCalls(repo, 'remove').length, 0, 'a refusal never mutates')
 
   // The SAME running member, now archived: inert → the removal proceeds and
@@ -103,15 +77,7 @@ test('the running guard is archived-aware: an archived running session is INERT 
 test('an archived ANCESTOR makes a running subagent descendant inert', async () => {
   const { core, repo, agents, archived } = setup({ linked: true })
   repo.existing.add(`${LINKED}/sub`)
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const linked = repository.worktrees.find(worktree => worktree.path === LINKED)!
-  const expected = {
-    repoId: repository.repoId,
-    worktreeId: linked.worktreeId,
-    branch: linked.branch!,
-    head: linked.head,
-  }
+  const { expected } = await targetOf(core)
   // child (running, SUBAGENT-origin) → parent (loaded, idle, ARCHIVED). The
   // child has no archived fact of its own: the chain walk is what makes it
   // inert. `origin: 'subagent'` is what makes the edge lineage at all — a
@@ -119,10 +85,7 @@ test('an archived ANCESTOR makes a running subagent descendant inert', async () 
   // test below).
   agents.push({ sessionId: 'parent', status: 'idle' })
   agents.push({ sessionId: 'child', status: 'running', cwd: `${LINKED}/sub`, parentSessionId: 'parent', origin: 'subagent' })
-  await assert.rejects(
-    core.remove({ operationId: 'chain-non-archived', workspaceId: 'ws-feature', expected }),
-    error => error instanceof GitWorktreeError && error.code === 'running-agent',
-  )
+  await assert.rejects(core.remove({ operationId: 'chain-non-archived', workspaceId: 'ws-feature', expected }), refuses('running-agent'))
   archived.push('parent')
   const removed = await core.remove({ operationId: 'chain-archived', workspaceId: 'ws-feature', expected })
   assert.equal(removed.removed, true)
@@ -140,15 +103,7 @@ test('an archived ANCESTOR makes a running subagent descendant inert', async () 
 
 test('a running FORK of an archived session is NOT inert: fork lineage is not subagent lineage', async () => {
   const { core, repo, agents, workspaces, archived } = setup({ linked: true })
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const linked = repository.worktrees.find(worktree => worktree.path === LINKED)!
-  const expected = {
-    repoId: repository.repoId,
-    worktreeId: linked.worktreeId,
-    branch: linked.branch!,
-    head: linked.head,
-  }
+  const { expected } = await targetOf(core)
   // Upstream `session/fork` records `parentSession` with NO `origin`; only
   // delegation children carry `origin: 'subagent'`. The fork is an INDEPENDENT
   // running session: the archived source says nothing about its run, so the
@@ -158,48 +113,27 @@ test('a running FORK of an archived session is NOT inert: fork lineage is not su
   // MEMBERSHIP leg: the fork is a workspace member (its cwd sits elsewhere).
   workspaces[1] = { ...workspaces[1]!, sessionIds: ['forked'] }
   agents.push({ sessionId: 'forked', status: 'running', cwd: `${MAIN}/elsewhere`, parentSessionId: 'source-session' })
-  await assert.rejects(
-    core.remove({ operationId: 'fork-member', workspaceId: 'ws-feature', expected }),
-    error => error instanceof GitWorktreeError
-      && error.code === 'running-agent'
-      && /forked/.test(error.message),
-  )
+  await assert.rejects(core.remove({ operationId: 'fork-member', workspaceId: 'ws-feature', expected }), refuses('running-agent', /forked/))
   assert.equal(mutationCalls(repo, 'remove').length, 0, 'a refusal never mutates')
   // PATH leg: ungrouped fork whose cwd sits inside the worktree.
   workspaces[1] = { ...workspaces[1]!, sessionIds: [] }
   agents.length = 0
   agents.push({ sessionId: 'source-session', status: 'idle' })
   agents.push({ sessionId: 'forked', status: 'running', cwd: LINKED, parentSessionId: 'source-session' })
-  await assert.rejects(
-    core.remove({ operationId: 'fork-path', workspaceId: 'ws-feature', expected }),
-    error => error instanceof GitWorktreeError
-      && error.code === 'running-agent'
-      && /cwd/.test(error.message),
-  )
+  await assert.rejects(core.remove({ operationId: 'fork-path', workspaceId: 'ws-feature', expected }), refuses('running-agent', /cwd/))
   assert.equal(mutationCalls(repo, 'remove').length, 0)
 })
 
 test('subagent cycle rule: archived-free cycles are never inert, a cycle WITH an archived member is', async () => {
   const { core, repo, agents, archived } = setup({ linked: true })
   repo.existing.add(`${LINKED}/sub`)
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const linked = repository.worktrees.find(worktree => worktree.path === LINKED)!
-  const expected = {
-    repoId: repository.repoId,
-    worktreeId: linked.worktreeId,
-    branch: linked.branch!,
-    head: linked.head,
-  }
+  const { expected } = await targetOf(core)
   // Both members SUBAGENT-origin (so the walk really reaches the cycle guard
   // instead of stopping at a fork edge).
   agents.push({ sessionId: 'a', status: 'running', cwd: `${LINKED}/sub`, parentSessionId: 'b', origin: 'subagent' })
   agents.push({ sessionId: 'b', status: 'idle', parentSessionId: 'a', origin: 'subagent' })
-  await assert.rejects(
-    core.remove({ operationId: 'cycle-archived-free', workspaceId: 'ws-feature', expected }),
-    error => error instanceof GitWorktreeError && error.code === 'running-agent',
-    'a cycle with no archived member proves nothing: fail closed',
-  )
+  await assert.rejects(core.remove({ operationId: 'cycle-archived-free', workspaceId: 'ws-feature', expected }), refuses('running-agent'),
+    'a cycle with no archived member proves nothing: fail closed')
   // The archived test runs BEFORE the cycle guard: an archived member reached
   // through the cycle is positive proof that the run is done (documented rule).
   archived.push('b')
@@ -211,15 +145,7 @@ test('subagent cycle rule: archived-free cycles are never inert, a cycle WITH an
 test('an UNRESOLVABLE parent chain is never inert (fail closed)', async () => {
   const { core, repo, agents, archived } = setup({ linked: true })
   repo.existing.add(`${LINKED}/sub`)
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const linked = repository.worktrees.find(worktree => worktree.path === LINKED)!
-  const expected = {
-    repoId: repository.repoId,
-    worktreeId: linked.worktreeId,
-    branch: linked.branch!,
-    head: linked.head,
-  }
+  const { expected } = await targetOf(core)
   // 'ghost' is neither loaded nor archived: the chain cannot be resolved, so
   // the running child keeps blocking (never guess an archived ancestor).
   agents.push({
@@ -229,18 +155,12 @@ test('an UNRESOLVABLE parent chain is never inert (fail closed)', async () => {
     parentSessionId: 'ghost',
     origin: 'subagent',
   })
-  await assert.rejects(
-    core.remove({ operationId: 'chain-unresolvable', workspaceId: 'ws-feature', expected }),
-    error => error instanceof GitWorktreeError && error.code === 'running-agent',
-  )
+  await assert.rejects(core.remove({ operationId: 'chain-unresolvable', workspaceId: 'ws-feature', expected }), refuses('running-agent'))
   // A subagent-origin row WITHOUT a recorded parent cannot resolve to an
   // ancestor either: fail closed.
   agents.length = 0
   agents.push({ sessionId: 'orphan-subagent', status: 'running', cwd: `${LINKED}/sub`, origin: 'subagent' })
-  await assert.rejects(
-    core.remove({ operationId: 'chain-parentless-subagent', workspaceId: 'ws-feature', expected }),
-    error => error instanceof GitWorktreeError && error.code === 'running-agent',
-  )
+  await assert.rejects(core.remove({ operationId: 'chain-parentless-subagent', workspaceId: 'ws-feature', expected }), refuses('running-agent'))
   assert.equal(archived.length, 0)
   assert.equal(mutationCalls(repo, 'remove').length, 0)
 })
@@ -248,24 +168,11 @@ test('an UNRESOLVABLE parent chain is never inert (fail closed)', async () => {
 test('the PATH-level running leg is archived-aware too (a running cwd inside the worktree)', async () => {
   const { core, repo, agents, archived } = setup({ linked: true })
   repo.existing.add(`${LINKED}/sub`)
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const linked = repository.worktrees.find(worktree => worktree.path === LINKED)!
-  const expected = {
-    repoId: repository.repoId,
-    worktreeId: linked.worktreeId,
-    branch: linked.branch!,
-    head: linked.head,
-  }
+  const { expected } = await targetOf(core)
   // An UNGROUPED running session (not a workspace member) whose cwd sits inside
   // the worktree: the path leg is what catches it.
   agents.push({ sessionId: 's-ungrouped', status: 'running', cwd: `${LINKED}/sub` })
-  await assert.rejects(
-    core.remove({ operationId: 'path-non-archived', workspaceId: 'ws-feature', expected }),
-    error => error instanceof GitWorktreeError
-      && error.code === 'running-agent'
-      && /cwd/.test(error.message),
-  )
+  await assert.rejects(core.remove({ operationId: 'path-non-archived', workspaceId: 'ws-feature', expected }), refuses('running-agent', /cwd/))
   archived.push('s-ungrouped')
   const removed = await core.remove({ operationId: 'path-archived', workspaceId: 'ws-feature', expected })
   assert.equal(removed.removed, true)
@@ -399,14 +306,9 @@ test('a drifted agent origin is handled PER ROW and reported loudly (never darke
     core.remove({
       operationId: 'drifted-origin',
       workspaceId: 'ws-feature',
-      expected: {
-        repoId: snapshot.repos[0]!.repoId,
-        worktreeId: linked.worktreeId,
-        branch: linked.branch!,
-        head: linked.head,
-      },
+      expected: { repoId: snapshot.repos[0]!.repoId, worktreeId: linked.worktreeId, branch: linked.branch!, head: linked.head },
     }),
-    error => error instanceof GitWorktreeError && error.code === 'running-agent',
+    refuses('running-agent'),
   )
   assert.equal(mutationCalls(repo, 'remove').length, 0)
 })
@@ -426,12 +328,7 @@ test('unregistered removal honors the archived-aware running guard on its path l
   const expected = { repoId: repository.repoId, worktreeId: row.worktreeId, branch: row.branch!, head: row.head }
   // A running session whose cwd sits inside the unregistered path blocks it.
   agents.push({ sessionId: 's-live', status: 'running', cwd: `${extra.path}/sub` })
-  await assert.rejects(
-    core.remove({ operationId: 'unregistered-running', expected, path: extra.path }),
-    error => error instanceof GitWorktreeError
-      && error.code === 'running-agent'
-      && /cwd/.test(error.message),
-  )
+  await assert.rejects(core.remove({ operationId: 'unregistered-running', expected, path: extra.path }), refuses('running-agent', /cwd/))
   assert.equal(mutationCalls(repo, 'remove').length, 0)
   // Archived → inert: the same unregistered removal proceeds.
   archived.push('s-live')

@@ -1,14 +1,11 @@
 /**
- * plugin-model.ts unit tests (plain node:test, no dsh, no React): the pure
- * unified plugin-management model layer (design 21 §6.6 step ①) — the legacy
- * protection fallback (§6.11.7 — no longer a Node-side mirror), intent
- * ordering (remove-first / duplicates / net coalesce), apply-result
- * normalization for both backends (gateway + ssh shapes as they really are on
- * the wire — incl. the ssh producer's fail-loud ok:true markers verified/
- * ready/readyNote, never collapsed into a clean success), the gateway task
- * projection → row model, the v1 ok-only undo derive, the protected-row
- * projection + the §6.11.5 diff/apply boundary, and the batch failure policy
- * constant.
+ * plugin-model.ts unit tests (plain node:test, no dsh, no React): the pure unified
+ * plugin-management model layer (design 21 §6.6 step ①) — legacy protection fallback
+ * (§6.11.7), intent ordering, apply-result normalization for both wire shapes (the ssh
+ * producer's fail-loud ok:true markers verified/ready/readyNote are never collapsed into
+ * a clean success), the gateway task projection → row model, the v1 ok-only undo derive,
+ * the protected-row projection + the §6.11.5 diff/apply boundary, and the batch failure
+ * policy constant.
  */
 
 import { test } from 'node:test'
@@ -38,11 +35,11 @@ import {
   type SshApplyShape,
   type TaskRow,
 } from '../../src/client/plugin-model.ts'
+import { pluginRow as row } from '../support/fixtures.ts'
 
 // ---------------------------------------------------------------------------
-// 1. Legacy protection fallback (design 21 §6.11.7 — version skew only; the
-// former isDeniedPluginName mirror + its textual lockstep test are deleted,
-// the protected set P is the backend's projection now, §6.11.5).
+// 1. Legacy protection fallback (design 21 §6.11.7 — version skew only; P is
+// the backend's projection now, §6.11.5).
 // ---------------------------------------------------------------------------
 
 test('legacyProtectedName: the official and chamber domains stay refused on the fallback path', () => {
@@ -148,56 +145,30 @@ test('gateway: cancelled arm maps to {cancelled:true}', () => {
 })
 
 test('gateway: ok:true full batch executes with the named lists; omitted deferred defaults to false', () => {
-  const result: GatewayApplyShape = {
-    ok: true,
-    installed: ['foo@^1.0.0', 'bar'],
-    removed: ['legacy'],
-    restarted: true,
-  }
+  const result: GatewayApplyShape = { ok: true, installed: ['foo@^1.0.0', 'bar'], removed: ['legacy'], restarted: true }
   assert.deepEqual(classifyGatewayApplyResult(result), {
-    executed: {
-      removed: ['legacy'],
-      installed: ['foo@^1.0.0', 'bar'],
-      restarted: true,
-      deferred: false,
-    },
+    executed: { removed: ['legacy'], installed: ['foo@^1.0.0', 'bar'], restarted: true, deferred: false },
   })
 })
 
 test('gateway: ok:true deferred:true keeps the flag (restart-to-apply skipped)', () => {
-  const result: GatewayApplyShape = {
-    ok: true,
-    installed: [],
-    removed: [],
-    restarted: false,
-    deferred: true,
-  }
+  const result: GatewayApplyShape = { ok: true, installed: [], removed: [], restarted: false, deferred: true }
   assert.deepEqual(classifyGatewayApplyResult(result), {
     executed: { removed: [], installed: [], restarted: false, deferred: true },
   })
 })
 
 test('gateway: ok:false with partial counts the accepted ops; attemptedOps gives the honest n/m total', () => {
-  const result: GatewayApplyShape = {
-    ok: false,
-    error: 'executor refusal at op 3',
-    partial: { installed: ['foo@^1.0.0'], removed: ['legacy'] },
-  }
-  assert.deepEqual(classifyGatewayApplyResult(result, 5), {
-    failed: { error: 'executor refusal at op 3', partialDone: 2, partialTotal: 5 },
-  })
+  const result: GatewayApplyShape = { ok: false, error: 'executor refusal at op 3', partial: { installed: ['foo@^1.0.0'], removed: ['legacy'] } }
+  assert.deepEqual(classifyGatewayApplyResult(result, 5), { failed: { error: 'executor refusal at op 3', partialDone: 2, partialTotal: 5 } })
   // Without the attempted count the total degrades to the backend-visible
   // count (n/n) — documented, never fabricated.
-  assert.deepEqual(classifyGatewayApplyResult(result), {
-    failed: { error: 'executor refusal at op 3', partialDone: 2, partialTotal: 2 },
-  })
+  assert.deepEqual(classifyGatewayApplyResult(result), { failed: { error: 'executor refusal at op 3', partialDone: 2, partialTotal: 2 } })
 })
 
 test('gateway: ok:false without partial reports 0 done / 0 total (nothing ran)', () => {
   const result: GatewayApplyShape = { ok: false, error: 'apply in progress' }
-  assert.deepEqual(classifyGatewayApplyResult(result), {
-    failed: { error: 'apply in progress', partialDone: 0, partialTotal: 0 },
-  })
+  assert.deepEqual(classifyGatewayApplyResult(result), { failed: { error: 'apply in progress', partialDone: 0, partialTotal: 0 } })
 })
 
 // ---------------------------------------------------------------------------
@@ -209,16 +180,7 @@ test('gateway: ok:false without partial reports 0 done / 0 total (nothing ran)',
 
 test('ssh: ok:true clean result executes with restarted/deferred passthrough; no name lists (counts-only result)', () => {
   const result: SshApplyShape = {
-    ok: true,
-    result: {
-      applied: 3,
-      skipped: 0,
-      failed: [],
-      restarted: true,
-      deferred: false,
-      verified: true,
-      ready: true,
-    },
+    ok: true, result: { applied: 3, skipped: 0, failed: [], restarted: true, deferred: false, verified: true, ready: true },
   }
   assert.deepEqual(classifySshApplyResult(result), {
     executed: { removed: [], installed: [], restarted: true, deferred: false },
@@ -229,13 +191,8 @@ test('ssh: per-item failures still EXECUTE (single-item isolation) with partial 
   const result: SshApplyShape = {
     ok: true,
     result: {
-      applied: 2,
-      skipped: 0,
-      failed: [{ spec: 'broken@1.0.0', error: 'registry 404' }],
-      restarted: false,
-      deferred: true,
-      verified: false,
-      ready: null,
+      applied: 2, skipped: 0, failed: [{ spec: 'broken@1.0.0', error: 'registry 404' }],
+      restarted: false, deferred: true, verified: false, ready: null,
     },
   }
   assert.deepEqual(classifySshApplyResult(result), {
@@ -251,13 +208,8 @@ test('ssh: all ops failed → executed with partial 0/m (the batch ran, every ro
   const result: SshApplyShape = {
     ok: true,
     result: {
-      applied: 0,
-      skipped: 0,
-      failed: [{ spec: 'a', error: 'e1' }, { spec: 'b', error: 'e2' }],
-      restarted: false,
-      deferred: false,
-      verified: false,
-      ready: null,
+      applied: 0, skipped: 0, failed: [{ spec: 'a', error: 'e1' }, { spec: 'b', error: 'e2' }],
+      restarted: false, deferred: false, verified: false, ready: null,
     },
   }
   assert.deepEqual(classifySshApplyResult(result), {
@@ -270,19 +222,12 @@ test('ssh: verified:false with ZERO row failures stays a loud executed (assertio
   const result: SshApplyShape = {
     ok: true,
     result: {
-      applied: 1,
-      skipped: 0,
-      failed: [],
-      restarted: true,
-      deferred: false,
+      applied: 1, skipped: 0, failed: [], restarted: true, deferred: false,
       verified: false, // applyPlugins ④: the post-apply assertion failed
       ready: true,
     },
   }
   const outcome = classifySshApplyResult(result)
-  assert.ok('executed' in outcome, 'ok:true is executed, not failed')
-  assert.equal(outcome.partial, undefined, 'no row failures → no partial')
-  assert.equal(outcome.executed.verified, false, 'the verified:false marker must ride the executed summary')
   assert.deepEqual(outcome, {
     executed: { removed: [], installed: [], restarted: true, deferred: false, verified: false },
   })
@@ -297,9 +242,6 @@ test('ssh: restart executed but readiness failed → ready:false marker; readine
     },
   }
   const outcome = classifySshApplyResult(recheckFailed)
-  assert.ok('executed' in outcome)
-  assert.equal(outcome.executed.ready, false)
-  assert.equal(outcome.executed.readyNote, undefined)
   assert.deepEqual(outcome, {
     executed: { removed: [], installed: [], restarted: true, deferred: false, ready: false },
   })
@@ -308,15 +250,11 @@ test('ssh: restart executed but readiness failed → ready:false marker; readine
   const notRechecked: SshApplyShape = {
     ok: true,
     result: {
-      applied: 1, skipped: 0, failed: [], restarted: true, deferred: false,
-      verified: true, ready: null,
+      applied: 1, skipped: 0, failed: [], restarted: true, deferred: false, verified: true, ready: null,
       readyNote: 'instance was not connected before restart — readiness was not re-checked',
     },
   }
   const outcome2 = classifySshApplyResult(notRechecked)
-  assert.ok('executed' in outcome2)
-  assert.equal(outcome2.executed.ready, null)
-  assert.equal(outcome2.executed.readyNote, 'instance was not connected before restart — readiness was not re-checked')
   assert.deepEqual(outcome2, {
     executed: {
       removed: [], installed: [], restarted: true, deferred: false,
@@ -327,16 +265,7 @@ test('ssh: restart executed but readiness failed → ready:false marker; readine
 
 test('ssh: skipped-only rows are never a partial (skipped ops were not attempted)', () => {
   const result: SshApplyShape = {
-    ok: true,
-    result: {
-      applied: 1,
-      skipped: 4,
-      failed: [],
-      restarted: false,
-      deferred: true,
-      verified: true,
-      ready: null,
-    },
+    ok: true, result: { applied: 1, skipped: 4, failed: [], restarted: false, deferred: true, verified: true, ready: null },
   }
   assert.deepEqual(classifySshApplyResult(result), {
     executed: { removed: [], installed: [], restarted: false, deferred: true },
@@ -345,12 +274,8 @@ test('ssh: skipped-only rows are never a partial (skipped ops were not attempted
 
 test('ssh: ok:false wholesale refusal fails with 0 done; attemptedOps supplies the total', () => {
   const result: SshApplyShape = { ok: false, error: 'apply in progress' }
-  assert.deepEqual(classifySshApplyResult(result), {
-    failed: { error: 'apply in progress', partialDone: 0, partialTotal: 0 },
-  })
-  assert.deepEqual(classifySshApplyResult(result, 6), {
-    failed: { error: 'apply in progress', partialDone: 0, partialTotal: 6 },
-  })
+  assert.deepEqual(classifySshApplyResult(result), { failed: { error: 'apply in progress', partialDone: 0, partialTotal: 0 } })
+  assert.deepEqual(classifySshApplyResult(result, 6), { failed: { error: 'apply in progress', partialDone: 0, partialTotal: 6 } })
 })
 
 // ---------------------------------------------------------------------------
@@ -360,10 +285,7 @@ test('ssh: ok:false wholesale refusal fails with 0 done; attemptedOps supplies t
 test('partialCounts: cancelled → null; clean executed → null; executed+partial and failed surface their counts', () => {
   const cancelled: ApplyOutcome = { cancelled: true }
   const clean: ApplyOutcome = { executed: { removed: [], installed: [], restarted: true, deferred: false } }
-  const partialExec: ApplyOutcome = {
-    executed: { removed: [], installed: [], restarted: false, deferred: true },
-    partial: { done: 2, total: 3 },
-  }
+  const partialExec: ApplyOutcome = { executed: { removed: [], installed: [], restarted: false, deferred: true }, partial: { done: 2, total: 3 } }
   const failed: ApplyOutcome = { failed: { error: 'boom', partialDone: 1, partialTotal: 4 } }
   assert.equal(partialCounts(cancelled), null)
   assert.equal(partialCounts(clean), null)
@@ -377,11 +299,7 @@ test('partialCounts: cancelled → null; clean executed → null; executed+parti
 
 test('BATCH_FAILURE_POLICY: registry/remove is fail-fast, materialize rows stay isolated', () => {
   assert.deepEqual(BATCH_FAILURE_POLICY, { registryAndRemove: 'fail-fast', materializeRows: 'isolated' })
-  assert.equal(BATCH_FAILURE_POLICY.registryAndRemove, 'fail-fast')
-  assert.equal(BATCH_FAILURE_POLICY.materializeRows, 'isolated')
   assert.equal(describeBatchPolicy(), BATCH_POLICY_SENTENCE)
-  assert.equal(typeof describeBatchPolicy(), 'string')
-  assert.ok(describeBatchPolicy().length > 0)
 })
 
 // ---------------------------------------------------------------------------
@@ -527,11 +445,6 @@ test('undoForLatest: empty rows and deferred-intent-only rows → none-executed'
 // 7. Protected rows: projection + the diff/apply boundary (design 21 §6.11.5)
 // ---------------------------------------------------------------------------
 
-/** One wire-shaped row with third-party/unprotected defaults. */
-function row(partial: Partial<PluginRowShape> & { name: string }): PluginRowShape {
-  return { spec: '^1.0.0', version: null, role: 'third-party', protected: false, ...partial }
-}
-
 test('pluginRowsOf: absent/non-array rows answer null (the §6.11.7 fallback trigger); an array comes back as a copy', () => {
   assert.equal(pluginRowsOf(undefined), null)
   assert.equal(pluginRowsOf(null), null)
@@ -579,12 +492,9 @@ test('actionableDependencies: rows mode keeps every unprotected dependency (laye
     row({ name: 'local-copy', role: 'materialized', protected: false, spec: 'file:../p' }),
   ]
   const dependencies = {
-    '@deepseek-ai/dsh-base': '^0.1.0',
-    '@dsh-chamber/dsh-chamber-seed-client-graph': '^0.1.0',
-    '@deepseek-ai/dsh-family-member': '^0.1.0',
-    'user-layer': '^2.0.0',
-    'third-party-a': '^1.0.0',
-    'local-copy': 'file:../p',
+    '@deepseek-ai/dsh-base': '^0.1.0', '@dsh-chamber/dsh-chamber-seed-client-graph': '^0.1.0',
+    '@deepseek-ai/dsh-family-member': '^0.1.0', 'user-layer': '^2.0.0',
+    'third-party-a': '^1.0.0', 'local-copy': 'file:../p',
   }
   assert.deepEqual(actionableDependencies(dependencies, rows), {
     'user-layer': '^2.0.0',
@@ -633,10 +543,8 @@ test('actionableDependencies: the map is filtered, never extended by a row witho
 
 test('actionableDependencies: rows absent (old gateway) falls back to the legacyProtectedName filter', () => {
   const dependencies = {
-    '@deepseek-ai/dsh': '^0.1.0',
-    '@dsh-chamber/dsh-client-ui-mobile': '^0.1.0',
-    'third-party-a': '^1.0.0',
-    '@scope/third-party': '^2.0.0',
+    '@deepseek-ai/dsh': '^0.1.0', '@dsh-chamber/dsh-client-ui-mobile': '^0.1.0',
+    'third-party-a': '^1.0.0', '@scope/third-party': '^2.0.0',
   }
   assert.deepEqual(actionableDependencies(dependencies, null), {
     'third-party-a': '^1.0.0',
@@ -651,8 +559,7 @@ test('projectInstalledRows: rows mode renders one row per declared dependency (p
   // 行集口径（design 21 §6.11.5 的 2026-09 修订）：后端只按依赖表投影，所以受保护行
   // 也**带依赖值**（`@deepseek-ai/dsh-base` 若出现，是因为该 profile 自己声明了它）。
   const dependencies = {
-    '@deepseek-ai/dsh-base': '^0.1.0',
-    '@dsh-chamber/dsh-chamber-seed-client-graph': '0.3.1',
+    '@deepseek-ai/dsh-base': '^0.1.0', '@dsh-chamber/dsh-chamber-seed-client-graph': '0.3.1',
     'third-party-a': '^1.0.0',
   }
   const rows = [
@@ -686,9 +593,7 @@ test('projectInstalledRows: rows mode renders one row per declared dependency (p
 
 test('projectInstalledRows: rows absent falls back to the legacy dependencies filter and reports legacy:true', () => {
   const projected = projectInstalledRows({
-    '@deepseek-ai/dsh': '^0.1.0',
-    '@dsh-chamber/dsh-client-ui-mobile': '^0.1.0',
-    'third-party-a': '^1.0.0',
+    '@deepseek-ai/dsh': '^0.1.0', '@dsh-chamber/dsh-client-ui-mobile': '^0.1.0', 'third-party-a': '^1.0.0',
   }, null)
   assert.equal(projected.legacy, true)
   assert.deepEqual(projected.rows, [

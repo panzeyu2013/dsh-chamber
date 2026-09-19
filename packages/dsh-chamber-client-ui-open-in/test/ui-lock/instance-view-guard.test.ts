@@ -3,17 +3,13 @@
  *
  * Locks the open-in menu owner guard and the split-button control against the
  * official primitive: the `.instance-view`-scoped dismissal of this N-ctx shell
- * (the one piece the vendor `Menu` cannot own) plus every capability the
- * chamber ships — catalog icons, split-button flow, per-source memory,
- * in-flight pick semantics, re-probe on open.
- *
- * The component itself is React + CSS + raster marks (not importable under
- * plain node), so the wiring below is locked as SOURCE TEXT with comments
- * stripped first (precedent:
- * `packages/dsh-chamber-client-ui-sidebar/test/plugin-kernel/panel-wiring.test.ts:20-27,105`)
- * — several comments name the retired menu, and a lock satisfied by a comment
- * is exactly what these assertions exist to prevent. The pure owner-guard
- * decision is tested directly.
+ * (the one piece the vendor `Menu` cannot own) plus catalog icons, split-button
+ * flow, per-source memory, in-flight pick semantics and re-probe on open. The
+ * component is React + CSS + raster marks (not importable under plain node), so
+ * the wiring is locked as SOURCE TEXT with comments stripped first — several
+ * comments name the retired menu, and a lock satisfied by a comment is exactly
+ * what these assertions exist to prevent. The pure owner-guard decision is
+ * tested directly.
  */
 
 import { test } from 'node:test'
@@ -66,7 +62,7 @@ test('the official Menu primitive carries the chamber menu density', () => {
   // Upstream's own menu composition (OpenInAppAction.tsx:181-198): fill
   // selection, end alignment, focus transfer + arrow navigation — with the
   // chamber menu-density decision on top (2026-09: `compact` 26px/12px, never
-  // upstream's `dense`; design 06 §7, design 20 §1, batch2-visual-locks.test.ts).
+  // upstream's `dense`; design 06 §7, design 20 §1).
   for (const prop of ['autoFocus', 'compact', 'selection="fill"', 'align="end"']) {
     assert.ok(button.includes(prop), `the official Menu must be opened with ${prop}`)
   }

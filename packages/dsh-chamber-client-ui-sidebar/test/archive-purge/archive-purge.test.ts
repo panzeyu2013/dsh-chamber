@@ -1,14 +1,11 @@
 /**
- * Archive-manager purge orchestration (design 24 §5, 2026-09 protection
- * amendment): the run NEVER refuses. It always stops the selection's running
- * turns (advisory) and always force-purges the same roots with the session
- * this client may be displaying in the host's protected set. Node-tested
- * without a React render.
- *
- * The regression this file exists for: the retired pre-flight gate turned an
- * unknown viewed session (nothing open, masked list gap, source shell
- * reclaimed) into a total capability loss — exactly the archived-but-running
- * sessions the force path exists for stayed undeletable.
+ * Archive-manager purge orchestration (design 24 §5, 2026-09 protection amendment):
+ * the run NEVER refuses — it always stops the selection's running turns (advisory) and
+ * force-purges the same roots with the session this client may be displaying in the
+ * host's protected set. Regression it exists for: the retired pre-flight gate turned an
+ * unknown viewed session (nothing open, masked list gap, reclaimed shell) into total
+ * capability loss — the archived-but-running sessions the force path exists for stayed
+ * undeletable.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -21,27 +18,15 @@ import type {
 
 function purgeResult(overrides: Partial<ArchiveCleanupPurgeResult> = {}): ArchiveCleanupPurgeResult {
   return {
-    deletedSessions: 0,
-    deletedSubagents: 0,
-    skippedRunning: 0,
-    skippedLoaded: 0,
-    forcedLoaded: 0,
-    skippedProtected: 0,
-    errors: [],
-    truncated: false,
-    ...overrides,
+    deletedSessions: 0, deletedSubagents: 0, skippedRunning: 0, skippedLoaded: 0,
+    forcedLoaded: 0, skippedProtected: 0, errors: [], truncated: false, ...overrides,
   }
 }
 
 function stopResult(overrides: Partial<StopSessionsResult> = {}): StopSessionsResult {
   return {
-    cancelled: [],
-    stillRunning: [],
-    failures: [],
-    unavailable: false,
-    refusedRoots: [],
-    lineage: null,
-    ...overrides,
+    cancelled: [], stillRunning: [], failures: [], unavailable: false, refusedRoots: [],
+    lineage: null, ...overrides,
   }
 }
 
@@ -49,9 +34,7 @@ function keysOf(lines: readonly { key: string }[]): string[] {
   return lines.map(line => line.key)
 }
 
-// ---------------------------------------------------------------------------
 // runArchivePurge: one shape, in every state.
-// ---------------------------------------------------------------------------
 
 test('runArchivePurge: a known viewed session is protected and force is always on', async () => {
   const stopCalls: unknown[] = []
@@ -124,15 +107,11 @@ test('runArchivePurge: protection skips are whatever the HOST reports (the clien
   assert.equal(run.purge.skippedProtected, 1)
 })
 
-// ---------------------------------------------------------------------------
-// archivePurgeNote: dictionary keys only, no refusal copy exists anymore.
-// ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Flow × REAL stop pass (the seam the 2026-09 dead end lived on): the pure
-// flow must delegate the cancel scope to `stopSessionsForPurge` and ALWAYS
-// reach the purge, whatever the lineage looks like.
-// ---------------------------------------------------------------------------
+// archivePurgeNote: dictionary keys only; no refusal copy exists anymore.
+//
+// Flow × REAL stop pass (the seam the 2026-09 dead end lived on): the pure flow must
+// delegate the cancel scope to `stopSessionsForPurge` and ALWAYS reach the purge,
+// whatever the lineage looks like.
 
 function sessionRow(overrides: Record<string, unknown>): Record<string, unknown> {
   return { cwd: '/w', running: false, blank: false, updatedAt: 0, ...overrides }
@@ -201,26 +180,14 @@ test('archivePurgeNote renders the stop / protected / deleted / skip lines in or
     protectedSessionId: 'viewed',
     stop: stopResult({ cancelled: ['a'], stillRunning: ['b'], failures: [{ sessionId: 'b', message: 'boom' }] }),
     purge: purgeResult({
-      deletedSessions: 1,
-      deletedSubagents: 2,
-      forcedLoaded: 1,
-      skippedRunning: 1,
-      skippedLoaded: 2,
-      skippedProtected: 1,
-      clearedOrphanMembers: 3,
-      truncated: true,
+      deletedSessions: 1, deletedSubagents: 2, forcedLoaded: 1, skippedRunning: 1,
+      skippedLoaded: 2, skippedProtected: 1, clearedOrphanMembers: 3, truncated: true,
     }),
   })
   assert.deepEqual(keysOf(note.lines), [
-    'archive.purge.note.stopped',
-    'archive.purge.note.protected',
-    'archive.purge.note.deleted',
-    'archive.purge.note.orphanMembers',
-    'archive.purge.note.forcedLoaded',
-    'archive.purge.note.skippedRunning',
-    'archive.purge.note.skippedLoaded',
-    'archive.purge.note.stillRunning',
-    'archive.purge.note.stopFailure',
+    'archive.purge.note.stopped', 'archive.purge.note.protected', 'archive.purge.note.deleted',
+    'archive.purge.note.orphanMembers', 'archive.purge.note.forcedLoaded', 'archive.purge.note.skippedRunning',
+    'archive.purge.note.skippedLoaded', 'archive.purge.note.stillRunning', 'archive.purge.note.stopFailure',
     'archive.purge.note.truncated',
   ])
   assert.equal(note.kind, 'info')
@@ -241,25 +208,16 @@ test('archivePurgeNote: a protection-only run is never silent (the actionable fa
 })
 
 test('archivePurgeNote: a resident-retained run says the content is gone but the session still lives in the instance (design 24 §4 step 9)', () => {
-  // 2026-13: the host kept these roots archived because the instance process
-  // still serves them — the rows stay hidden in the workspace and stay listed
-  // (labeled) in the manager until that instance restarts. The note must say
-  // exactly that, NOT the old "force-deleted" wording, which read as if the
-  // session had left the list too.
+  // 2026-13: the host kept these roots archived because the instance process still serves
+  // them; the note must say the content is gone while the session stays listed (labeled)
+  // until restart — NOT the old "force-deleted" wording, which read as if it left the list.
   const run = {
     roots: ['a', 'b'],
     stop: stopResult(),
-    purge: purgeResult({
-      deletedSessions: 2,
-      forcedLoaded: 2,
-      residentRetainedRoots: ['a', 'b'],
-    }),
+    purge: purgeResult({ deletedSessions: 2, forcedLoaded: 2, residentRetainedRoots: ['a', 'b'] }),
   }
   const note = archivePurgeNote(run)
-  assert.deepEqual(keysOf(note.lines), [
-    'archive.purge.note.deleted',
-    'archive.purge.note.residentRetained',
-  ])
+  assert.deepEqual(keysOf(note.lines), ['archive.purge.note.deleted', 'archive.purge.note.residentRetained'])
   const byKey = new Map(note.lines.map(line => [line.key, line.params]))
   assert.deepEqual(byKey.get('archive.purge.note.residentRetained'), { count: 2 })
   assert.equal(note.kind, 'info')
@@ -274,10 +232,7 @@ test('archivePurgeNote: an older host without the retention report keeps the his
     stop: stopResult(),
     purge: purgeResult({ deletedSessions: 1, forcedLoaded: 1 }),
   })
-  assert.deepEqual(keysOf(note.lines), [
-    'archive.purge.note.deleted',
-    'archive.purge.note.forcedLoaded',
-  ])
+  assert.deepEqual(keysOf(note.lines), ['archive.purge.note.deleted', 'archive.purge.note.forcedLoaded'])
 })
 
 test('purgeRemovedContent: only a run that actually removed something asks the dialog to drop the selection', () => {
@@ -308,20 +263,15 @@ test('archivePurgeNote: item errors render as an error note with bounded samples
     purge: purgeResult({
       deletedSessions: 1,
       errors: [
-        { sessionId: 'a', code: 'storage', message: 'e1' },
-        { sessionId: 'b', code: 'storage', message: 'e2' },
-        { sessionId: 'c', code: 'storage', message: 'e3' },
-        { sessionId: 'd', code: 'storage', message: 'e4' },
+        { sessionId: 'a', code: 'storage', message: 'e1' }, { sessionId: 'b', code: 'storage', message: 'e2' },
+        { sessionId: 'c', code: 'storage', message: 'e3' }, { sessionId: 'd', code: 'storage', message: 'e4' },
       ],
     }),
   })
   assert.equal(note.kind, 'error')
   assert.deepEqual(keysOf(note.lines), [
-    'archive.purge.note.deleted',
-    'archive.purge.note.errors',
-    'archive.purge.note.errorSample',
-    'archive.purge.note.errorSample',
-    'archive.purge.note.errorSample',
+    'archive.purge.note.deleted', 'archive.purge.note.errors', 'archive.purge.note.errorSample',
+    'archive.purge.note.errorSample', 'archive.purge.note.errorSample',
   ])
 })
 

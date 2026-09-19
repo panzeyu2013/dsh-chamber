@@ -5,11 +5,9 @@
  * stage move — `sessions.open(neighbor)` then `sessions.open(target)` in one
  * synchronous tick (see `../src/client/session-stream-health-probe.ts`). It works
  * because of exactly three facts in the PINNED vendor code, pinned here by
- * source text. The vendor tree is read-only, so formatting is absorbed
- * (`stripComments` + `normalize` from the shared test-support layer, the same
- * helpers the mobile anchor and locale contract locks use) while a SEMANTIC
- * change fails HERE — the point being that the recovery arm must be re-derived,
- * never silently disabled, on the next dsh pin upgrade.
+ * source text. Formatting is absorbed (`stripComments` + `normalize` from the
+ * shared test-support layer) while a SEMANTIC change fails HERE — the recovery
+ * arm must be re-derived, never silently disabled, on the next dsh pin upgrade.
  *
  *  1. `service.followCurrent()` opens a session only when `list.current` moved:
  *     that is why a stage move is the lever, and why `clear()` (which blanks

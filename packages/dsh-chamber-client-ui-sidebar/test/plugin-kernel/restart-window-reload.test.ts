@@ -1,77 +1,62 @@
 /**
- * restart-window-reload.ts tests (2026-12): the PAGE-OWNED "wait for the
- * restarted dsh to serve, then reload the window once" completion behind
- * 「重启 dsh」 and the other restart-to-apply entry points (design 18 §3.6 item 8).
- * Waiters/fetch/clock are injected and the page reload is spied through a
- * stubbed \`window\`, so the whole policy runs in plain node.
+ * restart-window-reload.ts tests (2026-12): the PAGE-OWNED "wait for the restarted dsh to serve, then reload the
+ * window once" completion behind 「重启 dsh」 and the other restart-to-apply entry points (design 18 §3.6 item 8).
+ * Waiters/fetch/clock are injected and the page reload is spied through a stubbed window global, so the policy runs
+ * in plain node.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  RESTART_RELOAD_BUDGET_MS,
-  armLocalDshRestartCompletion,
-  armWindowReloadWhenServed,
-  reloadWindow,
-  resetArmedWindowReloads,
-  waitForLocalDshServing,
+  RESTART_RELOAD_BUDGET_MS, armLocalDshRestartCompletion, armWindowReloadWhenServed, reloadWindow,
+  resetArmedWindowReloads, waitForLocalDshServing,
 } from '../../src/shared/restart-window-reload.ts'
 
-/** Run \`body\` with a countable page-reload spy installed as globalThis.window. */
+/** Run `body` with a countable page-reload spy installed as globalThis.window. */
 async function withReloadSpy<T>(body: (reloads: () => number) => Promise<T>): Promise<T> {
   let count = 0
   const holder = globalThis as { window?: unknown }
   const original = holder.window
   holder.window = { location: { reload: () => { count += 1 } } }
-  try {
-    return await body(() => count)
-  } finally {
+  try { return await body(() => count) } finally {
     if (original === undefined) delete holder.window
     else holder.window = original
   }
 }
 
-/** One JSON response stub for the /health waits. */
-function jsonResponse(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
+/** Run `arm` under the reload spy: its outcome plus how many page reloads it caused. */
+async function armAndCount<T>(arm: () => Promise<T>): Promise<[T, number]> {
+  let outcome!: T
+  const count = await withReloadSpy(async reloads => { outcome = await arm(); return reloads() })
+  return [outcome, count]
 }
+
+/** One JSON response stub for the /health waits. */
+const jsonResponse = (body: unknown, status = 200): Response =>
+  new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
+
+/** A /health fetch stub answering one dsh status. */
+const dshHealth = (status: string): typeof fetch => (async () => jsonResponse({ ok: true, dsh: { status } })) as typeof fetch
 
 test('a serving waiter reloads the window once and reports reloaded', async () => {
   resetArmedWindowReloads()
-  const count = await withReloadSpy(async reloads => {
-    const outcome = await armWindowReloadWhenServed('served', async () => true)
-    assert.equal(outcome, 'reloaded')
-    return reloads()
-  })
-  assert.equal(count, 1)
+  assert.deepEqual(await armAndCount(() => armWindowReloadWhenServed('served', async () => true)), ['reloaded', 1])
 })
 
 test('a waiter that gives up never reloads', async () => {
   resetArmedWindowReloads()
-  const count = await withReloadSpy(async reloads => {
-    assert.equal(await armWindowReloadWhenServed('gave-up', async () => false), 'not-served')
-    return reloads()
-  })
-  assert.equal(count, 0)
+  assert.deepEqual(await armAndCount(() => armWindowReloadWhenServed('gave-up', async () => false)), ['not-served', 0])
 })
 
 test('a rejecting waiter counts as not-serving and never throws', async () => {
   resetArmedWindowReloads()
-  const count = await withReloadSpy(async reloads => {
-    const outcome = await armWindowReloadWhenServed('rejects', async () => { throw new Error('channel down') })
-    assert.equal(outcome, 'not-served')
-    return reloads()
-  })
-  assert.equal(count, 0)
+  const rejecting = () => armWindowReloadWhenServed('rejects', async () => { throw new Error('channel down') })
+  assert.deepEqual(await armAndCount(rejecting), ['not-served', 0])
 })
 
 test('the same key shares one pending completion (no second poll, no second reload)', async () => {
   resetArmedWindowReloads()
   let calls = 0
-  const waiter = async (): Promise<boolean> => {
-    calls += 1
-    await new Promise(resolve => setTimeout(resolve, 10))
-    return true
-  }
+  const waiter = async (): Promise<boolean> => { calls += 1; await new Promise(resolve => setTimeout(resolve, 10)); return true }
   const count = await withReloadSpy(async reloads => {
     const first = armWindowReloadWhenServed('shared', waiter)
     const second = armWindowReloadWhenServed('shared', waiter)
@@ -85,22 +70,16 @@ test('the same key shares one pending completion (no second poll, no second relo
 
 test('a settled key can be armed again (retry after a stalled restart)', async () => {
   resetArmedWindowReloads()
-  const count = await withReloadSpy(async reloads => {
-    assert.equal(await armWindowReloadWhenServed('retry', async () => false), 'not-served')
-    assert.equal(await armWindowReloadWhenServed('retry', async () => true), 'reloaded')
-    return reloads()
-  })
-  assert.equal(count, 1)
+  assert.equal(await armWindowReloadWhenServed('retry', async () => false), 'not-served')
+  assert.deepEqual(await armAndCount(() => armWindowReloadWhenServed('retry', async () => true)), ['reloaded', 1])
 })
 
 test('distinct keys complete independently', async () => {
   resetArmedWindowReloads()
   const count = await withReloadSpy(async reloads => {
-    const outcomes = await Promise.all([
-      armWindowReloadWhenServed('source-a', async () => true),
-      armWindowReloadWhenServed('source-b', async () => true),
-    ])
-    assert.deepEqual(outcomes, ['reloaded', 'reloaded'])
+    const armA = armWindowReloadWhenServed('source-a', async () => true)
+    const armB = armWindowReloadWhenServed('source-b', async () => true)
+    assert.deepEqual(await Promise.all([armA, armB]), ['reloaded', 'reloaded'])
     return reloads()
   })
   assert.equal(count, 2)
@@ -110,10 +89,7 @@ test('the page-level budget aborts the waiter signal and reports not-served', as
   resetArmedWindowReloads()
   let sawAbort = false
   const outcome = await armWindowReloadWhenServed('budget', signal => new Promise<boolean>(resolve => {
-    signal.addEventListener('abort', () => {
-      sawAbort = true
-      resolve(false)
-    }, { once: true })
+    signal.addEventListener('abort', () => { sawAbort = true; resolve(false) }, { once: true })
   }), { budgetMs: 20 })
   assert.equal(outcome, 'not-served')
   assert.equal(sawAbort, true)
@@ -123,39 +99,22 @@ test('resetArmedWindowReloads lets the same key arm a fresh completion', async (
   resetArmedWindowReloads()
   void armWindowReloadWhenServed('reset', async () => false)
   resetArmedWindowReloads()
-  const count = await withReloadSpy(async reloads => {
-    assert.equal(await armWindowReloadWhenServed('reset', async () => true), 'reloaded')
-    return reloads()
-  })
-  assert.equal(count, 1)
+  assert.deepEqual(await armAndCount(() => armWindowReloadWhenServed('reset', async () => true)), ['reloaded', 1])
 })
 
 test('waitForLocalDshServing accepts ready and degraded, polls through starting', async () => {
-  assert.equal(await waitForLocalDshServing(new AbortController().signal, {
-    fetchImpl: async () => jsonResponse({ ok: true, dsh: { status: 'ready' } }),
-  }), true)
-  assert.equal(await waitForLocalDshServing(new AbortController().signal, {
-    fetchImpl: async () => jsonResponse({ ok: true, dsh: { status: 'degraded' } }),
-  }), true)
+  assert.equal(await waitForLocalDshServing(new AbortController().signal, { fetchImpl: dshHealth('ready') }), true)
+  assert.equal(await waitForLocalDshServing(new AbortController().signal, { fetchImpl: dshHealth('degraded') }), true)
   let calls = 0
-  const served = await waitForLocalDshServing(new AbortController().signal, {
-    pollMs: 5,
-    fetchImpl: async () => {
-      calls += 1
-      return jsonResponse({ ok: true, dsh: { status: calls >= 2 ? 'ready' : 'starting' } })
-    },
-  })
-  assert.equal(served, true)
+  const fetchImpl = (async () => jsonResponse({ ok: true, dsh: { status: (calls += 1) >= 2 ? 'ready' : 'starting' } })) as typeof fetch
+  assert.equal(await waitForLocalDshServing(new AbortController().signal, { pollMs: 5, fetchImpl }), true)
   assert.equal(calls, 2)
 })
 
 test('waitForLocalDshServing gives up on a non-serving channel within its budget', async () => {
   let calls = 0
-  const served = await waitForLocalDshServing(new AbortController().signal, {
-    budgetMs: 0,
-    fetchImpl: async () => { calls += 1; return jsonResponse({ error: 'unavailable' }, 503) },
-  })
-  assert.equal(served, false)
+  const fetchImpl = (async () => { calls += 1; return jsonResponse({ error: 'unavailable' }, 503) }) as typeof fetch
+  assert.equal(await waitForLocalDshServing(new AbortController().signal, { budgetMs: 0, fetchImpl }), false)
   assert.equal(calls, 1)
 })
 
@@ -163,9 +122,8 @@ test('waitForLocalDshServing resolves false immediately on an aborted signal', a
   const controller = new AbortController()
   controller.abort()
   let calls = 0
-  assert.equal(await waitForLocalDshServing(controller.signal, {
-    fetchImpl: async () => { calls += 1; return jsonResponse({ ok: true, dsh: { status: 'ready' } }) },
-  }), false)
+  const fetchImpl = (async () => { calls += 1; return jsonResponse({ ok: true, dsh: { status: 'ready' } }) }) as typeof fetch
+  assert.equal(await waitForLocalDshServing(controller.signal, { fetchImpl }), false)
   assert.equal(calls, 0)
 })
 
@@ -173,14 +131,9 @@ test('armLocalDshRestartCompletion wires the local /health waiter', async () => 
   resetArmedWindowReloads()
   const holder = globalThis as { fetch?: typeof fetch }
   const originalFetch = holder.fetch
-  holder.fetch = (async () => jsonResponse({ ok: true, dsh: { status: 'ready' } })) as typeof fetch
+  holder.fetch = dshHealth('ready')
   try {
-    const count = await withReloadSpy(async reloads => {
-      const outcome = await armLocalDshRestartCompletion()
-      assert.equal(outcome, 'reloaded')
-      return reloads()
-    })
-    assert.equal(count, 1)
+    assert.deepEqual(await armAndCount(armLocalDshRestartCompletion), ['reloaded', 1])
   } finally {
     if (originalFetch === undefined) delete holder.fetch
     else holder.fetch = originalFetch

@@ -1,21 +1,16 @@
 /**
  * CLI ⇄ control-plane runtime-gate contracts (design 05 §7.2 保留面).
  *
- * The CLI is a thin shell over the management REST surface, but it is the
- * FIRST consumer of that surface's real wire shapes. Three gates were
- * misaligned with the implementation and are pinned here black-box: the child
- * process is the REAL `src/index.ts` (spawned with this node), driven against
- * an in-test node:http fake control plane, so every assertion below is about
- * what the binary actually prints / requests / exits with.
- *
- * 1. Log-line shape: the implementation returns {ts: string|null,
- *    stream: 'stdout'|'stderr'|null, line} (control-plane host-logs.ts
- *    parseLogLine) — a raw passthrough line carries NO metadata. The shell must
- *    render a placeholder for an unparseable/missing ts, never `new Date(null)`
- *    → 1970 and never an uncaught RangeError that kills `--follow`.
- * 2. `--limit`: the control plane CLAMPS to MAX_LIMIT (1000) instead of
- *    erroring, so a larger --limit silently truncates; the shell must refuse.
- *    The boundary is read from the control-plane source, not duplicated here.
+ * The CLI is a thin shell over the management REST surface but its FIRST
+ * consumer, so these gates are pinned black-box against the REAL `src/index.ts`
+ * (spawned with this node) driven over an in-test node:http fake control plane:
+ * 1. Log-line shape: control-plane host-logs.ts parseLogLine returns
+ *    {ts: string|null, stream, line} and passes a raw line through with NO
+ *    metadata — the shell must render a placeholder, never `new Date(null)` →
+ *    1970 and never a RangeError that kills `--follow`.
+ * 2. `--limit`: the control plane CLAMPS to MAX_LIMIT instead of erroring, so
+ *    the shell must refuse an over-cap value before any request (the boundary
+ *    is read from the control-plane source, never duplicated here).
  * 3. Recovery surface: GET /api/connections/local/writers and POST
  *    /api/connections/local/reclaim (control-plane api.ts, design 04 §3.2)
  *    need CLI entry points, and a 409 connection_busy refusal must reach the
@@ -27,7 +22,6 @@ import assert from 'node:assert/strict'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import { readFileSync } from 'node:fs'
-import type { Readable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 
 // fileURLToPath: the repo path contains spaces, so url.pathname would be
@@ -41,10 +35,6 @@ const CONTROL_PLANE_MAX_LIMIT = Number(
     readFileSync(new URL('../../control-plane/src/host-logs.ts', import.meta.url), 'utf8'),
   )?.[1] ?? '0',
 )
-
-/* ------------------------------------------------------------------ */
-/* Harness                                                             */
-/* ------------------------------------------------------------------ */
 
 type PlaneHandler = (req: IncomingMessage, res: ServerResponse) => void
 
@@ -60,10 +50,7 @@ function sendJson(res: ServerResponse, status: number, body: unknown): void {
 }
 
 /** Run `body` against a loopback fake control plane that records every call. */
-async function withPlane(
-  handler: PlaneHandler,
-  body: (plane: FakePlane) => Promise<void>,
-): Promise<void> {
+async function withPlane(handler: PlaneHandler, body: (plane: FakePlane) => Promise<void>): Promise<void> {
   const calls: string[] = []
   const server = createServer((req, res) => {
     calls.push(`${req.method ?? 'GET'} ${req.url ?? ''}`)
@@ -90,23 +77,18 @@ interface CliRun {
   result: Promise<{ code: number | null; signal: NodeJS.Signals | null }>
 }
 
+/** Resolve with the child's exit outcome. */
+const childClosed = (child: ChildProcess): CliRun['result'] =>
+  new Promise(resolve => { child.on('close', (code, signal) => { resolve({ code, signal }) }) })
+
 function startCli(args: string[]): CliRun {
   const child = spawn(process.execPath, [CLI_PATH, ...args], { stdio: ['ignore', 'pipe', 'pipe'] })
-  const run: CliRun = {
-    child,
-    stdout: '',
-    stderr: '',
-    result: new Promise(resolve => {
-      child.on('close', (code, signal) => { resolve({ code, signal }) })
-    }),
-  }
-  const capture = (stream: Readable | null, key: 'stdout' | 'stderr'): void => {
-    if (stream === null) return
+  const run: CliRun = { child, stdout: '', stderr: '', result: childClosed(child) }
+  for (const [stream, key] of [[child.stdout, 'stdout'], [child.stderr, 'stderr']] as const) {
+    if (stream === null) continue
     stream.setEncoding('utf8')
     stream.on('data', (chunk: string) => { run[key] += chunk })
   }
-  capture(child.stdout, 'stdout')
-  capture(child.stderr, 'stderr')
   return run
 }
 
@@ -115,6 +97,19 @@ async function runCli(args: string[]): Promise<{ code: number | null; stdout: st
   const run = startCli(args)
   const { code } = await run.result
   return { code, stdout: run.stdout, stderr: run.stderr }
+}
+
+type CliOutcome = Awaited<ReturnType<typeof runCli>> & { calls: string[] }
+
+/** Run one non-follow CLI invocation against `handler`; also report the recorded calls. */
+async function runPlane(handler: PlaneHandler, args: string[]): Promise<CliOutcome> {
+  let outcome: CliOutcome | undefined
+  await withPlane(handler, async plane => {
+    const result = await runCli([...args, '--url', plane.url])
+    outcome = { ...result, calls: [...plane.calls] }
+  })
+  if (outcome === undefined) throw new Error('fake plane body never ran')
+  return outcome
 }
 
 async function waitFor(condition: () => boolean, label: string, timeoutMs = 8_000): Promise<void> {
@@ -139,26 +134,19 @@ const NON_ISO_LINE = { ts: 'yesterday-ish', stream: 'stdout', line: 'non-iso ts 
 
 function hostLogsPlane(lines: unknown[]): PlaneHandler {
   return (req, res) => {
-    if ((req.url ?? '').startsWith('/api/host/logs')) {
-      sendJson(res, 200, { port: 17500, lines, truncated: false })
-      return
-    }
+    if ((req.url ?? '').startsWith('/api/host/logs')) return sendJson(res, 200, { port: 17500, lines, truncated: false })
     sendJson(res, 404, { error: 'not_found' })
   }
 }
 
-/* ------------------------------------------------------------------ */
-/* 1. Log-line shape                                                   */
-/* ------------------------------------------------------------------ */
+// 1. Log-line shape
 
 test('host logs: a raw line (ts:null, stream:null) renders placeholders, never an epoch timestamp', async () => {
-  await withPlane(hostLogsPlane([RAW_LINE]), async plane => {
-    const result = await runCli(['host', 'logs', '--url', plane.url])
-    assert.equal(result.code, 0, result.stderr)
-    assert.match(result.stdout, /^\[\?\] \[\?\] raw line without metadata$/mu)
-    assert.equal(result.stdout.includes('1970'), false,
-      'new Date(null) is not a timestamp — a raw line has none, and the shell must say so')
-  })
+  const result = await runPlane(hostLogsPlane([RAW_LINE]), ['host', 'logs'])
+  assert.equal(result.code, 0, result.stderr)
+  assert.match(result.stdout, /^\[\?\] \[\?\] raw line without metadata$/mu)
+  assert.equal(result.stdout.includes('1970'), false,
+    'new Date(null) is not a timestamp — a raw line has none, and the shell must say so')
 })
 
 test('host logs --follow: a ts:null line neither crashes nor fabricates 1970', async () => {
@@ -200,9 +188,7 @@ test('host logs --follow: a non-ISO ts string is a placeholder, not a RangeError
   })
 })
 
-/* ------------------------------------------------------------------ */
-/* 2. --limit gate                                                     */
-/* ------------------------------------------------------------------ */
+// 2. --limit gate
 
 test('host logs --limit: the control-plane cap is mirrored (cap accepted, cap+1 refused before any request)', async () => {
   assert.ok(Number.isInteger(CONTROL_PLANE_MAX_LIMIT) && CONTROL_PLANE_MAX_LIMIT > 0,
@@ -232,102 +218,74 @@ test('host logs --limit: non-positive and non-integer values are refused', async
   })
 })
 
-/* ------------------------------------------------------------------ */
-/* 3. Recovery surface + refusal mapping                               */
-/* ------------------------------------------------------------------ */
+// 3. Recovery surface + refusal mapping
 
 test('connections writers: GET /api/connections/local/writers is reachable and rendered', async () => {
-  await withPlane((req, res) => {
+  const result = await runPlane((req, res) => {
     if (req.method === 'GET' && req.url === '/api/connections/local/writers') {
       sendJson(res, 200, {
         quiescent: false,
-        writers: [{
-          name: 'managed-dsh/1.json',
-          status: 'kept',
-          pid: 4242,
-          reason: 'identity-unverified',
-          takeOverAvailable: true,
-        }],
+        writers: [{ name: 'managed-dsh/1.json', status: 'kept', pid: 4242, reason: 'identity-unverified', takeOverAvailable: true }],
         errors: [],
       })
       return
     }
     sendJson(res, 404, { error: 'not_found' })
-  }, async plane => {
-    const result = await runCli(['connections', 'writers', '--url', plane.url])
-    assert.equal(result.code, 0, result.stderr)
-    assert.deepEqual(plane.calls, ['GET /api/connections/local/writers'])
-    assert.match(result.stdout, /4242/u, 'the blocking writer pid must be visible')
-    assert.match(result.stdout, /identity-unverified/u)
-  })
+  }, ['connections', 'writers'])
+  assert.equal(result.code, 0, result.stderr)
+  assert.deepEqual(result.calls, ['GET /api/connections/local/writers'])
+  assert.match(result.stdout, /4242/u, 'the blocking writer pid must be visible')
+  assert.match(result.stdout, /identity-unverified/u)
 })
 
 test('connections writers --json: the raw diagnosis is passed through verbatim', async () => {
   const diagnosis = { quiescent: true, writers: [], errors: [] }
-  await withPlane((_req, res) => { sendJson(res, 200, diagnosis) }, async plane => {
-    const result = await runCli(['connections', 'writers', '--json', '--url', plane.url])
-    assert.equal(result.code, 0, result.stderr)
-    assert.deepEqual(JSON.parse(result.stdout), diagnosis)
-  })
+  const result = await runPlane((_req, res) => { sendJson(res, 200, diagnosis) }, ['connections', 'writers', '--json'])
+  assert.equal(result.code, 0, result.stderr)
+  assert.deepEqual(JSON.parse(result.stdout), diagnosis)
 })
 
 test('connections writers: a 501 not_implemented surface is a localized hint, not a raw English body', async () => {
-  await withPlane((_req, res) => {
+  const result = await runPlane((_req, res) => {
     sendJson(res, 501, { code: 'not_implemented', message: 'this surface has no managed local host' })
-  }, async plane => {
-    const result = await runCli(['connections', 'writers', '--url', plane.url])
-    assert.notEqual(result.code, 0)
-    assert.match(result.stderr, /501/u)
-    assert.match(result.stderr, /not_implemented/u)
-    assert.equal(/this surface has no managed local host/u.test(result.stderr), false,
-      'the refusal is localized (the English wire detail is not the user-facing copy)')
-  })
+  }, ['connections', 'writers'])
+  assert.notEqual(result.code, 0)
+  assert.match(result.stderr, /501/u)
+  assert.match(result.stderr, /not_implemented/u)
+  assert.equal(/this surface has no managed local host/u.test(result.stderr), false,
+    'the refusal is localized (the English wire detail is not the user-facing copy)')
 })
 
 test('connections reclaim: POST /api/connections/local/reclaim is reachable and rendered', async () => {
-  await withPlane((req, res) => {
+  const result = await runPlane((req, res) => {
     if (req.method === 'POST' && req.url === '/api/connections/local/reclaim') {
-      sendJson(res, 200, {
-        reclaimed: [4242],
-        connection: { id: 'local', status: 'ready', dshPort: 17500 },
-        spawned: true,
-      })
+      sendJson(res, 200, { reclaimed: [4242], connection: { id: 'local', status: 'ready', dshPort: 17500 }, spawned: true })
       return
     }
     sendJson(res, 404, { error: 'not_found' })
-  }, async plane => {
-    const result = await runCli(['connections', 'reclaim', '--url', plane.url])
-    assert.equal(result.code, 0, result.stderr)
-    assert.deepEqual(plane.calls, ['POST /api/connections/local/reclaim'])
-    assert.match(result.stdout, /4242/u)
-    assert.match(result.stdout, /ready/u)
-  })
+  }, ['connections', 'reclaim'])
+  assert.equal(result.code, 0, result.stderr)
+  assert.deepEqual(result.calls, ['POST /api/connections/local/reclaim'])
+  assert.match(result.stdout, /4242/u)
+  assert.match(result.stdout, /ready/u)
 })
 
 test('connections reclaim: a 409 connection_busy refusal is localized', async () => {
-  await withPlane((_req, res) => {
+  const result = await runPlane((_req, res) => {
     sendJson(res, 409, { code: 'connection_busy', message: 'a live writer still holds the DSH_HOME' })
-  }, async plane => {
-    const result = await runCli(['connections', 'reclaim', '--url', plane.url])
-    assert.notEqual(result.code, 0)
-    assert.match(result.stderr, /connection_busy/u)
-    assert.equal(/a live writer still holds the DSH_HOME/u.test(result.stderr), false)
-  })
+  }, ['connections', 'reclaim'])
+  assert.notEqual(result.code, 0)
+  assert.match(result.stderr, /connection_busy/u)
+  assert.equal(/a live writer still holds the DSH_HOME/u.test(result.stderr), false)
 })
 
 test('connections add: a 409 connection_busy refusal reaches the user as localized, actionable copy', async () => {
-  await withPlane((_req, res) => {
-    sendJson(res, 409, {
-      code: 'connection_busy',
-      message: 'local DSH_HOME writer quiescence is not proven',
-      detail: { writers: [] },
-    })
-  }, async plane => {
-    const result = await runCli(['connections', 'add', '--kind', 'local', '--url', plane.url])
-    assert.notEqual(result.code, 0)
-    assert.match(result.stderr, /409 connection_busy/u)
-    assert.match(result.stderr, /写者/u, 'the refusal names the writer latch and the diagnosis command')
-    assert.match(result.stderr, /connections writers/u)
-    assert.equal(/writer quiescence is not proven/u.test(result.stderr), false)
-  })
+  const result = await runPlane((_req, res) => {
+    sendJson(res, 409, { code: 'connection_busy', message: 'local DSH_HOME writer quiescence is not proven', detail: { writers: [] } })
+  }, ['connections', 'add', '--kind', 'local'])
+  assert.notEqual(result.code, 0)
+  assert.match(result.stderr, /409 connection_busy/u)
+  assert.match(result.stderr, /写者/u, 'the refusal names the writer latch and the diagnosis command')
+  assert.match(result.stderr, /connections writers/u)
+  assert.equal(/writer quiescence is not proven/u.test(result.stderr), false)
 })

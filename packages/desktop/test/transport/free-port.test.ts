@@ -25,7 +25,6 @@ function occupyPort(): Promise<{ port: number; close: () => Promise<void> }> {
     })
   })
 }
-
 test('returns start when the base port is free', async () => {
   // Use a just-freed ephemeral port as base instead of the fixed dev default
   // (17520): a dev instance running during the test would otherwise occupy it
@@ -36,7 +35,6 @@ test('returns start when the base port is free', async () => {
   const first = await findFreePort(base, { attempts: 1 })
   assert.equal(first, base)
 })
-
 test('backs off past an occupied port', async () => {
   const occupied = await occupyPort()
   try {
@@ -46,7 +44,6 @@ test('backs off past an occupied port', async () => {
     await occupied.close()
   }
 })
-
 test('rejects when the whole range is occupied', async () => {
   const first = await occupyPort()
   try {
@@ -58,7 +55,6 @@ test('rejects when the whole range is occupied', async () => {
     await first.close()
   }
 })
-
 test('validates start and attempts', async () => {
   await assert.rejects(() => findFreePort(-1), RangeError)
   // 0 means "OS-assigned ephemeral" and is not a probe base.

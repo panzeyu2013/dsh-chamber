@@ -1,9 +1,9 @@
 /**
  * Carrier-retry pacing truth table (chamber fork patch, design 14 §D4).
  *
- * The fork's whole point is that a SECOND carrier failure inside one live
- * connection generation is paced and reopened instead of escaping terminally, so
- * the delay function is the contract: immediate once, then double up to a cap.
+ * A SECOND carrier failure inside one live connection generation is paced and
+ * reopened instead of escaping terminally, so the delay function is the contract:
+ * immediate once, then double up to a cap.
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'

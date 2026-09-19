@@ -10,13 +10,14 @@ import {
 import type {
   CreateWorktreeResult, GitRecovery, PreviewCreateResult, RemoveWorktreeResult,
 } from '../../src/shared/types.ts'
+import { HEAD, PREVIEW_BASE, REPO_ID, WORKTREE_ID } from '../support/fixtures.ts'
 
-const REPO_ID = `repo_${'a'.repeat(64)}`
-const WORKTREE_ID = `worktree_${'b'.repeat(64)}`
-const HEAD = 'c'.repeat(40)
-const PREVIEW: PreviewCreateResult = {
-  previewToken: 'preview-1', expiresAt: 1_800_000_000_000, repoId: REPO_ID,
-  commonDir: '/repo/.git', mainPath: '/repo', targetPath: '/feature', branch: 'feature', baseHead: HEAD,
+const PREVIEW: PreviewCreateResult = { ...PREVIEW_BASE, previewToken: 'preview-1' }
+/** The removal correlation every remove case shares (operationId varies). */
+const REMOVE_REQUEST = {
+  operationId: 'op-remove', workspaceId: 'ws-2',
+  expected: { repoId: REPO_ID, worktreeId: WORKTREE_ID, branch: null, head: HEAD },
+  path: '/feature',
 }
 
 function preview(token: string): PreviewCreateResult {
@@ -35,6 +36,26 @@ const removeResult: RemoveWorktreeResult = {
   operationId: 'op-remove', removed: true, replayed: false, repoId: REPO_ID, worktreeId: WORKTREE_ID,
   workspaceId: 'ws-2', commonDir: '/repo/.git', path: '/feature', branch: null, head: HEAD,
   sessionIds: ['s-old'], next: 'delete-workspace', branchPreserved: true,
+}
+
+/** The workspace-delete recovery the remove saga mints from a verified removal. */
+function deleteRecovery(message: string, discardChanges = false): Extract<GitRecovery, { kind: 'workspace-delete' }> {
+  return {
+    kind: 'workspace-delete', operationId: 'op-remove', workspaceId: 'ws-2',
+    expected: REMOVE_REQUEST.expected, path: '/feature', message,
+    ...(discardChanges ? { discardChanges: true } : {}),
+  }
+}
+
+/** Run a saga that must throw, returning the GitSagaError (a bare Error fails here). */
+async function expectSagaError(run: () => Promise<unknown>): Promise<GitSagaError> {
+  try {
+    await run()
+    assert.fail('expected failure')
+  } catch (error) {
+    assert.ok(error instanceof GitSagaError)
+    return error
+  }
 }
 
 test('create saga orders host -> workspace -> preallocated session and commits that id', async () => {
@@ -65,14 +86,10 @@ test('ambiguous create retains preview/operation/session identities and a retry 
     sessionCreate: async (_workspaceId: string, sessionId: string) => sessionId,
     isAmbiguousHostFailure: () => true,
   }
-  let recovery: any
-  try {
-    await runCreateSaga(deps, preview('preview-fixed'), { operationId: 'op-fixed', sessionId: 'session-fixed' })
-    assert.fail('expected dropped response')
-  } catch (error) {
-    assert.ok(error instanceof GitSagaError)
-    recovery = error.recovery
-  }
+  const failure = await expectSagaError(() =>
+    runCreateSaga(deps, preview('preview-fixed'), { operationId: 'op-fixed', sessionId: 'session-fixed' }))
+  assert.equal(failure.recovery?.kind, 'git-create')
+  const recovery = failure.recovery as Extract<GitRecovery, { kind: 'git-create' }>
   assert.deepEqual(recovery, {
     kind: 'git-create', preview: preview('preview-fixed'), operationId: 'op-fixed', sessionId: 'session-fixed', message: 'response dropped',
     createSession: true,
@@ -91,67 +108,51 @@ test('ambiguous create retains preview/operation/session identities and a retry 
 
 test('workspace failure rolls back only its operation and rollback failure is recoverable', async () => {
   const calls: string[] = []
-  try {
-    await runCreateSaga({
-      hostCreate: async () => createResult('only-this-op'),
-      hostRollback: async input => { calls.push(input.operationId); throw new Error('rollback dropped') },
-      workspaceCreate: async () => { throw new Error('workspace failed') },
-      sessionCreate: async () => { assert.fail('session must not be attempted') },
-      isAmbiguousHostFailure: () => false,
-    }, preview('p'), { operationId: 'only-this-op', sessionId: 's' })
-    assert.fail('expected failure')
-  } catch (error) {
-    assert.ok(error instanceof GitSagaError)
-    assert.equal(error.refreshNeeded, true)
-    assert.equal(error.recovery?.kind, 'rollback-create')
-    if (error.recovery?.kind !== 'rollback-create') assert.fail('expected rollback recovery')
-    assert.equal(error.recovery.operationId, 'only-this-op')
-    assert.equal(error.recovery.repoId, REPO_ID)
-    assert.equal(error.recovery.worktreeId, WORKTREE_ID)
-    assert.equal(error.recovery.commonDir, PREVIEW.commonDir)
-    assert.equal(error.recovery.path, '/feature')
-    assert.equal(error.recovery.branch, PREVIEW.branch)
-    assert.equal(error.recovery.head, PREVIEW.baseHead)
-    assert.equal(error.recovery.sessionId, 's')
-  }
+  const error = await expectSagaError(() => runCreateSaga({
+    hostCreate: async () => createResult('only-this-op'),
+    hostRollback: async input => { calls.push(input.operationId); throw new Error('rollback dropped') },
+    workspaceCreate: async () => { throw new Error('workspace failed') },
+    sessionCreate: async () => { assert.fail('session must not be attempted') },
+    isAmbiguousHostFailure: () => false,
+  }, preview('p'), { operationId: 'only-this-op', sessionId: 's' }))
+  assert.equal(error.refreshNeeded, true)
+  assert.equal(error.recovery?.kind, 'rollback-create')
+  if (error.recovery?.kind !== 'rollback-create') assert.fail('expected rollback recovery')
+  assert.equal(error.recovery.operationId, 'only-this-op')
+  assert.equal(error.recovery.repoId, REPO_ID)
+  assert.equal(error.recovery.worktreeId, WORKTREE_ID)
+  assert.equal(error.recovery.commonDir, PREVIEW.commonDir)
+  assert.equal(error.recovery.path, '/feature')
+  assert.equal(error.recovery.branch, PREVIEW.branch)
+  assert.equal(error.recovery.head, PREVIEW.baseHead)
+  assert.equal(error.recovery.sessionId, 's')
   assert.deepEqual(calls, ['only-this-op'])
 })
 
 test('after session.create is attempted, failure never compensates and retains the same session id', async () => {
   let rolledBack = false
-  try {
-    await runCreateSaga({
-      hostCreate: async () => createResult('op'),
-      hostRollback: async () => { rolledBack = true },
-      workspaceCreate: async path => ({ workspaceId: 'ws-2', path, created: true }),
-      sessionCreate: async () => { throw new Error('session response dropped') },
-      isAmbiguousHostFailure: () => false,
-    }, preview('p'), { operationId: 'op', sessionId: 'session-fixed' })
-    assert.fail('expected failure')
-  } catch (error) {
-    assert.ok(error instanceof GitSagaError)
-    assert.equal(error.recovery?.kind, 'session-create')
-    assert.equal(error.recovery?.sessionId, 'session-fixed')
-  }
+  const error = await expectSagaError(() => runCreateSaga({
+    hostCreate: async () => createResult('op'),
+    hostRollback: async () => { rolledBack = true },
+    workspaceCreate: async path => ({ workspaceId: 'ws-2', path, created: true }),
+    sessionCreate: async () => { throw new Error('session response dropped') },
+    isAmbiguousHostFailure: () => false,
+  }, preview('p'), { operationId: 'op', sessionId: 'session-fixed' }))
+  assert.equal(error.recovery?.kind, 'session-create')
+  assert.equal(error.recovery?.sessionId, 'session-fixed')
   assert.equal(rolledBack, false)
 })
 
 test('workspace response loss resolves rollback-has-workspace by adopting path and continuing the same session id', async () => {
-  let recovery: Extract<GitRecovery, { kind: 'rollback-create' }> | undefined
-  try {
-    await runCreateSaga({
-      hostCreate: async () => createResult('op-fixed'),
-      hostRollback: async () => { throw new Error('rollback-has-workspace') },
-      workspaceCreate: async () => { throw new TypeError('workspace response dropped') },
-      sessionCreate: async () => { assert.fail('session waits for ownership recovery') },
-      isAmbiguousHostFailure: () => false,
-    }, preview('p'), { operationId: 'op-fixed', sessionId: 'session-fixed' })
-  } catch (error) {
-    assert.ok(error instanceof GitSagaError)
-    if (error.recovery?.kind !== 'rollback-create') assert.fail('expected rollback recovery')
-    recovery = error.recovery
-  }
-  assert.ok(recovery !== undefined)
+  const failure = await expectSagaError(() => runCreateSaga({
+    hostCreate: async () => createResult('op-fixed'),
+    hostRollback: async () => { throw new Error('rollback-has-workspace') },
+    workspaceCreate: async () => { throw new TypeError('workspace response dropped') },
+    sessionCreate: async () => { assert.fail('session waits for ownership recovery') },
+    isAmbiguousHostFailure: () => false,
+  }, preview('p'), { operationId: 'op-fixed', sessionId: 'session-fixed' }))
+  if (failure.recovery?.kind !== 'rollback-create') assert.fail('expected rollback recovery')
+  const recovery = failure.recovery
   const calls: string[] = []
   const result = await runRollbackRecovery({
     hostRollback: async operationId => { calls.push(`rollback:${operationId}`); throw new Error('rollback-has-workspace') },
@@ -175,23 +176,16 @@ test('workspace response loss resolves rollback-has-workspace by adopting path a
 
 test('uncertain create provenance never authorizes rollback and recovers forward by workspace adoption', async () => {
   let rollbackCalls = 0
-  let recovery: Extract<GitRecovery, { kind: 'workspace-adopt' }> | undefined
-  try {
-    await runCreateSaga({
-      hostCreate: async () => createResult('op-uncertain', false),
-      hostRollback: async () => { rollbackCalls += 1 },
-      workspaceCreate: async () => { throw new TypeError('workspace response dropped') },
-      sessionCreate: async () => { assert.fail('session waits for workspace adoption') },
-      isAmbiguousHostFailure: isAmbiguousGitRpcFailure,
-    }, PREVIEW, { operationId: 'op-uncertain', sessionId: 'session-fixed' })
-    assert.fail('expected forward recovery')
-  } catch (error) {
-    assert.ok(error instanceof GitSagaError)
-    if (error.recovery?.kind !== 'workspace-adopt') assert.fail('expected workspace-adopt recovery')
-    recovery = error.recovery
-  }
+  const failure = await expectSagaError(() => runCreateSaga({
+    hostCreate: async () => createResult('op-uncertain', false),
+    hostRollback: async () => { rollbackCalls += 1 },
+    workspaceCreate: async () => { throw new TypeError('workspace response dropped') },
+    sessionCreate: async () => { assert.fail('session waits for workspace adoption') },
+    isAmbiguousHostFailure: isAmbiguousGitRpcFailure,
+  }, PREVIEW, { operationId: 'op-uncertain', sessionId: 'session-fixed' }))
+  if (failure.recovery?.kind !== 'workspace-adopt') assert.fail('expected workspace-adopt recovery')
+  const recovery = failure.recovery
   assert.equal(rollbackCalls, 0)
-  assert.ok(recovery !== undefined)
   const calls: string[] = []
   const result = await runWorkspaceAdoptRecovery({
     workspaceCreate: async path => {
@@ -214,74 +208,59 @@ test('mismatched rollback response preserves complete recovery facts and never a
     head: PREVIEW.baseHead, sessionId: 'session-fixed', message: 'rollback response dropped',
   }
   let workspaceCalls = 0
-  try {
-    await runRollbackRecovery({
-      hostRollback: async (operationId, expected) => decodeRollbackCreateValue({
-        operationId, removed: true, replayed: false, ...expected,
-        path: '/different', branchPreserved: true,
-      }, { operationId }, expected),
-      workspaceCreate: async path => {
-        workspaceCalls += 1
-        return { workspaceId: 'ws-2', path, created: false }
-      },
-      sessionCreate: async (_workspaceId, sessionId) => sessionId,
-      isWorkspaceOwnershipConflict: () => false,
-    }, recovery)
-    assert.fail('expected rollback correlation failure')
-  } catch (error) {
-    assert.ok(error instanceof GitSagaError)
-    assert.equal(error.recovery?.kind, 'rollback-create')
-    if (error.recovery?.kind !== 'rollback-create') assert.fail('expected rollback recovery')
-    assert.equal(error.recovery.repoId, REPO_ID)
-    assert.equal(error.recovery.path, PREVIEW.targetPath)
-  }
+  const error = await expectSagaError(() => runRollbackRecovery({
+    hostRollback: async (operationId, expected) => decodeRollbackCreateValue({
+      operationId, removed: true, replayed: false, ...expected,
+      path: '/different', branchPreserved: true,
+    }, { operationId }, expected),
+    workspaceCreate: async path => {
+      workspaceCalls += 1
+      return { workspaceId: 'ws-2', path, created: false }
+    },
+    sessionCreate: async (_workspaceId, sessionId) => sessionId,
+    isWorkspaceOwnershipConflict: () => false,
+  }, recovery))
+  assert.equal(error.recovery?.kind, 'rollback-create')
+  if (error.recovery?.kind !== 'rollback-create') assert.fail('expected rollback recovery')
+  assert.equal(error.recovery.repoId, REPO_ID)
+  assert.equal(error.recovery.path, PREVIEW.targetPath)
   assert.equal(workspaceCalls, 0)
 })
 
 test('malformed create success is ambiguous and invokes neither workspace nor session', async () => {
   let workspaceCalls = 0
   let sessionCalls = 0
-  try {
-    await runCreateSaga({
-      hostCreate: async input => decodeCreateValue(
-        { ...createResult(input.operationId), path: '/wrong-target' }, input, PREVIEW,
-      ),
-      hostRollback: async () => { assert.fail('an untrusted create result cannot authorize rollback') },
-      workspaceCreate: async path => {
-        workspaceCalls += 1
-        return { workspaceId: 'ws-2', path, created: true }
-      },
-      sessionCreate: async (_workspaceId, sessionId) => {
-        sessionCalls += 1
-        return sessionId
-      },
-      isAmbiguousHostFailure: isAmbiguousGitRpcFailure,
-    }, PREVIEW, { operationId: 'op-malformed', sessionId: 'session-fixed' })
-    assert.fail('expected malformed success failure')
-  } catch (error) {
-    assert.ok(error instanceof GitSagaError)
-    assert.equal(error.recovery?.kind, 'git-create')
-  }
+  const error = await expectSagaError(() => runCreateSaga({
+    hostCreate: async input => decodeCreateValue(
+      { ...createResult(input.operationId), path: '/wrong-target' }, input, PREVIEW,
+    ),
+    hostRollback: async () => { assert.fail('an untrusted create result cannot authorize rollback') },
+    workspaceCreate: async path => {
+      workspaceCalls += 1
+      return { workspaceId: 'ws-2', path, created: true }
+    },
+    sessionCreate: async (_workspaceId, sessionId) => {
+      sessionCalls += 1
+      return sessionId
+    },
+    isAmbiguousHostFailure: isAmbiguousGitRpcFailure,
+  }, PREVIEW, { operationId: 'op-malformed', sessionId: 'session-fixed' }))
+  assert.equal(error.recovery?.kind, 'git-create')
   assert.equal(workspaceCalls, 0)
   assert.equal(sessionCalls, 0)
 })
 
 test('a mismatched preallocated session id remains session recovery and never rolls back', async () => {
   let rolledBack = false
-  try {
-    await runCreateSaga({
-      hostCreate: async () => createResult('op-session-mismatch'),
-      hostRollback: async () => { rolledBack = true },
-      workspaceCreate: async path => ({ workspaceId: 'ws-2', path, created: true }),
-      sessionCreate: async () => 'different-session',
-      isAmbiguousHostFailure: isAmbiguousGitRpcFailure,
-    }, PREVIEW, { operationId: 'op-session-mismatch', sessionId: 'session-fixed' })
-    assert.fail('expected session correlation failure')
-  } catch (error) {
-    assert.ok(error instanceof GitSagaError)
-    assert.equal(error.recovery?.kind, 'session-create')
-    assert.equal(error.recovery?.sessionId, 'session-fixed')
-  }
+  const error = await expectSagaError(() => runCreateSaga({
+    hostCreate: async () => createResult('op-session-mismatch'),
+    hostRollback: async () => { rolledBack = true },
+    workspaceCreate: async path => ({ workspaceId: 'ws-2', path, created: true }),
+    sessionCreate: async () => 'different-session',
+    isAmbiguousHostFailure: isAmbiguousGitRpcFailure,
+  }, PREVIEW, { operationId: 'op-session-mismatch', sessionId: 'session-fixed' }))
+  assert.equal(error.recovery?.kind, 'session-create')
+  assert.equal(error.recovery?.sessionId, 'session-fixed')
   assert.equal(rolledBack, false)
 })
 
@@ -332,24 +311,14 @@ test('only a host-proven pre-mutation refusal may clear a pending git-remove rec
 })
 
 test('remove is Git-first; ambiguous response retains the exact operation and opaque expectation', async () => {
-  const request = {
-    operationId: 'op-remove', workspaceId: 'ws-2',
-    expected: { repoId: REPO_ID, worktreeId: WORKTREE_ID, branch: null, head: HEAD },
-    path: '/feature',
-  }
   const calls: string[] = []
-  try {
-    await runRemoveSaga({
-      hostRemove: async () => { calls.push('git'); throw new TypeError('response dropped') },
-      verifyTerminalRemove: async () => { calls.push('verify'); return removeResult },
-      workspaceDelete: async () => { calls.push('workspace') },
-      ambiguousRecovery: error => ({ kind: 'git-remove', ...request, message: String((error as Error).message) }),
-    })
-    assert.fail('expected failure')
-  } catch (error) {
-    assert.ok(error instanceof GitSagaError)
-    assert.deepEqual(error.recovery, { kind: 'git-remove', ...request, message: 'response dropped' })
-  }
+  const error = await expectSagaError(() => runRemoveSaga({
+    hostRemove: async () => { calls.push('git'); throw new TypeError('response dropped') },
+    verifyTerminalRemove: async () => { calls.push('verify'); return removeResult },
+    workspaceDelete: async () => { calls.push('workspace') },
+    ambiguousRecovery: error => ({ kind: 'git-remove', ...REMOVE_REQUEST, message: String((error as Error).message) }),
+  }))
+  assert.deepEqual(error.recovery, { kind: 'git-remove', ...REMOVE_REQUEST, message: 'response dropped' })
   assert.deepEqual(calls, ['git'])
 
   await runRemoveSaga({
@@ -362,116 +331,71 @@ test('remove is Git-first; ambiguous response retains the exact operation and op
 })
 
 test('malformed remove success invokes no workspace deletion and keeps the same operation recoverable', async () => {
-  const request = {
-    operationId: 'op-malformed-remove', workspaceId: 'ws-2',
-    expected: { repoId: REPO_ID, worktreeId: WORKTREE_ID, branch: null, head: HEAD },
-    path: '/feature',
-  }
+  const request = { ...REMOVE_REQUEST, operationId: 'op-malformed-remove' }
   let deleteCalls = 0
-  try {
-    await runRemoveSaga({
-      hostRemove: async () => decodeRemoveValue({
-        ...removeResult,
-        operationId: request.operationId,
-        path: '/different',
-        sessionIds: [],
-      }, request, request.path),
-      verifyTerminalRemove: async () => removeResult,
-      workspaceDelete: async () => { deleteCalls += 1 },
-      ambiguousRecovery: error => isAmbiguousGitRpcFailure(error)
-        ? { kind: 'git-remove', ...request, message: String((error as Error).message) }
-        : undefined,
-    })
-    assert.fail('expected malformed success failure')
-  } catch (error) {
-    assert.ok(error instanceof GitSagaError)
-    assert.equal(error.recovery?.kind, 'git-remove')
-    assert.equal(error.recovery?.operationId, request.operationId)
-  }
+  const error = await expectSagaError(() => runRemoveSaga({
+    hostRemove: async () => decodeRemoveValue({
+      ...removeResult,
+      operationId: request.operationId,
+      path: '/different',
+      sessionIds: [],
+    }, request, request.path),
+    verifyTerminalRemove: async () => removeResult,
+    workspaceDelete: async () => { deleteCalls += 1 },
+    ambiguousRecovery: error => isAmbiguousGitRpcFailure(error)
+      ? { kind: 'git-remove', ...request, message: String((error as Error).message) }
+      : undefined,
+  }))
+  assert.equal(error.recovery?.kind, 'git-remove')
+  assert.equal(error.recovery?.operationId, request.operationId)
   assert.equal(deleteCalls, 0)
 })
 
 test('workspace delete failure keeps retry-only recovery and never reverses Git', async () => {
-  try {
-    await runRemoveSaga({
-      hostRemove: async () => removeResult,
-      verifyTerminalRemove: async () => ({ ...removeResult, replayed: true }),
-      workspaceDelete: async () => { throw new Error('registry unavailable') },
-      ambiguousRecovery: () => undefined,
-    })
-    assert.fail('expected failure')
-  } catch (error) {
-    assert.ok(error instanceof GitSagaError)
-    assert.deepEqual(error.recovery, {
-      kind: 'workspace-delete', operationId: 'op-remove', workspaceId: 'ws-2',
-      expected: { repoId: REPO_ID, worktreeId: WORKTREE_ID, branch: null, head: HEAD },
-      path: '/feature', message: 'registry unavailable',
-    })
-  }
+  const error = await expectSagaError(() => runRemoveSaga({
+    hostRemove: async () => removeResult,
+    verifyTerminalRemove: async () => ({ ...removeResult, replayed: true }),
+    workspaceDelete: async () => { throw new Error('registry unavailable') },
+    ambiguousRecovery: () => undefined,
+  }))
+  assert.deepEqual(error.recovery, deleteRecovery('registry unavailable'))
 })
 
 test('first successful remove never deletes the registry when terminal replay no longer verifies', async () => {
   let deleteCalls = 0
-  try {
-    await runRemoveSaga({
-      hostRemove: async () => removeResult,
-      verifyTerminalRemove: async () => { throw new Error('workspace-membership-changed') },
-      workspaceDelete: async () => { deleteCalls += 1 },
-      ambiguousRecovery: () => undefined,
-    })
-    assert.fail('expected terminal verifier conflict')
-  } catch (error) {
-    assert.ok(error instanceof GitSagaError)
-    assert.deepEqual(error.recovery, {
-      kind: 'workspace-delete', operationId: 'op-remove', workspaceId: 'ws-2',
-      expected: { repoId: REPO_ID, worktreeId: WORKTREE_ID, branch: null, head: HEAD },
-      path: '/feature', message: 'workspace-membership-changed',
-    })
-  }
+  const error = await expectSagaError(() => runRemoveSaga({
+    hostRemove: async () => removeResult,
+    verifyTerminalRemove: async () => { throw new Error('workspace-membership-changed') },
+    workspaceDelete: async () => { deleteCalls += 1 },
+    ambiguousRecovery: () => undefined,
+  }))
+  assert.deepEqual(error.recovery, deleteRecovery('workspace-membership-changed'))
   assert.equal(deleteCalls, 0)
 })
 
 test('force removal echoes discardChanges into every recovery for byte-identical replays', async () => {
-  const request = {
-    operationId: 'op-force-remove', workspaceId: 'ws-2',
-    expected: { repoId: REPO_ID, worktreeId: WORKTREE_ID, branch: null, head: HEAD },
-    path: '/feature',
-  }
+  const request = { ...REMOVE_REQUEST, operationId: 'op-force-remove' }
   // Ambiguous failure (e.g. proxy 504) mints a git-remove recovery that
   // carries discardChanges so the same-id replay stays byte-identical.
-  try {
-    await runRemoveSaga({
-      hostRemove: async () => { throw new TypeError('response dropped') },
-      verifyTerminalRemove: async () => removeResult,
-      workspaceDelete: async () => {},
-      discardChanges: true,
-      ambiguousRecovery: error => ({ kind: 'git-remove', ...request, message: String((error as Error).message), discardChanges: true }),
-    })
-    assert.fail('expected failure')
-  } catch (error) {
-    assert.ok(error instanceof GitSagaError)
-    assert.equal(error.recovery?.kind, 'git-remove')
-    assert.equal(error.recovery?.discardChanges, true)
-  }
+  const error = await expectSagaError(() => runRemoveSaga({
+    hostRemove: async () => { throw new TypeError('response dropped') },
+    verifyTerminalRemove: async () => removeResult,
+    workspaceDelete: async () => {},
+    discardChanges: true,
+    ambiguousRecovery: error => ({ kind: 'git-remove', ...request, message: String((error as Error).message), discardChanges: true }),
+  }))
+  assert.equal(error.recovery?.kind, 'git-remove')
+  assert.equal(error.recovery?.discardChanges, true)
   // A successful force removal echoes discardChanges into the
   // workspace-delete recovery (the terminal replay must re-send it).
-  try {
-    await runRemoveSaga({
-      hostRemove: async () => removeResult,
-      verifyTerminalRemove: async () => ({ ...removeResult, replayed: true }),
-      workspaceDelete: async () => { throw new Error('registry unavailable') },
-      discardChanges: true,
-      ambiguousRecovery: () => undefined,
-    })
-    assert.fail('expected failure')
-  } catch (error) {
-    assert.ok(error instanceof GitSagaError)
-    assert.deepEqual(error.recovery, {
-      kind: 'workspace-delete', operationId: 'op-remove', workspaceId: 'ws-2',
-      expected: { repoId: REPO_ID, worktreeId: WORKTREE_ID, branch: null, head: HEAD },
-      path: '/feature', message: 'registry unavailable', discardChanges: true,
-    })
-  }
+  const forced = await expectSagaError(() => runRemoveSaga({
+    hostRemove: async () => removeResult,
+    verifyTerminalRemove: async () => ({ ...removeResult, replayed: true }),
+    workspaceDelete: async () => { throw new Error('registry unavailable') },
+    discardChanges: true,
+    ambiguousRecovery: () => undefined,
+  }))
+  assert.deepEqual(forced.recovery, deleteRecovery('registry unavailable', true))
 })
 
 test('workspace-delete recovery treats workspace/not-found as an idempotent committed delete', async () => {
@@ -709,14 +633,9 @@ test('a definitive 404 host error surfaces as a no-recovery failure, never a rec
     // (isAmbiguousGitRpcFailure excludes it) — mirror that here.
     isAmbiguousHostFailure: () => false,
   }
-  await assert.rejects(
-    runCreateSaga(deps, PREVIEW, { operationId: 'op-404', sessionId: 'session-404' }),
-    (error: unknown) => {
-      assert.ok(error instanceof GitSagaError)
-      assert.equal(error.recovery, undefined, 'a definitive host failure must not mint a recovery entry')
-      return true
-    },
-  )
+  const error = await expectSagaError(() =>
+    runCreateSaga(deps, PREVIEW, { operationId: 'op-404', sessionId: 'session-404' }))
+  assert.equal(error.recovery, undefined, 'a definitive host failure must not mint a recovery entry')
 })
 
 test('create saga with createSession:false commits the worktree + workspace but no session', async () => {

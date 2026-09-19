@@ -1,8 +1,7 @@
 /**
- * updater.ts — part 3: sanitizeErrorText, the electron-updater cache path
- * resolution, version comparison and cleanupStaleUpdateCache.
- *
- * Sibling parts: updater.test.ts, updater-restart-install.test.ts.
+ * updater.ts part 3 — sanitizeErrorText, the electron-updater cache path
+ * resolution, version comparison, cleanupStaleUpdateCache. Sibling parts:
+ * updater.test.ts, updater-restart-install.test.ts.
  */
 
 import { test } from 'node:test'
@@ -13,25 +12,21 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { cachedUpdateVersion, cleanupStaleUpdateCache, compareChamberVersions, resolveUpdaterCacheDir, sanitizeErrorText, updaterCacheDirNameFromYaml, updaterCacheRoot } from '../../updater.ts'
 import { makeController, waitFor } from '../support/updater-harness.ts'
-
 test('sanitizeErrorText replaces POSIX absolute paths', () => {
   assert.equal(sanitizeErrorText('Cannot read /Users/example/Library/Caches/dsh-chamber-updater/x'), 'Cannot read [path]')
   assert.equal(sanitizeErrorText('a /opt/x and /usr/local/bin/y'), 'a [path] and [path]')
   assert.equal(sanitizeErrorText('/root/x at start'), '[path] at start')
 })
-
 test('sanitizeErrorText replaces Windows drive paths (backslash and forward slash)', () => {
   assert.equal(sanitizeErrorText('Cannot read C:\\Users\\foo\\AppData\\Local\\dsh-chamber-updater'), 'Cannot read [path]')
   assert.equal(sanitizeErrorText('err D:/workspace/x'), 'err [path]')
 })
-
 test('sanitizeErrorText leaves URLs intact (scheme, host and path segments)', () => {
   const tagUrl = 'https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.2.0'
   assert.equal(sanitizeErrorText(`failed ${tagUrl}`), `failed ${tagUrl}`)
   const downloadUrl = 'https://github.com/panzeyu2013/dsh-chamber/releases/download/v0.2.0/latest.yml'
   assert.equal(sanitizeErrorText(`Cannot download ${downloadUrl}: 404`), `Cannot download ${downloadUrl}: 404`)
 })
-
 test('sanitizeErrorText redacts paths next to URLs without touching the URL', () => {
   const downloadUrl = 'https://github.com/panzeyu2013/dsh-chamber/releases/download/v0.2.0/latest.yml'
   assert.equal(
@@ -41,7 +36,6 @@ test('sanitizeErrorText redacts paths next to URLs without touching the URL', ()
 })
 
 // ---- Startup stale-download-cache cleanup (design 11, 2026-12) ----
-
 test('updaterCacheDirNameFromYaml reads the baked scalar (plain/quoted) and refuses escapes', () => {
   assert.equal(
     updaterCacheDirNameFromYaml('owner: panzeyu2013\nprovider: github\nupdaterCacheDirName: \'@dsh-chamberdesktop-updater\'\n'),
@@ -63,7 +57,6 @@ test('updaterCacheDirNameFromYaml reads the baked scalar (plain/quoted) and refu
   // Inline comments are not part of the scalar.
   assert.equal(updaterCacheDirNameFromYaml('updaterCacheDirName: x-updater # keep\n'), 'x-updater')
 })
-
 test('updaterCacheRoot follows the electron-updater platform branches', () => {
   const env = (extra: Record<string, string> = {}) => ({ HOME: '/h', ...extra })
   assert.equal(updaterCacheRoot('darwin', env(), '/Users/t'), '/Users/t/Library/Caches')
@@ -73,7 +66,6 @@ test('updaterCacheRoot follows the electron-updater platform branches', () => {
   assert.equal(updaterCacheRoot('linux', env(), '/home/t'), join('/home', 't', '.cache'))
   assert.equal(updaterCacheRoot('linux', env({ XDG_CACHE_HOME: '/var/cache/x' }), '/home/t'), '/var/cache/x')
 })
-
 test('resolveUpdaterCacheDir: packaged + baked yml resolves the real cache dir; dev never resolves', async () => {
   const yml = 'owner: panzeyu2013\nrepo: dsh-chamber\nprovider: github\nupdaterCacheDirName: \'@dsh-chamberdesktop-updater\'\n'
   const read = async (path: string) => {
@@ -105,10 +97,8 @@ test('resolveUpdaterCacheDir: packaged + baked yml resolves the real cache dir; 
 test('resolveUpdaterCacheDir refuses a RELATIVE derived cache dir (crafted env roots → null, no deletion possible)', async () => {
   const yml = 'updaterCacheDirName: \'@dsh-chamberdesktop-updater\'\n'
   const read = async () => yml
-  // A relative XDG_CACHE_HOME / LOCALAPPDATA / home would make the derived
-  // dir relative too — the resolver must return null (2026-12 review round
-  // F7: conservative, like the dev/unresolvable cases) so no deletion can
-  // ever be pointed at a relative path.
+  // A relative XDG_CACHE_HOME / LOCALAPPDATA / home makes the derived dir
+  // relative too: return null (F7) so no deletion targets a relative path.
   assert.equal(await resolveUpdaterCacheDir({
     isPackaged: true, platform: 'linux', env: { XDG_CACHE_HOME: 'relative/cache' }, home: 'relative/home',
     resourcesPath: '/opt/dsh-chamber/resources', readFile: read,
@@ -129,8 +119,7 @@ test('cachedUpdateVersion reads the first canonical chamber version out of a cac
   assert.equal(cachedUpdateVersion('dsh-chamber-0.10.2-x64.zip'), '0.10.2')
   assert.equal(cachedUpdateVersion('dsh-chamber-latest-mac.zip'), null)
   assert.equal(cachedUpdateVersion('0.2.2'), '0.2.2')
-  // An extra dotted tail does not confuse the version read (patch stops at
-  // the separator) and non-string input yields null.
+  // An extra dotted tail stops the version at the separator; non-strings → null.
   assert.equal(cachedUpdateVersion('dsh-chamber-electron-0.2.2.1-arm64.zip'), '0.2.2')
   assert.equal(cachedUpdateVersion(null), null)
   assert.equal(cachedUpdateVersion(undefined), null)
@@ -260,9 +249,8 @@ test('cleanupStaleUpdateCache keeps the cache when nothing is provably stale', a
 
 
 test('cleanupStaleUpdateCache tolerates shape-less JSON content and removal failures (never throws)', async () => {
-  // `null`, arrays and scalars are all VALID JSON that JSON.parse returns
-  // happily — reading `.fileName` off them used to throw, breaking the
-  // "never throws / keep when not provably stale" contract (2026-12 review).
+  // null/arrays/scalars are valid JSON: reading `.fileName` off them must not
+  // throw, or the "never throws / keep when not provably stale" contract breaks.
   for (const content of ['null', '[]', '"a string"', '42', '{}', '{"sha512":"abc"}', '{"fileName":42}']) {
     const { root, cacheDir } = await makeCacheTree('shape-guard')
     try {

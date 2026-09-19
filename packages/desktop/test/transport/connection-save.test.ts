@@ -11,20 +11,12 @@ import {
 } from '../../connection-save.ts'
 import type { TransportInstanceInput, TransportInstanceSpec } from '../../transport-provider.ts'
 
+const OLD_SECRETS = { ssh: 'old-ssh', token: 'old-token', password: 'old-password' }
+
 function spec(overrides: Partial<TransportInstanceSpec> = {}): TransportInstanceSpec {
   return {
-    id: 'one',
-    label: 'One',
-    kind: 'gateway',
-    transport: 'ssh',
-    host: 'one.example.com',
-    user: 'alice',
-    sshPort: 22,
-    remotePort: 30801,
-    serviceName: 'dsh-gateway',
-    remoteDshHome: null,
-    insecureHttp: false,
-    ...overrides,
+    id: 'one', label: 'One', kind: 'gateway', transport: 'ssh', host: 'one.example.com', user: 'alice',
+    sshPort: 22, remotePort: 30801, serviceName: 'dsh-gateway', remoteDshHome: null, insecureHttp: false, ...overrides,
   }
 }
 
@@ -33,36 +25,19 @@ function normalize(input: TransportInstanceInput): TransportInstanceSpec | null 
   if (input.kind !== 'dsh' && input.kind !== 'gateway') return null
   if (input.transport !== 'ssh' && input.transport !== 'http') return null
   return {
-    id: input.id,
-    label: input.label,
-    kind: input.kind,
-    transport: input.transport,
-    host: input.host,
-    user: input.user ?? null,
-    sshPort: input.sshPort ?? null,
-    remotePort: input.remotePort,
-    serviceName: input.serviceName ?? null,
-    remoteDshHome: input.remoteDshHome ?? null,
+    id: input.id, label: input.label, kind: input.kind, transport: input.transport, host: input.host,
+    user: input.user ?? null, sshPort: input.sshPort ?? null, remotePort: input.remotePort,
+    serviceName: input.serviceName ?? null, remoteDshHome: input.remoteDshHome ?? null,
     insecureHttp: input.transport === 'http' && input.insecureHttp === true,
     ...(input.spkiPin === undefined ? {} : { spkiPin: input.spkiPin }),
   }
 }
 
 interface FakeOptions {
-  initial?: TransportInstanceSpec[]
-  sshPassword?: string | null
-  gatewayToken?: string | null
-  gatewayPassword?: string | null
-  active?: boolean
-  failGatewayWrite?: number
-  failGatewayAfterWrite?: number
-  failSshWrite?: number
-  failSshAfterWrite?: number
-  failMetadataWrite?: number
-  failMetadataAfterWrite?: number
-  mismatchMetadataWrite?: number
-  failConnect?: number
-  hideCredentials?: boolean
+  initial?: TransportInstanceSpec[]; sshPassword?: string | null; gatewayToken?: string | null
+  gatewayPassword?: string | null; active?: boolean; hideCredentials?: boolean
+  failGatewayWrite?: number; failGatewayAfterWrite?: number; failSshWrite?: number; failSshAfterWrite?: number
+  failMetadataWrite?: number; failMetadataAfterWrite?: number; mismatchMetadataWrite?: number; failConnect?: number
 }
 
 function fakeDeps(options: FakeOptions = {}) {
@@ -125,6 +100,44 @@ function fakeDeps(options: FakeOptions = {}) {
   }
 }
 
+/** Delete-transaction deps: call recording plus main-only secret snapshots. */
+function deleteFake(initial: TransportInstanceSpec[], options: {
+  active?: boolean; ssh?: string | null; token?: string | null; password?: string | null
+  namesOnly?: boolean; quietGeneration?: boolean; failInvalidate?: boolean; failSshClearAt?: number
+} = {}) {
+  let instances = [...initial]
+  const secrets = { ssh: options.ssh ?? null, token: options.token ?? null, password: options.password ?? null }
+  let active = options.active ?? false
+  let sshWrites = 0
+  const calls: string[] = []
+  const deps: DeleteConnectionsTransactionDeps = {
+    listInstances: () => [...instances],
+    saveInstances: next => { calls.push('metadata'); instances = [...next] as TransportInstanceSpec[]; return [...instances] },
+    getSshPassword: () => secrets.ssh,
+    getGatewayToken: () => secrets.token,
+    getGatewayPassword: () => secrets.password,
+    setSshPassword: (_id, value) => {
+      sshWrites += 1
+      calls.push(options.namesOnly === true ? 'ssh' : `ssh:${value}`)
+      if (options.failSshClearAt === sshWrites) throw new Error('SSH clear failed')
+      secrets.ssh = value
+    },
+    setGatewaySecrets: (_id, token, password) => {
+      calls.push(options.namesOnly === true ? 'gateway' : `gateway:${token}:${password}`)
+      secrets.token = token
+      secrets.password = password
+    },
+    invalidateGatewaySessions: () => {
+      calls.push('invalidate')
+      if (options.failInvalidate === true) throw new Error('cache refused')
+    },
+    isActive: () => active,
+    disconnect: () => { if (options.quietGeneration !== true) calls.push('disconnect'); active = false },
+    connect: () => { if (options.quietGeneration !== true) calls.push('connect'); active = true },
+  }
+  return { deps, calls, secrets, snapshot: () => ({ active, instances }) }
+}
+
 function addRequest(kind: 'dsh' | 'gateway', transport: 'ssh' | 'http'): SaveConnectionRequest {
   return {
     previousId: null,
@@ -139,7 +152,6 @@ function addRequest(kind: 'dsh' | 'gateway', transport: 'ssh' | 'http'): SaveCon
     },
   }
 }
-
 test('main transaction accepts all four target/transport additions without credential leakage', () => {
   for (const [kind, transport, expected] of [
     ['dsh', 'ssh', { sshPassword: 'new-ssh', gatewayToken: null, gatewayPassword: null }],
@@ -158,7 +170,6 @@ test('main transaction accepts all four target/transport additions without crede
     }, expected, `${kind}+${transport}`)
   }
 })
-
 test('add and credential-domain entry scrub hidden crash-half secrets instead of reviving them', () => {
   const blankGateway = addRequest('gateway', 'http')
   blankGateway.credentials = {}
@@ -212,7 +223,6 @@ test('add and credential-domain entry scrub hidden crash-half secrets instead of
   }).ok, true)
   assert.equal(sshRetarget.state().sshPassword, null, 'SSH endpoint A→B blank retarget scrubs hidden B password')
 })
-
 test('unchanged gateway+ssh edit commits both credential layers and restarts one live transport', () => {
   const existing = spec()
   const fake = fakeDeps({
@@ -233,7 +243,6 @@ test('unchanged gateway+ssh edit commits both credential layers and restarts one
     'disconnect', 'gateway:new-token:new-gateway-password', 'ssh:new-ssh', 'metadata:1', 'connect',
   ])
 })
-
 test('an idle-projected generation is torn down before target metadata changes and is not auto-connected', () => {
   const existing = spec()
   const fake = fakeDeps({ initial: [existing], active: false })
@@ -248,7 +257,6 @@ test('an idle-projected generation is torn down before target metadata changes a
   ], 'disconnect is a generation fence even when phase/isActive is idle')
   assert.equal(fake.state().active, false, 'exec-only teardown never auto-connects a tunnel')
 })
-
 test('gateway-store partial failure happens before SSH/metadata and restores every old value', () => {
   const existing = spec()
   const fake = fakeDeps({
@@ -269,7 +277,6 @@ test('gateway-store partial failure happens before SSH/metadata and restores eve
     'disconnect', 'gateway:new-token:new-gateway-password', 'gateway:old-token:old-gateway-password',
   ])
 })
-
 test('SSH-store partial failure restores both secret stores from main-only snapshots', () => {
   const existing = spec()
   const fake = fakeDeps({
@@ -291,7 +298,6 @@ test('SSH-store partial failure restores both secret stores from main-only snaps
     'ssh:old-ssh',
   ])
 })
-
 test('metadata partial failure after both secret stores restores metadata and all old write-only values', () => {
   const existing = spec()
   const fake = fakeDeps({
@@ -314,7 +320,6 @@ test('metadata partial failure after both secret stores restores metadata and al
     'gateway:old-token:old-gateway-password', 'ssh:old-ssh',
   ])
 })
-
 test('replacement reconnect failure rolls metadata and both credential stores back, then restores the old live connection', () => {
   const existing = spec()
   const fake = fakeDeps({
@@ -340,7 +345,6 @@ test('replacement reconnect failure rolls metadata and both credential stores ba
     'disconnect', 'metadata:2', 'gateway:old-token:old-gateway-password', 'ssh:old-ssh', 'connect',
   ])
 })
-
 test('same-kind retarget requires each stored credential independently before any write', () => {
   const existing = spec()
   for (const [credentials, expected] of [
@@ -362,7 +366,6 @@ test('same-kind retarget requires each stored credential independently before an
     assert.deepEqual(fake.calls, [])
   }
 })
-
 test('same-kind retarget replaces all applicable credentials without exposing old values', () => {
   const existing = spec()
   const fake = fakeDeps({
@@ -380,7 +383,6 @@ test('same-kind retarget replaces all applicable credentials without exposing ol
     sshPassword: 'new-ssh', gatewayToken: 'new-token', gatewayPassword: 'new-gateway-password', active: false,
   })
 })
-
 test('SSH endpoint retarget requires only SSH password and rolls it back without touching gateway auth', () => {
   const existing = spec()
   const missing = fakeDeps({
@@ -408,7 +410,6 @@ test('SSH endpoint retarget requires only SSH password and rolls it back without
   })
   assert.equal(failing.calls.some(call => call.startsWith('gateway:')), false, 'SSH-only retarget never rewrites gateway auth')
 })
-
 test('gateway host/remotePort retarget requires token and password separately while preserving SSH password on rollback', () => {
   const existing = spec()
   const movedGateway = { ...existing, remotePort: 30802 }
@@ -443,7 +444,6 @@ test('gateway host/remotePort retarget requires token and password separately wh
   })
   assert.equal(failing.calls.some(call => call.startsWith('ssh:')), false, 'gateway-only retarget never rewrites SSH password')
 })
-
 test('transport-only gateway ssh↔http preserves gateway auth and handles SSH as its own transport credential', () => {
   // A real SSH row carries a user/daemon/service configuration. HTTP
   // normalization drops those SSH-only fields; gateway auth must still stay
@@ -472,7 +472,6 @@ test('transport-only gateway ssh↔http preserves gateway auth and handles SSH a
     instances: [ssh], sshPassword: 'fresh-ssh', gatewayToken: 'old-token', gatewayPassword: 'old-gateway-password', active: false,
   })
 })
-
 test('dsh↔gateway on one SSH endpoint preserves SSH password and clears only gateway-owned auth when leaving', () => {
   const gateway = spec()
   const dsh = { ...gateway, kind: 'dsh' as const }
@@ -494,7 +493,6 @@ test('dsh↔gateway on one SSH endpoint preserves SSH password and clears only g
     instances: [gateway], sshPassword: 'old-ssh', gatewayToken: 'new-token', gatewayPassword: 'new-gateway-password', active: false,
   })
 })
-
 test('kind and transport switch metadata failures restore the credentials each switch temporarily superseded', () => {
   const gatewaySsh = spec({ user: null, sshPort: null, serviceName: null, remoteDshHome: null })
   const cases: TransportInstanceSpec[] = [
@@ -516,7 +514,6 @@ test('kind and transport switch metadata failures restore the credentials each s
     }, `${input.kind}+${input.transport}`)
   }
 })
-
 test('metadata compensation failure is loud, scrubs all credentials, and never reconnects uncertain state', () => {
   const existing = spec()
   const fake = fakeDeps({
@@ -538,130 +535,38 @@ test('metadata compensation failure is loud, scrubs all credentials, and never r
   assert.equal(fake.state().gatewayPassword, null)
   assert.equal(fake.state().active, false)
 })
-
 test('delete transaction invalidates sessions and clears both bound stores before metadata deletion', () => {
-  const existing = spec()
-  let instances = [existing]
-  let ssh: string | null = 'old-ssh'
-  let token: string | null = 'old-token'
-  let password: string | null = 'old-password'
-  let active = true
-  const calls: string[] = []
-  const deps: DeleteConnectionsTransactionDeps = {
-    listInstances: () => [...instances],
-    saveInstances: next => {
-      calls.push('metadata')
-      instances = [...next] as TransportInstanceSpec[]
-      return [...instances]
-    },
-    getSshPassword: () => ssh,
-    getGatewayToken: () => token,
-    getGatewayPassword: () => password,
-    setSshPassword: (_id, value) => { calls.push(`ssh:${value}`); ssh = value },
-    setGatewaySecrets: (_id, nextToken, nextPassword) => {
-      calls.push(`gateway:${nextToken}:${nextPassword}`)
-      token = nextToken
-      password = nextPassword
-    },
-    invalidateGatewaySessions: () => { calls.push('invalidate') },
-    isActive: () => active,
-    disconnect: () => { calls.push('disconnect'); active = false },
-    connect: () => { calls.push('connect'); active = true },
-  }
-  const result = deleteConnectionsTransaction(deps, [])
+  const fake = deleteFake([spec()], { ...OLD_SECRETS, active: true })
+  const result = deleteConnectionsTransaction(fake.deps, [])
   assert.equal(result.ok, true)
-  assert.deepEqual(calls, ['disconnect', 'invalidate', 'gateway:null:null', 'ssh:null', 'metadata'])
-  assert.deepEqual(instances, [])
-  assert.equal(ssh, null)
-  assert.equal(token, null)
-  assert.equal(password, null)
+  assert.deepEqual(fake.calls, ['disconnect', 'invalidate', 'gateway:null:null', 'ssh:null', 'metadata'])
+  assert.deepEqual(fake.snapshot().instances, [])
+  assert.deepEqual(fake.secrets, { ssh: null, token: null, password: null })
 })
-
 test('delete tears down an idle-projected generation before session, secret, and metadata mutation', () => {
-  const existing = spec()
-  const calls: string[] = []
-  const deps: DeleteConnectionsTransactionDeps = {
-    listInstances: () => [existing],
-    saveInstances: () => { calls.push('metadata'); return [] },
-    getSshPassword: () => null,
-    getGatewayToken: () => null,
-    getGatewayPassword: () => null,
-    setSshPassword: () => { calls.push('ssh') },
-    setGatewaySecrets: () => { calls.push('gateway') },
-    invalidateGatewaySessions: () => { calls.push('invalidate') },
-    isActive: () => false,
-    disconnect: () => { calls.push('disconnect') },
-    connect: () => { calls.push('connect') },
-  }
-  assert.equal(deleteConnectionsTransaction(deps, []).ok, true)
-  assert.deepEqual(calls, ['disconnect', 'invalidate', 'gateway', 'ssh', 'metadata'])
+  const fake = deleteFake([spec()], { namesOnly: true })
+  assert.equal(deleteConnectionsTransaction(fake.deps, []).ok, true)
+  assert.deepEqual(fake.calls, ['disconnect', 'invalidate', 'gateway', 'ssh', 'metadata'])
 })
-
 test('delete session invalidation failure is fail-closed before secrets/metadata and reconnects the old row', () => {
-  const existing = spec()
-  let active = true
-  const calls: string[] = []
-  const deps: DeleteConnectionsTransactionDeps = {
-    listInstances: () => [existing],
-    saveInstances: () => { calls.push('metadata'); return [] },
-    getSshPassword: () => 'old-ssh',
-    getGatewayToken: () => 'old-token',
-    getGatewayPassword: () => 'old-password',
-    setSshPassword: () => { calls.push('ssh') },
-    setGatewaySecrets: () => { calls.push('gateway') },
-    invalidateGatewaySessions: () => { calls.push('invalidate'); throw new Error('cache refused') },
-    isActive: () => active,
-    disconnect: () => { calls.push('disconnect'); active = false },
-    connect: () => { calls.push('connect'); active = true },
-  }
-  const result = deleteConnectionsTransaction(deps, [])
+  const fake = deleteFake([spec()], { ...OLD_SECRETS, active: true, failInvalidate: true })
+  const result = deleteConnectionsTransaction(fake.deps, [])
   assert.equal(result.ok, false)
-  assert.deepEqual(calls, ['disconnect', 'invalidate', 'connect'])
-  assert.equal(active, true)
+  assert.deepEqual(fake.calls, ['disconnect', 'invalidate', 'connect'])
+  assert.equal(fake.snapshot().active, true)
   if (!result.ok) assert.equal(result.metadataCommitted, false)
 })
-
 test('delete credential-clear failure restores all main-only snapshots and leaves metadata intact', () => {
-  const existing = spec()
-  let ssh: string | null = 'old-ssh'
-  let token: string | null = 'old-token'
-  let password: string | null = 'old-password'
-  let sshWrites = 0
-  const calls: string[] = []
-  const deps: DeleteConnectionsTransactionDeps = {
-    listInstances: () => [existing],
-    saveInstances: () => { calls.push('metadata'); return [] },
-    getSshPassword: () => ssh,
-    getGatewayToken: () => token,
-    getGatewayPassword: () => password,
-    setGatewaySecrets: (_id, nextToken, nextPassword) => {
-      calls.push(`gateway:${nextToken}:${nextPassword}`)
-      token = nextToken
-      password = nextPassword
-    },
-    setSshPassword: (_id, value) => {
-      sshWrites += 1
-      calls.push(`ssh:${value}`)
-      if (sshWrites === 1) throw new Error('SSH clear failed')
-      ssh = value
-    },
-    invalidateGatewaySessions: () => { calls.push('invalidate') },
-    isActive: () => false,
-    disconnect: () => {},
-    connect: () => {},
-  }
-  const result = deleteConnectionsTransaction(deps, [])
+  const fake = deleteFake([spec()], { ...OLD_SECRETS, quietGeneration: true, failSshClearAt: 1 })
+  const result = deleteConnectionsTransaction(fake.deps, [])
   assert.equal(result.ok, false)
-  assert.deepEqual(calls, [
+  assert.deepEqual(fake.calls, [
     'invalidate', 'gateway:null:null', 'ssh:null',
     'gateway:old-token:old-password', 'ssh:old-ssh',
   ])
-  assert.equal(ssh, 'old-ssh')
-  assert.equal(token, 'old-token')
-  assert.equal(password, 'old-password')
+  assert.deepEqual(fake.secrets, OLD_SECRETS)
   if (!result.ok) assert.equal(result.metadataCommitted, false)
 })
-
 test('legacy instances_set accepts only an exact deeply unchanged no-op roster', () => {
   const one = spec({ id: 'one' })
   const two = spec({ id: 'two', host: 'two.example.com' })
@@ -677,7 +582,6 @@ test('legacy instances_set accepts only an exact deeply unchanged no-op roster',
     { ...two, tokenSet: true },
   ], normalize), [one, two], 'non-secret projections are ignored on an otherwise exact no-op')
 })
-
 test('exact-id delete is immune to stale delete-A plus concurrent delete-A/add-C roster replacement', () => {
   const two = spec({ id: 'two', host: 'two.example.com' })
   const concurrent = spec({ id: 'concurrent', host: 'concurrent.example.com' })
@@ -685,23 +589,9 @@ test('exact-id delete is immune to stale delete-A plus concurrent delete-A/add-C
   // invocation time another actor has already deleted A and added C, so the
   // current authoritative roster is [B, C]. Exact-id delete(A) is a no-op;
   // a stale retained-roster [B] would incorrectly delete C.
-  let instances = [two, concurrent]
-  const calls: string[] = []
-  const deps: DeleteConnectionsTransactionDeps = {
-    listInstances: () => [...instances],
-    saveInstances: next => { calls.push('metadata'); instances = [...next] as TransportInstanceSpec[]; return [...instances] },
-    getSshPassword: () => null,
-    getGatewayToken: () => null,
-    getGatewayPassword: () => null,
-    setSshPassword: () => { calls.push('ssh') },
-    setGatewaySecrets: () => { calls.push('gateway') },
-    invalidateGatewaySessions: () => { calls.push('invalidate') },
-    isActive: () => false,
-    disconnect: () => { calls.push('disconnect') },
-    connect: () => { calls.push('connect') },
-  }
-  const result = deleteConnectionTransaction(deps, 'one')
+  const fake = deleteFake([two, concurrent])
+  const result = deleteConnectionTransaction(fake.deps, 'one')
   assert.equal(result.ok, true)
   assert.deepEqual(result.instances, [two, concurrent])
-  assert.deepEqual(calls, [], 'idempotent missing-id delete cannot mutate concurrent C')
+  assert.deepEqual(fake.calls, [], 'idempotent missing-id delete cannot mutate concurrent C')
 })

@@ -1,17 +1,13 @@
 /**
- * chamber-settings.ts pure-logic tests (design 14 D7) — node:test, no
- * electron. Covers normalize / atomic file round-trip / corrupt preservation /
- * platform gates / close-window decision / quit-risk (update exemption) /
- * patch validation.
+ * chamber-settings.ts pure-logic tests (design 14 D7) — node:test, no electron.
+ * Covers normalize / atomic round-trip / corrupt preservation / platform gates /
+ * close-window decision / quit-risk (update exemption) / patch validation.
  *
- * settings-set → applySettingsPatch 行为族（S-E settings 副作用叶 async 化收口
- * — parity 边界 #2 行为确认）：经 installIpcHandlers 装配注入 fake ctx/edges/
- * registrar，以 fake 副作用叶断言——叶 reject（Swift 异步 leg 失败形态）与叶
- * 同步 throw（Electron 宿主腿形态）同汇于 applySettingsPatch 的 catch 回滚
- * （{error} + keepAwake 反悔 + 绝不持久化 + settings-get 回旧值 + 无 push）；
- * 叶 {ok:false,error}（login-item leg 失败）→ error 原样 loud 返回 + keepAwake
- * 反悔；成功路径 = await 叶后 persist/commit/push 全链。fake ctx 的未注入字段
- * 为 loud stub——误触未装配路径即抛错，绝不静默假通过。
+ * S-E settings-set → applySettingsPatch 行为族（parity 边界 #2）：installIpcHandlers
+ * 装配 fake ctx/edges/registrar，叶 reject 与叶同步 throw 同汇于 catch 回滚
+ * （{error} + keepAwake 反悔 + 绝不持久化 + settings-get 回旧值 + 无 push），
+ * 叶 {ok:false,error} 原样 loud 返回；成功 = await 叶后 persist/commit/push。
+ * fake ctx 未注入字段为 loud stub——误触未装配路径即抛错，绝不静默假通过。
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -39,9 +35,8 @@ import { installIpcHandlers, type ShellAssemblyCtx } from '../../shell-core.ts';
 import { IPC_CHANNELS } from '../../ipc-events.ts';
 
 // ---------------------------------------------------------------------------
-// S-E settings-set → applySettingsPatch 行为族（fake ctx/edges/registrar 装配；
-// 见文件头注记）。installIpcHandlers 全量注册但只 invoke settings 通道——ctx
-// 未注入字段为 loud stub（Proxy 缺失键返回调用即抛的 methodStub），误触即红。
+// S-E settings-set → applySettingsPatch 行为族（见文件头注记）。installIpcHandlers
+// 全量注册但只 invoke settings 通道；未注入字段为 loud methodStub，误触即红。
 // ---------------------------------------------------------------------------
 
 type SettingsSetLeaves = Pick<ShellAssemblyCtx, 'setKeepAwake' | 'setLoginItem'>
@@ -79,10 +74,9 @@ function settingsMethodStub(prefix: string): (..._args: never[]) => never {
 }
 
 /**
- * 装配 installIpcHandlers（fake registrar/edges + 可注入副作用叶的 fake ctx）
- * 并返回 settings 通道驱动面。每次调用独立 registrar/记录数组——测试间零共享。
- * persist 默认真实记录（spy）；commit 更新 holder。opts.persist 可覆写
- * （persist 失败路径用例）；opts.initial 可指定起始 holder。
+ * 装配 installIpcHandlers（fake registrar/edges + 可注入叶的 fake ctx）并返回
+ * settings 通道驱动面；每次调用独立 registrar/记录数组，测试间零共享。
+ * persist 默认真实记录（spy），commit 更新 holder；opts 可覆写 persist/initial。
  */
 function installSettingsHarness(
   leaves: SettingsSetLeaves,
@@ -126,11 +120,9 @@ function installSettingsHarness(
     isQuitting: () => false,
     setKeepAwake: leaves.setKeepAwake,
     setLoginItem: leaves.setLoginItem,
-    // I 组段装配期订阅（installIpcHandlers 先订阅后 start 契约）：空实现即可
-    // （sidecar-ctx 同款装配期空 subscribe）。
+    // 装配期订阅（先订阅后 start 契约）：空实现即可（sidecar-ctx 同款）。
     updateController: { subscribe: () => {} },
-    // 嵌套解构字段必须存在（installIpcHandlers 顶部解构 sshPluginTargets 的子键）；
-    // 空对象 = 子键 undefined——settings 路径不触碰，误触即 loud stub 不可达。
+    // 嵌套解构的顶层键必须存在（空对象 = 子键 undefined）；settings 路径不触碰。
     sshPluginTargets: {},
   };
   const ctx = new Proxy(ctxReal as object, {
@@ -158,11 +150,9 @@ function installSettingsHarness(
 function settingsOf(result: unknown): ChamberSettings {
   return (result as { settings: ChamberSettings }).settings;
 }
-
 test('S-E settings-set: keep-awake 叶 reject（Swift 异步 leg 失败）→ 回滚 + 绝不持久化 + settings-get 回旧值 + {error}', async () => {
   const harness = installSettingsHarness({
-    // Swift flavor 形态：async 叶，leg 失败 = rejected promise（与 Electron
-    // 同步 throw 同一 applySettingsPatch catch 路径）。
+    // Swift flavor 形态：async 叶 reject（与 Electron 同步 throw 同一 catch 路径）。
     setKeepAwake: async (enabled: boolean): Promise<void> => {
       harness.keepAwakeCalls.push(enabled);
       throw new Error('swift-edge-ui-unavailable:setKeepAwake:no-window');
@@ -182,7 +172,6 @@ test('S-E settings-set: keep-awake 叶 reject（Swift 异步 leg 失败）→ �
   assert.equal(settingsOf(await harness.invoke(IPC_CHANNELS.SETTINGS_GET, null)).keepAwake, false);
   assert.equal(harness.pushes.length, 0, '失败路径不得推送 settings-changed');
 });
-
 test('S-E settings-set: keep-awake 叶同步 throw（Electron 宿主腿形态）→ 同一回滚路径（await 吸收同步失败）', async () => {
   const harness = installSettingsHarness({
     setKeepAwake: (enabled: boolean): void => {
@@ -200,7 +189,6 @@ test('S-E settings-set: keep-awake 叶同步 throw（Electron 宿主腿形态）
   assert.equal(harness.persistCalls.length, 0);
   assert.equal(settingsOf(await harness.invoke(IPC_CHANNELS.SETTINGS_GET, null)).keepAwake, false);
 });
-
 test('S-E settings-set: login-item 叶 {ok:false,error} → error 原样 loud 返回 + keepAwake 反悔 + 绝不持久化 + 旧值', async () => {
   const harness = installSettingsHarness({
     setKeepAwake: async (enabled: boolean): Promise<void> => {
@@ -226,7 +214,6 @@ test('S-E settings-set: login-item 叶 {ok:false,error} → error 原样 loud �
   assert.equal(settingsOf(get).launchAtLogin, false);
   assert.equal(harness.pushes.length, 0);
 });
-
 test('S-E settings-set: 成功路径（async 叶）→ persist 深合并一次 + commit + push + settings-get 新值', async () => {
   const harness = installSettingsHarness({
     setKeepAwake: async (enabled: boolean): Promise<void> => {
@@ -255,7 +242,6 @@ test('S-E settings-set: 成功路径（async 叶）→ persist 深合并一次 +
   const get = await harness.invoke(IPC_CHANNELS.SETTINGS_GET, null);
   assert.equal(settingsOf(get).keepAwake, true);
 });
-
 test('S-E settings-set: persist 失败 → 已应用副作用 await 反悔 + {error:settings persist failed} + holder 旧值', async () => {
   const harness = installSettingsHarness(
     {
@@ -281,13 +267,11 @@ test('S-E settings-set: persist 失败 → 已应用副作用 await 反悔 + {er
   assert.equal(settingsOf(get).launchAtLogin, false);
   assert.deepEqual(harness.holder(), DEFAULT_CHAMBER_SETTINGS);
 });
-
 test('normalizeSettings: defaults for null / non-object', () => {
   assert.deepEqual(normalizeSettings(null), DEFAULT_CHAMBER_SETTINGS);
   assert.deepEqual(normalizeSettings('nope'), DEFAULT_CHAMBER_SETTINGS);
   assert.deepEqual(normalizeSettings(undefined), DEFAULT_CHAMBER_SETTINGS);
 });
-
 test('normalizeSettings: accepts valid fields, rejects bad values, ignores unknown keys', () => {
   const ok = normalizeSettings({ windowCloseBehavior: 'quit', launchAtLogin: true, keepAwake: true, quitConfirmation: false, vscodeOpenInNewWindow: false, registryOrigin: 'https://registry.npmmirror.com', futureKey: 42 });
   assert.deepEqual(ok, {
@@ -307,7 +291,6 @@ test('normalizeSettings: accepts valid fields, rejects bad values, ignores unkno
   assert.equal(normalizeSettings({}).vscodeOpenInNewWindow, true);
   assert.equal(DEFAULT_CHAMBER_SETTINGS.vscodeOpenInNewWindow, true, 'new-window policy defaults ON');
 });
-
 test('normalizeSettings: nested notifications — missing/invalid fields fall back to defaults', () => {
   // 缺字段 → 整组默认。
   assert.deepEqual(normalizeSettings({ notifications: {} }).notifications, DEFAULT_CHAMBER_SETTINGS.notifications);
@@ -327,7 +310,6 @@ test('normalizeSettings: nested notifications — missing/invalid fields fall ba
   assert.equal(normalizeSettings({ notifications: { badgeEnabled: false } }).notifications.badgeEnabled, false);
   assert.equal(normalizeSettings({ notifications: { badgeEnabled: 'yes' } }).notifications.badgeEnabled, true);
 });
-
 test('writeSettingsFile + readSettingsFile round-trip (atomic, 0600)', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'chamber-settings-'));
   const file = path.join(dir, 'chamber-settings.json');
@@ -368,7 +350,6 @@ test('readSettingsFile: corrupt file preserved as *.corrupt, defaults + loud not
   assert.ok(existsSync(`${file}.corrupt`), 'corrupt file preserved');
   assert.ok(!existsSync(file), 'corrupt file moved away');
 });
-
 test('readSettingsFile: non-object JSON is corrupt', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'chamber-settings-'));
   const file = path.join(dir, 'chamber-settings.json');
@@ -377,7 +358,6 @@ test('readSettingsFile: non-object JSON is corrupt', () => {
   assert.ok(read.notice !== null);
   assert.deepEqual(read.settings, DEFAULT_CHAMBER_SETTINGS);
 });
-
 test('readSettingsFile: invalid persisted registry trust anchor is preserved as corrupt', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'chamber-settings-invalid-registry-'));
   const file = path.join(dir, 'chamber-settings.json');
@@ -419,8 +399,7 @@ test('readSettingsFile: malformed nested notifications block is preserved as cor
       rmSync(dir, { recursive: true, force: true });
     }
   }
-  // A well-formed notifications block stays valid (and unknown nested keys
-  // remain a forward-compat tolerance, like the top level).
+  // A well-formed block stays valid (unknown nested keys are forward-compat).
   const dir = mkdtempSync(path.join(tmpdir(), 'chamber-settings-good-notifications-'));
   const file = path.join(dir, 'chamber-settings.json');
   try {
@@ -434,10 +413,8 @@ test('readSettingsFile: malformed nested notifications block is preserved as cor
     rmSync(dir, { recursive: true, force: true });
   }
 });
-
 test('readSettingsFile: wrongly-typed vscodeOpenInNewWindow is preserved as corrupt', () => {
-  // Top-level boolean keys are part of the file's SHAPE: a wrong type must
-  // never be silently re-normalized (corrupt-preserve discipline).
+  // Top-level booleans are part of the file's SHAPE: a wrong type is corruption.
   const dir = mkdtempSync(path.join(tmpdir(), 'chamber-settings-bad-vscode-open-'));
   const file = path.join(dir, 'chamber-settings.json');
   try {
@@ -507,7 +484,6 @@ test('readSettingsFile: malformed nested sessionTodo block is preserved as corru
     rmSync(dir, { recursive: true, force: true });
   }
 });
-
 test('validatePatch: nested sessionTodo — valid partial patches accepted', () => {
   const full = validatePatch({ sessionTodo: { enabled: false, onComplete: false, onAsk: true, onRequest: false } });
   assert.ok(full.ok);
@@ -524,7 +500,6 @@ test('validatePatch: nested sessionTodo — valid partial patches accepted', () 
   const empty = validatePatch({ sessionTodo: {} });
   assert.ok(empty.ok);
 });
-
 test('validatePatch: nested sessionTodo — invalid values rejected loudly', () => {
   const notObject = validatePatch({ sessionTodo: 'yes' });
   assert.equal(notObject.ok, false);
@@ -543,7 +518,6 @@ test('validatePatch: nested sessionTodo — invalid values rejected loudly', () 
 
 
 // --- P-12: shared strictness (Swift StartupSettings parity) ---
-
 test('P-12: duplicate JSON keys at any nesting level are corruption (both flavors judge the same)', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'chamber-settings-dup-keys-'))
   const file = path.join(dir, 'chamber-settings.json')
@@ -552,8 +526,7 @@ test('P-12: duplicate JSON keys at any nesting level are corruption (both flavor
       '{"keepAwake":true,"keepAwake":false}',
       '{"notifications":{"enabled":true,"enabled":false}}',
       '{"sessionTodo":{"onAsk":true,"onAsk":false}}',
-      // Escaped key spelling is the same key (JSON.parse keeps the last, so an
-      // escape-only duplicate is exactly the shape that would change behavior).
+      // Escaped key spelling is the same key (JSON.parse keeps the last).
       '{"keepAwake":true,"\\u006beepAwake":false}',
     ]
     for (const [index, raw] of duplicates.entries()) {
@@ -597,7 +570,6 @@ test('P-12: BOM / NUL encodings and an over-limit size are corruption, never coe
     rmSync(dir, { recursive: true, force: true })
   }
 })
-
 test('P-12: registry-origin shape set is the strict shared one (Swift mirror)', () => {
   const rejected = [
     'http://registry.example',
@@ -635,7 +607,6 @@ test('P-12: registry-origin shape set is the strict shared one (Swift mirror)', 
     if (patch.ok) assert.equal(patch.patch.registryOrigin, canonical)
   }
 })
-
 test('P-12: a persisted strict-rejected origin is preserved as corrupt (read path uses the same predicate)', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'chamber-settings-ipv6-origin-'))
   const file = path.join(dir, 'chamber-settings.json')
@@ -676,9 +647,8 @@ test('shouldHideToTray: needs behavior + recovery surface + no quit in flight', 
 });
 
 test('shouldHideToTray: an armed update restart never hides (macOS quitAndInstall closes windows first)', () => {
-  // macOS: electron-updater's quitAndInstall closes every window BEFORE
-  // before-quit runs, so a hide here aborts the install/relaunch and leaves
-  // the process alive with no window (the 2026-12 real-machine defect).
+  // macOS: quitAndInstall closes every window BEFORE before-quit runs, so a hide
+  // here aborts the install/relaunch and leaves a windowless living process.
   assert.equal(shouldHideToTray('hide-to-tray', true, false, true), false, 'armed restart → the close must reach the window manager');
   assert.equal(shouldHideToTray('hide-to-tray', true, true, true), false);
   assert.equal(shouldHideToTray('hide-to-tray', true, false, false), true, 'not armed → normal hide-to-tray behavior');
@@ -686,19 +656,15 @@ test('shouldHideToTray: an armed update restart never hides (macOS quitAndInstal
 });
 
 test('shouldUpdaterQuitTakeOver: only a released-free, armed leg with the window already gone', () => {
-  // The `armNativeUpdaterQuit` fallback decision (2026-09-13 review B3): the
-  // native macOS leg closes the window and then stops without quitting, so the
-  // host takes over — but ONLY under all three conditions. Each row is a real
-  // failure mode: a quit already running must not be raced, a released arming
-  // (restart failed / stalled) must not be followed by a self-quit, and a live
-  // window means the user is looking at the app.
+  // The `armNativeUpdaterQuit` fallback (B3): the native macOS leg closes the
+  // window and stops without quitting, so the host takes over — ONLY under all
+  // three conditions: no quit in flight, arming still held, window already gone.
   assert.equal(shouldUpdaterQuitTakeOver(false, true, false), true, 'armed + window gone + no quit → take over');
   assert.equal(shouldUpdaterQuitTakeOver(true, true, false), false, 'a real quit is in flight → never race the teardown');
   assert.equal(shouldUpdaterQuitTakeOver(false, false, false), false, 'the arming was released → never self-quit');
   assert.equal(shouldUpdaterQuitTakeOver(false, true, true), false, 'the window is still there → the user owns the exit');
   assert.equal(shouldUpdaterQuitTakeOver(true, false, true), false);
 });
-
 test('computeQuitRisk: only a running local instance triggers confirm (2026-08: remote tunnels never prompt)', () => {
   const local = computeQuitRisk({ quitConfirmation: true, localRunning: true, updateDownloadReady: false });
   assert.equal(local.needsConfirm, true);
@@ -707,19 +673,16 @@ test('computeQuitRisk: only a running local instance triggers confirm (2026-08: 
   assert.equal(none.needsConfirm, false);
   assert.deepEqual(none.reasons, []);
 });
-
 test('computeQuitRisk: quitConfirmation off never confirms', () => {
   const off = computeQuitRisk({ quitConfirmation: false, localRunning: true, updateDownloadReady: false });
   assert.equal(off.needsConfirm, false);
   assert.deepEqual(off.reasons, []);
 });
-
 test('computeQuitRisk: downloaded update exempts confirmation (design 14 D2)', () => {
   const risk = computeQuitRisk({ quitConfirmation: true, localRunning: true, updateDownloadReady: true });
   assert.equal(risk.needsConfirm, false);
   assert.deepEqual(risk.reasons, []);
 });
-
 test('validatePatch: rejects unknown keys and bad types loudly', () => {
   const unknown = validatePatch({ nope: true });
   assert.equal(unknown.ok, false);
@@ -732,7 +695,6 @@ test('validatePatch: rejects unknown keys and bad types loudly', () => {
   const notObject = validatePatch('x');
   assert.equal(notObject.ok, false);
 });
-
 test('validatePatch: accepts known partial patches', () => {
   const ok = validatePatch({ windowCloseBehavior: 'quit', keepAwake: true, quitConfirmation: false });
   assert.ok(ok.ok);
@@ -742,7 +704,6 @@ test('validatePatch: accepts known partial patches', () => {
   assert.ok(vscodeOff.ok);
   if (vscodeOff.ok) assert.deepEqual(vscodeOff.patch, { vscodeOpenInNewWindow: false });
 });
-
 test('validatePatch: nested notifications — valid partial patches accepted', () => {
   const full = validatePatch({ notifications: { enabled: true, mode: 'always', onComplete: false, onAsk: true, onRequest: true } });
   assert.ok(full.ok);
@@ -755,7 +716,6 @@ test('validatePatch: nested notifications — valid partial patches accepted', (
   const empty = validatePatch({ notifications: {} });
   assert.ok(empty.ok);
 });
-
 test('validatePatch: nested notifications — badgeEnabled rides as its own partial key', () => {
   const off = validatePatch({ notifications: { badgeEnabled: false } });
   assert.ok(off.ok);
@@ -765,7 +725,6 @@ test('validatePatch: nested notifications — badgeEnabled rides as its own part
   const bad = validatePatch({ notifications: { badgeEnabled: 'yes' } });
   assert.equal(bad.ok, false);
 });
-
 test('validatePatch: nested notifications — invalid values rejected loudly', () => {
   const notObject = validatePatch({ notifications: 'yes' });
   assert.equal(notObject.ok, false);
@@ -787,10 +746,8 @@ test('validatePatch: nested notifications — invalid values rejected loudly', (
 });
 
 // ---------------------------------------------------------------------------
-// S-08 / S-41 / P-20 纯判定（2026-12 macOS 审计修复；接线断言见
-// test/runtime/main-decision-gates.test.ts，行为矩阵在这里）。
+// S-08 / S-41 / P-20 纯判定（接线断言见 test/runtime/main-decision-gates.test.ts）。
 // ---------------------------------------------------------------------------
-
 test('S-41 readSettingsFile: missing / ok / corrupt are distinguishable for side-effect callers', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'dsh-chamber-settings-state-'));
   try {
@@ -822,9 +779,8 @@ test('S-41 readSettingsFile: missing / ok / corrupt are distinguishable for side
 });
 
 test('S-41 launchAtLoginReconcileDecision: only a readable file may move the OS login item', () => {
-  // ok/missing replay the persisted value (missing = defaults → false, which
-  // still unregisters a historical leftover — Swift StartupSettings does the
-  // same for .missing); corrupt is the one state that must never touch it.
+  // ok/missing replay the persisted value (missing = defaults → false, still
+  // unregistering a leftover, as Swift StartupSettings does); corrupt never moves it.
   assert.deepEqual(launchAtLoginReconcileDecision('ok', true), { action: 'apply', enabled: true });
   assert.deepEqual(launchAtLoginReconcileDecision('ok', false), { action: 'apply', enabled: false });
   assert.deepEqual(launchAtLoginReconcileDecision('missing', false), { action: 'apply', enabled: false });
@@ -839,8 +795,7 @@ test('S-41 follow-up: the *.corrupt sibling keeps the next launch indeterminate 
   const dir = mkdtempSync(path.join(tmpdir(), 'dsh-chamber-settings-corrupt-sibling-'));
   try {
     const file = path.join(dir, 'chamber-settings.json');
-    // Launch 1 — corrupt: preserved as *.corrupt (loud) and reported corrupt,
-    // so the login-item reconcile skips instead of replaying the default.
+    // Launch 1 — corrupt is preserved as *.corrupt and reported, so reconcile skips.
     writeFileSync(file, 'not-json{');
     const first = readSettingsFile(file);
     assert.equal(first.state, 'corrupt');
@@ -850,10 +805,8 @@ test('S-41 follow-up: the *.corrupt sibling keeps the next launch indeterminate 
     assert.equal(existsSync(file), false, 'corrupt file moved aside');
     assert.equal(existsSync(`${file}.corrupt`), true, 'corrupt evidence preserved');
 
-    // Launch 2 — the live file is missing but the preserved sibling remains
-    // durable evidence. Decaying to 'missing' here used to replay the default
-    // launchAtLogin:false and silently UNREGISTER the user's login item one
-    // launch after the corruption.
+    // Launch 2 — the live file is missing but the *.corrupt sibling is durable
+    // evidence: decaying to 'missing' would replay the default and UNREGISTER it.
     const second = readSettingsFile(file);
     assert.equal(second.state, 'corrupt', 'sibling evidence must keep the state indeterminate');
     assert.notEqual(second.notice, null, 'the second launch stays loud');
@@ -870,8 +823,7 @@ test('S-41 follow-up: the *.corrupt sibling keeps the next launch indeterminate 
     assert.deepEqual(launchAtLoginReconcileDecision(clean.state, clean.settings.launchAtLogin),
       { action: 'apply', enabled: false });
 
-    // A readable file always wins over the stale sibling: after the user saves
-    // settings again, the next launch applies them normally.
+    // A readable file wins over the stale sibling: the next launch applies it.
     writeSettingsFile(file, { ...DEFAULT_CHAMBER_SETTINGS, launchAtLogin: true });
     const recovered = readSettingsFile(file);
     assert.equal(recovered.state, 'ok');
@@ -882,7 +834,6 @@ test('S-41 follow-up: the *.corrupt sibling keeps the next launch indeterminate 
     rmSync(dir, { recursive: true, force: true });
   }
 });
-
 test('P-20 verifyLaunchAtLoginReadBack: the OS state decides, never the write call', () => {
   assert.deepEqual(verifyLaunchAtLoginReadBack(true, { openAtLogin: true }, 'darwin'), { ok: true });
   assert.deepEqual(verifyLaunchAtLoginReadBack(false, { openAtLogin: false }, 'win32'), { ok: true });
@@ -915,41 +866,28 @@ test('P-20 verifyLaunchAtLoginReadBack: the OS state decides, never the write ca
 test('S-08 decideMainWindowClose: a close that would quit is deferred until the decision', () => {
   // hide-to-tray with a recovery surface: the only branch that may hide.
   assert.equal(decideMainWindowClose({
-    behavior: 'hide-to-tray', recoveryAvailable: true, quitRequested: false, quitConfirmed: false, updateRestartArmed: false,
-  }), 'hide');
-  // No recovery surface (win/linux without tray): this close would end in a
-  // quit, so it must keep the window alive for the confirmation dialog —
-  // the X-close cancel path used to rebuild/reload the page here.
+    behavior: 'hide-to-tray', recoveryAvailable: true, quitRequested: false, quitConfirmed: false, updateRestartArmed: false }), 'hide');
+  // No recovery surface: this close would end in a quit, so the window stays
+  // alive for the confirmation dialog (no X-close rebuild/reload).
   assert.equal(decideMainWindowClose({
-    behavior: 'hide-to-tray', recoveryAvailable: false, quitRequested: false, quitConfirmed: false, updateRestartArmed: false,
-  }), 'defer-quit');
-  // close-behavior='quit': defer until confirmed; only a confirmed quit may
-  // destroy the window (cancel then restores it in place, no page reload).
+    behavior: 'hide-to-tray', recoveryAvailable: false, quitRequested: false, quitConfirmed: false, updateRestartArmed: false }), 'defer-quit');
+  // close-behavior='quit': defer until confirmed; only a confirmed quit destroys.
   assert.equal(decideMainWindowClose({
-    behavior: 'quit', recoveryAvailable: true, quitRequested: false, quitConfirmed: false, updateRestartArmed: false,
-  }), 'defer-quit');
+    behavior: 'quit', recoveryAvailable: true, quitRequested: false, quitConfirmed: false, updateRestartArmed: false }), 'defer-quit');
   assert.equal(decideMainWindowClose({
-    behavior: 'quit', recoveryAvailable: true, quitRequested: false, quitConfirmed: true, updateRestartArmed: false,
-  }), 'close');
+    behavior: 'quit', recoveryAvailable: true, quitRequested: false, quitConfirmed: true, updateRestartArmed: false }), 'close');
   // A real quit already in flight (before-quit confirmed it) may close.
   assert.equal(decideMainWindowClose({
-    behavior: 'hide-to-tray', recoveryAvailable: true, quitRequested: true, quitConfirmed: true, updateRestartArmed: false,
-  }), 'close');
-  // Quit requested but not yet confirmed (confirmation dialog open): keep the
-  // window alive — this is the S-08 regression the decision must not allow.
+    behavior: 'hide-to-tray', recoveryAvailable: true, quitRequested: true, quitConfirmed: true, updateRestartArmed: false }), 'close');
+  // Quit requested but unconfirmed (dialog open): keep the window alive (S-08).
   assert.equal(decideMainWindowClose({
-    behavior: 'quit', recoveryAvailable: true, quitRequested: true, quitConfirmed: false, updateRestartArmed: false,
-  }), 'defer-quit');
-  // An armed update restart owns the window teardown (macOS quitAndInstall
-  // closes windows BEFORE before-quit): that close must reach the WM.
+    behavior: 'quit', recoveryAvailable: true, quitRequested: true, quitConfirmed: false, updateRestartArmed: false }), 'defer-quit');
+  // An armed update restart owns teardown (macOS closes windows before before-quit).
   assert.equal(decideMainWindowClose({
-    behavior: 'quit', recoveryAvailable: true, quitRequested: false, quitConfirmed: false, updateRestartArmed: true,
-  }), 'close');
+    behavior: 'quit', recoveryAvailable: true, quitRequested: false, quitConfirmed: false, updateRestartArmed: true }), 'close');
   assert.equal(decideMainWindowClose({
-    behavior: 'hide-to-tray', recoveryAvailable: true, quitRequested: false, quitConfirmed: false, updateRestartArmed: true,
-  }), 'close');
+    behavior: 'hide-to-tray', recoveryAvailable: true, quitRequested: false, quitConfirmed: false, updateRestartArmed: true }), 'close');
   // Confirmed quit + armed update: still a real close.
   assert.equal(decideMainWindowClose({
-    behavior: 'quit', recoveryAvailable: false, quitRequested: true, quitConfirmed: true, updateRestartArmed: true,
-  }), 'close');
+    behavior: 'quit', recoveryAvailable: false, quitRequested: true, quitConfirmed: true, updateRestartArmed: true }), 'close');
 });

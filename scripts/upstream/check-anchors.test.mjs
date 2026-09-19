@@ -1,8 +1,6 @@
 /**
- * check-anchors.test.mjs — 符号锚探针的纯逻辑锁步。
- *
- * 面：锚点解析 / 各语言具名声明抽取 / literal 恰好一次纪律 / 遗留锚计数与三分类 /
- * 生成块区间（--fix 拒绝改写）/ registry 符号锚在临时目录上的 ok-missing 判定。
+ * check-anchors.test.mjs — 符号锚探针的纯逻辑锁步：锚点解析 / 各语言具名声明抽取 / literal 恰好一次纪律 /
+ * 遗留锚计数与三分类 / 生成块区间（--fix 拒绝改写）/ registry 符号锚在临时目录上的 ok-missing 判定。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -17,15 +15,8 @@ import {
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 /**
- * 预算上限的独立钉：升级/迁移只能调低。要在上面**上调**，必须同时改这里——
- * 这是故意的两文件编辑（否则手改 anchors-budget.json 就能把棘轮废掉）。
- *
- * 2026-12 上调 731 → 735（整合 main 788c6d55 时记录）：main 的 4 个已落地提交新增了
- * 4 处新裸锚（STATUS.md 2 处、deviations.md 2 处），uniform 整合侧零新增；735 即整合
- * 后的实测值，此后只降不升。
- * 2026-12 再次上调 735 → 743（整合 ui-chat-render-fix 时记录）：该分支的新「看不到但能点」
- * STATUS 条目自带 8 处诊断裸锚（按 Lead 裁决原样保留，不转符号锚、不改前两轮既有证据），
- * 743 即整合后的实测值；批量语义化重锚仍按 D15 在全部在途分支落地后执行，届时逐批调低。
+ * 预算上限的独立钉：升级/迁移只能调低；上调必须同时改这里并说明理由——故意的两文件编辑（否则手改 anchors-budget.json
+ * 就能把棘轮废掉）。当前钉为整合后的实测值，此后只降不升；批量语义化重锚仍按 D15 在全部在途分支落地后执行，届时逐批调低。
  */
 const BUDGET_CEILING = 743
 

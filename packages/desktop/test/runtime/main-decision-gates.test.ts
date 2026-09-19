@@ -1,13 +1,10 @@
 /**
- * Main-process decision gates extracted from main.ts — merged suite
- * (2026-12 test reorganization).
+ * Main-process decision gates extracted from main.ts — merged suite.
  *
- * Sources (both were package-root tests; now one file):
- *   - apply-now-gate.test.ts   — the RUNTIME_APPLY_NOW gate matrix.
- *   - disk-evidence-gate.test.ts — the D7 disk-evidence skip set.
- * Both modules are pure decision functions extracted out of the electron entry
- * (main.ts) precisely so their matrices carry real unit assertions; that shared
- * subject area ("a gate lifted out of main.ts") is what justified the merge.
+ * Sources: apply-now-gate.test.ts (the RUNTIME_APPLY_NOW gate matrix) and
+ * disk-evidence-gate.test.ts (the D7 disk-evidence skip set). Both are pure
+ * decision functions lifted out of the electron entry (main.ts) so their
+ * matrices carry real unit assertions.
  */
 
 import { test } from 'node:test'
@@ -26,6 +23,7 @@ import {
   shouldScheduleHangReload,
 } from '../../shell-core.ts'
 import type { RuntimePhase } from '@dsh-chamber/dsh-runtime'
+import { balancedBlock } from './source-blocks.ts'
 
 // --- merged from test/runtime/apply-now-gate.test.ts ---
 function gateInput(overrides: Partial<ApplyNowGateInput> = {}): ApplyNowGateInput {
@@ -46,12 +44,10 @@ function gateInput(overrides: Partial<ApplyNowGateInput> = {}): ApplyNowGateInpu
     ...overrides,
   }
 }
-
 test('apply-now gate: a clean pending state resolves ok with the durable target', () => {
   const result = evaluateApplyNowGate(gateInput())
   assert.deepEqual(result, { ok: true, target: '2.0.0' })
 })
-
 test('apply-now gate: busy rejects (operation in flight or writer fence held)', () => {
   assert.deepEqual(evaluateApplyNowGate(gateInput({ operationBusy: true })), { ok: false, reason: 'busy' })
   assert.deepEqual(evaluateApplyNowGate(gateInput({ fenceBusy: true })), { ok: false, reason: 'busy' })
@@ -64,7 +60,6 @@ test('apply-now gate: busy rejects (operation in flight or writer fence held)', 
     pending: null,
   })), { ok: false, reason: 'busy' })
 })
-
 test('apply-now gate: env source rejects (env outranks every persisted override)', () => {
   assert.deepEqual(evaluateApplyNowGate(gateInput({ source: 'env' })), { ok: false, reason: 'env' })
   // Env outranks the later gates (blocked/not-ready/no-pending/tree).
@@ -76,10 +71,8 @@ test('apply-now gate: env source rejects (env outranks every persisted override)
     treeValid: false,
   })), { ok: false, reason: 'env' })
 })
-
 test('apply-now gate: not-allowed rejects for non-pending phases and unsupported management', () => {
-  // Every non-pending phase is rejected (pending is the only phase exposing
-  // apply-now in the action matrix).
+  // Non-pending phases are all rejected (pending alone exposes apply-now).
   for (const phase of ['idle', 'available', 'applying', 'applied', 'rollback', 'snapshot-failed', 'failed', 'error']) {
     assert.deepEqual(evaluateApplyNowGate(gateInput({ phase })), { ok: false, reason: 'not-allowed' }, phase)
   }
@@ -87,7 +80,6 @@ test('apply-now gate: not-allowed rejects for non-pending phases and unsupported
   assert.deepEqual(evaluateApplyNowGate(gateInput({ managementSupported: false })), { ok: false, reason: 'not-allowed' })
   assert.deepEqual(evaluateApplyNowGate(gateInput({ managementSupported: false, phase: 'pending' })), { ok: false, reason: 'not-allowed' })
 })
-
 test('apply-now gate: runtimeBlocked rejects', () => {
   assert.deepEqual(evaluateApplyNowGate(gateInput({ runtimeBlocked: true })), { ok: false, reason: 'blocked' })
   // Blocked outranks the not-ready/no-pending/snapshot/tree gates.
@@ -99,7 +91,6 @@ test('apply-now gate: runtimeBlocked rejects', () => {
     treeValid: false,
   })), { ok: false, reason: 'blocked' })
 })
-
 test('apply-now gate: not-ready rejects unless the control plane is ready or degraded', () => {
   for (const connectionState of ['stopped', 'restarting', 'restart-exhausted', 'error', 'starting', 'none']) {
     assert.deepEqual(
@@ -112,14 +103,12 @@ test('apply-now gate: not-ready rejects unless the control plane is ready or deg
   assert.deepEqual(evaluateApplyNowGate(gateInput({ connectionState: 'none' })), { ok: false, reason: 'not-ready' })
   assert.deepEqual(evaluateApplyNowGate(gateInput({ connectionState: 'degraded' })), { ok: true, target: '2.0.0' })
 })
-
 test('apply-now gate: no-pending rejects when all three durable sources are empty (F5)', () => {
   assert.deepEqual(
     evaluateApplyNowGate(gateInput({ pending: null, journalTarget: null, overridePending: null })),
     { ok: false, reason: 'no-pending' },
   )
-  // Target resolution precedes the tree/snapshot checks: with no durable
-  // target there is nothing to snapshot-reject or tree-preflight.
+  // Target resolution precedes the snapshot/tree checks (nothing to reject).
   assert.deepEqual(evaluateApplyNowGate(gateInput({
     pending: null,
     journalTarget: null,
@@ -128,25 +117,21 @@ test('apply-now gate: no-pending rejects when all three durable sources are empt
     treeValid: false,
   })), { ok: false, reason: 'no-pending' })
 })
-
 test('apply-now gate: snapshot-failed rejects (retry-apply owns that path)', () => {
   assert.deepEqual(evaluateApplyNowGate(gateInput({ snapshotFailed: true })), { ok: false, reason: 'snapshot-failed' })
   // Snapshot failure outranks the tree preflight.
   assert.deepEqual(evaluateApplyNowGate(gateInput({ snapshotFailed: true, treeValid: false })), { ok: false, reason: 'snapshot-failed' })
 })
-
 test('apply-now gate: invalid-tree rejects a resolved target whose tree preflight failed', () => {
   assert.deepEqual(evaluateApplyNowGate(gateInput({ treeValid: false })), { ok: false, reason: 'invalid-tree' })
-  // A builtin-anchor journal target is not a version tree: apply-now must
-  // never treat it as a valid target (pending is the only version-tree source
-  // this path accepts; a builtin intent resolves nothing here).
+  // A builtin-anchor journal target is not a version tree: pending is the only
+  // version-tree source this path accepts, so a builtin intent resolves nothing.
   assert.deepEqual(evaluateApplyNowGate(gateInput({
     pending: null,
     journalTarget: 'builtin-anchor',
     treeValid: false,
   })), { ok: false, reason: 'invalid-tree' })
 })
-
 test('apply-now gate: target resolution prefers pending over journalTarget over overridePending', () => {
   assert.deepEqual(
     evaluateApplyNowGate(gateInput({ pending: '2.0.0', journalTarget: '3.0.0', overridePending: '4.0.0' })),
@@ -160,8 +145,7 @@ test('apply-now gate: target resolution prefers pending over journalTarget over 
     evaluateApplyNowGate(gateInput({ pending: null, journalTarget: null, overridePending: '4.0.0' })),
     { ok: true, target: '4.0.0' },
   )
-  // overridePending alone is enough (the post-confirm gate parity fix — the
-  // second gate must accept the same three-source target the first does).
+  // overridePending alone is enough (both gates accept the same three sources).
   assert.deepEqual(
     evaluateApplyNowGate(gateInput({ pending: null, journalTarget: null, overridePending: '1.9.0', connectionState: 'degraded' })),
     { ok: true, target: '1.9.0' },
@@ -170,7 +154,6 @@ test('apply-now gate: target resolution prefers pending over journalTarget over 
 
 
 // --- G21: Electron renderer-recovery policy (behavioural, not a source anchor) ---
-
 test('G21 renderer recovery: at most 3 reloads inside a 60s window, then exhausted', () => {
   const budget = { windowStart: 0, count: 0 }
   // windowStart 0: the first three attempts inside 60s are allowed.
@@ -183,10 +166,9 @@ test('G21 renderer recovery: at most 3 reloads inside a 60s window, then exhaust
   assert.equal(RENDERER_RECOVERY_MAX_RELOADS, 3)
   assert.equal(RENDERER_RECOVERY_WINDOW_MS, 60_000)
 })
-
 test('G21 renderer recovery: the window reset boundary is the strict greater-than (moved verbatim from main.ts)', () => {
   // Exactly 60s after the window started is still inside it (attempt 4 stays
-  // exhausted); one millisecond later a fresh window opens with attempt 1.
+  // exhausted); a moment later a fresh window opens with attempt 1.
   const exact = { windowStart: 10_000, count: 3 }
   assert.deepEqual(noteRendererReload(exact, 70_000), { allowed: false, attempt: 4 })
   const past = { windowStart: 10_000, count: 3 }
@@ -194,7 +176,6 @@ test('G21 renderer recovery: the window reset boundary is the strict greater-tha
   assert.equal(past.windowStart, 70_001)
   assert.equal(past.count, 1)
 })
-
 test('G21 renderer recovery: crash and hang gates', () => {
   // clean-exit is the normal window teardown; a quit in flight owns every reason.
   assert.equal(shouldReloadAfterCrash('clean-exit', false), false)
@@ -210,7 +191,6 @@ test('G21 renderer recovery: crash and hang gates', () => {
   assert.equal(RENDERER_HANG_RELOAD_DELAY_MS, 15_000)
   assert.equal(RENDERER_CRASH_RELOAD_DELAY_MS, 500)
 })
-
 test('G21 renderer recovery: main.ts routes every decision through the shared policy', () => {
   // The main process cannot be imported here (it loads electron); this lock keeps
   // the wiring on the tested policy instead of letting the inline decision grow back.
@@ -224,8 +204,7 @@ test('G21 renderer recovery: main.ts routes every decision through the shared po
   assert.doesNotMatch(main, /if \(now - reloadWindowStart > 60_000\)/, 'the inline budget must stay extracted')
 })
 // --- merged from test/runtime/disk-evidence-gate.test.ts ---
-/** Full legal phase set of the runtime state machine (typed against the
- *  RuntimePhase union — a typo/rename here fails the typecheck). */
+/** Full legal runtime phase set (typed — a typo/rename fails the typecheck). */
 const ALL_RUNTIME_PHASES: readonly RuntimePhase[] = [
   'idle', 'checking', 'available', 'downloading', 'installing', 'pending',
   'applying', 'applied', 'rollback', 'snapshot-failed', 'failed', 'error',
@@ -236,21 +215,18 @@ const NON_PROGRESS_PHASES: readonly RuntimePhase[] = [
   'idle', 'checking', 'available', 'pending', 'applied',
   'rollback', 'snapshot-failed', 'failed', 'error',
 ]
-
 test('D7: the three pure-progress phases are in the skip set and skip the disk refresh', () => {
   for (const phase of PROGRESS_PHASES) {
     assert.ok(DISK_SKIP_PROGRESS_PHASES.has(phase), `${phase} must be in DISK_SKIP_PROGRESS_PHASES`)
     assert.equal(shouldSkipDiskRefresh(phase), true, `${phase} must skip the disk refresh`)
   }
 })
-
 test('D7: representative non-progress phases never skip the disk refresh', () => {
   for (const phase of NON_PROGRESS_PHASES) {
     assert.equal(DISK_SKIP_PROGRESS_PHASES.has(phase), false, `${phase} must not be in the skip set`)
     assert.equal(shouldSkipDiskRefresh(phase), false, `${phase} must not skip`)
   }
 })
-
 test('D7: the skip set stays exactly the three progress phases', () => {
   // 恒为 3：任何未来相位进入/离开 skip 集都会在此显式炸出，防止静默扩展。
   assert.equal(DISK_SKIP_PROGRESS_PHASES.size, 3)
@@ -265,19 +241,16 @@ test('D7: the skip set stays exactly the three progress phases', () => {
   )
 })
 
-// --- S-08 / S-41 / P-20: main.ts wiring of the tested decisions (2026-12 macOS audit) ---
-//
-// main.ts loads electron and cannot be imported here; these assertions pin the
-// WIRING to the pure decisions whose behaviour matrices live in
-// test/local-state/chamber-settings.test.ts. The source is comment-stripped so a
-// commented-out line can never satisfy a contract.
+// --- S-08 / S-41 / P-20: main.ts wiring of the tested decisions ---
+// main.ts loads electron and cannot be imported; these assertions pin the WIRING
+// to the pure decisions whose matrices live in chamber-settings.test.ts. The
+// source is comment-stripped so a commented-out line can never satisfy a contract.
 
 const desktopMainCode = stripComments(readFileSync(new URL('../../main.ts', import.meta.url), 'utf8'))
 
-/** The body block of a function whose signature starts with `signature`.
- *  The body brace is the LAST `{` before the end of the signature line: a
- *  return-type annotation may itself contain object type literals
- *  (`): { ok: true } | { ok: false; error: string } {`). */
+/** The body block of a function whose signature starts with `signature`. The
+ *  body brace is the LAST `{` before the end of the signature line (a return
+ *  type may contain object literals: `): { ok: true } | { ... } {`). */
 function functionBodyBlock(source: string, signature: string): string {
   const start = source.indexOf(signature)
   assert.notEqual(start, -1, `missing function ${signature}`)
@@ -286,21 +259,6 @@ function functionBodyBlock(source: string, signature: string): string {
   const open = source.lastIndexOf('{', lineEnd)
   assert.notEqual(open, -1, `no body block for ${signature}`)
   return balancedBlock(source, open)
-}
-
-/** The `{ … }` block that starts at or after `from` (balanced braces). */
-function balancedBlock(source: string, from: number): string {
-  const open = source.indexOf('{', from)
-  assert.notEqual(open, -1, 'no block found in main.ts')
-  let depth = 0
-  for (let index = open; index < source.length; index += 1) {
-    if (source[index] === '{') depth += 1
-    else if (source[index] === '}') {
-      depth -= 1
-      if (depth === 0) return source.slice(open, index + 1)
-    }
-  }
-  assert.fail('unbalanced block in main.ts')
 }
 
 test('S-08 main.ts: the close handler defers the teardown to the shared close decision', () => {
@@ -323,7 +281,6 @@ test('S-08 main.ts: the close handler defers the teardown to the shared close de
   assert.match(handler, /app.quit()/, 'the deferred close must start the quit chain — before-quit owns the decision')
   assert.doesNotMatch(handler, /showMainWindow()/, 'the close handler must never rebuild the window (S-08)')
 })
-
 test('S-08 main.ts: cancelling the quit restores the living window, never rebuilds it', () => {
   const start = desktopMainCode.indexOf("app.on('before-quit'")
   assert.notEqual(start, -1, 'the before-quit handler is gone from main.ts')
@@ -335,14 +292,12 @@ test('S-08 main.ts: cancelling the quit restores the living window, never rebuil
     /mainWindow === null \|\| mainWindow\.isDestroyed\(\)\) \{\s*showMainWindow\(\)/,
     'the destroyed-window rebuild guard must be gone: the window stays alive until the decision resolves',
   )
-  // The no-control-plane allow path must confirm the quit too: the S-08 defer
-  // branch re-enters app.quit() from inside the close event, and an allowing
-  // path that left quitConfirmed false would make Electron close the window
-  // again, re-entering the defer branch — an unbreakable app.quit() ↔ close loop.
+  // The cp===null allow path must confirm the quit: the S-08 defer branch
+  // re-enters app.quit() from the close event, so a false quitConfirmed would
+  // loop app.quit() ↔ close forever.
   assert.match(handler, /if \(cp === null\) \{[\s\S]*?quitConfirmed = true;/,
     'the cp===null allow path must set quitConfirmed (the defer branch re-enters app.quit from close)')
 })
-
 test('S-41 main.ts: a corrupt settings file never moves the OS login item', () => {
   const start = desktopMainCode.indexOf('const settingsLoad = readSettingsFile(')
   assert.notEqual(start, -1, 'the startup settings load is gone from main.ts')
@@ -353,7 +308,6 @@ test('S-41 main.ts: a corrupt settings file never moves the OS login item', () =
   assert.doesNotMatch(desktopMainCode, /applyLaunchAtLogin\(chamberSettings\.launchAtLogin\)/,
     'the raw (defaulted) settings value must never be replayed directly — that silently unregistered a corrupt-file login item')
 })
-
 test('P-20 main.ts: applyLaunchAtLogin reads the OS state back before reporting ok', () => {
   const fn = functionBodyBlock(desktopMainCode, 'function applyLaunchAtLogin(')
   assert.match(fn, /app\.getLoginItemSettings\(\)/, 'the darwin/win32 leg must read the item back')

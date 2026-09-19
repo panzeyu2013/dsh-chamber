@@ -44,8 +44,7 @@ test('portal placement shrinks to a tiny viewport instead of overflowing it', ()
 test('settings roster signature tracks rendered pluginId but ignores timestamp-only changes', () => {
   const base = {
     id: 'dsh-alpha', kind: 'dsh' as const, transport: 'ssh' as const, rawId: 'alpha',
-    label: 'Alpha', connected: true, phase: 'ready',
-    sourceFingerprint: 'proof-a',
+    label: 'Alpha', connected: true, phase: 'ready', sourceFingerprint: 'proof-a',
     pluginDiagnostic: { state: 'bundle-load-failed', message: 'load failed', pluginId: 'plugin-a' },
   }
   const signature = serverProjectionSignature([{ ...base, updatedAt: 1 }])

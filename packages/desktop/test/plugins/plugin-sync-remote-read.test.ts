@@ -2,16 +2,15 @@
  * plugin-sync — part 2: remotePluginList — cat-output parsing, ENOENT →
  * profileExists:false, loud ssh failures, the registry-driven chamber probe
  * (half-injected states, git-worktree live probe) and manifest row shape.
- *
- * Sibling parts: plugin-sync.test.ts, plugin-sync-apply.test.ts,
- * plugin-sync-seed.test.ts, plugin-sync-renderer-projection.test.ts.
+ * Sibling parts: plugin-sync.test.ts, plugin-sync-apply.test.ts, plugin-sync-seed.test.ts, plugin-sync-renderer-projection.test.ts.
  */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { guardPluginMutation, sshProtectionFacts, ARCHIVE_CLEANUP_PACKAGE_NAME, CLIENT_GRAPH_PACKAGE_NAME, GIT_WORKTREE_PACKAGE_NAME, OPEN_IN_PACKAGE_NAME, remotePluginList } from '../../plugin-sync.ts'
-import type { ExecFn, ExecResult } from '../../plugin-sync.ts'
+import type { ExecFn } from '../../plugin-sync.ts'
 import { chamberPackageOf, chamberFacts } from '../support/chamber-projection.ts'
+import { chamberFact, err, expectedChamberFacts, ok, SEED_SPEC } from './plugin-sync-fixtures.ts'
 
 /** Compact projection of a manifest's read-face rows (design 21 §6.11.5):
  *  `name:role:protected[:spec]` order-preserving, so the union semantics stay
@@ -31,12 +30,27 @@ function assertRemoteManifest(
   assert.deepEqual(rowShape(rows), expectedRows)
 }
 
-function ok(stdout?: string): ExecResult {
-  return { ok: true, status: { phase: 'ready' }, stdout }
-}
+const CLIENT_GRAPH_PKG_JSON = '{"name":"@dsh-chamber/dsh-chamber-seed-client-graph"}'
+const CLIENT_GRAPH_PKG_VERSIONED = '{"name":"@dsh-chamber/dsh-chamber-seed-client-graph","version":"0.1.2"}'
+const GIT_WORKTREE_PKG_JSON = '{"name":"@dsh-chamber/dsh-chamber-seed-git-worktree"}'
+const CLIENT_ROW_PATCH = "- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-chamber-seed-client-graph'\n"
+const BOTH_ROWS_PATCH = `${CLIENT_ROW_PATCH}    - id: git-worktree\n      name: '@dsh-chamber/dsh-chamber-seed-git-worktree'\n`
 
-function err(error: string): ExecResult {
-  return { ok: false, error }
+/** A fully-seeded read face: both packages' files present, archive-cleanup absent. */
+function seededExec(clientGraphPkg = CLIENT_GRAPH_PKG_JSON, patch = BOTH_ROWS_PATCH): ExecFn {
+  return async (_id, action, payload) => {
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
+      const path = payload.argv?.[0] ?? ''
+      if (path.endsWith('/profiles/web/package.json')) return ok('{}')
+      if (path.includes(`${ARCHIVE_CLEANUP_PACKAGE_NAME}/`)) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
+      if (path.includes(`${CLIENT_GRAPH_PACKAGE_NAME}/dist/index.js`)) return ok('export const graph = 1\n')
+      if (path.includes(`${CLIENT_GRAPH_PACKAGE_NAME}/package.json`)) return ok(clientGraphPkg)
+      if (path.includes(`${GIT_WORKTREE_PACKAGE_NAME}/dist/index.js`)) return ok('export const git = 1\n')
+      if (path.includes(`${GIT_WORKTREE_PACKAGE_NAME}/package.json`)) return ok(GIT_WORKTREE_PKG_JSON)
+      if (path.endsWith('/cordis.patch.yml')) return ok(patch)
+    }
+    return err(`unexpected cat ${payload?.argv?.[0]}`)
+  }
 }
 
 // ============================================================================
@@ -50,29 +64,19 @@ test('remotePluginList: parses dependencies + bundles from cat output', async ()
       if (path.endsWith('/profiles/web/package.json')) {
         return ok(JSON.stringify({ dependencies: { foo: '^1.0.0' }, dsh: { profile: { bundles: ['foo'] } } }))
       }
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/dist/index.js')) {
-        return ok('export const graph = 1\n')
-      }
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/package.json')) {
-        return ok('{"name":"@dsh-chamber/dsh-chamber-seed-client-graph"}')
-      }
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/dist/index.js')) {
-        return ok('export const git = 1\n')
-      }
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/package.json')) {
-        return ok('{"name":"@dsh-chamber/dsh-chamber-seed-git-worktree"}')
-      }
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/dist/index.js')) return ok('export const graph = 1\n')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/package.json')) return ok(CLIENT_GRAPH_PKG_JSON)
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/dist/index.js')) return ok('export const git = 1\n')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/package.json')) return ok(GIT_WORKTREE_PKG_JSON)
       if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup')) {
         return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
       }
-      if (path.endsWith('/cordis.patch.yml')) {
-        // A fully-seeded machine: BOTH chamber boot rows present.
-        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-chamber-seed-client-graph'\n    - id: git-worktree\n      name: '@dsh-chamber/dsh-chamber-seed-git-worktree'\n")
-      }
+      // A fully-seeded machine: BOTH chamber boot rows present.
+      if (path.endsWith('/cordis.patch.yml')) return ok(BOTH_ROWS_PATCH)
     }
     return err(`unexpected cat ${payload?.argv?.[0]}`)
   }
-  const result = await remotePluginList(exec, { id: 's1', remoteDshHome: null })
+  const result = await remotePluginList(exec, SEED_SPEC)
   assertRemoteManifest(result, {
     ok: true,
     manifest: {
@@ -92,7 +96,6 @@ test('remotePluginList: parses dependencies + bundles from cat output', async ()
     'foo:layer:false:^1.0.0',
   ])
 })
-
 test('remotePluginList: ssh rows keep `protected === name ∈ P` (the install conservatism is a write-face/capability fact)', async () => {
   // design 21 §6.11.5 (2026-12 review revision): `protected` means EXACTLY "the write
   // face refuses both directions" (name ∈ P = B₀ ∪ S here). An official-scope row that
@@ -118,7 +121,7 @@ test('remotePluginList: ssh rows keep `protected === name ∈ P` (the install co
     }
     return err(`unexpected ${action}`)
   }
-  const result = await remotePluginList(exec, { id: 's1', remoteDshHome: null })
+  const result = await remotePluginList(exec, SEED_SPEC)
   assert.equal(result.ok, true)
   if (!result.ok) return
   const byName = new Map(result.manifest.rows.map(row => [row.name, row]))
@@ -140,11 +143,10 @@ test('remotePluginList: ssh rows keep `protected === name ∈ P` (the install co
   })
   assert.equal(remove.kind, 'allow', 'removing a stray official copy is restorative and stays allowed')
 })
-
 test('remotePluginList: ENOENT → profileExists:false, ssh failure → {ok:false}', async () => {
   const enoent: ExecFn = async () => err('cat: /home/u/.dsh/profiles/web/package.json: No such file or directory')
   assertRemoteManifest(
-    await remotePluginList(enoent, { id: 's1', remoteDshHome: null }),
+    await remotePluginList(enoent, SEED_SPEC),
     {
       ok: true,
       manifest: {
@@ -164,11 +166,10 @@ test('remotePluginList: ENOENT → profileExists:false, ssh failure → {ok:fals
   )
   const sshDown: ExecFn = async () => err('the ssh exec could not reach the host (exit 255)')
   assert.deepEqual(
-    await remotePluginList(sshDown, { id: 's1', remoteDshHome: null }),
+    await remotePluginList(sshDown, SEED_SPEC),
     { ok: false, error: 'the ssh exec could not reach the host (exit 255)' },
   )
 })
-
 test('remotePluginList: a zh_CN-locale remote ENOENT ("没有那个文件或目录") is a probe miss, never a loud failure', async () => {
   // Real-world case (2026-08 user report): the remote host runs coreutils in
   // the zh_CN locale, so an absent chamber package cats `没有那个文件或目录`
@@ -177,7 +178,7 @@ test('remotePluginList: a zh_CN-locale remote ENOENT ("没有那个文件或目�
   // failed (exit 1): cat: …: 没有那个文件或目录" instead of 未注入.
   const zhEnoent: ExecFn = async () => err('run command failed (exit 1): cat: /home/zeyu/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-git-worktree/package.json: 没有那个文件或目录')
   assertRemoteManifest(
-    await remotePluginList(zhEnoent, { id: 's1', remoteDshHome: null }),
+    await remotePluginList(zhEnoent, SEED_SPEC),
     {
       ok: true,
       manifest: {
@@ -204,35 +205,29 @@ test('remotePluginList: a zh_CN-locale remote ENOENT ("没有那个文件或目�
     assert.equal(redactedResult.manifest.chamber.ok, true)
   }
 })
-
 test('remotePluginList: chamber probe — installed but the boot-layer insert missing (half-injected)', async () => {
   const exec: ExecFn = async (_id, action, payload) => {
     if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
       const path = payload.argv?.[0] ?? ''
       if (path.endsWith('/profiles/web/package.json')) return ok('{}')
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup/package.json')) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup/dist/index.js')) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
+      if (path.includes(`${ARCHIVE_CLEANUP_PACKAGE_NAME}/`)) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
       if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/dist/index.js')) return ok('export const graph = 1\n')
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-chamber-seed-client-graph"}')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/package.json')) return ok(CLIENT_GRAPH_PKG_JSON)
       if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/dist/index.js')) return ok('export const git = 1\n')
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/package.json')) return ok('{"name":"@dsh-chamber/dsh-chamber-seed-git-worktree"}')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/package.json')) return ok(GIT_WORKTREE_PKG_JSON)
       // initProfile template: comments + empty list → the seed would rewrite it.
       if (path.endsWith('/cordis.patch.yml')) return ok('# comment\n[]')
     }
     return err(`unexpected cat ${payload?.argv?.[0]}`)
   }
-  const result = await remotePluginList(exec, { id: 's1', remoteDshHome: null })
+  const result = await remotePluginList(exec, SEED_SPEC)
   assert.ok(result.ok)
   if (result.ok) {
-    assert.deepEqual(chamberFacts(result.manifest.chamber), {
-    [CLIENT_GRAPH_PACKAGE_NAME]: { installed: true, patched: false, version: null, live: null },
-    [GIT_WORKTREE_PACKAGE_NAME]: { installed: true, patched: false, version: null, live: null },
-    [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
-    [OPEN_IN_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
-  })
+    assert.deepEqual(chamberFacts(result.manifest.chamber), expectedChamberFacts({
+      [CLIENT_GRAPH_PACKAGE_NAME]: chamberFact({ installed: true }), [GIT_WORKTREE_PACKAGE_NAME]: chamberFact({ installed: true }),
+    }))
   }
 })
-
 test('remotePluginList: chamber probe ssh failure is loud, never a silent "not injected"', async () => {
   const exec: ExecFn = async (_id, action, payload) => {
     if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
@@ -245,76 +240,61 @@ test('remotePluginList: chamber probe ssh failure is loud, never a silent "not i
     }
     return err(`unexpected cat ${payload?.argv?.[0]}`)
   }
-  const result = await remotePluginList(exec, { id: 's1', remoteDshHome: null })
+  const result = await remotePluginList(exec, SEED_SPEC)
   assert.ok(result.ok)
   if (result.ok) {
     assert.equal(result.manifest.chamber.ok, false)
     assert.match(result.manifest.chamber.error, /dsh-chamber-seed-client-graph probe failed/)
   }
 })
-
 test('remotePluginList: chamber probe — package.json present but dist/index.js missing = NOT installed (two-file definition)', async () => {
   const exec: ExecFn = async (_id, action, payload) => {
     if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
       const path = payload.argv?.[0] ?? ''
       if (path.endsWith('/profiles/web/package.json')) return ok('{}')
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup/package.json')) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup/dist/index.js')) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-chamber-seed-client-graph"}')
-            if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/dist/index.js')) return ok('export const git = 1\n')
-            if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/package.json')) return ok('{"name":"@dsh-chamber/dsh-chamber-seed-git-worktree"}')
+      if (path.includes(`${ARCHIVE_CLEANUP_PACKAGE_NAME}/`)) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/dist/index.js')) return ok('export const git = 1\n')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/package.json')) return ok(GIT_WORKTREE_PKG_JSON)
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/package.json')) return ok(CLIENT_GRAPH_PKG_JSON)
       // dist/index.js genuinely missing: a package.json alone is a
       // half-installed module A (the boot row could not resolve).
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/dist/index.js')) {
-        return ok('export const git = 1\n')
-      }
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/package.json')) {
-        return ok('{"name":"@dsh-chamber/dsh-chamber-seed-git-worktree"}')
-      }
       if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/dist/index.js')) {
         return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
       }
-      if (path.endsWith('/cordis.patch.yml')) {
-        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-chamber-seed-client-graph'\n")
-      }
+      if (path.endsWith('/cordis.patch.yml')) return ok(CLIENT_ROW_PATCH)
     }
     return err(`unexpected cat ${payload?.argv?.[0]}`)
   }
-  const result = await remotePluginList(exec, { id: 's1', remoteDshHome: null })
+  const result = await remotePluginList(exec, SEED_SPEC)
   assert.ok(result.ok)
   if (result.ok) {
-    assert.deepEqual(chamberFacts(result.manifest.chamber), {
-    [CLIENT_GRAPH_PACKAGE_NAME]: { installed: false, patched: true, version: null, live: null },
-    [GIT_WORKTREE_PACKAGE_NAME]: { installed: true, patched: false, version: null, live: null },
-    [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
-    [OPEN_IN_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
-  })
+    assert.deepEqual(chamberFacts(result.manifest.chamber), expectedChamberFacts({
+      [CLIENT_GRAPH_PACKAGE_NAME]: chamberFact({ patched: true }), [GIT_WORKTREE_PACKAGE_NAME]: chamberFact({ installed: true }),
+    }))
   }
 })
-
 test('remotePluginList: chamber probe ssh failure on dist/index.js is loud, never a silent "not injected"', async () => {
   const exec: ExecFn = async (_id, action, payload) => {
     if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
       const path = payload.argv?.[0] ?? ''
       if (path.endsWith('/profiles/web/package.json')) return ok('{}')
       if (path.endsWith('/cordis.patch.yml')) return ok('# comment\n[]')
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-chamber-seed-client-graph"}')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/package.json')) return ok(CLIENT_GRAPH_PKG_JSON)
       if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/dist/index.js')) return ok('export const git = 1\n')
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/package.json')) return ok('{"name":"@dsh-chamber/dsh-chamber-seed-git-worktree"}')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/package.json')) return ok(GIT_WORKTREE_PKG_JSON)
       if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/dist/index.js')) {
         return err('the ssh exec could not reach the host (exit 255)')
       }
     }
     return err(`unexpected cat ${payload?.argv?.[0]}`)
   }
-  const result = await remotePluginList(exec, { id: 's1', remoteDshHome: null })
+  const result = await remotePluginList(exec, SEED_SPEC)
   assert.ok(result.ok)
   if (result.ok) {
     assert.equal(result.manifest.chamber.ok, false)
     assert.ok(result.manifest.chamber.ok === false && /dsh-chamber-seed-client-graph probe failed/.test(result.manifest.chamber.error))
   }
 })
-
 test('remotePluginList: a `.ssh`-named home whose probe cat ENOENTs under redaction still classifies as absent (never a loud probe error)', async () => {
   // The ssh provider replaces a `.ssh*`-home ENOENT line with the redacted
   // summary and re-attaches the marker — the error text a fixed provider
@@ -327,16 +307,8 @@ test('remotePluginList: a `.ssh`-named home whose probe cat ENOENTs under redact
       if (path.endsWith('/profiles/web/package.json')) {
         return err('run command failed (exit 1): cat: [ssh material redacted]: No such file or directory')
       }
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph')) {
-        return err('run command failed (exit 1): [ssh material redacted]: No such file or directory')
-      }
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree')) {
-        return err('run command failed (exit 1): [ssh material redacted]: No such file or directory')
-      }
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup')) {
-        return err('run command failed (exit 1): [ssh material redacted]: No such file or directory')
-      }
-      if (path.endsWith('/cordis.patch.yml')) {
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph') || path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree')
+        || path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup') || path.endsWith('/cordis.patch.yml')) {
         return err('run command failed (exit 1): [ssh material redacted]: No such file or directory')
       }
     }
@@ -346,94 +318,48 @@ test('remotePluginList: a `.ssh`-named home whose probe cat ENOENTs under redact
   assert.ok(result.ok, 'a redacted ENOENT is a probe miss, not a loud probe failure')
   if (result.ok) {
     assert.equal(result.manifest.profileExists, false)
-    assert.deepEqual(chamberFacts(result.manifest.chamber), {
-    [CLIENT_GRAPH_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
-    [GIT_WORKTREE_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
-    [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
-    [OPEN_IN_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
-  })
+    assert.deepEqual(chamberFacts(result.manifest.chamber), expectedChamberFacts())
   }
 })
-
 test('remotePluginList: chamber probe parses module A version and reports live-effect via liveProbe', async () => {
-  const exec: ExecFn = async (_id, action, payload) => {
-    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
-      const path = payload.argv?.[0] ?? ''
-      if (path.endsWith('/profiles/web/package.json')) return ok('{}')
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup/package.json')) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup/dist/index.js')) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/dist/index.js')) return ok('export const graph = 1\n')
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/dist/index.js')) return ok('export const git = 1\n')
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/package.json')) return ok('{"name":"@dsh-chamber/dsh-chamber-seed-git-worktree"}')
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/package.json')) {
-        return ok('{"name":"@dsh-chamber/dsh-chamber-seed-client-graph","version":"0.1.2"}')
-      }
-      if (path.endsWith('/cordis.patch.yml')) {
-        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-chamber-seed-client-graph'\n    - id: git-worktree\n      name: '@dsh-chamber/dsh-chamber-seed-git-worktree'\n")
-      }
-    }
-    return err(`unexpected cat ${payload?.argv?.[0]}`)
-  }
-  const gitSeeded = (live: boolean | null) => ({ installed: true, patched: true, version: null, live })
+  const exec = seededExec(CLIENT_GRAPH_PKG_VERSIONED)
+  const gitSeeded = (live: boolean | null) => chamberFact({ installed: true, patched: true, live })
   // live = true → the RUNNING instance has loaded the module (已生效).
-  const live = await remotePluginList(exec, { id: 's1', remoteDshHome: null }, { liveProbe: async () => true })
+  const live = await remotePluginList(exec, SEED_SPEC, { liveProbe: async () => true })
   assert.ok(live.ok)
   if (live.ok) {
-    assert.deepEqual(chamberFacts(live.manifest.chamber), {
-    [CLIENT_GRAPH_PACKAGE_NAME]: { installed: true, patched: true, version: '0.1.2', live: true },
-    [GIT_WORKTREE_PACKAGE_NAME]: gitSeeded(true),
-    [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
-    [OPEN_IN_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
-  })
+    assert.deepEqual(chamberFacts(live.manifest.chamber), expectedChamberFacts({
+      [CLIENT_GRAPH_PACKAGE_NAME]: chamberFact({ installed: true, patched: true, version: '0.1.2', live: true }),
+      [GIT_WORKTREE_PACKAGE_NAME]: gitSeeded(true),
+    }))
   }
   // live = false → injected but restart still pending (重启后生效).
-  const pending = await remotePluginList(exec, { id: 's1', remoteDshHome: null }, { liveProbe: async () => false })
+  const pending = await remotePluginList(exec, SEED_SPEC, { liveProbe: async () => false })
   assert.ok(pending.ok)
   if (pending.ok) {
-    assert.deepEqual(chamberFacts(pending.manifest.chamber), {
-    [CLIENT_GRAPH_PACKAGE_NAME]: { installed: true, patched: true, version: '0.1.2', live: false },
-    [GIT_WORKTREE_PACKAGE_NAME]: gitSeeded(false),
-    [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
-    [OPEN_IN_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
-  })
+    assert.deepEqual(chamberFacts(pending.manifest.chamber), expectedChamberFacts({
+      [CLIENT_GRAPH_PACKAGE_NAME]: chamberFact({ installed: true, patched: true, version: '0.1.2', live: false }),
+      [GIT_WORKTREE_PACKAGE_NAME]: gitSeeded(false),
+    }))
   }
   // live = null → the desktop could not classify (no ready tunnel): the UI
   // renders 生效状态未知 — never a guessed claim.
-  const unknown = await remotePluginList(exec, { id: 's1', remoteDshHome: null }, { liveProbe: async () => null })
+  const unknown = await remotePluginList(exec, SEED_SPEC, { liveProbe: async () => null })
   assert.ok(unknown.ok)
   if (unknown.ok) {
-    assert.deepEqual(chamberFacts(unknown.manifest.chamber), {
-    [CLIENT_GRAPH_PACKAGE_NAME]: { installed: true, patched: true, version: '0.1.2', live: null },
-    [GIT_WORKTREE_PACKAGE_NAME]: gitSeeded(null),
-    [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
-    [OPEN_IN_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
-  })
+    assert.deepEqual(chamberFacts(unknown.manifest.chamber), expectedChamberFacts({
+      [CLIENT_GRAPH_PACKAGE_NAME]: chamberFact({ installed: true, patched: true, version: '0.1.2', live: null }),
+      [GIT_WORKTREE_PACKAGE_NAME]: gitSeeded(null),
+    }))
   }
   // A version-less seeded package.json → version:null (never a guessed one).
-  const versionless: ExecFn = async (_id, action, payload) => {
-    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
-      const path = payload.argv?.[0] ?? ''
-      if (path.endsWith('/profiles/web/package.json')) return ok('{}')
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup/package.json')) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup/dist/index.js')) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/dist/index.js')) return ok('export const graph = 1\n')
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-chamber-seed-client-graph"}')
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/dist/index.js')) return ok('export const git = 1\n')
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/package.json')) return ok('{"name":"@dsh-chamber/dsh-chamber-seed-git-worktree"}')
-      if (path.endsWith('/cordis.patch.yml')) {
-        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-chamber-seed-client-graph'\n    - id: git-worktree\n      name: '@dsh-chamber/dsh-chamber-seed-git-worktree'\n")
-      }
-    }
-    return err(`unexpected cat ${payload?.argv?.[0]}`)
-  }
-  const noVersion = await remotePluginList(versionless, { id: 's1', remoteDshHome: null }, { liveProbe: async () => true })
+  const noVersion = await remotePluginList(seededExec(), SEED_SPEC, { liveProbe: async () => true })
   assert.ok(noVersion.ok)
   if (noVersion.ok) {
     assert.equal(noVersion.manifest.chamber.ok, true)
     assert.equal(chamberPackageOf(noVersion.manifest.chamber, CLIENT_GRAPH_PACKAGE_NAME).version, null)
   }
 })
-
 test('remotePluginList: git-worktree live is probed SEPARATELY — host-graph live does not prove the git row loaded', async () => {
   // The user-reported dead end: host-graph live from an older boot (its row
   // loaded) while the git-worktree row was seeded LATER (files + insert
@@ -441,69 +367,34 @@ test('remotePluginList: git-worktree live is probed SEPARATELY — host-graph li
   // the git RPC 404s and the sidebar shows no git surface. The probe must
   // report the git-worktree ROW's live === false independently of the
   // client-graph row's live state.
-  const exec: ExecFn = async (_id, action, payload) => {
-    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
-      const path = payload.argv?.[0] ?? ''
-      if (path.endsWith('/profiles/web/package.json')) return ok('{}')
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup/package.json')) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup/dist/index.js')) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/dist/index.js')) return ok('export const graph = 1\n')
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-chamber-seed-client-graph"}')
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/dist/index.js')) return ok('export const git = 1\n')
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/package.json')) return ok('{"name":"@dsh-chamber/dsh-chamber-seed-git-worktree"}')
-      if (path.endsWith('/cordis.patch.yml')) {
-        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-chamber-seed-client-graph'\n    - id: git-worktree\n      name: '@dsh-chamber/dsh-chamber-seed-git-worktree'\n")
-      }
-    }
-    return err(`unexpected cat ${payload?.argv?.[0]}`)
-  }
+  const exec = seededExec()
   // host-graph live, git-worktree NOT live → the exact "已生效 + 重启后生效"
   // pair the UI must be able to render (and gate its restart button on).
-  const result = await remotePluginList(exec, { id: 's1', remoteDshHome: null }, {
+  const result = await remotePluginList(exec, SEED_SPEC, {
     liveProbe: async descriptor => descriptor.insert.name !== GIT_WORKTREE_PACKAGE_NAME,
   })
   assert.ok(result.ok)
   if (result.ok) {
-    assert.deepEqual(chamberFacts(result.manifest.chamber), {
-    [CLIENT_GRAPH_PACKAGE_NAME]: { installed: true, patched: true, version: null, live: true },
-    [GIT_WORKTREE_PACKAGE_NAME]: { installed: true, patched: true, version: null, live: false },
-    [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
-    [OPEN_IN_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
-  })
+    assert.deepEqual(chamberFacts(result.manifest.chamber), expectedChamberFacts({
+      [CLIENT_GRAPH_PACKAGE_NAME]: chamberFact({ installed: true, patched: true, live: true }),
+      [GIT_WORKTREE_PACKAGE_NAME]: chamberFact({ installed: true, patched: true, live: false }),
+    }))
   }
   // Both live → 已生效 for both.
-  const bothLive = await remotePluginList(exec, { id: 's1', remoteDshHome: null }, {
-    liveProbe: async () => true,
-  })
+  const bothLive = await remotePluginList(exec, SEED_SPEC, { liveProbe: async () => true })
   assert.ok(bothLive.ok)
   if (bothLive.ok) {
     assert.equal(bothLive.manifest.chamber.ok, true)
     assert.equal(chamberPackageOf(bothLive.manifest.chamber, GIT_WORKTREE_PACKAGE_NAME).live, true)
   }
 })
-
 test('remotePluginList: the git-worktree INSERT missing from the patch is its own half-injected state (files present, row absent)', async () => {
   // A machine seeded before the git package existed: package files present,
   // but cordis.patch.yml carries ONLY the client-graph row. The host-graph
   // row is genuinely patched; the git-worktree row is NOT — the UI must
   // offer 注入 (not claim 已注入) and never report gitWorktree.live.
-  const exec: ExecFn = async (_id, action, payload) => {
-    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
-      const path = payload.argv?.[0] ?? ''
-      if (path.endsWith('/profiles/web/package.json')) return ok('{}')
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup/package.json')) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup/dist/index.js')) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/dist/index.js')) return ok('export const graph = 1\n')
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-chamber-seed-client-graph"}')
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/dist/index.js')) return ok('export const git = 1\n')
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/package.json')) return ok('{"name":"@dsh-chamber/dsh-chamber-seed-git-worktree"}')
-      if (path.endsWith('/cordis.patch.yml')) {
-        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-chamber-seed-client-graph'\n")
-      }
-    }
-    return err(`unexpected cat ${payload?.argv?.[0]}`)
-  }
-  const result = await remotePluginList(exec, { id: 's1', remoteDshHome: null }, {
+  const exec = seededExec(CLIENT_GRAPH_PKG_JSON, CLIENT_ROW_PATCH)
+  const result = await remotePluginList(exec, SEED_SPEC, {
     liveProbe: async descriptor => {
       if (descriptor.insert.name === GIT_WORKTREE_PACKAGE_NAME) throw new Error('must not run: the git row is not patched, so it cannot be live')
       return true
@@ -511,15 +402,12 @@ test('remotePluginList: the git-worktree INSERT missing from the patch is its ow
   })
   assert.ok(result.ok)
   if (result.ok) {
-    assert.deepEqual(chamberFacts(result.manifest.chamber), {
-    [CLIENT_GRAPH_PACKAGE_NAME]: { installed: true, patched: true, version: null, live: true },
-    [GIT_WORKTREE_PACKAGE_NAME]: { installed: true, patched: false, version: null, live: null },
-    [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
-    [OPEN_IN_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
-  })
+    assert.deepEqual(chamberFacts(result.manifest.chamber), expectedChamberFacts({
+      [CLIENT_GRAPH_PACKAGE_NAME]: chamberFact({ installed: true, patched: true, live: true }),
+      [GIT_WORKTREE_PACKAGE_NAME]: chamberFact({ installed: true }),
+    }))
   }
 })
-
 test('remotePluginList: liveProbe is NOT consulted when the injection is half-present (cannot be live by definition)', async () => {
   let probed = false
   let gitProbed = false
@@ -527,29 +415,22 @@ test('remotePluginList: liveProbe is NOT consulted when the injection is half-pr
     if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
       const path = payload.argv?.[0] ?? ''
       if (path.endsWith('/profiles/web/package.json')) return ok('{}')
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup/package.json')) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-archive-cleanup/dist/index.js')) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/package.json')) return ok('{"name":"@dsh-chamber/dsh-chamber-seed-client-graph","version":"0.1.2"}')
+      if (path.includes(`${ARCHIVE_CLEANUP_PACKAGE_NAME}/`)) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/package.json')) return ok(CLIENT_GRAPH_PKG_VERSIONED)
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/dist/index.js')) return ok('export const git = 1\n')
+      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/package.json')) return ok(GIT_WORKTREE_PKG_JSON)
       // dist/index.js missing → installed:false.
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/dist/index.js')) {
-        return ok('export const git = 1\n')
-      }
-      if (path.includes('@dsh-chamber/dsh-chamber-seed-git-worktree/package.json')) {
-        return ok('{"name":"@dsh-chamber/dsh-chamber-seed-git-worktree"}')
-      }
       if (path.includes('@dsh-chamber/dsh-chamber-seed-client-graph/dist/index.js')) {
         return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
       }
-      if (path.endsWith('/cordis.patch.yml')) {
-        // The git-worktree boot row is ALSO absent (a stale patch from before
-        // the git package existed): both packages are half-present, so neither
-        // live probe may run.
-        return ok("- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-chamber-seed-client-graph'\n")
-      }
+      // The git-worktree boot row is ALSO absent (a stale patch from before
+      // the git package existed): both packages are half-present, so neither
+      // live probe may run.
+      if (path.endsWith('/cordis.patch.yml')) return ok(CLIENT_ROW_PATCH)
     }
     return err(`unexpected cat ${payload?.argv?.[0]}`)
   }
-  const result = await remotePluginList(exec, { id: 's1', remoteDshHome: null }, {
+  const result = await remotePluginList(exec, SEED_SPEC, {
     liveProbe: async (descriptor) => {
       if (descriptor.insert.name === GIT_WORKTREE_PACKAGE_NAME) gitProbed = true
       else probed = true
@@ -558,12 +439,10 @@ test('remotePluginList: liveProbe is NOT consulted when the injection is half-pr
   })
   assert.ok(result.ok)
   if (result.ok) {
-    assert.deepEqual(chamberFacts(result.manifest.chamber), {
-    [CLIENT_GRAPH_PACKAGE_NAME]: { installed: false, patched: true, version: '0.1.2', live: null },
-    [GIT_WORKTREE_PACKAGE_NAME]: { installed: true, patched: false, version: null, live: null },
-    [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
-    [OPEN_IN_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
-  })
+    assert.deepEqual(chamberFacts(result.manifest.chamber), expectedChamberFacts({
+      [CLIENT_GRAPH_PACKAGE_NAME]: chamberFact({ patched: true, version: '0.1.2' }),
+      [GIT_WORKTREE_PACKAGE_NAME]: chamberFact({ installed: true }),
+    }))
   }
   assert.equal(probed, false, 'a half-injected module is never "live" — the probe is skipped')
   assert.equal(gitProbed, false, 'the git probe is skipped while the module is half-present')

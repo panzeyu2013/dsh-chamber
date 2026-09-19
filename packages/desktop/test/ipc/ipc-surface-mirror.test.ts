@@ -1,12 +1,6 @@
-/**
- * IPC surface mirror lockstep tests (2026 audit L3): the bridge types are
- * hand-mirrored across packages/desktop/preload.cts (the surface contract),
- * packages/renderer/src/global.d.ts and the settings-connections plugin's
- * global.d.ts (interface merging requires identical shapes). A structural
- * comparison of METHOD sets AND FIELD sets turns a silent drift into a loud
- * test failure — the field check catches shape drift inside helper types
- * (e.g. a missing `chamber` / `gitWorktree` / `notifications` field).
- */
+/** IPC surface mirror lockstep (2026 audit L3): preload.cts (the surface contract),
+ *  renderer/src/global.d.ts and the settings-connections global.d.ts are hand-mirrored;
+ *  METHOD-set AND FIELD-set comparison turns a silent drift into a loud failure. */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -58,14 +52,9 @@ function stripComments(text: string): string {
     .join('\n')
 }
 
-/** Robust whole-file comment stripper (B12/E8 dead-channel scan): block
- *  comments, line comments and string literals are consumed in ONE state
- *  pass. The regex `stripComments` above is only safe for short balanced
- *  interface blocks — over a concatenated whole-file union, a slash-star
- *  sequence inside a line comment (main.ts 注记含 /api/i/<id>/星) would pair
- *  with a far-away close sequence and swallow real code. Strings are skipped
- *  entirely here: IPC_CHANNELS constant references never live inside string
- *  literals. */
+/** Whole-file comment stripper (B12/E8): block/line comments and strings in one state pass.
+ *  The regex `stripComments` above is only safe for short balanced interface blocks — over a
+ *  whole-file union a slash-star inside a line comment would swallow real code. */
 function stripCommentsRobust(text: string): string {
   let out = ''
   let inBlock = false
@@ -132,14 +121,9 @@ function interfaceFieldNames(source: string, typeName: string): string[] {
   return [...fields].sort()
 }
 
-/** Extract `name: type` signatures of one FLAT interface (one field per line).
- *  Type-sensitive (M2): a `version: string` → `string | null` drift fails.
- *  The OPTIONALITY marker is part of the compared signature (round-2 review
- *  A3): a required↔optional drift of e.g. `restartFailureText` between
- *  updater.ts and the renderer mirror must fail, so the pushed signature is
- *  `name?:type` for an optional field and `name:type` for a required one.
- *  Union-shaped types must use interfaceFieldNames (member shapes are
- *  single-line here, but the type text is not comparable across formats). */
+/** `name: type` signatures of one FLAT interface, type- and optionality-sensitive (M2 /
+ *  round-2 A3): a `string` → `string | null` or a required↔optional drift must fail.
+ *  Union-shaped types use interfaceFieldNames. */
 function interfaceFieldSignatures(source: string, typeName: string): string[] {
   const signatures: string[] = []
   for (const raw of stripComments(interfaceBlock(source, typeName)).split('\n')) {
@@ -154,12 +138,8 @@ function interfaceFieldSignatures(source: string, typeName: string): string[] {
   return signatures.sort()
 }
 
-/** Extract normalized single-line METHOD signatures (`name(params): Return`)
- *  of an interface. Type-sensitive (L3): a return-type or parameter drift
- *  fails where method-NAME-only comparisons cannot see it. Multi-line method
- *  declarations would silently escape the scan, so any non-empty line that is
- *  not a single-line method is surfaced LOUDLY (interfaces in this codebase
- *  keep methods single-line by discipline). */
+/** Normalized single-line METHOD signatures (`name(params): Return`), type-sensitive (L3);
+ *  a multi-line declaration within an interface is surfaced loudly instead of escaping. */
 function interfaceMethodSignatures(source: string, typeName: string): string[] {
   const signatures: string[] = []
   for (const raw of stripComments(interfaceBlock(source, typeName)).split('\n')) {
@@ -179,26 +159,12 @@ function interfaceMethodSignatures(source: string, typeName: string): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// 2026-12 review P2: the five surfaces that had NEITHER a golden nor a mirror
-// comparison (systemResume / openIn / deepLink / notifications / badge) join
-// the same golden + signature matrix as ssh/update/settings/runtime.
-//
-// These surfaces are the only ones whose mirrors name their inline payloads
-// differently (preload declares `NotificationOpenRequest`, the renderer spells
-// the same callback object out inline), so the shared helpers above cannot
-// compare them: `interfaceMethodSignatures` is documented flat-single-line-only
-// and would throw on the renderer's multi-line literal. The helpers below
-// normalize away exactly that surface-syntax difference — and nothing else:
-//   * a locally declared named type is expanded to its declaration, so a named
-//     alias and its inline mirror compare equal;
-//   * an inline `{…}` object literal's members are sorted, and its `;` and
-//     newline separators are unified, so field ORDER is not part of the contract;
-//   * PARAMETER NAMES are dropped (TypeScript's structural typing ignores them,
-//     and the renderer deliberately names the notification click listener
-//     `listener` where preload says `callback`); parameter TYPES stay ordered.
-//  Every other difference — a method removed/renamed, a parameter type, a
-//  return type, a field added/removed/retyped — still fails (see the
-//  self-honesty test below).
+// 2026-12 review P2: the five surfaces with NEITHER a golden nor a mirror comparison
+// (systemResume / openIn / deepLink / notifications / badge) join the golden + signature
+// matrix. They are the only mirrors naming their inline payloads differently, so the
+// helpers below normalize exactly that difference — local type expansion, field-order /
+// separator unification, dropped parameter names — and nothing else: removed or renamed
+// members, parameter types, return types and field retypes still fail.
 // ---------------------------------------------------------------------------
 
 /** Locally declared interfaces and type aliases of one source file, mapped to
@@ -396,13 +362,9 @@ const settings = readFileSync(join(ROOT, 'packages/dsh-chamber-client-ui-setting
 const rendererApp = readFileSync(join(ROOT, 'packages/renderer/src/App.tsx'), 'utf8')
 
 test('system-resume channel name stays in lockstep across all three sites (H2)', async () => {
-  // The desktop side is single-sourced in ipc-events.ts (main.ts imports it);
-  // preload.cts is a self-contained single-file build (build-preload.mjs) and
-  // cannot import the shared constant — the literal is duplicated on purpose.
-  // The renderer App layer re-dispatches the same IPC push as a window event.
-  // Pin all three sites to the same string so a rename can never drift
-  // silently. The preload assertion is anchored on the ACTUAL subscription
-  // call (not a bare includes) so the literal cannot hide in a comment.
+  // The desktop side is single-sourced in ipc-events.ts; preload.cts is a self-contained
+  // single-file build and duplicates the literal on purpose. Pin all three sites so a rename
+  // cannot drift silently (anchored on the real subscription call, not a bare includes).
   const { SYSTEM_RESUME_EVENT } = await import('../../ipc-events.ts')
   assert.ok(
     preload.includes(`ipcRenderer.on('${SYSTEM_RESUME_EVENT}'`),
@@ -417,35 +379,13 @@ test('system-resume channel name stays in lockstep across all three sites (H2)',
 const transportProvider = readFileSync(join(ROOT, 'packages/desktop/transport-provider.ts'), 'utf8')
 const connectionSave = readFileSync(join(ROOT, 'packages/desktop/connection-save.ts'), 'utf8')
 
-/** The IPC *registration* owner split across the W-10 seam: main.ts keeps the
- * not-yet-migrated ipcMain.handle(...) registrations, and
- * shell-core.installIpcHandlers (S1: INFO / SETTINGS_GET / SETTINGS_SET; S2:
- * NOTIFY / NOTIFICATIONS_READY / NOTIFICATION_OPEN_ACK / BADGE_COUNT /
- * DEEP_LINK_READY / DEEP_LINK_ACK; S3: SSH_INSTANCES_GET / SSH_SAVE_CONNECTION
- * / SSH_DELETE_CONNECTION / SSH_INSTANCES_SET / SSH_SET_PASSWORD /
- * GATEWAY_SET_TOKEN / GATEWAY_SET_PASSWORD) registers through the injected
- * registrar — the executable owner of each channel stays single (a second,
- * unimported handler cannot drift beside the registered one because the
- * surface equality below counts every spelling).
- * shell-core.ts and electron-edges.ts join the scan because W-10 (design
- * 25 §4.1) moves main-side TEXT between the three files: the send-side channel
- * references can now sit in any of them (S0: the four committed pushes leave
- * through the electron-edges rendererPush leaf whose IPC_CHANNELS.X call sites
- * still live in main.ts; S1: the SETTINGS_CHANGED send source moved into
- * shell-core; S2: the DEEP_LINK_INTENT / NOTIFICATION_OPEN drain sends moved
- * into shell-core's renderer delivery drains). Scanning the union preserves
- * the lockstep strength: the three-file handle/send sets must still equal the
- * preload invoke/on sets.
- * W-10 S3: the per-test TEXT anchors below scan the SAME union (desktopMain
- * below) — the C 组 registry/credentials handler bodies (incl. the
- * credential-existence projection text, the save/delete transactions and the
- * clear-only legacy setters) now live in shell-core.ts, so a main.ts-only read
- * would silently un-anchor them. Assertion intent is unchanged: the text must
- * exist on the desktop main side (main.ts ∪ shell-core.ts ∪ electron-edges.ts);
- * handle-registration spelling assertions accept BOTH main-side spellings
- * (see MAIN_HANDLE_CALLS below — trustedIpc is applied by the assembly-side
- * wrapper in main.ts, so no trustedIpc text appears beside the core
- * registrations). */
+/** The IPC *registration* owner split across the W-10 seam (design 25 §4.1): main.ts keeps
+ *  the not-yet-migrated ipcMain.handle(...) registrations while shell-core.installIpcHandlers
+ *  registers the S1–S3 channels through the injected registrar, so the send-side references
+ *  may sit in any of the three files. Scanning the union (main.ts ∪ shell-core.ts ∪
+ *  electron-edges.ts) preserves the lockstep strength: the handle/send sets must still equal
+ *  the preload invoke/on sets, handle spellings accept both main-side spellings, and the
+ *  per-test text anchors stay anchored to the union rather than one file. */
 const MAIN_SIDE_FILES = ['main.ts', 'shell-core.ts', 'electron-edges.ts']
 const desktopMain = MAIN_SIDE_FILES
   .map(file => readFileSync(join(ROOT, 'packages/desktop', file), 'utf8'))
@@ -586,24 +526,18 @@ test('UpdateSurface and SettingsSurface stay in lockstep across preload and rend
 })
 
 // ---------------------------------------------------------------------------
-// 2026-12 review P2: the five bridge surfaces that had NEITHER a golden NOR a
-// mirror comparison. `preload.cts` ↔ `renderer/src/global.d.ts` is the same
-// hand-mirrored contract as ssh/update/settings/runtime, but a drift here was
-// invisible: a renamed `badge.set`, a dropped `deepLink.ack`, a retyped
-// `openIn.open` argument or a widened notification payload all type-checked in
-// both packages. They now pass through the full matrix — golden method sets for
-// BOTH mirrors, normalized signature lockstep, and a payload golden that also
-// catches a drift synchronized across both mirrors.
+// 2026-12 review P2: the five bridge surfaces (`preload.cts` ↔ renderer global.d.ts)
+// that had neither a golden nor a mirror comparison now pass the full matrix —
+// golden method sets for BOTH mirrors, normalized signature lockstep, and a payload
+// golden that also catches a drift synchronized across both mirrors.
 // ---------------------------------------------------------------------------
 
 /** The five surfaces this section owns (the rest are covered above). */
 const P2_SURFACES = ['SystemResumeSurface', 'OpenInSurface', 'DeepLinkSurface', 'NotificationSurface', 'BadgeSurface']
 
-/** Payload declarations the five surfaces are built from. The preload side is
- *  authoritative and declares all four; the renderer spells the notification
- *  click payload (NotificationOpenRequest) inline inside `onOpen` — that leg is
- *  covered by the surface signature matrix below, and this golden covers the
- *  named leg plus every payload name the renderer does declare. */
+/** Payload declarations the five surfaces are built from: preload is authoritative and declares all
+ *  four; the renderer spells the notification click payload inline inside `onOpen` (covered by the
+ *  surface signature matrix below, this golden covers the named leg). */
 const P2_PAYLOAD_GOLDEN: Record<string, string[]> = {
   OpenInAppInfo: ['available: boolean', 'displayKind: string', 'id: string', 'remoteCapable: boolean'],
   DeepLinkIntent: ['attempt: number', 'deliveryId: number', 'instanceId: string', 'path: string', 'sourceFingerprint: string'],
@@ -720,16 +654,10 @@ test('the surface signature helper itself detects drift and tolerates the mirror
 })
 
 test("the open-in plugin's private bridge face stays a structural subset of the renderer OpenInSurface (P2)", () => {
-  // packages/dsh-chamber-client-ui-open-in/src/shared/coordinator.ts declares
-  // its own loose `window.dshChamber.openIn` face on purpose (the plugin stays
-  // out of the renderer's global Window augmentation merge and re-validates the
-  // IPC answer through parseOpenInApps). A local face is only safe while it
-  // keeps tracking the public one: a preload change to OpenInSurface.open's
-  // arity/types would silently pass the plugin's typecheck, because nothing
-  // else in this repo relates the two declarations. Pin the relationship here
-  // (a re-export from the renderer types was rejected: it would pull the whole
-  // renderer global augmentation into the plugin's program, which is exactly
-  // what the local face exists to avoid).
+  // The plugin declares its own loose `window.dshChamber.openIn` face on purpose (it stays
+  // out of the renderer global-augmentation merge; a re-export was rejected for pulling that
+  // augmentation in). Pin the relationship here so a preload OpenInSurface change cannot pass
+  // the plugin's typecheck silently. */
   const coordinator = readFileSync(
     join(ROOT, 'packages/dsh-chamber-client-ui-open-in/src/shared/coordinator.ts'),
     'utf8',
@@ -753,11 +681,9 @@ test("the open-in plugin's private bridge face stays a structural subset of the 
 })
 
 test('UpdateState and UpdatePhase stay locked between updater.ts and the renderer mirror (L3)', () => {
-  // preload.cts imports UpdateState/UpdatePhase from updater.ts (type-only,
-  // erased at build), so the DESKTOP side cannot drift; the renderer
-  // global.d.ts hand-mirrors them for the settings plugins and nothing used
-  // to guard the pair (2026-12 review L2). Field signatures are type-
-  // sensitive; the phase union is compared as normalized alias text.
+  // preload.cts imports UpdateState/UpdatePhase from updater.ts (type-only, erased at build), so the
+  // desktop side cannot drift; renderer/global.d.ts hand-mirrors them for the settings plugins with no
+  // guard (2026-12 review L2). Field signatures are type-sensitive; the phase union compares as alias text.
   const updater = readFileSync(join(ROOT, 'packages/desktop/updater.ts'), 'utf8')
   assert.deepEqual(
     interfaceFieldSignatures(renderer, 'UpdateState'),
@@ -826,22 +752,17 @@ test('the IPC result unions carry identical FIELD SETS across the mirrors that n
     const fields = interfaceFieldNames(preload, preloadName)
     assert.deepEqual(interfaceFieldNames(renderer, rendererName), fields, `${rendererName} renderer mirror drifted`)
   }
-  // GatewayPluginSyncIpcResult (design 21 §6.5; the IPC-side twin of
-  // gateway-provider's same-named sync result, deliberately suffixed) is a
-  // discriminated ok-union whose member set is exact by construction:
-  // uploaded/skipped live ONLY on the ok:true arm, error ONLY on ok:false
-  // (no cancelled/wider shapes).
+  // GatewayPluginSyncIpcResult (design 21 §6.5; the deliberately suffixed IPC twin of
+  // gateway-provider's sync result): a discriminated ok-union whose member set is exact —
+  // uploaded/skipped ONLY on ok:true, error ONLY on ok:false, no cancelled/wider shape.
   assert.deepEqual(
     interfaceFieldNames(preload, 'GatewayPluginSyncIpcResult'),
     ['error', 'ok', 'skipped', 'uploaded'],
     'gateway_plugin_sync result union must remain exact',
   )
-  // GatewayPluginApplyIpcResult (design 21 §6.5, plan Phase 4.6): the
-  // batch+cancelled union — cancelled ONLY on the ok:true cancelled member,
-  // installed/removed/restarted/deferred ONLY on the completed member,
-  // partial/error ONLY on the ok:false member. A producer/consumer contract
-  // mistake (e.g. partial silently dropped, or cancelled widened into a
-  // completion) must fail here.
+  // GatewayPluginApplyIpcResult (design 21 §6.5, plan Phase 4.6): cancelled ONLY on the
+  // ok:true/cancelled member, installed/removed/restarted/deferred ONLY on the completed
+  // member, partial/error ONLY on ok:false — a dropped or widened member must fail here. */
   assert.deepEqual(
     interfaceFieldNames(preload, 'GatewayPluginApplyIpcResult'),
     ['cancelled', 'deferred', 'error', 'installed', 'ok', 'partial', 'removed', 'restarted'],
@@ -879,13 +800,9 @@ test('the IPC result unions carry identical FIELD SETS across the mirrors that n
   // would hide a producer/consumer contract mistake.
   const applyFields = interfaceFieldNames(preload, 'SshPluginApplyIpcResult')
   assert.deepEqual(applyFields, ['error', 'ok', 'result'], 'plugin_apply result union must remain exact')
-  // SshPluginUndoIpcResult (design 21 §6.4 ssh undo journal IPC): exact
-  // member shapes — cancelled only on its own ok:true member, undone
-  // (kind/name + the optional restarted/ready/readyNote "not fully
-  // effective" projection) only on the completed member, unavailable only
-  // on the ok:false member. Widening any arm (e.g. dropping unavailable, or
-  // adding a spec projection that would leak a remote file: path) must fail
-  // here.
+  // SshPluginUndoIpcResult (design 21 §6.4 ssh undo journal IPC): cancelled only on its own ok:true
+  // member, undone/kind/name + the optional restarted/ready/readyNote projection only on the completed
+  // member, unavailable only on ok:false — widening any arm (or leaking a remote file: path) must fail.
   assert.deepEqual(
     interfaceFieldNames(preload, 'SshPluginUndoIpcResult'),
     ['cancelled', 'error', 'kind', 'name', 'ok', 'ready', 'readyNote', 'restarted', 'unavailable', 'undone'],
@@ -925,15 +842,10 @@ test('flat shared interfaces are TYPE-identical across preload and renderer (L3 
 })
 
 test('the desktop chamber-settings store mirrors preload\'s settings types (L3 — the manual-mirror leg)', () => {
-  // preload ↔ renderer is guarded above; the desktop AUTHORITATIVE store
-  // (chamber-settings.ts) is a documented MANUAL mirror of the same shapes
-  // (the notifications discipline extended to sessionTodo/vscode keys) with
-  // NO automated guard of its own — a field/type drift there would pass
-  // silently until a settings round-trip breaks. Guard it with the same
-  // type-sensitive signature comparison. ChamberSettingsStatus is excluded:
-  // its `supported` member is a nested object literal (signature extraction
-  // is flat-interface only) — its flat top-level field names are covered by
-  // interfaceFieldNames below.
+  // preload ↔ renderer is guarded above; the desktop AUTHORITATIVE store mirrors the same
+  // shapes as a documented MANUAL mirror with no guard of its own, so it gets the same
+  // type-sensitive signature comparison. ChamberSettingsStatus is excluded (nested literal;
+  // its flat top-level field names are covered below). */
   const store = readFileSync(join(ROOT, 'packages/desktop/chamber-settings.ts'), 'utf8')
   for (const typeName of ['ChamberSettings', 'ChamberNotificationSettings', 'ChamberSessionTodoSettings']) {
     assert.deepEqual(
@@ -969,27 +881,17 @@ test('ChamberInjectionState / ChamberHostPackageState / ChamberSettings stay in 
 })
 
 // ---------------------------------------------------------------------------
-// B8: channel-name lockstep (string-level guard). The main side registers
-// every channel through the IPC_CHANNELS constants in ipc-events.ts (single
-// source of truth); the preload CANNOT import that module (build-preload.mjs
-// self-contained single-file contract), so its literals are duplicated on
-// purpose. These tests assert the two sides can never drift:
-//   main-side  ipcMain.handle  set  ==  preload-side ipcRenderer.invoke set
-//   main-side  webContents.send set ==  preload-side ipcRenderer.on    set
-// and that every preload literal is a known IPC_CHANNELS value (so a rename
-// in the constants fails loudly on the preload side too).
+// B8: channel-name lockstep. Main registers every channel through IPC_CHANNELS (single
+// source of truth); preload cannot import it and duplicates the literals on purpose.
+// Assert: main handle/send sets == preload invoke/on sets, and every preload literal is
+// a known IPC_CHANNELS value.
 // ---------------------------------------------------------------------------
 
 const { IPC_CHANNELS } = await import('../../ipc-events.ts')
 
-/** Handle-side registration spellings across the W-10 seam split (S1): main.ts
- *  still owns the not-yet-migrated ipcMain.handle(...) registrations, while
- *  shell-core.installIpcHandlers registers through the injected registrar
- *  (deps.ipc.handle(...) — the S1 spelling; trustedIpc is applied by the
- *  assembly-side wrapper, so no trustedIpc text appears beside it). The union
- *  keeps the mirror equality strength across the split: every registration
- *  counts once, and a handler re-spelled under the new registrar stays
- *  covered. */
+/** Handle-side registration spellings across the W-10 seam split (S1): main.ts owns the
+ *  not-yet-migrated ipcMain.handle(...) registrations, installIpcHandlers registers through
+ *  deps.ipc.handle(...). The union counts every registration once. */
 const MAIN_HANDLE_CALLS = ['ipcMain.handle', 'deps.ipc.handle']
 
 function mainSideSource(): string {
@@ -998,12 +900,8 @@ function mainSideSource(): string {
     .join('\n')
 }
 
-/** Collect the channel names of one main-side registration/send call: the
- *  argument is either an IPC_CHANNELS constant reference (resolved against
- *  the imported constants) or a raw quoted literal (a regression the guard
- *  must also surface — the constant set is the source of truth). Since W-10
- *  the handle/send sides have multiple spellings and `calls` is the union
- *  (see MAIN_HANDLE_CALLS / collectMainSendChannels). */
+/** Channel names of one main-side registration/send call: an IPC_CHANNELS constant
+ *  reference (validated against the imported constants) or a raw quoted literal. */
 function collectMainChannels(source: string, calls: string | string[]): string[] {
   const spellings = Array.isArray(calls) ? calls : [calls]
   const channels = new Set<string>()
@@ -1032,12 +930,8 @@ function collectPreloadChannels(source: string, call: 'invoke' | 'on'): string[]
   return [...channels].sort()
 }
 
-/** Send-side channels across the W-10 seam spelling split: webContents.send(
- *  ...) text (drains and any not-yet-migrated sends) plus the HostEdges
- *  rendererPush(IPC_CHANNELS.X, ...) leaf calls. The union is what must equal
- *  the preload on-set — a push re-spelled under the new leaf stays covered,
- *  and the electron-edges.ts implementation body contributes nothing here
- *  (its webContents.send argument is a parameter, not a channel reference). */
+/** Send-side channels: webContents.send(...) text plus the rendererPush(IPC_CHANNELS.X)
+ *  leaf calls; the union is what must equal the preload on-set. */
 function collectMainSendChannels(source: string): string[] {
   return [...new Set([
     ...collectMainChannels(source, 'webContents.send'),
@@ -1072,17 +966,11 @@ test('every preload channel literal is a known IPC_CHANNELS value (B8 — consta
 })
 
 test('no IPC_CHANNELS constant is dead or duplicated across the main-side files (B12/E8 — 68/68 恰用一次由事实变断言)', () => {
-  // W-10 S11 收口：installIpcHandlers 全 60 handler 注册点与 send 叶
-  // （edges.rendererPush）迁入后，把「68 个 channel 常量在 MAIN_SIDE_FILES
-  // （main.ts ∪ shell-core.ts ∪ electron-edges.ts）的**代码引用**中每个至少使用
-  // 一次（当前恰为各一次）」由事实变断言。计数只认 `IPC_CHANNELS.<KEY>` 常量
-  // 引用拼写（词边界）：任一常量 0 次 = 死 channel（注册/发送随某批迁出丢失，
-  // preload invoke/on 集合相等仍会过，但主侧事实与常量表漂移）；>1 次 = 意外
-  // 双引用（镜像 set 相等同样看不见，语义重复须显式登记）。若未来合法双引用
-  // （如一个 channel 有两个显式 send 源），此断言须随用途注记同步更新。
-  // 注释剥离用下方逐字扫描器（string/block/line 单趟状态机）——上面的
-  // stripComments 正则助手只适用于短 interface 块，整文件 union 里行注释中的
-  // `/*` 序列会让它吞掉真实代码（main.ts 注记含 /api/i/<id>/* 即触发）。
+  // W-10 S11：installIpcHandlers 的 60 个 handler 注册点与 send 叶迁入后，
+  // 「68 个 channel 常量在 MAIN_SIDE_FILES 的代码引用中各恰用一次」由事实变断言：
+  // 0 次 = 死 channel（注册/发送随某批迁出丢失），>1 次 = 意外双引用（镜像集合
+  // 相等看不见）。计数只认 `IPC_CHANNELS.<KEY>` 拼写，注释剥离用下方单趟状态机
+  // （正则助手只适用于短 interface 块，整文件 union 会吞掉真实代码）。
   const code = stripCommentsRobust(mainSideSource())
   const dead: string[] = []
   const duplicated: string[] = []
@@ -1096,16 +984,11 @@ test('no IPC_CHANNELS constant is dead or duplicated across the main-side files 
 })
 
 // ---------------------------------------------------------------------------
-// design 19 §3.7: badge wiring pin. The badge IPC handler has no direct unit
-// seam, so the load-bearing call shapes are pinned as source assertions — a
-// rename, a dropped call, or an un-gated reconcile fails loudly here.
-// W-10 S2: BADGE_COUNT 注册体 + 意图 holder（pendingBadgeCount）迁入
-// shell-core.installIpcHandlers（注册拼写 = deps.ipc.handle；平台门
-// badgePlatformGate + applyBadgePresentation/reconcileBadgeCount 在 core 侧，
-// setBadge/badgeCountApiAvailable 宿主叶在 electron-edges.ts）；quit 兜底清除
-// 仍由 main.ts will-quit 驱动，但其「曾有意图」守卫迁 core
-// （clearBadgeIntentForQuit 内的 if (pendingBadgeCount !== null)），原生清除叶
-// （app.setBadgeCount(0)）仍在 main.ts 注入——union 文本断言随之更新。
+// design 19 §3.7: badge wiring pin — the handler has no direct unit seam, so the load-bearing
+// call shapes are pinned as source assertions. W-10 S2 moved the BADGE_COUNT registration
+// (deps.ipc.handle) and the intent holder into shell-core, while the quit-time clear keeps its
+// "had an intent" guard and the native app.setBadgeCount(0) leaf stays injected from main.ts.
+// ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
 
 test('badge wiring is pinned: handler registration + toggle-gated reconcile + quit clear (design 19 §3.7)', () => {

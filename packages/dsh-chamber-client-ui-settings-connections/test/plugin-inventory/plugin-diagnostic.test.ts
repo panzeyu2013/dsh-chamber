@@ -1,14 +1,12 @@
 /**
- * pluginDiagnosticText / pluginDiagnosticTone / bannerProjection unit tests —
- * the consumer-side severity decision for client-plugin runtime diagnostics
- * (design 09 §3.5): `instance-version-conflict` is informational (the page
- * reuses the first-loaded plugin revision and nothing in-app can switch it),
- * every other non-ok state is a problem. The card shows detail only for
- * problems; the plugin dialog always shows the full detail. bannerProjection
- * (plan 24 B1.4) de-duplicates the banner: title = short state name, detail
- * = message ?? pluginId ?? null — the triple repetition of state + pluginId
- * + message never reaches the screen. Mirror of the action-hint.test.ts
- * style: plain node:test, no dsh, no React.
+ * pluginDiagnosticText / pluginDiagnosticTone / bannerProjection unit tests — the
+ * consumer-side severity decision for client-plugin runtime diagnostics (design 09
+ * §3.5): `instance-version-conflict` is informational (the page reuses the
+ * first-loaded plugin revision; nothing in-app can switch it), every other non-ok
+ * state is a problem. The card shows detail only for problems; the plugin dialog
+ * always shows the full detail. bannerProjection (plan 24 B1.4) de-duplicates the
+ * banner: title = short state name, detail = message ?? pluginId ?? null. Mirror of
+ * the action-hint.test.ts style: plain node:test, no dsh, no React.
  */
 
 import { test } from 'node:test'
@@ -34,12 +32,9 @@ test('pluginDiagnosticTone: instance-version-conflict is informational, never a 
 
 test('pluginDiagnosticText: maps every state to its own locale key', () => {
   const expected: Readonly<Record<PluginDiagnostic['state'], string>> = {
-    'ok': 'pluginDiagnosticOk',
-    'not-injected': 'pluginDiagnosticNotInjected',
-    'graph-unreachable': 'pluginDiagnosticGraphUnreachable',
-    'bundle-load-failed': 'pluginDiagnosticBundleFailed',
-    'restart-required': 'pluginDiagnosticRestartRequired',
-    'instance-version-conflict': 'pluginDiagnosticInstanceVersionConflict',
+    'ok': 'pluginDiagnosticOk', 'not-injected': 'pluginDiagnosticNotInjected',
+    'graph-unreachable': 'pluginDiagnosticGraphUnreachable', 'bundle-load-failed': 'pluginDiagnosticBundleFailed',
+    'restart-required': 'pluginDiagnosticRestartRequired', 'instance-version-conflict': 'pluginDiagnosticInstanceVersionConflict',
   }
   for (const [state, key] of Object.entries(expected) as [PluginDiagnostic['state'], string][]) {
     assert.equal(pluginDiagnosticText(state, t), key)

@@ -1,32 +1,18 @@
-/**
- * Cross-package contract lockstep tests (A2 cross-package protocol
- * single-sourcing — the ipc-surface-mirror golden spirit): the desktop's
- * consumption of the shared wire formats must be byte-identical to the
- * control-plane's authoritative implementation for the same input.
- *
- * The desktop never re-derives the formats: ssh-provider.ts and plugin-sync.ts
- * consume control-plane's rpc-envelope.ts / cordis-inserts.ts through
- * control-plane-module.ts (packaged → compiled dist/control-plane, dev/tests →
- * workspace source). These tests pin the desktop-consumed output to the
- * control-plane output AND to the golden bytes, so a drift in either
- * direction fails loudly — a duplicated implementation sneaking back into
- * the desktop, or a wire-format change landing on only one side.
- *
- * Note: in the dev/test resolution both imports resolve to the same
- * control-plane module instance (the workspace source), so the byte equality
- * is also an identity assertion — it proves control-plane-module.ts forwards
- * the shared functions instead of re-implementing them. The packaged path
- * (compiled dist/control-plane) is exercised by the desktop build, not by
- * this test.
- */
+/** Cross-package contract lockstep (A2 protocol single-sourcing, the ipc-surface-mirror golden
+ *  spirit): the desktop never re-derives the shared wire formats — ssh-provider.ts and
+ *  plugin-sync.ts consume control-plane's rpc-envelope.ts / cordis-inserts.ts through
+ *  control-plane-module.ts (packaged → compiled dist/control-plane, dev/tests → workspace source).
+ *  These tests pin the desktop-consumed output to the control-plane output AND to the golden bytes,
+ *  so a duplicated implementation or a one-sided wire change fails loudly. In dev/test both imports
+ *  resolve to the same module instance, so byte equality also proves the facade forwards instead of
+ *  re-implementing; the packaged path is exercised by the desktop build, not here. */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-// Desktop consumption entry: the dual-path facade (packaged → compiled
-// control-plane, dev/tests → workspace source).
+// Desktop consumption entry: the dual-path facade (packaged → compiled, dev/tests → source).
 import {
   buildClientRequest as desktopBuildClientRequest,
   HOST_GRAPH_PATCH_FILENAME as facadeHostGraphPatchFilename,
@@ -160,12 +146,9 @@ test('the desktop-consumed client-request envelope is byte-identical to control-
 })
 
 test('the dsh-runtime activation set and the control-plane identity method stay in lockstep (A2)', () => {
-  // dsh-runtime (pure Node) mirrors the host-identity wire by design and its
-  // desktop/gateway consumers import the package main (the committed dist):
-  // this assertion pins the runtime's CLOSED activation set to the
-  // control-plane single-source method constants. A drift on either side —
-  // an identity-method rename, a session/list or data.sessions row sneaking
-  // back into the activation set, or a stale committed dist — fails here.
+  // dsh-runtime (pure Node) mirrors the host-identity wire by design and its desktop/gateway
+  // consumers import the committed dist: pin the CLOSED activation set to the control-plane
+  // single-source method constants — a rename, a re-entered session/list row or a stale dist fails.
   const probeSet = REQUIRED_ACTIVATION_PROBES as readonly string[]
   assert.equal(probeSet.includes(HOST_IDENTITY_METHOD), true,
     'the activation set no longer probes the identity method (or dist is stale)')
@@ -176,20 +159,14 @@ test('the dsh-runtime activation set and the control-plane identity method stay 
 })
 
 // ---------------------------------------------------------------------------
-// Seeded host-package FILE SET: one source, four consumers (P2).
-//
-// The seed file set used to be hand-copied in four places (control-plane's
-// private tuple, the desktop's remote seed/probe pair, the gateway upload
-// body, the gateway cache). The consequence was silent: adding a third seed
-// file on one side let the desktop PUT two keys, the gateway answer
-// 200/changed:true, and the remote boot miss the file with nobody reporting
-// it. These assertions pin all four sides to the control-plane export, item by
-// item, and prove each side REALLY consumes it (not merely that two literals
-// happen to match today).
+// Seeded host-package FILE SET: one source, four consumers (P2). The set used to be hand-copied
+// in four places (control-plane's private tuple, the desktop remote seed/probe pair, the gateway
+// upload body, the gateway cache), so a third seed file on one side made the desktop PUT two keys,
+// the gateway answer 200/changed:true and the remote boot miss the file silently. These assertions
+// pin all four sides to the control-plane export item by item AND prove each side really consumes it.
 // ---------------------------------------------------------------------------
 
-/** Golden seed file set — regenerate ONLY when the change is deliberately made
- *  on the control-plane side and every consumer follows it. */
+/** Golden seed file set — regenerate ONLY for a deliberate control-plane change every consumer follows. */
 const GOLDEN_SEED_FILES = ['package.json', 'dist/index.js']
 
 test('the seeded file set is single-sourced: control-plane export ≡ desktop writer/probe ≡ desktop gateway upload ≡ gateway cache (A2)', () => {
@@ -305,19 +282,16 @@ function interfaceFields(body: string): string[] {
     .split('\n')
     .map(line => line.replace(/\/\/.*$/, '').trim())
     .filter(line => line !== '' && !line.startsWith('*') && !line.startsWith('/*'))
-    // `readonly` is a modifier, not part of the field name (the client mirror
-    // declares every field readonly; the desktop projection does not).
+    // `readonly` is a modifier, not part of the field name (the client mirror marks every field readonly).
     .map(line => /^(?:readonly\s+)?([A-Za-z_$][\w$]*)\??\s*:/.exec(line)?.[1])
     .filter((name): name is string => name !== undefined)
 }
 
 test('the chamber host-package state field set is identical across its three declarations (design 20 §6)', () => {
-  // The SAME wire object is declared three times on purpose (three runtimes, no
-  // shared import path): plugin-sync.ts projects it, renderer/global.d.ts types
-  // it for the preload bridge, and the settings plugin mirrors it structurally
-  // for its pure projections. 2026-09-11: the open-in `localOnly` field landed
-  // in two of the three and the renderer's wire type silently missed it — the
-  // name-set drift gate could not see a FIELD. This is that gate.
+  // The SAME wire object is declared three times on purpose (three runtimes, no shared import
+  // path): plugin-sync.ts projects it, renderer/global.d.ts types it for the preload bridge, the
+  // settings plugin mirrors it structurally. 2026-09-11: `localOnly` landed in two of the three
+  // and the renderer's wire type silently missed it — this is the FIELD gate the name-set gate could not be.
   const repoRoot = join(import.meta.dirname, '..', '..', '..', '..')
   const desktopFields = interfaceFields(interfaceBody(
     readFileSync(join(import.meta.dirname, '..', '..', 'plugin-sync.ts'), 'utf8'), 'ChamberHostPackageState'))
@@ -328,13 +302,9 @@ test('the chamber host-package state field set is identical across its three dec
       'plugin-inventory-text.ts'), 'utf8'), 'ChamberPackageState'))
   assert.deepEqual([...desktopFields].sort(), [...rendererFields].sort(),
     'renderer/global.d.ts must declare exactly the desktop projection fields')
-  // The FOURTH declaration of this wire object — preload.cts — is pinned to
-  // the renderer copy by ipc-surface-mirror.test.ts (L3 shape guard), so the
-  // whole four-way set is transitively covered by the two gates together.
-  //
-  // The client plugin legitimately omits `probe` (documented: unused by its
-  // projection, and the omission keeps that module importable by the plain-node
-  // suite), so it is a SUBSET — never a superset with invented fields.
+  // The FOURTH declaration (preload.cts) is pinned to the renderer copy by ipc-surface-mirror.test.ts,
+  // so the two gates together cover all four. The client plugin legitimately omits `probe` (unused by
+  // its projection; the omission keeps that module plain-node importable), so it is a SUBSET, never a superset.
   const clientOnly = clientFields.filter(field => !desktopFields.includes(field))
   assert.deepEqual(clientOnly, [], 'the client mirror must not invent fields the desktop never projects')
   assert.deepEqual(desktopFields.filter(field => !clientFields.includes(field)), ['probe'])

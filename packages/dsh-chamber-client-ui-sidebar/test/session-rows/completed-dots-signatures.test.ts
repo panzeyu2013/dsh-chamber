@@ -17,6 +17,13 @@ import {
 import type { InstanceRuntimeReport } from '../../src/shared/aggregate-store.ts'
 import { server, session, snapshot, workspace } from '../support/derive-fixtures.ts'
 
+/** The [local, ssh-r1] pair with the remote aggregate overridden — the shared probe of the gate cases. */
+const sigWithRemote = (overrides: Parameters<typeof server>[1] = {}) =>
+  serversProjectionSignature([server('local'), server('ssh-r1', overrides)])
+/** Signature of the single remote source with the given overrides. */
+const sigRemoteOnly = (overrides: Parameters<typeof server>[1] = {}) =>
+  serversProjectionSignature([server('ssh-r1', overrides)])
+
 // ---- reconcileCompletedFacts (the App-owned completed-dot state machine) ----
 
 function reconcile(
@@ -102,22 +109,15 @@ test('reconcile keeps sibling arms when one session re-runs', () => {
 // ---- content signatures (2026-08 perf pass: identity-preserving state) ----
 
 test('instanceSnapshotSignature is stable for identical content and differs on any row change', () => {
-  const base = snapshot(
+  const makeSnap = () => snapshot(
     [workspace('w1', 'Work', ['a', 'b'])],
     [session('a', 1, { title: 'A' }), session('b', 2, { running: true })],
   )
-  const same = snapshot(
-    [workspace('w1', 'Work', ['a', 'b'])],
-    [session('a', 1, { title: 'A' }), session('b', 2, { running: true })],
-  )
-  assert.equal(instanceSnapshotSignature(base), instanceSnapshotSignature(same))
-  // A fresh object with the same content is byte-identical — this is exactly
-  // the 10s-poll no-change case the App layer must not turn into a re-render.
-  const rerun = snapshot(
-    [workspace('w1', 'Work', ['a', 'b'])],
-    [session('a', 1, { title: 'A' }), session('b', 2, { running: true })],
-  )
-  assert.equal(instanceSnapshotSignature(base), instanceSnapshotSignature(rerun))
+  const base = makeSnap()
+  assert.equal(instanceSnapshotSignature(base), instanceSnapshotSignature(makeSnap()))
+  // A fresh object with the same content is byte-identical — exactly the 10s-poll
+  // no-change case the App layer must not turn into a re-render.
+  assert.equal(instanceSnapshotSignature(base), instanceSnapshotSignature(makeSnap()))
   // Any render-relevant change flips the signature.
   assert.notEqual(instanceSnapshotSignature(base), instanceSnapshotSignature(
     snapshot([workspace('w1', 'Work', ['a'])], [session('a', 1, { title: 'A' }), session('b', 2, { running: true })]),
@@ -245,116 +245,60 @@ test('serversProjectionSignature ignores the per-call updatedAt stamp but tracks
   // A same-id authoritative replacement must publish even when every visible
   // field is identical, so source-owned child contexts can retire the old
   // incarnation instead of reusing it.
-  assert.notEqual(
-    serversProjectionSignature(a),
-    serversProjectionSignature([server('local'), server('ssh-r1', { sourceFingerprint: 'b'.repeat(64) })]),
-  )
-  assert.notEqual(
-    serversProjectionSignature([server('ssh-r1')]),
-    serversProjectionSignature([server('ssh-r1', { kind: 'gateway' })]),
-    'gateway remains a first-class kind in the shared aggregate contract',
-  )
-  assert.notEqual(
-    serversProjectionSignature([server('ssh-r1')]),
-    serversProjectionSignature([server('ssh-r1', { transport: 'http' })]),
-    'transport is independent from target kind',
-  )
+  assert.notEqual(serversProjectionSignature(a), sigWithRemote({ sourceFingerprint: 'b'.repeat(64) }))
+  assert.notEqual(sigRemoteOnly(), sigRemoteOnly({ kind: 'gateway' }), 'gateway remains a first-class kind in the shared aggregate contract')
+  assert.notEqual(sigRemoteOnly(), sigRemoteOnly({ transport: 'http' }), 'transport is independent from target kind')
   // 托管停机事实是渲染相关的（来源说明行/设置面板文案），必须进发布门——
   // 否则"托管 dsh 停机 + 传输断开"的跃迁被去重、说明行冻结（2026-12 复查 MINOR）。
-  assert.notEqual(
-    serversProjectionSignature([server('ssh-r1')]),
-    serversProjectionSignature([server('ssh-r1', { managedRuntimeDown: true })]),
-    'the managed-down fact is render-relevant',
-  )
-  assert.notEqual(
-    serversProjectionSignature([server('ssh-r1', { rawId: 'r1' })]),
-    serversProjectionSignature([server('ssh-r1', { rawId: 'other' })]),
-    'raw IPC identity is part of the bridge contract',
-  )
+  assert.notEqual(sigRemoteOnly(), sigRemoteOnly({ managedRuntimeDown: true }), 'the managed-down fact is render-relevant')
+  assert.notEqual(sigRemoteOnly({ rawId: 'r1' }), sigRemoteOnly({ rawId: 'other' }), 'raw IPC identity is part of the bridge contract')
   // 降级事实同样进发布门（2026-12，05 §4「降级呈现」第二批）：来源行的降级说明与
   // 连接页口径都从这条投影读，缺口单独翻转必须移动签名字节，否则提示冻结在上
   // 一代（例如自愈成功、缺口消失后来源行仍挂着旧警示）。
+  assert.notEqual(sigRemoteOnly(), sigRemoteOnly({ bootGap: { kind: 'graph-unavailable' } }),
+    'a gap-only flip must republish (the source row renders it)')
   assert.notEqual(
-    serversProjectionSignature([server('ssh-r1')]),
-    serversProjectionSignature([server('ssh-r1', { bootGap: { kind: 'graph-unavailable' } })]),
-    'a gap-only flip must republish (the source row renders it)',
-  )
-  assert.notEqual(
-    serversProjectionSignature([server('ssh-r1', { bootGap: { kind: 'graph-unavailable' } })]),
-    serversProjectionSignature([server('ssh-r1', { bootGap: { kind: 'required-services-missing', services: ['sidebarRight'] } })]),
+    sigRemoteOnly({ bootGap: { kind: 'graph-unavailable' } }),
+    sigRemoteOnly({ bootGap: { kind: 'required-services-missing', services: ['sidebarRight'] } }),
     'a different kind (or a different payload) is a different gap',
   )
   assert.equal(
-    serversProjectionSignature([server('ssh-r1', { bootGap: { kind: 'graph-unavailable' } })]),
-    serversProjectionSignature([server('ssh-r1', { bootGap: { kind: 'graph-unavailable', services: [], injectedBy: [], failedIds: [] } })]),
+    sigRemoteOnly({ bootGap: { kind: 'graph-unavailable' } }),
+    sigRemoteOnly({ bootGap: { kind: 'graph-unavailable', services: [], injectedBy: [], failedIds: [] } }),
     'absent and empty structured fields are the same fact (the projection normalizes them)',
   )
-  assert.notEqual(
-    serversProjectionSignature([server('ssh-r1')]),
-    serversProjectionSignature([server('ssh-r1', { dshVersion: '1.2.3' })]),
-    'live host version reaches settings consumers',
-  )
+  assert.notEqual(sigRemoteOnly(), sigRemoteOnly({ dshVersion: '1.2.3' }), 'live host version reaches settings consumers')
   // Session-level updatedAt IS part of the signature since the 2026-08
   // updated-mode alignment (updated = manual order + activity promotion): a
   // session's last-activity tick must re-publish the projection so the
   // sidebar's per-account derivation can promote the session.
-  assert.notEqual(
-    serversProjectionSignature(a),
-    serversProjectionSignature([
-      server('local'),
-      server('ssh-r1', { workspaces: [{ id: 'w1', title: 'Work', sessions: [{ id: 's1', title: 'One', displayTitle: 'One', running: false, updatedAt: 999 }] }] }),
-    ]),
-  )
+  assert.notEqual(serversProjectionSignature(a), sigWithRemote({
+    workspaces: [{ id: 'w1', title: 'Work', sessions: [{ id: 's1', title: 'One', displayTitle: 'One', running: false, updatedAt: 999 }] }],
+  }))
   // The same session with the same updatedAt still signs identically.
-  assert.equal(
-    serversProjectionSignature(a),
-    serversProjectionSignature([
-      server('local'),
-      server('ssh-r1', { workspaces: [{ id: 'w1', title: 'Work', sessions: [{ id: 's1', title: 'One', displayTitle: 'One', running: false, updatedAt: 1 }] }] }),
-    ]),
-  )
+  assert.equal(serversProjectionSignature(a), sigWithRemote({
+    workspaces: [{ id: 'w1', title: 'Work', sessions: [{ id: 's1', title: 'One', displayTitle: 'One', running: false, updatedAt: 1 }] }],
+  }))
   // Runtime facts of sessions NOT visible in the projection (subagent-origin /
   // archived / blank-non-current rows) never re-render the list.
-  assert.equal(
-    serversProjectionSignature(a),
-    serversProjectionSignature([
-      server('local'),
-      server('ssh-r1', { runtime: { sessions: { hidden: { running: true } } } }),
-    ]),
-  )
+  assert.equal(serversProjectionSignature(a), sigWithRemote({ runtime: { sessions: { hidden: { running: true } } } }))
   // A visible session's CHANNEL running flip does NOT re-render the sidebar
   // (2026-08 fix): the ring is poll-driven (runningRingVisible), so the
   // projection signature excludes the channel running bit — a report whose
   // only change is the running bit yields the same signature.
   assert.equal(
-    serversProjectionSignature([
-      server('local'),
-      server('ssh-r1', { runtime: { sessions: { s1: { running: true } } } }),
-    ]),
-    serversProjectionSignature([
-      server('local'),
-      server('ssh-r1', { runtime: { sessions: { s1: { running: false } } } }),
-    ]),
+    sigWithRemote({ runtime: { sessions: { s1: { running: true } } } }),
+    sigWithRemote({ runtime: { sessions: { s1: { running: false } } } }),
   )
   // A visible session's RENDERED fact change still flips the signature.
-  assert.notEqual(
-    serversProjectionSignature(a),
-    serversProjectionSignature([
-      server('local'),
-      server('ssh-r1', { runtime: { sessions: { s1: { completed: true } } } }),
-    ]),
-  )
+  assert.notEqual(serversProjectionSignature(a), sigWithRemote({ runtime: { sessions: { s1: { completed: true } } } }))
   // Connection / phase / workspaces / runtime changes all flip it.
   assert.notEqual(serversProjectionSignature(a), serversProjectionSignature([server('local', { connected: false }), server('ssh-r1')]))
   assert.notEqual(serversProjectionSignature(a), serversProjectionSignature([server('local', { phase: 'starting' }), server('ssh-r1')]))
-  assert.notEqual(serversProjectionSignature(a), serversProjectionSignature([
-    server('local'),
-    server('ssh-r1', { workspaces: [{ id: 'w1', title: 'Work', sessions: [{ id: 's1', title: 'One', displayTitle: 'One', running: true, updatedAt: 1 }] }] }),
-  ]))
-  assert.notEqual(serversProjectionSignature(a), serversProjectionSignature([
-    server('local'),
-    server('ssh-r1', { runtime: { current: 's1', sessions: { s1: { completed: true } } } }),
-  ]))
+  assert.notEqual(serversProjectionSignature(a), sigWithRemote({
+    workspaces: [{ id: 'w1', title: 'Work', sessions: [{ id: 's1', title: 'One', displayTitle: 'One', running: true, updatedAt: 1 }] }],
+  }))
+  assert.notEqual(serversProjectionSignature(a), sigWithRemote({ runtime: { current: 's1', sessions: { s1: { completed: true } } } }))
   assert.notEqual(serversProjectionSignature(a), serversProjectionSignature([server('local', { aggregateError: 'boom' }), server('ssh-r1')]))
   // Order of servers matters (source groups are ordered).
   assert.notEqual(serversProjectionSignature(a), serversProjectionSignature([server('ssh-r1'), server('local')]))
@@ -365,35 +309,25 @@ test('serversProjectionSignature JSON-encodes titles: user-controlled separators
   // encoding would have used — JSON escaping keeps them apart (a collision
   // here would make the publish gate silently skip a real change).
   const twoRows = [server('local', {
-    workspaces: [{
-      id: 'w1',
-      title: 'Work',
-      sessions: [
-        { id: 's1', title: 'a', displayTitle: 'a', running: false },
-        { id: 's2', title: 'b', displayTitle: 'b', running: false },
-      ],
-    }],
+    workspaces: [{ id: 'w1', title: 'Work', sessions: [
+      { id: 's1', title: 'a', displayTitle: 'a', running: false },
+      { id: 's2', title: 'b', displayTitle: 'b', running: false },
+    ] }],
   })]
   const forgedSingleRow = [server('local', {
-    workspaces: [{
-      id: 'w1',
-      title: 'Work',
-      sessions: [{ id: 's1', title: 'a,0:0,0,s2:b', displayTitle: 'a,0:0,0,s2:b', running: false }],
-    }],
+    workspaces: [{ id: 'w1', title: 'Work', sessions: [
+      { id: 's1', title: 'a,0:0,0,s2:b', displayTitle: 'a,0:0,0,s2:b', running: false },
+    ] }],
   })]
   assert.notEqual(serversProjectionSignature(twoRows), serversProjectionSignature(forgedSingleRow))
   // Identical content on fresh objects still yields identical signatures.
   assert.equal(
     serversProjectionSignature(twoRows),
     serversProjectionSignature([server('local', {
-      workspaces: [{
-        id: 'w1',
-        title: 'Work',
-        sessions: [
-          { id: 's1', title: 'a', displayTitle: 'a', running: false },
-          { id: 's2', title: 'b', displayTitle: 'b', running: false },
-        ],
-      }],
+      workspaces: [{ id: 'w1', title: 'Work', sessions: [
+        { id: 's1', title: 'a', displayTitle: 'a', running: false },
+        { id: 's2', title: 'b', displayTitle: 'b', running: false },
+      ] }],
     })]),
   )
 })

@@ -23,16 +23,12 @@ import {
   TEST_FILE_PATTERN,
   UNWIRED_ALLOWLIST,
 } from './verify-test-wiring.mjs'
-
 /** Build the wiring evidence shape the gate consumes. */
 function evidenceOf({ root = '', packages = {} } = {}) {
   return { root, byPackage: new Map(Object.entries(packages)) }
 }
-
 test('a repeated manifest group key is reported as a shadow', () => {
-  // The real regression (2026-12): the sidebar manifest carried an empty
-  // placeholder `'visual-lock': []` after a populated group of the same name, so
-  // the lock's path matched the wiring text while the group never ran.
+  // A repeated manifest group key shadows the earlier populated one: the lock's path matches the wiring text while the group never runs.
   const source = [
     'const GROUPS = {',
     "  'alpha': [",
@@ -50,14 +46,12 @@ test('a repeated manifest group key is reported as a shadow', () => {
   assert.deepEqual(findDuplicateGroupKeys(''), [])
   assert.deepEqual(findDuplicateGroupKeys(undefined), [])
 })
-
 test('pattern accepts the two test extensions and nothing else', () => {
   assert.equal(TEST_FILE_PATTERN.test('a.test.ts'), true)
   assert.equal(TEST_FILE_PATTERN.test('a.test.mjs'), true)
   assert.equal(TEST_FILE_PATTERN.test('a.spec.ts'), false)
   assert.equal(TEST_FILE_PATTERN.test('a.test.js'), false)
 })
-
 test('a package-relative basename in the owning package script counts as wired', () => {
   const verdict = findUnwiredTests({
     testFiles: ['packages/alpha/test/one.test.ts'],
@@ -66,7 +60,6 @@ test('a package-relative basename in the owning package script counts as wired',
   assert.deepEqual(verdict.unwired, [])
   assert.equal(verdict.corpusSize, 1)
 })
-
 test('a file list inside the package helper script counts as wired', () => {
   const verdict = findUnwiredTests({
     testFiles: ['packages/alpha/test/two.test.ts'],
@@ -74,7 +67,6 @@ test('a file list inside the package helper script counts as wired', () => {
   })
   assert.deepEqual(verdict.unwired, [])
 })
-
 test('a root manifest reference wires a package test file', () => {
   const verdict = findUnwiredTests({
     testFiles: ['packages/alpha/test/smoke.test.ts'],
@@ -82,7 +74,6 @@ test('a root manifest reference wires a package test file', () => {
   })
   assert.deepEqual(verdict.unwired, [])
 })
-
 test('an unreferenced file is reported even when another package has the same basename', () => {
   const verdict = findUnwiredTests({
     testFiles: ['packages/alpha/test/shared.test.ts', 'packages/beta/test/shared.test.ts'],
@@ -90,7 +81,6 @@ test('an unreferenced file is reported even when another package has the same ba
   })
   assert.deepEqual(verdict.unwired, ['packages/beta/test/shared.test.ts'])
 })
-
 test('a repository-level test file needs a root reference, not a package reference', () => {
   const verdict = findUnwiredTests({
     testFiles: ['scripts/dev/gate.test.mjs'],
@@ -98,7 +88,6 @@ test('a repository-level test file needs a root reference, not a package referen
   })
   assert.deepEqual(verdict.unwired, ['scripts/dev/gate.test.mjs'])
 })
-
 test('root entry points are followed, deduped, and never a test file itself', () => {
   // The scripts suites delegate their file list to one runner: without following
   // it every scripts test reads as unwired. A `node --test <file>` form or a
@@ -118,7 +107,6 @@ test('root entry points are followed, deduped, and never a test file itself', ()
   assert.deepEqual(rootEntryPoints(undefined), [])
   assert.deepEqual(rootEntryPoints({}), [])
 })
-
 test('an allowlisted file is accepted and reported separately', () => {
   const verdict = findUnwiredTests({
     testFiles: ['packages/alpha/test/parked.test.ts'],
@@ -128,17 +116,12 @@ test('an allowlisted file is accepted and reported separately', () => {
   assert.deepEqual(verdict.unwired, [])
   assert.deepEqual(verdict.allowlisted, ['packages/alpha/test/parked.test.ts'])
 })
-
 test('the shipped allowlist stays empty unless a reviewer adds a justified entry', () => {
   for (const entry of UNWIRED_ALLOWLIST) {
     assert.ok(entry.reason.length >= 20, `${entry.path} needs a substantive reason`)
   }
 })
-
-// ---------------------------------------------------------------------------
 // macOS/Swift corpus (G24): Package.swift testTarget ↔ files ↔ gate entry
-// ---------------------------------------------------------------------------
-
 test('parseSwiftTestTargets: default Tests/<name> path and explicit path', () => {
   const targets = parseSwiftTestTargets(`
         .testTarget(
@@ -157,7 +140,6 @@ test('parseSwiftTestTargets: default Tests/<name> path and explicit path', () =>
   ])
   assert.deepEqual(parseSwiftTestTargets('no test targets here'), [])
 })
-
 test('findUnwiredSwiftTests: files outside the testTarget path or without func test* are unwired', () => {
   const targets = [{ name: 'T', path: 'macos/Tests/T' }]
   const files = {
@@ -183,7 +165,6 @@ test('findUnwiredSwiftTests: files outside the testTarget path or without func t
   assert.equal(verdict.corpusSize, 3)
   assert.deepEqual(verdict.missingTargets, [])
 })
-
 test('findUnwiredSwiftTests: a declared testTarget with no files is reported (empty corpus)', () => {
   const verdict = findUnwiredSwiftTests({
     testFiles: ['macos/Tests/T/GoodTests.swift'],
@@ -192,7 +173,6 @@ test('findUnwiredSwiftTests: a declared testTarget with no files is reported (em
   })
   assert.deepEqual(verdict.missingTargets, ['macos/Tests/Gone'])
 })
-
 test('findUnwiredSwiftTests: an allowlisted helper without func test* stays accepted', () => {
   const verdict = findUnwiredSwiftTests({
     testFiles: ['macos/Tests/T/Helper.swift'],
@@ -203,7 +183,6 @@ test('findUnwiredSwiftTests: an allowlisted helper without func test* stays acce
   assert.deepEqual(verdict.unwired, [])
   assert.deepEqual(verdict.allowlisted, ['macos/Tests/T/Helper.swift'])
 })
-
 test('findSwiftTestScript + swiftWiringProblems: manifest ↔ run-checks lockstep', () => {
   const script = findSwiftTestScript({ scripts: { 'test:swift': 'node scripts/gates/run-swift-tests.mjs' } })
   assert.deepEqual(script, { name: 'test:swift', command: 'node scripts/gates/run-swift-tests.mjs' })
@@ -218,7 +197,6 @@ test('findSwiftTestScript + swiftWiringProblems: manifest ↔ run-checks lockste
     /does not reference the Swift-suite script 'test:swift'/,
   )
 })
-
 test('the shipped Swift corpus, manifest script and gate entry stay in lockstep', () => {
   const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
   const manifest = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8'))

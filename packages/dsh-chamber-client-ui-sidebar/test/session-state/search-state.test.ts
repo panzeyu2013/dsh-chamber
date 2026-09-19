@@ -1,10 +1,8 @@
 /**
- * shared/search-state.ts unit tests (plain node:test, no dsh, no DOM):
- * expand/collapse/clear/setQuery transitions + notifications, sanitized
- * queries, the disconnect prune (a disconnected source drops its search
- * state), and the debounced fetch jobs — driven through the INJECTED
- * `setSearchFetcher`, so jobs arm in node without any wire (success → ready,
- * failure → error, superseded → silent, disconnect aborts the in-flight job).
+ * shared/search-state.ts unit tests (plain node:test, no dsh, no DOM): expand/collapse/clear/
+ * setQuery transitions + notifications, sanitized queries, the disconnect prune, and the debounced
+ * fetch jobs — driven through the INJECTED `setSearchFetcher`, so jobs arm in node without any
+ * wire (success → ready, failure → error, superseded → silent, disconnect aborts the in-flight job).
  */
 
 import { test } from 'node:test'
@@ -21,17 +19,8 @@ import {
 import { chamberBridge, type ChamberServerAggregate } from '../../src/shared/aggregate-store.ts'
 
 function server(id: string, connected: boolean): ChamberServerAggregate {
-  return {
-    id,
-    sourceFingerprint: 'a'.repeat(64),
-    kind: 'dsh',
-    transport: 'ssh',
-    label: id,
-    connected,
-    phase: connected ? 'ready' : 'stopped',
-    workspaces: [],
-    updatedAt: 0,
-  }
+  return { id, sourceFingerprint: 'a'.repeat(64), kind: 'dsh', transport: 'ssh', label: id, connected,
+    phase: connected ? 'ready' : 'stopped', workspaces: [], updatedAt: 0 }
 }
 
 test('search-state: expand/collapse/clear transitions notify and are idempotent', () => {
@@ -83,8 +72,7 @@ test('search-state: a disconnected source drops its state on projection publish'
   assert.equal(getSearchStates().get('a')?.expanded, true)
   assert.equal(getSearchStates().get('b')?.expanded, true)
 
-  // b's tunnel drops: the publish prunes b's search state (a reconnect starts
-  // from a clean collapsed capsule); a's survives untouched.
+  // b's tunnel drops: the publish prunes b's state (a reconnect starts collapsed); a's survives.
   chamberBridge.publish([server('a', true), server('b', false)])
   assert.equal(getSearchStates().get('a')?.expanded, true)
   assert.equal(getSearchStates().get('b'), undefined)
@@ -96,9 +84,8 @@ test('search-state: a disconnected source drops its state on projection publish'
 })
 
 /**
- * Deadline-poll a condition instead of sleeping a fixed wall-clock margin
- * against the 250ms debounce: a stalled event loop (loaded CI) must not
- * flake the assertions (2026-08 audit fix).
+ * Deadline-poll a condition instead of sleeping a fixed margin against the 250ms debounce: a
+ * stalled event loop (loaded CI) must not flake the assertions (2026-08 audit fix).
  */
 async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
   const start = Date.now()
@@ -111,10 +98,8 @@ async function waitFor(predicate: () => boolean, timeoutMs = 2000): Promise<void
 test('search-state: one debounced job per expanded connected source, results land via the injected fetcher', async () => {
   chamberBridge.publish([server('a', true)])
   const seen: Array<{ sourceId: string; query: string; aborted: boolean }> = []
-  setSearchFetcher(async (sourceId, query, signal) => {
-    seen.push({ sourceId, query, aborted: signal.aborted })
-    return { items: [{ sessionId: 's1', snippet: 'hit' }], hasMore: false }
-  })
+  setSearchFetcher(async (sourceId, query, signal) => { seen.push({ sourceId, query, aborted: signal.aborted })
+    return { items: [{ sessionId: 's1', snippet: 'hit' }], hasMore: false } })
   expandSearch('a')
   setSearchQuery('a', 'foo')
   assert.equal(getSearchStates().get('a')?.status, 'loading')
@@ -126,8 +111,7 @@ test('search-state: one debounced job per expanded connected source, results lan
   assert.deepEqual(state?.items, [{ sessionId: 's1', snippet: 'hit' }])
   assert.deepEqual(seen, [{ sourceId: 'a', query: 'foo', aborted: false }])
 
-  // Re-querying supersedes the finished job: a NEW job is armed for the new
-  // query (one fetch total for the new query).
+  // Re-querying supersedes the finished job: a NEW job is armed for the new query.
   setSearchQuery('a', 'bar')
   assert.equal(getSearchStates().get('a')?.status, 'loading')
   await waitFor(() => getSearchStates().get('a')?.status === 'ready')
@@ -149,14 +133,9 @@ test('search-state: a failing search lands an error state (never lingers on pend
 
 test('search-state: a superseded job exits silently while the new job owns the state (P2-6)', async () => {
   chamberBridge.publish([server('a', true)])
-  const pending: Array<{
-    resolve: (value: { items: { sessionId: string; snippet: string }[]; hasMore: boolean }) => void
-    reject: (err: Error) => void
-    signal: AbortSignal
-  }> = []
-  setSearchFetcher((_sourceId, _query, signal) => new Promise((resolve, reject) => {
-    pending.push({ resolve, reject, signal })
-  }))
+  const pending: Array<{ resolve: (value: { items: { sessionId: string; snippet: string }[]; hasMore: boolean }) => void
+    reject: (err: Error) => void; signal: AbortSignal }> = []
+  setSearchFetcher((_sourceId, _query, signal) => new Promise((resolve, reject) => { pending.push({ resolve, reject, signal }) }))
   expandSearch('a')
   setSearchQuery('a', 'one')
   await waitFor(() => pending.length === 1) // debounce fired, job one in flight
@@ -167,8 +146,7 @@ test('search-state: a superseded job exits silently while the new job owns the s
   await waitFor(() => pending.length === 2)
   const second = pending[1]
 
-  // Job one rejects AFTER being superseded — its abort must land silently
-  // (it no longer owns the state); the state stays on job two's loading.
+  // Job one rejects AFTER being superseded — its abort must land silently; the state stays on job two's loading.
   first.reject(new Error('Aborted'))
   assert.equal(getSearchStates().get('a')?.status, 'loading')
 
@@ -183,10 +161,7 @@ test('search-state: a superseded job exits silently while the new job owns the s
 test('search-state: a disconnect aborts the in-flight job and drops the state', async () => {
   chamberBridge.publish([server('a', true)])
   const signals: AbortSignal[] = []
-  setSearchFetcher((_sourceId, _query, signal) => new Promise(() => {
-    signals.push(signal)
-    // Never settles — the disconnect abort is what must clean it up.
-  }))
+  setSearchFetcher((_sourceId, _query, signal) => new Promise(() => { signals.push(signal) })) // never settles: disconnect abort cleans it up
   expandSearch('a')
   setSearchQuery('a', 'foo')
   await waitFor(() => signals.length === 1)

@@ -1,11 +1,8 @@
 /**
- * updater.ts (design 11) unit tests — part 1: the release-page allowlist, the
- * controller state machine over the injected fake electron-updater (check/
- * download/error/subscribe, install-shape gates, single-flight) and start().
- * Pure Node, no electron and no real electron-updater.
- *
- * Sibling parts: updater-restart-install.test.ts (restart/quit/watchdog),
- * updater-cache-maintenance.test.ts (sanitize/cache cleanup).
+ * updater.ts (design 11) part 1: release-page allowlist, the controller state
+ * machine over the injected fake electron-updater (check/download/error/
+ * subscribe, install-shape gates, single-flight) and start(). Pure Node.
+ * Sibling parts: updater-restart-install.test.ts, updater-cache-maintenance.test.ts.
  */
 
 import { test } from 'node:test'
@@ -13,7 +10,6 @@ import assert from 'node:assert/strict'
 import { betaReleaseDownloadBase, createUpdateController, isAllowedReleaseUrl, LINUX_UPDATE_UNSUPPORTED_REASON, openReleasePage, probeLinuxAppImage, resolveGithubBetaFeed } from '../../updater.ts'
 import type { UpdateController, UpdatePhase, UpdateState } from '../../updater.ts'
 import { FakeAutoUpdater, makeController } from '../support/updater-harness.ts'
-
 test('release-page allowlist pins scheme/origin/repository and rejects encoded traversal or userinfo', () => {
   assert.equal(isAllowedReleaseUrl('https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.2.0'), true)
   assert.equal(isAllowedReleaseUrl('http://github.com/panzeyu2013/dsh-chamber/releases'), false)
@@ -23,7 +19,6 @@ test('release-page allowlist pins scheme/origin/repository and rejects encoded t
   assert.equal(isAllowedReleaseUrl('https://github.com/panzeyu2013/dsh-chamber/..%252f..%252fsettings'), false)
   assert.equal(isAllowedReleaseUrl(null), false)
 })
-
 test('openReleasePage awaits the OS handoff and reports rejection instead of false success', async () => {
   const url = 'https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.2.0'
   let opened: string | null = null
@@ -58,7 +53,6 @@ function collect(controller: UpdateController): UpdateState[] {
   controller.subscribe(state => states.push(state))
   return states
 }
-
 test('initial state is idle with the injected version/channel (win32: no install block)', () => {
   const { controller } = makeController()
   const state = controller.state()
@@ -71,16 +65,13 @@ test('initial state is idle with the injected version/channel (win32: no install
   assert.equal(state.installBlockedReason, null)
   assert.equal(state.error, null)
 })
-
 test('installBlockedReason follows platform/install shape (linux AppImage vs other shapes, darwin dev)', () => {
-  // Linux packaged but NOT started from a writable AppImage (dev / unpacked
-  // dir / deb): the historic inert reason — the renderer gate keys on it.
+  // Linux packaged but not from a writable AppImage (dev/unpacked/deb): inert.
   const linuxUnpacked = makeController({ deps: { platform: 'linux', app: { isPackaged: true }, linuxAppImage: null } }).controller.state()
   assert.equal(linuxUnpacked.installBlockedReason, LINUX_UPDATE_UNSUPPORTED_REASON)
   const linuxDev = makeController({ deps: { platform: 'linux', app: { isPackaged: false } } }).controller.state()
   assert.equal(linuxDev.installBlockedReason, LINUX_UPDATE_UNSUPPORTED_REASON)
-  // dev + a NON-NULL probe must still stay blocked: only the packaged shape
-  // may open the gate (isPackaged is the second half of the AND).
+  // dev + a NON-NULL probe stays blocked: only the packaged shape opens the gate.
   const linuxDevWithProbe = makeController({
     deps: { platform: 'linux', app: { isPackaged: false }, linuxAppImage: { path: '/opt/dsh-chamber.AppImage' } },
   }).controller.state()
@@ -93,7 +84,6 @@ test('installBlockedReason follows platform/install shape (linux AppImage vs oth
   const darwinDev = makeController({ deps: { platform: 'darwin', app: { isPackaged: false } } }).controller.state()
   assert.equal(darwinDev.installBlockedReason, 'development build')
 })
-
 test('probeLinuxAppImage requires an AppImage launch shape with an absolute regular file in a writable parent', () => {
   const mountExec = '/tmp/.mount_dsh-chamberAbC123/dsh-chamber'
   const extractExec = '/tmp/appimage_extracted_a119dd1b0/dsh-chamber'
@@ -103,9 +93,8 @@ test('probeLinuxAppImage requires an AppImage launch shape with an absolute regu
   const base = { env: { APPIMAGE: '/opt/dsh-chamber.AppImage' }, stat: file, ...ok }
   assert.deepEqual(probeLinuxAppImage({ ...base, execPath: mountExec }), { path: '/opt/dsh-chamber.AppImage' })
   assert.deepEqual(probeLinuxAppImage({ ...base, execPath: extractExec }), { path: '/opt/dsh-chamber.AppImage' })
-  // Unpacked-dir / dev launch shapes never open the gate, even with a stale
-  // inherited APPIMAGE pointing at a real writable file (quit-install must
-  // never unlink a foreign file).
+  // Unpacked-dir / dev shapes never open the gate, even with a stale inherited
+  // APPIMAGE (quit-install must never unlink a foreign file).
   assert.equal(probeLinuxAppImage({ ...base, execPath: '/opt/dsh-chamber/linux-unpacked/dsh-chamber' }), null)
   assert.equal(probeLinuxAppImage({ ...base, execPath: '/home/user/bin/dsh-chamber' }), null)
   // Missing / relative / non-file APPIMAGE → null.
@@ -118,8 +107,7 @@ test('probeLinuxAppImage requires an AppImage launch shape with an absolute regu
     probeLinuxAppImage({ env: { APPIMAGE: '/opt/x' }, stat: () => { throw new Error('ENOENT') }, ...ok, execPath: mountExec }),
     null,
   )
-  // Parent-directory write denied → null (AppImageUpdater unlinks + moves
-  // INTO the parent; the file's own mode is irrelevant to replacement).
+  // Parent-dir write denied → null (AppImageUpdater moves INTO the parent).
   assert.equal(
     probeLinuxAppImage({
       env: { APPIMAGE: '/opt/dsh-chamber.AppImage' },
@@ -143,7 +131,6 @@ test('probeLinuxAppImage requires an AppImage launch shape with an absolute regu
     null,
   )
 })
-
 test('contract invariants are asserted on the injected fake (stable channel + dev app)', () => {
   const { fake } = makeController()
   assert.equal(fake.autoDownload, false, 'autoDownload must be false (design 11: downloads only after user confirmation)')
@@ -154,13 +141,11 @@ test('contract invariants are asserted on the injected fake (stable channel + de
   assert.deepEqual(fake.feedUrl, { provider: 'github', owner: 'panzeyu2013', repo: 'dsh-chamber' })
   assert.equal(fake.channel, null, 'stable: no channel assignment')
 })
-
 test('packaged app: the dev feed is NOT force-enabled (app-update.yml bakes the channel)', () => {
   const { fake } = makeController({ deps: { app: { isPackaged: true } } })
   assert.equal(fake.forceDevUpdateConfig, false)
   assert.equal(fake.feedUrl, null)
 })
-
 test('beta env opt-in: channel + allowPrerelease set, allowDowngrade re-asserted AFTER the channel assignment', () => {
   const { fake, controller } = makeController({ env: { DSH_CHAMBER_UPDATE_CHANNEL: 'beta' } })
   assert.equal(controller.state().channel, 'beta')
@@ -170,14 +155,12 @@ test('beta env opt-in: channel + allowPrerelease set, allowDowngrade re-asserted
   // controller must re-assert false after any channel assignment (§5).
   assert.equal(fake.allowDowngrade, false)
 })
-
 test('a prerelease running version is intrinsically pinned to the beta channel', () => {
   const { fake, controller } = makeController({ version: '0.2.0-beta.1' })
   assert.equal(controller.state().channel, 'beta')
   assert.equal(fake.allowPrerelease, true)
   assert.equal(fake.channel, 'beta')
 })
-
 test('beta release discovery selects numeric beta.10 over beta.2 and rejects non-canonical tags', () => {
   assert.equal(betaReleaseDownloadBase([
     { tag_name: 'v9.0.0', draft: false, prerelease: false },
@@ -191,7 +174,6 @@ test('beta release discovery selects numeric beta.10 over beta.2 and rejects non
     { tag_name: 'v0.2.0', draft: false, prerelease: false },
   ]), /no published beta release/)
 })
-
 test('beta discovery uses only the bounded releases-list API', async () => {
   let requestedUrl = ''
   const feed = await resolveGithubBetaFeed(async (input, init) => {
@@ -207,7 +189,6 @@ test('beta discovery uses only the bounded releases-list API', async () => {
   assert.equal(feed, 'https://github.com/panzeyu2013/dsh-chamber/releases/download/v0.2.0-beta.3/')
   assert.doesNotMatch(requestedUrl + feed, /\/latest(?:[./?]|$)|latest[-.]\w+\.yml/)
 })
-
 test('beta check switches to an exact generic beta feed and never offers the GitHub latest fallback', async () => {
   let resolutions = 0
   const { fake, controller } = makeController({
@@ -230,7 +211,6 @@ test('beta check switches to an exact generic beta feed and never offers the Git
   assert.equal(fake.channel, 'beta')
   assert.equal(fake.allowDowngrade, false)
 })
-
 test('beta discovery failure is fail-closed before updater check; stable never invokes beta discovery', async () => {
   const beta = makeController({
     version: '0.2.0-beta.3',
@@ -252,7 +232,6 @@ test('beta discovery failure is fail-closed before updater check; stable never i
   assert.equal(stable.fake.channel, null)
   assert.deepEqual(stable.fake.feedUrl, { provider: 'github', owner: 'panzeyu2013', repo: 'dsh-chamber' })
 })
-
 test('checking-for-update transitions to checking and clears error', () => {
   const { fake, controller } = makeController()
   const states = collect(controller)
@@ -262,7 +241,6 @@ test('checking-for-update transitions to checking and clears error', () => {
   assert.equal(state.error, null)
   assert.equal(states.at(-1)?.phase, 'checking')
 })
-
 test('update-available transitions to available with latestVersion/releaseUrl and null progress', () => {
   const { fake, controller } = makeController()
   fake.emit('update-available', { version: '0.2.0' })
@@ -273,7 +251,6 @@ test('update-available transitions to available with latestVersion/releaseUrl an
   assert.equal(state.downloadPercent, null)
   assert.equal(state.error, null)
 })
-
 test('download-progress transitions to downloading with the percent', () => {
   const { fake, controller } = makeController()
   fake.emit('download-progress', { percent: 42 })
@@ -281,7 +258,6 @@ test('download-progress transitions to downloading with the percent', () => {
   assert.equal(state.phase, 'downloading')
   assert.equal(state.downloadPercent, 42)
 })
-
 test('update-downloaded transitions to downloaded with 100% and the version', () => {
   const { fake, controller } = makeController()
   fake.emit('update-available', { version: '0.2.0' })
@@ -291,7 +267,6 @@ test('update-downloaded transitions to downloaded with 100% and the version', ()
   assert.equal(state.latestVersion, '0.2.0')
   assert.equal(state.downloadPercent, 100)
 })
-
 test('update-not-available transitions to up-to-date and clears latestVersion/releaseUrl', () => {
   const { fake, controller } = makeController()
   fake.emit('update-available', { version: '0.2.0' })
@@ -301,7 +276,6 @@ test('update-not-available transitions to up-to-date and clears latestVersion/re
   assert.equal(state.latestVersion, null)
   assert.equal(state.releaseUrl, null)
 })
-
 test('error event: phase error, message sanitized, latestVersion KEPT (download-retry semantics)', () => {
   const { fake, controller } = makeController()
   fake.emit('update-available', { version: '0.2.0' })
@@ -312,7 +286,6 @@ test('error event: phase error, message sanitized, latestVersion KEPT (download-
   assert.ok(!state.error!.includes('/Users/'), 'no path material may reach the projection')
   assert.equal(state.latestVersion, '0.2.0', 'a download-side error keeps latestVersion for the retry path')
 })
-
 test('subscribe pushes every transition and unsubscribe stops them', () => {
   const { fake, controller } = makeController()
   const seen: UpdatePhase[] = []
@@ -324,7 +297,6 @@ test('subscribe pushes every transition and unsubscribe stops them', () => {
   fake.emit('update-not-available')
   assert.deepEqual(seen, ['checking', 'available'], 'an unsubscribed listener must not be called')
 })
-
 test('checkNow refuses loudly on linux non-AppImage shapes without touching the fake', async () => {
   const { fake, controller } = makeController({ deps: { platform: 'linux', linuxAppImage: null } })
   const result = await controller.checkNow()
@@ -332,7 +304,6 @@ test('checkNow refuses loudly on linux non-AppImage shapes without touching the 
   if (!result.ok) assert.equal(result.error, LINUX_UPDATE_UNSUPPORTED_REASON)
   assert.equal(fake.checkCalls, 0)
 })
-
 test('checkNow runs the shared check path on a linux AppImage build (shape gate open)', async () => {
   const { fake, controller } = makeController({
     deps: { platform: 'linux', app: { isPackaged: true }, linuxAppImage: { path: '/opt/dsh-chamber.AppImage' } },
@@ -341,18 +312,15 @@ test('checkNow runs the shared check path on a linux AppImage build (shape gate 
   assert.equal(result.ok, true)
   assert.equal(fake.checkCalls, 1, 'AppImage linux must reach electron-updater like mac/win')
 })
-
 test('checkNow is a no-op once a download completed (downloaded is final)', async () => {
   const { fake, controller } = makeController()
   fake.emit('update-downloaded', { version: '0.2.0' })
   const result = await controller.checkNow()
-  // A gate no-op still resolves {ok:true} — the renderer judges the outcome
-  // from the state push, never from this return value (documented contract).
+  // A gate no-op still resolves {ok:true}: the renderer judges the state push.
   assert.equal(result.ok, true)
   assert.equal(fake.checkCalls, 0, 'runCheck must not start a re-check in the downloaded state')
   assert.equal(controller.state().phase, 'downloaded')
 })
-
 test('checkNow single-flights an in-flight check (second call is a no-op)', async () => {
   const { fake, controller } = makeController()
   const gate = deferred<void>()
@@ -365,7 +333,6 @@ test('checkNow single-flights an in-flight check (second call is a no-op)', asyn
   gate.resolve()
   await first
 })
-
 test('checkNow is a no-op while a download is in flight', async () => {
   const { fake, controller } = makeController()
   fake.emit('update-available', { version: '0.2.0' })
@@ -380,7 +347,6 @@ test('checkNow is a no-op while a download is in flight', async () => {
   const downloadResult = await download
   assert.equal(downloadResult.ok, true)
 })
-
 test('download refuses when no update is available', async () => {
   const { fake, controller } = makeController()
   const result = await controller.download()
@@ -388,7 +354,6 @@ test('download refuses when no update is available', async () => {
   if (!result.ok) assert.equal(result.error, 'no update available')
   assert.equal(fake.downloadCalls, 0)
 })
-
 test('download refuses after a check failure (latestVersion cleared — never a stale download)', async () => {
   const { fake, controller } = makeController()
   fake.checkResult = Promise.reject(new Error('Cannot find module /opt/dsh-chamber/resources/app.asar'))
@@ -402,7 +367,6 @@ test('download refuses after a check failure (latestVersion cleared — never a 
   if (!result.ok) assert.equal(result.error, 'no update available')
   assert.equal(fake.downloadCalls, 0)
 })
-
 test('download refuses when automatic installation is blocked (linux non-AppImage shape)', async () => {
   const { fake, controller } = makeController({ deps: { platform: 'linux', linuxAppImage: null } })
   fake.emit('update-available', { version: '0.2.0' })
@@ -411,7 +375,6 @@ test('download refuses when automatic installation is blocked (linux non-AppImag
   if (!result.ok) assert.equal(result.error, 'automatic installation blocked on this platform')
   assert.equal(fake.downloadCalls, 0)
 })
-
 test('download proceeds on a linux AppImage build (shape gate open)', async () => {
   const { fake, controller } = makeController({
     deps: { platform: 'linux', app: { isPackaged: true }, linuxAppImage: { path: '/opt/dsh-chamber.AppImage' } },
@@ -421,7 +384,6 @@ test('download proceeds on a linux AppImage build (shape gate open)', async () =
   assert.equal(result.ok, true)
   assert.equal(fake.downloadCalls, 1, 'AppImage linux must reach the electron-updater download like mac/win')
 })
-
 test('download single-flights (a second click before the first progress event is refused)', async () => {
   const { fake, controller } = makeController()
   fake.emit('update-available', { version: '0.2.0' })
@@ -436,7 +398,6 @@ test('download single-flights (a second click before the first progress event is
   gate.resolve()
   await first
 })
-
 test('download failure: phase error, sanitized message, latestVersion KEPT for retry', async () => {
   const { fake, controller } = makeController()
   fake.emit('update-available', { version: '0.2.0' })
@@ -449,7 +410,6 @@ test('download failure: phase error, sanitized message, latestVersion KEPT for r
   assert.equal(state.error, 'Cannot read [path]')
   assert.equal(state.latestVersion, '0.2.0', 'a DOWNLOAD failure keeps latestVersion for the retry path')
 })
-
 test('full happy path: available → download-progress → update-downloaded in sequence', async () => {
   const { fake, controller } = makeController()
   const states = collect(controller)
@@ -472,7 +432,6 @@ test('full happy path: available → download-progress → update-downloaded in 
   assert.equal(controller.state().downloadPercent, 100, 'late progress after downloaded is ignored')
   assert.equal(states.at(-1)?.phase, 'downloaded')
 })
-
 test('after a check failure, checkNow retries from error and can reach available again', async () => {
   const { fake, controller } = makeController()
   fake.emit('error', new Error('EAI_AGAIN https://github.com'))
@@ -486,7 +445,6 @@ test('after a check failure, checkNow retries from error and can reach available
   assert.equal(state.latestVersion, '0.3.0')
   assert.equal(state.error, null, 'a successful retry clears the error')
 })
-
 test('start() on linux non-AppImage shapes is inert (no timers, just a log)', () => {
   const logs: string[] = []
   const fake = new FakeAutoUpdater()
@@ -501,7 +459,6 @@ test('start() on linux non-AppImage shapes is inert (no timers, just a log)', ()
   assert.ok(logs.some(line => line.includes('跳过更新检查')), 'non-AppImage linux start must log the skip and never schedule')
   assert.equal(fake.checkCalls, 0)
 })
-
 test('start() schedules checks on a linux AppImage build (shape gate open)', () => {
   const logs: string[] = []
   const fake = new FakeAutoUpdater()

@@ -1,21 +1,14 @@
 /**
- * nav-active.ts pure-logic tests (design 15 v1 flat form) — node:test, no
- * DOM. Covers the fixed chamber-global nav ids (connections / general — the
- * update status lives inside General) staying valid regardless of the
- * selected server's section ledger.
+ * nav-active.ts pure-logic tests (design 15 v1 flat form) — node:test, no DOM.
+ * Covers the fixed chamber-global nav ids (connections / general — the update status
+ * lives inside General) staying valid regardless of the selected server's ledger.
+ * 2026-09 修订：第三个固定入口 `__plugins` 已退役（现由连接页在服务器卡片内呈现），
+ * 本文件显式钉死「退役的 id 不再是固定项」——否则它会作为普通 ledger id 走回落分支。
  *
- * 2026-09 修订：第三个固定入口 `__plugins` 已退役（其 subject 是单个来源、
- * owner 是 chamber 壳，两组都不属于它），现由连接页在该服务器卡片内呈现；
- * 本文件因此只守 connections/general 两个固定 id，并显式钉死「退役的 id
- * 不再是固定项」——否则它会作为普通 ledger id 走回落分支。
- *
- * MUST run through the test-only vendor loader (2026-09-11 upstream-alignment
- * A2): `section-rows.ts` now VALUE-imports upstream's exported
- * `resolveSlotLabel` from `@deepseek-ai/dsh-client-ui-slots`, whose vendored
- * package.json points at an unbuilt `lib/`:
- *
- *   node --import ./test/support/vendor-register.mjs test/navigation/nav-active.test.ts
- *
+ * MUST run through the test-only vendor loader (2026-09-11 upstream-alignment A2):
+ * `section-rows.ts` VALUE-imports upstream's `resolveSlotLabel` from
+ * `@deepseek-ai/dsh-client-ui-slots`, whose vendored package.json points at an
+ * unbuilt `lib/`: `node --import ./test/support/vendor-register.mjs <file>`
  * (the package's `test` script already does).
  */
 import { test } from 'node:test';

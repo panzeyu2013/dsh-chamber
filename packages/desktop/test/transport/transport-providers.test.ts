@@ -4,29 +4,63 @@
  * child-disposal lifecycle, buildStartEnv injection and the ready-state
  * heartbeat / reverify surface.
  *
- * Sibling parts: transport-manager.test.ts, transport-connection-recovery.test.ts,
- * transport-exec-and-registry.test.ts.
+ * Sibling parts: transport-manager, transport-connection-recovery,
+ * transport-exec-and-registry (harness: test/support).
  */
 
-import { test } from 'node:test'
+import { test, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { createTransportManager } from '../../transport-manager.ts'
 import type { TransportManager } from '../../transport-manager.ts'
-import type { TransportInstanceInput, TransportInstanceSpec, TransportProvider, TransportVerifyResult } from '../../transport-provider.ts'
+import type { TransportInstanceSpec, TransportProvider, TransportVerifyResult } from '../../transport-provider.ts'
 import { configureSshPasswordStore, purgeSshAuth, setSshPassword, sshProvider } from '../../ssh-provider.ts'
 import { gatewayProvider } from '../../gateway-provider.ts'
-import { silentLogger, FakeChild, makeManager, tempDir, sleep, waitFor, fakeEnvProvider, type StatusWithNoUrlLeak } from '../support/transport-manager-harness.ts'
+import { silentLogger, FakeChild, makeManager, tempDir, sleep, waitFor, fakeEnvProvider, EXEC_INSTANCE, type StatusWithNoUrlLeak } from '../support/transport-manager-harness.ts'
 
-/** A second instance with a managed systemd service, for the exec tests. */
-const EXEC_INSTANCE: TransportInstanceInput = {
-  id: 's2',
-  label: 'lab-server',
-  host: 'lab.example.com',
-  user: 'bob',
-  remotePort: 3080,
-  serviceName: 'dsh-chamber',
+/** The shared spec projection of the two direct-endpoint providers. */
+function directSpec(record: Record<string, unknown>, kind: string, transport: string): TransportInstanceSpec {
+  return {
+    id: record.id as string, label: record.label as string, kind, transport, host: record.host as string,
+    user: null, sshPort: null, remotePort: record.remotePort as number, serviceName: null, remoteDshHome: null, insecureHttp: false,
+  }
+}
+
+/** A fakeEnvProvider that counts buildStartEnv lease releases for one helper. */
+function leaseProvider(helper: string) {
+  const state = { releases: 0 }
+  const provider: TransportProvider = {
+    ...fakeEnvProvider,
+    buildStartEnv: () => ({ env: { SSH_ASKPASS: helper }, release: () => { state.releases += 1 } }),
+  }
+  return { provider, releases: () => state.releases }
+}
+
+/** Purge the s2 askpass password and dispose the manager on teardown. */
+function sshPasswordTeardown(t: TestContext, manager: TransportManager) {
+  t.after(() => {
+    manager.dispose()
+    setSshPassword('s2', null)
+    purgeSshAuth('s2')
+    configureSshPasswordStore(null)
+  })
+}
+
+/** Lease the s2 askpass password (before the first spawn) plus teardown. */
+function sshPasswordLease(t: TestContext, manager: TransportManager) {
+  configureSshPasswordStore(null)
+  setSshPassword('s2', 'lease-password')
+  sshPasswordTeardown(t, manager)
+}
+
+/** makeManager + connect the given instance to ready. */
+async function readyOn(t: TestContext, id: string, overrides: Parameters<typeof makeManager>[1] = {}) {
+  const harness = makeManager(t, overrides)
+  harness.setProbe(true)
+  harness.manager.connect(id)
+  await waitFor(() => harness.manager.status(id)!.phase === 'ready')
+  return harness
 }
 
 /** A process-less DIRECT ENDPOINT provider: the abstraction proof. */
@@ -38,19 +72,7 @@ const fakeEndpointProvider: TransportProvider = {
     if (typeof record.id !== 'string' || typeof record.label !== 'string'
       || typeof record.host !== 'string' || typeof record.remotePort !== 'number') return null
     if (record.kind !== undefined && record.kind !== null && record.kind !== 'fake') return null
-    return {
-      id: record.id,
-      label: record.label,
-      kind: 'fake',
-      transport: 'fake',
-      host: record.host,
-      user: null,
-      sshPort: null,
-      remotePort: record.remotePort,
-      serviceName: null,
-      remoteDshHome: null,
-      insecureHttp: false,
-    }
+    return directSpec(record, 'fake', 'fake')
   },
   // no buildStartArgs → direct endpoint mode
   probeTarget: spec => ({ host: 'fake.local', port: spec.remotePort }),
@@ -67,19 +89,7 @@ function directKindProvider(kind: string, events: string[]): TransportProvider {
       const record = input as Record<string, unknown>
       if (record.kind !== kind || typeof record.id !== 'string' || typeof record.label !== 'string'
         || typeof record.host !== 'string' || typeof record.remotePort !== 'number') return null
-      return {
-        id: record.id,
-        label: record.label,
-        kind,
-        transport: kind,
-        host: record.host,
-        user: null,
-        sshPort: null,
-        remotePort: record.remotePort,
-        serviceName: null,
-        remoteDshHome: null,
-        insecureHttp: false,
-      }
+      return directSpec(record, kind, kind)
     },
     probeTarget: spec => ({ host: spec.host, port: spec.remotePort }),
     endpointUrl: spec => `https://${spec.host}:${spec.remotePort}`,
@@ -92,7 +102,6 @@ function directKindProvider(kind: string, events: string[]): TransportProvider {
     },
   }
 }
-
 test('kind switch unregisters and disposes the old provider before the replacement starts', async t => {
   const events: string[] = []
   const oldProvider = directKindProvider('old-kind', events)
@@ -130,7 +139,6 @@ test('kind switch unregisters and disposes the old provider before the replaceme
   assert.equal(manager.readyUrl('switch'), 'https://new.example.com:443')
   assert.equal(manager.status('switch')?.serviceActive, null, 'old provider projections do not cross the kind boundary')
 })
-
 test('resolveProvider prefers the TRANSPORT-keyed provider, then the legacy kind key, then the default (design 17 §2.2)', async t => {
   const dir = tempDir(t)
   const manager = createTransportManager({
@@ -158,7 +166,6 @@ test('resolveProvider prefers the TRANSPORT-keyed provider, then the legacy kind
   assert.equal(manager.status('s1')!.kind, 'dsh')
   assert.equal(manager.status('s1')!.transport, 'ssh')
 })
-
 test('direct-endpoint provider: no child, probe-driven ready, endpoint URL, kind routing', async t => {
   const { manager, spawnCalls, setProbe } = makeManager(t, {
     provider: fakeEndpointProvider,
@@ -181,7 +188,6 @@ test('direct-endpoint provider: no child, probe-driven ready, endpoint URL, kind
   assert.equal(manager.status('f1')!.phase, 'idle')
   assert.equal(manager.readyUrl('f1'), null)
 })
-
 test('direct-endpoint provider: probe failure lands on degraded and reconnects (no child to kill)', async t => {
   const { manager, setProbe } = makeManager(t, {
     provider: fakeEndpointProvider,
@@ -196,7 +202,6 @@ test('direct-endpoint provider: probe failure lands on degraded and reconnects (
   await waitFor(() => manager.status('f2')!.phase === 'ready', 3000, 'reconnected ready')
   assert.equal(manager.readyUrl('f2'), 'http://fake.local:9090')
 })
-
 test('exec for a provider without an exec channel is an explicit error', async t => {
   const { manager, spawnCalls } = makeManager(t, {
     provider: fakeEnvProvider,
@@ -207,12 +212,8 @@ test('exec for a provider without an exec channel is an explicit error', async t
   if (!result.ok) assert.match(result.error, /not supported by transport kind dsh/)
   assert.equal(spawnCalls.length, 0)
 })
-
 test('a pending SIGKILL escalation for one child survives another child\u2019s failure', async t => {
-  const { manager, children, spawnCalls, setProbe } = makeManager(t, { options: { disconnectGraceMs: 60 } })
-  setProbe(true)
-  manager.connect('s1')
-  await waitFor(() => manager.status('s1')!.phase === 'ready')
+  const { manager, children, spawnCalls, setProbe } = await readyOn(t, 's1', { options: { disconnectGraceMs: 60 } })
   setProbe(false)
   manager.disconnect('s1')
   assert.ok(children[0].killCalls.includes('SIGTERM'))
@@ -226,7 +227,6 @@ test('a pending SIGKILL escalation for one child survives another child\u2019s f
   await waitFor(() => children[0].killCalls.includes('SIGKILL'), 3000, 'A still gets its SIGKILL')
   assert.ok(!children[1].killCalls.includes('SIGKILL'), 'a cleanly-exited child never gets SIGKILL')
 })
-
 test('disposeAsync SIGTERMs, SIGKILLs and settles an in-flight exec child that ignores TERM', async t => {
   const { manager, spawnCalls, children } = makeManager(t, { instances: [EXEC_INSTANCE] })
   const resultPromise = manager.exec('s2', 'start')
@@ -240,15 +240,10 @@ test('disposeAsync SIGTERMs, SIGKILLs and settles an in-flight exec child that i
   assert.equal(result.ok, false)
 })
 
-
 test('a provider buildStartEnv is merged over process.env for the transport spawn', async t => {
-  const { manager, spawnCalls, setProbe } = makeManager(t, {
-    provider: fakeEnvProvider,
-    instances: [{ id: 'e1', label: 'envhost', kind: 'ssh', host: 'env.example.com', remotePort: 8080 }],
+  const { spawnCalls } = await readyOn(t, 'e1', {
+    provider: fakeEnvProvider, instances: [{ id: 'e1', label: 'envhost', kind: 'ssh', host: 'env.example.com', remotePort: 8080 }],
   })
-  setProbe(true)
-  manager.connect('e1')
-  await waitFor(() => manager.status('e1')!.phase === 'ready')
   assert.equal(spawnCalls.length, 1)
   const env = spawnCalls[0].options.env
   assert.ok(env !== undefined, 'provider env is applied to the spawn')
@@ -256,7 +251,6 @@ test('a provider buildStartEnv is merged over process.env for the transport spaw
   assert.equal(env.SSH_ASKPASS_REQUIRE, 'force')
   assert.equal(env.PATH, process.env.PATH, 'process.env is preserved, never replaced')
 })
-
 test('tunnel plus more than five concurrent execs retain askpass helpers until each child exits', async t => {
   configureSshPasswordStore(null)
   setSshPassword('s2', 'lease-password')
@@ -299,21 +293,9 @@ test('tunnel plus more than five concurrent execs retain askpass helpers until e
   children[0].simulateExit(143, 'SIGTERM')
   assert.ok(!existsSync(paths[0]), 'the final child exit leaves no askpass residue')
 })
-
 test('disconnect gives an idle exec one bounded SIGKILL escalation and keeps its askpass lease until real exit', async t => {
-  configureSshPasswordStore(null)
-  setSshPassword('s2', 'lease-password')
-  const { manager, spawnCalls } = makeManager(t, {
-    instances: [EXEC_INSTANCE],
-    options: { disconnectGraceMs: 20, execTimeoutMs: 2_000 },
-  })
-  t.after(() => {
-    manager.dispose()
-    setSshPassword('s2', null)
-    purgeSshAuth('s2')
-    configureSshPasswordStore(null)
-  })
-
+  const { manager, spawnCalls } = makeManager(t, { instances: [EXEC_INSTANCE], options: { disconnectGraceMs: 20, execTimeoutMs: 2_000 } })
+  sshPasswordLease(t, manager)
   const resultPromise = manager.exec('s2', 'start')
   assert.equal(spawnCalls.length, 1)
   const child = spawnCalls[0].child
@@ -335,24 +317,11 @@ test('disconnect gives an idle exec one bounded SIGKILL escalation and keeps its
   assert.equal((await resultPromise).ok, false)
   assert.ok(!existsSync(helper as string), 'the real exit releases the child-bound helper')
 })
-
 test('removed tunnel stays globally tracked through immediate disposeAsync until SIGKILL and real exit release askpass', async t => {
   configureSshPasswordStore(null)
   setSshPassword('s2', 'lease-password')
-  const { manager, spawnCalls, setProbe } = makeManager(t, {
-    instances: [EXEC_INSTANCE],
-    options: { disconnectGraceMs: 20 },
-  })
-  t.after(() => {
-    manager.dispose()
-    setSshPassword('s2', null)
-    purgeSshAuth('s2')
-    configureSshPasswordStore(null)
-  })
-
-  setProbe(true)
-  manager.connect('s2')
-  await waitFor(() => manager.status('s2')!.phase === 'ready')
+  const { manager, spawnCalls } = await readyOn(t, 's2', { instances: [EXEC_INSTANCE], options: { disconnectGraceMs: 20 } })
+  sshPasswordTeardown(t, manager)
   const child = spawnCalls[0].child
   const helper = spawnCalls[0].options.env?.SSH_ASKPASS
   assert.equal(typeof helper, 'string')
@@ -372,10 +341,7 @@ test('removed tunnel stays globally tracked through immediate disposeAsync until
   assert.equal(disposeSettled, true)
   assert.ok(!existsSync(helper as string), 'real child exit releases the removed generation helper')
 })
-
 test('a synchronous tunnel spawn failure releases its askpass lease', async t => {
-  configureSshPasswordStore(null)
-  setSshPassword('s2', 'lease-password')
   let helperPath: string | null = null
   const { manager } = makeManager(t, {
     instances: [EXEC_INSTANCE],
@@ -384,28 +350,14 @@ test('a synchronous tunnel spawn failure releases its askpass lease', async t =>
       throw new Error('synthetic spawn failure')
     },
   })
-  t.after(() => {
-    manager.dispose()
-    setSshPassword('s2', null)
-    purgeSshAuth('s2')
-    configureSshPasswordStore(null)
-  })
-
+  sshPasswordLease(t, manager)
   manager.connect('s2')
   await waitFor(() => manager.status('s2')!.phase === 'error')
   assert.ok(helperPath !== null, 'the helper existed when spawn was attempted')
   assert.ok(!existsSync(helperPath), 'the thrown spawn releases the helper immediately')
 })
-
 test('a synchronous tunnel spawn throw invokes provider lease release exactly once', async t => {
-  let releases = 0
-  const provider: TransportProvider = {
-    ...fakeEnvProvider,
-    buildStartEnv: () => ({
-      env: { SSH_ASKPASS: '/tmp/fake-sync-throw-helper' },
-      release: () => { releases += 1 },
-    }),
-  }
+  const { provider, releases } = leaseProvider('/tmp/fake-sync-throw-helper')
   const { manager } = makeManager(t, {
     provider,
     instances: [{ id: 'e-throw', label: 'env-throw', kind: 'dsh', transport: 'ssh', host: 'env-throw.example.com', remotePort: 8080 }],
@@ -413,18 +365,10 @@ test('a synchronous tunnel spawn throw invokes provider lease release exactly on
   })
   manager.connect('e-throw')
   await waitFor(() => manager.status('e-throw')!.phase === 'error')
-  assert.equal(releases, 1)
+  assert.equal(releases(), 1)
 })
-
 test('a tunnel child error releases its lease exactly once even if exit follows', async t => {
-  let releases = 0
-  const provider: TransportProvider = {
-    ...fakeEnvProvider,
-    buildStartEnv: () => ({
-      env: { SSH_ASKPASS: '/tmp/fake-child-error-helper' },
-      release: () => { releases += 1 },
-    }),
-  }
+  const { provider, releases } = leaseProvider('/tmp/fake-child-error-helper')
   const { manager, spawnCalls } = makeManager(t, {
     provider,
     instances: [{ id: 'e-error', label: 'env-error', kind: 'dsh', transport: 'ssh', host: 'env-error.example.com', remotePort: 8080 }],
@@ -434,25 +378,17 @@ test('a tunnel child error releases its lease exactly once even if exit follows'
   await waitFor(() => spawnCalls.length === 1)
   spawnCalls[0].child.simulateSpawnError(new Error('synthetic child error'))
   await waitFor(() => manager.status('e-error')!.phase === 'error')
-  assert.equal(releases, 1, 'child error releases the provider lease')
+  assert.equal(releases(), 1, 'child error releases the provider lease')
   const disposedPromptly = await Promise.race([
     manager.disposeAsync().then(() => true),
     sleep(100).then(() => false),
   ])
   assert.equal(disposedPromptly, true, 'spawn error without exit clears global tunnel tracking immediately')
   spawnCalls[0].child.simulateExit(1)
-  assert.equal(releases, 1, 'a following exit cannot double-release the lease')
+  assert.equal(releases(), 1, 'a following exit cannot double-release the lease')
 })
-
 test('a normal tunnel exit releases its lease exactly once even if an error follows', async t => {
-  let releases = 0
-  const provider: TransportProvider = {
-    ...fakeEnvProvider,
-    buildStartEnv: () => ({
-      env: { SSH_ASKPASS: '/tmp/fake-child-exit-helper' },
-      release: () => { releases += 1 },
-    }),
-  }
+  const { provider, releases } = leaseProvider('/tmp/fake-child-exit-helper')
   const { manager, spawnCalls } = makeManager(t, {
     provider,
     instances: [{ id: 'e-exit', label: 'env-exit', kind: 'dsh', transport: 'ssh', host: 'env-exit.example.com', remotePort: 8080 }],
@@ -461,22 +397,14 @@ test('a normal tunnel exit releases its lease exactly once even if an error foll
   await waitFor(() => spawnCalls.length === 1)
   manager.disconnect('e-exit')
   spawnCalls[0].child.simulateExit(143, 'SIGTERM')
-  assert.equal(releases, 1, 'normal child exit releases the provider lease')
+  assert.equal(releases(), 1, 'normal child exit releases the provider lease')
   spawnCalls[0].child.simulateSpawnError(new Error('late synthetic error'))
-  assert.equal(releases, 1, 'a following error cannot double-release the lease')
+  assert.equal(releases(), 1, 'a following error cannot double-release the lease')
 })
-
 test('a stale-epoch tunnel keeps its lease until the spawned child actually exits', async t => {
-  let releases = 0
+  const { provider, releases } = leaseProvider('/tmp/fake-stale-helper')
   let staleChild: FakeChild | null = null
   let runtime: TransportManager
-  const provider: TransportProvider = {
-    ...fakeEnvProvider,
-    buildStartEnv: () => ({
-      env: { SSH_ASKPASS: '/tmp/fake-stale-helper' },
-      release: () => { releases += 1 },
-    }),
-  }
   const made = makeManager(t, {
     provider,
     instances: [{ id: 'e-stale', label: 'env-stale', kind: 'dsh', transport: 'ssh', host: 'env-stale.example.com', remotePort: 8080 }],
@@ -494,43 +422,31 @@ test('a stale-epoch tunnel keeps its lease until the spawned child actually exit
   await waitFor(() => staleChild !== null)
   assert.equal(runtime.status('e-stale')!.phase, 'idle')
   assert.ok(staleChild!.killCalls.includes('SIGTERM'))
-  assert.equal(releases, 0, 'stale-epoch handling cannot release before child termination')
+  assert.equal(releases(), 0, 'stale-epoch handling cannot release before child termination')
   staleChild!.simulateExit(143, 'SIGTERM')
-  assert.equal(releases, 1)
+  assert.equal(releases(), 1)
 })
-
 test('disposeAuth is called when a live transport is disconnected', async t => {
   const disposed: string[] = []
   const provider: TransportProvider = {
     ...fakeEnvProvider,
     disposeAuth: spec => { disposed.push(spec.id) },
   }
-  const { manager, setProbe } = makeManager(t, {
-    provider,
-    instances: [{ id: 'e2', label: 'envhost2', kind: 'ssh', host: 'env2.example.com', remotePort: 8080 }],
-  })
-  setProbe(true)
-  manager.connect('e2')
-  await waitFor(() => manager.status('e2')!.phase === 'ready')
+  const { manager } = await readyOn(t, 'e2', { provider, instances: [{ id: 'e2', label: 'envhost2', kind: 'ssh', host: 'env2.example.com', remotePort: 8080 }] })
   manager.disconnect('e2')
   assert.deepEqual(disposed, ['e2'])
 })
-
 test('a throwing provider buildStartEnv lands on a loud error, never a stuck connecting', async t => {
   const provider: TransportProvider = {
     ...fakeEnvProvider,
     buildStartEnv: () => { throw new Error('env boom') },
   }
-  const { manager, spawnCalls } = makeManager(t, {
-    provider,
-    instances: [{ id: 'e3', label: 'envhost3', kind: 'ssh', host: 'env3.example.com', remotePort: 8080 }],
-  })
+  const { manager, spawnCalls } = makeManager(t, { provider, instances: [{ id: 'e3', label: 'envhost3', kind: 'ssh', host: 'env3.example.com', remotePort: 8080 }] })
   manager.connect('e3')
   await waitFor(() => manager.status('e3')!.phase === 'error', 3000, 'terminal error')
   assert.equal(spawnCalls.length, 0, 'no transport spawns after a throwing buildStartEnv')
   assert.equal(manager.status('e3')!.requiresUserAction, false, 'a provider bug is not a user-action failure')
 })
-
 test('hostile thrown values from allocation and provider start hooks still settle loudly', async t => {
   const hostile = new Proxy({}, {
     get() { throw new Error('formatter trap') },
@@ -554,7 +470,6 @@ test('hostile thrown values from allocation and provider start hooks still settl
   assert.match(providerStart.manager.status('s1')!.logSummary, /unknown error/)
   assert.equal(providerStart.spawnCalls.length, 0)
 })
-
 test('dispose(): exec children get SIGTERM plus a SIGKILL escalation that disposeAsync WAITS for (M2)', async t => {
   const { manager, spawnCalls } = makeManager(t, { instances: [EXEC_INSTANCE] })
   const resultPromise = manager.exec('s2', 'start')
@@ -574,16 +489,11 @@ test('dispose(): exec children get SIGTERM plus a SIGKILL escalation that dispos
   assert.equal(disposeSettled, true)
   assert.equal((await resultPromise).ok, false)
 })
-
 test('ready-state heartbeat: a terminal verification failure while ready lands error:requires_user_action with no auto-retry', async t => {
   let outcome: TransportVerifyResult = { ok: true }
-  const { manager, setProbe, spawnCalls } = makeManager(t, {
-    options: { readyVerifyIntervalMs: 20, readyVerifyMinIntervalMs: 5 },
-    verifyProbe: async () => outcome,
+  const { manager, spawnCalls } = await readyOn(t, 's1', {
+    options: { readyVerifyIntervalMs: 20, readyVerifyMinIntervalMs: 5 }, verifyProbe: async () => outcome,
   })
-  setProbe(true)
-  manager.connect('s1')
-  await waitFor(() => manager.status('s1')!.phase === 'ready', 3000, 'ready')
   // A dead gateway session (remote password change): the probe 401 is
   // terminal — the machine must leave ready within one heartbeat tick.
   outcome = { ok: false, terminal: true, detail: 'the gateway rejected the password authentication (401) — re-enter the password' }
@@ -597,23 +507,12 @@ test('ready-state heartbeat: a terminal verification failure while ready lands e
   assert.equal(manager.status('s1')!.phase, 'error')
   assert.equal(spawnCalls.length, 1)
 })
-
 test('ready-state heartbeat: a transient verification failure reconnects through degraded and recovers on its own', async t => {
   let outcome: TransportVerifyResult = { ok: true }
-  const { manager, setProbe } = makeManager(t, {
-    options: {
-      readyVerifyIntervalMs: 15,
-      readyVerifyMinIntervalMs: 5,
-      readyTimeoutMs: 50,
-      retryBaseMs: 10,
-      retryMaxMs: 20,
-      maxRetryAttempts: 3,
-    },
+  const { manager } = await readyOn(t, 's1', {
+    options: { readyVerifyIntervalMs: 15, readyVerifyMinIntervalMs: 5, readyTimeoutMs: 50, retryBaseMs: 10, retryMaxMs: 20, maxRetryAttempts: 3 },
     verifyProbe: async () => outcome,
   })
-  setProbe(true)
-  manager.connect('s1')
-  await waitFor(() => manager.status('s1')!.phase === 'ready', 3000, 'ready')
   // A transient probe failure (remote restart window) takes the bounded
   // reconnect path — degraded first, then a fresh attempt.
   outcome = { ok: false, detail: 'connection reset' }
@@ -622,17 +521,13 @@ test('ready-state heartbeat: a transient verification failure reconnects through
   await waitFor(() => manager.status('s1')!.phase === 'ready', 3000, 'recovered ready')
   assert.equal(manager.status('s1')!.retryAttempt, 0)
 })
-
 test('reverify(): on-demand probe runs once, is quiet-windowed, and is a no-op while not ready', async t => {
   let verifyCalls = 0
-  const { manager, setProbe } = makeManager(t, {
+  const { manager } = await readyOn(t, 's1', {
     // Heartbeat far away (the on-demand quiet window is the tested gate).
     options: { readyVerifyIntervalMs: 60_000, readyVerifyMinIntervalMs: 5_000 },
     verifyProbe: async () => { verifyCalls += 1; return { ok: true } },
   })
-  setProbe(true)
-  manager.connect('s1')
-  await waitFor(() => manager.status('s1')!.phase === 'ready', 3000, 'ready')
   const atReady = verifyCalls // the connect-time verification
   manager.reverify('s1')
   await sleep(30)
@@ -649,35 +544,25 @@ test('reverify(): on-demand probe runs once, is quiet-windowed, and is a no-op w
   await sleep(30)
   assert.equal(verifyCalls, before, 'reverify is a no-op while not ready')
 })
-
 test('leaving ready cancels the ready-state heartbeat', async t => {
   let verifyCalls = 0
-  const { manager, setProbe } = makeManager(t, {
+  const { manager } = await readyOn(t, 's1', {
     options: { readyVerifyIntervalMs: 30, readyVerifyMinIntervalMs: 5 },
     verifyProbe: async () => { verifyCalls += 1; return { ok: true } },
   })
-  setProbe(true)
-  manager.connect('s1')
-  await waitFor(() => manager.status('s1')!.phase === 'ready', 3000, 'ready')
   manager.disconnect('s1')
   await waitFor(() => manager.status('s1')!.phase === 'idle', 3000, 'idle')
   const atIdle = verifyCalls
   await sleep(120)
   assert.equal(verifyCalls, atIdle, 'no heartbeat probes fire after leaving ready')
 })
-
 test('onVerified fires after every successful ready-state re-verification, never on failures', async t => {
   let outcome: TransportVerifyResult = { ok: true }
   const verified: string[] = []
   const { manager, setProbe } = makeManager(t, {
     options: {
-      readyVerifyIntervalMs: 15,
-      readyVerifyMinIntervalMs: 5,
-      readyTimeoutMs: 50,
-      retryBaseMs: 10,
-      retryMaxMs: 20,
-      maxRetryAttempts: 3,
-      slowRetryMs: 30,
+      readyVerifyIntervalMs: 15, readyVerifyMinIntervalMs: 5, readyTimeoutMs: 50,
+      retryBaseMs: 10, retryMaxMs: 20, maxRetryAttempts: 3, slowRetryMs: 30,
     },
     verifyProbe: async () => outcome,
   })
@@ -697,7 +582,6 @@ test('onVerified fires after every successful ready-state re-verification, never
   await waitFor(() => manager.status('s1')!.phase === 'ready', 3000, 'recovered')
   await waitFor(() => verified.length > afterSuccess, 3000, 'onVerified after recovery heartbeat')
 })
-
 test('a user reverify overlapping the periodic tick does not kill the heartbeat chain (single-flight collision)', async t => {
   let outcome: TransportVerifyResult = { ok: true }
   let hold = false

@@ -45,32 +45,27 @@ import {
 } from './verify-electron-artifacts.mjs'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
-
 test('every mode resolves to at least one step', () => {
   for (const [mode, steps] of Object.entries(MODES)) {
     assert.ok(steps.length > 0, `${mode} must list at least one step`)
   }
 })
-
 test('no mode lists the same step twice', () => {
   for (const [mode, steps] of Object.entries(MODES)) {
     assert.equal(new Set(steps).size, steps.length, `${mode} repeats a step`)
   }
 })
-
 test('mode names are recognised and unknown names are rejected', () => {
   assert.equal(requestedMode(['tests']), 'tests')
   assert.equal(requestedMode(['--list', 'static']), 'static')
   assert.equal(requestedMode(['nonsense']), undefined)
   assert.equal(requestedMode(['--list']), undefined)
 })
-
 test('an unknown mode reports a failure instead of a silent pass', () => {
   const { failed, ran } = runMode('nope', { log: () => {} })
   assert.deepEqual(failed, ['mode nope has no steps'])
   assert.equal(ran, 0)
 })
-
 test('listing a mode runs nothing', () => {
   const lines = []
   const { failed, ran } = runMode('static', { list: true, log: line => lines.push(line) })
@@ -78,13 +73,11 @@ test('listing a mode runs nothing', () => {
   assert.equal(ran, 0)
   assert.equal(lines.length, MODES.static.length + 1)
 })
-
 test('the pnpm invocation always names an executable', () => {
   const invocation = pnpmInvocation()
   assert.ok(invocation.command.length > 0)
   assert.ok(Array.isArray(invocation.prefix))
 })
-
 test('stepInvocation resolves script names and explicit command entries without a shell', () => {
   const pnpm = { command: 'pnpm', prefix: [] }
   assert.deepEqual(stepInvocation('verify:i18n', pnpm),
@@ -96,7 +89,6 @@ test('stepInvocation resolves script names and explicit command entries without 
   assert.equal(viaPnpm.command, '/usr/bin/node')
   assert.deepEqual(viaPnpm.args, ['/pnpm.cjs', 'run', 'build:sidecar', '--skip-node'])
 })
-
 test('G32/G33: the darwin tests mode carries the executed-assembly gates ci.yml runs', () => {
   const gates = [
     'test:sidecar:compiled',
@@ -123,16 +115,11 @@ test('G32/G33: the darwin tests mode carries the executed-assembly gates ci.yml 
     }
   }
 })
-
 test('the full mode is the union of the narrower modes', () => {
   const union = new Set([...MODES.static, ...MODES.typecheck, ...MODES.tests])
   for (const step of union) assert.ok(MODES.full.includes(step), `full is missing ${step}`)
 })
-
-// ---------------------------------------------------------------------------
 // Swift test runner (run-swift-tests.mjs; G1/G2/G23)
-// ---------------------------------------------------------------------------
-
 test('the Swift suite rides tests/full on darwin only, before the .build/release consumers', () => {
   if (process.platform === 'darwin') {
     assert.ok(MODES.tests.includes('test:swift'), 'darwin check:tests must run the XCTest suite (G1)')
@@ -146,7 +133,6 @@ test('the Swift suite rides tests/full on darwin only, before the .build/release
     assert.equal(MODES.full.includes('test:swift'), false)
   }
 })
-
 test('swiftTestArgs pins the shipped release configuration (G23)', () => {
   const args = swiftTestArgs()
   assert.deepEqual(args.slice(0, 2), ['test', '--package-path'])
@@ -154,13 +140,11 @@ test('swiftTestArgs pins the shipped release configuration (G23)', () => {
   assert.ok(args.includes('-c'), 'swift test must name a configuration')
   assert.equal(args[args.indexOf('-c') + 1], 'release', 'G23: the shipped release configuration must be the tested one')
 })
-
 test('swiftTestEnvironment defaults DSH_CHAMBER_SHELL_NODE_BIN without overwriting an explicit value', () => {
   assert.equal(swiftTestEnvironment({}, '/usr/bin/node').DSH_CHAMBER_SHELL_NODE_BIN, '/usr/bin/node')
   assert.equal(swiftTestEnvironment({ DSH_CHAMBER_SHELL_NODE_BIN: '' }, '/usr/bin/node').DSH_CHAMBER_SHELL_NODE_BIN, '/usr/bin/node')
   assert.equal(swiftTestEnvironment({ DSH_CHAMBER_SHELL_NODE_BIN: '/opt/node' }, '/usr/bin/node').DSH_CHAMBER_SHELL_NODE_BIN, '/opt/node')
 })
-
 test('parseSwiftTestReport takes the last XCTest summary and counts every skipped case', () => {
   const output = [
     "Test Case '-[DSHChamberTests.X testSkipped]' skipped (0.001 seconds).",
@@ -176,7 +160,6 @@ test('parseSwiftTestReport takes the last XCTest summary and counts every skippe
     { executed: null, failures: null, skipped: 0 },
   )
 })
-
 test('judgeSwiftTestReport fails on no summary, zero tests, failures and any XCTSkip (G2)', () => {
   assert.equal(judgeSwiftTestReport({ executed: null, failures: null, skipped: 0 }).ok, false)
   assert.equal(judgeSwiftTestReport({ executed: 0, failures: 0, skipped: 0 }).ok, false)
@@ -186,11 +169,7 @@ test('judgeSwiftTestReport fails on no summary, zero tests, failures and any XCT
   assert.match(skipVerdict.reason, /XCTSkip/)
   assert.deepEqual(judgeSwiftTestReport({ executed: 182, failures: 0, skipped: 0 }), { ok: true })
 })
-
-// ---------------------------------------------------------------------------
 // Compiled sidecar smoke (compiled-sidecar-smoke.mjs; G4)
-// ---------------------------------------------------------------------------
-
 test('smokeDecision: disabled is a skip, enabled with a missing artifact is a failure', () => {
   const base = {
     enabled: true,
@@ -206,7 +185,6 @@ test('smokeDecision: disabled is a skip, enabled with a missing artifact is a fa
   assert.equal(smokeDecision({ ...base, entryExists: false }).action, 'fail')
   assert.equal(smokeDecision({ ...base, controlPlaneExists: false }).action, 'fail')
 })
-
 test('resolveSidecarDir honors the environment override; resolveNodeBinary prefers the bundled node', () => {
   assert.equal(resolveSidecarDir({}, '/repo'), DEFAULT_SIDECAR_DIR)
   assert.equal(resolveSidecarDir({ DSH_CHAMBER_SIDECAR_DIR: '/tmp/assembly' }, '/repo'), '/tmp/assembly')
@@ -223,11 +201,7 @@ test('resolveSidecarDir honors the environment override; resolveNodeBinary prefe
     rmSync(dir, { recursive: true, force: true })
   }
 })
-
-// ---------------------------------------------------------------------------
 // Shim payload shape (verify-shim-payload-shape.mjs; G22)
-// ---------------------------------------------------------------------------
-
 test('parsePayloadShape: absent/null, direct expression and exact object key sets', () => {
   assert.deepEqual(parsePayloadShape(')'), { kind: 'none' })
   assert.deepEqual(parsePayloadShape(', null)'), { kind: 'none' })
@@ -243,7 +217,6 @@ test('parsePayloadShape: absent/null, direct expression and exact object key set
     { kind: 'keys', keys: ['add', 'deferRestart', 'id', 'remove'] },
   )
 })
-
 test('parseMemberCall distinguishes invoke from push on both surfaces', () => {
   const preloadInvoke = parseMemberCall("    set: patch => ipcRenderer.invoke('dsh-chamber:settings-set', { patch }),", 'preload')
   assert.equal(preloadInvoke.channel, 'dsh-chamber:settings-set')
@@ -259,7 +232,6 @@ test('parseMemberCall distinguishes invoke from push on both surfaces', () => {
   assert.equal(shimPush.channel, 'dsh-chamber:settings-changed')
   assert.equal(shimPush.kind, 'push')
 })
-
 test('comparePayloadShapes catches an invoke payload-key drift', () => {
   const factories = Object.keys(FACTORY_TO_NAMESPACE)
   const preloadText = factories
@@ -276,7 +248,6 @@ test('comparePayloadShapes catches an invoke payload-key drift', () => {
   assert.equal(drifted.mismatches.length, factories.length)
   assert.match(drifted.mismatches[0], /payload shape keys:\{id\} \(preload\) != keys:\{other\} \(shim\)/)
 })
-
 test('the shipped preload/shim surfaces agree on every payload shape and stay manifest-locked', () => {
   const verdict = comparePayloadShapes({
     preloadText: readFileSync(join(REPO_ROOT, 'packages/desktop/preload.cts'), 'utf8'),
@@ -304,7 +275,6 @@ test('the shipped preload/shim surfaces agree on every payload shape and stay ma
     Object.values(EXPECTED_SURFACE.perNamespace).reduce((sum, count) => sum + count, 0),
     'the total pin must equal the per-namespace pin sum')
 })
-
 test('G34: a silently removed member fails the surface-total pin, not only a mismatch', () => {
   const base = {
     namespaces: EXPECTED_SURFACE.namespaces,
@@ -316,8 +286,6 @@ test('G34: a silently removed member fails the surface-total pin, not only a mis
   assert.deepEqual(assertSurfaceCounts(base), base)
   // An emptied namespace: the per-member comparison sees two matching (empty)
   // blocks; only the count pin notices the rows are gone.
-  // 期望文案从 EXPECTED_SURFACE 派生：此前写死的 67/59 与 68/60 的钉子漂移，
-  // 让这条守卫在两个数都对的时候反而报红（2026-09 统一名称时的复核修正）。
   const expects = (label, got, want) => new RegExp(`G34.*${label} ${got} != ${want}`)
   const emptied = { ...base, members: base.members - EXPECTED_SURFACE.perNamespace.runtime,
     perNamespace: { ...base.perNamespace, runtime: 0 } }
@@ -336,14 +304,9 @@ test('G34: a silently removed member fails the surface-total pin, not only a mis
   // The runtime arm may omit the invoke/push split only when it did not observe it.
   assert.doesNotThrow(() => assertSurfaceCounts({ namespaces: base.namespaces, members: base.members }))
 })
-
-// ---------------------------------------------------------------------------
 // Shim runtime arm (verify-shim-payload-shape.mjs; G22 residual)
-// ---------------------------------------------------------------------------
-
 const SHIM_SOURCE = readFileSync(join(REPO_ROOT, 'macos/Sources/DSHChamber/Resources/bridge-shim.js'), 'utf8')
 const PRELOAD_SOURCE = readFileSync(join(REPO_ROOT, 'packages/desktop/preload.cts'), 'utf8')
-
 test('injectShimToken replaces the placeholder and rejects a malformed token', () => {
   const token = 'a1'.repeat(16)
   const injected = injectShimToken(SHIM_SOURCE, token)
@@ -352,7 +315,6 @@ test('injectShimToken replaces the placeholder and rejects a malformed token', (
   assert.throws(() => injectShimToken(SHIM_SOURCE, 'short'), /32 lowercase hex/)
   assert.throws(() => injectShimToken(SHIM_SOURCE, 'A'.repeat(32)), /32 lowercase hex/)
 })
-
 test('runtime payload shape predicates are key-exact, not truthy', () => {
   assert.equal(payloadShapeMatches({ kind: 'none' }, null), true)
   assert.equal(payloadShapeMatches({ kind: 'none' }, undefined), true)
@@ -366,7 +328,6 @@ test('runtime payload shape predicates are key-exact, not truthy', () => {
   assert.equal(describeRuntimePayload({ b: 1, a: 2 }), 'keys:{a, b}')
   assert.equal(describeRuntimePayload(['x']), 'direct:array(1)')
 })
-
 test('the real shim executes in node:vm and every member posts the preload payload keys (G22)', async () => {
   const verdict = await compareRuntimePayloads({ preloadText: PRELOAD_SOURCE, shimText: SHIM_SOURCE })
   assert.deepEqual(verdict.mismatches, [])
@@ -389,7 +350,6 @@ test('the real shim executes in node:vm and every member posts the preload paylo
     },
   )
 })
-
 test('the runtime arm catches a payload-key drift and a channel drift the static gate would too (G22)', async () => {
   const payloadDrift = SHIM_SOURCE.replace(
     "invoke('desktop_ssh_delete_connection', { id: id })",
@@ -406,7 +366,6 @@ test('the runtime arm catches a payload-key drift and a channel drift the static
   assert.ok(channelVerdict.mismatches.some((entry) => entry.includes('desktopSsh.instances_get')),
     'a channel drift must fail the runtime arm')
 })
-
 test('the total-failure branch still exposes the surface with null scalars after 11 rejections (G22/T-12)', async () => {
   const failure = await runShimFailureBranch({ shimText: SHIM_SOURCE })
   assert.equal(failure.attempts, 11, '1 + INFO_MAX_ATTEMPTS rejections must have been observed')
@@ -414,7 +373,6 @@ test('the total-failure branch still exposes the surface with null scalars after
   assert.equal(failure.namespaces.length, 9)
   assert.ok(failure.warnings.some((warning) => /info failed after 10 attempts/.test(warning)), 'the degradation must be loud')
 })
-
 test('re-injecting the installed shim is a no-op (P-19 marker) (G22)', async () => {
   const reinjection = await assertShimReinjectionNoop({ shimText: SHIM_SOURCE })
   assert.equal(reinjection.marker, true)
@@ -423,11 +381,7 @@ test('re-injecting the installed shim is a no-op (P-19 marker) (G22)', async () 
   assert.equal(reinjection.sameSurface, true)
   assert.deepEqual(reinjection.conflicts, [])
 })
-
-// ---------------------------------------------------------------------------
 // Electron compiled-artifact smoke (verify-electron-artifacts.mjs; G4 residual)
-// ---------------------------------------------------------------------------
-
 test('electron artifact decision: both absent is a loud skip, a partial build is a failure', () => {
   const both = {
     controlPlaneEntry: '/dist/control-plane/index.js',
@@ -447,7 +401,6 @@ test('electron artifact decision: both absent is a loud skip, a partial build is
   assert.match(partialPlane.reason, /preload\.cjs/)
   assert.equal(artifactDecision({ ...both, controlPlaneExists: false }).action, 'fail')
 })
-
 test('runElectronArtifactSmoke returns skip for an empty dist and fail for a partial one (never a silent pass)', async () => {
   const empty = mkdtempSync(join(tmpdir(), 'dsh-electron-empty-'))
   const partial = mkdtempSync(join(tmpdir(), 'dsh-electron-partial-'))
@@ -464,13 +417,11 @@ test('runElectronArtifactSmoke returns skip for an empty dist and fail for a par
     rmSync(partial, { recursive: true, force: true })
   }
 })
-
 test('resolveDesktopDist honors the override, default points at packages/desktop/dist', () => {
   assert.equal(resolveDesktopDist({}, '/repo'), DEFAULT_DESKTOP_DIST)
   assert.equal(resolveDesktopDist({ DSH_CHAMBER_DESKTOP_DIST: '/tmp/dist' }, '/repo'), '/tmp/dist')
   assert.equal(resolveDesktopDist({ DSH_CHAMBER_DESKTOP_DIST: 'rel/dist' }, '/repo'), resolve('/repo', 'rel/dist'))
 })
-
 /** A synthetic compiled-preload fixture with the frozen surface shape. */
 function preloadFixture({ dropNamespace = null, badMember = false, scalar = 'value' } = {}) {
   const namespaces = BRIDGE_NAMESPACE_KEYS.filter((namespace) => namespace !== dropNamespace)
@@ -485,7 +436,6 @@ function preloadFixture({ dropNamespace = null, badMember = false, scalar = 'val
   ]
   return lines.join('\n')
 }
-
 test('compiled preload vm harness parses CJS, stubs electron and captures the exposed surface', async () => {
   const harness = await inspectPreloadSurface(preloadFixture(), { info: {} })
   assert.ok(harness.exposed.dshChamber !== undefined, 'the vm run must reach exposeInMainWorld')
@@ -498,7 +448,6 @@ test('compiled preload vm harness parses CJS, stubs electron and captures the ex
   harness.exposed.dshChamber.desktopSsh.member()
   assert.deepEqual(harness.invokes, [{ channel: 'ch:desktopSsh', payload: undefined }])
 })
-
 test('frozen preload surface assertion fails closed on a missing namespace, a non-function member and a scalar drift', async () => {
   const good = await inspectPreloadSurface(preloadFixture(), { info: {} })
   assert.deepEqual(assertFrozenPreloadSurface(good.exposed.dshChamber), {
@@ -520,13 +469,11 @@ test('frozen preload surface assertion fails closed on a missing namespace, a no
   )
   assert.throws(() => assertFrozenPreloadSurface(null), /exposed no dshChamber/)
 })
-
 test('the REAL compiled Electron artifacts execute when present (loud skip otherwise) (G4)', async (t) => {
   const controlPlaneEntry = join(DEFAULT_DESKTOP_DIST, 'control-plane', 'index.js')
   const preloadEntry = join(DEFAULT_DESKTOP_DIST, 'preload.cjs')
   if (!existsSync(controlPlaneEntry) || !existsSync(preloadEntry)) {
-    // The unit-test phase runs before the desktop build steps in CI; the ci.yml
-    // test-macos step runs the gate itself after build:control-plane/preload.
+    // Unit tests run before the CI desktop build; ci.yml's test-macos step runs the gate itself after build:control-plane/preload.
     t.diagnostic('SKIP: compiled Electron artifacts absent under ' + DEFAULT_DESKTOP_DIST
       + ' — the ci.yml test-macos step executes this gate after building them')
     return
@@ -534,8 +481,7 @@ test('the REAL compiled Electron artifacts execute when present (loud skip other
   const verdict = await runElectronArtifactSmoke({ desktopDist: DEFAULT_DESKTOP_DIST })
   assert.equal(verdict.action, 'run')
   assert.ok(verdict.port > 0)
-  // G34 产物臂（R3 复核发现）：`>= 60` 下限会让陈旧的 dist 在本机一路绿；改为与源面同一组
-  // 精确钉子比对。红时先跑 `pnpm --filter @dsh-chamber/desktop run build:preload` 刷新编译产物。
+  // G34 产物臂：`>= 60` 下限会让陈旧的 dist 在本机一路绿，故与源面同一组精确钉子比对；红时先跑 `pnpm --filter @dsh-chamber/desktop run build:preload` 刷新编译产物。
   assert.equal(verdict.members, EXPECTED_SURFACE.members,
     'the COMPILED preload must equal the pinned member total（陈旧 dist 先跑 '
     + 'pnpm --filter @dsh-chamber/desktop run build:preload）')

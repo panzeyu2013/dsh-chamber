@@ -1,8 +1,8 @@
 /**
- * node:test for the chamber apply seam (`src/client/index.ts`, design 05 §6/
- * §4): the per-entry `chamberBasePath` bound on the entry Context reaches the
- * generic RPC carrier and the exposed `handle.basePath` — no plugin config and
- * no page-global knob participate (2026-09 Batch 2 retired the config-passing
+ * node:test for the chamber apply seam (`src/client/index.ts`, design 05 §6/§4):
+ * the per-entry `chamberBasePath` bound on the entry Context reaches the generic
+ * RPC carrier and the exposed `handle.basePath` — no plugin config and no
+ * page-global knob participate (2026-09 Batch 2 retired the config-passing
  * form). The wake-event constant is pinned here too: the shell's App layer
  * dispatches exactly this window event.
  */
@@ -19,15 +19,11 @@ interface FakeHandle {
 
 function fakeContext(chamberBasePath: string | undefined): { ctx: never; handle: () => FakeHandle } {
   let handle: unknown
-  return {
-    ctx: {
-      chamberBasePath,
-      provide(name: string, value: unknown): void {
-        if (name === 'connection') handle = value
-      },
-    } as never,
-    handle: () => handle as FakeHandle,
+  const ctx = {
+    chamberBasePath,
+    provide: (name: string, value: unknown): void => { if (name === 'connection') handle = value },
   }
+  return { ctx: ctx as never, handle: () => handle as FakeHandle }
 }
 
 test('apply reads ctx.chamberBasePath into the RPC carrier and the handle', () => {

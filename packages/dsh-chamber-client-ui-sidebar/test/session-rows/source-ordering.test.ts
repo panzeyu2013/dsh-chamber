@@ -15,31 +15,31 @@ import {
 } from '../../src/shared/derive.ts'
 import { server, session, snapshot, workspace } from '../support/derive-fixtures.ts'
 
+const SERVERS = [server('local'), server('ssh-r1'), server('ssh-r2')]
+
 // ---- orderServersForDisplay / nextServerOrder (design 06 §2.4: stored source display order + the shared drop math) ----
 
 test('orderServersForDisplay with no stored preference returns the projection array unchanged (same reference)', () => {
-  const servers = [server('local'), server('ssh-r1'), server('ssh-r2')]
+  const servers = SERVERS
   assert.equal(orderServersForDisplay(servers, undefined), servers)
   assert.equal(orderServersForDisplay(servers, []), servers)
 })
 
 test('orderServersForDisplay leads with stored-known ids in stored order and places each id once', () => {
-  const servers = [server('local'), server('ssh-r1'), server('ssh-r2')]
-  const ordered = orderServersForDisplay(servers, ['ssh-r2', 'local', 'ssh-r2', 'ssh-r1'])
+  const ordered = orderServersForDisplay(SERVERS, ['ssh-r2', 'local', 'ssh-r2', 'ssh-r1'])
   // The duplicated 'ssh-r2' stored entry is skipped: every server appears once.
   assert.deepEqual(ordered.map(server => server.id), ['ssh-r2', 'local', 'ssh-r1'])
 })
 
 test('orderServersForDisplay keeps projection ids not listed in stored after the stored block, in projection order', () => {
-  const servers = [server('local'), server('ssh-r1'), server('ssh-r2')]
   // ssh-r1 was never listed: it keeps its projection position at the bottom
   // (a newly added source appears there until the user drags it).
   assert.deepEqual(
-    orderServersForDisplay(servers, ['ssh-r2', 'local']).map(server => server.id),
+    orderServersForDisplay(SERVERS, ['ssh-r2', 'local']).map(server => server.id),
     ['ssh-r2', 'local', 'ssh-r1'],
   )
   assert.deepEqual(
-    orderServersForDisplay(servers, ['ssh-r1']).map(server => server.id),
+    orderServersForDisplay(SERVERS, ['ssh-r1']).map(server => server.id),
     ['ssh-r1', 'local', 'ssh-r2'],
   )
 })
@@ -110,44 +110,29 @@ function byIdOf(rows: { id: string; updatedAt?: number }[]): Map<string, { id: s
   return new Map(rows.map(row => [row.id, row]))
 }
 
+/** One nextUpdatedOrder call over row literals (the byId map is derived). */
+const updateStep = (
+  sessionIds: string[],
+  stored: string[] | undefined,
+  previousUpdatedAt: Record<string, number> | undefined,
+  rows: { id: string; updatedAt?: number }[],
+) => nextUpdatedOrder({ sessionIds, stored, previousUpdatedAt, byId: byIdOf(rows) })
+
 test('nextUpdatedOrder first observation does a full recency sort and records bookkeeping', () => {
-  const sessions = [
-    { id: 'a', updatedAt: 100 },
-    { id: 'b', updatedAt: 300 },
-    { id: 'c', updatedAt: 200 },
-  ]
-  const first = nextUpdatedOrder({
-    sessionIds: ['a', 'b', 'c'],
-    stored: undefined,
-    previousUpdatedAt: undefined,
-    byId: byIdOf(sessions),
-  })
+  const sessions = [{ id: 'a', updatedAt: 100 }, { id: 'b', updatedAt: 300 }, { id: 'c', updatedAt: 200 }]
+  const first = updateStep(['a', 'b', 'c'], undefined, undefined, sessions)
   assert.deepEqual(first.order, ['b', 'c', 'a'])
   assert.deepEqual(first.updatedAt, { a: 100, b: 300, c: 200 })
   assert.equal(first.changed, true)
   // A re-run with the recorded bookkeeping and the recorded order changes nothing.
-  const second = nextUpdatedOrder({
-    sessionIds: ['a', 'b', 'c'],
-    stored: first.order,
-    previousUpdatedAt: first.updatedAt,
-    byId: byIdOf(sessions),
-  })
+  const second = updateStep(['a', 'b', 'c'], first.order, first.updatedAt, sessions)
   assert.deepEqual(second.order, ['b', 'c', 'a'])
   assert.equal(second.changed, false)
 })
 
 test('nextUpdatedOrder preserves the stored (manual) order until activity promotes', () => {
-  const sessions = [
-    { id: 'a', updatedAt: 100 },
-    { id: 'b', updatedAt: 300 },
-    { id: 'c', updatedAt: 200 },
-  ]
-  const next = nextUpdatedOrder({
-    sessionIds: ['a', 'b', 'c'],
-    stored: ['c', 'a', 'b'],
-    previousUpdatedAt: { a: 100, b: 300, c: 200 },
-    byId: byIdOf(sessions),
-  })
+  const sessions = [{ id: 'a', updatedAt: 100 }, { id: 'b', updatedAt: 300 }, { id: 'c', updatedAt: 200 }]
+  const next = updateStep(['a', 'b', 'c'], ['c', 'a', 'b'], { a: 100, b: 300, c: 200 }, sessions)
   // No session updated since the last observation → the stored order stands.
   assert.deepEqual(next.order, ['c', 'a', 'b'])
   assert.equal(next.changed, false)
@@ -159,162 +144,77 @@ test('nextUpdatedOrder promotes a freshly-updated session to the top and pins it
     { id: 'b', updatedAt: 350 }, // b updated since bookkeeping (300)
     { id: 'c', updatedAt: 200 },
   ]
-  const promoted = nextUpdatedOrder({
-    sessionIds: ['a', 'b', 'c'],
-    stored: ['c', 'a', 'b'],
-    previousUpdatedAt: { a: 100, b: 300, c: 200 },
-    byId: byIdOf(sessions),
-  })
+  const promoted = updateStep(['a', 'b', 'c'], ['c', 'a', 'b'], { a: 100, b: 300, c: 200 }, sessions)
   assert.deepEqual(promoted.order, ['b', 'c', 'a'])
   assert.equal(promoted.changed, true)
   // Pinned: with bookkeeping recorded, a later run with unchanged timestamps
   // keeps b at its promoted position instead of falling back to the wire order.
-  const pinned = nextUpdatedOrder({
-    sessionIds: ['a', 'b', 'c'],
-    stored: promoted.order,
-    previousUpdatedAt: promoted.updatedAt,
-    byId: byIdOf(sessions),
-  })
+  const pinned = updateStep(['a', 'b', 'c'], promoted.order, promoted.updatedAt, sessions)
   assert.deepEqual(pinned.order, ['b', 'c', 'a'])
   assert.equal(pinned.changed, false)
   // A newer promotion outranks the earlier one.
-  const superseded = nextUpdatedOrder({
-    sessionIds: ['a', 'b', 'c'],
-    stored: promoted.order,
-    previousUpdatedAt: promoted.updatedAt,
-    byId: byIdOf([
-      { id: 'a', updatedAt: 100 },
-      { id: 'b', updatedAt: 350 },
-      { id: 'c', updatedAt: 500 },
-    ]),
-  })
+  const superseded = updateStep(['a', 'b', 'c'], promoted.order, promoted.updatedAt, [
+    { id: 'a', updatedAt: 100 }, { id: 'b', updatedAt: 350 }, { id: 'c', updatedAt: 500 },
+  ])
   assert.deepEqual(superseded.order, ['c', 'b', 'a'])
 })
 
 test('nextUpdatedOrder promotes sessions never observed before (new members)', () => {
-  const next = nextUpdatedOrder({
-    sessionIds: ['a', 'd', 'b'],
-    stored: ['a', 'b'],
-    previousUpdatedAt: { a: 100, b: 300 },
-    byId: byIdOf([
-      { id: 'a', updatedAt: 100 },
-      { id: 'd', updatedAt: 900 },
-      { id: 'b', updatedAt: 300 },
-    ]),
-  })
+  const next = updateStep(['a', 'd', 'b'], ['a', 'b'], { a: 100, b: 300 }, [
+    { id: 'a', updatedAt: 100 }, { id: 'd', updatedAt: 900 }, { id: 'b', updatedAt: 300 },
+  ])
   // d was never observed → promoted to the top; a/b keep the stored order.
   assert.deepEqual(next.order, ['d', 'a', 'b'])
 })
 
 test('nextUpdatedOrder drops sessions that left the wire membership', () => {
-  const next = nextUpdatedOrder({
-    sessionIds: ['a', 'c'],
-    stored: ['b', 'a', 'c'],
-    previousUpdatedAt: { a: 100, b: 300, c: 200 },
-    byId: byIdOf([
-      { id: 'a', updatedAt: 100 },
-      { id: 'c', updatedAt: 200 },
-    ]),
-  })
+  const next = updateStep(['a', 'c'], ['b', 'a', 'c'], { a: 100, b: 300, c: 200 }, [
+    { id: 'a', updatedAt: 100 }, { id: 'c', updatedAt: 200 },
+  ])
   assert.deepEqual(next.order, ['a', 'c'])
   assert.equal(next.changed, true)
   // Appends new wire members at the end (reconciledSessionOrder semantics).
-  const withNew = nextUpdatedOrder({
-    sessionIds: ['a', 'c', 'e'],
-    stored: ['a', 'c'],
-    previousUpdatedAt: { a: 100, c: 200 },
-    byId: byIdOf([
-      { id: 'a', updatedAt: 100 },
-      { id: 'c', updatedAt: 200 },
-      { id: 'e', updatedAt: 1 },
-    ]),
-  })
+  const withNew = updateStep(['a', 'c', 'e'], ['a', 'c'], { a: 100, c: 200 }, [
+    { id: 'a', updatedAt: 100 }, { id: 'c', updatedAt: 200 }, { id: 'e', updatedAt: 1 },
+  ])
   // e is new (never observed) → promoted to the top, not appended.
   assert.deepEqual(withNew.order, ['e', 'a', 'c'])
 })
 
 test('nextUpdatedOrder recency sorts by updatedAt descending with the id tiebreak', () => {
-  const next = nextUpdatedOrder({
-    sessionIds: ['z', 'a', 'm'],
-    stored: undefined,
-    previousUpdatedAt: undefined,
-    byId: byIdOf([
-      { id: 'z', updatedAt: 100 },
-      { id: 'a', updatedAt: 100 },
-      { id: 'm', updatedAt: 100 },
-    ]),
-  })
+  const next = updateStep(['z', 'a', 'm'], undefined, undefined, [
+    { id: 'z', updatedAt: 100 }, { id: 'a', updatedAt: 100 }, { id: 'm', updatedAt: 100 },
+  ])
   assert.deepEqual(next.order, ['a', 'm', 'z'])
 })
 
 test('nextUpdatedOrder treats a missing updatedAt as 0: sorts last, then stays promoted (official edge)', () => {
-  const first = nextUpdatedOrder({
-    sessionIds: ['known', 'unknown1', 'unknown2'],
-    stored: undefined,
-    previousUpdatedAt: undefined,
-    byId: byIdOf([
-      { id: 'known', updatedAt: 5 },
-      { id: 'unknown1' },
-      { id: 'unknown2' },
-    ]),
-  })
+  const rows = [{ id: 'known', updatedAt: 5 }, { id: 'unknown1' }, { id: 'unknown2' }]
+  const first = updateStep(['known', 'unknown1', 'unknown2'], undefined, undefined, rows)
   // First observation: full recency sort, missing updatedAt sorts as 0.
   assert.deepEqual(first.order, ['known', 'unknown1', 'unknown2'])
-  // Sessions without an updatedAt are never recorded in the bookkeeping, so
-  // they read as "never observed" and are re-promoted on every run (official
-  // behavior) — they settle at the top in id order and stay stable.
-  const second = nextUpdatedOrder({
-    sessionIds: ['known', 'unknown1', 'unknown2'],
-    stored: first.order,
-    previousUpdatedAt: first.updatedAt,
-    byId: byIdOf([
-      { id: 'known', updatedAt: 5 },
-      { id: 'unknown1' },
-      { id: 'unknown2' },
-    ]),
-  })
+  // Sessions without an updatedAt are never recorded in the bookkeeping, so they read as
+  // "never observed" and are re-promoted on every run (official behavior) — they settle at
+  // the top in id order and stay stable.
+  const second = updateStep(['known', 'unknown1', 'unknown2'], first.order, first.updatedAt, rows)
   assert.deepEqual(second.order, ['unknown1', 'unknown2', 'known'])
-  const third = nextUpdatedOrder({
-    sessionIds: ['known', 'unknown1', 'unknown2'],
-    stored: second.order,
-    previousUpdatedAt: second.updatedAt,
-    byId: byIdOf([
-      { id: 'known', updatedAt: 5 },
-      { id: 'unknown1' },
-      { id: 'unknown2' },
-    ]),
-  })
+  const third = updateStep(['known', 'unknown1', 'unknown2'], second.order, second.updatedAt, rows)
   assert.deepEqual(third.order, ['unknown1', 'unknown2', 'known'])
   assert.equal(third.changed, false)
 })
 
 test('nextUpdatedOrder re-entry (switched to updated): stored account kept, bookkeeping cleared → one full recency sort, then converges', () => {
-  // setOrderBy clears the source's bookkeeping while KEEPING updatedOrder
-  // (official switchedToUpdated): the trigger is `previousUpdatedAt ===
-  // undefined`, NOT `stored === undefined` — a regression to the latter
-  // would silently skip the headline one-time recency sort on re-entry.
-  const sessions = [
-    { id: 'c', updatedAt: 300 },
-    { id: 'a', updatedAt: 100 },
-    { id: 'b', updatedAt: 200 },
-  ]
-  const reentry = nextUpdatedOrder({
-    sessionIds: ['a', 'b', 'c'],
-    stored: ['c', 'a', 'b'],       // retained manual arrangement
-    previousUpdatedAt: undefined,  // bookkeeping cleared on switch-in
-    byId: byIdOf(sessions),
-  })
+  // setOrderBy clears the source's bookkeeping while KEEPING updatedOrder (official
+  // switchedToUpdated): the trigger is `previousUpdatedAt === undefined`, NOT `stored ===
+  // undefined` — a regression to the latter would skip the one-time recency sort on re-entry.
+  const sessions = [{ id: 'c', updatedAt: 300 }, { id: 'a', updatedAt: 100 }, { id: 'b', updatedAt: 200 }]
+  const reentry = updateStep(['a', 'b', 'c'], ['c', 'a', 'b'], undefined, sessions) // stored kept; bookkeeping cleared
   // Full recency sort over the retained account: c(300), b(200), a(100).
   assert.deepEqual(reentry.order, ['c', 'b', 'a'])
   assert.deepEqual(reentry.updatedAt, { a: 100, b: 200, c: 300 })
   assert.equal(reentry.changed, true)
   // Converges: the re-run with the recorded bookkeeping is a no-op.
-  const steady = nextUpdatedOrder({
-    sessionIds: ['a', 'b', 'c'],
-    stored: reentry.order,
-    previousUpdatedAt: reentry.updatedAt,
-    byId: byIdOf(sessions),
-  })
+  const steady = updateStep(['a', 'b', 'c'], reentry.order, reentry.updatedAt, sessions)
   assert.deepEqual(steady.order, ['c', 'b', 'a'])
   assert.equal(steady.changed, false)
 })
@@ -328,12 +228,7 @@ test('nextUpdatedOrder a timestamp-only decrease refreshes bookkeeping without r
     { id: 'a', updatedAt: 100 },
     { id: 'b', updatedAt: 150 }, // decreased from 200 since the last observation
   ]
-  const next = nextUpdatedOrder({
-    sessionIds: ['a', 'b'],
-    stored: ['a', 'b'],
-    previousUpdatedAt: { a: 100, b: 200 },
-    byId: byIdOf(sessions),
-  })
+  const next = updateStep(['a', 'b'], ['a', 'b'], { a: 100, b: 200 }, sessions)
   assert.deepEqual(next.order, ['a', 'b'])
   assert.deepEqual(next.updatedAt, { a: 100, b: 150 })
   assert.equal(next.changed, true)
@@ -342,20 +237,13 @@ test('nextUpdatedOrder a timestamp-only decrease refreshes bookkeeping without r
 // ---- orderUngroupedSessions (P2-9 extraction, design 06 §3.1, manual mode) ----
 
 test('orderUngroupedSessions uses the stored order with wire-id appends', () => {
-  const wire = [
-    { id: 'a' },
-    { id: 'b' },
-    { id: 'c' },
-  ]
+  const wire = [{ id: 'a' }, { id: 'b' }, { id: 'c' }]
   const out = orderUngroupedSessions(wire, ['c', 'a'])
   assert.deepEqual(out.map(x => x.id), ['c', 'a', 'b'])
 })
 
 test('orderUngroupedSessions skips stored ids unknown to the wire', () => {
-  const wire = [
-    { id: 'a' },
-    { id: 'b' },
-  ]
+  const wire = [{ id: 'a' }, { id: 'b' }]
   const out = orderUngroupedSessions(wire, ['ghost', 'b', 'a'])
   assert.deepEqual(out.map(x => x.id), ['b', 'a'])
 })
@@ -369,24 +257,27 @@ test('orderUngroupedSessions with no stored order returns the wire order copy', 
 
 // ---- deriveLocalSearchMatches (design 06 §1.1 local leg) ----
 
+/** deriveLocalSearchMatches over a snapshot built from workspace/session literals. */
+const localSearch = (
+  query: string,
+  workspaces: Parameters<typeof snapshot>[0],
+  sessions: Parameters<typeof snapshot>[1],
+) => deriveLocalSearchMatches(snapshot(workspaces, sessions), query)
+
 test('deriveLocalSearchMatches hits session titles case-insensitively', () => {
-  const result = deriveLocalSearchMatches(
-    snapshot(
-      [workspace('w1', 'Work', ['a', 'b'])],
-      [session('a', 10, { title: 'DeepSeek R1' }), session('b', 20, { title: 'other' })],
-    ),
+  const result = localSearch(
     'deepseek',
+    [workspace('w1', 'Work', ['a', 'b'])],
+    [session('a', 10, { title: 'DeepSeek R1' }), session('b', 20, { title: 'other' })],
   )
   assert.deepEqual(result, [{ sessionId: 'a', snippet: '' }])
 })
 
 test('deriveLocalSearchMatches hits workspace titles (a session with no title still matches)', () => {
-  const result = deriveLocalSearchMatches(
-    snapshot(
-      [workspace('w1', 'Alpha Project', ['a']), workspace('w2', 'Other', ['b'])],
-      [session('a', 10), session('b', 20, { title: 'Other' })],
-    ),
+  const result = localSearch(
     'alpha',
+    [workspace('w1', 'Alpha Project', ['a']), workspace('w2', 'Other', ['b'])],
+    [session('a', 10), session('b', 20, { title: 'Other' })],
   )
   // Session a has NO title (missing titles never hit on title), but its
   // workspace title hit still counts; b sits in a non-matching workspace.
@@ -394,61 +285,42 @@ test('deriveLocalSearchMatches hits workspace titles (a session with no title st
 })
 
 test('deriveLocalSearchMatches matches either leg independently', () => {
-  const result = deriveLocalSearchMatches(
-    snapshot(
-      [workspace('w1', 'Work', ['a']), workspace('w2', 'Docs', ['b'])],
-      [session('a', 10, { title: 'Notes' }), session('b', 20, { title: 'no-match' })],
-    ),
+  const result = localSearch(
     'docs',
+    [workspace('w1', 'Work', ['a']), workspace('w2', 'Docs', ['b'])],
+    [session('a', 10, { title: 'Notes' }), session('b', 20, { title: 'no-match' })],
   )
   assert.deepEqual(result, [{ sessionId: 'b', snippet: '' }])
 })
 
 test('deriveLocalSearchMatches excludes blank, archived and subagent sessions', () => {
-  const result = deriveLocalSearchMatches(
-    {
-      workspaces: [workspace('w1', 'Match', ['hit', 'blank-hit', 'archived-hit', 'sub-hit'])],
-      sessions: [
-        session('hit', 10, { title: 'match me' }),
-        session('blank-hit', 20, { title: 'match me', blank: true }),
-        session('archived-hit', 30, { title: 'match me' }),
-        session('sub-hit', 40, { title: 'match me', origin: 'subagent' }),
-      ],
-      archivedSessionIds: ['archived-hit'],
-    },
-    'match',
-  )
+  const result = deriveLocalSearchMatches({
+    workspaces: [workspace('w1', 'Match', ['hit', 'blank-hit', 'archived-hit', 'sub-hit'])],
+    sessions: [
+      session('hit', 10, { title: 'match me' }), session('blank-hit', 20, { title: 'match me', blank: true }),
+      session('archived-hit', 30, { title: 'match me' }), session('sub-hit', 40, { title: 'match me', origin: 'subagent' }),
+    ],
+    archivedSessionIds: ['archived-hit'],
+  }, 'match')
   assert.deepEqual(result, [{ sessionId: 'hit', snippet: '' }])
 })
 
 test('deriveLocalSearchMatches orders hits by recency with the id tiebreak', () => {
-  const result = deriveLocalSearchMatches(
-    snapshot(
-      [workspace('w1', 'Work', ['a', 'b', 'c'])],
-      [
-        session('a', 100, { title: 'hit' }),
-        session('b', 300, { title: 'hit' }),
-        session('c', 300, { title: 'hit' }),
-      ],
-    ),
+  const result = localSearch(
     'hit',
+    [workspace('w1', 'Work', ['a', 'b', 'c'])],
+    [session('a', 100, { title: 'hit' }), session('b', 300, { title: 'hit' }), session('c', 300, { title: 'hit' })],
   )
   assert.deepEqual(result.map(row => row.sessionId), ['b', 'c', 'a'])
 })
 
 test('deriveLocalSearchMatches returns [] for an empty query (defensive trim)', () => {
-  const result = deriveLocalSearchMatches(
-    snapshot([workspace('w1', 'Work', ['a'])], [session('a', 1, { title: 'hit' })]),
-    '   ',
-  )
+  const result = localSearch('   ', [workspace('w1', 'Work', ['a'])], [session('a', 1, { title: 'hit' })])
   assert.deepEqual(result, [])
 })
 
 test('deriveLocalSearchMatches returns [] when nothing matches', () => {
-  const result = deriveLocalSearchMatches(
-    snapshot([workspace('w1', 'Work', ['a'])], [session('a', 1, { title: 'hit' })]),
-    'zzz',
-  )
+  const result = localSearch('zzz', [workspace('w1', 'Work', ['a'])], [session('a', 1, { title: 'hit' })])
   assert.deepEqual(result, [])
 })
 

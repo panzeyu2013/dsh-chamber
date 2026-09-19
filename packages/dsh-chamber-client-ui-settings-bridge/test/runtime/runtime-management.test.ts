@@ -29,16 +29,9 @@ import {
 
 function runtimeState(phase: RuntimePhase, overrides: Partial<RuntimeState> = {}): RuntimeState {
   return {
-    active: '1.0.0',
-    bundled: '1.0.0',
-    source: 'bundled',
-    latest: '1.1.0',
+    active: '1.0.0', bundled: '1.0.0', source: 'bundled', latest: '1.1.0',
     versions: [{ version: '1.1.0', latest: true, cached: false, belowBaseline: false }],
-    pending: null,
-    phase,
-    error: null,
-    connectionState: 'ready',
-    ...overrides,
+    pending: null, phase, error: null, connectionState: 'ready', ...overrides,
   }
 }
 
@@ -65,33 +58,18 @@ test('runtime action matrix covers every design-18 phase and keeps busy/terminal
 test('apply-now mirrors the main gates: visible only in pending, hidden for env/read-only/runtime-blocked', () => {
   // The pending phase exposes the immediate apply as the primary action plus
   // the reset escape hatch (design 18 addendum §6.1).
-  assert.deepEqual(
-    runtimeAllowedActions(runtimeState('pending', { hasOverride: true, source: 'user' })),
-    ['apply-now', 'reset-builtin'],
-  )
-  assert.deepEqual(
-    runtimeAllowedActions(runtimeState('pending', { hasOverride: false })),
-    [],
-    'apply-now and reset-builtin without a persisted override are main-process no-ops (F5/no-pending) and stay hidden',
-  )
+  assert.deepEqual(runtimeAllowedActions(runtimeState('pending', { hasOverride: true, source: 'user' })), ['apply-now', 'reset-builtin'])
+  assert.deepEqual(runtimeAllowedActions(runtimeState('pending', { hasOverride: false })), [],
+    'apply-now and reset-builtin without a persisted override are main-process no-ops (F5/no-pending) and stay hidden')
   // env source outranks every persisted override: version mutations (including
   // apply-now) are invisible, only the read-only check survives.
-  assert.deepEqual(
-    runtimeAllowedActions(runtimeState('pending', { source: 'env' })),
-    [],
-  )
+  assert.deepEqual(runtimeAllowedActions(runtimeState('pending', { source: 'env' })), [])
   // Unsupported platforms are read-only except the mandatory interrupted
   // restore recovery — apply-now must never appear.
-  assert.deepEqual(
-    runtimeAllowedActions(runtimeState('pending', { managementSupported: false })),
-    [],
-  )
+  assert.deepEqual(runtimeAllowedActions(runtimeState('pending', { managementSupported: false })), [])
   // runtimeBlocked isolates the instance: the pending apply-now is hidden
   // while recovery metadata is quarantined (only the escape hatches remain).
-  assert.deepEqual(
-    runtimeAllowedActions(runtimeState('pending', { runtimeBlocked: true, hasOverride: true, source: 'user' })),
-    [],
-  )
+  assert.deepEqual(runtimeAllowedActions(runtimeState('pending', { runtimeBlocked: true, hasOverride: true, source: 'user' })), [])
   // Busy/terminal phases never expose apply-now (it lives only in pending).
   assert.equal(runtimeAllowedActions(runtimeState('applying')).includes('apply-now'), false)
   assert.equal(runtimeAllowedActions(runtimeState('idle')).includes('apply-now'), false)
@@ -102,22 +80,13 @@ test('apply-now mirrors the main connectionState gate: hidden outside ready/degr
   // every connectionState outside ready/degraded — a stopped/crashed local dsh
   // would silently no-op. The pending apply-now button must therefore be hidden
   // while the durable-transaction escape hatch (reset-builtin) stays visible.
-  assert.deepEqual(
-    runtimeAllowedActions(runtimeState('pending', { hasOverride: true, source: 'user', connectionState: 'stopped' })),
-    ['reset-builtin'],
-    'connectionState outside ready/degraded hides apply-now but keeps reset-builtin',
-  )
+  assert.deepEqual(runtimeAllowedActions(runtimeState('pending', { hasOverride: true, source: 'user', connectionState: 'stopped' })), ['reset-builtin'],
+    'connectionState outside ready/degraded hides apply-now but keeps reset-builtin')
   // degraded is a live connection state (process alive, degraded health): the
   // button stays visible exactly like the main gate.
-  assert.deepEqual(
-    runtimeAllowedActions(runtimeState('pending', { hasOverride: true, source: 'user', connectionState: 'degraded' })),
-    ['apply-now', 'reset-builtin'],
-  )
+  assert.deepEqual(runtimeAllowedActions(runtimeState('pending', { hasOverride: true, source: 'user', connectionState: 'degraded' })), ['apply-now', 'reset-builtin'])
   // Absent connectionState (older main without the projection) never gates.
-  assert.deepEqual(
-    runtimeAllowedActions(runtimeState('pending', { hasOverride: true, source: 'user', connectionState: undefined })),
-    ['apply-now', 'reset-builtin'],
-  )
+  assert.deepEqual(runtimeAllowedActions(runtimeState('pending', { hasOverride: true, source: 'user', connectionState: undefined })), ['apply-now', 'reset-builtin'])
 })
 
 test('per-server source derivation uses target kind × transport, not id prefixes', () => {
@@ -482,12 +451,12 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
   return { promise, resolve }
 }
 
-function surfaceHarness(initial: Promise<RuntimeState>) {
+function surfaceHarness(initial: Promise<RuntimeState>, stateOverride?: () => Promise<RuntimeState>) {
   let push: ((state: RuntimeState) => void) | null = null
   let subscriptions = 0
   let unsubscriptions = 0
   const surface: RuntimeSurface = {
-    state: () => initial,
+    state: stateOverride ?? (() => initial),
     check: async () => runtimeState('idle'),
     install: async () => runtimeState('pending'),
     resetBuiltin: async () => runtimeState('idle'),
@@ -557,33 +526,14 @@ test('runtime store ignores hydration that resolves after its subscriber unmount
 test('runtime store tears down and retries after a transient hydration failure', async () => {
   const scheduled: Array<() => void> = []
   let stateCalls = 0
-  let subscriptions = 0
-  let unsubscriptions = 0
-  const surface: RuntimeSurface = {
-    state: () => {
-      stateCalls += 1
-      return stateCalls === 1
-        ? Promise.reject(new Error('transient IPC failure'))
-        : Promise.resolve(runtimeState('idle'))
-    },
-    check: async () => runtimeState('idle'),
-    install: async () => runtimeState('pending'),
-    resetBuiltin: async () => runtimeState('idle'),
-    applyNow: async () => runtimeState('applying'),
-    retryApply: async () => runtimeState('applying'),
-    retryRestore: async () => runtimeState('rollback'),
-    recoverMetadata: async () => runtimeState('applying'),
-    restorePreRollback: async () => runtimeState('idle'),
-    cleanupVersion: async () => runtimeState('idle'),
-    clearFailure: async () => runtimeState('idle'),
-    restart: async () => runtimeState('idle'),
-    onChanged: () => {
-      subscriptions += 1
-      return () => { unsubscriptions += 1 }
-    },
-  }
+  const harness = surfaceHarness(Promise.resolve(runtimeState('idle')), () => {
+    stateCalls += 1
+    return stateCalls === 1
+      ? Promise.reject(new Error('transient IPC failure'))
+      : Promise.resolve(runtimeState('idle'))
+  })
   const store = new RuntimeStateStore({
-    resolveSurface: () => surface,
+    resolveSurface: () => harness.surface,
     schedule: (callback) => {
       scheduled.push(callback)
       return 1 as unknown as ReturnType<typeof setTimeout>
@@ -595,13 +545,13 @@ test('runtime store tears down and retries after a transient hydration failure',
   await Promise.resolve()
   await Promise.resolve()
   assert.equal(scheduled.length, 1)
-  assert.deepEqual({ subscriptions, unsubscriptions }, { subscriptions: 1, unsubscriptions: 1 })
+  assert.deepEqual(harness.counts(), { subscriptions: 1, unsubscriptions: 1 })
 
   scheduled.shift()?.()
   await Promise.resolve()
   await Promise.resolve()
   assert.equal(store.getSnapshot()?.phase, 'idle')
-  assert.deepEqual({ subscriptions, unsubscriptions }, { subscriptions: 2, unsubscriptions: 1 })
+  assert.deepEqual(harness.counts(), { subscriptions: 2, unsubscriptions: 1 })
   off()
-  assert.equal(unsubscriptions, 2)
+  assert.equal(harness.counts().unsubscriptions, 2)
 })

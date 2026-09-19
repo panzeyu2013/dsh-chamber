@@ -1,11 +1,6 @@
-/**
- * gateway provider — part 4: gatewayChamberApplyBatch / gatewayChamberMaterialize
- * — the full apply flow, refusals and partial outcomes, settle/restart polls,
- * tarball upload headers and the client-side pre-flight gates.
- *
- * Sibling parts: gateway-provider.test.ts, gateway-session-spki.test.ts,
- * gateway-chamber-sync.test.ts.
- */
+/** gateway provider — part 4: gatewayChamberApplyBatch / gatewayChamberMaterialize — the apply
+ *  flow, refusals and partial outcomes, settle/restart polls, tarball upload headers and the
+ *  client-side pre-flight gates (siblings: gateway-provider / gateway-session-spki / gateway-chamber-sync). */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -25,6 +20,20 @@ function fixtureJson(res: import('node:http').ServerResponse, status: number, pa
 }
 
 const FIXTURE_TARBALL = Buffer.from('fake tgz bytes for the materialize fixture')
+
+type BatchParams = Parameters<typeof gatewayChamberApplyBatch>[0]
+type MaterializeParams = Parameters<typeof gatewayChamberMaterialize>[0]
+
+/** The standard apply/materialize call target (gw-1, loopback origin, no TLS
+ *  pin, no extra headers); `extra` carries the per-case timeout/authority
+ *  overrides, `headers` overriding the empty default. */
+function batchTarget(port: number, options: BatchParams['options'], extra: Partial<BatchParams> = {}): BatchParams {
+  return { id: 'gw-1', url: `http://127.0.0.1:${port}`, headers: {}, spkiPin: null, options, ...extra }
+}
+
+function materializeTarget(port: number, tarball: MaterializeParams['tarball'], name: MaterializeParams['name'], version: MaterializeParams['version'], extra: Partial<MaterializeParams> = {}): MaterializeParams {
+  return { id: 'gw-1', url: `http://127.0.0.1:${port}`, headers: {}, spkiPin: null, tarball, name, version, ...extra }
+}
 
 test('parseSpecArg: gateway registry add specs parse to their package names (plan Phase 4.6)', () => {
   assert.deepEqual(parseSpecArg('alpha'), { name: 'alpha' })
@@ -82,16 +91,12 @@ test('gatewayChamberApplyBatch: full flow installs, removes, waits for the ops t
     })
   })
   try {
-    const result = await gatewayChamberApplyBatch({
-      id: 'gw-1',
-      url: `http://127.0.0.1:${server.port}`,
-      headers: { authorization: 'Bearer test-token' },
-      spkiPin: null,
-      options: { add: ['alpha@^1.0.0'], remove: ['beta'] },
-      settleIntervalMs: 5,
-      restartPollIntervalMs: 5,
-      requestTimeoutMs: 2_000,
-    })
+    const result = await gatewayChamberApplyBatch(batchTarget(server.port, { add: ['alpha@^1.0.0'], remove: ['beta'] }, {
+   headers: { authorization: 'Bearer test-token' },
+   settleIntervalMs: 5,
+   restartPollIntervalMs: 5,
+   requestTimeoutMs: 2_000,
+ }))
     assert.equal(result.ok, true)
     if (result.ok) {
       assert.deepEqual(result.outcome, {
@@ -148,17 +153,12 @@ test('gatewayChamberApplyBatch: an ssh-tunnel origin presents the remote authori
     fixtureJson(res, 404, { error: 'not_found', code: 'not_found' })
   })
   try {
-    const result = await gatewayChamberApplyBatch({
-      id: 'gw-1',
-      url: `http://127.0.0.1:${server.port}`,
-      headers: {},
-      spkiPin: null,
-      authority: 'gateway.example:8443',
-      options: { add: ['alpha'], remove: [] },
-      settleIntervalMs: 5,
-      restartPollIntervalMs: 5,
-      requestTimeoutMs: 2_000,
-    })
+    const result = await gatewayChamberApplyBatch(batchTarget(server.port, { add: ['alpha'], remove: [] }, {
+   authority: 'gateway.example:8443',
+   settleIntervalMs: 5,
+   restartPollIntervalMs: 5,
+   requestTimeoutMs: 2_000,
+ }))
     assert.equal(result.ok, true)
     assert.deepEqual(seen, [
       'PUT /chamber/plugins/install',
@@ -180,14 +180,9 @@ test('gatewayChamberApplyBatch: deferRestart skips the settle/restart polls enti
     fixtureJson(res, 202, { accepted: true, opId: 'op-1' })
   })
   try {
-    const result = await gatewayChamberApplyBatch({
-      id: 'gw-1',
-      url: `http://127.0.0.1:${server.port}`,
-      headers: {},
-      spkiPin: null,
-      options: { add: ['alpha'], remove: [], deferRestart: true },
-      requestTimeoutMs: 2_000,
-    })
+    const result = await gatewayChamberApplyBatch(batchTarget(server.port, { add: ['alpha'], remove: [], deferRestart: true }, {
+   requestTimeoutMs: 2_000,
+ }))
     assert.equal(result.ok, true)
     if (result.ok) {
       assert.deepEqual(result.outcome, { installed: ['alpha'], removed: [], restarted: false, deferredOps: [] })
@@ -203,14 +198,10 @@ test('gatewayChamberApplyBatch: a first-op refusal fails loud with the code and 
     fixtureJson(res, 409, { error: 'duplicate operation pending', code: 'queue_busy' })
   })
   try {
-    const result = await gatewayChamberApplyBatch({
-      id: 'gw-1',
-      url: `http://127.0.0.1:${server.port}`,
-      headers: { authorization: 'Bearer test-token' },
-      spkiPin: null,
-      options: { add: ['alpha@^1.0.0'], remove: [] },
-      requestTimeoutMs: 2_000,
-    })
+    const result = await gatewayChamberApplyBatch(batchTarget(server.port, { add: ['alpha@^1.0.0'], remove: [] }, {
+   headers: { authorization: 'Bearer test-token' },
+   requestTimeoutMs: 2_000,
+ }))
     assert.equal(result.ok, false)
     if (!result.ok) {
       assert.match(result.error, /install of alpha refused \(HTTP 409, code queue_busy\)/)
@@ -233,14 +224,9 @@ test('gatewayChamberApplyBatch: a mid-batch refusal aborts with the honest parti
     fixtureJson(res, 409, { error: 'runtime mutation in progress', code: 'runtime_busy' })
   })
   try {
-    const result = await gatewayChamberApplyBatch({
-      id: 'gw-1',
-      url: `http://127.0.0.1:${server.port}`,
-      headers: {},
-      spkiPin: null,
-      options: { add: ['alpha', 'beta'], remove: [] },
-      requestTimeoutMs: 2_000,
-    })
+    const result = await gatewayChamberApplyBatch(batchTarget(server.port, { add: ['alpha', 'beta'], remove: [] }, {
+   requestTimeoutMs: 2_000,
+ }))
     assert.equal(result.ok, false)
     if (!result.ok) {
       assert.match(result.error, /install of beta refused/)
@@ -265,14 +251,9 @@ test('gatewayChamberApplyBatch: a mid-removal refusal stops the batch before ANY
     fixtureJson(res, 409, { error: 'not installed', code: 'not_installed' })
   })
   try {
-    const result = await gatewayChamberApplyBatch({
-      id: 'gw-1',
-      url: `http://127.0.0.1:${server.port}`,
-      headers: {},
-      spkiPin: null,
-      options: { add: ['alpha'], remove: ['beta', 'gamma'] },
-      requestTimeoutMs: 2_000,
-    })
+    const result = await gatewayChamberApplyBatch(batchTarget(server.port, { add: ['alpha'], remove: ['beta', 'gamma'] }, {
+   requestTimeoutMs: 2_000,
+ }))
     assert.equal(result.ok, false)
     if (!result.ok) {
       assert.match(result.error, /remove of gamma refused/)
@@ -308,16 +289,11 @@ test('gatewayChamberApplyBatch: an op that fails in the gateway executor blocks 
     fixtureJson(res, 404, { error: 'not_found', code: 'not_found' })
   })
   try {
-    const result = await gatewayChamberApplyBatch({
-      id: 'gw-1',
-      url: `http://127.0.0.1:${server.port}`,
-      headers: {},
-      spkiPin: null,
-      options: { add: ['alpha'], remove: [] },
-      settleIntervalMs: 5,
-      settleTimeoutMs: 2_000,
-      requestTimeoutMs: 2_000,
-    })
+    const result = await gatewayChamberApplyBatch(batchTarget(server.port, { add: ['alpha'], remove: [] }, {
+   settleIntervalMs: 5,
+   settleTimeoutMs: 2_000,
+   requestTimeoutMs: 2_000,
+ }))
     assert.equal(result.ok, false)
     if (!result.ok) {
       assert.match(result.error, /install of alpha failed on the gateway: pnpm add failed \(exit 1\)/)
@@ -342,15 +318,10 @@ test('gatewayChamberApplyBatch: a restart refusal after execution is a loud part
     fixtureJson(res, 409, { error: 'managed profile write in flight (plugin mutation); restart refused', code: 'runtime_busy' })
   })
   try {
-    const result = await gatewayChamberApplyBatch({
-      id: 'gw-1',
-      url: `http://127.0.0.1:${server.port}`,
-      headers: {},
-      spkiPin: null,
-      options: { add: ['alpha'], remove: [] },
-      settleIntervalMs: 5,
-      requestTimeoutMs: 2_000,
-    })
+    const result = await gatewayChamberApplyBatch(batchTarget(server.port, { add: ['alpha'], remove: [] }, {
+   settleIntervalMs: 5,
+   requestTimeoutMs: 2_000,
+ }))
     assert.equal(result.ok, false)
     if (!result.ok) {
       assert.match(result.error, /restart of the managed dsh refused \(HTTP 409, code runtime_busy\)/)
@@ -378,17 +349,12 @@ test('gatewayChamberApplyBatch: a post-202 restart rejection (restart failed) su
     fixtureJson(res, 200, { kind: GATEWAY_RUNTIME_IDENTITY, connectionState: 'ready', restart: 'failed', operationError: 'canStartLocal gate closed' })
   })
   try {
-    const result = await gatewayChamberApplyBatch({
-      id: 'gw-1',
-      url: `http://127.0.0.1:${server.port}`,
-      headers: {},
-      spkiPin: null,
-      options: { add: ['alpha'], remove: [] },
-      settleIntervalMs: 5,
-      restartPollIntervalMs: 5,
-      restartPollTimeoutMs: 1_000,
-      requestTimeoutMs: 2_000,
-    })
+    const result = await gatewayChamberApplyBatch(batchTarget(server.port, { add: ['alpha'], remove: [] }, {
+   settleIntervalMs: 5,
+   restartPollIntervalMs: 5,
+   restartPollTimeoutMs: 1_000,
+   requestTimeoutMs: 2_000,
+ }))
     assert.equal(result.ok, false)
     if (!result.ok) {
       assert.match(result.error, /restart failed: canStartLocal gate closed/)
@@ -406,14 +372,7 @@ test('gatewayChamberApplyBatch: deferred installs are reported as deferredOps an
     fixtureJson(res, 202, { accepted: true, deferred: true, intentId: 'int-7' })
   })
   try {
-    const result = await gatewayChamberApplyBatch({
-      id: 'gw-1',
-      url: `http://127.0.0.1:${server.port}`,
-      headers: {},
-      spkiPin: null,
-      options: { add: ['alpha'], remove: [] },
-      requestTimeoutMs: 2_000,
-    })
+    const result = await gatewayChamberApplyBatch(batchTarget(server.port, { add: ['alpha'], remove: [] }, { requestTimeoutMs: 2_000 }))
     assert.equal(result.ok, true)
     if (result.ok) {
       assert.deepEqual(result.outcome, { installed: [], removed: [], restarted: false, deferredOps: ['alpha'] })
@@ -453,16 +412,11 @@ test('gatewayChamberApplyBatch: settle timeout and restart-poll timeout stay lou
     fixtureJson(res, 200, { ok: true, busy: true, tasks: [{ id: 'op-1', kind: 'install', name: 'alpha', preImage: null, status: 'pending' }], deferred: [] })
   })
   try {
-    const result = await gatewayChamberApplyBatch({
-      id: 'gw-1',
-      url: `http://127.0.0.1:${settleServer.port}`,
-      headers: {},
-      spkiPin: null,
-      options: { add: ['alpha'], remove: [] },
-      settleIntervalMs: 5,
-      settleTimeoutMs: 60,
-      requestTimeoutMs: 2_000,
-    })
+    const result = await gatewayChamberApplyBatch(batchTarget(settleServer.port, { add: ['alpha'], remove: [] }, {
+   settleIntervalMs: 5,
+   settleTimeoutMs: 60,
+   requestTimeoutMs: 2_000,
+ }))
     assert.equal(result.ok, false)
     if (!result.ok) {
       assert.match(result.error, /has not finished applying the plugin ops/)
@@ -488,17 +442,12 @@ test('gatewayChamberApplyBatch: settle timeout and restart-poll timeout stay lou
     fixtureJson(res, 200, { kind: GATEWAY_RUNTIME_IDENTITY, connectionState: 'restarting', restart: 'running' })
   })
   try {
-    const result = await gatewayChamberApplyBatch({
-      id: 'gw-1',
-      url: `http://127.0.0.1:${restartServer.port}`,
-      headers: {},
-      spkiPin: null,
-      options: { add: ['alpha'], remove: [] },
-      settleIntervalMs: 5,
-      restartPollIntervalMs: 5,
-      restartPollTimeoutMs: 60,
-      requestTimeoutMs: 2_000,
-    })
+    const result = await gatewayChamberApplyBatch(batchTarget(restartServer.port, { add: ['alpha'], remove: [] }, {
+   settleIntervalMs: 5,
+   restartPollIntervalMs: 5,
+   restartPollTimeoutMs: 60,
+   requestTimeoutMs: 2_000,
+ }))
     assert.equal(result.ok, false)
     if (!result.ok) assert.match(result.error, /restart accepted but the gateway did not reach ready in time/)
   } finally {
@@ -543,18 +492,12 @@ test('gatewayChamberMaterialize: uploads the tarball with the exact headers, wai
     })
   })
   try {
-    const result = await gatewayChamberMaterialize({
-      id: 'gw-1',
-      url: `http://127.0.0.1:${server.port}`,
-      headers: { authorization: 'Bearer test-token' },
-      spkiPin: null,
-      tarball: FIXTURE_TARBALL,
-      name: 'custom-pkg',
-      version: '1.2.3',
-      settleIntervalMs: 5,
-      restartPollIntervalMs: 5,
-      requestTimeoutMs: 2_000,
-    })
+    const result = await gatewayChamberMaterialize(materializeTarget(server.port, FIXTURE_TARBALL, 'custom-pkg', '1.2.3', {
+   headers: { authorization: 'Bearer test-token' },
+   settleIntervalMs: 5,
+   restartPollIntervalMs: 5,
+   requestTimeoutMs: 2_000,
+ }))
     assert.deepEqual(result, { ok: true, outcome: { executed: true, restarted: true } })
     assert.deepEqual(seen.map(entry => `${entry.method} ${entry.url}`), [
       'PUT /chamber/plugins/materialize',
@@ -586,15 +529,7 @@ test('gatewayChamberMaterialize: a deferred answer maps to {ok:true,deferred:tru
     fixtureJson(res, 202, { accepted: true, deferred: true, intentId: 'int-mat' })
   })
   try {
-    const deferred = await gatewayChamberMaterialize({
-      id: 'gw-1',
-      url: `http://127.0.0.1:${deferredServer.port}`,
-      headers: {},
-      spkiPin: null,
-      tarball: FIXTURE_TARBALL,
-      name: 'custom-pkg',
-      version: '1.2.3',
-    })
+    const deferred = await gatewayChamberMaterialize(materializeTarget(deferredServer.port, FIXTURE_TARBALL, 'custom-pkg', '1.2.3'))
     assert.deepEqual(deferred, { ok: true, deferred: true })
   } finally {
     await deferredServer.close()
@@ -604,15 +539,7 @@ test('gatewayChamberMaterialize: a deferred answer maps to {ok:true,deferred:tru
     fixtureJson(res, 413, { error: 'archive too large', code: 'too_large' })
   })
   try {
-    const refused = await gatewayChamberMaterialize({
-      id: 'gw-1',
-      url: `http://127.0.0.1:${refusalServer.port}`,
-      headers: {},
-      spkiPin: null,
-      tarball: FIXTURE_TARBALL,
-      name: 'custom-pkg',
-      version: '1.2.3',
-    })
+    const refused = await gatewayChamberMaterialize(materializeTarget(refusalServer.port, FIXTURE_TARBALL, 'custom-pkg', '1.2.3'))
     assert.equal(refused.ok, false)
     if (!refused.ok) {
       assert.match(refused.error, /materialize of custom-pkg@1\.2\.3 refused \(HTTP 413, code too_large\)/)
@@ -642,17 +569,10 @@ test('gatewayChamberMaterialize: a failed executor op and a refused restart are 
     fixtureJson(res, 404, { error: 'not_found', code: 'not_found' })
   })
   try {
-    const failed = await gatewayChamberMaterialize({
-      id: 'gw-1',
-      url: `http://127.0.0.1:${failedOpServer.port}`,
-      headers: {},
-      spkiPin: null,
-      tarball: FIXTURE_TARBALL,
-      name: 'custom-pkg',
-      version: '1.2.3',
-      settleIntervalMs: 5,
-      requestTimeoutMs: 2_000,
-    })
+    const failed = await gatewayChamberMaterialize(materializeTarget(failedOpServer.port, FIXTURE_TARBALL, 'custom-pkg', '1.2.3', {
+   settleIntervalMs: 5,
+   requestTimeoutMs: 2_000,
+ }))
     assert.equal(failed.ok, false)
     if (!failed.ok) {
       assert.equal(failed.outcome, undefined, 'a failed op executed nothing')
@@ -684,17 +604,10 @@ test('gatewayChamberMaterialize: a failed executor op and a refused restart are 
     fixtureJson(res, 404, { error: 'not_found', code: 'not_found' })
   })
   try {
-    const refused = await gatewayChamberMaterialize({
-      id: 'gw-1',
-      url: `http://127.0.0.1:${restartRefusalServer.port}`,
-      headers: {},
-      spkiPin: null,
-      tarball: FIXTURE_TARBALL,
-      name: 'custom-pkg',
-      version: '1.2.3',
-      settleIntervalMs: 5,
-      requestTimeoutMs: 2_000,
-    })
+    const refused = await gatewayChamberMaterialize(materializeTarget(restartRefusalServer.port, FIXTURE_TARBALL, 'custom-pkg', '1.2.3', {
+   settleIntervalMs: 5,
+   requestTimeoutMs: 2_000,
+ }))
     assert.equal(refused.ok, false)
     if (!refused.ok) {
       assert.deepEqual(refused.outcome, { executed: true, restarted: false }, 'the install executed before the restart refusal')
@@ -724,18 +637,11 @@ test('gatewayChamberMaterialize: an unsettled executor op and an unsettled resta
     fixtureJson(res, 404, { error: 'not_found', code: 'not_found' })
   })
   try {
-    const pending = await gatewayChamberMaterialize({
-      id: 'gw-1',
-      url: `http://127.0.0.1:${pendingServer.port}`,
-      headers: {},
-      spkiPin: null,
-      tarball: FIXTURE_TARBALL,
-      name: 'custom-pkg',
-      version: '1.2.3',
-      settleIntervalMs: 5,
-      settleTimeoutMs: 60,
-      requestTimeoutMs: 2_000,
-    })
+    const pending = await gatewayChamberMaterialize(materializeTarget(pendingServer.port, FIXTURE_TARBALL, 'custom-pkg', '1.2.3', {
+   settleIntervalMs: 5,
+   settleTimeoutMs: 60,
+   requestTimeoutMs: 2_000,
+ }))
     assert.equal(pending.ok, false)
     if (!pending.ok) assert.match(pending.error, /has not finished applying the plugin ops/)
   } finally {
@@ -768,19 +674,12 @@ test('gatewayChamberMaterialize: an unsettled executor op and an unsettled resta
     fixtureJson(res, 404, { error: 'not_found', code: 'not_found' })
   })
   try {
-    const timedOut = await gatewayChamberMaterialize({
-      id: 'gw-1',
-      url: `http://127.0.0.1:${restartTimeoutServer.port}`,
-      headers: {},
-      spkiPin: null,
-      tarball: FIXTURE_TARBALL,
-      name: 'custom-pkg',
-      version: '1.2.3',
-      settleIntervalMs: 5,
-      restartPollIntervalMs: 5,
-      restartPollTimeoutMs: 60,
-      requestTimeoutMs: 2_000,
-    })
+    const timedOut = await gatewayChamberMaterialize(materializeTarget(restartTimeoutServer.port, FIXTURE_TARBALL, 'custom-pkg', '1.2.3', {
+   settleIntervalMs: 5,
+   restartPollIntervalMs: 5,
+   restartPollTimeoutMs: 60,
+   requestTimeoutMs: 2_000,
+ }))
     assert.equal(timedOut.ok, false)
     if (!timedOut.ok) {
       assert.deepEqual(timedOut.outcome, { executed: true, restarted: false })
@@ -798,19 +697,13 @@ test('gatewayChamberMaterialize: client-side header validation and the archive c
     fixtureJson(res, 202, { accepted: true })
   })
   try {
-    const badVersion = await gatewayChamberMaterialize({
-      id: 'gw-1', url: `http://127.0.0.1:${server.port}`, headers: {}, spkiPin: null,
-      tarball: FIXTURE_TARBALL, name: 'custom-pkg', version: 'v1.2.3',
-    })
+    const badVersion = await gatewayChamberMaterialize(materializeTarget(server.port, FIXTURE_TARBALL, 'custom-pkg', 'v1.2.3'))
     assert.equal(badVersion.ok, false)
     // A well-formed OFFICIAL-SCOPE name is a shape pass (design 21 §6.11.5):
     // the gateway's submit path owns the protected-set judgement, so the upload
     // is allowed to leave the client.
     const before = received
-    const officialName = await gatewayChamberMaterialize({
-      id: 'gw-1', url: `http://127.0.0.1:${server.port}`, headers: {}, spkiPin: null,
-      tarball: FIXTURE_TARBALL, name: '@dsh-chamber/taken', version: '1.2.3',
-    })
+    const officialName = await gatewayChamberMaterialize(materializeTarget(server.port, FIXTURE_TARBALL, '@dsh-chamber/taken', '1.2.3'))
     assert.equal(received, before + 1, 'a well-formed official-scope name is not refused client-side')
     // The fixture answers 202 without an opId, so the provider reports that
     // honestly — the point here is only that no CLIENT-SIDE refusal happened.
@@ -818,20 +711,11 @@ test('gatewayChamberMaterialize: client-side header validation and the archive c
     // Reset the counter: the tail of this test asserts that every INVALID
     // submission is refused before any request is made.
     received = 0
-    const badName = await gatewayChamberMaterialize({
-      id: 'gw-1', url: `http://127.0.0.1:${server.port}`, headers: {}, spkiPin: null,
-      tarball: FIXTURE_TARBALL, name: 'bad name!', version: '1.2.3',
-    })
+    const badName = await gatewayChamberMaterialize(materializeTarget(server.port, FIXTURE_TARBALL, 'bad name!', '1.2.3'))
     assert.equal(badName.ok, false)
-    const empty = await gatewayChamberMaterialize({
-      id: 'gw-1', url: `http://127.0.0.1:${server.port}`, headers: {}, spkiPin: null,
-      tarball: Buffer.alloc(0), name: 'custom-pkg', version: '1.2.3',
-    })
+    const empty = await gatewayChamberMaterialize(materializeTarget(server.port, Buffer.alloc(0), 'custom-pkg', '1.2.3'))
     assert.equal(empty.ok, false)
-    const oversized = await gatewayChamberMaterialize({
-      id: 'gw-1', url: `http://127.0.0.1:${server.port}`, headers: {}, spkiPin: null,
-      tarball: Buffer.alloc(32 * 1024 * 1024 + 1), name: 'custom-pkg', version: '1.2.3',
-    })
+    const oversized = await gatewayChamberMaterialize(materializeTarget(server.port, Buffer.alloc(32 * 1024 * 1024 + 1), 'custom-pkg', '1.2.3'))
     assert.equal(oversized.ok, false)
     if (!oversized.ok) assert.match(oversized.error, /32,?MiB|upload cap|beyond the/)
     assert.equal(received, 0, 'invalid materialize submissions never reach the gateway')

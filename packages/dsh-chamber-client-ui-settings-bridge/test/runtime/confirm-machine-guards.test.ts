@@ -1,36 +1,17 @@
 /**
- * Merged runtime armed-confirmation tests (2026-09-11 upstream-alignment T2 +
- * review-fix F2): the confirm state machine and the LIVE-fact guards that
- * re-validate an armed request at accept time. Plain node, no DOM, no React.
- *
- * merged 2026-12 test reorg: test/confirm-machine.test.ts (the machine own
- * contract) + test/runtime-confirm-guards.test.ts (the section wiring that
- * re-reads the live facts before an accept; it imports the machine, so the two
- * files are one contract chain). Both source blocks are preserved verbatim;
- * only their shared imports were hoisted and merged per module.
+ * Armed-confirmation machine + LIVE-fact guard tests (2026-09-11 upstream-alignment
+ * T2 + review-fix F2): the confirm state machine and the guards that re-validate an
+ * armed request at accept time. Plain node, no DOM, no React. The machine's own
+ * contract and the section wiring that re-reads live facts before an accept are one
+ * contract chain (the guards import the machine).
  */
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { acceptConfirm, armConfirm, cancelConfirm, IDLE_CONFIRM, type ConfirmRunner, type ConfirmState } from '../../src/client/confirm-machine.ts';
 import { applyNowStillValid, cleanupVersionStillValid, gatewayConfirmGates, preRollbackOfferable, recoverMetadataStillValid, restoreBuiltinStillValid, restorePreRollbackStillValid, retryApplyStillValid, retryRestoreStillValid, type GatewayConfirmFacts } from '../../src/client/runtime-confirm-guards.ts';
-import type { RemoteRuntimeStatus } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared';
+import { remoteStatus as status } from '../support/runtime-fixtures.ts';
 
-// --- merged from test/confirm-machine.test.ts ---
-
-/**
- * Armed-confirmation machine tests (2026-09-11 upstream-alignment T2; the
- * accept-time re-validation pin added by the 2026-09-11 review, F2): plain node,
- * no DOM.
- *
- * The invariant under test is the one the native `window.confirm` call sites
- * used to encode by construction — a destructive action reaches the wire only
- * after an explicit accept, and a cancel performs NOTHING. The dsh runtime
- * section arms its own gateway mutations and is armed for the shared restart
- * path, so both are exercised here with a fake wire recorder.
- */
-
-/** One request shaped like the section's RuntimeConfirmRequest, with its action recording one wire call. */
 function armedAction(wire: string[], kind: string, stillValid?: () => boolean) {
   return {
     title: `title:${kind}`,
@@ -184,61 +165,12 @@ test('re-arming replaces the previous request without running it', () => {
   assert.deepEqual(wire, ['retry-restore'], 'only the armed request runs');
 });
 
-// --- merged from test/runtime-confirm-guards.test.ts ---
-
-/**
- * Gateway armed-request guard tests (2026-09-11 review-fix F2): plain node, no
- * DOM, no React.
- *
- * The probe that found the hole, replayed end to end: a request armed while the
- * server was idle, a ~3s status poll flipping the gate while the dialog stayed
- * open, and the confirm click. Before the fix the armed request carried only the
- * ARM-time guards, so the accept fired `restore-builtin@phase=installing`; the
- * runners now re-validate against the LIVE facts, and this file pins both the
- * predicates and the machine transition that drops them (see
- * confirm-machine.test.ts for the transition's own contract).
- *
- * The gates themselves come from the shared gateway core
- * (`remoteRuntimeActionGates`), which the section's render uses too — the tests
- * therefore assert the SECTION's wiring decision (which fact is re-read, which
- * captured target is compared), never a second copy of the server matrix.
- */
-
-function status(overrides: Partial<RemoteRuntimeStatus> = {}): RemoteRuntimeStatus {
-  return {
-    kind: 'dsh-chamber-gateway-runtime',
-    activeVersion: '1.0.0',
-    builtinVersion: '0.9.0',
-    currentVersion: '1.0.0',
-    selectedVersion: '1.0.0',
-    hasOverride: true,
-    source: 'builtin-anchor',
-    phase: 'idle',
-    startupBlockedReason: null,
-    pending: null,
-    connectionState: 'ready',
-    registry: 'https://registry.npmjs.org',
-    registryError: null,
-    platform: 'darwin',
-    mutationsAllowed: true,
-    operationError: null,
-    restart: null,
-    restoreOutcome: null,
-    snapshotCount: 0,
-    latestSnapshotAt: null,
-    snapshotError: null,
-    restoreInProgress: false,
-    preRollbackCount: 0,
-    preRollbackLatestName: null,
-    failure: null,
-    diskUsage: null,
-    diskError: null,
-    diskLimitBytes: 10 * 1024 ** 3,
-    diskLimitExceeded: false,
-    progress: null,
-    ...overrides,
-  };
-}
+// The probe: a request armed while the server was idle, a ~3s status poll flipping
+// the gate while the dialog stayed open, then the confirm click. The runners now
+// re-validate against the LIVE facts; these tests pin both the predicates and the
+// machine transition that drops them. The gates come from the shared gateway core
+// (`remoteRuntimeActionGates`), so they assert the SECTION's wiring decision, never
+// a second copy of the server matrix.
 
 /** One live fact snapshot (the section's mirror, as the accept path reads it). */
 function facts(overrides: Partial<GatewayConfirmFacts> = {}): GatewayConfirmFacts {

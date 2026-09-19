@@ -20,6 +20,7 @@ import {
   subagent,
   FakeHost,
   buildHost,
+  codeIs,
 } from './support/archive-host.ts'
 
 test('preview: counts deletable trees, subagents, running subtrees and orphans', async () => {
@@ -491,9 +492,7 @@ test('purge: registry-unreadable state fails the whole run without mutating', as
   const host = buildHost()
   host.failStateRead = true
   const core = new ArchiveCleanupCore(host)
-  await assert.rejects(() => core.purge(), (error: unknown) => {
-    return error instanceof ArchiveCleanupError && error.code === 'registry-unreadable'
-  })
+  await assert.rejects(() => core.purge(), codeIs('registry-unreadable'))
   assert.equal(host.deleteLog.length, 0)
   assert.equal(host.removedFromArchived.length, 0)
 })
@@ -541,9 +540,7 @@ test('capacity guard: oversized archived sets refuse before any mutation', async
     host.states.set(`bulk-${i}`, state(`bulk-${i}`))
   }
   const core = new ArchiveCleanupCore(host)
-  await assert.rejects(() => core.purge(), (error: unknown) => {
-    return error instanceof ArchiveCleanupError && error.code === 'purge-capacity'
-  })
+  await assert.rejects(() => core.purge(), codeIs('purge-capacity'))
   assert.equal(host.deleteLog.length, 0)
 })
 

@@ -1,14 +1,12 @@
 /**
  * node:test for the chamber version-tolerance decision rules
- * (`packages/dsh-client-web/src/boot-tolerance.ts`) — the load-bearing
- * policy behind the 2026-08 rc.8 regression fix (design 09 §3.3). The rules
- * are React-free by design so this suite runs under plain node (no DOM, no
- * jsdom — `pnpm run test:client-web`).
+ * (`packages/dsh-client-web/src/boot-tolerance.ts`) — the load-bearing policy
+ * behind the 2026-08 rc.8 regression fix (design 09 §3.3). React-free by design,
+ * so this suite runs under plain node (`pnpm run test:client-web`).
  *
  * The assertions pin the EXACT pre-extraction behavior, including the
  * failure-report strings assertEntriesActive throws with: a refactor that
- * changes the rules (e.g. accidentally making manifest rows tolerable) fails
- * here before it can fail a real boot.
+ * changes the rules (e.g. making manifest rows tolerable) fails here first.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -26,21 +24,15 @@ test('sweep: a tolerated extra row that ran is ok (features present)', () => {
 
 test('sweep: a tolerated extra row in ANY non-active state degrades, never fails the boot', () => {
   for (const label of ['pending', 'loading', 'failed', 'disposed', 'unloading', undefined]) {
-    assert.deepEqual(
-      classifySweepEntry(row, label, TOLERATED, []),
-      { kind: 'degraded' },
-      `fiberLabel=${String(label)}`,
-    )
+    assert.deepEqual(classifySweepEntry(row, label, TOLERATED, []), { kind: 'degraded' }, `fiberLabel=${String(label)}`)
   }
 })
 
 // ── classifySweepEntry: manifest / app-shell rows (fatal) ──────────────────
 
 test('sweep: a manifest row without a fiber fails the boot (import failed)', () => {
-  assert.deepEqual(classifySweepEntry('@deepseek-ai/dsh-client-ui-tool', undefined, new Set(), []), {
-    kind: 'fatal',
-    reason: '@deepseek-ai/dsh-client-ui-tool: import failed (see console for the import error)',
-  })
+  assert.deepEqual(classifySweepEntry('@deepseek-ai/dsh-client-ui-tool', undefined, new Set(), []),
+    { kind: 'fatal', reason: '@deepseek-ai/dsh-client-ui-tool: import failed (see console for the import error)' })
 })
 
 test('sweep: an active manifest row is ok', () => {
@@ -48,15 +40,15 @@ test('sweep: an active manifest row is ok', () => {
 })
 
 test('sweep: a pending manifest row lists the missing services (plural/unknown forms)', () => {
-  const multi = classifySweepEntry('row', 'pending', new Set(), ['a', 'b'])
+  const pending = (missing: string[]): { kind: string; reason: string } =>
+    classifySweepEntry('row', 'pending', new Set(), missing) as { kind: string; reason: string }
+  const multi = pending(['a', 'b'])
   assert.equal(multi.kind, 'fatal')
-  assert.equal((multi as { reason: string }).reason, 'row: pending (waiting for services: a, b)')
-  const single = classifySweepEntry('row', 'pending', new Set(), ['a'])
-  assert.equal((single as { reason: string }).reason, 'row: pending (waiting for service: a)')
-  const unknown = classifySweepEntry('row', 'pending', new Set(), [])
+  assert.equal(multi.reason, 'row: pending (waiting for services: a, b)')
+  assert.equal(pending(['a']).reason, 'row: pending (waiting for service: a)')
   // Empty missing list → the "unknown" fallback keeps the plural form (the
   // pre-extraction behavior, preserved verbatim).
-  assert.equal((unknown as { reason: string }).reason, 'row: pending (waiting for services: unknown)')
+  assert.equal(pending([]).reason, 'row: pending (waiting for services: unknown)')
 })
 
 test('sweep: any other manifest fiber state is fatal with the state label', () => {

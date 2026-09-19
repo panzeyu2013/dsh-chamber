@@ -10,7 +10,8 @@ import { createServer } from 'node:http'
 import { EventEmitter } from 'node:events'
 import type { AddressInfo } from 'node:net'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { GATEWAY_SESSION_COOKIE_NAME, type GatewayHttpRequest, type GatewaySessionOrigin, type GatewaySessionResult } from '../../gateway-session.ts'
+import { GATEWAY_SESSION_COOKIE_NAME, type GatewayHttpRequest, type GatewaySessionManager, type GatewaySessionOrigin, type GatewaySessionResult } from '../../gateway-session.ts'
+import { configureGatewaySessionProvider } from '../../gateway-provider.ts'
 
 export const JWT = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzZXNzaW9uIn0.signature'
 export const COOKIE = `${GATEWAY_SESSION_COOKIE_NAME}=${JWT}`
@@ -93,4 +94,18 @@ type FailureCode = Extract<GatewaySessionResult, { ok: false }>['code']
 export function assertFailure(result: GatewaySessionResult, code: FailureCode): asserts result is Extract<GatewaySessionResult, { ok: false }> {
   assert.equal(result.ok, false, 'expected a failure result')
   assert.equal((result as { code: string }).code, code)
+}
+
+/** Bind a real session manager into the gateway provider's injectable seam and
+ * hand back the reset that must run in the test's finally block. */
+export function bindSessionManager(mgr: GatewaySessionManager): () => void {
+  configureGatewaySessionProvider({
+    ensureSession: (target, password) => mgr.ensureSession(target, password),
+    generation: target => mgr.generation(target),
+    registrationAuthProof: target => mgr.registrationAuthProof(target),
+    setRegistrationAuthProof: (target, proof) => mgr.setRegistrationAuthProof(target, proof),
+    cachedCookie: target => mgr.cachedCookie(target),
+    invalidate: target => mgr.invalidate(target),
+  })
+  return () => configureGatewaySessionProvider({})
 }

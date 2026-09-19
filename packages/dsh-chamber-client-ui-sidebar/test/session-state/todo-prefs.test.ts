@@ -1,21 +1,15 @@
 /**
- * todo-prefs tests (sidebar todo area settings subset) — node:test. Part 1:
- * the value-validated decode of the chamber-global sessionTodo block and the
- * defaults mirror (desktop store + settings-bridge helpers keep the same
- * literal; the ipc-surface-mirror guard keeps the authoritative types in
- * lockstep). Part 2: the read-only hydration state machine over a fake
- * window.dshChamber.settings bridge — the round-1 P2 regression pin: a
- * persistent get() failure must never stack permanent onChanged listeners
- * (each retry attach releases the previous handle first).
+ * todo-prefs tests (sidebar todo area settings subset) — node:test. Part 1: the value-validated
+ * decode of the chamber-global sessionTodo block and the defaults mirror (the ipc-surface-mirror
+ * guard keeps the authoritative types in lockstep). Part 2: the read-only hydration state machine
+ * over a fake window.dshChamber.settings bridge — the round-1 P2 regression pin: a persistent get()
+ * failure must never stack permanent onChanged listeners (each retry releases the previous handle).
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import {
-  SIDEBAR_TODO_PREFS_DEFAULTS,
-  todoPrefsOf,
-} from '../../src/shared/todo-prefs.ts'
+import { SIDEBAR_TODO_PREFS_DEFAULTS, todoPrefsOf } from '../../src/shared/todo-prefs.ts'
 
-// ---- decode (pure, no window) ------------------------------------------------
+// ---- decode (pure, no window) ---
 
 test('sidebar todo defaults are ALL ON and mirror the desktop store defaults', () => {
   // Mirror assertion: desktop DEFAULT_CHAMBER_SETTINGS.sessionTodo is
@@ -40,15 +34,13 @@ test('todoPrefsOf: unknown future keys and non-boolean values are filtered/ignor
   assert.deepEqual(todoPrefsOf({ enabled: 'yes', onComplete: 1 }), SIDEBAR_TODO_PREFS_DEFAULTS)
 })
 
-// ---- hydration (fake window bridge, fresh module instance per test) ---------
+// ---- hydration (fake window bridge, fresh module instance per test) ---
 
-// The singleton guard logs a diagnostic for every EXTRA module instance; each
-// fresh import below is an intentional second instance — keep the noise out
-// of the test output.
+// The singleton guard logs a diagnostic per EXTRA module instance; each fresh import below is an
+// intentional second instance — keep the noise out of the test output.
 const originalConsoleError = console.error
 console.error = (...args: unknown[]) => {
-  if (typeof args[0] === 'string' && args[0].includes('共享单例模块')) return
-  originalConsoleError(...args)
+  if (!(typeof args[0] === 'string' && args[0].includes('共享单例模块'))) originalConsoleError(...args)
 }
 
 type TodoPrefsModule = typeof import('../../src/shared/todo-prefs.ts')
@@ -70,14 +62,10 @@ function makeSurface(behavior: { failGet?: boolean } = {}) {
       if (behavior.failGet === true) throw new Error('simulated bridge invoke failure')
       return surface.status
     },
-    onChanged(callback: (status: { settings?: { sessionTodo?: unknown } }) => void): () => void {
-      listeners.add(callback)
-      return () => { listeners.delete(callback) }
-    },
+    onChanged: (callback: (status: { settings?: { sessionTodo?: unknown } }) => void): (() => void) =>
+      (listeners.add(callback), () => { listeners.delete(callback) }),
     push(enabled: boolean): void {
-      surface.status = {
-        settings: { sessionTodo: { enabled, onComplete: true, onAsk: true, onRequest: true } },
-      }
+      surface.status = { settings: { sessionTodo: { enabled, onComplete: true, onAsk: true, onRequest: true } } }
       for (const callback of [...listeners]) callback(surface.status)
     },
   }
@@ -86,9 +74,7 @@ function makeSurface(behavior: { failGet?: boolean } = {}) {
 
 async function waitFor(condition: () => boolean, timeoutMs = 4_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
-  while (!condition() && Date.now() < deadline) {
-    await new Promise(resolve => setTimeout(resolve, 25))
-  }
+  while (!condition() && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25))
   assert.ok(condition(), 'condition timed out')
 }
 
@@ -97,14 +83,12 @@ test('hydration: a late bridge hydrates through the probe chain and pushes updat
   const store = await freshModule()
   const unsubscribe = store.subscribeTodoPrefs(() => {})
   try {
-    // The bridge arrives after the module started probing — unhydrated reads
-    // as the design defaults until then (never a fake off).
+    // The bridge arrives after the module started probing — unhydrated reads as the design defaults.
     assert.deepEqual(store.getTodoPrefs(), SIDEBAR_TODO_PREFS_DEFAULTS)
     const surface = makeSurface({})
     surface.status = { settings: { sessionTodo: { enabled: false, onComplete: true, onAsk: true, onRequest: true } } }
     ;((globalThis as Record<string, unknown>).window as { dshChamber?: unknown }).dshChamber = { settings: surface }
-    // The one-shot get() query lands (enabled=false proves the query result
-    // was applied, not the defaults).
+    // The one-shot get() lands (enabled=false proves the query result was applied, not defaults).
     await waitFor(() => store.getTodoPrefs().enabled === false)
     assert.equal(store.getTodoPrefs().onComplete, true, 'sibling keys keep the decode defaults')
     // A push (main-process SETTINGS_CHANGED) updates the mirror live.
@@ -123,19 +107,16 @@ test('hydration: persistent get() failures never stack onChanged listeners (roun
   const store = await freshModule()
   const unsubscribe = store.subscribeTodoPrefs(() => {})
   try {
-    // Let several attach→fail→release cycles run (fast probe hops). Each
-    // attach registers ONE listener and must release it before re-arming —
-    // a leaked handle would keep every previous cycle's listener registered.
+    // Let several attach→fail→release cycles run. Each attach registers ONE listener and must
+    // release it before re-arming — a leaked handle keeps previous cycles' listeners registered.
     await waitFor(() => surface.getCalls >= 3)
-    // Sample across a few hundred ms: the active listener count must never
-    // exceed 1 (0 between a release and the next attach hop is legitimate).
+    // Sample across a few hundred ms: never more than 1 active listener (0 between hops is fine).
     const deadline = Date.now() + 800
     while (Date.now() < deadline) {
       assert.ok(surface.activeListeners() <= 1, `listener leak: ${surface.activeListeners()} active onChanged handles`)
       await new Promise(resolve => setTimeout(resolve, 40))
     }
-    // deepEqual, not identity: the fresh module instance carries its own
-    // defaults constant (per-instance module state).
+    // deepEqual, not identity: the fresh module carries its own defaults constant.
     assert.deepEqual(store.getTodoPrefs(), SIDEBAR_TODO_PREFS_DEFAULTS, 'unhydrated keeps serving the design defaults')
   } finally {
     unsubscribe()

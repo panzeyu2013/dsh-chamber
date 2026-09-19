@@ -5,14 +5,9 @@ import {
   isAmbiguousGitRpcFailure, isDeterministicGitRejection,
 } from '../../src/shared/git-api.ts'
 import type { PreviewCreateResult } from '../../src/shared/types.ts'
+import { HEAD, PREVIEW_BASE, REPO_ID, WORKTREE_ID } from '../support/fixtures.ts'
 
-const REPO_ID = `repo_${'a'.repeat(64)}`
-const WORKTREE_ID = `worktree_${'b'.repeat(64)}`
-const HEAD = 'c'.repeat(40)
-const PREVIEW: PreviewCreateResult = {
-  previewToken: 'preview-fixed', expiresAt: 1_800_000_000_000, repoId: REPO_ID,
-  commonDir: '/repo/.git', mainPath: '/repo', targetPath: '/feature', branch: 'feature', baseHead: HEAD,
-}
+const PREVIEW: PreviewCreateResult = { ...PREVIEW_BASE, previewToken: 'preview-fixed' }
 
 function response(domain: unknown): Response {
   return new Response(JSON.stringify({ result: { ok: true, value: domain } }), {
@@ -21,25 +16,32 @@ function response(domain: unknown): Response {
   })
 }
 
-test('snapshot sends exact no-argument Typert args while mutations use the one named input', async () => {
+/** Run against a stubbed global fetch, always restoring the real one. */
+async function withFetch(impl: typeof fetch, run: () => Promise<void>): Promise<void> {
   const original = globalThis.fetch
+  globalThis.fetch = impl
+  try {
+    await run()
+  } finally {
+    globalThis.fetch = original
+  }
+}
+
+test('snapshot sends exact no-argument Typert args while mutations use the one named input', async () => {
   const bodies: any[] = []
-  globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
+  await withFetch((async (_url: string | URL | Request, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body))
     bodies.push(body)
     return response({
       ok: true,
       value: body.method === 'gitWorktree/snapshot' ? { repos: [], errors: [] } : PREVIEW,
     })
-  }) as typeof fetch
-  try {
+  }) as typeof fetch, async () => {
     await gitWorktreeApi.snapshot('local')
     await gitWorktreeApi.previewCreate('local', {
       sourceWorkspaceId: 'ws-1', basename: 'feature', branch: { kind: 'new', name: 'feature' },
     })
-  } finally {
-    globalThis.fetch = original
-  }
+  })
   assert.deepEqual(bodies[0].payload, { args: {} })
   assert.deepEqual(bodies[1].payload, {
     args: { input: { sourceWorkspaceId: 'ws-1', basename: 'feature', branch: { kind: 'new', name: 'feature' } } },
@@ -47,12 +49,10 @@ test('snapshot sends exact no-argument Typert args while mutations use the one n
 })
 
 test('all methods unwrap the explicit domain result and preserve stable domain error fields', async () => {
-  const original = globalThis.fetch
-  globalThis.fetch = (async () => response({
+  await withFetch((async () => response({
     ok: false,
     error: { code: 'preview-stale', message: 'preview moved', retryable: false, details: { field: 'head' } },
-  })) as typeof fetch
-  try {
+  })) as typeof fetch, async () => {
     await assert.rejects(
       gitWorktreeApi.create('local', { previewToken: 'p', operationId: 'op' }, PREVIEW),
       (error: unknown) => {
@@ -63,9 +63,7 @@ test('all methods unwrap the explicit domain result and preserve stable domain e
         return true
       },
     )
-  } finally {
-    globalThis.fetch = original
-  }
+  })
 })
 
 test('worktree-submodules is a deterministic pre-mutation rejection; git refusals stay ambiguous unless the host proves otherwise', () => {
@@ -143,22 +141,19 @@ test('rollback decoder correlates the complete locally retained create facts', (
 })
 
 test('missing domain envelope fails ambiguous instead of masquerading as a successful value', async () => {
-  const original = globalThis.fetch
-  globalThis.fetch = (async () => new Response(JSON.stringify({ result: { ok: true, value: { repos: [], errors: [] } } }), { status: 200 })) as typeof fetch
-  try {
-    await assert.rejects(
-      gitWorktreeApi.snapshot('local'),
-      (error: unknown) => error instanceof GitWorktreeRpcError && error.code === 'invalid-domain-result',
-    )
-  } finally {
-    globalThis.fetch = original
-  }
+  await withFetch(
+    (async () => new Response(JSON.stringify({ result: { ok: true, value: { repos: [], errors: [] } } }), { status: 200 })) as typeof fetch,
+    async () => {
+      await assert.rejects(
+        gitWorktreeApi.snapshot('local'),
+        (error: unknown) => error instanceof GitWorktreeRpcError && error.code === 'invalid-domain-result',
+      )
+    },
+  )
 })
 
 test('a 404 from the gitWorktree namespace maps to a definitive host-not-loaded error', async () => {
-  const original = globalThis.fetch
-  globalThis.fetch = (async () => new Response('not found', { status: 404 })) as typeof fetch
-  try {
+  await withFetch((async () => new Response('not found', { status: 404 })) as typeof fetch, async () => {
     await assert.rejects(
       gitWorktreeApi.snapshot('local'),
       (error: unknown) => {
@@ -171,7 +166,5 @@ test('a 404 from the gitWorktree namespace maps to a definitive host-not-loaded 
         return true
       },
     )
-  } finally {
-    globalThis.fetch = original
-  }
+  })
 })

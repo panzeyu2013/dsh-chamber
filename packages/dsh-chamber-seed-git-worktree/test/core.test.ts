@@ -25,9 +25,10 @@ import {
   LINKED,
   MAIN_HEAD,
   FEATURE_HEAD,
-  MissingPathError,
   FakeRepository,
   setup,
+  pathSetFs,
+  coreOver,
   previewNew,
 } from './support/fake-repository.ts'
 
@@ -197,19 +198,7 @@ test('snapshot enforces one total worktree budget across repositories', async ()
       paths.add(`/multi/${repository}/linked-${row}`)
     }
   }
-  const fs: WorktreeFileSystem = {
-    realpath: async path => {
-      if (!paths.has(path)) throw new MissingPathError(path)
-      return path
-    },
-    lstat: async path => {
-      if (!paths.has(path)) throw new MissingPathError(path)
-      return { isDirectory: () => true }
-    },
-    exists: async path => paths.has(path),
-    mkdir: async () => {},
-    readFile: async () => { throw new MissingPathError('.git') },
-  }
+  const fs = pathSetFs(paths)
   const runner: GitRunner = async request => {
     const match = /^\/multi\/(\d+)\//u.exec(request.cwd)
     assert.ok(match)
@@ -235,11 +224,7 @@ test('snapshot enforces one total worktree budget across repositories', async ()
     if (request.args[0] === 'status') return { exitCode: 0, stdout: '', stderr: '' }
     throw new Error(`unexpected Git call: ${request.args.join(' ')}`)
   }
-  const core = new GitWorktreeCore({
-    source: { listWorkspaces: () => workspaces, listAgents: () => [], listArchivedSessionIds: () => [] },
-    git: runner,
-    fs,
-  })
+  const core = coreOver({ workspaces, git: runner, fs })
   const snapshot = await core.snapshot()
   assert.equal(snapshot.repos.reduce((count, repo) => count + repo.worktrees.length, 0), MAX_TOTAL_WORKTREES)
   assert.equal(snapshot.errors.some(error => error.code === 'snapshot-total-worktree-limit'), true)
@@ -284,8 +269,8 @@ test('Git spawn failure is source-wide while ordinary non-Git discovery stays lo
     { workspaceId: 'ws-main', path: MAIN, sessionIds: [] },
     { workspaceId: 'ws-linked', path: LINKED, sessionIds: [] },
   ]
-  const unavailable = new GitWorktreeCore({
-    source: { listWorkspaces: () => workspaces, listAgents: () => [], listArchivedSessionIds: () => [] },
+  const unavailable = coreOver({
+    workspaces,
     git: async () => { throw new GitWorktreeError('git-spawn-failed', 'spawn git ENOENT') },
     fs: repo.fs,
   })
@@ -295,8 +280,8 @@ test('Git spawn failure is source-wide while ordinary non-Git discovery stays lo
   assert.equal(sourceWide.errors.length, 2)
   assert.equal(sourceWide.errors.every(error => error.code === 'git-spawn-failed'), true)
 
-  const notRepository = new GitWorktreeCore({
-    source: { listWorkspaces: () => [workspaces[0]!], listAgents: () => [], listArchivedSessionIds: () => [] },
+  const notRepository = coreOver({
+    workspaces: [workspaces[0]!],
     git: async () => ({ exitCode: 128, stdout: '', stderr: 'not a git repository' }),
     fs: repo.fs,
   })

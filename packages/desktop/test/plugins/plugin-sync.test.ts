@@ -3,24 +3,16 @@
  * localPluginList classification (bundle/client/plain/materialize/unsyncable +
  * path-traversal defense, registry-driven chamber projection, bundleLines) and
  * the spec/dependency classifiers.
- *
- * Sibling parts: plugin-sync-remote-read.test.ts (remotePluginList),
- * plugin-sync-apply.test.ts (ownership fences, applyPlugins, materialize),
- * plugin-sync-seed.test.ts (cordis.patch.yml seed + seedRemoteChamberHostPackages),
- * plugin-sync-renderer-projection.test.ts (renderer redaction + confirmation copy).
+ * Sibling parts: plugin-sync-remote-read.test.ts, plugin-sync-apply.test.ts, plugin-sync-seed.test.ts, plugin-sync-renderer-projection.test.ts.
  */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { ARCHIVE_CLEANUP_PACKAGE_NAME, classifyDependencyValue, classifyLocalDependency, classifySpec, CLIENT_GRAPH_PACKAGE_NAME, GIT_WORKTREE_PACKAGE_NAME, OPEN_IN_PACKAGE_NAME, localPluginList, packageNameFromSpec, resolveLocalMaterializeDirectory, PLUGIN_SPEC_PATTERN, PLUGIN_NAME_PATTERN, CHAMBER_HOST_PACKAGES } from '../../plugin-sync.ts'
+import { ARCHIVE_CLEANUP_PACKAGE_NAME, classifyDependencyValue, classifyLocalDependency, classifySpec, CLIENT_GRAPH_PACKAGE_NAME, GIT_WORKTREE_PACKAGE_NAME, localPluginList, packageNameFromSpec, resolveLocalMaterializeDirectory, PLUGIN_SPEC_PATTERN, PLUGIN_NAME_PATTERN, CHAMBER_HOST_PACKAGES } from '../../plugin-sync.ts'
 import { chamberPackageOf, chamberFacts, chamberStateOf } from '../support/chamber-projection.ts'
-
-function tempDir(): string {
-  return mkdtempSync(join(tmpdir(), 'dsh-plugin-sync-'))
-}
+import { chamberFact, expectedChamberFacts, tempDir } from './plugin-sync-fixtures.ts'
 
 function writeLocalProfile(root: string, dependencies: Record<string, string>, bundles: string[]): string {
   const profileDir = join(root, 'profiles', 'web')
@@ -58,7 +50,6 @@ test('classifySpec: registry specs sync, file/link/path materialize, ranges unsy
   assert.equal(classifySpec('git+https://example.com/x.git').kind, 'unsyncable')
   assert.equal(classifySpec('npm:alias@^1.0.0').kind, 'unsyncable')
 })
-
 test('classifySpec / classifyDependencyValue reject semver x-wildcards (ranges)', () => {
   for (const spec of ['foo@1.x', 'foo@1.2.x', 'foo@x', '@scope/foo@1.x', 'foo@^1.x']) {
     assert.equal(classifySpec(spec).kind, 'unsyncable', `spec ${spec} is an x-wildcard range`)
@@ -70,7 +61,6 @@ test('classifySpec / classifyDependencyValue reject semver x-wildcards (ranges)'
   assert.deepEqual(classifySpec('foo@1.2.3'), { kind: 'sync' })
   assert.deepEqual(classifyDependencyValue('^1.2.3'), { kind: 'sync' })
 })
-
 test('PLUGIN_SPEC_PATTERN / PLUGIN_NAME_PATTERN reject shell metacharacters and file specs', () => {
   for (const bad of ['foo; rm -rf /', 'foo | bar', 'foo@>1.0.0', 'foo@1.0.0 || foo@2.0.0', 'file:/tmp/x.tgz', 'foo@*', '$(whoami)']) {
     assert.equal(PLUGIN_SPEC_PATTERN.test(bad), false, `should reject ${bad}`)
@@ -79,14 +69,12 @@ test('PLUGIN_SPEC_PATTERN / PLUGIN_NAME_PATTERN reject shell metacharacters and 
   assert.equal(PLUGIN_NAME_PATTERN.test('@scope/pkg'), true)
   assert.equal(PLUGIN_NAME_PATTERN.test('pkg'), true)
 })
-
 test('packageNameFromSpec strips the version suffix', () => {
   assert.equal(packageNameFromSpec('foo'), 'foo')
   assert.equal(packageNameFromSpec('foo@^1.2.3'), 'foo')
   assert.equal(packageNameFromSpec('@scope/foo'), '@scope/foo')
   assert.equal(packageNameFromSpec('@scope/foo@1.0.0'), '@scope/foo')
 })
-
 test('classifyDependencyValue: ordinary version VALUES are syncable, never unsyncable', () => {
   // Dependency values are synced as `<name>@<value>` — a bare `^1.0.0` must
   // be judged by the version grammar, not the full name@spec grammar (the
@@ -117,7 +105,6 @@ test('classifyLocalDependency: bundle / client / plain', () => {
   assert.equal(classifyLocalDependency({}), 'plain')
   assert.equal(classifyLocalDependency(null), 'plain')
 })
-
 test('localPluginList: classifies bundle/client/plain/materialize/unsyncable', () => {
   const root = tempDir()
   const profileDir = writeLocalProfile(root, {
@@ -130,14 +117,12 @@ test('localPluginList: classifies bundle/client/plain/materialize/unsyncable', (
   writeDepManifest(profileDir, 'bundle-pkg', { bundle: { patch: './cordis.patch.yml' } })
   writeDepManifest(profileDir, 'client-pkg', { client: { inject: [], platform: 'web' } })
   writeDepManifest(profileDir, 'plain-pkg', {})
-
   const manifest = localPluginList(root)
   assert.deepEqual(manifest.bundles, ['bundle-pkg'])
   assert.deepEqual(manifest.clientLines, ['client-pkg'])
   assert.ok('bundle-pkg' in manifest.dependencies)
   assert.ok('plain-pkg' in manifest.dependencies)
   assert.equal(manifest.dependencies['local-path-pkg'], 'file:../local-pkg')
-
   // materialize is NOT unsyncable (syncable via pack+transfer); workspace is;
   // ordinary version-range values are NEVER flagged unsyncable (the value
   // grammar, not the full name@spec grammar, judges `^1.0.0`/`~2.0.0`).
@@ -151,7 +136,6 @@ test('localPluginList: classifies bundle/client/plain/materialize/unsyncable', (
   assert.ok(workspaceEntry !== undefined)
   assert.match(workspaceEntry.reason, /workspace/)
 })
-
 test('localPluginList: unsafe dependency name is refused (path traversal defense)', () => {
   const root = tempDir()
   writeLocalProfile(root, { '../../etc/passwd': '^1.0.0' }, [])
@@ -161,11 +145,9 @@ test('localPluginList: unsafe dependency name is refused (path traversal defense
   assert.ok(entry !== undefined)
   assert.match(entry.reason, /safe registry name/)
 })
-
 test('localPluginList: throws on a missing profile manifest', () => {
   assert.throws(() => localPluginList(tempDir()), /cannot read local profile manifest/)
 })
-
 test('resolveLocalMaterializeDirectory: MAIN resolves the manifest entry and enforces package identity', () => {
   const root = tempDir()
   writeLocalProfile(root, { 'local-path-pkg': 'file:../local-pkg' }, [])
@@ -179,15 +161,13 @@ test('resolveLocalMaterializeDirectory: MAIN resolves the manifest entry and enf
   assert.equal(mismatched.ok, false)
   if (!mismatched.ok) assert.match(mismatched.error, /does not match/)
 })
-
 test('localPluginList: the chamber projection is REGISTRY-DRIVEN — one row per control-plane host package (never a hardcoded pair)', () => {
   // The user-reported gap (2026-09): the plugin-management page showed only
   // client-graph + git-worktree because the projection hardcoded the pair, so
   // the seeded archive-cleanup package was invisible. The projection now maps
   // the control-plane registry 1:1 — a NEW registry row appears here (and in
   // the page) with no code change.
-  const base = tempDir()
-  const home = join(base, 'home')
+  const home = join(tempDir(), 'home')
   writeLocalProfile(home, {}, [])
   const manifest = localPluginList(home)
   assert.ok(manifest.chamber.ok)
@@ -205,7 +185,6 @@ test('localPluginList: the chamber projection is REGISTRY-DRIVEN — one row per
     assert.ok(manifest.chamber.packages.some(pkg => pkg.name === ARCHIVE_CLEANUP_PACKAGE_NAME), 'the third host package is projected')
   }
 })
-
 test('localPluginList: chamber host-graph state — installed + patched', () => {
   // Nest the dsh home under a base dir so the `--patch` overlay (which lives
   // BESIDE the home: dirname(home)/dsh-chamber-graph.patch.yml) stays inside
@@ -218,29 +197,17 @@ test('localPluginList: chamber host-graph state — installed + patched', () => 
   writeFileSync(join(moduleADir, 'package.json'), '{"name":"@dsh-chamber/dsh-chamber-seed-client-graph"}')
   writeFileSync(join(moduleADir, 'dist', 'index.js'), 'export const graph = 1\n')
   writeFileSync(join(base, 'dsh-chamber-graph.patch.yml'), "- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-chamber-seed-client-graph'\n")
-
   const manifest = localPluginList(home)
-  assert.deepEqual(chamberFacts(manifest.chamber), {
-    [CLIENT_GRAPH_PACKAGE_NAME]: { installed: true, patched: true, version: null, live: null },
-    [GIT_WORKTREE_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
-    [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
-    [OPEN_IN_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
-  })
+  assert.deepEqual(chamberFacts(manifest.chamber), expectedChamberFacts({
+    [CLIENT_GRAPH_PACKAGE_NAME]: chamberFact({ installed: true, patched: true }),
+  }))
 })
-
 test('localPluginList: chamber host-graph state — absent = not injected (honest, never "done")', () => {
-  const base = tempDir()
-  const home = join(base, 'home')
+  const home = join(tempDir(), 'home')
   writeLocalProfile(home, {}, [])
   const manifest = localPluginList(home)
-  assert.deepEqual(chamberFacts(manifest.chamber), {
-    [CLIENT_GRAPH_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
-    [GIT_WORKTREE_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
-    [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
-    [OPEN_IN_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
-  })
+  assert.deepEqual(chamberFacts(manifest.chamber), expectedChamberFacts())
 })
-
 test('localPluginList: chamber host-graph state — package.json alone is a half-injected module A (installed:false)', () => {
   // The LOCAL `installed` uses the same TWO-file definition as the remote
   // probe and the seed writer (SEED_FILES / HOST_GRAPH_SEED_FILES): a
@@ -252,16 +219,11 @@ test('localPluginList: chamber host-graph state — package.json alone is a half
   mkdirSync(moduleADir, { recursive: true })
   writeFileSync(join(moduleADir, 'package.json'), '{"name":"@dsh-chamber/dsh-chamber-seed-client-graph"}')
   writeFileSync(join(base, 'dsh-chamber-graph.patch.yml'), "- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-chamber-seed-client-graph'\n")
-
   const manifest = localPluginList(home)
-  assert.deepEqual(chamberFacts(manifest.chamber), {
-    [CLIENT_GRAPH_PACKAGE_NAME]: { installed: false, patched: true, version: null, live: null },
-    [GIT_WORKTREE_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
-    [ARCHIVE_CLEANUP_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
-    [OPEN_IN_PACKAGE_NAME]: { installed: false, patched: false, version: null, live: null },
-  })
+  assert.deepEqual(chamberFacts(manifest.chamber), expectedChamberFacts({
+    [CLIENT_GRAPH_PACKAGE_NAME]: chamberFact({ patched: true }),
+  }))
 })
-
 test('localPluginList: chamber host-graph version is read from the seeded module A manifest', () => {
   const base = tempDir()
   const home = join(base, 'home')
@@ -271,7 +233,6 @@ test('localPluginList: chamber host-graph version is read from the seeded module
   writeFileSync(join(moduleADir, 'package.json'), '{"name":"@dsh-chamber/dsh-chamber-seed-client-graph","version":"0.1.2"}')
   writeFileSync(join(moduleADir, 'dist', 'index.js'), 'export const graph = 1\n')
   writeFileSync(join(base, 'dsh-chamber-graph.patch.yml'), '- insert:\n    - id: client-graph\n')
-
   const manifest = localPluginList(home)
   assert.ok(manifest.chamber.ok)
   if (manifest.chamber.ok) {
@@ -279,7 +240,6 @@ test('localPluginList: chamber host-graph version is read from the seeded module
     assert.equal(chamberPackageOf(manifest.chamber, CLIENT_GRAPH_PACKAGE_NAME).live, null, 'local side has no separate liveness probe')
   }
 })
-
 test('localPluginList: git-worktree patched is CONTENT-aware — a stale overlay without the git row is not "patched"', () => {
   // The overlay regenerates per spawn with only the rows whose built
   // artifacts exist; a stale overlay can carry only the client-graph row
@@ -344,12 +304,10 @@ test('localPluginList: chamber patched reads BOTH mount sources — the profile 
   seedChamberPackage(profileDir, CLIENT_GRAPH_PACKAGE_NAME)
   // The user layer carries the exact insert row; no --patch overlay file exists.
   writeFileSync(join(profileDir, 'cordis.patch.yml'), CLIENT_GRAPH_ROW)
-
   const manifest = localPluginList(home)
   assert.equal(chamberStateOf(manifest.chamber, CLIENT_GRAPH_PACKAGE_NAME).patched, true,
     'a row carried by the profile patch layer IS mounted — the probe must not require the overlay file')
 })
-
 test('localPluginList: chamber patched covers the four mount-source combinations', () => {
   // Mount sources: the profile's own cordis.patch.yml (user layer) and the
   // `--patch` overlay the control plane passes at spawn. The overlay file

@@ -140,6 +140,21 @@ function makeEnv(initial?: { sidebarWidth?: number }) {
   return { env, viewPrefs }
 }
 
+/**
+ * Wrap a test body so it runs under the mock setTimeout clock and always resets
+ * it — the fake view-prefs store and the debounced persistence both need it.
+ */
+function withTimers(run: () => Promise<void>): () => Promise<void> {
+  return async () => {
+    mock.timers.enable({ apis: ['setTimeout'] })
+    try {
+      await run()
+    } finally {
+      mock.timers.reset()
+    }
+  }
+}
+
 // ---- seeding ----
 
 test('createLayoutStore seeds sidebar from the shared view-prefs width', () => {
@@ -158,150 +173,115 @@ test('createLayoutStore seeds SIDEBAR_DEFAULT when no width was ever persisted',
 
 // ---- drag persistence (150ms trailing debounce) ----
 
-test('a drag updates the store immediately and persists exactly once after the 150ms debounce', async () => {
-  mock.timers.enable({ apis: ['setTimeout'] })
-  try {
-    const { env, viewPrefs } = makeEnv()
-    const instance = createLayoutStore(env).create()
-    instance.actions.setSidebar(300)
-    assert.equal(instance.getSnapshot().layoutInfo.sidebar, 300) // the STORE value is immediate
-    assert.equal(viewPrefs.writeCount(), 0)           // nothing persisted yet
-    mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS - 1)
-    assert.equal(viewPrefs.writeCount(), 0)
-    mock.timers.tick(1)
-    assert.equal(viewPrefs.writeCount(), 1)
-    assert.deepEqual(viewPrefs.writes(), [300])
-  } finally {
-    mock.timers.reset()
-  }
-})
+test('a drag updates the store immediately and persists exactly once after the 150ms debounce', withTimers(async () => {
+  const { env, viewPrefs } = makeEnv()
+  const instance = createLayoutStore(env).create()
+  instance.actions.setSidebar(300)
+  assert.equal(instance.getSnapshot().layoutInfo.sidebar, 300) // the STORE value is immediate
+  assert.equal(viewPrefs.writeCount(), 0)           // nothing persisted yet
+  mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS - 1)
+  assert.equal(viewPrefs.writeCount(), 0)
+  mock.timers.tick(1)
+  assert.equal(viewPrefs.writeCount(), 1)
+  assert.deepEqual(viewPrefs.writes(), [300])
+}))
 
-test('rapid drags coalesce into exactly one debounced write — the last width wins', async () => {
-  mock.timers.enable({ apis: ['setTimeout'] })
-  try {
-    const { env, viewPrefs } = makeEnv()
-    const instance = createLayoutStore(env).create()
-    instance.actions.setSidebar(300)
-    instance.actions.setSidebar(320)
-    instance.actions.setSidebar(340)
-    assert.equal(viewPrefs.writeCount(), 0)
-    mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
-    assert.equal(viewPrefs.writeCount(), 1)
-    assert.deepEqual(viewPrefs.writes(), [340])
-  } finally {
-    mock.timers.reset()
-  }
-})
+test('rapid drags coalesce into exactly one debounced write — the last width wins', withTimers(async () => {
+  const { env, viewPrefs } = makeEnv()
+  const instance = createLayoutStore(env).create()
+  instance.actions.setSidebar(300)
+  instance.actions.setSidebar(320)
+  instance.actions.setSidebar(340)
+  assert.equal(viewPrefs.writeCount(), 0)
+  mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
+  assert.equal(viewPrefs.writeCount(), 1)
+  assert.deepEqual(viewPrefs.writes(), [340])
+}))
 
-test('setSidebar clamps into the vendor range before persisting', async () => {
-  mock.timers.enable({ apis: ['setTimeout'] })
-  try {
-    const { env, viewPrefs } = makeEnv()
-    const instance = createLayoutStore(env).create()
-    instance.actions.setSidebar(500)
-    assert.equal(instance.getSnapshot().layoutInfo.sidebar, SIDEBAR_MAX)
-    mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
-    assert.deepEqual(viewPrefs.writes(), [SIDEBAR_MAX])
-    instance.actions.setSidebar(1)
-    mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
-    assert.deepEqual(viewPrefs.writes(), [SIDEBAR_MAX, SIDEBAR_MIN])
-  } finally {
-    mock.timers.reset()
-  }
-})
+test('setSidebar clamps into the vendor range before persisting', withTimers(async () => {
+  const { env, viewPrefs } = makeEnv()
+  const instance = createLayoutStore(env).create()
+  instance.actions.setSidebar(500)
+  assert.equal(instance.getSnapshot().layoutInfo.sidebar, SIDEBAR_MAX)
+  mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
+  assert.deepEqual(viewPrefs.writes(), [SIDEBAR_MAX])
+  instance.actions.setSidebar(1)
+  mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
+  assert.deepEqual(viewPrefs.writes(), [SIDEBAR_MAX, SIDEBAR_MIN])
+}))
 
 // ---- cross-shell adoption ----
 
-test('a drag in one shell is adopted live by the other shells (cross-boot sync)', async () => {
-  mock.timers.enable({ apis: ['setTimeout'] })
-  try {
-    const { env } = makeEnv({ sidebarWidth: 300 })
-    const handle = createLayoutStore(env)
-    const a = handle.create()
-    const b = handle.create()
-    trackLayoutInstance(env, a)
-    trackLayoutInstance(env, b)
-    assert.equal(a.getSnapshot().layoutInfo.sidebar, 300)
-    assert.equal(b.getSnapshot().layoutInfo.sidebar, 300)
-    b.actions.setSidebar(360)
-    assert.equal(a.getSnapshot().layoutInfo.sidebar, 300) // not yet — the write is still debounced
-    mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
-    await Promise.resolve()                    // the adoption listener defers to a microtask
-    assert.equal(a.getSnapshot().layoutInfo.sidebar, 360)
-    assert.equal(b.getSnapshot().layoutInfo.sidebar, 360)
-  } finally {
-    mock.timers.reset()
-  }
-})
+test('a drag in one shell is adopted live by the other shells (cross-boot sync)', withTimers(async () => {
+  const { env } = makeEnv({ sidebarWidth: 300 })
+  const handle = createLayoutStore(env)
+  const a = handle.create()
+  const b = handle.create()
+  trackLayoutInstance(env, a)
+  trackLayoutInstance(env, b)
+  assert.equal(a.getSnapshot().layoutInfo.sidebar, 300)
+  assert.equal(b.getSnapshot().layoutInfo.sidebar, 300)
+  b.actions.setSidebar(360)
+  assert.equal(a.getSnapshot().layoutInfo.sidebar, 300) // not yet — the write is still debounced
+  mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
+  await Promise.resolve()                    // the adoption listener defers to a microtask
+  assert.equal(a.getSnapshot().layoutInfo.sidebar, 360)
+  assert.equal(b.getSnapshot().layoutInfo.sidebar, 360)
+}))
 
-test('the initiating shell does not re-adopt its own echo — and the echo write is a no-op', async () => {
-  mock.timers.enable({ apis: ['setTimeout'] })
-  try {
-    const { env, viewPrefs } = makeEnv({ sidebarWidth: 300 })
-    const handle = createLayoutStore(env)
-    const a = handle.create()
-    const b = handle.create()
-    trackLayoutInstance(env, a)
-    trackLayoutInstance(env, b)
-    b.actions.setSidebar(360)
-    mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
-    await Promise.resolve()
-    assert.equal(b.getSnapshot().layoutInfo.sidebar, 360) // b kept its own value
-    assert.equal(a.getSnapshot().layoutInfo.sidebar, 360) // a adopted it
-    // b drags back onto the now-persisted width: the no-op guard skips the
-    // persist/notify cycle instead of re-running updateViewPrefs.
-    b.actions.setSidebar(360)
-    mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
-    assert.equal(viewPrefs.writeCount(), 1)
-  } finally {
-    mock.timers.reset()
-  }
-})
+test('the initiating shell does not re-adopt its own echo — and the echo write is a no-op', withTimers(async () => {
+  const { env, viewPrefs } = makeEnv({ sidebarWidth: 300 })
+  const handle = createLayoutStore(env)
+  const a = handle.create()
+  const b = handle.create()
+  trackLayoutInstance(env, a)
+  trackLayoutInstance(env, b)
+  b.actions.setSidebar(360)
+  mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
+  await Promise.resolve()
+  assert.equal(b.getSnapshot().layoutInfo.sidebar, 360) // b kept its own value
+  assert.equal(a.getSnapshot().layoutInfo.sidebar, 360) // a adopted it
+  // b drags back onto the now-persisted width: the no-op guard skips the
+  // persist/notify cycle instead of re-running updateViewPrefs.
+  b.actions.setSidebar(360)
+  mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
+  assert.equal(viewPrefs.writeCount(), 1)
+}))
 
-test('a closed shell is never re-opened by another shell\'s drag', async () => {
-  mock.timers.enable({ apis: ['setTimeout'] })
-  try {
-    const { env } = makeEnv({ sidebarWidth: 300 })
-    const handle = createLayoutStore(env)
-    const a = handle.create()
-    const b = handle.create()
-    trackLayoutInstance(env, a)
-    trackLayoutInstance(env, b)
-    a.actions.toggleSidebar() // close a
-    assert.equal(a.getSnapshot().layoutInfo.sidebar, 0)
-    b.actions.setSidebar(400)
-    mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
-    await Promise.resolve()
-    assert.equal(a.getSnapshot().layoutInfo.sidebar, 0) // stays closed
-    assert.equal(b.getSnapshot().layoutInfo.sidebar, 400)
-  } finally {
-    mock.timers.reset()
-  }
-})
+test('a closed shell is never re-opened by another shell\'s drag', withTimers(async () => {
+  const { env } = makeEnv({ sidebarWidth: 300 })
+  const handle = createLayoutStore(env)
+  const a = handle.create()
+  const b = handle.create()
+  trackLayoutInstance(env, a)
+  trackLayoutInstance(env, b)
+  a.actions.toggleSidebar() // close a
+  assert.equal(a.getSnapshot().layoutInfo.sidebar, 0)
+  b.actions.setSidebar(400)
+  mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
+  await Promise.resolve()
+  assert.equal(a.getSnapshot().layoutInfo.sidebar, 0) // stays closed
+  assert.equal(b.getSnapshot().layoutInfo.sidebar, 400)
+}))
 
-test('an untracked instance is never adopted into (registration is explicit)', async () => {
-  mock.timers.enable({ apis: ['setTimeout'] })
-  try {
-    const { env } = makeEnv({ sidebarWidth: 300 })
-    const handle = createLayoutStore(env)
-    const tracked = handle.create()
-    const untracked = handle.create()
-    trackLayoutInstance(env, tracked)
-    untracked.actions.setSidebar(360)
-    mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
-    await Promise.resolve()
-    assert.equal(tracked.getSnapshot().layoutInfo.sidebar, 360, 'tracked instance adopted the write')
-    assert.equal(untracked.getSnapshot().layoutInfo.sidebar, 360, 'writer keeps its own value')
-    // The writer was never registered: a later external write still reaches
-    // only the tracked instance.
-    env.viewPrefs.updateViewPrefs(prev => ({ ...prev, sidebarWidth: 320 }))
-    await Promise.resolve()
-    assert.equal(tracked.getSnapshot().layoutInfo.sidebar, 320)
-    assert.equal(untracked.getSnapshot().layoutInfo.sidebar, 360)
-  } finally {
-    mock.timers.reset()
-  }
-})
+test('an untracked instance is never adopted into (registration is explicit)', withTimers(async () => {
+  const { env } = makeEnv({ sidebarWidth: 300 })
+  const handle = createLayoutStore(env)
+  const tracked = handle.create()
+  const untracked = handle.create()
+  trackLayoutInstance(env, tracked)
+  untracked.actions.setSidebar(360)
+  mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
+  await Promise.resolve()
+  assert.equal(tracked.getSnapshot().layoutInfo.sidebar, 360, 'tracked instance adopted the write')
+  assert.equal(untracked.getSnapshot().layoutInfo.sidebar, 360, 'writer keeps its own value')
+  // The writer was never registered: a later external write still reaches
+  // only the tracked instance.
+  env.viewPrefs.updateViewPrefs(prev => ({ ...prev, sidebarWidth: 320 }))
+  await Promise.resolve()
+  assert.equal(tracked.getSnapshot().layoutInfo.sidebar, 320)
+  assert.equal(untracked.getSnapshot().layoutInfo.sidebar, 360)
+}))
 
 // ---- reopen semantics ----
 
@@ -406,34 +386,24 @@ test('openRightbar on a narrow frame clears the narrow re-expand override', () =
 
 // ---- P3 nit: no-op guard on the persistence write ----
 
-test('a drag onto the already-persisted width skips persist/notify entirely', async () => {
-  mock.timers.enable({ apis: ['setTimeout'] })
-  try {
-    const { env, viewPrefs } = makeEnv({ sidebarWidth: 300 })
-    const instance = createLayoutStore(env).create()
-    instance.actions.setSidebar(300) // same as the persisted width
-    mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
-    assert.equal(viewPrefs.writeCount(), 0)
-    assert.equal(viewPrefs.getViewPrefs().sidebarWidth, 300)
-  } finally {
-    mock.timers.reset()
-  }
-})
+test('a drag onto the already-persisted width skips persist/notify entirely', withTimers(async () => {
+  const { env, viewPrefs } = makeEnv({ sidebarWidth: 300 })
+  const instance = createLayoutStore(env).create()
+  instance.actions.setSidebar(300) // same as the persisted width
+  mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
+  assert.equal(viewPrefs.writeCount(), 0)
+  assert.equal(viewPrefs.getViewPrefs().sidebarWidth, 300)
+}))
 
-test('the no-op guard cancels a stale pending write when the drag returns to the persisted width', async () => {
-  mock.timers.enable({ apis: ['setTimeout'] })
-  try {
-    const { env, viewPrefs } = makeEnv({ sidebarWidth: 300 })
-    const instance = createLayoutStore(env).create()
-    instance.actions.setSidebar(350) // pending write scheduled
-    instance.actions.setSidebar(300) // back to the persisted width → guard cancels the stale write
-    mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
-    assert.equal(viewPrefs.writeCount(), 0)
-    assert.equal(viewPrefs.getViewPrefs().sidebarWidth, 300)
-  } finally {
-    mock.timers.reset()
-  }
-})
+test('the no-op guard cancels a stale pending write when the drag returns to the persisted width', withTimers(async () => {
+  const { env, viewPrefs } = makeEnv({ sidebarWidth: 300 })
+  const instance = createLayoutStore(env).create()
+  instance.actions.setSidebar(350) // pending write scheduled
+  instance.actions.setSidebar(300) // back to the persisted width → guard cancels the stale write
+  mock.timers.tick(SIDEBAR_WRITE_DEBOUNCE_MS)
+  assert.equal(viewPrefs.writeCount(), 0)
+  assert.equal(viewPrefs.getViewPrefs().sidebarWidth, 300)
+}))
 
 // ---- AppFrame collapsed derivation (shared by layoutFacts + the mobile plugin) ----
 
@@ -464,8 +434,7 @@ test('collapsedOf mirrors AppFrame: wide uses the preference, narrow the overrid
   assert.equal(collapsedOf(state({ sidebar: 280, viewportWidth: SIDEBAR_AUTO_COLLAPSE, narrowExpanded: true }), SIDEBAR_AUTO_COLLAPSE), false)
 })
 
-test('one throwing instance does not starve the adoption fan-out', async () => {
-  mock.timers.enable({ apis: ['setTimeout'] })
+test('one throwing instance does not starve the adoption fan-out', withTimers(async () => {
   const errors: unknown[][] = []
   const realError = console.error
   console.error = (...args: unknown[]) => { errors.push(args) }
@@ -499,6 +468,5 @@ test('one throwing instance does not starve the adoption fan-out', async () => {
     assert.equal(adoptionErrors.length, 1, 'the adoption failure must be logged exactly once')
   } finally {
     console.error = realError
-    mock.timers.reset()
   }
-})
+}))

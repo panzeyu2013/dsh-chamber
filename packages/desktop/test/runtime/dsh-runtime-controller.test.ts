@@ -1,6 +1,6 @@
 /**
  * dsh-runtime-controller.ts tests (design 18 §3.5/§3.6) — node:test, no real
- * fetch/install. fetchMetadata / install / store are injected mocks; the tests
+ * fetch/install: injected mocks only — the tests
  * assert orchestration: check phases, no-op + version-exists gates,
  * single-flight, override.pending write, resetBuiltin.
  */
@@ -101,7 +101,6 @@ function makeController(
     compatibilityBaseline: null, deps: deps ?? makeDeps(store),
   });
 }
-
 test('check: success fills latest + versions, phase available when newer', async () => {
   const store = makeStore();
   const c = makeController(store);
@@ -111,7 +110,6 @@ test('check: success fills latest + versions, phase available when newer', async
   assert.equal(state.versions.find((v) => v.latest)?.version, '0.2.0');
   assert.equal(state.versions[0]?.version, '0.1.1-rc.2'); // active pinned to top
 });
-
 test('check: latest equals active → phase idle', async () => {
   const store = makeStore();
   store.pointer = '0.2.0';
@@ -120,7 +118,6 @@ test('check: latest equals active → phase idle', async () => {
   const state = await c.check();
   assert.equal(state.phase, 'idle');
 });
-
 test('check: active newer than registry latest is not reported as available', async () => {
   const store = makeStore();
   store.pointer = '2.0.0';
@@ -130,7 +127,6 @@ test('check: active newer than registry latest is not reported as available', as
   assert.equal(state.phase, 'idle');
   assert.equal(state.latest, '1.9.9');
 });
-
 test('check: fetchMetadata failure → phase error', async () => {
   const store = makeStore();
   const deps = makeDeps(store);
@@ -140,7 +136,6 @@ test('check: fetchMetadata failure → phase error', async () => {
   assert.equal(state.phase, 'error');
   assert.match(state.error ?? '', /network down/);
 });
-
 test('check: success then offline keeps stale recommendation and unions fresh validated cache', async () => {
   const store = makeStore();
   const deps = makeDeps(store, { meta: meta('0.2.0', ['0.2.0']) });
@@ -154,7 +149,6 @@ test('check: success then offline keeps stale recommendation and unions fresh va
   assert.equal(state.versions.find((entry) => entry.version === '0.2.0')?.latest, true);
   assert.equal(state.versions.find((entry) => entry.version === '0.1.0')?.cached, true);
 });
-
 test('install: selecting active version is a no-op', async () => {
   const store = makeStore();
   store.pointer = '0.2.0';
@@ -168,7 +162,6 @@ test('install: selecting active version is a no-op', async () => {
   assert.equal(installCalls, 0);
   assert.equal(state.pending, null);
 });
-
 test('install: version not in registry → error, no install', async () => {
   const store = makeStore();
   let installCalls = 0;
@@ -180,14 +173,12 @@ test('install: version not in registry → error, no install', async () => {
   assert.equal(installCalls, 0);
   assert.equal(state.phase, 'error');
 });
-
 test('install: live progress is projected (download bytes + stages) and clears on completion', async () => {
   const store = makeStore();
   const deps = makeDeps(store, { meta: meta('0.2.0', ['0.2.0']) });
   deps.install = async (opts) => {
-    // The renderer must see byte progress mid-download, then the stage
-    // milestones, then the terminal 'done' (bar clears). The 200ms gap
-    // clears the controller's 150ms push throttle so both byte ticks land.
+    // The renderer must see byte progress, stage milestones, then terminal 'done';
+    // the 200ms gap clears the 150ms push throttle so both byte ticks land.
     opts.onProgress?.({ stage: 'download', received: 512, total: 1024 });
     await new Promise(resolve => setTimeout(resolve, 200));
     opts.onProgress?.({ stage: 'download', received: 1024, total: 1024 });
@@ -216,7 +207,6 @@ test('install: live progress is projected (download bytes + stages) and clears o
     unsubscribe();
   }
 });
-
 test('install: logical disk soft limit blocks only a fresh download', async () => {
   const store = makeStore();
   let installCalls = 0;
@@ -236,7 +226,6 @@ test('install: logical disk soft limit blocks only a fresh download', async () =
   assert.equal(state.diskLimitExceeded, true);
   assert.match(state.error ?? '', /软上限|清理/);
 });
-
 test('install: cached activation remains available above the logical disk soft limit', async () => {
   const store = makeStore();
   store.trees = ['0.2.0'];
@@ -248,7 +237,6 @@ test('install: cached activation remains available above the logical disk soft l
   assert.equal(state.phase, 'pending');
   assert.equal(state.pending, '0.2.0');
 });
-
 test('install: success writes override.pending and phase pending', async () => {
   const store = makeStore();
   const c = makeController(store);
@@ -264,7 +252,6 @@ test('install: success writes override.pending and phase pending', async () => {
     intentKind: 'version-switch',
   });
 });
-
 test('install: selecting an older version records a manual rollback intent before pending', async () => {
   const store = makeStore();
   store.pointer = '0.3.0';
@@ -279,7 +266,6 @@ test('install: selecting an older version records a manual rollback intent befor
     intentKind: 'version-switch',
   });
 });
-
 test('install: retention validation failure never publishes a pending override', async () => {
   const store = makeStore();
   const deps = makeDeps(store);
@@ -291,7 +277,6 @@ test('install: retention validation failure never publishes a pending override',
   assert.equal(store.override, null);
   assert.equal(state.pending, null);
 });
-
 test('install: activation intent failure never publishes a pending override', async () => {
   const store = makeStore();
   const deps = makeDeps(store);
@@ -303,7 +288,6 @@ test('install: activation intent failure never publishes a pending override', as
   assert.equal(store.override, null);
   assert.equal(state.pending, null);
 });
-
 test('install: failure → phase error with sanitized message', async () => {
   const store = makeStore();
   const deps = makeDeps(store, { installError: new Error('pnpm install failed /opt/x') });
@@ -313,7 +297,6 @@ test('install: failure → phase error with sanitized message', async () => {
   assert.equal(state.phase, 'error');
   assert.match(state.error ?? '', /pnpm install failed/);
 });
-
 test('install: single-flight — a second install during in-flight is rejected', async () => {
   const store = makeStore();
   let resolveFirst!: (r: InstallResult) => void;
@@ -329,7 +312,6 @@ test('install: single-flight — a second install during in-flight is rejected',
   resolveFirst({ versionTreeDir: '/rt/0.2.0', resolvedVersion: '0.2.0' });
   await first;
 });
-
 test('resetBuiltin: controller core never bypasses the main-process activation transaction', async () => {
   const store = makeStore();
   const c = makeController(store);
@@ -341,7 +323,6 @@ test('resetBuiltin: controller core never bypasses the main-process activation t
   assert.match(state.error ?? '', /事务协调器/);
   assert.equal(store.activationCleared, false);
 });
-
 test('install: registry source change after check fails closed and requires a new check', async () => {
   const store = makeStore();
   let origin = 'https://registry.npmjs.org';
@@ -360,7 +341,6 @@ test('install: registry source change after check fails closed and requires a ne
   assert.equal(state.phase, 'error');
   assert.match(state.error ?? '', /不存在|重新检查/);
 });
-
 test('invalid cached tree cannot bypass registry/install verification', async () => {
   const store = makeStore();
   store.trees = ['0.2.0'];
@@ -373,7 +353,6 @@ test('invalid cached tree cannot bypass registry/install verification', async ()
   await c.install('0.2.0');
   assert.equal(installs, 1, 'invalid cache is treated as absent and reinstalled from bound metadata');
 });
-
 test('getState: active = current pointer ?? bundled', () => {
   const store = makeStore();
   const c = makeController(store, undefined, { bundled: '0.1.1-rc.2' });
@@ -383,7 +362,6 @@ test('getState: active = current pointer ?? bundled', () => {
   store.override = { shellVersion: '0.1.4', chosenVersion: '0.2.0', resolvedVersion: '0.2.0', pending: null, swapAttempted: false };
   assert.equal(c.getState().active, '0.2.0');
 });
-
 test('getState projects durable shell-invalidation notice after automatic reactivation', () => {
   const store = makeStore();
   store.pointer = '0.2.0';
@@ -403,7 +381,6 @@ test('getState projects durable shell-invalidation notice after automatic reacti
     recovered: true,
   });
 });
-
 test('env path presence stays authoritative when its manifest version is unreadable', async () => {
   const store = makeStore();
   store.override = { shellVersion: '0.1.4', chosenVersion: '0.2.0', resolvedVersion: '0.2.0', pending: '0.2.0', swapAttempted: false };
@@ -422,7 +399,6 @@ test('env path presence stays authoritative when its manifest version is unreada
   assert.equal(c.resetBuiltin().source, 'env');
   assert.equal(store.deleted, false);
 });
-
 test('unsupported runtime management is read-only in controller core', async () => {
   const store = makeStore();
   store.override = { shellVersion: '0.1.4', chosenVersion: '0.2.0', resolvedVersion: '0.2.0', pending: null, swapAttempted: false };
@@ -446,7 +422,6 @@ test('unsupported runtime management is read-only in controller core', async () 
   assert.equal(state.managementSupported, false);
   assert.equal(state.managementUnsupportedReason, 'Windows runtime mutation is deferred');
 });
-
 test('throwing state listeners cannot strand check or install single-flight', async () => {
   const store = makeStore();
   const c = makeController(store);
@@ -466,7 +441,6 @@ test('throwing state listeners cannot strand check or install single-flight', as
     console.error = originalError;
   }
 });
-
 test('setLifecycle rejects an illegal stale edge and its accompanying fields as one patch', async () => {
   const store = makeStore();
   let resolveMetadata!: (value: RegistryMetadata) => void;
@@ -488,7 +462,6 @@ test('setLifecycle rejects an illegal stale edge and its accompanying fields as 
   resolveMetadata(meta('0.2.0', ['0.2.0']));
   assert.equal((await checking).phase, 'available');
 });
-
 test('metadata recovery capability is an explicit category-only lifecycle projection', () => {
   const store = makeStore();
   const c = makeController(store);

@@ -1,17 +1,13 @@
 /**
  * session-mutations.ts 行为测试（design 05 §2.2 唯一事实出口，会话侧）。
  *
- * 接线锁（renderer test/wiring/session-echo-wiring.test.ts）只证明**调用形状**；
- * 这里补的是出口**运行时契约**本身：
- * - 事实在 wire **成功之后**才发布，携带宿主返回的 session id（不是调用方预分配
- *   的那个 —— 宿主才是权威），以及 workspaceId / blank 事实；
- * - fork 携带 parentSessionId（App 用它解析子会话的工作区）与 blank:false（子会话
- *   继承内容，不是官方临时行）；标题提示缺省时字段根本不出现（稀疏）；
- * - 归档发布撤下事实；
- * - wire 失败（业务失败或抛错）**不发布任何事实**，也不吞掉失败。
+ * 出口的运行时契约（原先配对的 renderer source-text 接线锁已按 2026-12 裁决退役）：事实在 wire
+ * **成功之后**才发布，携带宿主返回的 session id（权威）与 workspaceId /
+ * blank 事实；fork 携带 parentSessionId 与 blank:false（子会话继承内容），标题提示缺省时字段
+ * 不出现（稀疏）；归档发布撤下事实；wire 失败（业务失败或抛错）**不发布任何事实**，也不吞掉失败。
  *
- * 打桩方式与 workspace-mutations.test.ts 同款：getInstanceClient 按 instanceId
- * 缓存同一个 InstanceApiClient，直接替换该缓存对象的 session/workspace 面。
+ * 打桩方式与 workspace-mutations.test.ts 同款：getInstanceClient 按 instanceId 缓存同一个
+ * InstanceApiClient，直接替换该缓存对象的 session/workspace 面。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -23,21 +19,13 @@ import {
   forkSessionForSource,
 } from '../../src/shared/session-mutations.ts'
 
-interface SessionFacts {
-  created: Record<string, unknown>[]
-  removed: Record<string, unknown>[]
-  off(): void
-}
+interface SessionFacts { created: Record<string, unknown>[]; removed: Record<string, unknown>[]; off(): void }
 
 function collectFacts(sourceId: string): SessionFacts {
   const created: Record<string, unknown>[] = []
   const removed: Record<string, unknown>[] = []
-  const offCreated = chamberBridge.onSessionCreated((fact) => {
-    if (fact.sourceId === sourceId) created.push({ ...fact })
-  })
-  const offRemoved = chamberBridge.onSessionRemoved((fact) => {
-    if (fact.sourceId === sourceId) removed.push({ ...fact })
-  })
+  const offCreated = chamberBridge.onSessionCreated((fact) => { if (fact.sourceId === sourceId) created.push({ ...fact }) })
+  const offRemoved = chamberBridge.onSessionRemoved((fact) => { if (fact.sourceId === sourceId) removed.push({ ...fact }) })
   return { created, removed, off: () => { offCreated(); offRemoved() } }
 }
 
@@ -61,10 +49,7 @@ test('createSessionForSource: the HOST id and the blank fact are published after
     assert.deepEqual(stub.calls, [{ workspaceId: 'w1' }], 'a host-minted id sends no sessionId key')
     assert.deepEqual(facts.created, [{ sourceId, sessionId: 'host-minted', workspaceId: 'w1', blank: true }])
     assert.deepEqual(facts.removed, [], 'a create publishes no removal fact')
-  } finally {
-    facts.off()
-    releaseInstanceClient(sourceId)
-  }
+  } finally { facts.off(); releaseInstanceClient(sourceId) }
 })
 
 test('createSessionForSource: a preallocated id rides the wire and the returned id must match', async () => {
@@ -76,67 +61,47 @@ test('createSessionForSource: a preallocated id rides the wire and the returned 
     assert.deepEqual(stub.calls, [{ workspaceId: 'w2', sessionId: 's-pre' }])
     assert.equal(facts.created[0]?.sessionId, 's-pre')
     assert.equal('title' in (facts.created[0] ?? {}), false, 'the fact stays sparse without a title hint')
-  } finally {
-    facts.off()
-    releaseInstanceClient(sourceId)
-  }
+  } finally { facts.off(); releaseInstanceClient(sourceId) }
 })
 
 test('forkSessionForSource: the child carries its parent and the content (blank:false) fact', async () => {
   const sourceId = 'session-funnel-fork'
   const client = getInstanceClient(sourceId)
   const calls: unknown[] = []
-  client.session.fork = async (payload: unknown): Promise<UnaryResult<unknown>> => {
-    calls.push(payload)
-    return { ok: true, value: { sessionId: 'child-1' } }
-  }
+  client.session.fork = async (payload: unknown): Promise<UnaryResult<unknown>> =>
+    (calls.push(payload), { ok: true, value: { sessionId: 'child-1' } })
   const facts = collectFacts(sourceId)
   try {
     const childId = await forkSessionForSource(sourceId, 'parent-1', { title: 'parent (1)' })
     assert.equal(childId, 'child-1')
     assert.deepEqual(calls, [{ sessionId: 'parent-1' }], 'fork sends only the parent id (atSeq stays official semantics)')
-    assert.deepEqual(facts.created, [
-      { sourceId, sessionId: 'child-1', parentSessionId: 'parent-1', blank: false, title: 'parent (1)' },
-    ])
-  } finally {
-    facts.off()
-    releaseInstanceClient(sourceId)
-  }
+    assert.deepEqual(facts.created, [{ sourceId, sessionId: 'child-1', parentSessionId: 'parent-1', blank: false, title: 'parent (1)' }])
+  } finally { facts.off(); releaseInstanceClient(sourceId) }
 })
 
 test('archiveSessionForSource: the withdraw fact is published after the wire accepted it', async () => {
   const sourceId = 'session-funnel-archive'
   const client = getInstanceClient(sourceId)
   const calls: unknown[] = []
-  client.workspace.archiveSession = async (payload: unknown): Promise<UnaryResult<unknown>> => {
-    calls.push(payload)
-    return { ok: true, value: { archived: true } }
-  }
+  client.workspace.archiveSession = async (payload: unknown): Promise<UnaryResult<unknown>> =>
+    (calls.push(payload), { ok: true, value: { archived: true } })
   const facts = collectFacts(sourceId)
   try {
     await archiveSessionForSource(sourceId, 's-1')
     assert.deepEqual(calls, [{ sessionId: 's-1' }])
     assert.deepEqual(facts.removed, [{ sourceId, sessionId: 's-1' }])
     assert.deepEqual(facts.created, [])
-  } finally {
-    facts.off()
-    releaseInstanceClient(sourceId)
-  }
+  } finally { facts.off(); releaseInstanceClient(sourceId) }
 })
 
 test('a failed wire publishes NOTHING (the echo must never outrun the host)', async () => {
   const sourceId = 'session-funnel-failure'
   const client = getInstanceClient(sourceId)
-  client.session.create = async (): Promise<UnaryResult<unknown>> => ({
-    ok: false,
-    error: { code: 'session/agent-busy', message: 'busy', details: {} },
-  })
+  client.session.create = async (): Promise<UnaryResult<unknown>> =>
+    ({ ok: false, error: { code: 'session/agent-busy', message: 'busy', details: {} } })
   const facts = collectFacts(sourceId)
   try {
     await assert.rejects(createSessionForSource(sourceId, 'w1'), /busy/)
     assert.deepEqual(facts.created, [], 'a rejected create leaves no phantom row in the projection')
-  } finally {
-    facts.off()
-    releaseInstanceClient(sourceId)
-  }
+  } finally { facts.off(); releaseInstanceClient(sourceId) }
 })

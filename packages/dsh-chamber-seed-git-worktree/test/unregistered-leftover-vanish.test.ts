@@ -13,6 +13,8 @@ import {
   FEATURE_HEAD,
   FakeRepository,
   setup,
+  targetOf,
+  refuses,
   previewNew,
   mutationCalls,
   STALE,
@@ -21,15 +23,9 @@ import {
 
 test('unregistered worktree removal: no workspace, git-first, next none', async () => {
   const { core, repo } = setup({ linked: true })
-  repo.addLinked({ path: '/repos/external', branch: 'ext', head: FEATURE_HEAD })
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const ext = repository.worktrees.find(worktree => worktree.path === '/repos/external')!
-  const removed = await core.remove({
-    operationId: 'op-unreg',
-    expected: { repoId: repository.repoId, worktreeId: ext.worktreeId, branch: ext.branch!, head: ext.head },
-    path: '/repos/external',
-  })
+  const ext = repo.addLinked({ path: '/repos/external', branch: 'ext', head: FEATURE_HEAD })
+  const { expected } = await targetOf(core, ext.path)
+  const removed = await core.remove({ operationId: 'op-unreg', expected, path: ext.path })
   assert.equal(removed.removed, true)
   assert.equal(removed.next, 'none')
   assert.equal(removed.workspaceId, undefined)
@@ -39,32 +35,20 @@ test('unregistered worktree removal: no workspace, git-first, next none', async 
 
 test('unregistered removal keeps the dirty/locked/main guards and rejects without a path', async () => {
   const { core, repo } = setup({ linked: true })
-  repo.addLinked({ path: '/repos/external', branch: 'ext', head: FEATURE_HEAD })
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const ext = repository.worktrees.find(worktree => worktree.path === '/repos/external')!
-  const expected = { repoId: repository.repoId, worktreeId: ext.worktreeId, branch: ext.branch!, head: ext.head }
-  repo.worktrees.find(row => row.path === '/repos/external')!.dirty = true
-  await assert.rejects(
-    core.remove({ operationId: 'op-unreg-dirty', expected, path: '/repos/external' }),
-    error => error instanceof GitWorktreeError && error.code === 'worktree-dirty',
-  )
-  await assert.rejects(
-    core.remove({ operationId: 'op-unreg-nopath', expected }),
-    error => error instanceof GitWorktreeError && error.code === 'invalid-input',
-  )
+  const ext = repo.addLinked({ path: '/repos/external', branch: 'ext', head: FEATURE_HEAD })
+  const { expected } = await targetOf(core, ext.path)
+  ext.dirty = true
+  await assert.rejects(core.remove({ operationId: 'op-unreg-dirty', expected, path: ext.path }), refuses('worktree-dirty'))
+  await assert.rejects(core.remove({ operationId: 'op-unreg-nopath', expected }), refuses('invalid-input'))
 })
 
 test('unregistered removal replay is idempotent', async () => {
   const { core, repo } = setup({ linked: true })
-  repo.addLinked({ path: '/repos/external', branch: 'ext', head: FEATURE_HEAD })
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const ext = repository.worktrees.find(worktree => worktree.path === '/repos/external')!
-  const expected = { repoId: repository.repoId, worktreeId: ext.worktreeId, branch: ext.branch!, head: ext.head }
-  const first = await core.remove({ operationId: 'op-unreg-replay', expected, path: '/repos/external' })
+  const ext = repo.addLinked({ path: '/repos/external', branch: 'ext', head: FEATURE_HEAD })
+  const { expected } = await targetOf(core, ext.path)
+  const first = await core.remove({ operationId: 'op-unreg-replay', expected, path: ext.path })
   assert.equal(first.next, 'none')
-  const replay = await core.remove({ operationId: 'op-unreg-replay', expected, path: '/repos/external' })
+  const replay = await core.remove({ operationId: 'op-unreg-replay', expected, path: ext.path })
   assert.equal(replay.removed, true)
   assert.equal(replay.replayed, true)
   assert.equal(replay.next, 'none')
@@ -120,9 +104,7 @@ test('a VANISHED (orphaned) workspace no longer blocks another worktree removal'
 test('a missing-dir leftover record does not block preview/create or another removal', async () => {
   const { core, repo } = setup({ linked: true })
   addStaleRecord(repo)
-  const before = await core.snapshot()
-  const repository = before.repos[0]!
-  const stale = repository.worktrees.find(row => row.path === STALE)!
+  const { repository, row: stale } = await targetOf(core, STALE)
   assert.equal(stale.status, 'missing')
   assert.equal(stale.workspaceId, null)
   // The mutation-path topology no longer fails on the stale row:
@@ -142,14 +124,8 @@ test('a missing-dir leftover record does not block preview/create or another rem
 test('unregistered removal of a missing-dir leftover record clears only the git record', async () => {
   const { core, repo } = setup({ linked: true })
   addStaleRecord(repo)
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const stale = repository.worktrees.find(row => row.path === STALE)!
-  const removed = await core.remove({
-    operationId: 'op-stale-clean',
-    expected: { repoId: repository.repoId, worktreeId: stale.worktreeId, branch: stale.branch!, head: stale.head },
-    path: STALE,
-  })
+  const { expected } = await targetOf(core, STALE)
+  const removed = await core.remove({ operationId: 'op-stale-clean', expected, path: STALE })
   assert.equal(removed.removed, true)
   assert.equal(removed.replayed, false)
   assert.equal(removed.next, 'none')
@@ -166,10 +142,7 @@ test('unregistered removal of a missing-dir leftover record clears only the git 
 test('missing leftover record removal replay is idempotent after a lost response', async () => {
   const { core, repo } = setup({ linked: true })
   addStaleRecord(repo)
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const stale = repository.worktrees.find(row => row.path === STALE)!
-  const expected = { repoId: repository.repoId, worktreeId: stale.worktreeId, branch: stale.branch!, head: stale.head }
+  const { expected } = await targetOf(core, STALE)
   const first = await core.remove({ operationId: 'op-stale-replay', expected, path: STALE })
   assert.equal(first.removed, true)
   const replay = await core.remove({ operationId: 'op-stale-replay', expected, path: STALE })
@@ -187,9 +160,7 @@ test('missing leftover record removal matches a DETACHED (branch-less) record', 
   repo.existing.add(STALE)
   repo.worktrees.push({ path: STALE, branch: null, head: FEATURE_HEAD })
   repo.existing.delete(STALE)
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const stale = repository.worktrees.find(row => row.path === STALE)!
+  const { repository, row: stale } = await targetOf(core, STALE)
   assert.equal(stale.status, 'missing')
   assert.equal(stale.branch, null)
   const removed = await core.remove({
@@ -207,34 +178,25 @@ test('missing leftover record removal matches a DETACHED (branch-less) record', 
 test('missing leftover record removal keeps the locked/main/ghost/identity guards', async () => {
   const { core, repo, workspaces } = setup({ linked: true })
   addStaleRecord(repo)
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const staleRow = repository.worktrees.find(row => row.path === STALE)!
-  const expected = { repoId: repository.repoId, worktreeId: staleRow.worktreeId, branch: staleRow.branch!, head: staleRow.head }
+  const { expected } = await targetOf(core, STALE)
   // Locked leftover record: refuse (git worktree prune would skip it too).
   repo.worktrees.find(row => row.path === STALE)!.locked = true
-  await assert.rejects(
-    core.remove({ operationId: 'op-stale-locked', expected, path: STALE }),
-    error => error instanceof GitWorktreeError && error.code === 'worktree-locked',
-  )
+  await assert.rejects(core.remove({ operationId: 'op-stale-locked', expected, path: STALE }), refuses('worktree-locked'))
   repo.worktrees.find(row => row.path === STALE)!.locked = false
   // A ghost workspace at the RAW path owns the record — never clean it
   // behind its registration (registration-first workspace flows own it).
   workspaces.push({ workspaceId: 'ghost-stale', path: STALE, sessionIds: [] })
-  await assert.rejects(
-    core.remove({ operationId: 'op-stale-ghost', expected, path: STALE }),
-    error => error instanceof GitWorktreeError && error.code === 'workspace-registered',
-  )
+  await assert.rejects(core.remove({ operationId: 'op-stale-ghost', expected, path: STALE }), refuses('workspace-registered'))
   workspaces.pop()
   // Repository identity mismatch: deterministic refusal.
   await assert.rejects(
     core.remove({ operationId: 'op-stale-repo', expected: { ...expected, repoId: `repo_${'0'.repeat(64)}` }, path: STALE }),
-    error => error instanceof GitWorktreeError && error.code === 'expected-mismatch',
+    refuses('expected-mismatch'),
   )
   // Worktree identity mismatch: deterministic refusal.
   await assert.rejects(
     core.remove({ operationId: 'op-stale-wtid', expected: { ...expected, worktreeId: `worktree_${'0'.repeat(64)}` }, path: STALE }),
-    error => error instanceof GitWorktreeError && error.code === 'expected-mismatch',
+    refuses('expected-mismatch'),
   )
   // None of the refusals ran a git mutation.
   assert.equal(mutationCalls(repo, 'remove').length, 0)
@@ -243,9 +205,7 @@ test('missing leftover record removal keeps the locked/main/ghost/identity guard
 test('missing leftover record removal refuses when the directory reappears before the commit', async () => {
   const { core, repo } = setup({ linked: true })
   addStaleRecord(repo)
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const stale = repository.worktrees.find(row => row.path === STALE)!
+  const { repository, row: stale } = await targetOf(core, STALE)
   // The directory comes back between the locating listing and the in-lock
   // commit listing: the record is a live worktree again — record-only
   // cleanup must refuse deterministically WITHOUT deleting a restored tree.
@@ -255,12 +215,8 @@ test('missing leftover record removal refuses when the directory reappears befor
     if (lists === 2) repo.existing.add(STALE)
   }
   await assert.rejects(
-    core.remove({
-      operationId: 'op-stale-race',
-      expected: { repoId: repository.repoId, worktreeId: stale.worktreeId, branch: stale.branch!, head: stale.head },
-      path: STALE,
-    }),
-    error => error instanceof GitWorktreeError && error.code === 'worktree-invalid',
+    core.remove({ operationId: 'op-stale-race', expected: { repoId: repository.repoId, worktreeId: stale.worktreeId, branch: stale.branch!, head: stale.head }, path: STALE }),
+    refuses('worktree-invalid'),
   )
   assert.equal(mutationCalls(repo, 'remove').length, 0)
 })

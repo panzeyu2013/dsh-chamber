@@ -10,6 +10,8 @@ import {
   MAIN_HEAD,
   FEATURE_HEAD,
   setup,
+  targetOf,
+  refuses,
   mutationCalls,
 } from './support/fake-repository.ts'
 
@@ -21,19 +23,8 @@ import {
 
 test('terminal replay re-reads the archived set: unarchiving between attempts refuses the replay', async () => {
   const { core, repo, agents, archived, workspaces } = setup({ linked: true })
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const linked = repository.worktrees.find(worktree => worktree.path === LINKED)!
-  const input = {
-    operationId: 'terminal-unarchive',
-    workspaceId: 'ws-feature',
-    expected: {
-      repoId: repository.repoId,
-      worktreeId: linked.worktreeId,
-      branch: linked.branch,
-      head: linked.head,
-    },
-  }
+  const { expected } = await targetOf(core)
+  const input = { operationId: 'terminal-unarchive', workspaceId: 'ws-feature', expected }
   // The first attempt runs with the member archived: inert, removal proceeds.
   workspaces[1] = { ...workspaces[1]!, sessionIds: ['s-feature'] }
   agents.push({ sessionId: 's-feature', status: 'running', cwd: LINKED })
@@ -44,30 +35,14 @@ test('terminal replay re-reads the archived set: unarchiving between attempts re
   // Unarchive, then replay the SAME operationId: the terminal receipt leg
   // re-reads the authoritative archived set and must now refuse.
   archived.length = 0
-  await assert.rejects(
-    core.remove(input),
-    error => error instanceof GitWorktreeError
-      && error.code === 'running-agent'
-      && /s-feature/.test(error.message),
-  )
+  await assert.rejects(core.remove(input), refuses('running-agent', /s-feature/))
   assert.equal(mutationCalls(repo, 'remove').length, 1, 'a refused replay never deletes again')
 })
 
 test('uncertain-outcome reconciliation re-reads the archived set: unarchiving between attempts refuses the replay', async () => {
   const { core, repo, agents, archived, workspaces } = setup({ linked: true })
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const linked = repository.worktrees.find(worktree => worktree.path === LINKED)!
-  const input = {
-    operationId: 'reconcile-unarchive',
-    workspaceId: 'ws-feature',
-    expected: {
-      repoId: repository.repoId,
-      worktreeId: linked.worktreeId,
-      branch: linked.branch,
-      head: linked.head,
-    },
-  }
+  const { expected } = await targetOf(core)
+  const input = { operationId: 'reconcile-unarchive', workspaceId: 'ws-feature', expected }
   workspaces[1] = { ...workspaces[1]!, sessionIds: ['s-feature'] }
   agents.push({ sessionId: 's-feature', status: 'running', cwd: LINKED })
   archived.push('s-feature')
@@ -79,26 +54,15 @@ test('uncertain-outcome reconciliation re-reads the archived set: unarchiving be
   // Unarchive before the replay: reconcileBoundRemove's receipt leg re-reads
   // the archived set, so the same replay must now be refused.
   archived.length = 0
-  await assert.rejects(
-    core.remove(input),
-    error => error instanceof GitWorktreeError
-      && error.code === 'running-agent'
-      && /s-feature/.test(error.message),
-  )
+  await assert.rejects(core.remove(input), refuses('running-agent', /s-feature/))
   assert.equal(mutationCalls(repo, 'remove').length, 1, 'the refused replay deleted nothing again')
 })
 
 test('uncertain-outcome reconciliation re-reads the archived set for the UNREGISTERED path leg', async () => {
   const { core, repo, agents, archived } = setup()
   const extra = repo.addLinked({ path: '/repos/unregistered', branch: 'unreg', head: FEATURE_HEAD })
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const row = repository.worktrees.find(worktree => worktree.path === extra.path)!
-  const input = {
-    operationId: 'reconcile-unregistered-unarchive',
-    expected: { repoId: repository.repoId, worktreeId: row.worktreeId, branch: row.branch!, head: row.head },
-    path: extra.path,
-  }
+  const { expected } = await targetOf(core, extra.path)
+  const input = { operationId: 'reconcile-unregistered-unarchive', expected, path: extra.path }
   agents.push({ sessionId: 's-live', status: 'running', cwd: `${extra.path}/sub` })
   archived.push('s-live')
   // The attempt reaches Git but the subprocess times out BEFORE mutating: the
@@ -108,12 +72,7 @@ test('uncertain-outcome reconciliation re-reads the archived set for the UNREGIS
   await assert.rejects(core.remove(input))
   assert.equal(mutationCalls(repo, 'remove').length, 1)
   archived.length = 0
-  await assert.rejects(
-    core.remove(input),
-    error => error instanceof GitWorktreeError
-      && error.code === 'running-agent'
-      && /cwd/.test(error.message),
-  )
+  await assert.rejects(core.remove(input), refuses('running-agent', /cwd/))
   assert.equal(mutationCalls(repo, 'remove').length, 1)
 })
 
@@ -126,19 +85,8 @@ test('uncertain-outcome reconciliation re-reads the archived set for the UNREGIS
 
 test('registered reconcile replay refuses a running member (the leg\'s ONLY running guard)', async () => {
   const { core, repo, agents, workspaces } = setup({ linked: true })
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const linked = repository.worktrees.find(worktree => worktree.path === LINKED)!
-  const input = {
-    operationId: 'registered-reconcile-running',
-    workspaceId: 'ws-feature',
-    expected: {
-      repoId: repository.repoId,
-      worktreeId: linked.worktreeId,
-      branch: linked.branch,
-      head: linked.head,
-    },
-  }
+  const { expected } = await targetOf(core)
+  const input = { operationId: 'registered-reconcile-running', workspaceId: 'ws-feature', expected }
   // First attempt: the Git subprocess times out BEFORE mutating, so the bound
   // intent survives and the target is still present on the replay.
   repo.throwBeforeRemove = new GitWorktreeError('git-timeout', 'simulated pre-commit timeout')
@@ -149,31 +97,15 @@ test('registered reconcile replay refuses a running member (the leg\'s ONLY runn
   // no full preflight — so this refusal is the sole protection.
   workspaces[1] = { ...workspaces[1]!, sessionIds: ['s-feature'] }
   agents.push({ sessionId: 's-feature', status: 'running', cwd: LINKED })
-  await assert.rejects(
-    core.remove(input),
-    error => error instanceof GitWorktreeError
-      && error.code === 'running-agent'
-      && /s-feature/.test(error.message),
-  )
+  await assert.rejects(core.remove(input), refuses('running-agent', /s-feature/))
   assert.equal(mutationCalls(repo, 'remove').length, 1, 'a refused replay never mutates again')
   assert.equal(repo.worktrees.some(worktree => worktree.path === LINKED), true)
 })
 
 test('registered reconcile replay ALLOWS an ARCHIVED running member (the allow direction must not wedge)', async () => {
   const { core, repo, agents, archived, workspaces } = setup({ linked: true })
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const linked = repository.worktrees.find(worktree => worktree.path === LINKED)!
-  const input = {
-    operationId: 'registered-reconcile-archived',
-    workspaceId: 'ws-feature',
-    expected: {
-      repoId: repository.repoId,
-      worktreeId: linked.worktreeId,
-      branch: linked.branch,
-      head: linked.head,
-    },
-  }
+  const { expected } = await targetOf(core)
+  const input = { operationId: 'registered-reconcile-archived', workspaceId: 'ws-feature', expected }
   // The only running member is ARCHIVED: inert, so the first attempt passes the
   // preflight and binds the intent; the Git subprocess then times out
   // pre-mutation.
@@ -195,19 +127,8 @@ test('registered reconcile replay ALLOWS an ARCHIVED running member (the allow d
 
 test('terminal receipt replay ALLOWS an ARCHIVED running member (the allow direction must not wedge)', async () => {
   const { core, repo, agents, archived, workspaces } = setup({ linked: true })
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const linked = repository.worktrees.find(worktree => worktree.path === LINKED)!
-  const input = {
-    operationId: 'terminal-receipt-archived',
-    workspaceId: 'ws-feature',
-    expected: {
-      repoId: repository.repoId,
-      worktreeId: linked.worktreeId,
-      branch: linked.branch,
-      head: linked.head,
-    },
-  }
+  const { expected } = await targetOf(core)
+  const input = { operationId: 'terminal-receipt-archived', workspaceId: 'ws-feature', expected }
   // The worktree's ONLY running session is archived ⇒ inert ⇒ the removal
   // succeeds. The workspace stays registered, so the replay re-enters
   // assertRemovedWorkspaceReceipt (the pre-`workspace.delete` receipt leg).
@@ -225,25 +146,11 @@ test('terminal receipt replay ALLOWS an ARCHIVED running member (the allow direc
 
 test('removed terminal replay rejects a reappeared worktree without deleting it again', async () => {
   const { core, repo } = setup({ linked: true })
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const linked = repository.worktrees.find(worktree => worktree.path === LINKED)!
-  const input = {
-    operationId: 'terminal-remove-reappeared',
-    workspaceId: 'ws-feature',
-    expected: {
-      repoId: repository.repoId,
-      worktreeId: linked.worktreeId,
-      branch: linked.branch,
-      head: linked.head,
-    },
-  }
+  const { expected } = await targetOf(core)
+  const input = { operationId: 'terminal-remove-reappeared', workspaceId: 'ws-feature', expected }
   await core.remove(input)
   repo.addLinked()
-  await assert.rejects(
-    core.remove(input),
-    error => error instanceof GitWorktreeError && error.code === 'operation-conflict',
-  )
+  await assert.rejects(core.remove(input), refuses('operation-conflict'))
   assert.equal(mutationCalls(repo, 'remove').length, 1)
   assert.equal(repo.worktrees.some(worktree => worktree.path === LINKED), true)
 })
@@ -251,19 +158,8 @@ test('removed terminal replay rejects a reappeared worktree without deleting it 
 test('removed terminal replay requires the same workspace membership and no running agent', async () => {
   for (const change of ['membership', 'running'] as const) {
     const { core, repo, workspaces, agents } = setup({ linked: true })
-    const snapshot = await core.snapshot()
-    const repository = snapshot.repos[0]!
-    const linked = repository.worktrees.find(worktree => worktree.path === LINKED)!
-    const input = {
-      operationId: `terminal-remove-${change}`,
-      workspaceId: 'ws-feature',
-      expected: {
-        repoId: repository.repoId,
-        worktreeId: linked.worktreeId,
-        branch: linked.branch,
-        head: linked.head,
-      },
-    }
+    const { expected } = await targetOf(core)
+    const input = { operationId: `terminal-remove-${change}`, workspaceId: 'ws-feature', expected }
     await core.remove(input)
     if (change === 'membership') {
       const workspaceIndex = workspaces.findIndex(workspace => workspace.workspaceId === 'ws-feature')
@@ -274,11 +170,7 @@ test('removed terminal replay requires the same workspace membership and no runn
     } else {
       agents.push({ sessionId: 's-feature', status: 'running', cwd: LINKED })
     }
-    await assert.rejects(
-      core.remove(input),
-      error => error instanceof GitWorktreeError
-        && error.code === (change === 'membership' ? 'operation-conflict' : 'running-agent'),
-    )
+    await assert.rejects(core.remove(input), refuses(change === 'membership' ? 'operation-conflict' : 'running-agent'))
     assert.equal(mutationCalls(repo, 'remove').length, 1)
   }
 })
@@ -286,19 +178,8 @@ test('removed terminal replay requires the same workspace membership and no runn
 test('remove retries reconcile committed timeout and postcondition-read failures without a second delete', async () => {
   for (const failure of ['timeout', 'post-read'] as const) {
     const { core, repo } = setup({ linked: true })
-    const snapshot = await core.snapshot()
-    const repository = snapshot.repos[0]!
-    const linked = repository.worktrees.find(worktree => worktree.path === LINKED)!
-    const input = {
-      operationId: `remove-${failure}`,
-      workspaceId: 'ws-feature',
-      expected: {
-        repoId: repository.repoId,
-        worktreeId: linked.worktreeId,
-        branch: linked.branch,
-        head: linked.head,
-      },
-    }
+    const { expected } = await targetOf(core)
+    const input = { operationId: `remove-${failure}`, workspaceId: 'ws-feature', expected }
     if (failure === 'timeout') {
       repo.throwAfterRemove = new GitWorktreeError('git-timeout', 'simulated timeout')
     } else {
@@ -317,19 +198,8 @@ test('remove retries reconcile committed timeout and postcondition-read failures
 test('uncertain remove reconciliation fails closed when membership or liveness changed', async () => {
   for (const change of ['membership', 'running'] as const) {
     const { core, repo, workspaces, agents } = setup({ linked: true })
-    const snapshot = await core.snapshot()
-    const repository = snapshot.repos[0]!
-    const linked = repository.worktrees.find(worktree => worktree.path === LINKED)!
-    const input = {
-      operationId: `uncertain-receipt-${change}`,
-      workspaceId: 'ws-feature',
-      expected: {
-        repoId: repository.repoId,
-        worktreeId: linked.worktreeId,
-        branch: linked.branch,
-        head: linked.head,
-      },
-    }
+    const { expected } = await targetOf(core)
+    const input = { operationId: `uncertain-receipt-${change}`, workspaceId: 'ws-feature', expected }
     repo.throwAfterRemove = new GitWorktreeError('git-timeout', 'simulated committed timeout')
     await assert.rejects(core.remove(input))
     if (change === 'membership') {
@@ -341,11 +211,7 @@ test('uncertain remove reconciliation fails closed when membership or liveness c
     } else {
       agents.push({ sessionId: 's-feature', status: 'running', cwd: LINKED })
     }
-    await assert.rejects(
-      core.remove(input),
-      error => error instanceof GitWorktreeError
-        && error.code === (change === 'membership' ? 'operation-conflict' : 'running-agent'),
-    )
+    await assert.rejects(core.remove(input), refuses(change === 'membership' ? 'operation-conflict' : 'running-agent'))
     assert.equal(mutationCalls(repo, 'remove').length, 1)
     assert.equal(repo.worktrees.some(worktree => worktree.path === LINKED), false)
   }
@@ -424,7 +290,7 @@ test('remove final absent convergence rechecks membership and liveness receipts'
 
 test('remove refuses main, dirty and locked worktrees without exposing force', async () => {
   const { core, repo } = setup({ linked: true })
-  let snapshot = await core.snapshot()
+  const snapshot = await core.snapshot()
   const repository = snapshot.repos[0]!
   const main = repository.worktrees[0]!
   await assert.rejects(
@@ -433,41 +299,19 @@ test('remove refuses main, dirty and locked worktrees without exposing force', a
       workspaceId: 'ws-main',
       expected: { repoId: repository.repoId, worktreeId: main.worktreeId, branch: 'main', head: MAIN_HEAD },
     }),
-    error => error instanceof GitWorktreeError && error.code === 'main-worktree',
+    refuses('main-worktree'),
   )
 
   repo.worktrees[1]!.dirty = true
-  snapshot = await core.snapshot()
-  let linked = snapshot.repos[0]!.worktrees[1]!
   await assert.rejects(
-    core.remove({
-      operationId: 'remove-dirty',
-      workspaceId: 'ws-feature',
-      expected: {
-        repoId: snapshot.repos[0]!.repoId,
-        worktreeId: linked.worktreeId,
-        branch: linked.branch!,
-        head: linked.head,
-      },
-    }),
-    error => error instanceof GitWorktreeError && error.code === 'worktree-dirty',
+    core.remove({ operationId: 'remove-dirty', workspaceId: 'ws-feature', expected: (await targetOf(core)).expected }),
+    refuses('worktree-dirty'),
   )
   repo.worktrees[1]!.dirty = false
   repo.worktrees[1]!.locked = true
-  snapshot = await core.snapshot()
-  linked = snapshot.repos[0]!.worktrees[1]!
   await assert.rejects(
-    core.remove({
-      operationId: 'remove-locked',
-      workspaceId: 'ws-feature',
-      expected: {
-        repoId: snapshot.repos[0]!.repoId,
-        worktreeId: linked.worktreeId,
-        branch: linked.branch!,
-        head: linked.head,
-      },
-    }),
-    error => error instanceof GitWorktreeError && error.code === 'worktree-locked',
+    core.remove({ operationId: 'remove-locked', workspaceId: 'ws-feature', expected: (await targetOf(core)).expected }),
+    refuses('worktree-locked'),
   )
   assert.equal(mutationCalls(repo, 'remove').length, 0)
 })
@@ -475,21 +319,10 @@ test('remove refuses main, dirty and locked worktrees without exposing force', a
 test('remove with discardChanges force-removes a dirty worktree and preserves the branch', async () => {
   const { core, repo, workspaces } = setup({ linked: true })
   repo.worktrees[1]!.dirty = true
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const linked = repository.worktrees[1]!
-  const expected = {
-    repoId: repository.repoId,
-    worktreeId: linked.worktreeId,
-    branch: linked.branch!,
-    head: linked.head,
-  }
+  const { expected } = await targetOf(core)
 
   // Without discardChanges the dirty worktree is still rejected.
-  await assert.rejects(
-    core.remove({ operationId: 'force-op-no-flag', workspaceId: 'ws-feature', expected }),
-    error => error instanceof GitWorktreeError && error.code === 'worktree-dirty',
-  )
+  await assert.rejects(core.remove({ operationId: 'force-op-no-flag', workspaceId: 'ws-feature', expected }), refuses('worktree-dirty'))
   assert.equal(mutationCalls(repo, 'remove').length, 0)
 
   // With discardChanges the removal goes through with --force; the branch
@@ -521,29 +354,14 @@ test('remove with discardChanges force-removes a dirty worktree and preserves th
   assert.equal(mutationCalls(repo, 'remove').length, 1)
 
   // A replay WITHOUT discardChanges changes the fingerprint -> conflict.
-  await assert.rejects(
-    core.remove({ operationId: 'force-op', workspaceId: 'ws-feature', expected }),
-    error => error instanceof GitWorktreeError && error.code === 'operation-conflict',
-  )
+  await assert.rejects(core.remove({ operationId: 'force-op', workspaceId: 'ws-feature', expected }), refuses('operation-conflict'))
 })
 
 test('unregistered removal honors discardChanges with --force on a dirty path', async () => {
   const { core, repo } = setup({ linked: true })
-  repo.addLinked({ path: '/repos/external', branch: 'ext', head: FEATURE_HEAD })
-  repo.worktrees.find(worktree => worktree.path === '/repos/external')!.dirty = true
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const external = repository.worktrees.find(worktree => worktree.path === '/repos/external')!
-  const expected = {
-    repoId: repository.repoId,
-    worktreeId: external.worktreeId,
-    branch: 'ext' as string | null,
-    head: FEATURE_HEAD,
-  }
-  await assert.rejects(
-    core.remove({ operationId: 'unreg-dirty', expected, path: '/repos/external' }),
-    error => error instanceof GitWorktreeError && error.code === 'worktree-dirty',
-  )
+  repo.addLinked({ path: '/repos/external', branch: 'ext', head: FEATURE_HEAD }).dirty = true
+  const { expected } = await targetOf(core, '/repos/external')
+  await assert.rejects(core.remove({ operationId: 'unreg-dirty', expected, path: '/repos/external' }), refuses('worktree-dirty'))
   const removed = await core.remove({
     operationId: 'unreg-dirty-force',
     expected,
@@ -566,20 +384,8 @@ test('force remove reconciles a committed timeout with a single --force call', a
   // must be exercised by that path.
   const { core, repo } = setup({ linked: true })
   repo.worktrees[1]!.dirty = true
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const linked = repository.worktrees[1]!
-  const input = {
-    operationId: 'force-uncertain',
-    workspaceId: 'ws-feature',
-    expected: {
-      repoId: repository.repoId,
-      worktreeId: linked.worktreeId,
-      branch: linked.branch!,
-      head: linked.head,
-    },
-    discardChanges: true,
-  }
+  const { expected } = await targetOf(core)
+  const input = { operationId: 'force-uncertain', workspaceId: 'ws-feature', expected, discardChanges: true }
   repo.throwAfterRemove = new GitWorktreeError('git-timeout', 'simulated timeout after --force commit')
   await assert.rejects(core.remove(input))
   assert.equal(repo.worktrees.some(worktree => worktree.path === LINKED), false)
@@ -596,22 +402,10 @@ test('discardChanges never overrides the locked guard, even on a clean worktree'
   // with worktree-locked and zero git mutations — --force is only allowed to
   // relax the DIRTY check, never the host's locked guard (review 2026-08).
   repo.worktrees[1]!.locked = true
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const linked = repository.worktrees[1]!
+  const { expected } = await targetOf(core)
   await assert.rejects(
-    core.remove({
-      operationId: 'force-locked',
-      workspaceId: 'ws-feature',
-      expected: {
-        repoId: repository.repoId,
-        worktreeId: linked.worktreeId,
-        branch: linked.branch!,
-        head: linked.head,
-      },
-      discardChanges: true,
-    }),
-    error => error instanceof GitWorktreeError && error.code === 'worktree-locked',
+    core.remove({ operationId: 'force-locked', workspaceId: 'ws-feature', expected, discardChanges: true }),
+    refuses('worktree-locked'),
   )
   assert.equal(mutationCalls(repo, 'remove').length, 0)
 })

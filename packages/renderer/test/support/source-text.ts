@@ -5,8 +5,8 @@
  * several test files assert against its SOURCE TEXT. A lock that matches raw
  * source can be satisfied by a comment — precisely the failure mode the locks
  * exist to prevent, because the comments next to the code describe the very
- * invariant being pinned (2026-09 round-3 W4-12 precedent:
- * `packages/dsh-chamber-client-ui-sidebar/test/plugin-kernel/panel-wiring.test.ts`).
+ * invariant being pinned (2026-09 round-3 W4-12 precedent; the lock that named
+ * it was retired by the 2026-12 ruling).
  *
  * {@link stripComments} therefore blanks every line/block comment (preserving
  * newlines, so positions and line shapes survive) while leaving string,

@@ -123,6 +123,28 @@ function linuxCore(fixture: Fixture & { readonly executable: string }): {
   return { core, calls }
 }
 
+/** A darwin core whose resolver never resolves anything, with an optional launch hook. */
+function darwinCore(fixture: Fixture, launch?: OpenInAppInternals['launch']): OpenInAppCore {
+  return new OpenInAppCore({
+    host: { platform: 'darwin', resolveExecutable: async () => null },
+    internals: launch === undefined ? fixture.internals : { ...fixture.internals, launch },
+  })
+}
+
+/** Assert the action rejects with the typed open-in code (and optional retryability). */
+async function rejectsCode(
+  action: () => Promise<unknown>,
+  code: string,
+  extra: { retryable?: boolean; label?: string } = {},
+): Promise<void> {
+  await assert.rejects(action, (error: unknown) => {
+    assert.ok(error instanceof OpenInAppError, `expected OpenInAppError, got ${String(error)}`)
+    assert.equal(error.code, code, `${code} mismatch${extra.label === undefined ? '' : ` (${extra.label})`}`)
+    if (extra.retryable !== undefined) assert.equal(error.retryable, extra.retryable)
+    return true
+  })
+}
+
 test('probe answers the platform without any host work', async (t) => {
   const fixture = await darwinFixture(t)
   let probes = 0
@@ -143,10 +165,7 @@ test('probe answers the platform without any host work', async (t) => {
 
 test('apps serves the resolved catalog in menu order', async (t) => {
   const fixture = await darwinFixture(t)
-  const core = new OpenInAppCore({
-    host: { platform: 'darwin', resolveExecutable: async () => null },
-    internals: fixture.internals,
-  })
+  const core = darwinCore(fixture)
 
   const { apps } = await core.apps()
   assert.ok(apps.includes('terminal'), `expected the fixed Terminal entry, got ${apps.join(',')}`)
@@ -174,10 +193,7 @@ test('apps resolves the catalog on a host launched through ssh', async (t) => {
     else process.env.SSH_TTY = before.tty
   })
 
-  const core = new OpenInAppCore({
-    host: { platform: 'darwin', resolveExecutable: async () => null },
-    internals: fixture.internals,
-  })
+  const core = darwinCore(fixture)
   const { apps } = await core.apps()
   assert.ok(apps.includes('terminal'), 'the SSH launch marker must not gate the catalog')
 })
@@ -195,39 +211,21 @@ test('icon rejects an unknown application and an uninstalled one', async (t) => 
   const fixture = await linuxFixture(t)
   const { core } = linuxCore(fixture)
 
-  await assert.rejects(core.icon('not-an-app'), (error: unknown) => {
-    assert.ok(error instanceof OpenInAppError)
-    assert.equal(error.code, 'unknown-app')
-    return true
-  })
-  await assert.rejects(core.icon('vscode'), (error: unknown) => {
-    assert.ok(error instanceof OpenInAppError)
-    assert.equal(error.code, 'unavailable-app')
-    return true
-  })
+  await rejectsCode(() => core.icon('not-an-app'), 'unknown-app')
+  await rejectsCode(() => core.icon('vscode'), 'unavailable-app')
 })
 
 test('icon reports icon-unavailable when the application ships no artwork', async (t) => {
   const fixture = await linuxFixture(t, { icon: false })
   const { core } = linuxCore(fixture)
 
-  await assert.rejects(core.icon('kitty'), (error: unknown) => {
-    assert.ok(error instanceof OpenInAppError)
-    assert.equal(error.code, 'icon-unavailable')
-    return true
-  })
+  await rejectsCode(() => core.icon('kitty'), 'icon-unavailable')
 })
 
 test('open launches the catalog argv with the workspace directory', async (t) => {
   const fixture = await darwinFixture(t)
   const launched: Array<{ command: string; args: readonly string[] }> = []
-  const core = new OpenInAppCore({
-    host: { platform: 'darwin', resolveExecutable: async () => null },
-    internals: {
-      ...fixture.internals,
-      launch: async (command, args) => { launched.push({ command, args }) },
-    },
-  })
+  const core = darwinCore(fixture, async (command, args) => { launched.push({ command, args }) })
 
   await core.open('terminal', fixture.root)
   assert.deepEqual(launched, [{ command: 'open', args: ['-a', 'Terminal', fixture.root] }])
@@ -235,40 +233,23 @@ test('open launches the catalog argv with the workspace directory', async (t) =>
 
 test('open rejects an unknown application before touching the path', async (t) => {
   const fixture = await darwinFixture(t)
-  const core = new OpenInAppCore({
-    host: { platform: 'darwin', resolveExecutable: async () => null },
-    internals: fixture.internals,
-  })
+  const core = darwinCore(fixture)
 
-  await assert.rejects(core.open('not-an-app', '/'), (error: unknown) => {
-    assert.ok(error instanceof OpenInAppError)
-    assert.equal(error.code, 'unknown-app')
-    return true
-  })
+  await rejectsCode(() => core.open('not-an-app', '/'), 'unknown-app')
 })
 
 test('open rejects an application that is not installed on this host', async (t) => {
   const fixture = await darwinFixture(t)
-  const core = new OpenInAppCore({
-    host: { platform: 'darwin', resolveExecutable: async () => null },
-    internals: fixture.internals,
-  })
+  const core = darwinCore(fixture)
 
-  await assert.rejects(core.open('vscode', fixture.root), (error: unknown) => {
-    assert.ok(error instanceof OpenInAppError)
-    assert.equal(error.code, 'unavailable-app')
-    return true
-  })
+  await rejectsCode(() => core.open('vscode', fixture.root), 'unavailable-app')
 })
 
 test('open rejects a relative path, a missing directory and a file', async (t) => {
   const fixture = await darwinFixture(t)
   const file = join(fixture.root, 'not-a-directory')
   await writeFile(file, 'x', 'utf8')
-  const core = new OpenInAppCore({
-    host: { platform: 'darwin', resolveExecutable: async () => null },
-    internals: fixture.internals,
-  })
+  const core = darwinCore(fixture)
 
   const cases: ReadonlyArray<readonly [unknown, string]> = [
     ['relative/path', 'invalid-path'],
@@ -278,56 +259,31 @@ test('open rejects a relative path, a missing directory and a file', async (t) =
     [file, 'directory-missing'],
   ]
   for (const [path, code] of cases) {
-    await assert.rejects(core.open('terminal', path), (error: unknown) => {
-      assert.ok(error instanceof OpenInAppError)
-      assert.equal(error.code, code, `path ${JSON.stringify(path)}`)
-      return true
-    })
+    await rejectsCode(() => core.open('terminal', path), code, { label: `path ${JSON.stringify(path)}` })
   }
 })
 
 test('open refreshes a vanished launcher once and retries', async (t) => {
   const fixture = await darwinFixture(t)
   let attempts = 0
-  const core = new OpenInAppCore({
-    host: { platform: 'darwin', resolveExecutable: async () => null },
-    internals: {
-      ...fixture.internals,
-      launch: async () => {
-        attempts += 1
-        throw Object.assign(new Error('spawn open ENOENT'), { code: 'ENOENT' })
-      },
-    },
+  const core = darwinCore(fixture, async () => {
+    attempts += 1
+    throw Object.assign(new Error('spawn open ENOENT'), { code: 'ENOENT' })
   })
 
-  await assert.rejects(core.open('terminal', fixture.root), (error: unknown) => {
-    assert.ok(error instanceof OpenInAppError)
-    assert.equal(error.code, 'launch-failed')
-    assert.equal(error.retryable, true)
-    return true
-  })
+  await rejectsCode(() => core.open('terminal', fixture.root), 'launch-failed', { retryable: true })
   assert.equal(attempts, 2, 'a missing executable re-resolves the entry and retries exactly once')
 })
 
 test('open does not retry a launcher that failed for another reason', async (t) => {
   const fixture = await darwinFixture(t)
   let attempts = 0
-  const core = new OpenInAppCore({
-    host: { platform: 'darwin', resolveExecutable: async () => null },
-    internals: {
-      ...fixture.internals,
-      launch: async () => {
-        attempts += 1
-        throw new Error('launcher exited with code 3')
-      },
-    },
+  const core = darwinCore(fixture, async () => {
+    attempts += 1
+    throw new Error('launcher exited with code 3')
   })
 
-  await assert.rejects(core.open('terminal', fixture.root), (error: unknown) => {
-    assert.ok(error instanceof OpenInAppError)
-    assert.equal(error.code, 'launch-failed')
-    return true
-  })
+  await rejectsCode(() => core.open('terminal', fixture.root), 'launch-failed')
   assert.equal(attempts, 1)
 })
 

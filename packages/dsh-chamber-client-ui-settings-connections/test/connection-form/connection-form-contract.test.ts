@@ -4,11 +4,6 @@
  * packages/desktop's transport/ssh providers) and the draft/schema behavior
  * (transport registry, credential capability matrix, SPKI eligibility,
  * write-only field isolation, round-trip backfill). Plain node:test, no DOM.
- *
- * merged 2026-12 test reorg: test/host-validation.test.ts +
- * test/connection-form.test.ts - one input contract chain for the connection
- * form. Test bodies are unchanged; only the shared imports were hoisted and
- * merged per module.
  */
 
 import { test } from 'node:test';
@@ -17,8 +12,6 @@ import { readFileSync } from 'node:fs';
 import { INSTANCE_ID_PATTERN as UI_INSTANCE_ID_PATTERN, MAX_INSTANCE_LABEL_CHARS as UI_MAX_INSTANCE_LABEL_CHARS, MAX_REMOTE_DSH_HOME_CHARS as UI_MAX_REMOTE_DSH_HOME_CHARS, MAX_SERVICE_NAME_CHARS as UI_MAX_SERVICE_NAME_CHARS, MAX_SSH_HOST_CHARS as UI_MAX_SSH_HOST_CHARS, MAX_SSH_PASSWORD_CHARS as UI_MAX_SSH_PASSWORD_CHARS, MAX_SSH_USER_CHARS as UI_MAX_SSH_USER_CHARS, REMOTE_DSH_HOME_PATTERN as UI_REMOTE_DSH_HOME_PATTERN, SERVICE_NAME_PATTERN as UI_SERVICE_NAME_PATTERN, SSH_HOST_PATTERN as UI_SSH_HOST_PATTERN, SSH_USER_PATTERN as UI_SSH_USER_PATTERN } from '../../src/client/host-validation.ts';
 import type { SshInstanceSpec, TransportKind, TransportMethod } from '../../src/global.d.ts';
 import { changeDraftEndpointUrl, changeDraftKind, changeDraftTransport, credentialCapabilitiesFor, draftFromSpec, draftToInput, EMPTY_DRAFT, nextDefaultedRemotePort, SERVICE_NAME_PATTERN, spkiPinEligible, spkiPinValidationError, TRANSPORT_FORM_OPTIONS, transportFormSchema, transportSupportsTarget, type HostDraft } from '../../src/client/connection-form.ts';
-
-// --- merged from test/host-validation.test.ts ---
 
 const desktopAuthority = [
   '../../../desktop/transport-provider.ts',
@@ -64,8 +57,6 @@ test('service names cannot be parsed as systemctl options', () => {
   assert.equal(UI_SERVICE_NAME_PATTERN.test('team:worker.service'), false)
 })
 
-// --- merged from test/connection-form.test.ts ---
-
 const PIN = 'A1'.repeat(32)
 
 function draft(overrides: Partial<HostDraft>): HostDraft {
@@ -74,19 +65,9 @@ function draft(overrides: Partial<HostDraft>): HostDraft {
 
 function spec(overrides: Partial<SshInstanceSpec>): SshInstanceSpec {
   return {
-    id: 'one',
-    label: 'One',
-    kind: 'dsh',
-    transport: 'ssh',
-    host: 'host.example.com',
-    user: null,
-    sshPort: null,
-    remotePort: 30800,
-    serviceName: null,
-    remoteDshHome: null,
-    insecureHttp: false,
-    sourceFingerprint: 'test-proof:one',
-    ...overrides,
+    id: 'one', label: 'One', kind: 'dsh', transport: 'ssh', host: 'host.example.com',
+    user: null, sshPort: null, remotePort: 30800, serviceName: null, remoteDshHome: null,
+    insecureHttp: false, sourceFingerprint: 'test-proof:one', ...overrides,
   }
 }
 

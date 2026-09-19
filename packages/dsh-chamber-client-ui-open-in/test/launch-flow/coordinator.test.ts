@@ -1,11 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { OpenInApp } from '../../src/shared/capabilities.ts'
-
-const validApps: OpenInApp[] = [
-  { id: 'finder', displayKind: 'file-manager', remoteCapable: false, available: true },
-  { id: 'vscode', displayKind: 'vscode', remoteCapable: true, available: true },
-]
+import { VALID_APPS as validApps } from '../support/harness.ts'
 
 let importNonce = 0
 

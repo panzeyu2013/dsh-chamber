@@ -1,13 +1,11 @@
 /**
- * Disclosure-attribute writer tests (2026-09-11 review-fix F3): plain node, no
- * DOM — the helper takes any `setAttribute`/`removeAttribute` target, so a fake
- * node records exactly what the switch's control element receives.
- *
- * The relationship under test is the one the review found inert: `aria-expanded`
- * on a role-less wrapper (`generic`) is not supported, so it has to be written
- * onto the element that both supports it and unfolds the card — the official
- * `Switch`'s own `role="switch"` button. `aria-controls` must follow the card's
- * existence: the collapsed render has no card element to point at.
+ * Disclosure-attribute writer tests (2026-09-11 review-fix F3): plain node, no DOM —
+ * the helper takes any `setAttribute`/`removeAttribute` target, so a fake node
+ * records exactly what the switch's control element receives. `aria-expanded` on a
+ * role-less wrapper (`generic`) is not supported, so it must be written onto the
+ * element that both supports it and unfolds the card — the official `Switch`'s own
+ * `role="switch"` button. `aria-controls` follows the card's existence: the collapsed
+ * render has no card element to point at.
  */
 
 import { test } from 'node:test';

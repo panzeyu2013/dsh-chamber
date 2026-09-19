@@ -16,6 +16,7 @@ import {
   OPEN_IN_APP_ICON_METHOD,
   OPEN_IN_APP_OPEN_METHOD,
 } from '../../src/shared/open-in-wire.ts'
+import { settle } from '../support/harness.ts'
 
 interface WireCalls {
   apps: number
@@ -72,10 +73,6 @@ function wire(options: WireOptions): { call: OpenInAppRpcCall; calls: WireCalls 
       throw new Error(`unexpected endpoint ${endpoint}`)
     },
   }
-}
-
-async function settle(): Promise<void> {
-  await new Promise(resolve => setTimeout(resolve, 0))
 }
 
 test('machine catalog: one boot probe, one icon fetch per id, never re-requested', async () => {

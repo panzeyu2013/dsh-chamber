@@ -16,41 +16,35 @@ const carrierError = (message = 'api gateway: Remote stream WebSocket failed'): 
   return error
 }
 
+/** Run the reporter over `failures` and return the facts it published. */
+function reportFacts(options: Parameters<typeof createCarrierFailureReporter>[0], failures: unknown[]): { message: string }[] {
+  const facts: { message: string }[] = []
+  const report = createCarrierFailureReporter({ ...options, dispatch: fact => { facts.push(fact) } })
+  for (const failure of failures) report(failure)
+  return facts
+}
+
 test('the event name is the documented page channel', () => {
   assert.equal(STREAM_CARRIER_FAILED_EVENT, 'dsh-chamber:stream-carrier-failed')
 })
 
 test('every carrier failure publishes one counted, attributed fact', () => {
-  const facts: unknown[] = []
-  const report = createCarrierFailureReporter({
-    instanceId: 'gateway-pve-ct-harness',
-    now: () => 1_700_000_000_000,
-    dispatch: fact => { facts.push(fact) },
-  })
-  report(carrierError())
-  report(carrierError('api gateway: Remote stream reconnect requested'))
+  const facts = reportFacts({ instanceId: 'gateway-pve-ct-harness', now: () => 1_700_000_000_000 },
+    [carrierError(), carrierError('api gateway: Remote stream reconnect requested')])
   assert.deepEqual(facts, [
     {
-      instanceId: 'gateway-pve-ct-harness',
-      stream: 'RemoteStreamCarrierError',
-      at: 1_700_000_000_000,
-      count: 1,
-      message: 'api gateway: Remote stream WebSocket failed',
+      instanceId: 'gateway-pve-ct-harness', stream: 'RemoteStreamCarrierError', at: 1_700_000_000_000,
+      count: 1, message: 'api gateway: Remote stream WebSocket failed',
     },
     {
-      instanceId: 'gateway-pve-ct-harness',
-      stream: 'RemoteStreamCarrierError',
-      at: 1_700_000_000_000,
-      count: 2,
-      message: 'api gateway: Remote stream reconnect requested',
+      instanceId: 'gateway-pve-ct-harness', stream: 'RemoteStreamCarrierError', at: 1_700_000_000_000,
+      count: 2, message: 'api gateway: Remote stream reconnect requested',
     },
   ])
 })
 
 test('the payload is bounded and never carries anything secret-shaped', () => {
-  const facts: { message: string }[] = []
-  const report = createCarrierFailureReporter({ dispatch: fact => { facts.push({ message: fact.message }) } })
-  report(carrierError('x'.repeat(1000)))
+  const facts = reportFacts({}, [carrierError('x'.repeat(1000))])
   assert.equal(facts[0].message.length, CARRIER_FACT_MESSAGE_MAX)
 })
 
@@ -60,15 +54,10 @@ test('a throwing dispatch can never break the reconnect lane', () => {
 })
 
 test('a non-Error carrier failure still yields a shaped fact', () => {
-  const facts: unknown[] = []
-  const report = createCarrierFailureReporter({ now: () => 7, dispatch: fact => { facts.push(fact) } })
-  report('plain string failure')
+  const facts = reportFacts({ now: () => 7 }, ['plain string failure'])
   assert.deepEqual(facts[0], {
-    instanceId: undefined,
-    stream: 'RemoteStreamCarrierError',
-    at: 7,
-    count: 1,
-    message: 'plain string failure',
+    instanceId: undefined, stream: 'RemoteStreamCarrierError', at: 7,
+    count: 1, message: 'plain string failure',
   })
 })
 

@@ -10,19 +10,9 @@ import assert from 'node:assert/strict'
 import {
   isStableTap, isHealableDrawerTarget, TAP_SLOP_PX, HEAL_GRACE_MS, HEAL_SUPPRESS_MS,
   HEAL_FORM_SELECTOR, shouldClearPendingHeal, isSuppressedLateClick,
-  type ClosestFace,
 } from '../../src/client/drawer-taps.ts'
 
-/** A closest() stub: per-selector match answer (an element matches many
- * ancestor selectors; the real DOM resolves the nearest, the predicate only
- * asks yes/no per selector). */
-class ClosestStub implements ClosestFace {
-  readonly match: Record<string, boolean>
-  constructor(match: Record<string, boolean>) { this.match = match }
-  closest(selector: string): ClosestFace | null {
-    return this.match[selector] === true ? this : null
-  }
-}
+import { ClosestStub } from '../support/closest-stub.ts'
 
 const drawer = () => new ClosestStub({ '[data-mobile-role="sidebar"]': true })
 

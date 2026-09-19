@@ -5,9 +5,8 @@
  * The probe itself lives in chamber-entry.ts (which no node test can import —
  * its imports resolve to source), so the decision and the message are pure
  * functions here and pinned by these cases; the chamber-entry WIRING is pinned
- * by source-text assertions at the bottom (the same pattern the repo uses for
- * App-level wiring, e.g. sidebar-right-heal-wiring.test.ts), because a missing
- * link there is a silent no-op.
+ * by source-text assertions at the bottom, because a missing link there is a
+ * silent no-op.
  */
 
 import { test } from 'node:test'

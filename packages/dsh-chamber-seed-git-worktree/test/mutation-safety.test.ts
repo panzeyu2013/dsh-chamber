@@ -4,15 +4,12 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { EventEmitter } from 'node:events'
 import { basename, resolve } from 'node:path'
 import {
-  GitWorktreeCore,
   GitWorktreeError,
   assertSafeGitArgv,
   createLocalGitRunner,
   domainResult,
-  type GitChildProcess,
   type GitRunner,
   type GitWorktreeDomainError,
 } from '../src/core.ts'
@@ -21,8 +18,12 @@ import {
   COMMON,
   LINKED,
   FEATURE_HEAD,
+  FakeGitChild,
   FakeRepository,
   setup,
+  targetOf,
+  refuses,
+  coreOver,
   previewNew,
   mutationCalls,
 } from './support/fake-repository.ts'
@@ -35,15 +36,7 @@ test('remove refuses a worktree hosting submodule checkouts unless discardChange
   // validate_no_submodules).
   repo.gitDirs.set(LINKED, modulesDir)
   repo.gitDirStateFiles.set(modulesDir, new Set(['modules']))
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const linked = repository.worktrees[1]!
-  const expected = {
-    repoId: repository.repoId,
-    worktreeId: linked.worktreeId,
-    branch: linked.branch!,
-    head: linked.head,
-  }
+  const { expected } = await targetOf(core)
 
   // A CLEAN submodule worktree is refused pre-mutation with a typed
   // DETERMINISTIC code: zero git mutations, and the wire carries
@@ -98,15 +91,7 @@ test('unregistered removal of a submodule worktree hits the same typed gate', as
   // The external worktree's admin git dir hosts a submodule `modules` dir.
   repo.gitDirs.set(external, modulesDir)
   repo.gitDirStateFiles.set(modulesDir, new Set(['modules']))
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const worktree = repository.worktrees.find(candidate => candidate.path === external)!
-  const expected = {
-    repoId: repository.repoId,
-    worktreeId: worktree.worktreeId,
-    branch: 'ext-sub' as string | null,
-    head: FEATURE_HEAD,
-  }
+  const { expected } = await targetOf(core, external)
 
   const refused = await domainResult(() => core.remove({
     operationId: 'unreg-submodule',
@@ -133,15 +118,7 @@ test('unregistered removal of a submodule worktree hits the same typed gate', as
 
 test('pre-mutation git refusals are deterministic (typed when git names submodules); a committed failure stays retryable', async () => {
   const { core, repo } = setup({ linked: true })
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const linked = repository.worktrees[1]!
-  const expected = {
-    repoId: repository.repoId,
-    worktreeId: linked.worktreeId,
-    branch: linked.branch!,
-    head: linked.head,
-  }
+  const { expected } = await targetOf(core)
   const input = { operationId: 'pre-mutation-refusal', workspaceId: 'ws-feature', expected }
 
   // git dies BEFORE deleting anything, citing submodules (its own guard when
@@ -235,19 +212,12 @@ test('git argv allowlist admits only the exact discardChanges remove grammar', a
 test('remove accepts a detached linked worktree only with expected branch null', async () => {
   const { core, repo } = setup({ linked: true })
   repo.worktrees[1]!.branch = null
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const linked = repository.worktrees[1]!
+  const { expected, row: linked } = await targetOf(core)
   assert.equal(linked.branch, null)
   const removed = await core.remove({
     operationId: 'remove-detached',
     workspaceId: 'ws-feature',
-    expected: {
-      repoId: repository.repoId,
-      worktreeId: linked.worktreeId,
-      branch: null,
-      head: linked.head,
-    },
+    expected: { ...expected, branch: null },
   })
   assert.equal(removed.branch, null)
   assert.equal(removed.removed, true)
@@ -255,24 +225,10 @@ test('remove accepts a detached linked worktree only with expected branch null',
 
 test('remove refuses a second workspace nested below the worktree', async () => {
   const { core, repo, workspaces } = setup({ linked: true })
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const linked = repository.worktrees[1]!
+  const { expected } = await targetOf(core)
   repo.existing.add(`${LINKED}/nested-workspace`)
   workspaces.push({ workspaceId: 'ws-nested', path: `${LINKED}/nested-workspace`, sessionIds: [] })
-  await assert.rejects(
-    core.remove({
-      operationId: 'remove-nested',
-      workspaceId: 'ws-feature',
-      expected: {
-        repoId: repository.repoId,
-        worktreeId: linked.worktreeId,
-        branch: linked.branch,
-        head: linked.head,
-      },
-    }),
-    error => error instanceof GitWorktreeError && error.code === 'nested-workspace',
-  )
+  await assert.rejects(core.remove({ operationId: 'remove-nested', workspaceId: 'ws-feature', expected }), refuses('nested-workspace'))
   assert.equal(mutationCalls(repo, 'remove').length, 0)
 })
 
@@ -320,11 +276,7 @@ test('core independently enforces injected runner output caps', async () => {
     }
     return repo.runner(request)
   }
-  const core = new GitWorktreeCore({
-    source: { listWorkspaces: () => [{ workspaceId: 'ws', path: MAIN, sessionIds: [] }], listAgents: () => [], listArchivedSessionIds: () => [] },
-    git: overflowing,
-    fs: repo.fs,
-  })
+  const core = coreOver({ workspaces: [{ workspaceId: 'ws', path: MAIN, sessionIds: [] }], git: overflowing, fs: repo.fs })
   const result = await core.snapshot()
   assert.equal(result.repos.length, 0)
   assert.equal(result.errors.some(error => error.code === 'git-output-limit'), true)
@@ -382,19 +334,15 @@ test('domain carrier preserves stable business errors and lets true internal fai
 })
 
 test('local runner waits for child close after output kill before settling', async () => {
-  class FakeChild extends EventEmitter implements GitChildProcess {
-    readonly stdout = new EventEmitter()
-    readonly stderr = new EventEmitter()
-    killed = false
-
-    kill(): boolean {
+  class KillFailingChild extends FakeGitChild {
+    override kill(): boolean {
       this.killed = true
       this.emit('error', new Error('simulated kill failure event'))
       return false
     }
   }
 
-  const child = new FakeChild()
+  const child = new KillFailingChild()
   const runner = createLocalGitRunner(() => child)
   const pending = runner({
     cwd: MAIN,

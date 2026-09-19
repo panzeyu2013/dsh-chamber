@@ -1,18 +1,12 @@
 /**
- * packaging-manifest-lockstep.test.mjs —— 打包清单同源锁步门禁（2026-12 P10）
- *
- * 手工维护的清单会漂移，而漂移的后果都不在本地：
- *  ① HOST_PACKAGES（packages/desktop/scripts/build-sidecar.mjs）——决定 .app
- *     内 Swift 装配的 seed 源与注入 flag；
- *  ② control-plane 的 DEFAULT_HOST_*_PACKAGE_SOURCE_DIR——dev/CI 缺省源；
- *  ③ root package.json 的 build:host-packages 构建链——构建顺序与包名；
- *  ④ build-host-graph-package.mjs 的 HOST_PACKAGE_BUILD_ROWS——Electron 侧拷贝；
- *  ⑤ macos AppDelegate.swift 的 (--host-*-dir, 包名) 行——Swift 装配态注入。
- * 另外 extraResources 过滤器必须与 VENDOR_DSH_FILES / PNPM_BIN_FILES 同源
- * （Electron 与 Swift 两条装配腿必须同一个过滤器）。
- *
- * 全部断言来自源码解析/导入，不执行构建，因此 ubuntu 腿也能跑；
- * 由 root package.json 的 test:upgrade-tools 运行。
+ * packaging-manifest-lockstep.test.mjs —— 打包清单同源锁步门禁（2026-12 P10）：手工维护的
+ * 清单会漂移，而漂移的后果都不在本地，因此五处必须同源——① HOST_PACKAGES
+ * （build-sidecar.mjs：.app 内 Swift 装配的 seed 源与注入 flag）② control-plane 的
+ * DEFAULT_HOST_*_PACKAGE_SOURCE_DIR（dev/CI 缺省源）③ root build:host-packages 链（顺序与
+ * 包名）④ build-host-graph-package.mjs 的 HOST_PACKAGE_BUILD_ROWS（Electron 侧拷贝）
+ * ⑤ AppDelegate.swift 的 (--host-*-dir, 包名) 行（Swift 装配态注入）。extraResources 过滤器
+ * 必须与 VENDOR_DSH_FILES / PNPM_BIN_FILES 同源（两条装配腿同一个过滤器）。断言全部来自
+ * 源码解析/导入、不执行构建，ubuntu 腿也能跑；由 root test:upgrade-tools 运行。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

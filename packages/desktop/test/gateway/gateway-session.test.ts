@@ -1,13 +1,7 @@
-/**
- * gateway-session unit tests (design 17 §7.3/§9.3) — part 1: the password →
- * JWT cookie login exchange against a real node:http stub (success, expiry
- * re-login, 400/413/401 classification, 429 backoff, 503, network failures,
- * URL scheme) and the SPKI-pinned https login request shape.
- *
- * Sibling parts: gateway-session-lifecycle.test.ts (cookie caching and
- * invalidation lifecycle), gateway-session-refresh.test.ts (origin derivation
- * + proactive refresh).
- */
+/** gateway-session unit tests (design 17 §7.3/§9.3) — part 1: the password → JWT cookie login
+ *  exchange against a real node:http stub (success, expiry re-login, 400/413/401 classification,
+ *  429 backoff, 503, network failures, URL scheme) and the SPKI-pinned https login request shape
+ *  (siblings: gateway-session-lifecycle.test.ts, gateway-session-refresh.test.ts). */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

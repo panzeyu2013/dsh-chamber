@@ -38,15 +38,12 @@ function targetSpec(overrides: Partial<TransportInstanceSpec> = {}): TransportIn
     ...overrides,
   }
 }
-
 test('label-only edits are not target changes', () => {
   assert.equal(transportTargetChanged(targetSpec({ label: 'prod' }), targetSpec({ label: 'renamed' })), false)
 })
-
 test('host change is a target change', () => {
   assert.equal(transportTargetChanged(targetSpec(), targetSpec({ host: 'other.example.com' })), true)
 })
-
 test('user / sshPort / remotePort / serviceName / remoteDshHome changes are target changes', () => {
   assert.equal(transportTargetChanged(targetSpec(), targetSpec({ user: 'admin' })), true)
   assert.equal(transportTargetChanged(targetSpec(), targetSpec({ sshPort: 2222 })), true)
@@ -54,14 +51,12 @@ test('user / sshPort / remotePort / serviceName / remoteDshHome changes are targ
   assert.equal(transportTargetChanged(targetSpec(), targetSpec({ serviceName: 'dsh' })), true)
   assert.equal(transportTargetChanged(targetSpec(), targetSpec({ remoteDshHome: '/srv/dsh' })), true)
 })
-
 test('kind change is a target change (caller excludes it from the clear decision)', () => {
   assert.equal(transportTargetChanged(
     targetSpec(),
     targetSpec({ kind: 'gateway', transport: 'http', sshPort: null, user: null, serviceName: null, remoteDshHome: null }),
   ), true)
 })
-
 test('transport change (ssh↔http) is NOT a target change — the credential binds to the host:port:kind target, not the mechanism (design 17 §9.1)', () => {
   assert.equal(transportTargetChanged(targetSpec(), targetSpec({ transport: 'http' })), false)
   assert.equal(transportTargetChanged(
@@ -69,16 +64,13 @@ test('transport change (ssh↔http) is NOT a target change — the credential bi
     targetSpec({ kind: 'gateway', transport: 'ssh', sshPort: null, user: null, serviceName: null, remoteDshHome: null }),
   ), false)
 })
-
 test('insecureHttp change (http↔https) is NOT a target change — protocol switch keeps credentials (design 17 §9.1, D3)', () => {
   assert.equal(transportTargetChanged(targetSpec(), targetSpec({ insecureHttp: true })), false)
 })
-
 test('identical specs are not a target change', () => {
   const a = targetSpec()
   assert.equal(transportTargetChanged(a, { ...a }), false)
 })
-
 test('canonical input normalization keeps the typed optional-transport IPC contract', () => {
   assert.deepEqual(canonicalizeTransportInstanceInput({ id: 'a', kind: 'dsh' }), {
     id: 'a', kind: 'dsh', transport: 'ssh',
@@ -105,7 +97,6 @@ function credentialSpec(overrides: Partial<TransportInstanceSpec> = {}): Transpo
     insecureHttp: false, ...overrides,
   }
 }
-
 test('gateway binding follows only kind + host + remotePort', () => {
   const base = gatewayCredentialBinding(credentialSpec())
   assert.equal(gatewayCredentialBinding(credentialSpec({ transport: 'http', user: null, sshPort: null, serviceName: null, insecureHttp: true })), base)
@@ -114,7 +105,6 @@ test('gateway binding follows only kind + host + remotePort', () => {
   assert.notEqual(gatewayCredentialBinding(credentialSpec({ remotePort: 8443 })), base)
   assert.equal(gatewayCredentialBinding(credentialSpec({ kind: 'dsh' })), null)
 })
-
 test('SSH binding follows only host + user + sshPort', () => {
   const base = sshCredentialBinding(credentialSpec())
   assert.equal(sshCredentialBinding(credentialSpec({ kind: 'dsh', remotePort: 18000, serviceName: null })), base)

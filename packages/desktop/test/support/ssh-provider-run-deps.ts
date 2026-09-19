@@ -4,7 +4,18 @@
  * (ssh-provider-exec.test.ts). Bare helper file, not a test.
  */
 
-import type { TransportExecDeps, TransportStatusProjection } from '../../transport-provider.ts'
+import type { TransportExecDeps, TransportInstanceSpec, TransportStatusProjection } from '../../transport-provider.ts'
+
+/** A minimal valid ssh spec for provider-surface tests (v2: kind = target type
+ *  'dsh', transport = mechanism 'ssh' — design 17 §2). */
+export function spec(id: string): TransportInstanceSpec {
+  return { id, label: 'h', kind: 'dsh', transport: 'ssh', host: 'h.example.com', user: 'u', sshPort: null, remotePort: 3080, serviceName: null, remoteDshHome: null, insecureHttp: false }
+}
+
+/** The same minimal spec with a remote DSH_HOME. */
+export function specWithHome(id: string, remoteDshHome: string): TransportInstanceSpec {
+  return { ...spec(id), remoteDshHome }
+}
 
 export function runDeps(spawnFn: TransportExecDeps['spawnFn']): TransportExecDeps {
   const projection: TransportStatusProjection = {

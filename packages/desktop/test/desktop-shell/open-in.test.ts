@@ -1,12 +1,9 @@
 /**
- * open-in registry (open-in.ts) unit tests — pure Node, no electron, no real
- * VS Code. Batch 3 Phase 2: the main-process registry is vscode-only (the
- * local file manager and every other local app come from the instance's own
- * official host catalog over the per-instance proxy), so this suite pins the
- * vscode provider, the vscode-only negotiation, and the shared execution
- * pipeline over untrusted renderer payloads. Every host capability
- * (registry lookup / vscode availability / url-open) is injected through
- * OpenInLaunchContext — nothing ever touches the OS.
+ * open-in registry (open-in.ts) unit tests — pure Node, no OS. The main-process
+ * registry is vscode-only (other local apps come from the instance's own official
+ * host catalog over the per-instance proxy), so this pins the vscode provider,
+ * the vscode-only negotiation and the execution pipeline over untrusted renderer
+ * payloads; every host capability is injected through OpenInLaunchContext.
  */
 
 import { test } from 'node:test'
@@ -27,13 +24,11 @@ function context(overrides: Partial<OpenInLaunchContext> = {}): OpenInLaunchCont
     openVscodeUrl: overrides.openVscodeUrl ?? (async () => ({ ok: true })),
   }
 }
-
 test('listOpenInApps is vscode-only (the local file manager moved to the instance catalog)', () => {
   const apps = listOpenInApps(context({ platform: 'darwin', vscodeAvailable: () => true }))
   assert.deepEqual(apps.map(app => app.id), ['vscode'])
   assert.deepEqual(apps.map(app => app.displayKind), ['vscode'])
 })
-
 test('listOpenInApps vscode projection: remoteCapable true', () => {
   const apps = listOpenInApps(context({ vscodeAvailable: () => true }))
   const vscode = apps.find(app => app.id === 'vscode')
@@ -41,12 +36,10 @@ test('listOpenInApps vscode projection: remoteCapable true', () => {
   assert.equal(vscode.remoteCapable, true)
   assert.equal(vscode.available, true)
 })
-
 test('listOpenInApps vscode availability follows the injected deps (true/false)', () => {
   assert.equal(listOpenInApps(context({ vscodeAvailable: () => true }))[0]?.available, true)
   assert.equal(listOpenInApps(context({ vscodeAvailable: () => false }))[0]?.available, false)
 })
-
 test('listOpenInApps fails a throwing availability probe closed without rejecting the list', () => {
   const reported: Array<{ appId: string; error: string }> = []
   const apps = listOpenInApps(
@@ -57,45 +50,37 @@ test('listOpenInApps fails a throwing availability probe closed without rejectin
   assert.equal(apps[0]?.available, false)
   assert.deepEqual(reported, [{ appId: 'vscode', error: 'probe exploded' }])
 })
-
 test('getOpenInApp resolves vscode and refuses the retired finder id', () => {
   assert.equal(getOpenInApp('vscode')?.id, 'vscode')
   assert.equal(getOpenInApp('finder'), null, 'finder is no longer a main-process provider')
   assert.equal(getOpenInApp('explorer'), null)
   assert.equal(getOpenInApp('unknown-app'), null)
 })
-
 test('runOpenInLaunch fails loudly for an unknown appId', async () => {
   const result = await runOpenInLaunch({ appId: 'finder', instanceId: 'local', path: '/home/user/proj' }, context())
   assert.deepEqual(result, { ok: false, error: 'unknown open-in app: finder' })
 })
-
 test('runOpenInLaunch fails loudly for a non-string appId (never guessed)', async () => {
   const result = await runOpenInLaunch({ appId: 42 as unknown as string, instanceId: 'local', path: '/home/user/proj' }, context())
   assert.deepEqual(result, { ok: false, error: 'unknown open-in app: <invalid>' })
 })
-
 test('runOpenInLaunch never stringifies a hostile non-string appId', async () => {
   const hostile = { toString() { throw new Error('toString') } }
   const result = await runOpenInLaunch({ appId: hostile as unknown as string, instanceId: 'local', path: '/home/user/proj' }, context())
   assert.deepEqual(result, { ok: false, error: 'unknown open-in app: <invalid>' })
 })
-
 test('runOpenInLaunch rejects an instanceId that fails INSTANCE_ID_PATTERN (bad/id)', async () => {
   const result = await runOpenInLaunch({ appId: 'vscode', instanceId: 'bad/id', path: '/home/user/proj' }, context())
   assert.deepEqual(result, { ok: false, error: 'invalid instance id' })
 })
-
 test('runOpenInLaunch rejects an empty instanceId', async () => {
   const result = await runOpenInLaunch({ appId: 'vscode', instanceId: '', path: '/home/user/proj' }, context())
   assert.deepEqual(result, { ok: false, error: 'invalid instance id' })
 })
-
 test('runOpenInLaunch rejects a non-string instanceId', async () => {
   const result = await runOpenInLaunch({ appId: 'vscode', instanceId: 7 as unknown as string, path: '/home/user/proj' }, context())
   assert.deepEqual(result, { ok: false, error: 'invalid instance id' })
 })
-
 test('runOpenInLaunch opens a vscode-remote URL for ssh + vscode (exact target)', async () => {
   let opened: string | null = null
   const result = await runOpenInLaunch(
@@ -105,7 +90,6 @@ test('runOpenInLaunch opens a vscode-remote URL for ssh + vscode (exact target)'
   assert.equal(result.ok, true)
   assert.equal(opened, 'vscode://vscode-remote/ssh-remote+root@h.example.com/home/user/proj')
 })
-
 test('runOpenInLaunch opens a vscode file URL for local + vscode (exact target)', async () => {
   let opened: string | null = null
   const result = await runOpenInLaunch(
@@ -115,7 +99,6 @@ test('runOpenInLaunch opens a vscode file URL for local + vscode (exact target)'
   assert.equal(result.ok, true)
   assert.equal(opened, 'vscode://file/home/user/local-ws')
 })
-
 test('runOpenInLaunch opens a Windows drive path for the local instance via vscode', async () => {
   let opened: string | null = null
   const result = await runOpenInLaunch(
@@ -125,18 +108,15 @@ test('runOpenInLaunch opens a Windows drive path for the local instance via vsco
   assert.equal(result.ok, true)
   assert.equal(opened, 'vscode://file/C:/Users/dev/proj')
 })
-
 test('runOpenInLaunch still accepts POSIX paths for the local instance', async () => {
   const result = await runOpenInLaunch({ appId: 'vscode', instanceId: 'local', path: '/home/user/ws' }, context())
   assert.deepEqual(result, { ok: true })
 })
-
 test('remote dsh session paths remain POSIX-only (drive paths fail loudly)', async () => {
   const result = await runOpenInLaunch({ appId: 'vscode', instanceId: 'web-1', path: 'C:\\Users\\dev\\proj' }, context())
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /absolute path/)
 })
-
 test('runOpenInLaunch fails loudly when vscode is not detected (injected ctx, any machine)', async () => {
   const result = await runOpenInLaunch(
     { appId: 'vscode', instanceId: 'local', path: '/home/user/ws' },
@@ -144,7 +124,6 @@ test('runOpenInLaunch fails loudly when vscode is not detected (injected ctx, an
   )
   assert.deepEqual(result, { ok: false, error: 'vscode not detected' })
 })
-
 test('runOpenInLaunch converts an availability exception into a structured failure', async () => {
   const result = await runOpenInLaunch(
     { appId: 'vscode', instanceId: 'local', path: '/home/user/ws' },
@@ -152,7 +131,6 @@ test('runOpenInLaunch converts an availability exception into a structured failu
   )
   assert.deepEqual(result, { ok: false, error: 'vscode availability check failed: probe exploded' })
 })
-
 test('runOpenInLaunch converts a rejected url-open adapter into a structured failure', async () => {
   const result = await runOpenInLaunch(
     { appId: 'vscode', instanceId: 'local', path: '/home/user/ws' },
@@ -160,7 +138,6 @@ test('runOpenInLaunch converts a rejected url-open adapter into a structured fai
   )
   assert.deepEqual(result, { ok: false, error: 'open vscode url failed: shell exploded' })
 })
-
 test('runOpenInLaunch survives a hostile thrown value whose traps and toString throw', async () => {
   const hostile = { toString() { throw new Error('toString') } }
   const result = await runOpenInLaunch(
@@ -170,27 +147,22 @@ test('runOpenInLaunch survives a hostile thrown value whose traps and toString t
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /^open vscode url failed: /)
 })
-
 test('runOpenInLaunch rejects a non-string path (untrusted payload, never guessed)', async () => {
   const result = await runOpenInLaunch({ appId: 'vscode', instanceId: 'local', path: 42 as unknown as string }, context())
   assert.equal(result.ok, false)
 })
-
 test('runOpenInLaunch rejects an empty path', async () => {
   const result = await runOpenInLaunch({ appId: 'vscode', instanceId: 'local', path: '' }, context())
   assert.equal(result.ok, false)
 })
-
 test('runOpenInLaunch rejects a relative path', async () => {
   const result = await runOpenInLaunch({ appId: 'vscode', instanceId: 'local', path: 'relative/ws' }, context())
   assert.equal(result.ok, false)
 })
-
 test('runOpenInLaunch rejects a path with control characters', async () => {
   const result = await runOpenInLaunch({ appId: 'vscode', instanceId: 'local', path: '/home/user/\u0000ws' }, context())
   assert.equal(result.ok, false)
 })
-
 test('runOpenInLaunch rejects an overlong path', async () => {
   const result = await runOpenInLaunch({ appId: 'vscode', instanceId: 'local', path: `/${'a'.repeat(5000)}` }, context())
   assert.equal(result.ok, false)

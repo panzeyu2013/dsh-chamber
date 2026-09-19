@@ -1,12 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  PURGED_REFRESH_MAX_ATTEMPTS,
-  PURGED_REFRESH_RETRY_MS,
-  filterPurgedRows,
-  lingeringPurgedIds,
-  reconcilePurgedRows,
-  trackArchiveSetShrink,
+  PURGED_REFRESH_MAX_ATTEMPTS, PURGED_REFRESH_RETRY_MS, filterPurgedRows, lingeringPurgedIds,
+  reconcilePurgedRows, trackArchiveSetShrink,
 } from '../../src/shared/purged-rows.ts'
 
 const set = (...ids: string[]): Set<string> => new Set(ids)
@@ -31,8 +27,7 @@ test('trackArchiveSetShrink: growth and unchanged sets report no removals', () =
 })
 
 test('trackArchiveSetShrink: non-string wire ids are stringified before comparison', () => {
-  // The wire may carry branded/boxed ids; the shrink diff must compare the
-  // STRING projection (the projection layer maps the same way).
+  // The wire may carry branded/boxed ids; the shrink diff compares the STRING projection.
   const branded = { toString: () => 'branded-1' }
   const step = trackArchiveSetShrink([String('keep'), 'branded-1'], [String('keep'), String(branded)])
   assert.deepEqual(step.archived, ['keep', 'branded-1'])
@@ -41,11 +36,7 @@ test('trackArchiveSetShrink: non-string wire ids are stringified before comparis
 })
 
 test('reconcilePurgedRows: keeps only still-listed, still-unarchived ids', () => {
-  const next = reconcilePurgedRows(
-    ['listed-ghost', 'dropped-row', 'rearchived'],
-    set('listed-ghost', 'rearchived'),
-    set('rearchived'),
-  )
+  const next = reconcilePurgedRows(['listed-ghost', 'dropped-row', 'rearchived'], set('listed-ghost', 'rearchived'), set('rearchived'))
   assert.deepEqual(next, ['listed-ghost'])
 })
 
@@ -77,24 +68,21 @@ test('lingeringPurgedIds: reports only ids the live summaries still list', () =>
 test('purge lifecycle: arm on shrink, suppress while lingering, drain after convergence', () => {
   let archived: string[] | undefined
   let purged: string[] = []
+  const apply = (next: string[]): void => { const s = trackArchiveSetShrink(archived, next); archived = s.archived; purged.push(...s.removed) }
   // 1. pre-purge baseline: g1/g2 archived and listed.
-  let step = trackArchiveSetShrink(archived, ['g1', 'g2'])
-  archived = step.archived
-  purged = [...purged, ...step.removed]
+  apply(['g1', 'g2'])
   assert.deepEqual(purged, [])
   const listed = set('g1', 'g2', 'live')
-  assert.deepEqual(reconcilePurgedRows(purged, listed, set(...archived)), [])
+  assert.deepEqual(reconcilePurgedRows(purged, listed, set(...(archived ?? []))), [])
   // 2. the purge removes both ids from the set: the shrink arms tombstones.
-  step = trackArchiveSetShrink(archived, [])
-  archived = step.archived
-  purged = [...purged, ...step.removed]
+  apply([])
   assert.deepEqual(purged, ['g1', 'g2'])
-  assert.deepEqual(reconcilePurgedRows(purged, listed, set(...archived)), ['g1', 'g2'])
+  assert.deepEqual(reconcilePurgedRows(purged, listed, set(...(archived ?? []))), ['g1', 'g2'])
   // The emitted rows carry no ghosts even though the raw summaries still do.
   const rows = [{ sessionId: 'g1' }, { sessionId: 'live' }, { sessionId: 'g2' }]
   assert.deepEqual(filterPurgedRows(rows, set(...purged)), [{ sessionId: 'live' }])
   // 3. the official refresh drops the rows -> tombstones drain.
-  purged = reconcilePurgedRows(purged, set('live'), set(...archived))
+  purged = reconcilePurgedRows(purged, set('live'), set(...(archived ?? [])))
   assert.deepEqual(purged, [])
   assert.equal(filterPurgedRows(rows, set(...purged)), rows)
 })

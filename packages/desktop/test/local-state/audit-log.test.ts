@@ -1,8 +1,7 @@
 /**
- * audit-log unit tests (design 17 §13.4.4, S24): JSONL append semantics,
- * 0600 owner-only mode, size-based rotation to `<file>.1` (old `.1` deleted),
- * and the whitelist serializer — a caller-attached credential field can never
- * reach disk, and an invalid event (missing required fields) writes nothing.
+ * audit-log unit tests (design 17 §13.4.4, S24): JSONL append semantics, 0600
+ * owner-only mode, size-based rotation to `<file>.1`, and the whitelist
+ * serializer — smuggled credentials never reach disk, invalid events write nothing.
  */
 
 import { test } from 'node:test'
@@ -26,7 +25,6 @@ function lines(file: string): string[] {
 function readEvents(file: string): Array<Record<string, string>> {
   return lines(file).map(line => JSON.parse(line) as Record<string, string>)
 }
-
 test('appendAuditEvent appends JSONL events in order with the given fields', () => {
   const dir = tmpDir('audit-append-')
   const file = join(dir, 'audit.log')
@@ -44,7 +42,6 @@ test('appendAuditEvent appends JSONL events in order with the given fields', () 
   assert.deepEqual(readEvents(minimal), [{ ts: '2026-01-01T00:00:02.000Z', event: 'transport_phase' }])
   rmSync(dir, { recursive: true, force: true })
 })
-
 test('the audit file is created 0600 and a legacy loose mode is tightened on append', () => {
   const dir = tmpDir('audit-mode-')
   const file = join(dir, 'audit.log')
@@ -56,7 +53,6 @@ test('the audit file is created 0600 and a legacy loose mode is tightened on app
   assert.equal(statSync(file).mode & 0o777, 0o600, 'a legacy 0644 file is tightened back to 0600')
   rmSync(dir, { recursive: true, force: true })
 })
-
 test('the audit file rotates to <file>.1 once the cap is reached and deletes the old .1', () => {
   const dir = tmpDir('audit-rotate-')
   const file = join(dir, 'audit.log')
@@ -81,7 +77,6 @@ test('the audit file rotates to <file>.1 once the cap is reached and deletes the
   assert.deepEqual(readEvents(file), [big3])
   rmSync(dir, { recursive: true, force: true })
 })
-
 test('the serializer is a fixed whitelist: a caller-attached credential field never reaches disk (S24)', () => {
   const dir = tmpDir('audit-secret-')
   const file = join(dir, 'audit.log')
@@ -95,8 +90,7 @@ test('the serializer is a fixed whitelist: a caller-attached credential field ne
     kind: 'gateway',
     transport: 'http',
     detail: 'auth:token',
-    // Deliberately smuggled secret fields (a buggy/abusive caller) — the
-    // serializer must drop every one of them (S24: 绝不包含凭据).
+    // Deliberately smuggled secrets: the serializer must drop every field (S24).
     password: PASSWORD,
     token: TOKEN,
     cookie: COOKIE,

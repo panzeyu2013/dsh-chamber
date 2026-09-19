@@ -1,11 +1,7 @@
 /**
- * registry.test.mjs — registry 单一来源的锁步测试。
- *
- * 面：① C1–C15 判据表与 verifier 源码不漂移；② registry.json 过 schema 且 canonical；
- * ③ 判据分区不重不漏；④ verifierForks 形状/顺序/计数与迁移前的内嵌 FORKS 一致
- *    （数字是"故意改才动"的 golden：删一个 fork 或改一份分类都必须在这里可见）；
- * ⑤ 校验器能抓住退化（未知判据 / 分区缺口 / accepted 缺理由 / upstream=null 语义）；
- * ⑥ 生成块 extract/apply/check 往返。
+ * registry.test.mjs — registry 单一来源的锁步测试：C1–C15 判据表不漂移、registry.json 过 schema 且 canonical、
+ * 判据分区不重不漏、verifierForks 形状/顺序/计数为"故意改才动"的 golden（删一个 fork 或改一份分类都必须在这里可见）、
+ * 校验器抓退化（未知判据 / 分区缺口 / accepted 缺理由 / upstream=null 语义）、生成块 extract/apply/check 往返。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -63,8 +59,7 @@ test('registry 值锁：分类桶形状 + 符号锚字符串（防"同计数下�
     [...(entry.classify.ownPrefix ?? [])],
     [...(entry.classify.dropped ?? [])],
   ])
-  // 2026-12 整合 ui-chat-render-fix：api-gateway 桶按合并后的 registry 重算——patched 5→6、
-  // own 2→5（载波重试纯函数 / 页面事实 / 仓内测试清单），同批改本哈希（值锁的两文件纪律）。
+  // 值锁：api-gateway 桶按合并后的 registry 重算（载波重试纯函数 / 页面事实 / 仓内测试清单）；形状变化必须同批改本哈希。
   assert.equal(
     createHash('sha256').update(JSON.stringify(shape)).digest('hex').slice(0, 16),
     '19ca33757127ba06',
@@ -104,7 +99,6 @@ test('verifierForks 与迁移前内嵌 FORKS 同形：顺序、路径、分类�
   ])
   assert.deepEqual(
     forks.map((fork) => [Object.keys(fork.patched).length, Object.keys(fork.own).length, fork.ownPrefix.length, fork.dropped.length]),
-    // api-gateway 由 [5, 2, 1, 9] 随 2026-12 ui-chat-render-fix 整合变为 [6, 5, 1, 9]。
     [[7, 4, 4, 2], [9, 2, 1, 2], [6, 5, 1, 9], [4, 3, 1, 6]],
   )
   assert.equal(forks[3].versionAnchor, 'chamber')

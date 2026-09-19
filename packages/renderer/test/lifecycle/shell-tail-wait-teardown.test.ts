@@ -11,7 +11,7 @@ import {
   __testResetDisposed, __testResetLifecycle,
   __testSetBootError, __testSetModuleSystemError, __testSetRunError,
   bootInstanceShell, disposeAllShells, disposeInstanceShell, INSTANCE_TAIL_WAIT_CAP_MS,
-  openInstanceSession, shellModule, stubReadyGraph, stubWindow, tailWaitRemainingMs,
+  openInstanceSession, shellModule, shellTestScope, tailWaitRemainingMs,
 } from '../support/shell-harness.ts'
 
 test('bootInstanceShell: a never-settling same-id predecessor stops pinning the id at the wait cap', async (t) => {
@@ -19,16 +19,12 @@ test('bootInstanceShell: a never-settling same-id predecessor stops pinning the 
   // 但"等待上一代"必须有绝对上限——否则一个 entry.run() 永不 settle 的 boot 会让
   // 该源此后每次重挂都卡住。上限 = 两个 boot 预算，低于 App 的放弃上限。
   const instanceId = 'ssh-test-tail-cap-9'
-  __testResetLifecycle()
+  shellTestScope(t, { onFetch: () => undefined, timers: false })
   const gen1Gate = __testQueueRunGate('gen1')
-  const restoreFetch = stubReadyGraph(() => undefined)
-  const restoreWindow = stubWindow()
-  const originalConsoleError = console.error
   let gen1Boot: ReturnType<typeof bootInstanceShell> | undefined
   let gen2Boot: ReturnType<typeof bootInstanceShell> | undefined
   let gen2Gate: ReturnType<typeof __testQueueRunGate> | undefined
   t.mock.timers.enable({ apis: ['setTimeout'] })
-  console.error = () => {}
   try {
     gen1Boot = bootInstanceShell(instanceId, `/api/i/${instanceId}`, {} as HTMLElement, () => {})
     await gen1Gate.started
@@ -71,11 +67,6 @@ test('bootInstanceShell: a never-settling same-id predecessor stops pinning the 
   } finally {
     gen1Gate.release()
     gen2Gate?.release()
-    restoreFetch()
-    restoreWindow()
-    console.error = originalConsoleError
-    disposeAllShells()
-    __testResetLifecycle()
   }
 })
 
@@ -93,10 +84,7 @@ test('bootInstanceShell: timeout releases a different id while same-id gen2 wait
   const instanceId = 'ssh-test-same-id-late-settle-8'
   const otherId = 'ssh-test-timeout-other-id-8'
   const graphFetches: string[] = []
-  const restoreFetch = stubReadyGraph(url => { graphFetches.push(url) })
-  const restoreWindow = stubWindow()
-  const originalConsoleError = console.error
-  __testResetLifecycle()
+  shellTestScope(t, { onFetch: url => { graphFetches.push(url) }, timers: false })
   const gen1Gate = __testQueueRunGate('gen1')
   let gen1Boot: ReturnType<typeof bootInstanceShell> | undefined
   let gen2Boot: ReturnType<typeof bootInstanceShell> | undefined
@@ -105,11 +93,6 @@ test('bootInstanceShell: timeout releases a different id while same-id gen2 wait
   let gen2Gate: ReturnType<typeof __testQueueRunGate> | undefined
   let gen1DisposeGate: ReturnType<typeof __testQueueDisposeGate> | undefined
   t.mock.timers.enable({ apis: ['setTimeout'] })
-  console.error = () => {}
-  __testResetDisposed()
-  __testSetBootError(undefined)
-  __testSetRunError(undefined)
-  __testSetModuleSystemError(undefined)
   try {
     gen1Boot = bootInstanceShell(instanceId, `/api/i/${instanceId}`, {} as HTMLElement, () => {})
     await gen1Gate.started
@@ -200,28 +183,14 @@ test('bootInstanceShell: timeout releases a different id while same-id gen2 wait
       ...(gen2Boot === undefined ? [] : [gen2Boot]),
       ...(otherBoot === undefined ? [] : [otherBoot]),
     ])
-    disposeInstanceShell(instanceId)
-    disposeInstanceShell(otherId)
-    __testResetLifecycle()
     t.mock.timers.reset()
-    console.error = originalConsoleError
-    restoreFetch()
-    restoreWindow()
   }
 })
 
-test('disposeInstanceShell: a live holder records and cancels a newer same-id queued generation', async () => {
+test('disposeInstanceShell: a live holder records and cancels a newer same-id queued generation', async (t) => {
   const instanceId = 'ssh-test-live-holder-cancels-inflight-9'
   const blockerId = 'ssh-test-live-holder-blocker-9'
-  const restoreFetch = stubReadyGraph()
-  const restoreWindow = stubWindow()
-  const originalConsoleError = console.error
-  __testResetLifecycle()
-  __testResetDisposed()
-  __testSetBootError(undefined)
-  __testSetRunError(undefined)
-  __testSetModuleSystemError(undefined)
-  console.error = () => {}
+  shellTestScope(t, { timers: false })
   let blockerGate: ReturnType<typeof __testQueueRunGate> | undefined
   let blockerBoot: ReturnType<typeof bootInstanceShell> | undefined
   let gen2Boot: ReturnType<typeof bootInstanceShell> | undefined
@@ -253,25 +222,13 @@ test('disposeInstanceShell: a live holder records and cancels a newer same-id qu
     blockerGate?.release()
     if (blockerBoot !== undefined) await blockerBoot
     if (gen2Boot !== undefined) await gen2Boot
-    disposeInstanceShell(instanceId)
-    disposeInstanceShell(blockerId)
-    __testResetLifecycle()
-    console.error = originalConsoleError
-    restoreFetch()
-    restoreWindow()
   }
 })
 
-test('bootInstanceShell: registering a newer same-id generation awaits displaced-holder teardown', async () => {
+test('bootInstanceShell: registering a newer same-id generation awaits displaced-holder teardown', async (t) => {
   const instanceId = 'ssh-test-same-id-holder-replacement-10'
   const graphFetches: string[] = []
-  const restoreFetch = stubReadyGraph(url => { graphFetches.push(url) })
-  const restoreWindow = stubWindow()
-  __testResetLifecycle()
-  __testResetDisposed()
-  __testSetBootError(undefined)
-  __testSetRunError(undefined)
-  __testSetModuleSystemError(undefined)
+  shellTestScope(t, { onFetch: url => { graphFetches.push(url) }, timers: false, silentConsole: false }, instanceId)
   const disposeGate = __testQueueDisposeGate()
   let gen2Boot: ReturnType<typeof bootInstanceShell> | undefined
   try {
@@ -312,19 +269,13 @@ test('bootInstanceShell: registering a newer same-id generation awaits displaced
   } finally {
     disposeGate.release()
     if (gen2Boot !== undefined) await gen2Boot
-    disposeInstanceShell(instanceId)
-    __testResetLifecycle()
-    restoreFetch()
-    restoreWindow()
   }
 })
 
-test('bootInstanceShell: remove then re-add awaits the removed holder async teardown', async () => {
+test('bootInstanceShell: remove then re-add awaits the removed holder async teardown', async (t) => {
   const instanceId = 'ssh-test-remove-readd-teardown-10b'
   const graphFetches: string[] = []
-  const restoreFetch = stubReadyGraph(url => { graphFetches.push(url) })
-  const restoreWindow = stubWindow()
-  __testResetLifecycle()
+  shellTestScope(t, { onFetch: url => { graphFetches.push(url) }, timers: false, silentConsole: false }, instanceId)
   const disposeGate = __testQueueDisposeGate()
   let gen2Boot: ReturnType<typeof bootInstanceShell> | undefined
   try {
@@ -358,19 +309,13 @@ test('bootInstanceShell: remove then re-add awaits the removed holder async tear
   } finally {
     disposeGate.release()
     if (gen2Boot !== undefined) await gen2Boot
-    disposeInstanceShell(instanceId)
-    __testResetLifecycle()
-    restoreFetch()
-    restoreWindow()
   }
 })
 
-test('bootInstanceShell: one source teardown barrier does not block a different source', async () => {
+test('bootInstanceShell: one source teardown barrier does not block a different source', async (t) => {
   const blockedId = 'ssh-test-teardown-isolation-a'
   const otherId = 'ssh-test-teardown-isolation-b'
-  const restoreFetch = stubReadyGraph()
-  const restoreWindow = stubWindow()
-  __testResetLifecycle()
+  shellTestScope(t, { timers: false, silentConsole: false })
   const disposeGate = __testQueueDisposeGate()
   try {
     const first = await bootInstanceShell(blockedId, `/api/i/${blockedId}`, {} as HTMLElement, () => {})
@@ -387,21 +332,13 @@ test('bootInstanceShell: one source teardown barrier does not block a different 
     ])
   } finally {
     disposeGate.release()
-    disposeInstanceShell(blockedId)
-    disposeInstanceShell(otherId)
-    __testResetLifecycle()
-    restoreFetch()
-    restoreWindow()
   }
 })
 
-test('bootInstanceShell: async teardown rejection is loud but cannot wedge same-id re-add', async () => {
+test('bootInstanceShell: async teardown rejection is loud but cannot wedge same-id re-add', async (t) => {
   const instanceId = 'ssh-test-teardown-rejection-contained'
-  const restoreFetch = stubReadyGraph()
-  const restoreWindow = stubWindow()
-  const originalConsoleError = console.error
+  shellTestScope(t, { timers: false, silentConsole: false }, instanceId)
   const errors: unknown[][] = []
-  __testResetLifecycle()
   const disposeGate = __testQueueDisposeGate()
   console.error = (...args: unknown[]) => { errors.push(args) }
   let readd: ReturnType<typeof bootInstanceShell> | undefined
@@ -419,18 +356,10 @@ test('bootInstanceShell: async teardown rejection is loud but cannot wedge same-
   } finally {
     disposeGate.release()
     if (readd !== undefined) await readd
-    disposeInstanceShell(instanceId)
-    __testResetLifecycle()
-    console.error = originalConsoleError
-    restoreFetch()
-    restoreWindow()
   }
 })
 
-test('shell lifecycle owners are reclaimed after churn without an old cleanup erasing a same-id re-add', async () => {
-  const restoreFetch = stubReadyGraph()
-  const restoreWindow = stubWindow()
-  __testResetLifecycle()
+test('shell lifecycle owners are reclaimed after churn without an old cleanup erasing a same-id re-add', async (t) => {
   const waitForOwnerCounts = async (bootGenerations: number, cancelledBoots: number): Promise<void> => {
     for (let attempt = 0; attempt < 100; attempt += 1) {
       const counts = shellModule.__testShellLifecycleOwnerCounts()
@@ -440,6 +369,7 @@ test('shell lifecycle owners are reclaimed after churn without an old cleanup er
     assert.deepEqual(shellModule.__testShellLifecycleOwnerCounts(), { bootGenerations, cancelledBoots })
   }
   const instanceId = 'ssh-test-owner-readd'
+  shellTestScope(t, { timers: false, silentConsole: false }, instanceId)
   let disposeGate: ReturnType<typeof __testQueueDisposeGate> | undefined
   let replacement: ReturnType<typeof bootInstanceShell> | undefined
   try {
@@ -484,11 +414,6 @@ test('shell lifecycle owners are reclaimed after churn without an old cleanup er
   } finally {
     disposeGate?.release()
     if (replacement !== undefined) await replacement
-    disposeInstanceShell(instanceId)
-    disposeAllShells()
-    __testResetLifecycle()
-    restoreFetch()
-    restoreWindow()
   }
 })
 

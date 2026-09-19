@@ -21,6 +21,10 @@ import {
 import type { SessionRow } from '../../src/shared/instance-api.ts'
 import { server, session, snapshot, workspace } from '../support/derive-fixtures.ts'
 
+/** deriveServerWorkspaces over the 'local' source, the stored 未分组 title and the pinned clock. */
+const deriveLocal = (snap: Parameters<typeof deriveServerWorkspaces>[0]) =>
+  deriveServerWorkspaces(snap, 'local', '未分组', undefined, 1_000)
+
 // ---------------------------------------------------------------------------
 // 2026-09-11 upstream-alignment T7: the active-Schedule fact, end to end
 // (session projection → snapshot → signature gate → rendered row).
@@ -39,30 +43,18 @@ test('hasActiveScheduleOf mirrors upstream: any non-empty schedule array means a
 
 test('projectInstanceSnapshot carries hasActiveSchedule sparsely (present only when active)', () => {
   const workspaceState = {
-    items: [workspace('w1', 'Work', ['scheduled', 'plain'])],
-    archivedSessionIds: [],
-    state: 'idle',
-    phase: 'ready',
+    items: [workspace('w1', 'Work', ['scheduled', 'plain'])], archivedSessionIds: [], state: 'idle', phase: 'ready',
   }
   const sessionState = {
     ids: ['scheduled', 'plain'],
     phase: 'ready',
     byId: {
+      // The mounted store's SessionSummary.projectionValues bag.
       scheduled: {
-        id: 'scheduled',
-        title: 'With schedule',
-        running: false,
-        blank: false,
-        // The mounted store's SessionSummary.projectionValues bag.
+        id: 'scheduled', title: 'With schedule', running: false, blank: false,
         projectionValues: { schedule: [{ id: 'sch1' }] },
       },
-      plain: {
-        id: 'plain',
-        title: 'No schedule',
-        running: false,
-        blank: false,
-        projectionValues: { schedule: [] },
-      },
+      plain: { id: 'plain', title: 'No schedule', running: false, blank: false, projectionValues: { schedule: [] } },
     },
   }
   const projected = projectInstanceSnapshot(workspaceState, sessionState)
@@ -106,29 +98,14 @@ test('a schedule change republishes: the snapshot signature carries the fact', (
 test('deriveServerWorkspaces threads the schedule fact into workspace rows and the ungrouped bucket', () => {
   const withSchedule = { ...session('in-ws', 5, { title: 'In workspace' }), hasActiveSchedule: true }
   const strayScheduled = { ...session('stray', 6, { title: 'Stray' }), hasActiveSchedule: true }
-  const result = deriveServerWorkspaces(
-    snapshot(
-      [workspace('w1', 'Work', ['in-ws'])],
-      [withSchedule, strayScheduled],
-    ),
-    'local',
-    '未分组',
-    undefined,
-    1_000,
-  )
+  const result = deriveLocal(snapshot([workspace('w1', 'Work', ['in-ws'])], [withSchedule, strayScheduled]))
   const workspaceRows = result.find(group => group.id === 'w1')?.sessions ?? []
   const ungroupedRows = result.find(group => group.id === UNGROUPED_WORKSPACE_ID)?.sessions ?? []
   assert.equal(workspaceRows[0]?.hasActiveSchedule, true, 'the workspace-member row carries the fact')
   assert.equal(ungroupedRows[0]?.id, 'stray')
   assert.equal(ungroupedRows[0]?.hasActiveSchedule, true, 'the ungrouped stray carries the fact too')
   // A schedule-less session never gains the key (sparse both ways).
-  const plain = deriveServerWorkspaces(
-    snapshot([workspace('w1', 'Work', ['plain'])], [session('plain', 5, { title: 'Plain' })]),
-    'local',
-    '未分组',
-    undefined,
-    1_000,
-  )
+  const plain = deriveLocal(snapshot([workspace('w1', 'Work', ['plain'])], [session('plain', 5, { title: 'Plain' })]))
   assert.equal('hasActiveSchedule' in (plain[0]?.sessions[0] ?? {}), false, 'an ordinary row stays key-free')
 })
 
@@ -141,28 +118,16 @@ test('sessionDisplayTitle follows the official ladder and treats empty as absent
   assert.equal(sessionDisplayTitle({ title: 'Real title', sessionId: 'session-1' }), 'Real title')
   // A predecessor record's title row is an EMPTY string (not undefined): the
   // official label for that row is the project directory name.
-  assert.equal(
-    sessionDisplayTitle({ title: '', cwdBasename: 'dsh-chamber', sessionId: 'session-1' }),
-    'dsh-chamber',
-  )
-  assert.equal(
-    sessionDisplayTitle({ cwdBasename: 'dsh-chamber', sessionId: 'session-1' }),
-    'dsh-chamber',
-  )
+  assert.equal(sessionDisplayTitle({ title: '', cwdBasename: 'dsh-chamber', sessionId: 'session-1' }), 'dsh-chamber')
+  assert.equal(sessionDisplayTitle({ cwdBasename: 'dsh-chamber', sessionId: 'session-1' }), 'dsh-chamber')
   // Last resort: the raw session id — never an empty string, never the
   // "untitled" copy.
   assert.equal(sessionDisplayTitle({ sessionId: 'session-1' }), 'session-1')
   assert.equal(sessionDisplayTitle({ title: '', cwdBasename: '', sessionId: 'session-1' }), 'session-1')
   // A producer-resolved displayTitle wins outright.
-  assert.equal(
-    sessionDisplayTitle({ displayTitle: 'Resolved', title: 'Durable', sessionId: 'session-1' }),
-    'Resolved',
-  )
+  assert.equal(sessionDisplayTitle({ displayTitle: 'Resolved', title: 'Durable', sessionId: 'session-1' }), 'Resolved')
   // ...but an empty producer value falls through the ladder.
-  assert.equal(
-    sessionDisplayTitle({ displayTitle: '', title: 'Durable', sessionId: 'session-1' }),
-    'Durable',
-  )
+  assert.equal(sessionDisplayTitle({ displayTitle: '', title: 'Durable', sessionId: 'session-1' }), 'Durable')
 })
 
 test('basenameOf keeps the trailing-segment contract the echo and cwd groups share', () => {
@@ -176,50 +141,24 @@ test('deriveServerWorkspaces labels an unreadable-title row with its directory n
   // The I3 regression: a session whose title projection is unreadable (a
   // predecessor cache record) used to arrive as title === '' and every surface
   // rendered 「未命名会话」. The derived row must carry the cwd basename.
-  const result = deriveServerWorkspaces(
-    snapshot(
-      [workspace('w1', 'Work', ['untitled'])],
-      [session('untitled', 5, { cwd: '/Users/x/dsh-chamber' })],
-    ),
-    'local',
-    '未分组',
-    undefined,
-    1_000,
-  )
+  const result = deriveLocal(snapshot([workspace('w1', 'Work', ['untitled'])], [session('untitled', 5, { cwd: '/Users/x/dsh-chamber' })]))
   const row = result.find(group => group.id === 'w1')?.sessions[0]
   assert.equal(row?.title, '', 'the durable title stays empty — rename/fork copy must not see a fallback')
   assert.equal(row?.displayTitle, 'dsh-chamber', 'the official label is the directory name')
 })
 
 test('deriveServerWorkspaces falls back to the session id when even the cwd is unknown', () => {
-  const result = deriveServerWorkspaces(
-    snapshot([workspace('w1', 'Work', ['nowhere'])], [session('nowhere', 5)]),
-    'local',
-    '未分组',
-    undefined,
-    1_000,
-  )
+  const result = deriveLocal(snapshot([workspace('w1', 'Work', ['nowhere'])], [session('nowhere', 5)]))
   assert.equal(result[0]?.sessions[0]?.displayTitle, 'nowhere')
 })
 
 test('the ungrouped bucket applies the same official label', () => {
-  const result = deriveServerWorkspaces(
-    snapshot([], [session('stray', 5, { cwd: '/Users/x/project' })]),
-    'local',
-    '未分组',
-    undefined,
-    1_000,
-  )
+  const result = deriveLocal(snapshot([], [session('stray', 5, { cwd: '/Users/x/project' })]))
   assert.equal(result[0]?.sessions[0]?.displayTitle, 'project')
 })
 
 test('the mounted projection carries the vendor displayTitle verbatim', () => {
-  const workspaceState = {
-    items: [workspace('w1', 'Work', ['s1'])],
-    archivedSessionIds: [],
-    state: 'idle',
-    phase: 'ready',
-  }
+  const workspaceState = { items: [workspace('w1', 'Work', ['s1'])], archivedSessionIds: [], state: 'idle', phase: 'ready' }
   const sessionState = {
     ids: ['s1'],
     phase: 'ready',
@@ -280,29 +219,17 @@ test('findReusableBlankSession mirrors the official connectWorkspace predicate',
 test('the derived workspace carries the reuse resolution over the RAW snapshot', () => {
   // The blank row is NOT visible in navigation (it is not current), so the
   // reuse candidate can only come from the raw snapshot — the whole point.
-  const reused = deriveServerWorkspaces(
-    {
-      ...snapshot([workspace('w1', 'Work', ['blank'])], [session('blank', 5, { blank: true, cwd: '/w1' })]),
-      archiveSetKnown: true,
-    },
-    'local',
-    '未分组',
-    undefined,
-    1_000,
-  )
+  const reused = deriveLocal({
+    ...snapshot([workspace('w1', 'Work', ['blank'])], [session('blank', 5, { blank: true, cwd: '/w1' })]),
+    archiveSetKnown: true,
+  })
   const row = reused.find(group => group.id === 'w1')
   assert.equal(row?.reusableBlankSessionId, 'blank')
   assert.deepEqual(row?.sessions, [], 'the reusable row stays hidden while it is not the current session')
 })
 
 test('reuse is withheld when the archive set is unknown (unary fallback)', () => {
-  const unknown = deriveServerWorkspaces(
-    snapshot([workspace('w1', 'Work', ['blank'])], [session('blank', 5, { blank: true, cwd: '/w1' })]),
-    'local',
-    '未分组',
-    undefined,
-    1_000,
-  )
+  const unknown = deriveLocal(snapshot([workspace('w1', 'Work', ['blank'])], [session('blank', 5, { blank: true, cwd: '/w1' })]))
   assert.equal(
     'reusableBlankSessionId' in (unknown[0] ?? {}),
     false,
@@ -311,34 +238,22 @@ test('reuse is withheld when the archive set is unknown (unary fallback)', () =>
 })
 
 test('reuse never picks an archived blank row', () => {
-  const archived = deriveServerWorkspaces(
-    {
-      ...snapshot([workspace('w1', 'Work', ['blank'])], [session('blank', 5, { blank: true, cwd: '/w1' })]),
-      archivedSessionIds: ['blank'],
-      archiveSetKnown: true,
-    },
-    'local',
-    '未分组',
-    undefined,
-    1_000,
-  )
+  const archived = deriveLocal({
+    ...snapshot([workspace('w1', 'Work', ['blank'])], [session('blank', 5, { blank: true, cwd: '/w1' })]),
+    archivedSessionIds: ['blank'],
+    archiveSetKnown: true,
+  })
   assert.equal(archived[0]?.reusableBlankSessionId, undefined)
 })
 
 test('reuse is not offered for synthetic cwd-derived groups', () => {
-  const synthetic = deriveServerWorkspaces(
-    {
-      ...snapshot(
-        [{ ...workspace('__cwd__:/w1', 'w1', ['blank']), synthetic: true }],
-        [session('blank', 5, { blank: true, cwd: '/w1' })],
-      ),
-      archiveSetKnown: true,
-    },
-    'local',
-    '未分组',
-    undefined,
-    1_000,
-  )
+  const synthetic = deriveLocal({
+    ...snapshot(
+      [{ ...workspace('__cwd__:/w1', 'w1', ['blank']), synthetic: true }],
+      [session('blank', 5, { blank: true, cwd: '/w1' })],
+    ),
+    archiveSetKnown: true,
+  })
   assert.equal('reusableBlankSessionId' in (synthetic[0] ?? {}), false)
 })
 
@@ -351,11 +266,7 @@ test('serversProjectionSignature moves for a label-only change (healed row must 
   // directory with no durable-title change: that flip must republish.
   const base = server('local')
   const relabeled = server('local', {
-    workspaces: [{
-      id: 'w1',
-      title: 'Work',
-      sessions: [{ id: 's1', title: 'One', displayTitle: 'dsh-chamber', running: false, updatedAt: 1 }],
-    }],
+    workspaces: [{ id: 'w1', title: 'Work', sessions: [{ id: 's1', title: 'One', displayTitle: 'dsh-chamber', running: false, updatedAt: 1 }] }],
   })
   assert.notEqual(serversProjectionSignature([base]), serversProjectionSignature([relabeled]))
 })
@@ -367,9 +278,7 @@ test('serversProjectionSignature moves for a reuse-only change ("+" must see the
   const base = server('local')
   const reusable = server('local', {
     workspaces: [{
-      id: 'w1',
-      title: 'Work',
-      reusableBlankSessionId: 'blank-1',
+      id: 'w1', title: 'Work', reusableBlankSessionId: 'blank-1',
       sessions: [{ id: 's1', title: 'One', displayTitle: 'One', running: false, updatedAt: 1 }],
     }],
   })
@@ -378,9 +287,7 @@ test('serversProjectionSignature moves for a reuse-only change ("+" must see the
   // the same fact.
   const explicitNull = server('local', {
     workspaces: [{
-      id: 'w1',
-      title: 'Work',
-      reusableBlankSessionId: undefined,
+      id: 'w1', title: 'Work', reusableBlankSessionId: undefined,
       sessions: [{ id: 's1', title: 'One', displayTitle: 'One', running: false, updatedAt: 1 }],
     }],
   })

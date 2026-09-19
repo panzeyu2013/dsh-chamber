@@ -14,12 +14,8 @@ import { sessionTodoPatch } from '../../src/client/session-todo-settings.ts'
 
 function statusWith(overrides?: Partial<ChamberSettings>): ChamberSettingsStatus {
   const base: ChamberSettings = {
-    windowCloseBehavior: 'quit',
-    launchAtLogin: false,
-    keepAwake: false,
-    quitConfirmation: true,
-    vscodeOpenInNewWindow: true,
-    registryOrigin: 'https://registry.npmjs.org',
+    windowCloseBehavior: 'quit', launchAtLogin: false, keepAwake: false, quitConfirmation: true,
+    vscodeOpenInNewWindow: true, registryOrigin: 'https://registry.npmjs.org',
     notifications: { enabled: false, mode: 'hidden-only', onComplete: true, onAsk: true, onRequest: true, badgeEnabled: true },
     sessionTodo: { enabled: true, onComplete: true, onAsk: true, onRequest: true },
   }
@@ -50,24 +46,16 @@ function fakeSurface(behavior: {
     async set(patch: Partial<ChamberSettings>): Promise<ChamberSettingsStatus | { error: string; code?: string }> {
       surface.setCalls += 1
       if (behavior.setError !== undefined) return { error: behavior.setError }
-      if (behavior.setDelayMs !== undefined) {
-        await new Promise(resolve => setTimeout(resolve, behavior.setDelayMs))
-      }
+      if (behavior.setDelayMs !== undefined) await new Promise(resolve => setTimeout(resolve, behavior.setDelayMs))
       surface.applied = {
         ...surface.applied,
         ...patch,
-        notifications: patch.notifications !== undefined
-          ? { ...surface.applied.notifications, ...patch.notifications }
-          : surface.applied.notifications,
-        sessionTodo: patch.sessionTodo !== undefined
-          ? { ...surface.applied.sessionTodo, ...patch.sessionTodo }
-          : surface.applied.sessionTodo,
+        notifications: patch.notifications !== undefined ? { ...surface.applied.notifications, ...patch.notifications } : surface.applied.notifications,
+        sessionTodo: patch.sessionTodo !== undefined ? { ...surface.applied.sessionTodo, ...patch.sessionTodo } : surface.applied.sessionTodo,
       }
       return statusWith(surface.applied)
     },
-    onChanged(): () => void {
-      return () => {}
-    },
+    onChanged(): () => void { return () => {} },
   }
   return surface
 }
@@ -77,12 +65,13 @@ function freshStore(): Promise<typeof import('../../src/client/settings-store.ts
   return import(`../../src/client/settings-store.ts?case=${Math.random().toString(36).slice(2)}`)
 }
 
-async function hydrate(store: typeof import('../../src/client/settings-store.ts')): Promise<void> {
+async function hydrate(store: typeof import('../../src/client/settings-store.ts'),
+  message = 'the store hydrates before the save under test'): Promise<void> {
   const deadline = Date.now() + 2_000
   while (store.getSettingsStatus() === null && Date.now() < deadline) {
     await new Promise(resolve => setTimeout(resolve, 25))
   }
-  assert.notEqual(store.getSettingsStatus(), null, 'the store hydrates before the save under test')
+  assert.notEqual(store.getSettingsStatus(), null, message)
 }
 
 test('a one-shot bridge get() failure self-heals through the retry chain', async () => {
@@ -92,14 +81,9 @@ test('a one-shot bridge get() failure self-heals through the retry chain', async
   }
   const store = await freshStore()
   try {
-    // The module hydrates on import: the first get() rejects, the retry
-    // chain re-attaches (backoff starts at 100ms) and the second get()
-    // lands. Poll up to 2s.
-    const deadline = Date.now() + 2_000
-    while (store.getSettingsStatus() === null && Date.now() < deadline) {
-      await new Promise(resolve => setTimeout(resolve, 25))
-    }
-    assert.notEqual(store.getSettingsStatus(), null, 'the store hydrates after a transient get() failure')
+    // The module hydrates on import: the first get() rejects, the retry chain
+    // re-attaches (backoff starts at 100ms) and the second get() lands.
+    await hydrate(store, 'the store hydrates after a transient get() failure')
     assert.ok(surface.getCalls >= 2, `the retry chain re-attached (getCalls=${surface.getCalls})`)
     assert.equal(store.getSettingsStatus()?.settings.registryOrigin, 'https://registry.npmjs.org')
   } finally {
@@ -116,11 +100,7 @@ test('a late bridge still hydrates through the retry chain while subscribers wai
       // The bridge arrives after the module already gave up its fast chain.
       const surface = fakeSurface({})
       ;((globalThis as Record<string, unknown>).window as { dshChamber?: unknown }).dshChamber = { settings: surface }
-      const deadline = Date.now() + 2_000
-      while (store.getSettingsStatus() === null && Date.now() < deadline) {
-        await new Promise(resolve => setTimeout(resolve, 25))
-      }
-      assert.notEqual(store.getSettingsStatus(), null, 'a late bridge hydrates through the re-probe')
+      await hydrate(store, 'a late bridge hydrates through the re-probe')
       assert.ok(surface.getCalls >= 1, 'the late bridge was queried')
     } finally {
       unsubscribe()

@@ -1,36 +1,18 @@
 /**
- * Merged during the 2026-12 test reorganization:
- *   test/open-in-view-model.test.ts (view model)
- *   test/open-in-gates.test.ts       (render/launch gates)
- *   -> test/launch-flow/open-in-view-model.test.ts
- *
- * src/client/open-in-gates.ts builds its gate matrix ON buildOpenInViewModel
- * (src/shared/open-in-view-model.ts), so the per-source decision surface and
- * the view model it consumes are one contract chain. Every test title and
- * assertion is preserved verbatim; the gates block now reuses the identical
- * FINDER/VSCODE fixtures declared by the view-model block instead of
- * re-declaring them (it previously imported the same OpenInApp type through
- * coordinator.ts, which only re-exports capabilities.ts).
- */
-
-// --- merged from test/open-in-view-model.test.ts ---
-
-/**
  * Per-source open-in view-model unit tests (Batch 3 Phase 0, design 20 §2):
- * the presentation matrix over the instance-hosted (local) catalog and main (desktop
- * IPC) pools, the channel-priority dedup, the explicit suppression reasons and
- * the default selection. Plain node:test — the module is pure over plain data.
+ * the presentation matrix over the instance-hosted (local) catalog and main
+ * (desktop IPC) pools, the channel-priority dedup, the explicit suppression
+ * reasons and the default selection. Plain node:test — the module is pure over
+ * plain data. The gate half below shares this file and its fixtures because
+ * src/client/open-in-gates.ts builds its matrix ON buildOpenInViewModel
+ * (src/shared/open-in-view-model.ts): one contract chain.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
 import { buildOpenInViewModel, type OpenInViewModel } from '../../src/shared/open-in-view-model.ts'
 import { parseOpenInSource, type OpenInApp, type OpenInSource } from '../../src/shared/capabilities.ts'
-
-const FINDER: OpenInApp = { id: 'finder', displayKind: 'file-manager', remoteCapable: false, available: true }
-const VSCODE: OpenInApp = { id: 'vscode', displayKind: 'vscode', remoteCapable: true, available: true }
-const TERMINAL: OpenInApp = { id: 'terminal', displayKind: 'terminal', remoteCapable: false, available: true }
-const GHOST: OpenInApp = { id: 'ghost', displayKind: 'ghost', remoteCapable: true, available: false }
+import { FINDER, GHOST, TERMINAL, VSCODE } from '../support/harness.ts'
 
 function source(value: string, transport: 'local' | 'ssh' | 'http'): OpenInSource {
   const parsed = parseOpenInSource(value, transport)
@@ -150,15 +132,13 @@ test('view-model / the local default falls back to the first entry without VS Co
   assert.equal(model.defaultEntryId, 'finder')
 })
 
-// --- merged from test/open-in-gates.test.ts ---
-
 /**
  * OpenInButton render-gate unit tests (plain node:test, no React/DOM): the
  * pure decision surface extracted into src/client/open-in-gates.ts — gate 1
  * (per-source usable apps across target kind × transport), gate 2
  * (workspace-path lookup) and the launch instance-id prefix strip. The
- * component itself (React + CSS + a raster mark) is not importable under
- * node; these tests pin its decision logic.
+ * component itself (React + CSS + a raster mark) is not importable under node;
+ * these tests pin its decision logic.
  */
 
 import {

@@ -1,10 +1,6 @@
-/**
- * view-prefs.ts unit tests (plain node:test, no dsh, no DOM): round-trip
- * save/load, corrupt JSON / version mismatch / malformed shape / missing key
- * → defaults, throwing storage never propagates, a throwing localStorage
- * accessor degrades to defaults / no-op (lazy default resolution), lenient
- * entry sanitizing.
- */
+/** view-prefs.ts unit tests (plain node:test, no dsh, no DOM): round-trip save/load,
+ *  corrupt/mismatched/malformed payloads → defaults, throwing storage (incl. a throwing
+ *  localStorage accessor) never propagates, lenient entry sanitizing. */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -23,7 +19,13 @@ import {
   type ChamberSidebarViewPrefs,
   type StorageLike,
 } from '../../src/shared/view-prefs.ts'
-import { chamberBridge } from '../../src/shared/aggregate-store.ts'
+import { chamberBridge, type ChamberServerAggregate } from '../../src/shared/aggregate-store.ts'
+import { server } from '../support/derive-fixtures.ts'
+
+/** Publish server fixtures into the shared bridge (defaults: local, connected, ready). */
+function publish(...servers: Array<Partial<ChamberServerAggregate>>): void {
+  chamberBridge.publish(servers.map(overrides => server(overrides.id ?? 'local', overrides)) as ChamberServerAggregate[])
+}
 
 class MemoryStorage implements StorageLike {
   private readonly map = new Map<string, string>()
@@ -51,15 +53,14 @@ test('loadViewPrefs returns defaults when the key is missing', () => {
 
 test('save then load round-trips the prefs', () => {
   const storage = new MemoryStorage()
+  // seenSources is SESSION-ONLY memory: it is never persisted, so a
+  // round-trip through storage always lands back on [].
   const prefs: ChamberSidebarViewPrefs = {
-    v: 1,
-    folded: { 'local/w1': true, 'ssh-a/w2': false },
+    v: 1, folded: { 'local/w1': true, 'ssh-a/w2': false },
     ungroupedOrder: { local: ['s3', 's1', 's2'], 'ssh-a': [] },
     orderBy: { local: 'updated', 'ssh-a': 'manual' },
     updatedOrder: { 'local/w1': ['s3', 's1', 's2'], 'ssh-a/__ungrouped__': ['x'] },
     sessionUpdatedAtByAccount: { 'local/w1': { s1: 100, s2: 200 } },
-    // seenSources is SESSION-ONLY memory: it is never persisted, so a
-    // round-trip through storage always lands back on [].
     seenSources: [],
   }
   saveViewPrefs(prefs, storage)
@@ -257,30 +258,7 @@ test('shared view-prefs store: safe prune — only sources SEEN then vanished ar
   // the local-only projection must not wipe ssh sources' prefs). Present
   // sources keep theirs — a present-but-disconnected source (no workspaces
   // in the projection) keeps its folds and they return on reconnect.
-  chamberBridge.publish([
-    {
-      id: 'local',
-      sourceFingerprint: 'local',
-      kind: 'local',
-      transport: 'local',
-      label: 'L',
-      connected: true,
-      phase: 'ready',
-      workspaces: [{ id: 'w1', title: 'W1', sessions: [] }],
-      updatedAt: 0,
-    },
-    {
-      id: 'ssh-b',
-      sourceFingerprint: 'b'.repeat(64),
-      kind: 'dsh',
-      transport: 'ssh',
-      label: 'B',
-      connected: false,
-      phase: 'stopped',
-      workspaces: [],
-      updatedAt: 0,
-    },
-  ])
+  publish({}, { id: 'ssh-b', connected: false, phase: 'stopped', workspaces: [] })
   updateViewPrefs(prev => ({
     ...prev,
     folded: { ...prev.folded, 'ghost/w2': true, 'ssh-b/w9': true },
@@ -310,19 +288,7 @@ test('shared view-prefs store: safe prune — only sources SEEN then vanished ar
 
   // ssh-b disappears from the projection AFTER being seen: its keys are
   // pruned on the next write; never-seen ghosts and local's survive.
-  chamberBridge.publish([
-    {
-      id: 'local',
-      sourceFingerprint: 'local',
-      kind: 'local',
-      transport: 'local',
-      label: 'L',
-      connected: true,
-      phase: 'ready',
-      workspaces: [{ id: 'w1', title: 'W1', sessions: [] }],
-      updatedAt: 0,
-    },
-  ])
+  publish({})
   updateViewPrefs(prev => ({ ...prev, folded: { ...prev.folded, 'local/w4': true } }))
   const pruned = getViewPrefs()
   assert.equal(pruned.folded['ssh-b/w9'], undefined) // seen then vanished → pruned
@@ -374,19 +340,7 @@ test('a fresh session under a local-only projection never prunes unloaded remote
     folded: { ...prev.folded, 'ssh-x/w': true, 'local/w1': true },
     ungroupedOrder: { 'ssh-x': ['s1'] },
   }))
-  chamberBridge.publish([
-    {
-      id: 'local',
-      sourceFingerprint: 'local',
-      kind: 'local',
-      transport: 'local',
-      label: 'L',
-      connected: true,
-      phase: 'ready',
-      workspaces: [{ id: 'w1', title: 'W1', sessions: [] }],
-      updatedAt: 0,
-    },
-  ])
+  publish({})
   updateViewPrefs(prev => ({ ...prev, folded: { ...prev.folded, 'local/w2': true } }))
   const after = getViewPrefs()
   assert.equal(after.folded['ssh-x/w'], true)          // unloaded remote source survives
@@ -484,14 +438,8 @@ test('clearSourceBookkeeping removes only the target source keys, keeps the rest
 test('sidebarWidth round-trips through save/load', () => {
   const storage = new MemoryStorage()
   const prefs: ChamberSidebarViewPrefs = {
-    v: 1,
-    folded: { 'local/w1': true },
-    ungroupedOrder: { local: ['s1'] },
-    orderBy: {},
-    updatedOrder: {},
-    sessionUpdatedAtByAccount: {},
-    sidebarWidth: 360,
-    seenSources: [],
+    v: 1, folded: { 'local/w1': true }, ungroupedOrder: { local: ['s1'] },
+    orderBy: {}, updatedOrder: {}, sessionUpdatedAtByAccount: {}, sidebarWidth: 360, seenSources: [],
   }
   saveViewPrefs(prefs, storage)
   assert.deepEqual(loadViewPrefs(storage), prefs)
@@ -536,18 +484,12 @@ test('loadViewPrefs keeps old payloads without sidebarWidth valid (v stays 1 —
 })
 
 test('the sidebarWidth clamp stays in sync with the vendor contract (columns.ts SIDEBAR_MIN/MAX)', () => {
-  // sanitizePrefs hardcodes `Math.min(420, Math.max(264, Math.round(x)))` in
-  // view-prefs.ts. The vendor contract — the pinned
-  // @deepseek-ai/dsh-client-ui-layout/src/client/columns.ts — fixes
-  // SIDEBAR_MIN = 264, SIDEBAR_MAX = 420, and clampWidth(px, min, max) =
-  // Math.min(max, Math.max(min, Math.round(px))): the EXACT round-then-clamp
-  // the sanitizer reproduces. The vendor source cannot be imported here (its
-  // .ts file sits outside this package's tsconfig rootDir and the vendor
-  // tree ships no built lib/ for plain node), so this test pins BOTH sides —
-  // the literals mirror the vendor constants, and the formula below IS the
-  // vendor clampWidth spelled out — so an unconscious drift on either side
-  // fails loudly instead of silently diverging the persisted clamp (2026-09
-  // review nit).
+  // sanitizePrefs hardcodes the vendor clamp. The pinned
+  // @deepseek-ai/dsh-client-ui-layout columns.ts fixes SIDEBAR_MIN = 264,
+  // SIDEBAR_MAX = 420 and clampWidth = round-then-clamp; the vendor source
+  // cannot be imported here (outside tsconfig rootDir, no built lib/), so this
+  // test pins BOTH sides — literals mirror the vendor constants and the
+  // formula below IS clampWidth spelled out — so drift fails loudly (2026-09).
   const VENDOR_SIDEBAR_MIN = 264
   const VENDOR_SIDEBAR_MAX = 420
   const vendorClampWidth = (px: number): number =>
@@ -569,19 +511,7 @@ test('sidebarWidth survives the write-time prune rebuild and unrelated writes', 
   // object (prunePrefs' reconstructed branch); the rebuild must carry
   // sidebarWidth — a fixed-field reconstruction would have dropped it.
   updateViewPrefs(prev => ({ ...prev, folded: { 'ghost/w': true }, sidebarWidth: 340 }))
-  chamberBridge.publish([
-    {
-      id: 'local',
-      sourceFingerprint: 'local',
-      kind: 'local',
-      transport: 'local',
-      label: 'L',
-      connected: true,
-      phase: 'ready',
-      workspaces: [{ id: 'w1', title: 'W1', sessions: [] }],
-      updatedAt: 0,
-    },
-  ])
+  publish({})
   updateViewPrefs(prev => ({ ...prev, folded: { ...prev.folded, 'local/w1': true } }))
   assert.equal(getViewPrefs().sidebarWidth, 340)
   // A later unrelated write (fold) keeps it too — spread carries it and
@@ -595,14 +525,8 @@ test('sidebarWidth survives the write-time prune rebuild and unrelated writes', 
 test('sourceFolded round-trips and sanitizes booleans leniently, absent stays absent', () => {
   const storage = new MemoryStorage()
   const prefs: ChamberSidebarViewPrefs = {
-    v: 1,
-    folded: { 'local/w1': true },
-    ungroupedOrder: {},
-    orderBy: {},
-    updatedOrder: {},
-    sessionUpdatedAtByAccount: {},
-    sourceFolded: { local: true, 'ssh-a': false },
-    seenSources: [],
+    v: 1, folded: { 'local/w1': true }, ungroupedOrder: {}, orderBy: {}, updatedOrder: {},
+    sessionUpdatedAtByAccount: {}, sourceFolded: { local: true, 'ssh-a': false }, seenSources: [],
   }
   saveViewPrefs(prefs, storage)
   assert.deepEqual(loadViewPrefs(storage), prefs)
@@ -624,14 +548,8 @@ test('sourceFolded round-trips and sanitizes booleans leniently, absent stays ab
 test('serverOrder sanitizes to a deduped string array, non-arrays are dropped', () => {
   const storage = new MemoryStorage()
   const prefs: ChamberSidebarViewPrefs = {
-    v: 1,
-    folded: {},
-    ungroupedOrder: {},
-    orderBy: {},
-    updatedOrder: {},
-    sessionUpdatedAtByAccount: {},
-    serverOrder: ['ssh-b', 'local', 'ssh-a'],
-    seenSources: [],
+    v: 1, folded: {}, ungroupedOrder: {}, orderBy: {}, updatedOrder: {},
+    sessionUpdatedAtByAccount: {}, serverOrder: ['ssh-b', 'local', 'ssh-a'], seenSources: [],
   }
   saveViewPrefs(prefs, storage)
   assert.deepEqual(loadViewPrefs(storage), prefs)
@@ -655,30 +573,7 @@ test('sourceFolded/serverOrder prune with the source: seen-then-vanished only, n
     sourceFolded: { local: true, 'ssh-b': true, ghost: true },
     serverOrder: ['ssh-b', 'local', 'ghost'],
   }))
-  chamberBridge.publish([
-    {
-      id: 'local',
-      sourceFingerprint: 'local',
-      kind: 'local',
-      transport: 'local',
-      label: 'L',
-      connected: true,
-      phase: 'ready',
-      workspaces: [{ id: 'w1', title: 'W1', sessions: [] }],
-      updatedAt: 0,
-    },
-    {
-      id: 'ssh-b',
-      sourceFingerprint: 'b'.repeat(64),
-      kind: 'dsh',
-      transport: 'ssh',
-      label: 'B',
-      connected: true,
-      phase: 'ready',
-      workspaces: [],
-      updatedAt: 0,
-    },
-  ])
+  publish({}, { id: 'ssh-b', workspaces: [] })
   // Both sources are present in the projection now: nothing pruned, but the
   // FIRST write rebuilds the prefs object (records the seen sources) — the
   // new fields must survive that reconstruction.
@@ -687,19 +582,7 @@ test('sourceFolded/serverOrder prune with the source: seen-then-vanished only, n
   assert.deepEqual(getViewPrefs().serverOrder, ['ssh-b', 'local', 'ghost'])
   // ssh-b vanishes AFTER being seen: pruned from both new fields on the next
   // write; never-seen ghost stays (safe), local stays.
-  chamberBridge.publish([
-    {
-      id: 'local',
-      sourceFingerprint: 'local',
-      kind: 'local',
-      transport: 'local',
-      label: 'L',
-      connected: true,
-      phase: 'ready',
-      workspaces: [{ id: 'w1', title: 'W1', sessions: [] }],
-      updatedAt: 0,
-    },
-  ])
+  publish({})
   updateViewPrefs(prev => ({ ...prev, folded: { ...prev.folded, 'local/w2': true } }))
   const pruned = getViewPrefs()
   assert.deepEqual(pruned.sourceFolded, { local: true, ghost: true })
@@ -789,23 +672,9 @@ test('equal-value suppression never swallows prune bookkeeping (review F8 gap 1)
   __resetViewPrefsForTests()
   // 投影新增来源：下一次任何写入都会让 seenSources 增长——等值抑制不得吞掉
   // 该 prune 副作用（否则"来源已见"簿记永缺，将来真删除时无法安全裁剪）。
-  chamberBridge.publish([
-    {
-      id: 'local', sourceFingerprint: 'local', kind: 'local', transport: 'local', label: 'L',
-      connected: true, phase: 'ready', workspaces: [], updatedAt: 0,
-    },
-  ])
+  publish({ workspaces: [] })
   updateViewPrefs(prev => ({ ...prev, folded: { ...prev.folded, 'local/w1': true } }))
-  chamberBridge.publish([
-    {
-      id: 'local', sourceFingerprint: 'local', kind: 'local', transport: 'local', label: 'L',
-      connected: true, phase: 'ready', workspaces: [], updatedAt: 0,
-    },
-    {
-      id: 'ssh-x', sourceFingerprint: 'x'.repeat(64), kind: 'dsh', transport: 'ssh', label: 'X',
-      connected: false, phase: 'stopped', workspaces: [], updatedAt: 0,
-    },
-  ])
+  publish({ workspaces: [] }, { id: 'ssh-x', connected: false, phase: 'stopped', workspaces: [] })
   let notified = 0
   const unsubscribe = subscribeViewPrefs(() => { notified += 1 })
   // 字段级等值写（folded 不变），但 prune 会记录新见来源 ssh-x → 必须通知。

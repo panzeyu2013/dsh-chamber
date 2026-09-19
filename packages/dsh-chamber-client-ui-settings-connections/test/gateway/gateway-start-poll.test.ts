@@ -1,12 +1,9 @@
 /**
- * Shared gateway readiness poll — the START action (design 21 §6.3 decision 12
- * + §6.8 r1). The poll used to follow `restart` only: the card's「启动实例」
- * flow fed it a start 202 and got restart wording back ("restart failed: …"),
- * never read the contract's `start` outcome field (gateway/runtime-manager.ts
- * GatewayRuntimeStatus.start: 'ok' | 'failed' | 'running' | null), and would
- * have fast-failed a legitimate start at its very first answer — a start BEGINS
- * from connectionState 'stopped', which the restart decision table treats as a
- * terminal failure. Fake fetch, no DOM, no dsh.
+ * Shared gateway readiness poll — the START action (design 21 §6.3 decision 12 +
+ * §6.8 r1). The poll reads the contract's `start` outcome field
+ * (gateway/runtime-manager.ts GatewayRuntimeStatus.start: 'ok' | 'failed' |
+ * 'running' | null): a start BEGINS from connectionState 'stopped', which the
+ * restart decision table would treat as a terminal failure. Fake fetch, no DOM.
  */
 
 import { test } from 'node:test'

@@ -1,32 +1,13 @@
 /**
- * Merged during the 2026-12 test reorganization:
- *   test/early-open.test.ts        (behaviour)
- *   test/early-open-wiring.test.ts (wiring lock)
- *   -> test/open-flow/early-open.test.ts
+ * Boot-time early-open arm (src/client/early-open.ts): behaviour through injected
+ * clock/timer seams, plus the wiring locks on its registration inside client/index.ts
+ * (design 05 §2.2 revision 2026-12; 2026-12 field report problem 1).
  *
- * Both sources cover ONE subject: the boot-time early-open arm built on
- * src/client/early-open.ts — its behaviour under injected clock/timer seams,
- * and the locks on its registration inside client/index.ts. The wiring file
- * header already names early-open.test.ts as the behaviour half of the same
- * contract. Every test title and assertion is preserved verbatim; the blocks
- * below are unchanged apart from the move-depth path fix (../ -> ../../).
- */
-
-// --- merged from test/early-open.test.ts ---
-
-/**
- * early-open.ts unit tests (plain node:test, no dsh, no DOM): the boot-time
- * early-open arm that preempts the official workspace navigation policy inside
- * the target instance's own ctx (design 05 §2.2 revision 2026-12; 2026-12 field
- * report problem 1).
- *
- * The arm is driven through injected clock/timer seams, so every contract is
- * asserted deterministically: one open per arm, the retry cadence, the live
- * intent read (an intent armed AFTER the first read must still be opened, a
- * replaced one must open the NEWER session), the deadline as the ONLY
- * retirement of an absent slot, the bounded deadline, a missing list face, a
- * THROWING probe (2026-09-11 review F1/F2), and a refused open (warn once,
- * never throw, never report an outcome — the App owns the terminal report).
+ * Contracts: one open per arm, the retry cadence, the LIVE intent read (a
+ * post-first-read arm still opens; a replacement opens the NEWER session), the
+ * deadline as the ONLY retirement of an absent slot, the bounded budget, a
+ * missing/THROWING list face (2026-09-11 review F1/F2), and a refused open
+ * (warn once, never throw — the App owns the terminal report).
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -54,9 +35,7 @@ function harness(overrides: Partial<EarlyOpenArmDeps> = {}) {
       queue.sort((left, right) => left.at - right.at)
       return handle as unknown as ReturnType<typeof setTimeout>
     },
-    clearTimer: (handle) => {
-      queue = queue.filter(entry => entry !== (handle as unknown as { at: number }))
-    },
+    clearTimer: (handle) => { queue = queue.filter(entry => entry !== (handle as unknown as { at: number })) },
     ...overrides,
   }
   return {
@@ -82,12 +61,10 @@ function harness(overrides: Partial<EarlyOpenArmDeps> = {}) {
 }
 
 test('an intent armed AFTER the arm first read the slot is still opened (an absent slot is "not yet")', () => {
-  // 2026-09-11 review F1: the first `attempt()` runs synchronously at plugin
-  // apply — BEFORE the user can click — so retiring on the first absent read
-  // killed the arm for a boot already in flight when the click landed, and the
-  // official navigation policy then created a blank session on the host (the
-  // exact cost the arm exists to avoid). Design 05 §2.2.1 gate 3 sanctions only
-  // two retirements: a successful open and the 8s deadline.
+  // 2026-09-11 review F1: the first `attempt()` runs synchronously at plugin apply —
+  // BEFORE the user can click — so retiring on the first absent read killed the arm for a
+  // boot in flight (the blank-session cost the arm exists to avoid). Design 05 §2.2.1 gate
+  // 3 sanctions only two retirements: a successful open and the 8s deadline.
   let intent: string | undefined
   let listed = false
   const h = harness({ readIntent: () => intent, isAddressable: () => listed })
@@ -112,11 +89,7 @@ test('a boot that never receives an intent polls to the deadline, opens nothing,
   assert.deepEqual(h.opened, [])
   assert.deepEqual(h.warnings, [])
   assert.equal(h.pendingTimers, 0, 'only the 8s deadline retires a boot with no intent')
-  assert.equal(
-    h.scheduledTimers,
-    EARLY_OPEN_BUDGET_MS / EARLY_OPEN_RETRY_MS,
-    'the documented cost of the F1 rule: 160 cheap polls per boot',
-  )
+  assert.equal(h.scheduledTimers, EARLY_OPEN_BUDGET_MS / EARLY_OPEN_RETRY_MS, 'the documented cost of the F1 rule: 160 cheap polls per boot')
   assert.equal(reads, h.scheduledTimers + 1, 'one read per tick, plus the first synchronous one')
   dispose()
 })
@@ -257,32 +230,17 @@ test('dispose cancels a pending retry (ctx teardown never opens afterwards)', ()
   assert.deepEqual(h.opened, [], 'a disposed arm must never reach sessions.open')
 })
 
-// --- merged from test/early-open-wiring.test.ts ---
-
 /**
- * Wiring contract for the boot-time early-open arm inside the sidebar plugin
- * (design 05 §2.2 revision 2026-12; 2026-12 field report problem 1).
- *
- * Source-text contract (a SHAPE-only lock; the package's former plumbing lock was
- * removed by the 2026-12 ruling): `client/index.ts` is a cordis plugin body that cannot be imported by
- * a node test without a full client ctx. The arm's BEHAVIOUR is covered by
- * `early-open.test.ts` and the shared rules by `open-intent.test.ts`; this file
+ * Wiring contract for the arm inside the sidebar plugin (design 05 §2.2 revision
+ * 2026-12). `client/index.ts` is a cordis plugin body a node test cannot import, so
+ * this SHAPE-only lock (comment-stripped source)
  * pins the links that would silently disable or misfire the preemption:
- *
- * 1. the arm is started inside a `ctx.effect` (so ctx teardown disposes it — an
- *    arm outliving its ctx could open a session in a dead shell);
- * 2. the intent is read LIVE from the shared slot, not captured at apply time
- *    (a captured value would open whatever was pending when the ctx mounted);
- * 3. the open goes through THIS ctx's own `sessions.open` (a detached reference
- *    or a page-global open would target the wrong instance);
- * 4. the arm proves the SOURCE IDENTITY before it mutates the host (2026-09-11
- *    review F3) — the intent slot is page-wide and keyed by sourceId only, so
- *    without the fingerprint guard any boot sharing that id would open a
- *    session on the strength of another incarnation's intent.
- *
- * The assertions run against COMMENT-STRIPPED source (`stripComments`, the
- * precedent is `panel-wiring.test.ts`): the contract is the executable shape,
- * so a line that only exists inside a comment must not satisfy it.
+ * 1. arm started inside a `ctx.effect` (ctx teardown must dispose it);
+ * 2. intent read LIVE from the shared slot, never captured at apply time;
+ * 3. the open goes through THIS ctx's own `sessions.open` (never detached/page-global);
+ * 4. the SOURCE IDENTITY is proven before the arm mutates the host (2026-09-11
+ *    review F3: the page-wide, sourceId-keyed slot would otherwise drive a same-id
+ *    boot of another incarnation).
  */
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -302,16 +260,19 @@ function armEffectBody(plugin: string): string {
 test('the plugin starts the arm inside a ctx.effect, bound to its own instance id', () => {
   const body = armEffectBody(read('../../src/client/index.ts'))
   assert.match(body, /const chamberInstanceId = \(ctx as any\)\.chamberInstanceId as string \| undefined/)
-  assert.match(body, /if \(typeof chamberInstanceId !== 'string' \|\| chamberInstanceId === ''\) return \(\) => \{\}/, 'a non-chamber boot must not arm')
+  assert.match(
+    body,
+    /if \(typeof chamberInstanceId !== 'string' \|\| chamberInstanceId === ''\) return \(\) => \{\}/,
+    'a non-chamber boot must not arm',
+  )
   assert.match(body, /return startEarlyOpenArm\(\{/)
   assert.match(body, /instanceId: chamberInstanceId,/)
 })
 
 test('the arm proves the source identity before it opens on that host (2026-09-11 review F3)', () => {
   // Deleting this guard re-opens the hole the review found: the arm MUTATES
-  // (`sessions.open`) on a page-wide, sourceId-keyed intent, so a same-id boot
-  // of another incarnation could be driven by an intent armed for a previous
-  // one. It is the same proof the runtime-facts producer above requires.
+  // (`sessions.open`) on a page-wide, sourceId-keyed intent, so a same-id boot of
+  // another incarnation could be driven by a previous one's intent (2026-09-11 F3).
   const body = armEffectBody(read('../../src/client/index.ts'))
   assert.match(
     body,
@@ -330,25 +291,17 @@ test('the arm proves the source identity before it opens on that host (2026-09-1
 
 test('the arm reads the LIVE intent and opens through this ctx own sessions service', () => {
   const body = armEffectBody(read('../../src/client/index.ts'))
-  assert.match(
-    body,
-    /readIntent: \(\) => getOpenIntent\(chamberInstanceId\)/,
-    'the intent must be read at attempt time — a captured value would open a stale request',
-  )
+  assert.match(body, /readIntent: \(\) => getOpenIntent\(chamberInstanceId\)/, 'read at attempt time — a captured value opens a stale request')
   assert.match(
     body,
     /open: \(sessionId\) => \{ ctx\.sessions\.open\(sessionId\) \}/,
     'the open must be a method call on THIS ctx sessions service (never a detached reference)',
   )
-  assert.match(
-    body,
-    /isAddressable: \(sessionId\) => \{/,
-    'the addressability probe must live at the ctx seam, where a hostile face is caught',
-  )
+  assert.match(body, /isAddressable: \(sessionId\) => \{/, 'the addressability probe must live at the ctx seam, where a hostile face is caught')
   assert.match(
     body,
     /if \(snapshot\?\.byId === undefined\) return undefined/,
-    'an ABSENT face is `undefined` (retire silently, 2026-09-11 review F2) — a readable-but-empty face is `false` (keep polling), handled by the next line',
+    'an ABSENT face is `undefined` (retire silently, 2026-09-11 review F2); a readable-but-empty face is `false` (keep polling)',
   )
   assert.doesNotMatch(
     body,

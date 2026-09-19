@@ -13,43 +13,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { projectRemoteRuntimeBadge, remoteRuntimeStatusView } from '../../src/client/gateway-runtime-api.ts'
-import type { RemoteRuntimeStatus } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
-
-function status(overrides: Partial<RemoteRuntimeStatus> = {}): RemoteRuntimeStatus {
-  return {
-    kind: 'dsh-chamber-gateway-runtime',
-    activeVersion: '1.0.0',
-    builtinVersion: '0.9.0',
-    currentVersion: '1.0.0',
-    selectedVersion: '1.0.0',
-    hasOverride: true,
-    source: 'builtin-anchor',
-    phase: 'idle',
-    startupBlockedReason: null,
-    pending: null,
-    connectionState: 'ready',
-    registry: 'https://registry.npmjs.org',
-    registryError: null,
-    platform: 'darwin',
-    mutationsAllowed: true,
-    operationError: null,
-    restart: null,
-    restoreOutcome: null,
-    snapshotCount: 0,
-    latestSnapshotAt: null,
-    snapshotError: null,
-    restoreInProgress: false,
-    preRollbackCount: 0,
-    preRollbackLatestName: null,
-    failure: null,
-    diskUsage: null,
-    diskError: null,
-    diskLimitBytes: 10 * 1024 ** 3,
-    diskLimitExceeded: false,
-    progress: null,
-    ...overrides,
-  }
-}
+import { remoteStatus as status } from '../support/runtime-fixtures.ts'
 
 test('projectRemoteRuntimeBadge maps remote states onto the unified badge vocabulary', () => {
   assert.equal(projectRemoteRuntimeBadge(null), null)
@@ -168,17 +132,6 @@ test('remoteRuntimeStatusView maps the remote status to the four render kinds wi
 })
 
 test('projectRemoteRuntimeBadge: corrupt metadata outranks the generic startup-blocked label', () => {
-  const status = (over: Record<string, unknown>): RemoteRuntimeStatus => ({
-    kind: 'dsh-chamber-gateway-runtime', activeVersion: null, builtinVersion: null,
-    currentVersion: null, selectedVersion: null, hasOverride: false, source: null,
-    phase: 'idle', startupBlockedReason: null, pending: null, connectionState: null,
-    registry: null, registryError: null, platform: null, mutationsAllowed: true,
-    operationError: null, restart: null, restoreOutcome: null, snapshotCount: null,
-    latestSnapshotAt: null, snapshotError: null, restoreInProgress: null,
-    preRollbackCount: null, preRollbackLatestName: null, failure: null,
-    diskUsage: null, diskError: null, diskLimitBytes: null, diskLimitExceeded: null,
-    progress: null, ...over,
-  })
   assert.deepEqual(
     projectRemoteRuntimeBadge(status({ metadataHealth: 'selection-corrupt', startupBlockedReason: 'journal-corrupt' })),
     { label: 'metadata', tone: 'danger' },

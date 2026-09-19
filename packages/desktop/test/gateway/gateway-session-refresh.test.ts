@@ -1,10 +1,6 @@
-/**
- * gateway-session — part 3: gatewaySessionOriginForUrl and the proactive refresh
- * orchestration (arm at expiry − lead, re-login/re-register, dead-cookie
- * recovery, disarm) against fake and real session managers.
- *
- * Sibling parts: gateway-session.test.ts, gateway-session-lifecycle.test.ts.
- */
+/** gateway-session — part 3: gatewaySessionOriginForUrl and the proactive refresh orchestration
+ *  (arm at expiry − lead, re-login/re-register, dead-cookie recovery, disarm) against fake and real
+ *  managers (siblings: gateway-session.test.ts, gateway-session-lifecycle.test.ts). */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

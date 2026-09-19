@@ -4,32 +4,22 @@ import { fetchInstanceSnapshot } from '../../src/shared/instance-api.ts'
 
 /** One wire summary row (SessionSummary shape the unary client decodes). */
 function summary(overrides: Record<string, unknown>): Record<string, unknown> {
-  return {
-    sessionId: 's1',
-    updatedAt: 100,
-    running: false,
-    blank: false,
-    ...overrides,
-  }
+  return { sessionId: 's1', updatedAt: 100, running: false, blank: false, ...overrides }
+}
+
+/** Minimal unary client whose `session.list` answers `items`. */
+function listClient(items: readonly unknown[]) {
+  return { session: { list: async () => ({ ok: true as const, value: { items } }) } }
 }
 
 test('fetchInstanceSnapshot derives workspace groups from session cwd facts', async () => {
-  const client = {
-    session: {
-      list: async () => ({
-        ok: true as const,
-        value: {
-          items: [
-            summary({ sessionId: 's1', cwd: '/work/a', updatedAt: 300, running: true }),
-            summary({ sessionId: 's2', cwd: '/work/a', updatedAt: 200 }),
-            summary({ sessionId: 's3', cwd: '/work/b', updatedAt: 400 }),
-            summary({ sessionId: 's4' }), // no cwd → ungrouped
-            summary({ sessionId: 'sub', origin: 'subagent', cwd: '/work/a' }),
-          ],
-        },
-      }),
-    },
-  }
+  const client = listClient([
+    summary({ sessionId: 's1', cwd: '/work/a', updatedAt: 300, running: true }),
+    summary({ sessionId: 's2', cwd: '/work/a', updatedAt: 200 }),
+    summary({ sessionId: 's3', cwd: '/work/b', updatedAt: 400 }),
+    summary({ sessionId: 's4' }), // no cwd → ungrouped
+    summary({ sessionId: 'sub', origin: 'subagent', cwd: '/work/a' }),
+  ])
   const snapshot = await fetchInstanceSnapshot(client as never)
   // Groups ordered by newest session (/work/b has s3@400 first).
   assert.equal(snapshot.workspaces.length, 2)
@@ -53,24 +43,15 @@ test('fetchInstanceSnapshot resolves the official display label on the unary pat
   // ladder itself — durable title, then the cwd basename, then the id. A row
   // whose title the host could not read (title projection empty) must NOT
   // arrive labelless: the sidebar would render 「未命名会话」 for it.
-  const client = {
-    session: {
-      list: async () => ({
-        ok: true as const,
-        value: {
-          items: [
-            summary({ sessionId: 'titled', cwd: '/work/a', projections: { values: { title: 'Real title' } } }),
-            // The REAL shape of a label-less predecessor record: the official
-            // title unit serves `null` (schema `string().min(1).nullable()`), and an
-            // empty string is impossible on the wire — both must resolve by ladder.
-            summary({ sessionId: 'untitled', cwd: '/work/dsh-chamber', projections: { values: { title: null } } }),
-            summary({ sessionId: 'empty-title', cwd: '/work/dsh-chamber', projections: { values: { title: '' } } }),
-            summary({ sessionId: 'nowhere' }),
-          ],
-        },
-      }),
-    },
-  }
+  // The REAL shape of a label-less predecessor record: the official title unit
+  // serves `null` (schema `string().min(1).nullable()`), and an empty string is
+  // impossible on the wire — both must resolve by the same ladder.
+  const client = listClient([
+    summary({ sessionId: 'titled', cwd: '/work/a', projections: { values: { title: 'Real title' } } }),
+    summary({ sessionId: 'untitled', cwd: '/work/dsh-chamber', projections: { values: { title: null } } }),
+    summary({ sessionId: 'empty-title', cwd: '/work/dsh-chamber', projections: { values: { title: '' } } }),
+    summary({ sessionId: 'nowhere' }),
+  ])
   const snapshot = await fetchInstanceSnapshot(client as never)
   const byId = new Map(snapshot.sessions.map(row => [row.sessionId, row]))
   assert.equal(byId.get('titled')?.displayTitle, 'Real title')
@@ -82,14 +63,7 @@ test('fetchInstanceSnapshot resolves the official display label on the unary pat
 })
 
 test('fetchInstanceSnapshot surfaces no-cwd sessions ungrouped and keeps wire rows', async () => {
-  const client = {
-    session: {
-      list: async () => ({
-        ok: true as const,
-        value: { items: [summary({ sessionId: 's1' }), summary({ sessionId: 's2', cwd: '/x' })] },
-      }),
-    },
-  }
+  const client = listClient([summary({ sessionId: 's1' }), summary({ sessionId: 's2', cwd: '/x' })])
   const snapshot = await fetchInstanceSnapshot(client as never)
   assert.equal(snapshot.workspaces.length, 1)
   assert.equal(snapshot.workspaces[0].title, 'x')
@@ -107,20 +81,11 @@ test('fetchInstanceSnapshot cwd grouping titles handle Windows separators, trail
   // trim falls back to the raw cwd '/' — never an empty title). All three
   // sessions share the default updatedAt, so the stable recency sort keeps
   // insertion order.
-  const client = {
-    session: {
-      list: async () => ({
-        ok: true as const,
-        value: {
-          items: [
-            summary({ sessionId: 's1', cwd: 'C:\\work\\proj' }),
-            summary({ sessionId: 's2', cwd: '/work/proj/' }),
-            summary({ sessionId: 's3', cwd: '/' }),
-          ],
-        },
-      }),
-    },
-  }
+  const client = listClient([
+    summary({ sessionId: 's1', cwd: 'C:\\work\\proj' }),
+    summary({ sessionId: 's2', cwd: '/work/proj/' }),
+    summary({ sessionId: 's3', cwd: '/' }),
+  ])
   const snapshot = await fetchInstanceSnapshot(client as never)
   assert.equal(snapshot.workspaces.length, 3)
   assert.deepEqual(snapshot.workspaces.map(w => w.title), ['proj', 'proj', '/'])
@@ -176,6 +141,28 @@ function cleanupClient(overrides: Record<string, unknown> = {}) {
       }),
     },
   }
+}
+
+/** JSON response carrying the wire content type. */
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
+}
+
+/** Run `body` with globalThis.fetch stubbed, restoring it on every path. */
+async function withFetch<T>(stub: typeof fetch, body: () => Promise<T>): Promise<T> {
+  const original = globalThis.fetch
+  globalThis.fetch = stub
+  try { return await body() } finally { globalThis.fetch = original }
+}
+
+/** Stub answering every unary RPC with the generic carrier `{ok:true,value:result}`, recording bodies. */
+function rpcStub(result: unknown, bodies: string[] = []): typeof fetch {
+  return (async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const raw = String(init?.body ?? '')
+    bodies.push(raw)
+    const envelope = JSON.parse(raw) as { rpcId?: string }
+    return jsonResponse({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: true, value: result } })
+  }) as typeof fetch
 }
 
 test('previewArchiveCleanup decodes the domain counts', async () => {
@@ -310,82 +297,50 @@ test('malformed nested domain carriers FAIL LOUD — never decode into empty cou
 })
 
 test('404 discrimination: instance_not_found stays a generic transport failure; other 404s map to domain missing', async () => {
-  const originalFetch = globalThis.fetch
   const calls: Array<{ url: string; init?: RequestInit }> = []
-  try {
-    // First call: control-plane unknown-instance 404 (body code present).
-    // Second call: host answered 404 with no instance_not_found code (a
-    // chamber host domain the runtime tree does not mount).
-    const responses = [
-      new Response(JSON.stringify({ code: 'instance_not_found', error: 'unknown instance path' }), {
-        status: 404,
-        headers: { 'content-type': 'application/json' },
-      }),
-      new Response(JSON.stringify({ error: 'method not registered' }), {
-        status: 404,
-        headers: { 'content-type': 'application/json' },
-      }),
-    ]
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-      calls.push({ url: String(input), init })
-      return responses.shift() as Response
-    }) as typeof fetch
-
+  // First call: control-plane unknown-instance 404 (body code present). Second:
+  // a host 404 with no instance_not_found code (a domain the runtime tree does
+  // not mount).
+  const responses = [
+    jsonResponse({ code: 'instance_not_found', error: 'unknown instance path' }, 404),
+    jsonResponse({ error: 'method not registered' }, 404),
+  ]
+  await withFetch((async (input: RequestInfo | URL, init?: RequestInit) => {
+    calls.push({ url: String(input), init })
+    return responses.shift() as Response
+  }) as typeof fetch, async () => {
     const client = getInstanceClient('local')
     await assert.rejects(
       () => client.archiveCleanup.preview({}),
-      (error: unknown) => {
-        return error instanceof Error
-          && error.message.includes('HTTP 404')
-          && !isInstanceDomainMissing(error)
-      },
+      (error: unknown) => error instanceof Error && error.message.includes('HTTP 404') && !isInstanceDomainMissing(error),
     )
     await assert.rejects(
       () => client.archiveCleanup.preview({}),
       (error: unknown) => isInstanceDomainMissing(error),
     )
-    assert.equal(calls.length, 2)
-    assert.ok(calls.every(call => call.url.includes('/api/i/local/api/archiveCleanup/preview')))
-    const body = JSON.parse(String(calls[0]?.init?.body)) as { method?: string; payload?: unknown }
-    assert.equal(body.method, 'archiveCleanup/preview')
-    assert.deepEqual(body.payload, { args: {} })
-  } finally {
-    globalThis.fetch = originalFetch
-  }
+  })
+  assert.equal(calls.length, 2)
+  assert.ok(calls.every(call => call.url.includes('/api/i/local/api/archiveCleanup/preview')))
+  const body = JSON.parse(String(calls[0]?.init?.body)) as { method?: string; payload?: unknown }
+  assert.equal(body.method, 'archiveCleanup/preview')
+  assert.deepEqual(body.payload, { args: {} })
 })
 
 test('404 discrimination: oversized 404 bodies stay safe under the bounded read (review follow-up F10)', async () => {
-  const originalFetch = globalThis.fetch
-  try {
-    // A body far beyond the 4 KiB cap is never fully consumed: the bounded
-    // probe resolves null and the branch keeps its conservative domain-
-    // missing throw — no crash, no misread of a huge page.
-    const oversized = 'x'.repeat(64 * 1024)
-    const responses = [
-      // Even an oversized body that WOULD carry instance_not_found past the
-      // cap is not trusted — the discrimination only reads a tiny code JSON.
-      new Response(JSON.stringify({ code: 'instance_not_found', error: oversized }), {
-        status: 404,
-        headers: { 'content-type': 'application/json' },
-      }),
-      new Response(oversized, { status: 404 }),
-    ]
-    globalThis.fetch = (async () => responses.shift() as Response) as typeof fetch
+  // A body far beyond the 4 KiB cap is never fully consumed: the bounded probe
+  // resolves null and the conservative domain-missing throw follows — no crash.
+  const oversized = 'x'.repeat(64 * 1024)
+  const responses = [
+    // Even an oversized body that WOULD carry instance_not_found past the cap
+    // is not trusted — the discrimination only reads a tiny code JSON.
+    jsonResponse({ code: 'instance_not_found', error: oversized }, 404),
+    new Response(oversized, { status: 404 }),
+  ]
+  await withFetch((async () => responses.shift() as Response) as typeof fetch, async () => {
     const client = getInstanceClient('local')
-    // Both oversized shapes fall to the conservative domain-missing outcome
-    // (payload404 null → domain-missing throw) instead of crashing or
-    // resolving an empty success.
-    await assert.rejects(
-      () => client.archiveCleanup.preview({}),
-      (error: unknown) => isInstanceDomainMissing(error),
-    )
-    await assert.rejects(
-      () => client.archiveCleanup.preview({}),
-      (error: unknown) => isInstanceDomainMissing(error),
-    )
-  } finally {
-    globalThis.fetch = originalFetch
-  }
+    await assert.rejects(() => client.archiveCleanup.preview({}), (error: unknown) => isInstanceDomainMissing(error))
+    await assert.rejects(() => client.archiveCleanup.preview({}), (error: unknown) => isInstanceDomainMissing(error))
+  })
 })
 
 test('purge/preview wrappers map no-response outcomes to honest retry copy (design 24 §5)', async () => {
@@ -428,101 +383,50 @@ test('purge/preview wrappers map no-response outcomes to honest retry copy (desi
 })
 
 test('503 classification: not-ready answers surface as InstanceUnavailableError (not-ready prefix)', async () => {
-  const originalFetch = globalThis.fetch
-  try {
-    globalThis.fetch = (async () => new Response(
-      JSON.stringify({ code: 'instance_unavailable', error: 'instance is still starting' }),
-      { status: 503, headers: { 'content-type': 'application/json' } },
-    )) as typeof fetch
+  const notReady = (async () => jsonResponse({ code: 'instance_unavailable', error: 'instance is still starting' }, 503)) as typeof fetch
+  await withFetch(notReady, async () => {
     const client = getInstanceClient('local')
+    // Prefix added by the wrapper-level wrapWireError.
     await assert.rejects(
       () => client.archiveCleanup.preview({}),
-      (error: unknown) => error instanceof InstanceUnavailableError, // prefix added by the wrapper-level wrapWireError
+      (error: unknown) => error instanceof InstanceUnavailableError,
     )
-  } finally {
-    globalThis.fetch = originalFetch
-  }
+  })
 })
 
 test('purgeArchivedSessions always sends {sessionIds, force:true, protectSessionIds} — one shape, no legacy legs (2026-09 protection amendment)', async () => {
-  const originalFetch = globalThis.fetch
   const bodies: string[] = []
-  try {
-    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const raw = String(init?.body ?? '')
-      bodies.push(raw)
-      const envelope = JSON.parse(raw) as { rpcId?: string }
-      return new Response(JSON.stringify({
-        type: 'server-response',
-        rpcId: envelope.rpcId,
-        result: {
-          ok: true,
-          value: {
-            ok: true,
-            value: {
-              deletedSessions: 1,
-              deletedSubagents: 0,
-              skippedRunning: 0,
-              skippedLoaded: 0,
-              forcedLoaded: 1,
-              skippedProtected: 2,
-              errors: [],
-            },
-          },
-        },
-      }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      })
-    }) as typeof fetch
-
-    const client = getInstanceClient('local')
-    const result = await purgeArchivedSessions(client, ['s1', 's2'], ['s9'])
-    assert.equal(result.deletedSessions, 1)
-    assert.equal(result.forcedLoaded, 1)
-    assert.equal(result.skippedProtected, 2, 'the host-reported protected-tree count is decoded')
-    assert.equal(bodies.length, 1, 'exactly one call — no skew retry leg exists')
-    const argsOf = (raw: string): unknown => (JSON.parse(raw) as { payload?: unknown }).payload
-    assert.deepEqual(argsOf(bodies[0] as string), {
-      args: { sessionIds: ['s1', 's2'], force: true, protectSessionIds: ['s9'] },
-    })
-  } finally {
-    globalThis.fetch = originalFetch
-  }
+  const client = getInstanceClient('local')
+  const result = await withFetch(rpcStub({
+    ok: true,
+    value: {
+      deletedSessions: 1, deletedSubagents: 0, skippedRunning: 0, skippedLoaded: 0,
+      forcedLoaded: 1, skippedProtected: 2, errors: [],
+    },
+  }, bodies), () => purgeArchivedSessions(client, ['s1', 's2'], ['s9']))
+  assert.equal(result.deletedSessions, 1)
+  assert.equal(result.forcedLoaded, 1)
+  assert.equal(result.skippedProtected, 2, 'the host-reported protected-tree count is decoded')
+  assert.equal(bodies.length, 1, 'exactly one call — no skew retry leg exists')
+  const argsOf = (raw: string): unknown => (JSON.parse(raw) as { payload?: unknown }).payload
+  assert.deepEqual(argsOf(bodies[0] as string), {
+    args: { sessionIds: ['s1', 's2'], force: true, protectSessionIds: ['s9'] },
+  })
 })
 
 test('purgeArchivedSessions: no protectable session still sends the same shape with an empty protected set', async () => {
-  const originalFetch = globalThis.fetch
   const bodies: string[] = []
-  try {
-    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const raw = String(init?.body ?? '')
-      bodies.push(raw)
-      const envelope = JSON.parse(raw) as { rpcId?: string }
-      return new Response(JSON.stringify({
-        type: 'server-response',
-        rpcId: envelope.rpcId,
-        result: {
-          ok: true,
-          value: { ok: true, value: { deletedSessions: 0, deletedSubagents: 0, skippedRunning: 0, errors: [] } },
-        },
-      }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      })
-    }) as typeof fetch
-
-    const client = getInstanceClient('local')
-    const result = await purgeArchivedSessions(client, [])
-    assert.equal(result.deletedSessions, 0)
-    assert.equal(result.skippedProtected, 0, 'an absent count decodes to 0, never undefined')
-    const payload = (JSON.parse(bodies[0] as string) as { payload?: unknown }).payload
-    // [] is the delimiter for "delete nothing" and MUST NOT be normalized to a
-    // whole-set request; the protected set is explicit and empty.
-    assert.deepEqual(payload, { args: { sessionIds: [], force: true, protectSessionIds: [] } })
-  } finally {
-    globalThis.fetch = originalFetch
-  }
+  const client = getInstanceClient('local')
+  const result = await withFetch(
+    rpcStub({ ok: true, value: { deletedSessions: 0, deletedSubagents: 0, skippedRunning: 0, errors: [] } }, bodies),
+    () => purgeArchivedSessions(client, []),
+  )
+  assert.equal(result.deletedSessions, 0)
+  assert.equal(result.skippedProtected, 0, 'an absent count decodes to 0, never undefined')
+  const payload = (JSON.parse(bodies[0] as string) as { payload?: unknown }).payload
+  // [] is the delimiter for "delete nothing" and MUST NOT be normalized to a
+  // whole-set request; the protected set is explicit and empty.
+  assert.deepEqual(payload, { args: { sessionIds: [], force: true, protectSessionIds: [] } })
 })
 
 test('purgeArchivedSessions surfaces a host args refusal verbatim (no compatibility fallback exists)', async () => {
@@ -540,46 +444,23 @@ test('purgeArchivedSessions surfaces a host args refusal verbatim (no compatibil
 })
 
 test('cancelSession posts the official session/cancel request shape', async () => {
-  const originalFetch = globalThis.fetch
   const bodies: string[] = []
-  try {
-    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const raw = String(init?.body ?? '')
-      bodies.push(raw)
-      const envelope = JSON.parse(raw) as { rpcId?: string }
-      return new Response(JSON.stringify({
-        type: 'server-response',
-        rpcId: envelope.rpcId,
-        result: { ok: true, value: { accepted: true } },
-      }), { status: 200, headers: { 'content-type': 'application/json' } })
-    }) as typeof fetch
-
+  await withFetch(rpcStub({ ok: true, value: { accepted: true } }, bodies), async () => {
     await cancelSession(getInstanceClient('local'), 's1')
-    const envelope = JSON.parse(bodies[0] as string) as { method?: string; payload?: unknown }
-    assert.equal(envelope.method, 'session/cancel')
-    assert.deepEqual(envelope.payload, { args: { request: { sessionId: 's1' } } })
-  } finally {
-    globalThis.fetch = originalFetch
-  }
+  })
+  const envelope = JSON.parse(bodies[0] as string) as { method?: string; payload?: unknown }
+  assert.equal(envelope.method, 'session/cancel')
+  assert.deepEqual(envelope.payload, { args: { request: { sessionId: 's1' } } })
 })
 
 test('fetchSessionRunningLineage keeps subagent rows but only SUBAGENT-origin edges (fork rows carry none)', async () => {
-  const client = {
-    session: {
-      list: async () => ({
-        ok: true as const,
-        value: {
-          items: [
-            { sessionId: 's1', running: true },
-            { sessionId: 'a1', running: true, origin: 'subagent', parentSessionId: 's1' },
-            { sessionId: 'fork1', running: true, parentSessionId: 's1' },
-            { sessionId: 's2', running: false },
-            { sessionId: 's3' },
-          ],
-        },
-      }),
-    },
-  }
+  const client = listClient([
+    { sessionId: 's1', running: true },
+    { sessionId: 'a1', running: true, origin: 'subagent', parentSessionId: 's1' },
+    { sessionId: 'fork1', running: true, parentSessionId: 's1' },
+    { sessionId: 's2', running: false },
+    { sessionId: 's3' },
+  ])
   const lineage = await fetchSessionRunningLineage(client as never)
   assert.deepEqual([...lineage.running].sort(), ['a1', 'fork1', 's1'],
     'a running fork is a real running session (its own guards must see it)')
@@ -655,10 +536,6 @@ test('stopSessionsForPurge catches a failed session/list read (never throws) and
 // contains it), and the currently-viewed session is excluded from the CLOSURE.
 // ---------------------------------------------------------------------------
 
-function lineageClient(items: readonly unknown[]) {
-  return { session: { list: async () => ({ ok: true as const, value: { items } }) } }
-}
-
 /** A hand-built lineage for the stop-pass seams: `listed`/`subagentIds` default
  *  to what the rows imply (edge keys are subagent rows; every referenced id is
  *  listed), so the E-#1 completeness rule sees a resolvable chain unless a test
@@ -683,7 +560,7 @@ const LINEAGE_ROWS = [
 ]
 
 test('fetchSessionRunningLineage reads running ids AND the SUBAGENT parent edges of one session/list call', async () => {
-  const lineage = await fetchSessionRunningLineage(lineageClient(LINEAGE_ROWS) as never)
+  const lineage = await fetchSessionRunningLineage(listClient(LINEAGE_ROWS) as never)
   assert.deepEqual([...lineage.running].sort(), ['child', 'fork', 'fork-grand', 'grand', 'unrelated'])
   assert.deepEqual([...lineage.parents.entries()], [['child', 'root'], ['grand', 'child'], ['fork-grand', 'fork']],
     'subagent edges only; the fork row and the self-referencing row contribute no edge')
@@ -697,7 +574,7 @@ test('fetchSessionRunningLineage reads running ids AND the SUBAGENT parent edges
 })
 
 test('sessionPurgeClosure follows subagent-origin edges only (a fork subtree is NOT the root tree)', async () => {
-  const lineage = await fetchSessionRunningLineage(lineageClient(LINEAGE_ROWS) as never)
+  const lineage = await fetchSessionRunningLineage(listClient(LINEAGE_ROWS) as never)
   assert.deepEqual(sessionPurgeClosure(['root'], lineage), ['root', 'child', 'grand'],
     'the fork child (and everything under it) is outside the purge tree')
   assert.deepEqual(sessionPurgeClosure(['root'], null), ['root'], 'no lineage facts => roots only, never a guess')
@@ -707,7 +584,7 @@ test('stopSessionsForPurge cancels the running CLOSURE and waits for the whole c
   const cancelled: string[] = []
   const parents = new Map([['child', 'root'], ['grand', 'child']])
   let running = new Set(['child', 'grand', 'unrelated'])
-  const result = await stopSessionsForPurge(lineageClient(LINEAGE_ROWS) as never, ['root'], {
+  const result = await stopSessionsForPurge(listClient(LINEAGE_ROWS) as never, ['root'], {
     fetchRunning: async () => lineageOf(running, parents),
     cancel: async (_client, sessionId) => { cancelled.push(sessionId) },
     delay: async () => { running = new Set(['unrelated']) },
@@ -723,8 +600,8 @@ test('stopSessionsForPurge cancels the running CLOSURE and waits for the whole c
 
 test('stopSessionsForPurge never cancels a running FORK of the selected root (F3)', async () => {
   const cancelled: string[] = []
-  const lineage = await fetchSessionRunningLineage(lineageClient(LINEAGE_ROWS) as never)
-  const result = await stopSessionsForPurge(lineageClient(LINEAGE_ROWS) as never, ['root'], {
+  const lineage = await fetchSessionRunningLineage(listClient(LINEAGE_ROWS) as never)
+  const result = await stopSessionsForPurge(listClient(LINEAGE_ROWS) as never, ['root'], {
     fetchRunning: async () => lineage,
     cancel: async (_client, sessionId) => { cancelled.push(sessionId) },
     delay: async () => {},
@@ -740,7 +617,7 @@ test('stopSessionsForPurge refuses roots whose CLOSURE contains the excluded vie
   const parents = new Map([['child', 'root'], ['grand', 'child']])
   const running = new Set(['child', 'grand', 'sibling'])
   const lineage = lineageOf(running, parents)
-  const result = await stopSessionsForPurge(lineageClient(LINEAGE_ROWS) as never, ['root', 'sibling'], {
+  const result = await stopSessionsForPurge(listClient(LINEAGE_ROWS) as never, ['root', 'sibling'], {
     fetchRunning: async () => lineage,
     cancel: async (_client, sessionId) => { cancelled.push(sessionId) },
     delay: async () => { running.clear() },
@@ -758,7 +635,7 @@ test('stopSessionsForPurge refuses roots whose CLOSURE contains the excluded vie
 test('stopSessionsForPurge reports a lingering closure descendant in stillRunning (fail-closed)', async () => {
   const parents = new Map([['child', 'root'], ['grand', 'child']])
   let running = new Set(['child', 'grand'])
-  const result = await stopSessionsForPurge(lineageClient(LINEAGE_ROWS) as never, ['root'], {
+  const result = await stopSessionsForPurge(listClient(LINEAGE_ROWS) as never, ['root'], {
     fetchRunning: async () => lineageOf(running, parents),
     cancel: async () => {},
     delay: async () => { running = new Set(['grand']) },
@@ -846,7 +723,7 @@ test('stopSessionsForPurge: requireCompleteExcludeChain cancels NOTHING when the
     listed: new Set(['root', 'grand']),
     subagentIds: new Set(['grand', 'child']),
   }
-  const result = await stopSessionsForPurge(lineageClient(LINEAGE_ROWS) as never, ['root'], {
+  const result = await stopSessionsForPurge(listClient(LINEAGE_ROWS) as never, ['root'], {
     fetchRunning: async () => lineage,
     cancel: async (_client, sessionId) => { cancelled.push(sessionId) },
     delay: async () => {},
@@ -864,8 +741,8 @@ test('stopSessionsForPurge: a COMPLETE viewed-session chain keeps the cancel pas
   const cancelled: string[] = []
   // Real rows: grand → child → root, so the chain resolves and root's closure
   // is known not to contain `sibling`.
-  const lineage = await fetchSessionRunningLineage(lineageClient(LINEAGE_ROWS) as never)
-  const result = await stopSessionsForPurge(lineageClient(LINEAGE_ROWS) as never, ['sibling'], {
+  const lineage = await fetchSessionRunningLineage(listClient(LINEAGE_ROWS) as never)
+  const result = await stopSessionsForPurge(listClient(LINEAGE_ROWS) as never, ['sibling'], {
     fetchRunning: async () => lineage,
     cancel: async (_client, sessionId) => { cancelled.push(sessionId) },
     delay: async () => {},
@@ -894,22 +771,13 @@ test('stopArchivedSubtree: the archive-time stop is the exclusion-free closure p
 // reads), so an unmounted source's rows carry the active-Schedule fact exactly
 // like the mounted-store projection (derive.ts projectInstanceSnapshot) does.
 test('fetchInstanceSnapshot carries the active-Schedule fact from the wire projections block', async () => {
-  const client = {
-    session: {
-      list: async () => ({
-        ok: true as const,
-        value: {
-          items: [
-            summary({ sessionId: 'scheduled', projections: { values: { schedule: [{ id: 'sch1' }] } } }),
-            summary({ sessionId: 'idle-empty', projections: { values: { schedule: [] } } }),
-            summary({ sessionId: 'no-bag' }),
-            // Defensive: a non-array projection value is not an active set.
-            summary({ sessionId: 'odd', projections: { values: { schedule: 'sch1' } } }),
-          ],
-        },
-      }),
-    },
-  }
+  const client = listClient([
+    summary({ sessionId: 'scheduled', projections: { values: { schedule: [{ id: 'sch1' }] } } }),
+    summary({ sessionId: 'idle-empty', projections: { values: { schedule: [] } } }),
+    summary({ sessionId: 'no-bag' }),
+    // Defensive: a non-array projection value is not an active set.
+    summary({ sessionId: 'odd', projections: { values: { schedule: 'sch1' } } }),
+  ])
   const snapshot = await fetchInstanceSnapshot(client as never)
   const byId = new Map(snapshot.sessions.map(row => [row.sessionId, row]))
   assert.equal(byId.get('scheduled')?.hasActiveSchedule, true, 'a non-empty schedule marks the row')

@@ -1,9 +1,7 @@
 /**
- * win-acl unit tests (design 21 M2a): pure argument builders + output
- * verifiers run on every platform; the exec helper is win32-gated and its
- * off-platform refusal is asserted here too. Real icacls behavior is
- * validated on the Windows CI/实机 leg.
- *
+ * win-acl unit tests (design 21 M2a): pure argument builders + output verifiers
+ * run on every platform; the win32-gated exec helper and its off-platform
+ * refusal are asserted here too. Real icacls behavior: Windows CI/实机 leg.
  * Run directly: node packages/desktop/test/local-state/win-acl.test.ts
  */
 
@@ -16,7 +14,6 @@ import {
   tightenWindowsAcl,
   verifyIcaclsOutput,
 } from '../../win-acl.ts'
-
 test('buildIcaclsTightenArgs removes inheritance and grants the user full control', () => {
   assert.deepEqual(buildIcaclsTightenArgs('C:\\state\\dir', 'directory', 'alice'), [
     'C:\\state\\dir', '/inheritance:r', '/grant:r', 'alice:(OI)(CI)F',
@@ -25,14 +22,12 @@ test('buildIcaclsTightenArgs removes inheritance and grants the user full contro
     'C:\\state\\secret.json', '/inheritance:r', '/grant:r', 'alice:F',
   ])
 })
-
 test('currentWindowsUserName reads USERNAME and fails closed when absent', () => {
   assert.equal(currentWindowsUserName({ USERNAME: 'alice' }), 'alice')
   assert.equal(currentWindowsUserName({ USERNAME: '  alice  ' }), 'alice')
   assert.equal(currentWindowsUserName({}), null)
   assert.equal(currentWindowsUserName({ USERNAME: '' }), null)
 })
-
 test('verifyIcaclsOutput accepts a tightened directory or file', () => {
   const dirAcl = [
     'C:\\Users\\alice\\AppData\\Roaming\\dsh-chamber\\state alice:(OI)(CI)F',
@@ -43,7 +38,6 @@ test('verifyIcaclsOutput accepts a tightened directory or file', () => {
   ].join('\r\n')
   assert.deepEqual(verifyIcaclsOutput(fileAcl, 'alice', 'file'), { ok: true })
 })
-
 test('verifyIcaclsOutput rejects inherited, Everyone/Users/SYSTEM and missing grants', () => {
   const withInherited = [
     'C:\\state\\dir alice:(I)(OI)(CI)F',
@@ -70,7 +64,6 @@ test('verifyIcaclsOutput rejects inherited, Everyone/Users/SYSTEM and missing gr
   assert.equal(verifyIcaclsOutput('C:\\state\\dir alice:F', 'alice', 'directory').ok, false)
   assert.equal(verifyIcaclsOutput('C:\\state\\dir alice:(OI)(CI)F', 'alice', 'file').ok, false)
 })
-
 test('applyWindowsAclTightening skips missing targets, collects failures and preserves kinds', () => {
   const calls: Array<{ path: string; kind: 'directory' | 'file' }> = []
   const tighten = ((path: string, kind: 'directory' | 'file') => {
@@ -93,11 +86,9 @@ test('applyWindowsAclTightening skips missing targets, collects failures and pre
     { path: '/exists/file', kind: 'file' },
   ])
 })
-
 test('tightenWindowsAcl fails closed off win32', { skip: process.platform === 'win32' }, () => {
   assert.throws(() => tightenWindowsAcl('/tmp/whatever', 'directory'), /win32/)
 })
-
 test('verifyIcaclsOutput matches the principal exactly (equality or domain prefix, never substring)', () => {
   assert.deepEqual(verifyIcaclsOutput('C:\\state\\dir alice:(OI)(CI)F', 'alice', 'directory'), { ok: true })
   assert.deepEqual(verifyIcaclsOutput('C:\\state\\dir DESKTOP-X\\alice:(OI)(CI)F', 'alice', 'directory'), { ok: true })

@@ -1,10 +1,9 @@
 /**
- * plugin-diff.ts unit tests (plain node:test, no dsh, no React): the four
- * actionable categories, version comparison, materialize name-matching
- * (local file: vs remote file: judged consistent, never a phantom update),
- * unsyncable classification, the empty-manifest cases, and the §6.11.5
- * protection boundary (protected/composition/seed rows never reach
- * computePluginDiff's inputs).
+ * plugin-diff.ts unit tests (plain node:test, no dsh, no React): the four actionable
+ * categories, version comparison, materialize name-matching (local file: vs remote
+ * file: judged consistent, never a phantom update), unsyncable classification, the
+ * empty-manifest cases, and the §6.11.5 protection boundary (protected/composition/seed
+ * rows never reach computePluginDiff's inputs).
  */
 
 import { test } from 'node:test'
@@ -18,6 +17,7 @@ import {
   type PluginRowKind,
 } from '../../src/client/plugin-diff.ts'
 import { actionableDependencies, type PluginRowShape } from '../../src/client/plugin-model.ts'
+import { pluginRow } from '../support/fixtures.ts'
 import type { LocalPluginManifest, RemotePluginManifest } from '../../src/global.d.ts'
 
 /** Fixture projection: the manifest PLUS the additive §6.11.5 `rows` array this
@@ -55,11 +55,6 @@ function remote(
     rows,
     chamber: { ok: true, packages: [] },
   }
-}
-
-/** One wire-shaped row with third-party/unprotected defaults. */
-function pluginRow(partial: Partial<PluginRowShape> & { name: string }): PluginRowShape {
-  return { spec: '^1.0.0', version: null, role: 'third-party', protected: false, ...partial }
 }
 
 function byKind(result: ReturnType<typeof computePluginDiff>, kind: PluginRowKind): string[] {

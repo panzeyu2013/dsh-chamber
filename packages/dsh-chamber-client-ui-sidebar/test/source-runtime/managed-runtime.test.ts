@@ -2,32 +2,24 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import {
-  fetchManagedRuntimeState,
-  MANAGED_RUNTIME_DOWN_STATES,
-  MANAGED_RUNTIME_TRANSIENT_STATES,
-  managedRuntimeDown,
-  managedRuntimeUnusable,
+  fetchManagedRuntimeState, MANAGED_RUNTIME_DOWN_STATES, MANAGED_RUNTIME_TRANSIENT_STATES,
+  managedRuntimeDown, managedRuntimeUnusable,
 } from '../../src/shared/managed-runtime.ts'
 import { GATEWAY_RUNTIME_STATUS_KIND } from '../../src/shared/gateway-runtime.ts'
 
-// 问题 B（design 17 §2）：gateway 来源的托管 dsh 状态投影。desktop 的 ready
-// 只证明 gateway 进程活着，停机窗口必须能被侧栏看见/禁用，而探针缺失时
-// 绝不能把健康来源隐藏（fail open）。
+// 问题 B（design 17 §2）：gateway 来源的托管 dsh 状态投影。desktop 的 ready 只证明 gateway 进程活着，
+// 停机窗口必须能被侧栏看见/禁用，而探针缺失时绝不能把健康来源隐藏（fail open）。
 
-const response = (status: number, body: unknown): Response => ({
-  status,
-  json: async () => body,
-}) as unknown as Response
+const response = (status: number, body: unknown): Response => ({ status, json: async () => body }) as unknown as Response
 
 test('only the explicit terminal-down states count as down', () => {
   for (const state of MANAGED_RUNTIME_DOWN_STATES) assert.equal(managedRuntimeDown(state), true)
-  // Transient/healthy states must keep the source interactive (rows stay; the
-  // existing status dot renders the phase).
+  // Transient/healthy states must keep the source interactive (rows stay; the existing status dot renders the phase).
   for (const state of ['ready', 'degraded', 'starting', 'restarting', 'idle', 'unknown', '']) {
-    assert.equal(managedRuntimeDown(state), false, `${state} must not hide the source`)
+    assert.equal(managedRuntimeDown(state), false, String(state) + ' must not hide the source')
   }
-  // Missing probes fail open: a proxy failure, an older gateway without the
-  // route, or an unmounted tunnel must never masquerade as "managed dsh down".
+  // Missing probes fail open: a proxy failure, an older gateway without the route, or an unmounted tunnel must
+  // never masquerade as "managed dsh down".
   for (const state of [undefined, null]) assert.equal(managedRuntimeDown(state), false)
 })
 
@@ -49,11 +41,10 @@ test('the probe reads connectionState through the per-instance proxy and never t
   const fetchBadJson = (async () => ({ status: 200, json: async () => { throw new Error('not json') } })) as unknown as typeof fetch
   assert.equal(await fetchManagedRuntimeState('gateway-a', { fetchImpl: fetchBadJson }), null)
 
-  // Non-200 (control plane's explicit 503 for a dead tunnel; 401/404 config
-  // errors) → unknown.
+  // Non-200 (control plane's explicit 503 for a dead tunnel; 401/404 config errors) → unknown.
   for (const status of [401, 403, 404, 503]) {
     const fetchStatus = (async () => response(status, { error: 'nope' })) as unknown as typeof fetch
-    assert.equal(await fetchManagedRuntimeState('gateway-a', { fetchImpl: fetchStatus }), null, `HTTP ${status}`)
+    assert.equal(await fetchManagedRuntimeState('gateway-a', { fetchImpl: fetchStatus }), null, 'HTTP ' + status)
   }
 
   // Transport failure / abort → unknown.
@@ -69,8 +60,7 @@ test('the probe reads connectionState through the per-instance proxy and never t
 })
 
 test('an unknown/future connectionState passes through verbatim (version skew)', async () => {
-  // The projection must not classify a state it does not know as down; it
-  // surfaces it (the status dot renders status.unknown) and stays fail-open.
+  // The projection must not classify a state it does not know as down; it surfaces it and stays fail-open.
   const fetchFuture = (async () => response(200, { kind: GATEWAY_RUNTIME_STATUS_KIND, connectionState: 'quiescing' })) as unknown as typeof fetch
   const state = await fetchManagedRuntimeState('gateway-a', { fetchImpl: fetchFuture })
   assert.equal(state, 'quiescing')
@@ -85,111 +75,87 @@ test('an invalid instance id never reaches the network', async () => {
   assert.equal(called, 0, 'the canonical runtime path validates the gateway-<id> shape first')
 })
 
-// 源码级接线钉子（2026-12 复查 MINOR）：托管停机的**判定事实**必须独立于合并后
-// 的 `phase`（两套词表都含 `error`，反推会把隧道失败误诊为托管停机——BLOCKER），
-// 且两个消费面都必须只读该事实。
+// 源码级接线钉子（2026-12 复查 MINOR）：托管停机的**判定事实**必须独立于合并后的 `phase`（两套词表都含
+// `error`，反推会把隧道失败误诊为托管停机——BLOCKER），且两个消费面都必须只读该事实。
 const sidebarRoot = new URL('../../', import.meta.url)
 const serverSection = readFileSync(new URL('src/client/ServerSection.tsx', sidebarRoot), 'utf8')
 const appSource = readFileSync(new URL('../renderer/src/App.tsx', sidebarRoot), 'utf8')
+/** Source-text locks: `pattern` must (or must not) appear in the sidebar / App source, with the given rationale. */
+const sLock = (pattern: RegExp, message: string): void => { assert.match(serverSection, pattern, message) }
+const sNoLock = (pattern: RegExp, message: string): void => { assert.doesNotMatch(serverSection, pattern, message) }
+const aLock = (pattern: RegExp, message: string): void => { assert.match(appSource, pattern, message) }
 
 test('the sidebar consumes the dedicated managed-down fact, never the merged phase', () => {
-  assert.match(serverSection, /server\.managedRuntimeDown === true/,
-    'the note/header must gate on the dedicated fact')
-  assert.doesNotMatch(serverSection, /managedRuntimeDown\(server\.phase\)/,
+  sLock(/server\.managedRuntimeDown === true/, 'the note/header must gate on the dedicated fact')
+  sNoLock(/managedRuntimeDown\(server\.phase\)/,
     're-classifying the merged phase would misdiagnose a transport error as a stopped managed dsh')
-  assert.match(serverSection, /sourceHeaderActivatable\(/,
-    'a managed-down source header must stop being an activation affordance')
-  assert.match(serverSection, /server\.connected && search\?\.expanded === true/,
+  sLock(/sourceHeaderActivatable\(/, 'a managed-down source header must stop being an activation affordance')
+  sLock(/server\.connected && search\?\.expanded === true/,
     'the search capsule must be gated on connected (otherwise it is a keyboard dead end)')
 })
 
 test('the App publishes the fact only while the transport is usable', () => {
-  assert.match(appSource, /const managedDown = kind === 'gateway' && transportUsable && managedRuntimeDown\(runtimeState\)/,
+  aLock(/const managedDown = kind === 'gateway' && transportUsable && managedRuntimeDown\(runtimeState\)/,
     'the projection must gate the managed fact on a usable transport')
-  assert.match(appSource, /\.\.\.\(managedDown \? \{ managedRuntimeDown: true \} : \{\}\)/,
-    'the aggregate must carry the dedicated field')
-  assert.match(appSource, /const phase = managedDown \|\| managedTransient \? runtimeState! : transportPhase/,
+  aLock(/\.\.\.\(managedDown \? \{ managedRuntimeDown: true \} : \{\}\)/, 'the aggregate must carry the dedicated field')
+  aLock(/const phase = managedDown \|\| managedTransient \? runtimeState! : transportPhase/,
     'starting/restarting must project into phase so the dot does not claim ready')
-  assert.match(appSource, /managedRuntimeUnusable\(managedRuntime\[/,
-    'harvest/prewarm must skip both terminal and transient managed states')
+  aLock(/managedRuntimeUnusable\(managedRuntime\[/, 'harvest/prewarm must skip both terminal and transient managed states')
 })
 
 test('the baseline-pending note is gated on the aggregate facts, not on the phase', () => {
-  // 降级列表的诚实标注（2026-12 复查 MAJOR）：门条件必须是
-  // connected && aggregateReady && archiveSetKnown !== true（unary 兜底视图的
-  // 三态），否则要么不显示、要么把真实列表也标注成降级。
-  assert.match(serverSection,
-    /server\.connected && server\.aggregateReady === true && server\.archiveSetKnown !== true/,
+  // 降级列表的诚实标注（2026-12 复查 MAJOR）：门条件必须是 connected && aggregateReady && archiveSetKnown !== true
+  // （unary 兜底视图的三态），否则要么不显示、要么把真实列表也标注成降级。
+  sLock(/server\.connected && server\.aggregateReady === true && server\.archiveSetKnown !== true/,
     'the degraded-list note must key off the aggregate tri-state')
-  assert.match(serverSection, /t\('source\.baselinePending'\)/, 'the note text must come from the dictionary')
+  sLock(/t\('source\.baselinePending'\)/, 'the note text must come from the dictionary')
 })
 
 test('the sidebar renders ONE persistent live region per source', () => {
-  // 插入即带内容的 role="status" 不会被 AT 播报；说明行也必须互斥（同一时刻至多
-  // 一条）——单一常驻区域 + 换文本才是正确形态。2026-12：降级说明（boot 缺口）
-  // 是这条 note 的一个分支 + 修饰类，不是第二个 live region。
-  assert.match(serverSection, /const sourceNote = server\.managedRuntimeDown === true/,
-    'the note text must be derived once')
+  // 插入即带内容的 role="status" 不会被 AT 播报；说明行也必须互斥（同一时刻至多一条）——单一常驻区域 +
+  // 换文本才是正确形态。2026-12：降级说明（boot 缺口）是这条 note 的一个分支 + 修饰类，不是第二个 live region。
+  sLock(/const sourceNote = server\.managedRuntimeDown === true/, 'the note text must be derived once')
   assert.match(
     serverSection,
     /<div\s+id=\{sourceNoteId\}\s+className=\{clsx\(cc\.sourceNote, noteIsBootGap && cc\.sourceNoteBootGap\)\}\s+role="status"\s+aria-live=\{noteIsBootGap && server\.id === chamberInstanceId \? 'off' : 'polite'\}\s*>/,
     'one persistent polite live region per source (the gap note modifies it)',
   )
-  // Comments are stripped before counting: the note's own comment NAMES the
-  // attribute, and a lock satisfied by prose is what these locks exist to prevent.
+  // Comments are stripped before counting: the note's own comment NAMES the attribute, and a lock satisfied by
+  // prose is what these locks exist to prevent.
   const noteCode = serverSection.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/^\s*\/\/.*$/gm, ' ')
-  assert.equal(
-    (noteCode.match(/aria-live=/g) ?? []).length,
-    1,
-    'exactly ONE live region per source — a second one would double-announce',
-  )
-  // …and the SAME region must actually RENDER the derived text. Counting
-  // `aria-live=` alone missed a second region written as `role="status"` (the
-  // idiomatic form elsewhere in this file) AND an emptied note
-  // (`{sourceNote}` → `{''}`), both proven green before this lock (2026-12
-  // falsification round): one render site, and it renders the cascade's result.
-  assert.equal(
-    (noteCode.match(/\{sourceNote\}/g) ?? []).length,
-    1,
-    'the note text must be rendered exactly once, in the one live region',
-  )
+  assert.equal((noteCode.match(/aria-live=/g) ?? []).length, 1, 'exactly ONE live region per source — a second one would double-announce')
+  // …and the SAME region must actually RENDER the derived text. Counting `aria-live=` alone missed a second region
+  // written as `role="status"` AND an emptied note (`{sourceNote}` → `{''}`), both green before this
+  // lock (2026-12 falsification round): one render site, and it renders the cascade's result.
+  assert.equal((noteCode.match(/\{sourceNote\}/g) ?? []).length, 1, 'the note text must be rendered exactly once, in the one live region')
   assert.match(
     noteCode,
     /role="status"\s*aria-live=\{noteIsBootGap && server\.id === chamberInstanceId \? 'off' : 'polite'\}\s*>\s*\{sourceNote\}\s*</,
     'the live region must render {sourceNote} (an emptied note announces nothing, forever)',
   )
-  // 2026-12：活动来源（本壳自己的行）的缺口事实同时由框架横幅播报，区域降为 off
-  // 以免同一件事说两遍；非活动行没有横幅，必须保持 polite。
-  assert.match(
-    serverSection,
-    /aria-live=\{noteIsBootGap && server\.id === chamberInstanceId \? 'off' : 'polite'\}/,
-    'the self row must not double-announce a gap the frame banner already announces',
-  )
-  assert.match(serverSection, /aria-label=\{noteCarriesPhase \? undefined : t\(sourceStatusLabelKey\(server\)\)\}/,
+  // 2026-12：活动来源（本壳自己的行）的缺口事实同时由框架横幅播报，区域降为 off 以免同一件事说两遍；
+  // 非活动行没有横幅，必须保持 polite。
+  sLock(/aria-live=\{noteIsBootGap && server\.id === chamberInstanceId \? 'off' : 'polite'\}/,
+    'the self row must not double-announce a gap the frame banner already announces')
+  sLock(/aria-label=\{noteCarriesPhase \? undefined : t\(sourceStatusLabelKey\(server\)\)\}/,
     'the status dot must not double-announce a phase the note already carries')
-  assert.match(serverSection, /aria-describedby=\{!headerActivatable && sourceNote !== '' \? sourceNoteId : undefined\}/,
+  sLock(/aria-describedby=\{!headerActivatable && sourceNote !== '' \? sourceNoteId : undefined\}/,
     'the non-interactive header must describe itself through the note, not a dead aria-label')
 })
 
 test('the header stops being an activation affordance only for managed-down sources', () => {
-  assert.match(serverSection, /return server\.id !== chamberInstanceId && !managedUnusable/,
+  sLock(/return server\.id !== chamberInstanceId && !managedUnusable/,
     'the activation affordance must be dropped exactly for unusable managed sources')
-  assert.match(serverSection, /return t\('source\.managedStarting', \{ state: t\(sourceStatusLabelKey\(server\)\) \}\)/,
+  sLock(/return t\('source\.managedStarting', \{ state: t\(sourceStatusLabelKey\(server\)\) \}\)/,
     'the header title must not promise a switch that is a no-op')
-  assert.match(serverSection, /if \(headerActivatable\) chamberBridge\.requestActivateSource\(server\.id\)/,
-    'the click handler must respect the affordance')
-  assert.match(serverSection, /if \(!headerActivatable\) return/, 'the key handler must respect the affordance')
+  sLock(/if \(headerActivatable\) chamberBridge\.requestActivateSource\(server\.id\)/, 'the click handler must respect the affordance')
+  sLock(/if \(!headerActivatable\) return/, 'the key handler must respect the affordance')
 })
 
 test('managedRuntimeUnusable covers terminal and transient states only', () => {
-  // 收割/预热门控用这个谓词：漏掉瞬态会拿 503 白烧一次尝试（只有 2 次），
-  // 把 null/'' 当不可用则会隐藏健康来源（2026-12 复查 MINOR）。
-  for (const state of MANAGED_RUNTIME_DOWN_STATES) {
-    assert.equal(managedRuntimeUnusable(state), true, state)
-  }
-  for (const state of MANAGED_RUNTIME_TRANSIENT_STATES) {
-    assert.equal(managedRuntimeUnusable(state), true, state)
-  }
+  // 收割/预热门控用这个谓词：漏掉瞬态会拿 503 白烧一次尝试（只有 2 次），把 null/'' 当不可用则会隐藏健康来源（2026-12 复查 MINOR）。
+  for (const state of MANAGED_RUNTIME_DOWN_STATES) assert.equal(managedRuntimeUnusable(state), true, state)
+  for (const state of MANAGED_RUNTIME_TRANSIENT_STATES) assert.equal(managedRuntimeUnusable(state), true, state)
   for (const state of ['ready', 'degraded', 'unknown', '', null, undefined]) {
     assert.equal(managedRuntimeUnusable(state), false, String(state))
   }
@@ -199,9 +165,9 @@ test('managedRuntimeUnusable covers terminal and transient states only', () => {
 })
 
 test('the source note id is per-shell and its empty state stays a live region', () => {
-  // 同一来源在每个已挂载壳的侧栏里各有一份 DOM：id 必须按壳限定，否则
-  // aria-describedby 可能解析到另一份（隐藏壳）的同名节点（2026-12 复查 MINOR）。
-  assert.match(serverSection, /chamber-source-note-\$\{chamberInstanceId \?\? 'unknown'\}-\$\{server\.id\}/,
+  // 同一来源在每个已挂载壳的侧栏里各有一份 DOM：id 必须按壳限定，否则 aria-describedby 可能解析到另一份
+  // （隐藏壳）的同名节点（2026-12 复查 MINOR）。
+  sLock(/chamber-source-note-\$\{chamberInstanceId \?\? 'unknown'\}-\$\{server\.id\}/,
     'the note id must be qualified by the shell instance id')
   const css = readFileSync(new URL('src/client/sidebar-chamber.module.css', sidebarRoot), 'utf8')
   assert.match(css, /\.sourceNote:empty \{\s*padding: 0;\s*line-height: 0;\s*\}/,
@@ -211,28 +177,24 @@ test('the source note id is per-shell and its empty state stays a live region', 
 })
 
 test('the transient managed state gets its own honest note and the dot keeps its phase', () => {
-  // 瞬态（starting/restarting）会把 connected 折叠为 false ⇒ 会话子树隐藏；
-  // 没有说明行就是"整组凭空消失"（2026-12 复查 MINOR）。
-  assert.match(serverSection, /const managedTransient = server\.kind === 'gateway'\s*\n\s*&& \(server\.phase === 'starting' \|\| server\.phase === 'restarting'\)/,
+  // 瞬态（starting/restarting）会把 connected 折叠为 false ⇒ 会话子树隐藏；没有说明行就是"整组凭空消失"
+  // （2026-12 复查 MINOR）。
+  sLock(/const managedTransient = server\.kind === 'gateway'\s*\n\s*&& \(server\.phase === 'starting' \|\| server\.phase === 'restarting'\)/,
     'the transient note must be kind-scoped (local /health shares the vocabulary)')
-  assert.match(serverSection, /const managedUnusable = server\.managedRuntimeDown === true/,
+  sLock(/const managedUnusable = server\.managedRuntimeDown === true/,
     'the transient state must also stop promising an activation that 503s')
-  assert.match(serverSection, /t\('source\.managedStarting', \{ state: t\(sourceStatusLabelKey\(server\)\) \}\)/,
+  sLock(/t\('source\.managedStarting', \{ state: t\(sourceStatusLabelKey\(server\)\) \}\)/,
     'the transient note must use the dictionary key and carry the state word')
-  // 2026-12：两个门必须分开——`noteCarriesPhase` 只能由**胜出并且把 {state} 写进
-  // 句子**的说明行置真：managedDown，或（managedTransient 且降级说明没有抢走该分支）。
-  // 原先的 `sourceNote !== ''` 会让 baselinePending（以及新接入的降级说明）在 a11y
-  // 树里丢掉状态词；只写 managedTransient 也不行——gateway 瞬态 + 缺口的组合下，
-  // 胜出的是**不含 phase 的缺口句**（2026-12 review MAJOR）。
-  assert.match(
-    serverSection,
-    /const noteCarriesPhase = server\.managedRuntimeDown === true \|\| \(managedTransient && !noteIsBootGap\)/,
-    'only a note that both WINS and embeds the state word may take the dot\'s aria-label',
-  )
-  assert.match(serverSection, /role=\{sourceNote === '' \? 'status' : undefined\}/,
+  // 2026-12：两个门必须分开——`noteCarriesPhase` 只能由**胜出并且把 {state} 写进句子**的说明行置真：
+  // managedDown，或（managedTransient 且降级说明没有抢走该分支）——原先的 `sourceNote !== ''` 会让
+  // baselinePending 在 a11y 树里丢掉状态词；只写 managedTransient 也不行——gateway 瞬态 + 缺口时胜出的是
+  // **不含 phase 的缺口句**（2026-12 review MAJOR）。
+  sLock(/const noteCarriesPhase = server\.managedRuntimeDown === true \|\| \(managedTransient && !noteIsBootGap\)/,
+    'only a note that both WINS and embeds the state word may take the dot\'s aria-label')
+  sLock(/role=\{sourceNote === '' \? 'status' : undefined\}/,
     'the dot must yield the live-region role to ANY note (one live region per source)')
-  assert.match(serverSection, /aria-label=\{noteCarriesPhase \? undefined : t\(sourceStatusLabelKey\(server\)\)\}/,
+  sLock(/aria-label=\{noteCarriesPhase \? undefined : t\(sourceStatusLabelKey\(server\)\)\}/,
     'the dot must keep announcing the phase when the note does not carry it')
-  assert.match(serverSection, /capsuleHeldFocus\.current && server\.connected !== true/,
+  sLock(/capsuleHeldFocus\.current && server\.connected !== true/,
     'the focus hand-back must key on the connection fact (the search state is pruned on disconnect)')
 })

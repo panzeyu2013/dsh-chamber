@@ -16,17 +16,9 @@ import {
   isEditableComposer, isEditabilityFlipToEditable, lockClock, shouldRecoverStuckComposer,
   isComposerSubmitBusy, BUSY_COMPOSER_PHASES, isOfficiallyDisabled,
   EDITABILITY_MUTATION_OPTIONS, SELF_HEAL_MUTATION_OPTIONS,
-  type ClosestLike,
 } from '../../src/client/composer.ts'
 
-/** A closest() stub: per-selector match answer. */
-class ClosestStub implements ClosestLike {
-  readonly match: Record<string, boolean>
-  constructor(match: Record<string, boolean>) { this.match = match }
-  closest(selector: string): ClosestLike | null {
-    return this.match[selector] === true ? this : null
-  }
-}
+import { ClosestStub } from '../support/closest-stub.ts'
 
 test('keyboard heuristic: >120px AND >20% of layout height', () => {
   // 812 layout, 812 visual → closed

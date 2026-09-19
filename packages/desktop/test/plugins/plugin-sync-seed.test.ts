@@ -1,37 +1,18 @@
 /**
  * plugin-sync — part 4: the cordis.patch.yml seed merge (dedup / deterministic
  * template rewrite / legacy fold / append-without-clobber / fail-loud) and
- * seedRemoteChamberHostPackages (built vs portable seeds, preflight, byte-domain
- * hash skip).
- *
- * Sibling parts: plugin-sync.test.ts, plugin-sync-remote-read.test.ts,
- * plugin-sync-apply.test.ts, plugin-sync-renderer-projection.test.ts.
+ * seedRemoteChamberHostPackages (built vs portable seeds, preflight, hash skip).
+ * Sibling parts: plugin-sync.test.ts, plugin-sync-remote-read.test.ts, plugin-sync-apply.test.ts, plugin-sync-renderer-projection.test.ts.
  */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { ARCHIVE_CLEANUP_INSERT_ID, ARCHIVE_CLEANUP_PACKAGE_NAME, CLIENT_GRAPH_INSERT_ID, CLIENT_GRAPH_PACKAGE_NAME, computeCordisPatchUpdate, foldLegacyHostInserts, GIT_WORKTREE_INSERT_ID, GIT_WORKTREE_PACKAGE_NAME, OPEN_IN_PACKAGE_NAME, builtChamberHostPackageSeeds, portableChamberHostPackageSeeds, seedRemoteChamberHostPackages } from '../../plugin-sync.ts'
-import type { ChamberHostPackageSeed, ExecFn, ExecResult, RemoteSpec } from '../../plugin-sync.ts'
+import type { ChamberHostPackageSeed, ExecFn } from '../../plugin-sync.ts'
 import type { TransportRunPayload } from '../../transport-provider.ts'
-
-function tempDir(): string {
-  return mkdtempSync(join(tmpdir(), 'dsh-plugin-sync-'))
-}
-
-function ok(stdout?: string): ExecResult {
-  return { ok: true, status: { phase: 'ready' }, stdout }
-}
-
-function okBytes(bytes: Buffer): ExecResult {
-  return { ok: true, status: { phase: 'ready' }, stdout: bytes.toString('utf8'), stdoutBytes: bytes }
-}
-
-function err(error: string): ExecResult {
-  return { ok: false, error }
-}
+import { err, ok, okBytes, SEED_SPEC, tempDir } from './plugin-sync-fixtures.ts'
 
 // ============================================================================
 // computeCordisPatchUpdate (seed cordis.patch.yml)
@@ -43,9 +24,8 @@ const TEMPLATE = `# Your patch layer for this dsh profile, applied after every b
 []
 `
 
-/** The single client-graph loader row (computeCordisPatchUpdate's inserts are
- *  REQUIRED — the old one-argument default was production-dead and has been
- *  removed). */
+/** The single client-graph loader row: computeCordisPatchUpdate's inserts are
+ *  REQUIRED — the one-argument default is production-dead. */
 const GRAPH_INSERTS = [{ insertId: CLIENT_GRAPH_INSERT_ID, packageName: CLIENT_GRAPH_PACKAGE_NAME }]
 
 test('seed: initProfile template is deterministically rewritten with the insert', () => {
@@ -60,7 +40,6 @@ test('seed: initProfile template is deterministically rewritten with the insert'
   // comments preserved
   assert.ok(update.content.includes('Your patch layer'))
 })
-
 test('seed: an existing insert is deduped (no write)', () => {
   const already = TEMPLATE.replace('[]', `[\n  - insert: { id: client-graph, name: '@dsh-chamber/dsh-chamber-seed-client-graph' }\n]`)
   assert.deepEqual(computeCordisPatchUpdate(already, GRAPH_INSERTS), { write: false })
@@ -77,7 +56,6 @@ test('seed: a pre-rename row under the same loader id folds to the canonical nam
   // One-time: the folded patch is already canonical, so the next pass is a no-op.
   assert.deepEqual(computeCordisPatchUpdate(update.content, GRAPH_INSERTS), { write: false })
 })
-
 test('seed: the legacy fold is scoped to the matching loader id and the exact rendered row', () => {
   // The same legacy name under a DIFFERENT loader id is a user row: it is left
   // verbatim and the missing canonical row is appended beside it.
@@ -95,7 +73,6 @@ test('seed: the legacy fold is scoped to the matching loader id and the exact re
   assert.ok('error' in conflict)
   if ('error' in conflict) assert.match(conflict.error, /already bound to a different package/)
 })
-
 test('seed: all three pre-rename rows fold in one pass; unrelated rows stay untouched', () => {
   const legacyPatch = [
     `- id: system-prompt\n  config:\n    persona: hi\n`,
@@ -121,7 +98,6 @@ test('seed: all three pre-rename rows fold in one pass; unrelated rows stay unto
   // foldLegacyHostInserts is the exported seam: nothing to fold = no write.
   assert.deepEqual(foldLegacyHostInserts(update.content, inserts), { content: update.content, folded: false })
 })
-
 test('seed: a user block list is appended to, never clobbered', () => {
   const userList = `- id: system-prompt\n  config:\n    persona: hi\n`
   const update = computeCordisPatchUpdate(userList, GRAPH_INSERTS)
@@ -133,20 +109,17 @@ test('seed: a user block list is appended to, never clobbered', () => {
   assert.ok(update.content.includes('- insert:'))
   assert.ok(update.content.includes("name: '@dsh-chamber/dsh-chamber-seed-client-graph'"))
 })
-
 test('seed: a non-list file fails loud', () => {
   const mapping = 'system-prompt:\n  persona: hi\n'
   const update = computeCordisPatchUpdate(mapping, GRAPH_INSERTS)
   assert.ok('error' in update)
   if ('error' in update) assert.match(update.error, /not a top-level YAML array/)
 })
-
 test('seed: a missing cordis.patch.yml (uninitialized profile) fails loud', () => {
   const update = computeCordisPatchUpdate(null, GRAPH_INSERTS)
   assert.ok('error' in update)
   if ('error' in update) assert.match(update.error, /not initialized/)
 })
-
 test('seed: a similar-but-different entry does NOT dedup (client-graph-foo id is not the client-graph entry)', () => {
   // The OLD substring dedup matched `id: client-graph` inside
   // `id: client-graph-foo` and wrongly skipped the insert; the line-level
@@ -160,7 +133,6 @@ test('seed: a similar-but-different entry does NOT dedup (client-graph-foo id is
   if ('error' in update) return
   assert.equal(update.write, true, 'a client-graph-foo id must not count as the client-graph entry')
 })
-
 test('seed: two chamber host rows merge together and only a missing row is appended', () => {
   const inserts = [
     { insertId: CLIENT_GRAPH_INSERT_ID, packageName: CLIENT_GRAPH_PACKAGE_NAME },
@@ -172,7 +144,6 @@ test('seed: two chamber host rows merge together and only a missing row is appen
   assert.ok(first.content.includes('id: client-graph'))
   assert.ok(first.content.includes('id: git-worktree'))
   assert.deepEqual(computeCordisPatchUpdate(first.content, inserts), { write: false })
-
   const graphSeed = computeCordisPatchUpdate(TEMPLATE, [
     { insertId: CLIENT_GRAPH_INSERT_ID, packageName: CLIENT_GRAPH_PACKAGE_NAME },
   ])
@@ -185,7 +156,6 @@ test('seed: two chamber host rows merge together and only a missing row is appen
   assert.equal((second.content.match(/id: client-graph/g) ?? []).length, 1)
   assert.equal((second.content.match(/id: git-worktree/g) ?? []).length, 1)
 })
-
 test('seed: crossed id/name rows fail loud before appending a boot-breaking duplicate', () => {
   const crossed = `- insert:
     - id: client-graph
@@ -200,7 +170,6 @@ test('seed: crossed id/name rows fail loud before appending a boot-breaking dupl
   assert.equal('error' in update, true)
   if ('error' in update) assert.match(update.error, /already bound|already mounted|duplicate chamber loader identity/)
 })
-
 test('seed: same chamber id with a different package fails loud', () => {
   const update = computeCordisPatchUpdate(`- insert:\n    - id: git-worktree\n      name: '@example/not-chamber'\n`, [
     { insertId: GIT_WORKTREE_INSERT_ID, packageName: GIT_WORKTREE_PACKAGE_NAME },
@@ -208,7 +177,6 @@ test('seed: same chamber id with a different package fails loud', () => {
   assert.equal('error' in update, true)
   if ('error' in update) assert.match(update.error, /already bound/)
 })
-
 test('seed: same chamber package under a different id fails loud', () => {
   const update = computeCordisPatchUpdate(`- insert:\n    - id: user-git-row\n      name: '@dsh-chamber/dsh-chamber-seed-git-worktree'\n`, [
     { insertId: GIT_WORKTREE_INSERT_ID, packageName: GIT_WORKTREE_PACKAGE_NAME },
@@ -216,7 +184,6 @@ test('seed: same chamber package under a different id fails loud', () => {
   assert.equal('error' in update, true)
   if ('error' in update) assert.match(update.error, /already mounted/)
 })
-
 test('seed: duplicate exact chamber rows fail loud instead of accepting the next boot failure', () => {
   const duplicate = `- insert:\n    - id: git-worktree\n      name: '@dsh-chamber/dsh-chamber-seed-git-worktree'\n    - id: git-worktree\n      name: '@dsh-chamber/dsh-chamber-seed-git-worktree'\n`
   const update = computeCordisPatchUpdate(duplicate, [
@@ -225,7 +192,6 @@ test('seed: duplicate exact chamber rows fail loud instead of accepting the next
   assert.equal('error' in update, true)
   if ('error' in update) assert.match(update.error, /duplicate chamber loader identity/)
 })
-
 test('seed: name-first sibling rows cannot be cross-paired into a false exact match', () => {
   const crossed = `- insert:
     - id: git-worktree
@@ -239,7 +205,6 @@ test('seed: name-first sibling rows cannot be cross-paired into a false exact ma
   assert.equal('error' in update, true)
   if ('error' in update) assert.match(update.error, /already bound|already mounted|duplicate chamber loader identity/)
 })
-
 test('seed: an exact name-first loader row is reused', () => {
   const exact = `- insert:
     - name: '@dsh-chamber/dsh-chamber-seed-git-worktree'
@@ -249,7 +214,6 @@ test('seed: an exact name-first loader row is reused', () => {
     { insertId: GIT_WORKTREE_INSERT_ID, packageName: GIT_WORKTREE_PACKAGE_NAME },
   ]), { write: false })
 })
-
 test('seed: a nested config name cannot complete the parent loader identity', () => {
   const nested = `- insert:
     - id: git-worktree
@@ -263,7 +227,6 @@ test('seed: a nested config name cannot complete the parent loader identity', ()
   assert.equal('error' in update, true)
   if ('error' in update) assert.match(update.error, /already bound|duplicate chamber loader identity/)
 })
-
 test('seed: crossed inline-flow mappings stay separate', () => {
   const crossed = `- insert: [{ id: git-worktree, name: '@example/not-chamber' }, { id: other, name: '@dsh-chamber/dsh-chamber-seed-git-worktree' }]
 `
@@ -300,9 +263,7 @@ function makeSeedExec(overrides: {
         return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
       }
       if (path === '~/.dsh/profiles/web/cordis.patch.yml') {
-        if (overrides.patchContent === null) {
-          return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
-        }
+        if (overrides.patchContent === null) return err(`run command failed (exit 1): cat: ${path}: No such file or directory`)
         return ok(overrides.patchContent)
       }
       return err('run command failed (exit 1): cat: no such file')
@@ -323,6 +284,7 @@ function makeSeedExec(overrides: {
   return { exec, calls, written }
 }
 
+/** A module A source dir with `package.json` bytes and a `dist/index.js`. */
 function writeModuleA(root: string, pkgJson: string | Buffer, distJs: string | Buffer): string {
   const sourceDir = join(root, 'module-a')
   mkdirSync(join(sourceDir, 'dist'), { recursive: true })
@@ -331,20 +293,19 @@ function writeModuleA(root: string, pkgJson: string | Buffer, distJs: string | B
   return sourceDir
 }
 
-const SEED_SPEC: RemoteSpec = { id: 's1', remoteDshHome: null }
+/** A throwaway module A source dir for the single-package edge cases. */
+function moduleASource(pkgJson: string | Buffer = '{"name":"x"}', distJs = 'export const graph = 1\n'): string {
+  return writeModuleA(tempDir(), pkgJson, distJs)
+}
 
 /** One single-package seed list (the client-graph row) — the legacy
  *  `seedRemoteHostGraph` wrapper was deleted as production-dead; its edge-case
  *  coverage lives on through these single-package calls. */
 function singleGraphSeed(sourceDir: string): ChamberHostPackageSeed[] {
-  return [{
-    insertId: CLIENT_GRAPH_INSERT_ID,
-    packageName: CLIENT_GRAPH_PACKAGE_NAME,
-    sourceDir,
-    label: 'host-graph',
-  }]
+  return [{ insertId: CLIENT_GRAPH_INSERT_ID, packageName: CLIENT_GRAPH_PACKAGE_NAME, sourceDir, label: 'host-graph' }]
 }
 
+/** A built host-package source dir (package.json + dist/index.js) under `root`. */
 function writeHostSeedPackage(root: string, dirName: string, packageName: string, distJs: string): string {
   const sourceDir = join(root, dirName)
   mkdirSync(join(sourceDir, 'dist'), { recursive: true })
@@ -354,32 +315,17 @@ function writeHostSeedPackage(root: string, dirName: string, packageName: string
 }
 
 function dualHostSeeds(root: string): ChamberHostPackageSeed[] {
+  const graph = writeHostSeedPackage(root, 'graph', CLIENT_GRAPH_PACKAGE_NAME, 'export const graph = 1\n')
+  const git = writeHostSeedPackage(root, 'git', GIT_WORKTREE_PACKAGE_NAME, 'export const git = 1\n')
   return [
-    {
-      insertId: CLIENT_GRAPH_INSERT_ID,
-      packageName: CLIENT_GRAPH_PACKAGE_NAME,
-      sourceDir: writeHostSeedPackage(root, 'graph', CLIENT_GRAPH_PACKAGE_NAME, 'export const graph = 1\n'),
-      label: 'host-graph',
-    },
-    {
-      insertId: GIT_WORKTREE_INSERT_ID,
-      packageName: GIT_WORKTREE_PACKAGE_NAME,
-      sourceDir: writeHostSeedPackage(root, 'git', GIT_WORKTREE_PACKAGE_NAME, 'export const git = 1\n'),
-      label: 'git-worktree',
-    },
+    { insertId: CLIENT_GRAPH_INSERT_ID, packageName: CLIENT_GRAPH_PACKAGE_NAME, sourceDir: graph, label: 'host-graph' },
+    { insertId: GIT_WORKTREE_INSERT_ID, packageName: GIT_WORKTREE_PACKAGE_NAME, sourceDir: git, label: 'git-worktree' },
   ]
 }
 
 function tripleHostSeeds(root: string): ChamberHostPackageSeed[] {
-  return [
-    ...dualHostSeeds(root),
-    {
-      insertId: ARCHIVE_CLEANUP_INSERT_ID,
-      packageName: ARCHIVE_CLEANUP_PACKAGE_NAME,
-      sourceDir: writeHostSeedPackage(root, 'archive', ARCHIVE_CLEANUP_PACKAGE_NAME, 'export const archive = 1\n'),
-      label: 'archive-cleanup',
-    },
-  ]
+  const archive = writeHostSeedPackage(root, 'archive', ARCHIVE_CLEANUP_PACKAGE_NAME, 'export const archive = 1\n')
+  return [...dualHostSeeds(root), { insertId: ARCHIVE_CLEANUP_INSERT_ID, packageName: ARCHIVE_CLEANUP_PACKAGE_NAME, sourceDir: archive, label: 'archive-cleanup' }]
 }
 
 test('seedRemoteChamberHostPackages: seeds three packages before one merged patch write', async () => {
@@ -410,7 +356,6 @@ test('seedRemoteChamberHostPackages: seeds three packages before one merged patc
   assert.ok(patch.includes('id: archive-cleanup'))
   assert.equal(remote.calls.at(-1), 'write:~/.dsh/profiles/web/cordis.patch.yml', 'patch is committed after every package file')
 })
-
 test('seedRemoteChamberHostPackages: seeds two packages before one merged patch write', async () => {
   const remote = makeSeedExec({ patchContent: TEMPLATE })
   const result = await seedRemoteChamberHostPackages(remote.exec, SEED_SPEC, dualHostSeeds(tempDir()))
@@ -427,7 +372,6 @@ test('seedRemoteChamberHostPackages: seeds two packages before one merged patch 
   assert.ok(patch.includes('id: git-worktree'))
   assert.equal(remote.calls.at(-1), 'write:~/.dsh/profiles/web/cordis.patch.yml', 'patch is committed after every package file')
 })
-
 test('seedRemoteChamberHostPackages: broken second source fails preflight before any remote call', async () => {
   const root = tempDir()
   const seeds = dualHostSeeds(root)
@@ -442,7 +386,6 @@ test('seedRemoteChamberHostPackages: broken second source fails preflight before
   assert.deepEqual(remote.calls, [])
   assert.deepEqual(remote.written, [])
 })
-
 test('seedRemoteChamberHostPackages: second-package read failure happens before every write', async () => {
   const remote = makeSeedExec({
     patchContent: TEMPLATE,
@@ -453,7 +396,6 @@ test('seedRemoteChamberHostPackages: second-package read failure happens before 
   if (!result.ok) assert.match(result.error, /git-worktree seed read/)
   assert.deepEqual(remote.written, [], 'all remote probes finish before the first write')
 })
-
 test('portableChamberHostPackageSeeds: localOnly rows never travel, the rest keep registry order', () => {
   const seeds: ChamberHostPackageSeed[] = [
     { insertId: 'client-graph', packageName: CLIENT_GRAPH_PACKAGE_NAME, sourceDir: '/tmp/graph', label: 'client-graph' },
@@ -472,16 +414,14 @@ test('portableChamberHostPackageSeeds: localOnly rows never travel, the rest kee
     'an all-localOnly list is empty, never a seed with an empty sourceDir',
   )
 })
-
 test('builtChamberHostPackageSeeds: an empty sourceDir is never resolved (the CWD is not a package)', () => {
   const root = tempDir()
   const built = dualHostSeeds(root)
   const seeds: ChamberHostPackageSeed[] = [
     ...built,
     // An unmapped registry row: `join('', 'dist', 'index.js')` would resolve
-    // against the process CWD. This checkout/repo root is the test's CWD, and
-    // the gate must refuse the empty dir BEFORE any filesystem probe — proven
-    // here by asserting the result set, not by relying on the CWD's content.
+    // against the process CWD, so the gate must refuse the empty dir BEFORE any
+    // filesystem probe — asserted on the result set, not on CWD content.
     { insertId: 'unmapped', packageName: '@dsh-chamber/dsh-chamber-seed-unmapped', sourceDir: '', label: 'unmapped' },
     // A directory that exists but has no built entry (source checkout).
     { insertId: 'unbuilt', packageName: '@dsh-chamber/dsh-chamber-seed-unbuilt', sourceDir: join(root, 'not-built'), label: 'unbuilt' },
@@ -491,7 +431,6 @@ test('builtChamberHostPackageSeeds: an empty sourceDir is never resolved (the CW
     'only real source dirs with a built dist/index.js are shipped here')
   assert.deepEqual(builtChamberHostPackageSeeds([]), [])
 })
-
 test('builtChamberHostPackageSeeds: an empty sourceDir stays refused even when the CWD LOOKS like a built package', () => {
   // This is the only test that can kill the `sourceDir !== ''` guard: the
   // CWD-independent case above passes with or without it (this checkout has no
@@ -499,15 +438,14 @@ test('builtChamberHostPackageSeeds: an empty sourceDir stays refused even when t
   // `existsSync(join('', 'dist', 'index.js'))` resolves the process CWD, so a
   // shell whose working directory contains a built entry would otherwise stage
   // ITS OWN bytes as that package's seed (2026-12 review; verification gap G1).
-  const root = tempDir()
-  const built = dualHostSeeds(root)
+  const built = dualHostSeeds(tempDir())
   const emptyDirSeed: ChamberHostPackageSeed = {
     insertId: 'unmapped',
     packageName: '@dsh-chamber/dsh-chamber-seed-unmapped',
     sourceDir: '',
     label: 'unmapped',
   }
-  const cwd = mkdtempSync(join(tmpdir(), 'chamber-cwd-'))
+  const cwd = tempDir('chamber-cwd-')
   mkdirSync(join(cwd, 'dist'))
   writeFileSync(join(cwd, 'dist', 'index.js'), '// a CWD that looks like a built package\n')
   const previous = process.cwd()
@@ -522,7 +460,6 @@ test('builtChamberHostPackageSeeds: an empty sourceDir stays refused even when t
     process.chdir(previous)
   }
 })
-
 test('seedRemoteChamberHostPackages: a localOnly row with a REAL source dir is neither probed nor written (design 20 §6)', async () => {
   // The seed must carry a real populated dir: with `sourceDir: ''` the writer's
   // shipped-artifact gate would skip the row anyway and the test would pass
@@ -549,7 +486,6 @@ test('seedRemoteChamberHostPackages: a localOnly row with a REAL source dir is n
   const patch = remote.written.find(entry => entry.path.endsWith('/cordis.patch.yml'))?.bytes.toString('utf8') ?? ''
   assert.equal(patch.includes('open-in'), false, 'not even a dangling loader row')
 })
-
 test('seedRemoteChamberHostPackages: an unbuilt package is omitted from files and loader rows', async () => {
   const root = tempDir()
   const seeds = dualHostSeeds(root)
@@ -564,7 +500,6 @@ test('seedRemoteChamberHostPackages: an unbuilt package is omitted from files an
   assert.ok(!patch.includes('id: git-worktree'))
   assert.ok(!remote.calls.some(call => call.includes(GIT_WORKTREE_PACKAGE_NAME)))
 })
-
 test('seedRemoteChamberHostPackages (single package): module A absent = not shipped → no files AND no patch (never a broken insert)', async () => {
   const remote = makeSeedExec({ patchContent: TEMPLATE })
   const result = await seedRemoteChamberHostPackages(remote.exec, SEED_SPEC, singleGraphSeed(join(tempDir(), 'does-not-exist')))
@@ -573,10 +508,8 @@ test('seedRemoteChamberHostPackages (single package): module A absent = not ship
   assert.deepEqual(remote.calls, [], 'no remote exec at all when module A is absent')
   assert.equal(remote.written.length, 0)
 })
-
 test('seedRemoteChamberHostPackages (single package): writes both seed files and appends the patch insert', async () => {
-  const root = tempDir()
-  const sourceDir = writeModuleA(root, JSON.stringify({ name: '@dsh-chamber/dsh-chamber-seed-client-graph', version: '1.0.0' }), 'export const graph = 1\n')
+  const sourceDir = moduleASource(JSON.stringify({ name: '@dsh-chamber/dsh-chamber-seed-client-graph', version: '1.0.0' }))
   const remote = makeSeedExec({ patchContent: TEMPLATE })
   const result = await seedRemoteChamberHostPackages(remote.exec, SEED_SPEC, singleGraphSeed(sourceDir))
   assert.equal(result.ok, true)
@@ -589,15 +522,13 @@ test('seedRemoteChamberHostPackages (single package): writes both seed files and
   assert.ok(patchWrite.bytes.toString('utf8').includes('- insert:'))
   assert.ok(remote.calls.some(call => call === 'write:~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/dist/index.js'))
 })
-
 test('seedRemoteChamberHostPackages (single package): hash-identical seed files are skipped in the BYTE domain, patch still ensured', async () => {
-  const root = tempDir()
   // dist/index.js carries invalid UTF-8 bytes — the old string-domain hash
   // would have false-mismatched (U+FFFD) and rewritten; the byte-domain
   // comparison must skip.
   const distJs = Buffer.from([0x1f, 0x8b, 0x08, 0x00, 0xff, 0xfe, 0x81, 0x00, 0x01])
   const pkgJson = Buffer.from('{"name":"x"}')
-  const sourceDir = writeModuleA(root, pkgJson, distJs)
+  const sourceDir = writeModuleA(tempDir(), pkgJson, distJs)
   const seedFiles = new Map<string, Buffer>()
   seedFiles.set('~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/package.json', pkgJson)
   seedFiles.set('~/.dsh/profiles/node_modules/@dsh-chamber/dsh-chamber-seed-client-graph/dist/index.js', distJs)
@@ -609,33 +540,24 @@ test('seedRemoteChamberHostPackages (single package): hash-identical seed files 
   assert.equal(remote.written.length, 1, 'only the patch write remains')
   assert.equal(remote.written[0].path, '~/.dsh/profiles/web/cordis.patch.yml')
 })
-
 test('seedRemoteChamberHostPackages (single package): an uninitialized remote profile (patch ENOENT) fails loud', async () => {
-  const root = tempDir()
-  const sourceDir = writeModuleA(root, '{"name":"x"}', 'export const graph = 1\n')
   const remote = makeSeedExec({ patchContent: null })
-  const result = await seedRemoteChamberHostPackages(remote.exec, SEED_SPEC, singleGraphSeed(sourceDir))
+  const result = await seedRemoteChamberHostPackages(remote.exec, SEED_SPEC, singleGraphSeed(moduleASource()))
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /not initialized/)
   assert.equal(remote.written.length, 0, 'the patch probe runs FIRST — no package files are left behind by the fail-loud path')
 })
-
 test('seedRemoteChamberHostPackages (single package): a seed write failure fails loud and never reaches the patch', async () => {
-  const root = tempDir()
-  const sourceDir = writeModuleA(root, '{"name":"x"}', 'export const graph = 1\n')
   const remote = makeSeedExec({
     patchContent: TEMPLATE,
     failWrite: path => (path.includes('dist/index.js') ? 'write-file target not allowed' : null),
   })
-  const result = await seedRemoteChamberHostPackages(remote.exec, SEED_SPEC, singleGraphSeed(sourceDir))
+  const result = await seedRemoteChamberHostPackages(remote.exec, SEED_SPEC, singleGraphSeed(moduleASource()))
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /write-file failed for dist\/index\.js/)
   assert.ok(!remote.written.some(entry => entry.path === '~/.dsh/profiles/web/cordis.patch.yml'), 'no patch without the package files')
 })
-
 test('seedRemoteChamberHostPackages (single package): a NON-ENOENT seed-file cat failure fails loud WITHOUT attempting the write', async () => {
-  const root = tempDir()
-  const sourceDir = writeModuleA(root, '{"name":"x"}', 'export const graph = 1\n')
   const remote = makeSeedExec({
     patchContent: TEMPLATE,
     // The FIRST seed-file probe (package.json) dies with an ssh failure —
@@ -644,16 +566,14 @@ test('seedRemoteChamberHostPackages (single package): a NON-ENOENT seed-file cat
     // misleading "write-file failed").
     failSeedCat: path => (path.endsWith('/package.json') ? 'the ssh exec could not reach the host (exit 255)' : null),
   })
-  const result = await seedRemoteChamberHostPackages(remote.exec, SEED_SPEC, singleGraphSeed(sourceDir))
+  const result = await seedRemoteChamberHostPackages(remote.exec, SEED_SPEC, singleGraphSeed(moduleASource()))
   assert.equal(result.ok, false)
   if (!result.ok) assert.match(result.error, /host-graph seed read package\.json failed/)
   assert.equal(remote.written.length, 0, 'no write is attempted after a non-ENOENT read-back failure')
   assert.ok(!remote.calls.some(call => call.startsWith('write:')), 'the failing cat is never papered over by a write')
 })
-
 test('seedRemoteChamberHostPackages (single package): every probe cat is marked quiet (expected ENOENT on a first seed)', async () => {
-  const root = tempDir()
-  const sourceDir = writeModuleA(root, '{"name":"x"}', 'export const graph = 1\n')
+  const sourceDir = moduleASource()
   const payloads: TransportRunPayload[] = []
   const exec: ExecFn = async (_id, action, payload) => {
     if (payload !== undefined) payloads.push(payload)

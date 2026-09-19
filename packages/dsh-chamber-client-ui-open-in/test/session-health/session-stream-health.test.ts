@@ -1,16 +1,14 @@
 /**
- * SESSION STREAM-HEALTH LADDER LOCKS.
+ * SESSION STREAM-HEALTH LADDER LOCKS (design 14 §D4).
  *
  * The reproduced defect (four mux socket kills 25ms apart ⇒ `openState='error'`
- * ⇒ a frozen transcript with only the vendor top-of-column error line) is
- * recovered by exactly two effects, and both are pinned here: the automatic
- * stage move for an `'error'` session, and the notice-plus-reload arm for a
- * parked `'loading'` open. The truth table is tested at the decision boundary
- * (pure module) and at the effect boundary (a fake sessions face), with the
- * boundaries the 2026-12 review found unpinned called out as their own cases:
- * the settle window, a backwards wall clock, the rolling-window edge, the
- * cross-phase hold, the first notice timestamp of both arms, and the hidden
- * stretch that must NOT hand back a fresh storm budget.
+ * ⇒ a frozen transcript) is recovered by exactly two effects, both pinned here:
+ * the automatic stage move for an `'error'` session and the notice-plus-reload
+ * arm for a parked `'loading'` open — at the decision boundary (pure module)
+ * and the effect boundary (a fake sessions face), including the edges the
+ * 2026-12 review found unpinned: the settle window, a backwards wall clock,
+ * the rolling-window edge, the cross-phase hold, both first-notice timestamps
+ * and the hidden stretch that must NOT hand back a fresh storm budget.
  */
 
 import { test } from 'node:test'
@@ -42,6 +40,11 @@ const S = CONFIG.healSettleMs
 const W = CONFIG.healBudgetWindowMs
 const T0 = 1_700_000_000_000
 
+/** planSessionStreamHealth bound to the pinned case-invariant config. */
+function planAt(state: SessionStreamHealthState, observation: SessionStreamObservation, at: number) {
+  return planSessionStreamHealth(state, observation, at, CONFIG)
+}
+
 function observe(openState: SessionStreamObservation['openState'], over: Partial<SessionStreamObservation> = {}): SessionStreamObservation {
   return { openState, presented: true, neighborAvailable: true, ...over }
 }
@@ -55,7 +58,7 @@ function drive(
   const actions: number[] = []
   const notices: Array<string | null> = []
   for (const step of steps) {
-    const plan = planSessionStreamHealth(state, step.observation, step.at, CONFIG)
+    const plan = planAt(state, step.observation, step.at)
     state = plan.state
     actions.push(plan.action === 'heal' ? step.at : 0)
     notices.push(plan.notice)
@@ -122,11 +125,8 @@ test('stream-health: the cooldown paces the retries and the rolling budget ends 
 
 test('stream-health: a hidden stretch keeps the event ledger and only stops the clocks', () => {
   const healed = T0 + G
-  const hidden = planSessionStreamHealth(
-    markSessionStreamHeal(createSessionStreamHealthState(), healed),
-    observe('error', { presented: false }),
-    healed + 1_000,
-    CONFIG,
+  const hidden = planAt(
+    markSessionStreamHeal(createSessionStreamHealthState(), healed), observe('error', { presented: false }), healed + 1_000,
   )
   assert.equal(hidden.state.phase, 'idle')
   assert.equal(hidden.state.since, 0)
@@ -135,18 +135,15 @@ test('stream-health: a hidden stretch keeps the event ledger and only stops the 
   assert.equal(hidden.state.healStamps.length, 1)
   assert.equal(hidden.state.lastHealAt, healed)
   // Immediately visible again: still cooling, so no second heal.
-  const resumed = planSessionStreamHealth(hidden.state, observe('error'), healed + 2_000, CONFIG)
+  const resumed = planAt(hidden.state, observe('error'), healed + 2_000)
   assert.equal(resumed.action, 'none')
   assert.equal(resumed.notice, null)
 })
 
 test('stream-health: a backwards wall clock cannot latch the healing phase', () => {
   const healed = T0 + G
-  const jumped = planSessionStreamHealth(
-    markSessionStreamHeal(createSessionStreamHealthState(), healed),
-    observe('error'),
-    healed - 3_600_000,
-    CONFIG,
+  const jumped = planAt(
+    markSessionStreamHeal(createSessionStreamHealthState(), healed), observe('error'), healed - 3_600_000,
   )
   // The jump is treated as "settled": the phase falls back to the hold instead
   // of waiting for a clock that already passed.
@@ -154,7 +151,7 @@ test('stream-health: a backwards wall clock cannot latch the healing phase', () 
   assert.equal(jumped.action, 'none')
   assert.equal(jumped.notice, null)
   // ...and the arm can act again as soon as the grace elapses on the new clock.
-  const later = planSessionStreamHealth(jumped.state, observe('error'), jumped.state.since + G, CONFIG)
+  const later = planAt(jumped.state, observe('error'), jumped.state.since + G)
   assert.equal(later.action, 'heal')
 })
 
@@ -178,11 +175,11 @@ test('stream-health: the rolling window edge is exclusive, and releases exactly 
     healStamps: [T0, T0 + C, T0 + 2 * C],
     lastHealAt: T0 + 2 * C,
   }
-  const before = planSessionStreamHealth(stamped, observe('error'), T0 + W - 1, CONFIG)
+  const before = planAt(stamped, observe('error'), T0 + W - 1)
   assert.equal(before.state.healStamps.length, 3)
   assert.equal(before.action, 'none')
   assert.equal(before.notice, 'heal-failed')
-  const exactly = planSessionStreamHealth(stamped, observe('error'), T0 + W, CONFIG)
+  const exactly = planAt(stamped, observe('error'), T0 + W)
   assert.equal(exactly.state.healStamps.length, 2)
   assert.equal(exactly.action, 'heal')
 })
@@ -202,7 +199,7 @@ test('stream-health: both arms report their reload notice at the exact tick the 
   let firstNotice: number | undefined
   let lastNotice: number | undefined
   for (let at = T0; at <= T0 + 320_000; at += 1_000) {
-    const plan = planSessionStreamHealth(state, observe('error'), at, CONFIG)
+    const plan = planAt(state, observe('error'), at)
     state = plan.state
     if (plan.action === 'heal') state = markSessionStreamHeal(state, at)
     if (plan.notice === 'heal-failed') {
@@ -216,12 +213,12 @@ test('stream-health: both arms report their reload notice at the exact tick the 
 
 test('stream-health: cold and open are inert, and recovery keeps the budget', () => {
   const held: SessionStreamHealthState = { phase: 'error-hold', since: T0, healStamps: [T0 - C] }
-  const cold = planSessionStreamHealth(held, observe('cold'), T0 + G + S, CONFIG)
+  const cold = planAt(held, observe('cold'), T0 + G + S)
   assert.equal(cold.action, 'none')
   assert.equal(cold.notice, null)
   assert.equal(cold.state.phase, 'idle')
   assert.equal(cold.state.healStamps.length, 1)
-  const open = planSessionStreamHealth(held, observe('open'), T0 + G + S, CONFIG)
+  const open = planAt(held, observe('open'), T0 + G + S)
   assert.equal(open.notice, null)
   assert.equal(open.state.phase, 'idle')
   assert.equal(open.state.healStamps.length, 1)
@@ -322,58 +319,33 @@ test('stream-health: the detour prefers the session the user came from, capped a
 
 test('stream-health: a recent carrier-churn fact surfaces the reconnecting notice and expires on its own', () => {
   const state = createSessionStreamHealthState()
-  const fresh = planSessionStreamHealth(state, observe('open', { carrierChurn: { at: T0, count: 2 } }), T0, CONFIG)
+  const fresh = planAt(state, observe('open', { carrierChurn: { at: T0, count: 2 } }), T0)
   assert.equal(fresh.notice, 'carrier-churn')
   assert.equal(fresh.action, 'none', 'churn must never be answered with a heal')
   assert.equal(fresh.state.phase, 'idle', 'the notice must not age a ladder phase')
   assert.equal(sessionStreamNoticeKey('carrier-churn'), 'streamHealth.carrierChurn')
-  assert.equal(
-    planSessionStreamHealth(state, observe('open', { carrierChurn: { at: T0, count: 2 } }), T0 + CONFIG.carrierChurnMs, CONFIG).notice,
-    'carrier-churn',
-    'the window is inclusive at its edge',
-  )
-  assert.equal(
-    planSessionStreamHealth(state, observe('open', { carrierChurn: { at: T0, count: 2 } }), T0 + CONFIG.carrierChurnMs + 1, CONFIG).notice,
-    null,
-    'the notice must expire without another fact',
-  )
-  assert.equal(
-    planSessionStreamHealth(state, observe('open', { carrierChurn: { at: T0, count: 0 } }), T0, CONFIG).notice,
-    null,
-    'a zero count is not churn',
-  )
-  assert.equal(planSessionStreamHealth(state, observe('open'), T0, CONFIG).notice, null, 'no fact, no notice')
+  assert.equal(planAt(state, observe('open', { carrierChurn: { at: T0, count: 2 } }), T0 + CONFIG.carrierChurnMs).notice,
+    'carrier-churn', 'the window is inclusive at its edge')
+  assert.equal(planAt(state, observe('open', { carrierChurn: { at: T0, count: 2 } }), T0 + CONFIG.carrierChurnMs + 1).notice,
+    null, 'the notice must expire without another fact')
+  assert.equal(planAt(state, observe('open', { carrierChurn: { at: T0, count: 0 } }), T0).notice, null,
+    'a zero count is not churn')
+  assert.equal(planAt(state, observe('open'), T0).notice, null, 'no fact, no notice')
 })
 
 test('stream-health: churn never overrides the error or loading arms', () => {
   const churn = { at: T0, count: 3 }
   // Both arms need their hold to AGE first (the notice is never handed out on the
   // first frame), so each case steps twice — churn must not shortcut either.
-  const errorHold = planSessionStreamHealth(
-    createSessionStreamHealthState(),
-    observe('error', { neighborAvailable: false, carrierChurn: churn }),
-    T0,
-    CONFIG,
+  const errorHold = planAt(
+    createSessionStreamHealthState(), observe('error', { neighborAvailable: false, carrierChurn: churn }), T0,
   )
-  const errored = planSessionStreamHealth(
-    errorHold.state,
-    observe('error', { neighborAvailable: false, carrierChurn: churn }),
-    T0 + G + CONFIG.healSettleMs,
-    CONFIG,
+  const errored = planAt(
+    errorHold.state, observe('error', { neighborAvailable: false, carrierChurn: churn }), T0 + G + CONFIG.healSettleMs,
   )
   assert.equal(errored.notice, 'heal-failed', 'the hopeless arm owns the notice while the open state is error')
-  const loadingHold = planSessionStreamHealth(
-    createSessionStreamHealthState(),
-    observe('loading', { carrierChurn: churn }),
-    T0,
-    CONFIG,
-  )
-  const loading = planSessionStreamHealth(
-    loadingHold.state,
-    observe('loading', { carrierChurn: churn }),
-    T0 + CONFIG.loadingStallMs,
-    CONFIG,
-  )
+  const loadingHold = planAt(createSessionStreamHealthState(), observe('loading', { carrierChurn: churn }), T0)
+  const loading = planAt(loadingHold.state, observe('loading', { carrierChurn: churn }), T0 + CONFIG.loadingStallMs)
   assert.equal(loading.notice, 'loading-stall', 'the stall arm owns the notice while the open state is loading')
 })
 

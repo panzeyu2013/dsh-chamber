@@ -1,22 +1,15 @@
 /**
- * tsconfig ↔ pnpm-lock store-path mapping lockstep (2026-09-11, 推广自 CI 修复).
+ * tsconfig ↔ pnpm-lock store-path mapping lockstep.
  *
- * WHY: the seed packages' tsconfigs resolve `@deepseek-ai/*` to the VENDOR
- * SOURCES (the vendor workspace members publish no built `lib/`), so compiling
- * them compiles upstream sources AND their registry deps. pnpm never links a
- * registry dep into the symlinked vendor checkout, so each such dep gets a
- * hand-written `paths` entry pointing into the pnpm virtual store
- * (`…/node_modules/.pnpm/<pkg>@<version>/node_modules/<pkg>`) — the seam
- * `dsh-chamber-seed-client-graph` documents for `@standard-schema/spec` /
- * `compression` / `negotiator`, and the one `dsh-chamber-seed-open-in` needed
- * for `undici` after the 2026-09-11 CI failure (four TS2307s inside
- * `vendor/…/dsh-http-proxy/src/install.ts`, invisible on a long-lived local
- * install whose accidental hoists hide the gap).
+ * WHY: seed-package tsconfigs resolve `@deepseek-ai/*` to the VENDOR SOURCES (vendor members publish no built
+ * `lib/`), so compiling them compiles upstream sources AND their registry deps, which pnpm never links into the
+ * symlinked vendor checkout — each dep therefore gets a hand-written `paths` entry into the virtual store
+ * (`…/.pnpm/<pkg>@<version>/node_modules/<pkg>`): the seam `dsh-chamber-seed-client-graph` documents for
+ * `@standard-schema/spec` / `compression` / `negotiator`, and `dsh-chamber-seed-open-in` needed for `undici`
+ * (four TS2307s in `vendor/…/dsh-http-proxy/src/install.ts`, invisible on a hoisted local install).
  *
- * THE INVARIANT: every mapping's version IS a version the committed lockfile
- * installs for some importer that declares that package. A pin bump that moves
- * a dependency must move the mapping with it; otherwise the mapping points at a
- * store directory that no install produces, and the typecheck fails with
+ * THE INVARIANT: every mapping's version IS a version the committed lockfile installs for some importer that
+ * declares that package; a pin bump that moves a dependency must move the mapping, or typecheck fails with
  * module-not-found errors inside vendor code — the least debuggable form.
  */
 
@@ -28,15 +21,11 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const LOCKFILE = join(ROOT, 'pnpm-lock.yaml')
-
-/** Escape a package name for use inside a RegExp. */
 const escapeRe = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
-/**
- * Every `"<spec>": ["…/.pnpm/<store>/node_modules/<pkg>"]` mapping declared by a
- * package tsconfig. Read as text (tsconfigs are JSONC: comments allowed).
- * @returns one entry per mapping: file, specifier, store dir, package name, version.
- */
+/** Every `"<spec>": ["…/.pnpm/<store>/node_modules/<pkg>"]` mapping declared by a package tsconfig
+ * (read as text: tsconfigs are JSONC). @returns one entry per mapping: file, specifier, store dir,
+ * package name, version. */
 function storePathMappings() {
   const mappings = []
   const packagesDir = join(ROOT, 'packages')
@@ -62,13 +51,9 @@ function storePathMappings() {
   return mappings.sort((a, b) => a.file.localeCompare(b.file) || a.specifier.localeCompare(b.specifier))
 }
 
-/**
- * Every version the lockfile resolves for `name`, across all importers that
+/** Every version the lockfile resolves for `name`, across all importers that
  * declare it (vendor members and chamber packages alike).
- * @param lockfile - pnpm-lock.yaml text.
- * @param name - package name.
- * @returns the resolved version set.
- */
+ * @param lockfile text, @param name package name, @returns the resolved version set. */
 function lockfileVersions(lockfile, name) {
   const pattern = new RegExp(
     `^\\s+'?${escapeRe(name)}'?:\\n\\s+specifier: [^\\n]*\\n\\s+version: (\\S+)`,
@@ -76,13 +61,11 @@ function lockfileVersions(lockfile, name) {
   )
   return new Set([...lockfile.matchAll(pattern)].map((match) => match[1]))
 }
-
 test('every tsconfig store-path mapping points at a version the lockfile installs', () => {
   const lockfile = readFileSync(LOCKFILE, 'utf8')
   const mappings = storePathMappings()
-  // The documented seams: @standard-schema/spec, @types/compression,
-  // @types/negotiator, undici. A drop below that means a seam was deleted
-  // without a replacement — re-derive it before relaxing this floor.
+  // The documented seams: @standard-schema/spec, @types/compression, @types/negotiator, undici. A drop
+  // below that means a seam was deleted without a replacement — re-derive it before relaxing this floor.
   assert.ok(mappings.length >= 4, `expected the documented store-path seams, found ${mappings.length}`)
   for (const mapping of mappings) {
     const versions = lockfileVersions(lockfile, mapping.packageName)
@@ -99,8 +82,7 @@ test('every tsconfig store-path mapping points at a version the lockfile install
 })
 
 test('the mappings resolve through the pnpm virtual store, never a top-level hoist', () => {
-  // A bare `["../../node_modules/undici"]` would work only on a machine carrying
-  // the public-hoist leftover; a fresh CI install never has it.
+  // A bare `["../../node_modules/undici"]` works only on a machine with the public-hoist leftover; a fresh CI install never has it.
   for (const mapping of storePathMappings()) {
     assert.match(
       mapping.entry,

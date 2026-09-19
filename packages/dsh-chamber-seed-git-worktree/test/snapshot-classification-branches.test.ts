@@ -4,7 +4,6 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { EventEmitter } from 'node:events'
 import { basename, resolve } from 'node:path'
 import {
   GitWorktreeCore,
@@ -13,10 +12,8 @@ import {
   PREVIEW_TTL_MS,
   assertSafeGitArgv,
   createLocalGitRunner,
-  type GitChildProcess,
   type GitRunner,
   type WorkspaceFact,
-  type WorktreeFileSystem,
   parseBranchLine,
 } from '../src/core.ts'
 import {
@@ -25,7 +22,9 @@ import {
   LINKED,
   MAIN_HEAD,
   FEATURE_HEAD,
-  MissingPathError,
+  FakeGitChild,
+  coreOver,
+  pathSetFs,
   setup,
   previewNew,
   mutationCalls,
@@ -113,19 +112,7 @@ test('snapshot caps the repository count at MAX_REPOSITORIES', async () => {
     paths.add(`${main}/.git`)
     workspaces.push({ workspaceId: `cap-${repository}`, path: main, sessionIds: [] })
   }
-  const fs: WorktreeFileSystem = {
-    realpath: async path => {
-      if (!paths.has(path)) throw new MissingPathError(path)
-      return path
-    },
-    lstat: async path => {
-      if (!paths.has(path)) throw new MissingPathError(path)
-      return { isDirectory: () => true }
-    },
-    exists: async path => paths.has(path),
-    mkdir: async () => {},
-    readFile: async () => { throw new MissingPathError('.git') },
-  }
+  const fs = pathSetFs(paths)
   const runner: GitRunner = async request => {
     const match = /^\/cap\/(\d+)\//u.exec(request.cwd)
     assert.ok(match)
@@ -139,11 +126,7 @@ test('snapshot caps the repository count at MAX_REPOSITORIES', async () => {
     if (request.args[0] === 'status') return { exitCode: 0, stdout: '', stderr: '' }
     throw new Error(`unexpected Git call: ${request.args.join(' ')}`)
   }
-  const core = new GitWorktreeCore({
-    source: { listWorkspaces: () => workspaces, listAgents: () => [], listArchivedSessionIds: () => [] },
-    git: runner,
-    fs,
-  })
+  const core = coreOver({ workspaces, git: runner, fs })
   const snapshot = await core.snapshot()
   assert.equal(snapshot.repos.length, MAX_REPOSITORIES)
   assert.equal(snapshot.sourceError?.code, 'snapshot-capacity')
@@ -250,18 +233,7 @@ test('remove replay with the same operation id but a drifted expected head fails
 })
 
 test('local runner times out, kills the child and only settles after close', async () => {
-  class FakeChild extends EventEmitter implements GitChildProcess {
-    readonly stdout = new EventEmitter()
-    readonly stderr = new EventEmitter()
-    killed = false
-
-    kill(): boolean {
-      this.killed = true
-      return true
-    }
-  }
-
-  const child = new FakeChild()
+  const child = new FakeGitChild()
   const runner = createLocalGitRunner(() => child)
   const pending = runner({
     cwd: MAIN, args: ['status', '--porcelain=v1', '-z', '--untracked-files=normal'],
@@ -283,18 +255,7 @@ test('local runner times out, kills the child and only settles after close', asy
 })
 
 test('local runner enforces a combined stdout+stderr byte cap', async () => {
-  class FakeChild extends EventEmitter implements GitChildProcess {
-    readonly stdout = new EventEmitter()
-    readonly stderr = new EventEmitter()
-    killed = false
-
-    kill(): boolean {
-      this.killed = true
-      return true
-    }
-  }
-
-  const child = new FakeChild()
+  const child = new FakeGitChild()
   const runner = createLocalGitRunner(() => child)
   const pending = runner({
     cwd: MAIN, args: ['status', '--porcelain=v1', '-z', '--untracked-files=normal'],
@@ -356,12 +317,8 @@ test('a failing show-ref --heads yields empty branches, never a snapshot error',
     if (request.args[0] === 'show-ref') return { ok: true, stdout: '', stderr: '', exitCode: 2, command: 'show-ref' }
     return repo.runner(request)
   }
-  const failingCore = new GitWorktreeCore({
-    source: {
-      listWorkspaces: () => workspaces.map(workspace => ({ ...workspace, sessionIds: [...workspace.sessionIds] })),
-      listAgents: () => [],
-      listArchivedSessionIds: () => [],
-    },
+  const failingCore = coreOver({
+    workspaces,
     git: failing,
     fs: repo.fs,
     now: () => Date.now(),
@@ -384,12 +341,8 @@ test('a missing branch reported with exit 128 (git version quirk) is treated as 
     }
     return repo.runner(request)
   }
-  const strictCore = new GitWorktreeCore({
-    source: {
-      listWorkspaces: () => workspaces.map(workspace => ({ ...workspace, sessionIds: [...workspace.sessionIds] })),
-      listAgents: () => [],
-      listArchivedSessionIds: () => [],
-    },
+  const strictCore = coreOver({
+    workspaces,
     git: strictRunner,
     fs: repo.fs,
     now: () => Date.now(),

@@ -1,24 +1,14 @@
 /**
- * verify-mobile-anchors.test.mjs — 移动锚点门的**负例**测试（纯函数层
- * `mobile-anchors.mjs`；docs/checklists/upstream-touchpoints.md §4 登记行的
- * 「自测负例」一栏）。
+ * verify-mobile-anchors.test.mjs — 移动锚点门的**负例**测试（纯函数层 `mobile-anchors.mjs`；
+ * docs/checklists/upstream-touchpoints.md §4 登记行的「自测负例」一栏）。
  *
- * 为什么必须有：一个「读两个文本、比字符串包含」的门最容易写成永远绿。
- * 这里逐条构造**改坏**的输入，断言门必须红（或按分级降为 advisory）：
- *   1. 上游把 slot key 改名（`main` → `center`）⇒ 硬失败；
- *   2. 上游把 `data-*` 属性改名 ⇒ 硬失败；
- *   3. 上游把 build-time 哈希 token 改名 ⇒ **advisory、不失败**（分级判据）；
- *   4. 插件侧把锚点删掉（源码里不再声明）⇒ 最小断言集硬失败（方向 B）；
- *   5. chamber 跨包钩子的发射方消失 ⇒ 硬失败；
- *   6. `data-mobile-*` 这类自打标属性**不得**被当成上游锚点（假红防线）；
- *   7. `--simulate-rename` 的解析与内存改名（不写盘）；
- *   8. 注释里写着的锚点不算声明（去注释投影）；
- *   9. 真语料（本包真实源码 + 合成产物）双向差集为空；
- *  10. 参数契约（`verify-mobile-anchors-args.mjs`）：未知参数/位置参数/缺值 = 用法
- *      错误（exit 2 的那条路），`--help` 优先，`DSH_MOBILE_ANCHOR_ROOT` 兜底。
+ * 这里逐条构造**改坏**的输入，断言门必须红（或按分级降为 advisory）：slot / data-* / role / hash
+ * 各类锚点改名、最小断言集方向 B、chamber 跨包发射方消失、自打标假红防线、去注释投影、真语料
+ * 双向差集、参数契约（未知参数/位置参数/缺值 = 用法错误 exit 2；`--help` 优先；
+ * `DSH_MOBILE_ANCHOR_ROOT` 兜底）。
  *
- * 跑法：`node --test scripts/upstream/verify-mobile-anchors.test.mjs`
- * （root `test:upgrade-tools` 逐文件列名，本文件在其中——见 §4 登记行。）
+ * 跑法：`node --test scripts/upstream/verify-mobile-anchors.test.mjs`（root `test:upgrade-tools`
+ * 逐文件列名，本文件在其中——见 §4 登记行。）
  */
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
@@ -37,9 +27,7 @@ import {
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url))
 
-/** 合成上游产物：覆盖本包声明的**全部**上游锚点形态（slot key / 属性 / role /
- *  哈希 token）。语料里**不得**混入插件源码——那会让每条锚点用自己的声明文本自证
- *  （2026-12 review：旧版正是这样，上游删掉发射点也照样绿）。 */
+/** 合成上游产物：覆盖全部上游锚点形态；语料**不得**混入插件源码——那会让每条锚点用自己的声明文本自证。 */
 const UPSTREAM_TEXT = [
   'const x = renderSlot("main", {}, { entryKey: "conversation" })',
   'renderSlot("sidebar", {}); renderSlot("rightbar", {}); renderSlot("root", {})',
@@ -64,7 +52,6 @@ const UPSTREAM_TEXT = [
   'const cls2 = "_card_1b2ny_4"',
 ].join('\n')
 
-/** 合成插件源码：声明同一批锚点（形态与真实源码一致）。 */
 const PLUGIN_TEXT = [
   "export const ROOT_SLOT_SELECTOR = '[data-slot=\"root\"]'",
   'export const ROLE_SLOT_KEYS = { sidebar: "sidebar", conversation: "main", details: "rightbar" }',
@@ -91,8 +78,6 @@ const CHAMBER_TEXT = 'jsx("span", { "data-git-action": "" })'
 const sources = [{ path: 'plugins/mobile.ts', text: PLUGIN_TEXT }]
 const upstream = [{ path: 'upstream/client.js', text: UPSTREAM_TEXT }]
 const chamber = [{ path: 'chamber/git.tsx', text: CHAMBER_TEXT }]
-
-/** 跑一次判定；`simulate` 为上游改名表（内存态）。 */
 function run({ text = UPSTREAM_TEXT, pluginText = PLUGIN_TEXT, chamberFiles = chamber } = {}) {
   const renamed = applySimulatedRename(text, [])
   const extracted = extractDeclaredAnchors([{ path: 'plugins/mobile.ts', text: pluginText }])
@@ -183,13 +168,9 @@ test('去注释投影：注释里写着的锚点不算声明（但行号保留�
 })
 
 test('真语料：本包源码抽出的每一条上游锚点，都能被「只含合成发射形态」的语料证明', () => {
-  // 2026-12 review：旧版把**插件源码本身**拼进「上游语料」，于是每条锚点都在
-  // 自己的声明文本里命中——上游删掉发射点也照样绿（自证）。这里改成：语料只由
-  // 合成发射件（UPSTREAM_TEXT，形态与真实产物一致）与仓内跨包发射方组成，
-  // 插件源码只用于**抽锚点**，绝不参与证据。
-  // The file list is DISCOVERED, not written out: a hardcoded list stops covering
-  // the package the moment a source file is added (2026-12 review: it read 7 of
-  // the 13 files the gate reads).
+  // 语料只由合成发射件（UPSTREAM_TEXT）与仓内跨包发射方组成，插件源码只用于**抽锚点**、绝不参与证据
+  // （否则每条锚点都在自己的声明文本里自证，上游删掉发射点也照样绿）。
+  // The file list is DISCOVERED, not hardcoded: a hardcoded list stops covering the package once a source file is added.
   const sourcesDir = join(ROOT, 'packages', 'dsh-chamber-client-ui-mobile', 'src')
   const discovered = readdirSync(sourcesDir, { recursive: true, encoding: 'utf8' })
     .filter(name => name.endsWith('.ts') || name.endsWith('.tsx'))
@@ -204,8 +185,7 @@ test('真语料：本包源码抽出的每一条上游锚点，都能被「只�
   const findings = anchorFindings({ anchors: extracted.anchors, upstream: syntheticUpstream, chamber, required: REQUIRED_ANCHORS })
   const upstreamRows = findings.rows.filter(row => row.category === 'upstream')
   assert.ok(upstreamRows.length > 30, `抽到的上游锚点太少：${upstreamRows.length}`)
-  // 每一条上游锚点都必须命中合成语料；任何一条不命中就说明抽取器抽出了语料没
-  // 覆盖的形态（那时要么补语料形态，要么修抽取器——不允许放宽判定）。
+  // 任何一条上游锚点不命中合成语料，即说明抽取器抽出了语料未覆盖的形态——补语料或修抽取器，不允许放宽判定。
   assert.deepEqual(upstreamRows.filter(row => row.verdict !== 'ok').map(row => row.token), [])
   // 方向 B 也必须在同一份合成语料上成立（旧版用 required: [] 把这一半关掉了）。
   assert.deepEqual(findings.violations, [])
@@ -221,11 +201,8 @@ test('防伪：只有写入形算发射；注释/数组/文案/选择器/attr() 
   const verdicts = text => anchorFindings({
     anchors, upstream: [{ path: 'upstream/all.js', text }], chamber: [], required: [],
   }).rows.map(row => row.verdict)
-
-  // 消费形（CSS 规则 / 选择器 / attr()）与裸提及都不证明上游还在**写**这个属性。
-  // 2026-12 review：§4 登记行当初把 `[data-x]` 选择器也算证据，于是「上游删掉写入点、
-  // 只留一条死 CSS」的漂移照样绿——`data-ds-dark-theme` 的真实写入点是
-  // `document.body.toggleAttribute('data-ds-dark-theme', dark)`，而判定当时只认 CSS。
+  // 消费形（CSS 规则 / 选择器 / attr()）与裸提及都不证明上游还在**写**这个属性：§4 登记行当初把
+  // `[data-x]` 选择器也算证据，于是「上游删掉写入点、只留死 CSS」的漂移照样绿（data-ds-dark-theme 即此形）。
   const decoys = [
     '// upstream still emits "data-chat-flow" somewhere',
     '// historically: jsx("div", { "data-chat-flow": "" })',
@@ -245,7 +222,6 @@ test('防伪：只有写入形算发射；注释/数组/文案/选择器/attr() 
     chamber: [], required: [],
   }).violations
   assert.equal(messages.filter(message => message.includes('消费方')).length, 1, messages.join(' | '))
-
   // 写入形才是证据：对象键（编译后的 JSX）、setAttribute/toggleAttribute。
   const real = anchorFindings({
     anchors,
@@ -261,8 +237,7 @@ test('防伪：只有写入形算发射；注释/数组/文案/选择器/attr() 
     required: [],
   })
   assert.deepEqual(real.rows.map(row => row.verdict), ['ok', 'ok', 'ok', 'ok'])
-  // 打包产物里 `data-x=` 只可能是文案/字符串（JS 标识符不能带 `-`），所以它只对
-  // .ts/.tsx 这类源码语料开启。
+  // 打包产物里 `data-x=` 只可能是文案/字符串（JS 标识符不能带 `-`），故只对 .ts/.tsx 源码语料开启。
   const jsxSource = anchorFindings({
     anchors: [{ kind: 'attribute', token: 'data-phase', path: 'x.ts', line: 1 }],
     upstream: [{ path: 'packages/example/src/X.tsx', text: '<div data-phase={phase} />' }],
@@ -287,9 +262,8 @@ test('防伪：只有写入形算发射；注释/数组/文案/选择器/attr() 
 })
 
 test('防伪：role 的「文案」不算发射，只有对象键/选择器形才算', () => {
-  // 与属性锚点同一类假绿：`console.warn('role: "dialog" is gone')` 这种**文案**在旧
-  // 判定下能让一个已被上游改名的 role 继续绿。真实发射形（编译后的 JSX 属性表）值后
-  // 必是 `,`/`}` 收尾，所以冒号形加了收尾要求（2026-12 review）。
+  // 与属性锚点同一类假绿：`console.warn('role: "dialog" is gone')` 这类**文案**在旧判定下能让已被
+  // 改名的 role 继续绿；真实发射形（编译后 JSX 属性表）值后必是 `,`/`}` 收尾，故冒号形加收尾要求。
   const decoy = anchorFindings({
     anchors: [{ kind: 'role', token: 'dialog', path: 'x.ts', line: 1 }],
     upstream: [{ path: 'upstream/all.js', text: `console.warn('role: "dialog" is gone')` }],
@@ -321,8 +295,7 @@ test('防伪：role 的「文案」不算发射，只有对象键/选择器形�
 })
 
 test('防伪：slot 也只有写入形算发射（注册 API / 选择器不算）', () => {
-  // 2026-12 第三轮复核：这一层原先没有分级，于是「上游删掉 renderSlot、只留
-  // slots.inject 或选择器」在 16 个 slot 锚点（含最小断言集里的一半）上照样绿。
+  // 这一层原先没有分级，于是「上游删掉 renderSlot、只留 slots.inject 或选择器」在 16 个 slot 锚点（含最小断言集一半）上照样绿。
   const anchors = [{ kind: 'slot', token: 'main', path: 'x.ts', line: 1 }]
   const verdict = text => anchorFindings({ anchors, upstream: [{ path: 'upstream/all.js', text }], chamber: [], required: [] })
   for (const text of [
@@ -370,8 +343,7 @@ test('data-tip 是上游锚点（不是本插件自打标）：上游零命中�
 })
 
 test('严格模式的「其实什么都没查」路径：源码缺失 ⇒ exit 1（默认仍 fail-soft）', () => {
-  // 2026-12 review：`--require-anchor-root` 的承诺是「区分正常跳过与其实什么都没查」，
-  // 但源码抽不到那条跳过路径当时仍 exit 0。用真实子进程跑一遍（这是退出码，只能端到端测）。
+  // `--require-anchor-root` 承诺区分「正常跳过」与「其实什么都没查」，但源码抽不到那条跳过路径仍 exit 0；退出码只能端到端测。
   const root = mkdtempSync(join(tmpdir(), 'anchors-strict-'))
   try {
     mkdirSync(join(root, 'scripts', 'upstream'), { recursive: true })
@@ -398,14 +370,12 @@ test('严格模式的 pin 身份：读不到 lockfile ⇒ 明说「无法判定�
     }
     // Sources present (so the run gets past that gate) but no in-repo lockfile.
     cpSync(join(ROOT, 'packages', 'dsh-chamber-client-ui-mobile', 'src'), join(root, 'packages', 'dsh-chamber-client-ui-mobile', 'src'), { recursive: true })
-    // A fake anchor tree whose corpus SATISFIES every declared anchor (the same
-    // synthetic emissions the corpus test uses), so the run would otherwise exit 0
-    // — making the pin the only thing that can fail it.
+    // A fake anchor tree whose corpus SATISFIES every declared anchor (the same synthetic emissions
+    // the corpus test uses), so otherwise the run exits 0 — making the pin the only thing that can fail it.
     const anchor = join(root, 'anchor')
     mkdirSync(join(anchor, 'node_modules', '@deepseek-ai', 'fake', 'lib'), { recursive: true })
     writeFileSync(join(anchor, 'node_modules', '@deepseek-ai', 'fake', 'lib', 'client.js'), UPSTREAM_TEXT)
-    // The corpus must look COMPLETE, or the newer strict corpus check fires first
-    // and this test would pass for the wrong reason (2026-12 third review).
+    // The corpus must look COMPLETE, or the newer strict corpus check fires first and this test passes for the wrong reason.
     const frontend = join(anchor, 'node_modules', '@deepseek-ai', 'dsh-web-frontend', 'dist', 'assets')
     mkdirSync(frontend, { recursive: true })
     writeFileSync(join(frontend, 'index-ABCDEFGH.js'), UPSTREAM_TEXT)
@@ -422,7 +392,6 @@ test('严格模式的 pin 身份：读不到 lockfile ⇒ 明说「无法判定�
   }
 })
 
-/** The version the committed runtime pin carries for the web frontend. */
 function pinnedFrontendVersion() {
   const lockfile = readFileSync(join(ROOT, 'packages', 'desktop', 'vendor', 'dsh', 'pnpm-lock.yaml'), 'utf8')
   const match = lockfile.match(/@deepseek-ai\/dsh-web-frontend@([^'(:\s]+)/)
@@ -431,9 +400,8 @@ function pinnedFrontendVersion() {
 }
 
 /**
- * A temp root whose corpus SATISFIES every declared anchor, so only the property
- * under test can fail the run. `shell: false` leaves out the shell bundle/CSS;
- * `frontendVersion` stamps the tree's identity.
+ * A temp root whose corpus SATISFIES every declared anchor, so only the property under test can fail
+ * the run. `shell: false` leaves out the shell bundle/CSS; `frontendVersion` stamps the tree's identity.
  */
 function makeStrictRoot(t, { frontendVersion, shell = false }) {
   const root = mkdtempSync(join(tmpdir(), 'anchors-strict-'))
@@ -482,8 +450,7 @@ test('严格模式的 pin 一致性：树版本与仓内 pin 不符 ⇒ exit 1',
     const strict = run(['--require-anchor-root', '--anchor-root', anchor])
     assert.equal(strict.status, 1, `strict must fail on a version mismatch: ${strict.stdout}`)
     assert.match(strict.stdout + strict.stderr, /与 pin 不符/)
-    // ...and the matching version passes, so the failure above is the version and
-    // not something else in this synthetic root.
+    // ...and the matching version passes, so the failure above is the version and not something else in this root.
     const ok = makeStrictRoot({ after: () => {} }, { frontendVersion: pinnedFrontendVersion(), shell: true })
     try {
       const green = run(['--require-anchor-root', '--anchor-root', ok.anchor])
@@ -505,9 +472,8 @@ test('最小断言集本身：无重复、kind 合法，且与 §4 登记行逐�
     assert.ok(['plugin', 'external'].includes(item.declared), item.declared)
     assert.ok(typeof item.note === 'string' && item.note.length > 0)
   }
-  // Doc lockstep (2026-12 review): a count alone just restates a constant. The
-  // registry row is the human half of this gate, so every required token must
-  // still be named there.
+  // Doc lockstep (2026-12 review): a count alone just restates a constant — the registry row is the
+  // human half of this gate, so every required token must still be named there.
   const registry = readFileSync(join(ROOT, 'docs/checklists/upstream-touchpoints.md'), 'utf8')
   // Pick the LONGEST line that names the gate: a positional `find` would silently
   // retarget to any earlier passing mention (§7 names it too) and then assert
@@ -517,8 +483,7 @@ test('最小断言集本身：无重复、kind 合法，且与 §4 登记行逐�
   assert.ok(row.length > 200, 'the §4 registry row for the mobile anchor gate must exist')
   assert.ok(candidates.length >= 2, 'both the §4 row and the §7 procedure name the gate')
   for (const item of REQUIRED_ANCHORS) {
-    // Slot anchors may be named compactly in the row ("conversation.session.header
-    // 及其 actions/utilities/corner/lineage 四座"), so the tail segment counts.
+    // Slot anchors may be named compactly in the row ("conversation.session.header 及其 actions/utilities/corner/lineage 四座"), so the tail segment counts.
     const named = row.includes(item.token) || (item.kind === 'slot' && row.includes(item.token.split('.').pop() ?? ''))
     assert.ok(named, `the §4 row must name the required anchor ${item.kind}:${item.token}`)
   }
@@ -537,13 +502,11 @@ test('参数契约：未知参数/位置参数/缺值都是用法错误（绝不
 })
 
 test('参数契约：--require-anchor-root 是严格的「必须真的查过」开关', () => {
-  // 默认（CI/裸 clone）允许 fail-soft；严格模式由升级流程显式打开，把「正常跳过」
-  // 与「其实什么都没查」区分开（2026-12 review：默认路径是静默 exit 0）。
+  // 默认（CI/裸 clone）允许 fail-soft；严格模式由升级流程显式打开，把「正常跳过」与「其实什么都没查」区分开（默认路径静默 exit 0）。
   assert.equal(parseVerifyMobileAnchorsArgs([]).requireAnchorRoot, false)
   const strict = parseVerifyMobileAnchorsArgs(['--require-anchor-root'])
   assert.deepEqual(strict.errors, [])
   assert.equal(strict.requireAnchorRoot, true)
-  // 与其它参数可组合，且不影响 --help 的优先级。
   assert.equal(parseVerifyMobileAnchorsArgs(['--require-anchor-root', '--list']).requireAnchorRoot, true)
   assert.equal(parseVerifyMobileAnchorsArgs(['--help', '--require-anchor-root']).help, true)
 })
@@ -554,7 +517,6 @@ test('参数契约：合法形态与 --help 优先、env 兜底', () => {
   assert.equal(parsed.anchorRoot, '/tmp/x')
   assert.deepEqual(parsed.renames, [{ from: 'main', to: 'center' }])
   assert.equal(parsed.list, true)
-  // --help 优先于一切（即使同时给了非法参数）
   const help = parseVerifyMobileAnchorsArgs(['--help', '--unknown-flag'])
   assert.equal(help.help, true)
   assert.deepEqual(help.errors, [])

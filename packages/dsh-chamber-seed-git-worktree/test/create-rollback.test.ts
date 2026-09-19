@@ -12,6 +12,7 @@ import {
   MAIN_HEAD,
   FEATURE_HEAD,
   setup,
+  targetOf,
   previewNew,
   mutationCalls,
 } from './support/fake-repository.ts'
@@ -198,15 +199,7 @@ test('operation capacity evicts the oldest safe pre-admission record instead of 
 
 test('capacity never evicts an uncertain mutation tombstone before TTL', async () => {
   const { core, repo } = setup({ linked: true, operationCapacity: 1 })
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const linked = repository.worktrees.find(worktree => worktree.path === LINKED)!
-  const expected = {
-    repoId: repository.repoId,
-    worktreeId: linked.worktreeId,
-    branch: linked.branch,
-    head: linked.head,
-  }
+  const { expected } = await targetOf(core)
   repo.throwBeforeRemove = new GitWorktreeError('git-timeout', 'simulated pre-commit timeout')
   await assert.rejects(
     core.remove({ operationId: 'retained-uncertain', workspaceId: 'ws-feature', expected }),
@@ -221,15 +214,7 @@ test('capacity never evicts an uncertain mutation tombstone before TTL', async (
 
 test('capacity retains a completed remove tombstone against same-identity ABA', async () => {
   const { core, repo } = setup({ linked: true, operationCapacity: 1 })
-  const snapshot = await core.snapshot()
-  const repository = snapshot.repos[0]!
-  const linked = repository.worktrees.find(worktree => worktree.path === LINKED)!
-  const expected = {
-    repoId: repository.repoId,
-    worktreeId: linked.worktreeId,
-    branch: linked.branch,
-    head: linked.head,
-  }
+  const { expected } = await targetOf(core)
   await core.remove({ operationId: 'retained-removed', workspaceId: 'ws-feature', expected })
   repo.addLinked()
   await assert.rejects(

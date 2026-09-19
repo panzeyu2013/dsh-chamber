@@ -16,7 +16,6 @@ test('prose-only change skips the expensive chain', () => {
   assert.equal(result.prose.length, 4)
   assert.deepEqual(result.codePaths, [])
 })
-
 test('anything outside the prose allowlist is code', () => {
   for (const path of [
     'package.json',
@@ -35,7 +34,6 @@ test('anything outside the prose allowlist is code', () => {
     assert.equal(classifyChangedPaths([path]).code, true, `${path} must count as code`)
   }
 })
-
 test('a mixed change is code — the prose part never dilutes it', () => {
   const result = classifyChangedPaths(['docs/progress/STATUS.md', 'packages/cli/package.json'])
   assert.equal(result.code, true)
@@ -43,7 +41,6 @@ test('a mixed change is code — the prose part never dilutes it', () => {
   assert.deepEqual(result.codePaths, ['packages/cli/package.json'])
   assert.match(result.reason, /packages\/cli\/package\.json/)
 })
-
 test('unknown or empty input fails safe', () => {
   for (const input of [undefined, null, [], 'docs/x.md', 42]) {
     const result = classifyChangedPaths(input)
@@ -51,7 +48,6 @@ test('unknown or empty input fails safe', () => {
     assert.match(result.reason, /fail-safe/)
   }
 })
-
 test('path traversal and directory-shaped entries are never prose', () => {
   for (const path of ['docs/../packages/x.ts', '../docs/x.md', 'docs/', './docs/../AGENTS.md', '']) {
     assert.equal(classifyChangedPaths([path]).code, true, `${JSON.stringify(path)} must count as code`)
@@ -60,12 +56,10 @@ test('path traversal and directory-shaped entries are never prose', () => {
   assert.equal(classifyChangedPaths(['./docs/README.md']).code, false)
   assert.deepEqual(classifyChangedPaths(['./AGENTS.md']).prose, ['AGENTS.md'])
 })
-
 test('every allowlisted prefix/file is covered by a real path shape', () => {
   for (const prefix of PROSE_ONLY_PREFIXES) assert.equal(classifyChangedPaths([`${prefix}some/file.md`]).code, false, prefix)
   for (const file of PROSE_ONLY_FILES) assert.equal(classifyChangedPaths([file]).code, false, file)
 })
-
 test('push events diff the pushed range', () => {
   const calls = []
   const run = args => {
@@ -77,7 +71,6 @@ test('push events diff the pushed range', () => {
   assert.deepEqual(result.paths, ['docs/a.md', 'packages/b.ts'])
   assert.match(result.note, /^aaaaaaaa\.\.bbbbbbbb$/)
 })
-
 test('pull requests diff against the base commit', () => {
   const calls = []
   const run = args => {
@@ -87,7 +80,6 @@ test('pull requests diff against the base commit', () => {
   changedPathsForEvent({ eventName: 'pull_request', baseSha: 'c'.repeat(40), after: 'd'.repeat(40) }, run)
   assert.deepEqual(calls, [['diff', '--name-only', 'c'.repeat(40), 'd'.repeat(40)]])
 })
-
 test('untrustworthy ranges and git failures return no list (fail-safe upstream)', () => {
   const neverRun = () => assert.fail('git must not be called without a trustworthy range')
   assert.equal(changedPathsForEvent({ eventName: 'push', before: '0'.repeat(40), after: 'b'.repeat(40) }, neverRun).paths, null)

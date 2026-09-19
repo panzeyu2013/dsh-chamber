@@ -1,19 +1,14 @@
 /**
- * Renderer ↔ main runtime action-matrix LOCKSTEP tests (P2 regression).
+ * Renderer ↔ main runtime action-matrix LOCKSTEP tests (P2).
  *
- * The renderer's `runtimeAllowedActions` and the main process's matrices are
- * maintained by hand in two packages. The invariant that matters for
- * security/UX: the UI must never SHOW an action the main process will
- * REJECT. This test enumerates every phase × capability combination and
- * asserts renderer ⊆ main for the non-blocked, management-supported path
- * (main's authoritative non-blocked gate is `allowedActions` in
- * @dsh-chamber/dsh-runtime — the desktop runtime-state-machine.ts shim was
- * deleted 2026-09, dedupe audit N8).
- *
- * The reverse direction (main accepts an action the UI hides) is currently
- * masked by the publishing invariant "canRecoverMetadata=true ⟹
- * runtimeBlocked=true" — asserted explicitly at the bottom so a change to
- * that invariant fails loudly instead of silently stranding users.
+ * Both matrices are hand-maintained in two packages; the security/UX invariant
+ * is that the UI must never SHOW an action the main process will REJECT. Every
+ * phase × capability combination asserts renderer ⊆ main for the non-blocked,
+ * management-supported path (`allowedActions` in @dsh-chamber/dsh-runtime is
+ * authoritative; the desktop runtime-state-machine.ts shim is gone, N8).
+ * The reverse direction (main accepts what the UI hides) is masked by the
+ * publishing invariant "canRecoverMetadata=true ⟹ runtimeBlocked=true",
+ * asserted below so a change strands users loudly, not silently.
  */
 
 import { test } from 'node:test'
@@ -29,6 +24,7 @@ import {
 } from '../../../renderer/src/runtime-management.ts'
 import type { RuntimeInstallProgress as MainRuntimeInstallProgress } from '@dsh-chamber/dsh-runtime'
 import type { RuntimeInstallProgress as RendererRuntimeInstallProgress } from '../../../renderer/src/runtime-management.ts'
+import { balancedBlock } from './source-blocks.ts'
 
 const PHASES: readonly RuntimePhase[] = [
   'idle', 'checking', 'available', 'downloading', 'installing', 'pending',
@@ -65,7 +61,6 @@ function mainActions(phase: RuntimePhase, state: RuntimeState): RuntimeAction[] 
     canRecoverMetadata: state.canRecoverMetadata,
   })
 }
-
 test('renderer actions are always a subset of the main-process matrix (non-blocked, managed path)', () => {
   const capMatrix: Array<Partial<RuntimeState>> = [
     {},
@@ -99,10 +94,8 @@ test('renderer actions are always a subset of the main-process matrix (non-block
 })
 
 test('renderer and main action matrices are EXACTLY equal on the non-blocked, managed, no-capability path', () => {
-  // Review fix: subset-only guarding let a renderer silently DROP an action
-  // (e.g. restart-dsh) pass. On the plain managed path (source 'user', no
-  // capability bits, non-blocked) the two hand-maintained matrices must be
-  // identical — a missing action is now a failure.
+  // Subset-only guarding let a renderer silently DROP an action (restart-dsh)
+  // pass: on the plain managed path both matrices must be exactly identical.
   for (const phase of PHASES) {
     const state = rendererState(phase, { source: 'user' })
     assert.deepEqual(
@@ -112,13 +105,11 @@ test('renderer and main action matrices are EXACTLY equal on the non-blocked, ma
     )
   }
 })
-
 test('the recover-metadata masking invariant is explicit (canRecoverMetadata ⟹ blocked publishing)', () => {
-  // The renderer's NON-blocked path never emits recover-metadata, while the
-  // main non-blocked matrix does for idle/failed + canRecoverMetadata +
-  // !canRetryRestore. Today every canRecoverMetadata=true publication path
-  // forces runtimeBlocked=true (main.ts publishBlockedStartup), so the UI is
-  // never wrong. If that invariant ever changes, THIS test fails first.
+  // The renderer's non-blocked path never emits recover-metadata while main's
+  // matrix does (idle/failed + canRecoverMetadata + !canRetryRestore); every
+  // such publication forces runtimeBlocked (publishBlockedStartup), so the UI
+  // is never wrong and a change fails THIS test first.
   for (const phase of ['idle', 'failed'] as const) {
     const state = rendererState(phase, { canRecoverMetadata: true })
     assert.ok(
@@ -131,7 +122,6 @@ test('the recover-metadata masking invariant is explicit (canRecoverMetadata ⟹
     )
   }
 })
-
 test('renderer blocked branch matches the main blocked gate', () => {
   // Main's blocked gate (main.ts runtimeActionAllowed): retry-restore needs
   // canRetryRestore + rollback/failed; recover-metadata needs
@@ -168,9 +158,8 @@ test('renderer blocked branch matches the main blocked gate', () => {
     runtimeAllowedActions(blocked({ phase: 'idle', canRecoverMetadata: true, metadataHealth: 'selection-corrupt' })),
     ['recover-metadata'],
   )
-  // Env source never exposes metadata recovery; a retryable half restore
-  // with canRetryRestore keeps retry-restore as the sole escape (main's
-  // gate: recover-metadata needs canRetryRestore !== true || incomplete).
+  // Env never exposes metadata recovery; a retryable half restore keeps
+  // retry-restore as the sole escape (recover-metadata needs !canRetryRestore).
   assert.deepEqual(
     runtimeAllowedActions(blocked({ canRecoverMetadata: true, metadataHealth: 'selection-corrupt', source: 'env' })),
     [],
@@ -180,7 +169,6 @@ test('renderer blocked branch matches the main blocked gate', () => {
     ['retry-restore'],
   )
 })
-
 test('the renderer RuntimeInstallProgress flat mirror projects from the main-process union without drift', () => {
   // The main process emits a DISCRIMINATED UNION
   // (@dsh-chamber/dsh-runtime runtime-installer: `{stage:'download'; received; total}` | stage-only
@@ -258,33 +246,24 @@ test('renderer compareSemver stays lockstep with the shared compareRuntimeVersio
 
 // ===========================================================================
 // main.ts `runtimeActionAllowed` — the three DESKTOP-ONLY guards in front of
-// the shared core (P3).
-//
-// Every matrix above models only the shared core (`allowedActions`), while
+// the shared core (P3). Every matrix above models only the shared core, while
 // main.ts evaluates three further guards BEFORE it (main.ts:5220-5249):
 //   1. `managementSupported === false && action !== 'retry-restore'` → reject:
-//      a read-only platform keeps exactly ONE escape (finish a crash-
-//      interrupted data restore). This is the desktop's one relaxation over the
-//      shared core — the core has no notion of an unsupported platform, so on
-//      its own it would still advertise the whole version-management matrix
-//      there. No assertion covered that cell before this block.
+//      a read-only platform keeps exactly ONE escape (finish a crash-interrupted
+//      restore) — the desktop's one relaxation over a core that has no notion of
+//      an unsupported platform.
 //   2. `action === 'recover-metadata' && state.source === 'env'` → reject,
-//      evaluated BEFORE the blocked branch, so an env-selected tree cannot
-//      reach the terminal metadata escape even in the blocked cells main's own
-//      matrix would open.
+//      BEFORE the blocked branch: an env-selected tree cannot reach the terminal
+//      metadata escape even in cells main's own matrix would open.
 //   3. `runtimeWriterFence.busy && !applyingReset` → reject everything except
-//      the applying-reset escape (reset-builtin while applying, non-env, with
-//      an override).
-//
-// main.ts cannot be imported here (it pulls Electron), so the gate is
-// TRANSCRIBED below and held to the real source by the structural pins at the
-// bottom of this file — the transcription cannot silently outlive the code it
-// mirrors, and each guard's behavioural cells are asserted. The writer fence is
-// NOT transcribed: `RuntimeOperationFence` is the real shared class from
-// @dsh-chamber/dsh-runtime, driven for real (only `busy` is read by main).
-// `restart-dsh` does NOT ride this gate at all: it has its own IPC handler
-// (main.ts:5161-5179) whose gate deliberately does not refuse read-only
-// platforms or env sources — see the restart-gate assertions.
+//      the applying-reset escape (reset-builtin while applying, non-env, with an
+//      override).
+// main.ts pulls Electron, so the gate is TRANSCRIBED below and held to the real
+// source by the structural pins at the bottom. The writer fence is NOT
+// transcribed: `RuntimeOperationFence` is the real shared class, driven for real
+// (only `busy` is read by main). `restart-dsh` does NOT ride this gate — its own
+// IPC handler (main.ts:5161-5179) deliberately accepts read-only platforms and
+// env sources (see the restart-gate assertions).
 // ===========================================================================
 
 /** Every action the desktop gate can be asked about, in the shared core's own
@@ -295,9 +274,8 @@ const RUNTIME_ACTIONS: readonly RuntimeAction[] = [
 ]
 
 /**
- * Transcription of main.ts's `runtimeActionAllowed` (main.ts:5220-5249):
- * the three desktop-only guards, then the blocked matrix, then the shared
- * `allowedActions` fall-through. Keep in step with the structural pins below.
+ * Transcription of main.ts's `runtimeActionAllowed` (main.ts:5220-5249): the
+ * three desktop-only guards, the blocked matrix, then shared `allowedActions`.
  */
 function desktopActionAllowed(
   action: RuntimeAction,
@@ -335,9 +313,8 @@ function desktopActionAllowed(
   }).includes(action)
 }
 
-/** Transcription of the RUNTIME_RESTART handler's own gate (main.ts:5171-5175)
- *  — the gate `restart-dsh` really rides, which never asks about
- *  `managementSupported` or `source`. */
+/** Transcription of the RUNTIME_RESTART handler's own gate (main.ts:5171-5175):
+ *  the gate `restart-dsh` really rides — never asks managementSupported/source. */
 function desktopRestartAllowed(
   state: RuntimeState,
   options: { writerFenceBusy?: boolean; runtimeOperation?: boolean } = {},
@@ -351,12 +328,10 @@ function desktopRestartAllowed(
     || state.phase === 'snapshot-failed')
 }
 
-/** The actions of RUNTIME_ACTIONS the desktop gate accepts (`restart-dsh`
- *  excluded — it never reaches this gate in main.ts). */
+/** The RUNTIME_ACTIONS the desktop gate accepts (`restart-dsh` rides its own). */
 function desktopAcceptedActions(state: RuntimeState, options: { writerFenceBusy?: boolean } = {}): RuntimeAction[] {
   return RUNTIME_ACTIONS.filter(action => action !== 'restart-dsh' && desktopActionAllowed(action, state, options))
 }
-
 test('the unsupported-platform guard admits exactly the retry-restore escape, and only it (main.ts:5222)', () => {
   for (const phase of PHASES) {
     for (const caps of [{}, { canRetryRestore: true }] as Array<Partial<RuntimeState>>) {
@@ -369,11 +344,8 @@ test('the unsupported-platform guard admits exactly the retry-restore escape, an
         expected,
         `${phase} ${JSON.stringify(caps)}: a read-only platform keeps exactly the recovery escape`,
       )
-      // The narrowing is desktop-only and real: the shared core alone (what
-      // `mainActions` models) has no notion of an unsupported platform and
-      // still advertises the version-management matrix there. Every action it
-      // additionally offers is refused by THIS guard alone — lifting the flag
-      // accepts it again.
+      // The narrowing is desktop-only: the shared core advertises the whole
+      // matrix there, and every extra action is refused by THIS guard alone.
       for (const action of mainActions(phase, state)) {
         if (action === 'retry-restore' || expected.includes(action)) continue
         assert.equal(
@@ -382,8 +354,7 @@ test('the unsupported-platform guard admits exactly the retry-restore escape, an
           `${phase}: '${action}' must be refused by the unsupported-platform guard alone`,
         )
       }
-      // UI ⊆ main on this branch, and the platform-independent restart button
-      // is covered by its own gate (the renderer shows it here).
+      // UI ⊆ main here; the restart button rides its own gate (shown here).
       const shown = runtimeAllowedActions(state)
       for (const action of shown) {
         assert.ok(
@@ -412,8 +383,7 @@ test('the env guard refuses recover-metadata in exactly the blocked cells main w
   })
   const envState = blocked({ source: 'env' })
   const userState = blocked({ source: 'user' })
-  // The blocked matrix (and the shared `idle` + canRecoverMetadata cell) would
-  // admit it: the env guard is the ONLY difference between these twins.
+  // The blocked matrix would admit it: the env guard is the ONLY difference.
   assert.equal(mainActions('idle', userState).includes('recover-metadata'), true,
     'the shared core has no source notion — this cell is open without the desktop guard')
   assert.equal(desktopActionAllowed('recover-metadata', userState), true)
@@ -422,8 +392,7 @@ test('the env guard refuses recover-metadata in exactly the blocked cells main w
   assert.equal(runtimeAllowedActions(envState).includes('recover-metadata'), false,
     'the renderer hides it on the same state (both sides agree)')
 
-  // Permanent-incomplete twin on a retryable phase: main's blocked matrix
-  // opens BOTH the retry and the terminal escape; env keeps only the retry.
+  // Main's blocked matrix opens BOTH escapes here; env keeps only the retry.
   const userIncomplete = blocked({ phase: 'failed', source: 'user', canRetryRestore: true, restoreOutcome: 'incomplete' })
   assert.deepEqual(desktopAcceptedActions(userIncomplete), ['retry-restore', 'recover-metadata'])
   const envIncomplete = blocked({ phase: 'failed', source: 'env', canRetryRestore: true, restoreOutcome: 'incomplete' })
@@ -432,7 +401,6 @@ test('the env guard refuses recover-metadata in exactly the blocked cells main w
   assert.deepEqual(runtimeAllowedActions(envIncomplete), ['retry-restore'],
     'the renderer matches the env guard on the same state')
 })
-
 test('the writer fence refuses every runtime action except the applying-reset escape (main.ts:5224-5228)', () => {
   // The REAL shared fence (main.ts holds one RuntimeOperationFence instance).
   const fence = new RuntimeOperationFence()
@@ -446,16 +414,14 @@ test('the writer fence refuses every runtime action except the applying-reset es
     // … with the fence held, the desktop gate accepts NONE of them.
     assert.deepEqual(desktopAcceptedActions(idle, { writerFenceBusy: fence.busy }), [],
       'a held writer fence must refuse every runtime action')
-    // The ONE escape: reset-builtin while applying, non-env, with an override
-    // (the queued reset-builtin behind an in-flight apply transaction).
+    // The ONE escape: reset-builtin while applying, non-env, with an override.
     const applying = rendererState('applying', { source: 'user', hasOverride: true })
     assert.equal(desktopActionAllowed('reset-builtin', applying, { writerFenceBusy: fence.busy }), true)
     // … and each of its three conditions is load-bearing.
     assert.equal(desktopActionAllowed('reset-builtin', { ...applying, source: 'env' }, { writerFenceBusy: fence.busy }), false)
     assert.equal(desktopActionAllowed('reset-builtin', { ...applying, hasOverride: false }, { writerFenceBusy: fence.busy }), false)
     assert.equal(desktopActionAllowed('reset-builtin', { ...applying, phase: 'idle' }, { writerFenceBusy: fence.busy }), false)
-    // The renderer agrees about the escape's precondition (it hides
-    // reset-builtin without an override, and on env).
+    // The renderer agrees: reset-builtin is hidden without an override and on env.
     assert.equal(runtimeAllowedActions({ ...applying, hasOverride: false }).includes('reset-builtin'), false)
     assert.equal(runtimeAllowedActions({ ...applying, source: 'env', hasOverride: false }).includes('reset-builtin'), false)
     // Releasing the fence restores the shared matrix: the fence is the cause.
@@ -470,20 +436,6 @@ test('the writer fence refuses every runtime action except the applying-reset es
 
 // ---- structural pins: the transcription above must keep matching main.ts ----
 
-/** The balanced `{ … }` block that starts at `open`. */
-function balancedBlock(source: string, open: number): string {
-  assert.notEqual(open, -1, 'block start not found')
-  let depth = 0
-  for (let index = open; index < source.length; index += 1) {
-    if (source[index] === '{') depth += 1
-    else if (source[index] === '}') {
-      depth -= 1
-      if (depth === 0) return source.slice(open, index + 1)
-    }
-  }
-  assert.fail('unbalanced block in main.ts')
-}
-
 /** The body of the `const <name> = (…) => { … }` arrow function. */
 function arrowFunctionBody(source: string, name: string): string {
   const start = source.indexOf(`const ${name} = `)
@@ -491,17 +443,14 @@ function arrowFunctionBody(source: string, name: string): string {
   return balancedBlock(source, source.indexOf('{', start))
 }
 
-// The desktop main-process surface spans two files on this branch: W-10 moved the
-// 60 trusted-IPC registrations (RUNTIME_RESTART among them) into shell-core.ts,
-// which takes an injected registrar, while the desktop-only `runtimeActionAllowed`
-// guards stayed in main.ts. Read both, like ipc-surface-mirror.test.ts's
-// MAIN_SIDE_FILES — pointing these assertions at main.ts alone would report the
-// relocated handler as "gone" (and vice versa).
+// The desktop main-process surface spans two files (W-10 moved the trusted-IPC
+// registrations into shell-core.ts; the desktop-only `runtimeActionAllowed`
+// guards stayed in main.ts). Read both like ipc-surface-mirror.test.ts's
+// MAIN_SIDE_FILES, or a relocated handler reports as "gone".
 const MAIN_SIDE_FILES = ['main.ts', 'shell-core.ts']
 const desktopMain = MAIN_SIDE_FILES
   .map(file => readFileSync(join(import.meta.dirname, '..', '..', '..', '..', 'packages', 'desktop', file), 'utf8'))
   .join('\n')
-
 test('main.ts still orders the three desktop-only guards before the shared core, unchanged (P3)', () => {
   const body = arrowFunctionBody(desktopMain, 'runtimeActionAllowed')
   const unsupportedGuard = body.indexOf("state.managementSupported === false && action !== 'retry-restore'")

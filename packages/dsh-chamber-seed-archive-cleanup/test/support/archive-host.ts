@@ -10,6 +10,14 @@ import {
   type SessionContentDeletion,
 } from '../../src/core.ts'
 
+/** assert.rejects predicate for a typed archive-cleanup refusal (code + optional message/retryability). */
+export function codeIs(code: string, options: { message?: RegExp; retryable?: boolean } = {}) {
+  return (error: unknown): boolean => error instanceof ArchiveCleanupError
+    && error.code === code
+    && (options.message === undefined || options.message.test(error.message))
+    && (options.retryable === undefined || error.retryable === options.retryable)
+}
+
 export function state(id: string, running = false): ArchivedSessionState {
   return { sessionId: id, running }
 }

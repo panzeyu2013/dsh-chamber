@@ -38,12 +38,9 @@ function fakeTimers() {
 
 /** Minimal harness recording refresh calls and warns. */
 function harness(options: {
-  /** Outcomes for successive attempts; the last entry repeats. */
-  outcomes: ConvergenceOutcome[]
-  /** Lingering ids per attempt (last repeats). */
-  lingering: string[][]
-  /** Authoritative probe result (undefined = probe unavailable). */
-  probe?: () => Promise<ReadonlySet<string> | undefined> | undefined
+  outcomes: ConvergenceOutcome[]                                     // per attempt; the last repeats
+  lingering: string[][]                                              // ids per attempt; the last repeats
+  probe?: () => Promise<ReadonlySet<string> | undefined> | undefined   // undefined = probe unavailable
   maxAttempts?: number
 }) {
   const timers = fakeTimers()
@@ -73,32 +70,25 @@ function harness(options: {
   return { chain, timers, refreshes, warns, releases }
 }
 
+/** A convergence chain over inert defaults, for the configs the harness does not cover. */
+function chainOf(overrides: Partial<Parameters<typeof createPurgedConvergence>[0]> = {}) {
+  return createPurgedConvergence({ refresh: () => Promise.resolve(), lingering: () => [], warn: () => {}, ...overrides })
+}
+
 test('nextConvergenceStep: converged as soon as nothing lingers', () => {
-  assert.deepEqual(
-    nextConvergenceStep({ attempt: 1, maxAttempts: 3, lingering: [] }),
-    { action: 'converged' },
-  )
+  assert.deepEqual(nextConvergenceStep({ attempt: 1, maxAttempts: 3, lingering: [] }), { action: 'converged' })
 })
 
 test('nextConvergenceStep: retries while attempts remain', () => {
-  assert.deepEqual(
-    nextConvergenceStep({ attempt: 1, maxAttempts: 3, lingering: ['g'] }),
-    { action: 'retry' },
-  )
-  assert.deepEqual(
-    nextConvergenceStep({ attempt: 2, maxAttempts: 3, lingering: ['g'] }),
-    { action: 'retry' },
-  )
+  assert.deepEqual(nextConvergenceStep({ attempt: 1, maxAttempts: 3, lingering: ['g'] }), { action: 'retry' })
+  assert.deepEqual(nextConvergenceStep({ attempt: 2, maxAttempts: 3, lingering: ['g'] }), { action: 'retry' })
 })
 
 test('nextConvergenceStep: exhausting the bound moves to the authoritative probe', () => {
   // `refreshList` resolving does not prove the summaries are authoritative
   // (failed pulls and joined stale single-flight responses also resolve), so
   // the terminal step consults the independent probe instead of releasing.
-  assert.deepEqual(
-    nextConvergenceStep({ attempt: 3, maxAttempts: 3, lingering: ['g'] }),
-    { action: 'verify' },
-  )
+  assert.deepEqual(nextConvergenceStep({ attempt: 3, maxAttempts: 3, lingering: ['g'] }), { action: 'verify' })
 })
 
 test('releasableAfterProbe: only ids the authoritative source still lists', () => {
@@ -164,15 +154,11 @@ test('chain: a hung refresh is bounded by the attempt watchdog', async () => {
   const refreshes: number[] = []
   const warns: string[] = []
   let attempt = 0
-  const chain = createPurgedConvergence({
+  const chain = chainOf({
     refresh: () => { refreshes.push(attempt++); return new Promise<never>(() => {}) },
     lingering: () => ['g'],
     warn: (message) => { warns.push(message) },
-    schedule: timers.schedule,
-    cancel: timers.cancel,
-    maxAttempts: 2,
-    retryMs: 10,
-    attemptTimeoutMs: 5,
+    schedule: timers.schedule, cancel: timers.cancel, maxAttempts: 2, retryMs: 10, attemptTimeoutMs: 5,
   })
   chain.converge()
   await flush()
@@ -192,12 +178,8 @@ test('chain: a hung refresh is bounded by the attempt watchdog', async () => {
 
 test('chain: the default per-attempt watchdog is 2x the retry interval', async () => {
   const timers = fakeTimers()
-  const chain = createPurgedConvergence({
-    refresh: () => new Promise<never>(() => {}),
-    lingering: () => ['g'],
-    warn: () => {},
-    schedule: timers.schedule,
-    cancel: timers.cancel,
+  const chain = chainOf({
+    refresh: () => new Promise<never>(() => {}), lingering: () => ['g'], schedule: timers.schedule, cancel: timers.cancel,
   })
   chain.converge()
   await flush()
@@ -212,7 +194,7 @@ test('chain: a late settle of a timed-out attempt cannot terminate a later attem
   const warns: string[] = []
   let resolveFirst: (() => void) | undefined
   let calls = 0
-  const chain = createPurgedConvergence({
+  const chain = chainOf({
     refresh: () => {
       calls += 1
       if (calls === 1) return new Promise<void>((resolve) => { resolveFirst = resolve })
@@ -220,11 +202,7 @@ test('chain: a late settle of a timed-out attempt cannot terminate a later attem
     },
     lingering: () => ['g'],
     warn: (message) => { warns.push(message) },
-    schedule: timers.schedule,
-    cancel: timers.cancel,
-    maxAttempts: 3,
-    retryMs: 10,
-    attemptTimeoutMs: 5,
+    schedule: timers.schedule, cancel: timers.cancel, maxAttempts: 3, retryMs: 10, attemptTimeoutMs: 5,
   })
   chain.converge()
   await flush()
@@ -291,11 +269,7 @@ test('chain: dispose cancels the pending retry and issues nothing further', asyn
 
 test('chain: an unavailable official refresh face warns and keeps the suppression', () => {
   const warns: string[] = []
-  const chain = createPurgedConvergence({
-    refresh: () => undefined,
-    lingering: () => ['g'],
-    warn: (message) => { warns.push(message) },
-  })
+  const chain = chainOf({ refresh: () => undefined, lingering: () => ['g'], warn: (message) => { warns.push(message) } })
   chain.converge()
   assert.equal(warns.length, 1)
   assert.match(warns[0] ?? '', /unavailable/)
@@ -304,11 +278,7 @@ test('chain: an unavailable official refresh face warns and keeps the suppressio
 
 test('chain: converge() after the source is disposed is inert', () => {
   const refreshes: number[] = []
-  const chain = createPurgedConvergence({
-    refresh: () => { refreshes.push(1); return Promise.resolve() },
-    lingering: () => [],
-    warn: () => {},
-  })
+  const chain = chainOf({ refresh: () => { refreshes.push(1); return Promise.resolve() } })
   chain.dispose()
   chain.converge()
   assert.deepEqual(refreshes, [])
@@ -316,9 +286,7 @@ test('chain: converge() after the source is disposed is inert', () => {
 
 test('chain: the authoritative probe releases ONLY the ids it still lists', async () => {
   const h = harness({
-    outcomes: ['resolved'],
-    lingering: [['g1', 'g2']],
-    maxAttempts: 1,
+    outcomes: ['resolved'], lingering: [['g1', 'g2']], maxAttempts: 1,
     probe: () => Promise.resolve(new Set(['g2', 'live'])),
   })
   h.chain.converge()
@@ -333,9 +301,7 @@ test('chain: the authoritative probe releases ONLY the ids it still lists', asyn
 
 test('chain: a probe that omits the id keeps the suppression', async () => {
   const h = harness({
-    outcomes: ['resolved'],
-    lingering: [['g1']],
-    maxAttempts: 1,
+    outcomes: ['resolved'], lingering: [['g1']], maxAttempts: 1,
     probe: () => Promise.resolve(new Set(['live'])),
   })
   h.chain.converge()
@@ -348,9 +314,7 @@ test('chain: a probe that omits the id keeps the suppression', async () => {
 
 test('chain: a rejecting probe keeps the suppression (no authoritative answer)', async () => {
   const h = harness({
-    outcomes: ['resolved'],
-    lingering: [['g1']],
-    maxAttempts: 1,
+    outcomes: ['resolved'], lingering: [['g1']], maxAttempts: 1,
     probe: () => Promise.reject(new Error('probe failed')),
   })
   h.chain.converge()
@@ -366,17 +330,11 @@ test('chain: a hung probe is bounded by the watchdog and keeps the suppression',
   const warns: string[] = []
   const releases: string[][] = []
   let refreshes = 0
-  const chain = createPurgedConvergence({
-    refresh: () => { refreshes += 1; return Promise.resolve() },
-    lingering: () => ['g'],
-    probe: () => new Promise<never>(() => {}),
-    release: (ids) => { releases.push([...ids]) },
+  const chain = chainOf({
+    refresh: () => { refreshes += 1; return Promise.resolve() }, lingering: () => ['g'],
+    probe: () => new Promise<never>(() => {}), release: (ids) => { releases.push([...ids]) },
     warn: (message) => { warns.push(message) },
-    schedule: timers.schedule,
-    cancel: timers.cancel,
-    maxAttempts: 1,
-    retryMs: 10,
-    attemptTimeoutMs: 5,
+    schedule: timers.schedule, cancel: timers.cancel, maxAttempts: 1, retryMs: 10, attemptTimeoutMs: 5,
   })
   chain.converge()
   await flush()
@@ -398,16 +356,10 @@ test('chain: a probe that outlives its watchdog cannot cancel a later attempt\'s
   let resolveProbe: ((present: ReadonlySet<string>) => void) | undefined
   let probeCalls = 0
   let refreshCalls = 0
-  const chain = createPurgedConvergence({
-    refresh: () => { refreshCalls += 1; return new Promise<never>(() => {}) },
-    lingering: () => ['g'],
+  const chain = chainOf({
+    refresh: () => { refreshCalls += 1; return new Promise<never>(() => {}) }, lingering: () => ['g'],
     probe: () => { probeCalls += 1; return new Promise<ReadonlySet<string>>((resolve) => { resolveProbe = resolve }) },
-    warn: () => {},
-    schedule: timers.schedule,
-    cancel: timers.cancel,
-    maxAttempts: 1,
-    retryMs: 10,
-    attemptTimeoutMs: 5,
+    schedule: timers.schedule, cancel: timers.cancel, maxAttempts: 1, retryMs: 10, attemptTimeoutMs: 5,
   })
   chain.converge()
   await flush()
@@ -443,14 +395,10 @@ test('chain: a tombstone armed while the probe is in flight is NOT released', as
   let lingeringNow = ['g1']
   let resolveProbe: ((present: ReadonlySet<string>) => void) | undefined
   const releases: string[][] = []
-  const chain = createPurgedConvergence({
-    refresh: () => Promise.resolve(),
+  const chain = chainOf({
     lingering: () => lingeringNow,
     probe: () => new Promise<ReadonlySet<string>>((resolve) => { resolveProbe = resolve }),
-    release: (ids) => { releases.push([...ids]) },
-    warn: () => {},
-    maxAttempts: 1,
-    attemptTimeoutMs: 0,
+    release: (ids) => { releases.push([...ids]) }, maxAttempts: 1, attemptTimeoutMs: 0,
   })
   chain.converge()
   await flush()
@@ -470,16 +418,10 @@ test('chain: a late probe settle cannot cancel a LATER probe\'s watchdog', async
   const timers = fakeTimers()
   const resolvers: Array<(present: ReadonlySet<string>) => void> = []
   let probeCalls = 0
-  const chain = createPurgedConvergence({
-    refresh: () => new Promise<never>(() => {}),
-    lingering: () => ['g'],
+  const chain = chainOf({
+    refresh: () => new Promise<never>(() => {}), lingering: () => ['g'],
     probe: () => { probeCalls += 1; return new Promise<ReadonlySet<string>>((resolve) => { resolvers.push(resolve) }) },
-    warn: () => {},
-    schedule: timers.schedule,
-    cancel: timers.cancel,
-    maxAttempts: 1,
-    retryMs: 10,
-    attemptTimeoutMs: 5,
+    schedule: timers.schedule, cancel: timers.cancel, maxAttempts: 1, retryMs: 10, attemptTimeoutMs: 5,
   })
   chain.converge()
   await flush()
