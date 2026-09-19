@@ -17,18 +17,18 @@
 ## 1. 动机与范围
 
 ### 1.1 需求
-design 18 现行契约：apply 只置 pending，激活事务在下次启动相位执行。用户希望安装/选择完成后立即在当前会话切换到新版本。
+design 18 现行契约：apply 只置 pending，激活事务在下次启动相位执行；需求 = 安装/选择完成后立即在当前会话切换。
 
 ### 1.2 范围
-目标宿主：desktop 本地实例（完整管理面）、gateway 托管 dsh（/chamber/runtime 面）。
-排除：ssh 直连（版本只读）、dsh http 直连（不挂载）、env 来源（DSH_CHAMBER_DSH_PATH / DSH_GATEWAY_DSH_PATH）、Windows（只读平台）。
-不做：进程内热切换（物理不可行）、「安装时直接询问是否立即应用」合并流（后续可选）、runtime SSE（§0 D4）。
+目标宿主：desktop 本地实例（完整管理面）、gateway 托管 dsh（/chamber/runtime）。
+排除：ssh 直连（版本只读）、dsh http 直连（不挂载）、env 来源（DSH_CHAMBER_DSH_PATH / DSH_GATEWAY_DSH_PATH）、Windows。
+不做：进程内热切换（物理不可行）、「安装时询问是否立即应用」合并流（后续可选）、runtime SSE（§0 D4）。
 
 ### 1.3 可行性依据（机制事实）
 - 激活事务是任意时刻可调的纯 async 函数 `applyPendingVersion`，副作用全经 `ApplyDeps`，与启动序列零硬耦合；
 - 两个宿主早已在运行中执行完整激活事务：desktop `RUNTIME_RESET_BUILTIN`/`RUNTIME_RETRY_APPLY`/F7、gateway `restoreBuiltin`；
-- 状态机已建模 `pending --apply-start--> applying` 与生命周期投影边，只是此前从未被用户动作触发；
-- durable journal 的幂等补完不依赖「下次启动」（`snapshot-store` 的 marker 相位机是普通函数）；
+- 状态机已建模 `pending --apply-start--> applying` 与生命周期投影边，此前从未被用户动作触发；
+- durable journal 幂等补完不依赖「下次启动」（`snapshot-store` marker 相位机即普通函数）；
 - 停机窗口与串行化现成：`stop()` epoch writer 屏障、健康单飞、`restartLocal` 单飞、spawn-dsh SIGTERM→1s→SIGKILL。
 
 ## 2. 总体方案
@@ -41,9 +41,9 @@ design 18 现行契约：apply 只置 pending，激活事务在下次启动相�
 ### 2.2 执行序列（两个宿主同一契约）
 二次确认 → 门控（pending 存在 ∧ 目标树有效 ∧ connectionState∈{ready,degraded} ∧ 非 env ∧ 非 Windows ∧ mutation 单飞 ∧ writer fence）→ [停机前置] 事务性停止托管 dsh（复用 restartLocal 停机段与健康单飞串行化，禁裸 stopLocal）→ runStartupPhase（快照 → 切指针 → spawn 候选 → 探针门控 ≤60s + 延迟裁决）→ 干净/snapshot-failed → 恢复宿主；其余 blocked（swap-attempted/restore-half/restore-incomplete）→ 保持停机 + startupBlockedReason 投影 + retry 恢复面。
 
-正确性关键：apply-phase 正向路径只在快照（`deps.snapshot`）之后跑回退时才调 `stopHost`（`stopHost` 仅出现在回退路径）——会话中执行必须先停机再快照，否则违反「无存活写者的静止拷贝」不变量（`snapshotDshHome` 自身不查存活写者，靠调用方排序保证）。desktop `runRuntimeStartup` 已无条件 `cp.stopLocal()`，直接复用。
+正确性关键：apply-phase 正向路径只在快照（`deps.snapshot`）之后跑回退时才调 `stopHost`（仅回退路径）——会话中执行必须先停机再快照，否则违反「无存活写者的静止拷贝」不变量（`snapshotDshHome` 不查存活写者，靠调用方排序保证）。desktop `runRuntimeStartup` 已无条件 `cp.stopLocal()`，直接复用。
 
-一句话总结：本设计把「立即应用」定义为——复用既有激活事务与 `restartLocal` 停机窗口、在 pending 相位新增一个用户触发的执行入口；共享核心只补一个 signal 参数（含 abort 事务级取消语义），gateway 侧补一个 proxy 激活门与同步 preflight 拒门，其余全部是既有原语的组合；失败路径零新终态，崩溃安全零新窗口。
+一句话总结：「立即应用」= 复用既有激活事务与 `restartLocal` 停机窗口、在 pending 相位新增用户触发的执行入口（共享核心只补 signal 参数、gateway 侧补 proxy 激活门与同步 preflight 拒门见 §3/§5）；失败零新终态、崩溃安全零新窗口。
 
 ## 3. 共享核心改动（packages/dsh-runtime）
 
@@ -61,67 +61,59 @@ design 18 现行契约：apply 只置 pending，激活事务在下次启动相�
 ### 4.1 IPC 与动作
 - `ipc-events.ts` 新增 `RUNTIME_APPLY_NOW` 常量；`preload.cts` `runtimeApi()` 新增 `applyNow`（镜像测试 `test/ipc/ipc-surface-mirror.test.ts` 强制 handle 集 == invoke 集）。
 - `runtime-state-machine.ts`（desktop shim 指向 dsh-runtime）：`RuntimeAction` 增 `'apply-now'`；`allowedActions('pending')` 扩为 `['apply-now', 'reset-builtin']`。
-- `main.ts` 新 handler（**不持有跨事务 fence 租约**——`runRuntimeStartup` 内部自取 `'runtime:startup'` 租约，外层持有必死锁；采用 `RUNTIME_RETRY_APPLY` 同款入口模式）：
+- `main.ts` 新 handler（**不持有跨事务 fence 租约**——`runRuntimeStartup` 内部自取 `'runtime:startup'` 租约，外层持有必死锁；采用 `RUNTIME_RETRY_APPLY` 同款入口）：
   - 门控为纯函数 `evaluateApplyNowGate`（`packages/desktop/apply-now-gate.ts`，零副作用，矩阵测试覆盖）——顺序：busy（operation/fence 单飞）→ env → not-allowed（非 pending 相位 / `managementSupported=false`）→ blocked → not-ready（connectionState 非 ready/degraded）→ no-pending（`pending ?? journalTarget ?? overridePending` 三源全空，**防无事务空重启循环**）→ snapshot-failed（走 retry-apply）→ invalid-tree（目标树预检，防注定失败的停启循环）→ ok(target)。
-  - 确认对话框前后各调用一次同一 gate（两处输入构造完全同构，覆盖 TOCTOU）；原生二次确认 `confirmRuntimeMutation`（复用既有原生确认路径）；拒绝路径返回现状。
+  - 确认对话框前后各调一次同一 gate（两处输入同构，覆盖 TOCTOU）；原生二次确认 `confirmRuntimeMutation`（复用既有原生确认路径）；拒绝路径返回现状。
   - 确认后 `await runRuntimeStartup()`——事务窗口即既有 `phase:'applying'` + `runtimeBlocked:true` 投影，`publishApplyOutcome` 负责终态。
 - renderer `runtime-management.ts`：`RuntimeAction`/`RuntimeSurface.applyNow()`/`BASE_ACTIONS['pending']` 同步；**pending + `hasOverride===false` 时隐藏 apply-now**（与 reset-builtin 的 hasOverride 过滤对称，杜绝 UI⊄main）；`test/runtime/runtime-lockstep.test.ts` 精确相等断言强制 renderer ⊆ main。
 
 ### 4.2 门控与互斥（全部复用既有机制）
 - 健康自动重启交错：`restartLocal` 单飞 + `canSpawn` 门（`local-connection.ts`）——事务窗口内健康机「进程死亡即重启」被抑制。
 - 双 spawn：`startPromise`/`restartPromise` 单飞 + `stop()` epoch writer 屏障。
-- applying 期间其它动作：`runtimeActionAllowed`（`main.ts`）与 `allowedActions('applying')=['reset-builtin']` 既有。
+- applying 期间其它动作：`runtimeActionAllowed`（`main.ts`）与 `allowedActions('applying')=['reset-builtin']`。
 - 崩溃安全：无新窗口——journal 相位幂等续作；候选孤儿由启动 reaper 回收（control-plane 既有）。
 
 ### 4.3 known-good 语义
-无不利影响：applied 时 `recordProbePass`（apply-phase）+ `noteBoot`（main）——「≥1 boot」当场满足，24h 连续健康从 apply 时刻起算；回退目标不变。
+无不利影响：applied 时 `recordProbePass`（apply-phase）+ `noteBoot`（main）——「≥1 boot」当场满足，24h 连续健康从 apply 起算；回退目标不变。
 
 ## 5. gateway 宿主改动（packages/gateway）
 
 ### 5.1 新路由 `POST /chamber/runtime/apply-now`
-- 202 接受即返回（镜像 restart 语义，`runtime-routes.ts`）；异步 job 经 `status()` 轮询。
-- **同步 preflight（202 前的唯一权威门）**：路由在发 202 前调用 manager 的同步 `applyNowPreflight()`，任何同步门失败都以 409/403 先于 202 返回（杜绝「202 + 仅日志 + 轮询永不 settle」）。preflight 与 `applyNow` 共用同一门面（路由与直接调用语义一致），preflight 在 202 前完成 pending arm（202 丢失时退化为「下次启动应用」，无害）。
+- 202 接受即返回（镜像 restart，`runtime-routes.ts`）；异步 job 经 `status()` 轮询。
+- **同步 preflight（202 前的唯一权威门）**：发 202 前调用 manager 同步 `applyNowPreflight()`，任何同步门失败都以 409/403 先于 202 返回（杜绝「202 + 仅日志 + 轮询永不 settle」）；preflight 与 `applyNow` 共用同一门面（路由与直接调用语义一致），并在 202 前完成 pending arm（202 丢失时退化为「下次启动应用」，无害）。
 - 同步拒门：
-  - 409 `runtime_recovery_required`：recovery 相位（snapshot-failed/swap-attempted/restore-blocked）——`recoveryGateRefusal` 对 `'apply-now'` 特判：**普通 pending 允许 apply-now**（这是本动作的语义前提），recovery 相位仍拒绝（只走各自 retry；restore-builtin 仅限 pending/健康选择）；
-  - 409 `runtime_busy`（installing/applying/restart 在途、已有 apply-now 在途；`assertMutationIdle` 已并入 `applyNowInFlight`，与 mutationInProgress 语义对齐）；
+  - 409 `runtime_recovery_required`：recovery 相位（snapshot-failed/swap-attempted/restore-blocked）——`recoveryGateRefusal` 对 `'apply-now'` 特判：**普通 pending 允许 apply-now**（本动作前提），recovery 相位仍拒绝（只走各自 retry；restore-builtin 仅限 pending/健康选择）；
+  - 409 `runtime_busy`（installing/applying/restart 或已有 apply-now 在途；`assertMutationIdle` 并入 `applyNowInFlight`，与 mutationInProgress 对齐）；
   - 409 `env_override_active`、403 `platform_read_only`；
   - 409 `no_selection`（preflight 内**失效过滤**的目标解析：pending 与未失效 chosenVersion 双空）；
   - 409 `invalid_target`（目标树不存在）；
   - 409 `noop_target`（`target === currentPointerVersion()` 且无在途事务 journal（missing 或 intent 相位）——防无版本变更的空停→快照→spawn→探针循环；不阻断 prepared/switched 等崩溃续作）；
-  - 409 `runtime_busy`（connectionState 非 ready/degraded，镜像 restart 门；restart-exhausted 无专门拒绝，该门自然覆盖，§0 D2）。
+  - 409 `runtime_busy`（connectionState 非 ready/degraded，镜像 restart 门；restart-exhausted 由该门自然覆盖，§0 D2）。
 - manager `applyNow()`（restoreBuiltin 骨架的 version-switch 对偶）：
-  - **目标解析**：目标 = pending（有则用之）否则未失效 chosenVersion；仅 chosenVersion 时须先按 apply() 的 journal-first 顺序补写 `writeActivationIntent({targetVersion, targetIsBuiltin:false, manualRollback, intentKind:'version-switch'})` → `writeOverride({...pending: target, selectedOnly:false, lastOutcome:null, lastError:null})`（`runStartupPhase` 要求 effectivePending === targetVersion）；**不可复用 `assertNoPending()`**；**manualRollback 镜像 apply() 的降级公式**（`current !== null && compareRuntimeVersions(target, current) === -1`——降级 apply-now 与 apply()+下次启动路径语义一致，含 pre-rollback 数据 stash）；
+  - **目标解析**：目标 = pending（优先）否则未失效 chosenVersion；仅后者时按 apply() journal-first 顺序补写 `writeActivationIntent({targetVersion, targetIsBuiltin:false, manualRollback, intentKind:'version-switch'})` → `writeOverride({...pending: target, selectedOnly:false, lastOutcome:null, lastError:null})`（要求 effectivePending === targetVersion）；**不可复用 `assertNoPending()`**；**manualRollback 镜像 apply() 降级公式**（`current !== null && compareRuntimeVersions(target, current) === -1`——降级与 apply()+下次启动路径语义一致，含 pre-rollback 数据 stash）；
   - `beginActivation` → `await plane.stopLocal()` → `executeStartupTransaction()` → `endActivation` → 干净/snapshot-failed 时 `plane.startLocal()` + `refreshLocalExposure()`；
   - blocked（swap-attempted/restore-half/restore-incomplete）保持 gateway 存活 + `startupBlockedReason` 投影 + retry 恢复（blocked-but-alive）；
-  - **失败投影**：202 异步 job 的失败必须投影进 manager 状态（`operationError`/`startupBlockedReason`，镜像 `restart()`），不能只落日志；`applyNowInFlight` 访问器供路由与 status 使用。
+  - **失败投影**：202 异步 job 失败必须投影进 manager 状态（`operationError`/`startupBlockedReason`，镜像 `restart()`），不能只落日志；`applyNowInFlight` 供路由与 status 使用。
 - 现有 `POST /chamber/runtime/apply`（置 pending，同步 200）不动。
 
 ### 5.2 结果投影（§0 S2：零 schema 改动）
 - 窗口期：`status().phase==='applying'`（`activationInProgress` 驱动）+ connectionState 诚实降级 stopped/starting。
-- 成功：phase 离开 applying 且 connectionState∈{ready,degraded}，并且本次会清零/重写的
-  `startupBlockedReason`/`operationError` 为空、`restoreOutcome∈{null,none,complete}`。
-  `failure` 是跨动作保留的最近失败诊断，不能把历史记录误判为本次 apply-now 失败。
+- 成功：phase 离开 applying 且 connectionState∈{ready,degraded}，且本次会清零/重写的 `startupBlockedReason`/`operationError` 为空、`restoreOutcome∈{null,none,complete}`；`failure` 是跨动作保留的最近失败诊断，不能把历史记录误判为本次失败。
 - 已更新 vs 已回退：activeVersion == selectedVersion → 更新成功；否则已回退。
-- 失败：startupBlockedReason / operationError / 非成功 restoreOutcome 投影，走既有终态；
-  `failure` 仅展示诊断，不单独决定 poll settle。
+- 失败：startupBlockedReason / operationError / 非成功 restoreOutcome 投影，走既有终态；`failure` 仅展示诊断，不单独决定 poll settle。
 - 可选增强：一行透传 `override.lastOutcome`。
-- settings-bridge 轮询端 `pollRemoteRuntimeUntilSettled` 强制调用者显式传
-  `select|apply-now` expectation：select 保留安装任务语义，apply-now 才执行上述 live
-  connection/恢复窗口判定；实例切换或组件卸载通过 AbortSignal 取消旧轮询。
+- settings-bridge 轮询端 `pollRemoteRuntimeUntilSettled` 强制显式传 `select|apply-now` expectation：select 保留安装任务语义，apply-now 才执行上述 live connection/恢复窗口判定；实例切换或卸载经 AbortSignal 取消旧轮询。
 
 ### 5.3 gateway-proxy 激活感知（§0 D3，必做）
 - `GatewayProxyDeps` 增 `canExposeLocal?: () => boolean`；`resolveTarget` 与 `handleUpgrade`（`gateway-proxy.ts`）增加激活门：激活事务在途（candidate 已 spawn、探针未裁决）时返回 503 `instance_unavailable`。
 - index.ts 直接复用既有谓词 `() => runtimeManager === null || !runtimeManager.activationInProgress()`。
-- 理由：探针只覆盖 host 侧、渲染侧兼容不在门控内（design 18 §3.4），未裁决候选不得服务在线用户；该修复同时覆盖启动路径与 restore-builtin 的既有同类暴露。
+- 理由：探针只覆盖 host 侧、渲染侧兼容不在门控内（design 18 §3.4），未裁决候选不得服务在线用户；该暴露在启动路径与 restore-builtin 同样存在（§0 D3）。
 
 ### 5.4 单进程与回收
-`owner.json` no-follow O_EXCL + token/inode 单进程不变量不受影响；`stop()` 在等待 startup
-continuation 前先触发 manager lifecycle abort，并 drain apply-now/F7/install 等完整 writer
-promise 后才释放 owner/state lock——apply-now 在途收到 stop → journal 保留中断相位 →
-下次启动 blocked-but-alive + retry，旧 job 不得在新 owner 进入后继续写。
+`owner.json` no-follow O_EXCL + token/inode 单进程不变量不受影响；`stop()` 等 startup continuation 前先触发 manager lifecycle abort，drain apply-now/F7/install 等完整 writer promise 后才释放 owner/state lock——apply-now 在途收到 stop → journal 保留中断相位 → 下次启动 blocked-but-alive + retry，旧 job 不得在新 owner 进入后继续写。
 
 ### 5.5 /chamber/ 浏览器页（§6.4 配套）
-`routes.ts` 的 /chamber/ 管理页同步实现 apply-now：runtime controls 区新增 `Apply now` 按钮（`runtime-apply-now`）与 `Applying… restarting` 窗口状态文案，经既有 `runtimeAction` 单飞 + 3s status 轮询；按钮禁用逻辑与相位/connectionState/env/read-only 门对应；硬编码英文、CSP 兼容（无内联事件），不属 i18n 面。
+`routes.ts` 的 /chamber/ 管理页同步实现 apply-now：runtime controls 区新增 `Apply now` 按钮（`runtime-apply-now`）与 `Applying… restarting` 窗口文案，经既有 `runtimeAction` 单飞 + 3s status 轮询；按钮禁用与相位/connectionState/env/read-only 门对应；硬编码英文、CSP 兼容（无内联事件），不属 i18n 面。
 
 ## 6. 状态机与 UI
 
@@ -133,7 +125,7 @@ promise 后才释放 owner/state lock——apply-now 在途收到 stop → journ
 | 其余状态 | 不变 | 不变 |
 | env 源 | mutation 禁用 | 不变（env 禁立即应用；[重启 dsh] 仍可用） |
 
-实现面：`runtime-state-machine.ts` 的 `allowedActions` pending 分支 + renderer `runtime-management.ts` `BASE_ACTIONS` 同步（含 `hasOverride=false` 时隐藏 apply-now）；`test/runtime/runtime-lockstep.test.ts` 精确相等断言是天然强制同步点。
+实现面：`runtime-state-machine.ts` `allowedActions` pending 分支 + renderer `runtime-management.ts` `BASE_ACTIONS` 同步（§4.1；`hasOverride=false` 时隐藏）；`test/runtime/runtime-lockstep.test.ts` 精确相等断言是天然强制同步点。
 
 ### 6.2 诚实信号纪律（窗口期）
 - desktop：`phase='applying'` + `runtimeBlocked=true` + `runtimeBlockedReason`；connections 卡 `runtimeBlocksLocalStart` 门控（`runtime-management.ts`）。
@@ -142,15 +134,15 @@ promise 后才释放 owner/state lock——apply-now 在途收到 stop → journ
 - 点击后立即置 busy 并禁用整组，防同帧双击。
 
 ### 6.3 文案（zh / en）
-- 二次确认对话框（desktop 的 IPC 入口仍由 main 的原生 `confirmRuntimeMutation` 交付，不动；settings-bridge 面板自身的一切确认——含 gateway 源重启——统一走应用内官方 `Modal`，2026-09-11 upstream-alignment T2，原为 `window.confirm`；**浏览器页按动作分档**（2026-09-11 review-fix 收窄）：apply-now 等运行时动作由各自控件直接触发、**无二次确认**，但该页自有的一层应用内确认对话框确实存在，只服务**凭据移除**的两处门——标记/控制器/inert 与 Tab 陷阱见 design 17 §10.3）：
+- 二次确认对话框（desktop IPC 入口仍由 main 原生 `confirmRuntimeMutation` 交付，不动；settings-bridge 面板自身一切确认——含 gateway 源重启——统一走应用内官方 `Modal`（2026-09-11 upstream-alignment T2，原为 `window.confirm`）；**浏览器页按动作分档**（2026-09-11 review-fix）：apply-now 等运行时动作由控件直接触发、**无二次确认**，但该页自有的应用内确认对话框只服务**凭据移除**两处门——标记/控制器/inert 与 Tab 陷阱见 design 17 §10.3）：
   - zh 标题：立即切换到 v{version}？正文：dsh 将立即重启并切换到 v{version}（约 30–90 秒）。进行中的会话会中断，你的数据不受影响；若切换失败，dsh 会自动回滚并保留现场。确认/取消：立即应用并重启 / 取消。
   - en：Switch to v{version} now? / dsh will restart immediately and switch to v{version} (about 30–90 seconds). In-progress sessions will be interrupted; your data is unaffected. If the switch fails, dsh rolls back automatically and retains the recovery state. / Apply and restart / Cancel.
 - 按钮/hint：pending 主按钮「立即应用 v{version} / Apply now v{version}」；pending hint 注明「切换将在下次启动生效；如需立即生效，点击『立即应用』（dsh 会短暂重启，约 30–90 秒）」；applying 窗口状态行「应用 dsh v{version}… 正在重启 / Applying dsh v{version}… restarting」。
-- **方向感知合并按钮**：gateway 设置区段的「仅下次启动」按钮与独立「回滚到」按钮合并为单一方向感知主按钮——升级「更新到 vX / Update to vX」、降级「切换到 vX / Switch to vX」（`dshRuntimeActionUpdate`/`dshRuntimeActionSwitch`），执行 select+apply（apply 服务端按方向计算 manualRollback，与 desktop install 同构）；按钮下 hint（`dshRuntimeApplyNextLaunchHint`）保留「下次启动生效」语义。desktop 本地区段同步采用 更新到/切换到 文案。
-- 口径：30–90 秒取就绪窗口；诚实注明探针可能延长（≤60s + 延迟裁决）。
+- **方向感知合并按钮**：gateway 设置区段的「仅下次启动」与独立「回滚到」按钮合并为单一方向感知主按钮——升级「更新到 vX / Update to vX」、降级「切换到 vX / Switch to vX」（`dshRuntimeActionUpdate`/`dshRuntimeActionSwitch`），执行 select+apply（服务端按方向算 manualRollback，与 desktop install 同构）；hint（`dshRuntimeApplyNextLaunchHint`）保留「下次启动生效」语义。desktop 本地区段同步采用 更新到/切换到 文案。
+- 口径：30–90 秒取就绪窗口；探针可能延长（≤60s + 延迟裁决）。
 
 ### 6.4 i18n key（命名空间 `dsh-chamber.settings.bridge`；`locales.ts`：zh 为 key 集源、en 为 `Record<keyof typeof zh>`）
-key 集：dshRuntimeApplyNowAction / dshRuntimeApplyNowActionWithVersion / dshRuntimeApplyNowConfirmTitle / dshRuntimeApplyNowConfirmBody / dshRuntimeApplyNowConfirmAction / dshRuntimeApplyNowHint / dshRuntimeStatusApplyingNow。`dshRuntimeApplyNextLaunchOnly` 已随方向感知合并按钮移除，替代为 `dshRuntimeActionUpdate` / `dshRuntimeActionSwitch` + hint key `dshRuntimeApplyNextLaunchHint`。`dshRuntimeApplyNowConfirmAction` 由 desktop 原生对话框以硬编码中文交付（main 进程无 i18n，与全部既有原生对话框一致），i18n key 保留为契约占位。/chamber/ 浏览器页（§5.5）硬编码英文，不属 i18n 面。
+key 集：dshRuntimeApplyNowAction / dshRuntimeApplyNowActionWithVersion / dshRuntimeApplyNowConfirmTitle / dshRuntimeApplyNowConfirmBody / dshRuntimeApplyNowConfirmAction / dshRuntimeApplyNowHint / dshRuntimeStatusApplyingNow（`dshRuntimeApplyNextLaunchOnly` 随方向感知合并按钮移除，替代为 `dshRuntimeActionUpdate`/`dshRuntimeActionSwitch` + hint key `dshRuntimeApplyNextLaunchHint`）。`dshRuntimeApplyNowConfirmAction` 由 desktop 原生对话框硬编码中文交付（main 无 i18n，与既有原生对话框一致），key 保留为契约占位。/chamber/ 浏览器页（§5.5）硬编码英文，不属 i18n 面。
 
 ## 7. 风险与不变量
 

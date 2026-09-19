@@ -1,27 +1,23 @@
 # 17 · 服务端接入层（Gateway）与远程连接模型
 
-> **状态：现行（服务端接入层 + 桌面远程连接模型（四维正交）+ 移动端 Web 访问面，2026-12）**——
+> **状态：现行（服务端接入层 + 四维正交远程连接模型 + 移动端 Web 访问面，2026-12）**——
 > `packages/gateway` 是显式启动、可认证的服务端形态：托管一份 loopback dsh，在认证、Host/Origin
-> 与资源边界之后反代 dsh 官方 Web 前端与 `/api`，并以独立的 `/chamber/*` 面提供受限运维面；
-> 桌面以**四维正交模型**接入（目标类型 dsh/gateway × 传输方式 ssh/http × 认证（可空
-> token/密码）× 通道（服务器侧 frp/tailscale/zerotier 槽位）），客户端对弱模式（http 明文、
-> 无认证）不前置拦截，服务器是唯一授权方；未完成门禁见 docs/progress/STATUS.md。
->
-> 本设计自包含：原 design 01 的编排规则不再作为本设计依据（已过时部分不引用）。
+> 与资源边界之后反代官方 Web 前端与 `/api`，并以独立的 `/chamber/*` 面提供受限运维面；
+> 桌面按四维正交模型接入，客户端对弱模式（http 明文、无认证）不前置拦截，服务器是唯一授权方；
+> 未完成门禁见 docs/progress/STATUS.md。本设计自包含：原 design 01 的编排规则不再作为本设计依据。
 
 ## 1. 定位与边界
 
 `packages/gateway` 是 dsh-chamber 仓库内一个**显式启动、可认证**的服务端形态：
 
 1. 托管一份始终监听 loopback 的本地 dsh；
-2. 在认证、Host/Origin 和资源边界后反代 dsh 官方 Web 前端与 `/api`；
+2. 在认证、Host/Origin 和资源边界后反代官方 Web 前端与 `/api`；
 3. 允许 Desktop 以 gateway 连接（http 或 https、可空认证）接入该入口；
 4. 在独立的 `/chamber/*` 面提供受限运维面：dsh 运行时管理（design 18 §9.3）、
    凭据面板、插件同步种子缓存与通道投影（编排面剥离后仅剩这些）。
 
-它不是普通 control-plane 的公网开关。普通 Desktop control-plane 仍保持 loopback-only、
-匿名、只负责连接管理与同源反代。Gateway 的网络能力只在 `packages/gateway` 被显式
-运行时存在。
+它不是普通 control-plane 的公网开关：普通 Desktop control-plane 仍 loopback-only、匿名、
+只负责连接管理与同源反代，网络能力只在 `packages/gateway` 显式运行时存在。
 
 ### 1.1 传输安全责任划分（本设计的总原则）
 
@@ -29,8 +25,8 @@
   反代 / tailscale / SSH 隧道 / frp / zerotier，任选或组合）；
 - 客户端对弱模式（http 明文、无认证）**不前置拦截**，但**如实注明**：配置时的安全
   姿态提示 + 连接卡片的常驻徽标 + 文档的责任划分；
-- `--no-auth` 完全由**服务器侧**校验与授权（S1 有界偏差），客户端不做模式选择、
-  不做推断、不做二次确认——空凭据 = 不带认证直接请求，由 gateway 决定放行或 401。
+- `--no-auth` 完全由**服务器侧**校验与授权（S1 有界偏差），客户端不做模式选择——空凭据
+  = 不带认证直接请求，由 gateway 决定放行或 401。
 
 ## 2. 远程连接模型（四维正交）
 
@@ -44,8 +40,7 @@
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-四维全部正交、全部开放联合 + 注册表驱动；新增任何一维的取值都只触碰对应槽位，
-核心运行时与反代零改动（槽位总表见 §14）。
+四维全部正交、开放联合 + 注册表驱动；新增任一维取值只触碰对应槽位，核心运行时与反代零改动（槽位总表见 §14）。
 
 ### 2.1 目标类型（kind）
 
@@ -54,8 +49,7 @@
 | `dsh` | dsh web profile（loopback-only，无认证） | 无 | `dsh-<id>` | `/api/i/dsh-<id>` |
 | `gateway` | gateway 部署（有认证面与 `/chamber/*` 面） | 可空 token/密码 | `gateway-<id>` | `/api/i/gateway-<id>` |
 
-kind 决定**目标语义**：dsh 目标永不注入认证头、永不挂载 `/chamber/*` 能力；gateway
-目标可注入认证头、可挂载全部 gateway 能力（§3）。
+kind 决定**目标语义**：dsh 目标永不注入认证头、永不挂载 `/chamber/*`；gateway 目标可注入认证头、可挂载全部 gateway 能力（§3）。
 
 ### 2.2 传输方式（transport）
 
@@ -65,14 +59,11 @@ kind 决定**目标语义**：dsh 目标永不注入认证头、永不挂载 `/c
 | `http` | direct endpoint：http(s) 直连，无子进程 | dsh（穿透用户自建）/ gateway | dsh 目标禁；gateway 目标可 |
 
 - **Provider 按 transport 注册**（`providers: { ssh: …, http: … }`），spec 内的 kind
-  决定目标语义（verifyUp 是否带认证、能否注入头）——新增一个传输 = 一个 provider，
-  同时服务两种目标；
-- **UI 槽位**：连接设置插件内维护 transport 表单 schema 注册表——每个 transport 声明
-  自己的字段集/校验/提示（ssh 字段组 vs URL 字段组），表单按注册渲染；新增 transport
-  只需加 schema + locales，表单骨架零改动；
-- **迁移**：旧 `kind:'ssh'` 条目载入时映射为 `{kind:'dsh', transport:'ssh'}`；
-  旧 `kind:'gateway'` 条目映射为 `{transport:'http'}`；source id 的 `ssh-` 前缀保留
-  legacy 兼容映射（deep link 可用）。
+  决定目标语义（verifyUp 是否带认证、能否注入头）——新增一个传输 = 一个 provider，同时服务两种目标；
+- **UI 槽位**：连接设置插件维护 transport 表单 schema 注册表——每个 transport 声明自己的
+  字段集/校验/提示（ssh 字段组 vs URL 字段组），表单按注册渲染；新增 transport 只需加 schema + locales；
+- **迁移**：旧 `kind:'ssh'` 条目映射为 `{kind:'dsh', transport:'ssh'}`；旧 `kind:'gateway'`
+  条目映射为 `{transport:'http'}`；source id 的 `ssh-` 前缀保留 legacy 兼容映射（deep link 可用）。
 
 ### 2.3 认证模型（可空、不前置、服务器权威）
 
@@ -80,16 +71,13 @@ kind 决定**目标语义**：dsh 目标永不注入认证头、永不挂载 `/c
 - **语义**：填 token → `Authorization: Bearer`；填密码 → 主进程 `POST /auth/login` →
   持有 12h JWT cookie（`dsh_gateway_session`，HttpOnly，仅 HTTPS 边界附加 Secure）→
   反代注入 `Cookie` 头；两者同时存在时登录与 bearer 是**独立 OR principal**，客户端
-  同时注入 `Authorization` + `Cookie`，gateway 接受任一合法身份（token 轮换不遮蔽
-  仍有效的密码会话，密码登录失败也可由有效 token 继续）；**都空 → 无认证头直接请求，由 gateway 校验**（`--no-auth`
+  同时注入 `Authorization` + `Cookie`，gateway 接受任一合法身份（token 轮换不遮蔽有效密码会话，密码登录失败可由有效 token 继续）；**都空 → 无认证头直接请求，由 gateway 校验**（`--no-auth`
   部署直接放行；要求认证的部署回 401，客户端如实分类上报，见 §7.3）；
-- **认证不是模式**：spec 不存 auth 模式；凭据存在性（`tokenSet`/`passwordSet`）
-  与存储模式（`secretStorage`：`'safeStorage' | 'plaintext'`，S22）是主进程凭据
-  存储的**实时非秘密投影**（`instances_get` 读时合并），用于 UI 显示「已配置」、
-  卡片徽标与明文回退提示；
-- **槽位**：认证 = 可注入头白名单（现为 `Authorization` + `Cookie` 两项，逐项校验）+
-  会话管理器接口；未来 passkey（服务器 auth.ts 联合已含）/OIDC/客户端证书 = 增加头项
-  或会话实现，反代与 UI 机制不变。
+- **认证不是模式**：spec 不存 auth 模式；凭据存在性（`tokenSet`/`passwordSet`）与存储模式
+  （`secretStorage`：`'safeStorage' | 'plaintext'`，S22）是主进程凭据存储的**实时非秘密投影**
+  （`instances_get` 读时合并），用于 UI 显示「已配置」、卡片徽标与明文回退提示；
+- **槽位**：认证 = 可注入头白名单（现为 `Authorization` + `Cookie` 两项，逐项校验）+ 会话管理器接口；
+  未来 passkey（服务器 auth.ts 联合已含）/OIDC/客户端证书 = 增加头项或会话实现，反代与 UI 机制不变。
 
 ### 2.4 通道（服务器侧暴露面，channel）
 
@@ -98,18 +86,18 @@ kind 决定**目标语义**：dsh 目标永不注入认证头、永不挂载 `/c
   `ChannelKind = 'frp' | 'tailscale' | 'zerotier' | (string & {})`，
   `ChannelProvider { start/stop/resolveEndpoint/probe }`；MVP 零实装，
   `/chamber/channels` 恒空、活性永远来自 live probe（§2.4 / §10.1；design 01 §5 权威边界纪律）；
-- **发现流槽位**（未来）：桌面可经认证的 `/chamber/channels` 列出通道、请求启动并
-  解析端点，自动填充连接表单——接口已定义，本期不实装。
+- **发现流槽位**（未来）：桌面可经认证的 `/chamber/channels` 列通道、请求启动并解析端点、
+  自动填充连接表单——接口已定义，本期不实装。
 
 ## 3. 能力差异与设置挂载（gateway vs dsh 直连）
 
 **依赖 gateway 的功能（dsh 运行时管理、凭据面板、插件同步）只能经 gateway 连接触达；
 直连 dsh（无论 ssh 隧道还是 http 直连）物理上不存在 `/chamber/*` 面，无法挂载。**
 **dsh×http 组合禁用（用户决策）**——直连 dsh 的宿主被
-browser-auth 门硬阻断（launch token 为远端进程内存随机数、不可远程恢复），http
-直连 dsh 无法验证/附加；连接表单不提供该组合（http 传输 schema 只服务 gateway），
-主进程 http provider `validateSpec` 拒绝 dsh kind（注册表保存即拒绝、旧条目加载时
-按无效条目丢弃）。ssh 是 dsh 唯一传输。上游提供 token 检索机制后，恢复点 =
+browser-auth 门硬阻断（launch token 为远端进程内存随机数、不可远程恢复），无法
+验证/附加；连接表单不提供该组合（http 传输 schema 只服务 gateway），
+主进程 http provider `validateSpec` 拒绝 dsh kind（保存即拒绝、旧条目按无效丢弃）。
+ssh 是 dsh 唯一传输。上游提供 token 检索机制后，恢复点 =
 connection-form http schema `targetKinds` + http provider `validateSpec` 两处。
 settings-bridge 按来源 kind 装配子 ctx，同一设置页对不同来源显示不同分区：
 
@@ -128,47 +116,44 @@ settings-bridge 按来源 kind 装配子 ctx，同一设置页对不同来源显
 
 装配规则（design 17 契约）：**gateway 连接** → 仅挂载 dsh-runtime 代理分节
 （design 18 §3.6/§9.3：`/chamber/runtime`，路径由 canonical `gateway-<id>` 派生为
-`/api/i/gateway-<id>/chamber/*` 同源代理，token 永不出主进程）；编排分区
-（git/notifications/schedule 功能开关、待处理审批/提问、
-会话/调度/worktree 投影）不挂载到桌面设置——审批/提问经侧边栏既有事实通道
-呈现；网关自有的编排面整体剥离（§10），仅保留 runtime 控制器、凭据
-面板与插件同步。**dsh 直连** → 只挂 dsh 自身能力，任何 `/chamber/*` 请求必须
-稳定返回 404/403 且不伪装。各资源独立失败，单一路由错误不抹掉其他已加载数据。
+`/api/i/gateway-<id>/chamber/*` 同源代理，token 永不出主进程）；编排分区不挂载到桌面设置
+——审批/提问经侧边栏既有事实通道呈现；网关自有的编排面整体剥离（§10），仅保留 runtime
+控制器、凭据面板与插件同步。**dsh 直连** → 只挂 dsh 自身能力，任何 `/chamber/*` 请求
+稳定返回 404/403。各资源独立失败，单一路由错误不抹掉其他已加载数据。
 
 **就绪语义**：gateway 来源的 desktop `ready` 只证明
 **gateway 进程**活着——就绪探针读的就是 `/chamber/runtime/status`，托管 dsh 是
-独立进程（design 18 §9）。侧栏因此必须消费该响应的 `connectionState`，否则托管
+独立进程（design 18 §9）。侧栏必须消费该响应的 `connectionState`，否则托管
 dsh 停机窗口里来源"可点但背后不可用"（`+` 建会话必失败、运行环/pending/完成点
 等挂载期事实缺失）。现行为：gateway 来源由 App 每 15s（仅前台）探一次
 `/api/i/<id>/chamber/runtime/status`（`shared/managed-runtime.ts`）——终态停机
-`stopped`/`error`/`restart-exhausted` 投影为该源 `phase`（侧栏既有状态点与
+`stopped`/`error`/`restart-exhausted` 投影为该源 `phase`（状态点与
 `status.stopped/error/restartExhausted` 文案复用）并置 `connected=false`
 ——按既有"断连来源"语义**整棵来源子树（行列表 + 归档入口）隐藏**、动作入口
-随之禁用（不是"只禁用动作"；这是有意的诚实投影：托管 dsh 停机时其会话数据
+随之禁用（有意的诚实投影：托管 dsh 停机时其会话数据
 不可用），**并在来源头下方就地给出一行原因 + 恢复提示**
 （`source.managedDown`，状态词复用既有 `status.*`；提示"前往 设置 → 连接 启动该
 实例"，实际入口是设置面板的「管理连接」/connections 页的「启动实例」）。该说明
 是**该来源在有说明时唯一的常驻 live region**（`role="status" aria-live="polite"`，空文本
-零高）：插入即带内容的 region 不会被 AT 播报，所以容器常驻、只换文本；此时状态点
-不再兼任 live region（同一事实不双播报），非交互头部改用 `aria-describedby` 指向
-该行而不是给它一个对 generic 角色无效的 `aria-label`。——实测该状态下点击来源头
+零高）：容器常驻、只换文本；此时状态点
+不再兼任 live region，非交互头部改用 `aria-describedby` 指向
+该行而不是给它一个对 generic 角色无效的 `aria-label`。实测该状态下点击来源头
 **到不了失败覆盖层**（壳能 boot、body 渲染空面板），因此该形态下**头部不再是
 可激活入口**（无 role/tabIndex，点击/键盘处理器由 `headerActivatable` 直接短路，title 改为
 说明原因）；设置面板同一状态
-改用 `managedDshDown` 文案（"网关可达但托管 dsh 未运行"）而非笼统的"不可达"。
-`starting`/`restarting` 同样投影进 `phase`（此时隧道是好的但 dsh 未起，绿点会
-撒谎）并**一并折叠进 `connected=false`**——dsh 尚未服务，动作入口只会 503，与终态
+改用 `managedDshDown` 文案（"网关可达但托管 dsh 未运行"）。
+`starting`/`restarting` 同样投影进 `phase` 并**一并折叠进 `connected=false`**——
+dsh 尚未服务，动作入口只会 503，与终态
 停机同一理由禁用（忙碌点仍显示）；`degraded` 按既有语义呈现为**未连接**
-（`instanceConnected` 只认 `ready`，故其会话子树隐藏、动作入口禁用），本投影不改
+（`instanceConnected` 只认 `ready`），本投影不改
 该语义；探针缺失/非 200/代理失败 **fail open**。
 
 **判定事实的独立性**：托管态**不得**从合并后的 `phase`
 反推——`phase` 是"托管态 ∪ 传输态"，两套词表都含 `error`，反推会把 SSH/隧道
-失败误诊为"托管 dsh 停机"。聚合里因此新增**独立字段** `managedRuntimeDown`
+失败误诊为"托管 dsh 停机"。聚合里新增**独立字段** `managedRuntimeDown`
 （仅当 `kind==='gateway'`、传输 `ready|degraded`、且探针报告终态停机时为 true），
-侧栏与设置面板只消费该字段。
-停机态与 connections 页「启动实例」的可启动三元组是同一个（`stopped|error|
-restart-exhausted`），故本投影不会把用户锁死——恢复入口仍在。
+侧栏与设置面板只消费该字段。停机态与 connections 页「启动实例」的可启动三元组是同一个
+（`stopped|error|restart-exhausted`），恢复入口仍在。
 dsh 直连目标无此投影需求：其就绪探针直接探 dsh 本体。
 
 ## 4. 组合架构与生命周期
@@ -211,15 +196,13 @@ upgrade middleware 和 CORS evaluator 才能越过 loopback 构造门。
    （`syncFeatures`，design 18 §9.3）；
 7. 任一步失败都会停止已打开的 server，下一次 `start()` 可重试。
 
-停止时先同步关闭 credential mutation admission（feature host 已不存在），并撤销
-dispatch 追踪的下游 HTTP/WS（未读完 body 的请求因此不会卡住 drain）；同时中止
+停止时先同步关闭 credential mutation admission，并撤销
+dispatch 追踪的下游 HTTP/WS（未读完 body 的请求不会卡住 drain）；同时中止
 runtime transaction/install。已经越过 admission 的凭据写入不强行打断，而是持有
 stateDir lock 等待其完整 promise、审计尾与持久化 tail 收敛；credential、runtime
 两类 writer（插件同步缓存是同步 put，随请求收敛）都静止后才停止 control-plane、
 managed dsh 并释放 `.gateway.lock`。启动失败回滚走同一屏障，绝不让旧 handler 在
-新 gateway 取得锁后继续写；同一 handle 再次 `start()` 时才重新开放 admission。
-编排面剥离后没有 feature host：不存在 index/notify/scheduler/git 派生
-consumers，ready 过渡订阅只把权威状态转发给 runtime 管理器。**例外**：
+新 gateway 取得锁后继续写；同一 handle 再次 `start()` 时才重新开放 admission。**例外**：
 `/chamber/runtime` 是 gateway 自有 runtime 控制器（挂在 dispatch 面，不随 ready
 detach）——dsh 停机/重启/applying 窗口内必须持续可轮询进度（design 18 §9.3）。
 **design 21 写面扩展**：`/chamber/plugins/*` 写路由在 dispatch 面之后
@@ -245,15 +228,15 @@ gateway auth clear [--state-dir DIR]
 ```
 
 `gateway auth` 子命令在**停机态**管理持久化凭据（§7.4）：`status` 输出非秘密投影
-（password/token 是否配置、`source` 与最后写入时间，永不含值）——它是**无锁只读**
-命令，运行中的 gateway 也可正常读取；只读路径验证既有凭据文件已经是 `0600`，
-权限过宽时按不安全/未配置投影且绝不以 `chmod` 修改文件；`reset-password --new PASSWORD` 以
-`source:'runtime'` 写入新密码并先旋转 `jwt-secret`（12–1024 字符）；`clear` 同时
-删除密码与 token，下次启动由部署配置重新播种（`--no-auth` 部署恢复匿名并打印 S1
+（password/token 是否配置、`source` 与最后写入时间，永不含值）——**无锁只读**，运行中的
+gateway 也可读；只读路径验证既有凭据文件已经是 `0600`，权限过宽时按不安全/未配置投影
+且绝不以 `chmod` 修改文件；`reset-password --new PASSWORD` 以
+`source:'runtime'` 写入新密码并先旋转 `jwt-secret`（12–1024 字符）；`clear` 删除
+密码与 token，下次启动由部署配置重新播种（`--no-auth` 部署恢复匿名并打印 S1
 告警）。后两者取 stateDir 独占锁，**运行中的 gateway 会响亮拒绝**（结构化错误
 `gateway_locked` + 运行中 pid）并提示改用 Web UI（`/chamber/` 凭据面板）或
-`/auth/change-*` API；用法错误退出 2，运行失败（gateway 运行中/state 错误）退出 1。
-`serve` 的 boot 行打印的是**播种后的有效 auth kind**（§7.4）——runtime 凭据生效时
+`/auth/change-*` API；用法错误退出 2，运行失败退出 1。
+`serve` 的 boot 行打印**播种后的有效 auth kind**（§7.4）——runtime 凭据生效时
 不再误报 `auth=none`。
 
 兼容别名为 `dsh-chamber-gateway`。环境变量包括 `DSH_GATEWAY_HOST`、
@@ -261,8 +244,8 @@ gateway auth clear [--state-dir DIR]
 `DSH_GATEWAY_PASSWORD`、`DSH_GATEWAY_TOKEN`、`DSH_GATEWAY_PUBLIC_ORIGIN` 和
 `DSH_GATEWAY_TRUSTED_PROXIES`。
 
-生产建议用 owner-only 的 systemd `EnvironmentFile` 或 secret manager 注入凭据。Gateway
-会从 managed dsh 和 Git 子进程环境中按大小写不敏感规则剥离全部 `DSH_GATEWAY_*`。
+生产建议用 owner-only 的 systemd `EnvironmentFile` 或 secret manager 注入凭据；Gateway
+从 managed dsh 与 Git 子进程环境按大小写不敏感规则剥离全部 `DSH_GATEWAY_*`。
 
 ### 5.1 配置硬门
 
@@ -270,29 +253,21 @@ gateway auth clear [--state-dir DIR]
 - 非 loopback bind、配置 `publicOrigin` 或配置 trusted proxy，任一成立即视为外部部署，
   必须有密码或 token；
 - **有界偏差（用户决策）**：`--no-auth` 显式覆盖上述 S1 门，允许
-  无认证的外部绑定。仅当显式传参才生效（默认仍 fail closed），启动时打印醒目安全
+  无认证的外部绑定，仅显式传参才生效（默认 fail closed），启动打印醒目安全
   告警；**客户端不前置校验该模式**（§2.3），服务器是唯一授权方；
 - 密码长度 12–1024 个 JavaScript 字符（JSON 传输，允许 Unicode）；token 长度
   32–4096 且必须为 visible ASCII；
 - 密码与 token 可以同时启用，不互相遮蔽（`password+token` 形态要求两者齐备）；
 - `publicOrigin` 必须是无 path/query/userinfo 的 canonical HTTP(S) origin；
 - trusted proxy 只接受精确 IP，不接受网段或主机名；
-- `--tls-cert/--tls-key` 即使成对提供也会 fail closed，因为内置 TLS 未实现
-  （TLS 一律由用户自建的外部边界提供）。
+- `--tls-cert/--tls-key` 即使成对提供也 fail closed（内置 TLS 未实现，
+  TLS 一律由用户自建的外部边界提供）。
 
-**凭据播种语义（§7.4/§12）**：启动时 `seedCredentialsFromConfig` 把部署
-配置（`--ui-password`/`--api-token` 或 `DSH_GATEWAY_*`）播种进持久化凭据。config
-凭据只在「无持久化」或「持久化 `source='config'`」时断言（值变化先旋转
-`jwt-secret`，未变化不写）；持久化 `source='runtime'` 的凭据**权威**——config 被
-忽略并响亮告警（含运行时更新时刻与回退指引），绝不静默覆盖。config 未提供且
-持久化为 config 来源时删除（先旋转），runtime 来源保留。因此「改配置→重启」流程
-在无 runtime 覆盖时行为与从前完全一致；`--no-auth` 部署若已存在 runtime 凭据则
-**有效形态已认证**——启动告警按播种后的有效 kind 判定（§7.4），不再误报匿名。
+**凭据播种语义（§7.4/§12）**：启动时 `seedCredentialsFromConfig` 把 `--ui-password`/`--api-token` 或 `DSH_GATEWAY_*` 播种进持久化凭据，四规则与来源冲突见 §7.4 播种表；runtime 来源保留。因此「改配置 → 重启」流程
+不变；`--no-auth` 部署若已有 runtime 凭据则**有效形态已认证**——告警按播种后的有效 kind 判定（§7.4）。
 
-**S1 门与 runtime 凭据的交互**：外部绑定（非 loopback / publicOrigin / trusted
-proxy）的 S1 硬门在**播种之前**按**部署配置**判定——持久化 runtime 凭据不满足该
-门，此类部署必须显式 `--no-auth` 才能启动（此时按播种后的有效 kind 判定告警：
-已认证则不打印匿名告警）。loopback 绑定下 runtime 凭据正常生效。
+**S1 门与 runtime 凭据的交互**：外部绑定的 S1 硬门在**播种之前**按**部署配置**判定——持久化 runtime
+凭据不满足该门，此类部署必须显式 `--no-auth` 才能启动；loopback 绑定下 runtime 凭据正常生效。
 
 推荐形态是 Gateway 监听 loopback，Caddy/Nginx 负责 HTTPS，并配置：
 
@@ -302,8 +277,7 @@ proxy）的 S1 硬门在**播种之前**按**部署配置**判定——持久化
 - 只把 Gateway 的监听端口暴露给该反代。
 
 可信网络替代形态（本设计一等支持，风险自担）：`--bind 0.0.0.0` 明文 HTTP 直连，
-或经 tailscale/SSH 隧道/frp 到达——加密由隧道层保证（tailscale WireGuard / SSH
-加密 / frp 隧道），认证由 gateway 的 token/密码（或显式 `--no-auth`）保证。
+或经 tailscale/SSH 隧道/frp 到达——加密由隧道层保证，认证由 token/密码（或显式 `--no-auth`）保证。
 
 `install-gateway.sh` 一键安装器（design 17 部署 + design 18 运行时管理）覆盖上述
 形态：交互向导确认 bind/凭据/服务形态，`--no-auth` 有二次确认步骤；「精确版本」
@@ -312,20 +286,18 @@ proxy）的 S1 硬门在**播种之前**按**部署配置**判定——持久化
 `prerelease` 标记解析最新预发布；提供 install/update/restart/status/logs/uninstall
 子命令与 `--purge`。
 
-安装形态的**登录环境**：unit 带 `User=` 时 systemd 按该用户的 passwd 条目推导
-`$HOME/$LOGNAME/$SHELL`；「当前用户运行」（`--service-user` 缺省）的 unit 不带
-`User=`，systemd 什么都不设（systemd.exec `SetLoginEnvironment=` 的默认真值只对
-`User=`/`DynamicUser=`/`PAMName=` 成立），因此安装器生成 unit 时显式注入**运行用户**的
-`HOME/LOGNAME/USER/XDG_CONFIG_HOME`。缺了它，gateway 与它拉起的每个子进程（managed
-dsh → 代码运行时 → bash 工具 → gh / npm / git credential.helper）从空 HOME 起步：
-gh 报「未登录」、npm 找不到缓存、git 凭据助手取不到 token。注入值取自 passwd，不读
-安装者环境里的 `$HOME`（`sudo` 可能把调用者的 HOME 带进来，那正是要避免的错值）。
+安装形态的**登录环境**：unit 带 `User=` 时 systemd 按 passwd 推导 `$HOME/$LOGNAME/$SHELL`；
+「当前用户运行」（`--service-user` 缺省）的 unit 不带 `User=`，systemd 什么都不设（systemd.exec
+`SetLoginEnvironment=` 的默认真值只对 `User=`/`DynamicUser=`/`PAMName=` 成立），故安装器生成 unit
+时显式注入**运行用户**的 `HOME/LOGNAME/USER/XDG_CONFIG_HOME`——缺了它，gateway 及每个子进程
+（managed dsh → 代码运行时 → bash 工具 → gh / npm / git credential.helper）从空 HOME 起步：gh 报
+「未登录」、npm 找不到缓存、git 凭据助手取不到 token。注入值取自 passwd，不读安装者环境的 `$HOME`
+（`sudo` 会带入调用者 HOME，正是要避免的错值）。
 
-**被否方案**：`SetLoginEnvironment=yes`（systemd 原生开关，语义等价）比手工注入更
-贴切，但它不在 systemd v253 的 systemd.exec 指令表里，写进旧发行版的 unit 只会得到
-「未知指令」告警、环境照旧为空——静默失效正是本次缺陷的同类；无条件注入
-`Environment=HOME=…` 则会把安装者的 HOME 写进 `--service-user` 的 unit，而服务用户的
-家目录必须由 systemd 按 passwd 推导。
+**被否方案**：`SetLoginEnvironment=yes`（语义等价）不在 systemd v253 的 systemd.exec 指令表里，
+写进旧发行版的 unit 只会得到「未知指令」告警、环境照旧为空——静默失效正是本次缺陷的同类；
+无条件注入 `Environment=HOME=…` 会把安装者的 HOME 写进 `--service-user` 的 unit，
+而服务用户的家目录必须由 systemd 按 passwd 推导。
 
 ## 6. 单一公网请求策略
 
@@ -390,14 +362,13 @@ trusted proxy 缺失、重复、含逗号或非法的 XFF 时，client identity 
   change 路由同纪律）；凭据和内部错误不进入日志或响应。
 - 代理到 dsh 前端的响应头取自 `packages/gateway/src/dispatch.ts` 的
   `GATEWAY_PROXY_CSP`（gateway-only 放宽）：`script-src` 放开 inline（被代理的文档是
-  上游自己的 render 产物，其内联 `__DSH_BOOT__`/loader 脚本不带 nonce，而本进程只往该
-  文档插入 S0 信任声明、并不为不属于自己的脚本铸发/回填 nonce）；`base-uri` 取 `'self'`
-  而非 `'none'`——上游 `@deepseek-ai/dsh-host-frontend-static` 每个 renderIndex 出来的
-  文档都注入 `<base href="/">`，`'none'` 会让浏览器拒绝该元素。该放宽按「元素必须生效」
-  而非按「某个已复现的白屏」记账：固定 pin 下 `serveStatic` 只在 dist 根与 index 路径本身
-  渲染 HTML（其余路径是文件读取，miss 即 404），相对资源 URL 本就解析正确；只有当前移到的
-  上游真的用 index 回答深链（其注释所称的 "SPA-fallback paths"）时，该元素才决定 `./assets/…`
-  是否按站点根解析。其余指令与 shell 的 nonce CSP 逐字一致。
+  上游自己的内联 `__DSH_BOOT__`/loader 脚本不带 nonce，本进程只插入 S0 信任声明、不为不属于
+  自己的脚本回填 nonce）；`base-uri` 取 `'self'` 而非 `'none'`——上游
+  `@deepseek-ai/dsh-host-frontend-static` 每个 renderIndex 文档都注入 `<base href="/">`，
+  `'none'` 会让浏览器拒绝该元素。该放宽按「元素必须生效」记账：固定 pin 下 `serveStatic`
+  只在 dist 根与 index 路径渲染 HTML（其余路径是文件读取，miss 即 404），相对资源 URL 本就
+  解析正确；只有上游真的用 index 回答深链（其注释所称的 "SPA-fallback paths"）时，该元素才
+  决定 `./assets/…` 是否按站点根解析。其余指令与 shell 的 nonce CSP 逐字一致。
 
 桌面端对 401 的**可行动三态分类**（探针层，非秘密 detail）：
 
@@ -407,10 +378,10 @@ trusted proxy 缺失、重复、含逗号或非法的 XFF 时，client identity 
 | 配置了错误 token | terminal | 「gateway 拒绝了 token（401）——检查共享 token」 |
 | 密码被拒 | terminal | 「gateway 拒绝了密码认证——重新输入密码」 |
 
-当 token 与密码同时配置时，上述失败分类以**联合探针最终结果**为准：一项凭据失败而
-另一项身份有效仍是成功，不能因“token 优先”或“密码优先”遮蔽可用的独立 principal。
-该 OR 契约也覆盖 token scrypt work gate 饱和：Bearer 校验返回 `auth_busy` 时仍先验证
-现有 Cookie；Cookie 有效即成功，否则才保留 503 `auth_busy`，不能把过载伪装成 401。
+当 token 与密码同时配置时，失败分类以**联合探针最终结果**为准：一项凭据失败而另一项身份
+有效仍是成功，不能因“token 优先”或“密码优先”遮蔽可用的独立 principal。该 OR 契约也覆盖
+token scrypt work gate 饱和：Bearer 校验返回 `auth_busy` 时仍先验证现有 Cookie；有效即成功，
+否则才保留 503 `auth_busy`，不能把过载伪装成 401。
 
 ### 7.4 运行时凭据管理
 
@@ -448,10 +419,9 @@ API 客户端一律用 JSON）。未认证的 HTML-accept 导航到 `/auth/*` �
 （不跳登录页）。
 
 新 token 明文在变更响应中**只返回一次**，此后任何面（含 `GET /auth/credentials`）
-都不再暴露；`/auth/login` 仅 password 形态存在，token-only 部署 404。原子 rename
-已经发布、但父目录 fsync 报错时，Gateway 以稳定 exact-hash readback 判定在线 token
-确已生效：生成型 token 仍必须返回这一次明文，响应额外带 `durability:'unknown'`，
-提示崩溃持久性未获证明；无法 exact readback 时仍返回 500，绝不猜测提交成功。
+都不再暴露。原子 rename 已经发布、但父目录 fsync 报错时，Gateway 以稳定 exact-hash
+readback 判定在线 token 确已生效：生成型 token 仍必须返回这一次明文，响应额外带
+`durability:'unknown'`，提示崩溃持久性未获证明；无法 exact readback 时仍返回 500。
 
 错误码→HTTP（change 路由）：
 
@@ -470,17 +440,16 @@ API 客户端一律用 JSON）。未认证的 HTML-accept 导航到 `/auth/*` �
 自证，或 `currentPassword` 经共享登录限流器 + 有界 scrypt work gate 校验。仅
 cookie principal 且未带正确 currentPassword 拒绝 403；currentPassword 错误为 401
 （连续失败按登录限流 → 429）。因此匿名（`--no-auth`）部署无法经 API 种植/变更
-凭据——无既有凭据可证明。dispatch 认证门将成功 principal 捕获为同 provider、同
-generation 的进程内 proof，凭据变更与审计直接复用它（bearer 每请求只做一次
-verifier）；排队期间跨 generation 的 proof 拒绝 401，绕过 dispatch 的内部直调未提供
-proof 时仍完整复验。
+凭据。dispatch 认证门将成功 principal 捕获为同 provider、同 generation 的进程内
+proof，凭据变更与审计直接复用它（bearer 每请求只做一次 verifier）；排队期间跨
+generation 的 proof 拒绝 401，绕过 dispatch 的内部直调未提供 proof 时仍完整复验。
 
 **last-credential 门 + config revert**：删除最后一个凭据（另一维度也不存在时）
 拒绝 409，除非部署配置提供替代——此时**回退**为 config 凭据（响应
 `source:'config'`，旧 cookie 因 rotate-first 已死）。S1 门不可在运行时削弱：
 none↔auth 双向转换仍仅部署期（config 播种 + 重启）；删除最后凭据只能停机态
 `gateway auth clear`。**config 管理维度的 remove 语义**：删除 config 来源维度
-（另一维仍在）成功，但**下次重启会被播种恢复**——面板对该情形如实提示
+成功，但**下次重启会被播种恢复**——面板如实提示
 「removed for now … re-seeded on the next restart」。
 
 **rotate-first（S13）**：密码变更先旋转 `jwt-secret` 再持久化——持久化失败也绝不
@@ -498,22 +467,18 @@ proxy 不再承担 credential-only 关闭回调；其 close primitive 只服务�
 stop/lifecycle 清理，避免重复 teardown 与覆盖遗漏。
 
 **审计（S24）**：`credential_changed` / `credential_change_rejected`——detail 仅含
-维度、set/remove、source、认证门已经确认的变更前 principal kind（成功事件）与
+维度、set/remove、source、认证门已确认的变更前 principal kind（成功事件）与
 客户端来源；拒绝事件 detail 含维度 +
 wire code + 客户端来源；任何值永不进入审计。`audit.log` append/rotation 绑定
 single-link inode，O_NOFOLLOW/O_APPEND、完整写 + file fsync，archive 也在 rename 前
-验证 leaf identity 并在发布后 fsync parent；审计 I/O 失败仍非业务致命，但不允许
+验证 leaf identity 并在发布后 fsync parent；审计 I/O 失败非业务致命，但不允许
 跟随 active/archive symlink 或修改外部 victim。
 
-**与 desktop 客户端的关系**：运行时凭据变更后旧 cookie/bearer 立即失效，desktop
-的 401 三态分类（§7.3）已覆盖「凭据被换」后的行为——重登/重输 token 后恢复；
-token 仅一次性返回意味着轮换方必须就地保存；`--no-auth` 部署不可经 API 种植凭据，
-删除最后凭据必须停机态 `gateway auth clear`。desktop settings-bridge 侧的凭据
-便捷重置入口为**推迟项**（变更一律走 `/chamber/` 凭据面板）。
+**与 desktop 客户端的关系**：凭据变更后旧 cookie/bearer 立即失效，desktop 的 401 三态分类（§7.3）覆盖「凭据被换」后的行为；token 仅一次性返回，轮换方须就地保存；desktop settings-bridge 侧的凭据便捷重置入口为**推迟项**（变更一律走 `/chamber/` 凭据面板）。
 
 ## 8. 反代内核与资源边界
 
-Gateway proxy 与 per-instance proxy 共用 `proxy-forward.ts`，从而保持相同的协议行为：
+Gateway proxy 与 per-instance proxy 共用 `proxy-forward.ts`，协议行为相同：
 
 - 上游 Host 固定改写为目标 origin；浏览器 Origin 改写为目标同源；
 - 请求剥离 cookie、authorization、hop-by-hop、`Forwarded`、`Via`、全部
@@ -521,23 +486,23 @@ Gateway proxy 与 per-instance proxy 共用 `proxy-forward.ts`，从而保持相
 - `accept-encoding` 只对**必须 identity 的两类请求**剥离（判定 `proxy-forward.ts`
   `requiresIdentityUpstreamEncoding` = `isHtmlDocumentNavigation` ∨ `acceptsEventStream`）：
   ① HTML 文档导航（GET/HEAD + `Accept` 含 `text/html`，路径不在 `/api`、`/plugins`、`/auth/…`、
-  `/chamber/<subpath>`，且不是内容寻址的 `/assets/<name>-<hash>.<ext>`）——这是 S0 注入的前提：
-  `htmlInjectable` 要求上游 `text/html` 未被编码，gateway `html-inject.ts` 依赖它写入
+  `/chamber/<subpath>`，且不是内容寻址的 `/assets/<name>-<hash>.<ext>`）——S0 注入的前提：
+  `htmlInjectable` 要求上游 `text/html` 未被编码，`html-inject.ts` 依赖它写入
   `__DSH_TRANSPORT__`；② `Accept` 含 `text/event-stream` 的 SSE 请求——**不是文档导航，而是传输层
-  保险**（远端/旧版实例未必带 pinned 的 gzip filter，长流被压缩即被缓冲）。其余请求把压缩协商交给
+  保险**（远端/旧版实例未必带 pinned gzip filter，长流被压缩即被缓冲）。其余请求把压缩协商交给
   上游 gzip 中间件（dsh-host-webserver `createGzipMiddleware` 自身拒绝 `text/event-stream` 与
-  `content-range`），回程 `content-encoding`/`vary` 已在响应白名单内 —— 该取舍修订 2026 audit M3b
+  `content-range`），回程 `content-encoding`/`vary` 已在响应白名单内——该取舍修订 2026 audit M3b
   的「一律剥离」（2026-12）；
 - 响应头组装提供窄 seam `ProxyForwardDeps.onUpstreamResponseHeaders(pathname, status, headers)`
   （`forwardHttp`，默认 `undefined` = 零变化）：owner 可补上游缺失的表示元数据，gateway 用它给
   内容寻址静态资源加 immutable `cache-control`（上游 dsh-host-frontend-static 只写 `content-type`；
   命名判定 `isHashedStaticAssetPath`，绝不匹配 `favicon.svg`/`manifest.webmanifest`/`index.html`）。
   **seam 的两条硬边界**：其一，回调返回后响应头映射会被 `RESPONSE_HEADER_WHITELIST` 再过滤一次，
-  因此回调写入的 `content-length`/`transfer-encoding` 或任何非表示元数据都到不了线上，framing
-  始终是代理自己的（`content-length` 在过滤后按上游声明重算）；其二，gateway 侧只在「200 + 命名
-  命中 + 上游未给 `cache-control`/`etag`/`expires` + `content-type` 与该扩展名相符」时才盖章——
-  路径本身不是载荷证明：一个把 miss 回退成 index 的 dsh（旧版 frontend-static 就是）会用
-  `text/html` 200 回答资源 URL，给它 immutable 等于把 HTML 按脚本 URL 缓存一年并跨版本回滚存活；
+  回调写入的 `content-length`/`transfer-encoding` 或任何非表示元数据都到不了线上，framing 始终是
+  代理自己的（`content-length` 过滤后按上游声明重算）；其二，gateway 侧只在「200 + 命名命中 +
+  上游未给 `cache-control`/`etag`/`expires` + `content-type` 与该扩展名相符」时才盖章——路径本身
+  不是载荷证明：把 miss 回退成 index 的 dsh（旧版 frontend-static 就是）会用 `text/html` 200 回答
+  资源 URL，给它 immutable 等于把 HTML 按脚本 URL 缓存一年并跨版本回滚存活；
 - WS 只转发握手白名单；30 秒 ping/pong，漏一次 pong 即回收；
 - 响应保留 content encoding、location、vary 等表示/跳转元数据，并重写同源 redirect；
 - 45 秒为 idle timeout；响应 chunk 会重置 timer；SSE/WS 是长流；
@@ -588,10 +553,10 @@ Gateway proxy 与 per-instance proxy 共用 `proxy-forward.ts`，从而保持相
 - 元数据与三类凭据由主进程单次 `desktop_ssh_save_connection` 事务提交：先拍 registry 与
   write-only secret 快照，逐步写入，任一步失败即在主进程补偿恢复；补偿也失败时安全
   scrub 相关凭据并响亮返回，renderer 不串联多个无法读回旧值的 setter；
-- 上述域绑定同时**持久化在凭据文件中并在每次读取/注入时与当前 registry 精确复验**：
-  secret 先 fsync、registry 后 fsync 的硬崩溃窗口只会令新值暂时不可见，绝不能把新目标
+- 上述域绑定**持久化在凭据文件中并在每次读取/注入时与当前 registry 精确复验**：
+  secret 先 fsync、registry 后 fsync 的崩溃窗口只令新值暂时不可见，绝不把新目标
   凭据发给仍在 registry 中的旧目标；新增/进入/离开/retarget 即使表单留空也强制写入或
-  清除该维度，防止同 id + 同域重建把无当前行时隐藏的半事务 secret 复活；
+  清除该维度，防止同 id + 同域重建复活半事务 secret；
 - 删除只走精确 id-addressed `desktop_ssh_delete_connection(id)` main-owned transaction：
   先断开并撤销该 connection-target scope 的全部历史 origin 会话、清两类 durable secret，
   最后删 registry；不存在 id 为幂等 no-op。保留的 legacy
@@ -623,20 +588,20 @@ providers: { ssh: sshTransport, http: httpTransport }    // 按 transport 注册
 | gateway | ssh | `GET /chamber/runtime/status` + 精确 `kind:'dsh-chamber-gateway-runtime'`，可选 0..2 认证头 |
 | gateway | http | 同上（直连 http(s)）；托管 dsh blocked/down 时 gateway 仍可 serviceable |
 
-Gateway 身份判据刻意不再依赖 managed dsh 的会话面：runtime controller 不随
-dsh ready detach，因此 blocked/applying/restart 窗口仍可注册反代、打开恢复动作；
-dsh 目标仍严格使用统一身份握手（`session/canOpenWorkspacePath`，与本地就绪同
+Gateway 身份判据不依赖 managed dsh 的会话面：runtime controller 不随
+dsh ready detach，故 blocked/applying/restart 窗口仍可注册反代、打开恢复动作；
+dsh 目标仍用统一身份握手（`session/canOpenWorkspacePath`，与本地就绪同
 契约），两层健康不得混为一个 ready 位。
 
-**gateway 密码会话 ownership**：`gateway-session.ts` 的 key 由三部分共同构成：网络
-origin、HTTP `Host` authority、稳定的 connection-target scope。scope = connection id +
-目标摘要（SSH：transport/host/user/sshPort/remotePort；direct：http transport/host/
-remotePort），刻意不含易变的 tunnel localPort；因此不同 direct id 即使同 origin 也不
-共享 Cookie，同一 localPort/远端 loopback authority 被不同 SSH 主机或 id 复用也不会
-串会话，同 id retarget 则进入新 scope。authority 只负责路由，不代表 ownership：SSH
-固定为远端真实监听 `127.0.0.1:<remotePort>`，`spec.host` 只是 SSH destination，可为
-ssh-config alias/DNS 名，绝不能拿来触发 gateway Host policy 421。隧道重连的新 origin
-会重新登录；scope invalidation 同时覆盖该连接目标的全部历史 localPort/origin。
+**gateway 密码会话 ownership**：`gateway-session.ts` 的 key 由三部分构成：网络 origin、
+HTTP `Host` authority、稳定的 connection-target scope。scope = connection id + 目标摘要
+（SSH：transport/host/user/sshPort/remotePort；direct：http transport/host/remotePort），
+刻意不含易变的 tunnel localPort；故不同 direct id 即使同 origin 也不共享 Cookie，同一
+localPort/远端 loopback authority 被不同 SSH 主机或 id 复用也不串会话，同 id retarget 进入
+新 scope。authority 只负责路由，不代表 ownership：SSH 固定为远端真实监听 `127.0.0.1:<remotePort>`，
+`spec.host` 只是 SSH destination（可为 ssh-config alias/DNS 名），绝不能触发 gateway Host
+policy 421。隧道重连的新 origin 会重新登录；scope invalidation 覆盖该连接目标的全部历史
+localPort/origin。
 
 ### 9.3 反代注册规则（instance-proxy）
 
@@ -665,31 +630,31 @@ ssh-config alias/DNS 名，绝不能拿来触发 gateway Host policy 421。隧�
   目标在缓存会话过期前 ~60s 定时重登（`gateway-session-refresh.ts`，
   `expiresAt − 60s` 触发；缓存会话寿命 = 12h − 5min 歪斜），重登成功后以新
   cookie **重注册** transport（替换既有 baseUrl/headers）并为新会话重 arm——
-  健康 transport 永不骑过期 cookie（否则注册期注入的旧 Cookie 会在残余窗口内
-  持续 401 直到重连）；armed on ready、disarmed on 离开 ready/移除/退出。每个 id 的
+  健康 transport 永不骑过期 cookie（否则旧 Cookie 在残余窗口持续 401 直到重连）；
+  armed on ready、disarmed on 离开 ready/移除/退出。每个 id 的
   arm/disarm/dispose 都提升 refresh epoch；任一 await 后、retry/register/reconnect 前
   复验 epoch 与当前 password/token/URL/SPKI pin/authority/scope，阻止同 id 重建或
   retarget 的迟到刷新提交；
 - **刷新失败→有界重连走 verifyUp**：预过期重登失败（网络/429/503）保持旧注册
-  （旧 cookie 到期前仍有效）并在过期时刻重试；已过期后仍失败则如实告警，残余
+  并在过期时刻重试；已过期后仍失败则如实告警，残余
   窗口交给断开→重连路径（verifyUp 用存储密码重登），绝不静默。
 - **ready 态周期再验证 + 用户意图即时探测（transport-manager）**：
   预过期刷新只覆盖"缓存 TTL 到期"，**服务端提前吊销**（远端改密轮换
   jwt-secret、gateway 重启、auth:none→要认证）与 **http 直连/隧道后实例死亡**
-  在刷新定时器触发前会长期呈现为 ready（绿点 + 401/502 洪流，无任何自动恢复）。
+  在刷新定时器触发前长期呈现为 ready（绿点 + 401/502 洪流，无自动恢复）。
   因此每个 READY 传输以 `READY_VERIFY_INTERVAL_MS`（60s）周期重跑 provider
-  `verifyUp`（与连接期同一条身份探测缝）：gateway 密码目标经
+  `verifyUp`：gateway 密码目标经
   `verifyGatewayPasswordSession` 的"缓存 Cookie 探测 → 401 → 失效 → 用存储密码
   单次自动重登"流，仅被吊销的会话**无感自愈**（会话轮换后经 `onVerified`
   按注册认证头指纹差异重注册代理——`registerInstanceTransport` 会撤销在途流量，
-  故健康注册绝不无谓重注册，只有 Cookie 真变化才替换）；重登仍被拒 → 终态
+  故只有 Cookie 真变化才替换）；重登仍被拒 → 终态
   `error:requires_user_action`（红点 + 连接页「重新输入密码」）；瞬态失败 →
   复用隧道掉线同款 `scheduleReconnect`（degraded → 有界重试 → error + 慢速重探）。
   生命周期锚点 = transport-manager `transition()`：进 ready 武装、离开 ready
   取消，无独立 arm/disarm 面；单飞 + epoch 围栏，探测结果不跨代提交。
   用户点击来源头/打开会话（renderer `selectView` 单点）经
   `desktop_ssh_reverify` 立即触发一次探测（`READY_VERIFY_MIN_INTERVAL_MS` 10s
-  静默窗 + 单飞防叠），把"正要操作的实例"的失效检测延迟收敛到一次探测 RTT。
+  静默窗 + 单飞防叠）。
 - **SPKI pre-write 门**：gateway+HTTPS 配置 pin 时，desktop 登录与 verifyUp 探针、
   control-plane HTTP/WS 反代均先在 TLS `secureConnect` 匹配 peer SPKI，再调用请求
   `write/end` 或发送 upgrade handshake；匹配前不发送 header、Bearer/Cookie、密码 body
@@ -729,11 +694,10 @@ chamber-plugins/<scope 剥离 slug>/`（如 `chamber-plugins/dsh-chamber-seed-cl
 version）。每次 spawn 时控制面种子注册表从缓存注入托管 profile，因此：
 
 - **版本语义**：托管 dsh 的宿主包 = 最后一次同步的桌面版本（多桌面不同版本 =
-  后同步者覆盖，`instance-version-conflict` 诊断继续兜底）；双发布线漂移从根上
-  消除；
+  后同步者覆盖，`instance-version-conflict` 继续兜底）；双发布线漂移消除；
 - **激活探针形态化**（design 18 §9.3）：缓存缺包（fresh gateway 未同步）时托管
   dsh 是纯 dsh，探针跳过 `clientGraph/graph` + `gitWorktree/previewCreate` 两域
-  （`hostDomains=false` + 缩减期望集）；缓存就绪后探针恢复全域验证；
+  （`hostDomains=false` + 缩减期望集），缓存就绪后恢复全域验证；
 - **首连时序**：桌面 ready 注册后自动同步（幂等），有变更时请求
   `/chamber/runtime/restart` 让运行中的托管 dsh 刷新挂载（失败仅告警，下次自然
   spawn 自动补上）；
@@ -754,62 +718,47 @@ lease）+ deferred ready 边沿排空（装完自动受控 restart 一次）；�
 单、子进程 pid journal（崩溃孤儿启动对账击杀）、错误 `persistence_failed` 500 族。
 
 ### 10.3 `/chamber/runtime` 与 `/chamber/` 仪表盘
+dsh 运行时版本管理（design 18 §9.3）——`status`/`versions` 投影、`select`/`apply`/`rollback`/
+`restore-builtin`/`retry-apply`/`retry-restore`/`restart`/`start` 动作（`start` = design 21 决策 12 停机恢复
+原语：仅 stopped/error/restart-exhausted，恢复门不可绕过，202 + status 轮询）、`registry` 源设置（owner-only
+0600）；`restart` = 事务化受控重启托管 dsh 刷新插件挂载（design 18 §3.6 项 8/§9.3：202 + status 轮询，指针
+不动、无快照/探针）；该面挂在 dispatch 的 runtime 控制器上、**不随 ready detach**（dsh 停机窗口可轮询进度）。
+仪表盘 = **Credentials 面板 + Runtime 块**（settings/approvals/sessions/schedule/worktrees 区块随编排面删除）。
 
-dsh 运行时版本管理（design 18
-§9.3）——`status`/`versions` 投影、`select`/`apply`/`rollback`/`restore-builtin`/
-`retry-apply`/`retry-restore`/`restart`/`start` 动作（`start` = design 21 决策 12
-停机恢复原语：仅 stopped/error/restart-exhausted，恢复门不可绕过，202 + status
-轮询）、`registry` 源设置（owner-only 0600）；`restart` = 事务化受控重启托管 dsh
-刷新插件挂载（design 18 §3.6 项 8/§9.3：202 + status 轮询，指针不动、无快照/
-探针）；该面挂在 dispatch 的 runtime 控制器上、**不随 ready detach**（dsh 停机
-窗口可轮询进度）。仪表盘 = **Credentials 面板 + Runtime 块**（settings/approvals/
-sessions/schedule/worktrees 区块随编排面删除）。
+浏览器可在 `/chamber/` 打开 Gateway 自有运维页；runtime 块完整呈现版本/来源、选择与
+apply/rollback/restore/retry/restart 动作、失败/快照/磁盘与 registry，且在 managed dsh blocked/down 时仍可
+轮询恢复。页面只使用同源 cookie/fetch，**不持久化** token（轮换明文仅一次性展示、复制或 60 秒后自动清空）。
+桌面 settings-bridge 不挂载网关编排分区（§3 装配规则），仅保留 dsh-runtime 代理分节（design 18 §9.3），
+同样不接触 token。仪表盘不再展示 settings 文档修订号（json-store 内部写入计数器，无运维信息量）。
 
-浏览器可在 `/chamber/` 打开 Gateway 自有运维页；其中 runtime 块完整呈现版本/来源、
-选择与 apply/rollback/restore/retry/restart 动作、失败/快照/磁盘与 registry，且在 managed
-dsh blocked/down 时仍可轮询恢复。页面只使用同源 cookie/fetch，**不持久化** token
-（轮换明文仅一次性展示、复制或 60 秒后自动清空）。桌面 settings-bridge 不挂载
-网关编排分区（§3 装配规则）——待处理审批/提问由
-侧边栏既有事实通道按会话呈现（琥珀点 + 等待分类，点入会话作答，与本地/ssh
-实例同一通道）；桌面仅保留 dsh-runtime 代理分节（design 18 §9.3），同样不接触
-token。仪表盘不再展示 settings 文档修订号（json-store 内部写入计数器，无运维
-信息量）。
+Credentials 面板（驱动 §7.4 三个端点）：两行投影（password/token 的 `source`/`updatedAt`，来自
+`GET /auth/credentials`，绝不含值）+ 改密/删密码/轮换 token/删 token 动作。轮换后的 token 明文在只读
+textarea **一次性展示**（成功复制后即清空，60 秒未复制自动清空；不落 localStorage、不进审计）；403
+`ambient_principal_rejected`、409 `last_credential`、429 等错误按 wire code 映射为可读文案（「输入当前密码以
+变更凭据」「不能移除最后一个凭据——先配置替代」等）；删除 **config 管理**维度时如实提示「removed for now —
+重启后重新播种」。
 
-Credentials 面板（驱动 §7.4 三个端点）：两行投影
-（password/token 的 `source`/`updatedAt`，来自 `GET /auth/credentials`，绝不含值）
-+ 改密/删密码/轮换 token/删 token 动作。轮换后的 token 明文在只读 textarea
-**一次性展示**（成功复制后即清空，60 秒未复制自动清空；不落 localStorage、不进
-审计）；403 `ambient_principal_rejected`、409 `last_credential`、429 等错误按 wire
-code 映射为可读文案（「输入当前密码以变更凭据」「不能移除最后一个凭据——先配置
-替代」等）；删除 **config 管理**维度时如实提示「removed for now — 重启后重新播种」。
+**页面内确认对话框（2026-09-11 upstream-alignment T2 建立；2026-09-11 review-fix F1/F2 补齐 `aria-modal` 的
+承诺）**：本页破坏性动作不走浏览器原生 `confirm`，而是页面自带的一层：
 
-**页面内确认对话框（2026-09-11 upstream-alignment T2 建立；2026-09-11 review-fix
-F1/F2 补齐 `aria-modal` 的承诺）**：本页的破坏性动作不走浏览器原生 `confirm`
-（OS chrome 套不上本页词汇，也不可本地化），而是页面自带的一层：
-
-- **标记**（`routes.ts:227-236`）：`#confirm-backdrop.dialog-backdrop[hidden]` 内含
-  `#confirm-dialog`（`tabindex="-1"` + `role="dialog"` + `aria-modal="true"` +
-  `aria-labelledby="confirm-title"` / `aria-describedby="confirm-description"`）=
-  标题 + 正文 + `#confirm-pending`（`role="status" aria-live="polite"`）+ 动作行
-  `#confirm-actions`（Cancel + 危险色 Confirm）。两个背景地标
+- **标记**（`routes.ts:227-236`）：`#confirm-backdrop.dialog-backdrop[hidden]` 内含 `#confirm-dialog`
+  （`tabindex="-1"` + `role="dialog"` + `aria-modal="true"` + `aria-labelledby="confirm-title"` /
+  `aria-describedby="confirm-description"`）= 标题 + 正文 + `#confirm-pending`（`role="status"
+  `aria-live="polite"`）+ 动作行 `#confirm-actions`（Cancel + 危险色 Confirm）。两个背景地标
   `<header id="page-header">` / `<main id="page-main">` 带 id，专供脚本施加 `inert`。
-- **控制器**（`routes.ts:723-866`，`confirmArmed` 单飞）：`armConfirmDialog` 填充
-  文案——**全部经 `textContent` 写入**，因此任何插值都不会被当作 HTML 解析——并把
-  焦点移进对话框（Cancel，最不破坏性的控件）；`acceptConfirmDialog` 恰好启动一次
-  runner，随后对话框变成不可取消的进度面；`dismissConfirmDialog`（Cancel / Escape /
-  遮罩点击）**什么都不做**：runner 在被调用前就被丢弃，不会有请求离开页面。
-- **`inert` + Tab 陷阱覆盖整个武装期**（F1）：武装即给两个地标置 `inert`，关闭时
-  **先**解除再交还焦点（`inert` 的调用控件拿不回焦点）；Tab 陷阱在动作 pending 期间
-  **仍然生效**——此时两个控件已 disabled、对话框内无环可绕，焦点被送到对话框容器
-  自身。`aria-modal="true"` 是页面必须兑现的承诺，不是一句声明：此前的实现在确认
-  被接受当刻就把陷阱关掉，Tab 于是走到页背后（`#open-dsh`、`#refresh`、
-  `#cred-change-password` 这个自身无确认的 POST 门，以及运行时的全部控件）。
-- **`aria-busy` 挂在动作行而非对话框**（F2）：`#confirm-pending` 是对话框的后代，
-  而辅助技术可能不播报 busy 子树内的变化，把忙碌标记挂在祖先会吞掉它本该伴随的
-  那条播报。
-- **使用面 = 凭据移除的两处**（`removePassword` / `removeToken`，`routes.ts:868`/
-  `:923`）；本页其余动作（apply-now / restart / registry…）仍由各自控件直接触发，
-  没有确认对话框。
+- **控制器**（`routes.ts:723-866`，`confirmArmed` 单飞）：`armConfirmDialog` 填充文案——**全部经
+  `textContent` 写入**（插值不会被当作 HTML 解析）并把焦点移入对话框（Cancel，最不破坏性的控件）；
+  `acceptConfirmDialog` 恰好启动一次 runner，随后对话框变成不可取消的进度面；`dismissConfirmDialog`
+  （Cancel / Escape / 遮罩点击）**什么都不做**：runner 在被调用前就被丢弃，不会有请求离开页面。
+- **`inert` + Tab 陷阱覆盖整个武装期**（F1）：武装即给两个地标置 `inert`，关闭时**先**解除再交还焦点
+  （`inert` 的调用控件拿不回焦点）；Tab 陷阱在动作 pending 期间**仍然生效**（两个控件已 disabled、对话框内无
+  环可绕，焦点被送到对话框容器自身）。`aria-modal="true"` 是页面必须兑现的承诺：此前实现在确认被接受当刻
+  就关掉陷阱，Tab 于是走到页背后（`#open-dsh`、`#refresh`、`#cred-change-password` 这个自身无确认的 POST
+  门，以及运行时的全部控件）。
+- **`aria-busy` 挂在动作行而非对话框**（F2）：`#confirm-pending` 是对话框的后代，辅助技术可能不播报 busy
+  子树内的变化，把忙碌标记挂在祖先会吞掉它本该伴随的那条播报。
+- **使用面 = 凭据移除的两处**（`removePassword` / `removeToken`，`routes.ts:868`/`:923`）；本页其余动作
+  （apply-now / restart / registry…）仍由各自控件直接触发，没有确认对话框。
 
 ### 10.4 桌面连接卡的 gateway 主机日志
 
@@ -824,45 +773,31 @@ Authorization/Cookie，renderer 不持 token）；内容为 gateway 进程 + 托
 
 ### 10.5 浏览器直连的能力边界
 
-浏览器直接访问 gateway 根路径 `/`（经认证入口的同源页面）得到的是**托管 dsh
-实例自身的官方前端**：`/`、`/plugins/*`、`/api/*` 经 gateway-proxy 反代到
-托管 dsh 实例（§8 反代内核），浏览器侧不加载任何 chamber 代码。**chamber
-自研插件不在其中**：chamber 插件（sidebar/layout/settings-bridge/git/open-in
-等）只随桌面复合 bundle 分发，不注入 gateway 托管的前端。因此浏览器直连
-没有 chamber 的「连接管理 / 设置壳 / 侧边栏」等扩展面，只有官方前端本体。
+浏览器直接访问 gateway 根路径 `/`（经认证入口的同源页面）得到**托管 dsh 实例自身的官方前端**：
+`/`、`/plugins/*`、`/api/*` 经 gateway-proxy 反代到托管 dsh（§8），浏览器侧不加载任何
+chamber 代码。chamber 插件（sidebar/layout/settings-bridge/git/open-in 等）只随桌面复合 bundle
+分发，不注入 gateway 托管前端，故浏览器直连没有「连接管理 / 设置壳 / 侧边栏」等扩展面。
 
-- **官方设置页的 loopback 门控由 gateway 出口信任声明解除**（S0）：
-  官方 `dsh-client-ui-settings` 以 `ctx.remote.$host.isLoopback` 决定持久化
-  模式——`isLoopback=false`（非 loopback 主机名访问）→ `persistence='memory'`
-  → 设置 scope 终态 `unavailable`。gateway 代理出口对托管 dsh 的
-  `text/html` 文档（≤64KiB、identity 编码、幂等、fail-soft）注入
-  `window.__DSH_TRANSPORT__={ownsHost:true}`（上游文档化钩子契约，
-  `packages/gateway/src/html-inject.ts`），使官方前端
-  `connection.isLoopback=true` → 设置持久化进入 host 模式，浏览器直连
-  （任意 origin）的 settings/models/插件面可用并写宿主。**信任决策**：
-  auth 门在先、能登录即受信（`--no-auth` 可信网络部署同语义）——非鉴权
-  绕过（服务端 RPC 本就不区分来源，该门是纯客户端 UI 策略）；上游移除
-  钩子/改压缩行为则注入静默失效（fail-soft，设置退回受限态，升级 dsh
-  版本需复验）。实现与验收见 STATUS.md「http 连接链路修复（S0/S2）」。
-- **`/chamber/` 运维仪表盘**是浏览器侧的运维面（§10）：同源 cookie 会话、
-  Credentials 面板与 dsh 运行时管理（版本 / 选择 / apply / rollback / restore /
-  retry / restart / registry）。它是 gateway 自有的运维入口，与托管前端并列，
-  不依赖 chamber 桌面插件，且**不随 ready detach**（dsh 停机窗口可轮询恢复）。
-  编排投影与功能开关已随编排面整体剥离（§10）——
-  仪表盘只剩凭据与 runtime 两块；桌面用户经侧边栏处理审批/提问（前端 runtime
-  通道），网关不再承载调度/worktree/会话投影等编排状态。
-- **token-only 部署浏览器无法登录 `/chamber/`**：仪表盘只用同源 cookie
-  （`/auth/login` 密码会话），不消费 bearer token（token 只作为桌面客户端的
-  `Authorization` 头，§7.2）。仅配置 token 而未配置密码的部署，浏览器直连
-  `/chamber/` 没有可用的认证路径——仪表盘面向（配置了密码的）浏览器管理员；
-  桌面客户端仅经 settings-bridge 的 dsh-runtime 代理分节触达
-  `/chamber/runtime`（§10.3/design 18 §9.3），不依赖该门。**后果**：调度、
-  worktree、settings 等编排域已整体删除，
-  相关路由（`PUT /chamber/settings`、`POST/DELETE /chamber/schedule`、
-  `DELETE /chamber/git/worktrees/…`）不复存在、一律 404——token-only 部署对
-  这些域**没有任何管理 API 或 UI**；存活的 `/chamber/*` 面只有通道投影
-  （`GET /chamber/channels`）、插件同步缓存（`GET/PUT /chamber/plugins`）、
-  runtime 控制器（`/chamber/runtime/*`）与仪表盘静态资源。
+- **官方设置页的 loopback 门控由 gateway 出口信任声明解除**（S0）：官方 `dsh-client-ui-settings` 以
+  `ctx.remote.$host.isLoopback` 决定持久化模式——`isLoopback=false`（非 loopback 主机名访问）→ `persistence='memory'`
+  → 设置 scope 终态 `unavailable`。gateway 代理出口对托管 dsh 的 `text/html` 文档（≤64KiB、identity 编码、
+  幂等、fail-soft）注入 `window.__DSH_TRANSPORT__={ownsHost:true}`（上游文档化钩子契约，
+  `packages/gateway/src/html-inject.ts`），使官方前端 `connection.isLoopback=true` → 设置持久化进入
+  host 模式，浏览器直连（任意 origin）的 settings/models/插件面可用并写宿主。**信任决策**：auth 门在先、
+  能登录即受信（`--no-auth` 可信网络部署同语义）——非鉴权绕过（服务端 RPC 不区分来源，该门是纯
+  客户端 UI 策略）；上游移除钩子/改压缩行为则注入静默失效（fail-soft，设置退回受限态，升级 dsh 版本需
+  复验）。实现与验收见 STATUS.md「http 连接链路修复（S0/S2）」。
+- **`/chamber/` 运维仪表盘**是浏览器侧的运维面（§10）：同源 cookie 会话、Credentials 面板与 dsh
+  运行时管理（版本 / 选择 / apply / rollback / restore / retry / restart / registry）；它是 gateway
+  自有的运维入口，与托管前端并列，不依赖桌面插件，且**不随 ready detach**（dsh 停机窗口可轮询恢复）。
+  编排投影与功能开关已随编排面整体剥离（§10），仪表盘只剩凭据与 runtime 两块。
+- **token-only 部署浏览器无法登录 `/chamber/`**：仪表盘只用同源 cookie（`/auth/login` 密码会话），
+  不消费 bearer token（token 只作桌面客户端的 `Authorization` 头，§7.2）——仪表盘面向配置了密码的
+  浏览器管理员；桌面客户端仅经 settings-bridge 的 dsh-runtime 代理分节触达 `/chamber/runtime`
+  （§10.3/design 18 §9.3）。**后果**：调度、worktree、settings 等编排域已整体删除，相关路由
+  （`PUT /chamber/settings`、`POST/DELETE /chamber/schedule`、`DELETE /chamber/git/worktrees/…`）
+  一律 404；存活的 `/chamber/*` 面只有通道投影（`GET /chamber/channels`）、
+  插件同步缓存（`GET/PUT /chamber/plugins`）、runtime 控制器（`/chamber/runtime/*`）与仪表盘静态资源。
 
 ## 11. Git worktree：服务器侧范围外
 
@@ -889,54 +824,44 @@ Gateway state 与 dsh `$DSH_HOME` 分离。主要文件：
 > `.gateway.lock`；`gateway/settings.json`、`gateway/worktrees.json`、
 > `gateway/schedule.json` 三文档随编排面删除。
 
-Gateway 拒绝把文件系统根、用户 HOME 或系统 temp 根本身作为 `stateDir`（其专用子目录
-仍合法）。POSIX 上，新建的专用 `stateDir` 创建为 `0700`；既有
-`stateDir` 在启动时经 pinned no-follow 描述符收紧到 `0700`（用户决策：
-自动收紧替代 fail-closed `require`——旧布局升级的 0755 根目录不再崩溃循环，
-且绝不碰 broad root）；`dsh-runtime/` 子目录同样收敛为 `0700`。Windows 的 Node
-`chmod/stat.mode` 只能表达
-有限的只读属性，不能诚实证明 POSIX `0700`；该目录边界仅保留 real-dir/no-follow/identity
-校验并继承 OS ACL，既不伪报 `0700` 也不改 ACL（Windows 首版：代码项已落地、
-真实 Windows runner/实机门禁未过——design 23；该让步登记见 design 23 §5
-（C1/C2 审计标识表）与 STATUS）。所有 JSON main/backup/tmp 与 secret 写入收敛为 `0600`；正常
-store 加载可显式迁移合法 legacy secret 到 `0600`，而 `gateway auth status` 只验证不
-改权限。secret 读取以 KiB 级上限约束，并先以 no-follow/inode 校验拒绝 symlink 与
-非普通文件。凭据 JSON 文档经 `createJsonStore` 的 owner-only 原子写路径持久化，写
-操作串行化，避免并发请求以旧 snapshot 覆盖新值（编排面剥离后经此路径的只有凭据
-文档与锁）。corrupt 主文件会先尝试 backup；双重损坏会响亮失败，不伪装成空配置。
-早期预留但从无生产消费者的 `gateway.json`/devices/channels 文档已删除；旧文件仅
-忽略，不做破坏性清理，未来能力必须按真实领域 validator 重引入。
+Gateway 拒绝把文件系统根、用户 HOME 或系统 temp 根本身作为 `stateDir`（专用子目录仍合法）。POSIX 上
+新建专用 `stateDir` 为 `0700`；既有 `stateDir` 启动时经 pinned no-follow 描述符收紧到 `0700`
+（用户决策：自动收紧替代 fail-closed `require`——旧 0755 布局不再崩溃循环，且绝不碰 broad root）；
+`dsh-runtime/` 同样收敛 `0700`。Windows 的 Node `chmod/stat.mode` 无法诚实证明 POSIX `0700`——该
+目录边界仅保留 real-dir/no-follow/identity 校验并继承 OS ACL，既不伪报 `0700` 也不改 ACL（Windows
+首版代码项已落地、真实 runner/实机门禁未过——design 23；让步登记见 design 23 §5（C1/C2 审计标识表）
+与 STATUS）。所有 JSON main/backup/tmp 与 secret 写入收敛 `0600`；正常 store 加载可显式迁移合法
+legacy secret 到 `0600`，而 `gateway auth status` 只验证不改权限。secret 读取以 KiB 级上限约束，并
+先以 no-follow/inode 校验拒绝 symlink 与非普通文件。凭据 JSON 经 `createJsonStore` 的 owner-only
+原子写路径持久化，写操作串行化，避免并发请求以旧 snapshot 覆盖新值（编排面剥离后经此路径的只有
+凭据文档与锁）。corrupt 主文件先试 backup；双重损坏响亮失败，不伪装成空配置。早期预留但无生产
+消费者的 `gateway.json`/devices/channels 文档已删除；旧文件仅忽略，不做破坏性清理，未来能力必须按
+真实领域 validator 重引入。
 
 **凭据信封（v2）**：`password-credential` 与 `tokens.json` 均为
-`{schemaVersion:2, source:'config'|'runtime', updatedAt:<epoch ms>, verifier|hash}`
-（0600 原子写，无 tmp 残留）；`source` 记录凭据来自部署播种还是运行时变更，播种
-策略见 §7.4。legacy v1（密码裸 `scrypt$salt$hash` 字符串、token `{"hash":…}`）读为
-`source:'config'`（updatedAt = 文件 mtime），下次写入自动迁移为 v2。v2 的
-verifier/hash 必须匹配 `scrypt$salt$hash` 规范形状
-（`/^scrypt\$[0-9a-f]{32}\$[0-9a-f]{64}$/i`）——形状合法但内容垃圾的文件按 corrupt
-v2 处理（**每进程告警一次**，按未配置处理），杜绝「垃圾 verifier 静默废认证」。
+`{schemaVersion:2, source:'config'|'runtime', updatedAt:<epoch ms>, verifier|hash}`（0600 原子写，
+无 tmp 残留）；`source` 记录部署播种还是运行时变更（播种策略见 §7.4）。legacy v1（密码裸
+`scrypt$salt$hash` 字符串、token `{"hash":…}`）读为 `source:'config'`（updatedAt = 文件 mtime），
+下次写入自动迁移 v2。v2 的 verifier/hash 必须匹配 `scrypt$salt$hash` 规范形状
+（`/^scrypt\$[0-9a-f]{32}\$[0-9a-f]{64}$/i`）——形状合法但内容垃圾按 corrupt v2 处理（**每进程告警
+一次**，按未配置处理），杜绝「垃圾 verifier 静默废认证」。
 
-**stateDir 独占锁（`.gateway.lock`）**：`createGatewayStore` 以
-**O_EXCL 优先**创建 `{"pid":…,"createdAt":…}`（0600，stateDir 0700 内）持有该目录：
-活 pid 的锁**响亮拒绝启动**（结构化错误 `gateway_locked` + 属主 pid）；死 pid 的
-陈旧锁以 **rename 认领 + 移动内容校验**接管：先 rename 到唯一 `.stale-*` 名（原子
-认领，仅一个竞争者成功，其余见 ENOENT 重试），再校验被移动的正是读到的陈旧锁；
-若移动了**新鲜锁**（读与 rename 之间另一竞争者完成了接管）则 rename 还原（覆盖
-间隙中第三方的新锁——先到者胜，被覆盖者的**创建后所有权终验**会检出位移并
-fail-closed）并响亮失败。不可读的锁文件（非普通文件/symlink/inode 竞态）响亮失败
-（绝不销毁意外内容）；**可读但 pid 缺失/损坏**的锁文件按陈旧锁**接管并告警**
-（`owner pid unreadable`）——它最可能是崩溃进程的残缺残留，接管后目录仍被独占
-（fail-safe）。
-`releaseLock` 双重守卫：未实际持有不删，且 on-disk 完整 bytes + inode identity 必须
-仍与本次获取一致才删（仅比较 pid 不足以区分同进程重取/后继者）；**exit 监听器仅在
-获取成功后注册**——获取失败的进程退出时绝不删除活网关的锁。创建后**所有权终验**
-（回读 pid+createdAt + inode 必须与刚写入一致）——
-被并发接管位移的获取者立即失败，绝不无锁运行。`GatewayStore.close()` 幂等释放，
-`reacquire()` 供 start() 重试路径重取（design 17 §4.1）；进程 exit 也 best-effort
-释放——同 stateDir 的重开必须先 close（测试与 `gateway auth` CLI 均依赖此语义）。
-已知残差（诚实声明）：三个进程同时接管同一陈旧锁时，第三个进程可能在还原间隙
-创建新锁并被覆盖——与所有 pidfile 锁相同，无内核 flock 时不可能数学消除；双进程
-场景（生产现实：systemd + 手动启动）由上述校验**证明地**闭合（双进程压力测试锁定）。
+**stateDir 独占锁（`.gateway.lock`）**：`createGatewayStore` 以 **O_EXCL 优先**创建
+`{"pid":…,"createdAt":…}`（0600，stateDir 0700 内）持有该目录：活 pid 的锁**响亮拒绝启动**
+（结构化错误 `gateway_locked` + 属主 pid）；死 pid 的陈旧锁以 **rename 认领 + 移动内容校验**接管：
+rename 到唯一 `.stale-*` 名（仅一个竞争者成功，其余见 ENOENT 重试），再校验被移动的正是
+读到的陈旧锁；若移动了**新鲜锁**则 rename 还原（覆盖间隙中第三方的新锁——先到者胜，被覆盖者的
+**创建后所有权终验**检出位移并 fail-closed）并响亮失败。不可读的
+锁文件（非普通文件/symlink/inode 竞态）响亮失败（绝不销毁意外内容）；**可读但 pid 缺失/损坏**的
+锁按陈旧锁**接管并告警**（`owner pid unreadable`）——最可能是崩溃残留，接管后目录仍
+被独占（fail-safe）。`releaseLock` 双重守卫：未实际持有不删，且 on-disk 完整 bytes + inode
+identity 必须仍与本次获取一致才删（仅比 pid 不足以区分同进程重取/后继者）；**exit 监听器仅在获取
+成功后注册**——获取失败的进程退出时绝不删除活网关的锁。创建后**所有权终验**（回读 pid+createdAt +
+inode 与刚写入一致）——被并发接管位移的获取者立即失败，绝不无锁运行。`GatewayStore.close()` 幂等
+释放，`reacquire()` 供 start() 重试路径重取（design 17 §4.1）；进程 exit 也 best-effort 释放——
+同 stateDir 重开必须先 close。已知残差：三个进程同时接管同一
+陈旧锁时，第三个可能在还原间隙创建新锁并被覆盖——与所有 pidfile 锁相同，无内核 flock 时不可能数学
+消除；双进程场景（生产现实：systemd + 手动启动）由上述校验**证明地**闭合（双进程压力测试锁定）。
 
 **桌面凭据存储（`<userData>/gateway-secrets.json`，schema v3）**：
 
@@ -949,24 +874,21 @@ fail-closed）并响亮失败。不可读的锁文件（非普通文件/symlink/
   "passwordBindings":{ "<id>": "<同上>" } }
 ```
 
-- **OS keychain 集成（Electron `safeStorage`）**：加密优先——macOS Keychain /
-  Windows DPAPI / Linux libsecret（kwallet/gnome-keyring）；落盘内容为加密 blob，
-  密钥由 OS 保管（§13.4.1）；
-- `safeStorage.isEncryptionAvailable()` 不可用（如 Linux 无后端、无登录会话）时，
-  回退当前 0600 明文镜像（登记为既有用户决策的延续）；
-- `storage` 是落盘事实而非当前 capability：密文永不以字符形状猜成明文；非空但缺少
-  discriminator 的历史 v2 fail closed 并保留 `.corrupt`；plaintext 文件在 keychain
-  后来可用时立即原子升级，升级成功后才投影 `safeStorage`，失败则继续诚实显示明文；
-- token/password binding 与各自值同一次原子写；读取/注入必须匹配当前 registry 的
-  gateway domain。当前配置路径内结构合法的 v1、带合法 storage 的非空 v2 没有可信
-  target binding，启动时移动为唯一 `.unbound-<time>-<pid>[-n]` 恢复文件、禁用并
-  要求显式重录；旁路旧 `gateway-tokens.json` 非空 v1 保留原路径并禁用，绝不从当前
-  registry 猜绑定；
-- 载入 gateway/SSH 凭据镜像均先 no-follow + regular-file + inode 校验，以已打开 fd
-  `fchmod 0600` 后才读 secret bytes；宽权限旧文件不再原样使用，symlink 不跟随；
-- 其余纪律不变：原子写、corrupt 响亮失败（保留 `.corrupt`）、删除实例/显式清除即删；
-  凭据仅表单瞬时 write-only 输入，永不由主进程返回/回填或持久化到 renderer，也不进
-  注册表/日志。
+- **OS keychain 集成（Electron `safeStorage`）**：加密优先——macOS Keychain / Windows DPAPI / Linux
+  libsecret（kwallet/gnome-keyring）；落盘为加密 blob，密钥由 OS 保管（§13.4.1）；
+- `safeStorage.isEncryptionAvailable()` 不可用（Linux 无后端、无登录会话等）时回退当前 0600 明文
+  镜像（登记为既有用户决策的延续）；
+- `storage` 是落盘事实而非当前 capability：密文永不以字符形状猜成明文；非空但缺 discriminator 的
+  历史 v2 fail closed 并保留 `.corrupt`；plaintext 文件在 keychain 后来可用时立即原子升级，成功后才
+  投影 `safeStorage`，失败则继续诚实显示明文；
+- token/password binding 与各自值同一次原子写；读取/注入必须匹配当前 registry 的 gateway domain。
+  当前配置路径内结构合法的 v1、带合法 storage 的非空 v2 无可信 target binding，启动时移动为唯一
+  `.unbound-<time>-<pid>[-n]` 恢复文件、禁用并要求显式重录；旁路旧 `gateway-tokens.json` 非空 v1
+  保留原路径并禁用，绝不从当前 registry 猜绑定；
+- 载入 gateway/SSH 凭据镜像先 no-follow + regular-file + inode 校验，以已打开 fd `fchmod 0600`
+  后才读 secret bytes；宽权限旧文件不再原样使用，symlink 不跟随；
+- 其余纪律不变：原子写、corrupt 响亮失败（保留 `.corrupt`）、删除实例/显式清除即删；凭据仅表单
+  瞬时 write-only 输入，永不由主进程返回/回填或持久化到 renderer，也不进注册表/日志。
 
 ## 13. 安全模型
 
@@ -1005,8 +927,8 @@ fail-closed）并响亮失败。不可读的锁文件（非普通文件/symlink/
 - **机制**：Electron `safeStorage.encryptString/decryptString`（macOS Keychain /
   Windows DPAPI / Linux libsecret）。加密 blob 仍存既有 0600 JSON 文件，密钥由 OS
   会话保管；
-- **价值**：静态磁盘拷贝/文件窃取不再能直接读出凭据；破解门槛从「读文件」提升到
-  「同 OS 登录会话 + 调 API」——与浏览器/1Password 的保管模型一致；
+- **价值**：静态磁盘拷贝/文件窃取不再能直接读出凭据；破解门槛提升到
+  「同 OS 登录会话 + 调 API」；
 - **决策**：集成（§12 桌面凭据存储 v3）；`isEncryptionAvailable()` 为 false 时回退
   0600 明文（登记延续既有用户决策）；回退路径在 UI 设置页可见。
 
@@ -1014,9 +936,8 @@ fail-closed）并响亮失败。不可读的锁文件（非普通文件/symlink/
 
 - **证书固定（SPKI pin）**：https 直连的可选高级字段——用户提供期望服务器证书的
   SPKI 指纹，desktop 登录/探针与 control-plane HTTP/WS 反代校验，不匹配即
-  terminal/502。pin 是该连接的信任锚；请求必须等 `secureConnect` peer SPKI 匹配后
-  才调用 `write/end` 或发 upgrade handshake，匹配前不发送 HTTP header、认证凭据、
-  登录 body 或任何应用层字节，mismatch 的上游 handler/upgrade 观察为零。
+  terminal/502。pin 是该连接的信任锚，pre-write 门见 §9.3（匹配前不发送任何应用层
+  字节；mismatch 的上游 handler/upgrade 观察为零）。
   **价值：直接解决内部 CA 信任痛点**——Caddy `tls internal` 场景不再需要
   `NODE_EXTRA_CA_CERTS` 全局注入，改为在单条连接上钉住 Caddy 证书；同时对抗 MITM；
 - **mTLS**：https 连接的可选客户端证书（cert+key，私钥走 safeStorage）。价值在
@@ -1045,23 +966,17 @@ fail-closed）并响亮失败。不可读的锁文件（非普通文件/symlink/
   （事件不延迟到窗口结束），其后同类重复只累加内存计数，窗口结束时落一条带
   `count:<n>`（该窗口同类总数）的合并记录；不同客户端/code/路径类别永不合并，
   拒绝码本身不变，`login_*`/`credential_*` 不经该路径；停机 drain（`quiesce`）会先
-  把未闭合窗口的计数落盘。动机：每次 append 含一次同步 fsync（实测 ≈3.3 ms），
-  无凭据的根类子资源洪峰（manifest/图标族）会把单线程事件循环钉在磁盘 I/O 上；
+  把未闭合窗口的计数落盘。动机：每次 append 含同步 fsync（实测 ≈3.3 ms），
+  无凭据的根类子资源洪峰（manifest/图标族）会钉住单线程事件循环；
 - **消费**：CLI/日志查询即可；不进入设置 UI（v1）；
-- **价值**：可信网络 + 无认证模式下，接入事实可追溯——「谁在什么时候连过、
-  认证结果如何」的责任记录。
+- **价值**：可信网络 + 无认证模式下接入事实可追溯。
 
 ### 13.5 密码会话专项
 
-登录响应/失败永不含密码或 cookie 进日志；cookie 仅主进程内存持有、仅注入网络
-origin + `Host` authority + exact connection-target scope 所有的目标，authority 从不
-单独代表 ownership。scope invalidation 提升 generation 并使在途登录/探针/fallback/
-重登结果失效；refresh epoch 及当前凭据/URL/pin/authority/scope 复验阻止同 id 重建的
-迟到提交。provider hooks 必须 all-or-none，当前 generation 的 `cookie|bearer` proof
-决定 ready 注册能否携带 Cookie 或经已验证 Bearer fallback；否则 fail closed，绝不
-headerless。重登有界（一次 + 429 退避），不成为爆破放大器；session cookie 为
-HttpOnly，桌面仅作代理转发头，renderer 永不可见。配置 HTTPS pin 时密码请求 body
-也受 §13.4.2 pre-write 门保护。
+会话 ownership、generation/refresh epoch 复验、provider hooks all-or-none 与 `cookie|bearer` proof 规则见
+§9.3/§9.4：登录响应/失败永不含密码或 cookie 进日志；cookie 仅主进程内存、仅注入 exact
+connection-target scope 所有的目标；重登有界（一次 + 429 退避）；session cookie 为 HttpOnly，renderer
+永不可见。配置 HTTPS pin 时密码请求 body 也受 §13.4.2 pre-write 门保护。
 
 ## 14. 扩展槽位总表
 
@@ -1137,7 +1052,7 @@ dry-run 无条件清空签名/公证环境变量与 `GH_TOKEN`（即使仓库已
    重启后自动连接（safeStorage 解密 + 密码会话重登）、token/密码更新/清除撤销既有流、
    N-ctx 与 Gateway settings 页面（dsh-runtime 分节挂载差异验证：gateway 完整管理面
    （版本选择/状态/快照/更新/回滚/恢复内建/registry/restart/start/apply-now 与轮询）
-   / **dsh 直连（ssh/http）均不挂载**——与 §3 能力表/design 18 §9.3/AGENTS 一致为不挂载）；
+   / **dsh 直连（ssh/http）均不挂载**——与 §3 能力表/design 18 §9.3 一致）；
 4. macOS 发布产物完成 Developer ID 签名/公证/安装；Windows 未签名产物验证安装与
    SmartScreen 已知提示（首版不把 Authenticode 当完成条件）；
 5. 服务端 dsh runtime 实机：安装候选版本 → 重启 Gateway → 探针 → 故障注入回退 →
@@ -1186,54 +1101,35 @@ PWA 安装、离线缓存和 UA 移动轻面是 §18 的独立设计面；实现
 
 ### 18.1 背景、动机与目标形态
 
-§16.2 曾将「PWA 安装、离线缓存和 UA 移动轻面」列为远期（P4）并预留为独立设计与
-测试面，本节即该独立设计面；移动例外（唯一随 gateway 发行物打包 seed 的 chamber
-客户端插件）定义于 §3 装配矩阵与 §10.2。
+§16.2 曾把本面列为远期（P4）后预留的独立设计与测试面；移动例外（唯一随 gateway 发行物打包 seed 的
+chamber 客户端插件）见 §3 装配矩阵与 §10.2。
 
-- **目标场景（用户决策）**：内网/可信网络形态（显式 `--no-auth` 可信网络或
-  tailscale 隧道）先行落地；公网认证入口（§7 认证边界）与 PWA 安装/离线能力在
-  设计上预留、分期实现。
-- **实证基线（2026-09）**：官方 dsh 前端（当时的 0.1.2-alpha.3 web profile）在
-  375×812 移动视口下**几乎不可用**：
-  - 92% 可交互目标 < 40px（移动触控标准 44px）：侧边栏图标 36×36、模式选择
-    28px 高、指令 28×28、发送 34×34；
-  - 侧边栏退化为 36px 图标 rail 仍占左侧 56px，聊天区仅剩 ~300px；
-  - 模态弹窗（内测声明 + API Key 配置 327×246）连续遮挡首屏；
-  - 真实用户路径（创建工作区）在 28px 触控目标上难以完成；
-  - 官方 index.html 已自带 viewport meta（middleware.ts 注记属实）——问题
-    不在缺 viewport，而在**布局与交互范式本身是桌面形态**。
-- **社区现状（调研结论）**：GitHub 生态已有多种移动端方案（详见 §18.4，五仓库
-  四形态），最成熟
-  的形态是 **dsh 客户端插件**（`dsh-ui-mobile` / `dsh-client-ui-mobile-adapt` /
-  `dsh-mobile-shell` / `dsh-web-ui-mobile`），全部以窄屏 media query + CSS
-  覆盖 + 组件重排实现，桌面宽度下与官方布局完全一致；网关形态（`dsh-pocket`
-  872★ 等）只做暴露/认证/隧道、不做内容转换。**没有任何项目在网关层改写官方
-  HTML**——社区共识与本章架构纪律一致。
+- **目标场景（用户决策）**：内网/可信网络形态（显式 `--no-auth` 可信网络或 tailscale 隧道）先行；
+  公网认证入口（§7 认证边界）与 PWA 安装/离线能力设计上预留、分期实现。
+- **实证基线（2026-09）**：官方 dsh 前端（当时 0.1.2-alpha.3 web profile）在 375×812 视口下**几乎
+  不可用**：92% 可交互目标 < 40px（触控标准 44px；侧边栏图标 36×36、模式选择 28px 高、指令 28×28、
+  发送 34×34）；侧边栏退化为 36px 图标 rail 仍占左侧 56px，聊天区仅剩 ~300px；模态弹窗（内测声明 +
+  API Key 配置 327×246）连续遮挡首屏；创建工作区在 28px 触控目标上难以完成。官方 index.html 已自带
+  viewport meta（middleware.ts 注记属实）——问题不在缺 viewport，而在**布局与交互范式本身是桌面形态**。
+- **社区现状（调研结论）**：GitHub 已有多种方案（详见 §18.4，五仓库四形态），最成熟的是 **dsh 客户端
+  插件**（`dsh-ui-mobile` / `dsh-client-ui-mobile-adapt` / `dsh-mobile-shell` / `dsh-web-ui-mobile`），均以
+  窄屏 media query + CSS 覆盖 + 组件重排实现，桌面宽度下与官方布局一致；网关形态（`dsh-pocket` 872★ 等）
+  只做暴露/认证/隧道、不做内容转换——**没有任何项目在网关层改写官方 HTML**，与本章架构纪律一致。
 
 ### 18.2 职责边界（与仓库纪律的关系）
 
-移动端适配拆成两层，各层落在既有职责边界内：
+移动端适配拆两层，各落在既有职责边界内：
 
 | 层 | 承担者 | 职责 | 与仓库纪律的关系 |
 |---|---|---|---|
 | 移动适配（覆盖层） | chamber 自研 dsh 客户端插件（`packages/dsh-chamber-client-ui-mobile-*`） | 窄屏下对官方前端做布局/触控/PWA 适配 | 复用 dsh 官方插件机制（design 09 方案 A `--patch` seed / bundle），**不改官方源码**；不写第二套聊天 UI、不消费会话内容（P1/P2/P3 均不触碰） |
 | 暴露与入口（路由层） | gateway | UA 体验分流（可选）、认证边界（§7）、PWA 资产、反代 | 保持流式透传（**无 HTML 改写**——S0 信任声明注入除外，§10.5，非布局改写）；UA 只是体验分流，**不是安全边界**（认证仍是唯一边界，S1/S2） |
 
-**移动例外（契约）**：§10.5「chamber 自研插件不注入
-gateway 托管前端」与 §3 装配矩阵已定义移动例外——`dsh-chamber-client-ui-mobile`
-是唯一随 gateway 发行物打包 seed 的 chamber 客户端插件（§3 矩阵与 §10.2
-「移动例外：不参与桌面同步」）；桌面侧 chamber 插件（sidebar/layout/
-settings-bridge/git/open-in）依旧不注入。机制上无需新能力：控制面 host-graph-seed
-的 `--patch` overlay（design 09 §3.1 方案 A）对 gateway spawn 的本地实例同样
-适用——与 `dsh-chamber-seed-client-graph`/`dsh-chamber-seed-git-worktree` 的 seed 路径同构，
-区别仅在**分发来源**：宿主包经桌面 `PUT /chamber/plugins` 同步（§10.2，
-版本锁定到连接桌面），移动插件随 gateway 发行物打包（链路无桌面在场）。
+**移动例外（契约）**：`dsh-chamber-client-ui-mobile` 是唯一随 gateway 发行物打包 seed 的 chamber 客户端插件（§10.5、§3 矩阵、§10.2「不参与桌面同步」）；桌面侧 chamber 插件（sidebar/layout/settings-bridge/git/open-in）依旧不注入。机制同 host-graph-seed `--patch` overlay（design 09 §3.1 方案 A），与两个宿主 seed 包同构，区别只在**分发来源**：宿主包经桌面 `PUT /chamber/plugins` 同步（版本锁定到连接桌面），移动插件随 gateway 打包（链路无桌面在场）。
 
-**管理面 vs 适配面职责区分**：认证、凭据、会话边界
-与访问控制是 **gateway 的管理职责**（§7 认证模型、§10 凭据面板、UA 分流门），
-移动插件**不触碰也不感知**这些域；插件的全部职责是**官方前端的呈现适配**
-（布局/触控/行为层/视觉 token），不持有也不消费任何认证态、凭据或会话管理
-能力。双方不变量：
+认证、凭据、会话边界与访问控制归 **gateway 管理职责**（§7、§10 凭据面板、UA 分流门），移动插件
+**不触碰也不感知**；插件只做**官方前端呈现适配**（布局/触控/行为层/视觉 token），不持有也不消费任何
+认证态、凭据或会话管理能力。不变量：
 
 | 域 | 归属 | 插件侧纪律 |
 |---|---|---|
@@ -1263,99 +1159,75 @@ settings-bridge/git/open-in）依旧不注入。机制上无需新能力：控�
 
 **gateway 侧（路由层）**：
 
-- UA 体验分流（可选、默认关闭）：移动 UA 访问 `/` 时可 302 到移动入口；UA 可伪造，
-  故**仅作体验分流，不承载任何安全语义**（认证边界不变，S1/S2）。
-- PWA 资产：**插件侧为权威**——`dsh-chamber-client-ui-mobile` 的 node 半部在
-  托管实例内注册 `/pwa/*` 与 `/sw.js`（§18.4.5 双半部机制），gateway-proxy
-  全量透传使浏览器在 gateway origin 下直接可达（`/pwa/manifest.webmanifest`、
-  `/sw.js`）；gateway 现有 `/chamber/manifest.webmanifest`、
-  `/chamber/sw-register.js`、`/chamber/sw.js`（空）、`/chamber/mobile.html`
-  为 P4 占位——**插件注入实例后 gateway 侧不再注册 SW/manifest**（避免双注册
-  与"假离线"承诺，§18.5），mobile.html 保留为未注入形态的移动入口占位。
-  SW scope 语义：gateway 单目标反代下托管实例即 gateway origin，`scope: "/"`
-  天然实例专属；多实例同源代理（桌面 N-ctx，`/api/i/<id>/*`）才需要
+- UA 体验分流（可选、默认关闭）：移动 UA 访问 `/` 时可 302 到移动入口；UA 可伪造，故**仅作体验分流，
+  不承载任何安全语义**（认证边界不变，S1/S2）。
+- PWA 资产：**插件侧为权威**——`dsh-chamber-client-ui-mobile` 的 node 半部在托管实例内注册 `/pwa/*` 与
+  `/sw.js`（§18.4.5 双半部机制），gateway-proxy 全量透传使其在 gateway origin 下直接可达；gateway
+  现有 `/chamber/manifest.webmanifest`、`/chamber/sw-register.js`、`/chamber/sw.js`（空）、
+  `/chamber/mobile.html` 为 P4 占位——**插件注入实例后 gateway 侧不再注册 SW/manifest**（避免双注册与
+  "假离线"承诺，§18.5），mobile.html 保留为未注入形态的移动入口占位。SW scope：单目标反代下托管实例即
+  gateway origin，`scope: "/"` 天然实例专属；多实例同源代理（桌面 N-ctx，`/api/i/<id>/*`）才需要
   per-instance 路径（§18.4.5）。
-- 认证交互：未认证移动访问 → 登录页（login-page 已带 viewport）→ 登录后回到
+- 认证交互：未认证移动访问 → 登录页（login-page 已带 viewport） → 登录后回到
   移动入口；流转与桌面浏览器一致，无新认证面。
 
-**客户端插件侧（覆盖层）**：断点、抽屉、弹层、输入行、设置面板等具体机制以
-§18.4 社区实现为基线参照，chamber 自研版本保持同等能力集并纳入 chamber 插件
-治理（typecheck/test、i18n、dsh 版本对齐）。
+**客户端插件侧（覆盖层）**：断点、抽屉、弹层、输入行、设置面板等机制以 §18.4 社区实现为基线，chamber
+自研版保持同等能力集并纳入 chamber 插件治理（typecheck/test、i18n、dsh 版本对齐）。
 
 ### 18.4 社区实现借鉴
 
 调研基线（源码级复核：GitHub API + 本地克隆 + 现场抓取）：
-`dsh-client-ui-mobile-adapt`（Hotsteel2901）、`dsh-mobile-shell`（Yui-Little，
-派生自 mexiaosqwq/dsh-web-mobile）、`dsh-ui-mobile`（jasondu，npm 已发布）、
-`dsh-web-ui-mobile`（whoamihappyhacking）、`dsh-mobile-pwa`（zylzyqzz）；
-另加 `dsh-meow-smooth`（Phant0Meow，41★，本清单中唯一仍在活跃开发，
-键盘/IME 机制最完整）。前五者均 MIT、均已停更（2026-08 末），宜作**架构参考
-而非上游依赖**。
+`dsh-client-ui-mobile-adapt`（Hotsteel2901）、`dsh-mobile-shell`（Yui-Little，派生自
+mexiaosqwq/dsh-web-mobile）、`dsh-ui-mobile`（jasondu，npm 已发布）、
+`dsh-web-ui-mobile`（whoamihappyhacking）、`dsh-mobile-pwa`（zylzyqzz）；另加
+`dsh-meow-smooth`（Phant0Meow，41★，唯一仍在活跃开发、键盘/IME 机制最完整）。
+前五者均 MIT、均已停更（2026-08 末），宜作**架构参考而非上游依赖**。
 
 **社区形态复核（源码级）**：
 - **设置页**：主流形态与 chamber 同构——`mobile-adapt/lib/client.js` 的
   `.VOzbGW_panel{position:fixed;inset:0;flex-direction:column}` +
-  `.VOzbGW_nav{flex-direction:row}` + `.VOzbGW_navList`/`.VOzbGW_navCell`
-  横向 chips + `.VOzbGW_options{flex:1;overflow-y:auto}`，与 §18.4.3 的 chamber
-  版逐条对应（chamber 版另有 44px 触控底线、chips 横向滚动与安全区）。
-  **社区还存在第三种形态**：`dsh-mobile-shell/src/client/mobile.css.ts` 用
-  **左侧 72px 图标导航栏 + 右侧内容列**（navCell 竖排 icon+label、rail 自身
-  `overflow-y:auto`、Close 变返回箭头、无遮罩全页）。对 4 个官方分区在 375px
-  宽度上，72px 侧栏比顶部 chips 更费宽度，故 chamber 取 chips 形态——这是
-  **取舍**，不是「社区没有该做法」。（注：§18.4.3 上条取舍里的「只全屏 +
-  整列滚动」描述的是 **chamber 自己的 P1 实现**，与社区形态无关。）
-- **tooltip 粘滞**：`dsh-ui-mobile/src/client/mobile.module.css` 与 chamber
-  首版同款全局隐藏（`[role='tooltip']{display:none!important}`，并带单测），
-  注释同样以「标签仍可由 aria-label 取得」为据——社区与 chamber 共享该判断，
-  也共享「信息型气泡被一并隐藏」的盲区；chamber 已精化为
-  `(pointer: coarse) and (hover: none)` 下的
-  `button[aria-label] + [role="tooltip"][data-side]`。
-- **键盘**：`dsh-mobile-shell` 与 chamber 同为
-  `interactive-widget=resizes-content` + `innerHeight - visualViewport.height`
-  探测；`dsh-meow-smooth` 更进一步（动态 vv 基线替代 `screen.height`——其注释
-  记录了折叠屏/分屏恒误报事故、**可编辑焦点信号**、`offsetTop` 补偿 fixed
-  元素）。chamber 吸收了「收缩不是充分条件」这一结论，但**未照搬**
-  其"缩放一票否决"：iOS 聚焦缩放（抽屉 13px 搜索框）会让否决永久生效，故
-  chamber 的缩放策略是「只服务 composer」（见 §18.4.4）。
+  `.VOzbGW_nav{flex-direction:row}` + `.VOzbGW_navList`/`.VOzbGW_navCell` 横向 chips +
+  `.VOzbGW_options{flex:1;overflow-y:auto}`，与 §18.4.3 的 chamber 版逐条对应（chamber 版另有
+  44px 触控底线、chips 横向滚动与安全区）。**第三种形态**：`dsh-mobile-shell/src/client/mobile.css.ts`
+  用左侧 72px 图标导航栏 + 右侧内容列（navCell 竖排 icon+label、rail 自身 `overflow-y:auto`、
+  Close 变返回箭头、无遮罩全页）；4 个官方分区在 375px 宽度上，72px 侧栏比顶部 chips 更费宽度，
+  故 chamber 取 chips 形态——**取舍**而非「社区没有该做法」。
+- **tooltip 粘滞**：`dsh-ui-mobile/src/client/mobile.module.css` 与 chamber 首版同款全局隐藏
+  （`[role='tooltip']{display:none!important}`，并带单测），注释同以「标签仍可由 aria-label 取得」
+  为据——两者共享「信息型气泡被一并隐藏」的盲区；chamber 已精化为
+  `(pointer: coarse) and (hover: none)` 下的 `button[aria-label] + [role="tooltip"][data-side]`。
+- **键盘**：`dsh-mobile-shell` 与 chamber 同为 `interactive-widget=resizes-content` +
+  `innerHeight - visualViewport.height` 探测；`dsh-meow-smooth` 更进一步（动态 vv 基线替代
+  `screen.height`，注释记录折叠屏/分屏恒误报事故、**可编辑焦点信号**、`offsetTop` 补偿 fixed 元素）。
+  chamber 吸收「收缩不是充分条件」但**未照搬**其"缩放一票否决"（会让 iOS 聚焦缩放永久否决），
+  缩放策略取「只服务 composer」（见 §18.4.4）。
 
-> **实现纪律：零代码复制，完整重写。** 本节全部内容仅为
-> 架构与机制参照——`dsh-chamber-client-ui-mobile` **不 fork、不搬运任何社区
-> 文件**（MIT 许可仅保证可阅读，不作为代码来源），只吸收以下设计决策后按
-> chamber 基座完整重写。**重写输入（chamber 自身特性，社区单实例插件均未
-> 处理过）**：
-> 1. **dsh 基线 v0.1.5-rc.2**（harness pin fb2c4b9e698e；`dsh-client-web` fork
->    提供 `__ModuleLoader__`、`extraRows`、异步 dispose 缝）：插件按 chamber
->    现有 `dsh-chamber-client-ui-*` 模板与构建体系写，不采用任何社区的构建
->    形态（tsdown/内联 CSS 等）；
-> 2. **N-ctx 多实例**：所有 document 级 effect 按实例根作用域化
->    （`[data-shell-overlay]` 的 parentElement），generation 隔离——社区插件
->    的单实例全局监听不可照搬。**实现边界**：打标/样式按实例根
->    作用域化；行为层 effect（IME/回车换行/自愈/Esc）为 document 级单实例设计——
->    gateway 部署单 shell 下成立，未来多 shell renderer 挂载时必须作用域化
->    （代码注释已标注）；
+> **实现纪律：零代码复制，完整重写。** 本节仅为架构与机制参照——
+> `dsh-chamber-client-ui-mobile` **不 fork、不搬运任何社区文件**（MIT 仅保证可阅读，
+> 不作为代码来源），只吸收以下设计决策后按 chamber 基座重写。**重写输入（社区单实例插件均未处理）**：
+> 1. **dsh 基线 v0.1.5-rc.2**（harness pin fb2c4b9e698e；`dsh-client-web` fork 提供
+>    `__ModuleLoader__`、`extraRows`、异步 dispose 缝）：按 chamber 现有
+>    `dsh-chamber-client-ui-*` 模板与构建体系写，不采用社区构建形态（tsdown/内联 CSS 等）；
+> 2. **N-ctx 多实例**：document 级 effect 按实例根作用域化（`[data-shell-overlay]` 的
+>    parentElement）并做 generation 隔离。**实现边界**：
+>    打标/样式按实例根作用域化；行为层 effect（IME/回车换行/自愈/Esc）为 document 级单实例
+>    设计——gateway 单 shell 下成立，未来多 shell renderer 挂载时必须作用域化；
 > 3. **layout store 驱动**：chamber 的 `dsh-chamber-client-ui-layout` 持有
->    `viewportWidth`/`narrowExpanded`（store 不再有 `narrow` 字段，
->    窄屏标记由 `viewportWidth < SIDEBAR_AUTO_COLLAPSE` 派生，经
->    `layoutFacts.getCollapsed()` 暴露），移动插件
->    **直接订阅 layout store** 驱动窄屏态与抽屉，不做社区通用的
->    `data-sidebar-collapsed` 属性观察。**部署矩阵例外**：
->    `layoutFacts` 订阅面只在 chamber layout fork 存在，而 §18.2/§3 矩阵明确
->    layout 不注入 gateway 托管实例——gateway 形态（移动插件唯一部署路径）
->    跑官方 ui-layout，插件以**双源回退**实现（`src/client/layout-facts.ts`）：
->    `ctx.layoutFacts` 存在时走 store 订阅，否则回退官方 `data-sidebar-collapsed`
->    属性观察（含触屏档 matchMedia 的 narrow 判定）。tier-1 分支当前仅在
->    未来桌面渲染器注入移动插件时可达（renderer 现无 mobile 注册，前瞻保留）；
->    两 tier 的 collapsed 推导与官方 AppFrame 逐字一致；
-> 4. **自研 DOM**：chamber 替换了官方 sidebar/layout/settings-bridge 注册，
->    移动适配的选择器与打标以 chamber 自研 DOM + fork 内新增 `data-*` 钩子
->    为锚，不猜官方哈希类名；
-> 5. **断点带触屏守卫**：`(max-width: 1023px) and (pointer: coarse)` 主断点
->    + 768px 手机档（社区 2026-08-30 的 "PC leak" 教训——桌面窄窗口不得误启
->    移动 UI，`dsh-mobile-shell` 即缺此守卫）；
-> 6. **能力取舍**：行为层（IME 恢复、composer 自愈、回车换行、打标替代
->    `:has()`、WAAPI 抽屉动画）为必做；社区宿主路由（会话删除/推理等级/
->    插件市场/GitHub token——依赖官方私有面或平台硬编码）v1 不做；Web Push
->    仅保留端点解耦架构（社区实现 VAPID 未接线、identity 编码，不可沿用）。
+>    `viewportWidth`/`narrowExpanded`（store 不再有 `narrow` 字段，窄屏标记由
+>    `viewportWidth < SIDEBAR_AUTO_COLLAPSE` 派生，经 `layoutFacts.getCollapsed()` 暴露），
+>    插件**直接订阅 layout store** 驱动窄屏态与抽屉。**部署矩阵例外**：`layoutFacts` 只在 chamber
+>    layout fork 存在，而 §18.2/§3 明确 layout 不注入 gateway 托管实例——故以**双源回退**实现
+>    （`src/client/layout-facts.ts`）：`ctx.layoutFacts` 存在走 store 订阅，否则回退官方
+>    `data-sidebar-collapsed` 属性观察（含触屏档 matchMedia 的 narrow 判定）。tier-1 分支仅在
+>    未来桌面渲染器注入插件时可达（renderer 现无 mobile 注册）；两 tier 的 collapsed 推导与官方
+>    AppFrame 逐字一致；
+> 4. **自研 DOM**：chamber 替换了官方 sidebar/layout/settings-bridge 注册，移动适配的选择器与
+>    打标以自研 DOM + fork 内新增 `data-*` 钩子为锚，不猜官方哈希类名；
+> 5. **断点带触屏守卫**：`(max-width: 1023px) and (pointer: coarse)` 主断点 + 768px 手机档
+>    （社区 2026-08-30 的 "PC leak" 教训——桌面窄窗口不得误启移动 UI，`dsh-mobile-shell` 即缺此守卫）；
+> 6. **能力取舍**：行为层（IME 恢复、composer 自愈、回车换行、打标替代 `:has()`、WAAPI 抽屉动画）
+>    为必做；社区宿主路由（会话删除/推理等级/插件市场/GitHub token）v1 不做；
+>    Web Push 仅保留端点解耦架构。
 
 **18.4.1 挂载机制（社区已证明零成本）**
 
@@ -1364,300 +1236,231 @@ settings-bridge/git/open-in）依旧不注入。机制上无需新能力：控�
 一行；`dsh.client.inject` 声明依赖包（官方 runtime/slots/layout/locale）；浏览器
 产物为 `window.__ModuleLoader__.load({id, factory})` 形态，CSS 运行时注入
 `<style data-plugin-css>` 标签（防重注入）。chamber 已有完全同构的先例
-（design 09 方案 A + host-graph-seed `--patch` overlay），**移动插件挂载无需
-任何新机制**。宿主半区如需补浏览器 RPC 面缺失的能力（如会话删除——官方
-append-only 无删除方法），走 dsh 实例自身 host 插件（`ctx.inject(['webServer',
-…])` 注册 `/api/*` 路由），属 dsh 实例域，不越控制面边界；v1 移动面不引入
-删除类宿主能力。
-
-**18.4.2 CSS 锚点策略（chamber 的决定性优势）**
+（design 09 方案 A + host-graph-seed `--patch` overlay），**移动插件挂载无需新机制**。
+宿主半区如需补浏览器 RPC 面缺失的能力（如会话删除——官方 append-only 无删除方法），走 dsh
+实例自身 host 插件（`ctx.inject(['webServer',
+…])` 注册 `/api/*` 路由），属 dsh 实例域，不越控制面边界；v1 不引入删除类宿主能力。
 
 社区两条路线：哈希类名全覆盖（上游构建一改即碎）vs 稳定属性 + 类名后缀
-（`data-mobile-nav="…"` 自有标记 + `[class$="_…"]`）。**chamber 走第三条路且
-更稳**：已 fork `dsh-client-web` 与 `ui-layout`（AGENTS.md 允许改源码的 chamber
-包），可在 fork 内直接加 `data-*` 钩子，不猜选择器；版本随 dsh 基线
-（v0.1.5-rc.2，harness pin fb2c4b9e698e）对齐 + 回归测试。断点锚定官方
-`SIDEBAR_AUTO_COLLAPSE`（<1024px）为主断点（mobile-shell 同款），768px 为
-手机档（mobile-adapt 同款），420/359px 微调可选。**档位表第三条**：宽度无关的
-**chrome 档** `(pointer: coarse) and (hover: none)`，
-目前只承载「粘滞 tooltip 气泡抑制」这一条装饰性规则——它是粗指针产物而非
-窄视口产物（iPad 横屏 1024px+ 同样点按），且必须与两个宽度档一起被
-「所有规则都在媒体查询内」的回归测试覆盖。
-**「不猜官方哈希类名」是原则，唯一的类名例外是后缀契约**（§18.4.3 的 Models
-provider 行一条；2026-09-11 upstream-alignment 后只剩这一条——原先用于
-`.cards` 的那条已删除）：实例 bundle 的 CSS Modules 生产命名是 `[hash]_[local]`（上游
+（`data-mobile-nav="…"` 自有标记 + `[class$="_…"]`）。**chamber 走第三条路且更稳**：
+已 fork `dsh-client-web` 与 `ui-layout`（AGENTS.md 允许改源码的 chamber 包），可在 fork 内
+直接加 `data-*` 钩子，不猜选择器；版本随 dsh 基线（v0.1.5-rc.2，harness pin fb2c4b9e698e）
+对齐 + 回归测试。断点锚定官方 `SIDEBAR_AUTO_COLLAPSE`（<1024px）为主断点（mobile-shell 同款），
+768px 为手机档（mobile-adapt 同款），420/359px 微调可选。**档位表第三条**：宽度无关的
+**chrome 档** `(pointer: coarse) and (hover: none)` 只承载「粘滞 tooltip 气泡抑制」这一条
+装饰性规则——它是粗指针产物而非窄视口产物（iPad 横屏 1024px+ 同样点按），且与两个宽度档一起
+被「所有规则都在媒体查询内」的回归测试覆盖。**「不猜官方哈希类名」是原则，唯一的类名例外是
+后缀契约**（§18.4.3 的 Models provider 行一条；2026-09-11 upstream-alignment 后只剩这一条）：
+实例 bundle 的 CSS Modules 生产命名是 `[hash]_[local]`（上游
 `vendor/harness-checkout/packages/client/tsdown.client.ts:517` 的
-`cssModules: { pattern: '[hash]_[local]' }`；0.1.5-rc.1 产物实测（该配置文件 rc.2 未改）
-`JObwrW_row`/`zGbnIq_modelRow`），局部名只在**末尾或后随空格**出现，
-故只能用 `:is([class$="_<local>"], [class*="_<local> "])`；`_<local>_<hash>_<idx>`
-是 **chamber 自建壳（Vite 默认 `generateScopedName`）**的命名，mobile 插件只在
-gateway 单壳面加载上游产物，该形态永远不出现。
+`cssModules: { pattern: '[hash]_[local]' }`；0.1.5-rc.1 实测 `JObwrW_row`/`zGbnIq_modelRow`），
+局部名只在**末尾或后随空格**出现，故只能用
+`:is([class$="_<local>"], [class*="_<local> "])`；`_<local>_<hash>_<idx>` 是 **chamber 自建壳
+（Vite 默认 `generateScopedName`）**命名，mobile 插件只加载上游产物，该形态永不出现。
 
 **18.4.3 布局覆盖要点（实证验证过的坑）**
 
-- **三栏 → 单栏**：`@media` 内覆盖 Grid 为 `0 minmax(0,1fr) 0`；侧边栏
-  `position:fixed` 脱离流后 Grid 才不会把中栏挤进 0 宽轨道（社区注释原文）；
-- **抽屉动画的 containing-block 陷阱**：官方侧边栏 portal 着 fixed 设置面板；
-  `transform` 非 none（含 identity）/`will-change`/`contain` 都会把它裁进抽屉
-  （mobile-adapt 弃 transform 用 left 位移；mobile-shell 用合成器动画且故意
-  不写 will-change）。**chamber 的 ui-layout fork 若把设置对话框移出侧边栏
-  portal 可根除**——这是 fork 路线优于外部插件的直接收益；
-- **弹层限宽：不做统一 blanket 限宽（2026-09-11 upstream-alignment T6）**。
-  手机档曾对**所有**非设置 `aria-modal` 弹层加 `max-width: calc(100vw - 24px)`，
-  该规则被删除：它对官方全幅图像 lightbox（ui-attachment `ImageLightbox`，
-  `role="dialog"` 的 backdrop 是 `position:fixed; inset:0` + 内部 `inset-0` 遮罩）
-  是过度约束——限宽后 backdrop 只剩 `100vw-24px` 且左对齐，屏幕右侧留下 24px
-  未变暗、可点穿的条带。树里只有三个 `role="dialog" aria-modal="true"` 生产者，
-  各自自带视口适配：设置面板（本插件全屏）、ui-primitives `Modal`（root 钉
-  `inset:0` 并留 24px 内边距、dialog 上限 `min(380px, 100%)`）、
-  `ImageLightbox`（全幅）——官方几何本身就是适配，插件不再叠加自己的限宽；
-- **设置面板全屏**：`fixed inset:0` + 内容纵向滚动 + safe-area 补边（P1 实现
-  nav 未做横向滚动——官方 nav 条目窄屏可接受，需补时追加 `overflow-x` 规则）；结构识别
-  不靠位置索引：设置面板的判定锚是官方 `[data-slot="settings.header"]`，粘滞行锚是
-  文档化的 `[data-slot="settings.action"]` + `[data-slot="settings.close"]` 两缝
-  （详见下条），chamber 在自己的 fork/插件里直接打标；
+- **三栏 → 单栏**：`@media` 内覆盖 Grid 为 `0 minmax(0,1fr) 0`；侧边栏 `position:fixed` 脱离流后
+  Grid 才不会把中栏挤进 0 宽轨道；
+- **抽屉动画的 containing-block 陷阱**：官方侧边栏 portal 着 fixed 设置面板；`transform` 非 none
+  （含 identity）/`will-change`/`contain` 都会把它裁进抽屉（mobile-adapt 弃 transform 用 left 位移；
+  mobile-shell 用合成器动画且故意不写 will-change）。**ui-layout fork 把设置对话框移出侧边栏 portal
+  即可根除**——fork 路线优于外部插件的直接收益；
+- **弹层限宽：不做统一 blanket 限宽（2026-09-11 upstream-alignment T6）**。手机档曾对**所有**非设置
+  `aria-modal` 弹层加 `max-width: calc(100vw - 24px)`，已删除：官方全幅图像 lightbox（ui-attachment
+  `ImageLightbox`，`role="dialog"` 的 backdrop 为 `position:fixed; inset:0` + 内部 `inset-0` 遮罩）
+  被限成 `100vw-24px` 且左对齐，右侧留 24px 未变暗、可点穿的条带。树里三个
+  `role="dialog" aria-modal="true"` 生产者各自自带视口适配：设置面板（本插件全屏）、ui-primitives
+  `Modal`（root 钉 `inset:0`、24px 内边距、dialog 上限 `min(380px, 100%)`）、`ImageLightbox`（全幅）
+  ——官方几何本身即适配；
+- **设置面板全屏**：`fixed inset:0` + 内容纵向滚动 + safe-area 补边（P1 的 nav 未做横向滚动，官方
+  条目窄屏可接受，需补时追加 `overflow-x`）；结构识别不靠位置索引：判定锚是官方
+  `[data-slot="settings.header"]`，粘滞行锚是文档化的 `[data-slot="settings.action"]` +
+  `[data-slot="settings.close"]` 两缝（详见下条），chamber 在 fork/插件里直接打标；
 - **输入工具行单行**：`flex-wrap: nowrap` + 触发器限宽 112px + 字号 12px；
-- **设置整页适配（手机档 ≤768px；平板 >768 保留桌面弹窗
-  几何；实机门禁 §18.6）**：取代上条 **chamber P1** 取舍（只全屏 + 整列滚动、
-  nav 不横向滚动）。官方壳是 800px `flex-row`（188px 竖排 nav rail + 内容列），
-  手机档把 panel 改 `flex-direction: column` 全屏堆叠：nav rail 变顶部横条
-  （标题 + **横向滚动分区 chips**，44px 触控，顶部安全区）；内容列 header
-  （actions+Close）以 `position: sticky` 固定不再随内容滚走（P1 的"整个
-  content 滚动"会让 Close 滚出屏），**该行的选择器锚在文档化的两条缝上**
+- **设置整页适配（手机档 ≤768px；平板 >768 保留桌面弹窗几何；实机门禁 §18.6）**：取代上条
+  **chamber P1** 取舍（只全屏 + 整列滚动、nav 不横向滚动）。官方壳是 800px `flex-row`（188px 竖排 nav
+  rail + 内容列），手机档把 panel 改 `flex-direction: column` 全屏堆叠：nav rail 变顶部横条（标题 +
+  **横向滚动分区 chips**，44px 触控，顶部安全区）；内容列 header（actions+Close）以 `position: sticky`
+  固定（P1 的"整个 content 滚动"会让 Close 滚出屏），**该行选择器锚在文档化的两条缝上**
   （2026-09-11 upstream-alignment T17c）：
   `… > div:last-child > div:has([data-slot="settings.action"]):has([data-slot="settings.close"])`
-  ——官方形状是 content > header >（actions > action 出口、close 按钮 > close
-  出口），只有这一行同时带两条缝，actions 格单独持有 action 缝、options 格只持有
-  `settings.section`，因此位置无关（上游把任一格再嵌深一层也不会失配），
-  也绝不会误中 options 格；内容列自身保留**兜底纵向滚动**
-  （官方子结构 header+options 精确匹配时仅 options 内滚，永不双重滚动；
-  结构漂移时兜底滚动 + sticky header，杜绝硬锁死），options 区纵向滚动并
-  补底部安全区；导航条与 options 的左右 padding 带
-  `env(safe-area-inset-left/right)`（刘海横屏）；分区内网格降级只剩**一条**：
-  Models provider 行 4 列 grid → 2×2。官方内部格子无稳定属性，这一处使用文档化的
-  **局部名后缀**匹配
-  `:is([class$="_<local>"], [class*="_<local> "])`——实例 bundle 的
-  CSS Modules 生产命名是 `[hash]_[local]`（上游 `tsdown.client.ts:517`；
-  产物实测 `JObwrW_row`/`zGbnIq_modelRow`），局部名可能不在
-  末位，故后缀 + 后随空格两臂并用；`_<local>_<hash>_<idx>` 是 chamber 自建壳
-  （Vite）的命名，从不属于实例 bundle——曾用的 `[class*="_<local>_"]` infix
-  形式因此在生产里命中不到任何东西（2026-09 修复）。命名翻转时 fail-soft
-  回官方网格，属记录在案的例外锚点族，后缀契约见 §18.4.2。**卡片网格不再由
-  chamber 降级（2026-09-11 upstream-alignment T17b；影响面按 2026-09-11 review-fix
-  F3 校正为两张网格）**：该手机档设置分区下有**两张各由上游拥有、规则却不同**的
-  卡片网格——
-  - `ui-settings-plugin-inventory/PluginInventorySettingsTab.module.css` 自己带折叠断点
-    （`@media (max-width: 680px)` 把 `.cards` 收成单列），chamber 原先那条强制单列
-    只在该网格的 **681–768px** 窗口里与上游自己的两列几何相矛盾；
+  ——官方形状为 content > header >（actions > action 出口、close 按钮 > close 出口），只有这一行同时带两
+  条缝，actions 格单独持 action 缝、options 格只持 `settings.section`，故位置无关、绝不误中 options 格；
+  内容列保留**兜底纵向滚动**（官方 header+options 精确匹配时仅 options 内滚，永不双重滚动；结构漂移时
+  兜底滚动 + sticky header，杜绝硬锁死），options 区纵向滚动并补底部安全区；导航条与 options 的左右
+  padding 带 `env(safe-area-inset-left/right)`（刘海横屏）；分区内网格降级只剩**一条**：Models provider
+  行 4 列 grid → 2×2。官方内部格子无稳定属性，这一处使用文档化的
+  **局部名后缀**匹配 `:is([class$="_<local>"], [class*="_<local> "])`——实例 bundle 的 CSS Modules
+  生产命名是 `[hash]_[local]`（上游 `tsdown.client.ts:517`；产物实测 `JObwrW_row`/`zGbnIq_modelRow`），
+  局部名可能不在末位，故后缀 + 后随空格两臂并用；`_<local>_<hash>_<idx>` 是 chamber 自建壳（Vite）的
+  命名，不属于实例 bundle——曾用的 `[class*="_<local>_"]` infix 因此命中不到任何东西
+  （2026-09 修复）。命名翻转时 fail-soft 回官方网格，属记录在案的例外锚点族，后缀契约见 §18.4.2。
+  **卡片网格不再由 chamber 降级（2026-09-11 upstream-alignment T17b；影响面按 2026-09-11 review-fix
+  F3 校正为两张网格）**：该手机档设置分区下有**两张各由上游拥有、规则却不同**的卡片网格——
+  - `ui-settings-plugin-inventory/PluginInventorySettingsTab.module.css` 自带折叠断点
+    （`@media (max-width: 680px)` 把 `.cards` 收成单列），chamber 原先那条强制单列只在该网格的
+    **681–768px** 窗口里与上游自己的两列几何相矛盾；
   - `ui-agent-preset/AgentPresetSection.module.css` **完全不带断点**：`.cards` 是
-    `repeat(auto-fill, minmax(268px, 1fr))`，外层 `.section` 上限 720px，于是从约
-    **580px** 视口宽起上游就渲染两列（两张 268px 卡 + 12px gap 需要 548px 的
-    options 内宽 = 视口 − 2×(16px + safe-area)）。对这张网格，被删掉的那条强制
-    单列改的是它**整个两列区间**的布局，即手机档约 **580–768px**，而不只是
-    681–768px。
-  两条都已删除（T17b）：每张网格的几何都由上游自己拥有，chamber 不覆盖——所以
-  「上游的断点就是唯一断点」不是本条的正当理由（上游对 Agent-presets 根本没有
-  断点，靠的是 auto-fill 自身；inventory 那一条才是断点）。弹窗内可编辑字段套用
-  composer 同款 16px 聚焦缩放底线；
-- **会话头部（会话页顶部标题/面包屑行）**：官方 header 为桌面宽度 chrome，
-  移动面三轴冲突全部以结构化锚点覆盖（不依赖哈希类名）——
-  (a) 浮动抽屉开关（左上 44px，官方 `IconPanelLeftOutline16` 字形——不再是
-  自绘 CSS 汉堡，2026-09-11 upstream-alignment T17a；**可访问名**就是官方名：
-  随状态切换的 `aria-label`（官方 toggle 的 `toggle.open`/`toggle.collapse` 对）。
-  但它的 ARIA **不是官方那份属性表**——官方控件只带那一个 label（它就在自己被折叠
-  的侧栏内部），而这个画外替身另写一个自身为真的属性：`aria-expanded`（它显隐的
-  抽屉的披露状态）；2026-09-11 review-fix F4a 校正了"ARIA 也是官方形状"这句多算的
-  一个属性。**`aria-haspopup` 已删**——它声称一个无类型的弹层，而抽屉
-  就是侧栏本体被移到画外；官方在真有弹层时才写类型，如设置触发器的
-  `aria-haspopup="dialog"`）与头部内容重叠 → 头部预留左 gutter
-  （`[data-slot="conversation.session.header"] > header` 直接子结构，
-  `padding-left` 同步让出 tab 行）；
-  (b) 官方 crumbs 行 nowrap + overflow hidden 会静默截断长标题链/谱系
-  chip（如「N 个子代理」目录触发器）→ 换行不裁切（单段省略号保留）；
-  (c) 官方 session-log-export 的「Session 日志」胶囊（header utilities，
-  min-width 111px+ 药丸）在手机上吃满标题行而移动端几乎不导出 → 上游已把该
-  控件改为会话头 more-actions 菜单里的 28×28 图标
-  按钮（`HeaderAction.tsx`），插件不再按文案打标（旧 `data-mobile-dismiss`
-  机制与 CSS 一并删除）。
-- **安全区一次做全**：`viewport-fit=cover` + `env(safe-area-inset-*)` 全表面 +
-  `100dvh`/`dvh` + `theme-color` 跟随主题 + `interactive-widget=resizes-content`；
-  `touch-action` 需给 textarea 恢复 `auto`（否则吞光标）；
-- **轨迹详情**：移动端改底部悬浮卡（`bottom` 抬到输入区上方，`min(52vh,460px)`），
-  或新增 Status 标签页承载统计（mobile-shell 思路）。右侧覆盖层形态
-  （`data-details-collapsed` 移除时 details 列 `position:fixed; right:0`）**已退役**；
-  但「只保留第三轨网格锁、右栏呈现全交官方」在 2026-09-13 复审时被判定不足以覆盖
-  769–1023px：上游只在 `<768px` 自动全屏（`ui-sidebar-right` 的
-  `autoFullscreen = viewportWidth < 768`、`track = shown && !autoFullscreen`），
-  而该档把第三轨钉成 0 ⇒ 展开的面板以常规宽度（视口 769–1023 时为 313–460px，
-  约正文列的 40–45%）直接盖在会话上，既不占轨道也不全屏。**现决策**：触屏档自己给
-  官方面板全屏呈现
-  （`[data-mobile-role="details"] [data-sidebar-right-panel]`
-  → `position:fixed; inset:0; z-index:40`；z-40 即上游自己的全屏层），网格锁
-  （`[data-mobile-role="details"] { grid-column: 3 }`）不变。该规则**刻意不加「已展开」
-  门控**：座席在滑出动画同一 commit 上报 `shown:false`，门控会让全屏盒在动画中途失效；
-  隐藏态由上游自己的 `translateX(100%) + visibility:hidden` 承担，无需门控。安全区
-  （`env(safe-area-inset-*)`）与 `box-sizing:border-box` 写在同一条规则里：面板自身与
-  全树都没有 border-box，content-box 的 `inset:0 + width:100%` 会连 inset 一起撑宽。
-  **锚点注记**：面板不是
-  该列的直接子节点——每个 slot 渲染点都把输出包在 `[data-slot="<key>"]` 出口里，
-  而出口是 `display:contents`（ui-renderer `scoped-slots.tsx` 的 `ANCHOR_STYLE`），
-  因此对「列的子元素」施加定位规则是**静默 no-op**（本修复第一版即踩此坑）；
-  规则瞄准面板自己的上游状态属性并以 details 列限定作用域。**层级范围与抽屉让位**：
-  插件的抽屉/遮罩/抽屉开关（z-74/75/76）挂在官方 `shell.overlay`
-  层内，而该层是 `position:absolute; z-index:20` 的**独立栈上下文**——三者因此压在
-  框架内容与普通右栏列（z-10）之上，但**低于官方全屏右栏（z-40）与浮动面板宿主
-  （z-60）**；因此面板展开期间抽屉**显式让位**：开关与遮罩 `display:none`、已打开
-  的抽屉 `visibility:hidden`（与关闭态同一机制，同时把它移出 Tab 序），不再留可聚焦
-  的面板后内容。**让位需要两条臂**：`data-rightbar-collapsed` 是上游的**轨道**标志
-  （`cols.rightbar === 0`），而 `track = shown && !autoFullscreen` ⇒ 手机档（<768，
-  上游自动全屏）已展开的面板照样上报 track=false，只用轨道臂会让手机完全不让位；
-  第二条臂用座的 `data-rightbar-fullscreen`（`openRightbar`/`closeRightbar` 成对读写）。
-  768–1023 档内面板自带的**模式控件隐藏**（该档呈现已钉死 ⇒ push↔fullscreen 翻转成为
-  no-op；<768 保留，因上游把它当「收起」用），面板子树声明 `overscroll-behavior:
-  contain`。要跨栈仍须把节点移到 body 级 portal，未做。
+    `repeat(auto-fill, minmax(268px, 1fr))`、外层 `.section` 上限 720px，故约 **580px** 视口宽起上游即
+    渲染两列（两张 268px 卡 + 12px gap 需 548px options 内宽 = 视口 − 2×(16px + safe-area)）；被删的
+    强制单列改的是它**整个两列区间**（手机档约 **580–768px**），不只是 681–768px。
+  两条都已删除（T17b）：每张网格的几何由上游拥有，chamber 不覆盖（Agent-presets 本无断点、靠
+  `auto-fill` 自身；inventory 那条才是断点）。
+  弹窗内可编辑字段套用 composer 同款 16px 聚焦缩放底线；
+- **会话头部（会话页顶部标题/面包屑行）**：官方 header 为桌面宽度 chrome，移动面三轴冲突全部以
+  结构化锚点覆盖（不依赖哈希类名）——
+  (a) 浮动抽屉开关（左上 44px，官方 `IconPanelLeftOutline16` 字形——不再是自绘 CSS 汉堡，
+  2026-09-11 upstream-alignment T17a；**可访问名**即官方名（`aria-label` 随状态切换，官方 toggle 的
+  `toggle.open`/`toggle.collapse` 对）；但其 ARIA **不是官方属性表**——官方控件只带那一个 label，
+  画外替身另写自身为真的 `aria-expanded`；2026-09-11 review-fix F4a 校正了"ARIA 也是官方形状"多算的
+  一个属性。**`aria-haspopup` 已删**——抽屉是侧栏本体被移出画外、无类型弹层；官方只在真有弹层时写
+  类型，如设置触发器 `aria-haspopup="dialog"`）与头部内容重叠 → 头部预留左
+  gutter（`[data-slot="conversation.session.header"] > header` 直接子结构，`padding-left` 同步让出 tab 行）；
+  (b) 官方 crumbs 行 nowrap + overflow hidden 会静默截断长标题链/谱系 chip（如「N 个子代理」目录触发器） → 换行不裁切（单段省略号保留）；
+  (c) 官方 session-log-export 的「Session 日志」胶囊（header utilities，min-width 111px+
+  药丸）在手机上吃满标题行而移动端几乎不导出 → 上游已把该
+  控件改为会话头 more-actions 菜单里的 28×28 图标按钮（`HeaderAction.tsx`），插件不再按文案打标
+  （旧 `data-mobile-dismiss` 机制与 CSS 一并删除）。
+- **安全区一次做全**：`viewport-fit=cover` + `env(safe-area-inset-*)` 全表面 + `100dvh`/`dvh` +
+  `theme-color` 跟随主题 + `interactive-widget=resizes-content`；`touch-action` 需给 textarea 恢复
+  `auto`（否则吞光标）；
+- **轨迹详情**：移动端改底部悬浮卡（`bottom` 抬到输入区上方，`min(52vh,460px)`），或新增 Status
+  标签页承载统计（mobile-shell 思路）。右侧覆盖层形态（`data-details-collapsed` 移除时 details 列
+  `position:fixed; right:0`）**已退役**；「只保留第三轨网格锁、右栏呈现全交官方」经 2026-09-13 复审
+  判定不足以覆盖 769–1023px：上游只在 `<768px` 自动全屏（`ui-sidebar-right` 的
+  `autoFullscreen = viewportWidth < 768`、`track = shown && !autoFullscreen`），该档却把第三轨钉成 0 ⇒
+  展开的面板以常规宽度（视口 769–1023 时 313–460px，约正文列 40–45%）直接盖在会话上，既不占轨道也不
+  全屏。**现决策**：触屏档自己给官方面板全屏呈现
+  （`[data-mobile-role="details"] [data-sidebar-right-panel]` → `position:fixed; inset:0; z-index:40`；
+  z-40 即上游自己的全屏层），网格锁（`[data-mobile-role="details"] { grid-column: 3 }`）不变。该规则
+  **刻意不加「已展开」门控**：座席在滑出动画同一 commit 上报 `shown:false`，门控会让全屏盒在动画中途
+  失效；隐藏态由上游自己的 `translateX(100%) + visibility:hidden` 承担。安全区
+  （`env(safe-area-inset-*)`）与 `box-sizing:border-box` 写在同一规则里：面板自身与全树都非 border-box，
+  content-box 的 `inset:0 + width:100%` 会连 inset 一起撑宽。**锚点注记**：面板不是该列的直接子节点——
+  每个 slot 渲染点都把输出包在 `[data-slot="<key>"]` 出口里，而出口是 `display:contents`（ui-renderer
+  `scoped-slots.tsx` 的 `ANCHOR_STYLE`），故对「列的子元素」施加定位是**静默 no-op**；规则瞄准面板
+  自己的上游状态属性并以 details 列限定作用域。**层级范围与抽屉让位**：插件的抽屉/遮罩/抽屉开关
+  （z-74/75/76）挂在官方 `shell.overlay` 层内，该层是 `position:absolute; z-index:20` 的**独立栈
+  上下文**——三者压在框架内容与普通右栏列（z-10）之上，但**低于官方全屏右栏（z-40）与浮动面板宿主
+  （z-60）**；面板展开期间抽屉**显式让位**：开关与遮罩 `display:none`、已打开的抽屉
+  `visibility:hidden`（与关闭态同一机制，同时移出 Tab 序），不留可聚焦的面板后内容。**让位需要两条
+  臂**：`data-rightbar-collapsed` 是上游的**轨道**标志（`cols.rightbar === 0`），而
+  `track = shown && !autoFullscreen` ⇒ 手机档（<768，上游自动全屏）已展开的面板照样上报 track=false，
+  只用轨道臂会让手机完全不让位；第二条臂用座的 `data-rightbar-fullscreen`（`openRightbar`/
+  `closeRightbar` 成对读写）。768–1023 档内面板自带的**模式控件隐藏**（该档呈现已钉死 ⇒
+  push↔fullscreen 翻转成为 no-op；<768 保留，因上游把它当「收起」用），面板子树声明
+  `overscroll-behavior: contain`。要跨栈仍须把节点移到 body 级 portal，未做。
 
 **18.4.4 行为层（移动端复杂度的真正核心）**
 
-社区经验：纯 CSS 只解决一半，IME/键盘/合成器是主战场——IME 恢复（程序化
-focus 丢弃循环、readOnly 翻转 blur、pointerup 手势内 refocus、visualViewport
-高度差 >20% 且 >120px 判键盘开）、回车 = 换行、composer 自愈（30s busy 强
-解锁、遮罩 pointer-events 中和、44px 触控下限）、包装官方方法必须保持
-Promise 链（返回 `originalSink()` 否则输入框永久卡死，社区 v0.1.6 实际踩坑）、
-`:has()` 在手机上每 DOM 变更重算是切标签卡顿源（MutationObserver + microtask
-合并替代）。**chamber 的 dsh-client-web fork 是这些行为补丁的合法落点**
-（现有 fork 补丁面已含 boot/context 类改动）。行为层已按五层落地 IME 恢复（程序化
-focus 丢弃循环 / editability 翻转 / pointerup 手势 refocus / visualViewport 键盘判定
-/ 键盘补偿）+ 30s busy 自愈 + 键盘遮挡兜底（实现见
+社区经验（IME/键盘/合成器是主战场）：IME 恢复（focus 丢弃循环、readOnly 翻转 blur、
+pointerup refocus、visualViewport 高度差 >20% 且 >120px 判键盘开）、回车 = 换行、composer 自愈（30s busy
+强解锁、遮罩 pointer-events 中和、44px 触控下限）、包装官方方法必须保持 Promise 链（返回 `originalSink()`
+否则输入框永久卡死，社区 v0.1.6 踩坑）、`:has()` 每 DOM 变更重算是切标签卡顿源（改用 MutationObserver +
+microtask 合并）。**dsh-client-web fork 是这些补丁的合法落点**（补丁面已含 boot/context 类改动）；行为层已按
+五层落地 IME 恢复（程序化 focus 丢弃循环 / editability 翻转 / pointerup 手势 refocus / visualViewport 键盘
+判定 / 键盘补偿）+ 30s busy 自愈 + 键盘遮挡兜底（实现见
 `packages/dsh-chamber-client-ui-mobile/src/client/composer.ts`）。
 
-**键盘补偿（layer-5）**：原「键盘钉住」
-（`installKeyboardPinning`，对 seat 做 `scrollIntoView`）在 iOS 上**恒为空转**
-——官方 composer seat 是 `position: sticky` 且是会话滚动器
-`[data-conversation-scroll]` 的**流内子元素**，滚动它只会被 sticky 重新钉回
-layout 底部，`scrollIntoView` 也看不见 visual viewport。现改为**键盘补偿**
-（`installKeyboardCompensation`）：键盘打开期间把 seat 的 sticky `bottom` 抬到
-键盘顶、给滚动器加等量 `padding-bottom`（frame 级 `data-mobile-kbd` +
-`--chamber-mobile-kbd-offset`），并对贴底会话做等量 scrollTop 补偿；外层跟随仍归
-官方（ui-chat 的 seat ResizeObserver）。`covered = layout − offsetTop − vv.height`
-在任意缩放态都成立（vv 高度已同时含缩放与键盘收缩）。
+**键盘补偿（layer-5）**：原「键盘钉住」（`installKeyboardPinning`，对 seat 做 `scrollIntoView`）在 iOS 上
+**恒为空转**——官方 composer seat 是 `position: sticky` 且是会话滚动器 `[data-conversation-scroll]` 的
+**流内子元素**，滚动它只会被 sticky 钉回 layout 底部。现改为**键盘补偿**
+（`installKeyboardCompensation`）：键盘打开期间把 seat 的 sticky `bottom` 抬到键盘顶、给滚动器加等量
+`padding-bottom`（frame 级 `data-mobile-kbd` + `--chamber-mobile-kbd-offset`），并给贴底会话做等量 scrollTop
+补偿；外层跟随仍归官方（ui-chat 的 seat ResizeObserver）。`covered = layout − offsetTop − vv.height` 在任意
+缩放态都成立（vv 高度已含缩放与键盘收缩）。
 
 守卫与取舍：
-- **可编辑焦点**（focusin + focusout 打点 + composer 选区兜底）：收缩不是充分
-  条件；focusout 打点让「提交期 editability 翻转」和「blur→收起动画」都在正确
-  的时刻起算，选区兜底覆盖官方 `contenteditable` 在 `adjudicating|submitting`
-  期间翻 false 的窗口。
-- **缩放策略 = 只服务 composer**：一刀切 `scale > 1.01` 否决是错的——iOS 会
-  对抽屉 13px 搜索框（`ui-workspace:1187`）聚焦缩放且页面**保持缩放**，否决会
-  让 composer 在键盘开着时永久留在后面。现在缩放 + 焦点在
-  `[data-composer-seat]` 内照常补偿（几何上就是把 seat 拉到可视视口底边），
-  非 composer 字段在缩放态仍否决（缩放页面的平移不得驱动偏移）；同时从源头
-  消除聚焦缩放——抽屉内输入框补 16px 底线。
-- **量化 16px**（原 48px）：死区从 8–55px 收窄到 8–23px；vv 事件按帧合并，
-  步进增多的写入可忽略。「移动中量化 + 静止吸附精确值」留作实机观察后的备选。
-- **arm 期间归零 seat 底部安全区 padding**：键盘弹起时该 inset 位于键盘之后，
-  不归零会多出 0–34px 死区；抬升量来自键盘几何，归零不会造成遮挡。
-- **arm 以 frame 元素为单位幂等**：renderer 重挂替换 AppFrame 时按元素重打标
-  （并清理旧 frame 的插件属性），而非依赖数值 `applied` 短路（否则新 frame
-  无属性、composer 停在键盘后）。
+- **可编辑焦点**（focusin + focusout 打点 + composer 选区兜底）：收缩不是充分条件；focusout 打点让「提交期
+  editability 翻转」和「blur → 收起动画」都在正确
+  的时刻起算，选区兜底覆盖官方 `contenteditable` 在
+  `adjudicating|submitting` 期间翻 false 的窗口。
+- **缩放策略 = 只服务 composer**：一刀切 `scale > 1.01` 否决错误——iOS 会对抽屉 13px 搜索框
+  （`ui-workspace:1187`）聚焦缩放且页面**保持缩放**，否决会让 composer 在键盘开着时永久留在后面。现在缩放 +
+  焦点在 `[data-composer-seat]` 内照常补偿（把 seat 拉到可视视口底边），非 composer 字段在缩放态仍否决
+  （缩放页面的平移不得驱动偏移）；并从源头消除聚焦缩放——抽屉内输入框补 16px 底线。
+- **量化 16px**（原 48px）：死区从 8–55px 收窄到 8–23px；vv 事件按帧合并，步进增多的写入可忽略。「移动中
+  量化 + 静止吸附精确值」留作实机观察后的备选。
+- **arm 期间归零 seat 底部安全区 padding**：键盘弹起时该 inset 位于键盘之后，不归零会多出 0–34px 死区；
+  抬升量来自键盘几何，归零不会造成遮挡。
+- **arm 以 frame 元素为单位幂等**：renderer 重挂替换 AppFrame 时按元素重打标（并清理旧 frame 的插件属性），
+  而非依赖数值 `applied` 短路（否则新 frame 无属性、composer 停在键盘后）。
 
-Enter 换行路径另补 `[data-input-scroll]` 内光标揭示——官方 `revealSelection`
-的依赖数组是布尔 `[draft !== ""]`，非空 draft 插入换行不触发它。
+Enter 换行路径另补 `[data-input-scroll]` 内光标揭示——官方 `revealSelection` 的依赖数组是布尔
+`[draft !== ""]`，非空 draft 插入换行不触发它。
 
-**tooltip 粘滞**：官方 ui-primitives
-`Tooltip` 只有 mouseenter/mouseleave/focus/blur，粗指针上 tap 合成 mouseenter
-而无配对 mouseleave ⇒ 延迟气泡常驻。规则以 `(pointer: coarse) and (hover: none)`
-门控（宽屏触控设备同样点按；接鼠标时 hover 翻转让位）且只隐藏
-`button[aria-label] + [role="tooltip"][data-side]`（气泡是 trigger 的紧邻下一
-兄弟并带组件自身的 `data-side`；官方 31 处用法中 27 处为带 aria-label 的按钮，
-其中 3 处措辞略有差异、语义相同）；四处信息型气泡（聊天统计行、代理预设卡片
-描述、轨迹时间轴 span、≤620px 轨迹 kind 标签）保留，第五处 `role="tooltip"`
-（轨迹 turn-rail 预览）无 `data-side` 被结构性排除。原生 `title` 长按气泡**不
-抑制**（刻意手势，且部分 title 是截断行的唯一全文入口，登记于 STATUS）。
+**tooltip 粘滞**：官方 ui-primitives `Tooltip` 只有 mouseenter/mouseleave/focus/blur，粗指针上 tap 合成
+mouseenter 而无配对 mouseleave ⇒ 延迟气泡常驻。规则以 `(pointer: coarse) and (hover: none)` 门控（宽屏触控
+设备同样点按；接鼠标时 hover 翻转让位）且只隐藏 `button[aria-label] + [role="tooltip"][data-side]`（官方 31 处用法中 27 处为带 aria-label 的按钮，其中 3 处措辞略有差异、语义相同）；四处
+信息型气泡（聊天统计行、代理预设卡片描述、轨迹时间轴 span、≤620px 轨迹 kind 标签）保留，第五处
+`role="tooltip"`（轨迹 turn-rail 预览）无 `data-side` 被结构性排除。原生 `title` 长按气泡**不抑制**（刻意
+手势，且部分 title 是截断行的唯一全文入口，登记于 STATUS）。
 移动导航机制两条（实机门禁见 §18.6）：
-- **抽屉点击自愈**：iOS Safari 抑制抽屉内点击的合成 click（行 hover
-  展开使命中元素在 touchstart/touchend 间位移；社区实测为合成 click 可
-  整体缺失、与 DOM 变更时序无关）→ 单击会话行无反应、双击才生效。机制：
-  稳定 tap（位移 ≤ slop、touch/pen、touch 档）的 pointerup 后 120ms 宽限
-  内真实 click 未到达时，从 pointerup 目标重发非受信 bubbling click——
-  React 委托的行 onClick 照常执行导航；真实 click 到达则零干预（宽限
-  吸收迟到的真实 click）；自愈后 150ms 内同坐标的受信 click 视为迟到真实
-  click 被抑制（防双重激活）。起点按 pointerId 跟踪（多点触控安全、响应
-  pointercancel）。平移/滚动意图（位移超 slop）、表单控件（含任意非 false
-  态 contenteditable）、抽屉之外一律不触发（`drawer-taps.ts`，纯判定单测
-  覆盖；桌面不受影响）；
-- **导航后不弹键盘**：官方 InputBar 在会话切换/解锁时把焦点还给 composer
-  （桌面惯例）——从抽屉点会话行切换后 iOS 会立刻弹键盘。IME 阶梯 layer-1
-  的 gesture 判定改为**导航区语义**：仅当手势起始于导航区（抽屉
-  `[data-mobile-role="sidebar"]` 或会话头 `[data-slot="conversation.session.header"]`）
-  时丢弃程序化回焦；composer seat 内手势、发送键、鼠标/硬键盘聚焦与
-  portal 型选择器流程（工作区/代理预设菜单）均视为输入意图保留（键盘已开
-  时不丢，连续输入不中断；粗指针设备配硬键盘不受影响）。
+- **抽屉点击自愈**：iOS Safari 抑制抽屉内点击的合成 click（行 hover 展开使命中元素在 touchstart/touchend 间
+  位移；社区实测合成 click 可整体缺失、与 DOM 变更时序无关） → 单击会话行无反应、双击才生效。机制：
+  稳定 tap（位移 ≤ slop、touch/pen、touch 档）的 pointerup 后 120ms 宽限内真实 click 未到达时，从 pointerup
+  目标重发非受信 bubbling click——React 委托的行 onClick 照常执行导航；真实 click 到达则零干预；自愈后
+  150ms 内同坐标的受信 click 视为迟到真实 click 被抑制（防双重激活）。起点按 pointerId 跟踪；平移/滚动意图
+  （位移超 slop）、表单控件（含任意非 false 态 contenteditable）、抽屉之外一律不触发（`drawer-taps.ts`，纯
+  判定单测覆盖；桌面不受影响）；
+- **导航后不弹键盘**：官方 InputBar 在会话切换/解锁时把焦点还给 composer（桌面惯例）——从抽屉点会话行切换
+  后 iOS 会立刻弹键盘。IME 阶梯 layer-1 的 gesture 判定改为**导航区语义**：仅当手势起始于导航区（抽屉
+  `[data-mobile-role="sidebar"]` 或会话头 `[data-slot="conversation.session.header"]`）时丢弃程序化回焦；
+  composer seat 内手势、发送键、鼠标/硬键盘聚焦与 portal 型选择器流程（工作区/代理预设菜单）均视为输入
+  意图保留（键盘已开时不丢；粗指针配硬键盘不受影响）。
 
 **18.4.5 官方机制确认与 PWA**
 
 官方插件机制（deepseek-ai/deepseek-harness master 树源码级确认）：
 
-- **官方不存在 ui-mobile 插件**（全树 grep `mobile` 零路径命中）。官方对窄视口的
-  策略是**流内换行而非断点布局**（`.row { flex-wrap: wrap }`），"按构造在所有
-  视口宽度下成立"——即官方把移动端布局**有意留给第三方**，这与 §18.1 实证
-  （桌面范式 UI）一致；
+- **官方不存在 ui-mobile 插件**（全树 grep `mobile` 零路径命中）；其对窄视口的策略是**流内换行而非断点
+  布局**（`.row { flex-wrap: wrap }`），"按构造在所有视口宽度下成立"——官方把移动端布局**有意留给第三
+  方**，与 §18.1 实证（桌面范式 UI）一致；
 - **两 manifest 体系**（chamber 插件走的就是该规范，与上游逐字段吻合）：
   `dsh.bundle.patch` → `cordis.patch.yml`（YAML 数组，按 `id` 整行替换
   `config`，非深合并）+ `dsh.client`（`exports["./client"]` → 宿主
   `clientModules` 扫描 → `window.__DSH_BOOT__` WebBootGraph → `GET
   /plugins/??<pkg>/client.js&rev=<rev>` 不可变缓存组合脚本）；加载顺序
   bundles 列表 → profile patch → 机器级 patch → `--patch` argv（后层覆盖前层）。
-  纯 client 包（无 `dsh.bundle`）不可被 `dsh plugin` 安装（awesome-dsh-plugin
-  准入规则原话）；
-- **官方 Web Shell 的 PWA 现状**：viewport meta 无 `viewport-fit=cover`；无任何
-  safe-area 处理；仅有 `apps/web/public/manifest.webmanifest`（`display:
-  fullscreen`，无 theme_color/background_color），**官方刻意不提供 service
-  worker**——实现 note 明言"不添加 service worker、缓存策略或离线回退……
-  会形成**误导性的不完整离线约定**"。本节尊重该立场：离线能力要么不做，要么
-  做完整，**gateway 现有空 `sw.js` 占位不得演变为"假离线"承诺**（见 §18.5）。
+  纯 client 包（无 `dsh.bundle`）不可被 `dsh plugin` 安装（awesome-dsh-plugin 准入规则原话）；
+- **官方 Web Shell 的 PWA 现状**：viewport meta 无 `viewport-fit=cover`、无 safe-area 处理；仅有
+  `apps/web/public/manifest.webmanifest`（`display: fullscreen`，无 theme_color/background_color）；
+  **官方刻意不提供 service worker**——实现 note 明言"不添加 service worker、缓存策略或离线回退……会形成
+  **误导性的不完整离线约定**"。离线能力要么不做、要么做完整，**gateway 现有空 `sw.js` 占位不得演变为
+  "假离线"承诺**（§18.5）。
 
-PWA / Web Push 社区实现机制（dsh-ui-mobile，jasondu，npm 0.1.8，MIT，
-2026-08 三天密集开发后停更；其 API 面与 chamber 基线（停更时 v0.1.5-alpha.2）已漂移，
-只能作机制参照）：
+PWA / Web Push 社区实现机制（dsh-ui-mobile，jasondu，npm 0.1.8，MIT，2026-08 三天密集开发后停更；其 API
+面与 chamber 基线（停更时 v0.1.5-alpha.2）已漂移，只能作机制参照）：
 
-- **双半部架构**：node host 半部（`webServer.tapIndex` 在浏览器解析前注入
-  PWA 头——`stripHostPwa` 先剥离宿主声明再注入自己的，等价静态标记；
-  自持 `/pwa/manifest.webmanifest` 路由 + `/pwa/icons/*` 图标 + 启动骨架
-  `<div id="root">` 替换）＋ 浏览器 client 半部（`__ModuleLoader__` +
-  **data-attribute stamping**：`data-mobile-frame`/`data-mobile-role` 自打标，
-  开合由宿主 `data-sidebar-collapsed` 驱动 CSS transform，零 React 状态；
-  body 级 MutationObserver 支持重载重挂——**chamber N-ctx 多实例可直接
-  复用该 stamping 策略**）；
-- **断点 767px**（dsh-ui-mobile 的社区选项：CSS/JS 共用常量，768–1024 故意
-  不干预、交给宿主让步链；**chamber 采用 §18.4.2 的 1023+768 策略**，二者
-  不同源，实现时以 §18.4.2 为准）；
-  三栏→单栏用 `grid-template-columns: minmax(0,1fr) !important`（宿主内联
-  样式写 grid，`!important` 必须，每个覆盖都注释对抗目标）；
-- **composer 固定底部双保险**：`position:fixed; bottom:0`（对抗官方
-  0,3,0 特异性）+ `overscroll-behavior-y: contain` + 滚动器
-  `padding-bottom: var(--dsh-composer-height)` 占位；防 iOS 缩放三件套
-  （`maximum-scale=1,user-scalable=no,viewport-fit=cover` + gesturestart
-  preventDefault + 输入 16px 字号）——注意 `user-scalable=no` 是 WCAG
-  1.4.4 反模式，chamber 版宜只防聚焦缩放；
-- **SW 分档缓存**：`/assets/*`（hashed）cache-first 不可变；`/` 与
-  `index.html` network-first + 离线回退（`__DSH_BOOT__` rev 随部署变）；
-  其余 cache-first lazy fill；`skipWaiting()` + activate 清旧缓存 +
-  `clients.claim()`。**关键坑：SW 是 origin 级（`/sw.js` scope `/`）——
-  chamber 多实例同源代理（`/api/i/<id>/*`）与 gateway 单目标反代下必须
-  per-instance 路径（如 `/api/i/<id>/sw.js`），否则缓存互相污染**；
-- **Web Push 流程**：浏览器 standalone 探测 → GET 配置 → `pushManager.
-  subscribe({userVisibleOnly, applicationServerKey})` → POST 订阅（每次启动
-  幂等对账）；服务端 VAPID env/0600 文件、订阅 0600 原子写、宿主事件流
-  `session/event turn/end completed` 触发 `webpush.sendNotification`
-  （TTL 3600，404/410 清订阅）；SW `notificationclick` → 已有窗口 focus +
+- **双半部架构**：node host 半部（`webServer.tapIndex` 注入 PWA 头，`stripHostPwa` 先剥离宿主声明再注入
+  自己的；`/pwa/manifest.webmanifest` 路由 + `/pwa/icons/*` 图标 + 启动骨架 `<div id="root">` 替换）＋
+  浏览器 client 半部（`__ModuleLoader__` + **data-attribute stamping**：`data-mobile-frame`/
+  `data-mobile-role` 自打标，开合由宿主 `data-sidebar-collapsed` 驱动 CSS transform，零 React 状态；
+  body 级 MutationObserver 支持重载重挂——**chamber N-ctx 多实例可直接复用该 stamping 策略**）；
+- **断点 767px**（CSS/JS 共用常量，768–1024 故意不干预、交给宿主让步链；**chamber 采用 §18.4.2 的
+  1023+768 策略**，实现以 §18.4.2 为准）；
+  三栏→单栏用 `grid-template-columns: minmax(0,1fr) !important`（宿主内联样式写 grid，`!important` 必须，
+  每个覆盖都注释对抗目标）；
+- **composer 固定底部双保险**：`position:fixed; bottom:0`（对抗官方 0,3,0 特异性）+
+  `overscroll-behavior-y: contain` + 滚动器 `padding-bottom: var(--dsh-composer-height)` 占位；防 iOS 缩放
+  三件套（`maximum-scale=1,user-scalable=no,viewport-fit=cover` + gesturestart preventDefault + 输入 16px
+  字号）——`user-scalable=no` 是 WCAG 1.4.4 反模式，chamber 版宜只防聚焦缩放；
+- **SW 分档缓存**：`/assets/*`（hashed）cache-first 不可变；`/` 与 `index.html` network-first + 离线回退
+  （`__DSH_BOOT__` rev 随部署变）；其余 cache-first lazy fill；`skipWaiting()` + activate 清旧缓存 +
+  `clients.claim()`。**关键坑：SW 是 origin 级（`/sw.js` scope `/`）——chamber 多实例同源代理
+  （`/api/i/<id>/*`）与 gateway 单目标反代下必须 per-instance 路径（如 `/api/i/<id>/sw.js`），否则缓存互
+  相污染**；
+- **Web Push**：standalone 探测 → GET 配置 → `pushManager.
+  subscribe({userVisibleOnly, applicationServerKey})` → POST 幂等对账；服务端 VAPID env/0600、订阅 0600
+  原子写；宿主事件流 `session/event turn/end completed` 触发 `webpush.sendNotification`（TTL 3600，404/410
+  清订阅）；SW `notificationclick` → 已有窗口 focus +
   `postMessage('dsh-push-open')` → `ctx.sessions.open(sessionId)`，无窗口
-  `openWindow('/')`。chamber 网关/远程场景的推送触发需要自己的移动端通知
-  投影（design 19 思路延伸），不消费会话内容；
-- **可借鉴的工程习惯**：单文件全局 CSS + 每个 `!important` 注释对抗目标、
-  手机微补丁合集（`enterkeyhint="send"`、`-webkit-tap-highlight-color:
+  `openWindow('/')`；chamber 网关/远程场景需要自己的移动端通知投影（design 19 思路延伸），不消费会话内容；
+- **工程习惯**：单文件全局 CSS + `!important` 注释对抗目标；手机微补丁（`enterkeyhint="send"`、
+  `-webkit-tap-highlight-color:
   transparent`、`touch-action: manipulation`、`100dvh`、
-  `prefers-reduced-motion` 关抽屉动画）、`stripHostPwa` 式"插件声明优先"
-  注入纪律。
+  `prefers-reduced-motion` 关抽屉动画）；`stripHostPwa` 式"插件声明优先"注入纪律。
 
 ### 18.5 安全与边界
 
@@ -1673,89 +1476,64 @@ PWA / Web Push 社区实现机制（dsh-ui-mobile，jasondu，npm 0.1.8，MIT，
 
 ### 18.6 验收门禁
 
-- 自动化：移动插件 typecheck/test（布局纯函数、断点、编辑态门控与自愈时钟、
-  SW 注册逻辑）、gateway
-  UA 路由测试（含伪造 UA 负例）、插件 PWA 资产经 gateway 透传后的 HEAD/GET
-  测试（`/pwa/*`、`/sw.js` 可达且内容正确、未注入形态下 gateway 占位不注册
-  SW）；
-- 实机（移动视口清单，CDP 设备模拟 + 真机抽检）：**设备模拟部分已有工具**
-  （2026-09-14）——`scripts/gui-acceptance/mobile-walkthrough.mjs`（设备尺寸 +
-  触控模拟 ⇒ 真实 `pointer:coarse`；结构化断言：无横向溢出、会话头首行高度、
-  「单字换行」行盒、命中盒；**并抓 WebSocket 帧**，是会话打开停滞取证的入口；
-  判定语义由 `mobile-checks.test.mjs` 以合成事实锁定，含已知边界：
-  `Emulation.setEmulatedMedia` 的 `pointer/hover` 被 Chromium 忽略、`mobile:true`
-  的收缩适配会让 `scrollWidth <= innerWidth` 恒真因而判定以 `clientWidth` 为准）
-  与 `scripts/upstream/verify-mobile-anchors.mjs`（锚点新鲜度门）。**真机抽检仍不可省**
-  （iOS 键盘/安全区/`100dvh`/聚焦缩放、惯性滚动与 hover 观感；当前走查只读，
-  抽屉/设置/键盘补偿尚未断言）：
+- 自动化：移动插件 typecheck/test（布局纯函数、断点、编辑态门控与自愈时钟、SW 注册逻辑）、
+  gateway UA 路由测试（含伪造 UA 负例）、插件 PWA 资产经 gateway 透传后的 HEAD/GET 测试
+  （`/pwa/*`、`/sw.js` 可达且内容正确、未注入形态下 gateway 占位不注册 SW）；
+- 实机（移动视口清单，CDP 设备模拟 + 真机抽检）：**设备模拟部分已有工具**（2026-09-14）——
+  `scripts/gui-acceptance/mobile-walkthrough.mjs`（设备尺寸 + 触控模拟 ⇒ 真实 `pointer:coarse`；
+  结构化断言：无横向溢出、会话头首行高度、「单字换行」行盒、命中盒；**并抓 WebSocket 帧**，
+  是会话打开停滞取证的入口；判定语义由 `mobile-checks.test.mjs` 以合成事实锁定，含已知边界：
+  `Emulation.setEmulatedMedia` 的 `pointer/hover` 被 Chromium 忽略、`mobile:true` 的收缩适配会让
+  `scrollWidth <= innerWidth` 恒真因而判定以 `clientWidth` 为准）与
+  `scripts/upstream/verify-mobile-anchors.mjs`（锚点新鲜度门）。**真机抽检仍不可省**（iOS
+  键盘/安全区/`100dvh`/聚焦缩放、惯性滚动与 hover 观感；走查只读，抽屉/设置/键盘补偿未断言）：
   - 触控目标 ≥44px 比例（**座席清单**：composer bar / sidebar / 会话头
-    actions+utilities+corner / settings.section / 右栏 dockkit 条 chips+按钮 /
-    menuitem+option）、无横向溢出、抽屉开合、弹层不出屏、设置全屏可滚动、
-    输入行单行、安全区/100dvh、键盘不遮挡输入区；
-  - 右栏与抽屉（2026-09-13 决策的实机判据）：展开的右栏在 769–1023px 档
-    **全屏**呈现（不再以常规宽度悬挂在会话上）、面板自带退出控件可点、
-    面板展开期间抽屉与开关不可见且**不在 Tab 序**——**两档都要走查**：<768
-    手机档（上游自身全屏、本插件补齐 inset，让位靠 `data-rightbar-fullscreen`
-    臂）与 769–1023 档（本插件全屏 + 轨道臂）；768–1023 档内面板自带的**模式
-    控件不可见**（该档呈现已钉死、翻转是 no-op）、关闭面板后抽屉回到原开合态
-    可接受、dockkit 条并入 44px 后条高与观感（chips 保持 content-box 以免放宽
-    分屏判定；**chips 行由上游 `touch-action:none` 持有，不得期望手指横滚**，
-    越界 chip 只能靠激活邻居滚入视野）、面板子树 `overscroll-behavior:contain`
-    生效（滚动到底不得带动身后文档/工具栏）、会话头座席底线落在内容盒
-    （图标按钮约 56px、头部行较高，读作过厚则三条臂一起改 border-box）、
-    官方浮动面板
-    （380×300 @ (160,120)、z-60）与 `ContextMeter` 264px 面板在窄屏是否出屏
-    （已登记为未适配，见 STATUS ③④）、**iOS 安全区**：横屏刘海机刘海不得压住
-    面板内容、home indicator 不得压住底部行（面板已带 `env(safe-area-inset-*)`
-    且 `box-sizing:border-box`，`viewport-fit=cover` 由本插件注入；真机先读
-    `getComputedStyle(panel).boxSizing` 与 `getBoundingClientRect().width`
-    对比 `visualViewport.width`）、键盘已弹起时打开面板的焦点归属
-    （现沿用上游：焦点与输入留在面板之后，是否补 blur 待判）、
-    面板在抽屉已展开的 768–979 档是否被上游 `canShow` 自收起（观感待判）、
-    设置页在抽屉内被让位隐藏时的「不可见 `aria-modal`」组合（见 STATUS ⑫）、
-    Split View / Stage Manager / 旋转跨越 768 与 1024 边界时呈现不得在手势中途跳变
-    （见 STATUS ⑪）；
-  - 键盘补偿：iOS 键盘弹出后 composer 停在键盘顶上方且**不
-    常驻气泡**；捏合缩放（双指放大）**不得**抬升 composer（缩放守卫）；键盘
-    服务于设置/提问字段时不得抬升 composer（焦点守卫）；**iOS 聚焦缩放后的
-    打字**必须仍被补偿（正例：抽屉搜索框 13px 触发聚焦缩放后，点回
-    composer 不得停在键盘后）；**缩放页面上的平移不得引起 seat/滚动范围抖动**
-    （缩放态只服务 composer 的取舍需实机确认）；提交（`submitting`）窗口内
-    seat 不得闪落；会话切换/reconnect settle 重挂 seat 后 composer 仍在键盘
-    上方（幂等 arm）；**arm 期间 seat 与键盘顶之间的死区应 ≤23px**（16px 量化
-    的正例，刘海机上还须确认安全区归零无双重间距）；arm 期间「回到底部」控件
-    必须仍可点到（现落在 `--dsh-composer-height` 之后，见 STATUS ⑦）；
-    Android WebView 无 `interactive-widget` 时同样生效；无工作区态按 Enter
-    **打开工作区选择器**（编辑态门控的正例）、**iPad 接硬件键盘时 Ctrl/Cmd+Enter
-    仍走官方加速提交**（不得被换成换行）、**卡住的提交**（不可编辑 +
-    `data-phase` 为 adjudicating/submitting 满 30s）点按可自愈，而**合法锁定态**
-    （owner 阻断 / 父端离线 / 无会话选择器节点）点按**不得**被强解锁（自愈范围
-    的正/负例）；carry 一个待判：撑满后的回车换行必须把新行带进可视区
-    （caret reveal 与 Lexical 归并的时序，见 STATUS ⑧）；
-  - 外设与档位：iPad 接触控板/鼠标时本档是否仍以 `pointer: coarse` 成立
-    （文档假设只翻转 `hover`；若翻转 `pointer`，移动档退场回落上游窄窗形态，
-    见 STATUS ⑩）；
-  - tooltip：点按发送/停止/指令/ContextMeter/队列/侧边栏等
-    带 aria-label 的按钮后**无**残留气泡；聊天统计行/代理预设卡片描述/轨迹
-    时间轴与 kind 标签的悬停气泡仍可读（信息型气泡保留）；轨迹 turn-rail
-    预览（901–1023px 触控平板）不受影响；接鼠标的触控设备 hover 气泡恢复；
-    桌面宽度零变化；**原生 `title` 长按气泡为已登记取舍**（刻意手势，不抑制）；
-  - 会话头：抽屉开关不重叠头部内容、crumbs 长链/chip 换行不裁切、视图 tab
-    （chat+trajectory 常驻）44px 且**换行**不裁切——活动 tab 那条外伸 1px 的
-    指示条必须仍与头部底线齐平（早期 `overflow-x:auto` 会把滚动容器的另一轴
-    算成 `auto` 从而裁掉它）、头部随 tab 盒增高；抽屉里单击会话行即切换
-    （iOS Safari 自愈生效）、
-    切换不弹键盘（composer 意图焦点不受影响）；
-  - 设置（手机档）：竖排 nav 变顶部横向 chips 且分类可达/可滚动、Close 固定
-    不随内容滚走（粘滞行仍由两条 `data-slot` 缝锚定）、各分区（General/Models/
-    Agent presets/Plugins+inventory）
-    无横向溢出且 **Models 行 2×2 降级生效**（卡片网格的折叠由上游自己的几何
-    负责，2026-09-11 review-fix F3 校正为两张网格：inventory 网格是上游的 680px
-    断点，Agent-presets 网格无断点、由
-    `auto-fill` 自身在约 580px 以下收成一列，chamber 都不覆盖）、**弹层不出屏且官方几何自足**（含全幅图像 lightbox 不得被
-    限宽裁切）、
-    输入框聚焦不触发页面缩放、键盘弹出不遮输入、深浅色与横竖屏走查、**分区
-    chip 切换后 options 从顶部开始（且点 nav 标题/选项区不复位）**；
+    actions+utilities+corner / settings.section / 右栏 dockkit 条 chips+按钮 / menuitem+option）、
+    无横向溢出、抽屉开合、弹层不出屏、设置全屏可滚动、输入行单行、安全区/100dvh、键盘不遮挡输入区；
+  - 右栏与抽屉（2026-09-13 决策的实机判据）：展开的右栏在 769–1023px 档**全屏**呈现、面板自带
+    退出控件可点、面板展开期间抽屉与开关不可见且**不在 Tab 序**——**两档都要走查**：<768（上游
+    自身全屏、本插件补齐 inset、让位靠 `data-rightbar-fullscreen` 臂）与 769–1023（本插件全屏 +
+    轨道臂）；768–1023 档内面板自带的**模式控件不可见**（翻转是 no-op）、关闭面板后
+    抽屉回到原开合态可接受、dockkit 条并入 44px 后条高与观感（chips 保持 content-box 以免放宽分屏
+    判定；**chips 行由上游 `touch-action:none` 持有，不得期望手指横滚**，越界 chip 只能靠激活邻居
+    滚入视野）、面板子树 `overscroll-behavior:contain` 生效（滚动到底不得带动身后文档/工具栏）、
+    会话头座席底线落在内容盒（图标按钮约 56px，过厚则三条臂一起改 border-box）、官方浮动面板
+    （380×300 @ (160,120)、z-60）与 `ContextMeter` 264px 面板在窄屏是否出屏（已登记未适配，见
+    STATUS ③④）、**iOS 安全区**：横屏刘海不得压住面板内容、home indicator 不得压住底部行（面板已带
+    `env(safe-area-inset-*)` 且 `box-sizing:border-box`，`viewport-fit=cover` 由本插件注入；真机先读
+    `getComputedStyle(panel).boxSizing` 与 `getBoundingClientRect().width` 对比 `visualViewport.width`）、
+    键盘已弹起时打开面板的焦点归属（现沿用上游：焦点与输入留在面板之后，是否补 blur 待判）、面板在
+    抽屉已展开的 768–979 档是否被上游 `canShow` 自收起（观感待判）、设置页在抽屉内被让位隐藏时的
+    「不可见 `aria-modal`」组合（见 STATUS ⑫）、Split View / Stage Manager / 旋转跨越 768 与 1024
+    边界时呈现不得在手势中途跳变（见 STATUS ⑪）；
+  - 键盘补偿：键盘弹出后 composer 停在键盘顶上方且**不常驻气泡**；捏合缩放（双指放大）**不得**抬升
+    composer（缩放守卫）；键盘服务于设置/提问字段时不得抬升 composer（焦点守卫）；**iOS 聚焦缩放后的
+    打字**必须仍被补偿（正例：抽屉搜索框 13px 聚焦缩放）；**缩放
+    页面上的平移不得引起 seat/滚动范围抖动**（缩放态只服务 composer 的取舍需实机确认）；提交
+    （`submitting`）窗口内 seat 不得闪落；会话切换/reconnect settle 重挂 seat 后 composer 仍在键盘
+    上方（幂等 arm）；**arm 期间 seat 与键盘顶之间的死区应 ≤23px**（16px 量化的正例，刘海机还须
+    确认安全区归零无双重间距）；arm 期间「回到底部」控件必须仍可点到（现落在 `--dsh-composer-height`
+    之后，见 STATUS ⑦）；Android WebView 无 `interactive-widget` 时同样生效；无工作区态按 Enter
+    **打开工作区选择器**（编辑态门控的正例）、**iPad 接硬件键盘时 Ctrl/Cmd+Enter 仍走官方加速提交**
+    （不得被换成换行）、**卡住的提交**（不可编辑 + `data-phase` 为 adjudicating/submitting 满 30s）
+    点按可自愈，而**合法锁定态**（owner 阻断 / 父端离线 / 无会话选择器节点）点按**不得**被强解锁
+    （自愈范围的正/负例）；carry 一个待判：撑满后的回车换行必须把新行带进可视区（caret reveal 与
+    Lexical 归并的时序，见 STATUS ⑧）；
+  - 外设与档位：iPad 接触控板/鼠标时本档是否仍以 `pointer: coarse` 成立（文档假设只翻转 `hover`；
+    若翻转 `pointer`，移动档退场回落上游窄窗形态，见 STATUS ⑩）；
+  - tooltip：点按发送/停止/指令/ContextMeter/队列/侧边栏等带 aria-label 的按钮后**无**残留气泡；
+    聊天统计行/代理预设卡片描述/轨迹时间轴与 kind 标签的悬停气泡仍可读（信息型气泡保留）；轨迹
+    turn-rail 预览（901–1023px 触控平板）不受影响；接鼠标的触控设备 hover 气泡恢复；桌面宽度零变化；
+    **原生 `title` 长按气泡为已登记取舍**（刻意手势，不抑制）；
+  - 会话头：抽屉开关不重叠头部内容、crumbs 长链/chip 换行不裁切、视图 tab（chat+trajectory 常驻）
+    44px 且**换行**不裁切——活动 tab 那条外伸 1px 的指示条必须仍与头部底线齐平（`overflow-x:auto` 的连带裁切）、头部随 tab 盒增高；抽屉里单击会话行即切换（iOS
+    Safari 自愈生效）、切换不弹键盘（composer 意图焦点不受影响）；
+  - 设置（手机档）：竖排 nav 变顶部横向 chips 且分类可达/可滚动、Close 固定不随内容滚走（粘滞行仍由
+    两条 `data-slot` 缝锚定）、各分区（General/Models/Agent presets/Plugins+inventory）无横向溢出且
+    **Models 行 2×2 降级生效**（折叠归上游几何，2026-09-11 review-fix F3：两张网格均不覆盖，详 §18.4.3）、
+    **弹层不出屏且官方几何自足**（含全幅图像 lightbox 不得被限宽裁切）、输入框聚焦不触发页面
+    缩放、键盘弹出不遮输入、深浅色与横竖屏走查、**分区 chip 切换后 options 从顶部开始（且点 nav 标题/
+    选项区不复位）**；
   - PWA：manifest 生效、SW 注册、安装引导（分期验收）。
 
 ### 18.7 分期
@@ -1783,27 +1561,26 @@ PWA / Web Push 社区实现机制（dsh-ui-mobile，jasondu，npm 0.1.8，MIT，
 改动触及既有契约或已交付行为时，按 `AGENTS.md` 的 PR 纪律记下「还考虑过什么、为什么落选」：
 
 - **移动停滞提示的控制面**（实现与锚点见 `packages/dsh-chamber-client-ui-mobile/README.md`）：
-  - 只留「重载」一个按钮（review 前的形态）——**否决**：45s 阈值未经真机校准，健康但缓慢的
-    打开与停滞同形，误报时用户只能在「无视提示」与「中断一次合法加载」之间二选一；补一个
-    「继续等待」把误报代价降到零，代价是提示多一个控件。
-  - 超时后自动重载或自动重开会话——**否决**：违反本插件「只观察、不代替用户决定」的边界，
-    慢链路下会把可完成的一次加载变成永久循环。
-  - 用 `conversationPhase()` 的内部名字（`blank`/`engaging`）当判据——**否决**：这些名字从不到达
-    `[data-phase]`，按它们匹配等于写死一条永不成立（或永不恢复）的规则；DOM 值空间
-    （`settling`/`hero`/`active`）才是可锚定的事实。
+  - 只留「重载」一个按钮（review 前形态）——**否决**：45s 阈值未经真机校准，健康但缓慢的打开与
+    停滞同形，误报时用户只能在「无视提示」与「中断一次合法加载」间二选一；补「继续等待」把误报
+    代价降到零，代价是多一个控件。
+  - 超时后自动重载或自动重开会话——**否决**：违反「只观察、不代替用户决定」的边界，慢链路下会把
+    可完成的一次加载变成永久循环。
+  - 用 `conversationPhase()` 的内部名字（`blank`/`engaging`）当判据——**否决**：它们从不到达
+    `[data-phase]`，匹配等于写死一条永不成立（或永不恢复）的规则；DOM 值空间
+    （`settling`/`hero`/`active`）才可锚定。
   - 只用 `[data-phase]` 节点当会话身份——**否决**：该节点属于按条目 key 的 root 作用域槽，切会话
-    时原地复用，于是计时、提示与「继续等待」都会被带进下一个会话；会话作用域的 header 子树
-    才是上游实际重挂的边界。
+    原地复用，计时、提示与「继续等待」被带进下一个会话；会话作用域的 header 子树才是上游实际重挂
+    的边界。
 - **网关的不可变缓存标记**（§8 附近的资产缓存段）：只按路径形状（`-<hash>.<ext>`）打标——
   **否决**：实测 0.1.0-rc.5 的 frontend-static 会把 miss SPA 回退到渲染后的 index（`text/html`
-  200），那样一个「JS URL 上的一年期 HTML」会跨版本回滚长期驻留；标记必须同时看内容类型与
-  上游自己的缓存元数据。反过来「只在上游声明长缓存时打标」——**否决**：上游对资产不发任何
-  缓存头，那样等于这个优化永远不生效。
-- **宿主日志导出器的卸载归属**（`packages/control-plane/src/host-log-bridge.ts`）：保持直接注册、
-  靠模块释放或「同 ctx 二次挂载」自证——**否决**：cordis 的 `LoggerService.exporter()` 把 effect
-  注册在**服务**的上下文（应用根）上，插件卸载不会移除它；重新物化 loader 会叠加第二个导出器
-  并把每行应用日志写两遍。挂到插件自己的 `ctx.effect` 是唯一由插件生命周期管辖的位置。
-- **锚点保鲜门的 fail-soft 默认**（`scripts/upstream/verify-mobile-anchors.mjs`）：让缺锚点树直接 exit 1
-  ——**否决**：CI 与裸 clone 上没有上游树（`packages/desktop/vendor/dsh` 只提交 lockfile），
-  常态红会把门变成噪声；改为默认 fail-soft + 升级流程 §7 显式 `--require-anchor-root`（缺根、
-  无 client 产物、锚点树版本与 pin 不符都 exit 1），让「真的查过」成为可断言的事实。
+  200），「JS URL 上的一年期 HTML」会跨版本回滚长期驻留；标记必须同时看内容类型与上游缓存元数据。
+  反过来「只在上游声明长缓存时打标」——**否决**：上游对资产不发任何缓存头，等于该优化永远不生效。
+- **宿主日志导出器的卸载归属**（`packages/control-plane/src/host-log-bridge.ts`）：直接注册、靠模块
+  释放或「同 ctx 二次挂载」自证——**否决**：cordis 的 `LoggerService.exporter()` 把 effect 注册在
+  **服务**上下文（应用根），插件卸载不会移除；重新物化 loader 会叠加第二个导出器并把每行应用日志
+  写两遍。挂到插件自己的 `ctx.effect` 是唯一由插件生命周期管辖的位置。
+- **锚点保鲜门的 fail-soft 默认**（`scripts/upstream/verify-mobile-anchors.mjs`）：缺锚点树直接
+  exit 1——**否决**：CI 与裸 clone 上没有上游树（`packages/desktop/vendor/dsh` 只提交 lockfile），
+  常态红会把门变成噪声；改为默认 fail-soft + 升级流程 §7 显式 `--require-anchor-root`（缺根、无
+  client 产物、锚点树版本与 pin 不符都 exit 1），让「真的查过」可断言。

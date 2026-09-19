@@ -1,16 +1,16 @@
 # 19 · 桌面通知与未读徽标（会话 complete / ask / request，设置可选项）
 
-> **状态：现行（桌面原生通知 + 未读徽标，2026-12）**——会话 complete / ask / request
-> 时推送原生通知，Dock/任务栏应用图标显示未读红气泡（均为主进程裁决的设置可选项）；
-> 检测端复用 renderer 既有事实通道，控制面零改动、无新 host 插件；
-> **未完成门禁**：macOS 权限/拒绝行为的**打包态实机走查**（拒绝态的设置页提示与
-> 「打开系统设置」恢复入口已实现，见 §3.3/§4 与 2026-09 修订）、Windows 任务栏
-> overlay 门控（design 23 排期）——见 `docs/progress/STATUS.md`。
-> 需求来源：用户要求「一个 session 在 complete、ask、request 时给用户推送通知」，
-> 做成设置中的可选项；未读徽标是同一投影的被动指示。
-> 本文先给出 **OpenChamber 通知功能调研**（外部参考，本地源码
-> `/Users/panzeyu2013/Desktop/code/develop/OpenChamber`，同设计 14 的调研体例），
-> 再给出 dsh-chamber 的移植设计契约。
+> **状态：现行（桌面原生通知 + 未读徽标，2026-12）**——会话 complete / ask / request 时
+> 推送原生通知，Dock/任务栏图标显示未读红气泡（均为主进程裁决的设置可选项）；检测端
+> 复用 renderer 既有事实通道，控制面零改动、无新 host 插件；**未完成门禁**：macOS
+> 权限/拒绝行为的**打包态实机走查**（拒绝态设置页提示与「打开系统设置」恢复入口已实现，
+> 见 §3.3/§4 与 2026-09 修订）、Windows 任务栏 overlay 门控（design 23 排期）——见
+> `docs/progress/STATUS.md`。
+> 需求来源：用户要求「一个 session 在 complete、ask、request 时推送通知」并做成设置
+> 可选项；未读徽标是同一投影的被动指示。
+> 本文先给 **OpenChamber 通知功能调研**（外部参考，源码
+> `/Users/panzeyu2013/Desktop/code/develop/OpenChamber`，体例同设计 14），再给 dsh-chamber
+> 的移植设计契约。
 
 ---
 
@@ -23,9 +23,8 @@
 | 窗口隐藏场景 | 设计 14：关窗 hide 到托盘 / macOS 无窗常驻——**窗口不可见时用户对会话完成与等待输入一无所知**（蓝点/pending 徽标只在窗口内） | 设计 14 |
 | 设置存储 | chamber 全局设置 `chamber-settings.json`（主进程权威、`dsh-chamber:settings-get/set` IPC + push、`validatePatch` 白名单） | `packages/desktop/chamber-settings.ts` |
 
-**结论**：本设计只补「呈现 + 裁决」两端——Electron 原生通知（桌面壳宿主能力，
-与托盘/退出确认同层级）与设置入口；检测端**复用现成事实通道**，零控制面改动、
-零新 host 插件即可接上。
+**结论**：本设计只补「呈现 + 裁决」两端（Electron 原生通知 + 设置入口，分层/纪律见
+§3.1）；检测端**复用现成事实通道**（06 §4）。
 
 **术语映射**（与用户需求对齐）：`complete` = 会话回合结束（running→idle 边沿，
 或 vendor `completed` 武装）；`ask` = pending `'question'`（代理提问、等待回答）；
@@ -42,16 +41,15 @@
 
 ### 2.1 服务端事件源（notifications/runtime.js）
 
-- 服务端（进程内 web 服务器）**消费 opencode 的会话生命周期事件**：会话完成
-  （completion，含 subtask 区分）、`question.asked`、`permission.asked` 等。
-- 每类事件套**模板**（`templates.completion/question/…`，变量 `{agent_name}`
-  `{model_name}` `{last_message}` `{session_name}` 等），组装 `{title, body, tag, kind,
-  sessionId, directory, projectId}`。
+- 服务端消费 opencode 会话生命周期事件（completion 含 subtask、`question.asked`、
+  `permission.asked` 等），按 `templates.completion/question/…` 模板（变量
+  `{agent_name}` `{model_name}` `{last_message}` `{session_name}` 等）组装
+  `{title, body, tag, kind, sessionId, directory, projectId}`。
 - **双通道分发**（`notifications/emitter-runtime.js`）：
-  - `emitDesktopNotification` → 桌面形态直调 Electron 主进程回调（`onDesktopNotification`）；
-  - `broadcastUiNotification` → 经 SSE/WS 全局事件 `openchamber:notification` 广播给 UI，
-    携带 `desktopNotificationDelivered` 标志——**桌面已发过原生通知时，UI 侧不得再发**
-    （防双发，`sync-context.tsx` L513–518）。
+  `emitDesktopNotification` → 桌面形态直调 Electron 主进程回调（`onDesktopNotification`）；
+  `broadcastUiNotification` → 经 SSE/WS 全局事件 `openchamber:notification` 广播给 UI，携带
+  `desktopNotificationDelivered` 标志——**桌面已发过原生通知时 UI 不得再发**（防双发，
+  `sync-context.tsx` L513–518）。
 
 ### 2.2 桌面端（main.mjs `maybeShowNativeNotification`）
 
@@ -59,23 +57,21 @@
 - `requireHidden && isAnyWindowFocused()` → 跳过（正在屏幕上看的会话不打扰）；
 - `Notification.isSupported()` 检查；
 - **去重 claim**：`nativeNotificationClaims` Map + 5s TTL，key = `workspaceId|tag`
-  或 `workspaceId|sessionId|kind|title|body`——同键 5s 内只发一次（防事件风暴/双发）；
-- OpenChamber 参考实现用 `activeNotifications` 存活集合防 GC 吞 click 事件
-  （macOS 已知坑）；dsh-chamber 的现行 token-aware Map 见 §3.3；
+  或 `workspaceId|sessionId|kind|title|body`——同键 5s 内只发一次（防风暴/双发）；
+- `activeNotifications` 存活集合防 GC 吞 click（macOS 已知坑）；dsh-chamber 现行
+  token-aware Map 见 §3.3；
 - `new Notification({title, body, silent: false, sound: 'Glass'(darwin)})`；
-- click → `focusForegroundWindow()`（macOS 先 `app.focus`）+ 广播
-  `openchamber:open-session` 打开对应会话。
+- click → `focusForegroundWindow()`（macOS 先 `app.focus`）+ 广播 `openchamber:open-session`。
 
 ### 2.3 设置面（NotificationSettings.tsx + useUIStore）
 
-- **主开关** `nativeNotificationsEnabled`（默认关）；
-- **聚焦模式** `notificationMode: 'always' | 'hidden-only'`（默认 hidden-only：
-  窗口聚焦时不打扰；`always` 仍受「正在查看的会话」豁免——`requireHidden`）；
-- **事件开关** ×4：completion / subtask / error / question（每类可独立关）；
-- **模板编辑**：每事件 title/message 可自定义（变量插值）；
-- 「发送测试通知」按钮（直调 `notifications.notifyAgentCompletion`，绕过开关）；
-- 浏览器形态另有 Web Push（service worker + VAPID）订阅（桌面形态不用）；
-- 持久化经 UI store → 服务端 settings（OpenChamber 的服务器持有设置权威）。
+- **主开关** `nativeNotificationsEnabled`（默认关）；**聚焦模式**
+  `notificationMode: 'always' | 'hidden-only'`（默认 hidden-only：聚焦时不打扰，
+  `always` 仍受「正在查看的会话」豁免——`requireHidden`）；**事件开关** ×4：
+  completion / subtask / error / question（独立关）；**模板编辑**：每事件 title/message
+  可自定义（变量插值）；「发送测试通知」直调 `notifications.notifyAgentCompletion`
+  绕过开关；浏览器形态另有 Web Push（service worker + VAPID，桌面不用）；持久化经 UI
+  store → 服务端 settings（OpenChamber 的服务器持有设置权威）。
 
 ### 2.4 与 dsh-chamber 的差异（移植要点）
 
@@ -107,19 +103,19 @@ renderer App 层
   └─ click → 聚焦窗口 + 推送 dsh-chamber:notification-open → renderer openSession（既有路径）
 ```
 
-- **控制面零改动**；**无新 host 插件**；**不消费宿主帧**（事实来自 chamber 已有的
-  侧边栏事实通道，非控制面消费）。
-- 「通知中心」在 01 §4 是**移出域**（宿主 UI 职责面）——本设计不建通知中心、不做
-  通知列表/历史/管理面，只做**桌面壳原生通知呈现**（与设计 14 托盘、退出确认同为
-  桌面宿主能力），不违反 P3。
+- **控制面零改动**、**无新 host 插件**、**不消费宿主帧**（事实来自 chamber 既有
+  侧边栏事实通道）。
+- 「通知中心」在 01 §4 是**移出域**（宿主 UI 职责面）——本设计不建通知中心/列表/历史/
+  管理面，只做**桌面壳原生通知呈现**（与设计 14 托盘、退出确认同级的宿主能力），
+  不违反 P3。
 - 设置 = chamber 全局设置（主进程权威），**绝不进任何实例的 dsh home**（15 D3）。
 
 ### 3.2 事件检测（renderer，`packages/renderer/src/notification-edges.ts`）
 
 事实源：`chamberBridge.onRuntimeReport`（App 已有订阅）。**新增独立纯函数模块**
-（与蓝点机 `reconcileCompletedFacts` 并存，互不耦合；蓝点机带「正在阅读」解除，
-通知边沿需要**不受解除影响**——窗口隐藏到托盘时活动来源的当前会话完成也必须
-通知，见 3.3 的 requireHidden 语义）：
+（与蓝点机 `reconcileCompletedFacts` 并存、互不耦合；蓝点机带「正在阅读」解除，
+通知边沿**不受解除影响**——窗口隐藏到托盘时活动来源的当前会话完成也必须通知，见
+§3.3 requireHidden）：
 
 ```ts
 // 每来源每会话的边沿记忆（App effect 内 ref 持有，随来源生命周期收敛）
@@ -139,13 +135,9 @@ function detectNotificationEdges(
 | `ask` | `pending` **值变化到 `'question'`** | 代理提问等待回答；含直切（question→approval 等不经 undefined 的切换——vendor 组合选择器会正常产生，每个新值都通知一次）；同值重放与清除（→undefined）不发 |
 | `request` | `pending` **值变化到 `'approval' \| 'plan-review'`** | 工具/计划审批请求；直切/重放/清除语义同上 |
 
-- **首次上报静默播种**（`prev === undefined`）：应用启动/来源首挂载时，已 pending /
-  已完成会话不轰炸（窗口内由侧边栏徽标呈现；参考 OpenChamber 的 boot 去抖语义）。
-- **断连重连 = 撤回即播种（断连窗口内的完成/提问不补发）**：通道撤回（shell
-  重连 / 重 boot 窗口）时事实边沿记忆随该来源一并删除，恢复后的首份上报
-  `prev === undefined`，只播种不发事件——窗口内完成/提问的会话**不**由此补发。
-  这是**有意的取舍**（理由见 §3.5）；同内容重放（mux 回放重加 pending 等）不重复
-  ——边沿记忆按来源保留（与 `prevRunningRef` 同生命周期纪律），主进程 claim 兜底。
+- **首报/撤回即播种**：`prev === undefined`（含通道撤回后的首份上报）只播种不发事件，
+  窗口内完成/提问**不**补发（取舍与理由见 §3.5）；同内容重放不重复（边沿记忆按来源保留，
+  与 `prevRunningRef` 同生命周期纪律；主进程 claim 兜底）。
 - subagent 会话不产生事件（事实通道不含 subagent 行；父会话的 `runningSubagents`
   只驱动子代理计数徽标）。
 
@@ -166,40 +158,38 @@ interface NotificationRequest {
 ```
 
 - `requireHidden = (sourceId === activeViewRef.current && sessionId === report.current
-  && document.hasFocus())`——用户正看着这个会话（无论主开关/模式如何都豁免，
-  与 OpenChamber `requireHidden && isAnyWindowFocused()` 同语义；单窗口下
-  renderer 的 `document.hasFocus()` 与主进程 `isAnyWindowFocused()` 等价，主进程
-  再查一次作为权威）。
+  && document.hasFocus())`——用户正看着这个会话（无论主开关/模式都豁免，与 OpenChamber `requireHidden && isAnyWindowFocused()` 同语义；单窗口下
+  `document.hasFocus()` 与主进程 `isAnyWindowFocused()` 等价，主进程再查一次作权威）。
 - 文案（v1 固定，renderer 组装）——**2026-09-11 upstream-alignment T16：不再用
-  zh 字面量**，改取 App 框架的 typed 字典 `packages/renderer/src/locales.ts`（框架
-  自身没有 `t` 席位，按**文档语言** `<html lang>` 用 `readDocumentLocale()` 解析；
-  该 effect 依赖为 `[]`，拿不到 render 作用域的 `t`，故在事件组装时读同一事实）：
+  zh 字面量**，改取 App 框架的 typed 字典 `packages/renderer/src/locales.ts`（该 effect
+  依赖为 `[]`、拿不到 render 作用域的 `t`，故按**文档语言** `<html lang>` 用
+  `readDocumentLocale()` 解析）：
   - complete：「会话已完成」/ `{来源 label} · {会话标题}`（`notification.sessionComplete`）
   - ask：「代理正在等待你的回答」/ `{来源 label} · {会话标题}`（`notification.awaitingAnswer`）
   - request：「代理请求你的批准」/ `{来源 label} · {会话标题}`（`notification.awaitingApproval`）
   - 会话标题查 `aggregates[sourceId]`（无标题/空白会话回落「未命名会话」，
     即 `session.untitled`）。
 - 发送：`window.dshChamber?.notifications?.notify(payload)`；桥未就绪静默跳过 +
-  console.warn（与 desktopSsh 桥探测同节奏，500ms 探测已有先例）。
-- `sourceFingerprint` 来自生产该份 runtime facts 的 ctx：local 固定为 `local`，远程
-  是主进程随 roster 投影的 64 位小写十六进制 opaque proof。App 只接受 proof 与当前
-  权威来源代相等的 producer report；renderer 不从可复用 registry 字段推导 proof。
+  console.warn（同 desktopSsh 桥探测节奏，500ms 先例）。
+- `sourceFingerprint` 来自生产该份 runtime facts 的 ctx：local 固定 `local`，远程是主
+  进程随 roster 投影的 64 位小写十六进制 opaque proof；App 只接受 proof 与当前权威来源代
+  相等的 report，renderer 不从 registry 字段推导 proof。
 
 **主进程**（`packages/desktop/main.ts` + 新增 `packages/desktop/notifications.ts`
 纯逻辑模块，electron-free 便于单测）：
 
-- 新 IPC：`dsh-chamber:notify`（`trustedIpc` invoke，payload 字段白名单校验
-  sourceId/sourceFingerprint/sessionId/kind/title/body/requireHidden，长度上限；sourceId 只接受精确
-  `local`、规范 `dsh-<raw-id>` / `gateway-<raw-id>`，以及迁移兼容的 legacy
-  `ssh-<raw-id>`；raw id 必须匹配 `INSTANCE_ID_PATTERN`，显式拒绝保留字 `local`、空值、
-  非法字符或超过 64 位；proof 还必须与主进程当前来源代精确匹配）；
+- 新 IPC：`dsh-chamber:notify`（`trustedIpc` invoke，payload 白名单校验
+  sourceId/sourceFingerprint/sessionId/kind/title/body/requireHidden + 长度上限；
+  sourceId 只接受精确 `local`、规范 `dsh-<raw-id>` / `gateway-<raw-id>` 及迁移兼容
+  legacy `ssh-<raw-id>`，raw id 必须匹配 `INSTANCE_ID_PATTERN`，显式拒绝保留字
+  `local`、空值、非法字符、超过 64 位；proof 还必须与主进程当前来源代精确匹配）；
 - 主进程以两组**仅保留 active roster** 的 Map 管理远程 proof 与 ownership token：
   删除即删项；renderer 来源身份（kind/host/user/sshPort/remotePort）编辑轮换
-  proof/generation，同 id 重建也不会复用旧 proof。`transport`、`serviceName`、
+  proof/generation，同 id 重建也不复用旧 proof；`transport`、`serviceName`、
   `remoteDshHome` 可触发各自 live/exec generation teardown，但不单独退役 N-ctx
-  来源 proof（05 §4/§7.6）；
-  历史 id 不留 tombstone，内存上界随当前远程实例数而非历史 churn 增长；
-- `maybeShowNativeNotification(payload)` 裁决链（设置权威在主进程内存状态，随
+  来源 proof（05 §4/§7.6）；历史 id 不留 tombstone，内存上界随当前远程实例数而非
+  历史 churn 增长；
+- `maybeShowNativeNotification(payload)` 裁决链（设置权威在主进程内存，随
   `dsh-chamber:settings-changed` 更新）：
   1. `kind === 'test'` 跳过设置门禁（设置页「发送测试通知」按钮）；
   2. `notifications.enabled === false` → 跳过；kind 对应事件开关关 → 跳过；
@@ -208,54 +198,49 @@ interface NotificationRequest {
   5. `Notification.isSupported()` → 否则跳过（记日志）；
   6. **去重 claim**：key =
      `JSON.stringify([sourceId, sourceFingerprint, sessionId, kind])`，5s TTL、
-     64 条硬上限，Map + 时间序列只清理过期前缀（防同一事件双路径/重放双发，
-     不再对每个新 key 全表扫描；claim 在裁决之后；'test' 不走 claim）；
+     64 条硬上限，Map + 时间序列只清理过期前缀（防同一事件双路径/重放双发，claim
+     在裁决之后；'test' 不走 claim）；
   7. **全局呈现预算**：所有实际呈现尝试（**含 `test`**）共享 5s/8 次滑窗硬上限
-     （1.6 次/秒，容纳适度多来源同时完成但不允许 banner 风暴）；
-     `BoundedActiveNotifications`（`activeNotifications`）把跨多个速率窗口仍不
-     close 的存活通知对象硬上界在 16 条。上界约束「存活引用/OS 监听器」数量而
-     非投递配额：**满员时不拒发**——macOS 横幅进入通知中心后不触发 Electron
-     close（通常只有用户手动清除才触发），若满员 fail-closed，16 条未清除的
-     存量横幅就会永久卡死通知流（2026-09 实机复现：第 16 条横幅后设置页
-     「发送测试通知」与事件通知全部返回 false，OS 侧无任何请求记录）。因此
-     满员时按插入序 loud 淘汰最旧一条（close 退役）并继续登记新通知——硬上界
-     不变、通知流不被存量横幅卡死，仅最旧（价值最低）条目的 click 随之失效。
-     该宿主预算不读取 session roster（控制面/主进程仍不成为 session consumer）；
+     （1.6 次/秒，容纳多来源同时完成但不允许 banner 风暴）；
+     `BoundedActiveNotifications`（`activeNotifications`）把跨多个速率窗口仍不 close 的
+     存活通知对象硬上界在 16 条。上界约束「存活引用/OS 监听器」数量而非投递配额：
+     **满员时不拒发**——macOS 横幅进通知中心后不触发 Electron close（通常只有用户手动
+     清除才触发），满员 fail-closed 会让 16 条存量横幅永久卡死通知流（2026-09 实机复现：
+     第 16 条后设置页「发送测试通知」与事件通知全部返回 false，OS 无任何请求记录）。故
+     满员按插入序 loud 淘汰最旧一条（close 退役）并继续登记——硬上界不变，仅最旧条目
+     click 失效。该宿主预算不读取 session roster（控制面/主进程仍不成为 session consumer）；
   8. `new Notification({title, body, silent: false, sound: 'Glass'(darwin)})`，
      `BoundedActiveNotifications` Map 持有 notification → 来源 token（既防 GC
      吞 click，又允许按退役来源关闭旧 banner）；IPC 的 `true` 只在原生
      `show` 事件后返回，异步 `failed`、同步 throw、show 前 close 或 5s 超时均返回
      `false` 并释放 claim，绝不把“调用了 void show()”冒充“已显示”；
-  9. click → 先复验创建 banner 时捕获的 ownership token，再聚焦/显示窗口（macOS
-     先 `app.focus`，同设计 14 恢复路径；退出在途
-     `quitRequested` 则终止恢复/重建；'test'
+  9. click → 先复验创建 banner 时捕获的 ownership token，再聚焦/显示窗口（macOS 先
+     `app.focus`，同设计 14 恢复路径；退出在途 `quitRequested` 则终止恢复/重建；'test'
      通知只聚焦不打开会话）+ 推送 `dsh-chamber:notification-open`
-     `{sourceId, sourceFingerprint, sessionId, deliveryId, attempt}`。来源删除或上述 renderer
-     来源身份编辑会同步 close 旧 banner，并丢弃该来源全部 pending/in-flight open；旧 click
-     closure 即使迟到也不能打开 replacement。
+     `{sourceId, sourceFingerprint, sessionId, deliveryId, attempt}`。来源删除或身份编辑
+     同步 close 旧 banner 并丢弃该来源全部 pending/in-flight open；旧 click closure 迟到也
+     不能打开 replacement。
 
 **点击打开会话**（renderer）：App 订阅 `window.dshChamber.notifications.onOpen` →
 `openSession(sourceId, sessionId)`（既有路径：挂载视图 → `ensureRemoteConnected` →
-`openInstanceSession`）。**窗口重建竞态**：主进程对 notification-open 使用 64 条
-硬上限 FIFO + reentrancy guard——renderer 注册监听后 invoke
-`dsh-chamber:notifications-ready` 置位（`did-start-loading` 与
-`render-process-gone` 时重置），就绪后才放行。一次 drain 只提交成功发送的前缀；
-  每条 push 携带稳定 `deliveryId`、逐次递增 `attempt` 与来源 proof；`webContents.send` 返回只把
-  记录移入 in-flight，**不算消费成功**。renderer 在完整 payload 已执行/入有界 roster
-  队列后调用 trusted `notification-open-ack(deliveryId,attempt)`；仅精确当前 attempt
-  释放容量。reload/crash/start-loading/closed 把全部未 ACK 前缀按 FIFO 放回队首，旧
-  document 的迟到 ACK 因 attempt 不匹配而无效；同步 send throw 只 rollback 当前项，
-  早先已发送项继续等各自 ACK。pending+in-flight 总计 64；满时 loud 淘汰最旧 pending，
-  若全为 in-flight 则 loud 拒绝新点击。
+`openInstanceSession`）。**窗口重建竞态**：主进程对 notification-open 用 64 条硬上限
+FIFO + reentrancy guard——renderer 注册监听后 invoke `dsh-chamber:notifications-ready`
+置位（`did-start-loading`/`render-process-gone` 重置），就绪后才放行。一次 drain 只提交
+成功发送的前缀；每条 push 携带稳定 `deliveryId`、逐次递增 `attempt` 与来源 proof；
+`webContents.send` 返回只把记录移入 in-flight，**不算消费成功**。renderer 在完整 payload
+已执行/入有界 roster 队列后调 trusted `notification-open-ack(deliveryId,attempt)`；仅精确
+当前 attempt 释放容量。reload/crash/start-loading/closed 把全部未 ACK 前缀按 FIFO 放回
+队首，旧 document 的迟到 ACK 因 attempt 不匹配而无效；同步 send throw 只 rollback 当前项，
+早先已发送项继续等各自 ACK。pending+in-flight 总计 64；满时 loud 淘汰最旧 pending，全为
+in-flight 则 loud 拒绝新点击。
 
 主进程 replay 之后还有 renderer 的**权威 roster + proof 二级门**：`local` 立即打开；规范
-`dsh-<id>` / `gateway-<id>`（及迁移兼容的 legacy `ssh-<id>`）远程来源在当前
-generation 首次 `instances_get` 成功前以完整
-`{sourceId,sourceFingerprint,sessionId,deliveryId,attempt}` 的 64 条有界 FIFO hold，
-roster settle 后按序 replay，目标缺失或 proof 已过期才逐项 loud 丢弃并 ACK。串行
-runner 捕获精确来源 token，旧代排队项不能在 same-id replacement 上执行。该门与深链
-的单槽 last-intent-wins 不同：每一次通知点击都必须保留。`deliveryId` 是 ACK/重放
-坐标，不建立 renderer 持久去重账本；精确 `attempt` 防止旧 document 的 ACK 误提交新发送。
+`dsh-<id>` / `gateway-<id>`（及 legacy `ssh-<id>`）远程来源在当前 generation 首次
+`instances_get` 成功前，以完整 `{sourceId,sourceFingerprint,sessionId,deliveryId,attempt}`
+的 64 条有界 FIFO hold，roster settle 后按序 replay，目标缺失或 proof 过期才逐项 loud 丢弃
+并 ACK；串行 runner 捕获精确来源 token，旧代排队项不能在 same-id replacement 上执行。与
+深链的单槽 last-intent-wins 不同，这里每一次点击都必须保留。`deliveryId` 是 ACK/重放坐标，
+不建立 renderer 持久去重账本；精确 `attempt` 防止旧 document 的 ACK 误提交新发送。
 
 **preload / 类型**（`preload.cts` + `renderer/src/global.d.ts`）：
 
@@ -291,9 +276,9 @@ interface ChamberSettings {
 }
 ```
 
-- `normalizeSettings` / `validatePatch` / `SETTINGS_KEYS` 扩展（嵌套对象校验，
-  未知键拒绝；`test/local-state/chamber-settings.test.ts` 补用例）；
-- 主进程在 `dsh-chamber:notify` 裁决时读取内存设置（同一次 settings-set 即生效）。
+- `normalizeSettings` / `validatePatch` / `SETTINGS_KEYS` 扩展（嵌套对象校验、未知键
+  拒绝；`test/local-state/chamber-settings.test.ts` 补用例）；主进程在
+  `dsh-chamber:notify` 裁决时读内存设置（同一次 settings-set 即生效）。
 
 **设置 UI**（`packages/dsh-chamber-client-ui-settings-bridge`）：
 
@@ -319,41 +304,33 @@ interface ChamberSettings {
 
 ### 3.5 覆盖边界与诚实性
 
-- **仅已挂载来源**可检测 ask/request（实时 mux 事实只在 ctx 内存在）；未挂载且
-  未预热的远程来源（预热槽 ≤3 + 用户打开过的 N-ctx 常驻之外）v1 不产生通知——
-  文档化限制，后续可选「unary 完成检测」（30s 延迟、无 pending 信息）扩展。
-- **断连/重连：撤回即播种，窗口内的完成/提问不补发**（设计取舍，与实现一致）：
-  通道撤回（shell 重连 / 重 boot，来源移除的 clear 由 liveServerIds/指纹检查挡在
-  前面）时，App 同时删除该来源的 `prevRunningRef` / `prevRuntimeFactsRef` /
-  `notifiedCompleteRef` 与蓝点账本（`App.tsx` report 撤回分支），恢复后的首份上报
-  `prev === undefined` → 只播种、不发通知事件。理由：wire 只有 `running` 位，无法
-  区分「窗口内完成」与「窗口内被手动停止」，保留记忆就会把后者误报成完成通知；
-  而窗口只持续到重连完成，窗口内的完成/提问状态在 UI（正在进行 / pending 徽标 /
-  Rows 呈现）中照常可见，通知这一层不补发即不撒谎。同内容重放（mux 回放重加
-  pending 等）仍不重复（边沿记忆 + 主进程 claim）。
-- 窗口内提醒职责仍由侧边栏蓝点/pending 徽标承担，通知只在「用户看不到窗口时
-  值得打扰」（hidden-only 默认）或用户显式选择 always。
+- **仅已挂载来源**可检测 ask/request（实时 mux 事实只在 ctx 内存在）；未挂载且未预热
+  的远程来源（预热槽 ≤3 + 用户打开过的 N-ctx 常驻之外）v1 不产生通知——文档化限制，
+  后续可选「unary 完成检测」（30s 延迟、无 pending 信息）扩展。
+- **断连/重连：撤回即播种，窗口内完成/提问不补发**（设计取舍，与实现一致）：通道撤回
+  （shell 重连/重 boot，来源移除的 clear 由 liveServerIds/指纹检查挡在前面）时，App 删除
+  该来源的 `prevRunningRef` / `prevRuntimeFactsRef` / `notifiedCompleteRef` 与蓝点
+  账本（`App.tsx` report 撤回分支），恢复后首份上报 `prev === undefined` → 只播种、不发通知事件。理由：wire 只有 `running` 位，
+  无法区分「窗口内完成」与「窗口内被手动停止」，保留
+  记忆会把后者误报成完成；窗口只持续到重连完成，窗口内状态在 UI（Rows / pending 徽标）
+  照常可见，通知不补发即不撒谎。同内容重放仍不重复（边沿记忆 + 主进程 claim）。
+- 窗口内提醒仍由侧边栏蓝点/pending 徽标承担；通知只在窗口不可见（hidden-only 默认）或
+  显式 always 时打扰。
 - **被裁决跳过的完成不补发**（设计取舍）：hidden-only + 窗口聚焦时主进程跳过
-  （focused-hidden-only），而 renderer 的 complete 去重记忆在边沿通过时已记账，
-  窗口稍后隐藏不会重新触发该完成——与「仅窗口隐藏时打扰」语义一致，侧边栏
-  蓝点仍覆盖，故不补发。
+  （focused-hidden-only），而 renderer 的 complete 去重记忆在边沿通过时已记账，窗口稍后
+  隐藏不会重新触发——与「仅窗口隐藏时打扰」语义一致，侧边栏蓝点仍覆盖。
 - **子代理运行期不视为完成**：父会话回合结束但 `runningSubagents > 0` 时抑制
-  complete 通知（与官方 Rows / 侧边栏呈现优先级一致；抑制在去重之前、不记账）。
-  补发语义依赖 vendor 武装 completed 的时序，两种分支均为文档化行为：vendor
-  **晚武装**（子代理全部结束后才武装）→ completed 边沿届时正常补发横幅；
-  vendor **早武装**（官方 manager 在父 idle 边沿武装的时序，子代理存活期间
-  completed 已为 true）→ 滤除的边沿不记账、子代理结束后无新 completed 边沿，
-  该完成不再有横幅补发（窗口内完成点与未读徽标不受影响，仍正常呈现）。
-  **未读徽标（§3.7）应用同一压制**——蓝点账本保持武装（与官方「completed 保持
-  武装、subagents 分支优先呈现」同构），徽标投影只计「App 账本武装且未被运行环
-  压制」的会话；vendor completed 兜底行与断连窗口的呈现边界见 §3.7 计数语义。
-- 通知失败（isSupported false / 系统权限拒绝）**静默降级不误报**：会话业务不受
-  影响，蓝点照常。
-- notification-open 的 `send()` 返回不等于消费成功：所有未 ACK 项跨 renderer
-  rebuild replay；稳定 deliveryId + attempt 只作为精确 ACK 坐标，来源 proof 隔离
-  same-id replacement，FIFO 不因并发 click 或窗口替换乱序。
-- renderer 的来源 ownership/producer 账本同样只保留 active Map 项，退役即删除；
-  单调 serial 只生成 token，不按历史 sourceId 留 generation tombstone。权威 delta 到达时
+  complete 通知（与官方 Rows / 侧边栏优先级一致；抑制在去重之前、不记账）。补发语义依赖
+  vendor 武装 completed 的时序，均为文档化行为：vendor **晚武装**（子代理全部结束后才武装）→ completed 边沿届时正常补发横幅；vendor **早武装**（官方 manager 在父 idle 边沿武装，子代理存活
+  期间 completed 已为 true）→ 滤除的边沿不记账、子代理结束后无新 completed 边沿，该完成不再有
+  横幅补发（窗口内完成点与未读徽标不受影响）。未读徽标（§3.7）应用同一压制——蓝点账本保持武装（与官方「completed 保持武装、subagents 分支优先呈现」同构），徽标投影只计「App 账本武装且未被运行环压制」的会话；呈现边界见
+  §3.7 计数语义。
+- 通知失败（isSupported false / 系统权限拒绝）**静默降级不误报**：会话业务不受影响，
+  蓝点照常。
+- notification-open 的可靠投递（`send()` 返回不等于消费成功、未 ACK replay、deliveryId/
+  attempt ACK 坐标、FIFO、proof 隔离 same-id replacement）见 §3.3。
+- renderer 来源 ownership/producer 账本同样只保留 active Map 项，退役即删除；单调 serial
+  只生成 token，不按历史 sourceId 留 tombstone；权威 delta 到达时
   `retireInstanceProducers` 同步撤销 runtime/snapshot token 与缓存，再异步 dispose shell。
 
 ### 3.6 安全与纪律
@@ -363,14 +340,14 @@ interface ChamberSettings {
 - 载荷全为非秘密投影（会话 id/标题/来源 label + 主进程签发的 opaque 生命周期
   proof——侧边栏同源数据，无隧道 URL、无 SSH 材料）；proof 不持久化，也不含可逆
   host/user/port 信息。
-- 控制面零改动；无新 host 插件；不消费宿主帧；设置不落实例 dsh home。
+- 纪律见 §3.1。
 
 ### 3.7 未读徽标：Dock/任务栏应用图标红气泡
 
-OpenChamber 参考实现：`packages/electron/main.mjs` 的 `desktop_tray_update`
-分支读 `args.dockBadgeCount` → `app.setBadgeCount(Math.max(0, Math.floor(count)))`
-（0 = 清除）；计数由 `packages/ui/src/hooks/useTraySync.ts` 计算——**有未读活动的
-会话数**（`unseenCount > 0`，`dockBadgeEnabled` 开关控制）。dsh-chamber 移植要点：
+OpenChamber 参考实现：`packages/electron/main.mjs` 的 `desktop_tray_update` 分支读
+`args.dockBadgeCount` → `app.setBadgeCount(Math.max(0, Math.floor(count)))`（0 = 清除），
+计数由 `packages/ui/src/hooks/useTraySync.ts` 算——**有未读活动的会话数**（`unseenCount > 0`，
+`dockBadgeEnabled` 控制）。dsh-chamber 移植要点：
 
 ```
 completedBySource（App 完成未读蓝点集，06 §4.1，只读复用——徽标与窗口内蓝点
@@ -384,73 +361,62 @@ completedBySource（App 完成未读蓝点集，06 §4.1，只读复用——徽
     → 平台门（app.setBadgeCount：darwin/linux；win32 overlay 门控）→ 呈现
 ```
 
-- **计数语义**：一个未读会话 = 1（与 OpenChamber「chats with unseen activity」
-  同款，不是通知条数）；pending（ask/request）不计数（蓝点面不覆盖，侧边栏
-  pending 徽标仍承担窗口内提醒）。
-- **呈现边界（既有窗口，徽标只计 App 账本）**：窗口内完成点 = App 账本 ∪
-  vendor `completed` 兜底行（`mergeRuntimeFacts`），徽标只投影 App 账本——①
-  vendor-only 完成的会话（首观察/撤回窗口内完成、从未被 App 观察到
-  running→idle 边沿）窗口内显示完成点而徽标恒为 0（App 未确认的完成不上 Dock，
-  诚实不臆测）；② 断连（来源 not-ready）窗口清空运行时事实而蓝点账本跨断连
-  保留（06 §4.2），徽标按保留账本继续计数、窗口内该来源无行可显示——两者均为
-  既有设计取舍的诚实边界，不是分叉缺陷。
-- **子代理压制（与窗口内蓝点同语义）**：父会话回合结束但后台子代理仍存活
-  （`runningSubagents > 0`，06 §4.5 后台模式）时，该会话已武装的完成蓝点**不计
-  入徽标**——窗口内蓝点此刻被侧边栏运行环压制、complete 横幅被同规过滤
-  （§3.2），徽标投影必须一致，否则「主分支闲置等子代理」期间 Dock 误亮红气泡；
-  压制信息取来源最新运行时事实行（App 的 badge effect 同时依赖
-  `completedBySource` 与 `runtimeFacts`：子代理计数归零时无需蓝点变化即可重推）。
-  子代理全部结束后 armed 蓝点正常浮现计入（与侧边栏「子 agent 全结束才显示
-  完成点」同刻）；父会话重新运行（蓝点解除）自然归零。**断连窗口**：来源
-  not-ready 即清运行时事实（压制数据随 generation 事实失效，06 §4.2）而蓝点
-  账本保留——若断连时子代理仍在远端运行，已武装蓝点短暂计入；重连后事实行
-  带回 `runningSubagents > 0` 自动回到 0，自愈窗口，接受。
-- **主进程裁决与状态**：`pendingBadgeCount`（最近一次 renderer 意图）+ 设置
-  权威裁决——`badgeEnabled` 关闭即强制清零，重新开启经 `reconcileBadgeCount`
-  恢复当前未读数（settings-set 后即时收敛，不等下一次推送）；quit 在途兜底
-  清零。renderer 始终推真实计数（开关裁决在主进程，与横幅通知同纪律）。
-- **平台门**（`badgePlatformGate`，诚实不假装）：darwin = Dock 红气泡；
-  linux = Unity launcher DBus API（GNOME 的 Dash to Dock 等消费同一 API 的
-  扩展同样可见；无消费方的桌面环境无可见效果——文档化平台限制，返回 true
-  表示已提交给 OS API 而非可见性保证）；win32 = v1 门控跳过 + loud 记一次
-  日志（`setOverlayIcon` 数字角标图属设计 23 排期；平台判定先于 API 可用性
-  判定，win32 上 setBadgeCount 恒为 undefined，专属原因不被泛化吞掉）。
-- **设置**：`notifications.badgeEnabled`（默认 **true**——被动指示，镜像蓝点
-  「始终开启」与 OpenChamber 默认开启；与横幅主开关 `enabled` 独立）。设置 UI
-  在客户端页「通知」组加一条始终可见的无边框开关行（主开关下方、子设置卡上方），
-  不增加边框层数；zh/en i18n。
-- **renderer 推送**：`[completedBySource, runtimeFacts]` effect 每次变化推当前
-  计数（蓝点武装/阅读解除/来源退役/子代理计数归零自然驱动徽标增减；通道-only
-  变化重推同值——主进程 setBadgeCount 幂等）；挂载时推 0 兜底（窗口重载后蓝点
-  复位为 {}，主进程遗留徽标必须清除）+ 桥迟到有界重试（复用
-  `LISTENER_READY_RETRY_*` 预算）。桥缺失（web/dev）静默跳过。
-- **校验**：`{ count }` 必须为有限数（结构化克隆可携带 NaN/Infinity，显式
-  拒绝）、非负、≤ 9999（超上限响亮拒绝不静默截断）；小数 `Math.floor` 归一
-  （OpenChamber 同款容忍）。返回 boolean = 是否实际应用；渲染端静默容忍
-  false（主进程已 loud 记平台/失败原因，重复推送不刷屏）。
-- **纪律**：控制面零改动、无新 host 插件、不消费宿主帧、不建通知历史/中心
-  （01 §4 移出域不变）；计数是瞬时投影，绝不持久化。
+- **计数语义**：一个未读会话 = 1（同 OpenChamber「chats with unseen activity」，非通知条数）；
+  pending（ask/request）不计数（窗口内提醒仍由侧边栏 pending 徽标承担）。
+- **呈现边界（既有窗口，徽标只计 App 账本）**：窗口内完成点 = App 账本 ∪ vendor
+  `completed` 兜底行（`mergeRuntimeFacts`），徽标只投影 App 账本——① vendor-only 完成的
+  会话（首观察/撤回窗口内完成、从未被 App 观察到 running→idle 边沿）窗口内有完成点而徽标
+  恒为 0（App 未确认的完成不上 Dock，诚实不臆测）；② 断连（来源 not-ready）清空运行时事实
+  而蓝点账本跨断连保留（06 §4.2），徽标按保留账本计数、窗口内该来源无行可显示——均为既有
+  取舍的诚实边界，非分叉缺陷。
+- **子代理压制（同窗口内蓝点语义，§3.2/§3.5）**：父会话回合结束但后台子代理仍存活
+  （`runningSubagents > 0`，06 §4.5 后台模式）时，该会话已武装的完成蓝点**不计入徽标**
+  ——徽标投影必须与窗口内蓝点一致，否则「主分支闲置等子代理」期间 Dock 误亮红气泡。
+  badge effect 同时依赖 `completedBySource` 与 `runtimeFacts`，压制取来源最新事实行，
+  子代理计数归零即重推；父会话重新运行（蓝点解除）自然归零。**断连窗口**：来源 not-ready
+  即清运行时事实（压制数据随 generation 事实失效，06 §4.2）而蓝点账本保留——断连期间已
+  武装蓝点短暂计入；重连后事实行带回 `runningSubagents > 0` 自动回到 0，自愈窗口，接受。
+- **主进程裁决与状态**：`pendingBadgeCount`（最近一次 renderer 意图）+ 设置权威裁决——
+  `badgeEnabled` 关闭即强制清零，重开经 `reconcileBadgeCount` 恢复当前未读数（settings-set
+  后即时收敛，不等下一次推送）；quit 在途兜底清零。renderer 始终推真实计数，开关裁决在
+  主进程（与横幅同纪律）。
+- **平台门**（`badgePlatformGate`，诚实不假装）：darwin = Dock 红气泡；linux = Unity launcher
+  DBus API（GNOME Dash to Dock 等消费同一 API 的扩展同样可见；无消费方时无可见效果——
+  文档化平台限制，返回 true 表示已提交给 OS API 而非可见性保证）；win32 = v1 门控跳过 + loud
+  记一次日志（`setOverlayIcon` 数字角标图属设计 23 排期；平台判定先于 API 可用性判定，win32
+  上 setBadgeCount 恒为 undefined，专属原因不被泛化吞掉）。
+- **设置**：`notifications.badgeEnabled`（默认 **true**——被动指示，镜像蓝点「始终开启」与
+  OpenChamber 默认；与横幅主开关 `enabled` 独立）。设置 UI 在客户端页「通知」组加一条始终
+  可见的无边框开关行（主开关下方、子设置卡上方），不增加边框层数；zh/en i18n。
+- **renderer 推送**：`[completedBySource, runtimeFacts]` effect 每次变化推当前计数（蓝点
+  武装/阅读解除/来源退役/子代理计数归零自然驱动；通道-only 变化重推同值——主进程
+  setBadgeCount 幂等）；挂载推 0 兜底（窗口重载后蓝点复位为 {}，主进程遗留徽标必须清除）+
+  桥迟到有界重试（复用 `LISTENER_READY_RETRY_*` 预算）。桥缺失（web/dev）静默跳过。
+- **校验**：`{ count }` 必须为有限数（结构化克隆可携带 NaN/Infinity，显式拒绝）、非负、
+  ≤ 9999（超上限响亮拒绝不静默截断）；小数 `Math.floor` 归一（OpenChamber 同款容忍）。返回
+  boolean = 是否实际应用；渲染端静默容忍 false（主进程已 loud 记平台/失败原因，重复推送不刷屏）。
+- **纪律**：同 §3.1；计数是瞬时投影，绝不持久化。
 
 ---
 
 ## 4. 验证门与实机验收
 
-- `test:desktop`：chamber-settings 新键 normalize/validate/corrupt 用例；
-  notifications 覆盖裁决链 enabled/kind/mode/requireHidden、claim/rate/active
-  hard cap、honest show/failed/timeout/hostile error、严格 `local | ssh-<raw-id>` 来源、
-  opaque proof 校验与 same-id replacement、active-only Map churn、notification-open
-  retain-until-ACK/FIFO/reload replay/旧 attempt 隔离；badge 的校验/裁决/平台门用例。
-- `test:renderer-shell`：`notification-edges` 纯函数单测（complete 边沿与
-  dedupe 去重、ask/request 值变化边沿（含直切）、首报播种、断连重连的重放不重复
-  ——注意**不是**「断连补发」，见 §3.5、同 tick 去重）；`badge-count` 投影用例。
+- `test:desktop`：chamber-settings 新键 normalize/validate/corrupt 用例；notifications
+  覆盖裁决链 enabled/kind/mode/requireHidden、claim/rate/active hard cap、honest
+  show/failed/timeout/hostile error、严格 `local | ssh-<raw-id>` 来源、opaque proof
+  校验与 same-id replacement、active-only Map churn、notification-open
+  retain-until-ACK/FIFO/reload replay/旧 attempt 隔离；badge 校验/裁决/平台门用例。
+- `test:renderer-shell`：`notification-edges` 纯函数单测（complete 边沿与 dedupe 去重、
+  ask/request 值变化边沿（含直切）、首报播种、断连重连的重放不重复——注意**不是**「断连
+  补发」，见 §3.5、同 tick 去重）；`badge-count` 投影用例。
 - `test:sidebar`：`projectRuntimeFacts` 的 subagent 行排除用例。
-- `test:settings-bridge`：通知设置纯函数（notifications-settings：缺省回落/
-  partial patch/未知键过滤/默认值镜像）+ 通知失败原因映射（notify-test-result：
-  成功不带原因、失败保留宿主/OS 原文、空串不制造假原因、reject 路径同样如实）
-  + 既有套件（入口解析不变——通知组不新增固定入口）。
+- `test:settings-bridge`：通知设置纯函数（notifications-settings：缺省回落/partial
+  patch/未知键过滤/默认值镜像）+ 通知失败原因映射（notify-test-result：成功不带原因、
+  失败保留宿主/OS 原文、空串不制造假原因、reject 路径同样如实）+ 既有套件（入口解析
+  不变——通知组不新增固定入口）。
 - `verify:i18n` 无 DRIFTED（settings-bridge 命名空间配对由
-  `typecheck:settings-bridge` 编译期强制）；`typecheck`；
-  `build:renderer`；`dist:desktop:mac` 打包态通知冒烟。
+  `typecheck:settings-bridge` 编译期强制）；`typecheck`；`build:renderer`；
+  `dist:desktop:mac` 打包态通知冒烟。
 - 最终 HEAD 的测试数字只见 `docs/progress/STATUS.md`。
 
 **实机验收（未完成）**：macOS 通知权限的打包态走查（拒绝态 → 设置页原因 +
@@ -461,39 +427,38 @@ completedBySource（App 完成未读蓝点集，06 §4.1，只读复用——徽
 ### 4.1 2026-09 修订：拒绝态的可见性与恢复入口（含被否决方案）
 
 现象：macOS 通知权限一旦落到 denied，系统**不再允许 App 弹出授权框**
-（`UNUserNotificationCenter.requestAuthorization` 只在 `.notDetermined` 弹），
-用户看到的是「测试通知发送失败」，而真正的原因（未授权/调度失败/超时）只进了
-sidecar 日志——设置页无从解释、也无恢复入口。
+（`UNUserNotificationCenter.requestAuthorization` 只在 `.notDetermined` 弹），用户
+看到「测试通知发送失败」，真正原因（未授权/调度失败/超时）只进 sidecar 日志——设置页
+无从解释、无恢复入口。
 
 契约（两个 flavor 共用，Swift 与 Electron 同一条 IPC 面）：
 
-- `dsh-chamber:notify` 的应答从 `boolean` 升级为 `{shown, error?}`：宿主/OS
-  原文（Swift 侧的 `swift-edge-notification-*` 码、Electron 侧的
-  `describeNativeNotificationFailure` 文案）与裁决侧抑制原因（设置/焦点/去重/
-  速率）都随应答返回；`error` 是**结果**而非拒绝（沿用 P-06 的 honest-show）。
-- `dsh-chamber:open-notification-settings`（新 invoke，无载荷）：主进程用**固定
-  常量** URL（`x-apple.systempreferences:com.apple.Notifications-Settings.extension`）
-  打开「系统设置 → 通知」，非 darwin 诚实回 false。renderer 不能传 URL —— 不把
+- `dsh-chamber:notify` 应答由 `boolean` 升级为 `{shown, error?}`：宿主/OS 原文
+  （Swift 的 `swift-edge-notification-*` 码、Electron 的
+  `describeNativeNotificationFailure` 文案）与裁决侧抑制原因（设置/焦点/去重/速率）都
+  随应答返回；`error` 是**结果**而非拒绝（沿用 P-06 的 honest-show）。
+- `dsh-chamber:open-notification-settings`（新 invoke，无载荷）：主进程用**固定常量**
+  URL（`x-apple.systempreferences:com.apple.Notifications-Settings.extension`）
+  打开「系统设置 → 通知」，非 darwin 诚实回 false。renderer 不能传 URL——不把
   `OPEN_RELEASE` 的白名单纪律扩成任意 URL 打开面。
-- 设置页失败态展示：原因原文（不翻译）+ 权限提示 + 「打开系统设置」按钮；
-  打开失败本身也 loud 展示。
+- 设置页失败态展示：原因原文（不翻译）+ 权限提示 + 「打开系统设置」按钮；打开失败也
+  loud 展示。
 
 **Rejected alternatives**（审议于 2026-09）：
 
-1. **只在 Swift 侧加日志/对话框**：Electron 侧同一失败面同样静默，会造出一条
-   未登记的双端差异（deviations S 行），且原因已在 sidecar 计算出、只在 IPC
-   边界被丢掉——修错层。
-2. **把授权申请提前到启动/进设置页**：违反 design 25 S3·V1 的既定双端时机
-   （首次真正投递才申请），且对已 denied 的账户零作用（macOS 不会二次弹框）。
-3. **新增任意 URL 打开通道（复用一个通用 openUrl）**：把 release 页的严格
-   白名单扩成通用打开面，安全面净增；固定常量 + 单用途通道是更小的能力面。
-4. **denied 时回退成「应用内提示/响铃」**：超出 design 19 的投影边界（本设计
-   不做通知中心/历史），且与 Electron 现状不等价；本轮只做「诚实 + 可恢复」。
+1. **只在 Swift 侧加日志/对话框**：Electron 侧同一失败面同样静默，会造出一条未登记的
+   双端差异（deviations S 行），且原因已在 sidecar 算出、只在 IPC 边界被丢掉——修错层。
+2. **把授权申请提前到启动/进设置页**：违反 design 25 S3·V1 的既定双端时机（首次真正
+   投递才申请），且对已 denied 的账户零作用（macOS 不会二次弹框）。
+3. **新增任意 URL 打开通道（复用一个通用 openUrl）**：把 release 页的严格白名单扩成
+   通用打开面，安全面净增；固定常量 + 单用途通道是更小的能力面。
+4. **denied 时回退成「应用内提示/响铃」**：超出 design 19 的投影边界（本设计不做通知
+   中心/历史），且与 Electron 现状不等价；本轮只做「诚实 + 可恢复」。
 
 ## 5. 关联
 
-- 设计 06 §4：运行时事实通道（检测事实源，本设计不改其契约）。
-- 设计 14：关窗/托盘/后台常驻（通知的主要使用场景——窗口不可见时才打扰）。
-- 设计 15：settings 壳平铺固定入口形态（通知并入 `__general`，入口数不变）。
-- 设计 16：`pendingIntents` 队列 + drain 模式（notification-open 重建竞态复用）。
+- 设计 06 §4：运行时事实通道（检测事实源，契约不改）。
+- 设计 14：关窗/托盘/后台常驻——通知只在窗口不可见时打扰。
+- 设计 15：settings 壳平铺入口形态（通知并入 `__general`，入口数不变）。
+- 设计 16：`pendingIntents` 队列 + drain（notification-open 重建竞态复用）。
 - 01 §4：通知中心为移出域；本设计仅桌面壳原生通知，控制面零改动。

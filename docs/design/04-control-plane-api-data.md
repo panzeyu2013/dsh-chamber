@@ -1,17 +1,14 @@
 # 04 · 控制面 API 与数据模型（v1 定稿）
 
-> **状态：现行（控制面 API 面与持久化数据模型，2026-09）**——控制面对外暴露的
-> 全部 API 面 = **管理 REST**（health / connections / host logs）+ **每实例反代**
-> （契约与 03 §3 共享，本文 §4 给 HTTP 形状）+ **前端服务**（静态 dist +
-> `__DSH_BOOT__` 启动图清单）；未完成门禁见 `docs/progress/STATUS.md`。
+> **状态：现行（控制面 API 面与持久化数据模型，2026-09）**——对外全部 API 面（管理
+> REST / 每实例反代 / 前端服务）见 §1；未完成门禁见 `docs/progress/STATUS.md`。
 > v2 薄壳 API 面（sessions / projects / project-sessions / interactions / events
-> SSE / config / external / runtime 透传族）**全部删除**——这些业务由 dsh
-> 前端 runtime 经每实例反代消费（03 §3），控制面不再持有。
-> **无认证边界**：认证/审计面（`/api/auth/*`、`/api/passkeys*`、
-> `/api/audit`）随模块整体移除——全部端点匿名可达（仅
-> loopback 监听，05 §8 安全不变量）。**该匿名边界只约束普通 loopback
-> 控制面**；gateway 部署的认证面/凭据/审计见 `17-server-side-gateway.md`。
-> 权威契约：`05-connection-manager.md` §7（控制面/桌面契约）；连接模型见
+> SSE / config / external / runtime 透传族）**全部删除**——业务由 dsh 前端 runtime
+> 经每实例反代消费（03 §3），控制面不再持有。**无认证边界**：认证/审计面
+> （`/api/auth/*`、`/api/passkeys*`、`/api/audit`）随模块整体移除——全部端点匿名
+> 可达（仅 loopback 监听，05 §8 安全不变量）；**该匿名边界仅约束普通 loopback
+> 控制面**，gateway 部署的认证面/凭据/审计见 `17-server-side-gateway.md`。权威契约
+> `05-connection-manager.md` §7（控制面/桌面契约）；连接模型见
 > `03-connections-proxy.md`。
 
 ---
@@ -20,18 +17,16 @@
 
 **范围**：控制面对外暴露的全部 API 面与持久化数据模型，分三块：
 
-1. **管理 REST**：`/health`、`/api/connections`（仅 local）、
-   `/api/host/logs`——桌面 chamber 插件（侧栏 / 管理视图）与 CLI 的消费面；
-2. **每实例反代**：`/api/i/<id>/*` 的 HTTP 形状（错误码 / 收敛），
-   契约定义在 03 §3；
+1. **管理 REST**：`/health`、`/api/connections`（仅 local）、`/api/host/logs`
+   ——桌面 chamber 插件（侧栏 / 管理视图）与 CLI 的消费面；
+2. **每实例反代**：`/api/i/<id>/*` 的 HTTP 形状（错误码 / 收敛），契约定义在 03 §3；
 3. **前端服务**：静态 dist + `__DSH_BOOT__` 启动图清单。
 
-**明确不在本文档范围**：宿主进程托管（02）、连接模型细节（03）、
-会话业务（dsh 前端 runtime，本仓不承载）、远程隧道与 systemd（desktop
-transport-manager（ssh provider），03 §2.2）。**认证机制（scrypt / Passkey / 限流 / JWT / 审计）
-随 v1 收敛整体移除**，不再有对应文档——**该移除限定匿名 loopback 控制面**；
-gateway 部署的认证（password/token/JWT cookie）、凭据存储（safeStorage）
-与审计见 17 §7/§12/§13.4。
+**不在本文档范围**：宿主进程托管（02）、连接模型细节（03）、会话业务（dsh 前端
+runtime，本仓不承载）、远程隧道与 systemd（desktop transport-manager（ssh provider），
+03 §2.2）。**认证机制（scrypt / Passkey / 限流 / JWT / 审计）随 v1 收敛整体移除**，
+不再有对应文档——**该移除限定匿名 loopback 控制面**；gateway 的认证
+（password/token/JWT cookie）、凭据存储（safeStorage）与审计见 17 §7/§12/§13.4。
 
 ---
 
@@ -39,27 +34,26 @@ gateway 部署的认证（password/token/JWT cookie）、凭据存储（safeStor
 
 ### D1 · 统一错误契约
 
-- 所有错误响应 `{ "error": string, "code"?: string }`；4xx 携带可展示的
-  安全消息；**5xx 永不回显上游细节**（host:port、URL、凭据、路径）；
-- 控制面码 snake_case 带域前缀（`connection_*` / `host_*` / `system_*`）；
-  dsh 业务码（kebab-case）只出现在反代透传面，原样透传不做重映射。
+- 所有错误响应 `{ "error": string, "code"?: string }`；4xx 携带可展示的安全消息；
+  **5xx 永不回显上游细节**（host:port、URL、凭据、路径）。
+- 控制面码 snake_case 带域前缀（`connection_*` / `host_*` / `system_*`）；dsh
+  业务码（kebab-case）只出现在反代透传面，原样透传不做重映射。
 
 ### D2 · v1 无认证边界
 
-- v1 收敛移除全部认证/审计面（`/api/auth/*`、`/api/passkeys*`、`/api/audit`
-  及 cookie/bearer 门禁）——管理面 `/api/*` 与反代面 `/api/i/*` 一律匿名；
-- 暴露面不变量：控制面 HTTP 仅监听 loopback（127.0.0.1）；API/upgrade 的
-  Host 必须是 loopback authority（拒绝 DNS rebinding），HTTP 在路由与
-  body/副作用前、WS 在 upgrade 转发前再执行同一 Origin 门禁（当前 Host
-  精确同源或显式 `corsOrigins` allowlist；其他回环端口与 `null` 均拒绝），
-  非法来源 403 `origin_forbidden`。
-  响应不带 CORS 头本身不是写操作防线。
+- v1 收敛移除全部认证/审计面（`/api/auth/*`、`/api/passkeys*`、`/api/audit` 及
+  cookie/bearer 门禁），管理面 `/api/*` 与反代面 `/api/i/*` 一律匿名；
+- 暴露面不变量：控制面 HTTP 仅监听 loopback（127.0.0.1）；API/upgrade 的 Host
+  必须是 loopback authority（拒绝 DNS rebinding），HTTP 在路由与 body/副作用前、
+  WS 在 upgrade 转发前再执行同一 Origin 门禁（当前 Host 精确同源或显式
+  `corsOrigins` allowlist；其他回环端口与 `null` 均拒绝），非法来源 403
+  `origin_forbidden`。响应不带 CORS 头本身不是写操作防线。
 
 ### D3 · 连接唯一：catalog 单行（local）
 
-- 数据权威 = `catalog.json` 单行（03 §2.1）；status / dshPort 为
-  PlaneHandle 投影（02 §3.5），控制面只持久化 label / accentColor；
-- `POST` 只接受 `kind:'local'`（幂等启动）；远程实例在桌面注册表，不进本面。
+- 数据权威 = `catalog.json` 单行（03 §2.1）；status / dshPort 为 PlaneHandle 投影
+  （02 §3.5），控制面只持久化 label / accentColor；`POST` 只接受 `kind:'local'`
+  （幂等启动），远程实例在桌面注册表，不进本面。
 
 ### D4 · 前端服务 = 静态 dist + `__DSH_BOOT__` 清单
 
@@ -67,16 +61,15 @@ gateway 部署的认证（password/token/JWT cookie）、凭据存储（safeStor
   （§5）；静态壳匿名加载。
 
 - renderer 的管理 REST/SSE 基址以当前 shell 的 `window.location.origin` 为权威；
-  preload 异步注入的 `controlPlaneUrl` 只作非页面 harness 回退。这样 dev 端口或
-  `DSH_CHAMBER_CP_PORT` 覆盖在首个 effect 即生效，不会先连固定 17500，也无需桥水合后
-  重建 EventSource。
-- 静态 gzip 先做协商再读文件：缓存命中直接返回压缩 Buffer，miss 只读一次后压缩并
-  入有界 cache；identity 仍只读一次，避免命中时无用分配原文件、miss 时重复读取。
+  preload 异步注入的 `controlPlaneUrl` 只作非页面 harness 回退——dev 端口或
+  `DSH_CHAMBER_CP_PORT` 覆盖首个 effect 即生效、不会先连固定 17500，也无需桥水合后重建 EventSource。
+- 静态 gzip 先协商再读文件：缓存命中直接返回压缩 Buffer，miss 只读一次后压缩并入
+  有界 cache；identity 仍只读一次，避免命中时无用分配原文件、miss 时重复读取。
 
 ### D5 · 反代 = 与 03 共享定义
 
-- 契约定义于 03 §3；本文 §4 只补 HTTP 形状（路径 / 方法 / 错误码），
-  两处引用同一语义，变更须同步（03 §4）。
+- 契约定义于 03 §3；本文 §4 只补 HTTP 形状（路径 / 方法 / 错误码），两处引用同一
+  语义，变更须同步（03 §4）。
 
 ---
 
@@ -108,19 +101,17 @@ gateway 部署的认证（password/token/JWT cookie）、凭据存储（safeStor
 
 ### 3.1.1 GET /api/host/health-events（SSE 状态推送）
 
-- `text/event-stream`；连接即发当前快照（`{ok:true, dsh:{...}}`，形状与
-  §3.1 相同），此后**每次机器状态迁移**推一帧；每 20s 发 `: keepalive`
-  注释帧；客户端断开即摘除监听（不泄漏）；写入失败（连接已死）同样触发
-  拆除。`write() === false` 仅表示 Node 已接收当前帧但下游发生背压：该客户端
-  暂停写入并按序保留至多 32 个后续状态帧，`drain` 后继续；背压期间不排队
-  keepalive，状态队列溢出则拆除该慢客户端。所有拆除路径都会取消状态订阅、
-  清空队列并移除待定 `drain` 监听——写错误/慢客户端永不逃逸进状态机或造成
-  无界内存增长（监听器隔离在 local-connection 扇出点）。
-  连接行/标签等低频字段不走此流（仍由 §3.2 轮询，30s 兜底）。
-- 动机（05 §2.3）：本地实例由控制面直接托管，状态本来就发生在主进程——
-  推送让 stopped → starting → ready 即时可见，渲染层不为本地状态轮询；
-  远程来源本就经桌面 `desktop_ssh_status_changed` 推送，两形态对称。
-- 帧错误容错：畸形帧由客户端忽略，下一帧快照覆盖。
+- `text/event-stream`；连接即发当前快照（`{ok:true, dsh:{...}}`，形状与 §3.1
+  相同），此后**每次机器状态迁移**推一帧；每 20s 发 `: keepalive` 注释帧；
+  客户端断开即摘除监听（不泄漏）；写入失败（连接已死）同样触发拆除。`write() === false` 表示下游背压：暂停写入、按序保留至多
+  32 个后续状态帧，`drain` 后继续；背压期间不排 keepalive，队列溢出拆除慢客户端。
+  所有拆除路径都取消状态订阅、清空队列并移除待定 `drain` 监听——写错误/慢客户端
+  永不逃逸进状态机或造成无界内存增长（监听器隔离在 local-connection 扇出点）；连接行/标签等低频字段不走此流（仍由 §3.2
+  轮询，30s 兜底）。
+- 动机（05 §2.3）：本地状态在控制面主进程产生，推送让
+  stopped → starting → ready 即时可见、渲染层不轮询；远程来源经桌面
+  `desktop_ssh_status_changed` 推送，两形态对称。畸形帧由客户端忽略，下一帧快照
+  覆盖。
 
 ### 3.2 /api/connections（仅 local）
 
@@ -134,15 +125,13 @@ gateway 部署的认证（password/token/JWT cookie）、凭据存储（safeStor
 | POST `/local/reclaim` | — | `{reclaimed:[pid], connection, spawned}`（清理并接管：清本状态目录自己的陈旧/孤儿写者记录后启动） | 409 `connection_busy`（仍有活写者，带 `detail`）；501 `not_implemented` |
 
 - **POST 幂等启动**：`stopped` → spawn（02 §3.1），同步返回 `starting` 态
-  （`spawned: true`），就绪经 GET 轮询；`starting/ready/degraded/…` →
-  返回既有状态（`spawned: false`），绝不重复 spawn；
-- `kind: 'local'` 以外的值一律 400——远程实例由桌面注册表管理
-  （03 §2.2），不在本 API 面；
-- DELETE = 优雅停止（02 §3.7），行保留（local 不可删）；
-- **POST 的 409 `connection_busy` 现在带结构化 `detail`**（2026-09-10，02 §3.4）：
-  `{writers:[{pid,reason,takeOverAvailable}], errors:[…], sticky:bool}`。连接页据此
+  （`spawned: true`），就绪经 GET 轮询；`starting/ready/degraded/…` → 返回既有状态
+  （`spawned: false`），绝不重复 spawn；`kind: 'local'` 以外的值一律 400（远程实例由
+  桌面注册表管理，03 §2.2）；DELETE = 优雅停止（02 §3.7），行保留（local 不可删）；
+- **POST 的 409 `connection_busy` 带结构化 `detail`**（2026-09-10，02 §3.4）：
+  `{writers:[{pid,reason,takeOverAvailable}], errors:[…], sticky:bool}`——连接页据此
   点名阻塞写者并在可接管时给出「清理并接管」；`sticky:true` 表示写入期终止失败
-  （扫描无法再证明），此时只提示重启应用。
+  （扫描无法再证明），只提示重启应用。
 
 ### 3.3 GET /api/host/logs
 
@@ -152,9 +141,9 @@ gateway 部署的认证（password/token/JWT cookie）、凭据存储（safeStor
 参数：?port=（缺省取 local 最近 spawn 记录）&limit=（默认 200，上限 1000）&offset=（跳过最新 N 行）
 ```
 
-- 纪律：日志永不含凭据/令牌（05 §8 安全不变量）；`stream` 与 `line` 原样，
-  时间戳服务端打；无托管记录/日志文件 → 404 `not_found`，参数非法 →
-  400 `invalid_argument`。
+- 纪律：日志永不含凭据/令牌（05 §8 安全不变量）；`stream` 与 `line` 原样、
+  时间戳服务端打；无托管记录/日志文件 → 404 `not_found`，参数非法 → 400
+  `invalid_argument`。
 
 ### 3.4 管理面错误码表
 
@@ -190,10 +179,9 @@ SSE：text/event-stream 响应直通（不缓冲、不解析、不重封装）
 
 ### 4.2 错误码（v1 无门禁）
 
-> v1 收敛移除登录会话 cookie 门禁：`/api/i/*` 对获准来源匿名可达（仅
-> loopback 监听 + HTTP/WS 来源门禁，03 §3.2 / 05 §8），不再有 401 认证
-> 失败面——**该边界限定匿名 loopback 控制面**；gateway 连接经注册
-> transport 的认证头注入（0..2 白名单）与 401 三态分类见 17 §7.3/§9.3。
+> `/api/i/*` 无登录会话 cookie 门禁、无 401 认证失败面（仅 loopback 监听 +
+> HTTP/WS 来源门禁，03 §3.2 / 05 §8）；**该边界限定匿名 loopback 控制面**，gateway
+> 连接经注册 transport 的认证头注入（0..2 白名单）与 401 三态分类见 17 §7.3/§9.3。
 
 | 情形 | 结果 |
 |---|---|
@@ -212,20 +200,18 @@ SSE：text/event-stream 响应直通（不缓冲、不解析、不重封装）
 `content-type`、`content-encoding`、`content-language`、`content-range`、
 `content-disposition`、`accept-ranges`、`cache-control`、`etag`、`expires`、
 `last-modified`、`location`、`vary`、`x-next-cursor`、`x-ratelimit-limit`、
-`x-ratelimit-remaining`、`x-ratelimit-reset`。其中 `location` 解析后仍指向同一
-上游 origin 的相对或绝对重定向会重写到实例反代前缀，`vary` 会与控制面的 CORS
-`Origin` 收敛合并；其余上游头不直通
-（WS upgrade 101 所需头除外）。该列表与 03 §3.4 及
+`x-ratelimit-remaining`、`x-ratelimit-reset`。`location` 解析后仍指向同一上游
+origin 的相对或绝对重定向重写到实例反代前缀；`vary` 与控制面 CORS `Origin` 收敛
+合并；其余上游头不直通（WS upgrade 101 所需头除外）。该列表与 03 §3.4 及
 `proxy-forward.ts` 的 `RESPONSE_HEADER_WHITELIST` 同步维护。
 
 ---
 
 ## 5. 前端服务契约
 
-- **静态服务**：控制面在 `/` 服务 dsh 官方前端构建产物（`dist/`）——
+- **静态服务**：控制面在 `/` 匿名服务 dsh 官方前端构建产物（`dist/`）——
   index.html、assets（`/assets/chamber-*.js` 等）、`/manifest.json`；
-  匿名加载（v1 无认证面）；SPA 回退（未知路径 → index.html，缺资产仍
-  404）。
+  SPA 回退（未知路径 → index.html，缺资产仍 404）。
 - **`__DSH_BOOT__` 启动图清单**：构建链产出 `dist/manifest.json`
   （renderer 的 gen-boot-manifest.mjs），控制面在响应 index.html 时注入
   `window.__DSH_BOOT__`（与 dsh-client-modules 的 parseBootManifest 契约
@@ -251,23 +237,19 @@ interface WebBootGraph {
 }
 ```
 
-  - parseBootManifest 消费该 wire 并派生两个视图：`modules[]`（模块表
-    预取视图）与 `plugins[]`（entry 组合视图）；chamber chrome 与 dsh
-    原生 ui-* 插件的组合图在宿主侧（v4 单 entry：`@dsh-chamber/app`
-    chamber composite bundle，自注册进 `window.__ModuleLoader__`）；
-    **每实例宿主图额外 entry 另取（设计 09）**：boot 时前端经反代
-    （`/api/i/<id>`）调 chamber host 包 `@dsh-chamber/dsh-chamber-seed-client-graph`
-    的 Remote `clientGraph/graph` 取该实例宿主组合的客户端插件 boot 图，按
-    `CHAMBER_COVERED_IDS` 去重并预加载剩余 bundle、经 boot.ts `extraRows`
-    seam 合并进 boot rows——机制与构建链详见 05 §6 / 设计 09 §3.5；
-  - **bundle URL 约定**：vite 产物 `/assets/chamber-<hash>.js`（**裸 URL，
-    无 `?rev=` 查询串**：chamber entry 的 chunk 图以裸引用共享提升出的工具，
-    带查询串会让浏览器把 boot 期加载与 chunk 图引用当成两个模块记录——加载延迟
-    chunk 时二次执行入口 bundle、延迟 ui-* 族不注册；文件名哈希已是不可变标记，
-    照抄旧 `?rev=` 写法会复现该故障。gen-boot-manifest 按
-    `assets/chamber-*.js` 模式定位产物；vendor
-    自身的默认路径 `/plugins/<id>/client.js` 仅为参考——wire 只要求
-    id/url/rev 为字符串）。
+  - parseBootManifest 消费该 wire 并派生 `modules[]`（模块表预取视图）与
+    `plugins[]`（entry 组合视图）；chamber chrome 与 dsh 原生 ui-* 的组合图在宿主侧
+    （v4 单 entry：`@dsh-chamber/app` composite bundle，自注册进
+    `window.__ModuleLoader__`）。**每实例宿主图额外 entry 另取（设计 09）**：boot 时
+    前端经反代（`/api/i/<id>`）调 chamber host 包
+    `@dsh-chamber/dsh-chamber-seed-client-graph` 的 Remote `clientGraph/graph`
+    取该实例宿主组合的客户端插件 boot 图，按 `CHAMBER_COVERED_IDS` 去重、预加载剩余
+    bundle、经 boot.ts `extraRows` seam 合并进 boot rows（详见 05 §6 / 设计 09 §3.5）；
+  - **bundle URL 约定**：vite 产物 `/assets/chamber-<hash>.js`（**裸 URL，无
+    `?rev=` 查询串**：查询串会造成双模块记录——加载延迟 chunk 时二次执行入口
+    bundle、延迟 ui-* 族不注册；文件名哈希已是不可变标记，照抄旧 `?rev=` 写法会复现该故障。gen-boot-manifest 按
+    `assets/chamber-*.js` 模式定位产物；vendor 默认路径 `/plugins/<id>/client.js`
+    仅为参考——wire 只要求 id/url/rev 为字符串）。
 - **N-ctx**：每个实例一个 AppWebEntry（05 §4）；实例流量全部经
   `/api/i/<id>/*`（03 §3）；侧栏会话行点击 → 经 `AppWebEntry.runtimeCtx`
   分发打开动作（05 §2/§4）。
@@ -283,19 +265,18 @@ interface WebBootGraph {
 | JSON 每进程一文件 | `…/managed-dsh/<pid>.json` | `{pid, ownerPid, ownerInstanceId, port, binary, profile:'web', source, startedAt}` | 控制面（02 §3.3） |
 
 - **原子写协议**（catalog.json）：同步 write-through + 随机 O_EXCL temp + file fsync +
-  rename + parent fsync；失败向调用者抛出。若 rename 后 parent fsync 报错，稳定 exact
-  readback 证明目标 revision 已在线时内存保留该 revision（但错误仍返回，durability
-  unknown）；未在线发布才回滚。损坏 → 回退备份并进入显式 recovery 态，主文件缺失
-  且 backup 损坏也 fail-loud，绝不覆盖证据或冒充空行（03 §2.1 同款）。
-- **owner 边界**：JsonStore 的 revision/rename 不是跨进程 CAS；本进程 mutation 串行，
-  多 control-plane 同 stateDir 的 metadata 并发仍按 03 §2.1 的 last-writer-wins 残差，
-  不下沉不可靠 stale pidfile lock 到通用 store。
+  rename + parent fsync，失败向调用者抛出。rename 后 parent fsync 报错时，exact
+  readback 证明目标 revision 已在线则内存保留（错误仍返回，durability
+  unknown）；未在线发布才回滚。损坏 → 回退备份并进入显式 recovery 态；主文件缺失且 backup 损坏
+  也 fail-loud，绝不覆盖证据或冒充空行（03 §2.1 同款）。
+- **owner 边界**：JsonStore 的 revision/rename 非跨进程 CAS；本进程 mutation 串行，
+  多 control-plane 同 stateDir 的 metadata 并发仍按 03 §2.1 的 last-writer-wins 残差
+  （不下沉 stale pidfile lock 到通用 store）。
 - **v2/v1 存储删除项**：`project-catalog.json`、`connection-profiles.json`、
-  `project-session-bindings.json`、`jwt-secret`、`ui-passkeys.json` 及 SQLite
-  的 sessions / interactions / goals / scheduled_tasks / session_folders /
-  notes / notifications / push_subscriptions / tunnels / github_accounts /
-  audit_log 表——随薄壳面与认证/审计面（v1 收敛）整体退役
-  （01 §4/§5），不再读写。
+  `project-session-bindings.json`、`jwt-secret`、`ui-passkeys.json` 及 SQLite 的
+  sessions / interactions / goals / scheduled_tasks / session_folders / notes /
+  notifications / push_subscriptions / tunnels / github_accounts / audit_log 表——
+  随薄壳面与认证/审计面（v1 收敛）整体退役（01 §4/§5），不再读写。
 
 ---
 
@@ -305,11 +286,10 @@ interface WebBootGraph {
 
 ### 7.1 反代响应头白名单演进
 
-上游若引入新必需响应头，需同步 03 §3.4 与
-本文 §4.3（一处契约两处表述，变更必须两处一致）。
+上游若引入新必需响应头，需同步 03 §3.4 与本文 §4.3（一处契约两处表述，变更必须
+两处一致）。
 
 ### 7.2 `__DSH_BOOT__` 与 dsh 版本漂移
 
-manifest 形状随 dsh parseBootManifest
-契约（vendor 源码为准）维护；构建链变更见 05 §6（pnpm + 符号链接 +
-`assets/chamber-*.js` 产物）。
+manifest 形状随 dsh parseBootManifest 契约（vendor 源码为准）维护；构建链变更见
+05 §6（pnpm + 符号链接 + `assets/chamber-*.js` 产物）。

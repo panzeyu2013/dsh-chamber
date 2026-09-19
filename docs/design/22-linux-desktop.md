@@ -13,8 +13,7 @@
    （Name/Comment/Icon/StartupWMClass）。
 2. **Linux 自动更新 = 解锁，但按「运行形态」门控**：electron-updater 的 AppImage updater 靠**替换正在运行
    的 .AppImage 文件**完成安装，故只有「打包 且 `$APPIMAGE` 为绝对路径、常规文件、父目录可写」时可用；
-   dev / 解包目录 / deb 等形态保持历史 inert 状态与同一 blocked 文案，settings「检查更新」按钮按既有字符串门
-   自动禁用，无 UX 回退（§2）。
+   dev / 解包目录 / deb 等形态保持历史 inert 状态与同一 blocked 文案，无 UX 回退（按钮门控见 §2）。
 3. **CI 构建基线 = ubuntu-22.04**（glibc 2.35）：AppImage 的 glibc 下限 = 构建机，在 24.04 构建会排除 22.04
    时代桌面；与本仓库测试机基线一致，形成「构建 → 实机验证」闭环（§4）。
 4. Windows 支持（design 23，首版未出）与 Linux 相互独立：Linux 走完整 POSIX 变更路径，不得复制 win32 只读门

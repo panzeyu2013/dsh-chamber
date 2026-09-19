@@ -1,13 +1,10 @@
 # 15 · Chamber 设置呈现（settings 壳固定入口）
 
-> **状态：现行（settings 壳平铺固定入口，v1 范围）**——chamber 全局设置落 settings 壳的固定入口区，
-> 与实例配置平面严格分离；**统一 Chamber 设置页 / 两级分组导航推迟（不排期）**；未完成门禁见
-> `docs/progress/STATUS.md`。
-> 范围契约：固定入口只有 `__connections`（连接）与 `__general`（**客户端 / Desktop**——命名避免与官方
-> `general.nav`（通用设置 / General）同名；含设计 11 的更新块、设计 14 的运行设置、通知与会话待办区
-> 控制组）；**移除 B 项**（插件管理提级、新插件包、OpenChamber 式完整子分区）。
-> 本文是 chamber 设置的**呈现面与权威边界**契约（数据权威见 D3）；设计 14 是睡眠/运行设置的来源，
-> 设计 11 是更新块，设计 19 是通知组，设计 06 §8 是会话待办区。
+> **状态：现行（settings 壳平铺固定入口，v1 范围）**——chamber 全局设置与实例配置平面严格分离；
+> **统一 Chamber 设置页 / 两级分组导航推迟（不排期）**；未完成门禁见 `docs/progress/STATUS.md`。
+> 范围契约：固定入口只有 `__connections`（连接）与 `__general`（**客户端 / Desktop**；命名理据见 D1；含
+> 设计 11 的更新块、设计 14 的运行设置、通知与会话待办区控制组）；**移除 B 项**见 D2。
+> 本文是 chamber 设置的**呈现面与权威边界**契约（数据权威见 D3；相关面来源见 §5）。
 
 ## 1. 壳形态（现状契约）
 
@@ -20,9 +17,9 @@
 - chamber 全局组件内嵌渲染（不依赖选中服务器连接）。
 - **每来源「设置组装诊断」块已退役**：设置面不再为选中来源二次装载插件，故不存在需要报告的
   「未激活/未落座/能力降级」；仍然可见的是连接页该来源卡片上的「客户端插件状态」（`pluginDiagnostic`，来自
-  boot/extra-row 诊断通道）。退役原因（契约依据）：该报告的 subject 是单个来源、owner 是壳——既不属于该来源
-  账本里的 `settings.section` 贡献（第一组的定义 = 来源自己贡献了什么），也不是与服务器无关的 chamber 全局状态
-  （第二组的契约），放进任何一组都会破坏该组语义。
+  boot/extra-row 诊断通道）。退役依据：该报告的 subject 是单个来源、owner 是壳——既不是该来源账本里的
+  `settings.section` 贡献（第一组 = 来源自己贡献了什么），也不是与服务器无关的 chamber 全局状态（第二组契约），
+  放进任何一组都破坏该组语义。
 - 插件管理在连接页内（`PluginSyncModal`/`PluginAddView`，经 `desktop_ssh_plugin_*` IPC）——**不搬家**。
 
 ## 2. 决策与契约（平铺形态）
@@ -30,8 +27,8 @@
 ### D1 固定入口平铺扩展
 
 - divider 下固定入口为 2 个：`__connections` / `__general`（**客户端 / Desktop**，`clientNav`；命名与官方
-  分节 `general.nav` 区分——同名会让两个不同的面在 nav 上不可分辨。本页是 chamber 全局的桌面客户端设置：
-  关闭行为 / 自启 / 保持唤醒 / 退出确认 / 更新。nav 单元与页面自身 `<h2>` 共用这一个键，不出现
+  分节 `general.nav` 区分——同名会让两个不同的面在 nav 上不可分辨。本页是 chamber 全局的桌面客户端设置，
+  分组见下。nav 单元与页面自身 `<h2>` 共用这一个键，不出现
   「导航一个名字、页面另一个名字」）。`FIXED_SECTION_IDS` 是机器可读的权威（`nav-active.ts`，`nav-active.test.ts` 钉死）。
   **更新（设计 11）不再单列入口**——并入 `__general` 视图底部（`UpdateSection` 控制组：当前版本 +
   「检查更新」按钮 + 低调状态行，见设计 11 §3.2）。
@@ -73,8 +70,8 @@
     `.runtimeProgressBarIndeterminate`；6px 轨道仍是 `--dsw-alias-border-l2`）同取该蓝。分段控件**几何保持 chamber 档**
     （26px/12px），只换色；③ 面板头取官方 `SettingsRoot .header` 的**对齐关键字**（`align-items:flex-start`）与
     54px 盒高下限，但**纵向内距保留 chamber 的 `12px 14px 10px`**（官方的 `20px 14px 8px 10px` 是围绕其 26px
-    内容行写死的；照抄会让 28px 关闭控件的内容盒被 `min-height` 撑高）。这是对齐关键字而非光学位置，
-    完全复刻官方光学位置需要官方那颗 26px 关闭控件；④ 服务器下拉**密度用 chamber、圆角背景参考官方**
+    内容行写死的；照抄会让 28px 关闭控件的内容盒被 `min-height` 撑高；对齐关键字而非光学位置，完全复刻需
+    官方那颗 26px 关闭控件）；④ 服务器下拉**密度用 chamber、圆角背景参考官方**
     （`padding:7px 10px` + 13px 字号，行框显式 18px；item r10、列表 r20、`bg-layer-3` + elevation）。
   - 读主进程 `chamber-settings.json`（`dsh-chamber:settings-get/set` IPC + 变更 push）。
 - 「关于」页 v1 不做。
@@ -97,8 +94,8 @@
 
 ### D4 会话待办区设置组（settings 契约）
 
-「客户端」（`__general`）在「运行」与「通知」组之间是「会话待办区」组（sidebar todo area，交互与派生契约见
-设计 06 §8）：主开关（无边框披露行）+ 展开后三类事件开关（会话完成时 / 代理提问时 / 审批请求时——与「通知」组
+「客户端」（`__general`）在「运行」与「通知」组之间是「会话待办区」组（D1；交互与派生契约见设计 06 §8）：
+主开关（无边框披露行）+ 展开后三类事件开关（会话完成时 / 代理提问时 / 审批请求时——与「通知」组
 事件开关共用同一组文案与事件行视觉）。两类事件开关**措辞统一**（不用「已完成未读的会话 / 等待你回答的会话 /
 等待你批准的会话」等长句）；待办区主开关与未读角标开关下不渲染说明行（开关标题自明）；事件行勾选框紧跟所属
 选项文字、宽布局下列间以竖分隔线分割（窄窗降列时无竖线）。对应 chamber 全局设置嵌套块：
@@ -124,11 +121,10 @@ ChamberSettings.sessionTodo: {
 
 ## 3. 与既有设计的衔接
 
-- 设计 11（更新）：更新块并入 `__general`；「检查更新」按钮经 `dsh-chamber:update-check` IPC（主进程同一条静默
+- 设计 11（更新）：入口并入见 D1；「检查更新」按钮经 `dsh-chamber:update-check` IPC（主进程同一条静默
   检查路径）。
 - 设计 09 §5（设置面装载边界）：完整桥接修订后设置面**不装载插件**，组装诊断块随之退役；**这不是「插件提级」**
   （§D2 仍推迟不排期），提级指把官方 `settings.section` 的 plugins 段抬成独立入口。
-- 设计 14（睡眠/后台常驻）：全部运行设置落 `__general`。
 - 设计 05 §5：连接设置插件（`settings.section` id `connections`）注册不变；chamber 固定入口是壳层结构，
   不新增官方 `settings.section` 注册。
 - 设计 13（插件管理）：IPC 面不动，视图维持现状。
@@ -141,14 +137,12 @@ ChamberSettings.sessionTodo: {
   （协调器真值表：blank 或缺席才活跃、有序取第一个未完成、完成集推进）/`update-gate`（检查按钮相位门）
   /会话待办区与通知设置纯函数）；`test:connections`（plugin-diff 等）；`typecheck:settings-bridge`、
   `typecheck:connections`、`build:renderer`。（源码文本锁已按既有裁决不在正式测试面内。）
-- **推迟（不排期）**：两级分组导航、插件提级、关于页。
 - 验证清单：两个固定入口渲染、chamber 入口在服务器未连接时可用、设置读写经主进程 store、与官方段互不污染、
   选中来源自己的分节台账渲染（第三方分节与官方分节同形）、i18n 无 DRIFTED。
 
 ## 5. 关联
 
-- 设计 14（睡眠/后台常驻）：`__general` 的内容来源；
-- 设计 11（自动更新）：更新块并入 `__general`；
+- 设计 14（睡眠/后台常驻，`__general` 内容来源）、设计 11（自动更新，更新块并入 `__general`）；
 - 设计 06 §8（会话待办区交互/派生契约）、设计 19 §3.4（通知组并入通用的先例：事件类别 vocabulary 复用
   complete/ask/request）；
 - `docs/progress/STATUS.md`（进度唯一记录）。

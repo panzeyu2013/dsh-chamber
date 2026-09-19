@@ -1,28 +1,22 @@
 # 02 · 宿主管理（web profile）：本地 dsh 宿主进程的托管与部署形态
 
-> **状态：现行（本地实例托管与部署形态，2026-12）**——控制面以 dsh 内置 web
-> profile 拉起本地宿主，并独占其生命周期（spawn → 就绪 → 健康 → 重启 → 优雅停止 →
+> **状态：现行（本地实例托管与部署形态，2026-12）**——控制面以 dsh 内置 web profile
+> 拉起本地宿主，并独占其生命周期（spawn → 就绪 → 健康 → 重启 → 优雅停止 →
 > 孤儿回收）；未完成门禁见 `docs/progress/STATUS.md`。
 >
 > - **profile 形态**：`dsh --profile web --host 127.0.0.1
->   --port <port> --trusted-host 127.0.0.1:<port>`——不生成/维护自建 profile
->   目录、业务 patch stack 或 glue 插件；端口固定（非随机），占用时按 port+1 有界
->   退让。唯一例外是设计 08/09/20/24 的**宿主包 loader overlay**：它只
->   把 chamber 自带的 host 包挂入官方 web profile（四个：client-graph /
->   git-worktree / archive-cleanup / open-in，见 §2.6），不接管
->   宿主组装权威（§2.6）。
-> - **契约范围**：spawn 生命周期、端口占用重试、pid 记录
->   （ownerPid/ownerInstanceId/port/binary/profile/source/startedAt）、
->   instance-id 仲裁、readiness（TCP + 统一身份探针）、健康七态状态机、
->   reaper、host-logs 滚动日志、systemd 单元（部署形态，远程实例参考）、优雅停止。
-> - **已删除的旧体系（不得回流）**：slim profile 生成与维护、glue 插件、旧业务
->   补丁层 HMR 分类与 `POST /api/config/reload`、external 接管 / claim、部署五形态
->   （收为桌面一体一形态）、README 快速连接承诺。
+>   --port <port> --trusted-host 127.0.0.1:<port>`——不生成/维护自建 profile 目录、业务 patch
+>   stack 或 glue 插件；端口固定（非随机），占用时按 port+1 有界退让。唯一例外是设计 08/09/20/24
+>   的**宿主包 loader overlay**（见 §2.6），不接管宿主组装权威。
+> - **契约范围**：spawn 生命周期、端口占用重试、pid 记录、instance-id 仲裁、readiness、健康七态状态机、
+>   reaper、host-logs 滚动日志、systemd 单元、优雅停止（字段见 §3.3）。
+> - **已删除的旧体系（不得回流）**：slim profile 生成与维护、glue 插件、旧业务补丁层
+>   HMR 分类与 `POST /api/config/reload`、external 接管 / claim、部署五形态（收为桌面
+>   一体一形态）、README 快速连接承诺。
 >
 > 权威契约：`05-connection-manager.md`（架构 / PlaneHandle）；管理面端点见
-> `04-control-plane-api-data.md`；连接模型见 `03-connections-proxy.md`。
-> 服务端部署形态（gateway 单元 / http 直连）与远程连接模型 v2 见
-> `17-server-side-gateway.md`。
+> `04-control-plane-api-data.md`；连接模型见 `03-connections-proxy.md`；服务端部署形态
+> （gateway 单元 / http 直连）与远程连接模型 v2 见 `17-server-side-gateway.md`。
 
 ---
 
@@ -31,39 +25,34 @@
 ### 1.1 目标
 
 1. 控制面在同机以 **dsh 内置 web profile** 拉起本地宿主（`--profile web
-   --host 127.0.0.1 --port <port> --trusted-host 127.0.0.1:<port>`），该实例
-   即连接模型的 `local` 连接（connectionId `'local'`，03 §2.1）；
+   --host 127.0.0.1 --port <port> --trusted-host 127.0.0.1:<port>`），该实例即连接模型的
+   `local` 连接（connectionId `'local'`，03 §2.1）；
 2. 宿主进程生命周期完全由控制面管辖：spawn（detached）→ 就绪探测 → 健康
    监控 → 失败重启（带背压）→ 优雅关闭；控制面崩溃后遗留的孤儿宿主可被
    安全回收；
-3. 用户的宿主配置/设置变更由 dsh 原生机制自行处理（web profile 自带配置
-   平面），控制面不介入；chamber 自带 host 包的 loader 附着仅走 §2.6 的
-   独立、确定性 seed，不成为配置权威；
-4. 明确部署形态（桌面一体）与 systemd 单元（远程实例的部署参考形态）。
+3. 用户的宿主配置/设置变更由 dsh 原生机制处理（web profile 自带配置平面），控制面不
+   介入；chamber host 包的 loader 附着仅走 §2.6 的独立、确定性 seed，不成为配置权威；
+4. 明确部署形态（桌面一体）与 systemd 单元（远程实例部署参考形态）。
 
 ### 1.2 范围
 
-- **in**：local 实例的托管（spawn / 就绪 / 健康 / 重启 / 回收 / 仲裁）、
-  pid 记录、host-logs 滚动日志、systemd 单元、优雅停止；chamber 自带 host
-  包的确定性分发与 loader overlay（§2.6）。
-- **out**：会话/目标/终端等宿主能力（宿主原生，前端经每实例反代消费，
-  03 §3）；dsh 连接协议（wire 以 vendor 源码为权威，控制面仅用统一身份握手/
-  健康探活面，见 §3.2/§3.5）；认证/审计
-  （匿名 loopback 控制面随 v1 收敛整体移除；gateway 部署的认证/凭据/审计
-  见 17 §7/§13.4）；远程实例的隧道与 systemd 编排（03 §2.2：桌面
-  主进程 transport-manager（ssh provider）+ 注册表）。
+- **in**：local 实例托管（spawn / 就绪 / 健康 / 重启 / 回收 / 仲裁）、pid 记录、host-logs
+  滚动日志、systemd 单元、优雅停止；chamber host 包的确定性分发与 loader overlay（§2.6）。
+- **out**：会话/目标/终端等宿主能力（宿主原生，前端经每实例反代消费，03 §3）；dsh 连接
+  协议（wire 以 vendor 源码为权威，控制面仅用统一身份握手/健康探活面，见 §3.2/§3.5）；
+  认证/审计（匿名 loopback 控制面随 v1 收敛整体移除；gateway 部署的认证/凭据/审计见
+  17 §7/§13.4）；远程实例的隧道与 systemd 编排（03 §2.2：桌面主进程
+  transport-manager（ssh provider）+ 注册表）。
 
 ### 1.3 原则
 
-- **复用而非重造**：web profile 是 dsh 官方装配（base + web-app），控制面
-  零代码复用其 webserver、`/api` 桥与浏览器信任栅栏；控制面只编排：解析
-  binary、spawn、读输出、端口重试、探活、计数、重启、回收。
-- **只杀自管进程**：reaper 的三重校验（记录在案 / 身份重验 / owner 已死）
-  是安全底线。
-- **诚实失败**：端口占用、启动超时、探测失败一律显式报错（fail-loud），
-  绝不静默降级。
-- **只附着，不下沉业务**：控制面可复制 chamber 自带 host 包并挂 loader row，
-  但不解析其业务数据，也不执行 Git；Git worktree 事实与命令始终属于实例内
+- **复用而非重造**：web profile 是 dsh 官方装配（base + web-app），控制面零代码复用其 webserver、
+  `/api` 桥与浏览器信任栅栏；控制面只编排：解析 binary、spawn、读输出、端口重试、探活、计数、
+  重启、回收。
+- **只杀自管进程**：reaper 的三重校验（记录在案 / 身份重验 / owner 已死）是安全底线。
+- **诚实失败**：端口占用、启动超时、探测失败一律显式报错（fail-loud），绝不静默降级。
+- **只附着，不下沉业务**：控制面可复制 chamber 自带 host 包并挂 loader row，但不解析其
+  业务数据，也不执行 Git；Git worktree 事实与命令始终属于实例内
   `@dsh-chamber/dsh-chamber-seed-git-worktree`（设计 08）。
 
 ---
@@ -77,11 +66,10 @@
 | 自建 slim profile（v2 `dsh-control` patch stack + glue 插件） | **v4 放弃**：生成/维护 profile 目录与补丁层 = 控制面持有"宿主组装权威"，还需出树插件（glue）发布端口；而 dsh 官方 `web` profile 已把"API 面 + 前端 + 信任栅栏 + 命令行端口"整体打包 |
 | **`dsh --profile web --host 127.0.0.1 --port <port> --trusted-host 127.0.0.1:<port>`（选定）** | 官方装配（`apps/cli/reference/README.md`：`web` profile 首次使用自动初始化；`--host/--port` 覆盖组合行；可重复 `--trusted-host` 向 `/api` 浏览器信任栅栏加入权威；`--host 0.0.0.0` 被 dsh 拒绝）。v4 前端本就复用 dsh 官方前端（单 frame 加载控制面同源），进程携带 web bundle 正是所需 |
 
-**决策理由**：v4 的界面 = dsh 官方前端（源码复用），本地实例的进程形态随之
-收敛为官方 web profile——"控制面要一个什么样的宿主"由 dsh 官方命令直接表达，
-不再维护私有组装层。`--trusted-host 127.0.0.1:<port>` 保证经控制面反代到达
-的浏览器请求（`Host: 127.0.0.1:<port>`，Origin 为控制面同源）通过 `/api`
-信任栅栏（`dsh web` 是 `--profile web` 的硬别名，两者等价）。
+**决策理由**：v4 界面 = dsh 官方前端（源码复用），本地实例进程形态随之收敛为官方 web
+profile——"控制面要一个什么样的宿主"由 dsh 官方命令直接表达。`--trusted-host 127.0.0.1:<port>`
+保证经控制面反代到达的浏览器请求（`Host: 127.0.0.1:<port>`，Origin 为控制面同源）通过 `/api`
+信任栅栏（`dsh web` 是 `--profile web` 的硬别名）。
 
 ### 2.2 端口占用重试（port+1）：固定端口 + 确定性退让
 
@@ -98,12 +86,10 @@ web profile 的 `--port` 是**固定端口**（非 0 随机）。控制面选定
 每次重试必须同时更新 --port 与 --trusted-host（两者恒一致：127.0.0.1:<P>）
 ```
 
-- 与 v2 的"port 0 随机 + stdout 读端口"相比，固定起点 + P+1 有界退让的代价是
-  占用冲突，收益是可预测范围（实际 `dshPort` 进入 pid ledger 与 live PlaneHandle
-  投影；不写 catalog），便于防火墙/隧道诊断。
+- 与 v2 的"port 0 随机 + stdout 读端口"相比，固定起点 + P+1 有界退让的代价是占用冲突，收益是
+  可预测范围（`dshPort` 进入 pid ledger 与 live PlaneHandle 投影；不写 catalog），便于防火墙/隧道诊断。
 - **TOCTOU 说明**：spawn 前不做 `net.listen(0)` 预占（释放到绑定之间仍有
   竞态）；冲突一律以"就绪探测失败 → P+1"的后验方式处理，语义确定。
-- 就绪判定里“TCP 通但身份探针失败”正是端口被占的判据（§3.2）。
 
 ### 2.3 孤儿回收直接移植参考实现安全模型
 
@@ -116,47 +102,40 @@ web profile 的 `--port` 是**固定端口**（非 0 随机）。控制面选定
 | 注册表 `<参考实现状态目录>/managed-agent/<pid>.json` | `<stateDir>/managed-dsh/<pid>.json`（缺省 `~/.dsh-chamber`，`$DSH_CHAMBER_STATE` 覆写，§3.3） |
 | 记录 `{pid, ownerPid, port, binary, runtime, startedAt}` | 记录 `{pid, ownerPid, ownerInstanceId, port, binary, profile, source, startedAt}`（profile 固定 `'web'`，§3.3） |
 
-每进程一个 JSON 文件（按 pid 命名，每个实例只写/删自己的文件，零写竞争），
-理由直接继承 v2。
+每进程一个 JSON 文件（按 pid 命名，每实例只写/删自己的文件，零写竞争）。
 
 ### 2.4 健康监控共享失败计数，避免"重连风暴"误触发重启
 
 沿用 v2（移植参考实现 `lifecycle.js`）：
 
 1. **共享一个失败计数**：周期探活与传输触发走同一个 `runHealthCheckCycle`；
-2. **计频节流**：同一失败窗口（15s）内至多计 1 次；探测结果 750ms 缓存 +
-   单飞行合并——突发失败只算一次；
+2. **计频节流**：同一失败窗口（15s）内至多计 1 次；探测结果 750ms 缓存 + 单飞行合并；
 3. **进程死亡分支**：子进程已退出时不计数、直接重启；
 4. **任何一次成功即清零计数**。
 
-**不保留**"忙会话宽限"——控制面不再消费会话帧（协议细节以
-dsh 自身 wire / vendor 源码为权威），
-探活载荷只有统一身份方法 `session/canOpenWorkspacePath`（固定小体积 boolean，
-见 §3.2），健康判定与宿主业务负载及**会话数据量**双向解耦；宿主因模型调用
-繁忙导致的慢响应由请求侧超时面处理，控制面只判定进程级健康。
+**不保留**"忙会话宽限"——控制面不消费会话帧（wire 以 vendor 源码为权威），探活载荷只有统一
+身份方法 `session/canOpenWorkspacePath`（固定小体积 boolean，见 §3.2），健康判定与宿主业务
+负载及**会话数据量**双向解耦；模型调用繁忙的慢响应由请求侧超时面处理。
 
 ### 2.5 instance-id 仲裁（多控制面实例并存）
 
-- 控制面首次运行以 no-follow `O_EXCL` 在状态目录生成 `instance-id`（规范 UUID、
-  `0600`），完整写入后依次 fsync 文件与父目录才返回；读取固定为小体积有界、
-  single-link 普通文件 + UUID 校验。并发首启中，loser 只对 winner 已公开但尚未写完的
-  空/部分 UUID 做有界重读，完整长度的非法值立即 fail-loud。控制面在构造 local
-  connection 时捕获这个稳定身份，所有后续 pid 记录直接携带同一
-  `ownerInstanceId`——不在 spawn 后重新 best-effort 读取可被替换的路径。
-- **各自 spawn 互不干扰**：每个实例从自己的起始端口（缺省同一起始端口，
+- 控制面首次运行以 no-follow `O_EXCL` 在状态目录生成 `instance-id`（规范 UUID、`0600`），
+  完整写入并 fsync 文件与父目录后才返回；读取固定为小体积有界、single-link 普通文件 + UUID
+  校验。并发首启中 loser 只对 winner 已公开但未写完的空/部分 UUID 有界重读，完整长度的非法值
+  立即 fail-loud。控制面在构造 local connection 时捕获该稳定身份，后续 pid 记录直接携带同一
+  `ownerInstanceId`——不在 spawn 后重新 best-effort 读取。
+- **各自 spawn 互不干扰**：每实例从自己的起始端口（缺省同一起始端口，
   可配置偏移）拉起 → 固定端口 + P+1 重试天然错开；记录文件按 pid 隔离。
-- **reaper 不杀活人**：owner 仍存活（`process.kill(pid, 0)` 成功）的条目
-  永不回收——两个实例同时跑 reaper 也安全。
+- **reaper 不杀活人**：owner 仍存活（`process.kill(pid, 0)` 成功）的条目永不回收——两实例同时跑
+  reaper 也安全。
 - **同端口仲裁**：同一起始端口时，先成功就绪者占住端口；后来者探测到
   `dshPort` 已属于另一活着的托管记录 → 按 P+1 继续重试或报告冲突，**不杀
   进程**（先注册先托管）。
-
 ### 2.6 chamber host 包的 seed 与单一 loader overlay（设计 08/09/20/24；2026-12 起四个 host 包）
 
-官方 web profile 仍是宿主组装权威；chamber 只追加自身拥有、边界明确的
-host package（2026-12 起为四个：client-graph / git-worktree / archive-cleanup（design 24）/
-open-in（design 20 §6，注册表标 `localOnly`——只进本地 profile，
-远端 seed 与 gateway 上传都跳过它））：
+官方 web profile 仍是宿主组装权威；chamber 只追加自身拥有、边界明确的 host package（2026-12 起四个：
+client-graph / git-worktree / archive-cleanup（design 24）/ open-in（design 20 §6，注册表标 `localOnly`
+——只进本地 profile，远端 seed 与 gateway 上传都跳过））：
 
 | loader id | package | 实例内职责 |
 |---|---|---|
@@ -168,27 +147,21 @@ open-in（design 20 §6，注册表标 `localOnly`——只进本地 profile，
 本地托管实例的接线如下：
 
 1. `createControlPlane` 分别接收 `hostGraphPackageSourceDir`、
-   `hostGitWorktreePackageSourceDir` 与 `hostArchiveCleanupPackageSourceDir`
-   （各自缺省落到 `DEFAULT_HOST_*_PACKAGE_SOURCE_DIR` 常量；open-in 走
-   `hostOpenInPackageSourceDir`，design 20 §6）；
-   只有该源的 `dist/index.js` 实际存在时，
-   才把 `package.json + dist/index.js` 以内容 hash 幂等复制到
-   `<DSH_HOME>/profiles/web/node_modules/@dsh-chamber/<package>/`。
-2. 控制面只生成**一个** `<stateDir>/dsh-chamber-graph.patch.yml`。其 `insert`
-   列表只含本次确有构建产物的 package row：四包俱全则四行，只构建部分包则
-   只有对应行；全部缺失时不传 `--patch`，保持原生 web profile 基线。
-3. 复制在 overlay 写入之前完成；已声明构建产物却缺少另一必需文件属于打包
-   损坏，启动 fail-loud。文件与 overlay 都原子写入并保持 0600。
-4. seed thunk 在**每次 spawn（含自动重启）之前**重新求值。`dsh plugin`
-   导致 pnpm 重链并裁掉 extraneous host 包后，下一次 spawn 会自动补回；overlay
-   也按当时实际可用产物重建，不留下悬空 row。用户触发的「重启 dsh」动作
-   （design 18 §3.6 项 8，刷新插件挂载）走同一条 spawn 路径：seed 重求值与
-   overlay 重建语义一致，插件挂载在每次 dsh 进程 boot 时重新确定——不是
-   Electron 会话级事实，重启 dsh 即刷新，无需重启壳。
+   `hostGitWorktreePackageSourceDir`、`hostArchiveCleanupPackageSourceDir`（缺省落到
+   `DEFAULT_HOST_*_PACKAGE_SOURCE_DIR`；open-in 走 `hostOpenInPackageSourceDir`，
+   design 20 §6）；仅当该源 `dist/index.js` 实际存在时，才把 `package.json + dist/index.js`
+   按内容 hash 幂等复制到 `<DSH_HOME>/profiles/web/node_modules/@dsh-chamber/<package>/`。
+2. 控制面只生成**一个** `<stateDir>/dsh-chamber-graph.patch.yml`，`insert` 列表只含本次确有构建
+   产物的 row（部分构建则只有对应行）；全部缺失时不传 `--patch`，保持原生 web profile 基线。
+3. 复制先于 overlay 写入；已声明构建产物却缺另一必需文件属打包损坏，启动 fail-loud；文件与 overlay
+   都原子写入并保持 0600。
+4. seed thunk 在**每次 spawn（含自动重启）之前**重新求值：`dsh plugin` 使 pnpm 重链并裁掉
+   extraneous host 包后，下次 spawn 自动补回；overlay 按当时实际可用产物重建，不留悬空 row。
+   用户触发的「重启 dsh」（design 18 §3.6 项 8）走同一 spawn 路径：插件挂载在每次 dsh boot 时
+   重新确定，重启 dsh 即刷新、无需重启壳。
 
-这不是旧 slim profile/业务 patch stack 的回归：控制面不知道 `clientGraph`、
-`gitWorktree`、`archiveCleanup` 或 `openInApp` 的领域结果，只做受控文件分发与 loader
-挂载。
+这不是旧 slim profile/业务 patch stack 的回归：控制面不知道 `clientGraph`、`gitWorktree`、
+`archiveCleanup` 或 `openInApp` 的领域结果，只做受控文件分发与 loader 挂载。
 
 ---
 
@@ -201,53 +174,43 @@ dsh --profile web [--patch <stateDir>/dsh-chamber-graph.patch.yml] \
   --host 127.0.0.1 --port <P> --trusted-host 127.0.0.1:<P>
 ```
 
-`--patch` 仅在 §2.6 至少一个 host 包产物可用时出现，并位于 web flags 之前；
-它只携带 chamber-owned host rows，不改变官方 web profile 的其它组合层。
+`--patch` 仅在 §2.6 至少一个 host 包产物可用时出现，位于 web flags 之前，只携带 chamber-owned host
+rows，不改变官方 web profile 的其它组合层。
 
 - `spawn(..., { detached: true, stdio: ['ignore', 'pipe', 'pipe'], env })`
   （Unix）——独立进程组，宿主可活过父进程崩溃；Windows 退化见 §5。
-- **node 可执行解析**（`resolveNodeExecutable`，spawn-dsh.ts）：控制面可能
-  运行在纯 node（standalone serve / 测试）或 Electron 主进程内（desktop），
-  而 GUI（Finder）启动的打包 App PATH 极简（`/usr/bin:/bin:/usr/sbin:/sbin`），
-  `spawn('node', …)` 必挂 ENOENT。解析序：
+- **node 可执行解析**（`resolveNodeExecutable`，spawn-dsh.ts）：控制面可运行在纯 node
+  （standalone serve / 测试）或 Electron 主进程（desktop），而 GUI（Finder）启动的打包 App
+  PATH 极简（`/usr/bin:/bin:/usr/sbin:/sbin`），`spawn('node', …)` 必挂 ENOENT。解析序：
   - 纯 node → `process.execPath`（就是运行中的 node）；
-  - Electron → `process.execPath` + `ELECTRON_RUN_AS_NODE=1`（Electron 官方
-    生产机制：应用二进制以纯 node 模式运行；依赖 `runAsNode` fuse，electron-
-    builder 默认开启——**不得关闭该 fuse**，否则宿主拉不起来），并前置
-    `--expose-internals`：dsh 的 cordis loader 经 `node-addon-require-builtin`
-    取 `internal/modules/esm/loader`，该 addon 的 V8 embedder 探测在 Electron
-    的 patched Node 下不可用（"no compatible GetAlignedPointerFromEmbedderData
-    symbol"），而 `--expose-internals` 的官方 require 路径可用；
+  - Electron → `process.execPath` + `ELECTRON_RUN_AS_NODE=1`（官方生产机制；依赖 `runAsNode`
+    fuse，electron-builder 默认开启——**不得关闭该 fuse**），并前置 `--expose-internals`：dsh
+    的 cordis loader 经 `node-addon-require-builtin` 取 `internal/modules/esm/loader`，该
+    addon 的 V8 embedder 探测在 Electron 的 patched Node 下不可用（"no compatible
+    GetAlignedPointerFromEmbedderData symbol"），`--expose-internals` 的官方 require 路径可用；
   - 兜底 → PATH 搜索 `node` → 常见安装位置（homebrew、`/usr/local/bin`、
-    nvm/volta/fnm）→ 最终退回裸名 `node`（保留历史行为，仅作诊断兜底）。
-- **cwd 决策**：以 `dshWorkspacePath`（= 桌面打包态 `vendor/dsh` 或开发态
-  `ref-dsh` 检出根）为 cwd spawn——spawn 的 dsh 以该工作根解析自身入口；
-  会话级工作区由前端 runtime 决定，与宿主 cwd 解耦。
-- **环境固定**（确定性 + 隐私）：`DSH_TELEMETRY_DISABLED=1`（任意非空值
-  即禁用）；`DSH_PERMISSION_MODE=workspace-write`（显式固定默认）；
-  `SSH_CONNECTION=127.0.0.1 0 127.0.0.1 0`（目录选择交互 pin：托管宿主恒以
-  应用内目录对话框服务，绝不弹 OS 选择器——05 §4）。该标记按
-  `launchedThroughSsh`（vendor `dsh-launch-environment`：非空
-  `SSH_CONNECTION` 或 `SSH_TTY`）被上游三处消费，均为可接受/需知情的副作用：
-  ① `host/directory-picker-auto` 解析 `browse`（本 pin 的目的）；② `bundle/web-app`
-  关闭浏览器自启 handoff（`handoffBrowser = openBrowser && !launchedThroughSsh`，
-  托管宿主不代开系统浏览器）；③ `host/open-in-app` 在 SSH 标记下不解析任何本机
-  应用（`resolveOpenInAppApps` 返回空表）——**自 2026-09-11 起该消费者与我们无关**：
-  本地打开面由实例进程内的 chamber host 包提供（设计 20 §2.2/§6，fork & supersede），
-  官方宿主行保持挂载但永不被调用，因此标记回到「仅目录选择 pin」的唯一目的；其余
-  继承控制面环境；`DSH_HOME` **显式 pin 到 `<stateDir>/dsh-home`**
-  （覆盖环境继承——控制面私有宿主 home，与系统用户 `~/.dsh` 不共享；
-  首启缺省与 seedDshHomeDefaults 见下）；Electron 分支额外注入
+    nvm/volta/fnm） → 最终退回裸名 `node`（仅作诊断兜底）。
+- **cwd 决策**：以 `dshWorkspacePath`（桌面打包态 `vendor/dsh` 或开发态 `ref-dsh` 检出根）为 cwd spawn，
+  spawn 的 dsh 以该工作根解析自身入口；会话级工作区由前端 runtime 决定，与宿主 cwd 解耦。
+- **环境固定**（确定性 + 隐私）：`DSH_TELEMETRY_DISABLED=1`（任意非空值即禁用）；
+  `DSH_PERMISSION_MODE=workspace-write`（显式固定默认）；
+  `SSH_CONNECTION=127.0.0.1 0 127.0.0.1 0`（目录选择交互 pin：托管宿主恒以应用内目录对话框
+  服务，绝不弹 OS 选择器——05 §4）。该标记按 `launchedThroughSsh`（vendor
+  `dsh-launch-environment`：非空 `SSH_CONNECTION` 或 `SSH_TTY`）被上游三处消费：①
+  `host/directory-picker-auto` 解析 `browse`（本 pin 目的）；② `bundle/web-app` 关闭浏览器
+  自启 handoff（`handoffBrowser = openBrowser && !launchedThroughSsh`）；③ `host/open-in-app`
+  在 SSH 标记下不解析任何本机应用（`resolveOpenInAppApps` 返回空表）——**自 2026-09-11 起该
+  消费者与我们无关**：本地打开面由实例进程内的 chamber host 包提供（设计 20 §2.2/§6，
+  fork & supersede），官方宿主行保持挂载但永不被调用，故标记回到「仅目录选择 pin」的唯一
+  目的。其余环境继承控制面；`DSH_HOME` **显式 pin 到 `<stateDir>/dsh-home`**（覆盖继承，
+  控制面私有宿主 home，与系统用户 `~/.dsh` 不共享）；Electron 分支额外注入
   `ELECTRON_RUN_AS_NODE=1`。
-- **首启默认（seedDshHomeDefaults，index.ts）**：首次 start() 在
-  `<stateDir>/dsh-home` 不存在 `settings.yaml` 时写入
-  `locale.preference: zh`（0600）——本地实例 dsh UI 默认中文，不再跟随
-  浏览器/系统语言；仅缺文件时写，用户显式选择（settings 页或手改文件）
-  永不被覆盖。
-- **日志**：stdout/stderr 管道接入控制面 host-logs 滚动日志（§3.8），同时
-  是启动诊断与就绪失败的证据（host-logs 登记 spawn 诊断字段：binary、args、
-  cwd、env 键数、PATH 项数——设计文档曾称 `lastSpawnDiagnostics` 结构，
-  spawn-dsh 现以注册表字段形式承载，非独立结构化对象）。
+- **首启默认（seedDshHomeDefaults，index.ts）**：首次 start() 时 `<stateDir>/dsh-home` 无
+  `settings.yaml` 则写入 `locale.preference: zh`（0600）——本地实例 dsh UI 默认中文，不跟随
+  浏览器/系统语言；仅缺文件时写，用户显式选择（settings 页或手改文件）永不被覆盖。
+- **日志**：stdout/stderr 管道接入控制面 host-logs 滚动日志（§3.8），同时是启动诊断与就绪失败
+  的证据（登记字段：binary、args、cwd、env 键数、PATH 项数；spawn-dsh 以注册表字段承载，非独立
+   结构化 `lastSpawnDiagnostics` 对象）。
 
 ### 3.2 就绪探测与端口占用判定（TCP + 统一身份探针）
 
@@ -261,27 +224,23 @@ starting ──① TCP connect 127.0.0.1:P（250ms 间隔轮询，总窗口 90s 
 ready
 ```
 
-- 就绪成功：`dshPort = P` 写入进程记录，并仅从当前 PlaneHandle 投影到 REST/SSE
-  （status `ready`，03 §2.1）；不把运行态写回共享 catalog。
-- 就绪失败（超时 / 进程退出 / 重试耗尽）：显式启动失败，附完整启动输出与
-  `--dump-config` 建议（`dsh --profile web --dump-config` 检查组合树）。
+- 就绪成功：`dshPort = P` 写入进程记录，仅从当前 PlaneHandle 投影到 REST/SSE（status
+  `ready`，03 §2.1）；不把运行态写回共享 catalog。
+- 就绪失败（超时 / 进程退出 / 重试耗尽）：显式启动失败，附完整启动输出与 `--dump-config`
+  建议（`dsh --profile web --dump-config` 检查组合树）。
 - **探针 = 统一身份契约（rpc-envelope.ts 单源；`probeHostIdentity`）**：POST
-  `/api/session/canOpenWorkspacePath`（SessionController `session` namespace
-  零参 boolean Remote，钉住上游 dsh ≥ 0.1.2-rc.1；纯同步平台检测，不读会话
-  数据、不激活 Agent、无 IO），200 + rpcId 回显 + `result.ok === true` +
-  boolean value（**true/false 均健康**）即通过；响应上限 64 KiB（探针专用
-  per-call cap）。HTTP 404 = 部分 0.1.2-alpha.x 早期树 / dsh < 0.1.2-rc.1
+  `/api/session/canOpenWorkspacePath`（SessionController `session` namespace 零参 boolean
+  Remote，钉住上游 dsh ≥ 0.1.2-rc.1；纯同步平台检测，不读会话数据、不激活 Agent、无 IO），
+  200 + rpcId 回显 + `result.ok === true` + boolean value（**true/false 均健康**）即通过；
+  响应上限 64 KiB（探针专用 per-call cap）。HTTP 404 = 部分 0.1.2-alpha.x 早期树 / dsh < 0.1.2-rc.1
   （无此方法）→ 自动
-  回退 legacy `session/list`（默认 1 MiB 上限，与旧版语义逐位一致，老树不
-  劣化）；**回退成功后**写 warning（双 404/transient 安静；每连续 legacy 期
-  至多一条——STATUS 挂账⑦）——上游未来再发生方法漂移时可见、不静默；
-  404 之外
-  （401 认证门、5xx、超时、畸形）一律如实失败、不回退。
-- 身份探针响应为固定小体积 boolean，只用于就绪与健康探活，不作任何会话级
-  消费（协议细节以 dsh wire / vendor 源码为权威）——探针响应体积与宿主会话
-  数量彻底解耦；控制面 unary fetch carrier 对单个 JSON 响应实施流式字节
-  上限（身份探针 64 KiB / legacy 回退 1 MiB），声明长度与实际流均受约束，
-  异常宿主不能借探活把响应无界缓冲进控制面。
+  回退 legacy `session/list`（默认 1 MiB 上限，与旧版语义逐位一致，老树不劣化）；
+  **回退成功后**写 warning（双 404/transient 安静；每连续 legacy 期至多一条——STATUS 挂账⑦），使
+  上游未来方法漂移可见、不静默；404 之外（401 认证门、5xx、超时、畸形）一律如实失败、不回退。
+- 身份探针响应为固定小体积 boolean，只用于就绪与健康探活，不作任何会话级消费（协议细节以 dsh wire /
+  vendor 源码为权威）——探针体积与宿主会话数量彻底解耦；控制面 unary fetch carrier 对单个 JSON 响应
+  实施流式字节上限（身份探针 64 KiB / legacy 回退 1 MiB），声明长度与实际流均受约束，异常宿主不能借
+  探活把响应无界缓冲进控制面。
 
 ### 3.3 进程记录文件（managed-dsh/<pid>.json）
 
@@ -301,13 +260,11 @@ ready
 }
 ```
 
-- 写文件：`writeFileSync(tmp-<pid>) + renameSync` 原子替换；**写入失败时
-  **清理已 spawn 的子进程（`killFailedSpawn`：进程组
-  SIGKILL → 确认退出 → 删记录）并使本次 spawn 尝试失败——绝不遗留无记录可
+- 写文件：`writeFileSync(tmp-<pid>) + renameSync` 原子替换；**写入失败时**清理已 spawn 的子进程
+  （`killFailedSpawn`：进程组 SIGKILL → 确认退出 → 删记录）并使本次 spawn 失败——绝不遗留无记录可
   追踪的 detached 进程；
 - 读取：跳过非 `.json`；解析失败或 `pid` 非整数 → 删文件（损坏即丢，不猜测）；
-- 注销：`removePidRecord(pid)` 只在**确认进程已退出**后调用（存活幸存者留在
-  注册表等下次 reaper）。
+- 注销：`removePidRecord(pid)` 只在**确认进程已退出**后调用（存活幸存者留在注册表等下次 reaper）。
 
 ### 3.4 reaper（孤儿回收）
 
@@ -336,35 +293,31 @@ ready
 6. 杀：进程组 SIGTERM → 轮询 1.5s → SIGKILL（killOrphan 序列）；删文件
 ```
 
-**安全总结**：杀掉一个进程需要同时满足"本产品记录过 + 身份重验通过
-（binary/profile 命令串 + 端口监听者 pid）+ owner 死亡/reparent"，三者缺一
-不动手。
+**安全总结**：杀进程须同时满足"本产品记录过 + 身份重验通过（binary/profile 命令串 +
+端口监听者 pid）+ owner 死亡/reparent"，三者缺一不动手。
 
-**闩锁的两种关闭原因与会话内再证明（2026-09-10）**：启动扫描只在"零 kept 且
-零 errors"时打开 `localWritersQuiescent`。关闭原因有两类，只有一类可再证明：
+**闩锁的两种关闭原因与会话内再证明（2026-09-10）**：启动扫描只在"零 kept 且零 errors"
+时打开 `localWritersQuiescent`；关闭原因两类，只一类可再证明：
 
-- **扫描判定**（记录被保留：身份探测不可用、身份不匹配、端口不可核对、残留
-  进程组…）——可被**再一次扫描**推翻。所以拒绝启动前会做一次有界再证明
-  （单飞行 + 2s 冷却）：孤儿在这期间退出的常见情形**无需任何用户动作**、也无需
-  重启应用即可恢复。取消启动被拒时抛 409，并把结构化阻塞清单
+- **扫描判定**（记录被保留：身份探测不可用、身份不匹配、端口不可核对、残留进程组…）——可被
+  **再一次扫描**推翻，故拒绝启动前做一次有界再证明（单飞行 + 2s 冷却）：孤儿在此期间退出的常见
+  情形**无需用户动作**、也无需重启应用即恢复。取消启动被拒时抛 409，结构化阻塞清单
   （`writers[]`：pid/原因/`takeOverAvailable`）随 `detail` 上浮。
-- **写入期终止失败**（`onWriterQuiescenceUnknown`：刚杀过的进程组无法证实已
-  退出）——**任何扫描都无法证明它不在**（记录可能已被删除，证据已失），因此该
-  闩锁对本平面生命周期**粘滞**，只有重启应用重新走启动扫描才可能恢复。诊断文本
-  明确点名"需重启应用"，不再只是笼统的 not proven。
+- **写入期终止失败**（`onWriterQuiescenceUnknown`：刚杀过的进程组无法证实已退出）——**任何扫描
+  都无法证明它不在**，故该闩锁对本平面生命周期**粘滞**，只有重启应用重走启动扫描才可能恢复；
+  诊断文本明确点名"需重启应用"。
 
 **显式接管（`takeover` 模式，入口 04 §3.2 `POST /api/connections/local/reclaim`）**：
-默认扫描 fail-closed 保留的条目里，有两类属于**本状态目录自己的**陈旧/孤儿写者，
-由用户显式点击「清理并接管」时清除（`runReaper({takeover:true})`）：
+默认扫描 fail-closed 保留的条目里，两类属于**本状态目录自己的**陈旧/孤儿写者，由用户显式
+点击「清理并接管」时清除（`runReaper({takeover:true})`）：
 
 - **ps 证明该 pid 已不是记录的托管 dsh**（pid 复用或进程已退出）→ **只删记录，
-  绝不向该进程发信号**（无关进程零风险）；
+  绝不向该进程发信号**；
 - **身份不可探测但 owner 已死、且记录 pid 仍持有记录的监听端口** → 视为本目录的
-  孤儿托管宿主（同目录 ⇒ 同 DSH_HOME 族），按第 6 步杀（`takeover-reclaimed`）；
-  身份探测成功但监听端口核对不可用时，同样允许杀（身份是最强证据）。
-- 以下情形**永不接管**：owner 仍活（另一个应用实例正在用它，杀它会破坏那个实例）、
-  端口探测答"不是它"（证据自相矛盾）、记录损坏/pid 不可信（无 pid 可验，删记录
-  等于让闩锁谎报静止——留给人工处理并在诊断里点名）、残留进程组（身份无法重验）。
+  孤儿托管宿主（同目录 ⇒ 同 DSH_HOME 族），按第 6 步杀（`takeover-reclaimed`）；身份探测成功但
+  监听端口核对不可用时同样允许杀。
+- **永不接管**：owner 仍活（另一个应用实例正用它）、端口探测答"不是它"（证据自相矛盾）、记录
+  损坏/pid 不可信（删记录等于让闩锁谎报静止——留给人工处理并在诊断里点名）、残留进程组。
 
 ### 3.5 健康监控：七态状态机
 
@@ -396,13 +349,12 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
 | 周期 | 定时器（缺省 30s，可配） | 统一身份探针 `session/canOpenWorkspacePath`（`probeHostIdentity`，§3.2），5s 超时；老树 404 → legacy `session/list` 回退，回退成功才 warn（每连续 legacy 期至多一条，§3.2/STATUS ⑦） |
 | 传输触发 | （设计预留；反代侧连接异常触发健康检查**未实现**——`InstanceProxyDeps` 无健康回调，当前仅周期通道驱动） | — |
 
-- 单飞行探测：并发触发共享一个 in-flight promise；结果带 750ms 缓存；
+- 单飞行探测：并发触发共享一个 in-flight promise，结果带 750ms 缓存；
 - 计频节流：两次计数至少间隔一个窗口 W（独立于探活周期，缺省 15s）；
 - 进程死亡分支：探活失败且子进程已退出 → 不计数，立即重启；
 - 阈值：N=20（连续计数，可经构造参数覆写）；
-- 检出预算：30s 周期 × N=20 ≈ 10min 才累计到挂起判定；child-exit（进程死亡
-  分支立即重启）与传输触发（设计预留）提供兜底，探测周期拉长不放大挂起风险；
-  身份探针固定小体积、不读会话列表——健康判定与宿主会话量增长彻底解耦；
+- 检出预算：30s 周期 × N=20 ≈ 10min 才累计到挂起判定；child-exit（立即重启）与传输触发
+  （设计预留）兜底；身份探针固定小体积、不读会话列表——健康判定与宿主会话量增长彻底解耦；
 - 成功 → 清零计数 + 状态回 ready。
 
 ### 3.6 重启序列与背压
@@ -441,83 +393,67 @@ stopped ──spawn──► starting ──ready(§3.2)──► ready ──fa
 
 - `DELETE /api/connections/local`（04 §3.2）/ 桌面退出 / systemd stop：
   SIGTERM 进程组 → 1s → SIGKILL；确认退出后注销记录，状态回 `stopped`；
-- stop 单飞行：并发或紧邻的停止调用共享同一 promise；已完全静止时为无日志的
-  no-op，因此同一代生命周期只落一条 `state=stopped`；
-- 停止同时取消在途手工 spawn，等待其 owner 清理后释放 single-flight 槽；任何不响应取消的迟到
-  测试 seam/适配器仍由 epoch 守卫隔离，不能复活或覆盖随后启动的新代；
-- **崩溃路径**：控制面被 SIGKILL → 宿主成为孤儿 → 下次启动 reaper 回收
-  （§3.4）——`detached: true` 保证宿主不连带，孤儿回收保证不泄漏；
-- **会话数据不丢**：dsh 侧 JSONL 持久化在 `$DSH_HOME/sessions`，重启后由
-  前端 runtime 经会话基线完整恢复（控制面不持有任何会话权威——01 §5 原则 4）。
+- stop 单飞行：并发或紧邻的停止调用共享同一 promise；已完全静止时为无日志 no-op，故同一代生命
+  周期只落一条 `state=stopped`；
+- 停止同时取消在途手工 spawn，等待其 owner 清理后释放 single-flight 槽；不响应取消的迟到测试
+  seam/适配器仍由 epoch 守卫隔离，不能复活或覆盖随后启动的新代；
+- **崩溃路径**：控制面被 SIGKILL → 宿主成为孤儿 → 下次启动 reaper 回收（§3.4）——`detached: true`
+  保证宿主不连带，孤儿回收保证不泄漏；
+- **会话数据不丢**：dsh 侧 JSONL 持久化在 `$DSH_HOME/sessions`，重启后由前端 runtime 经会话基线
+  完整恢复（控制面不持有任何会话权威——01 §5 原则 4）。
 
 ### 3.8 host-logs 滚动日志
 
-- 宿主 stdout/stderr 行写入控制面**滚动缓冲**（RING_BUFFER，如 500 行 /
-  按字节上限），启动诊断字段（binary/args/cwd/env 键数/PATH 项数）随
-  注册表进程记录登记（host-logs 以注册表字段承载，见 §3.1 日志条）；
-- 写入面按 backing path 共享一条**异步串行 lane**：stdout/stderr 与 lifecycle
-  writer 共用队列及 compaction ring，append 与临界 rename 绝不并行；child
-  `data` 回调先在 Buffer 层截为最多 64 KiB、添加固定截断摘要，再只解码一次供
-  logger/writer 共用；writer 只入队，不执行同步文件 I/O，并在 child `close`
-  （stdio 已关闭）后退役。每 host 在途最多 256 条 / 512 KiB，
-  达到任一高水位即丢弃**最新**诊断条目（原控制面 logger 已持有该行），绝不
-  反向暂停或阻塞宿主 pipe；未跨行数 cap 的批次只 append，跨 cap 的批次直接
-  原子替换为尾部 ring（不先 append 再整文件重写）；`flush/close` 可等待调用前
-  已接纳条目落定。append 绑定 no-follow `O_APPEND` active inode，首次创建
-  O_EXCL 0600，完整写 + file fsync；compaction 使用随机同目录 O_EXCL temp、
-  identity 复验、rename + parent fsync。active leaf 被删/换即切新 generation 并
-  丢弃旧 ring，绝不穿越 symlink/硬链接或复活被移除 backing；
-- 读取面：`GET /api/host/logs`（04 §3.3，local-only）——桌面
-  chamber-settings 插件展示"本地实例日志"；远程实例日志经
-  `desktop_ssh_logs` IPC（03 §2.2）；
-- 写入或压缩失败会丢弃失败批次及其后已排队诊断并切换到新的日志代次
-  （清空旧内存 ring/计数并重新 setup）；只有失败后到达的**新写入**发起一次
-  新 setup，永久磁盘故障不会形成无限重试队列；
-  旧 backing file 被删除后绝不由临界压缩把历史 ring 复活，失败写也不在下次
-  重建时重复；
-- **控制面自身日志落盘**（2026-12，取证缺口修复）：`createControlPlane` 无条件把
-  注入的 `options.logger`（默认 console）包一层文件 sink，写
-  `<stateDir>/logs/control-plane.log`（JSONL：`{ts,level,line}`；单文件 2 MiB、
-  保留 3 份轮转环（最小 2 份）；目录 0700、文件 0600、**常驻句柄 + 不跟随符号
-  链接**（O_NOFOLLOW）——与本节 host-logs 的 no-follow/0600 纪律同族）。设计动机：
-  控制面是 `proxy-forward` 的 WS splice 取证行（`WebSocket stream <id> closed
-  (<cause>, Nms)`、`heartbeat lost …`）的**权威**来源，而打包态由 Finder/Dock
-  启动时 console 不落盘（design 14 §D4 记实测）；控制面拥有 stateDir，故 Electron
-  与 Swift 原生壳**共用同一实现**。写失败/轮转失败只降级为「不落盘 + 告警一次」，
-  日志绝不能成为新的失败面；`stop()` 关句柄、`start()` 重开（plane 支持
-  stop→start 重启）。**被否替代**：①写进 `host-logs/<port>.log`——那是**被管理
-  宿主**的 stdout/stderr 管道（按端口寻址、有读侧 API），控制面自身日志混进去会
-  冒充宿主日志；②只依赖 stdout——打包态不落盘，正是本条的动机；③两个 flavor 各写
-  一份——同一份实现即可，多出的只是漂移面；④ 删掉原生壳的 `sidecar.log`、只留
-  `control-plane.log`——两链生命周期不同步：`sidecar.log` 覆盖控制面 sink 建立**之前**的
-  stderr（含 fatal 启动输出），兜底价值大于同内容重复的成本（保留量差异登记在
-  deviations T-25）。**与原生壳的关系**：原生壳另有
-  `<userData>/logs/sidecar.log`（design 25 §3.1）作**兜底**（覆盖 sink 建立前的
-  stderr）；同一批 console 行两处各存一份，保留量不同（Electron 只有 `2 MiB × 3` = 6 MiB，
-  原生壳另有 `256 KiB × 2` 轮转环 = 512 KiB，合计 6 MiB + 512 KiB）——
-  该 flavor 偏差登记在 deviations。
-  - **写入面纪律（2026-12 独立复核补记）**：①日志行**同步**追加（每行一次
-    `writeSync`，无 fsync）——与本节 host-logs 的"只入队、不阻塞"写法不同，取舍是
-    "崩溃前最后几行必须在页缓存里"（取证价值）换"每行一次系统调用"；这是有界的
-    常数开销，若将来实测到事件循环停顿，改法是入队 + 批量 flush（代价：崩溃时丢掉
-    队列里的行）。②`logs/` 与 `control-plane.log` 的 0700/0600 在**每次打开时显式
-    收紧**（`mode` 参数只在创建时生效），且**先判符号链接再 chmod**（chmod 会跟随链接，
-    顺序反了会先改掉链接目标的权限）；这是 best-effort——chmod/fchmod 失败的平台继续落盘，
-    不把日志变成新的失败面。③常驻句柄每 64 行做一次 dev/ino 巡检：
-    文件被外部删除/替换即重开（否则会一直写进已 unlink 的 inode，最多丢掉整个上限
-    的日志而不自知）。④**多进程共享**同一 stateDir 时不做跨进程锁：桌面两 flavor 由
-    目录锁串行，`dsh serve`/standalone 没有——整行 O_APPEND 保证行不撕裂，但轮转环
-    可能出现两份水位（影响限于日志内容）。
-  - **重复面（有意，不是双写缺陷）**：被管理宿主的 stdout/stderr 每一行都经控制面
-    logger，于是**同时**进入 `host-logs/<port>.log`（宿主面、按端口寻址、有读侧 API）
-    与 `control-plane.log`（控制面面、统一时间线）：前者服务"看某个宿主的输出"，
-    后者服务"事故时的单一考古面"。
+- 宿主 stdout/stderr 行写入控制面**滚动缓冲**（RING_BUFFER，如 500 行 / 按字节上限）；启动诊断字段
+  （binary/args/cwd/env 键数/PATH 项数）随注册表进程记录登记（见 §3.1）；
+- 写入面按 backing path 共享一条**异步串行 lane**（stdout/stderr 与 lifecycle writer 共用队列及
+  compaction ring，append 与临界 rename 绝不并行）：child `data` 回调先在 Buffer 层截为最多 64 KiB、
+  加固定截断摘要，再解码一次供 logger/writer 共用；writer 只入队、不同步文件 I/O，在 child `close`
+  （stdio 已关闭）后退役。每 host 在途最多 256 条 / 512 KiB，达任一高水位即丢弃**最新**诊断条目，
+  绝不反向暂停/阻塞宿主 pipe；未跨行数 cap 的批次只 append，跨 cap 的批次直接原子替换为尾部 ring
+  （不先 append 再整文件重写）；`flush/close` 可等待调用前已接纳条目落定。append 绑定 no-follow
+  `O_APPEND` active inode，首次创建 O_EXCL 0600，完整写 + file fsync；compaction 用随机同目录
+  O_EXCL temp、identity 复验、rename + parent fsync；active leaf 被删/换即切新 generation 并丢弃旧
+  ring，绝不穿越 symlink/硬链接或复活被移除 backing；
+- 读取面：`GET /api/host/logs`（04 §3.3，local-only）——桌面 chamber-settings 插件展示"本地实例
+  日志"；远程实例日志经 `desktop_ssh_logs` IPC（03 §2.2）；
+- 写入或压缩失败即丢弃失败批次及其后已排队诊断并切到新日志代次（清空旧内存 ring/计数并重新 setup）；
+  只有失败后到达的**新写入**发起一次新 setup，永久磁盘故障不会形成无限重试队列；旧 backing file 被
+  删除后绝不由临界压缩把历史 ring 复活，失败写也不在下次重建时重复；
+- **控制面自身日志落盘**（2026-12，取证缺口修复）：`createControlPlane` 无条件给注入的
+  `options.logger`（默认 console）加文件 sink，写 `<stateDir>/logs/control-plane.log`
+  （JSONL `{ts,level,line}`；单文件 2 MiB、3 份轮转环（最小 2 份）；目录 0700、文件 0600、**常驻
+  句柄 + O_NOFOLLOW**——与本节 host-logs 的 no-follow/0600 纪律同族）。动机：控制面是
+  `proxy-forward` WS splice 取证行（`WebSocket stream <id> closed
+  (<cause>, Nms)`、`heartbeat lost …`）的**权威**来源，而打包态由 Finder/Dock 启动时 console 不落盘
+  （design 14 §D4 实测）；控制面拥有 stateDir，故 Electron 与 Swift 壳**共用同一实现**。写失败/
+  轮转失败只降级为「不落盘 + 告警一次」，日志绝不能成为新失败面；`stop()` 关句柄、`start()` 重开
+  （plane 支持 stop→start 重启）。**被否替代**：①写进 `host-logs/<port>.log`——那是**被管理宿主**的
+  stdout/stderr 管道（按端口寻址、有读侧 API），混入会冒充宿主日志；②只依赖 stdout——打包态不落盘，
+  正是本条动机；③两 flavor 各写一份——多的只是漂移面；④删原生壳 `sidecar.log` 只留
+  `control-plane.log`——两链生命周期不同步：`sidecar.log` 覆盖控制面 sink 建立**之前**的 stderr
+  （含 fatal 启动输出），兜底价值大于重复成本（保留量差异登记 deviations T-25）。**与原生壳的关系**：
+  原生壳另有 `<userData>/logs/sidecar.log`（design 25 §3.1）作**兜底**；同一批 console 行两处各存
+  一份、保留量不同（Electron `2 MiB × 3` = 6 MiB，原生壳另有 `256 KiB × 2` = 512 KiB，合计
+  6 MiB + 512 KiB），该 flavor 偏差登记在 deviations。
+  - **写入面纪律（2026-12 独立复核补记）**：①日志行**同步**追加（每行一次 `writeSync`，无 fsync）
+    ——与本节 host-logs 的"只入队、不阻塞"不同，取舍是"崩溃前最后几行必须在页缓存里"（取证价值）
+    换"每行一次系统调用"，开销有界；若实测到事件循环停顿，改法是入队 + 批量 flush（代价：崩溃时丢
+    队列里的行）。②`logs/` 与 `control-plane.log` 的 0700/0600 在**每次打开时显式收紧**（`mode` 只在
+    创建时生效），且**先判符号链接再 chmod**（chmod 跟随链接）；best-effort——chmod/fchmod 失败的平台
+    继续落盘，不把日志变成新失败面。③常驻句柄每 64 行做一次 dev/ino 巡检：文件被外部删除/替换即重开
+    （否则会一直写进已 unlink 的 inode，最多丢掉整个上限的日志而不自知）。④**多进程共享**同一 stateDir
+    时不做跨进程锁：桌面两 flavor 由目录锁串行，`dsh serve`/standalone 没有——整行 O_APPEND 保证行不
+    撕裂，但轮转环可能出现两份水位（影响限于日志内容）。
+  - **重复面（有意，不是双写缺陷）**：被管理宿主的 stdout/stderr 每行都经控制面 logger，**同时**
+    进入 `host-logs/<port>.log`（宿主面、按端口寻址、有读侧 API）与 `control-plane.log`（控制面面、
+    统一时间线）。
 - 纪律：日志永不含凭据/令牌（05 §8 安全不变量）。
 
 ### 3.9 systemd 单元（远程实例部署参考）
 
-远程服务器的 dsh 实例以 systemd 单元持久化（loopback 固定端口；无需 web
-前端——UI 由本地复用前端经隧道提供）：
+远程服务器的 dsh 实例以 systemd 单元持久化（loopback 固定端口；无需 web 前端——UI 由本地复用前端
+经隧道提供）：
 
 ```ini
 [Unit]
@@ -559,60 +495,51 @@ PrivateTmp=true
 WantedBy=multi-user.target
 ```
 
-目录归属与无 root 形态（完整单元示例见 docs/deploy/remote-dsh-instance.md，与 README「服务器端部署」一致）：
+目录归属与无 root 形态（完整单元示例见 docs/deploy/remote-dsh-instance.md，与 README
+「服务器端部署」一致）：
 
-- **归属不变量**：dsh 默认把 home 放在运行账号自己的家目录（`~/.dsh`，
-  即 `${DSH_HOME:-$HOME/.dsh}`）——**无需设置 `DSH_HOME`**，也不再有
-  `/var/lib` 路径与 root 属主问题。单元运行账号（示例 `dsh`）只需有真实
-  家目录：建号用 `sudo useradd --system --create-home dsh`
-  （`useradd --system` 默认**不创建**家目录，必须加 `--create-home`）。
-  以 root 运行则写到 `/root/.dsh`（归 root，不推荐）。
-- **无 root 形态**：服务器无 root 时改用 systemd 用户单元
-  （`~/.config/systemd/user/dsh.service` + `systemctl --user` 管理，
-  `loginctl enable-linger` 一次性启用保证开机自启与登出存活）。注意
-  ssh-provider 的 systemd exec 恒为系统管理器（无 `--user`），用户单元
-  对 chamber 桌面起停按钮不可见——实例靠 linger 常驻、隧道照常，管理走
-  服务器端 `systemctl --user`。
+- **归属不变量**：dsh 默认把 home 放在运行账号自己的家目录（`~/.dsh`，即 `${DSH_HOME:-$HOME/.dsh}`）
+  ——**无需设置 `DSH_HOME`**，也不再有 `/var/lib` 路径与 root 属主问题。单元运行账号（示例 `dsh`）
+  只需有真实家目录：建号用 `sudo useradd --system --create-home dsh`（`useradd --system` 默认**不
+  创建**家目录，必须加 `--create-home`）；以 root 运行则写到 `/root/.dsh`（归 root，不推荐）。
+- **无 root 形态**：服务器无 root 时改用 systemd 用户单元（`~/.config/systemd/user/dsh.service`
+  + `systemctl --user` 管理，`loginctl enable-linger` 一次性启用保证开机自启与登出存活）。
+  ssh-provider 的 systemd exec 恒为系统管理器（无 `--user`），用户单元对 chamber 桌面起停
+  按钮不可见——实例靠 linger 常驻、隧道照常，管理走服务器端 `systemctl --user`。
 
 编排语义：
 
 - **起停/状态**：经桌面 transport-manager（ssh provider）的 systemd exec IPC
   （`desktop_ssh_start_service/stop_service/is_active`，serviceName 白名单
-  `^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`，首字符必须为字母或数字）驱动（03 §2.2）；
-  provider 固定以参数数组执行 `systemctl <action> -- <serviceName>`，`--` 明确终止
-  option 解析——控制面不直连远程进程，只经隧道消费其 API 面；
+  `^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`，首字符必须为字母或数字）驱动（03 §2.2）；provider 固定以参数
+  数组执行 `systemctl <action> -- <serviceName>`，`--` 明确终止 option 解析——控制面不直连远程进程，
+  只经隧道消费其 API 面；
 - **停止**：`systemctl stop` → SIGTERM → dsh profile-boot 优雅退出（exit 0）；
-- **崩溃**：`Restart=on-failure` + `RestartSec=3` 拉起；用户侧单元示例与
-  docs/deploy/remote-dsh-instance.md 及 README「服务器端部署」一节一致。常见崩溃原因：systemd 默认 PATH 不含 nvm
-  node → `status=127`（`/usr/bin/env: 'node': No such file or directory`），
-  须显式 `Environment=PATH=<node-bin-dir>:/usr/local/sbin:...`（整行字面赋值，
-  无追加语法、无变量展开）；
-- **绑定面**：恒 `--host 127.0.0.1`（loopback）——chamber 隧道是唯一入口，
-  不额外暴露面；绕过隧道直连（0.0.0.0）须配套鉴权（v1 实例匿名）或反代前置
-  （dsh 目标匿名 loopback 直连须反代/TLS 前置；gateway 目标自带认证边界与
-  公网请求策略，17 §5.1/§6）。
+- **崩溃**：`Restart=on-failure` + `RestartSec=3` 拉起（用户侧单元示例见
+  docs/deploy/remote-dsh-instance.md）；常见崩溃原因：
+  node → `status=127`（`/usr/bin/env: 'node': No such file or directory`），须显式
+  `Environment=PATH=<node-bin-dir>:/usr/local/sbin:...`（整行字面赋值，无追加语法、无变量展开）；
+- **绑定面**：恒 `--host 127.0.0.1`（loopback）——chamber 隧道是唯一入口，不额外暴露面；绕过隧道
+  直连（0.0.0.0）须配套鉴权（v1 实例匿名）或反代前置（dsh 目标匿名 loopback 直连须反代/TLS 前置；
+  gateway 目标自带认证边界与公网请求策略，17 §5.1/§6）。
 - **远端 chamber host 包**：SSH transport 进入 `ready` 后，桌面主进程调用
-  `seedRemoteChamberHostPackages`，把本次实际已构建的 host-graph + Git worktree
-  + archive-cleanup 三包写到 `<remoteDshHome>/profiles/node_modules/@dsh-chamber/<package>/`，并对
-  `<remoteDshHome>/profiles/web/cordis.patch.yml` 做一次合并写。它复用受限
-  `cat/write-file` 通道，仅做分发，**不经 SSH 执行 Git**；已运行的远端 dsh
-  需重启后才加载新 row，完整原子顺序、去重与失败语义见设计 13 §3。
+  `seedRemoteChamberHostPackages`，把本次实际已构建的 host-graph + Git worktree + archive-cleanup
+  三包写到 `<remoteDshHome>/profiles/node_modules/@dsh-chamber/<package>/`，并对
+  `<remoteDshHome>/profiles/web/cordis.patch.yml` 做一次合并写。它复用受限 `cat/write-file` 通道，
+  仅做分发，**不经 SSH 执行 Git**；已运行的远端 dsh 需重启后才加载新 row，完整原子顺序、去重与
+  失败语义见设计 13 §3。
 
 **gateway 目标单元形态（design 17，2026-09 v2）**：远程 gateway 部署以
-`dsh-chamber-gateway.service` 单元持久化（`install-gateway.sh` 一键安装器
-生成，17 §5），默认监听远端 30801（gateway 目标 `remotePort` 缺省；dsh 目标
-30800 不变，17 §2.2）：`ExecStart=<GATEWAY_BIN> serve --host 127.0.0.1
---port 30801 …`，服务账号 / `NoNewPrivileges` / `PrivateTmp` / PATH 环境
-要求同本单元；凭据经 owner-only systemd `EnvironmentFile` 注入（17 §5）。
-ssh transport 的 systemd exec 起停目标按 `serviceName` 在该单元与
-`dsh.service` 间选择（03 §2.2 schema v2 注）。
+`dsh-chamber-gateway.service` 单元持久化（`install-gateway.sh` 一键安装器生成，17 §5），默认监听
+远端 30801（gateway 目标 `remotePort` 缺省；dsh 目标 30800 不变，17 §2.2）：`ExecStart=<GATEWAY_BIN>
+serve --host 127.0.0.1 --port 30801 …`，服务账号 / `NoNewPrivileges` / `PrivateTmp` / PATH 环境
+要求同本单元；凭据经 owner-only systemd `EnvironmentFile` 注入（17 §5）。ssh transport 的 systemd
+exec 起停目标按 `serviceName` 在该单元与 `dsh.service` 间选择（03 §2.2 schema v2 注）。
 
-**http 直连形态（transport=http）**：无隧道子进程、无 systemd exec——桌面
-直接以 http(s) 访问目标端点。dsh 目标需**用户自建穿透**（TLS 反代 /
-tailscale / SSH 隧道 / frp，17 §1.1）把 loopback 实例暴露为可直连端点；
-gateway 目标即其入口本身（自带认证边界，17 §5.1/§6）。该形态下 systemd
-单元只作服务器侧部署参考，桌面侧不再编排远端服务起停（`serviceName`
-留空，03 §2.2）。
+**http 直连形态（transport=http）**：无隧道子进程、无 systemd exec——桌面直接以 http(s) 访问目标
+端点。dsh 目标需**用户自建穿透**（TLS 反代 / tailscale / SSH 隧道 / frp，17 §1.1）把 loopback 实例
+暴露为可直连端点；gateway 目标即其入口本身（自带认证边界，17 §5.1/§6）。该形态下 systemd 单元只作
+服务器侧部署参考，桌面侧不再编排远端服务起停（`serviceName` 留空，03 §2.2）。
 
 ---
 
@@ -637,45 +564,36 @@ gateway 目标即其入口本身（自带认证边界，17 §5.1/§6）。该形
 ### 5.1 Windows 路径退化（契约见 design 23）
 
 `detached` 语义、进程组信号、`lsof` 均不可用——Windows 实现见
-`packages/control-plane/src/win-probes.ts`(design 23):身份 = PowerShell CIM
-(命令行/PPID)、端口归属 = netstat、树终止 = `taskkill /T /F` + CIM 残余后代
-清扫;reaper/spawn-dsh 平台自适应接线,全部 fail-closed(不可证即保留/拒绝)。
-残余语义让步(妥协 F1/C6-C8):无 SIGTERM 握手 → 硬终止 + 事务恢复;身份证明
-依赖 PowerShell 与同行权限可读 CommandLine。Windows 契约腿 = ci.yml
-`test-windows`;win32-only 集成测试见 `win32-lifecycle.integration.test.ts`。
+`packages/control-plane/src/win-probes.ts`(design 23):身份 = PowerShell CIM(命令行/PPID)、端口归属
+= netstat、树终止 = `taskkill /T /F` + CIM 残余后代清扫;reaper/spawn-dsh 平台自适应接线,全部
+fail-closed(不可证即保留/拒绝)。残余让步(妥协 F1/C6-C8):无 SIGTERM 握手 → 硬终止 + 事务恢复;身份
+证明依赖 PowerShell 与同行权限可读 CommandLine。Windows 契约腿 = ci.yml `test-windows`;win32-only
+集成测试见 `win32-lifecycle.integration.test.ts`。
 
 ### 5.2 起始端口选择
 
-本地默认起始端口（17510）与控制面端口（17500）相邻；
-是否可配 / 每实例偏移未定——先以"固定起始端口 + P+1 重试 + 记录仲裁"落地。
+本地默认起始端口（17510）与控制面端口（17500）相邻；是否可配 / 每实例偏移未定——先以
+"固定起始端口 + P+1 重试 + 记录仲裁"落地。
 
 ### 5.3 trusted-host 与反代 Host 头
 
-`--trusted-host 127.0.0.1:<port>` 对应
-反代转发时的 Host 头（转发保持实例自身 host:port，不改写）；若未来引入
-自定义 Host 场景需同步扩展 trusted-host 集（05 §7.5 固定形态）。
+`--trusted-host 127.0.0.1:<port>` 对应反代转发时的 Host 头（转发保持实例自身 host:port，
+不改写）；若未来引入自定义 Host 场景需同步扩展 trusted-host 集（05 §7.5 固定形态）。
 
 ### 5.4 restart-exhausted 后的恢复策略
 
-重试入口与计数重置见 §3.6（连接 API
-幂等启动或桌面设置页操作；一次成功就绪即清零）。
+重试入口与计数重置见 §3.6（连接 API 幂等启动或桌面设置页操作；一次成功就绪即清零）。
 
 ### 5.5 host-logs 容量
 
-RING_BUFFER 行数/字节上限取桌面场景经验值（如
-500 行），滚动丢弃；长期留存/导出不在范围。
+RING_BUFFER 行数/字节上限取桌面场景经验值（如 500 行），滚动丢弃；长期留存/导出不在范围。
 
 ### 5.6 `$DSH_HOME` 与多用户冲突
 
-宿主 `DSH_HOME` 固定为
-`<stateDir>/dsh-home`（§3.1），多控制面实例共享同一 stateDir 时才
-共享该 home——会话 JSONL 追加式多写安全，settings 为 last-writer-wins
-文档由 dsh `settings-conflict` 仲裁；不同 stateDir 的实例互不相干。
-**服务器远程形态（§3.9）不再设置独立 `DSH_HOME`**：
-远程实例以单元运行账号的身份直启 dsh，home 即该账号自己的 `~/.dsh`——
-dsh 本就是「一账号一 home、多 profile 共存」的模型
-（`$DSH_HOME/profiles/<name>`），web profile 与同账号其他 profile
-共享 home 是上游支持的常态（settings 仲裁同前）。独立 home 的诉求
-只存在于控制面托管宿主（stateDir 生命周期/可移植性，§3.1），不适用于
-systemd 直启形态；若确有「同账号多 profile 必须互不共享配置」的罕见
-诉求，仍可显式 `Environment=DSH_HOME=...` 隔离。
+宿主 `DSH_HOME` 固定为 `<stateDir>/dsh-home`（§3.1），多控制面实例共享同一 stateDir 时才共享该
+home——会话 JSONL 追加式多写安全，settings 为 last-writer-wins 文档、由 dsh `settings-conflict`
+仲裁；不同 stateDir 的实例互不相干。**服务器远程形态（§3.9）不再设置独立 `DSH_HOME`**：远程实例以
+单元运行账号身份直启 dsh，home 即该账号自己的 `~/.dsh`——dsh 本就是「一账号一 home、多 profile 共存」
+的模型（`$DSH_HOME/profiles/<name>`），web profile 与同账号其他 profile 共享 home 是上游支持的常态。
+独立 home 的诉求只存在于控制面托管宿主（stateDir 生命周期/可移植性，§3.1）；若确有「同账号多 profile
+必须互不共享配置」的罕见诉求，仍可显式 `Environment=DSH_HOME=...` 隔离。

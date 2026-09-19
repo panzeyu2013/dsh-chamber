@@ -1,12 +1,11 @@
 # 07 · 模型额外参数与默认推理等级（设计先行，实现待上游）
 
-> **状态：推迟（设计定稿，待上游解锁）**——需求已确认、chamber 侧实现方案定稿，但关键能力受上游
-> （vendor，只读）约束，**实现暂缓**；未完成门禁见 `docs/progress/STATUS.md`。上游更新阶段须按 §4 复查，
-> 条件满足即按 §5 蓝本实现。本文档 + 05 为实现契约（05 的 `settings.section` 槽位契约见 05 §5）；官方
-> Models 页为 vendor `dsh-client-ui-settings-models`。
-> 上游证据以**当前 pin 树**为准（版本单一来源见 AGENTS.md）：settings `describe` 返回**全部**注册 namespace；
-> `serialize.ts` 白名单字段、`DeepSeekCatalogModel` 无 per-model effort 字段、schemastery 非严格 object
-> 保留未知键三项仍成立（§2/§4 逐条给出可核验的 vendor 路径）。
+> **状态：推迟（设计定稿，待上游解锁）**——关键能力受上游（vendor，只读）约束，**实现暂缓**；未完成门禁见
+> `docs/progress/STATUS.md`。上游更新阶段须按 §4 复查、按 §5 实现。本文档 + 05 为实现契约（05 的
+> `settings.section` 槽位契约见 05 §5）；官方 Models 页为 vendor `dsh-client-ui-settings-models`。
+> 上游证据以**当前 pin 树**为准（版本单一来源见 AGENTS.md）：settings `describe` 全量返回；`serialize.ts`
+> 白名单、`DeepSeekCatalogModel` 无 per-model effort 字段、schemastery 非严格 object 保留未知键三项仍成立
+> （vendor 路径见 §2/§4）。
 
 ## 0. 范围与状态
 
@@ -44,7 +43,7 @@
 - 生效路径：profile `reasoningEffort` → 每模型 `defaultEffort`（adapter）→ 无显式 effort 的请求自动套用
   （`dsh-llm/src/index`）→ wire `reasoning_effort`（`serialize`）。
 - **联动约束**：`thinking: disabled` 时仅允许 `off`/Default，否则适配器拒收并保留旧配置。
-- **注意**：`DeepSeekCatalogModel`（adapter）**没有 per-model effort 字段**——该默认是 profile 级，非 per-model。
+- `DeepSeekCatalogModel`（adapter）**没有 per-model effort 字段**，该默认是 profile 级非 per-model（§3 #3）。
 
 ### 2.3 wire 请求是封闭白名单：extra 键不会泛化透传
 
@@ -74,10 +73,10 @@
   （`api/settings-controller` 的 Remote）返回**全部**注册 namespace 的已脱敏 descriptor（`redactSecrets`），
   含 `ns / schema / value / base / user / revision`，**无 namespace 白名单门**；写入走同面的
   `settings.update / replace / mutate`（`ns` 参数直达该 section），按 schema 与 `expectedRevision` 校验。
-  → chamber **可以**回显并设置「当前默认选择」（该回显/设置入口不在 §5 蓝本范围内，属未排期实现项）。
-- 可用数据面：`settings.describe/update/replace/mutate`（全 namespace，已含 `agent-default-model`）、
-  `session.modelCatalog`（session 无关模型目录；provider 目录另见 `llm.listProviders` /
-  `llm.listConfigurableProviders`）、`sessions.selectModel`（选择时副作用写默认，§2.1）。
+  → chamber **可以**回显并设置「当前默认选择」（不在 §5 蓝本内，未排期）。
+- 可用数据面：`settings.describe/update/replace/mutate`（全 namespace，含 `agent-default-model`）、
+  `session.modelCatalog`（session 无关模型目录；provider 目录见 `llm.listProviders` /
+  `llm.listConfigurableProviders`）、`sessions.selectModel`（选择副作用写默认，§2.1）。
 
 ## 3. 阻塞点与解锁条件（上游）
 
