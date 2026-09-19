@@ -1,9 +1,10 @@
-# 产物新鲜度守卫（G1–G8；未排期）
+# 产物新鲜度守卫（G2–G8；未排期）
 
 > 由 2026-12 复核的产物普查得来：`packages/gateway/dist` 曾长期带着旧一轮的受保护集合判定器
 > （`src` 已修、`dist` 未重建，打包态才暴露），同一轮里 `packages/desktop/dist/control-plane` 也靠手工
 > 重建才生效。本轮只给这两个产物加了"存在但缺当前标记 ⇒ 失败"的守卫，其余产物的陈旧仍无人发现。
-> 本文只记**未实现**的守卫想法与优先级；已落地的两条守卫、两条真实覆盖空洞见
+> 本文只记**未实现**的守卫想法与优先级；已落地的守卫（control-plane / gateway 标记守卫 +
+> G1 测试接线闭包门禁 `verify:test-wiring`，2026-12 起挂 `check:static`）与两条真实覆盖空洞见
 > `docs/progress/STATUS.md`（design 21 §7 有指针）。**这是想法清单，不是承诺**；落地后按
 > `docs/progress/README.md` 的纪律移出本表。
 
@@ -24,13 +25,13 @@
 `dist/` 整族在 `.gitignore`：干净 checkout 里"缺失"是正常态（守卫因此按需构建），
 **本地/打包态的"存在但陈旧"才是要防的**——CI 每次全新构建，天然看不到这一类。
 
+> 表中 `scripts/*` 指 `packages/desktop/scripts/*`（Electron 构建脚本；gateway 侧为
+> `packages/gateway/scripts/*`），不是仓库根的 `scripts/`。
+
 ## 2. 最小守卫建议（P0–P2）
 
 ### P0（成本低、直接堵本轮漏洞）
 
-- **G1 测试接线闭包门禁**：断言每个 `*.test.*` / `*.test.mjs` 至少被某个 package 的 `test` 脚本引用，
-  挂在 `test:upgrade-tools`（CI 已跑）。适用产物：全部守卫自身。成本：低（纯函数 + 现有脚本清单文本）。
-  收益：本轮 `control-plane-freshness.test.mjs` 差点成为"存在但没人跑"的守卫——接线即生效可验证。
 - **G2 产物新鲜度双边登记表**：一张表（产物 ↔ 生成者 ↔ 守卫或豁免），门禁断言表里每个产物都有守卫或
   显式豁免。适用产物：§1 全部。成本：低–中（表 + 纯函数）。收益：把"没有守卫"变成显式登记，杜绝静默。
 - **G4 preload 重建比对**：`scripts/build-preload.mjs` 本就先 emit 到临时目录，追加"与 `dist/preload.cjs`
@@ -65,4 +66,4 @@
 - **CI 腿的边界**：CI 每次全新构建，"陈旧"只在本地/打包态出现——要真覆盖得在打包作业里跑 G5，
   而不是在 push 腿追加更多构建。
 - **smoke 无 PASS 腿**（见 STATUS 单列条）：是否在 release 作业里装一次真实 dsh 运行时跑冒烟；
-  不在 G1–G8 范围内。
+  不在本清单范围内。

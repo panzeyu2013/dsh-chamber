@@ -5,18 +5,9 @@
 > 接入缺口（P）、门禁/覆盖缺口与文档漂移（G/D）、可达性纪律与盘点。本文件**不是**进度记录、不是验证
 > 报告：不记完成态、不记测试计数、不记提交流水账。
 >
-> 2026-12 双 flavor 对齐两批之后，M1-M6 六路 macOS 专项只读复核（更新链/签名、生命周期与菜单、
-> 权限/凭据、Web 内容、打包/首启、resolved 行闭合核验）逐行核对了本表并开列缺陷与覆盖缺口
-> （S-36 起、T-17 起、P-20、G32 起、D14）。其后的修复批已按复核结论收口大部分行：更新通道与
-> 安装腿（S-22/S-23/S-36/S-37/S-38/S-39）、生命周期与首启（S-08/S-24/S-40/S-41/S-42/S-43/S-46）、
-> Swift 接入缺口（P-13/P-15/P-20）与门禁覆盖（G32-G40）各自修实或进测试，文档漂移
-> （D4/D9/D13/D14）按当前工作树改写；S-37 保留会话依赖的节奏残余，S-44 收窄为 Electron 授权
-> 预检的运行时不可达（诚实拒绝面已在位）。2026-12 打包/引擎专项复核（A1 用户可见行为、A2 开发/
-> 构建/发布链、A3 WebKit 引擎面）的条目已按落盘收口：支持矩阵与 JS 基线（S-30）、打包态 locale
-> （S-47）、下载落盘（S-26）、缩放持久化（T-22）、原生壳日志（T-25）、mac 打包演练与 Sparkle
-> 密钥/发布物门禁（G41/G42）；S-10 降级为遮挡/App Nap 未判的部分收口（open），S-45 的状态词与
-> 正文拉齐。新增 accepted：JS 对话框（T-21）、WebKit ITP（T-23）、无 `NS*UsageDescription`
-> （T-24）与旧系统兜底在新下限下不可达（T-26）。仍 open 的只有外部门禁（S-01）、S-44 的实机面、S-10 的实机判定、S-48 的实机验收、S-49 的窗口高度单侧对齐裁决、S-50 的实机门禁、D15 的文档锚点过期、T-28 的 corner-shape 单点裁决与 CI 内打包 .app
+> 2026-12 双 flavor 对齐与打包/引擎专项只读复核后，本表逐行改写为当前结论：**状态词即权威**，
+> 收口结论只保留一行 `resolved` 与退役判据（复核与修复的批次账不留存，原文见 git 历史）。
+> 仍 open 的只有外部门禁（S-01）、S-44 的实机面、S-10 的实机判定、S-48 的实机验收、S-49 的窗口高度单侧对齐裁决、S-50 的实机门禁、D15 的文档锚点过期、T-28 的 corner-shape 单点裁决与 CI 内打包 .app
 > 启动（G19）；其余为 accepted 的结构性差异或已收口项。证据为当前工作树行号；旧 id 全部保留。
 
 ## 0. 更新纪律
@@ -228,7 +219,7 @@
 - **打印 / 页内查找**：两端皆无（`electron.d.ts:9653` 无 print/find role；macos grep printOperation/find = 0）；任一端将来加入口时 Swift 必须实现 `printOperation(with:)`，否则成新缺口（预警）。
 - **许可文本随包**：两端都不随任何顶层许可/第三方声明（Electron mac 打包显式删除 LICENSE/LICENSES.chromium.html：`electronMac.js:219-221`；Swift 只解 bin/node：`build-sidecar.mjs`；THIRD_PARTY_NOTICES.md 只在 release 流程校验）——共同缺口而非 flavor 差异，需单独立项。
 - **CSP frame-src（已裁定）**：已补最窄 `frame-src blob:`（`control-plane/src/index.ts:1131-1143`），HTML 文档预览的 blob: iframe 具备渲染条件；Swift 只对非主 frame 放行（S-35）。真实渲染仍属实机观察（§4）。
-- test-windows 腿的 Windows 用户路径缺口由 `docs/progress/todo/windows-v1.md:50-58` 台账承载，不并入本表。
+- test-windows 腿的 Windows 用户路径缺口由 `docs/progress/todo/windows-v1.md:51-60` 台账承载，不并入本表。
 
 ## 6. 可达性优先：纪律与盘点
 

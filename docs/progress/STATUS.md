@@ -100,7 +100,7 @@
   失败」守卫 ；其余陈旧无测试变红——`desktop/dist/web/**`（`electron-shared.test.mjs` 只断路径文本）、
   `dist/preload.cjs`、`dist/host-{graph,git-worktree,archive-cleanup,open-in}-package/**`（
   `build-host-graph-package.test.mjs` 只断言行序 /outDir；C8 守已提交 `dist/index.js`）、
-  `gateway/host-packages/**`（仅存在性）、vendor `allowBuilds` 锁步、`renderer/src/generated/**`。G1–G8 见
+  `gateway/host-packages/**`（仅存在性）、vendor `allowBuilds` 锁步、`renderer/src/generated/**`。G2–G8（G1 已落地 `verify:test-wiring`）见
   `todo/product-freshness-guards.md`，design 21 §7 已登记。失效判据：每个产物有「 陈旧 ⇒ 红」守卫或进入豁免表（G8）。
 
 - **CI 无任何腿能证明 SMOKE PASS**：`control-plane/test/smoke.test.ts` 在 CI 恒 SKIP（不设 `DSH_CHAMBER_DSH_PATH`、无
@@ -246,8 +246,8 @@
     ⑥ 阈值（L1 门槛 120s / 等回执 150s / L2 退避 300s / L3 120s）未经实机校准，L1 配额为滚动窗口
     （10 分钟 ≤3 次）；
     ⑦ 上述三条上游语义依赖（refresh 回灌 / emit 无重传 / 失败也 resolve）只有接线测试
-    与语义测试，**尚无读 vendor 源的 lockstep 测试**（checklist §4 已登记，仿
-    locale-vendor-contract 的形态；失效判据 = 该测试落地并被 CI 运行）；
+    与语义测试，**尚无读 vendor 源的 lockstep 测试**（checklist §4 已登记；
+    失效判据 = 该测试落地并被 CI 运行）；
     ⑧ 控制面 `<stateDir>/logs/control-plane.log` 与原生壳 `<userData>/logs/sidecar.log`
     的取证价值未在一次真机事故里验证（失效判据 = 事故后能从这两处检索到
     `WebSocket stream … closed` / `heartbeat lost …` 行）；
@@ -310,7 +310,7 @@
   IPC、纯渲染层 ）；**复制 `ssh user@host` / VS Code 深链与 S4（侧栏入口、快捷键）不做**——header
   按钮与目标会话同排相邻、会话行动作已全在一个 kebab 菜单里（`ServerSection.tsx:1952-1977`；刻意无 kebab的是 worktree
   派生的 workspace 行，`:1288-1290` ）、快捷键缺 vendor keybinding
-  基建，且三处「今天无按钮」来源都不在主流程上。完整形态留档 `docs/progress/todo/open-in-superset-batches.md` §5 附录
+  基建，且三处「今天无按钮」来源都不在主流程上。完整形态留档 `docs/progress/todo/open-in-superset-batches.md` §3 附录
   A/B。
 
 - **VS Code 深链 + open-in（designs 16/20）**：剩余 macOS 实机验收——深链冷/热启动、打包态、托盘/退出在途、N-ctx、VS
@@ -492,10 +492,10 @@
 
 - **macOS Swift 原生壳（design 25，路线 A）开放门禁**：计划期的 D1–D7 正式签核未走形式流程（实现按推荐默认值落位；其中 D3 的更新路线经用户 2026-12 裁决改为 Sparkle 2），M5 门禁未闭合。剩余：① **实机/GUI 验收（打包 `.app` + 真实实例）**——打包态冷启动首载（宿主不占用 17500：首载等 sidecar ready + 有界退避、失败页携带真实原因与端口占用提示）与同 bundle 二次启动的单实例流程、通知权限时机与点击激活会话、SMAppService 登录项、LaunchServices
   深链冷/热启动、关窗隐藏与恢复、唤醒补发、ATS loopback、最小化/被完全覆盖与 App Nap 语义（S-10），以及 WKWebView 无 `backgroundThrottling:false` 等价物下的
-  SSE/WS 心跳与恢复（design 25 §8.1 C1/C2、§8.5 W1–W6；判定标准见 `todo/macos-swift-v1.md` §七）；② **凭据 /
+  SSE/WS 心跳与恢复（design 25 §8.1 C1/C2、§8.5 W1–W7；判定标准见 `todo/macos-swift-v1.md` §七）；② **凭据 /
   runner-only 发布证明**——Developer ID 签名、公证、stapler、spctl 各臂与 arch（lipo）断言实跑，以及首个正式
   `build-swift` 发布腿（release.yml 已 fail-closed；缺 Apple 凭据 = 外部阻断，design 25 §7 / companion A6）；③**M5
-  实机矩阵**——W-28（打包态全链矩阵）…W-32（R1–R13 复盘 + D1–D7 复核）未执行（W-29W1–W6 逐项判定、W-30
+  实机矩阵**——W-28（打包态全链矩阵）…W-32（R1–R13 复盘 + D1–D7 复核）未执行（W-29 W1–W7 逐项判定、W-30
   双端性能/体积对比见 companion §七/WBS）；**双端 harness 未实施**（`swift-harness-driver.test.ts`，需 mac + GUI）；④
   **有意保留的零 core 消费者契约面**——`resolveResource`/`isPackaged`/`notifyClicked`/`trayAvailable`/
   `focusMainWindow`/`launchApp` 与 HostEdges 同步 `setKeepAwake`/`setLoginItem` 在 `desktop/shell-core.ts:679-762`

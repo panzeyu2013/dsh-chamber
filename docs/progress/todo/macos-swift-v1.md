@@ -2,9 +2,9 @@
 
 > 状态：**代码面已落地**（路线 A：Swift 写壳 + Node sidecar；契约与实现形态见
 > `docs/design/25-macos-swift-native-shell.md`）。本文是 design 25 的 companion，只保留
-> **未闭合的外部门禁**、**双端验收协议 / 中止条件**与 **W-xx 任务号索引**（代码与测试注释按该
-> 编号引用契约）。M0–M4 的执行记录、逐里程碑叙述、施工分批顺序与工期估算已随收口删除
-> （留存 git 历史）；实机项与开放项同时登记在 `docs/progress/STATUS.md`。
+> **双端验收协议 / 中止条件**与 **W-xx 任务号索引**（代码与测试注释按该编号引用契约）；开放门禁的
+> **进度状态由 `docs/progress/STATUS.md` 单独持有**（矩阵本体见 design 25 §8.5），本文不复述台账。
+> M0–M4 的执行记录、逐里程碑叙述、施工分批顺序与工期估算已随收口删除（留存 git 历史）。
 
 ## 〇、决策结果索引（D1–D7；原签核表）
 
@@ -18,20 +18,16 @@
 | D6 Node 版本/架构/来源 | 构建期 fetch 固定版本 + SHA-256 校验（`DEFAULT_NODE_VERSION` 24.18.1，大版本对齐 Electron 43.4.0 内置 Node）；**v1 arm64-only** | `packages/desktop/scripts/build-sidecar.mjs` |
 | D7 静态凭据加密 | 不做：诚实 0600 明文 + 旧 safeStorage「保留禁用待重录」 | design 25 §6 |
 
-## 一、未闭合门禁
+## 一、未闭合门禁（坐标；状态归 STATUS）
 
-- **M5 实机门禁**（W-28…W-32，需真实打包产物 + 桌面会话）：
-  - W-28 打包态全链矩阵：控制面起动 / 本地实例预启动 / 连接 / 网关凭据重录 / 运行时版本管理与回退 /
-    插件同步 / 归档清理入口（无对话框）/ 通知点击 / 深链 / 隐藏恢复 / 唤醒补发 / 退出确认；
-  - W-29 W1–W7 parity 逐项判定（判据见 §七；W7 = 刷新率三工况，判据见 design 25 §5.1）；
-  - W-30 性能基线对照 + **双端产物体积对比登记**（.app/dmg/zip，同机同架构同 tag，目标 ≤ Electron × 0.75）；
-  - W-31 双端同 tag 正式发布 + CHANGELOG + STATUS 收口；
-  - W-32 R1–R13 实际化复盘 + D1–D7 复核。
-- **双端 harness 未实施**：`swift-harness-driver.test.ts`（node 侧拉起 Swift harness，断言真实窗口/桥/通信/
-  深链）需 GUI 会话，不进普通 push 链，列 release 演练与 M5（design 25 §8.3/§8.6）。
-- **A6 外部阻断**：Apple 凭据（Developer ID 签名 / 公证 / stapler）与首次 build-swift 的发布证明；凭据缺失时
-  dry-run 全链绿即可推进代码，但不得声称「完成」（STATUS 既有语义）。
-- 其余实机项（通知权限时序、SMAppService 登录项、LaunchServices 深链、唤醒恢复、SSE/WS 心跳、ATS）见 STATUS 未完成项。
+- **M5 实机门禁 W-28…W-32**：开放状态与逐条范围以 `docs/progress/STATUS.md`「macOS Swift 原生壳
+  （design 25，路线 A）开放门禁」为准；矩阵本体见 design 25 §8.5，判定标准见本文 §七。
+- **双端 harness 未实施**：`swift-harness-driver.test.ts`（真实窗口/桥/通信/深链）需 GUI 会话，
+  不进普通 push 链（design 25 §8.3/§8.6）。
+- **A6 外部阻断**：Apple 凭据（Developer ID 签名 / 公证 / stapler）缺失时 dry-run 全链绿即可推进代码，
+  但不得声称「完成」（design 25 §7）。
+- 其余实机项（通知权限时序、SMAppService 登录项、LaunchServices 深链、唤醒恢复、SSE/WS 心跳、ATS、
+  通知音效差异）逐条在 STATUS 未完成项。
 
 ## 二、WBS 任务号索引（W-01…W-32 → 契约落点）
 
@@ -56,7 +52,7 @@
 | W-23/W-24 | sidecar 打包（内建 node + dist/web）与 .app 组装 / Info.plist / ATS | design 25 §3.2、§4.3 |
 | W-25 | Sparkle 预研 → **已落地为 S-01 实现** | design 25 §7 |
 | W-26/W-27 | CI（ci.yml `test-macos`）与发布产物（`-native` 命名、appcast、回滚） | design 25 §8.4 |
-| W-28…W-32 | M5 实机门禁与收口 | 本文 §一 |
+| W-28…W-32 | M5 实机门禁与收口 | design 25 §8.5；开放状态见 STATUS |
 
 ## 三、双线防漂移门禁清单（压缩索引；断言细节见各文件与 design 25 §8.4）
 
@@ -75,13 +71,11 @@
 **Swift 产品代码禁止手写通道字符串**（测试 fixture 除外）。通道增删改 = 一次 PR 内三侧同改：
 `ipc-events`/preload（+ renderer 镜像）→ bridge-manifest 重生成 → Swift 引用点。
 
-## 六、同 tag 双端发布草案（D2=共存默认）
+## 六、同 tag 双端发布：回滚预案
 
-单 repo 单 tag `vX.Y.Z`：push CI 全绿（含上表全部 JS 门禁）→ release.yml `create-release`（Apple 凭据 fail-closed 门）
-→ Electron mac 腿（dmg/zip/latest-mac.yml）与 Swift mac 腿（`dsh-chamber-<ver>-macos-<arch>.dmg/.zip` +
-`appcast-swift.xml`，**独立 EdDSA 密钥**）并行构建上传 draft → 双产物齐 → 双端冒烟（M5 矩阵 + harness）→ publish。
-回滚预案：Swift 产物出问题 → draft 不 publish、Electron 照发（Electron 是共存主通道，Swift 可晚一 tag 跟上）；
-Electron 出问题 → 同 tag Swift 不单独发（防版本错位）；Win/Linux 腿不受影响。
+流程本体（凭据 fail-closed 门、两条 mac 腿、Swift 腿命名与**独立 EdDSA** appcast）见 design 25 §8.4 与
+release.yml；本文只留回滚预案：**Swift 产物出问题** → draft 不 publish、Electron 照发（Electron 是共存主通道，
+Swift 可晚一 tag 跟上）；**Electron 出问题** → 同 tag Swift 不单独发（防版本错位）；Win/Linux 腿不受影响。
 
 ## 七、风险与中止条件
 
@@ -139,11 +133,10 @@ Swift 侧用 **WKUserScript 注入同一套 PerformanceObserver 探针 + `evalua
 - A7：P4 性能基线结构性不达标且非修复可解——回 D1 重审。
 - A8：bridge-manifest 生成物 ≠ 提交物连续 3 个 PR 反复红——暂停 Swift 大 PR，先修 manifest 流程再继续。
 
-## 八、决策门日程与结果（原「最迟拍板门 / 错过后果」）
+## 八、决策门日程
 
-决策门随执行已全部拍板（结果见 §〇）：D1/D2/D4 在 M0 定；D3/D5 在 M2 前定（D3 后由用户裁决改为 Sparkle 2）；
-D6 在 M3 入口定（24.18.1 + arm64-only）；D7 在 M4 出口复查（不做）。若日后重开路线，最迟拍板门与错过后果仍照原表
-（改动会导致通知授权/打包身份/路径与 CI 返工）——原文见 git 历史。
+决策门随执行已全部拍板（结果见 §〇；原「最迟拍板门 / 错过后果」表在 git 历史）；若日后重开路线，改动会
+连带通知授权 / 打包身份 / 路径与 CI 返工。
 
 ## 九、工具与 dev 侧约定
 

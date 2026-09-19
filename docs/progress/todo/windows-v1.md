@@ -24,7 +24,8 @@
 - **M4**：登录自启注册表实测/卸载残留（nsis-uninstall-cleanup）、深链冷热启动 + `&`
   字符 URL、open-in 盘符实机、NSIS protocols 实证（与 M0.5 合并）。
 - **M5**：Azure Trusted Signing / MSIX 形态评估（需凭据/发行决策）；dry-run 全链 +
-  实机 Release 安装 + 更新链路演练；CHANGELOG 条目（随正式版本）。
+  实机 Release 安装 + 更新链路演练（design 23 §8）。
+- **M6**：收口——妥协清单、支持矩阵文档与 CHANGELOG 条目随正式版本落定（design 23 §1 分期表）。
 - **遗留低优（记录在案）**：supervisor win32 sendSignal 无宽限重试（方向 fail-closed）；
   双模块解析器重复（win-probes/windows-process 互注 + 双端 CI 测试）；decideDeepLink
   platform 入参保留为显式契约。
@@ -69,16 +70,9 @@
 | open-in 本地路径 | 已解锁（代码）：local 走 validateLocalPath（盘符/UNC） | `open-in.ts` runOpenInLaunch/finder | 实机盘符路径打开验证 |
 | 0700/0600 语义 | 继承 ACL + no-follow/identity + icacls 启动收紧 | store-permissions/private-file/win-acl.ts（main 已接线） | runner/实机 ACL 查询核对 |
 
-## 仍生效的取舍（design 23 / STATUS）
+## 仍生效的取舍
 
-- **无进程组等价**（妥协 F1）：win32 用硬终止 + 事务恢复，detached/进程组/SIGTERM
-  dispose 语义不可等价。
-- **能力先于开关**：dsh-runtime mutation 与 SSH askpass 密码认证在 M2a 验证完成前
-  保持只读/禁用门控；UI 翻转列 M2b。
-- **权限语义诚实**：Gateway owner-private 目录在 Windows 只验证
-  real-dir/no-follow/identity 并继承 OS ACL（icacls 显式收紧已接线）；Node 的
-  mode/chmod 无法诚实证明 POSIX 0700，不把该让步写成已有等价保障。
-- **凭据存储**：win32 上 DPAPI（safeStorage）不可用时拒绝明文落盘（C16/S22 明文兜底
-  仅限非 win32）——凭据仅内存驻留，每次连接需重录。
-- **发布身份**：x64 安装包未做 Authenticode 签名，SmartScreen 提示为已知取舍；feed
-  sha512 只证明下载完整性，不等价于发行者签名。
+取舍的唯一权威是 `docs/design/23-windows-support.md` §5「妥协点（发布附注，唯一权威）」与
+`docs/progress/STATUS.md`「范围决策与必要取舍」：F1 无进程组等价、能力先于开关（M2a 前只读/
+禁用）、Windows ACL 权限语义、C16 凭据仅内存、未签名发布身份均登记在彼，本文不复述（避免
+第三份副本漂移）。
