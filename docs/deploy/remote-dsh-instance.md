@@ -1,36 +1,30 @@
 # 远程 dsh 实例（systemd）持久化
 
-> 从 README 移出的完整操作说明。远程服务器上的 dsh 实例推荐用 systemd
-> 持久化（系统单元或 user 单元，以非 root 用户运行，所有文件落在该用户
-> 自己的家目录）。服务器端部署统一入口另见
-> [deploy-gateway.md](deploy-gateway.md)。
+> 从README移出的完整操作说明。远程dsh实例推荐用systemd持久化（系统/用户单元，非root，文件落在其家目录）。服务器端部署统一入口见 [deploy-gateway.md](deploy-gateway.md)。
 >
-> **改用 Gateway？** 直连实例的历史数据**不会自动跟随**托管实例——安装
-> gateway 后按 [deploy-gateway.md §3](deploy-gateway.md) 做一次停机态数据
-> 迁移，旧会话 / 工作区即可无缝延续。
+> 改用Gateway？ 直连实例的历史数据不会自动跟随托管实例——装完gateway后按 [deploy-gateway.md §3](deploy-gateway.md) 做一次停机态迁移，旧会话 / 工作区无缝延续。
 
 ---
 
 ## 远程 dsh 实例（systemd）
 
-远程服务器只需在 loopback 上运行 dsh 的 API 面 web profile——那里无需 web 前端：UI 来自本地复用的前端，经 `/api/i/dsh-<id>/*` 同源反代访问（这里采用 SSH transport）。
+远程服务器只需在loopback运行dsh的API面web profile，无需web前端：UI来自本地复用前端，
+经 `/api/i/dsh-<id>/*` 同源反代访问（SSH transport）。
 
-1. **环境要求** — 装有 systemd 的 Linux、Node.js 22+、运行 chamber 桌面的机器对该服务器的 SSH 访问（密钥认证：桌面传输运行时经 SSH 通道驱动 `systemctl`）。
-2. **安装 dsh**（官方发行）：
+1. 环境要求 — systemd Linux、Node.js 22+、chamber桌面机器对该服务器的SSH访问
+（密钥认证；桌面经SSH驱动 `systemctl`）。
+2. 安装dsh（官方发行）：
 
    ```bash
    npm install -g @deepseek-ai/dsh
    dsh --version
    which dsh   # 记下安装路径（npm 全局，不在 /usr/bin）供下方 ExecStart 使用
    which node  # 记下 node bin 目录（nvm 托管，systemd 的 PATH 里没有）供下方 PATH 行使用
-   ```
+ ```
 
-3. **用 systemd 持久化** — 两种形态任选，dsh 都以非 root 用户身份运行，
-   所有文件都落在该用户自己的家目录。dsh 默认 `$HOME/.dsh`，因此完全
-   不需要设置 DSH_HOME。
+3. 用systemd持久化 — 两种形态任选，dsh均以非root运行、文件落在其家目录（默认 `$HOME/.dsh`，无需DSH_HOME）。
 
-   **形态 A —— 系统单元（推荐）。** 创建 `/etc/systemd/system/dsh.service`
-   （root 只在安装单元时用一次）：
+   形态A —— 系统单元（推荐）。 创建 `/etc/systemd/system/dsh.service`（root仅在装单元时用一次）：
 
    ```ini
    [Unit]
@@ -65,18 +59,15 @@
 
    [Install]
    WantedBy=multi-user.target
-   ```
+ ```
 
    ```bash
    sudo systemctl daemon-reload
    sudo systemctl enable --now dsh
    sudo systemctl status dsh
-   ```
+ ```
 
-   **形态 B —— 用户单元（完全无需 root）。** 服务器上没有 root（或不想
-   申请）时，systemd 用户单元同样能持久化 dsh。创建
-   `~/.config/systemd/user/dsh.service`——单元形状相同，只是没有
-   `User=` 行（以你自己身份运行），`WantedBy=default.target`：
+   形态B —— 用户单元（完全无需root）。 无root时用用户单元：创建 `~/.config/systemd/user/dsh.service`——形状相同，没有 `User=` 行（以你自己身份运行）， `WantedBy=default.target`：
 
    ```ini
    [Unit]
@@ -96,7 +87,7 @@
 
    [Install]
    WantedBy=default.target
-   ```
+ ```
 
    ```bash
    systemctl --user daemon-reload
@@ -104,77 +95,52 @@
    systemctl --user status dsh
    # 登出后与开机后仍然存活——一次性操作，需要 root（或 polkit 授权）：
    sudo loginctl enable-linger <你的用户名>
-   ```
+ ```
 
-   创建和管理 `--user` 单元不需要 root；但**没有 linger 时**，用户管理器
-   （连同你的服务）会在登出时停止。`loginctl enable-linger` 让它在开机时
-   启动、登出后继续运行。
+   创建/管理 `--user` 单元不需root；无linger时用户管理器（连同服务）登出即停。 `loginctl enable-linger` 让它在开机时启动、登出后继续运行。
 
-   **归属规则。** dsh 把所有文件写到单元运行用户自己的家目录（默认
-   `~/.dsh`）——该用户只需要有真实的家目录即可。不需要 mkdir、不需要
-   chown，"root 写的文件我的用户读不了"的问题根本不会出现。运行账号三选一：
+   归属规则。 运行用户只需有真实家目录：无需mkdir/chown，不会出现"root写的文件我的用户读不了"。账号三选一：
 
-   - **你的登录用户**（形态 A）：`User=<你的用户名>`，家目录本就是你的。
-   - **专用服务账号**（更安全）：建号时带上家目录——
-     `sudo useradd --system --create-home dsh`（注意：`useradd --system`
-     默认**不创建**家目录，必须加 `--create-home`）——然后设
-     `User=dsh` / `Group=dsh`，dsh 使用该账号自己的 `~/.dsh`。
-   - **root**：可行但**不推荐**——dsh 会写到 `/root/.dsh`，归 root 所有，
-     你的用户不可读。
+   - 你的登录用户（形态A）：`User=<你的用户名>`，家目录本就是你的。
+   - 专用服务账号（更安全）：`sudo useradd --system --create-home dsh` 建号（`useradd --system` 默认不创建家目录，必须加 `--create-home`），再设 `User=dsh` / `Group=dsh`，dsh用其 `~/.dsh`。
+   - root：可行但不推荐——dsh写到 `/root/.dsh`，归root，你的用户不可读。
 
-   **形态 B 的注意点**：chamber 桌面的 systemd 起停按钮驱动的是**系统**
-   管理器（`systemctl ...` 不带 `--user`，设计 02 §3.9），看不到用户单元——
-   请在服务器上改用 `systemctl --user` 管理。隧道/连接本身不受影响
-   （linger 保证实例常驻）。若希望桌面按钮可用，请用形态 A。
+   形态B的注意点：chamber桌面的systemd起停按钮驱动系统管理器（`systemctl ...` 不带 `--user`，设计02 §3.9），看不到用户单元——请在服务器上用 `systemctl --user` 管理。 隧道/连接不受影响；要用桌面按钮请用形态A。
 
-   若服务崩溃重启，先看日志（`journalctl -u dsh`；用户单元用
-   `journalctl --user -u dsh`）：`status=127` + `/usr/bin/env: 'node': No
-   such file or directory` 说明上面的 PATH 行没包含实际的 node bin 目录。
+   服务崩溃重启先看日志（`journalctl -u dsh`；用户单元 `journalctl --user -u dsh`）： `status=127` + `/usr/bin/env: 'node': No such file or directory` 说明PATH行未含实际node bin目录。
 
-   `--host 127.0.0.1`（loopback 绑定）是刻意为之：chamber 桌面经自身 SSH
-   隧道访问实例，不额外暴露攻击面。只有想从其他机器直接访问 30800（绕过
-   chamber 隧道）时才需改成 `--host 0.0.0.0`——且必须配套真实鉴权（v1
-   实例是匿名的），或改用反向代理前置。
+   `--host 127.0.0.1`（loopback绑定）是刻意为之：chamber桌面经自身SSH隧道访问，不额外 暴露攻击面。要从其他机器直连30800（绕过隧道）才改为 `--host 0.0.0.0`——且必须配套真实鉴权 （v1实例匿名）或反向代理前置。
 
-4. **从 chamber 桌面接入** — 在连接设置页选择目标 `dsh|gateway` 与传输
-   `ssh|http`（四组合均支持），填写目标端点；SSH 可配 user/SSH 端口/systemd
-   服务与可选密码，Gateway 可独立配置 token 和/或 Unicode 登录密码，HTTPS 可选
-   SPKI pin。SSH 形态由桌面接管 `ssh -N -L` 与按需 systemd；HTTP 形态由主进程
-   直连，renderer 始终只见同源反代。单元形态遵循设计 02 §3.9，完整契约见
-   03 §2.2 / 17 §9。
+4. 从chamber桌面接入 — 连接设置页选择目标 `dsh|gateway` 与传输 `ssh|http`（四组合均支持） 并填端点；SSH可配user/SSH端口/systemd服务与可选密码，Gateway可独立配置token和/或Unicode登录密码，HTTPS可选SPKI pin。SSH由桌面接管 `ssh -N -L` 与按需systemd；HTTP由 主进程直连，renderer只见同源反代。单元形态遵循设计02 §3.9，契约见03 §2.2 / 17 §9。
 
 ---
 
 ## English version
 
-> Extracted from the README. For a dsh instance on a remote server, systemd is
-> the recommended way to persist it (system or user unit, running as a non-root
-> user with all files in that user's own home). The server-side deployment
-> entry point is [deploy-gateway.md](deploy-gateway.md).
+> Extracted from the README. For a remote-server dsh instance, systemd is the recommended persistence (system or user unit, non-root, files in that user's home). Server-side entry point: [deploy-gateway.md](deploy-gateway.md).
 >
-> **Switching to the Gateway?** Existing data does **not** follow the managed
-> instance automatically — after installing the gateway, run the one-time
-> quiescent migration in [deploy-gateway.md §3](deploy-gateway.md) so your
-> sessions/workspaces carry over seamlessly.
+> Switching to the Gateway? Existing data does not follow the managed instance automatically — after installing the gateway, run the one-time quiescent migration in [deploy-gateway.md §3](deploy-gateway.md) so sessions/workspaces carry over.
 
 ## Remote dsh instance (systemd)
 
-The remote server only needs the dsh API-side web profile on loopback — no web frontend there: the UI comes from the locally reused frontend through the `/api/i/dsh-<id>/*` same-origin proxy (using the SSH transport in this setup).
+The remote server only needs the dsh API-side web profile on loopback — no web frontend: the UI
+comes from the locally reused frontend through the `/api/i/dsh-<id>/*` same-origin proxy (SSH transport).
 
-1. **Requirements** — a systemd Linux host, Node.js 22+, and SSH access from the machine running the chamber desktop (key auth: the desktop transport runtime drives `systemctl` over the SSH channel).
-2. **Install dsh** (official release):
+1. Requirements — a systemd Linux host, Node.js 22+, and SSH access from the chamber-desktop
+machine (key auth; the desktop drives `systemctl` over SSH).
+2. Install dsh (official release):
 
    ```bash
    npm install -g @deepseek-ai/dsh
    dsh --version
    which dsh   # note the install path (npm global, not /usr/bin) for ExecStart below
    which node  # note the node bin dir (nvm-managed, absent from systemd's PATH) for the PATH line below
-   ```
+ ```
 
-3. **Persist with systemd** — either form below runs dsh as a non-root user, with all files landing in that user's own home. dsh defaults to `$HOME/.dsh`, so no DSH_HOME is needed.
+3. Persist with systemd — either form runs dsh as a non-root user, files landing in its home
+(default `$HOME/.dsh`; no DSH_HOME needed).
 
-   **Form A — system unit (recommended).** Create `/etc/systemd/system/dsh.service`
-   (root is only needed once, to install the unit):
+   Form A — system unit (recommended). Create `/etc/systemd/system/dsh.service` (root needed once, to install):
 
    ```ini
    [Unit]
@@ -211,18 +177,15 @@ The remote server only needs the dsh API-side web profile on loopback — no web
 
    [Install]
    WantedBy=multi-user.target
-   ```
+ ```
 
    ```bash
    sudo systemctl daemon-reload
    sudo systemctl enable --now dsh
    sudo systemctl status dsh
-   ```
+ ```
 
-   **Form B — user unit (no root at all).** When the server has no root (or you
-   don't want to ask), a systemd user unit persists dsh just as well. Create
-   `~/.config/systemd/user/dsh.service` — the unit shape is the same, just no
-   `User=` line (runs as yourself) and `WantedBy=default.target`:
+   Form B — user unit (no root at all). With no root, create `~/.config/systemd/user/dsh.service` — same shape, no `User=` line (runs as yourself), `WantedBy=default.target`:
 
    ```ini
    [Unit]
@@ -242,7 +205,7 @@ The remote server only needs the dsh API-side web profile on loopback — no web
 
    [Install]
    WantedBy=default.target
-   ```
+ ```
 
    ```bash
    systemctl --user daemon-reload
@@ -250,47 +213,21 @@ The remote server only needs the dsh API-side web profile on loopback — no web
    systemctl --user status dsh
    # Survives logout and boot — one-time step, needs root (or polkit):
    sudo loginctl enable-linger <YOUR_USERNAME>
-   ```
+ ```
 
-   Creating and managing `--user` units needs no root; but **without linger**,
-   the user manager (and your service) stops at logout. `loginctl enable-linger`
-   makes it start at boot and survive logout.
+   Creating/managing `--user` units needs no root; but without linger the user manager (and your service) stops at logout. `loginctl enable-linger` starts it at boot and keeps it past logout.
 
-   **Ownership rules.** dsh writes all files to the unit's running user's own
-   home (default `~/.dsh`) — the user just needs a real home directory. No
-   mkdir, no chown, and the "root wrote files my user can't read" problem never
-   arises. Pick one of three accounts:
+   Ownership rules. The running user needs only a real home directory: no mkdir, no chown, no "root wrote files my user can't read". Three accounts:
 
-   - **Your login user** (Form A): `User=<YOUR_USERNAME>`, the home is already yours.
-   - **A dedicated service account** (more secure): create it with a home —
-     `sudo useradd --system --create-home dsh` (note: `useradd --system` does
-     **not** create a home by default; `--create-home` is required) — then set
-     `User=dsh` / `Group=dsh`; dsh uses that account's own `~/.dsh`.
-   - **root**: possible but **not recommended** — dsh writes to `/root/.dsh`,
-     owned by root and unreadable by your user.
+   - Your login user (Form A): `User=<YOUR_USERNAME>`, the home is already yours.
+   - A dedicated service account (more secure): `sudo useradd --system --create-home dsh` (`useradd --system` does not create a home by default; `--create-home` is required), then set `User=dsh` / `Group=dsh`; dsh uses that account's own `~/.dsh`.
+   - root: possible but not recommended — dsh writes to `/root/.dsh`, root-owned and unreadable by your user.
 
-   **Form B caveat**: the chamber desktop's systemd start/stop buttons drive the
-   **system** manager (`systemctl ...` without `--user`, design 02 §3.9) and
-   cannot see user units — manage them on the server with `systemctl --user`
-   instead. Tunnels/connections are unaffected (linger keeps the instance
-   resident). Use Form A if you want the desktop buttons to work.
+   Form B caveat: the desktop's start/stop buttons drive the system manager (`systemctl ...` without `--user`, design 02 §3.9) and cannot see user units — manage them with `systemctl --user` on the server. Tunnels are unaffected (linger keeps the instance resident); use Form A for desktop buttons.
 
-   If the service crash-restarts, check the logs first (`journalctl -u dsh`;
-   user units: `journalctl --user -u dsh`): `status=127` +
-   `/usr/bin/env: 'node': No such file or directory` means the PATH line above
-   doesn't include the actual node bin dir.
+   If the service crash-restarts, check the logs (`journalctl -u dsh`; user units `journalctl --user -u dsh`): `status=127` + `/usr/bin/env: 'node': No such file or directory` means the PATH line lacks the node bin dir.
 
-   `--host 127.0.0.1` (loopback binding) is deliberate: the chamber desktop
-   reaches the instance through its own SSH tunnel, adding no extra attack
-   surface. Only change it to `--host 0.0.0.0` to reach port 30800 from other
-   machines (bypassing the chamber tunnel) — and then you must pair it with
-   real auth (v1 instances are anonymous) or put a reverse proxy in front.
+   `--host 127.0.0.1` (loopback) is deliberate: the chamber desktop reaches the instance through its own SSH tunnel, adding no attack surface. Only change it to `--host 0.0.0.0` to reach port 30800 from other machines directly (bypassing the tunnel) — and pair it with real auth (v1 instances are anonymous) or a reverse proxy.
 
-4. **Attach from the chamber desktop** — choose a `dsh|gateway` target and an
-   `ssh|http` transport (all four combinations ship), then enter its endpoint.
-   SSH may carry user/port/systemd metadata and an optional password; Gateway
-   independently accepts a token and/or Unicode login password, with optional
-   SPKI pinning for HTTPS. Desktop owns SSH tunnels and on-demand systemd;
-   main connects HTTP directly while the renderer still sees only same-origin
-   proxying. See designs 03 §2.2 and 17 §9.
+4. Attach from the chamber desktop — choose a `dsh|gateway` target and `ssh|http` transport (all four combinations ship) and enter the endpoint. SSH may carry user/port/systemd metadata and an optional password; Gateway independently accepts a token and/or Unicode login password, with optional SPKI pinning. Desktop owns SSH tunnels and on-demand systemd; main connects HTTP directly while the renderer sees only same-origin proxying. Designs 03 §2.2, 17 §9.
 
