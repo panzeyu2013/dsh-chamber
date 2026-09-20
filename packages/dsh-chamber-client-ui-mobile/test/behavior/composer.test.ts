@@ -1,18 +1,23 @@
 /**
  * Composer behavior pure-logic tests (P1.5 + 2026 review + mobile rounds):
  * the keyboard heuristic, the self-heal constant, the layer-1
- * navigation-gesture predicate, the layer-5 keyboard-compensation geometry
- * (covered height / quantized offset / scroll-end / arm decision) and the
- * Enter-newline caret-reveal delta — the DOM-bound installers stay
- * integration-tested on device, the pure decision functions are covered here.
+ * navigation-gesture predicate, the layer-5 composer-visibility guard
+ * (quantized offset / hysteresis arm+hold decision / scroll-end / bounded
+ * verification constants) and the Enter-newline caret-reveal delta — the
+ * DOM-bound installers stay integration-tested on device, the pure decision
+ * functions and the load-bearing source contracts are covered here.
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import {
   isKeyboardOpen, BUSY_STUCK_MS, TOUCH_TIER_QUERY, PHONE_TIER_QUERY,
   isNavigationGestureTarget, NAV_GESTURE_SELECTOR,
-  kbdCoveredHeight, nextKbdOffset, isAtScrollEnd, caretRevealDelta,
-  shouldCompensateKeyboard, KBD_EDITABLE_FOCUS_GRACE_MS, KBD_OFFSET_QUANTUM_PX,
+  kbdLiftTarget, nextKbdOffset, isAtScrollEnd, caretRevealDelta,
+  KBD_ARM_PX, KBD_DISARM_PX, KBD_VERIFY_SLACK_PX, KBD_MAX_VERIFY_STEPS,
+  MOBILE_KBD_ATTR, MOBILE_KBD_VAR, MOBILE_KBD_STATE_ATTR, MOBILE_KBD_SPACER_ATTR,
+  KBD_EDITABLE_FOCUS_GRACE_MS, KBD_OFFSET_QUANTUM_PX,
   isEditableComposer, isEditabilityFlipToEditable, lockClock, shouldRecoverStuckComposer,
   isComposerSubmitBusy, BUSY_COMPOSER_PHASES, isOfficiallyDisabled,
   EDITABILITY_MUTATION_OPTIONS, SELF_HEAL_MUTATION_OPTIONS,
@@ -69,15 +74,27 @@ test('isNavigationGestureTarget: non-navigation gestures are typing intent', () 
   assert.equal(isNavigationGestureTarget(seatOnly), false)
 })
 
-test('kbdCoveredHeight: layout bottom minus visual viewport bottom (layout coordinates)', () => {
-  // No keyboard / layout == visual → nothing covered.
-  assert.equal(kbdCoveredHeight(812, 812, 0), 0)
-  // iOS style: layout stays 812, visual shrinks to 512 → 300 covered.
-  assert.equal(kbdCoveredHeight(812, 512, 0), 300)
-  // Panned visual viewport (offsetTop > 0) reduces the covered band.
-  assert.equal(kbdCoveredHeight(812, 512, 40), 260)
-  // Zoomed-in visual viewport taller than the gap → clamped to 0.
-  assert.equal(kbdCoveredHeight(812, 900, 0), 0)
+test('kbdLiftTarget: hysteresis (arm >96px, hold >72px) over the measured overlap', () => {
+  // Nothing covered → never lift. The overlap is measured off the scrollport
+  // box (layout coordinates), not inferred from innerHeight.
+  assert.equal(kbdLiftTarget(0, false), 0)
+  assert.equal(kbdLiftTarget(-336, false), 0)
+  // Below the arm threshold the guard stays idle: browser chrome / a bottom
+  // bar / a 60px overlap must not micro-lift the seat (measured: idle at 60).
+  assert.equal(kbdLiftTarget(60, false), 0)
+  assert.equal(kbdLiftTarget(KBD_ARM_PX, false), 0)
+  // Keyboard-scale overlap arms, quantized so the seat never lands under the
+  // keyboard top (336 + 8 headroom → ceil(344/16) = 22 steps → 352).
+  assert.equal(kbdLiftTarget(336, false), 352)
+  assert.equal(kbdLiftTarget(KBD_ARM_PX + 1, false), 112)
+  // HYSTERESIS: while armed the lift is HELD through the band between the two
+  // thresholds — a sliding keyboard cannot flap the seat.
+  assert.equal(kbdLiftTarget(80, true), 96)
+  assert.equal(kbdLiftTarget(KBD_DISARM_PX + 1, true), 96)
+  // ...and releases only once the overlap is effectively gone.
+  assert.equal(kbdLiftTarget(KBD_DISARM_PX, true), 0)
+  assert.equal(kbdLiftTarget(0, true), 0)
+  assert.ok(KBD_ARM_PX > KBD_DISARM_PX, 'hysteresis band must be positive')
 })
 
 test('nextKbdOffset: ceil quantization with headroom, zero when uncovered', () => {
@@ -123,24 +140,18 @@ test('caretRevealDelta: signed scroll delta to bring the caret into the host vie
   assert.equal(caretRevealDelta(190, 210, 0, 200, 2), 12)
 })
 
-test('shouldCompensateKeyboard: a visual-viewport shrink alone is not enough', () => {
-  // No keyboard detected → never arm.
-  assert.equal(shouldCompensateKeyboard(false, 1, true, true), false)
-  // Keyboard detected but no editable focus (the keyboard belongs elsewhere,
-  // or the editor blurred) → do not lift the composer seat.
-  assert.equal(shouldCompensateKeyboard(true, 1, false, false), false)
-  // Zoom without the composer focused: vetoed — panning a zoomed page must
-  // not drive the offset (iOS focus-zooms on the drawer's 13px search).
-  assert.equal(shouldCompensateKeyboard(true, 2, true, false), false)
-  // Zoom WITH the composer focused: served — covered = layout - offsetTop -
-  // vv.height is exactly how far the seat exceeds the visible bottom edge,
-  // so the blanket veto would leave the composer behind the keyboard for the
-  // rest of a focus-zoomed session (cross-check P1).
-  assert.equal(shouldCompensateKeyboard(true, 2, true, true), true)
-  // Engine float noise around scale 1 is tolerated.
-  assert.equal(shouldCompensateKeyboard(true, 1.005, true, false), true)
-  // The real case: keyboard open, no zoom, editor focused.
-  assert.equal(shouldCompensateKeyboard(true, 1, true, true), true)
+test('the guard\'s contract constants: bounded verification, no unbounded ramp', () => {
+  // The post-write acceptance tolerance must stay well inside the smallest
+  // quantized lift, and the correction count must stay bounded: an engine
+  // that ignores the sticky inset is REPORTED (data-mobile-kbd-state =
+  // still-covered), never chased with a growing offset.
+  assert.ok(KBD_VERIFY_SLACK_PX > 0 && KBD_VERIFY_SLACK_PX < KBD_OFFSET_QUANTUM_PX * 2)
+  assert.ok(KBD_MAX_VERIFY_STEPS >= 1 && KBD_MAX_VERIFY_STEPS <= 2)
+  // The carrier names are the plugin\'s own (never an official attribute).
+  for (const name of [MOBILE_KBD_ATTR, MOBILE_KBD_STATE_ATTR, MOBILE_KBD_SPACER_ATTR]) {
+    assert.match(name, /^data-mobile-/)
+  }
+  assert.ok(MOBILE_KBD_VAR.startsWith('--'))
 })
 
 test('phone tier query is shared with the stylesheet and distinct from the touch tier', () => {
@@ -246,4 +257,37 @@ test('the observer channels keep their load-bearing options', () => {
   )
   assert.equal(SELF_HEAL_MUTATION_OPTIONS.attributes, true)
   assert.equal(SELF_HEAL_MUTATION_OPTIONS.subtree, true)
+})
+test('editability recovery only trusts the composer\'s OWN attribute flip (source lock)', () => {
+  // 2026-09 measured/review fix: the observer watches the whole document
+  // subtree, so a nested Lexical decorator flipping its own contenteditable
+  // used to satisfy isEditabilityFlipToEditable and blur+refocus the composer
+  // MID-TYPING. The predicate itself stays pure; the caller must narrow the
+  // batch to records whose target IS the composer input.
+  const source = readFileSync(fileURLToPath(new URL('../../src/client/composer.ts', import.meta.url)), 'utf8')
+  assert.match(
+    source,
+    /records\.filter\(record => record\.target === input\)\.map\(record => record\.oldValue\)/,
+    'the editability observer must ignore foreign contenteditable flips',
+  )
+})
+test('the guard keeps ONE actuator, never pads the scrollport (source lock)', () => {
+  const source = readFileSync(fileURLToPath(new URL('../../src/client/composer.ts', import.meta.url)), 'utf8')
+  // Measured double-lift defect: the conversation scrollport is ALSO the
+  // seat's sticky containing block, so padding it raises the sticky threshold
+  // and the same offset lands twice (seat 368px above the keyboard top on a
+  // 390x844 rig). The guard must never write a padding style.
+  assert.equal(/paddingBottom/.test(source), false, 'the guard must not pad the scrollport')
+  // The single actuator is the frame custom property the stylesheet reads.
+  assert.match(source, /style\.setProperty\(MOBILE_KBD_VAR/)
+  // The scroll range comes from an in-flow spacer kept immediately before the
+  // seat, including after a renderer remount reorders the seat list.
+  assert.match(source, /spacer\.nextElementSibling !== seat/)
+  // Bounded verification: the correction loop is capped, so an engine that
+  // ignores the sticky inset is reported instead of chased.
+  assert.match(source, /while \(steps < KBD_MAX_VERIFY_STEPS\)/)
+  // Diagnosis surface: every outcome is readable off the frame.
+  for (const state of ['armed', 'idle', 'no-seat', 'no-frame', 'still-covered']) {
+    assert.ok(source.includes(`'${state}'`), `missing guard state ${state}`)
+  }
 })

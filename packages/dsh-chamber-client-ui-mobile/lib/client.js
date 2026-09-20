@@ -547,23 +547,25 @@ var MOBILE_CSS = `
     text-size-adjust: 100%;
   }
 
-  /* Keyboard compensation (composer.ts installKeyboardCompensation, IME
-     ladder layer 5): engines that ignore 'interactive-widget=resizes-content'
-     (iOS Safari, older Android WebViews) keep the LAYOUT viewport full-height
-     when the soft keyboard opens, so the official sticky composer seat \u2014
-     pinned to the scrollport's layout bottom \u2014 ends up BEHIND the keyboard.
-     The installer mirrors resizes-content semantics against the visual
-     viewport: while the keyboard is open it raises the seat's sticky bottom
-     to the keyboard top AND pads the conversation scrollport by the same
-     offset, so the message tail can scroll up beside the raised seat instead
-     of hiding under the keyboard. State rides the plugin's own frame stamp:
-     'data-mobile-kbd' + the '--chamber-mobile-kbd-offset' custom property on the
-     stamped frame (never official attributes). Android Chrome WITH the token
-     shrinks the layout viewport itself: covered height \u2248 0, the installer
-     never arms, these rules stay inert. */
-  [data-mobile-frame][data-mobile-kbd] [data-phase="active"] [data-conversation-scroll] {
-    padding-bottom: var(--chamber-mobile-kbd-offset, 0px) !important;
-  }
+  /* Composer visibility guard (composer.ts installComposerVisibilityGuard,
+     IME ladder layer 5): engines that ignore
+     'interactive-widget=resizes-content' (iOS Safari, older Android WebViews)
+     keep the LAYOUT viewport full-height when the soft keyboard opens, so the
+     official sticky composer seat \u2014 pinned to the scrollport's layout bottom \u2014
+     ends up BEHIND the keyboard. The guard MEASURES how far the conversation
+     scrollport's bottom edge sits below the visible bottom (visual viewport +
+     its pan offset) and raises the seat's sticky bottom by exactly that much.
+     The conversation's scroll range comes from an in-flow spacer the guard
+     inserts before the seat ('data-mobile-kbd-spacer'), NOT from padding this
+     scrollport: the scrollport is also the seat's sticky containing block, so
+     a padding here shrank that containing block and the inset stacked with it
+     \u2014 measured double lift, the seat landing 368px ABOVE the keyboard top on
+     a 390x844 rig. State rides the plugin's own frame stamp:
+     'data-mobile-kbd' (applied px) + 'data-mobile-kbd-state' (armed | idle |
+     no-seat | no-frame | still-covered) + the '--chamber-mobile-kbd-offset'
+     custom property on the stamped frame (never official attributes). Android
+     Chrome WITH the token shrinks the layout viewport itself: the measured
+     overlap is ~0, the guard stays idle, this rule stays inert. */
   [data-mobile-frame][data-mobile-kbd] [data-phase="active"] [data-composer-seat] {
     bottom: var(--chamber-mobile-kbd-offset, 0px) !important;
     /* The phone-tier safe-area padding (below) is home-indicator spacing for
@@ -1132,7 +1134,9 @@ function installEditabilityRecovery(root = document) {
       editable,
       input === document.activeElement,
       previous,
-      records.map((record) => record.oldValue)
+      // Only the composer's OWN attribute flip may recover the keyboard: a
+      // nested decorator's flip used to blur+refocus the composer mid-typing.
+      records.filter((record) => record.target === input).map((record) => record.oldValue)
     )) {
       input.blur();
       input.focus({ preventScroll: true });
@@ -1228,9 +1232,18 @@ var KBD_OFFSET_HEADROOM_PX = 8;
 var MOBILE_KBD_ATTR = "data-mobile-kbd";
 var MOBILE_KBD_VAR = "--chamber-mobile-kbd-offset";
 var KBD_EDITABLE_FOCUS_GRACE_MS = 1200;
+var KBD_ARM_PX = 96;
+var KBD_DISARM_PX = 72;
+var KBD_VERIFY_SLACK_PX = 24;
+var KBD_MAX_VERIFY_STEPS = 2;
+var KBD_POLL_MS = 250;
+var KBD_POLL_BUDGET_MS = 4e3;
+var MOBILE_KBD_STATE_ATTR = "data-mobile-kbd-state";
+var MOBILE_KBD_SPACER_ATTR = "data-mobile-kbd-spacer";
 var ACTIVE_SEAT_SELECTOR = '[data-phase="active"] [data-composer-seat]';
-function kbdCoveredHeight(layoutHeight, visualHeight, visualOffsetTop) {
-  return Math.max(0, layoutHeight - visualOffsetTop - visualHeight);
+function kbdLiftTarget(covered, armed, armThreshold = KBD_ARM_PX, disarmThreshold = KBD_DISARM_PX) {
+  if (covered <= (armed ? disarmThreshold : armThreshold)) return 0;
+  return nextKbdOffset(covered);
 }
 function nextKbdOffset(covered, quantum = KBD_OFFSET_QUANTUM_PX, headroom = KBD_OFFSET_HEADROOM_PX) {
   if (covered <= 0) return 0;
@@ -1239,11 +1252,6 @@ function nextKbdOffset(covered, quantum = KBD_OFFSET_QUANTUM_PX, headroom = KBD_
 function isAtScrollEnd(scrollTop, scrollHeight, clientHeight, slack = 8) {
   if (clientHeight <= 0 || scrollHeight <= clientHeight) return true;
   return scrollTop + clientHeight >= scrollHeight - slack;
-}
-function shouldCompensateKeyboard(keyboardOpen, visualScale, editableFocused, composerFocused) {
-  if (!keyboardOpen || !editableFocused) return false;
-  if (visualScale > 1.01 && !composerFocused) return false;
-  return true;
 }
 function isEditableFocus(target) {
   if (!(target instanceof HTMLElement)) return false;
@@ -1259,18 +1267,44 @@ function isComposerSelection() {
   if (!(element instanceof Element)) return false;
   return element.closest(COMPOSER_INPUT_SELECTOR) !== null || element.closest("[data-composer-seat]") !== null;
 }
-function installKeyboardCompensation(root = document) {
-  const vv = window.visualViewport;
-  if (vv === null) return () => {
-  };
+function installComposerVisibilityGuard(root = document) {
   let applied = 0;
   let armedFrame = null;
+  let spacer = null;
   let lastEditableFocusAt = 0;
+  let pollTimer = null;
+  let pollUntil = 0;
+  let disposed = false;
+  let phaseNode = null;
+  const visibleBottom = () => {
+    const vv = window.visualViewport;
+    return vv === null ? window.innerHeight : vv.offsetTop + vv.height;
+  };
+  const setState = (state) => {
+    const frame = armedFrame ?? root.querySelector("[data-mobile-frame]");
+    if (frame instanceof HTMLElement) frame.setAttribute(MOBILE_KBD_STATE_ATTR, state);
+    document.documentElement.setAttribute(MOBILE_KBD_STATE_ATTR, state);
+  };
+  const removeSpacer = () => {
+    if (spacer === null) return;
+    spacer.remove();
+    spacer = null;
+  };
+  const clearState = () => {
+    for (const frame of root.querySelectorAll("[data-mobile-frame]")) {
+      if (frame instanceof HTMLElement) frame.removeAttribute(MOBILE_KBD_STATE_ATTR);
+    }
+    document.documentElement.removeAttribute(MOBILE_KBD_STATE_ATTR);
+  };
   const disarm = () => {
-    if (armedFrame === null) return;
-    armedFrame.removeAttribute(MOBILE_KBD_ATTR);
-    armedFrame.style.removeProperty(MOBILE_KBD_VAR);
-    armedFrame = null;
+    if (armedFrame !== null) {
+      armedFrame.removeAttribute(MOBILE_KBD_ATTR);
+      armedFrame.style.removeProperty(MOBILE_KBD_VAR);
+      armedFrame = null;
+    }
+    removeSpacer();
+    clearState();
+    applied = 0;
   };
   const editableFocused = () => {
     if (isEditableFocus(document.activeElement)) return true;
@@ -1284,64 +1318,145 @@ function installKeyboardCompensation(root = document) {
     }
     return isComposerSelection();
   };
+  const seatOf = () => {
+    for (const candidate of root.querySelectorAll(ACTIVE_SEAT_SELECTOR)) {
+      if (!(candidate instanceof Element)) continue;
+      const scroller = candidate.closest("[data-conversation-scroll]");
+      if (!(scroller instanceof HTMLElement)) continue;
+      const rect = scroller.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) continue;
+      return candidate;
+    }
+    return null;
+  };
+  const coveredOf = (seat) => {
+    const scroller = seat.closest("[data-conversation-scroll]");
+    if (!(scroller instanceof HTMLElement)) return null;
+    return scroller.getBoundingClientRect().bottom - visibleBottom();
+  };
+  const phaseObserver = new MutationObserver(() => sync());
+  const observePhase = () => {
+    const node = root.querySelector("[data-phase]");
+    if (node === phaseNode) return;
+    phaseObserver.disconnect();
+    phaseNode = node;
+    if (node !== null) phaseObserver.observe(node, { attributes: true, attributeFilter: ["data-phase"] });
+  };
+  const ensureSpacer = (seat, height) => {
+    if (spacer === null || !spacer.isConnected) {
+      spacer = document.createElement("div");
+      spacer.setAttribute(MOBILE_KBD_SPACER_ATTR, "");
+      spacer.style.cssText = "flex:none;pointer-events:none";
+      seat.parentElement?.insertBefore(spacer, seat);
+    } else if (spacer.nextElementSibling !== seat) {
+      seat.parentElement?.insertBefore(spacer, seat);
+    }
+    spacer.style.height = `${height}px`;
+  };
   const sync = () => {
-    const layoutHeight = window.innerHeight;
-    const target = shouldCompensateKeyboard(
-      isKeyboardOpen(layoutHeight, vv.height),
-      vv.scale,
-      editableFocused(),
-      composerFocused()
-    ) ? nextKbdOffset(kbdCoveredHeight(layoutHeight, vv.height, vv.offsetTop)) : 0;
-    if (target === 0) {
-      applied = 0;
+    if (disposed) return;
+    observePhase();
+    const seat = seatOf();
+    if (seat === null) {
       disarm();
+      setState("no-seat");
       return;
     }
-    const seat = root.querySelector(ACTIVE_SEAT_SELECTOR);
-    if (!(seat instanceof Element)) return;
     const frame = seat.closest("[data-mobile-frame]");
-    if (!(frame instanceof HTMLElement)) return;
-    const armed = frame === armedFrame && frame.hasAttribute(MOBILE_KBD_ATTR);
-    if (armed && target === applied) return;
+    if (!(frame instanceof HTMLElement)) {
+      disarm();
+      setState("no-frame");
+      return;
+    }
+    const covered = coveredOf(seat);
+    if (covered === null) {
+      disarm();
+      setState("no-seat");
+      return;
+    }
+    const target = kbdLiftTarget(covered, applied > 0);
+    if (target === 0 || !editableFocused() || !composerFocused()) {
+      disarm();
+      setState("idle");
+      return;
+    }
     if (armedFrame !== null && armedFrame !== frame) disarm();
     const scroller = seat.closest("[data-conversation-scroll]");
     const wasAtEnd = scroller instanceof HTMLElement && isAtScrollEnd(scroller.scrollTop, scroller.scrollHeight, scroller.clientHeight);
-    const delta = armed ? target - applied : target;
-    frame.setAttribute(MOBILE_KBD_ATTR, "");
-    frame.style.setProperty(MOBILE_KBD_VAR, `${target}px`);
+    const applyLift = (value) => {
+      frame.setAttribute(MOBILE_KBD_ATTR, String(value));
+      frame.style.setProperty(MOBILE_KBD_VAR, `${value}px`);
+      ensureSpacer(seat, value);
+      applied = value;
+    };
     armedFrame = frame;
-    applied = target;
-    if (wasAtEnd && scroller instanceof HTMLElement && delta > 0) {
-      scroller.scrollTop += delta;
+    let lift = target;
+    applyLift(lift);
+    if (wasAtEnd && scroller instanceof HTMLElement) scroller.scrollTop += lift;
+    let steps = 0;
+    while (steps < KBD_MAX_VERIFY_STEPS) {
+      const residual2 = seat.getBoundingClientRect().bottom - visibleBottom();
+      if (residual2 <= KBD_VERIFY_SLACK_PX) break;
+      const extra = nextKbdOffset(residual2) - lift;
+      if (extra <= 0) break;
+      lift += extra;
+      applyLift(lift);
+      if (wasAtEnd && scroller instanceof HTMLElement) scroller.scrollTop += extra;
+      steps += 1;
     }
+    applyLift(lift);
+    const residual = seat.getBoundingClientRect().bottom - visibleBottom();
+    setState(residual > KBD_VERIFY_SLACK_PX ? "still-covered" : "armed");
+  };
+  const startPoll = () => {
+    if (pollTimer !== null) return;
+    pollUntil = Date.now() + KBD_POLL_BUDGET_MS;
+    pollTimer = setInterval(() => {
+      if (disposed || Date.now() > pollUntil || !editableFocused()) {
+        if (pollTimer !== null) clearInterval(pollTimer);
+        pollTimer = null;
+        return;
+      }
+      sync();
+    }, KBD_POLL_MS);
   };
   const onViewportChange = () => sync();
   const onFocusIn = (event) => {
     if (isEditableFocus(event.target)) lastEditableFocusAt = Date.now();
+    startPoll();
     sync();
   };
   const onFocusOut = (event) => {
     if (isEditableFocus(event.target)) lastEditableFocusAt = Date.now();
   };
+  const onPointerDown = () => {
+    sync();
+  };
   const onVisibility = () => {
     if (document.visibilityState === "visible") sync();
   };
+  startPoll();
   sync();
-  vv.addEventListener("resize", onViewportChange);
-  vv.addEventListener("scroll", onViewportChange);
+  window.visualViewport?.addEventListener("resize", onViewportChange);
+  window.visualViewport?.addEventListener("scroll", onViewportChange);
   window.addEventListener("resize", onViewportChange);
   document.addEventListener("focusin", onFocusIn, true);
   document.addEventListener("focusout", onFocusOut, true);
+  document.addEventListener("pointerdown", onPointerDown, true);
   document.addEventListener("visibilitychange", onVisibility);
   return () => {
-    vv.removeEventListener("resize", onViewportChange);
-    vv.removeEventListener("scroll", onViewportChange);
+    disposed = true;
+    if (pollTimer !== null) clearInterval(pollTimer);
+    phaseObserver.disconnect();
+    window.visualViewport?.removeEventListener("resize", onViewportChange);
+    window.visualViewport?.removeEventListener("scroll", onViewportChange);
     window.removeEventListener("resize", onViewportChange);
     document.removeEventListener("focusin", onFocusIn, true);
     document.removeEventListener("focusout", onFocusOut, true);
+    document.removeEventListener("pointerdown", onPointerDown, true);
     document.removeEventListener("visibilitychange", onVisibility);
-    applied = 0;
     disarm();
+    clearState();
   };
 }
 var BUSY_STUCK_MS = 3e4;
@@ -2243,7 +2358,7 @@ function apply(ctx) {
           disposers = [
             installEnterToNewline(),
             installEditabilityRecovery(),
-            installKeyboardCompensation(),
+            installComposerVisibilityGuard(),
             installComposerSelfHeal(),
             // iOS suppresses the compatibility click for drawer taps (the
             // hover-reveal layout shift) — heal the lost activation so one

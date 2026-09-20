@@ -19,11 +19,14 @@ const GROUPS = {
     'test/auth/auth.test.ts',
     'test/auth/cli-auth.test.ts',
     'test/auth/login-page.test.ts',
+    'test/auth/warmup-login-page.test.ts',
     'test/auth/store-permissions.test.ts',
   ],
   // boundary: the public request boundary - exposure config, policy/dispatch chain, audit trail, error redaction.
   boundary: [
     'test/boundary/config.test.ts',
+    'test/boundary/warmup.test.ts',
+    'test/boundary/warmup-dispatch.test.ts',
     'test/boundary/public-boundary.test.ts',
     'test/boundary/mobile-ua-redirect.test.ts',
     'test/boundary/dispatch-composition.test.ts',

@@ -630,23 +630,25 @@ export const MOBILE_CSS = `
     text-size-adjust: 100%;
   }
 
-  /* Keyboard compensation (composer.ts installKeyboardCompensation, IME
-     ladder layer 5): engines that ignore 'interactive-widget=resizes-content'
-     (iOS Safari, older Android WebViews) keep the LAYOUT viewport full-height
-     when the soft keyboard opens, so the official sticky composer seat —
-     pinned to the scrollport's layout bottom — ends up BEHIND the keyboard.
-     The installer mirrors resizes-content semantics against the visual
-     viewport: while the keyboard is open it raises the seat's sticky bottom
-     to the keyboard top AND pads the conversation scrollport by the same
-     offset, so the message tail can scroll up beside the raised seat instead
-     of hiding under the keyboard. State rides the plugin's own frame stamp:
-     'data-mobile-kbd' + the '--chamber-mobile-kbd-offset' custom property on the
-     stamped frame (never official attributes). Android Chrome WITH the token
-     shrinks the layout viewport itself: covered height ≈ 0, the installer
-     never arms, these rules stay inert. */
-  [data-mobile-frame][data-mobile-kbd] [data-phase="active"] [data-conversation-scroll] {
-    padding-bottom: var(--chamber-mobile-kbd-offset, 0px) !important;
-  }
+  /* Composer visibility guard (composer.ts installComposerVisibilityGuard,
+     IME ladder layer 5): engines that ignore
+     'interactive-widget=resizes-content' (iOS Safari, older Android WebViews)
+     keep the LAYOUT viewport full-height when the soft keyboard opens, so the
+     official sticky composer seat — pinned to the scrollport's layout bottom —
+     ends up BEHIND the keyboard. The guard MEASURES how far the conversation
+     scrollport's bottom edge sits below the visible bottom (visual viewport +
+     its pan offset) and raises the seat's sticky bottom by exactly that much.
+     The conversation's scroll range comes from an in-flow spacer the guard
+     inserts before the seat ('data-mobile-kbd-spacer'), NOT from padding this
+     scrollport: the scrollport is also the seat's sticky containing block, so
+     a padding here shrank that containing block and the inset stacked with it
+     — measured double lift, the seat landing 368px ABOVE the keyboard top on
+     a 390x844 rig. State rides the plugin's own frame stamp:
+     'data-mobile-kbd' (applied px) + 'data-mobile-kbd-state' (armed | idle |
+     no-seat | no-frame | still-covered) + the '--chamber-mobile-kbd-offset'
+     custom property on the stamped frame (never official attributes). Android
+     Chrome WITH the token shrinks the layout viewport itself: the measured
+     overlap is ~0, the guard stays idle, this rule stays inert. */
   [data-mobile-frame][data-mobile-kbd] [data-phase="active"] [data-composer-seat] {
     bottom: var(--chamber-mobile-kbd-offset, 0px) !important;
     /* The phone-tier safe-area padding (below) is home-indicator spacing for

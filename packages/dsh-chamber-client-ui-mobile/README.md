@@ -429,33 +429,46 @@ idempotent, and is installed/uninstalled by `ctx.effect` behind one
   NAVIGATION region (drawer rows, session-header breadcrumbs); composer
   taps, send button, mouse/hardware-keyboard focus and portaled picker
   flows (workspace/agent-preset menus) keep the keyboard / typing intent.
-- **Keyboard-visible composer compensation** (IME ladder layer 5,
-  `composer.ts` `installKeyboardCompensation`): engines that ignore
+- **Composer visibility guard** (IME ladder layer 5, `composer.ts`
+  `installComposerVisibilityGuard`): engines that ignore
   `interactive-widget=resizes-content` (iOS Safari, older Android WebViews)
-  keep the LAYOUT viewport full-height, so the official sticky composer
-  seat — a FLOW child of the conversation scrollport — pins to the layout
-  bottom, behind the keyboard. While the keyboard is open the seat's sticky
-  bottom is raised to the keyboard top and the conversation scrollport gets
-  an equal bottom padding (frame-level `data-mobile-kbd` +
-  `--chamber-mobile-kbd-offset`, styles.ts); a bottom-pinned conversation scrolls
-  down by the same delta so the message tail stays glued above the seat (the
-  official chat already re-glues the outer scroll on seat resize, so this owns
-  only the keyboard-driven change). The seat's bottom safe-area padding is
-  zeroed while armed (it sits behind the keyboard and would add 0–34px of
-  dead space). Offsets are quantized (16px steps → an 8–23px dead band, vs
-  8–55px at 48px) and re-synced from visualViewport resize/scroll, window
-  resize, focusin/focusout and visibilitychange. Arming requires a
-  visual-viewport shrink AND an editable focus (focusin + focusout stamps, a
-  composer-selection fallback for the submit window, and a 1.2s grace window).
-  Under ZOOM the compensation is served for the composer only: a blanket
-  `scale ≈ 1` veto would leave the composer behind the keyboard for the rest
-  of an iOS focus-zoomed session — the drawer's 13px search field is a common
-  trigger, so the drawer's fields also get the 16px floor at the source — while
-  zoom + a non-composer field stays vetoed (panning a zoomed page must not
-  drive the offset). Arming is idempotent per frame element, so a renderer
-  remount that replaces the AppFrame while the keyboard stays open re-stamps
-  the new frame (and cleans the old one) instead of leaving the composer
-  behind the keyboard.
+  keep the LAYOUT viewport full-height, so the official sticky composer seat —
+  a FLOW child of the conversation scrollport — pins to the layout bottom,
+  behind the keyboard. The guard does NOT infer the keyboard: it MEASURES how
+  far the conversation scrollport's bottom edge sits below the visible bottom
+  (visual viewport + its pan offset) and raises the seat's sticky `bottom` by
+  exactly that much (frame-level `data-mobile-kbd` +
+  `--chamber-mobile-kbd-offset`, styles.ts). The conversation's scroll range
+  comes from an in-flow spacer the guard inserts before the seat
+  (`data-mobile-kbd-spacer`) — NOT from padding the scrollport, which is also
+  the seat's sticky containing block: padding there shrank the sticky threshold
+  and stacked with the inset (measured double lift: the seat landed 368px ABOVE
+  the keyboard top on a 390x844 rig with the real upstream CSS). A
+  bottom-pinned conversation scrolls down by the same delta so the message tail
+  stays glued above the raised seat (the official chat already re-glues the
+  outer scroll on seat resize, so this owns only the keyboard-driven change).
+  The seat's bottom safe-area padding is zeroed while armed (it sits behind the
+  keyboard and would add 0–34px of dead space). Hysteresis arms at ≥96px of
+  measured overlap and holds until it drops below 72px — browser chrome and
+  60px-scale overlaps stay idle (measured) — and offsets are quantized (16px
+  steps with a fixed `KBD_OFFSET_HEADROOM_PX` = 8px of headroom above the raw
+  overlap → an 8–23px dead band). Triggers: visualViewport resize/scroll,
+  window resize, focusin/focusout, visibilitychange, a `[data-phase]` observer
+  (the sticky seat exists only in the active phase), a document `pointerdown`
+  (re-syncs ONCE — it never re-arms or extends the poll) and a BOUNDED 250ms
+  poll while an editable is focused (4s budget, stamped once per focus arm),
+  so an engine that delivers no viewport event on keyboard open still
+  converges (measured: 8 frames). The lift is served for the composer only
+  (editable focus, composer selection, the `KBD_EDITABLE_FOCUS_GRACE_MS` =
+  1200ms grace window); under ZOOM a non-composer field stays vetoed — the drawer's 13px
+  search field is a common iOS focus-zoom trigger, so the drawer's fields also
+  get the 16px floor at the source. Arming is idempotent per frame element, so
+  a renderer remount that replaces the AppFrame while the keyboard stays open
+  re-stamps the new frame (and cleans the old one). After writing the offset the
+  guard re-measures at most twice (24px slack) and then REPORTS
+  `data-mobile-kbd-state` (`armed | idle | no-seat | no-frame | still-covered`)
+  instead of ramping forever: an engine that ignores the sticky inset is
+  surfaced, never chased.
 - **Enter belongs to the editor**: the composer's resident div doubles as the
   no-workspace picker trigger — with no workspace it binds `editor = null`, so
   it renders `contenteditable="false"` while still carrying

@@ -40,7 +40,7 @@ import {
 import { createLayoutFactSource } from './layout-facts.ts'
 import {
   installComposerSelfHeal, installEditabilityRecovery, installEnterToNewline,
-  installImeLadder, installKeyboardCompensation, PHONE_TIER_QUERY, TOUCH_TIER_QUERY,
+  installImeLadder, installComposerVisibilityGuard, PHONE_TIER_QUERY, TOUCH_TIER_QUERY,
 } from './composer.ts'
 import { installDrawerTapHeal } from './drawer-taps.ts'
 import { installSettingsSheetScrollReset } from './settings-sheet.ts'
@@ -268,7 +268,7 @@ export function apply(ctx: ClientContext): void {
           disposers = [
             installEnterToNewline(),
             installEditabilityRecovery(),
-            installKeyboardCompensation(),
+            installComposerVisibilityGuard(),
             installComposerSelfHeal(),
             // iOS suppresses the compatibility click for drawer taps (the
             // hover-reveal layout shift) — heal the lost activation so one

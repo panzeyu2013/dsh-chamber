@@ -5,8 +5,12 @@
  * request/upgrade; falsy falls through to the control-plane default dispatch
  * (management REST + per-instance proxy).
  *
- * Routing (all under the auth gate except the two public paths):
+ * Routing (all under the auth gate except the public paths below):
  *   /health                  → fall through (management probe, public)
+ *   /plugins/??…, /plugins/<pkg>/client.js|css
+ *                            → login-phase pre-warm (GET/HEAD only; claimed
+ *                              BEFORE the gate only with a valid short-lived
+ *                              capability cookie — design 17 §10.6)
  *   /auth/login              → auth login (public; route exists only while a
  *                              password is configured — design 17 §6)
  *   /auth/change-password    → auth.changePassword (Phase 2, runtime credentials)
@@ -46,11 +50,25 @@ import type { GatewayRejectionReason, GatewayRequestDecision, GatewayRequestPoli
 import { appendAuditEvent } from './audit.ts'
 import { LOGIN_PAGE_CSP, detectLoginLang, renderBoundaryErrorPage, renderLoginPage, renderTokenOnlyPage, wantsHtmlLoginResponse } from './login-page.ts'
 import { codedError, headerValue, jsonResponse, readBoundedBody } from './http-utils.ts'
+import {
+  createWarmupController,
+  type WarmupDeps,
+  type WarmupHttpRequest,
+  type WarmupHttpResponse,
+  type WarmupLinks,
+} from './warmup.ts'
 
 function isPublicRequest(method: string | undefined, pathname: string): boolean {
   // HEAD is the no-body twin of GET; a monitoring HEAD /health must not be
   // forced through the auth gate while GET /health is public.
   if (pathname === '/health') return method === 'GET' || method === 'HEAD'
+  // Login-phase pre-warm (design 17 §10.6, 2026-12 revision) has NO blanket
+  // public exemption here: the bundle shapes it may serve are real
+  // /plugins/** paths, so they are claimed by the route BEFORE this gate only
+  // when the request carries a valid capability cookie. Everything else under
+  // /plugins/ (every plugin HTTP route, a disabled warm-up controller, a
+  // stale/absent cookie) reaches the gate and keeps its 401/session verdict —
+  // never an unauthenticated fallthrough.
   return pathname === '/auth/login' && (method === 'GET' || method === 'HEAD' || method === 'POST')
 }
 
@@ -329,7 +347,13 @@ export function createGatewayDispatch(
   mobileEntryPath = DEFAULT_MOBILE_ENTRY_PATH,
   /** M3-5 auth-rejection debounce seam; defaults are production behavior. */
   rejectionDebounce: AuthRejectionDebounce = {},
+  /** Login-phase pre-warm (design 17 §10.6; default ON from config.warmup):
+   * discovery + token + proxy deps. null = the feature is not composed at all
+   * (the /chamber/warmup/ prefix stays public but the chamber surface answers
+   * 404). */
+  warmupDeps: WarmupDeps | null = null,
 ): GatewayDispatch {
+  const warmup = warmupDeps === null ? null : createWarmupController(warmupDeps)
   // Every request/socket admitted by one credential generation stays tracked
   // until its downstream leg ends. Rotation closes the old generation at the
   // dispatch boundary, which covers gateway-proxy, the chamber surface and
@@ -575,6 +599,31 @@ export function createGatewayDispatch(
       res.end()
       return true
     }
+    // 0.5 Login-phase pre-warm (design 17 §10.6, 2026-12 revision): the ONE
+    // pre-auth proxy leg, consulted BEFORE the auth gate so a valid capability
+    // grant can stream a real bundle URL without a session. The route claims a
+    // GET/HEAD request only when ALL of these hold: the kill switch is on, the
+    // target is one of the roster's two real bundle shapes, and the short-lived
+    // HttpOnly capability cookie (minted on the login-page response) verifies.
+    // Anything else — a non-bundle /plugins path, an absent/stale/tampered
+    // cookie, or a disabled controller — is 'unclaimed' and falls through to
+    // the gate below, which serves an existing session or writes its uniform
+    // 401 plus the category-only audit. A route-level refusal (405/429) is
+    // audited HERE with exactly the code the client received; the cookie value
+    // and the URL never enter the trail.
+    if (warmup !== null) {
+      const outcome = await warmup.handle(
+        req as unknown as WarmupHttpRequest,
+        res as unknown as WarmupHttpResponse,
+        url,
+        decision.clientAddress,
+      )
+      if (outcome.kind === 'rejected') {
+        auditAuthRejection(outcome.code, decision.clientAddress, req.socket?.remoteAddress, pathname)
+        return true
+      }
+      if (outcome.kind === 'proxied') return true
+    }
     // 1. Auth gate (public paths exempt). socketAddr is not available through
     // the middleware ctx — the token/password providers do not use it (the
     // Host authority decision belongs to the request policy, design 17 §6 /
@@ -751,8 +800,19 @@ export function createGatewayDispatch(
         return true
       }
       const expired = url.searchParams.get('expired') === '1'
+      // Design 17 §10.6 pre-warm: the REAL bundle hrefs plus the short-lived
+      // HttpOnly capability cookie that lets the anonymous prefetch through
+      // the bundle route. Discovery is bounded by WARMUP_DISCOVERY_TIMEOUT_MS
+      // and cached for 60 s per dsh port; links() fails soft to no links and
+      // no cookie, so a down dsh or the kill switch leaves the login page
+      // byte-identical to the pre-warm template. Never awaited for HEAD (no
+      // body to carry the links, so no grant is minted either).
+      const warmupLinks: WarmupLinks = warmup === null || req.method !== 'GET'
+        ? { urls: [] }
+        : await warmup.links({ clientAddress: decision.clientAddress, secure: decision.secure }).catch(() => ({ urls: [] }))
+      if (warmupLinks.cookie !== undefined && warmupLinks.cookie !== '') res.setHeader('set-cookie', warmupLinks.cookie)
       res.writeHead(200, LOGIN_HTML_HEADERS)
-      res.end(req.method === 'HEAD' ? undefined : renderLoginPage({ lang, secure: decision.secure, error: expired ? 'expired' : null, desktop: loginDesktop }))
+      res.end(req.method === 'HEAD' ? undefined : renderLoginPage({ lang, secure: decision.secure, error: expired ? 'expired' : null, desktop: loginDesktop, warmupUrls: warmupLinks.urls }))
       return true
     }
     // 2.5 Runtime credential management (Phase 2, design 17 §7): the two

@@ -523,12 +523,21 @@ test('sticky-hover tooltip suppression is coarse-gated and aria-label scoped', (
   assert.ok(ruleAt > coarseAt && ruleAt < touchAt, 'the rule must live in the coarse+hover tier, not the touch tier')
 })
 
-test('keyboard compensation CSS rides the plugin frame stamp, never official attributes', () => {
+test('composer visibility CSS rides the plugin frame stamp, never official attributes', () => {
   const code = stripComments(MOBILE_CSS)
-  assert.ok(code.includes('[data-mobile-frame][data-mobile-kbd] [data-phase="active"] [data-conversation-scroll]'))
-  assert.ok(code.includes('padding-bottom: var(--chamber-mobile-kbd-offset, 0px) !important;'))
   assert.ok(code.includes('[data-mobile-frame][data-mobile-kbd] [data-phase="active"] [data-composer-seat]'))
   assert.ok(code.includes('bottom: var(--chamber-mobile-kbd-offset, 0px) !important;'))
+  // The scrollport padding arm is REMOVED and must not come back: the
+  // scrollport is the seat's sticky containing block, so padding there
+  // shrinks the threshold and stacks with the inset — the measured double
+  // lift (seat 368px above the keyboard top on a 390x844 rig). The scroll
+  // range is supplied by the in-flow spacer instead.
+  assert.equal(
+    code.includes('[data-mobile-frame][data-mobile-kbd] [data-phase="active"] [data-conversation-scroll]'),
+    false,
+    'the scrollport padding arm must stay removed (double-lift regression)',
+  )
+  assert.equal(code.includes('padding-bottom: var(--chamber-mobile-kbd-offset, 0px) !important;'), false)
   // The phone-tier safe-area inset must be neutralized while armed (up to
   // ~34px of dead space below the raised seat otherwise).
   assert.match(

@@ -90,6 +90,10 @@ export class FakeResponse extends EventEmitter {
     this.headers[name.toLowerCase()] = value
   }
 
+  getHeader(name: string): string | undefined {
+    return this.headers[name.toLowerCase()]
+  }
+
   writeHead(status: number, headers: Record<string, string> = {}): this {
     this.status = status
     this.statusCode = status

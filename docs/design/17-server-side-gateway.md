@@ -799,6 +799,73 @@ chamber 代码。chamber 插件（sidebar/layout/settings-bridge/git/open-in 等
   一律 404；存活的 `/chamber/*` 面只有通道投影（`GET /chamber/channels`）、
   插件同步缓存（`GET/PUT /chamber/plugins`）、runtime 控制器（`/chamber/runtime/*`）与仪表盘静态资源。
 
+### 10.6 登录页阶段预热（pre-auth warm-up，2026-12）
+
+**是什么**：未认证访客停留在 `/auth/login` 期间，登录页在 `<head>` 为每个已发现的客户端 bundle 渲染
+一条**真实 URL** 的 `<link rel="prefetch" as="script" href="/plugins/??<pkg>/client.js,…&rev=<token>">`
+（开关默认开：`--no-warmup` / `DSH_GATEWAY_WARMUP=0` 关），并**只在这一个页面**下发一枚短时 HttpOnly
+capability cookie `dsh_gateway_warmup`（HMAC(`exp|warmup|<client>`)，密钥自 stateDir 的 jwt-secret 派生，
+域分隔标签 `dsh-gateway/warmup-cookie/v1`，TTL/Max-Age 120 s，`Path=/`、`HttpOnly`、`SameSite=Lax`、
+安全请求再加 `Secure`）。登录成功后的首屏从 HTTP 缓存取用整册前端 bundle（实测约 4.35 MiB gzip），
+这份下载不再落在关键路径上。登录页自身仍无脚本（C1 不变），`connect-src 'self'` 是唯一的 CSP 增量。
+
+**为什么必须是"真实 URL + cookie 门"**（2026-12 评审实测，两条硬事实）：
+
+1. **HTTP 缓存按 URL 键**。实测（Chrome 152）：预取真实 URL 后 App 自己的 `<script src>` **不再回源**
+   （命中缓存）；预取 `/chamber/warmup/<token>?u=…` 包装 URL 后 App 取真实 URL **仍回源**——两条 URL
+   是两条缓存项，包装形永远不可能等价。故**任何把 token 放进 URL 的写法都拿不到收益**，capability 只能走
+   cookie（同一实验中：带 cookie 的真实 URL 预取被浏览器发送并在 App 用**不同的 session cookie** 取同一
+   URL 时仍命中；对照实验里一旦路由追加 `vary: cookie`，命中立刻失效 ⇒ 本路由不得追加该头）。
+2. **托管 dsh 的 index 文档需要浏览器认证**：上游 `@deepseek-ai/dsh-host-frontend-static` 明确
+   "Every index response first passes Connection's browser authentication … **Non-index assets stay public**"。
+   发现腿若不带 spawn 期换取的 browser-auth cookie，`GET /` 会 401 ⇒ 登录页渲染 0 条链接（功能在生产中
+   静默失效）。现在发现腿带上该 cookie（`WarmupDeps.getAuthCookie` 注入，`index.ts` 用
+   `authCookieFor('http://127.0.0.1:'+port)`），并保持失败软退 + 500 ms 上限 + 60 s 缓存（成败都缓存）。
+   上游把**非 index 资源视为公开**，故本路由放开的 bundle 形态与上游自身边界一致。
+
+**路由与边界**（§7 认证边界、§13.1 不变量不变）：
+
+- **形状允许列表**：只认两类**真实路径**——组合包 `^/plugins/\?\?[^?#]*$` 与单行 bundle
+  `^/plugins/[^/]+/client\.(js|css)$`；其余 `/plugins/**`（插件 HTTP 路由）不放开。仍拒绝 `%`、`//`、
+  反斜杠、`#`、点段、控制字符、绝对/authority 形与超长目标（≤8 KiB）。仅 GET/HEAD（其余 405）。
+- **capability cookie 门**：路由在认证门**之前**被咨询，但**只有**形状命中且 cookie 验签通过（含客户端
+  地址绑定、过期、`timingSafeEqual`）时才 claim；缺/过期/篡改/他人 cookie ⇒ `unclaimed` ⇒ 落回认证门
+  （既有 session 照常，否则统一 401 + 仅类别审计）。**`/plugins/**` 不再有任何 blanket 公开豁免**，
+  kill switch 关闭时该前缀与改动前一样 401。
+- **限速与容量**：按客户端地址的有界 token bucket（容量 96 > 单页链接数（≤64）、5/s 补充、≤1024 键），
+  超预算 429 `warmup_rate_limited`；并发与聚合缓冲另有上界（在途 ≤8、聚合 ≤64 MiB，超限 503
+  `warmup_capacity`）——评审实测 40 条并发重放 8 MiB bundle 曾把 RSS 推高约 581 MiB。
+- **无用户凭据上行**：上游请求只带 `accept-encoding` 与 spawn 期换取的 browser-auth cookie（非用户凭据、
+  永不回给客户端）；调用方 cookie/authorization 一律丢弃；回程只透传
+  content-type/content-encoding/cache-control/vary/content-length，其中 `vary` 与策略已设值**合并**
+  （不覆盖 `vary: Origin`）。
+- **可关断 + 软退**：kill switch 同时关掉发现、链接渲染、cookie 与路由；关闭或发现失败时登录页与既有模板
+  逐字节一致（`warmup-login-page.test.ts` 以改动前哈希钉住）。托管端口只接受 1..65535。
+- **审计与日志**：路由级拒绝复用 `auth_rejected` 助手（code = 客户端收到的 code + 客户端 + 路径**类别**），
+  cookie 值与 URL 永不落盘、永不进日志。
+
+**发现顺序按"浏览器真的会拉哪些"排**（实测 index：2 条文档级 URL（`<link rel=preload>` + `<script src>`）+
+57 条 inline boot manifest 行 `url`，去重后 57 条真机册目，上限 64；该实测也说明顺序修正在上限 64 下通常
+不生效，保留排序是为了册目更大或不含组合包的形态）：`<script src>`/`<link … href>` 这类**文档自己加载**的 URL（shell
+在 mount 前 await 的 parser-preload/application 批）排在前面，manifest 的每行 URL 随后；仅按文档顺序会在
+上限处先塞满 manifest 行、可能把最重的 application 组合包挤掉——而那份组合包正是预取存在的理由。同一类内
+保持文档顺序。真机对照：用户网关实抓的 3 次真实 bundle 请求（组合包 preload 的解码形 + 组合包所在的
+`phase:"application"` 行 + 组合包不含的 `dsh-chamber-mcp` 行）在修正后**全部被覆盖**（修正前只覆盖 1 条）。
+
+**失败封闭**：无端口/未就绪 503 `instance_unavailable`，上游错误 502 `upstream_failed`，
+调用方看不到上游正文。
+
+**Rejected alternatives**：
+
+- **token 放 URL（`/chamber/warmup/<token>?u=…`，2026-12 首版，已整体删除）**：实测缓存不等价（见上事实 1），
+  且把登录页链接拉长（最长约 6.5 KB、整页 +25.7 KB）——预取的全额流量并未替关键路径省下任何字节。
+- **pre-auth 放开任意路径**：等于把托管 dsh 的完整请求面（管理 REST、会话 API、插件路由）交给匿名流量，
+  违反 S1/S2；只放开 `/plugins/` 的两种 bundle 形态是能拿到缓存收益的最小暴露面。
+- **把整个应用放到登录页之后**（未登录不发现，或登录成功后再预取）：预取的全部价值就是利用「用户正在
+  输密码」的等待时间；放到登录之后等于没做，关键路径一分不少。
+- **禁用重量级客户端插件**：那是用删功能换流量，不是缓存；预热让同一份 bundle 首次出现在关键路径之外，
+  功能集不动。
+
 ## 11. Git worktree：服务器侧范围外
 
 服务器侧 Git worktree saga（server 侧 `workspace.list`/`workspace.create`/
@@ -1363,13 +1430,25 @@ microtask 合并）。**dsh-client-web fork 是这些补丁的合法落点**（�
 判定 / 键盘补偿）+ 30s busy 自愈 + 键盘遮挡兜底（实现见
 `packages/dsh-chamber-client-ui-mobile/src/client/composer.ts`）。
 
-**键盘补偿（layer-5）**：原「键盘钉住」（`installKeyboardPinning`，对 seat 做 `scrollIntoView`）在 iOS 上
-**恒为空转**——官方 composer seat 是 `position: sticky` 且是会话滚动器 `[data-conversation-scroll]` 的
-**流内子元素**，滚动它只会被 sticky 钉回 layout 底部。现改为**键盘补偿**
-（`installKeyboardCompensation`）：键盘打开期间把 seat 的 sticky `bottom` 抬到键盘顶、给滚动器加等量
-`padding-bottom`（frame 级 `data-mobile-kbd` + `--chamber-mobile-kbd-offset`），并给贴底会话做等量 scrollTop
-补偿；外层跟随仍归官方（ui-chat 的 seat ResizeObserver）。`covered = layout − offsetTop − vv.height` 在任意
-缩放态都成立（vv 高度已含缩放与键盘收缩）。
+**composer 可见性守卫（layer-5，实测修订）**：原「键盘钉住」（`installKeyboardPinning`，对 seat 做
+`scrollIntoView`）在 iOS 上**恒为空转**——官方 composer seat 是 `position: sticky` 且是会话滚动器
+`[data-conversation-scroll]` 的**流内子元素**，滚动它只会被 sticky 钉回 layout 底部。
+
+其后的「键盘补偿」（旧导出 `installKeyboardCompensation`，已由 `installComposerVisibilityGuard` 取代；配套的
+`kbdCoveredHeight`/`shouldCompensateKeyboard` 一并删除）在 390×844 真机引擎台架（Chrome 152 + 从用户网关实抓的
+上游 CSS/DOM + 本插件真实产物）上实测暴露两处硬缺陷，均已修复：
+
+1. **双倍抬升（几何）**：旧实现把抬升**同时**写成 seat 的 sticky `bottom` 与滚动器的 `padding-bottom`；
+   而滚动器**同时是 seat 的 sticky 包含块**，其自身 padding 把 sticky 阈值一并垫高 ⇒ 两臂叠加。实测：键盘
+   顶在 508 时 seat 被抬到 `[40..140]`（意图 `[392..492]`）——**超出键盘顶 368px**，输入框飞到屏幕上方。
+   现在执行器**只有一个**：seat 的 sticky `bottom`；会话滚动余量由守卫插在 seat 之前的**流内 spacer**
+   （`data-mobile-kbd-spacer`）提供，绝不再给滚动器加 padding。
+2. **不 arm（触达）**：旧实现以 `isKeyboardOpen(innerHeight vs vv)` 推断键盘，输入是引擎事件驱动的启发式；
+   事件缺失/迟到（Android WebView 盲区）时整条补偿不动。实测：键盘打开但无 vv 事件 ⇒ `kbd=false`、
+   `covered=+336`，**composer 被键盘整块盖住**（用户报告的症状）。现在**不推断键盘、只测量遮挡**：
+   `covered = scrollport.getBoundingClientRect().bottom − (vv.offsetTop + vv.height)`，两个量同处 layout 坐标系、
+   平移/缩放自洽；滚动器盒高由 flex 决定（`height:100%` + `flex:1;min-height:0`），是我们的写入**改不动**的量
+   ⇒ 闭环有不动点、不会振荡。
 
 守卫与取舍：
 - **可编辑焦点**（focusin + focusout 打点 + composer 选区兜底）：收缩不是充分条件；focusout 打点让「提交期
@@ -1386,6 +1465,30 @@ microtask 合并）。**dsh-client-web fork 是这些补丁的合法落点**（�
   抬升量来自键盘几何，归零不会造成遮挡。
 - **arm 以 frame 元素为单位幂等**：renderer 重挂替换 AppFrame 时按元素重打标（并清理旧 frame 的插件属性），
   而非依赖数值 `applied` 短路（否则新 frame 无属性、composer 停在键盘后）。
+- **滞回 96/72**：≥96px 才视为键盘级遮挡（浏览器底栏/60px 级小重叠实测保持 idle），armed 后 <72px 才释放，
+  滑动的键盘不会让 seat 抖动。
+- **有界验证**：写后复测 ≤2 步、容差 24px；不达标只写 `data-mobile-kbd-state=still-covered` 上报，**绝不连续
+  爬升**——引擎若忽略 sticky inset，是"报告"而不是"追"。
+- **诊断面**：`data-mobile-kbd`（生效 px）+ `data-mobile-kbd-state`（armed | idle | no-seat | no-frame |
+  still-covered）落在 frame 上并镜像到 `<html>`，真机可即时读取；"静默不生效"这一失效模式不再可能。
+- **触达完整**：vv resize/scroll + window resize + focusin/out + visibilitychange + document pointerdown（任意
+  点击后重同步一次）+ `[data-phase]` observer（sticky seat 只在 active 相位存在）+ 可编辑焦点后 250ms 有界轮询
+  （4s 预算）。实测无事件场景 8 帧内收敛。
+- **宽限窗口 1200ms（`KBD_EDITABLE_FOCUS_GRACE_MS`）**：自 focusout 起算，覆盖「提交期 editability 翻转」与
+  「blur → 键盘收起动画」；量化前的 headroom 固定 8px（`KBD_OFFSET_HEADROOM_PX`），故实测死区为 8–23px。
+- **editability 恢复的调用契约（实测/评审修正）**：observer 监听整棵 document 子树，
+  `isEditabilityFlipToEditable` 必须只吃**目标为 composer 自身**的 record——嵌套 Lexical 装饰器翻转自己的
+  `contenteditable` 曾满足谓词，导致输入中途 blur+refocus（已按 record target 收窄并加源文本锁）。
+
+**被否决的备选（Rejected alternatives，layer-5）**：
+- **滚动器 padding + seat inset 两臂并用**（旧实现）：实测双倍抬升（见上第 1 条），已删除 padding 臂；
+  回归由 `test/visual/breakpoints.test.ts` 的"该规则必须不存在"断言钉住。
+- **调阈值 / 加延迟重试仍走推断**：`isKeyboardOpen` 类启发式在事件缺失时不 arm，改测量后该失效类别整体消失。
+- **`html[data-mobile-kbd]` 作第二 CSS 载体兜底**：实抓包证明 frame 打标成立，第二载体只增加状态面（否决）。
+- **放宽为"任何可编辑焦点都抬升"**：会让设置页/提问卡片的键盘把 composer 抬起（只服务 composer 的既有策略保留）。
+- **插件层禁用 PDF.js 预览包以降首屏字节**：裁剪功能，用户明确否决；首屏字节改走登录期后台预热（本文件 §10.6）。
+- **懒加载重客户端包**：需改上游 `dsh-client-modules`（host 组装 + shell 引导循环），不在本仓 fork 范围
+  （`scripts/upstream/registry.json` 的 `excludedUpstreamDirs` 仅三处镜像），登记为上游提案而非本仓改动。
 
 Enter 换行路径另补 `[data-input-scroll]` 内光标揭示——官方 `revealSelection` 的依赖数组是布尔
 `[draft !== ""]`，非空 draft 插入换行不触发它。
