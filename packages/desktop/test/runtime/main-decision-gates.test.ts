@@ -25,6 +25,14 @@ import {
 import type { RuntimePhase } from '@dsh-chamber/dsh-runtime'
 import { balancedBlock } from './source-blocks.ts'
 
+test('sidecar 唤醒入站保留可考古的一行（sidecar.log 取证面）', () => {
+  // e479c275 声称「这些面都被源锁钉住不再退回 print-only」，但 TS 侧这一行此前没有任何锁：
+  // 删掉它 Swift 侧「已发送」仍绿，而 sidecar.log 里的入站证据消失（2026-09 复核）。
+  const source = stripComments(readFileSync(new URL('../../sidecar-entry.ts', import.meta.url), 'utf8'))
+  assert.match(source, /console\.info\('\[sidecar\] __host\.systemResume 入站/,
+    'systemResume 入站必须写一行：否则真机上分不清「壳没发」与「页面没消费」')
+})
+
 // --- merged from test/runtime/apply-now-gate.test.ts ---
 function gateInput(overrides: Partial<ApplyNowGateInput> = {}): ApplyNowGateInput {
   return {
