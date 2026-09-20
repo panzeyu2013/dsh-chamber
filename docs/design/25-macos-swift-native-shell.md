@@ -709,12 +709,23 @@ loopback-http-test-server.ts 同款思路）**未实施——需 GUI 会话，�
   `macos/resources/dmg-background.tiff`，署名见 THIRD_PARTY_NOTICES），图标坐标取 electron-builder 默认 contents
   （app 130,220 / Applications 410,220），窗口尺寸 = 背景 1x 尺寸。单一来源 = `macos/scripts/dmg.mjs`（本地装配腿
   import，release.yml 正式腿调 CLI）：UDRW 可写镜像 → 挂载 `/Volumes/<卷名>` → osascript 驱动 Finder 写
-  `.DS_Store` → 等落盘 → detach →
-  UDZO → 产物级校验（.DS_Store/.background/快捷方式）。
+  `.DS_Store` → 等**内容级**布局落盘（`.icvp` 的 `backgroundType=2` + 指向卷内背景图的别名）→ detach →
+  UDZO → 产物级校验（只读挂载成品读 `.DS_Store`：`backgroundType=2`、非空且指向卷内背景图的别名、`iconSize`、
+  窗口尺寸、两条图标坐标；`.app`/`/Applications` 软链/`.background` 的存在性只是前置）。
   **Rejected alternatives**：① `dmg-builder` 下载的 dmgbuild（不驱动 Finder；要引入 electron-builder 内部下载器/缓存
   路径，本机缓存实测为空）；② 手绘 1x PNG（2026-09 首版，用户实测「分辨率低、不像 Electron」，已删）；③ 静态
   `.DS_Store` 模板 + `hdiutil -srcfolder`（alias 与卷名/CNID 绑定，跨构建脆弱）；④ 只留软链不做引导（用户报的
-  问题本身）。失败一律 loud：回退成「没有提示的 DMG」等于把缺陷重新发出。
+  问题本身）；⑤ 用 `plutil -extract <key> raw -o -`（stdin，实测可用、约 24 行）逐键读布局事实而不自写二进制
+  plist 读取器——为让事实提取成为零子进程、可注入的纯函数（单测可直接构造 facts）而否；代价是自写读取器要自己
+  守住语义（2026-09 修正有符号整数读取）。失败一律 loud：回退成「没有提示的 DMG」等于把缺陷重新发出。
+  别名的**可解析性**由 2026-09 审查用 Carbon `FSResolveAliasWithMountFlags` 在最终 UDZO 上实测确认（挂载态
+  RESOLVED；Finder 自己并不校验别名，删掉背景图后仍保留 `backgroundType=2`），因此门禁只断言必要条件：
+  别名字节同时含卷内相对路径与本卷卷名。
+- **SwiftPM 资源包形态（2026-09）**：包内形态随后端——`native` 扁平 `<bundle>/bridge-shim.js`，`swiftbuild`
+  （Swift 6.4+ 默认）为 `<bundle>/Contents/Resources/bridge-shim.js`。装配腿 `resourceBundleResourcesDir()` 统一
+  收敛为扁平（与 release.yml 的资源断言、运行期查找同契约），运行期 `ChamberResources.candidateURLs()` 兼容
+  嵌套形态（dev `swift run`）。备选 ① 显式 `--build-system native`（已 deprecated、且管不到 dev/test 与
+  `swift run`）、② 重指 `macos/.build/release` 到 native 产物（只治标、两种形态照旧）——都被否。
 - 更新 v1 blocked-available 已落地（§7）；v2 Sparkle 按决策 3 未排期。sidecar 打包布局 = `dist/control-plane/` + host 包
   `dist/dsh-chamber-seed-*/` + 内嵌 `vendor/dsh`/`pnpm` + 捆绑 `node`（§3.2）；build-swift-app.mjs；CI：GitHub
   Actions macOS runner（swift build + XCTest + 打包 + ad-hoc/Developer ID + notarize——mac 发布缺 Apple 凭据阻断，
