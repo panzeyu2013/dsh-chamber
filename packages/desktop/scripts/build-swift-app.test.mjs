@@ -23,7 +23,8 @@
  *  ⑪ 架构断言：同宿主通过、--arch 反向 loud、.app 与捆绑 node 无交集 loud；
  *  ⑫ lipo 输出解析（x86_64/arm64e/旧版 Non-fat 文案）；
  *  ⑬ DMG 卷内容（/Applications 快捷方式）与卷名来自 --app-name（纯 + 真实 hdiutil）；
- *  ⑬a/⑬g 资源包两形态归一、装配 shim fail-closed。
+ *  ⑬a/⑬b/⑬c 资源包两形态归一、.DS_Store blob 提取、bplist 读取器（含符号整数）；
+ *  ⑬d/⑬e/⑬f/⑬g 内容判据负例、Iloc 记录作用域、facts 分类、装配 shim 失败分支。
  *  ⑰ CFBundleVersion 映射（S-23）：beta.N → X.Y.Z.N、final → X.Y.Z.final 标记，
  *     同 base 的 beta.N < beta.N+1 < final 且 beta 与 final 不同；
  *  ⑱ --dry-run 计划断言（G30）：feed/公钥成对、https、.xml、精确产物名；不写盘；
@@ -78,6 +79,15 @@ import {
   stageDmgVolume,
   resourceBundleResourcesDir,
   assertBridgeShimPresent,
+  dsStoreBlobs,
+  dsStoreIlocEntries,
+  parseBinaryPlist,
+  dmgLayoutFacts,
+  assertDmgLayoutFacts,
+  dsStoreHasIlocEntry,
+  DMG_ICON_SIZE,
+  DMG_WINDOW,
+  DMG_WINDOW_ORIGIN,
   findSparkleFramework,
   shouldCopyWebDistEntry,
   sparkleFeedChannel,
@@ -725,6 +735,183 @@ test('⑬a SwiftPM 资源包两种形态都归一到扁平（swiftbuild = Swift 
   }
 })
 
+test('⑬b .DS_Store blob 提取：只认「blob + 前置 u32 长度」的 bplist 记录', () => {
+  const payload = Buffer.from('bplist00-fake-payload')
+  const record = Buffer.concat([
+    Buffer.from([0x05]), Buffer.from('.icvp').subarray(0, 5), Buffer.from('blob'),
+    (() => { const l = Buffer.alloc(4); l.writeUInt32BE(payload.length); return l })(),
+    payload,
+  ])
+  const other = Buffer.from('bplist00-not-a-blob-record')
+  const buffer = Buffer.concat([record, Buffer.from([0x00, 0x00]), other])
+  const blobs = dsStoreBlobs(buffer)
+  assert.equal(blobs.length, 1, '只有带 blob 标记的记录才算 blob（否则会把别的 bplist 误当布局）')
+  assert.equal(blobs[0].toString('latin1'), payload.toString('latin1'), '载荷切片必须精确等于记录长度')
+  assert.deepEqual(dsStoreBlobs(Buffer.from('no plist here')), [])
+})
+test('⑬c parseBinaryPlist 读真实 bplist：字符串/整数/实数/布尔/data/嵌套字典', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-bplist-'))
+  try {
+    const xml = [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+      '<plist version="1.0"><dict>',
+      '<key>name</key><string>dsh-chamber</string>',
+      '<key>count</key><integer>2</integer>',
+      '<key>size</key><real>128.5</real>',
+      '<key>flag</key><true/>',
+      '<key>blob</key><data>AAECAw==</data>',
+      '<key>nested</key><dict><key>inner</key><string>x</string></dict>',
+      '</dict></plist>',
+    ].join('\n')
+    const xmlPath = path.join(dir, 'fixture.plist')
+    const binPath = path.join(dir, 'fixture.bin.plist')
+    writeFileSync(xmlPath, xml)
+    execFileSync('plutil', ['-convert', 'binary1', '-o', binPath, xmlPath])
+    const parsed = parseBinaryPlist(readFileSync(binPath))
+    assert.equal(parsed.name, 'dsh-chamber')
+    assert.equal(parsed.count, 2)
+    assert.equal(parsed.size, 128.5)
+    assert.equal(parsed.flag, true)
+    assert.deepEqual([...Buffer.from(parsed.blob)], [0, 1, 2, 3], 'data 必须原样给到字节')
+    assert.equal(parsed.nested.inner, 'x')
+    assert.throws(() => parseBinaryPlist(Buffer.from('not a plist')), /bplist00/)
+    // 有符号整数：bplist 整数是二补码（plutil 同语义）。2026-09 审查发现原实现用无符号读，
+    // -5 会变成 18446744073709552000；当前 .icvp 无负数，属潜在缺陷。
+    const signedXml = [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+      '<plist version="1.0"><dict><key>neg</key><integer>-5</integer><key>pos</key><integer>5</integer></dict></plist>',
+    ].join('\n')
+    const signedXmlPath = path.join(dir, 'signed.plist')
+    const signedBinPath = path.join(dir, 'signed.bin.plist')
+    writeFileSync(signedXmlPath, signedXml)
+    execFileSync('plutil', ['-convert', 'binary1', '-o', signedBinPath, signedXmlPath])
+    const signed = parseBinaryPlist(readFileSync(signedBinPath))
+    assert.equal(signed.neg, -5, 'plutil 写出的负整数必须按有符号读回')
+    assert.equal(signed.pos, 5)
+    // 手搓最小 bplist 钉住 1/2 字节宽度的符号扩展（plutil 总用 8 字节）。
+    const minimalInt = (marker, bytes) => {
+      const offsetTableOffset = 8 + 1 + bytes.length
+      return Buffer.concat([
+        Buffer.from('bplist00', 'latin1'),
+        Buffer.from([marker, ...bytes]),
+        Buffer.from([8]),
+        Buffer.alloc(6), Buffer.from([1, 1]),
+        (() => { const b = Buffer.alloc(8); b.writeBigUInt64BE(1n); return b })(),
+        (() => { const b = Buffer.alloc(8); b.writeBigUInt64BE(0n); return b })(),
+        (() => { const b = Buffer.alloc(8); b.writeBigUInt64BE(BigInt(offsetTableOffset)); return b })(),
+      ])
+    }
+    // 语义与 plutil 对齐（2026-09 实测 `plutil -convert binary1` → `-extract raw`）：
+    // 1/2/4/16 字节无符号、只有 8 字节有符号；Apple 对非负值用最小宽度（128 → 1 字节 0x80）。
+    assert.equal(parseBinaryPlist(minimalInt(0x10, [0xfb])), 251, '1 字节按无符号（0xfb = 251，不是 -5）')
+    assert.equal(parseBinaryPlist(minimalInt(0x10, [0x80])), 128, 'iconSize 形态：1 字节 0x80 = 128')
+    assert.equal(parseBinaryPlist(minimalInt(0x11, [0xfe, 0x7f])), 65151, '2 字节按无符号')
+    assert.equal(parseBinaryPlist(minimalInt(0x10, [0x7f])), 127, '1 字节正数')
+    assert.equal(parseBinaryPlist(minimalInt(0x14, [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])), 1,
+      '真实 Finder .icvp 的 16 字节整数（viewOptionsVersion）必须读出且不得抛')
+    assert.deepEqual(parseBinaryPlist(minimalInt(0x80, [0x05])), { uid: 5 }, 'UID（1 字节）')
+    assert.deepEqual(parseBinaryPlist(minimalInt(0x81, [0x01, 0x00])), { uid: 256 }, 'UID（2 字节）')
+    // date / UTF-16（含非 BMP）覆盖（A 审查 N2）。
+    const richXml = [
+      '<?xml version="1.0" encoding="UTF-8"?>',
+      '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">',
+      '<plist version="1.0"><dict><key>when</key><date>2026-09-20T00:00:00Z</date>',
+      '<key>emoji</key><string>😀</string></dict></plist>',
+    ].join('\n')
+    const richXmlPath = path.join(dir, 'rich.plist')
+    const richBinPath = path.join(dir, 'rich.bin.plist')
+    writeFileSync(richXmlPath, richXml)
+    execFileSync('plutil', ['-convert', 'binary1', '-o', richBinPath, richXmlPath])
+    const rich = parseBinaryPlist(readFileSync(richBinPath))
+    assert.equal(rich.emoji, '😀', 'UTF-16BE 字符串（代理对）必须正确解码')
+    assert.ok(rich.when instanceof Date && rich.when.toISOString().startsWith('2026-09-20'), 'date 必须解析成 Date')
+    // 畸形 trailer 护栏（审查 F2：42 字节伪造文件曾让解析吃到 ~3GB RSS）。
+    const malformed = Buffer.concat([
+      Buffer.from('bplist00', 'latin1'), Buffer.alloc(24),
+      Buffer.alloc(6), Buffer.from([0, 1]),
+      (() => { const b = Buffer.alloc(8); b.writeBigUInt64BE(1000000000n); return b })(),
+      Buffer.alloc(8), Buffer.alloc(8),
+    ])
+    assert.throws(() => parseBinaryPlist(malformed), /非法 bplist 偏移宽度/,
+      '非法宽度必须当场抛，不得按伪造计数分配内存')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+test('⑬d 内容级判据的失败分支：每条断言都有负例（2026-09 审查补强）', () => {
+  const alias = Buffer.from('/Volumes/dsh-chamber/.background/background.tiff', 'utf8')
+  const base = {
+    iconView: { backgroundType: 2, backgroundImageAlias: alias, iconSize: DMG_ICON_SIZE },
+    window: { WindowBounds: '{{200, 482}, {540, 380}}' },
+    ilocEntries: ['dsh-chamber.app', 'Applications'],
+  }
+  assert.deepEqual(assertDmgLayoutFacts(base, 'dsh-chamber'), { bounds: '{{200, 482}, {540, 380}}' },
+    '合法 facts 必须通过（负例之外的正例）')
+  const cases = [
+    ['没有 .icvp 记录', { ...base, iconView: null }, /没有 Finder 视图记录/],
+    ['纯色背景（backgroundType=1）', { ...base, iconView: { ...base.iconView, backgroundType: 1 } }, /backgroundType=2/],
+    ['背景别名为空', { ...base, iconView: { ...base.iconView, backgroundImageAlias: Buffer.alloc(0) } }, /缺 backgroundImageAlias/],
+    ['别名指向别处', { ...base, iconView: { ...base.iconView, backgroundImageAlias: Buffer.from('/tmp/other.tiff') } }, /没有指向卷内/],
+    ['别名指向另一卷的同名路径', { ...base, iconView: { ...base.iconView, backgroundImageAlias: Buffer.from('/Volumes/dsh-OTHER/.background/background.tiff') } }, /不属于本卷/],
+    ['图标尺寸不是 128', { ...base, iconView: { ...base.iconView, iconSize: 64 } }, /图标尺寸未落盘/],
+    ['窗口尺寸与背景不符', { ...base, window: { WindowBounds: '{{0, 0}, {800, 600}}' } }, /窗口尺寸未落盘/],
+    ['缺 Iloc 记录', { ...base, ilocEntries: [] }, /Iloc）缺失/],
+    ['Iloc 只登记了一个条目', { ...base, ilocEntries: ['Applications'] }, /缺条目：dsh-chamber\.app/],
+  ]
+  for (const [label, facts, pattern] of cases) {
+    assert.throws(() => assertDmgLayoutFacts(facts, 'dsh-chamber'), pattern, `负例必须红：${label}`)
+  }
+})
+
+test('⑬e Iloc 断言只认「名字紧邻 Iloc 记录头」的登记（名字出现在别处不算数）', () => {
+  const utf16be = (text) => Buffer.from(text, 'utf16le').swap16()
+  // 真实形态：[u16 名长][UTF-16BE 名]["Ilocblob"][u32 坐标长][16 字节坐标]，名字紧邻记录头。
+  const entry = (name) => Buffer.concat([
+    Buffer.from([0, name.length]), utf16be(name), Buffer.from('Ilocblob', 'latin1'), Buffer.alloc(20),
+  ])
+  const withIloc = Buffer.concat([entry('dsh-chamber.app'), entry('Applications')])
+  assert.equal(dsStoreHasIlocEntry(withIloc, 'dsh-chamber.app'), true)
+  assert.equal(dsStoreHasIlocEntry(withIloc, 'Applications'), true)
+  assert.deepEqual(dsStoreIlocEntries(withIloc), ['dsh-chamber.app', 'Applications'], '按记录头解出条目名')
+  // 名字出现在别处（没有 Ilocblob 相邻）不算登记——旧实现的全文件子串搜索会假阳性。
+  const namesOnly = Buffer.concat([
+    Buffer.from('Iloc', 'latin1'), utf16be('dsh-chamber.app'), utf16be('Applications'),
+  ])
+  assert.equal(dsStoreHasIlocEntry(namesOnly, 'dsh-chamber.app'), false)
+  assert.deepEqual(dsStoreIlocEntries(namesOnly), [])
+  assert.equal(dsStoreHasIlocEntry(withIloc, ''), false, '空名字恒 false')
+  assert.equal(dsStoreHasIlocEntry(withIloc, 'chamber'), false, '子串不算登记')
+})
+
+test('⑬f dmgLayoutFacts：注入解析器即可单测记录分类（.icvp / .bwsp / Iloc）', () => {
+  const record = (name, payload) => Buffer.concat([
+    Buffer.from([name.length]), Buffer.from(name, 'latin1'), Buffer.from('blob', 'latin1'),
+    (() => { const b = Buffer.alloc(4); b.writeUInt32BE(payload.length); return b })(),
+    payload,
+  ])
+  const iconViewPayload = Buffer.from('bplist00-icvp', 'latin1')
+  const windowPayload = Buffer.from('bplist00-bwsp', 'latin1')
+  const ilocEntry = Buffer.concat([
+    Buffer.from([0, 'Applications'.length]), Buffer.from('Applications', 'utf16le').swap16(),
+    Buffer.from('Ilocblob', 'latin1'), Buffer.alloc(20),
+  ])
+  const buffer = Buffer.concat([
+    record('.icvp', iconViewPayload), record('.bwsp', windowPayload), ilocEntry,
+  ])
+  const iconView = { backgroundType: 2, backgroundImageAlias: Buffer.from('x'), iconSize: 128 }
+  const window = { WindowBounds: '{{1, 2}, {540, 380}}' }
+  const facts = dmgLayoutFacts(buffer, {
+    parsePlist: (blob) => (blob.equals(iconViewPayload) ? iconView : blob.equals(windowPayload) ? window : null),
+  })
+  assert.equal(facts.iconView?.backgroundType, 2, '.icvp 记录必须归到 iconView')
+  assert.equal(facts.window?.WindowBounds, '{{1, 2}, {540, 380}}', '.bwsp 记录必须归到 window')
+  assert.deepEqual(facts.ilocEntries, ['Applications'], 'Iloc 记录头里的条目名必须被解出')
+  assert.equal(dsStoreHasIlocEntry(buffer, 'Applications'), true)
+  assert.equal(dsStoreHasIlocEntry(buffer, 'dsh-chamber.app'), false)
+})
+
 test('⑬g 装配 fail-closed：资源包缺 bridge-shim.js 即 loud', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'dsh-shim-guard-'))
   try {
@@ -759,6 +946,23 @@ test('⑬ 真实 DMG：卷内含 .app + /Applications 链接，卷名 = --app-na
       assert.ok(lstatSync(path.join(mount, 'Applications')).isSymbolicLink(), '挂载卷内应有 /Applications 链接')
       const info = spawnSync('diskutil', ['info', mount], { encoding: 'utf8' })
       assert.match(info.stdout, /Volume Name:\s+dsh-chamber/)
+      // 内容级：.DS_Store 必须真的写着背景=图像 + 指向卷内背景图的别名 + 窗口尺寸 + 两条坐标。
+      // 只查「文件在」会放过「设了但没落盘」的 DMG——那正是「没有拖拽提示」的形态。
+      const dsStoreBuffer = readFileSync(path.join(mount, '.DS_Store'))
+      const facts = dmgLayoutFacts(dsStoreBuffer)
+      assert.equal(facts.iconView?.backgroundType, 2, 'backgroundType=2（图像背景）必须落盘')
+      const alias = facts.iconView?.backgroundImageAlias
+      assert.ok(alias instanceof Uint8Array && alias.length > 0, 'backgroundImageAlias 必须非空')
+      const aliasText = Buffer.from(alias).toString('latin1')
+      assert.ok(aliasText.includes('.background') && aliasText.includes('background.tiff'),
+        '背景别名必须指向卷内 .background/background.tiff')
+      assert.equal(facts.iconView?.iconSize, DMG_ICON_SIZE)
+      const bounds = facts.window?.WindowBounds
+      assert.ok(typeof bounds === 'string' && bounds.startsWith('{{' + DMG_WINDOW_ORIGIN.x + ', ')
+        && bounds.endsWith(', {' + DMG_WINDOW.width + ', ' + DMG_WINDOW.height + '}}'),
+        `窗口尺寸必须落盘（y 随屏幕取整，不比），实际 ${bounds}`)
+      assert.ok(dsStoreHasIlocEntry(dsStoreBuffer, 'dsh-chamber.app'))
+      assert.ok(dsStoreHasIlocEntry(dsStoreBuffer, 'Applications'), 'Iloc 必须登记两个条目')
     } finally {
       spawnSync('hdiutil', ['detach', mount, '-force'], { encoding: 'utf8' })
     }

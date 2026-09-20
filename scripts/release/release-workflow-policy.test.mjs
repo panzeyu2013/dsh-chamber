@@ -160,6 +160,10 @@ assert.doesNotMatch(swiftBuild, /hdiutil create/,
   'the workflow must not inline hdiutil staging — single implementation lives in macos/scripts/dmg.mjs')
 assert.doesNotMatch(swiftBuild, /DMG_STAGE|ln -s \/Applications/,
   'the workflow must not re-introduce the old inline dmg staging')
+// 内容级门禁（backgroundType/别名/窗口/坐标）只存在于 dmg.mjs；正式腿不得把它关掉
+// ——--skip-verify 仅供调试 CLI（2026-09 审查：原先无人断言这一点）。
+assert.doesNotMatch(swiftBuild, /--skip-verify/,
+  'the release leg must keep the dmg content verification on (--skip-verify is debug-only)')
 const dmgModule = readFileSync(new URL('../../macos/scripts/dmg.mjs', import.meta.url), 'utf8')
 const swiftAssembler = readFileSync(new URL('../../macos/scripts/build-swift-app.mjs', import.meta.url), 'utf8')
 assert.match(swiftAssembler, /from '\.\/dmg\.mjs'/,
@@ -171,6 +175,8 @@ assert.ok(dmgModule.includes("DMG_BACKGROUND_DIR_NAME = '.background'")
   'the dmg volume must carry the hidden .background/background.tiff (Finder background)')
 assert.match(dmgModule, /set background picture of viewOptions to file/,
   'the Finder layout script must set the background picture')
+assert.match(dmgModule, /export function assertDmgLayoutFacts/,
+  'the dmg content assertions must stay a single, unit-testable implementation')
 // 图标坐标在模块里是常量 + 模板插值，锚常量与插值点（源文本断言，非运行值）。
 assert.match(dmgModule, /DMG_WINDOW = \{ width: 540, height: 380 \}/,
   'the Finder window size must stay pinned to the background image size')

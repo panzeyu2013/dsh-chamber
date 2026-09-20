@@ -631,6 +631,15 @@ export {
   finderLayoutScript,
   stageDmgVolume,
   verifyDmgLayout,
+  dsStoreBlobs,
+  dsStoreIlocEntries,
+  parseBinaryPlist,
+  dmgLayoutFacts,
+  assertDmgLayoutFacts,
+  dsStoreHasIlocEntry,
+  DMG_ICON_SIZE,
+  DMG_WINDOW,
+  DMG_WINDOW_ORIGIN,
 } from './dmg.mjs'
 
 export async function runBuildSwiftApp(options, io = { log: console.log, error: console.error }) {
