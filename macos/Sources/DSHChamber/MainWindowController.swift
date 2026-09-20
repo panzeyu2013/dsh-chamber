@@ -25,6 +25,7 @@
 //  notifyClicked/未知事件 loud 不处理——路由决策表见文件底部
 //  decodeNotify/NotifyRoute（纯逻辑，单测直测）。
 import AppKit
+import DSHChamberWebKitSupport
 import UniformTypeIdentifiers
 import UserNotifications
 import WebKit
@@ -85,6 +86,38 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         NSColor(srgbRed: backgroundRed, green: backgroundGreen,
                 blue: backgroundBlue, alpha: 1)
     }
+
+    /// 主题化"露底"色（W4a，2026-12；F1 修正）：**无 last-known 事实时**首帧用
+    /// 骨架常量——页面自身骨架恒为 #0f1115 且与主题无关（packages/renderer/index.html
+    /// 明示「不跟随 prefers-color-scheme：dsh 主题按实例投影、骨架期不可知」），
+    /// 此时跟着骨架走才不会反向闪色；**已有 last-known 事实（第二次启动起）**则建窗
+    /// 即收敛到页面主题色（见 setupWindow 的 reconcileThemedBackground），否则 ingest
+    /// 对同值事实早退，浅色页面会整场会话露深色底（F1 真 bug）。页面事实到达后按页面
+    /// 主题换色，缩放/全屏/重载的露底就与页面一致（两个方向都不闪）。
+    /// nil（无事实）→ 骨架常量；dark → 骨架常量；light → dsh 浅色内容底（白）。
+    static func themedBackgroundColor(pageIsDark: Bool?) -> NSColor {
+        guard let pageIsDark, !pageIsDark else { return windowBackgroundColor }
+        return .white
+    }
+
+    /// W2（2026-12 三轮独立复核）：透明露底 KVC 结果的诊断行（纯函数，单测直测）。
+    /// drawsBackground 是私有键（公开面只有 underPageBackgroundColor）——包装返回
+    /// Unavailable 时保持 WebKit 默认、只靠公开露底色，日志必须能区分三种结果；任何
+    /// 分支都只记日志，绝不让进程退出。
+    static func drawsBackgroundLogLine(_ outcome: DSHChamberBoolKVCOutcome) -> String {
+        switch outcome {
+        case .applied:
+            return "[shell] 透明露底：drawsBackground=false 已生效（异常安全 KVC 包装）"
+        case .unavailable:
+            return "[shell] 透明露底：drawsBackground 私有键不可用（本 OS 无对应存取器）"
+                + "——保持 WebKit 默认，仅 underPageBackgroundColor 生效"
+        case .readBackMismatch:
+            return "[shell] 透明露底：drawsBackground=false 写入后回读不一致"
+                + "——按未生效记录，继续用 underPageBackgroundColor"
+        @unknown default:
+            return "[shell] 透明露底：drawsBackground 设置返回未知结果（C 侧新增 case）——保持现状"
+        }
+    }
     /// B 桥入站保留 method 名（单源 = HostInboundMethod；node-edges.ts 同拼写）。
     private static let hostFactsMethod = HostInboundMethod.hostFacts
     /// renderer 崩溃有界重载策略（design 25 §5 E19；Electron 版 500ms/60s≤3）。
@@ -128,6 +161,19 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 宿主设置变化回调（2026-12 审查 major）：关窗决策会缓存 quitFacts，设置页改
     /// 「关闭窗口行为」后必须让缓存失效，否则首次关窗仍按旧值决策。
     var onSettingsChanged: (() -> Void)?
+
+    // MARK: - 页面事实（native-shell 本地化/主题跟随的事实载波）
+
+    /// last-known 页面事实（language/dark/revision；init 时从 UserDefaults 恢复）。
+    private let pageFactsStore = ShellPageFactsStore(defaults: .standard)
+    /// 露底色当前已应用的页面暗色事实（nil = 尚未按事实着色，仍是骨架常量）。
+    /// 主线程独占；只由 reconcileThemedBackground 写（F1 幂等对账的状态）。
+    private var appliedPageIsDark: Bool?
+    /// 页面事实变化接收方（AppDelegate 注册；nil = 当前无人消费）。
+    var pageFactsSink: ShellPageFactsSink?
+    /// 独立消息通道 ShellPageFactsScript.messageName 的 handler（**不**混进
+    /// ChamberMessageHandler 的白名单/origin 就绪门链路）。
+    private var pageFactsHandler: ShellPageFactsMessageHandler?
     private var consoleCatcher: ShellConsoleCatcher?
     private var didSnapshot = false
     /// 在途下载占用的目标路径（S-26 静默落盘：WebKit 要求目标文件在决策时
@@ -241,6 +287,22 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // deviations S-50）。与 shim 同段：必须在 WKWebView 构造前生效。
         ShellOverscrollPolicy.install(config: configuration)
         print("[shell] 视口越界策略注入完成（\(ShellOverscrollPolicy.rootOverscrollCSS)）")
+
+        // 页面事实载波（本地化/主题跟随，S1）：documentStart、仅主 frame、
+        // page world 注入 MutationObserver（html[lang]/内联 color-scheme、
+        // body[data-ds-dark-theme]、meta[theme-color]），并注册独立消息通道。
+        // 与 shim/overscroll 同段：必须在 WKWebView 构造前注册。
+        let pageFactsHandler = ShellPageFactsMessageHandler(controller: self)
+        pageFactsHandler.expectedOrigin = { [weak self] in self?.cpOrigin }
+        self.pageFactsHandler = pageFactsHandler
+        configuration.userContentController.add(pageFactsHandler,
+                                                name: ShellPageFactsScript.messageName)
+        configuration.userContentController.addUserScript(WKUserScript(
+            source: ShellPageFactsScript.source(),
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: true
+        ))
+        print("[shell] 页面事实载波注入完成（\(ShellPageFactsScript.messageName)）")
 
         // 消息通道：ChamberMessageHandler 只做护栏与转发（W-04 实现）
         let handler = ChamberMessageHandler(
@@ -365,9 +427,19 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // ——WKWebView 缺省白底会让首帧/重载白闪；drawsBackground=false 让页面
         // 透明区域直接露出窗口底色（亮/暗主题同值，token 常量见文件顶部）。
         webView.underPageBackgroundColor = Self.windowBackgroundColor
-        if webView.responds(to: NSSelectorFromString("setDrawsBackground:")) {
-            webView.setValue(false, forKey: "drawsBackground")
-        }
+        // 为什么不直接用公开 API（历史沿革）：公开面只有 underPageBackgroundColor，
+        // 它只改「露底色」本身；页面未覆盖区域要透明露出窗口底，必须关 drawsBackground，
+        // 而它没有公开开关。X2（2026-12 二轮独立复核）：原先以
+        // `responds(to: NSSelectorFromString("setDrawsBackground:"))` 作门，实测恒
+        // false——WKWebView 没有可被 responds 探到的该访问器，T-4 透明露底因此
+        // 从未生效；而 KVC 直设仍有效（实测 value 变 0、快照透明区 alpha 0）。
+        // 但 `drawsBackground` **不在公开头文件**里，私有存取器
+        // `_drawsBackground`/`_setDrawsBackground:` 是否存在随 OS 版本而变；Swift
+        // 无法 catch ObjC 异常，直设 KVC 在缺该存取器的构建上以 NSUnknownKeyException
+        // 直接 abort 进程（实测 exit_code=134）。W1/W2（2026-12 三轮独立复核）：
+        // 改走 DSHChamberWebKitSupport 的异常安全包装（@try/@catch 吞异常、返回设置
+        // 结果），成功/失败都写 shellLog 可诊断，缺键时保持 WebKit 默认且绝不崩。
+        shellLog(Self.drawsBackgroundLogLine(DSHChamberSetDrawsBackground(webView, false)))
         // A3-3：恢复本 origin 上次的缩放（Chromium 按 origin 持久化 zoomLevel；
         // WKWebView.pageZoom 每次启动回 100%，这里用 UserDefaults 补齐）。
         webView.pageZoom = ZoomPersistence.load(
@@ -389,6 +461,14 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // 转入退出链由 core 决策，Swift 只执行）。
         window.delegate = self
         self.window = window
+
+        // F1（2026-12 审计）：首帧露底色也按 **last-known 页面事实** 收敛——
+        // 第二次启动时 store 内已有同值事实（后续 ingest 恒 false），只靠 ingest
+        // 的变化分支会让浅色页面整场会话停在骨架深色。建窗收尾立即对账一次
+        // （幂等、不记日志；窗口尚未 show，等效于"用 last-known 选初始露底色"，
+        // nil → 骨架常量）。
+        reconcileThemedBackground(
+            desiredPageIsDark: ShellPageFactsStore.lastKnown(in: .standard)?.pageIsDark)
 
         // S-A hostFacts 事实观察：窗口 key/关闭通知（主线程投递；object 限定
         // 本窗）。选择器观察者不被 center 持有；控制器与应用同生命周期
@@ -492,9 +572,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     @objc private func hostWakeUp(_ note: Notification) {
         // C4（2026-09 评审）：这一行**必须落盘**（shellLog = print + append）。
-        // 此前只用 print：Dock 启动的 .app stdout 无处可看，native-shell.log 里
-        // 零条唤醒行既不能证明「发过」也不能证明「没发」（只能靠反汇编），真机
-        // 验收因此分不开「壳没发」与「页面没消费」。
+        // 此前只用 print：Dock 启动的 .app stdout 无处可看，shell.log（即
+        // ShellLog.fileName）里零条唤醒行既不能证明「发过」也不能证明「没发」
+        // （只能靠反汇编），真机验收因此分不开「壳没发」与「页面没消费」。
         shellLog("[shell] 系统唤醒——发送 __host.systemResume")
         Task { @MainActor in
             do {
@@ -605,17 +685,23 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     /// 探测失败的可诊断原因（纯逻辑，单测直测）：NSURLError 带域与码——ATS
     /// 拒绝（NSURLErrorAppTransportSecurityRequiresSecureConnection，-1022）
-    /// 等网络层事实进落盘日志，不再只剩「未就绪」三个字。
+    /// 等网络层事实进落盘日志与失败页 detail，不再只剩「未就绪」三个字。
+    /// 本地化：failure.probeNSURLError（%d = 错误码、%@ = 系统描述）/
+    /// failure.probeHTTPStatus（%d = 状态码）/ failure.probeNoResponse；
+    /// 非 NSURLError 的 localizedDescription 由系统本地化，原样透出。
     static func healthProbeFailureDetail(statusCode: Int?, error: Error?) -> String {
         if let error {
             let nsError = error as NSError
             if nsError.domain == NSURLErrorDomain {
-                return "NSURLError \(nsError.code)：\(error.localizedDescription)"
+                return NativeText.format(.failureProbeNSURLError, Int32(nsError.code),
+                                         error.localizedDescription)
             }
             return error.localizedDescription
         }
-        if let statusCode { return "HTTP \(statusCode)（期望 2xx）" }
-        return "无响应"
+        if let statusCode {
+            return NativeText.format(.failureProbeHTTPStatus, Int32(statusCode))
+        }
+        return NativeText.string(.failureProbeNoResponse)
     }
 
     /// 首载第一步：探测（绝不直接导航）。
@@ -680,9 +766,10 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     }
 
     /// 就绪探测失败的失败页错误（LocalizedError 直出可诊断原因）。
+    /// 本地化：failure.probeFailed（%@ = 已本地化的探测 detail）。
     struct HealthProbeFailureError: LocalizedError {
         let detail: String
-        var errorDescription: String? { "控制面就绪探测失败：\(detail)" }
+        var errorDescription: String? { NativeText.format(.failureProbeFailed, detail) }
     }
 
     // MARK: - S-42：启动窗口呈现门（绝不先亮无内容空窗）
@@ -933,7 +1020,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                 } else {
                     message = error.localizedDescription
                 }
-                let errorJSON = Self.jsonLiteral(message) ?? "\"bridge error\""
+                let errorJSON = Self.jsonLiteral(message)
+                    ?? Self.jsonLiteral(NativeText.string(.bridgeErrorFallback))
+                    ?? "\"bridge error\""
                 evaluateJS("__dshChamberResolve(\(nativeTokenLiteral), \(id), null, \(errorJSON))")
             }
         }
@@ -1044,6 +1133,149 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         }
     }
 
+    // MARK: - 页面事实（本地化/主题跟随）
+
+    /// 启动早期读取 last-known 页面事实的只读入口（AppDelegate 可先于窗口创建
+    /// 调用，例如决定 AppleLanguages 覆盖与初始 NSAppearance；nil = 本机从未
+    /// 记录过任何事实）。
+    static func lastKnownPageFacts(defaults: UserDefaults = .standard) -> ShellPageFacts? {
+        ShellPageFactsStore.lastKnown(in: defaults)
+    }
+
+    /// 露底色对账决策（纯函数，F1 单测直测）：desired 与已应用值不同才返回要
+    /// 应用的色值；nil = 幂等不动（含双方都是"无事实"）。
+    static func themedBackgroundColorToApply(pageIsDark: Bool?,
+                                             appliedPageIsDark: Bool?) -> NSColor? {
+        guard pageIsDark != appliedPageIsDark else { return nil }
+        return themedBackgroundColor(pageIsDark: pageIsDark)
+    }
+
+    /// 露底色对账（F1：幂等——记录已应用值，不同才改窗口/WKWebView 的露底色）。
+    /// **不**写日志（避免每次 ingest 都刷屏）；appliedPageIsDark 只在这里推进。
+    private func reconcileThemedBackground(desiredPageIsDark: Bool?) {
+        guard let color = Self.themedBackgroundColorToApply(
+            pageIsDark: desiredPageIsDark, appliedPageIsDark: appliedPageIsDark) else {
+            return
+        }
+        webView?.underPageBackgroundColor = color
+        window?.backgroundColor = color
+        appliedPageIsDark = desiredPageIsDark
+    }
+
+    /// 合并一次页面事实上报：有变化才落盘（Store 内）并通知 sink。
+    /// 主线程所有（消息回调 / evaluateJavaScript 回调 / 本方法调用点）。
+    func ingestPageFacts(_ payload: [String: Any]) {
+        let previous = pageFactsStore.current
+        // F1（2026-12 审计）：露底色对账**不能**挂在 ingest 的"变化"分支上——
+        // 第二次启动时 store 内已有同值事实，ingest 返回 false，浅色页面会整场
+        // 会话停在骨架深色。任何一次 ingest 之后都幂等收敛（与页面事实一致）；
+        // W4（2026-12 三轮独立复核）把该次序抽成静态接缝：无窗口环境可直测，退回
+        // "仅变化时对账"会让 IngestReconcileSeamTests 变红。
+        let changed = Self.ingestPageFacts(payload, into: pageFactsStore) { desiredPageIsDark in
+            self.reconcileThemedBackground(desiredPageIsDark: desiredPageIsDark)
+        }
+        guard changed else { return }
+        guard let facts = pageFactsStore.current else { return }
+        shellLog("[shell] 页面事实更新 lang=\(facts.language.rawValue) "
+            + "dark=\(facts.pageIsDark) revision=\(facts.revision)")
+        pageFactsSink?.pageFactsDidChange(facts, previous: previous)
+    }
+
+    /// ingest 接缝（W4，2026-12 三轮独立复核）：Store 合并 + **无条件**露底色对账
+    /// 回调，返回 Store 是否产生变化。生产路径与单测共用本函数（签名
+    /// ingestPageFacts(_:into:reconcile:)，与实例版 ingestPageFacts(_:) 共存），故
+    /// "任何一次 ingest 之后必然对账露底色"（F1）可直测：把对账挪进 changed 分支或
+    /// 挪到其调用之后，无变化的 ingest 就不再触发回调，直测用例即红。
+    @discardableResult
+    static func ingestPageFacts(_ payload: [String: Any],
+                                into store: ShellPageFactsStore,
+                                reconcile: (Bool?) -> Void) -> Bool {
+        let changed = store.ingest(payload)
+        reconcile(store.current?.pageIsDark)
+        return changed
+    }
+
+    /// 页面事实载波通道的文档面判定（纯函数，X1/F5 单测直测真值表）：只要求
+    /// **主 frame + 同源**——url 与 expectedOrigin 都非空，且 scheme/host/port 与
+    /// expectedOrigin 完全相同；**不**要求 pathname == "/"、**不**要求无 query。
+    ///
+    /// 取舍（Z1，2026-12 二轮独立复核收口）：A 桥保留 TrustGuard.isTrustedDocument
+    /// 的严格壳文档判定——它承载 60 个 IPC 方法，同源非壳文档（/api/i/* 代理回传的
+    /// 远端 HTML）继承 shim 是真实风险。本通道只携带 lang/dark 两个非敏感事实，且与
+    /// A 桥白名单/就绪门完全解耦（事实必须在 sidecar ready 前可用）；页面一旦采用
+    /// history.pushState/replaceState（例如把地址改成 /api/i/1 或带 query 的 SPA
+    /// 路由），WKWebView 的 webView.url 会随 history API 变化，旧「壳文档」判定会
+    /// 把同一文档判成不可信 → 事实通道静默断掉直到下一次
+    /// didFinish 才靠对账恢复。故按同源放宽；主 frame 围栏与导航护栏（同源非壳文档
+    /// 的主 frame 导航仍被 cancel）保持失败页/异源文档进不了事实面。
+    ///
+    /// 同源比较是纯逻辑、绝不按字符串前缀：委托 TrustGuard.isTrustedOrigin
+    /// （URLComponents 解析后比较三元组）。边界语义：
+    ///   - userinfo（如 `http://evil@127.0.0.1:17520/`）→ 拒绝（同源以无凭据 URL 为前提）；
+    ///   - 默认端口折叠：http 的缺省 ≡ :80、https 的缺省 ≡ :443（WHATWG 语义）；
+    ///   - host（与 scheme）大小写折叠后比较；
+    ///   - IPv6 字面量按 URLComponents 规范化结果比较（URL.host 已去掉方括号，两侧同形）。
+    /// about:blank / data: / file: / blob:（无 http(s) scheme+host 三元组）、空 url、
+    /// 空 expectedOrigin、跨源（子域 / 不同端口 / 不同 scheme，含 https）一律拒绝。
+    static func isSameOriginDocument(url: String?, expectedOrigin: String?) -> Bool {
+        guard let url, !url.isEmpty,
+              let expectedOrigin, !expectedOrigin.isEmpty else { return false }
+        return TrustGuard.isTrustedOrigin(url, expectedOrigin: expectedOrigin)
+    }
+
+    /// 事实通道文档 URL 的取值规则（纯函数，W4a 单测直测；2026-12 三轮独立复核）。
+    ///
+    /// **webView.url 优先，frameInfo.request.url 仅兜底**：真实 WKWebView 实测，
+    /// 同源 blob:/about:srcdoc 子 frame 调 parent.document.write 可以改写主 frame
+    /// 文档；改写后 script message 的 frameInfo.request.url 仍是**过期的旧主 frame
+    /// URL**（读 frameInfo 的门因此被绕过），而 message.webView.url / location.href /
+    /// document.URL 已变成 blob:。A 桥正是读 message.webView?.url
+    /// （MessageHandler.fence 的 currentURL），事实通道对齐同一来源；webView 缺席
+    /// （进程终止/测试桩）才退回 frameInfo.request.url。
+    static func factsDocumentURL(webViewURL: String?, frameRequestURL: String?) -> String? {
+        if let webViewURL { return webViewURL }
+        return frameRequestURL
+    }
+
+    /// didFinish 对账路径的准入判定（纯函数，X1 单测直测真值表）：与观察器路径
+    /// ShellPageFactsMessageHandler.accepts 共用 isSameOriginDocument（主 frame 由
+    /// 对账路径本身保证：读的是**回调时刻主 frame 的 webView.url**——W4a 后与观察器
+    /// 路径同来源）。失败说明页（loadHTMLString → about:blank）与空 url 一律拒绝。
+    static func acceptsReconcile(url: String?, expectedOrigin: String?) -> Bool {
+        isSameOriginDocument(url: url, expectedOrigin: expectedOrigin)
+    }
+
+    /// didFinish 对账（snapshotSource 与注入脚本同一 dark 判定）。
+    ///
+    /// X1（2026-12 二轮独立复核 major 收口）：回调此前无条件 ingest，绕过了
+    /// 观察器路径的门（Z1 起两路共用同一 isSameOriginDocument）——失败说明页
+    /// about:blank 的 didFinish 会把
+    /// {lang:"", dark:false} 灌进 Store：空 lang 不构成语言事实（契约），但
+    /// dark 变化仍生效 ⇒ 暗系统被判 pageIsDark=false、强制 .aqua 露浅底，且污染
+    /// 值落盘成 last-known（下次启动先亮浅色）。现改为回调内先过 acceptsReconcile
+    /// 才 ingest；失败页/about:blank 静默丢弃（与观察器路径的拒绝同语义，不误报
+    /// 成「对账失败」）。「对账失败 loud 但不报警」的既有语义只针对下面的
+    /// evaluateJavaScript 错误分支，保持不变。
+    private func reconcilePageFacts() {
+        webView.evaluateJavaScript(ShellPageFactsScript.snapshotSource()) { [weak self] result, error in
+            if let error {
+                // 对账失败不致命：MutationObserver 路径仍在，保留 loud 但不报警。
+                shellLog("[shell] 页面事实对账失败（保留 MutationObserver 路径）："
+                    + "\(error.localizedDescription)")
+                return
+            }
+            guard let self else { return }
+            // 判定用回调时刻的 webView.url：evaluateJavaScript 求值的是当时的
+            // document，回调时的 URL 才是与其配对的可信文档面。
+            guard Self.acceptsReconcile(url: self.webView.url?.absoluteString,
+                                        expectedOrigin: self.cpOrigin) else {
+                return
+            }
+            guard let payload = result as? [String: Any] else { return }
+            self.ingestPageFacts(payload)
+        }
+    }
+
     // MARK: - 工具
 
     /// 读取 A 桥 shim 源码（ChamberResources：打包态 Contents/Resources、
@@ -1072,9 +1304,11 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                 let path = base.path
                 if !searched.contains(path) { searched.append(path) }
             }
-            return "缺少 A 桥 shim 资源：页面无法注入 dshChamber 桥，本机能力全部不可用。"
-                + "已在以下目录查找：" + searched.joined(separator: "、") + "。"
-                + "请重新运行 pnpm run build:swift-app（dev 用 swift build）后重试。"
+            // 本地化：failure.shimMissing（%@ = 已查找目录，按 common.listSeparator
+            // 连接；zh「、」/ en「, 」）。
+            return NativeText.format(
+                .failureShimMissing,
+                searched.joined(separator: NativeText.string(.commonListSeparator)))
         }
         return nil
     }
@@ -1364,6 +1598,10 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // E19 三事件映射之二：加载完成 = core 的确定性 replay 边（drain 待发
         // 通知点击/深链 intent）。
         sendRendererLifecycle("did-finish-load")
+        // 页面事实对账：MutationObserver 首次上报可能早于 lang/body 落定，
+        // didFinish 时按与注入脚本相同的判定再拉一次（ingest 幂等，无变化
+        // 不打扰 sink）。
+        reconcilePageFacts()
         // POC dev 白屏诊断（S14：仅 DSH_CHAMBER_SHELL_DEBUG=1，默认关闭）：延迟数秒后渲染
         // 快照落盘（takeSnapshot 不需要屏幕录制权限；多帧取样便于观察首屏演进）。
         guard ShellDebug.isEnabledCached, !didSnapshot else { return }
@@ -1582,8 +1820,8 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             shellLog("[shell] 渲染恢复正常化放弃（\(reason)，\(attempts) 次），本次不重载")
             let alert = NSAlert()
             alert.alertStyle = .critical
-            alert.messageText = "dsh-chamber 前端异常"
-            alert.informativeText = "前端渲染进程反复无响应/崩溃，已停止自动恢复。请重新启动应用。"
+            alert.messageText = NativeText.string(.rendererCrashTitle)
+            alert.informativeText = NativeText.string(.rendererCrashDetail)
             alert.runModal()
         }
     }
@@ -1680,13 +1918,17 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 浏览器错误页，Swift 侧此前只打印 stderr → 用户面对白屏。这里落一张最小
     /// 说明页（原因 + 控制面地址 + T-3 sidecar 真实原因），绝不自行重开会话。
     private func showLoadFailurePage(in webView: WKWebView, error: Error, exhausted: Bool) {
+        // 提示句：failure.title 即通用状态句；sidecar 分支用 failure.sidecarLabel
+        // 组合出「sidecar 启动失败：<状态>」；耗尽分支用 failure.retryExhausted
+        // （%d = 已重试次数），绝不再手拼 ASCII "(N)" 后缀。
+        let statusLine = NativeText.string(.failureTitle)
         let hint: String
         if startupFailureMessage != nil {
-            hint = "sidecar 启动失败，控制面未能启动。"
+            hint = NativeText.format(.failureSidecarLabel, statusLine)
         } else if exhausted {
-            hint = "已重试 \(navRetries) 次仍未连上控制面。"
+            hint = NativeText.format(.failureRetryExhausted, Int32(navRetries))
         } else {
-            hint = "控制面未能加载。"
+            hint = statusLine
         }
         let html = Self.failurePageHTML(hint: hint,
                                         detail: error.localizedDescription,
@@ -1713,16 +1955,34 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                 .replacingOccurrences(of: "<", with: "&lt;")
                 .replacingOccurrences(of: ">", with: "&gt;")
         }
+        // 文案全部走 NativeText（键表见 NativeText.swift；%@ 由调用方以
+        // NativeText.format 传入）：
+        //   <title>              = displayName（产品名；ShellIdentityTests 钉住）
+        //   failure.heading      = 「无法加载 %@ 界面」（%@ = displayName）
+        //   failure.cpLabel      = 「控制面地址：%@」（%@ = 已转义地址）
+        //   failure.sidecarLabel = 「sidecar 启动失败：%@」（%@ = 已转义原因）
+        // 主题：补 <meta name="color-scheme" content="light dark"> 与
+        // @media (prefers-color-scheme: dark) 两条分支——浅色仍用原
+        // #1d1d1f/#6e6e73，深色用等价的浅色文字配方；不再硬编码内联颜色。
         var html = """
         <!doctype html><meta charset="utf-8"><title>\(displayName)</title>
-        <body style="font-family:-apple-system,system-ui;padding:48px;color:#1d1d1f">
-        <h2>无法加载 \(displayName) 界面</h2>
+        <meta name="color-scheme" content="light dark">
+        <style>
+          :root { --dsh-failure-fg: #1d1d1f; --dsh-failure-muted: #6e6e73; }
+          @media (prefers-color-scheme: dark) {
+            :root { --dsh-failure-fg: #f5f5f7; --dsh-failure-muted: #a1a1a6; }
+          }
+          body { font-family:-apple-system,system-ui; padding:48px; color:var(--dsh-failure-fg); }
+          .dsh-failure-muted { color:var(--dsh-failure-muted); }
+        </style>
+        <body>
+        <h2>\(NativeText.format(.failureHeading, displayName))</h2>
         <p>\(escape(hint))</p>
-        <p style="color:#6e6e73">\(escape(detail))</p>
-        <p style="color:#6e6e73">控制面地址：\(escape(cpURL))</p>
+        <p class="dsh-failure-muted">\(escape(detail))</p>
+        <p class="dsh-failure-muted">\(NativeText.format(.failureCpLabel, escape(cpURL)))</p>
         """
         if let sidecarFailure, !sidecarFailure.isEmpty, sidecarFailure != detail {
-            html += "\n<p>sidecar 启动失败：\(escape(sidecarFailure))</p>"
+            html += "\n<p>\(NativeText.format(.failureSidecarLabel, escape(sidecarFailure)))</p>"
         }
         html += "\n</body>"
         return html
@@ -1994,5 +2254,72 @@ final class ShellConsoleCatcher: NSObject, WKScriptMessageHandler {
         } else {
             print("[shell-web] raw: \(message.body)")
         }
+    }
+}
+
+/// 页面事实通道 handler（S1）：独立 WKScriptMessageHandler，**绝不**混进
+/// ChamberMessageHandler 的白名单/origin 就绪门判定链——它承载本地化/主题
+/// 跟随所需的 DOM 事实，必须在 sidecar ready 前就可用。
+///
+/// 护栏（Z1 放宽 + W4a 收严）：主 frame + 同源文档面
+/// （MainWindowController.isSameOriginDocument；scheme/host/port 与 expectedOrigin
+/// 完全相同，**不**限定 pathname=/、**不**限定无 query——pushState/replaceState 后
+/// webView.url 会变化）；URL 来源以 message.webView?.url 为准（frameInfo.request.url
+/// 只在 webView 缺席时兜底，实测证据见 MainWindowController.factsDocumentURL）。
+/// 判定不过一律丢弃（本通道无回执，静默即丢弃）。与 A 桥的严格壳文档判定故意不同，
+/// 取舍见 MainWindowController.acceptsReconcile 的注记。
+/// 回调线程 = 主线程（WKScriptMessageHandler 的到达契约）。
+final class ShellPageFactsMessageHandler: NSObject, WKScriptMessageHandler {
+    /// 事实消费方（MainWindowController；弱引用避免环）。
+    weak var controller: MainWindowController?
+    /// 当前控制面 origin（nil = 尚未装配 → 判定不过）。
+    var expectedOrigin: (() -> String?)?
+
+    init(controller: MainWindowController) {
+        self.controller = controller
+    }
+
+    /// 准入判定（纯函数，F5 单测直测真值表）：名称相等 + 主 frame + 同源文档面
+    /// （MainWindowController.isSameOriginDocument）。放行 = 同源根路径 / 带 query /
+    /// 同源 /api/i/*（pushState 场景）/ hash；拒绝 = about:blank、data:/file:/blob:、
+    /// 空 url、空 expectedOrigin、跨源（不同端口 / 不同 host / 子域 / https / userinfo）。
+    /// 文档面判定与对账路径 acceptsReconcile 共用同一实现，避免两处门漂移。
+    /// 本重载显式传「已解析的文档 URL」；生产路径用下面的双来源重载。
+    static func accepts(messageName: String, isMainFrame: Bool,
+                        url: String?, expectedOrigin: String?) -> Bool {
+        guard messageName == ShellPageFactsScript.messageName else { return false }
+        guard isMainFrame else { return false }
+        return MainWindowController.isSameOriginDocument(url: url, expectedOrigin: expectedOrigin)
+    }
+
+    /// W4a 双来源重载（纯函数，单测直测「frameInfo 陈旧 URL 与 webView.url 不同时
+    /// 以 webView.url 为准」）：先把两个来源收敛成文档 URL（factsDocumentURL），
+    /// 再走与上面完全相同的名称/主 frame/同源判定。
+    static func accepts(messageName: String, isMainFrame: Bool,
+                        webViewURL: String?, frameRequestURL: String?,
+                        expectedOrigin: String?) -> Bool {
+        accepts(messageName: messageName, isMainFrame: isMainFrame,
+                url: MainWindowController.factsDocumentURL(webViewURL: webViewURL,
+                                                           frameRequestURL: frameRequestURL),
+                expectedOrigin: expectedOrigin)
+    }
+
+    func userContentController(_ userContentController: WKUserContentController,
+                               didReceive message: WKScriptMessage) {
+        // 名称/主 frame 门先行（与改造前顺序一致）：不匹配的通道连
+        // expectedOrigin 闭包都不求值。
+        guard message.name == ShellPageFactsScript.messageName else { return }
+        guard message.frameInfo.isMainFrame else { return }
+        // W4a：URL 以 message.webView?.url（实时，与 A 桥同来源）为准；
+        // frameInfo.request.url 只作 webView 缺席时的兜底。
+        guard Self.accepts(messageName: message.name,
+                           isMainFrame: message.frameInfo.isMainFrame,
+                           webViewURL: message.webView?.url?.absoluteString,
+                           frameRequestURL: message.frameInfo.request.url?.absoluteString,
+                           expectedOrigin: expectedOrigin?()) else {
+            return
+        }
+        guard let payload = message.body as? [String: Any] else { return }
+        controller?.ingestPageFacts(payload)
     }
 }

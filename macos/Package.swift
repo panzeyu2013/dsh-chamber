@@ -8,10 +8,15 @@
 //    Swift 代码：本窗口壳（main/AppDelegate/MainWindowController，W-03）与
 //    W-04 的 A/B 桥文件（BridgeShimInjector/MessageHandler/AnyCodable/
 //    FrameCodec/BridgeClient，其他作者创建）同 target，模块内直接互引共享契约。
-//  - resources 显式列出 .process("Resources/bridge-shim.js")：只有 A 桥 shim
-//    随包编译为 DSHChamber_DSHChamber.bundle——包内形态随后端：native 为扁平，
-//    swiftbuild（Swift 6.4+ 默认）为 `<bundle>/Contents/Resources/`；装配腿
-//    `resourceBundleResourcesDir()` 统一归一为扁平。运行时由
+//  - resources 显式列出 .process("Resources/bridge-shim.js") + 两个 .lproj：A 桥
+//    shim 与本地化文案随包编译为 DSHChamber_DSHChamber.bundle——包内形态随后端：
+//    native 为扁平，swiftbuild（Swift 6.4+ 默认）为
+//    `<bundle>/Contents/Resources/`；装配腿 `resourceBundleResourcesDir()`
+//    统一归一为扁平。**本地化（S2）**：`defaultLocalization` 必填——缺它时 SwiftPM
+//    只把 .lproj 当普通目录拷贝，不做本地化资源处理；两个 .lproj 逐条 .process
+//    （而不是整目录 `Resources/`），目录名用 Apple 拼写 `zh-Hans`（与
+//    ShellLanguagePolicy 的 AppleLanguages 覆盖值、Info.plist 的
+//    CFBundleLocalizations 三处同源）。运行时由
 //    ChamberResources 定位（resourceURL → bundleURL → 可执行目录；**不用
 //    Bundle.module**——装配态 .app 与 dev `swift run` 两种布局都要覆盖，见
 //    ChamberResources.swift 头注释）。**不要**把 Resources/ 整目录 process：
@@ -29,6 +34,9 @@ import PackageDescription
 
 let package = Package(
     name: "DSHChamber",
+    // S2：本地化资源的落位前提（见头注释）。值与 Info.plist.template 的
+    // CFBundleDevelopmentRegion 一致（en）——两者都是「缺省回退语言」声明。
+    defaultLocalization: "en",
     platforms: [
         // 最低系统下限 = macOS 14.4：原生壳用 OS WebKit，出货 bundle 在审批决策、
         // 用户提问/计划评审、PDF 预览构造路径直接调用 Promise.withResolvers（A3-1），
@@ -68,7 +76,12 @@ let package = Package(
                 "Resources/chamber-bridge.stub.js"
             ],
             resources: [
-                .process("Resources/bridge-shim.js")
+                .process("Resources/bridge-shim.js"),
+                // S2：本地化席位。两个 .lproj 各自 process；**不要**改成
+                // .process("Resources")——那会把测试用锁步产物
+                // chamber-bridge.stub.js 一并打进资源包（P8 明确排除）。
+                .process("Resources/en.lproj"),
+                .process("Resources/zh-Hans.lproj")
             ]
         ),
         .testTarget(

@@ -264,9 +264,10 @@ public enum FrameCodecError: LocalizedError, Equatable {
     public var errorDescription: String? {
         switch self {
         case .frameTooLarge(let byteCount):
-            return "帧超过上限 \(FrameCodec.maxFrameBytes) 字节（实际 \(byteCount) 字节）"
+            return NativeText.format(.frameTooLarge, Int32(FrameCodec.maxFrameBytes),
+                                     Int32(byteCount))
         case .responseMissingErrorMessage(let id):
-            return "ok=false 的响应帧必须携带 error 文案（id=\(id)）"
+            return NativeText.format(.frameResponseMissingError, Int32(id))
         }
     }
 }

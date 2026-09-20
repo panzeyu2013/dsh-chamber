@@ -55,12 +55,25 @@ public final class ShellLog {
     public static let rotatedFileName = "shell.log.1"
     /// 单文件字节上限（256 KiB；一轮排障足够，且不会无限增长）。
     public static let defaultMaxBytes = 256 * 1024
+    /// configure 前缓冲上限（W4b，2026-12 三轮独立复核）。
+    ///
+    /// 启动早期的 shellLog（applicationWillFinishLaunching 的 W3 席位日志、didFinish
+    /// 顶部若干行）发生在 ShellLog.configure 之前；Finder/Dock 双击启动时 stdout
+    /// 无处可看，这些行此前**永久丢失**。现改为有界缓冲，configure/打开成功后按原
+    /// 顺序补写；超出上限的行丢弃（仍已打印到 stdout）并补一条截断标记。
+    public static let maxPendingLines = 64
+    /// 截断标记行的稳定片段（W4b 单测直测；完整行还带已丢弃行数）。
+    static let pendingOverflowMarkerFragment = "configure 前日志缓冲超上限"
 
     private let lock = NSLock()
     private var fileURLStorage: URL?
     private var maxBytes: Int
     private var handle: FileHandle?
     private var writtenBytes = 0
+    /// configure 前缓冲的**已格式化行**（含时间戳；flush 时原样补写，保序）。
+    private var pendingLines: [String] = []
+    /// 缓冲超上限后丢弃的行数（>0 时 flush 补一条截断标记）。
+    private var droppedPendingLines = 0
     private let now: () -> Date
 
     private static let timestampFormatter: ISO8601DateFormatter = {
@@ -138,6 +151,10 @@ public final class ShellLog {
         writtenBytes = 0
         lock.unlock()
         openCurrentFile()
+        // W4b：configure 前的有界缓冲按原顺序补写（打开失败则留在缓冲里等下次）。
+        lock.lock()
+        flushPendingLocked()
+        lock.unlock()
     }
 
     /// 打印 + 落盘（壳内统一出口；stdout 行保持原样）。
@@ -146,24 +163,73 @@ public final class ShellLog {
         append(message)
     }
 
-    /// 仅落盘（时间戳 + 原文 + 换行）；未配置/打开失败 = no-op，绝不抛错。
+    /// 仅落盘（时间戳 + 原文 + 换行）；未配置/打开失败 = **有界缓冲**
+    /// （见 maxPendingLines，configure 后补写），绝不抛错。
     public func append(_ message: String) {
-        let line = "[\(Self.timestampFormatter.string(from: now()))] \(message)\n"
+        let line = Self.formatLine(message, at: now())
         lock.lock()
         defer { lock.unlock() }
+        guard handle != nil else {
+            enqueuePendingLocked(line)
+            return
+        }
+        writeLineLocked(line)
+    }
+
+    // MARK: - 私有（lock 内约定：openCurrentFile/rotateLocked 自行加锁）
+
+    /// 时间戳行格式（既有格式不变：`[ISO8601] 原文\n`）。
+    private static func formatLine(_ message: String, at date: Date) -> String {
+        "[\(timestampFormatter.string(from: date))] \(message)\n"
+    }
+
+    /// 截断标记文案（configure 前缓冲超上限时补写；丢弃行只进过 stdout）。
+    static func pendingOverflowMarker(droppedCount: Int) -> String {
+        "[shell-log] \(pendingOverflowMarkerFragment)：已丢弃 \(droppedCount) 行"
+            + "（仅 stdout），保留最早 \(maxPendingLines) 行"
+    }
+
+    /// 已持有 lock：有界入队（超上限丢弃并计数；截断标记在 flush 时补写）。
+    private func enqueuePendingLocked(_ line: String) {
+        guard pendingLines.count < Self.maxPendingLines else {
+            droppedPendingLines += 1
+            return
+        }
+        pendingLines.append(line)
+    }
+
+    /// 已持有 lock 时的单行写入（append 与 configure 后的补写共用）。
+    /// 写失败：关句柄降级（绝不因日志失败影响壳行为），后续行回到缓冲。
+    private func writeLineLocked(_ line: String) {
         guard let handle else { return }
         do {
             try handle.write(contentsOf: Data(line.utf8))
             writtenBytes += line.utf8.count
             if writtenBytes >= maxBytes { rotateLocked() }
         } catch {
-            // 写失败：关掉句柄，退回只打印（绝不因日志失败影响壳行为）。
             try? handle.close()
             self.handle = nil
         }
     }
 
-    // MARK: - 私有（lock 内约定：openCurrentFile/rotateLocked 自行加锁）
+    /// 已持有 lock：把 configure 前的缓冲按原顺序补写到已打开的文件；
+    /// 溢出过则在保留行之后补一条截断标记。补写中途降级 = 剩余行丢弃
+    /// （与 append 同一「日志失败静默」纪律）。
+    private func flushPendingLocked() {
+        guard handle != nil,
+              !pendingLines.isEmpty || droppedPendingLines > 0 else { return }
+        let lines = pendingLines
+        let dropped = droppedPendingLines
+        pendingLines = []
+        droppedPendingLines = 0
+        for line in lines {
+            guard handle != nil else { return }
+            writeLineLocked(line)
+        }
+        guard handle != nil, dropped > 0 else { return }
+        writeLineLocked(Self.formatLine(Self.pendingOverflowMarker(droppedCount: dropped),
+                                        at: now()))
+    }
 
     private func openCurrentFile() {
         lock.lock()

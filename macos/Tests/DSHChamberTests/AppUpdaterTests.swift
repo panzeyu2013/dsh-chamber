@@ -57,7 +57,7 @@ final class AppUpdaterTests: XCTestCase {
         let appItems = menu.items.first?.submenu?.items ?? []
         let item = appItems.first { $0.action == #selector(AppUpdater.checkForUpdates(_:)) }
         XCTAssertNotNil(item, "App 菜单需有「检查更新…」（macOS 标准位置：关于之后）")
-        XCTAssertEqual(item?.title, "检查更新…")
+        XCTAssertEqual(item?.title, NativeText.string(.menuCheckForUpdates))
         XCTAssertFalse(item?.isEnabled ?? true, "未配置 feed/公钥时必须禁用")
         let aboutIndex = appItems.firstIndex { $0.action == #selector(NSApplication.orderFrontStandardAboutPanel(_:)) }
         let updateIndex = appItems.firstIndex(of: item ?? NSMenuItem())
@@ -159,13 +159,13 @@ final class AppUpdaterTests: XCTestCase {
         let shared: NSObject = AppUpdater.shared
         XCTAssertTrue(shared is NSMenuItemValidation,
                       "target 必须实现 NSMenuItemValidation，NSMenu 才会在每次打开时实时校验")
-        let checkItem = NSMenuItem(title: "检查更新…",
+        let checkItem = NSMenuItem(title: NativeText.string(.menuCheckForUpdates),
                                    action: #selector(AppUpdater.checkForUpdates(_:)),
                                    keyEquivalent: "")
         checkItem.target = AppUpdater.shared
         XCTAssertFalse(AppUpdater.shared.validateMenuItem(checkItem),
                        "未装配 → 实时校验禁用（不再是启动快照）")
-        let aboutItem = NSMenuItem(title: "关于",
+        let aboutItem = NSMenuItem(title: NativeText.format(.menuAboutApp, MainWindowController.displayName),
                                    action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
                                    keyEquivalent: "")
         XCTAssertTrue(AppUpdater.shared.validateMenuItem(aboutItem),

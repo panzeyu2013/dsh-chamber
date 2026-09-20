@@ -41,4 +41,34 @@ typedef NS_ENUM(NSInteger, DSHChamberRefreshRatePreference) {
 FOUNDATION_EXPORT DSHChamberRefreshRatePreference
 DSHChamberPreferDisplayRefreshRate(WKPreferences * _Nullable preferences);
 
+/// KVC BOOL 写入结果（W1/W2，2026-12 三轮独立复核）。
+typedef NS_ENUM(NSInteger, DSHChamberBoolKVCOutcome) {
+    /// 对象为 nil / 键不存在 / 只读 / 设置路径抛异常（预期为
+    /// NSUnknownKeyException）：对象未被改动，调用方降级，绝不 fatal。
+    DSHChamberBoolKVCOutcomeUnavailable = 0,
+    /// 写入未抛异常且回读值 == 目标值。
+    DSHChamberBoolKVCOutcomeApplied = 1,
+    /// 写入调用未抛异常但回读值与目标不一致（或回读不是布尔）——如实报出，
+    /// 不假装成功也不假装失败。
+    DSHChamberBoolKVCOutcomeReadBackMismatch = 2,
+};
+
+/// 异常安全地把 WKWebView 的私有键 drawsBackground 设为指定值（KVC）。
+///
+/// 为什么存在这层包装（T-4 历史沿革）：drawsBackground **不在公开头文件**里
+/// （公开面只有 underPageBackgroundColor，只能改「露底色」本身）；透明露底依赖该
+/// 私有键，而私有存取器 _drawsBackground/_setDrawsBackground: 是否存在随 OS
+/// 版本而变。**Swift 无法 catch ObjC 异常**，Swift 侧直设 KVC 在缺该存取器的构建
+/// 上会以 NSUnknownKeyException 直接 abort 进程（实测 exit_code=134）；故设置必须
+/// 经本函数：@try/@catch 吞掉 NSUnknownKeyException 并返回结果，设置失败不崩。
+///
+/// 返回调用后的实际结论；Unavailable 时对象未被改动（保持 WebKit 默认）。
+FOUNDATION_EXPORT DSHChamberBoolKVCOutcome
+DSHChamberSetDrawsBackground(WKWebView * _Nullable webView, BOOL drawsBackground);
+
+/// 通用异常安全 KVC BOOL 写入（DSHChamberSetDrawsBackground 的可直测接缝，
+/// W3 单测覆盖「键存在」「键不存在且不崩」两条路径；无新依赖）。
+FOUNDATION_EXPORT DSHChamberBoolKVCOutcome
+DSHChamberSetBoolValueForKey(id _Nullable object, NSString *key, BOOL value);
+
 NS_ASSUME_NONNULL_END

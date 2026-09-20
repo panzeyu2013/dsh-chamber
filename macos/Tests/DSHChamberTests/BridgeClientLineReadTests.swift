@@ -767,8 +767,17 @@ final class BridgeClientLineReadTests: XCTestCase {
             let nsError = error as NSError
             XCTAssertEqual(nsError.domain, BridgeClient.errorDomain)
             XCTAssertEqual(nsError.code, BridgeClient.errorCodePendingDropped)
-            XCTAssertTrue(nsError.localizedDescription.contains("上限"),
-                          "作废原因应指向帧长上限，实际：\(nsError.localizedDescription)")
+            // 文案走键表 bridge.frameTooLarge（%d = 帧长上限）：期望值用同一取值面
+            // 动态构造（机器语言为 en 时同样成立）；并先确认资源真的解析出文案
+            // （不是缺键回落的键名），再钉「作废原因 == 该键的本地化整句」——
+            // 裸 contains("4194304") 过松，证明不了本地化模板被使用。
+            let localized = NativeText.format(.bridgeFrameTooLarge, Int32(FrameCodec.maxFrameBytes))
+            XCTAssertNotEqual(localized, NativeTextKey.bridgeFrameTooLarge.rawValue,
+                              "bridge.frameTooLarge 必须命中 .strings，不得回落键名")
+            XCTAssertTrue(localized.contains("\(FrameCodec.maxFrameBytes)"),
+                          "该键模板填参后必须带帧长上限数值：\(localized)")
+            XCTAssertEqual(nsError.localizedDescription, localized,
+                           "作废原因必须是 bridge.frameTooLarge 的本地化文案，实际：\(nsError.localizedDescription)")
         }
     }
 

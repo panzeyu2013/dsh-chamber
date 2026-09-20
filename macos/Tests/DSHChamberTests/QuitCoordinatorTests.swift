@@ -11,6 +11,21 @@ import XCTest
 
 final class QuitCoordinatorTests: XCTestCase {
 
+    /// 本类钉的是**中文整句**（与 Electron main.ts 的硬编码中文逐字锁步：
+    /// `退出将停止${reasons.join('与')}。确定退出？`；S-17 提示框的按钮/正文同理），
+    /// 故显式固定语言：NativeText 默认走进程 bundle 解析（= 机器语言），不固定的话
+    /// 英文语言机器（如 CI 的 macOS runner）上这些断言会红。
+    override func setUp() {
+        super.setUp()
+        XCTAssertTrue(NativeText.setLanguageOverride(.zh),
+                      "zh-Hans 资源必须可解析（打包态 Contents/Resources 或 SwiftPM 资源包）")
+    }
+
+    override func tearDown() {
+        NativeText.setLanguageOverride(nil)
+        super.tearDown()
+    }
+
     private func factsValue(
         hideOnClose: AnyCodable = .bool(true),
         needsConfirm: AnyCodable = .bool(false),
@@ -141,9 +156,9 @@ final class QuitCoordinatorTests: XCTestCase {
     private static func twoButtonQuitAlert() -> NSAlert {
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "退出 dsh-chamber？"
-        alert.addButton(withTitle: "退出")
-        let cancel = alert.addButton(withTitle: "取消")
+        alert.messageText = NativeText.format(.quitConfirmTitle, MainWindowController.displayName)
+        alert.addButton(withTitle: NativeText.string(.quitConfirmButton))
+        let cancel = alert.addButton(withTitle: NativeText.string(.quitCancelButton))
         cancel.keyEquivalent = "\r"
         return alert
     }

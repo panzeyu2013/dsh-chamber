@@ -112,8 +112,11 @@ public enum QuitCoordinator {
     }
 
     /// 确认框正文（main.ts before-quit 逐字：`退出将停止${reasons.join('与')}。确定退出？`）。
+    /// 本地化：quit.confirmDetail 为整句模板（%@ = reasons 连接串）；
+    /// quit.reasonsSeparator = 列表连接词（zh「与」/ en「 and 」）。
     public static func confirmDetail(reasons: [String]) -> String {
-        "退出将停止\(reasons.joined(separator: "与"))。确定退出？"
+        NativeText.format(.quitConfirmDetail,
+                          reasons.joined(separator: NativeText.string(.quitReasonsSeparator)))
     }
 
     /// 退出决策不可得（`__host.quitFacts` 超时/调用失败/解码失败）时的动作
@@ -134,12 +137,18 @@ public enum QuitCoordinator {
     /// S-17 提示框文案与按钮：sidecar 未在预算内应答退出决策。
     /// 默认（Enter）落在安全项「继续等待」；「强制退出」走既有清理链。
     public enum UnavailableAlert {
-        public static let messageText = "dsh sidecar 未响应退出请求"
-        public static let informativeText =
-            "dsh sidecar 未在 2 秒内应答退出决策，本次退出已取消。"
-            + "可以继续等待 sidecar 恢复，或强制退出（强制退出仍会执行既有清理）。"
-        public static let waitButtonTitle = "继续等待"
-        public static let forceButtonTitle = "强制退出"
+        // 计算属性（而非 static let）：bundle 偏好语言可能在启动期被
+        // AppleLanguages 覆盖，取文案时再解析，避免静态初始化锁死旧语言。
+        public static var messageText: String { NativeText.string(.quitUnavailableTitle) }
+
+        /// quit.unavailableDetail：整句含一个 %d = 超时秒数（en/zh 两份 .strings 同形）。
+        /// 传 2 与 AppDelegate.quitFactsTimeout 当前值 2.0 一致；模板改秒数时这里必须同步。
+        public static var informativeText: String {
+            NativeText.format(.quitUnavailableDetail, 2)
+        }
+
+        public static var waitButtonTitle: String { NativeText.string(.quitWaitButton) }
+        public static var forceButtonTitle: String { NativeText.string(.quitForceButton) }
     }
 }
 

@@ -526,12 +526,25 @@ final class ShellStartupTests: XCTestCase {
         XCTAssertTrue(guardWindow.firstInsert(1), "清空后可重新插入")
     }
 
+    // MARK: - W2：菜单分组一律按 tag/action 定位（标题已本地化，禁止按标题查找）
+
+    /// 顶层分组子菜单（tag 见 AppDelegate.<section>SectionTag）。
+    private func section(_ menu: NSMenu, _ tag: Int) -> NSMenu? {
+        menu.items.first { $0.tag == tag }?.submenu
+    }
+
+    /// 嵌套子菜单：定位「含指定 action 的父项」的 submenu（不依赖文案）。
+    private func nestedSubmenu(_ menu: NSMenu, containingAction action: Selector) -> NSMenu? {
+        menu.items.first { item in
+            item.submenu?.items.contains { $0.action == action } == true
+        }?.submenu
+    }
+
     // MARK: - S13：窗口菜单
 
     func testWindowMenuCarriesCloseAndMiniaturizeSelectors() {
         let menu = AppDelegate.makeMainMenu()
-        guard let windowMenu = menu.items.compactMap({ $0.submenu })
-            .first(where: { $0.title == "窗口" }) else {
+        guard let windowMenu = section(menu, AppDelegate.windowSectionTag) else {
             return XCTFail("主菜单缺少「窗口」子菜单（S13）")
         }
         let closeItem = windowMenu.items.first { $0.action == #selector(NSWindow.performClose(_:)) }
@@ -559,7 +572,7 @@ final class ShellStartupTests: XCTestCase {
                         "App 菜单应含「显示全部」")
         XCTAssertNotNil(appMenu.items.first { $0.action == #selector(NSApplication.terminate(_:)) },
                         "App 菜单应含「退出」")
-        guard let windowMenu = menu.items.compactMap({ $0.submenu }).first(where: { $0.title == "窗口" }) else {
+        guard let windowMenu = section(menu, AppDelegate.windowSectionTag) else {
             return XCTFail("主菜单缺少「窗口」子菜单")
         }
         XCTAssertNotNil(windowMenu.items.first { $0.action == #selector(NSWindow.performZoom(_:)) })
@@ -590,7 +603,7 @@ final class ShellStartupTests: XCTestCase {
         XCTAssertTrue(dev.contains("DSH_CHAMBER_SHELL_SIDECAR"))
         let explicit = AppDelegate.missingSidecarMessage(
             isPackaged: false, resourcesDir: nil, explicitPath: "/gone/sidecar.js")
-        XCTAssertEqual(explicit, "DSH_CHAMBER_SHELL_SIDECAR 指向的 sidecar 脚本不存在：/gone/sidecar.js")
+        XCTAssertEqual(explicit, NativeText.format(.fatalSidecarScriptMissingExplicit, "/gone/sidecar.js"))
     }
 
     func testPortSourceLabelsAreExplicit() {
@@ -675,8 +688,7 @@ final class ShellStartupTests: XCTestCase {
 
     func testViewMenuCarriesReloadZoomAndFullScreen() {
         let menu = AppDelegate.makeMainMenu()
-        guard let viewMenu = menu.items.compactMap({ $0.submenu })
-            .first(where: { $0.title == "显示" }) else {
+        guard let viewMenu = section(menu, AppDelegate.viewSectionTag) else {
             return XCTFail("主菜单缺少「显示」子菜单（S-24）")
         }
         let reload = viewMenu.items.first { $0.action == #selector(AppDelegate.reloadWebView(_:)) }
@@ -699,8 +711,7 @@ final class ShellStartupTests: XCTestCase {
 
     func testEditMenuCarriesStandardExtensions() {
         let menu = AppDelegate.makeMainMenu()
-        guard let editMenu = menu.items.compactMap({ $0.submenu })
-            .first(where: { $0.title == "编辑" }) else {
+        guard let editMenu = section(menu, AppDelegate.editSectionTag) else {
             return XCTFail("主菜单缺少「编辑」子菜单")
         }
         let pasteAndMatch = editMenu.items.first { $0.action == Selector(("pasteAndMatchStyle:")) }
@@ -711,7 +722,7 @@ final class ShellStartupTests: XCTestCase {
                         "Edit 菜单应含「删除」")
         XCTAssertNotNil(editMenu.items.first { $0.action == #selector(NSText.selectAll(_:)) },
                         "既有「全选」必须保留")
-        guard let speech = editMenu.items.first(where: { $0.submenu?.title == "语音" })?.submenu else {
+        guard let speech = nestedSubmenu(editMenu, containingAction: Selector(("startSpeaking:"))) else {
             return XCTFail("Edit 菜单应含「语音」子菜单（S-24）")
         }
         XCTAssertNotNil(speech.items.first { $0.action == Selector(("startSpeaking:")) })
@@ -723,16 +734,17 @@ final class ShellStartupTests: XCTestCase {
     /// 原生壳没有页面桥帮助面，这是最小且诚实的帮助入口。
     func testHelpMenuOpensProjectPageAndGroupsStayIntact() {
         let menu = AppDelegate.makeMainMenu()
-        let titles = menu.items.compactMap { $0.submenu?.title }
-        XCTAssertEqual(Array(titles.dropFirst()), ["文件", "编辑", "显示", "窗口", "帮助"],
+        // W2：分组次序改按 tag 断言（标题已本地化，按标题断言会在换语言时假红）。
+        XCTAssertEqual(menu.items.map(\.tag),
+                       [AppDelegate.appSectionTag, AppDelegate.fileSectionTag, AppDelegate.editSectionTag,
+                        AppDelegate.viewSectionTag, AppDelegate.windowSectionTag, AppDelegate.helpSectionTag],
                        "File 组补在最前（S-24），既有分组不得丢失/换位")
-        guard let helpMenu = menu.items.compactMap({ $0.submenu })
-            .first(where: { $0.title == "帮助" }) else {
+        guard let helpMenu = section(menu, AppDelegate.helpSectionTag) else {
             return XCTFail("主菜单缺少「帮助」子菜单（S-24）")
         }
         let help = helpMenu.items.first { $0.action == #selector(AppDelegate.openHelpPage(_:)) }
         XCTAssertNotNil(help, "Help 菜单应含项目页入口（openHelpPage）")
-        XCTAssertEqual(help?.title, "dsh-chamber 帮助")
+        XCTAssertEqual(help?.title, NativeText.format(.menuAppHelp, MainWindowController.displayName))
         XCTAssertEqual(help?.keyEquivalent, "?")
         XCTAssertEqual(help?.keyEquivalentModifierMask, [.command])
         XCTAssertEqual(AppDelegate.helpPageURL, "https://github.com/panzeyu2013/dsh-chamber",
@@ -796,9 +808,9 @@ final class ShellStartupTests: XCTestCase {
     /// windowMenu（Electron default-menu.ts；fileMenu = File + Close Window）。
     func testFileMenuCarriesCloseWindowAtElectronPosition() {
         let menu = AppDelegate.makeMainMenu()
-        XCTAssertEqual(menu.items.indices.contains(1) ? menu.items[1].submenu?.title : nil, "文件",
+        XCTAssertEqual(menu.items.indices.contains(1) ? menu.items[1].tag : nil, AppDelegate.fileSectionTag,
                        "File 组必须在 App 之后、Edit 之前（Electron 默认菜单次序）")
-        guard let fileMenu = menu.items[1].submenu else {
+        guard let fileMenu = section(menu, AppDelegate.fileSectionTag) else {
             return XCTFail("主菜单缺少「文件」子菜单（S-24）")
         }
         let close = fileMenu.items.first { $0.action == #selector(NSWindow.performClose(_:)) }
@@ -808,8 +820,7 @@ final class ShellStartupTests: XCTestCase {
 
     func testViewMenuCarriesForceReloadWithShiftCommandR() {
         let menu = AppDelegate.makeMainMenu()
-        guard let viewMenu = menu.items.compactMap({ $0.submenu })
-            .first(where: { $0.title == "显示" }) else {
+        guard let viewMenu = section(menu, AppDelegate.viewSectionTag) else {
             return XCTFail("主菜单缺少「显示」子菜单（S-24）")
         }
         guard let force = viewMenu.items.first(where: {
@@ -833,12 +844,11 @@ final class ShellStartupTests: XCTestCase {
 
     func testEditMenuCarriesSubstitutionsSubmenu() {
         let menu = AppDelegate.makeMainMenu()
-        guard let editMenu = menu.items.compactMap({ $0.submenu })
-            .first(where: { $0.title == "编辑" }) else {
+        guard let editMenu = section(menu, AppDelegate.editSectionTag) else {
             return XCTFail("主菜单缺少「编辑」子菜单")
         }
-        guard let substitutions = editMenu.items
-            .first(where: { $0.submenu?.title == "替换" })?.submenu else {
+        guard let substitutions = nestedSubmenu(
+            editMenu, containingAction: #selector(NSTextView.orderFrontSubstitutionsPanel(_:))) else {
             return XCTFail("Edit 菜单应含「替换」（macOS Substitutions）子菜单（S-24）")
         }
         XCTAssertNotNil(
@@ -859,8 +869,14 @@ final class ShellStartupTests: XCTestCase {
             }, "替换子菜单应含「文本替换」")
         // Electron editMenu（darwin）：全选 → Substitutions → Speech。
         let selectAll = editMenu.items.firstIndex { $0.action == #selector(NSText.selectAll(_:)) }
-        let substitutionsIndex = editMenu.items.firstIndex { $0.submenu?.title == "替换" }
-        let speechIndex = editMenu.items.firstIndex { $0.submenu?.title == "语音" }
+        let substitutionsIndex = editMenu.items.firstIndex { item in
+            item.submenu?.items.contains {
+                $0.action == #selector(NSTextView.orderFrontSubstitutionsPanel(_:))
+            } == true
+        }
+        let speechIndex = editMenu.items.firstIndex { item in
+            item.submenu?.items.contains { $0.action == Selector(("startSpeaking:")) } == true
+        }
         XCTAssertNotNil(selectAll)
         XCTAssertNotNil(substitutionsIndex)
         XCTAssertNotNil(speechIndex)

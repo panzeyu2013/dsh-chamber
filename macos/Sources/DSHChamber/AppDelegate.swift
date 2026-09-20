@@ -8,7 +8,8 @@
 import AppKit
 import UserNotifications
 
-final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate, MainWindowCloseDeciding {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate,
+    MainWindowCloseDeciding, ShellPageFactsSink {
 
     // MARK: - 常量（缺省值）
 
@@ -48,6 +49,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var signalSources: [DispatchSourceSignal] = []
     /// 托盘状态项（Electron Tray 对偶：显示窗口 / 退出）。
     private var statusItem: NSStatusItem?
+    /// 托盘菜单中需要随运行期语言切换的两个文案项（installStatusItem 保存；
+    /// F4：语言变化时按 key 重新取串，见 refreshStatusItemTitles）。
+    private var statusItemShowItem: NSMenuItem?
+    private var statusItemQuitItem: NSMenuItem?
     /// 本壳注册的 URL scheme（Info.plist.template CFBundleURLSchemes 同源）。
     static let deepLinkScheme = "dsh-chamber:"
     /// S-24：Help 菜单打开的项目页（仓库主页 = README/发布说明/issue 的统一入口；
@@ -164,7 +169,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         } catch let error as PackagedLayout.PathResolutionError {
             fatalStartup(error.message)
         } catch {
-            fatalStartup("node 解析失败：\(error.localizedDescription)")
+            fatalStartup(NativeText.format(.fatalNodeResolveFailed, error.localizedDescription))
         }
         shellLog("[shell] node = \(nodePath)")
 
@@ -290,8 +295,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     // 看到的是功能静默缺席。装配态一律 fatal（dev 形状不注入这些
                     // flag，不受影响）。
                     if !missingHosts.isEmpty {
-                        fatalStartup("装配态 host 包缺失：\(missingHosts.joined(separator: "、"))"
-                            + "——请重新运行 pnpm run build:sidecar 并重装 .app")
+                        fatalStartup(NativeText.format(.fatalHostPackagesMissing,
+                                                       missingHosts.joined(separator: NativeText.string(.commonListSeparator)))
+                            + NativeText.string(.fatalHostPackagesMissingHint))
                     }
                 }
                 shellLog("[shell] sidecar 参数：user-data=\(stateDir) web=\(webDir) port=\(port)"
@@ -325,12 +331,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         //    Info.plist/ATS 执行面，保持 127.0.0.1（与 sidecar --port 习惯一致）。
         let rawCPURL: URL
         if let explicit = env["DSH_CHAMBER_SHELL_CP_URL"] {
-            guard let url = URL(string: explicit) else { fatalStartup("DSH_CHAMBER_SHELL_CP_URL 无法解析为 URL") }
+            guard let url = URL(string: explicit) else {
+                fatalStartup(NativeText.string(.fatalCpURLUnparsable))
+            }
             rawCPURL = url
         } else if let url = Self.defaultControlPlaneURL(isPackaged: isPackaged, port: resolvedCPPort) {
             rawCPURL = url
         } else {
-            fatalStartup("控制面 URL 无法派生（port=\(resolvedCPPort)）")
+            // 走到这里 = 既无显式 CP URL、也没解析出端口（旧实现插值出 "nil"）。
+            fatalStartup(NativeText.string(.fatalCpURLUnderivable))
         }
         // 壳文档 = 根路径 + 无 query（A 桥信任边界，TrustGuard.isTrustedDocument）。
         // 配置带路径/query（如 /index.html、?fixture=1）时只取 origin 根，否则首载
@@ -382,6 +391,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         let controller = MainWindowController(cpURL: cpURL, bridge: bridge,
                                               shimSource: shimSource)
         controller.closeDelegate = self
+        // W1/W3：页面事实（语言/主题）变化 → 原生席位（菜单重建 + 外观 + 进程语言）。
+        controller.pageFactsSink = self
         mainWindowController = controller
         // S-42：首个已提交内容（didCommit，含 S-27 失败说明页）才亮出主窗——
         // 装配期绝不再无条件 makeKeyAndOrderFront（那会先亮出 1~2s 无内容空窗）。
@@ -449,8 +460,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     _ = Self.forwardDeepLinksToRunningInstance(arguments: CommandLine.arguments)
                     exit(0)
                 }
+                // 本地化：fatal.sidecarStartFailedDetail（%@ = 底层错误；该 detail
+                // 进 presentFatalAlert 的 informativeText）。
                 let detail = (error as? SidecarDirectoryLock.LockError)?.description
-                    ?? "sidecar 启动失败：\(error.localizedDescription)"
+                    ?? NativeText.format(.fatalSidecarStartFailedDetail,
+                                         error.localizedDescription)
                 fatalStartup(detail)
             }
             self.supervisor = supervisor
@@ -459,7 +473,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             do {
                 try bridge.start()
             } catch {
-                fatalStartup("BridgeClient 启动失败：\(error.localizedDescription)")
+                fatalStartup(NativeText.format(.fatalBridgeStartFailed, error.localizedDescription))
             }
             shellLog("[shell] bridge 已启动（自定义 sidecar 形状：无目录锁/无守护）")
         }
@@ -699,10 +713,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "退出 dsh-chamber？"
+        alert.messageText = NativeText.format(.quitConfirmTitle, MainWindowController.displayName)
         alert.informativeText = QuitCoordinator.confirmDetail(reasons: facts.quitReasons)
-        alert.addButton(withTitle: "退出")
-        let cancelButton = alert.addButton(withTitle: "取消")
+        alert.addButton(withTitle: NativeText.string(.quitConfirmButton))
+        let cancelButton = alert.addButton(withTitle: NativeText.string(.quitCancelButton))
         // 与 Electron 对齐（main.ts:1064-1066 buttons ['退出','取消'] defaultId: 1
         // cancelId: 1；2026-12 双端逐函数核对 V2）：Enter 命中「取消」这个安全项。
         // 保留 "\r" 让「取消」在版式上就是默认按钮（蓝色高亮）；实际按键解析
@@ -944,7 +958,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         fatalAlertShown = true
         let alert = NSAlert()
         alert.alertStyle = .critical
-        alert.messageText = "\(MainWindowController.displayName) sidecar 异常"
+        alert.messageText = NativeText.format(.fatalSidecarAbnormalTitle, MainWindowController.displayName)
         alert.informativeText = message
         if let window = NSApp.windows.first(where: { $0.isVisible }) {
             alert.beginSheetModal(for: window) { _ in exit(1) }
@@ -1044,7 +1058,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             Self.fatalAlertShown = true
             let alert = NSAlert()
             alert.alertStyle = .critical
-            alert.messageText = "\(MainWindowController.displayName) 启动失败"
+            alert.messageText = NativeText.format(.fatalStartupFailedTitle, MainWindowController.displayName)
             alert.informativeText = message
             alert.runModal()
         }
@@ -1057,43 +1071,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// 窗口（S13：performClose/performMiniaturize，恢复 Cmd+W/Cmd+M——Electron
     /// 默认 macOS Window 菜单对偶，design E3）/ 帮助。抽为静态纯函数便于单测
     /// 断言 selector（构造 NSMenu 无需 NSApp.run）。
+    /// 主菜单分区 tag（W2 附带修正）：子菜单接线（windowsMenu/helpMenu/servicesMenu）
+    /// 不再按**标题**查找——标题本地化后该查找会静默失效。tag 与顺序无关，测试同源引用。
+    static let appSectionTag = 1001
+    static let fileSectionTag = 1002
+    static let editSectionTag = 1003
+    static let viewSectionTag = 1004
+    static let windowSectionTag = 1005
+    static let helpSectionTag = 1006
+    /// App 菜单里的「服务」父项（NSApp.servicesMenu 的接线目标）。
+    static let servicesItemTag = 1101
+
     static func makeMainMenu() -> NSMenu {
         let mainMenu = NSMenu()
 
         let appMenuItem = NSMenuItem()
+        appMenuItem.tag = Self.appSectionTag
         mainMenu.addItem(appMenuItem)
         // App 菜单补齐 macOS 标准项（Electron 未自定义 setApplicationMenu，即系统默认
         // 菜单；2026-12 双端逐函数核对 V5/U4 的功能对齐）。
+        // W2：用户可见文案一律走 NativeText（壳内本地化席位）；app 名用
+        // displayName 拼，绝不把它写进死文案（HIG：app 菜单标题显示 app 名）。
+        let appName = MainWindowController.displayName
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "关于 dsh-chamber",
+        appMenu.addItem(withTitle: NativeText.format(.menuAboutApp, appName),
                         action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
                         keyEquivalent: "")
         // 「检查更新…」的 macOS 标准位置（About 之后）。2026-12 裁决 D-1 选 B：
         // 原生壳的安装腿由 Sparkle 承担；未配置 feed/公钥（dev、dry-run）时禁用，
         // 绝不假装能更新。
-        let checkForUpdates = NSMenuItem(title: "检查更新…",
+        let checkForUpdates = NSMenuItem(title: NativeText.string(.menuCheckForUpdates),
                                          action: #selector(AppUpdater.checkForUpdates(_:)),
                                          keyEquivalent: "")
         checkForUpdates.target = AppUpdater.shared
         checkForUpdates.isEnabled = AppUpdater.shared.isAvailable
         appMenu.addItem(checkForUpdates)
         appMenu.addItem(.separator())
-        let servicesItem = NSMenuItem(title: "服务", action: nil, keyEquivalent: "")
-        servicesItem.submenu = NSMenu(title: "服务")
+        let servicesItem = NSMenuItem(title: NativeText.string(.menuServices), action: nil, keyEquivalent: "")
+        servicesItem.tag = Self.servicesItemTag
+        servicesItem.submenu = NSMenu(title: NativeText.string(.menuServices))
         appMenu.addItem(servicesItem)
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "隐藏 dsh-chamber",
+        appMenu.addItem(withTitle: NativeText.format(.menuHideApp, appName),
                         action: #selector(NSApplication.hide(_:)),
                         keyEquivalent: "h")
-        let hideOthers = appMenu.addItem(withTitle: "隐藏其他",
+        let hideOthers = appMenu.addItem(withTitle: NativeText.string(.menuHideOthers),
                                          action: #selector(NSApplication.hideOtherApplications(_:)),
                                          keyEquivalent: "h")
         hideOthers.keyEquivalentModifierMask = [.command, .option]
-        appMenu.addItem(withTitle: "显示全部",
+        appMenu.addItem(withTitle: NativeText.string(.menuShowAll),
                         action: #selector(NSApplication.unhideAllApplications(_:)),
                         keyEquivalent: "")
         appMenu.addItem(.separator())
-        appMenu.addItem(withTitle: "退出 dsh-chamber",
+        appMenu.addItem(withTitle: NativeText.format(.menuQuitApp, appName),
                         action: #selector(NSApplication.terminate(_:)),
                         keyEquivalent: "q")
         appMenuItem.submenu = appMenu
@@ -1106,58 +1136,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // Window/Help 结构与 Window 组自带「关闭」不变——两条入口同 selector
         // （performClose:），行为完全一致。
         let fileMenuItem = NSMenuItem()
+        fileMenuItem.tag = Self.fileSectionTag
         mainMenu.addItem(fileMenuItem)
-        let fileMenu = NSMenu(title: "文件")
-        fileMenu.addItem(withTitle: "关闭窗口",
+        let fileMenu = NSMenu(title: NativeText.string(.menuFile))
+        fileMenu.addItem(withTitle: NativeText.string(.menuCloseWindow),
                          action: #selector(NSWindow.performClose(_:)),
                          keyEquivalent: "w")
         fileMenuItem.submenu = fileMenu
 
         let editMenuItem = NSMenuItem()
+        editMenuItem.tag = Self.editSectionTag
         mainMenu.addItem(editMenuItem)
-        let editMenu = NSMenu(title: "编辑")
-        editMenu.addItem(withTitle: "撤销", action: Selector(("undo:")), keyEquivalent: "z")
-        editMenu.addItem(withTitle: "重做", action: Selector(("redo:")), keyEquivalent: "Z")
+        let editMenu = NSMenu(title: NativeText.string(.menuEdit))
+        editMenu.addItem(withTitle: NativeText.string(.menuUndo), action: Selector(("undo:")), keyEquivalent: "z")
+        editMenu.addItem(withTitle: NativeText.string(.menuRedo), action: Selector(("redo:")), keyEquivalent: "Z")
         editMenu.addItem(.separator())
-        editMenu.addItem(withTitle: "剪切", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
-        editMenu.addItem(withTitle: "拷贝", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-        editMenu.addItem(withTitle: "粘贴", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(withTitle: NativeText.string(.menuCut), action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: NativeText.string(.menuCopy), action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: NativeText.string(.menuPaste), action: #selector(NSText.paste(_:)), keyEquivalent: "v")
         // S-24：Electron 默认 Edit 菜单的其余标准项（此前缺失——网页输入框里
         // Cmd+Opt+Shift+V 与 Delete 无效）。
-        let pasteAndMatch = editMenu.addItem(withTitle: "粘贴并匹配样式",
+        let pasteAndMatch = editMenu.addItem(withTitle: NativeText.string(.menuPasteAndMatchStyle),
                                              action: Selector(("pasteAndMatchStyle:")),
                                              keyEquivalent: "v")
         pasteAndMatch.keyEquivalentModifierMask = [.command, .option, .shift]
-        editMenu.addItem(withTitle: "删除", action: Selector(("delete:")), keyEquivalent: "")
-        editMenu.addItem(withTitle: "全选", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editMenu.addItem(withTitle: NativeText.string(.menuDelete), action: Selector(("delete:")), keyEquivalent: "")
+        editMenu.addItem(withTitle: NativeText.string(.menuSelectAll), action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editMenu.addItem(.separator())
         // S-24（残余）：macOS Substitutions 子菜单（Electron 默认 editMenu role
         // 在 darwin 上的标准分组：全选之后、Speech 之前 = Substitutions 子菜单，
         // 含 Show Substitutions + Smart Quotes/Smart Dashes/Text Replacement 四个
         // role；Electron Framework menu-item-roles 实测同一拼写）。动作走 AppKit/
         // WebKit 响应链标准 selector（无响应者时系统自动禁用，绝不伪造可用）。
-        let substitutionsItem = NSMenuItem(title: "替换", action: nil, keyEquivalent: "")
-        let substitutionsMenu = NSMenu(title: "替换")
-        substitutionsMenu.addItem(withTitle: "显示替换…",
+        let substitutionsItem = NSMenuItem(title: NativeText.string(.menuSubstitutions), action: nil, keyEquivalent: "")
+        let substitutionsMenu = NSMenu(title: NativeText.string(.menuSubstitutions))
+        substitutionsMenu.addItem(withTitle: NativeText.string(.menuShowSubstitutions),
                                   action: #selector(NSTextView.orderFrontSubstitutionsPanel(_:)),
                                   keyEquivalent: "")
         substitutionsMenu.addItem(.separator())
-        substitutionsMenu.addItem(withTitle: "智能引号",
+        substitutionsMenu.addItem(withTitle: NativeText.string(.menuSmartQuotes),
                                   action: #selector(NSTextView.toggleAutomaticQuoteSubstitution(_:)),
                                   keyEquivalent: "")
-        substitutionsMenu.addItem(withTitle: "智能破折号",
+        substitutionsMenu.addItem(withTitle: NativeText.string(.menuSmartDashes),
                                   action: #selector(NSTextView.toggleAutomaticDashSubstitution(_:)),
                                   keyEquivalent: "")
-        substitutionsMenu.addItem(withTitle: "文本替换",
+        substitutionsMenu.addItem(withTitle: NativeText.string(.menuTextReplacement),
                                   action: #selector(NSTextView.toggleAutomaticTextReplacement(_:)),
                                   keyEquivalent: "")
         substitutionsItem.submenu = substitutionsMenu
         editMenu.addItem(substitutionsItem)
         editMenu.addItem(.separator())
-        let speechItem = NSMenuItem(title: "语音", action: nil, keyEquivalent: "")
-        let speechMenu = NSMenu(title: "语音")
-        speechMenu.addItem(withTitle: "开始朗读", action: Selector(("startSpeaking:")), keyEquivalent: "")
-        speechMenu.addItem(withTitle: "停止朗读", action: Selector(("stopSpeaking:")), keyEquivalent: "")
+        let speechItem = NSMenuItem(title: NativeText.string(.menuSpeech), action: nil, keyEquivalent: "")
+        let speechMenu = NSMenu(title: NativeText.string(.menuSpeech))
+        speechMenu.addItem(withTitle: NativeText.string(.menuStartSpeaking),
+                           action: Selector(("startSpeaking:")), keyEquivalent: "")
+        speechMenu.addItem(withTitle: NativeText.string(.menuStopSpeaking),
+                           action: Selector(("stopSpeaking:")), keyEquivalent: "")
         speechItem.submenu = speechMenu
         editMenu.addItem(speechItem)
         editMenuItem.submenu = editMenu
@@ -1166,49 +1200,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // 缩放 / 全屏；Swift 此前只有 App/Edit/Window）。动作经响应链到
         // AppDelegate（reload/zoom 绑 webView.pageZoom），全屏走 NSWindow。
         let viewMenuItem = NSMenuItem()
+        viewMenuItem.tag = Self.viewSectionTag
         mainMenu.addItem(viewMenuItem)
-        let viewMenu = NSMenu(title: "显示")
-        viewMenu.addItem(withTitle: "重新加载",
+        let viewMenu = NSMenu(title: NativeText.string(.menuView))
+        viewMenu.addItem(withTitle: NativeText.string(.menuReload),
                          action: #selector(AppDelegate.reloadWebView(_:)),
                          keyEquivalent: "r")
         // S-24（残余）：Force Reload（Shift+Cmd+R；Electron 默认菜单 forceReload
         // role = reloadIgnoringCache 对偶，标定见 Electron Framework
         // menu-item-roles 实测「Force Reload / Shift+CmdOrCtrl+R」）。
-        let forceReload = viewMenu.addItem(withTitle: "强制重新加载",
+        let forceReload = viewMenu.addItem(withTitle: NativeText.string(.menuForceReload),
                                            action: #selector(AppDelegate.forceReloadWebView(_:)),
                                            keyEquivalent: "r")
         forceReload.keyEquivalentModifierMask = [.command, .shift]
         viewMenu.addItem(.separator())
-        viewMenu.addItem(withTitle: "放大",
+        viewMenu.addItem(withTitle: NativeText.string(.menuZoomIn),
                          action: #selector(AppDelegate.zoomInWebView(_:)),
                          keyEquivalent: "+")
-        viewMenu.addItem(withTitle: "缩小",
+        viewMenu.addItem(withTitle: NativeText.string(.menuZoomOut),
                          action: #selector(AppDelegate.zoomOutWebView(_:)),
                          keyEquivalent: "-")
-        viewMenu.addItem(withTitle: "实际大小",
+        viewMenu.addItem(withTitle: NativeText.string(.menuActualSize),
                          action: #selector(AppDelegate.resetWebViewZoom(_:)),
                          keyEquivalent: "0")
         viewMenu.addItem(.separator())
-        let fullScreen = viewMenu.addItem(withTitle: "切换全屏幕",
+        let fullScreen = viewMenu.addItem(withTitle: NativeText.string(.menuToggleFullScreen),
                                           action: #selector(NSWindow.toggleFullScreen(_:)),
                                           keyEquivalent: "f")
         fullScreen.keyEquivalentModifierMask = [.command, .control]
         viewMenuItem.submenu = viewMenu
 
         let windowMenuItem = NSMenuItem()
+        windowMenuItem.tag = Self.windowSectionTag
         mainMenu.addItem(windowMenuItem)
-        let windowMenu = NSMenu(title: "窗口")
-        windowMenu.addItem(withTitle: "最小化",
+        let windowMenu = NSMenu(title: NativeText.string(.menuWindow))
+        windowMenu.addItem(withTitle: NativeText.string(.menuMinimize),
                            action: #selector(NSWindow.performMiniaturize(_:)),
                            keyEquivalent: "m")
-        windowMenu.addItem(withTitle: "关闭",
+        windowMenu.addItem(withTitle: NativeText.string(.menuCloseWindow),
                            action: #selector(NSWindow.performClose(_:)),
                            keyEquivalent: "w")
-        windowMenu.addItem(withTitle: "缩放",
+        windowMenu.addItem(withTitle: NativeText.string(.menuZoom),
                            action: #selector(NSWindow.performZoom(_:)),
                            keyEquivalent: "")
         windowMenu.addItem(.separator())
-        windowMenu.addItem(withTitle: "前置全部窗口",
+        windowMenu.addItem(withTitle: NativeText.string(.menuBringAllToFront),
                            action: #selector(NSApplication.arrangeInFront(_:)),
                            keyEquivalent: "")
         windowMenuItem.submenu = windowMenu
@@ -1220,9 +1256,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // 明确不加 DevTools 项：T-10 保持 isInspectable/菜单入口仅 DEBUG 可达，
         // release 打包态菜单里绝不出现检查器入口。
         let helpMenuItem = NSMenuItem()
+        helpMenuItem.tag = Self.helpSectionTag
         mainMenu.addItem(helpMenuItem)
-        let helpMenu = NSMenu(title: "帮助")
-        let help = helpMenu.addItem(withTitle: "dsh-chamber 帮助",
+        let helpMenu = NSMenu(title: NativeText.string(.menuHelp))
+        let help = helpMenu.addItem(withTitle: NativeText.format(.menuAppHelp, MainWindowController.displayName),
                                     action: #selector(AppDelegate.openHelpPage(_:)),
                                     keyEquivalent: "?")
         help.keyEquivalentModifierMask = [.command]
@@ -1232,17 +1269,194 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         return mainMenu
     }
 
+    // MARK: - W3 原生席位（语言 / 外观在壳侧的唯一应用点）
+
+    /// W3：启动最早期应用「上次已知」的页面事实。`AppleLanguages` 必须早于任何
+    /// bundle 本地化解析（首次取串发生在 didFinishLaunching 的主菜单构造），故挂在
+    /// willFinishLaunching；事实由 MainWindowController 的 ShellPageFactsStore 在
+    /// 每次页面上报后持久化，跨启动以 last-known 兜底。
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // 单一读取入口 = MainWindowController（与页面上报共用同一个 UserDefaults 单源）。
+        guard let facts = MainWindowController.lastKnownPageFacts() else { return }
+        // 自建文案的即时语言面：显式 .lproj 覆盖（否则主菜单只会在下次启动换语言）。
+        let resolved = NativeText.setLanguageOverride(facts.language)
+        Self.applyLanguage(facts.language)
+        Self.applyAppearance(pageIsDark: facts.pageIsDark)
+        shellLog("[shell] 原生席位：语言覆盖资源=\(resolved ? "已解析" : "缺失（回落 bundle 解析）")")
+        shellLog("[shell] 原生席位：启动期应用上次已知事实 language=\(facts.language.rawValue)"
+            + " pageIsDark=\(facts.pageIsDark)")
+    }
+
+    /// 系统语言（**排除本 app 域自己写过的 AppleLanguages**）：我们自己写覆盖后
+    /// Locale.preferredLanguages 会返回覆盖值，不能拿它当"系统语言"做下一轮比较。
+    /// F5：决策抽成纯函数 systemLanguageDecision（单测直测），本函数只读值后调用。
+    static func systemLanguageIdentifiers(defaults: UserDefaults = .standard) -> [String] {
+        let global = defaults.persistentDomain(forName: UserDefaults.globalDomain) ?? [:]
+        let own = defaults.object(forKey: "AppleLanguages") as? [String]
+        let globalLanguages = global["AppleLanguages"] as? [String]
+        return systemLanguageDecision(own: own,
+                                      global: globalLanguages,
+                                      localePreferred: Locale.preferredLanguages)
+    }
+
+    /// 系统语言决策（纯函数，F5 单测直测）：own 非空且 global 非空 → 取 global
+    /// （排除写进 app 域的覆盖值）；否则 Locale.preferredLanguages。
+    /// 语义与抽取前逐字一致。
+    static func systemLanguageDecision(own: [String]?,
+                                       global: [String]?,
+                                       localePreferred: [String]) -> [String] {
+        if let own, !own.isEmpty, let global, !global.isEmpty {
+            return global
+        }
+        return localePreferred
+    }
+
+    /// 本壳写 `AppleLanguages` 时同时记录**写入的确切值**（F2，2026-12 审计修正）。
+    ///
+    /// 为什么需要记录（旧布尔标记的缺陷）：系统设置「语言与地区 → 应用程序」给本
+    /// app 指定的语言也写进**同一个 app 域键**，且完全可能正好是 `["en"]`/
+    /// `["zh-Hans"]`——旧的布尔标记一经写过就长期为真、系统设置写值时也不会被清掉，
+    /// 于是用户的显式 per-app 语言会被当成我们的陈旧覆盖而覆盖/删除。
+    /// 规则：记录不存在 = 该值不是本壳写的，一律不碰。
+    static let appleLanguagesWrittenKey = "native-shell.appleLanguagesWritten"
+
+    /// 旧版本（F2 之前）的布尔所有权标记：只作为**残留**清理，绝不当所有权依据
+    /// （发现即删键；因无从知道旧值归属，保守不删 `AppleLanguages`）。
+    static let legacyAppleLanguagesOwnedKey = "native-shell.appleLanguagesOwned"
+
+    /// app 域 `AppleLanguages` 的确切值（nil = app 域没有该键）。
+    ///
+    /// macOS 的 per-app「应用程序语言」写在本 app 域；系统语言在 `NSGlobalDomain`，
+    /// `defaults.object(forKey:)` 会穿透到全局域，不能拿穿透值当"app 域已有值"
+    /// （否则首次启动会把系统语言误判成用户设置，覆盖永远写不进去）。
+    /// `appDomainName`：生产传 nil → bundle id（dev `swift run` 回落进程名）；
+    /// 单测传 scratch suite 名（`defaults` 注入参数保留给测试，F2 要求）。
+    /// 域名不可定位时返回 nil（写路径据此保守判断，见 applyLanguage）。
+    static func appDomainAppleLanguages(defaults: UserDefaults,
+                                        appDomainName: String? = nil) -> [String]? {
+        let name = appDomainName
+            ?? Bundle.main.bundleIdentifier
+            ?? ProcessInfo.processInfo.processName
+        guard let domain = defaults.persistentDomain(forName: name) else { return nil }
+        guard let raw = domain["AppleLanguages"] else { return nil }
+        if let list = raw as? [String] { return list }
+        // 存在但不是字符串数组（被别的工具写坏/写成别的形状）：**保守视为"外来值存在"**
+        // （返回空数组而非 nil）——写路径据此拒绝覆盖，回收路径据此不删值。
+        return []
+    }
+
+    /// 把页面语言写进本 app 域的 `AppleLanguages`——**仅在与系统语言不同时**；
+    /// 相同则回收**我们自己写过**的陈旧覆盖，交给系统解析。
+    ///
+    /// 所有权规则（F2，2026-12 审计；以"我们写入的确切值"为准）：
+    /// - 写：app 域已有值且不等于记录值（含记录不存在）⇒ 视为用户/系统设置的
+    ///   per-app 语言，**不覆盖**，记日志并返回 false；
+    /// - 回收：仅当记录存在且 app 域当前值 == 记录值时才 removeObject，并同时
+    ///   清掉记录（值被外部改过 ⇒ 记录不再是事实，作废记录但绝不删值）；
+    /// - 兼容：发现旧布尔标记只删它，并当作"没有记录"处理。
+    /// 返回 true = 已写覆盖（框架/Sparkle/右键菜单文案下次启动生效）。
+    @discardableResult
+    static func applyLanguage(_ language: ShellPageLanguage,
+                              systemLanguages: [String] = AppDelegate.systemLanguageIdentifiers(),
+                              defaults: UserDefaults = .standard,
+                              appDomainName: String? = nil) -> Bool {
+        // 旧布尔标记只是老版本残留：删掉；它不构成"我们写过"的证据（保守不删值）。
+        if defaults.object(forKey: legacyAppleLanguagesOwnedKey) != nil {
+            defaults.removeObject(forKey: legacyAppleLanguagesOwnedKey)
+        }
+        // 记录同样**只读 app 域**（与 appValue 对称：defaults.array(forKey:) 会穿透全局域），
+        // 且**空数组视同无记录**——否则"记录被外部写坏成 []"会与"app 值是非数组"的哨兵 []
+        // 相等，从而错误地宣称所有权（第二轮 review 抓到的理论不安全组合）。
+        let domainName = appDomainName
+            ?? Bundle.main.bundleIdentifier
+            ?? ProcessInfo.processInfo.processName
+        let appDomain = defaults.persistentDomain(forName: domainName) ?? [:]
+        let writtenRaw = appDomain[appleLanguagesWrittenKey] as? [String]
+        let written = (writtenRaw?.isEmpty ?? true) ? nil : writtenRaw
+        let appValue = appDomainAppleLanguages(defaults: defaults,
+                                               appDomainName: appDomainName)
+
+        if let override = ShellLanguagePolicy.appleLanguagesOverride(page: language,
+                                                                     systemLanguages: systemLanguages) {
+            // 只有"app 域没有值"或"app 域值 == 我们记录的值"才允许覆盖。
+            guard appValue == nil || (written != nil && appValue == written) else {
+                shellLog("[shell] AppleLanguages 已是用户/系统设置的 per-app 语言，"
+                    + "本壳不覆盖（保守保留）：\(appValue ?? [])")
+                // 失配即作废记录：否则外部值日后恰好改回记录值时会"复活"我们的所有权。
+                if written != nil { defaults.removeObject(forKey: appleLanguagesWrittenKey) }
+                return false
+            }
+            defaults.set(override, forKey: "AppleLanguages")
+            defaults.set(override, forKey: appleLanguagesWrittenKey)
+            return true
+        }
+
+        // 回收：仅"记录存在且 app 域当前值 == 记录值"才删；否则一律不碰值。
+        guard let written, appValue == written else {
+            // 值被外部改过/键被删 → 记录不再是事实：作废记录（不删值）。
+            if written != nil {
+                defaults.removeObject(forKey: appleLanguagesWrittenKey)
+            }
+            return false
+        }
+        defaults.removeObject(forKey: "AppleLanguages")
+        defaults.removeObject(forKey: appleLanguagesWrittenKey)
+        return false
+    }
+
+    /// 系统是否深色（不读 effectiveAppearance 的覆盖态）：AppleInterfaceStyle 是
+    /// 系统浅/深色的既有落点；缺失（浅色）时才回落有效外观判定。
+    static func systemIsDark() -> Bool {
+        if let style = UserDefaults.standard.string(forKey: "AppleInterfaceStyle") {
+            return style.lowercased() == "dark"
+        }
+        return NSApp.appearance == nil
+            && NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+    }
+
+    /// 外观：默认 nil（跟系统，HIG「不要 app 专属外观开关」）；仅当页面显式主题与
+    /// 系统不同才覆盖，页面回到"跟随系统"时重置为 nil。
+    static func applyAppearance(pageIsDark: Bool, systemIsDark: Bool = AppDelegate.systemIsDark()) {
+        if let name = ShellAppearancePolicy.appearanceName(pageIsDark: pageIsDark, systemIsDark: systemIsDark) {
+            NSApp.appearance = NSAppearance(named: name)
+        } else {
+            NSApp.appearance = nil
+        }
+    }
+
+    /// W1/W3：页面事实变化（W2 上报告在主线程）。壳自建菜单**即时**跟随；
+    /// 进程级本地化只有启动期可变，故框架/Sparkle 文案的切换在下次启动生效（R9）。
+    func pageFactsDidChange(_ facts: ShellPageFacts, previous: ShellPageFacts?) {
+        if previous?.language != facts.language {
+            // 顺序要紧：先换运行期语言覆盖，再重建菜单/刷新托盘——否则重建/重取的
+            // 仍是旧语言。托盘标题在 installStatusItem 时一次性取串（F4 缺口），
+            // 必须在 setLanguageOverride 之后重取。
+            let resolved = NativeText.setLanguageOverride(facts.language)
+            installMainMenu()
+            refreshStatusItemTitles()
+            let wrote = Self.applyLanguage(facts.language)
+            shellLog("[shell] 页面语言 → \(facts.language.rawValue)：菜单/托盘已重建（语言覆盖资源="
+                + (resolved ? "已解析" : "缺失，回落 bundle 解析") + "），AppleLanguages 覆盖="
+                + (wrote ? "已写" : "未写（用户设置优先/无覆盖/已回收）")
+                + "（框架/Sparkle/右键菜单下次启动生效）")
+        }
+        if previous?.pageIsDark != facts.pageIsDark {
+            Self.applyAppearance(pageIsDark: facts.pageIsDark)
+            shellLog("[shell] 页面主题 → \(facts.pageIsDark ? "dark" : "light")：原生外观已更新")
+        }
+    }
+
     private func installMainMenu() {
         let menu = Self.makeMainMenu()
         NSApp.mainMenu = menu
-        NSApp.windowsMenu = menu.items.first { $0.submenu?.title == "窗口" }?.submenu
+        // W2：一律按 tag 接线，绝不按标题（标题已本地化，按标题查找会静默失效）。
+        NSApp.windowsMenu = menu.items.first { $0.tag == Self.windowSectionTag }?.submenu
         // S-24：注册 Help 组（系统据此在帮助菜单提供搜索框；不做也是普通菜单，
         // 注册才是「真实 Help 菜单」的标准接线）。
-        NSApp.helpMenu = menu.items.first { $0.submenu?.title == "帮助" }?.submenu
+        NSApp.helpMenu = menu.items.first { $0.tag == Self.helpSectionTag }?.submenu
         NSApp.servicesMenu = menu.items
-            .compactMap({ $0.submenu })
-            .flatMap({ $0.items })
-            .first(where: { $0.title == "服务" })?.submenu
+            .first { $0.tag == Self.appSectionTag }?.submenu?.items
+            .first { $0.tag == Self.servicesItemTag }?.submenu
     }
 
     /// SIGTERM/SIGINT → NSApp.terminate（走 applicationShouldTerminate 的三分支与
@@ -1328,17 +1542,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             button.toolTip = "dsh-chamber"
         }
         let menu = NSMenu()
-        let show = NSMenuItem(title: "显示窗口",
+        let show = NSMenuItem(title: NativeText.string(.trayShowWindow),
                               action: #selector(showMainWindowFromStatusItem(_:)),
                               keyEquivalent: "")
         show.target = self
         menu.addItem(show)
         menu.addItem(.separator())
-        menu.addItem(withTitle: "退出 dsh-chamber",
-                     action: #selector(NSApplication.terminate(_:)),
-                     keyEquivalent: "")
+        let quit = NSMenuItem(title: NativeText.format(.trayQuitApp, MainWindowController.displayName),
+                              action: #selector(NSApplication.terminate(_:)),
+                              keyEquivalent: "")
+        menu.addItem(quit)
         item.menu = menu
         statusItem = item
+        statusItemShowItem = show
+        statusItemQuitItem = quit
+    }
+
+    /// 托盘标题刷新（F4，2026-12 审计）：托盘只在 installStatusItem 装一次，
+    /// 首装时取的串会停留在启动语言；语言变化分支在 setLanguageOverride 之后
+    /// 调用本方法，按 key 重新取串（只改这两个文案项，不动图标/结构）。
+    private func refreshStatusItemTitles() {
+        statusItemShowItem?.title = NativeText.string(.trayShowWindow)
+        statusItemQuitItem?.title = NativeText.format(.trayQuitApp,
+                                                      MainWindowController.displayName)
     }
 
     @objc private func showMainWindowFromStatusItem(_ sender: Any?) {
@@ -1357,15 +1583,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     static func missingSidecarMessage(isPackaged: Bool, resourcesDir: String?,
                                       explicitPath: String? = nil) -> String {
         if let explicitPath, !explicitPath.isEmpty {
-            return "DSH_CHAMBER_SHELL_SIDECAR 指向的 sidecar 脚本不存在：\(explicitPath)"
+            return NativeText.format(.fatalSidecarScriptMissingExplicit, explicitPath)
         }
         if isPackaged {
             let expected = resourcesDir.map { PackagedLayout.sidecarScript(resourcesDir: $0) }
-                ?? "<Resources>/sidecar/sidecar.js（Bundle.main.resourceURL 缺失）"
-            return "装配态缺少 sidecar 脚本：\(expected)（DSH_CHAMBER_SHELL_SIDECAR 可显式指定）"
+                // 路径注解不译（非散文；zh/en 两面对同一路径都必须可读，故取 ASCII
+                // 括号与英文说明，不进键表）。
+                ?? "<Resources>/sidecar/sidecar.js (Bundle.main.resourceURL unavailable)"
+            return NativeText.format(.fatalSidecarScriptMissingPackaged, expected)
         }
-        return "dev 态未找到 sidecar 脚本：DSH_CHAMBER_SHELL_SIDECAR 未设，且自 "
-            + "\(FileManager.default.currentDirectoryPath) 向上 6 层未找到 \(sidecarRelativePath)"
+        return NativeText.format(.fatalSidecarScriptMissingDev,
+                                 FileManager.default.currentDirectoryPath, sidecarRelativePath)
     }
 
     /// P-02（纯函数，单测直测）：ready 帧端口 vs 壳即将加载的控制面 URL 端口。
@@ -1385,8 +1613,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             expected = nil
         }
         guard let expected, expected != readyPort else { return nil }
-        return "sidecar ready 端口 \(readyPort) 与壳即将加载的控制面 origin 端口 "
-            + "\(expected) 不一致（\(cpURL.absoluteString)）——拒绝加载错 origin"
+        return NativeText.format(.fatalReadyPortMismatch, Int32(readyPort), Int32(expected),
+                                 cpURL.absoluteString)
     }
 
     /// P-17：登录自启启动期重放的决策结果（纯值，单测直测）。

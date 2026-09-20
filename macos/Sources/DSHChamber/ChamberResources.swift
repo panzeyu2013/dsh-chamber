@@ -134,14 +134,17 @@ public enum PackagedLayout {
         case packagedNodeMissing(path: String)
         case pathNodeMissing
 
+        /// 本地化：resources.explicitNodeMissing / resources.packagedNodeMissing
+        /// （%@ = 路径）/ resources.pathNodeMissing——经 AppDelegate.fatalStartup
+        /// 进 NSAlert informativeText，是用户可见的装配失败文案。
         public var message: String {
             switch self {
             case .explicitNodeMissing(let path):
-                return "DSH_CHAMBER_SHELL_NODE_BIN 指向的 node 不存在或不可执行：\(path)"
+                return NativeText.format(.resourcesExplicitNodeMissing, path)
             case .packagedNodeMissing(let path):
-                return "装配态缺少自带 node（不可执行）：\(path)"
+                return NativeText.format(.resourcesPackagedNodeMissing, path)
             case .pathNodeMissing:
-                return "dev 态 PATH 中找不到可执行的 node（可设 DSH_CHAMBER_SHELL_NODE_BIN 显式指定）"
+                return NativeText.string(.resourcesPathNodeMissing)
             }
         }
     }
@@ -167,7 +170,7 @@ public enum PackagedLayout {
         if isPackaged {
             guard let resourcesDir else {
                 throw PathResolutionError.packagedNodeMissing(
-                    path: "<Resources>/sidecar/node（Bundle.main.resourceURL 缺失）")
+                    path: "<Resources>/sidecar/node (Bundle.main.resourceURL missing)")
             }
             let bundled = nodeBinary(resourcesDir: resourcesDir)
             guard isExecutable(bundled) else {

@@ -1,0 +1,175 @@
+/*
+ * Localizable.strings —— dsh-chamber 原生壳英文文案（S2：本地化资源）
+ *
+ * 键 = NativeTextKey.rawValue（macos/Sources/DSHChamber/NativeText.swift），逐字一致；键表以 NativeTextKey 为准（当前 121 键）。
+ * 英文值按既有英文面措辞与 zh-Hans 逐条对译（同义、同结构）：正文来源
+ * main.ts 的对话框/报错与 electron-edges 的 pickPluginSource。
+ * 占位符 %@ / %d 与 zh-Hans 逐键一一对应（种类/顺序一致）；参数由调用方按
+ * NativeText.format 传入，故两份文件的格式必须同步。原本由 Swift 字面量插值的
+ * 动态部分（app 名、控制面地址、退出原因、次数/秒数、sidecar 失败原因）改为
+ * %@/%d——zh-Hans 侧格式化后的输出与旧字面量逐字一致。
+ *
+ * 装配：SwiftPM .process("Resources/en.lproj") 产出资源包；build-swift-app.mjs
+ * 把 <lang>.lproj 装配到 <App>.app/Contents/Resources/ 下（Bundle.main 与系统
+ * 框架的本地化解析层），任一缺席即 loud。Info.plist 的 CFBundleLocalizations
+ * 声明同一集合 {en, zh-Hans}。
+ */
+
+/* ===== 主菜单：App ===== */
+"menu.aboutApp" = "About %@";
+"menu.checkForUpdates" = "Check for Updates…";
+"menu.services" = "Services";
+"menu.hideApp" = "Hide %@";
+"menu.hideOthers" = "Hide Others";
+"menu.showAll" = "Show All";
+"menu.quitApp" = "Quit %@";
+
+/* ===== 主菜单：文件 ===== */
+"menu.file" = "File";
+"menu.closeWindow" = "Close Window";
+
+/* ===== 主菜单：编辑 ===== */
+"menu.edit" = "Edit";
+"menu.undo" = "Undo";
+"menu.redo" = "Redo";
+"menu.cut" = "Cut";
+"menu.copy" = "Copy";
+"menu.paste" = "Paste";
+"menu.pasteAndMatchStyle" = "Paste and Match Style";
+"menu.delete" = "Delete";
+"menu.selectAll" = "Select All";
+"menu.substitutions" = "Substitutions";
+"menu.showSubstitutions" = "Show Substitutions…";
+"menu.smartQuotes" = "Smart Quotes";
+"menu.smartDashes" = "Smart Dashes";
+"menu.textReplacement" = "Text Replacement";
+"menu.speech" = "Speech";
+"menu.startSpeaking" = "Start Speaking";
+"menu.stopSpeaking" = "Stop Speaking";
+
+/* ===== 主菜单：显示 ===== */
+"menu.view" = "View";
+"menu.reload" = "Reload";
+"menu.forceReload" = "Force Reload";
+"menu.zoomIn" = "Zoom In";
+"menu.zoomOut" = "Zoom Out";
+"menu.actualSize" = "Actual Size";
+"menu.toggleFullScreen" = "Toggle Full Screen";
+
+/* ===== 主菜单：窗口 / 帮助 ===== */
+"menu.window" = "Window";
+"menu.minimize" = "Minimize";
+"menu.zoom" = "Zoom";
+"menu.bringAllToFront" = "Bring All to Front";
+"menu.help" = "Help";
+"menu.appHelp" = "%@ Help";
+
+/* ===== 状态栏托盘 ===== */
+"tray.showWindow" = "Show Window";
+"tray.quitApp" = "Quit %@";
+
+/* ===== 退出确认 ===== */
+"quit.confirmTitle" = "Quit %@?";
+"quit.confirmDetail" = "Quitting will stop %@. Quit anyway?";
+"quit.reasonsSeparator" = " and ";
+"quit.confirmButton" = "Quit";
+"quit.cancelButton" = "Cancel";
+
+/* ===== 退出决策不可得（S-17） ===== */
+"quit.unavailableTitle" = "The dsh sidecar is not responding to the quit request";
+"quit.unavailableDetail" = "The dsh sidecar did not answer the quit decision within %d seconds, so this quit was cancelled. You can keep waiting for the sidecar to recover, or force quit (forcing a quit still runs the existing cleanup).";
+"quit.waitButton" = "Keep Waiting";
+"quit.forceButton" = "Force Quit";
+
+/* ===== 致命提示标题与正文（AppDelegate.fatalStartup 的用户可见原因；日志仍中文） ===== */
+"fatal.startupFailedTitle" = "%@ failed to start";
+"fatal.sidecarAbnormalTitle" = "%@ sidecar error";
+"fatal.nodeResolveFailed" = "Failed to resolve Node: %@";
+"fatal.sidecarScriptMissingExplicit" = "The sidecar script referenced by DSH_CHAMBER_SHELL_SIDECAR does not exist: %@";
+"fatal.sidecarScriptMissingPackaged" = "The packaged app is missing its sidecar script: %@ (DSH_CHAMBER_SHELL_SIDECAR can override it)";
+"fatal.sidecarScriptMissingDev" = "Sidecar script not found in dev mode: DSH_CHAMBER_SHELL_SIDECAR is unset, and %@ is not found within 6 parent levels of %@";
+"fatal.hostPackagesMissing" = "The packaged app is missing host packages: %@";
+"fatal.hostPackagesMissingHint" = " — run pnpm run build:sidecar again and reinstall the .app";
+"fatal.cpURLUnparsable" = "DSH_CHAMBER_SHELL_CP_URL is not a valid URL";
+"fatal.cpURLUnderivable" = "Cannot derive the control-plane URL (no port resolved)";
+"fatal.readyPortMismatch" = "The sidecar ready port %d does not match the control-plane origin port %d the shell is about to load (%@) — refusing to load the wrong origin";
+"fatal.bridgeStartFailed" = "BridgeClient failed to start: %@";
+"fatal.sidecarStartFailedDetail" = "The sidecar failed to start: %@";
+
+/* ===== 渲染恢复放弃 ===== */
+"renderer.crashTitle" = "dsh-chamber Frontend Error";
+"renderer.crashDetail" = "The frontend renderer has repeatedly stopped responding or crashed, so automatic recovery has been stopped. Please restart the app.";
+
+/* ===== sidecar 启动失败报告（SidecarStartupFailure） ===== */
+"sidecar.lockBusy" = "Another dsh-chamber instance is already running";
+"sidecar.checkConfig" = "Check the control plane and app configuration, then try again";
+"sidecar.startupExit" = "Sidecar failed to start (exit=%d)";
+"sidecar.portInUseSuffix" = " (port %@ is already in use) — quit it and try again";
+"sidecar.portInUseNoAddress" = " (the port is already in use) — quit it and try again";
+"sidecar.detailSuffix" = ": %@";
+"sidecar.hintSuffix" = ". %@";
+"sidecar.genericSuffix" = " — %@";
+
+/* ===== sidecar 守护（SidecarSupervisor） ===== */
+"supervisor.startupExit" = "Sidecar exited during startup (status=%d) — %@; startup exits are not restarted automatically";
+"supervisor.startFailure" = "The sidecar failed to start: %@";
+"supervisor.lockBusy" = "The sidecar found the directory lock held by another instance (exit=3) — close the other flavor and try again";
+"supervisor.crashLoop" = "The sidecar crashed %d times in a %ds window; automatic recovery has stopped";
+"supervisor.lifecycleDeferred" = "Sidecar restarts kept being deferred by a lifecycle transition (gave up after %d retries)";
+
+/* ===== 目录锁 / B 桥 / 资源解析（用户可见的 fatal 描述） ===== */
+"lock.heldByAnotherProcess" = "The directory lock is taken (%@) — another flavor/instance is using this userData; refusing to start";
+"lock.ioFailure" = "Directory lock I/O failure: %@";
+"lock.pidUnknown" = "unknown";
+"lock.mkdirFailed" = "mkdir %@ failed: %@";
+"lock.openFailed" = "open %@ failed (errno=%d)";
+"lock.notRegularFile" = "The lock file is not a regular file (fail-closed): %@";
+"lock.ownerUnexpected" = "The lock file has an unexpected owner (uid=%d): %@";
+"lock.shortWrite" = "Short write to the lock record (%d/%d)";
+"lock.encodeFailed" = "Failed to encode the lock record: %@";
+"bridge.lifecycleBusy" = "The previous session's shutdown did not finish within %d seconds; the start was abandoned — please try again later";
+"bridge.alreadyRunning" = "BridgeClient is already running (start is not reentrant; call stop() first, then start())";
+"bridge.invokeFailed" = "BridgeClient is not running (not started / already stopped / the sidecar has exited)";
+"bridge.pendingAborted" = "BridgeClient has stopped (stop())";
+"bridge.pendingProcessExited" = "The sidecar process exited, so pending requests were discarded";
+"bridge.stdoutResync" = "The stdout line buffer overflowed without a newline; the buffer was reset to resync, and the discarded bytes may relate to pending requests";
+"bridge.frameTooLarge" = "The sidecar response exceeds the %d-byte frame limit and cannot be matched to a request";
+"bridge.writeFailed" = "Failed to write the frame (id=%d): %@";
+"bridge.responseWithoutError" = "The sidecar returned ok=false without an error message";
+"resources.explicitNodeMissing" = "The node pointed to by DSH_CHAMBER_SHELL_NODE_BIN does not exist or is not executable: %@";
+"resources.packagedNodeMissing" = "The packaged app is missing its bundled node (or it is not executable): %@";
+"resources.pathNodeMissing" = "No executable node was found on PATH in dev mode (set DSH_CHAMBER_SHELL_NODE_BIN to point at one)";
+
+/* ===== 原生更新器（AppUpdater 装配期配置不可用原因） ===== */
+"updater.feedMustBeHTTPS" = "SUFeedURL must be an https URL (currently: %@)";
+"updater.publicKeyInvalid" = "SUPublicEDKey must be a base64-encoded 32-byte Ed25519 public key";
+
+/* ===== 首载失败说明页 ===== */
+"failure.title" = "dsh-chamber";
+"failure.heading" = "Unable to load the %@ interface";
+"failure.cpLabel" = "Control plane address: %@";
+"failure.sidecarLabel" = "Sidecar failed to start: %@";
+"failure.retryExhausted" = "The control plane could not be loaded after %d retries.";
+"failure.shimMissing" = "The A-bridge shim resource is missing: the page cannot inject the dshChamber bridge, so all host capabilities are unavailable. Searched these directories: %@. Re-run pnpm run build:swift-app (or swift build in dev) and try again.";
+"failure.probeFailed" = "Control plane readiness probe failed: %@";
+"failure.probeHTTPStatus" = "HTTP %d (expected 2xx)";
+"failure.probeNoResponse" = "No response";
+"failure.probeNSURLError" = "NSURLError %d: %@";
+
+/* ===== 插件源选择面板（英文原文即源码措辞；zh-Hans 侧为等效译文） ===== */
+"panel.pluginSourceTitle" = "Import a dsh plugin — source folder or .tgz archive";
+"panel.pluginSourcePrompt" = "Import";
+
+/* ===== 通用 ===== */
+"common.ok" = "OK";
+"common.listSeparator" = ", ";
+
+/* ===== composer native open panel / bridge fallback / frame errors
+   (2026-12 audit closure: these were hardcoded, so they mismatched whenever the
+   page language differs from the system language) ===== */
+"panel.openFileTitle" = "Choose a file";
+"panel.openFileOrDirectoryTitle" = "Choose a file or folder";
+"panel.openFilePrompt" = "Open";
+"bridge.errorFallback" = "bridge error";
+"frame.tooLarge" = "Frame exceeds the %d-byte limit (actual: %d bytes)";
+"frame.responseMissingError" = "An ok=false response frame must carry an error message (id=%d)";

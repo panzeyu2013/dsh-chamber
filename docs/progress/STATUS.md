@@ -26,6 +26,8 @@
 
 - ProMotion / 120Hz实机验收（未完成；口径与退役判据见deviations S-48 / design 25 §5.1）：残余 = 打包态三工况实机验收；另需确认 `DSH_CHAMBER_SHELL_DEBUG=1` 的 `[shell-fps]` 观测只在调试态出现（S14/T-11调试面纪律）。
 
+- 原生席位（语言/外观跟随）实机门禁 + W7 待裁决（2026-12）：仍开放——打包态右键菜单语言、Sparkle 标准窗语言与外观、打包态实机目视（`zh-Hans` 与 `zh_CN` 的**匹配已本机实测确认**：`Bundle.preferredLocalizations(["zh-Hans"]) → zh_CN`）、页面内切主题的即时性（契约见 design 25 §5.3、deviations S-11/S-24/S-47/S-53）；**已裁决的语言语义（2026-12 用户裁决，不再重开）**：保留「族比较 + 同族不覆盖」的两层语义——**壳自建文案跟随应用内设置**（页面语言，切换即生效），**系统与框架面默认跟随系统语言**（Sparkle 标准窗、AppKit 内建串、右键菜单），仅当语言族不同（中文 ↔ 非中文）时才写 `AppleLanguages` 让这些面一起跟随（下次启动生效）；跨族强制跟随与"框架面永远跟系统"两侧均被否决，取舍理由见 design 25 §5.3（含 Rejected alternatives）。**必要取舍两条（2026-12 审计后仍成立）**：① 本壳只随包 en/zh-Hans，`zh-*` 折叠为 zh ⇒ zh-Hant 页面下壳自建文案为简体、系统框架为繁体（与页面 frame 自身的简体折叠一致，是否收口取决于是否随包 zh-Hant，见 design 25 §5.3）；② A 桥 shim 的六条拒绝文案（随包的 `macos/Sources/DSHChamber/Resources/bridge-shim.js` 的 ERROR_TEXT_BY_CODE）保持英文——它是 Electron renderer-trust 的**逐字镜像**，且运行在页面世界、取不到壳的键表，若要本地化须同时改两 flavor 并注入词典，属产品裁决；W7（更新自动检查与间隔的设置化）待产品裁决——现无设置席位，行为只由能力位与模板常量承担（`macos/Sources/DSHChamber/AppUpdater.swift#AppUpdater`）。
+
 - gateway unit登录环境真机门（2026-09-15，待Linux判）：`write_unit` 无 `User=`、注入`HOME/LOGNAME/USER/XDG_CONFIG_HOME`（`scripts/install-gateway.sh`，design 17 §5）；单测只钉文本/结构。真判须重跑安装器 + `daemon-reload`、在部署机验 `systemd-analyze verify` + 服务拿到HOME（`ghauth status`）——macOS开发机无systemd，未判。
 
 - ssh/http dsh目标无cookie注入（实例侧401）：五处同源绝对URL由vendor补丁集走本实例前缀（design 09 §3.6）；cookie注入属既有认证面，未覆盖。
@@ -240,7 +242,7 @@
 
 ## 一致性债务与开放登记（低–中，未排期；均指回代码面注释/design 登记）
 
-- docs证据锚点过期（D15，2026-12实测；低–中，未排期）：`docs/**` 的 `文件:行` 证据锚点实测743处（`check-anchors --report` 口径；666不可复现），分布deviations.md 493 / STATUS.md 117 / design 20 40 / design 25 37；位移后大面积错位、偏移不均（同一文件净增128行，偏移 +5…+128）。工具（2026-12）：`check-anchors.mjs`（`anchors-budget.json` 棘轮，基线743只降不升；两次整合实测main 788c6d55 +4 / ui-chat-render-fix +8；`--report`/`--fix`）+ `verify-registry.mjs` 已进 `check:static` 与CI。测试面44处注释 + 4处非注释（3处runtime-lockstep标题 + 1处真实断言：`WebPermissionPolicyTests.swift#testMediaCaptureIsDeniedLikeElectronsPermissionPolicy`（D13）；夹具另7处命中（5个示例字面量）不计入；`--report` 打印 注释44 / 字符串10 / 断言或其它1）；需同步的测试锚点只有这1处。退役动作 = 待合并分支（timeout-loading / ui-chat-not-render / windows-slide / swift-sidebar-update等）落地后按符号grep分批语义化重锚、逐批调低预算；登记见 [deviations.md](deviations.md) D15。
+- docs证据锚点过期（D15，2026-12实测；低–中，未排期）：`docs/**` 的 `文件:行` 证据锚点实测678处（`check-anchors --report` 口径；D15 旧记666不可复现），分布deviations.md 431 / STATUS.md 117 / design 20 40 / design 25 38；位移后大面积错位、偏移不均（同一文件净增128行，偏移 +5…+128）。工具（2026-12）：`check-anchors.mjs`（`anchors-budget.json` 棘轮，基线743只降不升；两次整合实测main 788c6d55 +4 / ui-chat-render-fix +8；`--report`/`--fix`）+ `verify-registry.mjs` 已进 `check:static` 与CI。测试面45处注释 + 4处非注释（3处runtime-lockstep标题 + 1处真实断言：`WebPermissionPolicyTests.swift#testMediaCaptureIsDeniedLikeElectronsPermissionPolicy`（D13）；夹具另7处命中（5个示例字面量）不计入；`--report` 打印 注释45 / 字符串10 / 断言或其它1）；需同步的测试锚点只有这1处。退役动作 = 待合并分支（timeout-loading / ui-chat-not-render / windows-slide / swift-sidebar-update等）落地后按符号grep分批语义化重锚、逐批调低预算；登记见 [deviations.md](deviations.md) D15。
 
 - 设置面残余登记（design 05 §5，2026-12完整桥接修订后剩余项）：壳渲染选中来源自己boot ctx的 `settings.section`
   台账与绑定标准座（`settings-source-face.ts`）。剩余：①面板要求该来源壳挂载中（`setSettingsTarget` 保证后台挂载/不被回收；代价 = 一次该来源boot，失败只显示不可达/启动中，无独立降级面）；②

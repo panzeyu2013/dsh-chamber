@@ -49,10 +49,15 @@ public final class SidecarDirectoryLock {
         public var description: String {
             switch self {
             case .heldByAnotherProcess(let pid):
-                let who = pid.map { "pid=\($0)" } ?? "pid=未知"
-                return "目录锁被占用（\(who)）——另一 flavor/实例正在使用该 userData，拒绝启动"
+                // 本地化：lock.heldByAnotherProcess（%@ = who：pid=NNN 或
+                // pid=<lock.pidUnknown>）；pid 记录缺失时不猜进程，标未知。
+                let who = pid.map { "pid=\($0)" }
+                    ?? "pid=" + NativeText.string(.lockPidUnknown)
+                return NativeText.format(.lockHeldByAnotherProcess, who)
             case .ioFailure(let detail):
-                return "目录锁 I/O 失败：\(detail)"
+                // 本地化：lock.ioFailure 只包前缀；detail（errno/inode 等诊断
+                // 片段）原样透出——SidecarSupervisorTests 钉住其内容。
+                return NativeText.format(.lockIoFailure, detail)
             }
         }
     }
@@ -84,24 +89,25 @@ public final class SidecarDirectoryLock {
             try FileManager.default.createDirectory(
                 atPath: dir, withIntermediateDirectories: true)
         } catch {
-            throw LockError.ioFailure("mkdir \(dir) 失败：\(error.localizedDescription)")
+            throw LockError.ioFailure(NativeText.format(.lockMkdirFailed, dir, error.localizedDescription))
         }
 
         let opened = open(recordPath, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
         guard opened >= 0 else {
             // O_NOFOLLOW：路径被替换成符号链接 → ELOOP，fail-closed（design 25
             // §6.3 与秘密文件同纪律：0600、no-follow、原子创建）。
-            throw LockError.ioFailure("open \(recordPath) 失败（errno=\(errno)）")
+            throw LockError.ioFailure(NativeText.format(.lockOpenFailed, recordPath, errno))
         }
         // 规整文件 + 属主校验 + 收紧权限（既有文件可能带宽松 mode）。
         var info = stat()
         if fstat(opened, &info) != 0 || (info.st_mode & S_IFMT) != S_IFREG {
             close(opened)
-            throw LockError.ioFailure("锁文件非规整文件（fail-closed）：\(recordPath)")
+            throw LockError.ioFailure(NativeText.format(.lockNotRegularFile, recordPath))
         }
         if info.st_uid != getuid() {
             close(opened)
-            throw LockError.ioFailure("锁文件属主异常（uid=\(info.st_uid)）：\(recordPath)")
+            throw LockError.ioFailure(NativeText.format(.lockOwnerUnexpected,
+                                                         Int32(truncatingIfNeeded: info.st_uid), recordPath))
         }
         if (info.st_mode & 0o777) != 0o600 {
             _ = fchmod(opened, 0o600)
@@ -128,7 +134,8 @@ public final class SidecarDirectoryLock {
                 return write(opened, base, data.count)
             }
             guard written == data.count else {
-                throw LockError.ioFailure("写锁记录短写（\(written)/\(data.count)）")
+                throw LockError.ioFailure(NativeText.format(.lockShortWrite,
+                                                             Int32(written), Int32(data.count)))
             }
         } catch let error as LockError {
             flock(opened, LOCK_UN)
@@ -137,7 +144,7 @@ public final class SidecarDirectoryLock {
         } catch {
             flock(opened, LOCK_UN)
             close(opened)
-            throw LockError.ioFailure("锁记录序列化失败：\(error.localizedDescription)")
+            throw LockError.ioFailure(NativeText.format(.lockEncodeFailed, error.localizedDescription))
         }
 
         fd = opened
@@ -366,7 +373,9 @@ public final class SidecarSupervisor {
                 deps.log("[supervisor] sidecar 启动被生命周期过渡推迟：\(error.localizedDescription)")
                 throw error
             }
-            let message = "sidecar 启动失败：\(error.localizedDescription)"
+            // 本地化：supervisor.startFailure（%@ = 底层错误：spawn 等系统文案；
+            // BridgeClient 自身的状态错误已按 NativeText 本地化（bridge.*），原样嵌入）。
+            let message = NativeText.format(.supervisorStartFailure, error.localizedDescription)
             markFatal(message)
             throw error
         }
@@ -425,8 +434,10 @@ public final class SidecarSupervisor {
             // 绝不只给一句「启动失败」。
             let failure = SidecarStartupFailure.make(
                 exitCode: status, stderr: instance?.recentStderrSummary ?? "")
-            markFatal("sidecar 启动期退出（status=\(status)）——" + failure.message
-                + "；启动期退出不自动重启")
+            // 本地化：supervisor.startupExit（占位符契约：%d = 退出码、
+            // %@ = failure.message（含 stderr 摘要）；尾部「启动期退出不自动
+            // 重启」也在模板内，S2 的 .strings 必须保留两个占位符）。
+            markFatal(NativeText.format(.supervisorStartupExit, Int(status), failure.message))
             return
         }
 
@@ -434,7 +445,8 @@ public final class SidecarSupervisor {
         // （sidecar-entry 语义）→ fatal 不重启（重启必再撞同一锁，死循环）；
         // 0 = 非我方停止的自然退出 → 不重启（loud 记录）；其余非零 = 崩溃。
         if status == 3 {
-            markFatal("sidecar 检测到目录锁被另一实例占用（exit=3）——请关闭另一 flavor 后重试")
+            // 本地化：supervisor.lockBusy（整句；exit=3 语义固定）。
+            markFatal(NativeText.string(.supervisorLockBusy))
             return
         }
         // 70 = sidecar 启动失败（控制面启动 / 装配期，sidecar-entry
@@ -466,7 +478,9 @@ public final class SidecarSupervisor {
         stateLock.unlock()
         switch decision {
         case .giveUp(let count):
-            markFatal("sidecar 连续崩溃 \(count) 次（\(Int(policy.window))s 窗口），已停止自动恢复")
+            // 本地化：supervisor.crashLoop（占位符契约：%d = 连续崩溃次数、
+            // %ds = 滚动窗口秒数）。
+            markFatal(NativeText.format(.supervisorCrashLoop, count, Int(policy.window)))
         case .restart(let delay, let attempt):
             stateLock.lock()
             stateStorage = .restarting
@@ -505,7 +519,9 @@ public final class SidecarSupervisor {
                 // 重试耗尽：过渡态持续不消（>~6s）说明终局收尾卡死——升格 fatal，
                 // 绝不静默停在 .restarting（第三轮验证 RISK：此前既不 fatal 也不续排，
                 // 日志还假称 launch 已 markFatal）。
-                markFatal("sidecar 重启被生命周期过渡持续推迟（重试 \(busyRetries) 次后放弃）")
+                // 本地化：supervisor.lifecycleDeferred（占位符契约：%d =
+                // busyRetries 已消耗的重试次数）。
+                markFatal(NativeText.format(.supervisorLifecycleDeferred, busyRetries))
                 return
             }
             // 其余错误：launch 已 markFatal（spawn 失败 = fatal）。
