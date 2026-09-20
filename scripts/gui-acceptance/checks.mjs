@@ -748,3 +748,56 @@ export function applyRequireHover(verdict, requireHover) {
     evidence: `${verdict.evidence}（--require-hover：本次运行要求 hover 腿必须真实执行）`,
   }
 }
+
+/**
+ * 遮罩层叠判定（2026-12 P0–P3，design 05 §4）。
+ *
+ * 断言：`.instance-loading` 可见期间，租客壳（`.instance-shell` / `[data-instance]`
+ * 子树）的任何元素都不得画在它之上——这正是"白屏里出现输入栏"缺陷的核心不变量，
+ * 此前只有源码锁（`packages/renderer/test/wiring/veil-layering-invariants.test.ts`），
+ * 没有运行时命中判定。
+ *
+ * 采样由页面侧探针完成（`walkthrough.mjs` 的 `VEIL_LAYERING_PROBE_INSTALL` /
+ * `VEIL_LAYERING_PROBE_READ`）：遮罩可见的那些帧里，对 composer 座 / 输入区 /
+ * 会话流等已登记锚点各做一次 `elementFromPoint`，按命中面归属归并计数。本函数只做判定，
+ * 因此可在 CI 单测（`checks.test.mjs`）。
+ *
+ * @param facts.veilFrames - 探测窗内观察到遮罩的帧数（0 ⇒ 本次无从判定，INFO）。
+ * @param facts.samples - `[{ point, winner, count, hit? }]`，`winner ∈ 'veil' | 'tenant' | 'portal' | 'none'`；
+ *   `portal` = 文档级 body portal（已登记残余，只记不判）；`none` = 该点无命中，不判。
+ * @returns `{ ok, evidence }`；`ok === null` 是 INFO（本次未执行/无法判定），不是通过。
+ */
+export function veilLayeringVerdict({ veilFrames = 0, samples = [], error = null, heldFrames = 0, bootFrames = 0 } = {}) {
+  // 探针异常一律 fail-closed 成 INFO（2026-12 二轮 review）：否则前半窗采到的 veil 采样
+  // 会让一条已经坏掉的探针给出 PASS 标题，而"探针坏了"只躺在 evidence 里。
+  if (error !== null && error !== undefined && String(error) !== '') {
+    return { ok: null, evidence: `探针异常（${String(error)}）：本次层叠判定未执行——"探针坏了"不得读成通过` }
+  }
+  if (veilFrames === 0) {
+    return { ok: null, evidence: '本次运行未观察到遮罩（无冷 boot / 无持有期）：层叠判定不适用' }
+  }
+  const judged = samples.filter(sample => sample !== null && typeof sample === 'object' && sample.winner !== 'none')
+  if (judged.length === 0) {
+    return { ok: null, evidence: `遮罩可见 ${veilFrames} 帧，但没有任何可采样锚点（composer 座/输入区/会话流不在 DOM）` }
+  }
+  const tenants = judged.filter(sample => sample.winner === 'tenant')
+  const portals = judged.filter(sample => sample.winner === 'portal')
+  if (tenants.length > 0) {
+    const hits = tenants.reduce((sum, sample) => sum + (Number.isFinite(sample.count) ? sample.count : 1), 0)
+    const detail = tenants.map(sample => `${sample.point}(${sample.hit ?? '未知元素'})`).join('、')
+    return {
+      ok: false,
+      evidence: `遮罩可见时租客元素仍画在其上：${detail}；累计 ${hits} 次采样——检查 .instance-shell 的 isolation 与 'cut' 过渡作用域`,
+    }
+  }
+  const note = portals.length > 0
+    ? `；另有 ${portals.length} 个采样点命中文档级浮层（body portal，已登记残余，非本门判据）`
+    : ''
+  const split = heldFrames + bootFrames > 0
+    ? `；其中持有态 ${heldFrames} 帧 / boot 段 ${bootFrames} 帧（持有态里租客被隐藏、不参与命中测试 ⇒ 该段 PASS 只证明"遮罩盖住锚点"，boot 段的 PASS 才有完整判别力）`
+    : ''
+  return {
+    ok: true,
+    evidence: `遮罩 ${veilFrames} 帧内 ${judged.length} 个采样组（锚点×归属）均由遮罩获胜（命中 .instance-loading）${note}${split}`,
+  }
+}

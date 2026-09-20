@@ -47,6 +47,8 @@ export const GROUPS = {
     { file: 'test/lifecycle/session-open-poll.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-shell-register.mjs'] },
     'test/lifecycle/page-read-path-lockstep.test.ts',
     'test/lifecycle/source-readiness.test.ts',
+    // P3 会话面绘制信号（[data-phase] 揭示门）的纯决策契约。
+    'test/lifecycle/session-surface.test.ts',
     // 运行位活性守卫的决策纯模块契约（design 14 §D4）。
     'test/lifecycle/session-liveness.test.ts',
   ],
@@ -67,6 +69,8 @@ export const GROUPS = {
     // 运行位活性守卫的跨模块不变量（design 14 §D4：最坏回执 < 等回执期限、
     // verify 预算 ≥ 探针 30s 上限、生产装配不得 override）。
     'test/wiring/session-liveness-wiring.test.ts',
+    // 遮罩层叠不变量（P0 租客边界 / P1 遮罩期隐藏 / P2 过渡作用域 / P3 揭幕信号）。
+    'test/wiring/veil-layering-invariants.test.ts',
   ],
   // view-runtime: 视图运行时 —— 隐藏视图回收、视图过渡队列、侧栏滚动恢复
   'view-runtime': [

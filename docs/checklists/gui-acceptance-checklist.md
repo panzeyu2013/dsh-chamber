@@ -37,6 +37,7 @@
 |项|检查id|判据来源|
 |---|---|---|
 |壳启动并挂载实例视图（`[data-instance]`）|`W-1`|design 09 §3.2|
+|遮罩层叠：遮罩可见期内租客元素不得画在其上（作用域=活动视图；租客命中记FAIL，body portal 只记，无遮罩帧/无锚点记INFO）|`W-1b`|design 05 §4（租客层叠边界）、§2.2.1|
 |侧栏多来源结构（`[data-chamber-section]` / `[data-chamber-row]` / `[data-session-id]`）|`W-2`|design 05 §2、06|
 |首启模态可关闭/可走完（非首启记INFO）|`W-3`|design 05 §5（onboarding阶段）|
 |侧栏rail折叠/展开：控件结构定位（侧栏头部图标钮，按计算可见性只取可见视图；候选为空或并列即FAIL）+ 效果锚定（官方frame属性 `[data-sidebar-collapsed]` 出现/消失；复原用同一元素、按身份寻址）+ 写入边界（本次点击不得改动 `dsh-chamber.sidebar.v1`）；点错控件、未复原、定位不到、写了偏好都FAIL|`W-4`|design 06 §3.1（ui-layout fork的折叠与宽度共享）、05 §6|

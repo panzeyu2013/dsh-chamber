@@ -19,12 +19,14 @@ import {
   hoverDismissVerdict, hoverExclusiveVerdict, hoverRaceVerdict, isHonestError, isInstanceIndex, isShellIndex,
   isWriterQuiescent, leakedFileContent, normalizeCardText, parseInstanceAssets, parsePluginLoaderUrls,
   parseShellAssets, partitionFailures, pickRailToggle, raceBandForWindow, railToggleVerdict, renderMarkdown,
-  railFactsSnapshot, safeJson, sourceFoldVerdict, summarize, summarizeNetFailures, viewPrefsDelta,
-  viewPrefsFingerprint, viewPrefsUnreadable, writerEvidence,
+  railFactsSnapshot, safeJson, sourceFoldVerdict, summarize, summarizeNetFailures, veilLayeringVerdict,
+  viewPrefsDelta, viewPrefsFingerprint, viewPrefsUnreadable, writerEvidence,
 } from './checks.mjs'
 // The two page-level click expressions are imported so CI can run the REAL strings against a fake
 // DOM (identity addressing and the no-click-when-missing rule are behaviour, not source facts).
-import { CLICK_STASHED_BUTTON, clickButtonAt } from './walkthrough.mjs'
+import {
+  CLICK_STASHED_BUTTON, VEIL_LAYERING_PROBE_INSTALL, VEIL_LAYERING_PROBE_READ, clickButtonAt,
+} from './walkthrough.mjs'
 // Native flavor mode helpers (G20): the native walkthrough drives the sidecar assembly the packaged Swift shell spawns (WKWebView has no CDP).
 import {
   nativePreflight,
@@ -993,9 +995,159 @@ test('walkthrough source: the first-match aria-expanded picker is gone, restore 
   const source = readFileSync(new URL('./walkthrough.mjs', import.meta.url), 'utf8')
   assert.equal(source.includes('CLICK_SIDEBAR_TOGGLE'), false,
     'the old "first aria-expanded in the left half" picker must not come back')
-  for (const symbol of ['pickRailToggle(', 'railToggleVerdict(', 'sourceFoldVerdict(', 'clickButtonAt(', 'CLICK_STASHED_BUTTON', 'DOM_FACTS', 'SOURCE_FOLD_FACTS', 'VIEW_PREFS']) {
+  for (const symbol of ['pickRailToggle(', 'railToggleVerdict(', 'sourceFoldVerdict(', 'clickButtonAt(', 'CLICK_STASHED_BUTTON', 'DOM_FACTS', 'SOURCE_FOLD_FACTS', 'VIEW_PREFS', 'VEIL_LAYERING_PROBE_INSTALL', 'VEIL_LAYERING_PROBE_READ', 'veilLayeringVerdict(']) {
     assert.ok(source.includes(symbol), `walkthrough.mjs must use ${symbol}`)
   }
   assert.ok(source.includes('allowPersistentWrites'),
     'the state-writing source-fold leg must be gated to the throwaway instance')
+})
+
+test('veil layering: a broken probe is INFO, never a PASS', () => {
+  const broken = veilLayeringVerdict({
+    veilFrames: 9,
+    samples: [{ point: '[data-composer-seat]', winner: 'veil', count: 12 }],
+    error: 'TypeError: document.elementFromPoint is not a function',
+  })
+  assert.equal(broken.ok, null, '探针异常 ⇒ 未判定（fail-closed），不能因为前半窗采样过就报 PASS')
+  assert.match(broken.evidence, /探针异常/)
+})
+
+test('veil layering: PASS evidence states which segment was sampled', () => {
+  const held = veilLayeringVerdict({
+    veilFrames: 8,
+    samples: [{ point: '[data-composer-seat]', winner: 'veil', count: 8 }],
+    heldFrames: 8,
+    bootFrames: 0,
+  })
+  assert.equal(held.ok, true)
+  assert.match(held.evidence, /持有态 8 帧 \/ boot 段 0 帧/)
+  assert.match(held.evidence, /完整判别力/)
+})
+
+test('veil layering: a tenant above the veil fails, veil-only passes, portal is a note', () => {
+  assert.equal(veilLayeringVerdict({ veilFrames: 0, samples: [] }).ok, null,
+    'no veil frames observed = INFO: the layering question was not asked this run')
+  assert.equal(veilLayeringVerdict({ veilFrames: 3, samples: [] }).ok, null,
+    'veil seen but no anchor to sample = INFO, never a silent pass')
+  const pass = veilLayeringVerdict({
+    veilFrames: 12,
+    samples: [
+      { point: '[data-composer-seat]', winner: 'veil', count: 24, hit: 'div.instance-loading' },
+      { point: '[data-composer-input]', winner: 'none', count: 4 },
+    ],
+  })
+  assert.equal(pass.ok, true, 'every sampled point resolved to the veil = PASS')
+  assert.match(pass.evidence, /均由遮罩获胜/)
+  const portal = veilLayeringVerdict({
+    veilFrames: 6,
+    samples: [
+      { point: '[data-composer-seat]', winner: 'veil', count: 2 },
+      { point: '[data-conversation-scroll]', winner: 'portal', count: 3, hit: 'div.portal' },
+    ],
+  })
+  assert.equal(portal.ok, true, 'a document-level portal is the registered residual: recorded, not failed')
+  assert.match(portal.evidence, /body portal/)
+  const fail = veilLayeringVerdict({
+    veilFrames: 9,
+    samples: [
+      { point: '[data-composer-seat]', winner: 'veil', count: 12 },
+      { point: '[data-composer-seat]', winner: 'tenant', count: 5, hit: 'div.composerSeat' },
+    ],
+  })
+  assert.equal(fail.ok, false, 'a tenant element painting above the veil = FAIL (the P0 invariant)')
+  assert.match(fail.evidence, /composerSeat/)
+  assert.match(fail.evidence, /累计 5 次采样/)
+})
+
+/**
+ * The REAL probe expressions, against a fake DOM: their owner classification decides
+ * whether the acceptance leg judges the product (a tenant above the veil = FAIL) or
+ * itself. `elementFromPoint` is scripted per scenario; every node answers `closest`
+ * for exactly the selectors the probe asks about.
+ */
+function probeNodes({ hit, veilIn = 'active' }) {
+  const node = (tag, cls, rect, closest) => ({ tagName: tag, className: cls, getBoundingClientRect: () => rect, closest })
+  const rect = { left: 100, top: 100, width: 200, height: 100, bottom: 200 }
+  const veil = node('DIV', 'instance-loading', rect, selector => (selector === '.instance-loading' ? veil : null))
+  const composer = node('DIV', 'composerSeat', rect, selector => (selector === '.instance-shell' ? { shell: true } : null))
+  const portal = node('DIV', 'portal', rect, () => null)
+  const anchors = { '[data-composer-seat]': composer, '[data-composer-input]': composer, '[data-conversation-scroll]': composer }
+  // 活动视图作用域：探针只在这里查遮罩与锚点。SCOPE 字面量与 walkthrough.mjs 的表达式
+  // 一致——表达式漂移时这里返回 null，"veil 获胜"剧本会红。
+  const activeView = {
+    querySelector: selector => (selector === '.instance-loading' ? (veilIn === 'active' ? veil : null) : anchors[selector] ?? null),
+  }
+  return {
+    veil, composer, portal,
+    document: {
+      querySelector: selector => {
+        if (selector === '.instance-view:not(.instance-hidden):not(.instance-pending)') return activeView
+        // 旧的全文档口径（回归探测）：隐藏视图的遮罩照样命中。
+        if (selector === '.instance-loading') return veil
+        if (anchors[selector] !== undefined) return anchors[selector]
+        return null
+      },
+      elementFromPoint: () => hit(veil, composer, portal),
+    },
+  }
+}
+
+function runVeilProbe(hit, options = {}) {
+  const built = probeNodes({ hit, ...options })
+  const win = { innerWidth: 1000, innerHeight: 800 }
+  let queued = 0
+  const raf = callback => { if (queued >= 12) return 0; queued += 1; callback(); return queued }
+  // getComputedStyle 作为形参注入（2026-12 二轮 review）：Node 里它不存在，不注入的话
+  // 探针的"computed hidden 不算可见遮罩"分支永远零覆盖。
+  const install = new Function('window', 'document', 'requestAnimationFrame', 'Date', 'getComputedStyle', 'return (' + VEIL_LAYERING_PROBE_INSTALL + ')')
+  const read = new Function('window', 'document', 'return (' + VEIL_LAYERING_PROBE_READ + ')')
+  const installed = install(win, built.document, raf, Date, options.computedStyle)
+  return { installed, state: read(win, built.document) }
+}
+
+test('veil probe: real expressions classify veil / tenant / portal hits', () => {
+  const veilWins = runVeilProbe(veil => veil)
+  assert.equal(veilWins.installed.installed, true, 'the install expression must run against a plain DOM')
+  assert.ok(veilWins.state.veilFrames > 0, 'frames with a veil on screen must be counted')
+  assert.ok(veilWins.state.samples.every(sample => sample.winner === 'veil'), 'a veil hit wins')
+  assert.equal(veilLayeringVerdict(veilWins.state).ok, true, 'veil-only samples pass')
+
+  const tenantWins = runVeilProbe((_veil, composer) => composer)
+  assert.ok(tenantWins.state.samples.some(sample => sample.winner === 'tenant'), 'a shell hit is the tenant')
+  assert.equal(veilLayeringVerdict(tenantWins.state).ok, false, 'and that is the FAIL this leg exists for')
+
+  const portalWins = runVeilProbe((_veil, _composer, portal) => portal)
+  assert.ok(portalWins.state.samples.some(sample => sample.winner === 'portal'), 'anything else is a document-level portal')
+  assert.equal(veilLayeringVerdict(portalWins.state).ok, true, 'the registered residual must not turn the leg red')
+
+  const emptyWin = { innerWidth: 1000, innerHeight: 800 }
+  const readAgain = new Function('window', 'document', 'return (' + VEIL_LAYERING_PROBE_READ + ')')(emptyWin, { querySelector: () => null })
+  assert.equal(readAgain.veilFrames, 0, 'reading without an install is an honest empty result, not a throw')
+})
+
+/**
+ * 2026-12 review MAJOR 的回归锁：后台预热/收割视图（.instance-pending，只
+ * visibility:hidden）的遮罩仍在 DOM 里；若探针按全文档口径取遮罩、却把活动视图的
+ * 锚点配上去，健康构建会被判成"租客画在遮罩之上"的假 FAIL。修正后只认活动视图
+ * 作用域：隐藏视图的遮罩不构成"遮罩可见帧" ⇒ 本腿记 INFO 而不是红。
+ */
+test('veil probe: a background view\'s veil is not paired with the active view', () => {
+  const scene = runVeilProbe((_veil, composer) => composer, { veilIn: 'hidden' })
+  assert.equal(scene.state.veilFrames, 0, '隐藏视图的遮罩不算遮罩帧（作用域限定为活动视图）')
+  assert.equal(
+    veilLayeringVerdict(scene.state).ok,
+    null,
+    '没有遮罩帧 = INFO；旧的全文档口径在这种场景下会判出 tenant FAIL（假红）',
+  )
+  const active = runVeilProbe(veil => veil)
+  assert.ok(active.state.veilFrames > 0, '活动视图的遮罩仍必须被计入（修正不能把探针探空）')
+})
+
+test('veil probe: a computed-hidden veil is not a visible veil frame', () => {
+  const hidden = runVeilProbe(veil => veil, { computedStyle: () => ({ visibility: 'hidden', display: 'block' }) })
+  assert.ok(hidden.state.frames > 0, '探针必须真的跑了帧')
+  assert.equal(hidden.state.veilFrames, 0, 'computed visibility:hidden 的遮罩不算"遮罩可见帧"（双保险真实生效）')
+  assert.equal(veilLayeringVerdict(hidden.state).ok, null, '没有遮罩帧 ⇒ INFO')
+  const visible = runVeilProbe(veil => veil, { computedStyle: () => ({ visibility: 'visible', display: 'block' }) })
+  assert.ok(visible.state.veilFrames > 0, '同一剧本下可见遮罩必须被计入（证明上一句不是因为探针没跑）')
 })
