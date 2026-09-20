@@ -128,6 +128,45 @@ test('checkRegistrySymbols：临时目录上 ok / missing / 歧义不红', () =>
   }
 })
 
+test('collectDocAnchors：URL fragment 不算锚；点号符号整段采集且显式报不支持', () => {
+  const root = mkdtempSync(join(tmpdir(), 'anchors-url-'))
+  try {
+    mkdirSync(join(root, 'docs'), { recursive: true })
+    mkdirSync(join(root, 'src'), { recursive: true })
+    writeFileSync(join(root, 'src', 'a.ts'), 'export function apply() {}\nexport const Type = {}\n')
+    writeFileSync(join(root, 'docs', 'u.md'), [
+      '见 `src/a.ts#apply` 与 https://github.com/foo/bar/blob/main/src/a.ts#L42 的说明。',
+      '另见 `src/a.ts#Type.method`。',
+      '',
+    ].join('\n'))
+    const anchors = collectDocAnchors(root).map((entry) => entry.anchor)
+    assert.deepEqual(anchors, ['src/a.ts#apply', 'src/a.ts#Type.method'],
+      'URL fragment 不得被当成仓内锚（此前会采集成 //github.com/… 并报假红）')
+    const findings = checkDocAnchors(root)
+    assert.equal(findings.length, 1, findings.join(' | '))
+    assert.match(findings[0], /点号符号锚不受支持/, '点号符号必须显式报不支持，不得静默截断成 `Type`')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test('checkDocAnchors：裸文件名唯一命中采用、同名歧义报缺失', () => {
+  const root = mkdtempSync(join(tmpdir(), 'anchors-bare-'))
+  try {
+    mkdirSync(join(root, 'docs'), { recursive: true })
+    mkdirSync(join(root, 'packages'), { recursive: true })
+    writeFileSync(join(root, 'packages', 'WebPolicy.swift'), 'func testApply() {}\n')
+    writeFileSync(join(root, 'docs', 'ok.md'), '见 `WebPolicy.swift#testApply`。\n')
+    assert.deepEqual(checkDocAnchors(root), [], '唯一 basename 必须被解析到并校验通过')
+    mkdirSync(join(root, 'macos'), { recursive: true })
+    writeFileSync(join(root, 'macos', 'WebPolicy.swift'), 'func testApply() {}\n')
+    const findings = checkDocAnchors(root)
+    assert.equal(findings.length, 1, findings.join(' | '))
+    assert.match(findings[0], /锚点文件不存在/, '同名两份 basename 属歧义，必须报缺失而不是猜一个')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
 test('--fix 拒绝越出 root 的 --file，且 root 外文件保持字节不变', () => {
   const outer = mkdtempSync(join(tmpdir(), 'dsh-fix-escape-'))
   try {

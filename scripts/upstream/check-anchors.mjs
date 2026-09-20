@@ -335,7 +335,10 @@ export function checkRegistrySymbols(registry, root = ROOT) {
  * registry 校验覆盖（坐标系不同），此处跳过。
  */
 export function collectDocAnchors(root = ROOT) {
-  const pattern = /[A-Za-z0-9_/.@-]+\.(?:ts|tsx|mts|cts|mjs|js|swift|css|json|ya?ml)(?:#=literal:[^`\n]+|#[A-Za-z_$][A-Za-z0-9_$]*)/gu
+  // 符号段允许 `.`：`src/a.ts#Type.method` 必须整段采集——此前只吃到 `#Type`，
+  // 恰好存在导出 `Type` 时 `method` 零校验（2026-09 复核漏报）。点号形态的处置见
+  // checkDocAnchors（显式报不支持，不做静默截断）。
+  const pattern = /[A-Za-z0-9_/.@-]+\.(?:ts|tsx|mts|cts|mjs|js|swift|css|json|ya?ml)(?:#=literal:[^`\n]+|#[A-Za-z_$][A-Za-z0-9_$.]*)/gu
   const found = []
   for (const file of collectFiles(join(root, 'docs'), '.md')) {
     const text = readFileSync(file, 'utf8')
@@ -343,6 +346,10 @@ export function collectDocAnchors(root = ROOT) {
     for (const match of text.matchAll(pattern)) {
       const index = match.index ?? 0
       if (ranges.some(([start, stop]) => index >= start && index < stop)) continue
+      // 只接受行内「分隔符之后」的锚：URL（`https://…/src/a.ts#L42`）里每个可能的起始
+      // 位置都被 `:`/`/`/`.` 之类字符顶着，字符类会把 scheme 剥掉后采集成
+      // `//github.com/…` 并报「锚点文件不存在」的假红（2026-09 复核实测）。
+      if (index > 0 && /[\w/:.@-]/.test(text[index - 1])) continue
       const anchor = match[0].trim()
       found.push({ file, anchor, parsed: parseAnchor(anchor) })
     }
@@ -376,6 +383,10 @@ export function checkDocAnchors(root = ROOT) {
   for (const { file, anchor, parsed } of collectDocAnchors(root)) {
     const where = '[' + relative(root, file) + ']'
     if (parsed === null) { findings.push(where + ' 锚点格式非法: ' + anchor); continue }
+    if (parsed.symbol !== undefined && parsed.symbol.includes('.')) {
+      findings.push(where + ' ' + anchor + ': 点号符号锚不受支持（声明抽取只认具名顶层声明，改用 `#=literal:<唯一子串>`）')
+      continue
+    }
     const full = resolveDocAnchorFile(root, parsed.file)
     if (full === null) {
       findings.push(where + ' ' + anchor + ': 锚点文件不存在（含裸文件名的唯一 basename 解析）')
