@@ -250,8 +250,48 @@ public enum NativeText {
                let bundle = Bundle(path: path) {
                 return bundle
             }
+            // `path(forResource:)` 大小写敏感，而 native 后端的 SwiftPM 会把目录名
+            // 整段小写（实测 `zh-hans.lproj`；swiftbuild 后端是 `zh-Hans.lproj`）
+            // ⇒ 再按文件系统枚举做大小写不敏感匹配，并按主语言子标签族内回退。
+            if let bundle = localizedDirectoryBundle(in: root, matching: identifier) {
+                return bundle
+            }
         }
         return nil
+    }
+
+    /// 在一个 bundle 的资源根目录里按 identifier 找目标语言 `.lproj`。
+    /// 根覆盖两种后端形态（扁平包自身 / `Contents/Resources`），先做大小写不敏感
+    /// 的全名匹配，再按主语言子标签回退（`zh-Hans` 命中 `zh` / `zh-CN` 等命名）。
+    private static func localizedDirectoryBundle(in bundle: Bundle, matching identifier: String) -> Bundle? {
+        var roots: [String] = []
+        func addRoot(_ path: String?) {
+            guard let path, !roots.contains(path) else { return }
+            roots.append(path)
+        }
+        addRoot(bundle.bundlePath)
+        addRoot(bundle.resourceURL?.path)
+        addRoot(bundle.bundlePath + "/Contents/Resources")
+
+        let wanted = normalizedLocalizationName(identifier)
+        let primary = wanted.split(separator: "-").first.map(String.init) ?? wanted
+        for root in roots {
+            guard let entries = try? FileManager.default.contentsOfDirectory(atPath: root) else { continue }
+            let candidates = entries
+                .filter { $0.lowercased().hasSuffix(".lproj") }
+                .map { (entry: $0, name: normalizedLocalizationName(String($0.dropLast(6)))) }
+            let match = candidates.first { $0.name == wanted }
+                ?? candidates.first { $0.name.split(separator: "-").first.map(String.init) == primary }
+            if let match, let bundle = Bundle(path: root + "/" + match.entry) {
+                return bundle
+            }
+        }
+        return nil
+    }
+
+    /// `.lproj` 目录名归一：小写、`_` → `-`（CFBundle 对 `zh_CN` 的兼容拼写）。
+    private static func normalizedLocalizationName(_ name: String) -> String {
+        name.lowercased().replacingOccurrences(of: "_", with: "-")
     }
 
     /// 取一条本地化文案并按 printf 规则填参（占位符契约写在各调用点注释里）。
@@ -299,6 +339,12 @@ public enum NativeText {
         for bundle in bundles {
             addBase(bundle.resourceURL)
             addBase(bundle.bundleURL)
+            // 构建产物目录：native 后端（旧工具链的默认，CI runner 走这条）把资源包
+            // 放在 `*.xctest` 的**同级**目录（`.build/<triple>/release/DSHChamber_DSHChamber.bundle`），
+            // 而 swiftbuild 后端（Swift 6.4+）把它嵌进 `*.xctest/Contents/Resources`。
+            // 只加 bundleURL 自身会让 native 形态在 `swift test` 下整个解析不到资源
+            // （2026-09-21 CI 实测：37 个断言真实文案的用例回落键名）。
+            addBase(bundle.bundleURL.deletingLastPathComponent())
         }
         for base in ChamberResources.searchBases() { addBase(base) }
         if let executable = Bundle.main.executableURL {
