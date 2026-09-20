@@ -11,6 +11,9 @@
  *                                       closed——G38：electron-builder 同样 fatal）
  *       DSHChamber_DSHChamber.bundle   ← SwiftPM 资源包（bridge-shim 等）；
  *         **必须放 Contents/Resources**（放 .app 根会被 codesign 判为未密封内容）
+ *       en.lproj/zh-Hans.lproj         ← S2 本地化：从资源包平移出来的
+ *         Localizable.strings，**必须落在 Contents/Resources 根**（Bundle.main 与
+ *         系统框架的本地化解析层）；缺席即装配期 fail（assertLocalizationsPresent）
  *       sidecar/{node,sidecar.js,package.json,dist/…}   ← W-23 build-sidecar 产物
  *       dist/web/                     ← renderer 产物（可选；sidecar 静态伺服；
  *                                       过滤 *.map 与 .vite/，与 Electron build.files
@@ -89,6 +92,81 @@ export const EXECUTABLE_NAME = APP_NAME
 /** SwiftPM 资源包名（target 名重复一次，见 Package.swift target DSHChamber）。 */
 export const RESOURCE_BUNDLE_NAME = `${MODULE_NAME}_${MODULE_NAME}.bundle`
 
+/**
+ * 本地化集合（S2）：三处必须逐字同源——这里、Package.swift 的两个
+ * .process("Resources/<locale>.lproj")、Info.plist.template 的
+ * CFBundleLocalizations。目录名用 Apple 的脚本拼写（zh-Hans，不是 zh_CN/zh-CN），
+ * 因为壳内 ShellLanguagePolicy.appleLanguagesOverride 覆盖的就是这两个值。
+ */
+export const LOCALIZATIONS = ['en', 'zh-Hans']
+
+/** <Resources>/<locale>.lproj 的精确路径（装配拷贝 / dry-run 打印 / 断言共用）。 */
+export function localizationDir(resourcesDir, locale) {
+  return path.join(resourcesDir, `${locale}.lproj`)
+}
+
+/** <Resources>/<locale>.lproj/Localizable.strings 的精确路径。 */
+export function localizationFile(resourcesDir, locale) {
+  return path.join(localizationDir(resourcesDir, locale), 'Localizable.strings')
+}
+
+/**
+ * 装配断言（S2）：本地化资源缺席即 fail（响亮、带每个缺失文件的精确路径）。
+ * 缺口的后果是「zh 系统上原生面回退英文/键名」，绝不能静默通过——与 bridge-shim
+ * 的 fail-closed 同纪律。origin 用于把来源（SwiftPM 资源包）写进报错。
+ */
+export function assertLocalizationsPresent(resourcesDir, origin = '', exists = existsSync) {
+  const missing = LOCALIZATIONS
+    .map((locale) => localizationFile(resourcesDir, locale))
+    .filter((file) => !exists(file))
+  if (missing.length > 0) {
+    throw new Error('缺本地化资源（.lproj/Localizable.strings）：' + missing.join('、')
+      + (origin
+        ? `（来源 ${origin}——SwiftPM 资源形态变了，或 Package.swift 缺 defaultLocalization / .process("…lproj")？）`
+        : ''))
+  }
+}
+
+/**
+ * 装配断言（S2 内容级，fail-closed）：本地化文件复制到落点后，落点必须与源
+ * **逐字节相等**，且能被系统自带 plutil 解析（`plutil -lint` 非 0 = 坏文件）。
+ * 只做存在性断言不够——2026-12 独立审查实测：把源里的 Localizable.strings 清成
+ * 0 字节，旧装配照样 EXIT=0 报「完成」，事后 plutil 才报 Cannot parse a NULL or
+ * zero-length data。报错与 assertLocalizationsPresent 同风格：中文、带每个落点的
+ * 精确路径与 fail-closed 字样。runner 可注入仅为单测；缺省系统 plutil 是 macOS
+ * 自带（本脚本本就只在 macOS 跑，已用 codesign/hdiutil），不引入任何 npm 依赖。
+ * --dry-run 在调用点之前就返回，不写盘也不跑 plutil。
+ */
+export function assertLocalizationsContent(sourceResourcesDir, resourcesDir, runner = quiet) {
+  for (const locale of LOCALIZATIONS) {
+    const source = localizationFile(sourceResourcesDir, locale)
+    const destination = localizationFile(resourcesDir, locale)
+    if (!existsSync(destination)) {
+      throw new Error('本地化内容断言（fail-closed）：装配落点缺文件 ' + destination
+        + '（源 ' + source + '）')
+    }
+    const sourceBytes = readFileSync(source)
+    const destinationBytes = readFileSync(destination)
+    if (!sourceBytes.equals(destinationBytes)) {
+      throw new Error('本地化内容断言（fail-closed）：落点与源不逐字节相等 ' + destination
+        + `（源 ${source}：${sourceBytes.length} 字节 / 落点：${destinationBytes.length} 字节）`)
+    }
+    const lint = runner('plutil', ['-lint', destination])
+    if (lint.status !== 0) {
+      throw new Error('本地化内容断言（fail-closed）：plutil 拒绝解析 ' + destination
+        + `（exit ${lint.status}）——${(lint.stderr || lint.stdout).trim()}`)
+    }
+  }
+}
+
+/** Info.plist.template 的 CFBundleLocalizations 解析（纯函数，单测直测）。
+ *  返回声明的 locale 数组；键/数组缺席 → null（调用方 loud）。 */
+export function plistLocalizations(template) {
+  const block = /<key>CFBundleLocalizations<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(template)
+  if (block === null) return null
+  return [...block[1].matchAll(/<string>([^<]+)<\/string>/g)].map((match) => match[1])
+}
+
 export function appLayout(outDir, appName = APP_NAME, artifactBasename = APP_NAME) {
   const appDir = path.join(outDir, `${appName}.app`)
   const contentsDir = path.join(appDir, 'Contents')
@@ -105,6 +183,9 @@ export function appLayout(outDir, appName = APP_NAME, artifactBasename = APP_NAM
     // "unsealed contents present in the bundle root"；运行时由
     // ChamberResources 按 Bundle.main.resourceURL 定位——见该文件头注释）。
     resourceBundle: path.join(resourcesDir, RESOURCE_BUNDLE_NAME),
+    // S2：本地化必须平移到 Contents/Resources 这一层（Bundle.main 与系统框架
+    // 的 preferredLocalizations 解析都看它；资源包内的 .lproj 只服务 Bundle.module）。
+    localizationsDir: resourcesDir,
     icon: path.join(resourcesDir, 'icon.icns'),
     sidecarDir: path.join(resourcesDir, 'sidecar'),
     // Sparkle 等内嵌框架放 Contents/Frameworks（S-01 / 裁决 D-1 选 B）；可执行靠
@@ -321,7 +402,7 @@ export function assemblePlan(options) {
   steps.push(options.skipBuild
     ? `[1] 复用已有 swift build -c ${options.config} 产物`
     : `[1] swift build -c ${options.config}${options.swiftArgs.length > 0 ? ` ${options.swiftArgs.join(' ')}` : ''}`)
-  steps.push(`[2] 组装 ${layout.appDir}（MacOS/ + Resources/ + Info.plist）`)
+  steps.push(`[2] 组装 ${layout.appDir}（MacOS/ + Resources/ + 本地化 ${LOCALIZATIONS.join('/')}.lproj + Info.plist）`)
   if (options.sparkleFeed !== '' && options.sparklePublicKey !== '') {
     steps.push(`[2b] 嵌入 Sparkle.framework → ${path.join(layout.frameworksDir, 'Sparkle.framework')}`)
   }
@@ -416,6 +497,18 @@ export function dryRunPlanReport(options) {
   if (!existsSync(options.iconPath)) {
     throw new Error(`dry-run：缺少图标（${options.iconPath}）——electron-builder 在缺 mac.icon 时同样致命（G38）`)
   }
+  // S2：声明面与资源面同源。CFBundleLocalizations 声明了却缺 .lproj（或反之）
+  // 会让 Bundle 的本地化解析静默回退 DevelopmentRegion；dry-run 是计划校验面，
+  // 这里就把 Info.plist.template 的声明与 LOCALIZATIONS 钉在一起（资源断言在装配腿）。
+  const declaredLocalizations = plistLocalizations(
+    readFileSync(path.join(macosDir, 'Info.plist.template'), 'utf8'))
+  if (declaredLocalizations === null) {
+    throw new Error('dry-run：Info.plist.template 缺 CFBundleLocalizations（声明面必须与本地化资源集同源）')
+  }
+  if (declaredLocalizations.join(',') !== LOCALIZATIONS.join(',')) {
+    throw new Error('dry-run：CFBundleLocalizations=' + declaredLocalizations.join('/')
+      + ' 与本地化资源集 ' + LOCALIZATIONS.join('/') + ' 不一致')
+  }
   const lines = [
     `app=${layout.appDir}`,
     `可执行=${layout.executable}`,
@@ -424,6 +517,15 @@ export function dryRunPlanReport(options) {
       ? 'web-dist=（--skip-web-dist 跳过）'
       : `web-dist=${options.webDistDir}（${existsSync(path.join(options.webDistDir, 'index.html')) ? '就绪' : '缺失'}）`,
     `icon=${options.iconPath}（就绪）`,
+    // S2：--dry-run 也打印将写入的本地化路径（含 SwiftPM 源是否已构建），
+    // 让 CI 的 packaging dry run 能直接核对 Bundle.main 解析层的确切落点。
+    ...LOCALIZATIONS.map((locale) => {
+      // 源 = SwiftPM 资源包（含两种后端形态），经 resourceBundleResourcesDir 归一。
+      const source = localizationFile(resourceBundleResourcesDir(
+        path.join(buildOutputDir(options.config), RESOURCE_BUNDLE_NAME)), locale)
+      return `i18n=${locale}.lproj → ${localizationFile(layout.localizationsDir, locale)}`
+        + `（源 ${existsSync(source) ? '就绪' : '待构建'}）`
+    }),
     options.noZip ? 'zip=（--no-zip 跳过）' : `zip=${layout.zipPath}`,
     options.noDmg ? 'dmg=（--no-dmg 跳过）' : `dmg=${layout.dmgPath}`,
     feed === ''
@@ -692,6 +794,23 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
   cpSync(bundleResources, layout.resourceBundle, { recursive: true })
   // fail-closed：形态再变（第三个目录层级）时当场红，绝不产出没有桥 shim 的 .app。
   assertBridgeShimPresent(layout.resourceBundle, bundleResources)
+
+  // S2：本地化资源平移。SwiftPM 资源包里的 .lproj 只服务 Bundle.module；原生面
+  // 的 Bundle.main 与系统框架都按 **Contents/Resources/<lang>.lproj** 解析，故
+  // 必须在这个解析层各留一份。顺序 = 断言源 → 拷贝 → 断言目标：两处都带每个缺失
+  // 文件的精确路径 loud，绝不产出「zh 系统静默回退英文」的次品。
+  assertLocalizationsPresent(bundleResources, bundleResources)
+  for (const locale of LOCALIZATIONS) {
+    const destination = localizationDir(layout.resourcesDir, locale)
+    rmSync(destination, { recursive: true, force: true })
+    cpSync(localizationDir(bundleResources, locale), destination, { recursive: true })
+  }
+  assertLocalizationsPresent(layout.resourcesDir, bundleResources)
+  // S2 内容级 fail-closed（2026-12 审查）：存在性断言挡不住 0 字节/截断/复制损坏
+  // 的 Localizable.strings——落点必须与源逐字节相等且 plutil 可解析。
+  assertLocalizationsContent(bundleResources, layout.resourcesDir)
+  io.log('[build-swift-app] 本地化 → ' + LOCALIZATIONS
+    .map((locale) => localizationFile(layout.resourcesDir, locale)).join('、'))
 
   const desktopPkg = JSON.parse(readFileSync(path.join(desktopDir, 'package.json'), 'utf8'))
   const version = typeof desktopPkg.version === 'string' ? desktopPkg.version : '0.0.0'
