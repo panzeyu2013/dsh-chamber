@@ -879,6 +879,7 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
   必要内容不再参与入场动画；折叠的位移/裁剪仍由 AppFrame 轨道过渡承担，`.fading` 保留
   （类驱动 + settle 定时器界定）。回归锁：`test/visual-lock/`（该包）+ 渲染器隐藏壳门
   （design 05 §4）。设置壳按来源重放的 `contentFadeIn` 同批退役。
+   2026-09-20 更正：退役后同一「切源后座席/字标空白」症状仍复现，本段只覆盖**入场动画特有**的失绘风险；当前根因（文档级重复 SVG 资源 id × 隐藏壳的 WebKit 丢绘）与修复契约见 design 05 §4.2。
 
 ## 8. 会话待办区（sidebar todo area）
 

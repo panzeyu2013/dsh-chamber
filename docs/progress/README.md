@@ -32,7 +32,7 @@ docs/progress/
 
 |文件|主题|状态|
 |---|---|---|
-|[upstream-proposals.md](todo/upstream-proposals.md)|四条上游提案：N-壳宿主selection scope、设置面声明式贡献通道（T3）、归档会话wire草案（design 24根域）、静默丢帧自愈（design 14 §D4根治面）|上游提案，未排期；chamber侧不等待|
+|[upstream-proposals.md](todo/upstream-proposals.md)|五条上游提案：N-壳宿主selection scope、设置面声明式贡献通道（T3）、归档会话wire草案（design 24根域）、静默丢帧自愈（design 14 §D4根治面）、图标资源 id 实例私有化（design 05 §4.2）|上游提案，未排期；chamber侧不等待|
 |[windows-v1.md](todo/windows-v1.md)|Windows v1剩余外部门禁（M0–M6）+ 基线登记口径（原windows-baseline.md）+ 取舍指针（权威在design 23 §5/STATUS）|待真实Windows runner/实机/产物|
 |[open-in-superset-batches.md](todo/open-in-superset-batches.md)|open-in超集分批S1/S2/S3（S4不做）+ S3/S4降级留档形态|未排期（实机验收清单在STATUS）|
 |[product-freshness-guards.md](todo/product-freshness-guards.md)|产物新鲜度守卫：2026-12产物普查 + G2–G8最小守卫建议（P0/P1/P2；G1已落地 `verify:test-wiring`）|想法，未排期；缺口现状登记在STATUS|

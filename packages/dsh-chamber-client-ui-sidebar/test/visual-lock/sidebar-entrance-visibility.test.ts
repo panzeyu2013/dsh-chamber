@@ -4,6 +4,10 @@
  * or occluded shell (no self-heal until remount; WKWebView measurement recorded in
  * STATUS/design 06/14), so content-bearing UI carries no entrance animation at all and
  * the renderer refuses to create one inside a shell nobody renders.
+ *
+ * 2026-09-20 correction: the same symptom still reproduces after the animation retirement.
+ * This lock covers the ANIMATION face only; the current root cause (document-level duplicate
+ * SVG resource ids x hidden shells) and its fix live in design 05 §4.2.
  */
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
@@ -36,7 +40,10 @@ test('the state-driven collapse fade is the only opacity transition left', () =>
 })
 
 test('the removed animations are documented and their class hooks stay mounted', () => {
-  assert.match(sidebarCss, /2026-12「看不到但能点」的空白图标修复/u)
+  // Lock the 2026-09-20 correction, not the (superseded) animation-only attribution:
+  // the retirement removed an animation-face risk, the blank-icon root cause is design 05 §4.2.
+  assert.match(sidebarCss, /2026-09-20 更正/u)
+  assert.match(sidebarCss, /design 05 §4\.2/u)
   assert.match(sidebarTsx, /clsx\(css\.brand, css\.wide\)/u, 'the wide hook still marks the brand row')
   assert.match(sidebarTsx, /css\.railIn/u, 'the railIn hook still marks a live collapse')
 })

@@ -120,3 +120,25 @@ chamber已落地缓解（不动上游事实面）：design 05 §2.2.1的open意�
 **开放问题**：应用级 keepalive 的版本兼容（未知 item 必须被旧客户端忽略，而现客户端
 对未知帧会 `failAll` 并关 socket）；心跳的隐私/体积边界；`session.list` 对账在大会话
 语料上的宿主成本（chamber 一次 refresh = per-call disk walk）。
+
+## 5. 图标资源 id 应作为组件实例私有（useId）而不是写死的 Figma id
+
+上游图标组件把 Figma 导出 id 写死在 JSX 里（`IconSettingsOutline16`/`-14`=`clip0_1450_63327`/
+`clip0_2580_121189`、`IconCordisPluginOutline14`=`clip0_1840_45990`、`IconAgentPresetOutline16`=
+`mask0_agent_preset_16`、`BrandWordmark`=`dsh-wordmark-whale-clip`/`-badge-clip`、
+`dshDropOverlayClip`），而 `url(#id)`/`mask` 的解析是**文档级**的。
+
+宿主把同一个文档用于多个实例壳（chamber 的 N-ctx）时，同一 id 被逐壳重复定义；macOS WKWebView
+在「新建形状首次绘制解析到未布局子树里的 clipper/mask」时整块失绘并把结果缓存住（重建元素才自愈，
+属性回写/揭示都不行）。真机对照与判据见 `docs/design/05-connection-manager.md` §4.2。
+
+上游最小改法（任一）：
+1. 每个图标实例用 `useId()` 前缀/后缀化它定义的资源 id（`icons/index.tsx` 的 `clipPath:"url(#clip0_…)"`
+   与同文件里的 `defs` 成对生成）；`BrandWordmark` 的 whale/badge clip 与附件拖拽浮层的
+   `dshDropOverlayClip` 同理；
+2. 或让这些 clip/mask 只依赖 `viewBox` 与路径本身（该文件里三处 `clip0_*` 矩形与 viewBox 等值，
+   删掉后无视觉差），保留真实裁剪的那几处改用实例私有 id。
+
+chamber 侧已落地缓解（`packages/renderer/src/svg-resource-scope.ts`，design 05 §4.2）：不改上游、
+在每个 `<svg>` 内把「自定 ∩ 自用」的资源 id 改名到文档唯一 token，外部引用复制进消费方。
+未覆盖的是 gateway/mobile 独立部署的官方壳（由实例自带 bundle 渲染，见 STATUS）。
