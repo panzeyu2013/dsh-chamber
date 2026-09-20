@@ -6,6 +6,9 @@
  * （deviations.md D15：不批量按偏移刷）。本工具把退役动作拆成可增量执行的三件事：
  *   ① registry 里的符号锚（`path#symbol` / `path#=literal:<唯一子串>`）默认必须可解析；
  *      锚点 path 先按 entry.ours 解析（与 classify 的键同一坐标系），再退回仓库根；
+ *   ①′ docs 正文里手写的稳定锚（`path#symbol` / `path#=literal:<唯一子串>`）同样必须可
+ *      解析——此前只有 registry 条目的锚被校验，docs 里拼错的锚零校验（2026-09 复核发现）；
+ *      生成块内的锚由 registry 侧覆盖，跳过不重复判定（见 collectDocAnchors）；
  *   ② 遗留 `文件:行` 锚点总数只许降不许升（`anchors-budget.json` 棘轮）——
  *      新锚点必须写符号锚，旧锚点按批次迁移后调低预算；
  *   ③ `--report` 给出符号锚漂移与遗留锚分布（含测试面三分类），供人工判读。
@@ -21,7 +24,7 @@
  * 写完必须重跑受影响的测试（部分 Swift/TS 测试注释引用这些行号）。
  */
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs'
-import { dirname, join, relative, resolve, sep } from 'node:path'
+import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadRegistry, validateRegistry } from './registry.mjs'
 
@@ -259,7 +262,7 @@ function main(argv) {
     return
   }
 
-  const anchorFindings = checkRegistrySymbols(registry)
+  const anchorFindings = [...checkRegistrySymbols(registry), ...checkDocAnchors()]
   const total = countLegacyAnchorsTotal()
   const budgetFinding = total > budget.legacyAnchors
 
@@ -284,7 +287,7 @@ function main(argv) {
     process.exitCode = 1
     return
   }
-  console.log('✓ check-anchors: 符号锚全部可解析（' + registrySymbolCount(registry) + ' 个）；遗留行号锚 ' + total + ' / 预算 ' + budget.legacyAnchors + '（棘轮只降不升）')
+  console.log('✓ check-anchors: 符号锚全部可解析（registry ' + registrySymbolCount(registry) + ' + docs ' + collectDocAnchors().length + ' 个）；遗留行号锚 ' + total + ' / 预算 ' + budget.legacyAnchors + '（棘轮只降不升）')
 }
 
 function registrySymbolCount(registry) {
@@ -315,6 +318,65 @@ export function checkRegistrySymbols(registry, root = ROOT) {
   return findings
 }
 
+/**
+ * docs 正文里的稳定锚（D15 要求的新锚点形态）：`path#symbol` / `path#=literal:<唯一子串>`。
+ * 仓内惯例是把锚点包在反引号里，故 literal 允许含空格（匹配到反引号或行尾为止）；`.md`
+ * 路径不参与符号锚匹配——`docs/x.md#heading` 是链接而不是代码符号锚。生成块区间内的锚由
+ * registry 校验覆盖（坐标系不同），此处跳过。
+ */
+export function collectDocAnchors(root = ROOT) {
+  const pattern = /[A-Za-z0-9_/.@-]+\.(?:ts|tsx|mts|cts|mjs|js|swift|css|json|ya?ml)(?:#=literal:[^`\n]+|#[A-Za-z_$][A-Za-z0-9_$]*)/gu
+  const found = []
+  for (const file of collectFiles(join(root, 'docs'), '.md')) {
+    const text = readFileSync(file, 'utf8')
+    const ranges = generatedRanges(text)
+    for (const match of text.matchAll(pattern)) {
+      const index = match.index ?? 0
+      if (ranges.some(([start, stop]) => index >= start && index < stop)) continue
+      const anchor = match[0].trim()
+      found.push({ file, anchor, parsed: parseAnchor(anchor) })
+    }
+  }
+  return found
+}
+
+/**
+ * 解析 docs 锚点路径：先按仓库根相对；**裸文件名**（既有登记形态，如
+ * `WebPermissionPolicyTests.swift#…`）按全仓唯一 basename 解析。越出仓库根返回 null。
+ */
+function resolveDocAnchorFile(root, file) {
+  const rootResolved = resolve(root)
+  const direct = resolve(join(root, file))
+  if (direct !== rootResolved && !direct.startsWith(rootResolved + sep)) return null
+  if (existsSync(direct) && statSync(direct).isFile()) return direct
+  if (file.includes('/')) return null
+  const suffix = file.slice(file.lastIndexOf('.'))
+  const hits = []
+  for (const base of ['macos', 'packages', 'scripts', 'docs']) {
+    const dir = join(root, base)
+    if (!existsSync(dir)) continue
+    for (const candidate of collectFiles(dir, suffix)) if (basename(candidate) === file) hits.push(candidate)
+  }
+  return hits.length === 1 ? hits[0] : null
+}
+
+/** docs 手写锚校验（生成块之外）：文件存在且 literal 恰好一次 / 符号声明存在。 */
+export function checkDocAnchors(root = ROOT) {
+  const findings = []
+  for (const { file, anchor, parsed } of collectDocAnchors(root)) {
+    const where = '[' + relative(root, file) + ']'
+    if (parsed === null) { findings.push(where + ' 锚点格式非法: ' + anchor); continue }
+    const full = resolveDocAnchorFile(root, parsed.file)
+    if (full === null) {
+      findings.push(where + ' ' + anchor + ': 锚点文件不存在（含裸文件名的唯一 basename 解析）')
+      continue
+    }
+    const result = resolveAnchorInText(readFileSync(full, 'utf8'), full.slice(full.lastIndexOf('.')), parsed)
+    if (result.status !== 'ok') findings.push(where + ' ' + anchor + ': ' + result.detail)
+  }
+  return findings
+}
+
 function countLegacyAnchorsTotal() {
   let total = 0
   for (const file of collectFiles(LEGACY_SCAN_ROOT, '.md')) total += countLegacyAnchors(readFileSync(file, 'utf8'))
@@ -322,7 +384,7 @@ function countLegacyAnchorsTotal() {
 }
 
 function report(registry, anchorFindings, total, budget) {
-  console.log('== registry 符号锚（' + registrySymbolCount(registry) + ' 个）==')
+  console.log('== 符号锚（registry ' + registrySymbolCount(registry) + ' 个 + docs 手写 ' + collectDocAnchors().length + ' 个）==')
   console.log(anchorFindings.length === 0 ? '  ✓ 全部可解析' : anchorFindings.map((finding) => '  ✗ ' + finding).join('\n'))
   console.log('\n== 遗留行号锚（docs/**/*.md）==')
   const perFile = collectFiles(LEGACY_SCAN_ROOT, '.md')

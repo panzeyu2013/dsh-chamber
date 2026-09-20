@@ -196,4 +196,107 @@ final class QuitCoordinatorTests: XCTestCase {
         XCTAssertEqual(response, .alertSecondButtonReturn,
                        "Enter 必须命中「取消」（Electron defaultId=1）")
     }
+
+    // MARK: - D1：关窗决策缓存（2026-09 评审）
+
+    /// close 语境的投影：关窗该隐藏。
+    private static func closeDecision() -> QuitFacts {
+        QuitFacts(hideOnClose: true, quitNeedsConfirm: false, quitReasons: [])
+    }
+
+    /// 退出语境（quitRequested=true）的投影：hideOnClose 恒 false。
+    private static func quitContextDecision() -> QuitFacts {
+        QuitFacts(hideOnClose: false, quitNeedsConfirm: true,
+                  quitReasons: ["正在运行的本地 dsh 实例"])
+    }
+
+    func testQuitFactsCacheRejectsQuitContextResponse() {
+        var cache = QuitFactsCache()
+        let token = cache.token
+        XCTAssertFalse(cache.store(Self.quitContextDecision(), requestToken: token, closeContext: false),
+                       "退出语境的应答不得入缓存（hideOnClose 恒 false，会把关窗变成退出）")
+        XCTAssertNil(cache.current(), "被丢弃的应答不得留下任何缓存值")
+    }
+
+    func testQuitFactsCacheAcceptsCloseContextResponse() {
+        var cache = QuitFactsCache()
+        let token = cache.token
+        XCTAssertTrue(cache.store(Self.closeDecision(), requestToken: token, closeContext: true))
+        XCTAssertEqual(cache.current(), Self.closeDecision())
+    }
+
+    /// D1 的原始复现序列：一次被取消的退出不得污染 close 决策。
+    func testCancelledQuitCannotPoisonTheCloseCache() {
+        var cache = QuitFactsCache()
+        let token = cache.token
+        XCTAssertTrue(cache.store(Self.closeDecision(), requestToken: token, closeContext: true))
+        // Cmd+Q → 确认框（quitRequested=true 的应答随后落地）→ 用户点「取消」。
+        XCTAssertFalse(cache.store(Self.quitContextDecision(), requestToken: token, closeContext: false),
+                       "取消的退出不得改写缓存")
+        XCTAssertEqual(cache.current(), Self.closeDecision(),
+                       "取消退出之后，红点/Cmd+W 关窗必须仍然隐藏")
+        XCTAssertEqual(QuitCoordinator.closeAction(facts: cache.current()!), .hide)
+    }
+
+    func testQuitFactsCacheDropsResponseAcrossInvalidation() {
+        var cache = QuitFactsCache()
+        let stale = cache.token
+        XCTAssertTrue(cache.store(Self.closeDecision(), requestToken: stale, closeContext: true))
+        // 设置变更 / 新 sidecar ready：世代自增并清空。
+        cache.invalidate()
+        XCTAssertNil(cache.current())
+        XCTAssertNotEqual(cache.token, stale, "失效必须自增世代号")
+        XCTAssertFalse(cache.store(Self.closeDecision(), requestToken: stale, closeContext: true),
+                       "失效之前在途的应答落地即丢弃（旧设置不得回填）")
+        XCTAssertNil(cache.current())
+        // 新世代里的新应答照常可写。
+        let fresh = cache.token
+        XCTAssertTrue(cache.store(Self.closeDecision(), requestToken: fresh, closeContext: true))
+        XCTAssertEqual(cache.current(), Self.closeDecision())
+    }
+
+    func testQuitFactsCacheSurvivesRepeatedQuitContextReads() {
+        var cache = QuitFactsCache()
+        let token = cache.token
+        XCTAssertTrue(cache.store(Self.closeDecision(), requestToken: token, closeContext: true))
+        for _ in 0..<3 {
+            XCTAssertFalse(cache.store(Self.quitContextDecision(), requestToken: token, closeContext: false))
+        }
+        XCTAssertEqual(cache.current(), Self.closeDecision(), "多次退出语境应答不得累积污染")
+    }
+
+    /// 读 Swift 源（相对 macos/）——源文本锁用；跨 target 不共享 ShellIdentityTests
+    /// 的 private helper，故此处同技术再取一份。
+    private static func macOSSource(_ relative: String) throws -> String {
+        let macosDir = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // DSHChamberTests
+            .deletingLastPathComponent()   // Tests
+            .deletingLastPathComponent()   // macos
+        return try String(contentsOf: macosDir.appendingPathComponent(relative),
+                          encoding: .utf8)
+    }
+
+    /// 只留代码行（丢整行注释），源锁才不会被「注释里也抄一遍」的形态骗过
+    /// （2026-09 复核：`// self?.quitFactsCache.invalidate()` 会让朴素计数仍为 2）。
+    private static func codeOnly(_ source: String) -> String {
+        source.split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
+    }
+
+    /// D1 的调用点锁（2026-09 评审反例）：把 AppDelegate 的 closeContext 改成恒真时，
+    /// 上面五个 struct 用例全绿而 D1 复活——故把调用点本身钉住。锁比对的是**完整调用
+    /// 表达式**，并用 codeOnly() 过滤注释行：`|| true` 与「注释版 invalidate」两个
+    /// 逃逸都已由 2026-09 复核实测钉掉。
+    func testQuitFactsStoreCallSiteKeepsTheCloseContextGate() throws {
+        let source = Self.codeOnly(try Self.macOSSource("Sources/DSHChamber/AppDelegate.swift"))
+        XCTAssertTrue(source.contains("closeContext: !quitRequested)"),
+                      "写入缓存必须以请求语境作为 closeContext（退出语境不得入缓存）")
+        XCTAssertFalse(source.contains("closeContext: !quitRequested ||"),
+                       "不得用逻辑或短路这道门（评审反例）")
+        XCTAssertEqual(source.components(separatedBy: "quitFactsCache.invalidate()").count - 1, 2,
+                       "失效点必须恰好两处（设置变更 + sidecar ready），且都在代码行里")
+        XCTAssertTrue(source.contains("if let facts = quitFactsCache.current()"),
+                      "关窗路径必须读缓存（S3·V9 即时决策）")
+    }
 }

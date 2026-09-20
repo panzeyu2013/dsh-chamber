@@ -134,4 +134,35 @@ final class ShellIdentityTests: XCTestCase {
         XCTAssertTrue(source.contains("setDrawsBackground:"),
                       "透明 webview 露出同色窗口底（T-4）")
     }
+
+    /// C4（2026-09 评审）：唤醒/激活腿必须落盘。print-only 时 Dock 启动的 .app
+    /// stdout 无处可看——native-shell.log 里零条唤醒行既不能证明「发过」，也不能
+    /// 证明「没发」（只能靠反汇编），真机验收分不开「壳没发」与「页面没消费」。
+    func testWakeAndActivationLegsLogDurably() throws {
+        let source = try macosSource("Sources/DSHChamber/MainWindowController.swift")
+        XCTAssertTrue(source.contains("shellLog(\"[shell] 系统唤醒——发送 __host.systemResume\")"),
+                      "唤醒腿必须写 shellLog（落盘）")
+        XCTAssertTrue(source.contains("shellLog(\"[shell] 应用激活——发送 __host.mainWindowShown\")"),
+                      "held-resume 补发点（didBecomeActive）必须落盘")
+        XCTAssertFalse(source.contains("print(\"[shell] 系统唤醒"), "唤醒腿不得退回 print-only")
+        XCTAssertFalse(source.contains("print(\"[shell] 应用激活"), "激活腿不得退回 print-only")
+        // 失败分支与 hop3 同样必须落盘（2026-09 评审：catch 与壳→页面这一跳
+        // 此前是 print-only，真机分不开「没发/没推」与「页面没消费」）。
+        XCTAssertTrue(source.contains("shellLog(\"[shell] __host.systemResume 发送失败："),
+                      "唤醒发送失败（catch）必须落盘")
+        XCTAssertTrue(source.contains("shellLog(\"[shell] __host.mainWindowShown 发送失败："),
+                      "激活发送失败（catch）必须落盘")
+        XCTAssertTrue(source.contains("shellLog(\"[shell] notify rendererPush → 页面 emit"),
+                      "shell → 页面 emit 这一跳必须落盘（C4 hop3）")
+        XCTAssertFalse(source.contains("print(\"[shell] notify rendererPush"), "不得退回 print-only")
+        XCTAssertTrue(source.contains("shellLog(\"[shell] 页面 emit 失败"),
+                      "emit 失败必须可考古（JS 抛错 = 页面没收到）")
+        // 同一缺陷类的其余推送面（2026-09 复核）也不得退回 print-only。
+        XCTAssertTrue(source.contains("shellLog(\"[shell] hostFacts 推送 "),
+                      "hostFacts 推送必须落盘")
+        XCTAssertTrue(source.contains("shellLog(\"[shell] rendererLifecycle 上报 "),
+                      "rendererLifecycle 上报必须落盘")
+        XCTAssertFalse(source.contains("print(\"[shell] hostFacts 推送"), "不得退回 print-only")
+        XCTAssertFalse(source.contains("print(\"[shell] rendererLifecycle 上报"), "不得退回 print-only")
+    }
 }

@@ -52,6 +52,53 @@ public struct QuitFacts: Equatable {
     }
 }
 
+/// 关窗决策缓存（D1 修复，2026-09 评审）。
+///
+/// 缺陷：`requestQuitFacts` 曾把**任何**成功应答都写进缓存，而退出链以
+/// `quitRequested=true` 请求，其投影里 `hideOnClose` 按定义恒 false
+/// （`chamber-settings.ts` 的 `shouldHideToTray` 直接取该参数）。于是一次被取消的
+/// 退出（确认框「取消」/ S-17「继续等待」）之后，缓存里躺着的是退出语境的决定，
+/// 下一次红点/Cmd+W 关窗命中缓存即走 `NSApp.terminate`，日志还会打印与设置矛盾
+/// 的 close-behavior='quit'。
+///
+/// 两条不变量：
+///  1. **只有 close 语境（`quitRequested=false`）的应答可入缓存**——缓存值的语义
+///     就是「关窗该做什么」；
+///  2. **应答必须仍属当前世代**——设置变更 / sidecar 重启时世代自增并清空，
+///     失效之前在途的应答落地即被丢弃，旧设置不得回填（S3·V9 的即时决策不受
+///     影响：close 语境的刷新照旧写缓存）。
+///
+/// 主线程所有：请求发起、应答落地、设置变更失效都在主线程（见 AppDelegate 的
+/// `requestQuitFacts` / `onSettingsChanged` / `handleSidecarReady`），故无需加锁
+/// （值语义 struct）。
+public struct QuitFactsCache {
+    private var epoch = 0
+    private var facts: QuitFacts?
+
+    public init() {}
+
+    /// 当前世代号：请求发起时捕获，应答落地时比对。
+    public var token: Int { epoch }
+
+    /// 缓存里的 close 语境决定（无 → nil，调用方走一次异步请求）。
+    public func current() -> QuitFacts? { facts }
+
+    /// 失效（设置变更 / 新 sidecar ready）：世代自增并清空。
+    public mutating func invalidate() {
+        epoch += 1
+        facts = nil
+    }
+
+    /// 尝试写入：仅接受 close 语境且世代未失效的应答。
+    /// - Returns: true = 已写入；false = 丢弃（quit 语境 / 跨世代）。
+    @discardableResult
+    public mutating func store(_ incoming: QuitFacts, requestToken: Int, closeContext: Bool) -> Bool {
+        guard closeContext, requestToken == epoch else { return false }
+        facts = incoming
+        return true
+    }
+}
+
 /// 关窗/退出动作映射与文案（纯函数，单测直测）。
 public enum QuitCoordinator {
     /// 关窗动作：隐藏（Dock 常驻恢复入口）或转入完整退出链。

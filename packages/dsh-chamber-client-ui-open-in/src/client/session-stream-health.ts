@@ -29,6 +29,17 @@
  *
  *  - `openState === 'error'` held past the grace ⇒ `heal` (the stage move),
  *    retried on the cooldown while the rolling budget lasts;
+ *  - a heal judged failed (grace + settle) ⇒ the reload notice **latches**
+ *    while the retries continue (C2, 2026-09): before the latch the user had to
+ *    wait out the whole rolling budget (~296 s) before seeing the one action
+ *    that works, and the chip showed "recovering…" over a repair that had
+ *    already been judged. The judgment is taken from the **settle clock**
+ *    (`lastHealAt + healSettleMs`), not from the 'healing' phase: the re-open
+ *    itself reports `loading` synchronously (vendor `doOpen()`) and a hidden
+ *    stretch zeroes the phase, so a phase-gated latch missed the button in the
+ *    common interleavings; the latch then rides through loading dwells and is
+ *    cleared only by recovery (which also ends the episode: the next error gets
+ *    its own grace instead of inheriting this heal's settle clock);
  *  - `openState === 'loading'` held past the stall threshold ⇒ a notice with a
  *    reload action (never an automatic reload: design 14 discipline, and the
  *    mobile tier's `session-stall.ts` ruling — an observer may offer the
@@ -45,9 +56,14 @@
  * patch) — never a blind timeout here.
  *
  * CLOCK DISCIPLINE (mirrors `session-liveness.ts` and the mobile stall
- * observer): every hold is "zero whenever the predicate breaks", time spent
- * with the conversation surface hidden never counts, and the whole ladder is
- * fail-closed — an observation that cannot be made produces no action.
+ * observer): every hold is "zero whenever the predicate breaks" and the whole
+ * ladder is fail-closed — an observation that cannot be made produces no
+ * action. A hidden surface produces no notice and no heal, and its hold does
+ * not accumulate; the settle clock is the deliberate exception, because it
+ * measures an EXECUTED heal against wall time — a repair that failed while the
+ * surface was hidden is announced by the first visible `error` tick (2026-09
+ * review; callers must not read "hidden never counts" as "hidden time never
+ * decides").
  */
 
 /** Official session lifecycle state (`SessionSnapshot.openState`). */
@@ -94,6 +110,22 @@ export interface SessionStreamHealthState {
   readonly healStamps: readonly number[]
   /** Epoch ms of the last EXECUTED heal (repair-settle clock). */
   readonly lastHealAt?: number
+  /**
+   * A heal was executed AND judged failed without settling the error (C2,
+   * 2026-09): from then on the notice carries the reload action while the
+   * automatic retries keep running. Before this latch the user had to wait out
+   * the whole rolling budget (~296 s) before the one action that works was
+   * offered at all. Cleared the moment the stream leaves the error state.
+   */
+  readonly healFailedLatched?: boolean
+  /**
+   * The stream was observed 'open'/'cold' after the heal that `lastHealAt`
+   * points at (2026-09 review). `lastHealAt` deliberately survives recovery so
+   * the cooldown is not reset by a flapping source — but a settle-clock latch
+   * must not read that old clock as "this episode's repair failed": the next
+   * error would show the reload notice before the ladder even tried again.
+   */
+  readonly recoveredSinceHeal?: boolean
 }
 
 /** Thresholds and budgets (tuned by the numbers in the module header). */
@@ -162,7 +194,14 @@ export function planSessionStreamHealth(
   // another session window.
   if (!observation.presented) {
     return {
-      state: { phase: 'idle', since: 0, healStamps, ...(state.lastHealAt === undefined ? {} : { lastHealAt: state.lastHealAt }) },
+      state: {
+        phase: 'idle',
+        since: 0,
+        healStamps,
+        ...(state.lastHealAt === undefined ? {} : { lastHealAt: state.lastHealAt }),
+        ...(state.healFailedLatched === undefined ? {} : { healFailedLatched: state.healFailedLatched }),
+        ...(state.recoveredSinceHeal === undefined ? {} : { recoveredSinceHeal: state.recoveredSinceHeal }),
+      },
       action: 'none',
       notice: null,
     }
@@ -175,6 +214,9 @@ export function planSessionStreamHealth(
     let phase: SessionStreamPhase = continued ? state.phase : 'error-hold'
     let since = continued ? state.since : now
     let held = now - since
+    // C2 (2026-09): once a heal has been judged failed, the notice carrying the
+    // ONE action that works stays up while the automatic retries continue.
+    let latched = state.healFailedLatched === true
 
     // A wall clock that jumped BACKWARDS (NTP step, VM resume, manual change)
     // must never latch 'healing' forever with no notice and no retry: a negative
@@ -185,24 +227,49 @@ export function planSessionStreamHealth(
     if (phase === 'healing') {
       const judging = sinceHeal !== undefined && sinceHeal >= 0 && sinceHeal < config.healSettleMs
       if (judging) {
-        return { state: { ...state, phase, since, healStamps }, action: 'none', notice: null }
+        return {
+          state: { ...state, phase, since, healStamps, ...(latched ? { healFailedLatched: true } : {}) },
+          action: 'none',
+          notice: latched ? 'heal-failed' : null,
+        }
       }
       // Judge it: the repair did not take. Fall back to the hold so the cooldown
-      // (or the exhausted budget, below) decides what happens next — a single
-      // failed heal never latches a notice while an automatic retry is pending.
+      // (or the exhausted budget, below) paces the next attempt.
       phase = 'error-hold'
       since = now
       held = 0
     }
+
+    // C2 (2026-09 review): the judgment hangs off the SETTLE CLOCK, not off the
+    // 'healing' phase. The lever re-opens the session and vendor `Session.doOpen()`
+    // writes `openState = 'loading'` SYNCHRONOUSLY before its first await, so a
+    // loading observation (or a hidden stretch, which zeroes the phase) routinely
+    // interrupts the error hold — gating the latch on `phase === 'healing'`
+    // silently dropped the button in exactly those cases (probe: 28s → >128s, and
+    // a flapping re-open never latched at all). What proves the executed heal did
+    // not settle is `sinceHeal >= healSettleMs` while the state is still `error`;
+    // a recovery marks the episode as recovered (`recoveredSinceHeal`, while the
+    // cooldown anchor survives for the flapping bound), so a fresh error cannot
+    // inherit this heal's clock. A backwards wall clock (negative delta) must NOT
+    // latch: a clock step is not evidence that the repair failed.
+    // not evidence that the repair failed.
+    if (state.recoveredSinceHeal !== true
+        && sinceHeal !== undefined && sinceHeal >= config.healSettleMs) latched = true
 
     const cooling = sinceHeal !== undefined && sinceHeal >= 0 && sinceHeal < config.healCooldownMs
     const inBudget = healStamps.length < config.healBudgetMax
     if (held >= config.errorGraceMs && !cooling && inBudget && observation.neighborAvailable) {
       // The seat executes the heal and marks it; 'since' restarts at execution.
       return {
-        state: { phase: 'healing', since: now, healStamps, ...(state.lastHealAt === undefined ? {} : { lastHealAt: state.lastHealAt }) },
+        state: {
+          phase: 'healing',
+          since: now,
+          healStamps,
+          ...(state.lastHealAt === undefined ? {} : { lastHealAt: state.lastHealAt }),
+          ...(latched ? { healFailedLatched: true } : {}),
+        },
         action: 'heal',
-        notice: null,
+        notice: latched ? 'heal-failed' : null,
       }
     }
 
@@ -210,17 +277,44 @@ export function planSessionStreamHealth(
     // hold has clearly outlived a repair attempt — never on the first frames,
     // where an in-flight open can still resolve the state on its own.
     const hopeless = held >= config.errorGraceMs + config.healSettleMs && (!observation.neighborAvailable || !inBudget)
-    return { state: { phase, since, healStamps, ...(state.lastHealAt === undefined ? {} : { lastHealAt: state.lastHealAt }) }, action: 'none', notice: hopeless ? 'heal-failed' : null }
+    return {
+      state: {
+        phase,
+        since,
+        healStamps,
+        ...(state.lastHealAt === undefined ? {} : { lastHealAt: state.lastHealAt }),
+        ...(latched ? { healFailedLatched: true } : {}),
+        // Carry the episode marker: the gate above read it, and dropping it here
+        // would let the NEXT error tick falsely latch off the previous episode's
+        // settle clock (probe: a recovery at +10s made +29s announce a failure this
+        // episode never attempted). `markSessionStreamHeal` clears it for real when
+        // a fresh heal of this episode runs.
+        ...(state.recoveredSinceHeal === undefined ? {} : { recoveredSinceHeal: state.recoveredSinceHeal }),
+      },
+      action: 'none',
+      notice: latched || hopeless ? 'heal-failed' : null,
+    }
   }
 
   if (observation.openState === 'loading') {
     const continued = state.phase === 'loading-hold'
     const since = continued ? state.since : now
     const stalled = now - since >= config.loadingStallMs
+    // C2: the re-open's own loading dwell must not take back an action the user
+    // was already offered (the same rule `markSessionStreamHeal` states). The
+    // latch rides along; a genuine stall keeps its own, more specific label.
+    const latched = state.healFailedLatched === true
     return {
-      state: { phase: 'loading-hold', since, healStamps, ...(state.lastHealAt === undefined ? {} : { lastHealAt: state.lastHealAt }) },
+      state: {
+        phase: 'loading-hold',
+        since,
+        healStamps,
+        ...(state.lastHealAt === undefined ? {} : { lastHealAt: state.lastHealAt }),
+        ...(latched ? { healFailedLatched: true } : {}),
+        ...(state.recoveredSinceHeal === undefined ? {} : { recoveredSinceHeal: state.recoveredSinceHeal }),
+      },
       action: 'none',
-      notice: stalled ? 'loading-stall' : null,
+      notice: stalled ? 'loading-stall' : (latched ? 'heal-failed' : null),
     }
   }
 
@@ -234,7 +328,17 @@ export function planSessionStreamHealth(
   const churn = observation.carrierChurn
   const churning = churn !== undefined && churn.count > 0 && now - churn.at <= config.carrierChurnMs
   return {
-    state: { phase: 'idle', since: 0, healStamps, ...(state.lastHealAt === undefined ? {} : { lastHealAt: state.lastHealAt }) },
+    state: {
+      phase: 'idle',
+      since: 0,
+      healStamps,
+      // The cooldown anchor survives recovery (the flapping bound), but the
+      // EPISODE does not: mark it so the next error cannot inherit this heal's
+      // settle clock (2026-09 review). A fresh heal drops the marker again.
+      ...(state.lastHealAt === undefined
+        ? {}
+        : { lastHealAt: state.lastHealAt, recoveredSinceHeal: true }),
+    },
     action: 'none',
     notice: churning ? 'carrier-churn' : null,
   }
@@ -248,7 +352,15 @@ export function planSessionStreamHealth(
  * @returns the next state (the caller stores it in its ref).
  */
 export function markSessionStreamHeal(state: SessionStreamHealthState, now: number): SessionStreamHealthState {
-  return { phase: 'healing', since: now, healStamps: [...state.healStamps, now], lastHealAt: now }
+  return {
+    phase: 'healing',
+    since: now,
+    healStamps: [...state.healStamps, now],
+    lastHealAt: now,
+    // C2: the latch is a user-visible contract, not a phase — a retry in flight
+    // must not hide the reload action the user was already offered.
+    ...(state.healFailedLatched === undefined ? {} : { healFailedLatched: state.healFailedLatched }),
+  }
 }
 
 /** The notice's own label key (the seat's single copy lookup). */

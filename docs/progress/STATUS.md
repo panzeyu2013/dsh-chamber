@@ -128,7 +128,9 @@
     （store 已无 running 行 ⇒ 本轮不发探针）收回。
     失效判据 = 任一形态落地并删掉相应生产端通道（并补上被删面的等价证据），或复核确认现形态更优并写回 design 14 §D4。
      ⑫ **对话流健康臂（design 14 §D4，2026-12）的实机验收未做**（治因已由 ⑬ 的 fork 补丁承担，本臂只兜 `ended(false)` 等剩余终局）：自动 stage 迁移重开
-     （`error` 满 8s、冷却 120s、滚动窗口 10 分钟 ≤3 次）与 `loading` 20s 提示阈值均只在
+     （`error` 满 8s、冷却 120s、滚动窗口 10 分钟 ≤3 次；已执行的 heal 过 settle 窗仍
+     `error` 即 latch「对话通道未恢复 + 重新加载」按钮——判据是 settle 时钟而非相位，
+     `loading` 驻留不清 latch，2026-09）与 `loading` 20s 提示阈值均只在
      headless 复现与单测里验过，未在真机抖动下校准（杠杆所依赖的三条 vendor 事实已由
      `test/session-health/vendor-heal-contract.test.ts` 锁住：pin 升级若改了 stage/open/error
      语义，该测试即红，届时恢复臂须重推而不是静默失效）；`error` 的自动重开还会让聊天面重挂载

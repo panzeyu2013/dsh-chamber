@@ -412,7 +412,15 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
     都不可重开。
   - **落地**：`packages/dsh-chamber-client-ui-open-in`（既有的 per-instance 头排座席宿主）
     新增 `src/client/session-stream-health.ts`（纯决策：error 满 8s 自动 stage 迁移重开，
-    冷却 120s、滚动窗口 10 分钟 ≤3 次；loading 满 20s、或阶梯无杠杆时给「重新加载」提示）、
+    冷却 120s、滚动窗口 10 分钟 ≤3 次；**已执行的 heal 过了 settle 窗（8s grace + 20s）
+    而流仍是 error 即 latch「对话通道未恢复 + 重新加载」按钮**，自动重试照旧——2026-09
+    修复前要等完整预算耗尽才出按钮，最坏 ~296s，期间 chip 显示「正在恢复对话…」。判据挂在
+    `lastHealAt` 的 **settle 时钟**而非 `'healing'` 相位：重开自身会同步报 `loading`
+    （vendor `doOpen()` 在首个 await 前写 `openState`），隐藏期会把相位清零——按相位判定
+    会把按钮吞掉（2026-09 评审实测：28s → >128s，flapping 重开甚至永不 latch）。latch 随
+    loading 驻留、只有**观测到**恢复（open/cold）才清除并结束本次「回合」，之后的报错按新
+    错误重新起 grace——若恢复发生在隐藏期（观测不到 `openState`），回前台第一帧即按 settle
+    钟给出提示（那仍是唯一有效的动作）；loading 满 20s、或阶梯无杠杆时给同一提示）、
     `src/client/session-stream-health-probe.ts`（stage 迁移与面形状读取，全部 fail-closed）、
     `src/client/SessionStreamHealthChip.tsx`（`conversation.session.header.actions`，
     list/session 作用域：只显示，绝不自行重载）、`src/client/session-stream-health-seat.ts`
@@ -444,12 +452,19 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
     代理注入合成 `end`/未知帧逼客户端重试（未知帧会让客户端 `failAll` 并关 socket，且空闲
     会话被周期性重放）；代理透明重放客户端流开帧（新宿主 socket 无流上下文，重放会触发
     `RemoteJournalStream` 的「多次 opening cursor」协议错误）；**上游腿代答宿主 pong**
-    （理由见上一段：掩码与帧边界两条协议约束）。
+    （理由见上一段：掩码与帧边界两条协议约束）；**把滚动预算缩短/提前耗尽以换取更早的
+    「重新加载」按钮**——拒：预算是防风暴的硬界（缩短等于允许更频繁的 stage 迁移），而
+    「按钮何时出现」是呈现问题，正确修法是首次判失败即 latch（2026-09，见「落地」段）；
+    **把 latch 判据挂在 `'healing'` 相位上**（首版实现，2026-09 评审否决）——拒：重开自身
+    会同步报 `loading`、隐藏期会把相位清零，相位门控实测让按钮被吞（28s → >128s，flapping
+    重开甚至永不 latch），改为挂 `lastHealAt` 的 settle 时钟；**恢复后仍沿用旧回合的 settle
+    钟**（评审发现的次生反例）——拒：会让新错误第一帧就出提示、跳过自己的 grace，改为
+    `recoveredSinceHeal` 回合标记。
   - **未闭合**：`openState === 'open'` 但静默的半死形态仍无自动杠杆（无 applied cursor
     水位时与合法长静默不可区分），收口两条：宿主侧流级 keepalive 仍未做；「让 carrier 失败永不终局」已落地（见下条）；自动重开的**实机验收未做**（判据 = 真机抖动后自查恢复，且 `local closed (upstream close, …)` 的频率不再随浏览器卡顿波动），阶梯阈值（8s/20s/120s/≤3）与 `presented` 判据的近似（document 级 `[data-chat-flow]` 存在性，非「实际可见」）同样待真机校准
 
 - **载体故障的用户可见面（2026-12）**：治因 = `packages/dsh-api-gateway/src/client/remote-stream.ts` 在活世代下用有界退避（250ms 起翻倍、10s 封顶，与连接车道自身 `backoffMaxMs` 同值）重开而不逃逸为 `gateway/internal`；信号面 = 该包 `$stream` 工厂组合 `carrierFailed` 成有界页面事实
-  `dsh-chamber:stream-carrier-failed`（`stream-carrier-fact.ts`：计数 + 时间 + 实例 id + 截断消息，dispatch 抛错被吞，绝不打断重连），由 open-in 的健康臂座席按实例过滤后喂进纯决策模块，chip 以 `role="status"` 显示「对话流正在重新连接…」（信息性、不给「重新加载」按钮，超过 `carrierChurnMs` 自行消退）。
+  `dsh-chamber:stream-carrier-failed`（`stream-carrier-fact.ts`：计数 + 时间 + 实例 id + 截断消息，dispatch 抛错被吞，绝不打断重连），由 open-in 的健康臂座席按实例过滤后喂进纯决策模块，chip 以 `role="status"` 显示「对话流正在重新连接…」（信息性、不给「重新加载」按钮，超过 `carrierChurnMs` 自行消退）。**接线要求（2026-09 修复，C1）**：事实落在座席闭包而非 props，座席必须把每次落地的 churn 广播给渲染侧（`subscribe(listener)`），chip 订阅后 bump tick 重规划——否则 `openState === 'open'` 时 ticker 停摆，提示既不出现也不会过期（原实现只有「事实进决策」没有「通知渲染」）。
   - **拒绝替代**：（a）不做可见面——拒：去掉终局逃逸后，用户再也分不清「流在重连」与「会话本来就安静」，这是本补丁引入的静默窗口；（b）客户端插件在打包期 import 该 fork 的事件常量——拒：client plugin 不应加深进 fork 的 import 路径，故字面量复制并由 `stream-health-wiring.test.ts` 把两处拼写钉在一起（vendor-lockstep 先例）；（c）ctx service seam（fork 消费 chamber 提供的服务）——拒：fork 的探针面会被 chamber 插件的存在绑住，而页面事实在座席缺席时也无害；（d）让 carrier 失败重新终局——拒：正是本次要修的根因。
   - **未闭合**：churn 提示窗口（10s）与按来源归属的粗粒度未在真机校准（STATUS ⑬）。
 ### D5 keep-awake（v1 设置项，默认关）

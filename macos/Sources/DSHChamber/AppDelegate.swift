@@ -37,8 +37,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
     /// 退出单飞/已确认门（E9/E20；语义照搬 main.ts 三标志）。
     private let quitGate = QuitGate()
-    /// 最近一次成功取到的 quitFacts（S3·V9：关窗决策即时可用，不再等 B 桥往返）。
-    private var cachedQuitFacts: QuitFacts?
+    /// 关窗决策缓存（S3·V9 即时决策 + D1 修复）：只存 close 语境、当前世代的
+    /// 应答。`QuitFactsCache` 自带世代号，跨语境/跨世代的应答一律丢弃。
+    private var quitFactsCache = QuitFactsCache()
     /// 退出清理是否已启动（幂等；清理完成/超时后 reply 一次）。
     private var quitCleanupStarted = false
     /// 是否在等待 `reply(toApplicationShouldTerminate:)`（每次 .terminateLater 一轮）。
@@ -499,14 +500,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // 下一次关窗必须用**新**的 quitFacts，而不是缓存里的旧值。
         controller.onSettingsChanged = { [weak self] in
             // A3（2026-09-18）：本回调可能由 B 桥**读线程**触发（routeNotify 在读
-            // 线程上调 onSettingsChanged），而 cachedQuitFacts 是主线程所有的状态
+            // 线程上调 onSettingsChanged），而关窗决策缓存是主线程所有的状态
             // （关窗路径同步读它，见 requestQuitFacts/closeAction 分支）——写必须
             // 回落主线程，避免跨线程读写同一存储。日志仍在调用线程同步打印，
             // 保持既有 debug 输出顺序不变。
             shellLog("[shell] 设置变化 → 关窗决策缓存作废")
-            DispatchQueue.main.async { [weak self] in
-                self?.cachedQuitFacts = nil
+            let invalidate: () -> Void = { [weak self] in
+                // 世代自增 + 清空：失效之前在途的应答落地时会因 token 失配被丢弃，
+                // 旧设置的 close 决定不得复活（D1 修复的第二条不变量）。
+                self?.quitFactsCache.invalidate()
             }
+            // 主线程快路径（2026-09 复核）：设置变更在主线程到达时当场失效，关窗
+            // 不会再命中旧决定；来自 B 桥读线程的调用仍回落主线程（缓存是主线程状态）。
+            if Thread.isMainThread { invalidate() } else { DispatchQueue.main.async(execute: invalidate) }
         }
         shellLog("[shell] 装配完成（主窗口等首个已提交内容后呈现，S-42）")
 
@@ -653,7 +659,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // 关窗判定是同步的（设置已在主进程），Swift 此前每次都等一次 B 桥往返
         // （最长 2s 窗口无响应，用户以为卡死）。缓存缺失才走异步请求，并在返回
         // 前顺手刷新缓存（后台，不阻塞本次决策）。
-        if let facts = cachedQuitFacts {
+        if let facts = quitFactsCache.current() {
             requestQuitFacts(quitRequested: false) { _ in }
             switch QuitCoordinator.closeAction(facts: facts) {
             case .hide:
@@ -839,11 +845,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // 单次完成守卫：Task{@MainActor} 与 main.asyncAfter 同在主线程队列，
         // 先到者胜（Swift 5 模式下闭包捕获可变局部量，无并发写）。
         var finished = false
+        // 请求发起时的世代号：应答跨过一次失效（设置变更 / sidecar 重启）即作废。
+        let requestToken = quitFactsCache.token
         let finish: (QuitFacts?) -> Void = { [weak self] facts in
             guard !finished else { return }
             finished = true
-            // S3·V9：成功取到的事实留作缓存，供下一次关窗决策即时使用。
-            if let facts { self?.cachedQuitFacts = facts }
+            // S3·V9 + D1：成功取到的事实留作缓存，供下一次关窗决策即时使用；但
+            // **只有 close 语境**（quitRequested=false）且世代未失效的应答可以写入
+            // ——退出语境的投影里 hideOnClose 恒 false，缓存它会把下一次关窗变成
+            // 退出（一次被取消的退出即可复现）。
+            if let facts {
+                self?.quitFactsCache.store(facts, requestToken: requestToken, closeContext: !quitRequested)
+            }
             completion(facts)
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.quitFactsTimeout) {
@@ -875,6 +888,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // 三审 #8：新 sidecar 没有历史事实——清空去重簿记并推全量快照，
         // 否则重启后它长期以「种子事实」运行。
         mainWindowController?.resetHostFactsBookkeeping()
+        // D1：新 sidecar 会重新从磁盘读 chamber settings，而失效推送只会来自
+        // **活着的** sidecar——世代自增并清空，旧世代的 close 决定不再被信任
+        // （在途应答随 token 失配丢弃）。本函数在主线程队列上运行（ready 帧收敛）。
+        quitFactsCache.invalidate()
+        // …并顺手预热一次 close 语境决策：失效本身会把重启后的首次关窗推回 ≤2s 的
+        // 异步路径（S-33 的健康路径是 ms 级），预取把它补回来。quitRequested=false
+        // 才是可缓存的语境；失败/超时由 requestQuitFacts 自己 loud，回调忽略结果。
+        requestQuitFacts(quitRequested: false) { _ in }
         let flushed = deepLinks.markReady()
         if flushed > 0 {
             shellLog("[shell] ready 后补发深链 \(flushed) 条")

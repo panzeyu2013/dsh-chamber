@@ -429,6 +429,10 @@ async function handleInboundLine(line: string): Promise<void> {
       // （main.ts:1451-1453 → reconnectStaleTransports 679-697）。重探叶自带早退
       // （装配前/退出在途/只碰 error/degraded 非终态），失败 loud 且绝不反噬本帧。
       if (method === HOST_INBOUND.systemResume) {
+        // C4 观测（2026-09 评审）：入站本身留一行（sidecar-console-redirect 把
+        // console.* 统一写 stderr → <userData>/logs/sidecar.log）。否则真机上只有
+        // Swift 侧「发了」的一行，分不清「壳没发」与「页面没消费」。
+        console.info('[sidecar] __host.systemResume 入站：core 回灌 + 陈旧 transport 重探')
         try {
           headless?.reconnectStaleTransports()
         } catch (error) {

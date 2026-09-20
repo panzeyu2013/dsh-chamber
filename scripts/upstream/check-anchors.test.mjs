@@ -9,8 +9,9 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  LEGACY_ANCHOR_PATTERN, checkRegistrySymbols, classifyAnchors, collectDeclarations, countLegacyAnchors,
-  declarationLine, generatedRanges, parseAnchor, resolveAnchorInText, runFix,
+  LEGACY_ANCHOR_PATTERN, checkDocAnchors, checkRegistrySymbols, classifyAnchors, collectDeclarations,
+  collectDocAnchors, countLegacyAnchors, declarationLine, generatedRanges, parseAnchor,
+  resolveAnchorInText, runFix,
 } from './check-anchors.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
@@ -121,5 +122,29 @@ test('--fix 拒绝越出 root 的 --file，且 root 外文件保持字节不变'
     assert.ok(readFileSync(join(outer, 'outside.md'), 'utf8').includes('foo.ts:1'), 'root 外的文件不得被改写')
   } finally {
     rmSync(outer, { recursive: true, force: true })
+  }
+})
+
+test('checkDocAnchors：docs 手写锚的 ok / missing / ambiguous 与生成块跳过', () => {
+  const root = mkdtempSync(join(tmpdir(), 'anchors-doc-'))
+  try {
+    mkdirSync(join(root, 'docs'), { recursive: true })
+    mkdirSync(join(root, 'src'), { recursive: true })
+    writeFileSync(join(root, 'src', 'a.ts'), 'export function apply() {}\nconst marker = \'unique\'\nconst twice = 1\nconst twice2 = 1\ntwice\ntwice2\n')
+    writeFileSync(join(root, 'docs', 'ok.md'), [
+      '见 `src/a.ts#apply` 与 `src/a.ts#=literal:const marker`。',
+      '<!-- GENERATED:registry:x:begin -->',
+      '`src/a.ts#=literal:not here`',
+      '`src/a.ts#noSuchSymbol`',
+      '<!-- GENERATED:registry:x:end -->',
+      '',
+    ].join('\n'))
+    writeFileSync(join(root, 'docs', 'bad.md'), '见 `src/a.ts#=literal:const nope` 与 `src/a.ts#noSuchSymbol`。\n')
+    const findings = checkDocAnchors(root)
+    assert.equal(findings.length, 2, findings.join(' | '))
+    assert.ok(findings.every((finding) => finding.startsWith('[docs/bad.md]')), findings.join(' | '))
+    assert.equal(collectDocAnchors(root).length, 4, '生成块内的两个锚必须被跳过')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
   }
 })

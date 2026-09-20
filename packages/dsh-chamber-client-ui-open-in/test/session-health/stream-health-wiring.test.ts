@@ -115,6 +115,33 @@ test('stream-health wiring: the carrier-churn fact is locked to the api-gateway 
   assert.match(fork, /createCarrierFailureReporter/u, 'the fork must build the reporter it exports')
 })
 
+test('stream-health wiring: a landed churn fact wakes the renderer without becoming a prop', () => {
+  // The seat announces the fact (the closure keeps it)…
+  assert.match(seat, /const churnListeners = new Set<\(\) => void>\(\)/u)
+  assert.match(seat, /subscribe: \(listener\) => \{\n\s*churnListeners\.add\(listener\)/u,
+    'subscribe must register the listener — without it every assertion here stays'
+    + ' green while the wake-up is dead (2026-09 verification, w4)')
+  assert.match(seat, /churnListeners\.delete\(listener\)/u)
+  assert.match(seat, /churnListeners\.clear\(\)/u, 'the hub must be torn down with its ctx effect')
+  // …and the broadcast must sit INSIDE the landing handler, immediately after the
+  // fact is stored: a hub driven from anywhere else (or an early return in the
+  // handler) leaves the renderer blind while `openState === 'open'`.
+  assert.match(seat, /const onChurn = \(event: Event\): void => \{\n\s*const detail =/u,
+    'the handler must start with the fact extraction')
+  assert.match(seat, /carrierChurn = \{ at, count \}\n\s*for \(const listener of \[\.\.\.churnListeners\]\) listener\(\)/u,
+    'the broadcast must follow the stored fact in the same handler')
+  // A line-leading `return` before the broadcast is how a silently dead hub survives
+  // every assertion above (2026-09 verification, w3b); the conditional guard on the
+  // first line is fine because it is not line-leading.
+  assert.match(seat, /const onChurn = \(event: Event\): void => \{(?:(?!\n\s*return\b)[\s\S])*?for \(const listener/u,
+    'no unconditional return may precede the broadcast')
+  // …and the chip re-plans on that notification instead of waiting for a prop:
+  // with openState === 'open' the ticker is off, so nothing else would re-run it.
+  // The increment is pinned exactly: a no-op bump would satisfy a loose match and
+  // still leave the notice unplannable.
+  assert.match(chip, /useEffect\(\(\) => subscribe\(\(\) => setTick\(value => value \+ 1\)\), \[subscribe\]\)/u)
+})
+
 test('stream-health wiring: churn is informational, self-expiring and never offers a reload', () => {
   assert.match(chip, /plan\.notice === null \|\| plan\.notice === 'carrier-churn' \? null/u, 'churn must not offer the reload action')
   assert.match(chip, /\|\| plan\.notice !== null/u, 'a visible notice must keep the ticker alive so it can expire')
