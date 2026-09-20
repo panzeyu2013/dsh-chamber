@@ -294,8 +294,14 @@ final class QuitCoordinatorTests: XCTestCase {
                       "写入缓存必须以请求语境作为 closeContext（退出语境不得入缓存）")
         XCTAssertFalse(source.contains("closeContext: !quitRequested ||"),
                        "不得用逻辑或短路这道门（评审反例）")
-        XCTAssertEqual(source.components(separatedBy: "quitFactsCache.invalidate()").count - 1, 2,
+        // 2026-09 复核：只数次数会被「把两处失效搬进同一函数」骗过——同时钉住语境。
+        let invalidateSites = source.components(separatedBy: "quitFactsCache.invalidate()")
+        XCTAssertEqual(invalidateSites.count - 1, 2,
                        "失效点必须恰好两处（设置变更 + sidecar ready），且都在代码行里")
+        XCTAssertTrue(String(invalidateSites[0].suffix(1500)).contains("controller.onSettingsChanged = {"),
+                      "第一处失效必须留在 onSettingsChanged 闭包里（设置变更当场作废旧决定）")
+        XCTAssertTrue(String(invalidateSites[1].suffix(1500)).contains("func handleSidecarReady()"),
+                      "第二处失效必须留在 handleSidecarReady 里（新世代重新读盘后不得复用旧事实）")
         XCTAssertTrue(source.contains("if let facts = quitFactsCache.current()"),
                       "关窗路径必须读缓存（S3·V9 即时决策）")
     }
