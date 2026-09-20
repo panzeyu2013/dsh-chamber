@@ -11,19 +11,19 @@
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
 
-## [0.3.2-beta.4] - 2026-09-19
+## [0.3.2-beta.4] - 2026-09-20
 
 ### 新增
 - **本地来源缺图端点现在给出病因，而不只是后果** —— 新增 boot-gap 事实 `local-graph-not-injected`（仅本地实例；远程与 gateway 逐字保留）：本机实例没有注入 chamber 的客户端图通道时，横幅先报「安装 / seed 完整性」这一病因，并以优先级压过 5 秒后到达的 `required-services-missing` 后果；同一 ready 世代内可撤销、可复查（判词后 +30s 有界复查，provider 迟到即清事实），不再长期挂着并白烧一次冷重挂。
 - **诊断点名缺失的提供方** —— 控制台诊断行由只报「等待者 ui-chat」升级为同时给出缺失提供方（`sidebarRight → @deepseek-ai/dsh-client-ui-sidebar-right`）；未登记的服务显式写 "provider row unknown"，缺行的病因不再零日志。
 - **Windows 腿开始跑前端契约，发布证明要求 Windows 打包彩排** —— ci.yml 的 Windows 腿新增 renderer 与 sidebar 的 `test:win32` 清单（根 `test:win32` 扇出到 5 个包，每包一个可点名的步骤），每个清单带「零测试即失败」守卫；`verify-release-ci-proof.mjs` 的 `REQUIRED_JOB_STEPS` 同步要求这两步与 Windows 打包彩排，删步/改名即红。
 - **通知失败不再是无解的死路（design 19 §3.3/§4.1）** —— `dsh-chamber:notify` 由布尔改为 `{ shown, error? }`：宿主/系统的拒绝原因与裁决侧抑制原因穿过 IPC 保留；新增 `dsh-chamber:open-notification-settings`（固定主进程侧 URL，不接受渲染端传入），设置页据此渲染原因、权限提示与「打开系统设置」按钮（中英）；映射纯函数有单测，Swift 壳把授权裁决与投递失败写入 native-shell.log。
-- **会话流健康臂（design 14 §D4）** —— api-gateway 流载体改为重试而非终态失败并投影页级 `stream-carrier-failed` 事实；open-in 插件渲染会话流健康 chip 座位；控制面记录被放弃的升级以便归因。
-- **macOS Swift 原生壳（design 25 路线 A，预览）** —— macOS 上新增第二只壳：Swift/AppKit 只做壳（窗口、WKWebView、菜单/通知/角标/深链/对话框/外部打开/隐藏恢复），**壳内不承载任何业务**；业务由打包成独立 Node 可执行文件的 sidecar 承载（现有 control-plane 与 desktop 的纯 Node 业务模块族原样运行），Swift 与 sidecar 之间走一条受信的 stdio JSON-RPC 通道，页面侧用与 preload 等价的注入 shim 顶替 `window.dshChamber`，web UI 100% 复用。与原 Electron 版**共存**：产物为 `dsh-chamber-<版本>-macos-arm64.dmg/.zip`（本版起命名归属反转，见「变更」），bundle id `com.dshchamber.native`（通知授权身份独立），双 flavor 共用同一 userData 根与目录锁（`<userData>/.dsh-chamber.lock`，darwin `flock`/`O_EXLOCK`，锁本身是唯一仲裁权威）。
+- **会话流健康臂（design 14 §D4）** —— api-gateway 流载体改为重试而非终态失败并投影页级 `stream-carrier-failed` 事实；open-in 插件渲染会话流健康 chip 座位；控制面记录被放弃的升级以便归因；修复被判定失败后立即**锁存**重载动作（判据挂在 settle 时钟而非相位，`loading` 驻留与隐藏期都不再吞掉它），载体重连的抖动也不再只留在闭包里。
+- **macOS Swift 原生壳（design 25 路线 A，预览）** —— macOS 上新增第二只壳：Swift/AppKit 只做壳（窗口、WKWebView、菜单/通知/角标/深链/对话框/外部打开/隐藏恢复），**壳内不承载任何业务**；业务由打包成独立 Node 可执行文件的 sidecar 承载（现有 control-plane 与 desktop 的纯 Node 业务模块族原样运行），Swift 与 sidecar 之间走一条受信的 stdio JSON-RPC 通道，页面侧用与 preload 等价的注入 shim 顶替 `window.dshChamber`，web UI 100% 复用。与原 Electron 版**共存**：产物为 `dsh-chamber-<版本>-macos-arm64.dmg/.zip`（本版起命名归属反转，见「变更」），bundle id `com.dshchamber.native`（通知授权身份独立），双 flavor 共用同一 userData 根与目录锁（`<userData>/.dsh-chamber.lock`，darwin `flock`/`O_EXLOCK`，锁本身是唯一仲裁权威），并保证关窗决策只吃**本世代**的关闭语境事实：取消退出后不再沿用旧决定，设置变更与 sidecar 重启各失效一次、重启后再预热一次以保住 ms 级关窗。
 - **原生 flavor 的应用内更新链（design 25 §7，D-1 = B）** —— 改为 Sparkle 2：检查真实 appcast（EdDSA 签名；公钥/私钥由发布链配置），支持应用内下载、安装与重启，并保留用户手动的「检查更新…」；beta 通道用滚动 appcast 同时收当前 beta 与最新 final，让 beta 客户端也能看到 final（S-22/S-23/S-36）。更新面不可用、坏 feed/坏公钥或忙态点击都返回诚实错误而不是静默吞掉（S-37–S-39）。
 - **双 flavor 防漂移锁步与新 CI 腿** —— IPC 面镜像（main/preload 两侧字面量与结构）、桥 manifest（`bridge-manifest.json` ↔ 生成的 Swift 白名单，通道 68 = 60 invoke + 8 push）、注入 shim 表面、core 的 electron-free 传递闭包、打包清单与产物命名（`-native` 不含碰撞、更新 feed 归属唯一）各有独立门禁；新增 macOS CI 腿 `test-macos`（Swift 构建 + XCTest + 打包干跑 + darwin 目录锁与打包脚本套件），发布证明要求 linux/windows/macos 三腿同时通过。
 - **打包链** —— `build:sidecar`（官方 Node 归档按仓库固定 SHA-256 校验后捆绑，基名必须是 `node`；内置 dsh 工作区与内嵌 pnpm）与 `build:swift-app`（组装 → ad-hoc 或 Developer ID 签名 → 公证 → stapler 装订 → 归档，任一缺失即 fail-closed），同一 tag 下与 Electron 产物并行发布、互不覆盖。
-- **原生壳本地落盘日志（design 25 排障面，T-25）** —— 原生壳此前双击态白屏/退出没有任何本地 dump 可考古；现在关键行（启动、sidecar spawn/退出、导航失败、更新相位、退出链）同写 `<userData>/logs/native-shell.log`，256 KiB 单份轮转（`.1`）、0600/0700，写不进静默退回 stdout。它**不**复用 Electron 的 `<userData>/state/host-logs/<port>.log`——那是控制面按端口寻址的宿主 stdout/stderr 管道，两条日志面不同目录、不能混用。
+- **原生壳本地落盘日志（design 25 排障面，T-25）** —— 原生壳此前双击态白屏/退出没有任何本地 dump 可考古；现在关键行（启动、sidecar spawn/退出、导航失败、更新相位、退出链）同写 `<userData>/logs/native-shell.log`，256 KiB 单份轮转（`.1`）、0600/0700，写不进静默退回 stdout。它**不**复用 Electron 的 `<userData>/state/host-logs/<port>.log`——那是控制面按端口寻址的宿主 stdout/stderr 管道，两条日志面不同目录、不能混用；唤醒与「壳→页面」推送的每一跳（含失败分支）也走这条日志，真机上能分清「没发」与「没消费」。
 - **Electron mac 打包演练进 push CI（G41）** —— main push 的 `test-macos` 腿新增 ad-hoc、`--publish=never`、无凭据/无公证/无上传的 `electron-builder --mac --arm64` 演练，并紧跟 `verify-electron-artifacts.mjs` 对真实 `.app` 校验；发布证明（`verify-release-ci-proof.mjs` 的 `REQUIRED_JOB_STEPS`）同步要求该步名，删步/改名即红。代价 = macos 腿每次 push 真跑一次打包（时间变长），换取 files/extraResources/beforePack/afterPack/entitlements 的破坏在 push 即暴露，而不是等到 release（draft 已建、凭据已加载）才失败。
 - **更新链 fail-closed 门禁（G42）** —— 正式发布中 Sparkle 公钥在而私钥缺 = FAIL（壳会轮询没人签的 feed）；私钥在而 beta/stable appcast 缺失 = FAIL（不再静默跳过滚动发布）；`/releases/latest` 解析失败（非 404）或 final 有 native zip 但下载失败 = FAIL；新增 `verify-native-appcast.mjs` 断言本版本 appcast 条目同时带 `shortVersionString`=本版本、`sparkle:version`=本 `.app` 的 CFBundleVersion、enclosure 指向本版本 zip（appcast 步与滚动刷新两处都跑）。两把钥匙都缺仍是 loud 降级（照常出包、客户端看不到更新）；仓库尚无 final release 或最新 final 确实没有 native zip 时保留 loud 警告。
 - **原生壳跟随显示器刷新率（S-48）** —— 原生 flavor 此前把渲染上限压在接近 60Hz：面板是 ProMotion/高刷时会明显比 Electron 侧"钝"。现在按所在显示器的刷新率取整跟随（低电量模式减半），偏好必须在 web view 构造前应用，且**先读回确认可写**再改；实测原生壳 114–120fps。
@@ -31,6 +31,7 @@
 - **控制面与 sidecar 的诊断也落盘（T-25 扩展）** —— 继原生壳本地日志之后，控制面日志与 sidecar 诊断同样按 0600 落盘：双击态出问题不再只能靠系统日志猜。
 - **未就绪来源的 boot 死区可以逃出去（design 05 §4.1）** —— 远程来源未就绪时点开会话，此前会停在全窗遮罩上等最长 135s 的收割臂，期间没有任何导航出口。现在遮罩按相位给动作：未连接（idle）立即给「连接」+ 切换行且**不启动 boot**；`error` 与托管 `stopped`/`restart-exhausted` 在 1.5s 宽限后判不可服务（不再等满 60s）；`degraded`（重连在途）不判死、仍在预算内等；挂死 boot 超过反馈窗（10s）后给重试/连接/切换 + ⌘R 提示；502（隧道通、远端端口死）是非阻断横幅并按 ready 世代自愈一次。
 - **侧栏会话 running 位陈旧会自愈** —— 会话已被判定结束、running 位却没收敛时，聊天面此前会一直不渲染：现在由侧栏会话事实与渲染位活性守卫三层收敛，聊天面恢复挂载。
+- **gateway 登录页阶段预热（design 17 §10.6）** —— 未登录访客在输入密码时即预取**真实的** `/plugins` bundle URL（HTTP 缓存按 URL 建键，包装 URL 拿不到收益），登录后首屏直接取用整册前端 bundle（实测约 4.35 MiB gzip），不再落在关键路径上；能力由一枚短时 HttpOnly cookie 承载（HMAC、客户端地址绑定、120 s），该路由在认证门之前被咨询，但只认两种真实 bundle 形态 + 有效 capability，缺/过期/篡改/他人 cookie 一律落回原有 401/session 判定与类别审计，其余 `/plugins/**` 不放开；限速与容量 fail-closed（超限 429/503，且限速只对已验签的 capability 生效），并带 `--no-warmup` / `DSH_GATEWAY_WARMUP=0` 关闭开关（关闭时登录页 HTML 逐字节回旧模板）。
 
 ### 变更
 - **win32 私有状态读写不再要求 `O_NOFOLLOW`** —— 平台没有该旗标时改为身份回退：open 前后 lstat 拒符号链接并以 dev/ino 复验，不可证即 fail-closed（不再在事务首步抛错）；Windows 上 `<userData>/dsh-runtime` 已存在也不再被误判为 corrupt 而永久阻断。登记为 design 23 F8（身份回退的 TOCTOU 残余）。
@@ -56,7 +57,7 @@
 - **无法验证的 running 位不再长期保留** —— 事实读持续失败到界限后只清 running 断言（行/分组保留、不触发归档回流），并把来源交给既有的会话停滞横幅「无法确认会话状态」，下一次成功读取（push 或 unary）立即恢复；侧栏的陈旧远程 running 位由本地裁决清除（本地判词 + 独立 unary 权威读，确认后经上游公开的 `handleSessionStatus(id, false)` 写回），不再需要上游补丁。
 - **流抖动下聊天面与侧栏座位保持可见** —— 四个 `from-opacity:0` 入场动画在隐藏/被遮挡的 N-ctx 壳里可能冻在第一帧，让 HARNESS 标记与设置齿轮「不可见但仍可点」；这些动画已退役，隐藏壳门禁同步收紧。
 - **WebKit 下设置页的服务器选项按压不再丢失** —— WKWebView 不在 mousedown 聚焦按钮，下拉的搜索框随即 blur（relatedTarget: null）并关闭 portal，切换服务器的 click 到不了已卸载的行；现在抑制 mousedown 默认行为直到 click 生效（与上游 MenuView 同一手法），键盘 Enter、外部 pointerdown、遮罩与 Escape 语义不变。
-- **原生 dmg 带上拖拽安装提示** —— 原生 dmg 此前只有 app 与 /Applications 软链，Finder 打开是白面板；现在由 `macos/scripts/dmg.mjs` 统一产出带 electron-builder 同款背景与图标坐标的 UDZO 镜像，并在装配时挂载自检（.DS_Store、背景 tiff、软链），缺提示的 dmg 不再能出厂。
+- **原生 dmg 带上拖拽安装提示** —— 原生 dmg 此前只有 app 与 /Applications 软链，Finder 打开是白面板；现在由 `macos/scripts/dmg.mjs` 统一产出带 electron-builder 同款背景与图标坐标的 UDZO 镜像，并在装配时做**内容级**自检：读 `.DS_Store` 断言背景类型、指向卷内背景的别名、图标尺寸、窗口尺寸与两条图标坐标，缺提示或坐标错的 dmg 不再能出厂。
 - **系统唤醒后原生 flavor 的立即重连与补发从未生效** —— 唤醒通知此前注册在错误的通知中心，现已注册到 `NSWorkspace.shared.notificationCenter`。
 - **keep-awake 不再连带阻止显示器休眠** —— 与 Electron 的 `prevent-app-suspension` 语义（以及 design 14 D5）对齐：只防系统休眠。
 - **确认对话框不再把正文显示两遍**（调用点把标题与正文传同一文案时，原生壳此前两处都渲染）。
@@ -75,6 +76,8 @@
 - **重放器不再认领身份未验证的遗留 token** —— 控制面回收器对遗留 token 的接管要求条目自身的 dsh 身份可识别，否则保留并记为 identity-unverified，避免误杀他人进程。
 - **CSP 的 style 源按生效链求值** —— 有效 style 源按 CSP3 回退链（`style-src-elem` → `style-src` → `default-src`）与大小写不敏感 nonce/hash 求值，注入的根规则因此不会被"别处还有一条 style-src"骗过。
 - **跨语言锁步测试不再被注释骗过** —— 两处装配锁步此前匹配原始源码，把 apply/install 调用注释掉仍然绿；现在先剥离注释行再匹配。
+- **移动端 composer 不再被键盘盖住** —— 旧的键盘补偿靠 `innerHeight` 与 visualViewport 推断键盘高度，并把偏移同时写成 sticky bottom 与滚动器 padding（滚动器又是 sticky 的包含块，实测越顶 368px、另有被盖 +336px）；现在直接量会话滚动器边框盒的重叠——这个量在本守卫自己的写入下不变，验证环因此有不动点——只写 frame 自定义属性 + 一个 in-flow spacer 提供滚动余量，配 96/72px 迟滞、有界复测（≤2 步）与 `data-mobile-kbd-state` 诊断面；载体若反常地随写入移动则锁存并如实上报，不再爬升。
+- **Git 工作树删除对话框不再自相矛盾** —— 风险确认此前声称「分支不受影响」，而同一流程另有「同时删除本地分支」勾选；现在只陈述将被丢弃的内容，分支去留交给那个勾选项。
 
 ## [0.3.1] - 2026-09-15
 
