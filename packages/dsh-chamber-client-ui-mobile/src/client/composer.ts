@@ -725,6 +725,8 @@ function isComposerSelection(): boolean {
 
 export function installComposerVisibilityGuard(root: ParentNode = document): () => void {
   let applied = 0
+  /** The measured edge moved WITH one of our own writes (see applyLift). */
+  let carrierPushed = false
   /** The frame currently carrying the offset (teardown handle: the frame
    *  persists across seat remounts, so disarm must target the element that
    *  actually carries the attribute). */
@@ -781,6 +783,7 @@ export function installComposerVisibilityGuard(root: ParentNode = document): () 
     removeSpacer()
     clearState()
     applied = 0
+    carrierPushed = false
   }
 
   /** The keyboard's owner: an editable element focused right now, a caret
@@ -829,7 +832,14 @@ export function installComposerVisibilityGuard(root: ParentNode = document): () 
    *  below the visible bottom edge, in layout coordinates. The scrollport's
    *  border box is flex-sized (never content- or padding-driven), so this
    *  value is invariant under the guard's own writes — the loop has a fixed
-   *  point instead of oscillating. `null` when the scrollport is absent. */
+   *  point instead of oscillating. `null` when the scrollport is absent.
+   *
+   *  PREMISE (2026-09 review): "flex-sized" is the upstream CSS contract
+   *  (`.root{height:100%}` → `.body{flex:1}` → `.scrollBody{flex:1;overflow-y:auto}`),
+   *  not something this guard can enforce: a carrier that answers a lift with
+   *  its own growth inflates this measurement (synthetic model: 352 → 5984px
+   *  over the poll window). `applyLift` therefore probes the edge across the
+   *  write itself and latches (`carrierPushed`) instead of trusting the premise. */
   const coveredOf = (seat: Element): number | null => {
     const scroller = seat.closest('[data-conversation-scroll]')
     if (!(scroller instanceof HTMLElement)) return null
@@ -907,13 +917,25 @@ export function installComposerVisibilityGuard(root: ParentNode = document): () 
      *  attr=352 / var=1056 / spacer=1056 with an engine that ignores the
      *  inset). */
     const applyLift = (value: number): void => {
+      // Self-push probe (2026-09 review): read the measured edge immediately
+      // before and after THIS write. The window is synchronous, so movement
+      // inside it is caused by us — a viewport-driven move lands outside it.
+      const node = scroller instanceof HTMLElement ? scroller : null
+      const before = node === null ? null : node.getBoundingClientRect().bottom
+      const increment = value - applied
       frame.setAttribute(MOBILE_KBD_ATTR, String(value))
       frame.style.setProperty(MOBILE_KBD_VAR, `${value}px`)
       ensureSpacer(seat, value)
+      if (node !== null && before !== null && increment > 0
+          && node.getBoundingClientRect().bottom - before >= increment * 0.5) {
+        carrierPushed = true
+      }
       applied = value
     }
     armedFrame = frame
-    let lift = target
+    // A latched carrier never grows again (a shrinking requirement still
+    // releases): the residue is REPORTED as `still-covered`, not chased.
+    let lift = carrierPushed && target > applied ? applied : target
     applyLift(lift)
     // Was the conversation pinned to its end before this step? If yes, keep
     // the message tail glued above the raised seat: the spacer grows the
@@ -929,7 +951,7 @@ export function installComposerVisibilityGuard(root: ParentNode = document): () 
     // compound the spacer past the lift the measured overlap called for
     // (measured 3x overshoot before this).
     let steps = 0
-    while (steps < KBD_MAX_VERIFY_STEPS) {
+    while (!carrierPushed && steps < KBD_MAX_VERIFY_STEPS) {
       const residual = seat.getBoundingClientRect().bottom - visibleBottom()
       if (residual <= KBD_VERIFY_SLACK_PX) break
       const extra = nextKbdOffset(residual) - lift

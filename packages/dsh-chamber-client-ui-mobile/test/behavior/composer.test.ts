@@ -271,6 +271,24 @@ test('editability recovery only trusts the composer\'s OWN attribute flip (sourc
     'the editability observer must ignore foreign contenteditable flips',
   )
 })
+test('the guard keeps its full trigger set wired (source lock)', () => {
+  // 2026-09 review: the visualViewport/window listeners, the visibilitychange
+  // handler and the [data-phase] observer had NO coverage at all — deleting any
+  // one of them left every package test green, while design 17 §18.4.4 makes
+  // "触发面完整" an invariant. Pin the registrations (and the attribute filter)
+  // so a dropped trigger is a red test, not a silent field regression.
+  const source = readFileSync(fileURLToPath(new URL('../../src/client/composer.ts', import.meta.url)), 'utf8')
+  for (const needle of [
+    "window.visualViewport?.addEventListener('resize', onViewportChange)",
+    "window.visualViewport?.addEventListener('scroll', onViewportChange)",
+    "window.addEventListener('resize', onViewportChange)",
+    "document.addEventListener('visibilitychange', onVisibility)",
+    "document.addEventListener('focusin', onFocusIn, true)",
+    "document.addEventListener('pointerdown', onPointerDown, true)",
+    "attributeFilter: ['data-phase']",
+  ]) assert.ok(source.includes(needle), `trigger registration must stay wired: ${needle}`)
+})
+
 test('the guard keeps ONE actuator, never pads the scrollport (source lock)', () => {
   const source = readFileSync(fileURLToPath(new URL('../../src/client/composer.ts', import.meta.url)), 'utf8')
   // Measured double-lift defect: the conversation scrollport is ALSO the
@@ -283,9 +301,12 @@ test('the guard keeps ONE actuator, never pads the scrollport (source lock)', ()
   // The scroll range comes from an in-flow spacer kept immediately before the
   // seat, including after a renderer remount reorders the seat list.
   assert.match(source, /spacer\.nextElementSibling !== seat/)
-  // Bounded verification: the correction loop is capped, so an engine that
-  // ignores the sticky inset is reported instead of chased.
-  assert.match(source, /while \(steps < KBD_MAX_VERIFY_STEPS\)/)
+  // Bounded verification: the correction loop is capped AND refuses to run on
+  // a carrier that moved with our own write (2026-09 review), so an engine
+  // that ignores the sticky inset — or feeds the lift back into the measured
+  // edge — is reported instead of chased.
+  assert.match(source, /while \(!carrierPushed && steps < KBD_MAX_VERIFY_STEPS\)/)
+  assert.match(source, /if \(node !== null && before !== null && increment > 0/)
   // Diagnosis surface: every outcome is readable off the frame.
   for (const state of ['armed', 'idle', 'no-seat', 'no-frame', 'still-covered']) {
     assert.ok(source.includes(`'${state}'`), `missing guard state ${state}`)

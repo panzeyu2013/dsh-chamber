@@ -108,6 +108,23 @@ test('a focused editable OUTSIDE the composer seat leaves the guard idle (F6)', 
   })
 })
 
+test('a carrier that grows with the lift is latched, never ramped (F2)', () => {
+  // The measurement's premise is that the scrollport's border box is
+  // flex-sized, so our own writes cannot move it. This model breaks it: each
+  // write grows the measured edge by the increment it applied (the synthetic
+  // feedback that ramped 352 → 5984px over the poll window). The guard must
+  // read the edge across the write, latch, and REPORT the residue.
+  withGuard({ covered: 336, scrollerGrowsWithLift: 1 }, h => {
+    const first = h.frame.getAttribute(MOBILE_KBD_ATTR)
+    assert.equal(first, '352')
+    for (let tick = 0; tick < 20; tick += 1) h.clock.advance(KBD_POLL_MS)
+    assert.equal(h.frame.getAttribute(MOBILE_KBD_ATTR), first,
+      'a self-pushed carrier must not raise the lift past its first bounded value')
+    assert.equal(h.frame.getAttribute(MOBILE_KBD_STATE_ATTR), 'still-covered',
+      'the residue is reported instead of chased')
+  })
+})
+
 test('a hidden active-phase root earlier in DOM order never wins the seat query (F3)', () => {
   withGuard({ covered: 336, hiddenSeatFirst: true }, h => {
     // First-match seat selection served the hidden seat (scrollport 0x0) and
@@ -142,7 +159,12 @@ test('an engine that honors the sticky inset arms with one coherent 352px lift',
   })
 })
 
-test('a geometry that lands short is corrected within the same sync, on the FINAL lift (F1)', () => {
+test('a requirement that GROWS during the write is corrected within the same sync, on the FINAL lift (F1)', () => {
+  // Narrowed 2026-09: with an unchanged requirement the loop cannot fire
+  // (`extra > 0` needs `residual > lift - 8`, while a partially honoured
+  // engine leaves `residual <= nextKbdOffset(covered) - lift <= -8`) — a
+  // partially honouring engine converges on the next event/poll tick instead.
+  // The loop therefore only corrects demand that grew while the write landed.
   // The keyboard keeps rising while the first write lands (visible bottom drops
   // 400px): the first residual (384px) is worse than the applied lift, so the
   // bounded loop adds exactly the missing delta (48px → total 400) instead of

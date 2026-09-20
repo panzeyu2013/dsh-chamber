@@ -453,7 +453,8 @@ idempotent, and is installed/uninstalled by `ctx.effect` behind one
   60px-scale overlaps stay idle (measured) — and offsets are quantized (16px
   steps with a fixed `KBD_OFFSET_HEADROOM_PX` = 8px of headroom above the raw
   overlap → an 8–23px dead band). Triggers: visualViewport resize/scroll,
-  window resize, focusin/focusout, visibilitychange, a `[data-phase]` observer
+  window resize, focusin (focusout only stamps the 1200ms grace window — the
+  re-sync comes from the next event or the poll), visibilitychange, a `[data-phase]` observer
   (the sticky seat exists only in the active phase), a document `pointerdown`
   (re-syncs ONCE — it never re-arms or extends the poll) and a BOUNDED 250ms
   poll while an editable is focused (4s budget, stamped once per focus arm),
@@ -465,10 +466,14 @@ idempotent, and is installed/uninstalled by `ctx.effect` behind one
   get the 16px floor at the source. Arming is idempotent per frame element, so
   a renderer remount that replaces the AppFrame while the keyboard stays open
   re-stamps the new frame (and cleans the old one). After writing the offset the
-  guard re-measures at most twice (24px slack) and then REPORTS
-  `data-mobile-kbd-state` (`armed | idle | no-seat | no-frame | still-covered`)
-  instead of ramping forever: an engine that ignores the sticky inset is
-  surfaced, never chased.
+  guard re-measures at most twice (24px slack) — that loop only fires when the
+  requirement GROWS while the write lands (an unchanged requirement cannot enter
+  it; a partially honouring engine converges on the next event/poll tick) — and
+  then REPORTS `data-mobile-kbd-state` (`armed | idle | no-seat | no-frame |
+  still-covered`): `idle` covers "below the arm threshold", "no editable focus"
+  and "focus outside the composer"; `still-covered` is the reported residue of an
+  engine that ignores the sticky inset or — latched since 2026-09 — of a carrier
+  that moves with the guard's own write. The residue is surfaced, never chased.
 - **Enter belongs to the editor**: the composer's resident div doubles as the
   no-workspace picker trigger — with no workspace it binds `editor = null`, so
   it renders `contenteditable="false"` while still carrying

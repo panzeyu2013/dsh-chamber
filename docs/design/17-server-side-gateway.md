@@ -1476,11 +1476,17 @@ microtask 合并）。**dsh-client-web fork 是这些补丁的合法落点**（�
   而非依赖数值 `applied` 短路（否则新 frame 无属性、composer 停在键盘后）。
 - **滞回 96/72**：≥96px 才视为键盘级遮挡（浏览器底栏/60px 级小重叠实测保持 idle），armed 后 <72px 才释放，
   滑动的键盘不会让 seat 抖动。
-- **有界验证**：写后复测 ≤2 步、容差 24px；不达标只写 `data-mobile-kbd-state=still-covered` 上报，**绝不连续
-  爬升**——引擎若忽略 sticky inset，是"报告"而不是"追"。
+- **有界验证**：写后复测 ≤2 步、容差 24px，且只修正**写入期间增长**的需求（需求不变时 `extra > 0` 不可达，
+  部分兑现由下一次 sync 收敛）；不达标只写 `data-mobile-kbd-state=still-covered` 上报，**绝不连续爬升**——
+  引擎若忽略 sticky inset，是"报告"而不是"追"。
+- **前提与自推锁存（2026-09 复核）**：测量值依赖「滚动器边框盒由 flex 决定」这一上游 CSS 契约
+  （`.root{height:100%}`→`.body{flex:1}`→`.scrollBody{flex:1}`）；该前提不是守卫能强制的，故 `applyLift` 在
+  **同一次写入的前后**读被测边：载体若以自己的增长回应本次增量（合成模型 20 tick 爬到 5984px），锁存后不再
+  抬升、只报 `still-covered`（viewport 驱动的位移落在写入窗口之外，不会误锁）。
 - **诊断面**：`data-mobile-kbd`（生效 px）+ `data-mobile-kbd-state`（armed | idle | no-seat | no-frame |
-  still-covered）落在 frame 上并镜像到 `<html>`，真机可即时读取；"静默不生效"这一失效模式不再可能。
-- **触达完整**：vv resize/scroll + window resize + focusin/out + visibilitychange + document pointerdown（任意
+  still-covered）落在 frame 上并镜像到 `<html>`，真机可即时读取；`idle` 覆盖「低于阈值 / 无可编辑焦点 / 焦点
+  不在 composer」三因；"静默不生效"这一失效模式不再可能。
+- **触达完整**：vv resize/scroll + window resize + focusin（focusout 只打 1.2s 宽限窗）+ visibilitychange + document pointerdown（任意
   点击后重同步一次）+ `[data-phase]` observer（sticky seat 只在 active 相位存在）+ 可编辑焦点后 250ms 有界轮询
   （4s 预算）。实测无事件场景 8 帧内收敛。
 - **宽限窗口 1200ms（`KBD_EDITABLE_FOCUS_GRACE_MS`）**：自 focusout 起算，覆盖「提交期 editability 翻转」与

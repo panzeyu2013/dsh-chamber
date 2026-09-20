@@ -336,7 +336,7 @@ Tooltip 用法中 27 处是带 aria-label 的按钮，标签命名同一动作�
   0–34px 死区）。**滞回 96/72**：遮挡 ≥96px 才 arm、<72px 才释放（浏览器底栏与
   60px 级小重叠实测保持 idle）；偏移量化（16px 步进 + 固定
   `KBD_OFFSET_HEADROOM_PX`=8px headroom → 死区 8–23px）。**触达**：
-  visualViewport resize/scroll、window resize、focusin/focusout、visibilitychange、
+  visualViewport resize/scroll、window resize、focusin（focusout 只打 1.2s 宽限窗，重同步来自下一次事件或轮询）、visibilitychange、
   `[data-phase]` observer（sticky seat 只在 active 相位存在）、document
   `pointerdown`（只重同步一次，**不**重臂/延长轮询）+ 可编辑焦点后
   **250ms 有界轮询（4s 预算，按焦点会话一次计，指针/焦点噪声不延长）**——引擎不派发
@@ -346,9 +346,12 @@ Tooltip 用法中 27 处是带 aria-label 的按钮，标签命名同一动作�
   非 composer 字段仍否决（缩放页面的平移不得驱动偏移），抽屉内输入框补 16px
   底线从源头消除聚焦缩放。arm 以 **frame 元素**为单位幂等：renderer 重挂替换
   AppFrame 而键盘仍开着时，新 frame 会被重新打标（旧 frame 的插件属性被清理）。
-  写偏移后最多复测 2 步（容差 24px），不达标只上报 `data-mobile-kbd-state`
-  （`armed | idle | no-seat | no-frame | still-covered`），**绝不无限爬升**：
-  引擎若忽略 sticky inset，是被"报告"而不是被"追"。
+  写偏移后最多复测 2 步（容差 24px），但该环只修正**写入期间增长**的需求——需求
+  不变时环不可达，部分兑现由下一次事件/轮询重新测量收敛；不达标只上报
+  `data-mobile-kbd-state`（`armed | idle | no-seat | no-frame | still-covered`）：
+  `idle` 覆盖「低于阈值 / 无可编辑焦点 / 焦点不在 composer」三因，`still-covered`
+  是残余量的如实上报（引擎忽略 sticky inset，或 2026-09 起锁存的「载体随本守卫自己
+  的写入移动」），**绝不无限爬升**。
 - **Enter 属于编辑器**：composer 的常驻 div 同时充当「无工作区」选择器触发器
   ——无工作区时它绑定 `editor = null`，于是渲染成 `contenteditable="false"`，
   却仍带 `[data-composer-input]`、`tabIndex=0` 与官方那段负责打开选择器的

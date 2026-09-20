@@ -255,6 +255,11 @@ export interface GuardHarnessOptions {
    *  so the applied lift genuinely lands short and the bounded verify loop
    *  must correct it within the same sync. */
   keyboardGrowthOnFirstWrite?: number
+  /** The CARRIER answers the guard's own writes: the scrollport's bottom edge
+   *  grows by this factor × the lift increment (0 = the flex-sized border-box
+   *  premise holds). Models the premise break the self-push probe must latch —
+   *  the synthetic feedback that ramped 352 → 5984px over the poll window. */
+  scrollerGrowsWithLift?: number
 }
 
 export interface GuardHarness {
@@ -369,6 +374,7 @@ export function createGuardHarness(options: GuardHarnessOptions = {}): GuardHarn
   seat.onRect = (): void => { counts.seatRects += 1 }
 
   let appliedLift = 0
+  let previousLift = 0
   let liftWrites = 0
   const harness: GuardHarness = {
     root, frame, seat, input, scroller, outsideInput,
@@ -414,6 +420,11 @@ export function createGuardHarness(options: GuardHarnessOptions = {}): GuardHarn
       windowDouble.innerHeight -= options.keyboardGrowthOnFirstWrite as number
     }
     liftWrites += 1
+    // Carrier feedback: the measured edge grows with the increment we wrote
+    // (the flex-sized presumption broken). The guard must latch, not ramp.
+    const grow = (lift - previousLift) * (options.scrollerGrowsWithLift ?? 0)
+    previousLift = lift
+    if (grow > 0) scroller.rect = rect(scroller.rect.bottom + grow)
     seat.rect = rect(scroller.rect.bottom - lift * harness.responsiveness, 390, 20)
   }
   if (options.focused !== false) documentDouble.activeElement = input

@@ -1269,6 +1269,7 @@ function isComposerSelection() {
 }
 function installComposerVisibilityGuard(root = document) {
   let applied = 0;
+  let carrierPushed = false;
   let armedFrame = null;
   let spacer = null;
   let lastEditableFocusAt = 0;
@@ -1305,6 +1306,7 @@ function installComposerVisibilityGuard(root = document) {
     removeSpacer();
     clearState();
     applied = 0;
+    carrierPushed = false;
   };
   const editableFocused = () => {
     if (isEditableFocus(document.activeElement)) return true;
@@ -1384,17 +1386,23 @@ function installComposerVisibilityGuard(root = document) {
     const scroller = seat.closest("[data-conversation-scroll]");
     const wasAtEnd = scroller instanceof HTMLElement && isAtScrollEnd(scroller.scrollTop, scroller.scrollHeight, scroller.clientHeight);
     const applyLift = (value) => {
+      const node = scroller instanceof HTMLElement ? scroller : null;
+      const before = node === null ? null : node.getBoundingClientRect().bottom;
+      const increment = value - applied;
       frame.setAttribute(MOBILE_KBD_ATTR, String(value));
       frame.style.setProperty(MOBILE_KBD_VAR, `${value}px`);
       ensureSpacer(seat, value);
+      if (node !== null && before !== null && increment > 0 && node.getBoundingClientRect().bottom - before >= increment * 0.5) {
+        carrierPushed = true;
+      }
       applied = value;
     };
     armedFrame = frame;
-    let lift = target;
+    let lift = carrierPushed && target > applied ? applied : target;
     applyLift(lift);
     if (wasAtEnd && scroller instanceof HTMLElement) scroller.scrollTop += lift;
     let steps = 0;
-    while (steps < KBD_MAX_VERIFY_STEPS) {
+    while (!carrierPushed && steps < KBD_MAX_VERIFY_STEPS) {
       const residual2 = seat.getBoundingClientRect().bottom - visibleBottom();
       if (residual2 <= KBD_VERIFY_SLACK_PX) break;
       const extra = nextKbdOffset(residual2) - lift;
