@@ -11,14 +11,14 @@
 > English: [docs/CHANGELOG.en-US.md](docs/CHANGELOG.en-US.md)
 
 
-## [0.3.2-beta.4] - 2026-09-20
+## [0.3.2-beta.5] - 2026-09-21
 
 ### 新增
 - **本地来源缺图端点现在给出病因，而不只是后果** —— 新增 boot-gap 事实 `local-graph-not-injected`（仅本地实例；远程与 gateway 逐字保留）：本机实例没有注入 chamber 的客户端图通道时，横幅先报「安装 / seed 完整性」这一病因，并以优先级压过 5 秒后到达的 `required-services-missing` 后果；同一 ready 世代内可撤销、可复查（判词后 +30s 有界复查，provider 迟到即清事实），不再长期挂着并白烧一次冷重挂。
 - **诊断点名缺失的提供方** —— 控制台诊断行由只报「等待者 ui-chat」升级为同时给出缺失提供方（`sidebarRight → @deepseek-ai/dsh-client-ui-sidebar-right`）；未登记的服务显式写 "provider row unknown"，缺行的病因不再零日志。
 - **Windows 腿开始跑前端契约，发布证明要求 Windows 打包彩排** —— ci.yml 的 Windows 腿新增 renderer 与 sidebar 的 `test:win32` 清单（根 `test:win32` 扇出到 5 个包，每包一个可点名的步骤），每个清单带「零测试即失败」守卫；`verify-release-ci-proof.mjs` 的 `REQUIRED_JOB_STEPS` 同步要求这两步与 Windows 打包彩排，删步/改名即红。
 - **通知失败不再是无解的死路（design 19 §3.3/§4.1）** —— `dsh-chamber:notify` 由布尔改为 `{ shown, error? }`：宿主/系统的拒绝原因与裁决侧抑制原因穿过 IPC 保留；新增 `dsh-chamber:open-notification-settings`（固定主进程侧 URL，不接受渲染端传入），设置页据此渲染原因、权限提示与「打开系统设置」按钮（中英）；映射纯函数有单测，Swift 壳把授权裁决与投递失败写入 native-shell.log。
-- **会话流健康臂（design 14 §D4）** —— api-gateway 流载体改为重试而非终态失败并投影页级 `stream-carrier-failed` 事实；open-in 插件渲染会话流健康 chip 座位；控制面记录被放弃的升级以便归因；修复被判定失败后立即**锁存**重载动作（判据挂在 settle 时钟而非相位，`loading` 驻留与隐藏期都不再吞掉它），载体重连的抖动也不再只留在闭包里。
+- **会话流健康臂（design 14 §D4）** —— api-gateway 流载体改为重试而非终态失败并投影页级 `stream-carrier-failed` 事实；open-in 插件渲染会话流健康 chip 座位；控制面记录被放弃的升级以便归因；修复被判定失败后立即**锁存**重载动作（判据挂在 settle 时钟而非相位，`loading` 驻留与隐藏期都不再吞掉它），载体重连的抖动也不再只留在闭包里。2026-09 的卡死排查把这条臂补成完整闭环：开帧发送前校验 socket（被替换/正在关闭即按载波失败，杜绝 RFC 6455 静默丢弃）、逻辑流首帧 30s 期限（连续超时放宽到 4×）、WebSocket 握手 30s、socket 丢失后自查重连（1s 起、封顶 10s，连接泵下令的重连不计失败）、journal 静默 ≥45s 时开旁路 sibling follow 并只比对 opening cursor（仅宿主确已前进才替换物理世代），以及健康 chip 上的**用户触发**「重建对话通道」（具象能力守卫、只 arm 后单一执行、与自动 heal 共用 cooldown）。
 - **macOS Swift 原生壳（design 25 路线 A，预览）** —— macOS 上新增第二只壳：Swift/AppKit 只做壳（窗口、WKWebView、菜单/通知/角标/深链/对话框/外部打开/隐藏恢复），**壳内不承载任何业务**；业务由打包成独立 Node 可执行文件的 sidecar 承载（现有 control-plane 与 desktop 的纯 Node 业务模块族原样运行），Swift 与 sidecar 之间走一条受信的 stdio JSON-RPC 通道，页面侧用与 preload 等价的注入 shim 顶替 `window.dshChamber`，web UI 100% 复用。与原 Electron 版**共存**：产物为 `dsh-chamber-<版本>-macos-arm64.dmg/.zip`（本版起命名归属反转，见「变更」），bundle id `com.dshchamber.native`（通知授权身份独立），双 flavor 共用同一 userData 根与目录锁（`<userData>/.dsh-chamber.lock`，darwin `flock`/`O_EXLOCK`，锁本身是唯一仲裁权威），并保证关窗决策只吃**本世代**的关闭语境事实：取消退出后不再沿用旧决定，设置变更与 sidecar 重启各失效一次、重启后再预热一次以保住 ms 级关窗。
 - **原生 flavor 的应用内更新链（design 25 §7，D-1 = B）** —— 改为 Sparkle 2：检查真实 appcast（EdDSA 签名；公钥/私钥由发布链配置），支持应用内下载、安装与重启，并保留用户手动的「检查更新…」；beta 通道用滚动 appcast 同时收当前 beta 与最新 final，让 beta 客户端也能看到 final（S-22/S-23/S-36）。更新面不可用、坏 feed/坏公钥或忙态点击都返回诚实错误而不是静默吞掉（S-37–S-39）。
 - **双 flavor 防漂移锁步与新 CI 腿** —— IPC 面镜像（main/preload 两侧字面量与结构）、桥 manifest（`bridge-manifest.json` ↔ 生成的 Swift 白名单，通道 68 = 60 invoke + 8 push）、注入 shim 表面、core 的 electron-free 传递闭包、打包清单与产物命名（`-native` 不含碰撞、更新 feed 归属唯一）各有独立门禁；新增 macOS CI 腿 `test-macos`（Swift 构建 + XCTest + 打包干跑 + darwin 目录锁与打包脚本套件），发布证明要求 linux/windows/macos 三腿同时通过。
@@ -32,6 +32,8 @@
 - **未就绪来源的 boot 死区可以逃出去（design 05 §4.1）** —— 远程来源未就绪时点开会话，此前会停在全窗遮罩上等最长 135s 的收割臂，期间没有任何导航出口。现在遮罩按相位给动作：未连接（idle）立即给「连接」+ 切换行且**不启动 boot**；`error` 与托管 `stopped`/`restart-exhausted` 在 1.5s 宽限后判不可服务（不再等满 60s）；`degraded`（重连在途）不判死、仍在预算内等；挂死 boot 超过反馈窗（10s）后给重试/连接/切换 + ⌘R 提示；502（隧道通、远端端口死）是非阻断横幅并按 ready 世代自愈一次。
 - **侧栏会话 running 位陈旧会自愈** —— 会话已被判定结束、running 位却没收敛时，聊天面此前会一直不渲染：现在由侧栏会话事实与渲染位活性守卫三层收敛，聊天面恢复挂载。
 - **gateway 登录页阶段预热（design 17 §10.6）** —— 未登录访客在输入密码时即预取**真实的** `/plugins` bundle URL（HTTP 缓存按 URL 建键，包装 URL 拿不到收益），登录后首屏直接取用整册前端 bundle（实测约 4.35 MiB gzip），不再落在关键路径上；能力由一枚短时 HttpOnly cookie 承载（HMAC、客户端地址绑定、120 s），该路由在认证门之前被咨询，但只认两种真实 bundle 形态 + 有效 capability，缺/过期/篡改/他人 cookie 一律落回原有 401/session 判定与类别审计，其余 `/plugins/**` 不放开；限速与容量 fail-closed（超限 429/503，且限速只对已验签的 capability 生效），并带 `--no-warmup` / `DSH_GATEWAY_WARMUP=0` 关闭开关（关闭时登录页 HTML 逐字节回旧模板）。
+
+- **原生壳文案本地化并跟随应用内语言（design 25 §5.3）** —— 原生壳的菜单、托盘、对话框与错误文案此前是写死的中文；现在整表（121 键）以 en / zh-Hans 两份字符串资源随包发布，键表由 `NativeTextKey` 单一来源锁步，两份文件的占位符逐键同型同序。壳自建文案跟随**页面语言**（应用内切换即生效），系统与框架面（Sparkle 标准窗、AppKit 内建串、右键菜单）默认跟随系统语言，仅当语言族不同时才写 `AppleLanguages` 让它们一起跟随（下次启动生效）。装配期对每个 `.lproj` 做存在 + 逐字节 + `plutil` 三重 fail-closed 断言，缺件不再出包。
 
 ### 变更
 - **win32 私有状态读写不再要求 `O_NOFOLLOW`** —— 平台没有该旗标时改为身份回退：open 前后 lstat 拒符号链接并以 dev/ino 复验，不可证即 fail-closed（不再在事务首步抛错）；Windows 上 `<userData>/dsh-runtime` 已存在也不再被误判为 corrupt 而永久阻断。登记为 design 23 F8（身份回退的 TOCTOU 残余）。
@@ -78,6 +80,9 @@
 - **跨语言锁步测试不再被注释骗过** —— 两处装配锁步此前匹配原始源码，把 apply/install 调用注释掉仍然绿；现在先剥离注释行再匹配。
 - **移动端 composer 不再被键盘盖住** —— 旧的键盘补偿靠 `innerHeight` 与 visualViewport 推断键盘高度，并把偏移同时写成 sticky bottom 与滚动器 padding（滚动器又是 sticky 的包含块，实测越顶 368px、另有被盖 +336px）；现在直接量会话滚动器边框盒的重叠——这个量在本守卫自己的写入下不变，验证环因此有不动点——只写 frame 自定义属性 + 一个 in-flow spacer 提供滚动余量，配 96/72px 迟滞、有界复测（≤2 步）与 `data-mobile-kbd-state` 诊断面；载体若反常地随写入移动则锁存并如实上报，不再爬升。
 - **Git 工作树删除对话框不再自相矛盾** —— 风险确认此前声称「分支不受影响」，而同一流程另有「同时删除本地分支」勾选；现在只陈述将被丢弃的内容，分支去留交给那个勾选项。
+
+- **设置导航齿轮、侧栏字标与设置座席的空白图标已修（design 05 §4.2）** —— 入场动画退役后同一症状仍复现，真机判因是上游图标把 Figma 导出 id 写死在组件里，而 `url(#…)` 按**文档**解析：N-ctx 在同一文档里挂 N 个实例壳，同一 id 被逐壳重复定义，macOS WKWebView 在新建图标首次绘制解析到隐藏壳里的 clipper/mask 时把整块丢绘并缓存结果（属性回写、揭示壳、视图过渡都不自愈）。现在 renderer 在 React root 之前安装一个 scoper，让每个 `<svg>` 自足：只把「本 svg 内定义 ∩ 本 svg 内被引用」的资源 id 改名为文档唯一 token，跨 svg 的引用把定义复制进消费方；aria、内嵌 `<style>` 与文档级样式表引用的 id 一律保留原名。上游的最小改法另登记为提案。
+- **boot 遮罩不再被租客画穿，会话面画好即揭幕（design 05 §2.2.1/§4）** —— 真机两形态：遮罩期官方 composer（`position: sticky`，z-index 7）画在 z-index 1 的遮罩之上（「白屏里出现输入栏」）；揭示门只吃 App 侧两个异步镜像事实，迟到或抖动时遮罩挂在已经渲染好的壳上直到 open 预算烧完（「白屏 / 直接显示载入中」交替）。现在把 stacking 边界画在租客根（`.instance-shell{isolation:isolate}`）、持有期直接隐藏租客（并入隐藏壳禁动画门），并以壳自己暴露的 `[data-phase]` 决定揭幕（`active` 立即、`absent` 2s 兜底、`hero`/`settling` 保持 + 70s 外层保险；释放是电平、绑请求身份），只对「落地面是遮罩」的切换取硬切，避免旧视图输入栏与新遮罩混色。
 
 ## [0.3.1] - 2026-09-15
 
