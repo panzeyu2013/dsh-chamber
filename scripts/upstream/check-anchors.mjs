@@ -23,7 +23,7 @@
  * 之间的内容）；只把"同一行里有且仅有一个可解析符号"的锚点写回行号，其余留给人工。
  * 写完必须重跑受影响的测试（部分 Swift/TS 测试注释引用这些行号）。
  */
-import { existsSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync } from 'node:fs'
 import { basename, dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadRegistry, validateRegistry } from './registry.mjs'
@@ -55,7 +55,7 @@ export function collectTestSurfaceFiles(root = ROOT) {
   }
   return [...new Set(files)].sort()
 }
-const IGNORED_DIRECTORIES = new Set(['node_modules', 'vendor', 'dist', 'lib', 'release', '.git', '.build', '.dev-user-data'])
+const IGNORED_DIRECTORIES = new Set(['node_modules', 'vendor', 'dist', 'lib', 'release', '.git', '.build', '.dev-user-data', '.tmp'])
 
 const USAGE = [
   '用法: node scripts/upstream/check-anchors.mjs [--report|--fix --file <path> [--apply]|--update-budget [--force]]',
@@ -72,7 +72,17 @@ export function collectFiles(root, suffix) {
     for (const name of readdirSync(dir)) {
       if (IGNORED_DIRECTORIES.has(name)) continue
       const full = join(dir, name)
-      const info = statSync(full)
+      // 悬空软链（GUI 验收留下的 Chrome `SingletonCookie` 等）会让 statSync 抛 ENOENT、
+      // 软链环抛 ELOOP，两者都会把整道门打挂（2026-09 实测）；这类条目既不是锚点目标也
+      // 不该递归，跳过即可。其余软链保持原样跟随（不改变既有解析面）。
+      if (lstatSync(full).isSymbolicLink() && !existsSync(full)) continue
+      let info
+      try {
+        info = statSync(full)
+      } catch (error) {
+        if (error.code === 'ENOENT' || error.code === 'ELOOP') continue
+        throw error
+      }
       if (info.isDirectory()) walk(full)
       else if (name.endsWith(suffix)) found.push(full)
     }

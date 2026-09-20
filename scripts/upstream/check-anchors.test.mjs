@@ -4,13 +4,13 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   LEGACY_ANCHOR_PATTERN, checkDocAnchors, checkRegistrySymbols, classifyAnchors, collectDeclarations,
-  collectDocAnchors, countLegacyAnchors, declarationLine, generatedRanges, parseAnchor,
+  collectDocAnchors, collectFiles, countLegacyAnchors, declarationLine, generatedRanges, parseAnchor,
   resolveAnchorInText, runFix,
 } from './check-anchors.mjs'
 
@@ -20,6 +20,24 @@ const HERE = dirname(fileURLToPath(import.meta.url))
  * 就能把棘轮废掉）。当前钉为整合后的实测值，此后只降不升；批量语义化重锚仍按 D15 在全部在途分支落地后执行，届时逐批调低。
  */
 const BUDGET_CEILING = 743
+
+test('collectFiles：悬空软链与软链环不炸门（Chrome SingletonCookie 形态）', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-anchors-walk-'))
+  try {
+    // .tmp 下的 Chrome 配置：悬空软链（GUI 验收留下的真实形态）。
+    mkdirSync(join(dir, '.tmp', 'dev-user-data'), { recursive: true })
+    symlinkSync('1374599200779130394', join(dir, '.tmp', 'dev-user-data', 'SingletonCookie'))
+    // 非 .tmp 目录里的悬空软链：同样不得让门崩，且不得被当成锚点目标。
+    mkdirSync(join(dir, 'docs'), { recursive: true })
+    writeFileSync(join(dir, 'docs', 'ok.md'), '# ok')
+    symlinkSync('missing-target', join(dir, 'docs', 'broken.md'))
+    assert.deepEqual(collectFiles(join(dir, 'docs'), '.md'), [join(dir, 'docs', 'ok.md')],
+      '悬空软链必须跳过，正常文件照常收集')
+    assert.deepEqual(collectFiles(dir, '.md'), [join(dir, 'docs', 'ok.md')], '.tmp 目录整体忽略')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
 
 test('parseAnchor：path#symbol 与 path#=literal:…', () => {
   assert.deepEqual(parseAnchor('src/a.ts#apply'), { file: 'src/a.ts', symbol: 'apply' })
