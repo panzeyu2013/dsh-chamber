@@ -217,4 +217,19 @@ final class PackagedLayoutTests: XCTestCase {
             XCTAssertTrue(buildSidecar.contains(anchor), "build-sidecar.mjs 布局锚点缺失：\(anchor)")
         }
     }
+
+    /// 资源查找候选：打包态扁平资源包 → swiftbuild（Swift 6.4+ 默认后端）的
+    /// `Contents/Resources` 形态 → 平铺。少一个候选，dev `swift run`（或任何未经
+    /// 装配归一化的形态）就会找不到桥 shim（2026-09 Xcode 27 实测）。
+    func testChamberResourceCandidatesCoverBothSwiftPMLayouts() {
+        let candidates = ChamberResources.candidateURLs(
+            in: URL(fileURLWithPath: resources), name: "bridge-shim.js")
+        XCTAssertEqual(candidates.map { $0.path }, [
+            "\(resources)/\(ChamberResources.bundleName)/bridge-shim.js",
+            "\(resources)/\(ChamberResources.bundleName)/Contents/Resources/bridge-shim.js",
+            "\(resources)/bridge-shim.js",
+        ], "候选顺序必须是 扁平资源包 → swiftbuild 内部形态 → 平铺")
+        XCTAssertTrue(candidates.allSatisfy { $0.lastPathComponent == "bridge-shim.js" },
+                      "每个候选都指向同一资源名")
+    }
 }

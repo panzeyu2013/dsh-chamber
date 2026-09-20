@@ -22,7 +22,8 @@
  *  ④b Mach-O magic 全集（含 FAT_MAGIC_64）+ readdir 失败 fail closed；
  *  ⑪ 架构断言：同宿主通过、--arch 反向 loud、.app 与捆绑 node 无交集 loud；
  *  ⑫ lipo 输出解析（x86_64/arm64e/旧版 Non-fat 文案）；
- *  ⑬ DMG 卷内容（/Applications 快捷方式）与卷名来自 --app-name（纯 + 真实 hdiutil）。
+ *  ⑬ DMG 卷内容（/Applications 快捷方式）与卷名来自 --app-name（纯 + 真实 hdiutil）；
+ *  ⑬a/⑬g 资源包两形态归一、装配 shim fail-closed。
  *  ⑰ CFBundleVersion 映射（S-23）：beta.N → X.Y.Z.N、final → X.Y.Z.final 标记，
  *     同 base 的 beta.N < beta.N+1 < final 且 beta 与 final 不同；
  *  ⑱ --dry-run 计划断言（G30）：feed/公钥成对、https、.xml、精确产物名；不写盘；
@@ -75,6 +76,8 @@ import {
   runBuildSwiftApp,
   finderLayoutScript,
   stageDmgVolume,
+  resourceBundleResourcesDir,
+  assertBridgeShimPresent,
   findSparkleFramework,
   shouldCopyWebDistEntry,
   sparkleFeedChannel,
@@ -701,6 +704,38 @@ test('⑬ DMG 卷内容：.app + /Applications 快捷方式 + Finder 拖拽布�
   }
 })
 
+test('⑬a SwiftPM 资源包两种形态都归一到扁平（swiftbuild = Swift 6.4+ 默认后端）', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-bundle-shape-'))
+  try {
+    // native（旧默认）：扁平资源包。
+    const flat = path.join(dir, RESOURCE_BUNDLE_NAME)
+    mkdirSync(flat, { recursive: true })
+    writeFileSync(path.join(flat, 'bridge-shim.js'), 'shim')
+    assert.equal(resourceBundleResourcesDir(flat), flat, '扁平形态必须原样取用')
+    // swiftbuild（Swift 6.4+ 默认）：多一层 Contents/Resources，必须收敛到资源目录。
+    const nested = path.join(dir, 'nested.bundle')
+    mkdirSync(path.join(nested, 'Contents', 'Resources'), { recursive: true })
+    writeFileSync(path.join(nested, 'Contents', 'Resources', 'bridge-shim.js'), 'shim')
+    assert.equal(resourceBundleResourcesDir(nested), path.join(nested, 'Contents', 'Resources'),
+      'swiftbuild 形态必须取 Contents/Resources，否则装配出的资源包没有 bridge-shim.js')
+    // 判定走注入的 exists（纯函数可测；目录不存在时保持原样，交给后续 fail-closed 报错）。
+    assert.equal(resourceBundleResourcesDir('/nonexistent', () => false), '/nonexistent')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('⑬g 装配 fail-closed：资源包缺 bridge-shim.js 即 loud', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-shim-guard-'))
+  try {
+    assert.throws(() => assertBridgeShimPresent(dir, '/tmp/source'), /缺 bridge-shim\.js/,
+      '缺 shim 必须抛（否则产出没有桥的 .app）')
+    writeFileSync(path.join(dir, 'bridge-shim.js'), 'shim')
+    assert.doesNotThrow(() => assertBridgeShimPresent(dir))
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
 test('⑬ 真实 DMG：卷内含 .app + /Applications 链接，卷名 = --app-name', async (t) => {
   if (!existsSync('/usr/bin/hdiutil')) {
     t.skip('hdiutil 不可用')

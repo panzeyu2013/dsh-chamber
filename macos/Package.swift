@@ -9,7 +9,9 @@
 //    W-04 的 A/B 桥文件（BridgeShimInjector/MessageHandler/AnyCodable/
 //    FrameCodec/BridgeClient，其他作者创建）同 target，模块内直接互引共享契约。
 //  - resources 显式列出 .process("Resources/bridge-shim.js")：只有 A 桥 shim
-//    随包编译为 DSHChamber_DSHChamber.bundle（扁平）；运行时由
+//    随包编译为 DSHChamber_DSHChamber.bundle——包内形态随后端：native 为扁平，
+//    swiftbuild（Swift 6.4+ 默认）为 `<bundle>/Contents/Resources/`；装配腿
+//    `resourceBundleResourcesDir()` 统一归一为扁平。运行时由
 //    ChamberResources 定位（resourceURL → bundleURL → 可执行目录；**不用
 //    Bundle.module**——装配态 .app 与 dev `swift run` 两种布局都要覆盖，见
 //    ChamberResources.swift 头注释）。**不要**把 Resources/ 整目录 process：

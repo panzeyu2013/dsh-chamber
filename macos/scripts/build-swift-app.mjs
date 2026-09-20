@@ -193,6 +193,26 @@ export function buildOutputDir(config) {
   return path.join(macosDir, '.build', config)
 }
 
+/** SwiftPM 资源包的「资源目录」——两种后端形态不同：
+ *  - `native`（旧默认）：扁平资源包 `<bundle>/bridge-shim.js`；
+ *  - `swiftbuild`（Swift 6.4+ 默认）：多一层 `<bundle>/Contents/Resources/bridge-shim.js`。
+ *  装配态只认扁平形态（运行期 `ChamberResources` 按 `<Resources>/<bundle>/<name>` 查找，
+ *  release.yml 的资源断言同样按该路径），所以这里统一收敛到资源目录再拷：两种后端
+ *  产出同一个扁平资源包。判定用目录形态而不是文件名——将来资源包加文件也不必回来改。 */
+export function resourceBundleResourcesDir(bundleDir, exists = existsSync) {
+  const nested = path.join(bundleDir, 'Contents', 'Resources')
+  return exists(nested) ? nested : bundleDir
+}
+
+/** 装配后的资源包必须真有桥 shim——形态再变（第三层目录、改名）时当场 loud。
+ *  抽成函数是为了能直接单测失败分支（2026-09 审查：新 fail-closed 分支原先无负例）。 */
+export function assertBridgeShimPresent(resourceBundleDir, source = '', exists = existsSync) {
+  if (!exists(path.join(resourceBundleDir, 'bridge-shim.js'))) {
+    throw new Error('装配后的资源包缺 bridge-shim.js：' + resourceBundleDir
+      + (source ? '（来源 ' + source + '——SwiftPM 资源形态变了？）' : ''))
+  }
+}
+
 export function renderInfoPlist(template, values) {
   let rendered = template
   for (const [key, value] of Object.entries(values)) {
@@ -656,7 +676,13 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
   mkdirSync(layout.resourcesDir, { recursive: true })
   cpSync(binarySource, layout.executable)
   chmodSync(layout.executable, 0o755)
-  cpSync(bundleSource, layout.resourceBundle, { recursive: true })
+  const bundleResources = resourceBundleResourcesDir(bundleSource)
+  if (bundleResources !== bundleSource) {
+    io.log(`[build-swift-app] SwiftPM 资源包为 swiftbuild 形态（${path.relative(macosDir, bundleSource)}/Contents/Resources）——按扁平形态装配`)
+  }
+  cpSync(bundleResources, layout.resourceBundle, { recursive: true })
+  // fail-closed：形态再变（第三个目录层级）时当场红，绝不产出没有桥 shim 的 .app。
+  assertBridgeShimPresent(layout.resourceBundle, bundleResources)
 
   const desktopPkg = JSON.parse(readFileSync(path.join(desktopDir, 'package.json'), 'utf8'))
   const version = typeof desktopPkg.version === 'string' ? desktopPkg.version : '0.0.0'

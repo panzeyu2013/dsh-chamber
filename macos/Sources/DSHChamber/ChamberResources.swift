@@ -13,8 +13,11 @@
 //    1. `Bundle.main.resourceURL` —— .app 的 Contents/Resources（打包态正解）；
 //    2. `Bundle.main.bundleURL` —— `swift run` / 扁平可执行（资源包与二进制同目录）；
 //    3. 可执行文件所在目录 —— 兜底（符号链接/自定义布局）。
-//  每一层先查 `<base>/<Target>_<Target>.bundle/<name>`（SwiftPM 资源包），
-//  再查 `<base>/<name>`（资源被平铺的布局），全部 miss → nil（调用方 loud）。
+//  每一层按 `candidateURLs(in:name:)` 的顺序查，全部 miss → nil（调用方 loud）：
+//    1. `<base>/<Target>_<Target>.bundle/<name>` —— native 后端的扁平资源包（打包态正解）；
+//    2. `<base>/<Target>_<Target>.bundle/Contents/Resources/<name>` —— swiftbuild（Swift 6.4+
+//       默认）的资源包内部形态（dev 态 `swift run` 与未归一化的装配靠它兜底）；
+//    3. `<base>/<name>` —— 资源被平铺的布局。
 //
 
 import Foundation
@@ -23,16 +26,28 @@ public enum ChamberResources {
     /// SwiftPM 资源包名（target 名重复一次；见 Package.swift target DSHChamber）。
     public static let bundleName = "DSHChamber_DSHChamber.bundle"
 
-    /// 按候选目录顺序定位资源文件（相对路径，如 "bridge-shim.js"）。
+    /// 一个候选根目录下的资源查找顺序（纯函数，单测钉住形态）：扁平资源包 → 资源包的
+    /// swiftbuild 内部形态（`Contents/Resources`，Swift 6.4+ 默认后端）→ 平铺。
+    public static func candidateURLs(
+        in base: URL,
+        name: String,
+        bundleName: String = ChamberResources.bundleName
+    ) -> [URL] {
+        let bundle = base.appendingPathComponent(bundleName)
+        return [
+            bundle.appendingPathComponent(name),
+            bundle.appendingPathComponent("Contents").appendingPathComponent("Resources")
+                .appendingPathComponent(name),
+            base.appendingPathComponent(name),
+        ]
+    }
+
+    /// 按候选顺序定位资源文件（相对路径，如 "bridge-shim.js"）。
     public static func url(forResource name: String) -> URL? {
         for base in searchBases() {
-            let packaged = base.appendingPathComponent(bundleName).appendingPathComponent(name)
-            if FileManager.default.fileExists(atPath: packaged.path) {
-                return packaged
-            }
-            let flat = base.appendingPathComponent(name)
-            if FileManager.default.fileExists(atPath: flat.path) {
-                return flat
+            for candidate in candidateURLs(in: base, name: name)
+            where FileManager.default.fileExists(atPath: candidate.path) {
+                return candidate
             }
         }
         return nil
