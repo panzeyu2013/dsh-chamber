@@ -2,11 +2,14 @@
  * SESSION STREAM-HEALTH LADDER LOCKS (design 14 §D4).
  *
  * The reproduced defect (four mux socket kills 25ms apart ⇒ `openState='error'`
- * ⇒ a frozen transcript) is recovered by exactly two effects, both pinned here:
- * the automatic stage move for an `'error'` session and the notice-plus-reload
- * arm for a parked `'loading'` open — at the decision boundary (pure module)
- * and the effect boundary (a fake sessions face), including the edges the
- * 2026-12 review found unpinned: the settle window, a backwards wall clock,
+ * ⇒ a frozen transcript) is recovered by exactly three effects, all pinned here:
+ * the automatic stage move for an `'error'` session, the notice-plus-reload arm
+ * for a parked `'loading'` open, and — added 2026-12 — the USER-triggered
+ * per-session `resync` the loading-stall arm ARMS (the concrete
+ * `Session.resync()` the pinned controller ships off-contract, reached through
+ * the guarded structural slice). Assertions live at the decision boundary (pure
+ * module) and the effect boundary (a fake sessions face), including the edges
+ * the 2026-12 review found unpinned: the settle window, a backwards wall clock,
  * the rolling-window edge, the cross-phase hold, both first-notice timestamps
  * and the hidden stretch that must NOT hand back a fresh storm budget.
  */
@@ -17,6 +20,7 @@ import {
   createSessionStreamHealthState,
   markSessionStreamHeal,
   planSessionStreamHealth,
+  sessionStreamLeversAvailable,
   sessionStreamNoticeKey,
   SESSION_STREAM_HEALTH_DEFAULTS,
   type SessionStreamHealthConfig,
@@ -25,16 +29,21 @@ import {
 } from '../../src/client/session-stream-health.ts'
 import {
   hasHealNeighbor,
+  hasHealRoute,
+  hasSessionStreamResync,
   healSessionStream,
   isConversationSurfacePresented,
   pickHealNeighbor,
   previousPresented,
   rememberPresented,
+  resyncSessionStream,
+  type SessionsConcreteLoose,
   type SessionsLoose,
 } from '../../src/client/session-stream-health-probe.ts'
 
 const CONFIG: SessionStreamHealthConfig = SESSION_STREAM_HEALTH_DEFAULTS
 const G = CONFIG.errorGraceMs
+const L = CONFIG.loadingStallMs
 const C = CONFIG.healCooldownMs
 const S = CONFIG.healSettleMs
 const W = CONFIG.healBudgetWindowMs
@@ -170,6 +179,99 @@ test('stream-health: the loading arm restarts its hold after an error-phase deto
   ])
   assert.deepEqual(actions, [0, 0, 0, 0, 0, T0 + 34_000])
   assert.deepEqual(notices, [null, null, 'loading-stall', null, null, null])
+})
+
+test('stream-health: the resync lever is armed only by a loading stall with a live concrete face', () => {
+  // The hold must AGE first, exactly like the stall notice it rides with: the
+  // control is never offered on the first frame of a load.
+  const hold = planAt(createSessionStreamHealthState(), observe('loading', { resyncAvailable: true }), T0)
+  assert.equal(hold.action, 'none')
+  assert.equal(hold.notice, null)
+  const stalled = planAt(hold.state, observe('loading', { resyncAvailable: true }), T0 + L)
+  assert.equal(stalled.action, 'resync')
+  assert.equal(stalled.notice, 'loading-stall', 'the reload arm keeps its own notice')
+  // Fail-closed on a build without the concrete face: the SAME stall with no
+  // observed availability arms nothing (and the reload arm is untouched).
+  const unavailable = planAt(hold.state, observe('loading'), T0 + L)
+  assert.equal(unavailable.action, 'none')
+  assert.equal(unavailable.notice, 'loading-stall')
+  // Never in the error arm (that arm has its own automatic heal)…
+  const errorHold = planAt(createSessionStreamHealthState(), observe('error', { resyncAvailable: true }), T0)
+  const error = planAt(errorHold.state, observe('error', { resyncAvailable: true }), T0 + G)
+  assert.equal(error.action, 'heal')
+  // …and never for a cold or healthy stream, even with the face present.
+  assert.equal(planAt(createSessionStreamHealthState(), observe('cold', { resyncAvailable: true }), T0 + L).action, 'none')
+  assert.equal(planAt(createSessionStreamHealthState(), observe('open', { resyncAvailable: true }), T0 + L).action, 'none')
+  // A churn fact on an open stream is informational: still no rebuild arm.
+  assert.equal(
+    planAt(createSessionStreamHealthState(), observe('open', { resyncAvailable: true, carrierChurn: { at: T0, count: 1 } }), T0).action,
+    'none',
+  )
+})
+
+test('stream-health: an error state the stage move must refuse arms the user resync control instead', () => {
+  // An address-only subagent selection: current, absent from ids, so the seat
+  // reports no stage route (neighborAvailable false) while the concrete resync
+  // face is live. The arm is USER-executed and grace-aged exactly like the heal.
+  const hold = planAt(createSessionStreamHealthState(), observe('error', { neighborAvailable: false, resyncAvailable: true }), T0)
+  assert.equal(hold.action, 'none', 'an error is never made worse by acting on its first frame')
+  const armed = planAt(hold.state, observe('error', { neighborAvailable: false, resyncAvailable: true }), T0 + G)
+  assert.equal(armed.action, 'resync')
+  // The chip renders controls only alongside a notice, so an armed rebuild MUST
+  // carry one (2026-09 review BLOCKER: action='resync' + notice=null rendered
+  // neither the rebuild button nor the pre-existing reload fallback).
+  assert.equal(armed.notice, 'heal-failed')
+  // Fail-closed without the concrete face: the same hold only reports the reload
+  // notice once it has outlived a repair attempt, and never invents an action.
+  const noFace = planAt(hold.state, observe('error', { neighborAvailable: false }), T0 + G)
+  assert.equal(noFace.action, 'none')
+  assert.equal(noFace.notice, null)
+  const drained = planAt(noFace.state, observe('error', { neighborAvailable: false }), T0 + G + S)
+  assert.equal(drained.action, 'none')
+  assert.equal(drained.notice, 'heal-failed', 'no lever at all is reported, not hidden')
+  // With a route the automatic stage move keeps precedence over the manual control.
+  const routedHold = planAt(createSessionStreamHealthState(), observe('error', { resyncAvailable: true }), T0)
+  const routed = planAt(routedHold.state, observe('error', { resyncAvailable: true }), T0 + G)
+  assert.equal(routed.action, 'heal')
+})
+
+test('stream-health: the resync lever is suppressed while the session ledger is cooling or spent', () => {
+  // Cooling: a lever (heal or resync) was executed a second ago.
+  const cooling: SessionStreamHealthState = { phase: 'loading-hold', since: T0 - L, lastHealAt: T0, healStamps: [T0] }
+  const coolingPlan = planAt(cooling, observe('loading', { resyncAvailable: true }), T0 + 1_000)
+  assert.equal(coolingPlan.action, 'none')
+  assert.equal(coolingPlan.notice, 'loading-stall', 'suppression must not hide the stall notice')
+  // Budget spent: three levers inside the window, none recent enough to hold
+  // the cooldown on its own.
+  const spent: SessionStreamHealthState = { phase: 'loading-hold', since: T0, healStamps: [T0, T0 + 1_000, T0 + 2_000] }
+  const spentPlan = planAt(spent, observe('loading', { resyncAvailable: true }), T0 + L)
+  assert.equal(spentPlan.action, 'none')
+  assert.equal(spentPlan.notice, 'loading-stall')
+  // sessionStreamLeversAvailable is the one gate the plan and the seat's click
+  // both read.
+  assert.equal(sessionStreamLeversAvailable(cooling, T0 + 1_000), false)
+  assert.equal(sessionStreamLeversAvailable(spent, T0 + L), false)
+  assert.equal(sessionStreamLeversAvailable(createSessionStreamHealthState(), T0), true)
+  // Once the rolling window releases a stamp the lever is armed again.
+  const released = planAt(spentPlan.state, observe('loading', { resyncAvailable: true }), T0 + W + 1)
+  assert.equal(released.action, 'resync')
+  assert.equal(sessionStreamLeversAvailable(spent, T0 + W + 1), true)
+})
+
+test('stream-health: accounting a user resync keeps the control down for the cooldown', () => {
+  const hold = planAt(createSessionStreamHealthState(), observe('loading', { resyncAvailable: true }), T0)
+  const armed = planAt(hold.state, observe('loading', { resyncAvailable: true }), T0 + L)
+  assert.equal(armed.action, 'resync')
+  // The seat accounts the click exactly like an automatic heal.
+  const clickedAt = T0 + L
+  const afterClick = markSessionStreamHeal(armed.state, clickedAt)
+  const restarted = planAt(afterClick, observe('loading', { resyncAvailable: true }), clickedAt + 1_000)
+  assert.equal(restarted.action, 'none', 'the executed lever starts the cooldown immediately')
+  assert.equal(restarted.state.phase, 'loading-hold', 'the loading hold restarts on a fresh window')
+  const stillCooling = planAt(restarted.state, observe('loading', { resyncAvailable: true }), clickedAt + 1_000 + L)
+  assert.equal(stillCooling.action, 'none', 'a second click inside the cooldown must not be armed')
+  const again = planAt(stillCooling.state, observe('loading', { resyncAvailable: true }), clickedAt + C)
+  assert.equal(again.action, 'resync', 'the lever returns after the cooldown while the stall persists')
 })
 
 test('stream-health: the rolling window edge is exclusive, and releases exactly one stamp', () => {
@@ -439,6 +541,117 @@ test('stream-health: the heal is a no-op without a face or a second session, and
     open: () => { throw new Error('must not open') },
   }
   assert.equal(healSessionStream(drifting, 'b'), false)
+})
+
+test('stream-health: the stage move is only offered when its target is current, listed and has a neighbour', () => {
+  const currentListed: SessionsLoose = { list: { getSnapshot: () => ({ ids: ['a', 'b'], current: 'b' }) }, open: () => {} }
+  assert.equal(hasHealRoute(currentListed, 'b'), true)
+  // An address-only subagent selection: current but absent from ids. The move must
+  // refuse it, so it must not look like it has a route (2026-09 review: the ledger
+  // was being spent on guaranteed refusals).
+  const addressOnly: SessionsLoose = { list: { getSnapshot: () => ({ ids: ['a'], current: 'child' }) }, open: () => {} }
+  assert.equal(hasHealRoute(addressOnly, 'child'), false)
+  // Not current, no other listed session, or a throwing snapshot: no route.
+  const notCurrent: SessionsLoose = { list: { getSnapshot: () => ({ ids: ['a', 'b'], current: 'a' }) }, open: () => {} }
+  assert.equal(hasHealRoute(notCurrent, 'b'), false)
+  const solo: SessionsLoose = { list: { getSnapshot: () => ({ ids: ['only'], current: 'only' }) }, open: () => {} }
+  assert.equal(hasHealRoute(solo, 'only'), false)
+  const throwing: SessionsLoose = { list: { getSnapshot: () => { throw new Error('shape drift') } }, open: () => {} }
+  assert.equal(hasHealRoute(throwing, 'a'), false)
+  assert.equal(hasHealRoute(undefined, 'a'), false)
+})
+
+test('stream-health: the resync probe reaches the concrete face behind guards and fails closed', async () => {
+  let calls = 0
+  let opened = 0
+  const resync = (): Promise<void> => { calls += 1; return Promise.resolve() }
+  const concrete: SessionsConcreteLoose = {
+    list: { getSnapshot: () => ({ ids: ['a', 'b'], current: 'a' }) },
+    open: () => { opened += 1; throw new Error('the resync lever must never move the stage') },
+    resolve: (sessionId: string) => (sessionId === 'a' ? { session: { resync } } : undefined),
+  }
+  assert.equal(hasSessionStreamResync(concrete, 'a'), true)
+  assert.equal(resyncSessionStream(concrete, 'a'), true)
+  assert.equal(calls, 1)
+  assert.equal(opened, 0)
+  // A session that is not the CURRENT, LISTED one is refused by the same
+  // precondition the stage move uses, and its concrete face is never read.
+  const other: SessionsConcreteLoose = {
+    list: { getSnapshot: () => ({ ids: ['a', 'b'], current: 'a' }) },
+    open: () => {},
+    resolve: () => ({ session: { resync } }),
+  }
+  assert.equal(hasSessionStreamResync(other, 'b'), false)
+  assert.equal(resyncSessionStream(other, 'b'), false)
+  assert.equal(calls, 1, 'a non-current session must not be rebuilt')
+  // Address-only subagent selections are CURRENT but absent from ids; the stage
+  // move must refuse them, yet the concrete per-session resync is exactly their
+  // lever (2026-09 review MAJOR), so listedness must NOT gate this read.
+  const addressOnlyCurrent: SessionsConcreteLoose = {
+    list: { getSnapshot: () => ({ ids: ['a'], current: 'child' }) },
+    open: () => {},
+    resolve: id => (id === 'child' ? { session: { resync } } : undefined),
+  }
+  assert.equal(hasSessionStreamResync(addressOnlyCurrent, 'child'), true)
+  assert.equal(resyncSessionStream(addressOnlyCurrent, 'child'), true, 'an address-only child must be rebuildable')
+  assert.equal(calls, 2, 'the address-only child resync must reach the vendor method')
+  const masked: SessionsConcreteLoose = {
+    list: { getSnapshot: () => ({ ids: ['a', 'b'] }) },
+    open: () => {},
+    resolve: () => ({ session: { resync } }),
+  }
+  assert.equal(resyncSessionStream(masked, 'a'), false)
+  // A build without the concrete services method (a face that predates it).
+  const noResolve: SessionsLoose = {
+    list: { getSnapshot: () => ({ ids: ['a'], current: 'a' }) },
+    open: () => {},
+  }
+  assert.equal(hasSessionStreamResync(noResolve, 'a'), false)
+  assert.equal(resyncSessionStream(noResolve, 'a'), false)
+  // The method's own absence on the Session object (a pin without resync()).
+  const noMethod: SessionsConcreteLoose = { ...concrete, resolve: () => ({ session: {} }) }
+  assert.equal(hasSessionStreamResync(noMethod, 'a'), false)
+  assert.equal(resyncSessionStream(noMethod, 'a'), false)
+  // Wrong shapes and throws are "no lever", never an exception.
+  const wrongShape: SessionsConcreteLoose = { ...concrete, resolve: () => ({ session: null }) }
+  assert.equal(hasSessionStreamResync(wrongShape, 'a'), false)
+  assert.equal(resyncSessionStream(wrongShape, 'a'), false)
+  // A hostile accessor must not escape the guard: the capability read itself can
+  // throw, and the whole point is "no lever", never an exception into React.
+  const hostileGetter: SessionsConcreteLoose = {
+    ...concrete,
+    resolve: () => ({
+      session: new Proxy({}, {
+        get: () => { throw new Error('hostile resync getter') },
+      }) as never,
+    }),
+  }
+  assert.doesNotThrow(() => { assert.equal(hasSessionStreamResync(hostileGetter, 'a'), false) })
+  assert.doesNotThrow(() => { assert.equal(resyncSessionStream(hostileGetter, 'a'), false) })
+  const missingSession: SessionsConcreteLoose = { ...concrete, resolve: () => undefined }
+  assert.equal(hasSessionStreamResync(missingSession, 'a'), false)
+  assert.equal(resyncSessionStream(missingSession, 'a'), false)
+  const hostileResolve: SessionsConcreteLoose = { ...concrete, resolve: () => { throw new Error('shape drift') } }
+  assert.equal(hasSessionStreamResync(hostileResolve, 'a'), false)
+  assert.equal(resyncSessionStream(hostileResolve, 'a'), false)
+  const throwingResync: SessionsConcreteLoose = {
+    ...concrete,
+    resolve: () => ({ session: { resync: (): unknown => { calls += 1; throw new Error('reopen blew up') } } }),
+  }
+  assert.equal(hasSessionStreamResync(throwingResync, 'a'), true, 'the capability exists before the call')
+  assert.equal(resyncSessionStream(throwingResync, 'a'), false, 'a synchronous throw degrades to not available')
+  // An async rejection is settled by the probe's own catch; an unhandled
+  // rejection here would fail this test file under the node runner.
+  const rejecting: SessionsConcreteLoose = {
+    ...concrete,
+    resolve: () => ({ session: { resync: (): Promise<void> => { calls += 1; return Promise.reject(new Error('reopen rejected')) } } }),
+  }
+  assert.equal(resyncSessionStream(rejecting, 'a'), true)
+  await new Promise(resolve => { setTimeout(resolve, 0) })
+  // No face at all is the same "no lever" answer.
+  assert.equal(hasSessionStreamResync(undefined, 'a'), false)
+  assert.equal(resyncSessionStream(undefined, 'a'), false)
+  assert.equal(calls, 4, 'only the ISSUED calls (concrete, address-only child, throwing, rejecting) ever reached the method')
 })
 
 test('stream-health: the detour prefers the session the user came from, capped and deduped', () => {

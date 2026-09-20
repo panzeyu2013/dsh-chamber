@@ -19,11 +19,13 @@ export const zh = {
   'streamHealth.healing': '正在恢复对话…',
   /** The official open state has been `loading` past its stall threshold. */
   'streamHealth.loadingStall': '对话载入停滞',
-  /** The ladder is out of levers: only a reload remains. */
+  /** No automatic repair is running (out of levers, or no stage route): the chip offers the manual ones. */
   'streamHealth.healFailed': '对话通道未恢复',
   'streamHealth.carrierChurn': '对话流正在重新连接…',
   /** The user's own recovery action. */
   'streamHealth.reload': '重新加载',
+  /** The user's own per-session stream rebuild (not the page reload). */
+  'streamHealth.resync': '重建对话通道',
   titleVscode: '在 VS Code 中打开当前工作区',
   titleFinder: '在 Finder 中打开当前工作区',
   titleExplorer: '在资源管理器中打开当前工作区',
@@ -85,11 +87,13 @@ export const en: Record<OpenInKey, string> = {
   'streamHealth.healing': 'Recovering the conversation…',
   /** The official open state has been `loading` past its stall threshold. */
   'streamHealth.loadingStall': 'Conversation load stalled',
-  /** The ladder is out of levers: only a reload remains. */
+  /** No automatic repair is running (out of levers, or no stage route): the chip offers the manual ones. */
   'streamHealth.healFailed': 'Conversation stream not recovered',
   'streamHealth.carrierChurn': 'Conversation stream reconnecting…',
   /** The user's own recovery action. */
   'streamHealth.reload': 'Reload',
+  /** The user's own per-session stream rebuild (not the page reload). */
+  'streamHealth.resync': 'Rebuild stream',
   titleVscode: 'Open current workspace in VS Code',
   titleFinder: 'Open current workspace in Finder',
   titleExplorer: 'Open current workspace in Explorer',

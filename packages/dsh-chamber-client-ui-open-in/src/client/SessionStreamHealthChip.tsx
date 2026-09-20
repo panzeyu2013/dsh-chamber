@@ -12,9 +12,13 @@
  * ref would reset the cooldown/budget each time. This file owns the ticker, the
  * visibility re-check and the markup — that is all.
  *
- * It renders at most one line of text plus, when the ladder cannot recover on
- * its own, the ONE action that works: a page reload the user asks for. Nothing
- * here reloads, re-opens or navigates on its own.
+ * It renders at most one line of text plus up to two user actions: the page
+ * reload every (non-churn) notice offers, and — only while the pure plan ARMS
+ * it (a parked `loading` open with lever budget left, on a build that exposes
+ * the concrete face) — the per-session stream rebuild. Nothing here
+ * reloads, re-opens, rebuilds or navigates on its own: both controls are the
+ * user's own click, and the plan's `'resync'` action only decides whether the
+ * second control is rendered.
  */
 import { useEffect, useState, type ReactElement } from 'react'
 import type { Translate } from '../shared/coordinator.ts'
@@ -54,6 +58,12 @@ export interface SessionStreamHealthInjected {
   subscribe(listener: () => void): () => void
   /** The user's own reload action. */
   reload(): void
+  /**
+   * The user's own per-session stream rebuild. Only ever invoked from the
+   * control the plan armed; the seat re-checks the session's cooldown/budget
+   * and the concrete face's availability before calling `resync()`.
+   */
+  resync(sessionId: string): void
 }
 
 /**
@@ -77,7 +87,7 @@ function idlePlan(): SessionStreamHealthPlan {
 }
 
 export function SessionStreamHealthChip(props: SessionStreamHealthProps): ReactElement | null {
-  const { t, note, step, subscribe, reload, sessionId, useSession } = props
+  const { t, note, step, subscribe, reload, resync, sessionId, useSession } = props
   const openState = useSession(snapshot => snapshot.openState)
   const [plan, setPlan] = useState<SessionStreamHealthPlan>(idlePlan)
   const [tick, setTick] = useState(0)
@@ -110,7 +120,8 @@ export function SessionStreamHealthChip(props: SessionStreamHealthProps): ReactE
   useEffect(() => subscribe(() => setTick(value => value + 1)), [subscribe])
 
   // One ladder step per render-relevant change. The seat is where the state and
-  // the only side effect (executing a requested heal) live.
+  // the only side effects live (executing a requested heal, and the user's own
+  // resync click — which no effect here ever issues).
   useEffect(() => {
     const presented = visible && isConversationSurfacePresented(typeof document === 'undefined' ? null : document)
     const next = step(sessionId, openState, presented, Date.now())
@@ -151,9 +162,20 @@ export function SessionStreamHealthChip(props: SessionStreamHealthProps): ReactE
       {/* Churn is informational: the stream reopens on its own, so the chip
           offers no action that would interrupt a recovery in flight. */}
       {plan.notice === null || plan.notice === 'carrier-churn' ? null : (
-        <button type="button" className={styles.action} onClick={reload}>
-          {t('streamHealth.reload')}
-        </button>
+        <>
+          <button type="button" className={styles.action} onClick={reload}>
+            {t('streamHealth.reload')}
+          </button>
+          {/* The per-session lever: rendered ONLY while the pure plan arms it
+              (a loading stall with the session's cooldown/budget intact and the
+              concrete face present). The click is the only invocation — the
+              plan never rebuilds a stream by itself. */}
+          {plan.action === 'resync' ? (
+            <button type="button" className={styles.action} onClick={() => { resync(sessionId) }}>
+              {t('streamHealth.resync')}
+            </button>
+          ) : null}
+        </>
       )}
     </div>
   )

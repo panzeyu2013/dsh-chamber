@@ -1,7 +1,9 @@
 /**
- * The imperative half of the session stream-health ladder: the only two effects
- * the seat is allowed to perform — read the presented shape, and (for an
- * `'error'` session) move the stage across a neighbor and back.
+ * The imperative half of the session stream-health ladder: the only three
+ * effects the seat is allowed to perform — read the presented shape, move the
+ * stage across a neighbor and back (an `'error'` session), and rebuild THIS
+ * session's event stream through the concrete per-session `resync()` (a
+ * parked `'loading'` open, and only ever from the user's own click).
  *
  * The vendor face is reached through the loose structural slice the chamber's
  * client plugins already use for per-entry facts (open-in's `chamberInstanceId`
@@ -42,6 +44,30 @@
  * schedules the re-render as a microtask, so the commit sees only the final
  * binding (no visible detour). No `await` may ever be inserted between them.
  *
+ * THE PER-SESSION RESYNC (2026-12). The pinned controller's concrete `Session`
+ * object exposes an `async resync()` that disposes the current event stream and
+ * re-opens it — the exact lever a parked `'loading'` open needs, and the one
+ * the stage move cannot supply for it. It is NOT on the `ISession` contract, so
+ * it is reached here the same way the stage move reaches its concrete members:
+ * a loose structural slice plus a runtime capability guard. The concrete
+ * `ClientSessions` reaches a `Session` through `resolve(id)` — the framework's
+ * own scope accessor, which `followCurrent()` calls on every stage move and
+ * whose record carries the `Session` instance — so that is the read used. Only
+ * the CURRENT half of the stage move's precondition applies here: a window must
+ * never be rebuilt behind the user's back for a session that is not the one on
+ * stage, but LISTEDNESS is not required because `resync()` is a direct
+ * per-session call — and requiring it would make the control unreachable for
+ * exactly the address-only subagent selections the stage move must refuse
+ * (current, absent from `ids`; the vendor accessor resolves those through the
+ * retained subagent address and fails closed for everything else).
+ *
+ * Both resync entry points fail closed: a missing `resolve`, a missing
+ * `resync`, a wrong-shaped record, or a throw from either is "no lever" —
+ * never an exception into React, and never a console line (this package's
+ * ui-lock forbids `console.*` in `src/client/**`). The returned promise of a
+ * successful call is settled with a no-op catch for the same reason: the chip
+ * is a status surface, not an error channel.
+ *
  * A `RemoteStreamCarrierError` that reaches the domain is the official
  * frontend's own retry policy (see the module header of `session-stream-health.ts`);
  * this file only recovers the view, it never touches the transport.
@@ -53,6 +79,28 @@ export interface SessionsLoose {
   readonly list: { getSnapshot(): { readonly ids: readonly string[]; readonly current?: string | undefined } }
   /** Stage the given session (`ISessions.open`). */
   open(sessionId: string): void
+}
+
+/**
+ * Structural slice of the official concrete `Session` face this module calls
+ * (`Session.resync()` is public on the concrete object, not on the `ISession`
+ * contract). Optional on purpose: a controller build that predates the method
+ * must degrade to "no lever", never throw.
+ */
+export interface SessionResyncLoose {
+  /** Dispose the session's event stream and re-open it. */
+  resync?(): unknown
+}
+
+/**
+ * Structural slice of the concrete sessions service members that reach a
+ * `Session`. `resolve(id)` is the framework's own scope accessor (the stage
+ * follower calls it on every stage move), so it is the least intrusive read of
+ * the per-session face. Optional for the same fail-closed reason as
+ * {@link SessionResyncLoose.resync}.
+ */
+export interface SessionsConcreteLoose extends SessionsLoose {
+  resolve?(sessionId: string): { readonly session?: SessionResyncLoose | null | undefined } | undefined
 }
 
 /**
@@ -70,6 +118,31 @@ export function pickHealNeighbor(
 ): string | undefined {
   if (preferredId !== undefined && preferredId !== targetId && ids.includes(preferredId)) return preferredId
   return ids.find(id => id !== targetId)
+}
+
+/**
+ * Is the stage move usable for this target at all?
+ *
+ * The move needs all three: the target must still be the CURRENT session, must be
+ * LISTED (the seat's re-open validates it), and another listed session must exist
+ * to carry the detour. Without this gate an address-only target looks like it has
+ * a neighbour (the list contains other sessions) even though the executed move
+ * refuses it — which spent the whole heal ledger on guaranteed-refused attempts
+ * (2026-09 review).
+ *
+ * @param sessions - the instance's session face (loose slice), if any.
+ * @param targetId - the session whose stage the detour would move.
+ * @returns true only when `healSessionStream` can actually run for the target.
+ */
+export function hasHealRoute(sessions: SessionsLoose | undefined, targetId: string): boolean {
+  if (sessions === undefined) return false
+  try {
+    const snapshot = sessions.list.getSnapshot()
+    if (snapshot.current !== targetId || !snapshot.ids.includes(targetId)) return false
+    return hasHealNeighbor(snapshot.ids, targetId)
+  } catch {
+    return false
+  }
 }
 
 /** True when some OTHER listed session can carry the stage move. */
@@ -109,6 +182,78 @@ export function healSessionStream(
     // Fail closed, and silently: this package's client sources are under a
     // source lock that forbids console beyond nothing at all (the ui-lock
     // test), and a heal must never surface as an app error of its own.
+    return false
+  }
+}
+
+/**
+ * The concrete resync face of the CURRENT, LISTED target, or undefined when
+ * this build/service does not expose one.
+ *
+ * The precondition is "still the CURRENT session" (see the module header): the
+ * chip's own session is the one on stage, and rebuilding a window for anything
+ * else would touch a surface the user is not looking at. Listedness is NOT
+ * required — that is what makes address-only subagent selections reachable
+ * (their own header calls out current-but-unlisted as the case the stage move
+ * must refuse). Every access is guarded; any drift yields undefined, which
+ * callers read as "no lever".
+ */
+function readSessionResyncFace(
+  sessions: SessionsLoose | undefined,
+  sessionId: string,
+): SessionResyncLoose | undefined {
+  if (sessions === undefined) return undefined
+  try {
+    const concrete = sessions as SessionsConcreteLoose
+    if (typeof concrete.resolve !== 'function') return undefined
+    const snapshot = sessions.list.getSnapshot()
+    if (snapshot.current !== sessionId) return undefined
+    const session = concrete.resolve(sessionId)?.session
+    if (session === null || session === undefined || typeof session !== 'object') return undefined
+    // The property READ can throw on a hostile proxy, so the capability check
+    // lives inside this guard too (2026-09 review NIT: it used to escape).
+    if (typeof session.resync !== 'function') return undefined
+    return session
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Does this build expose the per-session stream rebuild for the target? The
+ * pure ladder's `resyncAvailable` observation comes from here, so a build
+ * without the concrete method never arms (and never renders) the control.
+ *
+ * @param sessions - the instance's session face (loose slice).
+ * @param targetId - the session whose stream would be rebuilt.
+ * @returns true only when the guarded read finds a callable `resync`.
+ */
+export function hasSessionStreamResync(sessions: SessionsLoose | undefined, targetId: string): boolean {
+  return readSessionResyncFace(sessions, targetId) !== undefined
+}
+
+/**
+ * Rebuild one session's stream through the concrete vendor method.
+ *
+ * ONLY ever called from the user's own control — never from the ladder's plan,
+ * so a stall cannot turn into an automatic retry (the seat re-checks the
+ * session's cooldown/budget before calling this). `resync()` is async and may
+ * reject; the promise is settled with a no-op catch because the chip has no
+ * error channel and this package may not log.
+ *
+ * @param sessions - the instance's session face (loose slice).
+ * @param targetId - the session whose stream must be rebuilt.
+ * @returns true only when the call was issued (the method existed and was invoked).
+ */
+export function resyncSessionStream(sessions: SessionsLoose | undefined, targetId: string): boolean {
+  try {
+    const session = readSessionResyncFace(sessions, targetId)
+    if (session === undefined || typeof session.resync !== 'function') return false
+    void Promise.resolve(session.resync()).catch(() => undefined)
+    return true
+  } catch {
+    // Fail closed, and silently: see the module header (ui-lock) and the
+    // stage-move heal it mirrors.
     return false
   }
 }
