@@ -491,7 +491,11 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     // MARK: - A-1/A-2 入站事件发送（唤醒/窗口显示）
 
     @objc private func hostWakeUp(_ note: Notification) {
-        print("[shell] 系统唤醒——发送 __host.systemResume")
+        // C4（2026-09 评审）：这一行**必须落盘**（shellLog = print + append）。
+        // 此前只用 print：Dock 启动的 .app stdout 无处可看，native-shell.log 里
+        // 零条唤醒行既不能证明「发过」也不能证明「没发」（只能靠反汇编），真机
+        // 验收因此分不开「壳没发」与「页面没消费」。
+        shellLog("[shell] 系统唤醒——发送 __host.systemResume")
         Task { @MainActor in
             do {
                 _ = try await bridge.invoke(
@@ -500,18 +504,19 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             } catch {
                 // S10：事件边界绝不吞错、绝不崩——失败 loud（同
                 // sendRendererLifecycle 风格；core 侧幂等，无需重试）。
-                print("[shell] __host.systemResume 发送失败：\(error.localizedDescription)")
+                shellLog("[shell] __host.systemResume 发送失败：\(error.localizedDescription)")
             }
         }
     }
 
     @objc private func appDidBecomeActive(_ note: Notification) {
-        print("[shell] 应用激活——发送 __host.mainWindowShown")
+        // C4：同样落盘——这是 core held-resume 的补发点，真机取证靠它。
+        shellLog("[shell] 应用激活——发送 __host.mainWindowShown")
         Task { @MainActor in
             do {
                 _ = try await bridge.invoke(method: HostInboundMethod.mainWindowShown, payload: nil)
             } catch {
-                print("[shell] __host.mainWindowShown 发送失败：\(error.localizedDescription)")
+                shellLog("[shell] __host.mainWindowShown 发送失败：\(error.localizedDescription)")
             }
         }
     }
@@ -826,7 +831,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         guard !payload.isEmpty else { return }
         lastHostFacts = merged
         let summary = payload.map { "\($0.key)=\($0.value)" }.sorted().joined(separator: " ")
-        print("[shell] hostFacts 推送 \(summary)")
+        shellLog("[shell] hostFacts 推送 \(summary)")
         let object = AnyCodable.object(payload.mapValues { .bool($0) })
         let pushed = payload
         Task { @MainActor in
@@ -838,7 +843,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                 // 事实已送达，而 sidecar 侧存活事实缺省为「未知=不可交付」，于是
                 // rendererPush 长期返回 false、通知/深链被永久 hold。
                 self.lastHostFacts = Self.hostFactsRollback(last: self.lastHostFacts, pushed: pushed)
-                print("[shell] hostFacts 推送失败（已回滚意图，等待下次事件重推）：\(error.localizedDescription)")
+                shellLog("[shell] hostFacts 推送失败（已回滚意图，等待下次事件重推）：\(error.localizedDescription)")
             }
         }
     }
@@ -881,14 +886,14 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// Swift 只做事件源，绝不复制状态机。fire-and-forget：失败 loud 不重试
     /// （下一次事件会再报；sidecar 未就绪时帧被 stdin 管道缓冲）。
     private func sendRendererLifecycle(_ event: String) {
-        print("[shell] rendererLifecycle 上报 \(event)")
+        shellLog("[shell] rendererLifecycle 上报 \(event)")
         Task { @MainActor in
             do {
                 _ = try await bridge.invoke(
                     method: HostInboundMethod.rendererLifecycle,
                     payload: .object(["event": .string(event)]))
             } catch {
-                print("[shell] rendererLifecycle 上报失败（\(event)）：\(error.localizedDescription)")
+                shellLog("[shell] rendererLifecycle 上报失败（\(event)）：\(error.localizedDescription)")
             }
         }
     }
@@ -938,7 +943,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// payloadJSON)。序列化失败 → loud 打印不注入（绝不注入残缺 JS）。
     private func emitToPage(event: String, payload: AnyCodable?) {
         guard let eventJSON = Self.jsonLiteral(event) else {
-            print("[shell] 页面 emit 序列化失败：event 不可 JSON 化（丢弃）")
+            shellLog("[shell] 页面 emit 序列化失败：event 不可 JSON 化（丢弃）")
             return
         }
         let payloadJSON: String
@@ -947,7 +952,16 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         } else {
             payloadJSON = "null"
         }
-        evaluateJS("__dshChamberEmit(\(nativeTokenLiteral), \(eventJSON), \(payloadJSON))")
+        // C4 hop3（2026-09 评审）：这一跳此前零落盘——「壳把事件推给页面了吗」
+        // 只能靠猜。失败（JS 抛错 = 页面根本没收到）必须可考古；成功不逐条刷日志
+        // （emit 是用户可见事件的低频面，routeNotify 那行已给出 channel）。
+        webView.evaluateJavaScript(
+            "__dshChamberEmit(\(nativeTokenLiteral), \(eventJSON), \(payloadJSON))"
+        ) { _, error in
+            if let error {
+                shellLog("[shell] 页面 emit 失败 \(event)：\(error.localizedDescription)")
+            }
+        }
     }
 
     /// 主线程执行 JS（所有调用点都已收敛到主线程）
@@ -967,7 +981,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         case .emitToPage(let channel, let payload):
             // rendererPush 解包：channel/payload 原样进页面（与 electron-edges
             // rendererPush = webContents.send(channel, payload) 同语义）。
-            print("[shell] notify rendererPush → 页面 emit \(channel)")
+            // C4 hop3（2026-09 评审）：壳 → 页面这一跳必须落盘，否则真机上
+            // 分不开「sidecar 没推」与「推了但页面没消费」（唤醒链的最后一跳）。
+            shellLog("[shell] notify rendererPush → 页面 emit \(channel)")
             if channel == Self.settingsChangedChannel {
                 // 设置变了 → 关窗决策缓存作废（S3·V9：缓存必须随设置失效）。
                 onSettingsChanged?()
@@ -978,7 +994,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         case .hostLeg(let method, let payload):
             Task { @MainActor in
                 guard let legs = bridge.edgeHostLegs else {
-                    print("[shell] notify \(method) 消费失败：edgeHostLegs 未接线（loud）")
+                    shellLog("[shell] notify \(method) 消费失败：edgeHostLegs 未接线（loud）")
                     return
                 }
                 // 与 edge 面同一执行体（respond 内部 performUI + 窗口守卫）：
@@ -988,7 +1004,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                     // notify 无回执通道（sidecar fire-and-forget）——失败只能
                     // 本侧 loud（Electron 侧同步 setBadge 失败同样不回执
                     // renderer，见 SwiftEdgeHostLegs.setBadge 注释的 parity 结论）。
-                    print("[shell] notify \(method) 消费失败（loud）：\(error)")
+                    shellLog("[shell] notify \(method) 消费失败（loud）：\(error)")
                 }
             }
         case .retireNotifications(let sourceIds, let notificationIds):
@@ -999,7 +1015,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             // 中心存量横幅。逐条 notificationIds 在 sourceIds 为空时同样生效
             // （node-edges 的 >16 淘汰路径）。
             guard let registry = bridge.edgeHostLegs?.notificationRegistry else {
-                print("[shell] notify retireNotifications 消费失败：edgeHostLegs 未接线（loud）")
+                shellLog("[shell] notify retireNotifications 消费失败：edgeHostLegs 未接线（loud）")
                 return
             }
             let identifiers = registry.retire(sourceIds: sourceIds, notificationIds: notificationIds)
