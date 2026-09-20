@@ -136,7 +136,8 @@ test('插件激活：打标即 PASS，未打标是 INFO 且 --require-run 下改
 test('插件激活证据读出键盘守卫的诊断面（kbd 帧 / state / spacer 高度）', () => {
   const verdict = pluginActivationVerdict(deviceFacts({
     mobileKbdFrames: 1,
-    mobileKbdStates: ['still-covered', 'still-covered'],
+    // 载体前缀：状态在 frame 与 <html> 各镜像一份（2026-09 复核后按载体收集）。
+    mobileKbdStates: ['frame:still-covered', 'html:still-covered'],
     mobileKbdSpacers: [352],
   }))
   assert.equal(verdict.ok, true)

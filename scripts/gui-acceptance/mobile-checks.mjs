@@ -110,7 +110,10 @@ export const DEVICE_FACTS_EXPRESSION = `(() => {
     // 取值（armed | idle | no-seat | no-frame | still-covered）与 spacer 高度
     // 决定「插件激活了但键盘面没有生效」能不能被看见。
     mobileKbdFrames: document.querySelectorAll('[data-mobile-frame][data-mobile-kbd]').length,
-    mobileKbdStates: [...document.querySelectorAll('[data-mobile-kbd-state]')].map(el => el.getAttribute('data-mobile-kbd-state')),
+    // 状态面在 frame 与 <html> 上各镜像一份：按载体分别收集，否则同一状态恒出现
+    // 两次，走查证据会被读成「两个 frame / 两个载体」（2026-09 复核）。
+    mobileKbdStates: [...document.querySelectorAll('[data-mobile-kbd-state]')]
+      .map(el => (el.tagName === 'HTML' ? 'html:' : 'frame:') + el.getAttribute('data-mobile-kbd-state')),
     mobileKbdSpacers: [...document.querySelectorAll('[data-mobile-kbd-spacer]')]
       .map(el => Math.round(el.getBoundingClientRect().height)),
   }
