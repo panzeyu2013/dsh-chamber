@@ -74,6 +74,11 @@ export const GROUPS = {
     'test/view-runtime/view-transition.test.ts',
     'test/view-runtime/sidebar-scroll-sync.test.ts',
   ],
+  // svg-resource: 文档级 SVG 资源 id 归属（N-ctx 失绘不变量，design 05 §4.2）
+  'svg-resource': [
+    'test/svg-resource/svg-resource-scope.test.ts',
+    'test/svg-resource/svg-resource-scope-wiring.test.ts',
+  ],
   // frame-chrome: frame 文案/主题兜底与视觉锁
   'frame-chrome': [
     'test/frame-chrome/theme-fallback.test.ts',
