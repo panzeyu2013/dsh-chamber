@@ -14,6 +14,9 @@
  *  ④ --dry-run 子进程：模板/entitlements 就绪、不写盘；
  *  ⑤ 真实组装（--skip-build --skip-sidecar --no-sign --no-zip --no-dmg）：
  *     可执行位、资源包（只含 bridge-shim.js）、Info.plist 版本/图标/ATS、图标；
+ *  ⑤b/⑤c 本地化 fail-closed：缺 .lproj（纯函数）+ 内容级（0 字节/截断/缺 .lproj
+ *     的真实装配腿负例，plutil 解析）。2026-12 审查：旧装配对 0 字节 .strings 仍
+ *     EXIT=0 报完成；
  *  ⑥ sidecar 装配拷贝 + A5 基名反例 loud + 缺 node / node 无执行位 loud；
  *  ⑦ ad-hoc 签名 + codesign 校验通过（真实 codesign，无网络）；
  *  ⑧ codesignArgs argv 顺序（ad-hoc/hardened 分支互斥、identity 紧跟 --sign）；
@@ -79,6 +82,12 @@ import {
   stageDmgVolume,
   resourceBundleResourcesDir,
   assertBridgeShimPresent,
+  LOCALIZATIONS,
+  localizationDir,
+  localizationFile,
+  assertLocalizationsPresent,
+  assertLocalizationsContent,
+  plistLocalizations,
   dsStoreBlobs,
   dsStoreIlocEntries,
   parseBinaryPlist,
@@ -128,6 +137,27 @@ function writeFakeSidecar(dir, nodeArch) {
   writeFileSync(path.join(dir, 'package.json'), '{}')
   fakeMachO(dir, 'node', nodeArch)
   return dir
+}
+
+/**
+ * 造一份最小 SwiftPM 构建输出（macos/.build/<config>/），供真实装配腿的本地化
+ * 负例使用：只满足装配步在本地化断言之前的输入契约（可执行占位 + 扁平资源包 +
+ * bridge-shim.js + 调用方给的 .lproj 内容）。用独立 config 目录，绝不碰真实
+ * .build/release（⑤/⑥/⑦ 等真实装配用例仍以它为输入）；负例在架构断言（lipo）
+ * 之前就必须 loud。macos/.build/ 已在 macos/.gitignore 内，调用方负责清理。
+ */
+function writeFakeSwiftBuild(config, localizations) {
+  const outputDir = buildOutputDir(config)
+  const bundleDir = path.join(outputDir, RESOURCE_BUNDLE_NAME)
+  rmSync(outputDir, { recursive: true, force: true })
+  mkdirSync(bundleDir, { recursive: true })
+  writeFileSync(path.join(outputDir, MODULE_NAME), '#!/bin/sh\nexit 0\n')
+  writeFileSync(path.join(bundleDir, 'bridge-shim.js'), '// fake')
+  for (const [locale, content] of Object.entries(localizations)) {
+    mkdirSync(localizationDir(bundleDir, locale), { recursive: true })
+    writeFileSync(localizationFile(bundleDir, locale), content)
+  }
+  return { outputDir, bundleDir }
 }
 
 test('① 参数解析：缺省与覆盖', () => {
@@ -267,6 +297,13 @@ test('④ --dry-run 子进程：就绪校验、计划打印、不写盘、半配
     assert.match(stdout, /sparkle-channel=stable（releases\/latest）/, 'S-22：dry-run 计划必须标注通道')
     // 默认产物名与 APP_NAME 同源（统一名称后 = dsh-chamber）。
     assert.match(stdout, new RegExp(`zip=.*${APP_NAME}\\.zip`), 'dry-run 必须打印解析后的精确产物名')
+    // S2：dry-run 必须打印本地化的将写入路径（Bundle.main 解析层的确切落点）。
+    assert.match(stdout,
+      /i18n=en\.lproj → .*Contents\/Resources\/en\.lproj\/Localizable\.strings/,
+      'dry-run 必须打印 en.lproj 的装配目标路径')
+    assert.match(stdout,
+      /i18n=zh-Hans\.lproj → .*Contents\/Resources\/zh-Hans\.lproj\/Localizable\.strings/,
+      'dry-run 必须打印 zh-Hans.lproj 的装配目标路径')
     assert.match(stdout, new RegExp(`dmg=.*${APP_NAME}\\.dmg`))
     assert.ok(!stdout.includes('abc='), '公钥值不得回显')
     assert.ok(!existsSync(path.join(out, `${APP_NAME}.app`)), 'dry-run 不写盘')
@@ -299,6 +336,11 @@ test('④b dryRunPlanReport：feed/公钥成对、https、.xml、精确产物名
   assert.match(text, /sparkle-feed=https:\/\/github\.com\/o\/r\/releases\/latest\/download\/appcast-swift\.xml/)
   assert.match(text, /sparkle-channel=stable（releases\/latest）/, '稳定通道必须按 releases/latest 标注')
   assert.doesNotMatch(text, /abc=/, '公钥值不得回显')
+  // S2：计划文本显式给出两个 .lproj 的装配落点（app-name 派生，不是硬编码）。
+  assert.match(text,
+    /i18n=en\.lproj → \/tmp\/dsh-plan\/dsh-chamber\.app\/Contents\/Resources\/en\.lproj\/Localizable\.strings/)
+  assert.match(text,
+    /i18n=zh-Hans\.lproj → \/tmp\/dsh-plan\/dsh-chamber\.app\/Contents\/Resources\/zh-Hans\.lproj\/Localizable\.strings/)
 
   // S-22：beta feed 必须落在滚动 tag 上（beta.N 才能发现 beta.N+1）——dry-run
   // 计划把通道与滚动 tag 一并标注；版本固定 tag 直接 loud。
@@ -432,7 +474,17 @@ test('⑤ 真实组装：可执行位 / 资源包 / Info.plist 版本 / 图标',
       '无运行期消费者的 stub 不得打进 SwiftPM 资源包')
     assert.ok(existsSync(path.join(macosDir, 'Sources', 'DSHChamber', 'Resources', 'chamber-bridge.stub.js')),
       'stub 仍须留在源码树作为 JS 锁步产物')
+    // S2：本地化必须落在 Contents/Resources 根（Bundle.main 与系统框架的
+    // 本地化解析层）——资源包内的 .lproj 只服务 Bundle.module，不构成原生面事实。
+    for (const locale of LOCALIZATIONS) {
+      const file = localizationFile(layout.resourcesDir, locale)
+      assert.ok(existsSync(file), `装配后缺 ${locale}.lproj/Localizable.strings：${file}`)
+    }
     const plist = readFileSync(layout.infoPlist, 'utf8')
+    // S2：声明面（CFBundleLocalizations）必须与资源集逐字一致——声明了却没资源
+    // 会让 Bundle 静默回退 DevelopmentRegion（zh 系统见到英文）。
+    assert.deepEqual(plistLocalizations(plist), LOCALIZATIONS,
+      'Info.plist 的 CFBundleLocalizations 必须与 LOCALIZATIONS 同源')
     const desktopPkg = JSON.parse(readFileSync(path.join(desktopDir, 'package.json'), 'utf8'))
     assert.ok(plist.includes(`<string>${desktopPkg.version}</string>`), 'Info.plist 版本 = chamber 版本')
     // S-23：CFBundleVersion 走 bundleVersionFor 映射，beta 与 final 不再同版本。
@@ -459,6 +511,120 @@ test('⑤ 真实组装：可执行位 / 资源包 / Info.plist 版本 / 图标',
     assert.equal(lint.status, 0, lint.stdout + lint.stderr)
   } finally {
     rmSync(out, { recursive: true, force: true })
+  }
+})
+
+test('⑤b 本地化 fail-closed：缺 .lproj/Localizable.strings 即 loud 带路径（S2）', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-lproj-'))
+  try {
+    // 两个都缺 → 报错必须逐个列出精确路径与来源（响亮，不猜）。
+    assert.throws(() => assertLocalizationsPresent(dir, '/tmp/from'),
+      (error) => {
+        assert.match(error.message, /缺本地化资源/)
+        assert.ok(error.message.includes(localizationFile(dir, 'en')), error.message)
+        assert.ok(error.message.includes(localizationFile(dir, 'zh-Hans')), error.message)
+        assert.ok(error.message.includes('/tmp/from'), '来源必须写进报错')
+        return true
+      })
+    for (const locale of LOCALIZATIONS) {
+      mkdirSync(localizationDir(dir, locale), { recursive: true })
+      writeFileSync(localizationFile(dir, locale), '"common.ok" = "OK";')
+    }
+    assert.doesNotThrow(() => assertLocalizationsPresent(dir, '/tmp/from'))
+    // 只缺一侧也 loud（半装配绝不放行）。
+    rmSync(localizationDir(dir, 'zh-Hans'), { recursive: true, force: true })
+    assert.throws(() => assertLocalizationsPresent(dir, '/tmp/from'), /zh-Hans\.lproj/)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+
+  // 声明面解析：模板必须恰好声明 LOCALIZATIONS；缺键 → null（调用方 loud）。
+  const template = readFileSync(path.join(macosDir, 'Info.plist.template'), 'utf8')
+  assert.deepEqual(plistLocalizations(template), LOCALIZATIONS,
+    'Info.plist.template 的 CFBundleLocalizations 必须与资源集逐字一致')
+  assert.ok(template.includes('<key>CFBundleDevelopmentRegion</key>'),
+    'DevelopmentRegion 必须保持既有声明（en），不得被本地化改造替换')
+  assert.match(template, /<key>CFBundleDevelopmentRegion<\/key>\s*<string>en<\/string>/)
+  assert.equal(plistLocalizations('<plist></plist>'), null, '缺键必须返回 null 而不是空数组')
+})
+
+test('⑤c 本地化内容 fail-closed：0 字节 / 缺 .lproj 的真实装配腿负例（S2）', async () => {
+  const out = tempOut()
+  // 真实装配腿从 .build/<config> 读输入；用独立 config 目录造最小 SwiftPM 产物，
+  // 不碰真实 .build/release（⑤/⑥/⑦ 仍以它为输入）。
+  const zeroConfig = 'test-i18n-zero'
+  const missingConfig = 'test-i18n-missing'
+  try {
+    // 内容级断言本身：等字节且 plutil 可解析 → 通过；落点被截断（与源不相等）与
+    // 0 字节（字节相等但 plutil 拒绝）→ 都必须 loud 且带落点精确路径。
+    const src = mkdtempSync(path.join(tmpdir(), 'dsh-lproj-src-'))
+    const dst = mkdtempSync(path.join(tmpdir(), 'dsh-lproj-dst-'))
+    try {
+      for (const locale of LOCALIZATIONS) {
+        mkdirSync(localizationDir(src, locale), { recursive: true })
+        mkdirSync(localizationDir(dst, locale), { recursive: true })
+        writeFileSync(localizationFile(src, locale), '"common.ok" = "OK";\n')
+        writeFileSync(localizationFile(dst, locale), '"common.ok" = "OK";\n')
+      }
+      assert.doesNotThrow(() => assertLocalizationsContent(src, dst))
+      writeFileSync(localizationFile(dst, 'en'), '')
+      assert.throws(() => assertLocalizationsContent(src, dst), (error) => {
+        assert.match(error.message, /fail-closed/)
+        assert.ok(error.message.includes(localizationFile(dst, 'en')), error.message)
+        return true
+      }, '落点被截断（与源不逐字节相等）必须 loud 带路径')
+      // 源也是 0 字节：逐字节相等也过不了 plutil（审查实测的坏文件形态）。
+      writeFileSync(localizationFile(src, 'en'), '')
+      assert.throws(() => assertLocalizationsContent(src, dst), (error) => {
+        assert.match(error.message, /fail-closed/)
+        assert.match(error.message, /plutil/)
+        assert.ok(error.message.includes(localizationFile(dst, 'en')), error.message)
+        return true
+      }, '0 字节 .strings 必须被 plutil 拦下')
+    } finally {
+      rmSync(src, { recursive: true, force: true })
+      rmSync(dst, { recursive: true, force: true })
+    }
+
+    // 真实装配腿（0 字节）：源里 en.lproj/Localizable.strings 被清空 → 复制后的
+    // 内容断言 fail。旧实现只做 existsSync，这种输入照样 EXIT=0 报「完成」。
+    writeFakeSwiftBuild(zeroConfig, { en: '', 'zh-Hans': '"common.ok" = "OK";\n' })
+    const zeroLayout = appLayout(out)
+    await assert.rejects(
+      runBuildSwiftApp(parseBuildSwiftAppArgs([
+        '--out', out, '--config', zeroConfig, '--skip-build', '--skip-web-dist',
+        '--skip-sidecar', '--no-sign', '--no-zip', '--no-dmg',
+      ]), { log: () => {}, error: () => {} }),
+      (error) => {
+        assert.match(error.message, /fail-closed/)
+        assert.match(error.message, /plutil/)
+        assert.ok(error.message.includes(localizationFile(zeroLayout.resourcesDir, 'en')), error.message)
+        return true
+      },
+      '0 字节 .strings 过去只过存在性断言，装配仍报完成（独立审查实测）',
+    )
+    assert.ok(!existsSync(zeroLayout.infoPlist),
+      '内容断言在写 Info.plist 之前 fail——坏的 .app 不得成形')
+
+    // 真实装配腿（缺一个 .lproj）：端到端复现「半本地化」输入，loud 带缺失路径
+    // （纯函数单测之外，装配腿自己也要红）。
+    const missing = writeFakeSwiftBuild(missingConfig, { en: '"common.ok" = "OK";\n' })
+    await assert.rejects(
+      runBuildSwiftApp(parseBuildSwiftAppArgs([
+        '--out', out, '--config', missingConfig, '--skip-build', '--skip-web-dist',
+        '--skip-sidecar', '--no-sign', '--no-zip', '--no-dmg',
+      ]), { log: () => {}, error: () => {} }),
+      (error) => {
+        assert.match(error.message, /缺本地化资源/)
+        assert.ok(error.message.includes(localizationFile(missing.bundleDir, 'zh-Hans')), error.message)
+        return true
+      },
+      '缺一个 .lproj 的真实装配腿必须 fail（此前只有纯函数负例）',
+    )
+  } finally {
+    rmSync(out, { recursive: true, force: true })
+    rmSync(buildOutputDir(zeroConfig), { recursive: true, force: true })
+    rmSync(buildOutputDir(missingConfig), { recursive: true, force: true })
   }
 })
 

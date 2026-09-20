@@ -5,6 +5,8 @@
 //  A2：原生壳落盘日志的写入面——路径规则、真的落盘（不是只打印）、时间戳、
 //  0600、大小上限轮转、失败静默降级，以及「启动/sidecar/导航失败/更新相位/退出链
 //  都接了 shellLog」的源码锁步。
+//  W4b（2026-12 三轮独立复核）：configure 前的启动早期行（W3 席位日志等）有界缓冲、
+//  configure 后按原顺序补写（Finder 双击态 stdout 不可见，此前永久丢失）。
 //
 import XCTest
 @testable import DSHChamber
@@ -145,12 +147,74 @@ final class ShellLogTests: XCTestCase {
 
     // MARK: - 失败静默降级（日志绝不成为新的致命面）
 
-    func testUnconfiguredLogIsNoOpButPrints() {
+    /// 未 configure = 只打印、不落盘（W4b 后同时有界缓冲等待 configure，见下方用例）。
+    func testUnconfiguredLogBuffersWithoutWritingButStillPrints() {
         let log = ShellLog()
         XCTAssertFalse(log.isActive)
         XCTAssertNil(log.filePath)
-        log.append("nowhere")       // no-op，不崩
-        log.note("note-to-stdout")  // print + no-op
+        log.append("nowhere")       // 只入缓冲，不崩
+        log.note("note-to-stdout")  // print + 入缓冲
+        XCTAssertFalse(FileManager.default.fileExists(
+            atPath: ShellLog.fileURL(userDataDir: tempDir.path).path),
+            "未 configure 不得创建任何日志文件")
+        XCTAssertNil(log.filePath)
+    }
+
+    // MARK: - configure 前的有界缓冲（W4b：启动早期行不再丢）
+
+    /// W4b（2026-12 三轮独立复核）：configure 之前的 note/append（applicationWillFinish
+    /// Launching 的 W3 席位日志、didFinish 顶部若干行）在 Finder 双击态没有 stdout 可看，
+    /// 必须被有界缓冲并在 configure 成功后按原顺序补写；console 行为不变（note 仍立即
+    /// print），故断言全部落在文件面上。
+    func testNotesBeforeConfigureAreBufferedAndFlushedInOrder() throws {
+        let url = ShellLog.fileURL(userDataDir: tempDir.path)
+        let fixed = Date(timeIntervalSince1970: 1_700_000_000.25)
+        let log = ShellLog(now: { fixed })
+        XCTAssertFalse(log.isActive, "configure 前不得打开文件")
+        log.note("[shell] W3 席位日志（configure 前）")
+        log.append("[shell] didFinish 早期行 2")
+        log.note("[shell] didFinish 早期行 3")
+        log.configure(fileURL: url)
+        XCTAssertTrue(log.isActive)
+
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let lines = text.split(separator: "\n")
+        XCTAssertEqual(lines.count, 3, "三条 configure 前日志必须全部补写：\(text)")
+        XCTAssertTrue(lines[0].contains("W3 席位日志（configure 前）"))
+        XCTAssertTrue(lines[1].contains("didFinish 早期行 2"))
+        XCTAssertTrue(lines[2].contains("didFinish 早期行 3"))
+        XCTAssertTrue(lines.allSatisfy { $0.hasPrefix("[2023-11-14T") },
+                      "补写行保持既有时间戳格式（取入队时刻）：\(text)")
+    }
+
+    /// W4b：缓冲有上限（64 条）——超出的行丢弃（它们仍已 print 到 stdout），
+    /// 补写时在保留行之后落一条带丢弃行数的截断标记（既有日志格式不变）。
+    func testPendingBufferOverflowDropsBeyondLimitAndWritesTruncationMarker() throws {
+        let url = ShellLog.fileURL(userDataDir: tempDir.path)
+        let log = ShellLog()
+        let overflow = 3
+        for index in 0..<(ShellLog.maxPendingLines + overflow) {
+            log.append("early-\(index)")
+        }
+        log.configure(fileURL: url)
+
+        XCTAssertEqual(ShellLog.maxPendingLines, 64, "缓冲上限的设计值是 64（W4b）")
+        let text = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertTrue(text.contains("early-0"), "最早的行保留")
+        XCTAssertTrue(text.contains("early-\(ShellLog.maxPendingLines - 1)"),
+                      "恰在上限内的最后一行保留")
+        XCTAssertFalse(text.contains("early-\(ShellLog.maxPendingLines)\n"),
+                       "超上限的行不得落盘：\(text)")
+        XCTAssertTrue(text.contains(ShellLog.pendingOverflowMarkerFragment),
+                      "超上限必须落截断标记：\(text)")
+        XCTAssertTrue(text.contains("已丢弃 \(overflow) 行"),
+                      "标记必须带丢弃行数：\(text)")
+        // 保序：保留行在前、截断标记在后。
+        let first = try XCTUnwrap(text.range(of: "early-0"))
+        let last = try XCTUnwrap(text.range(of: "early-\(ShellLog.maxPendingLines - 1)"))
+        let marker = try XCTUnwrap(text.range(of: ShellLog.pendingOverflowMarkerFragment))
+        XCTAssertLessThan(first.lowerBound, last.lowerBound)
+        XCTAssertLessThan(last.lowerBound, marker.lowerBound)
     }
 
     /// 2026-12 独立复核：叶子是符号链接时必须拒绝打开（FileHandle 会跟随链接把日志

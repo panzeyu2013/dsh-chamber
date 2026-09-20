@@ -181,4 +181,46 @@ final class CrossLanguageLockstepTests: XCTestCase {
                        "手工转录清单必须删除（S16a）")
     }
 
+    // MARK: - S3：页面事实载波与 TS 帧语言常量锁步
+
+    /// S3：document 语言属性名的单源在 TS（locales.ts 的
+    /// DOCUMENT_LANGUAGE_ATTRIBUTE），zh 族前缀规则也必须与 Swift
+    /// ShellPageLanguage.resolve 逐值一致。注意两侧对 nil/空是有意分歧：
+    /// TS 回落到 served markup 默认 zh（FALLBACK_FRAME_LOCALE），Swift 侧
+    /// nil/空是「无事实」哨兵（由 ShellPageFactsStore 保留旧值）——本用例只钉
+    /// 前缀规则与属性名，不钉该回落。
+    func testPageFactsLanguageConstantAndZhFamilyLockstep() throws {
+        let locales = try source("packages/renderer/src/locales.ts")
+        XCTAssertTrue(locales.contains("export const DOCUMENT_LANGUAGE_ATTRIBUTE = 'lang'"),
+                      "locales.ts 必须继续以 'lang' 作为 document 语言属性单源")
+        XCTAssertTrue(locales.contains("if (tag === 'zh' || tag.startsWith('zh-') || tag.startsWith('zh_')) return 'zh'"),
+                      "locales.ts 的 zh 族前缀规则必须保持（S3 锁步锚）")
+
+        let script = ShellPageFactsScript.source()
+        XCTAssertTrue(script.contains("documentElement.lang")
+                      || script.contains("getAttribute('lang')")
+                      || script.contains("getAttribute(\"lang\")"),
+                      "Swift 事实脚本必须从 documentElement 的 lang 属性读语言")
+        XCTAssertTrue(script.contains(ShellPageFactsScript.messageName),
+                      "Swift 事实脚本的回包名必须与 messageName 一致")
+
+        // zh 族前缀规则逐值锁步：zh / zh- / zh_ → zh；其余非空 → en。
+        for tag in ["zh", "zh-CN", "zh-Hans", "zh-Hans-CN", "zh_CN", "zh-Hant-TW"] {
+            XCTAssertEqual(ShellPageLanguage.resolve(lang: tag), .zh,
+                           "TS zh 族 \(tag) 必须对应 Swift .zh")
+        }
+        for tag in ["en", "en-US", "ja", "fr", "zhx"] {
+            XCTAssertEqual(ShellPageLanguage.resolve(lang: tag), .en,
+                           "TS 非 zh 族 \(tag) 必须对应 Swift .en")
+        }
+    }
+
+    /// S3：served markup 的默认语言是 zh-CN（packages/renderer/index.html 的
+    /// html lang="zh-CN"）——冷启动兜底与静态骨架都依赖这个锚。
+    func testServedMarkupDeclaresZhCnDefaultLanguage() throws {
+        let html = try source("packages/renderer/index.html")
+        XCTAssertTrue(html.contains("<html lang=\"zh-CN\">"),
+                      "served markup 必须声明 lang=\"zh-CN\"（页面语言兜底单源）")
+    }
+
 }

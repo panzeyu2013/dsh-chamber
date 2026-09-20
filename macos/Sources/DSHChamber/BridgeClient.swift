@@ -598,14 +598,16 @@ public final class BridgeClient {
         guard lifecycleLock.lock(before: Date().addingTimeInterval(Self.terminalTransitionTimeout)) else {
             throw Self.makeError(
                 code: Self.errorCodeLifecycleBusy,
-                message: "上一会话的终止收尾超过 \(Self.terminalTransitionTimeout)s 未完成：start 放弃，请稍后重试")
+                message: NativeText.format(.bridgeLifecycleBusy,
+                                           Int32(Self.terminalTransitionTimeout)))
         }
         defer { lifecycleLock.unlock() }
         lock.lock()
         defer { lock.unlock() }
         guard process == nil else {
+            // 本地化：bridge.alreadyRunning（经 supervisor.startFailure 进致命框）。
             throw Self.makeError(code: Self.errorCodeAlreadyStarted,
-                                 message: "BridgeClient 已在运行（start 不可重入；先 stop 再 start）")
+                                 message: NativeText.string(.bridgeAlreadyRunning))
         }
 
         let process = Process()
@@ -789,7 +791,10 @@ public final class BridgeClient {
         lock.unlock()
         // 代际分桶结算（验证者 1 TOCTOU + 最终验证者 RISK-1）：只结算本次 stop 捕获的
         // 代际登记的请求（旧会话不悬挂、新会话不被误杀）。
-        _ = failAllPending(reason: "BridgeClient 已停止（stop()）", ifGeneration: generation)
+        // 本地化：bridge.pendingAborted（该 reason 同时是未决请求 NSError 的
+        // localizedDescription，经 invoke 失败回页面）。
+        _ = failAllPending(reason: NativeText.string(.bridgePendingAborted),
+                           ifGeneration: generation)
     }
 
     /// 自然退出收尾：sidecar 崩溃/自行 exit 时（SIGCHLD 回调线程）——置状态
@@ -857,7 +862,8 @@ public final class BridgeClient {
         // 终局副作用的会话绑定（独立审查 C-RISK）：抽干期间调用方可能已 stop+start，
         // 旧会话不得作废新会话的未决请求，也不得把旧退出码上报给 Supervisor
         // （后者会按同一实例把旧会话的退出当成本次会话崩溃）。
-        let settlementCurrent = failAllPending(reason: "sidecar 进程退出，未决请求作废",
+        // 本地化：bridge.pendingProcessExited（同上，作废文案随 invoke 失败回页面）。
+        let settlementCurrent = failAllPending(reason: NativeText.string(.bridgePendingProcessExited),
                                               ifGeneration: generation)
         guard settlementCurrent else {
             log("旧会话收尾：会话代际已推进（仅结算本代际请求），status=\(status) 不上报")
@@ -1107,7 +1113,8 @@ public final class BridgeClient {
             handleIncomingLine(line, generation: generation)   // Data 直入，无中间 String
         }
         if outcome.overflowResets > 0 {
-            _ = failAllPending(reason: "stdout 无换行缓冲超限，已清缓冲重新同步；被丢弃字节可能与未决请求相关",
+            // 本地化：bridge.stdoutResync（诊断语义随 NSError 回页面）。
+            _ = failAllPending(reason: NativeText.string(.bridgeStdoutResync),
                                ifGeneration: generation)
         }
     }
@@ -1164,7 +1171,9 @@ public final class BridgeClient {
             // 无长度上限）。fail-closed：loud 上报并作废全部未决请求，绝不静默
             // 留一个永不 settle 的 Promise。
             log("收到超长行（> \(FrameCodec.maxFrameBytes) 字节），丢弃该帧：\(Self.preview(data))")
-            _ = failAllPending(reason: "sidecar 响应超过 \(FrameCodec.maxFrameBytes) 字节上限，无法与请求配对",
+            // 本地化：bridge.frameTooLarge（%d = 帧长上限）。
+            _ = failAllPending(reason: NativeText.format(.bridgeFrameTooLarge,
+                                                         Int32(FrameCodec.maxFrameBytes)),
                                ifGeneration: generation)
             return
         }
@@ -1463,9 +1472,10 @@ public final class BridgeClient {
             }
             lock.unlock()
             guard let input else {
+                // 本地化：bridge.invokeFailed（invoke 失败随宿主腿回页面）。
                 continuation.resume(throwing: Self.makeError(
                     code: Self.errorCodeNotRunning,
-                    message: "BridgeClient 未在运行（未 start / 已 stop / sidecar 已退出）"))
+                    message: NativeText.string(.bridgeInvokeFailed)))
                 return
             }
 
@@ -1481,9 +1491,11 @@ public final class BridgeClient {
                 let removed = pending.removeValue(forKey: id)
                 lock.unlock()
                 if removed != nil {
+                    // 本地化：bridge.writeFailed（%d = 请求 id，%@ = 底层写错误）。
                     continuation.resume(throwing: Self.makeError(
                         code: Self.errorCodeWriteFailed,
-                        message: "写帧失败（id=\(id)）：\(error.localizedDescription)"))
+                        message: NativeText.format(.bridgeWriteFailed, Int32(id),
+                                                   error.localizedDescription)))
                 }
             }
         }
@@ -1505,7 +1517,8 @@ public final class BridgeClient {
         } else {
             // spec：ok=false → NSError，domain "BridgeClient"，code 1，
             // userInfo 带 error 文案（error 缺省时给兜底文案——解码容忍层）。
-            let message = error ?? "sidecar 返回 ok=false 但未附 error 文案"
+            // 本地化：bridge.responseWithoutError（sidecar 违约时壳自己的兜底文案）。
+            let message = error ?? NativeText.string(.bridgeResponseWithoutError)
             continuation.resume(throwing: Self.makeError(code: Self.errorCodeInvocationFailed,
                                                          message: message))
         }
@@ -1513,6 +1526,8 @@ public final class BridgeClient {
 
     /// 全部未决请求作废（进程退出 / stop）：锁内清空字典，锁外逐个 resume
     /// throw（code 4）。与 deliverResponse 互斥，续体恰好一次由字典所有权保证。
+    /// `reason` 既是落盘日志片段、也是该 NSError 的 localizedDescription——调用方
+    /// 传 **NativeText 已本地化**的文案（日志尾注仍是壳内中文诊断）。
     /// 代际分桶结算版本（最终验证者 RISK-1 + 独立验证者 1 的 TOCTOU）：判定、
     /// 按代际取条目、排空在**同一次加锁**内完成。只结算 `generation`（nil = 全部）
     /// 登记的条目——既不误杀新会话刚登记的 invoke，也不让旧会话自己的请求悬挂

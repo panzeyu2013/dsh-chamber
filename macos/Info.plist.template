@@ -21,6 +21,25 @@
 <dict>
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
+    <!-- S2（本地化）：CFBundleLocalizations = **进程偏好集合的声明面**。
+         它不是「翻译清单」而是 Bundle/系统框架在解析 preferredLocalizations 时
+         允许的本地化全集；盘上的 .lproj 本身也参与 Foundation 的
+         localizations/preferredLocalizations 解析，两者叠加会让 localizations
+         出现重复项（无功能影响）。真正的文案来自随包的
+         Contents/Resources/{en,zh-Hans}.lproj/Localizable.strings——装配腿
+         build-swift-app.mjs 在拷贝后断言两者存在，缺席即 fail。
+         装配腿机械校验的三处同源：build-swift-app.mjs 的 LOCALIZATIONS、本键
+         （dry-run 逐字比对）、Package.swift 两个 .process("…lproj") 的产物
+         （装配期断言 SwiftPM 资源包内两个 .lproj 都在）。壳内
+         ShellLanguagePolicy/NativeText 写死的 en / zh-Hans 字面量（后者是 Apple
+         的脚本拼写，不用 zh_CN/zh-CN）没有机械比对，由
+         NativeTextLanguageOverrideTests 的解析成功隐式锁定。
+         CFBundleDevelopmentRegion 保持 en 不变：它只承担缺省回退语言。 -->
+    <key>CFBundleLocalizations</key>
+    <array>
+        <string>en</string>
+        <string>zh-Hans</string>
+    </array>
     <key>CFBundleExecutable</key>
     <string>dsh-chamber</string>
     <!-- W-24：build-swift-app 把 icon.icns 平移到 Contents/Resources；

@@ -30,9 +30,12 @@ public struct SidecarStartupFailure: Equatable {
     /// stderr 摘要总字符上限（防把整篇崩溃栈塞进提示框/失败页）。
     public static let summaryCharLimit = 600
     /// 端口占用提示的可执行动作（文案单源；测试断言同源）。
-    public static let portInUseHint = "已有另一个 dsh-chamber 实例在运行"
+    /// 本地化：sidecar.lockBusy。计算属性（而非 static let）——bundle 偏好语言
+    /// 可能在启动期被 AppleLanguages 覆盖，取文案时再解析。
+    public static var portInUseHint: String { NativeText.string(.sidecarLockBusy) }
     /// 没有 stderr 证据时的保守回落（有证据时绝不把它当唯一信息）。
-    public static let genericHint = "请检查控制面/装配配置后重试"
+    /// 本地化：sidecar.checkConfig。
+    public static var genericHint: String { NativeText.string(.sidecarCheckConfig) }
 
     public init(exitCode: Int32?, stderrSummary: String,
                 addressInUse: String?, hint: String?) {
@@ -43,15 +46,30 @@ public struct SidecarStartupFailure: Equatable {
     }
 
     /// 用户可见完整文案（失败页 / fatal 提示框 / 日志共用）。
+    /// 本地化：sidecar.startupExit 是**模板**（zh「sidecar 启动失败（exit=%d）」/
+    /// en「Sidecar failed to start (exit=%d)」），观测到终止码时按 %d 填参；
+    /// 未观测到终止码（spawn 前失败）时把 %d 换成 "?"（保留模板骨架）。
+    /// 重试/修复：这里绝不再追加 ASCII "(exit=N)"——模板与后缀双写会让用户
+    /// 看到「（exit=70） (exit=70)」。
+    /// 三段后缀（detailSuffix / hintSuffix / genericSuffix）同样走键表：zh 侧拼出的
+    /// 字符串与旧字面量逐字一致，en 侧不再出现中文标点。
     public var message: String {
-        var text = exitCode.map { "sidecar 启动失败（exit=" + String($0) + "）" } ?? "sidecar 启动失败"
+        var text: String
+        if let exitCode {
+            text = NativeText.format(.sidecarStartupExit, Int32(exitCode))
+        } else {
+            text = NativeText.string(.sidecarStartupExit)
+                .replacingOccurrences(of: "%d", with: "?")
+        }
         if !stderrSummary.isEmpty {
-            text += "：" + stderrSummary
+            // 本地化：sidecar.detailSuffix（zh「：%@」/ en「: %@」——连标点也走键表，
+            // 绝不把中文标点硬拼在已本地化的模板之后）。
+            text += NativeText.format(.sidecarDetailSuffix, stderrSummary)
         }
         if let hint {
-            text += "。" + hint
+            text += NativeText.format(.sidecarHintSuffix, hint)
         } else if stderrSummary.isEmpty {
-            text += "——" + Self.genericHint
+            text += NativeText.format(.sidecarGenericSuffix, Self.genericHint)
         }
         return text
     }
@@ -82,11 +100,13 @@ public struct SidecarStartupFailure: Equatable {
 
     /// EADDRINUSE（或 Node/uv 的 address already in use 变体）→ 提示文案。
     /// EADDRINUSE 已识别但地址解析失败时仍给提示（不给地址，绝不回落成笼统建议）。
+    /// 本地化：sidecar.portInUseSuffix（%@ = host:port）/ sidecar.portInUseNoAddress
+    /// ——两段都直接接在 portInUseHint 之后（en 值自带前导空格）。
     static func hint(for address: String?) -> String? {
         if let address {
-            return portInUseHint + "（端口 " + address + " 被占用），请先退出它再重试"
+            return portInUseHint + NativeText.format(.sidecarPortInUseSuffix, address)
         }
-        return portInUseHint + "（端口被占用），请先退出它再重试"
+        return portInUseHint + NativeText.string(.sidecarPortInUseNoAddress)
     }
 
     /// 端口占用的跨语言证据拼写（Node 的 listen EADDRINUSE: address already in

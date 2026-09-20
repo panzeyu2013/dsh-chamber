@@ -1,0 +1,183 @@
+/*
+ * Localizable.strings —— dsh-chamber 原生壳简体中文文案（S2：本地化资源）
+ *
+ * 键 = NativeTextKey.rawValue（macos/Sources/DSHChamber/NativeText.swift），逐字一致；键表以 NativeTextKey 为准（当前 121 键）。
+ * zh-Hans 值逐条对照既有 Swift 源码字面量（不新造文案）：
+ *   - AppDelegate.makeMainMenu / presentQuitConfirmation / presentQuitUnavailableAlert /
+ *     presentFatalAlert / installStatusItem（菜单、退出框、致命标题、托盘）
+ *   - QuitCoordinator（confirmDetail / UnavailableAlert）
+ *   - SidecarStartupFailure（portInUseHint / genericHint / message）
+ *   - SidecarSupervisor（启动期退出 / 目录锁 / 崩溃循环 / 生命周期过渡）
+ *   - BridgeClient（bridge.* 进程状态与未决请求作废文案）
+ *   - AppUpdater（updater.* 装配期配置不可用原因）
+ *   - SwiftEdgeHostLegs.pickPluginSourceBody（NSOpenPanel title/prompt）
+ *   - MainWindowController（渲染恢复放弃提示、首载失败说明页）
+ *
+ * 占位符：%@ = 字符串参数，%d = 整数参数（String(format:) 语义）；与 en.lproj 逐键一一对应，
+ * 两份文件的占位符种类/顺序必须保持一致。参数由调用方按 NativeText.format 传入：
+ * 原本由 Swift 字面量插值的动态部分（app 名、控制面地址、退出原因、次数/秒数、
+ * sidecar 失败原因）改为 %@/%d，格式化后的输出与既有字面量逐字一致。
+ *
+ * 装配：SwiftPM .process("Resources/zh-Hans.lproj") 产出资源包；
+ * build-swift-app.mjs 把 <lang>.lproj 装配到 <App>.app/Contents/Resources/ 下
+ * （Bundle.main 与系统框架的本地化解析都读这一层），缺席即装配期 loud。
+ * Info.plist 的 CFBundleLocalizations 声明同一集合 {en, zh-Hans}。
+ */
+
+/* ===== 主菜单：App ===== */
+"menu.aboutApp" = "关于 %@";
+"menu.checkForUpdates" = "检查更新…";
+"menu.services" = "服务";
+"menu.hideApp" = "隐藏 %@";
+"menu.hideOthers" = "隐藏其他";
+"menu.showAll" = "显示全部";
+"menu.quitApp" = "退出 %@";
+
+/* ===== 主菜单：文件 ===== */
+"menu.file" = "文件";
+"menu.closeWindow" = "关闭窗口";
+
+/* ===== 主菜单：编辑 ===== */
+"menu.edit" = "编辑";
+"menu.undo" = "撤销";
+"menu.redo" = "重做";
+"menu.cut" = "剪切";
+"menu.copy" = "拷贝";
+"menu.paste" = "粘贴";
+"menu.pasteAndMatchStyle" = "粘贴并匹配样式";
+"menu.delete" = "删除";
+"menu.selectAll" = "全选";
+"menu.substitutions" = "替换";
+"menu.showSubstitutions" = "显示替换…";
+"menu.smartQuotes" = "智能引号";
+"menu.smartDashes" = "智能破折号";
+"menu.textReplacement" = "文本替换";
+"menu.speech" = "语音";
+"menu.startSpeaking" = "开始朗读";
+"menu.stopSpeaking" = "停止朗读";
+
+/* ===== 主菜单：显示 ===== */
+"menu.view" = "显示";
+"menu.reload" = "重新加载";
+"menu.forceReload" = "强制重新加载";
+"menu.zoomIn" = "放大";
+"menu.zoomOut" = "缩小";
+"menu.actualSize" = "实际大小";
+"menu.toggleFullScreen" = "切换全屏幕";
+
+/* ===== 主菜单：窗口 / 帮助 ===== */
+"menu.window" = "窗口";
+"menu.minimize" = "最小化";
+"menu.zoom" = "缩放";
+"menu.bringAllToFront" = "前置全部窗口";
+"menu.help" = "帮助";
+"menu.appHelp" = "%@ 帮助";
+
+/* ===== 状态栏托盘 ===== */
+"tray.showWindow" = "显示窗口";
+"tray.quitApp" = "退出 %@";
+
+/* ===== 退出确认 ===== */
+"quit.confirmTitle" = "退出 %@？";
+"quit.confirmDetail" = "退出将停止%@。确定退出？";
+"quit.reasonsSeparator" = "与";
+"quit.confirmButton" = "退出";
+"quit.cancelButton" = "取消";
+
+/* ===== 退出决策不可得（S-17） ===== */
+"quit.unavailableTitle" = "dsh sidecar 未响应退出请求";
+"quit.unavailableDetail" = "dsh sidecar 未在 %d 秒内应答退出决策，本次退出已取消。可以继续等待 sidecar 恢复，或强制退出（强制退出仍会执行既有清理）。";
+"quit.waitButton" = "继续等待";
+"quit.forceButton" = "强制退出";
+
+/* ===== 致命提示标题与正文（AppDelegate.fatalStartup 的用户可见原因；日志仍中文） ===== */
+"fatal.startupFailedTitle" = "%@ 启动失败";
+"fatal.sidecarAbnormalTitle" = "%@ sidecar 异常";
+"fatal.nodeResolveFailed" = "node 解析失败：%@";
+"fatal.sidecarScriptMissingExplicit" = "DSH_CHAMBER_SHELL_SIDECAR 指向的 sidecar 脚本不存在：%@";
+"fatal.sidecarScriptMissingPackaged" = "装配态缺少 sidecar 脚本：%@（DSH_CHAMBER_SHELL_SIDECAR 可显式指定）";
+"fatal.sidecarScriptMissingDev" = "dev 态未找到 sidecar 脚本：DSH_CHAMBER_SHELL_SIDECAR 未设，且自 %@ 向上 6 层未找到 %@";
+"fatal.hostPackagesMissing" = "装配态 host 包缺失：%@";
+"fatal.hostPackagesMissingHint" = "——请重新运行 pnpm run build:sidecar 并重装 .app";
+"fatal.cpURLUnparsable" = "DSH_CHAMBER_SHELL_CP_URL 无法解析为 URL";
+"fatal.cpURLUnderivable" = "控制面 URL 无法派生（未解析到端口）";
+"fatal.readyPortMismatch" = "sidecar ready 端口 %d 与壳即将加载的控制面 origin 端口 %d 不一致（%@）——拒绝加载错 origin";
+"fatal.bridgeStartFailed" = "BridgeClient 启动失败：%@";
+"fatal.sidecarStartFailedDetail" = "sidecar 启动失败：%@";
+
+/* ===== 渲染恢复放弃 ===== */
+"renderer.crashTitle" = "dsh-chamber 前端异常";
+"renderer.crashDetail" = "前端渲染进程反复无响应/崩溃，已停止自动恢复。请重新启动应用。";
+
+/* ===== sidecar 启动失败报告（SidecarStartupFailure） ===== */
+"sidecar.lockBusy" = "已有另一个 dsh-chamber 实例在运行";
+"sidecar.checkConfig" = "请检查控制面/装配配置后重试";
+"sidecar.startupExit" = "sidecar 启动失败（exit=%d）";
+"sidecar.portInUseSuffix" = "（端口 %@ 被占用），请先退出它再重试";
+"sidecar.portInUseNoAddress" = "（端口被占用），请先退出它再重试";
+"sidecar.detailSuffix" = "：%@";
+"sidecar.hintSuffix" = "。%@";
+"sidecar.genericSuffix" = "——%@";
+
+/* ===== sidecar 守护（SidecarSupervisor） ===== */
+"supervisor.startupExit" = "sidecar 启动期退出（status=%d）——%@；启动期退出不自动重启";
+"supervisor.startFailure" = "sidecar 启动失败：%@";
+"supervisor.lockBusy" = "sidecar 检测到目录锁被另一实例占用（exit=3）——请关闭另一 flavor 后重试";
+"supervisor.crashLoop" = "sidecar 连续崩溃 %d 次（%ds 窗口），已停止自动恢复";
+"supervisor.lifecycleDeferred" = "sidecar 重启被生命周期过渡持续推迟（重试 %d 次后放弃）";
+
+/* ===== 目录锁 / B 桥 / 资源解析（用户可见的 fatal 描述） ===== */
+"lock.heldByAnotherProcess" = "目录锁被占用（%@）——另一 flavor/实例正在使用该 userData，拒绝启动";
+"lock.ioFailure" = "目录锁 I/O 失败：%@";
+"lock.pidUnknown" = "未知";
+"lock.mkdirFailed" = "mkdir %@ 失败：%@";
+"lock.openFailed" = "open %@ 失败（errno=%d）";
+"lock.notRegularFile" = "锁文件非规整文件（fail-closed）：%@";
+"lock.ownerUnexpected" = "锁文件属主异常（uid=%d）：%@";
+"lock.shortWrite" = "写锁记录短写（%d/%d）";
+"lock.encodeFailed" = "锁记录序列化失败：%@";
+"bridge.lifecycleBusy" = "上一会话的终止收尾超过 %d 秒未完成：启动已放弃，请稍后重试";
+"bridge.alreadyRunning" = "BridgeClient 已在运行（start 不可重入；先 stop 再 start）";
+"bridge.invokeFailed" = "BridgeClient 未在运行（未 start / 已 stop / sidecar 已退出）";
+"bridge.pendingAborted" = "BridgeClient 已停止（stop()）";
+"bridge.pendingProcessExited" = "sidecar 进程退出，未决请求作废";
+"bridge.stdoutResync" = "stdout 无换行缓冲超限，已清缓冲重新同步；被丢弃字节可能与未决请求相关";
+"bridge.frameTooLarge" = "sidecar 响应超过 %d 字节上限，无法与请求配对";
+"bridge.writeFailed" = "写帧失败（id=%d）：%@";
+"bridge.responseWithoutError" = "sidecar 返回 ok=false 但未附 error 文案";
+"resources.explicitNodeMissing" = "DSH_CHAMBER_SHELL_NODE_BIN 指向的 node 不存在或不可执行：%@";
+"resources.packagedNodeMissing" = "装配态缺少自带 node（不可执行）：%@";
+"resources.pathNodeMissing" = "dev 态 PATH 中找不到可执行的 node（可设 DSH_CHAMBER_SHELL_NODE_BIN 显式指定）";
+
+/* ===== 原生更新器（AppUpdater 装配期配置不可用原因） ===== */
+"updater.feedMustBeHTTPS" = "SUFeedURL 必须是 https URL（当前：%@）";
+"updater.publicKeyInvalid" = "SUPublicEDKey 必须是 base64 编码的 32 字节 Ed25519 公钥";
+
+/* ===== 首载失败说明页 ===== */
+"failure.title" = "dsh-chamber";
+"failure.heading" = "无法加载 %@ 界面";
+"failure.cpLabel" = "控制面地址：%@";
+"failure.sidecarLabel" = "sidecar 启动失败：%@";
+"failure.retryExhausted" = "控制面未能加载（已重试 %d 次）。";
+"failure.shimMissing" = "缺少 A 桥 shim 资源：页面无法注入 dshChamber 桥，本机能力全部不可用。已在以下目录查找：%@。请重新运行 pnpm run build:swift-app（dev 用 swift build）后重试。";
+"failure.probeFailed" = "控制面就绪探测失败：%@";
+"failure.probeHTTPStatus" = "HTTP %d（期望 2xx）";
+"failure.probeNoResponse" = "无响应";
+"failure.probeNSURLError" = "NSURLError %d：%@";
+
+/* ===== 插件源选择面板（当前源码为英文原文，此处为等效中文译文） ===== */
+"panel.pluginSourceTitle" = "导入 dsh 插件——源文件夹或 .tgz 归档";
+"panel.pluginSourcePrompt" = "导入";
+
+/* ===== 通用 ===== */
+"common.ok" = "好";
+"common.listSeparator" = "、";
+
+/* ===== composer 原生打开面板 / 桥兜底 / 帧错误（2026-12 审计收口：这三处
+   此前硬编码英文或中文，会在页面语言与系统语言不同时错配） ===== */
+"panel.openFileTitle" = "选择文件";
+"panel.openFileOrDirectoryTitle" = "选择文件或文件夹";
+"panel.openFilePrompt" = "打开";
+"bridge.errorFallback" = "桥接错误";
+"frame.tooLarge" = "帧超过上限 %d 字节（实际 %d 字节）";
+"frame.responseMissingError" = "ok=false 的响应帧必须携带 error 文案（id=%d）";

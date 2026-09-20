@@ -2,9 +2,12 @@
 //  DSHChamberWebKitSupport.m
 //  DSHChamberWebKitSupport
 //
-//  S-48 / design 25 §5.1：见头文件。实现只做三件事：按 key 找到该 WebKit 构建的 _WKFeature、
-//  置 NO、读回。全部 SPI 调用都有 respondsToSelector/@try 兜底——未来 OS 拿掉
-//  任一 SPI 时退化为「保持 WebKit 默认 + 日志」，绝不让壳崩溃。
+//  S-48 / design 25 §5.1：见头文件。刷新率部分只做三件事：按 key 找到该 WebKit 构建的
+//  _WKFeature、置 NO、读回。全部 SPI 调用都有 respondsToSelector/@try 兜底——未来 OS
+//  拿掉任一 SPI 时退化为「保持 WebKit 默认 + 日志」，绝不让壳崩溃。
+//  W1/W2（2026-12 三轮独立复核）：本文件另承载 T-4 透明露底的异常安全 KVC BOOL 写入
+//  （WKWebView 私有键 drawsBackground，不在公开头文件里；Swift 侧无法 catch ObjC 异常，
+//  直设会 abort）——@try/@catch 吞掉 NSUnknownKeyException，返回结果而非崩溃。
 //
 #import "DSHChamberWebKitSupport.h"
 
@@ -96,4 +99,53 @@ DSHChamberRefreshRatePreference DSHChamberPreferDisplayRefreshRate(WKPreferences
     // **不是不可构造**，只是没有测试覆盖（测试需要在进程内换掉 objc 方法实现）。真正的证据
     // 仍是 DSH_CHAMBER_SHELL_DEBUG 的 [shell-fps] A/B（S-48 实机三工况）。
     return DSHChamberRefreshRatePreferenceState(preferences);
+}
+
+#pragma mark - T-4 透明露底：异常安全 KVC BOOL 写入（W1/W2，2026-12 三轮独立复核）
+
+/// 回读：nil 对象 / 键不存在（valueForKey: 抛异常）/ 值不是 NSNumber → NO。
+/// 只有 @try 之外确定拿到 NSNumber 才写 outValue。
+static BOOL DSHChamberReadBoolValue(id object, NSString *key, BOOL *outValue)
+{
+    if (!object || outValue == NULL)
+        return NO;
+
+    id raw = nil;
+    @try {
+        raw = [object valueForKey:key];
+    } @catch (__unused NSException *exception) {
+        return NO;
+    }
+    if (![raw isKindOfClass:[NSNumber class]])
+        return NO;
+
+    *outValue = [(NSNumber *)raw boolValue];
+    return YES;
+}
+
+DSHChamberBoolKVCOutcome DSHChamberSetBoolValueForKey(id object, NSString *key, BOOL value)
+{
+    if (!object || key.length == 0)
+        return DSHChamberBoolKVCOutcomeUnavailable;
+
+    // 预期异常 = NSUnknownKeyException（键不存在/只读时 setValue:forKey: 的默认
+    // setValue:forUndefinedKey: 抛出）。这里按 NSException 兜住整族：Swift 侧没有
+    // 任何 catch 面，任何异常泄出去都是进程 abort。
+    @try {
+        [object setValue:@(value) forKey:key];
+    } @catch (__unused NSException *exception) {
+        return DSHChamberBoolKVCOutcomeUnavailable;
+    }
+
+    BOOL actual = NO;
+    if (!DSHChamberReadBoolValue(object, key, &actual))
+        return DSHChamberBoolKVCOutcomeReadBackMismatch;
+    return actual == value ? DSHChamberBoolKVCOutcomeApplied
+                           : DSHChamberBoolKVCOutcomeReadBackMismatch;
+}
+
+DSHChamberBoolKVCOutcome DSHChamberSetDrawsBackground(WKWebView *webView, BOOL drawsBackground)
+{
+    // 键名在此单点出现：KVC 私有键的拼写只依赖这一个字符串。
+    return DSHChamberSetBoolValueForKey(webView, @"drawsBackground", drawsBackground);
 }

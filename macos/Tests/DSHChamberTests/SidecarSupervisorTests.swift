@@ -146,7 +146,10 @@ final class SidecarSupervisorTests: XCTestCase {
             guard case .ioFailure(let detail) = error as? SidecarDirectoryLock.LockError else {
                 return XCTFail("非规整文件应 fail-closed，实际 \(error)")
             }
-            XCTAssertTrue(detail.contains("非规整文件"), detail)
+            // 文案已本地化（lock.notRegularFile）：期望值走同一键表动态构造，
+            // 不依赖译文里恰好保留 "fail-closed" 字样（机器语言无关）。
+            XCTAssertEqual(detail, NativeText.format(.lockNotRegularFile, lock.recordPath),
+                           "非规整文件必须给出 lock.notRegularFile 的本地化诊断（含路径）")
         }
     }
 
@@ -334,7 +337,8 @@ final class SidecarSupervisorTests: XCTestCase {
         sidecar.terminate(status: 3)
         XCTAssertEqual(supervisor.state, .fatal)
         XCTAssertEqual(fatal.count, 1)
-        XCTAssertTrue((fatal[0] as? String)?.contains("目录锁") ?? false)
+        XCTAssertEqual(fatal[0] as? String, NativeText.string(.supervisorLockBusy),
+                       "exit=3 的 fatal 文案必须是键表 supervisor.lockBusy 的本地化整句")
         XCTAssertTrue(scheduled().isEmpty, "锁冲突不重启（重启必再撞同一锁）")
         supervisor.stop()
     }
@@ -349,7 +353,9 @@ final class SidecarSupervisorTests: XCTestCase {
         sidecar.terminate(status: 70)
         XCTAssertEqual(supervisor.state, .fatal)
         XCTAssertEqual(fatal.count, 1)
-        XCTAssertTrue((fatal[0] as? String)?.contains("启动失败") ?? false)
+        XCTAssertEqual(fatal[0] as? String,
+                       SidecarStartupFailure.make(exitCode: 70, stderr: "").message,
+                       "exit=70 的 fatal 必须走 SidecarStartupFailure 的本地化启动失败文案")
         XCTAssertTrue(scheduled().isEmpty, "启动失败不排定重启")
         supervisor.stop()
     }
@@ -368,7 +374,11 @@ final class SidecarSupervisorTests: XCTestCase {
         sidecar.terminate(status: 1)
         XCTAssertEqual(supervisor.state, .fatal)
         XCTAssertEqual(fatal.count, 1)
-        XCTAssertTrue((fatal[0] as? String)?.contains("连续崩溃") ?? false)
+        let policy = SidecarRestartPolicy()
+        XCTAssertEqual(fatal[0] as? String,
+                       NativeText.format(.supervisorCrashLoop,
+                                         policy.maxRestarts, Int(policy.window)),
+                       "重启耗尽的 fatal 必须是键表 supervisor.crashLoop 的本地化整句")
         supervisor.stop()
     }
 
@@ -398,7 +408,10 @@ final class SidecarSupervisorTests: XCTestCase {
         XCTAssertEqual(state, .fatal, "启动期退出不得发布 .running")
         XCTAssertEqual(supervisor.state, .fatal)
         XCTAssertEqual(fatal.count, 1)
-        XCTAssertTrue((fatal[0] as? String)?.contains("启动期退出") ?? false)
+        XCTAssertEqual(fatal[0] as? String,
+                       NativeText.format(.supervisorStartupExit, Int(1),
+                                         SidecarStartupFailure.make(exitCode: 1, stderr: "").message),
+                       "启动期退出的 fatal 必须是键表 supervisor.startupExit 的本地化整句")
         XCTAssertTrue(scheduled().isEmpty, "启动期退出不排定重启")
         supervisor.stop()
     }

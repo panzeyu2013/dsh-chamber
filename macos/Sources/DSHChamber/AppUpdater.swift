@@ -93,9 +93,14 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
         guard let url = URL(string: configuration.feedURL),
               url.scheme?.lowercased() == "https",
               url.host?.isEmpty == false
-        else { return "SUFeedURL 必须是 https URL（当前：\(configuration.feedURL)）" }
+        else {
+            // 本地化：updater.feedMustBeHTTPS（%@ = 当前 feed）；reason 追加在
+            // native-updater-misconfigured: 前缀之后（前缀是页面侧机器可读协议，不动）。
+            return NativeText.format(.updaterFeedMustBeHTTPS, configuration.feedURL)
+        }
         guard let key = Data(base64Encoded: configuration.publicKey), key.count == 32 else {
-            return "SUPublicEDKey 必须是 base64 编码的 32 字节 Ed25519 公钥"
+            // 本地化：updater.publicKeyInvalid（同上，经能力面/相位回页面）。
+            return NativeText.string(.updaterPublicKeyInvalid)
         }
         return nil
     }

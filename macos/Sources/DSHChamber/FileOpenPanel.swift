@@ -41,6 +41,11 @@ protocol FileOpenPanelPresenting {
 final class SystemFileOpenPanelPresenter: FileOpenPanelPresenting {
     func present(_ request: FileOpenPanelRequest, completion: @escaping ([URL]) -> Void) {
         let panel = NSOpenPanel()
+        // 审计收口（2026-12）：面板标题/按钮此前留空 → 走 AppKit 默认，只随系统语言。
+        // 显式键化后与页面语言一致；面板内建按钮（打开/取消）仍由 AppKit 按进程本地化。
+        panel.title = NativeText.string(request.allowsDirectories
+            ? .panelOpenFileOrDirectoryTitle : .panelOpenFileTitle)
+        panel.prompt = NativeText.string(.panelOpenFilePrompt)
         panel.allowsMultipleSelection = request.allowsMultipleSelection
         panel.canChooseDirectories = request.allowsDirectories
         panel.canChooseFiles = true

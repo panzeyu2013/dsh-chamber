@@ -33,11 +33,19 @@ final class SidecarStartupFailureTests: XCTestCase {
             stderr: "Error: listen EADDRINUSE: address already in use 127.0.0.1:17500")
         XCTAssertEqual(failure.exitCode, 70)
         XCTAssertEqual(failure.addressInUse, "127.0.0.1:17500")
-        XCTAssertTrue(failure.message.contains("exit=70"))
+        // 模板期望值动态取自键表（sidecar.startupExit，%d = 退出码）：
+        // "exit=70" 也是键表值的一部分，机器语言为 en 时同样成立。
+        XCTAssertTrue(failure.message.contains(
+            NativeText.format(.sidecarStartupExit, Int32(70))),
+            "必须带 sidecar.startupExit 的本地化模板：\(failure.message)")
         XCTAssertTrue(failure.message.contains("EADDRINUSE"))
         XCTAssertTrue(failure.message.contains("127.0.0.1:17500"))
         XCTAssertTrue(failure.message.contains(SidecarStartupFailure.portInUseHint))
-        XCTAssertTrue(failure.message.contains("请先退出它再重试"))
+        // 期望值动态取自键表（sidecar.portInUseSuffix，%@ = host:port）：
+        // 机器语言是 en 时同样成立，不再钉中文片段。
+        XCTAssertTrue(failure.message.contains(
+            NativeText.format(.sidecarPortInUseSuffix, "127.0.0.1:17500")),
+            "必须带端口被占用的可执行后缀（含被占用端口）：\(failure.message)")
         XCTAssertFalse(failure.message.contains(SidecarStartupFailure.genericHint),
                        "已有真实原因时不得以笼统建议作为唯一信息")
     }
@@ -109,7 +117,8 @@ final class SidecarStartupFailureTests: XCTestCase {
                       "exit=70 必须到达 fatal（当前状态 \(supervisor.state)）")
         XCTAssertEqual(supervisor.state, .fatal)
         let message = fatal.first ?? ""
-        XCTAssertTrue(message.contains("exit=70"), "fatal 文案必须带退出码：\(message)")
+        XCTAssertTrue(message.contains(NativeText.format(.sidecarStartupExit, Int32(70))),
+                      "fatal 文案必须带 sidecar.startupExit 的本地化模板：\(message)")
         XCTAssertTrue(message.contains("EADDRINUSE"), "必须带 stderr 里的 errno：\(message)")
         XCTAssertTrue(message.contains("127.0.0.1:17500"), "必须带被占用端口：\(message)")
         XCTAssertTrue(message.contains(SidecarStartupFailure.portInUseHint),

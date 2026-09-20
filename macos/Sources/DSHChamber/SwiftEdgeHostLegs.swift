@@ -775,7 +775,8 @@ public final class SwiftEdgeHostLegs {
                 if case .string(let s) = item { buttons.append(s) }
             }
         }
-        if buttons.isEmpty { buttons = ["OK"] }
+        // 缺省按钮本地化：common.ok（调用方未给 buttons 时的 fallback）。
+        if buttons.isEmpty { buttons = [NativeText.string(.commonOk)] }
         // defaultId / cancelId（2026-12 双端逐函数核对 F5/Q4）：Electron
         // dialog.showMessageBox 用 defaultId 指定 Enter 命中的按钮、cancelId 指定
         // Esc 命中的按钮；NSAlert 用 keyEquivalent 表达同一语义。两者相同或越界
@@ -816,9 +817,11 @@ public final class SwiftEdgeHostLegs {
             // title 'Import a dsh plugin — source folder or .tgz archive'、
             // buttonLabel 'Import'、扩展过滤器只约束文件、目录仍可选）——
             // 2026-12 双端逐函数核对 S4·U2 / S2·V3。
-            panel.title = "Import a dsh plugin — source folder or .tgz archive"
-            panel.prompt = "Import"
-            panel.message = "Import a dsh plugin — source folder or .tgz archive"
+            // 本地化：panel.pluginSourceTitle（title 与 message 同一句）、
+            // panel.pluginSourcePrompt（按钮名）；原硬编码英文改由键表承载。
+            panel.title = NativeText.string(.panelPluginSourceTitle)
+            panel.prompt = NativeText.string(.panelPluginSourcePrompt)
+            panel.message = NativeText.string(.panelPluginSourceTitle)
             panel.canChooseFiles = true
             panel.canChooseDirectories = true
             panel.allowsMultipleSelection = false
