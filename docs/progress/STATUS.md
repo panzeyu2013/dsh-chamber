@@ -242,6 +242,11 @@
 
 ## 一致性债务与开放登记（低–中，未排期；均指回代码面注释/design 登记）
 
+- **消息来源判定依赖 `isMainFrame`：`parent.`/`top.` 上的 handler 会把子 frame 消息归属成主 frame（2026-12第三轮审查；真实 WKWebView 实测）**：
+  同源 `blob:`/`about:srcdoc` 子 frame 调 `parent.webkit.messageHandlers.<name>.postMessage(...)` 时，WebKit 投递的 `frameInfo.isMainFrame=true` 且 `frameInfo.request.url` 为主 frame URL（归属随 `parent.` 取到的 handler 对象而非调用脚本；走 `self.` 时归属正确）——`macos/Sources/DSHChamber/MessageHandler.swift#ChamberMessageHandler`（A 桥）与 `macos/Sources/DSHChamber/MainWindowController.swift#ShellPageFactsMessageHandler`（事实通道）都受影响；加 `sandbox="allow-scripts"`（不含 `allow-same-origin`）后 `parent.`/`top.` 抛 SecurityError。
+  同路子 frame 还可用 `parent.document.write(...)` 改写主 frame 文档，此后 `frameInfo.request.url` 保持**过期的旧主 frame URL**（读 frameInfo 的门据此被绕过），而 `message.webView.url`/`location.href` 变为 `blob:`——A 桥读 `message.webView.url` 故仍拒；事实通道的三个门（`#isSameOriginDocument`、`#acceptsReconcile`、handler `accepts`）按同一更严来源取值。
+  可达性取决于「同源子 frame 内能否执行脚本」：`blob:` 非主 frame 正是 S-35 放行的预览形态、控制面 CSP 只补最窄 `frame-src blob:`；逐字 CSP 复现中 blob 子 frame 的内联/`'self'`/复制 nonce 脚本**均未执行**（机制未查清）⇒ 需真实壳（真实 CSP + 预览文档）复验；若能执行，根治 = 预览文档必须 sandbox（不含 `allow-same-origin`，opaque origin）或换源，登记并入 S-35 残余实机项。
+
 - docs证据锚点过期（D15，2026-12实测；低–中，未排期）：`docs/**` 的 `文件:行` 证据锚点实测678处（`check-anchors --report` 口径；D15 旧记666不可复现），分布deviations.md 431 / STATUS.md 117 / design 20 40 / design 25 38；位移后大面积错位、偏移不均（同一文件净增128行，偏移 +5…+128）。工具（2026-12）：`check-anchors.mjs`（`anchors-budget.json` 棘轮，基线743只降不升；两次整合实测main 788c6d55 +4 / ui-chat-render-fix +8；`--report`/`--fix`）+ `verify-registry.mjs` 已进 `check:static` 与CI。测试面45处注释 + 4处非注释（3处runtime-lockstep标题 + 1处真实断言：`WebPermissionPolicyTests.swift#testMediaCaptureIsDeniedLikeElectronsPermissionPolicy`（D13）；夹具另7处命中（5个示例字面量）不计入；`--report` 打印 注释45 / 字符串10 / 断言或其它1）；需同步的测试锚点只有这1处。退役动作 = 待合并分支（timeout-loading / ui-chat-not-render / windows-slide / swift-sidebar-update等）落地后按符号grep分批语义化重锚、逐批调低预算；登记见 [deviations.md](deviations.md) D15。
 
 - 设置面残余登记（design 05 §5，2026-12完整桥接修订后剩余项）：壳渲染选中来源自己boot ctx的 `settings.section`
