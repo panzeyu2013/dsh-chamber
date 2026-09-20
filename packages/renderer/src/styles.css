@@ -105,10 +105,12 @@ body {
   /* 与 dsh 主题同底色：骨架屏/切换过渡的底层永远不是"黑"，加载与切换观感
      跟随实例主题（主题 token 未加载时回退 chamber 暗色）。 */
   background: var(--dsw-alias-bg-base, var(--bg));
-  /* 2026-09 review（P0）：隔离自身 stacking context——veil 的 z-index:1
-     只在视图内与 shell 内容比价，壳内未来任何更高 z 的元素都不可能穿透
-     veil（固化"veil 必盖 dsh 启动页"的未来不变量，不依赖 dsh 侧无高 z
-     元素的现状）。 */
+  /* 隔离自身 stacking context：让本视图内的层级不与其它视图互相竞争。
+     注意这条**不**保证 veil 盖住壳内元素——veil 与壳在这个上下文里同级
+     比价，壳内任何 z-index>1 的定位元素都会画在 veil（z-index:1）之上；
+     "veil 必盖壳"的结构性边界必须画在租客根上（见下面 .instance-shell 的
+     isolation）。2026-12 复核订正：旧注释把"公共父级隔离"当成了"压平壳内 z"，
+     与官方 composer 的 z-index:7 事实矛盾（实测穿透）。 */
   isolation: isolate;
 }
 
@@ -136,7 +138,8 @@ body {
    整组退役（各自的样式表有说明），这条门是防回归：将来任何一处重新引入入场动画
    都不会在隐藏壳里被创建。 */
 .instance-hidden .instance-shell *,
-.instance-pending .instance-shell * {
+.instance-pending .instance-shell *,
+.instance-veil-held .instance-shell * {
   animation: none !important;
   transition: none !important;
 }
@@ -151,11 +154,31 @@ body {
   pointer-events: none;
 }
 
+/* 遮罩在**已 settle** 的壳上仍然可见时的租客隐藏（2026-12 P1 兜底不变量；判定是
+   InstanceView 的 `shellHeld = settled && veilVisible`——遮罩是这段时间唯一的可见面，
+   租客整体不可见；注意 `settled && holdVeil` 但已 surfaceRelease 时不成立，那时遮罩
+   不在 DOM，租客必须可见）。
+   与 .instance-pending 同法只取 visibility（保留 style/layout：壳内的
+   ResizeObserver / 虚拟列表测量不被破坏）；content-visibility 在这里不用，
+   避免每次"等待打开意图"都触发一次渲染缓存失效 + reveal 重排。 */
+.instance-view.instance-veil-held .instance-shell {
+  visibility: hidden;
+}
+
+/* 租客层叠边界（2026-12 P0）：把整个 dsh shell 子树关进它自己的 stacking
+   context。此后壳内任何 z-index（官方 composer 座位的 7、宽度手柄的 8、
+   shell.overlay 的 20、以及未来任何更高值）都被压平到这一层之内，兄弟遮罩
+   .instance-loading（z-index:1）按结构获胜——"遮罩必盖壳"由此成为不变量，
+   不再依赖对上游 z 值的假设。
+   只取 isolation（纯绘制属性）：不建 fixed 包含块、不裁 ink overflow、不改
+   布局与测量（contain:paint 会三者都改，故不采用）。隐藏视图本就有
+   content-visibility:hidden 自带的边界，这里补齐的是**活动视图**那一半。 */
 .instance-shell {
   flex: 1;
   min-height: 0;
   min-width: 0;
   display: block;
+  isolation: isolate;
 }
 
 /* ---------- 骨架屏（加载中间态，design 05 §4） ----------
@@ -167,6 +190,36 @@ body {
    全屏同底色 veil + 居中 spinner/文案：零几何主张、零失配可能；旧视图 →
    veil → 真实内容可能的两段 View Transition（后台已 settle 的视图切入时仅
    一段）保持同底色平滑过渡。 */
+
+/* 过渡作用域（2026-12 P2）：只有**活动**视图带 view-transition-name，旧/新
+   快照才能配成同一组（名字在文档内必须唯一）；非活动视图显式 none。命名把视图
+   从 root 快照里"挖出"，于是可以按意图控制这一组：`data-vt-intent='cut'`
+   （切向一个尚未 settle、必定显示遮罩的视图）立即换帧——旧视图快照（含它的
+   输入栏）绝不与新遮罩做 crossfade 混色；其余情况保留默认 crossfade（两个温壳
+   互切时仍由旧快照遮盖 reveal 重排）。不支持命名过渡的引擎忽略这些规则，行为
+   退回现状；prefers-reduced-motion 由 view-transition.ts 的直通模式接管。 */
+.instance-view:not(.instance-hidden):not(.instance-pending) {
+  view-transition-name: active-instance;
+}
+
+.instance-view.instance-hidden,
+.instance-view.instance-pending {
+  view-transition-name: none;
+}
+
+html[data-vt-intent='cut']::view-transition-group(active-instance),
+html[data-vt-intent='cut']::view-transition-old(active-instance),
+html[data-vt-intent='cut']::view-transition-new(active-instance) {
+  animation: none;
+}
+
+html[data-vt-intent='cut']::view-transition-old(active-instance) {
+  opacity: 0;
+}
+
+html[data-vt-intent='cut']::view-transition-new(active-instance) {
+  opacity: 1;
+}
 
 .instance-loading {
   position: absolute;

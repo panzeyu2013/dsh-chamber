@@ -134,7 +134,7 @@ import { forgetDegradedRetry, planDegradedRetries } from './degraded-retry.ts'
 // this?" rule; the frame only maps its keys through `t`.
 import { bootGapNotice, toServerBootGap } from './boot-gap.ts'
 import { setPageActiveSource } from './page-language.ts'
-import { runViewTransition } from './view-transition.ts'
+import { runViewTransition, type PaintIntent } from './view-transition.ts'
 import { captureSidebarScrollAnchor, restoreSidebarScroll } from './sidebar-scroll-sync.ts'
 import {
   AggregateRefreshQueue,
@@ -2569,6 +2569,19 @@ export default function App() {
     // sidebar-scroll-sync.ts).
     const scrollAnchor = captureSidebarScrollAnchor(activeViewRef.current)
     pendingViewRef.current = viewId
+    // P2（2026-12 过渡作用域；review 修订）：判据是"目标**落地后**是否显示遮罩"这一
+    // DOM 事实，而不是"目标是否已 settle"——已 settle 的温壳同样可以被 P1/P3 的持有门
+    // 罩着（settled ≠ 无遮罩），按 settled 猜会把"旧视图输入栏 × 新遮罩"的混色留在
+    // 那条路径上。resolver 在 view-transition 认领（flushSync 之后）时求值，此刻 DOM
+    // 就是落地后的状态；判不出来（无 CSS.escape / 选择器抛错）就地保守取 'cut'。
+    const paint = (): PaintIntent => {
+      try {
+        const el = document.querySelector(`.instance-view[data-instance="${CSS.escape(viewId)}"]`)
+        return el !== null && el.querySelector('.instance-loading') === null ? 'crossfade' : 'cut'
+      } catch {
+        return 'cut'
+      }
+    }
     // 键 'view'：与 settle 流隔离；同键突发意图在 view-transition 层单槽合并
     // （perf T2）——被取代意图不进快照/动画，末意图胜出语义不变。
     runViewTransition(() => {
@@ -2597,7 +2610,7 @@ export default function App() {
       setMountedViews(prev => (prev.includes(viewId) ? prev : [...prev, viewId]))
       if (scrollAnchor !== null) restoreSidebarScroll(viewId, scrollAnchor)
       onApply?.(true)
-    }, 'view')
+    }, 'view', paint)
     return true
   }, [ensureRemoteConnected, probeRemoteReady])
 
@@ -4370,6 +4383,9 @@ const HEALTH_ERROR_GRACE_MS = 10_000
                   && shellStates[viewId]?.booted === true
                   && runtimeFacts[viewId]?.current === openIntents[viewId],
               })}
+              // P3 持有窗的请求身份（二轮 review MINOR-4）：同视图 A→B 换代时窗口必须
+              // 重新起算，否则新请求会继承 A 的起点（极端时窗口立即过期）。
+              openIntentId={openIntents[viewId]}
             />
           )
         })}

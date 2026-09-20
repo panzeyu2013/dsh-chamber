@@ -67,9 +67,22 @@ test('no chamber stylesheet reintroduces an invisible first frame (repo-wide swe
 })
 
 test('the renderer forbids creating animations inside a shell nobody renders', () => {
-  assert.match(rendererCss, /\.instance-hidden \.instance-shell \*,\s*\n\.instance-pending \.instance-shell \*\s*\{/u)
-  const block = /\.instance-hidden \.instance-shell \*,[\s\S]*?\{([\s\S]*?)\}/u.exec(rendererCss)
+  // 2026-12：遮罩持有期（`.instance-veil-held`，renderer 的 P1 兜底不变量）加入同一门。
+  // 这里不再逐字钉"两条选择器 + 紧跟 {"，而是要求**三条隐藏态选择器都在门里**——
+  // 语义是"新增隐藏态必须进门"（原来那条正则会在新增第三条时失配，正是本轮 review
+  // 抓到的 BLOCKER）；声明体仍逐字断言，门本身没有被放宽。
+  // 先剥注释再匹配（二轮 review NIT-1）：否则把第三条选择器写成 `/* … */` 就能骗过本锁。
+  const block = /\.instance-hidden \.instance-shell \*,[\s\S]*?\{([\s\S]*?)\}/u.exec(
+    rendererCss.replace(/\/\*[\s\S]*?\*\//gu, ''),
+  )
   assert.ok(block !== null, 'the gate block must exist')
+  for (const selector of [
+    '.instance-hidden .instance-shell *',
+    '.instance-pending .instance-shell *',
+    '.instance-veil-held .instance-shell *',
+  ]) {
+    assert.ok(block![0].includes(selector), `${selector} must join the hidden-shell animation gate`)
+  }
   assert.match(block![1], /animation: none !important;/u)
   assert.match(block![1], /transition: none !important;/u)
 })

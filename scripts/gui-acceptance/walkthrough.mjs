@@ -33,7 +33,7 @@ import {
   KNOWN_UPSTREAM_BOOT_NOISE, TOLERATED_REQUEST_FAILURES, applyRequireHover, createRecorder, hoverCardVerdict,
   hoverDismissVerdict, hoverExclusiveVerdict, hoverRaceVerdict, partitionFailures, pickRailToggle,
   raceBandForWindow, railFactsSnapshot, railToggleVerdict, renderMarkdown, sourceFoldVerdict, summarize,
-  summarizeNetFailures,
+  summarizeNetFailures, veilLayeringVerdict,
 } from './checks.mjs'
 
 const SETTINGS_SEAT_LABELS = ['设置', 'Settings']
@@ -274,6 +274,107 @@ export const CLICK_STASHED_BUTTON = `(() => {
   return { clicked: true, drifted: false, identity: identity }
 })()`
 
+/**
+ * 遮罩层叠探针（2026-12 P0–P3，design 05 §4）：遮罩 `.instance-loading` 可见的那些帧里，
+ * 对已登记锚点（composer 座 / 输入区 / 会话流中心与底缘）各做一次 `elementFromPoint`，
+ * 按命中面归属归并计数：`veil`（遮罩获胜）/ `tenant`（租客画在其上 ⇒ FAIL）/
+ * `portal`（文档级 body portal，已登记残余 ⇒ 只记）/ `none`（无命中 ⇒ 不判）。
+ *
+ * 采样按 rAF 每 4 帧一次（≈16Hz）：足够覆盖一次 settle/切换窗口，又不给同一次走查里的
+ * 时序腿（hover 竞态窗口、提交时延）添可测的额外布局读。自停在 20s / 1200 帧；读回用
+ * {@link VEIL_LAYERING_PROBE_READ}，判定用纯函数 `veilLayeringVerdict`（CI 单测）。
+ * 装在会话建立之后**尽早**执行：本地实例壳通常还在 boot，正是冷启动遮罩那一窗。
+ */
+export const VEIL_LAYERING_PROBE_INSTALL = `(() => {
+  if (window.__veilLayering !== undefined) return { installed: false, reason: 'already' }
+  const VEIL = '.instance-loading'
+  // 只认**活动视图**的遮罩与锚点：后台预热/收割的视图（.instance-pending，
+  // 只 visibility:hidden）遮罩仍在 DOM 里，全文档口径会把它的遮罩帧与活动视图的
+  // 命中面配在一起，对健康构建判出假 FAIL（2026-12 review 复现）。
+  const SCOPE = '.instance-view:not(.instance-hidden):not(.instance-pending)'
+  const ANCHORS = ['[data-composer-seat]', '[data-composer-input]', '[data-conversation-scroll]']
+  const state = { frames: 0, veilFrames: 0, heldFrames: 0, bootFrames: 0, samples: {}, error: null, done: false, startedAt: Date.now() }
+  const record = (point, winner, hit) => {
+    const key = point + '|' + winner
+    const entry = state.samples[key]
+    if (entry === undefined) {
+      state.samples[key] = {
+        point: point, winner: winner, count: 1,
+        hit: hit === null ? null : (hit.tagName.toLowerCase() + (typeof hit.className === 'string' && hit.className !== '' ? '.' + hit.className.trim().split(/\\s+/)[0] : '')),
+      }
+    } else {
+      entry.count += 1
+    }
+  }
+  const sample = () => {
+    const view = document.querySelector(SCOPE)
+    if (view === null) return
+    const veil = view.querySelector(VEIL)
+    if (veil === null) return
+    // 双保险：显式隐藏的遮罩不算"遮罩可见帧"（SCOPE 已排除 hidden/pending 视图）。
+    if (typeof getComputedStyle === 'function') {
+      const style = getComputedStyle(veil)
+      if (style.visibility === 'hidden' || style.display === 'none') return
+    }
+    state.veilFrames += 1
+    // PASS 的强弱取决于这一帧属于哪一段（2026-12 二轮 review）：已 settle 的持有态里
+    // 租客被 .instance-veil-held 隐藏（visibility:hidden 移出命中测试），PASS 只证明
+    // "遮罩盖住了锚点"，不单独断言 P0（isolation）或 P1（持有期隐藏）任一条；只有
+    // !settled 的 boot 段里租客仍参与命中测试，才有完整的判别力。分开计数并写进 evidence。
+    let held = false
+    if (typeof view.classList === 'object' && view.classList !== null && typeof view.classList.contains === 'function') {
+      held = view.classList.contains('instance-veil-held')
+    }
+    if (held) state.heldFrames += 1
+    else state.bootFrames += 1
+    for (const anchor of ANCHORS) {
+      const node = view.querySelector(anchor)
+      if (node === null) continue
+      const rect = node.getBoundingClientRect()
+      if (rect.width < 1 || rect.height < 1) continue
+      const points = [[rect.left + rect.width / 2, rect.top + rect.height / 2], [rect.left + rect.width / 2, rect.bottom - 2]]
+      for (const [x, y] of points) {
+        if (x < 0 || y < 0 || x > window.innerWidth || y > window.innerHeight) continue
+        const hit = document.elementFromPoint(x, y)
+        if (hit === null) { record(anchor, 'none', null); continue }
+        const winner = hit.closest(VEIL) !== null ? 'veil'
+          : (hit.closest('.instance-shell') !== null || hit.closest('[data-instance]') !== null) ? 'tenant'
+          : 'portal'
+        record(anchor, winner, hit)
+      }
+    }
+  }
+  const tick = () => {
+    // 读回（READ 删除全局）后立即停：否则 rAF 环会带着旧 state 继续跑满自停窗，
+    // 给同一次走查里的时序腿（hover 竞态窗口）添不必要的负载。
+    if (window.__veilLayering !== state) { state.done = true; return }
+    if (Date.now() - state.startedAt > 20_000 || state.frames > 1_200) { state.done = true; return }
+    state.frames += 1
+    if (state.frames % 4 === 0) {
+      try { sample() } catch (error) { state.error = String(error) }
+    }
+    requestAnimationFrame(tick)
+  }
+  window.__veilLayering = state
+  requestAnimationFrame(tick)
+  return { installed: true }
+})()`
+
+/** 读回并清除探针状态（`samples` 拍平成数组，供纯判据消费）。 */
+export const VEIL_LAYERING_PROBE_READ = `(() => {
+  const state = window.__veilLayering
+  if (state === undefined) return { installed: false, frames: 0, veilFrames: 0, samples: [], error: null, done: false }
+  const samples = Object.keys(state.samples).map(key => state.samples[key])
+  // done 不再强制为 true（2026-12 二轮 review）：它表示"探针自己跑完了 20s/1200 帧窗口"，
+  // false = 本次是提前读回。tick 在被读回后的下一帧自行退出。
+  delete window.__veilLayering
+  return {
+    installed: true, frames: state.frames, veilFrames: state.veilFrames,
+    heldFrames: state.heldFrames, bootFrames: state.bootFrames,
+    samples: samples, error: state.error, done: state.done === true,
+  }
+})()`
+
 
 /**
  * The core fix's identity markers (packages/dsh-chamber-client-ui-sidebar/
@@ -461,7 +562,20 @@ export async function runWalkthrough({
   // document's SSE stream, which would otherwise be reported as a page failure.
   session.beginObservationWindow()
   await session.waitFor(ROOT_MOUNTED, 'shell mounted')
+  // P0–P3 acceptance（2026-12）：壳一挂上就装遮罩层叠探针——此刻本地实例壳通常还在
+  // boot，正是冷启动遮罩那一窗（晚装/温壳则本次判 INFO，不伪绿）。读回后交给纯判据。
+  const veilProbeInstall = await session.evaluate(VEIL_LAYERING_PROBE_INSTALL)
   await sleep(4_000)
+  const veilProbe = await session.evaluate(VEIL_LAYERING_PROBE_READ)
+  const veilVerdict = veilLayeringVerdict({
+    veilFrames: veilProbe.veilFrames,
+    samples: veilProbe.samples,
+    error: veilProbe.error,
+    heldFrames: veilProbe.heldFrames,
+    bootFrames: veilProbe.bootFrames,
+  })
+  rec.add('W-1b', '遮罩层叠：可见期内租客不得画在遮罩之上', veilVerdict.ok,
+    `${veilVerdict.evidence}；probe={installed:${String(veilProbeInstall.installed)},frames:${veilProbe.frames},veilFrames:${veilProbe.veilFrames},held:${veilProbe.heldFrames},boot:${veilProbe.bootFrames},samples:${veilProbe.samples.length},done:${String(veilProbe.done)},error:${String(veilProbe.error)}}`)
 
   const shot = async name => { await session.screenshot(path.join(shots, `${name}.png`)); return `${name}.png` }
 

@@ -178,7 +178,9 @@ export function projectableCurrent(
  *
  * The shell must not be revealed until it shows what the user asked for. The
  * boot window itself is already covered by the existing boot veil
- * (`InstanceView`: `!settled || holdVeil`); this rule extends the hold past a
+ * (`InstanceView`: `(!settled || (holdVeil === true && !surfaceRelease)) &&
+ * !failureOverlayVisible` — `surfaceRelease` is the P3 DOM-phase signal,
+ * design 05 §2.2.1); this rule extends the hold past a
  * clean settle for exactly as long as the view would show NOTHING legitimate
  * while an open is in flight.
  *

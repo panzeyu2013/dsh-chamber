@@ -44,7 +44,7 @@
  *  - 重试在途（W4）：如实播报同 id boot 尾的排队上限（`INSTANCE_TAIL_WAIT_CAP_MS`）。
  * 决策全部来自纯模块 `source-readiness.ts`，本组件只做接线与呈现。
  */
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@deepseek-ai/dsh-client-ui-primitives/src/Button.tsx'
 import { dismissVisibleRowCard } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import {
@@ -56,7 +56,23 @@ import { runViewTransition } from '../view-transition.ts'
 import {
   isTerminalUnreadyPhase, shouldAnnounceRetryQueue, veilShowsActions, veilState,
 } from '../source-readiness.ts'
+import {
+  readSessionSurfacePhase, shouldReleaseVeilForSurface, surfaceHoldBoundMs, SESSION_PHASE_ATTRIBUTE,
+  type SessionSurfacePhase,
+} from '../session-surface.ts'
 import { frameText, type FrameLocale } from '../locales.ts'
+
+/**
+ * 单调时基（2026-12 第二轮 review MINOR-2）：持有时钟与相位计窗都只做差值比较，绝不能
+ * 受墙钟步进影响——NTP 校时/休眠唤醒把 `Date.now()` 拉回 10 分钟，会让"70s 外层保险"
+ * 的定时器到期后算出负 elapsed、判定拒绝释放，而一次性定时器不会重臂：那次持有的有界
+ * 出口就此静默消失。`performance.now()` 在渲染器里恒在，缺失时退回墙钟（测试/异常环境）。
+ */
+function monotonicNow(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now()
+}
 
 export interface InstanceViewProps {
   instanceId: string
@@ -99,12 +115,19 @@ export interface InstanceViewProps {
    * 打开意图揭示门（2026-12，design 05 §2.2 修订；真机问题 1）：由 App 用共享纯规则
    * `shouldHoldViewVeil` 判定后传入的**最终判定**——遮罩在干净 settle 之后继续保留，
    * 直到该壳显示的会话就是要打开的那个为止（规则与两个输入都在 App：壳状态镜像 +
-   * 原始 runtime current；本组件只负责合成 `!settled || holdVeil`）。冷 boot 期间官方
+   * 原始 runtime current；本组件只负责合成 `(!settled || (holdVeil === true && !surfaceRelease)) && !failureOverlayVisible`——`surfaceRelease` 由 `session-surface.ts` 的会话面相位判定给出）。冷 boot 期间官方
    * 初始导航策略会新建并打开一个 blank 会话，而排队中的 open 要等
    * session-controller 子 fiber + 一次 400ms 重试才分发；壳失败时 App 永远传 false
    * （失败呈现归 App 覆盖层所有），因此遮罩不会挂住。
    */
   holdVeil?: boolean
+  /**
+   * 本次持有对应的**请求身份**（`openIntents[viewId]`，即要打开的那个 session id；无在途
+   * 请求时不传）。持有窗必须随"请求换代"重置：同一视图里"点 A 未结束又点 B"会**替换**
+   * 意图而不产生持有上升沿，若沿用 A 的窗口起点，新请求可能只剩很短（极端时立即过期）的
+   * 兜底窗（2026-12 二轮 review MINOR-4）。同一个 id 重开不重置——那是同一个请求。
+   */
+  openIntentId?: string
   /**
    * 来源当前相位（`ChamberServerAggregate.phase`，字符串口径与 boot-gap.ts 一致）。
    * 只做文案与动作的事实输入：本组件绝不从相位推断"是否失败"。
@@ -146,7 +169,7 @@ export interface InstanceViewProps {
 
 export default function InstanceView({
   instanceId, basePath, sourceFingerprint, transport, active, label, locale, onSettled, onStateChange,
-  retryToken, waitForServing, holdVeil,
+  retryToken, waitForServing, holdVeil, openIntentId,
   sourcePhase, bootDeferred, failureOverlayVisible, switchTargets, onSwitchSource, onConnectSource, onRequestRetry,
 }: InstanceViewProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -181,6 +204,22 @@ export default function InstanceView({
    * 不排队，绝不能播报排队文案（2026-12 复核 F3）。
    */
   const queuedBehindPredecessorRef = useRef(false)
+  /**
+   * P3：**本次持有**开始的时刻（遮罩兜底窗的基准）。必须是持有起点而**不是** shell 的
+   * settle 时刻——温壳上 settle 早已是几分钟前，用它会令窗口在第一帧就过期、揭示门在
+   * 温壳上整体失效（2026-12 review 复现的 MAJOR）。落成 state 而非 ref：依赖数组自洽。
+   */
+  const [holdStartedAt, setHoldStartedAt] = useState<number | null>(null)
+  /** P3：容器内观察到的会话根相位（`[data-phase]` 的 DOM 事实，非 App 镜像）。 */
+  const [surfacePhase, setSurfacePhase] = useState<SessionSurfacePhase>('absent')
+  /**
+   * P3：相位为 absent 时的**连续缺失起点**（2026-12 二轮 review MINOR-1）。会话根中途短暂
+   * 消失（插件重注册、会话切换空档）不能让遮罩按"持有起点 + 2s"立刻揭幕、下一帧又回遮
+   * ——那是"遮罩→露壳→遮罩"的闪动。null = 当前不是 absent（或窗口未开）。
+   */
+  const [absentSince, setAbsentSince] = useState<number | null>(null)
+  /** P3：兜底释放窗到期后的重渲染触发器；决策本身仍是纯函数（可测）。 */
+  const [surfaceFallbackTick, setSurfaceFallbackTick] = useState(0)
 
   useEffect(() => {
     // W2：来源未连接（手动断开）时绝不启动 shell——遮罩自身就是可操作态，
@@ -257,11 +296,110 @@ export default function InstanceView({
   const settled = isSettledShellState(shell)
   // 2026-12（design 05 §2.2 修订）：遮罩 = boot 期（未 settle）**或** App 判定的
   // 打开意图揭示门。判定规则（含"壳已经显示请求的会话就不遮"与"壳失败不遮"）在
-  // sidebar 包 shared/open-intent.ts 内单测覆盖；遮罩的生命周期由 open promise
-  // 自身界定（dispatchOpen 8s 预算 + App 的 finally 释放），不会出现挂住的加载层。
-  // 第三个合取项是 App 拥有的失败覆盖层事实（模态；覆盖层在场时遮罩退出 DOM，
-  // 2026-12 独立复核）。其余两项目仍是会话意图门（holdVeil）与本地 boot 状态的契约。
-  const veilVisible = (!settled || holdVeil === true) && failureOverlayVisible !== true
+  // sidebar 包 shared/open-intent.ts 内单测覆盖。
+  //
+  // P3（2026-12 会话面绘制信号）：揭示门的"继续持有"不再只由 App 侧两个异步镜像
+  // 事实（runtimeFacts.current / aggregates 的 blank 行）决定——它们迟到或抖动时
+  // 遮罩会挂在已渲染的壳上，最长烧满 open 预算（单次 8s、排队 68s），正是"白屏 /
+  // 直接显示载入中"交替的来源。现在以壳自己的 DOM 事实为准（`session-surface.ts`）：
+  // 会话根画到 `active`（真实会话面）即揭幕；hero/settling 保持遮罩（不闪空白"新
+  // 会话"），absent（观察不到会话根，降级形态）以 2s 兜底、hero/settling 只留 70s
+  // 外层保险——**窗口基准是本次持有的起点**，绝不是 shell 的 settle 时刻（温壳上后者
+  // 早已是几分钟前，用它会让持有窗第一帧就过期、揭示门整体失效；2026-12 review 复现）。
+  // 锚点是已登记的上游触点（scripts/upstream/mobile-anchors.mjs 的 data-phase）。
+  // 第三个合取项仍是 App 拥有的失败覆盖层事实（模态；覆盖层在场时遮罩退出 DOM）。
+  const surfaceHoldActive = settled && holdVeil === true && failureOverlayVisible !== true
+  // P3：持有窗的开闭 —— 全模块唯一的时基来源。上升沿复位相位（上一代的 active 不得
+  // 用于新持有）+ 记本次持有时钟；窗口关闭/重试即清空。观察器与兜底时钟都以它为界。
+  useEffect(() => {
+    if (!surfaceHoldActive) {
+      setHoldStartedAt(null)
+      setAbsentSince(null)
+      return
+    }
+    const now = monotonicNow()
+    setSurfacePhase('absent')
+    setAbsentSince(now)
+    setHoldStartedAt(now)
+    // 注释订正（二轮 review）：下面这行相位复位只是**与 leaf 时钟门重复的保险**——真正的
+    // 硬保证是 shouldReleaseVeilForSurface 里"时钟未建立绝不释放"；删掉本行不会立刻回归，
+    // 删掉 leaf 那条才会（wiring 锁与 leaf 用例分别钉住两边）。
+    // openIntentId（请求身份）进依赖：请求换代 = 新的一次持有，窗口从这一帧重新起算
+    // （二轮 review MINOR-4；同 id 重开时身份不变，不重置）。
+  }, [surfaceHoldActive, retryToken, openIntentId])
+  const surfaceRelease = useMemo(
+    () => shouldReleaseVeilForSurface({
+      settled,
+      phase: surfacePhase,
+      holdStartedAtMs: holdStartedAt,
+      absentSinceMs: absentSince,
+      nowMs: monotonicNow(),
+    }),
+    // surfaceFallbackTick 只作"兜底窗到期"的重算触发器；相位/窗口/时钟/缺失起点变化同样重算。
+    [settled, surfacePhase, holdStartedAt, absentSince, surfaceFallbackTick],
+  )
+  // P3：相位观察器在**整个持有窗**内运行（不因一次释放而断开）。释放是"电平"而不是
+  // "闩锁"：官方初始导航可能先显示持久化的真实会话（active）再复用/新建 blank 会话
+  // （相位回 hero），此时空白"新会话"仍必须被遮住——观察器一旦在首次释放时断开，相位
+  // 就永远冻结在 active，遮罩再也回不来（2026-12 review 的第二个 MAJOR）。来回抖动被
+  // 持有窗本身（open 生命周期 ≤ 8s / 外层 70s）限制；窗口结束即断开，绝不为整个生命
+  // 周期挂 subtree 观察器。相位只在 rAF 节流后落 state。
+  useEffect(() => {
+    if (!surfaceHoldActive) return
+    const el = containerRef.current
+    if (el === null) return
+    let frame = 0
+    const sample = (): void => {
+      const next = readSessionSurfacePhase(el)
+      setSurfacePhase(prev => (prev === next ? prev : next))
+      // 连续缺失起点只在"缺席开始"那一帧落一次，根回来后清空；同值返回原引用不触发渲染。
+      setAbsentSince(prev => {
+        if (next !== 'absent') return prev === null ? prev : null
+        return prev === null ? monotonicNow() : prev
+      })
+    }
+    frame = requestAnimationFrame(() => { frame = 0; sample() })
+    const observer = new MutationObserver(() => {
+      if (frame !== 0) return
+      frame = requestAnimationFrame(() => { frame = 0; sample() })
+    })
+    observer.observe(el, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: [SESSION_PHASE_ATTRIBUTE],
+    })
+    return () => {
+      observer.disconnect()
+      if (frame !== 0) cancelAnimationFrame(frame)
+    }
+    // deps 只认持有窗、容器更换与请求换代：释放是一次"电平翻转"，观察器必须继续活着
+    // （注释里那句"不因一次释放而断开"要字面成立），把 surfaceRelease 放进依赖只会白白
+    // teardown/重订阅；openIntentId 需要重订阅，是为了换代时立刻重采一次相位（否则新请求
+    // 的窗口会停在复位后的 'absent' 上等下一次 DOM 变更）。
+  }, [surfaceHoldActive, retryToken, openIntentId])
+  // P3：兜底时钟（两档上界，与判定窗同基准 = 本次持有起点）。absent = 观察不到会话根
+  // （ui-chat 未注册等降级形态）2s 即揭；hero/settling = 保持，只留 70s 外层保险（> 68s
+  // 排队预算，正常路径由 App 的 open 生命周期先释放意图）。延时扣除已走过部分，避免
+  // "窗口已到期但定时器未到"把持有拖长（review MINOR）。
+  useEffect(() => {
+    if (!surfaceHoldActive || holdStartedAt === null) return
+    const bound = surfaceHoldBoundMs(surfacePhase)
+    // absent 按"连续缺失起点"计窗（根从未出现时它等于持有起点，仍是 2s 有界出口）；
+    // 延时钳到 [0, bound]：负值/超界都不该出现，真出现也不能把窗口拉长。
+    const base = surfacePhase === 'absent' ? (absentSince ?? holdStartedAt) : holdStartedAt
+    const delay = Math.min(bound, Math.max(0, base + bound - monotonicNow()))
+    const handle = setTimeout(
+      () => setSurfaceFallbackTick(tick => tick + 1),
+      delay,
+    )
+    return () => { clearTimeout(handle) }
+    // surfaceFallbackTick 进依赖是二轮 review 的加固：定时器若被浏览器提前触发（或判定
+    // 因别的原因此刻不放行），"没有释放"的 tick 必须重臂一次，否则本次持有的外层保险
+    // 就此消失。单调钟下重臂不会空转：真正到期后判定必然放行，持有窗随之关闭。
+  }, [surfaceHoldActive, holdStartedAt, absentSince, surfacePhase, surfaceFallbackTick])
+  const veilVisible = (!settled || (holdVeil === true && !surfaceRelease))
+    && failureOverlayVisible !== true
   // W1/W2/W4：遮罩呈现分类（决策全在 source-readiness.ts）。这里**不改**
   // veilVisible 的合成——它属于会话意图门（holdVeil）与本地 boot 状态的契约。
   const veil = veilState({ deferred: bootDeferred === true, settled, waitedMs })
@@ -274,6 +412,12 @@ export default function InstanceView({
   const waitedSeconds = String(Math.round(waitedMs / 1000))
   const retryQueueSeconds = String(Math.round(INSTANCE_TAIL_WAIT_CAP_MS / 1000))
   const sourceFailed = isTerminalUnreadyPhase(sourcePhase)
+  // P1（2026-12 兜底不变量）：遮罩在**已 settle** 的壳上仍然可见，就是打开意图
+  // 揭示门在持有它（boot 期 settled 为假）——这段时间遮罩是唯一可见面，租客整体
+  // 不可见。判断耦合的是合成后的 veilVisible 而不是 holdVeil 入参：P3 的会话面
+  // 信号一旦释放遮罩，同一 commit 里壳也跟着恢复可见，绝不出现"遮罩没了壳还藏着"。
+  // 类挂在**外层视图 div** 上——容器 div 的 JSX 被 baseline-harvest 用例逐字钉住。
+  const shellHeld = settled && veilVisible
   const viewClass = active
     ? 'instance-view'
     : settled
@@ -300,7 +444,7 @@ export default function InstanceView({
   }, [active])
 
   return (
-    <div className={viewClass} data-instance={instanceId}>
+    <div className={shellHeld ? `${viewClass} instance-veil-held` : viewClass} data-instance={instanceId}>
       {/* 每次重试换一个容器元素（2026-12 复查 MAJOR）：上一个尝试若挂死，
           它的 AppWebEntry 仍持有旧容器——复用同一个 div 会让第二次尝试把新的
           boot 页/React root 追加进已有 root 的容器里（shell.ts 头注的
