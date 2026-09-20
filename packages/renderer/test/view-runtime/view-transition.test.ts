@@ -338,7 +338,8 @@ test('P2：ready 拒绝（过渡开始不了）不破坏队列，finished 后照
     runViewTransition(() => executed.push('first'), 'view', 'cut')
     fake.transitions[0].failReady()
     await settle()
-    assert.deepEqual(executed, [], 'ready 拒绝不改变本节的 update 时序')
+    // `[]` 字面量会让 node:assert 的断言签名把 `executed` 收窄成 never[]，显式标注期望值类型。
+    assert.deepEqual(executed, [] as string[], 'ready 拒绝不改变本节的 update 时序')
     fake.transitions[0].update()
     assert.deepEqual(executed, ['first'], '本节的 update 照常执行')
     runViewTransition(() => executed.push('second'), 'view', 'cut')

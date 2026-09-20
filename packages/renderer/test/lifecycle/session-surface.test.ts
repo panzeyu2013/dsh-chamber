@@ -19,6 +19,7 @@ import {
   SESSION_PHASE_ATTRIBUTE, SESSION_SCROLL_ANCHOR,
   SURFACE_ABSENT_FALLBACK_MS, SURFACE_MAX_HOLD_MS,
 } from '../../src/session-surface.ts'
+import type { SessionSurfaceFacts } from '../../src/session-surface.ts'
 
 /** 桩：只实现 leaf 用到的两面——querySelector(滚动锚) → { closest(相位属性) }。 */
 const root = (phase: string | null, options: { anchor?: boolean } = {}) => ({
@@ -44,7 +45,7 @@ test('readSessionSurfacePhase：从滚动锚反查相位祖先，缺失/未知�
   assert.equal(readSessionSurfacePhase(root('inert')), 'hero', '未知取值（composer 值域）fail-closed 到 hero')
 })
 
-const facts = (over: Record<string, unknown> = {}) => ({
+const facts = (over: Partial<SessionSurfaceFacts> = {}): SessionSurfaceFacts => ({
   settled: true,
   phase: 'hero',
   holdStartedAtMs: 1_000,
@@ -130,7 +131,7 @@ test('absent 按"连续缺失起点"计窗：根短暂消失不得立刻揭幕�
   // 二轮 review MINOR-1：held 到 +60s 时会话根消失一帧，若仍按持有起点算，遮罩会立刻
   // 消失（下一帧根回来又回遮）——用户看到"遮罩→露壳→遮罩"。窗口必须从"缺席开始"算。
   const holdStart = 600_000
-  const flicker = absStart => facts({ phase: 'absent', holdStartedAtMs: holdStart, absentSinceMs: absStart, nowMs: absStart })
+  const flicker = (absStart: number) => facts({ phase: 'absent', holdStartedAtMs: holdStart, absentSinceMs: absStart, nowMs: absStart })
   assert.equal(shouldReleaseVeilForSurface(flicker(holdStart + 60_000)), false, '刚缺席的那一帧绝不释放')
   assert.equal(
     shouldReleaseVeilForSurface({ ...flicker(holdStart + 60_000), nowMs: holdStart + 61_999 }),
