@@ -90,7 +90,9 @@ test('stream-health: the settle window is never sampled as "failed" and never re
   // Inside the settle window: no notice, no second heal.
   assert.equal(actions[2], 0)
   assert.equal(actions[3], 0)
-  assert.deepEqual(notices, [null, null, null, null, null, null])
+  // C2 (2026-09): the judged failure latches the reload notice, and it stays up
+  // while the cooldown-paced retry runs — no "recovering…" over a dead repair.
+  assert.deepEqual(notices, [null, null, null, null, 'heal-failed', 'heal-failed'])
   // The window closes into the hold, and the cooldown (not the settle) paces
   // the next attempt.
   assert.deepEqual(actions, [0, healed, 0, 0, 0, healed + C])
@@ -118,7 +120,9 @@ test('stream-health: the cooldown paces the retries and the rolling budget ends 
     { at: t8, observation: observe('error') },
   ])
   assert.deepEqual(actions, [0, t1, 0, t3, 0, t5, 0, 0, t8])
-  assert.deepEqual(notices, [null, null, null, null, null, null, null, 'heal-failed', null])
+  // C2: from the first judged failure onward the notice is latched for the whole
+  // storm (indices 2-8); only the two pre-judgment ticks stay null.
+  assert.deepEqual(notices, [null, null, 'heal-failed', 'heal-failed', 'heal-failed', 'heal-failed', 'heal-failed', 'heal-failed', 'heal-failed'])
   // One stamp per executed heal, each pruned once it leaves the rolling window.
   assert.equal(state.healStamps.length, 1)
 })
@@ -193,8 +197,8 @@ test('stream-health: both arms report their reload notice at the exact tick the 
   ])
   assert.deepEqual(notices, [null, null, 'heal-failed'])
 
-  // Budget spent: sampled every second, the notice appears exactly at
-  // last-heal + settle + grace + settle, and never before.
+  // First judged failure: sampled every second, the notice appears exactly at
+  // grace + settle (C2) — it used to wait out the whole rolling budget (~296 s).
   let state = createSessionStreamHealthState()
   let firstNotice: number | undefined
   let lastNotice: number | undefined
@@ -207,8 +211,142 @@ test('stream-health: both arms report their reload notice at the exact tick the 
       lastNotice = at
     }
   }
-  assert.equal(firstNotice, T0 + 296_000)
+  assert.equal(firstNotice, T0 + G + S)
   assert.equal(lastNotice, T0 + 320_000)
+})
+
+test('stream-health: a judged-failed heal latches the reload notice while the retries continue', () => {
+  const healed = T0 + G
+  const judged = healed + S
+  const retry = healed + C
+  const { actions, notices } = drive([
+    { at: T0, observation: observe('error') },
+    { at: healed, observation: observe('error') },
+    { at: judged, observation: observe('error') },
+    { at: judged + 1_000, observation: observe('error') },
+    { at: retry, observation: observe('error') },
+    { at: retry + S, observation: observe('error') },
+  ])
+  // The notice appears the moment the first repair is judged failed (C2)…
+  assert.deepEqual(notices, [null, null, 'heal-failed', 'heal-failed', 'heal-failed', 'heal-failed'])
+  // …and the automatic retry lane never stops: the cooldown, not the notice,
+  // paces the second attempt.
+  assert.deepEqual(actions, [0, healed, 0, 0, retry, 0])
+})
+test('stream-health: the latch hangs off the settle clock, not off the healing phase', () => {
+  const healed = T0 + G
+  const judged = healed + S
+  const retry = healed + C
+  // (a) the re-open itself reports `loading` for a second (vendor doOpen() sets
+  //     it synchronously): the notice still lands at the settle tick once the
+  //     stream is back on `error`, instead of >100s later.
+  const flap = drive([
+    { at: T0, observation: observe('error') },
+    { at: healed, observation: observe('error') },
+    { at: healed + 1_000, observation: observe('loading') },
+    { at: healed + 2_000, observation: observe('error') },
+    { at: judged + 1_000, observation: observe('error') },
+    { at: retry, observation: observe('error') },
+  ])
+  assert.deepEqual(flap.actions, [0, healed, 0, 0, 0, retry])
+  assert.deepEqual(flap.notices, [null, null, null, null, 'heal-failed', 'heal-failed'])
+
+  // (b) once latched, a later loading dwell never takes the button back.
+  const dwell = drive([
+    { at: T0, observation: observe('error') },
+    { at: healed, observation: observe('error') },
+    { at: judged, observation: observe('error') },
+    { at: judged + 1_000, observation: observe('loading') },
+  ])
+  assert.deepEqual(dwell.notices, [null, null, 'heal-failed', 'heal-failed'])
+
+  // (c) a hidden stretch that swallows the whole settle window still latches
+  //     the moment the surface is back on `error`.
+  const hidden = drive([
+    { at: T0, observation: observe('error') },
+    { at: healed, observation: observe('error') },
+    { at: healed + S, observation: observe('error', { presented: false }) },
+    { at: healed + S + 1_000, observation: observe('error') },
+  ])
+  assert.deepEqual(hidden.notices, [null, null, null, 'heal-failed'])
+
+  // (d) a recovery ends the episode: the next error gets its own grace instead of
+  //     inheriting the already-settled heal's clock (the cooldown still paces it).
+  const recovered = drive([
+    { at: T0, observation: observe('error') },
+    { at: healed, observation: observe('error') },
+    { at: healed + 1_000, observation: observe('open') },
+    { at: healed + 2_000, observation: observe('error') },
+    { at: healed + 10_000, observation: observe('error') },
+  ])
+  assert.deepEqual(recovered.notices, [null, null, null, null, null])
+  assert.equal(recovered.actions[4], 0, 'the cooldown still paces the new episode')
+
+  // (e) …and the marker is not dropped by the next tick: even past the old settle
+  //     window the notice waits for THIS episode's own heal to be judged.
+  const newEpisode = drive([
+    { at: T0, observation: observe('error') },
+    { at: healed, observation: observe('error') },
+    { at: healed + 1_000, observation: observe('open') },
+    { at: healed + 2_000, observation: observe('error') },
+    { at: healed + 10_000, observation: observe('error') },
+    { at: healed + S + 2_000, observation: observe('error') },
+    { at: healed + C, observation: observe('error') },
+    { at: healed + C + S, observation: observe('error') },
+  ])
+  assert.deepEqual(newEpisode.notices,
+                   [null, null, null, null, null, null, null, 'heal-failed'])
+  assert.equal(newEpisode.actions[6], healed + C, 'the new episode still heals itself')
+})
+
+test('stream-health: the latch survives the retry heal\'s own settle window', () => {
+  // 2026-09 verification (m6/m10): if the loading state or `markSessionStreamHeal`
+  // dropped the latch, the button goes out for the retry's whole 20s judging window
+  // — the very regression C2 removed. One tick after the retry must still carry it.
+  const healed = T0 + G
+  const judged = healed + S
+  const retry = healed + C
+  const { actions, notices } = drive([
+    { at: T0, observation: observe('error') },
+    { at: healed, observation: observe('error') },
+    { at: judged, observation: observe('error') },
+    { at: retry, observation: observe('error') },
+    { at: retry + 1_000, observation: observe('error') },
+    { at: retry + S - 1, observation: observe('error') },
+    { at: retry + S, observation: observe('error') },
+  ])
+  assert.equal(actions[3], retry, 'the cooldown still fires the retry')
+  assert.deepEqual(notices,
+                   [null, null, 'heal-failed', 'heal-failed', 'heal-failed', 'heal-failed', 'heal-failed'])
+})
+
+test('stream-health: a recovery marker survives a loading dwell (no false latch)', () => {
+  // 2026-09 verification (m3): the loading state must carry `recoveredSinceHeal`,
+  // otherwise the next error latches off the PREVIOUS episode's settle clock.
+  const healed = T0 + G
+  const { notices } = drive([
+    { at: T0, observation: observe('error') },
+    { at: healed, observation: observe('error') },
+    { at: healed + 1_000, observation: observe('open') },
+    { at: healed + 2_000, observation: observe('loading') },
+    { at: healed + 3_000, observation: observe('error') },
+    { at: healed + S + 3_000, observation: observe('error') },
+  ])
+  assert.deepEqual(notices, [null, null, null, null, null, null])
+})
+
+test('stream-health: a recovery marker survives a hidden tick (no false latch)', () => {
+  // 2026-09 verification (m4): same shape through `presented === false`.
+  const healed = T0 + G
+  const { notices } = drive([
+    { at: T0, observation: observe('error') },
+    { at: healed, observation: observe('error') },
+    { at: healed + 1_000, observation: observe('open') },
+    { at: healed + 2_000, observation: observe('error', { presented: false }) },
+    { at: healed + 3_000, observation: observe('error') },
+    { at: healed + S + 3_000, observation: observe('error') },
+  ])
+  assert.deepEqual(notices, [null, null, null, null, null, null])
 })
 
 test('stream-health: cold and open are inert, and recovery keeps the budget', () => {

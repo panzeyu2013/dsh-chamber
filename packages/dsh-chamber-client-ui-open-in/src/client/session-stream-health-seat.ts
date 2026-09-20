@@ -104,6 +104,13 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
    * without a chamber instance id) is accepted, fail-open.
    */
   let carrierChurn: { at: number; count: number } | undefined
+  /**
+   * Render-side subscribers (the chip). The fact stays in this closure — a new
+   * observation is announced, not passed as a value (C1 wiring fix, 2026-09):
+   * while the session keeps `openState === 'open'` the chip's ticker is off, so
+   * an event nobody announces would never be planned into the churn notice.
+   */
+  const churnListeners = new Set<() => void>()
   const ownInstanceId = (ctx as { readonly chamberInstanceId?: string }).chamberInstanceId
   ctx.effect(() => {
     if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') return
@@ -116,9 +123,13 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
         ? detail.count
         : (carrierChurn?.count ?? 0) + 1
       carrierChurn = { at, count }
+      for (const listener of [...churnListeners]) listener()
     }
     window.addEventListener(CARRIER_CHURN_EVENT, onChurn)
-    return () => { window.removeEventListener(CARRIER_CHURN_EVENT, onChurn) }
+    return () => {
+      window.removeEventListener(CARRIER_CHURN_EVENT, onChurn)
+      churnListeners.clear()
+    }
   }, 'dsh-chamber: stream carrier churn fact')
   const previousOf = (sessionId: string): string | undefined => previousPresented(presented, sessionId)
 
@@ -175,6 +186,12 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
     t,
     note,
     step,
+    // Carrier-churn wake-up for the renderer (C1): the chip bumps its tick so
+    // the ladder re-plans and the "reconnecting…" notice can appear and expire.
+    subscribe: (listener) => {
+      churnListeners.add(listener)
+      return () => { churnListeners.delete(listener) }
+    },
     // The user's own action — never taken automatically (design 14 discipline).
     reload: () => { window.location.reload() },
   }

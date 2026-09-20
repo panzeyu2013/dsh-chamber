@@ -43,6 +43,15 @@ export interface SessionStreamHealthInjected {
    * the rolling budget.
    */
   step(sessionId: string, openState: SessionOpenState, presented: boolean, now: number): SessionStreamHealthPlan
+  /**
+   * Subscribe to carrier-churn facts for this source (C1 wiring fix, 2026-09).
+   * The fact itself stays in the seat's closure; the chip only learns that a new
+   * observation is due. Without this the churn notice could never be planned
+   * while the session kept `openState === 'open'` (the ticker is off then, so
+   * nothing re-ran the ladder when the event arrived).
+   * @returns unsubscribe for the effect's cleanup.
+   */
+  subscribe(listener: () => void): () => void
   /** The user's own reload action. */
   reload(): void
 }
@@ -68,7 +77,7 @@ function idlePlan(): SessionStreamHealthPlan {
 }
 
 export function SessionStreamHealthChip(props: SessionStreamHealthProps): ReactElement | null {
-  const { t, note, step, reload, sessionId, useSession } = props
+  const { t, note, step, subscribe, reload, sessionId, useSession } = props
   const openState = useSession(snapshot => snapshot.openState)
   const [plan, setPlan] = useState<SessionStreamHealthPlan>(idlePlan)
   const [tick, setTick] = useState(0)
@@ -93,6 +102,12 @@ export function SessionStreamHealthChip(props: SessionStreamHealthProps): ReactE
   useEffect(() => {
     note(sessionId)
   }, [note, sessionId])
+
+  // Carrier-churn facts arrive as EVENTS — the seat's closure owns the fact, so
+  // no prop changes when one lands. Bump the tick to re-plan the ladder (the
+  // "reconnecting…" notice appears), and because a visible notice keeps the
+  // ticker alive it expires on its own afterwards (C1 wiring fix, 2026-09).
+  useEffect(() => subscribe(() => setTick(value => value + 1)), [subscribe])
 
   // One ladder step per render-relevant change. The seat is where the state and
   // the only side effect (executing a requested heal) live.
