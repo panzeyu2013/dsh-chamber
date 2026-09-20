@@ -349,8 +349,8 @@ export function createGatewayDispatch(
   rejectionDebounce: AuthRejectionDebounce = {},
   /** Login-phase pre-warm (design 17 §10.6; default ON from config.warmup):
    * discovery + token + proxy deps. null = the feature is not composed at all
-   * (the /chamber/warmup/ prefix stays public but the chamber surface answers
-   * 404). */
+   * (no discovery, no grant mint, no route claim), so every /plugins target
+   * keeps its pre-existing verdict — the uniform 401 or the session. */
   warmupDeps: WarmupDeps | null = null,
 ): GatewayDispatch {
   const warmup = warmupDeps === null ? null : createWarmupController(warmupDeps)

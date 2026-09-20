@@ -238,6 +238,10 @@ test('allowlist accepts the two real bundle shapes and rejects traversal/authori
     '/plugins/pkg/client.js.map',     // only the .js/.css client bundles
     '/plugins/pkg/nested/client.js',  // exactly one package segment
     '/plugins/pkg/client.js?rev=1',   // single-row bundles carry no query
+    '/plugins/pkg?/client.js',        // '?' smuggled INTO the single-row shape (2026-09 review:
+    '/plugins/pkg?x=y/client.js',     // the raw target's `[^/]+` swallowed it, so any visitor with
+    '/plugins/?/client.js',           // an auto-issued login cookie could probe arbitrary one-segment
+                                      // /plugins paths and read the upstream 404 instead of our 401)
     '/plugins/pkg/client.js/x',       // trailing segment
     '/plugins/@scope/pkg/client.js',  // scoped single-row (two segments) is outside the prescribed shape;
                                       // such modules travel through the /plugins/?? combo instead
@@ -618,6 +622,87 @@ test('discovery is cached per dsh port (60 s success / 10 s failure), mints the 
   clock += 2
   await warmup.links()
   assert.equal(fetches, 4, 'the negative entry expires on the SHORT TTL: a dsh that becomes ready is not hidden for a minute')
+})
+
+test('a request with no capability never spends the rate bucket (2026-09 review, MAJOR)', async () => {
+  // The bucket used to be consumed BEFORE the cookie was read, so a caller
+  // holding no grant could drain it (5 req/s keeps it empty) and every bundle
+  // request from that client address — including a legitimately logged-in
+  // session behind the same NAT — got 429 from this PRE-AUTH leg, with the auth
+  // gate never consulted and its audit never written. design 17 §10.6: an
+  // absent/stale/tampered/foreign cookie ⇒ unclaimed, so this route may not
+  // answer at all.
+  const server = createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'application/javascript' })
+    res.end('/* bundle */')
+  })
+  const port = await listen(server)
+  try {
+    const warmup = controller({ port, state: 'ready' })
+    for (let i = 0; i < 200; i += 1) {
+      const refusal = new FakeResponse()
+      const outcome = await warmup.handle(fakeRequest('GET'), refusal, bundleUrl())
+      assert.deepEqual(outcome, { kind: 'unclaimed' }, 'no grant ⇒ unclaimed (never a 429)')
+      assert.equal(refusal.status, 0, 'the pre-auth leg must not answer at all')
+    }
+    const served = new FakeResponse()
+    const outcome = await warmup.handle(grantedRequest(), served, bundleUrl())
+    assert.deepEqual(outcome, { kind: 'proxied' }, '200 cookie-less requests must not exhaust the bucket')
+    assert.equal(served.status, 200)
+  } finally {
+    await close(server)
+  }
+})
+
+test('concurrent login-page renders share ONE discovery fetch (2026-09 review, MAJOR)', async () => {
+  // The login page AWAITS discovery and one unauthenticated connection can
+  // pipeline many index requests, so without single-flight N renders issued N
+  // concurrent loopback index fetches against the managed dsh (measured 100 on
+  // a single socket).
+  let fetches = 0
+  let release: (() => void) | undefined
+  const gate = new Promise<void>(resolve => { release = resolve })
+  const warmup = controller({
+    port: 17510,
+    state: 'ready',
+    fetchIndex: async () => {
+      fetches += 1
+      await gate
+      return '<script src="' + BUNDLE + '"></script>'
+    },
+  })
+  const renders = Array.from({ length: 32 }, () => warmup.links({ clientAddress: CLIENT }))
+  await new Promise<void>(resolve => setImmediate(resolve))
+  assert.equal(fetches, 1, '32 concurrent renders must issue ONE loopback index fetch')
+  release?.()
+  const results = await Promise.all(renders)
+  assert.equal(fetches, 1, 'the shared fetch is not repeated when it settles')
+  for (const result of results) assert.deepEqual(result.urls, [BUNDLE], 'every render gets the shared result')
+})
+
+test('an oversized index is cancelled at the cap instead of drained (2026-09 review, MAJOR)', async () => {
+  // The default read used `response.text()`: a 12.5 MiB index was fully
+  // delivered (measured +32.9 MiB RSS for one request) and only then rejected.
+  // The reader must stop the moment the cap is crossed and cancel the body.
+  const originalFetch = globalThis.fetch
+  let pulls = 0
+  let cancelled = false
+  try {
+    globalThis.fetch = (async () => new Response(new ReadableStream<Uint8Array>({
+      pull(stream) {
+        pulls += 1
+        stream.enqueue(new Uint8Array(1024 * 1024))
+        if (pulls > 8) stream.close()
+      },
+      cancel() { cancelled = true },
+    }), { status: 200, headers: { 'content-type': 'text/html' } })) as typeof fetch
+    const result = await controller({ port: 17510, state: 'ready' }).links()
+    assert.deepEqual(result, { urls: [] }, 'an over-cap index yields no links')
+    assert.ok(pulls <= 6, 'must stop pulling once the cap is crossed (pulls=' + pulls + ')')
+    assert.equal(cancelled, true, 'the body must be cancelled, not drained')
+  } finally {
+    globalThis.fetch = originalFetch
+  }
 })
 
 test('default discovery attaches the spawn-minted cookie to the loopback index read (401 without it)', async () => {

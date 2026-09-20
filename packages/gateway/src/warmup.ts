@@ -310,7 +310,19 @@ export function isWarmupPathAllowed(pathAndQuery: string): boolean {
   for (const segment of path.split('/')) {
     if (segment === '.' || segment === '..') return false
   }
-  if (!WARMUP_COMBO_PATH_RE.test(pathAndQuery) && !WARMUP_SINGLE_ROW_PATH_RE.test(pathAndQuery)) return false
+  // The single-row shape is judged on the PATH only (2026-09 review): the raw
+  // target's `[^/]+` used to swallow a '?' — `/plugins/foo?x=y/client.js`
+  // passed and reached the loopback as `/plugins/foo`, so any visitor holding
+  // an auto-issued login cookie could probe arbitrary one-segment /plugins
+  // paths (upstream 404) instead of this gateway's uniform 401. A query is a
+  // COMBO-only form; the combination request keeps its query.
+  if (WARMUP_COMBO_PATH_RE.test(pathAndQuery)) {
+    // combination request: `/plugins/??<rows>` (+ the rev query)
+  } else if (queryAt === -1 && WARMUP_SINGLE_ROW_PATH_RE.test(path)) {
+    // single-row bundle: path-only, no query
+  } else {
+    return false
+  }
   try {
     const parsed = new URL(pathAndQuery, 'http://warmup.invalid')
     if (parsed.origin !== 'http://warmup.invalid') return false
@@ -533,8 +545,26 @@ async function fetchIndexDocument(url: string, signal: AbortSignal, authCookie: 
   if (authCookie !== undefined && authCookie !== '') headers.cookie = authCookie
   const response = await fetch(url, { method: 'GET', redirect: 'manual', signal, headers })
   if (!response.ok) throw new Error('HTTP ' + response.status)
-  const text = await response.text()
-  if (text.length > MAX_WARMUP_INDEX_CHARS) throw new Error('index document too large')
+  if (response.body === null) return ''
+  // Streaming bound (2026-09 review, MAJOR): `response.text()` read the WHOLE
+  // body before the cap was checked — a 12.5 MiB index was fully delivered
+  // (measured +32.9 MiB RSS for one request) and only then rejected. Cancel as
+  // soon as the cap is crossed, so the memory cost is one chunk over it.
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let text = ''
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done === true) break
+      text += decoder.decode(value, { stream: true })
+      if (text.length > MAX_WARMUP_INDEX_CHARS) throw new Error('index document too large')
+    }
+    text += decoder.decode()
+  } finally {
+    // Releases the socket on every path (over-cap throw included).
+    reader.cancel().catch(() => {})
+  }
   return text
 }
 
@@ -558,6 +588,13 @@ export function createWarmupController(deps: WarmupDeps): WarmupController {
   const maxTotalBufferedBytes = deps.budget?.maxTotalBufferedBytes ?? MAX_WARMUP_TOTAL_BUFFERED_BYTES
   /** per-dsh-port discovery result: urls (empty on failure) + fetch time. */
   const discoveryCache = new Map<number, { urls: string[]; at: number; ok: boolean }>()
+  /** In-flight discovery per dsh port (2026-09 review, MAJOR): the login page
+   *  AWAITS discovery and one unauthenticated connection can pipeline many
+   *  index requests, so without single-flight N concurrent renders issued N
+   *  concurrent loopback index fetches against the managed dsh (measured 100
+   *  on one socket). Concurrent callers share ONE fetch, and the map's size
+   *  is the aggregate concurrency bound for this leg. */
+  const discoveryInflight = new Map<number, Promise<string[]>>()
   /** Bounded aggregate budget state (concurrency + buffered bytes). */
   let activeFetches = 0
   let bufferedBytes = 0
@@ -587,26 +624,39 @@ export function createWarmupController(deps: WarmupDeps): WarmupController {
       const ttl = cached.ok ? WARMUP_DISCOVERY_CACHE_TTL_MS : WARMUP_DISCOVERY_FAILURE_TTL_MS
       if (at - cached.at < ttl) return cached.urls
     }
-    let urls: string[] = []
-    let ok = true
+    const inflight = discoveryInflight.get(port)
+    if (inflight !== undefined) return inflight
+    // Past the aggregate cap the login page renders without links (fail-soft
+    // and bounded — never a queue of pending loopback fetches).
+    if (discoveryInflight.size >= maxConcurrentFetches) return cached?.urls ?? []
+    const pending = (async (): Promise<string[]> => {
+      let urls: string[] = []
+      let ok = true
+      try {
+        const authCookie = authCookieFor(port)
+        const html = await (deps.fetchIndex ?? fetchIndexDocument)('http://127.0.0.1:' + port + '/', AbortSignal.timeout(WARMUP_DISCOVERY_TIMEOUT_MS), authCookie)
+        urls = extractWarmupBundleUrls(html)
+      } catch (error) {
+        // Fail soft: no warm-up is a performance loss, never an error surface
+        // on the login page. The error name only — no response body, no secret.
+        const name = error instanceof Error ? error.name : 'unknown'
+        deps.logger.warn('gateway warmup: bundle discovery failed on port ' + port + ' (' + name + ')')
+        urls = []
+        ok = false
+      }
+      if (discoveryCache.size >= MAX_WARMUP_DISCOVERY_KEYS && !discoveryCache.has(port)) {
+        const oldest = discoveryCache.keys().next().value
+        if (oldest !== undefined) discoveryCache.delete(oldest)
+      }
+      discoveryCache.set(port, { urls, at, ok })
+      return urls
+    })()
+    discoveryInflight.set(port, pending)
     try {
-      const authCookie = authCookieFor(port)
-      const html = await (deps.fetchIndex ?? fetchIndexDocument)('http://127.0.0.1:' + port + '/', AbortSignal.timeout(WARMUP_DISCOVERY_TIMEOUT_MS), authCookie)
-      urls = extractWarmupBundleUrls(html)
-    } catch (error) {
-      // Fail soft: no warm-up is a performance loss, never an error surface
-      // on the login page. The error name only — no response body, no secret.
-      const name = error instanceof Error ? error.name : 'unknown'
-      deps.logger.warn('gateway warmup: bundle discovery failed on port ' + port + ' (' + name + ')')
-      urls = []
-      ok = false
+      return await pending
+    } finally {
+      discoveryInflight.delete(port)
     }
-    if (discoveryCache.size >= MAX_WARMUP_DISCOVERY_KEYS && !discoveryCache.has(port)) {
-      const oldest = discoveryCache.keys().next().value
-      if (oldest !== undefined) discoveryCache.delete(oldest)
-    }
-    discoveryCache.set(port, { urls, at, ok })
-    return urls
   }
 
   /** Forward one allowlisted bundle request to the managed dsh. Buffered
@@ -764,29 +814,31 @@ export function createWarmupController(deps: WarmupDeps): WarmupController {
       // (the same identity the login-page mint used): the rate bucket and the
       // cookie binding must agree with dispatch's decision.
       const requestClient = clientAddress !== undefined && clientAddress !== '' ? clientAddress : (req.socket?.remoteAddress ?? '')
+      // CAPABILITY FIRST (2026-09 review, MAJOR): the bucket used to be spent
+      // before the cookie was looked at, so a caller WITHOUT any grant could
+      // drain it (5 req/s keeps it empty) and every bundle request from that
+      // client address — including a legitimately logged-in session on a NAT —
+      // got 429 from this pre-auth leg, never reaching the auth gate's verdict
+      // or its audit. design 17 §10.6: absent/stale/tampered/foreign cookie ⇒
+      // unclaimed, so the route may not answer at all.
+      const presented = readWarmupCookie(headerValue(req.headers, 'cookie'))
+      if (presented === undefined) return { kind: 'unclaimed' }
+      let granted = false
+      // Only a PRESENTED capability pays for the HMAC (≤256 bytes).
+      try {
+        granted = verifyWarmupCookie(deps.getSecret(), presented, nowSeconds(), requestClient)
+      } catch (error) {
+        deps.logger.warn('gateway warmup: cookie verification unavailable (' + (error instanceof Error ? error.name : 'unknown') + ')')
+        granted = false
+      }
+      if (!granted) return { kind: 'unclaimed' }
+      // A verified capability still gets the per-client sustained cap: the
+      // bucket is the abuse bound for the exfil leg, not an auth verdict.
       if (!limiter.consume(requestClient, now())) {
         // Documented refusal: 429 warmup_rate_limited (design 17 §10.6).
         writeJson(res, 429, { error: 'too many warm-up requests', code: 'warmup_rate_limited' }, { 'retry-after': '1' })
         return { kind: 'rejected', code: 'warmup_rate_limited' }
       }
-      // The rate limiter is consulted BEFORE any crypto; the cookie is only
-      // ever an HMAC comparison.
-      const presented = readWarmupCookie(headerValue(req.headers, 'cookie'))
-      let granted = false
-      if (presented !== undefined) {
-        try {
-          granted = verifyWarmupCookie(deps.getSecret(), presented, nowSeconds(), requestClient)
-        } catch (error) {
-          deps.logger.warn('gateway warmup: cookie verification unavailable (' + (error instanceof Error ? error.name : 'unknown') + ')')
-          granted = false
-        }
-      }
-      // No capability (absent, stale, tampered, bound to another client): the
-      // route does NOT answer — the request falls through to the auth gate,
-      // which serves an existing session or writes its uniform 401 (and the
-      // category-only audit). The pre-auth leg therefore never becomes an
-      // authentication verdict of its own.
-      if (!granted) return { kind: 'unclaimed' }
       const port = readyPort()
       if (port === null) {
         writeJson(res, 503, { error: 'instance_unavailable', code: 'instance_unavailable' })

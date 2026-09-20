@@ -807,7 +807,9 @@ chamber 代码。chamber 插件（sidebar/layout/settings-bridge/git/open-in 等
 capability cookie `dsh_gateway_warmup`（HMAC(`exp|warmup|<client>`)，密钥自 stateDir 的 jwt-secret 派生，
 域分隔标签 `dsh-gateway/warmup-cookie/v1`，TTL/Max-Age 120 s，`Path=/`、`HttpOnly`、`SameSite=Lax`、
 安全请求再加 `Secure`）。登录成功后的首屏从 HTTP 缓存取用整册前端 bundle（实测约 4.35 MiB gzip），
-这份下载不再落在关键路径上。登录页自身仍无脚本（C1 不变），`connect-src 'self'` 是唯一的 CSP 增量。
+这份下载不再落在关键路径上。登录页自身仍无脚本（C1 不变），`connect-src 'self'` 是唯一的 CSP 增量；
+它是**静态常量**：kill switch 关闭或发现失败时 HTML 逐字节回到旧模板，但该指令仍在响应头里（页面无脚本，
+inert；2026-09 复核实测）——要让响应头也条件化需把「是否下发了链接」穿到模板层，刻意不做。
 
 **为什么必须是"真实 URL + cookie 门"**（2026-12 评审实测，两条硬事实）：
 
@@ -820,7 +822,9 @@ capability cookie `dsh_gateway_warmup`（HMAC(`exp|warmup|<client>`)，密钥自
    "Every index response first passes Connection's browser authentication … **Non-index assets stay public**"。
    发现腿若不带 spawn 期换取的 browser-auth cookie，`GET /` 会 401 ⇒ 登录页渲染 0 条链接（功能在生产中
    静默失效）。现在发现腿带上该 cookie（`WarmupDeps.getAuthCookie` 注入，`index.ts` 用
-   `authCookieFor('http://127.0.0.1:'+port)`），并保持失败软退 + 500 ms 上限 + 60 s 缓存（成败都缓存）。
+   `authCookieFor('http://127.0.0.1:'+port)`），并保持失败软退 + 500 ms 上限 + **60 s 成功缓存 / 10 s 失败
+   缓存**（负缓存短，已就绪的 dsh 不会被藏一分钟）。发现腿按 dsh 端口**单飞**（在途共享同一个 Promise，
+   并发登录页只触发一次 loopback index 拉取，在途数受聚合并发上界约束），超限直接无链接渲染而不是排队。
    上游把**非 index 资源视为公开**，故本路由放开的 bundle 形态与上游自身边界一致。
 
 **路由与边界**（§7 认证边界、§13.1 不变量不变）：
@@ -832,9 +836,14 @@ capability cookie `dsh_gateway_warmup`（HMAC(`exp|warmup|<client>`)，密钥自
   地址绑定、过期、`timingSafeEqual`）时才 claim；缺/过期/篡改/他人 cookie ⇒ `unclaimed` ⇒ 落回认证门
   （既有 session 照常，否则统一 401 + 仅类别审计）。**`/plugins/**` 不再有任何 blanket 公开豁免**，
   kill switch 关闭时该前缀与改动前一样 401。
-- **限速与容量**：按客户端地址的有界 token bucket（容量 96 > 单页链接数（≤64）、5/s 补充、≤1024 键），
+- **限速与容量**：按客户端地址的有界 token bucket（容量 128 > 单页链接数（≤64）、5/s 补充、≤1024 键），
   超预算 429 `warmup_rate_limited`；并发与聚合缓冲另有上界（在途 ≤8、聚合 ≤64 MiB，超限 503
   `warmup_capacity`）——评审实测 40 条并发重放 8 MiB bundle 曾把 RSS 推高约 581 MiB。
+  **限速只对「已出示且验签通过」的 capability 生效**（2026-09 复核 MAJOR）：无 cookie 的请求连令牌都不
+  消费——否则任何人（无需 grant）都能按 5 req/s 把同地址的桶抽干，让已登录 session 的 bundle 请求被这条
+  **预鉴权**腿判 429、连认证门裁决与审计都不再发生，与「缺/篡改/他人 cookie ⇒ unclaimed」直接冲突。
+  **发现腿**同样有界：按端口单飞 + 流式读取（超 `MAX_WARMUP_INDEX_CHARS` 立即 cancel，不再 `text()` 读满
+  12.5 MiB 才判超限）——单条未认证连接曾实测放大成 100 次并发 loopback index 拉取。
 - **无用户凭据上行**：上游请求只带 `accept-encoding` 与 spawn 期换取的 browser-auth cookie（非用户凭据、
   永不回给客户端）；调用方 cookie/authorization 一律丢弃；回程只透传
   content-type/content-encoding/cache-control/vary/content-length，其中 `vary` 与策略已设值**合并**
