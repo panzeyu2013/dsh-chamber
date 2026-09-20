@@ -443,10 +443,10 @@ pre-remove 归档**不**停止，仍由归档管理器的删除前停止兜底�
 ### 5.3 显式授权：dirty / 子模块 / 删分支
 
 - **dirty 工作树不硬性阻断删除**（用户拍板）：删除对话框列出该工作树有未提交更改（host 快照
-  `dirty` 事实），用户勾选「丢弃未提交更改并移除（保留分支）」后客户端才发 `discardChanges: true`，
+  `dirty` 事实），用户勾选「丢弃未提交更改并移除」后客户端才发 `discardChanges: true`，
   host 以 `git worktree remove --force` 移除。**force 只经显式授权**：
-  - 分支/提交/HEAD 永不触碰：`--force` 只丢弃工作树工作区文件（已修改/未跟踪文件），
-    `branchPreserved: true` 无条件成立；
+  - `--force` 只丢弃工作树工作区文件（已修改/未跟踪文件），不触碰分支/提交/HEAD；本地分支只在用户
+    显式勾选「同时删除本地分支」时另经 `git branch -D` 删除（本 § 末条），其余情况 `branchPreserved: true`；
   - 身份/锁/主 checkout/running-agent 守卫全保留，force 只放行 dirty。`git worktree remove --force`
     并**不**绕过 git 自身锁检查——remove 的锁 die 需 `-f -f`（force ≥ 2）才放行，单 `--force` 仍被
     git 拒绝；故 finalTopology 读取与 git 调用之间被外部 `git worktree lock` 的窄窗口内，git 在
@@ -468,7 +468,7 @@ pre-remove 归档**不**停止，仍由归档管理器的删除前停止兜底�
   - 含子模块工作树未授权丢弃 → 确定性拒绝码 `worktree-submodules`（`retryable: false` 显式标记），
     **不发起任何 git 变更**；对话框（经官方 `RiskConfirmation`，§5.4）呈现子模块丢弃授权（勾选后
     `discardChanges: true` → `--force`）——子模块工作区文件与 dirty 文件同属「显式授权才丢弃」的
-    一类（gitlink 已提交，内容可重新检出），分支/提交/HEAD、身份/锁/running 守卫全不变；
+    一类（gitlink 已提交，内容可重新检出），身份/锁/running 守卫全不变（`--force` 不触碰分支/提交/HEAD；删分支另经显式授权）；
   - 守卫 best-effort：`.git` 指针不可读时读作"无子模块"；git 的 index 回退判据（admin `modules/`
     缺失但 index 中有已检出 gitlink——历史/共享 gitdir 布局）**不镜像**。git 自身仍拒绝时 host 在
     失败后复查 topology：**同一个**目标（同仓库身份且 branch/HEAD 相同）仍在列出、目录仍存在且工作
@@ -489,10 +489,10 @@ pre-remove 归档**不**停止，仍由归档管理器的删除前停止兜底�
   显式勾选、默认关闭（`archiveSessions` 初值 `false`，每次打开/换目标重置）；另可选「同时删除本地
   分支」（§5.3）。
 - **dirty**：删除图标不再禁用（仅 dirty），点击进对话框显示醒目警示（"该工作树有未提交的更改，将被
-  永久丢弃；分支与已提交内容不受影响"）；授权由**官方 `RiskConfirmation`** 收集
+  永久丢弃"）；授权由**官方 `RiskConfirmation`** 收集
   （`RemoveWorktreeDialog.tsx:411`，2026-09-11 upstream-alignment；单手势与撤销语义按 2026-09-11
   review-fix F1 校正）：对话框内无勾选框，点「移除」时尚缺授权则先弹官方风险确认（警示图标 + 同上
-  说明 + 自动聚焦勾选框「我了解这些更改将被丢弃，仅移除工作树（保留分支）」，主按钮勾选前不可用），
+  说明 + 自动聚焦勾选框「我了解这些更改将被丢弃」，主按钮勾选前不可用），
   **该门自己的 Confirm 就地执行这次删除**——一次手势即 `移除 → 勾选 → 确认`，确认后以
   `discardChanges: true` 跑同一删除路径，无需第二次「移除」。门开关由点击「移除」时选定的**授权
   种类**持有（`discard-gate.ts` 的 `nextDiscardGate`：先 dirty、后 submodule），`onConfirm`/
