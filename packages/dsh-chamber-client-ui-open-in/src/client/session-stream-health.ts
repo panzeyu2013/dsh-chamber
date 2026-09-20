@@ -115,7 +115,9 @@ export interface SessionStreamHealthState {
    * 2026-09): from then on the notice carries the reload action while the
    * automatic retries keep running. Before this latch the user had to wait out
    * the whole rolling budget (~296 s) before the one action that works was
-   * offered at all. Cleared the moment the stream leaves the error state.
+   * offered at all. Cleared **only** by an observed recovery (`open`/`cold`):
+   * the re-open reports `loading` synchronously and a hidden stretch zeroes the
+   * phase, so a `loading` dwell deliberately retains the latch (module header).
    */
   readonly healFailedLatched?: boolean
   /**
@@ -252,7 +254,6 @@ export function planSessionStreamHealth(
     // cooldown anchor survives for the flapping bound), so a fresh error cannot
     // inherit this heal's clock. A backwards wall clock (negative delta) must NOT
     // latch: a clock step is not evidence that the repair failed.
-    // not evidence that the repair failed.
     if (state.recoveredSinceHeal !== true
         && sinceHeal !== undefined && sinceHeal >= config.healSettleMs) latched = true
 
