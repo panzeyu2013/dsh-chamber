@@ -116,6 +116,11 @@ final class StartupLoadRetryTests: XCTestCase {
     }
 
     func testHealthProbeFailureDetailKeepsDiagnosableReason() {
+        // 文案断言必须钉语言：CI runner 是 en 系统，而期望串是 zh 模板——不钉会让同一
+        // 提交在 zh 开发机上绿、在 en runner 上红（2026-09-21 CI 实测；与
+        // QuitCoordinatorTests 的 setUp/tearDown 同法）。
+        XCTAssertTrue(NativeText.setLanguageOverride(.zh), "zh-Hans 资源必须可解析")
+        defer { NativeText.setLanguageOverride(nil) }
         let ats = NSError(domain: NSURLErrorDomain,
                           code: NSURLErrorAppTransportSecurityRequiresSecureConnection,
                           userInfo: [NSLocalizedDescriptionKey: "ATS blocked"])
