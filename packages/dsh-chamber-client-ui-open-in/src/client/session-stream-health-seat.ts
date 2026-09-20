@@ -21,6 +21,12 @@
  * WHY THE FACE IS A SINGLETON: the chip's effects depend on the injected
  * members; a fresh closure per render would re-run them for nothing.
  *
+ * EXECUTION DISCIPLINE (2026-12): `step` executes ONLY the automatic heal. The
+ * plan's `'resync'` action merely ARMS the chip's second control; the click
+ * reaches `resync()` below, which checks the per-session ledger again before
+ * the concrete vendor method is called. A stalled stream therefore never
+ * rebuilds itself, and a second click inside the cooldown is a no-op.
+ *
  * The recovery chip is registered BEFORE the open-in gates and independently of
  * them: a source whose per-entry open-in id does not parse still gets the
  * stream-health chip (that early `return` in `index.ts` must not take the
@@ -32,13 +38,15 @@ import {
   createSessionStreamHealthState,
   markSessionStreamHeal,
   planSessionStreamHealth,
+  sessionStreamLeversAvailable,
   SESSION_STREAM_HEALTH_DEFAULTS,
   type SessionOpenState,
   type SessionStreamHealthPlan,
   type SessionStreamHealthState,
 } from './session-stream-health.ts'
 import {
-  hasHealNeighbor, healSessionStream, previousPresented, rememberPresented, type SessionsLoose,
+  hasHealRoute, hasSessionStreamResync, healSessionStream, previousPresented, rememberPresented,
+  resyncSessionStream, type SessionsLoose,
 } from './session-stream-health-probe.ts'
 import { SessionStreamHealthChip, type SessionStreamHealthInjected } from './SessionStreamHealthChip.tsx'
 
@@ -137,6 +145,21 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
   const ladders = new Map<string, SessionStreamHealthState>()
 
   /**
+   * Re-insert a session's ladder state to refresh its recency, then cap the map
+   * (an entry is a few numbers; the cap keeps a long browsing history from
+   * growing it). Shared by the automatic heal and the user-clicked resync so
+   * both spend the same per-session ledger.
+   */
+  const storeLadder = (sessionId: string, state: SessionStreamHealthState): void => {
+    ladders.delete(sessionId)
+    ladders.set(sessionId, state)
+    if (ladders.size > LADDER_MEMORY) {
+      const oldest = ladders.keys().next().value
+      if (oldest !== undefined) ladders.delete(oldest)
+    }
+  }
+
+  /**
    * One ladder step for one session: plan, execute a requested heal, account it.
    * Never throws — a drifting or absent vendor face degrades to "no action".
    */
@@ -147,13 +170,17 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
     now: number,
   ): SessionStreamHealthPlan => {
     try {
-      const ids = readSessions(ctx)?.list.getSnapshot().ids
+      const sessions = readSessions(ctx)
       const plan = planSessionStreamHealth(
         ladders.get(sessionId) ?? createSessionStreamHealthState(),
         {
           openState,
           presented: surfacePresented,
-          neighborAvailable: ids === undefined ? false : hasHealNeighbor(ids, sessionId),
+          // 2026-09 review: the stage move needs a CURRENT, LISTED target, so a
+          // neighbour in the list is not enough — an address-only target would be
+          // refused after spending the ledger. hasHealRoute() gates all three.
+          neighborAvailable: hasHealRoute(sessions, sessionId),
+          resyncAvailable: hasSessionStreamResync(readSessions(ctx), sessionId),
           ...(carrierChurn === undefined ? {} : { carrierChurn }),
         },
         now,
@@ -168,14 +195,7 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
         healSessionStream(readSessions(ctx), sessionId, previousOf(sessionId))
         state = markSessionStreamHeal(state, now)
       }
-      // Re-insert to refresh recency, then cap the map (an entry is a few
-      // numbers; the cap keeps a long browsing history from growing it).
-      ladders.delete(sessionId)
-      ladders.set(sessionId, state)
-      if (ladders.size > LADDER_MEMORY) {
-        const oldest = ladders.keys().next().value
-        if (oldest !== undefined) ladders.delete(oldest)
-      }
+      storeLadder(sessionId, state)
       return state === plan.state ? plan : { state, action: plan.action, notice: plan.notice }
     } catch {
       return { state: createSessionStreamHealthState(), action: 'none', notice: null }
@@ -194,6 +214,26 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
     },
     // The user's own action — never taken automatically (design 14 discipline).
     reload: () => { window.location.reload() },
+    // The user's own per-session stream rebuild (2026-12): the concrete
+    // `Session.resync()` reached through the probe's guarded capability slice.
+    // NEVER called from `step` (the plan only arms the control), and guarded
+    // again HERE by the same per-session ledger the plan used — a second click
+    // inside the cooldown, or a click once the budget is spent, is a no-op.
+    resync: (sessionId) => {
+      try {
+        const now = Date.now()
+        const current = ladders.get(sessionId) ?? createSessionStreamHealthState()
+        if (!sessionStreamLeversAvailable(current, now)) return
+        // Account the attempt whether or not this build exposes the method (the
+        // same one-stamp-per-attempt rule the automatic heal follows): a face
+        // that vanished between planning and clicking must not leave the control
+        // armed for a retry loop.
+        resyncSessionStream(readSessions(ctx), sessionId)
+        storeLadder(sessionId, markSessionStreamHeal(current, now))
+      } catch {
+        // Never throws into React, and this package's client sources may not log.
+      }
+    },
   }
 
   ctx.slots.inject(STREAM_HEALTH_HEADER_SLOT, () => ctx.slots.register({

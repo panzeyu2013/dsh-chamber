@@ -107,14 +107,17 @@ pure 5（以脚本计数为准）。
 | 文件 | 标记 | 原因/补丁说明 |
 |---|---|---|
 | `package.json` | [patch-mod] | description/peer 集裁剪（host 依赖 dropped）+ chamber test 脚本 + 版本行随上游推进 |
-| `src/client/index.ts` | [patch-mod] | apply(ctx) 读 ctx.chamberBasePath → /api/remote.mux 落到实例前缀 + start(sinks, recoveryOverridesForTransport(transport))（design 05 §6）+ $stream 工厂组合 carrierFailed 发布 dsh-chamber:stream-carrier-failed 页面事实（design 14 §D4） |
+| `src/client/index.ts` | [patch-mod] | apply(ctx) 读 ctx.chamberBasePath → /api/remote.mux 落到实例前缀 + start(sinks, recoveryOverridesForTransport(transport))（design 05 §6）+ $stream 工厂组合 carrierFailed 发布 dsh-chamber:stream-carrier-failed 页面事实（design 14 §D4）+ 生命周期取证通道 dsh-chamber:stream-forensics（generation 就绪/丢失；2026-09 卡死排查） |
+| `src/client/journal-stream.ts` | [patch-mod] | 静默看门狗（design 14 §D4，2026-09 卡死排查）：已开启的 journal 静默 ≥45s 时开一条旁路 sibling follow、只比对 opening cursor，仅当宿主确已前进才替换物理世代（新 opening 以 replace 全窗口收敛）；不设盲空闲重启；探针节奏按无进展次数放宽至 90s 上限（探针自身失败/超时同样放宽）；prepend 用户读带 60s 期限 |
 | `src/client/remote-stream.ts` | [patch-mod] | 载波重试策略：活连接世代下的后续载波失败改走有界退避重开，不再逃逸为终局 gateway/internal（design 14 §D4；退避纯函数在同包 own 文件 remote-retry-policy.ts，patch 形状由 test/patch-lock 钉住） |
-| `src/client/stream-client.ts` | [patch-mod] | per-entry basePath（流载波 URL 拼装） |
+| `src/client/stream-client.ts` | [patch-mod] | per-entry basePath（流载波 URL 拼装）+ 开帧发送前校验（socket 已被替换/正在关闭 ⇒ 载波失败，杜绝 RFC 6455 静默丢弃）+ 逻辑流首帧期限（30s 起、按 endpoint+payload 摘要分账、连续超时放宽至 4×，失败 inbox 走既有退避重开）+ socket 丢失后自行重排重连（1s 起、连接泵下令的重连不计失败、真实失败翻倍封顶 10s、成功即复位）+ WebSocket 握手期限 30s + socket 生命周期取证（lost/reconnect/attempt-failed/disposed/opening-timeout） |
 | `tsconfig.client.json` | [patch-mod] | chamber client 构面（files 表随新增 client 文件同步） |
 | `tsconfig.json` | [patch-mod] | chamber 构面（files 表随新增 client 文件同步） |
 | `scripts/test.mjs` | [own] | chamber 自有测试清单（按域分组的显式 manifest；verify:test-wiring 校验可达性） |
-| `src/client/remote-retry-policy.ts` | [own] | chamber 载波退避纯函数 + 可中止等待（零 import，可脱离 vendor 图行为单测） |
+| `src/client/remote-retry-policy.ts` | [own] | chamber 载波退避纯函数 + 可中止等待 + 逻辑流首帧期限预算（endpoint+payload 摘要分账）+ mux 自查重连重排区间 1s/10s + WebSocket 握手期限 30s（零 import，可脱离 vendor 图行为单测） |
 | `src/client/stream-carrier-fact.ts` | [own] | chamber 载波故障页面事实（有界计数 + dsh-chamber:stream-carrier-failed；零 import，可注入 dispatch 单测） |
+| `src/client/stream-forensics.ts` | [own] | chamber 流生命周期取证事实（有界计数 + dsh-chamber:stream-forensics：socket lost/reconnect/disposed、opening-timeout、generation ready/lost；零 import，可注入 dispatch 单测） |
+| `src/client/stream-stall-policy.ts` | [own] | chamber 静默看门狗纯决策（阈值 + probe/wait 判定；零 import，可脱离 vendor 图行为单测） |
 | `tsconfig.check-base.json` | [own] | chamber erasable-only 校验构面（files 与 client 同步） |
 | `tsconfig.check-client.json` | [own] | chamber erasable-only 校验构面（files 与 client 同步） |
 | `test/` | [own] | chamber 自有测试（退避真值表 + 可中止等待 + 载波事实契约 + patch 源文本锁） |

@@ -421,7 +421,7 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
     loading 驻留、只有**观测到**恢复（open/cold）才清除并结束本次「回合」，之后的报错按新
     错误重新起 grace——若恢复发生在隐藏期（观测不到 `openState`），回前台第一帧即按 settle
     钟给出提示（那仍是唯一有效的动作）；loading 满 20s、或阶梯无杠杆时给同一提示）、
-    `src/client/session-stream-health-probe.ts`（stage 迁移与面形状读取，全部 fail-closed）、
+    `src/client/session-stream-health-probe.ts`（stage 迁移、具象 `Session.resync()` 能力守卫与面形状读取，全部 fail-closed）、
     `src/client/SessionStreamHealthChip.tsx`（`conversation.session.header.actions`，
     list/session 作用域：只显示，绝不自行重载）、`src/client/session-stream-health-seat.ts`
     （座席注册 + **按会话持有的阶梯状态** + 非抛错的 vendor 面读取）。两条 review 修正写进
@@ -467,6 +467,13 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
   `dsh-chamber:stream-carrier-failed`（`stream-carrier-fact.ts`：计数 + 时间 + 实例 id + 截断消息，dispatch 抛错被吞，绝不打断重连），由 open-in 的健康臂座席按实例过滤后喂进纯决策模块，chip 以 `role="status"` 显示「对话流正在重新连接…」（信息性、不给「重新加载」按钮，超过 `carrierChurnMs` 自行消退）。**接线要求（2026-09 修复，C1）**：事实落在座席闭包而非 props，座席必须把每次落地的 churn 广播给渲染侧（`subscribe(listener)`），chip 订阅后 bump tick 重规划——否则 `openState === 'open'` 时 ticker 停摆，提示既不出现也不会过期（原实现只有「事实进决策」没有「通知渲染」）。
   - **拒绝替代**：（a）不做可见面——拒：去掉终局逃逸后，用户再也分不清「流在重连」与「会话本来就安静」，这是本补丁引入的静默窗口；（b）客户端插件在打包期 import 该 fork 的事件常量——拒：client plugin 不应加深进 fork 的 import 路径，故字面量复制并由 `stream-health-wiring.test.ts` 把两处拼写钉在一起（vendor-lockstep 先例）；（c）ctx service seam（fork 消费 chamber 提供的服务）——拒：fork 的探针面会被 chamber 插件的存在绑住，而页面事实在座席缺席时也无害；（d）让 carrier 失败重新终局——拒：正是本次要修的根因。
   - **未闭合**：churn 提示窗口（10s）与按来源归属的粗粒度未在真机校准（STATUS ⑬）。
+
+- **逻辑流开帧丢失与首帧期限（2026-09 ui-chat 卡死排查的根因修复，chamber fork）**：
+  - **缺陷（已实证）**：本地实例的 mux socket 在负载期被页面每 ~20 s 重连一次（`control-plane.log` 3 天 233 次 `WebSocket stream local closed (browser close, …)`；2026-09-20 09:04–09:10 七分钟内 15 次，寿命 17.4–21.1 s；远端实例同时段 socket 活数分钟），而 `RemoteStreamMuxClient.open()` 的 `waitForSocket → send` 之间存在窗口：socket 若已被替换或正在关闭，RFC 6455 只在 CONNECTING 抛错，CLOSING/CLOSED 上 `send()` **静默丢弃**载荷 ⇒ 该逻辑流既收不到任何帧、也不会有任何错误。首开场景下 `openState` 永停 `loading`——vendor chat 视图**仅在该态**渲染 `chat.loadingHistory`（`dsh-client-ui-chat/lib/client.js:2515`）——而已开启流表现为 transcript 静默截断；载体、unary 读、`RemoteJournalStream.open()` 三处**都没有期限**，健康臂又全部以 `'error'` 边沿为条件，于是唯一出口是 ⌘R。子代理视图同形：宿主对已结束子代理也能 73 ms 返回快照（本次实测），`loading` 卡死与目录/mode 无关。
+  - **落地**：① `stream-client.ts` 开帧前校验（socket 非当前或非 OPEN ⇒ `RemoteStreamCarrierError`，进既有退避重开道）；② **逻辑流首帧期限**（30 s 起，连续超时 ×2 放宽、封顶 4×；失败**绑定 inbox**，绝不 abort generation signal——那会让重试道终局化）；③ `journal-stream.ts` **静默看门狗**：已开启 journal 静默 ≥45 s 时开一条旁路 sibling follow（20 s 期限），只读 opening cursor，**仅当宿主确已前进**才替换物理世代（新 opening 走 `replace` 收敛全窗口），未前进即判合法静默、不动；④ `dsh-chamber:stream-forensics` 有界页面事实（socket lost/reconnect/attempt-failed/disposed、opening-timeout、generation ready/lost）补上「谁在抖」的取证面（attempt-failed 让「没有任何逻辑流在等、却一直被静默重连」也可见）。2026-09 独立复核后的加固：首帧预算按 **endpoint + payload 摘要** 分账（一个慢会话不再被别的流重置，也不再重置别人）；mux 在 socket 丢失后自行**重排**重连（最小间隔 1 s，仅真实失败翻倍、封顶 10 s，成功开帧即复位；**连接泵下令的重连不计失败**、从基线上重新计），并给**握手本身**加 30 s 期限（构造抛错也转成同一类失败），不再等连接泵（连接泵的世代源正跑在同一 mux 上，等待它是循环依赖；而「只补一次」的节流会让「开帧后 1 s 内死亡」与「补连自身失败」两种情况永久停摆——复核实测）；`prepend`（历史翻页）的用户触发读带 60 s 期限（它走 lifetime signal，世代重启无法中止它）；探针节奏上限收到 **90 s**（初版 300 s，复核两轮收紧），且**探针自身失败/超时**与「宿主未前进」同样放宽节奏，探针收尾有界（否则坏探针路径会每 45 s 常驻一条 sibling follow，或让 `probing` 永久为真、静默关掉整条自愈臂）；新增 `test/behavior/journal-stall-probe.test.ts` 与 `test/behavior/mux-self-heal.test.ts` 行为用例（真实模块 + 假流/假 socket；源文本锁曾在复核中把 `next.value.value` 这个致命双层取值钉成「正确」，事故证明锁必须配行为测试），两套用例都用变异验证过真的会红（双层取值 → test 3 红；`> 0` 改成 `!== 0` → 旧游标用例红）。⑤ 会话头座席新增**用户触发**的「重建对话通道」控制：经运行时能力守卫读具象 `Session.resync()`（非契约面；缺失/形状不符/抛错一律按「无杠杆」fail-closed），与自动 heal 共用同一 cooldown + 滚动预算账本，且计划只**arm**控制、点击是唯一执行路径。它在**两个臂**里都会 arm——`loading` 停滞，以及 stage 迁移必须拒绝的 `error` 状态（address-only 子代理：current 但不在 `ids`）——把「只能 ⌘R/重新加载」换成一次点击（armed 时必须同时给出 `heal-failed` 提示——chip 只在有提示时渲染动作区，否则按钮永远不可见且连重新加载都消失）；同时 `neighborAvailable` 改为「完整迁移路由」（current ∧ listed ∧ 有邻居），不再为注定被拒的迁移空耗账本。
+  - **被否替代**：盲空闲超时（TTFT 75 s 起、工具可数分钟 ⇒ 必然误报并周期性重放窗口）；journal 级 open 失败闩锁（只把 loading 换成 error，不给自愈）；整连接 reconnect（不重开 journal）；把上游 `Session.resync()` 当作**自动或必需**杠杆（非契约面 + 跨包 seam，且自动重开在 'open'/'loading' 下没有合法触发条件）——它只作为**用户触发 + 能力守卫**的兜底控制落地（见 ⑤）。
+  - **未闭合**：抖动触发源未钉死（ready 握手已证快速：`$events` 25 ms）；取证事实的**持久消费面**仍是 STATUS ⑩；首帧期限与探针阈值未经真机校准；`AbortSignal.any/timeout` 恰好压在文档基线的 macOS 14.4 / Safari 17.4 门槛上（仓内 sidebar 已同款无守卫使用），需一次真机冒烟；错误臂在「刚恢复后的 cooldown 窗口」内只显示「正在恢复…」无按钮（≤120 s，cooldown 到期自动重试），是否再给一个手动出口待真机观感。
+
 ### D5 keep-awake（v1 设置项，默认关）
 
 - `powerSaveBlocker.start('prevent-app-suspension')`；settings 壳「通用」入口
@@ -500,7 +507,7 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 | `packages/desktop/preload.cts` | `settings` 面（get/set/onChanged，覆盖 chamber 级全部设置键）+ `systemResume` 订阅；`DshChamberBridge` 扩展 |
 | `packages/renderer` | App 层订阅 system-resume → 分发实例重连 + transport 即时重探；**D4 运行位活性守卫的决策与呈现**：`src/session-liveness.ts`（纯决策，含阈值/每会话计时/预算）+ App 内接线（staleness watchdog 内规划 → L1 广播 / L2 共享账本重连 / L3 横幅 + 忽略集合） |
 | `packages/dsh-chamber-client-ui-sidebar` | **D4 的执行半**：`shared/session-fact-reconcile.ts`（单飞 + 有界重试 + 相位超时 + 三值权威判定回执）；producer 订阅既有刷新通道并驱动它，回执经 `InstanceRuntimeReport.sessionFactReconcile` 回流（05 §3） |
-| `packages/dsh-chamber-client-ui-open-in` | **D4 对话流健康臂的座席宿主**（2026-12）：`src/client/session-stream-health.ts`（纯决策）+ `session-stream-health-probe.ts`（stage 迁移与面形状，fail-closed）+ `SessionStreamHealthChip.tsx`、`session-stream-health-seat.ts`（注册进 `conversation.session.header.actions`，list/session 作用域） |
+| `packages/dsh-chamber-client-ui-open-in` | **D4 对话流健康臂的座席宿主**（2026-12）：`src/client/session-stream-health.ts`（纯决策）+ `session-stream-health-probe.ts`（stage 迁移、具象 `Session.resync()` 与面形状，全部 fail-closed）+ `SessionStreamHealthChip.tsx`、`session-stream-health-seat.ts`（注册进 `conversation.session.header.actions`，list/session 作用域）；2026-09 起含用户触发的「重建对话通道」控制 |
 | settings-bridge 壳 | 「通用」视图（见设计 15：固定入口 `__general` 平铺） |
 | 测试 | `test:desktop`（关窗行为/退出确认/设置 store 单测）、`typecheck`、`build:renderer`（§6 验证门） |
 | 控制面 | loopback-only 与对外契约**无改动**；D4 的日志落盘包装（`createControlPlane` 无条件把注入 logger 包成 `<stateDir>/logs/control-plane.log`，规格见 02 §3.8）。2026-12 另加一处：「握手完成前下游腿离开」的取证日志（`WebSocket upgrade <id> abandoned (downstream close before upstream handshake, Nms)`，不动计数器；代答宿主 pong 的设想按同段证据整体回退） |

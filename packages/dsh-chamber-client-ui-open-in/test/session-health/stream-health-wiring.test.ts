@@ -15,9 +15,11 @@
  *     must not reset the storm budget) and reads the vendor session face the
  *     non-throwing way (`reflect.get(name, false)` — a bare `ctx.sessions` read
  *     throws in cordis when the service is absent);
- *  3. the chip never reloads, re-opens or navigates on its own: the only
- *     `location.reload()` in the whole feature is the injected action, and the
- *     component is inert while the ladder holds nothing;
+ *  3. the chip never reloads, re-opens, rebuilds or navigates on its own: the
+ *     only `location.reload()` in the whole feature is the injected action, the
+ *     only resync execution is the injected one (the plan ARMS the second
+ *     control and never calls it), and the component is inert while the ladder
+ *     holds nothing;
  *  4. no client source in this package writes to the console — the package's
  *     own ui-lock forbids it, and these files must stay inside that rule;
  *  5. every notice the ladder can return has zh and en copy.
@@ -62,6 +64,31 @@ test('stream-health wiring: the seat owns the ladder state and reads the session
   assert.match(seat, /previousOf = \(sessionId: string\): string \| undefined => previousPresented\(presented, sessionId\)/)
 })
 
+test('stream-health wiring: the seat arms resync from the guarded capability read and never executes it from the plan', () => {
+  // The pure observation only reports what the guarded concrete read found.
+  assert.match(seat, /resyncAvailable: hasSessionStreamResync\(readSessions\(ctx\), sessionId\)/)
+  // The plan path branches on 'heal' ONLY: a stall can never rebuild a stream
+  // by itself (the 'resync' action ARMS the chip's second control instead).
+  assert.match(seat, /if \(plan\.action === 'heal'\) \{/)
+  assert.doesNotMatch(seat, /plan\.action === 'resync'/)
+  // Exactly one resync execution path in the whole seat: the injected user
+  // action, guarded again by the same per-session ledger the plan used.
+  assert.equal(
+    [...seat.matchAll(/resyncSessionStream\(/gu)].length,
+    1,
+    'exactly one resync execution path: the injected user action',
+  )
+  assert.match(seat, /resync: \(sessionId\) => \{/)
+  assert.match(seat, /const current = ladders\.get\(sessionId\) \?\? createSessionStreamHealthState\(\)/)
+  assert.match(seat, /if \(!sessionStreamLeversAvailable\(current, now\)\) return/)
+  assert.match(seat, /resyncSessionStream\(readSessions\(ctx\), sessionId\)/)
+  assert.match(seat, /storeLadder\(sessionId, markSessionStreamHeal\(current, now\)\)/)
+  // The ladder state is still stored through one shared helper, so the click and
+  // the automatic heal cannot diverge in how they age the ledger.
+  assert.match(seat, /const storeLadder = \(sessionId: string, state: SessionStreamHealthState\): void => \{/)
+  assert.match(seat, /storeLadder\(sessionId, state\)/)
+})
+
 test('stream-health wiring: only the injected action reloads, and an idle ladder renders nothing', () => {
   const reloads = [...chip.matchAll(/location\.reload\(\)/g)]
   assert.equal(reloads.length, 0, 'the chip must not reload on its own')
@@ -79,6 +106,19 @@ test('stream-health wiring: only the injected action reloads, and an idle ladder
   assert.doesNotMatch(chip, /<div[^>]*role="status"/)
 })
 
+test('stream-health wiring: the resync control is rendered only where the plan arms it, beside the reload', () => {
+  // Both controls live in the same notice branch; the reload button is byte-for-
+  // byte the one that existed before the resync arm (the expression the churn
+  // test pins above), and resync is an ADDITIONAL control gated on plan.action.
+  assert.match(chip, /plan\.action === 'resync' \? \(/)
+  assert.match(chip, /<button type="button" className=\{styles\.action\} onClick=\{\(\) => \{ resync\(sessionId\) \}\}>/)
+  assert.match(chip, /\{t\('streamHealth\.resync'\)\}/)
+  // The chip calls the injected executor exactly once, from that click: no
+  // effect, tick or render may rebuild the stream on its own.
+  assert.equal([...chip.matchAll(/resync\(sessionId\)/gu)].length, 1, 'the click is the only resync invocation in the chip')
+  assert.doesNotMatch(chip, /useEffect\(\(\) => \{ resync/, 'resync must not ride an effect')
+})
+
 test('stream-health wiring: no console writer in this package client sources', () => {
   const dir = fileURLToPath(new URL('../../src/client', import.meta.url))
   const offenders = readdirSync(dir)
@@ -88,7 +128,7 @@ test('stream-health wiring: no console writer in this package client sources', (
 })
 
 test('stream-health wiring: every notice key exists in both dictionaries', () => {
-  for (const key of ['streamHealth.label', 'streamHealth.healing', 'streamHealth.loadingStall', 'streamHealth.healFailed', 'streamHealth.reload', 'streamHealth.carrierChurn']) {
+  for (const key of ['streamHealth.label', 'streamHealth.healing', 'streamHealth.loadingStall', 'streamHealth.healFailed', 'streamHealth.reload', 'streamHealth.resync', 'streamHealth.carrierChurn']) {
     assert.equal(typeof (zh as Record<string, string>)[key], 'string', 'zh is missing ' + key)
     assert.equal(typeof (en as Record<string, string>)[key], 'string', 'en is missing ' + key)
   }

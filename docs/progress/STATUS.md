@@ -101,7 +101,7 @@
   - 连接稳定性（未修复，取证中；2026-12）：唯一长连接 `/api/remote.mux`；实例侧心跳2s×2（硬编码）⇒ 静默4–6s `terminate`，gateway侧无日志；代理浏览器腿30s/1 miss（拆链同毁upstream腿）；客户端指数退避（500ms×2上限10s）重连 + baseline replay；pending approval/question在generation结束被abort、重投换新key ⇒ 草稿丢失/弹窗重建。仅1次拆链 ⇒ 代理心跳非主因；无周期性整页重载/SW。取证日志（`proxy-forward.ts` 的 `WebSocket stream <id> closed (<cause>, <ms>ms)`）区分实例判死与客户端重连（代理主动撤销亦记 `upstream close`）。下一步：DevTools抓close code + 节奏（1006/4000）；若为实例心跳，最小改动 = patch overlay加config行（现 `cordis-inserts.ts` 仅id/name）调宽 `websocketHeartbeatIntervalMs`（宿主 `api-gateway` 的 `Config.websocketHeartbeatIntervalMs` 默认2s）。① 取证日志 `WebSocket upgrade <id> abandoned (downstream close before upstream handshake, Nms)`（`revokeTransportTraffic`/`closeAllStreams` 亦走此行，不可单据此判定「浏览器主动离开」）；② 上游腿代答宿主pong已评估并整体回退：RFC 6455 §5.3掩码要求（pinned `ws` 未掩码帧1002）、pong插 `pipe` 劈帧均协议级硬约束 ⇒ 不做字节注入（见design 14 §D4触发面小节）。否决替代：解析close帧（实例侧 `terminate()` 不发）；改用上游ping间隔计数（~15行）。另：桌面idle重连看门狗只按transport过滤（`App.tsx:1824-1865`，阈值 `aggregate-refresh.ts:119-123`：http 120s/ssh 300s/local跳过），gateway目标（同属direct-http）也吃 ~2min bounce——解释「桌面也发生」。
   - 会话运行位卡死（ui-chat「深度求索中」）的剩余门：机制与取舍见design 14 §D4（运行位 = `$events` 上emit型 `api-session/status`、无重传）。未闭合：
     ① 实机/浏览器lane端到端复现未跑——fixture的 `__fxTiming.appendSilent` 与 `breakStreams` 两个timing hook可确定性回归，未接CI（失效判据 = 该场景进CI）；
-    ② HTTP通路健康而WS逻辑流半盲时运行位收敛但transcript不收敛（需fork逐流交付统计 + 宿主 `session/list` `projections.asOfSeq` 对账，再以 `Session.resync()` 重放单会话——失效判据 = 该对账落地并由 `appendSilent` 场景钉住）。`openState='error'` 与 `'loading'` 两个可观测变体已由健康臂收口（见 ⑫），「流仍open而静默」未闭合（见 ⑬）；
+    ② HTTP通路健康而WS逻辑流半盲时运行位收敛但transcript不收敛（2026-09 已落 fork 级杠杆：`RemoteJournalStream` 静默 ≥45s 时开旁路 sibling follow 只比对 opening cursor、仅当前进才重订阅，见 design 14 §D4「逻辑流开帧丢失与首帧期限」；宿主 `session/list` `projections.asOfSeq` 对账仍为可选收紧路径（未做）；`Session.resync()` 已作为**用户触发**的座席控制落地（见 ⑫），自动重放仍不做——失效判据 = `appendSilent` 场景进 CI 车道 + 真机校准）。`openState='error'` 与 `'loading'` 两个可观测变体已由健康臂收口（见 ⑫），「流仍open而静默」未闭合（见 ⑬）；
     ③ 官方 `session.list` **单飞悬挂**时 L2 无效、store 的 `listState` 永久 loading；2026-12
     tier-3 写回已能纠正**事实**（侧栏/聊天面立即脱离陈旧位），但 store 级悬挂仍只能靠
     「重新加载」收口（需上游给 fetch 超时或客户端可清除 in-flight——失效判据 = 悬挂后重连能恢复，
@@ -144,9 +144,9 @@
      **存在性**（非「实际可见」，多实例壳下可能把隐藏实例的 ChatView 也算作已呈现——放宽只让动作多
      发生一次，收窄会静默废掉恢复臂，故刻意取宽；失效判据 = 确认隐藏实例的 conversation 树是否常驻
      DOM 后改为按实例判定）；stage 迁移有前置条件：target 必须仍是 **current 且在列表**，因此
-     address-only 子代理会话与 masked gap 只留「重新加载」提示（设计取舍，不是缺陷）。失效判据 = 真机拆链后自查恢复
+     address-only 子代理会话与 masked gap 都不能走 stage 迁移（设计取舍，不是缺陷）：两者都保留「重新加载」，address-only 另有下述用户触发的 resync 兜底；masked gap 只留「重新加载」；2026-09 新增**用户触发**的「重建对话通道」控制（具象 `Session.resync()` 能力守卫、计划只 arm、点击唯一执行、与自动 heal 共用 cooldown + 滚动预算），在 `loading` 停滞与 address-only（current 但未 listed）的 `error` 两臂都可用（error 臂 armed 时同时给出 `heal-failed` 提示，chip 的动作区才渲染），不再只剩「重新加载」；`neighborAvailable` 同步收紧为 current ∧ listed ∧ 有邻居。失效判据 = 真机拆链后自查恢复
      且判据写回 design 14 §D4。
-     ⑬ **静默半死（`openState === 'open'` 而事件不再投递）仍无自动杠杆**：无 applied cursor 水位时与合法长静默（TTFT 75s 起、工具可数分钟）不可区分，故刻意不做形状超时。治因（fork 载波重试不再终局）与信号面（`dsh-chamber:stream-carrier-failed` 页面事实 → 健康臂 chip「对话流正在重新连接…」）属已实现基线，契约（含拒绝替代）见 design 14 §D4。**仍未闭合**：①宿主侧流级 keepalive+游标未做；②真机抖动验收（判据 = 拆链后 `openState` 不落 `error`，且 churn 提示在真实 mux 抖动下出现并自行消退）；③churn 提示窗口（10s）与「按来源而非按会话」的粗粒度归属均未经真机校准（多会话同源时提示会同时出现在该源各会话上——刻意接受）；④`ended(false)`（正常结束而未收下 opening item）仍是终局，由健康臂兜底。失效判据 = ②③任一校准或裁决落地并写回 design 14 §D4。
+     ⑬ **静默半死（`openState === 'open'` 而事件不再投递）**：2026-09 起有 fork 级杠杆——静默 ≥45s 开旁路 sibling follow（20s 期限）只比对 opening cursor，**仅当宿主确已前进**才替换物理世代（design 14 §D4）；不设形状超时（合法长静默 TTFT 75s 起、工具可数分钟，盲超时必然误报）。治因（fork 载波重试不再终局）与信号面（`dsh-chamber:stream-carrier-failed` 页面事实 → 健康臂 chip「对话流正在重新连接…」）属已实现基线，契约（含拒绝替代）见 design 14 §D4。**仍未闭合**：①宿主侧流级 keepalive+游标未做；⑤首帧期限（30s/连续超时封顶 4×）与探针阈值（45s/20s）未经真机校准；②真机抖动验收（判据 = 拆链后 `openState` 不落 `error`，且 churn 提示在真实 mux 抖动下出现并自行消退）；③churn 提示窗口（10s）与「按来源而非按会话」的粗粒度归属均未经真机校准（多会话同源时提示会同时出现在该源各会话上——刻意接受）；④`ended(false)`（正常结束而未收下 opening item）仍是终局，由健康臂兜底。失效判据 = ②③任一校准或裁决落地并写回 design 14 §D4。
     ⑭ **2026-12 彻底修复链（tier-1.5 本地判定 + 权威相位 + tier-3 写回，design 14 §D4 ①b）的未闭合项**：
     ① 写回押在**非 `ISessions` 契约**的 `ClientSessions.handleSessionStatus` 上（运行时能力守卫 +
     接线锁已就位；pin 升级移除/改名即降级为 WARN + 升级阶梯）；两个上游诉求（store 快照暴露
@@ -171,7 +171,11 @@
     ⑧ 保留视图的 90s 界限只清**聚合**的 running 位，不触碰 producer 的 runtimeFacts（蓝点/
     通知边沿仍可能读到 running）：语义由守卫横幅与对话流健康臂覆盖，但两者口径不同，真机未判。
 
-- 会话打开停滞（「载入历史…」永久停留，2026-09-14实机）：大会话（`session-28e9eb86`）经gateway打开只显示 `chat.loadingHistory`。根因未证实；唯一同构状态 = mux socket正常而 `session/follow` 逻辑流永久无首帧，客户端与宿主均无首帧超时；收口需设备侧帧证据（CDP WS Frames/抓包），入口 `mobile-walkthrough.mjs`（`mobile-ws-frames.json` 落盘前脱敏）。插件侧「停滞提示 + 主动重载」兜底（`session-stall.ts`）判据全为属性锚点，45s阈值未经真机校准；桌面侧同形兜底 = `session-stream-health.ts` `loading` 臂（20s阈值，同未经真机校准），另加 `error` 臂自动stage迁移重开（见 ⑫）；形态取值/误报边界见 `session-stall.ts` 头注与 `README.md`「Anchor baseline」。（同族见上方「会话运行位卡死」与design 14 §D4；本首帧期限与之同缺口——上游提案见 `docs/progress/todo/upstream-proposals.md` §4。）
+- 会话打开停滞（「载入历史…」永久停留，2026-09-14实机）：大会话（`session-28e9eb86`）经gateway打开只显示 `chat.loadingHistory`。根因未证实（宿主侧实测健康：经代理 `$events` 就绪 25ms、普通快照 57ms、已结束子代理快照 73ms）；唯一同构状态 = mux socket正常而 `session/follow` 逻辑流永久无首帧，客户端侧 2026-09 起有 fork 首帧期限（30s，连续超时封顶 4×）+ 开帧发送前校验（design 14 §D4），宿主侧仍无；收口需设备侧帧证据（CDP WS Frames/抓包），入口 `mobile-walkthrough.mjs`（`mobile-ws-frames.json` 落盘前脱敏）。插件侧「停滞提示 + 主动重载」兜底（`session-stall.ts`）判据全为属性锚点，45s阈值未经真机校准；桌面侧同形兜底 = `session-stream-health.ts` `loading` 臂（20s阈值，同未经真机校准），另加 `error` 臂自动stage迁移重开（见 ⑫）；形态取值/误报边界见 `session-stall.ts` 头注与 `README.md`「Anchor baseline」。2026-09 客户端侧已有开帧校验 + 首帧期限（30s/4×，design 14 §D4）；`loading` 卡死另有座席「重建对话通道」用户出口，不再只有 ⌘R。（同族见上方「会话运行位卡死」与design 14 §D4；本首帧期限与之同缺口——上游提案见 `docs/progress/todo/upstream-proposals.md` §4。）
+
+- **本地实例 mux 周期性抖动（2026-09-20 实测，触发源未钉死）**：
+  `<stateDir>/logs/control-plane.log` 3 天 233 次 `WebSocket stream local closed`；2026-09-20 09:04:44–09:10:56 七分钟内 15 次 `browser close`、寿命 17.4–21.1 s（远端实例同时段 socket 活数分钟），且 09:03:48 WKWebView WebContent 崩溃自动重载后进入该节奏。同一宿主经控制面代理实测：`$events` 就绪 25 ms、普通会话快照 57 ms、已结束子代理快照 73 ms ⇒ 抖动既不是握手慢、也不是宿主不答，而是页面侧每次 generation 结束后 `RemoteStreamMuxClient.reconnect()` 关掉该 socket 上全部逻辑流（本地 15s readiness 期限 vs 远端 45s override 的差异与之相符；触发源仍需 `dsh-chamber:stream-forensics` 真机回读钉死）。
+  已落取证事实 `dsh-chamber:stream-forensics`（socket lost/reconnect/disposed、opening-timeout、generation ready/lost，design 14 §D4）。失效判据 = 一次真机回读把触发源定位到具体调用路径，且修复后该节奏不再周期性出现。
 
 - 上游装载面三项待办（只登记，不改upstream）：① `dsh-client-modules` 的 `compose()`把全部非bootstrap行打成application批次、只按URL 3 KiB切分（不按字节）⇒ 首屏~10.65 MiB响应（`ui-sidebar-documentpreview` 内嵌PDF.js占6.57 MiB）；懒加载需连带chunk供给方案（combo URL下发时相对动态chunk 404；chamber `seedFiles` 也带chunk）——低优先级，不裁功能；② `ui-subagent` 的 `SubagentHeaderLineage` 类字典缺 `count` 键 ⇒ 计数span无class、仅靠继承 `nowrap`，应补class/nowrap；③ 会话打开流应加首帧超时、失败落成可见错误态（现永久loading）。
 
