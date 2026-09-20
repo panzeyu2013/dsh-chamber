@@ -15,6 +15,7 @@ import {
   CHAMBER_HOST_PACKAGES,
   DEFAULT_STATE_DIR,
   HOST_PACKAGE_SEED_FILES,
+  authCookieFor,
   createControlPlane,
   defaultDshWorkspacePath,
   type Logger,
@@ -309,6 +310,29 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       // validated/materialized by parseGatewayConfig).
       options.config.mobileUaRedirect === true,
       options.config.mobileEntryPath ?? DEFAULT_MOBILE_ENTRY_PATH,
+      // M3-5 debounce seam: production defaults (undefined = the module
+      // constant + unref'd timer).
+      undefined,
+      // Login-phase pre-warm (design 17 §10.6): ON by default
+      // (--no-warmup / DSH_GATEWAY_WARMUP=0 is the kill switch). The port and
+      // state dereference stays lazy because createdPlane is created later in
+      // this same construction transaction — exactly like the proxy and
+      // chamber-surface getters above.
+      {
+        enabled: options.config.warmup !== false,
+        getLocalDshPort: () => createdPlane.getLocalDshPort(),
+        getLocalState: () => createdPlane.connectionState,
+        canExposeLocal: () => !stopping && !runtimeExposureQuarantined(),
+        getSecret: () => store.getJwtSecret(),
+        // The spawn-minted browser-auth cookie (review-round3c P0) opens the
+        // loopback static surface: upstream's Connection authorizes EVERY
+        // index response, while non-index assets stay public. This is an
+        // internal host credential, not a user credential: it is attached to
+        // the loopback discovery/bundle legs only and is never returned to
+        // the pre-auth client.
+        getAuthCookie: port => authCookieFor('http://127.0.0.1:' + port),
+        logger,
+      },
     )
     // Chamber seed registry (2026-12): the THREE syncable host packages are DESKTOP-
     // SYNCED — the control-plane seeds them into the managed dsh profile from

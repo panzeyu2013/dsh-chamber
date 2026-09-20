@@ -799,6 +799,73 @@ chamber 代码。chamber 插件（sidebar/layout/settings-bridge/git/open-in 等
   一律 404；存活的 `/chamber/*` 面只有通道投影（`GET /chamber/channels`）、
   插件同步缓存（`GET/PUT /chamber/plugins`）、runtime 控制器（`/chamber/runtime/*`）与仪表盘静态资源。
 
+### 10.6 登录页阶段预热（pre-auth warm-up，2026-12）
+
+**是什么**：未认证访客停留在 `/auth/login` 期间，登录页在 `<head>` 为每个已发现的客户端 bundle 渲染
+一条**真实 URL** 的 `<link rel="prefetch" as="script" href="/plugins/??<pkg>/client.js,…&rev=<token>">`
+（开关默认开：`--no-warmup` / `DSH_GATEWAY_WARMUP=0` 关），并**只在这一个页面**下发一枚短时 HttpOnly
+capability cookie `dsh_gateway_warmup`（HMAC(`exp|warmup|<client>`)，密钥自 stateDir 的 jwt-secret 派生，
+域分隔标签 `dsh-gateway/warmup-cookie/v1`，TTL/Max-Age 120 s，`Path=/`、`HttpOnly`、`SameSite=Lax`、
+安全请求再加 `Secure`）。登录成功后的首屏从 HTTP 缓存取用整册前端 bundle（实测约 4.35 MiB gzip），
+这份下载不再落在关键路径上。登录页自身仍无脚本（C1 不变），`connect-src 'self'` 是唯一的 CSP 增量。
+
+**为什么必须是"真实 URL + cookie 门"**（2026-12 评审实测，两条硬事实）：
+
+1. **HTTP 缓存按 URL 键**。实测（Chrome 152）：预取真实 URL 后 App 自己的 `<script src>` **不再回源**
+   （命中缓存）；预取 `/chamber/warmup/<token>?u=…` 包装 URL 后 App 取真实 URL **仍回源**——两条 URL
+   是两条缓存项，包装形永远不可能等价。故**任何把 token 放进 URL 的写法都拿不到收益**，capability 只能走
+   cookie（同一实验中：带 cookie 的真实 URL 预取被浏览器发送并在 App 用**不同的 session cookie** 取同一
+   URL 时仍命中；对照实验里一旦路由追加 `vary: cookie`，命中立刻失效 ⇒ 本路由不得追加该头）。
+2. **托管 dsh 的 index 文档需要浏览器认证**：上游 `@deepseek-ai/dsh-host-frontend-static` 明确
+   "Every index response first passes Connection's browser authentication … **Non-index assets stay public**"。
+   发现腿若不带 spawn 期换取的 browser-auth cookie，`GET /` 会 401 ⇒ 登录页渲染 0 条链接（功能在生产中
+   静默失效）。现在发现腿带上该 cookie（`WarmupDeps.getAuthCookie` 注入，`index.ts` 用
+   `authCookieFor('http://127.0.0.1:'+port)`），并保持失败软退 + 500 ms 上限 + 60 s 缓存（成败都缓存）。
+   上游把**非 index 资源视为公开**，故本路由放开的 bundle 形态与上游自身边界一致。
+
+**路由与边界**（§7 认证边界、§13.1 不变量不变）：
+
+- **形状允许列表**：只认两类**真实路径**——组合包 `^/plugins/\?\?[^?#]*$` 与单行 bundle
+  `^/plugins/[^/]+/client\.(js|css)$`；其余 `/plugins/**`（插件 HTTP 路由）不放开。仍拒绝 `%`、`//`、
+  反斜杠、`#`、点段、控制字符、绝对/authority 形与超长目标（≤8 KiB）。仅 GET/HEAD（其余 405）。
+- **capability cookie 门**：路由在认证门**之前**被咨询，但**只有**形状命中且 cookie 验签通过（含客户端
+  地址绑定、过期、`timingSafeEqual`）时才 claim；缺/过期/篡改/他人 cookie ⇒ `unclaimed` ⇒ 落回认证门
+  （既有 session 照常，否则统一 401 + 仅类别审计）。**`/plugins/**` 不再有任何 blanket 公开豁免**，
+  kill switch 关闭时该前缀与改动前一样 401。
+- **限速与容量**：按客户端地址的有界 token bucket（容量 96 > 单页链接数（≤64）、5/s 补充、≤1024 键），
+  超预算 429 `warmup_rate_limited`；并发与聚合缓冲另有上界（在途 ≤8、聚合 ≤64 MiB，超限 503
+  `warmup_capacity`）——评审实测 40 条并发重放 8 MiB bundle 曾把 RSS 推高约 581 MiB。
+- **无用户凭据上行**：上游请求只带 `accept-encoding` 与 spawn 期换取的 browser-auth cookie（非用户凭据、
+  永不回给客户端）；调用方 cookie/authorization 一律丢弃；回程只透传
+  content-type/content-encoding/cache-control/vary/content-length，其中 `vary` 与策略已设值**合并**
+  （不覆盖 `vary: Origin`）。
+- **可关断 + 软退**：kill switch 同时关掉发现、链接渲染、cookie 与路由；关闭或发现失败时登录页与既有模板
+  逐字节一致（`warmup-login-page.test.ts` 以改动前哈希钉住）。托管端口只接受 1..65535。
+- **审计与日志**：路由级拒绝复用 `auth_rejected` 助手（code = 客户端收到的 code + 客户端 + 路径**类别**），
+  cookie 值与 URL 永不落盘、永不进日志。
+
+**发现顺序按"浏览器真的会拉哪些"排**（实测 index：2 条文档级 URL（`<link rel=preload>` + `<script src>`）+
+57 条 inline boot manifest 行 `url`，去重后 57 条真机册目，上限 64；该实测也说明顺序修正在上限 64 下通常
+不生效，保留排序是为了册目更大或不含组合包的形态）：`<script src>`/`<link … href>` 这类**文档自己加载**的 URL（shell
+在 mount 前 await 的 parser-preload/application 批）排在前面，manifest 的每行 URL 随后；仅按文档顺序会在
+上限处先塞满 manifest 行、可能把最重的 application 组合包挤掉——而那份组合包正是预取存在的理由。同一类内
+保持文档顺序。真机对照：用户网关实抓的 3 次真实 bundle 请求（组合包 preload 的解码形 + 组合包所在的
+`phase:"application"` 行 + 组合包不含的 `dsh-chamber-mcp` 行）在修正后**全部被覆盖**（修正前只覆盖 1 条）。
+
+**失败封闭**：无端口/未就绪 503 `instance_unavailable`，上游错误 502 `upstream_failed`，
+调用方看不到上游正文。
+
+**Rejected alternatives**：
+
+- **token 放 URL（`/chamber/warmup/<token>?u=…`，2026-12 首版，已整体删除）**：实测缓存不等价（见上事实 1），
+  且把登录页链接拉长（最长约 6.5 KB、整页 +25.7 KB）——预取的全额流量并未替关键路径省下任何字节。
+- **pre-auth 放开任意路径**：等于把托管 dsh 的完整请求面（管理 REST、会话 API、插件路由）交给匿名流量，
+  违反 S1/S2；只放开 `/plugins/` 的两种 bundle 形态是能拿到缓存收益的最小暴露面。
+- **把整个应用放到登录页之后**（未登录不发现，或登录成功后再预取）：预取的全部价值就是利用「用户正在
+  输密码」的等待时间；放到登录之后等于没做，关键路径一分不少。
+- **禁用重量级客户端插件**：那是用删功能换流量，不是缓存；预热让同一份 bundle 首次出现在关键路径之外，
+  功能集不动。
+
 ## 11. Git worktree：服务器侧范围外
 
 服务器侧 Git worktree saga（server 侧 `workspace.list`/`workspace.create`/

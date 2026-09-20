@@ -67,6 +67,16 @@ export interface GatewayConfig {
   /** Origin-form target of the mobile UA redirect (default
    * '/chamber/mobile.html' — validated, never absolute, never `/`). */
   mobileEntryPath?: string
+  /** Login-phase background pre-warm (design 17 §10.6; default ON): the
+   * unauthenticated login page renders the REAL /plugins bundle URLs as
+   * `<link rel="prefetch">` and mints a short-lived HttpOnly capability cookie,
+   * so the post-login boot is served from the HTTP cache instead of paying the
+   * ~4.35 MiB gzip download on the critical path. The route serves only the two
+   * bundle shapes, only with a valid grant, and is rate- and budget-bounded.
+   * `false` (--no-warmup / DSH_GATEWAY_WARMUP=0) is the kill switch: no
+   * discovery, no links, no cookie, no route (those paths keep their normal
+   * 401/session verdict). */
+  warmup?: boolean
 }
 
 /** Raw config input (CLI flags already resolved by the CLI entry; env fallback
@@ -87,6 +97,7 @@ export interface GatewayConfigInput {
   allowAnonymousExternal?: boolean
   mobileUaRedirect?: boolean
   mobileEntryPath?: string
+  warmup?: boolean
 }
 
 /** Configuration error (surfaced as exit 2 by the CLI). */
@@ -105,8 +116,9 @@ function firstEnv(...names: string[]): string | undefined {
   return undefined
 }
 
-/** Lenient-but-loud env boolean (used for DSH_GATEWAY_MOBILE_UA_REDIRECT): an
- * unrecognized value is a configuration error, never a silent default. */
+/** Lenient-but-loud env boolean (used for DSH_GATEWAY_MOBILE_UA_REDIRECT and
+ * DSH_GATEWAY_WARMUP): an unrecognized value is a configuration error, never
+ * a silent default. */
 function envBoolean(name: string): boolean | undefined {
   const raw = firstEnv(name)
   if (raw === undefined) return undefined
@@ -242,6 +254,10 @@ export function parseGatewayConfig(input: GatewayConfigInput, stateDir: string, 
   // silently surface later as a misdirecting 302 once the flag is flipped.
   const mobileUaRedirect = input.mobileUaRedirect ?? envBoolean('DSH_GATEWAY_MOBILE_UA_REDIRECT') ?? false
   const mobileEntryPath = normalizeMobileEntryPath(input.mobileEntryPath ?? DEFAULT_MOBILE_ENTRY_PATH)
+  // Design 17 §10.6 login-phase pre-warm: ON by default (the feature is the
+  // point of the login page's prefetch; the kill switch exists for operators
+  // who do not want the pre-auth route at all).
+  const warmup = input.warmup ?? envBoolean('DSH_GATEWAY_WARMUP') ?? true
   // S1 (design 17 §17 安全不变量摘要): exposure is a semantic deployment
   // fact, not just the socket bind. A loopback listener behind an explicitly
   // configured public origin or trusted reverse proxy is still public and
@@ -271,5 +287,6 @@ export function parseGatewayConfig(input: GatewayConfigInput, stateDir: string, 
     allowAnonymousExternal,
     mobileUaRedirect,
     mobileEntryPath,
+    warmup,
   }
 }

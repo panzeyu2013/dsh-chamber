@@ -52,12 +52,31 @@ export interface LoginPageOptions {
    * shunted again. Boolean marker only — no free-form return path (no
    * open-redirect surface). */
   desktop?: boolean
+  /** Login-phase background pre-warm (design 17 §10.6, 2026-12 revision):
+   * the REAL discovered client-bundle URLs (`/plugins/??…`), each rendered
+   * as one `<link rel="prefetch" as="script">` inside <head>. No token
+   * wrapper and no `?u=` parameter: the URL must stay byte-identical to the
+   * one the app's own `<script src>` will request so the HTTP cache entry is
+   * shared, and the capability to fetch it pre-auth travels as the short-lived
+   * `dsh_gateway_warmup` cookie set on this response. Absent or empty keeps
+   * the historical output byte-identical (locked by
+   * warmup-login-page.test.ts). Values are HTML-escaped; the page stays
+   * script-free. */
+  warmupUrls?: readonly string[]
 }
 
-/** Login-page CSP: `img-src data:` is the only sanctioned
- * increment over design 17 §7.1 — the inline SVG favicon/brand marks.
- * `script-src` stays absent (C1). Shared by the boundary error page. */
-export const LOGIN_PAGE_CSP: string = "default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; style-src 'unsafe-inline'; img-src data:"
+/** Login-page CSP: two sanctioned increments over design 17 §7.1 —
+ * `img-src data:` (the inline SVG favicon/brand marks) and, since the
+ * login-phase pre-warm (design 17 §10.6), `connect-src 'self'`. The latter is
+ * required because the page's <head> carries one same-origin
+ * `<link rel="prefetch" as="script" href="/plugins/??…">` per discovered
+ * client bundle: `default-src 'none'` would block the fetch (prefetch falls
+ * back to default-src when connect-src is absent), so the pre-warm would
+ * silently do nothing. 'self' is the narrowest value that permits exactly the
+ * same-origin real bundle URLs; nothing else changes — `script-src` stays
+ * absent (C1), so the page remains script-free. Shared by the boundary error
+ * page (which never renders prefetch links). */
+export const LOGIN_PAGE_CSP: string = "default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; style-src 'unsafe-inline'; img-src data:; connect-src 'self'"
 
 type Lang = 'en' | 'zh'
 
@@ -331,9 +350,21 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:
 
 /** Full self-contained document shell: charset, viewport, theme-color for
  * both display modes, title, inline SVG data: favicon (the `img-src data:`
- * CSP increment, design 17 §7.1), inline styles, and the given body. Never
- * emits external URLs or script elements. */
-function pageShell(lang: Lang, title: string, body: string): string {
+ * CSP increment, design 17 §7.1), optional pre-warm prefetch links inside
+ * <head> (design 17 §10.6), inline styles, and the given body. Never emits
+ * external URLs or script elements. With no prefetch URLs the output is
+ * byte-identical to the pre-warm template (locked by
+ * warmup-login-page.test.ts). */
+function pageShell(lang: Lang, title: string, body: string, prefetchUrls: readonly string[] = []): string {
+  // One same-origin <link rel="prefetch"> per REAL bundle URL. These are the
+  // ONLY external element the pre-auth page ever emits; they stay inside the
+  // CSP's connect-src 'self' and carry no script. No crossorigin attribute is
+  // added: the app's own <script src> is a plain same-origin script load, and
+  // every difference from that request is a chance to split the HTTP cache
+  // entry the pre-warm exists to share.
+  const prefetchLinks = prefetchUrls.length === 0
+    ? ''
+    : prefetchUrls.map(url => `  <link rel="prefetch" as="script" href="${escapeHtml(url)}">\n`).join('')
   return `<!doctype html>
 <html lang="${lang}">
 <head>
@@ -348,7 +379,7 @@ ${TOKEN_LAYER}
 
 ${COMPONENT_STYLES}
   </style>
-</head>
+${prefetchLinks}</head>
 <body>
 ${body}
 </body>
@@ -448,7 +479,9 @@ export function renderLoginPage(opts: LoginPageOptions): string {
   }
 
   const body = '  <main class="card">\n' + indentLines(parts.join('\n'), 4) + '\n  </main>'
-  return pageShell(opts.lang, copy.title, body)
+  // Only the login GET path ever passes warm-up URLs; the boundary/token-only
+  // pages keep the default empty list and therefore the historical bytes.
+  return pageShell(opts.lang, copy.title, body, opts.warmupUrls ?? [])
 }
 
 /** Content negotiation for the login page (design 17 §7.3): a browser-native

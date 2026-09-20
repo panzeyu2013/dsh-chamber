@@ -8,7 +8,7 @@
  *   gateway serve [--host 0.0.0.0] [--port 3000]
  *       [--state-dir DIR] [--dsh-path PATH]
  *       [--ui-password PWD] [--api-token TOK] [--cors-origin ORIGIN ...]
- *       [--public-origin URL] [--trusted-proxy IP ...] [--no-auth]
+ *       [--public-origin URL] [--trusted-proxy IP ...] [--no-warmup] [--no-auth]
  *   gateway auth status [--state-dir DIR]
  *   gateway auth reset-password --new PASSWORD [--state-dir DIR]
  *   gateway auth clear [--state-dir DIR]
@@ -54,6 +54,11 @@ Options:
                       --mobile-entry (design 17 §18 UA shunting; default off)
   --mobile-entry PATH origin-form target of the mobile UA redirect
                       (default /chamber/mobile.html)
+  --no-warmup
+                      disable the login-phase bundle pre-warm (design 17 §10.6;
+                      default ON — while a visitor is on the login page the
+                      browser prefetches the managed dsh's static client bundles
+                      so the post-login boot is cache-served)
   --no-auth
                       allow an externally-reachable bind with NO auth (S1 override;
                       prints a loud warning — trusted networks only)
@@ -61,6 +66,9 @@ Options:
   -h, --help          show this help
 
 Environment:
+  DSH_GATEWAY_WARMUP
+                      0/false disables the login-phase bundle pre-warm
+                      (design 17 §10.6); 1/true or unset keeps it ON
   DSH_CHAMBER_HOST_LOG_LEVEL
                       opt-in managed-dsh application-log bridge: mount a Cordis
                       logger exporter at error|info|warn|debug (unset = off; a
@@ -125,6 +133,7 @@ interface ParsedArgs {
   allowAnonymousExternal: boolean
   mobileUaRedirect: boolean
   mobileEntryPath?: string
+  warmup: boolean
   // auth options
   subcommand?: 'status' | 'reset-password' | 'clear'
   newPassword?: string
@@ -135,7 +144,7 @@ interface ParsedArgs {
 class UsageError extends Error {}
 
 function parseArgs(argv: string[]): ParsedArgs {
-  const args: ParsedArgs = { command: 'serve', corsOrigins: [], trustedProxies: [], allowAnonymousExternal: false, mobileUaRedirect: false, version: false, help: false }
+  const args: ParsedArgs = { command: 'serve', corsOrigins: [], trustedProxies: [], allowAnonymousExternal: false, mobileUaRedirect: false, warmup: true, version: false, help: false }
   let positional = false // 'serve' seen
   let authMode = false
   let subcommandSeen = false
@@ -195,6 +204,10 @@ function parseArgs(argv: string[]): ParsedArgs {
         args.mobileUaRedirect = true
         break
       case '--mobile-entry': args.mobileEntryPath = takeValue(); break
+      case '--no-warmup':
+        if (inlineValue !== undefined) throw new UsageError('--no-warmup takes no value')
+        args.warmup = false
+        break
       case '--no-auth':
         if (inlineValue !== undefined) throw new UsageError('--no-auth takes no value')
         args.allowAnonymousExternal = true
@@ -328,6 +341,9 @@ async function main(): Promise<number | null> {
       // undefined-pass-through pattern every other env-backed option uses).
       mobileUaRedirect: args.mobileUaRedirect === true ? true : undefined,
       mobileEntryPath: args.mobileEntryPath,
+      // Same undefined-pass-through as mobileUaRedirect: the default (ON)
+      // leaves DSH_GATEWAY_WARMUP reachable; --no-warmup pins false.
+      warmup: args.warmup === true ? undefined : false,
     }, stateDir, dshWorkspacePath)
   } catch (error) {
     if (error instanceof GatewayConfigError) {

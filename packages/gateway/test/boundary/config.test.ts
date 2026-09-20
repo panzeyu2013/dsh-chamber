@@ -278,6 +278,31 @@ test('DSH_GATEWAY_MOBILE_UA_REDIRECT env is boolified; garbage is a config error
   }
 })
 
+test('login-phase pre-warm defaults ON; input and DSH_GATEWAY_WARMUP can turn it off', () => {
+  // Design 17 §10.6: the switch defaults ON (the login page's prefetch is the
+  // feature); --no-warmup maps to input.warmup === false, the env is the
+  // fallback and garbage is a config error (envBoolean discipline).
+  assert.equal(parseGatewayConfig({}, STATE, DSH).warmup, true)
+  assert.equal(parseGatewayConfig({ warmup: false }, STATE, DSH).warmup, false)
+  const previous = process.env.DSH_GATEWAY_WARMUP
+  try {
+    process.env.DSH_GATEWAY_WARMUP = '0'
+    assert.equal(parseGatewayConfig({}, STATE, DSH).warmup, false)
+    process.env.DSH_GATEWAY_WARMUP = 'false'
+    assert.equal(parseGatewayConfig({}, STATE, DSH).warmup, false)
+    process.env.DSH_GATEWAY_WARMUP = '1'
+    assert.equal(parseGatewayConfig({}, STATE, DSH).warmup, true)
+    process.env.DSH_GATEWAY_WARMUP = 'banana'
+    assert.throws(() => parseGatewayConfig({}, STATE, DSH), GatewayConfigError)
+    // An explicit input wins over the env.
+    process.env.DSH_GATEWAY_WARMUP = '1'
+    assert.equal(parseGatewayConfig({ warmup: false }, STATE, DSH).warmup, false)
+  } finally {
+    if (previous === undefined) delete process.env.DSH_GATEWAY_WARMUP
+    else process.env.DSH_GATEWAY_WARMUP = previous
+  }
+})
+
 test('gateway serve surfaces a bad --mobile-entry as exit 2 (flags parse end-to-end)', t => {
   const root = mkdtempSync(join(tmpdir(), 'gateway-cli-mobile-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
