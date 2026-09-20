@@ -41,6 +41,7 @@ import {
   type RemoteStreamOptions,
 } from './remote-stream.ts'
 import { createCarrierFailureReporter } from './stream-carrier-fact.ts'
+import { createStreamForensicsReporter } from './stream-forensics.ts'
 
 export { RemoteStreamCarrierError } from './stream-client.ts'
 export { RemoteJournalStream } from './journal-stream.ts'
@@ -173,9 +174,24 @@ class ClientRemoteService extends Service implements ClientRemote {
       // Same seam the sidebar/layout forks read (published by the shell per boot).
       instanceId: (ctx as { readonly chamberInstanceId?: string }).chamberInstanceId,
     })
-    this.streams = new RemoteStreamMuxClient(basePath)
+    // chamber patch (design 14 §D4, 2026-09): bounded lifecycle forensics. The
+    // local-source mux was observed closing and reopening every ~20 s while no
+    // durable surface recorded why; these facts (page events) name the transition
+    // and the caller, so the next investigation does not depend on renderer
+    // DevTools (the Swift shell exposes none).
+    const forensics = createStreamForensicsReporter({
+      instanceId: (ctx as { readonly chamberInstanceId?: string }).chamberInstanceId,
+    })
+    this.streams = new RemoteStreamMuxClient(basePath, forensics)
     const connection = ctx.get('connection') as ConnectionHandle
     this.connection = connection
+    const unsubscribeForensics = connection.generation.subscribe(() => {
+      const active = connection.generation.getSnapshot()
+      forensics(
+        active === undefined ? 'generation-lost' : 'generation-ready',
+        active === undefined ? 'connection generation replaced' : `generation ${String(active.id)}`,
+      )
+    })
     this.events = new ClientRemoteEvents(
       ctx,
       connection,
@@ -207,6 +223,7 @@ class ClientRemoteService extends Service implements ClientRemote {
     else void loader.await().then(start, () => {})
     ctx.effect(() => async () => {
       disposed = true
+      unsubscribeForensics()
       loop?.stop()
       await this.events.dispose()
       await this.streams.close()

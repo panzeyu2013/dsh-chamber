@@ -9,10 +9,15 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   delayRemoteStreamRetry,
+  REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS,
+  REMOTE_STREAM_OPENING_TIMEOUT_MS,
   REMOTE_STREAM_RETRY_BASE_MS,
   REMOTE_STREAM_RETRY_FIRST_MS,
   REMOTE_STREAM_RETRY_MAX_MS,
+  remoteStreamOpeningTimeoutMs,
   remoteStreamRetryDelayMs,
+  REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,
+  streamOpeningKey,
 } from '../../src/client/remote-retry-policy.ts'
 import { setTimeout as delay } from 'node:timers/promises'
 
@@ -73,5 +78,59 @@ test('an already-aborted signal never waits at all', async () => {
 test('degenerate attempt counts fail safe to the immediate branch', () => {
   for (const attempt of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
     assert.equal(remoteStreamRetryDelayMs(attempt), 0, String(attempt))
+  }
+})
+
+test('the opening-item budget starts tight and widens only while timeouts stay consecutive', () => {
+  assert.equal(REMOTE_STREAM_OPENING_TIMEOUT_MS, 30_000)
+  assert.equal(remoteStreamOpeningTimeoutMs(0), REMOTE_STREAM_OPENING_TIMEOUT_MS)
+  assert.equal(remoteStreamOpeningTimeoutMs(1), 60_000)
+  assert.equal(remoteStreamOpeningTimeoutMs(2), REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS)
+  assert.equal(remoteStreamOpeningTimeoutMs(9), REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS)
+})
+
+test('the opening budget is monotone and never leaves its bounds', () => {
+  let previous = 0
+  for (let streak = 0; streak <= 40; streak++) {
+    const budget = remoteStreamOpeningTimeoutMs(streak)
+    assert.ok(budget >= REMOTE_STREAM_OPENING_TIMEOUT_MS, 'streak ' + String(streak) + ' stays above the base')
+    assert.ok(budget <= REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS, 'streak ' + String(streak) + ' stays capped')
+    assert.ok(budget >= previous, 'streak ' + String(streak) + ' must not shrink the budget')
+    assert.ok(Number.isInteger(budget), 'streak ' + String(streak) + ' must be whole milliseconds')
+    previous = budget
+  }
+})
+
+test('the opening budget clears the measured healthy Host answer by orders of magnitude', () => {
+  // Measured 2026-09 through the control-plane proxy: $events ready 25 ms,
+  // session snapshot 57 ms, subagent snapshot 73 ms. The base must be far above
+  // those while remaining a bound a user would still call "stuck for a moment".
+  assert.ok(REMOTE_STREAM_OPENING_TIMEOUT_MS >= 10_000)
+  assert.ok(REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS <= 300_000)
+})
+
+test('the opening episode key is stable per stream and separates endpoints and payloads', () => {
+  const payload = { args: { request: { address: { kind: 'session', sessionId: 'a' } } } }
+  assert.equal(streamOpeningKey('session/follow', payload), streamOpeningKey('session/follow', payload))
+  assert.notEqual(streamOpeningKey('session/follow', payload), streamOpeningKey('session/follow', { args: {} }))
+  assert.notEqual(streamOpeningKey('session/follow', payload), streamOpeningKey('session/control', payload))
+  assert.equal(streamOpeningKey('$events', undefined), streamOpeningKey('$events', undefined))
+})
+
+test('an unencodable payload still yields a usable key instead of throwing', () => {
+  const cyclic: Record<string, unknown> = {}
+  cyclic.self = cyclic
+  assert.doesNotThrow(() => streamOpeningKey('session/follow', cyclic))
+  assert.equal(streamOpeningKey('session/follow', cyclic), streamOpeningKey('session/follow', cyclic))
+})
+
+test('the mux self-heal throttle stays a second-scale bound', () => {
+  assert.ok(REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS >= 250, 'a flapping network must not hot-loop')
+  assert.ok(REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS <= 10_000, 'self-heal must stay useful while the lane is parked')
+})
+
+test('degenerate opening streaks fail safe to the base budget', () => {
+  for (const streak of [-1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    assert.equal(remoteStreamOpeningTimeoutMs(streak), REMOTE_STREAM_OPENING_TIMEOUT_MS, String(streak))
   }
 })

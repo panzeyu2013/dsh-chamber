@@ -2,6 +2,11 @@
 
 import { RemoteError } from '@deepseek-ai/dsh-typert-protocol'
 import { RemoteStreamCarrierError } from './stream-client.ts'
+import {
+  decideStreamStallAction,
+  DEFAULT_STREAM_STALL_TIMING,
+  type StreamStallTiming,
+} from './stream-stall-policy.ts'
 import type {
   RemoteStream,
   RemoteStreamItem,
@@ -76,6 +81,11 @@ export interface RemoteJournalStreamOptions<Page, Entry, Cursor, Notification = 
   readonly publish: (change: RemoteJournalChange<Page, Entry, Notification>) => void
   /** Observe a retryable carrier loss before reconnection. */
   readonly carrierFailed?: (error: RemoteStreamCarrierError) => void
+  /**
+   * chamber patch (design 14 §D4, 2026-09): silence-watchdog timing. Omitted by
+   * every existing consumer, which takes {@link DEFAULT_STREAM_STALL_TIMING}.
+   */
+  readonly stall?: Partial<StreamStallTiming>
   /** Publish a terminal stream, page, or protocol failure after opening. */
   readonly failed: (error: unknown) => void
 }
@@ -103,6 +113,17 @@ export abstract class RemoteJournalStream<
   private done: Promise<void> | undefined
   private closing: Promise<void> | undefined
   private pendingNext: Promise<IteratorResult<JournalStreamItem<Page, Entry, Cursor, Notification>>> | undefined
+  // chamber patch (design 14 §D4, 2026-09): silence watchdog state. `lastProgressAt`
+  // advances on every published item, so a stream that keeps producing never
+  // reaches the probe window at all.
+  private readonly stallTiming: StreamStallTiming
+  private stallTimer: ReturnType<typeof setInterval> | undefined
+  private lastProgressAt: number
+  private lastProbeAt: number | undefined
+  private lastRestartAt: number | undefined
+  private probing = false
+  /** Consecutive probes that found no Host advance (widens the probe cadence). */
+  private quietProbes = 0
 
   /**
    * @param remote - Gateway factory for the reconnecting physical-generation stream.
@@ -112,6 +133,8 @@ export abstract class RemoteJournalStream<
     remote: RemoteStreamFactory,
     private readonly options: RemoteJournalStreamOptions<Page, Entry, Cursor, Notification>,
   ) {
+    this.stallTiming = { ...DEFAULT_STREAM_STALL_TIMING, ...options.stall }
+    this.lastProgressAt = Date.now()
     this.stream = remote.$stream<RemoteJournalFrame<Entry, Cursor, Page, Notification>>({
       name: options.name,
       open: signal => this.follow(this.initialRequest, signal),
@@ -173,6 +196,7 @@ export abstract class RemoteJournalStream<
       if (first.done) throw protocolViolation(`${this.options.name} ended before its opening cursor`)
       this.replaceGeneration(first.value, false)
       this.opened = true
+      this.startStallWatchdog()
       this.done = this.consume(iterator)
     } catch (error) {
       await this.stream.dispose()
@@ -187,7 +211,7 @@ export abstract class RemoteJournalStream<
    */
   async prepend(request: PageRequest): Promise<void> {
     if (!this.opened || this.disposed) throw new Error(`${this.options.name} is not open`)
-    const page = await this.readPage(request, this.currentCursor(), this.stream.signal)
+    const page = await this.readPage(request, this.currentCursor(), this.prependSignal())
     this.stream.signal.throwIfAborted()
     const entries = this.options.entries(page)
     this.assertPage(entries)
@@ -198,17 +222,28 @@ export abstract class RemoteJournalStream<
     const tail = accepted.at(-1)
     if (tail !== undefined && before !== undefined
       && !this.options.follows(this.options.last(tail), before)) {
-      this.options.publish({ type: 'prepend', page, entries: [], hasMore: false })
+      this.publish({ type: 'prepend', page, entries: [], hasMore: false })
       throw protocolViolation(`${this.options.name} history page is discontinuous`)
     }
     const first = accepted[0]
     if (first !== undefined) this.firstCursor = this.options.first(first)
-    this.options.publish({
+    this.publish({
       type: 'prepend',
       page,
       entries: accepted,
       hasMore: this.options.hasMore(page),
     })
+  }
+
+  /**
+   * chamber patch (2026-09 review): bound one user-initiated page read. `prepend`
+   * reads on the stream's LIFETIME signal, so a generation restart cannot abort
+   * it — a hung page request would leave "load older" stuck forever with no
+   * error edge. The deadline turns that into an ordinary rejected read (the
+   * vendor `loadOlder()` catches it and clears its busy flag).
+   */
+  private prependSignal(): AbortSignal {
+    return AbortSignal.any([this.stream.signal, AbortSignal.timeout(this.stallTiming.readDeadlineMs)])
   }
 
   /** Replace the active physical generation while retaining the published window. */
@@ -223,6 +258,7 @@ export abstract class RemoteJournalStream<
   dispose(): Promise<void> {
     if (this.closing !== undefined) return this.closing
     this.disposed = true
+    this.stopStallWatchdog()
     const done = this.done
     const closing = (async () => {
       await this.stream.dispose()
@@ -230,6 +266,124 @@ export abstract class RemoteJournalStream<
     })()
     this.closing = closing
     return closing
+  }
+
+  /**
+   * chamber patch (design 14 §D4, 2026-09): publish one change and mark live
+   * progress for the silence watchdog (opening windows, appends, prepends and
+   * cursorless notifications all count — a streaming assistant keeps them coming).
+   */
+  private publish(change: RemoteJournalChange<Page, Entry, Notification>): void {
+    this.lastProgressAt = Date.now()
+    this.quietProbes = 0
+    this.options.publish(change)
+  }
+
+  /**
+   * chamber patch (design 14 §D4, 2026-09): arm the silence watchdog once the
+   * opening window is published. A stream that goes silently dead while the Host
+   * keeps producing would otherwise freeze the transcript with no error edge for
+   * any chamber arm to react to.
+   */
+  private startStallWatchdog(): void {
+    if (this.stallTimer !== undefined || this.disposed) return
+    const timer = setInterval(() => { void this.checkStall() }, this.stallTiming.tickMs)
+    // Never keep a Host/Electron process alive just for this watchdog.
+    ;(timer as unknown as { unref?: () => void }).unref?.()
+    this.stallTimer = timer
+  }
+
+  private stopStallWatchdog(): void {
+    if (this.stallTimer === undefined) return
+    clearInterval(this.stallTimer)
+    this.stallTimer = undefined
+  }
+
+  /**
+   * Run one watchdog tick. `'probe'` opens a SIBLING follow on the same request
+   * and reads only its opening cursor:
+   *
+   * - cursor AHEAD of the applied one ⇒ the Host has newer content and this
+   *   subscription is stale ⇒ replace the physical generation (the fresh opening
+   *   item is published as a `replace`, so the whole current window lands);
+   * - cursor EQUAL/absent ⇒ the silence is genuine (long tool run, TTFT) ⇒ do
+   *   nothing; there is no blind restart anywhere in this path.
+   *
+   * A failed or timed-out probe is "no evidence", never a reason to tear the
+   * subscription down; the physical carrier lane owns real transport failures.
+   */
+  private async checkStall(): Promise<void> {
+    if (this.disposed || this.probing) return
+    const action = decideStreamStallAction({
+      now: Date.now(),
+      lastProgressAt: this.lastProgressAt,
+      lastProbeAt: this.lastProbeAt,
+      lastRestartAt: this.lastRestartAt,
+      probing: this.probing,
+      quietProbes: this.quietProbes,
+    }, this.stallTiming)
+    if (action !== 'probe') return
+    this.probing = true
+    this.lastProbeAt = Date.now()
+    let advanced = false
+    try {
+      advanced = await this.probeHostAdvance()
+    } catch {
+      // Diagnostic read only: a probe failure must never escape into the journal —
+      // but it is NOT evidence of an advance, so it widens the cadence below like
+      // a clean "no advance" answer (2026-09 review: a broken probe path otherwise
+      // kept a sibling follow in flight every 45 s forever).
+    } finally {
+      this.probing = false
+    }
+    if (advanced) {
+      this.lastRestartAt = Date.now()
+      this.lastProgressAt = Date.now()
+      this.quietProbes = 0
+      this.stream.restart()
+      return
+    }
+    this.quietProbes += 1
+  }
+
+  /** Open one sibling follow and report whether its opening cursor is ahead of the applied one. */
+  private async probeHostAdvance(): Promise<boolean> {
+    const deadline = new AbortController()
+    const signal = AbortSignal.any([this.stream.signal, deadline.signal])
+    const timer = setTimeout(() => {
+      deadline.abort(new Error('journal stall probe deadline'))
+    }, this.stallTiming.probeTimeoutMs)
+    const iterator = this.follow(this.initialRequest, signal)[Symbol.asyncIterator]()
+    try {
+      const next = await iterator.next()
+      // A sibling follow yields RemoteJournalFrame directly — the RemoteStreamItem
+      // wrapper only exists inside RemoteStream (that is why consume() reads
+      // item.value.type). Reading a double-wrapped frame here throws on every probe
+      // and silently kills the whole restart arm (2026-09 review BLOCKER).
+      if (next.done || next.value.type !== 'opened') return false
+      const applied = this.lastCursor
+      if (applied === undefined) return false
+      return this.options.compare(next.value.cursor, applied) > 0
+    } finally {
+      clearTimeout(timer)
+      deadline.abort(new Error('journal stall probe finished'))
+      // Bounded teardown (2026-09 review): a follow whose return() ignores the
+      // aborted signal must not leave probing=true forever — that would silently
+      // disable this stream's silent-journal arm. The abort above already made the
+      // mux send its cancel frame, so the host-side follow is released regardless.
+      const closing = Promise.resolve(iterator.return?.(undefined)).then(
+        () => undefined,
+        () => undefined,
+      )
+      await Promise.race([
+        closing,
+        new Promise<void>((resolve) => {
+          const bound = setTimeout(resolve, this.stallTiming.probeTimeoutMs)
+          ;(bound as unknown as { unref?: () => void }).unref?.()
+          void closing.then(() => { clearTimeout(bound) })
+        }),
+      ])
+    }
   }
 
   private async consume(
@@ -294,7 +448,7 @@ export abstract class RemoteJournalStream<
     this.firstCursor = first === undefined ? undefined : this.options.first(first)
     this.lastCursor = cursor
     this.setResumeCursor(cursor)
-    this.options.publish({
+    this.publish({
       type: 'replace',
       page,
       entries,
@@ -332,7 +486,7 @@ export abstract class RemoteJournalStream<
     if (this.firstCursor === undefined) this.firstCursor = first
     this.lastCursor = cursor
     this.setResumeCursor(cursor)
-    this.options.publish({ type: 'append', entry })
+    this.publish({ type: 'append', entry })
   }
 
   private async replaceThrough(
@@ -382,7 +536,7 @@ export abstract class RemoteJournalStream<
     this.firstCursor = first === undefined ? undefined : this.options.first(first)
     this.lastCursor = this.tailCursor(entries)
     this.setResumeCursor(this.lastCursor)
-    this.options.publish({
+    this.publish({
       type: 'replace',
       page,
       entries,
@@ -524,7 +678,7 @@ export abstract class RemoteJournalStream<
   }
 
   private publishNotification(notification: Notification): void {
-    this.options.publish({
+    this.publish({
       type: 'notification',
       notification,
     } as RemoteJournalChange<Page, Entry, Notification>)

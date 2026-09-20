@@ -21,6 +21,8 @@
     "src/client/stream-carrier-fact.ts",
     "src/client/snapshot-stream.ts",
     "src/client/stream-client.ts",
+    "src/client/stream-forensics.ts",
+    "src/client/stream-stall-policy.ts",
     "src/remote-error-codes.ts",
     "src/stream-protocol.ts"
   ]

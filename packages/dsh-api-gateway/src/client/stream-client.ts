@@ -21,6 +21,14 @@ import {
 } from '../stream-protocol.ts'
 import { Deque } from '@deepseek-ai/dsh-deque'
 import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
+import {
+  REMOTE_STREAM_HANDSHAKE_TIMEOUT_MS,
+  REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS,
+  REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,
+  remoteStreamOpeningTimeoutMs,
+  streamOpeningKey,
+} from './remote-retry-policy.ts'
+import type { StreamForensicsReporter } from './stream-forensics.ts'
 
 const INTERNAL_BASE = 'http://dsh.internal'
 
@@ -35,6 +43,15 @@ export class RemoteStreamCarrierError extends Error {
     this.name = 'RemoteStreamCarrierError'
   }
 }
+
+/**
+ * chamber patch (2026-09 review): a candidate rejection the MUX itself requested
+ * (the connection lane asked for a fresh socket). It is not a connect failure, so
+ * it must not widen the self-heal interval — otherwise the ~20 s page-side socket
+ * cycling this change exists to survive would inflate the mux cadence to the cap
+ * without a single failed attempt.
+ */
+class RemoteStreamReconnectRequest extends RemoteStreamCarrierError {}
 
 interface SocketWaiter {
   readonly revision: number
@@ -52,6 +69,14 @@ export class RemoteStreamMuxClient {
   private revision = 0
   private readonly streams = new Map<string, StreamInbox>()
   private readonly waiters = new Set<SocketWaiter>()
+  /** chamber patch: consecutive opening-item timeouts per logical stream REQUEST (endpoint + payload digest; see remote-retry-policy.ts). */
+  private readonly openingTimeouts = new Map<string, number>()
+  /** chamber patch: when the mux itself last started a connect attempt (self-heal throttle). */
+  private lastMaintainAt = 0
+  /** chamber patch: current self-heal interval; doubles while attempts keep failing. */
+  private maintainIntervalMs = REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS
+  /** chamber patch: the single pending self-heal timer (never a one-shot attempt). */
+  private healTimer: ReturnType<typeof setTimeout> | undefined
   private running = false
   private disposed = false
 
@@ -60,8 +85,9 @@ export class RemoteStreamMuxClient {
    * lands under the control-plane proxy prefix. `''` (or the stock `/api`,
    * which the mux route already carries) restores the upstream behavior.
    * @param basePath - per-entry proxy base path (`/api/i/<id>`); a trailing slash is tolerated.
+   * @param forensics - chamber patch: bounded lifecycle reporter (design 14 §D4); omitted = no reporting.
    */
-  constructor(basePath = '') {
+  constructor(basePath = '', private readonly forensics?: StreamForensicsReporter) {
     const normalized = basePath.replace(/\/+$/, '')
     this.basePath = normalized === '' || normalized === '/api' ? '' : normalized
   }
@@ -79,9 +105,13 @@ export class RemoteStreamMuxClient {
   /** Cancel the current socket or retry wait and start a fresh attempt immediately. */
   reconnect(): void {
     if (!this.running || this.disposed) return
-    const failure = new RemoteStreamCarrierError('api gateway: Remote stream reconnect requested')
+    this.forensics?.('socket-reconnect', 'reconnect requested by the connection lane')
+    const failure = new RemoteStreamReconnectRequest('api gateway: Remote stream reconnect requested')
     const pending = this.keepAlive
     this.revision++
+    // A lane-commanded restart starts from the base cadence: the reconnect below is
+    // the deliberate attempt, not a failure to back off from.
+    this.maintainIntervalMs = REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS
     this.cancelCandidate?.(failure)
     const socket = this.socket
     if (socket !== undefined) {
@@ -113,17 +143,52 @@ export class RemoteStreamMuxClient {
     let carrier: WebSocket | undefined
     let opened = false
     let terminal = false
+    let opening: ReturnType<typeof setTimeout> | undefined
     const abort = (): void => { inbox.fail(signal.reason) }
     signal.addEventListener('abort', abort, { once: true })
     try {
       const socket = await this.waitForSocket(signal)
       signal.throwIfAborted()
+      // chamber patch (design 14 §D4, 2026-09 ui-chat freeze investigation): a
+      // socket that was replaced, or started closing, since `waitForSocket`
+      // resolved would DISCARD the open frame silently — RFC 6455 only throws
+      // for CONNECTING; CLOSING/CLOSED drops the payload. The guard closes that
+      // interleaving window explicitly (it is the last statement before the
+      // synchronous send); the opening deadline below is the durable protection
+      // for every other way an open frame or its answer can be lost.
+      if (socket !== this.socket || socket.readyState !== WebSocket.OPEN) {
+        throw new RemoteStreamCarrierError(
+          'api gateway: Remote stream socket was replaced before its open frame could be sent',
+        )
+      }
       carrier = socket
       this.streams.set(streamId, inbox)
       this.send(socket, { type: 'open', streamId, endpoint, payload })
       opened = true
+      // chamber patch: the Host MUST answer a stream open with its opening item
+      // (snapshot/ready). Nothing below this layer has a deadline — `Session.doOpen`
+      // awaits this iterator forever — so a lost opening frame is indistinguishable
+      // from a live-but-silent stream. Fail the INBOX (never the generation signal:
+      // aborting it would settle the retry lane terminally) so the existing paced
+      // reopen re-issues the stream, and the page fact/chip report the churn.
+      const openingKey = streamOpeningKey(endpoint, payload)
+      const openingBudgetMs = remoteStreamOpeningTimeoutMs(this.openingTimeouts.get(openingKey) ?? 0)
+      opening = setTimeout(() => {
+        this.openingTimeouts.set(openingKey, (this.openingTimeouts.get(openingKey) ?? 0) + 1)
+        this.forensics?.('opening-timeout', `${endpoint} waited ${String(openingBudgetMs)}ms`)
+        inbox.fail(new RemoteStreamCarrierError(
+          `api gateway: Remote stream ${JSON.stringify(endpoint)} delivered no opening item within ${String(openingBudgetMs)}ms`,
+        ))
+      }, openingBudgetMs)
+      let awaitingOpeningItem = true
       while (true) {
         const frame = await inbox.next()
+        if (awaitingOpeningItem) {
+          awaitingOpeningItem = false
+          this.openingTimeouts.delete(openingKey)
+          clearTimeout(opening)
+          opening = undefined
+        }
         signal.throwIfAborted()
         if (frame.type === 'item') {
           yield frame.value
@@ -136,6 +201,7 @@ export class RemoteStreamMuxClient {
         return
       }
     } finally {
+      if (opening !== undefined) clearTimeout(opening)
       signal.removeEventListener('abort', abort)
       this.streams.delete(streamId)
       if (opened && !terminal && carrier?.readyState === WebSocket.OPEN) {
@@ -153,9 +219,12 @@ export class RemoteStreamMuxClient {
     if (!this.disposed) {
       this.disposed = true
       this.running = false
+      this.forensics?.('socket-disposed', 'mux client disposed')
       const error = new Error('api gateway: Remote stream client disposed')
       this.failAll(error)
       for (const waiter of [...this.waiters]) waiter.reject(error)
+      this.stopHealTimer()
+      this.openingTimeouts.clear()
       this.cancelCandidate?.(error)
       const socket = this.socket
       this.socket = undefined
@@ -165,11 +234,33 @@ export class RemoteStreamMuxClient {
   }
 
   private connect(): Promise<WebSocket> {
-    const socket = new WebSocket(this.remoteStreamUrl())
+    let socket: WebSocket
+    try {
+      socket = new WebSocket(this.remoteStreamUrl())
+    } catch (error) {
+      // A synchronous constructor throw (mixed content, an invalid URL) must become
+      // an ordinary carrier failure: the caller's heal path already handles it, and
+      // an uncaught throw inside the heal timer would kill recovery silently.
+      return Promise.reject(new RemoteStreamCarrierError(
+        'api gateway: Remote stream WebSocket could not be constructed',
+        { cause: error },
+      ))
+    }
     const connecting = new Promise<WebSocket>((resolve, reject) => {
       let settled = false
+      // chamber patch (2026-09 review): bound the handshake itself. A socket that
+      // never fires open/error/close would otherwise park this attempt until the
+      // connection lane's readiness timeout, and the mux's self-heal cannot arm
+      // while an attempt is in flight.
+      let handshake: ReturnType<typeof setTimeout> | undefined
+      const clearHandshake = (): void => {
+        if (handshake === undefined) return
+        clearTimeout(handshake)
+        handshake = undefined
+      }
       const rejectCandidate = (error: Error): void => {
         settled = true
+        clearHandshake()
         socket.removeEventListener('open', opened)
         socket.removeEventListener('error', failed)
         socket.removeEventListener('message', received)
@@ -180,7 +271,12 @@ export class RemoteStreamMuxClient {
       }
       const opened = (): void => {
         settled = true
+        clearHandshake()
         this.cancelCandidate = undefined
+        // chamber patch: an established socket resets the self-heal cadence, so its
+        // own loss is healed at once (and no stale timer fires behind it).
+        this.maintainIntervalMs = REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS
+        this.stopHealTimer()
         this.socket = socket
         for (const waiter of [...this.waiters]) waiter.resolve(socket)
         resolve(socket)
@@ -207,6 +303,13 @@ export class RemoteStreamMuxClient {
       }
       const received = (event: MessageEvent): void => { this.receive(socket, event.data) }
       this.cancelCandidate = rejectCandidate
+      const candidate = setTimeout(() => {
+        rejectCandidate(new RemoteStreamCarrierError(
+          'api gateway: Remote stream WebSocket handshake timed out',
+        ))
+      }, REMOTE_STREAM_HANDSHAKE_TIMEOUT_MS)
+      ;(candidate as unknown as { unref?: () => void }).unref?.()
+      handshake = candidate
       socket.addEventListener('open', opened, { once: true })
       socket.addEventListener('error', failed, { once: true })
       socket.addEventListener('message', received)
@@ -275,12 +378,51 @@ export class RemoteStreamMuxClient {
   ): void {
     if (this.socket !== socket) return
     this.socket = undefined
+    this.forensics?.('socket-lost', error.message)
     this.failAll(error)
+    // chamber patch (2026-09 review): the connection lane's generation source is
+    // the $events stream ON THIS MUX, so waiting for the lane to notice a lost
+    // socket is circular whenever the loop is parked (offline gate, between
+    // attempts): every open() would wait forever with no error edge. Self-heal
+    // here — and RE-SCHEDULE, because a single throttled attempt is not enough:
+    // a socket that dies inside the interval, or a replacement connect that fails
+    // before opening, would otherwise park the mux forever.
+    this.scheduleMaintain()
+  }
+
+  /**
+   * chamber patch (2026-09 review): maintain the mux's own reconnect without ever
+   * parking. Maintain now when the current interval has elapsed, otherwise arm
+   * exactly one timer for the remainder; failed attempts widen the interval in
+   * maintain()'s rejection path, and a successful open resets it.
+   */
+  private scheduleMaintain(): void {
+    if (!this.running || this.disposed) return
+    if (this.socket?.readyState === WebSocket.OPEN || this.keepAlive !== undefined) return
+    const elapsed = Date.now() - this.lastMaintainAt
+    if (elapsed >= this.maintainIntervalMs) {
+      this.maintain()
+      return
+    }
+    if (this.healTimer !== undefined) return
+    const timer = setTimeout(() => {
+      this.healTimer = undefined
+      this.scheduleMaintain()
+    }, this.maintainIntervalMs - elapsed)
+    ;(timer as unknown as { unref?: () => void }).unref?.()
+    this.healTimer = timer
+  }
+
+  private stopHealTimer(): void {
+    if (this.healTimer === undefined) return
+    clearTimeout(this.healTimer)
+    this.healTimer = undefined
   }
 
   private maintain(): void {
     if (!this.running || this.disposed) return
     if (this.socket?.readyState === WebSocket.OPEN || this.keepAlive !== undefined) return
+    this.lastMaintainAt = Date.now()
     const revision = this.revision
     const task = this.connect().then(
       () => undefined,
@@ -289,11 +431,29 @@ export class RemoteStreamMuxClient {
         for (const waiter of [...this.waiters]) {
           if (waiter.revision <= revision) waiter.reject(error)
         }
+        // chamber patch: one failed attempt must not end the mux's own recovery —
+        // widen the interval once per consecutive failure (capped at the lane's
+        // own backoff ceiling), release OUR in-flight guard (identity-checked: a
+        // newer attempt's guard must survive) and schedule the next attempt. The
+        // re-schedule lives here, not in a task.then handler, because this handler
+        // consumes the rejection and so the derived task fulfils.
+        if (!(error instanceof RemoteStreamReconnectRequest)) {
+          this.maintainIntervalMs = Math.min(this.maintainIntervalMs * 2, REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS)
+          // A construction/handshake failure that no logical stream is waiting for
+          // would otherwise retry silently forever (2026-09 review): one bounded
+          // fact per attempt makes the loop visible without any log channel.
+          this.forensics?.(
+            'socket-attempt-failed',
+            'connect attempt failed; next attempt in ' + String(this.maintainIntervalMs) + 'ms',
+          )
+        }
+        if (this.keepAlive === task) this.keepAlive = undefined
+        this.scheduleMaintain()
       },
     )
     this.keepAlive = task
     void task.then(() => {
-      this.keepAlive = undefined
+      if (this.keepAlive === task) this.keepAlive = undefined
     })
   }
 
