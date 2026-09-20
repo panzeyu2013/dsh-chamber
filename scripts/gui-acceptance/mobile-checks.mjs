@@ -105,6 +105,14 @@ export const DEVICE_FACTS_EXPRESSION = `(() => {
     mobileFrames: document.querySelectorAll('[data-mobile-frame]').length,
     mobileRoles: [...document.querySelectorAll('[data-mobile-role]')].map(el => el.getAttribute('data-mobile-role')),
     pluginStyle: document.querySelector('style[data-plugin="dsh-chamber-client-ui-mobile"]') !== null,
+    // 键盘守卫（composer.ts installComposerVisibilityGuard）的诊断面：M-4 的
+    // 激活证据不再只是「frame 打了标」——已生效的 data-mobile-kbd 帧、state
+    // 取值（armed | idle | no-seat | no-frame | still-covered）与 spacer 高度
+    // 决定「插件激活了但键盘面没有生效」能不能被看见。
+    mobileKbdFrames: document.querySelectorAll('[data-mobile-frame][data-mobile-kbd]').length,
+    mobileKbdStates: [...document.querySelectorAll('[data-mobile-kbd-state]')].map(el => el.getAttribute('data-mobile-kbd-state')),
+    mobileKbdSpacers: [...document.querySelectorAll('[data-mobile-kbd-spacer]')]
+      .map(el => Math.round(el.getBoundingClientRect().height)),
   }
 })()`
 
@@ -307,18 +315,29 @@ export function hitBoxVerdict(facts, minPx = HIT_BOX_MIN_PX) {
 }
 
 /**
- * 插件激活判定（**观察项**）：模拟成立后，本插件是否真的把 frame 打标了。
- * 失败不判 FAIL：可能本实例根本没装移动插件（对着别的实例走查），这条只帮人
- * 分辨「走查环境不对」与「插件在移动档没生效」。
+ * 插件激活判定：模拟成立后，本插件是否真的把 frame 打标了（**判**：打了就是
+ * PASS），并把守卫自己的键盘诊断面一并读出来（data-mobile-kbd 帧、state、
+ * spacer 高度）。
+ *
+ * 未打标仍是 INFO 而不是硬 FAIL —— 可能本实例根本没装移动插件（对着别的实例
+ * 走查）。但这条腿现在走 `addGated`/`applyRequireRun`：走查一旦用
+ * `--require-run` 声明「插件必须在场」，INFO 就被改判 FAIL，不再靠人工注意
+ * （2026-12 review F9：此前它连 --require-run 都不理，M-4 永远是 INFO）。
  */
 export function pluginActivationVerdict(facts) {
   const stamped = facts.mobileFrames > 0
+  const kbdFrames = facts.mobileKbdFrames ?? 0
+  const kbdStates = facts.mobileKbdStates ?? []
+  const kbdSpacers = facts.mobileKbdSpacers ?? []
   const evidence = [
     `[data-slot="root"]=${facts.rootSlots} [data-mobile-frame]=${facts.mobileFrames} data-mobile-role=${JSON.stringify(facts.mobileRoles)}`,
     `插件 <style> 注入=${facts.pluginStyle}`,
-    stamped ? '' : '未打标：要么本实例未装 dsh-chamber-client-ui-mobile，要么插件在本次模拟下未激活——需要人工确认（不是断言失败）',
+    `键盘面诊断：[data-mobile-frame][data-mobile-kbd]=${kbdFrames} data-mobile-kbd-state=${JSON.stringify(kbdStates)} spacer 高度=${JSON.stringify(kbdSpacers)}`,
+    stamped
+      ? '已打标：插件在本次模拟下激活；键盘面诊断字段为空说明本次走查没有 active 会话/键盘面（不是激活失败）'
+      : '未打标：要么本实例未装 dsh-chamber-client-ui-mobile，要么插件在本次模拟下未激活——需要人工确认（--require-run 下判 FAIL）',
   ].filter(Boolean).join('\n')
-  return { ok: null, evidence }
+  return { ok: stamped ? true : null, evidence }
 }
 
 /**

@@ -79,6 +79,7 @@
 
 - 移动端Web访问面（design 17 §18；契约 §18.3–§18.5、门禁 §18.6）：
   未实施：移动中量化 + 静止吸附精确值（现16px固定量化）；设置分区滚动位置记忆（现一律复位；无稳定section id、异步高度不足会钳顶）；宽屏触控（iPad横屏1024px+）键盘补偿（行为层与CSS同在1023px触屏档，扩展需设计决策）；原生 `title` 长按气泡不抑制（刻意手势，部分title是截断行唯一入口）。
+  composer 可见性守卫（layer-5 实测修订，design 17 §18.4.4）：台架为真实上游 CSS/DOM + 本包产物（Chromium），**WebKit 侧未验证**——sticky `bottom` 内缩在 iOS Safari 的实际落位、真实键盘事件序列下的 arm 时机与死区待真机；判据 = 真机读 `[data-mobile-frame][data-mobile-kbd-state]`（出现 `still-covered` 即该引擎不认 inset，需启用备选执行器：spacer-only 抬升 / seat 内 transform）且输入区底边不落在键盘之下。
   2026-09-13复审开放项（判据待实机）：
   ① 触屏档右栏全屏与抽屉让位（`mobile/src/client/styles.ts:175-230`，锚点 `data-sidebar-right-panel`）；让位靠两臂——上游轨道标志 `data-rightbar-collapsed`（手机档面板展开同样track=false）加 `[data-rightbar-fullscreen]`；规则含iOS安全区与 `box-sizing:border-box`；768–1023档隐藏自带模式控件（钉死全屏），面板子树 `overscroll-behavior:contain`。待判：769–1023观感、44px退出控件够用否、关闭后抽屉回原态、刘海/home indicator压内容否、键盘弹起时开面板是否blur composer。
   ② 新并入44px底线：会话头视图tab（恒两个，`styles.ts:430-448`）后头部增高、tab条改换行后「第三个视图」可达性；dockkit条（`styles.ts:470-520`；chip 20px关闭控件刻意排除、条内按钮border-box、chips保持content-box，否则chip最小值100→80px而放宽分屏判定）；会话头座席底线仍在内容盒（图标按钮约56px）。待真机判48px行观感、≤480/≤360排布、横滑与谱系hover-open互扰、横向平移对抽屉边缘手势。

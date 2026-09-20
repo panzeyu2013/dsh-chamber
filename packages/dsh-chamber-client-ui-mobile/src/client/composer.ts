@@ -279,7 +279,13 @@ function revealCaretInComposerScroll(input: Element | null): void {
 /** Did an editability mutation flip the composer from non-editable to
  *  editable, while it holds focus? `recordOldValues` carries the observed
  *  attribute before-images (`attributeOldValue`), the tracked-state pair the
- *  in-memory fallback. Pure — unit-tested. */
+ *  in-memory fallback.
+ *
+ *  CALLER CONTRACT (2026-09 measured/review fix): pass the before-images of
+ *  records whose TARGET is the composer element itself. Passing every
+ *  `contenteditable` record of the batch makes any nested Lexical decorator
+ *  that flips its own attribute blur+refocus the composer MID-TYPING (the
+ *  observer watches the whole document subtree). Pure — unit-tested. */
 export function isEditabilityFlipToEditable(
   editableNow: boolean,
   focused: boolean,
@@ -342,7 +348,9 @@ export function installEditabilityRecovery(root: ParentNode = document): () => v
       editable,
       input === document.activeElement,
       previous,
-      records.map(record => record.oldValue),
+      // Only the composer's OWN attribute flip may recover the keyboard: a
+      // nested decorator's flip used to blur+refocus the composer mid-typing.
+      records.filter(record => record.target === input).map(record => record.oldValue),
     )) {
       input.blur()
       input.focus({ preventScroll: true })
@@ -378,9 +386,9 @@ export function isKeyboardOpen(layoutHeight: number, visualHeight: number): bool
  *   4. visualViewport keyboard detection — feeds layer 3's guard and the
  *      keyboard visibility state.
  * Layer 2 (editability flip) lives in installEditabilityRecovery; layer 5
- * (keyboard-visible composer compensation) lives in the stylesheet
+ * (composer visibility guard) lives in the stylesheet
  * (interactive-widget=resizes-content where the engine honors it) +
- * installKeyboardCompensation below (the visual-viewport fallback).
+ * installComposerVisibilityGuard below (the measured-overlap fallback).
  */
 
 /**
@@ -534,44 +542,74 @@ export function installImeLadder(root: ParentNode = document): ImeLadder {
 }
 
 /**
- * Keyboard-visible composer compensation (IME ladder layer 5, P1.5 +
- * mobile round): with interactive-widget=resizes-content the layout viewport
- * already shrinks; this is the fallback for engines that ignore the token —
- * iOS Safari (the soft keyboard overlays the LAYOUT viewport) and older
- * Android WebViews. The official composer seat is `position: sticky;
- * bottom: 0` and a FLOW child of the conversation scrollport, so it pins to
- * the LAYOUT bottom and ends up BEHIND the keyboard; scrolling the
- * scrollport cannot lift it (sticky re-pins it) and scrollIntoView cannot
- * see the visual viewport — the old pinning attempt was a no-op exactly
- * there. The compensation mirrors resizes-content semantics against the
- * visual viewport instead: while the keyboard is open the seat's sticky
- * bottom is raised to the keyboard top and the scrollport gets an equal
- * bottom padding (both via the frame's `--chamber-mobile-kbd-offset`, see
- * styles.ts), and a bottom-pinned conversation is scrolled down by the same
- * delta so the message tail stays readable right above the raised seat. The
- * official chat already re-glues the OUTER scroll on seat resize (ui-chat's
- * ResizeObserver follows `[data-composer-seat]`), so this installer owns only
- * the keyboard-driven geometry change.
+ * Composer visibility guard (IME ladder layer 5, measured revision).
  *
- * Guards (2026-12 review + cross-check round): a visual-viewport shrink is
- * necessary but NOT sufficient — zoom shrinks the visual viewport with no
- * keyboard (the plugin deliberately keeps user-scalable for WCAG 1.4.4), and
- * a keyboard can belong to a field that is not the composer. The community's
- * most developed implementation reached the same conclusion after a
- * foldable/split-screen false-positive round (dsh-meow-smooth's dynamic
- * baseline + editable-focus signal).
+ * THE MEASURED DEFECT the earlier form carried (Chrome 152 rig with the real
+ * upstream CSS + this bundle, 390x844, keyboard top at 508): the installer
+ * inferred the keyboard from `window.innerHeight` vs the visual viewport and
+ * wrote the lift BOTH as the seat's sticky `bottom` AND as a scrollport
+ * `padding-bottom`. The scrollport is the sticky containing block, so its own
+ * padding moved the sticky threshold up by the same amount and the seat was
+ * lifted TWICE: measured seat [40..140] where [392..492] was intended — the
+ * composer flew 368px above the keyboard. And because the arm decision was a
+ * heuristic fed by events engines do not guarantee, a missing/late
+ * visualViewport event left the composer BEHIND the keyboard (measured
+ * `kbd=false, covered=+336` with the keyboard open).
+ *
+ * THE MEASURED FORM: do not infer the keyboard — measure the overlap.
+ * `covered = scrollport.getBoundingClientRect().bottom - (vv.offsetTop +
+ * vv.height)`, both in layout coordinates at any pan/zoom, and the scrollport's
+ * border box is flex-sized (ui-layout/conversation CSS: `height:100%` +
+ * `flex:1; min-height:0`), so it is an ACTUATOR INVARIANT: our own padding /
+ * scrollTop / seat-inset writes cannot move it and the loop has a fixed point
+ * instead of oscillating. One actuator only — the seat's sticky `bottom`
+ * (styles.ts); the scroll range the tail needs comes from an in-flow spacer
+ * inserted just before the seat, which does NOT shrink the sticky containing
+ * block (this is why the scrollport padding arm is gone).
+ *
+ * Guards: hysteresis (arm at >= KBD_ARM_PX, release below KBD_DISARM_PX) keeps
+ * browser-chrome overlap from micro-lifting the seat; typing intent (editable
+ * focus / composer selection / grace window) keeps the guard off fields that
+ * are not the composer. Triggers: visualViewport resize/scroll, window resize,
+ * focusin/focusout, visibilitychange, a `[data-phase]` observer (the sticky
+ * seat only exists in the active phase) and a BOUNDED poll while an editable is
+ * focused, so an engine that delivers no viewport event still converges.
+ * Every outcome is written to the frame as `data-mobile-kbd` (applied px) and
+ * `data-mobile-kbd-state` (armed | idle | no-seat | no-frame | still-covered)
+ * — the guard can no longer fail silently.
+ *
+ * Verdicts are bounded: after writing the offset the guard re-measures at
+ * most KBD_MAX_VERIFY_STEPS times (KBD_VERIFY_SLACK_PX tolerance) and then
+ * reports `still-covered` instead of ramping up forever if an engine ignores
+ * the sticky inset. The official chat already re-glues the OUTER scroll on
+ * seat resize (ui-chat's ResizeObserver follows `[data-composer-seat]`), so
+ * this installer owns only the keyboard-driven geometry change.
+ *
+ * Why the measurement replaced the inference: the old arm signal
+ * (`innerHeight` vs the visual viewport = "keyboard open") is a guess about a
+ * field the plugin does not own, and it needed extra guards against its own
+ * false positives — a pinch/FOCUS zoom shrinks the visual viewport with no
+ * keyboard (the plugin deliberately keeps user-scalable for WCAG 1.4.4), and a
+ * keyboard can belong to a field that is not the composer (settings sheet,
+ * question cards). The measured overlap needs no keyboard inference at all:
+ * "the conversation's bottom edge is below the visible bottom" is exactly the
+ * property the guard must fix, whatever caused it, and it is only actionable
+ * while the composer is the focused field — so the TYPE-GATED intent check
+ * stays (editable focus / composer selection / grace window, plus
+ * composer-only under zoom), and the keyboard heuristic is gone from this
+ * path.
  *
  * Zoom policy (cross-check P1): a blanket scale veto is WRONG — iOS
  * focus-zooms on the drawer's 13px search field (ui-workspace:1187) and the
  * page stays zoomed, so vetoing every zoomed state would leave the composer
- * behind the keyboard for the rest of the session. Under zoom the compensation
- * is served for the COMPOSER only: `covered = layout - offsetTop - vv.height`
- * is exactly how far the sticky seat's layout position exceeds the visual
- * viewport's bottom edge, so lifting by it brings the composer back above the
- * keyboard (the browser's own pan usually already zeroes it). Non-composer
- * fields keep the veto — panning a zoomed page must not drive the offset.
- * The focus-zoom trigger itself is also removed at the source (styles.ts
- * gives the drawer's fields the same 16px floor as the composer/dialogs).
+ * behind the keyboard for the rest of the session. With the measured overlap
+ * the zoom case needs no special branch: the pan/zoom is already inside
+ * `vv.offsetTop + vv.height`, so the value is exactly how far the scrollport's
+ * bottom edge exceeds the visible bottom (measured: 2x zoom → 400px lift,
+ * 18px dead band). Non-composer fields keep the veto — panning a zoomed page
+ * must not drive the offset. The focus-zoom trigger itself is also removed at
+ * the source (styles.ts gives the drawer's fields the same 16px floor as the
+ * composer/dialogs).
  *
  * Re-sync entries beyond visualViewport events: window resize (rotation /
  * browser chrome), visibilitychange (mobile browsers do not deliver the
@@ -596,19 +634,48 @@ export const MOBILE_KBD_VAR = '--chamber-mobile-kbd-offset'
  *  keyboard-close animation and the editability-recovery refocus instead of
  *  dropping the seat mid-transition. */
 export const KBD_EDITABLE_FOCUS_GRACE_MS = 1_200
+/** Arm threshold: the overlap must be clearly keyboard-scale before the guard
+ *  lifts the composer. Chrome/Firefox bottom-bar overlap sits well below this,
+ *  so browser chrome alone never micro-lifts the seat (measured: a 60px
+ *  overlap stays idle). */
+export const KBD_ARM_PX = 96
+/** Release threshold, below the arm threshold on purpose (hysteresis): once
+ *  armed the lift is held until the overlap is effectively gone, so a
+ *  sliding keyboard (or a 1-2px wobble) cannot flap the seat. */
+export const KBD_DISARM_PX = 72
+/** Post-write acceptance tolerance: how far the seat's bottom may still sit
+ *  below the visible bottom before the guard keeps correcting. */
+export const KBD_VERIFY_SLACK_PX = 24
+/** Bounded post-write corrections per sync (never an unbounded ramp: an engine
+ *  that ignores the sticky inset must be REPORTED, not chased). */
+export const KBD_MAX_VERIFY_STEPS = 2
+/** Bounded poll cadence/budget while an editable holds focus. Engines that
+ *  deliver no visualViewport event on keyboard open (Android WebView) are
+ *  covered by this, and it stops as soon as focus leaves. */
+export const KBD_POLL_MS = 250
+export const KBD_POLL_BUDGET_MS = 4_000
+/** Diagnosis surface (plugin-owned attribute, never an official one). */
+export const MOBILE_KBD_STATE_ATTR = 'data-mobile-kbd-state'
+/** The in-flow spacer that supplies the scroll range above the raised seat
+ *  (replaces the scrollport padding arm, see the section doc). */
+export const MOBILE_KBD_SPACER_ATTR = 'data-mobile-kbd-spacer'
 /** The active conversation's sticky composer seat (phase guard: hero/blank
  *  seats are not sticky — only an active session has the bottom-pinned
  *  seat the keyboard can cover). */
 const ACTIVE_SEAT_SELECTOR = '[data-phase="active"] [data-composer-seat]'
 
-/** Height of the layout viewport bottom edge the keyboard covers: layout
- *  bottom minus the visual viewport bottom, both in layout coordinates.
- *  Valid at any zoom: the visual viewport's reported height already accounts
- *  for both the zoom shrink and the keyboard, so the difference is exactly
- *  how far the layout bottom exceeds the visible bottom edge. Pure —
- *  unit-tested. */
-export function kbdCoveredHeight(layoutHeight: number, visualHeight: number, visualOffsetTop: number): number {
-  return Math.max(0, layoutHeight - visualOffsetTop - visualHeight)
+/** Hysteresis + quantization for the visibility guard: arm only when the
+ *  measured overlap is keyboard-scale, hold while armed until it is
+ *  effectively gone, then quantize (ceil + headroom) so the seat never lands
+ *  under the keyboard top. Pure — unit-tested. */
+export function kbdLiftTarget(
+  covered: number,
+  armed: boolean,
+  armThreshold: number = KBD_ARM_PX,
+  disarmThreshold: number = KBD_DISARM_PX,
+): number {
+  if (covered <= (armed ? disarmThreshold : armThreshold)) return 0
+  return nextKbdOffset(covered)
 }
 
 /** Quantized (ceil) offset: applied in steps while the keyboard slides,
@@ -631,22 +698,6 @@ export function nextKbdOffset(
 export function isAtScrollEnd(scrollTop: number, scrollHeight: number, clientHeight: number, slack = 8): boolean {
   if (clientHeight <= 0 || scrollHeight <= clientHeight) return true
   return scrollTop + clientHeight >= scrollHeight - slack
-}
-
-/** Should the keyboard compensation arm? Pure — unit-tested. See the zoom
- *  policy above: a shrink alone is not enough, and under zoom only the
- *  composer is served. */
-export function shouldCompensateKeyboard(
-  keyboardOpen: boolean,
-  visualScale: number,
-  editableFocused: boolean,
-  composerFocused: boolean,
-): boolean {
-  if (!keyboardOpen || !editableFocused) return false
-  // Zoom (pinch or iOS focus-zoom): vv.height shrinks while the layout
-  // viewport does not. 1.01 tolerates float noise in the reported scale.
-  if (visualScale > 1.01 && !composerFocused) return false
-  return true
 }
 
 /** Does this focus target open a soft keyboard? Covers the Lexical composer
@@ -672,21 +723,64 @@ function isComposerSelection(): boolean {
   return element.closest(COMPOSER_INPUT_SELECTOR) !== null || element.closest('[data-composer-seat]') !== null
 }
 
-export function installKeyboardCompensation(root: ParentNode = document): () => void {
-  const vv = window.visualViewport
-  if (vv === null) return () => {}
+export function installComposerVisibilityGuard(root: ParentNode = document): () => void {
   let applied = 0
   /** The frame currently carrying the offset (teardown handle: the frame
    *  persists across seat remounts, so disarm must target the element that
    *  actually carries the attribute). */
   let armedFrame: HTMLElement | null = null
+  /** The in-flow spacer that gives the conversation its scroll range above
+   *  the raised seat (the scrollport padding arm was removed: it shrank the
+   *  sticky containing block and double-lifted the seat — see the section
+   *  doc). */
+  let spacer: HTMLElement | null = null
   let lastEditableFocusAt = 0
+  let pollTimer: ReturnType<typeof setInterval> | null = null
+  let pollUntil = 0
+  let disposed = false
+  let phaseNode: Element | null = null
+
+  /** The visible bottom edge in LAYOUT coordinates (pan + zoom included). */
+  const visibleBottom = (): number => {
+    const vv = window.visualViewport
+    return vv === null ? window.innerHeight : vv.offsetTop + vv.height
+  }
+
+  /** Diagnosis surface: every outcome is readable off the frame (and off
+   *  <html> so a missing frame is still visible). */
+  const setState = (state: string): void => {
+    const frame = armedFrame ?? root.querySelector('[data-mobile-frame]')
+    if (frame instanceof HTMLElement) frame.setAttribute(MOBILE_KBD_STATE_ATTR, state)
+    document.documentElement.setAttribute(MOBILE_KBD_STATE_ATTR, state)
+  }
+
+  const removeSpacer = (): void => {
+    if (spacer === null) return
+    spacer.remove()
+    spacer = null
+  }
+
+  /** The diagnosis surface is torn down with the actuator: a disposed guard
+   *  (or one that has just gone idle) must not leave `data-mobile-kbd-state`
+   *  behind, on the frame OR on <html> — the acceptance walkthrough reads
+   *  both, and a stale 'armed' after dispose reported a live offset that no
+   *  longer existed. */
+  const clearState = (): void => {
+    for (const frame of root.querySelectorAll('[data-mobile-frame]')) {
+      if (frame instanceof HTMLElement) frame.removeAttribute(MOBILE_KBD_STATE_ATTR)
+    }
+    document.documentElement.removeAttribute(MOBILE_KBD_STATE_ATTR)
+  }
 
   const disarm = (): void => {
-    if (armedFrame === null) return
-    armedFrame.removeAttribute(MOBILE_KBD_ATTR)
-    armedFrame.style.removeProperty(MOBILE_KBD_VAR)
-    armedFrame = null
+    if (armedFrame !== null) {
+      armedFrame.removeAttribute(MOBILE_KBD_ATTR)
+      armedFrame.style.removeProperty(MOBILE_KBD_VAR)
+      armedFrame = null
+    }
+    removeSpacer()
+    clearState()
+    applied = 0
   }
 
   /** The keyboard's owner: an editable element focused right now, a caret
@@ -699,8 +793,9 @@ export function installKeyboardCompensation(root: ParentNode = document): () => 
     return Date.now() - lastEditableFocusAt < KBD_EDITABLE_FOCUS_GRACE_MS
   }
 
-  /** Is the keyboard the COMPOSER's? The zoom policy serves only this case
-   *  (cross-check P1). */
+  /** Is the field the COMPOSER's? Only this case is served: a keyboard that
+   *  belongs to the settings sheet or a question card must not move the seat
+   *  (and panning a zoomed page must not drive the offset). */
   const composerFocused = (): boolean => {
     const active = document.activeElement
     if (active instanceof Element
@@ -710,63 +805,170 @@ export function installKeyboardCompensation(root: ParentNode = document): () => 
     return isComposerSelection()
   }
 
+  /** The active conversation's sticky seat. Only an ACTIVE session has the
+   *  bottom-pinned seat the keyboard can cover (hero/blank seats are not
+   *  sticky, and `settling` hides this one). Single-shell deployment: one
+   *  seat — but the phase attribute is NOT unique: a second, hidden
+   *  `[data-phase="active"]` root earlier in DOM order used to win the
+   *  first-match query and the guard served a seat whose scrollport is
+   *  zero-sized while the real seat stayed covered. A candidate is only
+   *  committed when its scrollport is actually laid out. */
+  const seatOf = (): Element | null => {
+    for (const candidate of root.querySelectorAll(ACTIVE_SEAT_SELECTOR)) {
+      if (!(candidate instanceof Element)) continue
+      const scroller = candidate.closest('[data-conversation-scroll]')
+      if (!(scroller instanceof HTMLElement)) continue
+      const rect = scroller.getBoundingClientRect()
+      if (rect.width <= 0 || rect.height <= 0) continue
+      return candidate
+    }
+    return null
+  }
+
+  /** THE MEASUREMENT: how far the conversation scrollport's bottom edge sits
+   *  below the visible bottom edge, in layout coordinates. The scrollport's
+   *  border box is flex-sized (never content- or padding-driven), so this
+   *  value is invariant under the guard's own writes — the loop has a fixed
+   *  point instead of oscillating. `null` when the scrollport is absent. */
+  const coveredOf = (seat: Element): number | null => {
+    const scroller = seat.closest('[data-conversation-scroll]')
+    if (!(scroller instanceof HTMLElement)) return null
+    return scroller.getBoundingClientRect().bottom - visibleBottom()
+  }
+
+  /** The sticky seat only exists in the active phase: a phase flip must
+   *  re-arm (no viewport/focus event follows it). */
+  const phaseObserver = new MutationObserver(() => sync())
+  const observePhase = (): void => {
+    const node = root.querySelector('[data-phase]')
+    if (node === phaseNode) return
+    phaseObserver.disconnect()
+    phaseNode = node
+    if (node !== null) phaseObserver.observe(node, { attributes: true, attributeFilter: ['data-phase'] })
+  }
+
+  /** Grow the flow above the seat by the lift, without touching the
+   *  scrollport's own box (a scrollport padding would shrink the sticky
+   *  containing block — the measured double-lift defect). */
+  const ensureSpacer = (seat: Element, height: number): void => {
+    if (spacer === null || !spacer.isConnected) {
+      spacer = document.createElement('div')
+      spacer.setAttribute(MOBILE_KBD_SPACER_ATTR, '')
+      spacer.style.cssText = 'flex:none;pointer-events:none'
+      seat.parentElement?.insertBefore(spacer, seat)
+    } else if (spacer.nextElementSibling !== seat) {
+      // The renderer rebuilds the seat list on remount: keep the spacer
+      // immediately before the seat instead of leaving it orphaned between
+      // other children (the offset would otherwise space the wrong gap).
+      seat.parentElement?.insertBefore(spacer, seat)
+    }
+    spacer.style.height = `${height}px`
+  }
+
   const sync = (): void => {
-    const layoutHeight = window.innerHeight
-    const target = shouldCompensateKeyboard(
-      isKeyboardOpen(layoutHeight, vv.height),
-      vv.scale,
-      editableFocused(),
-      composerFocused(),
-    )
-      ? nextKbdOffset(kbdCoveredHeight(layoutHeight, vv.height, vv.offsetTop))
-      : 0
-    if (target === 0) {
-      applied = 0
+    if (disposed) return
+    observePhase()
+    const seat = seatOf()
+    if (seat === null) {
       disarm()
+      setState('no-seat')
       return
     }
-    // Only the ACTIVE session seat is sticky bottom-pinned; a hero/blank
-    // seat must not be lifted (its scrollport can scroll normally).
-    // Single-shell deployment: one seat.
-    const seat = root.querySelector(ACTIVE_SEAT_SELECTOR)
-    if (!(seat instanceof Element)) return
     const frame = seat.closest('[data-mobile-frame]')
-    if (!(frame instanceof HTMLElement)) return
-    // Idempotent ensure keyed on the FRAME ELEMENT, not on the numeric
-    // offset alone: a renderer remount replaces the AppFrame while the
-    // keyboard stays open with unchanged geometry, so `target === applied`
-    // must not short-circuit — the new frame still needs the attribute
-    // (review fix: the old form left the composer behind the keyboard until
-    // the geometry happened to change).
-    const armed = frame === armedFrame && frame.hasAttribute(MOBILE_KBD_ATTR)
-    if (armed && target === applied) return
+    if (!(frame instanceof HTMLElement)) {
+      disarm()
+      setState('no-frame')
+      return
+    }
+    const covered = coveredOf(seat)
+    if (covered === null) {
+      disarm()
+      setState('no-seat')
+      return
+    }
+    const target = kbdLiftTarget(covered, applied > 0)
+    if (target === 0 || !editableFocused() || !composerFocused()) {
+      disarm()
+      setState('idle')
+      return
+    }
     // A re-arm onto a DIFFERENT frame must clean the previous one: the old
     // element keeps its plugin-owned attribute/custom property forever
-    // otherwise (cross-check: only reachable while detached, but it is
-    // plugin state leaking onto a dead node).
+    // otherwise (a renderer remount replaces the AppFrame while the keyboard
+    // stays open).
     if (armedFrame !== null && armedFrame !== frame) disarm()
-    // Was the conversation pinned to its end before this step? If yes, keep
-    // the message tail glued above the seat: the scrollport grows by the
-    // offset (bottom padding) below the content, so without a matching
-    // scroll the last messages would slide behind the keyboard. The end
-    // check runs BEFORE the geometry change (the post-change max already
-    // includes the new padding).
     const scroller = seat.closest('[data-conversation-scroll]')
     const wasAtEnd = scroller instanceof HTMLElement
       && isAtScrollEnd(scroller.scrollTop, scroller.scrollHeight, scroller.clientHeight)
-    // A freshly armed frame carries no offset yet: the effective previous
-    // offset is 0, so the glue delta is the full target (the alternative —
-    // trusting the stale counter — would under-scroll after a remount).
-    const delta = armed ? target - applied : target
-    frame.setAttribute(MOBILE_KBD_ATTR, '')
-    frame.style.setProperty(MOBILE_KBD_VAR, `${target}px`)
-    armedFrame = frame
-    applied = target
-    // The scrollTop write forces layout with the new padding already in
-    // place; a pinned scrollport clamps exactly to the new content end.
-    if (wasAtEnd && scroller instanceof HTMLElement && delta > 0) {
-      scroller.scrollTop += delta
+    /** ONE writer for the whole actuator: the frame attribute (which activates
+     *  the stylesheet arm), the custom property and the spacer height are
+     *  never allowed to disagree — the attribute used to be stamped from the
+     *  pre-verify target while the property/spacer ended higher (measured:
+     *  attr=352 / var=1056 / spacer=1056 with an engine that ignores the
+     *  inset). */
+    const applyLift = (value: number): void => {
+      frame.setAttribute(MOBILE_KBD_ATTR, String(value))
+      frame.style.setProperty(MOBILE_KBD_VAR, `${value}px`)
+      ensureSpacer(seat, value)
+      applied = value
     }
+    armedFrame = frame
+    let lift = target
+    applyLift(lift)
+    // Was the conversation pinned to its end before this step? If yes, keep
+    // the message tail glued above the raised seat: the spacer grows the
+    // scroll range below the content, so the pinned scrollport must follow.
+    if (wasAtEnd && scroller instanceof HTMLElement) scroller.scrollTop += lift
+    // BOUNDED verification: an engine that ignores the sticky inset, or a
+    // geometry that landed short, is corrected at most
+    // KBD_MAX_VERIFY_STEPS times and then REPORTED — never chased. The
+    // residual is measured AFTER the lift was applied, so it is a fresh TOTAL
+    // requirement: subtracting the already-applied lift turns it into the
+    // missing delta. A residual the applied lift already covers therefore
+    // adds nothing — an engine that ignores the sticky inset can never
+    // compound the spacer past the lift the measured overlap called for
+    // (measured 3x overshoot before this).
+    let steps = 0
+    while (steps < KBD_MAX_VERIFY_STEPS) {
+      const residual = seat.getBoundingClientRect().bottom - visibleBottom()
+      if (residual <= KBD_VERIFY_SLACK_PX) break
+      const extra = nextKbdOffset(residual) - lift
+      if (extra <= 0) break
+      lift += extra
+      applyLift(lift)
+      if (wasAtEnd && scroller instanceof HTMLElement) scroller.scrollTop += extra
+      steps += 1
+    }
+    // FINAL-lift write: after the loop the attribute carries the same value as
+    // the custom property and the spacer.
+    applyLift(lift)
+    const residual = seat.getBoundingClientRect().bottom - visibleBottom()
+    setState(residual > KBD_VERIFY_SLACK_PX ? 'still-covered' : 'armed')
+  }
+
+  /** Bounded poll while an editable holds focus: engines that deliver NO
+   *  visualViewport event on keyboard open (Android WebView) still converge,
+   *  and the poll stops on budget expiry or when focus leaves the editable.
+   *
+   *  The budget is PER FOCUS ARM, never per event: the deadline is stamped
+   *  once when the interval is created and a running interval is never
+   *  extended. Document-wide pointerdown/focusin churn used to reset
+   *  `pollUntil` before the early return, so 4Hz synthetic taps kept the
+   *  interval alive across the whole 4s window and beyond (measured: it never
+   *  cleared over 6.5s) — the convergence aid became a permanent 250ms sync
+   *  loop. Re-arming is refused while the timer runs; a pointerdown only
+   *  re-syncs once and focusin starts the next genuine focus episode. */
+  const startPoll = (): void => {
+    if (pollTimer !== null) return
+    pollUntil = Date.now() + KBD_POLL_BUDGET_MS
+    pollTimer = setInterval(() => {
+      if (disposed || Date.now() > pollUntil || !editableFocused()) {
+        if (pollTimer !== null) clearInterval(pollTimer)
+        pollTimer = null
+        return
+      }
+      sync()
+    }, KBD_POLL_MS)
   }
 
   const onViewportChange = (): void => sync()
@@ -774,6 +976,7 @@ export function installKeyboardCompensation(root: ParentNode = document): () => 
     if (isEditableFocus(event.target)) lastEditableFocusAt = Date.now()
     // A seat remount (session switch / reconnect settle) re-arms here even
     // when no visualViewport event follows.
+    startPoll()
     sync()
   }
   const onFocusOut = (event: FocusEvent): void => {
@@ -783,25 +986,37 @@ export function installKeyboardCompensation(root: ParentNode = document): () => 
     // focusin (cross-check D2).
     if (isEditableFocus(event.target)) lastEditableFocusAt = Date.now()
   }
+  const onPointerDown = (): void => {
+    // A tap can raise the keyboard with no viewport event: re-sync ONCE. The
+    // poll budget belongs to the focus episode (onFocusIn) — a pointerdown
+    // must never re-arm or extend it.
+    sync()
+  }
   const onVisibility = (): void => {
     if (document.visibilityState === 'visible') sync()
   }
+  startPoll()
   sync()
-  vv.addEventListener('resize', onViewportChange)
-  vv.addEventListener('scroll', onViewportChange)
+  window.visualViewport?.addEventListener('resize', onViewportChange)
+  window.visualViewport?.addEventListener('scroll', onViewportChange)
   window.addEventListener('resize', onViewportChange)
   document.addEventListener('focusin', onFocusIn, true)
   document.addEventListener('focusout', onFocusOut, true)
+  document.addEventListener('pointerdown', onPointerDown, true)
   document.addEventListener('visibilitychange', onVisibility)
   return () => {
-    vv.removeEventListener('resize', onViewportChange)
-    vv.removeEventListener('scroll', onViewportChange)
+    disposed = true
+    if (pollTimer !== null) clearInterval(pollTimer)
+    phaseObserver.disconnect()
+    window.visualViewport?.removeEventListener('resize', onViewportChange)
+    window.visualViewport?.removeEventListener('scroll', onViewportChange)
     window.removeEventListener('resize', onViewportChange)
     document.removeEventListener('focusin', onFocusIn, true)
     document.removeEventListener('focusout', onFocusOut, true)
+    document.removeEventListener('pointerdown', onPointerDown, true)
     document.removeEventListener('visibilitychange', onVisibility)
-    applied = 0
     disarm()
+    clearState()
   }
 }
 

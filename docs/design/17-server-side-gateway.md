@@ -1363,13 +1363,25 @@ microtask 合并）。**dsh-client-web fork 是这些补丁的合法落点**（�
 判定 / 键盘补偿）+ 30s busy 自愈 + 键盘遮挡兜底（实现见
 `packages/dsh-chamber-client-ui-mobile/src/client/composer.ts`）。
 
-**键盘补偿（layer-5）**：原「键盘钉住」（`installKeyboardPinning`，对 seat 做 `scrollIntoView`）在 iOS 上
-**恒为空转**——官方 composer seat 是 `position: sticky` 且是会话滚动器 `[data-conversation-scroll]` 的
-**流内子元素**，滚动它只会被 sticky 钉回 layout 底部。现改为**键盘补偿**
-（`installKeyboardCompensation`）：键盘打开期间把 seat 的 sticky `bottom` 抬到键盘顶、给滚动器加等量
-`padding-bottom`（frame 级 `data-mobile-kbd` + `--chamber-mobile-kbd-offset`），并给贴底会话做等量 scrollTop
-补偿；外层跟随仍归官方（ui-chat 的 seat ResizeObserver）。`covered = layout − offsetTop − vv.height` 在任意
-缩放态都成立（vv 高度已含缩放与键盘收缩）。
+**composer 可见性守卫（layer-5，实测修订）**：原「键盘钉住」（`installKeyboardPinning`，对 seat 做
+`scrollIntoView`）在 iOS 上**恒为空转**——官方 composer seat 是 `position: sticky` 且是会话滚动器
+`[data-conversation-scroll]` 的**流内子元素**，滚动它只会被 sticky 钉回 layout 底部。
+
+其后的「键盘补偿」（旧导出 `installKeyboardCompensation`，已由 `installComposerVisibilityGuard` 取代；配套的
+`kbdCoveredHeight`/`shouldCompensateKeyboard` 一并删除）在 390×844 真机引擎台架（Chrome 152 + 从用户网关实抓的
+上游 CSS/DOM + 本插件真实产物）上实测暴露两处硬缺陷，均已修复：
+
+1. **双倍抬升（几何）**：旧实现把抬升**同时**写成 seat 的 sticky `bottom` 与滚动器的 `padding-bottom`；
+   而滚动器**同时是 seat 的 sticky 包含块**，其自身 padding 把 sticky 阈值一并垫高 ⇒ 两臂叠加。实测：键盘
+   顶在 508 时 seat 被抬到 `[40..140]`（意图 `[392..492]`）——**超出键盘顶 368px**，输入框飞到屏幕上方。
+   现在执行器**只有一个**：seat 的 sticky `bottom`；会话滚动余量由守卫插在 seat 之前的**流内 spacer**
+   （`data-mobile-kbd-spacer`）提供，绝不再给滚动器加 padding。
+2. **不 arm（触达）**：旧实现以 `isKeyboardOpen(innerHeight vs vv)` 推断键盘，输入是引擎事件驱动的启发式；
+   事件缺失/迟到（Android WebView 盲区）时整条补偿不动。实测：键盘打开但无 vv 事件 ⇒ `kbd=false`、
+   `covered=+336`，**composer 被键盘整块盖住**（用户报告的症状）。现在**不推断键盘、只测量遮挡**：
+   `covered = scrollport.getBoundingClientRect().bottom − (vv.offsetTop + vv.height)`，两个量同处 layout 坐标系、
+   平移/缩放自洽；滚动器盒高由 flex 决定（`height:100%` + `flex:1;min-height:0`），是我们的写入**改不动**的量
+   ⇒ 闭环有不动点、不会振荡。
 
 守卫与取舍：
 - **可编辑焦点**（focusin + focusout 打点 + composer 选区兜底）：收缩不是充分条件；focusout 打点让「提交期
@@ -1386,6 +1398,30 @@ microtask 合并）。**dsh-client-web fork 是这些补丁的合法落点**（�
   抬升量来自键盘几何，归零不会造成遮挡。
 - **arm 以 frame 元素为单位幂等**：renderer 重挂替换 AppFrame 时按元素重打标（并清理旧 frame 的插件属性），
   而非依赖数值 `applied` 短路（否则新 frame 无属性、composer 停在键盘后）。
+- **滞回 96/72**：≥96px 才视为键盘级遮挡（浏览器底栏/60px 级小重叠实测保持 idle），armed 后 <72px 才释放，
+  滑动的键盘不会让 seat 抖动。
+- **有界验证**：写后复测 ≤2 步、容差 24px；不达标只写 `data-mobile-kbd-state=still-covered` 上报，**绝不连续
+  爬升**——引擎若忽略 sticky inset，是"报告"而不是"追"。
+- **诊断面**：`data-mobile-kbd`（生效 px）+ `data-mobile-kbd-state`（armed | idle | no-seat | no-frame |
+  still-covered）落在 frame 上并镜像到 `<html>`，真机可即时读取；"静默不生效"这一失效模式不再可能。
+- **触达完整**：vv resize/scroll + window resize + focusin/out + visibilitychange + document pointerdown（任意
+  点击后重同步一次）+ `[data-phase]` observer（sticky seat 只在 active 相位存在）+ 可编辑焦点后 250ms 有界轮询
+  （4s 预算）。实测无事件场景 8 帧内收敛。
+- **宽限窗口 1200ms（`KBD_EDITABLE_FOCUS_GRACE_MS`）**：自 focusout 起算，覆盖「提交期 editability 翻转」与
+  「blur → 键盘收起动画」；量化前的 headroom 固定 8px（`KBD_OFFSET_HEADROOM_PX`），故实测死区为 8–23px。
+- **editability 恢复的调用契约（实测/评审修正）**：observer 监听整棵 document 子树，
+  `isEditabilityFlipToEditable` 必须只吃**目标为 composer 自身**的 record——嵌套 Lexical 装饰器翻转自己的
+  `contenteditable` 曾满足谓词，导致输入中途 blur+refocus（已按 record target 收窄并加源文本锁）。
+
+**被否决的备选（Rejected alternatives，layer-5）**：
+- **滚动器 padding + seat inset 两臂并用**（旧实现）：实测双倍抬升（见上第 1 条），已删除 padding 臂；
+  回归由 `test/visual/breakpoints.test.ts` 的"该规则必须不存在"断言钉住。
+- **调阈值 / 加延迟重试仍走推断**：`isKeyboardOpen` 类启发式在事件缺失时不 arm，改测量后该失效类别整体消失。
+- **`html[data-mobile-kbd]` 作第二 CSS 载体兜底**：实抓包证明 frame 打标成立，第二载体只增加状态面（否决）。
+- **放宽为"任何可编辑焦点都抬升"**：会让设置页/提问卡片的键盘把 composer 抬起（只服务 composer 的既有策略保留）。
+- **插件层禁用 PDF.js 预览包以降首屏字节**：裁剪功能，用户明确否决；首屏字节改走登录期后台预热（本文件 §10.6）。
+- **懒加载重客户端包**：需改上游 `dsh-client-modules`（host 组装 + shell 引导循环），不在本仓 fork 范围
+  （`scripts/upstream/registry.json` 的 `excludedUpstreamDirs` 仅三处镜像），登记为上游提案而非本仓改动。
 
 Enter 换行路径另补 `[data-input-scroll]` 内光标揭示——官方 `revealSelection` 的依赖数组是布尔
 `[draft !== ""]`，非空 draft 插入换行不触发它。

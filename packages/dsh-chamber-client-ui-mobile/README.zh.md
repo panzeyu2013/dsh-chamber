@@ -318,27 +318,37 @@ Tooltip 用法中 27 处是带 aria-label 的按钮，标签命名同一动作�
   手势起始于**导航区**（抽屉会话行、会话头面包屑）时丢弃程序化回焦；点输入
   框、发送键、鼠标/硬键盘聚焦以及 portal 型选择器流程（工作区/代理预设菜单）
   仍保留键盘与输入意图。
-- **键盘可见期的 composer 补偿**（IME 阶梯 layer 5，
-  `composer.ts` `installKeyboardCompensation`）：忽略
+- **composer 可见性守卫**（IME 阶梯 layer 5，`composer.ts`
+  `installComposerVisibilityGuard`）：忽略
   `interactive-widget=resizes-content` 的引擎（iOS Safari、旧 Android
   WebView）在键盘弹出时保持 **layout 视口**满高，而官方 composer seat 是
-  会话滚动器的**流内子元素**，于是钉在 layout 底部、落在键盘背后。键盘打开
-  期间把 seat 的 sticky `bottom` 抬到键盘顶，并给会话滚动器加等量底部
-  padding（frame 级 `data-mobile-kbd` + `--chamber-mobile-kbd-offset`，
-  styles.ts）；原本贴底的会话按同一差值向下滚，消息尾保持贴在抬升后的 seat
-  上方（外层滚动跟随由官方 chat 的 seat ResizeObserver 负责，本安装器只管
-  键盘驱动的几何变化）。arm 期间 seat 的底部安全区 padding 归零（键盘弹起时
-  该 inset 位于键盘之后，会多出 0–34px 死区）。偏移量化（16px 步进 → 死区
-  8–23px，48px 时为 8–55px），并由 visualViewport resize/scroll、window
-  resize、focusin/focusout 与 visibilitychange 重同步。**arm 需要**：visual
-  viewport 收缩 + 可编辑焦点（focusin/focusout 打点 + 提交期 composer 选区
-  兜底 + 1.2s 宽限窗口）。**缩放策略**：缩放态只服务 composer——一刀切的
-  `scale ≈ 1` 否决会在 iOS 聚焦缩放后（抽屉 13px 搜索框是常见触发源）让
-  composer 永久留在键盘后，因此抽屉内输入框也补上 16px 底线从源头消除聚焦
-  缩放；缩放 + 非 composer 字段仍然否决（缩放页面的平移不得驱动偏移）。
-  arm 以 **frame 元素**为单位幂等：renderer 重挂替换 AppFrame 而键盘仍开着时，
-  新 frame 会被重新打标（旧 frame 的插件属性被清理），不会把 composer 留在
-  键盘后面。
+  会话滚动器的**流内子元素**，于是钉在 layout 底部、落在键盘背后。该守卫
+  **不推断键盘，只测量遮挡**：量出会话滚动器底边落在可视底边（visual
+  viewport + 平移偏移）之下多少，就把 seat 的 sticky `bottom` 抬多少
+  （frame 级 `data-mobile-kbd` + `--chamber-mobile-kbd-offset`，styles.ts）。
+  会话滚动余量由守卫插在 seat 之前的**流内 spacer**（`data-mobile-kbd-spacer`）
+  提供——**不再给滚动器加 padding**：滚动器同时是 seat 的 sticky 包含块，
+  给它加 padding 会连同 sticky 阈值一起垫高、与 inset 叠加（实测双倍抬升：
+  390×844 台架 + 真实上游 CSS 下 seat 被抬到键盘顶**之上 368px**）。原本贴底的
+  会话按同一差值向下滚，消息尾保持贴在抬升后的 seat 上方（外层滚动跟随由官方
+  chat 的 seat ResizeObserver 负责，本安装器只管键盘驱动的几何变化）。arm 期间
+  seat 的底部安全区 padding 归零（键盘弹起时该 inset 位于键盘之后，会多出
+  0–34px 死区）。**滞回 96/72**：遮挡 ≥96px 才 arm、<72px 才释放（浏览器底栏与
+  60px 级小重叠实测保持 idle）；偏移量化（16px 步进 + 固定
+  `KBD_OFFSET_HEADROOM_PX`=8px headroom → 死区 8–23px）。**触达**：
+  visualViewport resize/scroll、window resize、focusin/focusout、visibilitychange、
+  `[data-phase]` observer（sticky seat 只在 active 相位存在）、document
+  `pointerdown`（只重同步一次，**不**重臂/延长轮询）+ 可编辑焦点后
+  **250ms 有界轮询（4s 预算，按焦点会话一次计，指针/焦点噪声不延长）**——引擎不派发
+  vv 事件也能收敛（实测 8 帧内）。
+  **只服务 composer**（可编辑焦点 / composer 选区 / `KBD_EDITABLE_FOCUS_GRACE_MS`=1.2s
+  宽限窗口）；**缩放态**
+  非 composer 字段仍否决（缩放页面的平移不得驱动偏移），抽屉内输入框补 16px
+  底线从源头消除聚焦缩放。arm 以 **frame 元素**为单位幂等：renderer 重挂替换
+  AppFrame 而键盘仍开着时，新 frame 会被重新打标（旧 frame 的插件属性被清理）。
+  写偏移后最多复测 2 步（容差 24px），不达标只上报 `data-mobile-kbd-state`
+  （`armed | idle | no-seat | no-frame | still-covered`），**绝不无限爬升**：
+  引擎若忽略 sticky inset，是被"报告"而不是被"追"。
 - **Enter 属于编辑器**：composer 的常驻 div 同时充当「无工作区」选择器触发器
   ——无工作区时它绑定 `editor = null`，于是渲染成 `contenteditable="false"`，
   却仍带 `[data-composer-input]`、`tabIndex=0` 与官方那段负责打开选择器的

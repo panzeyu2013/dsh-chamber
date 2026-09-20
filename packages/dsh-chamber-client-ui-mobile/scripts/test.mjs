@@ -22,6 +22,7 @@ const GROUPS = {
   // behavior: the pure interaction decisions (composer, drawer gestures, settings chips).
   behavior: [
     'test/behavior/composer.test.ts',
+    'test/behavior/composer-guard.test.ts',
     'test/behavior/drawer-taps.test.ts',
     'test/behavior/settings-sheet.test.ts',
   ],

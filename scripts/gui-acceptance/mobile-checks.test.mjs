@@ -7,7 +7,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  HEADER_FIRST_ROW_MAX_PX, HIT_BOX_MIN_PX, MOBILE_DEVICE, applyRequireRun, deviceEmulationSteps, deviceEmulationVerdict,
+  DEVICE_FACTS_EXPRESSION, HEADER_FIRST_ROW_MAX_PX, HIT_BOX_MIN_PX, MOBILE_DEVICE, applyRequireRun,
+  deviceEmulationSteps, deviceEmulationVerdict,
   headerFirstRowVerdict, headerWrapVerdict, hitBoxVerdict, overflowVerdict, pluginActivationVerdict,
   redactSecrets, summarizeWebSocketFrames,
 } from './mobile-checks.mjs'
@@ -19,6 +20,7 @@ const deviceFacts = (over = {}) => ({
   pointerCoarse: true, pointerFine: false, hoverNone: true, anyPointerCoarse: true,
   touchTier: true, phoneTier: true,
   rootSlots: 1, mobileFrames: 1, mobileRoles: ['sidebar', 'conversation', 'details'], pluginStyle: true,
+  mobileKbdFrames: 0, mobileKbdStates: [], mobileKbdSpacers: [],
   ...over,
 })
 /** 一条会话头文本事实。 */
@@ -117,12 +119,40 @@ test('命中盒：任一轴 < 44px 即红；无可见 button INFO；隐藏按钮
   assert.equal(hitBoxVerdict(headerFacts({ hasOutlet: false })).ok, null)
 })
 
-test('插件激活是观察项：打标与否都不判失败（但证据必须说清两种可能）', () => {
-  assert.equal(pluginActivationVerdict(deviceFacts()).ok, null)
-  assert.equal(pluginActivationVerdict(deviceFacts()).evidence.includes('未打标'), false)
+test('插件激活：打标即 PASS，未打标是 INFO 且 --require-run 下改判 FAIL（F9）', () => {
+  // 2026-12 review F9：这条腿此前恒为 INFO（连 --require-run 都不理），于是
+  // 「插件在移动档完全没生效」永远不会让走查变红。
+  const activated = pluginActivationVerdict(deviceFacts())
+  assert.equal(activated.ok, true)
+  assert.equal(activated.evidence.includes('未打标'), false)
+  assert.match(activated.evidence, /键盘面诊断/)
   const unstamped = pluginActivationVerdict(deviceFacts({ mobileFrames: 0, mobileRoles: [] }))
   assert.equal(unstamped.ok, null)
   assert.match(unstamped.evidence, /未打标/)
+  // 走查声明「该腿必须真实执行」时，INFO 不再是免责通道。
+  assert.equal(applyRequireRun(unstamped, true).ok, false)
+})
+
+test('插件激活证据读出键盘守卫的诊断面（kbd 帧 / state / spacer 高度）', () => {
+  const verdict = pluginActivationVerdict(deviceFacts({
+    mobileKbdFrames: 1,
+    mobileKbdStates: ['still-covered', 'still-covered'],
+    mobileKbdSpacers: [352],
+  }))
+  assert.equal(verdict.ok, true)
+  assert.match(verdict.evidence, /\[data-mobile-frame\]\[data-mobile-kbd\]=1/)
+  assert.match(verdict.evidence, /still-covered/)
+  assert.match(verdict.evidence, /spacer 高度=\[352\]/)
+})
+
+test('DEVICE_FACTS_EXPRESSION 采集键盘守卫诊断面（M-4 证据的页面来源）', () => {
+  // 证据字段不采集 = 人永远看不到；三个锚点各自钉一次。
+  for (const anchor of ['[data-mobile-frame][data-mobile-kbd]', '[data-mobile-kbd-state]', '[data-mobile-kbd-spacer]']) {
+    assert.ok(DEVICE_FACTS_EXPRESSION.includes(anchor), `DEVICE_FACTS_EXPRESSION must read ${anchor}`)
+  }
+  for (const field of ['mobileKbdFrames', 'mobileKbdStates', 'mobileKbdSpacers']) {
+    assert.ok(DEVICE_FACTS_EXPRESSION.includes(field), `DEVICE_FACTS_EXPRESSION must expose ${field}`)
+  }
 })
 
 test('WS 帧摘要：有上行无下行 = 停滞形态；计数与 URL 去参数', () => {
