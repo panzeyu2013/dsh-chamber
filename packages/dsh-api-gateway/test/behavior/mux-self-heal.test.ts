@@ -236,6 +236,40 @@ test('a silent socket is REPLACED when an opening item times out on it', async (
   t.mock.timers.reset()
 })
 
+test('a logical stream torn down on a socket that never delivered a frame replaces it', async (t) => {
+  installFakeSocket()
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const facts: Array<{ kind: string; cause: string }> = []
+  const client = new RemoteStreamMuxClient('', (kind, cause) => { facts.push({ kind, cause }) })
+  client.start()
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 1)
+  FakeSocket.instances[0].openNow()
+  await flushMicrotasks()
+  const controller = new AbortController()
+  const iterator = client.open('session/follow', { args: {} }, controller.signal)
+  const pending = iterator.next()
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 1, 'nothing is replaced while the stream is live')
+  // The journal watchdog aborts its sibling follow at 20 s — BEFORE the 30 s opening
+  // budget can fire — so that abort is the only teardown signal this attempt gets.
+  // A socket that delivered nothing for the whole life of the stream is dead even
+  // though no opening deadline ever expired; the teardown must escalate it exactly
+  // like the deadline path does, or an already-open session keeps a dead carrier
+  // until the transport watchdog (http ~120 s / ssh ~300 s) notices.
+  t.mock.timers.tick(20_000)
+  controller.abort(new Error('sibling probe gave up'))
+  await pending.then(
+    () => { throw new Error('the torn-down stream must reject') },
+    () => undefined,
+  )
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 2, 'the silent socket must be replaced on teardown')
+  assert.equal(FakeSocket.instances[0].readyState, FakeSocket.CLOSED)
+  assert.deepEqual(facts.map(fact => fact.kind), ['socket-silent'])
+  await client.close()
+  t.mock.timers.reset()
+})
 test('a socket that delivered a frame keeps the request retry instead of being replaced', async (t) => {
   installFakeSocket()
   t.mock.timers.enable({ apis: ['setTimeout'] })

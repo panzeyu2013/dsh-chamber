@@ -78,7 +78,7 @@ test('a lane-commanded reconnect is marked and never widens the heal cadence', (
 
 test('an opening timeout on a SILENT socket escalates to replacing the socket', () => {
   const body = openerBody(client)
-  assert.match(body, /const framesAtSend = this\.socketFrames/u, 'each attempt captures its own liveness baseline')
+  assert.match(body, /framesAtSend = this.socketFrames/u, 'each attempt captures its own liveness baseline')
   assert.match(body, /shouldReplaceSilentSocket\(this\.socketFrames - framesAtSend\)/u)
   assert.match(body, /socket === this\.socket && socket\.readyState === WebSocket\.OPEN/u, 'the escalation is judged on the socket this attempt sent on')
   assert.match(body, /this\.replaceSocket\(/u)

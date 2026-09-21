@@ -85,7 +85,8 @@ chamber已落地缓解（不动上游事实面）：design 05 §2.2.1的open意�
    `STATUS.md`「会话打开停滞」）；**并把失败写成状态**：宿主/客户端任一环的首帧期限到期都应让
    `Session.openState` 落到 `'error'`（带原因），而不是停留在 `'loading'`。chamber 侧 2026-09-21
    起用「证据门自动重建 + 90 s 硬失败面」收敛客户端可修的部分（design 14 §D4），但宿主侧期限
-   仍是「进入必有内容」的最后一块（上面的 1/2 条同理）。
+   仍是「进入必有内容」的最后一块。
+   - **（2026-09-21 评审）客户端可自修的最后一公里 = unary 引导通道**：宿主 `session/page` 是冷读，且 `session/control` baseline 的 `projections[sid].asOfSeq`（= `session.seq - 1`）是合法 `throughSeq` ⇒ 协议层已存在不依赖 `session/follow` 开帧的引导路径，当前 pinned 客户端没有 unary→窗口写入者。chamber 本轮**未采纳**（与 follow 共用宿主 `sourceFor`，救不了宿主卡死；且属非契约窗口写入面），作为无 fork 档（触屏档）的候选兜底保留在此。（上面的 1/2 条同理）。
 4. **让 `refresh()` 可判成败**（最便宜、且不新增 API 面）：`SessionManager.refreshList()`
    现在对「拉取失败」照常 resolve，只把 `listState` 置 `'error'`（`listError` 同存）。
    把结果显式化（`refresh(): Promise<{ ok: boolean; error?: … }>`）后，chamber 的独立 unary
