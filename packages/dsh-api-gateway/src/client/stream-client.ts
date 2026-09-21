@@ -60,13 +60,13 @@ interface SocketWaiter {
   reject(error: unknown): void
 }
 
-/** Keep one physical WebSocket and share it among independently cancellable Remote streams. */
 /**
  * Upper bound on the opening-budget ledger (chamber patch, 2026-09-21 review).
  * One entry per timed-out request, cleared only by close() before this bound.
  */
 const OPENING_BUDGET_KEYS_MAX = 256
 
+/** Keep one physical WebSocket and share it among independently cancellable Remote streams. */
 export class RemoteStreamMuxClient {
   /** chamber patch: per-entry control-plane base path, normalized (trailing slashes stripped); '' keeps the stock route. */
   private readonly basePath: string
