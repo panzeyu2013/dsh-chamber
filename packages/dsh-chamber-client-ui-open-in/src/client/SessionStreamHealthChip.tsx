@@ -9,8 +9,11 @@
  * The component is deliberately thin: every decision and the ladder's whole
  * state live in the seat (`session-stream-health-seat.ts`), because a
  * session-scoped subtree is unmounted on every session switch and a component
- * ref would reset the cooldown/budget each time. This file owns the ticker, the
- * visibility re-check and the markup — that is all.
+ * ref would reset the cooldown/budget each time. This file owns the visibility
+ * re-check, the React wiring and the markup; the VISIBLE surface (which notice,
+ * which controls, whether to keep ticking, whether a re-plan changed anything)
+ * is the pure projection in `session-stream-health-chip-face.ts`, so it can be
+ * behaviour-tested without a DOM (2026-09-21 review).
  *
  * It renders at most one line of text plus up to two user actions: the page
  * reload every (non-churn) notice offers, and — while the pure plan arms it (a
@@ -28,6 +31,11 @@ import {
   type SessionStreamHealthPlan,
 } from './session-stream-health.ts'
 import { isConversationSurfacePresented } from './session-stream-health-probe.ts'
+import {
+  sameSessionStreamHealthPlan,
+  sessionStreamHealthChipFace,
+  sessionStreamHealthChipHoldsTick,
+} from './session-stream-health-chip-face.ts'
 import styles from './SessionStreamHealthChip.module.css'
 
 /** Injected face the seat supplies (bound translator + the ladder entry point). */
@@ -126,11 +134,7 @@ export function SessionStreamHealthChip(props: SessionStreamHealthProps): ReactE
   useEffect(() => {
     const presented = visible && isConversationSurfacePresented(typeof document === 'undefined' ? null : document)
     const next = step(sessionId, openState, presented, Date.now())
-    setPlan(previous =>
-      previous.action === next.action && previous.notice === next.notice && previous.state.phase === next.state.phase
-        ? previous
-        : next,
-    )
+    setPlan(previous => (sameSessionStreamHealthPlan(previous, next) ? previous : next))
   }, [openState, sessionId, tick, visible, note, step])
 
   // Age the ladder only while an arm is actually holding and the page is
@@ -138,31 +142,29 @@ export function SessionStreamHealthChip(props: SessionStreamHealthProps): ReactE
   // A visible NOTICE also ticks: the carrier-churn notice is derived from a fact
   // timestamp, so it has to be re-planned to expire on its own.
   useEffect(() => {
-    const holding = plan.state.phase !== 'idle'
-      || (openState !== 'open' && openState !== 'cold')
-      || plan.notice !== null
-    if (!holding || !visible) return
+    if (!sessionStreamHealthChipHoldsTick(plan, openState, visible)) return
     const timer = window.setInterval(() => setTick(value => value + 1), TICK_MS)
     return () => window.clearInterval(timer)
   }, [plan.state.phase, plan.notice, openState, visible])
 
-  // While the ladder holds an 'error' state it may still act on its own (the
-  // grace, then a retry after each cooldown), and the user must see that a
-  // repair is in flight rather than only the vendor's error line. Once the
-  // ladder is out of levers the notice takes over with the one action left.
-  const recovering = plan.state.phase === 'healing' || (plan.state.phase === 'error-hold' && openState === 'error')
-  if (plan.notice === null && !recovering) return null
+  // The visible surface is the pure projection (behaviour-tested without a DOM):
+  // a null label means nothing renders — an idle ladder, or a held state that is
+  // not a recovery in flight. While the ladder holds an 'error' state it may still
+  // act on its own (the grace, then a retry after each cooldown), and the user must
+  // see that a repair is in flight rather than only the vendor's error line.
+  const face = sessionStreamHealthChipFace(plan, openState)
+  if (face.label === null) return null
 
-  const label = plan.notice === null ? t('streamHealth.healing') : t(sessionStreamNoticeKey(plan.notice))
+  const label = face.label === 'healing' ? t('streamHealth.healing') : t(sessionStreamNoticeKey(face.label))
   return (
-    <div className={styles.chip} data-chamber-stream-health={plan.notice ?? 'recovering'}>
+    <div className={styles.chip} data-chamber-stream-health={face.marker}>
       {/* The live region is the LABEL only: a live region must not contain the
           interactive control (assistive tech would announce the button as part
           of every update). */}
       <span role="status" aria-live="polite">{label}</span>
       {/* Churn is informational: the stream reopens on its own, so the chip
           offers no action that would interrupt a recovery in flight. */}
-      {plan.notice === null || plan.notice === 'carrier-churn' ? null : (
+      {face.reload ? (
         <>
           <button type="button" className={styles.action} onClick={reload}>
             {t('streamHealth.reload')}
@@ -172,13 +174,13 @@ export function SessionStreamHealthChip(props: SessionStreamHealthProps): ReactE
               executing its own evidence-gated automatic rebuild — the user's
               manual exit must survive either way. The click is this path's only
               invocation; the automatic arm is the plan's `'auto-resync'`. */}
-          {plan.action === 'resync' || plan.action === 'auto-resync' ? (
+          {face.resync ? (
             <button type="button" className={styles.action} onClick={() => { resync(sessionId) }}>
               {t('streamHealth.resync')}
             </button>
           ) : null}
         </>
-      )}
+      ) : null}
     </div>
   )
 }

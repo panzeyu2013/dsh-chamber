@@ -30,7 +30,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { stripComments, normalize } from '../../../../scripts/dev/test-support/source-text.ts'
+import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 import { en, zh } from '../../src/locales.ts'
 import { SESSION_STREAM_HEALTH_DEFAULTS } from '../../src/client/session-stream-health.ts'
 
@@ -38,6 +38,7 @@ const read = (relative: string): string => stripComments(readFileSync(fileURLToP
 const entry = read('../../src/client/index.ts')
 const seat = read('../../src/client/session-stream-health-seat.ts')
 const chip = read('../../src/client/SessionStreamHealthChip.tsx')
+const chipFace = read('../../src/client/session-stream-health-chip-face.ts')
 
 test('stream-health wiring: the recovery seat is registered before the open-in gates', () => {
   const call = entry.indexOf('registerSessionStreamHealthSeat(ctx, t)')
@@ -106,12 +107,18 @@ test('stream-health wiring: only the injected action reloads, and an idle ladder
   const seatReloads = [...seat.matchAll(/location\.reload\(\)/g)]
   assert.equal(seatReloads.length, 1, 'exactly one reload path: the injected user action')
   assert.doesNotMatch(chip, /useRef/, 'the ladder state must not live in a component ref')
-  assert.match(normalize(chip), /if \(plan\.notice === null && !recovering\) return null/)
-  assert.match(chip, /const recovering = plan\.state\.phase === 'healing' \|\| \(plan\.state\.phase === 'error-hold' && openState === 'error'\)/)
+  // The visible surface is a pure projection (behaviour-tested in
+  // stream-health-chip-face.test.ts): the component renders exactly what it says.
+  assert.match(chip, /const face = sessionStreamHealthChipFace\(plan, openState\)/)
+  assert.match(chip, /if \(face\.label === null\) return null/)
+  assert.match(chip, /face\.label === 'healing' \? t\('streamHealth\.healing'\) : t\(sessionStreamNoticeKey\(face\.label\)\)/)
+  assert.match(chip, /data-chamber-stream-health=\{face\.marker\}/)
+  assert.match(chipFace, /const recovering = plan\.state\.phase === 'healing'/)
   assert.match(chip, /const next = step\(sessionId, openState, presented, Date\.now\(\)\)/)
+  assert.match(chip, /setPlan\(previous => \(sameSessionStreamHealthPlan\(previous, next\) \? previous : next\)\)/)
   // A hidden page stops the clock and is re-read on the event, not only on the tick.
   assert.match(chip, /visibilitychange/)
-  assert.match(chip, /if \(!holding \|\| !visible\) return/)
+  assert.match(chip, /if \(!sessionStreamHealthChipHoldsTick\(plan, openState, visible\)\) return/)
   // The live region is the label alone: the reload button must never sit inside it.
   assert.match(chip, /<span role="status" aria-live="polite">\{label\}<\/span>/)
   assert.doesNotMatch(chip, /<div[^>]*role="status"/)
@@ -123,7 +130,10 @@ test('stream-health wiring: the resync control is rendered where the plan arms O
   // test pins above), and resync is an ADDITIONAL control gated on plan.action —
   // rendered for the armed control AND for the plan's own automatic rebuild, so
   // the user's manual exit never disappears behind the automatic arm.
-  assert.match(chip, /plan\.action === 'resync' \|\| plan\.action === 'auto-resync' \? \(/)
+  assert.match(chip, /face\.reload \? \(/)
+  assert.match(chip, /face\.resync \? \(/)
+  assert.match(chipFace, /const actionable = plan\.notice !== null && plan\.notice !== 'carrier-churn'/)
+  assert.match(chipFace, /plan\.action === 'resync' \|\| plan\.action === 'auto-resync'/)
   assert.match(chip, /<button type="button" className=\{styles\.action\} onClick=\{\(\) => \{ resync\(sessionId\) \}\}>/)
   assert.match(chip, /\{t\('streamHealth\.resync'\)\}/)
   // The chip calls the injected executor exactly once, from that click: no
@@ -197,6 +207,8 @@ test('stream-health wiring: a landed churn fact wakes the renderer without becom
 })
 
 test('stream-health wiring: churn is informational, self-expiring and never offers a reload', () => {
-  assert.match(chip, /plan\.notice === null \|\| plan\.notice === 'carrier-churn' \? null/u, 'churn must not offer the reload action')
-  assert.match(chip, /\|\| plan\.notice !== null/u, 'a visible notice must keep the ticker alive so it can expire')
+  // The projection owns the rule (behaviour-tested in stream-health-chip-face.test.ts).
+  assert.match(chipFace, /const actionable = plan\.notice !== null && plan\.notice !== 'carrier-churn'/u, 'churn must not offer the reload action')
+  assert.match(chip, /face\.reload \? \(/u, 'the component renders that control from the projection')
+  assert.match(chipFace, /\|\| plan\.notice !== null/u, 'a visible notice must keep the ticker alive so it can expire')
 })
