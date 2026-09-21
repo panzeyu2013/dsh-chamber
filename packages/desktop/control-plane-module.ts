@@ -219,6 +219,39 @@ export const SPKI_PIN_MISMATCH_CODE = controlPlaneModule.SPKI_PIN_MISMATCH_CODE
 export const spkiPinOfPeerCertificate = controlPlaneModule.spkiPinOfPeerCertificate
 export const attachSpkiPinVerifier = controlPlaneModule.attachSpkiPinVerifier
 
+// Session-state wire contract (control-plane session-state-protocol.ts, plan
+// of record docs/progress/todo/remote-session-state-and-switch.md §4;
+// protocol-compat-blueprint §8.1) — ONE source for the protocol version,
+// feature ids, descriptor classification, read-mark merge and turn/end
+// classification shared with the gateway watcher. The desktop session-facts
+// probe consumes it through this facade because the packaged desktop cannot
+// import a workspace package from node_modules (see the module header). The
+// re-exports below require packages/control-plane/src/index.ts to export the
+// module (the facade resolves `typeof import('@dsh-chamber/control-plane')` to
+// that package root).
+export const PROTOCOL_VERSION = controlPlaneModule.PROTOCOL_VERSION
+export const SESSION_STATE_PROTOCOL_VERSION = controlPlaneModule.SESSION_STATE_PROTOCOL_VERSION
+export const SESSION_STATE_FEATURES = controlPlaneModule.SESSION_STATE_FEATURES
+export const SESSION_STATE_BASE_FEATURES = controlPlaneModule.SESSION_STATE_BASE_FEATURES
+export const SESSION_STATE_DEGRADATION_CODES = controlPlaneModule.SESSION_STATE_DEGRADATION_CODES
+export const SESSION_STATE_PATH = controlPlaneModule.SESSION_STATE_PATH
+export const SESSION_STATE_STREAM_PATH = controlPlaneModule.SESSION_STATE_STREAM_PATH
+export const SESSION_STATE_READ_PATH = controlPlaneModule.SESSION_STATE_READ_PATH
+export const SESSION_STATE_READ_ALL_PATH = controlPlaneModule.SESSION_STATE_READ_ALL_PATH
+export const SESSION_STATE_ROUTES = controlPlaneModule.SESSION_STATE_ROUTES
+export const SESSION_STATE_READ_BODY_MAX_BYTES = controlPlaneModule.SESSION_STATE_READ_BODY_MAX_BYTES
+export const SESSION_STATE_CLIENT_ID_PATTERN = controlPlaneModule.SESSION_STATE_CLIENT_ID_PATTERN
+export const SESSION_STATE_SESSION_ID_MAX_CHARS = controlPlaneModule.SESSION_STATE_SESSION_ID_MAX_CHARS
+export const SESSION_STATE_PROBE_TIMEOUT_MS = controlPlaneModule.SESSION_STATE_PROBE_TIMEOUT_MS
+export const SESSION_STATE_HANDSHAKE_WINDOW_MS = controlPlaneModule.SESSION_STATE_HANDSHAKE_WINDOW_MS
+export const parseSessionStateDescriptor = controlPlaneModule.parseSessionStateDescriptor
+export const sessionStateFeatureSupport = controlPlaneModule.sessionStateFeatureSupport
+export const classifySessionStateProbe = controlPlaneModule.classifySessionStateProbe
+export const sessionStateNoteKey = controlPlaneModule.sessionStateNoteKey
+export const mergeReadMark = controlPlaneModule.mergeReadMark
+export const effectiveReadMark = controlPlaneModule.effectiveReadMark
+export const classifyTurnEnd = controlPlaneModule.classifyTurnEnd
+
 // Types ride the same single source; type-only exports are erased at build
 // time, so re-exporting from the workspace package costs nothing at runtime.
 export type {
@@ -246,7 +279,29 @@ export type {
   ProtectedSet,
   ProtectedSource,
   RawUnaryOutcome,
+  ReadAllRequest,
+  ReadRequest,
   RuntimeFamilyResolution,
   ServerResponseEnvelope,
   ServerResponseParse,
+  SessionStateCapability,
+  SessionStateCapabilityKind,
+  SessionStateCompletedAtSource,
+  SessionStateDegradationCode,
+  SessionStateDelta,
+  SessionStateDescriptor,
+  SessionStateFeature,
+  SessionStateHostInfo,
+  SessionStateHostState,
+  SessionStateMode,
+  SessionStatePendingKind,
+  SessionStateProbeFailureReason,
+  SessionStateProbeOutcome,
+  SessionStateReadState,
+  SessionStateRow,
+  SessionStateSnapshot,
+  SessionTurnEnd,
+  SessionTurnEndCause,
+  SessionTurnEndDisposition,
+  SessionTurnEndKind,
 } from '@dsh-chamber/control-plane'

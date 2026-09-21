@@ -458,7 +458,7 @@ async function performCreateSaga(
           ...(sourceWorkspaceId === undefined ? {} : { mainWorkspaceId: sourceWorkspaceId }),
         }),
       }),
-      sessionCreate: (workspaceId, id) => createSessionForSource(sourceId, workspaceId, { sessionId: id }),
+      sessionCreate: (workspaceId, id) => createSessionForSource(sourceId, workspaceId, { sessionId: id, origin: 'user' }),
       isAmbiguousHostFailure: isAmbiguousGitRpcFailure,
     }, preview, { operationId, sessionId }, {
       createSession: commitSession,
@@ -567,7 +567,7 @@ export async function createSessionHere(sourceId: string, path: string): Promise
             })
           },
         }),
-        sessionCreate: (workspaceId, id) => createSessionForSource(sourceId, workspaceId, { sessionId: id }),
+        sessionCreate: (workspaceId, id) => createSessionForSource(sourceId, workspaceId, { sessionId: id, origin: 'user' }),
       }, path, sessionId)
       setRecovery(sourceId, undefined)
       // Position + identity (review 2026-08): the wire PREPENDS new
@@ -856,7 +856,7 @@ export async function retryRecovery(sourceId: string): Promise<void> {
           // recovery 路径随后会 requestOpenSession（切到该来源 ⇒ 挂载 ⇒ follow
           // 基线），锚点收益有限，这里只保证事实不漏发。
           workspaceCreate: path => createWorkspaceForSource(sourceId, path),
-          sessionCreate: (workspaceId, sessionId) => createSessionForSource(sourceId, workspaceId, { sessionId }),
+          sessionCreate: (workspaceId, sessionId) => createSessionForSource(sourceId, workspaceId, { sessionId, origin: 'user' }),
           isWorkspaceOwnershipConflict: error => (
             error instanceof GitWorktreeRpcError && error.code === 'rollback-has-workspace'
           ),
@@ -865,11 +865,12 @@ export async function retryRecovery(sourceId: string): Promise<void> {
       } else if (recovery.kind === 'workspace-adopt' || recovery.kind === 'session-adopt') {
         const result = await runWorkspaceAdoptRecovery({
           workspaceCreate: path => createWorkspaceForSource(sourceId, path),
-          sessionCreate: (workspaceId, sessionId) => createSessionForSource(sourceId, workspaceId, { sessionId }),
+          sessionCreate: (workspaceId, sessionId) => createSessionForSource(sourceId, workspaceId, { sessionId, origin: 'user' }),
         }, recovery)
         requestOpenSession(sourceId, result.sessionId)
       } else if (recovery.kind === 'session-create') {
-        await createSessionForSource(sourceId, recovery.workspaceId, { sessionId: recovery.sessionId })
+        // I10 归因：恢复路径仍属用户发起的 worktree saga（不是 boot 交接）。
+        await createSessionForSource(sourceId, recovery.workspaceId, { sessionId: recovery.sessionId, origin: 'user' })
         requestOpenSession(sourceId, recovery.sessionId)
       } else {
         await runWorkspaceDeleteRecovery(

@@ -14,7 +14,7 @@ const ALL: TodoAttentionFilters = { completed: true, ask: true, request: true }
 /** deriveTodoAttention for the 'local' viewing source (filters default to ALL). */
 const run = (
   servers: ChamberServerAggregate[],
-  view: { viewingSessionId?: string; filters?: TodoAttentionFilters } = {},
+  view: { viewingSessionId?: string; filters?: TodoAttentionFilters; offlineUnread?: boolean } = {},
 ) => deriveTodoAttention(servers, { viewingSourceId: 'local', filters: ALL, ...view })
 
 function session(id: string, extra: { title?: string; running?: boolean; updatedAt?: number } = {}) {
@@ -198,4 +198,101 @@ test('workspace rows without session runtime facts never produce entries (fact =
   })
   const entries = run([s])
   assert.deepEqual(entries.map(entry => entry.sessionId), ['withFacts'])
+})
+
+// ---- R14: stale facts of a disconnected source (option A + the offline-unread group) ----
+
+test('R14 option A: a disconnected source with rows renders stale-marked facts only', () => {
+  const rows = [workspace('w', [session('s1'), session('s2')])]
+  // Without the explicit stale marker the old rule holds: unknown ≠ attention.
+  const unmarked = server('r1', rows, {
+    sessions: { s1: { completed: true }, s2: { pending: 'question' } },
+  }, { connected: false })
+  assert.deepEqual(run([unmarked]), [], 'unmarked disconnected facts must stay invisible')
+  // Marked stale (App-side R14 decision): the facts render, every entry labelled.
+  const marked = server('r1', rows, {
+    stale: true,
+    sessions: { s1: { completed: true }, s2: { pending: 'question' } },
+  }, { connected: false })
+  const entries = run([marked])
+  assert.deepEqual(entries.map(entry => [entry.sessionId, entry.kind, entry.stale]), [
+    ['s2', 'question', true],
+    ['s1', 'completed', true],
+  ])
+  // The marker comes from the fact, not from the connection bit: a connected
+  // source carrying a stale report is labelled too (consumers never lie).
+  const connectedStale = server('r1', rows, {
+    stale: true,
+    sessions: { s1: { completed: true } },
+  })
+  assert.equal(run([connectedStale])[0]?.stale, true)
+  // A connected fresh source keeps the marker absent (today's semantics).
+  assert.equal('stale' in (run([server('r1', rows, { sessions: { s1: { completed: true } } })])[0] ?? {}), false)
+})
+
+test('R14 row-absent branch: the offline-unread group is opt-in and uses the sessionId fallback label', () => {
+  const noRows = server('r1', [], {
+    stale: true,
+    sessions: { gone: { completed: true } },
+  }, { connected: false })
+  // Default: row-bound semantics exactly as before (no row ⇒ no entry).
+  assert.deepEqual(run([noRows]), [])
+  const entries = run([noRows], { offlineUnread: true })
+  assert.deepEqual(entries.map(entry => [entry.sessionId, entry.kind, entry.title, entry.displayTitle, entry.stale]), [
+    ['gone', 'completed', '', 'gone', true],
+  ])
+  // The group is UNREAD only: a pending fact on a row-less session is not an
+  // offline-unread item (R14 criterion is about unread; the pending surface
+  // remains row-bound until its own design says otherwise).
+  const pendingOnly = server('r1', [], {
+    stale: true,
+    sessions: { asksGone: { pending: 'question' } },
+  }, { connected: false })
+  assert.deepEqual(run([pendingOnly], { offlineUnread: true }), [])
+})
+
+test('R14 row-absent branch: row-present ids never duplicate, filters and subagents still gate', () => {
+  const mixed = server('r1', [workspace('w', [session('s1')])], {
+    stale: true,
+    sessions: {
+      s1: { completed: true },
+      gone: { completed: true },
+      busyGone: { completed: true, runningSubagents: 2 },
+    },
+  }, { connected: false })
+  assert.deepEqual(
+    run([mixed], { offlineUnread: true }).map(entry => entry.sessionId),
+    ['s1', 'gone'],
+    'row entry once + offline group; the row-present id and the subagent-busy fact must not duplicate/leak',
+  )
+  // completed gate off ⇒ both the row entry and the offline group disappear.
+  assert.deepEqual(run([mixed], { offlineUnread: true, filters: { completed: false, ask: true, request: true } }), [])
+  // The option only affects disconnected stale sources; a CONNECTED source with
+  // row-less completed facts keeps today's row-bound behavior.
+  const connected = server('r1', [workspace('w', [session('s1')])], {
+    sessions: { s1: { completed: true }, gone: { completed: true } },
+  })
+  assert.deepEqual(run([connected], { offlineUnread: true }).map(entry => entry.sessionId), ['s1'])
+})
+
+test('R14 row-absent branch: viewing exclusion and waiting-first ordering survive', () => {
+  const localStale = server('local', [], {
+    stale: true,
+    sessions: { cur: { completed: true } },
+  }, { connected: false })
+  assert.deepEqual(run([localStale], { offlineUnread: true, viewingSessionId: 'cur' }), [])
+  assert.deepEqual(
+    run([localStale], { offlineUnread: true, viewingSessionId: 'other' }).map(entry => entry.sessionId),
+    ['cur'],
+  )
+  // Waiting entries stay first; the offline group is appended to the completed
+  // list in sessionId order.
+  const ordered = server('r1', [workspace('w', [session('ask'), session('done')])], {
+    stale: true,
+    sessions: { ask: { pending: 'question' }, done: { completed: true }, goneB: { completed: true }, goneA: { completed: true } },
+  }, { connected: false })
+  assert.deepEqual(
+    run([ordered], { offlineUnread: true }).map(entry => [entry.sessionId, entry.kind]),
+    [['ask', 'question'], ['done', 'completed'], ['goneA', 'completed'], ['goneB', 'completed']],
+  )
 })

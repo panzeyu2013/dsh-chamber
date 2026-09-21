@@ -219,6 +219,9 @@ function TodoRow({
       <button
         type="button"
         className={cc.todoRow}
+        // I2/I13（plan §10）：条目身份与 stale 的机器可读标记，验收直接断言集合。
+        data-chamber-todo={`${entry.sourceId}:${entry.sessionId}:${entry.kind}`}
+        data-chamber-stale={entry.stale === true || undefined}
         aria-label={t('todo.row.aria', { state: status, title, source: sourceLabel })}
         onClick={() => {
           requestOpen(entry.sourceId, entry.sessionId)

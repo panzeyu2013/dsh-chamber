@@ -1224,6 +1224,13 @@ export function onRendererLifecycle(event: RendererLifecycleEvent): void {
   if (event === 'did-finish-load') {
     // ready() can run while late subresources still keep isLoading() true. The
     // first drain then correctly holds; finish is the deterministic replay edge.
+    //
+    // F2（2026-12 审计 S4）：渲染器重新可投递**也是**一次补发边沿。Swift 形态没有窗口
+    // 'show' 事件（mainWindowShown 只在 NSApplication.didBecomeActive 发），于是「唤醒时
+    // 渲染器不可投递 ⇒ lastResume 被 hold ⇒ 等下一次应用激活才 flush」——即时重连退化成
+    // 等 15–45s 看门狗。按这个 flavor 无关的边沿补发一次；无滞留时 handleMainWindowShown
+    // 是 no-op（幂等，Electron 同样受益）。
+    handleMainWindowShown();
     drainPendingRendererDeepLinkIntents();
     drainPendingNotificationOpens();
     return;

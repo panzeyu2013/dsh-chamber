@@ -5,12 +5,21 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts';
 import {
   MAX_BADGE_COUNT,
   adjudicateBadgeCount,
   badgePlatformGate,
   validateBadgeRequest,
 } from '../../badge.ts';
+
+/** 主进程徽标接线的两个源码事实面（合并投影输入的单一权威 + 重载清 0）。
+ *  shell-core.ts 是 electron-free core 且 BADGE_COUNT 注册体在其中，注释剥离后
+ *  做文本锚点断言——与 ipc-surface-mirror.test.ts 的 badge wiring pin 同款纪律
+ *  （该文件钉住注册/裁决/退出清 0 的存在性，本文件钉住输入语义）。 */
+const badgeModuleSource = stripComments(readFileSync(new URL('../../badge.ts', import.meta.url), 'utf8'));
+const shellCoreSource = stripComments(readFileSync(new URL('../../shell-core.ts', import.meta.url), 'utf8'));
 
 // ---- payload 白名单 ----
 test('validateBadgeRequest: accepts a valid object payload', () => {
@@ -76,4 +85,46 @@ test('badgePlatformGate: a missing API is unsupported on every platform', () => 
     assert.equal(badgePlatformGate(platform, false).supported, false, platform);
   }
   assert.equal(badgePlatformGate('freebsd', true).supported, false);
+});
+
+// ---- 合并投影输入：单一权威 + 重载清 0（主计划 §3.3-7 / §5-14，裁决 14） ----
+
+/** BADGE_COUNT 注册体文本（到下一个 handler 注册点截止；注释已剥离）。 */
+function badgeCountHandlerSource(): string {
+  const start = shellCoreSource.indexOf('deps.ipc.handle(IPC_CHANNELS.BADGE_COUNT');
+  assert.notEqual(start, -1, 'BADGE_COUNT handler must stay registered in shell-core');
+  const end = shellCoreSource.indexOf('IPC_CHANNELS.DEEP_LINK_READY', start);
+  return shellCoreSource.slice(start, end === -1 ? start + 800 : end);
+}
+
+test('badge input is the renderer merged projection — the desktop never re-derives a count', () => {
+  // badge.ts 是纯平台/裁决叶：不得读事实账本、合并投影或会话行——否则就是
+  // 与 renderer 投影并存的第二权威（裁决 14 明确徽标输入 = 合并投影）。
+  assert.doesNotMatch(
+    badgeModuleSource,
+    /completedBySource|runtimeFacts|mergeRuntimeFacts|projectBadgeCount|sessionId/,
+    'badge.ts must stay a pure intake/adjudication leaf; the count is the renderer merged projection',
+  );
+  const handler = badgeCountHandlerSource();
+  assert.match(handler, /pendingBadgeCount = validated\.count/, 'the holder records exactly the renderer-pushed count');
+  assert.match(handler, /adjudicateBadgeCount\(/, 'settings adjudication stays the only transform');
+  assert.doesNotMatch(
+    handler,
+    /completedBySource|runtimeFacts|projectBadgeCount|\.sessions\b/,
+    'the BADGE_COUNT handler must not tally sessions itself (single authority)',
+  );
+});
+
+test('badge intake keeps the renderer retry/reload-zero semantics (design 19 §3.7)', () => {
+  // 0 = 合法清除值：窗口重载后 renderer 的 completedBySource 复位为 {}，挂载兜底
+  // 推 0 依赖主进程照单接收并清除遗留徽标。
+  assert.deepEqual(validateBadgeRequest({ count: 0 }), { ok: true, count: 0 });
+  const handler = badgeCountHandlerSource();
+  // holder 是「替换」而非「合并/取大」：取大会让重载的 0 被旧计数压住。
+  assert.doesNotMatch(handler, /Math\.max\(/, 'the holder must be replace-on-push, never a max/merge');
+  // 主进程不做值去重：renderer 的有界 retry 会重推同值（IPC 拒绝后重试），
+  // 「值相同即跳过」会把 retry 变成空转（app.setBadgeCount 本身幂等）。
+  assert.doesNotMatch(handler, /validated\.count === pendingBadgeCount/);
+  // 平台门 + 设置裁决仍在：重载 0 也走同一条呈现链（badgeEnabled 关时本就 0）。
+  assert.match(handler, /applyBadgePresentation\(count\)/);
 });

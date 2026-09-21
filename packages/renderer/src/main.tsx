@@ -42,7 +42,13 @@ installPageLanguageOwner()
 // dropped at paint time and stays blank until the element is rebuilt; renaming the
 // duplicated ids was measured to immunise it. The scoper makes every <svg>
 // self-contained BEFORE any shell boots.
-installSvgResourceScope()
+// 锚定赋值的形式是**故意的**（W8/R15③ 修正，2026-12 审计 S3）：esbuild 不改点号属性名，
+// 于是产物里留下 globalThis.__chamberSvgScopeInstalled=<压缩后标识符>() —— 守卫因此能在
+// **压缩产物**上证明「入口真的调用了安装」；而裸调用 installSvgResourceScope() 在压缩后
+// 被改名为短标识符，会让产物守卫对任何真实构建恒红（此前就是这样）。
+// 负控仍然成立：把右侧换成非调用（如 = null）标记即消失。
+;(globalThis as unknown as { __chamberSvgScopeInstalled?: unknown }).__chamberSvgScopeInstalled =
+  installSvgResourceScope()
 
 createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

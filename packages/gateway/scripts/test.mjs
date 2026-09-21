@@ -65,6 +65,22 @@ const GROUPS = {
     'test/plugins/plugins-tasks.test.ts',
     'test/plugins/plugin-spec-lockstep.test.ts',
   ],
+  // session-state: the read-only watcher - store/state machine + persistence,
+  // the observer over the real control-plane mux (fake socket/call seams),
+  // routes + SSE, and the /chamber/* claim + config kill switch. These files
+  // import the workspace packages by name, so they run through the test-only
+  // resolver that maps them onto the real source entries (no node_modules in a
+  // bare worktree; the production bundle is unaffected).
+  'session-state': [
+    { file: 'test/session-state/session-state-store.test.ts', nodeArgs: ['--import', './test/session-state/workspace-loader.mjs'] },
+    { file: 'test/session-state/session-state-persistence.test.ts', nodeArgs: ['--import', './test/session-state/workspace-loader.mjs'] },
+    { file: 'test/session-state/session-state-observer.test.ts', nodeArgs: ['--import', './test/session-state/workspace-loader.mjs'] },
+    { file: 'test/session-state/session-state-routes.test.ts', nodeArgs: ['--import', './test/session-state/workspace-loader.mjs'] },
+    { file: 'test/session-state/session-state-surface.test.ts', nodeArgs: ['--import', './test/session-state/workspace-loader.mjs'] },
+    { file: 'test/session-state/session-state-version-matrix.test.ts', nodeArgs: ['--import', './test/session-state/workspace-loader.mjs'] },
+    { file: 'test/session-state/session-state-old-desktop-matrix.test.ts', nodeArgs: ['--import', './test/session-state/workspace-loader.mjs'] },
+    { file: 'test/session-state/session-state-diagnostics.test.ts', nodeArgs: ['--import', './test/session-state/workspace-loader.mjs'] },
+  ],
   // chamber-surface: the /chamber/* route surface - installed read projection, write mutations, dashboard assets.
   'chamber-surface': [
     'test/chamber-surface/chamber-installed.test.ts',

@@ -308,6 +308,65 @@ test('claimNotification: key space covers sourceId|sourceFingerprint|sessionId|k
   assert.equal(claimNotification(retitled, now + 100), false, 'title 变化不构成新 key');
 });
 
+// ---------------------------------------------------------------------------
+// 内容水位（主计划 §3.3-3 / §5-16）：claim 键的第五个分量
+// ---------------------------------------------------------------------------
+
+test('claimNotification: watermark is event identity — same completion once, later completion not swallowed', () => {
+  const now = 5_000_000;
+  const firstCompletion = makeRequest({
+    sourceId: 'gateway-a',
+    sourceFingerprint: 'a'.repeat(64),
+    sessionId: 's1',
+    kind: 'complete',
+    watermark: 1_700_000_000_000,
+  });
+  // 第二入口（gateway 事实源）对同一次完成必须传同一水位函数
+  // （complete = completedAt ?? updatedAt）⇒ 5s 内合并成一条横幅。
+  const sameCompletion = { ...firstCompletion };
+  // 同会话的下一次完成水位更高 ⇒ 新事件，不得被前一次的 claim 吞掉。
+  const nextCompletion = { ...firstCompletion, watermark: firstCompletion.watermark! + 60_000 };
+  assert.equal(claimNotification(firstCompletion, now), true);
+  assert.equal(claimNotification(sameCompletion, now + 100), false, '同一完成（同水位）不得被二次通知');
+  assert.equal(claimNotification(nextCompletion, now + 200), true, '不同完成（水位更高）不得被吞');
+});
+
+test('claimNotification: kind and fingerprint stay in the watermark-era key', () => {
+  const now = 6_000_000;
+  const complete = makeRequest({
+    sourceId: 'gateway-a',
+    sourceFingerprint: 'a'.repeat(64),
+    sessionId: 's1',
+    kind: 'complete',
+    watermark: 42,
+  });
+  const askAtSameWatermark = makeRequest({ ...complete, kind: 'ask' });
+  const freshHost = makeRequest({ ...complete, sourceFingerprint: 'b'.repeat(64) });
+  assert.equal(claimNotification(complete, now), true);
+  assert.equal(claimNotification(askAtSameWatermark, now + 1), true, '同水位的 ask 不得被 complete 吞并');
+  assert.equal(claimNotification(freshHost, now + 1), true, 'same-id 换宿主（新 fingerprint）不继承旧 claim');
+});
+
+test('NotificationClaimWindow: the claim key is the five-tuple with watermark ?? null (L13)', () => {
+  const claims = new NotificationClaimWindow();
+  const stamped = claims.claim(makeRequest({ watermark: 123 }), 1_000);
+  assert.equal(stamped.accepted, true);
+  if (!stamped.accepted || stamped.token === null) throw new Error('expected a claim token');
+  assert.equal(stamped.token.key, JSON.stringify(['local', 'local', 's1', 'complete', 123]));
+  // 缺省水位序列化为 null：旧调用方的键是同一四元组 + 恒 null 的第五项，
+  // 行为与升级前逐字一致。
+  const legacy = claims.claim(makeRequest({ sessionId: 'legacy' }), 1_000);
+  assert.equal(legacy.accepted, true);
+  if (!legacy.accepted || legacy.token === null) throw new Error('expected a claim token');
+  assert.equal(legacy.token.key, JSON.stringify(['local', 'local', 'legacy', 'complete', null]));
+  // watermark: 0 是合法水位且不与缺省混淆（?? 只折叠 null/undefined，不折叠 0）。
+  const zero = claims.claim(makeRequest({ sessionId: 'zero', watermark: 0 }), 1_000);
+  assert.equal(zero.accepted, true);
+  if (!zero.accepted || zero.token === null) throw new Error('expected a claim token');
+  assert.equal(zero.token.key, JSON.stringify(['local', 'local', 'zero', 'complete', 0]));
+  assert.equal(legacy.token.key === zero.token.key, false, '缺省 null 与显式 0 是两个事件');
+});
+
 test('NotificationClaimWindow has a hard cap, O(1) expiry queue, and conditional release', () => {
   const claims = new NotificationClaimWindow(2, 100)
   const a = makeRequest({ sessionId: 'cap-a' })
@@ -577,6 +636,28 @@ test('validateNotificationRequest: unknown extra fields ignored (whitelist seman
   const extra = { ...makeRequest(), futureField: 'x', secret: 42 };
   const result = validateNotificationRequest(extra);
   assert.ok(result.ok, '白名单校验只检查必要字段');
+});
+test('validateNotificationRequest: the optional watermark must be a non-negative safe integer', () => {
+  // 缺省（旧调用方）：字段保持缺席，校验后的 request 与升级前逐字一致。
+  const absent = validateNotificationRequest(makeRequest());
+  assert.ok(absent.ok);
+  if (absent.ok) assert.equal('watermark' in absent.request, false, '缺省不得凭空补出 watermark 键');
+  // 0 是合法水位（不得被 `?? null` 折叠成缺省）。
+  const zero = validateNotificationRequest(makeRequest({ watermark: 0 }));
+  assert.ok(zero.ok);
+  if (zero.ok) assert.equal(zero.request.watermark, 0);
+  const boundary = validateNotificationRequest(makeRequest({ watermark: Number.MAX_SAFE_INTEGER }));
+  assert.ok(boundary.ok, 'MAX_SAFE_INTEGER 边界合法');
+  const stamped = validateNotificationRequest(makeRequest({ watermark: 1_700_000_000_000 }));
+  assert.ok(stamped.ok);
+  if (stamped.ok) assert.equal(stamped.request.watermark, 1_700_000_000_000);
+  for (const watermark of [1.5, -1, 'x', null, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.equal(
+      validateNotificationRequest(makeRequest({ watermark: watermark as unknown as number })).ok,
+      false,
+      `watermark ${String(watermark)} 必须被校验拒（不归一、不静默）`,
+    );
+  }
 });
 test('BoundedActiveNotifications: constructor rejects non-positive or fractional limits', () => {
   assert.throws(() => new BoundedActiveNotifications(0), RangeError);

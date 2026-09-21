@@ -544,6 +544,9 @@ const P2_PAYLOAD_GOLDEN: Record<string, string[]> = {
   NotificationRequest: [
     'body: string', "kind: 'complete' | 'ask' | 'request' | 'test'", 'requireHidden: boolean',
     'sessionId: string', 'sourceFingerprint: string', 'sourceId: string', 'title: string',
+    // 内容水位（主计划 §5-16）：desktop 侧 notifications.ts 与 preload.cts 双侧
+    // 可选字段；renderer global.d.ts 必须同批镜像（P2 的 renderer leg）。
+    'watermark?: number',
   ],
   NotificationOpenRequest: ['attempt: number', 'deliveryId: number', 'sessionId: string', 'sourceFingerprint: string', 'sourceId: string'],
 }
@@ -598,6 +601,26 @@ test('the open-in / deep-link / notification payloads pin their exact field sign
         `${name} renderer mirror drifted from the golden baseline`)
     }
   }
+})
+
+test('the notification authority (notifications.ts) and its preload mirror agree on watermark (L14)', () => {
+  // notifications.ts 是主进程校验/去重的权威声明；preload.cts 只是类型镜像。
+  // 两侧字段集（含可选性标记）必须逐条一致，否则 renderer 侧的类型面与主进程
+  // 实际接受的载荷漂移。
+  const notifications = readFileSync(join(ROOT, 'packages/desktop', 'notifications.ts'), 'utf8')
+  const authority = interfaceFieldSignatures(notifications, 'NotificationRequest')
+  assert.ok(
+    authority.includes('watermark?:number'),
+    'notifications.ts must declare the optional watermark (plan §5-16)',
+  )
+  assert.deepEqual(
+    interfaceFieldSignatures(preload, 'NotificationRequest'),
+    authority,
+    'the preload mirror drifted from the main-process notification authority',
+  )
+  // preload 原样转发 payload：水位校验/缺省语义只在主进程一侧（fail-closed 的
+  // 唯一权威），桥不得替 renderer 补默认水位。
+  assert.match(preload, /notify: payload => ipcRenderer\.invoke\('dsh-chamber:notify', \{ payload \}\)/)
 })
 
 test('the surface signature helper itself detects drift and tolerates the mirror syntax differences (P2 self-honesty)', () => {

@@ -677,6 +677,9 @@ export interface NotificationRequest {
   body: string
   /** 正在屏幕上查看的会话（主进程再查一次窗口焦点作权威豁免）。 */
   requireHidden: boolean
+  /** 内容水位（host 域）：complete = completedAt ?? updatedAt；ask/request = updatedAt；
+   *  缺省即旧调用方（主进程 claim 键退化为四元组，不做推测）。 */
+  watermark?: number
 }
 
 /** window.dshChamber.notifications — 桌面原生通知（design 19 §3.3）。

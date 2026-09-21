@@ -1564,3 +1564,10 @@ export {
   GATEWAY_TOKEN_MIN_CHARS,
   GATEWAY_TOKEN_VISIBLE_ASCII_PATTERN,
 } from './gateway-session-protocol.ts'
+
+// Session-state wire contract (session-state-protocol.ts) — the single source
+// shared by the gateway watcher (packages/gateway/src/session-state.ts) and the
+// desktop probe (through control-plane-module.ts). The Typert mux client
+// (session-mux.ts) is the client half of the same contract.
+export * from './session-state-protocol.ts'
+export * from './session-mux.ts'

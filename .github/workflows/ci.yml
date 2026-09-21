@@ -172,6 +172,12 @@ jobs:
       - name: Package unit tests — single entry (runtime / control-plane / desktop / gateway / renderer-shell / client+host plugins)
         if: steps.classify.outputs.code == 'true'
         run: node scripts/gates/run-checks.mjs tests
+      # 计划的统一验收矩阵（docs/progress/todo/remote-session-state-and-switch.md §9/§13.1）：
+      # 2026-12 审计 M9 指出它此前只是人工脚本。它按 --node 指定的解释器逐文件跑，
+      # 因此 CI 用自带 node；vendor 与 node_modules 在此都已就位，blocked 项应全部转绿。
+      - name: Remote-state acceptance matrix (plan §9)
+        if: steps.classify.outputs.code == 'true'
+        run: node scripts/gates/remote-state-acceptance.mjs --node "$(command -v node)" --out .tmp/acceptance/remote-state.json
       # Client plugin compiler faces, same single entry as `pnpm run check:typecheck`.
       - name: Client plugin type checks — single entry (sidebar / git / layout / connections / settings-bridge / client-web / connection / api-gateway / open-in / mobile)
         if: steps.classify.outputs.code == 'true'
@@ -213,6 +219,12 @@ jobs:
       - name: Renderer build
         if: steps.classify.outputs.code == 'true'
         run: pnpm run build:renderer
+      # W8 / R15③: the renderer page bundle is a build output that appears AFTER
+      # the package test suites, so no test-suite guard can see it. Assert the SVG
+      # resource scoper code survived the build here, where the artifact exists.
+      - name: Renderer page bundle carries the SVG scope code
+        if: steps.classify.outputs.code == 'true'
+        run: node packages/dsh-chamber-client-ui-mobile/scripts/assert-scoper-artifact.mjs
       # Host-package esbuild bundles (dsh-chamber-seed-client-graph /
       # dsh-chamber-seed-git-worktree / dsh-chamber-seed-archive-cleanup /
       # dsh-chamber-seed-open-in — dist/index.js) only used to build in

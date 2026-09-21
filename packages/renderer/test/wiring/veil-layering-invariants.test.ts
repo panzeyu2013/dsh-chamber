@@ -174,10 +174,87 @@ test('P3：揭幕信号来自会话面 DOM 事实，窗口锚在本次持有起�
     app.includes("el.querySelector('.instance-loading') === null ? 'crossfade' : 'cut'"),
     'App 的 paint 判据必须按目标视图落地后的遮罩事实（settled 镜像不是判据）',
   )
-  assert.ok(app.includes(", 'view', paint)"), 'selectView 必须把 resolver 交给 view 键过渡')
+  assert.ok(app.includes(", 'view', paint)"), 'W3 揭示节必须把 resolver 交给 view 键过渡')
   assert.ok(
     app.includes('openIntentId={openIntents[viewId]}'),
     '持有窗的请求身份必须来自 openIntents（同视图换代＝新一次持有，窗口重新起算）',
   )
   assert.equal(app.includes('settledViewIdsRef'), false, '已删除的 settled 镜像不得复活')
+})
+
+/**
+ * P4/W3（2026-12 延迟揭示；蓝图 §2.6 的语义同步清单）：
+ * 可见性 = paintedView（屏上），选择 = activeView（意图）。这些锁各自对应一条
+ * "改坏也不红"的接线（判定本体在 view-runtime/reveal-gate.test.ts，这里钉 App 的
+ * 装配）：可见性绑定、揭示回调的重验守卫、保留/回收与 hiddenSince 跟随屏上、
+ * 侧栏 current 高亮跟随屏上、退役回落、失败/控制面不可达强制释放持有。
+ *
+ * 阅读/蓝点武装（notify requireHidden / reconcile 的 readingCurrent / 清 current
+ * 蓝点 effect）按同一语义也应当读 paintedView，但那三处位于 runtime-facts handler
+ * 与 completedBySource 账本内——本工作流的写权限冻结在它们之外，交接给 WS-C
+ * （App.tsx 的 paintedView 声明注释同样写明）。
+ */
+test('P4/W3：可见性由 paintedView 驱动，选择与绘制分离', () => {
+  const app = read('../../src/App.tsx')
+  assert.match(
+    app,
+    /const \[paintedView, setPaintedView\] = useState<string>\(LOCAL_INSTANCE_ID\)/,
+    'paintedView 必须是与 activeView 并列的 App 事实（初始 = local）',
+  )
+  assert.ok(app.includes('active={paintedView === viewId}'), 'InstanceView 的可见性必须绑定 paintedView')
+  assert.equal(
+    /active=\{activeView === viewId\}/.test(app),
+    false,
+    '不得回到 activeView 驱动可见性——那会让持有窗内目标壳提前露出（未 settle 时是 pending）',
+  )
+  // 揭示回调的重验：单槽队列里的揭示意图可能已过期（用户点了 B 又点回 A；来源退役）。
+  // 没有这道守卫，一个过期揭示会把已撤销的目标画回屏上（蓝图 §2.3）。
+  assert.ok(
+    app.split('if (activeViewRef.current !== selected) return').length - 1 >= 2,
+    '揭示的 microtask 与 view 过渡 update 回调都必须重验 activeViewRef.current === selected',
+  )
+  assert.ok(
+    app.includes('if (paintedViewRef.current === target) return'),
+    '揭示前必须再确认屏上目标未变（排队期间的改写不得重复起节）',
+  )
+  const revealEffect = /useLayoutEffect\(\(\) => \{[\s\S]*?shouldReveal\(\{[\s\S]*?\}, \[activeView, paintedView, shellStates, mountedViews, revealTick\]\)/.exec(app)
+  assert.ok(revealEffect !== null, '揭示 effect 必须以 [activeView, paintedView, shellStates, mountedViews, revealTick] 为依赖')
+  assert.ok(revealEffect[0].includes('queueMicrotask('), 'flushSync 出场必须经 microtask（commit 相位内不得 flushSync）')
+  assert.ok(
+    revealEffect[0].includes('revealHoldRemainingMs(revealHoldStartedAtRef.current, nowMs)'),
+    '持有窗到期必须用单调钟重臂一次性定时器（墙钟回拨会让它不再重臂）',
+  )
+  assert.ok(
+    app.includes('revealHoldStartedAt(revealHoldStartedAtRef.current, {'),
+    '持有起点必须经纯叶子推进（分叉锚定一次、稳态清空）',
+  )
+})
+
+test('P4/W3：保留 / 回收 / 计时 / 侧栏高亮 / 退役都跟随 paintedView', () => {
+  const app = read('../../src/App.tsx')
+  assert.ok(
+    app.includes('id === activeViewRef.current || id === paintedViewRef.current || id === pendingViewRef.current'),
+    'reclaimView 守卫必须含 painted：屏上的壳永不被回收（唯一拆除入口）',
+  )
+  assert.ok(
+    app.includes('activeViewId: paintedViewRef.current'),
+    'decideReclaimCandidates 的 activeViewId 必须是 painted（否则持有窗内屏上壳被算成隐藏壳）',
+  )
+  assert.ok(
+    app.includes('if (instanceId === paintedViewRef.current) delete hiddenSinceRef.current[instanceId]'),
+    'settle 起表必须按 painted：屏上壳不开始隐藏计时',
+  )
+  assert.ok(app.includes('}, [paintedView])'), 'hiddenSince 落地 effect 必须以 paintedView 为键')
+  assert.ok(
+    app.includes('completedBySource, paintedView, pluginDiagnostics'),
+    'deriveServers 的 current 投影必须吃 paintedView（侧栏高亮跟随屏上来源）',
+  )
+  assert.ok(
+    app.includes('setPaintedView(prev => retireSelectedSource(prev, retired, LOCAL_INSTANCE_ID))'),
+    'painted 必须与 activeView 同帧随注册表退役回落 local（同帧回落 + 揭示门 unmountable 双保险）',
+  )
+  assert.ok(
+    app.includes('if (activeShellError === null && !controlUnreachable) return'),
+    '失败 / 控制面不可达必须强制释放持有（覆盖层不透明，不等待揭示门）',
+  )
 })

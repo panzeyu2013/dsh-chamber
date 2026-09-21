@@ -541,6 +541,11 @@ export interface NotificationRequest {
   body: string
   /** 正在屏幕上查看的会话（渲染端 document.hasFocus 判定，主进程再查一次作为权威）。 */
   requireHidden: boolean
+  /** 内容水位（host 域毫秒，主计划 §3.3-3/§5-16）：complete =
+   *  `completedAt ?? updatedAt`；ask/request = `updatedAt`。两个通知入口对同一次
+   *  事件必须传同一个值（主进程 5s 去重键含水位：同水位合并、不同水位是新事件）。
+   *  缺省 = 旧调用方，主进程按四元组行为处理。 */
+  watermark?: number
 }
 
 /** 通知点击打开事件的载荷（design 19 §3.3）：渲染端据此 openSession。 */

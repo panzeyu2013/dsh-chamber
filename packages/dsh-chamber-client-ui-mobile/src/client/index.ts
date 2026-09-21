@@ -29,6 +29,7 @@ import type { Context as ClientContext } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-client-locale/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-slots'
+import { installSvgResourceScope } from '../../../../packages/renderer/src/svg-resource-scope.ts'
 import { en, zh, type MobileKey } from './locales.ts'
 import { MOBILE_CSS, PLUGIN_STYLE_TAG, VIEWPORT_TOKENS } from './styles.ts'
 import {
@@ -38,6 +39,7 @@ import {
   type MutationLike,
 } from './markup.ts'
 import { createLayoutFactSource } from './layout-facts.ts'
+import { installMobileReadWatermark } from './read-watermark.ts'
 import {
   installComposerSelfHeal, installEditabilityRecovery, installEnterToNewline,
   installImeLadder, installComposerVisibilityGuard, PHONE_TIER_QUERY, TOUCH_TIER_QUERY,
@@ -49,6 +51,22 @@ import {
 } from './official-hover-card.ts'
 import { installSessionStallNotice, sessionStallFace } from './session-stall.ts'
 import { MobileNavToggle, type MobileNavToggleInjected } from './MobileNavToggle.tsx'
+
+// design 05 §4.2「文档级 SVG 资源 id 归属」: the OFFICIAL shell's icon components
+// hard-code their Figma resource ids and `url(#id)` resolves DOCUMENT-wide, so an
+// icon whose clipper/mask lands in a not-laid-out subtree is dropped at paint time
+// on WebKit and stays blank (the desktop N-ctx defect, real-machine measured). The
+// gateway-hosted mobile page renders the same official components, so it installs
+// the same scoper — mirroring `packages/renderer/src/main.tsx` (module scope,
+// BEFORE createRoot()). This module is evaluated by the client-module loader
+// before the shell applies, and the installer also processes the SVGs already in
+// the document, so the rename happens before the first paint. ONE implementation:
+// the module is IMPORTED from the renderer source (never copied), so the renderer
+// suite and the manual probe (`scripts/dev/svg-resource-probe.mjs`) keep covering
+// this deployment too.
+// 同 main.tsx 的锚定赋值（同一套产物标记；未压缩的 committed bundle 也照此写）。
+;(globalThis as unknown as { __chamberSvgScopeInstalled?: unknown }).__chamberSvgScopeInstalled =
+  installSvgResourceScope()
 
 export type { MobileNavToggleInjected } from './MobileNavToggle.tsx'
 export type { MobileKey } from './locales.ts'
@@ -65,12 +83,23 @@ const NS = 'dsh-chamber.mobile'
 // fork, so `layoutFacts` (a chamber-only service) must NOT be a hard inject;
 // the layout source abstraction probes it at runtime and falls back to the
 // official frame attribute (layout-facts.ts).
-export const inject = ['slots', 'locale', 'layout']
+// `sessions` is the OFFICIAL session-list service (design 17 §18; the mobile DOM
+// carries no session-id anchor — markup.ts — so the official list is the only
+// authoritative source of "which session is the reader on"). It is provided by
+// the official ui-session client in every deployment shape of this page, so the
+// inject list stays official-services-only (layoutFacts' rule above).
+export const inject = ['slots', 'locale', 'layout', 'sessions']
 
 export function apply(ctx: ClientContext): void {
   const t = ctx.locale.bind(NS)
 
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-chamber: mobile dictionaries')
+
+  // ---- read watermark (plan W5): reading a session on the phone teaches the
+  // gateway mirror the host-domain watermark, so the desktop's completed-unread
+  // dot clears for the same session. Fail-closed: absent service / missing row /
+  // rejected fetch are all silent no-ops (read-watermark.ts). ----
+  ctx.effect(() => installMobileReadWatermark(ctx), 'dsh-chamber: mobile read watermark')
 
   // ---- assets: viewport tokens + stylesheet (idempotent) ----
   ctx.effect(() => {

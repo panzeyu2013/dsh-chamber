@@ -154,9 +154,14 @@ interface NotificationRequest {
   title: string
   body: string
   requireHidden: boolean      // 正在屏幕上查看的会话（见下）
+  watermark?: number          // 2026-12：内容水位（host 域），complete=completedAt，ask/request=updatedAt
 }
 ```
 
+- **身份与去重键（2026-12，plan §5-16）**：主进程 claim 键 = `[sourceId, sourceFingerprint,
+  sessionId, kind, watermark ?? null]`——`kind` 与 `sourceFingerprint` 必须保留，否则同一会话的
+  ask/complete 互吞、或 same-id 换宿主继承旧 claim；旧调用方不带 `watermark` 时请求逐字节不变
+  （`packages/desktop/notifications.ts`，镜像钳制见 `packages/renderer/src/global.d.ts`）。
 - `requireHidden = (sourceId === activeViewRef.current && sessionId === report.current
   && document.hasFocus())`——用户正看着这个会话（无论主开关/模式都豁免，与 OpenChamber `requireHidden && isAnyWindowFocused()` 同语义；单窗口下
   `document.hasFocus()` 与主进程 `isAnyWindowFocused()` 等价，主进程再查一次作权威）。
@@ -323,7 +328,7 @@ interface ChamberSettings {
   complete 通知（与官方 Rows / 侧边栏优先级一致；抑制在去重之前、不记账）。补发语义依赖
   vendor 武装 completed 的时序，均为文档化行为：vendor **晚武装**（子代理全部结束后才武装）→ completed 边沿届时正常补发横幅；vendor **早武装**（官方 manager 在父 idle 边沿武装，子代理存活
   期间 completed 已为 true）→ 滤除的边沿不记账、子代理结束后无新 completed 边沿，该完成不再有
-  横幅补发（窗口内完成点与未读徽标不受影响）。未读徽标（§3.7）应用同一压制——蓝点账本保持武装（与官方「completed 保持武装、subagents 分支优先呈现」同构），徽标投影只计「App 账本武装且未被运行环压制」的会话；呈现边界见
+  横幅补发（窗口内完成点与未读徽标不受影响）。未读徽标（§3.7）应用同一压制——蓝点账本保持武装（与官方「completed 保持武装、subagents 分支优先呈现」同构），徽标投影同一并集（App 账本武装 ∪ vendor 自武装，且未被运行环压制；2026-12 收口为单一权威——此前「点/待办有、徽标无」的分工已消除）；呈现边界见
   §3.7 计数语义。
 - 通知失败（isSupported false / 系统权限拒绝）**静默降级不误报**：会话业务不受影响，
   蓝点照常。

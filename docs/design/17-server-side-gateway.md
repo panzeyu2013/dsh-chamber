@@ -875,6 +875,24 @@ inert；2026-09 复核实测）——要让响应头也条件化需把「是否�
 - **禁用重量级客户端插件**：那是用删功能换流量，不是缓存；预热让同一份 bundle 首次出现在关键路径之外，
   功能集不动。
 
+### 10.7 只读会话状态镜像（2026-12 裁决：carve-out）
+
+> §10 开头的「不得回流」针对的是**编排**（审批/提问代理、跨会话调度、会话索引、功能开关、feature host）。
+> 本节只开一条**只读事实镜像**：gateway 观察它托管的本地 dsh 的会话状态并向外提供只读投影，供桌面在
+> 「未挂载该来源」时仍能正确显示运行 / 等待 / 完成未读。它不写、不发命令、不代替用户响应，也不是 dsh
+> 事实的权威（权威永远是 dsh 宿主与其前端）。实现与里程碑见 `docs/progress/todo/remote-session-state-and-switch.md`。
+
+**边界（review 判据，任一不成立即越界）**：
+
+- 只读镜像：只订阅宿主事件流与只读 unary（`session/list`），**没有任何写面**（不 create/cancel/approve/answer）；
+- 不成为控制路径：桌面缺此能力时行为不劣化（能力协商 + 优雅降级），镜像不可用时全部功能仍在；
+- 观察者纪律：作为 `$events` 的 waterfall 交付目标时，**仅当另有下游 mux 客户端在线且过 1.5s grace 才回 `next` 委派，否则保持等待**——不得自行 settle 审批/提问；
+- 只存状态元数据：**不存标题 / cwd / 消息 / 审批与提问载荷**；状态文件 0600、目录 0700；
+- 路由全部落在既有 `/chamber/*` 鉴权门内；宿主停机时返回 200 + `serviceable:false`（不 5xx，避免被误判为「未升级」）。
+
+**接口摘要**：`GET /chamber/session-state`（快照 + `protocol` / `features` / `cursor`）、
+`GET /chamber/session-state/stream`（SSE 增量，单调 `id`，`Last-Event-ID` 续传或快照兜底）、
+`POST /chamber/session-state/read` 与 `/read-all`（幂等、只升不降）。
 ## 11. Git worktree：服务器侧范围外
 
 服务器侧 Git worktree saga（server 侧 `workspace.list`/`workspace.create`/
@@ -1689,6 +1707,18 @@ PWA / Web Push 社区实现机制（dsh-ui-mobile，jasondu，npm 0.1.8，MIT，
     账本允许时，模块才调用一次 pinned `resync()`；证据不可读（缺失/抛错/宿主形态漂移）一律 `unknown` fail-closed，
     因此上面那条「无条件」否决仍然成立。文案在 `STALL_FAILED_MS`（180s）后转硬失败面，避免把已失败的加载
     描述成进行中。桌面档同形且更强（另有载波层升级：开帧校验 + 首帧期限 + 静默 socket 替换，design 14 §D4）。
+- **只读会话状态镜像的实现形态**（§10.7 carve-out，`packages/gateway/src/session-state.ts`）：
+  - 在 gateway 内 headless 运行官方客户端半（`dsh-client-connection` + 会话控制器 + ui-session 插件图）——**否决**：
+    需要 cordis + typert 服务图与 location/存储 stub，等于把编排面的依赖重新搬回服务端，且信任面（整张客户端插件图）
+    远大于一个只读订阅者；最小 mux 订阅 + 只读 unary 已能取得同一事实。
+  - 只做 HTTP 轮询（`session/list`）当主路径——**否决**：粒度受限、看不到短任务与实时等待态，且 design 06 §5 已
+    否决「轮询级完成推导」；轮询只保留为能力降级档（`mode:'poll'`）。
+  - 让桌面渲染端从聚合 wire 自行推导完成——**否决**：双权威（design 06 §4.3 既有裁决），且 pin `0.1.5-rc.2` 实测
+    `updatedAt` 只随 user-authored 消息推进，agent 完成根本推不出来。
+  - 把该镜像扩成控制路径（gateway 代答审批/提问，或代替桌面决定已读）——**否决**：正是 §10 开头禁止的回流；
+    审批是 dsh 原生的用户决策，镜像只能看。
+  - 未挂载来源的完成状态**只等上游**（host 持久 unread/pending）——**否决**为唯一路径：来源以 gateway 为主时
+    镜像可立即闭合绝大多数窗口；上游提案作为长期根治并行推进，前提是降级路径不劣化（§10.7）。
   - 用 `conversationPhase()` 的内部名字（`blank`/`engaging`）当判据——**否决**：它们从不到达
     `[data-phase]`，匹配等于写死一条永不成立（或永不恢复）的规则；DOM 值空间
     （`settling`/`hero`/`active`）才可锚定。

@@ -532,6 +532,61 @@ export function reconcileCompletedFacts(params: {
 }
 
 /**
+ * Turn-end classification of one completion edge (plan §3.1 B-track, W0
+ * §2.3/H3b): the watcher arms `completedAt` for `kind === 'completed'`, and ALSO
+ * for an UNREADABLE tail (the degraded marker, `lastTurnEnd: null` +
+ * `degraded` in the observer status — R12's "回退现状"). `aborted` +
+ * `cause === 'user'` is a user stop and every other kind
+ * (blocked/error/max-tokens/interrupted) is neutral, i.e. a KNOWN kind other
+ * than `completed` suppresses the arm. Kept as the wire vocabulary so a future
+ * kind cannot silently count as a completion.
+ */
+export interface TurnEndFact {
+  kind?: 'completed' | 'aborted' | 'blocked' | 'error' | 'max-tokens' | 'interrupted'
+  cause?: 'user' | 'parent' | 'hook' | 'disposed' | 'legacy'
+  /** Host-domain timestamp of the edge (wire diagnostics; the predicate reads only `kind`). */
+  at?: number
+  /** Monotonic completion seq of the edge (wire diagnostics; read mark cursors use it separately). */
+  seq?: number
+}
+
+/**
+ * THE unread predicate (plan §3.2/§5-3, B edge track):
+ *
+ *   unread ⟺ max(updatedAt, completedAt) > readThrough
+ *
+ * - `updatedAt` (host domain) covers "someone added user content elsewhere" —
+ *   it is valid regardless of how the turn ended, so a user stop still leaves
+ *   the user's own prompt unread;
+ * - `completedAt` counts when the turn-end classification is `completed` **or
+ *   is ABSENT**: the absent case is the watcher's degraded marker for an
+ *   unreadable tail (`packages/gateway/src/session-state.ts` `settleCompletion`:
+ *   `disposition === 'completed' || unreadable`), where the edge has already
+ *   armed. Fail-closed here would silently LOSE that real completion — the very
+ *   defect this plan fixes. A KNOWN non-completion (`aborted` incl. cause
+ *   `user`, `blocked`, `error`, `max-tokens`, `interrupted`) suppresses the arm;
+ *   the residual manual-stop ambiguity is closed the pre-change way (the
+ *   initiating client marks its own stop read — R12);
+ * - `readThrough` is the host-domain read watermark; absent/0 means "nothing
+ *   read yet". Comparisons are strictly `>` (the same watermark never re-arms)
+ *   and use ONLY the integer inputs — no client wall clock and no ledger state
+ *   (the function signature carries neither; plan §5-13 and the R2 anti-cheat
+ *   rule "deriveUnread 不得读取任何账本状态").
+ */
+export function deriveUnread(
+  completedAt: number | undefined,
+  lastTurnEnd: TurnEndFact | null | undefined,
+  readThrough: number | undefined,
+  updatedAt: number | undefined,
+): boolean {
+  const kind = lastTurnEnd === undefined || lastTurnEnd === null ? undefined : lastTurnEnd.kind
+  const knownNonCompletion = kind !== undefined && kind !== 'completed'
+  const completedWatermark = completedAt !== undefined && !knownNonCompletion ? completedAt : 0
+  const watermark = Math.max(updatedAt ?? 0, completedWatermark)
+  return watermark > (readThrough ?? 0)
+}
+
+/**
  * Project one ctx's sessions snapshot into the chamber runtime-facts report
  * (design 06 §4.2). Pure pass-through (the caller may drop tombstoned ids —
  * design 24 §12): every listed session carries its
@@ -767,6 +822,24 @@ export function projectInstanceSnapshot(
 }
 
 /**
+ * Narrow RENDER-FIELD overlay of one session row (facts-injection projection,
+ * plan §3.3-1): the headless-observer / SessionFactsSource contribution that
+ * must reach the sidebar even when the source's shell is not mounted. ONLY
+ * rendered fields ride it — the judgment inputs (`updatedAt`/`completedAt`)
+ * deliberately never enter the projection (the 反-churn discipline the shape
+ * convergence below has always enforced).
+ */
+export interface RuntimeFactsOverlayRow {
+  pending?: 'approval' | 'plan-review' | 'question'
+  runningSubagents?: number
+  /** I5：观察者刷新这一行事实的 host 域毫秒（渲染字段，不参与任何判定）。 */
+  factAt?: number
+}
+
+/** One source's render-field overlay, keyed by session id (see {@link RuntimeFactsOverlayRow}). */
+export type RuntimeFactsOverlay = Readonly<Record<string, RuntimeFactsOverlayRow>>
+
+/**
  * Merge one source's live runtime-facts report with the App-owned
  * completed-but-unread dots (design 06 §4.2): the UNION of the channel's
  * vendor-armed completed rows and the App-derived dots (the App's
@@ -777,14 +850,35 @@ export function projectInstanceSnapshot(
  * Returns undefined when there is nothing to attach (no report and no armed
  * dots); the caller attaches runtime only for CONNECTED sources, so a
  * not-connected source never carries facts.
+ *
+ * 2026-12 facts wiring (plan §3.3-1) adds two OPTIONAL inputs; a two-argument
+ * call stays byte-identical to the pre-change implementation (compatibility
+ * lock, test/session-rows/merge-runtime-facts.test.ts):
+ * - `overlay`: render fields supplied by a facts source when the shell channel
+ *   is absent. Per-field priority — pending: channel wins, overlay fills an
+ *   absent kind; runningSubagents: channel ?? overlay; completed stays the
+ *   App-armed union above; `current` and the running bit never come from the
+ *   overlay (the ring keeps reading the polled wire, runningRingVisible).
+ * - `stale`: R14 — the aggregate's read-only facts for a DISCONNECTED source
+ *   (rows may still render; consumers label, never present them as live). It is
+ *   a report-level flag and is no-op when false; it requires attachable content
+ *   (an armed dot, an overlay row, or a report) — stale alone still returns
+ *   undefined, because a marker with nothing to attach is not a fact.
  */
 export function mergeRuntimeFacts(
   runtime: InstanceRuntimeReport | undefined,
   completedBySource: Record<string, boolean> | undefined,
+  overlay?: RuntimeFactsOverlay,
+  stale?: boolean,
 ): InstanceRuntimeReport | undefined {
   const chamberCompleted = completedBySource
   const hasArmed = chamberCompleted !== undefined && Object.values(chamberCompleted).some(value => value === true)
-  if (runtime === undefined && !hasArmed) {
+  const hasOverlay = overlay !== undefined && Object.keys(overlay).length > 0
+  const hasStale = stale === true
+  // `stale` alone is not content: with no report, no armed dot and no overlay
+  // row there is nothing to attach, so the two-argument early return is
+  // preserved verbatim (compatibility lock).
+  if (runtime === undefined && !hasArmed && !hasOverlay) {
     return undefined
   }
   const sessions: InstanceRuntimeReport['sessions'] = { ...(runtime?.sessions ?? {}) }
@@ -795,11 +889,32 @@ export function mergeRuntimeFacts(
       sessions[sessionId] = { ...row, completed: true }
     }
   }
+  if (hasOverlay) {
+    for (const [sessionId, extra] of Object.entries(overlay)) {
+      if (extra === undefined) continue
+      const row = sessions[sessionId] ?? {}
+      let next = row
+      // pending: the channel's authoritative kind wins; the overlay only fills
+      // an absent one (same registry semantics, two carriers).
+      if (row.pending === undefined && extra.pending !== undefined) next = { ...next, pending: extra.pending }
+      // runningSubagents stays sparse (absent = 0) so an overlay 0 never adds a
+      // key the projection signature would have to carry.
+      if (next.runningSubagents === undefined && extra.runningSubagents !== undefined && extra.runningSubagents > 0) {
+        next = { ...next, runningSubagents: extra.runningSubagents }
+      }
+      // I5：事实时间戳只随观察者走（通道报告不带它），因此 overlay 直接写；
+      // 它是渲染字段，不参与任何判定（与 updatedAt/completedAt 拒收的纪律不冲突）。
+      if (extra.factAt !== undefined && extra.factAt > 0) next = { ...next, factAt: extra.factAt }
+      sessions[sessionId] = next
+    }
+  }
   // 刻意的形状收敛：`sessionFactReconcile` **不进**投影（侧边栏不渲染它，
   // 且投影签名按此形状去重）——守卫读的是 App 原始 runtimeFacts（App.tsx 的
   // setRuntimeFacts），不是 server.runtime。下一个想读回执的 consumer 请直接
   // 读原始事实，不要以为投影里有。
-  return { current: runtime?.current, sessions }
+  const report: InstanceRuntimeReport = { current: runtime?.current, sessions }
+  if (hasStale) report.stale = true
+  return report
 }
 
 /**
@@ -891,6 +1006,13 @@ export function runningRingVisible(_channelRunning: boolean | undefined, polledR
  * 权威）」, runningRingVisible), so a channel-only running flip must NOT
  * re-publish/re-render the sidebar (its rendered content — ring, dots,
  * pending badges, current highlight — is unchanged).
+ *
+ * `listComplete` (plan §6 / R13) joins the same identity-only branch: it is a
+ * JUDGMENT input (the App prunes absent sessions only on an authoritative
+ * complete list), never a rendered sidebar fact — but it must move the App's
+ * identity signature or a "facts unchanged, list became authoritative" report
+ * would be deduplicated away and the pruning gate would freeze at its
+ * first-seen value.
  */
 export function runtimeReportSignature(
   report: InstanceRuntimeReport | undefined,
@@ -917,12 +1039,22 @@ export function runtimeReportSignature(
   const receipt = !includeRunning || reconcile === undefined
     ? ''
     : `#f:${reconcile.settledAt === undefined ? 'p' : String(reconcile.settledAt)}:${reconcile.ok ? '1' : '0'}:${String(reconcile.attempts)}`
+  // listComplete（主计划 §6 / R13）：官方 session list 的 arrival phase（pending
+  // → ready 后不回退）是「缺席即删除」的权威门。它是**判定输入**（App 的派生
+  // 未读据此剪枝），不是侧边栏渲染事实，所以与回执同一纪律：只签在
+  // includeRunning（App 的身份校验路径），投影签名不得因它单独翻转而重发布。
+  // 若不进身份签名，一次「事实未变、只有 listComplete 翻到 ready」的上报会被
+  // 去重吞掉，派生层永远看不到权威缺席门（同 832-845 的签名教训）。
+  const listComplete = !includeRunning || report.listComplete === undefined
+    ? ''
+    : `#l:${report.listComplete ? '1' : '0'}`
   // A report whose only rows were filtered out (no visible session, no current)
   // contributes nothing to the projection signature — it must be
   // indistinguishable from "no runtime attached" **unless** it carries a
-  // receipt (回执本身就是内容：会话被清空那一瞬的回执结算不得被去重吞掉).
-  if (rows.length === 0 && current === '' && receipt === '') return ''
-  return `${current}|${rows.join(',')}${receipt}`
+  // receipt or listComplete (回执/权威门本身就是内容：会话被清空那一瞬的回执
+  // 结算与首份 ready 列表都不得被去重吞掉).
+  if (rows.length === 0 && current === '' && receipt === '' && listComplete === '') return ''
+  return `${current}|${rows.join(',')}${receipt}${listComplete}`
 }
 
 /**

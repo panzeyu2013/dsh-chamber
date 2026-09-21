@@ -14,6 +14,13 @@ import { fileURLToPath } from 'node:url'
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
 
 const GROUPS = {
+  // artifacts: committed build outputs and their marker guards (STATUS:61 family).
+  // The mobile client bundle is seeded verbatim by the gateway, so a source edit
+  // without a rebuild would otherwise ship the previous bundle silently; the
+  // scoper install marker guard fails on exactly that (design 05 §4.2, W8/R15③).
+  artifacts: [
+    'scripts/artifact-scope-marker.test.mjs',
+  ],
   // visual: stylesheet/source-text locks over the mobile CSS and its component surface.
   visual: [
     'test/visual/breakpoints.test.ts',
@@ -26,11 +33,16 @@ const GROUPS = {
     'test/behavior/drawer-taps.test.ts',
     'test/behavior/settings-sheet.test.ts',
   ],
+  // state: read-watermark reporting to the gateway mirror (plan W5; pure, injected fetch/list).
+  state: [
+    'test/state/read-watermark.test.ts',
+  ],
   // dom: the DOM-facing adaptation modules (markup stamping, stall notice, hover-card watchdog).
   dom: [
     'test/dom/markup.test.ts',
     'test/dom/session-stall.test.ts',
     'test/dom/official-hover-card.test.ts',
+    'test/dom/entry-scope-wiring.test.ts',
   ],
 }
 

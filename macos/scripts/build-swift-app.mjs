@@ -77,6 +77,10 @@ import { NATIVE_BETA_ROLLING_TAG } from '../../scripts/release/release-artifacts
 // 方式）的**单一实现**。正式发布腿（release.yml 公证步）调用同文件的 CLI——
 // 两处各写一份必然漂移，实现与背景资产都收敛在 macos/scripts/dmg.mjs。
 import { createStyledDmg } from './dmg.mjs'
+// W8/R15③ 的**装配内门**（2026-12 审计 S3）：.app 里已拷入的字节就是最终发布字节，
+// 因此标记载体只在**一处**定义（mobile 包的 scoper-markers.mjs，跨包相对导入同
+// build-sidecar 的 seam 先例）——绝不在装配脚本里再写一套标记。
+import { missingScoperMarkers } from '../../packages/dsh-chamber-client-ui-mobile/scripts/lib/scoper-markers.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const macosDir = path.resolve(here, '..')
@@ -431,6 +435,33 @@ export function sparkleFeedChannel(feed) {
  * 源码映射等构建内部文件。规则**逐条对齐 Electron**（目录名 .vite 出现在任意
  * 层级 + 任何 .map 文件），不另造第二套规则。relativePath 相对 web dist 根。
  */
+/**
+ * 装配内 fail-closed 门：已拷入 .app 的页面 chunk 必须至少有一个携带全部 scoper 标记。
+ *
+ * 判据与 `assert-scoper-artifact.mjs`（CI 的 build:renderer 后步骤）同源、同标记模块；
+ * 差别只在**检查对象**：这里是真正进包的字节（覆盖 release 腿只存在性检查的缺口）。
+ * @param {string} webDistDir - .app 内的 dist/web 目录。
+ */
+export function assertWebDistCarriesScoper(webDistDir) {
+  const assetsDir = path.join(webDistDir, 'assets')
+  const chunks = existsSync(assetsDir)
+    ? readdirSync(assetsDir).filter(name => name.endsWith('.js'))
+    : []
+  if (chunks.length === 0) {
+    throw new Error(
+      `装配进的 dist/web 没有可检查的页面 chunk：${assetsDir}`
+      + '——scoper 标记必须在真实构建产物上判定（先跑 pnpm run build:renderer）',
+    )
+  }
+  for (const name of chunks) {
+    if (missingScoperMarkers(readFileSync(path.join(assetsDir, name), 'utf8')).length === 0) return name
+  }
+  throw new Error(
+    `装配进的 dist/web 没有任何 chunk 携带 SVG scoper 标记（检查了 ${chunks.length} 个）：${assetsDir}`
+    + '——构建把 scoper 摇掉了，装出来的 .app 会在切源后白屏（先跑 pnpm run build:renderer 再装配）',
+  )
+}
+
 export function shouldCopyWebDistEntry(relativePath) {
   const normalized = relativePath.split(path.sep).join('/')
   if (normalized === '') return true
@@ -931,7 +962,11 @@ export async function runBuildSwiftApp(options, io = { log: console.log, error: 
       filter: (source) => source === options.webDistDir
         || shouldCopyWebDistEntry(path.relative(options.webDistDir, source)),
     })
-    io.log(`[build-swift-app] renderer dist/web → ${layout.webDist}（过滤 *.map 与 .vite/，与 Electron build.files 对齐）`)
+    // S3 审计（2026-12）：**装配后**对已拷入的字节断言 scoper 标记。此前 Swift 侧
+    // 完全没有标记门（只断 index.html），于是「构建把 scoper 摇掉」的空壳可以装进
+    // .app 并发布——切源白屏就回来了。缺标记即 throw（提示先跑 build:renderer）。
+    assertWebDistCarriesScoper(layout.webDist)
+    io.log(`[build-swift-app] renderer dist/web → ${layout.webDist}（过滤 *.map 与 .vite/，与 Electron build.files 对齐；已断言 scoper 标记）`)
   }
 
   // 3b. 嵌入 Sparkle.framework（S-01 / 裁决 D-1 选 B）：必须在签名之前——

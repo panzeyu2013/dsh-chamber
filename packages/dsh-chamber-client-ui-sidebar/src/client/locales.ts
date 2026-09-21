@@ -75,6 +75,8 @@ export const zh = {
   'orderBy.label': '排序方式',
   'orderBy.manual': '手动排序',
   'orderBy.updated': '最近更新',
+  // W4「全部已读」：来源级动作（读水位由 App 落盘，插件只发意图）。
+  'source.markAllRead': '全部已读',
   'menu.fork': '分叉会话',
   'menu.archiveSession': '归档会话',
   // Workspace-delete confirm (2026-09-11 upstream-alignment T2b): the in-app
@@ -109,6 +111,10 @@ export const zh = {
   // 2026-12（诚实投影，用户视角复查 M1/M4）：两种"数据不可信"状态就地说明。
   'source.managedDown': '托管 dsh 不可用（{state}）：请在 设置 → 连接 中启动该实例后重试。',
   'source.baselinePending': '会话基线尚未就绪：当前为降级列表（已归档会话可能显示为普通行）。',
+  // R19 能力一览（plan W4）：档位说明并入同一条 live region 级联的最低优先级。
+  'source.factsDegraded': '会话事实降级：完成/未读可能延迟或缺省（网关镜像受限）。',
+  'source.factsLegacy': '该网关未升级：本来源的完成/未读由本机观察得出，窗口关闭期间可能丢失。',
+  'source.factsDisabled': '该网关的会话观察已被关闭（管理员配置）。',
   'source.managedStarting': '托管 dsh 正在启动（{state}）：就绪后自动恢复。',
   // 2026-12（05 §4「降级呈现」第二批）：该来源的壳 boot 成功但已知缺口——事实是
   // 结构化的（kind + 服务/插件 id），文案由本包自己出，不接收框架拼好的句子。
@@ -221,6 +227,7 @@ export const en = {
   'orderBy.label': 'Sort by',
   'orderBy.manual': 'Manual',
   'orderBy.updated': 'Last updated',
+  'source.markAllRead': 'Mark all as read',
   'menu.fork': 'Fork session',
   'menu.archiveSession': 'Archive session',
   'delete.workspace': 'Delete workspace',
@@ -248,6 +255,9 @@ export const en = {
   'status.unknown': 'Unknown',
   'source.managedDown': 'Managed dsh unavailable ({state}): start this instance in Settings → Connections, then retry.',
   'source.baselinePending': 'Session baseline not ready: this is a degraded list (archived sessions may appear as ordinary rows).',
+  'source.factsDegraded': 'Session facts degraded: completions/unread may lag or be missing (the gateway mirror is limited).',
+  'source.factsLegacy': 'This gateway is not upgraded: completions/unread come from local observation and may be missed while the window is closed.',
+  'source.factsDisabled': 'Session observation is disabled on this gateway (administrator setting).',
   'source.managedStarting': 'Managed dsh is starting ({state}): it recovers automatically once ready.',
   'source.bootGap.generic': 'This server’s interface is limited: some surfaces may be missing.',
   'source.bootGap.graphUnavailable': 'This server’s interface is limited: this mount loaded none of its frontend plugins (surfaces such as the conversation body may be missing).',

@@ -59,6 +59,10 @@ Options:
                       default ON — while a visitor is on the login page the
                       browser prefetches the managed dsh's static client bundles
                       so the post-login boot is cache-served)
+  --no-session-state
+                      disable the read-only session-state watcher surface
+                      /chamber/session-state* (design 17 §10.7; default ON —
+                      the env twin is DSH_GATEWAY_SESSION_STATE=0)
   --no-auth
                       allow an externally-reachable bind with NO auth (S1 override;
                       prints a loud warning — trusted networks only)
@@ -134,6 +138,7 @@ interface ParsedArgs {
   mobileUaRedirect: boolean
   mobileEntryPath?: string
   warmup: boolean
+  sessionState: boolean
   // auth options
   subcommand?: 'status' | 'reset-password' | 'clear'
   newPassword?: string
@@ -144,7 +149,7 @@ interface ParsedArgs {
 class UsageError extends Error {}
 
 function parseArgs(argv: string[]): ParsedArgs {
-  const args: ParsedArgs = { command: 'serve', corsOrigins: [], trustedProxies: [], allowAnonymousExternal: false, mobileUaRedirect: false, warmup: true, version: false, help: false }
+  const args: ParsedArgs = { command: 'serve', corsOrigins: [], trustedProxies: [], allowAnonymousExternal: false, mobileUaRedirect: false, warmup: true, sessionState: true, version: false, help: false }
   let positional = false // 'serve' seen
   let authMode = false
   let subcommandSeen = false
@@ -207,6 +212,10 @@ function parseArgs(argv: string[]): ParsedArgs {
       case '--no-warmup':
         if (inlineValue !== undefined) throw new UsageError('--no-warmup takes no value')
         args.warmup = false
+        break
+      case '--no-session-state':
+        if (inlineValue !== undefined) throw new UsageError('--no-session-state takes no value')
+        args.sessionState = false
         break
       case '--no-auth':
         if (inlineValue !== undefined) throw new UsageError('--no-auth takes no value')
@@ -344,6 +353,9 @@ async function main(): Promise<number | null> {
       // Same undefined-pass-through as mobileUaRedirect: the default (ON)
       // leaves DSH_GATEWAY_WARMUP reachable; --no-warmup pins false.
       warmup: args.warmup === true ? undefined : false,
+      // Same undefined-pass-through: the default (ON) leaves
+      // DSH_GATEWAY_SESSION_STATE reachable; --no-session-state pins false.
+      sessionState: args.sessionState === true ? undefined : false,
     }, stateDir, dshWorkspacePath)
   } catch (error) {
     if (error instanceof GatewayConfigError) {

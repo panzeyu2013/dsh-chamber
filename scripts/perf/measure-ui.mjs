@@ -15,6 +15,11 @@
  *
  * 输出字段（schema: measure-ui/v1）：
  *   dom.totalNodes / dom.views.{mounted,hidden} / dom.perInstanceNodes[]
+ *   mountedShells                     —— 挂载壳数（分档预算的比较单位，plan §10）
+ *   prewarm                           —— 预热 attempt/hit/cancelled（分来源）+ hitRate（I8；
+ *                                         best-effort：未发布全局即缺字段并记 errors[]）
+ *   watcher                           —— 事实源/观察者统计（best-effort：页面全局未发布时
+ *                                        缺字段并记入 errors[]，绝不臆造数字）
  *     （每项 {id,hidden,pending,nodes}）
  *   heap.{usedJSHeapSize,totalJSHeapSize,jsSizeHeapLimit}
  *   idle.{durationMs,longtasks[],maxLongtaskMs,over100msCount}   —— 空闲 15s
@@ -107,7 +112,33 @@ const domSnapshot = await ev(`(() => {
   return { totalNodes: total, views: { mounted: views.length, hidden: views.filter(v => v.classList.contains('instance-hidden')).length }, perInstanceNodes: perInstance }
 })()`)
 if (domSnapshot === undefined) errors.push('domSnapshot evaluate failed')
-else summary.dom = domSnapshot
+else {
+  summary.dom = domSnapshot
+  // plan §10 口径：单列挂载壳数（分档预算按「每壳」而不是全页节点数比较）。
+  summary.mountedShells = domSnapshot.views.mounted
+}
+
+// ---- 1b. watcher / 事实源统计（best-effort：事实源尚未发布全局即为缺字段，不臆造）----
+const watcherStats = await ev(`(() => {
+  const s = window.__dshFactsStats ?? window.__dshWatcherStats ?? window.__dshPerf?.watcher
+  return s ? JSON.parse(JSON.stringify(s)) : null
+})()`)
+if (watcherStats === null || watcherStats === undefined) {
+  errors.push('watcher stats unavailable (no page global published by the facts source)')
+} else {
+  summary.watcher = watcherStats
+}
+
+// ---- 1c. 预热命中率（I8：分来源 + 命中率，plan §7-W3 判据 ≥80%）----
+const prewarmStats = await ev(`(() => {
+  const p = window.__dshChamberPrewarm
+  return p ? { totals: p.totals(), hitRate: p.hitRate(), counters: p.counters() } : null
+})()`)
+if (prewarmStats === null || prewarmStats === undefined) {
+  errors.push('prewarm stats unavailable (no __dshChamberPrewarm global)')
+} else {
+  summary.prewarm = prewarmStats
+}
 
 const heap = await ev(`(() => { const m = performance.memory; return m ? { usedJSHeapSize: m.usedJSHeapSize, totalJSHeapSize: m.totalJSHeapSize, jsHeapSizeLimit: m.jsHeapSizeLimit } : null })()`)
 if (heap === undefined || heap === null) errors.push('heap evaluate failed/unsupported')
@@ -210,6 +241,10 @@ writeFileSync(absoluteOut, JSON.stringify(summary, null, 2))
 
 // ---- stdout 人类可读摘要 ----
 console.log(`measure-ui: DOM=${summary.dom?.totalNodes ?? 'n/a'} nodes (${summary.dom?.views?.mounted ?? '?'} views, ${summary.dom?.views?.hidden ?? '?'} hidden)`)
+console.log(`mountedShells=${summary.mountedShells ?? 'n/a'}`)
+if (summary.prewarm) {
+  console.log(`prewarm: attempts=${summary.prewarm.totals.attempts} hits=${summary.prewarm.totals.hits} cancelled=${summary.prewarm.totals.cancelled} hitRate=${(summary.prewarm.hitRate * 100).toFixed(1)}%`)
+}
 console.log(`heap used=${summary.heap ? Math.round(summary.heap.usedJSHeapSize / 1024 / 1024) + ' MiB' : 'n/a'}`)
 console.log(`idle ${idleSec}s: longtasks=${summary.idle.longtasks.length} max=${summary.idle.maxLongtaskMs}ms over100ms=${summary.idle.over100msCount}`)
 if (summary.frames?.samples) console.log(`frames: samples=${summary.frames.samples} p95=${summary.frames.p95Ms}ms worst=${summary.frames.worstMs}ms`)

@@ -50,6 +50,13 @@ const GROUPS = {
     'test/protocol/m1-dsh-client.test.ts',
     'test/protocol/rpc-envelope.test.ts',
     'test/protocol/browser-auth-cookie.test.ts',
+    // 会话状态 wire 契约单一源（capability 判定矩阵、feature 冻结元组、读标记
+    // max 归并、turn/end 分类）与 Typert mux 最小客户端（$events 订阅、每次
+    // (重)连全量 session/list 基线对账、waterfall 委派硬约束、R21 ready/
+    // lastEventAt 信号）。两者都是纯模块（注入假 socket/假 unary carrier），
+    // 平台无关，所以 Windows 腿同样跑（见 WIN32_FILES）。
+    'test/protocol/session-state-protocol.test.ts',
+    'test/protocol/session-mux.test.ts',
   ],
   // host-lifecycle: 宿主进程生命周期（spawn/readiness/健康/回收/重启）
   'host-lifecycle': [
@@ -83,6 +90,10 @@ const GROUPS = {
     // (the gateway html-inject.ts consumes it via @dsh-chamber/control-plane —
     // no twin constant since the B-6e dedupe); the test pins the budget value.
     'test/proxy/html-inject-lockstep.test.ts',
+    // SSE 断线续传（remote-session-state-and-switch.md §11 风险条 / W1）：
+    // Last-Event-ID 经实例代理的透传、SSE 帧序与客户端断开的释放，
+    // 行为级锁定——若代理吃掉该头，续传会静默降级为整量重取。
+    'test/proxy/sse-resume.test.ts',
   ],
   // plugins: 宿主图种子、cordis insert 渲染与受保护插件集合判定
   'plugins': [
@@ -121,6 +132,12 @@ const WIN32_FILES = [
   // runs in ~25 ms, so the Windows leg gets the same pins as the POSIX legs —
   // including symlink/junction semantics of readInstalledVersion.
   'test/plugins/protected-plugins.test.ts',
+  // Session-state wire contract + mux client: pure modules (no fs permissions,
+  // no network, injected socket/carrier) whose contract must hold on every
+  // platform — the failure mode they guard (a downstream-less observer
+  // settling an approval) is platform-independent.
+  'test/protocol/session-state-protocol.test.ts',
+  'test/protocol/session-mux.test.ts',
 ]
 
 /** node:test summary lines: the spec reporter prints "ℹ tests N" and TAP

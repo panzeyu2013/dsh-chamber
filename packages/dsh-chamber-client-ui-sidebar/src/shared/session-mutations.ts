@@ -21,6 +21,7 @@
  * 的行会留在投影里直到 TTL——与工作区回声的 remove 半同理。
  */
 import { chamberBridge } from './aggregate-store.ts'
+import type { SessionCreationOrigin } from './session-create-ledger.ts'
 import {
   archiveSession, createSession, forkSession, getInstanceClient,
 } from './instance-api.ts'
@@ -37,6 +38,12 @@ export interface SessionCreationOptions {
    * 官方 id 阶梯；权威行始终压过它。
    */
   title?: string
+  /**
+   * I10 归因（plan §8-R16/§10）：这次创建的**触发路径**。每个调用点都必须表态
+   * （默认 'unknown' 是仪表覆盖缺口的信号，不是可接受的常态——验收断言
+   * "无标签外来源"）。
+   */
+  origin?: SessionCreationOrigin
 }
 
 /** 对 `sourceId` 执行 session.create，并发布创建回声事实（blank = 官方临时行）。 */
@@ -51,6 +58,9 @@ export async function createSessionForSource(
     sessionId,
     workspaceId,
     blank: true,
+    // I10：标签是加法字段——未表态的调用方**不发**该键（事实形状逐字节不变，旧
+    // 订阅者不受影响），桥在记账时把它计为 'unknown'（仪表覆盖缺口的信号）。
+    ...(options.origin === undefined ? {} : { origin: options.origin }),
     ...(options.title === undefined ? {} : { title: options.title }),
   })
   return sessionId
@@ -72,6 +82,7 @@ export async function forkSessionForSource(
     sessionId: childId,
     parentSessionId: sessionId,
     blank: false,
+    ...(options.origin === undefined ? {} : { origin: options.origin }),
     ...(options.title === undefined ? {} : { title: options.title }),
   })
   return childId

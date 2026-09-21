@@ -115,6 +115,9 @@ const STATIC_CHECKS = [
   // 结论——否则本地 static/full 可以在 C1/C3 失败（例如把 pure 文件挪进 patched）时全绿，
   // 与 AGENTS "本地 pass = CI 同证据" 的口径矛盾。CI 两处已直接调用同一命令。
   'node scripts/upstream/verify-upstream-touchpoints.mjs --no-artifact-rebuild',
+  // 远端完成未读/切源计划的故障注入矩阵（plan §10）：快、离线、自带 --self-test 负控。
+  // 2026-12 审计 M9：它与 remote-state-acceptance.mjs 此前完全是人工-only。
+  'node scripts/gates/remote-state-injection-matrix.mjs',
   'test:scripts',
 ]
 

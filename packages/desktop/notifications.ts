@@ -30,6 +30,18 @@ export interface NotificationRequest {
   body: string
   /** 正在屏幕上查看的会话（渲染端 document.hasFocus 判定，主进程再查一次作为权威）。 */
   requireHidden: boolean
+  /**
+   * 内容水位（来源 host 域毫秒：远端行取该来源 host 时钟，本地行取本地 dsh host
+   * 时钟；**不得**使用 renderer 墙钟——主计划 §5-13 禁止客户端墙钟进任何比较）：
+   * 同一次事件的两个通知入口（壳通道 / gateway 事实源）必须传同一个水位函数——
+   * complete = `completedAt ?? updatedAt`；ask/request = `updatedAt`。
+   *
+   * 它是 5s 去重身份的第五个分量（主计划 §3.3-3 / §5-16）：同一水位 = 同一事件
+   * → 两个入口合并成一条横幅；同会话的下一次完成水位不同 → 新事件，不得被前一次
+   * 吞掉。**缺省（旧调用方）** = 键里序列化为 `null`，与升级前的四元组行为逐字
+   * 一致（L13）。
+   */
+  watermark?: number
 }
 
 /** A native-notification click held until the renderer has installed its
@@ -318,7 +330,20 @@ export class NotificationClaimWindow {
     this.#prune(now)
     // The opaque source proof is part of event identity: a newly-created
     // same-id host must not inherit an old incarnation's 5s dedupe claim.
-    const key = JSON.stringify([request.sourceId, request.sourceFingerprint, request.sessionId, request.kind])
+    // The content watermark is the fifth identity component (plan §5-16): the
+    // two notification entries (shell channel / gateway facts) collapse to one
+    // banner on the same completion while a later completion of the same
+    // session is a new event. `kind` stays in the key — ask and complete at the
+    // same watermark must not swallow each other. Legacy callers omit the
+    // watermark, so it serializes as `null` and reproduces the exact
+    // pre-watermark four-tuple behaviour (L13).
+    const key = JSON.stringify([
+      request.sourceId,
+      request.sourceFingerprint,
+      request.sessionId,
+      request.kind,
+      request.watermark ?? null,
+    ])
     const existing = this.#claims.get(key)
     if (existing !== undefined && now - existing.claimedAt < this.#ttlMs) {
       return { accepted: false, reason: 'duplicate' }
@@ -637,7 +662,9 @@ function canonicalNotificationSourceId(sourceId: string): string | null {
  * 为非空 string（前三个 ≤256、body ≤512），sourceId 只能是保留的 local 或
  * canonical `dsh-${registryId}` / `gateway-${registryId}`；迁移期输入
  * `ssh-${registryId}` 被规范化为 `dsh-${registryId}`（registryId 复用
- * INSTANCE_ID_PATTERN）。kind 四选一、requireHidden 为 boolean。未知/多余
+ * INSTANCE_ID_PATTERN）。kind 四选一、requireHidden 为 boolean；可选
+ * watermark（内容水位，主计划 §5-16）必须是非负安全整数，缺省保持字段缺席
+ * （旧调用方的兼容面——校验后的 request 与升级前逐字段一致）。未知/多余
  * 字段忽略（校验只做白名单必要字段，不做全等断言）。
  */
 export function validateNotificationRequest(
@@ -692,6 +719,21 @@ export function validateNotificationRequest(
   if (typeof record.requireHidden !== 'boolean') {
     return { ok: false, error: 'requireHidden must be a boolean' };
   }
+  // 可选内容水位（主计划 §5-16）：必须是非负安全整数（host 域毫秒；结构化克隆
+  // 可携带 NaN/Infinity/分数/字符串，一律响亮拒绝而不是强制归一——水位进的是
+  // 去重身份，悄悄改值会造出一个假事件）。缺省保持字段缺席，校验后的 request
+  // 与升级前逐字段一致（旧调用方的兼容面）。
+  let watermark: number | undefined;
+  if (record.watermark !== undefined) {
+    if (
+      typeof record.watermark !== 'number'
+      || !Number.isSafeInteger(record.watermark)
+      || record.watermark < 0
+    ) {
+      return { ok: false, error: 'watermark must be a non-negative safe integer when present' };
+    }
+    watermark = record.watermark;
+  }
   return {
     ok: true,
     request: {
@@ -702,6 +744,7 @@ export function validateNotificationRequest(
       title: record.title,
       body: record.body,
       requireHidden: record.requireHidden,
+      ...(watermark === undefined ? {} : { watermark }),
     },
   };
 }
