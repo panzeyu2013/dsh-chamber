@@ -26,6 +26,7 @@ import {
   REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS,
   REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,
   remoteStreamOpeningTimeoutMs,
+  REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS,
   shouldReplaceSilentSocket,
   streamOpeningKey,
 } from './remote-retry-policy.ts'
@@ -191,6 +192,8 @@ export class RemoteStreamMuxClient {
     // here (not inside the try) so the finally block can read it too: the teardown
     // escalation below needs the same baseline the opening deadline uses.
     let framesAtSend = 0
+    // When that open frame was sent: the teardown escalation's own evidence window.
+    let sentAt = 0
     let opening: ReturnType<typeof setTimeout> | undefined
     const abort = (): void => { inbox.fail(signal.reason) }
     signal.addEventListener('abort', abort, { once: true })
@@ -227,6 +230,7 @@ export class RemoteStreamMuxClient {
       // subtraction answers exactly "did this socket deliver anything while this
       // attempt's opening item was pending".
       framesAtSend = this.socketFrames
+      sentAt = Date.now()
       opening = setTimeout(() => {
         timedOut = true
         this.openingTimeouts.set(openingKey, (this.openingTimeouts.get(openingKey) ?? 0) + 1)
@@ -300,17 +304,22 @@ export class RemoteStreamMuxClient {
         }
         if (!shared) this.openingTimeouts.delete(departedKey)
       }
-      // chamber patch (2026-09-21 independent review, B2): the opening deadline is
-      // the ONLY place that escalated a silent carrier — but the deadline is cleared
-      // on ANY teardown, and the journal watchdog's sibling probe aborts its stream
-      // at 20 s, BEFORE the 30 s opening budget can fire. A stream that is torn down
-      // (abort, dispose, consumer break) without the socket having delivered a single
-      // frame in its whole life is exactly the same evidence of a silently dead
-      // carrier, so escalate here as well. Socket-wide frames are the guard: a socket
-      // that served any other stream in the meantime is alive and must not be replaced.
-      // `!timedOut`: when the opening deadline already escalated, the teardown must not
-      // repeat it (one verdict per stream).
-      if (opened && !terminal && !timedOut && this.running && !this.disposed
+      // chamber patch (design 14 §D4, 2026-09): the opening deadline is not the only
+      // place a silent carrier can be proved. The journal watchdog aborts its sibling
+      // probe at 20 s — BEFORE the 30 s opening budget can fire — so a session that had
+      // already opened could lose its carrier with no page-level signal at all. A
+      // stream torn down (abort, dispose, consumer break) that never saw a single
+      // frame on its socket during a life of at least
+      // REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS is the same evidence, and escalates here:
+      // receiving this stream's opening item would itself have advanced the socket's
+      // frame counter, so a zero delta IS "still unanswered". The lifetime bound is
+      // what keeps a healthy socket safe — every reconnect starts a socket whose frame
+      // counter is 0, and a stream aborted before the socket could answer must not
+      // judge it. `!timedOut`: when the opening deadline already escalated, one
+      // verdict per stream is enough.
+      if (opened && !terminal && !timedOut
+        && Date.now() - sentAt >= REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS
+        && this.running && !this.disposed
         && carrier !== undefined && carrier === this.socket && carrier.readyState === WebSocket.OPEN
         && shouldReplaceSilentSocket(this.socketFrames - framesAtSend)) {
         this.forensics?.('socket-silent', endpoint + ' torn down with no frame delivered on the current socket')

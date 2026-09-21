@@ -108,6 +108,21 @@ export const REMOTE_STREAM_OPENING_TIMEOUT_MS = 30_000
 export const REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS = 300_000
 
 /**
+ * Minimum life a logical stream must have had before its TEARDOWN may call the
+ * physical socket silent (chamber fork, design 14 §D4, 2026-09).
+ *
+ * The opening deadline already proves silence after a whole budget, but a consumer
+ * can give up earlier: the journal watchdog aborts its sibling probe at 20 s, and
+ * the mux never saw that stream's opening item. Judging the socket on a stream torn
+ * down before it could possibly have been answered would replace healthy carriers —
+ * every reconnect starts a socket whose frame counter is 0, so a stream cancelled
+ * inside that first window would otherwise churn the carrier. 15 s is far above the
+ * measured Host answer (~25–75 ms through the proxy) and below the watchdog's own
+ * 20 s probe window, so a probe that gives up on a silent socket still counts.
+ */
+export const REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS = 15_000
+
+/**
  * Minimum distance between two mux-client connect attempts started by the mux
  * itself (chamber patch, 2026-09 review): a lost socket triggers one immediate
  * reconnect instead of waiting for the connection lane, but a flapping network

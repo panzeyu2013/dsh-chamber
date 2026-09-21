@@ -13,7 +13,11 @@
  *    upstream chat view renders exactly that string when `openState === 'loading'`), and
  *  - re-issuing the request on a socket that never delivers: the deadline alone
  *    cannot cure a carrier the page still sees OPEN (an ssh tunnel / direct-http
- *    leg whose FIN never arrived), so a silent socket must be REPLACED.
+ *    leg whose FIN never arrived), so a silent socket must be REPLACED, and
+ *  - waiting for that deadline to prove the silence: the journal watchdog's sibling
+ *    probe aborts its own stream at 20 s, so a teardown must escalate the same
+ *    evidence — bounded by a minimum life, because every reconnect starts a socket
+ *    whose frame counter is 0.
  */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -150,6 +154,28 @@ test('the opening budget stays a pure, import-free policy decision', () => {
   assert.match(policy, /export const REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS = 300_000/u)
   assert.match(
     client,
-    /import \{\s*\n\s*REMOTE_STREAM_HANDSHAKE_TIMEOUT_MS,\s*\n\s*REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS,\s*\n\s*REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,\s*\n\s*remoteStreamOpeningTimeoutMs,\s*\n\s*shouldReplaceSilentSocket,\s*\n\s*streamOpeningKey,\s*\n\} from '\.\/remote-retry-policy\.ts'/u,
+    /import \{\s*\n\s*REMOTE_STREAM_HANDSHAKE_TIMEOUT_MS,\s*\n\s*REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS,\s*\n\s*REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,\s*\n\s*remoteStreamOpeningTimeoutMs,\s*\n\s*REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS,\s*\n\s*shouldReplaceSilentSocket,\s*\n\s*streamOpeningKey,\s*\n\} from '\.\/remote-retry-policy\.ts'/u,
   )
+})
+
+test('a teardown proves the same silence, bounded by the life of the stream', () => {
+  const body = openerBody(client)
+  const finallyAt = body.lastIndexOf('} finally {')
+  assert.ok(finallyAt > 0, 'the opener keeps its finally')
+  const teardown = body.slice(finallyAt)
+  assert.match(body, /sentAt = Date\.now\(\)/u, 'the evidence window opens at the open frame')
+  assert.match(
+    teardown,
+    /Date\.now\(\) - sentAt >= REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS/u,
+    'a stream too young for the socket to have answered must not judge it',
+  )
+  assert.match(teardown, /shouldReplaceSilentSocket\(this\.socketFrames - framesAtSend\)/u, 'zero frames across that life is the evidence')
+  assert.match(teardown, /!timedOut/u, 'one verdict per stream: the deadline path may not be repeated')
+  assert.match(
+    teardown,
+    /carrier === this\.socket && carrier\.readyState === WebSocket\.OPEN/u,
+    'the verdict is judged on the socket this stream sent on',
+  )
+  assert.match(teardown, /this\.replaceSocket\(/u, 'the teardown shares the one replacement path')
+  assert.match(policy, /export const REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS = 15_000/u)
 })

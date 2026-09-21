@@ -14,12 +14,14 @@ import {
   REMOTE_STREAM_RETRY_BASE_MS,
   REMOTE_STREAM_RETRY_FIRST_MS,
   REMOTE_STREAM_RETRY_MAX_MS,
+  REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS,
   remoteStreamOpeningTimeoutMs,
   remoteStreamRetryDelayMs,
   REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,
   shouldReplaceSilentSocket,
   streamOpeningKey,
 } from '../../src/client/remote-retry-policy.ts'
+import { DEFAULT_STREAM_STALL_TIMING } from '../../src/client/stream-stall-policy.ts'
 import { setTimeout as delay } from 'node:timers/promises'
 
 test('the first carrier failure of an episode reopens immediately', () => {
@@ -154,4 +156,17 @@ test('an unknown frame baseline never churns the carrier', () => {
   for (const frames of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
     assert.equal(shouldReplaceSilentSocket(frames), false, String(frames))
   }
+})
+
+test('the teardown evidence window stays inside every window it must serve', () => {
+  // The teardown escalation exists for the journal watchdog's sibling probe, which
+  // aborts at probeTimeoutMs — before the mux opening budget can fire — so the
+  // minimum life must sit BELOW that probe window (or the probe teardown it exists
+  // for would always be judged too young) and below the opening budget (anything
+  // that waits longer is the deadline path's verdict).
+  assert.equal(REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS, 15_000)
+  assert.ok(REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS < DEFAULT_STREAM_STALL_TIMING.probeTimeoutMs,
+    'the watchdog probe window must be able to reach the bound')
+  assert.ok(REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS < REMOTE_STREAM_OPENING_TIMEOUT_MS,
+    'a stream that outlives this bound is judged by the opening deadline instead')
 })

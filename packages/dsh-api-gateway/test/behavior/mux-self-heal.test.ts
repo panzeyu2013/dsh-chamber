@@ -14,6 +14,12 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { RemoteStreamMuxClient } from '../../src/client/stream-client.ts'
+import {
+  REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS,
+  REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,
+  REMOTE_STREAM_OPENING_TIMEOUT_MS,
+  REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS,
+} from '../../src/client/remote-retry-policy.ts'
 
 class FakeSocket {
   static readonly CONNECTING = 0
@@ -60,6 +66,21 @@ class FakeSocket {
   /** Test helper: the Host delivers one frame on this socket (any frame is liveness evidence). */
   deliverNow(): void {
     this.#dispatch('message', { type: 'message', data: JSON.stringify({ type: 'item', streamId: 'liveness', value: {} }) })
+  }
+
+  /** Test helper: the Host answers one logical stream's open with its opening item. */
+  answerNow(streamId: string): void {
+    this.#dispatch('message', {
+      type: 'message',
+      data: JSON.stringify({ type: 'item', streamId, value: { type: 'opened' } }),
+    })
+  }
+
+  /** Test helper: the streamId of the n-th open frame sent on this socket (0-based). */
+  openStreamId(index = 0): string {
+    const frame = this.sent.filter(entry => entry.includes('"type":"open"'))[index]
+    assert.ok(frame !== undefined, 'the open frame must have reached the socket')
+    return (JSON.parse(frame) as { streamId: string }).streamId
   }
 
   /** Test helper: the socket dies after a successful handshake. */
@@ -238,7 +259,9 @@ test('a silent socket is REPLACED when an opening item times out on it', async (
 
 test('a logical stream torn down on a socket that never delivered a frame replaces it', async (t) => {
   installFakeSocket()
-  t.mock.timers.enable({ apis: ['setTimeout'] })
+  // Date is mocked as well: the teardown escalation is bounded by a minimum life, so
+  // the 20 s tick below must move the clock that guard reads (2026-09-21 review).
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
   const facts: Array<{ kind: string; cause: string }> = []
   const client = new RemoteStreamMuxClient('', (kind, cause) => { facts.push({ kind, cause }) })
   client.start()
@@ -322,6 +345,244 @@ test('an unanswered stream open fails as a carrier error once the deadline fires
     pending,
     (error: unknown) => error instanceof Error && error.name === 'RemoteStreamCarrierError',
   )
+  await client.close()
+  t.mock.timers.reset()
+})
+
+/** Sentinel for an iterator step that has not settled yet. */
+const PENDING = Symbol('pending')
+
+/**
+ * Attach a settling observer to one pending iterator step. The outcome is readable
+ * after `flushMicrotasks()`; a step that is still parked stays {@link PENDING}, so a
+ * broken escalation fails the assertion instead of hanging the suite.
+ * @param pending - the pending `iterator.next()` call.
+ * @returns the outcome reader.
+ */
+function observe(pending: Promise<unknown>): { read(): unknown } {
+  let outcome: unknown = PENDING
+  void pending.then(
+    (value) => { outcome = value },
+    (error: unknown) => { outcome = error },
+  )
+  return { read: () => outcome }
+}
+
+/** A settled failure, or a hard test failure when the step did not fail at all. */
+function asError(outcome: unknown): Error {
+  assert.ok(outcome instanceof Error, 'expected the step to fail with an Error')
+  return outcome
+}
+
+/** The carrier-error message must name the budget the stream was actually given. */
+function budgetError(ms: number): (error: unknown) => boolean {
+  return (error: unknown): boolean => error instanceof Error
+    && error.name === 'RemoteStreamCarrierError'
+    && error.message.includes('within ' + String(ms) + 'ms')
+}
+
+// ---------------------------------------------------------------------------
+// The teardown escalation's TWO bounds (design 14 §D4, 2026-09). The positive case
+// — the journal watchdog's sibling probe aborting at 20 s, before the 30 s opening
+// budget — is the test above; these pin the guards that keep the same evidence from
+// churning a healthy carrier: a minimum life, and zero frames on the socket.
+// ---------------------------------------------------------------------------
+
+test('a stream aborted inside the evidence window never judges the socket', async (t) => {
+  installFakeSocket()
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  const facts: Array<{ kind: string; cause: string }> = []
+  const client = new RemoteStreamMuxClient('', (kind, cause) => { facts.push({ kind, cause }) })
+  client.start()
+  await flushMicrotasks()
+  FakeSocket.instances[0].openNow()
+  await flushMicrotasks()
+  const deadline = new AbortController()
+  const iterator = client.open('session/follow', { args: {} }, deadline.signal)
+  const pending = iterator.next()
+  await flushMicrotasks()
+  // A consumer that gives up inside the evidence window (a session switch, an
+  // aborted unary-style read) must not churn a carrier that may simply be young.
+  t.mock.timers.tick(REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS - 1)
+  deadline.abort(new Error('consumer gave up'))
+  await assert.rejects(pending)
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 1, 'a young stream must not replace the socket')
+  assert.deepEqual(facts, [])
+  await client.close()
+  t.mock.timers.reset()
+})
+
+test('a teardown on a socket that delivered a frame in the meantime leaves it alone', async (t) => {
+  installFakeSocket()
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  const facts: Array<{ kind: string; cause: string }> = []
+  const client = new RemoteStreamMuxClient('', (kind, cause) => { facts.push({ kind, cause }) })
+  client.start()
+  await flushMicrotasks()
+  FakeSocket.instances[0].openNow()
+  await flushMicrotasks()
+  const deadline = new AbortController()
+  const iterator = client.open('session/follow', { args: {} }, deadline.signal)
+  const pending = iterator.next()
+  await flushMicrotasks()
+  // Any frame on the socket — here for another stream — is liveness evidence.
+  t.mock.timers.tick(10_000)
+  FakeSocket.instances[0].deliverNow()
+  t.mock.timers.tick(10_000)
+  deadline.abort(new Error('journal stall probe deadline'))
+  await assert.rejects(pending)
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 1, 'a socket that served another stream is alive')
+  assert.deepEqual(facts, [])
+  await client.close()
+  t.mock.timers.reset()
+})
+
+test('a stream answered with its opening item clears the opening budget key', async (t) => {
+  installFakeSocket()
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  const client = new RemoteStreamMuxClient()
+  client.start()
+  await flushMicrotasks()
+  const socket = FakeSocket.instances[0]
+  socket.openNow()
+  await flushMicrotasks()
+
+  // 1) The first episode earns one widening step (30 s → 60 s) while the socket
+  //    stays alive: a frame lands inside the window, so no replacement fires.
+  const first = client.open('session/follow', { args: { same: true } }, new AbortController().signal)
+  const firstSeen = observe(first.next())
+  await flushMicrotasks()
+  t.mock.timers.tick(10_000)
+  socket.deliverNow()
+  t.mock.timers.tick(20_000)
+  await flushMicrotasks()
+  assert.ok(budgetError(REMOTE_STREAM_OPENING_TIMEOUT_MS)(firstSeen.read()), 'the first episode must time out on the base budget')
+
+  // 2) The SAME request re-issued and answered. The answered stream stays LIVE: a
+  //    teardown would clear the key too, so only a live sibling can prove that the
+  //    DELIVERED FRAME is what reset it.
+  const answered = client.open('session/follow', { args: { same: true } }, new AbortController().signal)
+  const answeredSeen = observe(answered.next())
+  await flushMicrotasks()
+  socket.answerNow(socket.openStreamId(1))
+  await flushMicrotasks()
+  assert.deepEqual(
+    answeredSeen.read(),
+    { done: false, value: { type: 'opened' } },
+    "the opening item is the stream's first yield",
+  )
+
+  // 3) A further stream for that request (a rebuild) starts at the tight base budget
+  //    while the answered sibling is STILL live: the widening died with the frame.
+  const next = client.open('session/follow', { args: { same: true } }, new AbortController().signal)
+  const nextSeen = observe(next.next())
+  await flushMicrotasks()
+  t.mock.timers.tick(10_000)
+  socket.deliverNow()
+  t.mock.timers.tick(20_000)
+  await flushMicrotasks()
+  assert.ok(
+    budgetError(REMOTE_STREAM_OPENING_TIMEOUT_MS)(nextSeen.read()),
+    'a stream opened beside the answered one must start at the base budget',
+  )
+  await answered.return(undefined)
+  await next.return(undefined)
+  await client.close()
+  t.mock.timers.reset()
+})
+
+test('replacing a silent socket fails EVERY logical stream, not only the timed-out one', async (t) => {
+  installFakeSocket()
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  const client = new RemoteStreamMuxClient()
+  client.start()
+  await flushMicrotasks()
+  FakeSocket.instances[0].openNow()
+  await flushMicrotasks()
+  const first = client.open('session/follow', { args: { a: 1 } }, new AbortController().signal)
+  const firstSeen = observe(first.next())
+  await flushMicrotasks()
+  // The sibling opens 25 s later, so its OWN 30 s deadline cannot fire in the same
+  // tick: any failure it observes here can only come from the replacement.
+  t.mock.timers.tick(25_000)
+  const second = client.open('$events', { args: { b: 2 } }, new AbortController().signal)
+  const secondSeen = observe(second.next())
+  await flushMicrotasks()
+  t.mock.timers.tick(5_000)
+  await flushMicrotasks()
+  assert.ok(
+    budgetError(REMOTE_STREAM_OPENING_TIMEOUT_MS)(firstSeen.read()),
+    'the timed-out stream reaches its retry lane',
+  )
+  const secondError = asError(secondSeen.read())
+  assert.equal(secondError.name, 'RemoteStreamCarrierError')
+  assert.ok(
+    !secondError.message.includes('delivered no opening item'),
+    'the sibling was failed BY the replacement, not by its own deadline',
+  )
+  assert.equal(FakeSocket.instances.length, 2, 'the silent socket is replaced exactly once')
+  await client.close()
+  t.mock.timers.reset()
+})
+
+test('an open frame is refused when the socket was replaced before the send', async () => {
+  installFakeSocket()
+  const client = new RemoteStreamMuxClient()
+  client.start()
+  await flushMicrotasks()
+  FakeSocket.instances[0].openNow()
+  await flushMicrotasks()
+  const iterator = client.open('$events', { args: {} }, new AbortController().signal)
+  const pending = iterator.next()
+  // The waiter already resolved with socket 1; the lane restarts before the
+  // continuation runs. RFC 6455 would DISCARD the open frame on a CLOSED socket
+  // (only CONNECTING throws), so the guard must turn it into a carrier failure.
+  client.reconnect()
+  await assert.rejects(
+    pending,
+    (error: unknown) => error instanceof Error
+      && error.name === 'RemoteStreamCarrierError'
+      && error.message.includes('replaced before its open frame'),
+  )
+  assert.equal(FakeSocket.instances.length, 2, 'the replacement attempt must still start')
+  await client.close()
+})
+
+test('consecutive genuine failures double the self-heal cadence up to its cap', async (t) => {
+  installFakeSocket()
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  const client = new RemoteStreamMuxClient()
+  client.start()
+  await flushMicrotasks()
+  FakeSocket.instances[0].openNow()
+  await flushMicrotasks()
+  FakeSocket.instances[0].dieNow()
+  await flushMicrotasks()
+  /**
+   * Advance to the next attempt and fail it: the cadence doubles once per genuine
+   * failure, so attempt N+1 must start exactly at the expected interval.
+   * @param expectedMs - the interval the failed attempt before it earned.
+   * @param index - index of the attempt instance that must appear.
+   */
+  const nextAttempt = async (expectedMs: number, index: number): Promise<void> => {
+    t.mock.timers.tick(expectedMs - 1)
+    await flushMicrotasks()
+    assert.equal(FakeSocket.instances.length, index, 'attempt ' + String(index + 1) + ' must not start before ' + String(expectedMs) + 'ms')
+    t.mock.timers.tick(1)
+    await flushMicrotasks()
+    assert.equal(FakeSocket.instances.length, index + 1, 'attempt ' + String(index + 1) + ' must start after ' + String(expectedMs) + 'ms')
+    FakeSocket.instances[index].failNow()
+    await flushMicrotasks()
+  }
+  await nextAttempt(REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS, 1)
+  await nextAttempt(REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS * 2, 2)
+  await nextAttempt(REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS * 4, 3)
+  await nextAttempt(REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS * 8, 4)
+  // Doubling stops at the ceiling: 8 s → 16 s would exceed it.
+  await nextAttempt(REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS, 5)
+  await nextAttempt(REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS, 6)
   await client.close()
   t.mock.timers.reset()
 })
