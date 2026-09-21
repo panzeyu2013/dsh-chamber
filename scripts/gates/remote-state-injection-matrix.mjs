@@ -113,10 +113,23 @@ const INJECTIONS = [
   ] },
 ]
 
+/**
+ * Live-code projection: comments removed and skip/todo declarations renamed, so
+ * a title that only survives in a comment or in a skipped declaration no longer
+ * counts as evidence (P2-13: the old matcher was a plain substring search).
+ */
+function liveProjection(text) {
+  return String(text)
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^[ \t]*\/\/.*$/gm, '')
+    .replace(/\b(?:test|it|describe|suite)\.(?:skip|todo|fixme)\s*\(\s*(['"`])(?:\\.|(?!\1)[\s\S])*?\1/g, 'SKIPPED_DECL')
+}
+
 function exists(title, file) {
   let text
   try { text = readFileSync(join(ROOT, file), 'utf8') } catch { return false }
-  return title === '' ? true : text.includes(title)
+  // 文件级证据（title ''）只证明文件存在 —— 见头注的覆盖纪律。
+  return title === '' ? true : liveProjection(text).includes(title)
 }
 
 function main() {

@@ -18,7 +18,8 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createGatewayRuntimeManager } from '../../src/runtime-manager.ts'
-import { createRuntimeRoutes, sanitizeRouteError } from '../../src/runtime-routes.ts'
+import { createRuntimeRoutes } from '../../src/runtime-routes.ts'
+import { sanitizeRouteError } from '../../src/sanitize-route-error.ts'
 import {
   silentLogger,
   TEST_BUILTIN_VERSION,

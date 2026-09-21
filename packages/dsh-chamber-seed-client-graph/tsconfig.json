@@ -51,7 +51,8 @@
       // them to their @types packages in the virtual store (versions pinned
       // by the lockfile), types-only, same as the @standard-schema/spec seam.
       "compression": ["../../node_modules/.pnpm/@types+compression@1.8.1/node_modules/@types/compression"],
-      "negotiator": ["../../node_modules/.pnpm/@types+negotiator@0.6.5/node_modules/@types/negotiator"]
+      "negotiator": ["../../node_modules/.pnpm/@types+negotiator@0.6.5/node_modules/@types/negotiator"],
+      "undici": ["../../node_modules/.pnpm/undici@8.10.0/node_modules/undici"]
       // 版本同步有门禁：scripts/upstream/lockfile-store-path-mappings.test.mjs（跑在
       // test:upgrade-tools）断言每条 ".pnpm/<pkg>@<ver>/" 映射的版本 == 锁文件里
       // 某个声明该依赖的 importer 解析出的版本——pin 升级把依赖版本改掉而映射没跟

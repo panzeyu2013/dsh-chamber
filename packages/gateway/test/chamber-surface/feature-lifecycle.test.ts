@@ -37,22 +37,13 @@ import { createChamberInstalled } from '../../src/plugins-installed.ts'
 import { createChamberSurface } from '../../src/routes.ts'
 import { createDashboardHarness, type DashboardHarness, type DashboardRequest } from '../support/dashboard-harness.ts'
 import { seedCacheProjection } from '../support/chamber-surface-fixtures.ts'
-import { FakeRequest, FakeResponse, stubPluginTasks } from '../support/utils.ts'
+import { FakeResponse, stubPluginTasks } from '../support/utils.ts'
+import { handleChamberSurface, makeChamberSurfaceHarness, surfaceSilentLogger, surfaceStubChannels } from '../support/chamber-surface-harness.ts'
 
-const logger = {
-  log() {},
-  warn() {},
-  error() {},
-}
-
-const channels = {
-  register() {},
-  async start() {},
-  async stop() {},
-  resolve: () => null,
-  health: () => 'unknown' as const,
-  list: () => [],
-}
+// Shared harness (2026-12 audit F40): one logger, channel stub, surface
+// factory and transport runner for the chamber-surface suites.
+const logger = surfaceSilentLogger
+const channels = surfaceStubChannels
 
 class UploadRequest extends EventEmitter {
   method = 'PUT'
@@ -73,19 +64,10 @@ function uploadVia(host: ReturnType<typeof surface>, body: unknown): Promise<Fak
 }
 
 function surface(t?: { after(fn: () => void): void }) {
-  const stateDir = mkdtempSync(join(tmpdir(), 'gateway-surface-'))
-  t?.after(() => rmSync(stateDir, { recursive: true, force: true }))
-  const plugins = createChamberPlugins(stateDir, logger)
-  const installed = createChamberInstalled(stateDir)
-  return createChamberSurface({ logger, channels, plugins, installed, tasks: stubPluginTasks(), stateDir })
+  return makeChamberSurfaceHarness(t).surface
 }
 
-async function handle(surfaceHost: ReturnType<typeof surface>, method: string, path: string): Promise<FakeResponse> {
-  const response = new FakeResponse()
-  await surfaceHost.handle(new FakeRequest(method) as unknown as ApiRequest,
-    response as unknown as ApiResponse, path)
-  return response
-}
+const handle = handleChamberSurface
 
 test('chamber channels projection is a read-only GET', async t => {
   const host = surface(t)
@@ -602,12 +584,12 @@ test('the dialog keeps the page behind out of reach for its whole armed lifetime
     'a closed dialog no longer holds the keyboard')
 })
 
-test('PWA and mobile assets keep serving', async t => {
+test('mobile entry asset keeps serving', async t => {
   const host = surface(t)
+  // The PWA trio (manifest.webmanifest / sw-register.js / sw.js) was removed
+  // with the unreferenced P4 asset routes (2026-12 audit F12); the mobile
+  // light surface is the one asset the mobile-UA shunting actually serves.
   for (const [path, type] of [
-    ['/chamber/manifest.webmanifest', /^application\/manifest\+json/],
-    ['/chamber/sw-register.js', /^application\/javascript/],
-    ['/chamber/sw.js', /^application\/javascript/],
     ['/chamber/mobile.html', /^text\/html/],
   ] as const) {
     const response = await handle(host, 'GET', path)
@@ -792,7 +774,7 @@ test('chamber plugins cache lands 0600 files under 0700 dirs and rejects symlink
 
 test('chamber surface asset method edges: HEAD on scripts and 405 on POST /chamber/', async t => {
   const host = surface(t)
-  for (const path of ['/chamber/app.js', '/chamber/mobile.html', '/chamber/manifest.webmanifest']) {
+  for (const path of ['/chamber/app.js', '/chamber/mobile.html']) {
     const head = await handle(host, 'HEAD', path)
     assert.equal(head.status, 200, path)
     assert.equal(head.chunks.join(''), '', path)

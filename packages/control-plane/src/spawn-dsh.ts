@@ -313,28 +313,62 @@ export function removePidRecord(stateDir: string, pid: number): void {
   } catch { /* best effort: unsafe/unremovable evidence remains for the startup reaper */ }
 }
 
+/** How the dsh CLI entry was resolved for one spawn (see resolveDshEntry). */
+export type DshEntryLayout = 'installed' | 'source'
+
+/**
+ * The cwd for one managed-host spawn (2026-09-17 cwd incident; STATUS.md:27).
+ *
+ * An installed dsh entry lives in a runtime tree that an app install/update
+ * replaces IN PLACE (packaged `vendor/dsh`). A process created with such a
+ * directory as cwd keeps the old, unlinked inode as its working directory after
+ * the replacement, and worker_threads share one process.cwd() — so every tool
+ * call in the managed host then fails with `uv_cwd ENOENT` until the app
+ * restarts. Installed layouts therefore run with the managed dsh home — a
+ * stable, 0700, control-plane-owned directory that exists for the host's whole
+ * lifetime — as cwd.
+ *
+ * Source layouts keep the workspace cwd: their loader (`--import tsx/esm`) is
+ * resolved through the workspace's own node_modules, and a source checkout is
+ * not replaced in place by an install/update. Changing that branch would
+ * require absolutizing the tsx loader (fragile across tsx versions) for no
+ * safety gain.
+ *
+ * The entry itself is always passed as an absolute path, so neither branch
+ * depends on cwd to find the dsh CLI (design 02 §3.1).
+ */
+export function resolveSpawnCwd(input: {
+  readonly layout: DshEntryLayout
+  readonly dshWorkspacePath: string
+  readonly dshHome: string
+}): string {
+  return input.layout === 'installed' ? input.dshHome : input.dshWorkspacePath
+}
+
 /**
  * Resolve the dsh CLI entry for a workspace, preferring the installed
  * artifact over the source checkout (runtime differences are intentional:
  * packaged runtimes ship the published @deepseek-ai/dsh npm package, dev
  * workspaces run the ref-dsh source tree — the tsx fallback is dev-only).
- * The web-profile flags ride the entry either way (design 02 §3.1).
- * @param dshWorkspacePath - the dsh installation root (cwd of the spawned process).
+ * The web-profile flags ride the entry either way (design 02 §3.1). The
+ * resolved layout also selects the child cwd (see resolveSpawnCwd).
+ * @param dshWorkspacePath - the dsh installation root; the CLI entry and (for
+ *   the source layout) the spawned process cwd are resolved from it.
  * @param port - the port the host is asked to serve.
  * @param patchPath - optional `--patch` overlay (design 09 module B); null/absent when none.
- * @returns {args} node arguments to spawn.
+ * @returns {args, binary, layout} node arguments to spawn plus the resolved layout.
  */
-function resolveDshEntry(dshWorkspacePath: string, port: number, patchPath?: string | null): { args: string[]; binary: string } {
+function resolveDshEntry(dshWorkspacePath: string, port: number, patchPath?: string | null): { args: string[]; binary: string; layout: DshEntryLayout } {
   const profileFlags = webProfileArgs(port, patchPath ?? undefined)
   const installed = join(dshWorkspacePath, 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
   if (existsSync(installed)) {
-    return { args: [installed, ...profileFlags], binary: installed }
+    return { args: [installed, ...profileFlags], binary: installed, layout: 'installed' }
   }
   const source = join(dshWorkspacePath, 'apps', 'cli', 'src', 'bin.ts')
   if (existsSync(source)) {
     // Use the absolute source entry in argv as well as in the pid record so
     // the orphan reaper can re-verify one exact token without a cwd guess.
-    return { args: ['--import', 'tsx/esm', source, ...profileFlags], binary: source }
+    return { args: ['--import', 'tsx/esm', source, ...profileFlags], binary: source, layout: 'source' }
   }
   throw new Error(`no dsh CLI entry found in ${dshWorkspacePath} (neither node_modules/@deepseek-ai/dsh/lib/bin.js nor apps/cli/src/bin.ts)`)
 }
@@ -728,12 +762,22 @@ async function spawnAttempt({
   // so GET /api/host/logs can serve the recent lines without re-spawning.
   const hostLog = createHostLogWriter(stateDir, port)
   const entry = resolveDshEntry(dshWorkspacePath, port, patchPath)
+  // The cwd is never the installed runtime tree: an in-place app update
+  // replaces it and would leave the host with an unlinked working directory
+  // (worker_threads' shared process.cwd() then fails every tool call —
+  // 2026-09-17 incident). See resolveSpawnCwd.
+  const spawnCwd = resolveSpawnCwd({ layout: entry.layout, dshWorkspacePath, dshHome })
+  if (entry.layout === 'installed') {
+    // The stable cwd must exist before the spawn. createControlPlane creates
+    // dshHome for its own spawns; direct spawnDsh callers may not have.
+    ensurePrivateDirectoryNoFollow(dshHome, 0o700, { existingMode: 'preserve' })
+  }
   // The node executable is resolved, never assumed on PATH: the control
   // plane may run inside the Electron main process, where a GUI-launched
   // app has a minimal PATH (design 02 §3.1 — resolveNodeExecutable).
   const nodeExec = resolveNodeExecutable()
   const child = spawn(nodeExec.file, [...nodeExec.args, ...entry.args], {
-    cwd: dshWorkspacePath,
+    cwd: spawnCwd,
     // Deterministic, privacy-pinned environment (design 02 §3.1);
     // the Electron branch additionally injects ELECTRON_RUN_AS_NODE=1
     // so the app binary runs the CLI as a plain node process.

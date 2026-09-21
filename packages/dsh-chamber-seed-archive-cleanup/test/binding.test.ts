@@ -14,7 +14,6 @@ import {
   makeHostBinding,
   RunGate,
   BUSY_MESSAGE,
-  headerToState,
   type HostCtxServices,
 } from '../src/binding.ts'
 import { ArchiveCleanupCore, ArchiveCleanupError } from '../src/core.ts'
@@ -451,14 +450,22 @@ test('binding: registry surface guard refuses a missing setState surface', async
   await assert.rejects(() => host.listArchivedSessionIds(), codeIs('registry-unreadable'))
 })
 
-test('binding: headerToState carries cwd + lineage into snapshot states', () => {
-  const top = headerToState(header('top', { cwd: '/work/a' }))
-  const sub = headerToState(header('sub', { cwd: '/work/a', origin: 'subagent', parentSession: 'top' }))
-  assert.equal(top.cwd, '/work/a')
-  assert.equal(top.origin, undefined)
-  assert.equal(sub.origin, 'subagent')
-  assert.equal(sub.parentSessionId, 'top')
-  assert.equal(sub.running, false)
+test('binding: listSessionStates carries cwd + lineage into snapshot states', async () => {
+  const host = makeHostBinding({
+    sessionQuery: {
+      listSessions: async () => [
+        { header: header('top', { cwd: '/work/a' }) },
+        { header: header('sub', { cwd: '/work/a', origin: 'subagent', parentSession: 'top' }) },
+      ],
+    },
+  } as never)
+  const states = await host.listSessionStates()
+  const top = states.find(s => s.sessionId === 'top')
+  const sub = states.find(s => s.sessionId === 'sub')
+  assert.equal(top?.cwd, '/work/a')
+  assert.equal(top?.origin, undefined)
+  assert.equal(sub?.origin, 'subagent')
+  assert.equal(sub?.parentSessionId, 'top')
 })
 
 // Malformed official header shapes (review F3): the binding keys its whole
@@ -485,16 +492,8 @@ test('binding F3: listSessionStates refuses every malformed header shape loudly 
   }
 })
 
-test('binding F3: headerToState refuses every malformed header shape loudly with registry-unreadable', () => {
-  for (const { name, header: badHeader, field } of MALFORMED_HEADERS) {
-    assert.throws(() => headerToState(badHeader as never), (error: unknown) => isRegistryUnreadableNaming(error, field), name)
-  }
-})
-
 test('binding F3: absent optional header fields still pass and keep the cascade intact', async () => {
   // No cwd/parentSession/origin — an older legitimate record must pass.
-  const bare = headerToState(header('plain'))
-  assert.deepEqual(bare, { sessionId: 'plain', running: false })
   const host = makeHostBinding({
     sessionQuery: {
       listSessions: async () => [{ header: header('plain') }, { header: header('sub', { origin: 'subagent', parentSession: 'plain' }) }],

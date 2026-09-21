@@ -38,10 +38,6 @@ class FakeSocket implements MuxSocket {
   item(value: unknown): void { this.onmessage?.({ data: JSON.stringify({ type: 'item', streamId: 'events', value }) }) }
 }
 
-function listResponse(items: unknown[]) {
-  return async () => ({ ok: true, status: 200, json: async () => ({ type: 'server-response', rpcId: 'x', result: { ok: true, value: { items } } }) })
-}
-
 /** fetch 假件：按 rpcId 回显信封（envelope 校验要求 rpcId 一致）。 */
 function rpcFetch(handlers: Record<string, (payload: unknown) => unknown>) {
   return async (_url: string, init?: { body?: unknown }) => {

@@ -40,6 +40,7 @@
  * cases in test/gateway/gateway-session.test.ts).
  */
 
+import { buildGatewaySessionOrigin } from './gateway-session.ts'
 import type { GatewaySessionManager, GatewaySessionOrigin } from './gateway-session.ts'
 
 /** Lead time before the cached session's expiry instant at which the refresh
@@ -93,13 +94,13 @@ export function gatewaySessionOriginForUrl(
     return null
   }
   if (scope === undefined) return null
-  return {
+  return buildGatewaySessionOrigin({
     baseUrl: url,
     insecureHttp: parsed.protocol === 'http:',
-    ...(spkiPin === undefined ? {} : { spkiPin }),
-    ...(authority === undefined ? {} : { authority }),
     scope,
-  }
+    spkiPin,
+    authority,
+  })
 }
 
 /** Dependency seams (main.ts wires the real surfaces; tests inject fakes). */

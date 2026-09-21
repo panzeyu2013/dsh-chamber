@@ -2,10 +2,13 @@ import { test, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import {
-  BundleLoadTimeoutError, collectExtraRows, dedupeHostEntries, fetchHostGraph,
+  collectExtraRows, fetchHostGraph,
   findDeferredExternalDependencies, toExtraRows,
   type ExtraModuleRow, type HostGraphRow,
 } from '../../src/host-graph.ts'
+import {
+  BundleLoadTimeoutError, dedupeCoveredRows,
+} from '../../../dsh-chamber-client-ui-sidebar/src/shared/client-plugin-loader.ts'
 import { CHAMBER_COVERED_FACTORY_IDS, CHAMBER_COVERED_IDS } from '../../src/chamber-covered.ts'
 import { DEFERRED_EXTRA_ROW_IDS } from '../../src/required-extra-rows.ts'
 import { normalize, stripComments } from '../support/source-text.ts'
@@ -263,21 +266,21 @@ test('fetchHostGraph: malformed envelope/rows throw loud (never silently merged)
   }
 })
 
-test('dedupeHostEntries: drops covered ids, keeps extras, preserves optional fields', () => {
+test('dedupeCoveredRows: drops covered ids, keeps extras, preserves optional fields', () => {
   const covered = ['@deepseek-ai/dsh-client-ui-sidebar', '@deepseek-ai/dsh-client-ui-session']
   const entries = [
     row('@deepseek-ai/dsh-client-ui-sidebar'),
     row('@deepseek-ai/dsh-client-ui-session'),
     row('@scope/user-plugin', { immediately: true }),
   ]
-  assert.deepEqual(dedupeHostEntries(entries, covered), [
+  assert.deepEqual(dedupeCoveredRows(entries, covered), [
     { id: '@scope/user-plugin', url: '/plugins/??@scope/user-plugin&rev=abc123', rev: 'abc123', immediately: true },
   ])
 })
 
-test('dedupeHostEntries: covered set is O(1) per row and tolerates duplicate covered ids', () => {
+test('dedupeCoveredRows: covered set is O(1) per row and tolerates duplicate covered ids', () => {
   const covered = ['a', 'a', 'b']
-  assert.deepEqual(dedupeHostEntries([row('a'), row('b'), row('c')], covered).map(r => r.id), ['c'])
+  assert.deepEqual(dedupeCoveredRows([row('a'), row('b'), row('c')], covered).map(r => r.id), ['c'])
 })
 
 test('toExtraRows: injects the per-instance base path into root-relative urls and drops non-root-relative urls', () => {
@@ -393,7 +396,7 @@ test('dedupe + toExtraRows compose into the shell merge (covered rows never leak
     row('@deepseek-ai/dsh-client-ui-cordis'), // not covered → extra
   ]
   const covered = ['@deepseek-ai/dsh-client-ui-sidebar', '@deepseek-ai/dsh-client-modules', '@deepseek-ai/dsh-client-ui-conversation']
-  const extras = toExtraRows(dedupeHostEntries(entries, covered), '/api/i/local')
+  const extras = toExtraRows(dedupeCoveredRows(entries, covered), '/api/i/local')
   assert.deepEqual(extras, [extra('@deepseek-ai/dsh-client-ui-cordis')])
 })
 

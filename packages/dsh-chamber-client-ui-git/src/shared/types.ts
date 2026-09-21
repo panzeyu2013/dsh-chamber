@@ -272,6 +272,10 @@ export interface GitSourceState {
   snapshot?: GitWorktreeSnapshot
   sourceError?: GitSourceError
   actionError?: string
+  /** The failure code behind {@link GitSourceState.actionError}: the source-level
+   *  strip localizes it (shared/action-error.ts); absent on an unmapped/plain
+   *  failure, whose English message is then shown. */
+  actionErrorCode?: string
   busy?: GitBusyState
   recovery?: GitRecovery
   updatedAt?: number

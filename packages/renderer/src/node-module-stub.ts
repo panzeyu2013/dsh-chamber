@@ -8,5 +8,3 @@ export const createRequire = (): never => {
   throw new Error('node:module is not available in the browser')
 }
 
-/** Erased type peer for the vendored loader's type-only LoadHookContext import. */
-export type LoadHookContext = never

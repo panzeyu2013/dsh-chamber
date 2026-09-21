@@ -45,7 +45,7 @@ export interface SshInstanceSpec {
   /** Opaque main-process lifecycle proof; never persisted or renderer-minted. */
   sourceFingerprint: string
   /** transport='http' only: true = plaintext http origin (default false =
-   * https). Non-secret; never part of transportTargetChanged — an http↔https
+   * https). Non-secret; never part of the transport-identity predicate — an http↔https
    * switch keeps the target's credentials (design 17 §9.1). */
   insecureHttp: boolean
   /** Optional S23 certificate pin (64 hex SHA-256 of SPKI DER). Only present
@@ -59,7 +59,7 @@ export interface SshInstanceSpec {
   /**
    * Read-time NON-SECRET credential projection (design 17 §2.3/§9.1): true
    * when the main process holds a gateway token for this instance. Merged on
-   * instances_get, instances_set, save_connection, and delete_connection results (main.ts
+   * instances_get, save_connection, and delete_connection results (main.ts
    * projects the stores onto every registry return — never persisted, never
    * a secret value). Absent on older payloads.
    */
@@ -67,7 +67,7 @@ export interface SshInstanceSpec {
   /**
    * Read-time NON-SECRET credential projection (design 17 §2.3/§9.1): true
    * when the main process holds a gateway login password for this instance.
-   * Merged on instances_get, instances_set, save_connection, and delete_connection results
+   * Merged on instances_get, save_connection, and delete_connection results
    * (main.ts projects the stores onto every registry return — never persisted,
    * never a secret value). Only a gateway-kind target can ever report true.
    * Absent on older payloads.
@@ -78,7 +78,7 @@ export interface SshInstanceSpec {
    * how the main process's credential mirror is stored — 'safeStorage' =
    * OS-keychain-encrypted blobs (Electron safeStorage), 'plaintext' = the
    * documented 0600 plaintext fallback (OS keychain unavailable). Global per
-   * store. Merged on instances_get, instances_set, save_connection, and delete_connection
+   * store. Merged on instances_get, save_connection, and delete_connection
    * results (main.ts projects it onto every registry return — never persisted,
    * never a secret value). Absent on older payloads.
    */
@@ -335,8 +335,6 @@ export interface NpmSearchPackage {
  */
 export interface DesktopSshSurface {
   instances_get(): Promise<SshInstanceSpec[]>
-  /** Legacy compatibility channel: exact unchanged no-op roster only. */
-  instances_set(instances: SshInstanceSpec[]): Promise<SshInstanceSpec[]>
   /** Exact id-addressed main-owned delete; an absent id is an idempotent no-op. */
   delete_connection(id: string): Promise<SshInstanceSpec[]>
   /** Main-owned registry + all applicable credential dimensions transaction.

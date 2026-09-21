@@ -3,7 +3,7 @@
  * （design 18 §3.2/§3.5），原名 dsh-runtime-store.test.ts 的主体段（P0 拆分保留）。
  * Shared fixtures: test/support/store-fixtures.ts. Siblings:
  *   - metadata-authority.test.ts (pointer/override/isProtected/listVersionTrees)
- *   - disk-accounting.test.ts (runtimeDiskSummary accounting)
+ *   - disk-accounting.test.ts (runtimeDiskSummaryAsync accounting)
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

@@ -77,15 +77,11 @@ import {
 // install-tree copy of the sidebar package and its plain-node tests must
 // resolve the real module without a bundler).
 import {
-  BundleLoadTimeoutError,
   clientPluginRowOwner,
   dedupeCoveredRows,
   loadClientPluginRows,
-  publishSourceClientGraph,
   type ClientRowOutcome,
 } from '../../dsh-chamber-client-ui-sidebar/src/shared/client-plugin-loader.ts'
-
-export { BundleLoadTimeoutError }
 
 /** Re-exported for existing consumers (the type lives in the chamber shared face). */
 export type { PluginGraphDiagnostic, PluginGraphDiagnosticState }
@@ -280,18 +276,6 @@ export async function fetchHostGraph(basePath: string): Promise<HostGraphRow[] |
 }
 
 /**
- * Drop the rows the chamber page already covers (design 09 §3.3): composite
- * registration (chamber-entry.ts) plus page-own rows (chamber-covered.ts).
- * Loading a covered row again would double-register the same plugin on one
- * cordis ctx — this filter is load-bearing, not an optimization.
- */
-export function dedupeHostEntries(entries: readonly HostGraphRow[], covered: readonly string[]): HostGraphRow[] {
-  // Single-sourced with the settings bridge (sidebar shared face): the same
-  // first-load-wins union-table rule decides what the page may load again.
-  return dedupeCoveredRows(entries, covered)
-}
-
-/**
  * Turn kept rows into module-table rows for the boot kernel, injecting the
  * per-instance proxy prefix into root-relative bundle urls
  * ('/plugins/??<id>/client.js&rev=…' → '<basePath>/plugins/??<id>/client.js&rev=…')
@@ -477,13 +461,6 @@ export interface CollectExtraRowsDeps {
    * (gateway/mobile shapes): that is legitimate, not degraded.
    */
   onGraphUnavailable?(message: string, kind: GraphGapKind): void
-  /**
-   * The authoritative roster proof this boot belongs to (2026-12): the fetched
-   * graph is published into the page-level cache under it, so the settings
-   * panel only reuses the rows for the SAME source incarnation. Omitted
-   * callers publish under '' (never reused across an incarnation change).
-   */
-  sourceFingerprint?: string
   /**
    * C3 (2026-09 性能审计): awaited once the graph rows are known, BEFORE the
    * first extra-bundle load pass. The chamber composite entry evaluates
@@ -702,17 +679,10 @@ export async function collectExtraRows(
     }
     return []
   }
-  if (firstFetch.rows === null) {
-    // Non-503 channel failure already logged + published above; the boot
-    // continues without profile plugins (the documented gateway/mobile shape).
-    return []
-  }
-  // The RAW rows the page-level cache will publish (2026-12). Kept in a
-  // variable so the bounded recovery pass below can replace it with the FRESH
-  // read: publishing the pre-recovery rows would hand the settings panel stale
-  // bundle revs (per-process nonces) that 404 after a restart-straddled boot.
-  let rawRows = firstFetch.rows
-  const rows = toExtraRows(dedupeHostEntries(firstFetch.rows, CHAMBER_COVERED_IDS), basePath)
+  // fetchWithRetry 的失败出口（starting / error）已在上方 return；此处 rows 必非 null。
+  // 判别式在类型层无法关联，故显式断言——运行时不变式由三条出口穷尽（无新增可达分支）。
+  const firstRows = firstFetch.rows as HostGraphRow[]
+  const rows = toExtraRows(dedupeCoveredRows(firstRows, CHAMBER_COVERED_IDS), basePath)
   // C3: the chamber entry must have evaluated before any extra bundle executes
   // (its covered factory answers the ui-primitives platform-word require edges
   // the seed no longer serves — see the deps comment). The gate promise was
@@ -773,14 +743,13 @@ export async function collectExtraRows(
     const secondFetch = await fetchWithRetry()
     const keptFailures: { row: ExtraModuleRow; error: unknown }[] = []
     const recoveredRows: ExtraModuleRow[] = []
-    if (secondFetch.error === null && secondFetch.rows !== null) rawRows = secondFetch.rows
     if (secondFetch.error !== null || secondFetch.rows === null) {
       // The graph channel failed again (or the 503 budget ran out): no fresh
       // verdict is available — keep every original failure loud.
       keptFailures.push(...failedRows)
     } else {
       const freshById = new Map(
-        toExtraRows(dedupeHostEntries(secondFetch.rows, CHAMBER_COVERED_IDS), basePath)
+        toExtraRows(dedupeCoveredRows(secondFetch.rows, CHAMBER_COVERED_IDS), basePath)
           .map(fresh => [fresh.id, fresh] as const),
       )
       for (const failure of failedRows) {
@@ -870,13 +839,5 @@ export async function collectExtraRows(
   } else {
     reportDiagnostic(instanceId, 'ok', {}, deps.reportDiagnostic)
   }
-  // Publish the source's LATEST raw rows into the page-level cache: the
-  // settings panel reuses this exact read for the same source incarnation
-  // instead of paying another round trip, and both consumers then agree on the
-  // plugin set (post-recovery, so the revs are the live ones).
-  publishSourceClientGraph(instanceId, {
-    sourceFingerprint: deps.sourceFingerprint ?? '',
-    rows: rawRows,
-  })
   return rows
 }

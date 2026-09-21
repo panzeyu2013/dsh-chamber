@@ -2,8 +2,11 @@
  * Build-level smoke test (design 17 §9.4 regression): the gateway esbuild
  * bundle must carry the createRequire banner and import cleanly. 2026-12: the
  * ws-based session-index / approval-stream transports were removed with the
- * orchestration strip, so the bundle no longer contains ws — the banner stays
- * as belt-and-braces for any remaining bundled CJS dep with static requires.
+ * orchestration strip; `ws` itself is back in the bundle for the gateway's
+ * read-only session-state watcher (design 17 §10.7), which attaches the local
+ * dsh mux through control-plane's session-mux — that module and none of the
+ * stripped transports must be present. The banner stays as belt-and-braces for
+ * any remaining bundled CJS dep with static requires.
  */
 
 import { test } from 'node:test'
@@ -28,9 +31,18 @@ test('gateway dist bundle carries the createRequire banner and imports cleanly',
   // any bundled CJS dep's static requires resolve node builtins normally.
   assert.match(source, /import \{ createRequire \} from 'node:module';/, 'the createRequire banner import is present')
   assert.match(source, /const require = createRequire\(import\.meta\.url\);/, 'the banner require shim is installed')
-  // 2026-12: the ws transports are gone with the orchestration strip — the
-  // bundle must NOT carry ws's static require("events") any more.
-  assert.equal(source.includes('ws/lib/websocket.js'), false, 'the ws websocket transport is no longer bundled')
+  // 2026-12 orchestration strip: the removed session-index / approval-stream
+  // transports must stay out of the bundle. `ws` ITSELF is expected now — the
+  // gateway's session-state watcher attaches the local dsh mux through
+  // control-plane's session-mux, whose real opener lazily imports `ws`, and the
+  // shipped tarball carries no node_modules (design 18 §9.2), so the library
+  // must be bundled. Assert the mux is present and the stripped transports are
+  // not.
+  assert.equal(source.includes('control-plane/src/session-mux.ts'), true,
+    'the session-state mux transport must be bundled')
+  for (const removed of ['session-index', 'approval-stream']) {
+    assert.equal(source.includes(removed), false, `the stripped orchestration transport ${removed} must not be bundled`)
+  }
   // And the bundle must import cleanly (no "Dynamic require") and expose the
   // public API surface the control plane consumes.
   const module = await import(pathToFileURL(distIndex).href)

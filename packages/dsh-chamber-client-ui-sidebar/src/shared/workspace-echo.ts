@@ -61,6 +61,7 @@
 import type { InstanceAggregate, WorkspaceRow } from './instance-api.ts'
 import { basenameOf } from './instance-api.ts'
 import { canonicalPathKey } from './derive.ts'
+import { filterLedgerRows, forgetLedgerSources, mapLedgerRows, setLedgerRows, sweepLedger } from './ledger.ts'
 import { assertSingletonModule } from './singleton.ts'
 
 assertSingletonModule('workspace-echo')
@@ -155,23 +156,12 @@ export function recordPendingWorkspace(
   // that reuses an existing registration returns `created: false` — expire
   // seconds after the user asked for it.
   const kept = rows.filter(row => canonicalPathKey(row.path) !== key && row.workspaceId !== created.workspaceId)
-  return { ...ledger, [sourceId]: [...kept, next] }
+  return setLedgerRows(ledger, sourceId, [...kept, next])
 }
 
 /** Drop echoes older than the TTL (identity-preserving when nothing expired). */
 export function sweepPendingWorkspaces(ledger: WorkspaceEchoLedger, now: number): WorkspaceEchoLedger {
-  let changed = false
-  const next: Record<string, readonly PendingWorkspace[]> = {}
-  for (const [sourceId, rows] of Object.entries(ledger)) {
-    const kept = rows.filter(row => now - row.at < PENDING_WORKSPACE_TTL_MS)
-    if (kept.length === rows.length) {
-      next[sourceId] = rows
-      continue
-    }
-    changed = true
-    if (kept.length > 0) next[sourceId] = kept
-  }
-  return changed ? next : ledger
+  return sweepLedger(ledger, row => now - row.at >= PENDING_WORKSPACE_TTL_MS)
 }
 
 /**
@@ -185,8 +175,7 @@ export function reconcilePendingWorkspaces(
   sourceId: string,
   authoritative: readonly WorkspaceRow[],
 ): WorkspaceEchoLedger {
-  const rows = ledger[sourceId]
-  if (rows === undefined || rows.length === 0) return ledger
+  if (ledger[sourceId] === undefined) return ledger
   const realIds = new Set<string>()
   const realPaths = new Set<string>()
   for (const row of authoritative) {
@@ -194,12 +183,8 @@ export function reconcilePendingWorkspaces(
     realIds.add(row.workspaceId)
     realPaths.add(canonicalPathKey(row.path))
   }
-  const kept = rows.filter(row => !realIds.has(row.workspaceId) && !realPaths.has(canonicalPathKey(row.path)))
-  if (kept.length === rows.length) return ledger
-  const next: Record<string, readonly PendingWorkspace[]> = { ...ledger }
-  if (kept.length === 0) delete next[sourceId]
-  else next[sourceId] = kept
-  return next
+  return filterLedgerRows(ledger, sourceId, row =>
+    !realIds.has(row.workspaceId) && !realPaths.has(canonicalPathKey(row.path)))
 }
 
 /**
@@ -220,17 +205,11 @@ export function removePendingWorkspace(
   sourceId: string,
   key: { workspaceId: string; path: string },
 ): WorkspaceEchoLedger {
-  const rows = ledger[sourceId]
-  if (rows === undefined || rows.length === 0) return ledger
+  if (ledger[sourceId] === undefined) return ledger
   const pathKey = key.path === '' ? undefined : canonicalPathKey(key.path)
-  const kept = rows.filter(row =>
+  return filterLedgerRows(ledger, sourceId, row =>
     row.workspaceId !== key.workspaceId
     && (pathKey === undefined || canonicalPathKey(row.path) !== pathKey))
-  if (kept.length === rows.length) return ledger
-  const next: Record<string, readonly PendingWorkspace[]> = { ...ledger }
-  if (kept.length === 0) delete next[sourceId]
-  else next[sourceId] = kept
-  return next
 }
 
 /**
@@ -246,15 +225,8 @@ export function renamePendingWorkspace(
   workspaceId: string,
   title: string,
 ): WorkspaceEchoLedger {
-  const rows = ledger[sourceId]
-  if (rows === undefined || rows.length === 0) return ledger
-  let changed = false
-  const next = rows.map((row) => {
-    if (row.workspaceId !== workspaceId || row.title === title) return row
-    changed = true
-    return { ...row, title }
-  })
-  return changed ? { ...ledger, [sourceId]: next } : ledger
+  return mapLedgerRows(ledger, sourceId, row =>
+    row.workspaceId !== workspaceId || row.title === title ? row : { ...row, title })
 }
 
 /** Retire the echoes of sources that left the registry (same-id re-add = new generation). */
@@ -262,14 +234,7 @@ export function forgetPendingWorkspaces(
   ledger: WorkspaceEchoLedger,
   retired: ReadonlySet<string>,
 ): WorkspaceEchoLedger {
-  let changed = false
-  const next: Record<string, readonly PendingWorkspace[]> = { ...ledger }
-  for (const sourceId of retired) {
-    if (next[sourceId] === undefined) continue
-    delete next[sourceId]
-    changed = true
-  }
-  return changed ? next : ledger
+  return forgetLedgerSources(ledger, retired)
 }
 
 /**

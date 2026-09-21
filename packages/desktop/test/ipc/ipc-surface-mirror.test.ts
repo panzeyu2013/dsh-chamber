@@ -432,7 +432,7 @@ test('DesktopSshSurface matches the GOLDEN baseline — a method deleted from AL
   // method is genuinely removed; a synchronized three-way deletion otherwise
   // stays green in the pairwise comparison above).
   const golden = [
-    'config_list', 'connect', 'delete_connection', 'disconnect', 'gateway_plugin_apply', 'gateway_plugin_materialize', 'gateway_plugin_sync', 'instances_get', 'instances_set',
+    'config_list', 'connect', 'delete_connection', 'disconnect', 'gateway_plugin_apply', 'gateway_plugin_materialize', 'gateway_plugin_sync', 'instances_get',
     'is_active', 'local_plugin_add', 'local_plugin_add_file', 'local_plugin_list',
     'local_plugin_remove', 'logs', 'logs_clear', 'npm_search', 'onInstancesChanged',
     'onStatusChanged', 'plugin_apply', 'plugin_list', 'plugin_materialize_add',
@@ -480,7 +480,7 @@ test('main-owned connection transaction is wired through the preload without ret
     'save result must never return credential values')
 })
 
-test('legacy credential setters are clear-only, deletion is exact-id, and instances_set is no-op-only in main', () => {
+test('legacy credential setters are clear-only and deletion is exact-id in main', () => {
   for (const signature of [
     'set_password(id: string, password: null)',
     'set_gateway_token(id: string, token: null)',
@@ -495,7 +495,6 @@ test('legacy credential setters are clear-only, deletion is exact-id, and instan
   assert.match(preload, /delete_connection:\s*id\s*=>\s*ipcRenderer\.invoke\('desktop_ssh_delete_connection',\s*\{ id \}\)/)
   assert.match(desktopMain, /(?:ipcMain|deps\.ipc)\.handle\(IPC_CHANNELS\.SSH_DELETE_CONNECTION/)
   assert.match(desktopMain, /deleteConnectionTransaction\(/)
-  assert.match(desktopMain, /desktop_ssh_instances_set: only an exact unchanged no-op roster is allowed/)
 })
 
 test('gateway ready registration and session invalidation use exact connection scope and fail-closed auth decisions', () => {

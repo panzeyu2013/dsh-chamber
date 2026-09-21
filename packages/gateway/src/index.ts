@@ -13,11 +13,9 @@ import { fileURLToPath } from 'node:url'
 import { FATAL_STARTUP_BLOCK_REASONS } from '@dsh-chamber/dsh-runtime'
 import {
   CHAMBER_HOST_PACKAGES,
-  DEFAULT_STATE_DIR,
   HOST_PACKAGE_SEED_FILES,
   authCookieFor,
   createControlPlane,
-  defaultDshWorkspacePath,
   type Logger,
   type PlaneHandle,
 } from '@dsh-chamber/control-plane'
@@ -29,9 +27,7 @@ import {
   MIN_GATEWAY_PASSWORD_CHARS,
   MIN_GATEWAY_TOKEN_CHARS,
   normalizeMobileEntryPath,
-  parseGatewayConfig,
   type GatewayConfig,
-  type GatewayConfigInput,
 } from './config.ts'
 import { createAuth, type AuthProvider } from './auth.ts'
 import { createGatewayProxy, type GatewayProxy } from './gateway-proxy.ts'
@@ -81,14 +77,6 @@ export interface GatewayHandle {
   /** Effective auth kind AFTER config seeding (design 17 §7.4): reflects
    * runtime-managed credentials, unlike the deployment-config kind. */
   readonly authKind: string
-}
-
-/**
- * Build a validated GatewayConfig from raw input + resolved roots (CLI entry
- * resolves the stateDir/dshWorkspacePath defaults, then calls this).
- */
-export function buildGatewayConfig(input: GatewayConfigInput, stateDir = DEFAULT_STATE_DIR, dshWorkspacePath = defaultDshWorkspacePath()): GatewayConfig {
-  return parseGatewayConfig(input, stateDir, dshWorkspacePath)
 }
 
 /** Defend the public programmatic constructor as well as the CLI parser.
@@ -790,17 +778,9 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
   }
 }
 
-export { parseGatewayConfig, GatewayConfigError } from './config.ts'
-export type { GatewayConfig, GatewayConfigInput } from './config.ts'
-export { createAuth } from './auth.ts'
-export type { AuthProvider, AuthPrincipal } from './auth.ts'
-export { createGatewayProxy } from './gateway-proxy.ts'
-export type { GatewayProxy, GatewayProxyDeps } from './gateway-proxy.ts'
+// The bundle's public surface, asserted by test/packaging/build-smoke.test.ts:
+// the control plane consumes createGateway (defined here) plus these two. Every
+// other re-export of this entry had zero consumers in the repository and was
+// removed (2026-12 audit F11).
 export { createChamberSurface } from './routes.ts'
-export type { ChamberSurface, ChamberSurfaceDeps } from './routes.ts'
-export { createGatewayStore, hashCredential, verifyCredential } from './store.ts'
-export type { GatewayStore } from './store.ts'
-export { createChannelRegistry } from './channels.ts'
-export type { ChannelKind, ChannelHealth, ChannelProvider, ChannelInstance, ChannelRegistry, ChannelListEntry } from './channels.ts'
-export { createGatewayRequestPolicy, GATEWAY_VIEWPORT_META } from './middleware.ts'
-export type { GatewayRequestDecision, GatewayRequestPolicy } from './middleware.ts'
+export { createGatewayStore } from './store.ts'

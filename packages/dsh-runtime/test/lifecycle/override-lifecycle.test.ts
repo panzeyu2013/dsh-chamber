@@ -5,8 +5,7 @@
  * 覆盖：shouldInvalidate 版本相等/不等；invalidate 保留
  * chosenVersion/resolvedVersion/pending 且复位 swapAttempted（标记 ≠ 删除、
  * 不修改入参）；effectivePending 未失效/已失效（pending 一并失效）/record null
- * 三分支；shouldRetrySwap 置位/未置位；replayDecision 三分支（pending 空 /
- * 指针===pending / 指针!==pending，含指针缺失时视为需切换）。
+ * 三分支。
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -14,9 +13,7 @@ import type { OverrideRecord } from '../../src/dsh-runtime-store.ts';
 import {
   effectivePending,
   invalidate,
-  replayDecision,
   shouldInvalidate,
-  shouldRetrySwap,
 } from '../../src/override-lifecycle.ts';
 
 const SHELL = '0.1.1-rc.2';
@@ -105,29 +102,4 @@ test('effectivePending: 已失效（壳版本不等）→ null，pending 一并�
 test('effectivePending: record 为 null（无 override 记录）→ null', () => {
   assert.equal(effectivePending(null, SHELL), null);
   assert.equal(effectivePending(null, CURRENT), null);
-});
-
-test('shouldRetrySwap: swapAttempted===true → false（置位后不重试，避免每启重复警告）', () => {
-  assert.equal(shouldRetrySwap(makeRecord({ swapAttempted: true })), false);
-});
-
-test('shouldRetrySwap: swapAttempted===false → true（可尝试，置位由上层在尝试时做）', () => {
-  assert.equal(shouldRetrySwap(makeRecord({ swapAttempted: false })), true);
-});
-
-test('replayDecision: pending 为空 → none（无未决切换）', () => {
-  const record = makeRecord({ pending: null });
-  assert.equal(replayDecision(record, CURRENT), 'none');
-  assert.equal(replayDecision(record, null), 'none');
-});
-
-test('replayDecision: 当前指针 === pending → skip-switch-probe-only（切换已生效，跳过切换直接探针）', () => {
-  assert.equal(replayDecision(makeRecord(), PENDING), 'skip-switch-probe-only');
-});
-
-test('replayDecision: 当前指针 !== pending → apply-switch（指针尚未指向 pending）', () => {
-  assert.equal(replayDecision(makeRecord(), CURRENT), 'apply-switch');
-  assert.equal(replayDecision(makeRecord(), '0.4.0'), 'apply-switch');
-  // 指针缺失（null，如指针文件损坏/缺失）也视为未生效 → 执行切换。
-  assert.equal(replayDecision(makeRecord(), null), 'apply-switch');
 });

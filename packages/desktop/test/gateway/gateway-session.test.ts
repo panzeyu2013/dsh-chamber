@@ -6,7 +6,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { createGatewaySessionManager, GATEWAY_LOGIN_RATE_LIMIT_BACKOFF_MS, GATEWAY_SESSION_EXPIRY_SKEW_MS, GATEWAY_SESSION_TTL_MS, type GatewayHttpRequest, type GatewaySessionOrigin } from '../../gateway-session.ts'
+import { buildGatewaySessionOrigin, createGatewaySessionManager, GATEWAY_LOGIN_RATE_LIMIT_BACKOFF_MS, GATEWAY_SESSION_EXPIRY_SKEW_MS, GATEWAY_SESSION_TTL_MS, type GatewayHttpRequest, type GatewaySessionOrigin } from '../../gateway-session.ts'
 import { COOKIE, PASSWORD, loginHandler, startGateway, stubRequestFactory, assertFailure, type LoginRecord } from '../support/gateway-session-fixtures.ts'
 
 test('ensureSession: 302 + set-cookie succeeds, caches the bare cookie value, attributes stripped (design 17 §7.1/§7.3)', async () => {
@@ -315,4 +315,23 @@ test('ensureSession: an http origin with a pin stays unpinned (no TLS layer — 
   } finally {
     mgr.dispose()
   }
+})
+test('buildGatewaySessionOrigin is the single origin construction point (optional keys stay absent)', () => {
+  assert.deepEqual(
+    buildGatewaySessionOrigin({ baseUrl: 'https://gw.example.com', insecureHttp: false, scope: 's' }),
+    { baseUrl: 'https://gw.example.com', insecureHttp: false, scope: 's' },
+  )
+  assert.deepEqual(
+    buildGatewaySessionOrigin({ baseUrl: 'http://127.0.0.1:1', insecureHttp: true, scope: 's', spkiPin: null, authority: undefined }),
+    { baseUrl: 'http://127.0.0.1:1', insecureHttp: true, scope: 's' },
+    'null/undefined optionals must not create keys (the session cache key serializes this object)',
+  )
+  const pinned = buildGatewaySessionOrigin({
+    baseUrl: 'https://gw.example.com', insecureHttp: false, scope: 's', spkiPin: 'ab', authority: '127.0.0.1:30801',
+  })
+  assert.deepEqual(pinned, {
+    baseUrl: 'https://gw.example.com', insecureHttp: false, scope: 's', spkiPin: 'ab', authority: '127.0.0.1:30801',
+  })
+  assert.equal(Object.hasOwn(pinned, 'spkiPin'), true)
+  assert.equal(Object.hasOwn(buildGatewaySessionOrigin({ baseUrl: 'https://gw.example.com', insecureHttp: false, scope: 's' }), 'spkiPin'), false)
 })

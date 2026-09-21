@@ -1,7 +1,9 @@
 /**
- * runtimeDiskSummary / runtimeDiskSummaryAsync 磁盘核算测试（design 18 §3.5），
- * 拆分自 dsh-runtime-store.test.ts（P0）。共享 fixture：
- * test/support/store-fixtures.ts。
+ * runtimeDiskSummaryAsync 磁盘核算测试（design 18 §3.5），拆分自
+ * dsh-runtime-store.test.ts（P0）。共享 fixture：test/support/store-fixtures.ts。
+ *
+ * 2026-12 单源化：同步孪生 runtimeDiskSummary 已删除，本文件只驱动唯一的异步
+ * 单遍实现（含真实布局、硬链接/符号链接、网关布局、错误传播与让渡样本）。
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -10,16 +12,16 @@ import path from 'node:path';
 import {
   clearActivationJournal,
   recordRuntimeFailure,
-  runtimeDiskSummary,
   runtimeDiskSummaryAsync,
   writeActivationIntent,
+  type RuntimeDiskSummary,
 } from '../../src/dsh-runtime-store.ts';
 import { freshBase, makeVersionTree } from '../support/store-fixtures.ts';
 
-test('runtimeDiskSummary accounts every runtime-owned tree, cache, snapshot, and restore backup', () => {
+test('runtimeDiskSummaryAsync accounts every runtime-owned tree, cache, snapshot, and restore backup', async () => {
   const base = freshBase();
   makeVersionTree(base, '1.0.0');
-  const missing = runtimeDiskSummary(base);
+  const missing = await runtimeDiskSummaryAsync(base);
   assert.equal(missing.snapshotBytes, 0);
   assert.equal(missing.preRollbackBytes, 0);
   assert.equal(missing.restoreBackupBytes, 0);
@@ -49,7 +51,7 @@ test('runtimeDiskSummary accounts every runtime-owned tree, cache, snapshot, and
     writeFileSync(file, content);
   }
   recordRuntimeFailure(base, { version: '1.0.0', phase: 'install', error: 'x' });
-  const failureBytesBeforeRecovery = runtimeDiskSummary(base).failureBytes;
+  const failureBytesBeforeRecovery = (await runtimeDiskSummaryAsync(base)).failureBytes;
   const recoveryEvidence = path.join(base, 'dsh-runtime', 'metadata-recovery-data', 'tx', 'evidence', 'current');
   mkdirSync(path.dirname(recoveryEvidence), { recursive: true });
   writeFileSync(recoveryEvidence, 'metadata-recovery-evidence');
@@ -60,7 +62,7 @@ test('runtimeDiskSummary accounts every runtime-owned tree, cache, snapshot, and
   const publishBackup = path.join(base, 'dsh-runtime', '.1.2.3.publish-backup-deadbeef', 'payload');
   mkdirSync(path.dirname(publishBackup), { recursive: true });
   writeFileSync(publishBackup, Buffer.alloc(1024 * 1024));
-  const summary = runtimeDiskSummary(base);
+  const summary = await runtimeDiskSummaryAsync(base);
   assert.equal(summary.versionTrees, 1);
   assert.ok(summary.versionTreeBytes > 0);
   assert.ok(summary.storeBytes > 0);
@@ -87,51 +89,51 @@ test('runtimeDiskSummary accounts every runtime-owned tree, cache, snapshot, and
   const unrelated = path.join(base, 'state', 'dsh-home.oldish', 'data');
   mkdirSync(path.dirname(unrelated), { recursive: true });
   writeFileSync(unrelated, 'must not count');
-  assert.equal(runtimeDiskSummary(base).restoreBackupBytes, summary.restoreBackupBytes);
+  assert.equal((await runtimeDiskSummaryAsync(base)).restoreBackupBytes, summary.restoreBackupBytes);
 
   const unsafeBackupLookalike = path.join(base, 'dsh-runtime', '.1.2.3.publish-backup-not-hex', 'payload');
   mkdirSync(path.dirname(unsafeBackupLookalike), { recursive: true });
   writeFileSync(unsafeBackupLookalike, Buffer.alloc(1024 * 1024));
-  assert.equal(runtimeDiskSummary(base).failureBytes, summary.failureBytes,
+  assert.equal((await runtimeDiskSummaryAsync(base)).failureBytes, summary.failureBytes,
     'non-installer lookalikes are not claimed as owned failure scenes');
 });
 
-test('runtimeDiskSummary counts a publish-backup symlink itself without following its target', () => {
+test('runtimeDiskSummaryAsync counts a publish-backup symlink itself without following its target', async () => {
   const base = freshBase();
   const outside = path.join(base, 'outside-large');
   writeFileSync(outside, Buffer.alloc(1024 * 1024));
   const link = path.join(base, 'dsh-runtime', '.1.2.3.publish-backup-deadbeef');
   mkdirSync(path.dirname(link), { recursive: true });
   symlinkSync(outside, link, 'file');
-  const summary = runtimeDiskSummary(base);
+  const summary = await runtimeDiskSummaryAsync(base);
   assert.ok(summary.failureBytes > 0);
   assert.ok(summary.failureBytes < 1024 * 1024,
     'quota walk must account the link entry but never follow the external target');
 });
 
-test('runtimeDiskSummary accepts the gateway DSH_HOME layout for restore-backup accounting', () => {
+test('runtimeDiskSummaryAsync accepts the gateway DSH_HOME layout for restore-backup accounting', async () => {
   const base = freshBase();
   const gatewayHome = path.join(base, 'dsh-home');
   const backup = path.join(base, 'dsh-home.old-123', 'data');
   mkdirSync(path.dirname(backup), { recursive: true });
   writeFileSync(backup, 'gateway-restore-backup');
-  assert.equal(runtimeDiskSummary(base).restoreBackupBytes, 0,
+  assert.equal((await runtimeDiskSummaryAsync(base)).restoreBackupBytes, 0,
     'the desktop default must not claim gateway sibling backups');
-  assert.ok(runtimeDiskSummary(base, gatewayHome).restoreBackupBytes > 0,
+  assert.ok((await runtimeDiskSummaryAsync(base, gatewayHome)).restoreBackupBytes > 0,
     'the gateway owner explicitly accounts sibling restore backups');
 });
 
-test('runtimeDiskSummary propagates non-ENOENT accounting errors instead of reporting zero', () => {
+test('runtimeDiskSummaryAsync propagates non-ENOENT accounting errors instead of reporting zero', async () => {
   const base = freshBase();
   makeVersionTree(base, '1.0.0');
   // A non-directory state path deterministically makes restore-backup
   // enumeration fail with ENOTDIR on every supported platform.
   writeFileSync(path.join(base, 'state'), 'not a directory');
-  assert.throws(() => runtimeDiskSummary(base), (error: unknown) =>
+  await assert.rejects(() => runtimeDiskSummaryAsync(base), (error: unknown) =>
     (error as NodeJS.ErrnoException).code === 'ENOTDIR');
 });
 
-test('runtimeDiskSummary dedupes hard-linked tree/store bytes in the real total while categories keep per-path sums', () => {
+test('runtimeDiskSummaryAsync dedupes hard-linked tree/store bytes in the real total while categories keep per-path sums', async () => {
   const base = freshBase();
   const tree = makeVersionTree(base, '1.0.0');
   const payload = Buffer.alloc(1024 * 1024);
@@ -139,7 +141,7 @@ test('runtimeDiskSummary dedupes hard-linked tree/store bytes in the real total 
   const storeDir = path.join(base, 'dsh-runtime', '.pnpm-store');
   mkdirSync(storeDir, { recursive: true });
   linkSync(path.join(tree, 'shared-payload.bin'), path.join(storeDir, 'shared-payload.bin'));
-  const summary = runtimeDiskSummary(base);
+  const summary = await runtimeDiskSummaryAsync(base);
   // Category sums keep the historical per-path semantics: the shared inode is
   // charged to BOTH the version tree and the store.
   assert.ok(summary.storeBytes >= 1024 * 1024);
@@ -153,14 +155,14 @@ test('runtimeDiskSummary dedupes hard-linked tree/store bytes in the real total 
   assert.equal(summary.totalBytes, categorySum - 1024 * 1024);
 });
 
-test('runtimeDiskSummary buckets stray residue and metadata authorities into unclassifiedBytes', () => {
+test('runtimeDiskSummaryAsync buckets stray residue and metadata authorities into unclassifiedBytes', async () => {
   const base = freshBase();
   makeVersionTree(base, '1.0.0');
   const stray = path.join(base, 'dsh-runtime', 'leftover', 'data.bin');
   mkdirSync(path.dirname(stray), { recursive: true });
   writeFileSync(stray, Buffer.alloc(1024));
   writeFileSync(path.join(base, 'dsh-runtime', 'current'), '{"version":"1.0.0"}', 'utf8');
-  const summary = runtimeDiskSummary(base);
+  const summary = await runtimeDiskSummaryAsync(base);
   assert.ok(summary.unclassifiedBytes > 1024,
     'stray directories and metadata authorities are quota-visible residue');
   assert.equal(summary.totalBytes,
@@ -171,22 +173,22 @@ test('runtimeDiskSummary buckets stray residue and metadata authorities into unc
     'without hard links the real total equals the category sum plus the residue bucket');
 });
 
-test('runtimeDiskSummary counts an unclassified symlink itself without following the external target', {
+test('runtimeDiskSummaryAsync counts an unclassified symlink itself without following the external target', {
   skip: process.platform === 'win32' ? 'symlink fixture requires Unix permissions' : false,
-}, () => {
+}, async () => {
   const base = freshBase();
   const outside = path.join(base, 'outside-large');
   writeFileSync(outside, Buffer.alloc(1024 * 1024));
   const link = path.join(base, 'dsh-runtime', 'stray-link');
   mkdirSync(path.dirname(link), { recursive: true });
   symlinkSync(outside, link, 'file');
-  const summary = runtimeDiskSummary(base);
+  const summary = await runtimeDiskSummaryAsync(base);
   assert.ok(summary.unclassifiedBytes > 0, 'the link entry itself is accounted');
   assert.ok(summary.unclassifiedBytes < 1024 * 1024, 'the external target is never charged');
   assert.ok(summary.totalBytes < 1024 * 1024);
 });
 
-test('runtimeDiskSummary charges restore backups in the real total and dedupes hard links across roots', () => {
+test('runtimeDiskSummaryAsync charges restore backups in the real total and dedupes hard links across roots', async () => {
   const base = freshBase();
   const runtimeFile = path.join(base, 'dsh-runtime', 'leftover', 'data.bin');
   mkdirSync(path.dirname(runtimeFile), { recursive: true });
@@ -194,7 +196,7 @@ test('runtimeDiskSummary charges restore backups in the real total and dedupes h
   const backupFile = path.join(base, 'state', 'dsh-home.old', 'data.bin');
   mkdirSync(path.dirname(backupFile), { recursive: true });
   linkSync(runtimeFile, backupFile);
-  const summary = runtimeDiskSummary(base);
+  const summary = await runtimeDiskSummaryAsync(base);
   assert.ok(summary.restoreBackupBytes > 0);
   assert.ok(summary.unclassifiedBytes > 0);
   assert.equal(summary.totalBytes,
@@ -202,7 +204,7 @@ test('runtimeDiskSummary charges restore backups in the real total and dedupes h
     'the inode shared by the residue and the restore backup is charged exactly once');
 });
 
-// ---- perf T3（2026-09）：runtimeDiskSummaryAsync 与同步版逐字段对等 ----
+// ---- perf T3（2026-09）：富 fixture 上的单遍实现语义（不再有同步对等物） ----
 
 /** 组装覆盖全部类别的真实形态 fixture（版本树/store/缓存/工作目录/失败族/
  *  快照/预回滚/恢复备份/发布备份/未分类残渣/元数据权威），硬链接 + 符号链接
@@ -253,7 +255,7 @@ function makeRichAccountingFixture(base: string): void {
   linkSync(path.join(base, 'dsh-runtime', '.pnpm-store', 'pkg', 'x', 'index.js'), backupLink);
 }
 
-function summaryFields(summary: ReturnType<typeof runtimeDiskSummary>): Record<string, number | boolean> {
+function summaryFields(summary: RuntimeDiskSummary): Record<string, number | boolean> {
   const { versionTrees, versionTreeBytes, storeBytes, cacheBytes, installHomeBytes, xdgCacheBytes,
     workBytes, failureBytes, snapshotBytes, preRollbackBytes, restoreBackupBytes,
     unclassifiedBytes, totalBytes, storePruneNeeded } = summary;
@@ -262,38 +264,44 @@ function summaryFields(summary: ReturnType<typeof runtimeDiskSummary>): Record<s
     unclassifiedBytes, totalBytes, storePruneNeeded };
 }
 
-test('runtimeDiskSummaryAsync is field-for-field identical to the sync walk on a rich fixture', async () => {
+test('runtimeDiskSummaryAsync accounts the rich fixture: every category visible, hard links charged once', async () => {
   const base = freshBase();
   makeRichAccountingFixture(base);
-  const syncSummary = runtimeDiskSummary(base);
-  const asyncSummary = await runtimeDiskSummaryAsync(base);
-  assert.deepEqual(summaryFields(asyncSummary), summaryFields(syncSummary));
-  // 富 fixture 必须真的覆盖到各面（防对等测试空转）：类别与残渣都非零。
-  assert.ok(syncSummary.versionTreeBytes > 0 && syncSummary.storeBytes > 0);
-  assert.ok(syncSummary.unclassifiedBytes > 0 && syncSummary.restoreBackupBytes > 0);
-  assert.ok(syncSummary.failureBytes > 1024, 'failure family incl. publish backup is quota-visible');
+  const summary = await runtimeDiskSummaryAsync(base);
+  assert.ok(summary.versionTreeBytes > 0 && summary.storeBytes > 0);
+  assert.ok(summary.cacheBytes > 0 && summary.installHomeBytes > 0 && summary.xdgCacheBytes > 0);
+  assert.ok(summary.workBytes > 0 && summary.snapshotBytes > 0 && summary.preRollbackBytes > 0);
+  assert.ok(summary.unclassifiedBytes > 0 && summary.restoreBackupBytes > 0);
+  assert.ok(summary.failureBytes > 1024, 'failure family incl. publish backup is quota-visible');
+  const fields = summaryFields(summary);
+  assert.equal(Object.keys(fields).length, 14, 'the projection covers the full summary shape');
+  for (const [name, value] of Object.entries(fields)) {
+    assert.equal(Number.isNaN(value), false, `${name} must be a real number/boolean`);
+  }
+  // Two hard-linked inodes are charged to both of their categories but once to
+  // the real total: the 1 MiB tree/store payload and the small store/backup file.
+  const categorySum = summary.versionTreeBytes + summary.storeBytes
+    + summary.cacheBytes + summary.installHomeBytes + summary.xdgCacheBytes
+    + summary.workBytes + summary.failureBytes + summary.snapshotBytes
+    + summary.preRollbackBytes + summary.restoreBackupBytes + summary.unclassifiedBytes;
+  assert.ok(summary.totalBytes < categorySum, 'hard-linked bytes are never double charged');
+  assert.ok(summary.totalBytes >= 1024 * 1024, 'the real total keeps the payload once');
 });
 
-test('runtimeDiskSummaryAsync matches the sync walk on an empty and a gateway-layout base', async () => {
+test('runtimeDiskSummaryAsync on an empty base is all zeros and the gateway layout charges sibling backups', async () => {
   const empty = freshBase();
-  assert.deepEqual(summaryFields(await runtimeDiskSummaryAsync(empty)), summaryFields(runtimeDiskSummary(empty)));
+  const emptyFields = summaryFields(await runtimeDiskSummaryAsync(empty));
+  assert.equal(emptyFields.versionTrees, 0);
+  for (const [name, value] of Object.entries(emptyFields)) {
+    if (typeof value === 'number') assert.equal(value, 0, `${name} must be zero on an empty base`);
+  }
+  assert.equal(emptyFields.storePruneNeeded, false);
   const gatewayBase = freshBase();
   const gatewayHome = path.join(gatewayBase, 'dsh-home');
   const backup = path.join(gatewayBase, 'dsh-home.old-123', 'data');
   mkdirSync(path.dirname(backup), { recursive: true });
   writeFileSync(backup, 'gateway-restore-backup');
-  const gatewayExpected = runtimeDiskSummary(gatewayBase, gatewayHome);
-  assert.ok(gatewayExpected.restoreBackupBytes > 0);
-  assert.deepEqual(summaryFields(await runtimeDiskSummaryAsync(gatewayBase, gatewayHome)),
-    summaryFields(gatewayExpected));
-});
-
-test('runtimeDiskSummaryAsync propagates the same non-ENOENT accounting errors as the sync walk', async () => {
-  const base = freshBase();
-  makeVersionTree(base, '1.0.0');
-  writeFileSync(path.join(base, 'state'), 'not a directory');
-  await assert.rejects(() => runtimeDiskSummaryAsync(base), (error: unknown) =>
-    (error as NodeJS.ErrnoException).code === 'ENOTDIR');
+  assert.ok((await runtimeDiskSummaryAsync(gatewayBase, gatewayHome)).restoreBackupBytes > 0);
 });
 
 test('runtimeDiskSummaryAsync batches: yields to the event loop and reports progress via onVisited', async () => {

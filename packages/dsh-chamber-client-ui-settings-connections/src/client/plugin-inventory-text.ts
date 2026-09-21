@@ -140,16 +140,38 @@ export function thirdPartyEntries(
  * entry (the host's list() reports disabled Loader entries too) is never
  * claimed live.
  */
-/** Map a chamber package name to its inventory-entry kind (the reverse of
- *  classifyInventoryEntry for the fixed chamber rows). */
+/** Map a chamber package name to its inventory-entry kind: the reverse of
+ *  classifyInventoryEntry, derived FROM it (2026-12 audit: this function used
+ *  to re-list the four package names). classifyInventoryEntry answers
+ *  'official' for any other @deepseek-ai/* name; the historical reverse map
+ *  answered 'third-party' for everything that is not a fixed chamber name, and
+ *  the caller keys its exact-name fallback on that answer — fold the two
+ *  non-chamber answers back together. */
 function chamberKindOf(packageName: string): InventoryEntryKind {
-  const clientKind = classifyChamberClientPlugin(packageName)
-  if (clientKind !== null) return clientKind
-  if (packageName === HOST_GRAPH_PACKAGE) return 'chamber-host-graph'
-  if (packageName === GIT_WORKTREE_PACKAGE) return 'chamber-git-worktree'
-  if (packageName === ARCHIVE_CLEANUP_PACKAGE) return 'chamber-archive-cleanup'
-  if (packageName === OPEN_IN_PACKAGE) return 'chamber-open-in'
-  return 'third-party'
+  const kind = classifyInventoryEntry(packageName)
+  return kind === 'official' || kind === 'third-party' ? 'third-party' : kind
+}
+
+/** The ONE Loader-liveness fact for one snapshot entry (no presentation). */
+export type LoaderLivenessFact = 'absent' | 'disabled' | 'active' | 'failed' | 'starting'
+
+/**
+ * Classify one Loader entry by the actual load outcome — presence, enablement
+ * and root-fiber phase are the only facts, never a constant claim. Every
+ * projection (chamberRemoteKey, thirdPartyLiveState) reads THIS function so
+ * the decision exists once (2026-12 audit); each keeps its own label
+ * vocabulary.
+ * @param entry - the matched Loader entry, or undefined when absent.
+ * @returns absent / disabled / active / failed / starting.
+ */
+export function entryLiveness(
+  entry: { enabled: boolean; fiberPhase: PluginFiberPhase } | undefined,
+): LoaderLivenessFact {
+  if (entry === undefined) return 'absent'
+  if (!entry.enabled) return 'disabled'
+  if (entry.fiberPhase === 'active') return 'active'
+  if (entry.fiberPhase === 'failed') return 'failed'
+  return 'starting'
 }
 
 export function chamberRemoteKey(
@@ -164,11 +186,13 @@ export function chamberRemoteKey(
   const entry = kind === 'third-party'
     ? entries.find(candidate => candidate.moduleName === packageName)
     : entries.find(candidate => classifyInventoryEntry(candidate.moduleName) === kind)
-  if (entry === undefined) return 'chamberRemoteNotInjected'
-  if (!entry.enabled) return 'chamberRemoteInjectedUnknown'
-  if (entry.fiberPhase === 'active') return 'chamberRemoteLive'
-  if (entry.fiberPhase === 'failed') return 'chamberRemoteFailed'
-  return 'chamberRemoteInjectedUnknown'
+  switch (entryLiveness(entry)) {
+    case 'absent': return 'chamberRemoteNotInjected'
+    case 'active': return 'chamberRemoteLive'
+    case 'failed': return 'chamberRemoteFailed'
+    // disabled / starting: presence is a fact, effectiveness is not.
+    default: return 'chamberRemoteInjectedUnknown'
+  }
 }
 
 /* ---- Third-party row live state (Loader-derived, per-row 生效状态) ----
@@ -255,13 +279,15 @@ export function thirdPartyLiveState(
 ): ThirdPartyLiveState | null {
   if (snapshot === null) return null
   const entry = snapshot.entries.find(candidate => candidate.moduleName === packageName)
-  if (entry === undefined) return null
-  if (!entry.enabled) return { labelKey: 'pluginDisabled', tone: 'muted' }
-  if (entry.fiberPhase === 'active') return { labelKey: 'thirdPartyLiveActive', tone: 'ok' }
-  // The failed-load label is the shared badge copy (chamberBadgeFailed:
-  // 加载失败 / Failed to load) — the tone is what carries the danger color.
-  if (entry.fiberPhase === 'failed') return { labelKey: 'chamberBadgeFailed', tone: 'danger' }
-  return { labelKey: 'thirdPartyLiveStarting', tone: 'muted' }
+  switch (entryLiveness(entry)) {
+    case 'absent': return null
+    case 'disabled': return { labelKey: 'pluginDisabled', tone: 'muted' }
+    case 'active': return { labelKey: 'thirdPartyLiveActive', tone: 'ok' }
+    // The failed-load label is the shared badge copy (chamberBadgeFailed:
+    // 加载失败 / Failed to load) — the tone is what carries the danger color.
+    case 'failed': return { labelKey: 'chamberBadgeFailed', tone: 'danger' }
+    default: return { labelKey: 'thirdPartyLiveStarting', tone: 'muted' }
+  }
 }
 
 /* ---- Chamber row badges (plan 24 B1.5: the three-row chamber table is

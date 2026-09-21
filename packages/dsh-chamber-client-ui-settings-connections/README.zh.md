@@ -30,9 +30,8 @@ order 30，排在 agent-presets 之后）。本分区是 chamber 连接管理器
   独立显示 write-only 凭据：所有 SSH transport 可填 SSH 密码，所有 Gateway
   target 可填 token 和/或 Unicode 登录密码。add/edit 与非空凭据写统一走主进程
   `desktop_ssh_save_connection` 单事务；删除走精确 id-addressed
-  `desktop_ssh_delete_connection`（不存在 id 为幂等 no-op）。legacy setter 仅 clear，
-  `instances_set` 只接受当前规范化 roster 的同长度、同顺序、逐字段完全相同 no-op，
-  不能 delete/add/edit/reorder。serviceName 必须匹配
+  `desktop_ssh_delete_connection`（不存在 id 为幂等 no-op）。legacy setter 仅 clear；
+  除该单事务外不能 add/edit/reorder。serviceName 必须匹配
   `^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`，主进程固定执行
   `systemctl <action> -- <serviceName>`。
 - secret 永不记日志、编辑时永不回填。主进程分别镜像到

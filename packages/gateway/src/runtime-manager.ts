@@ -26,6 +26,7 @@
 import {
   readFileSync,
   readdirSync,
+  statSync,
 } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { createRequire as nodeCreateRequire } from 'node:module'
@@ -33,6 +34,7 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { call as dshCall, type Logger, type PlaneHandle } from '@dsh-chamber/control-plane'
 import { syncedHostDomainProbeNames } from './plugins.ts'
 import {
+  activationJournalPath,
   bindRuntimeInstallResolution,
   assertRuntimeRootNoFollow,
   atomicWriteRuntimeFileNoFollow,
@@ -48,6 +50,7 @@ import {
   isVersionDowngrade,
   completeInterruptedRestore,
   createRuntimeFileExclusiveNoFollow,
+  currentPointerPath,
   deleteOverride,
   detectRuntimeMetadataHealth,
   downloadVerifiedRegistryTarball,
@@ -99,6 +102,7 @@ import {
   createCoalescedRefresher,
   runtimeDiskSummaryAsync,
   runtimeFailureSummary,
+  overridePath,
   PROBE_TEXT_KEEP_TOKENS,
   sanitizeErrorText,
   snapshotSummary,
@@ -123,6 +127,10 @@ import {
 import { sanitizeRouteError } from './sanitize-route-error.ts'
 import { resolvePnpmEntry } from './pnpm-entry.ts'
 import type { GatewayConfig } from './config.ts'
+// The shared in-flight writer matrix (2026-12 audit F3): assertMutationIdle and
+// profileWriteRefusal no longer carry two copies of the same seven branches.
+import { writerBusyRefusal, type RuntimeWriterFlags } from './runtime-gate.ts'
+import { codedError } from './http-utils.ts'
 // Refusal construction + recovery-name classification single sources (audit
 // N2): every code/message this manager shares with the route pre-gates in
 // runtime-routes.ts comes from runtime-refusals.ts; canonical recovery reason
@@ -132,7 +140,6 @@ import {
   applyNowNotRunningRefusal,
   envPinnedRefusal,
   pendingOnlyRefusal,
-  profileWriteBusyRefusal,
   RECOVERABLE_METADATA_BLOCKS,
   recoveryRetryRequiredRefusal,
   refusalError,
@@ -682,9 +689,48 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     usage: RuntimeDiskSummary | null
     error: string | null
   } | null = null
+  /** Disk-derived metadata health facts (2026-12 audit F4): detectRuntimeMetadataHealth
+   *  scans CURRENT/OVERRIDE/JOURNAL/recovery evidence on every /status call
+   *  (probed every 3s by the UI). Only the DISK facts are cached — the
+   *  in-memory recoverability gate is recomputed per call, so a writer becoming
+   *  busy still stops advertising recovery immediately. Every transaction
+   *  boundary invalidates through invalidateDiskCache(). */
+  const METADATA_HEALTH_TTL_MS = 5_000
+  let metadataHealthCache: {
+    checkedAt: number
+    /** Cheap change detector: a direct on-disk corruption (fault injection,
+     *  operator repair) must be reflected on the NEXT status call, not after
+     *  the TTL — four stats replace the full scan in the common case. */
+    fingerprint: string
+    facts: {
+      status: 'unknown' | 'healthy' | 'selection-corrupt' | 'recovery-in-progress' | 'recovery-finalized' | 'recovery-marker-corrupt'
+      components: string[]
+      needsRecovery: boolean
+    } | null
+  } | null = null
+
+  /** stat-only fingerprint of the metadata files + their directory. */
+  function metadataFingerprint(): string {
+    const parts: string[] = []
+    for (const path of [
+      join(baseDir, 'dsh-runtime'),
+      currentPointerPath(baseDir),
+      overridePath(baseDir),
+      activationJournalPath(baseDir),
+    ]) {
+      try {
+        const stat = statSync(path, { throwIfNoEntry: false })
+        parts.push(stat === undefined ? '-' : `${stat.ino}:${stat.size}:${stat.mtimeMs}`)
+      } catch {
+        parts.push('?')
+      }
+    }
+    return parts.join('|')
+  }
 
   function invalidateDiskCache(): void {
     diskCache = null
+    metadataHealthCache = null
   }
 
   // perf T3（2026-09，D8）：磁盘统计走异步单遍遍历（runtimeDiskSummaryAsync，
@@ -1023,9 +1069,14 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
         }
       },
       spawnAndProbe: (version, isBuiltin, signal) => spawnAndProbeCandidate(version, isBuiltin, hostSeedDomains, signal),
-      probeExpectedNames: hostSeedDomains.length === 0
+      // Lazy seam (2026-12 P0): the shared core resolves this AFTER a probe
+      // attempt, exactly like the desktop hosts. The gateway's own probe does
+      // not seed at spawn (its cache is synced by the desktop), so this still
+      // returns the snapshot taken above — same source and same snapshot as
+      // `hostSeedDomains` passed into the probe closure.
+      probeExpectedNames: () => (hostSeedDomains.length === 0
         ? PROBE_NAMES_WITHOUT_HOST_DOMAINS
-        : activationProbeNamesForDomains(hostSeedDomains),
+        : activationProbeNamesForDomains(hostSeedDomains)),
       stopHost: async () => { await plane.stopLocal() },
       restore: (snapshotPath) => restoreSnapshot(baseDir, dshHome, snapshotPath),
       recordProbePass: (version) => recordProbePass(baseDir, version),
@@ -1346,29 +1397,27 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     }
   }
 
+  /** One row per writer fence for the shared in-flight matrix (runtime-gate). */
+  function writerFlags(): RuntimeWriterFlags {
+    return {
+      disposed,
+      activation: activationInProgress(),
+      install: installInFlight,
+      restart: restartInFlight,
+      applyNow: applyNowInFlight,
+      restartExhaustedRollback: restartExhaustedRollbackInFlight,
+      start: startInFlight,
+      profileWrite: profileWriteInFlight(),
+    }
+  }
+
   function assertMutationIdle(): void {
-    if (disposed) throw Object.assign(new Error('gateway runtime manager is disposing'), { code: 'runtime_disposed' })
-    if (activationInProgress()) throw Object.assign(new Error('runtime activation in progress'), { code: 'runtime_busy' })
-    if (installInFlight) throw Object.assign(new Error('a runtime install is in flight; runtime mutations are refused'), { code: 'runtime_busy' })
-    if (restartInFlight) throw Object.assign(new Error('a restart is in flight; runtime mutations are refused'), { code: 'runtime_busy' })
-    // Review fix: apply-now is a full writer fence from the moment it is
-    // accepted (applyNowInFlight=true) — before that the fence only existed
-    // via activationDepth, which is a timing coincidence, not a contract.
-    if (applyNowInFlight) throw Object.assign(new Error('an apply-now transaction is in flight; runtime mutations are refused'), { code: 'runtime_busy' })
-    if (restartExhaustedRollbackInFlight) {
-      throw Object.assign(new Error('an automatic restart-exhausted rollback is in flight; runtime mutations are refused'), { code: 'runtime_busy' })
-    }
-    if (startInFlight) {
-      throw Object.assign(new Error('a start is in flight; runtime mutations are refused'), { code: 'runtime_busy' })
-    }
-    // Design 21 §6.3 (decision 6/17): a managed profile write (plugin add/
-    // remove pnpm child) must never interleave a runtime transaction — every
-    // runtime writer is a DSH_HOME/profile writer too (snapshot/restore/seed).
-    if (profileWriteInFlight()) {
-      // Same code/message as the route /select pre-gate (audit N2:
-      // profileWriteBusyRefusal).
-      throw refusalError(profileWriteBusyRefusal('runtime mutations'))
-    }
+    // Shared in-flight writer matrix (2026-12 audit F3). Its last row is the
+    // design 21 §6.3 profile-write fence: a plugin add/remove pnpm child must
+    // never interleave a runtime transaction (every runtime writer is a
+    // DSH_HOME/profile writer too).
+    const refusal = writerBusyRefusal(writerFlags(), 'runtime mutations')
+    if (refusal !== null) throw codedError(refusal.code, refusal.error)
   }
 
   /**
@@ -1380,18 +1429,14 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
    * acquisition: a plugin write must not land mid-recovery-authority work.
    */
   function profileWriteRefusal(): { code: ProfileWriteRefusalCode; error: string } | null {
-    if (disposed) return { code: 'runtime_busy', error: 'gateway runtime manager is disposing; managed profile write refused' }
-    if (activationInProgress()) return { code: 'runtime_busy', error: 'runtime activation in progress; managed profile write refused' }
-    if (installInFlight) return { code: 'runtime_busy', error: 'a runtime install is in flight; managed profile write refused' }
-    if (restartInFlight) return { code: 'runtime_busy', error: 'a restart is in flight; managed profile write refused' }
-    if (applyNowInFlight) return { code: 'runtime_busy', error: 'an apply-now transaction is in flight; managed profile write refused' }
-    // The F7 latch is armed SYNCHRONOUSLY before its async body drains/
-    // waits, so this refusal covers the whole rollback window (including the
-    // lease-drain wait): no new lease can ever start mid-rollback.
-    if (restartExhaustedRollbackInFlight) {
-      return { code: 'runtime_busy', error: 'an automatic restart-exhausted rollback is in flight; managed profile write refused' }
-    }
-    if (startInFlight) return { code: 'runtime_busy', error: 'a start is in flight; managed profile write refused' }
+    // Shared in-flight writer matrix (runtime-gate.ts), historical order. The
+    // F7 rollback latch is armed SYNCHRONOUSLY before its async body drains/
+    // waits, so its row covers the whole rollback window (including the
+    // lease-drain wait): no new lease can start mid-rollback. This surface is
+    // the lease itself, so the profile-write flag is deliberately not part of
+    // its matrix (a nested acquire stays allowed).
+    const busy = writerBusyRefusal(writerFlags(), 'managed profile write')
+    if (busy !== null) return busy
     // Recovery states expose only their matching retry (recover-metadata for
     // FATAL); restore-builtin applies to pending/healthy selections only — a
     // plugin write is not on that surface and must not slip past it. Same
@@ -2361,16 +2406,24 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     }
   }
 
-  /** Desktop-shaped metadata health projection (main.ts 3422-3470 mirror) for
-   *  /status: category-only components + explicit recover eligibility. */
-  function metadataProjection(): {
-    metadataHealth: 'unknown' | 'healthy' | 'selection-corrupt' | 'recovery-in-progress' | 'recovery-finalized' | 'recovery-marker-corrupt'
-    metadataComponents: string[]
-    canRecoverMetadata: boolean
-  } {
-    if (platform === 'win32') {
-      return { metadataHealth: 'unknown', metadataComponents: [], canRecoverMetadata: false }
+  /** Disk-derived metadata facts behind a short TTL (the scan the audit F4
+   *  finding targets): status + category-only components + whether any
+   *  recovery condition is on disk. null = unavailable (win32 or unreadable).
+   *  Cached ONLY here; invalidated by every writer transaction. */
+  function metadataHealthFacts(): {
+    status: 'unknown' | 'healthy' | 'selection-corrupt' | 'recovery-in-progress' | 'recovery-finalized' | 'recovery-marker-corrupt'
+    components: string[]
+    needsRecovery: boolean
+  } | null {
+    if (platform === 'win32') return null
+    const now = Date.now()
+    const fingerprint = metadataFingerprint()
+    if (metadataHealthCache !== null
+      && metadataHealthCache.fingerprint === fingerprint
+      && now - metadataHealthCache.checkedAt < METADATA_HEALTH_TTL_MS) {
+      return metadataHealthCache.facts
     }
+    let facts: ReturnType<typeof metadataHealthFacts> = null
     try {
       const health = detectRuntimeMetadataHealth(baseDir, shellVersion)
       const components = new Set<string>()
@@ -2390,30 +2443,48 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       const needsRecovery = health.status === 'selection-corrupt'
         || health.status === 'recovery-in-progress'
         || markerRescueAvailable
-      // The recover route may act only on a FATAL metadata block (or a
-      // recovery attempt whose builtin probe failed and kept its durable
-      // record, or a finalized recovery whose resume start failed) —
-      // restore/swap recovery phases resume through their retry.
-      const recoverableBlock = startupBlockReason === null
-        || RECOVERABLE_METADATA_BLOCKS.has(startupBlockReason)
-      // L4 review fix: no busy-phase/task gate may advertise recovery while an
-      // activation/install/restart owns the writer.
-      const writerBusy = activationInProgress() || installInFlight
-        || restartInFlight || applyNowInFlight || restartExhaustedRollbackInFlight
-      const canRecoverMetadata = (needsRecovery || startupBlockReason === 'metadata-start-failed')
-        && recoverableBlock
-        && !writerBusy
-        && envPath === null
-        && builtinVersion !== null
-        && isSafeVersion(builtinVersion)
-        && !disposed
-      return {
-        metadataHealth: health.status,
-        metadataComponents: [...components],
-        canRecoverMetadata,
-      }
+      facts = { status: health.status, components: [...components], needsRecovery }
     } catch {
+      facts = null
+    }
+    metadataHealthCache = { checkedAt: now, fingerprint, facts }
+    return facts
+  }
+
+  /** Desktop-shaped metadata health projection (main.ts 3422-3470 mirror) for
+   *  /status: category-only components + explicit recover eligibility. The
+   *  disk facts are cached (TTL); the recoverability gate mixes them with LIVE
+   *  in-memory writer state on every call. */
+  function metadataProjection(): {
+    metadataHealth: 'unknown' | 'healthy' | 'selection-corrupt' | 'recovery-in-progress' | 'recovery-finalized' | 'recovery-marker-corrupt'
+    metadataComponents: string[]
+    canRecoverMetadata: boolean
+  } {
+    const facts = metadataHealthFacts()
+    if (facts === null) {
       return { metadataHealth: 'unknown', metadataComponents: [], canRecoverMetadata: false }
+    }
+    // The recover route may act only on a FATAL metadata block (or a
+    // recovery attempt whose builtin probe failed and kept its durable
+    // record, or a finalized recovery whose resume start failed) —
+    // restore/swap recovery phases resume through their retry.
+    const recoverableBlock = startupBlockReason === null
+      || RECOVERABLE_METADATA_BLOCKS.has(startupBlockReason)
+    // L4 review fix: no busy-phase/task gate may advertise recovery while an
+    // activation/install/restart owns the writer.
+    const writerBusy = activationInProgress() || installInFlight
+      || restartInFlight || applyNowInFlight || restartExhaustedRollbackInFlight
+    const canRecoverMetadata = (facts.needsRecovery || startupBlockReason === 'metadata-start-failed')
+      && recoverableBlock
+      && !writerBusy
+      && envPath === null
+      && builtinVersion !== null
+      && isSafeVersion(builtinVersion)
+      && !disposed
+    return {
+      metadataHealth: facts.status,
+      metadataComponents: facts.components,
+      canRecoverMetadata,
     }
   }
 

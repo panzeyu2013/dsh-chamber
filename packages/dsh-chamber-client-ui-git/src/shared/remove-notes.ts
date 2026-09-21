@@ -92,18 +92,28 @@ export function removeFailureCode(error: unknown): string | undefined {
 }
 
 /**
- * Localized copy for a host refusal code, or undefined when the code has no
- * dedicated copy (the dialog then shows the host's own message — honest, but
- * in English; only the refusals a user can actually hit from this dialog are
- * mapped).
+ * Localized copy for a refusal/action code, or undefined when the code has no
+ * dedicated copy (the caller then shows the raw message — honest, and English
+ * for every message this package mints; only the refusals a user can actually
+ * hit are mapped).
  *
- * `running-agent` is the important one: the row deliberately leaves the delete
- * control enabled while non-archived sessions run, so the host re-checks and
- * refuses — the user must read WHY in their own language, not a raw
+ * The table serves BOTH vocabularies (see shared/action-error.ts):
+ *  - host-domain codes from `GitWorktreeRpcError` (`running-agent`,
+ *    `main-worktree`, `worktree-locked`, `worktree-dirty`,
+ *    `worktree-invalid`, `git-host-not-loaded`);
+ *  - local preflight/guard codes from `GitActionError` — reusing the host
+ *    spelling whenever the condition is the same (`main-worktree`,
+ *    `worktree-locked`, `worktree-dirty`) and using a client-only code
+ *    otherwise.
+ *
+ * `running-agent` is the important host one: the row deliberately leaves the
+ * delete control enabled while non-archived sessions run, so the host re-checks
+ * and refuses — the user must read WHY in their own language, not a raw
  * `running-agent: worktree has running associated session(s): …` string.
  */
 export function removeFailureCopyKey(code: string | undefined): GitSidebarKey | undefined {
   switch (code) {
+    // ---- host-domain refusals (GitWorktreeRpcError) ----
     case 'running-agent': return 'runningAgentBlocked'
     case 'main-worktree': return 'mainWorktreeBlocked'
     case 'worktree-locked': return 'lockedBlocked'
@@ -111,6 +121,21 @@ export function removeFailureCopyKey(code: string | undefined): GitSidebarKey | 
     // authorization the dialog already renders.
     case 'worktree-dirty': return 'dirtyDiscardWarning'
     case 'worktree-invalid': return 'unhealthyInvalidBlocked'
+    // 404 on the gitWorktree namespace: the host package is absent/inactive.
+    case 'git-host-not-loaded': return 'gitHostNotLoaded'
+    // ---- local preflight/guard failures (GitActionError) ----
+    case 'action-in-progress': return 'actionInProgress'
+    case 'recovery-pending': return 'recoveryPending'
+    case 'fresh-facts-unavailable': return 'freshFactsUnavailable'
+    case 'worktree-not-found': return 'worktreeNotFound'
+    case 'worktree-unregistered': return 'unregisteredBlocked'
+    case 'worktree-current': return 'currentBlocked'
+    case 'worktree-runtime-unknown': return 'runtimeUnknownBlocked'
+    case 'worktree-unhealthy': return 'unhealthyRemoveBlocked'
+    case 'worktree-status-unknown': return 'dirtyUnknownBlocked'
+    case 'unhealthy-target': return 'unhealthyTarget'
+    case 'archive-failed': return 'archiveFailed'
+    case 'refresh-failed': return 'refreshFailed'
     default: return undefined
   }
 }

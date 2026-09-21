@@ -47,6 +47,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
+import { describeError } from './describe-error.ts'
 import { renameSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 // The owner-private file primitives are single-sourced in control-plane
@@ -149,7 +150,7 @@ export function sshPluginJournalFile(dir: string): string {
 }
 
 function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+  return describeError(error)
 }
 
 function isErrno(error: unknown, code: string): boolean {

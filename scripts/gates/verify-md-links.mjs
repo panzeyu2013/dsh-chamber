@@ -15,7 +15,9 @@
  *   node scripts/gates/verify-md-links.mjs --list    # report, never fails
  */
 
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
+
+import { walkFiles } from '../lib/walk.mjs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -35,7 +37,9 @@ export const LINK_SCAN_FILES = ['AGENTS.md', 'CONTRIBUTING.md', 'README.md', 'CH
  * links by construction — scanning it turns any developer's local dev run into
  * hundreds of dead-link reports that CI (which has no such directory) never sees.
  */
-export const IGNORED_DIRECTORIES = new Set(['node_modules', 'vendor', 'dist', 'lib', 'release', '.git', '.desktop-build', '.dev-user-data'])
+// ONE ignore set + one walk for every gate that scans the repository
+// (scripts/lib/walk.mjs; P2-17 of the 13-scripts audit).
+export { IGNORED_DIRECTORIES } from '../lib/walk.mjs'
 
 /**
  * Documents excluded from link checking because their contents are frozen
@@ -129,31 +133,12 @@ export function collectAnchors(source) {
 }
 
 /**
- * Walk a directory for Markdown files, skipping ignored directories.
+ * Walk a directory for Markdown files (shared walk: scripts/lib/walk.mjs).
  * @param {string} root - absolute directory.
  * @returns {string[]} absolute paths.
  */
 function walkMarkdown(root) {
-  const found = []
-  const visit = (directory) => {
-    let entries
-    try {
-      entries = readdirSync(directory, { withFileTypes: true })
-    } catch {
-      return
-    }
-    for (const entry of entries) {
-      const path = join(directory, entry.name)
-      if (entry.isDirectory()) {
-        if (IGNORED_DIRECTORIES.has(entry.name)) continue
-        visit(path)
-        continue
-      }
-      if (entry.isFile() && entry.name.toLowerCase().endsWith('.md')) found.push(path)
-    }
-  }
-  visit(root)
-  return found
+  return walkFiles(root, path => path.toLowerCase().endsWith('.md'))
 }
 
 /**

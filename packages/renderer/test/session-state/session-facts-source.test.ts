@@ -117,7 +117,7 @@ test('snapshot parser: rows, host gate, read state and unknown fields are defens
   assert.equal(stopped?.hostState, 'stopped')
   // 未知/坏字段绝不被当成事实。
   assert.equal(parseSessionFactsSnapshotValue({ ...SNAPSHOT, host: {} })?.hostState, 'unknown')
-  assert.equal(parseSessionFactsRow({ sessionId: 'x', updatedAt: -5 }).updatedAt, 0)
+  assert.equal(parseSessionFactsRow({ sessionId: 'x', updatedAt: -5 })?.updatedAt, 0)
   assert.equal(parseSessionFactsRow({}), null)
   assert.equal(parseSessionFactsReadState(null), null)
 })
@@ -348,8 +348,8 @@ test('R22: a failed read-all floor replays on recovery and never regresses the s
 test('R22: a hung ack POST never blocks snapshot delivery or the synchronous ack call', async () => {
   const harness = r22Harness()
   let hung = 0
-  const fetchImpl = (async (url: unknown, init?: unknown) => {
-    if (((init ?? {}) as RequestInit).method === 'POST') {
+  const fetchImpl = (async (url: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === 'POST') {
       hung += 1
       // 最坏的离线悬挂：永不结算。
       return await new Promise<Response>(() => {})
@@ -396,4 +396,173 @@ test('R22: the source-level queue honors the injected bound and reports overflow
   assert.ok(diagnostics.some(line => line.includes('overflow')), '上限淘汰必须经诊断可见')
   source.stop()
 })
+
+// ── R21 收口：SSE 建连 deadline 与「请求发起即武装」的静默看门狗 ───────────────
+
+const SSE_PROBE_BODY = {
+  protocol: 1,
+  mode: 'sse',
+  features: ['session-state.snapshot', 'session-state.stream', 'session-state.host-clock'],
+  cursor: 3,
+  host: { now: 1_700_000_000_000, serviceable: true, state: 'ready' },
+  sessions: [],
+  read: { clientId: 'client-a', marks: {}, floor: 0 },
+}
+
+/**
+ * SSE 假件：probe GET 立即回一份 sse 快照把流带起来；stream GET 按场景选择
+ * 「永不回响应头」（半死隧道：fetch 永不落定）或「回响应头但永不产出帧」（静默载体）。
+ */
+function sseStreamHarness(behavior: 'never-headers' | 'silent-body') {
+  const streams: Array<{ url: string; aborted: () => boolean }> = []
+  const probeGets: string[] = []
+  const fetchImpl = (async (url: unknown, init?: unknown) => {
+    const text = String(url)
+    if (text.endsWith(SESSION_FACTS_STREAM_ROUTE)) {
+      const signal = ((init ?? {}) as RequestInit).signal as AbortSignal
+      streams.push({ url: text, aborted: () => signal.aborted })
+      if (behavior === 'never-headers') {
+        return await new Promise<Response>((_resolve, reject) => {
+          signal.addEventListener('abort', () => { reject(new Error('aborted')) }, { once: true })
+        })
+      }
+      return new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+        status: 200,
+        headers: { 'content-type': 'text/event-stream' },
+      })
+    }
+    probeGets.push(text)
+    return new Response(JSON.stringify(SSE_PROBE_BODY), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }) as unknown as typeof fetch
+  return { fetchImpl, streams, probeGets }
+}
+
+test('R21: a stream whose response headers never arrive hits the connect deadline and is retried', async () => {
+  const harness = sseStreamHarness('never-headers')
+  const diagnostics: string[] = []
+  const source = createSessionFactsSource({
+    sourceId: 'gw-sse-wedge',
+    fetchImpl: harness.fetchImpl,
+    silenceMs: 0,
+    streamConnectTimeoutMs: 20,
+    reconnectMs: 10,
+    onDiagnostic: message => diagnostics.push(message),
+  })
+  source.subscribe(() => {})
+  source.update({ fingerprint: 'f1', connected: true })
+  await waitFor(() => harness.streams.length >= 1)
+  // 关键回归：没有 deadline 时这条流永久停在 in-flight（第二个请求永不出现）。
+  await waitFor(() => harness.streams.length >= 2, 2_000)
+  assert.ok(harness.streams[0].aborted(), '建连超时必须 abort 在途 stream')
+  assert.ok(
+    diagnostics.some(line => line.includes('connect timed out')),
+    '建连超时必须响亮诊断（不许静默楔死）',
+  )
+  assert.equal(source.getSnapshot()?.stale, true, '收口后事实必须标 stale')
+  source.stop()
+  const settled = harness.streams.length
+  await new Promise(resolve => setTimeout(resolve, 60))
+  assert.equal(harness.streams.length, settled, 'stop 必须清掉重连定时器（不得再起新流）')
+  assert.ok(harness.streams[settled - 1].aborted(), 'stop 必须 abort 在途流')
+})
+
+test('R21: a silent stream (headers arrived, no frames) is re-subscribed by the watchdog armed at request start', async () => {
+  const harness = sseStreamHarness('silent-body')
+  const diagnostics: string[] = []
+  const source = createSessionFactsSource({
+    sourceId: 'gw-sse-silent',
+    fetchImpl: harness.fetchImpl,
+    // 看门狗间隔 floor = 1s；建连 deadline 远大于它 ⇒ 静默臂先收口。
+    silenceMs: 10,
+    streamConnectTimeoutMs: 60_000,
+    reconnectMs: 10,
+    onDiagnostic: message => diagnostics.push(message),
+  })
+  source.subscribe(() => {})
+  source.update({ fingerprint: 'f1', connected: true })
+  await waitFor(() => harness.streams.length >= 1)
+  await waitFor(() => diagnostics.some(line => line.includes('stream silent')), 3_000)
+  assert.ok(harness.streams[0].aborted(), '静默收口必须关掉旧流')
+  // 收口路径 = 整量重取（probe GET）+ 重订阅：都必须在有限时间内发生。
+  await waitFor(() => harness.probeGets.length >= 2, 2_000)
+  await waitFor(() => harness.streams.length >= 2, 2_000)
+  source.stop()
+})
+
+// ── 阶段 2：快照构造单一工厂（probe / SSE sync 帧 / refetch 同形状） ─────────────
+
+test('snapshot factory: an SSE sync frame builds the same shape as the probe and falls back to the prior mode', async () => {
+  const syncFrame = JSON.stringify({
+    protocol: 1,
+    mode: null,
+    cursor: 9,
+    host: { state: 'stopped', serviceable: false },
+    sessions: [],
+  })
+  const fetchImpl = (async (url: unknown) => {
+    const text = String(url)
+    if (text.endsWith(SESSION_FACTS_STREAM_ROUTE)) {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('event: sync\ndata: ' + syncFrame + '\n\n'))
+        },
+      })
+      return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+    }
+    return new Response(JSON.stringify(SSE_PROBE_BODY), { status: 200, headers: { 'content-type': 'application/json' } })
+  }) as unknown as typeof fetch
+  const source = createSessionFactsSource({
+    sourceId: 'gw-factory',
+    fetchImpl,
+    silenceMs: 0,
+    streamConnectTimeoutMs: 60_000,
+  })
+  source.update({ fingerprint: 'f1', connected: true })
+  await waitFor(() => source.getSnapshot()?.cursor === 9)
+  const snapshot = source.getSnapshot()
+  assert.equal(snapshot?.verdict, 'ok')
+  assert.equal(snapshot?.degradation, null)
+  assert.equal(snapshot?.mode, 'sse', 'sync 帧缺 mode 时沿用上一份快照的 mode')
+  assert.equal(snapshot?.hostState, 'stopped')
+  assert.equal(snapshot?.serviceable, false)
+  assert.equal(snapshot?.stale, false)
+  assert.deepEqual(snapshot?.rows, {})
+  assert.ok((snapshot?.lastEventAt ?? 0) > 0, '工厂必须盖 lastEventAt')
+  source.stop()
+})
+
+test('snapshot factory negative: a malformed sync frame refetches instead of silently clearing the snapshot', async () => {
+  const probeGets: string[] = []
+  let streams = 0
+  const fetchImpl = (async (url: unknown) => {
+    const text = String(url)
+    if (text.endsWith(SESSION_FACTS_STREAM_ROUTE)) {
+      streams += 1
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          // 只有第一条流发坏帧；重取后的第二条流保持静默，避免测试内无限重取。
+          if (streams === 1) controller.enqueue(new TextEncoder().encode('event: sync\ndata: {"oops":true}\n\n'))
+        },
+      })
+      return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } })
+    }
+    probeGets.push(text)
+    return new Response(JSON.stringify(SSE_PROBE_BODY), { status: 200, headers: { 'content-type': 'application/json' } })
+  }) as unknown as typeof fetch
+  const source = createSessionFactsSource({
+    sourceId: 'gw-factory-bad',
+    fetchImpl,
+    silenceMs: 0,
+    streamConnectTimeoutMs: 60_000,
+  })
+  source.update({ fingerprint: 'f1', connected: true })
+  await waitFor(() => probeGets.length >= 1)
+  await waitFor(() => probeGets.length >= 2, 2_000)
+  assert.equal(source.getSnapshot()?.cursor, SSE_PROBE_BODY.cursor, '坏帧不得清空既有快照（走 refetch 收敛）')
+  source.stop()
+})
+
 

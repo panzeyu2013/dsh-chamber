@@ -4,7 +4,6 @@ import {
   deleteConnectionTransaction,
   deleteConnectionsTransaction,
   saveConnectionTransaction,
-  validateDeleteOnlyReplacement,
   type DeleteConnectionsTransactionDeps,
   type SaveConnectionRequest,
   type SaveConnectionTransactionDeps,
@@ -566,21 +565,6 @@ test('delete credential-clear failure restores all main-only snapshots and leave
   ])
   assert.deepEqual(fake.secrets, OLD_SECRETS)
   if (!result.ok) assert.equal(result.metadataCommitted, false)
-})
-test('legacy instances_set accepts only an exact deeply unchanged no-op roster', () => {
-  const one = spec({ id: 'one' })
-  const two = spec({ id: 'two', host: 'two.example.com' })
-  assert.equal(validateDeleteOnlyReplacement([one, two], [
-    { ...two, tokenSet: true, passwordSet: false, secretStorage: 'plaintext' },
-  ], normalize), null, 'even a one-row deletion is refused on the roster compatibility channel')
-  assert.equal(validateDeleteOnlyReplacement([one], [{ ...one, label: 'edited' }], normalize), null, 'edit refused')
-  assert.equal(validateDeleteOnlyReplacement([one], [one, spec({ id: 'added' })], normalize), null, 'add refused')
-  assert.equal(validateDeleteOnlyReplacement([one, two], [two, one], normalize), null, 'reorder refused')
-  assert.equal(validateDeleteOnlyReplacement([one], [one, one], normalize), null, 'duplicate refused')
-  assert.deepEqual(validateDeleteOnlyReplacement([one, two], [
-    { ...one, sshPasswordSet: true },
-    { ...two, tokenSet: true },
-  ], normalize), [one, two], 'non-secret projections are ignored on an otherwise exact no-op')
 })
 test('exact-id delete is immune to stale delete-A plus concurrent delete-A/add-C roster replacement', () => {
   const two = spec({ id: 'two', host: 'two.example.com' })

@@ -11,9 +11,12 @@
  * Options:
  * - stateDir: control-plane state root; defaults to $DSH_CHAMBER_STATE or
  *   ~/.dsh-chamber. Holds catalog.json and managed-dsh/ (pid records).
- * - dshWorkspacePath: working directory of the spawned dsh host (cwd of the
- *   spawned `dsh` process); defaults to $DSH_CHAMBER_DSH_PATH or
- *   <repo>/ref-dsh (falling back to the desktop vendor bundle when absent).
+ * - dshWorkspacePath: the dsh installation root the spawned host's CLI entry
+ *   is resolved from; defaults to $DSH_CHAMBER_DSH_PATH or <repo>/ref-dsh
+ *   (falling back to the desktop vendor bundle when absent). It is the child
+ *   cwd only for the source layout; the installed layout spawns with the
+ *   managed dsh home as a stable cwd (spawn-dsh.ts resolveSpawnCwd — an
+ *   in-place app update must never leave the host with an unlinked cwd).
  * - port/host: the control plane's own HTTP bind (standalone default
  *   DEFAULT_CONTROL_PLANE_PORT).
  * - webDistDir: optional static frontend dist directory (design 05 §7.3).
@@ -1120,9 +1123,10 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
               return
             }
             if (staticServing !== null) {
-              try {
-                staticServing.serve(req, res, url.pathname)
-              } catch (staticError) {
+              // serve is async now (fs/promises read + async zlib off the event
+              // loop): a rejection takes exactly the same 500 fallback the sync
+              // try/catch used to own.
+              void staticServing.serve(req, res, url.pathname).catch((staticError: unknown) => {
                 logger.error(`static handler failure: ${String(staticError)}`)
                 if (!res.headersSent) {
                   res.writeHead(500, { 'content-type': 'application/json' })
@@ -1130,7 +1134,7 @@ export function createControlPlane(options: ControlPlaneOptions = {}): PlaneHand
                 } else {
                   res.end()
                 }
-              }
+              })
               return
             }
             res.writeHead(404, { 'content-type': 'application/json' })

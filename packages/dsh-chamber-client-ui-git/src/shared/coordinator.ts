@@ -14,6 +14,7 @@ import {
   clearWorkspaceGitFlags, getSourceRepoLayouts, getWorkspaceGitFlag, markSourceGitFlagsLoaded, retainSourceWorkspaceFlags, setSourceRepoLayouts, setWorkspaceGitFlag,
   fetchInstanceSnapshot, getInstanceClient, InstanceRpcError,
 } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
+import { GitActionError, gitActionErrorCode } from './action-error.ts'
 import { GitActionLedger } from './action-ledger.ts'
 import { SerializedRefreshes } from './refresh-flight.ts'
 import { GitWorktreeRpcError, gitWorktreeApi, isAmbiguousGitRpcFailure, isDeterministicGitRejection } from './git-api.ts'
@@ -212,6 +213,7 @@ function syncServers(): void {
           busy: actionLedger.current(server.id),
           recovery: current?.recovery,
           actionError: current?.actionError,
+          actionErrorCode: current?.actionErrorCode,
         })
         refreshIds.push(server.id)
         changed = true
@@ -235,6 +237,7 @@ function syncServers(): void {
         busy: actionLedger.current(server.id),
         recovery: current?.recovery,
         actionError: current?.actionError,
+        actionErrorCode: current?.actionErrorCode,
       })
       lastWorkspaceKeys.delete(server.id)
       changed = true
@@ -306,16 +309,22 @@ export async function refreshSource(sourceId: string, force = false): Promise<Gi
 
 async function runBusy<T>(sourceId: string, busy: GitBusyState, operation: () => Promise<T>): Promise<T> {
   const current = states.get(sourceId)
-  if (current?.recovery !== undefined && busy.kind !== 'recovery') throw new Error('请先完成当前 Git 恢复操作')
+  if (current?.recovery !== undefined && busy.kind !== 'recovery') {
+    throw new GitActionError('recovery-pending', 'Finish the pending Git recovery before starting another action')
+  }
   const lease = actionLedger.begin(sourceId, busy)
-  if (lease === undefined) throw new Error('该来源已有 Git 操作正在进行')
+  if (lease === undefined) {
+    throw new GitActionError('action-in-progress', 'Another Git operation is already running on this source')
+  }
   try {
-    patchSource(sourceId, { busy, actionError: undefined })
+    patchSource(sourceId, { busy, actionError: undefined, actionErrorCode: undefined })
     const result = await operation()
-    patchSource(sourceId, { actionError: undefined })
+    patchSource(sourceId, { actionError: undefined, actionErrorCode: undefined })
     return result
   } catch (error) {
-    patchSource(sourceId, { actionError: errorText(error) })
+    // The code is what the source-level strip localizes; the raw message stays
+    // for diagnostics and as the unmapped fallback (English by construction).
+    patchSource(sourceId, { actionError: errorText(error), actionErrorCode: gitActionErrorCode(error) })
     throw error
   } finally {
     if (actionLedger.end(lease)) patchSource(sourceId, { busy: undefined })
@@ -535,16 +544,16 @@ export async function createSessionHere(sourceId: string, path: string): Promise
   return runBusy(sourceId, { kind: 'adopt-session', operationId }, async () => {
     const fresh = await refreshSource(sourceId, true)
     if (fresh.snapshot === undefined || fresh.sourceError !== undefined) {
-      throw new Error(fresh.sourceError?.message ?? '无法取得最新 Git 工作树事实')
+      throw new GitActionError('fresh-facts-unavailable', 'The latest Git worktree facts are unavailable', fresh.sourceError)
     }
     // 锚点与装饰事实在这里（守卫之后、闭包之外）解析：`fresh.snapshot` 的窄化
     // 不会跨进下面的回调（属性访问在闭包内重新放宽为 `| undefined`）。
     const adopt = adoptPlacementOf(fresh.snapshot, path)
     const known = fresh.snapshot.repos.flatMap(repo => repo.worktrees).find(worktree => worktree.path === path)
-    if (known === undefined) throw new Error('目标工作树不在当前来源拓扑中')
+    if (known === undefined) throw new GitActionError('worktree-not-found', 'The target worktree is not in the current source topology')
     // Re-check health against the FRESH snapshot: the UI button reflects an
     // older snapshot, and a session must never target a vanished/unhealthy path.
-    if (!canTargetSession(known)) throw new Error('目标工作树不可用（目录缺失/无效/非 Git 仓库），不能作为会话目标')
+    if (!canTargetSession(known)) throw new GitActionError('unhealthy-target', 'The target worktree is unhealthy and cannot host a session')
     try {
       const result = await runAdoptSessionSaga({
         workspaceCreate: targetPath => createWorkspaceForSource(sourceId, targetPath, {
@@ -672,9 +681,11 @@ export function currentSessionIsBlank(sourceId: string, sessionId: string | unde
  *  the FRESH preflight snapshot discovers dirty after the dialog opened
  *  clean, the dialog must force-show the checkbox instead of leaving the
  *  user with a bare error and no way forward. */
-export class WorktreeDirtyError extends Error {
+export class WorktreeDirtyError extends GitActionError {
   constructor() {
-    super('有未提交改动的工作树不能删除')
+    // Same code as the host's own dirty refusal: one user-facing situation,
+    // one code→copy entry (shared/action-error.ts).
+    super('worktree-dirty', 'The worktree has uncommitted changes and cannot be removed without an explicit discard')
     this.name = 'WorktreeDirtyError'
   }
 }
@@ -693,10 +704,10 @@ export async function removeWorktree(
   return runBusy(sourceId, { kind: 'remove', operationId }, async () => {
     const fresh = await refreshSource(sourceId, true)
     if (fresh.snapshot === undefined || fresh.sourceError !== undefined) {
-      throw new Error(fresh.sourceError?.message ?? '无法取得最新 Git 工作树事实')
+      throw new GitActionError('fresh-facts-unavailable', 'The latest Git worktree facts are unavailable', fresh.sourceError)
     }
     const found = findWorktree(fresh.snapshot, target.repoId, target.worktreeId)
-    if (found === undefined) throw new Error('工作树已不存在；请刷新后重试')
+    if (found === undefined) throw new GitActionError('worktree-not-found', 'The worktree no longer exists')
     const server = chamberBridge.getServers().find(candidate => candidate.id === sourceId)
     const current = server?.runtime?.current
     // NO IMPLICIT SESSION TOUCHING (2026-09 user decision, design 08 §5.2
@@ -723,12 +734,12 @@ export async function removeWorktree(
     )
     const worktree = found.worktree
     const blocked = blockOf(worktree)
-    if (blocked === 'main') throw new Error('主工作树不能删除')
-    if (blocked === 'unregistered') throw new Error('该工作树未关联 dsh workspace，不能从此处删除')
-    if (blocked === 'current') throw new Error('该工作树包含当前正在查看的会话')
-    if (blocked === 'runtime-unknown') throw new Error('无法确认当前会话状态（来源重连中），暂不能删除，请稍后重试')
-    if (blocked === 'locked') throw new Error('已锁定的工作树不能删除')
-    if (blocked === 'unhealthy') throw new Error('工作树不可用（目录缺失/无效/非 Git 仓库），不能删除')
+    if (blocked === 'main') throw new GitActionError('main-worktree', 'The main checkout cannot be removed')
+    if (blocked === 'unregistered') throw new GitActionError('worktree-unregistered', 'The worktree has no dsh workspace; use the unregistered removal path')
+    if (blocked === 'current') throw new GitActionError('worktree-current', 'The worktree holds the session currently on screen')
+    if (blocked === 'runtime-unknown') throw new GitActionError('worktree-runtime-unknown', 'The current session state is unknown while the source reconnects')
+    if (blocked === 'locked') throw new GitActionError('worktree-locked', 'A locked worktree cannot be removed')
+    if (blocked === 'unhealthy') throw new GitActionError('worktree-unhealthy', 'The worktree is unusable (missing, invalid or not a Git repository)')
     // Dirty is NOT an automatic throw here: the dialog collects an explicit
     // user checkbox (discardChanges) authorizing the host to force-remove —
     // the worktree's uncommitted files are discarded, the branch is kept
@@ -737,9 +748,11 @@ export async function removeWorktree(
     if (blocked === 'dirty' && options.discardChanges !== true) {
       throw new WorktreeDirtyError()
     }
-    if (blocked === 'status-unknown') throw new Error('无法确认工作树是否干净，不能删除')
+    if (blocked === 'status-unknown') throw new GitActionError('worktree-status-unknown', 'The worktree cleanliness is unknown')
     const workspaceId = worktree.workspaceId
-    if (workspaceId === null) throw new Error('工作树缺少 workspace id')
+    // Internal invariant (no user fix exists, so no localized copy): English
+    // message is the honest unmapped fallback.
+    if (workspaceId === null) throw new Error('The worktree row has no workspace id')
 
     // Optional soft-archive of the whole session tree BEFORE any Git mutation.
     // A failure aborts with nothing removed; the closure enumerates direct
@@ -757,7 +770,7 @@ export async function removeWorktree(
           archiveSession: sessionId => archiveSessionForSource(sourceId, sessionId),
         }, directSessionIds)
       } catch (error) {
-        throw new Error(`归档会话失败：${errorText(error)}；未删除任何工作树（部分会话可能已归档）`)
+        throw new GitActionError('archive-failed', 'Archiving sessions failed; no worktree was removed', error)
       }
     }
 
@@ -793,7 +806,7 @@ export async function removeUnregisteredWorktree(
   // an expected-mismatch on a stale snapshot would needlessly fail.
   const refreshFailure = await refreshSource(sourceId, true).catch((error: unknown) => error)
   if (refreshFailure !== undefined) {
-    throw new Error(`刷新工作树状态失败：${refreshFailure instanceof Error ? refreshFailure.message : String(refreshFailure)}`)
+    throw new GitActionError('refresh-failed', 'Refreshing the Git worktree state failed', refreshFailure)
   }
   return runBusy(sourceId, { kind: 'remove', operationId }, async () => {
     const input = {
@@ -898,7 +911,10 @@ export async function retryRecovery(sourceId: string): Promise<void> {
 }
 
 export function clearActionError(sourceId: string): void {
-  if (states.get(sourceId)?.actionError !== undefined) patchSource(sourceId, { actionError: undefined })
+  const current = states.get(sourceId)
+  if (current?.actionError !== undefined || current?.actionErrorCode !== undefined) {
+    patchSource(sourceId, { actionError: undefined, actionErrorCode: undefined })
+  }
 }
 
 /** Refresh every connected, action-idle source; existing pulls are joined. */

@@ -50,16 +50,6 @@ import {
   type OpenInAppProbeValue,
 } from './shared.ts'
 
-export * from './shared.ts'
-export {
-  OpenInAppCore,
-  OpenInAppError,
-  domainResult,
-  OPEN_IN_APP_ICON_TIMEOUT_MS,
-  OPEN_IN_APP_LAUNCH_WATCH_MS,
-  OPEN_IN_APP_PROBE_TIMEOUT_MS,
-} from './core.ts'
-
 /**
  * Remote-only facade: all catalog, icon and launch policy lives in the pure
  * core, so the wire surface stays a projection.

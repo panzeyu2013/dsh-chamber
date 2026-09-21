@@ -1,76 +1,26 @@
 /**
  * Transport instance spec semantics — merged suite (2026-12 test
- * reorganization). Both sources pin the SAME contract chain (design 17 §9.1
- * credential ownership): which spec fields make two connections "the same
- * target" and therefore keep or invalidate a stored credential.
+ * reorganization). Pins the contract chain (design 17 §9.1 credential
+ * ownership): which spec fields make two connections "the same target" and
+ * therefore keep or invalidate a stored credential.
  *
- * Sources (both were package-root tests; now one file):
- *   - transport-target.test.ts    — transportTargetChanged compatibility
- *     semantics + canonicalizeTransportInstanceInput.
- *   - credential-binding.test.ts  — the gateway/ssh credential binding keys.
- *
- * Merge note: the two sources each defined an identical-purpose spec()
- * fixture builder with different defaults; both are kept verbatim but named
- * targetSpec() and credentialSpec() so they can coexist. Test titles and
- * assertion semantics are unchanged.
+ * Sources: the former transport-target.test.ts (canonicalizeTransportInstanceInput)
+ * and credential-binding.test.ts (the gateway/ssh credential binding keys).
+ * The desktop-target comparison helper itself is gone: the credential-ownership
+ * decision is carried by the binding fingerprints asserted below.
  */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { canonicalizeTransportInstanceInput, transportTargetChanged } from '../../transport-provider.ts'
+import { canonicalizeTransportInstanceInput } from '../../transport-provider.ts'
+import {
+  gatewayCredentialTargetChanged,
+  liveTransportIdentityChanged,
+  sshCredentialEndpointChanged,
+} from '../../credential-identity.ts'
 import type { TransportInstanceSpec } from '../../transport-provider.ts'
 import { gatewayCredentialBinding, sshCredentialBinding } from '../../credential-binding.ts'
 
-// --- merged from test/transport/transport-target.test.ts ---
-function targetSpec(overrides: Partial<TransportInstanceSpec> = {}): TransportInstanceSpec {
-  return {
-    id: 'ssh-1',
-    label: 'prod',
-    kind: 'dsh',
-    transport: 'ssh',
-    host: 'example.com',
-    user: 'root',
-    sshPort: 22,
-    remotePort: 17500,
-    serviceName: null,
-    remoteDshHome: null,
-    insecureHttp: false,
-    ...overrides,
-  }
-}
-test('label-only edits are not target changes', () => {
-  assert.equal(transportTargetChanged(targetSpec({ label: 'prod' }), targetSpec({ label: 'renamed' })), false)
-})
-test('host change is a target change', () => {
-  assert.equal(transportTargetChanged(targetSpec(), targetSpec({ host: 'other.example.com' })), true)
-})
-test('user / sshPort / remotePort / serviceName / remoteDshHome changes are target changes', () => {
-  assert.equal(transportTargetChanged(targetSpec(), targetSpec({ user: 'admin' })), true)
-  assert.equal(transportTargetChanged(targetSpec(), targetSpec({ sshPort: 2222 })), true)
-  assert.equal(transportTargetChanged(targetSpec(), targetSpec({ remotePort: 18000 })), true)
-  assert.equal(transportTargetChanged(targetSpec(), targetSpec({ serviceName: 'dsh' })), true)
-  assert.equal(transportTargetChanged(targetSpec(), targetSpec({ remoteDshHome: '/srv/dsh' })), true)
-})
-test('kind change is a target change (caller excludes it from the clear decision)', () => {
-  assert.equal(transportTargetChanged(
-    targetSpec(),
-    targetSpec({ kind: 'gateway', transport: 'http', sshPort: null, user: null, serviceName: null, remoteDshHome: null }),
-  ), true)
-})
-test('transport change (ssh↔http) is NOT a target change — the credential binds to the host:port:kind target, not the mechanism (design 17 §9.1)', () => {
-  assert.equal(transportTargetChanged(targetSpec(), targetSpec({ transport: 'http' })), false)
-  assert.equal(transportTargetChanged(
-    targetSpec({ kind: 'gateway', transport: 'http', sshPort: null, user: null, serviceName: null, remoteDshHome: null }),
-    targetSpec({ kind: 'gateway', transport: 'ssh', sshPort: null, user: null, serviceName: null, remoteDshHome: null }),
-  ), false)
-})
-test('insecureHttp change (http↔https) is NOT a target change — protocol switch keeps credentials (design 17 §9.1, D3)', () => {
-  assert.equal(transportTargetChanged(targetSpec(), targetSpec({ insecureHttp: true })), false)
-})
-test('identical specs are not a target change', () => {
-  const a = targetSpec()
-  assert.equal(transportTargetChanged(a, { ...a }), false)
-})
 test('canonical input normalization keeps the typed optional-transport IPC contract', () => {
   assert.deepEqual(canonicalizeTransportInstanceInput({ id: 'a', kind: 'dsh' }), {
     id: 'a', kind: 'dsh', transport: 'ssh',
@@ -112,5 +62,39 @@ test('SSH binding follows only host + user + sshPort', () => {
   assert.notEqual(sshCredentialBinding(credentialSpec({ user: 'root' })), base)
   assert.notEqual(sshCredentialBinding(credentialSpec({ sshPort: 2222 })), base)
   assert.equal(sshCredentialBinding(credentialSpec({ transport: 'http' })), null)
+})
+test('identity predicates are single-sourced with the credential fingerprints (stage-2 lockstep)', () => {
+  const base = credentialSpec()
+  const livePatches: Array<Partial<TransportInstanceSpec>> = [
+    { kind: 'dsh' }, { transport: 'http' }, { host: 'other.example.com' }, { user: 'bob' },
+    { sshPort: 2222 }, { remotePort: 8443 }, { serviceName: 'other' }, { remoteDshHome: '/srv/dsh' },
+    { insecureHttp: true }, { spkiPin: 'ab'.repeat(32) },
+  ]
+  for (const patch of livePatches) {
+    assert.equal(liveTransportIdentityChanged(base, credentialSpec(patch)), true,
+      'live transport identity must include ' + JSON.stringify(patch))
+  }
+  assert.equal(liveTransportIdentityChanged(base, credentialSpec({ label: 'renamed' })), false,
+    'presentation-only fields never restart the transport')
+  const sshPatches: Array<Partial<TransportInstanceSpec>> = [{ host: 'other.example.com' }, { user: 'bob' }, { sshPort: 2222 }]
+  for (const patch of sshPatches) {
+    const other = credentialSpec(patch)
+    assert.equal(sshCredentialEndpointChanged(base, other),
+      sshCredentialBinding(base) !== sshCredentialBinding(other),
+      'the SSH predicate must agree with the SSH fingerprint for ' + JSON.stringify(patch))
+  }
+  assert.equal(sshCredentialEndpointChanged(base, credentialSpec({
+    remotePort: 1, serviceName: null, remoteDshHome: '/x', label: 'x',
+  })), false, 'forwarded port / service / home never retarget the password')
+  const gatewayPatches: Array<Partial<TransportInstanceSpec>> = [{ host: 'other.example.com' }, { remotePort: 8443 }, { kind: 'dsh' }]
+  for (const patch of gatewayPatches) {
+    const other = credentialSpec(patch)
+    assert.equal(gatewayCredentialTargetChanged(base, other),
+      gatewayCredentialBinding(base) !== gatewayCredentialBinding(other),
+      'the gateway predicate must agree with the gateway fingerprint for ' + JSON.stringify(patch))
+  }
+  assert.equal(gatewayCredentialTargetChanged(base, credentialSpec({
+    insecureHttp: true, spkiPin: 'ab'.repeat(32), user: null, sshPort: null,
+  })), false, 'scheme / pin / ssh-only metadata never retarget the gateway credential')
 })
 

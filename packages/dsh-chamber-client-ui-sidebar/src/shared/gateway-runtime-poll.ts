@@ -10,6 +10,8 @@
  * connectionState 'stopped', which the restart table treats as terminal, and a
  * start failure must never be reported as "restart failed".
  */
+import { pollUntil, sleepMs } from './poll.ts'
+
 export type GatewayRuntimeAction = 'restart' | 'start'
 
 export interface GatewayPollDeps {
@@ -28,7 +30,7 @@ const TERMINAL_CONNECTION_STATES = new Set(['error', 'restart-exhausted'])
 
 export async function pollGatewayReady(chamberInstanceId: string, signal?: AbortSignal, deps: GatewayPollDeps = {}): Promise<void> {
   const fetchImpl = deps.fetchImpl ?? fetch
-  const sleep = deps.sleepMs ?? ((ms: number) => new Promise(resolve => setTimeout(resolve, ms)))
+  const sleep = deps.sleepMs ?? sleepMs
   const timeoutMs = deps.timeoutMs ?? 120_000
   const intervalMs = deps.pollIntervalMs ?? 1_000
   const action: GatewayRuntimeAction = deps.action === 'start' ? 'start' : 'restart'
@@ -52,58 +54,82 @@ export async function pollGatewayReady(chamberInstanceId: string, signal?: Abort
       }, { once: true })
     })
   }
-  while (Date.now() < deadline) {
-    throwIfAborted()
-    try {
+  /** One status round, already reduced to this poll's own vocabulary. */
+  type Round =
+    | { kind: 'status'; connectionState: string | null; operationError: string; outcome: unknown }
+    | { kind: 'config-error'; status: number }
+    | { kind: 'transient' }
+  const settled = await pollUntil<Round, true>({
+    intervalMs,
+    deadline,
+    sleep: sleepAbortable,
+    onProbeError: (error) => {
+      throwIfAborted()
+      // A failure raised by this poll (outcome 'failed', terminal state, …)
+      // must surface; a transient proxy failure while dsh is down keeps polling.
+      if (error instanceof Error && error.message.startsWith(`${action} failed`)) return { kind: 'fail', error }
+      return { kind: 'retry' }
+    },
+    probe: async (): Promise<Round> => {
+      throwIfAborted()
       const response = await fetchImpl(`/api/i/${chamberInstanceId}/chamber/runtime/status`, { credentials: 'same-origin', signal })
-      if (response.status === 200) {
-        const payload = await response.json() as { connectionState?: unknown; operationError?: unknown; restart?: unknown; start?: unknown }
-        const connectionState = typeof payload.connectionState === 'string' ? payload.connectionState : null
-        const operationError = typeof payload.operationError === 'string' && payload.operationError !== ''
+      if (response.status !== 200) {
+        return response.status === 401 || response.status === 403 || response.status === 404
+          ? { kind: 'config-error', status: response.status }
+          : { kind: 'transient' }
+      }
+      const payload = await response.json() as { connectionState?: unknown; operationError?: unknown; restart?: unknown; start?: unknown }
+      return {
+        kind: 'status',
+        connectionState: typeof payload.connectionState === 'string' ? payload.connectionState : null,
+        operationError: typeof payload.operationError === 'string' && payload.operationError !== ''
           ? payload.operationError
-          : ''
-        const outcome = payload[action]
-        // Review fix: a runtime action rejected AFTER the 202 (e.g. a
-        // canStartLocal gate that closed between the route pre-checks and the
-        // transaction) sets <action>:'failed' + operationError while
-        // connectionState is still 'ready' — that must surface as a failure,
-        // never as success.
-        if (outcome === 'failed') throw failure(operationError)
-        // Terminal connection states outrank a (stale/misreported) 'ok':
-        // the action also resolves from restart-exhausted/error/stopped
-        // (resolve ≠ success, design 18 §9.3) — defense-in-depth for older
-        // gateways without the outcome field. 'stopped' is included for a
-        // RESTART only: both the desktop IPC handler and the gateway manager
-        // treat it as a restart failure (round-3 tightening; a legit restart
-        // never passes through 'stopped' — control-plane resolves it only when
-        // stop() won the epoch race). A START begins from exactly that state
-        // (decision 12), so a stopped answer while start:'running'/absent is
-        // the normal transition, and a genuinely failed start is caught by
-        // start:'failed' above.
-        if (connectionState !== null && TERMINAL_CONNECTION_STATES.has(connectionState)) throw failure(operationError)
-        if (action === 'restart' && connectionState === 'stopped') throw failure(operationError)
-        if (outcome === 'ok') return
-        // Backward-compatible fallback for gateways without the outcome
-        // field (version skew): keep the connectionState contract.
-        // 'degraded' counts as success too — the process is alive and the
-        // next probe returns to ready (round-4 note).
-        if ((connectionState === 'ready' || connectionState === 'degraded') && outcome !== 'running') return
-      } else if (response.status === 401 || response.status === 403 || response.status === 404) {
-        // Review fix: config errors must fail fast, not blind-poll for 90 s
-        // into a misattributed readiness timeout.
-        const detail = response.status === 401
+          : '',
+        outcome: payload[action],
+      }
+    },
+    classify: (round) => {
+      if (round.kind === 'transient') return { kind: 'retry' }
+      if (round.kind === 'config-error') {
+        const detail = round.status === 401
           ? 'unauthorized (401) — check the gateway token'
-          : response.status === 404
+          : round.status === 404
             ? 'gateway does not expose /chamber/runtime (404)'
             : 'forbidden (403)'
-        throw failure(detail)
+        return { kind: 'fail', error: failure(detail) }
       }
-    } catch (error) {
-      throwIfAborted()
-      if (error instanceof Error && error.message.startsWith(`${action} failed`)) throw error
-      // transient proxy failure while dsh is down — keep polling
-    }
-    await sleepAbortable(intervalMs)
-  }
-  throw new Error(`${action} accepted but the gateway did not reach ready in time`)
+      const { connectionState, operationError, outcome } = round
+      // Review fix: a runtime action rejected AFTER the 202 (e.g. a
+      // canStartLocal gate that closed between the route pre-checks and the
+      // transaction) sets <action>:'failed' + operationError while
+      // connectionState is still 'ready' — that must surface as a failure,
+      // never as success.
+      if (outcome === 'failed') return { kind: 'fail', error: failure(operationError) }
+      // Terminal connection states outrank a (stale/misreported) 'ok':
+      // the action also resolves from restart-exhausted/error/stopped
+      // (resolve ≠ success, design 18 §9.3) — defense-in-depth for older
+      // gateways without the outcome field. 'stopped' is included for a
+      // RESTART only: both the desktop IPC handler and the gateway manager
+      // treat it as a restart failure (round-3 tightening; a legit restart
+      // never passes through 'stopped' — control-plane resolves it only when
+      // stop() won the epoch race). A START begins from exactly that state
+      // (decision 12), so a stopped answer while start:'running'/absent is
+      // the normal transition, and a genuinely failed start is caught by
+      // start:'failed' above.
+      if (connectionState !== null && TERMINAL_CONNECTION_STATES.has(connectionState)) {
+        return { kind: 'fail', error: failure(operationError) }
+      }
+      if (action === 'restart' && connectionState === 'stopped') return { kind: 'fail', error: failure(operationError) }
+      if (outcome === 'ok') return { kind: 'done', value: true }
+      // Backward-compatible fallback for gateways without the outcome
+      // field (version skew): keep the connectionState contract.
+      // 'degraded' counts as success too — the process is alive and the
+      // next probe returns to ready (round-4 note).
+      if ((connectionState === 'ready' || connectionState === 'degraded') && outcome !== 'running') {
+        return { kind: 'done', value: true }
+      }
+      return { kind: 'retry' }
+    },
+  })
+  if (settled === undefined) throw new Error(`${action} accepted but the gateway did not reach ready in time`)
 }

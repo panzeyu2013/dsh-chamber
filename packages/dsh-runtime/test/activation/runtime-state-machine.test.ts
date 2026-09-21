@@ -7,7 +7,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { transition, transitionLifecycleProjection, allowedActions, isTerminal } from '../../src/runtime-state-machine.ts';
+import { transition, transitionLifecycleProjection, allowedActions } from '../../src/runtime-state-machine.ts';
 import type { RuntimePhase } from '../../src/runtime-state-machine.ts';
 
 test('main chain: idle → checking → available → installing → pending → applying → applied → checking', () => {
@@ -53,13 +53,6 @@ test('invalid combos absorb (no state change)', () => {
   assert.equal(transition('idle', { type: 'install-done' }), 'idle');
   assert.equal(transition('pending', { type: 'probe-pass' }), 'pending');
   assert.equal(transition('checking', { type: 'apply-start' }), 'checking');
-});
-
-test('isTerminal: rollback/failed terminal, applied not', () => {
-  assert.equal(isTerminal('rollback'), true);
-  assert.equal(isTerminal('failed'), true);
-  assert.equal(isTerminal('applied'), false);
-  assert.equal(isTerminal('pending'), false);
 });
 
 test('apply-now: pending exposes the immediate-apply action and nothing else (design 18 addendum)', () => {

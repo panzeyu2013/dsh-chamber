@@ -14,16 +14,12 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import {
-  probeKoffiLoadable,
   runDelayedRollback,
   runStartupPhase,
   shouldProbeEnvWithDormantCorruptSelection,
 } from '../../src/runtime-startup.ts'
-import { REQUIRED_ACTIVATION_PROBES, type ProbeResult } from '../../src/activation-gate.ts'
+import { activationProbeNamesForDomains, REQUIRED_ACTIVATION_PROBES, type ProbeResult } from '../../src/activation-gate.ts'
 import { journalBuilder } from '../support/store-fixtures.ts'
 import type { ActivationJournal, OverrideRecord } from '../../src/dsh-runtime-store.ts'
 import { RunPhaseFixture, type RunPhaseEvent } from '../support/run-phase-fixture.ts'
@@ -111,6 +107,34 @@ test('pending activation uses real source/known-good facts and clears pending at
   assert.equal(snapshot?.version, '0.1.0')
   assert.equal(fixture.currentState().override?.pending, null)
   assert.equal(fixture.currentState().override?.lastOutcome, 'applied')
+})
+
+test('P0: cold-start pending derives the expected set after the spawn refreshes the seed table', async () => {
+  // Desktop cold-start model: `seededProbeDomains` starts empty and is written
+  // only by the spawn thunk inside `spawnAndProbe`. The expectation must be a
+  // lazy read taken after that run; an eagerly captured value (old getter
+  // semantics) froze the empty table and rolled back a healthy activation.
+  const fixture = new RunPhaseFixture({ override: record('0.2.0'), pointer: '0.1.0' })
+  const deps = fixture.makeStartupDeps()
+  const partialSeed = ['clientGraph/graph', 'archiveCleanup/probe'] as const
+  let seededDomains: readonly string[] = []
+  const order: string[] = []
+  deps.spawnAndProbe = async () => {
+    order.push('probe')
+    seededDomains = [...partialSeed]
+    return activationProbeNamesForDomains(seededDomains).map(name => ({ name, ok: true }))
+  }
+  deps.probeExpectedNames = () => {
+    order.push('expected')
+    return activationProbeNamesForDomains(seededDomains)
+  }
+  const result = await runStartupPhase(deps)
+  assert.equal(result.applyOutcome?.status, 'applied')
+  assert.equal(result.blockedReason, null)
+  // Partial seed = base four + the two mounted chamber domains (6 names), not
+  // the 4-name reduced set and not the full 7-name set.
+  assert.deepEqual(order, ['probe', 'expected'])
+  assert.equal(activationProbeNamesForDomains(seededDomains).length, REQUIRED_ACTIVATION_PROBES.length - 1)
 })
 
 test('probe failure stops, restores, rolls pointer back, and persists failure evidence', async () => {
@@ -448,11 +472,4 @@ test('F7 persists rollback-needed before effects and preserves a concurrently qu
     assert.equal(durable.journal.manualRollback, true)
   }
   assert.equal(fixture.currentState().override?.pending, '0.3.0')
-})
-
-test('probeKoffiLoadable reports the packaged prebuilt directory', async () => {
-  const tree = mkdtempSync(join(tmpdir(), 'dsh-koffi-'))
-  assert.equal((await probeKoffiLoadable(tree)).ok, false)
-  mkdirSync(join(tree, 'node_modules', 'koffi', 'build'), { recursive: true })
-  assert.equal((await probeKoffiLoadable(tree)).ok, true)
 })

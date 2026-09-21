@@ -256,8 +256,6 @@ export interface SessionStateStoreDeps {
   stateDir: string
   logger: Logger
   now?: () => number
-  /** Observer epoch id; a fresh one per process (gap reconstruction input). */
-  epoch?: string
 }
 
 export interface SessionStateStore {
@@ -348,7 +346,10 @@ function createStoredRow(sessionId: string, at: number): StoredRow {
  */
 export function createSessionStateStore(deps: SessionStateStoreDeps): SessionStateStore {
   const now = deps.now ?? (() => Date.now())
-  const epoch = deps.epoch ?? randomUUID()
+  // Observer epoch id; a fresh one per process (gap reconstruction input). The
+  // former injectable deps.epoch seam had zero suppliers anywhere (2026-12
+  // audit F43).
+  const epoch = randomUUID()
   const sessionStateDir = join(deps.stateDir, SESSION_STATE_DIR_NAME)
   const filePath = join(sessionStateDir, SESSION_STATE_FILE_NAME)
   ensurePrivateDirectoryNoFollow(sessionStateDir, SESSION_STATE_DIR_MODE)
@@ -1564,7 +1565,10 @@ export function createChamberSessionState(deps: ChamberSessionStateDeps): Chambe
         writeFrame(frameFor(delta))
         deliveredCursor = delta.cursor
       }
-      if (deliveredCursor < 0) deliveredCursor = lastEventId
+      // In this branch replay !== null, so lastEventId is non-null (the replay
+      // call is skipped when the header is absent); the explicit guard keeps the
+      // narrowing local to this line (baseline type repair, 2026-12 audit).
+      if (deliveredCursor < 0 && lastEventId !== null) deliveredCursor = lastEventId
     } else {
       const body = snapshot(client.clientId)
       writeFrame(snapshotFrame(body))
@@ -1699,10 +1703,6 @@ export interface SessionStateServiceDeps {
   canExposeLocal(): boolean
   /** gateway-proxy.getDiagnostics().activeStreams > 0 (the delegate gate). */
   otherMuxClientsConnected(): boolean
-  now?: () => number
-  call?: Parameters<typeof createSessionMux>[0]['call']
-  openSocket?: Parameters<typeof createSessionMux>[0]['openSocket']
-  silenceTimeoutMs?: number
 }
 
 export interface SessionStateService {
@@ -1713,8 +1713,6 @@ export interface SessionStateService {
   stop(): void
   /** Gateway shutdown: close SSE -> stop the observer -> flush the snapshot. */
   shutdown(): Promise<void>
-  dispose(): void
-  observerStatus(): SessionStateObserverStatus
 }
 
 /**
@@ -1730,24 +1728,19 @@ export function createSessionStateService(deps: SessionStateServiceDeps): Sessio
     if (state !== 'ready' && state !== 'degraded') return null
     return 'http://127.0.0.1:' + port
   }
-  const store = createSessionStateStore({ stateDir: deps.stateDir, logger: deps.logger, now: deps.now })
+  const store = createSessionStateStore({ stateDir: deps.stateDir, logger: deps.logger })
   const observer = createSessionStateObserver({
     logger: deps.logger,
     store,
     getBaseUrl: baseUrl,
     getHostState: () => normalizeHostState(deps.getConnectionState()),
     otherMuxClientsAttached: deps.otherMuxClientsConnected,
-    call: deps.call,
-    openSocket: deps.openSocket,
-    now: deps.now,
-    silenceTimeoutMs: deps.silenceTimeoutMs,
   })
   const surface = createChamberSessionState({
     logger: deps.logger,
     store,
     observer,
     enabled: deps.enabled,
-    now: deps.now,
   })
   if (!deps.enabled) store.setMode('off')
   return {
@@ -1768,14 +1761,6 @@ export function createSessionStateService(deps: SessionStateServiceDeps): Sessio
       if (deps.enabled) store.setMode('poll')
       await store.flush()
       store.dispose()
-    },
-    dispose(): void {
-      surface.closeAllStreams()
-      observer.stop()
-      store.dispose()
-    },
-    observerStatus(): SessionStateObserverStatus {
-      return observer.status()
     },
   }
 }

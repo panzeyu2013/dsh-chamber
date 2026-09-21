@@ -6,6 +6,12 @@
  * `typecheck:settings-bridge` script keeps this package's own code checked.
  * Keep in sync with what the src/client modules actually import.
  *
+ * 2026-12 audit: the faces this package never imports were removed (the
+ * dissolved-runtime store / api-controller mirrors, the ui-renderer client
+ * shim and the settings-family entry shims) — none of them was imported by
+ * src/ or test/, so each was inert. Add a block back only alongside a real
+ * import of that specifier.
+ *
  * The renderer's `src/client/bindings.tsx` (2026-09-11 upstream-alignment A3:
  * the bridge uses the OFFICIAL `observableHook` instead of re-implementing it)
  * is the one exception: a DEEP `./src/*` specifier resolves to the real vendor
@@ -61,57 +67,6 @@ declare module '@deepseek-ai/cordis' {
   }
 }
 
-declare module '@deepseek-ai/dsh-client-ui-renderer/client' {
-  import type { Context } from '@deepseek-ai/cordis'
-  import type { LocaleFace, StoredEntry } from '@deepseek-ai/dsh-client-ui-slots'
-  /** Slot registry service (moved here from the dissolved dsh-client-runtime). */
-  export class SlotRegistry {
-    constructor(ctx: Context)
-    /**
-     * The context a service method is called through: the cordis service proxy
-     * binds it to the CALLER's context at call time.
-     */
-    ctx: Context
-    register(options: Record<string, unknown>, component: unknown): () => void
-    /**
-     * Install one root standard-source contribution (upstream
-     * `RootStandardSourceContribution`: `hooks` / `keyedHooks` / `props`).
-     * The source's own renderer installs it; the bridge only reads the seats
-     * that instance's settings shell received (`settings-source-face.ts`).
-     */
-    provideRoot(contribution: Record<string, unknown>): () => void
-    inject(key: string, callback: () => void | Iterable<() => void>): () => void
-    entries(key: string): readonly StoredEntry[]
-    entriesOfSlot(key: string): readonly StoredEntry[]
-    getVersion(key: string): number
-    subscribe(key: string, fn: () => void): () => void
-    spec(key: string): { kind: string; scope: string } | undefined
-    /**
-     * Entry-render supervision seam: observe every render-time entry failure
-     * the boundaries contain, with the entry's registrant stamp (the seam the
-     * bridge's own `BridgeEntryBoundary` mirrors).
-     */
-    onEntryError(fn: (key: string, entry: StoredEntry, error: unknown, info: { abdicated: boolean }) => void): () => void
-    installLocale(face: LocaleFace): void
-  }
-  export interface RootOwnerProps {}
-}
-
-declare module '@deepseek-ai/dsh-client-store' {
-  /** Observable snapshot-store contract (dsh-client-runtime's store primitives successor). */
-  export interface SnapshotStore<T> {
-    getSnapshot(): T
-    subscribe(listener: () => void): () => void
-    set(state: T): void
-    update(recipe: (draft: T) => void): void
-  }
-  export function createSnapshotStore<T>(initial: T): SnapshotStore<T>
-  export type ObservableSnapshot<T> = SnapshotStore<T>
-  export interface EngineStoreHandle {}
-  export type DefineStore = unknown
-  export function defineStore(...args: unknown[]): unknown
-}
-
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   import type { ReactNode } from 'react'
   export type SlotKind = 'single' | 'list' | 'keyed' | 'chain'
@@ -163,133 +118,6 @@ declare module '@deepseek-ai/dsh-client-locale/client' {
   import type { Context } from '@deepseek-ai/cordis'
   export const inject: string[]
   export function apply(ctx: Context): void
-}
-
-declare module '@deepseek-ai/dsh-client-ui-theme/client' {
-  import type { Context } from '@deepseek-ai/cordis'
-  export const inject: string[]
-  export function apply(ctx: Context): void
-}
-
-declare module '@deepseek-ai/dsh-client-ui-settings/client' {
-  import type { Context } from '@deepseek-ai/cordis'
-  import type { SettingsPathOpView } from '@deepseek-ai/dsh-api-remotes/client'
-  export const inject: string[]
-  export function apply(ctx: Context): void
-  /** Live schemastery node (introspection face this package consumes). */
-  export interface SchemaNode {
-    type: string
-    list?: readonly unknown[]
-    value?: unknown
-    meta?: { description?: unknown }
-  }
-  /** Settings-owned synchronous schema operations (ui-settings client service face). */
-  export interface SettingsSchemaService {
-    rehydrate(serialized: unknown): SchemaNode
-    nodeAtPath(root: unknown, path: readonly string[]): SchemaNode | undefined
-  }
-  /** Settings-namespace scope contracts (settings-contract.ts, dsh-v0.1.2-alpha.1). */
-  export interface SettingsScopeSnapshot<T> {
-    status: 'loading' | 'ready' | 'unavailable'
-    value: T | undefined
-    base: unknown
-    user: unknown
-    revision: number | undefined
-    writable: boolean
-    mode: 'host' | 'memory'
-  }
-  export interface SettingsScopeSpec<T> {
-    namespace: string
-    decode?: (section: unknown) => T | undefined
-  }
-  export interface SettingsScope<T> {
-    getSnapshot(): SettingsScopeSnapshot<T>
-    subscribe(listener: () => void): () => void
-    mutate(ops: readonly SettingsPathOpView[], expectedRevision?: number): Promise<void>
-    set(field: string, value: unknown): Promise<void>
-    unset(field: string): Promise<void>
-  }
-}
-
-declare module '@deepseek-ai/dsh-client-ui-settings-general/client' {
-  import type { Context } from '@deepseek-ai/cordis'
-  export const inject: string[]
-  export function apply(ctx: Context): void
-}
-
-declare module '@deepseek-ai/dsh-client-ui-settings-models/client' {
-  import type { Context } from '@deepseek-ai/cordis'
-  export const inject: string[]
-  export function apply(ctx: Context): void
-}
-
-declare module '@deepseek-ai/dsh-client-ui-settings-plugins/client' {
-  import type { Context } from '@deepseek-ai/cordis'
-  export const inject: string[]
-  export function apply(ctx: Context): void
-}
-
-declare module '@deepseek-ai/dsh-client-ui-settings-plugin-inventory/client' {
-  import type { Context } from '@deepseek-ai/cordis'
-  export const inject: string[]
-  export function apply(ctx: Context): void
-}
-
-declare module '@deepseek-ai/dsh-client-ui-agent-preset/client' {
-  import type { Context } from '@deepseek-ai/cordis'
-  export const inject: string[]
-  export function apply(ctx: Context): void
-}
-
-declare module '@deepseek-ai/dsh-api-remotes/client' {
-  /** Wire view of one registered settings namespace (a settings/describe row). */
-  export interface SettingsNamespaceView {
-    /** Namespace key (`permission`, `ui-conversation`, …). */
-    ns: string
-    /** Serialized schemastery schema envelope (`schema.toJSON()`). */
-    schema: unknown
-    /** Redacted resolved value (schema defaults → composition base → user layer). */
-    value: unknown
-    /** Redacted composition base layer, when the registrant declared one. */
-    base?: unknown
-    /** Redacted raw user section, when one exists. */
-    user?: unknown
-    /** When the owner applies changes. */
-    applies: 'live' | 'restart'
-    /** Every schema-declared secret slot with its configured state. */
-    secrets: readonly { path: readonly string[]; set: boolean }[]
-    /** Monotonic revision of the raw user section this view was read at. */
-    revision: number
-  }
-  /** One path-addressed edit carried by a remote settings write (dsh-v0.1.2-alpha.1). */
-  export type SettingsPathOpView =
-    | { op: 'set'; path: string[]; value: unknown }
-    | { op: 'unset'; path: string[] }
-  /** The full `settings/describe` answer. */
-  export interface SettingsDescribeValue {
-    writable: boolean
-    hasDocument: boolean
-    namespaces: readonly SettingsNamespaceView[]
-  }
-}
-
-declare module '@deepseek-ai/dsh-api-session-controller/client' {
-  /** Session-list state (moved here from the dissolved dsh-client-runtime). */
-  export interface SessionListState {}
-  export interface SessionSummary {
-    id: string
-    title: string
-    updatedAt: number
-  }
-}
-
-declare module '@deepseek-ai/dsh-api-workspace-controller/client' {
-  /** Workspace identity (moved here from the dissolved dsh-client-runtime). */
-  export type WorkspaceId = string & { readonly __workspace?: never }
-  export interface WorkspaceView {
-    id: WorkspaceId
-    path: string
-  }
 }
 
 declare module '@deepseek-ai/dsh-client-ui-primitives' {

@@ -42,24 +42,16 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRecorder, isShellIndex, parseShellAssets, renderMarkdown, safeJson } from './checks.mjs'
+import { DEFAULT_SIDECAR_DIR, resolveSidecarDir } from '../lib/sidecar-assembly.mjs'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
-const DEFAULT_SIDECAR_DIR = path.join(REPO, 'packages', 'desktop', 'release', 'sidecar')
-
-/** Env override for the native sidecar assembly dir (same variable the G4 gate uses). */
-export const NATIVE_SIDECAR_DIR_ENV = 'DSH_CHAMBER_SIDECAR_DIR'
 
 /**
- * Resolve the native sidecar assembly dir.
- * @param {NodeJS.ProcessEnv} env - process environment.
- * @param {string} cwd - base for a relative override.
- * @returns {string} absolute assembly dir.
+ * Native-flavor aliases of the shared assembly resolver
+ * (scripts/lib/sidecar-assembly.mjs — ONE implementation for the G4 smoke, this
+ * toolbox and remote-state-acceptance; P1-4 of the 13-scripts audit).
  */
-export function resolveNativeSidecarDir(env = process.env, cwd = process.cwd()) {
-  const configured = typeof env[NATIVE_SIDECAR_DIR_ENV] === 'string' ? env[NATIVE_SIDECAR_DIR_ENV].trim() : ''
-  if (configured !== '') return path.isAbsolute(configured) ? configured : path.resolve(cwd, configured)
-  return DEFAULT_SIDECAR_DIR
-}
+export { resolveNodeBinary, resolveSidecarDir as resolveNativeSidecarDir } from '../lib/sidecar-assembly.mjs'
 
 /**
  * Fail-closed preflight of the native assembly: the entry and the compiled
@@ -84,13 +76,6 @@ export function nativePreflight({ sidecarDir = DEFAULT_SIDECAR_DIR } = {}) {
     }
   }
   return { ok: true, entry, controlPlaneEntry }
-}
-
-/** The bundled `node` when present, else the node running this toolbox. */
-export function resolveNodeBinary(sidecarDir, execPath = process.execPath) {
-  const bundled = path.join(sidecarDir, 'node')
-  if (existsSync(bundled)) return bundled
-  return execPath
 }
 
 /**
@@ -225,7 +210,7 @@ export async function launchNativeSidecar({ sidecarDir, outDir, timeoutMs = 30_0
  * @returns {Promise<{ skipped: boolean, reason?: string, results: object[], passed: number, failed: number, info: number, reportPath: string, planeOrigin: string|null }>} verdict.
  */
 export async function runNativeAcceptance({
-  sidecarDir = resolveNativeSidecarDir(),
+  sidecarDir = resolveSidecarDir(),
   outDir = '.tmp/gui-acceptance',
   attachPlaneOrigin = null,
   requireAssembly = false,

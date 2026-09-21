@@ -9,37 +9,18 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import type { SessionStateHostInfo, SessionStateMode } from '@dsh-chamber/control-plane'
 import {
   MAX_SSE_STREAMS,
   createChamberSessionState,
-  createSessionStateStore,
 } from '../../src/session-state.ts'
 import { FakeRequest, FakeResponse } from '../support/utils.ts'
-import { baselineItem, delay, scratch, silentLogger } from './harness.ts'
+import { baselineItem, delay, sessionSurfaceFor, type SessionSurfaceHarness } from './harness.ts'
 
-interface SurfaceHarness {
-  surface: ReturnType<typeof createChamberSessionState>
-  store: ReturnType<typeof createSessionStateStore>
-  setMode(mode: SessionStateMode): void
-  setHost(host: SessionStateHostInfo): void
-}
+type SurfaceHarness = SessionSurfaceHarness
 
+/** Session-state surface harness (shared factory; 2026-12 audit F40). */
 function surfaceFor(t: { after(fn: () => void): void }, options: { enabled?: boolean; maxStreams?: number } = {}): SurfaceHarness {
-  const store = createSessionStateStore({ stateDir: scratch(t), logger: silentLogger, now: () => 1_000 })
-  let mode: SessionStateMode = 'sse'
-  let host: SessionStateHostInfo = { now: 1_000, serviceable: true, state: 'ready' }
-  const surface = createChamberSessionState({
-    logger: silentLogger,
-    store,
-    observer: { status: () => ({ mode }), hostInfo: () => host } as never,
-    enabled: options.enabled ?? true,
-    now: () => 1_000,
-    keepaliveMs: 30,
-    maxStreams: options.maxStreams,
-  })
-  t.after(() => surface.closeAllStreams())
-  return { surface, store, setMode: value => { mode = value }, setHost: value => { host = value } }
+  return sessionSurfaceFor(t, options)
 }
 
 async function json(method: string, path: string, body?: unknown, headers: Record<string, string> = {}): Promise<FakeResponse> {

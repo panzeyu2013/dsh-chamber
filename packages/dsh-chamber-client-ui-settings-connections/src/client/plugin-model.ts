@@ -297,6 +297,17 @@ export function partialCounts(outcome: ApplyOutcome): { done: number; total: num
   return outcome.partial ?? null
 }
 
+/** The n/m prefix for a partial outcome ('Completed 2 of 5: '), empty when
+ *  nothing was partially done. Shared by the manage and add surfaces, which
+ *  spelled the interpolation twice (2026-12 audit P2-9). */
+export function partialTextOf(
+  counts: { done: number; total: number } | null,
+  t: (key: 'partialNofM' | 'partialSep') => string,
+): string {
+  if (counts === null || counts.done === 0) return ''
+  return `${t('partialNofM').replace('{done}', String(counts.done)).replace('{total}', String(counts.total))}${t('partialSep')}`
+}
+
 /* ---------------------------------------------------------------------------
  * 4. Batch failure policy — the SINGLE definition (design 21 §6.6)
  * ---------------------------------------------------------------------------
@@ -475,7 +486,6 @@ export function projectTasks(shape: GatewayTasksShape): { rows: TaskRow[]; busy:
  * above the newest ok op does not hide it in v1 (only successful changes are
  * undoable; the failed row owns its own surface). */
 export const UNDO_V1_POLICY = 'ok-only' as const
-export type UndoV1Policy = typeof UNDO_V1_POLICY
 
 /** The undo the UI can offer. `remove` = re-submit the name for removal.
  *  `add` (name + spec) is reserved for the future when the prior spec is
@@ -628,7 +638,8 @@ export function actionableDependencies(
 }
 
 /** 已安装列表的一行视图（渲染端只读投影）。legacy 回退行的 role 为 'unknown'
- *  （没有后端投影可消费），legacy 标记驱动「gateway 版本较低」提示。 */
+ *  （没有后端投影可消费）；「gateway 版本较低」提示由投影级 legacy 标记驱动
+ *  （projectInstalledRows 的返回值），行本身不携带该标记。 */
 export interface InstalledRowView {
   name: string
   /** 依赖值（掩码后）；后端行没有依赖项且自身 spec 为 null 时为 null（2026-09 行集
@@ -639,8 +650,6 @@ export interface InstalledRowView {
   protected: boolean
   /** 是否渲染逐行移除按钮（见 isRemovableRow）。 */
   removable: boolean
-  /** true = 该行来自旧服务端的 dependencies 回退（无 rows 投影，§6.11.7）。 */
-  legacy: boolean
 }
 
 /**
@@ -662,7 +671,7 @@ export function projectInstalledRows(
     const legacyRows: InstalledRowView[] = []
     for (const [name, spec] of Object.entries(dependencies)) {
       if (legacyProtectedName(name)) continue
-      legacyRows.push({ name, spec, version: null, role: 'unknown', protected: false, removable: true, legacy: true })
+      legacyRows.push({ name, spec, version: null, role: 'unknown', protected: false, removable: true })
     }
     return { rows: legacyRows, legacy: true }
   }
@@ -674,7 +683,6 @@ export function projectInstalledRows(
       role: row.role,
       protected: row.protected,
       removable: isRemovableRow(row),
-      legacy: false,
     })),
     legacy: false,
   }

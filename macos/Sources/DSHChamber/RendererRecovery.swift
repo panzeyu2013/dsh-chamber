@@ -54,13 +54,16 @@ public struct RendererRecoveryPolicy: Equatable {
 
     /// 依据历史重载时间戳（秒）与当前时刻决策；命中 reload 时把本次计入
     /// `attempts`（窗口外旧记录自动淘汰）。
+    /// 窗口淘汰 / 上限判定 / 记账 = `RollingWindowLimiter` 单源（2026-12 单源化）；
+    /// inout 数组契约保持不变（本策略是值类型，状态由调用方持有）。
     public func decide(now: Double, attempts: inout [Double]) -> Decision {
-        attempts = attempts.filter { now - $0 < window }
-        if attempts.count >= maxReloads {
+        switch RollingWindowLimiter.decide(window: window, limit: maxReloads,
+                                           now: now, events: &attempts) {
+        case .allow(let count):
+            return .reload(after: delay, attempt: count)
+        case .deny:
             return .giveUp(attempts: attempts.count)
         }
-        attempts.append(now)
-        return .reload(after: delay, attempt: attempts.count)
     }
 }
 

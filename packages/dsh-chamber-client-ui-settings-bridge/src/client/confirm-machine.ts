@@ -104,12 +104,3 @@ export function acceptConfirm<R extends ConfirmRunner>(
   launch(state.request.run)
   return { outcome: 'launched', state: { request: state.request, pending: true } }
 }
-
-/**
- * The accepted action settled (success or failure — both are the action's own
- * reporting): the dialog closes and the next action can arm.
- * @returns the idle state.
- */
-export function settleConfirm<R extends ConfirmRunner>(): ConfirmState<R> {
-  return IDLE_CONFIRM
-}

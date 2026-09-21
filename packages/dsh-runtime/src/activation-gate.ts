@@ -58,10 +58,10 @@ export const REQUIRED_ACTIVATION_PROBES = [
  *  archiveCleanup/probe + openInApp/probe). 2026-12 shape-awareness: the
  *  gateway shape only verifies them once a connecting desktop has synced its
  *  host packages into the seed cache — a fresh gateway hosts a plain dsh whose
- *  activation must pass without them. Design 24 §7 C: M2 replaces the binary
- *  hostDomains switch with a per-spawn derivation from the actually seeded
- *  entries; the typed subtraction below keeps the reduced set in lockstep
- *  meanwhile.
+ *  activation must pass without them. Design 24 §7 C (M2 landed): the expected
+ *  domains are derived per spawn from the actually seeded entries
+ *  (`activationProbeNamesForDomains`); the typed subtraction below keeps the
+ *  reduced set in lockstep.
  *
  *  `openInApp/probe` backs a LOCAL-shape-only registry row (design 20 §6): the
  *  desktop never syncs that package to a remote target or a gateway, so there

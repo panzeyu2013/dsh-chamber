@@ -36,8 +36,6 @@ import {
   type GitWorktreeDomainResult,
 } from './core.ts'
 
-export * from './core.ts'
-
 // Keep this gateway's compilation boundary narrow. Runtime ownership is still
 // enforced by static injection; these structural views avoid dragging every
 // transitive host source package into this standalone plugin's typecheck.

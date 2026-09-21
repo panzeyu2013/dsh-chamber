@@ -2487,23 +2487,6 @@ __decoratorMetadata(_init, GitWorktreeGateway);
 __publicField(GitWorktreeGateway, "inject", ["workspaceRegistry", "agents"]);
 var index_default = GitWorktreeGateway;
 export {
-  GitWorktreeCore,
-  GitWorktreeError,
   GitWorktreeGateway,
-  MAX_OPERATIONS,
-  MAX_REPOSITORIES,
-  MAX_TOTAL_SESSION_MEMBERSHIPS,
-  MAX_TOTAL_WORKTREES,
-  MAX_WORKSPACES,
-  MAX_WORKTREES_PER_REPOSITORY,
-  OPERATION_TTL_MS,
-  PREVIEW_TTL_MS,
-  RETRYABLE_CODES,
-  SNAPSHOT_DEADLINE_MS,
-  SNAPSHOT_WALL_TIMEOUT_MS,
-  assertSafeGitArgv,
-  createLocalGitRunner,
-  index_default as default,
-  domainResult,
-  parseBranchLine
+  index_default as default
 };

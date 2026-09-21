@@ -1,23 +1,27 @@
 /**
- * Browser wire client. The plugin selects fixture or HTTP transport, provides
- * the shared RPC client, and lets API Gateway own the connection loop.
+ * Browser wire client. The plugin provides the shared RPC client and lets API
+ * Gateway own the connection loop.
  *
  * ## chamber patch (dsh-chamber connection manager, design 05 §6; re-anchored
  * on upstream dsh-v0.1.5-alpha.2 at the 2026-09 re-anchor — that upstream file is
  * byte-identical at the current pin dsh-v0.1.5-rc.2)
  *
- * Three chamber deltas only:
+ * Three chamber deltas plus one removal:
  *  - `basePath` is read from the per-entry Context (`ctx.chamberBasePath`, the
  *    same seam the chamber api-gateway fork uses — never a page-global knob)
  *    and handed to the generic RPC carrier, so every api path lands under the
- *    control-plane per-instance proxy prefix (`/api/i/<id>`). The resolved
- *    value is also exposed as `handle.basePath`.
+ *    control-plane per-instance proxy prefix (`/api/i/<id>`).
  *  - the carrier assembly (`carrier-assembly.ts`) owns the RPC carrier
  *    construction; the liveness triggers (`liveness-triggers.ts`, design 14 D4)
  *    drive the controller's native `reconnect()` on OS wake / network return /
  *    long-hidden recovery.
  *  - `SYSTEM_RESUME_EVENT` is exported as the single canonical wake-event name
  *    the chamber shell dispatches.
+ *  - upstream's `?fixture` page mode is removed together with its browser
+ *    fixture (`src/client/fixture.ts` is registered as dropped): chamber has no
+ *    producer for the flag, and the static import pulled the 4037-line dev
+ *    scaffold plus its `@deepseek-ai/dsh-llm/*` value imports into the composite
+ *    boot chunk.
  *
  * Everything else is verbatim upstream: the page-global
  * `__DSH_CONNECTION_RECOVERY__` bootstrap, the `{...recovery, ...config}`
@@ -34,7 +38,6 @@ import {
   type ConnectionSinks,
   type ConnectionState,
 } from './connection.ts'
-import { createFixtureConnectionRpc } from './fixture.ts'
 import { createWebConnectionRpc, type RpcFetch, type RpcStreamOpen } from './rpc.ts'
 import { assembleConnectionCarriers } from './carrier-assembly.ts'
 import { attachLivenessTriggers } from './liveness-triggers.ts'
@@ -174,8 +177,6 @@ export interface ConnectionHandle {
    * ({@link ClientTransportHooks.ownsHost}), or the context is not a browser.
    */
   readonly isLoopback: boolean
-  /** chamber patch: resolved per-instance api base path (`/api` stock, `/api/i/<id>` chamber). */
-  readonly basePath: string
   /** Current Remote event generation and the Host facts carried by its opening frame. */
   readonly generation: ConnectionGenerationState
   /** Current recovery lifecycle for connection-specific consumers. */
@@ -249,18 +250,15 @@ function chamberBasePathOf(ctx: Context): string | undefined {
  */
 export function apply(ctx: Context): void {
   const pageLocation = typeof location === 'undefined' ? undefined : location
-  const fixture = pageLocation !== undefined && new URLSearchParams(pageLocation.search).has('fixture')
   const transport = (globalThis as ClientTransportGlobal).__DSH_TRANSPORT__
   const recovery = resolveConnectionConfig((globalThis as ClientTransportGlobal).__DSH_CONNECTION_RECOVERY__)
-  const fixtureRpc = fixture ? createFixtureConnectionRpc() : undefined
   // chamber patch: resolve the per-entry path once (from the entry Context) and
   // fan the same immutable value into the generic RPC carrier (plus the
   // transport's fetch/stream hooks when a page-owned transport is present). The
   // pure assembly policy is behavior-tested without loading the source-only
   // vendor graph; production supplies the real constructor here.
-  const { basePath, rpc } = assembleConnectionCarriers(
+  const { rpc } = assembleConnectionCarriers(
     chamberBasePathOf(ctx),
-    fixtureRpc,
     transport,
     {
       createRpc: options => createWebConnectionRpc(options),
@@ -305,11 +303,6 @@ export function apply(ctx: Context): void {
   }
   const handle: ConnectionHandle = {
     isLoopback: transport?.ownsHost === true || pageLocation === undefined || isLoopbackHostname(pageLocation.hostname),
-    // Diagnostic surface only: the gateway fork reads `ctx.chamberBasePath` and
-    // keeps its own base path, so this field's only consumers are this package's
-    // tests (2026-09 audit). Kept rather than removed so the handle stays
-    // inspectable in a live ctx.
-    basePath,
     generation: {
       getSnapshot: () => generation,
       subscribe: (listener) => {

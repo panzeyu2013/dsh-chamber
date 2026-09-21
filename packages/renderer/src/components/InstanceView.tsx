@@ -76,7 +76,7 @@ function monotonicNow(): number {
     : Date.now()
 }
 
-export interface InstanceViewProps {
+interface InstanceViewProps {
   instanceId: string
   basePath: string
   /** Immutable non-secret transport identity bound to this exact boot ctx. */

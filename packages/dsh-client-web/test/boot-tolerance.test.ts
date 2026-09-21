@@ -11,7 +11,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 
-import { classifyRendererInstallError, classifySweepEntry } from '../src/boot-tolerance.ts'
+import { classifySweepEntry } from '../src/boot-tolerance.ts'
 
 const TOLERATED = new Set(['@deepseek-ai/dsh-client-ui-renderer'])
 const row = '@deepseek-ai/dsh-client-ui-renderer'
@@ -60,19 +60,4 @@ test('sweep: tolerance applies per row id — the same label degrades only the t
   const tolerated = new Set(['extra-a'])
   assert.deepEqual(classifySweepEntry('extra-a', 'failed', tolerated, []), { kind: 'degraded' })
   assert.deepEqual(classifySweepEntry('manifest-row', 'failed', tolerated, []), { kind: 'fatal', reason: 'manifest-row: failed' })
-})
-
-// ── classifyRendererInstallError ───────────────────────────────────────────
-
-test('renderer install: the runtime boot-once error adopts the existing renderer', () => {
-  assert.equal(
-    classifyRendererInstallError(new Error('slot renderer already installed (install() is boot-once)')),
-    'adopt',
-  )
-})
-
-test('renderer install: any other failure is fatal (fail-safe direction)', () => {
-  assert.equal(classifyRendererInstallError(new Error('boom')), 'fatal')
-  assert.equal(classifyRendererInstallError('not an error object'), 'fatal')
-  assert.equal(classifyRendererInstallError(undefined), 'fatal')
 })

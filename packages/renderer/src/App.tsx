@@ -90,6 +90,7 @@ import {
   type WorkspaceEchoLedger,
 } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import { detectNotificationEdges, dedupeCompleteEdges, type SessionFacts } from './notification-edges.ts'
+import { createCompleteLedger } from './complete-ledger.ts'
 import { projectBadgeCount } from './badge-count.ts'
 // I3/I4 仪器（plan §10）：徽标回读与通知决定账本（只读、有界、发布为函数视图）。
 import { notificationLedger, publishBadgeCount, publishNotificationInstrument } from './notification-ledger.ts'
@@ -113,7 +114,7 @@ import {
   type UnreadStorageLike,
 } from './unread-store.ts'
 import { deriveSourceUnread, viewingReadWatermark } from './unread-derivation.ts'
-import { completionWatermark, nextNotifiedWatermark, shouldNotifyWatermark } from './notification-dedupe.ts'
+import { completionWatermark, nextNotifiedWatermark, shouldNotifyWatermark } from './watermark.ts'
 import { shouldDispatchRefreshHint } from './source-refresh-hint.ts'
 import {
   acknowledgeRendererDelivery,
@@ -1038,9 +1039,10 @@ export default function App() {
   const unreadStorageRef = useRef<UnreadStorageLike | undefined>(unreadBoot.storage)
   const readMarksRef = useRef<Record<string, Record<string, number>>>(unreadBoot.payload.read)
   const edgeLedgerRef = useRef<Record<string, Record<string, boolean>>>(unreadBoot.payload.edge)
-  const notifiedWatermarkRef = useRef<
-    Record<string, Record<string, Partial<Record<'complete' | 'ask' | 'request', number>>>>
-  >(unreadBoot.payload.notified)
+  // complete 通知账本（设计 19 §3.2；2026-12 阶段 2 单源化）：水位轨（facts 入口，
+  // 单调只升）与武装轨（壳边沿入口，直到重新 running）共用一个容器与键空间，规则
+  // 本体仍在 watermark.ts / notification-edges.ts；初始表来自 v2 落盘。
+  const completeLedgerRef = useRef(createCompleteLedger(unreadBoot.payload.notified))
   const clientInstallIdRef = useRef('')
   if (clientInstallIdRef.current === '') clientInstallIdRef.current = loadClientInstallId(unreadBoot.storage)
   const [completedBySource, setCompletedBySource] = useState<Record<string, Record<string, boolean>>>(
@@ -1054,10 +1056,6 @@ export default function App() {
   // （requireHidden 豁免在主进程裁决）。随来源生命周期收敛（onRuntimeReport
   // 的 clear 分支 delete，与 prevRunningRef 同纪律）。
   const prevRuntimeFactsRef = useRef<Record<string, Record<string, SessionFacts>>>({})
-  // 通知 complete 去重记忆（设计 19 §3.2，dedupeCompleteEdges）：每来源已发
-  // complete 的会话集合——正被查看的会话完成先走 running 边沿，切走后 vendor
-  // 延迟武装 completed 的重复边沿在此丢弃；会话重新 running 时清除。
-  const notifiedCompleteRef = useRef<Record<string, Set<string>>>({})
   // ── 2026-12 facts wiring：gateway session-state 事实 + 派生账本 + 行刷新 ──
   /** 每来源 facts 快照（判定输入：completedAt/updatedAt/lastTurnEnd/pendingKind）。 */
   const [sessionFacts, setSessionFacts] = useState<Record<string, SessionFactsSnapshot | undefined>>({})
@@ -1467,9 +1465,8 @@ export default function App() {
     for (const id of Object.keys(prevRuntimeFactsRef.current)) {
       if (!servers.some(server => server.id === id)) delete prevRuntimeFactsRef.current[id]
     }
-    for (const id of Object.keys(notifiedCompleteRef.current)) {
-      if (!servers.some(server => server.id === id)) delete notifiedCompleteRef.current[id]
-    }
+    // complete 通知两轨（水位 + 武装）与注册表同拍收敛（一次调用覆盖两张表）。
+    completeLedgerRef.current.prune(live)
     // facts wiring 数据面（2026-12）：退役来源的读水位 / 回退账本 / 通知水位 /
     // 播种集 / 提示记账 / 在途计数与 facts state 一并清（same-id 重加 = 新来源代，
     // 不得继承上一代的已读/已通知判定）。
@@ -1478,9 +1475,6 @@ export default function App() {
     }
     for (const id of Object.keys(edgeLedgerRef.current)) {
       if (!servers.some(server => server.id === id)) delete edgeLedgerRef.current[id]
-    }
-    for (const id of Object.keys(notifiedWatermarkRef.current)) {
-      if (!servers.some(server => server.id === id)) delete notifiedWatermarkRef.current[id]
     }
     for (const id of [...factsSeededRef.current]) {
       if (!servers.some(server => server.id === id)) factsSeededRef.current.delete(id)
@@ -1638,7 +1632,7 @@ export default function App() {
       chamberBridge.clearPluginDiagnostic(sourceId)
       delete prevRunningRef.current[sourceId]
       delete prevRuntimeFactsRef.current[sourceId]
-      delete notifiedCompleteRef.current[sourceId]
+      completeLedgerRef.current.forget(sourceId)
       // facts wiring：事实源实例与全部未读数据面键随退役同拍收敛（reclaimView
       // 刻意不碰这些——拆壳不等于来源消失，R2/L3）。
       sessionFactsTeardownRef.current.get(sourceId)?.()
@@ -1650,7 +1644,6 @@ export default function App() {
       sourceMuxIdentityRef.current.delete(sourceId)
       delete readMarksRef.current[sourceId]
       delete edgeLedgerRef.current[sourceId]
-      delete notifiedWatermarkRef.current[sourceId]
       delete refreshHintAtRef.current[sourceId]
       delete factsPullInFlightRef.current[sourceId]
       factsSeededRef.current.delete(sourceId)
@@ -3003,7 +2996,7 @@ export default function App() {
       v: 2,
       read: readMarksRef.current,
       edge: edgeLedgerRef.current,
-      notified: notifiedWatermarkRef.current,
+      notified: completeLedgerRef.current.notifiedTable(),
     })
   }, [])
   flushUnreadRef.current = flushUnread
@@ -3182,20 +3175,16 @@ export default function App() {
       // 只播种水位（桌面关闭期间的完成不得补发通知）。
       const seeded = factsSeededRef.current.has(sourceId)
       const lifecycle = sourceLifecyclesRef.current!.capture(sourceId)
-      const memory = notifiedWatermarkRef.current[sourceId] ?? {}
-      let memoryChanged = false
-      const nextMemory = { ...memory }
       for (const row of Object.values(snapshot.rows)) {
         // 子代理压制（与壳通道同一谓词）：不记账，待子代理全部结束后补发。
         if (row.subagentCount > 0) continue
         if (row.completedAtSource !== 'observed' || row.completedAt === null) continue
         const watermark = completionWatermark(row)
         if (watermark === undefined) continue
-        const previous = memory[row.sessionId]?.complete
+        const previous = completeLedgerRef.current.notifiedWatermark(sourceId, row.sessionId, 'complete')
         const nextWatermark = nextNotifiedWatermark(previous, watermark)
         if (nextWatermark !== undefined && nextWatermark !== previous) {
-          nextMemory[row.sessionId] = { ...nextMemory[row.sessionId], complete: nextWatermark }
-          memoryChanged = true
+          completeLedgerRef.current.setNotifiedWatermark(sourceId, row.sessionId, 'complete', nextWatermark)
         }
         if (seeded && lifecycle !== null && shouldNotifyWatermark(previous, watermark)) {
           emitSessionNotification({
@@ -3207,7 +3196,6 @@ export default function App() {
           })
         }
       }
-      if (memoryChanged) notifiedWatermarkRef.current = { ...notifiedWatermarkRef.current, [sourceId]: nextMemory }
       factsSeededRef.current.add(sourceId)
     }
     recomputeSourceUnread(sourceId)
@@ -4749,7 +4737,7 @@ export default function App() {
         // 完成，且会话完成状态在 UI 中可见）。
         delete prevRunningRef.current[sourceId]
         delete prevRuntimeFactsRef.current[sourceId]
-        delete notifiedCompleteRef.current[sourceId]
+        completeLedgerRef.current.forgetArmed(sourceId)
         // R2（2026-12 facts wiring）：**不再**删来源账本。撤回只清易失的转移记忆
         // （prevRunning 是「转移」不是「状态」，持久化会伪造边沿）；durable 账本
         // 由事实重算——同代重挂/撤回后未读仍在（派生投影，账本不再是唯一来源）。
@@ -4780,14 +4768,14 @@ export default function App() {
       const runningIds = Object.entries(report.sessions)
         .filter(([, facts]) => facts?.running === true)
         .map(([sessionId]) => sessionId)
-      const notifiedBefore = notifiedCompleteRef.current[sourceId] ?? new Set<string>()
+      const notifiedBefore = completeLedgerRef.current.armed(sourceId)
       const deduped = dedupeCompleteEdges(edgesWithoutRunningSubagents, notifiedBefore, runningIds)
       // 已离开列表的会话清除已发记忆（与蓝点机 leave-the-list 清扫同纪律，
       // 防长活来源上的记忆缓慢增长）。
       for (const sessionId of [...deduped.notified]) {
         if (report.sessions[sessionId] === undefined) deduped.notified.delete(sessionId)
       }
-      notifiedCompleteRef.current[sourceId] = deduped.notified
+      completeLedgerRef.current.setArmed(sourceId, deduped.notified)
       if (deduped.edges.length > 0) {
         // 唯一组装点（2026-12）：文案/标题/requireHidden 全在 emitSessionNotification。
         // facts.ok 的完成由**第二入口**（watcher completedAt）负责——本入口只发

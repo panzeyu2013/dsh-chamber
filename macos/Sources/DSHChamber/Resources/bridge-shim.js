@@ -15,9 +15,8 @@
  * 传输 + preload 逐字面。
  *
  * 方法→通道/载荷映射（与 preload.cts 逐字；payload 键即 preload 现形状）：
- *   desktopSsh（32 invoke + 2 订阅）
+ *   desktopSsh（31 invoke + 2 订阅）
  *     instances_get()            → desktop_ssh_instances_get（无载荷）
- *     instances_set(instances)   → desktop_ssh_instances_set（instances 数组原文）
  *     delete_connection(id)      → desktop_ssh_delete_connection {id}
  *     save_connection(prevId,input,creds) → desktop_ssh_save_connection
  *                                 {previousId,input,credentials}
@@ -424,14 +423,12 @@
   // Every method below invokes its real manifest channel with the exact
   // preload.cts payload shape; no poc-unimplemented stub remains (S-B).
 
-  /** desktopSsh — 全 32 invoke 方法接真实通道；载荷键逐字 preload（id 寻址
-   *  通道一律 {id}，instances_set 直传数组原文）。W-05 切片桩 sidecar-stub.ts
+  /** desktopSsh — 全 31 invoke 方法接真实通道；载荷键逐字 preload（id 寻址
+   *  通道一律 {id}）。W-05 切片桩 sidecar-stub.ts
    *  读 {instanceId}（自 2026-12 起仅作集成测试 fixture，见文件头注记），
    *  此处不迁就。 */
   var desktopSsh = {
     instances_get: function () { return invoke('desktop_ssh_instances_get', null) },
-    // preload 逐字：第二参原文直传（主进程校验数组；legacy no-op roster 通道）。
-    instances_set: function (instances) { return invoke('desktop_ssh_instances_set', instances) },
     delete_connection: function (id) { return invoke('desktop_ssh_delete_connection', { id: id }) },
     save_connection: function (previousId, input, credentials) {
       return invoke('desktop_ssh_save_connection', { previousId: previousId, input: input, credentials: credentials })

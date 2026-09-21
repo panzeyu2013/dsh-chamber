@@ -38,10 +38,23 @@ export interface ApplyDeps {
    * already-aborted signal (see `rollbackProbeSignal`).
    */
   probe: (version: string, isBuiltin: boolean, signal?: AbortSignal) => Promise<ProbeResult[]>
-  /** 2026-12 shape-awareness: the exact probe-name set the verdict expects.
-   * Defaults to REQUIRED_ACTIVATION_PROBES; the gateway shape (no synced
-   * chamber host seed) passes PROBE_NAMES_WITHOUT_HOST_DOMAINS. */
-  probeExpectedNames?: readonly string[]
+  /**
+   * 2026-12 shape-awareness: resolves the exact probe-name set the verdict
+   * expects. Defaults to REQUIRED_ACTIVATION_PROBES when omitted; the gateway
+   * shape (no synced chamber host seed) resolves
+   * PROBE_NAMES_WITHOUT_HOST_DOMAINS.
+   *
+   * It is a FUNCTION on purpose (2026-12 P0 fix): a host may refresh the domain
+   * table inside `probe` itself — desktop's probe closure runs
+   * `cp.startLocal()`, whose spawn thunk is the only writer of
+   * `seededProbeDomains`. A value captured while the transaction object is
+   * built (before that spawn) would freeze the cold-start empty table and make
+   * the verdict's exact-set check fail against the freshly seeded probe run,
+   * rolling back a healthy activation. The apply phase calls it only AFTER a
+   * probe attempt resolved, so expectation and result set share this
+   * transaction's seed snapshot.
+   */
+  probeExpectedNames?: () => readonly string[]
   restore: (snapshotPath: string) => Promise<'complete' | 'half' | 'incomplete'>
   stopHost: () => Promise<void>
   waitBeforeRetry?: (delayMs: number) => Promise<void>
@@ -134,6 +147,23 @@ async function safeProbe(probe: () => Promise<ProbeResult[]>): Promise<ProbeResu
   } catch (error) {
     return [{ name: 'probe', ok: false, error: errorText(error) }]
   }
+}
+
+/**
+ * Run one probe attempt and resolve the expected name set only afterwards.
+ * Ordering is a correctness property, not a style choice: the probe is the
+ * landing site of the candidate spawn, and the desktop host publishes the
+ * seeded chamber domains from inside that spawn (see
+ * `ApplyDeps.probeExpectedNames`). Resolving the expectation lazily keeps the
+ * verdict's exact-set check aligned with the probe run it judges.
+ */
+async function probeWithExpectedNames(
+  probe: () => Promise<ProbeResult[]>,
+  deps: ApplyDeps,
+): Promise<{ probes: ProbeResult[]; expected: { expectedNames?: readonly string[] } }> {
+  const probes = await safeProbe(probe)
+  const expectedNames = deps.probeExpectedNames?.()
+  return { probes, expected: expectedNames === undefined ? {} : { expectedNames } }
 }
 
 /**
@@ -334,10 +364,11 @@ async function delayedVerdict(opts: ApplyOptions): Promise<'pass' | 'fail'> {
   const nowMs = opts.deps.nowMs ?? Date.now
   const firstStartedAt = nowMs()
   const probeTarget = () => opts.deps.probe(opts.pendingVersion, opts.targetIsBuiltin === true, opts.signal)
-  let verdict = decideVerdict(await safeProbe(probeTarget), {
+  const first = await probeWithExpectedNames(probeTarget, opts.deps)
+  let verdict = decideVerdict(first.probes, {
     elapsedMs: nowMs() - firstStartedAt,
     observedOnce: false,
-    ...(opts.deps.probeExpectedNames === undefined ? {} : { expectedNames: opts.deps.probeExpectedNames }),
+    ...first.expected,
   })
   if (verdict === 'observe') {
     const wait = opts.deps.waitBeforeRetry ?? (delayMs => new Promise<void>(resolve => setTimeout(resolve, delayMs)))
@@ -345,10 +376,11 @@ async function delayedVerdict(opts: ApplyOptions): Promise<'pass' | 'fail'> {
     // The design's timeout bounds one probe attempt. Do not charge the first
     // timeout or observation delay to a healthy confirmation attempt.
     const secondStartedAt = nowMs()
-    verdict = decideVerdict(await safeProbe(probeTarget), {
+    const second = await probeWithExpectedNames(probeTarget, opts.deps)
+    verdict = decideVerdict(second.probes, {
       elapsedMs: nowMs() - secondStartedAt,
       observedOnce: true,
-      ...(opts.deps.probeExpectedNames === undefined ? {} : { expectedNames: opts.deps.probeExpectedNames }),
+      ...second.expected,
     })
   }
   return verdict === 'pass' ? 'pass' : 'fail'
@@ -471,10 +503,14 @@ async function continueRollback(opts: ApplyOptions, initial: ActivationJournal):
       })
     }
     const fallbackVersion = journal.rollbackTarget ?? opts.builtinVersion
-    const fallbackProbes = await safeProbe(() => deps.probe(fallbackVersion, journal.rollbackTarget === null, rollbackProbeSignal(opts.signal)))
+    const fallbackAttempt = await probeWithExpectedNames(
+      () => deps.probe(fallbackVersion, journal.rollbackTarget === null, rollbackProbeSignal(opts.signal)),
+      deps,
+    )
+    const fallbackProbes = fallbackAttempt.probes
     const fallbackVerdict = decideVerdict(
       fallbackProbes,
-      { elapsedMs: 0, observedOnce: true, ...(deps.probeExpectedNames === undefined ? {} : { expectedNames: deps.probeExpectedNames }) },
+      { elapsedMs: 0, observedOnce: true, ...fallbackAttempt.expected },
     )
     if (fallbackVerdict === 'pass') {
       return makeOutcome({
@@ -518,10 +554,14 @@ async function continueRollback(opts: ApplyOptions, initial: ActivationJournal):
         error: `回退目标失败，落内建运行时也失败：${errorText(error)}`,
       })
     }
-    const builtinProbes = await safeProbe(() => deps.probe(opts.builtinVersion, true, rollbackProbeSignal(opts.signal)))
+    const builtinAttempt = await probeWithExpectedNames(
+      () => deps.probe(opts.builtinVersion, true, rollbackProbeSignal(opts.signal)),
+      deps,
+    )
+    const builtinProbes = builtinAttempt.probes
     const builtinVerdict = decideVerdict(
       builtinProbes,
-      { elapsedMs: 0, observedOnce: true, ...(deps.probeExpectedNames === undefined ? {} : { expectedNames: deps.probeExpectedNames }) },
+      { elapsedMs: 0, observedOnce: true, ...builtinAttempt.expected },
     )
     return makeOutcome({
       status: 'failed', snapshotPath: preSwapPath, restoreOutcome: 'complete', swapAttempted: true,

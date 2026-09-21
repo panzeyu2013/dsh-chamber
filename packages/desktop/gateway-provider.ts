@@ -56,7 +56,7 @@ import type {
   TransportProvider,
   TransportVerifyResult,
 } from './transport-provider.ts'
-import { gatewaySessionScopeForConnection } from './gateway-session.ts'
+import { buildGatewaySessionOrigin, gatewaySessionScopeForConnection } from './gateway-session.ts'
 import type { GatewayRegistrationAuthProof, GatewaySessionOrigin, GatewaySessionResult } from './gateway-session.ts'
 import { readOwnerOnlySecretFile } from './owner-only-secret-file.ts'
 import { parseSpecArg } from './gateway-ipc-shared.ts'
@@ -78,6 +78,7 @@ import {
 } from './control-plane-module.ts'
 import { GATEWAY_PLUGIN_VERSION_PATTERN, TARBALL_MAX_ARCHIVE_BYTES } from './plugin-tarball.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
+import { describeError } from './describe-error.ts'
 
 /** Gateway hostname whitelist: a bare hostname/IPv4 (NO colon — the port is
  * carried separately in `remotePort`, never embedded in the host) or a fully
@@ -1046,12 +1047,12 @@ function isValidGatewayInstance(instance: unknown): instance is TransportInstanc
  * the identity probe — an internal-CA gateway login can then succeed
  * instead of dying as an untrusted-chain network failure (永不 ready). */
 function gatewaySessionOriginFor(spec: TransportInstanceSpec): GatewaySessionOrigin {
-  return {
+  return buildGatewaySessionOrigin({
     baseUrl: `${spec.insecureHttp ? 'http' : 'https'}://${spec.host}:${spec.remotePort}`,
     insecureHttp: spec.insecureHttp,
     scope: gatewaySessionScopeForConnection(spec),
-    ...(spec.spkiPin === undefined || spec.spkiPin === null ? {} : { spkiPin: spec.spkiPin }),
-  }
+    spkiPin: spec.spkiPin,
+  })
 }
 
 /** Map a login-exchange failure onto the probe's terminal/transient verdict
@@ -1519,7 +1520,7 @@ export async function syncGatewayChamberPlugins(options: {
           options.logger.warn(`[dsh-chamber] gateway plugin sync: dsh restart after upload returned HTTP ${restart.status}; packages apply on the next natural spawn`)
         }
       } catch (error) {
-        options.logger.warn(`[dsh-chamber] gateway plugin sync: dsh restart after upload failed: ${error instanceof Error ? error.message : String(error)}`)
+        options.logger.warn(`[dsh-chamber] gateway plugin sync: dsh restart after upload failed: ${describeError(error)}`)
       }
     }
     if (firstFailure !== null) {
@@ -1527,12 +1528,12 @@ export async function syncGatewayChamberPlugins(options: {
     }
     return { uploaded, skipped: false }
   } catch (error) {
-    options.logger.warn(`[dsh-chamber] gateway plugin sync failed: ${error instanceof Error ? error.message : String(error)}`)
+    options.logger.warn(`[dsh-chamber] gateway plugin sync failed: ${describeError(error)}`)
     return {
       uploaded: false,
       skipped: false,
       failed: true,
-      error: `gateway plugin sync failed: ${sanitizeErrorText(error instanceof Error ? error.message : String(error))}`,
+      error: `gateway plugin sync failed: ${sanitizeErrorText(describeError(error))}`,
     }
   }
 }
@@ -1722,7 +1723,7 @@ export async function gatewayChamberApplyBatch(params: {
       }
     }
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error)
+    const detail = describeError(error)
     return partialFailure(`gateway plugin apply request failed: ${detail}`)
   }
 
@@ -1756,7 +1757,7 @@ export async function gatewayChamberApplyBatch(params: {
       }
       outcome.restarted = true
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
+      const detail = describeError(error)
       return partialFailure(`gateway restart request failed: ${detail}`)
     }
   }
@@ -1813,7 +1814,7 @@ async function waitForOpsToSettle(params: {
     try {
       response = await params.request('GET', '/chamber/plugins/tasks')
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error)
+      const detail = describeError(error)
       return { ok: false, error: `gateway plugin task projection failed: ${detail}` }
     }
     if (response.status === 200) {
@@ -2118,7 +2119,7 @@ export async function gatewayChamberMaterialize(params: {
     }
     return { ok: true, outcome: { executed: true, restarted: true } }
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error)
+    const detail = describeError(error)
     return { ok: false, error: `gateway plugin materialize failed: ${detail}` }
   }
 }

@@ -95,6 +95,7 @@ import {
   retryRestoreStillValid,
   type GatewayConfirmFacts,
 } from './runtime-confirm-guards.ts'
+import { bridgeRestartRefusalText } from './restart-refusal.ts'
 import css from './SettingsShell.module.css'
 
 type RuntimeTranslate = (key: SettingsBridgeKey, params?: Record<string, unknown>) => string
@@ -339,6 +340,8 @@ function GatewayRuntimeSection({
   askConfirm: (request: RuntimeConfirmRequest) => void
 }) {
   const STATUS_POLL_MS = 3_000
+  /** Per-request deadline for one status GET (the versions pull's 30s pattern). */
+  const STATUS_REQUEST_TIMEOUT_MS = 30_000
   // Per-instance labelledby ids (useId): N-ctx shells mount one settings panel
   // each in the SAME document — a static id would alias across panels.
   const selectVersionId = useId()
@@ -354,6 +357,22 @@ function GatewayRuntimeSection({
   const actionController = useRef<AbortController | null>(null)
   const componentActive = useRef(true)
   const lastPhaseRef = useRef<string | null>(null)
+  // Monotonic write discipline for remoteStatus (2026-12 audit): the 3s status
+  // poll, the 2s settle poll, the apply-now poll and the registry echo all
+  // write the same state and their responses interleave — a slow 3s tick
+  // landing after a fresh settle answer used to roll the section back to an
+  // older snapshot (and a pre-PUT poll GET could revert the echoed origin).
+  // Every request takes the next number BEFORE it starts; a result is applied
+  // only while nothing newer has landed.
+  const statusSeq = useRef(0)
+  const statusAppliedSeq = useRef(0)
+  const nextStatusSeq = (): number => (statusSeq.current += 1)
+  const applyRemoteStatus = useCallback((next: RemoteRuntimeStatus, seq: number): boolean => {
+    if (seq < statusAppliedSeq.current) return false
+    statusAppliedSeq.current = seq
+    setRemoteStatus(next)
+    return true
+  }, [])
   const [registrySelection, setRegistrySelection] = useState(NPMJS)
   const [customOrigin, setCustomOrigin] = useState('')
   const [registryEditing, setRegistryEditing] = useState(false)
@@ -408,20 +427,32 @@ function GatewayRuntimeSection({
     let timer: ReturnType<typeof setTimeout> | undefined
     const controller = new AbortController()
     const tick = async (): Promise<void> => {
+      const seq = nextStatusSeq()
+      // Per-request deadline: without it one wedged hop left this await pending
+      // forever, so the finally never ran, no further tick was scheduled and the
+      // section silently froze on its last snapshot (2026-12 audit P1-1).
+      const request = new AbortController()
+      const onUnmount = (): void => { request.abort() }
+      controller.signal.addEventListener('abort', onUnmount)
+      let timedOut = false
+      const deadline = setTimeout(() => { timedOut = true; request.abort() }, STATUS_REQUEST_TIMEOUT_MS)
       try {
-        const status = await fetchRemoteRuntimeStatus(chamberInstanceId, { signal: controller.signal })
-        if (!cancelled) {
+        const status = await fetchRemoteRuntimeStatus(chamberInstanceId, { signal: request.signal })
+        if (!cancelled && applyRemoteStatus(status, seq)) {
           if ((lastPhaseRef.current === 'installing' || lastPhaseRef.current === 'applying')
             && status.phase !== 'installing' && status.phase !== 'applying') {
             setVersionsEpoch((epoch) => epoch + 1)
           }
           lastPhaseRef.current = status.phase
-          setRemoteStatus(status)
           setStatusError(null)
         }
       } catch (error) {
-        if (!cancelled && !controller.signal.aborted) setStatusError(errorMessage(error))
+        if (!cancelled && !controller.signal.aborted) {
+          setStatusError(timedOut ? tRef.current('dshRuntimeStatusTimeout') : errorMessage(error))
+        }
       } finally {
+        clearTimeout(deadline)
+        controller.signal.removeEventListener('abort', onUnmount)
         if (!cancelled) timer = setTimeout(() => { void tick() }, STATUS_POLL_MS)
       }
     }
@@ -659,8 +690,9 @@ function GatewayRuntimeSection({
       // apply is the separate action that arms it).
       const result = await remoteRuntimeAction(chamberInstanceId, { kind: 'select', version: chosenRemote }, { signal })
       if (result.status === 202) {
+        const seq = nextStatusSeq()
         const status = await pollRemoteRuntimeUntilSettled(chamberInstanceId, 'select', { signal })
-        if (!signal.aborted) setRemoteStatus(status)
+        if (!signal.aborted) applyRemoteStatus(status, seq)
       }
       if (chosenRemote !== remoteActive) {
         await remoteRuntimeAction(chamberInstanceId, { kind: 'apply' }, { signal })
@@ -804,8 +836,9 @@ function GatewayRuntimeSection({
       run: () => runRemoteAction(async (signal) => {
         const result = await remoteRuntimeAction(chamberInstanceId, { kind: 'apply-now' }, { signal })
         if (result.status === 202) {
+          const seq = nextStatusSeq()
           const status = await pollRemoteRuntimeUntilSettled(chamberInstanceId, 'apply-now', { signal })
-          if (!signal.aborted) setRemoteStatus(status)
+          if (!signal.aborted) applyRemoteStatus(status, seq)
         }
         // The applied version may have changed the cached-tree list.
         setVersionsEpoch((epoch) => epoch + 1)
@@ -840,11 +873,11 @@ function GatewayRuntimeSection({
         // reflect it IMMEDIATELY instead of waiting for the next ~3s status
         // poll tick — same instant feedback the local branch gets from its
         // optimistic settings overlay. The poll keeps asserting the truth.
-        // Known benign race (accepted): a poll GET that snapshot the OLD
-        // origin before the PUT may land AFTER this echo and revert the row
-        // for at most one poll interval (~3s); the next tick re-asserts the
-        // applied origin. Same self-healing class as the local optimistic
-        // overlay racing a main push.
+        // The echo also takes a NEWER sequence number, so a poll GET that
+        // snapshotted the OLD origin before the PUT and lands afterwards can no
+        // longer revert the row for one interval (2026-12 audit: the former
+        // accepted race is closed by the monotonic guard).
+        statusAppliedSeq.current = nextStatusSeq()
         setRemoteStatus((current) => current === null
           ? current
           : { ...current, registry: result.origin, registryError: null })
@@ -1673,16 +1706,13 @@ export function DshRuntimeSection({
             signal: restartController.signal,
           })
           if (response.status !== 202) {
-            // Surface the server's own reason (round-3 fix): the route answers
-            // 409 with a specific error ('managed dsh is not running (stopped)…',
-            // 'runtime activation in progress…', 'a restart is already in flight')
-            // that must reach the user instead of a bare status code.
-            let serverReason = ''
-            try {
-              const body = await response.json() as { error?: unknown }
-              if (typeof body.error === 'string' && body.error !== '') serverReason = body.error
-            } catch { /* non-JSON body — fall back to the status */ }
-            throw new Error(serverReason !== '' ? `restart refused: ${serverReason}` : `restart refused (${response.status})`)
+            // The route's 409 families get the SAME localized copy the
+            // connections card/dialog render (restart-refusal.ts; the parity
+            // test pins both classifiers). Non-409 statuses keep the server's
+            // verbatim reason — never a bare status code (round-3 fix).
+            let body: unknown = null
+            try { body = await response.json() } catch { body = null }
+            throw new Error(bridgeRestartRefusalText(body, response.status, t))
           }
         } catch (error) {
           // Our own POST deadline reports itself in the section's copy; every

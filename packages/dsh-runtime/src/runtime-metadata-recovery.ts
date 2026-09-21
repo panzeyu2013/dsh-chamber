@@ -22,7 +22,6 @@ import {
   fstatSync,
   fsyncSync,
   lstatSync,
-  mkdirSync,
   openSync,
   readFileSync,
   readlinkSync,
@@ -32,7 +31,6 @@ import {
   renameSync,
   rmSync,
   symlinkSync,
-  writeFileSync,
   writeSync,
 } from 'node:fs'
 import { createHash, randomBytes } from 'node:crypto'
@@ -62,6 +60,13 @@ import { RESTORE_MARKER_BASENAME as RESTORE_MARKER_EVIDENCE } from './restore-ma
 import { ROLLBACK_CONTINUATION_PHASES } from './rollback-facts.ts'
 import { snapshotPaths } from './snapshot-store.ts'
 import { assertSafeVersion, isSafeVersion } from './version-safety.ts'
+import {
+  atomicWriteRuntimeFileNoFollow,
+  classifyPrivateFileNoFollow as stateForUnsafeExactFile,
+  ensurePrivateDirectoryNoFollow,
+  syncPrivateDirectoryNoFollow as fsyncRealDirectory,
+  syncPrivateFileNoFollow as fsyncRegularFileNoFollow,
+} from './private-fs.ts'
 
 const PRIVATE_DIR_MODE = 0o700
 const PRIVATE_FILE_MODE = 0o600
@@ -374,63 +379,11 @@ function assertExistingRealDirectory(path: string, label: string): void {
 
 function ensurePrivateDirectory(path: string, parentRoot: string): void {
   assertContained(parentRoot, path, 'private recovery directory')
-  if (existsSync(path)) {
-    const info = lstatSync(path)
-    if (info.isSymbolicLink() || !info.isDirectory()) {
-      throw new Error(`private recovery path is not a real directory: ${basename(path)}`)
-    }
-  } else {
-    mkdirSync(path, { mode: PRIVATE_DIR_MODE })
-  }
-  chmodSync(path, PRIVATE_DIR_MODE)
-}
-
-function fsyncRegularFileNoFollow(path: string, label: string): void {
-  const pathInfo = lstatSync(path)
-  if (pathInfo.isSymbolicLink() || !pathInfo.isFile() || pathInfo.nlink !== 1) {
-    throw new Error(`${label} is not a uniquely linked real file`)
-  }
-  const noFollow = typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0
-  let descriptor: number | null = null
-  try {
-    descriptor = openSync(path, constants.O_RDONLY | noFollow)
-    const info = fstatSync(descriptor)
-    if (!info.isFile()
-      || info.nlink !== 1
-      || info.dev !== pathInfo.dev
-      || info.ino !== pathInfo.ino) {
-      throw new Error(`${label} identity changed before sync`)
-    }
-    fsyncSync(descriptor)
-  } finally {
-    if (descriptor !== null) closeSync(descriptor)
-  }
-}
-
-function fsyncRealDirectory(path: string, label: string): void {
-  const info = lstatSync(path)
-  if (info.isSymbolicLink() || !info.isDirectory()) throw new Error(`${label} is not a real directory`)
-  const noFollow = typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0
-  const directoryOnly = typeof constants.O_DIRECTORY === 'number' ? constants.O_DIRECTORY : 0
-  let descriptor: number | null = null
-  try {
-    descriptor = openSync(path, constants.O_RDONLY | noFollow | directoryOnly)
-    const opened = fstatSync(descriptor)
-    if (!opened.isDirectory() || opened.dev !== info.dev || opened.ino !== info.ino) {
-      throw new Error(`${label} identity changed before sync`)
-    }
-    try {
-      fsyncSync(descriptor)
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code
-      // Directory fsync is a filesystem property, not a Windows one: NFS /
-      // CIFS / FUSE mounts may reject an O_RDONLY directory fsync with
-      // EINVAL/ENOTSUP on any platform — tolerate exactly those two codes.
-      if (code !== 'EINVAL' && code !== 'ENOTSUP') throw error
-    }
-  } finally {
-    if (descriptor !== null) closeSync(descriptor)
-  }
+  // The no-follow creation/tightening strategy is owned by private-fs.ts
+  // (kernel O_NOFOLLOW where available, the win32 user-space identity fallback
+  // otherwise); this wrapper only adds the recovery-specific containment
+  // assertion.
+  ensurePrivateDirectoryNoFollow(path)
 }
 
 function recoveryRootPaths(
@@ -795,29 +748,14 @@ function writePrivateJson(
 ): void {
   assertContained(runtimeRoot, filePath, 'metadata recovery JSON')
   const parent = dirname(filePath)
+  // Keep the "parent must already exist" precondition of the former local
+  // writer; the shared writer then owns tmp naming, fsync, rename identity
+  // re-verification and parent fsync (single private-fs implementation).
   assertExistingRealDirectory(parent, 'metadata recovery JSON parent')
-  const tmp = join(parent, `.${basename(filePath)}.tmp-${randomBytes(4).toString('hex')}`)
-  assertContained(parent, tmp, 'metadata recovery JSON temporary file')
-  try {
-    writeFileSync(tmp, `${JSON.stringify(payload, null, 2)}\n`, {
-      encoding: 'utf8',
-      mode: PRIVATE_FILE_MODE,
-      flag: 'wx',
-    })
-    chmodSync(tmp, PRIVATE_FILE_MODE)
-    fsyncRegularFileNoFollow(tmp, 'metadata recovery JSON temporary file')
-    ops.renamePath(tmp, filePath, kind)
-    const published = lstatSync(filePath)
-    if (published.isSymbolicLink() || !published.isFile() || published.nlink !== 1) {
-      throw new Error('metadata recovery JSON did not publish as a uniquely linked real file')
-    }
-    chmodSync(filePath, PRIVATE_FILE_MODE)
-    fsyncRegularFileNoFollow(filePath, 'published metadata recovery JSON')
-    fsyncRealDirectory(parent, 'metadata recovery JSON parent')
-  } catch (error) {
-    try { rmSync(tmp, { force: true }) } catch { /* best effort */ }
-    throw error
-  }
+  atomicWriteRuntimeFileNoFollow(dirname(runtimeRoot), filePath, `${JSON.stringify(payload, null, 2)}\n`, {
+    // Publish stays injected: crash/failure tests reach the exact phase by kind.
+    rename: (source, destination) => ops.renamePath(source, destination, kind),
+  })
 }
 
 function checkpoint(
@@ -832,17 +770,6 @@ function checkpoint(
   writePrivateJson(paths.marker, parsed, paths.runtimeDir, ops, markerKind)
   ops.afterCheckpoint(checkpointName, parsed)
   return parsed
-}
-
-function stateForUnsafeExactFile(
-  filePath: string,
-): 'missing' | 'regular' | 'unsafe' {
-  try {
-    const info = lstatSync(filePath)
-    return info.isFile() && !info.isSymbolicLink() && info.nlink === 1 ? 'regular' : 'unsafe'
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unsafe'
-  }
 }
 
 function corruptEvidenceBasenames(runtimeDir: string): string[] {

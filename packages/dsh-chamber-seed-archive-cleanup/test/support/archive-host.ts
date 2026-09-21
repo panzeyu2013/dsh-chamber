@@ -18,12 +18,12 @@ export function codeIs(code: string, options: { message?: RegExp; retryable?: bo
     && (options.retryable === undefined || error.retryable === options.retryable)
 }
 
-export function state(id: string, running = false): ArchivedSessionState {
-  return { sessionId: id, running }
+export function state(id: string): ArchivedSessionState {
+  return { sessionId: id }
 }
 
-export function subagent(id: string, parentSessionId: string, running = false): ArchivedSessionState {
-  return { sessionId: id, origin: 'subagent', parentSessionId, running }
+export function subagent(id: string, parentSessionId: string): ArchivedSessionState {
+  return { sessionId: id, origin: 'subagent', parentSessionId }
 }
 
 /** One-shot/per-session injectable failure: sessionId → { code, remaining }. */
@@ -41,8 +41,6 @@ export class FakeHost implements ArchiveCleanupHost {
   readonly loaded = new Set<string>()
   readonly deleteLog: string[] = []
   readonly removedFromArchived: string[] = []
-  readonly emittedRemoved: string[] = []
-  changedEvents = 0
   /** sessionId → injectable delete failures (decrement per call). */
   readonly failDeletes = new Map<string, InjectedFailure>()
   /** Whole-batch archived-set-removal failures remaining (single setState). */
@@ -220,17 +218,10 @@ export class FakeHost implements ArchiveCleanupHost {
     }
   }
 
-  async emitSessionRemoved(sessionId: string): Promise<void> {
-    this.emittedRemoved.push(sessionId)
-  }
-
-  async emitArchivedSessionsChanged(): Promise<void> {
-    this.changedEvents += 1
-  }
 }
 
 /** Default fixture: s1 (archived, chain a1 → a1a), s2 (archived, leaf),
- *  s3 (archived) with a DURABLE-RUNNING child b1, orphan id s-orphan (in the
+ *  s3 (archived) with a RUNNING (live agent) child b1, orphan id s-orphan (in the
  *  archived set with NO session record — the registry-global sweep subject),
  *  and a live non-archived sibling s4 that must never be touched. */
 export function buildHost(): FakeHost {
@@ -243,7 +234,8 @@ export function buildHost(): FakeHost {
   host.states.set('s2', state('s2'))
   host.archived.add('s3')
   host.states.set('s3', state('s3'))
-  host.states.set('b1', subagent('b1', 's3', true))
+  host.states.set('b1', subagent('b1', 's3'))
+  host.live.add('b1')
   host.archived.add('s-orphan')
   host.states.set('s4', state('s4'))
   return host

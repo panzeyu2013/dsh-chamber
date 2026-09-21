@@ -7,20 +7,16 @@
  */
 import type { ApiRequest, ApiResponse, Logger } from '@dsh-chamber/control-plane'
 import { sanitizeRouteError } from './sanitize-route-error.ts'
-export { sanitizeRouteError }
 import type { GatewayRuntimeManager } from './runtime-manager.ts'
 import {
   applyNowNotRunningRefusal,
   envPinnedRefusal,
   mutationBusyRefusal,
-  pendingOnlyRefusal,
   profileWriteBusyRefusal,
-  RECOVERABLE_METADATA_BLOCKS,
-  RETRY_APPLY_REASONS,
-  RETRY_RESTORE_REASONS,
   startAlreadyInFlightRefusal,
   startNotApplicableRefusal,
 } from './runtime-refusals.ts'
+import { recoveryGateRefusal, type RuntimeMutationAction } from './runtime-gate.ts'
 import { codedError, jsonResponse, readBoundedBody } from './http-utils.ts'
 
 /** Read a bounded JSON body (64 KiB cap). A completely empty body is a JSON
@@ -68,159 +64,6 @@ function codeToStatus(code: string | undefined): number {
     case 'bad_request': return 400
     default: return 500
   }
-}
-
-type RuntimeMutationAction =
-  | 'select'
-  | 'apply'
-  | 'apply-now'
-  | 'rollback'
-  | 'cleanup-version'
-  | 'restore-pre-rollback'
-  | 'recover-metadata'
-  | 'retry-apply'
-  | 'retry-restore'
-  | 'restore-builtin'
-  | 'restart'
-  | 'start'
-  | 'registry'
-
-// Canonical recovery-name classification (audit N2 single source): the same
-// tokens classify the projected phase and the startupBlockReason text; the
-// manager's pending-suppression/status formulas consume the same sets from
-// runtime-refusals.ts (RETRY_APPLY_REASONS / RETRY_RESTORE_REASONS /
-// RECOVERABLE_METADATA_BLOCKS).
-
-/**
- * Durable recovery state is an authoritative terminal gate, not merely UI
- * copy. A recovery phase takes precedence over a lingering `pending` value:
- * it exposes exactly its matching retry (desktop parity, 2026 audit R2 —
- * restore-builtin is NOT offered inside an interrupted apply/restore: the
- * shared core re-blocks an armed reset against durable swap/snapshot/restore
- * markers, stopping the dsh for nothing and leaving an armed reset intent
- * that would hijack the later retry's semantics). Ordinary pending exposes
- * only restore-builtin; healthy idle selections keep the full surface
- * (design 18 §9.3).
- *
- * Mid-run metadata drift (2026 audit R4): when the process stays alive past
- * a healthy startup and the CURRENT/OVERRIDE/JOURNAL files go corrupt
- * afterwards, no in-memory block exists yet — status() projects the
- * resolveWorkspace error text as startupBlockedReason AND reports
- * canRecoverMetadata=true (the manager's own recover gate accepts). The
- * free-text blockedReason is not a canonical sentinel, so this gate
- * classifies by the authoritative `canRecoverMetadata` flag: a flagged
- * state opens recover-metadata (and only it) regardless of the reason text
- * or a lingering pending, keeping status/canRecoverMetadata/manager/UI and
- * the recovery route mutually consistent.
- */
-function recoveryGateRefusal(
-  status: {
-    phase?: unknown
-    pending?: unknown
-    startupBlockedReason?: unknown
-    canRecoverMetadata?: unknown
-  },
-  action: RuntimeMutationAction,
-): { error: string; code: 'runtime_pending' | 'runtime_recovery_required' } | null {
-  const phase = typeof status.phase === 'string' ? status.phase : 'unknown'
-  const retryAction = RETRY_APPLY_REASONS.has(phase)
-    ? 'retry-apply'
-    : phase === 'restore-blocked'
-      ? 'retry-restore'
-      : null
-
-  if (retryAction !== null) {
-    if (action === retryAction) return null
-    return {
-      error: `runtime recovery ${phase} is required; only ${retryAction} is allowed`,
-      code: 'runtime_recovery_required',
-    }
-  }
-
-  // 2026-12 (M1 review fix): any projected startup block (FATAL metadata or
-  // a swap/restore recovery phase projected through startupBlockedReason)
-  // closes every ordinary mutation — desktop parity: only the exact recovery
-  // surface stays open. Retry routes keep their phase-driven gates above.
-  const blockedReason = typeof status.startupBlockedReason === 'string'
-    && status.startupBlockedReason !== ''
-    ? status.startupBlockedReason
-    : null
-  // Authoritative recoverability: the status projection derives this from
-  // the durable metadata health, not from the (possibly free-text) blocked
-  // reason above (R4 mid-run drift classification).
-  const canRecoverMetadata = status.canRecoverMetadata === true
-  if (blockedReason !== null) {
-    // Recovery-name classification single source (audit N2): the reason-token
-    // sets are the same constants the manager's pending suppression and
-    // status() block-outranks-pending projection classify with.
-    const swapLike = RETRY_APPLY_REASONS.has(blockedReason)
-    const restoreLike = RETRY_RESTORE_REASONS.has(blockedReason)
-    const fatalLike = RECOVERABLE_METADATA_BLOCKS.has(blockedReason)
-    // An UNRECOGNIZED blockedReason (free-text resolution error from
-    // mid-run metadata drift) must not lock out the very recovery route the
-    // projection advertises — recover-metadata opens whenever the status
-    // reports canRecoverMetadata, for canonical FATAL sentinels and for
-    // drifted free-text reasons alike. Everything else stays closed.
-    const recoverOpen = fatalLike
-      || (canRecoverMetadata && !swapLike && !restoreLike && blockedReason !== 'env-probe-failed')
-    const allowed = (action === 'retry-apply' && swapLike)
-      || (action === 'retry-restore' && restoreLike)
-      || (action === 'recover-metadata' && recoverOpen)
-    if (allowed) {
-      // 2026 audit R3 (FATAL + stale pending deadlock): an allowed recovery
-      // action returns HERE — a startup block OUTRANKS a lingering pending
-      // value. Falling through to the pending terminal gate below would
-      // refuse recover-metadata with runtime_pending while restore-builtin
-      // (pending's own escape) is simultaneously refused by this block
-      // branch — the recovery surface would be fully locked behind a block
-      // that only the recovery route can clear (H2: blockOutranksPending
-      // only re-labels the projected phase; the gate itself must honor it).
-      return null
-    }
-    // env-probe-failed has NO matching recovery route (the runtime is
-    // externally pinned) — say so instead of promising a route that does
-    // not exist (A-U2 review): the operator must fix the
-    // DSH_GATEWAY_DSH_PATH target and restart the gateway.
-    if (blockedReason === 'env-probe-failed') {
-      return {
-        error: 'runtime startup block env-probe-failed: the DSH_GATEWAY_DSH_PATH runtime failed activation probes; fix the target and restart the gateway (no recovery route applies)',
-        code: 'runtime_recovery_required',
-      }
-    }
-    return {
-      error: canRecoverMetadata
-        ? `runtime startup block ${blockedReason} requires recovery first; only recover-metadata is allowed`
-        : `runtime startup block ${blockedReason} requires recovery first; no recovery route matches (restart the gateway if this persists)`,
-      code: 'runtime_recovery_required',
-    }
-  }
-
-  // Same mid-run drift with no projected block text: FATAL metadata
-  // corruption beneath an armed pending must not hide recover-metadata
-  // behind the pending terminal gate (the pending escape restore-builtin is
-  // refused by the manager's durable guard for corrupt metadata —
-  // recover-metadata is the actual recovery surface; R4).
-  if (action === 'recover-metadata' && canRecoverMetadata) return null
-
-  // The ordinary-pending terminal gate applies only when NO startup block is
-  // armed — a blocked startup projects its own recovery surface above and a
-  // stale pending must not relabel refusals (H2/2026 audit R3).
-  if (blockedReason === null
-    && ((status.pending !== null && status.pending !== undefined) || phase === 'pending')) {
-    if (action === 'restore-builtin') return null
-    // apply-now's semantic premise is exactly this pending/selection state —
-    // it is the in-session execution of the armed switch, not a competing
-    // mutation (design 18 addendum §5.1). Recovery phases above still refuse it.
-    if (action === 'apply-now') return null
-    const version = typeof status.pending === 'string' && status.pending !== ''
-      ? status.pending
-      : 'unknown'
-    // Same code/message the manager's assertNoPending/assertNoOrdinaryPending
-    // and profileWriteRefusal emit (audit N2 single source: pendingOnlyRefusal).
-    return pendingOnlyRefusal(version)
-  }
-
-  return null
 }
 
 function rejectRecoveryGate(

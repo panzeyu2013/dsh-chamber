@@ -14,6 +14,7 @@ import {
   defaultChecked,
   isDifferenceRow,
   rowAddArg,
+  type PluginRow,
   type PluginRowKind,
 } from '../../src/client/plugin-diff.ts'
 import { actionableDependencies, type PluginRowShape } from '../../src/client/plugin-model.ts'
@@ -61,6 +62,12 @@ function byKind(result: ReturnType<typeof computePluginDiff>, kind: PluginRowKin
   return result.rows.filter(row => row.kind === kind).map(row => row.name)
 }
 
+/** The row view of one kind: rows carry their own `kind`, so the categorized
+ *  arrays the diff used to pre-compute are derived here instead. */
+function rowsOfKind(result: ReturnType<typeof computePluginDiff>, kind: PluginRowKind): PluginRow[] {
+  return result.rows.filter(row => row.kind === kind)
+}
+
 test('missing: local registry specs absent on remote, excluding unsyncable and materialize', () => {
   const result = computePluginDiff(
     local({ foo: '^1.0.0', bar: '2.0.0' }),
@@ -99,10 +106,10 @@ test('extra: remote-only rows are the remove set (remote bundle layer only)', ()
     remote({ legacy: '^1.0.0', active: '2.0.0' }, ['active']),
   )
   assert.deepEqual(byKind(result, 'extra'), ['active', 'legacy'])
-  const active = result.extra.find(row => row.name === 'active')
+  const active = rowsOfKind(result, 'extra').find(row => row.name === 'active')
   assert.equal(active?.category, 'bundle')
   assert.equal(active?.localSpec, null)
-  const legacy = result.extra.find(row => row.name === 'legacy')
+  const legacy = rowsOfKind(result, 'extra').find(row => row.name === 'legacy')
   assert.equal(legacy?.category, 'plain')
 })
 
@@ -113,7 +120,7 @@ test('materialize: local path spec absent on remote is materialize (default-chec
   )
   assert.deepEqual(byKind(result, 'materialize'), ['link', 'pkg'])
   assert.deepEqual(byKind(result, 'missing'), [])
-  assert.ok(result.materialize.every(row => defaultChecked(row.kind)))
+  assert.ok(rowsOfKind(result, 'materialize').every(row => defaultChecked(row.kind)))
 })
 
 test('materialize name-match: local file: and remote file: tarball are consistent (no phantom update)', () => {
@@ -151,7 +158,7 @@ test('unsyncable: workspace / git / url / range / alias are refused with a reaso
   assert.deepEqual(byKind(result, 'unsyncable'), ['alias', 'git', 'range', 'url', 'wildcard', 'ws'])
   assert.deepEqual(byKind(result, 'missing'), [])
   assert.deepEqual(byKind(result, 'materialize'), [])
-  const reasons = Object.fromEntries(result.unsyncable.map(row => [row.name, row.reason]))
+  const reasons = Object.fromEntries(rowsOfKind(result, 'unsyncable').map(row => [row.name, row.reason]))
   assert.equal(reasons.ws, 'workspace protocol')
   assert.equal(reasons.git, 'git/URL dependency')
   assert.equal(reasons.url, 'git/URL dependency')
@@ -162,7 +169,7 @@ test('unsyncable: workspace / git / url / range / alias are refused with a reaso
 
 test('unsyncable rows are never actionable and never default-checked', () => {
   const result = computePluginDiff(local({ ws: 'workspace:*' }), remote({}))
-  const row = result.unsyncable[0]
+  const row = rowsOfKind(result, 'unsyncable')[0]
   assert.equal(row?.kind, 'unsyncable')
   assert.equal(isDifferenceRow(row.kind), false)
   assert.equal(defaultChecked(row.kind), false)
@@ -182,8 +189,8 @@ test('category: bundle and client come from the local manifest; remote-only rows
 
 test('unlocked: a floating tag flags the "install latest" hint, a pinned range does not', () => {
   const result = computePluginDiff(local({ foo: 'latest', pinned: '^1.0.0' }), remote({}))
-  const foo = result.missing.find(row => row.name === 'foo')
-  const pinned = result.missing.find(row => row.name === 'pinned')
+  const foo = rowsOfKind(result, 'missing').find(row => row.name === 'foo')
+  const pinned = rowsOfKind(result, 'missing').find(row => row.name === 'pinned')
   assert.equal(foo?.unlocked, true)
   assert.equal(pinned?.unlocked, false)
 })
@@ -201,11 +208,11 @@ test('rowAddArg: registry rows pin name@spec, bare names pass name', () => {
 test('empty manifests: both empty produce no rows and a no-diff result', () => {
   const result = computePluginDiff(local({}), remote({}))
   assert.equal(result.rows.length, 0)
-  assert.equal(result.missing.length, 0)
-  assert.equal(result.update.length, 0)
-  assert.equal(result.extra.length, 0)
-  assert.equal(result.materialize.length, 0)
-  assert.equal(result.unsyncable.length, 0)
+  assert.equal(rowsOfKind(result, 'missing').length, 0)
+  assert.equal(rowsOfKind(result, 'update').length, 0)
+  assert.equal(rowsOfKind(result, 'extra').length, 0)
+  assert.equal(rowsOfKind(result, 'materialize').length, 0)
+  assert.equal(rowsOfKind(result, 'unsyncable').length, 0)
 })
 
 test('classifySpec: pinned/tag specs are registry, paths are materialize, else unsyncable', () => {

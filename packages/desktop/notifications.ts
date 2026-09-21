@@ -615,20 +615,6 @@ export function shouldFocusApplicationBeforeShowing(platform: string): boolean {
   return platform === 'darwin'
 }
 
-/** Exception-safe Electron boolean adapter boundary (focus/support probes). */
-export function readNotificationHostBoolean(read: () => unknown):
-  | { ok: true; value: boolean }
-  | { ok: false; error: string } {
-  try {
-    const value = read()
-    return typeof value === 'boolean'
-      ? { ok: true, value }
-      : { ok: false, error: 'notification host probe returned a non-boolean value' }
-  } catch (error) {
-    return { ok: false, error: describeUnknownError(error) }
-  }
-}
-
 /** 字段长度上限（防异常 title/body 刷屏，design 19 §3.6）。sourceId 另受
  * local | dsh-<registry id> | gateway-<registry id>（及 legacy ssh- alias）
  * 语义白名单约束。 */

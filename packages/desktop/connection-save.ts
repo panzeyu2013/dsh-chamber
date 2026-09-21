@@ -1,4 +1,6 @@
 import type { TransportInstanceInput, TransportInstanceSpec } from './transport-provider.ts'
+import { gatewayCredentialTargetChanged, liveTransportIdentityChanged, sshCredentialEndpointChanged } from './credential-identity.ts'
+import { describeError } from './describe-error.ts'
 
 /** Write-only mutations accepted by the main-owned connection transaction.
  * Missing/empty fields mean "leave untouched"; explicit clearing stays on
@@ -75,65 +77,12 @@ export type DeleteConnectionsTransactionResult =
   | { ok: true; instances: TransportInstanceSpec[]; removed: TransportInstanceSpec[] }
   | { ok: false; instances: TransportInstanceSpec[]; error: string; metadataCommitted: boolean }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
 function sameInstances(left: TransportInstanceSpec[], right: TransportInstanceSpec[]): boolean {
   return JSON.stringify(left) === JSON.stringify(right)
 }
 
-/** Validate the retained legacy instances_set wire shape as exact no-op only.
- * Projected/non-secret extra fields are ignored by `normalize`; normalized
- * metadata for every row must remain byte-for-byte equal and in order. Exact
- * id deletion has its own authoritative channel and never accepts a roster. */
-export function validateDeleteOnlyReplacement(
-  before: TransportInstanceSpec[],
-  candidates: unknown[],
-  normalize: (input: TransportInstanceInput) => TransportInstanceSpec | null,
-): TransportInstanceSpec[] | null {
-  if (candidates.length !== before.length) return null
-  const retained: TransportInstanceSpec[] = []
-  const seen = new Set<string>()
-  for (const entry of candidates) {
-    const candidate = normalize(entry as TransportInstanceInput)
-    const previous = candidate === null ? undefined : before.find(item => item.id === candidate.id)
-    if (candidate === null || previous === undefined || seen.has(candidate.id)
-      || JSON.stringify(candidate) !== JSON.stringify(previous)) return null
-    seen.add(candidate.id)
-    retained.push(candidate)
-  }
-  const expectedOrder = before.filter(instance => seen.has(instance.id)).map(instance => instance.id)
-  return JSON.stringify(retained.map(instance => instance.id)) === JSON.stringify(expectedOrder)
-    ? retained
-    : null
-}
-
 function nonEmpty(value: string | undefined): string | undefined {
   return value === undefined || value === '' ? undefined : value
-}
-
-function liveTransportChanged(a: TransportInstanceSpec, b: TransportInstanceSpec): boolean {
-  return a.kind !== b.kind
-    || a.transport !== b.transport
-    || a.host !== b.host
-    || a.user !== b.user
-    || a.sshPort !== b.sshPort
-    || a.remotePort !== b.remotePort
-    || a.serviceName !== b.serviceName
-    || a.remoteDshHome !== b.remoteDshHome
-    || a.insecureHttp !== b.insecureHttp
-    || a.spkiPin !== b.spkiPin
-}
-
-function sshEndpointChanged(a: TransportInstanceSpec, b: TransportInstanceSpec): boolean {
-  return a.host !== b.host || a.user !== b.user || a.sshPort !== b.sshPort
-}
-
-/** Gateway auth belongs to the gateway deployment, not to the mechanism used
- * to reach it. HTTP scheme, SPKI, and SSH-only metadata never retarget it. */
-function gatewayCredentialTargetChanged(a: TransportInstanceSpec, b: TransportInstanceSpec): boolean {
-  return a.host !== b.host || a.remotePort !== b.remotePort
 }
 
 /**
@@ -193,7 +142,7 @@ export function saveConnectionTransaction(
   const sshRetarget = previous !== null
     && previous.transport === 'ssh'
     && normalized.transport === 'ssh'
-    && sshEndpointChanged(previous, normalized)
+    && sshCredentialEndpointChanged(previous, normalized)
   const gatewayRetarget = previous !== null
     && previous.kind === 'gateway'
     && normalized.kind === 'gateway'
@@ -255,7 +204,7 @@ export function saveConnectionTransaction(
   const sshWriteNeeded = forceSshCommit || changes.sshPassword
   const gatewayChanged = changes.gatewayToken || changes.gatewayPassword
   const credentialsChanged = gatewayWriteNeeded || sshWriteNeeded
-  const metadataNeedsRestart = previous !== null && liveTransportChanged(previous, normalized)
+  const metadataNeedsRestart = previous !== null && liveTransportIdentityChanged(previous, normalized)
   const wasActive = previous !== null && deps.isActive(id)
   let disconnected = false
   let gatewayAttempted = false
@@ -299,7 +248,7 @@ export function saveConnectionTransaction(
     // manager violated the pre-disconnect assumption; always stop it before
     // restoring metadata/secrets.
     if (metadataAttempted) {
-      try { deps.disconnect(id) } catch (restoreError) { failures.push(`disconnecting replacement failed: ${errorMessage(restoreError)}`) }
+      try { deps.disconnect(id) } catch (restoreError) { failures.push(`disconnecting replacement failed: ${describeError(restoreError)}`) }
     }
 
     let metadataRestored = true
@@ -310,7 +259,7 @@ export function saveConnectionTransaction(
         if (!metadataRestored) failures.push('restoring connection metadata returned a different registry')
       } catch (restoreError) {
         metadataRestored = false
-        failures.push(`restoring connection metadata failed: ${errorMessage(restoreError)}`)
+        failures.push(`restoring connection metadata failed: ${describeError(restoreError)}`)
       }
     }
 
@@ -319,28 +268,28 @@ export function saveConnectionTransaction(
       // main-only throughout and are never included in this result.
       if (gatewayAttempted) {
         try { deps.setGatewaySecrets(id, oldGatewayToken, oldGatewayPassword, previous?.kind === 'gateway' ? previous : null) } catch (restoreError) {
-          failures.push(`restoring gateway credentials failed: ${errorMessage(restoreError)}`)
+          failures.push(`restoring gateway credentials failed: ${describeError(restoreError)}`)
         }
       }
       if (sshAttempted) {
         try { deps.setSshPassword(id, oldSshPassword, previous?.transport === 'ssh' ? previous : null) } catch (restoreError) {
-          failures.push(`restoring SSH password failed: ${errorMessage(restoreError)}`)
+          failures.push(`restoring SSH password failed: ${describeError(restoreError)}`)
         }
       }
     } else {
       // Never place credentials for the OLD target onto metadata that could
       // still name the NEW target. Best-effort scrub keeps failure safe.
       try { deps.setGatewaySecrets(id, null, null, null) } catch (restoreError) {
-        failures.push(`scrubbing gateway credentials after metadata rollback failure failed: ${errorMessage(restoreError)}`)
+        failures.push(`scrubbing gateway credentials after metadata rollback failure failed: ${describeError(restoreError)}`)
       }
       try { deps.setSshPassword(id, null, null) } catch (restoreError) {
-        failures.push(`scrubbing SSH password after metadata rollback failure failed: ${errorMessage(restoreError)}`)
+        failures.push(`scrubbing SSH password after metadata rollback failure failed: ${describeError(restoreError)}`)
       }
     }
 
     if (wasActive && disconnected && metadataRestored && failures.length === 0) {
       try { deps.connect(id) } catch (restoreError) {
-        failures.push(`reconnecting restored connection failed: ${errorMessage(restoreError)}`)
+        failures.push(`reconnecting restored connection failed: ${describeError(restoreError)}`)
       }
     }
     const authoritative = deps.listInstances()
@@ -348,7 +297,7 @@ export function saveConnectionTransaction(
     return {
       ok: false,
       instances: authoritative,
-      error: `${errorMessage(error)}${note}`,
+      error: `${describeError(error)}${note}`,
       metadataCommitted: !sameInstances(authoritative, before),
     }
   }
@@ -413,7 +362,7 @@ function runDeleteConnectionsTransaction(
         if (!metadataRestored) failures.push('restoring connection metadata returned a different registry')
       } catch (restoreError) {
         metadataRestored = false
-        failures.push(`restoring connection metadata failed: ${errorMessage(restoreError)}`)
+        failures.push(`restoring connection metadata failed: ${describeError(restoreError)}`)
       }
     }
     if (metadataRestored && secretsAttempted) {
@@ -422,29 +371,29 @@ function runDeleteConnectionsTransaction(
           deps.setGatewaySecrets(snapshot.spec.id, snapshot.gatewayToken, snapshot.gatewayPassword,
             snapshot.spec.kind === 'gateway' ? snapshot.spec : null)
         } catch (restoreError) {
-          failures.push(`restoring gateway credentials for ${snapshot.spec.id} failed: ${errorMessage(restoreError)}`)
+          failures.push(`restoring gateway credentials for ${snapshot.spec.id} failed: ${describeError(restoreError)}`)
         }
         try {
           deps.setSshPassword(snapshot.spec.id, snapshot.sshPassword,
             snapshot.spec.transport === 'ssh' ? snapshot.spec : null)
         } catch (restoreError) {
-          failures.push(`restoring SSH password for ${snapshot.spec.id} failed: ${errorMessage(restoreError)}`)
+          failures.push(`restoring SSH password for ${snapshot.spec.id} failed: ${describeError(restoreError)}`)
         }
       }
     } else if (!metadataRestored) {
       for (const snapshot of snapshots) {
         try { deps.setGatewaySecrets(snapshot.spec.id, null, null, null) } catch (restoreError) {
-          failures.push(`scrubbing gateway credentials for ${snapshot.spec.id} failed: ${errorMessage(restoreError)}`)
+          failures.push(`scrubbing gateway credentials for ${snapshot.spec.id} failed: ${describeError(restoreError)}`)
         }
         try { deps.setSshPassword(snapshot.spec.id, null, null) } catch (restoreError) {
-          failures.push(`scrubbing SSH password for ${snapshot.spec.id} failed: ${errorMessage(restoreError)}`)
+          failures.push(`scrubbing SSH password for ${snapshot.spec.id} failed: ${describeError(restoreError)}`)
         }
       }
     }
     if (metadataRestored && failures.length === 0) {
       for (const snapshot of disconnected) {
         try { deps.connect(snapshot.spec.id) } catch (restoreError) {
-          failures.push(`reconnecting ${snapshot.spec.id} failed: ${errorMessage(restoreError)}`)
+          failures.push(`reconnecting ${snapshot.spec.id} failed: ${describeError(restoreError)}`)
         }
       }
     }
@@ -453,7 +402,7 @@ function runDeleteConnectionsTransaction(
     return {
       ok: false,
       instances: authoritative,
-      error: `${errorMessage(error)}${note}`,
+      error: `${describeError(error)}${note}`,
       metadataCommitted: !sameInstances(authoritative, before),
     }
   }

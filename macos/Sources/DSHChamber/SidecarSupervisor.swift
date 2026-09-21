@@ -92,24 +92,25 @@ public final class SidecarDirectoryLock {
             throw LockError.ioFailure(NativeText.format(.lockMkdirFailed, dir, error.localizedDescription))
         }
 
-        let opened = open(recordPath, O_CREAT | O_RDWR | O_NOFOLLOW, 0o600)
-        guard opened >= 0 else {
-            // O_NOFOLLOW：路径被替换成符号链接 → ELOOP，fail-closed（design 25
-            // §6.3 与秘密文件同纪律：0600、no-follow、原子创建）。
-            throw LockError.ioFailure(NativeText.format(.lockOpenFailed, recordPath, errno))
+        // 叶纪律（lstat/open(O_NOFOLLOW)/fstat + 单硬链接 + inode 稳定性）单源 =
+        // PrivateFS（2026-12 单源化）；失败即 fail-closed（design 25 §6.3 与秘密文件
+        // 同纪律：0600、no-follow、原子创建），文案仍走既有 NativeText 键。
+        let opened: Int32
+        let leaf: PrivateFS.Leaf
+        switch PrivateFS.openLeaf(path: recordPath, flags: O_CREAT | O_RDWR) {
+        case .failure(let error):
+            throw LockError.ioFailure(Self.lockOpenFailureText(error, path: recordPath))
+        case .success(let (descriptor, snapshot)):
+            opened = descriptor
+            leaf = snapshot
         }
-        // 规整文件 + 属主校验 + 收紧权限（既有文件可能带宽松 mode）。
-        var info = stat()
-        if fstat(opened, &info) != 0 || (info.st_mode & S_IFMT) != S_IFREG {
-            close(opened)
-            throw LockError.ioFailure(NativeText.format(.lockNotRegularFile, recordPath))
-        }
-        if info.st_uid != getuid() {
+        // 属主校验 + 收紧权限（既有文件可能带宽松 mode）。
+        if leaf.owner != getuid() {
             close(opened)
             throw LockError.ioFailure(NativeText.format(.lockOwnerUnexpected,
-                                                         Int32(truncatingIfNeeded: info.st_uid), recordPath))
+                                                         Int32(truncatingIfNeeded: leaf.owner), recordPath))
         }
-        if (info.st_mode & 0o777) != 0o600 {
+        if (leaf.mode & 0o777) != 0o600 {
             _ = fchmod(opened, 0o600)
         }
         if flock(opened, LOCK_EX | LOCK_NB) != 0 {
@@ -148,6 +149,21 @@ public final class SidecarDirectoryLock {
         }
 
         fd = opened
+    }
+
+    /// 私有叶打开失败 → 既有本地化文案：形状类（非常规/多硬链接）用 notRegularFile；
+    /// 符号链接保留迁移前的 openFailed(ELOOP)；其余（inode 被替换等）用 ioFailure 明细。
+    private static func lockOpenFailureText(_ error: PrivateFS.LeafError, path: String) -> String {
+        switch error {
+        case .notRegularFile, .multipleHardLinks:
+            return NativeText.format(.lockNotRegularFile, path)
+        case .symlinkRejected:
+            return NativeText.format(.lockOpenFailed, path, ELOOP)
+        case .ioFailure:
+            return NativeText.format(.lockOpenFailed, path, PrivateFS.errnoCode(for: error))
+        case .missing, .replacedBetweenStatAndOpen, .tooLarge, .shortRead:
+            return NativeText.format(.lockIoFailure, PrivateFS.describe(error))
+        }
     }
 
     /// 释放锁（幂等）。锁记录文件保留（内容仅供诊断；独占权由 flock 决定）。
@@ -207,13 +223,15 @@ public struct SidecarRestartPolicy: Equatable {
 
     /// 依据历史重启时间戳（秒）与当前时刻决策；命中 restart 时把本次计入
     /// `attempts`（调用方传入 inout 数组，窗口外的旧记录自动淘汰）。
+    /// 窗口淘汰 / 上限判定 / 记账 = `RollingWindowLimiter` 单源（2026-12 单源化）。
     public func decide(now: Double, attempts: inout [Double]) -> Decision {
-        attempts = attempts.filter { now - $0 < window }
-        if attempts.count >= maxRestarts {
+        switch RollingWindowLimiter.decide(window: window, limit: maxRestarts,
+                                           now: now, events: &attempts) {
+        case .allow(let count):
+            return .restart(after: delay, attempt: count)
+        case .deny:
             return .giveUp(attempts: attempts.count)
         }
-        attempts.append(now)
-        return .restart(after: delay, attempt: attempts.count)
     }
 }
 

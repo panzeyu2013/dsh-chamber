@@ -8,8 +8,9 @@
 //    - fence：接受 + origin 拒绝 + 白名单拒绝 + 信封/尺寸拒绝 + app_quitting
 //      （S7）+ 非本通道/子 frame 丢弃；
 //    - exactInt：id 整值域（布尔/NaN/±Inf/越界/浮点全部拒绝）
-//    - isJSONSerializableValue：NaN/±Infinity/深度上限/fail-closed
 //    - jsStringLiteral：引号/反斜杠/控制字符/Unicode 转义
+//  2026-12 审计删除的仅测试函数（anyCodablePayload / isJSONSerializableValue /
+//  maxJSONDepth）不再有对应用例；其接受集由 fence + AnyCodableTests 覆盖。
 //    - 拒绝码常量：与 design 25 §4.4.1 / renderer-trust 同族字面量
 //
 import XCTest
@@ -116,18 +117,19 @@ final class MessageHandlerTests: XCTestCase {
             .reject(id: 1, code: ChamberMessageHandler.codeMalformedEnvelope))
     }
 
-    /// Phase 1 C2：走完整 fence 的深嵌套 payload（此前只直测 isJSONSerializableValue，
-    /// 没有覆盖 fence ⑤→⑦ 的完整路径）。注意 envelope 根占深度 0，payload 从 1 起，
-    /// 故经 fence 的 payload 深度上限是 maxJSONDepth - 1（fail-closed 偏严无害）。
+    /// Phase 1 C2：走完整 fence 的深嵌套 payload。注意 envelope 根占深度 0，
+    /// payload 从 1 起，故经 fence 的 payload 深度上限是 maxJSONDepth - 1
+    /// （fail-closed 偏严无害）；深度门单源 = AnyCodable.maxJSONDepth
+    /// （MessageHandler.maxJSONDepth 随仅测试函数于 2026-12 审计删除）。
     func testFenceRejectsDeeplyNestedPayload() {
         var rejected: Any = "leaf"
-        for _ in 0..<ChamberMessageHandler.maxJSONDepth { rejected = [rejected] }
+        for _ in 0..<AnyCodable.maxJSONDepth { rejected = [rejected] }
         XCTAssertEqual(
             ChamberMessageHandler.fence(fenceInput(body: envelope(payload: rejected))),
             .reject(id: 1, code: ChamberMessageHandler.codeMalformedEnvelope))
         // 边界内（payload 上限 = maxJSONDepth - 1）仍接受，避免把上限写死在过严一侧
         var allowed: Any = "leaf"
-        for _ in 0..<(ChamberMessageHandler.maxJSONDepth - 1) { allowed = [allowed] }
+        for _ in 0..<(AnyCodable.maxJSONDepth - 1) { allowed = [allowed] }
         guard case .accept(_, _, .some) = ChamberMessageHandler.fence(
             fenceInput(body: envelope(payload: allowed))) else {
             return XCTFail("深度 = 上限的 payload 必须通过 fence")
@@ -196,28 +198,6 @@ final class MessageHandlerTests: XCTestCase {
         XCTAssertNil(ChamberMessageHandler.exactInt(from: [1]))
     }
 
-    func testJSONSerializableValueRejectsNonFiniteAndDeepNesting() {
-        XCTAssertTrue(ChamberMessageHandler.isJSONSerializableValue(NSNull()))
-        XCTAssertTrue(ChamberMessageHandler.isJSONSerializableValue("text"))
-        XCTAssertTrue(ChamberMessageHandler.isJSONSerializableValue(NSNumber(value: 1.25)))
-        XCTAssertTrue(ChamberMessageHandler.isJSONSerializableValue(NSNumber(value: true)))
-        XCTAssertTrue(ChamberMessageHandler.isJSONSerializableValue([1, "a", NSNull()]))
-        XCTAssertTrue(ChamberMessageHandler.isJSONSerializableValue(["k": [1, 2]]))
-        // NaN/±Infinity 是 JSON 表示之外的值（JSONSerialization 抛 NSException）
-        XCTAssertFalse(ChamberMessageHandler.isJSONSerializableValue(NSNumber(value: Double.nan)))
-        XCTAssertFalse(ChamberMessageHandler.isJSONSerializableValue(NSNumber(value: Double.infinity)))
-        XCTAssertFalse(ChamberMessageHandler.isJSONSerializableValue(["k": NSNumber(value: -Double.infinity)]))
-        // 非 JSON 桥接类型 fail-closed
-        XCTAssertFalse(ChamberMessageHandler.isJSONSerializableValue(Date()))
-        XCTAssertFalse(ChamberMessageHandler.isJSONSerializableValue(NSObject()))
-        // 深度上限：超限拒绝（防 <4MiB 极深信封击穿栈）
-        var nested: Any = "leaf"
-        for _ in 0...(ChamberMessageHandler.maxJSONDepth + 2) {
-            nested = [nested]
-        }
-        XCTAssertFalse(ChamberMessageHandler.isJSONSerializableValue(nested))
-    }
-
     func testJSStringLiteralEscapes() {
         XCTAssertEqual(ChamberMessageHandler.jsStringLiteral("plain"), "\"plain\"")
         XCTAssertEqual(ChamberMessageHandler.jsStringLiteral("a\"b"), "\"a\\\"b\"")
@@ -230,15 +210,5 @@ final class MessageHandlerTests: XCTestCase {
         XCTAssertFalse(literal.contains("\u{01}"))
         // 非 ASCII 原样保留（JS 字符串允许）
         XCTAssertEqual(ChamberMessageHandler.jsStringLiteral("中文"), "\"中文\"")
-    }
-
-    func testAnyCodablePayloadRoundTrip() {
-        XCTAssertNil(ChamberMessageHandler.anyCodablePayload(from: Date()))
-        XCTAssertEqual(ChamberMessageHandler.anyCodablePayload(from: "s"), .string("s"))
-        XCTAssertEqual(ChamberMessageHandler.anyCodablePayload(from: NSNumber(value: 7)), .number(7))
-        XCTAssertEqual(ChamberMessageHandler.anyCodablePayload(from: ["k": "v"]), .object(["k": .string("v")]))
-        XCTAssertEqual(ChamberMessageHandler.anyCodablePayload(from: [1, 2]), .array([.number(1), .number(2)]))
-        // NaN 不是 JSON 值 → nil（与 isJSONSerializableValue 同向）
-        XCTAssertNil(ChamberMessageHandler.anyCodablePayload(from: NSNumber(value: Double.nan)))
     }
 }

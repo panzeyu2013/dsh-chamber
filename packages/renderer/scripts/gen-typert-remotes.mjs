@@ -96,11 +96,6 @@ function findHarnessRoot() {
 
 const HARNESS_ROOT = findHarnessRoot()
 
-function isWithinDir(file, dir) {
-  const relative = file.startsWith(dir) ? file.slice(dir.length) : ''
-  return relative !== '' && !relative.startsWith('/') === false
-}
-
 /** Subpath → source entry convention (mirrors vite.config.mjs). */
 function sourceEntry(pkgDir, sub) {
   const src = join(pkgDir, 'src')

@@ -64,6 +64,9 @@ var ArchiveCleanupError = class extends Error {
     this.retryable = retryable;
   }
 };
+function errorText(error) {
+  return error instanceof Error ? error.message : String(error);
+}
 async function domainResult(operation) {
   try {
     return { ok: true, value: await operation() };
@@ -79,7 +82,7 @@ async function domainResult(operation) {
     };
   }
 }
-function subtreeLiveness(sessionId, statesBySession, childrenOf, facts) {
+function subtreeLiveness(sessionId, childrenOf, facts) {
   const visited = /* @__PURE__ */ new Set();
   const queue = [sessionId];
   let sawLoaded = false;
@@ -87,8 +90,7 @@ function subtreeLiveness(sessionId, statesBySession, childrenOf, facts) {
     const current = queue.shift();
     if (visited.has(current)) continue;
     visited.add(current);
-    const state = statesBySession.get(current);
-    if (facts.running.has(current) || state?.running === true) return "running";
+    if (facts.running.has(current)) return "running";
     if (facts.loaded.has(current)) sawLoaded = true;
     for (const child of childrenOf.get(current) ?? []) queue.push(child);
   }
@@ -105,7 +107,7 @@ function indexChildren(states) {
   }
   return childrenOf;
 }
-function subtreeOrder(rootSessionId, statesBySession, childrenOf) {
+function subtreeOrder(rootSessionId, childrenOf) {
   const order = [];
   const visited = /* @__PURE__ */ new Set();
   const stack = [
@@ -126,18 +128,6 @@ function subtreeOrder(rootSessionId, statesBySession, childrenOf) {
     }
   }
   return order;
-}
-function resolveDeletableTree(rootSessionId, statesBySession, childrenOf, facts, force = false) {
-  if (!statesBySession.has(rootSessionId)) return null;
-  const liveness = subtreeLiveness(rootSessionId, statesBySession, childrenOf, facts);
-  if (liveness === "running") return null;
-  if (liveness === "loaded" && !force) return null;
-  const order = subtreeOrder(rootSessionId, statesBySession, childrenOf);
-  return {
-    rootSessionId,
-    order,
-    subagentCount: order.length - 1
-  };
 }
 function liveSessionIdsOf(facts) {
   return /* @__PURE__ */ new Set([...facts.running, ...facts.loaded]);
@@ -185,7 +175,7 @@ var ArchiveCleanupCore = class {
       ]);
     } catch (error) {
       if (error instanceof ArchiveCleanupError) throw error;
-      throw new ArchiveCleanupError("registry-unreadable", `\u5F52\u6863\u72B6\u6001\u4E0D\u53EF\u8BFB\uFF1A${error instanceof Error ? error.message : String(error)}`);
+      throw new ArchiveCleanupError("registry-unreadable", `\u5F52\u6863\u72B6\u6001\u4E0D\u53EF\u8BFB\uFF1A${errorText(error)}`);
     }
     const statesBySession = /* @__PURE__ */ new Map();
     for (const state of states) {
@@ -237,12 +227,12 @@ var ArchiveCleanupCore = class {
       if (!statesBySession.has(id)) {
         continue;
       }
-      const order = subtreeOrder(id, statesBySession, childrenOf);
+      const order = subtreeOrder(id, childrenOf);
       if (protectedIds.size > 0 && order.some((member) => protectedIds.has(member))) {
         skippedProtected += 1;
         continue;
       }
-      const liveness = subtreeLiveness(id, statesBySession, childrenOf, liveFacts);
+      const liveness = subtreeLiveness(id, childrenOf, liveFacts);
       if (liveness === "running") {
         skippedRunning += 1;
         continue;
@@ -300,7 +290,7 @@ var ArchiveCleanupCore = class {
       } catch (error) {
         probeFailures += 1;
         if (firstProbeFailure === "") {
-          firstProbeFailure = error instanceof Error ? error.message : String(error);
+          firstProbeFailure = errorText(error);
         }
         continue;
       }
@@ -499,9 +489,9 @@ var ArchiveCleanupCore = class {
         nowFacts = { running: new Set(facts.running.map(String)), loaded: new Set(facts.loaded.map(String)) };
       } catch (error) {
         if (error instanceof ArchiveCleanupError) throw error;
-        throw new ArchiveCleanupError("registry-unreadable", `live agent \u72B6\u6001\u4E0D\u53EF\u8BFB\uFF1A${error instanceof Error ? error.message : String(error)}`);
+        throw new ArchiveCleanupError("registry-unreadable", `live agent \u72B6\u6001\u4E0D\u53EF\u8BFB\uFF1A${errorText(error)}`);
       }
-      const liveness = subtreeLiveness(tree.rootSessionId, statesBySession, childrenOf, nowFacts);
+      const liveness = subtreeLiveness(tree.rootSessionId, childrenOf, nowFacts);
       if (liveness === "running") {
         plan.skippedRunning += 1;
         continue;
@@ -523,14 +513,6 @@ var ArchiveCleanupCore = class {
             if (rootDeleted) deletedSessions += 1;
           } else if (deletion.outcome === "deleted") {
             deletedSubagents += 1;
-          }
-          try {
-            await this.host.emitSessionRemoved(sessionId);
-          } catch (error) {
-            if (!(error instanceof ArchiveCleanupError)) throw error;
-            treeAborted = true;
-            recordError(sessionId, error.code, error.message);
-            break;
           }
         } catch (error) {
           if (!(error instanceof ArchiveCleanupError)) throw error;
@@ -609,12 +591,6 @@ var ArchiveCleanupCore = class {
         if (!(error instanceof ArchiveCleanupError)) throw error;
         recordError("", "archive-set", error.message);
       }
-      try {
-        await this.host.emitArchivedSessionsChanged();
-      } catch (error) {
-        if (!(error instanceof ArchiveCleanupError)) throw error;
-        recordError("", "archive-set", error.message);
-      }
     }
     return {
       deletedSessions,
@@ -678,18 +654,20 @@ function headerToState(header) {
     sessionId: header.id,
     ...header.origin === "subagent" ? { origin: "subagent" } : {},
     ...typeof header.parentSession === "string" && header.parentSession !== "" ? { parentSessionId: header.parentSession } : {},
-    ...typeof header.cwd === "string" ? { cwd: header.cwd } : {},
-    running: false
+    ...typeof header.cwd === "string" ? { cwd: header.cwd } : {}
   };
 }
-function assertHostSurface(ctx) {
-  const registry = ctx.workspaceRegistry;
+function requireRegistrySurface(registry) {
   if (registry === void 0 || typeof registry.setState !== "function" || !Array.isArray(registry.archivedSessionIds) || typeof registry.list !== "function") {
     throw new ArchiveCleanupError(
       "registry-unreadable",
       "archiveCleanup: the workspaceRegistry service is not mounted with the expected surface"
     );
   }
+  return registry;
+}
+function assertHostSurface(ctx) {
+  requireRegistrySurface(ctx.workspaceRegistry);
   const query = ctx.sessionQuery;
   const persistence = ctx.sessionPersistence;
   const canEnumerate = query !== void 0 && typeof query.listSessions === "function" || persistence !== void 0 && typeof persistence.list === "function";
@@ -743,15 +721,7 @@ function makeHostBinding(ctx) {
   const registry = ctx.workspaceRegistry;
   const query = ctx.sessionQuery;
   const persistence = ctx.sessionPersistence;
-  const requireRegistry = () => {
-    if (registry === void 0 || typeof registry.setState !== "function" || !Array.isArray(registry.archivedSessionIds) || typeof registry.list !== "function") {
-      throw new ArchiveCleanupError(
-        "registry-unreadable",
-        "archiveCleanup: the workspaceRegistry service is not mounted with the expected surface"
-      );
-    }
-    return registry;
-  };
+  const requireRegistry = () => requireRegistrySurface(registry);
   const listHeaders = async () => {
     const byId = /* @__PURE__ */ new Map();
     let sawEnumeration = false;
@@ -907,7 +877,7 @@ function makeHostBinding(ctx) {
         if (error instanceof ArchiveCleanupError) throw error;
         throw new ArchiveCleanupError(
           "storage",
-          `archiveCleanup: ${sessionId} content removal failed: ${error instanceof Error ? error.message : String(error)}`
+          `archiveCleanup: ${sessionId} content removal failed: ${errorText(error)}`
         );
       }
     },
@@ -933,13 +903,9 @@ function makeHostBinding(ctx) {
         if (error instanceof ArchiveCleanupError) throw error;
         throw new ArchiveCleanupError(
           "storage",
-          `archiveCleanup: archived-set removal failed: ${error instanceof Error ? error.message : String(error)}`
+          `archiveCleanup: archived-set removal failed: ${errorText(error)}`
         );
       }
-    },
-    async emitSessionRemoved() {
-    },
-    async emitArchivedSessionsChanged() {
     }
   };
 }
@@ -1029,21 +995,6 @@ __decoratorMetadata(_init, ArchiveCleanupGateway);
 __publicField(ArchiveCleanupGateway, "inject", ["workspaceRegistry", "agents", "sessions", "sessionQuery", "sessionPersistence"]);
 var index_default = ArchiveCleanupGateway;
 export {
-  ArchiveCleanupCore,
-  ArchiveCleanupError,
   ArchiveCleanupGateway,
-  BUSY_MESSAGE,
-  MAX_PURGE_ERROR_RECORDS,
-  MAX_PURGE_SESSIONS,
-  MAX_SWEEP_CONTENT_PROBES,
-  RunGate,
-  assertHostSurface,
-  index_default as default,
-  domainResult,
-  indexChildren,
-  liveSessionIdsOf,
-  makeHostBinding,
-  orphanArchivedMembers,
-  resolveDeletableTree,
-  subtreeLiveness
+  index_default as default
 };

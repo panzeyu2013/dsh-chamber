@@ -42,14 +42,6 @@ export const TARGET_KINDS = ['dsh', 'gateway'] as const
  * `kind` decides target semantics (auth-header injection, `/chamber/*`). */
 export const TRANSPORT_METHODS = ['ssh', 'http'] as const
 
-/**
- * Legacy v1 name: `kind` used to conflate the transport with the target
- * ('ssh' | 'gateway'). Kept as a compat alias of TARGET_KINDS for any
- * external mirror still referencing the symbol — nothing ships against the
- * old meaning anymore (the transport dimension is `transport`).
- */
-export const TRANSPORT_KINDS = TARGET_KINDS
-
 /** Renderer/registry resource budgets, enforced again in the main process. */
 export const MAX_TRANSPORT_INSTANCES = 32
 export const MAX_INSTANCE_LABEL_CHARS = 128
@@ -103,16 +95,16 @@ export interface TransportInstanceInput {
   /** Remote dsh home (design 13 §4.2); `~/.dsh` or an absolute path, null = remote default `~/.dsh`. Non-secret. */
   remoteDshHome?: string | null
   /** transport='http' only: true = plaintext http origin (default false =
-   * https). Non-secret; never part of transportTargetChanged — an http↔https
-   * switch keeps the target's credentials (design 17 §9.1, D3 decision). */
+   * https). Non-secret, and not part of the credential-target comparison: an
+   * http↔https switch keeps the target's credentials (design 17 §9.1, D3). */
   insecureHttp?: boolean
   /** transport='http' gateway targets only (S23): optional SPKI certificate
    * pin — hex sha256 of the peer certificate's SPKI DER, format
    * `^[0-9a-fA-F]{64}$` (validateSpec refuses anything else). https-only:
    * the pin makes the peer's public key the connection's trust anchor, so an
    * internal CA (e.g. Caddy `tls internal`) needs no NODE_EXTRA_CA_CERTS;
-   * a mismatch is terminal (「gateway 证书已更换或 pin 错误」). Never part of
-   * transportTargetChanged — it is not a credential. */
+   * a mismatch is terminal (「gateway 证书已更换或 pin 错误」). Excluded from
+   * the credential-target comparison — it is not a credential. */
   spkiPin?: string
 }
 
@@ -138,8 +130,8 @@ export interface TransportInstanceSpec {
   /** Remote dsh home (design 13 §4.2); normalized `~/.dsh` or absolute path, null = default `~/.dsh`. Non-secret. */
   remoteDshHome: string | null
   /** transport='http' only: true = plaintext http origin (default false =
-   * https). Non-secret, normalized required. Excluded from
-   * transportTargetChanged (http↔https keeps credentials, design 17 §9.1). */
+   * https). Non-secret, normalized required. Excluded from the credential-
+   * target comparison (http↔https keeps credentials, design 17 §9.1). */
   insecureHttp: boolean
   /** transport='http' gateway targets only (S23): optional SPKI certificate
    * pin (hex sha256 of the peer cert's SPKI DER); absent = no pinning. See
@@ -481,25 +473,3 @@ export type SshStatusProjection = TransportStatusProjection
 export type SshLogEntry = TransportLogEntry
 export type SshPhase = TransportPhase
 
-/**
- * True when two specs point at a different transport TARGET — kind or any
- * host/user/port field. Label-only edits are not target changes.
- *
- * Compatibility semantic helper for the pre-v3 target model. Kind, host,
- * user, SSH/remote ports, serviceName, and remoteDshHome are included;
- * transport, HTTP scheme, and SPKI are excluded. The main-owned connection
- * transaction does NOT use this helper for credential ownership: gateway and
- * SSH secrets have separate binding fingerprints and retarget rules.
- *
- * It remains exported only to lock the compatibility comparison and prevent
- * accidental drift in callers that reason about whole execution targets.
- */
-export function transportTargetChanged(a: TransportInstanceSpec, b: TransportInstanceSpec): boolean {
-  return a.kind !== b.kind
-    || a.host !== b.host
-    || a.user !== b.user
-    || a.sshPort !== b.sshPort
-    || a.remotePort !== b.remotePort
-    || a.serviceName !== b.serviceName
-    || a.remoteDshHome !== b.remoteDshHome
-}

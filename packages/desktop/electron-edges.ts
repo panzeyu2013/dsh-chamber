@@ -45,25 +45,16 @@
  *     deep-link OS launch drain moved into core with this batch is its first
  *     core consumer).
  *
- * TODO (W-10 later batches): the remaining HostEdges v2 members are declared
- * on the shell-core interface but not yet implemented here — each batch moves
- * the corresponding main.ts leaf body VERBATIM into the returned object and
- * widens its Pick:
- *   - keep-awake: powerSaveBlocker start/stop + blocker-id host state
- *     (main.ts setKeepAwakeActive ~:871).
- *   - tray/window: trayAvailable, focusMainWindow (D3 — the per-member
- *     activate/restore/focus leg; notification clicks already activate via
- *     host.showMainWindow).
- *     P-03 (2026-12 ruling): notifyClicked (design 25 §4.5 E4) was deleted
- *     from the shared contract — zero consumers, and the Swift host treats the
- *     outbound member's notify as unexpected and ignores it loudly.
- *   - open/open-in: launchApp (E12 — the unified open-in native-launch leg;
- *     the finder/vscode providers still go through openExternal /
- *     openPath / showItemInFolder — launchApp moves with its first consumer).
- *   - system/resources: setLoginItem / trayAvailable / isPackaged (B1).
- *     P-03 (2026-12 ruling): resolveResource was deleted from the shared
- *     contract — zero consumers and always failing on the Swift side (no
- *     resource cache); the hostFacts.resources push is no longer consumed.
+ * Retained HostEdges members with no core Pick consumer (P-03/D1e rulings):
+ * keep-awake (setKeepAwake), tray (trayAvailable), the click focus leg
+ * (focusMainWindow), open-in (launchApp) and system/identity (setLoginItem /
+ * isPackaged) are still declared on the shell-core contract, but core's
+ * installer Pick does not consume them and this Electron flavor does NOT
+ * implement them — the Electron-side actions live directly in main.ts
+ * (setKeepAwakeActive / applyLaunchAtLogin / Tray / showMainWindow), while
+ * node-edges.ts implements the members for the Swift host. notifyClicked and
+ * resolveResource were DELETED from the shared contract (zero consumers; the
+ * Swift-side semantics differed) — see the shell-core.ts HostEdges head note.
  */
 import { Notification, app, dialog, powerMonitor, shell } from 'electron';
 import type { BrowserWindow } from 'electron';
@@ -266,7 +257,7 @@ export function createElectronEdges(host: ElectronEdgesHost): Pick<
 
     /** 单窗口焦点复查（通知裁决的权威事实，design 19 §3.3）：窗口必须存在、
      *  可见且聚焦——隐藏到托盘/后台的窗口不算聚焦。异常安全（不可聚焦即
-     *  false；与搬迁前 readNotificationHostBoolean 失败即拒发的差异见
+     *  false；与搬迁前 host-probe boolean 适配失败即拒发的差异见
      *  showNativeNotification 注释的有意收敛）。 */
     isFocused(): boolean {
       const win = host.mainWindow();

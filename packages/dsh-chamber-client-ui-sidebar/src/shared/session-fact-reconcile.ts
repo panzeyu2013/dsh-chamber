@@ -198,18 +198,14 @@ export interface AuthoritativeSessionFactRow {
  * @param official - 官方 store 的 byId 视图。
  * @returns 是否存在需要权威对账的 running 行。
  */
+export function isRunningNonSubagentRow(row: OfficialSessionFactRow | undefined): boolean {
+  return row?.running === true && row.origin !== 'subagent'
+}
+
 export function hasReconcilableRunning(
   official: Readonly<Record<string, OfficialSessionFactRow | undefined>>,
 ): boolean {
-  return Object.values(official).some(row => row?.running === true && row.origin !== 'subagent')
-}
-
-/** 第一次独立权威读的结果（{@link decideAfterFirstAuthorityRead} 的输入）。 */
-export interface AuthorityFirstRead {
-  /** 权威**正面证伪**的 id（官方说 running、权威说没在跑）。 */
-  readonly denied: ReadonlySet<string>
-  /** 官方 store 说 running 但本次读数**没有覆盖**的 id（沉默 ≠ 覆盖）。 */
-  readonly uncovered: ReadonlySet<string>
+  return Object.values(official).some(isRunningNonSubagentRow)
 }
 
 /**
@@ -253,7 +249,7 @@ export function uncoveredRunningIds(
   const covered = new Set(authoritative.map(row => row.sessionId))
   const uncovered = new Set<string>()
   for (const [id, row] of Object.entries(official)) {
-    if (row?.running === true && row.origin !== 'subagent' && !covered.has(id)) uncovered.add(id)
+    if (isRunningNonSubagentRow(row) && !covered.has(id)) uncovered.add(id)
   }
   return uncovered
 }
@@ -307,8 +303,7 @@ export function deniedRunningIds(
   const authoritativeById = new Map(authoritative.map(row => [row.sessionId, row]))
   const denied = new Set<string>()
   for (const [sessionId, summary] of Object.entries(official)) {
-    if (summary?.running !== true) continue
-    if (summary.origin === 'subagent') continue
+    if (!isRunningNonSubagentRow(summary)) continue
     const row = authoritativeById.get(sessionId)
     if (row === undefined) continue
     if (row.running !== true) denied.add(sessionId)

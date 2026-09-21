@@ -57,6 +57,24 @@ import type {
 import type { SettingsConnectionsKey } from '../locales.ts'
 import type { LocalWriterDiagnosisWire } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import { writerNotice, writerReasonKey } from './writer-diagnosis.ts'
+import { errorMessage } from './error-text.ts'
+import { runManagedRestart } from './restart-action.ts'
+// The desktop-gate mirrors (and their byte-parity test) are the ONE copy of
+// these patterns/limits: the form validates with them instead of re-spelling
+// weaker inline regexes (2026-12 audit P1-4).
+import {
+  INSTANCE_ID_PATTERN,
+  MAX_INSTANCE_LABEL_CHARS,
+  MAX_REMOTE_DSH_HOME_CHARS,
+  MAX_SERVICE_NAME_CHARS,
+  MAX_SSH_HOST_CHARS,
+  MAX_SSH_PASSWORD_CHARS,
+  MAX_SSH_USER_CHARS,
+  REMOTE_DSH_HOME_PATTERN,
+  SSH_HOST_PATTERN,
+  SSH_USER_PATTERN,
+} from './host-validation.ts'
+import { localSpawnGate } from './local-spawn-gate.ts'
 import { cp, type ConnectionSummary, type HealthResponse, type HostLogsResponse } from './control-plane.ts'
 import {
   applyRuntimeProbe,
@@ -141,13 +159,9 @@ const GATEWAY_RUNTIME_PROBE_INTERVAL_MS = 20_000
  *  runtime-routes.ts). */
 const STARTABLE_RUNTIME_STATES = new Set(['stopped', 'error', 'restart-exhausted'])
 
-/** 409 拒绝的本地化键（managed-restart.ts 的 kind → 键）：重启区分「托管 dsh
- *  未在运行」（可行动作是启动）与「忙碌/恢复中」；启动只有一族（当前状态不可
- *  启动或运行时正忙）。 */
-const RESTART_REFUSAL_KEYS: { notRunning: RuntimeRefusalKey; busy: RuntimeRefusalKey } = {
-  notRunning: 'restartRefusedNotRunning',
-  busy: 'restartRefusedBusy',
-}
+/** 启动 409 拒绝的本地化键（managed-restart.ts 的 kind → 键）：启动只有一族
+ *  （当前状态不可启动或运行时正忙）；重启那一族在 restart-action.ts
+ *  （MANAGED_RESTART_REFUSAL_KEYS），两个入口共用。 */
 const START_REFUSAL_KEYS: { notRunning: RuntimeRefusalKey; busy: RuntimeRefusalKey } = {
   notRunning: 'startManagedDshRefused',
   busy: 'startManagedDshRefused',
@@ -162,10 +176,6 @@ type RestartNote = { tone: 'ok' | 'error'; text: string }
 /** Local-card connection-row poll cadence: 状态由 /api/host/health-events
  * 推送（05 §3），此处只兜底行字段（label/dshPort）与流异常收敛。 */
 const LOCAL_ROW_POLL_MS = 30_000
-
-/** Page-level net for a source restart whose readiness the shared serving gate
- *  waits on (the gate's own 120s budget runs inside this). */
-const SOURCE_RESTART_RELOAD_BUDGET_MS = 180_000
 
 /** Slugify a ~/.ssh/config alias into the id whitelist (^[a-zA-Z0-9_-]+$). */
 function slugifyAlias(alias: string): string {
@@ -212,10 +222,6 @@ function gatewayUrlErrorText(parsed: Extract<ReturnType<typeof parseGatewayUrl>,
       : parsed.error === 'host'
         ? t('validationDirectUrlHost')
         : t('validationDirectUrlOrigin')
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }
 
 function ssh(): DesktopSshSurface | null {
@@ -418,7 +424,17 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   const runtimeSurfacePresent = currentRuntimeSurface() !== null
   // Fail closed while the desktop runtime bridge hydrates; once hydrated,
   // applying is the one design-18 phase that forbids every local spawn entry.
-  const runtimeStartBlocked = runtimeBlocksLocalStart(runtimeState, runtimeSurfacePresent)
+  // The local card has TWO spawn entries — 「启动」(startLocal) and
+  // 「清理并接管」(reclaimLocal: it clears this state directory's own stale
+  // writers and then STARTS the instance, control-plane api.ts:26-28) — and
+  // design 18:245-247 gates EVERY spawn entry, so both read ONE verdict from
+  // ./local-spawn-gate.ts and render the same reason row.
+  const spawnGate = localSpawnGate({
+    blocked: runtimeBlocksLocalStart(runtimeState, runtimeSurfacePresent),
+    hydrating: runtimeState === null,
+    phase: runtimeState?.phase,
+    runtimeBlockedReason: runtimeState?.runtimeBlockedReason,
+  })
 
   // ---- local instance card ----
   const [health, setHealth] = useState<HealthResponse | null>(null)
@@ -493,9 +509,6 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
    *  决定渲染：'error' = css.error + role="alert"（opError 同款红字），
    *  'ok' = css.hint + role="status"。 */
   const [restartNotes, setRestartNotes] = useState<Record<string, RestartNote | null>>({})
-  /** 每卡在飞重启的 AbortController（同卡新尝试先中止旧的；卸载时全部中止）。 */
-  const restartAbortRefs = useRef<Record<string, AbortController>>({})
-
   // ---- gateway 托管 dsh 启动（design 21 §6.8 r1 / decision 12）----
   /** 正在启动的 gateway 卡 id 集（与 restartingIds 同款每卡单飞；同卡
    *  重启/启动互斥 —— 二者写同一 runtime）。 */
@@ -553,7 +566,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
 
   /** 幂等启动本地实例（POST /api/connections；启动后立即回读 /health）。 */
   const startLocal = useCallback(async (): Promise<void> => {
-    if (runtimeStartBlocked) return
+    if (spawnGate.blocked) return
     setLocalBusy(true)
     try {
       setConnection(await cp.createLocal())
@@ -567,7 +580,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       setLocalBusy(false)
     }
     void loadLocal()
-  }, [loadLocal, runtimeStartBlocked])
+  }, [loadLocal, spawnGate.blocked])
 
   /**
    * 清理并接管（POST /api/connections/local/reclaim，2026-09-10）：清除本状态
@@ -575,6 +588,9 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
    * 不会被影响（控制面拒绝）。失败时把控制面给出的阻塞原因原样呈现。
    */
   const reclaimLocal = useCallback(async (): Promise<void> => {
+    // Same gate as startLocal: this route ends in a spawn (design 18:245-247
+    // covers every instance spawn entry, not just the start button).
+    if (spawnGate.blocked) return
     setReclaiming(true)
     setReclaimError(null)
     try {
@@ -591,7 +607,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       setReclaiming(false)
     }
     void loadLocal()
-  }, [loadLocal])
+  }, [loadLocal, spawnGate.blocked])
 
   /** 优雅停止本地实例（DELETE /api/connections/local）。 */
   const stopLocal = useCallback(async (): Promise<void> => {
@@ -702,7 +718,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     void armWindowReloadWhenServed(
       sourceId,
       () => waitForSourceServing(sourceId, { timeoutMs: 120_000 }),
-      { budgetMs: SOURCE_RESTART_RELOAD_BUDGET_MS },
+      { budgetMs: RESTART_RELOAD_BUDGET_MS },
     )
   }, [runServiceOp])
 
@@ -720,62 +736,27 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   const restartManagedDsh = useCallback(async (spec: SshInstanceSpec): Promise<void> => {
     // 每卡独立单飞：同卡重复确认被门挡住；他卡在飞不受影响。
     if (restartingIds[spec.id] === true) return
-    const id = `gateway-${spec.id}`
-    // 同卡新尝试（防御性，单飞门已挡并发）先中止上一轮，互不串扰。
-    restartAbortRefs.current[spec.id]?.abort()
-    const controller = new AbortController()
-    restartAbortRefs.current[spec.id] = controller
     setRestartingIds(prev => ({ ...prev, [spec.id]: true }))
     setRestartNotes(prev => ({ ...prev, [spec.id]: null }))
     const note = (value: RestartNote | null): void => {
       setRestartNotes(prev => ({ ...prev, [spec.id]: value }))
     }
     try {
-      let response: Response
-      try {
-        response = await fetch(`/api/i/${id}/chamber/runtime/restart`, { method: 'POST' })
-      } catch (err) {
-        if (controller.signal.aborted) return
-        note({ tone: 'error', text: errorMessage(err) })
-        return
-      }
-      if (response.status !== 202) {
-        let body: unknown = null
-        try { body = await response.json() } catch { body = null }
-        note({ tone: 'error', text: runtimeRefusalText(body, response.status, RESTART_REFUSAL_KEYS, t) })
-        return
-      }
-      // Readiness + reload are PAGE-owned (review F6): the completion keeps
-      // running when this card unmounts mid-restart. Its classified failure
-      // still feeds this card's note slot whenever the panel is on screen.
-      let pollFailure: unknown = null
-      const outcome = await armWindowReloadWhenServed(
-        id,
-        async signal => {
-          try {
-            await pollGatewayReady(id, signal, { action: 'restart' })
-            return true
-          } catch (err) {
-            pollFailure = err
-            return false
-          }
-        },
-        { budgetMs: RESTART_RELOAD_BUDGET_MS },
-      )
-      if (outcome === 'reloaded') {
+      // 传输 + 202 门 + page-owned 就绪轮询只有一份实现（restart-action.ts，
+      // 与 PluginDialog 共用）：409 走同一族本地化文案，超时/失败按 outcome
+      // 落到本卡的结果行。POST 不再自带 controller —— 它控制不了任何东西
+      // （page-owned completion 拥有轮询 signal），死 signal 与失实注释已删。
+      const outcome = await runManagedRestart(`gateway-${spec.id}`, t)
+      if (outcome.kind === 'reloaded') {
         note({ tone: 'ok', text: t('restartManagedDshOk') })
         // 成功刷新卡片状态投影（design 21 §5.1）：registry 不变，只重读
         // 各实例 phase/service 激活态。
         void loadRemote()
+      } else if (outcome.kind === 'accepted-timeout') {
+        // 重启已接受、仍在恢复 → 本地化说明（ok 语气）。
+        note({ tone: 'ok', text: t('restartManagedDshAccepted') })
       } else {
-        const cls = classifyRestartError(pollFailure
-          ?? new Error('restart completion aborted before the readiness poll settled'))
-        // accepted-timeout = 重启已接受、仍在恢复 → 本地化说明（ok 语气：动作
-        // 已被接受，仅提示仍在恢复）；其余 = 轮询/服务的英文错误串原样透出
-        // （error 语气；未本地化文案登记接受，design 21 §5.2）。
-        note(cls.kind === 'accepted-timeout'
-          ? { tone: 'ok', text: t('restartManagedDshAccepted') }
-          : { tone: 'error', text: cls.detail })
+        note({ tone: 'error', text: outcome.kind === 'refused' ? outcome.text : outcome.detail })
       }
     } finally {
       // 收尾只清自己的 id：A 卡完成绝不静默关闭/解锁 B 卡的在飞状态。
@@ -787,7 +768,6 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
       })
       // 只关闭「正在收尾这张卡」的确认 Modal；他卡 Modal 保持原样。
       setRestartConfirmFor(prev => (prev !== null && prev.id === spec.id ? null : prev))
-      if (restartAbortRefs.current[spec.id] === controller) delete restartAbortRefs.current[spec.id]
     }
   }, [restartingIds, t, loadRemote])
 
@@ -1197,10 +1177,12 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     const id = value.id.trim()
     if (id === '') errors.id = t('validationIdRequired')
     else if (id === 'local') errors.id = t('validationIdReserved')
-    else if (!/^[a-zA-Z0-9_-]{1,64}$/.test(id)) errors.id = t('validationIdInvalid')
+    // The authoritative pattern already reserves 'local' (checked above
+    // with its own message) and caps the length at 64.
+    else if (!INSTANCE_ID_PATTERN.test(id)) errors.id = t('validationIdInvalid')
     else if (editing === 'new' && instances.some(instance => instance.id === id)) errors.id = t('validationIdDuplicate')
     if (value.label.trim() === '') errors.label = t('validationLabelRequired')
-    else if (value.label.length > 128) errors.label = t('validationLabelTooLong')
+    else if (value.label.length > MAX_INSTANCE_LABEL_CHARS) errors.label = t('validationLabelTooLong')
     // Credential dimensions are independent. Re-entry is driven by the main
     // process's non-secret existence projections plus the exact retarget rule:
     // gateway+ssh may require both its tunnel password and gateway auth, while
@@ -1247,11 +1229,14 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     }
     const host = value.host.trim()
     if (host === '') errors.host = t('validationHostRequired')
-    else if (!/^[a-zA-Z0-9.:\[][a-zA-Z0-9._:[\]-]*$/.test(host)) errors.host = t('validationHostInvalid')
+    else if (host.length > MAX_SSH_HOST_CHARS || !SSH_HOST_PATTERN.test(host)) errors.host = t('validationHostInvalid')
     if (value.user.trim() !== '') {
       const user = value.user.trim()
-      if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(user)) errors.user = t('validationUserInvalid')
+      if (user.length > MAX_SSH_USER_CHARS || !SSH_USER_PATTERN.test(user)) errors.user = t('validationUserInvalid')
     }
+    // The ssh password is transient and write-only, but an over-long value
+    // would still be rejected by the main process with a vague write failure.
+    if (value.password.length > MAX_SSH_PASSWORD_CHARS) errors.password = t('validationPasswordTooLong')
     const parsePort = (raw: string): number | null => {
       const trimmed = raw.trim()
       if (trimmed === '') return null
@@ -1263,9 +1248,17 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     const sshPort = parsePort(value.sshPort)
     if (sshPort !== null && (!Number.isInteger(sshPort) || sshPort < 1 || sshPort > 65535)) errors.sshPort = t('validationPortRange')
     const serviceName = value.serviceName.trim()
-    if (serviceName !== '' && !SERVICE_NAME_PATTERN.test(serviceName)) errors.serviceName = t('validationServiceNameInvalid')
+    if (serviceName !== '' && (serviceName.length > MAX_SERVICE_NAME_CHARS || !SERVICE_NAME_PATTERN.test(serviceName))) {
+      errors.serviceName = t('validationServiceNameInvalid')
+    }
     const remoteDshHome = value.remoteDshHome.trim()
-    if (remoteDshHome !== '' && !/^~?\/[a-zA-Z0-9._/-]+$/.test(remoteDshHome)) errors.remoteDshHome = t('validationRemoteDshHomeInvalid')
+    // The authoritative mirror rejects '..', empty segments and a trailing
+    // slash (the inline regex this replaced accepted /srv/../tmp, /srv//dsh
+    // and /srv/dsh/ — renderer weaker than the desktop authority).
+    if (remoteDshHome !== ''
+      && (remoteDshHome.length > MAX_REMOTE_DSH_HOME_CHARS || !REMOTE_DSH_HOME_PATTERN.test(remoteDshHome))) {
+      errors.remoteDshHome = t('validationRemoteDshHomeInvalid')
+    }
     return errors
   }, [editing, instances, t])
 
@@ -1393,11 +1386,11 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
     return () => { clearInterval(timer) }
   }, [bridgeUp])
 
-  // 卸载即中止全部在飞的重启/启动轮询（pollGatewayReady 对 AbortSignal
-  // 敏感）：迟到的响应绝不能改写已卸载页面的状态。
+  // 卸载即中止在飞的「启动实例」POST（它自带 controller）。重启腿没有
+  // controller：就绪轮询的 signal 属于 page-owned completion，关闭面板不取消
+  // 它（review F6）——旧注释声称「中止全部在飞的重启/启动轮询」是失实的。
   useEffect(() => {
     return () => {
-      for (const controller of Object.values(restartAbortRefs.current)) controller.abort()
       for (const controller of Object.values(startAbortRefs.current)) controller.abort()
     }
   }, [])
@@ -1496,7 +1489,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
               <Button
                 variant="primary"
                 size="sm"
-                disabled={healthy || starting || localBusy || stopping || runtimeStartBlocked}
+                disabled={healthy || starting || localBusy || stopping || spawnGate.blocked}
                 onClick={() => { void startLocal() }}
               >
                 {t('localStart')}
@@ -1561,7 +1554,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                 <Button
                   variant="primary"
                   size="sm"
-                  disabled={reclaiming}
+                  disabled={reclaiming || spawnGate.blocked}
                   onClick={() => { void reclaimLocal() }}
                 >
                   {reclaiming ? t('writerReclaimBusy') : t('writerReclaim')}
@@ -1571,13 +1564,12 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
               {reclaimOk ? <p className={css.writerReclaimOk}>{t('writerReclaimOk')}</p> : null}
             </div>
           ) : null}
-          {runtimeState?.phase === 'applying'
-            ? <p className={css.hint}>{t('localRuntimeApplying')}</p>
-            : runtimeSurfacePresent && runtimeState === null
-              ? <p className={css.hint}>{t('localRuntimeHydrating')}</p>
-              : runtimeState?.runtimeBlocked === true
-                ? <p className={css.hint}>{runtimeState.runtimeBlockedReason ?? t('localRuntimeBlocked')}</p>
-                : null}
+          {/* The one visible reason for BOTH gated spawn entries (start and
+              「清理并接管」): local-spawn-gate.ts guarantees every blocked verdict
+              names itself, so a disabled entry never appears without a cause. */}
+          {spawnGate.reasonKey !== null ? (
+            <p className={css.hint}>{spawnGate.reasonDetail ?? t(spawnGate.reasonKey)}</p>
+          ) : null}
           <PluginDiagnosticLine diagnostic={pluginDiagnostics?.['local']} bootGap={bootGaps?.['local']} t={t} />
           <div className={css.logArea}>
             <div className={css.logHead}>
@@ -2180,6 +2172,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                       <input
                         className={css.input}
                         value={draft.host}
+                        maxLength={MAX_SSH_HOST_CHARS}
                         spellCheck={false}
                         placeholder={t('fieldHostPlaceholder')}
                         onChange={event => { setDraft({ ...draft, host: event.target.value }) }}
@@ -2191,6 +2184,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                       <input
                         className={css.input}
                         value={draft.user}
+                        maxLength={MAX_SSH_USER_CHARS}
                         spellCheck={false}
                         placeholder={t('fieldUserPlaceholder')}
                         onChange={event => { setDraft({ ...draft, user: event.target.value }) }}
@@ -2222,6 +2216,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                         className={css.input}
                         type="password"
                         value={draft.password}
+                        maxLength={MAX_SSH_PASSWORD_CHARS}
                         autoComplete="new-password"
                         spellCheck={false}
                         placeholder={t('fieldPasswordPlaceholder')}
@@ -2280,6 +2275,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                       <input
                         className={css.input}
                         value={draft.serviceName}
+                        maxLength={MAX_SERVICE_NAME_CHARS}
                         spellCheck={false}
                         placeholder={t('fieldServiceNamePlaceholder')}
                         onChange={event => { setDraft({ ...draft, serviceName: event.target.value }) }}
@@ -2290,6 +2286,7 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
                       <input
                         className={css.input}
                         value={draft.remoteDshHome}
+                        maxLength={MAX_REMOTE_DSH_HOME_CHARS}
                         spellCheck={false}
                         placeholder={t('fieldRemoteDshHomePlaceholder')}
                         onChange={event => { setDraft({ ...draft, remoteDshHome: event.target.value }) }}

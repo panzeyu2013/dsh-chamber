@@ -26,9 +26,21 @@ import { spawnSync } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { resolveNodeBinary, resolveSidecarDir } from '../lib/sidecar-assembly.mjs'
+
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
-const DEFAULT_NODE = '/Applications/dsh-chamber.app/Contents/Resources/sidecar/node'
 const LOADER = 'packages/gateway/test/session-state/workspace-loader.mjs'
+
+/**
+ * Default interpreter: the assembly's bundled node when it is a real file, else
+ * the node running this script. It used to be the absolute path
+ * '/Applications/dsh-chamber.app/Contents/Resources/sidecar/node', which turned
+ * every local run into ~30 bogus failures on any machine that did not carry the
+ * maintainer's app bundle (P1-2 of the 13-scripts audit).
+ */
+function defaultNode() {
+  return resolveNodeBinary(resolveSidecarDir())
+}
 
 function argValue(name) {
   const i = process.argv.indexOf(name)
@@ -135,7 +147,11 @@ function selfTest(node) {
 }
 
 function main() {
-  const node = argValue('--node') ?? DEFAULT_NODE
+  const node = argValue('--node') ?? defaultNode()
+  if (!existsSync(node)) {
+    console.error(`remote-state-acceptance: node 解释器不存在：${node}——用 --node 指定可执行文件，或先物化 sidecar 装配（${'DSH_CHAMBER_SIDECAR_DIR'}）`)
+    process.exit(2)
+  }
   const only = argValue('--only')
   const wantJson = process.argv.includes('--json')
   const groups = GROUPS.filter(g => only === undefined || g.id === only)

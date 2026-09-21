@@ -43,10 +43,10 @@ import {
   PLUGIN_MATERIALIZED_VALUE_MASK,
   isMaterializedValue,
   readInstalledVersion,
-  readPrivateFileNoFollow,
   resolveRuntimeFamily,
 } from '@dsh-chamber/control-plane'
 import type { PluginRow, ProtectedSet } from '@dsh-chamber/control-plane'
+import { readPrivateTextOrNull } from './private-read.ts'
 
 /** Managed dsh home directory name under the gateway stateDir (the runtime
  * manager spawns the managed instance with DSH_HOME=<stateDir>/dsh-home). */
@@ -139,12 +139,7 @@ export interface ChamberInstalled {
  * the seed cache, minus requiredMode (this manifest is pnpm-written, not
  * 0600-owned by construction; requiring 0600 would misclassify a legit file). */
 function readProfileManifest(path: string): string | null {
-  try {
-    return readPrivateFileNoFollow(path, { tightenMode: 0o600, maxBytes: INSTALLED_MANIFEST_MAX_BYTES }).value
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-    throw error
-  }
+  return readPrivateTextOrNull(path, { tightenMode: 0o600, maxBytes: INSTALLED_MANIFEST_MAX_BYTES })
 }
 
 /** String-array member of a nested record path (bundles), mirroring the

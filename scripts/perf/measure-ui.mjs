@@ -35,6 +35,7 @@ import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { findPageTarget, connect, installEarlyObservers, readPerf } from './cdp-lib.mjs'
+import { sleep } from '../lib/cli.mjs'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
@@ -65,7 +66,6 @@ function evGuard(send, expression) {
     new Promise((_, reject) => setTimeout(() => reject(new Error('evaluate-timeout')), 4000)),
   ]).then(r => r?.result?.value)
 }
-const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 // ---- 连接（失败即清晰退出）----
 let page

@@ -38,6 +38,7 @@ import {
   decodeSessionCreateValue, decodeWorkspaceCreateValue, decodeWorkspaceDeleteValue,
 } from './instance-mutation-values.ts'
 import { InstanceRpcError } from './instance-rpc-error.ts'
+import { pollUntil, sleepMs } from './poll.ts'
 import { mintRpcId } from './wire-common.ts'
 export { basenameOf } from './derive.ts'
 export { InstanceRpcError } from './instance-rpc-error.ts'
@@ -168,11 +169,6 @@ class InstanceDomainMissingError extends Error {
     super(message)
     this.name = 'InstanceDomainMissingError'
   }
-}
-
-/** True when a wire failure is the chamber-domain-absent 404 (design 24 §5). */
-export function isInstanceDomainMissing(err: unknown): boolean {
-  return err instanceof InstanceDomainMissingError
 }
 
 /**
@@ -421,8 +417,8 @@ class InstanceApiClient {
   }
 
   /**
-   * archiveCleanup unary Remotes (design 24 chamber host domain). preview is
-   * zero-arg — the payload envelope is `{args:{}}`. purge takes the explicit
+   * archiveCleanup unary Remotes (design 24 chamber host domain). purge takes
+   * the explicit
    * `sessionIds` deletion subset and the client's `protectSessionIds`
    * (2026-09 protection amendment): the ids a client may be DISPLAYING, which
    * the host must never cut — a matching subtree is skipped whole and reported
@@ -434,8 +430,6 @@ class InstanceApiClient {
    * timeout — rerun is idempotent). See purgeArchivedSessions below.
    */
   readonly archiveCleanup = {
-    preview: (_payload: unknown, signal?: AbortSignal): Promise<UnaryResult<any>> =>
-      this.call('archiveCleanup/preview', { args: {} }, signal, { notFoundAsDomainMissing: true }),
     purge: (
       sessionIds: readonly string[],
       force: boolean,
@@ -497,7 +491,7 @@ function wrapWireError(err: unknown): Error {
     return new InstanceUnavailableError(`实例未就绪：${err.message}`)
   }
   if (err instanceof InstanceDomainMissingError) {
-    // Keep the class identity (isInstanceDomainMissing, design 24 §5): the
+    // Keep the class identity (design 24 §5): the
     // message already carries the honest recovery text.
     return err
   }
@@ -828,17 +822,6 @@ export function isSessionNotAttached(error: unknown): boolean {
   return error instanceof InstanceRpcError && error.code === 'session/not-found'
 }
 
-/** archiveCleanup/preview result counts (design 24 §3). */
-export interface ArchiveCleanupPreview {
-  readonly archived: number
-  readonly deletableSessions: number
-  readonly deletableSubagents: number
-  readonly skippedRunning: number
-  /** Subtrees skipped only because a member is loaded (idle) in the host
-   *  process — deletable through an explicit force purge. */
-  readonly skippedLoaded: number
-}
-
 /** One per-item failure of an archiveCleanup/purge run (design 24 §3). */
 export interface ArchiveCleanupPurgeItemError {
   readonly sessionId: string
@@ -968,37 +951,6 @@ function decodeDomainResult<T>(result: UnaryResult<any>): { ok: true; value: T }
     throw new Error('归档清理域返回了畸形结果：ok:true 但 value 不是对象')
   }
   return { ok: true, value: domainValue as T }
-}
-
-/**
- * archiveCleanup/preview wrapper (design 24 §5): read-only point-in-time
- * counts. Domain-missing 404s surface as isInstanceDomainMissing errors;
- * not-ready 503s keep the existing wording; no-response outcomes
- * (timeout/abort/network) map to an honest retry message — never a bare
- * browser timeout string.
- *
- * KEPT DELIBERATELY (review round 2026-09): the archive manager derives its
- * list from the snapshot (no preview call), so this wrapper currently has no
- * UI caller — it stays as the tested client half of the still-live host
- * preview endpoint (informational counts; a natural consumer for future
- * authoritative-count confirmations) and pins the nested-carrier decode.
- */
-export async function previewArchiveCleanup(client: InstanceApiClient): Promise<ArchiveCleanupPreview> {
-  let result: UnaryResult<any>
-  try {
-    result = await callAndThrow(client, () => client.archiveCleanup.preview({}))
-  } catch (error) {
-    if (looksNoResponse(error)) throw new Error('预览超时或网络中断，请重试。')
-    throw error
-  }
-  const { value } = decodeDomainResult<ArchiveCleanupPreview>(result)
-  return {
-    archived: countField(value, 'archived'),
-    deletableSessions: countField(value, 'deletableSessions'),
-    deletableSubagents: countField(value, 'deletableSubagents'),
-    skippedRunning: countField(value, 'skippedRunning'),
-    skippedLoaded: countField(value, 'skippedLoaded'),
-  }
 }
 
 /**
@@ -1382,7 +1334,7 @@ export async function stopSessionsForPurge(
 ): Promise<StopSessionsResult> {
   const fetchRunning = deps.fetchRunning ?? fetchSessionRunningLineage
   const cancel = deps.cancel ?? cancelSession
-  const delay = deps.delay ?? ((ms: number) => new Promise<void>(resolve => { setTimeout(resolve, ms) }))
+  const delay = deps.delay ?? sleepMs
   const attempts = deps.attempts ?? 10
   const intervalMs = deps.intervalMs ?? 300
   const cancelled: string[] = []
@@ -1458,15 +1410,22 @@ export async function stopSessionsForPurge(
     }
   }
   if (cancelled.length > 0) {
-    for (let attempt = 0; attempt < attempts; attempt += 1) {
-      await delay(intervalMs)
-      try {
-        running = (await fetchRunning(client)).running
-      } catch {
-        break
-      }
-      if (wanted.every(id => !running.has(id))) break
-    }
+    const settled = await pollUntil<ReadonlySet<string>>({
+      attempts,
+      intervalMs,
+      waitFirst: true,
+      sleep: delay,
+      probe: async () => (await fetchRunning(client)).running,
+      // A failed probe ends the settle wait: the caller reports the observed
+      // still-running set, never a fabricated one.
+      onProbeError: () => ({ kind: 'stop' }),
+      // The last allowed round returns what it observed, so `stillRunning`
+      // reflects the freshest read even when the bits never cleared.
+      classify: (next, info) => wanted.every(id => !next.has(id)) || info.last
+        ? { kind: 'done', value: next }
+        : { kind: 'retry' },
+    })
+    if (settled !== undefined) running = settled
   }
   return {
     cancelled,

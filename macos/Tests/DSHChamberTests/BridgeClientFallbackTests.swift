@@ -50,6 +50,11 @@ final class BridgeClientFallbackTests: XCTestCase {
         XCTAssertEqual(dev["DSH_CHAMBER_SHELL_DEBUG"], "1", "dev 态照常传递 DSH_CHAMBER_SHELL_*")
         XCTAssertEqual(dev["DSH_CHAMBER_SHELL_NODE_BIN"], "/tmp/node")
         XCTAssertEqual(dev["DSH_CHAMBER_CP_PORT"], "17500")
+        // 2026-12 单源化锁：壳自身 env（AppDelegate）与子进程 env（childEnvironment）
+        // 共用同一过滤器——打包剔除、dev 原样。
+        XCTAssertEqual(BridgeClient.filteredShellEnvironment(base: base, isPackaged: true),
+                       ["DSH_CHAMBER_CP_PORT": "17500", "PATH": "/usr/bin"])
+        XCTAssertEqual(BridgeClient.filteredShellEnvironment(base: base, isPackaged: false), base)
     }
 
     /// S-29：sidecar 的精确凭证文案逐字透传（前缀 + 原文 + 换行，无截断）。

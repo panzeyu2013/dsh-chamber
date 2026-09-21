@@ -232,7 +232,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         self.shimSource = shimSource
         self.cpOrigin = Self.origin(of: cpURL) ?? ""
         if self.cpOrigin.isEmpty {
-            print("[shell] 警告：控制面 URL 无合法 origin，导航护栏将一律拦截 http(s)")
+            shellLog("[shell] 警告：控制面 URL 无合法 origin，导航护栏将一律拦截 http(s)")
         }
         super.init(window: nil)
         setupWindow()
@@ -284,7 +284,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         BridgeShimInjector.install(
             config: configuration,
             source: BridgeShimInjector.injectNativeToken(nativeChannelToken, into: shimSource))
-        print("[shell] A 桥 shim 注入完成（\(Self.shimResourceName)）")
+        shellLog("[shell] A 桥 shim 注入完成（\(Self.shimResourceName)）")
 
         // 视口越界策略（2026-12）：关闭 macOS WebKit 的根级弹性回弹——指针停在
         // 不可滚动 chrome（顶栏/侧栏头部）上滚动、或滚动器滚到端点后继续滚时，
@@ -294,7 +294,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // 不给上游滚动容器加 contain（design 25 §5.2；Electron 未同步见
         // deviations S-50）。与 shim 同段：必须在 WKWebView 构造前生效。
         ShellOverscrollPolicy.install(config: configuration)
-        print("[shell] 视口越界策略注入完成（\(ShellOverscrollPolicy.rootOverscrollCSS)）")
+        shellLog("[shell] 视口越界策略注入完成（\(ShellOverscrollPolicy.rootOverscrollCSS)）")
 
         // 页面事实载波（本地化/主题跟随，S1）：documentStart、仅主 frame、
         // page world 注入 MutationObserver（html[lang]/内联 color-scheme、
@@ -310,7 +310,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             injectionTime: .atDocumentStart,
             forMainFrameOnly: true
         ))
-        print("[shell] 页面事实载波注入完成（\(ShellPageFactsScript.messageName)）")
+        shellLog("[shell] 页面事实载波注入完成（\(ShellPageFactsScript.messageName)）")
 
         // 消息通道：ChamberMessageHandler 只做护栏与转发（W-04 实现）
         let handler = ChamberMessageHandler(
@@ -401,7 +401,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                 injectionTime: .atDocumentStart,
                 forMainFrameOnly: true
             ))
-            print("[shell] DSH_CHAMBER_SHELL_DEBUG=1：已安装 shellConsole 回传（\(Self.consoleMessageName)）+ 帧率观测")
+            shellLog("[shell] DSH_CHAMBER_SHELL_DEBUG=1：已安装 shellConsole 回传（\(Self.consoleMessageName)）+ 帧率观测")
         }
 
         // S-02：渲染器卡死自愈（空闲 ping + 有界重载）。
@@ -1000,7 +1000,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // 计时戳仅在调试态取（生产零成本，注释与实现一致）。
         let started = ShellDebug.isEnabledCached ? Date() : nil
         if ShellDebug.isEnabledCached {
-            print("[shell] invoke #\(id) \(method)")
+            shellLog("[shell] invoke #\(id) \(method)")
         }
         Task { @MainActor in
             do {
@@ -1008,7 +1008,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                 if let started, ShellDebug.isEnabledCached {
                     // Phase 0：单次 invoke 的端到端耗时（含 B 桥往返与结果编码），
                     // 仅调试态打印。
-                    print("[perf] invoke \(method) \(Int((Date().timeIntervalSince(started) * 1000).rounded()))ms")
+                    shellLog("[perf] invoke \(method) \(Int((Date().timeIntervalSince(started) * 1000).rounded()))ms")
                 }
                 let resultJSON = Self.jsonLiteral(of: result)
                 evaluateJS("__dshChamberResolve(\(nativeTokenLiteral), \(id), \(resultJSON), null)")
@@ -1028,27 +1028,22 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                 } else {
                     message = error.localizedDescription
                 }
-                let errorJSON = Self.jsonLiteral(message)
-                    ?? Self.jsonLiteral(NativeText.string(.bridgeErrorFallback))
-                    ?? "\"bridge error\""
+                // 错误串 → JS 字面量 = AnyCodable 单遍写出器（2026-12 单源化）：
+                // String 恒可序列化，故 stage 1 保留的三级兜底（含
+                // NativeText.bridgeErrorFallback）整体删除——那三级本就不可达。
+                let errorJSON = Self.jsonLiteral(of: .string(message))
                 evaluateJS("__dshChamberResolve(\(nativeTokenLiteral), \(id), null, \(errorJSON))")
             }
         }
     }
 
     /// 页面 emit 直写（调用方必须已在主线程）：__dshChamberEmit(eventJSON,
-    /// payloadJSON)。序列化失败 → loud 打印不注入（绝不注入残缺 JS）。
+    /// payloadJSON)。两个实参都经 AnyCodable 单遍写出器（2026-12 单源化）——
+    /// String/AnyCodable 恒可序列化，故不存在「注入残缺 JS」的路径（旧的可选
+    /// 返回与 loud 失败日志随之删除）。
     private func emitToPage(event: String, payload: AnyCodable?) {
-        guard let eventJSON = Self.jsonLiteral(event) else {
-            shellLog("[shell] 页面 emit 序列化失败：event 不可 JSON 化（丢弃）")
-            return
-        }
-        let payloadJSON: String
-        if let payload = payload {
-            payloadJSON = Self.jsonLiteral(of: payload)
-        } else {
-            payloadJSON = "null"
-        }
+        let eventJSON = Self.jsonLiteral(of: .string(event))
+        let payloadJSON = payload.map { Self.jsonLiteral(of: $0) } ?? "null"
         // C4 hop3（2026-09 评审）：这一跳此前零落盘——「壳把事件推给页面了吗」
         // 只能靠猜。失败（JS 抛错 = 页面根本没收到）必须可考古；成功不逐条刷日志
         // （emit 是用户可见事件的低频面，routeNotify 那行已给出 channel）。
@@ -1117,27 +1112,27 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             }
             let identifiers = registry.retire(sourceIds: sourceIds, notificationIds: notificationIds)
             guard !identifiers.isEmpty else {
-                print("[shell] notify retireNotifications：无已投递登记（\(sourceIds.count) 个 sourceId、"
+                shellLog("[shell] notify retireNotifications：无已投递登记（\(sourceIds.count) 个 sourceId、"
                       + "\(notificationIds.count) 个 notificationId，no-op）")
                 return
             }
             guard Bundle.main.bundleIdentifier != nil else {
                 // 无 bundle（swift run dev）下 UNUserNotificationCenter.current()
                 // 会崩（bundleProxyForCurrentProcess nil）——同 AppDelegate 守卫。
-                print("[shell] notify retireNotifications：dev 无 bundle 不支持通知中心，"
+                shellLog("[shell] notify retireNotifications：dev 无 bundle 不支持通知中心，"
                       + "\(identifiers.count) 条登记未清除（loud）")
                 return
             }
             UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: identifiers)
-            print("[shell] notify retireNotifications：已请求清除 \(identifiers.count) 条已投递通知")
+            shellLog("[shell] notify retireNotifications：已请求清除 \(identifiers.count) 条已投递通知")
         case .unexpectedClick:
             // notifyClicked 的正常路径是 __host.notifyClicked 入站请求
             // （AppDelegate userNotificationCenter click 回灌），不应经 notify
             // 到达——loud 打印不处理。
-            print("[shell] notify notifyClicked 不经 notify 到达（正常 = __host.notifyClicked 请求路径）——忽略（loud）")
+            shellLog("[shell] notify notifyClicked 不经 notify 到达（正常 = __host.notifyClicked 请求路径）——忽略（loud）")
         case .malformed(let reason):
             // 未知事件/形状非法：loud 丢弃，绝不伪造成功/猜测。
-            print("[shell] notify 拒绝消费（loud）：\(reason)")
+            shellLog("[shell] notify 拒绝消费（loud）：\(reason)")
         }
     }
 
@@ -1342,32 +1337,13 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         return origin
     }
 
-    /// 把 Swift 值序列化为合法 JS 字面量（JSON 字符串是 JS 字面量的合法子集；
-    /// .fragmentsAllowed 允许顶层为字符串/数字等标量）。
-    ///
-    /// 调用点只传 String（错误文案 / 事件名）与 JSON 可表示容器。首行白名单是
-    /// 必要的 fail-closed 护栏（独立审查发现的既有崩溃面）：`JSONSerialization`
-    /// 对 Date/NaN 等非法值抛的是 **NSException**，`try?` 拦不住、会直接崩进程。
-    static func jsonLiteral(_ value: Any) -> String? {
-        let isFragment = value is String || value is NSNull
-            || ((value as? NSNumber)?.doubleValue.isFinite ?? false)
-        guard isFragment || JSONSerialization.isValidJSONObject(value) else { return nil }
-        guard let data = try? JSONSerialization.data(withJSONObject: value,
-                                                     options: [.fragmentsAllowed]),
-              let text = String(data: data, encoding: .utf8) else {
-            return nil
-        }
-        // R3：U+2028/U+2029 是 JS 行终止符（ES2019 前不允许直接出现在字符串
-        // 字面量中；JSONSerialization 原样输出）。替换为转义序列对 JSON 语义
-        // 无损、对注入 evaluateJavaScript 的源码更安全。
-        return text.replacingOccurrences(of: "\u{2028}", with: "\\u2028")
-            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
-    }
-
-    /// AnyCodable → JS 字面量（Phase 2 C7）：单遍写出（AnyCodable.jsonLiteralText），
-    /// 免去 `jsonObject` 把整棵载荷物化成 [String: Any] 树的深拷贝，也不再经
-    /// JSONEncoder（实测在大载荷上比旧路径慢 2.1×）。JSON 文本是 JS 字面量的合法
-    /// 子集；无失败路径（非有限数值降级为 null），故返回非可选。
+    /// **页面 JS 字面量的唯一出口**（2026-12 单源化）：AnyCodable → 单遍写出
+    /// （AnyCodable.jsonLiteralText），免去把整棵载荷物化成 [String: Any] 树的
+    /// 深拷贝，也不再经 JSONEncoder（实测在深树上慢 2.1×）。
+    /// JSON 文本是 JS 字面量的合法子集；无失败路径（非有限数值降级为 null），
+    /// 故返回非可选。旧的 `jsonLiteral(_ value: Any)`（JSONSerialization +
+    /// `.fragmentsAllowed`）只有 String 调用点，已随单源化删除；A 桥回执用的
+    /// MessageHandler.jsStringLiteral 现委托同一实现。
     static func jsonLiteral(of value: AnyCodable) -> String {
         value.jsonLiteralText
     }
@@ -1459,9 +1435,9 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             // blob 子 frame 放行也绝不会吃掉 main frame 的豁免。
             if presentationGate.allowsFailurePageNavigation(),
                (url?.scheme ?? "").lowercased() == "about" {
-                print("[shell] 放行首载失败说明页（about:blank，一次性门；didCommit 消费）")
+                shellLog("[shell] 放行首载失败说明页（about:blank，一次性门；didCommit 消费）")
             } else {
-                print("[shell] 放行导航 \(url?.absoluteString ?? "")")
+                shellLog("[shell] 放行导航 \(url?.absoluteString ?? "")")
             }
             decisionHandler(.allow)
         case .download:
@@ -1470,11 +1446,11 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             shellLog("[shell] 导航转下载（不装入壳 webview）\(url?.absoluteString ?? "")")
             decisionHandler(.download)
         case .openExternally:
-            print("[shell] 外链交给系统打开 \(url?.absoluteString ?? "")")
+            shellLog("[shell] 外链交给系统打开 \(url?.absoluteString ?? "")")
             if let url { openExternally(url) }
             decisionHandler(.cancel)
         case .cancel(let reason):
-            print("[shell] 拦截导航（\(reason)）\(url?.absoluteString ?? "")")
+            shellLog("[shell] 拦截导航（\(reason)）\(url?.absoluteString ?? "")")
             decisionHandler(.cancel)
         }
     }
@@ -1637,14 +1613,14 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                       let tiff = image.tiffRepresentation,
                       let rep = NSBitmapImageRep(data: tiff),
                       let png = rep.representation(using: .png, properties: [:]) else {
-                    print("[shell] 快照失败（delay=\(delay)）")
+                    shellLog("[shell] 快照失败（delay=\(delay)）")
                     continue
                 }
                 do {
                     try png.write(to: snapshotURL)
-                    print("[shell] 快照已写 \(snapshotURL.path)（delay=\(delay)s）")
+                    shellLog("[shell] 快照已写 \(snapshotURL.path)（delay=\(delay)s）")
                 } catch {
-                    print("[shell] 快照写盘失败：\(error.localizedDescription)")
+                    shellLog("[shell] 快照写盘失败：\(error.localizedDescription)")
                 }
             }
         }
@@ -1724,14 +1700,14 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     }
 
     func reloadPage() {
-        print("[shell] 菜单重新加载")
+        shellLog("[shell] 菜单重新加载")
         webView.reload()
     }
 
     /// 「强制重新加载」（S-24 残余；Electron 默认菜单 forceReload role 对偶：
     /// reloadIgnoringCache 忽略缓存重新取源）。
     func forceReloadPage() {
-        print("[shell] 菜单强制重新加载（忽略缓存）")
+        shellLog("[shell] 菜单强制重新加载（忽略缓存）")
         _ = webView.reloadFromOrigin()
     }
 
@@ -2092,10 +2068,10 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         if navigationAction.targetFrame == nil,
            let url = navigationAction.request.url,
            TrustGuard.isExternalLink(url.absoluteString, expectedOrigin: cpOrigin) {
-            print("[shell] 新窗外链交系统打开 \(url.absoluteString)")
+            shellLog("[shell] 新窗外链交系统打开 \(url.absoluteString)")
             openExternally(url)
         } else {
-            print("[shell] 拒绝新建窗口请求")
+            shellLog("[shell] 拒绝新建窗口请求")
         }
         return nil
     }
@@ -2113,7 +2089,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
             allowsMultipleSelection: parameters.allowsMultipleSelection,
             allowsDirectories: parameters.allowsDirectories,
             allowedContentTypes: Self.allowedContentTypes(of: parameters))
-        print("[shell] 文件选择面板：多选=\(request.allowsMultipleSelection) "
+        shellLog("[shell] 文件选择面板：多选=\(request.allowsMultipleSelection) "
             + "目录=\(request.allowsDirectories) 类型数=\(request.allowedContentTypes.count)")
         FileOpenPanel.present(request, presenter: fileOpenPanelPresenter) { urls in
             completionHandler(urls)
@@ -2129,7 +2105,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
                  initiatedByFrame frame: WKFrameInfo,
                  type: WKMediaCaptureType,
                  decisionHandler: @escaping (WKPermissionDecision) -> Void) {
-        print("[shell] 拒绝媒体采集权限请求（origin=\(origin.host) type=\(type.rawValue)）")
+        shellLog("[shell] 拒绝媒体采集权限请求（origin=\(origin.host) type=\(type.rawValue)）")
         decisionHandler(.deny)
     }
 
@@ -2147,7 +2123,7 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         // 30s 冷却并 loud（与 shell-core 同参数）。
         switch externalBudget.decide(now: Date().timeIntervalSince1970) {
         case .blocked(let remaining):
-            print("[shell] 外链打开被预算限制（冷却 \(Int(remaining))s）：\(url.absoluteString)")
+            shellLog("[shell] 外链打开被预算限制（冷却 \(Int(remaining))s）：\(url.absoluteString)")
             return
         case .allow:
             break
@@ -2158,11 +2134,11 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
         if #available(macOS 14.0, *) {
             NSWorkspace.shared.open(url, configuration: NSWorkspace.OpenConfiguration()) { _, error in
                 if let error {
-                    print("[shell] 外链打开失败 \(url.absoluteString)：\(error.localizedDescription)")
+                    shellLog("[shell] 外链打开失败 \(url.absoluteString)：\(error.localizedDescription)")
                 }
             }
         } else if !NSWorkspace.shared.open(url) {
-            print("[shell] 外链打开失败 \(url.absoluteString)：NSWorkspace.open 返回 false")
+            shellLog("[shell] 外链打开失败 \(url.absoluteString)：NSWorkspace.open 返回 false")
         }
     }
 }
@@ -2278,9 +2254,9 @@ final class ShellConsoleCatcher: NSObject, WKScriptMessageHandler {
         if let body = message.body as? [String: Any],
            let kind = body["kind"] as? String,
            let text = body["text"] as? String {
-            print("[shell-web] \(kind): \(text)")
+            shellLog("[shell-web] \(kind): \(text)")
         } else {
-            print("[shell-web] raw: \(message.body)")
+            shellLog("[shell-web] raw: \(message.body)")
         }
     }
 }

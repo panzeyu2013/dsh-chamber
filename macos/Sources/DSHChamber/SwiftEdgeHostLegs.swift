@@ -47,10 +47,11 @@ enum EdgePayload {
     }
 
     static func int(_ value: AnyCodable?) -> Int? {
-        guard case .number(let n)? = value, n.isFinite else { return nil }
+        guard case .number(let n)? = value else { return nil }
         // Int(n) 对 NaN/±inf/越界值直接 trap（2026-09 二轮评审 P3：实测
-        // `-1e400` 经 JSON 桥接后 exit 133）；Int(exactly:) 失败即 nil。
-        return Int(exactly: n)
+        // `-1e400` 经 JSON 桥接后 exit 133）；判定本体 =
+        // StrictJSONNumber.int（有限 + 整值 + Int 域内，2026-12 单源化）。
+        return StrictJSONNumber.int(n)
     }
 
     static func bool(_ value: AnyCodable?) -> Bool? {
@@ -267,6 +268,10 @@ public final class SwiftEdgeHostLegs {
     /// 退出清理（同 D13）：清空 Dock 角标（Electron will-quit 同序）。
     public func clearBadge() {
         let run: () -> Void = { NSApp.dockTile.badgeLabel = nil }
+        // 本方法是**对外直接 API**（不经 performUI body）：调用点（Sparkle
+        // willInstallUpdate 清理链、退出清理）都在主线程，但保留原线程 hop
+        // 兜底——2026-12 审计只删 performUI/performInteractiveUI 内不可达的
+        // `main.sync` 分支，不改这里。
         if Thread.isMainThread {
             run()
         } else {
@@ -590,11 +595,11 @@ public final class SwiftEdgeHostLegs {
                         alert.runModal()
                     }
                 }
-                if Thread.isMainThread {
-                    run()
-                } else {
-                    DispatchQueue.main.sync(execute: run)
-                }
+                // 本 body 只经 performUI 在主线程排队执行（见其注记：main.sync 会在
+                // 主线程被退出收尾占用时挂死），原先的兜底分支不可达——2026-12
+                // 审计删除，保留主线程不变量断言。
+                assert(Thread.isMainThread, "UI 腿 body 必须在主线程执行")
+                run()
                 return (nil, nil)
             }
         // E12 open-in 原生拉起叶（launchApp）已于 2026-12 移除（S-05 复裁决）：
@@ -793,11 +798,11 @@ public final class SwiftEdgeHostLegs {
         }
         var modalResponse: NSApplication.ModalResponse = .alertFirstButtonReturn
         let run: () -> Void = { modalResponse = alert.runModal() }
-        if Thread.isMainThread {
-            run()
-        } else {
-            DispatchQueue.main.sync(execute: run)
-        }
+        // 本 body 只经 performUI/performInteractiveUI 在主线程排队执行（见其注记：
+        // main.sync 会在主线程被退出收尾占用时挂死），原先的 `Thread.isMainThread`
+        // + `main.sync` 兜底分支不可达——2026-12 审计删除，保留主线程不变量断言。
+        assert(Thread.isMainThread, "UI 腿 body 必须在主线程执行")
+        run()
         // NSAlert 按钮返回码：1000=第一个…；索引 = raw-1000（越界夹 0）。
         let index = max(0, min(buttons.count - 1, Int(modalResponse.rawValue) - 1000))
         return (.number(Double(index)), nil)
@@ -832,11 +837,11 @@ public final class SwiftEdgeHostLegs {
                 cancelled = true
             }
         }
-        if Thread.isMainThread {
-            run()
-        } else {
-            DispatchQueue.main.sync(execute: run)
-        }
+        // 本 body 只经 performUI/performInteractiveUI 在主线程排队执行（见其注记：
+        // main.sync 会在主线程被退出收尾占用时挂死），原先的 `Thread.isMainThread`
+        // + `main.sync` 兜底分支不可达——2026-12 审计删除，保留主线程不变量断言。
+        assert(Thread.isMainThread, "UI 腿 body 必须在主线程执行")
+        run()
         if cancelled {
             return (.object(["status": .string("cancelled")]), nil)
         }

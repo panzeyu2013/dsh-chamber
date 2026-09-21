@@ -487,24 +487,56 @@ type SnapshotReportListener = (
 ) => void
 type PluginDiagnosticListener = (sourceId: string, diagnostic: PluginGraphDiagnostic | undefined) => void
 
-const listeners = new Set<Listener>()
-const openListeners = new Set<OpenListener>()
-const openOutcomeListeners = new Set<OpenOutcomeListener>()
-const markAllReadListeners = new Set<MarkAllReadListener>()
-const intentPrewarmListeners = new Set<IntentPrewarmListener>()
-const refreshListeners = new Set<RefreshListener>()
-const sessionListRefreshListeners = new Set<SessionListRefreshListener>()
-const workspaceCreatedListeners = new Set<WorkspaceCreatedListener>()
-const workspaceRemovedListeners = new Set<WorkspaceRemovedListener>()
-const workspaceRenamedListeners = new Set<WorkspaceRenamedListener>()
-const sessionCreatedListeners = new Set<SessionCreatedListener>()
-const sessionRemovedListeners = new Set<SessionRemovedListener>()
-const activateSourceListeners = new Set<SourceListener>()
-const settingsTargetListeners = new Set<SettingsTargetListener>()
-const activeSourceListeners = new Set<ActiveSourceListener>()
-const runtimeReportListeners = new Set<RuntimeReportListener>()
-const snapshotReportListeners = new Set<SnapshotReportListener>()
-const pluginDiagnosticListeners = new Set<PluginDiagnosticListener>()
+/**
+ * One fan-out channel: the chamberBridge subscriber plumbing, extracted so the
+ * ~20 channels cannot drift and so EVERY channel shares one dispatch
+ * discipline — a throwing listener is reported and the remaining listeners
+ * still run (before this extraction only sessionListRefresh and activeSource
+ * isolated; one bad subscriber could starve its siblings on the other 18
+ * channels). Listeners are snapshotted per emit, so subscribing/unsubscribing
+ * during dispatch never affects the in-flight fan-out. `label` names the
+ * channel (and may use the emit arguments) in the console diagnostic.
+ */
+function createChannel<Args extends unknown[]>(label: (args: Args) => string) {
+  const listeners = new Set<(...args: Args) => void>()
+  return {
+    subscribe(listener: (...args: Args) => void): () => void {
+      listeners.add(listener)
+      return () => {
+        listeners.delete(listener)
+      }
+    },
+    emit(...args: Args): void {
+      for (const listener of [...listeners]) {
+        try {
+          listener(...args)
+        } catch (error) {
+          console.error(`${label(args)}:`, error)
+        }
+      }
+    },
+  }
+}
+
+const serversChannel = createChannel<Parameters<Listener>>(() => '[dsh-chamber] bridge subscriber threw')
+const openChannel = createChannel<Parameters<OpenListener>>(() => '[dsh-chamber] open-session listener threw')
+const openOutcomeChannel = createChannel<Parameters<OpenOutcomeListener>>(() => '[dsh-chamber] open-outcome listener threw')
+const markAllReadChannel = createChannel<Parameters<MarkAllReadListener>>(() => '[dsh-chamber] mark-all-read listener threw')
+const intentPrewarmChannel = createChannel<Parameters<IntentPrewarmListener>>(() => '[dsh-chamber] intent-prewarm listener threw')
+const refreshChannel = createChannel<Parameters<RefreshListener>>(() => '[dsh-chamber] refresh listener threw')
+const sessionListRefreshChannel = createChannel<Parameters<SessionListRefreshListener>>(
+  ([sourceId]) => `[chamber] session-list refresh listener failed for ${sourceId}`)
+const workspaceCreatedChannel = createChannel<Parameters<WorkspaceCreatedListener>>(() => '[dsh-chamber] workspace-created listener threw')
+const workspaceRemovedChannel = createChannel<Parameters<WorkspaceRemovedListener>>(() => '[dsh-chamber] workspace-removed listener threw')
+const workspaceRenamedChannel = createChannel<Parameters<WorkspaceRenamedListener>>(() => '[dsh-chamber] workspace-renamed listener threw')
+const sessionCreatedChannel = createChannel<Parameters<SessionCreatedListener>>(() => '[dsh-chamber] session-created listener threw')
+const sessionRemovedChannel = createChannel<Parameters<SessionRemovedListener>>(() => '[dsh-chamber] session-removed listener threw')
+const activateSourceChannel = createChannel<Parameters<SourceListener>>(() => '[dsh-chamber] activate-source listener threw')
+const settingsTargetChannel = createChannel<Parameters<SettingsTargetListener>>(() => '[dsh-chamber] settings-target listener threw')
+const activeSourceChannel = createChannel<Parameters<ActiveSourceListener>>(() => '[dsh-chamber] active-source subscriber threw')
+const runtimeReportChannel = createChannel<Parameters<RuntimeReportListener>>(() => '[dsh-chamber] runtime-report listener threw')
+const snapshotReportChannel = createChannel<Parameters<SnapshotReportListener>>(() => '[dsh-chamber] snapshot-report listener threw')
+const pluginDiagnosticChannel = createChannel<Parameters<PluginDiagnosticListener>>(() => '[dsh-chamber] plugin-diagnostic listener threw')
 let servers: ChamberServerAggregate[] = []
 let activeSourceId: string | undefined
 const runtimeReports: Record<string, InstanceRuntimeReport> = {}
@@ -532,10 +564,7 @@ export const chamberBridge = {
 
   /** Subscribe to projection refreshes; returns the unsubscribe. */
   subscribe(listener: Listener): () => void {
-    listeners.add(listener)
-    return () => {
-      listeners.delete(listener)
-    }
+    return serversChannel.subscribe(listener)
   },
 
   /**
@@ -555,35 +584,29 @@ export const chamberBridge = {
   publish(next: ChamberServerAggregate[]): void {
     if (next === servers) return
     servers = next
-    for (const listener of [...listeners]) listener()
+    serversChannel.emit()
   },
 
   /** Ask the App layer to switch to the source shell and open the session. */
   requestOpenSession(sourceId: string, sessionId: string): void {
-    for (const listener of [...openListeners]) listener({ sourceId, sessionId })
+    openChannel.emit({ sourceId, sessionId })
   },
 
   /** App-layer subscription to open-session requests; returns the unsubscribe. */
   onOpenSession(listener: OpenListener): () => void {
-    openListeners.add(listener)
-    return () => {
-      openListeners.delete(listener)
-    }
+    return openChannel.subscribe(listener)
   },
 
   /** App-layer report that one requested open settled (failure carries the
    *  loud terminal message). Every sidebar shell receives the report and
    *  surfaces failures on the session row; success clears a stale failure. */
   reportOpenSessionOutcome(outcome: OpenSessionOutcome): void {
-    for (const listener of [...openOutcomeListeners]) listener(outcome)
+    openOutcomeChannel.emit(outcome)
   },
 
   /** Sidebar subscription to open-outcome reports; returns the unsubscribe. */
   onOpenSessionOutcome(listener: OpenOutcomeListener): () => void {
-    openOutcomeListeners.add(listener)
-    return () => {
-      openOutcomeListeners.delete(listener)
-    }
+    return openOutcomeChannel.subscribe(listener)
   },
 
   /**
@@ -591,15 +614,12 @@ export const chamberBridge = {
    * App 手里（WS-C 的读水位纪律），因此插件只发意图，不自己写读数。
    */
   requestMarkAllRead(sourceId: string): void {
-    for (const listener of [...markAllReadListeners]) listener({ sourceId })
+    markAllReadChannel.emit({ sourceId })
   },
 
   /** App 层订阅「全部已读」请求；返回取消订阅。 */
   onMarkAllRead(listener: MarkAllReadListener): () => void {
-    markAllReadListeners.add(listener)
-    return () => {
-      markAllReadListeners.delete(listener)
-    }
+    return markAllReadChannel.subscribe(listener)
   },
 
   /**
@@ -609,28 +629,22 @@ export const chamberBridge = {
    * 与每会话计费共同决定（blueprint §4.2/§4.4）。
    */
   requestIntentPrewarm(sourceId: string): void {
-    for (const listener of [...intentPrewarmListeners]) listener({ sourceId })
+    intentPrewarmChannel.emit({ sourceId })
   },
 
   /** App 层订阅意图预热请求；返回取消订阅。 */
   onIntentPrewarm(listener: IntentPrewarmListener): () => void {
-    intentPrewarmListeners.add(listener)
-    return () => {
-      intentPrewarmListeners.delete(listener)
-    }
+    return intentPrewarmChannel.subscribe(listener)
   },
 
   /** Sidebar call after an action: unmounted/incomplete sources ask App for one pull; mounted stores push. */
   requestRefresh(sourceId: string): void {
-    for (const listener of [...refreshListeners]) listener(sourceId)
+    refreshChannel.emit(sourceId)
   },
 
   /** App-layer subscription to refresh requests; returns the unsubscribe. */
   onRefresh(listener: RefreshListener): () => void {
-    refreshListeners.add(listener)
-    return () => {
-      refreshListeners.delete(listener)
-    }
+    return refreshChannel.subscribe(listener)
   },
 
   /**
@@ -645,21 +659,12 @@ export const chamberBridge = {
     // 逐监听器隔离（与 setActiveSource 同纪律）：这条广播现在同时驱动归档收敛链与
     // 运行位活性守卫的 L1——一个抛错的监听器若中断整轮广播，守卫会拿不到对账请求并
     // 把它误判成「对账通道无回执」而升级 L2（2026-12 三轮复核的结构性建议）。
-    for (const listener of [...sessionListRefreshListeners]) {
-      try {
-        listener(sourceId)
-      } catch (error) {
-        console.error(`[chamber] session-list refresh listener failed for ${sourceId}:`, error)
-      }
-    }
+    sessionListRefreshChannel.emit(sourceId)
   },
 
   /** Sidebar-plugin subscription to session-list refresh requests; returns the unsubscribe. */
   onRequestSessionListRefresh(listener: SessionListRefreshListener): () => void {
-    sessionListRefreshListeners.add(listener)
-    return () => {
-      sessionListRefreshListeners.delete(listener)
-    }
+    return sessionListRefreshChannel.subscribe(listener)
   },
 
   /**
@@ -671,15 +676,12 @@ export const chamberBridge = {
    * the host.
    */
   reportWorkspaceCreated(fact: WorkspaceCreatedFact): void {
-    for (const listener of [...workspaceCreatedListeners]) listener(fact)
+    workspaceCreatedChannel.emit(fact)
   },
 
   /** App-layer subscription to workspace-creation facts; returns the unsubscribe. */
   onWorkspaceCreated(listener: WorkspaceCreatedListener): () => void {
-    workspaceCreatedListeners.add(listener)
-    return () => {
-      workspaceCreatedListeners.delete(listener)
-    }
+    return workspaceCreatedChannel.subscribe(listener)
   },
 
   /**
@@ -692,15 +694,12 @@ export const chamberBridge = {
    * enabled until the TTL.
    */
   reportWorkspaceRemoved(fact: WorkspaceRemovedFact): void {
-    for (const listener of [...workspaceRemovedListeners]) listener(fact)
+    workspaceRemovedChannel.emit(fact)
   },
 
   /** App-layer subscription to workspace-removal facts; returns the unsubscribe. */
   onWorkspaceRemoved(listener: WorkspaceRemovedListener): () => void {
-    workspaceRemovedListeners.add(listener)
-    return () => {
-      workspaceRemovedListeners.delete(listener)
-    }
+    return workspaceRemovedChannel.subscribe(listener)
   },
 
   /**
@@ -710,15 +709,12 @@ export const chamberBridge = {
    * looked like a no-op on an unmounted source until the mount push arrived.
    */
   reportWorkspaceRenamed(fact: WorkspaceRenamedFact): void {
-    for (const listener of [...workspaceRenamedListeners]) listener(fact)
+    workspaceRenamedChannel.emit(fact)
   },
 
   /** App-layer subscription to workspace-rename facts; returns the unsubscribe. */
   onWorkspaceRenamed(listener: WorkspaceRenamedListener): () => void {
-    workspaceRenamedListeners.add(listener)
-    return () => {
-      workspaceRenamedListeners.delete(listener)
-    }
+    return workspaceRenamedChannel.subscribe(listener)
   },
 
   /**
@@ -740,15 +736,12 @@ export const chamberBridge = {
       at: Date.now(),
     })
     publishSessionCreationInstrument()
-    for (const listener of [...sessionCreatedListeners]) listener(fact)
+    sessionCreatedChannel.emit(fact)
   },
 
   /** App-layer subscription to session-creation facts; returns the unsubscribe. */
   onSessionCreated(listener: SessionCreatedListener): () => void {
-    sessionCreatedListeners.add(listener)
-    return () => {
-      sessionCreatedListeners.delete(listener)
-    }
+    return sessionCreatedChannel.subscribe(listener)
   },
 
   /**
@@ -758,28 +751,22 @@ export const chamberBridge = {
    * App exactly like the create fact.
    */
   reportSessionRemoved(fact: SessionRemovedFact): void {
-    for (const listener of [...sessionRemovedListeners]) listener(fact)
+    sessionRemovedChannel.emit(fact)
   },
 
   /** App-layer subscription to session-removal (archive) facts; returns the unsubscribe. */
   onSessionRemoved(listener: SessionRemovedListener): () => void {
-    sessionRemovedListeners.add(listener)
-    return () => {
-      sessionRemovedListeners.delete(listener)
-    }
+    return sessionRemovedChannel.subscribe(listener)
   },
 
   /** Sidebar call when the user clicks a source header: ask the App layer to switch the active view. */
   requestActivateSource(sourceId: string): void {
-    for (const listener of [...activateSourceListeners]) listener(sourceId)
+    activateSourceChannel.emit(sourceId)
   },
 
   /** App-layer subscription to source-activation requests; returns the unsubscribe. */
   onActivateSource(listener: SourceListener): () => void {
-    activateSourceListeners.add(listener)
-    return () => {
-      activateSourceListeners.delete(listener)
-    }
+    return activateSourceChannel.subscribe(listener)
   },
 
   /**
@@ -792,15 +779,12 @@ export const chamberBridge = {
    * active view keeps following the user, not the dropdown.
    */
   setSettingsTarget(sourceId: string | undefined): void {
-    for (const listener of [...settingsTargetListeners]) listener(sourceId)
+    settingsTargetChannel.emit(sourceId)
   },
 
   /** App-layer subscription to settings-target changes; returns the unsubscribe. */
   onSettingsTarget(listener: SettingsTargetListener): () => void {
-    settingsTargetListeners.add(listener)
-    return () => {
-      settingsTargetListeners.delete(listener)
-    }
+    return settingsTargetChannel.subscribe(listener)
   },
 
   /**
@@ -817,13 +801,7 @@ export const chamberBridge = {
     activeSourceId = sourceId
     // Per-listener isolation (same discipline as the layout facts fan-out): a
     // throwing projector must not abort the publish for its siblings.
-    for (const listener of [...activeSourceListeners]) {
-      try {
-        listener(activeSourceId)
-      } catch (error) {
-        console.error('[dsh-chamber] active-source subscriber threw:', error)
-      }
-    }
+    activeSourceChannel.emit(activeSourceId)
   },
 
   /** Page-wide active-view fact; undefined until the App publishes. */
@@ -833,10 +811,7 @@ export const chamberBridge = {
 
   /** Subscribe to active-view changes (fires on change only); returns the unsubscribe. */
   onActiveSource(listener: ActiveSourceListener): () => void {
-    activeSourceListeners.add(listener)
-    return () => {
-      activeSourceListeners.delete(listener)
-    }
+    return activeSourceChannel.subscribe(listener)
   },
 
   /**
@@ -858,8 +833,15 @@ export const chamberBridge = {
     delete snapshotProducerFingerprints[sourceId]
     delete runtimeReports[sourceId]
     delete instanceSnapshots[sourceId]
-    for (const listener of [...runtimeReportListeners]) listener(sourceId, undefined, runtimeFingerprint)
-    for (const listener of [...snapshotReportListeners]) listener(sourceId, undefined, snapshotFingerprint)
+    runtimeReportChannel.emit(sourceId, undefined, runtimeFingerprint)
+    snapshotReportChannel.emit(sourceId, undefined, snapshotFingerprint)
+    // Diagnostics are per-source renderer state too: roster retirement must
+    // drop them with the producers, or a deleted source keeps a stale
+    // pluginDiagnostic entry (and its settings-bridge card) forever.
+    if (pluginDiagnostics[sourceId] !== undefined) {
+      delete pluginDiagnostics[sourceId]
+      pluginDiagnosticChannel.emit(sourceId, undefined)
+    }
   },
 
   /**
@@ -888,13 +870,13 @@ export const chamberBridge = {
     runtimeProducerFingerprints[sourceId] = sourceFingerprint
     if (runtimeReports[sourceId] !== undefined) {
       delete runtimeReports[sourceId]
-      for (const listener of [...runtimeReportListeners]) listener(sourceId, undefined, previousFingerprint)
+      runtimeReportChannel.emit(sourceId, undefined, previousFingerprint)
     }
     return {
       report(report): void {
         if (runtimeProducerTokens[sourceId] !== token) return
         runtimeReports[sourceId] = report
-        for (const listener of [...runtimeReportListeners]) listener(sourceId, report, sourceFingerprint)
+        runtimeReportChannel.emit(sourceId, report, sourceFingerprint)
       },
       clear(): void {
         if (runtimeProducerTokens[sourceId] !== token) return
@@ -903,17 +885,14 @@ export const chamberBridge = {
         delete runtimeProducerGenerations[sourceId]
         if (runtimeReports[sourceId] === undefined) return
         delete runtimeReports[sourceId]
-        for (const listener of [...runtimeReportListeners]) listener(sourceId, undefined, sourceFingerprint)
+        runtimeReportChannel.emit(sourceId, undefined, sourceFingerprint)
       },
     }
   },
 
   /** App-layer subscription to runtime-fact reports (report or clear); returns the unsubscribe. */
   onRuntimeReport(listener: RuntimeReportListener): () => void {
-    runtimeReportListeners.add(listener)
-    return () => {
-      runtimeReportListeners.delete(listener)
-    }
+    return runtimeReportChannel.subscribe(listener)
   },
 
   /**
@@ -941,7 +920,7 @@ export const chamberBridge = {
     snapshotProducerFingerprints[sourceId] = sourceFingerprint
     if (instanceSnapshots[sourceId] !== undefined) {
       delete instanceSnapshots[sourceId]
-      for (const listener of [...snapshotReportListeners]) listener(sourceId, undefined, previousFingerprint)
+      snapshotReportChannel.emit(sourceId, undefined, previousFingerprint)
     }
     return {
       report(snapshot): void {
@@ -952,7 +931,7 @@ export const chamberBridge = {
         } else {
           instanceSnapshots[sourceId] = snapshot
         }
-        for (const listener of [...snapshotReportListeners]) listener(sourceId, snapshot, sourceFingerprint)
+        snapshotReportChannel.emit(sourceId, snapshot, sourceFingerprint)
       },
       clear(): void {
         if (snapshotProducerTokens[sourceId] !== token) return
@@ -961,7 +940,7 @@ export const chamberBridge = {
         delete snapshotProducerGenerations[sourceId]
         if (instanceSnapshots[sourceId] === undefined) return
         delete instanceSnapshots[sourceId]
-        for (const listener of [...snapshotReportListeners]) listener(sourceId, undefined, sourceFingerprint)
+        snapshotReportChannel.emit(sourceId, undefined, sourceFingerprint)
       },
     }
   },
@@ -973,24 +952,26 @@ export const chamberBridge = {
 
   /** Subscribe and synchronously replay all complete reports. */
   onInstanceSnapshot(listener: SnapshotReportListener): () => void {
-    snapshotReportListeners.add(listener)
+    const unsubscribe = snapshotReportChannel.subscribe(listener)
     for (const [sourceId, snapshot] of Object.entries(instanceSnapshots)) {
-      listener(sourceId, snapshot, snapshotProducerFingerprints[sourceId])
+      try {
+        listener(sourceId, snapshot, snapshotProducerFingerprints[sourceId])
+      } catch (error) {
+        console.error(`[dsh-chamber] snapshot replay for ${sourceId} threw:`, error)
+      }
     }
-    return () => {
-      snapshotReportListeners.delete(listener)
-    }
+    return unsubscribe
   },
 
   reportPluginDiagnostic(sourceId: string, diagnostic: PluginGraphDiagnostic): void {
     pluginDiagnostics[sourceId] = diagnostic
-    for (const listener of [...pluginDiagnosticListeners]) listener(sourceId, diagnostic)
+    pluginDiagnosticChannel.emit(sourceId, diagnostic)
   },
 
   clearPluginDiagnostic(sourceId: string): void {
     if (pluginDiagnostics[sourceId] === undefined) return
     delete pluginDiagnostics[sourceId]
-    for (const listener of [...pluginDiagnosticListeners]) listener(sourceId, undefined)
+    pluginDiagnosticChannel.emit(sourceId, undefined)
   },
 
   getPluginDiagnostics(): Readonly<Record<string, PluginGraphDiagnostic>> {
@@ -998,10 +979,14 @@ export const chamberBridge = {
   },
 
   onPluginDiagnostic(listener: PluginDiagnosticListener): () => void {
-    pluginDiagnosticListeners.add(listener)
-    for (const [sourceId, diagnostic] of Object.entries(pluginDiagnostics)) listener(sourceId, diagnostic)
-    return () => {
-      pluginDiagnosticListeners.delete(listener)
+    const unsubscribe = pluginDiagnosticChannel.subscribe(listener)
+    for (const [sourceId, diagnostic] of Object.entries(pluginDiagnostics)) {
+      try {
+        listener(sourceId, diagnostic)
+      } catch (error) {
+        console.error(`[dsh-chamber] plugin-diagnostic replay for ${sourceId} threw:`, error)
+      }
     }
+    return unsubscribe
   },
 }

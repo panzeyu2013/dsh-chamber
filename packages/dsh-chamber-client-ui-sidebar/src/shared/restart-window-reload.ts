@@ -169,12 +169,6 @@ export function reloadWindow(): void {
   }
 }
 
-/** Test/diagnostic seam: forget every armed completion (pending arms keep their
- *  own timers and settle into nothing — the map entry is already replaced). */
-export function resetArmedWindowReloads(): void {
-  armedReloads.clear()
-}
-
 /** Injected seams of {@link waitForLocalDshServing}. */
 export interface LocalServingDeps {
   /** Fetch seam (tests). */

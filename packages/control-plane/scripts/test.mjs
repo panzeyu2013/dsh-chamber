@@ -57,6 +57,14 @@ const GROUPS = {
     // 平台无关，所以 Windows 腿同样跑（见 WIN32_FILES）。
     'test/protocol/session-state-protocol.test.ts',
     'test/protocol/session-mux.test.ts',
+    // 跨包 parity/lockstep（审计 14 · A1/A2）：control-plane 与 dsh-runtime 的
+    // 孪生实现以相对路径 import 对拍，绝对期望值 + 意图分叉登记表 + 导出面清单
+    // 三重锁定；任一侧改名/删面/静默漂移都会让这两条变红。
+    // private-fs 门含 POSIX 权限/符号链接语义，只在 POSIX 腿跑（与同一孪生实现
+    // 的既有 private-fs 套件同样的平台分割）；win-probes 门是平台中性的纯解析
+    // 对拍，同时进 WIN32_FILES。
+    'test/protocol/private-fs-parity.test.ts',
+    'test/protocol/win-probes-parity.test.ts',
   ],
   // host-lifecycle: 宿主进程生命周期（spawn/readiness/健康/回收/重启）
   'host-lifecycle': [
@@ -138,6 +146,9 @@ const WIN32_FILES = [
   // settling an approval) is platform-independent.
   'test/protocol/session-state-protocol.test.ts',
   'test/protocol/session-mux.test.ts',
+  // 孪生探针的纯解析对拍：平台中性（win32-gated exec 段自行 skip），
+  // 与 test/windows/win-probes.test.ts 同批在 Windows 腿再跑一遍。
+  'test/protocol/win-probes-parity.test.ts',
 ]
 
 /** node:test summary lines: the spec reporter prints "ℹ tests N" and TAP

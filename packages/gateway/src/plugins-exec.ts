@@ -73,6 +73,7 @@ import {
 } from '@dsh-chamber/control-plane'
 import { INSTALL_ENV_WHITELIST, sanitizeInstallerOutput } from '@dsh-chamber/dsh-runtime'
 import { sanitizeRouteError } from './sanitize-route-error.ts'
+import { messageOf } from './util.ts'
 import {
   deriveBootProtectedSet,
   gatewayProtectedSet,
@@ -249,10 +250,6 @@ function lastNonEmptyLine(text: string): string | null {
     if (line !== '') return line
   }
   return null
-}
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }
 
 /** Real spawn: detached child + process-group kill wrapper (POSIX), so a

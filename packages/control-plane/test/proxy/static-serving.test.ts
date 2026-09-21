@@ -20,7 +20,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from 'node:fs'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import { connect } from 'node:net'
 import { createControlPlane } from '../../src/index.ts'
@@ -455,89 +455,182 @@ function fakeReq(headers: Record<string, string> = {}): ApiRequest {
   return { headers } as unknown as ApiRequest
 }
 
-/** Serve one path through the module directly. */
-function serveOnce(
+/** Serve one path through the module directly (await the async serve). */
+async function serveOnce(
   serving: ReturnType<typeof createStaticServing>,
   req: ApiRequest,
   pathname: string,
-): FakeRes {
+): Promise<FakeRes> {
   const res = new FakeRes() as unknown as ApiResponse
   res._cspNonce = 'dsh-nonce-test'
-  serving.serve(req, res, pathname)
+  await serving.serve(req, res, pathname)
   return res as unknown as FakeRes
 }
 
-test('static module: gzip negotiation is q-value aware (gzip;q=0 refuses, multi-token accepts)', () => {
+test('static module: gzip negotiation is q-value aware (gzip;q=0 refuses, multi-token accepts)', async () => {
   const fixture = fixtureDist()
   try {
     const serving = createStaticServing({ webDistDir: fixture.dir })
-    const refused = serveOnce(serving, fakeReq({ 'accept-encoding': 'gzip;q=0, deflate' }), fixture.assetUrl)
+    const refused = await serveOnce(serving, fakeReq({ 'accept-encoding': 'gzip;q=0, deflate' }), fixture.assetUrl)
     assert.equal(refused.status, 200)
     assert.equal(refused.headers['content-encoding'], undefined)
     assert.equal(refused.headers['vary'], 'accept-encoding')
     assert.deepEqual(refused.body, fixture.asset)
 
-    const accepted = serveOnce(serving, fakeReq({ 'accept-encoding': 'deflate, gzip, br' }), fixture.assetUrl)
+    const accepted = await serveOnce(serving, fakeReq({ 'accept-encoding': 'deflate, gzip, br' }), fixture.assetUrl)
     assert.equal(accepted.status, 200)
     assert.equal(accepted.headers['content-encoding'], 'gzip')
     assert.deepEqual(gunzipSync(accepted.body), fixture.asset)
 
-    const noHeader = serveOnce(serving, fakeReq(), fixture.assetUrl)
+    const noHeader = await serveOnce(serving, fakeReq(), fixture.assetUrl)
     assert.equal(noHeader.headers['content-encoding'], undefined)
   } finally {
     rmSync(fixture.dir, { recursive: true, force: true })
   }
 })
 
-test('static module: MIME resolution, SPA fallback, missing-asset 404 and path-escape 404', () => {
+test('static module: MIME resolution, SPA fallback, missing-asset 404 and path-escape 404', async () => {
   const fixture = fixtureDist()
   try {
     const serving = createStaticServing({ webDistDir: fixture.dir })
 
     // Unknown extension → octet-stream; known extension → its MIME type.
     writeFileSync(join(fixture.dir, 'app.xyz'), 'data')
-    const unknown = serveOnce(serving, fakeReq(), '/app.xyz')
+    const unknown = await serveOnce(serving, fakeReq(), '/app.xyz')
     assert.equal(unknown.status, 200)
     assert.equal(unknown.headers['content-type'], 'application/octet-stream')
-    const asset = serveOnce(serving, fakeReq(), fixture.assetUrl)
+    const asset = await serveOnce(serving, fakeReq(), fixture.assetUrl)
     assert.equal(asset.headers['content-type'], 'text/javascript; charset=utf-8')
 
     // SPA fallback serves the injected shell for an unknown HTML-ish path.
-    const fallback = serveOnce(serving, fakeReq(), '/some/unknown/route')
+    const fallback = await serveOnce(serving, fakeReq(), '/some/unknown/route')
     assert.equal(fallback.status, 200)
     assert.match(fallback.headers['content-type'] ?? '', /text\/html/)
     assert.ok(fallback.body.toString('utf8').includes('window.__DSH_BOOT__='))
 
     // Missing assets answer JSON 404, never the shell.
-    const missing = serveOnce(serving, fakeReq(), '/assets/missing-xyz.js')
+    const missing = await serveOnce(serving, fakeReq(), '/assets/missing-xyz.js')
     assert.equal(missing.status, 404)
     assert.match(missing.headers['content-type'] ?? '', /application\/json/)
     assert.ok(missing.body.toString('utf8').includes('not_found'))
 
     // A traversal path is rejected (never served from outside webDistDir).
-    const escape = serveOnce(serving, fakeReq(), '/../outside.txt')
+    const escape = await serveOnce(serving, fakeReq(), '/../outside.txt')
     assert.equal(escape.status, 404)
   } finally {
     rmSync(fixture.dir, { recursive: true, force: true })
   }
 })
 
-test('static module: __DSH_BOOT__ injection requires the CSP nonce (missing → throw)', () => {
+test('static module: __DSH_BOOT__ injection requires the CSP nonce (missing → rejection)', async () => {
   const fixture = fixtureDist()
   try {
     const serving = createStaticServing({ webDistDir: fixture.dir })
     const res = new FakeRes() as unknown as ApiResponse
     res._cspNonce = 'dsh-nonce-test'
-    serving.serve(fakeReq(), res, '/')
+    await serving.serve(fakeReq(), res, '/')
     const text = (res as unknown as FakeRes).body.toString('utf8')
     assert.match(text, /<script nonce="dsh-nonce-test">window\.__DSH_BOOT__=/)
     assert.ok(text.includes('</script></head>'), 'the injected script lands before </head>')
 
     const noNonce = new FakeRes() as unknown as ApiResponse
-    assert.throws(
-      () => serving.serve(fakeReq(), noNonce, '/'),
+    await assert.rejects(
+      serving.serve(fakeReq(), noNonce, '/'),
       /missing CSP nonce for static response/,
     )
+  } finally {
+    rmSync(fixture.dir, { recursive: true, force: true })
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Gzip cache semantics (async read/gzip + single-flight)
+// ---------------------------------------------------------------------------
+
+test('static module: gzip cache serves the previously compressed bytes while mtime+size are unchanged', async () => {
+  const fixture = fixtureDist()
+  try {
+    const target = join(fixture.dir, 'assets', 'chamber-BKQ_L1z6.js')
+    // Pin a fixed whole-ms mtime: the rewrite below must not move the
+    // path+mtime+size cache key, so only the bytes on disk change.
+    const pinned = new Date(2_000_000_000_000)
+    utimesSync(target, pinned, pinned)
+    const serving = createStaticServing({ webDistDir: fixture.dir })
+
+    const first = await serveOnce(serving, fakeReq({ 'accept-encoding': 'gzip' }), fixture.assetUrl)
+    assert.equal(first.headers['content-encoding'], 'gzip')
+    assert.deepEqual(gunzipSync(first.body), fixture.asset)
+
+    // Same byte length (same cache key) but different bytes: the cached
+    // compressed payload must still be served.
+    const replacement = Buffer.from(fixture.asset.toString('utf8').replaceAll('chamber asset', 'CHAMBER-ASSET'))
+    assert.equal(replacement.length, fixture.asset.length)
+    assert.notDeepEqual(replacement, fixture.asset)
+    writeFileSync(target, replacement)
+    utimesSync(target, pinned, pinned)
+
+    const second = await serveOnce(serving, fakeReq({ 'accept-encoding': 'gzip' }), fixture.assetUrl)
+    assert.equal(second.headers['content-encoding'], 'gzip')
+    assert.deepEqual(second.body, first.body, 'cache hit returns the previously compressed bytes')
+    assert.deepEqual(gunzipSync(second.body), fixture.asset, 'the cached bytes still decode to the pre-rewrite file')
+    assert.equal(second.headers['content-length'], String(second.body.length))
+
+    // Identity reads never touch the gzip cache and see the current file.
+    const identity = await serveOnce(serving, fakeReq(), fixture.assetUrl)
+    assert.equal(identity.headers['content-encoding'], undefined)
+    assert.deepEqual(identity.body, replacement)
+  } finally {
+    rmSync(fixture.dir, { recursive: true, force: true })
+  }
+})
+
+test('static module: gzip cache invalidates when the file mtime moves (new bytes served)', async () => {
+  const fixture = fixtureDist()
+  try {
+    const target = join(fixture.dir, 'assets', 'chamber-BKQ_L1z6.js')
+    const pinned = new Date(2_000_000_000_000)
+    utimesSync(target, pinned, pinned)
+    const serving = createStaticServing({ webDistDir: fixture.dir })
+
+    const first = await serveOnce(serving, fakeReq({ 'accept-encoding': 'gzip' }), fixture.assetUrl)
+    assert.deepEqual(gunzipSync(first.body), fixture.asset)
+
+    // Same byte length, moved mtime: the key changes, so the new bytes are
+    // read and re-compressed instead of serving the stale variant.
+    const replacement = Buffer.from(fixture.asset.toString('utf8').replaceAll('chamber asset', 'INVALIDATED!!'))
+    assert.equal(replacement.length, fixture.asset.length)
+    writeFileSync(target, replacement)
+    const moved = new Date(2_000_000_000_000 + 1000)
+    utimesSync(target, moved, moved)
+
+    const second = await serveOnce(serving, fakeReq({ 'accept-encoding': 'gzip' }), fixture.assetUrl)
+    assert.notDeepEqual(second.body, first.body, 'a new mtime must not serve the stale compressed bytes')
+    assert.deepEqual(gunzipSync(second.body), replacement)
+    assert.equal(second.headers['content-length'], String(second.body.length))
+  } finally {
+    rmSync(fixture.dir, { recursive: true, force: true })
+  }
+})
+
+test('static module: concurrent gzip misses for one file all resolve with the correct bytes', async () => {
+  const fixture = fixtureDist()
+  try {
+    const serving = createStaticServing({ webDistDir: fixture.dir })
+    // Cold cache: all eight requests enter the miss path together; the
+    // single-flight map shares one read/gzip, and every response must still
+    // carry the complete gzip variant.
+    const responses = await Promise.all(
+      Array.from({ length: 8 }, () => serveOnce(serving, fakeReq({ 'accept-encoding': 'gzip' }), fixture.assetUrl)),
+    )
+    for (const response of responses) {
+      assert.equal(response.status, 200)
+      assert.equal(response.headers['content-encoding'], 'gzip')
+      assert.equal(response.headers['content-length'], String(response.body.length))
+      assert.deepEqual(gunzipSync(response.body), fixture.asset)
+    }
+    for (const response of responses) {
+      assert.deepEqual(response.body, responses[0].body, 'one shared compression serves every concurrent miss')
+    }
   } finally {
     rmSync(fixture.dir, { recursive: true, force: true })
   }

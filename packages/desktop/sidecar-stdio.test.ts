@@ -691,7 +691,7 @@ test('S3·D2 唤醒重探叶：只连 error/degraded 非终态；idle/ready/终�
       return null
     },
   } as unknown as ReconnectSm
-  reconnectStaleTransports(sm, () => false, (message) => { warnings.push(message) })
+  reconnectStaleTransports(sm, () => false, (message) => { warnings.push(message) }, '[sidecar]')
   assert.deepEqual(connectCalls, ['err'], '只重探 error/degraded 且非终态；idle/ready/requiresUserAction 一律不碰')
   assert.equal(warnings.length, 1, '单实例 connect 抛错只 loud（degraded 的抛错已计）')
 
@@ -701,10 +701,10 @@ test('S3·D2 唤醒重探叶：只连 error/degraded 非终态；idle/ready/终�
     status: () => ({ phase: 'error', requiresUserAction: false }),
     connect: (id: string) => { quitCalls.push(id); return null },
   } as unknown as ReconnectSm
-  reconnectStaleTransports(quittingSm, () => true, () => { throw new Error('quit 在途绝不重探') })
+  reconnectStaleTransports(quittingSm, () => true, () => { throw new Error('quit 在途绝不重探') }, '[sidecar]')
   assert.deepEqual(quitCalls, [], 'quit 在途必须早退（dispose 后不得 spawn 新传输）')
 
-  assert.doesNotThrow(() => reconnectStaleTransports(null, () => false, () => { throw new Error('no-op') }))
+  assert.doesNotThrow(() => reconnectStaleTransports(null, () => false, () => { throw new Error('no-op') }, '[sidecar]'))
 })
 
 test('D1c 退出在途：入站帧以 app_quitting 拒绝 + 清理硬顶（早于宿主 SIGKILL grace）强退', async () => {
@@ -868,16 +868,22 @@ test('P-01 入站帧 >4MiB 被 loud 拒绝且不解析；会话继续服务（�
   }
 })
 
-test('P-01 跨语言锁步：TS 入站帧上限 = Swift FrameCodec.maxFrameBytes（4 MiB，按 UTF-8 字节）', () => {
-  const swiftPath = path.join(dir, '..', '..', 'macos', 'Sources', 'DSHChamber', 'FrameCodec.swift')
+test('P-01 跨语言锁步：TS 入站帧上限 = Swift BridgeLimits.maxMessageBytes（4 MiB，按 UTF-8 字节）', () => {
+  // 2026-12 Swift 单源化：4 MiB 预算单一定义在 BridgeLimits.swift，FrameCodec
+  // 的 maxFrameBytes 与 TrustGuard 的 maxMessageBytes 都是同一值的别名（注释互指
+  // 改为编译期同值）；跨语言锁步因此读单一源文件，并钉住帧上限仍是该别名。
+  const swiftPath = path.join(dir, '..', '..', 'macos', 'Sources', 'DSHChamber', 'BridgeLimits.swift')
   const swift = readFileSync(swiftPath, 'utf8')
-  const match = /public static let maxFrameBytes = ([0-9_]+) \* ([0-9_]+) \* ([0-9_]+)/.exec(swift)
-  assert.ok(match !== null, 'FrameCodec.swift 的 maxFrameBytes 拼写必须可锁步（见 CrossLanguageLockstepTests.swift）')
+  const match = /public static let maxMessageBytes = ([0-9_]+) \* ([0-9_]+) \* ([0-9_]+)/.exec(swift)
+  assert.ok(match !== null, 'BridgeLimits.swift 的 maxMessageBytes 拼写必须可锁步（见 CrossLanguageLockstepTests.swift）')
   const swiftBytes = Number(match[1]!.replaceAll('_', ''))
     * Number(match[2]!.replaceAll('_', ''))
     * Number(match[3]!.replaceAll('_', ''))
-  assert.equal(MAX_INBOUND_FRAME_BYTES, swiftBytes, 'TS 侧常量必须与 Swift FrameCodec.maxFrameBytes 逐值一致')
+  assert.equal(MAX_INBOUND_FRAME_BYTES, swiftBytes, 'TS 侧常量必须与 Swift BridgeLimits.maxMessageBytes 逐值一致')
   assert.equal(swiftBytes, 4 * 1024 * 1024, 'Swift 侧常量必须仍是 4 MiB（护栏不允许被悄悄放宽）')
+  const frameCodec = readFileSync(path.join(dir, '..', '..', 'macos', 'Sources', 'DSHChamber', 'FrameCodec.swift'), 'utf8')
+  assert.match(frameCodec, /public static let maxFrameBytes = BridgeLimits\.maxMessageBytes/,
+    'FrameCodec.maxFrameBytes 必须是 BridgeLimits 单源的别名（不得复活字面量）')
   const entry = readFileSync(sidecarPath, 'utf8')
   assert.match(entry, /lineBytes > MAX_INBOUND_FRAME_BYTES/, 'sidecar-entry 入站门必须读同一常量')
   assert.match(entry, /Buffer\.byteLength\(line, 'utf8'\)/, '门必须按 UTF-8 字节数判定（与 Swift line.utf8.count 同口径）')

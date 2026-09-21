@@ -19,7 +19,6 @@ import {
   loadUnread,
   maxWatermark,
   mergeReadMarks,
-  postUnreadRequest,
   pruneUnreadPayload,
   saveUnread,
   sendUnreadRequest,
@@ -175,36 +174,6 @@ test('client-install id: persisted id wins, absent/corrupt regenerates and persi
   }
   assert.equal(loadClientInstallId(throwing, () => 'memory-id'), 'memory-id')
   assert.match(createClientInstallId(), CLIENT_INSTALL_ID_PATTERN)
-})
-
-test('postUnreadRequest posts JSON with same-origin credentials and never throws', async () => {
-  const calls: Array<{ url: string; init: RequestInit }> = []
-  const fakeFetch = (async (url: unknown, init?: unknown) => {
-    calls.push({ url: String(url), init: (init ?? {}) as RequestInit })
-    return new Response('{}', { status: 200 })
-  }) as unknown as typeof fetch
-  postUnreadRequest(fakeFetch, '/api/i/gateway-a/chamber/session-state/read', {
-    clientId: 'c',
-    sessionId: 's',
-    readThrough: 42,
-  })
-  assert.equal(calls.length, 1)
-  assert.equal(calls[0].url, '/api/i/gateway-a/chamber/session-state/read')
-  assert.equal(calls[0].init.method, 'POST')
-  assert.equal(calls[0].init.credentials, 'same-origin')
-  assert.deepEqual(JSON.parse(String(calls[0].init.body)), { clientId: 'c', sessionId: 's', readThrough: 42 })
-  // reject 只走 onError，不产生 unhandled rejection。
-  const failing = (async () => { throw new Error('offline') }) as unknown as typeof fetch
-  let seen = false
-  postUnreadRequest(failing, '/x', {}, () => { seen = true })
-  await new Promise(resolve => setTimeout(resolve, 0))
-  assert.equal(seen, true)
-  // R22：5xx 也是失败（旧实现把 500 当成功），必须走 onError。
-  let serverError: unknown = null
-  const failing500 = (async () => new Response('{}', { status: 500 })) as unknown as typeof fetch
-  postUnreadRequest(failing500, '/x', {}, error => { serverError = error })
-  await new Promise(resolve => setTimeout(resolve, 0))
-  assert.match(String(serverError), /500/)
 })
 
 test('privacy whitelist: the serialized payload carries ids and watermarks only', () => {

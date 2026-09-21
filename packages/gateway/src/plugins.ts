@@ -39,10 +39,10 @@ import {
   assertHostSeedInsertNaming,
   atomicWritePrivateFileNoFollow,
   ensurePrivateDirectoryNoFollow,
-  readPrivateFileNoFollow,
 } from '@dsh-chamber/control-plane'
 import type { HostPackageSeedFile, Logger } from '@dsh-chamber/control-plane'
 import { HOST_DOMAIN_PROBE_NAMES } from '@dsh-chamber/dsh-runtime'
+import { readPrivateTextOrNull } from './private-read.ts'
 
 /** Cache root under the gateway stateDir. */
 export const SYNCED_PLUGIN_DIR = 'chamber-plugins'
@@ -152,12 +152,7 @@ function unsyncableMessage(name: string): string {
 
 /** Read one cache file (0600 no-follow, bounded); null when absent. */
 function readCacheFile(path: string, maxBytes: number): string | null {
-  try {
-    return readPrivateFileNoFollow(path, { tightenMode: 0o600, requiredMode: 0o600, maxBytes }).value
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-    throw error
-  }
+  return readPrivateTextOrNull(path, { tightenMode: 0o600, requiredMode: 0o600, maxBytes })
 }
 
 export function createChamberPlugins(stateDir: string, logger: Logger): ChamberPlugins {

@@ -1,11 +1,9 @@
 /**
  * React-free decision rules behind the chamber version-tolerance seams
  * (design 09 §3.3, 2026-08): the boot kernel's extra-row degrade (boot.ts
- * assertEntriesActive / runPluginBoot) and the renderer-install adoption
- * adjudication (a chamber-owned install adopting an already-installed slot
- * renderer — the rule is retained for any chamber-side install path; the rc.8
- * shell itself no longer installs the renderer, the composite-covered
- * ui-renderer row does).
+ * assertEntriesActive / runPluginBoot). The rc.8 shell no longer installs the
+ * slot renderer (the composite-covered ui-renderer row does), so the former
+ * renderer-install adoption rule was removed with its only consumer.
  *
  * Why a separate module: boot.ts cannot load under plain
  * node (DOM), but the tolerance POLICY is the load-bearing contract of
@@ -75,24 +73,4 @@ export function classifySweepEntry(
     }
   }
   return { kind: 'fatal', reason: `${name}: ${fiberLabel}` }
-}
-
-/**
- * The exact substring the runtime's boot-once renderer install throws with
- * (vendor `@deepseek-ai/dsh-client-ui-renderer/src/client/registry.ts`
- * SlotRegistry.install — "slot renderer already installed (install() is
- * boot-once)"; the SlotRegistry moved there with the v0.1.2-alpha.1 runtime
- * split). A backend dsh
- * may move the install into its OWN graph row (rc.8's `dsh-client-ui-renderer`
- * does); whichever install runs second throws this, and the tolerant reading
- * adopts the already-installed renderer (same createSlotRenderer contract).
- *
- * ANY other error is a real bug in this shell's own install and must fail the
- * boot loud — the string match is fail-safe by construction: a backend that
- * changes the message simply rethrows and boots loud instead of adopting.
- */
-const RENDERER_ALREADY_INSTALLED = 'slot renderer already installed'
-
-export function classifyRendererInstallError(error: unknown): 'adopt' | 'fatal' {
-  return error instanceof Error && error.message.includes(RENDERER_ALREADY_INSTALLED) ? 'adopt' : 'fatal'
 }

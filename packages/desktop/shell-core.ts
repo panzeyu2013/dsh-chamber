@@ -63,8 +63,8 @@
  *   syncNotificationSourceRegistry / clearBadgeIntentForQuit）——逐条迁移决策
  *   见「Renderer delivery state machines」段注释。
  *  Responsibilities relocated from main.ts (W-10 S3 registry+credentials batch):
- *  - C 组 7 个注册体：SSH_INSTANCES_GET / SSH_SAVE_CONNECTION /
- *    SSH_DELETE_CONNECTION / SSH_INSTANCES_SET / SSH_SET_PASSWORD /
+ *  - C 组 6 个注册体：SSH_INSTANCES_GET / SSH_SAVE_CONNECTION /
+ *    SSH_DELETE_CONNECTION / SSH_SET_PASSWORD /
  *    GATEWAY_SET_TOKEN / GATEWAY_SET_PASSWORD——按原 main.ts 顺序追加在 B 组
  *    之后（installIpcHandlers ② 段）；随迁注册体侧纯辅助（gatewayOriginFor /
  *    normalizeConnectionInput）与 registry 非秘密投影链（projectInstances /
@@ -234,10 +234,12 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs';
+import { describeError } from './describe-error.ts'
 import path from 'node:path';
 import type { ChamberHostPackageDescriptor } from './control-plane-module.ts';
 import { findFreePort } from './free-port.ts';
 import { computeSupported, validatePatch } from './chamber-settings.ts';
+import { createKeyedMemo, lockfileIdentityKey } from './lockfile-facts-memo.ts';
 import type { ChamberSettings, ChamberSettingsStatus } from './chamber-settings.ts';
 import { DEFAULT_CHAMBER_SETTINGS } from './chamber-settings.ts';
 import {
@@ -249,7 +251,6 @@ import {
 import {
   deleteConnectionTransaction,
   saveConnectionTransaction,
-  validateDeleteOnlyReplacement,
   type ConnectionCredentialMutations,
 } from './connection-save.ts';
 import { IPC_CHANNELS } from './ipc-events.ts';
@@ -1487,9 +1488,9 @@ export function runRuntimeCheckCycle(): void {
 //     在此注册——held-resume 补发语义随迁 core，见上段状态机）；
 //   ② A 组 3 个注册体（S1 批）+ B 组 6 个注册体（S2 批：NOTIFY /
 //     NOTIFICATIONS_READY / NOTIFICATION_OPEN_ACK / BADGE_COUNT /
-//     DEEP_LINK_READY / DEEP_LINK_ACK——按原 main.ts 顺序追加）+ C 组 7 个
+//     DEEP_LINK_READY / DEEP_LINK_ACK——按原 main.ts 顺序追加）+ C 组 6 个
 //     注册体（S3 批：SSH_INSTANCES_GET / SSH_SAVE_CONNECTION /
-//     SSH_DELETE_CONNECTION / SSH_INSTANCES_SET / SSH_SET_PASSWORD /
+//     SSH_DELETE_CONNECTION / SSH_SET_PASSWORD /
 //     GATEWAY_SET_TOKEN / GATEWAY_SET_PASSWORD——按原 main.ts 顺序追加在 B 组
 //     之后；全零 Electron：事务/canonicalize/凭据写入口为纯模块直接 import，
 //     装配依赖经 ctx——transportManager/audit/gatewaySessions/
@@ -2238,7 +2239,7 @@ export function installIpcHandlers(deps: {
       ...DEFAULT_CHAMBER_SETTINGS.notifications,
       ...(settingsIO.current().notifications ?? {}),
     };
-    // 搬迁差异注记：原 readNotificationHostBoolean 区分「探测异常（拒发）」与
+    // 搬迁差异注记：搬迁前的 host-probe boolean 适配区分「探测异常（拒发）」与
     // 「未聚焦」；接缝下 isFocused 由实现侧保证异常安全恒 boolean（单窗守卫内
     // isVisible/isFocused 探测不可达异常），两态同值——有意收敛，注释于
     // electron-edges isFocused。
@@ -2451,8 +2452,7 @@ export function installIpcHandlers(deps: {
    * they can never cross IPC. connection-save.ts stops the old live
    * transport, writes binding-guarded secrets, writes metadata last, and
    * restores every store plus metadata on any ordinary failure. Exact-id
-   * deletion has its own transaction/channel; legacy instances_set below
-   * accepts only an unchanged no-op roster.
+   * deletion has its own transaction/channel.
    */
   deps.ipc.handle(IPC_CHANNELS.SSH_SAVE_CONNECTION, (payload: unknown) => {
     const before = sm.listInstances();
@@ -2539,7 +2539,7 @@ export function installIpcHandlers(deps: {
     const result = saveConnectionTransaction({
       listInstances: () => sm.listInstances(),
       normalize: normalizeConnectionInput,
-      saveInstances: instances => sm.saveInstances(instances),
+      saveInstances: sm.saveInstances,
       getSshPassword,
       getGatewayToken,
       getGatewayPassword,
@@ -2601,7 +2601,7 @@ export function installIpcHandlers(deps: {
     }
     const result = deleteConnectionTransaction({
       listInstances: () => sm.listInstances(),
-      saveInstances: next => sm.saveInstances(next),
+      saveInstances: sm.saveInstances,
       getSshPassword,
       getGatewayToken,
       getGatewayPassword,
@@ -2637,23 +2637,6 @@ export function installIpcHandlers(deps: {
         : projectInstances(result.instances);
     }
     return publishRegistryTransition(before, result.instances);
-  });
-  deps.ipc.handle(IPC_CHANNELS.SSH_INSTANCES_SET, (payload: unknown) => {
-    const instances = payload;
-    if (!Array.isArray(instances)) {
-      console.warn('[dsh-chamber] desktop_ssh_instances_set: non-array input refused');
-      return projectInstances(sm.listInstances());
-    }
-    const before = sm.listInstances();
-    // Compatibility channel is exact no-op only. Full-roster deletion is a
-    // stale read-modify-write primitive (delete A + concurrent add C could
-    // accidentally delete C); production deletion is id-addressed through
-    // desktop_ssh_delete_connection, while add/edit use save_connection.
-    const normalized = validateDeleteOnlyReplacement(before, instances, normalizeConnectionInput);
-    if (normalized === null) {
-      console.warn('[dsh-chamber] desktop_ssh_instances_set: only an exact unchanged no-op roster is allowed');
-    }
-    return projectInstances(before);
   });
   // Legacy explicit SSH-password CLEAR action. Non-empty writes are owned
   // exclusively by desktop_ssh_save_connection so metadata + all credential
@@ -2691,7 +2674,7 @@ export function installIpcHandlers(deps: {
       }
       return { ok: true };
     } catch (error) {
-      return { error: error instanceof Error ? error.message : String(error) };
+      return { error: describeError(error) };
     }
   });
   // Legacy explicit gateway-token CLEAR action. Non-empty writes use the
@@ -2729,7 +2712,7 @@ export function installIpcHandlers(deps: {
       }
       return { ok: true };
     } catch (error) {
-      return { error: error instanceof Error ? error.message : String(error) };
+      return { error: describeError(error) };
     }
   });
   // Legacy explicit gateway-password CLEAR action. It also invalidates the
@@ -2895,6 +2878,11 @@ export function installIpcHandlers(deps: {
    *  source-line vendor tree), the effective runtime version, and whether the
    *  profile manifest already exists (absent ⇒ the write face defers — the
    *  first install is what creates it). */
+  /** One-entry memo for the lockfile-derived family facts (see memoKey). */
+  const familyFactsMemo = createKeyedMemo<{
+    names: readonly string[] | null;
+    versions: PluginProtectionFacts['familyVersions'];
+  }>();
   const localProtectionFacts = (): PluginProtectionFacts => {
     const resolved = resolveActiveRuntime(runtimeBaseDir, builtinDshWorkspacePath);
     let familyNames: readonly string[] | null = null;
@@ -2904,7 +2892,8 @@ export function installIpcHandlers(deps: {
     // package (which keeps its upstream version, never the generation string)
     // is judged on its own scale. Absent key = no version fact ⇒ generation arm.
     let familyVersions: PluginProtectionFacts['familyVersions'] = null;
-    if (resolved.path !== null) {
+    const activePath = resolved.path;
+    if (activePath !== null) {
       // The built-in anchor describes the BUILT-IN runtime line only. A
       // user-selected runtime (design 18 §3.6) — or an env-provided tree — is
       // another line whose own lockfile is the right fact source; handing it
@@ -2914,22 +2903,41 @@ export function installIpcHandlers(deps: {
       // the trust criterion.
       const usePinned = shouldPreferPinnedRuntimeLockfile(resolved.version, bundledVersion);
       const pinnedPath = pinnedRuntimeLockfilePath();
-      let family = resolveRuntimeFamily(resolved.path, {
-        pinnedLockfilePath: usePinned ? pinnedPath : null,
+      // 2026-12 stage-2 (item 7): this function runs on every local plugin IPC
+      // read/judgement and used to re-parse the up-to-512 KiB lockfile each
+      // time. The family resolution is memoized by the full input identity —
+      // active tree + version + source, pin selection, and the mtime+size of
+      // BOTH candidate lockfiles — so any file change (or runtime switch)
+      // reloads while a hot read pays one stat pair. profileState below is
+      // deliberately NOT memoized: the first install creates the profile
+      // manifest.
+      const memoKey = [
+        activePath, resolved.version ?? '', resolved.source ?? '',
+        usePinned ? 'pinned' : 'tree', bundledVersion ?? '', pinnedPath ?? '',
+        lockfileIdentityKey([pinnedPath ?? '', path.join(activePath, 'pnpm-lock.yaml')]),
+      ].join('|');
+      const family = familyFactsMemo.read(memoKey, () => {
+        let resolvedFamily = resolveRuntimeFamily(activePath, {
+          pinnedLockfilePath: usePinned ? pinnedPath : null,
+        });
+        // A dev/env tree (DSH_CHAMBER_DSH_PATH) at another generation normally
+        // carries a source-line lockfile (opt-in segment ⇒ refused) and a
+        // source-line tree (forbidden names ⇒ refused), so it would resolve to
+        // NO family facts and degrade the write face to "official installs
+        // refused". For an explicit developer override the built-in anchor is
+        // still the closest usable source; a user-SELECTED released runtime
+        // never gets this stand-in (that is exactly the cross-line misjudgement
+        // this gate fixes).
+        if (!resolvedFamily.ok && !usePinned && resolved.source === 'env') {
+          resolvedFamily = resolveRuntimeFamily(activePath, { pinnedLockfilePath: pinnedPath });
+        }
+        return {
+          names: resolvedFamily.ok ? resolvedFamily.names : null,
+          versions: resolvedFamily.ok ? resolvedFamily.versions : null,
+        };
       });
-      // A dev/env tree (DSH_CHAMBER_DSH_PATH) at another generation normally
-      // carries a source-line lockfile (opt-in segment ⇒ refused) and a
-      // source-line tree (forbidden names ⇒ refused), so it would resolve to
-      // NO family facts and degrade the write face to "official installs
-      // refused". For an explicit developer override the built-in anchor is
-      // still the closest usable source; a user-SELECTED released runtime
-      // never gets this stand-in (that is exactly the cross-line misjudgement
-      // this gate fixes).
-      if (!family.ok && !usePinned && resolved.source === 'env') {
-        family = resolveRuntimeFamily(resolved.path, { pinnedLockfilePath: pinnedPath });
-      }
-      familyNames = family.ok ? family.names : null;
-      familyVersions = family.ok ? family.versions : null;
+      familyNames = family.names;
+      familyVersions = family.versions;
     }
     const profileManifest = path.join(localDshHome, 'profiles', WEB_PROFILE, 'package.json');
     return {
@@ -3987,7 +3995,7 @@ export function installIpcHandlers(deps: {
       return true;
     } catch (error) {
       console.error(
-        `[dsh-chamber] 打开通知设置失败：${error instanceof Error ? error.message : String(error)}`,
+        `[dsh-chamber] 打开通知设置失败：${describeError(error)}`,
       );
       return false;
     }
@@ -4142,7 +4150,7 @@ export function installIpcHandlers(deps: {
       }
       return runtimeInstance.getState();
     } catch (error) {
-      const message = sanitizeErrorText(error instanceof Error ? error.message : String(error));
+      const message = sanitizeErrorText(describeError(error));
       console.warn('[dsh-chamber] restart dsh failed:', message);
       // Honest failure (design 18 §3.6 项 8): reject so the renderer shows
       // the failure line instead of silently resolving.
@@ -4271,7 +4279,7 @@ export function installIpcHandlers(deps: {
     try {
       clearRuntimeFailure(runtimeBaseDir, requestedVersion);
     } catch (error) {
-      const message = sanitizeErrorText(error instanceof Error ? error.message : String(error));
+      const message = sanitizeErrorText(describeError(error));
       console.warn('[dsh-chamber] clear runtime failure scene failed:', message);
       throw new Error(message);
     }
@@ -4381,7 +4389,7 @@ export function installIpcHandlers(deps: {
         });
       } catch (error) {
         runtimeInstance.setLifecycle({
-          error: sanitizeErrorText(`无法排队恢复内建事务：${error instanceof Error ? error.message : String(error)}`),
+          error: sanitizeErrorText(`无法排队恢复内建事务：${describeError(error)}`),
         });
         return runtimeInstance.getState();
       }
@@ -4409,7 +4417,7 @@ export function installIpcHandlers(deps: {
         intentKind: 'reset-builtin',
       });
     } catch (error) {
-      await publishBlockedStartup(`无法持久化恢复内建事务：${error instanceof Error ? error.message : String(error)}`);
+      await publishBlockedStartup(`无法持久化恢复内建事务：${describeError(error)}`);
       return runtimeInstance.getState();
     }
     await runRuntimeStartup();
@@ -4525,7 +4533,7 @@ export function installIpcHandlers(deps: {
       await stopLocalDsh().catch(() => undefined);
       // Recorded, not hard-blocked: the startup transaction below restarts
       // the instance (a thrown transaction leaves a resumeable marker).
-      restoreResult.error = sanitizeErrorText(error instanceof Error ? error.message : String(error));
+      restoreResult.error = sanitizeErrorText(describeError(error));
       return null;
     }).finally(() => {
       runtimeOperationSlot.end();

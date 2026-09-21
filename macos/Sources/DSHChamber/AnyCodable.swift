@@ -9,17 +9,18 @@
 //   - MessageHandler 经 `fromJSONObject(_:)` 单遍转换 web 侧对象（Phase 1 C2；
 //     旧的 JSONSerialization + JSONDecoder 往返已删除），深度上限见下；
 //   - MainWindowController 经 `jsonLiteralText` 单遍写出页面 JS 字面量
-//     （Phase 2 C7）。`jsonObject` 仍保留为 JSONSerialization 可写投影，供
-//     测试/诊断与兼容使用，但**不再位于页面热路径**。
+//     （Phase 2 C7）。旧的 `jsonObject`（JSONSerialization 可写投影）生产零
+//     消费点、只服务测试与诊断，2026-12 审计删除；测试侧保留等价的 legacy
+//     基线辅助（AnyCodableTests.legacyJSONObject）。
 //
 // 存储取舍（与 MessageHandler.swift 的 case 契约对应，勿擅改）：
 //   - 数值一律以 Double 承载：JSONDecoder 可无损还原 ≤ 2^53 的整数与常规
 //     小数；> 2^53 的整数文本在 JSON 文本 → Double 阶段按 IEEE754 就近取整
 //     （与 JS JSON.parse 的双精度行为同族；POC 载荷无此量级，声明为已知
 //     边界——id 等整数域字段绝不放入 .number 走 Double）。
-//   - `jsonObject` 对整值 Double 还原为 NSNumber(int64) 形态（JSONSerialization
-//     因此输出整数文本而非 “3.0”），非整值给 NSNumber(double)——NSNumber 桥接
-//     取舍：统一经 NSNumber 让 JSONSerialization/ObjC 面零歧义。
+//   - 整值 Double 的文本形态：`jsonLiteralText` 直出整数（3.0 → “3”、-0.0 → “0”）；
+//     B 桥出帧走 JSONEncoder（Double 编码）。NSNumber/JSONSerialization 老口径
+//     已随 `jsonObject` 的删除退出生产面，其语义只由测试的 legacy 基线维持。
 //   - Bool 判别纪律（fromJSONObject）：实测 NSNumber(1) as? Bool 也会成功
 //     （Swift 动态转换不区分数值 NSNumber 与布尔桥接），因此一律先经
 //     CFTypeID 判定（CFBoolean vs CFNumber，CFNull/CFString/CFArray/
@@ -97,37 +98,6 @@ public enum AnyCodable: Codable, Equatable {
         }
     }
 
-    // MARK: - 规范 JSON 对象（JSONSerialization 可写形态）
-
-    /// 规范 JSON 值：NSNull / Bool / NSNumber / String / [Any] / [String: Any]。
-    /// 供测试/诊断与 JSONSerialization 兼容消费；**页面热路径已改走
-    /// `jsonLiteralText`**（Phase 2 C7，免掉这棵树的深拷贝）。来自解码的
-    /// AnyCodable 不含 NaN/Infinity 等非 JSON 值。
-    public var jsonObject: Any {
-        switch self {
-        case .null:
-            return NSNull()
-        case .bool(let value):
-            return value
-        case .number(let value):
-            // 整值 Double（含 -0.0）→ NSNumber(int64)，让 JSONSerialization
-            // 输出整数形态文本；非整值 / 超出 Int64 域 → NSNumber(double)。
-            // 取舍：Int64(exactly:) 对域内整值恒成功（运行时值，非编译期
-            // 常量折叠），域外返回 nil 自然落到 double 形态。
-            if value.isFinite, value == value.rounded(),
-               let integer = Int64(exactly: value) {
-                return NSNumber(value: integer)
-            }
-            return NSNumber(value: value)
-        case .string(let value):
-            return value
-        case .array(let values):
-            return values.map { $0.jsonObject }
-        case .object(let entries):
-            return entries.mapValues { $0.jsonObject }
-        }
-    }
-
     // MARK: - 单遍 JS 字面量（Phase 2 C7）
 
     /// 直接写出 JSON 文本：单遍、无中间对象树。页面字面量出口
@@ -138,7 +108,7 @@ public enum AnyCodable: Codable, Equatable {
     /// JSONEncoder 1360–1393ms——既避免深拷贝的内存峰值，也是三者中最快的
     /// （JSONEncoder 在深层嵌套的 AnyCodable 上反而退化约 2.1×，故不再使用）。
     ///
-    /// 契约（AnyCodableTests 钉住，并与旧路径做解析后语义等价断言）：
+    /// 契约（AnyCodableTests 钉住；测试侧以 legacy 基线辅助做解析后语义等价断言）：
     ///   - 数字：整值且 Int64 可表示 → 整数文本（与旧行为一致）；0 / -0.0 → "0"
     ///     （旧 jsonObject 的 Int64(exactly:) 折叠同样丢符号）；其余 → Swift 最短
     ///     往返表示（JS 求值后 Number 相同）；非有限 → "null"（旧路径会让
@@ -326,10 +296,11 @@ public enum AnyCodable: Codable, Equatable {
 
     // MARK: - 桥接对象 → AnyCodable
 
-    /// JSON 嵌套深度上限（Phase 1 C2）：与 MessageHandler.maxJSONDepth 同值，
-    /// 由 AnyCodableTests 的 lockstep 断言钉住。**本文件不 import
-    /// MessageHandler**——AnyCodable 是 A/B 桥共享的载荷模型，反向依赖 A 桥
-    /// 文件会造成耦合（同 FrameCodec 自带同值常量的纪律，见 FrameCodec.swift）。
+    /// JSON 嵌套深度上限（Phase 1 C2）：A 桥围栏（MessageHandler.fence ⑤）与 B
+    /// 桥解码共用本函数的 `maxDepth`，故深度门是**本常量单源**（原
+    /// MessageHandler.maxJSONDepth 与锁步断言已随 fence 预扫描的删除一并移除）。
+    /// **本文件不 import MessageHandler**——AnyCodable 是 A/B 桥共享的载荷模型，
+    /// 反向依赖 A 桥文件会造成耦合。
     public static let maxJSONDepth = 512
 
     /// 把 [String: Any] / [Any] / 基础类型（Bool/Int/Double/String 等）/
@@ -342,8 +313,8 @@ public enum AnyCodable: Codable, Equatable {
     /// as? 混淆（NSNumber(1) as? Bool == true）与 NSNumber/Int/Double 的
     /// 双向可转换性，所有数值一律落到 .number(doubleValue)。
     ///
-    /// 深度：与 MessageHandler.isJSONSerializableValue 同规——根为 0，超过
-    /// maxDepth 立即失败（防 <4MiB 的极深嵌套在递归转换中击穿 Swift 栈）。
+    /// 深度：根为 0，超过 maxDepth 立即失败（防 <4MiB 的极深嵌套在递归转换中
+    /// 击穿 Swift 栈；A 桥唯一深度门 = 本函数的 maxDepth，见 MessageHandler.fence ⑤）。
     public static func fromJSONObject(_ value: Any,
                                       maxDepth: Int = AnyCodable.maxJSONDepth,
                                       depth: Int = 0) -> AnyCodable? {

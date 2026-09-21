@@ -329,3 +329,24 @@ test('integration: the tombstone also hides a pending creation row (create → a
     'an archived creation must not survive through its own echo (the App also retires that entry)')
 })
 
+test('ledger plumbing: a TTL sweep never releases a tombstone early and preserves identity when nothing changes', () => {
+  const base: SessionArchiveLedger = { 'ssh-a': [{ sessionId: 'a', at: 100 }, { sessionId: 'b', at: 900 }] }
+  // Identity discipline: a sweep that expires nothing returns the SAME ledger
+  // and the same row array (the App's publish signature depends on it).
+  const intact = sweepPendingArchives(base, 100 + PENDING_ARCHIVE_TTL_MS - 1)
+  assert.equal(intact, base)
+  assert.equal(intact['ssh-a'], base['ssh-a'])
+  // One tick later only the expired row goes; the live tombstone stays suppressed.
+  const swept = sweepPendingArchives(base, 100 + PENDING_ARCHIVE_TTL_MS)
+  assert.deepEqual(swept, { 'ssh-a': [{ sessionId: 'b', at: 900 }] })
+  assert.notEqual(swept, base)
+  // A whole-source expiry removes the key — never an empty-array tombstone slot.
+  assert.deepEqual(sweepPendingArchives(base, 900 + PENDING_ARCHIVE_TTL_MS), {})
+  // Filter/forget identity: nothing covered / nothing retired => the same ledger.
+  assert.equal(reconcilePendingArchives(base, 'ssh-a', []), base)
+  // A covered tombstone retires (the authoritative set takes over), and the
+  // emptied source key disappears instead of lingering as an empty array.
+  assert.deepEqual(reconcilePendingArchives(base, 'ssh-a', ['a', 'b']), {})
+  assert.equal(forgetPendingArchives(base, new Set()), base)
+})
+

@@ -7,9 +7,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  BundleLoadTimeoutError, cachedSourceClientGraph, clientPluginRowLoaded, clientPluginRowOwner, clientRowSignatures,
-  dedupeCoveredRows, loadClientPluginRows, notePluginMounted, notePluginUnmounted, publishSourceClientGraph,
-  resetClientPluginLoaderState, retireSourceClientGraph,
+  BundleLoadTimeoutError, clientPluginRowOwner,
+  dedupeCoveredRows, loadClientPluginRows,
+  resetClientPluginLoaderState,
 } from '../../src/shared/client-plugin-loader.ts';
 
 const row = (id: string, rev = 'r1', url = `/plugins/??${id}/client.js&rev=${rev}`) => ({ id, url, rev });
@@ -45,7 +45,6 @@ test('loadClientPluginRows: first-load-wins — same id+rev reuses across source
   assert.equal(version[0]?.state === 'rev-conflict' ? version[0].conflict : '', 'version');
   assert.equal(loaded.length, 1, 'the loaded factory is never re-executed');
   assert.equal(clientPluginRowOwner('@scope/plugin'), 'local');
-  assert.equal(clientPluginRowLoaded('@scope/plugin'), true);
 });
 
 test('loadClientPluginRows: an ordinary failure is deferred in the boot pass, thrown in the recovery pass, and stays retryable', async () => {
@@ -108,35 +107,4 @@ test('dedupeCoveredRows: drops covered ids, keeps the rest in order', () => {
   const rows = [row('a'), row('covered'), row('b')];
   assert.deepEqual(dedupeCoveredRows(rows, ['covered']).map(entry => entry.id), ['a', 'b']);
   assert.deepEqual(dedupeCoveredRows(rows, []), rows);
-});
-
-test('clientRowSignatures: id set drives rebuilds, rev set reports drift', () => {
-  const base = clientRowSignatures([row('a', 'r1'), row('b', 'r2')]);
-  const rebuilt = clientRowSignatures([row('a', 'r1'), row('b', 'r9')]);
-  const installed = clientRowSignatures([row('a', 'r1'), row('b', 'r2'), row('c', 'r3')]);
-  assert.equal(base.idSet, rebuilt.idSet);
-  assert.notEqual(base.revSet, rebuilt.revSet);
-  assert.notEqual(base.idSet, installed.idSet);
-});
-
-test('source graph cache: reuses only the same incarnation and can be retired', () => {
-  resetClientPluginLoaderState();
-  publishSourceClientGraph('ssh-1', { sourceFingerprint: 'fp-1', rows: [row('a')] });
-  assert.deepEqual(cachedSourceClientGraph('ssh-1', 'fp-1')?.rows.map(entry => entry.id), ['a']);
-  assert.equal(cachedSourceClientGraph('ssh-1', 'fp-2'), undefined, 'a replaced incarnation never serves old rows');
-  assert.equal(cachedSourceClientGraph('ssh-2', 'fp-1'), undefined);
-  retireSourceClientGraph('ssh-1');
-  assert.equal(cachedSourceClientGraph('ssh-1', 'fp-1'), undefined);
-});
-
-test('cross-source mount facts: the second source learns it shares the module instance', () => {
-  resetClientPluginLoaderState();
-  assert.deepEqual(notePluginMounted('@scope/shared', 'local'), []);
-  assert.deepEqual(notePluginMounted('@scope/shared', 'ssh-b'), ['local']);
-  assert.deepEqual(notePluginMounted('@scope/shared', 'ssh-b'), ['local'], 'idempotent per source');
-  notePluginUnmounted('@scope/shared', 'local');
-  assert.deepEqual(notePluginMounted('@scope/shared', 'ssh-c'), ['ssh-b']);
-  notePluginUnmounted('@scope/shared', 'ssh-b');
-  notePluginUnmounted('@scope/shared', 'ssh-c');
-  assert.deepEqual(notePluginMounted('@scope/shared', 'local'), []);
 });

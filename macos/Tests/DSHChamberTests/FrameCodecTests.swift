@@ -6,63 +6,74 @@ import XCTest
 @testable import DSHChamber
 
 final class FrameCodecTests: XCTestCase {
+    /// 测试侧行解码：生产侧 `decodeLine(_:)` 只有测试使用，2026-12
+    /// 审计删除；生产入站解析是 BridgeClient.handleIncomingLine（Data 直入，
+    /// BridgeClientLineReadTests 覆盖）。本 helper 逐字保留原实现的语义
+    /// （超长短路 → UTF-8 解析 → classify），使下列分类/容忍断言原样成立。
+    private func decodeLine(_ line: String) -> BridgeFrame? {
+        guard !FrameCodec.isLineTooLong(line),
+              let data = line.data(using: .utf8),
+              let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+            return nil
+        }
+        return FrameCodec.classify(jsonObject: object)
+    }
+
     func testEncodeDecodeRequestRoundtrip() throws {
-        let frame = BridgeFrame.request(id: 7, method: "desktop_ssh_connect",
-                                        payload: .object(["instanceId": .string("local")]))
-        let data = try FrameCodec.encode(frame)
+        let payload: AnyCodable = .object(["instanceId": .string("local")])
+        let data = try FrameCodec.encodeRequest(id: 7, method: "desktop_ssh_connect",
+                                                payload: payload)
         let line = String(data: data, encoding: .utf8)!
         XCTAssertTrue(line.hasSuffix("\n"))
         XCTAssertTrue(line.hasPrefix("{"))
         // JSONEncoder 字典键序不保证——语义断言而非字节断言
         guard case .request(id: 7, method: "desktop_ssh_connect", payload: .object(let obj))? =
-            FrameCodec.decodeLine(line) else {
+            decodeLine(line) else {
             return XCTFail("request 帧未能往返解码")
         }
         XCTAssertEqual(obj["instanceId"], .string("local"))
     }
 
-    func testEncodeDecodeResponseOkAndError() throws {
-        let okFrame = BridgeFrame.response(id: 1, ok: true, result: .array([.number(1), .bool(true)]), error: nil)
-        let okData = try FrameCodec.encode(okFrame)
-        XCTAssertEqual(FrameCodec.decodeLine(String(data: okData, encoding: .utf8)!), okFrame)
-
-        let errFrame = BridgeFrame.response(id: 2, ok: false, result: nil, error: "poc-unimplemented")
-        let errData = try FrameCodec.encode(errFrame)
-        XCTAssertEqual(FrameCodec.decodeLine(String(data: errData, encoding: .utf8)!), errFrame)
+    /// response/event 的编码分支已随 2026-12 审计删除（生产只发 request）；
+    /// 解码面保留：sidecar 的 ok/error 响应帧必须仍可分类（id 族优先）。
+    func testDecodeResponseOkAndError() {
+        XCTAssertEqual(decodeLine(#"{"id":1,"ok":true,"result":[1,true]}"#),
+                       .response(id: 1, ok: true, result: .array([.number(1), .bool(true)]),
+                                 error: nil))
+        XCTAssertEqual(decodeLine(#"{"id":2,"ok":false,"error":"poc-unimplemented"}"#),
+                       .response(id: 2, ok: false, result: nil, error: "poc-unimplemented"))
     }
 
-    func testEncodeDecodeEventWithNullPayload() throws {
-        let frame = BridgeFrame.event(event: "desktop_ssh_status_changed", payload: nil)
-        let data = try FrameCodec.encode(frame)
-        guard case .event(event: "desktop_ssh_status_changed", payload: nil)? =
-            FrameCodec.decodeLine(String(data: data, encoding: .utf8)!) else {
-            return XCTFail("event 帧未能往返解码")
-        }
+    func testEncodeRequestWithNullPayload() throws {
+        // 缺省载荷 → 线格式 payload:null；分类侧折叠回 nil（协议两侧同语义）。
+        let data = try FrameCodec.encodeRequest(id: 3, method: "desktop_ssh_status_changed",
+                                                payload: nil)
+        XCTAssertEqual(decodeLine(String(data: data, encoding: .utf8)!),
+                       .request(id: 3, method: "desktop_ssh_status_changed", payload: nil))
     }
 
     func testUnicodeAndNewlinePayloadSafe() throws {
         let text = "多行\n中文 \u{1F680} \"quoted\""
-        let frame = BridgeFrame.event(event: "e", payload: .string(text))
-        let data = try FrameCodec.encode(frame)
-        let decoded = FrameCodec.decodeLine(String(data: data, encoding: .utf8)!)
-        XCTAssertEqual(decoded, frame)
+        let data = try FrameCodec.encodeRequest(id: 9, method: "e", payload: .string(text))
+        XCTAssertEqual(decodeLine(String(data: data, encoding: .utf8)!),
+                       .request(id: 9, method: "e", payload: .string(text)))
     }
 
     func testMalformedLinesReturnNil() {
-        XCTAssertNil(FrameCodec.decodeLine(""))
-        XCTAssertNil(FrameCodec.decodeLine("not json"))
-        XCTAssertNil(FrameCodec.decodeLine(#"{"id":1}"#))          // 无 method/ok/event
-        XCTAssertNil(FrameCodec.decodeLine(#"{"method":"x"}"#))     // 无 id（request/response 需 id）
-        XCTAssertNil(FrameCodec.decodeLine(#"{"id":1,"event":2}"#)) // event 名非字符串
-        XCTAssertNil(FrameCodec.decodeLine(#"{"id":"1","ok":true}"#)) // id 非 Int
-        XCTAssertNil(FrameCodec.decodeLine(#"{"id":1,"ok":"yes"}"#))  // ok 非 Bool
+        XCTAssertNil(decodeLine(""))
+        XCTAssertNil(decodeLine("not json"))
+        XCTAssertNil(decodeLine(#"{"id":1}"#))          // 无 method/ok/event
+        XCTAssertNil(decodeLine(#"{"method":"x"}"#))     // 无 id（request/response 需 id）
+        XCTAssertNil(decodeLine(#"{"id":1,"event":2}"#)) // event 名非字符串
+        XCTAssertNil(decodeLine(#"{"id":"1","ok":true}"#)) // id 非 Int
+        XCTAssertNil(decodeLine(#"{"id":1,"ok":"yes"}"#))  // ok 非 Bool
     }
 
     func testResponseWithoutResultDecodes() {
         // 容忍语义：ok:true 无 result → result nil（协议注释：容忍缺省字段）
         let line = #"{"id":3,"ok":true}"#
         guard case .response(id: 3, ok: true, result: nil, error: nil)? =
-            FrameCodec.decodeLine(line) else {
+            decodeLine(line) else {
             return XCTFail("缺省 result 的 ok 帧应可解码")
         }
     }
@@ -96,8 +107,8 @@ final class FrameCodecTests: XCTestCase {
             jsonObject: ["id": 1, "method": "m", "event": "e", "edge": "x"]) else {
             return XCTFail("id+method 必须优先分类为 request")
         }
-        XCTAssertNil(FrameCodec.decodeLine(#"{"edge":"e","edgeId":1,"payload":null}"#))
-        XCTAssertNil(FrameCodec.decodeLine(#"{"notify":"ready","payload":null}"#))
+        XCTAssertNil(decodeLine(#"{"edge":"e","edgeId":1,"payload":null}"#))
+        XCTAssertNil(decodeLine(#"{"notify":"ready","payload":null}"#))
     }
 
     /// 独立差分审查（A）发现的极值边界：JSONSerialization 丢失原始 token 后与旧
@@ -122,25 +133,25 @@ final class FrameCodecTests: XCTestCase {
     /// 变宽松）、整数写法 -0 变 .number(0)（AnyCodable == 相等、页面文本都是 "0"）。
     func testClassifyNumberTokenEdgeCases() {
         guard case .event(event: "e", payload: .array(let underflow))? =
-            FrameCodec.decodeLine(#"{"event":"e","payload":[1e-400]}"#) else {
+            decodeLine(#"{"event":"e","payload":[1e-400]}"#) else {
             return XCTFail("下溢指数应折叠为 0 并被接受")
         }
         XCTAssertEqual(underflow, [.number(0)])
-        XCTAssertNil(FrameCodec.decodeLine(#"{"event":"e","payload":[1e-1000]}"#),
+        XCTAssertNil(decodeLine(#"{"event":"e","payload":[1e-1000]}"#),
                      "JSONSerialization 无法表示的数字整帧丢弃（与旧一致）")
-        XCTAssertEqual(FrameCodec.decodeLine(#"{"event":"e","payload":[-0]}"#),
+        XCTAssertEqual(decodeLine(#"{"event":"e","payload":[-0]}"#),
                        .event(event: "e", payload: .array([.number(0)])))
     }
 
     func testClassificationPrecedence() {
         // 确定性分类：request(id+method) > response(id+ok) > event(无 id)
-        XCTAssertNotNil(FrameCodec.decodeLine(#"{"id":1,"method":"m","ok":true}"#))
-        guard case .request? = FrameCodec.decodeLine(#"{"id":1,"method":"m","ok":true}"#) else {
+        XCTAssertNotNil(decodeLine(#"{"id":1,"method":"m","ok":true}"#))
+        guard case .request? = decodeLine(#"{"id":1,"method":"m","ok":true}"#) else {
             return XCTFail("id+method 应分类为 request")
         }
         // 未知键容忍：event 帧混入 ok 键仍按 event 解码（实现按"无 id"归类）
         guard case .event(event: "e", payload: nil)? =
-            FrameCodec.decodeLine(#"{"event":"e","ok":true}"#) else {
+            decodeLine(#"{"event":"e","ok":true}"#) else {
             return XCTFail("无 id + event 应分类为 event（未知键容忍）")
         }
     }
@@ -150,8 +161,8 @@ final class FrameCodecTests: XCTestCase {
         XCTAssertTrue(FrameCodec.isLineTooLong(String(repeating: "a", count: FrameCodec.maxFrameBytes + 1)))
     }
 
-    func testEncodeOversizeThrows() throws {
+    func testEncodeRequestOversizeThrows() {
         let big = String(repeating: "x", count: FrameCodec.maxFrameBytes)
-        XCTAssertThrowsError(try FrameCodec.encode(.event(event: "e", payload: .string(big))))
+        XCTAssertThrowsError(try FrameCodec.encodeRequest(id: 1, method: "e", payload: .string(big)))
     }
 }

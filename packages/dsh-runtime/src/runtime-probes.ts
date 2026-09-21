@@ -37,8 +37,8 @@
  * test/activation/runtime-probes.test.ts now enforces the same exact key set while a
  * vendor-lockstep test pins the name to the upstream signature.
  */
-import { constants } from 'node:fs'
-import { lstat, open } from 'node:fs/promises'
+import { constants, type Stats } from 'node:fs'
+import type { FileHandle } from 'node:fs/promises'
 import { join } from 'node:path'
 import { TextDecoder } from 'node:util'
 import {
@@ -47,7 +47,11 @@ import {
   activationProbeNamesForDomains,
   type ProbeResult,
 } from './activation-gate.ts'
-import { resolveNoFollowFlags, type NoFollowConstantsLike } from './private-fs.ts'
+import {
+  openPrivateNoFollowReadAsync,
+  PrivateNoFollowOpenError,
+  type NoFollowConstantsLike,
+} from './private-fs.ts'
 import { sanitizeErrorText } from './sanitize-error.ts'
 
 export interface RuntimeProbeRpcOptions {
@@ -90,23 +94,15 @@ export interface RuntimeProbeOptions {
    *  must stay visible, never silent; a failing fallback is already loud). */
   warn?: RuntimeProbeWarn
   /**
-   * 2026-12 shape-awareness: whether the spawned dsh is expected to carry the
-   * chamber host packages (clientGraph/graph + gitWorktree/previewCreate +
-   * archiveCleanup/probe domains). The desktop shape always verifies them;
-   * the gateway shape only when a desktop has synced its host packages into
-   * the seed cache — a fresh gateway with no synced cache hosts a plain dsh
-   * whose activation must pass without the chamber domains. Default true.
-   */
-  hostDomains?: boolean
-  /**
    * Design 24 §7 C (M2 derivation): the EXACT chamber host domains this
    * spawn actually carries, derived from the seeded host entries
-   * (gateway: syncedHostDomainProbeNames). Takes precedence over
-   * `hostDomains`; an empty list runs no chamber-domain probe (the reduced
-   * set), a partial list runs exactly those domains (2-of-3 partial syncs
-   * get a well-defined expectation instead of a binary all-or-none gate),
-   * and the full list equals the all-domains shape. The returned probe set
-   * and the verdict expectation are both derived from this list.
+   * (desktop: every seeded domain; gateway: syncedHostDomainProbeNames).
+   * An empty list runs no chamber-domain probe (the reduced set), a partial
+   * list runs exactly those domains (2-of-3 partial syncs get a well-defined
+   * expectation instead of a binary all-or-none gate), and the full list
+   * equals the all-domains shape. The returned probe set and the verdict
+   * expectation are both derived from this list; callers that omit it keep
+   * the all-domains shape.
    */
   hostDomainNames?: readonly string[]
   /**
@@ -232,44 +228,31 @@ async function readBoundedRegularUtf8File(
   constantsLike: NoFollowConstantsLike = constants,
 ): Promise<void> {
   signal.throwIfAborted()
-  const { flags, kernelNoFollow } = resolveNoFollowFlags('read', constantsLike)
-  if (!kernelNoFollow) {
-    let before
-    try {
-      before = await lstat(filePath)
-    } catch (error) {
-      throw new Error(`settings.yaml could not be opened${safeFsCode(error)}`)
-    }
-    if (before.isSymbolicLink()) throw new Error('settings.yaml is a symbolic link')
-  }
-  let handle
+  // The no-follow strategy itself is single-sourced in private-fs.ts (kernel
+  // O_NOFOLLOW where available, the win32 user-space identity fallback
+  // otherwise). This wrapper keeps the probe's sanitized settings messages:
+  // the OS error is never projected (it embeds the absolute userData path and
+  // generic regex redaction cannot perfectly cover quoted paths with spaces).
+  let handle: FileHandle
+  let info: Stats
   try {
-    handle = await open(filePath, flags)
+    const opened = await openPrivateNoFollowReadAsync(filePath, constantsLike)
+    handle = opened.handle
+    info = opened.stats
   } catch (error) {
-    // Never project the OS message: it embeds the absolute userData path and
-    // generic regex redaction cannot perfectly cover quoted paths with spaces.
+    if (error instanceof PrivateNoFollowOpenError) {
+      if (error.phase === 'symlink') throw new Error('settings.yaml is a symbolic link')
+      if (error.phase === 'identity-mismatch') {
+        throw new Error('settings.yaml changed while being opened or is a symbolic link')
+      }
+      if (error.phase === 'inspect-failed') {
+        throw new Error(`settings.yaml could not be inspected${safeFsCode(error.detail ?? error)}`)
+      }
+      throw new Error(`settings.yaml could not be opened${safeFsCode(error.detail ?? error)}`)
+    }
     throw new Error(`settings.yaml could not be opened${safeFsCode(error)}`)
   }
   try {
-    let info
-    try {
-      info = await handle.stat()
-    } catch (error) {
-      throw new Error(`settings.yaml could not be inspected${safeFsCode(error)}`)
-    }
-    if (!kernelNoFollow) {
-      // The kernel could not refuse a symlinked leaf, so re-prove that the path
-      // still names exactly the opened inode (lstat never follows the leaf).
-      let atPath
-      try {
-        atPath = await lstat(filePath)
-      } catch (error) {
-        throw new Error(`settings.yaml could not be inspected${safeFsCode(error)}`)
-      }
-      if (atPath.isSymbolicLink() || atPath.dev !== info.dev || atPath.ino !== info.ino) {
-        throw new Error('settings.yaml changed while being opened or is a symbolic link')
-      }
-    }
     if (!info.isFile()) throw new Error('settings.yaml is not a regular file')
     if (!Number.isSafeInteger(info.size) || info.size < 0 || info.size > SETTINGS_FILE_MAX_BYTES) {
       throw new Error('settings.yaml is unexpectedly large')
@@ -408,10 +391,10 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
   }
 
   // Design 24 §7 C (M2 derivation): the chamber domains actually expected are
-  // `hostDomainNames` when the caller derived them from the seeded host
-  // entries (gateway partial syncs), else the legacy binary shape
-  // (hostDomains=false runs NO chamber-domain probe; default = all domains).
-  const hostDomainNames = opts.hostDomainNames ?? (opts.hostDomains === false ? [] : [...HOST_DOMAIN_PROBE_NAMES])
+  // `hostDomainNames`, derived by the caller from the spawned host entries
+  // (desktop: all seeded domains; gateway: synced/partial cache). An empty
+  // list is the reduced shape; omitting the option keeps all domains.
+  const hostDomainNames = opts.hostDomainNames ?? [...HOST_DOMAIN_PROBE_NAMES]
   const wantsDomain = (domain: string): boolean => hostDomainNames.includes(domain)
   const [sessions, graph, settings, git, archiveCleanup] = await Promise.all([
     // The fixed-size host-identity probe: session/canOpenWorkspacePath is a

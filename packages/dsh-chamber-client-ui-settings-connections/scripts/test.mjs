@@ -33,9 +33,14 @@ const GROUPS = {
     'test/connection-form/connection-form-contract.test.ts',
     'test/connection-form/save-host.test.ts',
   ],
-  // runtime-gate: 卡片 runtime 门/探针与 managed-restart 分类
+  // runtime-gate: 卡片 runtime 门/探针、本地实例 spawn 门（design 18 applying）
+  // 与 managed-restart 分类
   'runtime-gate': [
     'test/runtime-gate/restart-gates.test.ts',
+    'test/runtime-gate/local-spawn-gate.test.ts',
+    'test/runtime-gate/restart-action.test.ts',
+    'test/runtime-gate/restart-refusal-parity.test.ts',
+    'test/runtime-gate/error-text-parity.test.ts',
   ],
   // gateway: control-plane REST 客户端与网关就绪轮询
   gateway: [

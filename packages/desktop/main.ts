@@ -48,13 +48,16 @@
  */
 
 import { app, BrowserWindow, crashReporter, dialog, ipcMain, Menu, Tray, nativeImage, powerMonitor, powerSaveBlocker, safeStorage, session } from 'electron';
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { describeError } from './describe-error.ts'
+import { preserveFileAside } from './store-file-hygiene.ts'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { PlaneHandle } from '@dsh-chamber/control-plane';
 import { attemptCommittedRegistryPush, computeRemovedInstanceIds, computeRetiredInstanceIds, createTransportManager } from './transport-manager.ts';
+import { reconnectStaleTransports } from './transport-reconnect.ts';
 import type { TransportManager } from './transport-manager.ts';
 import type { TransportInstanceSpec } from './transport-provider.ts';
 import { sshProvider, probeChamberHostLive } from './ssh-provider.ts';
@@ -716,32 +719,6 @@ function applyLaunchAtLogin(enabled: boolean): { ok: true } | { ok: false; error
 }
 
 /**
- * OS 唤醒即时重探（design 14 D4，主进程侧）：只触碰瞬时失败的实例——
- * phase=error/degraded 且 **非终态**（requiresUserAction=false；认证失败/
- * verifyUp 终态等确定性错误绝不自动重试，05 §7.6 纪律）；**绝不触碰 idle**
- * （保持手动断开语义）。connect() 对 connecting/ready 幂等，重复唤醒无副作用。
- */
-function reconnectStaleTransports(): void {
-  // 2026-08 review NIT：退出在途（will-quit 的 disposeAsync 已开始）时 OS
-  // 唤醒不得再 spawn 新传输——否则可能在 dispose 完成后留下孤儿 ssh 子进程
-  // （SIGKILL 升级计时器 unref 后随退出丢失）。
-  if (quitRequested) return;
-  const sm = transportManager;
-  if (sm === null) return;
-  for (const instance of sm.listInstances()) {
-    const status = sm.status(instance.id);
-    if (status === null) continue;
-    if (status.phase !== 'error' && status.phase !== 'degraded') continue;
-    if (status.requiresUserAction === true) continue;
-    try {
-      sm.connect(instance.id);
-    } catch (error) {
-      console.warn(`[dsh-chamber] 唤醒重探 ${instance.id} 失败：`, error);
-    }
-  }
-}
-
-/**
  * 渲染进程崩溃/卡死恢复（有界自动重载）：`render-process-gone` 或长时间
  * 无响应 → 60s 窗口内至多重载 3 次，超出即大声失败（错误框一次，绝不静默
  * 白屏）。正常退出（clean-exit，如用户关窗）不重载。
@@ -1326,7 +1303,7 @@ if (!gotTheLock) {
     try {
       startupMetadataHealth = detectRuntimeMetadataHealth(runtimeBaseDir, version);
     } catch (error) {
-      runtimeBootstrapFailure = `无法检查 dsh 运行时选择元数据：${sanitizeErrorText(error instanceof Error ? error.message : String(error))}`;
+      runtimeBootstrapFailure = `无法检查 dsh 运行时选择元数据：${sanitizeErrorText(describeError(error))}`;
     }
 
     // A shell-version fallback is itself a runtime/data switch. Persist the
@@ -1392,7 +1369,7 @@ if (!gotTheLock) {
             );
           }
         } catch (error) {
-          runtimeBootstrapFailure = `无法持久化 shell 更新回落事务：${sanitizeErrorText(error instanceof Error ? error.message : String(error))}`;
+          runtimeBootstrapFailure = `无法持久化 shell 更新回落事务：${sanitizeErrorText(describeError(error))}`;
         }
       }
     }
@@ -1548,7 +1525,7 @@ if (!gotTheLock) {
     // shell-core（electron-edges 的 onSystemResume 订阅 = 装配于 installIpcHandlers
     // ① 段；另挂一条独立监听专做重探——双监听语义与搬迁前单 handler 等价）。
     powerMonitor.on('resume', () => {
-      reconnectStaleTransports();
+      reconnectStaleTransports(transportManager, () => quitRequested, (message, error) => console.warn(message, error), '[dsh-chamber]');
     });
 
     maybeCreateTray(controlPlane);
@@ -1699,12 +1676,11 @@ if (!gotTheLock) {
       // save_connection rebuilds the registry (never silently faked as empty).
       console.error('[dsh-chamber] 加载 SSH 实例失败：', loadError);
       const file = instancesFilePath(app.getPath('userData'));
-      try {
-        renameSync(file, `${file}.corrupt`);
-        console.warn(`[dsh-chamber] 已保留损坏的实例文件为 ${file}.corrupt`);
-      } catch (renameError) {
-        console.error('[dsh-chamber] 保留损坏实例文件失败：', renameError);
-      }
+      // The rename itself is single-sourced in store-file-hygiene.preserveFileAside
+      // (2026-12 stage-2 item 5); only the wording stays flavor-specific.
+      const aside = preserveFileAside(file, '.corrupt');
+      if (aside.ok) console.warn(`[dsh-chamber] 已保留损坏的实例文件为 ${aside.path}`);
+      else console.error('[dsh-chamber] 保留损坏实例文件失败：', aside.error);
     }
     // Capture the non-null manager before registering closures over it (the
     // ipc handlers run later, after startup).
@@ -2039,8 +2015,13 @@ if (!gotTheLock) {
             packageJson: readFileSync(source.packageJsonPath, 'utf8'),
             distIndex: readFileSync(source.distIndexPath, 'utf8'),
           });
-        } catch {
+        } catch (error) {
           // Not built/bundled in this runtime — nothing to sync for this entry.
+          // Still loud: a silently skipped source would present as a gateway
+          // that is missing chamber host packages with no diagnostic at all.
+          console.warn(
+            `[dsh-chamber] chamber host package source skipped (${source.name}): ${sanitizeErrorText(describeError(error))}`,
+          );
         }
       }
       return syncGatewayChamberPlugins({
@@ -2424,8 +2405,8 @@ if (!gotTheLock) {
       }
       return projectedSaved;
     };
-    // —— W-10 S3：registry+凭据 C 组 7 注册体（SSH_INSTANCES_GET /
-    // SSH_SAVE_CONNECTION / SSH_DELETE_CONNECTION / SSH_INSTANCES_SET /
+    // —— W-10 S3：registry+凭据 C 组 6 注册体（SSH_INSTANCES_GET /
+    // SSH_SAVE_CONNECTION / SSH_DELETE_CONNECTION /
     // SSH_SET_PASSWORD / GATEWAY_SET_TOKEN / GATEWAY_SET_PASSWORD）自 main.ts
     // 迁入 shell-core installIpcHandlers ② C 组段（注册体/纯辅助/投影链逐字
     // 随迁；装配依赖经 ctx：transportManager/audit/gatewaySessions/
@@ -2586,7 +2567,7 @@ if (!gotTheLock) {
         .catch((error) => {
           // Retain the marker: the next safe startup/operation retries. Prune
           // failure is disk hygiene, not permission to block a verified tree.
-          console.error('[dsh-chamber] dsh runtime store prune failed:', sanitizeErrorText(error instanceof Error ? error.message : String(error)));
+          console.error('[dsh-chamber] dsh runtime store prune failed:', sanitizeErrorText(describeError(error)));
         })
         .finally(() => {
           if (storePruneOperation === operation) storePruneOperation = null;
@@ -2758,7 +2739,7 @@ if (!gotTheLock) {
         };
       } catch (error) {
         snapshotProjection = {
-          snapshotError: sanitizeErrorText(error instanceof Error ? error.message : String(error)),
+          snapshotError: sanitizeErrorText(describeError(error)),
         };
       }
       let diskProjection: Parameters<typeof runtimeInstance.setLifecycle>[0];
@@ -2792,7 +2773,7 @@ if (!gotTheLock) {
         } catch (error) {
           lastDiskEvidence = {
             usage: null,
-            error: sanitizeErrorText(error instanceof Error ? error.message : String(error)),
+            error: sanitizeErrorText(describeError(error)),
           };
           diskProjection = {
             diskUsage: null,
@@ -2931,14 +2912,15 @@ if (!gotTheLock) {
       }
       return {
         // 激活裁决的期望集必须与探针结果集**同源同快照**（design 18 §3.4；
-        // gateway runtime-manager.ts:999-1003 同款）：getter 在 gate 读取时
-        // 求值 → 此时本事务的 seed 已完成（cp.startLocal() 内），与
+        // gateway runtime-manager.ts:989 同款）。shared core 在探针 run 返回后
+        // 调用本函数（ApplyDeps.probeExpectedNames 惰性求值，2026-12 P0 修复）
+        // → 此时本事务的 seed 已完成（cp.startLocal() 内），与
         // startAndProbeRuntime 传入的 hostDomainNames 完全一致。缺此字段时
         // gate 默认「全 7 探针」，部分/空 seed 必 exact-set 失配并回滚
-        // （2026-09 二轮评审 P1）。
-        get probeExpectedNames() {
-          return activationProbeNamesForDomains(cp.seededProbeDomains);
-        },
+        // （2026-09 二轮评审 P1）；若在构造 deps 时就把域表取成值（旧 getter
+        // 语义），冷启动带 pending 的事务会在 spawn 前冻结空域表 → 同样失配
+        // 并回滚健康候选。
+        probeExpectedNames: () => activationProbeNamesForDomains(cp.seededProbeDomains),
         cleanupStaleInstalls: () => cleanupStaleInstalls(runtimeBaseDir),
         evict: () => evictVersions(runtimeBaseDir),
         completeInterruptedRestore: () => completeInterruptedRestore(runtimeBaseDir, localDshHome),
@@ -3205,7 +3187,7 @@ if (!gotTheLock) {
         return false;
       } catch (error) {
         await cp.stopLocal().catch(() => undefined);
-        await publishBlockedStartup(`元数据恢复失败：${error instanceof Error ? error.message : String(error)}`);
+        await publishBlockedStartup(`元数据恢复失败：${describeError(error)}`);
         return false;
       }
     };
@@ -3235,7 +3217,7 @@ if (!gotTheLock) {
         });
       } catch (error) {
         await cp.stopLocal().catch(() => undefined);
-        await publishBlockedStartup(error instanceof Error ? error.message : String(error));
+        await publishBlockedStartup(describeError(error));
       }
     };
 
@@ -3267,7 +3249,7 @@ if (!gotTheLock) {
         try {
           metadataHealth = detectRuntimeMetadataHealth(runtimeBaseDir, version);
         } catch (error) {
-          await publishBlockedStartup(`无法检查 dsh 运行时选择元数据：${error instanceof Error ? error.message : String(error)}`);
+          await publishBlockedStartup(`无法检查 dsh 运行时选择元数据：${describeError(error)}`);
           return null;
         }
         if (metadataHealth.status === 'recovery-in-progress') {
@@ -3371,7 +3353,7 @@ if (!gotTheLock) {
             });
           } catch (error) {
             await cp.stopLocal().catch(() => undefined);
-            await publishBlockedStartup(error instanceof Error ? error.message : String(error));
+            await publishBlockedStartup(describeError(error));
           }
           return null;
         }
@@ -3406,7 +3388,7 @@ if (!gotTheLock) {
           try {
             sourceFacts = readActivationFacts();
           } catch (error) {
-            await publishBlockedStartup(error instanceof Error ? error.message : String(error));
+            await publishBlockedStartup(describeError(error));
             return null;
           }
         }
@@ -3517,16 +3499,16 @@ if (!gotTheLock) {
               );
               return result;
             } catch (rollbackError) {
-              await publishBlockedStartup(`运行时探针失败且自动回退未完成：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`);
+              await publishBlockedStartup(`运行时探针失败且自动回退未完成：${describeError(rollbackError)}`);
               return result;
             }
           }
-          await publishBlockedStartup(error instanceof Error ? error.message : String(error));
+          await publishBlockedStartup(describeError(error));
         }
         return result;
       })().catch(async (error) => {
         await cp.stopLocal().catch(() => undefined);
-        await publishBlockedStartup(error instanceof Error ? error.message : String(error));
+        await publishBlockedStartup(describeError(error));
         return null;
       }).finally(() => {
         runtimeInternalStart = false;
@@ -3536,7 +3518,7 @@ if (!gotTheLock) {
         runtimeOperation = null;
         void runStorePruneIfNeeded();
         void runSnapshotMaintenance().catch(error => {
-          console.error('[dsh-chamber] dsh runtime snapshot maintenance failed:', sanitizeErrorText(error instanceof Error ? error.message : String(error)));
+          console.error('[dsh-chamber] dsh runtime snapshot maintenance failed:', sanitizeErrorText(describeError(error)));
         });
       });
       runtimeOperation = operation;
@@ -3597,7 +3579,7 @@ if (!gotTheLock) {
         return result;
       })().catch(async (error) => {
         await cp.stopLocal().catch(() => undefined);
-        await publishBlockedStartup(`restart-exhausted 回退失败：${error instanceof Error ? error.message : String(error)}`);
+        await publishBlockedStartup(`restart-exhausted 回退失败：${describeError(error)}`);
         return null;
       }).finally(() => {
         runtimeInternalStart = false;
@@ -3607,7 +3589,7 @@ if (!gotTheLock) {
         runtimeOperation = null;
         void runStorePruneIfNeeded();
         void runSnapshotMaintenance().catch(error => {
-          console.error('[dsh-chamber] dsh runtime snapshot maintenance failed:', sanitizeErrorText(error instanceof Error ? error.message : String(error)));
+          console.error('[dsh-chamber] dsh runtime snapshot maintenance failed:', sanitizeErrorText(describeError(error)));
         });
       });
       runtimeOperation = operation;
@@ -3618,7 +3600,7 @@ if (!gotTheLock) {
       if (snapshot.status === 'degraded' || snapshot.status === 'restarting'
         || snapshot.status === 'error' || snapshot.status === 'restart-exhausted') {
         try { resetCandidateHealthWindow(runtimeBaseDir); } catch (error) {
-          console.error('[dsh-chamber] known-good 健康窗口重置失败：', sanitizeErrorText(error instanceof Error ? error.message : String(error)));
+          console.error('[dsh-chamber] known-good 健康窗口重置失败：', sanitizeErrorText(describeError(error)));
         }
       }
       if (snapshot.status === 'restart-exhausted') void runRestartExhaustedRollback();
@@ -3662,7 +3644,13 @@ if (!gotTheLock) {
           return health.status;
         }
         return null;
-      } catch {
+      } catch (error) {
+        // Returning null means "nothing recoverable", so a failed detection
+        // read must stay visible instead of silently closing the recovery
+        // escape. The success path is unchanged.
+        console.warn(
+          `[dsh-chamber] 运行时元数据健康探测失败（按无可恢复状态处理）：${sanitizeErrorText(describeError(error))}`,
+        );
         return null;
       }
     };
@@ -3684,7 +3672,7 @@ if (!gotTheLock) {
         return null;
       })().catch(async (error) => {
         await cp.stopLocal().catch(() => undefined);
-        await publishBlockedStartup(`元数据恢复事务失败：${error instanceof Error ? error.message : String(error)}`);
+        await publishBlockedStartup(`元数据恢复事务失败：${describeError(error)}`);
         return null;
       }).finally(() => {
         runtimeInternalStart = false;
@@ -3831,7 +3819,7 @@ if (!gotTheLock) {
     const knownGoodPromotionTimer = setInterval(() => {
       if (quitRequested || runtimeOperation !== null || !cp.localProcessAlive) return;
       try { promoteDueCandidates(runtimeBaseDir); } catch (error) {
-        console.error('[dsh-chamber] known-good 晋升检查失败：', sanitizeErrorText(error instanceof Error ? error.message : String(error)));
+        console.error('[dsh-chamber] known-good 晋升检查失败：', sanitizeErrorText(describeError(error)));
       }
     }, 60 * 60 * 1_000);
     knownGoodPromotionTimer.unref();
@@ -4078,7 +4066,7 @@ if (!gotTheLock) {
     void refreshRuntimeEvidence().then(() => runRuntimeStartup()).catch(error => {
       console.error('[dsh-chamber] dsh 运行时启动事务失败：', error);
       runtimeStartBlocked = true;
-      runtimeInstance.setLifecycle({ phase: 'failed', error: error instanceof Error ? error.message : String(error) });
+      runtimeInstance.setLifecycle({ phase: 'failed', error: describeError(error) });
     });
 
     // 深链统一 drain（design 16 §4.2）——W-10 S9：OS 深链启动队列（pendingIntents）

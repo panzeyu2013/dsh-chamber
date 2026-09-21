@@ -386,6 +386,10 @@ jobs:
       # 只有真失败 exit 1，所以这里不会因环境缺件而误红。
       - name: Remote-state acceptance matrix (plan §9)
         run: node scripts/gates/remote-state-acceptance.mjs --node "$(command -v node)" --out .tmp/acceptance/remote-state.json
+      # 故障注入矩阵（plan §10）：与本地 check:static 同一条命令 —— P1-1 的单源化要求
+      # 静态集合两侧一致；file-only，故不挂 classifier（release 侧本就没有 classifier）。
+      - name: Remote-state fault-injection matrix (plan section 10)
+        run: node scripts/gates/remote-state-injection-matrix.mjs
       - name: Client plugin type checks (single entry)
         run: node scripts/gates/run-checks.mjs typecheck
       # Shared runtime core build: the gateway tarball packs it, so a broken

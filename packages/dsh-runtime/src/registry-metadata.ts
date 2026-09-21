@@ -34,7 +34,7 @@ export interface RegistryMetadata {
 
 import { canonicalRegistryOrigin, isAllowedRegistryUrl, registryRedirectOrigins } from './registry-url.ts'
 import { isSupportedIntegrity } from './registry-integrity.ts'
-import { EXACT_SEMVER } from './version-safety.ts'
+import { EXACT_SEMVER, compareSemverAsc } from './version-safety.ts'
 
 export const DEFAULT_REGISTRY_TIMEOUT_MS = 15_000
 export const DEFAULT_REGISTRY_MAX_REDIRECTS = 5
@@ -232,7 +232,11 @@ function parseRegistryMetadata(
       byVersion.set(version, Object.freeze(info))
     }
   }
-  const versions = [...byVersion.keys()].sort(compareVersionsDesc)
+  // Descending semver precedence from the package-wide comparator: the
+  // distance to version-safety.ts is what keeps the registry ordering, the
+  // selector ordering and the controller's downgrade predicate on one rule
+  // (build metadata ignored, numeric identifiers exact, release > prerelease).
+  const versions = [...byVersion.keys()].sort((a, b) => compareSemverAsc(b, a))
   const latest = pickLatest(packument['dist-tags'], versions)
   return Object.freeze({
     packageName,
@@ -278,29 +282,7 @@ function pickLatest(distTags: { latest?: unknown } | undefined, versions: readon
   return versions.length > 0 ? versions[0] : null
 }
 
-/**
- * Semver-ish descending comparison (no dependency on a semver package).
- * Split on `.`/`-` and compare part-wise: numeric parts numerically, numeric
- * before alphanumeric, alphanumeric by ASCII; when one side runs out the
- * shorter side is the release (greater) and the longer side a prerelease.
- * Registry versions are npm semver strings, but arbitrary junk still gets a
- * stable total order for display.
- */
-function compareVersionsDesc(a: string, b: string): number {
-  const ap = a.split(/[.-]/)
-  const bp = b.split(/[.-]/)
-  for (let i = 0; i < Math.max(ap.length, bp.length); i++) {
-    const av = ap[i]
-    const bv = bp[i]
-    if (av === undefined) return -1 // a exhausted → a is the release → a first (descending)
-    if (bv === undefined) return 1 // b exhausted → b is the release → b first (descending)
-    if (av === bv) continue
-    const an = /^\d+$/.test(av) ? Number(av) : NaN
-    const bn = /^\d+$/.test(bv) ? Number(bv) : NaN
-    if (!Number.isNaN(an) && !Number.isNaN(bn)) return bn - an
-    if (!Number.isNaN(an)) return 1 // numeric identifiers sort below alphanumeric (semver)
-    if (!Number.isNaN(bn)) return -1
-    return av < bv ? 1 : -1
-  }
-  return 0
-}
+// (The former local "semver-ish" compareVersionsDesc was removed in the
+// 2026-12 single-source pass: it parsed numeric identifiers through Number(),
+// mixed build metadata into the comparison and inverted the prerelease
+// longest-list rule. Registry ordering now consumes compareSemverAsc.)

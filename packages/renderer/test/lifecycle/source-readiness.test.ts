@@ -15,7 +15,6 @@ import {
   servingGatePhase,
   shouldAnnounceRetryQueue,
   shouldDeferBootForSource,
-  shouldReportGraphUnavailable,
   graphGapKindFor,
   veilShowsActions,
   veilState,
@@ -117,11 +116,7 @@ test('veil state: the feedback window upgrades to actionable, and settling alway
 })
 
 test('every channel failure but the 404 "no graph injected" shape reaches the App as a degrade', () => {
-  assert.equal(shouldReportGraphUnavailable('not-injected'), false,
-    'gateway/mobile shapes legitimately run without a graph — never a degrade')
-  assert.equal(shouldReportGraphUnavailable('graph-unreachable'), true)
-  assert.equal(shouldReportGraphUnavailable('anything-else'), true, 'unknown states fail toward honesty')
-  // The caller that carries a source id gets the KIND, not just a boolean.
+  // 唯一对外裁决带 source id（kind，而非旧布尔投影）；本地实例形态单独收敛（FIX 6）。
   assert.equal(graphGapKindFor('not-injected', 'local'), 'local-graph-not-injected',
     'the LOCAL instance always injects its graph — a 404 there is a chamber-side installation/seed fact (FIX 6)')
   assert.equal(graphGapKindFor('not-injected', 'ssh-a'), null,

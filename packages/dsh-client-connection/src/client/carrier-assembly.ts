@@ -5,8 +5,8 @@
  * injects `createWebConnectionRpc` (the generic RPC carrier), while node:test
  * can pin that the SAME resolved per-entry base path reaches it without
  * loading the source-only vendor graph. Keeping the decision here also
- * prevents a future fixture/transport refactor from silently dropping the
- * prefix from the carrier.
+ * prevents a future carrier refactor from silently dropping the prefix from
+ * the carrier.
  *
  * Rebased for upstream v0.1.2-alpha.1: the WebApiClient/IApiClient half is
  * gone (the upstream API-client surface was deleted with the downlinks), so
@@ -24,9 +24,6 @@ export interface CarrierTransport {
   openStream?: RpcStreamOpen
 }
 
-/** Fixture carrier: the fixture API also owns its generic RPC face. */
-export type FixtureCarrier<Rpc> = Rpc
-
 /** Factories supplied by the browser plugin's production implementation. */
 export interface ConnectionCarrierFactories<Rpc> {
   /** Construct the generic RPC carrier over the same per-entry prefix. */
@@ -42,18 +39,18 @@ export interface ConnectionCarrierAssembly<Rpc> {
 /**
  * Resolve one immutable per-entry prefix and fan it out to the RPC carrier.
  *
- * Fixture and page-owned transports retain their upstream precedence. Even
- * when a page-owned transport replaces the fetch/stream halves, the generic
- * RPC factory still receives the same basePath plus that transport's hooks.
+ * The page-owned transport keeps its upstream precedence: even when it
+ * replaces the fetch/stream halves, the generic RPC factory still receives the
+ * same basePath plus that transport's hooks. The upstream browser-fixture
+ * carrier branch is gone with `src/client/fixture.ts` (registry dropped).
  */
 export function assembleConnectionCarriers<Rpc>(
   explicitBasePath: string | undefined,
-  fixtureRpc: Rpc | undefined,
   transport: CarrierTransport | undefined,
   factories: ConnectionCarrierFactories<Rpc>,
 ): ConnectionCarrierAssembly<Rpc> {
   const basePath = resolveInstanceBasePath(explicitBasePath)
-  const rpc = fixtureRpc ?? factories.createRpc({
+  const rpc = factories.createRpc({
     basePath,
     ...(transport === undefined ? {} : {
       doFetch: transport.fetch,

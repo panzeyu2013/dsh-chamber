@@ -11,6 +11,7 @@
 import { useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Button, IconChevronRightOutline14, Input, Menu, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import { createFromPreview, gitCoordinator, previewCreate } from '../shared/coordinator.ts'
+import { gitActionErrorText } from '../shared/action-error.ts'
 import { createSourceOptions, sourceBranchChoices } from '../shared/git-facts.ts'
 import type { GitWorktreeSnapshot } from '../shared/types.ts'
 import type { WorkspaceGitInjected } from './injected.ts'
@@ -320,7 +321,9 @@ export function CreateWorktreeDialog({
       await createFromPreview(sourceId, preview, { createSession: false, sourceWorkspaceId })
       onClose()
     } catch (error) {
-      setFormError(error instanceof Error ? error.message : String(error))
+      // The code→copy resolver: user-reachable refusals render localized copy;
+      // an unmapped failure keeps its raw (English) message.
+      setFormError(gitActionErrorText(error, t))
     }
   }
 

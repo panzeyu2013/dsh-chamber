@@ -15,7 +15,7 @@
  *
  * 数据面（存储/指针/override）见 dsh-runtime-store.ts，安装/下载不在本模块。
  */
-import { EXACT_SEMVER } from './version-safety.ts';
+import { EXACT_SEMVER, compareSemverAsc } from './version-safety.ts';
 import type { RegistryMetadata } from './registry-metadata.ts';
 import { canonicalRegistryOrigin, isAllowedRegistryUrl, registryRedirectOrigins } from './registry-url.ts';
 import { isSupportedIntegrity } from './registry-integrity.ts';
@@ -106,77 +106,14 @@ export interface VersionListEntry {
 }
 
 /**
- * 解析精确 semver 为数字段 + prerelease 标识符数组（build metadata 不参与
- * 排序优先级）。非法串（不匹配 EXACT_SEMVER）→ null。
+ * SemVer precedence for controller policy without Number precision loss.
+ * The comparison itself is the package-wide single implementation in
+ * version-safety.ts (compareSemverAsc); this wrapper only narrows the result
+ * and turns non-semver input into null.
  */
-function parseSemverTriple(
-  v: string,
-): { major: string; minor: string; patch: string; prerelease: string[] } | null {
-  if (!EXACT_SEMVER.test(v)) return null;
-  const plus = v.indexOf('+');
-  const withoutBuild = plus === -1 ? v : v.slice(0, plus);
-  const dash = withoutBuild.indexOf('-');
-  const nums = dash === -1 ? withoutBuild : withoutBuild.slice(0, dash);
-  const pre = dash === -1 ? '' : withoutBuild.slice(dash + 1);
-  const [major, minor, patch] = nums.split('.') as [string, string, string];
-  return { major, minor, patch, prerelease: pre === '' ? [] : pre.split('.') };
-}
-
-function compareNumericText(a: string, b: string): number {
-  if (a.length !== b.length) return a.length < b.length ? -1 : 1;
-  return a === b ? 0 : a < b ? -1 : 1;
-}
-
-/**
- * 升序 semver 比较（自实现，无 semver 依赖；design 18 §6「精确 semver」口径）：
- *
- *   - 数字段 major/minor/patch 逐段比较；
- *   - 数字段相等时：release > prerelease（升序时 prerelease 靠前）；
- *   - prerelease 标识符按 semver 规则：纯数字按数值、字母数字按 ASCII 字典序、
- *     纯数字 < 字母数字；标识符列表长者优先级更高（1.0.0-alpha < 1.0.0-alpha.1）；
- *   - build metadata（+ 段）不参与优先级；
- *   - 非法串（不匹配 EXACT_SEMVER）排最后（恒大于合法串），保证列表不因
- *     脏数据崩溃。`..` 类纵深防御不在本模块（见 version-safety.isSafeVersion）。
- */
-function semverCompareAsc(a: string, b: string): number {
-  const pa = parseSemverTriple(a);
-  const pb = parseSemverTriple(b);
-  if (pa === null && pb === null) return 0;
-  if (pa === null) return 1;
-  if (pb === null) return -1;
-  for (const [left, right] of [
-    [pa.major, pb.major],
-    [pa.minor, pb.minor],
-    [pa.patch, pb.patch],
-  ] as const) {
-    const compared = compareNumericText(left, right);
-    if (compared !== 0) return compared;
-  }
-  const aPre = pa.prerelease.length > 0;
-  const bPre = pb.prerelease.length > 0;
-  if (aPre !== bPre) return aPre ? -1 : 1; // 升序：release 在后，prerelease 在前
-  const common = Math.min(pa.prerelease.length, pb.prerelease.length);
-  for (let i = 0; i < common; i++) {
-    const x = pa.prerelease[i];
-    const y = pb.prerelease[i];
-    const xNumeric = /^\d+$/.test(x);
-    const yNumeric = /^\d+$/.test(y);
-    if (xNumeric && yNumeric) {
-      const compared = compareNumericText(x, y);
-      if (compared !== 0) return compared;
-    } else if (xNumeric !== yNumeric) {
-      return xNumeric ? -1 : 1; // 纯数字 < 字母数字
-    } else if (x !== y) {
-      return x < y ? -1 : 1; // ASCII 字典序
-    }
-  }
-  return pa.prerelease.length - pb.prerelease.length; // 列表长者优先级更高
-}
-
-/** SemVer precedence for controller policy without Number precision loss. */
 export function compareRuntimeVersions(a: string, b: string): -1 | 0 | 1 | null {
   if (!EXACT_SEMVER.test(a) || !EXACT_SEMVER.test(b)) return null;
-  const compared = semverCompareAsc(a, b);
+  const compared = compareSemverAsc(a, b);
   return compared === 0 ? 0 : compared < 0 ? -1 : 1;
 }
 
@@ -194,9 +131,9 @@ export function isVersionDowngrade(target: string, active: string | null): boole
   return active !== null && compareRuntimeVersions(target, active) === -1;
 }
 
-/** 降序比较：升序结果取反（semverCompareAsc(b, a)）。 */
+/** 降序比较：升序结果取反（compareSemverAsc(b, a)）。 */
 function semverCompareDesc(a: string, b: string): number {
-  return semverCompareAsc(b, a);
+  return compareSemverAsc(b, a);
 }
 
 /** Registry 单条候选版本是否可入列表。 */
@@ -212,7 +149,7 @@ function isListable(
  * 构建版本选择器列表（design 18 §3.6 A.2 显示规格）：
  *
  *   1. active 版本置顶（精确 semver 即可列出，并从其余列表中去重）；
- *   2. 其余按 semver 降序（自实现简单降序比较，见 semverCompareAsc）。
+ *   2. 其余按 semver 降序（compareSemverAsc 取反）。
  *      dist-tags.latest 只作数据标记（2026-10 决策 11：不再「推荐」钉位/展示——
  *      npm latest 可能是低于内建基线的旧版本，钉位会造成无解释的乱序）；
  *      active 本身就是 latest 时标记打在置顶条目上，不重复出现；
@@ -241,7 +178,7 @@ export function buildVersionList(
   const makeEntry = (v: string): VersionListEntry => {
     const baseline = opts.compatibilityBaseline;
     const belowBaseline =
-      baseline !== null && EXACT_SEMVER.test(baseline) && semverCompareAsc(v, baseline) < 0;
+      baseline !== null && EXACT_SEMVER.test(baseline) && compareSemverAsc(v, baseline) < 0;
     return {
       version: v,
       latest: meta.latest !== null && v === meta.latest,
@@ -267,9 +204,8 @@ export function buildVersionList(
     .filter((v) => !emitted.has(v))
     .sort(semverCompareDesc);
 
-  // 3. 其余按 semver 降序（去重 + 跳过不可列出条目）。
+  // 3. 其余按 semver 降序（candidates 已在上面按 emitted 去重）。
   for (const v of rest) {
-    if (emitted.has(v)) continue; // meta.versions 内的重复项
     emitted.add(v);
     entries.push(makeEntry(v));
   }

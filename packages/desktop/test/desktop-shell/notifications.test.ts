@@ -22,7 +22,6 @@ import {
   NotificationSourceIncarnations,
   NotificationSourceProofs,
   REMOTE_SOURCE_FINGERPRINT_PATTERN,
-  readNotificationHostBoolean,
   claimNotification,
   decideNotification,
   describeNativeNotificationFailure,
@@ -536,17 +535,6 @@ test('validateNotificationRequest: accepts a valid payload', () => {
   if (legacy.ok) assert.equal(legacy.request.sourceId, 'dsh-dev_01', 'legacy ssh alias is canonicalized before ownership lookup');
   // test kind 同样合法。
   assert.ok(validateNotificationRequest(makeRequest({ kind: 'test' })).ok);
-});
-
-test('notification host boolean probes contain throws, hostile values, and invalid returns', () => {
-  assert.deepEqual(readNotificationHostBoolean(() => true), { ok: true, value: true })
-  assert.deepEqual(readNotificationHostBoolean(() => false), { ok: true, value: false })
-  assert.deepEqual(readNotificationHostBoolean(() => 'yes'), {
-    ok: false,
-    error: 'notification host probe returned a non-boolean value',
-  })
-  const hostile = hostileThrownValue()
-  assert.deepEqual(readNotificationHostBoolean(() => { throw hostile }), { ok: false, error: 'unknown error' })
 });
 
 test('validateNotificationRequest: sourceId is local, canonical dsh/gateway, or the exact legacy ssh alias', () => {

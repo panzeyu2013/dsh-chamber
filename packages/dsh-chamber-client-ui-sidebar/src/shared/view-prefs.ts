@@ -10,6 +10,7 @@
  */
 import { chamberBridge } from './aggregate-store.ts'
 import { assertSingletonModule } from './singleton.ts'
+import { isRecord } from './wire-common.ts'
 import type { SessionOrderBy } from './derive.ts'
 
 assertSingletonModule('view-prefs')
@@ -127,21 +128,17 @@ function defaults(): ChamberSidebarViewPrefs {
   return { v: 1, folded: {}, ungroupedOrder: {}, orderBy: {}, updatedOrder: {}, sessionUpdatedAtByAccount: {}, seenSources: [] }
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
 /** Lenient structural validation: drop malformed entries, keep valid ones. */
 function sanitizePrefs(raw: unknown): ChamberSidebarViewPrefs {
-  if (!isPlainObject(raw) || raw.v !== 1) return defaults()
+  if (!isRecord(raw) || raw.v !== 1) return defaults()
   const folded: Record<string, boolean> = {}
-  if (isPlainObject(raw.folded)) {
+  if (isRecord(raw.folded)) {
     for (const [key, value] of Object.entries(raw.folded)) {
       if (typeof value === 'boolean') folded[key] = value
     }
   }
   const ungroupedOrder: Record<string, string[]> = {}
-  if (isPlainObject(raw.ungroupedOrder)) {
+  if (isRecord(raw.ungroupedOrder)) {
     for (const [key, value] of Object.entries(raw.ungroupedOrder)) {
       if (Array.isArray(value)) ungroupedOrder[key] = value.filter((entry): entry is string => typeof entry === 'string')
     }
@@ -149,7 +146,7 @@ function sanitizePrefs(raw: unknown): ChamberSidebarViewPrefs {
   // orderBy：丢弃非法值（非 'manual'/'updated'）条目；缺失字段（旧数据）
   // 回退空对象——v 保持 1，不因新增字段重播种。
   const orderBy: Record<string, SessionOrderBy> = {}
-  if (isPlainObject(raw.orderBy)) {
+  if (isRecord(raw.orderBy)) {
     for (const [key, value] of Object.entries(raw.orderBy)) {
       if (value === 'manual' || value === 'updated') orderBy[key] = value
     }
@@ -157,7 +154,7 @@ function sanitizePrefs(raw: unknown): ChamberSidebarViewPrefs {
   // updatedOrder：account 键（`${sourceId}/${workspaceId}`）→ string[]；
   // 非数组/含非字符串条目丢弃，与 ungroupedOrder 同规则。
   const updatedOrder: Record<string, string[]> = {}
-  if (isPlainObject(raw.updatedOrder)) {
+  if (isRecord(raw.updatedOrder)) {
     for (const [key, value] of Object.entries(raw.updatedOrder)) {
       if (Array.isArray(value)) updatedOrder[key] = value.filter((entry): entry is string => typeof entry === 'string')
     }
@@ -165,9 +162,9 @@ function sanitizePrefs(raw: unknown): ChamberSidebarViewPrefs {
   // sessionUpdatedAtByAccount：account 键 → sessionId → 有限数值时间戳，
   // 嵌套逐层校验。
   const sessionUpdatedAtByAccount: Record<string, Record<string, number>> = {}
-  if (isPlainObject(raw.sessionUpdatedAtByAccount)) {
+  if (isRecord(raw.sessionUpdatedAtByAccount)) {
     for (const [key, value] of Object.entries(raw.sessionUpdatedAtByAccount)) {
-      if (!isPlainObject(value)) continue
+      if (!isRecord(value)) continue
       const timestamps: Record<string, number> = {}
       for (const [id, at] of Object.entries(value)) {
         if (typeof at === 'number' && Number.isFinite(at)) timestamps[id] = at
@@ -179,7 +176,7 @@ function sanitizePrefs(raw: unknown): ChamberSidebarViewPrefs {
   // 产出该键（v 保持 1），写入路径带空对象则保留。
   let hasSourceFolded = false
   const sourceFolded: Record<string, boolean> = {}
-  if (isPlainObject(raw.sourceFolded)) {
+  if (isRecord(raw.sourceFolded)) {
     hasSourceFolded = true
     for (const [key, value] of Object.entries(raw.sourceFolded)) {
       if (typeof value === 'boolean') sourceFolded[key] = value
@@ -475,7 +472,7 @@ export function updateViewPrefs(mutator: (prev: ChamberSidebarViewPrefs) => Cham
 /** 规范化：递归输出键序稳定的对象图（数组保序）。值限 JSON 纯数据。 */
 function canonicalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalize)
-  if (isPlainObject(value)) {
+  if (isRecord(value)) {
     const out: Record<string, unknown> = {}
     for (const key of Object.keys(value).sort()) out[key] = canonicalize(value[key])
     return out

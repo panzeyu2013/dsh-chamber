@@ -48,64 +48,35 @@ public enum BridgeFrame: Equatable {
 /// NDJSON 帧编解码：全 static 纯函数，无共享可变状态（线程安全、可测性优先）。
 public enum FrameCodec {
 
-    /// 单帧（行）上限：4 MiB。与 TrustGuard.maxMessageBytes 同值同源
-    /// （design 25 §4.4.1 ③/§4.4.2；TrustGuard.swift:32）——本文件自带常量，
-    /// 不 import TrustGuard 以免 A 桥 → B 桥文件耦合；两处调值必须同步。
-    public static let maxFrameBytes = 4 * 1024 * 1024
+    /// 单帧（行）上限：4 MiB。单一定义 = `BridgeLimits.maxMessageBytes`
+    /// （2026-12 单源化：A 桥信封与 B 桥帧共用同一预算；原「本文件自带同值常量、
+    /// 两处注释互指」的双写随之中止，TrustGuard 也不再被本文件引用）。
+    public static let maxFrameBytes = BridgeLimits.maxMessageBytes
 
-    // MARK: - 信封（仅 encode 使用；decode 走 classify 的类型判定，字段名以本结构为线格式权威）
+    // MARK: - 信封（仅 encodeRequest 使用；decode 走 classify 的类型判定，
+    // 字段名以本结构为线格式权威）
 
-    /// 单帧线格式（全部字段可选：解码容忍缺省，编码按帧族只写应写字段）。
-    /// 注意 Codable 合成编码对 nil 可选字段自动省略（encodeIfPresent 语义），
-    /// 因此显式 null 载荷在组帧时以 `payload ?? .null` 填充（见 encode）。
-    private struct Envelope: Codable {
-        var id: Int?
-        var method: String?
-        var payload: AnyCodable?
-        var ok: Bool?
-        var result: AnyCodable?
-        var error: String?
-        var event: String?
-
-        init(id: Int? = nil,
-             method: String? = nil,
-             payload: AnyCodable? = nil,
-             ok: Bool? = nil,
-             result: AnyCodable? = nil,
-             error: String? = nil,
-             event: String? = nil) {
-            self.id = id
-            self.method = method
-            self.payload = payload
-            self.ok = ok
-            self.result = result
-            self.error = error
-            self.event = event
-        }
+    /// Swift → sidecar 请求帧的线格式（`{id,method,payload}`；payload 恒写，
+    /// 缺省载荷以 `.null` 填充——旧 Envelope 的“全字段可选 + 各帧族按需写”形态
+    /// 随 response/event 编码分支一并删除）。
+    private struct RequestEnvelope: Codable {
+        var id: Int
+        var method: String
+        var payload: AnyCodable
     }
 
-    // MARK: - 编码（帧 → 一行 JSON + "\n"）
+    // MARK: - 编码（request 帧 → 一行 JSON + "\n"）
 
-    /// 把帧编码为一行的字节（JSON + "\n"，UTF-8）。超限抛
-    /// FrameCodecError.frameTooLarge；ok=false 但 error 为 nil（无法构成合法
-    /// 响应帧）抛 FrameCodecError.responseMissingErrorMessage。
-    public static func encode(_ frame: BridgeFrame) throws -> Data {
-        let envelope: Envelope
-        switch frame {
-        case .request(let id, let method, let payload):
-            envelope = Envelope(id: id, method: method, payload: payload ?? .null)
-        case .response(let id, let ok, let result, let error):
-            guard ok || error != nil else {
-                throw FrameCodecError.responseMissingErrorMessage(id: id)
-            }
-            // ok=true 时 result 键恒写（nil 载荷 → JSON null）；ok=false 只写
-            // error 键；ok=true 却带 error 的混写帧按“result 优先”收敛。
-            envelope = ok
-                ? Envelope(id: id, ok: true, result: result ?? .null)
-                : Envelope(id: id, ok: false, error: error)
-        case .event(let event, let payload):
-            envelope = Envelope(payload: payload ?? .null, event: event)
-        }
+    /// 把**请求帧**编码为一行的字节（JSON + "\n"，UTF-8）。超限抛
+    /// FrameCodecError.frameTooLarge。
+    ///
+    /// 方向固定：Swift 是 B 桥客户端，只发 request；response/event 是 sidecar →
+    /// Swift 的入站帧族，只经 `classify` 解码——旧 `encode(_:)` 的
+    /// response/event 分支与 FrameCodecError.responseMissingErrorMessage
+    /// 生产零调用（仅测试用），2026-12 审计删除。
+    public static func encodeRequest(id: Int, method: String,
+                                     payload: AnyCodable?) throws -> Data {
+        let envelope = RequestEnvelope(id: id, method: method, payload: payload ?? .null)
         var data = try JSONEncoder().encode(envelope)
         guard data.count <= maxFrameBytes else {
             throw FrameCodecError.frameTooLarge(byteCount: data.count)
@@ -115,26 +86,12 @@ public enum FrameCodec {
         return data
     }
 
-    // MARK: - 解码（一行 → 帧）
-
-    /// 一行 → 帧。容忍 null payload / 缺省字段 / 未知多余键；缺 id 或结构
-    /// 非法返回 nil（不抛错——调用方负责 loud 打印并丢弃，见 BridgeClient）。
-    ///
-    /// Phase 1 C3：本函数与 BridgeClient 的入站单次解析路径共用 `classify`，
-    /// 严格性契约集中在那一处（避免两条分类路径漂移）。
-    public static func decodeLine(_ line: String) -> BridgeFrame? {
-        // 防御性兜底：超长行由调用方先行判定并 loud（通常到不了这里）；
-        // 此处再挡一次，避免把 4 MiB+ 字符串喂给解码器。
-        guard !isLineTooLong(line),
-              let data = line.data(using: .utf8),
-              let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
-            return nil
-        }
-        return classify(jsonObject: object)
-    }
+    // MARK: - 解码（已解析 JSON 对象 → 帧）
 
     /// 已解析顶层 JSON 对象 → 帧（唯一分类器；BridgeClient 每行只解析一次后
     /// 直接调用本函数，edge/notify 两族的分类只在 classify 归 nil 后接手）。
+    /// 旧 `decodeLine(_:)`（String 入口，仅测试使用）2026-12 审计删除——
+    /// 生产入站解析只有 BridgeClient.handleIncomingLine 一条（Data 直入）。
     ///
     /// 分类规则（确定性，防歧义帧摇摆）：
     ///   - 带 id + method → .request（method 型帧不校验字符串内容，见文件头）；
@@ -222,27 +179,16 @@ public enum FrameCodec {
     ///     Int64.min 不受影响。
     /// 线上 id 恒为 Swift `allocateID()` 的小整数（pending 只认这些），差异输入
     /// 只会落成「未知 id → loud 丢弃」，不影响配对。
+    /// 判定本体 = `StrictJSONNumber.int64(_:domain: .int64Exact)`（2026-12 单源化；
+    /// B 桥其余整数点共用同一实现）。
     private static func intValue(_ raw: Any) -> Int? {
-        guard let number = raw as? NSNumber,
-              CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
-        if !CFNumberIsFloatType(number) {
-            guard let value = number as? Int64 else { return nil }
-            return Int(value)
-        }
-        let double = number.doubleValue
-        // -2^63 在 Double 里恰好可表示、Int64(exactly:) 会接受；但它只可能来自
-        // 越界 token 的舍入（合法 Int64.min 走整数存储），故 fail-closed 拒绝。
-        guard double != -9_223_372_036_854_775_808.0 else { return nil }
-        guard let value = Int(exactly: double) else { return nil }
-        return value
+        StrictJSONNumber.int64(raw, domain: .int64Exact).map { Int($0) }
     }
 
     private static func stringValue(_ raw: Any) -> String? { raw as? String }
 
     private static func boolValue(_ raw: Any) -> Bool? {
-        guard let number = raw as? NSNumber,
-              CFGetTypeID(number) == CFBooleanGetTypeID() else { return nil }
-        return number.boolValue
+        StrictJSONNumber.bool(raw)
     }
 
     /// 行是否超过单帧上限：按 UTF-8 字节数计（帧长上限的计量口径与
@@ -258,16 +204,12 @@ public enum FrameCodec {
 public enum FrameCodecError: LocalizedError, Equatable {
     /// 帧超过 maxFrameBytes 上限。
     case frameTooLarge(byteCount: Int)
-    /// ok=false 的响应帧必须携带 error 文案（line 协议要求 error:<string>）。
-    case responseMissingErrorMessage(id: Int)
 
     public var errorDescription: String? {
         switch self {
         case .frameTooLarge(let byteCount):
             return NativeText.format(.frameTooLarge, Int32(FrameCodec.maxFrameBytes),
                                      Int32(byteCount))
-        case .responseMissingErrorMessage(let id):
-            return NativeText.format(.frameResponseMissingError, Int32(id))
         }
     }
 }

@@ -10,7 +10,7 @@ import { chmodSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { configureGatewaySecretStore as configureGatewaySecretStoreRaw, configureGatewayTokenStore as configureGatewayTokenStoreRaw, DEFAULT_GATEWAY_HTTP_PORT, DEFAULT_GATEWAY_PORT, GATEWAY_HOST_PATTERN, gatewayHttpFailureIsTerminal, gatewayPasswordValidationError, gatewayProvider, gatewaySecretStorageCrossFlavorUnreadable, gatewaySecretStorageMode, gatewayTokenValidationError, getGatewayPassword, getGatewayToken, setGatewayPassword, setGatewayToken, setInstanceSecrets } from '../../gateway-provider.ts'
-import { GATEWAY_RUNTIME_STATUS } from '../../gateway-session-test-hooks.ts'
+import { GATEWAY_RUNTIME_STATUS } from '../support/gateway-session-test-hooks.ts'
 import type { SecretCryptoAdapter } from '../../gateway-provider.ts'
 import { gatewayCredentialBinding } from '../../credential-binding.ts'
 import type { TransportInstanceSpec } from '../../transport-provider.ts'

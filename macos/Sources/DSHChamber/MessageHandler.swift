@@ -221,7 +221,7 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
         // （同类白名单、同 512 深度上限）。随后量尺寸先走**安全上界短路**
         // （Phase 3，见 ⑤）；只有上界超限才回退对**原始信封**做 JSONSerialization
         // （线格式字节数语义不变，且因已过可表示性校验，这一步不可能再抛
-        // NSException/爆栈）。预扫函数保留给测试（拒绝集基准）。
+        // NSException/爆栈）。
         // 取舍：超限信封会先建一棵转换树再被尺寸门拒绝（峰值多一层树；信封本身
         // 已在内存且有 4 MiB 门，可接受）。
         guard let convertedEnvelope = AnyCodable.fromJSONObject(envelope) else {
@@ -294,86 +294,29 @@ final class ChamberMessageHandler: NSObject, WKScriptMessageHandler {
     /// JS 数字常以 int64 存储直通，> 2^53 的双精度路径会丢精度——如未来 id
     /// 源变为大整数，需按 CFNumber 存储类型重做严格解析）。
     static func exactInt(from value: Any?) -> Int? {
-        guard let number = value as? NSNumber,
-              CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
-        // 整型存储的 NSNumber（WebKit 对整值 JS 数字常走 int64 直通）：
-        // 直接取 int64——原实现统一走 double，会把 Int.max 判成 2^63 而误拒
-        // （2026-09 模块评审补测发现）。
-        if !CFNumberIsFloatType(number) {
-            return Int(number.int64Value)
-        }
-        // 浮点存储：只接受整值且在 2^53 内（JS Number 的精确整数域）。
-        let d = number.doubleValue
-        guard d.isFinite, d == d.rounded(), abs(d) <= 9_007_199_254_740_992.0 else { return nil }
-        return Int(d)
+        // 判定本体 = StrictJSONNumber（2026-12 单源化）：Bool 拒绝、非浮点存储
+        // 无损取 Int64（WebKit 对整值 JS 数字常走 int64 直通，统一走 double 会把
+        // Int.max 判成 2^63 而误拒）、浮点存储按 JS 精确整数域（±2^53）收口。
+        // 与迁移前的唯一差异：非浮点存储改用无损 `as? Int64`（UInt64 域外存储 →
+        // nil），旧实现的 `int64Value` 会回绕；该输入不可能来自 WebKit 桥接，
+        // 方向为 fail-closed。
+        StrictJSONNumber.int64(value, domain: .jsExact).map { Int($0) }
     }
 
-    /// 桥接 payload（[String: Any] / [Any] / 基础类型 / NSNull）→ AnyCodable。
-    ///
-    /// Phase 1 C2：直接走 `AnyCodable.fromJSONObject`（全量 CFTypeID 判定 +
-    /// 有限性拒绝 + 深度上限），不再经 JSONSerialization → JSONDecoder 往返。
-    /// 旧实现把同一棵载荷树走了两遍（规范成 JSON 一遍、按 Codable 契约解码
-    /// 一遍），且内部的 isJSONSerializableValue 预扫描与 fence ⑤ 对整封信封的
-    /// 扫描重复。调用方语义不变：非 JSON 可表示值（Date/Data/自定义对象）、
-    /// NaN/±Infinity、超深嵌套一律 nil（fail closed）。
-    /// 若 AnyCodable 的桥接契约再演进，本函数仍是唯一替换点。
-    ///
-    /// Phase 2：fence 已改为「整封信封一次转换」（见 fence ⑤ 注释），本函数
-    /// 现在只服务测试与其它单点调用方。
-    static func anyCodablePayload(from raw: Any) -> AnyCodable? {
-        AnyCodable.fromJSONObject(raw)
-    }
+    // 2026-12 审计删除（生产零调用，只服务测试）：
+    //   - `anyCodablePayload(from:)`：fence ② 起已改为「整封信封一次
+    //     AnyCodable.fromJSONObject 转换」（见 fence ⑤ 注释），单点包装无生产调用；
+    //   - `isJSONSerializableValue(_:depth:)` 与 `maxJSONDepth`：Phase 2 起
+    //     fence 不再走预扫描，接受集/深度门单源 = AnyCodable.fromJSONObject
+    //     （AnyCodable.maxJSONDepth）。
+    // 若将来需要「先判 JSON 可表示性再序列化」的独立预扫，应新建显式类型并入
+    // AnyCodable 单源，而不是在 A 桥文件里复制第二份深度/类型表。
 
-    /// JSON 嵌套深度上限：防受信页面构造 <4MiB 的极深嵌套信封在预扫描阶段
-    /// 击穿 Swift 栈（静态审查 #4；超限按 malformed_envelope 拒绝）。
-    static let maxJSONDepth = 512
-
-    /// 递归确认值可被 JSONSerialization 无异常序列化。
-    ///
-    /// Phase 2：fence 不再调用它（整封 AnyCodable 转换已覆盖同一接受集），
-    /// 保留为拒绝集的测试基准（MessageHandlerTests）。桥接/原生值只可能是
-    /// NSNull/String/NSNumber/NSArray/[String:Any] 或其 Swift 原生等价物；
-    /// 其余类型一律 false（fail closed）。NSNumber 需额外检查有限性——
-    /// JSONSerialization 对 NaN/±Infinity 抛 NSException（非 NSError）。
-    /// Phase 2 起 fence 走 AnyCodable.fromJSONObject（同接受集），本函数只剩
-    /// 测试基准用途：任何「先 try? 序列化」的调用点都应先过它。
-    static func isJSONSerializableValue(_ value: Any, depth: Int = 0) -> Bool {
-        if depth > maxJSONDepth { return false }
-        if value is NSNull || value is String { return true }
-        if let number = value as? NSNumber {
-            // JS 布尔桥接为 CFBoolean，属合法 JSON；非有限浮点拒绝。
-            if CFGetTypeID(number) == CFBooleanGetTypeID() { return true }
-            return number.doubleValue.isFinite
-        }
-        if let array = value as? [Any] {
-            return array.allSatisfy { isJSONSerializableValue($0, depth: depth + 1) }
-        }
-        if let dictionary = value as? [String: Any] {
-            return dictionary.values.allSatisfy { isJSONSerializableValue($0, depth: depth + 1) }
-        }
-        return false
-    }
-
-    /// JS 字符串字面量：手工转义（JSON 转义集 ⊂ JS 字符串转义，控制字符
-    /// \uXXXX），不依赖顶层片段序列化的可用性。
+    /// JS 字符串字面量：**单源 = AnyCodable 的单遍写出器**（2026-12 单源化）——
+    /// 与页面字面量出口（MainWindowController.jsonLiteral(of:)）逐字节同源，
+    /// 转义集：引号 / 反斜杠 / C0 控制字符（\uXXXX，大写十六进制）/ U+2028 /
+    /// U+2029；非 ASCII 原样保留（合法 JS 字符串）。本函数只保留调用点语义。
     static func jsStringLiteral(_ string: String) -> String {
-        var literal = "\""
-        for scalar in string.unicodeScalars {
-            switch scalar.value {
-            case 0x22: literal += "\\\""
-            case 0x5C: literal += "\\\\"
-            case 0x08: literal += "\\b"
-            case 0x09: literal += "\\t"
-            case 0x0A: literal += "\\n"
-            case 0x0C: literal += "\\f"
-            case 0x0D: literal += "\\r"
-            case 0x00...0x1F, 0x2028, 0x2029:
-                literal += String(format: "\\u%04X", scalar.value)
-            default:
-                literal.unicodeScalars.append(scalar)
-            }
-        }
-        literal += "\""
-        return literal
+        AnyCodable.string(string).jsonLiteralText
     }
 }

@@ -46,6 +46,7 @@
  */
 
 import { readFileSync } from 'node:fs'
+import { describeError } from './describe-error.ts'
 import { createInterface } from 'node:readline'
 
 // ---- wire types ---------------------------------------------------------
@@ -76,10 +77,6 @@ function send(frame: OutboundFrame): void {
 
 function pushEvent(event: string, payload: Json): void {
   send({ event: event, payload: payload })
-}
-
-function describeError(err: unknown): string {
-  return err instanceof Error ? err.message : String(err)
 }
 
 /** Deliberate request failure → error frame carrying exactly this message.

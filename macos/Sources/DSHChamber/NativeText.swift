@@ -31,8 +31,9 @@
 //     → BridgeClient（生命周期过渡、进程状态、未决请求作废与写帧/违约兜底）
 //   frame.tooLarge / frame.responseMissingError → FrameCodec
 //     （FrameCodecError.errorDescription：%d 分别为字节上限/实际字节与帧 id）
-//   bridge.errorFallback → MainWindowController（错误文案 jsonLiteral 失败时的
-//     最后 JSON 兜底；见 __dshChamberResolve 的 catch）
+//   bridge.errorFallback →（2026-12 单源化后已无代码引用：错误文案走
+//     AnyCodable 字面量出口，恒可序列化，原三级兜底删除）——键表冻结，
+//     保留待下一次键表评审再决定删表
 //   resources.explicitNodeMissing / resources.packagedNodeMissing /
 //   resources.pathNodeMissing → ChamberResources.PathResolutionError（node 解析 fatal）
 //   updater.feedMustBeHTTPS / updater.publicKeyInvalid → AppUpdater

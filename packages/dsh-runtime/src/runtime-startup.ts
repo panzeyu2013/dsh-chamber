@@ -61,8 +61,16 @@ export interface StartupDeps {
    * verification probes null an already-aborted one).
    */
   spawnAndProbe: (version: string, isBuiltin: boolean, signal?: AbortSignal) => Promise<ProbeResult[]>
-  /** 2026-12 shape-awareness: forwarded to apply-phase (see ApplyDeps). */
-  probeExpectedNames?: readonly string[]
+  /**
+   * 2026-12 shape-awareness: forwarded verbatim to apply-phase (see
+   * ApplyDeps.probeExpectedNames). It stays a function reference all the way
+   * through — the apply phase resolves it only after a probe attempt finished,
+   * because a host may refresh its seeded-domain table inside `spawnAndProbe`
+   * (desktop's probe closure runs `cp.startLocal()`). Capturing an array here
+   * would freeze the cold-start empty table and fail the exact-set verdict
+   * against the freshly seeded run (2026-12 P0).
+   */
+  probeExpectedNames?: () => readonly string[]
   stopHost: () => Promise<void>
   restore: (snapshotPath: string) => Promise<'complete' | 'half' | 'incomplete'>
   recordProbePass: (version: string) => void
@@ -759,15 +767,4 @@ export async function runDelayedRollback(
     })
   } catch { /* diagnostic only */ }
   return finalOutcome
-}
-
-/** M1 koffi presence probe (no compiler invocation). */
-export async function probeKoffiLoadable(versionTreeDir: string): Promise<{ ok: boolean; detail: string }> {
-  const { existsSync } = await import('node:fs')
-  const path = await import('node:path')
-  const hasBuildDir = existsSync(path.join(versionTreeDir, 'node_modules', 'koffi', 'build'))
-  return {
-    ok: hasBuildDir,
-    detail: hasBuildDir ? 'koffi prebuilt present (no toolchain needed)' : 'koffi prebuilt missing (source build would need a toolchain)',
-  }
 }

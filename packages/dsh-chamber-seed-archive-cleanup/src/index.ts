@@ -52,9 +52,9 @@
  *    binding performs ONE single-state `setState` write INSIDE the official
  *    `enqueueOperation` chain (serialized; runtime-guarded; version-pinned;
  *    retired when upstream unarchive/delete wire lands — design 24 §11);
- *  - official events: none public in the pinned tree — the two emit
- *    capabilities are documented no-ops; projection refresh rides the
- *    client mutation-pull and the official startup header-index rebuild.
+ *  - official events: none public in the pinned tree — projection refresh
+ *    rides the client mutation-pull and the official startup header-index
+ *    rebuild.
  *
  * Audit (security review 2026-12 Major-5): preview/purge lifecycle lines go
  * through the instance logger (purge = the product's only persistent content
@@ -80,10 +80,6 @@ import {
   RunGate,
   type HostCtxServices,
 } from './binding.ts'
-
-export * from './core.ts'
-export { BUSY_MESSAGE, assertHostSurface, makeHostBinding, RunGate }
-export type { HostCtxServices } from './binding.ts'
 
 /** Remote-only facade; all orchestration, validation and policy live in the pure core. */
 export class ArchiveCleanupGateway extends TypertRemoteService {

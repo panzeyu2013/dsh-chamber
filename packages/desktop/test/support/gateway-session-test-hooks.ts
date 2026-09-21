@@ -5,13 +5,12 @@
  * local twins (completeTestGatewaySessionHooks / completeTestSessionHooks +
  * GATEWAY_RUNTIME_STATUS) were unified here — dedupe audit N7. Bare helper
  * file, not a test: the desktop test script enumerates suites explicitly.
- * Packaging note: package.json `files` excludes this helper explicitly
- * (`!gateway-session-test-hooks.ts`) — unlike `*.test.ts` there is no
- * built-in exclusion for bare test helpers, so keep that list in sync.
+ * Packaging: lives under test/support/ (2026-12 cleanup), so the root
+ * `*.ts` collection glob never picks it up — no build.files negate needed.
  */
-import { GATEWAY_RUNTIME_IDENTITY } from './gateway-provider.ts'
-import type { GatewaySessionProviderHooks } from './gateway-provider.ts'
-import type { GatewayRegistrationAuthProof } from './gateway-session.ts'
+import { GATEWAY_RUNTIME_IDENTITY } from '../../gateway-provider.ts'
+import type { GatewaySessionProviderHooks } from '../../gateway-provider.ts'
+import type { GatewayRegistrationAuthProof } from '../../gateway-session.ts'
 
 export const GATEWAY_RUNTIME_STATUS = { kind: GATEWAY_RUNTIME_IDENTITY, connectionState: 'stopped' }
 

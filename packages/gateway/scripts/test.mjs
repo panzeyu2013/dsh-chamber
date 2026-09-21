@@ -1,15 +1,15 @@
 /**
  * @dsh-chamber/gateway test manifest - authoritative file list for this package test script.
- * Grouped by subject area (mirrors test/<domain>/). Every listed file runs as its
- * own node child with inherited stdio; the first failure ends the run - the same
- * semantics as the inline && chain this replaces. A listed file that does not
- * exist is a failure, never a silent skip.
+ * Grouped by subject area (mirrors test/<domain>/). The shared runner
+ * (scripts/lib/test-manifest.mjs) owns the semantics: a listed file that does
+ * not exist fails, every file runs as its own node child, the first failure
+ * ends the run, and a child that exits 0 without executing a node:test body
+ * fails (a zero-case manifest is never a pass).
  * Entries: a path, or { file, nodeArgs } when a loader (--import ...) is needed.
  */
-import { existsSync } from 'node:fs'
-import { spawnSync } from 'node:child_process'
-import { join, resolve } from 'node:path'
+import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { runTestManifest } from '../../../scripts/lib/test-manifest.mjs'
 
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
 
@@ -34,6 +34,7 @@ const GROUPS = {
     'test/boundary/boundary-login-page.test.ts',
     'test/boundary/audit.test.ts',
     'test/boundary/sanitize-route-error.test.ts',
+    'test/boundary/dashboard-semver-lockstep.test.ts',
   ],
   // proxy: the single-target reverse proxy, the S0 HTML trust injection, and the full-chain unary RPC proof.
   proxy: [
@@ -44,6 +45,7 @@ const GROUPS = {
   // runtime: managed-dsh boot/lifecycle, the /chamber/runtime controller, workspace path resolution and spawn guards.
   runtime: [
     'test/runtime/dsh-path.test.ts',
+    'test/runtime/runtime-gate-parity.test.ts',
     'test/runtime/spawn-guards.test.ts',
     'test/runtime/lifecycle.test.ts',
     'test/runtime/runtime-routes.test.ts',
@@ -96,20 +98,8 @@ const GROUPS = {
   ],
 }
 
-const entries = Object.entries(GROUPS).flatMap(([group, list]) =>
-  list.map(entry => (typeof entry === 'string' ? { group, file: entry, nodeArgs: [] } : { group, nodeArgs: [], ...entry })),
-)
-const missing = entries.filter(entry => !existsSync(join(PACKAGE_ROOT, entry.file)))
-if (missing.length > 0) {
-  console.error('[test] listed test file(s) missing:')
-  for (const entry of missing) console.error('  - ' + entry.file)
-  process.exit(1)
-}
-for (const [index, entry] of entries.entries()) {
-  if (index === 0 || entries[index - 1].group !== entry.group) console.log('\n=== ' + entry.group + ' ===')
-  const result = spawnSync(process.execPath, [...entry.nodeArgs, entry.file], { cwd: PACKAGE_ROOT, stdio: "inherit" })
-  if (result.status !== 0) {
-    console.error('[test] ' + entry.file + ' failed (exit ' + (result.status ?? ('signal ' + result.signal)) + ')')
-    process.exit(1)
-  }
-}
+runTestManifest({
+  label: '@dsh-chamber/gateway',
+  packageRoot: PACKAGE_ROOT,
+  groups: GROUPS,
+})

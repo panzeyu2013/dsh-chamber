@@ -101,6 +101,8 @@ test('the remove dialog derives its notes from the helper and never does inline 
   assert.match(dialog, /removeRunningNotes\(\{/, 'the dialog must use the pure derivation')
   assert.match(dialog, /runningNotes\.inertCount/, 'the inert count comes from the set difference')
   assert.doesNotMatch(dialog, /runningSessionIds\.length\s*-/, 'no length subtraction for the archived count')
-  assert.match(dialog, /removeFailureCopyKey\(/, 'host refusals must map to localized copy')
+  // The code→copy resolver moved behind shared/action-error.ts: the dialog
+  // must still localize every user-reachable refusal (test/shared/action-error.test.ts).
+  assert.match(dialog, /gitActionErrorText\(error, t\)/, 'refusals must map to localized copy')
   assert.match(dialog, /runtimeUnknownBlock/, 'the runtime-absent pre-hint must gate the confirm')
 })

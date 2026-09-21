@@ -28,8 +28,8 @@ export function gatewayPasswordValidationError(password: string): 'length' | nul
   return null
 }
 /**
- * Plugin-side mirror of the desktop `transportTargetChanged`
- * (packages/desktop/transport-provider.ts, locked by transport-spec-binding.test.ts):
+ * Plugin-side mirror of the desktop transport-identity predicate
+ * (packages/desktop/credential-identity.ts, locked by transport-spec-binding.test.ts):
  * true when an EDIT changes the transport TARGET — kind or any
  * host/user/port field — while the id stays the same. Label-only edits are
  * not target changes; `insecureHttp` is deliberately excluded (design 17
@@ -40,8 +40,7 @@ export function gatewayPasswordValidationError(password: string): 'length' | nul
  * process (transport-manager.ts migrateInstanceEntry / provider validateSpec:
  * an omitted kind defaults to dsh, an omitted transport derives from kind, omitted optional
  * fields default to null). This remains the renderer-side mirror for provider/
- * registry semantic tests; legacy instances_set is exact-no-op-only and has
- * no retarget path. The settings form's save_connection path deliberately does
+ * registry semantic tests. The settings form's save_connection path deliberately does
  * NOT reuse it for credential ownership: gateway auth compares
  * host+remotePort, while SSH password compares host+user+sshPort.
  */

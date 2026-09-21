@@ -25,7 +25,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     /// 的 QUIT_CLEANUP_TIMEOUT_MS = 5_000 同一预算，单源常量化，拆开不再漂移。
     static let quitCleanupTimeout: TimeInterval = BridgeClient.quitCleanupGracePeriod
     /// 退出/关窗决策请求超时（sidecar 无应答 → 诚实 nil，绝不无限挂起退出）。
-    private static let quitFactsTimeout: TimeInterval = 2.0
+    /// 单一定义 = QuitCoordinator.factsTimeout（2026-12 单源化：提示框秒数同源）。
+    private static let quitFactsTimeout: TimeInterval = QuitCoordinator.factsTimeout
 
     // MARK: - 状态
 
@@ -106,9 +107,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // 若在打包 .app 里生效，环境变量即可把壳重定向到任意 node、sidecar 脚本、
         // web dist、userData 或控制面 origin —— 产品边界破口。dev（swift run /
         // 非 .app）路径不受影响。
-        let env = isPackaged
-            ? ProcessInfo.processInfo.environment.filter { !$0.key.hasPrefix("DSH_CHAMBER_SHELL_") }
-            : ProcessInfo.processInfo.environment
+        // 过滤规则单源 = BridgeClient.filteredShellEnvironment（2026-12 单源化；
+        // 子进程 env 走同一实现，两处不再各写一份前缀判据）。
+        let env = BridgeClient.filteredShellEnvironment(
+            base: ProcessInfo.processInfo.environment, isPackaged: isPackaged)
         let fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) }
         let isExecutable: (String) -> Bool = { FileManager.default.isExecutableFile(atPath: $0) }
         if isPackaged { shellLog("[shell] 装配态（.app）——按 Contents/Resources 解析缺省路径") }
@@ -152,12 +154,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // 时间点只能靠外部测量，NSApplication 之前的时段不可测）。顺序契约：sidecar.log
         // 必须先配置，这条 boot 时间线才会落进它（合并两批时按此排序）。
         shellLog(ShellPerf.bootLine("logConfigured"))
-        // 控制面端口缺省（S11）：DSH_CHAMBER_SHELL_PORT > DSH_CHAMBER_CP_PORT > dev 空闲退避 /
-        // packaged 17500；真实 sidecar 分支里解析后回填（自定义脚本形状不探测，
-        // 保持缺省，绝不静默漂移）。
-        var resolvedCPPort = env["DSH_CHAMBER_SHELL_PORT"] ?? env["DSH_CHAMBER_CP_PORT"]
-            ?? (isPackaged ? "17500" : "17520")
-
         // ① Node 路径（S4）：DSH_CHAMBER_SHELL_NODE_BIN（须可执行）→ 装配态自带
         //    <Resources>/sidecar/node（须可执行）→ dev PATH node。皆无 →
         //    fatal（绝不 spawn 裸 node，也绝不拿另一个 app 的 Electron 二进制顶替）。
@@ -185,6 +181,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                 explicitPath: env["DSH_CHAMBER_SHELL_SIDECAR"].flatMap { $0.isEmpty ? nil : $0 }))
         }
         shellLog("[shell] sidecar = \(sidecarPath)")
+        // 控制面端口（S11 + 2026-12 单源化）：**唯一实现 = ControlPlanePort.resolve**——
+        // DSH_CHAMBER_SHELL_PORT > DSH_CHAMBER_CP_PORT > packaged 17500 / dev 17520；
+        // 真实 sidecar 形状额外做空闲探测与系统临时端口兜底，自定义脚本形状不探测。
+        // 两种形状共用同一优先级与同一「非法值 notice + 降级」语义（绝不 fatal）；
+        // 旧实现在此处另写一条字符串链、只在真实形状里解析——非法值遇到自定义形状
+        // 会一路走到 CP URL 派生失败 → fatal（本次单源化把这个破口收掉）。
+        let isRealSidecarScript = ControlPlanePort.isRealSidecarScript(sidecarPath)
+        let devProbe: ((Int) -> Int?)? = isRealSidecarScript
+            ? { ControlPlanePort.probeFreePort(startingAt: $0) } : nil
+        let ephemeralProbe: (() -> Int?)? = isRealSidecarScript
+            ? { ControlPlanePort.probeEphemeralPort() } : nil
+        let cpPortResolution = ControlPlanePort.resolve(
+            env: env, isPackaged: isPackaged,
+            probeDevPort: devProbe, probeEphemeralPort: ephemeralProbe)
+        for notice in cpPortResolution.notices { shellLog("[shell] 端口降级：\(notice)") }
+        let resolvedCPPort = String(cpPortResolution.port)
         // 真实 sidecar（dev 的 sidecar-entry.ts / W-23 装配产物的 sidecar.js）
         // 需要参数：--user-data-dir / --web-dist-dir / --port。按脚本名识别并补
         // 默认参数（env 可覆盖：DSH_CHAMBER_SHELL_USER_DATA / DSH_CHAMBER_SHELL_WEB_DIST / DSH_CHAMBER_SHELL_PORT /
@@ -202,9 +214,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             let path = sidecarPath
             let basename = (path as NSString).lastPathComponent
             let isCompiled = basename == "sidecar.js"
-            // 形状判定单源 = ControlPlanePort.isRealSidecarScript（与 S11 的
-            // --port 注入/空闲探测前置同一判定，测试直测）。
-            if ControlPlanePort.isRealSidecarScript(path) {
+            // 形状判定单源 = ControlPlanePort.isRealSidecarScript（与 ② 之后的
+            // 端口解析前置同一判定，测试直测）。
+            if isRealSidecarScript {
                 compiledSidecar = isCompiled
                 let sidecarDir = (path as NSString).deletingLastPathComponent
                 let repoRoot = URL(fileURLWithPath: path)
@@ -234,20 +246,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
                     webDir = repoRoot + "/packages/desktop/dist/web"
                 }
                 // sidecar 监听端口必须与控制面 URL 同源（2026-09 二轮：此前
-                // 恒 17520，打包态 URL 已改 17500 → 端口错配、白窗）。S11：
-                // DSH_CHAMBER_SHELL_PORT > DSH_CHAMBER_CP_PORT > dev 空闲端口退避（packaged
-                // 固定 17500，不改）；解析结果同时派生控制面 URL。
-                // S-03（2026-12 复裁决）：非法显式端口 / dev 退避耗尽**降级不致命**
-                // （对齐 Electron `resolveControlPlanePort()`，shell-core.ts:425-442）。
-                // 降级原因逐条 loud 打印，绝不静默换端口。
-                let resolution = ControlPlanePort.resolve(
-                    env: env, isPackaged: isPackaged,
-                    probeDevPort: { ControlPlanePort.probeFreePort(startingAt: $0) },
-                    probeEphemeralPort: { ControlPlanePort.probeEphemeralPort() })
-                for notice in resolution.notices { shellLog("[shell] 端口降级：\(notice)") }
-                let port = String(resolution.port)
-                shellLog("[shell] 控制面端口 = \(port)（\(Self.portSourceLabel(resolution.source))）")
-                resolvedCPPort = port
+                // 恒 17520，打包态 URL 已改 17500 → 端口错配、白窗）。解析结果
+                // 与缺省/降级语义单源 = ② 之后的 cpPortResolution（S-03 复裁决：
+                // 非法显式端口 / dev 退避耗尽降级不致命，notices 已在解析处 loud）。
+                let port = String(cpPortResolution.port)
+                shellLog("[shell] 控制面端口 = \(port)（\(Self.portSourceLabel(cpPortResolution.source))）")
                 sidecarArguments += [
                     "--user-data-dir", stateDir,
                     "--web-dist-dir", webDir,

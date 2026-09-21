@@ -10,7 +10,6 @@ import {
   ArchiveCleanupCore,
   ArchiveCleanupError,
   indexChildren,
-  resolveDeletableTree,
   subtreeLiveness,
   MAX_PURGE_SESSIONS,
   MAX_PURGE_ERROR_RECORDS,
@@ -37,7 +36,7 @@ test('preview: loaded-only subtrees are reported separately from running ones', 
   const host = buildHost()
   host.loaded.add('s2')
   const preview = await new ArchiveCleanupCore(host).preview()
-  assert.equal(preview.skippedRunning, 1) // s3 (durable-running child)
+  assert.equal(preview.skippedRunning, 1) // s3 (running child)
   assert.equal(preview.skippedLoaded, 1) // s2 (attached but idle)
   assert.equal(preview.deletableSessions, 1) // s1 only under the default guard
 })
@@ -51,40 +50,23 @@ test('indexChildren: uninterrupted subagent-origin children only', () => {
   assert.equal(children.has('s2'), false)
 })
 
-test('resolveDeletableTree: children-first post-order, root last; null when running or unknown', () => {
-  const host = buildHost()
-  const states = new Map([...host.states.entries()])
-  const children = indexChildren([...states.values()])
-  const facts = { running: host.live, loaded: host.loaded }
-  const tree = resolveDeletableTree('s1', states, children, facts)
-  assert.ok(tree !== null)
-  assert.deepEqual(tree.order, ['a1a', 'a1', 's1'])
-  assert.equal(tree.subagentCount, 2)
-  assert.equal(resolveDeletableTree('s3', states, children, facts), null)
-  assert.equal(resolveDeletableTree('nope', states, children, facts), null)
-})
-
-test('subtreeLiveness: running beats loaded beats clear; force never overrides running', () => {
+test('subtreeLiveness: running beats loaded beats clear (force gating lives in purge)', () => {
   const host = buildHost()
   const states = new Map([...host.states.entries()])
   const children = indexChildren([...states.values()])
   const facts = { running: host.live, loaded: host.loaded }
 
-  assert.equal(subtreeLiveness('s1', states, children, facts), 'clear')
+  assert.equal(subtreeLiveness('s1', children, facts), 'clear')
   host.loaded.add('a1a')
-  assert.equal(subtreeLiveness('s1', states, children, facts), 'loaded')
-  // A LOADED-only subtree is deletable with force…
-  assert.ok(resolveDeletableTree('s1', states, children, facts) === null)
-  assert.ok(resolveDeletableTree('s1', states, children, facts, true) !== null)
-  // …but a RUNNING member wins, and force does NOT override it.
+  assert.equal(subtreeLiveness('s1', children, facts), 'loaded')
+  // A RUNNING member wins.
   host.live.add('a1a')
-  assert.equal(subtreeLiveness('s1', states, children, facts), 'running')
-  assert.equal(resolveDeletableTree('s1', states, children, facts, true), null)
+  assert.equal(subtreeLiveness('s1', children, facts), 'running')
 })
 
 test('purge: loaded-only subtrees are skipped by default and deleted under force', async () => {
   const host = buildHost()
-  // s2 is attached-but-idle (loaded); s3 keeps its durable-running child b1.
+  // s2 is attached-but-idle (loaded); s3 keeps its running child b1.
   host.loaded.add('s2')
   const core = new ArchiveCleanupCore(host)
 
@@ -270,7 +252,7 @@ test('purge: a running member is refused with force too (delete-time guard)', as
   assert.deepEqual(host.archived, new Set(['s1', 's2', 's3']))
 })
 
-test('purge: deletes children-first, removes archived members last, emits events once', async () => {
+test('purge: deletes children-first and removes archived members last', async () => {
   const host = buildHost()
   const core = new ArchiveCleanupCore(host)
   const result = await core.purge()
@@ -280,8 +262,6 @@ test('purge: deletes children-first, removes archived members last, emits events
   assert.deepEqual(result.errors, [])
   assert.deepEqual(host.deleteLog, ['a1a', 'a1', 's1', 's2'])
   assert.deepEqual(host.removedFromArchived, ['s1', 's2', 's-orphan'])
-  assert.deepEqual(host.emittedRemoved, ['a1a', 'a1', 's1', 's2'])
-  assert.equal(host.changedEvents, 1)
   // Only archived subtrees were touched; the running subtree and the live
   // sibling are intact.
   assert.equal(host.states.has('s3'), true)
@@ -299,7 +279,6 @@ test('purge: idempotent rerun converges to the running-skipped remainder only', 
   assert.equal(again.deletedSubagents, 0)
   assert.equal(again.skippedRunning, 1) // s3 stays running-skipped
   assert.equal(again.errors.length, 0)
-  assert.equal(host.changedEvents, 1) // nothing left to mutate → no extra event
 })
 
 test('purge: a running subtree is skipped whole and stays archived', async () => {
@@ -314,10 +293,10 @@ test('purge: a running subtree is skipped whole and stays archived', async () =>
 })
 
 test('purge: mid-run running flip is caught by the per-subtree recheck', async () => {
-  // s3's child b1 is durable-idle at plan time; deleting s1 flips b1 live.
-  // The per-tree recheck before s3 must skip the whole subtree mid-run.
+  // s3's child b1 is idle (not running) at plan time; deleting s1 flips it
+  // live. The per-tree recheck before s3 must skip the whole subtree mid-run.
   const host = buildHost()
-  host.states.set('b1', subagent('b1', 's3', false))
+  host.live.delete('b1')
   host.liveAddOnDeleteOf = 's1'
   host.liveAddOnDelete = 'b1'
   const core = new ArchiveCleanupCore(host)
@@ -450,7 +429,8 @@ test('purge: an archived descendant covered by a completed tree is cleared in th
   host.states.set('s2', state('s2'))
   host.archived.add('s3')
   host.states.set('s3', state('s3'))
-  host.states.set('b1', subagent('b1', 's3', true))
+  host.states.set('b1', subagent('b1', 's3'))
+  host.live.add('b1')
   const core = new ArchiveCleanupCore(host)
   const result = await core.purge()
   assert.equal(result.deletedSessions, 2)
@@ -464,7 +444,6 @@ test('purge: an archived descendant covered by a completed tree is cleared in th
   const again = await core.purge()
   assert.equal(again.deletedSessions, 0)
   assert.equal(again.deletedSubagents, 0)
-  assert.equal(host.changedEvents, 1)
 })
 
 test('purge: crash mid-subtree leaves the root archived and a rerun converges', async () => {
@@ -475,10 +454,13 @@ test('purge: crash mid-subtree leaves the root archived and a rerun converges', 
   assert.deepEqual(host.deleteLog, ['a1a'])
   assert.deepEqual(host.removedFromArchived, [])
   // A "restarted process" sees the same persisted state (archived set
-  // unchanged; a1a's record gone).
+  // unchanged; a1a's record gone) and the same live-agent facts (b1's run
+  // outlives the mid-run crash) — the running guard is sourced from the live
+  // facts, never from a persisted per-record bit.
   const restarted = new FakeHost()
   for (const id of host.archived) restarted.archived.add(id)
   for (const [id, st] of host.states) restarted.states.set(id, st)
+  for (const id of host.live) restarted.live.add(id)
   const rerun = new ArchiveCleanupCore(restarted)
   const result = await rerun.purge()
   // s1's subtree: a1a is missing (no double delete), a1 + s1 delete; s2 too.
@@ -519,7 +501,6 @@ test('purge: batched set-removal failure keeps every id archived for rerun conve
   assert.equal(host.archived.has('s-orphan'), false)
   assert.deepEqual([...host.archived], ['s3'])
   assert.deepEqual(host.removalCalls, [['s1', 's2', 's-orphan']])
-  assert.equal(host.changedEvents, 2) // one changed event per run with clear work
 })
 
 test('domainResult: ArchiveCleanupError maps through the carrier; unknown failures stay throws', async () => {

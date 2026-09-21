@@ -21,29 +21,17 @@ import { createChamberPluginTasks } from '../../src/plugins-tasks.ts'
 import type { PluginTaskSubmitInput, PluginTaskSubmitResult, PluginTaskTasksProjection, DeferredIntent } from '../../src/plugins-tasks.ts'
 import type { JournalOp } from '../../src/plugins-journal.ts'
 import { FakeRequest, FakeResponse } from '../support/utils.ts'
+import { makeChamberSurfaceHarness, surfaceSilentLogger, surfaceStubChannels } from '../support/chamber-surface-harness.ts'
 import { buildTgz, buildPluginTgz, type TarEntrySpec } from '../support/tgz-fixtures.ts'
 import { writeManifestFixture, scratchDir, makeSpawnHarness, waitFor } from '../support/plugins-tasks-fixtures.ts'
 
-const silent = { log() {}, warn() {}, error() {} }
-const channels = {
-  register() {},
-  async start() {},
-  async stop() {},
-  resolve: () => null,
-  health: () => 'unknown' as const,
-  list: () => [],
-}
+// Shared harness (2026-12 audit F40).
+const silent = surfaceSilentLogger
+const channels = surfaceStubChannels
 
 /** Surface with a programmable fake tasks orchestrator + real installed. */
 function surfaceWithTasks(stateDir: string, tasks: ChamberSurfacePluginTasks): ReturnType<typeof createChamberSurface> {
-  return createChamberSurface({
-    logger: silent,
-    channels,
-    plugins: createChamberPlugins(stateDir, silent),
-    installed: createChamberInstalled(stateDir),
-    tasks,
-    stateDir,
-  })
+  return makeChamberSurfaceHarness(undefined, { stateDir, tasks, logger: silent }).surface
 }
 
 /** Track submissions and answer from a queue of canned results. */

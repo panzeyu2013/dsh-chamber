@@ -63,6 +63,7 @@ import { thirdPartyRoot } from './plugins-journal.ts'
 import type { PluginTaskSubmitInput, PluginTaskSubmitResult, PluginTaskTasksProjection } from './plugins-tasks.ts'
 import { scanTgzMetadata, TGZ_MAX_ENTRIES, TGZ_MAX_UNPACKED_BYTES } from './tgz-scan.ts'
 import { sanitizeRouteError } from './sanitize-route-error.ts'
+import { DASHBOARD_SEMVER_JS } from './chamber-dashboard-semver.ts'
 import type { ChamberSessionState } from './session-state.ts'
 import { codedError, headerValue, jsonResponse, readBoundedBody } from './http-utils.ts'
 
@@ -367,62 +368,13 @@ const CHAMBER_APP_JS = `(function () {
 
   function runtimeVersion() { return byId('runtime-version').value || null; }
 
-  // SemVer 2.0 precedence for the version dropdown (build metadata ignored;
-  // unparseable strings compare equal and keep their stable sort position at
-  // the tail — the same policy as the settings-bridge selector). Written
-  // regex-free: this is an inline script template, backslash escapes would be
-  // consumed by the template literal.
-  function semverNumericCompare(a, b) {
-    if (a.length !== b.length) return a.length < b.length ? -1 : 1;
-    return a === b ? 0 : (a < b ? -1 : 1);
-  }
-  function semverIsDigits(s) {
-    if (s.length === 0) return false;
-    for (var i = 0; i < s.length; i += 1) {
-      var c = s.charCodeAt(i);
-      if (c < 48 || c > 57) return false;
-    }
-    return true;
-  }
-  function semverParse(value) {
-    var plus = value.indexOf('+');
-    if (plus !== -1) value = value.slice(0, plus);
-    var dash = value.indexOf('-');
-    var core = (dash === -1 ? value : value.slice(0, dash)).split('.');
-    if (core.length !== 3) return null;
-    var nums = [];
-    for (var i = 0; i < 3; i += 1) {
-      var part = core[i];
-      if (!semverIsDigits(part)) return null;
-      if (part.length > 1 && part.charCodeAt(0) === 48) return null; // leading zero
-      nums.push(part);
-    }
-    return { core: nums, prerelease: dash === -1 ? [] : value.slice(dash + 1).split('.') };
-  }
-  function semverCompare(a, b) {
-    var left = semverParse(a), right = semverParse(b);
-    if (left === null || right === null) return 0;
-    for (var i = 0; i < 3; i += 1) {
-      var c = semverNumericCompare(left.core[i], right.core[i]);
-      if (c !== 0) return c;
-    }
-    var lp = left.prerelease, rp = right.prerelease;
-    if (lp.length === 0 || rp.length === 0) {
-      if (lp.length === rp.length) return 0;
-      return lp.length === 0 ? 1 : -1;
-    }
-    var common = Math.min(lp.length, rp.length);
-    for (var j = 0; j < common; j += 1) {
-      var x = lp[j], y = rp[j];
-      if (x === y) continue;
-      var xn = semverIsDigits(x), yn = semverIsDigits(y);
-      if (xn && yn) return semverNumericCompare(x, y);
-      if (xn !== yn) return xn ? -1 : 1;
-      return x < y ? -1 : 1;
-    }
-    if (lp.length === rp.length) return 0;
-    return lp.length < rp.length ? -1 : 1;
-  }
+  // SemVer 2.0 precedence for the version dropdown. ONE local source of the
+  // rules (chamber-dashboard-semver.ts; 2026-12 audit F8), interpolated here
+  // verbatim: build metadata is ignored, unparseable strings compare equal and
+  // keep their stable sort position at the tail — the same policy as the
+  // settings-bridge selector. A lockstep test pins the shared dsh-runtime
+  // conclusions for valid semver.
+${DASHBOARD_SEMVER_JS}
 
   function setRuntimeControls() {
     var row = runtimeSnapshot;
@@ -1019,23 +971,6 @@ const CHAMBER_APP_JS = `(function () {
 }());
 `
 
-const MANIFEST_WEBMANIFEST = JSON.stringify({
-  name: 'dsh gateway',
-  short_name: 'dsh',
-  start_url: '/',
-  display: 'standalone',
-  background_color: '#0b0f14',
-  theme_color: '#0b0f14',
-})
-
-const SW_REGISTER_JS = `// dsh gateway service-worker registration (design 17 §9, P4).
-// No-op for now: registers an empty worker so the PWA installs and later
-// offline/cache behavior can be added without changing the registration point.
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/chamber/sw.js').catch(() => {})
-}
-`
-
 const MOBILE_HTML = `<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -1577,23 +1512,11 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
       return true
     }
 
-    // P4 static assets (design 17 §10/§9): PWA manifest + SW registration +
-    // mobile light surface + the (empty) service worker.
-    if (pathname === '/chamber/manifest.webmanifest') {
-      if (!isAssetMethod(req.method)) return methodNotAllowed(res)
-      serveAsset(res, 'application/manifest+json', MANIFEST_WEBMANIFEST, req.method === 'HEAD')
-      return true
-    }
-    if (pathname === '/chamber/sw-register.js') {
-      if (!isAssetMethod(req.method)) return methodNotAllowed(res)
-      serveAsset(res, 'application/javascript', SW_REGISTER_JS, req.method === 'HEAD')
-      return true
-    }
-    if (pathname === '/chamber/sw.js') {
-      if (!isAssetMethod(req.method)) return methodNotAllowed(res)
-      serveAsset(res, 'application/javascript', '/* dsh gateway service worker (empty) */\n', req.method === 'HEAD')
-      return true
-    }
+    // Mobile light surface (design 17 §9/§18). The PWA trio
+    // (manifest.webmanifest / sw-register.js / sw.js) was removed: nothing in
+    // the repository referenced those URLs — the HTML link/registration
+    // injection is still the design's deferred P4 item (middleware.ts), so
+    // serving them had no consumer (2026-12 audit F12).
     if (pathname === '/chamber/mobile.html') {
       if (!isAssetMethod(req.method)) return methodNotAllowed(res)
       serveAsset(res, 'text/html; charset=utf-8', MOBILE_HTML, req.method === 'HEAD')
@@ -1642,9 +1565,6 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
   // §6.2). No further server-side admission gate exists — a fully
   // authenticated caller is trusted at /chamber/runtime action level (design
   // 21 decision 14).
-  void logger
-  void channels
-
   return {
     async handle(req, res, pathname): Promise<boolean> {
       return handleRoute(req, res, pathname)

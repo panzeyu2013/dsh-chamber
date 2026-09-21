@@ -11,7 +11,7 @@ import { probeDshSignature, verifyDshEndpoint, sshProvider, verifyGatewayEndpoin
 import { configureGatewaySessionProvider, setGatewayPassword, setGatewayToken } from '../../gateway-provider.ts'
 import type { GatewaySessionProviderHooks } from '../../gateway-provider.ts'
 import type { GatewaySessionOrigin } from '../../gateway-session.ts'
-import { completeGatewaySessionHooks as completeTestGatewaySessionHooks, GATEWAY_RUNTIME_STATUS } from '../../gateway-session-test-hooks.ts'
+import { completeGatewaySessionHooks as completeTestGatewaySessionHooks, GATEWAY_RUNTIME_STATUS } from '../support/gateway-session-test-hooks.ts'
 import { closeLoopbackServer, listenEphemeral } from '../../loopback-http-test-server.ts'
 import type { TransportInstanceSpec } from '../../transport-provider.ts'
 

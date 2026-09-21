@@ -6,6 +6,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { pollGatewayReady } from '../../src/shared/gateway-runtime-poll.ts'
+import { pollUntil } from '../../src/shared/poll.ts'
 
 /** One status-route fetch stub: HTTP `status` and a canned JSON body. */
 const stubFetch = (status: number, body: unknown): typeof fetch => (async () => ({ status, json: async () => body })) as unknown as typeof fetch
@@ -73,4 +74,32 @@ test('pollGatewayReady: terminal connection states OUTRANK a stale/misreported r
     await assert.rejects(pollGatewayReady('gateway-x', undefined, { fetchImpl, ...fast }),
       new RegExp('restart failed: landed ' + terminal), terminal + ' must outrank restart:ok')
   }
+})
+
+test('the poll kernel stops at the attempts budget and on a stop verdict (no extra rounds)', async () => {
+  // attempts mode: exactly N probes, then undefined — the caller owns the timeout wording.
+  let probes = 0
+  const exhausted = await pollUntil<number>({
+    attempts: 3,
+    intervalMs: 0,
+    waitFirst: true,
+    probe: async () => { probes += 1; return probes },
+    classify: () => ({ kind: 'retry' }),
+  })
+  assert.equal(exhausted, undefined)
+  assert.equal(probes, 3)
+
+  // A rejected probe mapped to 'stop' ends the loop immediately (the purge
+  // settle wait must keep the last observed running set, not fabricate one).
+  let failedProbes = 0
+  const stopped = await pollUntil<number>({
+    attempts: 5,
+    intervalMs: 0,
+    waitFirst: true,
+    probe: async () => { failedProbes += 1; throw new Error('running read failed') },
+    classify: () => ({ kind: 'retry' }),
+    onProbeError: () => ({ kind: 'stop' }),
+  })
+  assert.equal(stopped, undefined)
+  assert.equal(failedProbes, 1)
 })

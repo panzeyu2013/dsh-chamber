@@ -1024,17 +1024,6 @@ export function markKnownGood(
   atomicWriteJson(baseDir, filePath, { versions })
 }
 
-export function forgetKnownGood(baseDir: string, version: string): void {
-  ensureRuntimeRootNoFollow(baseDir)
-  const safe = assertSafeVersion(version)
-  const filePath = knownGoodPath(baseDir)
-  const state = readVersionTimestampMap(filePath)
-  if (state.kind !== 'valid') return
-  const versions = { ...state.versions }
-  delete versions[safe]
-  atomicWriteJson(baseDir, filePath, { versions })
-}
-
 function failurePath(baseDir: string, version: string): string {
   return join(runtimeDirPath(baseDir), 'failures', `${assertSafeVersion(version)}.json`)
 }
@@ -1465,52 +1454,6 @@ export function cleanupStaleInstalls(baseDir: string): string[] {
   return removed
 }
 
-function measurePathBytes(path: string): number {
-  let info
-  try {
-    info = lstatSync(path)
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0
-    throw error
-  }
-  // Do not follow links outside the owned runtime root, but account for the
-  // directory entry itself rather than silently treating it as no usage.
-  if (info.isSymbolicLink()) return info.size
-  if (!info.isDirectory()) return info.size
-  let total = info.size
-  for (const entry of readdirSync(path)) total += measurePathBytes(join(path, entry))
-  return total
-}
-
-/** Same walk discipline as measurePathBytes (lstat only, symlinks never
- * followed, directory entries charged), but every entry is counted by
- * (dev, ino) identity exactly once across ALL roots — the real-bytes
- * companion for totalBytes/unclassifiedBytes. A root that vanished entirely
- * is zero; anything else (including a nested entry that vanished between
- * listing and lstat) propagates like the per-path sums. */
-function measureDedupedBytes(roots: string[]): number {
-  const seen = new Set<string>()
-  const visit = (entryPath: string, missingIsZero: boolean): number => {
-    let info
-    try {
-      info = lstatSync(entryPath)
-    } catch (error) {
-      if (missingIsZero && (error as NodeJS.ErrnoException).code === 'ENOENT') return 0
-      throw error
-    }
-    const key = `${info.dev}:${info.ino}`
-    if (seen.has(key)) return 0
-    seen.add(key)
-    if (info.isSymbolicLink() || !info.isDirectory()) return info.size
-    let total = info.size
-    for (const entry of readdirSync(entryPath)) total += visit(join(entryPath, entry), false)
-    return total
-  }
-  let total = 0
-  for (const root of roots) total += visit(root, true)
-  return total
-}
-
 function isRuntimePublishBackupName(name: string): boolean {
   const match = PUBLISH_BACKUP_NAME.exec(name)
   if (!match) return false
@@ -1528,128 +1471,13 @@ function isRuntimePublishBackupName(name: string): boolean {
  * public constant names). */
 export const RUNTIME_LOGICAL_DISK_LIMIT_BYTES = 10 * 1024 ** 3
 
-/** On-demand disk accounting. It performs a full tree walk and is not for a
- * hot UI loop; callers should run it only after install/cleanup or on demand.
- * `dshHome` defaults to the desktop owner layout; the separately invoked
- * gateway passes its sibling `<stateDir>/dsh-home` explicitly so interrupted
- * restore backups are charged to the same logical runtime quota.
- *
- * Accounting contract (settings polish D1-A): `totalBytes` is the real byte
- * figure — the runtime root plus the `dsh-home.old*` backups are walked once
- * with (dev, ino) dedupe, so hard-linked tree/store bytes are never counted
- * twice. Category fields keep their historical per-path sum semantics.
- * `unclassifiedBytes` is the deduped residue of entries that fall into no
- * known category, so stray directories and metadata authorities stop being
- * invisible to the UI and the fresh-install soft gate. See RuntimeDiskSummary
- * for the honest APFS-reflink approximation boundary. */
-export function runtimeDiskSummary(
-  baseDir: string,
-  dshHome: string = join(baseDir, 'state', 'dsh-home'),
-): RuntimeDiskSummary {
-  const runtime = runtimeDirPath(baseDir)
-  const trees = listVersionTrees(baseDir)
-  const treeSet = new Set(trees)
-  const runtimeEntries = (() => {
-    try {
-      return readdirSync(runtime, { withFileTypes: true })
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
-      throw error
-    }
-  })()
-  const workDirs = runtimeEntries.filter((entry) => entry.isDirectory() && entry.name.startsWith('.work-')).map((entry) => join(runtime, entry.name))
-  const failedTrees = runtimeEntries.filter((entry) => entry.isDirectory() && entry.name.endsWith('.failed')).map((entry) => join(runtime, entry.name))
-  const publishBackups = runtimeEntries
-    .filter((entry) => isRuntimePublishBackupName(entry.name))
-    .map((entry) => join(runtime, entry.name))
-  const dshHomeParent = dirname(dshHome)
-  const dshHomeName = basename(dshHome)
-  const restoreBackups = (() => {
-    try {
-      return readdirSync(dshHomeParent, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory()
-          && (entry.name === `${dshHomeName}.old` || entry.name.startsWith(`${dshHomeName}.old-`)))
-        .map((entry) => join(dshHomeParent, entry.name))
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
-      throw error
-    }
-  })()
-  // One entry belongs to at most one known category; everything else is
-  // unclassified residue. Classification mirrors the exact category sums
-  // below (same name/dirent filters), so no entry can be silently counted
-  // in neither the categories nor the residue.
-  const unclassifiedPaths: string[] = []
-  for (const entry of runtimeEntries) {
-    const name = entry.name
-    const known = (treeSet.has(name) && entry.isDirectory())
-      || (entry.isDirectory() && name.startsWith('.work-'))
-      || (entry.isDirectory() && name.endsWith('.failed'))
-      || isRuntimePublishBackupName(name)
-      || name === 'failures'
-      || name === 'metadata-recovery-data'
-      || name === 'metadata-recovery-rescue-data'
-      || name === 'metadata-recovery.json'
-      || name === '.pnpm-store'
-      || name === '.pnpm-cache'
-      || name === '.install-home'
-      || name === '.xdg-cache'
-      || name === 'snapshots'
-      || name === 'pre-rollback'
-    if (!known) unclassifiedPaths.push(join(runtime, name))
-  }
-  const versionTreeBytes = trees.reduce((sum, version) => sum + measurePathBytes(join(runtime, version)), 0)
-  const storeBytes = measurePathBytes(join(runtime, '.pnpm-store'))
-  const cacheBytes = measurePathBytes(join(runtime, '.pnpm-cache'))
-  const installHomeBytes = measurePathBytes(join(runtime, '.install-home'))
-  const xdgCacheBytes = measurePathBytes(join(runtime, '.xdg-cache'))
-  const workBytes = workDirs.reduce((sum, dir) => sum + measurePathBytes(dir), 0)
-  // Recovery stashes/evidence are failure-scene bytes as well: keeping them
-  // outside the quota would let the safest corruption path grow invisible to
-  // both the UI and the fresh-install soft gate.
-  const failureBytes = measurePathBytes(join(runtime, 'failures'))
-    + failedTrees.reduce((sum, tree) => sum + measurePathBytes(tree), 0)
-    + publishBackups.reduce((sum, backup) => sum + measurePathBytes(backup), 0)
-    + measurePathBytes(join(runtime, 'metadata-recovery-data'))
-    + measurePathBytes(join(runtime, 'metadata-recovery-rescue-data'))
-    + measurePathBytes(join(runtime, 'metadata-recovery.json'))
-  const snapshotBytes = measurePathBytes(join(runtime, 'snapshots'))
-  const preRollbackBytes = measurePathBytes(join(runtime, 'pre-rollback'))
-  const restoreBackupBytes = restoreBackups.reduce((sum, backup) => sum + measurePathBytes(backup), 0)
-  const unclassifiedBytes = measureDedupedBytes(unclassifiedPaths)
-  // One walk, one identity set: a hard link shared between a version tree
-  // and the store (or a restore backup) is charged to real totalBytes once.
-  const totalBytes = measureDedupedBytes([
-    ...runtimeEntries.map((entry) => join(runtime, entry.name)),
-    ...restoreBackups,
-  ])
-  return {
-    versionTrees: trees.length,
-    versionTreeBytes,
-    storeBytes,
-    cacheBytes,
-    installHomeBytes,
-    xdgCacheBytes,
-    workBytes,
-    failureBytes,
-    snapshotBytes,
-    preRollbackBytes,
-    restoreBackupBytes,
-    unclassifiedBytes,
-    totalBytes,
-    storePruneNeeded: existsSync(storePruneMarkerPath(baseDir)),
-  }
-}
-
 /* ============================================================================
  * perf T3（2026-09，D8 组合方案：异步分批单遍遍历 + 节流/单飞/终态一次）
  *
- * `runtimeDiskSummary`（上方，保留为兼容面）对每个已知类别各做一整遍全树
- * 遍历、再加两遍 (dev,ino) 去重遍历——一次调用约 15 遍重叠遍历。store 达
- * 10⁵–10⁶ 项量级时单遍即数秒到数十秒（scripts/perf/disk-walk-baseline.mjs
- * 合成曲线），版本事务（desktop owner 15 个 refresh 调用点）会把这个成本
- * 再放大。异步兄弟函数对每个 runtime 拥有的根只遍历**一遍**，会计契约与
- * 同步版逐字段一致：
+ * 每个 runtime 拥有的根只遍历**一遍**（2026-12 单源化前存在一份同步孪生，
+ * 按类别各走一遍 + 两遍 (dev,ino) 去重，一次调用约 15 遍重叠遍历；10⁵–10⁶
+ * 项量级下单遍即数秒到数十秒，再乘以 desktop owner 的 15 个 refresh 调用
+ * 点）。单遍会计契约：
  *   - 类别字段保持"逐路径求和"语义（每处出现都计）；
  *   - unclassifiedBytes 在"未分类残渣"集合内去重（独立 identity 集）；
  *   - totalBytes 跨 runtime 根与 dsh-home.old* 恢复备份共享同一 identity
@@ -1659,13 +1487,12 @@ export function runtimeDiskSummary(
  * coalesced-refresh.ts 的 createCoalescedRefresher 叠加节流/单飞/终态一次。
  *
  * 残差登记（2026-09 review，均仅并发竞态/文件系统病理，稳定状态无差异）：
- * - 嵌套 lstat ENOENT（list 与 lstat 间并发删除）：sync 逐路径类别 = 0、
- *   sync 去重与 async = 抛（宁失败不静默低估），见 chargeNodeAsync 注；
- * - 版本名同名**非目录** dirent：sync 按 listVersionTrees 名称对文件也计
- *   类别（并同时落入 unclassified 双计），async 单桶归 unclassified——仅
- *   两次列目录间 dirent 类型翻转才触发；
- * - bind-mount/overlay 重复目录 inode：sync 去重跳整棵子树 vs 本实现逐节点
- *   查重——和值恒等，仅多余遍历代价（实际运行时布局不存在）。
+ * - 嵌套 lstat ENOENT（list 与 lstat 间并发删除）：抛错而非静默低估
+ *   （宁失败不静默当 0），见 chargeNodeAsync 注；
+ * - 版本名同名**非目录** dirent：单桶归 unclassified——仅两次列目录间
+ *   dirent 类型翻转才触发；
+ * - bind-mount/overlay 重复目录 inode：逐节点查重（和值恒等，仅多余遍历
+ *   代价；实际运行时布局不存在）。
  * ========================================================================== */
 
 export interface RuntimeDiskWalkOptions {
@@ -1715,12 +1542,9 @@ async function chargeNodeAsync(
   try {
     info = await lstatP(path)
   } catch (error) {
-    // 根级 ENOENT = 该根不存在（与同步版各 walker 的 missing→0 语义一致）；
-    // 嵌套 ENOENT（list 与 lstat 之间被并发删除）：同步版**逐路径**类别
-    // walker（measurePathBytes）在该点返回 0、**去重** walker
-    // （measureDedupedBytes）抛错；单遍异步无法同时复现分裂语义，选择与
-    // total 去重侧一致的"抛错"（宁失败不静默低估，2026-09 review P2-1 精确
-    // 化声明；稳定状态与对等测试不受竞态窗口影响）。
+    // 根级 ENOENT = 该根不存在；其余（含 list 与 lstat 之间目录被并发删除的
+    // 嵌套 ENOENT）一律抛错——绝不把并发删除静默计成 0（宁失败不静默低估，
+    // 2026-09 review P2-1）。
     if (rootMissingIsZero && (error as NodeJS.ErrnoException).code === 'ENOENT') return
     throw error
   }
@@ -1730,7 +1554,7 @@ async function chargeNodeAsync(
     await yieldToEventLoop()
   }
   const key = `${info.dev}:${info.ino}`
-  // 类别逐路径求和：每处出现都计（与 measurePathBytes 一致），与去重无关。
+  // 类别逐路径求和：每处出现都计；去重只作用于 unclassified/total identity 集。
   switch (target) {
     case 'versionTree': acc.versionTreeBytes += info.size; break
     case 'store': acc.storeBytes += info.size; break
@@ -1753,9 +1577,8 @@ async function chargeNodeAsync(
     acc.totalBytes += info.size
   }
   if (!info.isDirectory()) return
-  // readdir 竞态（lstat 与 readdir 之间目录消失）让错误直接向上传播——同步
-  // 版 measurePathBytes/measureDedupedBytes 的 readdirSync 同点抛 ENOENT，
-  // 保持一致（绝不把并发删除静默计成 0）。
+  // readdir 竞态（lstat 与 readdir 之间目录消失）让错误直接向上传播：绝不把
+  // 并发删除静默计成 0。
   const names = await readdirP(path)
   for (const name of names) {
     await chargeNodeAsync(join(path, name), target, false, acc, opts)
@@ -1788,8 +1611,8 @@ const ENTRY_TARGET_RULES: ReadonlyArray<{
   { test: name => name === 'pre-rollback', target: 'preRollback' },
 ]
 
-/** runtimeEntries 顶层条目 → 会计类别（规则表驱动，与 runtimeDiskSummary 的
- *  分类完全同构；返回 'unclassified' 表示条目属于"未分类残渣"）。 */
+/** runtimeEntries 顶层条目 → 会计类别（规则表驱动，是分类的唯一来源；
+ *  返回 'unclassified' 表示条目属于"未分类残渣"）。 */
 function asyncTargetForEntry(name: string, isDirectory: boolean, treeSet: Set<string>): AsyncWalkTarget {
   for (const rule of ENTRY_TARGET_RULES) {
     if (rule.test(name, isDirectory, treeSet)) return rule.target
@@ -1797,10 +1620,9 @@ function asyncTargetForEntry(name: string, isDirectory: boolean, treeSet: Set<st
   return 'unclassified'
 }
 
-/** 异步单遍磁盘统计（perf T3）。会计契约与 `runtimeDiskSummary` 逐字段一致
- *  （并发删除的竞态窗口除外——嵌套 ENOENT 抛错 vs 同步逐路径类别的 0，见
- *  chargeNodeAsync 注，2026-09 review P2-1）；
- *  真实布局 + 硬链接/符号链接 fixture 的对等测试见 store/disk-accounting.test.ts。 */
+/** 异步单遍磁盘统计（perf T3）——唯一的磁盘核算实现（2026-12 单源化后不再有
+ *  同步孪生）。会计契约与并发残差见上方 T3 段注释；真实布局 + 硬链接/符号链接
+ *  fixture 的用例见 test/store/disk-accounting.test.ts。 */
 export async function runtimeDiskSummaryAsync(
   baseDir: string,
   dshHome: string = join(baseDir, 'state', 'dsh-home'),

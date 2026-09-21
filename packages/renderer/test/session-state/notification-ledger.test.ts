@@ -17,7 +17,6 @@ import {
 } from '../../src/notification-ledger.ts'
 
 const APP = readFileSync(fileURLToPath(new URL('../../src/App.tsx', import.meta.url)), 'utf8')
-const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
 const APP_LINES = APP.split('\n')
 
 function entry(decision: 'sent' | 'suppressed' | 'skipped', extra: Partial<Record<string, unknown>> = {}) {

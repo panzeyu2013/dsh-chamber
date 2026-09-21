@@ -124,7 +124,6 @@ pnpm run dist:desktop
 |---|---|---|
 | `dsh-chamber:info` | invoke | `{controlPlaneUrl, dshVersion, version, platform}`（不向 renderer 暴露本机工作区/状态目录） |
 | `desktop_ssh_instances_get` | invoke | 实例列表 |
-| `desktop_ssh_instances_set` | invoke | legacy exact-no-op-only：只接受与当前规范化 roster 同长度、同顺序、逐字段完全相同的列表；delete/add/edit/reorder 全部拒绝 |
 | `desktop_ssh_save_connection` | invoke | add/edit/非空凭据写唯一入口；元数据 + 三类 write-only 凭据的主进程 crash-safe binding/补偿事务，旧值不返回 renderer |
 | `desktop_ssh_delete_connection` | invoke | 精确 id-addressed 删除；先断开/撤销 exact-scope session/清凭据，再删 metadata；不存在 id 为幂等 no-op |
 | `desktop_ssh_set_password` | invoke | legacy clear-only：仅接受 '' / null 清除 SSH 密码；非空写必须走 save_connection，未知 id → `{error}` |

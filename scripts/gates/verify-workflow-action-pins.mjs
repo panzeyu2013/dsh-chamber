@@ -12,6 +12,7 @@ import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import { basename, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { pnpmPinFindings, readPnpmPinSites } from './pnpm-pin.mjs'
 
 const root = resolve(fileURLToPath(new URL('../../', import.meta.url)))
 const workflowDir = resolve(root, '.github/workflows')
@@ -94,4 +95,12 @@ assert.match(
   'dry-run must skip GitHub Release creation/update entirely',
 )
 
-console.log('workflow action pins: OK')
+// Pinned pnpm version (P2-14): root package.json#packageManager is the ONE
+// declared source; every pnpm/action-setup step and every package/script mirror
+// must agree with it. Read-only — the dependency fields themselves are not
+// touched by this gate.
+const pnpmSites = readPnpmPinSites(root)
+const pnpmFindings = pnpmPinFindings(pnpmSites)
+assert.deepEqual(pnpmFindings, [], pnpmFindings.join('; '))
+console.log('workflow action pins: OK (pnpm ' + String(pnpmSites.workflowPins.length)
+  + ' workflow pin(s) + ' + String(pnpmSites.mirrors.length) + ' mirror(s) agree with packageManager)')

@@ -18,19 +18,32 @@ export function isPlainRecord(value: unknown): value is Record<string, unknown> 
 }
 
 /**
+ * THE rename-aside primitive (2026-12 stage-2 single-sourcing): one try/rename
+ * over the target file, returning the actual aside path or the failure text.
+ * Every corrupt/legacy preserve path (credential mirrors, chamber settings,
+ * ssh plugin journal) builds on this instead of hand-writing the rename.
+ */
+export function preserveFileAside(file: string, suffix: string): { ok: true; path: string } | { ok: false; error: string } {
+  const aside = `${file}${suffix}`
+  try {
+    renameSync(file, aside)
+    return { ok: true, path: aside }
+  } catch (error) {
+    return { ok: false, error: String(error) }
+  }
+}
+
+/**
  * Preserve an INVALID/UNREADABLE store file as `<file>.corrupt` (renamed
  * aside — reversible evidence, never silently treated as empty) and return
  * the loud notice string. `invalidFile` names the file in the notice
  * ('password file', 'gateway secrets file') — the only per-store variance.
  */
 export function preserveInvalidCredentialFile(file: string, invalidFile: string): string {
-  const corruptPath = `${file}.corrupt`
-  try {
-    renameSync(file, corruptPath)
-    return `invalid ${invalidFile} preserved at ${corruptPath}`
-  } catch (error) {
-    return `invalid ${invalidFile} at ${file}; preserve failed: ${String(error)}`
-  }
+  const result = preserveFileAside(file, '.corrupt')
+  return result.ok
+    ? `invalid ${invalidFile} preserved at ${result.path}`
+    : `invalid ${invalidFile} at ${file}; preserve failed: ${result.error}`
 }
 
 /** Store-specific wording of an unbound-legacy preserve notice — the ONLY
@@ -65,12 +78,12 @@ export function preserveUnboundCredentialFile(file: string, wording: UnboundCred
   const stem = `${file}.unbound-${Date.now()}-${process.pid}`
   let unboundPath = stem
   for (let index = 1; existsSync(unboundPath); index += 1) unboundPath = `${stem}-${index}`
-  try {
-    renameSync(file, unboundPath)
-    return `${wording.subject} ${wording.hasVerb} no ${wording.bindingsNoun} and ${wording.preservedAuxiliary} preserved at ${unboundPath}; re-enter ${wording.reentryNoun} to use them`
-  } catch (error) {
-    return `${wording.subject} at ${file} ${wording.hasVerb} no ${wording.bindingsNoun} and ${wording.disabledAuxiliary} disabled; preserve failed: ${String(error)}`
-  }
+  // The unique-name loop above only PICKS the path; the rename itself goes
+  // through the shared preserve primitive (one implementation for every store).
+  const result = preserveFileAside(file, unboundPath.slice(file.length))
+  return result.ok
+    ? `${wording.subject} ${wording.hasVerb} no ${wording.bindingsNoun} and ${wording.preservedAuxiliary} preserved at ${result.path}; re-enter ${wording.reentryNoun} to use them`
+    : `${wording.subject} at ${file} ${wording.hasVerb} no ${wording.bindingsNoun} and ${wording.disabledAuxiliary} disabled; preserve failed: ${result.error}`
 }
 
 /**

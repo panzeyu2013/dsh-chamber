@@ -23,6 +23,15 @@ const GROUPS = {
     'test/subset-and-orphan-sweep.test.ts',
     'test/sweep-gates-and-protection.test.ts',
   ],
+  // parity: cross-seed lockstep (wire-carrier semantics + the shared
+  // vendor-resolution seam). The open-in loader stubs the two vendor host
+  // adapters its domain imports at runtime, so the real carriers all load.
+  parity: [
+    {
+      file: 'test/seed-parity-lockstep.test.ts',
+      nodeArgs: ['--experimental-transform-types', '--import', '../dsh-chamber-seed-open-in/test/support/vendor-register.mjs'],
+    },
+  ],
   // binding: the host binding and its randomized retention-properties leg.
   binding: [
     'test/binding.test.ts',

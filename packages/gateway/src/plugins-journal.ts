@@ -53,8 +53,9 @@ import { randomUUID } from 'node:crypto'
 import {
   atomicWritePrivateFileNoFollow,
   ensurePrivateDirectoryNoFollow,
-  readPrivateFileNoFollow,
 } from '@dsh-chamber/control-plane'
+import { readPrivateTextOrNull } from './private-read.ts'
+import { messageOf, newestFirst } from './util.ts'
 
 /** Third-party plugin state root (journal, backups, private pnpm env dirs),
  * relative to the gateway stateDir. */
@@ -163,8 +164,6 @@ export interface PluginsJournal {
   markTerminal(opId: string, patch: JournalTerminalPatch): JournalOp | null
   /** Newest-first projection (default newest 50). */
   recent(limit?: number): JournalOp[]
-  /** Newest failed op, or null. */
-  latestFailed(): JournalOp | null
   /** Startup reconciliation: pending → failed ('interrupted before
    * completion; preImage retained'), persisted once; idempotent (second call
    * rewrites nothing and returns []). Returns the ops it transitioned. On a
@@ -200,10 +199,6 @@ export function backupDirFor(stateDir: string, opId: string): string {
   return join(backupsRoot(stateDir), opId)
 }
 
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
 export function createPluginsJournal(stateDir: string, logger: JournalLogger): PluginsJournal {
   const root = thirdPartyRoot(stateDir)
   const filePath = journalFilePath(stateDir)
@@ -223,13 +218,9 @@ export function createPluginsJournal(stateDir: string, logger: JournalLogger): P
 
   function readFileText(): string | null {
     // ENOENT (absent file or absent root) means an empty journal; every other
-    // failure is treated as corrupt evidence (see noteCorruption).
-    try {
-      return readPrivateFileNoFollow(filePath, { tightenMode: 0o600, requiredMode: 0o600, maxBytes: JOURNAL_MAX_BYTES }).value
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-      throw error
-    }
+    // failure is treated as corrupt evidence (see noteCorruption) — the shared
+    // wrapper rethrows everything but ENOENT.
+    return readPrivateTextOrNull(filePath, { tightenMode: 0o600, requiredMode: 0o600, maxBytes: JOURNAL_MAX_BYTES })
   }
 
   /** `journal.json.corrupt-*` asides left by earlier runs: unresolved evidence
@@ -320,14 +311,6 @@ export function createPluginsJournal(stateDir: string, logger: JournalLogger): P
     atomicWritePrivateFileNoFollow(filePath, text, { mode: 0o600 })
   }
 
-  /** Newest-first; ties (same-ms appends) break toward later insertion. */
-  function newestFirst(ops: JournalOp[]): JournalOp[] {
-    return ops
-      .map((op, index) => ({ op, index }))
-      .sort((a, b) => b.op.ts - a.op.ts || b.index - a.index)
-      .map(entry => entry.op)
-  }
-
   /** Prune to the newest RETENTION_LIMIT ops (file keeps oldest-first
    * reading order) and drop backup dirs no retained op references. While the
    * record set is unknown (corruption, or its unresolved aside evidence) the
@@ -414,10 +397,6 @@ export function createPluginsJournal(stateDir: string, logger: JournalLogger): P
 
     recent(limit = JOURNAL_RETENTION_LIMIT) {
       return newestFirst(loadOpsOrEmpty()).slice(0, limit)
-    },
-
-    latestFailed() {
-      return newestFirst(loadOpsOrEmpty()).find(op => op.status === 'failed') ?? null
     },
 
     reconcile() {

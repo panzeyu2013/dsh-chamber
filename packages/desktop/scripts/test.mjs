@@ -48,6 +48,7 @@ export const GROUPS = {
     'test/transport/ssh-provider-endpoint-auth.test.ts',
     'test/transport/ssh-config.test.ts',
     'test/transport/free-port.test.ts',
+    'test/transport/transport-reconnect.test.ts',
   ],
   // gateway: gateway provider/session and the manual gateway plugin sync apply path
   gateway: [
@@ -109,6 +110,8 @@ export const GROUPS = {
     'test/desktop-shell/updater.test.ts',
     'test/desktop-shell/updater-restart-install.test.ts',
     'test/desktop-shell/updater-cache-maintenance.test.ts',
+    // 两个 GitHub 发现面的锁步（审计项 2：共享 update-discovery.ts）
+    'test/desktop-shell/update-discovery.test.ts',
     // swift-side headless update controller (design 25 §7)
     'update-headless.test.ts',
   ],
@@ -120,6 +123,8 @@ export const GROUPS = {
     'test/local-state/win-acl.test.ts',
     // 安装树上游 client-plugin 闭包抽样（S4 P1）：纯函数 + 临时目录 fixture
     'test/local-state/runtime-tree-check.test.ts',
+    // lockfile-derived family facts memo (审计项 7)：mtime+size 失效
+    'test/local-state/lockfile-facts-memo.test.ts',
     // swift-side main.ts directory-lock wiring source assertions (三审 #13)
     'chamber-lock-wiring.test.ts',
   ],

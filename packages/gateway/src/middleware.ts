@@ -250,5 +250,6 @@ export function createGatewayRequestPolicy(config: GatewayConfig): GatewayReques
   }
 }
 
-/** The canonical viewport meta (for completeness; dsh already emits one). */
-export const GATEWAY_VIEWPORT_META = '<meta name="viewport" content="width=device-width, initial-scale=1">'
+// (The former GATEWAY_VIEWPORT_META export was removed with the dead entry
+// re-export block: dsh emits its own viewport meta, so nothing consumed it —
+// 2026-12 audit F11.)

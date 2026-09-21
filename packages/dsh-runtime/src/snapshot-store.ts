@@ -1141,14 +1141,6 @@ export async function snapshotSummary(baseDir: string): Promise<SnapshotSummary>
   }
 }
 
-export async function dirNonEmpty(dir: string): Promise<boolean> {
-  try {
-    return (await readdir(dir)).length > 0
-  } catch {
-    return false
-  }
-}
-
 /** Startup completion entry. Marker snapshot/phase is authoritative. */
 export async function completeInterruptedRestore(
   baseDir: string,

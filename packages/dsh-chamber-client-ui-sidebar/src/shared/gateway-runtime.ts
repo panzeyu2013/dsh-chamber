@@ -29,6 +29,9 @@
  * startupBlockedReason / pending. Nothing is invented.
  */
 
+import { pollUntil, sleepMs } from './poll.ts'
+import { isRecord } from './wire-common.ts'
+
 export const REMOTE_STATUS_POLL_INTERVAL_MS = 2_000
 // The shared installer has one 10-minute wall-clock budget. A legitimate slow
 // install must not be reported as timed out while its background job is still
@@ -190,10 +193,8 @@ const METADATA_COMPONENTS: readonly string[] = [
 const GATEWAY_SOURCE_ID = /^gateway-[a-zA-Z0-9_-]{1,64}$/
 
 function record(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error(`Gateway returned malformed ${label}`)
-  }
-  return value as Record<string, unknown>
+  if (!isRecord(value)) throw new Error(`Gateway returned malformed ${label}`)
+  return value
 }
 
 function nullableString(row: Record<string, unknown>, key: string, label: string): string | null {
@@ -719,7 +720,7 @@ export async function pollRemoteRuntimeUntilSettled(
   deps: GatewayRuntimeApiDeps = {},
 ): Promise<RemoteRuntimeStatus> {
   const fetchImpl = deps.fetchImpl ?? fetch
-  const sleep = deps.sleepMs ?? ((ms: number) => new Promise(resolve => setTimeout(resolve, ms)))
+  const sleep = deps.sleepMs ?? sleepMs
   const pollIntervalMs = deps.pollIntervalMs ?? REMOTE_STATUS_POLL_INTERVAL_MS
   const timeoutMs = deps.timeoutMs ?? REMOTE_STATUS_POLL_TIMEOUT_MS
   const deadline = Date.now() + timeoutMs
@@ -751,9 +752,15 @@ export async function pollRemoteRuntimeUntilSettled(
   }
 
   try {
-    while (Date.now() < deadline) {
-      const status = await fetchRemoteRuntimeStatus(chamberInstanceId, { fetchImpl, signal: controller.signal })
-      if (status.phase !== 'installing' && status.phase !== 'applying' && status.restart !== 'running') {
+    const settled = await pollUntil<RemoteRuntimeStatus>({
+      intervalMs: pollIntervalMs,
+      deadline,
+      sleep: wait,
+      probe: () => fetchRemoteRuntimeStatus(chamberInstanceId, { fetchImpl, signal: controller.signal }),
+      classify: (status) => {
+        if (status.phase === 'installing' || status.phase === 'applying' || status.restart === 'running') {
+          return { kind: 'retry' }
+        }
         if (expectation === 'apply-now') {
           const failure = status.startupBlockedReason !== null && status.startupBlockedReason !== ''
             ? status.startupBlockedReason
@@ -765,24 +772,23 @@ export async function pollRemoteRuntimeUntilSettled(
                 ? `runtime restore ended with ${status.restoreOutcome}`
                 : null
           if (failure !== null) {
-            throw new RemoteRuntimeApiError(`runtime action failed: ${failure}`, 200)
+            return { kind: 'fail', error: new RemoteRuntimeApiError(`runtime action failed: ${failure}`, 200) }
           }
           if (status.connectionState !== 'ready' && status.connectionState !== 'degraded') {
-            await wait()
-            continue
+            return { kind: 'retry' }
           }
-          return status
+          return { kind: 'done', value: status }
         }
         if (status.restart === 'failed') {
-          throw new RemoteRuntimeApiError(`runtime action failed: ${status.operationError ?? 'unknown runtime failure'}`, 200)
+          return { kind: 'fail', error: new RemoteRuntimeApiError(`runtime action failed: ${status.operationError ?? 'unknown runtime failure'}`, 200) }
         }
         if (status.operationError !== null && status.operationError !== '') {
-          throw new RemoteRuntimeApiError(`runtime action failed: ${status.operationError}`, 200)
+          return { kind: 'fail', error: new RemoteRuntimeApiError(`runtime action failed: ${status.operationError}`, 200) }
         }
-        return status
-      }
-      await wait()
-    }
+        return { kind: 'done', value: status }
+      },
+    })
+    if (settled !== undefined) return settled
   } catch (error) {
     if (timedOut) {
       throw new RemoteRuntimeApiError('runtime action accepted but the gateway did not settle in time', null)

@@ -23,9 +23,9 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { ApiRequest, ApiResponse } from '@dsh-chamber/control-plane'
+import { AUDIT_TRAIL_MAX_BYTES, type ApiRequest, type ApiResponse, type AuditTrailEvent } from '@dsh-chamber/control-plane'
 import type { AuthProvider } from '../../src/auth.ts'
-import { appendAuditEvent, AUDIT_LOG_MAX_BYTES, type AuditEvent } from '../../src/audit.ts'
+import { appendAuditEvent } from '../../src/audit.ts'
 import { parseGatewayConfig, DEFAULT_MOBILE_ENTRY_PATH } from '../../src/config.ts'
 import {
   AUTH_REJECTION_DEBOUNCE_MS,
@@ -129,10 +129,10 @@ test('gateway audit rotates to <file>.1 past the cap and deletes the old .1', t 
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const file = join(dir, 'audit.log')
   const maxBytes = 120
-  const small: AuditEvent = { ts: '2026-01-01T00:00:00.000Z', event: 'a' }
-  const big1: AuditEvent = { ts: '2026-01-01T00:00:01.000Z', event: 'b', detail: 'x'.repeat(300) }
-  const big2: AuditEvent = { ts: '2026-01-01T00:00:02.000Z', event: 'c', detail: 'y'.repeat(300) }
-  const big3: AuditEvent = { ts: '2026-01-01T00:00:03.000Z', event: 'd', detail: 'z'.repeat(300) }
+  const small: AuditTrailEvent = { ts: '2026-01-01T00:00:00.000Z', event: 'a' }
+  const big1: AuditTrailEvent = { ts: '2026-01-01T00:00:01.000Z', event: 'b', detail: 'x'.repeat(300) }
+  const big2: AuditTrailEvent = { ts: '2026-01-01T00:00:02.000Z', event: 'c', detail: 'y'.repeat(300) }
+  const big3: AuditTrailEvent = { ts: '2026-01-01T00:00:03.000Z', event: 'd', detail: 'z'.repeat(300) }
   // Rotation is lazy (checked before the next append): the file may exceed the
   // cap by one event, then the NEXT append rotates it to <file>.1 first.
   appendAuditEvent(file, small, maxBytes)
@@ -187,7 +187,7 @@ test('the gateway audit serializer is a fixed whitelist: credentials never reach
     kind: 'gateway',
     password: PASSWORD,
     cookie: COOKIE,
-  } as unknown as AuditEvent)
+  } as unknown as AuditTrailEvent)
   const events = readEvents(file)
   assert.equal(events.length, 1)
   assert.deepEqual(Object.keys(events[0]).sort(), ['event', 'kind', 'ts'])
@@ -196,8 +196,11 @@ test('the gateway audit serializer is a fixed whitelist: credentials never reach
   assert.equal(raw.includes(COOKIE), false)
 })
 
-test('the exported gateway cap is 5 MiB per the design contract', _t => {
-  assert.equal(AUDIT_LOG_MAX_BYTES, 5 * 1024 * 1024)
+test('the audit rotation cap is 5 MiB per the design contract', _t => {
+  // The gateway's default cap IS the shared core constant (audit.ts aliases
+  // AUDIT_TRAIL_MAX_BYTES); the gateway entry's own alias was removed with the
+  // dead exports (2026-12 audit F23), so the pin targets the single source.
+  assert.equal(AUDIT_TRAIL_MAX_BYTES, 5 * 1024 * 1024)
 })
 
 // ---------------------------------------------------------------------------

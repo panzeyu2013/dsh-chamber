@@ -24,6 +24,7 @@ import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared
 import {
   clearActionError, createSessionHere, currentSessionIsBlank, gitCoordinator, removeUnregisteredWorktree, retryRecovery,
 } from '../shared/coordinator.ts'
+import { gitActionErrorTextFor } from '../shared/action-error.ts'
 import { gitFactsForWorkspace, removeBlockReason } from '../shared/git-facts.ts'
 import { removeRunningNotes } from '../shared/remove-notes.ts'
 import type { GitBusyKind, GitRecovery, GitWorktreeInfo } from '../shared/types.ts'
@@ -309,7 +310,9 @@ export function SidebarWorkspaceGitLine({
           </span>
         )}
         {actionError !== undefined && (
-          <span className={css.wsSourceAlertText}>{t('actionError')} {actionError}</span>
+          <span className={css.wsSourceAlertText}>
+            {t('actionError')} {gitActionErrorTextFor(source.actionErrorCode, actionError, t)}
+          </span>
         )}
         {recovery !== undefined && (
           <button

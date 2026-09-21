@@ -47,33 +47,34 @@ glob即闭包：`packages/desktop/package.json` 的 `build.files` 用包根三�
 1. 新增根级运行模块不得命中下面的9条negate。测试的常规位置是 `packages/desktop/test/<domain>/`（包根三条glob不收取）；例外：9个Swift/POC专属测试（bridge-manifest / bridge-shim / bridge-shim-surface / chamber-lock / chamber-lock-wiring / electron-free-gate / node-edges / sidecar-stdio / update-headless）留在包根——由 `scripts/test.mjs` 清单显式接线、`ci.yml` 的 `test-macos` 桥面锁步步骤按包根路径调用，故 `!*.test.ts` negate载荷相关（勿删）；
 2. `main.ts` / `preload.cts` 的传递import闭包不得指到 `scripts/`、`vendor/` 或未编译的 `node_modules/@dsh-chamber/control-plane/**`（见 §1、§2）。
 
-被收取的根级模块（含1个仅被测试引用的惰性模块 `registry-password-commit.ts`，随glob进包但无运行引用）：
+被收取的根级模块（2026-12 清理：`registry-password-commit.ts` 已删除、`gateway-session-test-hooks.ts` 移入 `test/support/`、`sidecar-stub.ts` 移入 negate 不随包；`credential-identity.ts` / `describe-error.ts` / `lockfile-facts-memo.ts` / `transport-reconnect.ts` / `update-discovery.ts` 为后续批次新增运行模块，计数 51 → 54）：
 
 `main.ts`、`preload.cts`、`control-plane-module.ts`、`ipc-events.ts`、
 `apply-now-gate.ts`、`audit-log.ts`、`badge.ts`、`bounded-lines.ts`、
 `chamber-lock.ts`、`chamber-settings.ts`、`connection-save.ts`、
-`credential-binding.ts`、`deep-link.ts`、`disk-evidence-gate.ts`、
+`credential-binding.ts`、`credential-identity.ts`、`deep-link.ts`、`describe-error.ts`、`disk-evidence-gate.ts`、
 `dsh-runtime-controller.ts`、`electron-edges.ts`、`free-port.ts`、
 `gateway-ipc-shared.ts`、`gateway-provider.ts`、`gateway-session-refresh.ts`、
 `gateway-session.ts`、`gateway-sync-registry.ts`、`host-package-dirs.ts`、
-`node-edges.ts`、
+`lockfile-facts-memo.ts`、`node-edges.ts`、
 `notifications.ts`、`open-in.ts`、`owner-only-secret-file.ts`、`plugin-sync.ts`、
-`plugin-tarball.ts`、`pnpm-launcher.ts`、`sidecar-stub.ts`、`registry-password-commit.ts`、
+`plugin-tarball.ts`、`pnpm-launcher.ts`、
 `renderer-trust.ts`、`runtime-probe-detail.ts`、`runtime-tree-check.ts`、`sanitize-error.ts`、
 `shell-core.ts`、`sidecar-console-redirect.ts`、`sidecar-ctx.ts`、
 `sidecar-entry.ts`、`sidecar-exit-codes.ts`、`ssh-apply-rows.ts`、`ssh-config.ts`、
 `ssh-plugin-journal.ts`、`ssh-provider.ts`、`store-file-hygiene.ts`、
-`transport-manager.ts`、`transport-provider.ts`、`update-headless.ts`、`updater.ts`、
+`transport-manager.ts`、`transport-provider.ts`、`transport-reconnect.ts`、
+`update-discovery.ts`、`update-headless.ts`、`updater.ts`、
 `win-acl.ts`
 
-复核命令（与glob同义，扣除两条测试夹具negate与包根 `.test.ts`；自检式：输出必须等于上方名单的模块数，名单与计数同改，任一漂移即红）：
+复核命令（与glob同义，扣除测试夹具 negate 与包根 `.test.ts`；自检式：输出必须等于上方名单的模块数，名单与计数同改，任一漂移即红）：
 
 ```sh
 count=$(ls -1 packages/desktop/*.ts packages/desktop/*.cts packages/desktop/*.mjs \
-  | grep -vE '/(gateway-session-test-hooks|loopback-http-test-server)\.ts$' \
+  | grep -vE '/(loopback-http-test-server|sidecar-stub)\.ts$' \
   | grep -vc '\.test\.ts$')
 echo "root-level collected modules: $count"
-test "$count" = 51 || { echo "STALE: 名单/计数需同步（见上方 51 个）"; exit 1; }
+test "$count" = 54 || { echo "STALE: 名单/计数需同步（见上方 54 个）"; exit 1; }
 ```
 
 **例外名单 = `build.files` 的9条negate（勿删；顺序同package.json）**：
@@ -81,8 +82,8 @@ test "$count" = 51 || { echo "STALE: 名单/计数需同步（见上方 51 个�
 |negate|原因|
 |---|---|
 |`!*.test.ts`|载荷相关：常规测试在 `test/<domain>/`，9个Swift/POC专属根级测试留在包根、靠后缀排除（清单见本节）；勿删|
-|`!gateway-session-test-hooks.ts`|测试夹具，被 `test/gateway/gateway-session-spki.test.ts`、`test/gateway/gateway-provider.test.ts`、`test/transport/ssh-provider-endpoint-auth.test.ts` 引用（可执行路径不受 `!*.ts` 收包glob影响）|
 |`!loopback-http-test-server.ts`|测试夹具（回环HTTP测试服务器）|
+|`!sidecar-stub.ts`|W-05 POC 桩：仅 `macos/Tests/DSHChamberTests/BridgeClientIntegrationTests.swift` 按包根路径 spawn（集成测试夹具，产品路径零引用）；不随 asar，路径保持不动|
 |`!dist/**/*.map`|source map不随包|
 |`!node_modules/@dsh-chamber/control-plane/**`|用 `dist/control-plane` 编译产物替代TS源码（node_modules内 .ts无类型擦除）|
 |`!dist/.vite/**`|vite的临时构建目录|

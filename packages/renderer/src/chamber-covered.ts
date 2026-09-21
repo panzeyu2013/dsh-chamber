@@ -1,7 +1,7 @@
 /**
  * The boot-graph entry ids the chamber page covers WITHOUT the host graph —
  * the dedupe set the per-instance host-graph merge filters against (design 09
- * §3.3, module C: `dedupeHostEntries` in host-graph.ts).
+ * §3.3, module C: `dedupeCoveredRows` in the sidebar shared face; the host-graph merge calls it).
  *
  * Mostly two families, plus a third, non-row class:
  *

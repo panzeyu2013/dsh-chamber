@@ -10,9 +10,12 @@ import assert from 'node:assert/strict'
 import {
   appendFileSync,
   chmodSync,
+  chownSync,
   closeSync,
   constants,
   existsSync,
+  linkSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   openSync,
@@ -191,6 +194,77 @@ test('轮转失败必须降级并告警一次，绝不让文件无界增长', ()
   assert.equal(warnings.length, 1, '只告警一次')
   const size = statSync(join(dir, CONTROL_LOG_FILE)).size
   assert.ok(size < 60, `降级后不得继续追加（实际 ${String(size)} 字节）`)
+})
+
+test('轮转遇预置符号链接归档槽：拒绝轮转并降级，链接与目标都保留（P1-4 同包收敛）', () => {
+  const stateDir = tempDir()
+  const outside = tempDir()
+  const victim = join(outside, 'victim.log')
+  writeFileSync(victim, 'secret-victim')
+  const dir = join(stateDir, CONTROL_LOG_DIR)
+  mkdirSync(dir, { recursive: true })
+  const archive = join(dir, CONTROL_LOG_FILE + '.1')
+  symlinkSync(victim, archive)
+  const warnings: string[] = []
+  const sink = createControlLogSink({ stateDir, maxBytes: 10, files: 3, warn: message => { warnings.push(message) } })
+  sink.write({ ts: 't', level: 'log', line: 'a'.repeat(20) })
+  sink.write({ ts: 't', level: 'log', line: 'b'.repeat(20) })
+  assert.equal(sink.isActive(), false, '被预置链接的归档槽必须让 sink 降级而不是被覆盖')
+  assert.equal(warnings.length, 1, '只告警一次')
+  assert.equal(readFileSync(victim, 'utf8'), 'secret-victim', '链接目标内容不得被改动')
+  assert.equal(lstatSync(archive).isSymbolicLink(), true, '预置链接作为证据保留')
+  sink.close()
+})
+
+test('轮转遇多链接归档槽：拒绝轮转并降级，不删除不覆盖（P1-4 同包收敛）', () => {
+  const stateDir = tempDir()
+  const outside = tempDir()
+  const victim = join(outside, 'victim.log')
+  writeFileSync(victim, 'secret-victim')
+  const dir = join(stateDir, CONTROL_LOG_DIR)
+  mkdirSync(dir, { recursive: true })
+  const archive = join(dir, CONTROL_LOG_FILE + '.1')
+  linkSync(victim, archive)
+  const warnings: string[] = []
+  const sink = createControlLogSink({ stateDir, maxBytes: 10, files: 3, warn: message => { warnings.push(message) } })
+  sink.write({ ts: 't', level: 'log', line: 'a'.repeat(20) })
+  sink.write({ ts: 't', level: 'log', line: 'b'.repeat(20) })
+  assert.equal(sink.isActive(), false, '多链接归档槽必须 fail-closed')
+  assert.equal(warnings.length, 1)
+  assert.equal(readFileSync(victim, 'utf8'), 'secret-victim')
+  assert.equal(existsSync(archive), true, '多链接槽位不得被删除')
+  assert.equal(statSync(archive).nlink, 2, '链接关系保持不变')
+  sink.close()
+})
+
+test('轮转遇异主归档槽：拒绝轮转并降级（同 uid 校验；chown 需权限，否则跳过）（P1-4 同包收敛）', t => {
+  const stateDir = tempDir()
+  const dir = join(stateDir, CONTROL_LOG_DIR)
+  mkdirSync(dir, { recursive: true })
+  const archive = join(dir, CONTROL_LOG_FILE + '.1')
+  writeFileSync(archive, 'foreign')
+  // A foreign-owned slot is only constructible as root: a non-root process
+  // chowning to "another" uid would only ever recreate its own uid, and the
+  // symlink/hard-link cases above already lock the refusal path everywhere.
+  const effectiveUid = process.geteuid?.() ?? -1
+  if (effectiveUid !== 0) {
+    t.skip('creating a foreign-owned file requires root')
+    return
+  }
+  try {
+    chownSync(archive, 65534, 65534)
+  } catch {
+    t.skip('chown to another uid is unavailable on this filesystem')
+    return
+  }
+  const warnings: string[] = []
+  const sink = createControlLogSink({ stateDir, maxBytes: 10, files: 3, warn: message => { warnings.push(message) } })
+  sink.write({ ts: 't', level: 'log', line: 'a'.repeat(20) })
+  sink.write({ ts: 't', level: 'log', line: 'b'.repeat(20) })
+  assert.equal(sink.isActive(), false, '异主归档槽必须 fail-closed')
+  assert.equal(warnings.length, 1)
+  assert.equal(readFileSync(archive, 'utf8'), 'foreign', '他人文件不得被删除或覆盖')
+  sink.close()
 })
 
 test('行序列化：换行折叠、Error 取 stack、超长截断', () => {

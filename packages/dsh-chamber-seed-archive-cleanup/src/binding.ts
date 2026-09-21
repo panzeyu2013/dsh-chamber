@@ -47,6 +47,7 @@ import { rm, rmdir, lstat, readdir } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import {
   ArchiveCleanupError,
+  errorText,
   type ArchiveCleanupHost,
   type ArchivedSessionState,
   type SessionContentDeletion,
@@ -199,7 +200,7 @@ function isMigrationTempFilename(name: string): boolean {
 /* Binding implementation (design 24 §10: branch b, verified).     */
 /* ------------------------------------------------------------------ */
 
-export function headerToState(header: SessionHeaderLike): ArchivedSessionState {
+function headerToState(header: SessionHeaderLike): ArchivedSessionState {
   // F3: standalone-entry shape guard — a drifted header must throw here too
   // (listHeaders validates the raw intake; this keeps headerToState itself a
   // loud boundary for any direct consumer).
@@ -211,7 +212,6 @@ export function headerToState(header: SessionHeaderLike): ArchivedSessionState {
       ? { parentSessionId: header.parentSession }
       : {}),
     ...(typeof header.cwd === 'string' ? { cwd: header.cwd } : {}),
-    running: false,
   }
 }
 
@@ -223,8 +223,8 @@ export function headerToState(header: SessionHeaderLike): ArchivedSessionState {
  * registry-unreadables/storages. Mirrors requireRegistry's checks; throws
  * ArchiveCleanupError('registry-unreadable', …) when a surface is wrong.
  */
-export function assertHostSurface(ctx: HostCtxServices): void {
-  const registry = ctx.workspaceRegistry
+/** The registry surface the whole domain keys on: a missing/drifted shape refuses loudly. */
+function requireRegistrySurface(registry: RegistryLike | undefined): RegistryLike {
   if (registry === undefined || typeof registry.setState !== 'function'
     || !Array.isArray(registry.archivedSessionIds) || typeof registry.list !== 'function') {
     throw new ArchiveCleanupError(
@@ -232,6 +232,11 @@ export function assertHostSurface(ctx: HostCtxServices): void {
       'archiveCleanup: the workspaceRegistry service is not mounted with the expected surface',
     )
   }
+  return registry
+}
+
+export function assertHostSurface(ctx: HostCtxServices): void {
+  requireRegistrySurface(ctx.workspaceRegistry)
   // Merge-round Minor-3: surface health of the enumeration + storage legs
   // too — a host whose registry is intact but whose session enumeration or
   // locate surface is missing must not pass the probe. Zero-IO structural
@@ -314,16 +319,7 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
   const query = ctx.sessionQuery
   const persistence = ctx.sessionPersistence
 
-  const requireRegistry = (): RegistryLike => {
-    if (registry === undefined || typeof registry.setState !== 'function'
-      || !Array.isArray(registry.archivedSessionIds) || typeof registry.list !== 'function') {
-      throw new ArchiveCleanupError(
-        'registry-unreadable',
-        'archiveCleanup: the workspaceRegistry service is not mounted with the expected surface',
-      )
-    }
-    return registry
-  }
+  const requireRegistry = (): RegistryLike => requireRegistrySurface(registry)
 
   const listHeaders = async (): Promise<readonly SessionHeaderLike[]> => {
     // COMPLETENESS UNION (2026-12 blocker fix). Neither official enumeration
@@ -624,7 +620,7 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
         if (error instanceof ArchiveCleanupError) throw error
         throw new ArchiveCleanupError(
           'storage',
-          `archiveCleanup: ${sessionId} content removal failed: ${error instanceof Error ? error.message : String(error)}`,
+          `archiveCleanup: ${sessionId} content removal failed: ${errorText(error)}`,
         )
       }
     },
@@ -664,20 +660,11 @@ export function makeHostBinding(ctx: HostCtxServices): ArchiveCleanupHost {
         if (error instanceof ArchiveCleanupError) throw error
         throw new ArchiveCleanupError(
           'storage',
-          `archiveCleanup: archived-set removal failed: ${error instanceof Error ? error.message : String(error)}`,
+          `archiveCleanup: archived-set removal failed: ${errorText(error)}`,
         )
       }
     },
 
-    async emitSessionRemoved() {
-      // No official public event surface in the pinned tree — documented
-      // no-op (design 24 §10; projection refresh rides the client
-      // mutation-pull and the official startup header-index rebuild).
-    },
-
-    async emitArchivedSessionsChanged() {
-      // Same documented no-op (no official archived-set event emitter).
-    },
   }
 }
 

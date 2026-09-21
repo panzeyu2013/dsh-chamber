@@ -74,7 +74,7 @@
  *   setKeepAwake/setLoginItem——core 的 HostEdges Pick
  *   （shell-core.ts installIpcHandlers）未收窄到它们，本仓也暂无调用方；
  *   electron-edges 的返回 Pick 同样不含（Electron 侧这些动作在 main.ts 直做，
- *   见其 TODO 段）。它们是 design 25 §4.1 v2 字段集这一共享契约面（本文件是
+ *   见其「Retained HostEdges members」注记）。它们是 design 25 §4.1 v2 字段集这一共享契约面（本文件是
  *   当前唯一实现；focusMainWindow/launchApp/setKeepAwake/setLoginItem 的 Swift
  *   宿主腿已在 SwiftEdgeHostLegs 落位），删除会砍掉契约本身。语义仍须保持诚实
  *   （形状/失败语义与契约一致）；改这些成员时两侧同时核对。
@@ -91,6 +91,7 @@ import type {
   HostPluginSourcePick,
   HostMessageOptions,
 } from './shell-core.ts'
+import { describeError } from './describe-error.ts'
 import { rendererPushDelivered } from './shell-core.ts'
 import { MAX_ACTIVE_NATIVE_NOTIFICATIONS, interpretNativeNotificationReply } from './notifications.ts'
 
@@ -347,7 +348,7 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
         return
       } catch (error) {
         entry.attemptsLeft -= 1
-        const message = error instanceof Error ? error.message : String(error)
+        const message = describeError(error)
         if (entry.attemptsLeft > 0 && isRetryableLegError(message)) {
           await new Promise<void>((resolve) => {
             entry.timer = setTimeout(resolve, deps.nonInteractiveRetryDelayMs ?? NON_INTERACTIVE_LEG_RETRY_DELAY_MS)
@@ -426,7 +427,7 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
           (reply) => interpretNativeNotificationReply(reply),
           (err: unknown) => ({
             shown: false as const,
-            error: err instanceof Error ? err.message : String(err),
+            error: describeError(err),
           }),
         )
       const route: PendingNotificationRoute = {
@@ -689,7 +690,7 @@ export function createNodeEdges(deps: NodeEdgesDeps): NodeEdges {
         try {
           deps.nativeUpdatePhase({ phase: phase as NativeUpdatePhase, version, error: errorText })
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err)
+          const message = describeError(err)
           return { ok: false, error: 'sidecar-edges:native-update-phase-failed:' + message }
         }
         return { ok: true }

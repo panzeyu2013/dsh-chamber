@@ -21,6 +21,7 @@ import {
   OPEN_IN_PACKAGE,
   applicableChamberPackages,
   classifyInventoryEntry,
+  entryLiveness,
   installedRowLiveState,
   localChamberBadge,
   remoteChamberBadge,
@@ -28,6 +29,20 @@ import {
   thirdPartyEntries,
   thirdPartyLiveState,
 } from '../../src/client/plugin-inventory-text.ts'
+
+test('entryLiveness: the ONE Loader-liveness decision every projection reads', () => {
+  // 2026-12 audit: chamberRemoteKey and thirdPartyLiveState used to re-derive
+  // this switch; both now read this function, so its truth table is the lock.
+  assert.equal(entryLiveness(undefined), 'absent')
+  assert.equal(entryLiveness({ enabled: false, fiberPhase: 'active' }), 'disabled')
+  assert.equal(entryLiveness({ enabled: true, fiberPhase: 'active' }), 'active')
+  assert.equal(entryLiveness({ enabled: true, fiberPhase: 'failed' }), 'failed')
+  for (const phase of ['pending', 'loading', 'unloading', null] as const) {
+    assert.equal(entryLiveness({ enabled: true, fiberPhase: phase }), 'starting', String(phase))
+  }
+  // A disabled entry is never claimed failed/live: enablement gates the phase.
+  assert.equal(entryLiveness({ enabled: false, fiberPhase: 'failed' }), 'disabled')
+})
 
 test('classifyInventoryEntry: plain module names map to their package class', () => {
   assert.equal(classifyInventoryEntry(HOST_GRAPH_PACKAGE), 'chamber-host-graph')

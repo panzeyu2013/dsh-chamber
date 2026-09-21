@@ -13,6 +13,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { findPageTarget, connect, installEarlyObservers, pollState, readPerf, summarize } from './cdp-lib.mjs'
+import { sleep } from '../lib/cli.mjs'
 
 const cycles = Number(process.argv[2] ?? 3)
 const rapidFlag = process.argv.indexOf('--rapid')
@@ -48,7 +49,6 @@ const cdp = connect(page.webSocketDebuggerUrl)
 await cdp.ready
 await installEarlyObservers(cdp, cdp.send)
 const ev = async (expression) => (await cdp.send('Runtime.evaluate', { expression, returnByValue: true })).result?.value
-const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 /**
  * 点击来源 `sourceRef`（**id 或标签**）下标题为 `wsLabel` 的工作区行。

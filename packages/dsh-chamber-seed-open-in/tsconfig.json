@@ -29,7 +29,10 @@
       // install.ts:10/144/194/209）。按同一先例映射到 pnpm 虚拟store中由
       // 已提交锁文件钉住的路径（undici 8.10.0 = dsh-http-proxy /
       // dsh-web-fetch-http 的依赖版本）；pin 升级改动该版本时此路径必须同步。
-      "undici": ["../../node_modules/.pnpm/undici@8.10.0/node_modules/undici"]
+      "undici": ["../../node_modules/.pnpm/undici@8.10.0/node_modules/undici"],
+      "@standard-schema/spec": ["../../node_modules/.pnpm/@standard-schema+spec@1.1.0/node_modules/@standard-schema/spec"],
+      "compression": ["../../node_modules/.pnpm/@types+compression@1.8.1/node_modules/@types/compression"],
+      "negotiator": ["../../node_modules/.pnpm/@types+negotiator@0.6.5/node_modules/@types/negotiator"]
     }
   },
   "include": ["src/**/*.ts", "test/**/*.ts"]

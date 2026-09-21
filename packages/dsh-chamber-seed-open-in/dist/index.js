@@ -970,11 +970,7 @@ var OpenInAppCore = class {
    * @returns the icon value.
    */
   async icon(app) {
-    const entry = this.catalogEntry(app);
-    const resolved = (await this.availability()).get(entry.id);
-    if (resolved === void 0) {
-      throw new OpenInAppError("unavailable-app", `${entry.id} is not installed on this host`);
-    }
+    const { entry, resolved } = await this.resolvedEntry(app);
     const icon = await this.iconOf(entry, resolved);
     if (icon === null) {
       throw new OpenInAppError("icon-unavailable", `no icon for ${entry.id}`);
@@ -988,11 +984,7 @@ var OpenInAppCore = class {
    * @returns after the host acknowledged the launch.
    */
   async open(app, path) {
-    const entry = this.catalogEntry(app);
-    const resolved = (await this.availability()).get(entry.id);
-    if (resolved === void 0) {
-      throw new OpenInAppError("unavailable-app", `${entry.id} is not installed on this host`);
-    }
+    const { entry, resolved } = await this.resolvedEntry(app);
     if (typeof path !== "string" || path === "" || !isAbsolute3(path)) {
       throw new OpenInAppError("invalid-path", "path must be an absolute directory path");
     }
@@ -1022,6 +1014,15 @@ var OpenInAppCore = class {
       throw new OpenInAppError("unknown-app", `unknown open-in application: ${JSON.stringify(app)}`);
     }
     return entry;
+  }
+  /** Resolve one wire app id to its installed launcher (icon/open share this leg). */
+  async resolvedEntry(app) {
+    const entry = this.catalogEntry(app);
+    const resolved = (await this.availability()).get(entry.id);
+    if (resolved === void 0) {
+      throw new OpenInAppError("unavailable-app", `${entry.id} is not installed on this host`);
+    }
+    return { entry, resolved };
   }
   /** The internals every resolver call receives (host facts first, seams last). */
   internals() {
@@ -1064,25 +1065,10 @@ var OpenInAppCore = class {
 
 // src/shared.ts
 var OPEN_IN_APP_REMOTE_NAMESPACE = "openInApp";
-var OPEN_IN_APP_METHODS = ["probe", "apps", "icon", "open"];
 var OPEN_IN_APP_PROBE_METHOD = `${OPEN_IN_APP_REMOTE_NAMESPACE}/probe`;
 var OPEN_IN_APP_APPS_METHOD = `${OPEN_IN_APP_REMOTE_NAMESPACE}/apps`;
 var OPEN_IN_APP_ICON_METHOD = `${OPEN_IN_APP_REMOTE_NAMESPACE}/icon`;
 var OPEN_IN_APP_OPEN_METHOD = `${OPEN_IN_APP_REMOTE_NAMESPACE}/open`;
-var OPEN_IN_APP_ERROR_CODES = [
-  /** The id is not a catalog member (or not a non-empty string). */
-  "unknown-app",
-  /** The id is a catalog member that does not resolve as installed on this host. */
-  "unavailable-app",
-  /** The path is missing, empty or not absolute. */
-  "invalid-path",
-  /** The path names something that is not an existing directory. */
-  "directory-missing",
-  /** The launcher ran but the application did not come up. */
-  "launch-failed",
-  /** No icon could be extracted for this application. */
-  "icon-unavailable"
-];
 
 // src/index.ts
 var _open_dec, _icon_dec, _apps_dec, _probe_dec, _a, _init;
@@ -1129,19 +1115,6 @@ __decoratorMetadata(_init, OpenInAppGateway);
 __publicField(OpenInAppGateway, "inject", ["subprocess"]);
 var index_default = OpenInAppGateway;
 export {
-  OPEN_IN_APP_APPS_METHOD,
-  OPEN_IN_APP_ERROR_CODES,
-  OPEN_IN_APP_ICON_METHOD,
-  OPEN_IN_APP_ICON_TIMEOUT_MS,
-  OPEN_IN_APP_LAUNCH_WATCH_MS,
-  OPEN_IN_APP_METHODS,
-  OPEN_IN_APP_OPEN_METHOD,
-  OPEN_IN_APP_PROBE_METHOD,
-  OPEN_IN_APP_PROBE_TIMEOUT_MS,
-  OPEN_IN_APP_REMOTE_NAMESPACE,
-  OpenInAppCore,
-  OpenInAppError,
   OpenInAppGateway,
-  index_default as default,
-  domainResult
+  index_default as default
 };

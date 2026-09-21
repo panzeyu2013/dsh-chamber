@@ -17,7 +17,7 @@ test('carrier assembly: explicit ConnectionPlugin basePath reaches the generic R
   withWindow({ __DSH_BASE_PATH__: '/api/i/ssh-wrong' }, () => {
     const genericRpc = { kind: 'rpc' }
     const rpcOptions: unknown[] = []
-    const assembly = assembleConnectionCarriers('/api/i/ssh-right', undefined, undefined, {
+    const assembly = assembleConnectionCarriers('/api/i/ssh-right', undefined, {
       createRpc(options) {
         rpcOptions.push(options)
         return genericRpc
@@ -34,7 +34,7 @@ test('carrier assembly: page transport preserves basePath and fans fetch/openStr
   const transportFetch = () => Promise.resolve(new Response())
   const openStream = () => async function* stream() { yield undefined }()
   const rpcOptions: unknown[] = []
-  const assembly = assembleConnectionCarriers('/api/i/local', undefined, { fetch: transportFetch, openStream }, {
+  const assembly = assembleConnectionCarriers('/api/i/local', { fetch: transportFetch, openStream }, {
     createRpc(options) {
       rpcOptions.push(options)
       return { kind: 'rpc' }
@@ -48,7 +48,7 @@ test('carrier assembly: page transport preserves basePath and fans fetch/openStr
 test('carrier assembly: a page transport without a stream opener passes only the fetch hook', () => {
   const transportFetch = () => Promise.resolve(new Response())
   const rpcOptions: unknown[] = []
-  const assembly = assembleConnectionCarriers('/api/i/local', undefined, { fetch: transportFetch }, {
+  const assembly = assembleConnectionCarriers('/api/i/local', { fetch: transportFetch }, {
     createRpc(options) {
       rpcOptions.push(options)
       return { kind: 'rpc' }
@@ -57,19 +57,4 @@ test('carrier assembly: a page transport without a stream opener passes only the
 
   assert.equal(assembly.basePath, '/api/i/local')
   assert.deepEqual(rpcOptions, [{ basePath: '/api/i/local', doFetch: transportFetch }])
-})
-
-test('carrier assembly: fixture owns the RPC half and no web constructor runs', () => {
-  const fixtureRpc = { kind: 'fixture-rpc' }
-  let factoryCalls = 0
-  const assembly = assembleConnectionCarriers('/api/i/local', fixtureRpc, undefined, {
-    createRpc() {
-      factoryCalls += 1
-      return { kind: 'unexpected-rpc' }
-    },
-  })
-
-  assert.equal(assembly.basePath, '/api/i/local')
-  assert.equal(assembly.rpc, fixtureRpc)
-  assert.equal(factoryCalls, 0)
 })

@@ -82,8 +82,6 @@ export interface ArchivedSessionState {
   readonly origin?: 'subagent'
   /** Link to the parent session (subagent-origin rows only). */
   readonly parentSessionId?: string
-  /** Durable running bit from the authoritative session record. */
-  readonly running: boolean
   /** Canonical working directory (header cwd) — lets the binding resolve the
    *  official artifact WITHOUT re-enumerating the whole corpus per delete
    *  (design 24 perf: purge uses one snapshot). */
@@ -108,7 +106,7 @@ export interface ArchivedSessionState {
  *    terminated the run (session/cancel) and archived sessions have no UI
  *    route to start a new one.
  */
-export interface LiveSessionFacts {
+interface LiveSessionFacts {
   readonly running: readonly string[]
   readonly loaded: readonly string[]
 }
@@ -206,14 +204,6 @@ export interface ArchiveCleanupHost {
    *  (purge collects every completed root/orphan and commits at the end —
    *  design 24 perf: N per-tree atomic writes → 1). */
   removeArchivedSessionIds(ids: readonly string[]): Promise<void>
-  /** Emit the official session-removed event for one deleted session.
-   *  Implementations MUST wrap their failures in `ArchiveCleanupError` (the
-   *  caller treats the first in-tree emit failure as a tree abort; a raw
-   *  non-ArchiveCleanupError throw would kill the whole purge without item
-   *  records — 2026-09 round-2 note). */
-  emitSessionRemoved(sessionId: string): Promise<void>
-  /** Emit the official archived-set-changed event after set mutations. */
-  emitArchivedSessionsChanged(): Promise<void>
 }
 
 export interface PreviewResult {
@@ -236,7 +226,7 @@ export interface PreviewResult {
   readonly skippedLoaded: number
 }
 
-export interface PurgeItemError {
+interface PurgeItemError {
   readonly sessionId: string
   readonly code: string
   readonly message: string
@@ -289,7 +279,7 @@ export interface PurgeResult {
   readonly clearedOrphanMembers?: number
 }
 
-export interface ArchiveCleanupDomainError {
+interface ArchiveCleanupDomainError {
   readonly code: string
   readonly message: string
   readonly retryable?: boolean
@@ -330,6 +320,11 @@ export class ArchiveCleanupError extends Error {
   }
 }
 
+/** Single in-package description of an unknown thrown value (no second copy). */
+export function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
 /** Convert only known domain failures; unexpected programming failures remain internal throws. */
 export async function domainResult<T>(operation: () => Promise<T>): Promise<ArchiveCleanupDomainResult<T>> {
   try {
@@ -348,7 +343,7 @@ export async function domainResult<T>(operation: () => Promise<T>): Promise<Arch
 }
 
 /** Strongest liveness found anywhere in one uninterrupted subtree. */
-export type SubtreeLiveness = 'running' | 'loaded' | 'clear'
+type SubtreeLiveness = 'running' | 'loaded' | 'clear'
 
 /**
  * Classify one session subtree (the root plus every uninterrupted
@@ -357,7 +352,6 @@ export type SubtreeLiveness = 'running' | 'loaded' | 'clear'
  */
 export function subtreeLiveness(
   sessionId: string,
-  statesBySession: ReadonlyMap<string, ArchivedSessionState>,
   childrenOf: ReadonlyMap<string, readonly string[]>,
   facts: { readonly running: ReadonlySet<string>; readonly loaded: ReadonlySet<string> },
 ): SubtreeLiveness {
@@ -368,8 +362,7 @@ export function subtreeLiveness(
     const current = queue.shift() as string
     if (visited.has(current)) continue
     visited.add(current)
-    const state = statesBySession.get(current)
-    if (facts.running.has(current) || state?.running === true) return 'running'
+    if (facts.running.has(current)) return 'running'
     if (facts.loaded.has(current)) sawLoaded = true
     for (const child of childrenOf.get(current) ?? []) queue.push(child)
   }
@@ -377,7 +370,7 @@ export function subtreeLiveness(
 }
 
 
-export interface DeletableTree {
+interface DeletableTree {
   readonly rootSessionId: string
   /** Children-first deletion order (descendants before the root). */
   readonly order: readonly string[]
@@ -400,14 +393,13 @@ export function indexChildren(
 }
 
 /** Children-first post-order over one subtree (cycle-guarded, iterative — see
- *  resolveDeletableTree). `order[0]` is the deepest-visited leaf; the root is
+ *  see resolvePlan). `order[0]` is the deepest-visited leaf; the root is
  *  last. Lives on its own because `purge`'s plan needs the closure BEFORE it
  *  applies the liveness gates: a PROTECTED tree must be recognised as such even
  *  when it is also running/loaded (the protected bucket is the outer
  *  classification). */
 function subtreeOrder(
   rootSessionId: string,
-  statesBySession: ReadonlyMap<string, ArchivedSessionState>,
   childrenOf: ReadonlyMap<string, readonly string[]>,
 ): string[] {
   const order: string[] = []
@@ -436,34 +428,6 @@ function subtreeOrder(
     }
   }
   return order
-}
-
-/** Resolve the deletable subtree under one archived top-level id, or null
- *  when the whole subtree is skipped because a member is running (always) or
- *  merely loaded (unless `force`). Returns null for an unknown root
- *  (orphan/archived id with no session record — treated as already gone, see
- *  purge). Children-first order is produced by post-order walk
- *  (cycle-guarded). NOTE: `ArchiveCleanupCore.purge` drives the same two steps
- *  explicitly (closure → protection → liveness) so a protected tree is
- *  classified as protected rather than by its liveness; this helper keeps the
- *  historical single-call shape for its consumers and tests. */
-export function resolveDeletableTree(
-  rootSessionId: string,
-  statesBySession: ReadonlyMap<string, ArchivedSessionState>,
-  childrenOf: ReadonlyMap<string, readonly string[]>,
-  facts: { readonly running: ReadonlySet<string>; readonly loaded: ReadonlySet<string> },
-  force = false,
-): DeletableTree | null {
-  if (!statesBySession.has(rootSessionId)) return null
-  const liveness = subtreeLiveness(rootSessionId, statesBySession, childrenOf, facts)
-  if (liveness === 'running') return null
-  if (liveness === 'loaded' && !force) return null
-  const order = subtreeOrder(rootSessionId, statesBySession, childrenOf)
-  return {
-    rootSessionId,
-    order,
-    subagentCount: order.length - 1,
-  }
 }
 
 /**
@@ -577,7 +541,7 @@ export class ArchiveCleanupCore {
       ])
     } catch (error) {
       if (error instanceof ArchiveCleanupError) throw error
-      throw new ArchiveCleanupError('registry-unreadable', `归档状态不可读：${error instanceof Error ? error.message : String(error)}`)
+      throw new ArchiveCleanupError('registry-unreadable', `归档状态不可读：${errorText(error)}`)
     }
     const statesBySession = new Map<string, ArchivedSessionState>()
     for (const state of states) {
@@ -647,12 +611,12 @@ export class ArchiveCleanupCore {
       // id is reported as protected even when it is also running or loaded —
       // the client's actionable fact is "this tree holds the session you are
       // viewing", and protection is authoritative over `force`.
-      const order = subtreeOrder(id, statesBySession, childrenOf)
+      const order = subtreeOrder(id, childrenOf)
       if (protectedIds.size > 0 && order.some(member => protectedIds.has(member))) {
         skippedProtected += 1
         continue
       }
-      const liveness = subtreeLiveness(id, statesBySession, childrenOf, liveFacts)
+      const liveness = subtreeLiveness(id, childrenOf, liveFacts)
       if (liveness === 'running') {
         // A running member is never deletable (a live writer recreates a
         // header-less artifact) — the client stops the run first.
@@ -721,7 +685,7 @@ export class ArchiveCleanupCore {
         // caller's single write) nor clear a membership.
         probeFailures += 1
         if (firstProbeFailure === '') {
-          firstProbeFailure = error instanceof Error ? error.message : String(error)
+          firstProbeFailure = errorText(error)
         }
         continue
       }
@@ -980,9 +944,9 @@ export class ArchiveCleanupCore {
         nowFacts = { running: new Set(facts.running.map(String)), loaded: new Set(facts.loaded.map(String)) }
       } catch (error) {
         if (error instanceof ArchiveCleanupError) throw error
-        throw new ArchiveCleanupError('registry-unreadable', `live agent 状态不可读：${error instanceof Error ? error.message : String(error)}`)
+        throw new ArchiveCleanupError('registry-unreadable', `live agent 状态不可读：${errorText(error)}`)
       }
-      const liveness = subtreeLiveness(tree.rootSessionId, statesBySession, childrenOf, nowFacts)
+      const liveness = subtreeLiveness(tree.rootSessionId, childrenOf, nowFacts)
       if (liveness === 'running') {
         plan.skippedRunning += 1
         continue
@@ -1003,8 +967,8 @@ export class ArchiveCleanupCore {
       // ArchiveCleanupError('running') and triggers the abort below).
       //
       // ABORT SEMANTICS: the FIRST in-tree failure (any ArchiveCleanupError
-      // from a member deletion — delete-time `running`/`storage` — or from
-      // emitSessionRemoved) stops processing the REMAINING members of this
+      // from a member deletion — delete-time `running`/`storage`) stops
+      // processing the REMAINING members of this
       // tree: ancestors and the root stay untouched and archived, so a later
       // purge re-enumerates the intact remainder and converges (design 24
       // §4 step-4/Minor-4). Members already deleted BEFORE the failure stay
@@ -1040,22 +1004,6 @@ export class ArchiveCleanupCore {
             if (rootDeleted) deletedSessions += 1
           } else if (deletion.outcome === 'deleted') {
             deletedSubagents += 1
-          }
-          try {
-            await this.host.emitSessionRemoved(sessionId)
-          } catch (error) {
-            if (!(error instanceof ArchiveCleanupError)) throw error
-            // First in-tree failure — abort the remaining members of this
-            // tree (the deleted member itself stays deleted). Note: when the
-            // deletion above already succeeded, the member was counted
-            // `deleted` AND is listed as an error for the same sessionId
-            // (double presentation) — accepted: the deletion is durable and
-            // a rerun converges via 'missing', while the error honestly tells
-            // the client the projection side (event) failed. The binding is a
-            // documented no-op today, so this branch is future-proofing.
-            treeAborted = true
-            recordError(sessionId, error.code, error.message)
-            break
           }
         } catch (error) {
           if (!(error instanceof ArchiveCleanupError)) throw error
@@ -1256,15 +1204,6 @@ export class ArchiveCleanupCore {
         // MAX_PURGE_ERROR_RECORDS-length list keeps `truncated: true`, which
         // is the honest surface: the set members stay archived, so a rerun
         // still converges despite the truncation flag.
-        recordError('', 'archive-set', error.message)
-      }
-      try {
-        await this.host.emitArchivedSessionsChanged()
-      } catch (error) {
-        if (!(error instanceof ArchiveCleanupError)) throw error
-        // The changed event is a projection signal only — a failure must not
-        // roll back completed deletions; it is recorded per design 24 §11.
-        // Same shared-cap semantics as the removal record above (F4).
         recordError('', 'archive-set', error.message)
       }
     }

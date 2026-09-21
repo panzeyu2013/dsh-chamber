@@ -28,6 +28,12 @@ import type { FileHandle } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { readPidRecord } from './spawn-dsh.ts'
 import type { PidRecord } from './spawn-dsh.ts'
+import {
+  assertPrivateLeafStatNoFollow,
+  noFollowOpenFlag,
+  privateIdentityOf,
+  samePrivateIdentity,
+} from './private-file.ts'
 import type { Logger } from './types.ts'
 
 /** Default lines returned by readManagedLog. */
@@ -99,23 +105,11 @@ interface PinnedDirectory {
   handle: FileHandle | null
 }
 
-function identityOf(stat: Stats): FileIdentity {
-  return { dev: stat.dev, ino: stat.ino }
-}
-
-function sameIdentity(left: FileIdentity, right: FileIdentity): boolean {
-  return left.dev === right.dev && left.ino === right.ino
-}
-
-function noFollowFlag(): number {
-  return typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0
-}
-
 function assertSafeLeaf(path: string, value: Stats): SafeLeaf {
-  if (value.isSymbolicLink() || !value.isFile() || value.nlink !== 1) {
-    throw new Error(`host log leaf is not a single-link regular file: ${path}`)
-  }
-  return { identity: identityOf(value), stat: value }
+  // The unsafe-leaf rule (symlink / non-regular / multi-link) is single-sourced
+  // in private-file.ts; host-logs keeps the stat it needs for size/mtime facts.
+  assertPrivateLeafStatNoFollow(path, value)
+  return { identity: privateIdentityOf(value), stat: value }
 }
 
 async function inspectLeaf(path: string): Promise<SafeLeaf | null> {
@@ -129,7 +123,7 @@ async function inspectLeaf(path: string): Promise<SafeLeaf | null> {
 
 async function inspectExpectedLeaf(path: string, expected: FileIdentity): Promise<SafeLeaf> {
   const current = await inspectLeaf(path)
-  if (current === null || !sameIdentity(current.identity, expected)) {
+  if (current === null || !samePrivateIdentity(current.identity, expected)) {
     throw new Error(`host log leaf identity changed: ${path}`)
   }
   return current
@@ -143,7 +137,7 @@ async function pinDirectory(path: string): Promise<PinnedDirectory> {
   if (before.isSymbolicLink() || !before.isDirectory()) {
     throw new Error(`host log parent is not a real directory: ${path}`)
   }
-  const identity = identityOf(before)
+  const identity = privateIdentityOf(before)
   if (
     process.platform === 'win32'
     || typeof constants.O_DIRECTORY !== 'number'
@@ -154,7 +148,7 @@ async function pinDirectory(path: string): Promise<PinnedDirectory> {
   const handle = await open(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
   try {
     const opened = await handle.stat()
-    if (!opened.isDirectory() || !sameIdentity(identity, identityOf(opened))) {
+    if (!opened.isDirectory() || !samePrivateIdentity(identity, privateIdentityOf(opened))) {
       throw new Error(`host log parent changed while opening: ${path}`)
     }
     return { path, identity, handle }
@@ -169,13 +163,13 @@ async function verifyDirectory(pin: PinnedDirectory): Promise<void> {
   if (
     atPath.isSymbolicLink()
     || !atPath.isDirectory()
-    || !sameIdentity(pin.identity, identityOf(atPath))
+    || !samePrivateIdentity(pin.identity, privateIdentityOf(atPath))
   ) {
     throw new Error(`host log parent identity changed: ${pin.path}`)
   }
   if (pin.handle !== null) {
     const opened = await pin.handle.stat()
-    if (!opened.isDirectory() || !sameIdentity(pin.identity, identityOf(opened))) {
+    if (!opened.isDirectory() || !samePrivateIdentity(pin.identity, privateIdentityOf(opened))) {
       throw new Error(`host log parent descriptor changed: ${pin.path}`)
     }
   }
@@ -213,7 +207,7 @@ async function writeAll(handle: FileHandle, value: string): Promise<void> {
 
 async function removeOwnedLeaf(path: string, expected: FileIdentity): Promise<void> {
   const current = await inspectLeaf(path)
-  if (current !== null && sameIdentity(current.identity, expected)) await unlink(path)
+  if (current !== null && samePrivateIdentity(current.identity, expected)) await unlink(path)
 }
 
 /** One shared lane per backing path. spawn-dsh stdout/stderr and the local
@@ -260,11 +254,11 @@ class AsyncHostLogLane {
     await verifyDirectory(parent)
     const before = await inspectLeaf(this.path)
     if (before === null) return
-    const fd = await open(this.path, constants.O_RDONLY | noFollowFlag())
+    const fd = await open(this.path, constants.O_RDONLY | noFollowOpenFlag())
     try {
       const info = await fd.stat()
       const opened = assertSafeLeaf(this.path, info)
-      if (!sameIdentity(before.identity, opened.identity)) {
+      if (!samePrivateIdentity(before.identity, opened.identity)) {
         throw new Error(`host log leaf changed while opening: ${this.path}`)
       }
       await inspectExpectedLeaf(this.path, opened.identity)
@@ -290,7 +284,7 @@ class AsyncHostLogLane {
       const atPath = await inspectExpectedLeaf(this.path, opened.identity)
       await verifyDirectory(parent)
       if (
-        !sameIdentity(opened.identity, after.identity)
+        !samePrivateIdentity(opened.identity, after.identity)
         || after.stat.size !== info.size
         || after.stat.mtimeMs !== info.mtimeMs
         || after.stat.ctimeMs !== info.ctimeMs
@@ -327,11 +321,11 @@ class AsyncHostLogLane {
     try {
       await verifyDirectory(parent)
       if (expected !== null) await inspectExpectedLeaf(this.path, expected)
-      const flags = constants.O_WRONLY | constants.O_APPEND | noFollowFlag()
+      const flags = constants.O_WRONLY | constants.O_APPEND | noFollowOpenFlag()
         | (created ? constants.O_CREAT | constants.O_EXCL : 0)
       fd = await open(this.path, flags, 0o600)
       const opened = assertSafeLeaf(this.path, await fd.stat())
-      if (expected !== null && !sameIdentity(expected, opened.identity)) {
+      if (expected !== null && !samePrivateIdentity(expected, opened.identity)) {
         throw new Error(`host log leaf changed while opening for append: ${this.path}`)
       }
       await inspectExpectedLeaf(this.path, opened.identity)
@@ -339,7 +333,7 @@ class AsyncHostLogLane {
       await writeAll(fd, value)
       await fd.sync()
       const after = assertSafeLeaf(this.path, await fd.stat())
-      if (!sameIdentity(opened.identity, after.identity)) {
+      if (!samePrivateIdentity(opened.identity, after.identity)) {
         throw new Error(`host log descriptor identity changed after append: ${this.path}`)
       }
       await inspectExpectedLeaf(this.path, opened.identity)
@@ -372,7 +366,7 @@ class AsyncHostLogLane {
       await inspectExpectedLeaf(this.path, expected)
       fd = await open(
         tmp,
-        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollowFlag(),
+        constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollowOpenFlag(),
         0o600,
       )
       const opened = assertSafeLeaf(tmp, await fd.stat())
@@ -384,7 +378,7 @@ class AsyncHostLogLane {
       await writeAll(fd, retained.join(''))
       await fd.sync()
       const after = assertSafeLeaf(tmp, await fd.stat())
-      if (!sameIdentity(opened.identity, after.identity)) {
+      if (!samePrivateIdentity(opened.identity, after.identity)) {
         throw new Error(`host log temp descriptor changed before publish: ${tmp}`)
       }
       await fd.close()
@@ -670,10 +664,10 @@ export async function readLogTail(path: string, { limit, offset }: { limit: numb
     if (before === null) {
       throw Object.assign(new Error(`host log file is missing: ${path}`), { code: 'ENOENT' })
     }
-    fd = await open(path, constants.O_RDONLY | noFollowFlag())
+    fd = await open(path, constants.O_RDONLY | noFollowOpenFlag())
     const info = await fd.stat()
     const opened = assertSafeLeaf(path, info)
-    if (!sameIdentity(before.identity, opened.identity)) {
+    if (!samePrivateIdentity(before.identity, opened.identity)) {
       throw new Error(`host log leaf changed while opening for read: ${path}`)
     }
     await inspectExpectedLeaf(path, opened.identity)
@@ -682,7 +676,7 @@ export async function readLogTail(path: string, { limit, offset }: { limit: numb
       const afterEmptyRead = assertSafeLeaf(path, await fd.stat())
       await inspectExpectedLeaf(path, opened.identity)
       await verifyDirectory(parent)
-      if (!sameIdentity(opened.identity, afterEmptyRead.identity)) {
+      if (!samePrivateIdentity(opened.identity, afterEmptyRead.identity)) {
         throw new Error(`host log leaf changed during empty read: ${path}`)
       }
       return { lines: [], truncated: false }
@@ -724,7 +718,7 @@ export async function readLogTail(path: string, { limit, offset }: { limit: numb
     // Concurrent append is safe: every read above is bounded by the original
     // size. Replacement/compaction or truncation is not — never return bytes
     // from a generation the namespace no longer owns.
-    if (!sameIdentity(opened.identity, after.identity) || after.stat.size < info.size) {
+    if (!samePrivateIdentity(opened.identity, after.identity) || after.stat.size < info.size) {
       throw new Error(`host log leaf changed during read: ${path}`)
     }
     return { lines: lines.map(parseLogLine).filter((entry): entry is LogLine => entry !== null), truncated }

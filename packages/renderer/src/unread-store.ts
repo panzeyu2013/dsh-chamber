@@ -28,6 +28,9 @@
  * 待发表只影响"服务端何时知道"，绝不影响未读判定。
  */
 
+import { createBoundedMap } from './bounded-ledger.ts'
+import { isWatermark, maxWatermarkValue } from './watermark.ts'
+
 /** v2 落盘键（唯一被持续写入的未读键）。 */
 export const UNREAD_V2_KEY = 'dsh-chamber.unread.v2'
 /** 防御性 v1 边沿账本键（HEAD 无写入者；只读一次 + 迁移后删）。 */
@@ -78,10 +81,6 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
   const prototype: unknown = Object.getPrototypeOf(value)
   return prototype === Object.prototype || prototype === null
-}
-
-function isWatermark(value: unknown): value is number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 }
 
 function warn(message: string, error?: unknown): void {
@@ -313,12 +312,8 @@ export function maxWatermark(
 ): number {
   let max = 0
   for (const row of Object.values(rows)) {
-    const updated = isWatermark(row.updatedAt) ? row.updatedAt : 0
-    const completed = row.completedAt !== null && row.completedAt !== undefined && isWatermark(row.completedAt)
-      ? row.completedAt
-      : 0
-    if (updated > max) max = updated
-    if (completed > max) max = completed
+    const watermark = maxWatermarkValue(row.updatedAt, row.completedAt)
+    if (watermark > max) max = watermark
   }
   return max
 }
@@ -451,21 +446,6 @@ export async function sendUnreadRequest(
   }
 }
 
-/** 一次性上行入口（无队列调用点；失败只经 onError 报告，绝不抛）。 */
-export function postUnreadRequest(
-  fetchImpl: typeof fetch,
-  url: string,
-  payload: Record<string, unknown>,
-  onError?: (error: unknown) => void,
-): void {
-  void sendUnreadRequest(fetchImpl, url, payload).then(result => {
-    if (result.outcome === 'ok') return
-    const error = result.error ?? new Error('read ack answered ' + String(result.status))
-    warn('read ack failed', error)
-    onError?.(error)
-  })
-}
-
 export interface UnreadAckOutboxOptions {
   fetchImpl: typeof fetch
   /** 队列上限（条目数）；默认 UNREAD_PENDING_MAX；测试注入小值。0 = 关闭队列。 */
@@ -509,8 +489,15 @@ export function createUnreadAckOutbox(options: UnreadAckOutboxOptions): UnreadAc
   const maxPending = requested === undefined || !Number.isSafeInteger(requested)
     ? UNREAD_PENDING_MAX
     : Math.max(0, requested)
-  /** Map 迭代序 = 入队序；同键覆盖走 delete+set ⇒ 该键移到队尾（最近更新），FIFO 淘汰优先丢最久没更新的键。 */
-  const entries = new Map<string, UnreadAckRequest>()
+  /**
+   * 有界内核（阶段 2 单源化）：Map 迭代序 = 入队序；同键覆盖走 delete+set ⇒ 该键
+   * 移到队尾（最近更新），FIFO 淘汰优先丢最久没更新的键；淘汰经 onEvict 报诊断。
+   */
+  const entries = createBoundedMap<UnreadAckRequest>({
+    limit: maxPending,
+    replace: (previous, next) => next.watermark > previous.watermark,
+    onEvict: key => report(new Error('unread ack pending queue overflow (max ' + String(maxPending) + '); dropped ' + key)),
+  })
   let replaying: Promise<number> | null = null
 
   /** 诊断回调不得反过来打断队列：吞掉回调自身的异常。 */
@@ -537,18 +524,8 @@ export function createUnreadAckOutbox(options: UnreadAckOutboxOptions): UnreadAc
   }
 
   const enqueue = (request: UnreadAckRequest): void => {
-    if (maxPending === 0) return
-    const existing = entries.get(request.key)
-    // 同键只保留更高水位：max 服务端下旧值被支配，合并是安全的。
-    if (existing !== undefined && existing.watermark >= request.watermark) return
-    entries.delete(request.key)
+    // 同键只保留更高水位（内核 replace 裁决）：max 服务端下旧值被支配，合并是安全的。
     entries.set(request.key, request)
-    while (entries.size > maxPending) {
-      const oldest = entries.keys().next()
-      if (oldest.done === true) break
-      entries.delete(oldest.value)
-      report(new Error('unread ack pending queue overflow (max ' + String(maxPending) + '); dropped ' + oldest.value))
-    }
   }
 
   const settle = (
@@ -588,7 +565,7 @@ export function createUnreadAckOutbox(options: UnreadAckOutboxOptions): UnreadAc
     },
     replay() {
       if (replaying !== null) return replaying
-      if (entries.size === 0) return Promise.resolve(0)
+      if (entries.size() === 0) return Promise.resolve(0)
       const run = (async (): Promise<number> => {
         let delivered = 0
         // 快照迭代：重放期间新入队的条目留给下一次恢复信号，绝不为清空而自旋
@@ -608,7 +585,7 @@ export function createUnreadAckOutbox(options: UnreadAckOutboxOptions): UnreadAc
       replaying = tracked
       return tracked
     },
-    size() { return entries.size },
+    size() { return entries.size() },
     pending() {
       return [...entries.values()].map(entry => ({ ...entry, payload: { ...entry.payload } }))
     },

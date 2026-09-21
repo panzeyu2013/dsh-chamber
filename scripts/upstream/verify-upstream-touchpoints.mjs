@@ -84,7 +84,6 @@ import { createHash } from 'node:crypto'
 import {
   closeSync, existsSync, mkdirSync, openSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync,
 } from 'node:fs'
-import { createRequire } from 'node:module'
 import { dirname, join, relative, sep } from 'node:path'
 import { tmpdir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -96,6 +95,7 @@ import {
 import { USAGE_EXIT_CODE, VERIFY_USAGE, parseVerifyArgs } from './verify-upstream-touchpoints-args.mjs'
 import { HOVER_PORT_SOURCES, hoverPortVerdict } from './verify-upstream-touchpoints-hover.mjs'
 import { loadRegistry, validateRegistry, verifierForks } from './registry.mjs'
+import { resolveEsbuildPath } from '../lib/esbuild.mjs'
 
 const ROOT = fileURLToPath(new URL('../..', import.meta.url))
 const SUBMODULE = join(ROOT, 'vendor', 'harness-checkout')
@@ -529,6 +529,7 @@ for (const fork of FORKS) {
     )
     let lockFd
     let lockTaken = false
+    let lockBlocked = false
     for (let attempt = 0; attempt < 2 && !lockTaken; attempt += 1) {
       try {
         lockFd = openSync(lockPath, 'wx')
@@ -544,17 +545,23 @@ for (const fork of FORKS) {
           try { process.kill(recorded, 0); alive = true } catch { alive = false }
         }
         if (alive) {
+          lockBlocked = true
           fail(`C8 无法重建：另一个 C8 重建正在运行（pid ${recorded}，${lockPath}）——不能证明产物新鲜度，稍后重跑`)
           break
         }
         rmSync(lockPath, { force: true })
       }
     }
-    if (!lockTaken && lockFd === undefined && !process.exitCode) {
-      // The lock loop broke on a live holder: `fail()` already reported it.
-      lockFd = undefined
-    }
-    if (lockFd !== undefined) {
+    // P2-15: every path that leaves the lock un-taken must be a hard failure.
+    // A live holder already reported itself via fail(); anything else (the lock
+    // stolen between rm and retry, or a stale file whose PID is gone) used to
+    // fall through this no-op branch and end the run green WITHOUT rebuilding
+    // the artifacts the gate exists to verify.
+    if (!lockTaken) {
+      if (lockBlocked !== true) {
+        fail(`C8 无法取得重建锁（${lockPath}）——产物新鲜度未被验证，请稍后重跑`)
+      }
+    } else {
       // Snapshot/restore/compare live in scripts/upstream/artifact-gate.mjs so the
       // decision logic is unit-tested (see artifact-gate.test.mjs).
       const artifactDirs = (group) => [...new Set(group.outputs.map(output => dirname(join(ROOT, output))))]
@@ -717,15 +724,10 @@ for (const fork of FORKS) {
     ]
     // Live-literal extraction: TS/JS via esbuild (comments stripped, strings
     // preserved); yml/sh/json via a line scan that drops `#`/`//` comments.
-    const esbuildEntry = (() => {
-      try {
-        const requireFromRenderer = createRequire(join(ROOT, 'packages', 'renderer', 'package.json'))
-        const viteEntry = requireFromRenderer.resolve('vite')
-        return createRequire(viteEntry).resolve('esbuild')
-      } catch {
-        return undefined
-      }
-    })()
+    // Shared lookup (scripts/lib/esbuild.mjs): returns undefined when the tree
+    // is absent, which is what the advisory mode below turns into an explicit
+    // partial-check statement instead of a silent green.
+    const esbuildEntry = resolveEsbuildPath(ROOT)
     let transformSync
     if (esbuildEntry !== undefined) {
       const esbuild = await import(pathToFileURL(esbuildEntry).href)
@@ -898,7 +900,17 @@ for (const fork of FORKS) {
     } else if (stale.length > 0) {
       fail(`C10 版本锚不一致: ${stale.join('; ')}`)
     } else if (skipped.length > 0) {
-      warn(`C10 跳过 ${skipped.length} 个文件（esbuild 不可用，无法剥离注释做活字面量扫描）`)
+      // P2-16: the degraded form must never read as a full pass. Default mode
+      // fails (the tree is not installed); the CI pre-install step passes
+      // --no-artifact-rebuild, which is the one documented exemption — and even
+      // there the summary says PARTIAL instead of printing the ✓ line.
+      const detail = `C10 降级：esbuild 不可用，${skipped.length} 个 TS/JS 文件未做活字面量扫描（只校验了 ${REQUIRED.length} 个 REQUIRED 锚的原文包含）`
+      if (noArtifactRebuild) {
+        warn(`${detail}——--no-artifact-rebuild 显式豁免（CI install 前的 advisory 步骤）`)
+        console.log('C10 PARTIAL（advisory）: 版本锚原文包含已校验；活字面量扫描未执行')
+      } else {
+        fail(`${detail}——请先 pnpm install，或显式传 --no-artifact-rebuild 接受部分检查`)
+      }
     } else {
       console.log(`✓ C10 版本锚 = ${current}（六锚 + 3 fork 一致；生产源码无未登记版本字面量，扫描 ${candidates.length} 文件）`)
     }

@@ -15,7 +15,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { applyPendingVersion } from '../../src/apply-phase.ts'
-import { REQUIRED_ACTIVATION_PROBES, type ProbeResult } from '../../src/activation-gate.ts'
+import { activationProbeNamesForDomains, REQUIRED_ACTIVATION_PROBES, type ProbeResult } from '../../src/activation-gate.ts'
 import { journalBuilder } from '../support/store-fixtures.ts'
 import { RunPhaseFixture, type RunPhaseEvent } from '../support/run-phase-fixture.ts'
 
@@ -87,6 +87,91 @@ test('validateTarget rejection is a loud target-invalid failure — no snapshot,
   assert.match(outcome.error ?? '', /待应用运行时树无效/)
   assert.equal(fixture.snapshotCalls, 0)
   assert.equal(fixture.switchCalls, 0)
+})
+
+const FULL_SEED_DOMAINS = ['clientGraph/graph', 'gitWorktree/previewCreate', 'archiveCleanup/probe'] as const
+const PARTIAL_SEED_DOMAINS = ['clientGraph/graph', 'archiveCleanup/probe'] as const
+
+/**
+ * P0 (2026-12): the verdict's expected name set must be resolved AFTER the
+ * probe attempt, because the probe is the landing site of the candidate spawn
+ * and the desktop host publishes its seeded chamber domains from inside that
+ * spawn (cp.seededProbeDomains is written by the spawn thunk only). A value
+ * captured while the ApplyDeps object was built froze the cold-start empty
+ * table, so the freshly seeded run (7 names) never passed the exact-set check
+ * and a healthy activation rolled back. These tests drive the real ordering:
+ * `probeExpectedNames` is a lazy reader of the host's domain table.
+ */
+test('P0: expected probe set is resolved after the probe run (cold-start seed refresh)', async () => {
+  const fixture = new RunPhaseFixture({ pointer: '0.1.1-rc.2' })
+  const deps = fixture.makeApplyDeps()
+  // Cold start: the host's seeded-domain table is empty until the candidate
+  // spawn inside `probe` refreshes it.
+  let seededDomains: readonly string[] = []
+  const order: string[] = []
+  const expectedSnapshots: string[][] = []
+  deps.probe = async () => {
+    order.push('probe')
+    seededDomains = [...FULL_SEED_DOMAINS]
+    return activationProbeNamesForDomains(seededDomains).map(name => ({ name, ok: true }))
+  }
+  deps.probeExpectedNames = () => {
+    order.push('expected')
+    const names = activationProbeNamesForDomains(seededDomains)
+    expectedSnapshots.push([...names])
+    return names
+  }
+  const outcome = await apply(fixture, { deps })
+  assert.equal(outcome.status, 'applied')
+  // The stale pre-spawn expectation would have been the 4-name reduced set.
+  assert.equal(expectedSnapshots.length, 1)
+  assert.deepEqual(expectedSnapshots[0], [...activationProbeNamesForDomains(FULL_SEED_DOMAINS)])
+  assert.equal(expectedSnapshots[0].length, REQUIRED_ACTIVATION_PROBES.length)
+  assert.deepEqual(order, ['probe', 'expected'])
+})
+
+test('P0: rollback verification probes also resolve the expectation after each run', async () => {
+  const fixture = new RunPhaseFixture({ pointer: '0.1.1-rc.2' })
+  const deps = fixture.makeApplyDeps()
+  let seededDomains: readonly string[] = []
+  const expectedSnapshots: string[][] = []
+  let calls = 0
+  deps.probe = async () => {
+    calls += 1
+    seededDomains = [...PARTIAL_SEED_DOMAINS]
+    // Candidate observe (1) → confirm-fail (2); the third attempt is the
+    // rollback verification and must pass.
+    return activationProbeNamesForDomains(seededDomains).map(name => ({ name, ok: calls >= 3 }))
+  }
+  deps.probeExpectedNames = () => {
+    const names = activationProbeNamesForDomains(seededDomains)
+    expectedSnapshots.push([...names])
+    return names
+  }
+  const outcome = await apply(fixture, { deps, knownGoodVersion: '0.1.1-rc.2' })
+  // Without the lazy seam the stale 4-name expectation makes the rollback
+  // verification fail too, escalating to the builtin-terminal outcome.
+  assert.equal(outcome.status, 'rolled-back')
+  assert.equal(outcome.runtimeBlocked, false)
+  assert.equal(expectedSnapshots.length, 3)
+  for (const snapshot of expectedSnapshots) {
+    assert.deepEqual(snapshot, [...activationProbeNamesForDomains(PARTIAL_SEED_DOMAINS)])
+  }
+})
+
+test('P0 control: the stale pre-spawn (empty-table) expectation rolls the same healthy run back', async () => {
+  // Reproduces the pre-fix capture: the cold-start table ([]) was frozen into
+  // the verdict while the spawned candidate answered the full seeded set.
+  // This is the defect the lazy seam removes — keep it as the negative control.
+  const fixture = new RunPhaseFixture({ pointer: '0.1.1-rc.2' })
+  const deps = fixture.makeApplyDeps()
+  deps.probe = async () => activationProbeNamesForDomains(FULL_SEED_DOMAINS).map(name => ({ name, ok: true }))
+  deps.probeExpectedNames = () => activationProbeNamesForDomains([])
+  const outcome = await apply(fixture, { deps, knownGoodVersion: '0.1.1-rc.2' })
+  assert.equal(outcome.status, 'failed')
+  assert.equal(outcome.runtimeBlocked, true)
+  assert.equal(outcome.failureKind, 'terminal')
+  assert.equal(fixture.switchCalls > 0, true)
 })
 
 test('probe pass → applied, marks known-good, switches to pending', async () => {

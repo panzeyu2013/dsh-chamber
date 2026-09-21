@@ -33,6 +33,7 @@
  * token, which is not a release credential).
  */
 import { realpathSync } from 'node:fs'
+import { sleep } from '../lib/cli.mjs'
 import { argv, env, exit } from 'node:process'
 import { fileURLToPath } from 'node:url'
 
@@ -229,7 +230,6 @@ export function parseArgs(args) {
   return options
 }
 
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 async function api(path, token) {
   const headers = { accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28' }

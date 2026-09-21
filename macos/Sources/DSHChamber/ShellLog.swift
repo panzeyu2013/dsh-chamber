@@ -284,23 +284,17 @@ public final class ShellLog {
     /// lstat → open(O_NOFOLLOW|O_NONBLOCK) → fstat 三段判据：FIFO/socket/设备/目录/
     /// 链接一律拒绝，lstat 与 open 之间被换掉也由 fstat 兜住。
     private func openLeafLocked(_ url: URL) -> FileHandle? {
-        var info = stat()
-        // 已存在就必须是常规文件（FIFO/socket/设备/目录/链接一律拒绝，且在 open 之前
-        // 判掉——open 一个无读者的 FIFO 会永久阻塞）；不存在则由下面的 O_CREAT 建。
-        if lstat(url.path, &info) == 0 {
-            guard (info.st_mode & S_IFMT) == S_IFREG, info.st_nlink == 1 else { return nil }
-        }
-        let descriptor = open(
-            url.path, O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW | O_NONBLOCK, 0o600)
-        guard descriptor >= 0 else { return nil }
-        var opened = stat()
-        guard fstat(descriptor, &opened) == 0,
-              (opened.st_mode & S_IFMT) == S_IFREG,
-              opened.st_nlink == 1 else {
-            close(descriptor)
+        // 判据并集单源 = PrivateFS（2026-12 单源化）：lstat（FIFO/socket/设备/目录/
+        // 链接一律拒绝，且在 open 之前判掉——open 一个无读者的 FIFO 会永久阻塞）→
+        // open(O_NOFOLLOW|O_NONBLOCK) → fstat（常规文件 + 单硬链接 + inode 稳定性）。
+        // 失败一律 nil → 调用方降级只写 stderr（日志绝不成为新的致命面）。
+        switch PrivateFS.openLeaf(path: url.path,
+                                  flags: O_WRONLY | O_APPEND | O_CREAT | O_NONBLOCK) {
+        case .failure:
             return nil
+        case .success(let (descriptor, _)):
+            return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
         }
-        return FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
     }
 
     /// 轮转：关闭当前 → 现文件搬到 .rotating → 删旧 .1 → .rotating 改名为 .1 →

@@ -73,34 +73,3 @@ export function effectivePending(record: OverrideRecord | null, currentShellVers
   if (shouldInvalidate(record, currentShellVersion)) return null;
   return record.pending;
 }
-
-/**
- * 现在能否尝试换树（指针写）：swapAttempted===true → false（置位后不重试，
- * 避免每启重复警告）；false → true（可尝试，尝试时置位由上层做）。
- *
- * 语义（§3.5）：换树失败后置 swapAttempted；阻塞消失（用户再次操作）清除后
- * 重试一次——清除与置位都在上层，本模块只回答布尔问题。
- */
-export function shouldRetrySwap(record: OverrideRecord): boolean {
-  return !record.swapAttempted;
-}
-
-/** pending 重放裁决（§3.5「pending 清除与重放」三分支，幂等）。 */
-export type ReplayDecision = 'apply-switch' | 'skip-switch-probe-only' | 'none';
-
-/**
- * pending 重放幂等三分支：
- *   - pending 为空 → 'none'（无未决切换，无事可做）；
- *   - 当前指针版本 === pending → 'skip-switch-probe-only'（切换已生效——
- *     上次启动已完成指针写；跳过切换直接探针，幂等）；
- *   - 否则 → 'apply-switch'（指针尚未指向 pending，执行切换）。
- *
- * 注意：本裁决只看 pending 与当前指针，不掺失效判定——失效门在调用方
- * （启动时经 shouldInvalidate / effectivePending 已把已失效记录的 pending
- * 投影为 null，重放路径不会带着失效记录走到这里）。
- */
-export function replayDecision(record: OverrideRecord, currentPointerVersion: string | null): ReplayDecision {
-  if (record.pending === null) return 'none';
-  if (currentPointerVersion === record.pending) return 'skip-switch-probe-only';
-  return 'apply-switch';
-}

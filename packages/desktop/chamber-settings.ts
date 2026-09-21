@@ -11,10 +11,10 @@
  * electron side effects (powerSaveBlocker / setLoginItemSettings / XDG
  * autostart / window lifecycle) live in main.ts.
  */
-import { lstatSync, renameSync } from 'node:fs';
+import { lstatSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { atomicWritePrivateFileNoFollow, ensurePrivateDirectoryNoFollow, readPrivateFileNoFollow } from './control-plane-module.ts';
-import { removeLegacyTmpResidue } from './store-file-hygiene.ts';
+import { isPlainRecord, preserveFileAside, removeLegacyTmpResidue } from './store-file-hygiene.ts';
 
 /** Close-window behavior (design 14 D1): hide to tray (dsh keeps running) or quit. */
 export type WindowCloseBehavior = 'hide-to-tray' | 'quit';
@@ -353,7 +353,7 @@ const NOTIFICATION_SETTINGS_KEYS: ReadonlyArray<keyof ChamberNotificationSetting
  *  响亮校验在 validatePatch）。非对象（null/数组/标量）整组回落默认。 */
 function normalizeNotificationSettings(input: unknown): ChamberNotificationSettings {
   const notifications: ChamberNotificationSettings = { ...DEFAULT_CHAMBER_SETTINGS.notifications };
-  if (input === null || typeof input !== 'object' || Array.isArray(input)) return notifications;
+  if (!isPlainRecord(input)) return notifications;
   const record = input as Record<string, unknown>;
   if (typeof record.enabled === 'boolean') notifications.enabled = record.enabled;
   if (record.mode === 'hidden-only' || record.mode === 'always') notifications.mode = record.mode;
@@ -375,7 +375,7 @@ const SESSION_TODO_SETTINGS_KEYS: ReadonlyArray<keyof ChamberSessionTodoSettings
  *  响亮校验在 validatePatch）。非对象（null/数组/标量）整组回落默认。 */
 function normalizeSessionTodoSettings(input: unknown): ChamberSessionTodoSettings {
   const sessionTodo: ChamberSessionTodoSettings = { ...DEFAULT_CHAMBER_SETTINGS.sessionTodo };
-  if (input === null || typeof input !== 'object' || Array.isArray(input)) return sessionTodo;
+  if (!isPlainRecord(input)) return sessionTodo;
   const record = input as Record<string, unknown>;
   if (typeof record.enabled === 'boolean') sessionTodo.enabled = record.enabled;
   if (typeof record.onComplete === 'boolean') sessionTodo.onComplete = record.onComplete;
@@ -415,7 +415,7 @@ export function normalizeSettings(input: unknown): ChamberSettings {
  *  registryOrigin (a wrongly-shaped trust-relevant value must not be
  *  silently reinterpreted). */
 function isValidSettingsFile(input: unknown): input is Record<string, unknown> {
-  if (input === null || typeof input !== 'object' || Array.isArray(input)) return false;
+  if (!isPlainRecord(input)) return false;
   const record = input as Record<string, unknown>;
   if (record.windowCloseBehavior !== undefined
     && record.windowCloseBehavior !== 'hide-to-tray'
@@ -433,7 +433,7 @@ function isValidSettingsFile(input: unknown): input is Record<string, unknown> {
   // behavior without their consent.
   if (record.notifications !== undefined) {
     const notifications = record.notifications;
-    if (notifications === null || typeof notifications !== 'object' || Array.isArray(notifications)) return false;
+    if (!isPlainRecord(notifications)) return false;
     const nested = notifications as Record<string, unknown>;
     if (nested.mode !== undefined && nested.mode !== 'hidden-only' && nested.mode !== 'always') return false;
     for (const key of ['enabled', 'onComplete', 'onAsk', 'onRequest', 'badgeEnabled'] as const) {
@@ -445,7 +445,7 @@ function isValidSettingsFile(input: unknown): input is Record<string, unknown> {
   // corruption, never a silent reinterpretation of the user's UI choice.
   if (record.sessionTodo !== undefined) {
     const sessionTodo = record.sessionTodo;
-    if (sessionTodo === null || typeof sessionTodo !== 'object' || Array.isArray(sessionTodo)) return false;
+    if (!isPlainRecord(sessionTodo)) return false;
     const nested = sessionTodo as Record<string, unknown>;
     for (const key of ['enabled', 'onComplete', 'onAsk', 'onRequest'] as const) {
       if (nested[key] !== undefined && typeof nested[key] !== 'boolean') return false;
@@ -560,12 +560,10 @@ function corruptSiblingExists(filePath: string): boolean {
 }
 
 function preserveCorrupt(filePath: string): void {
-  try {
-    renameSync(filePath, `${filePath}.corrupt`);
-  } catch (error) {
-    // Never throw out of the read path; the caller logs the loud notice already.
-    console.error(`[chamber-settings] 保留损坏设置文件失败：`, error);
-  }
+  // The rename itself is single-sourced in store-file-hygiene.preserveFileAside
+  // (2026-12 stage-2); only the failure wording stays store-specific.
+  const result = preserveFileAside(filePath, '.corrupt');
+  if (!result.ok) console.error(`[chamber-settings] 保留损坏设置文件失败：`, result.error);
 }
 
 /** 关窗隐藏到托盘的「恢复入口可用」判定（design 14 D1）：macOS Dock 图标常驻
@@ -800,7 +798,7 @@ export function computeQuitRisk(input: {
 export function validatePatch(
   patch: unknown,
 ): { ok: true; patch: Partial<ChamberSettings> } | { ok: false; error: string; code?: string } {
-  if (patch === null || typeof patch !== 'object' || Array.isArray(patch)) {
+  if (!isPlainRecord(patch)) {
     return { ok: false, error: 'settings patch must be an object' };
   }
   const record = patch as Record<string, unknown>;
@@ -844,7 +842,7 @@ export function validatePatch(
 function validateNotificationSettingsPatch(
   input: unknown,
 ): { ok: true; patch: Partial<ChamberNotificationSettings> } | { ok: false; error: string } {
-  if (input === null || typeof input !== 'object' || Array.isArray(input)) {
+  if (!isPlainRecord(input)) {
     return { ok: false, error: 'notifications must be an object' };
   }
   const record = input as Record<string, unknown>;
@@ -872,7 +870,7 @@ function validateNotificationSettingsPatch(
 function validateSessionTodoSettingsPatch(
   input: unknown,
 ): { ok: true; patch: Partial<ChamberSessionTodoSettings> } | { ok: false; error: string } {
-  if (input === null || typeof input !== 'object' || Array.isArray(input)) {
+  if (!isPlainRecord(input)) {
     return { ok: false, error: 'sessionTodo must be an object' };
   }
   const record = input as Record<string, unknown>;

@@ -17,8 +17,10 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { MODES, pnpmInvocation, requestedMode, runMode, stepInvocation } from './run-checks.mjs'
+import { ciUnclassifiedGateCommands, jobBlock, staticGateParityProblems } from './static-gate-parity.mjs'
 import { judgeSwiftTestReport, parseSwiftTestReport, swiftTestArgs, swiftTestEnvironment } from './run-swift-tests.mjs'
-import { DEFAULT_SIDECAR_DIR, resolveNodeBinary, resolveSidecarDir, smokeDecision } from './compiled-sidecar-smoke.mjs'
+import { smokeDecision } from './compiled-sidecar-smoke.mjs'
+import { DEFAULT_SIDECAR_DIR, resolveNodeBinary, resolveSidecarDir } from '../lib/sidecar-assembly.mjs'
 import {
   EXPECTED_SURFACE,
   FACTORY_TO_NAMESPACE,
@@ -485,4 +487,19 @@ test('the REAL compiled Electron artifacts execute when present (loud skip other
   assert.equal(verdict.members, EXPECTED_SURFACE.members,
     'the COMPILED preload must equal the pinned member total（陈旧 dist 先跑 '
     + 'pnpm --filter @dsh-chamber/desktop run build:preload）')
+})
+
+// G35/P1-1: the local static set and ci.yml's unclassified gate steps were two
+// hand-maintained lists that had silently drifted (each ran a DIFFERENT
+// remote-state script). The contract + exemptions + negative controls live in
+// static-gate-parity.mjs; this is the real-repository assertion.
+test("G35: MODES.static matches ci.yml's unclassified gate steps", () => {
+  const scripts = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')).scripts
+  const job = jobBlock(readFileSync(join(REPO_ROOT, '.github', 'workflows', 'ci.yml'), 'utf8'), 'test')
+  assert.ok(job.length > 0, 'ci.yml must declare the test job')
+  const ciCommands = ciUnclassifiedGateCommands(job, scripts)
+  const problems = staticGateParityProblems({ staticSteps: MODES.static, ciCommands, scripts })
+  assert.deepEqual(problems, [], problems.join('\n'))
+  assert.ok(ciCommands.some(command => command.includes('remote-state-injection-matrix')),
+    'the fault-injection matrix must run on the push path too, not only from check:static')
 })

@@ -97,6 +97,34 @@ export interface GatewaySessionOrigin {
   scope: string
 }
 
+/**
+ * THE construction point of a session origin (2026-12 stage-2 single-sourcing):
+ * the direct-endpoint provider (gateway-provider gatewaySessionOriginFor), the
+ * ssh tunnel provider (ssh-provider tunnelSessionOrigin) and the refresh
+ * controller (gateway-session-refresh gatewaySessionOriginForUrl) used to build
+ * the same object shape three times, with the optional spkiPin/authority keys
+ * conditionally spread by hand in each. They now all come through here, so the
+ * login, the cached-session key and the proxy registration can never disagree
+ * about which fields form an origin. Optional keys stay ABSENT (not
+ * undefined/null) exactly as before — the cache key is built by serializing
+ * this object.
+ */
+export function buildGatewaySessionOrigin(input: {
+  baseUrl: string
+  insecureHttp: boolean
+  scope: string
+  spkiPin?: string | null
+  authority?: string | undefined
+}): GatewaySessionOrigin {
+  return {
+    baseUrl: input.baseUrl,
+    insecureHttp: input.insecureHttp,
+    scope: input.scope,
+    ...(input.spkiPin === undefined || input.spkiPin === null ? {} : { spkiPin: input.spkiPin }),
+    ...(input.authority === undefined ? {} : { authority: input.authority }),
+  }
+}
+
 /** Stable, non-secret session ownership scope. The id distinguishes parallel
  * connections; the digest binds the scope to the actual direct/SSH target so
  * a same-id retarget cannot inherit a prior generation's session. Local

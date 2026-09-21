@@ -155,6 +155,13 @@ import type { MobileKey } from './locales.ts'
  * before the notice appears. Long enough that a slow-but-alive history load is
  * never called stalled; short enough that a phone left on a dead loading face
  * gets an exit without the user guessing.
+ *
+ * CROSS-TIER PARITY (design 14 §D4; test/behavior/session-recovery-parity.test.ts):
+ * the desktop ladder's own notice threshold is 20s, measured on the official
+ * openState the desktop tier subscribes to. This tier has NO openState channel —
+ * it observes a DOM-only shape that a healthy slow load can produce too — so the
+ * threshold stays deliberately LONGER. The deviation is intentional and locked
+ * by the parity test; the ledger and the failure bound are aligned instead.
  */
 export const STALL_THRESHOLD_MS = 45_000
 
@@ -181,8 +188,13 @@ export const STALL_RESYNC_MAX = 3
  * not loaded"): every automatic attempt has had its chance, and the user must not
  * read an ongoing load that already failed. Announced only — the levers and the
  * dismissal keep working underneath.
+ *
+ * ALIGNED with the desktop ladder's `loadingFailedMs` (design 14 §D4 = 90s):
+ * "content not loaded" must mean the same thing on both tiers, and the parity
+ * test pins the equality. The 45s stall threshold above already ensures the
+ * failure wording never precedes a first notice.
  */
-export const STALL_FAILED_MS = 180_000
+export const STALL_FAILED_MS = 90_000
 
 /** The conversation root's phase attribute. The emitter is upstream
  *  `ConversationRoot`'s `phase` attribute (ui-conversation): the value space is

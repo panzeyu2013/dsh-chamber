@@ -143,7 +143,6 @@ test('purge subset: an empty selection deletes NO content but still converges th
   assert.equal(again.errors.length, 0)
   assert.equal(again.clearedOrphanMembers, undefined)
   assert.equal(host.removalCalls.length, 1)
-  assert.equal(host.changedEvents, 1)
 })
 
 test('capacity guard: an oversized archived set still allows bounded subset purges', async () => {
@@ -348,7 +347,6 @@ test('purge: a failed sweep confirmation read SKIPS the sweep, records archive-s
   assert.equal(host.archived.has('s-orphan'), true)
   assert.equal(host.archived.has('s1'), false)
   assert.equal(host.archived.has('s2'), false)
-  assert.equal(host.changedEvents, 1)
   // A later run (enumeration healthy again) converges the orphan.
   host.failStateReadOnAttempt = null
   const again = await core.purge()
@@ -367,7 +365,6 @@ test('purge: the orphan sweep is idempotent — a second run is a no-op with no 
   assert.equal(second.deletedSessions, 0)
   assert.equal(second.clearedOrphanMembers, undefined)
   assert.equal(host.removalCalls.length, 1, 'no second write')
-  assert.equal(host.changedEvents, 1, 'no second changed event')
   assert.deepEqual([...host.archived], ['s3'])
 })
 

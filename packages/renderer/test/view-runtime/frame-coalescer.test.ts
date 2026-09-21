@@ -15,7 +15,6 @@ import { createFrameCoalescer } from '../../src/frame-coalescer.ts'
 interface Harness {
   readonly frames: Array<() => void>
   readonly delays: Array<{ run: () => void; ms: number }>
-  sample: () => void
   samples: number
   now: () => number
   advance: (ms: number) => void

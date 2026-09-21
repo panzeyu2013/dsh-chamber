@@ -101,6 +101,10 @@ public struct QuitFactsCache {
 
 /// 关窗/退出动作映射与文案（纯函数，单测直测）。
 public enum QuitCoordinator {
+    /// `__host.quitFacts` 决策请求超时（秒）：**单一定义**（2026-12 单源化）——
+    /// AppDelegate 的等待预算与 prompt 里的 %d 秒数共用本值，不再各写 2.0/2。
+    public static let factsTimeout: TimeInterval = 2.0
+
     /// 关窗动作：隐藏（Dock 常驻恢复入口）或转入完整退出链。
     public enum CloseAction: Equatable {
         case hide
@@ -142,9 +146,9 @@ public enum QuitCoordinator {
         public static var messageText: String { NativeText.string(.quitUnavailableTitle) }
 
         /// quit.unavailableDetail：整句含一个 %d = 超时秒数（en/zh 两份 .strings 同形）。
-        /// 传 2 与 AppDelegate.quitFactsTimeout 当前值 2.0 一致；模板改秒数时这里必须同步。
+        /// 秒数 = QuitCoordinator.factsTimeout（单一定义；不再与 AppDelegate 双写）。
         public static var informativeText: String {
-            NativeText.format(.quitUnavailableDetail, 2)
+            NativeText.format(.quitUnavailableDetail, Int32(QuitCoordinator.factsTimeout))
         }
 
         public static var waitButtonTitle: String { NativeText.string(.quitWaitButton) }

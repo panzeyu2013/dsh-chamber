@@ -21,7 +21,7 @@ import type { DshChamberBridge } from '../../renderer/src/global.d.ts'
  * plugin-local seams (GatewayPasswordSurface / PasswordSetProjection) were
  * retired when they landed there. The `sshPasswordSet`/`tokenSet`/
  * `passwordSet`/`secretStorage` projections are merged by the main process
- * on `instances_get`, `instances_set`, `save_connection`, and
+ * on `instances_get`, `save_connection`, and
  * `delete_connection` results
  * (main.ts projects every registry return), so callers may rely on them in
  * every registry-returning path.

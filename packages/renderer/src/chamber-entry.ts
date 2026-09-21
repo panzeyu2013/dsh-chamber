@@ -486,16 +486,6 @@ async function registerDeferred(
   }), 0)
 }
 
-/**
- * The boot-graph entry ids this composite covers (design 09, module C) — the
- * dedupe set the per-instance host-graph merge filters against (shell.ts →
- * host-graph.ts). Re-exported from the leaf module `chamber-covered.ts` (the
- * constant is DEFINED there): shell.ts must import it without pulling this
- * bundle's top-level module-table handoff into the main chunk. Maintenance:
- * keep the two lists in lockstep (see chamber-covered.ts header).
- */
-export { CHAMBER_COVERED_IDS } from './chamber-covered.ts'
-
 /** The boot-graph row id this bundle registers under (must match dist/manifest.json). */
 export const CHAMBER_APP_ID = '@dsh-chamber/app'
 

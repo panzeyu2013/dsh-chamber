@@ -59,7 +59,7 @@ pure 16：`src/http-bridge.ts`、`src/rpc.ts`、`src/rpc-host.ts`、`src/rpc-sch
 | `package.json` | [patch-add] | 仅追加 chamber test 脚本（其余与上游一致；版本行随上游推进） |
 | `src/api-path.ts` | [patch-mod] | 追加 resolveInstanceBasePath + 头部 chamber 说明（basePath 语义，design 05 §6） |
 | `src/client/connection.ts` | [patch-mod] | 仅 erasableSyntaxOnly 显式字段改写（两个构造参数属性）+ 顶部 chamber 说明；其余逐字节上游（Batch 2 重锚：loopEpoch 守卫与 CONNECTION_BACKOFF_MAX_MS 导出退役，改由原生 reconnect/setNetworkAvailable） |
-| `src/client/index.ts` | [patch-mod] | apply(ctx) 读 ctx.chamberBasePath → 载波装配（design 05 §6）+ SYSTEM_RESUME_EVENT/liveness 触发（design 14 D4）+ recovery-policy 转出（/client barrel）+ 头部 chamber 说明 |
+| `src/client/index.ts` | [patch-mod] | apply(ctx) 读 ctx.chamberBasePath → 载波装配（design 05 §6）+ SYSTEM_RESUME_EVENT/liveness 触发（design 14 D4）+ recovery-policy 转出（/client barrel）+ 移除上游 ?fixture 页面模式与夹具静态 import（src/client/fixture.ts 已 dropped）+ 头部 chamber 说明 |
 | `src/client/rpc.ts` | [patch-mod] | basePath 前缀拼装 + WebConnectionRpcOptions（chamber 选项对象）+ 头部 chamber 说明 |
 | `tsconfig.client.json` | [patch-mod] | chamber 构面：extends ../../tsconfig.json + vendor paths + files 列表（与上游 files 增量同步维护） |
 | `tsconfig.host.json` | [patch-mod] | 同上（host 构面） |
@@ -71,6 +71,7 @@ pure 16：`src/http-bridge.ts`、`src/rpc.ts`、`src/rpc-host.ts`、`src/rpc-sch
 | `src/client/liveness-triggers.ts` | [own] | chamber sleep/wake 活性触发（design 14；原生 reconnect + 离线门 + 唤醒事件旁路） |
 | `src/client/recovery-policy.ts` | [own] | chamber 每来源恢复时序策略（远端 45s/5s，本地保持上游默认） |
 | `test/` | [own] | chamber 自有测试（api-path/carrier-assembly/liveness-triggers/client-apply + fixtures（含 schemastery/fixture/recovery-config 桩 loader）） |
+| `src/client/fixture.ts` | [dropped] | 上游浏览器开发夹具（4037 行）：chamber 无 ?fixture 生产者，静态 import 会把夹具及其 dsh-llm 值导入拖进复合首屏 bundle |
 | `tests/` | [dropped] | chamber 无 tsdown / 不镜像上游测试 |
 | `tsdown.config.ts` | [dropped] | chamber 无 tsdown / 不镜像上游测试 |
 <!-- GENERATED:registry:touchpoints.fork-mirror.connection:end -->
@@ -126,7 +127,7 @@ pure 5（以脚本计数为准）。
 | `README.zh.md` | [dropped] | 上游 README 不携带（fork 描述在 package.json） |
 | `src/index.ts` | [dropped] | 上游 host 插件入口（chamber 不镜像 host 半） |
 | `src/stream-server.ts` | [dropped] | 上游 host 半流服务器（dropped） |
-| `src/types.ts` | [dropped] | 上游 host/aux 类型文件（exports 保留 inert ./types 子路径） |
+| `src/types.ts` | [dropped] | 上游 host/aux 类型文件（源码与 inert ./types 子路径均已移除） |
 | `tests/` | [dropped] | 上游文件有意不镜像 |
 | `tsconfig.host.json` | [dropped] | host 构面不镜像 |
 | `tsdown.config.ts` | [dropped] | 上游文件有意不镜像 |

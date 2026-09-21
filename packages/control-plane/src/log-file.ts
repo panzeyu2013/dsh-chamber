@@ -26,22 +26,18 @@
  *   design 05 §8 / 17 §8 不变）。调用方仍不得把凭据写进日志。
  */
 
-import {
-  chmodSync,
-  closeSync,
-  constants,
-  fchmodSync,
-  fstatSync,
-  lstatSync,
-  mkdirSync,
-  openSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeSync,
-} from 'node:fs'
+import { closeSync, constants, fstatSync, lstatSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 
+import {
+  ensurePrivateDirectoryNoFollow,
+  noFollowOpenFlag,
+  openPrivateAppendNoFollow,
+  privateIdentityOf,
+  rotatePrivateFileRingNoFollow,
+  samePrivateIdentity,
+  writePrivateFdAll,
+} from './private-file.ts'
 import type { Logger } from './types.ts'
 
 /** 单个日志文件默认上限（2 MiB；环内总占用 ≤ 6 MiB）。 */
@@ -59,7 +55,7 @@ export const CONTROL_LOG_FILE = 'control-plane.log'
 
 /** 平台暴露 O_NOFOLLOW / O_NONBLOCK 时取其值，否则显式 0。win32 两个常量都
  *  不存在：不能依赖位或把 `undefined` 静默转成 0（那正是守卫消失而无告警的原因）。 */
-const CONTROL_LOG_NOFOLLOW_FLAG = typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0
+const CONTROL_LOG_NOFOLLOW_FLAG = noFollowOpenFlag()
 const CONTROL_LOG_NONBLOCK_FLAG = typeof constants.O_NONBLOCK === 'number' ? constants.O_NONBLOCK : 0
 
 /**
@@ -72,7 +68,9 @@ const CONTROL_LOG_NONBLOCK_FLAG = typeof constants.O_NONBLOCK === 'number' ? con
 export function verifyOpenedLeafIdentity(path: string, handle: number): void {
   const atPath = lstatSync(path)
   const opened = fstatSync(handle)
-  if (atPath.isSymbolicLink() || atPath.dev !== opened.dev || atPath.ino !== opened.ino) {
+  // The identity pair is single-sourced in private-file.ts (same predicate the
+  // shared open/rotation primitives use).
+  if (atPath.isSymbolicLink() || !samePrivateIdentity(privateIdentityOf(atPath), privateIdentityOf(opened))) {
     throw new Error('log leaf is a symbolic link or changed while being opened')
   }
 }
@@ -178,23 +176,10 @@ export function createControlLogSink(options: {
    */
   const validateDirectory = (): boolean => {
     try {
-      // **先判链接再 chmod**：chmod(2) 会跟随符号链接，若顺序反过来，一次拒绝落盘之前
-      // 就已经把链接目标目录的权限改掉了（2026-12 二轮独立复核实测：目标 777 → 700）。
-      try {
-        if (lstatSync(directory).isSymbolicLink()) {
-          degrade('logs directory is a symbolic link: ' + directory)
-          return false
-        }
-      } catch { /* 目录尚不存在：由下面的 mkdir 创建 */ }
-      mkdirSync(directory, { recursive: true, mode: 0o700 })
-      // 0700 只在**创建**时生效：已存在的宽松目录必须显式收紧（文档承诺 0700，
-      // 但 mode 参数不会改既有目录的位，2026-12 独立复核）。
-      try { chmodSync(directory, 0o700) } catch { /* 非 POSIX 或无权限：不因此停写 */ }
-      // chmod 之后再验一次：lstat 与 mkdir/chmod 之间被换成链接（TOCTOU）也要挡住。
-      if (lstatSync(directory).isSymbolicLink()) {
-        degrade('logs directory became a symbolic link: ' + directory)
-        return false
-      }
+      // 目录纪律单一源（private-file.ts ensurePrivateDirectoryNoFollow）：
+      // no-follow + identity + 0700，且**先判链接再 chmod**（一次拒绝落盘之前
+      // 绝不动链接目标的权限），已存在的宽松目录显式收紧。任何失败即降级原因。
+      ensurePrivateDirectoryNoFollow(directory, 0o700, { existingMode: 'tighten' })
       return true
     } catch (error) {
       degrade(`cannot create ${directory}: ${String(error)}`)
@@ -216,23 +201,23 @@ export function createControlLogSink(options: {
     // 否则符号链接目录会在 reopen 时被重新激活（O_NOFOLLOW 只保护最后一段）。
     if (!validateDirectory()) return false
     try {
-      // O_NONBLOCK：叶子被换成 FIFO 时，同步 open(O_WRONLY) 会永久阻塞事件循环
-      // （2026-12 二轮独立复核实测）；无读者的 FIFO 直接 ENXIO ⇒ 降级。普通文件忽略该位。
-      handle = openSync(path,
-        constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | CONTROL_LOG_NOFOLLOW_FLAG
-        | CONTROL_LOG_NONBLOCK_FLAG, 0o600)
-      // 无 O_NOFOLLOW 的平台（win32）：先复验 path 仍指向刚打开的 inode，再 chmod
-      // ——顺序反过来会先对攻击者选定的链接目标做 0600 收紧（C2）。
-      if (CONTROL_LOG_NOFOLLOW_FLAG === 0) verifyOpenedLeafIdentity(path, handle)
-      // 0600 同样只在创建时生效：已存在的宽松文件（旧版本留下/手工改过）必须显式
-      // 收紧，否则文档与 T-25 的"无条件 0600"是假的（2026-12 独立复核）。
-      try { fchmodSync(handle, 0o600) } catch { /* 某些文件系统不支持：不因此停写 */ }
-      // 身份取自**句柄本身**（fstat）而不是 path：open 与 stat(path) 之间被换文件时，
-      // 用 path 记下的身份会让 64 行巡检永久失明（2026-12 二轮独立复核的 preload 复现）。
-      const stat = fstatSync(handle)
-      writtenBytes = stat.size
-      handleDev = stat.dev
-      handleIno = stat.ino
+      // 打开语义单一源（private-file.ts openPrivateAppendNoFollow）：
+      // O_APPEND|O_CREAT + O_NOFOLLOW（无该位的平台先复验 path 身份再 chmod）、
+      // 0600 收紧（本 sink 为 fail-soft，故 strictTighten=false：不支持 chmod 的
+      // 文件系统不因此停写）、O_NONBLOCK（叶子被换成 FIFO 时不得阻塞事件循环）。
+      // 身份取自**句柄本身**（fstat）：open 与 stat(path) 之间被换文件也不会让
+      // 巡检失明。
+      const opened = openPrivateAppendNoFollow(path, {
+        create: true,
+        verifyPathIdentity: CONTROL_LOG_NOFOLLOW_FLAG === 0,
+        tightenMode: 0o600,
+        strictTighten: false,
+        extraFlags: CONTROL_LOG_NONBLOCK_FLAG,
+      })
+      handle = opened.fd
+      writtenBytes = opened.size
+      handleDev = opened.identity.dev
+      handleIno = opened.identity.ino
       return true
     } catch (error) {
       // degrade() 内部会 closeHandle()：必须先降级再清 handle，否则刚打开的 fd 泄漏。
@@ -259,21 +244,18 @@ export function createControlLogSink(options: {
   /** @returns 轮转后当前文件是否确实被挪走（false = 该环失效，须降级）。 */
   const rotate = (): boolean => {
     closeHandle()
-    // 每一步独立容错：环里尚未生成的槽位（.1 不存在等）不得让整轮轮转中止
-    // ——整轮 try/catch 会吞掉「.log → .1」这一步，表现为文件无限增长
-    // （由 log-file 单测抓出）。
-    try { rmSync(`${path}.${String(files - 1)}`, { force: true }) } catch { /* 不存在即目的达成 */ }
-    for (let index = files - 2; index >= 1; index -= 1) {
-      try {
-        renameSync(`${path}.${String(index)}`, `${path}.${String(index + 1)}`)
-      } catch { /* 该槽位尚未生成 */ }
-    }
+    // 环语义单一源（private-file.ts rotatePrivateFileRingNoFollow）：轮转前校验
+    // 每个现存槽位（单链接常规文件、非符号链接、POSIX 同 uid）；被预置的链接/
+    // 多链接/他人文件作为证据拒绝整个轮转，绝不删除或覆盖。失败即返回 false，
+    // 由调用方按「文件将无界增长」降级告警一次。
     try {
-      renameSync(path, `${path}.1`)
-    } catch { /* 首次轮转前没有当前文件 */ }
+      rotatePrivateFileRingNoFollow(path, { files })
+    } catch {
+      return false
+    }
     // 只靠 catch 无法区分「本来就没有当前文件」与「rename 持续失败」：后者在
-    // 槽位被目录/权限卡住时会让文件无界增长且不报错（2026-12 独立复核发现）。
-    // 用「当前文件是否还超限」作为轮转确实发生的证据。
+    // 槽位被目录/权限卡住时会让文件无界增长且不报错。用「当前文件是否还超限」
+    // 作为轮转确实发生的证据。
     try {
       const onDisk = statSync(path).size
       writtenBytes = onDisk
@@ -297,9 +279,8 @@ export function createControlLogSink(options: {
         if (writesSinceIdentityCheck >= IDENTITY_CHECK_EVERY) writesSinceIdentityCheck = 0
         const line = `${JSON.stringify(record)}\n`
         const bytes = Buffer.byteLength(line)
-        const written = writeSync(handle as number, line)
-        // 短写会让水位与磁盘脱节（后续按错误水位轮转）。普通文件不应发生，发生即降级。
-        if (written !== bytes) throw new Error(`short write (${String(written)}/${String(bytes)})`)
+        writePrivateFdAll(handle as number, line)
+        // 短写由 writePrivateFdAll 循环吸收；零进展抛错并降级，水位只在写完后推进。
         writtenBytes += bytes
       } catch (error) {
         degrade(`write failed: ${String(error)}`)

@@ -58,8 +58,6 @@ export function createPrewarmLedger() {
   }
 }
 
-export type PrewarmLedger = ReturnType<typeof createPrewarmLedger>
-
 /** 进程级单例（只读仪表）。 */
 export const prewarmLedger = createPrewarmLedger()
 

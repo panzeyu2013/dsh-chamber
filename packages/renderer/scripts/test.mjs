@@ -59,8 +59,10 @@ export const GROUPS = {
     'test/aggregate/aggregate-refresh.test.ts',
     'test/aggregate/aggregate-reconnect.test.ts',
     'test/aggregate/notification-edges.test.ts',
-    // 通知第二入口的水位去重（2026-12 WS-C：同一完成不重发、不同完成不互吞）。
-    'test/aggregate/notification-dedupe.test.ts',
+    // 水位原语单一来源（2026-12 阶段 2：同一完成不重发、坏值不臆造、max/完成水位负例）。
+    'test/aggregate/watermark.test.ts',
+    // complete 通知账本内核（两轨：水位 + 武装；撤回只清武装轨 / forget / prune）。
+    'test/aggregate/complete-ledger.test.ts',
     'test/aggregate/badge-count.test.ts',
   ],
   // session-state: gateway session-state 事实源 + 未读 v2 落盘 + 派生账本（2026-12 WS-C）
@@ -77,6 +79,8 @@ export const GROUPS = {
     'test/session-state/source-mux-facts.test.ts',
     // I8：预热命中率（attempt/hit/cancelled 的定义与计数 + 全局仪器）。
     'test/session-state/prewarm-ledger.test.ts',
+    // 有界集合内核（2026-12 阶段 2：容量/FIFO 淘汰/同键替换裁决的负例）。
+    'test/session-state/bounded-ledger.test.ts',
     // R8「意图预热」：hover 意图 → 既有预热队列优先输入 + 计费（App 接线锁）。
     'test/session-state/prewarm-intent-wiring.test.ts',
     // W4「全部已读」：源级上界 + 单调提升（行为）+ App 接线锁。
@@ -113,6 +117,8 @@ export const GROUPS = {
     'test/view-runtime/switch-frame-verdict.test.ts',
     // W3 采集仪器：png-ink 解码自测 + 探针注入表达式/CLI 失败响亮（无 CDP 可跑的部分）。
     'test/view-runtime/switch-frame-instruments.test.ts',
+    // SemVer precedence 单一实现（2026-12 阶段 2：build metadata 忽略 / prerelease 方向 / 非法 null）。
+    'test/view-runtime/semver.test.ts',
   ],
   // svg-resource: 文档级 SVG 资源 id 归属（N-ctx 失绘不变量，design 05 §4.2）
   'svg-resource': [

@@ -119,7 +119,7 @@ import type {
   TransportSpawnLease,
   TransportVerifyResult,
 } from './transport-provider.ts'
-import { gatewaySessionScopeForConnection } from './gateway-session.ts'
+import { buildGatewaySessionOrigin, gatewaySessionScopeForConnection } from './gateway-session.ts'
 import type { GatewaySessionOrigin } from './gateway-session.ts'
 import { gatewayTunnelAuthority } from './gateway-session-refresh.ts'
 import { readOwnerOnlySecretFile } from './owner-only-secret-file.ts'
@@ -510,12 +510,12 @@ function tunnelSessionOrigin(
   endpoint: TransportProbeEndpoint,
   authority: string | undefined,
 ): GatewaySessionOrigin {
-  return {
+  return buildGatewaySessionOrigin({
     baseUrl: `http://${endpoint.host}:${endpoint.port}`,
     insecureHttp: true,
     scope: gatewaySessionScopeForConnection(spec),
-    ...(authority === undefined ? {} : { authority }),
-  }
+    authority,
+  })
 }
 
 /** verifyUp for a password-configured gateway-over-ssh target:

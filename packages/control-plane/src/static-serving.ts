@@ -17,8 +17,8 @@
  */
 
 import { extname, join, resolve, sep } from 'node:path'
-import { readFileSync, statSync } from 'node:fs'
-import { gzipSync } from 'node:zlib'
+import { readFile, stat } from 'node:fs/promises'
+import { gzip } from 'node:zlib'
 import { isHashedStaticAssetPath } from './proxy-forward.ts'
 import type { Logger } from './types.ts'
 import type { ApiRequest, ApiResponse } from './api.ts'
@@ -52,6 +52,16 @@ const COMPRESSIBLE_TYPES = new Set(['.html', '.js', '.mjs', '.css', '.json', '.s
 /** FIFO cap of the per-file gzip cache (memory bound: one compressed asset). */
 const GZIP_CACHE_MAX = 64
 
+/** zlib.gzip's callback API as a promise: no sync compression on the serve path. */
+function gzipAsync(source: Buffer): Promise<Buffer> {
+  return new Promise((resolveGzip, rejectGzip) => {
+    gzip(source, (error, compressed) => {
+      if (error !== null) rejectGzip(error)
+      else resolveGzip(compressed)
+    })
+  })
+}
+
 /** createStaticServing options. */
 export interface StaticServingOptions {
   /** The built frontend dist directory (must exist; the plane validates it). */
@@ -64,10 +74,10 @@ export interface StaticServingOptions {
 export interface StaticServing {
   /**
    * Serve a static path (or the injected index.html SPA fallback) on the
-   * response. Throws on a missing CSP nonce for the manifest-injected shell;
-   * the owning handler answers 500 for any throw beyond the guarded races.
+   * response. Rejects on a missing CSP nonce for the manifest-injected shell;
+   * the owning handler answers 500 for any rejection beyond the guarded races.
    */
-  serve(req: ApiRequest, res: ApiResponse, pathname: string): void
+  serve(req: ApiRequest, res: ApiResponse, pathname: string): Promise<void>
 }
 
 /**
@@ -82,32 +92,50 @@ export function createStaticServing({ webDistDir, logger }: StaticServingOptions
    * Electron session keeps a disk HTTP cache, so the immutable policy below
    * serves those assets from cache across relaunches and the server re-encodes
    * one only when a request actually misses that cache; the path+mtime key
-   * makes that a single gzipSync per file per server lifetime. FIFO cap
+   * makes that a single (async) gzip per file per server lifetime. FIFO cap
    * bounds memory (each entry is one compressed asset). index.html is NOT
    * served through this cache: its content is re-injected with __DSH_BOOT__
    * per request (manifest rev can change without index.html's mtime moving),
    * so it is gzipped per request from the in-memory (already-injected) buffer
    * instead.
+   *
+   * The read+gzip runs off the event loop (fs/promises + async zlib). Every
+   * request still stats for itself (cheap) so the per-request cache key stays
+   * the freshness verdict; only the expensive read+gzip is single-flighted,
+   * keyed by that same path+mtime+size key, so concurrent cold misses of one
+   * snapshot share it while a request that observes a new key starts its own
+   * flight. A rejected flight is forgotten so the next request retries, and a
+   * failed gzip still falls back to the identity bytes exactly as before.
   */
   const gzipCache = new Map<string, Buffer>()
-  function readGzipCached(path: string): { data: Buffer; encoded: boolean; error?: unknown } {
-    const stat = statSync(path)
-    const key = `${path}:${stat.mtimeMs}:${stat.size}`
+  const gzipFlights = new Map<string, Promise<{ data: Buffer; encoded: boolean; error?: unknown }>>()
+  async function readGzipCached(path: string): Promise<{ data: Buffer; encoded: boolean; error?: unknown }> {
+    const info = await stat(path)
+    const key = `${path}:${info.mtimeMs}:${info.size}`
     const hit = gzipCache.get(key)
     if (hit !== undefined) return { data: hit, encoded: true }
-    const source = readFileSync(path)
-    let compressed: Buffer
-    try {
-      compressed = gzipSync(source)
-    } catch (error) {
-      return { data: source, encoded: false, error }
-    }
-    if (gzipCache.size >= GZIP_CACHE_MAX) {
-      const oldest = gzipCache.keys().next().value
-      if (oldest !== undefined) gzipCache.delete(oldest)
-    }
-    gzipCache.set(key, compressed)
-    return { data: compressed, encoded: true }
+    const existing = gzipFlights.get(key)
+    if (existing !== undefined) return existing
+    const flight = (async (): Promise<{ data: Buffer; encoded: boolean; error?: unknown }> => {
+      const source = await readFile(path)
+      let compressed: Buffer
+      try {
+        compressed = await gzipAsync(source)
+      } catch (error) {
+        return { data: source, encoded: false, error }
+      }
+      if (gzipCache.size >= GZIP_CACHE_MAX) {
+        const oldest = gzipCache.keys().next().value
+        if (oldest !== undefined) gzipCache.delete(oldest)
+      }
+      gzipCache.set(key, compressed)
+      return { data: compressed, encoded: true }
+    })()
+    const tracked = flight.finally(() => {
+      if (gzipFlights.get(key) === tracked) gzipFlights.delete(key)
+    })
+    gzipFlights.set(key, tracked)
+    return tracked
   }
 
   /**
@@ -143,16 +171,16 @@ export function createStaticServing({ webDistDir, logger }: StaticServingOptions
   }
 
   /** Read the __DSH_BOOT__ manifest (<dist>/manifest.json); null when absent. */
-  function readBootManifest(): unknown | null {
+  async function readBootManifest(): Promise<unknown | null> {
     try {
-      return JSON.parse(readFileSync(join(webDistDir, 'manifest.json'), 'utf8'))
+      return JSON.parse(await readFile(join(webDistDir, 'manifest.json'), 'utf8'))
     } catch {
       return null
     }
   }
 
   /** Serve a static file (or index.html fallback) on the response. */
-  function serveStatic(req: ApiRequest, res: ApiResponse, pathname: string) {
+  async function serveStatic(req: ApiRequest, res: ApiResponse, pathname: string): Promise<void> {
     let candidate = pathname === '/' ? '/index.html' : pathname
     // SPA fallback: unknown paths render index.html (04 §5), except paths
     // that look like real assets (missing assets answer 404 — a frontend
@@ -171,14 +199,14 @@ export function createStaticServing({ webDistDir, logger }: StaticServingOptions
         && acceptsGzip(req)
       if (wantsCachedGzip) {
         gzipAttempted = true
-        const payload = readGzipCached(path)
+        const payload = await readGzipCached(path)
         data = payload.data
         gzipEncoded = payload.encoded
         if (payload.error !== undefined) {
           logger?.warn(`static gzip failed for ${candidate}: ${String(payload.error)}`)
         }
       } else {
-        data = readFileSync(path)
+        data = await readFile(path)
       }
     } catch {
       const ext = extname(candidate)
@@ -192,7 +220,7 @@ export function createStaticServing({ webDistDir, logger }: StaticServingOptions
         return
       }
       try {
-        data = readFileSync(fallback)
+        data = await readFile(fallback)
       } catch {
         jsonStaticError(res, 404, 'not_found')
         return
@@ -206,7 +234,7 @@ export function createStaticServing({ webDistDir, logger }: StaticServingOptions
       // __DSH_BOOT__ injection (04 §5 / 05 §2): the manifest (rendered by
       // the renderer build chain) becomes window.__DSH_BOOT__ inline —
       // parseBootManifest contract, served from <dist>/manifest.json.
-      const manifest = readBootManifest()
+      const manifest = await readBootManifest()
       if (manifest !== null) {
         const nonce = res._cspNonce
         if (nonce === undefined) throw new Error('missing CSP nonce for static response')
@@ -250,7 +278,7 @@ export function createStaticServing({ webDistDir, logger }: StaticServingOptions
         headers['content-encoding'] = 'gzip'
       } else if (!gzipAttempted) {
         try {
-          data = gzipSync(data)
+          data = await gzipAsync(data)
           headers['content-encoding'] = 'gzip'
         } catch (gzipError) {
           // index.html is injected per request and cannot use the file cache.

@@ -5,7 +5,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { EXACT_SEMVER, assertSafeVersion, isSafeVersion } from '../../src/version-safety.ts';
+import { EXACT_SEMVER, assertSafeVersion, compareSemverAsc, isSafeVersion } from '../../src/version-safety.ts';
 
 test('EXACT_SEMVER: 与 bundle-dsh.mjs 第 69 行同口径（精确 semver，含 prerelease/build）', () => {
   assert.equal(EXACT_SEMVER.test('0.1.1'), true);
@@ -58,6 +58,50 @@ test('assertSafeVersion: 安全版本返回 trim 后的版本串', () => {
   assert.equal(assertSafeVersion('0.1.1-rc.2'), '0.1.1-rc.2');
   assert.equal(assertSafeVersion(' 1.2.3+build '), '1.2.3+build');
   assert.equal(assertSafeVersion(' 0.1.1 '), '0.1.1');
+});
+
+test('compareSemverAsc: semver §11 预发布优先级全序', () => {
+  const ordered = [
+    '1.0.0-alpha',
+    '1.0.0-alpha.1',
+    '1.0.0-alpha.beta',
+    '1.0.0-beta',
+    '1.0.0-beta.2',
+    '1.0.0-beta.11',
+    '1.0.0-rc.1',
+    '1.0.0',
+    '1.0.1',
+    '1.1.0',
+    '2.0.0',
+  ];
+  for (let i = 0; i < ordered.length; i++) {
+    for (let j = 0; j < ordered.length; j++) {
+      const expected = i < j ? -1 : i > j ? 1 : 0;
+      assert.equal(
+        Math.sign(compareSemverAsc(ordered[i], ordered[j])),
+        expected,
+        `${ordered[i]} vs ${ordered[j]}`,
+      );
+    }
+  }
+});
+
+test('compareSemverAsc: build metadata 不参与优先级', () => {
+  assert.equal(compareSemverAsc('1.0.0+build.1', '1.0.0+build.2'), 0);
+  assert.equal(compareSemverAsc('1.0.0-rc.1+x', '1.0.0-rc.1'), 0);
+  assert.equal(compareSemverAsc('1.0.0-rc.1+9', '1.0.0-rc.2'), -1);
+});
+
+test('compareSemverAsc: 数字标识符精确比较（无 Number 精度损失）且数字 < 字母数字', () => {
+  assert.equal(compareSemverAsc('1.0.0-9007199254740992', '1.0.0-9007199254740993'), -1);
+  assert.equal(compareSemverAsc('1.0.0-1', '1.0.0-alpha'), -1, 'numeric identifiers sort below alphanumeric');
+  assert.equal(compareSemverAsc('1.0.0-alpha.1', '1.0.0-alpha'), 1, 'longer prerelease list has higher precedence');
+});
+
+test('compareSemverAsc: 非法串恒排在合法串之后，彼此相等（稳定总序）', () => {
+  assert.equal(compareSemverAsc('latest', '1.0.0'), 1);
+  assert.equal(compareSemverAsc('1.0.0', 'latest'), -1);
+  assert.equal(compareSemverAsc('junk', 'nope'), 0);
 });
 
 test('assertSafeVersion: 不安全版本 throw，错误信息含原始串', () => {

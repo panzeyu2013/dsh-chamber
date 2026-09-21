@@ -93,48 +93,18 @@ public enum StartupSettings {
     }
 
     /// 文件级读取与校验（keepAwake / launchAtLogin 共用）。
+    /// 判据并集单源 = `PrivateFS`（2026-12 单源化）：lstat / fstat / 单硬链接 /
+    /// O_NOFOLLOW / inode 稳定性 / 1 MiB 尺寸上限（拒绝而非截断）/ 精确长度读取；
+    /// 本层只把结果映射为 DataOutcome。
     private static func readValidatedData(userDataDir: String) -> DataOutcome {
-        let path = userDataDir + "/" + fileName
-        var info = stat()
-        guard lstat(path, &info) == 0 else {
-            return errno == ENOENT ? .missing : .corrupt(reason: "lstat 失败（errno \(errno)）")
+        switch PrivateFS.readLeaf(path: userDataDir + "/" + fileName, limit: 1 << 20) {
+        case .success(let data):
+            return .ok(data)
+        case .failure(.missing):
+            return .missing
+        case .failure(let error):
+            return .corrupt(reason: PrivateFS.describe(error))
         }
-        let kind = info.st_mode & S_IFMT
-        if kind == S_IFLNK { return .corrupt(reason: "符号链接叶被拒绝（no-follow 纪律）") }
-        guard kind == S_IFREG else { return .corrupt(reason: "不是常规文件") }
-        if info.st_nlink > 1 { return .corrupt(reason: "多硬链接叶被拒绝（no-follow 纪律）") }
-        // O_NOFOLLOW + 在已打开的 fd 上 fstat：把「lstat 之后、读取之前叶被换成
-        // 符号链接/别的 inode」的 TOCTOU 窗口关掉（2026-12 第二轮验证：仅 lstat +
-        // Data(contentsOf:) 仍会跟随换过的叶）。读上限 1 MiB：settings 文件远超不了
-        // 这个量级，超限则 JSON 解析失败 → corrupt（fail-closed）。
-        let fd = open(path, O_RDONLY | O_NOFOLLOW)
-        guard fd >= 0 else {
-            return errno == ENOENT ? .missing : .corrupt(reason: "open 失败（errno \(errno)）")
-        }
-        defer { close(fd) }
-        var opened = stat()
-        guard fstat(fd, &opened) == 0 else { return .corrupt(reason: "fstat 失败（errno \(errno)）") }
-        // inode 稳定性：lstat 快照与已打开 fd 必须指向同一 (dev, ino)，否则说明
-        // 叶在两步之间被替换（2026-12 第三轮验证：此前换成另一个常规文件会被
-        // 照读，Electron 的 stableFileSnapshot 会拒）。
-        guard opened.st_dev == info.st_dev, opened.st_ino == info.st_ino else {
-            return .corrupt(reason: "叶在打开前后被替换（inode 不一致）")
-        }
-        if opened.st_nlink > 1 { return .corrupt(reason: "多硬链接叶被拒绝（no-follow 纪律）") }
-        guard opened.st_mode & S_IFMT == S_IFREG else { return .corrupt(reason: "不是常规文件") }
-        // 尺寸纪律：超过上限直接判损坏（绝不截断后当成合法文档——2026-12 第三轮
-        // 验证：固定 1 MiB 缓冲会把「合法 JSON + 尾部垃圾」的前缀当完整文档）。
-        let limit = 1 << 20
-        guard opened.st_size <= off_t(limit) else {
-            return .corrupt(reason: "settings 文件超过 \(limit) 字节上限（拒绝而非截断）")
-        }
-        let capacity = max(Int(opened.st_size), 1)
-        var buffer = [UInt8](repeating: 0, count: capacity)
-        let readBytes = read(fd, &buffer, capacity)
-        guard readBytes == Int(opened.st_size) else {
-            return .corrupt(reason: "读取长度与 st_size 不一致（errno \(errno)）")
-        }
-        return .ok(Data(buffer[0..<readBytes]))
     }
 
     /// JSON 数据 → keepAwake 决策（纯函数，单测直测）。
@@ -206,11 +176,10 @@ public enum StartupSettings {
         return nil
     }
 
-    /// JSONSerialization 的布尔是 CFBoolean 型 NSNumber；用 CFTypeID 判别，
-    /// 防把数字 1/0 静默当真值（与 MessageHandler.exactInt 同规）。
+    /// JSONSerialization 的布尔是 CFBoolean 型 NSNumber；判定单源 =
+    /// `StrictJSONNumber.bool`（2026-12 单源化），防把数字 1/0 静默当真值。
     static func isBoolean(_ value: Any) -> Bool {
-        guard let number = value as? NSNumber else { return false }
-        return CFGetTypeID(number) == CFBooleanGetTypeID()
+        StrictJSONNumber.bool(value) != nil
     }
 
     /// normalizeRegistryOrigin（chamber-settings.ts:133-146）的镜像：https、

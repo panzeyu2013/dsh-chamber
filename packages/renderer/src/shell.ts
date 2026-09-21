@@ -47,11 +47,8 @@ import {
 // this module only carries the verdict it returns into the settled state.
 import type { GraphGapKind } from './source-readiness.ts'
 import { isChamberSourceId, rawInstanceIdFromSourceId } from './transport-source.ts'
-import { BundleLoadTimeoutError, collectExtraRows, type ExtraModuleRow } from './host-graph.ts'
-import { CHAMBER_COVERED_IDS } from './chamber-covered.ts'
-import {
-  installClientPluginLoader, retireSourceClientGraph,
-} from '../../dsh-chamber-client-ui-sidebar/src/shared/client-plugin-loader.ts'
+import { collectExtraRows, type ExtraModuleRow } from './host-graph.ts'
+import { BundleLoadTimeoutError } from '../../dsh-chamber-client-ui-sidebar/src/shared/client-plugin-loader.ts'
 import { chamberBridge, type PluginGraphDiagnostic } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 // Page-level machine catalog + the page-level instance client it reads through:
 // both are pure modules with no vendor/runtime links, so the isolated shell
@@ -699,17 +696,6 @@ export function bootInstanceShell(
   } catch (reason) {
     moduleSystemError = describeShellError(reason)
   }
-  // Publish the page-level seams the SETTINGS BRIDGE consumes (2026-12): it
-  // loads the selected source's own client plugins through the SAME transport,
-  // module table and covered-id rule as this boot, so one page-wide union
-  // table serves both. Installed even when the module system failed: the
-  // settings panel then reports "module table unavailable" per source instead
-  // of silently showing no plugin sections.
-  installClientPluginLoader({
-    loadBundle: loadModuleBundle,
-    ...(modulesSystem === null ? {} : { modules: modulesSystem }),
-    coveredIds: CHAMBER_COVERED_IDS,
-  })
   // Const capture: TS does not narrow a mutable captured variable inside the
   // closure below.
   const installedModulesSystem = modulesSystem
@@ -749,9 +735,6 @@ export function bootInstanceShell(
       ? collectExtraRows(instanceId, basePath, {
         loadModuleBundle,
         awaitBeforeLoad: () => chamberEval ?? Promise.resolve(),
-        // The published graph cache is keyed by this incarnation (2026-12):
-        // the settings panel must never reuse another incarnation's rows.
-        sourceFingerprint,
         // A retry starts its graph request before the previous queued boot has
         // necessarily settled — the shared generation-guarded reporter covers it.
         reportDiagnostic: reportPluginDiagnostic,
@@ -1302,10 +1285,6 @@ function dispatchOpen(
  * barrier. Rejections are loud but contained so a broken disposer cannot
  * permanently wedge every future boot for that source. */
 function teardownEntry(instanceId: string, entry: AppWebEntry, reason: string): Promise<void> {
-  // The source's shell is going away: drop its cached client-plugin graph so a
-  // later boot (or the settings panel) re-reads the live plugin set instead of
-  // serving a retired incarnation's rows.
-  retireSourceClientGraph(instanceId)
   let ownTeardown: Promise<void>
   try {
     ownTeardown = Promise.resolve(entry.dispose()).catch(error => {
@@ -1441,5 +1420,3 @@ export function reconnectInstanceConnection(instanceId: string): boolean {
   }
 }
 
-/** The boot-graph row id this page's manifest must carry (gen-boot-manifest.mjs). */
-export const BOOT_PLUGIN_ID = CHAMBER_BOOT

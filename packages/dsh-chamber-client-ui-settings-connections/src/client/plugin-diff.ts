@@ -45,13 +45,11 @@ export interface PluginRow {
   reason: string | null
 }
 
-/** The full diff: categorized lists plus the combined, ordered row set. */
+/** The full diff: the combined, ordered row set. Every row carries its own
+ *  `kind` (§5.3), so a per-kind view is a filter over `rows` — the pre-filtered
+ *  arrays this interface used to expose were write-only for every production
+ *  reader and cost one extra full scan + allocation per kind (2026-12 audit). */
 export interface PluginDiff {
-  missing: PluginRow[]
-  update: PluginRow[]
-  extra: PluginRow[]
-  materialize: PluginRow[]
-  unsyncable: PluginRow[]
   rows: PluginRow[]
 }
 
@@ -211,15 +209,7 @@ export function computePluginDiff(local: LocalPluginManifest, remote: RemotePlug
 
   rows.sort(compareRows)
 
-  const ofKind = (kind: PluginRowKind): PluginRow[] => rows.filter(row => row.kind === kind)
-  return {
-    missing: ofKind('missing'),
-    update: ofKind('update'),
-    extra: ofKind('extra'),
-    materialize: ofKind('materialize'),
-    unsyncable: ofKind('unsyncable'),
-    rows,
-  }
+  return { rows }
 }
 
 /** Whether a row participates in a diff (i.e. shown under the default

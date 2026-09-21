@@ -78,8 +78,6 @@ class RandomHost implements ArchiveCleanupHost {
       this.removed.push(id)
     }
   }
-  async emitSessionRemoved(): Promise<void> {}
-  async emitArchivedSessionsChanged(): Promise<void> {}
 }
 
 test(`retention properties: ${ITERATIONS} generated runs keep the retention invariants (seed ${SEED})`, async () => {
@@ -99,14 +97,14 @@ test(`retention properties: ${ITERATIONS} generated runs keep the retention inva
     let next = 0
     for (let t = 0, topCount = 1 + pick(4); t < topCount; t += 1) {
       const root = `s${next++}`
-      host.states.set(root, { sessionId: root, running: false })
+      host.states.set(root, { sessionId: root })
       if (chance(0.8)) host.archived.add(root)
       const members = [root]
       let parent = root
       for (let d = 0, depth = pick(3); d < depth; d += 1) {
         const child = `s${next++}`
         const running = chance(0.15)
-        host.states.set(child, { sessionId: child, origin: 'subagent', parentSessionId: parent, running })
+        host.states.set(child, { sessionId: child, origin: 'subagent', parentSessionId: parent })
         if (running) host.running.add(child)
         if (chance(0.4)) host.archived.add(child)
         members.push(child)

@@ -202,7 +202,6 @@ export default defineConfig({
       },
       output: {
         chunkFileNames(chunk) {
-          if (chunk.name === 'index' || chunk.name === 'vendor') return 'assets/[name]-[hash].js'
           const isLangChunk = chunk.moduleIds.some(id => id.includes('/node_modules/@shikijs/langs/'))
           return isLangChunk ? 'assets/langs/[name]-[hash].js' : 'assets/[name]-[hash].js'
         },

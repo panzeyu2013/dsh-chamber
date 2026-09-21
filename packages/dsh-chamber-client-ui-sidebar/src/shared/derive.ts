@@ -24,6 +24,7 @@
  */
 import type { InstanceSnapshot, SearchRow, SessionRow, WorkspaceRow } from './instance-api.ts'
 import type { ChamberServerAggregate, ChamberServerWorkspace, InstanceRuntimeReport, ServerBootGap } from './aggregate-store.ts'
+import { forgetMapSources } from './ledger.ts'
 import { assertSingletonModule } from './singleton.ts'
 
 // `blankGhostUntil` below is CROSS-BOUNDARY shared state — armed by the
@@ -365,14 +366,11 @@ function retainForkMembershipCandidates(serverId: string, candidates: ReadonlySe
  * never derives another snapshot, so candidate-based pruning alone cannot
  * reclaim it; same-id re-adds must start with a fresh generation. */
 export function retainMembershipGraceSources(liveServerIds: ReadonlySet<string>): void {
-  for (const key of membershipGraceUntil.keys()) {
+  forgetMapSources(membershipGraceUntil, (key) => {
     const separator = key.indexOf(':')
-    const serverId = separator === -1 ? key : key.slice(0, separator)
-    if (!liveServerIds.has(serverId)) membershipGraceUntil.delete(key)
-  }
-  for (const serverId of forkMembershipGraceByServer.keys()) {
-    if (!liveServerIds.has(serverId)) forkMembershipGraceByServer.delete(serverId)
-  }
+    return separator === -1 ? key : key.slice(0, separator)
+  }, liveServerIds)
+  forgetMapSources(forkMembershipGraceByServer, key => key, liveServerIds)
 }
 
 /** Test-only: clear both membership-grace maps (node tests share the module instance). */

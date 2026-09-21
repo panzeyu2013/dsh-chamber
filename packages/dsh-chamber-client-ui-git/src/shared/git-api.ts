@@ -140,51 +140,51 @@ function isRecord(value: unknown): value is Record<string, any> {
 function invalidValue(method: string, reason: string, details?: unknown): never {
   throw new GitWorktreeRpcError(
     'invalid-domain-value',
-    `gitWorktree/${method} 返回值无效：${reason}`,
+    `gitWorktree/${method} returned an invalid value: ${reason}`,
     details,
   )
 }
 
 function stringField(value: Record<string, any>, field: string, method: string): string {
   const result = value[field]
-  if (typeof result !== 'string' || result === '') invalidValue(method, `${field} 必须为非空字符串`)
+  if (typeof result !== 'string' || result === '') invalidValue(method, `${field} must be a non-empty string`)
   return result
 }
 
 function booleanField(value: Record<string, any>, field: string, method: string): boolean {
   const result = value[field]
-  if (typeof result !== 'boolean') invalidValue(method, `${field} 必须为布尔值`)
+  if (typeof result !== 'boolean') invalidValue(method, `${field} must be a boolean`)
   return result
 }
 
 function repoIdField(value: Record<string, any>, method: string): string {
   const result = stringField(value, 'repoId', method)
-  if (!REPO_ID.test(result)) invalidValue(method, 'repoId 不是宿主 opaque id')
+  if (!REPO_ID.test(result)) invalidValue(method, 'repoId is not a host opaque id')
   return result
 }
 
 function worktreeIdField(value: Record<string, any>, method: string): string {
   const result = stringField(value, 'worktreeId', method)
-  if (!WORKTREE_ID.test(result)) invalidValue(method, 'worktreeId 不是宿主 opaque id')
+  if (!WORKTREE_ID.test(result)) invalidValue(method, 'worktreeId is not a host opaque id')
   return result
 }
 
 function oidField(value: Record<string, any>, field: string, method: string): string {
   const result = stringField(value, field, method)
-  if (!OBJECT_ID.test(result)) invalidValue(method, `${field} 不是 Git object id`)
+  if (!OBJECT_ID.test(result)) invalidValue(method, `${field} is not a Git object id`)
   return result
 }
 
 function assertEqual(method: string, field: string, actual: unknown, expected: unknown): void {
-  if (actual !== expected) invalidValue(method, `${field} 与请求上下文不匹配`, { field, expected, actual })
+  if (actual !== expected) invalidValue(method, `${field} does not match the request context`, { field, expected, actual })
 }
 
 function stringArrayField(value: Record<string, any>, field: string, method: string): string[] {
   const result = value[field]
   if (!Array.isArray(result) || !result.every(item => typeof item === 'string' && item !== '')) {
-    invalidValue(method, `${field} 必须为非空字符串数组`)
+    invalidValue(method, `${field} must be an array of non-empty strings`)
   }
-  if (new Set(result).size !== result.length) invalidValue(method, `${field} 含重复 identity`)
+  if (new Set(result).size !== result.length) invalidValue(method, `${field} contains duplicate identities`)
   return [...result]
 }
 
@@ -201,10 +201,10 @@ export function decodePreviewCreateValue(
   input: PreviewCreateInput,
 ): PreviewCreateResult {
   const method = 'previewCreate'
-  if (!isRecord(value)) invalidValue(method, '结果必须为对象')
+  if (!isRecord(value)) invalidValue(method, 'result must be an object')
   const expiresAt = value.expiresAt
   if (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt)) {
-    invalidValue(method, 'expiresAt 必须为有限数值')
+    invalidValue(method, 'expiresAt must be a finite number')
   }
   const result: PreviewCreateResult = {
     previewToken: stringField(value, 'previewToken', method),
@@ -227,10 +227,10 @@ export function decodeCreateValue(
   preview: PreviewCreateResult,
 ): CreateWorktreeResult {
   const method = 'create'
-  if (!isRecord(value)) invalidValue(method, '结果必须为对象')
+  if (!isRecord(value)) invalidValue(method, 'result must be an object')
   const result: CreateWorktreeResult = {
     operationId: stringField(value, 'operationId', method),
-    created: value.created === true ? true : invalidValue(method, 'created 必须为 true'),
+    created: value.created === true ? true : invalidValue(method, 'created must be true'),
     replayed: booleanField(value, 'replayed', method),
     repoId: repoIdField(value, method),
     worktreeId: worktreeIdField(value, method),
@@ -256,10 +256,10 @@ export function decodeRollbackCreateValue(
   expected: RollbackCreateExpectation,
 ): RollbackCreateResult {
   const method = 'rollbackCreate'
-  if (!isRecord(value)) invalidValue(method, '结果必须为对象')
+  if (!isRecord(value)) invalidValue(method, 'result must be an object')
   const result: RollbackCreateResult = {
     operationId: stringField(value, 'operationId', method),
-    removed: value.removed === true ? true : invalidValue(method, 'removed 必须为 true'),
+    removed: value.removed === true ? true : invalidValue(method, 'removed must be true'),
     replayed: booleanField(value, 'replayed', method),
     repoId: repoIdField(value, method),
     worktreeId: worktreeIdField(value, method),
@@ -269,7 +269,7 @@ export function decodeRollbackCreateValue(
     head: oidField(value, 'head', method),
     branchPreserved: value.branchPreserved === true
       ? true
-      : invalidValue(method, 'branchPreserved 必须为 true'),
+      : invalidValue(method, 'branchPreserved must be true'),
     ...(value.branchDeleted === true ? { branchDeleted: true } : {}),
     ...(value.branchDeleteFailed === true ? { branchDeleteFailed: true } : {}),
   }
@@ -289,14 +289,14 @@ export function decodeRemoveValue(
   expectedPath: string,
 ): RemoveWorktreeResult {
   const method = 'remove'
-  if (!isRecord(value)) invalidValue(method, '结果必须为对象')
+  if (!isRecord(value)) invalidValue(method, 'result must be an object')
   const branch = value.branch
   if (!(branch === null || (typeof branch === 'string' && branch !== ''))) {
-    invalidValue(method, 'branch 必须为非空字符串或 null')
+    invalidValue(method, 'branch must be a non-empty string or null')
   }
   const result: RemoveWorktreeResult = {
     operationId: stringField(value, 'operationId', method),
-    removed: value.removed === true ? true : invalidValue(method, 'removed 必须为 true'),
+    removed: value.removed === true ? true : invalidValue(method, 'removed must be true'),
     replayed: booleanField(value, 'replayed', method),
     ...(value.workspaceId === undefined ? {} : { workspaceId: stringField(value, 'workspaceId', method) }),
     repoId: repoIdField(value, method),
@@ -308,15 +308,15 @@ export function decodeRemoveValue(
     sessionIds: stringArrayField(value, 'sessionIds', method),
     next: value.next === 'delete-workspace' || value.next === 'none'
       ? value.next
-      : invalidValue(method, "next 必须为 'delete-workspace' 或 'none'"),
+      : invalidValue(method, "next must be 'delete-workspace' or 'none'"),
     branchPreserved: value.branchPreserved === true
       ? true
-      : invalidValue(method, 'branchPreserved 必须为 true'),
+      : invalidValue(method, 'branchPreserved must be true'),
   }
   // Decode invariant (P2-1): `next` and `workspaceId` must agree — a
   // 'delete-workspace' without an id would call deleteWorkspace(undefined).
   if ((result.next === 'delete-workspace') !== (result.workspaceId !== undefined)) {
-    return invalidValue(method, "next 与 workspaceId 不一致")
+    return invalidValue(method, 'next does not agree with workspaceId')
   }
   assertEqual(method, 'operationId', result.operationId, input.operationId)
   assertEqual(method, 'workspaceId', result.workspaceId, input.workspaceId)
@@ -355,7 +355,9 @@ async function callGitRemote(sourceId: string, method: string, input?: unknown):
     if (response.status === 404) {
       throw new GitWorktreeRpcError(
         'git-host-not-loaded',
-        'Git 插件未在该实例加载（host 包缺失或未生效）。本地实例请重启桌面端；远程实例请在连接设置中重新下发 chamber host 包并点击“重启生效”后重试。',
+        // The user-facing guide is localized (locales.gitHostNotLoaded); this
+        // raw message is the unmapped/diagnostic fallback and stays English.
+        'The Git plugin is not loaded in this instance (host package missing or inactive). Restart the desktop for a local instance, or re-send the chamber host package in the connection settings and restart to apply for a remote instance.',
       )
     }
     throw new GitWorktreeRpcError('http-error', `Git Remote HTTP ${response.status}`)
@@ -364,17 +366,17 @@ async function callGitRemote(sourceId: string, method: string, input?: unknown):
   try {
     envelope = await response.json()
   } catch {
-    throw new GitWorktreeRpcError('invalid-envelope', 'Git Remote 返回的不是合法 JSON')
+    throw new GitWorktreeRpcError('invalid-envelope', 'The Git Remote did not return valid JSON')
   }
   const result = envelope?.result
   if (typeof result !== 'object' || result === null || typeof result.ok !== 'boolean') {
-    throw new GitWorktreeRpcError('invalid-envelope', 'Git Remote envelope 缺少 result')
+    throw new GitWorktreeRpcError('invalid-envelope', 'The Git Remote envelope is missing result')
   }
   if (result.ok !== true) {
     const error = result?.error
     throw new GitWorktreeRpcError(
       'rpc-failed',
-      String(error?.message ?? error?.code ?? 'Git Remote 内部调用失败'),
+      String(error?.message ?? error?.code ?? 'The Git Remote call failed internally'),
       error?.details,
     )
   }
@@ -383,7 +385,7 @@ async function callGitRemote(sourceId: string, method: string, input?: unknown):
   // codes suitable for recovery decisions.
   const domain = result.value
   if (typeof domain !== 'object' || domain === null || typeof domain.ok !== 'boolean') {
-    throw new GitWorktreeRpcError('invalid-domain-result', 'Git Remote 缺少领域结果 envelope')
+    throw new GitWorktreeRpcError('invalid-domain-result', 'The Git Remote is missing the domain-result envelope')
   }
   if (domain.ok !== true) {
     const error = domain.error
@@ -396,7 +398,7 @@ async function callGitRemote(sourceId: string, method: string, input?: unknown):
       || (error.retryable !== undefined && typeof error.retryable !== 'boolean')
       || (error.details !== undefined && !isRecord(error.details))
     ) {
-      throw new GitWorktreeRpcError('invalid-domain-result', 'Git Remote 领域错误形状无效')
+      throw new GitWorktreeRpcError('invalid-domain-result', 'The Git Remote domain error has an invalid shape')
     }
     throw new GitWorktreeRpcError(error.code, error.message, error.details, error.retryable)
   }

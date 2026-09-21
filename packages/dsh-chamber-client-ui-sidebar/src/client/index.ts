@@ -42,7 +42,7 @@ import {
 export type {
   SidebarBrandMarkOwnerProps, SidebarBrandNameOwnerProps, SidebarFooterActionOwnerProps,
   SidebarPanelIconOwnerProps, SidebarPanelMetadata, SidebarRootComponentProps, SidebarRootInjected,
-  SidebarSectionOwnerProps, SidebarSettingsOwnerProps, SidebarWorkspaceGitOwnerProps,
+  SidebarSettingsOwnerProps, SidebarWorkspaceGitOwnerProps,
 } from './contract/slots.ts'
 export type { SidebarKey } from './locales.ts'
 

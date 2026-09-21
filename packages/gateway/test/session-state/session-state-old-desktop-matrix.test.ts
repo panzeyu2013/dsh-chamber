@@ -35,7 +35,7 @@
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import type { SessionStateHostInfo, SessionStateMode } from '@dsh-chamber/control-plane'
+
 import {
   PROTOCOL_VERSION,
   SESSION_STATE_BASE_FEATURES,
@@ -47,13 +47,10 @@ import {
 import { createChamberInstalled } from '../../src/plugins-installed.ts'
 import { createChamberPlugins } from '../../src/plugins.ts'
 import { createChamberSurface } from '../../src/routes.ts'
-import {
-  createChamberSessionState,
-  createSessionStateStore,
-  featuresForMode,
-} from '../../src/session-state.ts'
+import { createSessionStateStore, featuresForMode } from '../../src/session-state.ts'
 import { FakeRequest, FakeResponse, stubPluginTasks } from '../support/utils.ts'
-import { baselineItem, scratch, silentLogger } from './harness.ts'
+import { baselineItem, scratch, sessionSurfaceFor, silentLogger } from './harness.ts'
+import { surfaceStubChannels } from '../support/chamber-surface-harness.ts'
 
 // ---------------------------------------------------------------------------
 // The frozen fixture (single source for this cell's expectations)
@@ -127,24 +124,12 @@ interface GatewayHarness {
 
 function gatewayFor(t: { after(fn: () => void): void }): GatewayHarness {
   const stateDir = scratch(t)
-  const store = createSessionStateStore({ stateDir, logger: silentLogger, now: () => 1_000 })
-  const mode: SessionStateMode = 'sse'
-  const host: SessionStateHostInfo = { now: 1_000, serviceable: true, state: 'ready' }
-  const sessionState = createChamberSessionState({
-    logger: silentLogger,
-    store,
-    observer: { status: () => ({ mode }), hostInfo: () => host } as never,
-    enabled: true,
-    now: () => 1_000,
-    keepaliveMs: 30,
-  })
-  t.after(() => sessionState.closeAllStreams())
+  // Shared session-state harness (2026-12 audit F40) on the SAME stateDir the
+  // chamber surface below reads (its plugin/installed fixtures live under it).
+  const { surface: sessionState, store } = sessionSurfaceFor(t, { stateDir })
   const surface = createChamberSurface({
     logger: silentLogger,
-    channels: {
-      register() {}, async start() {}, async stop() {}, resolve: () => null,
-      health: () => 'unknown' as const, list: () => [],
-    },
+    channels: surfaceStubChannels,
     plugins: createChamberPlugins(stateDir, silentLogger),
     installed: createChamberInstalled(stateDir),
     tasks: stubPluginTasks(),

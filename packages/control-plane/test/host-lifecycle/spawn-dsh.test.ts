@@ -13,10 +13,10 @@ import { spawn } from 'node:child_process'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { EventEmitter, once } from 'node:events'
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { createServer as createNetServer } from 'node:net'
-import { join } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import {
@@ -24,6 +24,7 @@ import {
   killFailedSpawn,
   probePortBusy,
   readPidRecord,
+  resolveSpawnCwd,
   spawnDsh,
   writePidRecord,
   DEFAULT_DSH_START_PORT,
@@ -65,6 +66,13 @@ function writeFakeDshEntry(dshWorkspacePath: string, body: string): string {
   return entry
 }
 
+/** Whether @@child@@ is @@parent@@ itself or lives under it (textual path
+ *  check; symlinked spellings are compared separately via realpathSync). */
+function isInsideOrEqual(child: string, parent: string): boolean {
+  const rel = relative(resolve(parent), resolve(child))
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel))
+}
+
 class FakeProbeSocket extends EventEmitter {
   destroyed = false
 
@@ -73,6 +81,18 @@ class FakeProbeSocket extends EventEmitter {
     return this
   }
 }
+
+test('resolveSpawnCwd: the installed (replaceable) layout gets the stable managed home, the source layout keeps the workspace for tsx', () => {
+  const workspace = join('app', 'vendor', 'dsh')
+  const dshHome = join('state', 'dsh-home')
+  // The installed runtime tree is replaced in place by an app update, so the
+  // host must never be created with it as cwd (2026-09-17 incident: the shared
+  // worker process.cwd() then fails every tool call with uv_cwd ENOENT).
+  assert.equal(resolveSpawnCwd({ layout: 'installed', dshWorkspacePath: workspace, dshHome }), dshHome)
+  // The source checkout is not install-replaceable and its `tsx/esm` loader is
+  // resolved through the workspace's own node_modules.
+  assert.equal(resolveSpawnCwd({ layout: 'source', dshWorkspacePath: workspace, dshHome }), workspace)
+})
 
 test('child output formatter bounds Buffer bytes before decode and marks truncation once', () => {
   assert.equal(formatChildOutputChunk(Buffer.from('ordinary output\n')), 'ordinary output')
@@ -364,6 +384,53 @@ test('spawnDsh: abort during the post-TCP host-identity probe wait kills the det
     const leftovers = existsSync(recordsDir) ? readdirSync(recordsDir).filter(file => file.endsWith('.json')) : []
     assert.deepEqual(leftovers, [])
     await waitForNoEntryProcess(entryPath, 3000)
+  } finally {
+    controller.abort()
+    rmSync(stateDir, { recursive: true, force: true })
+  }
+})
+
+test('spawnDsh: the installed layout runs the host with the stable managed home as cwd, never inside the replaceable runtime tree', async () => {
+  // Packaged shape: the installed entry lives under <bundle>/vendor/dsh, the
+  // directory an in-place app update replaces. The child must be created with
+  // the managed dsh home as cwd so worker_threads' shared process.cwd() keeps
+  // resolving (2026-09-17 uv_cwd ENOENT incident).
+  const stateDir = tempDir()
+  const dshWorkspacePath = join(stateDir, 'vendor', 'dsh')
+  const dshHome = join(stateDir, 'home')
+  const childCwdMarker = join(stateDir, 'child-cwd')
+  writeFakeDshEntry(dshWorkspacePath, [
+    "const { writeFileSync } = require('node:fs')",
+    "writeFileSync(" + JSON.stringify(childCwdMarker) + ", process.cwd())",
+    "const { createServer } = require('node:http')",
+    "const args = process.argv.slice(2)",
+    "const port = Number(args[args.indexOf('--port') + 1])",
+    "createServer((req, res) => {",
+    "  if (req.url === '/api/session/canOpenWorkspacePath') {",
+    "    let body = ''",
+    "    req.on('data', c => { body += c })",
+    "    req.on('end', () => {",
+    "      const rpcId = JSON.parse(body).rpcId",
+    "      res.writeHead(200, { 'content-type': 'application/json' })",
+    "      res.end(JSON.stringify({ type: 'server-response', rpcId: rpcId, result: { ok: true, value: true } }))",
+    "    })",
+    "    return",
+    "  }",
+    "  res.writeHead(404); res.end()",
+    "}).listen(port, '127.0.0.1')",
+    '',
+  ].join('\n'))
+  const controller = new AbortController()
+  try {
+    const spawned = await spawnHost(stateDir, dshWorkspacePath, controller.signal)
+    const childCwd = readFileSync(childCwdMarker, 'utf8').trim()
+    // The defect lock: cwd must not name (or live under) the runtime tree an
+    // update replaces in place...
+    assert.equal(isInsideOrEqual(childCwd, dshWorkspacePath), false, 'host cwd must not be the replaceable runtime tree')
+    // ...and must be the stable control-plane-owned home the spawn created.
+    assert.equal(isInsideOrEqual(childCwd, stateDir), true, 'host cwd must stay under the control-plane state root')
+    assert.equal(realpathSync(childCwd), realpathSync(dshHome))
+    await reapSpawned(spawned)
   } finally {
     controller.abort()
     rmSync(stateDir, { recursive: true, force: true })

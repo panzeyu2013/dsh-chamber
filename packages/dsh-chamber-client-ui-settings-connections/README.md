@@ -37,9 +37,8 @@ no host frames, no dsh runtime objects.
   login password for every Gateway target. Add/edit and nonempty credential
   writes use the single main-owned `desktop_ssh_save_connection` transaction;
   deletion uses exact id-addressed `desktop_ssh_delete_connection` (an absent
-  id is an idempotent no-op). Legacy setters are clear-only and `instances_set`
-  accepts only the exact unchanged normalized current roster; it cannot delete,
-  add, edit, or reorder anything. serviceName must match
+  id is an idempotent no-op). Legacy setters are clear-only; nothing can be
+  added, edited, or reordered outside that single transaction. serviceName must match
   `^[a-zA-Z0-9][a-zA-Z0-9_.-]*$`; main executes the fixed argv
   `systemctl <action> -- <serviceName>`.
 - Secrets are never logged or prefilled. Main mirrors SSH passwords in

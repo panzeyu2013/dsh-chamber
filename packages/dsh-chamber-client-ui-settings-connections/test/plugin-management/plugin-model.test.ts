@@ -597,7 +597,7 @@ test('projectInstalledRows: rows absent falls back to the legacy dependencies fi
   }, null)
   assert.equal(projected.legacy, true)
   assert.deepEqual(projected.rows, [
-    { name: 'third-party-a', spec: '^1.0.0', version: null, role: 'unknown', protected: false, removable: true, legacy: true },
+    { name: 'third-party-a', spec: '^1.0.0', version: null, role: 'unknown', protected: false, removable: true },
   ])
   // 空 rows（新后端投影了空集）不是回退：legacy:false、行集为空。
   const empty = projectInstalledRows({ 'third-party-a': '^1.0.0' }, [])

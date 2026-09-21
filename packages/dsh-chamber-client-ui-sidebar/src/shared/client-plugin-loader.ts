@@ -1,6 +1,5 @@
 /**
- * Page-level client-plugin bundle loader + per-source graph cache (design 09
- * §3.2 union table; settings-surface extension 2026-12).
+ * Page-level client-plugin bundle loader (design 09 §3.2 union table).
  *
  * WHY THIS MODULE EXISTS (single source): the chamber page executes a source's
  * `dsh.client` bundles in the per-instance shell boot
@@ -78,50 +77,17 @@ export class BundleLoadTimeoutError extends Error {
   }
 }
 
-/** What the page shell installs once at boot (see {@link installClientPluginLoader}). */
-export interface ClientPluginLoaderInstall {
-  /** The shell-owned module-script transport (DOM element + timeout/tombstone). */
-  loadBundle(url: string): Promise<void>
-  /** The page module table (`window.__DSH_MODULES__`); absent in non-browser hosts. */
-  modules?: ClientModuleTable
-  /** The boot-graph ids the chamber composite covers (renderer `CHAMBER_COVERED_IDS`). */
-  coveredIds?: readonly string[]
-}
-
-let installed: ClientPluginLoaderInstall | null = null
-
-/**
- * Install (or replace) the page-level loader seams. Idempotent in effect: the
- * page shell calls it once per boot with the same instances; a later call
- * refreshes the captured references (HMR / re-boot) without dropping the
- * page-level load bookkeeping below.
- * @param install - the shell-owned seams.
- */
-export function installClientPluginLoader(install: ClientPluginLoaderInstall): void {
-  installed = install
-}
-
-/** The installed seams, or null before the page shell booted (non-browser hosts). */
-export function clientPluginLoader(): ClientPluginLoaderInstall | null {
-  return installed
-}
-
-/** The covered ids the composite registers (empty until the shell installs them). */
-export function coveredClientPluginIds(): readonly string[] {
-  return installed?.coveredIds ?? []
-}
-
 /**
  * Drop the rows the chamber composite already covers (design 09 §3.3):
  * loading a covered row again would double-register the same plugin on one
  * cordis ctx — this filter is load-bearing, not an optimization.
  * @param rows - the source's raw graph rows.
- * @param covered - covered ids (defaults to the installed set).
+ * @param covered - covered ids (renderer `CHAMBER_COVERED_IDS`).
  * @returns the kept rows, input order preserved.
  */
 export function dedupeCoveredRows<T extends ClientPluginRow>(
   rows: readonly T[],
-  covered: readonly string[] = coveredClientPluginIds(),
+  covered: readonly string[],
 ): T[] {
   const coveredIds = new Set(covered)
   return rows.filter(row => !coveredIds.has(row.id))
@@ -302,120 +268,13 @@ export async function loadClientPluginRows<T extends ClientPluginRow>(
   return outcomes
 }
 
-/** Whether a plugin id's factory is already on the page module table (loaded at least once). */
-export function clientPluginRowLoaded(id: string): boolean {
-  return preloadedIds.has(id)
-}
-
 /** The source that first claimed a plugin id on this page (first-load-wins owner), when known. */
 export function clientPluginRowOwner(id: string): string | undefined {
   return preloadedIds.get(id)?.ownerSourceId
 }
 
-/** Row signatures for cache/reconcile decisions. */
-export interface ClientRowSignatures {
-  /** Sorted id set (plugin install/uninstall changes this). */
-  idSet: string
-  /** Sorted `id@rev` set (a rebuilt plugin changes this; an instance restart changes every rev). */
-  revSet: string
-}
-
-/**
- * Identity of a row set for cache/reconcile decisions. The id set is the
- * REBUILD key (a different plugin set needs a different boot graph); the
- * rev set is informational (first-load-wins already decided which factory the
- * page runs, so rev drift is reported, never rebuilt).
- * @param rows - the source's kept rows.
- * @returns both signatures.
- */
-export function clientRowSignatures(rows: readonly ClientPluginRow[]): ClientRowSignatures {
-  const ids = [...new Set(rows.map(row => row.id))].sort()
-  const revs = [...new Set(rows.map(row => `${row.id}@${row.rev}`))].sort()
-  return { idSet: ids.join('|'), revSet: revs.join('|') }
-}
-
-/** One cached source graph (raw rows, before covered filtering / base-path prefixing). */
-export interface CachedSourceGraph {
-  /** Registry incarnation the rows were fetched for ('' when unknown). */
-  sourceFingerprint: string
-  rows: readonly ClientPluginRow[]
-}
-
-const sourceGraphs = new Map<string, CachedSourceGraph>()
-
-/**
- * Publish a source's freshly fetched graph rows (the boot path does this so the
- * settings panel reuses the same read instead of paying another round trip).
- * @param sourceId - the source id.
- * @param graph - the raw rows + the incarnation they belong to.
- */
-export function publishSourceClientGraph(sourceId: string, graph: CachedSourceGraph): void {
-  sourceGraphs.set(sourceId, graph)
-}
-
-/**
- * The cached graph for a source, only when it belongs to the CURRENT
- * incarnation (a deleted/re-added source must never serve the old plugin set).
- * @param sourceId - the source id.
- * @param sourceFingerprint - the authoritative roster proof, when known.
- * @returns the cached rows, or undefined when absent/foreign.
- */
-export function cachedSourceClientGraph(
-  sourceId: string,
-  sourceFingerprint: string,
-): CachedSourceGraph | undefined {
-  const cached = sourceGraphs.get(sourceId)
-  if (cached === undefined) return undefined
-  if (cached.sourceFingerprint !== sourceFingerprint) return undefined
-  return cached
-}
-
-/**
- * Retire a source's cached graph (roster removal / incarnation replacement).
- * @param sourceId - the source id.
- */
-export function retireSourceClientGraph(sourceId: string): void {
-  sourceGraphs.delete(sourceId)
-}
-
-/**
- * Which sources have mounted a plugin id on this page (cross-source sharing
- * fact). The module table is page-level, so one module instance backs every
- * mounted fiber — a plugin with module-scope state would share it across
- * sources; the settings panel surfaces this rather than pretending isolation.
- */
-const mountedBy = new Map<string, Set<string>>()
-
-/**
- * Record that `sourceId` mounted `pluginId`.
- * @param pluginId - the plugin id.
- * @param sourceId - the mounting source.
- * @returns the OTHER sources that already mounted it (empty = first mount).
- */
-export function notePluginMounted(pluginId: string, sourceId: string): string[] {
-  const owners = mountedBy.get(pluginId) ?? new Set<string>()
-  const others = [...owners].filter(id => id !== sourceId)
-  owners.add(sourceId)
-  mountedBy.set(pluginId, owners)
-  return others
-}
-
-/**
- * Record that `sourceId` no longer mounts `pluginId` (child-ctx dispose).
- * @param pluginId - the plugin id.
- * @param sourceId - the disposing source.
- */
-export function notePluginUnmounted(pluginId: string, sourceId: string): void {
-  const owners = mountedBy.get(pluginId)
-  if (owners === undefined) return
-  owners.delete(sourceId)
-  if (owners.size === 0) mountedBy.delete(pluginId)
-}
-
-/** Test/diagnostic seam: forget every page-level load/cache fact. */
+/** Test/diagnostic seam: forget every page-level load fact. */
 export function resetClientPluginLoaderState(): void {
   preloadedCombos.clear()
   preloadedIds.clear()
-  sourceGraphs.clear()
-  mountedBy.clear()
 }

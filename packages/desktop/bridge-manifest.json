@@ -73,10 +73,6 @@
       "key": "SSH_INSTANCES_GET"
     },
     {
-      "channel": "desktop_ssh_instances_set",
-      "key": "SSH_INSTANCES_SET"
-    },
-    {
       "channel": "desktop_ssh_save_connection",
       "key": "SSH_SAVE_CONNECTION"
     },
@@ -280,8 +276,8 @@
     }
   ],
   "counts": {
-    "invoke": 61,
+    "invoke": 60,
     "push": 8,
-    "total": 69
+    "total": 68
   }
 }

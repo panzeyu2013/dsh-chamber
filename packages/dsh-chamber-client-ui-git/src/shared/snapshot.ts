@@ -146,7 +146,7 @@ export function normalizeGitSnapshot(value: unknown): GitWorktreeSnapshot {
   for (const [errorIndex, rawError] of value.errors.entries()) {
     const error = normalizeError(rawError)
     if (error === undefined) {
-      errors.push({ code: 'invalid-error', operation: 'snapshot', message: `Git snapshot error ${errorIndex} 形状无效` })
+      errors.push({ code: 'invalid-error', operation: 'snapshot', message: `Git snapshot error ${errorIndex} has an invalid shape` })
     } else {
       errors.push(error)
     }
@@ -162,7 +162,7 @@ export function normalizeGitSnapshot(value: unknown): GitWorktreeSnapshot {
       || !isNonEmptyString(rawRepo.mainPath)
       || !Array.isArray(rawRepo.worktrees)
     ) {
-      errors.push({ code: 'invalid-repo', operation: 'snapshot', message: `Git snapshot repo ${repoIndex} 形状无效` })
+      errors.push({ code: 'invalid-repo', operation: 'snapshot', message: `Git snapshot repo ${repoIndex} has an invalid shape` })
       continue
     }
     if (repoIds.has(rawRepo.repoId)) {
@@ -177,7 +177,7 @@ export function normalizeGitSnapshot(value: unknown): GitWorktreeSnapshot {
       if (worktree === undefined) {
         errors.push({
           code: 'invalid-worktree', operation: 'snapshot', path: rawRepo.mainPath,
-          message: `Git snapshot worktree ${repoIndex}/${rowIndex} 形状无效`,
+          message: `Git snapshot worktree ${repoIndex}/${rowIndex} has an invalid shape`,
         })
       } else if (worktreeIds.has(worktree.worktreeId)) {
         errors.push({

@@ -19,7 +19,7 @@
  *     纯转圈升级为可操作态，以及重试在途时是否必须如实播报排队。
  *  4. `isDeferredReclaimDue`：被推迟（来源未连接）挂载的回收裁决——只接管
  *     从未 settle 的挂载，且绝不碰设置面板正在编辑的来源。
- *  5. `graphGapKindFor` / `shouldReportGraphUnavailable`：W3 的上浮边界——非本地来源的
+ *  5. `graphGapKindFor`：W3 的上浮边界——非本地来源的
  *     `not-injected` 豁免，本地实例的 `not-injected` 收敛为 `local-graph-not-injected`
  *     （FIX 6：chamber 侧安装/seed 事实，仍可自愈）。
  *
@@ -154,19 +154,6 @@ export type GraphGapKind = Extract<ShellDegradedKind, 'graph-unavailable' | 'loc
 export function graphGapKindFor(diagnosticState: string, instanceId: string): GraphGapKind | null {
   if (diagnosticState !== 'not-injected') return 'graph-unavailable'
   return instanceId === 'local' ? 'local-graph-not-injected' : null
-}
-
-/**
- * 图通道失败是否上浮（旧签名，保留给只关心"是否上浮"的读者）。
- *
- * `instanceId` 缺省时本地形态同样豁免——与旧行为逐字节一致；调用方要拿 kind
- * 时用 {@link graphGapKindFor}，本函数只是它的布尔投影。
- * @param diagnosticState - 通道分类结果。
- * @param instanceId - 来源 id；缺省 = 只按通道分类判断。
- * @returns 是否上浮。
- */
-export function shouldReportGraphUnavailable(diagnosticState: string, instanceId?: string): boolean {
-  return graphGapKindFor(diagnosticState, instanceId ?? '') !== null
 }
 
 /**

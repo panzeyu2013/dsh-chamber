@@ -127,20 +127,20 @@ test('② 重生成 Swift 与提交物 BridgeManifest.swift 逐字节一致', ()
   )
 })
 
-test('③ 通道数守恒：counts {invoke:61, push:8, total:69} 与两列表长度自洽', () => {
+test('③ 通道数守恒：counts {invoke:60, push:8, total:68} 与两列表长度自洽', () => {
   const { manifest } = regenerated()
-  // 当前仓库事实（69 = 61 + 8，与 ipc-surface-mirror.test.ts 的 B8 集合断言
-  // 同一批事实；2026-09 通知设置恢复入口 +1 invoke）；通道增删时须与两提交物
-  // 同步更新。
-  assert.deepEqual(manifest.counts, { invoke: 61, push: 8, total: 69 })
+  // 当前仓库事实（68 = 60 + 8，与 ipc-surface-mirror.test.ts 的 B8 集合断言
+  // 同一批事实；2026-12 删除 legacy instances_set 通道 -1 invoke）；通道增删时
+  // 须与两提交物同步更新。
+  assert.deepEqual(manifest.counts, { invoke: 60, push: 8, total: 68 })
   assert.equal(manifest.invoke.length, manifest.counts.invoke)
   assert.equal(manifest.push.length, manifest.counts.push)
   assert.equal(manifest.invoke.length + manifest.push.length, manifest.counts.total)
 })
 
-test('④ 无死键：manifest 键/通道集 == ipc-events.ts IPC_CHANNELS 表（69 全覆盖、无重复、无交集）', () => {
+test('④ 无死键：manifest 键/通道集 == ipc-events.ts IPC_CHANNELS 表（68 全覆盖、无重复、无交集）', () => {
   const table = ipcChannelTable()
-  assert.equal(table.length, 69, 'IPC_CHANNELS 应恰为 69 键（当前事实）')
+  assert.equal(table.length, 68, 'IPC_CHANNELS 应恰为 68 键（当前事实）')
   const { manifest } = regenerated()
   const covered = [...manifest.invoke, ...manifest.push]
   assert.equal(covered.length, table.length, '两向条目总数必须 == 常量表键数（无死键/无幻影键）')
@@ -205,12 +205,11 @@ test('⑤ 方向抽查：invoke/push 归属与 main 侧注册事实一致（含 
 test('⑥ 提交物双件语义一致：Swift 字面量集合与 JSON 通道集逐条对应', () => {
   // ① ② 已保证「重生成 == 提交物」，两者同源出自一次生成；本测试在文本
   // 相等之外做交叉检查——即便双件被手工改坏成「互相一致但偏离生成器」，
-  // ① ② 仍会红，此处再钉死 Swift 三个 Set 与 JSON 集合的字面量对应。
+  // ① ② 仍会红，此处再钉死 Swift 两个 Set 与 JSON 集合的字面量对应。
+  // （allChannels 并集推导生产零引用，2026-12 审计随生成器一并删除。）
   const { swiftText, manifest } = regenerated()
   assert.match(swiftText, /static let invokeChannels: Set<String> = \[/)
   assert.match(swiftText, /static let pushChannels: Set<String> = \[/)
-  assert.match(swiftText, /static let allChannels: Set<String> = invokeChannels\.union\(pushChannels\)/)
-  assert.ok(!swiftText.includes('static let allChannels: Set<String> = ['), 'allChannels 应为推导而非第三次字面量')
   for (const { channel } of manifest.invoke) {
     assert.ok(swiftText.includes(`"${channel}"`), `Swift invokeChannels 缺通道字面量：${channel}`)
   }

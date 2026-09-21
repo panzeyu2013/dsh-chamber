@@ -21,9 +21,7 @@ import {
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { ApiRequest, ApiResponse } from '@dsh-chamber/control-plane'
 import { CHAMBER_HOST_PACKAGES, PLUGIN_MATERIALIZED_VALUE_MASK } from '@dsh-chamber/control-plane'
-import { createChamberPlugins } from '../../src/plugins.ts'
 import {
   createChamberInstalled,
   INSTALLED_MANIFEST_MAX_BYTES,
@@ -33,22 +31,11 @@ import {
 } from '../../src/plugins-installed.ts'
 import { createChamberSurface } from '../../src/routes.ts'
 import { seedCacheProjection } from '../support/chamber-surface-fixtures.ts'
-import { FakeRequest, FakeResponse, stubPluginTasks } from '../support/utils.ts'
+import { stubPluginTasks } from '../support/utils.ts'
+import { handleChamberSurface, makeChamberSurfaceHarness, surfaceSilentLogger } from '../support/chamber-surface-harness.ts'
 
-const logger = {
-  log() {},
-  warn() {},
-  error() {},
-}
-
-const channels = {
-  register() {},
-  async start() {},
-  async stop() {},
-  resolve: () => null,
-  health: () => 'unknown' as const,
-  list: () => [],
-}
+// Shared harness (2026-12 audit F40): only the logger default remains local.
+const logger = surfaceSilentLogger
 
 /** Read the module projection directly (pure-module tests). */
 function readProjection(stateDir: string): InstalledResult {
@@ -77,22 +64,10 @@ function surface(
   tasks: ReturnType<typeof stubPluginTasks> = stubPluginTasks(),
   loggerForSurface: typeof logger = logger,
 ): ReturnType<typeof createChamberSurface> {
-  return createChamberSurface({
-    logger: loggerForSurface,
-    channels,
-    plugins: createChamberPlugins(stateDir, logger),
-    installed: createChamberInstalled(stateDir),
-    tasks,
-    stateDir,
-  })
+  return makeChamberSurfaceHarness(_t, { stateDir, tasks, logger: loggerForSurface }).surface
 }
 
-async function handle(host: ReturnType<typeof createChamberSurface>, method: string, path: string): Promise<FakeResponse> {
-  const response = new FakeResponse()
-  await host.handle(new FakeRequest(method) as unknown as ApiRequest,
-    response as unknown as ApiResponse, path)
-  return response
-}
+const handle = handleChamberSurface
 
 // ---------------------------------------------------------------------------
 // Pure module: absent / corrupt / valid / masking

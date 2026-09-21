@@ -9,7 +9,20 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { MuxSocket, MuxUnaryCall } from '@dsh-chamber/control-plane'
+import type {
+  MuxSocket,
+  MuxUnaryCall,
+  SessionListBaselineItem,
+  SessionStateHostInfo,
+  SessionStateMode,
+} from '@dsh-chamber/control-plane'
+import {
+  createChamberSessionState,
+  createSessionStateStore,
+  type ChamberSessionState,
+  type SessionStateObserverStatus,
+  type SessionStateStore,
+} from '../../src/session-state.ts'
 
 export const silentLogger: { log(): void; warn(message: string): void; error(): void } = {
   log() {},
@@ -32,6 +45,71 @@ export function scratch(t: { after(fn: () => void): void }): string {
   const dir = mkdtempSync(join(tmpdir(), 'gateway-session-state-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   return dir
+}
+
+export interface SessionSurfaceHarness {
+  surface: ChamberSessionState
+  store: SessionStateStore
+  observerStatus: SessionStateObserverStatus
+  setMode(mode: SessionStateMode): void
+  setHost(host: SessionStateHostInfo): void
+}
+
+/**
+ * ONE session-state surface harness (2026-12 audit F40): the four suites each
+ * carried their own store + fake observer + createChamberSessionState call.
+ * Every injection point stays open (stateDir, mode, enabled, stream/keepalive
+ * bounds, observer overrides); the fake observer object is a superset of the
+ * per-file shapes and is mutated by setMode/setHost so live transitions still
+ * work.
+ */
+export function sessionSurfaceFor(
+  t: { after(fn: () => void): void },
+  options: {
+    stateDir?: string
+    mode?: SessionStateMode
+    enabled?: boolean
+    maxStreams?: number
+    keepaliveMs?: number
+    observerOverrides?: Partial<SessionStateObserverStatus>
+  } = {},
+): SessionSurfaceHarness {
+  const stateDir = options.stateDir ?? scratch(t)
+  const store = createSessionStateStore({ stateDir, logger: silentLogger, now: () => 1_000 })
+  const host: SessionStateHostInfo = { now: 1_000, serviceable: true, state: 'ready' }
+  const observerStatus: SessionStateObserverStatus = {
+    mode: options.mode ?? 'sse',
+    ready: true,
+    baselineAt: 900,
+    lastEventAt: 950,
+    reconnects: 0,
+    lastError: null,
+    degraded: false,
+    heldWaterfalls: 0,
+    followReads: 0,
+    followFailures: 0,
+    clientId: 'mux-1',
+    eventsReceived: 0,
+    baselines: 1,
+    ...options.observerOverrides,
+  }
+  const surface = createChamberSessionState({
+    logger: silentLogger,
+    store,
+    observer: { status: () => observerStatus, hostInfo: () => host } as never,
+    enabled: options.enabled ?? true,
+    now: () => 1_000,
+    keepaliveMs: options.keepaliveMs ?? 30,
+    maxStreams: options.maxStreams,
+  })
+  t.after(() => surface.closeAllStreams())
+  return {
+    surface,
+    store,
+    observerStatus,
+    setMode: mode => { observerStatus.mode = mode },
+    setHost: value => { Object.assign(host, value) },
+  }
 }
 
 export interface RecordedCall {
@@ -167,8 +245,10 @@ export function statusFrame(sessionId: string, running: boolean): unknown {
   return { type: 'item', streamId: 'events', value: { type: 'emit', event: 'api-session/status', args: [sessionId, running] } }
 }
 
-export function baselineItem(sessionId: string, running: boolean, updatedAt = 1, extra: Record<string, unknown> = {}): Record<string, unknown> {
-  return { sessionId, running, updatedAt, parentSessionId: null, origin: null, ...extra }
+export function baselineItem(sessionId: string, running: boolean, updatedAt = 1, extra: Record<string, unknown> = {}): SessionListBaselineItem {
+  // The cast is deliberate: callers also feed hostile/unknown wire fields
+  // (persistence privacy test) that must survive the spread untyped.
+  return { sessionId, running, updatedAt, parentSessionId: null, origin: null, ...extra } as SessionListBaselineItem
 }
 
 /** One session/follow snapshot carrying a tail turn/end event. */

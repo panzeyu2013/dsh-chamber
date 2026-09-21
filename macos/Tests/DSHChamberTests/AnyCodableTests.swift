@@ -1,6 +1,8 @@
 //
 //  AnyCodableTests.swift — W-05 AnyCodable（B 桥载荷载体，design 25 §4.4.2）
-//  纯逻辑单测：JSON 往返互逆、jsonObject 桥接、fromJSONObject 判别。
+//  纯逻辑单测：JSON 往返互逆、jsonLiteralText 语义、fromJSONObject 判别。
+//  旧的 `jsonObject` 生产面已删除（2026-12 审计），测试侧保留 legacyJSONObject
+//  基线以维持"单遍写出 == 老 JSONSerialization 口径"的等价断言。
 //
 import XCTest
 @testable import DSHChamber
@@ -8,6 +10,31 @@ import XCTest
 final class AnyCodableTests: XCTestCase {
     private func decodeJSON<T: Decodable>(_ json: String) throws -> T {
         try JSONDecoder().decode(T.self, from: Data(json.utf8))
+    }
+
+    /// 测试侧 legacy 基线：逐字复刻已删除的 `AnyCodable.jsonObject`
+    /// （JSONSerialization 可写投影：整值 Double → NSNumber(int64)，非整值 →
+    /// NSNumber(double)，容器递归）。生产面 2026-12 审计删除；这里只为单遍写出器
+    /// 的"解析后语义等价"断言保留一个老口径参照物。
+    private func legacyJSONObject(_ value: AnyCodable) -> Any {
+        switch value {
+        case .null:
+            return NSNull()
+        case .bool(let flag):
+            return flag
+        case .number(let number):
+            if number.isFinite, number == number.rounded(),
+               let integer = Int64(exactly: number) {
+                return NSNumber(value: integer)
+            }
+            return NSNumber(value: number)
+        case .string(let text):
+            return text
+        case .array(let values):
+            return values.map { legacyJSONObject($0) }
+        case .object(let entries):
+            return entries.mapValues { legacyJSONObject($0) }
+        }
     }
 
     func testJSONRoundtripNested() throws {
@@ -27,15 +54,6 @@ final class AnyCodableTests: XCTestCase {
         XCTAssertEqual(try decodeJSON("[1,2]") as AnyCodable, .array([.number(1), .number(2)]))
     }
 
-    func testJsonObjectBridging() throws {
-        let value: AnyCodable = try decodeJSON(#"{"i":1,"f":1.5,"b":true,"n":null,"arr":[2]}"#)
-        guard let obj = value.jsonObject as? [String: Any] else { return XCTFail("object 桥接失败") }
-        XCTAssertEqual(obj["i"] as? Int, 1)        // 整值还原
-        XCTAssertEqual(obj["f"] as? Double, 1.5)
-        XCTAssertEqual(obj["b"] as? Bool, true)
-        XCTAssertTrue(obj["n"] is NSNull)
-    }
-
     func testFromJSONObjectDiscrimination() {
         // NSNumber(1) as? Bool 在 Swift 中为 true——必须按 CFTypeID 判别（A3 平台坑）
         XCTAssertEqual(AnyCodable.fromJSONObject(NSNumber(value: 1)), .number(1))
@@ -51,13 +69,13 @@ final class AnyCodableTests: XCTestCase {
     }
 
     func testNumberIntegralRestore() throws {
-        // 整值 Double 经 JSONEncoder → 数字 token；jsonObject 应还原为 Int 语义
+        // 整值 Double 经 JSONEncoder → 数字 token；legacy 基线应还原为 Int 语义
         let value = AnyCodable.number(7)
         let data = try JSONEncoder().encode(value)
         let round: AnyCodable = try JSONDecoder().decode(AnyCodable.self, from: data)
         guard case .number(let d) = round else { return XCTFail("number case 丢失") }
         XCTAssertEqual(Int(d), 7)
-        let obj = round.jsonObject
+        let obj = legacyJSONObject(round)
         XCTAssertEqual((obj as? NSNumber)?.int64Value, 7)
     }
 
@@ -72,9 +90,10 @@ final class AnyCodableTests: XCTestCase {
         XCTAssertNil(AnyCodable.fromJSONObject([NSNumber(value: Double.nan)]))
     }
 
-    /// Phase 1 C2：深度上限与 A 桥常量锁步，边界与 isJSONSerializableValue 同规。
-    func testDepthLimitLockstepAndBoundary() {
-        XCTAssertEqual(AnyCodable.maxJSONDepth, ChamberMessageHandler.maxJSONDepth)
+    /// Phase 1 C2 / 2026-12 审计：深度门单源 = AnyCodable.maxJSONDepth（A 桥
+    /// fence 与 B 桥解码共用），原与 MessageHandler.maxJSONDepth 的锁步断言随该
+    /// 常量的删除一并移除；边界断言保留。
+    func testDepthLimitBoundary() {
         var allowed: Any = "leaf"
         for _ in 0..<AnyCodable.maxJSONDepth { allowed = [allowed] }
         XCTAssertNotNil(AnyCodable.fromJSONObject(allowed), "深度 = 上限的嵌套必须可转换")
@@ -84,7 +103,7 @@ final class AnyCodableTests: XCTestCase {
     }
 
     /// Phase 2 C7（修正版）：页面字面量走单遍写出器——-0.0 折叠为 "0"（与旧
-    /// jsonObject 路径逐字一致）；B 桥出帧的 JSONEncoder 往返保持改动前行为。
+    /// legacy 基线路径逐字一致）；B 桥出帧（request）的 JSONEncoder 往返保持改动前行为。
     func testJsonLiteralTextSemantics() throws {
         XCTAssertEqual(AnyCodable.null.jsonLiteralText, "null")
         XCTAssertEqual(AnyCodable.bool(true).jsonLiteralText, "true")
@@ -111,7 +130,7 @@ final class AnyCodableTests: XCTestCase {
         XCTAssertEqual(String(data: try JSONEncoder().encode(AnyCodable.number(-0.0)), encoding: .utf8), "-0")
     }
 
-    /// Phase 2 C7：单遍写出与旧路径（jsonObject + JSONSerialization）解析后语义等价。
+    /// Phase 2 C7：单遍写出与 legacy 基线（原 jsonObject + JSONSerialization）解析后语义等价。
     func testJsonLiteralTextMatchesLegacySerialization() throws {
         let values: [AnyCodable] = [
             .null, .bool(false), .number(0), .number(-0.0), .number(0.1), .number(1e18), .number(1e21),
@@ -120,7 +139,7 @@ final class AnyCodableTests: XCTestCase {
             .object(["k": .array([.object(["n": .number(1)])]), "e": .string("🚀")]),
         ]
         for value in values {
-            let legacyData = try JSONSerialization.data(withJSONObject: value.jsonObject,
+            let legacyData = try JSONSerialization.data(withJSONObject: legacyJSONObject(value),
                                                         options: [.fragmentsAllowed])
             let legacy = try JSONSerialization.jsonObject(with: legacyData, options: [.fragmentsAllowed])
             let custom = try JSONSerialization.jsonObject(with: Data(value.jsonLiteralText.utf8),
@@ -134,7 +153,7 @@ final class AnyCodableTests: XCTestCase {
     /// 恒 ≥ 实际序列化字节数（单遍写出与 JSONSerialization 两条口径）。
     /// 该不等式是 MessageHandler ⑤「上界 ≤ 上限 ⇒ 必过」短路的唯一前提。
     func testJsonUpperBoundCoversActualSerialization() throws {
-        // 非有限值单独走字面量口径：`jsonObject` 会把它们交给 JSONSerialization，
+        // 非有限值单独走字面量口径：legacy 基线会把它们交给 JSONSerialization，
         // 后者对 NaN/±Infinity 抛 **不可捕获的 NSException**（try? 拦不住，上面
         // testJsonLiteralTextSemantics 的注释与 fence ⑤ 的可表示性前置同因），
         // 故不进下面那条 legacy 比较。
@@ -158,8 +177,8 @@ final class AnyCodableTests: XCTestCase {
             let literal = value.jsonLiteralText.utf8.count
             XCTAssertGreaterThanOrEqual(value.jsonUpperBoundByteCount, literal,
                                         "上界小于单遍写出实际长度：\(value)")
-            // 非有限值经 jsonObject 会让 JSONSerialization 抛异常（try? 拦下）→ 跳过该口径。
-            if let legacy = try? JSONSerialization.data(withJSONObject: value.jsonObject,
+            // 非有限值经 legacy 基线会让 JSONSerialization 抛异常（try? 拦下）→ 跳过该口径。
+            if let legacy = try? JSONSerialization.data(withJSONObject: legacyJSONObject(value),
                                                         options: [.fragmentsAllowed]) {
                 XCTAssertGreaterThanOrEqual(value.jsonUpperBoundByteCount, legacy.count,
                                             "上界小于 JSONSerialization 实际长度：\(value)")

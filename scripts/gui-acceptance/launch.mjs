@@ -17,11 +17,11 @@ import { closeSync, existsSync, mkdirSync, openSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { RENDERER_DIST_RELATIVE, ensureSharedElectronDist, platformExecutableName } from '../../packages/desktop/scripts/electron-shared.mjs'
+import { sleep } from '../lib/cli.mjs'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const DESKTOP_DIR = path.join(REPO, 'packages/desktop')
 
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 /**
  * Dev-mode build prerequisites. electron-dev.mjs lazily builds the renderer and

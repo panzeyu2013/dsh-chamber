@@ -8,6 +8,7 @@
  */
 import { createHash } from 'node:crypto'
 import type { TransportInstanceSpec } from './transport-provider.ts'
+import { gatewayCredentialTargetIdentity } from './credential-identity.ts'
 
 function fingerprint(parts: readonly unknown[]): string {
   return createHash('sha256').update(JSON.stringify(parts)).digest('hex')
@@ -16,8 +17,8 @@ function fingerprint(parts: readonly unknown[]): string {
 /** Gateway token/password identity is target-owned, independent of transport,
  * HTTP scheme, SPKI, and SSH-only fields (design 17 §9.1). */
 export function gatewayCredentialBinding(spec: TransportInstanceSpec): string | null {
-  if (spec.kind !== 'gateway') return null
-  return fingerprint(['gateway-credential-v1', spec.kind, spec.host, spec.remotePort])
+  const target = gatewayCredentialTargetIdentity(spec)
+  return target === null ? null : fingerprint(['gateway-credential-v1', target.kind, target.host, target.remotePort])
 }
 
 /** SSH password identity belongs only to the SSH endpoint. Target kind,

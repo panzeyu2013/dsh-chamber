@@ -1,8 +1,8 @@
 /**
  * dsh 运行时版本管理状态机（design 18 §3.6 状态转移表）——纯逻辑、零依赖、
- * 无 electron、无副作用（M4 抽纯模块）。只有三个纯函数：`transition`
- * （状态 × 事件 → 状态）、`allowedActions`（终态门：该状态下可见动作）、
- * `isTerminal`（rollback / failed 终态判定）。不碰文件、不碰 IPC、不碰 UI：
+ * 无 electron、无副作用（M4 抽纯模块）。只有两个纯函数：`transition`
+ * （状态 × 事件 → 状态）、`allowedActions`（终态门：该状态下可见动作）。
+ * 不碰文件、不碰 IPC、不碰 UI：
  * 控制器（main 进程）注入事件、读相位；settings UI 用 `allowedActions` 渲染
  * 可见动作按钮。
  *
@@ -245,14 +245,6 @@ export function allowedActions(
     case 'error':
       return ['check', 'select-version', 'install', 'cleanup-version', 'reset-builtin', 'restart-dsh'];
   }
-}
-
-/**
- * 终态判定（§3.6）：rollback / failed 为终态（落内建树，等用户动作）；applied
- * 非终态（下一周期可 checking）。
- */
-export function isTerminal(state: RuntimePhase): boolean {
-  return state === 'rollback' || state === 'failed';
 }
 
 /*

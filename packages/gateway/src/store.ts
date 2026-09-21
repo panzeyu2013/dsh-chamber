@@ -47,11 +47,11 @@ import { randomBytes, scryptSync } from 'node:crypto'
 import {
   atomicWritePrivateFileNoFollow,
   ensurePrivateDirectoryNoFollow,
-  readPrivateFileNoFollow,
   removePrivateFileNoFollow,
   syncPrivateDirectoryNoFollow,
   type PrivateFileIdentity,
 } from '@dsh-chamber/control-plane'
+import { readPrivateEntryOrNull } from './private-read.ts'
 
 export interface GatewayStoreLogger { log(...args: unknown[]): void; warn(...args: unknown[]): void; error(...args: unknown[]): void }
 
@@ -127,21 +127,73 @@ function readSecret(file: string): string | null {
  * 0600 — the lock-free auth-status projection is genuinely read-only and a
  * loose credential file is rejected rather than silently accepted. */
 function readSecretFile(file: string, migrateMode = true): { value: string | null; mtimeMs: number; identity: PrivateFileIdentity | null } {
+  let read: { value: string; mtimeMs: number; identity: PrivateFileIdentity } | null
   try {
-    const read = readPrivateFileNoFollow(file, {
+    read = readPrivateEntryOrNull(file, {
       requiredMode: 0o600,
       ...(migrateMode ? { tightenMode: 0o600 } : {}),
       maxBytes: MAX_PRIVATE_CREDENTIAL_BYTES,
     })
-    return {
-      value: read.value.trim() === '' ? null : read.value,
-      mtimeMs: read.mtimeMs,
-      identity: read.identity,
-    }
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { value: null, mtimeMs: 0, identity: null }
     throw new Error(`gateway private file must be a regular file and remain stable: ${file}`, { cause: error })
   }
+  if (read === null) return { value: null, mtimeMs: 0, identity: null }
+  return {
+    value: read.value.trim() === '' ? null : read.value,
+    mtimeMs: read.mtimeMs,
+    identity: read.identity,
+  }
+}
+
+/** The single credential-document parse (2026-12 audit F9): the runtime
+ * readers and the read-only CLI projection previously each carried their own
+ * copy of the v2-envelope + legacy-v1 rules. `corrupt-v2` and the legacy
+ * outcomes let each caller keep its exact warning text while the parse itself
+ * exists once. */
+type CredentialParse =
+  | { kind: 'record'; record: CredentialRecord }
+  | { kind: 'absent' }
+  | { kind: 'corrupt-v2' }
+  /** tokens.json: a document that is neither a valid v2 envelope nor a usable
+   * legacy `{"hash"}` object (unparseable JSON, non-object, or missing hash). */
+  | { kind: 'legacy-unreadable' }
+  /** password-credential: a document that is neither a v2 envelope nor a bare
+   * legacy `scrypt$…` verifier. */
+  | { kind: 'unrecognized' }
+
+function parseCredential(text: string | null, field: 'verifier' | 'hash', mtimeMs: number): CredentialParse {
+  if (text === null) return { kind: 'absent' }
+  if (!text.startsWith('{')) {
+    if (field === 'verifier') {
+      return /^scrypt\$/.test(text)
+        ? { kind: 'record', record: { verifier: text, source: 'config', updatedAt: mtimeMs } }
+        : { kind: 'unrecognized' }
+    }
+    return { kind: 'legacy-unreadable' }
+  }
+  let parsed: unknown
+  try { parsed = JSON.parse(text) } catch { return { kind: 'corrupt-v2' } }
+  if (parsed === null || typeof parsed !== 'object') return { kind: 'corrupt-v2' }
+  const doc = parsed as { schemaVersion?: unknown; source?: unknown; updatedAt?: unknown; verifier?: unknown; hash?: unknown }
+  if (doc.schemaVersion !== 2) {
+    // Legacy v1 tokens.json `{"hash": …}` → config-sourced, file mtime as the
+    // write time; the password face never had a v1 JSON shape.
+    if (field === 'hash') {
+      const hash = doc.hash
+      if (typeof hash === 'string' && hash !== '') {
+        return { kind: 'record', record: { verifier: hash, source: 'config', updatedAt: mtimeMs } }
+      }
+      return { kind: 'legacy-unreadable' }
+    }
+    return { kind: 'unrecognized' }
+  }
+  const verifier = field === 'verifier' ? doc.verifier : doc.hash
+  if (typeof verifier !== 'string' || !CREDENTIAL_VERIFIER_RE.test(verifier)
+    || (doc.source !== 'config' && doc.source !== 'runtime')
+    || typeof doc.updatedAt !== 'number' || !Number.isFinite(doc.updatedAt)) {
+    return { kind: 'corrupt-v2' }
+  }
+  return { kind: 'record', record: { verifier, source: doc.source, updatedAt: doc.updatedAt } }
 }
 
 /**
@@ -162,9 +214,10 @@ export function readCredentialProjection(stateDir: string): CredentialProjection
   }
 }
 
-/** Parse one credential file into its non-secret projection; mirrors the
- * store's v2-envelope + legacy-v1 semantics (see `readCredentialProjection`).
- * Returns null for missing/corrupt/unreadable files — never throws. */
+/** Parse one credential file into its non-secret projection through the
+ * shared {@link parseCredential} (the same v2-envelope + legacy-v1 rules the
+ * store's runtime readers use). Returns null for missing/corrupt/unreadable
+ * files — never throws. */
 function readProjectionRecord(file: string, field: 'verifier' | 'hash'): CredentialProjection['password'] {
   let text: string | null
   let mtimeMs: number
@@ -177,32 +230,9 @@ function readProjectionRecord(file: string, field: 'verifier' | 'hash'): Credent
   } catch {
     return null // missing / non-regular / symlink / inode race → not configured
   }
-  if (text === null) return null
-  if (text.startsWith('{')) {
-    let parsed: unknown
-    try { parsed = JSON.parse(text) } catch { return null }
-    if (parsed === null || typeof parsed !== 'object') return null
-    const doc = parsed as { schemaVersion?: unknown; source?: unknown; updatedAt?: unknown; verifier?: unknown; hash?: unknown }
-    if (doc.schemaVersion === 2) {
-      const value = field === 'verifier' ? doc.verifier : doc.hash
-      // Mirror the store's corrupt-v2 rule (parseV2Credential): a shape-valid
-      // envelope whose verifier is not a real scrypt value projects as
-      // unconfigured, never as a configured credential.
-      if (typeof value !== 'string' || !CREDENTIAL_VERIFIER_RE.test(value)
-        || (doc.source !== 'config' && doc.source !== 'runtime')
-        || typeof doc.updatedAt !== 'number' || !Number.isFinite(doc.updatedAt)) return null
-      return { set: true, source: doc.source, updatedAt: doc.updatedAt }
-    }
-    // Legacy v1 tokens.json `{"hash": …}` (no schemaVersion) → config-sourced.
-    if (field === 'hash') {
-      const hash = (parsed as { hash?: unknown }).hash
-      if (typeof hash === 'string' && hash !== '') return { set: true, source: 'config', updatedAt: mtimeMs }
-    }
-    return null
-  }
-  // Legacy v1 password-credential: a bare `scrypt$salt$hash` string.
-  if (field === 'verifier' && /^scrypt\$/.test(text)) return { set: true, source: 'config', updatedAt: mtimeMs }
-  return null
+  const parsed = parseCredential(text, field, mtimeMs)
+  if (parsed.kind !== 'record') return null
+  return { set: true, source: parsed.record.source, updatedAt: parsed.record.updatedAt }
 }
 
 /** 0600 atomic write through a random exclusive no-follow temp + parent fsync. */
@@ -334,13 +364,8 @@ export function createGatewayStore(stateDir: string, logger: GatewayStoreLogger)
    * dead pid-less lock can be claimed, never chmod while inspecting another
    * owner, and cap the tiny pidfile to prevent an unbounded startup read. */
   function readLockFile(file: string): { value: string; identity: PrivateFileIdentity } | null {
-    try {
-      const read = readPrivateFileNoFollow(file, { maxBytes: 4 * 1024 })
-      return { value: read.value, identity: read.identity }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-      throw error
-    }
+    const read = readPrivateEntryOrNull(file, { maxBytes: 4 * 1024 })
+    return read === null ? null : { value: read.value, identity: read.identity }
   }
 
   function isProcessAlive(pid: number): boolean {
@@ -565,45 +590,15 @@ export function createGatewayStore(stateDir: string, logger: GatewayStoreLogger)
   const jwtSecretFile = join(stateDir, 'jwt-secret')
   const passwordCredentialFile = join(stateDir, 'password-credential')
 
-  /** Parse a schemaVersion-2 credential envelope. `found:false` means the text
-   * is not a v2 document (legacy v1); `record:null` means a corrupt v2 doc
-   * (including a shape-valid envelope whose verifier is not a real
-   * `scrypt$salt$hash` value — treated as corrupt so a garbage verifier can
-   * never silently disable authentication). */
-  function parseV2Credential(text: string, field: 'verifier' | 'hash'): { found: boolean; record: CredentialRecord | null } {
-    if (!text.startsWith('{')) return { found: false, record: null }
-    let parsed: unknown
-    try { parsed = JSON.parse(text) } catch { return { found: true, record: null } }
-    if (parsed === null || typeof parsed !== 'object') return { found: true, record: null }
-    const doc = parsed as { schemaVersion?: unknown; source?: unknown; updatedAt?: unknown; verifier?: unknown; hash?: unknown }
-    if (doc.schemaVersion !== 2) return { found: false, record: null }
-    const verifier = field === 'verifier' ? doc.verifier : doc.hash
-    if (typeof verifier !== 'string' || !CREDENTIAL_VERIFIER_RE.test(verifier)
-      || (doc.source !== 'config' && doc.source !== 'runtime')
-      || typeof doc.updatedAt !== 'number' || !Number.isFinite(doc.updatedAt)) {
-      return { found: true, record: null }
-    }
-    return { found: true, record: { verifier, source: doc.source, updatedAt: doc.updatedAt } }
-  }
-
   function readTokenCredential(): CredentialRecord | null {
     const { value, mtimeMs } = readSecretFile(tokensFile)
-    if (value === null) return null
-    const v2 = parseV2Credential(value, 'hash')
-    if (v2.found) {
-      if (v2.record === null) warnOnce(tokensFile, `gateway-store: corrupt v2 tokens.json (${tokensFile})`, logger)
-      return v2.record
-    }
-    // Legacy v1 `{"hash": ...}` without schemaVersion → config-sourced; the
-    // next write migrates it to v2.
-    let parsed: unknown
-    try { parsed = JSON.parse(value) } catch {
+    const parsed = parseCredential(value, 'hash', mtimeMs)
+    if (parsed.kind === 'record') return parsed.record
+    if (parsed.kind === 'corrupt-v2') {
+      warnOnce(tokensFile, `gateway-store: corrupt v2 tokens.json (${tokensFile})`, logger)
+    } else if (parsed.kind !== 'absent') {
       warnOnce(tokensFile, `gateway-store: cannot read ${tokensFile}`, logger)
-      return null
     }
-    const hash = (parsed as { hash?: unknown } | null)?.hash
-    if (typeof hash === 'string' && hash !== '') return { verifier: hash, source: 'config', updatedAt: mtimeMs }
-    warnOnce(tokensFile, `gateway-store: cannot read ${tokensFile}`, logger)
     return null
   }
 
@@ -621,20 +616,13 @@ export function createGatewayStore(stateDir: string, logger: GatewayStoreLogger)
 
   function readPasswordCredential(): CredentialRecord | null {
     const { value, mtimeMs } = readSecretFile(passwordCredentialFile)
-    if (value === null) return null
-    const v2 = parseV2Credential(value, 'verifier')
-    if (v2.found) {
-      if (v2.record === null) warnOnce(passwordCredentialFile, `gateway-store: corrupt v2 password-credential (${passwordCredentialFile})`, logger)
-      return v2.record
-    }
-    // Legacy v1: a bare `scrypt$salt$hash` string → config-sourced, write time
-    // = file mtime; the next write migrates it to v2.
-    if (!value.startsWith('{')) {
-      if (/^scrypt\$/.test(value)) return { verifier: value, source: 'config', updatedAt: mtimeMs }
+    const parsed = parseCredential(value, 'verifier', mtimeMs)
+    if (parsed.kind === 'record') return parsed.record
+    if (parsed.kind === 'corrupt-v2') {
+      warnOnce(passwordCredentialFile, `gateway-store: corrupt v2 password-credential (${passwordCredentialFile})`, logger)
+    } else if (parsed.kind !== 'absent') {
       warnOnce(passwordCredentialFile, `gateway-store: unrecognized password-credential file (${passwordCredentialFile})`, logger)
-      return null
     }
-    warnOnce(passwordCredentialFile, `gateway-store: unrecognized password-credential file (${passwordCredentialFile})`, logger)
     return null
   }
 

@@ -25,10 +25,12 @@
  *
  * Exit codes (scripts/README.md §分类规则 2): 0 pass · 1 failure · 2 usage error.
  */
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
+
+import { walkFiles } from '../lib/walk.mjs'
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 
@@ -42,7 +44,11 @@ export const GROUPS = {
     'scripts/gates/run-script-tests.test.mjs',
     'scripts/gates/verify-md-links.test.mjs',
     'scripts/gates/verify-test-wiring.test.mjs',
+    'scripts/gates/verify-workflow-action-pins.test.mjs',
     'scripts/gates/verify-workflow-yaml-scalars.test.mjs',
+    // Shared package-test runner (its zero-case guard is a repository gate
+    // helper, so it runs with the gate suites).
+    'scripts/lib/test-manifest.test.mjs',
   ],
   // Upstream pin and touchpoint tooling (pin preflight, lockfile repair,
   // registry/touchpoint gates, protected-set and anchor gates).
@@ -94,8 +100,12 @@ export const SUBJECT_TESTS = [
   },
 ]
 
-/** Directories never descended into while scanning for test files. */
-const IGNORED_DIRECTORIES = new Set(['node_modules', 'dist', 'lib', '.git'])
+// ONE walk for every gate that scans the repository (scripts/lib/walk.mjs;
+// P2-17 of the 13-scripts audit). This caller keeps its own narrow ignore set
+// because scripts/ contains REAL directories named like build output:
+// scripts/release/ (tests) and scripts/lib/ (shared modules + their tests) —
+// the repo-wide union would silently drop both, and did once (2026-12).
+const SCRIPT_TEST_IGNORED_DIRECTORIES = ['node_modules', 'dist', '.git']
 
 /**
  * Resolve the command line into a selection.
@@ -166,24 +176,9 @@ export function manifestProblems({ listed, onDisk, moduleExists, subjects = SUBJ
  * @returns {string[]} test file paths.
  */
 export function collectScriptTests() {
-  const found = []
-  const visit = directory => {
-    let entries
-    try { entries = readdirSync(directory, { withFileTypes: true }) } catch { return }
-    for (const entry of entries) {
-      const path = join(directory, entry.name)
-      if (entry.isDirectory()) {
-        if (IGNORED_DIRECTORIES.has(entry.name)) continue
-        visit(path)
-        continue
-      }
-      if (entry.isFile() && /\.test\.(?:mjs|ts)$/u.test(entry.name)) {
-        found.push(relative(REPO_ROOT, path).split(sep).join('/'))
-      }
-    }
-  }
-  visit(join(REPO_ROOT, 'scripts'))
-  return found.sort()
+  return walkFiles(join(REPO_ROOT, 'scripts'), path => /\.test\.(?:mjs|ts)$/u.test(path), { ignoredDirs: SCRIPT_TEST_IGNORED_DIRECTORIES })
+    .map(path => relative(REPO_ROOT, path).split(sep).join('/'))
+    .sort()
 }
 
 function main() {

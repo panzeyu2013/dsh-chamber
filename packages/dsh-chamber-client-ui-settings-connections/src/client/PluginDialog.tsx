@@ -99,9 +99,11 @@ import {
   sshPluginUndo,
   type GatewayInstalledProjection,
 } from './control-plane.ts'
-import { classifyRestartError, gatewayReadFenceText, serverRefusalText } from './managed-restart.ts'
+import { gatewayReadFenceText } from './managed-restart.ts'
+import { errorMessage } from './error-text.ts'
+import { runManagedRestart } from './restart-action.ts'
 import {
-  classifyGatewayApplyResult, classifySshApplyResult, partialCounts, pluginRowsOf, projectInstalledRows, sshSyncableDependencies,
+  classifyGatewayApplyResult, classifySshApplyResult, partialCounts, partialTextOf, pluginRowsOf, projectInstalledRows, sshSyncableDependencies,
   projectTasks, undoForLatest,
   type InstalledRowView, type PluginRowRoleShape, type TaskRow,
 } from './plugin-model.ts'
@@ -171,10 +173,6 @@ function manageStatusClass(tone: ManageTone): string {
     case 'warn': return css.pluginWarn
     default: return css.error
   }
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }
 
 /** Row-kind → localized label key. */
@@ -366,7 +364,6 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
   // POST + pollGatewayReady semantics as the connection card.
   const [restarting, setRestarting] = useState(false)
   const [restartNote, setRestartNote] = useState<RestartNote | null>(null)
-  const restartAbortRef = useRef<AbortController | null>(null)
   // Gateway chamber seed-cache projection (design 21 §6.2 A0 read side).
   const [seedCache, setSeedCache] = useState<Record<string, string | null> | null>(null)
   const [seedCacheError, setSeedCacheError] = useState<string | null>(null)
@@ -416,10 +413,6 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     if (diagnostic === undefined || diagnostic.state === 'ok') return
     onRecheckDiagnostic?.()
   }, [diagnostic?.state])
-
-  useEffect(() => {
-    return () => { restartAbortRef.current?.abort() }
-  }, [])
 
   // ---- local: load the local manifest on open ----
   const loadLocalList = useCallback(async (): Promise<void> => {
@@ -548,10 +541,9 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     setSeedError(null)
     try {
       const res = await seedHostGraph(sshSpec.id)
-      if ('cancelled' in res) {
-        // User dismissed the main-process confirmation: a silent no-op.
-        setPendingRestart(false)
-      } else if (res.ok) {
+      // SshSeedHostGraphResult has no cancelled arm (renderer/src/global.d.ts):
+      // the main-process seed has no dialog/picker to dismiss.
+      if (res.ok) {
         setPendingRestart(res.wrote === true || res.patched === true)
       } else {
         setSeedError(res.error)
@@ -643,9 +635,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     })
     try {
       const res = await pluginApply(sshSpec.id, { add: [], remove: [name], restart })
-      if ('cancelled' in res) {
-        // User dismissed the main-process confirmation: silent no-op.
-      } else if ('error' in res) {
+      if ('error' in res) {
         setRemoteRowErrors(prev => ({ ...prev, [name]: res.error }))
       } else {
         const r = res.result
@@ -654,9 +644,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
           setRemoteRowErrors(prev => ({ ...prev, [name]: failed.error }))
         } else {
           const outcome = classifySshApplyResult(res)
-          if ('cancelled' in outcome) {
-            // Defensive: the wrapper's cancelled arm is handled above.
-          } else if ('failed' in outcome) {
+          if ('failed' in outcome) {
             setRemoteListStatus({ tone: 'error', text: outcome.failed.error })
           } else {
             const executed = outcome.executed
@@ -879,51 +867,24 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
    *  按 shared pollGatewayReady 语义轮询；成功刷新清单（同手动刷新通道）。 */
   const restartManagedDsh = async (): Promise<void> => {
     if (sourceId === null || restarting) return
-    restartAbortRef.current?.abort()
-    const controller = new AbortController()
-    restartAbortRef.current = controller
     setRestarting(true)
     setRestartNote(null)
     try {
-      let response: Response
-      try {
-        response = await fetch(`/api/i/${sourceId}/chamber/runtime/restart`, { method: 'POST' })
-      } catch (err) {
-        if (controller.signal.aborted) return
-        setRestartNote({ tone: 'error', text: errorMessage(err) })
-        return
-      }
-      if (response.status !== 202) {
-        let body: unknown = null
-        try { body = await response.json() } catch { body = null }
-        setRestartNote({ tone: 'error', text: serverRefusalText(body, response.status) })
-        return
-      }
-      // Readiness + reload are PAGE-owned (review F6): closing the dialog
-      // mid-restart cannot cancel the completion.
-      let pollFailure: unknown = null
-      const outcome = await armWindowReloadWhenServed(sourceId, async signal => {
-        try {
-          await pollGatewayReady(sourceId, signal)
-          return true
-        } catch (err) {
-          pollFailure = err
-          return false
-        }
-      }, { budgetMs: RESTART_RELOAD_BUDGET_MS })
-      if (outcome === 'reloaded') {
+      // Same single action layer as the connection card (restart-action.ts):
+      // POST + 202 gate + page-owned readiness poll. The dialog used to render
+      // the server's English refusal verbatim while the card localized the same
+      // 409 through runtimeRefusalText — both now share the one localized copy.
+      const outcome = await runManagedRestart(sourceId, t)
+      if (outcome.kind === 'reloaded') {
         setRestartNote({ tone: 'ok', text: t('restartManagedDshOk') })
         setReloadNonce(n => n + 1)
+      } else if (outcome.kind === 'accepted-timeout') {
+        setRestartNote({ tone: 'ok', text: t('restartManagedDshAccepted') })
       } else {
-        const cls = classifyRestartError(pollFailure
-          ?? new Error('restart completion aborted before the readiness poll settled'))
-        setRestartNote(cls.kind === 'accepted-timeout'
-          ? { tone: 'ok', text: t('restartManagedDshAccepted') }
-          : { tone: 'error', text: cls.detail })
+        setRestartNote({ tone: 'error', text: outcome.kind === 'refused' ? outcome.text : outcome.detail })
       }
     } finally {
       setRestarting(false)
-      if (restartAbortRef.current === controller) restartAbortRef.current = null
     }
   }
 
@@ -971,10 +932,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
       }
       if ('failed' in outcome) {
         const counts = partialCounts(outcome)
-        const partialText = counts === null || counts.done === 0
-          ? ''
-          : `${t('partialNofM').replace('{done}', String(counts.done)).replace('{total}', String(counts.total))}${t('partialSep')}`
-        setManageStatus({ tone: 'error', text: `${partialText}${outcome.failed.error}` })
+        setManageStatus({ tone: 'error', text: `${partialTextOf(counts, t)}${outcome.failed.error}` })
         if (counts !== null && counts.done > 0) setReloadNonce(n => n + 1)
         return
       }
@@ -1020,8 +978,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
     try {
       if (isSsh && sshSpec !== null) {
         const res = await pluginApply(sshSpec.id, { add: [value], remove: [], restart: false })
-        if ('cancelled' in res) { /* silent no-op (user dismissed the main-process confirmation) */ }
-        else if ('error' in res) setDraftError(res.error)
+        if ('error' in res) setDraftError(res.error)
         else if (res.result.failed.length > 0 || !res.result.verified) {
           const first = res.result.failed[0]
           setDraftError(first !== undefined ? `${value}${t('partialSep')}${first.error}` : t('pluginsVerifyFailed'))
@@ -1036,10 +993,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
         if ('cancelled' in outcome) { /* silent no-op */ }
         else if ('failed' in outcome) {
           const counts = partialCounts(outcome)
-          const partialText = counts === null || counts.done === 0
-            ? ''
-            : `${t('partialNofM').replace('{done}', String(counts.done)).replace('{total}', String(counts.total))}${t('partialSep')}`
-          setDraftError(`${partialText}${outcome.failed.error}`)
+          setDraftError(`${partialTextOf(counts, t)}${outcome.failed.error}`)
         } else {
           const executed = outcome.executed
           setAddResult(executed.restarted
@@ -1211,9 +1165,7 @@ export function PluginDialog({ t, target, diagnostic, bootGap, onRecheckDiagnost
       // (remove-first, serial, restart unless deferred, assert, ready recheck).
       if (add.length > 0 || remove.length > 0) {
         const res = await pluginApply(sshSpec.id, { add, remove, restart })
-        if ('cancelled' in res) {
-          setResult({ applied, failed, skipped: add.length + remove.length, restarted: false, deferred: true, verified: failed.length === 0, ready: null })
-        } else if ('error' in res) {
+        if ('error' in res) {
           setResultError(res.error)
           setResult({ applied, failed, skipped: 0, restarted: false, deferred: true, verified: failed.length === 0, ready: null })
         } else {

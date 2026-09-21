@@ -107,9 +107,7 @@ import {
   fetchSessionRunningLineage,
   getInstanceClient,
   InstanceUnavailableError,
-  isInstanceDomainMissing,
   isSessionNotAttached,
-  previewArchiveCleanup,
   purgeArchivedSessions,
   sessionPurgeClosure,
   stopArchivedSubtree,
@@ -119,19 +117,10 @@ import {
   type ArchiveCleanupPurgeResult,
 } from '../../src/shared/instance-api.ts'
 
-const PREVIEW_VALUE = {
-  archived: 4,
-  deletableSessions: 2,
-  deletableSubagents: 2,
-  skippedRunning: 1,
-  skippedLoaded: 0,
-}
-
 function cleanupClient(overrides: Record<string, unknown> = {}) {
   const nested = (payload: unknown) => ({ ok: true as const, value: { ok: true as const, value: payload } })
   return {
     archiveCleanup: {
-      preview: async () => nested({ ...PREVIEW_VALUE, ...overrides }),
       purge: async () => nested({
         deletedSessions: 2,
         deletedSubagents: 2,
@@ -164,11 +153,6 @@ function rpcStub(result: unknown, bodies: string[] = []): typeof fetch {
     return jsonResponse({ type: 'server-response', rpcId: envelope.rpcId, result: { ok: true, value: result } })
   }) as typeof fetch
 }
-
-test('previewArchiveCleanup decodes the domain counts', async () => {
-  const preview = await previewArchiveCleanup(cleanupClient() as never)
-  assert.deepEqual(preview, PREVIEW_VALUE)
-})
 
 test('purgeArchivedSessions decodes counts and per-item errors (partial failure is visible)', async () => {
   const client = cleanupClient({
@@ -238,13 +222,9 @@ test('archiveCleanup business failures decode the NESTED domain carrier (securit
   // show "没有可删除的已归档会话" while another purge is running).
   const client = {
     archiveCleanup: {
-      preview: async () => ({ ok: true as const, value: { ok: false as const, error: { code: 'busy', message: 'busy message', details: {} } } }),
       purge: async () => ({ ok: true as const, value: { ok: false as const, error: { code: 'registry-unreadable', message: 'unreadable', details: {} } } }),
     },
   }
-  await assert.rejects(() => previewArchiveCleanup(client as never), (error: unknown) => {
-    return error instanceof Error && error.message.startsWith('busy:')
-  })
   await assert.rejects(() => purgeArchivedSessions(client as never, ['s1']), (error: unknown) => {
     return error instanceof Error && error.message.startsWith('registry-unreadable:')
   })
@@ -262,35 +242,27 @@ test('archiveCleanup business failures decode the NESTED domain carrier (securit
 test('malformed nested domain carriers FAIL LOUD — never decode into empty counts (review follow-up F1)', async () => {
   // decodeDomainResult's fail-closed shape contract: the nested carrier must
   // be an object carrying a boolean ok, and ok:true must carry an OBJECT
-  // value (preview/purge domain values are always objects). Every other
-  // shape — value 42 / null / missing, an array or absent carrier, non-
-  // boolean ok — throws the loud zh malformed-domain error on BOTH wrappers,
-  // never a silent zero-count preview or an empty purge result.
+  // value (purge domain values are always objects). Every other shape —
+  // value 42 / null / missing, an array or absent carrier, non-boolean ok —
+  // throws the loud zh malformed-domain error, never a silent empty purge
+  // result.
   const resolveAs = (payload: unknown) => ({ ok: true as const, value: payload })
-  const shapes: Array<{ name: string; via: 'preview' | 'purge'; shape: unknown }> = [
-    { name: 'preview ok:true value is a number (42)', via: 'preview', shape: resolveAs({ ok: true as const, value: 42 }) },
-    { name: 'preview ok:true value is null', via: 'preview', shape: resolveAs({ ok: true as const, value: null }) },
-    { name: 'preview ok:true value is undefined', via: 'preview', shape: resolveAs({ ok: true as const, value: undefined }) },
-    { name: 'preview carrier is an array', via: 'preview', shape: resolveAs([{ ok: true, value: {} }]) },
-    { name: 'preview carrier absent (no value slot)', via: 'preview', shape: { ok: true as const } },
-    { name: 'preview ok is not boolean (string)', via: 'preview', shape: resolveAs({ ok: 'yes', value: {} }) },
-    { name: 'preview ok is not boolean (number)', via: 'preview', shape: resolveAs({ ok: 1, value: {} }) },
-    { name: 'purge ok:true value is a number (7)', via: 'purge', shape: resolveAs({ ok: true as const, value: 7 }) },
-    { name: 'purge carrier is an array', via: 'purge', shape: resolveAs([{ ok: true, value: {} }]) },
-    { name: 'purge carrier absent (no value slot)', via: 'purge', shape: { ok: true as const } },
-    { name: 'purge ok is not boolean', via: 'purge', shape: resolveAs({ ok: 'yes', value: {} }) },
+  const shapes: Array<{ name: string; shape: unknown }> = [
+    { name: 'purge ok:true value is a number (7)', shape: resolveAs({ ok: true as const, value: 7 }) },
+    { name: 'purge ok:true value is null', shape: resolveAs({ ok: true as const, value: null }) },
+    { name: 'purge ok:true value is undefined', shape: resolveAs({ ok: true as const, value: undefined }) },
+    { name: 'purge carrier is an array', shape: resolveAs([{ ok: true, value: {} }]) },
+    { name: 'purge carrier absent (no value slot)', shape: { ok: true as const } },
+    { name: 'purge ok is not boolean (string)', shape: resolveAs({ ok: 'yes', value: {} }) },
+    { name: 'purge ok is not boolean (number)', shape: resolveAs({ ok: 1, value: {} }) },
   ]
   for (const c of shapes) {
     const client = {
       archiveCleanup: {
-        preview: async () => c.shape,
         purge: async () => c.shape,
       },
     }
-    const run = c.via === 'preview'
-      ? () => previewArchiveCleanup(client as never)
-      : () => purgeArchivedSessions(client as never, ['s1'])
-    await assert.rejects(run, (error: unknown) => {
+    await assert.rejects(() => purgeArchivedSessions(client as never, ['s1']), (error: unknown) => {
       return error instanceof Error && error.message.startsWith('归档清理域返回了畸形结果')
     }, c.name)
   }
@@ -311,19 +283,20 @@ test('404 discrimination: instance_not_found stays a generic transport failure; 
   }) as typeof fetch, async () => {
     const client = getInstanceClient('local')
     await assert.rejects(
-      () => client.archiveCleanup.preview({}),
-      (error: unknown) => error instanceof Error && error.message.includes('HTTP 404') && !isInstanceDomainMissing(error),
+      () => client.archiveCleanup.purge(['s1'], true, []),
+      (error: unknown) => error instanceof Error && error.message.includes('HTTP 404')
+        && error.name !== 'InstanceDomainMissingError',
     )
     await assert.rejects(
-      () => client.archiveCleanup.preview({}),
-      (error: unknown) => isInstanceDomainMissing(error),
+      () => client.archiveCleanup.purge(['s1'], true, []),
+      (error: unknown) => error instanceof Error && error.name === 'InstanceDomainMissingError',
     )
   })
   assert.equal(calls.length, 2)
-  assert.ok(calls.every(call => call.url.includes('/api/i/local/api/archiveCleanup/preview')))
+  assert.ok(calls.every(call => call.url.includes('/api/i/local/api/archiveCleanup/purge')))
   const body = JSON.parse(String(calls[0]?.init?.body)) as { method?: string; payload?: unknown }
-  assert.equal(body.method, 'archiveCleanup/preview')
-  assert.deepEqual(body.payload, { args: {} })
+  assert.equal(body.method, 'archiveCleanup/purge')
+  assert.deepEqual(body.payload, { args: { sessionIds: ['s1'], force: true, protectSessionIds: [] } })
 })
 
 test('404 discrimination: oversized 404 bodies stay safe under the bounded read (review follow-up F10)', async () => {
@@ -338,30 +311,32 @@ test('404 discrimination: oversized 404 bodies stay safe under the bounded read 
   ]
   await withFetch((async () => responses.shift() as Response) as typeof fetch, async () => {
     const client = getInstanceClient('local')
-    await assert.rejects(() => client.archiveCleanup.preview({}), (error: unknown) => isInstanceDomainMissing(error))
-    await assert.rejects(() => client.archiveCleanup.preview({}), (error: unknown) => isInstanceDomainMissing(error))
+    await assert.rejects(
+      () => client.archiveCleanup.purge(['s1'], true, []),
+      (error: unknown) => error instanceof Error && error.name === 'InstanceDomainMissingError',
+    )
+    await assert.rejects(
+      () => client.archiveCleanup.purge(['s1'], true, []),
+      (error: unknown) => error instanceof Error && error.name === 'InstanceDomainMissingError',
+    )
   })
 })
 
-test('purge/preview wrappers map no-response outcomes to honest retry copy (design 24 §5)', async () => {
+test('purge wrapper maps no-response outcomes to honest retry copy (design 24 §5)', async () => {
   const timeout = new Error('signal timed out')
   timeout.name = 'TimeoutError'
   const network = new TypeError('fetch failed')
   const timeoutClient = {
     archiveCleanup: {
-      preview: async () => { throw timeout },
       purge: async () => { throw timeout },
     },
   }
   const networkClient = {
     archiveCleanup: {
-      preview: async () => { throw network },
       purge: async () => { throw network },
     },
   }
-  await assert.rejects(() => previewArchiveCleanup(timeoutClient as never), /预览超时或网络中断，请重试/)
   await assert.rejects(() => purgeArchivedSessions(timeoutClient as never, ['s1']), /可能仍在进行.*重复执行是安全的/)
-  await assert.rejects(() => previewArchiveCleanup(networkClient as never), /预览超时或网络中断，请重试/)
   await assert.rejects(() => purgeArchivedSessions(networkClient as never, ['s1']), /可能仍在进行.*重复执行是安全的/)
   // A deterministic business failure still surfaces verbatim (never remapped).
   const refused = {
@@ -388,7 +363,7 @@ test('503 classification: not-ready answers surface as InstanceUnavailableError 
     const client = getInstanceClient('local')
     // Prefix added by the wrapper-level wrapWireError.
     await assert.rejects(
-      () => client.archiveCleanup.preview({}),
+      () => client.archiveCleanup.purge(['s1'], true, []),
       (error: unknown) => error instanceof InstanceUnavailableError,
     )
   })

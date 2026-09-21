@@ -46,7 +46,11 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
      * browser here without error, but the chamber shell renders its own
      * multi-source session list instead (05 §2) and never calls this hole.
      */
-    'sidebar.workspaces': { kind: 'single'; scope: 'root'; owner: SidebarSectionOwnerProps }
+    'sidebar.workspaces': {
+      kind: 'single'; scope: 'root'
+      /** Kept for wire compatibility with the official declaration (chamber renders no occupant). */
+      owner: { wide: boolean; expandSidebar: () => void }
+    }
     /**
      * Per-workspace Git occupant rendered inside every workspace group of the
      * browsing region (workspace-centric discovery, design 08 §3.1). The
@@ -117,17 +121,6 @@ export interface SidebarPanelMetadata {
   order: number
   /** Row title and accessible name: resolved label, or the id when omitted. */
   label: string
-}
-
-/**
- * Owner share of the browser hole — kept for wire compatibility with the
- * official declaration (chamber renders no occupant here).
- */
-export interface SidebarSectionOwnerProps {
-  /** Shell fold-state output: wide renders the full browser, rail the icon column. */
-  wide: boolean
-  /** Rail icons request expansion; the browser rides the wide flip for focus. */
-  expandSidebar: () => void
 }
 
 /**

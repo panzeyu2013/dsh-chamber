@@ -78,6 +78,7 @@
  * exact reason) never offers a pointless button.
  */
 import { execFile } from 'node:child_process'
+import { describeError } from './describe-error.ts'
 import { accessSync, constants, statSync } from 'node:fs'
 import { readFile, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
@@ -86,6 +87,14 @@ import { createRequire } from 'node:module'
 import type { UpdateInfo } from 'electron-updater'
 import { sanitizeErrorText } from './sanitize-error.ts'
 export { sanitizeErrorText } from './sanitize-error.ts'
+import {
+  fetchGithubReleases,
+  isBoundedReleasesList,
+  releaseDownloadBase,
+  selectReleaseCandidate,
+  GITHUB_OWNER,
+  GITHUB_REPO,
+} from './update-discovery.ts'
 
 // electron-updater's CJS main exposes `autoUpdater` through an
 // Object.defineProperty getter — cjs-module-lexer cannot detect it, so an ESM
@@ -652,9 +661,9 @@ export interface UpdateController {
   restartAndInstallAsync?(): Promise<{ ok: true } | { ok: false; error: string }>
 }
 
-/** The update feed repository (release.yml uploads the same repo's artifacts). */
-export const GITHUB_OWNER = 'panzeyu2013'
-export const GITHUB_REPO = 'dsh-chamber'
+/** The update feed repository (release.yml uploads the same repo's artifacts).
+ *  Single source: update-discovery.ts (shared with the headless flavor). */
+export { GITHUB_OWNER, GITHUB_REPO } from './update-discovery.ts'
 
 /** Startup delay before the first silent check (let the app settle). */
 const CHECK_DELAY_MS = 15_000
@@ -691,64 +700,32 @@ function resolveChannel(version: string): 'stable' | 'beta' {
     : 'stable'
 }
 
-type GithubRelease = { tag_name?: unknown; draft?: unknown; prerelease?: unknown }
-type BetaVersion = readonly [bigint, bigint, bigint, bigint]
-const BETA_TAG_PATTERN = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-beta\.(0|[1-9]\d*)$/
-
-function betaVersion(tag: unknown): BetaVersion | null {
-  if (typeof tag !== 'string' || tag.length > 128) return null
-  const match = BETA_TAG_PATTERN.exec(tag)
-  return match === null ? null : [BigInt(match[1]), BigInt(match[2]), BigInt(match[3]), BigInt(match[4])]
-}
-
-function compareBetaVersion(left: BetaVersion, right: BetaVersion): number {
-  for (let index = 0; index < left.length; index += 1) {
-    if (left[index] < right[index]) return -1
-    if (left[index] > right[index]) return 1
-  }
-  return 0
-}
-
 /** Select an exact prerelease asset base. The returned URL never contains a
- * `latest` path and a malformed/draft/stable release can never become a feed. */
+ * `latest` path and a malformed/draft/stable release can never become a feed.
+ * Selection + the bounded-list shape check come from the shared electron-free
+ * update-discovery.ts; only the no-candidate failure stays updater-specific
+ * (the headless selector returns null and its call site decides). */
 export function betaReleaseDownloadBase(releases: unknown): string {
-  if (!Array.isArray(releases) || releases.length > 100) throw new Error('invalid GitHub releases response')
-  let selected: { tag: string; version: BetaVersion } | null = null
-  for (const candidate of releases as GithubRelease[]) {
-    if (candidate === null || typeof candidate !== 'object'
-      || candidate.draft !== false || candidate.prerelease !== true) continue
-    const version = betaVersion(candidate.tag_name)
-    if (version === null) continue
-    if (selected === null || compareBetaVersion(version, selected.version) > 0) {
-      selected = { tag: candidate.tag_name as string, version }
-    }
-  }
+  if (!isBoundedReleasesList(releases)) throw new Error('invalid GitHub releases response')
+  const selected = selectReleaseCandidate(releases, 'beta')
   if (selected === null) throw new Error('no published beta release is available')
-  return `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/download/${encodeURIComponent(selected.tag)}/`
+  return releaseDownloadBase(selected.tag)
 }
 
 /** Public GitHub discovery used only for beta. It deliberately queries the
- * bounded releases collection, then switches electron-updater to a generic
- * exact-tag feed; the GitHubProvider never gets a chance to fall back from
- * beta.yml to latest.yml. */
+ * bounded releases collection (shared implementation: update-discovery.ts),
+ * then switches electron-updater to a generic exact-tag feed; the
+ * GitHubProvider never gets a chance to fall back from beta.yml to latest.yml. */
 export async function resolveGithubBetaFeed(
   request: typeof fetch = globalThis.fetch,
   timeoutMs = 10_000,
 ): Promise<string> {
-  if (typeof request !== 'function') throw new Error('beta update discovery is unavailable')
-  const abort = new AbortController()
-  const timer = setTimeout(() => abort.abort(), timeoutMs)
-  timer.unref?.()
-  try {
-    const response = await request(
-      `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases?per_page=100`,
-      { headers: { Accept: 'application/vnd.github+json' }, signal: abort.signal },
-    )
-    if (!response.ok) throw new Error(`beta update discovery failed (HTTP ${response.status})`)
-    return betaReleaseDownloadBase(await response.json())
-  } finally {
-    clearTimeout(timer)
-  }
+  const releases = await fetchGithubReleases(request, {
+    timeoutMs,
+    unavailableMessage: 'beta update discovery is unavailable',
+    failureLabel: 'beta update discovery failed',
+  })
+  return betaReleaseDownloadBase(releases)
 }
 
 function resolveRuntimeBetaFeed(): Promise<string> {
@@ -908,7 +885,7 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
         options.onNativeUpdaterQuitting?.()
       })
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
+      const message = describeError(error)
       logger.warn('[updater] 无法订阅原生更新器退出事件（本次重启只能依赖 arming hook）：', sanitizeErrorText(message))
     }
   }
@@ -1086,7 +1063,7 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
   // flight can only ever be armed at phase `downloaded`) keep the historic
   // phase-'error' behavior exactly.
   autoUpdater.on('error', (error) => {
-    const message = error instanceof Error ? error.message : String(error)
+    const message = describeError(error)
     logger.warn('[updater]', message)
     if (restartInFlight || state.phase === 'downloaded') {
       releaseRestartFlight()
@@ -1111,7 +1088,7 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
         // seam or logger must not turn best-effort hygiene into an unhandled
         // rejection either.
       }).catch((error) => {
-        const message = error instanceof Error ? error.message : String(error)
+        const message = describeError(error)
         logger.warn('[updater] 更新缓存清理失败（已忽略）：', message)
       })
     }
@@ -1127,7 +1104,7 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
         const removed = await cleanupStaleUpdateCache(cacheDir, version)
         if (removed) logger.log('[updater] 已清理已安装版本的更新缓存：', cacheDir)
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
+        const message = describeError(error)
         logger.warn('[updater] 更新缓存清理失败（已忽略）：', message)
       }
     })()
@@ -1176,7 +1153,7 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
       // update info without a fresh successful check. The 'error' event above
       // preserves latestVersion (download errors need it for retry); this
       // catch clears it because we KNOW the failure was a check.
-      const message = error instanceof Error ? error.message : String(error)
+      const message = describeError(error)
       logger.warn('[updater] check failed:', message)
       setState({ phase: 'error', latestVersion: null, downloadPercent: null, releaseUrl: null, error: sanitizeErrorText(message) })
     } finally {
@@ -1250,7 +1227,7 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
         await autoUpdater.downloadUpdate()
         return { ok: true }
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error)
+        const message = describeError(error)
         logger.warn('[updater] download failed:', message)
         setState({ phase: 'error', error: sanitizeErrorText(message) })
         return { ok: false, error: sanitizeErrorText(message) }
@@ -1411,7 +1388,7 @@ export function createUpdateController(options: UpdateControllerOptions, deps?: 
         // in-place retry and surface the sanitized failure on the same
         // restartFailureText channel (phase deliberately stays `downloaded`;
         // `error` stays null — a restart failure is never a download failure).
-        const message = error instanceof Error ? error.message : String(error)
+        const message = describeError(error)
         logger.warn('[updater] restart failed (nothing armed):', message)
         releaseRestartFlight()
         setState({ restartFailureText: sanitizeErrorText(message) })

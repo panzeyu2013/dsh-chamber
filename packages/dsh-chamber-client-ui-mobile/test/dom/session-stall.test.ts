@@ -782,7 +782,9 @@ test('the shipped automatic-arm limits are the documented ones', () => {
   assert.equal(STALL_RESYNC_COOLDOWN_MS, 120_000)
   assert.equal(STALL_RESYNC_WINDOW_MS, 600_000)
   assert.equal(STALL_RESYNC_MAX, 3)
-  assert.equal(STALL_FAILED_MS, 180_000)
+  // Aligned with the desktop ladder's loadingFailedMs (design 14 §D4); the
+  // cross-tier lockstep is test/behavior/session-recovery-parity.test.ts.
+  assert.equal(STALL_FAILED_MS, 90_000)
 })
 
 test('a parked open is rebuilt automatically once, and the copy turns into the failure wording', () => {

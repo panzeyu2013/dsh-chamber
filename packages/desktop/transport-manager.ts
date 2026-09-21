@@ -60,9 +60,17 @@ import { EventEmitter } from 'node:events'
 import { spawn } from 'node:child_process'
 import type { SpawnOptions } from 'node:child_process'
 import net from 'node:net'
-import { closeSync, fsyncSync, mkdirSync, openSync, readFileSync, renameSync, writeSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { canonicalizeTransportInstanceInput, MAX_TRANSPORT_INSTANCES, signalChild } from './transport-provider.ts'
+import { liveTransportIdentityChanged, sshCredentialEndpointChanged } from './credential-identity.ts'
+// Failure text is single-sourced in describe-error.ts (2026-12 stage-2 merge);
+// the historical export name stays for the state-machine call sites.
+import { describeError } from './describe-error.ts'
+// The owner-only atomic replace (random O_EXCL tmp + 0600 + fsync + rename +
+// parent-directory fsync) is the same primitive every other userData store
+// uses - the registry no longer hand-writes a fixed-name .tmp path.
+import { atomicWritePrivateFileNoFollow, ensurePrivateDirectoryNoFollow } from './control-plane-module.ts'
 import { CHILD_LINE_MAX_CHARS, createBoundedLineProcessor } from './bounded-lines.ts'
 import { findFreeEphemeralPort } from './free-port.ts'
 import type {
@@ -221,17 +229,6 @@ export interface TransportManagerDeps {
 /** Status-change listener: listener(instanceId, statusProjection). */
 export type StatusChangedListener = (instanceId: string, status: TransportStatusProjection) => void
 
-/**
- * Optional registry commit preparation. It runs after the complete proposal
- * has been validated and normalized, but before either file is changed. The
- * returned synchronous commit runs after the new registry file is durable
- * and before in-memory publication or transport restart. If it throws, the
- * previous registry file is restored and the old runtime remains untouched.
- */
-export type PrepareRegistryCommit = (
-  next: readonly TransportInstanceSpec[],
-) => (() => void) | undefined
-
 /** Synchronous registry delta projected with the instances-changed push. The
  * removed ids come from main's authoritative before/saved snapshots, so a
  * rapid remove→re-add cannot be erased by a superseding async roster pull. */
@@ -266,10 +263,7 @@ export function computePasswordRetirementIds(
     if (seen.has(previous.id)) continue
     seen.add(previous.id)
     const current = afterById.get(previous.id)
-    if (current === undefined
-      || previous.host !== current.host
-      || previous.user !== current.user
-      || previous.sshPort !== current.sshPort) {
+    if (current === undefined || sshCredentialEndpointChanged(previous, current)) {
       retired.push(previous.id)
     }
   }
@@ -320,7 +314,7 @@ export function attemptCommittedRegistryPush(push: () => void):
 /** The runtime surface returned by createTransportManager. */
 export interface TransportManager {
   loadInstances(): TransportInstanceSpec[]
-  saveInstances(next: TransportInstanceInput[], prepareCommit?: PrepareRegistryCommit): TransportInstanceSpec[]
+  saveInstances(next: TransportInstanceInput[]): TransportInstanceSpec[]
   listInstances(): TransportInstanceSpec[]
   connect(id: string): TransportStatusProjection | null
   disconnect(id: string): void
@@ -453,18 +447,10 @@ interface CodedError extends Error {
 }
 
 /** Exception-safe formatter for provider hooks, injected deps and event data.
- * Catch blocks are part of the state machine and must themselves never throw. */
-export function describeTransportError(value: unknown): string {
-  try {
-    if (value instanceof Error && typeof value.message === 'string' && value.message !== '') return value.message
-  } catch { /* hostile Error proxy/getter */ }
-  try {
-    const text = String(value)
-    return text === '' ? 'unknown error' : text
-  } catch {
-    return 'unknown error'
-  }
-}
+ * Catch blocks are part of the state machine and must themselves never throw.
+ * Single-sourced in describe-error.ts (2026-12 stage-2 merge); this alias
+ * preserves the historical export name. */
+export const describeTransportError = describeError
 
 function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms))
@@ -476,17 +462,18 @@ function sleep(ms: number) {
  * concurrent writers because the runtime serializes all writes through
  * saveInstances).
  */
-function writeFileAtomic(filePath: string, text: string) {
-  const tmpPath = `${filePath}.tmp`
-  mkdirSync(dirname(filePath), { recursive: true })
-  const fd = openSync(tmpPath, 'w')
-  try {
-    writeSync(fd, text)
-    fsyncSync(fd)
-  } finally {
-    closeSync(fd)
-  }
-  renameSync(tmpPath, filePath)
+/**
+ * Persist the registry through the control-plane private-file primitive
+ * (2026-12 stage-2 single-sourcing): random O_EXCL temp + explicit 0600 +
+ * fsync + rename + parent-directory fsync, refusing a planted symlink /
+ * multi-link leaf fail-closed. The runtime serializes all writes through
+ * saveInstances, and the non-secret registry is now written owner-only like
+ * every other userData store instead of a fixed-name world-readable temp.
+ * The rollback path (a failed save rewrites the previous roster) is unchanged.
+ */
+function writeFileAtomic(filePath: string, text: string): void {
+  ensurePrivateDirectoryNoFollow(dirname(filePath), 0o700)
+  atomicWritePrivateFileNoFollow(filePath, text, { mode: 0o600 })
 }
 
 /** Default readiness probe: one bounded TCP connect to host:port (loopback default). */
@@ -1522,7 +1509,7 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
    * the registry starts projecting the replacement kind.
    * @returns the persisted instance list.
    */
-  function saveInstances(next: TransportInstanceInput[], prepareCommit?: PrepareRegistryCommit): TransportInstanceSpec[] {
+  function saveInstances(next: TransportInstanceInput[]): TransportInstanceSpec[] {
     if (!Array.isArray(next)) {
       const error: CodedError = new Error('instances must be an array')
       error.code = 'ssh_instances_invalid'
@@ -1565,30 +1552,21 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
       seenIds.add(normalized.id)
       const previous = instances.get(normalized.id)
       const state = previous === undefined ? undefined : states.get(normalized.id)
-      const kindChanged = previous !== undefined && previous.kind !== normalized.kind
       if (previous !== undefined && execIdentityChanged(previous, normalized)) {
         projectionResetIds.push(normalized.id)
       }
       // transport and insecureHttp are part of the live-transport identity:
       // switching ssh↔http (or http↔https) while live must tear down and
       // restart the transport so the projection/proxy URL never disagrees
-      // with the mechanism. (insecureHttp is NOT part of transportTargetChanged
-      // — the secret survives the switch, design 17 §9.1 — but the LIVE
-      // transport still restarts to re-register the new origin.) The same
+      // with the mechanism. (insecureHttp is NOT part of the credential-target
+      // comparison — the secret survives the switch, design 17 §9.1 — but the
+      // LIVE transport still restarts to re-register the new origin.) The same
       // applies to the SPKI pin (S23): a pin edit while live must restart so
       // verifyUp + the proxy registration pick up the new pin (the pin is not
-      // a credential — transportTargetChanged stays untouched, so the token/
+      // a credential — the binding fingerprints stay untouched, so the token/
       // password survive the edit).
-      const transportFieldsChanged = previous !== undefined && (kindChanged
-        || previous.transport !== normalized.transport
-        || previous.insecureHttp !== normalized.insecureHttp
-        || previous.spkiPin !== normalized.spkiPin
-        || previous.host !== normalized.host
-        || previous.user !== normalized.user
-        || previous.sshPort !== normalized.sshPort
-        || previous.remotePort !== normalized.remotePort
-        || previous.serviceName !== normalized.serviceName
-        || previous.remoteDshHome !== normalized.remoteDshHome)
+      // The live-transport field set is single-sourced in credential-identity.ts.
+      const transportFieldsChanged = previous !== undefined && liveTransportIdentityChanged(previous, normalized)
       if (transportFieldsChanged && state !== undefined) {
         // Always revoke the old generation, including the between-child gap
         // of a multi-stage exec where phase is idle and execChildren is
@@ -1598,32 +1576,12 @@ export function createTransportManager({ provider, providers, spawnFn, portProbe
       }
       kept.push(normalized)
     }
-    // The optional coordinator validates against defensive copies of the
-    // COMPLETE normalized proposal before any durable change. It returns a
-    // synchronous write-through operation to run at the publication barrier.
-    const commit = prepareCommit?.(kept.map(entry => ({ ...entry })))
-    const previous = listInstances()
     // Persist BEFORE mutating the in-memory registry: a failed write throws
     // while the registry (and every live transport) stays untouched, so the
-    // runtime and the UI never diverge on a partial save. A coordinated
-    // secondary store commits next; only then may transports observe/restart
-    // under the new registry incarnation.
+    // runtime and the UI never diverge on a partial save. Credential and
+    // metadata coordination is owned by connection-save.ts, which commits the
+    // secondary stores around this call and restores this file on failure.
     writeFileAtomic(instancesFile, `${JSON.stringify(kept, undefined, 2)}\n`)
-    try {
-      commit?.()
-    } catch (commitError) {
-      try {
-        writeFileAtomic(instancesFile, `${JSON.stringify(previous, undefined, 2)}\n`)
-      } catch (rollbackError) {
-        const error: CodedError = new Error(
-          `registry commit failed and the previous registry could not be restored: ${describeTransportError(rollbackError)}`,
-          { cause: commitError },
-        )
-        error.code = 'transport_registry_commit_incomplete_rollback'
-        throw error
-      }
-      throw commitError
-    }
     const nextIds = new Set(kept.map(entry => entry.id))
     for (const id of [...instances.keys()]) {
       if (!nextIds.has(id)) {

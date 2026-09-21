@@ -266,3 +266,45 @@ test('the generation fence is order-independent for equal generations and re-arm
     assert.deepEqual(seen, ['1', undefined, '1', undefined, '1'], 'a cleared source is re-registrable')
   } finally { dispose() }
 })
+
+test('every bridge channel isolates a throwing listener from its siblings (unified dispatch)', () => {
+  // Before the createChannel extraction only requestSessionListRefresh and
+  // setActiveSource isolated; a throwing subscriber starved every later one on
+  // the other channels. This locks the unified discipline on a channel that had
+  // none, with the thrower FIRST in subscription order.
+  const seen: string[] = []
+  const bad = chamberBridge.onRuntimeReport(() => { throw new Error('runtime listener exploded') })
+  const good = chamberBridge.onRuntimeReport((sourceId, report) => {
+    if (sourceId === 'channel-isolation-source') seen.push(report?.current ?? 'clear')
+  })
+  const originalError = console.error
+  console.error = () => undefined
+  try {
+    const producer = chamberBridge.registerInstanceRuntimeProducer('channel-isolation-source', firstProof)
+    producer.report({ current: 'one', sessions: {} })
+    producer.clear()
+  } finally {
+    console.error = originalError
+    bad()
+    good()
+    chamberBridge.retireInstanceProducers('channel-isolation-source')
+  }
+  assert.deepEqual(seen, ['one', 'clear'], 'the later listener must still receive every emit')
+})
+
+test('retireInstanceProducers drops the source plugin diagnostic with its producers', () => {
+  const sourceId = 'diagnostic-retire-source'
+  const seen: (string | undefined)[] = []
+  const off = chamberBridge.onPluginDiagnostic((changedSourceId, diagnostic) => {
+    if (changedSourceId === sourceId) seen.push(diagnostic?.state)
+  })
+  try {
+    chamberBridge.reportPluginDiagnostic(sourceId, { state: 'not-injected', message: 'cold graph', updatedAt: 1 })
+    assert.equal(chamberBridge.getPluginDiagnostics()[sourceId]?.state, 'not-injected')
+    chamberBridge.retireInstanceProducers(sourceId)
+    assert.equal(chamberBridge.getPluginDiagnostics()[sourceId], undefined, 'roster retirement must not leak a stale diagnostic')
+    assert.deepEqual(seen, ['not-injected', undefined])
+  } finally {
+    off()
+  }
+})

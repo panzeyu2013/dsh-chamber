@@ -8,35 +8,19 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import type { SessionStateHostInfo, SessionStateMode } from '@dsh-chamber/control-plane'
+import { PROTOCOL_VERSION } from '@dsh-chamber/control-plane'
 import {
-  PROTOCOL_VERSION,
+  createChamberSessionState,
   type SessionStateObserverStatus,
-} from '@dsh-chamber/control-plane'
-import { createChamberSessionState, createSessionStateStore } from '../../src/session-state.ts'
+} from '../../src/session-state.ts'
 import { FakeRequest, FakeResponse } from '../support/utils.ts'
-import { baselineItem, scratch, silentLogger } from './harness.ts'
+import { baselineItem, sessionSurfaceFor } from './harness.ts'
 
 let activeSurface: ReturnType<typeof createChamberSessionState>
 
+/** Session-state surface harness (shared factory; 2026-12 audit F40). */
 function surfaceFor(t: { after(fn: () => void): void }, observerOverrides: Partial<SessionStateObserverStatus> = {}) {
-  const store = createSessionStateStore({ stateDir: scratch(t), logger: silentLogger, now: () => 1_000 })
-  const host: SessionStateHostInfo = { now: 1_000, serviceable: true, state: 'ready' }
-  const observerStatus: SessionStateObserverStatus = {
-    mode: 'sse', ready: true, baselineAt: 900, lastEventAt: 950, reconnects: 0, lastError: null,
-    degraded: false, heldWaterfalls: 0, followReads: 0, followFailures: 0, clientId: 'mux-1',
-    eventsReceived: 0, baselines: 1, ...observerOverrides,
-  }
-  const surface = createChamberSessionState({
-    logger: silentLogger,
-    store,
-    observer: { status: () => observerStatus, hostInfo: () => host } as never,
-    enabled: true,
-    now: () => 1_000,
-    keepaliveMs: 30,
-  })
-  t.after(() => surface.closeAllStreams())
-  return { surface, store, observerStatus }
+  return sessionSurfaceFor(t, { observerOverrides })
 }
 
 async function get(): Promise<Record<string, unknown>> {

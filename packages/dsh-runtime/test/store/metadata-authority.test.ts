@@ -8,7 +8,7 @@
  *
  * P0 split: shared fixtures = test/support/store-fixtures.ts. Siblings:
  *   - dsh-runtime-store.test.ts (protection / journal / failure store)
- *   - disk-accounting.test.ts (runtimeDiskSummary accounting)
+ *   - disk-accounting.test.ts (runtimeDiskSummaryAsync accounting)
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';

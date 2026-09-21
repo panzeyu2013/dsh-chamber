@@ -502,7 +502,7 @@ test('adopt-only structural correlation failure (missing workspace id) never cal
       workspaceCreate: async () => { calls.push('workspace'); return { workspaceId: '', path: '/existing-wt', created: false } },
       sessionCreate: async () => { calls.push('session'); return 'session-fixed' },
     }, '/existing-wt', 'session-fixed'),
-    /不匹配/,
+    /does not match the request/,
   )
   assert.deepEqual(calls, ['workspace'])
 })
@@ -617,7 +617,9 @@ test('a definitive 404 host error surfaces as a no-recovery failure, never a rec
   const deps = {
     fetchGitFacts: async () => ({ repos: [], errors: [] }),
     hostCreate: async () => {
-      const error = new Error('git-host-not-loaded: Git 插件未在该实例加载（host 包缺失或未生效）。本地实例请重启桌面端；远程实例请在连接设置中重新下发 chamber host 包并点击“重启生效”后重试。')
+      // The raw message is the diagnostic fallback; the user-facing guide is
+      // localized via locales.gitHostNotLoaded (shared/action-error.ts).
+      const error = new Error('git-host-not-loaded: The Git plugin is not loaded in this instance (host package missing or inactive).')
       ;(error as { code?: string }).code = 'git-host-not-loaded'
       throw error
     },

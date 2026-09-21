@@ -349,6 +349,94 @@ test('applyPlugins: failed rows are journaled with ok:false and their error, nev
     { instanceId: 's1', name: 'bad-pkg', kind: 'add', specBefore: null, ok: false, error: 'remote: bad package name' },
   ])
 })
+test('applyPlugins: a non-ENOENT journal snapshot failure refuses the whole batch (P0-2: no row, nothing to undo)', async () => {
+  const order: string[] = []
+  const exec: ExecFn = async (_id, action, payload) => {
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
+      order.push('cat:snapshot')
+      return err('ssh: connect to host example.com port 22: Connection reset by peer')
+    }
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'dsh') {
+      order.push(['dsh', String(payload.argv?.[3]), String(payload.argv?.[4])].join(':'))
+      return ok()
+    }
+    order.push(action)
+    return ok()
+  }
+  const recorded: unknown[] = []
+  const journal: SshApplyJournalSink = { record: entry => recorded.push(entry) }
+  const result = await applyPlugins(exec, readyStatus, SEED_SPEC,
+    { remove: ['old-pkg'], add: ['up-pkg@^2.0.0'], restart: false }, { journal })
+  assert.equal(result.ok, false)
+  if (!result.ok) {
+    assert.match(result.error, /pre-change journal snapshot could not be read/)
+    assert.match(result.error, /Connection reset by peer/, 'the sanitized cause is reported, not a bare default')
+  }
+  // The defect (P0-2): the row used to execute and be recorded with
+  // specBefore null, so undoing it removed a plugin that was upgraded in
+  // place. Nothing may run, and no op may be recorded — an empty journal makes
+  // latestOkForTarget return null, so the undo IPC answers "no recent plugin
+  // change to undo" instead of issuing a remove.
+  assert.deepEqual(order, ['cat:snapshot'], 'no remote change may follow the failed snapshot read')
+  assert.deepEqual(recorded, [], 'no journal op may be recorded without a trustworthy pre-change spec')
+})
+test('applyPlugins: an unparseable snapshot manifest refuses the batch too (never an empty dependency map)', async () => {
+  const order: string[] = []
+  const exec: ExecFn = async (_id, action, payload) => {
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
+      order.push('cat:snapshot')
+      return ok('not a JSON manifest at all')
+    }
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'dsh') {
+      order.push(['dsh', String(payload.argv?.[3]), String(payload.argv?.[4])].join(':'))
+      return ok()
+    }
+    order.push(action)
+    return ok()
+  }
+  const recorded: unknown[] = []
+  const journal: SshApplyJournalSink = { record: entry => recorded.push(entry) }
+  const result = await applyPlugins(exec, readyStatus, SEED_SPEC,
+    { add: ['up-pkg@^2.0.0'], remove: [], restart: false }, { journal })
+  assert.equal(result.ok, false)
+  if (!result.ok) assert.match(result.error, /failed to parse remote package\.json/)
+  assert.deepEqual(order, ['cat:snapshot'], 'a manifest that cannot be parsed is not an empty dependency map')
+  assert.deepEqual(recorded, [])
+})
+test('applyPlugins: an ENOENT snapshot (absent profile) stays an empty snapshot — the batch still applies', async () => {
+  const order: string[] = []
+  let cats = 0
+  const exec: ExecFn = async (_id, action, payload) => {
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
+      cats += 1
+      if (cats === 1) {
+        order.push('cat:snapshot')
+        return err('cat: /root/.dsh/profiles/web/package.json: No such file or directory')
+      }
+      order.push('cat:verify')
+      return ok(manifestJson({ 'fresh-pkg': '^1.0.0' }))
+    }
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'dsh') {
+      order.push(['dsh', String(payload.argv?.[3]), String(payload.argv?.[4])].join(':'))
+      return ok()
+    }
+    return err('unexpected ' + action)
+  }
+  const recorded: Array<{ name: string; specBefore: string | null }> = []
+  const journal: SshApplyJournalSink = {
+    record: entry => recorded.push({ name: entry.name, specBefore: entry.specBefore }),
+  }
+  const result = await applyPlugins(exec, readyStatus, SEED_SPEC,
+    { add: ['fresh-pkg@^1.0.0'], remove: [], restart: false }, { journal })
+  assert.equal(result.ok, true)
+  if (result.ok) assert.equal(result.result.verified, true)
+  // verifyApplied re-pulls the manifest + chamber probes (several tagged
+  // 'cat:verify' reads); strip those and assert the only real change ran.
+  assert.equal(order[0], 'cat:snapshot', 'the snapshot read is the first remote call')
+  assert.deepEqual(order.filter(entry => entry !== 'cat:verify'), ['cat:snapshot', 'dsh:add:fresh-pkg@^1.0.0'],
+    'the absent profile must not block the batch')
+  assert.deepEqual(recorded, [{ name: 'fresh-pkg', specBefore: null }])
+})
 test('applyPlugins: without a journal sink the historical exec sequence is unchanged (no snapshot read)', async () => {
   const order: string[] = []
   const exec: ExecFn = async (_id, action, payload) => {

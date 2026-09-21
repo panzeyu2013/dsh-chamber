@@ -36,6 +36,7 @@ import { accessSync, constants as fsConstants, existsSync, mkdirSync, statSync, 
 import os from 'node:os'
 import path from 'node:path'
 import { INSTANCE_ID_PATTERN } from './transport-provider.ts'
+import { describeError } from './describe-error.ts'
 
 /** A normalized deep-link launch request (design 16 §3.1). */
 export interface VscodeLaunchRequest {
@@ -87,27 +88,9 @@ export function appendVscodeNewWindowParam(url: string): string {
 }
 
 /** Convert an arbitrary thrown value into a stable, non-empty diagnostic.
- * Even hostile proxies/getters/toString implementations must not make an
- * exception handler throw a second time and escape the structured result
- * channel. */
-export function describeUnknownError(error: unknown): string {
-  try {
-    if (error instanceof Error) {
-      const message = typeof error.message === 'string' ? error.message : ''
-      if (message !== '') return message
-      const name = typeof error.name === 'string' ? error.name : ''
-      if (name !== '') return name
-    }
-  } catch {
-    // Fall through to the guarded String conversion below.
-  }
-  try {
-    const text = String(error)
-    return text === '' ? 'unknown error' : text
-  } catch {
-    return 'unknown error'
-  }
-}
+ * Single-sourced in describe-error.ts (2026-12 stage-2 merge); this alias is
+ * kept because notifications.ts / open-in.ts import it from here. */
+export const describeUnknownError = describeError
 
 /** A bounded, normalized single-flight queue for OS deep-link launches.
  * Keys remain tracked after shift() while the launch is in flight and are

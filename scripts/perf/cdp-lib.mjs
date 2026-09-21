@@ -1,14 +1,16 @@
 /**
- * CDP 采集公共库（T0 场景表实机测量）。
- * 复用仓库既有 ws（经 control-plane 包解析，仓库根由 import.meta.url 定锚，
- * 任意 cwd 可运行），不加新依赖。用法见 boot-measure.mjs / switch-measure.mjs 头注。
+ * CDP 采集公共库 —— `scripts/gui-acceptance/cdp.mjs` 的薄封装（P1-3：
+ * 仓库里曾有两套 CDP 客户端；本文件只保留 perf 侧的历史 API 形状与采集助手，
+ * 协议载波、超时与 pending 清理全部复用 gui-acceptance 的实现）。
+ *
+ * 行为差异（有意收紧）：`send` 现在带 30s 超时（gui-acceptance 的语义），
+ * 不再依赖各调用点自己 Promise.race；`findPageTarget` 保持历史 fail-fast
+ * （一次 /json/list，不在 90s 窗口里等待）。
+ *
+ * 用法见 boot-measure.mjs / switch-measure.mjs 头注。
  */
-import { createRequire } from 'node:module'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
-const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..', '..')
-const require = createRequire(join(repoRoot, 'packages/control-plane/package.json'))
-const WebSocket = require('ws')
+import { CdpSession } from '../gui-acceptance/cdp.mjs'
+import { sleep } from '../lib/cli.mjs'
 
 export async function findPageTarget(port = 9333) {
   const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()
@@ -25,35 +27,23 @@ export async function findPageTarget(port = 9333) {
   return pages[0]
 }
 
+/**
+ * One CDP session with the historical perf shape:
+ * `{ ready, send, on, close }` where `send` resolves the raw protocol result
+ * (`{ result: { value } }` / `{ exceptionDetails }`) exactly as before.
+ */
 export function connect(targetWsUrl) {
-  const ws = new WebSocket(targetWsUrl)
-  let id = 0
-  const pending = new Map()
-  const listeners = new Map()
-  ws.on('message', d => {
-    const m = JSON.parse(String(d))
-    if (m.id !== undefined && pending.has(m.id)) {
-      const { res, rej } = pending.get(m.id)
-      pending.delete(m.id)
-      if (m.error) rej(new Error(`${m.error.code}: ${m.error.message}`))
-      else res(m.result)
-      return
-    }
-    if (m.method && listeners.has(m.method)) for (const fn of listeners.get(m.method)) fn(m.params)
-  })
-  const ready = new Promise((res, rej) => { ws.on('open', res); ws.on('error', rej) })
-  ws.on('close', () => {
-    const err = new Error('cdp ws closed')
-    for (const { res, rej } of pending.values()) rej(err)
-    pending.clear()
-  })
-  const send = (method, params = {}) => new Promise((res, rej) => {
-    const i = ++id
-    pending.set(i, { res, rej })
-    ws.send(JSON.stringify({ id: i, method, params }))
-  })
-  const on = (method, fn) => { if (!listeners.has(method)) listeners.set(method, []); listeners.get(method).push(fn) }
-  const close = () => ws.close()
+  const ready = CdpSession.connect(targetWsUrl)
+  const send = async (method, params = {}) => {
+    const session = await ready
+    return session.send(method, params)
+  }
+  const on = (method, fn) => {
+    void ready.then(session => session.onMessage(message => {
+      if (message.method === method) fn(message.params)
+    }))
+  }
+  const close = () => { void ready.then(session => session.close()) }
   return { ready, send, on, close }
 }
 
@@ -118,7 +108,7 @@ export async function pollState(cdp, send, fn, { intervalMs = 120, timeoutMs = 9
     }
     trail.push(s)
     if (s.done) return { ok: true, trail, elapsedMs: Date.now() - t0 }
-    await new Promise(res => setTimeout(res, intervalMs))
+    await sleep(intervalMs)
   }
   return { ok: false, trail, elapsedMs: Date.now() - t0 }
 }
@@ -136,13 +126,14 @@ export async function readPerf(cdp, send) {
 
 export function summarize(perf, phase = '') {
   const lts = [...(perf?.longtasks ?? [])].sort((a, b) => b.dur - a.dur)
+  const fcp = perf?.paints?.find(p => p.name === 'first-contentful-paint')?.start
   return {
     phase,
     ltCount: perf?.ltCount ?? lts.length,
     maxLongtaskMs: Math.round((perf?.maxLt ?? 0) * 10) / 10,
     topLongtasksMs: lts.slice(0, 5).map(l => Math.round(l.dur * 10) / 10),
     cls: perf?.cls ?? null,
-    fcpMs: perf?.paints?.find(p => p.name === 'first-contentful-paint')?.start != null ? Math.round(perf.paints.find(p => p.name === 'first-contentful-paint').start) : null,
+    fcpMs: fcp != null ? Math.round(fcp) : null,
     domContentLoadedMs: perf?.domContentLoaded != null ? Math.round(perf.domContentLoaded) : null,
     loadEndMs: perf?.loadEnd != null ? Math.round(perf.loadEnd) : null,
   }

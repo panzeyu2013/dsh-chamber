@@ -29,7 +29,9 @@ import Foundation
 enum TrustGuard {
 
     /// 信封尺寸上限：4 MiB（design 25 §4.4.1 ③「信封结构/尺寸上限（≤4 MiB）」）。
-    static let maxMessageBytes = 4 * 1024 * 1024
+    /// 单一定义 = `BridgeLimits.maxMessageBytes`（2026-12 单源化：与
+    /// FrameCodec.maxFrameBytes 同一预算，不再各写字面量）。
+    static let maxMessageBytes = BridgeLimits.maxMessageBytes
 
     /// origin 判定：把 urlString 解析为 URLComponents，与期望 origin 按
     /// `scheme://host:port` 精确比较（path/query/fragment 不参与——POC 按

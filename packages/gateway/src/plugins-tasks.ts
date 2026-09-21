@@ -59,10 +59,11 @@ import {
   MAX_PLUGIN_SPEC_CHARS,
   PLUGIN_NAME_PATTERN,
   PLUGIN_SPEC_PATTERN,
-  readPrivateFileNoFollow,
   registrySpecVersion,
   resolveNodeExecutable,
 } from '@dsh-chamber/control-plane'
+import { readPrivateTextOrNull } from './private-read.ts'
+import { messageOf, newestFirst } from './util.ts'
 import { deriveBootProtectedSet, gatewayProtectedSet } from './plugins-installed.ts'
 import { resolveDshCliEntry } from './dsh-path.ts'
 import type { SpawnFn } from './plugins-exec.ts'
@@ -253,10 +254,6 @@ export interface ChamberPluginTasks {
 interface DeferredStoreFile {
   version: 1
   intents: DeferredIntent[]
-}
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
 }
 
 /** Name + spec whitelist validation shared by install/materialize/remove. */
@@ -463,20 +460,22 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
   }
 
   function loadIntents(): DeferredIntent[] {
-    let value: { value: string }
+    let text: string | null
     try {
-      value = readPrivateFileNoFollow(deferredFilePath(), {
+      // Absent file (ENOENT) is the only empty answer; any other read failure
+      // is corrupt evidence handled below.
+      text = readPrivateTextOrNull(deferredFilePath(), {
         tightenMode: 0o600,
         requiredMode: 0o600,
         maxBytes: DEFERRED_INTENTS_MAX_BYTES,
       })
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
       return asideCorruptIntents(error)
     }
+    if (text === null) return []
     let parsed: unknown
     try {
-      parsed = JSON.parse(value.value)
+      parsed = JSON.parse(text)
     } catch (error) {
       return asideCorruptIntents(error)
     }
@@ -545,13 +544,6 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
     if (next.length === intents.length) return false
     persistIntents(next)
     return true
-  }
-
-  function newestFirst(intents: DeferredIntent[]): DeferredIntent[] {
-    return intents
-      .map((intent, index) => ({ intent, index }))
-      .sort((a, b) => b.intent.ts - a.intent.ts || b.index - a.index)
-      .map(entry => entry.intent)
   }
 
   /** Projection masking (design 21 §6.2/decision 18, P2 review): gateway-
@@ -821,26 +813,23 @@ export function createChamberPluginTasks(deps: ChamberPluginTasksDeps): ChamberP
       const manifestPath = join(stateDir, MANAGED_DSH_HOME_DIR, INSTALLED_PROFILE_DIR, 'package.json')
       let manifestText: string | null = null
       try {
-        manifestText = readPrivateFileNoFollow(manifestPath, {
+        // Absent manifest (fresh gateway before the first materialize) is the
+        // ONE empty answer the sweep trusts: nothing can be referenced through
+        // it — intents/ops below still protect their own. Any other failure is
+        // rethrown by the shared wrapper.
+        manifestText = readPrivateTextOrNull(manifestPath, {
           tightenMode: 0o600,
           maxBytes: INSTALLED_MANIFEST_MAX_BYTES,
-        }).value
+        })
       } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-          // Absent manifest (fresh gateway before the first materialize):
-          // nothing can be referenced through it — intents/ops below still
-          // protect their own. This is the ONE empty answer the sweep trusts.
-          manifestText = null
-        } else {
-          // Present but unreadable/unsafe (permissions, symlinked dir/leaf,
-          // oversized): the read face calls this profile_corrupt, and a read
-          // failure must never license deletion.
-          warn(
-            'plugins-tasks: staged-archive sweep skipped: the managed profile manifest is present but ' +
-            `unreadable (${messageOf(error)}); refusing to read that as "nothing is referenced" — staged archives are retained`,
-          )
-          return
-        }
+        // Present but unreadable/unsafe (permissions, symlinked dir/leaf,
+        // oversized): the read face calls this profile_corrupt, and a read
+        // failure must never license deletion.
+        warn(
+          'plugins-tasks: staged-archive sweep skipped: the managed profile manifest is present but ' +
+          `unreadable (${messageOf(error)}); refusing to read that as "nothing is referenced" — staged archives are retained`,
+        )
+        return
       }
       if (manifestText !== null) {
         let parsed: unknown

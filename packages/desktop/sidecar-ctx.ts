@@ -108,7 +108,9 @@
  * loud 的 0600 plaintext 回退（main 无 keychain 分支同语义），绝不静默。
  */
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, renameSync } from 'node:fs'
+import { describeError } from './describe-error.ts'
+import { preserveFileAside } from './store-file-hygiene.ts'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { PlaneHandle } from '@dsh-chamber/control-plane'
@@ -143,6 +145,11 @@ import {
   createTransportManager,
   type TransportManager,
 } from './transport-manager.ts'
+// Single-sourced OS-resume re-probe (2026-12 stage-2 item 6) — main.ts binds
+// its own transportManager/quitRequested facts to the same implementation.
+// Re-exported so this module keeps its historical surface.
+import { reconnectStaleTransports } from './transport-reconnect.ts'
+export { reconnectStaleTransports }
 import type { TransportInstanceSpec } from './transport-provider.ts'
 import {
   cleanupStaleAskpassHelpers,
@@ -448,43 +455,6 @@ export interface HeadlessCtxAssembly {
 }
 
 /**
- * OS 唤醒即时重探（design 14 D4 ②，主进程侧；main.ts:679-697 判据逐字对齐）：
- * 只触碰**瞬时失败**的实例——phase error/degraded 且 **非终态**
- * （requiresUserAction !== true；认证失败/verifyUp 终态等确定性错误绝不自动
- * 重试，05 §7.6 纪律）；**绝不触碰 idle**（保持手动断开语义）。
- *
- * 连接动作复用 core 已有的 `TransportManager.connect`（对 connecting/ready
- * 幂等，重复唤醒无副作用）——不新写重连机制，只搬 main 的判据/早退。
- *
- * 早退门与 main 一致：quit 在途（dispose 已开始）不得再 spawn 新传输，否则
- * dispose 完成后可能留下孤儿 ssh 子进程；transportManager 缺失（装配前）
- * 同样 no-op。单实例 connect 抛错只 loud，绝不反噬唤醒帧。
- *
- * @param sm 传输管理器（sidecar-ctx 的进程内单例；null = 尚未装配）
- * @param isQuitting 退出在途判据（dispose 置位；main 的 quitRequested 对偶）
- * @param warn 失败日志腿（main 的 console.warn 同形）
- */
-export function reconnectStaleTransports(
-  sm: Pick<TransportManager, 'listInstances' | 'status' | 'connect'> | null,
-  isQuitting: () => boolean,
-  warn: (message: string, error: unknown) => void,
-): void {
-  if (isQuitting()) return
-  if (sm === null) return
-  for (const instance of sm.listInstances()) {
-    const status = sm.status(instance.id)
-    if (status === null) continue
-    if (status.phase !== 'error' && status.phase !== 'degraded') continue
-    if (status.requiresUserAction === true) continue
-    try {
-      sm.connect(instance.id)
-    } catch (error) {
-      warn(`[sidecar] 唤醒重探 ${instance.id} 失败：`, error)
-    }
-  }
-}
-
-/**
  * S2·F13 退出清理并行编排：把 dispose 与 cp.stop 两条腿**同时启动**、一起等待
  * （allSettled 语义——任一腿失败只 loud，不阻断另一条腿、不改变调用方/退出码
  * 语义）。与 Electron main will-quit 的单个 Promise.allSettled（main.ts
@@ -581,7 +551,7 @@ export async function buildHeadlessCtx(
   try {
     startupMetadataHealth = detectRuntimeMetadataHealth(runtimeBaseDir, shellVersion)
   } catch (error) {
-    runtimeBootstrapFailure = `无法检查 dsh 运行时选择元数据：${sanitizeErrorText(error instanceof Error ? error.message : String(error))}`
+    runtimeBootstrapFailure = `无法检查 dsh 运行时选择元数据：${sanitizeErrorText(describeError(error))}`
   }
   // A shell-version fallback is itself a runtime/data switch（main 1125-1131 注释
   // 同源——持久化内建激活意图先于 override invalidation，崩溃不得无快照回内建）。
@@ -631,7 +601,7 @@ export async function buildHeadlessCtx(
           )
         }
       } catch (error) {
-        runtimeBootstrapFailure = `无法持久化 shell 更新回落事务：${sanitizeErrorText(error instanceof Error ? error.message : String(error))}`
+        runtimeBootstrapFailure = `无法持久化 shell 更新回落事务：${sanitizeErrorText(describeError(error))}`
       }
     }
   }
@@ -656,7 +626,7 @@ export async function buildHeadlessCtx(
     if (loaded.notice !== null) console.error(`[sidecar] ${loaded.notice}`)
     settings = loaded.settings
   } catch (error) {
-    console.error('[sidecar] chamber settings 读取异常（回退默认值）：' + sanitizeErrorText(error instanceof Error ? error.message : String(error)))
+    console.error('[sidecar] chamber settings 读取异常（回退默认值）：' + sanitizeErrorText(describeError(error)))
   }
   // main 1306-1313 的 keep-awake / 登录自启启动 reconcile 为 Electron 宿主腿
   // （setKeepAwakeActive/applyLaunchAtLogin，同步应用加载值）。Swift flavor：
@@ -752,12 +722,11 @@ export async function buildHeadlessCtx(
     // 语义与 main 1452-1466 逐字同向。
     console.error('[sidecar] 加载 SSH 实例失败：', loadError)
     const file = instancesFilePath(runtimeBaseDir)
-    try {
-      renameSync(file, `${file}.corrupt`)
-      console.warn(`[sidecar] 已保留损坏的实例文件为 ${file}.corrupt`)
-    } catch (renameError) {
-      console.error('[sidecar] 保留损坏实例文件失败：', renameError)
-    }
+    // The rename itself is single-sourced in store-file-hygiene.preserveFileAside
+    // (2026-12 stage-2 item 5); only the wording stays flavor-specific.
+    const aside = preserveFileAside(file, '.corrupt')
+    if (aside.ok) console.warn(`[sidecar] 已保留损坏的实例文件为 ${aside.path}`)
+    else console.error('[sidecar] 保留损坏实例文件失败：', aside.error)
   }
   // 初始来源代际同步（main 1491——installIpcHandlers 之前建立首代证明，
   // 装配序与 main 相同：先 sync 后 handler 注册）。
@@ -1015,7 +984,7 @@ export async function buildHeadlessCtx(
         }
       } catch (err) {
         if (!ownsSeed()) return
-        const detail = err instanceof Error ? err.message : String(err)
+        const detail = describeError(err)
         console.warn(`[sidecar] chamber host seed error for ${id}: ${detail}`)
         appendSeedLog('error', `chamber host 包注入异常：${detail}`)
       } finally {
@@ -1420,7 +1389,7 @@ export async function buildHeadlessCtx(
       .catch((error) => {
         // Retain the marker: the next safe startup/operation retries. Prune
         // failure is disk hygiene, not permission to block a verified tree.
-        console.error('[sidecar] dsh runtime store prune failed:', sanitizeErrorText(error instanceof Error ? error.message : String(error)))
+        console.error('[sidecar] dsh runtime store prune failed:', sanitizeErrorText(describeError(error)))
       })
       .finally(() => {
         if (storePruneOperation === operation) storePruneOperation = null
@@ -1582,7 +1551,7 @@ export async function buildHeadlessCtx(
       }
     } catch (error) {
       snapshotProjection = {
-        snapshotError: sanitizeErrorText(error instanceof Error ? error.message : String(error)),
+        snapshotError: sanitizeErrorText(describeError(error)),
       }
     }
     let diskProjection: Parameters<typeof runtimeInstance.setLifecycle>[0]
@@ -1613,7 +1582,7 @@ export async function buildHeadlessCtx(
       } catch (error) {
         lastDiskEvidence = {
           usage: null,
-          error: sanitizeErrorText(error instanceof Error ? error.message : String(error)),
+          error: sanitizeErrorText(describeError(error)),
         }
         diskProjection = {
           diskUsage: null,
@@ -1730,11 +1699,6 @@ export async function buildHeadlessCtx(
       throw new Error('无法确认内建 dsh 运行时版本')
     }
     return {
-      // 与 Electron 侧同源：期望集按实际 seed 的宿主域派生（getter 在 gate
-      // 读取时求值，届时本事务 seed 已完成）。
-      get probeExpectedNames() {
-        return activationProbeNamesForDomains(planeRef.current?.seededProbeDomains ?? [])
-      },
       sourceVersion: bundledVersion,
       sourceIsBuiltin: true,
       sourceWasKnownGood: true,
@@ -1786,6 +1750,12 @@ export async function buildHeadlessCtx(
         isBuiltin,
         signal,
       ),
+      // 与 Electron 侧同源：期望集按实际 seed 的宿主域派生，且必须是惰性
+      // 函数——shared core 在探针 run 返回后调用它（ApplyDeps 侧），此时
+      // startAndProbeRuntime 内的 spawn 已完成 seed，与传给
+      // runRuntimeActivationProbes 的 hostDomainNames 同源同快照（2026-12 P0：
+      // 值/对象属性位置错误会让 Swift flavor 的期望集恒为默认全量）。
+      probeExpectedNames: () => activationProbeNamesForDomains(planeRef.current?.seededProbeDomains ?? []),
       stopHost: () => {
         const livePlane = planeRef.current
         if (livePlane === null) throw new Error('control plane not initialized')
@@ -2006,7 +1976,7 @@ export async function buildHeadlessCtx(
       return false
     } catch (error) {
       await planeRef.current?.stopLocal().catch(() => undefined)
-      await publishBlockedStartup(`元数据恢复失败：${error instanceof Error ? error.message : String(error)}`)
+      await publishBlockedStartup(`元数据恢复失败：${describeError(error)}`)
       return false
     }
   }
@@ -2036,7 +2006,7 @@ export async function buildHeadlessCtx(
       })
     } catch (error) {
       await planeRef.current?.stopLocal().catch(() => undefined)
-      await publishBlockedStartup(error instanceof Error ? error.message : String(error))
+      await publishBlockedStartup(describeError(error))
     }
   }
 
@@ -2067,7 +2037,7 @@ export async function buildHeadlessCtx(
       try {
         metadataHealth = detectRuntimeMetadataHealth(runtimeBaseDir, shellVersion)
       } catch (error) {
-        await publishBlockedStartup(`无法检查 dsh 运行时选择元数据：${error instanceof Error ? error.message : String(error)}`)
+        await publishBlockedStartup(`无法检查 dsh 运行时选择元数据：${describeError(error)}`)
         return null
       }
       if (metadataHealth.status === 'recovery-in-progress') {
@@ -2170,7 +2140,7 @@ export async function buildHeadlessCtx(
           })
         } catch (error) {
           await planeRef.current?.stopLocal().catch(() => undefined)
-          await publishBlockedStartup(error instanceof Error ? error.message : String(error))
+          await publishBlockedStartup(describeError(error))
         }
         return null
       }
@@ -2198,7 +2168,7 @@ export async function buildHeadlessCtx(
         try {
           sourceFacts = readActivationFacts()
         } catch (error) {
-          await publishBlockedStartup(error instanceof Error ? error.message : String(error))
+          await publishBlockedStartup(describeError(error))
           return null
         }
       }
@@ -2308,16 +2278,16 @@ export async function buildHeadlessCtx(
             )
             return result
           } catch (rollbackError) {
-            await publishBlockedStartup(`运行时探针失败且自动回退未完成：${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`)
+            await publishBlockedStartup(`运行时探针失败且自动回退未完成：${describeError(rollbackError)}`)
             return result
           }
         }
-        await publishBlockedStartup(error instanceof Error ? error.message : String(error))
+        await publishBlockedStartup(describeError(error))
       }
       return result
     })().catch(async (error) => {
       await planeRef.current?.stopLocal().catch(() => undefined)
-      await publishBlockedStartup(error instanceof Error ? error.message : String(error))
+      await publishBlockedStartup(describeError(error))
       return null
     }).finally(() => {
       runtimeInternalStart = false
@@ -2327,7 +2297,7 @@ export async function buildHeadlessCtx(
       runtimeOperation = null
       void runStorePruneIfNeeded()
       void runSnapshotMaintenance().catch(error => {
-        console.error('[sidecar] dsh runtime snapshot maintenance failed:', sanitizeErrorText(error instanceof Error ? error.message : String(error)))
+        console.error('[sidecar] dsh runtime snapshot maintenance failed:', sanitizeErrorText(describeError(error)))
       })
     })
     runtimeOperation = operation
@@ -2388,7 +2358,7 @@ export async function buildHeadlessCtx(
       return result
     })().catch(async (error) => {
       await planeRef.current?.stopLocal().catch(() => undefined)
-      await publishBlockedStartup(`restart-exhausted 回退失败：${error instanceof Error ? error.message : String(error)}`)
+      await publishBlockedStartup(`restart-exhausted 回退失败：${describeError(error)}`)
       return null
     }).finally(() => {
       runtimeInternalStart = false
@@ -2398,7 +2368,7 @@ export async function buildHeadlessCtx(
       runtimeOperation = null
       void runStorePruneIfNeeded()
       void runSnapshotMaintenance().catch(error => {
-        console.error('[sidecar] dsh runtime snapshot maintenance failed:', sanitizeErrorText(error instanceof Error ? error.message : String(error)))
+        console.error('[sidecar] dsh runtime snapshot maintenance failed:', sanitizeErrorText(describeError(error)))
       })
     })
     runtimeOperation = operation
@@ -2459,7 +2429,7 @@ export async function buildHeadlessCtx(
       return null
     })().catch(async (error) => {
       await planeRef.current?.stopLocal().catch(() => undefined)
-      await publishBlockedStartup(`元数据恢复事务失败：${error instanceof Error ? error.message : String(error)}`)
+      await publishBlockedStartup(`元数据恢复事务失败：${describeError(error)}`)
       return null
     }).finally(() => {
       runtimeInternalStart = false
@@ -2551,7 +2521,7 @@ export async function buildHeadlessCtx(
   const knownGoodPromotionTimer = setInterval(() => {
     if (quittingRequested || runtimeOperation !== null || (planeRef.current?.localProcessAlive ?? false) === false) return
     try { promoteDueCandidates(runtimeBaseDir) } catch (error) {
-      console.error('[sidecar] known-good 晋升检查失败：', sanitizeErrorText(error instanceof Error ? error.message : String(error)))
+      console.error('[sidecar] known-good 晋升检查失败：', sanitizeErrorText(describeError(error)))
     }
   }, 60 * 60 * 1_000)
   knownGoodPromotionTimer.unref()
@@ -2626,7 +2596,7 @@ export async function buildHeadlessCtx(
           }
         }
       } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error)
+        const detail = describeError(error)
         console.error(`[sidecar] keep-awake host leg failed: ${detail}`)
         throw error
       }
@@ -2652,7 +2622,7 @@ export async function buildHeadlessCtx(
         }
         return { ok: true }
       } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error)
+        const detail = describeError(error)
         console.error(`[sidecar] login-item host leg failed: ${detail}`)
         return { ok: false, error: detail }
       }
@@ -2866,7 +2836,7 @@ export async function buildHeadlessCtx(
       if (snapshot.status === 'degraded' || snapshot.status === 'restarting'
         || snapshot.status === 'error' || snapshot.status === 'restart-exhausted') {
         try { resetCandidateHealthWindow(runtimeBaseDir) } catch (error) {
-          console.error('[sidecar] known-good 健康窗口重置失败：', sanitizeErrorText(error instanceof Error ? error.message : String(error)))
+          console.error('[sidecar] known-good 健康窗口重置失败：', sanitizeErrorText(describeError(error)))
         }
       }
       if (snapshot.status === 'restart-exhausted') void runRestartExhaustedRollback()
@@ -2896,7 +2866,7 @@ export async function buildHeadlessCtx(
     } catch (error) {
       console.error('[sidecar] dsh 运行时启动事务失败：', error)
       runtimeStartBlocked = true
-      runtimeInstance.setLifecycle({ phase: 'failed', error: error instanceof Error ? error.message : String(error) })
+      runtimeInstance.setLifecycle({ phase: 'failed', error: describeError(error) })
     }
   }
 
@@ -2962,6 +2932,7 @@ export async function buildHeadlessCtx(
       transportManager,
       () => quittingRequested,
       (message, error) => console.warn(message, error),
+      '[sidecar]',
     ),
   }
 }

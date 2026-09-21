@@ -6,7 +6,8 @@ import { gitCoordinator, removeWorktree, WorktreeDirtyError } from '../shared/co
 import { GitSagaError } from '../shared/saga.ts'
 import { GitWorktreeRpcError } from '../shared/git-api.ts'
 import { collectSessionClosure } from '../shared/git-facts.ts'
-import { removeFailureCode, removeFailureCopyKey, removeRunningNotes } from '../shared/remove-notes.ts'
+import { gitActionErrorCode, gitActionErrorText } from '../shared/action-error.ts'
+import { removeRunningNotes } from '../shared/remove-notes.ts'
 import { discardAuthorized, nextDiscardGate } from '../shared/discard-gate.ts'
 import type { DiscardGateFacts, DiscardGateKind } from '../shared/discard-gate.ts'
 import type { WorkspaceGitInjected } from './injected.ts'
@@ -252,25 +253,18 @@ export function RemoveWorktreeDialog({
       // discard authorization and state its warning: the NEXT `Remove` click
       // opens the acknowledgement (the refusal itself does not open it), so the
       // user can authorize and retry without closing.
-      if (error instanceof WorktreeDirtyError) {
-        setFreshDirty(true)
-        setRemoveError(error instanceof Error ? error.message : String(error))
-      } else if (isSubmoduleRefusal(error)) {
+      if (isSubmoduleRefusal(error)) {
         setSubmoduleBlock(true)
         setDiscardSubmodules(false)
       } else {
-        // Host refusals a user can hit from this dialog get LOCALIZED copy
-        // (review G1-4: `running-agent` used to surface as the raw English
-        // host string). The fresh-preflight `worktree-dirty` refusal also ARMS
-        // the discard acknowledgement, exactly like WorktreeDirtyError — the
-        // user can authorize and retry without closing. Unmapped codes keep the
-        // host's own message (honest, if English).
-        const code = removeFailureCode(error)
-        if (code === 'worktree-dirty') setFreshDirty(true)
-        const key = removeFailureCopyKey(code)
-        setRemoveError(key === undefined
-          ? (error instanceof Error ? error.message : String(error))
-          : t(key))
+        // Both the local preflight marker and the host's own refusal carry the
+        // SAME `worktree-dirty` code, so one check arms the discard
+        // acknowledgement (review 2026-08 P2-1; review G1-4 for the host half).
+        if (error instanceof WorktreeDirtyError || gitActionErrorCode(error) === 'worktree-dirty') setFreshDirty(true)
+        // Every user-reachable refusal resolves its code to localized copy
+        // (shared/action-error.ts); only an unmapped failure keeps the raw
+        // message, which this package mints in English.
+        setRemoveError(gitActionErrorText(error, t))
       }
     }
   }

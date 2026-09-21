@@ -60,8 +60,6 @@ export type SaveConnectionResult =
  */
 export interface DesktopSshSurface {
   instances_get(): Promise<SshInstanceSpec[]>
-  /** Legacy compatibility channel: exact unchanged no-op roster only. */
-  instances_set(instances: SshInstanceSpec[]): Promise<SshInstanceSpec[]>
   /** Exact id-addressed main-owned delete; an absent id is an idempotent no-op. */
   delete_connection(id: string): Promise<SshInstanceSpec[]>
   /** Main-owned registry + write-only credential transaction. */
@@ -638,7 +636,6 @@ export interface RuntimeSurface {
 function desktopSshApi(): DesktopSshSurface {
   return {
     instances_get: () => ipcRenderer.invoke('desktop_ssh_instances_get'),
-    instances_set: instances => ipcRenderer.invoke('desktop_ssh_instances_set', instances),
     delete_connection: id => ipcRenderer.invoke('desktop_ssh_delete_connection', { id }),
     save_connection: (previousId, input, credentials) => ipcRenderer.invoke('desktop_ssh_save_connection', { previousId, input, credentials }),
     set_password: (id, password) => ipcRenderer.invoke('desktop_ssh_set_password', { id, password }),

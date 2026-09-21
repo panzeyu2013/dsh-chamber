@@ -66,7 +66,9 @@ test('appendPending records durable pending ops; recent is newest-first and pers
   assert.equal(recent[2]!.initiator, 'test-desktop')
   assert.equal(recent[2]!.spec, 'pkg-a@^1.0.0')
   assert.equal(journal.recent(2).length, 2)
-  assert.equal(journal.latestFailed(), null)
+  // (journal.latestFailed() was removed as a zero-consumer API, 2026-12 audit
+  // F6; the same fact is asserted through the surviving projection.)
+  assert.equal(journal.recent().some(op => op.status === 'failed'), false)
 
   if (posix) {
     assert.equal(mode(thirdPartyRoot(stateDir)), 0o700)
@@ -101,7 +103,7 @@ test('markTerminal records ok/failed/blocked (+error/restarted) and no-ops on a 
 
   const latest = journal.recent()
   assert.deepEqual(latest.map(op => op.status), ['blocked', 'failed', 'ok'])
-  assert.equal(journal.latestFailed()?.id, failedId)
+  assert.equal(latest.find(op => op.status === 'failed')?.id, failedId)
 
   // Re-marking a terminal op can attach a later restart outcome.
   const reMarked = journal.markTerminal(failedId, { status: 'failed', restarted: 'failed' })

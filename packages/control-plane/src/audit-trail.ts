@@ -16,47 +16,48 @@
  * wrapper keeps its own loud-but-non-fatal contract (an audit trail must
  * never take auth/connection management down with it).
  *
+ * Since 2026-12 the no-follow/identity/mode/fsync primitives themselves are
+ * single-sourced in private-file.ts (inspectPrivateLeafNoFollow,
+ * openPrivateAppendNoFollow, writePrivateFdAll, removePrivateFileNoFollow,
+ * ensurePrivateDirectoryNoFollow); this module keeps only the audit-specific
+ * policy (one-slot rotation, evidence-preserving abort, whitelist serializer)
+ * on top of them.
+ *
  * Pure Node built-ins + the control-plane private-file helpers — no
  * electron, no IPC.
  */
-import {
-  closeSync,
-  constants,
-  fchmodSync,
-  fstatSync,
-  fsyncSync,
-  lstatSync,
-  mkdirSync,
-  openSync,
-  renameSync,
-  writeSync,
-  type Stats,
-} from 'node:fs'
+import { closeSync, fstatSync, fsyncSync, renameSync } from 'node:fs'
 import { dirname } from 'node:path'
 import {
+  assertPrivateLeafStatNoFollow,
+  ensurePrivateDirectoryNoFollow,
+  inspectPrivateLeafNoFollow,
+  openPrivateAppendNoFollow,
   removePrivateFileNoFollow,
+  samePrivateIdentity,
   syncPrivateDirectoryNoFollow,
+  writePrivateFdAll,
   type PrivateFileIdentity,
 } from './private-file.ts'
 
 /** Rotation cap of the active audit file (5 MiB; the trail is bounded at
- * 2 × cap including `<file>.1`). */
+ * 2 × cap including the `"<file>.1"` archive). */
 export const AUDIT_TRAIL_MAX_BYTES = 5 * 1024 * 1024
 
 /** One non-secret audit event. Every field is public metadata only; no field
  * may ever carry a credential, cookie or session body (S24). */
 export interface AuditTrailEvent {
-  /** ISO-8601 timestamp (e.g. `new Date().toISOString()`). */
+  /** ISO-8601 timestamp (e.g. new Date().toISOString()). */
   ts: string
-  /** Event name — e.g. `transport_phase`, `login_success`,
-   * `login_invalid_credentials`, `credential_set`. */
+  /** Event name — e.g. transport_phase, login_success,
+   * login_invalid_credentials, credential_set. */
   event: string
   /** Non-secret source (registry instance id; gateway login events use
-   * kind `gateway`). */
+   * kind gateway). */
   sourceId?: string
-  /** Target kind (`dsh` | `gateway`). */
+  /** Target kind (dsh | gateway). */
   kind?: string
-  /** Transport method (`ssh` | `http`). */
+  /** Transport method (ssh | http). */
   transport?: string
   /** Non-secret detail (phase, auth-result code, client address, …). */
   detail?: string
@@ -80,130 +81,48 @@ export function serializeAuditEvent(event: AuditTrailEvent): Record<string, stri
   return line
 }
 
-interface AuditLeaf {
-  identity: PrivateFileIdentity
-  size: number
-}
-
-function identityOf(stat: Stats): PrivateFileIdentity {
-  return { dev: stat.dev, ino: stat.ino }
-}
-
-function sameIdentity(left: PrivateFileIdentity, right: PrivateFileIdentity): boolean {
-  return left.dev === right.dev && left.ino === right.ino
-}
-
-function assertSafeStat(path: string, stat: Stats): AuditLeaf {
-  if (stat.isSymbolicLink() || !stat.isFile() || stat.nlink !== 1) {
-    throw new Error(`audit leaf is not a single-link regular file: ${path}`)
-  }
-  return { identity: identityOf(stat), size: stat.size }
-}
-
-/** lstat is deliberate: an attacker-controlled symlink is evidence, never an
- * absent audit file. Only ENOENT is treated as absence. */
-function inspectLeaf(path: string): AuditLeaf | null {
-  try {
-    return assertSafeStat(path, lstatSync(path))
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-    throw error
-  }
-}
-
-function inspectExpectedLeaf(path: string, expected: PrivateFileIdentity): AuditLeaf {
-  const current = inspectLeaf(path)
-  if (current === null || !sameIdentity(current.identity, expected)) {
-    throw new Error(`audit leaf identity changed: ${path}`)
-  }
-  return current
-}
-
-function noFollowFlag(): number {
-  return typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0
-}
-
-/** Open the exact active identity (or exclusively create a missing leaf),
- * tighten it through the descriptor, then prove the namespace still names
- * that same single-link inode.
- *
- * POSIX mode discipline only: Windows chmod/stat can express just the
- * read-only attribute, so a mode can never equal 0o600 there — enforcing and
- * re-verifying it would fail EVERY append on win32 (same platform policy as
- * the private-file helpers; audit-trail review 2026-09). */
-function openForAppend(file: string, expected: PrivateFileIdentity | null): {
-  fd: number
-  identity: PrivateFileIdentity
-  created: boolean
-} {
-  const posixModeSemantics = process.platform !== 'win32'
-  const created = expected === null
-  const flags = constants.O_WRONLY | constants.O_APPEND | noFollowFlag()
-    | (created ? constants.O_CREAT | constants.O_EXCL : 0)
-  const fd = openSync(file, flags, 0o600)
-  try {
-    const opened = assertSafeStat(file, fstatSync(fd))
-    if (expected !== null && !sameIdentity(opened.identity, expected)) {
-      throw new Error(`audit leaf changed while opening: ${file}`)
-    }
-    const atPath = inspectExpectedLeaf(file, opened.identity)
-    if (!sameIdentity(atPath.identity, opened.identity)) {
-      throw new Error(`audit leaf path does not match its descriptor: ${file}`)
-    }
-    if (posixModeSemantics) {
-      const descriptor = fstatSync(fd)
-      if ((descriptor.mode & 0o777) !== 0o600) fchmodSync(fd, 0o600)
-      const tightened = assertSafeStat(file, fstatSync(fd))
-      if (!sameIdentity(tightened.identity, opened.identity)
-        || (fstatSync(fd).mode & 0o777) !== 0o600) {
-        throw new Error(`audit leaf became unsafe while tightening mode: ${file}`)
-      }
-    }
-    inspectExpectedLeaf(file, opened.identity)
-    return { fd, identity: opened.identity, created }
-  } catch (error) {
-    closeSync(fd)
-    throw error
-  }
-}
-
-function writeAll(fd: number, value: string): void {
-  const bytes = Buffer.from(value)
-  let offset = 0
-  while (offset < bytes.length) {
-    const written = writeSync(fd, bytes, offset, bytes.length - offset)
-    if (written === 0) throw new Error('audit append made no write progress')
-    offset += written
-  }
-}
-
-/** Rotate the active file to `<file>.1` once it reaches `maxBytes`. Unsafe
+/** Rotate the active file to the .1 archive once it reaches maxBytes. Unsafe
  * active/archive evidence aborts the whole append without modifying either
  * namespace entry. Returns the identity to append to, or null when the active
  * file is absent after a successful rotation. */
 function rotateIfNeeded(file: string, maxBytes: number): PrivateFileIdentity | null {
-  const active = inspectLeaf(file)
+  const active = inspectPrivateLeafNoFollow(file)
   if (active === null || active.size < maxBytes) return active?.identity ?? null
 
-  const archivePath = `${file}.1`
+  const archivePath = file + '.1'
   // Validate the archive BEFORE touching the active file. A pre-planted
   // symlink/hardlink is preserved as evidence and its victim is untouched.
-  const archive = inspectLeaf(archivePath)
+  const archive = inspectPrivateLeafNoFollow(archivePath)
 
   // Tighten and fsync the exact active inode before it becomes the archive.
-  const opened = openForAppend(file, active.identity)
+  const opened = openPrivateAppendNoFollow(file, {
+    create: false,
+    exclusive: false,
+    expected: active.identity,
+    verifyPathIdentity: true,
+    tightenMode: 0o600,
+    strictTighten: true,
+  })
   try {
     fsyncSync(opened.fd)
   } finally {
     closeSync(opened.fd)
   }
-  inspectExpectedLeaf(file, active.identity)
+  if (inspectPrivateLeafNoFollow(file, { expected: active.identity }) === null) {
+    throw new Error('audit leaf identity changed: ' + file)
+  }
 
   if (archive !== null) removePrivateFileNoFollow(archivePath, archive.identity)
-  inspectExpectedLeaf(file, active.identity)
+  if (inspectPrivateLeafNoFollow(file, { expected: active.identity }) === null) {
+    throw new Error('audit leaf identity changed: ' + file)
+  }
   renameSync(file, archivePath)
-  inspectExpectedLeaf(archivePath, active.identity)
-  if (inspectLeaf(file) !== null) throw new Error(`audit active leaf still exists after rotation: ${file}`)
+  if (inspectPrivateLeafNoFollow(archivePath, { expected: active.identity }) === null) {
+    throw new Error('audit archive identity changed after rotation: ' + file)
+  }
+  if (inspectPrivateLeafNoFollow(file) !== null) {
+    throw new Error('audit active leaf still exists after rotation: ' + file)
+  }
   syncPrivateDirectoryNoFollow(dirname(file))
   return null
 }
@@ -221,27 +140,35 @@ export function appendAuditTrailLine(file: string, line: string, maxBytes: numbe
     throw new Error('audit line must be a complete JSONL line ending with a newline')
   }
   const parent = dirname(file)
-  mkdirSync(parent, { recursive: true, mode: 0o700 })
-  const parentStat = lstatSync(parent)
-  if (parentStat.isSymbolicLink() || !parentStat.isDirectory()) {
-    throw new Error(`audit parent is not a real directory: ${parent}`)
-  }
+  // Parent discipline single-sourced: create 0700 (real final component,
+  // no-follow) and verify an existing parent without mutating its mode — the
+  // exported contract is unchanged; a symlinked/file parent still fails loud.
+  ensurePrivateDirectoryNoFollow(parent, 0o700, { existingMode: 'preserve' })
   const expected = rotateIfNeeded(file, maxBytes)
-  const opened = openForAppend(file, expected)
+  const opened = openPrivateAppendNoFollow(file, {
+    create: expected === null,
+    exclusive: expected === null,
+    expected: expected ?? null,
+    verifyPathIdentity: true,
+    tightenMode: 0o600,
+    strictTighten: true,
+  })
   let committed = false
   try {
-    writeAll(opened.fd, line)
+    writePrivateFdAll(opened.fd, line)
     fsyncSync(opened.fd)
-    const after = assertSafeStat(file, fstatSync(opened.fd))
-    if (!sameIdentity(after.identity, opened.identity)) {
-      throw new Error(`audit descriptor identity changed after append: ${file}`)
+    const after = assertPrivateLeafStatNoFollow(file, fstatSync(opened.fd))
+    if (!samePrivateIdentity(after.identity, opened.identity)) {
+      throw new Error('audit descriptor identity changed after append: ' + file)
     }
-    inspectExpectedLeaf(file, opened.identity)
+    if (inspectPrivateLeafNoFollow(file, { expected: opened.identity }) === null) {
+      throw new Error('audit leaf identity changed: ' + file)
+    }
     committed = true
   } finally {
     closeSync(opened.fd)
   }
   // Creating the active file changes the directory namespace; make that
   // publication durable only after the exact file data is fsynced.
-  if (committed && opened.created) syncPrivateDirectoryNoFollow(dirname(file))
+  if (committed && opened.created) syncPrivateDirectoryNoFollow(parent)
 }

@@ -5,7 +5,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { GROUPS, SUBJECT_TESTS, manifestProblems, resolveSelection } from './run-script-tests.mjs'
+import { GROUPS, SUBJECT_TESTS, collectScriptTests, manifestProblems, resolveSelection } from './run-script-tests.mjs'
 
 test('no arguments select every group in declaration order', () => {
   const selection = resolveSelection([])
@@ -92,4 +92,15 @@ test('the shipped manifest is self-consistent: unique entries, real reasons, no 
     assert.ok(entry.path.startsWith('scripts/'), 'subject locks live under scripts/')
     assert.ok(entry.reason.length > 20, 'a subject lock needs the reason a reviewer accepted')
   }
+})
+
+// The walk must not apply the repo-wide ignore union: 'release' is build output
+// elsewhere but a REAL source directory under scripts/ (dropping it once made
+// every scripts/release test look unlisted — 2026-12 stage-2 regression).
+test('collectScriptTests sees the scripts/release corpus', () => {
+  const tests = collectScriptTests()
+  assert.ok(tests.some(path => path.startsWith('scripts/release/')), tests.join(', '))
+  assert.ok(tests.some(path => path.startsWith('scripts/upstream/')), tests.join(', '))
+  assert.ok(tests.some(path => path.startsWith('scripts/gates/')), tests.join(', '))
+  assert.ok(tests.some(path => path.startsWith('scripts/lib/')), tests.join(', '))
 })

@@ -114,6 +114,9 @@ import {
   RuntimeInstallerSupervisor,
   isRuntimeInstallerWriterSafetyError,
 } from '@dsh-chamber/dsh-runtime'
+// Failure reasons this module returns to the main process are sanitized like
+// every other desktop diagnostic (absolute paths redacted, design 05 §8).
+import { sanitizeErrorText } from './sanitize-error.ts'
 
 export { PLUGIN_SPEC_PATTERN, PLUGIN_NAME_PATTERN }
 // The authoritative chamber host-package registry (name + insert id + liveness
@@ -1358,10 +1361,19 @@ export interface SshApplyJournalSink {
 
 /** Pre-change remote manifest read used ONLY by the journal capture: a single
  *  quiet `cat` + parse of the profile manifest (no chamber probes — the
- *  journal only needs the dependency rows). Returns the dependency map, or
- *  null when the read failed with a real ssh error (an absent profile is an
- *  empty map — ENOENT classification rides the result). */
-async function readJournalSnapshot(exec: ExecFn, spec: RemoteSpec): Promise<Record<string, string> | null> {
+ *  journal only needs the dependency rows).
+ *
+ *  FAIL-CLOSED (2026-12 P0-2): an unreadable snapshot is returned as the
+ *  failure arm so the caller refuses the WHOLE batch. Recording rows with
+ *  `specBefore: null` after a failed read made a later undo treat an in-place
+ *  upgrade as a fresh install and DELETE the plugin — the journal's undo
+ *  semantics cannot represent "unknown", so the batch must not execute at all.
+ *  An absent profile (ENOENT) is the one benign empty snapshot; an unparseable
+ *  read is a failure too, never an empty dependency map. */
+async function readJournalSnapshot(
+  exec: ExecFn,
+  spec: RemoteSpec,
+): Promise<{ ok: true; dependencies: Record<string, string> } | { ok: false; error: string }> {
   const res = await exec(spec.id, 'run', {
     op: 'exec',
     command: 'cat',
@@ -1369,9 +1381,11 @@ async function readJournalSnapshot(exec: ExecFn, spec: RemoteSpec): Promise<Reco
     quiet: true,
   })
   if (!res.ok) {
-    return ENOENT_PATTERN.test(res.error) ? {} : null
+    return ENOENT_PATTERN.test(res.error) ? { ok: true, dependencies: {} } : { ok: false, error: res.error }
   }
-  return parseRemoteManifest(res.stdout ?? '').dependencies
+  const parsed = parseRemoteManifest(res.stdout ?? '')
+  if (parsed.error !== undefined) return { ok: false, error: parsed.error }
+  return { ok: true, dependencies: parsed.dependencies }
 }
 
 /** In-flight apply guards (single-flight per instance, design 13 §3 ⑥). */
@@ -1515,13 +1529,28 @@ export async function applyPlugins(
     // the first remote change so every executed row can be recorded with the
     // spec the touched name had before the op (add: null when the name was
     // absent; remove: the previous spec string — the undo journal's undoable
-    // fact). A failed snapshot (real ssh error) never aborts the apply — the
-    // rows are recorded with specBefore null and the row outcome still tells
-    // the truth; an absent profile (ENOENT) is an empty snapshot.
+    // fact). An absent profile (ENOENT) is an empty snapshot.
+    //
+    // FAIL-CLOSED (2026-12 P0-2): a snapshot that cannot be read (real ssh
+    // failure, or an unparseable manifest) refuses the WHOLE batch before any
+    // remote change. The journal cannot represent "unknown": a row recorded
+    // with specBefore null after a failed read would be undone as "the name
+    // was absent before", i.e. an in-place upgrade would be DELETED instead of
+    // restored. The undo path rides this same function, so a failed read there
+    // refuses the undo too, with the same explicit reason.
     const journal = opts?.journal
-    const snapshot = journal === undefined ? null : await readJournalSnapshot(exec, spec)
-    const specBeforeOf = (name: string): string | null =>
-      snapshot === null ? null : (snapshot[name] ?? null)
+    let snapshot: Record<string, string> | null = null
+    if (journal !== undefined) {
+      const read = await readJournalSnapshot(exec, spec)
+      if (!read.ok) {
+        return {
+          ok: false,
+          error: `refusing the plugin change: the pre-change journal snapshot could not be read (${sanitizeErrorText(read.error)}); without it a later undo could delete a plugin that was upgraded in place instead of restoring it`,
+        }
+      }
+      snapshot = read.dependencies
+    }
+    const specBeforeOf = (name: string): string | null => snapshot === null ? null : (snapshot[name] ?? null)
 
     // ② remove first (releases old layers), then add — serial, isolated.
     for (const name of remove) {
@@ -2213,10 +2242,6 @@ let pluginSyncDisposePromise: Promise<void> | null = null
 export function disposePluginSyncChildren(): Promise<void> {
   pluginSyncDisposePromise ??= localPluginChildSupervisor.dispose()
   return pluginSyncDisposePromise
-}
-
-export function disposeLocalPluginChildren(): Promise<void> {
-  return disposePluginSyncChildren()
 }
 
 /** Run a bounded child without blocking Electron's main event loop. */

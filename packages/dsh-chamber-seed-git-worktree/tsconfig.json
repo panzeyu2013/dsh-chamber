@@ -19,7 +19,10 @@
     "noUnusedParameters": false,
     "paths": {
       "@deepseek-ai/*": ["../../vendor/harness-packages/@deepseek-ai/*/src/index.ts"],
-      "@standard-schema/spec": ["../../node_modules/.pnpm/@standard-schema+spec@1.1.0/node_modules/@standard-schema/spec"]
+      "@standard-schema/spec": ["../../node_modules/.pnpm/@standard-schema+spec@1.1.0/node_modules/@standard-schema/spec"],
+      "compression": ["../../node_modules/.pnpm/@types+compression@1.8.1/node_modules/@types/compression"],
+      "negotiator": ["../../node_modules/.pnpm/@types+negotiator@0.6.5/node_modules/@types/negotiator"],
+      "undici": ["../../node_modules/.pnpm/undici@8.10.0/node_modules/undici"]
     }
   },
   "include": ["src/**/*.ts", "test/**/*.ts"]

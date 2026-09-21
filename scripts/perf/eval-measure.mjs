@@ -16,6 +16,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { findPageTarget, connect, installEarlyObservers, pollState, readPerf } from './cdp-lib.mjs'
+import { sleep } from '../lib/cli.mjs'
 
 const runs = Number(process.argv[2] ?? 3)
 const outFlag = process.argv.indexOf('--out')
@@ -27,7 +28,6 @@ if (!Number.isInteger(runs) || runs < 1) {
   console.error(`runs 须为 ≥1 的整数，收到：${JSON.stringify(process.argv[2] ?? '(缺省)')}`)
   process.exit(1)
 }
-const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 const results = []
 for (let i = 0; i < runs; i++) {

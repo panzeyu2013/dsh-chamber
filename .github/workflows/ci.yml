@@ -178,6 +178,11 @@ jobs:
       - name: Remote-state acceptance matrix (plan §9)
         if: steps.classify.outputs.code == 'true'
         run: node scripts/gates/remote-state-acceptance.mjs --node "$(command -v node)" --out .tmp/acceptance/remote-state.json
+      # 故障注入矩阵（plan §10）：与本地 check:static 同一条命令 —— P1-1 的单源化要求
+      # 静态集合两侧一致（check:static ↔ 这条 push 路径）；它是 file-only 的，故不挂
+      # classifier。release 验证必须同步（release-workflow-policy 从 ci.yml 派生断言）。
+      - name: Remote-state fault-injection matrix (plan section 10)
+        run: node scripts/gates/remote-state-injection-matrix.mjs
       # Client plugin compiler faces, same single entry as `pnpm run check:typecheck`.
       - name: Client plugin type checks — single entry (sidebar / git / layout / connections / settings-bridge / client-web / connection / api-gateway / open-in / mobile)
         if: steps.classify.outputs.code == 'true'

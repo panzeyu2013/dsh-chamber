@@ -30,7 +30,8 @@ import { stripTypeScriptTypes } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { inflateSync } from 'node:zlib'
+
+import { decodePng } from '../lib/png-ink.mjs'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const REPO = resolve(HERE, '..', '..')
@@ -189,58 +190,6 @@ const DRIVER = [
   'RunLoop.main.run()',
   '',
 ].join('\n')
-
-/** 最小 PNG 解码（zlib + 反滤波），只支持探针自己产出的 8bit RGB/RGBA。 */
-function decodePng(buffer) {
-  let offset = 8
-  let width = 0
-  let height = 0
-  let channels = 4
-  const idat = []
-  while (offset + 12 <= buffer.length) {
-    const length = buffer.readUInt32BE(offset)
-    const type = buffer.toString('latin1', offset + 4, offset + 8)
-    const data = buffer.subarray(offset + 8, offset + 8 + length)
-    if (type === 'IHDR') {
-      width = data.readUInt32BE(0)
-      height = data.readUInt32BE(4)
-      const colorType = data.readUInt8(9)
-      channels = { 0: 1, 2: 3, 4: 2, 6: 4 }[colorType] ?? 4
-    } else if (type === 'IDAT') idat.push(data)
-    else if (type === 'IEND') break
-    offset += 12 + length
-  }
-  const raw = inflateSync(Buffer.concat(idat))
-  const stride = width * channels
-  const rows = []
-  let previous = Buffer.alloc(stride)
-  let cursor = 0
-  for (let y = 0; y < height; y += 1) {
-    const filter = raw[cursor]
-    cursor += 1
-    const line = Buffer.from(raw.subarray(cursor, cursor + stride))
-    cursor += stride
-    if (filter === 1) for (let x = channels; x < stride; x += 1) line[x] = (line[x] + line[x - channels]) & 255
-    else if (filter === 2) for (let x = 0; x < stride; x += 1) line[x] = (line[x] + previous[x]) & 255
-    else if (filter === 3) for (let x = 0; x < stride; x += 1) {
-      const left = x >= channels ? line[x - channels] : 0
-      line[x] = (line[x] + ((left + previous[x]) >> 1)) & 255
-    } else if (filter === 4) for (let x = 0; x < stride; x += 1) {
-      const left = x >= channels ? line[x - channels] : 0
-      const up = previous[x]
-      const upLeft = x >= channels ? previous[x - channels] : 0
-      const estimate = left + up - upLeft
-      const dLeft = Math.abs(estimate - left)
-      const dUp = Math.abs(estimate - up)
-      const dUpLeft = Math.abs(estimate - upLeft)
-      const predictor = dLeft <= dUp && dLeft <= dUpLeft ? left : (dUp <= dUpLeft ? up : upLeft)
-      line[x] = (line[x] + predictor) & 255
-    }
-    rows.push(line)
-    previous = line
-  }
-  return { width, height, channels, rows }
-}
 
 function measureInk(image, rect, scale) {
   const x0 = Math.max(0, Math.round(rect.x * scale))

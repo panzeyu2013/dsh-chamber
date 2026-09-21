@@ -3,7 +3,7 @@
  * 落地版）。文本匹配前一律 stripComments（既有纪律：注释不得满足断言）。
  *
  * 这些锁只证明 SHAPE；行为正确性由同批纯模块测试承担（unread-derivation /
- * unread-store / session-facts-source / notification-dedupe / source-refresh-hint）。
+ * unread-store / session-facts-source / watermark / complete-ledger / source-refresh-hint）。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -20,9 +20,9 @@ test('L1/L2/L16：账本是派生投影，撤回分支不再删它，读 refs �
   assert.match(APP, /\{ deriveUnread, reconcileCompletedFacts \}/,
     'App 必须把 sidebar shared 的共享判定喂给派生模块（不得自造第二套）')
   assert.match(APP, /deriveSourceUnread\(\{/, '派生投影入口必须存在')
-  assert.match(APP, /delete notifiedCompleteRef\.current\[sourceId\][\s\S]{0,400}recomputeSourceUnread\(sourceId\)/,
-    '撤回分支必须由事实重算（R2），而不是删账本')
-  assert.doesNotMatch(APP, /delete notifiedCompleteRef\.current\[sourceId\][\s\S]{0,300}setCompletedBySource/,
+  assert.match(APP, /completeLedgerRef\.current\.forgetArmed\(sourceId\)[\s\S]{0,400}recomputeSourceUnread\(sourceId\)/,
+    '撤回分支必须由事实重算（R2），且只清易失的武装轨（durable 水位轨不随撤回删除）')
+  assert.doesNotMatch(APP, /completeLedgerRef\.current\.forgetArmed\(sourceId\)[\s\S]{0,300}setCompletedBySource/,
     '撤回分支不得再删来源账本（R2 的爆炸点）')
   assert.match(APP, /readMarksRef = useRef<Record<string, Record<string, number>>>/,
     '读水位 durable 表必须存在（重启不丢未读）')
@@ -36,7 +36,7 @@ test('L3：reclaimView 不碰数据面键（拆壳 ≠ 来源退役）', () => {
   const end = APP.indexOf('}, [mountedViews])', start)
   assert.ok(end > start)
   const body = APP.slice(start, end)
-  assert.doesNotMatch(body, /readMarks|edgeLedger|notifiedWatermark|completedBySource/,
+  assert.doesNotMatch(body, /readMarks|edgeLedger|completeLedger|completedBySource/,
     '拆壳顺手清未读标记会造出假未读/丢未读（R2/L3）')
 })
 

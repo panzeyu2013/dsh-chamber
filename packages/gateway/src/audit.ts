@@ -23,17 +23,16 @@ import {
 } from '@dsh-chamber/control-plane'
 
 /** Rotation cap of the active audit file (5 MiB; the trail is bounded at
- * 2 × cap including `<file>.1`). */
-export const AUDIT_LOG_MAX_BYTES = AUDIT_TRAIL_MAX_BYTES
-
-/** One non-secret audit event. Every field is public metadata only; no field
- * may ever carry a credential, cookie or session body (S24). */
-export type AuditEvent = AuditTrailEvent
+ * 2 × cap including `<file>.1`). Module-local: the shared core constant
+ * (AUDIT_TRAIL_MAX_BYTES) is the wire-contract single source, and the gateway
+ * entry's alias exports (AUDIT_LOG_MAX_BYTES / AuditEvent) had no production
+ * consumer (2026-12 audit F23). */
+const AUDIT_LOG_MAX_BYTES = AUDIT_TRAIL_MAX_BYTES
 
 /** Append one non-secret audit event (JSONL). Never throws into the caller;
  * failures are loud but non-fatal. `maxBytes` is the rotation-cap override
  * used by tests (defaults to AUDIT_LOG_MAX_BYTES). */
-export function appendAuditEvent(file: string, event: AuditEvent, maxBytes: number = AUDIT_LOG_MAX_BYTES): void {
+export function appendAuditEvent(file: string, event: AuditTrailEvent, maxBytes: number = AUDIT_LOG_MAX_BYTES): void {
   if (file === '') return
   // Validate BEFORE touching the filesystem: an invalid event (missing
   // required fields) writes nothing — not even an empty file.

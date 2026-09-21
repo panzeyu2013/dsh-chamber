@@ -102,6 +102,51 @@ test('fetchRegistryMetadata: selected origin cannot delegate tarballs to another
   }
 });
 
+test('fetchRegistryMetadata: version order and latest fallback use exact semver precedence', async () => {
+  const tarball = (origin: string, version: string): string =>
+    `${origin}/@deepseek-ai/dsh/-/dsh-${version}.tgz`;
+  const entry = (origin: string, version: string) => ({
+    dist: { tarball: tarball(origin, version), integrity: SRI_A },
+  });
+  const registry = await startRegistryServer((_url, origin) => ({
+    status: 200,
+    body: {
+      // Malformed latest (not among the parsed versions) → max-semver fallback.
+      'dist-tags': { latest: 'vNext' },
+      versions: {
+        '0.2.0-alpha': entry(origin, '0.2.0-alpha'),
+        '0.2.0-alpha.1': entry(origin, '0.2.0-alpha.1'),
+        '0.2.0-beta': entry(origin, '0.2.0-beta'),
+        // Numeric identifiers beyond Number.MAX_SAFE_INTEGER: the former
+        // local comparator treated these as equal (Number precision loss).
+        '0.2.0-rc.9007199254740992': entry(origin, '0.2.0-rc.9007199254740992'),
+        '0.2.0-rc.9007199254740993': entry(origin, '0.2.0-rc.9007199254740993'),
+        '0.2.0-rc.2': entry(origin, '0.2.0-rc.2'),
+        // Equal precedence to the bare rc.2 (build metadata ignored): the
+        // stable sort keeps their registration order.
+        '0.2.0-rc.2+build.9': entry(origin, '0.2.0-rc.2+build.9'),
+        '0.2.0': entry(origin, '0.2.0'),
+      },
+    },
+  }));
+  try {
+    const metadata = await fetchRegistryMetadata('@deepseek-ai/dsh', { origin: registry.origin });
+    assert.deepEqual(metadata.versions, [
+      '0.2.0',
+      '0.2.0-rc.9007199254740993',
+      '0.2.0-rc.9007199254740992',
+      '0.2.0-rc.2',
+      '0.2.0-rc.2+build.9',
+      '0.2.0-beta',
+      '0.2.0-alpha.1',
+      '0.2.0-alpha',
+    ], 'descending exact semver precedence (alpha < alpha.1 < beta, rc.9007199254740993 > ...992, build ignored)');
+    assert.equal(metadata.latest, '0.2.0', 'malformed dist-tags.latest falls back to the true max semver');
+  } finally {
+    await registry.close();
+  }
+});
+
 test('fetchRegistryMetadata: junk/non-semver version keys are excluded at parse time', async () => {
   const registry = await startRegistryServer((_url, origin) => ({
     status: 200,

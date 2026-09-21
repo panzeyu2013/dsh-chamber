@@ -43,9 +43,6 @@ const READY_TIMEOUT_MARKER = 'did not reach ready in time'
  *  (decision 12). */
 const RESTARTABLE_RUNTIME_STATES = new Set(['ready', 'degraded'])
 
-/** How a managed-dsh restart attempt ended (card/panel note projections). */
-export type RestartOutcomeKind = 'ok' | 'failed' | 'accepted-timeout'
-
 /**
  * Classify a restart poll/action failure: the accepted-timeout case (the
  * gateway accepted the restart but did not reach ready in the poll window)

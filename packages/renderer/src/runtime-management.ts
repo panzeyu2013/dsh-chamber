@@ -9,6 +9,8 @@
  * subscription to the preload bridge.
  */
 
+import { compareSemver } from './semver.ts'
+
 export type RuntimePhase =
   | 'idle'
   | 'checking'
@@ -540,60 +542,8 @@ export function formatRuntimeBytes(bytes: number): string {
   return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`
 }
 
-interface ParsedSemver {
-  core: [string, string, string]
-  prerelease: string[]
-}
-
-const SEMVER = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u
-
-function parseSemver(value: string): ParsedSemver | null {
-  const match = SEMVER.exec(value)
-  if (match === null) return null
-  return {
-    core: [match[1]!, match[2]!, match[3]!],
-    prerelease: match[4] === undefined ? [] : match[4].split('.'),
-  }
-}
-
-function compareNumericIdentifier(a: string, b: string): -1 | 0 | 1 {
-  if (a.length !== b.length) return a.length < b.length ? -1 : 1
-  return a === b ? 0 : a < b ? -1 : 1
-}
-
-/** SemVer 2.0 precedence; build metadata is deliberately ignored. */
-export function compareSemver(a: string, b: string): -1 | 0 | 1 | null {
-  const left = parseSemver(a)
-  const right = parseSemver(b)
-  if (left === null || right === null) return null
-  for (let index = 0; index < 3; index += 1) {
-    const compared = compareNumericIdentifier(left.core[index]!, right.core[index]!)
-    if (compared !== 0) return compared
-  }
-  const leftPre = left.prerelease
-  const rightPre = right.prerelease
-  if (leftPre.length === 0 || rightPre.length === 0) {
-    if (leftPre.length === rightPre.length) return 0
-    return leftPre.length === 0 ? 1 : -1
-  }
-  const common = Math.min(leftPre.length, rightPre.length)
-  for (let index = 0; index < common; index += 1) {
-    const x = leftPre[index]!
-    const y = rightPre[index]!
-    if (x === y) continue
-    const xNumeric = /^\d+$/u.test(x)
-    const yNumeric = /^\d+$/u.test(y)
-    if (xNumeric && yNumeric) return compareNumericIdentifier(x, y)
-    if (xNumeric !== yNumeric) return xNumeric ? -1 : 1
-    return x < y ? -1 : 1
-  }
-  if (leftPre.length === rightPre.length) return 0
-  return leftPre.length < rightPre.length ? -1 : 1
-}
-
-export function isSemverGreater(a: string, b: string): boolean {
-  return compareSemver(a, b) === 1
-}
+/** SemVer 单一实现见 ./semver.ts（本模块仅为既有跨包消费者保留同一导入路径）。 */
+export { compareSemver }
 
 /**
  * Preserve a still-valid explicit user choice. Before the user chooses, the

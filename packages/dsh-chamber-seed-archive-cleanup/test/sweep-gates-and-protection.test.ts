@@ -7,8 +7,6 @@ import assert from 'node:assert/strict'
 import {
   ArchiveCleanupCore,
   ArchiveCleanupError,
-  indexChildren,
-  resolveDeletableTree,
   MAX_PURGE_SESSIONS,
   MAX_SWEEP_CONTENT_PROBES,
 } from '../src/core.ts'
@@ -320,7 +318,8 @@ test('purge protection: a protected tree injected into the plan is skipped BEFOR
   const original = core['resolvePlan'].bind(core)
   core['resolvePlan'] = ((...args: Parameters<typeof original>) => {
     const plan = original(...args)
-    const tree = resolveDeletableTree('r1', host.states, indexChildren([...host.states.values()]), { running: host.live, loaded: host.loaded }, true)
+    // r1's full post-order (c1a → c1 → r1), exactly as the plan would have built it.
+    const tree = { rootSessionId: 'r1', order: ['c1a', 'c1', 'r1'], subagentCount: 2 }
     if (tree !== null) plan.trees.unshift(tree)
     return plan
   }) as typeof core['resolvePlan']

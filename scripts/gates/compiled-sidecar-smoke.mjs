@@ -29,51 +29,18 @@
  * acceptance item.
  */
 
-import { spawn } from 'node:child_process'
-import { createInterface } from 'node:readline'
-import { existsSync, mkdtempSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+import { resolveNodeBinary, resolveSidecarDir } from '../lib/sidecar-assembly.mjs'
 
 /** Assembly-sidecar marker consumed by control-plane-module.isPackagedSidecarRuntime. */
 export const COMPILED_ENV = 'DSH_CHAMBER_SIDECAR_COMPILED'
-/** Override for the assembly directory (CI builds into a job temp dir when needed). */
-export const SIDECAR_DIR_ENV = 'DSH_CHAMBER_SIDECAR_DIR'
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
-export const DEFAULT_SIDECAR_DIR = join(REPO_ROOT, 'packages', 'desktop', 'release', 'sidecar')
 
-/**
- * Resolve the assembly directory: explicit env override (absolute or relative to
- * the caller's cwd), else the build-sidecar default output.
- * @param {NodeJS.ProcessEnv} env - process environment.
- * @param {string} cwd - base for relative overrides.
- * @returns {string} absolute assembly directory.
- */
-export function resolveSidecarDir(env = process.env, cwd = process.cwd()) {
-  const configured = typeof env[SIDECAR_DIR_ENV] === 'string' ? env[SIDECAR_DIR_ENV].trim() : ''
-  if (configured !== '') return isAbsolute(configured) ? configured : resolve(cwd, configured)
-  return DEFAULT_SIDECAR_DIR
-}
-
-/**
- * Node binary for the smoke: the assembly's own bundled `node` when present
- * (the shipped shape), else the node running this gate (CI builds with
- * --skip-node; release.yml bundles the real one).
- * @param {string} sidecarDir - assembly directory.
- * @param {string} execPath - current node executable.
- * @returns {string} node executable path.
- */
-export function resolveNodeBinary(sidecarDir, execPath = process.execPath) {
-  const bundled = join(sidecarDir, 'node')
-  try {
-    if (statSync(bundled).isFile()) return bundled
-  } catch {
-    /* no bundled node: fall through to the running node */
-  }
-  return execPath
-}
 
 /**
  * Decide whether the smoke runs, skips loudly, or fails.

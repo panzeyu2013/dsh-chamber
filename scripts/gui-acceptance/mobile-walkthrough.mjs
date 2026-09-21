@@ -55,6 +55,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { parseArgs } from 'node:util'
 import { CdpSession, discoverPageTarget } from './cdp.mjs'
+import { sleep } from '../lib/cli.mjs'
 import {
   KNOWN_UPSTREAM_BOOT_NOISE, TOLERATED_REQUEST_FAILURES, createRecorder, partitionFailures,
   renderMarkdown, summarize, summarizeNetFailures,
@@ -69,7 +70,6 @@ const ROOT_MOUNTED = `document.querySelector('#root') !== null && document.query
 /** 单帧落盘上限（base64 图片/大 JSON 会把帧文件撑爆；完整长度另记）。 */
 const DEFAULT_FRAME_CAP = 8_000
 
-const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
 /**
  * 从环境变量读凭据并装成请求头。**永不返回/打印值**——只回传头对象与一句

@@ -264,7 +264,7 @@ export interface RemoveResult {
   readonly branchDeleteFailed?: boolean
 }
 
-export interface SnapshotError {
+interface SnapshotError {
   readonly code: string
   readonly operation: 'discover' | 'list' | 'status' | 'associate'
   readonly message: string
@@ -274,7 +274,7 @@ export interface SnapshotError {
 
 export type GitWorktreeState = 'ready' | 'missing' | 'invalid' | 'not-a-repo'
 
-export type GitAttentionReason = 'merge' | 'rebase' | 'cherry-pick' | 'revert' | 'bisect'
+type GitAttentionReason = 'merge' | 'rebase' | 'cherry-pick' | 'revert' | 'bisect'
 
 export interface SnapshotWorktree {
   readonly worktreeId: string

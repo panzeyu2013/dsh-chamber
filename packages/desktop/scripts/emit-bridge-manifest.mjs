@@ -23,8 +23,8 @@
  *      { "invoke": [{channel,key}×60], "push": [{channel,key}×8],
  *        "counts": {invoke,push,total} }，两数组均按 IPC_CHANNELS 定义序。
  *   B. macos/Sources/DSHChamber/Generated/BridgeManifest.swift（生成物、
- *      提交）——`enum BridgeManifest` 三份 Set<String>（invokeChannels /
- *      pushChannels / allChannels = 前两者并集推导，不重复字面量）。
+ *      提交）——`enum BridgeManifest` 两份 Set<String>（invokeChannels /
+ *      pushChannels；allChannels 并集推导只被测试引用，2026-12 审计删除）。
  *      W-18 落位迁移：文件位于 DSHChamber target 目录内（Sources/
  *      DSHChamber/Generated/——SwiftPM 递归收 Sources/<target>/ 子目录，
  *      随 swift build 编译接线，Swift 白名单 XCTest 方可 @testable import
@@ -310,8 +310,8 @@ function swiftStringLiteral(channel) {
   return out
 }
 
-/** Swift 生成物文本：`enum BridgeManifest` 三份 Set<String>。allChannels 取
- *  invoke ∪ push 推导（而非第三次字面量）——与上两集合永不漂移。 */
+/** Swift 生成物文本：`enum BridgeManifest` 两份 Set<String>（invokeChannels /
+ *  pushChannels）。allChannels 并集推导生产零引用，已删除（2026-12 审计）。 */
 export function renderSwiftManifest(manifest) {
   const { counts } = manifest
   const lines = [
@@ -351,8 +351,7 @@ export function renderSwiftManifest(manifest) {
     'static let pushChannels: Set<String>',
     manifest.push,
   )
-  indent4(['/// 全量通道（invoke ∪ push 推导，不重复字面量 —— 与上两集合永不漂移）。']).forEach(l => lines.push(l))
-  indent4(['static let allChannels: Set<String> = invokeChannels.union(pushChannels)']).forEach(l => lines.push(l))
+  if (lines[lines.length - 1] === '') lines.pop()
   lines.push('}')
   return `${lines.join('\n')}\n`
 }

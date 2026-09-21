@@ -27,6 +27,7 @@ import {
   readFileSync,
   writeSync,
 } from 'node:fs'
+import { describeError } from './describe-error.ts'
 import path from 'node:path'
 
 /** 锁文件名（与 Swift `SidecarDirectoryLock` / sidecar-entry 复验同一路径）。 */
@@ -137,7 +138,7 @@ export function acquireChamberLock(options: AcquireChamberLockOptions): ChamberL
       fchmodSync(fd, 0o600)
     } catch (error) {
       closeSync(fd)
-      return { ok: false, holderPid: null, error: `锁文件权限收紧失败：${error instanceof Error ? error.message : String(error)}` }
+      return { ok: false, holderPid: null, error: `锁文件权限收紧失败：${describeError(error)}` }
     }
   }
 
@@ -155,7 +156,7 @@ export function acquireChamberLock(options: AcquireChamberLockOptions): ChamberL
     return {
       ok: false,
       holderPid: null,
-      error: `锁记录写入失败：${error instanceof Error ? error.message : String(error)}`,
+      error: `锁记录写入失败：${describeError(error)}`,
     }
   }
 

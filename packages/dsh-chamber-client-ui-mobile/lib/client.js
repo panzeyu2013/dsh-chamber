@@ -2525,7 +2525,7 @@ var STALL_POLL_MS = 3e3;
 var STALL_RESYNC_COOLDOWN_MS = 12e4;
 var STALL_RESYNC_WINDOW_MS = 6e5;
 var STALL_RESYNC_MAX = 3;
-var STALL_FAILED_MS = 18e4;
+var STALL_FAILED_MS = 9e4;
 var CONVERSATION_PHASE_QUERY = "[data-phase]";
 var STALL_PHASES = ["settling", "active"];
 function isStallPhase(value) {

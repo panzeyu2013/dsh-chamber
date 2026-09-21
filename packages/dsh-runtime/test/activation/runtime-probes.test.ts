@@ -442,10 +442,10 @@ test('a non-404 identity failure never downgrades to the legacy session-data pro
 })
 
 
-test('hostDomains=false returns the reduced set and never invokes the chamber host domains (2026-12 shape)', async () => {
+test('an empty hostDomainNames list returns the reduced set and never invokes the chamber host domains (2026-12 shape)', async () => {
   const fx = fixture()
   try {
-    const results = await probes(fx, successfulCall(fx), { windowMs: 1_000, rpcTimeoutMs: 100, hostDomains: false })
+    const results = await probes(fx, successfulCall(fx), { windowMs: 1_000, rpcTimeoutMs: 100, hostDomainNames: [] })
     // Exactly the reduced set, in contract order — no synthetic rows.
     assert.deepEqual(results.map(result => result.name), [...PROBE_NAMES_WITHOUT_HOST_DOMAINS])
     assert.ok(results.every(result => result.ok))

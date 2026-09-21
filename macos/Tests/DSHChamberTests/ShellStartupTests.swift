@@ -434,6 +434,15 @@ final class ShellStartupTests: XCTestCase {
         XCTAssertEqual(hopeless.port, 17520)
         XCTAssertEqual(hopeless.source, .devDefault)
         XCTAssertFalse(hopeless.notices.isEmpty)
+
+        // 2026-12 单源化：自定义 sidecar 形状（probeDevPort == nil，AppDelegate 传 nil）
+        // 遇到非法显式端口同样 notice + dev 缺省，绝不 fatal——两种形状共用同一解析。
+        let invalidCustomShape = ControlPlanePort.resolve(
+            env: ["DSH_CHAMBER_SHELL_PORT": "-1"], isPackaged: false, probeDevPort: nil)
+        XCTAssertEqual(invalidCustomShape.port, 17520)
+        XCTAssertEqual(invalidCustomShape.source, .devDefault)
+        XCTAssertTrue(invalidCustomShape.notices.contains { $0.contains("DSH_CHAMBER_SHELL_PORT") },
+                      "自定义形状的非法端口也必须 loud 降级")
     }
 
     /// 真 socket 路径：bind 0 取到的系统临时端口必须可解析且落在合法区间。
@@ -495,20 +504,22 @@ final class ShellStartupTests: XCTestCase {
         XCTAssertEqual(ShellDebug.isEnabledCached, ShellDebug.isEnabled())
     }
 
-    /// Phase 2 C7：页面字面量出口委托单遍写出器；String/Any 版仍走 JSONSerialization
-    /// （错误串、事件名），失败回落 nil。
+    /// Phase 2 C7 / 2026-12 单源化：页面字面量出口 = AnyCodable 单遍写出器
+    /// （A 桥回执的 jsStringLiteral 委托同一实现；Any 版 JSONSerialization 出口
+    /// 只有 String 调用点，已删除）。完整转义矩阵见 JSLiteralEscapingTests。
     func testPageLiteralDelegatesToSinglePassWriter() {
         XCTAssertEqual(MainWindowController.jsonLiteral(of: .object(["k": .number(1)])), "{\"k\":1}")
         XCTAssertEqual(MainWindowController.jsonLiteral(of: .null), "null")
         XCTAssertEqual(MainWindowController.jsonLiteral(of: .number(-0.0)), "0")
-        XCTAssertEqual(MainWindowController.jsonLiteral("a\"b"), "\"a\\\"b\"")
+        XCTAssertEqual(MainWindowController.jsonLiteral(of: .string("a\"b")), "\"a\\\"b\"")
         // R3：U+2028/U+2029 必须转义（JS 行终止符），JSON 语义不变
-        XCTAssertEqual(MainWindowController.jsonLiteral("a\u{2028}b"), "\"a\\u2028b\"")
-        XCTAssertEqual(MainWindowController.jsonLiteral("a\u{2029}b"), "\"a\\u2029b\"")
-        // fail-closed：非法值返回 nil 而不是让 JSONSerialization 抛 NSException 崩进程
-        XCTAssertNil(MainWindowController.jsonLiteral(Date()))
-        XCTAssertNil(MainWindowController.jsonLiteral(NSNumber(value: Double.nan)))
-        XCTAssertNil(MainWindowController.jsonLiteral(["k": Date()]))
+        XCTAssertEqual(MainWindowController.jsonLiteral(of: .string("a\u{2028}b")), "\"a\\u2028b\"")
+        XCTAssertEqual(MainWindowController.jsonLiteral(of: .string("a\u{2029}b")), "\"a\\u2029b\"")
+        // 回执转义与页面字面量逐字节同源（单实现锁）
+        for value in ["a\"b", "a\\b", "a\u{2028}b", "\u{01}", "中文🚀"] {
+            XCTAssertEqual(ChamberMessageHandler.jsStringLiteral(value),
+                           MainWindowController.jsonLiteral(of: .string(value)))
+        }
     }
 
     func testBoundedEdgeReplyGuardWindow() {

@@ -27,6 +27,7 @@ import {
   linuxAutostartDesktopEntry,
   linuxAutostartDirectory,
   linuxProtocolDesktopEntry,
+  describeUnknownError,
   parseOpenVscodeIntent,
   quoteDesktopExecValue,
   resolveLinuxLaunchExecutable,
@@ -876,4 +877,14 @@ test('scanDeepLinkUrls 接受大小写不敏感的 scheme，且不改动 URI 其
     scan(['https://dsh-chamber://x', 'x-dsh-chamber://y', 'dsh-chamber:', 'dsh-chamber://', ' DSH-CHAMBER://z']),
     ['dsh-chamber://'],
   )
+})
+test('describeUnknownError is the shared describeError: cause chain + hostile values (stage-2 lockstep)', () => {
+  assert.equal(describeUnknownError(new Error('boom')), 'boom')
+  assert.equal(describeUnknownError(new Error('', { cause: new Error('root') })), 'Error: root')
+  assert.equal(describeUnknownError(new Error('outer', { cause: new Error('inner', { cause: 'deep' }) })), 'outer: inner: deep')
+  assert.equal(describeUnknownError(new Error('')), 'Error')
+  assert.equal(describeUnknownError('plain'), 'plain')
+  assert.equal(describeUnknownError(''), 'unknown error')
+  assert.equal(describeUnknownError(null), 'null')
+  assert.equal(describeUnknownError(hostileThrownValue()), 'unknown error')
 })

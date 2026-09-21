@@ -8,8 +8,9 @@
  *   产生），settings-bridge 的 UpdateSection/update-store/update-gate 不感知
  *   flavor；
  * - **真实 check**：用户点「检查更新」→ 有界 GitHub releases 列表 API（≤100、
- *   10s 超时、AbortController）→ `selectLatestReleaseVersion`（draft/prerelease
- *   与 tag 形状严格校验）→ `compareChamberVersions` 比较 → 有更新则
+ *   10s 超时、AbortController；共享实现 update-discovery.ts）→
+ *   `selectLatestReleaseVersion`（draft/prerelease 与 tag 形状严格校验，同一共享
+ *   选择）→ `compareChamberVersions` 比较 → 有更新则
  *   `phase='available'` + `latestVersion` + `releaseUrl`（`releaseUrlFor` 生成、
  *   `isAllowedReleaseUrl` 复核，绝不伪造 URL）；
  * - `installBlockedReason` 缺省为 `NATIVE_SHELL_INSTALL_BLOCKED_REASON`
@@ -47,8 +48,6 @@
  * electron——electron 只在缺省 seam 内 lazy require）。
  */
 import {
-  GITHUB_OWNER,
-  GITHUB_REPO,
   compareChamberVersions,
   isAllowedReleaseUrl,
   releaseUrlFor,
@@ -56,20 +55,26 @@ import {
   type UpdateController,
   type UpdateState,
 } from './updater.ts'
+import { describeError } from './describe-error.ts'
 import type { NativeUpdatePhaseInput } from './node-edges.ts'
+import {
+  fetchGithubReleases,
+  isBoundedReleasesList,
+  isParseableReleaseTag,
+  selectReleaseCandidate,
+} from './update-discovery.ts'
 
 /** blocked 原因（design 25 §7 逐字）：Swift 壳不支持自动安装。UI 对已知 reason
  *  有本地化映射（UpdateSection.blockedCopy / updateAvailableBlockedNativeShell）。 */
 export const NATIVE_SHELL_INSTALL_BLOCKED_REASON = '原生壳不支持自动安装'
 /**
  * feed 条目是否带**可解析版本**（stable 或 beta 形状，不看通道/draft）——
- * 用来区分「本通道暂无发布物」与「feed 形状异常」（三审 #14）。
+ * 用来区分「本通道暂无发布物」与「feed 形状异常」（三审 #14）。形状判定来自
+ * 共享的 update-discovery.ts（与 updater.ts 的 beta 发现同一套 tag 形状）。
  */
 function hasParseableVersion(candidate: unknown): boolean {
   if (candidate === null || typeof candidate !== 'object') return false
-  const record = candidate as { tag_name?: unknown }
-  if (typeof record.tag_name !== 'string' || record.tag_name.length > 128) return false
-  return STABLE_TAG.test(record.tag_name) || BETA_TAG.test(record.tag_name)
+  return isParseableReleaseTag((candidate as { tag_name?: unknown }).tag_name)
 }
 
 /** 下载拒绝文案（IPC 返回的 error 串；UI 只显示状态行，不显示本串）。 */
@@ -77,9 +82,6 @@ export const NATIVE_SHELL_DOWNLOAD_REFUSAL = '原生壳不支持自动安装（�
 /** 重启并安装拒绝文案。 */
 export const NATIVE_SHELL_RESTART_REFUSAL = '原生壳不支持自动更新安装（请手动下载新版本）'
 
-const STABLE_TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
-const BETA_TAG = /^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-beta\.(0|[1-9]\d*)$/
-const RELEASES_URL = `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases?per_page=100`
 /** 静默首检延迟（与 Electron updater.ts:651 的 CHECK_DELAY_MS 同值——那边未导出，
  *  这里以等值常量 + 单测锁步，防两端节奏漂移）。 */
 export const HEADLESS_CHECK_DELAY_MS = 15_000
@@ -87,36 +89,17 @@ export const HEADLESS_CHECK_DELAY_MS = 15_000
 export const HEADLESS_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000
 
 /**
- * 从 GitHub releases 列表选最新版本（纯函数；feed 数据是不可信输入）：
- * - 响应必须是数组且 ≤100 条（与 resolveGithubBetaFeed 同界）；
- * - `draft === false` 且 `prerelease` 与 channel 精确匹配（stable 要 false，
- *   beta 要 true——稳定版不会被 beta 通道选中，反之亦然）；
- * - tag 形状严格（stable `vX.Y.Z` / beta `vX.Y.Z-beta.N`，前导 v 去掉）；
- * - 逐条经 `compareChamberVersions` 取最大；不可比较的条目跳过（绝不猜测）。
- * 返回版本号（无前导 v）或 null（无候选）。
+ * 从 GitHub releases 列表选最新版本（纯函数；feed 数据是不可信输入）。
+ * 与 updater.ts 的 beta 发现共用 update-discovery.ts 的候选选择：数组/≤100 条
+ * 边界、draft/prerelease 通道匹配、canonical tag 形状、BigInt 最大值。
+ * 返回版本号（无前导 v）或 null（无候选）——调用点据此区分「本通道暂无发布物」
+ * （up-to-date）与「非空 feed 零可解析版本」（响亮 error），见 runCheck。
  */
 export function selectLatestReleaseVersion(
   releases: unknown,
   channel: 'stable' | 'beta',
 ): string | null {
-  if (!Array.isArray(releases) || releases.length > 100) return null
-  const pattern = channel === 'beta' ? BETA_TAG : STABLE_TAG
-  let best: string | null = null
-  for (const candidate of releases as unknown[]) {
-    if (candidate === null || typeof candidate !== 'object') continue
-    const record = candidate as { tag_name?: unknown; draft?: unknown; prerelease?: unknown }
-    if (record.draft !== false || record.prerelease !== (channel === 'beta')) continue
-    if (typeof record.tag_name !== 'string' || record.tag_name.length > 128) continue
-    if (!pattern.test(record.tag_name)) continue
-    const version = record.tag_name.slice(1)
-    if (best === null) {
-      best = version
-      continue
-    }
-    const comparison = compareChamberVersions(version, best)
-    if (comparison !== null && comparison > 0) best = version
-  }
-  return best
+  return selectReleaseCandidate(releases, channel)?.version ?? null
 }
 
 /** 通道判定（与 updater.ts resolveChannel 同语义：内建 beta 版本或显式
@@ -219,7 +202,7 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
         listener(state)
       } catch (error) {
         try {
-          deps.logger.error('[updater-headless] state listener failed:', error instanceof Error ? error.message : String(error))
+          deps.logger.error('[updater-headless] state listener failed:', describeError(error))
         } catch { /* logging boundary */ }
       }
     }
@@ -252,24 +235,15 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
         }
         return
       }
-      if (typeof request !== 'function') throw new Error('update check is unavailable (no fetch)')
-      const abort = new AbortController()
-      const timer = setTimeout(() => abort.abort(), timeoutMs)
-      timer.unref?.()
-      let releases: unknown
-      try {
-        const response = await request(RELEASES_URL, {
-          headers: { Accept: 'application/vnd.github+json' },
-          signal: abort.signal,
-        })
-        if (!response.ok) throw new Error(`update check failed (HTTP ${response.status})`)
-        releases = await response.json()
-      } finally {
-        clearTimeout(timer)
-      }
+      // 有界查询为共享实现（update-discovery.ts）；两侧错误串保持本 flavor 原样。
+      const releases = await fetchGithubReleases(request, {
+        timeoutMs,
+        unavailableMessage: 'update check is unavailable (no fetch)',
+        failureLabel: 'update check failed',
+      })
       // 响应形状不可信：非数组/超界是 feed 故障（loud error），绝不当「已是最新」
       // （proxy honesty——空成功必须与真无更新区分）。
-      if (!Array.isArray(releases) || releases.length > 100) {
+      if (!isBoundedReleasesList(releases)) {
         throw new Error('invalid GitHub releases response')
       }
       const latest = selectLatestReleaseVersion(releases, channel)
@@ -298,7 +272,7 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
       }
       setState({ phase: 'available', latestVersion: latest, downloadPercent: null, releaseUrl, error: null })
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
+      const message = describeError(error)
       deps.logger.warn('[updater-headless] check failed:', message)
       setState({ phase: 'error', latestVersion: null, downloadPercent: null, releaseUrl: null, error: sanitizeErrorText(message) })
     } finally {
@@ -423,7 +397,7 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
               + (reason ?? '壳未提供原因（缺 feed/公钥）'))
           }
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error)
+          const message = describeError(error)
           deps.logger.warn('[updater-headless] 原生更新器能力探测失败（保持 blocked-available）：' + message)
         }
       })()

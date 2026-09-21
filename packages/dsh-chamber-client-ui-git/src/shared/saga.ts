@@ -83,7 +83,7 @@ function assertCreateCorrelation(
     || created.path !== preview.targetPath
     || created.branch !== preview.branch
     || created.head !== preview.baseHead
-  ) throw new Error('gitWorktree/create 返回值与原预览不匹配')
+  ) throw new Error('gitWorktree/create result does not match the preview')
 }
 
 /** Structural correlation of a workspace.create response. NOTE: the returned
@@ -103,7 +103,7 @@ function assertWorkspaceCorrelation(
     typeof workspace.workspaceId !== 'string'
     || workspace.workspaceId === ''
     || typeof workspace.created !== 'boolean'
-  ) throw new Error('workspace.create 返回值与请求不匹配')
+  ) throw new Error('workspace.create result does not match the request')
 }
 
 async function createExactSession(
@@ -112,7 +112,7 @@ async function createExactSession(
   sessionId: string,
 ): Promise<void> {
   const publishedId = await create(workspaceId, sessionId)
-  if (publishedId !== sessionId) throw new Error('session.create 返回了不同的预分配会话 id')
+  if (publishedId !== sessionId) throw new Error('session.create returned a different preallocated session id')
 }
 
 /**
@@ -172,7 +172,7 @@ export async function runCreateSaga(
         branch: created.branch,
         head: created.head,
         sessionId: ids.sessionId,
-        message: `${errorText(workspaceError)}；回滚也失败：${errorText(rollbackError)}`,
+        message: `${errorText(workspaceError)}; rollback also failed: ${errorText(rollbackError)}`,
       }, true)
     }
     // Rollback succeeded: both mutations still require an immediate fresh read.

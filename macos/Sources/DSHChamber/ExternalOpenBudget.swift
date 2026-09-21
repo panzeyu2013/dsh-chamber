@@ -21,13 +21,15 @@ public struct ExternalOpenBudget {
     /// 超限后的冷却时长（shell-core：30_000ms）。
     public let cooldown: TimeInterval
 
-    private var opens: [Double] = []
+    /// 窗口计数（2026-12 单源化：判定在 RollingWindowLimiter，冷却/清空语义留在本类型）。
+    private var windowed: RollingWindowLimiter
     private var blockedUntil: Double = 0
 
     public init(window: TimeInterval = 10, maxOpens: Int = 8, cooldown: TimeInterval = 30) {
         self.window = window
         self.maxOpens = maxOpens
         self.cooldown = cooldown
+        self.windowed = RollingWindowLimiter(window: window, limit: maxOpens)
     }
 
     public enum Decision: Equatable {
@@ -36,17 +38,19 @@ public struct ExternalOpenBudget {
     }
 
     /// 判定一次打开请求；`allow` 时计入本次。
+    /// 判定顺序与迁移前逐条一致：冷却未过 → blocked；窗口超限 → 进入冷却并
+    /// 清空窗口计数；否则放行并记账。
     public mutating func decide(now: Double) -> Decision {
         if now < blockedUntil {
             return .blocked(cooldownRemaining: blockedUntil - now)
         }
-        opens = opens.filter { now - $0 < window }
-        if opens.count >= maxOpens {
+        switch windowed.record(now: now) {
+        case .allow:
+            return .allow
+        case .deny:
             blockedUntil = now + cooldown
-            opens.removeAll()
+            windowed.reset()
             return .blocked(cooldownRemaining: cooldown)
         }
-        opens.append(now)
-        return .allow
     }
 }

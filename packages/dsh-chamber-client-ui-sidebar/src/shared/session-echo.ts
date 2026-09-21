@@ -61,6 +61,7 @@
 import type { InstanceAggregate, SessionRow, WorkspaceRow } from './instance-api.ts'
 import { basenameOf } from './instance-api.ts'
 import { canonicalPathKey, sessionDisplayTitle } from './derive.ts'
+import { filterLedgerRows, forgetLedgerSources, mapLedgerRows, setLedgerRows, sweepLedger } from './ledger.ts'
 import { assertSingletonModule } from './singleton.ts'
 
 assertSingletonModule('session-echo')
@@ -165,23 +166,12 @@ export function recordPendingSession(
     at: now,
   }
   const kept = rows.filter(row => row.sessionId !== created.sessionId)
-  return { ...ledger, [sourceId]: [...kept, next] }
+  return setLedgerRows(ledger, sourceId, [...kept, next])
 }
 
 /** Drop echoes older than the TTL (identity-preserving when nothing expired). */
 export function sweepPendingSessions(ledger: SessionEchoLedger, now: number): SessionEchoLedger {
-  let changed = false
-  const next: Record<string, readonly PendingSession[]> = {}
-  for (const [sourceId, rows] of Object.entries(ledger)) {
-    const kept = rows.filter(row => now - row.at < PENDING_SESSION_TTL_MS)
-    if (kept.length === rows.length) {
-      next[sourceId] = rows
-      continue
-    }
-    changed = true
-    if (kept.length > 0) next[sourceId] = kept
-  }
-  return changed ? next : ledger
+  return sweepLedger(ledger, row => now - row.at >= PENDING_SESSION_TTL_MS)
 }
 
 /**
@@ -198,18 +188,12 @@ export function reconcilePendingSessions(
   sourceId: string,
   authoritative: readonly WorkspaceRow[],
 ): SessionEchoLedger {
-  const rows = ledger[sourceId]
-  if (rows === undefined || rows.length === 0) return ledger
+  if (ledger[sourceId] === undefined) return ledger
   const accounted = new Set<string>()
   for (const workspace of authoritative) {
     for (const sessionId of workspace.sessionIds) accounted.add(sessionId)
   }
-  const kept = rows.filter(row => !accounted.has(row.sessionId))
-  if (kept.length === rows.length) return ledger
-  const next: Record<string, readonly PendingSession[]> = { ...ledger }
-  if (kept.length === 0) delete next[sourceId]
-  else next[sourceId] = kept
-  return next
+  return filterLedgerRows(ledger, sourceId, row => !accounted.has(row.sessionId))
 }
 
 /**
@@ -224,14 +208,7 @@ export function removePendingSession(
   sourceId: string,
   sessionId: string,
 ): SessionEchoLedger {
-  const rows = ledger[sourceId]
-  if (rows === undefined || rows.length === 0) return ledger
-  const kept = rows.filter(row => row.sessionId !== sessionId)
-  if (kept.length === rows.length) return ledger
-  const next: Record<string, readonly PendingSession[]> = { ...ledger }
-  if (kept.length === 0) delete next[sourceId]
-  else next[sourceId] = kept
-  return next
+  return filterLedgerRows(ledger, sourceId, row => row.sessionId !== sessionId)
 }
 
 /** Retire the echoes of sources that left the registry (same-id re-add = new generation). */
@@ -239,14 +216,7 @@ export function forgetPendingSessions(
   ledger: SessionEchoLedger,
   retired: ReadonlySet<string>,
 ): SessionEchoLedger {
-  let changed = false
-  const next: Record<string, readonly PendingSession[]> = { ...ledger }
-  for (const sourceId of retired) {
-    if (next[sourceId] === undefined) continue
-    delete next[sourceId]
-    changed = true
-  }
-  return changed ? next : ledger
+  return forgetLedgerSources(ledger, retired)
 }
 
 /**
@@ -371,23 +341,12 @@ export function recordPendingArchive(
 ): SessionArchiveLedger {
   const rows = ledger[sourceId] ?? []
   const kept = rows.filter(row => row.sessionId !== sessionId)
-  return { ...ledger, [sourceId]: [...kept, { sessionId, at: now }] }
+  return setLedgerRows(ledger, sourceId, [...kept, { sessionId, at: now }])
 }
 
 /** Drop tombstones whose lease expired (identity-preserving when none did). */
 export function sweepPendingArchives(ledger: SessionArchiveLedger, now: number): SessionArchiveLedger {
-  let changed = false
-  const next: Record<string, readonly PendingArchive[]> = {}
-  for (const [sourceId, rows] of Object.entries(ledger)) {
-    const kept = rows.filter(row => now - row.at < PENDING_ARCHIVE_TTL_MS)
-    if (kept.length === rows.length) {
-      next[sourceId] = rows
-      continue
-    }
-    changed = true
-    if (kept.length > 0) next[sourceId] = kept
-  }
-  return changed ? next : ledger
+  return sweepLedger(ledger, row => now - row.at >= PENDING_ARCHIVE_TTL_MS)
 }
 
 /**
@@ -403,15 +362,8 @@ export function refreshPendingArchives(
   listed: ReadonlySet<string>,
   now: number,
 ): SessionArchiveLedger {
-  const rows = ledger[sourceId]
-  if (rows === undefined || rows.length === 0) return ledger
-  let changed = false
-  const next = rows.map((row) => {
-    if (!listed.has(row.sessionId) || row.at === now) return row
-    changed = true
-    return { ...row, at: now }
-  })
-  return changed ? { ...ledger, [sourceId]: next } : ledger
+  return mapLedgerRows(ledger, sourceId, row =>
+    !listed.has(row.sessionId) || row.at === now ? row : { ...row, at: now })
 }
 
 /**
@@ -427,15 +379,9 @@ export function reconcilePendingArchives(
   sourceId: string,
   authoritative: readonly string[],
 ): SessionArchiveLedger {
-  const rows = ledger[sourceId]
-  if (rows === undefined || rows.length === 0) return ledger
+  if (ledger[sourceId] === undefined) return ledger
   const covered = new Set(authoritative)
-  const kept = rows.filter(row => !covered.has(row.sessionId))
-  if (kept.length === rows.length) return ledger
-  const next: Record<string, readonly PendingArchive[]> = { ...ledger }
-  if (kept.length === 0) delete next[sourceId]
-  else next[sourceId] = kept
-  return next
+  return filterLedgerRows(ledger, sourceId, row => !covered.has(row.sessionId))
 }
 
 /** Retire the tombstones of sources that left the registry (same-id re-add = new generation). */
@@ -443,14 +389,7 @@ export function forgetPendingArchives(
   ledger: SessionArchiveLedger,
   retired: ReadonlySet<string>,
 ): SessionArchiveLedger {
-  let changed = false
-  const next: Record<string, readonly PendingArchive[]> = { ...ledger }
-  for (const sourceId of retired) {
-    if (next[sourceId] === undefined) continue
-    delete next[sourceId]
-    changed = true
-  }
-  return changed ? next : ledger
+  return forgetLedgerSources(ledger, retired)
 }
 
 /**

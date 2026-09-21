@@ -40,6 +40,14 @@ export const SESSION_FACTS_DISABLED_CODE = 'session_state_disabled'
 /** 探测超时（对齐协议模块 SESSION_STATE_PROBE_TIMEOUT_MS 的一次调用预算）。 */
 export const SESSION_FACTS_PROBE_TIMEOUT_MS = 5_000
 
+/**
+ * 流建连/首字节 deadline：同一条 HTTP 通道上的同类等待，与 probe 同预算。
+ * 到点按「流断开」收口（abort + markStale + 诊断 + 有界重连）——半死隧道下
+ * 裸 fetch 可能永不落定，没有它这条流会带着 streamStarted=true 永久楔死：
+ * 无 stale、无重连、该来源未读/通知/行刷新静默冻结（2026-12 审计 P0）。
+ */
+export const SESSION_FACTS_STREAM_CONNECT_TIMEOUT_MS = SESSION_FACTS_PROBE_TIMEOUT_MS
+
 /** 流断开后的重连退避（有界）。 */
 export const SESSION_FACTS_RECONNECT_MS = 3_000
 
@@ -49,6 +57,7 @@ export const SESSION_FACTS_SILENCE_MS = 60_000
 /** poll 档的快照重取周期（与 30s unary watchdog 同量级）。 */
 export const SESSION_FACTS_POLL_MS = 30_000
 
+import { isWatermark } from './watermark.ts'
 import { createUnreadAckOutbox, type UnreadAckMethod } from './unread-store.ts'
 
 export type SessionFactsVerdict = 'ok' | 'legacy-gateway' | 'degraded'
@@ -159,6 +168,10 @@ export interface SessionFactsSourceOptions {
   silenceMs?: number
   /** poll 档重取周期（0 = 不轮询）。 */
   pollIntervalMs?: number
+  /** 流建连/首字节 deadline（默认 SESSION_FACTS_STREAM_CONNECT_TIMEOUT_MS；测试注入小值）。 */
+  streamConnectTimeoutMs?: number
+  /** 重连退避（probe 失败与流断开共用；默认 SESSION_FACTS_RECONNECT_MS；测试注入小值）。 */
+  reconnectMs?: number
   /** 待发 ack 队列上限（条目数；默认 UNREAD_PENDING_MAX；测试注入小值）。 */
   ackQueueMax?: number
   /** 诊断回调（warn 一次语义由调用方决定；本模块不直接 console）。 */
@@ -190,10 +203,6 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
   const prototype: unknown = Object.getPrototypeOf(value)
   return prototype === Object.prototype || prototype === null
-}
-
-function isWatermark(value: unknown): value is number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
 }
 
 function stringOrNull(value: unknown): string | null {
@@ -463,6 +472,8 @@ interface SourceState {
   snapshot: SessionFactsSnapshot | undefined
   streamController: AbortController | null
   streamStarted: boolean
+  /** 当前在途流的建连/首字节 deadline 定时器（正常收头或 closeStream 后必须清）。 */
+  streamConnectTimer: ReturnType<typeof setTimeout> | null
   lastEventId: number | null
   lastFrameAt: number
   reconnectTimer: ReturnType<typeof setTimeout> | null
@@ -479,6 +490,8 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
   const basePath = options.basePath ?? ('/api/i/' + options.sourceId)
   const silenceMs = options.silenceMs ?? SESSION_FACTS_SILENCE_MS
   const pollIntervalMs = options.pollIntervalMs ?? SESSION_FACTS_POLL_MS
+  const streamConnectTimeoutMs = options.streamConnectTimeoutMs ?? SESSION_FACTS_STREAM_CONNECT_TIMEOUT_MS
+  const reconnectMs = options.reconnectMs ?? SESSION_FACTS_RECONNECT_MS
   const listeners = new Set<(snapshot: SessionFactsSnapshot | undefined) => void>()
   const hintListeners = new Set<(hint: SessionFactsRowHint) => void>()
   const state: SourceState = {
@@ -489,6 +502,7 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     snapshot: undefined,
     streamController: null,
     streamStarted: false,
+    streamConnectTimer: null,
     lastEventId: null,
     lastFrameAt: 0,
     reconnectTimer: null,
@@ -534,18 +548,63 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     for (const listener of [...hintListeners]) listener(hint)
   }
 
+  /**
+   * 快照构造单一工厂（阶段 2 单源化）：probe / SSE sync 帧 / refetch 三个入口此前各
+   * 手写一份同形状对象，字段一旦增删就会漂移。verdict / degradation / mode 仍由调用点
+   * 按各自入口语义给（SSE 帧的 mode 缺失时沿用上一份快照），本工厂只负责形状。
+   */
+  const buildSnapshot = (
+    parsed: NonNullable<ReturnType<typeof parseSessionFactsSnapshotValue>>,
+    verdict: SessionFactsVerdict,
+    degradation: SessionFactsDegradation,
+    mode: SessionFactsMode | null = parsed.mode,
+  ): SessionFactsSnapshot => ({
+    verdict,
+    degradation,
+    mode,
+    hostState: parsed.hostState,
+    serviceable: parsed.serviceable,
+    stale: false,
+    cursor: parsed.cursor,
+    rows: parsed.rows,
+    read: parsed.read,
+    lastEventAt: now(),
+  })
+
+  /** 清掉当前流的静默看门狗（closeStream / clearTimers 共用）。 */
+  const clearSilenceTimer = (): void => {
+    if (state.silenceTimer !== null) { clearInterval(state.silenceTimer); state.silenceTimer = null }
+  }
+
+  /**
+   * 清掉当前流的建连 deadline。显式传 timer 时只清「就是它自己」的那只：
+   * 一条被 timeout/stop 收口后仍迟到的旧流，不得清掉后继流的定时器。
+   */
+  const clearStreamConnectTimer = (timer?: ReturnType<typeof setTimeout>): void => {
+    if (timer === undefined) {
+      if (state.streamConnectTimer === null) return
+      timer = state.streamConnectTimer
+    } else if (state.streamConnectTimer !== timer) {
+      return
+    }
+    state.streamConnectTimer = null
+    clearTimeout(timer)
+  }
+
   const clearTimers = (): void => {
     if (state.reconnectTimer !== null) { clearTimeout(state.reconnectTimer); state.reconnectTimer = null }
     if (state.probeTimer !== null) { clearTimeout(state.probeTimer); state.probeTimer = null }
     if (state.pollTimer !== null) { clearInterval(state.pollTimer); state.pollTimer = null }
-    if (state.silenceTimer !== null) { clearInterval(state.silenceTimer); state.silenceTimer = null }
+    clearSilenceTimer()
+    clearStreamConnectTimer()
   }
 
   const closeStream = (): void => {
     state.streamStarted = false
     state.streamController?.abort()
     state.streamController = null
-    if (state.silenceTimer !== null) { clearInterval(state.silenceTimer); state.silenceTimer = null }
+    clearSilenceTimer()
+    clearStreamConnectTimer()
   }
 
   const markStale = (): void => {
@@ -606,18 +665,7 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
         : parsed.protocol > SESSION_FACTS_PROTOCOL_VERSION
           ? 'forward-skew'
           : verdict === 'ok' ? null : 'unversioned'
-      state.snapshot = {
-        verdict,
-        degradation,
-        mode: parsed.mode,
-        hostState: parsed.hostState,
-        serviceable: parsed.serviceable,
-        stale: false,
-        cursor: parsed.cursor,
-        rows: parsed.rows,
-        read: parsed.read,
-        lastEventAt: now(),
-      }
+      state.snapshot = buildSnapshot(parsed, verdict, degradation)
       state.lastEventId = parsed.cursor
       emit()
       noteChannelAlive()
@@ -633,7 +681,7 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
       }
       markStale()
       diagnostic('[session-facts] probe failed', error)
-      scheduleProbe(SESSION_FACTS_RECONNECT_MS)
+      scheduleProbe(reconnectMs)
     } finally {
       state.probing = false
     }
@@ -645,6 +693,22 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
       state.probeTimer = null
       void probeOnce()
     }, delayMs)
+  }
+
+  /**
+   * R21 静默看门狗：在**请求发起时**武装（而不是响应头到达之后）——建连/首字节
+   * 挂起同样是「通道静默」，旧武装点让半死隧道既无 stale 也无重连。间隔保留
+   * 1s floor 防高频；真正的收口判据仍是 lastFrameAt。
+   */
+  const armSilenceWatchdog = (): void => {
+    if (silenceMs <= 0 || state.silenceTimer !== null) return
+    state.silenceTimer = setInterval(() => {
+      if (state.stopped || now() - state.lastFrameAt <= silenceMs) return
+      diagnostic('[session-facts] stream silent beyond ' + String(silenceMs) + 'ms; resubscribing')
+      closeStream()
+      markStale()
+      void refetchSnapshot()
+    }, Math.max(1000, Math.floor(silenceMs / 3)))
   }
 
   const startDelivery = (mode: SessionFactsMode | null, features: readonly string[]): void => {
@@ -674,18 +738,7 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     if (frame.event === 'sync' || frame.event === 'snapshot') {
       const parsed = parseSessionFactsSnapshotValue(data)
       if (parsed === null) { void refetchSnapshot(); return }
-      state.snapshot = {
-        verdict: 'ok',
-        degradation: null,
-        mode: parsed.mode ?? state.snapshot?.mode ?? 'sse',
-        hostState: parsed.hostState,
-        serviceable: parsed.serviceable,
-        stale: false,
-        cursor: parsed.cursor,
-        rows: parsed.rows,
-        read: parsed.read,
-        lastEventAt: now(),
-      }
+      state.snapshot = buildSnapshot(parsed, 'ok', null, parsed.mode ?? state.snapshot?.mode ?? 'sse')
       state.lastEventId = parsed.cursor
       emit()
       return
@@ -710,18 +763,7 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
       if (state.stopped || generation !== state.generation) return
       const parsed = parseSessionFactsSnapshotValue(body)
       if (parsed === null) return
-      state.snapshot = {
-        verdict: 'ok',
-        degradation: null,
-        mode: parsed.mode,
-        hostState: parsed.hostState,
-        serviceable: parsed.serviceable,
-        stale: false,
-        cursor: parsed.cursor,
-        rows: parsed.rows,
-        read: parsed.read,
-        lastEventAt: now(),
-      }
+      state.snapshot = buildSnapshot(parsed, 'ok', null)
       state.lastEventId = parsed.cursor
       emit()
       noteChannelAlive()
@@ -738,7 +780,7 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     state.reconnectTimer = setTimeout(() => {
       state.reconnectTimer = null
       void streamLoop()
-    }, SESSION_FACTS_RECONNECT_MS)
+    }, reconnectMs)
   }
 
   const streamLoop = async (): Promise<void> => {
@@ -748,6 +790,20 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
     const controller = new AbortController()
     state.streamController = controller
     state.lastFrameAt = now()
+    // 静默看门狗在**请求发起时**即武装：建连/首字节挂起同样是「通道静默」。
+    armSilenceWatchdog()
+    // 建连/首字节 deadline：到点按「流断开」收口。收口动作放在定时器里而不是
+    // 依赖 fetch 因 abort 而 reject —— 忽略 abort 的 carrier 也必须被收口，
+    // 且 catch 侧对 aborted 的早退不得把这次失败吞成「静默」（半死隧道下
+    // 这条流此前会带着 streamStarted=true 永久楔死）。
+    const connectTimer = setTimeout(() => {
+      if (state.stopped || state.streamController !== controller) return
+      diagnostic('[session-facts] stream connect timed out after ' + String(streamConnectTimeoutMs) + 'ms; reconnecting')
+      markStale()
+      closeStream()
+      scheduleStreamReconnect()
+    }, streamConnectTimeoutMs)
+    state.streamConnectTimer = connectTimer
     try {
       const headers: Record<string, string> = { accept: 'text/event-stream' }
       if (state.lastEventId !== null) headers['last-event-id'] = String(state.lastEventId)
@@ -758,20 +814,12 @@ export function createSessionFactsSource(options: SessionFactsSourceOptions): Se
         cache: 'no-store',
         signal: controller.signal,
       })
+      // 响应头到达 = 建连成功：建连 deadline 退场，静默交给看门狗。
+      clearStreamConnectTimer(connectTimer)
       if (generation !== state.generation) return
       if (!response.ok) throw new Error('stream answered ' + String(response.status))
       const body = response.body
       if (body === null || typeof body.getReader !== 'function') throw new Error('stream body unavailable')
-      // R21 静默探针：连接活着但事件停投时重订阅并整量重取。
-      if (silenceMs > 0) {
-        state.silenceTimer = setInterval(() => {
-          if (state.stopped || now() - state.lastFrameAt <= silenceMs) return
-          diagnostic('[session-facts] stream silent beyond ' + String(silenceMs) + 'ms; resubscribing')
-          closeStream()
-          markStale()
-          void refetchSnapshot()
-        }, Math.max(1000, Math.floor(silenceMs / 3)))
-      }
       const reader = body.getReader()
       const decoder = new TextDecoder()
       let buffer = ''

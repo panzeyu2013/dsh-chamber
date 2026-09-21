@@ -22,7 +22,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import type { SessionStateHostInfo, SessionStateMode } from '@dsh-chamber/control-plane'
+import type { SessionStateMode } from '@dsh-chamber/control-plane'
 import {
   PROTOCOL_VERSION,
   SESSION_STATE_BASE_FEATURES,
@@ -32,28 +32,16 @@ import {
 } from '@dsh-chamber/control-plane'
 import {
   createChamberSessionState,
-  createSessionStateStore,
   featuresForMode,
 } from '../../src/session-state.ts'
 import { FakeRequest, FakeResponse } from '../support/utils.ts'
-import { scratch, silentLogger } from './harness.ts'
+import { sessionSurfaceFor } from './harness.ts'
 
 let activeSurface: ReturnType<typeof createChamberSessionState>
 
+/** Session-state surface harness (shared factory; 2026-12 audit F40). */
 function surfaceFor(t: { after(fn: () => void): void }, mode: SessionStateMode = 'sse') {
-  const store = createSessionStateStore({ stateDir: scratch(t), logger: silentLogger, now: () => 1_000 })
-  let currentMode: SessionStateMode = mode
-  const host: SessionStateHostInfo = { now: 1_000, serviceable: true, state: 'ready' }
-  const surface = createChamberSessionState({
-    logger: silentLogger,
-    store,
-    observer: { status: () => ({ mode: currentMode }), hostInfo: () => host } as never,
-    enabled: true,
-    now: () => 1_000,
-    keepaliveMs: 30,
-  })
-  t.after(() => surface.closeAllStreams())
-  return { surface, store, setMode: (value: SessionStateMode) => { currentMode = value } }
+  return sessionSurfaceFor(t, { mode })
 }
 
 async function call(method: string, path: string, body?: unknown): Promise<FakeResponse> {
@@ -75,7 +63,7 @@ test('cell A: an absent route set classifies as legacy-gateway, never as a failu
   assert.equal(absent.kind, 'legacy-gateway')
   assert.equal(absent.degradation, 'legacy-gateway')
   // The distinction that keeps a transient outage from being read as "old server".
-  const timedOut = classifySessionStateProbe({ kind: 'error', error: 'timeout' })
+  const timedOut = classifySessionStateProbe({ kind: 'failure', reason: 'timeout' })
   assert.notEqual(timedOut.kind, 'legacy-gateway')
   const flaky = classifySessionStateProbe({ kind: 'response', status: 502 })
   assert.notEqual(flaky.kind, 'legacy-gateway')
@@ -178,7 +166,7 @@ test('cell D: poll mode drops the event-only ids and off mode advertises none', 
 
 test('unknown request fields and query params are ignored, wrong types are not', async t => {
   const harness = surfaceFor(t)
-  harness.store.applyBaseline([{ sessionId: 's1', running: false, updatedAt: 5 }], { at: 100 })
+  harness.store.applyBaseline([{ sessionId: 's1', running: false, updatedAt: 5, parentSessionId: null, origin: null }], { at: 100 })
   activeSurface = harness.surface
   // Unknown fields from a NEWER client must not break an older server.
   const extra = await call('POST', '/chamber/session-state/read', {

@@ -23,7 +23,7 @@
 //     {"edgeId":N,"ok":true,"result":…} | {"edgeId":N,"ok":false,"error":…}——
 //     sidecar 侧 pendingEdges 无超时，Swift 不应答 = 永久挂起）与 **notify
 //     单向帧** {"notify":event,"payload":…}（ready/rendererPush 等）。这两族
-//     帧既无 id 也无 event 键，FrameCodec.decodeLine 按容忍语义归 nil——
+//     帧既无 id 也无 event 键，FrameCodec.classify 按容忍语义归 nil——
 //     M3 前的本文件会把它们当非协议行 loud 丢弃；现由本文件的
 //     decodeOutboundFrame 在 BridgeClient 层先行分类（不改 FrameCodec，
 //     注释见该函数），edge 经 v1 默认应答策略（defaultEdgeResponse /
@@ -567,20 +567,26 @@ public final class BridgeClient {
 
     // MARK: - 子进程环境（T-11）
 
-    /// 子进程环境的合并规则（T-11）：打包态从基底与 overlay 都剔除全部 DSH_CHAMBER_SHELL_*
-    /// （与 AppDelegate 对壳自身 env 的过滤同规）。start() 把当前进程环境当
-    /// 基底、构造参数当 overlay——若只过滤调用方传入的 overlay，基底里的
+    /// 打包态剔除全部 DSH_CHAMBER_SHELL_* 的**唯一实现**（2026-12 单源化）：
+    /// 壳自身 env（AppDelegate 的路径/URL 解析基底）与 sidecar 子进程 env
+    /// （childEnvironment）共用同一判据（前缀 + isPackaged）。dev（swift run /
+    /// 非 .app）原样返回——这些变量只服务 dev/POC。
+    public static func filteredShellEnvironment(base: [String: String],
+                                                isPackaged: Bool) -> [String: String] {
+        guard isPackaged else { return base }
+        return base.filter { !$0.key.hasPrefix("DSH_CHAMBER_SHELL_") }
+    }
+
+    /// 子进程环境的合并规则（T-11）：打包态从基底与 overlay 都剔除全部
+    /// DSH_CHAMBER_SHELL_*（单源 = filteredShellEnvironment）。start() 把当前进程
+    /// 环境当基底、构造参数当 overlay——若只过滤调用方传入的 overlay，基底里的
     /// DSH_CHAMBER_SHELL_* 仍会经合并进入 sidecar（此前的实际泄漏路径）。打包判定与
     /// AppDelegate 相同：PackagedLayout.isAppBundle(executablePath:)。
     public static func childEnvironment(base: [String: String],
                                         overlay: [String: String],
                                         isPackaged: Bool) -> [String: String] {
-        var merged = base
-        if isPackaged {
-            merged = merged.filter { !$0.key.hasPrefix("DSH_CHAMBER_SHELL_") }
-        }
-        for (key, value) in overlay {
-            if isPackaged && key.hasPrefix("DSH_CHAMBER_SHELL_") { continue }
+        var merged = filteredShellEnvironment(base: base, isPackaged: isPackaged)
+        for (key, value) in filteredShellEnvironment(base: overlay, isPackaged: isPackaged) {
             merged[key] = value
         }
         return merged
@@ -1243,15 +1249,15 @@ public final class BridgeClient {
     /// 已解析顶层 JSON 对象 → 出站帧分类（Phase 1 C3：对象来自
     /// handleIncomingLine 的唯一一次解析，本函数不再自行 JSONSerialization）。
     /// **在 BridgeClient 层做而不扩 FrameCodec/
-    /// BridgeFrame**：edge/notify 帧既无 id 也无 event 键，decodeLine 按容忍
+    /// BridgeFrame**：edge/notify 帧既无 id 也无 event 键，`classify` 按容忍
     /// 语义归 nil（M3 前 → 非协议行 loud 丢弃）；若给 BridgeFrame 增加 case，
-    /// 需同步 FrameCodec 的 encode/decode 与其既有单测断言族（FrameCodecTests
+    /// 需同步 FrameCodec 的分类与其既有单测断言族（FrameCodecTests
     /// 的分类优先序/容忍断言），POC 取本层先行分类的最小侵入——注释声明：
     /// W-17 协议族稳定后若收编回 FrameCodec，本函数与 dispatchOutboundFrame
     /// 一并迁移，BridgeClient 公开出口不变。
     /// 分类确定性（防歧义帧摇摆）：edge 键优先于 notify 键（两族协议互斥）；
     /// 结构不合法（edge/notify 名非字符串、edgeId 非数值等）→ nil，调用方
-    /// loud（与 decodeLine 的 nil 语义同构）。
+    /// loud（与 `classify` 的 nil 语义同构）。
     private static func decodeOutboundFrame(jsonObject object: [String: Any]) -> OutboundFrame? {
         // Phase 1 C3 补口（独立审查 RISK）：与 FrameCodec.classify 同规——**已知键
         // 存在但类型不符毒化整行**。旧实现用 `as?` 链会让
@@ -1275,15 +1281,12 @@ public final class BridgeClient {
     }
 
     /// 出站 edgeId 的严格整数取值：Bool 排除；非浮点存储无损取 Int64；浮点存储
-    /// 要求精确可表示且排除 -2^63 边界——与 FrameCodec.intValue（classify 的 id 域）
-    /// 逐条同规（差异见其注释：JSONSerialization 已丢原始 token）。
+    /// 要求精确可表示且排除 -2^63 边界。
+    /// 判定本体 = `StrictJSONNumber.int64(_:domain: .int64Exact)`（2026-12 单源化，
+    /// 与 FrameCodec.intValue 共用同一实现；JSONSerialization 已丢原始 token 的
+    /// 差异说明见 FrameCodec.intValue 注释）。
     private static func exactInt64(_ raw: Any?) -> Int64? {
-        guard let raw, let number = raw as? NSNumber,
-              CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
-        if !CFNumberIsFloatType(number) { return number as? Int64 }
-        let double = number.doubleValue
-        guard double != -9_223_372_036_854_775_808.0 else { return nil }
-        return Int64(exactly: double)
+        StrictJSONNumber.int64(raw, domain: .int64Exact)
     }
 
     /// 出站帧 payload 键取值：键缺省 → nil；显式 null → .null；其它 JSON 值 →
@@ -1457,7 +1460,7 @@ public final class BridgeClient {
         // 先占 id 后编码：编码失败（超限等）仅烧号、不登记、不悬挂——id
         // 单调语义不受影响（静态审查 #3 注释修正）。
         let id = allocateID()
-        let data = try FrameCodec.encode(.request(id: id, method: method, payload: payload))
+        let data = try FrameCodec.encodeRequest(id: id, method: method, payload: payload)
         return try await withCheckedThrowingContinuation { continuation in
             // 登记先于写入：sidecar 只可能收到帧后应答，“应答先到而登记未
             // 就”的窗口不存在；写失败再回滚登记（见下），绝不留悬挂。

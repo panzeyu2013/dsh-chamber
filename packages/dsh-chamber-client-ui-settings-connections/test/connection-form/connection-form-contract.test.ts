@@ -49,6 +49,25 @@ test('remoteDshHome rejects traversal/empty segments and accepts safe home roots
   }
 })
 
+test('the connections form validates with the mirrored gates and limits, never an inline copy', () => {
+  // 2026-12 audit P1-4: the component used to re-spell weaker inline regexes
+  // (the remoteDshHome one accepted /srv/../tmp, /srv//dsh and /srv/dsh/) while
+  // this module was imported by the parity test only. This lock keeps the form
+  // wired to the AUTHORITY the parity test above pins to desktop.
+  const source = readFileSync(new URL('../../src/client/ConnectionsSection.tsx', import.meta.url), 'utf8')
+  assert.match(source, /INSTANCE_ID_PATTERN\.test\(id\)/u, 'id')
+  assert.match(source, /SSH_HOST_PATTERN\.test\(host\)/u, 'host')
+  assert.match(source, /SSH_USER_PATTERN\.test\(user\)/u, 'user')
+  assert.match(source, /REMOTE_DSH_HOME_PATTERN\.test\(remoteDshHome\)/u, 'remoteDshHome')
+  assert.match(source, /value\.label\.length > MAX_INSTANCE_LABEL_CHARS/u, 'label cap')
+  assert.match(source, /host\.length > MAX_SSH_HOST_CHARS/u, 'host cap')
+  assert.match(source, /user\.length > MAX_SSH_USER_CHARS/u, 'user cap')
+  assert.match(source, /value\.password\.length > MAX_SSH_PASSWORD_CHARS/u, 'ssh password cap')
+  assert.match(source, /serviceName\.length > MAX_SERVICE_NAME_CHARS/u, 'service cap')
+  assert.match(source, /remoteDshHome\.length > MAX_REMOTE_DSH_HOME_CHARS/u, 'dsh-home cap')
+  assert.doesNotMatch(source, /\^~\?\\\/\[a-zA-Z0-9\._\/-\]\+\$/u, 'the weak inline remoteDshHome regex must not come back')
+})
+
 test('service names cannot be parsed as systemctl options', () => {
   assert.equal(UI_SERVICE_NAME_PATTERN.test('--help'), false)
   assert.equal(UI_SERVICE_NAME_PATTERN.test('-Hattacker'), false)

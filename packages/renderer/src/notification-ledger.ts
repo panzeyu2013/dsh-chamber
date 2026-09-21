@@ -14,6 +14,7 @@
  * 边界：有界环（默认 200）、只存 id/种类/水位/决定与错误串，不存正文；发布为**函数**的
  * 只读全局（活视图，无周期性对象），供验收仪器/CDP 直接读。
  */
+import { createBoundedList } from './bounded-ledger.ts'
 
 export type NotificationDecision = 'sent' | 'suppressed' | 'skipped'
 
@@ -35,17 +36,16 @@ export interface NotificationLedgerCounts {
 }
 
 export function createNotificationLedger(options: { limit?: number } = {}) {
-  const limit = options.limit ?? 200
-  const entries: NotificationLedgerEntry[] = []
+  // 有界环走内核（阶段 2 单源化）：尾部入队、超限头部淘汰，语义与旧 splice 版逐字等价。
+  const ring = createBoundedList<NotificationLedgerEntry>(options.limit ?? 200)
   const counts: NotificationLedgerCounts = { sent: 0, suppressed: 0, skipped: 0 }
   return {
     record(entry: NotificationLedgerEntry): void {
-      entries.push(entry)
-      if (entries.length > limit) entries.splice(0, entries.length - limit)
+      ring.push(entry)
       counts[entry.decision] += 1
     },
     entries(): readonly NotificationLedgerEntry[] {
-      return [...entries]
+      return ring.toArray()
     },
     counts(): NotificationLedgerCounts {
       return { ...counts }
@@ -59,8 +59,6 @@ export function createNotificationLedger(options: { limit?: number } = {}) {
     },
   }
 }
-
-export type NotificationLedger = ReturnType<typeof createNotificationLedger>
 
 /** 进程级单例（所有壳共享；只读仪表）。 */
 export const notificationLedger = createNotificationLedger()

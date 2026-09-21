@@ -56,8 +56,11 @@ export const TRANSPORT_FORM_OPTIONS: readonly TransportFormSchema[] = [
 /** systemd unit-name input gate. A leading dash is never a unit name here:
  * it could otherwise be parsed as a systemctl option. Main repeats this gate
  * and inserts `--` before the unit, so renderer validation is UX rather than
- * the security boundary. */
-export const SERVICE_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/
+ * the security boundary. The literal lives with the other desktop-gate mirrors
+ * (host-validation.ts, byte-parity-locked by connection-form-contract.test.ts)
+ * and is re-exported here so the form and the mirror cannot drift apart
+ * (2026-12 audit: duplicate-literal merge). */
+export { SERVICE_NAME_PATTERN } from './host-validation.ts'
 
 export function transportFormSchema(method: TransportMethod): TransportFormSchema {
   return TRANSPORT_FORM_SCHEMAS[method]

@@ -165,11 +165,7 @@ export class OpenInAppCore {
    * @returns the icon value.
    */
   async icon(app: unknown): Promise<OpenInAppIconValue> {
-    const entry = this.catalogEntry(app)
-    const resolved = (await this.availability()).get(entry.id)
-    if (resolved === undefined) {
-      throw new OpenInAppError('unavailable-app', `${entry.id} is not installed on this host`)
-    }
+    const { entry, resolved } = await this.resolvedEntry(app)
     const icon = await this.iconOf(entry, resolved)
     if (icon === null) {
       throw new OpenInAppError('icon-unavailable', `no icon for ${entry.id}`)
@@ -184,11 +180,7 @@ export class OpenInAppCore {
    * @returns after the host acknowledged the launch.
    */
   async open(app: unknown, path: unknown): Promise<void> {
-    const entry = this.catalogEntry(app)
-    const resolved = (await this.availability()).get(entry.id)
-    if (resolved === undefined) {
-      throw new OpenInAppError('unavailable-app', `${entry.id} is not installed on this host`)
-    }
+    const { entry, resolved } = await this.resolvedEntry(app)
     if (typeof path !== 'string' || path === '' || !isAbsolute(path)) {
       throw new OpenInAppError('invalid-path', 'path must be an absolute directory path')
     }
@@ -224,6 +216,16 @@ export class OpenInAppCore {
       throw new OpenInAppError('unknown-app', `unknown open-in application: ${JSON.stringify(app)}`)
     }
     return entry
+  }
+
+  /** Resolve one wire app id to its installed launcher (icon/open share this leg). */
+  private async resolvedEntry(app: unknown): Promise<{ entry: OpenInAppApp; resolved: OpenInAppResolvedLaunch }> {
+    const entry = this.catalogEntry(app)
+    const resolved = (await this.availability()).get(entry.id)
+    if (resolved === undefined) {
+      throw new OpenInAppError('unavailable-app', `${entry.id} is not installed on this host`)
+    }
+    return { entry, resolved }
   }
 
   /** The internals every resolver call receives (host facts first, seams last). */

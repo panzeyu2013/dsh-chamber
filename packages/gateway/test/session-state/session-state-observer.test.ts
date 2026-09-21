@@ -97,8 +97,8 @@ async function connect(harness: ObserverHarness, clientId = 'mux-client-1'): Pro
 
 function followFrames(harness: ObserverHarness): Array<Record<string, unknown>> {
   return harness.sockets.sockets
-    .flatMap(socket => socket.parsed())
-    .filter(frame => frame['endpoint'] === 'session/follow') as Array<Record<string, unknown>>
+    .flatMap(socket => socket.parsed() as Array<Record<string, unknown>>)
+    .filter(frame => frame['endpoint'] === 'session/follow')
 }
 
 // ---------------------------------------------------------------------------
@@ -297,8 +297,16 @@ test('the grace window is honoured: no delegation before waterfallGraceMs', asyn
   harness.observer.kick('tick')
   await settle()
   assert.equal(harness.calls.calls.some(entry => entry.method === '$events/result'), false)
-  await delay(200)
-  const resultCalls = harness.calls.calls.filter(entry => entry.method === '$events/result')
+  // The mux grace timer is a real timer (120 ms here). A fixed 200 ms sleep
+  // races it under load (observed flake, 2026-12): poll for the delegation
+  // instead. The assertions are unchanged — none before the window, exactly one
+  // after it.
+  const deadline = Date.now() + 1_000
+  let resultCalls: typeof harness.calls.calls = []
+  do {
+    await delay(20)
+    resultCalls = harness.calls.calls.filter(entry => entry.method === '$events/result')
+  } while (resultCalls.length === 0 && Date.now() < deadline)
   assert.equal(resultCalls.length, 1, 'the mux grace timer delegates after the window')
   assert.equal((resultCalls[0].payload as { args: { eventId: string } }).args.eventId, 'w3')
 })

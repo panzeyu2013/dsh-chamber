@@ -53,7 +53,6 @@ export const IPC_CHANNELS = {
   SYSTEM_RESUME: 'dsh-chamber:system-resume',
 
   SSH_INSTANCES_GET: 'desktop_ssh_instances_get',
-  SSH_INSTANCES_SET: 'desktop_ssh_instances_set',
   SSH_SAVE_CONNECTION: 'desktop_ssh_save_connection',
   SSH_DELETE_CONNECTION: 'desktop_ssh_delete_connection',
   SSH_SET_PASSWORD: 'desktop_ssh_set_password',

@@ -17,6 +17,7 @@
  */
 
 import { chamberBridge } from './aggregate-store.ts'
+import { pollUntil, sleepMs } from './poll.ts'
 
 /** The projection slice this gate needs (structurally satisfied by the store). */
 export interface ServingGateSource {
@@ -41,8 +42,6 @@ export interface ServingGateOptions {
 
 const DEFAULT_TIMEOUT_MS = 60_000
 const DEFAULT_POLL_MS = 250
-const realSleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
-
 function readSources(options: ServingGateOptions): readonly ServingGateSource[] {
   if (options.getSources !== undefined) return options.getSources()
   return chamberBridge.getServers()
@@ -60,16 +59,27 @@ export async function waitForSourceServing(
 ): Promise<boolean> {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const pollMs = options.pollMs ?? DEFAULT_POLL_MS
-  const sleep = options.sleep ?? realSleep
+  const sleep = options.sleep ?? sleepMs
   const deadline = Date.now() + timeoutMs
-  for (;;) {
-    const source = readSources(options).find(candidate => candidate.id === sourceId)
-    if (source === undefined) return false
-    if (source.connected) return true
-    if (TERMINAL_PHASES.has(source.phase)) return false
-    if (Date.now() >= deadline) return false
-    await sleep(pollMs)
-  }
+  // Budget lives in classify (not the kernel's deadline) because this gate
+  // probes ONCE past a zero deadline before giving up — exactly the retired
+  // loop's order: read, decide connected/terminal, then test the deadline.
+  const verdict = await pollUntil<boolean | undefined, boolean>({
+    intervalMs: pollMs,
+    sleep,
+    probe: () => {
+      const source = readSources(options).find(candidate => candidate.id === sourceId)
+      if (source === undefined) return false
+      if (source.connected) return true
+      return TERMINAL_PHASES.has(source.phase) ? false : undefined
+    },
+    classify: (state) => state !== undefined
+      ? { kind: 'done', value: state }
+      : Date.now() >= deadline
+        ? { kind: 'done', value: false }
+        : { kind: 'retry' },
+  })
+  return verdict === true
 }
 
 /**

@@ -20,7 +20,7 @@
  *   node scripts/gates/verify-test-wiring.mjs --list     # report, never fails
  */
 
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -29,21 +29,11 @@ const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 /** Repository directories that are scanned for test files. */
 export const TEST_SCAN_ROOTS = ['packages', 'scripts']
 
-/** Directory names never descended into while scanning. */
-export const IGNORED_DIRECTORIES = new Set([
-  'node_modules',
-  'vendor',
-  'dist',
-  'lib',
-  'release',
-  '.git',
-  '.desktop-build',
-  'coverage',
-  // Dev runtime state (the desktop app's own .dev-user-data holds a harness
-  // worktree with foreign *.test.mjs files): never part of the package's test
-  // surface. Mirrors test-runner-lockstep.test.mjs's list.
-  '.dev-user-data',
-])
+// ONE ignore set + one walk for every gate that scans the repository
+// (scripts/lib/walk.mjs; P2-17 of the 13-scripts audit).
+import { IGNORED_DIRECTORIES, walkFiles } from '../lib/walk.mjs'
+
+export { IGNORED_DIRECTORIES, walkFiles }
 
 /** Wiring forms accepted for one test file. */
 export const TEST_FILE_PATTERN = /\.test\.(?:ts|mjs)$/u
@@ -69,35 +59,6 @@ export const SWIFT_TEST_FUNC_PATTERN = /\bfunc\s+test[A-Za-z0-9_]*\s*\(/u
  * @type {readonly { path: string, reason: string }[]}
  */
 export const UNWIRED_ALLOWLIST = []
-
-/**
- * List every file under `root` matching `predicate`, skipping ignored directories.
- * @param {string} root - absolute directory to walk.
- * @param {(path: string) => boolean} predicate - receives absolute file paths.
- * @returns {string[]} matching absolute paths, sorted.
- */
-export function walkFiles(root, predicate) {
-  const found = []
-  const visit = (directory) => {
-    let entries
-    try {
-      entries = readdirSync(directory, { withFileTypes: true })
-    } catch {
-      return
-    }
-    for (const entry of entries) {
-      const path = join(directory, entry.name)
-      if (entry.isDirectory()) {
-        if (IGNORED_DIRECTORIES.has(entry.name)) continue
-        visit(path)
-        continue
-      }
-      if (entry.isFile() && predicate(path)) found.push(path)
-    }
-  }
-  visit(root)
-  return found.sort()
-}
 
 /**
  * Collect test files from each scan root.

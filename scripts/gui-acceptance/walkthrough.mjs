@@ -29,6 +29,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { CdpSession, discoverPageTarget } from './cdp.mjs'
+import { sleep } from '../lib/cli.mjs'
 import {
   KNOWN_UPSTREAM_BOOT_NOISE, TOLERATED_REQUEST_FAILURES, applyRequireHover, createRecorder, hoverCardVerdict,
   hoverDismissVerdict, hoverExclusiveVerdict, hoverRaceVerdict, partitionFailures, pickRailToggle,
@@ -550,7 +551,6 @@ export async function runWalkthrough({
   const rec = createRecorder()
   const shots = path.join(outDir, 'shots')
   mkdirSync(shots, { recursive: true })
-  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 
   const target = await discoverPageTarget(cdpPort)
   console.log(`# CDP 走查目标 ${target.url}（${target.title}）`)

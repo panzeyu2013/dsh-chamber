@@ -27,6 +27,7 @@ import {
   type BigIntStats,
   type Stats,
 } from 'node:fs'
+import { lstat as lstatAsync, open as openAsync, type FileHandle } from 'node:fs/promises'
 import { randomBytes } from 'node:crypto'
 import { basename, dirname, join, relative, sep } from 'node:path'
 
@@ -47,6 +48,10 @@ export type PrivateFileRead =
  * callers omit it and always reach the real fsyncSync implementation. */
 export interface PrivateFsDurabilityDeps {
   fsync?: (fd: number) => void
+  /** Namespace-commit seam: replaces the publish rename inside the atomic
+   *  writers so tests can inject a rename failure at a named phase without
+   *  faking the writer. Production callers omit it and reach renameSync. */
+  rename?: (source: string, destination: string) => void
 }
 
 export interface PrivateFileReadOptions {
@@ -462,7 +467,7 @@ export function atomicWriteRuntimeFileNoFollow(
       || !sameIdentity(tmpIdentity, tmpAtCommit)) {
       throw new Error('runtime 原子写提交前身份复验失败')
     }
-    renameSync(tmp, filePath)
+    ;(deps?.rename ?? renameSync)(tmp, filePath)
     const published = lstatSync(filePath)
     const parentAfter = lstatSync(parent)
     if (published.isSymbolicLink()
@@ -782,5 +787,156 @@ export function readPrivateFileNoFollow(
     if (fd !== null) {
       try { closeSync(fd) } catch { /* best effort */ }
     }
+  }
+}
+
+/** Classify one leaf for destructive/selection decisions without following it:
+ *  'regular' only for a uniquely-linked real file, 'missing' only for ENOENT;
+ *  every other shape (symlink, directory, hard-linked, unreadable) is 'unsafe'
+ *  so callers fail closed. */
+export function classifyPrivateFileNoFollow(filePath: string): 'missing' | 'regular' | 'unsafe' {
+  try {
+    const info = lstatSync(filePath)
+    return info.isFile() && !info.isSymbolicLink() && info.nlink === 1 ? 'regular' : 'unsafe'
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unsafe'
+  }
+}
+
+/** Fsync one uniquely-linked private regular file, re-proving the leaf identity
+ *  across the open (kernel O_NOFOLLOW where available, the win32 user-space
+ *  fallback otherwise) and again after the sync. Symlinked, non-regular and
+ *  multiply-linked leaves are refused. */
+export function syncPrivateFileNoFollow(
+  filePath: string,
+  label = 'runtime 私有文件',
+  deps?: PrivateFsDurabilityDeps,
+): void {
+  const before = lstatSync(filePath)
+  if (before.isSymbolicLink() || !before.isFile() || before.nlink !== 1) {
+    throw new Error(`${label} 不是单链接普通文件`)
+  }
+  const opened = openPrivateNoFollowSync(filePath, 'read')
+  try {
+    const info = fstatSync(opened.fd)
+    if (!info.isFile() || info.nlink !== 1 || !sameIdentity(before, info)) {
+      throw new Error(`${label} fsync 前身份复验失败`)
+    }
+    syncFd(opened.fd, deps)
+    const after = fstatSync(opened.fd)
+    const atPath = lstatSync(filePath)
+    if (!after.isFile()
+      || after.nlink !== 1
+      || atPath.isSymbolicLink()
+      || !atPath.isFile()
+      || atPath.nlink !== 1
+      || !sameIdentity(after, atPath)) {
+      throw new Error(`${label} fsync 后身份复验失败`)
+    }
+  } finally {
+    closeSync(opened.fd)
+  }
+}
+
+/** Fsync one real directory, re-proving the directory AND its parent identity
+ *  across the sync (no mode tightening). Directory fsync is a filesystem
+ *  property, not a platform one: NFS/CIFS/FUSE mounts may reject it with
+ *  EINVAL/ENOTSUP on any platform, so exactly those two codes are tolerated —
+ *  every other failure, and any identity drift, is thrown. */
+export function syncPrivateDirectoryNoFollow(
+  dirPath: string,
+  label = 'runtime 私有目录',
+  deps?: PrivateFsDurabilityDeps,
+): void {
+  const pin = pinRealDirectory(dirPath, false)
+  try {
+    verifyPinnedDirectory(pin, `${label} fsync 前身份复验失败：${basename(dirPath)}`)
+    try {
+      syncFd(pin.fd, deps)
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code !== 'EINVAL' && code !== 'ENOTSUP') throw error
+    }
+    verifyPinnedDirectory(pin, `${label} fsync 后身份复验失败：${basename(dirPath)}`)
+  } finally {
+    closePinnedDirectory(pin)
+  }
+}
+
+/** Failure phase of {@link openPrivateNoFollowReadAsync}: callers map it onto
+ *  their own error surface without re-implementing the fallback strategy. */
+export type PrivateNoFollowOpenPhase =
+  | 'symlink'
+  | 'precheck-failed'
+  | 'open-failed'
+  | 'inspect-failed'
+  | 'identity-mismatch'
+
+/** Typed open failure of the async no-follow reader. `detail` carries the raw
+ *  OS error for the caller's own sanitizer. */
+export class PrivateNoFollowOpenError extends Error {
+  readonly phase: PrivateNoFollowOpenPhase
+  readonly detail: unknown
+
+  constructor(phase: PrivateNoFollowOpenPhase, message: string, detail?: unknown) {
+    super(message)
+    this.name = 'PrivateNoFollowOpenError'
+    this.phase = phase
+    this.detail = detail
+  }
+}
+
+/**
+ * Async sibling of openPrivateNoFollowSync for callers that must not block
+ * (the activation probe reads settings.yaml inside a bounded transaction
+ * window). Same platform strategy: the kernel O_NOFOLLOW where available, and
+ * otherwise an lstat immediately before the open plus an lstat identity
+ * re-proof (dev/ino) immediately after it. The returned handle is owned by the
+ * caller; the accompanying stats are the post-open snapshot.
+ */
+export async function openPrivateNoFollowReadAsync(
+  filePath: string,
+  constantsLike: NoFollowConstantsLike = constants,
+): Promise<{ handle: FileHandle; stats: Stats }> {
+  const { flags, kernelNoFollow } = resolveNoFollowFlags('read', constantsLike)
+  if (!kernelNoFollow) {
+    let before: Stats
+    try {
+      before = await lstatAsync(filePath)
+    } catch (error) {
+      throw new PrivateNoFollowOpenError('precheck-failed', `私有路径打开前检查失败：${basename(filePath)}`, error)
+    }
+    if (before.isSymbolicLink()) {
+      throw new PrivateNoFollowOpenError('symlink', `私有路径的最终组件是符号链接，拒绝打开：${basename(filePath)}`)
+    }
+  }
+  let handle: FileHandle
+  try {
+    handle = await openAsync(filePath, flags)
+  } catch (error) {
+    throw new PrivateNoFollowOpenError('open-failed', `私有路径打开失败：${basename(filePath)}`, error)
+  }
+  try {
+    let stats: Stats
+    try {
+      stats = await handle.stat()
+    } catch (error) {
+      throw new PrivateNoFollowOpenError('inspect-failed', `私有路径打开后检查失败：${basename(filePath)}`, error)
+    }
+    if (!kernelNoFollow) {
+      let atPath: Stats
+      try {
+        atPath = await lstatAsync(filePath)
+      } catch (error) {
+        throw new PrivateNoFollowOpenError('inspect-failed', `私有路径打开后检查失败：${basename(filePath)}`, error)
+      }
+      if (atPath.isSymbolicLink() || !sameIdentity(stats, atPath)) {
+        throw new PrivateNoFollowOpenError('identity-mismatch', `私有路径打开后身份复验失败：${basename(filePath)}`)
+      }
+    }
+    return { handle, stats }
+  } catch (error) {
+    await handle.close().catch(() => { /* best effort */ })
+    throw error
   }
 }
