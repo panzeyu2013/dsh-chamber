@@ -18,8 +18,12 @@ const HERE = dirname(fileURLToPath(import.meta.url))
 /**
  * 预算上限的独立钉：升级/迁移只能调低；上调必须同时改这里并说明理由——故意的两文件编辑（否则手改 anchors-budget.json
  * 就能把棘轮废掉）。当前钉为整合后的实测值，此后只降不升；批量语义化重锚仍按 D15 在全部在途分支落地后执行，届时逐批调低。
+ *
+ * 2026-12（remote-status 整合）上调到 1275，与 anchors-budget.json 的 note 同一次：整合前 main（525dc66d）树
+ * 实测 665、remote-status 树实测 1279、整合后本树实测 1275，增量全部来自该分支新增的 7 份计划/蓝图文档
+ * （它们的「现状盘点」按设计带 file:line 证据锚），main 侧零新增；本次按实测值对齐（无余量）。
  */
-const BUDGET_CEILING = 743
+const BUDGET_CEILING = 1275
 
 test('collectFiles：悬空软链与软链环不炸门（Chrome SingletonCookie 形态）', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-anchors-walk-'))
