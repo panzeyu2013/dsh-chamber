@@ -33,6 +33,18 @@ test('sidecar 唤醒入站保留可考古的一行（sidecar.log 取证面）', 
     'systemResume 入站必须写一行：否则真机上分不清「壳没发」与「页面没消费」')
 })
 
+test('渲染器重新就绪时补发 held resume（F2：Swift 形态没有窗口 show 事件）', () => {
+  const source = stripComments(readFileSync(new URL('../../shell-core.ts', import.meta.url), 'utf8'))
+  // 2026-12 审计 S4：Swift 的 mainWindowShown 只在 NSApplication.didBecomeActive 发；
+  // 唤醒时若渲染器不可投递（crashed/reloading），lastResume 会被 hold 到下一次应用激活
+  // ——即时重连退化成等 15–45s 看门狗。修复 = 把「渲染器重新就绪」也当作补发边沿。
+  assert.match(
+    source,
+    /if \(event === 'did-finish-load'\) \{[\s\S]{0,700}?handleMainWindowShown\(\);[\s\S]{0,240}?drainPendingRendererDeepLinkIntents\(\);/,
+    'did-finish-load 必须先补发 held resume（handleMainWindowShown）再 drain',
+  )
+})
+
 // --- merged from test/runtime/apply-now-gate.test.ts ---
 function gateInput(overrides: Partial<ApplyNowGateInput> = {}): ApplyNowGateInput {
   return {

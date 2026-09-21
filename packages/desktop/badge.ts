@@ -8,6 +8,16 @@
  * (notifications.badgeEnabled, chamber-settings.json) → platform gate →
  * `app.setBadgeCount(n)` (macOS Dock / Linux Unity launcher). 0 = clear.
  *
+ * SINGLE AUTHORITY (plan §0-4 / §3.3-7 / §5-14,主计划裁决 14): that integer is
+ * the renderer's **merged projection** count — the same merged facts projection
+ * that drives the in-window dots, the todo entries and the notification edges.
+ * This module (and the BADGE_COUNT handler in shell-core) consumes exactly that
+ * number and never tallies sessions itself: it holds no ledger, reads no
+ * runtime-facts row and keeps no per-source map. The holder is
+ * replace-on-push, so the renderer's reload fallback (push 0 from the mount
+ * effect) clears the OS badge, and the renderer-side dedupe/retry budget is
+ * never shadowed by a second desktop state machine.
+ *
  * Platform honesty: `app.setBadgeCount` only has an OS-visible effect on
  * macOS (Dock badge) and Linux (Unity launcher); GNOME/KDE show nothing —
  * a documented platform limit, not a silent fake success. Windows needs the
