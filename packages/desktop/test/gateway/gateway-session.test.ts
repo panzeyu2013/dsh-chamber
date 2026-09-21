@@ -8,7 +8,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { buildGatewaySessionOrigin, createGatewaySessionManager, GATEWAY_LOGIN_RATE_LIMIT_BACKOFF_MS, GATEWAY_SESSION_EXPIRY_SKEW_MS, GATEWAY_SESSION_TTL_MS, type GatewayHttpRequest, type GatewaySessionOrigin, type GatewaySessionResult } from '../../gateway-session.ts'
-import { createGatewaySessionRefresh, type GatewaySessionRefreshDeps } from '../../gateway-session-refresh.ts'
+import { createGatewaySessionRefresh, GATEWAY_SESSION_REFRESH_LEAD_MS, type GatewaySessionRefreshDeps } from '../../gateway-session-refresh.ts'
 import { COOKIE, PASSWORD, loginHandler, startGateway, stubRequestFactory, assertFailure, type LoginRecord } from '../support/gateway-session-fixtures.ts'
 
 test('ensureSession: 302 + set-cookie succeeds, caches the bare cookie value, attributes stripped (design 17 §7.1/§7.3)', async () => {
@@ -518,4 +518,39 @@ test('session refresh: in-flight result is bound to password, token, SPKI pin, t
     await new Promise(resolve => setTimeout(resolve, 0))
     assert.equal(h.state.registered.length, 0, entry.name + ': stale fact-bound login cannot register')
   }
+})
+
+test('session refresh: arm fires one lead before expiry, re-registers the fresh cookie, re-arms, and disarm/dispose cancel', async () => {
+  const h = refreshHarness()
+  const origin = { baseUrl: 'http://127.0.0.1:40000', insecureHttp: true }
+  h.state.readyUrls.set('gw-1', origin.baseUrl)
+  h.state.passwords.set('gw-1', PASSWORD)
+  h.state.tokens.set('gw-1', 'x'.repeat(32))
+  h.state.expiries.set(h.keyFor(origin), h.state.nowMs + h.state.TTL)
+  h.refresh.arm('gw-1')
+  assert.equal(h.state.scheduled.length, 1)
+  assert.equal(h.state.scheduled[0].delayMs, h.state.TTL - GATEWAY_SESSION_REFRESH_LEAD_MS,
+    'the refresh fires 60s before the cached session expires')
+  // No-ops: no stored password, not ready, and no cached session never schedule.
+  h.state.readyUrls.set('gw-2', 'http://127.0.0.1:40003')
+  h.refresh.arm('gw-2')
+  h.state.passwords.set('gw-3', PASSWORD)
+  h.refresh.arm('gw-3')
+  h.state.readyUrls.set('gw-4', 'http://127.0.0.1:40004')
+  h.state.passwords.set('gw-4', PASSWORD)
+  h.refresh.arm('gw-4')
+  assert.equal(h.state.scheduled.length, 1, 'only the armed-with-session case schedules')
+  await h.fireNext()
+  assert.equal(h.state.logins.length, 1, 'the refresh performs exactly one login')
+  assert.equal(h.state.logins[0].password, PASSWORD, 'the STORED password is re-exchanged')
+  assert.equal(h.state.logins[0].origin.baseUrl, origin.baseUrl)
+  assert.deepEqual(h.state.registered[0], {
+    id: 'gw-1', url: origin.baseUrl, headers: { authorization: 'Bearer ' + 'x'.repeat(32), cookie: COOKIE }, tls: undefined, authority: undefined,
+  }, 'the transport is re-registered with the fresh Cookie and preserves the independent Bearer')
+  assert.equal(h.state.scheduled.length, 1, 'a fresh session re-arms the next refresh')
+  assert.equal(h.state.scheduled[0].delayMs, h.state.TTL - GATEWAY_SESSION_REFRESH_LEAD_MS)
+  assert.equal(h.state.reconnects.length, 0, 'a successful refresh never triggers the recovery reconnect')
+  h.refresh.disarm('gw-1')
+  assert.equal(h.state.cancelled.length, 1, 'disarm cancels the pending timer')
+  h.refresh.dispose()
 })

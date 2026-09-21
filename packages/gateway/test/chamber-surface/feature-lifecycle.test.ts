@@ -90,6 +90,7 @@ test('dashboard HTML carries only Credentials + runtime panels and a closed CSP'
   assert.match(html, /^<!doctype html>/, 'the app page keeps its doctype')
   assert.match(html, /<script defer src="\/chamber\/app\.js"><\/script>/)
   assert.equal((html.match(/<script/g) ?? []).length, 1, 'exactly one script tag')
+  assert.ok(html.trimEnd().endsWith('</html>'), 'the app page is a complete document')
   assert.match(html, /id="credentials-title"/)
   assert.match(html, /id="runtime-title"/)
   // 2026-12 strip: no orchestration panels remain.
@@ -107,6 +108,7 @@ test('dashboard script parses and carries only credentials + runtime logic', asy
   assert.match(script.headers['content-type'], /^application\/javascript/)
   const source = script.chunks.join('')
   assert.doesNotThrow(() => new Function(source), 'the served classic script must parse')
+  assert.ok(source.startsWith('(function () {'), 'the script stays one IIFE')
   // 2026-12 audit F2 (moved from boundary/chamber-assets.test.ts): the served
   // bytes keep the interpolated comparators and stay safely inlinable.
   assert.match(source, /semverNumericCompare/, 'the interpolated comparator landed')

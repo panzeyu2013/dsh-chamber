@@ -1,7 +1,15 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createPurgeTracker } from '../../src/shared/purged-tracker.ts'
-import { createPurgedConvergence } from '../../src/shared/purged-convergence.ts'
+import { createPurgedConvergence, nextConvergenceStep, releasableAfterProbe } from '../../src/shared/purged-convergence.ts'
+import {
+  filterPurgedRows,
+  lingeringPurgedIds,
+  PURGED_REFRESH_MAX_ATTEMPTS,
+  PURGED_REFRESH_RETRY_MS,
+  reconcilePurgedRows,
+  trackArchiveSetShrink,
+} from '../../src/shared/purged-rows.ts'
 
 const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve))
 
@@ -370,5 +378,70 @@ test('chain fence: converge() after dispose is inert', () => {
   chain.dispose()
   chain.converge()
   assert.equal(calls, 0)
+})
+
+// 原 purged-convergence.test.ts 的纯函数与调度边界（2026-12 复核恢复）。
+test('round-3 restore: convergence step bounds and probe release order', () => {
+  assert.deepEqual(nextConvergenceStep({ attempt: 1, maxAttempts: 3, lingering: [] }), { action: 'converged' })
+  assert.deepEqual(nextConvergenceStep({ attempt: 1, maxAttempts: 3, lingering: ['g'] }), { action: 'retry' })
+  assert.deepEqual(nextConvergenceStep({ attempt: 2, maxAttempts: 3, lingering: ['g'] }), { action: 'retry' })
+  assert.deepEqual(nextConvergenceStep({ attempt: 3, maxAttempts: 3, lingering: ['g'] }), { action: 'verify' },
+    'a resolved refresh is not authoritative: the bound moves to the probe')
+  assert.deepEqual(releasableAfterProbe(['a', 'b', 'c'], new Set(['c', 'a', 'x'])), ['a', 'c'])
+  assert.deepEqual(releasableAfterProbe(['a'], new Set()), [])
+  assert.ok(PURGED_REFRESH_MAX_ATTEMPTS >= 1)
+  assert.ok(PURGED_REFRESH_RETRY_MS > 0)
+})
+
+test('round-3 restore: purged-rows pure helpers keep their direct contracts', () => {
+  const branded = { toString: () => 'branded-1' }
+  assert.deepEqual(trackArchiveSetShrink([String('keep'), 'branded-1'], [String('keep'), String(branded)]).archived, ['keep', 'branded-1'])
+  assert.deepEqual(trackArchiveSetShrink(['branded-1'], []).removed, ['branded-1'], 'wire ids compare by string projection')
+  assert.deepEqual(reconcilePurgedRows(['listed-ghost', 'dropped-row', 'rearchived'], new Set(['listed-ghost', 'rearchived']), new Set(['rearchived'])), ['listed-ghost'])
+  assert.deepEqual(reconcilePurgedRows(['g1', 'g2'], new Set(['g1', 'g2', 'live']), new Set()), ['g1', 'g2'])
+  assert.deepEqual(reconcilePurgedRows(['g1', 'g2'], new Set(['live']), new Set()), [], 'the official refresh drops them')
+  const rows = [{ sessionId: 'live' }]
+  assert.equal(filterPurgedRows(rows, new Set()), rows)
+  assert.equal(filterPurgedRows(rows, new Set(['other'])), rows, 'identity-preserving when nothing matches')
+  assert.deepEqual(filterPurgedRows([{ sessionId: 'a' }, { sessionId: 'ghost' }, { sessionId: 'b' }], new Set(['ghost'])), [{ sessionId: 'a' }, { sessionId: 'b' }])
+  assert.deepEqual(lingeringPurgedIds(['g1', 'g2'], new Set(['g1', 'live'])), ['g1'])
+  assert.deepEqual(lingeringPurgedIds(['g1'], new Set(['live'])), [])
+})
+
+test('round-3 restore: default watchdog, rejected-refresh retry and single-flight join', async () => {
+  const watchdogClock = chainClock()
+  const watchdog = chainOf({
+    refresh: () => new Promise<never>(() => {}), lingering: () => ['g'], schedule: watchdogClock.schedule, cancel: watchdogClock.cancel,
+  })
+  watchdog.converge()
+  await flush()
+  assert.equal(await watchdogClock.drainOldest(), PURGED_REFRESH_RETRY_MS * 2, 'the default watchdog is 2x the retry interval')
+  const retryClock = chainClock()
+  let attempts = 0
+  const retry = chainOf({
+    refresh: () => { attempts += 1; return attempts === 1 ? Promise.reject(new Error('rpc failed')) : Promise.resolve() },
+    lingering: () => (attempts >= 2 ? [] : ['g']), schedule: retryClock.schedule, cancel: retryClock.cancel, retryMs: 10,
+  })
+  retry.converge()
+  await flush()
+  assert.equal(retryClock.pending, 1, 'a transient RPC rejection parks a retry')
+  await retryClock.drainOldest()
+  await flush()
+  assert.equal(attempts, 2)
+  assert.equal(retry.active(), false)
+  const unavailableWarns: string[] = []
+  const unavailable = chainOf({ refresh: () => undefined, lingering: () => ['g'], warn: (message) => { unavailableWarns.push(message) } })
+  unavailable.converge()
+  assert.equal(unavailableWarns.length, 1)
+  assert.match(unavailableWarns[0] ?? '', /unavailable/)
+  assert.equal(unavailable.active(), false)
+  const joinClock = chainClock()
+  const join = chainOf({
+    refresh: () => new Promise<never>(() => {}), lingering: () => ['g'], schedule: joinClock.schedule, cancel: joinClock.cancel,
+  })
+  join.converge()
+  join.converge()
+  await flush()
+  assert.equal(joinClock.pending, 1, 'a second converge joins the in-flight chain instead of restarting the bound')
 })
 

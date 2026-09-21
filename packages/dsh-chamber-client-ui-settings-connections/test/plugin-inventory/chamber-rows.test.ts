@@ -17,6 +17,7 @@ import {
   HOST_GRAPH_PACKAGE,
   MOBILE_PACKAGE,
   OPEN_IN_PACKAGE,
+  chamberSeedDrift,
   classifyChamberClientPlugin,
   classifyInventoryEntry,
   deriveChamberRows,
@@ -166,6 +167,35 @@ test('gateway: cache match / drift / per-row absent / whole-cache absent are fou
     assert.equal(row.cacheAbsent, true)
     assert.equal(row.cacheNotSynced, false)
   }
+})
+
+test('gateway: an unknown LOCAL version beside a cached row is absent-local, never a mismatch claim', () => {
+  // Moved from the deleted chamber-seed-drift.test.ts (2026-12 trim): the
+  // unreadable-manifest state and the pure comparison's representation rules.
+  const rows = gatewayRows({
+    localManifestChamber: [
+      pkg(HOST_GRAPH_PACKAGE, { ...INJECTED, version: null }),
+      pkg(GIT_WORKTREE_PACKAGE, INJECTED),
+      pkg(ARCHIVE_CLEANUP_PACKAGE, INJECTED),
+    ],
+    seedCache: { [HOST_GRAPH_PACKAGE]: '1.2.3' },
+  })
+  const row = byName(rows, HOST_GRAPH_PACKAGE)
+  assert.equal(row.driftState, 'absent-local', 'no local version = no drift claim')
+  assert.equal(row.cacheVersionText, 'v1.2.3')
+  assert.equal(row.cacheNotSynced, false)
+  // The pure comparison keeps the same states, ignores unknown cache names
+  // and treats a null cache row as absent-cache (never-synced row).
+  assert.deepEqual(
+    chamberSeedDrift([{ name: HOST_GRAPH_PACKAGE, version: null }],
+      { [HOST_GRAPH_PACKAGE]: '1.2.3', '@dsh-chamber/unrelated': '9.9.9' }),
+    { [HOST_GRAPH_PACKAGE]: 'absent-local' },
+  )
+  assert.deepEqual(
+    chamberSeedDrift([{ name: HOST_GRAPH_PACKAGE, version: '1.0.0' }], { [HOST_GRAPH_PACKAGE]: null }),
+    { [HOST_GRAPH_PACKAGE]: 'absent-cache' },
+  )
+  assert.deepEqual(chamberSeedDrift([], { [HOST_GRAPH_PACKAGE]: '1.0.0' }), {})
 })
 
 test('gateway: an EMPTY expected list never claims the seed cache is absent', () => {

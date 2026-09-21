@@ -38,6 +38,7 @@ import {
   projectRuntimeFacts,
   reconcileCompletedFacts,
   reconciledSessionOrder,
+  relativeTimeBucket,
   retainMembershipGraceSources,
   runningRingVisible,
   runtimeReportSignature,
@@ -803,6 +804,7 @@ test('reconcileCompletedFacts: a background edge arms, the read session never ar
   assert.deepEqual(reconcile({}, {}, { x: { running: false } }, undefined).completed, {}, 'first observation records no edge')
   const prev = { x: true }
   assert.equal(reconcile(prev, { x: false }, { x: { running: false } }, undefined).completed, prev, 'no re-edge, identity kept')
+  assert.equal(reconcile(prev, { x: false }, { x: { running: false } }, undefined).changed, false, 'an unchanged arm must not churn the state')
   assert.deepEqual(reconcile({ x: true }, { x: false }, { x: { running: true } }, undefined).completed, {}, 'a re-run disarms')
   assert.deepEqual(reconcile({ x: true }, { x: false }, { x: { running: false } }, 'x').completed, {}, 'starting to read disarms')
   assert.deepEqual(reconcile({ x: true, y: true }, { x: false, y: false }, { x: { running: true }, y: { running: false } }, undefined).completed, { y: true })
@@ -826,6 +828,7 @@ test('runtimeReportSignature: the L1 receipt, onlyIds and listComplete identity 
 test('runningRingVisible is poll-only: the channel running bit never renders the ring', () => {
   assert.equal(runningRingVisible(false, true), true)
   assert.equal(runningRingVisible(true, true), true)
+  assert.equal(runningRingVisible(undefined, true), true, 'the poll bit alone renders the ring')
   assert.equal(runningRingVisible(true, false), false, 'a stale channel bit must not fake a running ring')
   assert.equal(runningRingVisible(true, undefined), false)
   assert.equal(runningRingVisible(undefined, undefined), false)
@@ -850,6 +853,319 @@ test('producer projects listComplete from the official list store phase (source 
   const producer = stripComments(readFileSync(fileURLToPath(new URL('../../src/client/index.ts', import.meta.url)), 'utf8'))
   assert.match(producer, /baseReport\.listComplete = snapshot\.phase === 'ready'/)
   assert.match(producer, /const snapshot = sessionsList\.getSnapshot\(\)/)
+})
+
+// =====================================================================
+// 2026-12 deletion-review restores: invariants that the round-2 folds left
+// without any surviving assertion. Each block is taken from the deleted
+// sibling file's branch and adjusted to this file's helpers.
+// =====================================================================
+
+test('round-3 restore: the schedule fact reaches the snapshot, the signature and the rows', () => {
+  const projected = projectInstanceSnapshot(
+    { items: [workspace('w1', 'Work', ['scheduled', 'plain'])], archivedSessionIds: [], state: 'idle', phase: 'ready' },
+    {
+      ids: ['scheduled', 'plain'],
+      phase: 'ready',
+      byId: {
+        scheduled: { id: 'scheduled', title: 'With schedule', running: false, blank: false, projectionValues: { schedule: [{ id: 'sch1' }] } },
+        plain: { id: 'plain', title: 'No schedule', running: false, blank: false, projectionValues: { schedule: [] } },
+      },
+    },
+  )
+  assert.deepEqual(projected?.sessions.map(row => row.hasActiveSchedule), [true, undefined], 'sparse: present only when active')
+  const idle = snapshot([workspace('w1', 'Work', ['s1'])], [session('s1', 5, { title: 'One' })])
+  const armed = snapshot([workspace('w1', 'Work', ['s1'])], [{ ...session('s1', 5, { title: 'One' }), hasActiveSchedule: true }])
+  assert.notEqual(instanceSnapshotSignature(idle), instanceSnapshotSignature(armed), 'a schedule change must republish')
+  const derived = deriveOf(
+    [workspace('w1', 'Work', ['in-ws'])],
+    [{ ...session('in-ws', 5, { title: 'In workspace' }), hasActiveSchedule: true }, { ...session('stray', 6, { title: 'Stray' }), hasActiveSchedule: true }],
+  )
+  assert.equal(derived[0]?.sessions[0]?.hasActiveSchedule, true, 'workspace rows carry the fact')
+  assert.equal(derived[1]?.sessions[0]?.hasActiveSchedule, true, 'the ungrouped stray carries the fact too')
+  const plainRow = deriveOf([workspace('w1', 'Work', ['plain'])], [session('plain', 5, { title: 'Plain' })])
+  assert.equal('hasActiveSchedule' in (plainRow[0]?.sessions[0] ?? {}), false, 'an ordinary row stays key-free')
+})
+
+test('round-3 restore: label fallbacks, vendor displayTitle and label/reuse signature moves', () => {
+  const untitled = deriveOf([workspace('w1', 'Work', ['untitled'])], [session('untitled', 5, { cwd: '/Users/x/dsh-chamber' })])
+  assert.equal(untitled[0]?.sessions[0]?.title, '', 'the durable title stays empty')
+  assert.equal(untitled[0]?.sessions[0]?.displayTitle, 'dsh-chamber', 'the official label is the directory name')
+  const nowhere = deriveOf([workspace('w1', 'Work', ['nowhere'])], [session('nowhere', 5)])
+  assert.equal(nowhere[0]?.sessions[0]?.displayTitle, 'nowhere', 'the id is the last resort')
+  const stray = deriveOf([], [session('stray', 5, { cwd: '/Users/x/project' })])
+  assert.equal(stray[0]?.sessions[0]?.displayTitle, 'project', 'the ungrouped bucket applies the same label')
+  const mounted = projectInstanceSnapshot(
+    { items: [workspace('w1', 'Work', ['s1'])], archivedSessionIds: [], state: 'idle', phase: 'ready' },
+    { ids: ['s1'], phase: 'ready', byId: { s1: { id: 's1', title: 'One', cwd: '/w1', running: false, blank: false, displayTitle: 'Vendor label' } } },
+  )
+  assert.equal(mounted?.sessions[0]?.displayTitle, 'Vendor label', 'the mounted projection carries the vendor label verbatim')
+  assert.equal(sessionDisplayTitle({ sessionId: 'sid' }), 'sid')
+  assert.equal(sessionDisplayTitle({ displayTitle: '', title: 'Durable', sessionId: 'sid' }), 'Durable', 'an empty producer label falls through')
+  assert.equal(sessionDisplayTitle({ displayTitle: null as never, title: null as never, sessionId: 'sid' }), 'sid', 'a JSON null is not a label')
+  assert.equal(sessionDisplayTitle({ cwdBasename: '///', sessionId: 'sid' }), 'sid')
+  const before = snapshot([workspace('w1', 'Work', ['s1'])], [{ ...session('s1', 5), displayTitle: 'a' }])
+  const after = snapshot([workspace('w1', 'Work', ['s1'])], [{ ...session('s1', 5), displayTitle: 'b' }])
+  assert.notEqual(instanceSnapshotSignature(before), instanceSnapshotSignature(after), 'a displayTitle-only change republishes')
+  const base = server('local')
+  const relabeled = server('local', { workspaces: [{ id: 'w1', title: 'Work', sessions: [{ id: 's1', title: 'One', displayTitle: 'dsh-chamber', running: false, updatedAt: 1 }] }] })
+  assert.notEqual(serversProjectionSignature([base]), serversProjectionSignature([relabeled]), 'a healed label must republish')
+  const reusable = server('local', { workspaces: [{ id: 'w1', title: 'Work', reusableBlankSessionId: 'blank-1', sessions: [{ id: 's1', title: 'One', displayTitle: 'One', running: false, updatedAt: 1 }] }] })
+  assert.notEqual(serversProjectionSignature([base]), serversProjectionSignature([reusable]), 'a reuse-only change must republish')
+  const explicitNull = server('local', { workspaces: [{ id: 'w1', title: 'Work', reusableBlankSessionId: undefined, sessions: [{ id: 's1', title: 'One', displayTitle: 'One', running: false, updatedAt: 1 }] }] })
+  assert.equal(serversProjectionSignature([base]), serversProjectionSignature([explicitNull]), 'absent and explicit-null are the same reuse fact')
+})
+
+test('round-3 restore: workspace membership order, accounting slots and passthrough', () => {
+  const byOrder = deriveOf(
+    [workspace('w1', 'Alpha', ['s3', 's1', 's2'])],
+    [session('s1', 10, { title: 'One' }), session('s2', 20, { title: 'Two' }), session('s3', 30, { title: 'Three' })],
+  )
+  assert.deepEqual(byOrder[0]?.sessions.map(row => [row.id, row.title, row.displayTitle]),
+    [['s3', 'Three', 'Three'], ['s1', 'One', 'One'], ['s2', 'Two', 'Two']], 'membership maps in sessionIds order')
+  assert.deepEqual(deriveOf([], []), [], 'empty snapshot -> empty list')
+  const noStray = deriveOf([workspace('w1', 'Work', ['a', 'b'])], [session('a', 1), session('b', 2)])
+  assert.equal(noStray.length, 1, 'no strays means no ungrouped bucket')
+  const missing = deriveOf([workspace('w1', 'Work', ['missing', 'a'])], [session('a', 1, { title: 'A' })])
+  assert.deepEqual(missing[0]?.sessions.map(row => row.id), ['a'], 'missing members are skipped without breaking order')
+  const titled = deriveServerWorkspaces(snapshot([workspace('w1', 'Work', ['a'])], [session('x', 100), session('a', 1)]), 'srv-a', 'Ungrouped')
+  assert.equal(titled[1]?.title, 'Ungrouped', 'the caller-provided bucket title is carried')
+  const archivedSlot = deriveServerWorkspaces({
+    ...snapshot([workspace('w1', 'Work', ['a', 'archived'])], [session('a', 1), session('archived', 2), session('x', 3)]),
+    archivedSessionIds: ['archived'],
+  }, 'srv-a', '')
+  assert.deepEqual(archivedSlot[0]?.sessions.map(row => row.id), ['a'])
+  assert.deepEqual(archivedSlot[1]?.sessions.map(row => row.id), ['x'], 'an archived member keeps its accounting slot')
+  const passing = deriveOf([workspace('w1', 'Work', ['a', 'b'])], [session('a', 42, { title: 'A', running: true }), session('b', 7), session('s', 99, { running: true })])
+  assert.equal(passing[0]?.sessions[0]?.running, true)
+  assert.equal(passing[0]?.sessions[0]?.updatedAt, 42)
+  assert.equal(passing[1]?.sessions[0]?.running, true, 'running/updatedAt pass through to strays')
+})
+
+test('round-3 restore: relativeTimeBucket boundaries and the search clamp', () => {
+  const now = 1_000_000_000_000
+  const MIN = 60_000
+  const HOUR = 3_600_000
+  const DAY = 86_400_000
+  assert.deepEqual(relativeTimeBucket(now - (MIN - 1), now), { unit: 'now', n: 0 })
+  assert.deepEqual(relativeTimeBucket(now - MIN, now), { unit: 'minutes', n: 1 })
+  assert.deepEqual(relativeTimeBucket(now - (HOUR - 1), now), { unit: 'minutes', n: 59 })
+  assert.deepEqual(relativeTimeBucket(now - HOUR, now), { unit: 'hours', n: 1 })
+  assert.deepEqual(relativeTimeBucket(now - (DAY - 1), now), { unit: 'hours', n: 23 })
+  assert.deepEqual(relativeTimeBucket(now - DAY, now), { unit: 'days', n: 1 })
+  assert.deepEqual(relativeTimeBucket(now - 30 * DAY, now), { unit: 'months', n: 1 })
+  assert.deepEqual(relativeTimeBucket(now - 365 * DAY, now), { unit: 'years', n: 1 })
+  assert.deepEqual(relativeTimeBucket(now + 5000, now), { unit: 'now', n: 0 }, 'future stamps clamp to now')
+  assert.equal(SEARCH_QUERY_MAX_CODE_UNITS, 500, 'the wire schema clamp')
+  const atBoundary = 'b'.repeat(SEARCH_QUERY_MAX_CODE_UNITS)
+  assert.equal(sanitizeSearchQuery(atBoundary), atBoundary)
+  assert.equal(sanitizeSearchQuery(atBoundary + 'b'), atBoundary)
+  const pair = 'b'.repeat(SEARCH_QUERY_MAX_CODE_UNITS - 1) + '\ud83d\ude00' + 'c'
+  assert.equal(sanitizeSearchQuery(pair), 'b'.repeat(SEARCH_QUERY_MAX_CODE_UNITS - 1))
+  assert.equal(sanitizeSearchQuery(pair).includes('\ud83d'), false)
+})
+
+test('round-3 restore: findReusableBlankSession skip rules and derive-side exclusions', () => {
+  const ws = { path: '/w1', sessionIds: ['blank', 'other'] }
+  const blank = (id: string, extra: Partial<SessionRow> = {}): SessionRow => ({ sessionId: id, running: false, blank: true, cwd: '/w1', ...extra })
+  assert.equal(findReusableBlankSession({ path: '/w1', sessionIds: [] }, [blank('blank')], new Set()), undefined, 'a non-member row is skipped')
+  assert.equal(findReusableBlankSession(ws, [blank('blank', { origin: 'subagent' })], new Set()), undefined, 'a subagent blank is skipped')
+  assert.equal(findReusableBlankSession(ws, [blank('blank'), blank('other', { cwd: '/w1' })], new Set()), 'blank', 'wire order decides')
+  const archived = deriveServerWorkspaces({
+    ...snapshot([workspace('w1', 'Work', ['blank'])], [session('blank', 5, { blank: true, cwd: '/w1' })]),
+    archivedSessionIds: ['blank'], archiveSetKnown: true,
+  }, 'srv-a', '', undefined, 1_000)
+  assert.equal(archived[0]?.reusableBlankSessionId, undefined, 'an archived blank is never reusable')
+  const synthetic = deriveServerWorkspaces({
+    ...snapshot([{ ...workspace('__cwd__:/w1', 'w1', ['blank']), synthetic: true }], [session('blank', 5, { blank: true, cwd: '/w1' })]),
+    archiveSetKnown: true,
+  }, 'srv-a', '', undefined, 1_000)
+  assert.equal('reusableBlankSessionId' in (synthetic[0] ?? {}), false, 'synthetic cwd groups offer no reuse')
+})
+
+test('round-3 restore: orderServersForDisplay/nextServerOrder remaining drop-math edges', () => {
+  const servers = [server('local'), server('ssh-r1'), server('ssh-r2')]
+  assert.deepEqual(orderServersForDisplay(servers, ['ssh-r2', 'local']).map(s => s.id), ['ssh-r2', 'local', 'ssh-r1'], 'unlisted ids keep projection position')
+  assert.deepEqual(orderServersForDisplay(servers, ['ssh-r1']).map(s => s.id), ['ssh-r1', 'local', 'ssh-r2'])
+  const rendered = ['a', 'b', 'c']
+  assert.equal(nextServerOrder(rendered, 'ghost', { id: 'b', half: 'before' }), null)
+  assert.equal(nextServerOrder(rendered, 'ghost', { id: 'b', half: 'after' }), null)
+  assert.equal(nextServerOrder(rendered, 'b', { id: 'b', half: 'after' }), null)
+  assert.equal(nextServerOrder(rendered, 'b', { id: 'a', half: 'after' }), null, 'already directly after the target')
+  assert.equal(nextServerOrder(rendered, 'a', { id: 'b', half: 'before' }), null, 'already directly before the target')
+  assert.equal(nextServerOrder(rendered, 'c', { id: 'b', half: 'after' }), null)
+  assert.equal(nextServerOrder(rendered, 'c', { id: 'c', half: 'after' }), null)
+  assert.deepEqual(nextServerOrder(['a', 'b', 'c'], 'a', { id: 'c', half: 'before' }), ['b', 'a', 'c'])
+  assert.deepEqual(nextServerOrder(['a', 'b', 'c'], 'c', { id: 'a', half: 'after' }), ['a', 'c', 'b'])
+  assert.deepEqual(nextServerOrder(['a', 'b', 'c'], 'a', { id: 'c', half: 'after' }), ['b', 'c', 'a'])
+  const input = ['a', 'b', 'c', 'd']
+  const moved = nextServerOrder(input, 'd', { id: 'b', half: 'after' })
+  assert.notEqual(moved, input, 'a real move mints a new array')
+})
+
+test('round-3 restore: nextUpdatedOrder membership changes, missing timestamps and re-entry', () => {
+  const byIdOf = (rows: { id: string; updatedAt?: number }[]) => new Map(rows.map(row => [row.id, row]))
+  const step = (
+    sessionIds: string[],
+    stored: string[] | undefined,
+    previousUpdatedAt: Record<string, number> | undefined,
+    rows: { id: string; updatedAt?: number }[],
+  ) => nextUpdatedOrder({ sessionIds, stored, previousUpdatedAt, byId: byIdOf(rows) })
+  const newMember = step(['a', 'd', 'b'], ['a', 'b'], { a: 100, b: 300 }, [{ id: 'a', updatedAt: 100 }, { id: 'd', updatedAt: 900 }, { id: 'b', updatedAt: 300 }])
+  assert.deepEqual(newMember.order, ['d', 'a', 'b'], 'an unobserved member is promoted')
+  const dropped = step(['a', 'c'], ['b', 'a', 'c'], { a: 100, b: 300, c: 200 }, [{ id: 'a', updatedAt: 100 }, { id: 'c', updatedAt: 200 }])
+  assert.deepEqual(dropped.order, ['a', 'c'])
+  assert.equal(dropped.changed, true, 'leaving the wire membership must persist')
+  const tie = step(['z', 'a', 'm'], undefined, undefined, [{ id: 'z', updatedAt: 100 }, { id: 'a', updatedAt: 100 }, { id: 'm', updatedAt: 100 }])
+  assert.deepEqual(tie.order, ['a', 'm', 'z'], 'recency then id tiebreak')
+  const missing = [{ id: 'known', updatedAt: 5 }, { id: 'unknown1' }, { id: 'unknown2' }]
+  const first = step(['known', 'unknown1', 'unknown2'], undefined, undefined, missing)
+  assert.deepEqual(first.order, ['known', 'unknown1', 'unknown2'])
+  const second = step(['known', 'unknown1', 'unknown2'], first.order, first.updatedAt, missing)
+  assert.deepEqual(second.order, ['unknown1', 'unknown2', 'known'], 'a missing updatedAt reads as never-observed and re-promotes')
+  const third = step(['known', 'unknown1', 'unknown2'], second.order, second.updatedAt, missing)
+  assert.deepEqual(third.order, ['unknown1', 'unknown2', 'known'])
+  assert.equal(third.changed, false, 'the re-promotion settles')
+  const reentry = step(['a', 'b', 'c'], ['c', 'a', 'b'], undefined, [{ id: 'c', updatedAt: 300 }, { id: 'a', updatedAt: 100 }, { id: 'b', updatedAt: 200 }])
+  assert.deepEqual(reentry.order, ['c', 'b', 'a'], 'switched-to-updated keeps the stored account and recency-sorts once')
+  assert.deepEqual(reentry.updatedAt, { a: 100, b: 200, c: 300 })
+  const decreased = step(['a', 'b'], ['a', 'b'], { a: 100, b: 200 }, [{ id: 'a', updatedAt: 100 }, { id: 'b', updatedAt: 150 }])
+  assert.deepEqual(decreased.order, ['a', 'b'])
+  assert.deepEqual(decreased.updatedAt, { a: 100, b: 150 })
+  assert.equal(decreased.changed, true, 'a timestamp decrease refreshes the baseline')
+})
+
+test('round-3 restore: deriveLocalSearchMatches title/workspace legs, hidden rows and recency', () => {
+  const search = (query: string, ws: Parameters<typeof snapshot>[0], rows: Parameters<typeof snapshot>[1]) =>
+    deriveLocalSearchMatches(snapshot(ws, rows), query)
+  assert.deepEqual(search('deepseek', [workspace('w1', 'Work', ['a', 'b'])], [session('a', 10, { title: 'DeepSeek R1' }), session('b', 20, { title: 'other' })]),
+    [{ sessionId: 'a', snippet: '' }], 'session titles match case-insensitively')
+  assert.deepEqual(search('alpha', [workspace('w1', 'Alpha Project', ['a']), workspace('w2', 'Other', ['b'])], [session('a', 10), session('b', 20, { title: 'Other' })]),
+    [{ sessionId: 'a', snippet: '' }], 'a workspace-title hit needs no session title')
+  assert.deepEqual(search('docs', [workspace('w1', 'Work', ['a']), workspace('w2', 'Docs', ['b'])], [session('a', 10, { title: 'Notes' }), session('b', 20, { title: 'no-match' })]),
+    [{ sessionId: 'b', snippet: '' }], 'either leg matches independently')
+  const hidden = deriveLocalSearchMatches({
+    workspaces: [workspace('w1', 'Match', ['hit', 'blank-hit', 'archived-hit', 'sub-hit'])],
+    sessions: [
+      session('hit', 10, { title: 'match me' }), session('blank-hit', 20, { title: 'match me', blank: true }),
+      session('archived-hit', 30, { title: 'match me' }), session('sub-hit', 40, { title: 'match me', origin: 'subagent' }),
+    ],
+    archivedSessionIds: ['archived-hit'],
+  }, 'match')
+  assert.deepEqual(hidden, [{ sessionId: 'hit', snippet: '' }], 'blank/archived/subagent rows are excluded')
+  const recency = search('hit', [workspace('w1', 'Work', ['a', 'b', 'c'])], [session('a', 100, { title: 'hit' }), session('b', 300, { title: 'hit' }), session('c', 300, { title: 'hit' })])
+  assert.deepEqual(recency.map(row => row.sessionId), ['b', 'c', 'a'], 'hits order by recency with the id tiebreak')
+})
+
+test('round-3 restore: archive metadata, overflow hasMore and the schedule-only signature flip', () => {
+  const overflow = mergeSearchResults(
+    [{ sessionId: 'l1', snippet: '' }, { sessionId: 'l2', snippet: '' }],
+    { items: [{ sessionId: 'r1', snippet: '' }], hasMore: false }, 2, new Set(['l1', 'l2', 'r1']), true)
+  assert.deepEqual(overflow.items.map(row => row.sessionId), ['l1', 'l2'])
+  assert.equal(overflow.hasMore, true, 'a merged result over the limit sets hasMore')
+  const meta = deriveArchivedSessions({
+    workspaces: [], archivedSessionIds: ['a1', 'a2'],
+    sessions: [session('v1', 300, { title: 'visible' }), session('a1', 500, { title: 'old archived', cwd: '/work/a' }), session('a2', 900, { title: 'recent archived' })],
+  })
+  assert.deepEqual(meta.map(row => row.sessionId), ['a2', 'a1'])
+  assert.equal(meta[0]?.title, 'recent archived')
+  assert.equal(meta[1]?.cwd, '/work/a')
+  assert.deepEqual(deriveArchivedSessions({ workspaces: [], archivedSessionIds: ['x1'], sessions: [{ sessionId: 'x1', running: false, blank: false }] }), [{ sessionId: 'x1' }])
+  const conflict = deriveArchivedSessions({ workspaces: [workspace('w1', 'Alpha', ['conflict'])], archivedSessionIds: ['conflict'], sessions: [session('conflict', 250, { cwd: '/w2' })] })
+  assert.deepEqual(conflict[0]?.workspace, { id: 'w1', title: 'Alpha' }, 'membership wins over another workspace cwd')
+  const trailing = deriveArchivedSessions({ workspaces: [workspace('w1', 'Alpha', [])], archivedSessionIds: ['a3'], sessions: [session('a3', 3, { cwd: '/w1/' })] })
+  assert.deepEqual(trailing[0]?.workspace, { id: 'w1', title: 'Alpha' }, 'the cwd fallback normalizes trailing separators')
+  const groups = groupArchivedRows([
+    { sessionId: 'o1', updatedAt: 999 },
+    { sessionId: 'a2', updatedAt: 100, workspace: { id: 'w2', title: 'Beta' } },
+    { sessionId: 'a1', updatedAt: 300, workspace: { id: 'w1', title: 'Alpha' } },
+  ])
+  assert.deepEqual(groups.map(group => group.key), ['w1', 'w2', UNGROUPED_WORKSPACE_ID])
+  assert.deepEqual(groups[2]?.rows.map(row => row.sessionId), ['o1'])
+  const unordered = groupArchivedRows([
+    { sessionId: 'late', workspace: { id: 'w1', title: 'Alpha' } },
+    { sessionId: 'early', updatedAt: 5, workspace: { id: 'w1', title: 'Alpha' } },
+  ])
+  assert.deepEqual(unordered[0]?.rows.map(row => row.sessionId), ['early', 'late'])
+  const mounted = projectInstanceSnapshot({ items: [workspace('w1', 'w1')], archivedSessionIds: [], state: 'idle', phase: 'ready' }, { ids: [], byId: {}, phase: 'ready' })
+  assert.equal(mounted?.archiveSetKnown, true, 'an empty mounted archive set is authoritative')
+  const scheduleSig = (armed: boolean) => serversProjectionSignature([server('local', {
+    workspaces: [{ id: 'w1', title: 'Work', sessions: [{ id: 's1', title: 'One', displayTitle: 'One', running: false, blank: false, updatedAt: 5, hasActiveSchedule: armed }] }],
+  })] as never)
+  assert.notEqual(scheduleSig(false), scheduleSig(true), 'a schedule-only flip moves the publish gate')
+  assert.equal(scheduleSig(false), scheduleSig(false), 'reverting restores identical bytes')
+})
+
+test('round-3 restore: mergeRuntimeFacts overlay keeps the armed union and sparse fills', () => {
+  const merged = mergeRuntimeFacts(
+    { current: 's1', sessions: { s1: { running: false }, s3: { running: false, completed: true } } },
+    { s1: true, s2: true, s4: false },
+    { s2: { pending: 'question' } },
+  )
+  assert.deepEqual(merged, {
+    current: 's1',
+    sessions: {
+      s1: { running: false, completed: true },
+      s3: { running: false, completed: true },
+      s2: { completed: true, pending: 'question' },
+    },
+  }, 'an overlay row still receives its armed dot')
+  assert.deepEqual(mergeRuntimeFacts({ sessions: { a: { running: false } } }, undefined, { a: { runningSubagents: 3 } })?.sessions.a,
+    { running: false, runningSubagents: 3 }, 'an absent channel count is filled by the overlay')
+  assert.deepEqual(mergeRuntimeFacts(undefined, undefined, { s1: {} })?.sessions.s1, {}, 'an empty overlay row invents nothing')
+})
+
+test('round-3 restore: reconcile composition, replaced receipt variants and report signatures', () => {
+  const left = reconcile({ x: true }, { x: false }, {}, undefined)
+  assert.deepEqual(left.completed, {}, 'a departed session drops its armed dot')
+  assert.equal(left.changed, true)
+  const stepA = reconcile({}, { x: true }, { x: { running: false }, y: { running: false } }, undefined)
+  assert.deepEqual(stepA.completed, { x: true })
+  const stepB = reconcile(stepA.completed, { x: false, y: true }, { x: { running: false }, y: { running: false } }, undefined)
+  assert.deepEqual(stepB.completed, { x: true, y: true }, 'two batched updaters keep both arms')
+  assert.deepEqual(reconcile({ x: true }, { x: false }, { x: { running: false } }, 'x').completed, {}, 'reading the armed session disarms')
+  assert.equal(runtimeReportSignature(undefined), '')
+  const a: InstanceRuntimeReport = { current: 's1', sessions: { s1: { running: true }, s2: { completed: true } } }
+  assert.equal(runtimeReportSignature(a), runtimeReportSignature({ current: 's1', sessions: { s2: { completed: true }, s1: { running: true } } }), 'insertion order is normalized')
+  assert.notEqual(runtimeReportSignature(a), runtimeReportSignature({ current: 's1', sessions: { s1: { running: false }, s2: { completed: true } } }), 'running bits matter')
+  assert.notEqual(runtimeReportSignature({ sessions: { p: { running: false } } }), runtimeReportSignature({ sessions: { p: { running: false, runningSubagents: 2 } } }), 'subagent counts matter')
+  assert.notEqual(runtimeReportSignature({ sessions: { p: { running: false } } }), runtimeReportSignature({ sessions: { p: { running: false, pending: 'approval' } } }), 'pending kinds matter')
+  assert.notEqual(runtimeReportSignature({ sessions: { p: { pending: 'approval' } } }, undefined, false), runtimeReportSignature({ sessions: { p: { pending: 'question' } } }, undefined, false))
+  assert.notEqual(runtimeReportSignature({ sessions: {}, sessionFactReconcile: { requestedAt: 1_000, settledAt: 2_000, ok: true, attempts: 1 } }), '', 'a receipt-only report is content')
+  assert.equal(runtimeReportSignature({ sessions: {} }), '', 'a truly empty report stays empty')
+  assert.equal(runtimeReportSignature({ current: 's1', sessions: { s1: { running: true } } }, undefined, false), runtimeReportSignature({ current: 's1', sessions: { s1: { running: false } } }, undefined, false), 'the projection path drops the running bit')
+  assert.notEqual(runtimeReportSignature({ sessions: { s1: { completed: true } } }, undefined, false), runtimeReportSignature({ sessions: { s1: {} } }, undefined, false), 'rendered facts still matter in the projection path')
+  assert.notEqual(runtimeReportSignature(a, new Set(['s1'])), runtimeReportSignature(a, new Set(['s2'])), 'different visible subsets differ')
+})
+
+test('round-3 restore: serversProjectionSignature tracks render-relevant fields and ignores stamps', () => {
+  const a = [server('local'), server('ssh-r1')]
+  assert.equal(serversProjectionSignature(a), serversProjectionSignature([server('local', { updatedAt: 123456789 }), server('ssh-r1', { updatedAt: 987654321 })]), 'the per-call updatedAt stamp is ignored')
+  const remoteOnly = (overrides: Parameters<typeof server>[1] = {}) => serversProjectionSignature([server('ssh-r1', overrides)])
+  assert.notEqual(serversProjectionSignature(a), serversProjectionSignature([server('local'), server('ssh-r1', { sourceFingerprint: 'b'.repeat(64) })]), 'a same-id replacement republishes')
+  assert.notEqual(remoteOnly(), remoteOnly({ kind: 'gateway' }))
+  assert.notEqual(remoteOnly(), remoteOnly({ transport: 'http' }))
+  assert.notEqual(remoteOnly(), remoteOnly({ managedRuntimeDown: true }))
+  assert.notEqual(remoteOnly({ rawId: 'r1' }), remoteOnly({ rawId: 'other' }))
+  assert.notEqual(remoteOnly(), remoteOnly({ bootGap: { kind: 'graph-unavailable' } }))
+  assert.equal(remoteOnly({ bootGap: { kind: 'graph-unavailable' } }), remoteOnly({ bootGap: { kind: 'graph-unavailable', services: [], injectedBy: [], failedIds: [] } }), 'absent and empty structured fields are the same fact')
+  assert.notEqual(remoteOnly({ bootGap: { kind: 'graph-unavailable' } }), remoteOnly({ bootGap: { kind: 'required-services-missing', services: ['sidebarRight'] } }))
+  assert.notEqual(remoteOnly(), remoteOnly({ dshVersion: '1.2.3' }))
+  const withSession = (updatedAt: number) => serversProjectionSignature([server('local'), server('ssh-r1', { workspaces: [{ id: 'w1', title: 'Work', sessions: [{ id: 's1', title: 'One', displayTitle: 'One', running: false, updatedAt }] }] })])
+  assert.notEqual(serversProjectionSignature(a), withSession(999), 'session updatedAt moves the gate')
+  assert.equal(serversProjectionSignature(a), withSession(1), 'identical session bytes sign identically')
+  assert.equal(serversProjectionSignature(a), serversProjectionSignature([server('local'), server('ssh-r1', { runtime: { sessions: { hidden: { running: true } } } })]), 'hidden runtime rows never re-render')
+  assert.equal(serversProjectionSignature([server('local'), server('ssh-r1', { runtime: { sessions: { s1: { running: true } } } })]), serversProjectionSignature([server('local'), server('ssh-r1', { runtime: { sessions: { s1: { running: false } } } })]), 'the channel running bit is excluded')
+  assert.notEqual(serversProjectionSignature(a), serversProjectionSignature([server('local'), server('ssh-r1', { runtime: { sessions: { s1: { completed: true } } } })]))
+  assert.notEqual(serversProjectionSignature(a), serversProjectionSignature([server('local', { connected: false }), server('ssh-r1')]))
+  assert.notEqual(serversProjectionSignature(a), serversProjectionSignature([server('local', { phase: 'starting' }), server('ssh-r1')]))
+  assert.notEqual(serversProjectionSignature(a), serversProjectionSignature([server('ssh-r1'), server('local')]), 'source order matters')
+})
+
+test('round-3 restore: InstanceRuntimeReport declares the optional judgment facts', () => {
+  const store = stripComments(readFileSync(fileURLToPath(new URL('../../src/shared/aggregate-store.ts', import.meta.url)), 'utf8'))
+  assert.match(store, /listComplete\?: boolean/, 'listComplete is an optional additive field')
+  assert.match(store, /stale\?: boolean/, 'the stale marker is optional')
 })
 
 

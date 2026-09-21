@@ -164,3 +164,17 @@ test('createWorkspaceForSource: decorations run BEFORE the fact and a throwing o
   assert.equal(logged.length, 1, 'the swallowed decoration failure is logged exactly once, never silent')
   assert.match(String(logged[0]?.[0] ?? ''), /workspace create decoration failed/)
 })
+
+test('round-3 restore: the workspace title hint rides the fact (the echoed row is born labeled)', async () => {
+  const sourceId = 'funnel-workspace-title'
+  const client = getInstanceClient(sourceId)
+  client.workspace.create = async (): Promise<UnaryResult<unknown>> =>
+    ({ ok: true, value: { workspace: { workspaceId: 'w4', path: '/p/4' }, created: true } })
+  const facts: Record<string, unknown>[] = []
+  const off = chamberBridge.onWorkspaceCreated((fact) => { if (fact.sourceId === sourceId) facts.push({ ...fact }) })
+  try {
+    await createWorkspaceForSource(sourceId, '/p/4', { title: 'feature/x' })
+    assert.deepEqual(facts, [{ sourceId, workspaceId: 'w4', path: '/p/4', title: 'feature/x' }])
+    assert.equal('afterWorkspaceId' in (facts[0] ?? {}), false, 'the fact stays sparse without an anchor')
+  } finally { off(); releaseInstanceClient(sourceId) }
+})

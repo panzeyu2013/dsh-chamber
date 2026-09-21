@@ -20,6 +20,9 @@ import {
   markStallResync, noticeTopFor, probeStall, sessionStallFace, stallMessageKey, stallResyncAvailable,
 } from '../../src/client/session-stall.ts'
 import type { RenderedNodeFace, StallNodeFace } from '../../src/client/session-stall.ts'
+import {
+  createSessionStreamHealthState, planSessionStreamHealth, SESSION_STREAM_HEALTH_DEFAULTS,
+} from '../../../dsh-chamber-client-ui-open-in/src/client/session-stream-health.ts'
 import { FakeNode, attach } from '../support/dom-double.ts'
 
 const SOURCE_URL = new URL('../../src/client/session-stall.ts', import.meta.url)
@@ -813,5 +816,73 @@ test('a parked open is rebuilt automatically once, and the copy turns into the f
     assert.equal(harness.notice()?.children[0]?.textContent, zh['dsh-chamber.mobile.stall.messageFailed'])
     dispose()
   })
+})
+
+/**
+ * CROSS-TIER RECOVERY LOCKSTEP (restored 2026-09-21 deletion review).
+ *
+ * The mobile stall observer and the desktop open-in stream-health ladder
+ * implement the SAME recovery contract (design 14 §D4) on two tiers. These
+ * assertions import BOTH pure decision modules and pin the shared ledger, the
+ * ONE intentional threshold deviation and the evidence rule: the automatic
+ * rebuild fires on one tier exactly when it fires on the other, and an
+ * unreadable face fails closed on both. Any drift on either side turns red.
+ */
+const PARITY_NOW = 1_000_000
+
+/** Desktop ladder state parked in the loading hold since `heldMs` ago. */
+function desktopLoadingHold(heldMs: number) {
+  return { phase: 'loading-hold' as const, since: PARITY_NOW - heldMs, healStamps: [] }
+}
+
+test('parity: the shared ledger and the failure bound are equal across tiers', () => {
+  assert.equal(STALL_RESYNC_COOLDOWN_MS, SESSION_STREAM_HEALTH_DEFAULTS.healCooldownMs)
+  assert.equal(STALL_RESYNC_WINDOW_MS, SESSION_STREAM_HEALTH_DEFAULTS.healBudgetWindowMs)
+  assert.equal(STALL_RESYNC_MAX, SESSION_STREAM_HEALTH_DEFAULTS.healBudgetMax)
+  assert.equal(STALL_FAILED_MS, SESSION_STREAM_HEALTH_DEFAULTS.loadingFailedMs)
+})
+
+test('parity: the notice threshold is the ONE documented deviation (mobile is DOM-only)', () => {
+  assert.equal(SESSION_STREAM_HEALTH_DEFAULTS.loadingStallMs, 20_000)
+  assert.equal(STALL_THRESHOLD_MS, 45_000)
+  assert.ok(STALL_THRESHOLD_MS > SESSION_STREAM_HEALTH_DEFAULTS.loadingStallMs,
+    'the mobile tier has no openState channel and must stay conservative')
+  assert.ok(STALL_THRESHOLD_MS < STALL_FAILED_MS, 'the failure wording must not precede the notice')
+})
+
+test('parity: the automatic-rebuild evidence rule agrees on every in-flight value', () => {
+  const desktop = (openInFlight: boolean | undefined): boolean => planSessionStreamHealth(
+    desktopLoadingHold(SESSION_STREAM_HEALTH_DEFAULTS.loadingStallMs),
+    { openState: 'loading', presented: true, neighborAvailable: false, resyncAvailable: true, openInFlight },
+    PARITY_NOW,
+  ).action === 'auto-resync'
+  const mobile = (openInFlight: boolean | undefined): boolean => decideStallNotice({
+    shape: true, pageVisible: true, since: PARITY_NOW - STALL_THRESHOLD_MS, now: PARITY_NOW,
+    dismissed: false, loading: true, openInFlight, resyncStamps: [],
+  }).resync
+  for (const openInFlight of [false, true, undefined]) {
+    assert.equal(desktop(openInFlight), mobile(openInFlight),
+      'automatic rebuild verdict drifted for openInFlight=' + String(openInFlight))
+  }
+  assert.equal(desktop(false), true, 'a parked open is rebuilt automatically on both tiers')
+  assert.equal(desktop(true), false, 'an in-flight open is never interrupted')
+  assert.equal(desktop(undefined), false, 'an unreadable face fails closed')
+})
+
+test('parity: the loading evidence is required on both tiers (the shape alone is not enough)', () => {
+  assert.equal(decideStallNotice({
+    shape: true, pageVisible: true, since: PARITY_NOW - STALL_THRESHOLD_MS, now: PARITY_NOW,
+    dismissed: false, loading: false, openInFlight: false, resyncStamps: [],
+  }).resync, false)
+  assert.equal(decideStallNotice({
+    shape: true, pageVisible: true, since: PARITY_NOW - STALL_THRESHOLD_MS, now: PARITY_NOW,
+    dismissed: false, openInFlight: false, resyncStamps: [],
+  }).resync, false, 'an unreadable loading state fails closed')
+  const errorArm = planSessionStreamHealth(
+    createSessionStreamHealthState(),
+    { openState: 'error', presented: true, neighborAvailable: true, resyncAvailable: true, openInFlight: false },
+    PARITY_NOW,
+  )
+  assert.notEqual(errorArm.action, 'auto-resync', 'an error state may arm the manual control but never executes on its own')
 })
 

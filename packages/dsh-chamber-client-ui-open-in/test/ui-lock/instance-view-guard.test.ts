@@ -205,3 +205,82 @@ test('the aligned launch semantics are unchanged (250ms busy dress, 2s error, in
   assert.ok(inFlightAt !== -1 && chooseAt > inFlightAt, 'a pick during an in-flight launch is still ignored whole')
   assert.ok(button.includes('if (!result.ok)') || button.includes('if (result.ok)'), 'the launch result gate stays')
 })
+
+/**
+ * RESTORED STREAM-HEALTH SEAT/CHIP WIRING LOCKS (2026-09-21 deletion review).
+ *
+ * The deleted test/session-health/stream-health-wiring.test.ts pinned the React
+ * seat and chip as source text (neither is importable under plain node). These
+ * are the invariants that review found had no behavioural replacement: the
+ * registration order behind the open-in gates, the per-session ladder
+ * ownership, the evidence-gated execution discipline, the inert chip, and the
+ * cross-package churn constant shared with the api-gateway fork.
+ */
+const seat = stripComments(source('../../src/client/session-stream-health-seat.ts'))
+const chip = stripComments(source('../../src/client/SessionStreamHealthChip.tsx'))
+const openInEntry = stripComments(source('../../src/client/index.ts'))
+
+test('stream-health seat: registered before the open-in gates, ladder state in the seat, defensive face read', () => {
+  const call = openInEntry.indexOf('registerSessionStreamHealthSeat(ctx, t)')
+  const bail = openInEntry.indexOf('if (source === null) return')
+  assert.notEqual(call, -1, 'the entry must register the stream-health seat')
+  assert.notEqual(bail, -1, 'the open-in source gate must still exist')
+  assert.ok(call < bail, 'the recovery seat must not sit behind the open-in source gate')
+  assert.match(openInEntry, /import \{ registerSessionStreamHealthSeat \} from '\.\/session-stream-health-seat\.ts'/)
+  assert.match(seat, /'conversation\.session\.header\.actions'/)
+  assert.match(seat, /inject: \(\) => face,/)
+  assert.match(seat, /const ladders = new Map<string, SessionStreamHealthState>\(\)/)
+  assert.match(seat, /const storeLadder = \(sessionId: string, state: SessionStreamHealthState\): void => \{/,
+    'per-session state must survive a chip remount through one shared store')
+  assert.match(seat, /reflect\.get\('sessions', false\)/, 'an absent cordis service must not throw through the ctx proxy')
+  assert.match(seat, /previousOf = \(sessionId: string\): string \| undefined => previousPresented\(presented, sessionId\)/)
+})
+
+test('stream-health seat: only the evidence-gated auto rebuild, and the click is never ledger-gated', () => {
+  assert.match(seat, /resyncAvailable: hasSessionStreamResync\(sessions, sessionId\)/)
+  assert.match(seat, /openInFlight: sessionOpenInFlight\(sessions, sessionId\)/)
+  assert.match(seat, /if \(plan\.action === 'heal'\) \{/)
+  assert.match(seat, /else if \(plan\.action === 'auto-resync'\) \{/)
+  assert.doesNotMatch(seat, /plan\.action === 'resync'/)
+  assert.equal([...seat.matchAll(/resyncSessionStream\(/gu)].length, 2,
+    'two resync execution paths: the auto arm and the injected user action')
+  assert.match(seat, /resyncSessionStream\(sessions, sessionId\)\n\s*state = markSessionStreamHeal\(state, now\)/,
+    'the automatic rebuild must be accounted against the ledger')
+  assert.doesNotMatch(seat, /if \(!sessionStreamLeversAvailable\(current, now\)\) return/,
+    'the manual exit must survive an exhausted automatic budget')
+  assert.match(seat, /resync: \(sessionId\) => \{/)
+  assert.match(seat, /storeLadder\(sessionId, markSessionStreamHeal\(current, now\)\)/)
+})
+
+test('stream-health chip: only the injected action reloads, idle renders nothing, controls match the plan', () => {
+  assert.equal([...chip.matchAll(/location\.reload\(\)/gu)].length, 0, 'the chip must not reload on its own')
+  assert.equal([...seat.matchAll(/location\.reload\(\)/gu)].length, 1, 'exactly one reload path: the injected user action')
+  assert.doesNotMatch(chip, /useRef/, 'the ladder state must not live in a component ref')
+  assert.match(chip, /if \(face\.label === null\) return null/)
+  assert.match(chip, /<span role="status" aria-live="polite">\{label\}<\/span>/, 'the live region is the label alone')
+  assert.doesNotMatch(chip, /<div[^>]*role="status"/)
+  assert.match(chip, /face\.reload \? \(/)
+  assert.match(chip, /face\.resync \? \(/)
+  assert.match(chip, /<button type="button" className=\{styles\.action\} onClick=\{\(\) => \{ resync\(sessionId\) \}\}>/)
+  assert.equal([...chip.matchAll(/resync\(sessionId\)/gu)].length, 1, 'the click is the only resync invocation in the chip')
+  assert.doesNotMatch(chip, /useEffect\(\(\) => \{ resync/, 'resync must not ride an effect')
+})
+
+test('stream-health churn: the seat mirrors the api-gateway literal and wakes the renderer', () => {
+  const fork = stripComments(readFileSync(
+    new URL('../../../dsh-api-gateway/src/client/stream-carrier-fact.ts', import.meta.url), 'utf8'))
+  const forkEvent = /export const STREAM_CARRIER_FAILED_EVENT = '([^']+)'/u.exec(fork)
+  assert.ok(forkEvent !== null, 'the fork must export the page event name')
+  const seatEvent = /const CARRIER_CHURN_EVENT = '([^']+)'/u.exec(seat)
+  assert.equal(seatEvent?.[1], forkEvent[1], 'the seat must listen on the fork event, spelled identically')
+  assert.match(seat, /window\.addEventListener\(CARRIER_CHURN_EVENT, onChurn\)/u)
+  assert.match(seat, /window\.removeEventListener\(CARRIER_CHURN_EVENT, onChurn\)/u, 'the listener must be torn down')
+  assert.match(seat, /\.\.\.\(carrierChurn === undefined \? \{\} : \{ carrierChurn \}\)/u, 'the fact must reach the decision observation')
+  assert.match(seat, /const churnListeners = new Set<\(\) => void>\(\)/u)
+  assert.match(seat, /subscribe: \(listener\) => \{\n\s*churnListeners\.add\(listener\)/u)
+  assert.match(seat, /carrierChurn = \{ at, count \}\n\s*for \(const listener of \[\.\.\.churnListeners\]\) listener\(\)/u,
+    'the broadcast must follow the stored fact in the same handler')
+  assert.match(seat, /const onChurn = \(event: Event\): void => \{(?:(?!\n\s*return\b)[\s\S])*?for \(const listener/u,
+    'no unconditional return may precede the broadcast')
+  assert.match(chip, /useEffect\(\(\) => subscribe\(\(\) => setTick\(value => value \+ 1\)\), \[subscribe\]\)/u)
+})

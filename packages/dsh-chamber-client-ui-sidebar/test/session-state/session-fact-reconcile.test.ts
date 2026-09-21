@@ -691,3 +691,29 @@ test('生产接线：producer 接上 correct，写回只写 false，相位栅栏
   assert.ok(fenceAt >= 0 && fenceAt < reconcile.indexOf("if (verdict === 'converged') {"),
     'attemptSettled/disposed 栅栏必须排在收敛结算与写回之前，否则晚到的 verify 会改官方 store')
 })
+
+// 生产接线锁（原 session-fact-reconcile-wiring.test.ts，2026-12 复核恢复）：行为已由
+// 纯函数单测覆盖，这里补回「生产真的调了它」的源码栅栏。
+test('round-3 restore: tier-1.5 gate, N=2 intersection and the write-back self-check are wired', () => {
+  const plugin = stripComments(readFileSync(
+    fileURLToPath(new URL('../../src/client/index.ts', import.meta.url)), 'utf8'))
+  assert.match(plugin, /if \(!hasReconcilableRunning\(readStoreRunning\(\)\)\) return 'converged'/,
+    'no reconcilable running row converges without paying a host read')
+  assert.match(plugin, /const first = await probeDeniedRunning\(\)/)
+  assert.match(plugin, /const second = await probeDeniedRunning\(\)/)
+  assert.match(plugin, /const confirmed = confirmDeniedRunningIds\(first\.denied, second\.denied\)/,
+    'only the intersection of two independent reads may write back or upgrade')
+  assert.match(plugin, /if \(confirmed\.size === 0\) return 'unknown'/)
+  assert.match(plugin, /await new Promise\(resolve => \{ setTimeout\(resolve, 0\) \}\)/, 'the self-check waits one macrotask')
+  assert.match(plugin, /if \(targets\.every\(id => after\[id\]\?\.running !== true\)\) return true/,
+    'the self-check compares the write targets, not "no running row anywhere"')
+  assert.match(plugin, /for \(let attempt = 0; attempt < 2; attempt \+= 1\) \{/, 'one retry when the projection lags a tick')
+  assert.match(plugin, /let verifySeq = 0/, 'the denied set carries a verify round sequence')
+  assert.match(plugin, /if \(denied\.seq !== verifySeq\) return false/, 'only the current verify round may write back')
+  assert.match(plugin, /const targets = writeBackTargets\(denied\.ids, readStoreRunning\(\)\)/)
+  assert.match(plugin, /if \(targets\.length === 0\) return true/, 'a naturally converged round is not an upgrade')
+  assert.ok(
+    plugin.indexOf('writeBackTargets(denied.ids') < plugin.indexOf("typeof service.handleSessionStatus !== 'function'"),
+    'the target decision must precede the capability guard, or a build without the method misjudges convergence',
+  )
+})

@@ -842,3 +842,68 @@ test('syncGatewayChamberPlugins: an SPKI-pinned https gateway is checked before 
     await server.close()
   }
 })
+
+test('syncGatewayChamberPlugins: uploads only the version-changed package and requests the controlled restart after the PUT', async () => {
+  const seen: string[] = []
+  const bodies: Array<Record<string, unknown>> = []
+  const server = await startSyncHttpServer((req, res) => {
+    let body = ''
+    req.on('data', (chunk: Buffer) => { body += chunk.toString('utf8') })
+    req.on('end', () => {
+      seen.push((req.method ?? '') + ' ' + (req.url ?? ''))
+      if (req.method === 'GET') {
+        fixtureJson(res, 200, { items: [
+          { name: SYNC_GRAPH.name, version: '1.0.0' },
+          { name: SYNC_ARCHIVE.name, version: '3.0.0' },
+        ] })
+        return
+      }
+      if (req.url === '/chamber/runtime/restart') { fixtureJson(res, 202, { accepted: true }); return }
+      bodies.push(JSON.parse(body) as Record<string, unknown>)
+      fixtureJson(res, 200, { ok: true, changed: true })
+    })
+  })
+  try {
+    const result = await syncGatewayChamberPlugins({
+      origin: 'http://127.0.0.1:' + server.port, headers: { authorization: 'Bearer test-token' }, spkiPin: null, packages: [SYNC_GRAPH, SYNC_ARCHIVE], logger: syncLogger().logger,
+    })
+    assert.equal(result.uploaded, true)
+    assert.deepEqual(seen, ['GET /chamber/plugins', 'PUT /chamber/plugins', 'POST /chamber/runtime/restart'],
+      'only the changed package uploads, then the controlled restart is requested')
+    assert.deepEqual(bodies, [{ name: SYNC_GRAPH.name, files: { 'package.json': SYNC_GRAPH.packageJson, 'dist/index.js': SYNC_GRAPH.distIndex } }],
+      'the PUT body carries the changed package only')
+  } finally {
+    await server.close()
+  }
+})
+
+test('syncGatewayChamberPlugins: a matching projection and a byte-identical answer never restart; an empty list is a best-effort skip', async () => {
+  const requests: string[] = []
+  const server = await startSyncHttpServer((req, res) => {
+    requests.push((req.method ?? '') + ' ' + (req.url ?? ''))
+    if (req.method === 'GET') { fixtureJson(res, 200, { items: [{ name: SYNC_GRAPH.name, version: '1.2.3' }] }); return }
+    fixtureJson(res, 200, { ok: true, changed: false })
+  })
+  try {
+    const matching = await syncGatewayChamberPlugins({
+      origin: 'http://127.0.0.1:' + server.port, headers: {}, spkiPin: null, packages: [SYNC_GRAPH], logger: syncLogger().logger,
+    })
+    assert.equal(matching.uploaded, false, 'a version-identical package is idempotently skipped')
+    assert.equal(matching.skipped, false)
+    assert.deepEqual(requests, ['GET /chamber/plugins'])
+    requests.length = 0
+    const changedGraph = { ...SYNC_GRAPH, packageJson: JSON.stringify({ name: SYNC_GRAPH.name, version: '9.9.9' }) }
+    const identical = await syncGatewayChamberPlugins({
+      origin: 'http://127.0.0.1:' + server.port, headers: {}, spkiPin: null, packages: [changedGraph], logger: syncLogger().logger,
+    })
+    assert.equal(identical.uploaded, false, 'a byte-identical PUT answer (changed:false) must not trigger the controlled restart')
+    assert.deepEqual(requests, ['GET /chamber/plugins', 'PUT /chamber/plugins'])
+  } finally {
+    await server.close()
+  }
+  assert.deepEqual(
+    await syncGatewayChamberPlugins({ origin: 'http://127.0.0.1:1', headers: {}, spkiPin: null, packages: [], logger: syncLogger().logger }),
+    { uploaded: false, skipped: true },
+    'an empty package list is a best-effort skip',
+  )
+})

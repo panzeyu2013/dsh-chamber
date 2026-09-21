@@ -5,8 +5,9 @@
  * context and a stand-in vendor locale plugin.
  *
  * This is the single page-language spec (the injected-host spec was retired in
- * the second trim round; its unique wiring locks moved here, its pure-rule and
- * state-machine cases are the end-to-end cases below): it proves that the
+ * the second trim round; its unique wiring locks moved here, its state-machine
+ * cases are the end-to-end cases below and its pure-rule cases are restored
+ * below): it proves that the
  * decorator runs the ownership hook after the vendor body, that the hook reads
  * the faces it claims to read, and that a background entry's write is restored
  * in the same synchronous task. Here the real modules run: `withLocaleOwnership` wraps a stand-in plugin
@@ -36,10 +37,15 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 import {
+  documentLanguageFor,
   installPageLanguageOwner,
   PageLanguageOwner,
+  projectPageLanguage,
   setPageActiveSource,
+  SERVED_DOCUMENT_LANGUAGE,
+  type EntryLanguageFact,
 } from '../../src/page-language.ts'
+import { resolveFrameLocale } from '../../src/locales.ts'
 import { withLocaleOwnership } from '../../src/locale-ownership.ts'
 import { normalize, stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 
@@ -446,4 +452,57 @@ test('the composite decorates the vendor locale mount with the ownership hook', 
     /register\('@deepseek-ai\/dsh-client-locale', Locale\)/,
     'the locale registration call site must keep its namespace import',
   )
+})
+
+// ── The pure rule (restored: the injected-host spec's projection table and the
+// document-language tag contract; the owner cases above drive the same rule end
+// to end, but no shell case can reach the "no on-screen source published" arm).
+
+test('locale ids map to the language tags the vendor service writes, and the frame resolves them back', () => {
+  assert.equal(documentLanguageFor('zh'), 'zh-CN')
+  assert.equal(documentLanguageFor('en'), 'en')
+  assert.equal(SERVED_DOCUMENT_LANGUAGE, 'zh-CN')
+  // Pin the writer/reader pair: a mapping drift on either side — writing a bare
+  // 'zh', or a tag resolveFrameLocale collapses to the wrong locale — fails here.
+  assert.equal(resolveFrameLocale(SERVED_DOCUMENT_LANGUAGE), 'zh')
+  assert.equal(resolveFrameLocale(documentLanguageFor('en')), 'en')
+  assert.equal(resolveFrameLocale(documentLanguageFor('zh')), 'zh')
+})
+
+test('the page follows only the ON-SCREEN source, and only once its settings answered', () => {
+  const facts = (entries: ReadonlyArray<readonly [string, EntryLanguageFact]>): ReadonlyMap<string, EntryLanguageFact> => new Map(entries)
+  // No on-screen source yet (owner installed, App has not published): keep.
+  assert.equal(projectPageLanguage({ facts: facts([]) }, 'zh-CN'), 'zh-CN')
+  // On-screen source without a fact (still booting): keep.
+  assert.equal(projectPageLanguage({ activeSource: 'local', facts: facts([]) }, 'zh-CN'), 'zh-CN')
+  // On-screen source whose host settings have NOT answered: its browser-derived
+  // provisional must never own the page.
+  assert.equal(
+    projectPageLanguage({ activeSource: 'local', facts: facts([['local', { locale: 'en', settled: false }]]) }, 'zh-CN'),
+    'zh-CN',
+  )
+  // On-screen source, answered: the page follows it.
+  assert.equal(
+    projectPageLanguage({ activeSource: 'local', facts: facts([['local', { locale: 'en', settled: true }]]) }, 'zh-CN'),
+    'en',
+  )
+  // A BACKGROUND source, answered, can never move the page.
+  assert.equal(
+    projectPageLanguage({
+      activeSource: 'local',
+      facts: facts([['local', { locale: 'zh', settled: true }], ['gateway-a', { locale: 'en', settled: true }]]),
+    }, 'zh-CN'),
+    'zh-CN',
+  )
+})
+
+test('the decorator forwards the vendor apply\'s this and return value (construct path preserved)', () => {
+  const sentinel = { marker: 'vendor-this' }
+  const vendor = {
+    // A NORMAL function (ctor-able): the wrapper must not flatten it to an arrow.
+    apply: function (this: unknown): unknown { return this === sentinel ? 'vendor-result' : 'this-lost' },
+  }
+  const decorated = withLocaleOwnership(vendor) as { apply: (this: unknown, ctx: unknown) => unknown }
+  assert.equal(typeof (decorated.apply as unknown as { prototype?: unknown }).prototype, 'object', 'a normal function keeps cordis\u2019s construct branch')
+  assert.equal(decorated.apply.call(sentinel, {}), 'vendor-result', 'this and the vendor return value must survive the wrapper')
 })

@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ApiRequest, ApiResponse } from '@dsh-chamber/control-plane'
 import { type AuthProvider } from '../../src/auth.ts'
-import { renderLoginPage } from '../../src/login-page.ts'
+import { detectLoginLang, renderLoginPage, wantsHtmlLoginResponse } from '../../src/login-page.ts'
 import { FakeRequest, FakeResponse, gatewayRequest } from '../support/utils.ts'
 import { TOKEN, setup, realAuth, runHttp, silentLogger } from '../support/dispatch-harness.ts'
 
@@ -156,6 +156,44 @@ test('S5: no error state ever echoes a value attribute (both languages, both sec
       }
     }
   }
+})
+
+test('zh error states keep the localized copy and the aria marking', () => {
+  // Moved from the deleted auth/login-page.test.ts (2026-12 trim): the sha256
+  // pins cover the pristine pages; these are the error-state renderings.
+  const invalid = renderLoginPage({ lang: 'zh', secure: true, error: 'invalid' })
+  assert.ok(invalid.includes('密码不正确。'))
+  assert.match(invalid, /<input[^>]*aria-invalid="true"/)
+  assert.match(invalid, /<input[^>]*aria-describedby="login-error"/)
+  assert.match(invalid, /role="alert"/)
+  assert.doesNotMatch(renderLoginPage({ lang: 'en', secure: true }), /<input[^>]*aria-invalid/)
+  assert.ok(renderLoginPage({ lang: 'zh', secure: true, error: 'rate_limited', retryAfterSec: 900 }).includes('请在约 900 秒后重试。'))
+  assert.ok(renderLoginPage({ lang: 'zh', secure: true, error: 'rate_limited' }).includes('尝试次数过多，请稍后重试。'))
+  assert.ok(renderLoginPage({ lang: 'zh', secure: true, error: 'busy' }).includes('认证服务繁忙，请稍后重试。'))
+  const expired = renderLoginPage({ lang: 'zh', secure: true, error: 'expired' })
+  assert.ok(expired.includes('会话已过期，请重新登录。'))
+  assert.doesNotMatch(expired, /<input[^>]*aria-invalid/)
+  // A non-finite or sub-1 retryAfterSec never renders Infinity or a bogus wait.
+  for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    const en = renderLoginPage({ lang: 'en', secure: true, error: 'rate_limited', retryAfterSec: bad })
+    assert.ok(en.includes('Too many attempts. Try again later.'))
+    assert.equal(en.includes('Infinity') || /~\d+s/.test(en), false)
+  }
+})
+
+test('login helpers: lang detection, HTML negotiation and the desktop form action', () => {
+  assert.equal(detectLoginLang('zh-CN,zh;q=0.9,en;q=0.8'), 'zh')
+  assert.equal(detectLoginLang('en-US,en;q=0.9'), 'en')
+  assert.equal(detectLoginLang(undefined), 'en')
+  const form = { 'content-type': 'application/x-www-form-urlencoded' }
+  assert.equal(wantsHtmlLoginResponse({ ...form, accept: 'text/html,application/xhtml+xml' }), true)
+  assert.equal(wantsHtmlLoginResponse({ ...form, accept: 'application/json' }), false)
+  assert.equal(wantsHtmlLoginResponse({ ...form, accept: ['text/html', 'application/xhtml+xml'] }), true)
+  assert.equal(wantsHtmlLoginResponse({ 'content-type': 'application/x-www-form-urlencoded; charset=UTF-8', accept: 'text/html' }), true)
+  assert.equal(wantsHtmlLoginResponse(form), false)
+  assert.match(renderLoginPage({ lang: 'en', secure: true }), /action="\/auth\/login"/)
+  assert.match(renderLoginPage({ lang: 'en', secure: true, desktop: true }), /action="\/auth\/login\?desktop=1"/)
+  assert.match(renderLoginPage({ lang: 'en', secure: true, error: 'invalid', desktop: true }), /action="\/auth\/login\?desktop=1"/)
 })
 
 test('API login failure keeps the JSON shape', async () => {

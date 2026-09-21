@@ -549,6 +549,26 @@ test('previewCreate startRef pins the chosen source branch; a moved source fails
   )
 })
 
+test('a non-zero show-ref --hash exit (the git 128 missing-ref quirk) reads as branch absent', async () => {
+  // Moved from the deleted snapshot-classification-branches.test.ts (2026-12
+  // trim): Git versions disagree on the missing-ref exit code (1 vs 128); the
+  // 2026-08 fix in src/core.ts localBranchHead treats ANY non-zero exit as
+  // "branch absent" — a regression to a hard failure would break new-branch
+  // preview/create on those versions.
+  const { repo, workspaces } = setup({ linked: true })
+  const strictRunner: GitRunner = async request => {
+    if (request.args[0] === 'show-ref' && request.args[1] === '--hash') {
+      return { exitCode: 128, stdout: '', stderr: `fatal: '${request.args[3]}' - not a valid ref\n` }
+    }
+    return repo.runner(request)
+  }
+  const strictCore = coreOver({ workspaces, git: strictRunner, fs: repo.fs, now: () => Date.now(), token: () => 'token-strict' })
+  const preview = await previewNew(strictCore, 'new-worktree', 'rapid-meadow')
+  assert.equal(preview.baseHead, MAIN_HEAD, 'a 128 missing ref is an absent branch, not a hard git failure')
+  const created = await strictCore.create({ previewToken: preview.previewToken, operationId: 'op-strict' })
+  assert.equal(created.branch, 'rapid-meadow')
+})
+
 test('a blank or whitespace-only $DSH_HOME is UNSET: the worktrees root follows upstream resolveDshHome', async () => {
   const previousDshHome = process.env.DSH_HOME
   try {

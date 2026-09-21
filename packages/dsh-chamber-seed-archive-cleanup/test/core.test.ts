@@ -7,6 +7,8 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import {
   ArchiveCleanupCore,
   ArchiveCleanupError,
@@ -87,6 +89,7 @@ test('purge: loaded-only subtrees are skipped by default and deleted under force
   assert.equal(forced.deletedSessions, 1) // s2
   assert.equal(forced.forcedLoaded, 1)
   assert.equal(forced.skippedRunning, 1) // s3's b1 is running — force must not bypass
+  assert.equal(forced.skippedLoaded, 0, 'force must never skip a loaded tree (retention-properties I4)')
   assert.equal(host.states.has('s2'), false)
   assert.equal(host.states.has('s3'), true)
   assert.equal(host.states.has('b1'), true)
@@ -447,6 +450,8 @@ test('purge: an archived descendant covered by a completed tree is cleared in th
   const again = await core.purge()
   assert.equal(again.deletedSessions, 0)
   assert.equal(again.deletedSubagents, 0)
+  assert.equal(again.clearedOrphanMembers, undefined, 'a converged rerun sweeps nothing')
+  assert.equal(host.removalCalls.length, 1, 'and performs no second set write')
 })
 
 test('purge: crash mid-subtree leaves the root archived and a rerun converges', async () => {
@@ -591,6 +596,82 @@ test('purge subset: a malformed filter refuses BEFORE any authoritative read (va
   assert.equal(host.stateReadAttempts, 0, 'no corpus read for a malformed request')
   assert.equal(host.removalCalls.length, 0)
 })
+test('purge subset: stale ids, named orphans and duplicate ids stay honest', async () => {
+  // Moved from the deleted subset-and-orphan-sweep.test.ts (2026-12 trim).
+  const host = buildHost()
+  const core = new ArchiveCleanupCore(host)
+  // A stale (never-archived) id and the live non-archived sibling are no
+  // candidates: nothing deleted, no error, and the sweep still converges.
+  const stale = await core.purge(['s4', 'never-archived'])
+  assert.equal(stale.errors.length, 0)
+  assert.equal(stale.deletedSessions, 0)
+  assert.equal(stale.deletedSubagents, 0)
+  assert.equal(host.deleteLog.length, 0)
+  assert.deepEqual(host.removalCalls, [['s-orphan']])
+  assert.equal(stale.clearedOrphanMembers, 1)
+  assert.equal(host.states.has('s4'), true, 'the live non-archived sibling is untouchable')
+  assert.equal(host.archived.has('s1'), true)
+
+  // An orphan NAMED by the filter is cleared in the same deduped batch write.
+  const host2 = buildHost()
+  const named = await new ArchiveCleanupCore(host2).purge(['s1', 's-orphan'])
+  assert.equal(named.errors.length, 0)
+  assert.equal(named.deletedSessions, 1)
+  assert.equal(named.clearedOrphanMembers, 1)
+  assert.deepEqual(host2.removalCalls, [['s1', 's-orphan']])
+  assert.equal(host2.archived.has('s2'), true, 'unselected member untouched')
+
+  // Duplicate filter ids delete once and keep the counts honest.
+  const host3 = buildHost()
+  const dup = await new ArchiveCleanupCore(host3).purge(['s2', 's2', 's2'])
+  assert.equal(dup.errors.length, 0)
+  assert.equal(dup.deletedSessions, 1)
+  assert.equal(host3.deleteLog.length, 1)
+  assert.deepEqual(host3.removalCalls, [['s2', 's-orphan']])
+})
+test('purge subset: an archived subagent row selected without its ancestor deletes only its own subtree', async () => {
+  const host = buildHost()
+  host.archived.add('a1')
+  const result = await new ArchiveCleanupCore(host).purge(['a1'])
+  assert.equal(result.errors.length, 0)
+  assert.equal(result.deletedSessions, 1, 'the archived subagent row is its own tree root')
+  assert.equal(result.deletedSubagents, 1)
+  assert.deepEqual(new Set(host.deleteLog), new Set(['a1', 'a1a']))
+  assert.equal(host.archived.has('a1'), false)
+  assert.equal(host.archived.has('s1'), true, 'the ancestor content and membership are untouched')
+  assert.equal(host.states.has('s1'), true)
+})
+test('purge subset: an empty selection deletes no content but still converges the orphan backlog', async () => {
+  const host = buildHost()
+  const core = new ArchiveCleanupCore(host)
+  const result = await core.purge([])
+  assert.equal(result.errors.length, 0)
+  assert.equal(result.deletedSessions, 0)
+  assert.equal(result.deletedSubagents, 0)
+  assert.equal(result.skippedRunning, 0)
+  assert.equal(result.clearedOrphanMembers, 1)
+  assert.equal(host.deleteLog.length, 0, 'no content deletion')
+  assert.deepEqual(host.removalCalls, [['s-orphan']])
+  assert.equal(host.archived.has('s-orphan'), false)
+  assert.equal(host.archived.has('s1'), true, 'record-bearing members untouched')
+  // Idempotent: the second empty run has nothing left to clear and no error.
+  const again = await core.purge([])
+  assert.equal(again.errors.length, 0)
+  assert.equal(again.clearedOrphanMembers, undefined)
+  assert.equal(host.removalCalls.length, 1)
+})
+test('purge subset: an archived descendant selected WITH its ancestor is covered by the ancestor tree', async () => {
+  const host = buildHost()
+  host.archived.add('a1')
+  const result = await new ArchiveCleanupCore(host).purge(['s1', 'a1'])
+  assert.equal(result.errors.length, 0)
+  assert.equal(result.deletedSessions, 1, 'one tree root — a1 is covered, never double-deleted')
+  assert.equal(result.deletedSubagents, 2)
+  assert.deepEqual(host.deleteLog, ['a1a', 'a1', 's1'])
+  assert.equal(host.removalCalls.length, 1)
+  assert.deepEqual(new Set(host.removalCalls[0]), new Set(['s1', 'a1', 's-orphan']))
+  assert.equal(host.archived.has('s2'), true)
+})
 test('orphanArchivedMembers: record-less members only; a live record-less id is excluded (fail-closed predicate)', () => {
   const states = new Map<string, ArchivedSessionState>([
     ['with-record', state('with-record')],
@@ -699,4 +780,36 @@ test('purge: a failed single set write keeps the swept orphans archived too (hon
   assert.equal(host.archived.has('s-orphan'), false)
   assert.equal(host.archived.has('s1'), false)
   assert.equal(host.archived.has('s2'), false)
+})
+
+test('purge at the full MAX_PURGE_SESSIONS capacity completes linearly', async () => {
+  // Moved from the deleted scale-purge-linear.test.ts (2026-12 trim): the
+  // full-capacity purge and a linear-time bound.
+  const host = new FakeHost()
+  for (let index = 0; index < MAX_PURGE_SESSIONS; index += 1) {
+    const id = 'cap-' + index
+    host.archived.add(id)
+    host.states.set(id, state(id))
+  }
+  const core = new ArchiveCleanupCore(host)
+  const started = performance.now()
+  const result = await core.purge()
+  const elapsed = performance.now() - started
+  assert.equal(result.deletedSessions, MAX_PURGE_SESSIONS)
+  assert.equal(result.deletedSubagents, 0)
+  assert.equal(result.skippedRunning, 0)
+  assert.deepEqual(result.errors, [])
+  assert.equal(host.deleteLog.length, MAX_PURGE_SESSIONS)
+  assert.equal(host.removedFromArchived.length, MAX_PURGE_SESSIONS)
+  assert.ok(elapsed < 20_000, 'full-capacity purge exceeded the linear-time bound')
+})
+
+test('purge tail keeps Set membership (source lock against Array.includes regression)', () => {
+  const source = readFileSync(fileURLToPath(new URL('../src/core.ts', import.meta.url)), 'utf8')
+  assert.match(source, /const clearIdSet = new Set\(clearIds\)/u)
+  assert.match(source, /const writeIdSet = new Set\(writeIds\)/u)
+  assert.match(source, /clearIdSet\.has\(root\)/u)
+  assert.match(source, /writeIdSet\.has\(id\)/u)
+  assert.doesNotMatch(source, /clearIds\.includes\(/u)
+  assert.doesNotMatch(source, /writeIds\.includes\(/u)
 })

@@ -460,4 +460,9 @@ test('S0 injector edges: case-insensitive </head>, idempotency and the exact 64K
   const atCap = injectTrustDeclaration(boundary)
   assert.equal(atCap.injected, true)
   assert.equal(atCap.html.length, boundary.length + TRUST_DECLARATION_SCRIPT.length)
+
+  // One byte over the cap stays untouched, and an empty body is not injectable.
+  const over = '<html><head></head><body>' + 'x'.repeat(MAX_HTML_INJECTION_BYTES) + '</body></html>'
+  assert.deepEqual(injectTrustDeclaration(over), { injected: false, html: over })
+  assert.deepEqual(injectTrustDeclaration(''), { injected: false, html: '' })
 })

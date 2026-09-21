@@ -13,11 +13,14 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { RemoteStreamMuxClient } from '../../src/client/stream-client.ts'
+import { RemoteStream } from '../../src/client/remote-stream.ts'
+import { RemoteStreamCarrierError, RemoteStreamMuxClient } from '../../src/client/stream-client.ts'
 import {
   REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS,
   REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,
+  REMOTE_STREAM_NO_GENERATION_WAIT_MAX_MS,
   REMOTE_STREAM_OPENING_TIMEOUT_MS,
+  REMOTE_STREAM_RETRY_BASE_MS,
   REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS,
 } from '../../src/client/remote-retry-policy.ts'
 
@@ -686,4 +689,79 @@ test('consecutive genuine failures double the self-heal cadence up to its cap', 
   await nextAttempt(REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS, 6)
   await client.close()
   t.mock.timers.reset()
+})
+
+/* ---- the single-consumer Remote stream's bounded retry lane ---- */
+
+/** Observable generation source that never publishes a generation. */
+function parkedConnection(): { generation: { getSnapshot: () => undefined; subscribe: (fn: () => void) => () => void } } {
+  return {
+    generation: {
+      getSnapshot: () => undefined,
+      subscribe: () => () => {},
+    },
+  }
+}
+
+test('a parked lane no longer waits forever: the bound reopens the stream', async (t) => {
+  // Moved from the deleted behavior/remote-stream-generation-wait.test.ts
+  // (2026-12 trim): the patch lock pins the bound's SHAPE; this is the runtime
+  // arm — a lane that never receives a generation must be reopened by the bound
+  // and the condition published on the carrier-failed seam.
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  t.after(() => t.mock.timers.reset())
+  let opens = 0
+  const failures: string[] = []
+  const stream = new RemoteStream(parkedConnection(), {
+    name: 'session/follow',
+    open: async function* () {
+      opens += 1
+      throw new RemoteStreamCarrierError('carrier down')
+    },
+    ended: () => new Error('ended'),
+    carrierFailed: (error: Error) => { failures.push(error.message) },
+  })
+  const iterator = stream[Symbol.asyncIterator]()
+  iterator.next().catch(() => {})
+  await flushMicrotasks()
+  assert.equal(opens, 1, 'the first attempt ran and failed')
+  await flushMicrotasks()
+  assert.equal(opens, 1, 'no reopen before the bound')
+  t.mock.timers.tick(REMOTE_STREAM_NO_GENERATION_WAIT_MAX_MS - 1)
+  await flushMicrotasks()
+  assert.equal(opens, 1, 'no reopen one tick before the bound')
+  t.mock.timers.tick(1)
+  await flushMicrotasks()
+  assert.equal(opens, 2, 'the bound reopens the stream instead of waiting forever')
+  assert.ok(failures.some(message => message.includes('without a connection generation')),
+    'the expired wait is published on the carrier-failed seam')
+  await stream.dispose()
+})
+
+test('a live generation paces the reopen with the episode backoff', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  t.after(() => t.mock.timers.reset())
+  let opens = 0
+  const stream = new RemoteStream({ generation: { getSnapshot: () => ({ id: 1 }), subscribe: () => () => {} } } as never, {
+    name: 'session/follow',
+    open: async function* () {
+      opens += 1
+      throw new RemoteStreamCarrierError('carrier down')
+    },
+    ended: () => new Error('ended'),
+  })
+  const iterator = stream[Symbol.asyncIterator]()
+  iterator.next().catch(() => {})
+  // The episode's first failure reopens immediately (the upstream shape).
+  await flushMicrotasks()
+  assert.equal(opens, 2, 'the first failure reopens immediately')
+  // The second failure is paced by the base backoff — the live-generation
+  // branch, so the no-generation bound plays no part here.
+  t.mock.timers.tick(REMOTE_STREAM_RETRY_BASE_MS - 1)
+  await flushMicrotasks()
+  assert.equal(opens, 2, 'no reopen before the backoff elapses')
+  t.mock.timers.tick(1)
+  await flushMicrotasks()
+  assert.equal(opens, 3, 'the live-generation lane keeps its paced reopen')
+  await stream.dispose()
 })

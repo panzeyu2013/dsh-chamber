@@ -169,6 +169,21 @@ test('POST read is idempotent, monotonic and reports unknown sessions as unstore
   assert.equal(bad.status, 400)
 })
 
+test('read tolerates unknown body fields and query params (newer client, older server)', async t => {
+  // Moved from the deleted session-state-version-matrix.test.ts (2026-12 trim):
+  // additive tolerance is what keeps a newer client usable against this server.
+  const harness = surfaceFor(t)
+  harness.store.applyBaseline([baselineItem('s1', false, 5)], { at: 100 })
+  activeSurface = harness.surface
+  const extra = await json('POST', '/chamber/session-state/read', {
+    clientId: 'install-1', sessionId: 's1', readThrough: 90, somethingNew: { nested: true },
+  })
+  assert.equal(extra.status, 200)
+  assert.equal(extra.json().readThrough, 90)
+  const extraQuery = await json('GET', '/chamber/session-state?clientId=install-1&somethingNew=1')
+  assert.equal(extraQuery.status, 200)
+})
+
 test('POST read-all stores the source floor and requires the client through', async t => {
   const harness = surfaceFor(t)
   harness.store.applyBaseline([baselineItem('s1', false, 40)], { at: 100 })

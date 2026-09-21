@@ -27,6 +27,7 @@ import {
   type SessionStreamHealthState,
   type SessionStreamObservation,
 } from '../../src/client/session-stream-health.ts'
+import { en, zh } from '../../src/locales.ts'
 import {
   hasHealNeighbor,
   hasHealRoute,
@@ -767,4 +768,18 @@ test('stream-health: surface presentation is the official chat column on a visib
   assert.equal(isConversationSurfacePresented({ visibilityState: 'visible', querySelector: () => null }), false)
   assert.equal(isConversationSurfacePresented(null), false)
   assert.equal(isConversationSurfacePresented(undefined), false)
+})
+
+test('stream-health: every notice key exists in both dictionaries', () => {
+  // Restored from the deleted stream-health wiring lock (invariant 5): the four
+  // notices the ladder can return and the four fixed chip labels must have copy
+  // in both dictionaries. The mapping itself is pinned above; this pins that the
+  // mapped key RESOLVES, so a helper rename can never ship a raw key.
+  for (const key of [
+    'streamHealth.label', 'streamHealth.healing', 'streamHealth.loadingStall', 'streamHealth.loadingFailed',
+    'streamHealth.healFailed', 'streamHealth.reload', 'streamHealth.resync', 'streamHealth.carrierChurn',
+  ]) {
+    assert.equal(typeof (zh as Record<string, string>)[key], 'string', 'zh is missing ' + key)
+    assert.equal(typeof (en as Record<string, string>)[key], 'string', 'en is missing ' + key)
+  }
 })

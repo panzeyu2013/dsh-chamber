@@ -13,6 +13,8 @@
 
 import { afterEach, beforeEach, test, mock } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import {
   createPrewarmIntent,
   emptyIntentPrewarmBudget,
@@ -223,4 +225,29 @@ test('the intent reaches App-layer bridge subscribers and unsubscribes cleanly',
   unsubscribe()
   chamberBridge.requestIntentPrewarm('ssh-b')
   assert.deepEqual(seen, ['ssh-a', 'local'], '取消订阅后不再投递')
+})
+
+// 门面接线锁（原 session-rows/prewarm-intent-wiring.test.ts 的源码面，2026-12 复核
+// 恢复）：来源头部是本版唯一的意图触点；点击/键盘/拖动消费本次 hover 周期，
+// onIntent 只把来源 id 交给 chamberBridge，卸载时 dispose 并清 ref。
+test('round-3 restore: the source header is the one and only intent touchpoint', () => {
+  const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
+  const section = [
+    read('../../src/client/ServerSection.tsx'),
+    read('../../src/client/ServerSectionHeader.tsx'),
+    read('../../src/client/ServerSectionRows.tsx'),
+    read('../../src/client/ServerSectionSearch.tsx'),
+    read('../../src/client/server-section-controls.tsx'),
+    read('../../src/client/server-section-model.ts'),
+    read('../../src/client/server-section-session-state.tsx'),
+  ].join('\n')
+  assert.match(section, /import \{ createPrewarmIntent, type PrewarmIntent \} from '\.\.\/shared\/prewarm-intent\.ts'/)
+  assert.equal((section.match(/createPrewarmIntent\(/g) ?? []).length, 1, 'one machine per source header; session rows stay out of scope')
+  assert.match(section, /const prewarmIntentRef = useRef<PrewarmIntent \| null>\(null\)/)
+  assert.match(section, /onPointerEnter=\{\(\) => \{ prewarmIntent\(\)\.enter\(\) \}\}/)
+  assert.match(section, /onPointerLeave=\{\(\) => \{ prewarmIntent\(\)\.leave\(\) \}\}/)
+  assert.match(section, /onIntent: \(\) => \{ chamberBridge\.requestIntentPrewarm\(server\.id\) \}/)
+  assert.equal((section.match(/prewarmIntent\(\)\.press\(\)/g) ?? []).length, 3, 'click / keyboard / drag each consume the cycle')
+  const cleanup = /useEffect\(\(\) => \(\) => \{[\s\S]{0,200}?prewarmIntentRef\.current\?\.dispose\(\)[\s\S]{0,120}?prewarmIntentRef\.current = null\s*\n  \}, \[\]\)/.exec(section)
+  assert.ok(cleanup, 'dispose alone is not enough: the ref must be cleared for StrictMode remounts')
 })

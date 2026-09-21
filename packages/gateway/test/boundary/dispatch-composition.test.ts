@@ -142,6 +142,30 @@ test('echoed boundary values are HTML-escaped and over-long values are capped', 
   assert.ok(capped.includes('…'))
 })
 
+test('every boundary reason kind renders its explanation (en) and the zh copy renders', () => {
+  // Moved from the deleted auth/login-page.test.ts (2026-12 trim): the page
+  // copy for every reason kind, plus the zh rendering and the fix hints.
+  const cases = [
+    ['malformed_headers', 400, 'bad_request', 'malformed or duplicated'],
+    ['host_rejected', 421, 'misdirected_request', 'did not carry a Host header'],
+    ['origin_invalid', 403, 'origin_forbidden', 'not a valid browser origin'],
+    ['origin_mismatch', 403, 'origin_forbidden', 'same-origin browser requests'],
+    ['cross_site_no_origin', 403, 'origin_forbidden', 'no Origin header'],
+  ] as const
+  for (const [reasonKind, status, code, marker] of cases) {
+    const html = renderBoundaryErrorPage({ lang: 'en', status, code, reasonKind })
+    assert.ok(html.includes(marker), reasonKind)
+    assert.doesNotMatch(html, /<script/i)
+    assert.doesNotMatch(html, /value="/)
+  }
+  const mismatch = renderBoundaryErrorPage({ lang: 'en', status: 403, code: 'origin_forbidden', reasonKind: 'origin_mismatch', origin: 'http://a.example', authority: 'http://b.example' })
+  assert.ok(mismatch.includes('--cors-origin'), 'the cross-site fix hint names the --cors-origin flag')
+  assert.ok(renderBoundaryErrorPage({ lang: 'en', status: 421, code: 'misdirected_request', reasonKind: 'host_rejected' }).includes('did not carry a Host header'))
+  const zh = renderBoundaryErrorPage({ lang: 'zh', status: 421, code: 'misdirected_request', reasonKind: 'host_rejected', host: '203.0.113.9:30801' })
+  assert.match(zh, /<html lang="zh">/)
+  assert.ok(zh.includes('访问被拒绝') && zh.includes('HTTP 421'))
+})
+
 test('WS applies the same Host policy before auth and proxies an allowed authenticated stream', async () => {
   let verifyCalls = 0
   const auth: AuthProvider = {

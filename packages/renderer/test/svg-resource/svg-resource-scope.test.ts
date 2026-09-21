@@ -27,6 +27,8 @@
  */
 import { beforeEach, test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 import {
   SVG_SCOPE_ATTRIBUTE,
@@ -37,6 +39,7 @@ import {
   scopeSvgElement,
   urlReferenceIds,
 } from '../../src/svg-resource-scope.ts'
+import { normalize, stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 
 // Module-level memory (rename map / preserved ids / scoped identity) is per realm, not per test.
 beforeEach(() => { resetSvgResourceScopeMemory() })
@@ -1238,4 +1241,33 @@ test('dispose() removes the link load listeners and a reinstall watches its own 
   second()
   assert.equal(linkB.listenerCount('load'), 0)
   assert.equal(linkA.listenerCount('load'), 0)
+})
+
+// ── The module face (restored: the wiring lock was retired, this module lock
+// has no behavior replacement — an aria attribute entering the rename face is
+// invisible to the url(#…) cases, and "no runtime import" is a static property).
+
+test('the scoper source stays framework-free and the rename face stays resource-only', () => {
+  const source = normalize(stripComments(readFileSync(
+    fileURLToPath(new URL('../../src/svg-resource-scope.ts', import.meta.url)),
+    'utf8',
+  )))
+  // The scoper runs before React mounts and takes its document surface by
+  // injection: it must not grow a runtime import.
+  assert.ok(!source.includes('import '), 'the scoper must stay framework-free (no imports)')
+  for (const attribute of ["'clip-path'", "'mask'", "'filter'", "'fill'", "'stroke'", "'style'"]) {
+    assert.ok(source.includes(attribute), 'resource attribute face must keep ' + attribute)
+  }
+  // aria / form ids are read ONLY to preserve them (never to rename them); the
+  // rename face itself stays the resource attribute list asserted above.
+  assert.ok(source.includes('ID_REFERENCE_ATTRIBUTES'), 'a11y id references must be collected to preserve them')
+  assert.ok(
+    !/RESOURCE_REFERENCE_ATTRIBUTES = \[[^\]]*aria/.test(source),
+    'no aria attribute may enter the rename face',
+  )
+  // Anti-vacuity (restored with the lock): these phrases only ever appear in this
+  // module's COMMENTS. If the shared stripComments helper regresses, they come
+  // back and the assertions above could be satisfied by comment text.
+  assert.ok(!source.includes('宁可少改'), 'comment text survived stripping: the source lock would be vacuous')
+  assert.ok(!source.includes('克隆件'), 'comment text survived stripping: the clone comment must be stripped too')
 })
