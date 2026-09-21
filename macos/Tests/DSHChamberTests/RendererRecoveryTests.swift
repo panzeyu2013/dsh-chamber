@@ -39,6 +39,34 @@ final class RendererRecoveryTests: XCTestCase {
         XCTAssertEqual(attempt, 1)
     }
 
+    // MARK: - RendererCrashAttribution（2026-09 崩溃归因轮）
+
+    func testCrashAttributionNamesTheBootWindow() {
+        let text = RendererCrashAttribution.describe(secondsSinceLoad: 21.4, ordinal: 1)
+        XCTAssertTrue(text.contains("21.40s"), text)
+        XCTAssertTrue(text.contains("boot 窗口内"), text)
+        XCTAssertTrue(text.contains("第 1 次崩溃"), text)
+    }
+
+    func testCrashAttributionSeparatesStableLoadsAndMissingLoad() {
+        let stable = RendererCrashAttribution.describe(secondsSinceLoad: 3600, ordinal: 2)
+        XCTAssertTrue(stable.contains("加载已稳定 3600s"), stable)
+        XCTAssertTrue(stable.contains("第 2 次崩溃"), stable)
+        for missing in [nil, Double(-1)] as [Double?] {
+            XCTAssertTrue(
+                RendererCrashAttribution.describe(secondsSinceLoad: missing, ordinal: 1)
+                    .contains("尚无完成的加载"),
+            )
+        }
+    }
+
+    func testBootWindowBoundCoversTheObservedIncidents() {
+        // 实测：当前构建的两次崩溃发生在加载完成后 21.0s / 33.9s（Apple 符号化栈
+        // 落在 JSC 代码块替换）；更早构建 8 次同族。归因窗口必须覆盖它们。
+        XCTAssertLessThan(21.0, RendererCrashAttribution.bootWindowSeconds)
+        XCTAssertLessThan(33.9, RendererCrashAttribution.bootWindowSeconds)
+    }
+
     // MARK: - DeepLinkBuffer
 
     func testBufferIsFIFOAndBounded() {

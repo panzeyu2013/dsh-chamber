@@ -64,6 +64,35 @@ public struct RendererRecoveryPolicy: Equatable {
     }
 }
 
+/// renderer 崩溃归因（2026-09 崩溃归因轮）。
+///
+/// 证据（本机 `~/Library/Logs/DiagnosticReports` 的 WebContent 报告 + shell.log）：
+/// 当前构建的两次崩溃都落在「页面加载完成后 20–34 秒」的 boot 窗口，Apple 符号化栈
+/// 是 JSC 代码块替换/JIT tier-up（入口 `JSRequestAnimationFrameCallback::invoke`）；
+/// 更早构建的 8 份报告是同一段代码块替换机制（入口是嵌套 async generator 驱动链）。
+/// 问题是**静默**：10 次崩溃里只有 2 次留下过 shell 侧痕迹，其余都表现为"应用自己
+/// 回到载入历史"。把"距上次加载完成多少秒 + 本次加载窗口内第几次崩溃"写进日志，
+/// 下一次发生即可直接判定，不必再靠事后推理。
+public enum RendererCrashAttribution {
+    /// boot 窗口上界（秒）。证据里的崩溃落在 21–34s；取 60s 覆盖同族形态
+    /// （多来源挂载 + 插件 boot 全在同一窗口内完成）。
+    public static let bootWindowSeconds: Double = 60
+
+    /// 崩溃时刻的归因文案（纯值，单测直测）。
+    /// @param secondsSinceLoad - 距上次「加载完成」的秒数；nil = 本次加载窗口内还没有
+    ///   完成过加载（首次加载就崩）。
+    /// @param ordinal - 本次加载窗口内的第几次崩溃（1 起）。
+    public static func describe(secondsSinceLoad: Double?, ordinal: Int) -> String {
+        guard let secondsSinceLoad, secondsSinceLoad >= 0 else {
+            return "本次加载窗口内尚无完成的加载，第 \(ordinal) 次崩溃"
+        }
+        let where_ = secondsSinceLoad < bootWindowSeconds
+            ? "boot 窗口内（< \(Int(bootWindowSeconds))s）"
+            : "加载已稳定 \(Int(secondsSinceLoad))s"
+        return String(format: "距上次加载完成 %.2fs（%@），本次加载窗口内第 %d 次崩溃", secondsSinceLoad, where_, ordinal)
+    }
+}
+
 /// sidecar 就绪前的深链缓冲（design 25 §4.5：`application(_:open:)` 冷启动
 /// 先于 ready 到达 → Swift 暂存，ready 后按序转交 B 桥 `__host.deepLink`；
 /// 归一化去重/队列语义在 core enqueueDeepLink，本缓冲只做「就绪前不丢」）。
