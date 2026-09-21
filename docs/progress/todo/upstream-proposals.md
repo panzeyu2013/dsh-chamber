@@ -142,3 +142,14 @@ chamber已落地缓解（不动上游事实面）：design 05 §2.2.1的open意�
 chamber 侧已落地缓解（`packages/renderer/src/svg-resource-scope.ts`，design 05 §4.2）：不改上游、
 在每个 `<svg>` 内把「自定 ∩ 自用」的资源 id 改名到文档唯一 token，外部引用复制进消费方。
 未覆盖的是 gateway/mobile 独立部署的官方壳（由实例自带 bundle 渲染，见 STATUS）。
+
+## 6. 会话状态的只读观察者与未读事实（2026-12，plan `todo/remote-session-state-and-switch.md` W7 / 裁决 20）
+
+背景：chamber 的 gateway 侧 watcher 需要一个**不渲染任何界面**的进程持续观察会话状态，才能在桌面关壳/关闭期间仍把「完成未读」带到下次启动。当前 pin 下这条路能走通（`$events` + 每条完成边沿一次 `session/follow` 读尾巴），但有三处本可由上游消掉的尖锐面——每处的 chamber 侧现状与判据都已在 plan 里登记。
+
+1. **`updatedAt` 语义请给一个契约级承诺**。当前 pin 的摘要是 `updatedAt = max(header.createdAt, sessionListMetadata.lastPromptAt)`，而 `lastPromptAt` 只在 `user/message && data.source.kind === 'user'` 推进（vendor `dsh-api-session-controller/lib/index.js` 的 `applySessionListMetadata` / `updatedAt`；事件自述见 `typert.host.js` 的 `api-session/activity` JSDoc）。若上游把「任意 durable 产出都推进 `updatedAt`」写成契约，只读客户端就能用**内容水位**（`unread ⟺ updatedAt > 已读标记`）判定未读：不需要观察者、轮询就够、手动停止天然不产生未读——这是本族问题里性价比最高的一处改动。不承诺也可以，但请明确「只在用户消息推进」为契约，以便下游按边沿轨设计（chamber 现按此落地）。
+2. **turn-end 的稳定性与转发**。`turn/end.reason`（`completed | aborted{reason} | blocked | error | max-tokens | interrupted`）已在 pin 存在（`typert.host.js` 的 `SessionEventMap` 与 `TurnEndReasonMap`），chamber 用它区分「完成」与「用户停止」以闭合误报。请求两点：① 冻结为稳定契约（含 `aborted` 的 `TurnEndCancelCause` 取值域）；② 考虑把 `turn/end` 纳入 `API_REMOTE_FORWARDED_EVENTS`——现白名单没有任何会话事件（`dsh-api-remotes` 的 `remote-events.js` 仅有 `api-session/*` 与两个 request 瀑布），观察者因此必须为每条完成边沿开一次 `session/follow` 才能读到尾巴。
+3. **观察者角色 / pending 投影**。经 `$events` 接入的客户端会成为 `approval/request`、`user-questions/request` 瀑布的交付目标（`dsh-api-gateway/lib/index.js` 的 `deliverRemoteEvent` / `receiveRemoteEventResult`）：静默会挂起等待中的批准，而无条件回 `{kind:'next'}` 会在没有其他下游客户端时把它结算成 unavailable。chamber 的规则是「仅当另有 mux 客户端在线且过 1.5s grace 才委派，否则保持等待」，但这本质是把上游缺失的角色区分补在了下游。请求任一：① 给只读订阅者一个 **observer 角色**（不参与 waterfall 交付）；② 或在 `session/list` 上提供 pending 投影，让只读方无需接触瀑布即可知道「等待输入」。
+4. **宿主侧持久 unread/pending 事实**。当前只有「有人正在观察」时才能记录完成边沿；桌面关闭且无观察者运行的窗口内完成的会话仍会丢。若宿主为每个会话持久化「最后完成水位 + 是否未读」（或至少给出稳定的 per-session unread 投影），这类丢失就能被根除，下游无需再各自维护观察者。
+
+chamber 侧现状（非上游阻塞项，供参照）：只读镜像的边界与验收判据见 `docs/design/17-server-side-gateway.md` §10.7 与 §20；协议单一源 `packages/control-plane/src/session-state-protocol.ts`；watcher `packages/gateway/src/session-state.ts`（`/chamber/session-state*`，能力协商 + 优雅降级）。

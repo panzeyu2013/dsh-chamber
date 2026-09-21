@@ -15,7 +15,7 @@
   - 写入期终止失败后闩锁**只**能靠重启应用再证明（design 02 §3.4）：`onWriterQuiescenceUnknown` 无扫描证据可依（记录可能已删），对本平面粘滞；触发 = 受管进程组信号被拒或子进程终止超时。
   - 实例写者静默门拦住自动启动恢复路径（同上验收）：shell被 `SIGKILL`/孤儿dsh占DSH_HOME如实拒绝（`409 connection_busy`）但「启动/停止」点不动（状态停 `starting`、端口0），恢复 = 优雅重启应用；仅硬杀后出现。
   - 降级提示目检/实机腿（05 §4，2026-12）：结构性缺口下三处座位一致性——横幅 ~5s出现/自愈后以「若仍然如此…」回来、侧栏行不重复播报、连接页卡片不同时出现「正常/能力受限」、提示非阻断与 `role="status"`、与body portal叠压；仅单测 + 源码锁，未真机判（`gui-acceptance-checklist.md` §3）。
-  - **切源后侧栏座席/字标与设置导航齿轮空白**（首报场景：切换来源后）：根因、修复契约、被拒方案与残余边界见 design 05 §4.2；回归锁 `packages/renderer/test/svg-resource/`（SVG 自足面）与 `packages/dsh-chamber-client-ui-sidebar/test/visual-lock/`（入场动画面）。**开放项**：① 真机验收未做——需在**重新构建的产物**上重放触发序列（切来源数次 + 开设置面板，rail↔wide、字标/座席一并看）确认不再空白；判据与命令见 design 05 §4.2（`node scripts/dev/svg-resource-probe.mjs --expect-artifact`，人工验收工具、不进 CI、需控制面在跑）；② gateway/mobile 独立部署的官方壳未覆盖——chamber 侧可选收口是把 scoper 装进既有打包插件 `packages/dsh-chamber-client-ui-mobile`（需范围决策），否则等上游/runtime 侧修。
+  - **切源后侧栏座席/字标与设置导航齿轮空白**（首报场景：切换来源后）：根因、修复契约、被拒方案与残余边界见 design 05 §4.2；回归锁 `packages/renderer/test/svg-resource/`（SVG 自足面）与 `packages/dsh-chamber-client-ui-sidebar/test/visual-lock/`（入场动画面）。（2026-12 W8/R15③ 收窄部署面：`packages/dsh-chamber-client-ui-mobile/src/client/index.ts` 已装同一 scoper（import 自 renderer 源，不复制），committed `lib/client.js` 由 `packages/dsh-chamber-client-ui-mobile/scripts/artifact-scope-marker.test.mjs` 守卫（缺标记即红，含负控），`packages/desktop/dist/web/assets/*.js` 由 build:renderer 之后的 `scripts/assert-scoper-artifact.mjs` 在 CI 断言——仍待真机判据。**开放项**：① 真机验收未做——需在**重新构建的产物**上重放触发序列（切来源数次 + 开设置面板，rail↔wide、字标/座席一并看）确认不再空白；判据与命令见 design 05 §4.2（`node scripts/dev/svg-resource-probe.mjs --expect-artifact`，人工验收工具、不进 CI、需控制面在跑）；② gateway/mobile 独立部署的官方壳未覆盖——chamber 侧可选收口是把 scoper 装进既有打包插件 `packages/dsh-chamber-client-ui-mobile`（需范围决策），否则等上游/runtime 侧修。
   - boot死区收敛实机门（05 §4.1，2026-12）：idle远端点其会话 → 遮罩立即给「连接」+ 切换行且不启动boot（隐藏满宽限后回收；编辑中来源不回收）；`error`、托管 `stopped`/`restart-exhausted` → 就绪门1.5s宽限后判不可服务（不再等满60s），`degraded`（重连在途）不判死、预算内等，两者都能退回本地；挂死boot → 超过10s反馈窗后遮罩给重试/连接/切换 + ⌘R；502（隧道通、远端端口死）→ 非阻断 `.boot-gap` 横幅 + 每ready世代一次自愈。Swift打包态复测遮挡/最小化仍收敛（与S-10同批）。见design 05 §4.1；纯函数/接线锁 `packages/renderer/src/source-readiness.ts`、`packages/renderer/test/lifecycle/source-readiness.test.ts`，通道失败上浮 `packages/renderer/test/lifecycle/host-graph.test.ts`。
 
   - idle来源点会话排队到68s才失败（05 §4.1推迟boot的代价，2026-12）：`open` 在 `QUEUED_OPEN_TIMEOUT_MS`(68s) 内等不到壳即失败；窗口内点「连接」可在settle后补发，但无"连接成功后自动打开"这条腿。候选收口 = App记下推迟open意图、来源ready时重放（须与既有pending-open队列语义对齐）。
@@ -58,7 +58,7 @@
 
 - 设计21网关插件能力对齐：剩余 §9实机E2E矩阵（真实gateway×desktop双通道门禁、registry传递依赖/lifecycle、故障注入、journal中断对账；发布前执行；.172升级因凭据轮换暂停待恢复）；UI余留：who/when tooltip未渲染、拒绝码→本地化映射未做（409逐字英文）、pollGatewayReady英文串未本地化；archive-pick双模式对话框为macOS-v1。
 
-- 产物新鲜度守卫只覆盖两个产物（2026-12 §6.11）：`desktop/dist/control-plane/**`（`control-plane-freshness.test.mjs`）与 `gateway/dist/**`（`build-smoke.test.ts`）已有「存在但缺当前标记 ⇒失败」守卫；其余陈旧无测试变红——`desktop/dist/web/**`（`electron-shared.test.mjs` 只断路径文本）、`dist/preload.cjs`、`dist/host-{graph,git-worktree,archive-cleanup,open-in}-package/**`（`build-host-graph-package.test.mjs` 只断言行序 /outDir；C8守已提交 `dist/index.js`）、`gateway/host-packages/**`（仅存在性）、vendor `allowBuilds` 锁步、`renderer/src/generated/**`。G2–G8（G1落地 `verify:test-wiring`）见`todo/product-freshness-guards.md`，design 21 §7登记。失效判据：每个产物有「陈旧 ⇒ 红」守卫或进入豁免表（G8）。
+- 产物新鲜度守卫只覆盖两个产物（2026-12 §6.11）：`desktop/dist/control-plane/**`（`control-plane-freshness.test.mjs`）与 `gateway/dist/**`（`build-smoke.test.ts`）已有「存在但缺当前标记 ⇒失败」守卫；其余陈旧无测试变红——`desktop/dist/web/**`（`electron-shared.test.mjs` 只断路径文本）、`dist/preload.cjs`、`dist/host-{graph,git-worktree,archive-cleanup,open-in}-package/**`（`build-host-graph-package.test.mjs` 只断言行序 /outDir；C8守已提交 `dist/index.js`）、`gateway/host-packages/**`（仅存在性）、vendor `allowBuilds` 锁步、`renderer/src/generated/**`。G2–G8（G1落地 `verify:test-wiring`）见`todo/product-freshness-guards.md`，design 21 §7登记。失效判据：每个产物有「陈旧 ⇒ 红」守卫或进入豁免表（G8）。（2026-12 W8/R15③ 收窄：`dsh-chamber-client-ui-mobile/lib/client.js` 由 `scripts/artifact-scope-marker.test.mjs` 守卫（缺标记/缺文件即红，含负控）；`desktop/dist/web/assets/*.js` 由 `build:renderer` 之后的 `scripts/assert-scoper-artifact.mjs` 在 ci.yml 断言——本仓无 node_modules 时该步骤只在 CI 生效。其余产物仍按上文无守卫。）
 
 - CI无任何腿能证明SMOKE PASS：`control-plane/test/smoke.test.ts` 在CI恒SKIP（不设 `DSH_CHAMBER_DSH_PATH`、无`ref-dsh`/vendor运行时），release.yml同样没有smoke；`ci.yml` 只接受显式 `SMOKE PASS` 或显式 `SKIP: …`（静默exit0会红），绿灯从未代表真跑过安装链。失效判据：至少一条CI/发布腿真跑出 `SMOKE PASS`（或明确改判「不做」并登记缺席理由）时删除本条。
 
@@ -244,7 +244,28 @@
 
 - 变更文件覆盖率门未接：`scripts/gates/run-checks.mjs` 的 `tests` 模式是每文件一个 `node` 子进程，V8覆盖率须跨进程合并，而仓内无 `c8` 类工具、新增devDependency需显式请求。待裁决二选一：引入devDependency或把runner改成单进程 `node --test`（动到现有进程隔离语义）。
 
-- 根级弹性回弹（deviations S-50）：仍open = 打包态 `.app` 实机走查（顶栏、会话栏顶部、内容区中段、内容区两端；含滚动/惯性/键盘/滚动条/缩放/拖拽选择无回归）与最低支持版本macOS 14.4复验；Electron未同步属双flavor有意差异（S-50 ①，accepted，理由见该行）。
+- 根级弹性回弹（deviations S-50）：仍open = 打包态 `.app` 实机走查（顶栏、会话栏顶部、内容区中段、内容区两端；含滚动/惯性/键盘/滚动条/缩放/拖拽选择无回归）与最低支持版本macOS 14.4复验；Electron未同步属双f
+
+- 远端完成未读 / 切源体验（2026-12 计划 `docs/progress/todo/remote-session-state-and-switch.md` §13）：实现面已闭合
+  （裁决1–20、W0–W8、R1–R23、仪表I1–I16；证据=该文档 §13.1 的 70 文件矩阵与 §13.2 的注入矩阵），**仍开放的是实机/CI 权威的五项**：
+  ① 实机矩阵：`node scripts/perf/measure-ui.mjs`（`prewarm` 命中率与 `watcher` 字段）、
+  `node scripts/perf/switch-measure.mjs 2 --require-switch`（未绘制目标实例即失败）与白屏/切换目检序列，需打包态 Electron + ≥2 可切换来源；
+  **2026-12 实测的精确阻断点**：没有带 CDP 的 Electron 实例——`curl http://127.0.0.1:9333/json/version` → 000，
+  安装态 `/Applications/dsh-chamber.app` 为 Swift 原生壳（无 Electron/asar，结构上无 CDP）；`ws` 经
+  `NODE_PATH=<sidecar>/vendor/dsh/node_modules` 已可解析，不再是阻断。同一实测下**已跑绿**的只读腿：
+  `node scripts/gui-acceptance/run.mjs --live --out /tmp/gui-live` → 25 pass / 0 fail / 26 checks（复跑命令见计划 §13.4）；
+  ② W6 无壳观察者实机：真实 SSH 远端 + 关闭该来源的壳后，完成仍落蓝点/todo（无壳可观测）；
+  ③ W8 双版本实机门：旧版 gateway + 新版桌面同跑，验证 404 / 503 `session_state_disabled` / 无 `protocol` 三种降级形态。
+  **2026-12 已实测一半**：本机 6 个真实 gateway 来源 `/chamber/runtime/status` → 200（进程活着）而
+  `/chamber/session-state*` → 404 `not_found`（= 本次改动前的构建），本地 dsh 来源 → 404 `capability_not_found`；
+  即「404 = 版本事实」这一形态已在真实部署上验证（复跑命令见计划 §13.6）。**仍缺**：503 `session_state_disabled`、
+  「2xx 无 `protocol`」两种形态（仅夹具验证），以及**新版 gateway（带镜像）**与新版桌面的端到端联通；
+  ③a W7 上游提案的**提交与跟踪**：仓内文本已落（`todo/upstream-proposals.md` §6 四项），但向 GitHub 提交/跟踪需外部凭据，2026-12 未做——
+  出口判据已改为「仓内提案文本」，提交属开放的外部动作；
+  ③b R12 的**真机 abort 样本**仍未捕获：`aborted+cause=user`（用户停止不得产生未读）目前只有夹具样本，
+  按 `todo/notes/residual-verifiability-review.md` §4-R12 的判据，真机无该样本时应判 **INCONCLUSIVE 而不是 PASS**；
+  ④ 移动端 scoper 产物绿：需 `build:renderer` 产物（`packages/dsh-chamber-client-ui-mobile/scripts/assert-scoper-artifact.mjs`；
+  无产物时该守卫 exit 1 并写明前置，已实测）；⑤ vendor 树 lockstep：需物化 `vendor/harness-packages`（CI 的 `ensure-harness-vendor` 前置）。lavor有意差异（S-50 ①，accepted，理由见该行）。
 
 ## 一致性债务与开放登记（低–中，未排期；均指回代码面注释/design 登记）
 
@@ -383,7 +404,15 @@
 
 - N-ctx单文档信任域：远端实例前端与同文档内其他实例及高权限preload bridge共域；现有main-frame/origin/proof/主进程确认只能缓解，横向隔离推迟到每实例独立WebContents架构。
 
-- N-ctx壳常驻语义收窄（2026性能整改偏差，design 05 §4）：「booted壳无限常驻」收窄：local恒留，隐藏壳最多保留`RETAINED_HIDDEN_VIEWS=1`，超限回收「已settle+连续隐藏≥60s」最久者（回收= dispose shell +卸载壳，实例进程/连接不受影响，重开冷boot）；被回收源不再自动预热直到用户点开；运行中任务完成蓝点/通知边沿随壳回收暂停至重开。
+- N-ctx壳常驻语义收窄（2026性能整改偏差，design 05 §4）：「booted壳无限常驻」收窄：local恒留，隐藏壳最多保留`RETAINED_HIDDEN_VIEWS=1`，超限回收「已settle+连续隐藏≥60s」最久者（回收= dispose shell +卸载壳，实例进程/连接不受影响，重开冷boot）；被回收源不再自动预热直到用户点开。**2026-12 起完成边沿不再依赖壳**：蓝点/未读/通知/徽标由 App 派生账本 + 只读事实通道（网关只读镜像 `session-state`、SSH/本地 dsh 的无壳观察者）承载，壳回收不再丢完成（`docs/design/06-sidebar-enhancements.md` §4.2、`docs/design/19-notifications.md` §3.3/§3.7）；仅实机腿未判（见本文件「远端完成未读 / 切源体验」条）。
+
+- 远程来源会话状态与切源白屏（2026-12，锚 `v0.4.0-beta.1`）：实现面已闭合，被否方案见 `docs/design/17-server-side-gateway.md` §20，读水位/派生契约见 `docs/design/06-sidebar-enhancements.md` §4.2 与 `docs/design/19-notifications.md` §3.3；验收记录与仍开放的实机/CI 权威五项见 `docs/progress/todo/remote-session-state-and-switch.md` §13 与本文件「远端完成未读 / 切源体验」条。
+
+- **安装态 Swift 版仍是修复前的构建（2026-12 复查，行动项）**：`/Applications/dsh-chamber.app` = `0.3.2-beta.5`（2026-09-21），其 `Resources/dist/web/assets` 对本次修复标记 0 命中（`view-request/view-reveal`、`requestMarkAllRead`、`requestIntentPrewarm`、`__dshChamberSourceMux`、`__chamberSvgScopeInstalled` 等全无）⇒ 要用上本次修复必须重跑 `build:renderer` → `build:sidecar` → `build:swift-app` 并安装。另有待实机判的一项：`document.hasFocus()` ≡ 宿主焦点的假设（`design 19:166-167`，`macos/` 无焦点观测），它驱动「正在阅读」清蓝点与 `requireHidden`。
+
+- Swift 形态的**产物门已补齐、实机门仍开**（2026-12 复查，design 25）：产物链单源（`build-swift-app.mjs` 从 `packages/desktop/dist/web` 拷入，装配内已加 scoper 标记 fail-closed；`release.yml` 两处补门），Swift XCTest 本机跑得 453 例、450 绿（其余 6 例需 `build:sidecar` 产物，属 CI 的 macos 腿）；**仍开放**：打包态 `.app` 实机验收、WKWebView 无 `backgroundThrottling:false` 等价物下的 SSE/WS 心跳与 App Nap 语义（与下方 S-10 条同源）、真机重放切源白屏判据。详见 `todo/remote-session-state-and-switch.md` §13.10。
+
+- 远端完成未读的**零证据窗口**（2026-12 审计后登记，design 17 §10.7）：网关**整段停机期间**开始并完成的会话不可恢复——镜像未观察、壳未挂载，重启重建没有任何输入可依。按设计接受（R3 只覆盖「重启后仍可见的事实」），不计为缺陷；判据与边界见 `todo/remote-session-state-and-switch.md` §13.9。
 
 - 远端宿主上的空白会话残留（2026-12，design 05 §2.2.1）：N-ctx会话选择是页面级单键（`dsh.sessions.current`，vendor store无scope），壳冷boot无恢复会话，官方即在最近工作区复用/新建（宿主`session.create`）一个blank。chamber三闸门只消除用户可感中间态，不阻止该create；根治须上游给selection加shell/入口作用域（`todo/upstream-proposals.md`）。同工作区复用不增长，按已知降级接受。
 

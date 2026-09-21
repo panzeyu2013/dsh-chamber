@@ -334,6 +334,15 @@
   `test/session-rows/derive.test.ts`）：App 在 `setCompletedBySource` 的函数式
   updater 里调用，每份上报各自捕获 `prevRunning` 快照——同来源两次上报落在同一
   渲染周期时按序组合，不会互相覆盖丢蓝点。
+- **未读判定与事实携带（2026-12，plan §3.2/§5-3/§5-13、W2）**：`runtimeFacts` 每条上报另带
+  `listComplete?: boolean`（vendor list store `phase === 'ready'`，即本客户端至少成功拉过一次基线——
+  蓝点缺席剪枝的唯一门控）与 `stale?: boolean`（断连/主机不可达时仍可附加的只读事实，R14）；
+  未读是**纯谓词** `shared/derive.ts deriveUnread(completedAt, lastTurnEnd, readThrough, updatedAt)`：
+  `unread ⟺ max(updatedAt, completedAt) > readThrough`，`completedAt` 在 turn-end 分类为 `completed`
+  **或分类缺失**（watcher 的降级标记，R12 回退现状）时计入，已知非完成（aborted 含 `user`、blocked、
+  error、max-tokens、interrupted）抑制；全部比较都在 host 时间域，谓词不读账本、不读客户端墙钟。
+  `mergeRuntimeFacts(runtime, completedBySource, overlay?, stale?)` 保留两参逐字节相容，第三/四参用于
+  事实注入与 stale 附加；`todo-attention` 对断连来源只渲染 `runtime.stale === true` 的事实（R14 方案 A）。
 
 ### 4.3 UI 语义（状态指示）
 
