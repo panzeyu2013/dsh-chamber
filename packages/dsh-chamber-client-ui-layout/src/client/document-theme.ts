@@ -26,6 +26,7 @@
  *    id, or a renderer that has not published yet).
  */
 import type {} from '@deepseek-ai/dsh-client-ui-theme/client'
+import { decidePrime, type SourceThemeCache } from './theme-cache.ts'
 
 /**
  * One resolved theme snapshot, as produced by `ctx.theme.getTheme()`. Opaque
@@ -55,15 +56,37 @@ export interface DocumentThemeProjector {
 }
 
 /**
+ * Optional page-wide priming (W3 切源体验, 2026-12). Omitting `cache` keeps the
+ * pre-2026-12 behavior byte-for-byte (the unit tests lock that shape): without a
+ * cache the projector only re-projects its OWN remembered snapshot on activation,
+ * so a cold target boots on whatever palette the previous view left behind.
+ */
+export interface DocumentThemeProjectorOptions {
+  /** Page-wide per-source snapshot cache (see theme-cache.ts). */
+  cache?: SourceThemeCache
+  /**
+   * Cache-admission gate. Only SETTLED snapshots may be remembered: a provisional
+   * snapshot (theme runtime using the system default before the settings scope
+   * hydrates, per the locale-ownership.ts:127-150 discipline) must never become a
+   * source palette. Defaults to admitting every snapshot.
+   */
+  isSettled?: (snapshot: DocumentThemeSnapshot) => boolean
+}
+
+/**
  * Build one instance's projector over a page-wide environment.
  * @param instanceId - This boot's chamber source id, or undefined outside the chamber shell.
  * @param env - Page-wide active-view fact and document writer.
- * @returns The projector; `dispose` only unsubscribes.
+ * @param options - Optional page-wide priming; omitted = legacy behavior.
+ * @returns The projector; `dispose` only unsubscribes (and releases the mount mark).
  */
 export function createDocumentThemeProjector(
   instanceId: string | undefined,
   env: DocumentThemeEnvironment,
+  options?: DocumentThemeProjectorOptions,
 ): DocumentThemeProjector {
+  const cache = options?.cache
+  const isSettled = options?.isSettled ?? ((): boolean => true)
   let latest: DocumentThemeSnapshot | undefined
   // Fail open on either unknown side: an unpublished active source or a boot
   // without a chamber instance id keeps the vendor's unconditional behavior.
@@ -72,14 +95,48 @@ export function createDocumentThemeProjector(
     const active = env.getActiveSource()
     return active === undefined || active === instanceId
   }
-  const unsubscribe = env.onActiveSource(() => {
-    if (latest !== undefined && owns()) env.apply(latest)
+  if (cache !== undefined && instanceId !== undefined) cache.setMounted(instanceId, true)
+  const unsubscribe = env.onActiveSource(sourceId => {
+    if (cache === undefined) {
+      if (latest !== undefined && owns()) env.apply(latest)
+      return
+    }
+    const decision = decidePrime({
+      active: sourceId,
+      self: instanceId,
+      hasCached: sourceId !== undefined && cache.snapshotOf(sourceId) !== undefined,
+      activeMounted: sourceId !== undefined && cache.isMounted(sourceId),
+      primedFor: cache.primedFor(),
+      hasFallback: cache.lastSettled() !== undefined,
+    })
+    if (decision === 'self') {
+      if (latest !== undefined) env.apply(latest)
+      return
+    }
+    if (decision === 'none' || sourceId === undefined) return
+    const snapshot = decision === 'cached' ? cache.snapshotOf(sourceId) : cache.lastSettled()
+    if (snapshot === undefined) return
+    env.apply(snapshot)
+    cache.markPrimed(sourceId)
   })
   return {
     project: snapshot => {
       latest = snapshot
-      if (owns()) env.apply(snapshot)
+      if (cache !== undefined && instanceId !== undefined && isSettled(snapshot)) {
+        cache.remember(instanceId, snapshot)
+      }
+      if (owns()) {
+        // The active view is authoritative: a fresh own-snapshot supersedes any
+        // cold-boot prime, so the next activation may prime again.
+        cache?.clearPrimed()
+        env.apply(snapshot)
+      }
     },
-    dispose: () => { unsubscribe() },
+    dispose: () => {
+      unsubscribe()
+      // Keep the remembered palette (that is what primes the next cold open) but
+      // stop counting as mounted, so a hidden instance may prime this source.
+      if (cache !== undefined && instanceId !== undefined) cache.setMounted(instanceId, false)
+    },
   }
 }

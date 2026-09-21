@@ -40,6 +40,7 @@ import { LayoutController } from '@deepseek-ai/dsh-client-ui-layout/src/client/s
 import { ThemePresenter } from '@deepseek-ai/dsh-client-ui-layout/src/client/theme-presenter.ts'
 import { chamberBridge } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import { createDocumentThemeProjector, type DocumentThemeSnapshot } from './document-theme.ts'
+import { resolveSourceThemeCache } from './theme-cache.ts'
 
 /**
  * Page-wide document theme writer: ONE vendor ThemePresenter for the whole
@@ -316,16 +317,20 @@ export function apply(ctx: ClientContext): void {
     } catch {
       instanceId = undefined
     }
+    const cache = resolveSourceThemeCache()
+    // The first resolved snapshot is the runtime's PROVISIONAL value (the system
+    // default before the settings scope answers), so it must never become a
+    // source palette. `getTheme()` returns a stable reference until the next
+    // change, so identity is a sound settledness gate (W3 切源体验).
+    const initial = ctx.theme.getTheme()
     const projector = createDocumentThemeProjector(instanceId, {
       getActiveSource: () => chamberBridge.getActiveSource(),
       onActiveSource: listener => chamberBridge.onActiveSource(listener),
       apply: applyDocumentTheme,
+    }, {
+      cache,
+      isSettled: snapshot => snapshot !== initial,
     })
-    projector.project(ctx.theme.getTheme())
+    projector.project(initial)
     const off = ctx.on('theme/change', (snapshot) => { projector.project(snapshot) })
-    return () => {
-      off()
-      projector.dispose()
-    }
-  }, 'ui-layout: document theme presenter (active view only)')
 }
