@@ -301,7 +301,10 @@ test('the grace window is honoured: no delegation before waterfallGraceMs', asyn
   // races it under load (observed flake, 2026-12): poll for the delegation
   // instead. The assertions are unchanged — none before the window, exactly one
   // after it.
-  const deadline = Date.now() + 1_000
+  // 5 s, not 1 s: the mux grace timer is real and the suite runs its files
+  // concurrently, so a loaded machine can push the first tick past a tighter
+  // deadline (observed flake). A genuinely stuck observer still fails here.
+  const deadline = Date.now() + 5_000
   let resultCalls: typeof harness.calls.calls = []
   do {
     await delay(20)
