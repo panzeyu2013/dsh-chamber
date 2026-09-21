@@ -2087,8 +2087,8 @@ function singleShot(release) {
 }
 function currentStallSession(sessions) {
   try {
-    const current = sessions.list?.getSnapshot?.().current;
-    if (current === void 0 || typeof sessions.resolve !== "function") return void 0;
+    const current = sessions?.list?.getSnapshot?.().current;
+    if (current === void 0 || typeof sessions?.resolve !== "function") return void 0;
     const session = sessions.resolve(current)?.session;
     if (session === null || session === void 0 || typeof session !== "object") return void 0;
     return session;
@@ -2099,9 +2099,10 @@ function currentStallSession(sessions) {
 function sessionStallFace(ctx) {
   const reflect = ctx?.reflect;
   if (reflect?.get === void 0) return void 0;
+  const get = reflect.get.bind(reflect);
   const resolve = () => {
     try {
-      const found = reflect.get("sessions", false);
+      const found = get("sessions", false);
       if (found === null || typeof found !== "object") return void 0;
       const candidate = found;
       if (typeof candidate.list?.getSnapshot !== "function" || typeof candidate.resolve !== "function") return void 0;
