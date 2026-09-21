@@ -1149,7 +1149,8 @@ export function SidebarRoot({
       // 05 §2.2（2026-12 修订）：创建事实由唯一出口在 wire 成功后立即发布——App
       // 把该行并入这个工作区并立即渲染；官方 summaries 看不见它时（unary 侧栏创建
       // 的会话不在挂载壳的会话列表里），回声账本保证行不会在下一次挂载推送时消失。
-      const sessionId = await createSessionForSource(server.id, workspaceId)
+      // I10 归因：这是用户点「+」触发的创建（不是 boot 交接 / 预热兜底）。
+      const sessionId = await createSessionForSource(server.id, workspaceId, { origin: 'user' })
       // The App layer re-pulls the snapshot so every OTHER row of that source
       // converges; the created row itself rides the echo fact above.
       chamberBridge.requestRefresh(server.id)

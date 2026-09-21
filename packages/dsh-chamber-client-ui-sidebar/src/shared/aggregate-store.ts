@@ -14,6 +14,9 @@ import type { InstanceSnapshot } from './instance-api.ts'
 import type { ArchivedSessionMetaRow } from './derive.ts'
 import type { SessionFactReconcileSnapshot } from './session-fact-reconcile.ts'
 import { assertSingletonModule } from './singleton.ts'
+import {
+  publishSessionCreationInstrument, sessionCreationLedger, type SessionCreationOrigin,
+} from './session-create-ledger.ts'
 
 assertSingletonModule('aggregate-store')
 
@@ -71,6 +74,9 @@ export interface ChamberServerWorkspace {
   reusableBlankSessionId?: string
 }
 
+/** 会话事实档位（R19 能力一览；判定与展示分离，见 ChamberServerAggregate.sessionFacts）。 */
+export type SourceSessionFactsMode = 'full' | 'degraded' | 'legacy' | 'disabled'
+
 export interface ChamberServerAggregate {
   /** 'local' | '<target-kind>-<id>' (`ssh-<id>` remains a legacy dsh id). */
   id: string
@@ -97,6 +103,16 @@ export interface ChamberServerAggregate {
    * down, probe missing, or a healthy/transient managed state (fail open).
    */
   managedRuntimeDown?: boolean
+  /**
+   * R19 能力一览（plan W4「能力一览」）：本来源的**会话事实档位**，由桌面侧事实源
+   * 探测/观测得出，只读展示，绝不参与判定（判定只用事实本身）。
+   * - `full`：镜像可用且版本兼容，完成/未读是观测事实；
+   * - `degraded`：镜像可用但受限（尾巴不可读 / 事件静默 / 轮询模式 / 特性缺失）；
+   * - `legacy`：该网关未升级（路由 404，无镜像）；
+   * - `disabled`：该网关的观察面被关闭（503 或 `mode:'off'`）。
+   * 缺席 = 未知（未探测 / 该部署形态无此面）——绝不臆造为 full。
+   */
+  sessionFacts?: SourceSessionFactsMode
   workspaces: ChamberServerWorkspace[]
   /** True when the per-instance aggregate snapshot has actually landed
    *  (sessions; workspace groups derive from session cwd facts since
@@ -329,6 +345,8 @@ export interface SessionCreatedFact {
    * echo), false for a fork child, which inherits content.
    */
   blank: boolean
+  /** I10 归因（plan §8-R16/§10）：触发路径标签。缺席 = unknown（仪表覆盖缺口）。 */
+  origin?: SessionCreationOrigin
 }
 
 /**
@@ -375,6 +393,8 @@ export interface InstanceRuntimeReport {
     pending?: 'approval' | 'plan-review' | 'question'
     /** Running subagent descendants (vendor runningSubagentCount semantics); absent = 0. */
     runningSubagents?: number
+    /** I5：观察者刷新这一行事实的 host 域毫秒（0/缺席 = 无观察者事实）。 */
+    factAt?: number
   }>
   /**
    * 运行位活性守卫（renderer/src/session-liveness.ts）最近一次 L1 对账的回执；
@@ -383,10 +403,40 @@ export interface InstanceRuntimeReport {
    * shared/session-fact-reconcile.ts（单飞 + 有界重试）。
    */
   sessionFactReconcile?: SessionFactReconcileSnapshot
+  /**
+   * Whether `sessions` came from a COMPLETE session-list baseline (plan §6,
+   * R13): the mounted producer projects the official list store's arrival
+   * phase (`phase === 'ready'`, vendor
+   * dsh-api-session-controller/lib/types/client/sessions/manager.js:41,387 —
+   * pending until the first successful list, never rolled back by a later
+   * error). Only `true` is an authoritative "a session absent here is
+   * GONE" gate for the App's unread pruning; absent/undefined means "not
+   * proven complete" and must retain state (never prune on a shrinking list
+   * that is merely unverified). It is a JUDGMENT input, not a rendered fact —
+   * the sidebar projection does not carry it (shared/derive.ts
+   * runtimeReportSignature signs it on the identity path only).
+   */
+  listComplete?: boolean
+  /**
+   * R14: these facts are retained READ-ONLY facts of a source that is
+   * disconnected right now (the App attaches them past its `connected` gate
+   * and marks them stale). Consumers may render them but must label them as
+   * stale / offline instead of presenting them as live; a report without the
+   * flag keeps today's semantics exactly (unknown ≠ attention).
+   */
+  stale?: boolean
 }
 
 type Listener = () => void
 type OpenListener = (request: OpenSessionRequest) => void
+/** W4「全部已读」请求（插件→App）：读水位是 App 的权威，插件不持有读标记。 */
+type MarkAllReadListener = (request: { sourceId: string }) => void
+/**
+ * R8 意图预热（插件→App，blueprint §4.2）：「指针在该来源头部停留过」这一
+ * 优先级提示。它不是打开/挂载请求：App 侧只把它折算成"既有后台预热队列里
+ * 该来源优先"，是否真的 boot 仍由 App 的 eligible/抑制/收割纪律决定。
+ */
+type IntentPrewarmListener = (request: { sourceId: string }) => void
 type OpenOutcomeListener = (outcome: OpenSessionOutcome) => void
 type RefreshListener = (sourceId: string) => void
 /**
@@ -440,6 +490,8 @@ type PluginDiagnosticListener = (sourceId: string, diagnostic: PluginGraphDiagno
 const listeners = new Set<Listener>()
 const openListeners = new Set<OpenListener>()
 const openOutcomeListeners = new Set<OpenOutcomeListener>()
+const markAllReadListeners = new Set<MarkAllReadListener>()
+const intentPrewarmListeners = new Set<IntentPrewarmListener>()
 const refreshListeners = new Set<RefreshListener>()
 const sessionListRefreshListeners = new Set<SessionListRefreshListener>()
 const workspaceCreatedListeners = new Set<WorkspaceCreatedListener>()
@@ -531,6 +583,40 @@ export const chamberBridge = {
     openOutcomeListeners.add(listener)
     return () => {
       openOutcomeListeners.delete(listener)
+    }
+  },
+
+  /**
+   * W4：请 App 把一个**来源**整体标记为已读（单向：插件→App）。读标记与落盘都在
+   * App 手里（WS-C 的读水位纪律），因此插件只发意图，不自己写读数。
+   */
+  requestMarkAllRead(sourceId: string): void {
+    for (const listener of [...markAllReadListeners]) listener({ sourceId })
+  },
+
+  /** App 层订阅「全部已读」请求；返回取消订阅。 */
+  onMarkAllRead(listener: MarkAllReadListener): () => void {
+    markAllReadListeners.add(listener)
+    return () => {
+      markAllReadListeners.delete(listener)
+    }
+  },
+
+  /**
+   * R8：来源头部 hover dwell（shared/prewarm-intent.ts 的 120ms 机器）留驻后，
+   * 侧栏发出的单向优先级提示。它绝不挂载/打开任何东西——App 侧只把它折算成
+   * "既有预热队列里该来源优先"，是否 boot 由 App 的 eligible/抑制/收割纪律
+   * 与每会话计费共同决定（blueprint §4.2/§4.4）。
+   */
+  requestIntentPrewarm(sourceId: string): void {
+    for (const listener of [...intentPrewarmListeners]) listener({ sourceId })
+  },
+
+  /** App 层订阅意图预热请求；返回取消订阅。 */
+  onIntentPrewarm(listener: IntentPrewarmListener): () => void {
+    intentPrewarmListeners.add(listener)
+    return () => {
+      intentPrewarmListeners.delete(listener)
     }
   },
 
@@ -644,6 +730,16 @@ export const chamberBridge = {
    * echo; the App remains the only writer of the projection.
    */
   reportSessionCreated(fact: SessionCreatedFact): void {
+    // I10：无论有没有订阅者，每次应用内创建都进归因账本（含 blank），并把只读
+    // 仪表挂到页面全局一次——验收脚本据此按标签聚合、并断言"无标签外来源"。
+    sessionCreationLedger.record({
+      sourceId: fact.sourceId,
+      sessionId: fact.sessionId,
+      blank: fact.blank,
+      origin: fact.origin ?? 'unknown',
+      at: Date.now(),
+    })
+    publishSessionCreationInstrument()
     for (const listener of [...sessionCreatedListeners]) listener(fact)
   },
 

@@ -13,10 +13,14 @@
  * running) so the strip can never claim attention the rows themselves do not
  * show, and vice versa.
  *
- * - An entry exists only while its session row is IN the projection and its
- *   source is connected (a disconnected source carries no runtime facts —
- *   unknown ≠ attention; the entry reappears with the true state after
- *   reconnect, or stays gone when it was resolved meanwhile).
+ * - An entry exists only while its session row is IN the projection. A
+ *   disconnected source carries no LIVE runtime facts (unknown ≠ attention);
+ *   R14 opens exactly one door: facts the App explicitly marked `stale: true`
+ *   ride a disconnected source too, and are rendered (labelled `stale`) while
+ *   the rows survive. With `offlineUnread` enabled, a disconnected stale
+ *   source whose ROWS ARE GONE still surfaces its completed-unread facts as an
+ *   "offline unread" group (sessionId fallback label) — the row-absent half of
+ *   R14, opt-in so no consumer is forced onto a new surface.
  * - The session being read right now (the active view's current session) is
  *   excluded by the caller-provided viewing ids — the same single-selection
  *   rule as the current-session highlight (SidebarRoot chamberInstanceId).
@@ -48,6 +52,13 @@ export interface TodoAttentionEntry {
   workspaceTitle?: string
   /** Last-activity epoch ms (row fact; absent when the wire gave none). */
   updatedAt?: number
+  /**
+   * R14: the entry comes from facts of a source that is disconnected right now
+   * (the aggregate `runtime.stale` fact) — or, for the offline-unread group,
+   * from facts whose rows are gone. Consumers must label it (I13/I2
+   * `data-chamber-stale`); absent = live fact, today's semantics.
+   */
+  stale?: boolean
 }
 
 /** Per-kind gates, fed by the chamber-global settings block
@@ -67,21 +78,36 @@ export interface TodoAttentionFilters {
  * @param opts.viewingSessionId - that source's runtime current session (only
  *   consulted when the entry's source is the viewing source).
  * @param opts.filters - per-kind gates from the settings block.
+ * @param opts.offlineUnread - R14 row-absent branch (opt-in): also emit the
+ *   completed-unread facts of a DISCONNECTED stale source whose rows are gone,
+ *   as an offline-unread group. Absent = today's row-bound semantics exactly.
  */
 export function deriveTodoAttention(
   servers: readonly ChamberServerAggregate[],
-  opts: { viewingSourceId?: string; viewingSessionId?: string; filters: TodoAttentionFilters },
+  opts: {
+    viewingSourceId?: string
+    viewingSessionId?: string
+    filters: TodoAttentionFilters
+    offlineUnread?: boolean
+  },
 ): TodoAttentionEntry[] {
   const waiting: TodoAttentionEntry[] = []
   const completed: TodoAttentionEntry[] = []
   for (const server of servers) {
-    // 断连来源无实时状态（App 只在 connected 时附加 runtime；此处为防御
-    // 纵深再查一次）——未知 ≠ 待办，不臆造条目（重连后随真实状态重现）。
-    if (!server.connected) continue
     const runtime = server.runtime
+    // 断连来源无实时状态（App 只在 connected 或「有只读事实」时附加 runtime）
+    // ——未知 ≠ 待办，不臆造条目（重连后随真实状态重现）。R14 放开的是**显式
+    // 标 stale 的只读事实**：未标 stale 的断连 runtime 保持旧行为（App 是标记
+    // 的唯一写者；这里再查一次是防御纵深）。
+    const offline = server.connected !== true
+    if (offline && runtime?.stale !== true) continue
     if (runtime === undefined) continue
+    // 事实是否 stale 只信事实本身（连接态也可能带着一份标注过期的快照）。
+    const factsStale = runtime.stale === true
+    const rowSessionIds = new Set<string>()
     for (const workspace of server.workspaces) {
       for (const session of workspace.sessions) {
+        rowSessionIds.add(session.id)
         // 正在查看的会话不进待办（同高亮单选纪律；内容已在屏幕上）。
         if (server.id === opts.viewingSourceId && session.id === opts.viewingSessionId) continue
         const facts = runtime.sessions[session.id]
@@ -104,6 +130,7 @@ export function deriveTodoAttention(
           }
           if (session.updatedAt !== undefined) entry.updatedAt = session.updatedAt
           if (workspace.title !== undefined && workspace.title !== '') entry.workspaceTitle = workspace.title
+          if (factsStale) entry.stale = true
           waiting.push(entry)
           continue
         }
@@ -128,8 +155,30 @@ export function deriveTodoAttention(
         }
         if (session.updatedAt !== undefined) entry.updatedAt = session.updatedAt
         if (workspace.title !== undefined && workspace.title !== '') entry.workspaceTitle = workspace.title
+        if (factsStale) entry.stale = true
         completed.push(entry)
       }
+    }
+    // R14 行缺席分支（显式选项）：断连 + stale + 行不在投影里的 completed 事实
+    // ——待办区是唯一还能承载它的面（遍历行的旧实现无基底）。只出未读（completed
+    // 且子代理压制同规则），标签用 sessionId 兜底（derive.ts sessionDisplayTitle），
+    // 分组键是 entry.stale；不新增桥接面 / 不改 kind 联合。
+    if (!offline || opts.offlineUnread !== true) continue
+    // 确定序：sessionId 升序（跨 ctx 一致，与配置无关）。
+    for (const sessionId of Object.keys(runtime.sessions).sort()) {
+      if (rowSessionIds.has(sessionId)) continue
+      if (server.id === opts.viewingSourceId && sessionId === opts.viewingSessionId) continue
+      const facts = runtime.sessions[sessionId]
+      if (facts?.completed !== true || !opts.filters.completed) continue
+      if ((facts.runningSubagents ?? 0) > 0) continue
+      completed.push({
+        sourceId: server.id,
+        sessionId,
+        kind: 'completed',
+        title: '',
+        displayTitle: sessionDisplayTitle({ sessionId }),
+        stale: true,
+      })
     }
   }
   // 等待类（阻塞 agent）在前、完成未读在后；组内保持列表扫描序（确定、

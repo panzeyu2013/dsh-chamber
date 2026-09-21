@@ -23,6 +23,7 @@ import {
 } from '../shared/derive.ts'
 import { createPanelSource } from './panel-source.ts'
 import { createPurgeTracker } from '../shared/purged-tracker.ts'
+import { publishSessionCreationInstrument } from '../shared/session-create-ledger.ts'
 import {
   SessionFactReconciler,
   confirmDeniedRunningIds,
@@ -68,6 +69,10 @@ export const inject = ['slots', 'layout', 'sessions', 'workspaces', 'uiSession',
  */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'dsh-chamber: sidebar dictionaries')
+
+  // I10（plan §8-R16/§10）：把会话创建归因的只读仪表挂到页面全局**一次**——验收
+  // 脚本/CDP 直接读按标签聚合的 blank 计数与「无标签外来源」断言，不需要 IPC。
+  ctx.effect(() => { publishSessionCreationInstrument() }, 'dsh-chamber: session-creation instrument')
 
   // chamber (v0.1.2-alpha.1): `workspaces.startSession` moved to the
   // ui-workspace cross-Controller navigation service (official sidebar shape).
@@ -572,6 +577,13 @@ export function apply(ctx: ClientContext): void {
         if (summary.runningCount > 0) subagentRunning.set(parentId, summary.runningCount)
       }
       const baseReport = projectRuntimeFacts(snapshot, subagentRunning, pendingInteractions.getSnapshot())
+      // listComplete（主计划 §6 / R13）：官方 session list 的 arrival phase 就是
+      // 「本列表是否完整」的权威事实——listPhase 初值 'pending'，首次列表成功时置
+      // 'ready'，此后出错不回退（vendor
+      // dsh-api-session-controller/lib/types/client/sessions/manager.js:41,387）。
+      // 只有 ready 才允许 App 把「缺席」当删除剪掉未读；pending 恒 false ⇒ 不剪枝
+      // （否则一次尚未完成的列表会把未读假清）。它是判定输入，不进侧边栏渲染。
+      baseReport.listComplete = snapshot.phase === 'ready'
       // 运行位活性守卫的回执与事实同源上报：守卫据它区分「宿主确实还在跑」
       // 与「对账拿不到结论」（只有后者允许升级 reconnect）。
       const reconcile = sessionFacts?.snapshot()

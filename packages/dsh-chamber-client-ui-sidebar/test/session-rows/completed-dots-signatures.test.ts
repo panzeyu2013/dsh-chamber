@@ -217,6 +217,24 @@ test('runtimeReportSignature includeRunning=false drops the running bit (project
   )
 })
 
+test('runtimeReportSignature signs listComplete on the identity path only (plan §6 / R13)', () => {
+  const without: InstanceRuntimeReport = { sessions: {} }
+  const withTrue: InstanceRuntimeReport = { sessions: {}, listComplete: true }
+  const withFalse: InstanceRuntimeReport = { sessions: {}, listComplete: false }
+  // The App's runtimeFacts identity gate must move when the list becomes
+  // authoritative, or a "facts unchanged, list ready" report is deduplicated
+  // away and the pruning gate freezes at its first-seen value.
+  assert.notEqual(runtimeReportSignature(without), runtimeReportSignature(withTrue))
+  assert.notEqual(runtimeReportSignature(withTrue), runtimeReportSignature(withFalse))
+  assert.notEqual(runtimeReportSignature(withFalse), '', 'the gate alone is content on the identity path')
+  // The PROJECTION path ignores it: the sidebar renders nothing from it, so a
+  // flip must not re-publish every shell's list (same discipline as the receipt).
+  assert.equal(runtimeReportSignature(withTrue, undefined, false), runtimeReportSignature(withFalse, undefined, false))
+  assert.equal(runtimeReportSignature(withTrue, undefined, false), runtimeReportSignature(without, undefined, false))
+  // Existing reports without the field keep their exact signature bytes.
+  assert.equal(runtimeReportSignature(without), runtimeReportSignature({ sessions: {} }))
+})
+
 test('runtimeReportSignature onlyIds restricts the signature to the given session subset', () => {
   const a: InstanceRuntimeReport = { current: 's1', sessions: { s1: { running: true }, s2: { completed: true } } }
   // A hidden session (absent from onlyIds) flipping its facts does not change

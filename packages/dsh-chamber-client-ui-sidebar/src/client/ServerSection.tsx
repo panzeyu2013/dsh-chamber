@@ -39,11 +39,13 @@ import {
   type SourceSearchState,
 } from '../shared/search-state.ts'
 import { clearPendingClick, noteSessionRowClick } from '../shared/pending-click.ts'
+import { createPrewarmIntent, type PrewarmIntent } from '../shared/prewarm-intent.ts'
 import { MANAGED_RUNTIME_TRANSIENT_STATES } from '../shared/managed-runtime.ts'
 import { openErrorKey } from '../shared/open-outcome.ts'
 import { getSourceRepoLayouts, getWorkspaceGitFlag, hiddenByMainWorkspaceFold, isSourceGitFlagsLoaded } from '../shared/workspace-git-flags.ts'
 import { resolveWorkspaceDrop } from '../shared/workspace-drag-order.ts'
 import { sessionRowDisclosure, sessionRowWindow, SESSION_ROWS_VISIBLE_FIRST } from '../shared/session-row-window.ts'
+import { sessionRowState } from '../shared/session-row-state.ts'
 import { sourceAccentStyle, useSidebarSection, workspaceDropEnv } from './sidebar-context.ts'
 import cc from './sidebar-chamber.module.css'
 
@@ -265,6 +267,28 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
   const capsuleHeldFocus = useRef(false)
   const searchButton = useRef<HTMLButtonElement | null>(null)
 
+  /**
+   * R8 意图预热（blueprint §4.1）：**本来源头部** hover 的 120ms dwell 机器。
+   * 一台机器一个来源；首次指针进入才创建（非 hover 路径零成本）。`onIntent`
+   * 只经 chamberBridge 发一条单向请求——队列/预算/抑制纪律全在 App 消费端，
+   * 这一侧只回答"指针真的在这里停留了吗"（shared/prewarm-intent.ts 头注）。
+   */
+  const prewarmIntentRef = useRef<PrewarmIntent | null>(null)
+  const prewarmIntent = (): PrewarmIntent => {
+    if (prewarmIntentRef.current === null) {
+      prewarmIntentRef.current = createPrewarmIntent({
+        onIntent: () => { chamberBridge.requestIntentPrewarm(server.id) },
+      })
+    }
+    return prewarmIntentRef.current
+  }
+  // StrictMode（dev）会 setup→cleanup→setup：dispose 后必须把 ref 置空，否则
+  // 第二次挂载会复用一台永久 inert 的机器，hover 意图静默失效。
+  useEffect(() => () => {
+    prewarmIntentRef.current?.dispose()
+    prewarmIntentRef.current = null
+  }, [])
+
   // chamber (2026 性能整改 B2)：会话行渲染窗口的"已展开"标记——每工作区一
   // 个本地浏览态布尔（不持久化、不跨 ctx 同步；窗口只在渲染层，见
   // shared/session-row-window.ts）。
@@ -387,6 +411,17 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
   /** Pending-interaction kind of the row, or undefined when not pending. */
   const sessionStatePending = (server: ChamberServerAggregate, session: { id: string }): 'approval' | 'plan-review' | 'question' | undefined =>
     server.runtime?.sessions[session.id]?.pending
+  /** 仪表 I1/I13（plan §10）：行状态读数的机器可读标记——与圆点同一优先级输入。 */
+  const sessionStateMarker = (server: ChamberServerAggregate, session: { id: string; running?: boolean }) => {
+    const facts = server.runtime?.sessions[session.id]
+    return sessionRowState({
+      running: runningRingVisible(facts?.running, session.running),
+      completed: facts?.completed,
+      pending: facts?.pending,
+      runningSubagents: facts?.runningSubagents,
+      stale: server.runtime?.stale,
+    })
+  }
   const sessionStateDot = (server: ChamberServerAggregate, session: { id: string; running?: boolean }): ReactNode => {
     const facts = server.runtime?.sessions[session.id]
     const pending = facts?.pending
@@ -460,7 +495,15 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
         ? t('source.managedStarting', { state: t(sourceStatusLabelKey(server)) })
         : server.connected && server.aggregateReady === true && server.archiveSetKnown !== true
           ? t('source.baselinePending')
-          : ''
+          // R19 能力一览（plan W4）：最低优先级的一句「会话事实档位」说明。字段缺席时
+          // 整条级联逐字节等于改造前（桌面侧尚未投影 = 未知，绝不臆造为 full）。
+          : server.sessionFacts === 'degraded'
+            ? t('source.factsDegraded')
+            : server.sessionFacts === 'legacy'
+              ? t('source.factsLegacy')
+              : server.sessionFacts === 'disabled'
+                ? t('source.factsDisabled')
+                : ''
   // 两个门必须分开（下方状态点注释即其判据，2026-12 复查 MINOR 的落地）：
   // ①**live region 角色**：任何说明行在场，点就让位（一个来源只应有一个 live
   //   region——见渲染处的 `role={sourceNote === '' ? 'status' : undefined}`）；
@@ -751,6 +794,10 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                     headerActivatable && cc.sourceHeaderClickable,
                   )}
                   data-chamber-row={server.id}
+                  // R19：能力档位的机器可读锚点（验收仪器/诊断读取；用户可见文案见下方 sourceNote 分支）。
+                  data-chamber-facts-mode={server.sessionFacts}
+                  // I13：断连来源仍渲染的只读事实（R14）——来源级 stale 标记。
+                  data-chamber-stale={server.runtime?.stale === true || undefined}
                   style={sourceAccentStyle(server)}
                   title={headerTitle}
                   role={headerActivatable ? 'button' : undefined}
@@ -767,6 +814,11 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                   // the header (or its buttons) must not fire a spurious
                   // activate/toggle/action.
                   draggable
+                  // R8：来源头部 hover 的意图预热触点。React 的 pointerenter/leave
+                  // 不因指针移入子按钮而 leave（与 RowHoverCard 同款用法），移出
+                  // header 才 leave；真正的"是否值得优先"由 App 端既有纪律裁决。
+                  onPointerEnter={() => { prewarmIntent().enter() }}
+                  onPointerLeave={() => { prewarmIntent().leave() }}
                   onPointerDown={(event) => {
                     // Record whether the press started
                     // on a header BUTTON. dragstart's target is the drag
@@ -775,6 +827,9 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                     dragPressOnButtonRef.current = event.target instanceof Element && event.target.closest('button') !== null
                   }}
                   onDragStart={(event) => {
+                    // R8：拖动来源头部是"整理"而不是"前往"——它消费本次 hover
+                    // 周期，drag 期间不再补发预热意图（机器语义：一次 press）。
+                    prewarmIntent().press()
                     // A gesture that STARTED on a header
                     // button (fold / sort / add-workspace / search /
                     // archive-cleanup manager) aborts the
@@ -813,6 +868,9 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                     window.setTimeout(() => { suppressClickRef.current = false }, 0)
                   }}
                   onClick={() => {
+                    // R8：点击（明确点开）消费本次 hover 周期——切换本身走既有的
+                    // requestActivateSource → selectView 原路，意图不得代行。
+                    prewarmIntent().press()
                     if (suppressClickRef.current) return
                     // A remote source's header switches the active N-ctx view
                     // without opening a session (App layer owns the switch).
@@ -833,6 +891,8 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                     if (event.target !== event.currentTarget) return
                     if (event.key === 'Enter' || event.key === ' ') {
                       event.preventDefault()
+                      // R8：键盘激活同样消费本次 hover 周期（与点击同义）。
+                      prewarmIntent().press()
                       chamberBridge.requestActivateSource(server.id)
                     }
                   }}
@@ -939,12 +999,19 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                         onClose={() => { setSortMenuOpen(null) }}
                         onSelect={(id: string) => {
                           setSortMenuOpen(null)
+                          // W4「全部已读」：只把意图发给 App（读水位与落盘在 App 手里），
+                          // 插件不自己写读数——同一份权威，两个载体不重复实现。
+                          if (id === 'mark-all-read') {
+                            chamberBridge.requestMarkAllRead(server.id)
+                            return
+                          }
                           if (id === 'manual' || id === 'updated') setOrderBy(server, id)
                         }}
                         items={[
                           { type: 'label' as const, id: 'sort-label', text: t('orderBy.label') },
                           { id: 'manual', label: t('orderBy.manual') },
                           { id: 'updated', label: t('orderBy.updated') },
+                          { id: 'mark-all-read', label: t('source.markAllRead') },
                         ]}
                         selectedIds={[viewPrefs.orderBy?.[server.id] ?? 'manual']}
                         anchor={(
@@ -2071,6 +2138,11 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                         as the search-result rows). */}
                                     <span
                                       className={clsx(cc.sessionStateSlot, sessionStatePending(server, session) !== undefined && cc.sessionStateSlotPending)}
+                                      // I1/I13：状态与出处（验收 DOM 判据；不参与渲染）。
+                                      data-chamber-session-state={sessionStateMarker(server, session).state}
+                                      // I5：这一行事实的观察时刻（host 域 ms；缺席 = 无观察者事实）。
+                                      data-chamber-fact-at={server.runtime?.sessions[session.id]?.factAt}
+                                      data-chamber-state-source={sessionStateMarker(server, session).source}
                                       title={sessionStateLabel(server, session)}
                                       aria-label={sessionStateLabel(server, session)}
                                       role={sessionStateDot(server, session) !== null ? 'status' : undefined}
