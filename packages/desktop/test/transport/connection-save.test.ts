@@ -2,7 +2,6 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   deleteConnectionTransaction,
-  deleteConnectionsTransaction,
   saveConnectionTransaction,
   type DeleteConnectionsTransactionDeps,
   type SaveConnectionRequest,
@@ -536,7 +535,7 @@ test('metadata compensation failure is loud, scrubs all credentials, and never r
 })
 test('delete transaction invalidates sessions and clears both bound stores before metadata deletion', () => {
   const fake = deleteFake([spec()], { ...OLD_SECRETS, active: true })
-  const result = deleteConnectionsTransaction(fake.deps, [])
+  const result = deleteConnectionTransaction(fake.deps, 'one')
   assert.equal(result.ok, true)
   assert.deepEqual(fake.calls, ['disconnect', 'invalidate', 'gateway:null:null', 'ssh:null', 'metadata'])
   assert.deepEqual(fake.snapshot().instances, [])
@@ -544,12 +543,12 @@ test('delete transaction invalidates sessions and clears both bound stores befor
 })
 test('delete tears down an idle-projected generation before session, secret, and metadata mutation', () => {
   const fake = deleteFake([spec()], { namesOnly: true })
-  assert.equal(deleteConnectionsTransaction(fake.deps, []).ok, true)
+  assert.equal(deleteConnectionTransaction(fake.deps, 'one').ok, true)
   assert.deepEqual(fake.calls, ['disconnect', 'invalidate', 'gateway', 'ssh', 'metadata'])
 })
 test('delete session invalidation failure is fail-closed before secrets/metadata and reconnects the old row', () => {
   const fake = deleteFake([spec()], { ...OLD_SECRETS, active: true, failInvalidate: true })
-  const result = deleteConnectionsTransaction(fake.deps, [])
+  const result = deleteConnectionTransaction(fake.deps, 'one')
   assert.equal(result.ok, false)
   assert.deepEqual(fake.calls, ['disconnect', 'invalidate', 'connect'])
   assert.equal(fake.snapshot().active, true)
@@ -557,7 +556,7 @@ test('delete session invalidation failure is fail-closed before secrets/metadata
 })
 test('delete credential-clear failure restores all main-only snapshots and leaves metadata intact', () => {
   const fake = deleteFake([spec()], { ...OLD_SECRETS, quietGeneration: true, failSshClearAt: 1 })
-  const result = deleteConnectionsTransaction(fake.deps, [])
+  const result = deleteConnectionTransaction(fake.deps, 'one')
   assert.equal(result.ok, false)
   assert.deepEqual(fake.calls, [
     'invalidate', 'gateway:null:null', 'ssh:null',

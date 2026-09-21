@@ -472,8 +472,6 @@ test('⑤ 真实组装：可执行位 / 资源包 / Info.plist 版本 / 图标',
     // 供 JS 测试断言，但不得进 bundle。
     assert.ok(!existsSync(path.join(layout.resourceBundle, 'chamber-bridge.stub.js')),
       '无运行期消费者的 stub 不得打进 SwiftPM 资源包')
-    assert.ok(existsSync(path.join(macosDir, 'Sources', 'DSHChamber', 'Resources', 'chamber-bridge.stub.js')),
-      'stub 仍须留在源码树作为 JS 锁步产物')
     // S2：本地化必须落在 Contents/Resources 根（Bundle.main 与系统框架的
     // 本地化解析层）——资源包内的 .lproj 只服务 Bundle.module，不构成原生面事实。
     for (const locale of LOCALIZATIONS) {
@@ -538,10 +536,9 @@ test('⑤b 本地化 fail-closed：缺 .lproj/Localizable.strings 即 loud 带�
     rmSync(dir, { recursive: true, force: true })
   }
 
-  // 声明面解析：模板必须恰好声明 LOCALIZATIONS；缺键 → null（调用方 loud）。
+  // 声明面解析：缺键 → null（调用方 loud）。CFBundleLocalizations 的逐字一致已由
+  // macos/Tests/DSHChamberTests/ShellIdentityTests.swift（plist ↔ ShellPageLanguage）锁住。
   const template = readFileSync(path.join(macosDir, 'Info.plist.template'), 'utf8')
-  assert.deepEqual(plistLocalizations(template), LOCALIZATIONS,
-    'Info.plist.template 的 CFBundleLocalizations 必须与资源集逐字一致')
   assert.ok(template.includes('<key>CFBundleDevelopmentRegion</key>'),
     'DevelopmentRegion 必须保持既有声明（en），不得被本地化改造替换')
   assert.match(template, /<key>CFBundleDevelopmentRegion<\/key>\s*<string>en<\/string>/)

@@ -11,7 +11,6 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   appendAuditEvent,
-  configureAuditLog,
   AUDIT_LOG_MAX_BYTES,
   type AuditEvent,
 } from '../../audit-log.ts'
@@ -116,10 +115,6 @@ test('an event missing the required fields writes nothing (loudly, never a parti
   appendAuditEvent({ file }, { event: 'transport_phase' } as AuditEvent)
   assert.throws(() => statSync(file), /ENOENT/, 'no file was created for invalid events')
   rmSync(dir, { recursive: true, force: true })
-})
-
-test('configureAuditLog is the DI seam: it accepts the file and reports no notice', () => {
-  assert.equal(configureAuditLog(join(tmpdir(), 'unused-audit.log')), null)
 })
 
 test('the exported cap is 5 MiB per the design contract', () => {

@@ -18,6 +18,7 @@ import {
   createSessionForSource,
   forkSessionForSource,
 } from '../../src/shared/session-mutations.ts'
+import { createWorkspaceForSource } from '../../src/shared/workspace-mutations.ts'
 
 interface SessionFacts { created: Record<string, unknown>[]; removed: Record<string, unknown>[]; off(): void }
 
@@ -104,4 +105,62 @@ test('a failed wire publishes NOTHING (the echo must never outrun the host)', as
     await assert.rejects(createSessionForSource(sourceId, 'w1'), /busy/)
     assert.deepEqual(facts.created, [], 'a rejected create leaves no phantom row in the projection')
   } finally { facts.off(); releaseInstanceClient(sourceId) }
+})
+
+// ---- workspace create funnel (consolidated from workspace-mutations.test.ts;
+//      same stubbing style, so the two funnels share one harness file) ----
+
+test('createWorkspaceForSource publishes the HOST identity (id + canonical path) with the requested anchor', async () => {
+  const sourceId = 'funnel-workspace-identity'
+  const client = getInstanceClient(sourceId)
+  const calls: unknown[] = []
+  client.workspace.create = async (payload: unknown): Promise<UnaryResult<unknown>> => {
+    calls.push(payload)
+    return { ok: true, value: { workspace: { workspaceId: 'w1', path: '/canonical/path' }, created: true } }
+  }
+  const facts: Record<string, unknown>[] = []
+  const off = chamberBridge.onWorkspaceCreated((fact) => { if (fact.sourceId === sourceId) facts.push({ ...fact }) })
+  try {
+    const created = await createWorkspaceForSource(sourceId, 'picked/lexical/path', { afterWorkspaceId: 'main' })
+    assert.deepEqual(created, { workspaceId: 'w1', path: '/canonical/path', created: true },
+      'the host canonical path wins over the requested spelling (symlinked picks)')
+    assert.equal(calls.length, 1, 'exactly one wire call')
+    assert.deepEqual(facts, [{ sourceId, workspaceId: 'w1', path: '/canonical/path', afterWorkspaceId: 'main' }])
+  } finally { off(); releaseInstanceClient(sourceId) }
+})
+
+test('createWorkspaceForSource: a host-reused registration still publishes and the fact stays sparse', async () => {
+  const sourceId = 'funnel-workspace-reuse'
+  const client = getInstanceClient(sourceId)
+  client.workspace.create = async (): Promise<UnaryResult<unknown>> =>
+    ({ ok: true, value: { workspace: { workspaceId: 'w2', path: '/p/2' }, created: false } })
+  const facts: Record<string, unknown>[] = []
+  const off = chamberBridge.onWorkspaceCreated((fact) => { if (fact.sourceId === sourceId) facts.push({ ...fact }) })
+  try {
+    const created = await createWorkspaceForSource(sourceId, '/p/2')
+    assert.equal(created.created, false)
+    assert.equal(facts.length, 1, 'adopting an existing registration is still a fact the projection must hear')
+    assert.equal('afterWorkspaceId' in (facts[0] ?? {}), false, 'the fact is sparse without an anchor')
+  } finally { off(); releaseInstanceClient(sourceId) }
+})
+
+test('createWorkspaceForSource: decorations run BEFORE the fact and a throwing one never aborts the create', async () => {
+  const sourceId = 'funnel-workspace-decoration'
+  const client = getInstanceClient(sourceId)
+  client.workspace.create = async (): Promise<UnaryResult<unknown>> =>
+    ({ ok: true, value: { workspace: { workspaceId: 'w3', path: '/p/3' }, created: true } })
+  const order: string[] = []
+  const off = chamberBridge.onWorkspaceCreated((fact) => { if (fact.sourceId === sourceId) order.push('fact') })
+  const logged: unknown[][] = []
+  const originalError = console.error
+  console.error = (...args: unknown[]) => { logged.push(args) }
+  try {
+    const created = await createWorkspaceForSource(sourceId, '/p/3', {
+      beforePublish: () => { order.push('decorate'); throw new Error('decoration exploded') },
+    })
+    assert.deepEqual(order, ['decorate', 'fact'], 'the echoed row is born in its final shape')
+    assert.equal(created.workspaceId, 'w3', 'a committed host mutation must never become a saga failure')
+  } finally { console.error = originalError; off(); releaseInstanceClient(sourceId) }
+  assert.equal(logged.length, 1, 'the swallowed decoration failure is logged exactly once, never silent')
+  assert.match(String(logged[0]?.[0] ?? ''), /workspace create decoration failed/)
 })

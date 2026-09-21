@@ -22,7 +22,7 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { basename, dirname } from 'node:path'
 import {
   GitWorktreeCore,
@@ -54,11 +54,18 @@ const UNREGISTERED_HEAD = '3'.repeat(40)
 const DETACHED_HEAD = '4'.repeat(40)
 /** The linked worktree's admin git dir (`<common>/worktrees/feature`). */
 const LINKED_GIT_DIR = '/repos/project/.git/worktrees/feature'
-/** Host core source text: the code-vocabulary side of the error-code lockstep. */
-const HOST_CORE_SOURCE = readFileSync(
-  new URL('../../../dsh-chamber-seed-git-worktree/src/core.ts', import.meta.url),
-  'utf8',
-)
+/** Host core source text: the code-vocabulary side of the error-code lockstep.
+ *  Scans the WHOLE host source set — core.ts plus every extracted core-*.ts
+ *  family module (B5 split) — so a code moved into an ops module stays covered
+ *  instead of silently dropping out of this scan. */
+const HOST_CORE_SOURCE = readdirSync(
+  new URL('../../../dsh-chamber-seed-git-worktree/src/', import.meta.url),
+).filter(name => name.startsWith('core') && name.endsWith('.ts')).sort()
+  .map(name => readFileSync(
+    new URL(`../../../dsh-chamber-seed-git-worktree/src/${name}`, import.meta.url),
+    'utf8',
+  ))
+  .join('\n')
 
 /** The fields the client's `normalizeWorktree` decodes. A host rename of any of
  *  them drops the row (fail-closed) and must fail this suite instead. */

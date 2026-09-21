@@ -8,7 +8,6 @@ import { basename, resolve } from 'node:path'
 import {
   GitWorktreeError,
   assertSafeGitArgv,
-  createLocalGitRunner,
   domainResult,
   type GitRunner,
   type GitWorktreeDomainError,
@@ -18,7 +17,6 @@ import {
   COMMON,
   LINKED,
   FEATURE_HEAD,
-  FakeGitChild,
   FakeRepository,
   setup,
   targetOf,
@@ -28,92 +26,45 @@ import {
   mutationCalls,
 } from './support/fake-repository.ts'
 
-test('remove refuses a worktree hosting submodule checkouts unless discardChanges authorizes --force', async () => {
-  const { core, repo } = setup({ linked: true })
-  const modulesDir = `${COMMON}/worktrees/feature`
-  // The linked worktree's admin git dir hosts a submodule `modules` dir —
-  // the same criterion git's own removal guard checks (builtin/worktree.c
-  // validate_no_submodules).
-  repo.gitDirs.set(LINKED, modulesDir)
-  repo.gitDirStateFiles.set(modulesDir, new Set(['modules']))
-  const { expected } = await targetOf(core)
+test('remove refuses a submodule-hosting worktree unless discardChanges authorizes --force', async () => {
+  for (const mode of ['registered', 'unregistered'] as const) {
+    const { core, repo } = setup({ linked: true })
+    // The worktree's admin git dir hosts a submodule `modules` dir — the same
+    // criterion git's own removal guard checks (builtin/worktree.c validate_no_submodules).
+    const target = mode === 'registered' ? LINKED : '/repos/ext-sub'
+    const modulesDir = `${COMMON}/worktrees/${mode === 'registered' ? 'feature' : 'ext-sub'}`
+    if (mode === 'unregistered') repo.addLinked({ path: target, branch: 'ext-sub', head: FEATURE_HEAD })
+    repo.gitDirs.set(target, modulesDir)
+    repo.gitDirStateFiles.set(modulesDir, new Set(['modules']))
+    const { expected } = await targetOf(core, target)
+    const input = mode === 'registered'
+      ? { operationId: 'submodule-no-flag', workspaceId: 'ws-feature', expected }
+      : { operationId: 'unreg-submodule', expected, path: target }
 
-  // A CLEAN submodule worktree is refused pre-mutation with a typed
-  // DETERMINISTIC code: zero git mutations, and the wire carries
-  // retryable: false so the client never mints an "uncertain outcome"
-  // recovery that only a same-reason retry could clear.
-  const refused = await domainResult(() => core.remove({
-    operationId: 'submodule-no-flag',
-    workspaceId: 'ws-feature',
-    expected,
-  }))
-  assert.ok(!refused.ok)
-  const refusedError = (refused as { ok: false; error: GitWorktreeDomainError }).error
-  assert.equal(refusedError.code, 'worktree-submodules')
-  assert.equal(refusedError.retryable, false)
-  assert.match(refusedError.message, /submodule/)
-  assert.equal(mutationCalls(repo, 'remove').length, 0)
-  assert.equal(repo.worktrees.some(worktree => worktree.path === LINKED), true)
+    // A CLEAN submodule worktree is refused pre-mutation with a typed
+    // DETERMINISTIC code (retryable: false), and the same id replays it with
+    // zero further mutations.
+    const refused = await domainResult(() => core.remove(input))
+    assert.ok(!refused.ok)
+    const refusedError = (refused as { ok: false; error: GitWorktreeDomainError }).error
+    assert.equal(refusedError.code, 'worktree-submodules')
+    assert.equal(refusedError.retryable, false)
+    assert.match(refusedError.message, /submodule/)
+    assert.equal(mutationCalls(repo, 'remove').length, 0)
+    assert.equal(repo.worktrees.some(worktree => worktree.path === target), true)
+    const replay = await domainResult(() => core.remove(input))
+    assert.ok(!replay.ok)
+    assert.equal((replay as { ok: false; error: GitWorktreeDomainError }).error.code, 'worktree-submodules')
+    assert.equal((replay as { ok: false; error: GitWorktreeDomainError }).error.retryable, false)
+    assert.equal(mutationCalls(repo, 'remove').length, 0)
 
-  // The same operation id replays the SAME typed refusal deterministically
-  // (zero further mutations; the gate left the record 'ready' — nothing
-  // uncertain to reconcile).
-  const replay = await domainResult(() => core.remove({
-    operationId: 'submodule-no-flag',
-    workspaceId: 'ws-feature',
-    expected,
-  }))
-  assert.ok(!replay.ok)
-  const replayError = (replay as { ok: false; error: GitWorktreeDomainError }).error
-  assert.equal(replayError.code, 'worktree-submodules')
-  assert.equal(replayError.retryable, false)
-  assert.equal(mutationCalls(repo, 'remove').length, 0)
-
-  // With the explicit discard authorization the removal goes through with
-  // --force (git's submodule guard is bypassed only by --force).
-  const removed = await core.remove({
-    operationId: 'submodule-force',
-    workspaceId: 'ws-feature',
-    expected,
-    discardChanges: true,
-  })
-  assert.equal(removed.removed, true)
-  assert.equal(removed.next, 'delete-workspace')
-  assert.equal(removed.branchPreserved, true)
-  assert.deepEqual(mutationCalls(repo, 'remove').at(-1)!.args, ['worktree', 'remove', '--force', '--', LINKED])
-})
-
-test('unregistered removal of a submodule worktree hits the same typed gate', async () => {
-  const { core, repo } = setup({ linked: true })
-  const external = '/repos/ext-sub'
-  const modulesDir = `${COMMON}/worktrees/ext-sub`
-  repo.addLinked({ path: external, branch: 'ext-sub', head: FEATURE_HEAD })
-  // The external worktree's admin git dir hosts a submodule `modules` dir.
-  repo.gitDirs.set(external, modulesDir)
-  repo.gitDirStateFiles.set(modulesDir, new Set(['modules']))
-  const { expected } = await targetOf(core, external)
-
-  const refused = await domainResult(() => core.remove({
-    operationId: 'unreg-submodule',
-    expected,
-    path: external,
-  }))
-  assert.ok(!refused.ok)
-  const refusedError = (refused as { ok: false; error: GitWorktreeDomainError }).error
-  assert.equal(refusedError.code, 'worktree-submodules')
-  assert.equal(refusedError.retryable, false)
-  assert.equal(mutationCalls(repo, 'remove').length, 0)
-  assert.equal(repo.worktrees.some(worktree => worktree.path === external), true)
-
-  const removed = await core.remove({
-    operationId: 'unreg-submodule-force',
-    expected,
-    path: external,
-    discardChanges: true,
-  })
-  assert.equal(removed.removed, true)
-  assert.equal(removed.next, 'none')
-  assert.deepEqual(mutationCalls(repo, 'remove').at(-1)!.args, ['worktree', 'remove', '--force', '--', external])
+    // Only the explicit discard authorization bypasses git's guard, with --force.
+    const removed = await core.remove({ ...input, operationId: `${input.operationId}-force`, discardChanges: true })
+    assert.equal(removed.removed, true)
+    assert.equal(removed.next, mode === 'registered' ? 'delete-workspace' : 'none')
+    assert.equal(removed.branchPreserved, true)
+    assert.deepEqual(mutationCalls(repo, 'remove').at(-1)!.args, ['worktree', 'remove', '--force', '--', target])
+  }
 })
 
 test('pre-mutation git refusals are deterministic (typed when git names submodules); a committed failure stays retryable', async () => {
@@ -121,12 +72,7 @@ test('pre-mutation git refusals are deterministic (typed when git names submodul
   const { expected } = await targetOf(core)
   const input = { operationId: 'pre-mutation-refusal', workspaceId: 'ws-feature', expected }
 
-  // git dies BEFORE deleting anything, citing submodules (its own guard when
-  // the host's best-effort preflight missed a gitdir layout without the
-  // admin `modules` dir): the target is still listed with the SAME identity,
-  // its directory still exists and the worktree is still clean — the
-  // refusal is reclassified DETERMINISTIC and UPGRADED to the typed code so
-  // the client dialog can offer the discard authorization.
+  // git dies pre-mutation citing submodules: deterministic, upgraded to the typed code.
   repo.throwBeforeRemove = new GitWorktreeError(
     'git-command-failed',
     'Git worktree failed with exit 128: fatal: working trees containing submodules cannot be moved or removed',
@@ -139,16 +85,13 @@ test('pre-mutation git refusals are deterministic (typed when git names submodul
   assert.match(refusedError.message, /discardChanges/)
   assert.equal(repo.worktrees.some(worktree => worktree.path === LINKED), true)
   assert.equal(mutationCalls(repo, 'remove').length, 1)
-  // Once the cause is fixed, the same operation id replays and converges
-  // (the deterministic refusal left the record 'ready', yet the bound intent
-  // still reconciles through the same path).
+  // Once the cause is fixed the same id replays and converges.
   const retried = await core.remove(input)
   assert.equal(retried.removed, true)
   assert.equal(retried.replayed, true)
   assert.equal(mutationCalls(repo, 'remove').length, 2)
 
-  // A pre-mutation die() that does NOT name submodules stays on the
-  // git-command-failed code but is equally deterministic (dismissible).
+  // A pre-mutation die() not naming submodules is equally deterministic.
   repo.addLinked()
   repo.throwBeforeRemove = new GitWorktreeError(
     'git-command-failed',
@@ -173,9 +116,7 @@ test('pre-mutation git refusals are deterministic (typed when git names submodul
   assert.equal(retriedOther.removed, true)
   assert.equal(mutationCalls(repo, 'remove').length, 4)
 
-  // A failure AFTER git committed the removal (the target vanished mid-
-  // command) keeps the retryable classification for the same code: the
-  // outcome is genuinely uncertain and the same-id replay must reconcile it.
+  // A post-commit failure keeps the retryable classification for the same code.
   repo.addLinked()
   repo.throwAfterRemove = new GitWorktreeError(
     'git-command-failed',
@@ -333,51 +274,4 @@ test('domain carrier preserves stable business errors and lets true internal fai
   )
 })
 
-test('local runner waits for child close after output kill before settling', async () => {
-  class KillFailingChild extends FakeGitChild {
-    override kill(): boolean {
-      this.killed = true
-      this.emit('error', new Error('simulated kill failure event'))
-      return false
-    }
-  }
 
-  const child = new KillFailingChild()
-  const runner = createLocalGitRunner(() => child)
-  const pending = runner({
-    cwd: MAIN,
-    args: ['status', '--porcelain=v1', '-z', '--untracked-files=normal'],
-    timeoutMs: 1_000,
-    maxOutputBytes: 4,
-  })
-  let settled = false
-  void pending.then(
-    () => { settled = true },
-    () => { settled = true },
-  )
-  child.stdout.emit('data', Buffer.from('12345'))
-  await new Promise(resolve => setImmediate(resolve))
-  assert.equal(child.killed, true)
-  assert.equal(settled, false)
-  child.emit('close', null)
-  await assert.rejects(
-    pending,
-    error => error instanceof GitWorktreeError && error.code === 'git-output-limit',
-  )
-  assert.equal(settled, true)
-})
-
-test('local runner normalizes synchronous spawn throws as pre-admission failure', async () => {
-  const runner = createLocalGitRunner(() => { throw new Error('synchronous spawn failure') })
-  await assert.rejects(
-    runner({
-      cwd: MAIN,
-      args: ['status', '--porcelain=v1', '-z', '--untracked-files=normal'],
-      timeoutMs: 1_000,
-      maxOutputBytes: 1_024,
-    }),
-    error => error instanceof GitWorktreeError
-      && error.code === 'git-spawn-failed'
-      && /synchronous spawn failure/u.test(error.message),
-  )
-})

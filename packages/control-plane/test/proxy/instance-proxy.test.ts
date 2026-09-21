@@ -26,7 +26,6 @@ import {
   fakeRequest,
   fakeResponse,
   fakeSocket,
-  GATEWAY_AUTHORIZATION,
   makeProxy,
   proxyFor,
 } from '../support/proxy-fakes.ts'
@@ -300,39 +299,6 @@ test('dsh and local targets reject the gateway-owned /chamber namespace in the p
   assert.equal(upstream.calls[0].url.pathname, '/chamber/runtime/status')
 })
 
-test('gateway http direct origin: registered and forwarded with its injected headers', async () => {
-  const { proxy, upstream } = makeProxy()
-  // http direct = the user-configurable insecureHttp origin (design 17 §9.3),
-  // non-loopback allowed — plus both sanctioned headers.
-  proxy.registerTransport('gateway:gw-http', 'http://gw.internal:8080', {
-    authorization: GATEWAY_AUTHORIZATION,
-    cookie: 'dsh_gateway_session=abc.def',
-  })
-  const res = fakeResponse()
-  await proxy.handleHttp(fakeRequest('/api/i/gateway-gw-http/api/session/list', 'GET'), res)
-  assert.equal(res.status, 200)
-  assert.equal(upstream.calls.length, 1)
-  const call = upstream.calls[0]
-  assert.equal(call.url.origin, 'http://gw.internal:8080')
-  assert.equal(call.url.pathname, '/api/session/list')
-  const headers = call.options.headers as Record<string, string>
-  assert.equal(headers.authorization, GATEWAY_AUTHORIZATION)
-  assert.equal(headers.cookie, 'dsh_gateway_session=abc.def')
-  assert.equal(headers.host, 'gw.internal:8080')
-})
-
-test('gateway 0-header registration forwards without any injected credential', async () => {
-  const { proxy, upstream } = makeProxy()
-  // A credential-less gateway target is legal: the probe/forward answers
-  // whatever the server enforces (design 17 §2.3 — no upfront rejection).
-  proxy.registerTransport('gateway:anon', 'https://gw.example.com')
-  const res = fakeResponse()
-  await proxy.handleHttp(fakeRequest('/api/i/gateway-anon/api/session/list', 'GET'), res)
-  assert.equal(res.status, 200)
-  const headers = upstream.calls[0].options.headers as Record<string, string>
-  assert.equal(headers.authorization, undefined)
-  assert.equal(headers.cookie, undefined)
-})
 
 test('gateway WS upgrade: the sanctioned Cookie rides the handshake too', async () => {
   const upstream = fakeHttpRequest(url => url.pathname.startsWith('/api/remote.mux')

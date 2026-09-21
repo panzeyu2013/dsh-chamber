@@ -647,29 +647,5 @@ test('⑰ S-38 坏配置：能力探测原因必须记录、保持 blocked，che
     '壳拒绝 → 页面诚实 error 相位（旧实现停在 checking）')
   assert.equal(controller.state().error, reason, '错误文案 = 壳的真实原因（sanitize 后不变）')
   controller.stop()
-
-  // 消费面兼容：sidecar-entry 的现有实现仍回 boolean（该文件不在本工作流域内），
-  // 控制器必须同样处理——boolean false 保持 blocked 并记录兜底原因，绝不因回执
-  // 形态升级而误判可用。
-  const booleanWarns: string[] = []
-  const booleanForm = createHeadlessUpdateController({
-    version: '0.2.2',
-    logger: {
-      log: () => {},
-      warn: (...args: unknown[]) => booleanWarns.push(args.map((value) => String(value)).join(' ')),
-      error: () => {},
-    },
-    request: fakeFetch([]),
-    nativeUpdater: {
-      async available() { return false },
-      async trigger() { return { ok: false as const, error: 'native-updater-unavailable' } },
-    },
-  })
-  booleanForm.start()
-  await Promise.resolve(); await Promise.resolve()
-  assert.equal(booleanForm.state().installBlockedReason, NATIVE_SHELL_INSTALL_BLOCKED_REASON)
-  assert.ok(booleanWarns.some((line) => line.includes('壳未提供原因')),
-    'boolean 形态的 false 也必须被记录（兼容 sidecar-entry 现有实现）')
-  booleanForm.stop()
 })
 

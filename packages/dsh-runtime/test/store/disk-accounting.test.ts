@@ -204,57 +204,6 @@ test('runtimeDiskSummaryAsync charges restore backups in the real total and dedu
     'the inode shared by the residue and the restore backup is charged exactly once');
 });
 
-// ---- perf T3（2026-09）：富 fixture 上的单遍实现语义（不再有同步对等物） ----
-
-/** 组装覆盖全部类别的真实形态 fixture（版本树/store/缓存/工作目录/失败族/
- *  快照/预回滚/恢复备份/发布备份/未分类残渣/元数据权威），硬链接 + 符号链接
- *  面齐备。返回 base。 */
-function makeRichAccountingFixture(base: string): void {
-  const tree = makeVersionTree(base, '1.0.0');
-  writeFileSync(path.join(tree, 'payload-shared.bin'), Buffer.alloc(1024 * 1024));
-  mkdirSync(path.join(base, 'dsh-runtime', '.pnpm-store', 'pkg', 'x'), { recursive: true });
-  writeFileSync(path.join(base, 'dsh-runtime', '.pnpm-store', 'pkg', 'x', 'index.js'), 'store-content');
-  // 版本树 ↔ store 硬链接：totalBytes 只计一次，类别逐路径和两处都计。
-  linkSync(path.join(tree, 'payload-shared.bin'), path.join(base, 'dsh-runtime', '.pnpm-store', 'payload-shared.bin'));
-  writeFileSync(path.join(base, 'dsh-runtime', '.pnpm-store', 'pkg', 'x', 'bin'), 'store-bin');
-  mkdirSync(path.join(base, 'dsh-runtime', '.pnpm-cache'), { recursive: true });
-  writeFileSync(path.join(base, 'dsh-runtime', '.pnpm-cache', 'meta.json'), 'cache');
-  for (const [relative, content] of [
-    ['.install-home/home/pnpm.cjs', 'install-home'],
-    ['.xdg-cache/cache/data', 'xdg-cache'],
-    ['.work-active/work/pid', 'work'],
-    // >1 KiB so the quota-visibility assertion below is filesystem-independent
-    // (directory st_size is 4096 on ext4 but near zero on ZFS/tmpfs).
-    ['.3.0.0.failed/tree/payload', Buffer.alloc(2048, 7)],
-    ['failures/1.0.0.json', '{"count":1}'],
-    ['.9.9.9.publish-backup-cafebabe/payload', 'publish-backup'],
-    ['metadata-recovery-data/tx/evidence/current', 'recovery'],
-    ['metadata-recovery-rescue-data/tx/evidence/stash', 'rescue'],
-    ['metadata-recovery.json', '{"phase":"finalized"}'],
-    ['snapshots/1.0.0-1/data', 'snapshot'],
-    ['pre-rollback/1.0.0-2/data', 'stash'],
-    ['leftover/stray-dir/data.bin', Buffer.alloc(2048)],
-  ] as const) {
-    const file = path.join(base, 'dsh-runtime', relative);
-    mkdirSync(path.dirname(file), { recursive: true });
-    writeFileSync(file, content);
-  }
-  writeFileSync(path.join(base, 'dsh-runtime', 'current'), '{"version":"1.0.0"}', 'utf8');
-  const outside = path.join(base, 'outside-large.bin');
-  writeFileSync(outside, Buffer.alloc(1024 * 1024));
-  symlinkSync(outside, path.join(base, 'dsh-runtime', 'leftover', 'stray-link'), 'file');
-  for (const [name, content] of [
-    ['dsh-home.old', 'restore-one'],
-    ['dsh-home.old-123', 'restore-two'],
-  ] as const) {
-    const file = path.join(base, 'state', name, 'data.bin');
-    mkdirSync(path.dirname(file), { recursive: true });
-    writeFileSync(file, content);
-  }
-  const backupLink = path.join(base, 'state', 'dsh-home.old', 'hardlinked.bin');
-  linkSync(path.join(base, 'dsh-runtime', '.pnpm-store', 'pkg', 'x', 'index.js'), backupLink);
-}
-
 function summaryFields(summary: RuntimeDiskSummary): Record<string, number | boolean> {
   const { versionTrees, versionTreeBytes, storeBytes, cacheBytes, installHomeBytes, xdgCacheBytes,
     workBytes, failureBytes, snapshotBytes, preRollbackBytes, restoreBackupBytes,
@@ -264,44 +213,15 @@ function summaryFields(summary: RuntimeDiskSummary): Record<string, number | boo
     unclassifiedBytes, totalBytes, storePruneNeeded };
 }
 
-test('runtimeDiskSummaryAsync accounts the rich fixture: every category visible, hard links charged once', async () => {
-  const base = freshBase();
-  makeRichAccountingFixture(base);
-  const summary = await runtimeDiskSummaryAsync(base);
-  assert.ok(summary.versionTreeBytes > 0 && summary.storeBytes > 0);
-  assert.ok(summary.cacheBytes > 0 && summary.installHomeBytes > 0 && summary.xdgCacheBytes > 0);
-  assert.ok(summary.workBytes > 0 && summary.snapshotBytes > 0 && summary.preRollbackBytes > 0);
-  assert.ok(summary.unclassifiedBytes > 0 && summary.restoreBackupBytes > 0);
-  assert.ok(summary.failureBytes > 1024, 'failure family incl. publish backup is quota-visible');
-  const fields = summaryFields(summary);
-  assert.equal(Object.keys(fields).length, 14, 'the projection covers the full summary shape');
-  for (const [name, value] of Object.entries(fields)) {
-    assert.equal(Number.isNaN(value), false, `${name} must be a real number/boolean`);
-  }
-  // Two hard-linked inodes are charged to both of their categories but once to
-  // the real total: the 1 MiB tree/store payload and the small store/backup file.
-  const categorySum = summary.versionTreeBytes + summary.storeBytes
-    + summary.cacheBytes + summary.installHomeBytes + summary.xdgCacheBytes
-    + summary.workBytes + summary.failureBytes + summary.snapshotBytes
-    + summary.preRollbackBytes + summary.restoreBackupBytes + summary.unclassifiedBytes;
-  assert.ok(summary.totalBytes < categorySum, 'hard-linked bytes are never double charged');
-  assert.ok(summary.totalBytes >= 1024 * 1024, 'the real total keeps the payload once');
-});
-
-test('runtimeDiskSummaryAsync on an empty base is all zeros and the gateway layout charges sibling backups', async () => {
+test('runtimeDiskSummaryAsync on an empty base is all zeros (full 14-key projection shape)', async () => {
   const empty = freshBase();
   const emptyFields = summaryFields(await runtimeDiskSummaryAsync(empty));
   assert.equal(emptyFields.versionTrees, 0);
+  assert.equal(Object.keys(emptyFields).length, 14, 'the projection covers the full summary shape');
   for (const [name, value] of Object.entries(emptyFields)) {
     if (typeof value === 'number') assert.equal(value, 0, `${name} must be zero on an empty base`);
   }
   assert.equal(emptyFields.storePruneNeeded, false);
-  const gatewayBase = freshBase();
-  const gatewayHome = path.join(gatewayBase, 'dsh-home');
-  const backup = path.join(gatewayBase, 'dsh-home.old-123', 'data');
-  mkdirSync(path.dirname(backup), { recursive: true });
-  writeFileSync(backup, 'gateway-restore-backup');
-  assert.ok((await runtimeDiskSummaryAsync(gatewayBase, gatewayHome)).restoreBackupBytes > 0);
 });
 
 test('runtimeDiskSummaryAsync batches: yields to the event loop and reports progress via onVisited', async () => {

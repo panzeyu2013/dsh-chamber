@@ -301,150 +301,67 @@ test('settings/describe rides a per-call 16 MiB response cap (aligned with SETTI
   }
 })
 
-test('identity 404 falls back to the legacy session/list probe and fires the warn sink', async () => {
-  const fx = fixture()
-  const warnings: string[] = []
-  try {
-    const call: RuntimeProbeCall = async (_base, method, _payload, _options) => {
-      fx.calls.push({ method, payload: {} })
-      if (method === 'commands/execute') {
-        throw missingSessionError()
+test('identity 404 legacy session/list fallback: success, double-404, malformed, carrier failure, and 401 no-downgrade', async () => {
+  const cases = [
+    // identity method 404 = the runtime tree does not register it (the
+    // control-plane unary client attaches status to its transport errors).
+    { name: 'successful legacy fallback', identity: 404, legacy: 'items', expectOk: true, expectWarn: 1 },
+    {
+      name: 'double 404',
+      identity: 404,
+      legacy: '404',
+      expectOk: false,
+      expectWarn: 0,
+      // No raw carrier text, no paths — the closed combined constant wording.
+      error: /neither session\/canOpenWorkspacePath nor the legacy session\/list method is registered \(HTTP 404\)/,
+    },
+    // The pre-migration row rejected a value without the {items} session list.
+    { name: 'legacy answer without items', identity: 404, legacy: 'no-items', expectOk: false, expectWarn: 0, error: /malformed session list/ },
+    { name: 'legacy 503 propagates the carrier error', identity: 404, legacy: '503', expectOk: false, expectWarn: 0, error: /service down/ },
+    // Only a 404 downgrades; a 401 never falls back.
+    { name: 'non-404 identity failure', identity: 401, legacy: 'items', expectOk: false, expectWarn: 0, noFallback: true },
+  ] as const;
+  for (const c of cases) {
+    const fx = fixture();
+    const warnings: string[] = [];
+    try {
+      const call: RuntimeProbeCall = async (_base, method) => {
+        fx.calls.push({ method, payload: {} });
+        if (method === 'commands/execute') throw missingSessionError();
+        if (method === 'session/canOpenWorkspacePath') {
+          const error = new Error(c.identity === 404 ? 'not found' : 'gated') as Error & { status?: number };
+          error.status = c.identity;
+          throw error;
+        }
+        if (method === 'session/list') {
+          if (c.legacy === 'items') return { result: { value: { items: [{ sessionId: 's1' }] } } };
+          if (c.legacy === 'no-items') return { result: { value: { ok: true } } };
+          const error = new Error(c.legacy === '503' ? 'service down' : 'not found') as Error & { status?: number };
+          error.status = Number(c.legacy);
+          throw error;
+        }
+        return { result: { value: successfulValue(method) } };
+      };
+      const results = await probes(fx, call, { warn: line => warnings.push(line) });
+      const session = results.find(result => result.name === 'session/canOpenWorkspacePath');
+      assert.equal(session?.ok, c.expectOk, c.name);
+      if ('error' in c && c.error !== undefined) assert.match(session?.error ?? '', c.error, c.name);
+      if (c.expectWarn === 1) {
+        assert.equal(fx.calls.some(entry => entry.method === 'session/list'), true, 'legacy fallback ran');
+        assert.equal(warnings.length, 1, 'the legacy fallback is never silent');
+        assert.match(warnings[0], /404/);
+        assert.match(warnings[0], /session\/list/);
+      } else {
+        assert.equal(warnings.length, 0, c.name + ': a fallback that did not succeed never warns');
       }
-      if (method === 'session/canOpenWorkspacePath') {
-        // A carrier 404 = the runtime tree does not register the identity
-        // method (the control-plane unary client attaches status to its
-        // transport errors).
-        const error = new Error('not found') as Error & { status?: number }
-        error.status = 404
-        throw error
+      if ('noFallback' in c && c.noFallback === true) {
+        assert.equal(fx.calls.some(entry => entry.method === 'session/list'), false, '401 never falls back');
       }
-      if (method === 'session/list') return { result: { value: { items: [{ sessionId: 's1' }] } } }
-      return { result: { value: successfulValue(method) } }
+    } finally {
+      rmSync(fx.root, { recursive: true, force: true });
     }
-    const results = await probes(fx, call, { warn: line => warnings.push(line) })
-    // The probe row keeps the identity-method name and passes via the legacy
-    // fallback — old-tree activation/rollback stays exactly as before.
-    const session = results.find(result => result.name === 'session/canOpenWorkspacePath')
-    assert.equal(session?.ok, true)
-    assert.equal(fx.calls.some(entry => entry.method === 'session/list'), true, 'legacy fallback ran')
-    assert.equal(warnings.length, 1, 'the legacy fallback is never silent')
-    assert.match(warnings[0], /404/)
-    assert.match(warnings[0], /session\/list/)
-  } finally {
-    rmSync(fx.root, { recursive: true, force: true })
   }
 })
-
-test('identity 404 with a failing legacy fallback fails the probe row (no silent downgrade)', async () => {
-  const fx = fixture()
-  const warnings: string[] = []
-  try {
-    const call: RuntimeProbeCall = async (_base, method) => {
-      if (method === 'commands/execute') {
-        throw missingSessionError()
-      }
-      if (method === 'session/canOpenWorkspacePath' || method === 'session/list') {
-        const error = new Error('not found') as Error & { status?: number }
-        error.status = 404
-        throw error
-      }
-      return { result: { value: successfulValue(method) } }
-    }
-    const results = await probes(fx, call, { warn: line => warnings.push(line) })
-    const session = results.find(result => result.name === 'session/canOpenWorkspacePath')
-    assert.equal(session?.ok, false)
-    // The double-404 row carries the explicit combined message (no raw
-    // carrier text, no paths — closed constant wording).
-    assert.match(session?.error ?? '', /neither session\/canOpenWorkspacePath nor the legacy session\/list method is registered \(HTTP 404\)/)
-    assert.equal(warnings.length, 0, 'a fallback that did not succeed never warns')
-  } finally {
-    rmSync(fx.root, { recursive: true, force: true })
-  }
-})
-
-test('identity 404 with a legacy answer lacking the {items} list fails the row (old shape check restored)', async () => {
-  // The pre-migration session/list activation row rejected a value without
-  // the {items} session list ('malformed session list'); the legacy fallback
-  // restores that check — an ok:true envelope without the list is a damaged
-  // host, not a healthy old tree, and the fallback warn never fires.
-  const fx = fixture()
-  const warnings: string[] = []
-  try {
-    const call: RuntimeProbeCall = async (_base, method) => {
-      if (method === 'commands/execute') {
-        throw missingSessionError()
-      }
-      if (method === 'session/canOpenWorkspacePath') {
-        const error = new Error('not found') as Error & { status?: number }
-        error.status = 404
-        throw error
-      }
-      if (method === 'session/list') return { result: { value: { ok: true } } }
-      return { result: { value: successfulValue(method) } }
-    }
-    const results = await probes(fx, call, { warn: line => warnings.push(line) })
-    const session = results.find(result => result.name === 'session/canOpenWorkspacePath')
-    assert.equal(session?.ok, false, 'a legacy answer without items must fail the row')
-    assert.match(session?.error ?? '', /malformed session list/)
-    assert.equal(warnings.length, 0, 'a fallback that did not succeed never warns')
-  } finally {
-    rmSync(fx.root, { recursive: true, force: true })
-  }
-})
-
-test('identity 404 with a legacy 503 failure propagates the carrier error (no warn)', async () => {
-  const fx = fixture()
-  const warnings: string[] = []
-  try {
-    const call: RuntimeProbeCall = async (_base, method) => {
-      if (method === 'commands/execute') {
-        throw missingSessionError()
-      }
-      if (method === 'session/canOpenWorkspacePath') {
-        const error = new Error('not found') as Error & { status?: number }
-        error.status = 404
-        throw error
-      }
-      if (method === 'session/list') {
-        const error = new Error('service down') as Error & { status?: number }
-        error.status = 503
-        throw error
-      }
-      return { result: { value: successfulValue(method) } }
-    }
-    const results = await probes(fx, call, { warn: line => warnings.push(line) })
-    const session = results.find(result => result.name === 'session/canOpenWorkspacePath')
-    assert.equal(session?.ok, false)
-    assert.match(session?.error ?? '', /service down/)
-    assert.equal(warnings.length, 0, 'only a SUCCESSFUL legacy fallback warns')
-  } finally {
-    rmSync(fx.root, { recursive: true, force: true })
-  }
-})
-
-test('a non-404 identity failure never downgrades to the legacy session-data probe', async () => {
-  const fx = fixture()
-  try {
-    const call: RuntimeProbeCall = async (_base, method) => {
-      fx.calls.push({ method, payload: {} })
-      if (method === 'commands/execute') {
-        throw missingSessionError()
-      }
-      if (method === 'session/canOpenWorkspacePath') {
-        const error = new Error('gated') as Error & { status?: number }
-        error.status = 401
-        throw error
-      }
-      return { result: { value: successfulValue(method) } }
-    }
-    const results = await probes(fx, call)
-    assert.equal(results.find(result => result.name === 'session/canOpenWorkspacePath')?.ok, false)
-    assert.equal(fx.calls.some(entry => entry.method === 'session/list'), false, '401 never falls back')
-  } finally {
-    rmSync(fx.root, { recursive: true, force: true })
-  }
-})
-
 
 test('an empty hostDomainNames list returns the reduced set and never invokes the chamber host domains (2026-12 shape)', async () => {
   const fx = fixture()
@@ -770,18 +687,6 @@ test('hostDomainNames derives the exact probe set for partial syncs (design 24 �
     assert.equal(fx.calls.some(entry => entry.method === 'clientGraph/graph'), false)
     assert.equal(fx.calls.some(entry => entry.method === 'archiveCleanup/probe'), false)
     assert.equal(fx.calls.some(entry => entry.method === 'gitWorktree/previewCreate'), true)
-  } finally {
-    rmSync(fx.root, { recursive: true, force: true })
-  }
-})
-
-test('hostDomainNames: an empty list equals the reduced set (no chamber domains)', async () => {
-  const fx = fixture()
-  try {
-    const results = await probes(fx, successfulCall(fx), { hostDomainNames: [] })
-    assert.deepEqual(results.map(result => result.name), [...PROBE_NAMES_WITHOUT_HOST_DOMAINS])
-    assert.ok(results.every(result => result.ok))
-    assert.equal(fx.calls.some(entry => entry.method === 'archiveCleanup/probe'), false)
   } finally {
     rmSync(fx.root, { recursive: true, force: true })
   }

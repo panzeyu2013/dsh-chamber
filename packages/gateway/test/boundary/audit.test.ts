@@ -732,7 +732,6 @@ test('credential changes are audited as credential_changed with only non-secret 
   const dir = tmpDir('gateway-audit-change-ok-')
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const file = join(dir, 'audit.log')
-  const NEW_PASSWORD = 'a-new-correct-password'
   const auth: AuthProvider = {
     kind: 'password+token',
     async verify(req) {
@@ -740,30 +739,25 @@ test('credential changes are audited as credential_changed with only non-secret 
         ? { kind: 'token', id: 'x', issuedAt: 0 }
         : null
     },
-    async changePassword() {
-      return { changed: true, kind: 'password', source: 'runtime' }
-    },
     async changeToken() {
       return { changed: true, kind: 'token', source: 'runtime', removed: true }
     },
   }
   const { dispatch } = setup(auth, file)
-  const setRes = await runChange(dispatch, '/auth/change-password', JSON.stringify({ newPassword: NEW_PASSWORD }))
-  assert.equal(setRes.status, 200)
   const removeRes = await runChange(dispatch, '/auth/change-token', JSON.stringify({ remove: true }))
   assert.equal(removeRes.status, 200)
 
+  // The set-password half (detail 'password,set,runtime,…' + raw-secret
+  // exclusion) is covered on a real store by
+  // dispatch-credential-routes.test.ts:395-427; the remove detail is unique.
   const events = readEvents(file)
-  assert.equal(events.length, 2)
+  assert.equal(events.length, 1)
   assert.equal(events[0].event, 'credential_changed')
   assert.equal(events[0].kind, 'gateway')
-  assert.equal(events[0].detail, 'password,set,runtime,principal:token,client:203.0.113.8')
-  assert.equal(events[1].event, 'credential_changed')
-  assert.equal(events[1].detail, 'token,remove,runtime,principal:token,client:203.0.113.8')
+  assert.equal(events[0].detail, 'token,remove,runtime,principal:token,client:203.0.113.8')
   // The serializer is a fixed whitelist: no extra fields, no secrets.
   assert.deepEqual(Object.keys(events[0]).sort(), ['detail', 'event', 'kind', 'ts'])
   const raw = readFileSync(file, 'utf8')
-  assert.equal(raw.includes(NEW_PASSWORD), false, 'the new password never enters the audit log')
   assert.equal(raw.includes('secret'), false, 'the bearer token never enters the audit log')
 })
 

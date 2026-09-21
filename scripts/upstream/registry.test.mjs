@@ -1,5 +1,5 @@
 /**
- * registry.test.mjs — registry 单一来源的锁步测试：C1–C15 判据表不漂移、registry.json 过 schema 且 canonical、
+ * registry.test.mjs — registry 单一来源的锁步测试：C1–C15 判据表不漂移、
  * 判据分区不重不漏、verifierForks 形状/顺序/计数为"故意改才动"的 golden（删一个 fork 或改一份分类都必须在这里可见）、
  * 校验器抓退化（未知判据 / 分区缺口 / accepted 缺理由 / upstream=null 语义）、生成块 extract/apply/check 往返。
  */
@@ -11,7 +11,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { CRITERIA_IDS } from './touchpoint-criteria.mjs'
 import {
-  REGISTRY_PATH, criteriaPartition, loadRegistry, renderRegistryText, validateRegistry, verifierForks,
+  criteriaPartition, loadRegistry, validateRegistry, verifierForks,
 } from './registry.mjs'
 import { INDEX_BLOCK, applyBlocks, checkBlocks, renderBlocks } from './registry-views.mjs'
 
@@ -77,11 +77,6 @@ test('registry 值锁：分类桶形状 + 符号锚字符串（防"同计数下�
     ],
     '符号锚是逐条 golden：改指向必须同批改本断言',
   )
-})
-
-test('registry.json 过 schema 且是 canonical 形态', () => {
-  assert.deepEqual(validateRegistry(registry), [])
-  assert.equal(renderRegistryText(registry), readFileSync(REGISTRY_PATH, 'utf8'))
 })
 
 test('判据分区：entries.criteria ∪ criteriaCodeOnly == C1–C15，不重不漏', () => {

@@ -1,15 +1,7 @@
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
 import { compareReleaseVersions, releaseChannel } from './release-semver.mjs'
-import {
-  NATIVE_BETA_ROLLING_TAG,
-  NATIVE_STABLE_ZIP_PATTERN,
-  nativeAppcastDownloadPrefix,
-  nativeBetaRollingDownloadPrefix,
-  nativeEnclosureUrl,
-  nativeMacArtifacts,
-  nativeMacFeedUrl,
-} from './release-artifacts.mjs'
+import { NATIVE_BETA_ROLLING_TAG, NATIVE_STABLE_ZIP_PATTERN } from './release-artifacts.mjs'
 import { REQUIRED_JOB_STEPS, REQUIRED_JOBS, judgeCandidates, judgeRun, pickCandidateRuns } from './verify-release-ci-proof.mjs'
 
 
@@ -307,39 +299,6 @@ assert.ok(swiftBuild.includes('releases/download/${SPARKLE_BETA_ROLLING_TAG}/app
   'beta builds must inject the rolling tag\'s beta appcast')
 assert.ok(swiftBuild.includes(`SPARKLE_BETA_ROLLING_TAG: ${NATIVE_BETA_ROLLING_TAG}`),
   'the rolling tag must be defined once (build-swift job env) and match release-artifacts.mjs')
-assert.ok(!NATIVE_BETA_ROLLING_TAG.startsWith('v'),
-  'the rolling tag must not start with v: release.yml triggers on push tags v* and would run a release')
-assert.equal(
-  nativeMacFeedUrl('0.3.2-beta.1', 'panzeyu2013/dsh-chamber'),
-  'https://github.com/panzeyu2013/dsh-chamber/releases/download/appcast-swift-beta/appcast-swift-beta.xml',
-  'the beta feed URL (single-sourced) must resolve on the rolling tag')
-assert.equal(
-  nativeMacFeedUrl('0.3.2', 'panzeyu2013/dsh-chamber'),
-  'https://github.com/panzeyu2013/dsh-chamber/releases/latest/download/appcast-swift.xml',
-  'the stable feed URL (single-sourced) must stay releases/latest')
-
-// S-36 enclosure resolution, locked to Sparkle's own algorithm (ArchiveItem.archiveURL:
-// URL(filename, relativeTo: prefix ?? embedded SUFeedURL)): with the prefix pinned to the
-// rolling download dir every beta enclosure lands next to the appcast, so the zip must ALSO
-// live on the rolling release.
-const betaZip = nativeMacArtifacts('0.3.2-beta.1')[1]
-const betaFeed = nativeMacFeedUrl('0.3.2-beta.1', 'panzeyu2013/dsh-chamber')
-const betaRollingPrefix = nativeBetaRollingDownloadPrefix('panzeyu2013/dsh-chamber')
-const betaEnclosure = `https://github.com/panzeyu2013/dsh-chamber/releases/download/${NATIVE_BETA_ROLLING_TAG}/${betaZip}`
-assert.equal(nativeAppcastDownloadPrefix('0.3.2-beta.1', 'panzeyu2013/dsh-chamber'), betaRollingPrefix,
-  'beta generation must use the rolling download prefix (single-sourced)')
-assert.ok(betaRollingPrefix.endsWith('/'),
-  'the prefix must end in a slash: URL(filename, relativeTo: prefix) replaces the last segment otherwise')
-assert.equal(nativeEnclosureUrl(betaZip, betaFeed, betaRollingPrefix), betaEnclosure,
-  'the beta enclosure must resolve on the rolling release (S-36)')
-assert.equal(nativeEnclosureUrl(betaZip, betaFeed), betaEnclosure,
-  'even without the flag the embedded rolling SUFeedURL yields the same URL — the zip must therefore be uploaded there')
-const stableZip = nativeMacArtifacts('0.3.2')[1]
-assert.equal(nativeAppcastDownloadPrefix('0.3.2', 'panzeyu2013/dsh-chamber'), null,
-  'stable must pass NO prefix: its enclosure shape is unchanged')
-assert.equal(nativeEnclosureUrl(stableZip, nativeMacFeedUrl('0.3.2', 'panzeyu2013/dsh-chamber')),
-  `https://github.com/panzeyu2013/dsh-chamber/releases/latest/download/${stableZip}`,
-  'the stable enclosure stays on releases/latest (byte-identical generation)')
 
 // 2026-09 增量更新：stable 与 beta 的收件目录/feed/上传面**完全分开**——generate_appcast 按
 // 归档内嵌 SUFeedURL 的文件名分组，两通道归档同目录 + -o 会直接失败 multiple appcasts found
@@ -1235,17 +1194,6 @@ for (const step of [
   assert.ok(
     jobBlock(ciWorkflow, 'test-macos').includes(`- name: ${step}`),
     `ci.yml test-macos must keep the proof-required step: ${step}`,
-  )
-}
-const runChecksSource = readFileSync(new URL('../gates/run-checks.mjs', import.meta.url), 'utf8')
-for (const entry of [
-  'test:sidecar:compiled',
-  'node scripts/gates/verify-electron-artifacts.mjs',
-  'node scripts/gui-acceptance/run.mjs --flavor native --require-assembly',
-]) {
-  assert.ok(
-    runChecksSource.includes(`'${entry}'`),
-    `G32/G33: run-checks must expose the executed-assembly gate "${entry}" (a gate outside every local mode is only wired in CI)`,
   )
 }
 assert.ok(

@@ -3,7 +3,7 @@
  * scopeExecToOwnership, runWithFinalOwnership, ReadyPhaseEdges), applyPlugins
  * (whitelist, remove-before-add, single-flight, failure isolation, restart/verify),
  * materializeAndAdd / materializeArchiveAndAdd and the local writer reaper.
- * Sibling parts: plugin-sync.test.ts, plugin-sync-remote-read.test.ts, plugin-sync-seed.test.ts, plugin-sync-renderer-projection.test.ts.
+ * Sibling part: plugin-sync.test.ts (round-2 trim keeps this write-face suite).
  */
 
 import { test } from 'node:test'
@@ -13,7 +13,6 @@ import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { applyPlugins, ExactOwnershipRegistry, localPluginWriterLedgerPath, materializeAbsolutePath, materializeAndAdd, materializeArchiveAndAdd, materializePluginsDir, remoteManifestPath, ReadyPhaseEdges, reapStaleLocalPluginWriters, scopeExecToOwnership, runWithFinalOwnership } from '../../plugin-sync.ts'
 import type { ExecFn, ExecResult, SshApplyJournalSink, StatusFn } from '../../plugin-sync.ts'
-import { buildSshApplyRows, defaultSshProtectionFacts } from '../../ssh-apply-rows.ts'
 import { NotificationSourceIncarnations } from '../../notifications.ts'
 import { err, ok, readyStatus, SEED_SPEC, tempDir } from './plugin-sync-fixtures.ts'
 
@@ -267,13 +266,6 @@ test('applyPlugins: protected names refuse the WHOLE batch before any exec (desi
     assert.match(mixed.error, /@dsh-chamber\/dsh-chamber-seed-git-worktree/)
   }
   assert.equal(execCalls, 0, 'no exec (not even a snapshot read) may run for a refused batch')
-  // Removal is judged by B₀ ∪ S alone: an unexpected official-scope row that is
-  // NOT part of the baseline may be removed (removing a shadow copy is
-  // restorative). The guard decides this without any exec — asserted directly
-  // on the shared assembly so the apply chain stays out of the picture.
-  const rows = buildSshApplyRows([], ['@deepseek-ai/dsh-session'], defaultSshProtectionFacts())
-  assert.deepEqual(rows.refusals, [])
-  assert.deepEqual(rows.rows.map(row => `${row.kind}:${row.name}`), ['remove:@deepseek-ai/dsh-session'])
 })
 test('applyPlugins: with a journal sink, every executed row records its PRE-CHANGE spec (snapshot first)', async () => {
   const order: string[] = []

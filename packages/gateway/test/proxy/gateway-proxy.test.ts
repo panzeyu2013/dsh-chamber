@@ -12,9 +12,9 @@ import { EventEmitter } from 'node:events'
 import { createServer } from 'node:http'
 import { PassThrough } from 'node:stream'
 import type { HttpRequestFactory, ProxyRequest, ProxyResponse, ProxySocket } from '@dsh-chamber/control-plane'
-import { clearAuthCookie, registerAuthCookie } from '@dsh-chamber/control-plane'
+import { clearAuthCookie, MAX_HTML_INJECTION_BYTES, registerAuthCookie } from '@dsh-chamber/control-plane'
 import { createGatewayProxy } from '../../src/gateway-proxy.ts'
-import { TRUST_DECLARATION_SCRIPT } from '../../src/html-inject.ts'
+import { injectTrustDeclaration, TRUST_DECLARATION_SCRIPT } from '../../src/html-inject.ts'
 import { FakeRequest, FakeResponse } from '../support/utils.ts'
 
 const quietLogger = { log() {}, warn() {}, error() {} }
@@ -435,4 +435,29 @@ test('S0: an html body over the 64KiB injection budget is flushed and streamed u
   assert.equal(res.headers['content-length'], undefined)
   assert.equal(res.body, body, 'every byte is forwarded exactly once')
   assert.equal(res.endCalls, 1)
+})
+
+test('S0 injector edges: case-insensitive </head>, idempotency and the exact 64KiB cap', () => {
+  // Moved from html-inject.test.ts (2026-12 trim): the proxy-level S0 tests
+  // above already pin the insertion point, the missing-</head> passthrough and
+  // the over-budget stream; these are the injector's remaining fail-soft edges.
+  const upper = '<html><head><title>t</title></HEAD><body>ok</body></html>'
+  const injected = injectTrustDeclaration(upper)
+  assert.equal(injected.injected, true)
+  assert.equal(injected.html, '<html><head><title>t</title>' + TRUST_DECLARATION_SCRIPT + '</HEAD><body>ok</body></html>')
+
+  // Idempotent: the marker anywhere (even a comment) suppresses injection.
+  const already = '<html><head></head><body>' + TRUST_DECLARATION_SCRIPT + '</body></html>'
+  assert.deepEqual(injectTrustDeclaration(already), { injected: false, html: already })
+  const commented = '<html><head><!-- __DSH_TRANSPORT__ documented hook --></head><body>ok</body></html>'
+  assert.equal(injectTrustDeclaration(commented).injected, false)
+
+  // Exactly at the cap is still injectable (one byte over is not, per the
+  // over-budget proxy test above).
+  const padding = 'x'.repeat(MAX_HTML_INJECTION_BYTES - '<html><head></head><body></body></html>'.length)
+  const boundary = '<html><head></head><body>' + padding + '</body></html>'
+  assert.equal(boundary.length, MAX_HTML_INJECTION_BYTES)
+  const atCap = injectTrustDeclaration(boundary)
+  assert.equal(atCap.injected, true)
+  assert.equal(atCap.html.length, boundary.length + TRUST_DECLARATION_SCRIPT.length)
 })

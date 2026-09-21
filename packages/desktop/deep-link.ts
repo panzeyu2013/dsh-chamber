@@ -138,21 +138,6 @@ export class BoundedVscodeIntentQueue {
     return this.#pending.shift() ?? null
   }
 
-  /** Roll back the most recently shifted in-flight item to the FIFO head.
-   * Its key deliberately remains tracked across shift/rollback, so this does
-   * not consume capacity or open a duplicate-admission window. */
-  rollbackShift(intent: VscodeLaunchRequest):
-    | { restored: true }
-    | { restored: false; reason: 'untracked' | 'already-pending' } {
-    const key = BoundedVscodeIntentQueue.key(intent)
-    if (!this.#trackedKeys.has(key)) return { restored: false, reason: 'untracked' }
-    if (this.#pending.some(candidate => BoundedVscodeIntentQueue.key(candidate) === key)) {
-      return { restored: false, reason: 'already-pending' }
-    }
-    this.#pending.unshift(Object.freeze({ instanceId: intent.instanceId, path: intent.path }))
-    return { restored: true }
-  }
-
   complete(intent: VscodeLaunchRequest): void {
     this.#trackedKeys.delete(BoundedVscodeIntentQueue.key(intent))
   }

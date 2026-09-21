@@ -1,8 +1,8 @@
 /**
  * updater.ts part 2 — restart-and-install leg: quitAndInstall arming rules, the
  * native before-quit-for-update bridge, restart-failure reporting, the stall
- * watchdog / win32 latch. Sibling parts: updater.test.ts,
- * updater-cache-maintenance.test.ts (harness in test/support/updater-harness.ts).
+ * watchdog / win32 latch. Sibling part: updater.test.ts (which now carries the
+ * cache-maintenance coverage; harness in test/support/updater-harness.ts).
  */
 
 import { test } from 'node:test'

@@ -6,11 +6,14 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { ApiRequest, ApiResponse } from '@dsh-chamber/control-plane'
 import { type AuthProvider } from '../../src/auth.ts'
+import { renderLoginPage } from '../../src/login-page.ts'
 import { FakeRequest, FakeResponse, gatewayRequest } from '../support/utils.ts'
-import { TOKEN, setup, realAuth, runHttp } from '../support/dispatch-harness.ts'
+import { TOKEN, setup, realAuth, runHttp, silentLogger } from '../support/dispatch-harness.ts'
 
 // ── Proxied dsh frontend CSP (M2-4a) ──
 
@@ -139,6 +142,20 @@ test('browser form login failure renders an HTML 401 without echoing the passwor
   assertLoginHtmlResponse(res, 401)
   assert.ok(String(res.body).includes('Incorrect password'))
   assert.ok(!String(res.body).includes('hunter2'))
+})
+
+test('S5: no error state ever echoes a value attribute (both languages, both secure values)', () => {
+  // Moved from auth/login-page.test.ts (2026-12 trim): the rendering matrix is
+  // the security half of that suite — a submitted secret must never be
+  // reflected back into a value attribute, in any language or transport state.
+  for (const lang of ['en', 'zh'] as const) {
+    for (const secure of [true, false] as const) {
+      for (const error of ['invalid', 'rate_limited', 'busy', 'expired'] as const) {
+        const html = renderLoginPage({ lang, secure, error })
+        assert.doesNotMatch(html, /value="/, `${lang}/${secure}/${error} leaked a value attribute`)
+      }
+    }
+  }
 })
 
 test('API login failure keeps the JSON shape', async () => {
@@ -396,4 +413,65 @@ test('uppercase Accept still negotiates HTML for browser forms', async () => {
   const res = await runHttp(dispatch, gatewayRequest('POST', '/auth/login', { 'content-type': 'application/x-www-form-urlencoded', accept: 'TEXT/HTML' }), 'password=hunter2')
   assertLoginHtmlResponse(res, 401)
   assert.ok(String(res.body).includes('Incorrect password'))
+})
+
+test('a warm-up grant claims a bundle shape pre-auth and its 405 refusal is audited', async () => {
+  // Merged from the deleted boundary/warmup-dispatch.test.ts (2026-12 trim):
+  // the only dispatch-level wiring assertions that had no equal behavior test
+  // — the login→href→route join, the pre-auth claim ordering, and the 405
+  // audit line. The route's own unit behavior lives in warmup.test.ts.
+  const secret = 'warmup-merged-secret'
+  const now = 1_700_000_000
+  const bundle = '/plugins/??dsh-chamber-mcp/client.js&rev=deadbeef'
+  let verifyCalls = 0
+  let localState = 'ready'
+  const auth: AuthProvider = {
+    kind: 'password',
+    async verify() { verifyCalls += 1; return null },
+    async login() { return {} },
+  }
+  const dir = mkdtempSync(join(tmpdir(), 'dsh-gw-warmup-'))
+  const auditFile = join(dir, 'audit.log')
+  const state = setup(auth, undefined, auditFile, undefined, {
+    enabled: true,
+    getLocalDshPort: () => 17510,
+    getLocalState: () => localState,
+    getSecret: () => secret,
+    getAuthCookie: () => undefined,
+    logger: silentLogger,
+    fetchIndex: async () => '<script src="' + bundle.replace('&', '&amp;') + '"></script>',
+    now: () => now * 1000,
+  })
+  try {
+    // The login page mints the grant and renders the REAL (escaped) bundle href.
+    const login = await runHttp(state.dispatch, gatewayRequest('GET', '/auth/login'))
+    assert.equal(login.status, 200)
+    const setCookie = String(login.headers['set-cookie'] ?? '')
+    assert.match(setCookie, /^dsh_gateway_warmup=/, 'the login response grants the warm-up capability')
+    const cookiePair = setCookie.split(';')[0]
+    const href = /<link rel="prefetch" as="script" href="([^"]+)">/.exec(String(login.body))?.[1].replace(/&amp;/g, '&')
+    assert.ok(href !== undefined && href.includes('dsh-chamber-mcp/client.js'),
+      'the rendered href is the real bundle URL, never a token wrapper')
+
+    // The grant claims the route BEFORE the auth gate: once the dsh drops out
+    // of ready, the granted fetch is the route's 503, never the gate's 401,
+    // with no auth verdict and no proxy call.
+    localState = 'starting'
+    const granted = await runHttp(state.dispatch, gatewayRequest('GET', href, { cookie: cookiePair, authorization: 'Bearer nope' }))
+    assert.equal(granted.status, 503)
+    assert.equal(JSON.parse(granted.body).code, 'instance_unavailable')
+    assert.equal(verifyCalls, 0, 'no auth verdict is computed for the granted fetch')
+    assert.equal(state.httpProxyCalls, 0)
+
+    // A non-GET/HEAD bundle shape is refused before the gate, with the route's
+    // own audit code; neither the URL nor the grant value enters the trail.
+    const post = await runHttp(state.dispatch, gatewayRequest('POST', href, { cookie: cookiePair }))
+    assert.equal(post.status, 405)
+    assert.equal(post.headers.allow, 'GET, HEAD')
+    assert.equal(verifyCalls, 0)
+    const raw = readFileSync(auditFile, 'utf8')
+    assert.match(raw, /code:method_not_allowed,client:203\.0\.113\.8,path:plugins/)
+    assert.equal(raw.includes(href), false, 'the signed path never enters the audit trail')
+    assert.equal(raw.includes(cookiePair), false, 'the grant value never enters the audit trail')
+  } finally { rmSync(dir, { recursive: true, force: true }) }
 })

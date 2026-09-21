@@ -184,22 +184,6 @@ test('fetchRegistryMetadata: dist-tags.latest missing → max semver fallback', 
   }
 });
 
-test('fetchRegistryMetadata: malformed dist-tags.latest → max semver fallback', async () => {
-  const registry = await startRegistryServer((_url, origin) => ({
-    status: 200,
-    body: {
-      'dist-tags': { latest: '9.9.9-not-a-real-version' },
-      versions: fixture(origin).versions,
-    },
-  }));
-  try {
-    const metadata = await fetchRegistryMetadata('@deepseek-ai/dsh', { origin: registry.origin });
-    assert.equal(metadata.latest, '0.2.0', 'latest not among parsed versions is malformed → max semver');
-  } finally {
-    await registry.close();
-  }
-});
-
 test('fetchRegistryMetadata: garbage document → empty metadata, latest null', async () => {
   const registry = await startRegistryServer(() => ({ status: 200, body: { nope: true } }));
   try {

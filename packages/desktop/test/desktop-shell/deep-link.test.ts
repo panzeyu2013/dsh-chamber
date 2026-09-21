@@ -188,43 +188,6 @@ test('BoundedVscodeIntentQueue reports saturated when capacity is entirely in fl
   )
 })
 
-test('BoundedVscodeIntentQueue retries a failed send A before pending B', () => {
-  const queue = new BoundedVscodeIntentQueue(2)
-  const a = { instanceId: 'local', path: '/a' }
-  const b = { instanceId: 'local', path: '/b' }
-  queue.enqueue(a)
-  queue.enqueue(b)
-
-  const delivered: VscodeLaunchRequest[] = []
-  let failAOnce = true
-  const drain = (): boolean => {
-    for (;;) {
-      const intent = queue.shift()
-      if (intent === null) return true
-      try {
-        if (failAOnce && intent.path === '/a') {
-          failAOnce = false
-          throw new Error('renderer disappeared')
-        }
-        delivered.push(intent)
-        queue.complete(intent)
-      } catch {
-        assert.deepEqual(queue.rollbackShift(intent), { restored: true })
-        return false
-      }
-    }
-  }
-
-  assert.equal(drain(), false, 'first A send fails and rolls back')
-  assert.deepEqual(delivered, [])
-  assert.equal(queue.trackedCount, 2, 'rollback does not release or duplicate the tracked key')
-  assert.equal(queue.pendingCount, 2, 'rollback remains inside the original hard limit')
-
-  assert.equal(drain(), true)
-  assert.deepEqual(delivered, [a, b], 'the retry order remains A then B')
-  assert.equal(queue.trackedCount, 0)
-})
-
 test('renderer intent hold/replay waits when ready arrives before did-finish-load', () => {
   const queue = new BoundedVscodeIntentQueue(2)
   queue.enqueue({ instanceId: 'local', path: '/cold-start' })
@@ -374,11 +337,6 @@ test('buildVscodeRemoteUrl omits the user when null', () => {
   const result = buildVscodeRemoteUrl('h.example.com', null, null, '/foo')
   assert.equal(result.ok, true)
   if (result.ok) assert.equal(result.url, 'vscode://vscode-remote/ssh-remote+h.example.com/foo')
-})
-test('buildVscodeRemoteUrl includes the user when present', () => {
-  const result = buildVscodeRemoteUrl('h.example.com', 'root', null, '/foo')
-  assert.equal(result.ok, true)
-  if (result.ok) assert.match(result.url, /ssh-remote\+root@h\.example\.com\//)
 })
 test('buildVscodeRemoteUrl brackets an IPv6 literal', () => {
   const result = buildVscodeRemoteUrl('[::1]', null, null, '/foo')

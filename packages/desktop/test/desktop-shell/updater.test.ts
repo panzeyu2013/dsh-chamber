@@ -2,14 +2,19 @@
  * updater.ts (design 11) part 1: release-page allowlist, the controller state
  * machine over the injected fake electron-updater (check/download/error/
  * subscribe, install-shape gates, single-flight) and start(). Pure Node.
- * Sibling parts: updater-restart-install.test.ts, updater-cache-maintenance.test.ts.
+ * Sibling part: updater-restart-install.test.ts. The cache-maintenance suite was
+ * merged in as part 1b (round-2 trim).
  */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { betaReleaseDownloadBase, createUpdateController, isAllowedReleaseUrl, LINUX_UPDATE_UNSUPPORTED_REASON, openReleasePage, probeLinuxAppImage, resolveGithubBetaFeed } from '../../updater.ts'
+import { existsSync } from 'node:fs'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { betaReleaseDownloadBase, cachedUpdateVersion, cleanupStaleUpdateCache, compareChamberVersions, createUpdateController, isAllowedReleaseUrl, LINUX_UPDATE_UNSUPPORTED_REASON, openReleasePage, probeLinuxAppImage, resolveGithubBetaFeed, resolveUpdaterCacheDir, sanitizeErrorText, updaterCacheDirNameFromYaml, updaterCacheRoot } from '../../updater.ts'
 import type { UpdateController, UpdatePhase, UpdateState } from '../../updater.ts'
-import { FakeAutoUpdater, makeController } from '../support/updater-harness.ts'
+import { FakeAutoUpdater, makeController, waitFor } from '../support/updater-harness.ts'
 test('release-page allowlist pins scheme/origin/repository and rejects encoded traversal or userinfo', () => {
   assert.equal(isAllowedReleaseUrl('https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.2.0'), true)
   assert.equal(isAllowedReleaseUrl('http://github.com/panzeyu2013/dsh-chamber/releases'), false)
@@ -477,4 +482,187 @@ test('start() schedules checks on a linux AppImage build (shape gate open)', () 
   assert.equal(controller.state().installBlockedReason, null)
   controller.start()
   assert.ok(logs.some(line => line.includes('更新检查已启动')), 'AppImage linux start must schedule the periodic checks')
+})
+
+// ---------------------------------------------------------------------------
+// part 1b — cache maintenance, compressed from updater-cache-maintenance.test.ts
+// (round-2 trim: same production module updater.ts, sibling suite deleted).
+// Whitelist-class assertions (path traversal / relative-root / never-delete-
+// newer / never-throw) are carried over verbatim in semantics.
+// ---------------------------------------------------------------------------
+
+test('sanitizeErrorText redacts absolute paths on both platforms and leaves URLs intact', () => {
+  assert.equal(sanitizeErrorText('Cannot read /Users/example/Library/Caches/dsh-chamber-updater/x'), 'Cannot read [path]')
+  assert.equal(sanitizeErrorText('a /opt/x and /usr/local/bin/y'), 'a [path] and [path]')
+  assert.equal(sanitizeErrorText('/root/x at start'), '[path] at start')
+  assert.equal(sanitizeErrorText('Cannot read C:\\Users\\foo\\AppData\\Local\\dsh-chamber-updater'), 'Cannot read [path]')
+  assert.equal(sanitizeErrorText('err D:/workspace/x'), 'err [path]')
+  const tagUrl = 'https://github.com/panzeyu2013/dsh-chamber/releases/tag/v0.2.0'
+  assert.equal(sanitizeErrorText(`failed ${tagUrl}`), `failed ${tagUrl}`)
+  assert.equal(
+    sanitizeErrorText(`Cannot download ${tagUrl}: ENOENT /Users/x/Library/Caches/y`),
+    `Cannot download ${tagUrl}: ENOENT [path]`,
+  )
+})
+
+test('updaterCacheDirNameFromYaml reads the baked scalar and refuses traversal names', () => {
+  assert.equal(updaterCacheDirNameFromYaml("updaterCacheDirName: '@dsh-chamberdesktop-updater'\n"), '@dsh-chamberdesktop-updater')
+  assert.equal(updaterCacheDirNameFromYaml('updaterCacheDirName: "dsh-chamberdesktop-updater"\n'), 'dsh-chamberdesktop-updater')
+  assert.equal(updaterCacheDirNameFromYaml('updaterCacheDirName: x-updater # keep\n'), 'x-updater')
+  assert.equal(updaterCacheDirNameFromYaml('owner: panzeyu2013\nprovider: github\n'), null)
+  assert.equal(updaterCacheDirNameFromYaml('updaterCacheDirName:\n'), null)
+  for (const bad of ['../evil', 'a/b', 'a\\b', '..', '.']) {
+    assert.equal(updaterCacheDirNameFromYaml(`updaterCacheDirName: ${bad}\n`), null, bad)
+  }
+})
+
+test('updaterCacheRoot follows the electron-updater platform branches', () => {
+  const env = (extra: Record<string, string> = {}) => ({ HOME: '/h', ...extra })
+  assert.equal(updaterCacheRoot('darwin', env(), '/Users/t'), '/Users/t/Library/Caches')
+  assert.equal(updaterCacheRoot('win32', env({ LOCALAPPDATA: 'C:\\Users\\t\\AppData\\Local' }), 'C:\\Users\\t'), 'C:\\Users\\t\\AppData\\Local')
+  assert.equal(updaterCacheRoot('win32', env(), 'C:\\Users\\t'), join('C:\\Users\\t', 'AppData', 'Local'))
+  assert.equal(updaterCacheRoot('linux', env(), '/home/t'), join('/home', 't', '.cache'))
+  assert.equal(updaterCacheRoot('linux', env({ XDG_CACHE_HOME: '/var/cache/x' }), '/home/t'), '/var/cache/x')
+})
+
+test('resolveUpdaterCacheDir: packaged resolves; dev/unreadable/traversal/relative roots all fail closed to null', async () => {
+  const yml = "owner: panzeyu2013\nrepo: dsh-chamber\nprovider: github\nupdaterCacheDirName: '@dsh-chamberdesktop-updater'\n"
+  const read = async (path: string) => {
+    assert.ok(path.endsWith(join('Resources', 'app-update.yml')) || path.endsWith('app-update.yml'), `unexpected read: ${path}`)
+    return yml
+  }
+  assert.equal(
+    await resolveUpdaterCacheDir({ isPackaged: true, platform: 'darwin', home: '/Users/t', resourcesPath: '/Applications/dsh-chamber.app/Contents/Resources', readFile: read }),
+    '/Users/t/Library/Caches/@dsh-chamberdesktop-updater',
+  )
+  assert.equal(
+    await resolveUpdaterCacheDir({ isPackaged: true, platform: 'win32', env: { LOCALAPPDATA: 'C:\\Users\\t\\AppData\\Local' }, home: 'C:\\Users\\t', resourcesPath: 'C:\\dsh-chamber\\resources', readFile: read }),
+    join('C:\\Users\\t\\AppData\\Local', '@dsh-chamberdesktop-updater'),
+  )
+  assert.equal(await resolveUpdaterCacheDir({ isPackaged: false, readFile: read }), null, 'dev never resolves')
+  assert.equal(await resolveUpdaterCacheDir({ isPackaged: true, resourcesPath: '/nonexistent', readFile: async () => { throw new Error('ENOENT') } }), null, 'unreadable yml')
+  assert.equal(await resolveUpdaterCacheDir({ isPackaged: true, home: '/Users/t', resourcesPath: '/r', readFile: async () => 'updaterCacheDirName: ../../evil\n' }), null, 'traversal name refused')
+  // A relative XDG_CACHE_HOME / LOCALAPPDATA / home must never yield a relative deletion target (F7).
+  const rel = async () => "updaterCacheDirName: '@dsh-chamberdesktop-updater'\n"
+  assert.equal(await resolveUpdaterCacheDir({ isPackaged: true, platform: 'linux', env: { XDG_CACHE_HOME: 'relative/cache' }, home: 'relative/home', resourcesPath: '/opt/dsh-chamber/resources', readFile: rel }), null)
+  assert.equal(await resolveUpdaterCacheDir({ isPackaged: true, platform: 'win32', env: { LOCALAPPDATA: 'Relative\\AppData\\Local' }, resourcesPath: 'C:\\dsh-chamber\\resources', readFile: rel }), null)
+  assert.equal(await resolveUpdaterCacheDir({ isPackaged: true, platform: 'linux', env: {}, home: 'home-relative', resourcesPath: '/opt/dsh-chamber/resources', readFile: rel }), null)
+})
+
+test('cachedUpdateVersion reads the first canonical version and refuses non-strings', () => {
+  assert.equal(cachedUpdateVersion('dsh-chamber-electron-0.2.2-arm64-mac.zip'), '0.2.2')
+  assert.equal(cachedUpdateVersion('dsh-chamber-electron-0.2.2-beta.1-arm64-mac.zip'), '0.2.2-beta.1')
+  assert.equal(cachedUpdateVersion('dsh-chamber-electron-0.2.2.1-arm64.zip'), '0.2.2')
+  assert.equal(cachedUpdateVersion('0.2.2'), '0.2.2')
+  assert.equal(cachedUpdateVersion('dsh-chamber-latest-mac.zip'), null)
+  assert.equal(cachedUpdateVersion(null), null)
+  assert.equal(cachedUpdateVersion(undefined), null)
+  assert.equal(cachedUpdateVersion(42), null)
+})
+
+test('compareChamberVersions is numeric, beta-aware and refuses non-canonical input', () => {
+  assert.equal(compareChamberVersions('0.2.2', '0.2.2'), 0)
+  assert.ok((compareChamberVersions('0.2.10', '0.2.9') ?? 0) > 0)
+  assert.ok((compareChamberVersions('0.2.2', '0.2.2-beta.1') ?? 0) > 0)
+  assert.ok((compareChamberVersions('0.2.2-beta.2', '0.2.2-beta.1') ?? 0) > 0)
+  for (const bad of ['0.2', 'v0.2.2', '0.2.2-rc.1', 'abc']) {
+    assert.equal(compareChamberVersions(bad, '0.2.2'), null, bad)
+  }
+})
+
+async function makeCacheTree(dirName: string): Promise<{ root: string; cacheDir: string }> {
+  const root = await mkdtemp(join(tmpdir(), 'dsh-updater-cache-test-'))
+  return { root, cacheDir: join(root, dirName) }
+}
+
+async function writePendingInfo(cacheDir: string, fileName: string): Promise<void> {
+  await mkdir(join(cacheDir, 'pending'), { recursive: true })
+  await writeFile(join(cacheDir, 'pending', 'update-info.json'),
+    JSON.stringify({ fileName, sha512: 'abc', isAdminRightsRequired: false }), 'utf8')
+}
+
+test('cleanupStaleUpdateCache deletes only a provably stale pending tree (installed/older/beta-superseded)', async () => {
+  for (const [name, pendingName, running] of [
+    ['equal', 'dsh-chamber-electron-0.2.2-arm64-mac.zip', '0.2.2'],
+    ['older', 'dsh-chamber-electron-0.2.1-arm64-mac.zip', '0.2.2'],
+    ['beta-stale', 'dsh-chamber-electron-0.2.2-beta.1-arm64-mac.zip', '0.2.2'],
+  ] as const) {
+    const { root, cacheDir } = await makeCacheTree(name)
+    try {
+      await writePendingInfo(cacheDir, pendingName)
+      await writeFile(join(cacheDir, 'update.zip'), 'x', 'utf8')
+      assert.equal(await cleanupStaleUpdateCache(cacheDir, running), true, name)
+      assert.equal(existsSync(cacheDir), false, `${name} cache dir (incl. update.zip) must be removed`)
+    } finally { await rm(root, { recursive: true, force: true }) }
+  }
+  // A genuinely newer pending (0.2.3 > 0.2.2; stable pending > running beta) is never deleted.
+  for (const [name, pendingName, running] of [
+    ['newer', 'dsh-chamber-electron-0.2.3-arm64-mac.zip', '0.2.2'],
+    ['beta-fresh', 'dsh-chamber-electron-0.2.2-arm64-mac.zip', '0.2.2-beta.1'],
+  ] as const) {
+    const { root, cacheDir } = await makeCacheTree(name)
+    try {
+      await writePendingInfo(cacheDir, pendingName)
+      await writeFile(join(cacheDir, 'update.zip'), 'x', 'utf8')
+      assert.equal(await cleanupStaleUpdateCache(cacheDir, running), false, name)
+      assert.equal(existsSync(join(cacheDir, 'update.zip')), true, `${name} cache must stay untouched`)
+      assert.ok((await readFile(join(cacheDir, 'pending', 'update-info.json'), 'utf8')).includes(pendingName.slice(0, 0) || 'dsh-chamber'), 'pending metadata must stay')
+    } finally { await rm(root, { recursive: true, force: true }) }
+  }
+})
+
+async function expectCacheKept(name: string, setup: (cacheDir: string) => Promise<void>): Promise<void> {
+  const { root, cacheDir } = await makeCacheTree(name)
+  try {
+    await setup(cacheDir)
+    assert.equal(await cleanupStaleUpdateCache(cacheDir, '0.2.2'), false, name)
+    assert.equal(existsSync(join(cacheDir, 'update.zip')), true, `${name} must keep the cache`)
+  } finally { await rm(root, { recursive: true, force: true }) }
+}
+
+test('cleanupStaleUpdateCache keeps the cache when nothing is provably stale (fail-closed, never throws)', async () => {
+  const withZip = async (cacheDir: string) => { await writeFile(join(cacheDir, 'update.zip'), 'x', 'utf8') }
+  await expectCacheKept('no-info', async c => { await mkdir(c, { recursive: true }); await withZip(c) })
+  await expectCacheKept('no-file', async c => { await mkdir(join(c, 'pending'), { recursive: true }); await withZip(c) })
+  await expectCacheKept('corrupt', async c => {
+    await mkdir(join(c, 'pending'), { recursive: true })
+    await writeFile(join(c, 'pending', 'update-info.json'), '{not json', 'utf8')
+    await withZip(c)
+  })
+  await expectCacheKept('no-version', async c => { await writePendingInfo(c, 'dsh-chamber-latest-arm64-mac.zip'); await withZip(c) })
+  const shapes = ['null', '[]', '"a string"', '42', '{}', '{"sha512":"abc"}', '{"fileName":42}']
+  for (const [index, content] of shapes.entries()) {
+    await expectCacheKept(`shape-${index}`, async c => {
+      await mkdir(join(c, 'pending'), { recursive: true })
+      await writeFile(join(c, 'pending', 'update-info.json'), content, 'utf8')
+      await withZip(c)
+    })
+  }
+  // A failing removal reports false, leaves the cache intact and never throws.
+  const failing = await makeCacheTree('rm-fail')
+  try {
+    await writePendingInfo(failing.cacheDir, 'dsh-chamber-electron-0.2.2-arm64-mac.zip')
+    assert.equal(await cleanupStaleUpdateCache(failing.cacheDir, '0.2.2', {
+      removeTree: async () => { throw new Error('EACCES /private/var') },
+    }), false)
+    assert.equal(existsSync(failing.cacheDir), true, 'a failed removal leaves the cache intact')
+  } finally { await rm(failing.root, { recursive: true, force: true }) }
+})
+
+test('controller startup cleans a stale injected cache dir and a null override disables it', async () => {
+  const stale = await makeCacheTree('controller-stale')
+  try {
+    await writePendingInfo(stale.cacheDir, 'dsh-chamber-electron-0.2.2-arm64-mac.zip')
+    const { controller } = makeController({ version: '0.2.2', deps: { staleCache: { cacheDir: stale.cacheDir } } })
+    assert.equal(controller.state().phase, 'idle', 'controller construction is not affected by the cleanup')
+    assert.equal(await waitFor(() => !existsSync(stale.cacheDir)), true, 'the controller must asynchronously remove the stale cache dir')
+  } finally { await rm(stale.root, { recursive: true, force: true }) }
+  const kept = await makeCacheTree('controller-kept')
+  try {
+    await writePendingInfo(kept.cacheDir, 'dsh-chamber-electron-0.2.2-arm64-mac.zip')
+    const { controller } = makeController({ version: '0.2.2', deps: { staleCache: { cacheDir: null } } })
+    assert.equal(controller.state().phase, 'idle')
+    await new Promise(resolve => setTimeout(resolve, 80))
+    assert.equal(existsSync(kept.cacheDir), true, 'a null staleCache override must disable the cleanup')
+  } finally { await rm(kept.root, { recursive: true, force: true }) }
 })

@@ -27,7 +27,7 @@ import {
   en, FRAME_DICTIONARIES, frameText, readDocumentLocale, resolveFrameLocale,
   subscribeDocumentLocale, zh, type FrameKey,
 } from '../../src/locales.ts'
-import { normalize, stripComments } from '../support/source-text.ts'
+import { normalize, stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 
 const read = (rel: string): string => readFileSync(new URL(rel, import.meta.url), 'utf8')
 const readCode = (rel: string): string => normalize(stripComments(read(rel)))

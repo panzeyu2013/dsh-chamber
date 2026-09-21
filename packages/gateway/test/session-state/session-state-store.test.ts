@@ -15,7 +15,6 @@ import {
   MAX_SSE_STREAMS,
   SSE_KEEPALIVE_MS,
   createSessionStateStore,
-  featuresForMode,
   normalizeHostState,
   parseReadAllRequestBody,
   parseReadRequestBody,
@@ -264,13 +263,6 @@ test('replayFrom distinguishes satisfiable, current, future and expired cursors'
 // ---------------------------------------------------------------------------
 // Feature advertisement + host mapping
 // ---------------------------------------------------------------------------
-
-test('featuresForMode drops the event-only features outside sse mode', () => {
-  assert.equal(featuresForMode('sse').includes('session-state.pending-graph'), true)
-  assert.equal(featuresForMode('poll').includes('session-state.pending-graph'), false)
-  assert.equal(featuresForMode('poll').includes('session-state.dsh-events'), false)
-  assert.deepEqual(featuresForMode('off'), [])
-})
 
 test('normalizeHostState maps unknown plane states to unknown', () => {
   assert.equal(normalizeHostState('ready'), 'ready')

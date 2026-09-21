@@ -15,17 +15,15 @@ import { fileURLToPath } from 'node:url'
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
 
 const GROUPS = {
-  // core: the Git worktree domain core - snapshot topology, preview/create +
-  // rollback, the archived-aware running guard, replay/reconcile, mutation
-  // safety, snapshot classification, and unregistered/missing-dir removal legs.
+  // core: the Git worktree domain core - snapshot topology/classification,
+  // preview/create + rollback, removal (running guard, replay/reconcile,
+  // unregistered/missing-record legs), and mutation safety. Round-2 trim
+  // consolidated the former seven subject files into these four.
   core: [
     'test/core.test.ts',
     'test/create-rollback.test.ts',
-    'test/remove-running-guard.test.ts',
-    'test/reconcile-replay-force.test.ts',
+    'test/removal.test.ts',
     'test/mutation-safety.test.ts',
-    'test/snapshot-classification-branches.test.ts',
-    'test/unregistered-leftover-vanish.test.ts',
   ],
 }
 

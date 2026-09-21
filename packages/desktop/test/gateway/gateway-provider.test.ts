@@ -802,34 +802,6 @@ test('verifyUp: 403/421 stay terminal and 5xx stays transient (design 17 §7.3 s
   }
 })
 
-test('verifyUp is unreachable for dsh-kind targets — validateSpec refuses the dsh×http combination (2026-09)', async () => {
-  // The dsh×http combination is disabled at the registry mutation point
-  // (direct dsh attach is hard-blocked on the 0.1.2 line: browser-auth
-  // launch token unrecoverable remotely), so no dsh-kind spec can exist for
-  // this provider — the old probe path (session/list handshake with its 401
-  // browser-auth classification) was removed with the combination.
-  assert.equal(gatewayProvider.validateSpec({ id: 'dsh-refused', label: 'g', kind: 'dsh', transport: 'http', host: 'dsh.example.com', remotePort: 3080 }), null)
-  // The gateway probe itself is unaffected: no auth header is sent without a
-  // configured credential, and the gateway's own 401 is the answer.
-  let sawAuthorization: string | undefined
-  const server = await startHttpProbeServer((req, res) => {
-    sawAuthorization = req.headers.authorization
-    res.writeHead(401)
-    res.end()
-  })
-  try {
-    const spec = gatewayProvider.validateSpec({ id: 'gw-auth-probe', label: 'g', kind: 'gateway', transport: 'http', host: '127.0.0.1', remotePort: server.port, insecureHttp: true })
-    assert.ok(spec !== null)
-    const result = await gatewayProvider.verifyUp!(spec!, { host: '127.0.0.1', port: server.port })
-    assert.equal(sawAuthorization, undefined, 'no credential configured → the probe carries no Authorization header')
-    assert.equal(result.ok, false, 'an auth-requiring gateway answers 401')
-    assert.equal(result.terminal, true)
-    assert.match(result.detail ?? '', /401/)
-  } finally {
-    await server.close()
-  }
-})
-
 test('the secrets store dir has no stray files after a full lifecycle', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dsh-gw-secret-clean-'))
   const file = join(dir, 'gateway-secrets.json')

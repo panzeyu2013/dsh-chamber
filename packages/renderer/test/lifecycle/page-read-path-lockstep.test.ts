@@ -39,7 +39,7 @@ import {
   OPEN_IN_APP_ICON_METHOD,
 } from '../../../dsh-chamber-client-ui-open-in/src/shared/open-in-wire.ts'
 import { getInstanceClient } from '../../../dsh-chamber-client-ui-sidebar/src/shared/instance-api.ts'
-import { normalize, stripComments } from '../support/source-text.ts'
+import { normalize, stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 
 interface HostTable {
   /** Ids the host's catalog resolution found, in menu order. */

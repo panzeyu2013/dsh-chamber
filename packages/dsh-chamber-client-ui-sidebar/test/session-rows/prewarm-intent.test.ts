@@ -210,3 +210,17 @@ test('an intent buys at most one boot per source and at most the session cap', (
   // intentPrewarmAllowed — the App calls spent() exactly at the drain point.
   assert.deepEqual(intentPrewarmSpent(twice, 'b', 30_000_000).usedSources, ['a', 'b'])
 })
+
+// 接线行为（原 prewarm-intent-wiring.test.ts 的行为面）：意图必须真的到达 App 层
+// 订阅者，且取消订阅后不再投递。
+test('the intent reaches App-layer bridge subscribers and unsubscribes cleanly', async () => {
+  const { chamberBridge } = await import('../../src/shared/aggregate-store.ts')
+  const seen: string[] = []
+  const unsubscribe = chamberBridge.onIntentPrewarm(({ sourceId }) => { seen.push(sourceId) })
+  chamberBridge.requestIntentPrewarm('ssh-a')
+  chamberBridge.requestIntentPrewarm('local')
+  assert.deepEqual(seen, ['ssh-a', 'local'])
+  unsubscribe()
+  chamberBridge.requestIntentPrewarm('ssh-b')
+  assert.deepEqual(seen, ['ssh-a', 'local'], '取消订阅后不再投递')
+})

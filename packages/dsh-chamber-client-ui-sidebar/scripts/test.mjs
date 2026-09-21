@@ -31,36 +31,24 @@ export const GROUPS = {
   // session-rows: session/workspace projection, row windowing, row hover and the shell's row wiring
   'session-rows': [
     'test/session-rows/derive.test.ts',
-    'test/session-rows/workspace-membership.test.ts',
-    'test/session-rows/completed-dots-signatures.test.ts',
-    // Facts-injection projection: overlay/stale merge + the two-argument compatibility lock,
-    // and the shared unread predicate of the B edge track (plan §3.3-1/§3.2).
-    'test/session-rows/merge-runtime-facts.test.ts',
+    // The shared unread predicate of the B edge track (plan §3.3-1/§3.2); the
+    // facts-merge / ordering / label / search-archive contracts were consolidated
+    // into derive.test.ts (round 2).
     'test/session-rows/derive-unread.test.ts',
     // I1/I2/I13 仪表：行/待办条的机器可读状态标记（纯分类器 + 属性锁）。
     'test/session-rows/session-row-state.test.ts',
-    'test/session-rows/source-ordering.test.ts',
-    'test/session-rows/search-and-archive.test.ts',
-    'test/session-rows/schedule-label-reuse.test.ts',
     'test/session-rows/session-row-window.test.ts',
     'test/session-rows/todo-attention.test.ts',
     'test/session-rows/hover-intent.test.ts',
     // Source-header prewarm intent: the 120ms dwell machine (distinct from the
     // row hover-card machine above), plan R8 / switch blueprint §4.
     'test/session-rows/prewarm-intent.test.ts',
-    // R8 接线锁：来源头部 hover → chamberBridge 单向请求/取消订阅（会话行
-    // 不接入，见文件头注）。
-    'test/session-rows/prewarm-intent-wiring.test.ts',
   ],
   // session-state: the shared chamber store and the per-source view/search/todo state
   'session-state': [
     'test/session-state/aggregate-store.test.ts',
     // 运行位对账链（官方 refresh + 权威判定 seam + 有界重试/单次尝试超时）。
     'test/session-state/session-fact-reconcile.test.ts',
-    // 权威写回 seam 的生产接线锁（只写 false / 能力守卫 / 写后自校验）。
-    'test/session-state/session-fact-reconcile-wiring.test.ts',
-    // listComplete / 事实注入接线锁（生产者 phase→listComplete、签名归属）。
-    'test/session-state/list-complete-wiring.test.ts',
     // R19 能力一览：来源行的会话事实档位展示读数（源文本锁）。
     'test/session-state/facts-capability-note.test.ts',
     // I10：会话创建归因账本（含 blank 的按标签聚合与「无标签外来源」判据）。
@@ -69,7 +57,6 @@ export const GROUPS = {
     'test/session-state/vendor-session-fact-contract.test.ts',
     'test/session-state/workspace-echo.test.ts',
     'test/session-state/session-echo.test.ts',
-    'test/session-state/workspace-mutations.test.ts',
     'test/session-state/session-mutations.test.ts',
     'test/session-state/workspace-drag-order.test.ts',
     'test/session-state/workspace-git-flags.test.ts',
@@ -110,8 +97,6 @@ export const GROUPS = {
   // archive-purge: the archive/purge flow, its tombstones and the producer/retention wiring
   'archive-purge': [
     'test/archive-purge/archive-purge.test.ts',
-    'test/archive-purge/purged-rows.test.ts',
-    'test/archive-purge/purged-convergence.test.ts',
     'test/archive-purge/purged-tracker.test.ts',
   ],
   // visual-lock: source locks over the sidebar's visual rules. No entrance animation may

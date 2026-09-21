@@ -141,6 +141,23 @@ test('sanitizeRouteError redacts URL userinfo, paths and credential patterns', (
   assert.equal(sanitizeRouteError('plain message'), 'plain message')
 })
 
+test('sanitizeRouteError keep tokens never widen path or credential redaction', () => {
+  // Moved from boundary/sanitize-route-error.test.ts: the kept scoped-package
+  // name already has route-level coverage (feature-lifecycle.test.ts, the
+  // /chamber/plugins refusal), so only the keep-safety half is preserved here.
+  const kept = '@dsh-chamber/dsh-chamber-seed-client-graph'
+  const message = `unsyncable package ${JSON.stringify(kept)} while reading /Users/alice/private/state.json token=abc123`
+  const out = sanitizeRouteError(message, [kept])
+  assert.match(out, /@dsh-chamber\/dsh-chamber-seed-client-graph/)
+  assert.doesNotMatch(out, /\/Users\/alice/)
+  assert.match(out, /\[path\]/)
+  assert.match(out, /token=\[redacted\]/)
+  // An empty or non-string keep entry never widens the output, and without the
+  // keep token the scoped name falls back to the pre-fix [path] shape.
+  assert.match(sanitizeRouteError(message, ['']), /\[path\]/)
+  assert.match(sanitizeRouteError(message, []), /@dsh-chamber\[path\]/)
+})
+
 // ---------------------------------------------------------------------------
 // Manager: resolution chain + single-owner guard
 // ---------------------------------------------------------------------------

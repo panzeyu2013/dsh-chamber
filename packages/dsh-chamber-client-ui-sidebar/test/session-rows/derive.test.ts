@@ -1,28 +1,57 @@
 /**
- * Pure derive.ts unit tests, part 1: reconnect-baseline snapshot projection,
- * cwd-derived workspace membership, blank/subagent visibility and the
- * blank-ghost / membership / fork first-observation graces.
+ * derive.ts unit tests: reconnect-baseline snapshot projection, cwd-derived
+ * workspace membership, blank/subagent visibility, the blank-ghost /
+ * membership / fork first-observation graces, plus the consolidated projection
+ * contracts (facts merge, ordering, labels/reuse, search/archive and the
+ * publish signatures) that round 2 folded in from the former sibling files.
  *
- * Siblings in this split (test/session-rows/): workspace-membership.test.ts,
- * completed-dots-signatures.test.ts, source-ordering.test.ts,
- * search-and-archive.test.ts, schedule-label-reuse.test.ts.
+ * Siblings: completed-dots-signatures.test.ts (publish-signature identity and
+ * the separator-forgery negative) and derive-unread.test.ts (the shared unread
+ * predicate, referenced by the remote-state injection matrix).
  */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 import {
   armBlankGhost,
   armMembershipGrace,
+  basenameOf,
   BLANK_GHOST_GRACE_MS,
+  deriveArchivedSessions,
+  deriveLocalSearchMatches,
   deriveServerWorkspaces,
+  findReusableBlankSession,
+  groupArchivedRows,
+  hasActiveScheduleOf,
+  instanceSnapshotSignature,
   MEMBERSHIP_GRACE_MS,
+  mergeRuntimeFacts,
+  mergeSearchResults,
+  nextServerOrder,
+  nextUpdatedOrder,
+  orderServersForDisplay,
+  orderUngroupedSessions,
   projectInstanceSnapshot,
+  projectRuntimeFacts,
+  reconcileCompletedFacts,
+  reconciledSessionOrder,
   retainMembershipGraceSources,
+  runningRingVisible,
+  runtimeReportSignature,
+  sanitizeSearchQuery,
+  SEARCH_QUERY_MAX_CODE_UNITS,
+  serversProjectionSignature,
+  sessionDisplayTitle,
+  UNGROUPED_WORKSPACE_ID,
   __resetBlankGhostsForTests,
   __resetMembershipGracesForTests,
 } from '../../src/shared/derive.ts'
-import type { SessionRow, WorkspaceRow } from '../../src/shared/instance-api.ts'
-import { session, snapshot, workspace } from '../support/derive-fixtures.ts'
+import type { InstanceRuntimeReport } from '../../src/shared/aggregate-store.ts'
+import type { InstanceSnapshot, SearchRow, SessionRow, WorkspaceRow } from '../../src/shared/instance-api.ts'
+import { server, session, snapshot, workspace } from '../support/derive-fixtures.ts'
 
 /** Workspace-store projection fixture (idle/ready) for the projectInstanceSnapshot cases. */
 function wsState(archivedSessionIds: string[] = [], items = [workspace('w1', 'Work', ['s1', 'sub'])]) {
@@ -479,4 +508,349 @@ test('an accounted fork child renders in its workspace even while an unrelated g
   assert.equal(result.length, 1)
   assert.deepEqual(result[0].sessions.map(row => row.id), ['parent', 'child'])
 })
+
+// =====================================================================
+// Consolidated projection contracts (round 2): the key invariants of the
+// former sibling files merge-runtime-facts / workspace-membership /
+// schedule-label-reuse / source-ordering / search-and-archive. Edge cases not
+// reproduced here were deleted with those files; the retained assertions are
+// the fail-closed, cross-source and upstream-alignment ones.
+// =====================================================================
+
+// ---- mergeRuntimeFacts: two-argument compatibility lock + overlay/stale ----
+
+/** The two-argument implementation as it stood before the overlay/stale extension (verbatim oracle). */
+function legacyMergeRuntimeFacts(
+  runtime: InstanceRuntimeReport | undefined,
+  completedBySource: Record<string, boolean> | undefined,
+): InstanceRuntimeReport | undefined {
+  const chamberCompleted = completedBySource
+  const hasArmed = chamberCompleted !== undefined && Object.values(chamberCompleted).some(value => value === true)
+  if (runtime === undefined && !hasArmed) return undefined
+  const sessions: InstanceRuntimeReport['sessions'] = { ...(runtime?.sessions ?? {}) }
+  if (chamberCompleted !== undefined) {
+    for (const [sessionId, armed] of Object.entries(chamberCompleted)) {
+      if (armed !== true) continue
+      const row = sessions[sessionId] ?? {}
+      sessions[sessionId] = { ...row, completed: true }
+    }
+  }
+  return { current: runtime?.current, sessions }
+}
+
+const RUNTIME_FACTS: InstanceRuntimeReport = {
+  current: 's1',
+  sessionFactReconcile: { requestedAt: 1_000, settledAt: 2_000, ok: true, attempts: 1 },
+  sessions: {
+    s1: { running: true },
+    s2: { running: false, pending: 'approval', runningSubagents: 2 },
+    s3: { running: false, completed: true },
+  },
+}
+const ARMED_DOTS: Record<string, boolean> = { s1: true, s4: true, s5: false }
+const COMPAT_CASES: [InstanceRuntimeReport | undefined, Record<string, boolean> | undefined][] = [
+  [undefined, undefined], [undefined, {}], [undefined, { x: false }], [RUNTIME_FACTS, undefined],
+  [RUNTIME_FACTS, {}], [RUNTIME_FACTS, { s1: false }], [RUNTIME_FACTS, ARMED_DOTS],
+  [{ current: 's1', sessions: {} }, undefined],
+  [{ sessions: { a: { running: false, completed: true, pending: 'question' } } }, { b: true }],
+]
+
+test('mergeRuntimeFacts: the two-argument call stays byte-identical to the pre-overlay implementation', () => {
+  for (const [runtime, completed] of COMPAT_CASES) {
+    assert.equal(JSON.stringify(mergeRuntimeFacts(runtime, completed)), JSON.stringify(legacyMergeRuntimeFacts(runtime, completed)),
+      'two-argument behaviour (including key order) must not move')
+  }
+  assert.equal(JSON.stringify(mergeRuntimeFacts(RUNTIME_FACTS, ARMED_DOTS)),
+    '{"current":"s1","sessions":{"s1":{"running":true,"completed":true},'
+    + '"s2":{"running":false,"pending":"approval","runningSubagents":2},'
+    + '"s3":{"running":false,"completed":true},"s4":{"completed":true}}}')
+})
+
+test('mergeRuntimeFacts: overlay-only content, channel precedence, stale and anti-churn', () => {
+  assert.deepEqual(mergeRuntimeFacts(undefined, undefined, { s9: { pending: 'question', runningSubagents: 2 } }),
+    { current: undefined, sessions: { s9: { pending: 'question', runningSubagents: 2 } } })
+  assert.deepEqual(mergeRuntimeFacts({ sessions: { s1: { running: false, pending: 'approval' } } }, undefined, { s1: { pending: 'question' } })?.sessions.s1,
+    { running: false, pending: 'approval' }, 'the channel pending kind wins over the overlay')
+  assert.deepEqual(mergeRuntimeFacts({ sessions: { s1: { running: false } } }, undefined, { s1: { pending: 'question' } })?.sessions.s1,
+    { running: false, pending: 'question' }, 'an absent channel kind is filled by the overlay')
+  assert.deepEqual(mergeRuntimeFacts({ sessions: { a: { running: false, runningSubagents: 1 } } }, undefined, { a: { runningSubagents: 3 } })?.sessions.a,
+    { running: false, runningSubagents: 1 }, 'runningSubagents is channel ?? overlay (never double-counted)')
+  const zero = mergeRuntimeFacts(undefined, undefined, { a: { runningSubagents: 0 } })
+  assert.equal('runningSubagents' in (zero?.sessions.a ?? {}), false, 'a zero overlay count stays sparse')
+  assert.deepEqual(mergeRuntimeFacts(undefined, { s1: true }, undefined, true),
+    { current: undefined, sessions: { s1: { completed: true } }, stale: true })
+  for (const value of [false, undefined]) {
+    assert.equal('stale' in (mergeRuntimeFacts(RUNTIME_FACTS, ARMED_DOTS, undefined, value) ?? {}), false)
+  }
+  assert.equal(mergeRuntimeFacts(undefined, undefined, undefined, true), undefined,
+    'stale alone is not content: the two-argument early return is preserved')
+  const merged = mergeRuntimeFacts(undefined, undefined, { s1: { pending: 'question', runningSubagents: 1, updatedAt: 999, completedAt: 999 } as never })
+  assert.deepEqual(merged?.sessions.s1, { pending: 'question', runningSubagents: 1 }, 'judgment fields never enter the projected row')
+})
+
+// ---- membership / un-grouped bucket / hidden rows ----
+
+test('deriveServerWorkspaces hides subagent and archived rows and trails one ungrouped bucket', () => {
+  const result = deriveOf(
+    [workspace('w1', 'Work', ['a'])],
+    [session('x', 100), session('y', 200), session('a', 1), session('sub', 300, { origin: 'subagent' })],
+  )
+  assert.equal(result.length, 2)
+  assert.equal(result[1].id, UNGROUPED_WORKSPACE_ID)
+  assert.equal(result[1].ungrouped, true)
+  assert.deepEqual(result[1].sessions.map(row => row.id), ['y', 'x'], 'recency then id tiebreak')
+  const archived = deriveServerWorkspaces({
+    ...snapshot([workspace('w1', 'Work', ['a', 'b'])], [session('a', 1), session('b', 2), session('stray', 3)]),
+    archivedSessionIds: ['b', 'stray'],
+  }, 'srv-a', '')
+  assert.equal(archived.length, 1)
+  assert.deepEqual(archived[0].sessions.map(row => row.id), ['a'], 'archived members and strays are hidden')
+})
+
+test('sanitizeSearchQuery strips NULs and clamps to 500 UTF-16 units without splitting a surrogate pair', () => {
+  assert.equal(sanitizeSearchQuery('  a\0b\0  '), 'ab')
+  assert.equal(sanitizeSearchQuery('a'.repeat(600)), 'a'.repeat(SEARCH_QUERY_MAX_CODE_UNITS))
+  const sanitized = sanitizeSearchQuery('a'.repeat(499) + '\ud83d\ude00' + 'b')
+  assert.equal(sanitized, 'a'.repeat(499))
+  assert.equal(sanitized.includes('\ud83d'), false, 'the pair is never split at the clamp boundary')
+})
+
+test('reconciledSessionOrder/orderUngroupedSessions keep stored-known ids first and append the wire remainder', () => {
+  assert.deepEqual(reconciledSessionOrder(['b', 'a'], ['a', 'b', 'c']), ['b', 'a', 'c'])
+  assert.deepEqual(reconciledSessionOrder(['x', 'a'], ['a', 'b']), ['a', 'b'], 'stored ids unknown to the wire are skipped')
+  assert.deepEqual(reconciledSessionOrder([], []), [])
+  const wire = [{ id: 'a' }, { id: 'b' }, { id: 'c' }]
+  assert.deepEqual(orderUngroupedSessions(wire, ['c', 'a']).map(x => x.id), ['c', 'a', 'b'])
+  assert.deepEqual(orderUngroupedSessions(wire, ['ghost', 'b']).map(x => x.id), ['b', 'a', 'c'])
+  const copy = orderUngroupedSessions(wire, undefined)
+  assert.notEqual(copy, wire, 'no stored order returns a wire-order copy')
+})
+
+test('projectRuntimeFacts: live bits, pending kinds, subagent and sparse lineage discipline', () => {
+  const report = projectRuntimeFacts({
+    current: 's1',
+    byId: { s1: { running: true, completed: true }, sub1: { running: false, origin: 'subagent' }, s2: { running: false, completed: true }, c: {} },
+  }, new Map([['s1', 2], ['c', 0]]), new Map([
+    ['s1', { kind: 'question' }], ['sub1', { kind: 'approval' }], ['c', { kind: 'unknown-future-kind' }],
+  ]))
+  assert.deepEqual(report, {
+    current: 's1',
+    sessions: {
+      s1: { running: true, completed: true, pending: 'question', runningSubagents: 2 },
+      s2: { running: false, completed: true },
+      c: { running: false },
+    },
+  }, 'subagent rows and unknown kinds never enter the report; zero counts stay sparse')
+  assert.deepEqual(projectRuntimeFacts({}), { sessions: {} })
+})
+
+// ---- labels / schedule / blank reuse ----
+
+test('sessionDisplayTitle follows title → cwd basename → id; basenameOf keeps the trailing-segment contract', () => {
+  assert.equal(sessionDisplayTitle({ title: 'Real', sessionId: 'sid' }), 'Real')
+  assert.equal(sessionDisplayTitle({ title: '', cwdBasename: 'dsh-chamber', sessionId: 'sid' }), 'dsh-chamber')
+  assert.equal(sessionDisplayTitle({ displayTitle: 'Resolved', title: 'Durable', sessionId: 'sid' }), 'Resolved')
+  assert.equal(sessionDisplayTitle({ cwdBasename: '/', sessionId: 'sid' }), 'sid', 'separator-only basenames fall through')
+  assert.equal(basenameOf('/Users/x/project/'), 'project')
+  assert.equal(basenameOf('C:\\Users\\x\\project'), 'project')
+  assert.equal(basenameOf('/'), '/')
+})
+
+test('hasActiveScheduleOf is true only for a non-empty schedule array', () => {
+  assert.equal(hasActiveScheduleOf(undefined), false)
+  assert.equal(hasActiveScheduleOf({}), false)
+  assert.equal(hasActiveScheduleOf({ schedule: [] }), false)
+  assert.equal(hasActiveScheduleOf({ schedule: [{ id: 'sch1' }] }), true)
+  assert.equal(hasActiveScheduleOf({ schedule: 'sch1' }), false)
+  assert.equal(hasActiveScheduleOf({ schedule: null }), false)
+})
+
+test('findReusableBlankSession mirrors connectWorkspace and reuse stays off without an authoritative archive set', () => {
+  const ws = { path: '/w1', sessionIds: ['blank', 'other'] }
+  const blank = (id: string, extra: Partial<SessionRow> = {}): SessionRow => ({ sessionId: id, running: false, blank: true, cwd: '/w1', ...extra })
+  assert.equal(findReusableBlankSession(ws, [blank('blank')], new Set()), 'blank')
+  assert.equal(findReusableBlankSession(ws, [{ ...blank('blank'), blank: false }], new Set()), undefined)
+  assert.equal(findReusableBlankSession(ws, [blank('blank', { cwd: '/elsewhere' })], new Set()), undefined)
+  assert.equal(findReusableBlankSession(ws, [blank('blank')], new Set(['blank'])), undefined)
+  assert.equal(findReusableBlankSession(ws, [blank('blank', { parentSessionId: 'p' })], new Set()), undefined)
+  const withKnown = deriveServerWorkspaces({
+    ...snapshot([workspace('w1', 'Work', ['blank'])], [session('blank', 5, { blank: true, cwd: '/w1' })]), archiveSetKnown: true,
+  }, 'srv-a', '', undefined, 1_000)
+  assert.equal(withKnown[0]?.reusableBlankSessionId, 'blank')
+  assert.deepEqual(withKnown[0]?.sessions, [], 'the reusable row stays hidden while it is not current')
+  const unknown = deriveOf([workspace('w1', 'Work', ['blank'])], [session('blank', 5, { blank: true, cwd: '/w1' })])
+  assert.equal('reusableBlankSessionId' in (unknown[0] ?? {}), false, 'an unknown archive set could make an archived row look reusable')
+})
+
+// ---- ordering: sources, updated mode, local search ----
+
+test('orderServersForDisplay leads with stored-known ids and nextServerOrder keeps the drop math exact', () => {
+  const servers = [server('local'), server('ssh-r1'), server('ssh-r2')]
+  assert.equal(orderServersForDisplay(servers, undefined), servers)
+  assert.deepEqual(orderServersForDisplay(servers, ['ssh-r2', 'local', 'ssh-r2', 'ssh-r1']).map(s => s.id), ['ssh-r2', 'local', 'ssh-r1'])
+  assert.deepEqual(orderServersForDisplay(servers, ['ghost-a', 'ssh-r2', 'ghost-b']).map(s => s.id), ['ssh-r2', 'local', 'ssh-r1'], 'no ghost groups')
+  assert.equal(nextServerOrder(['a', 'b', 'c'], 'a', { id: 'ghost', half: 'before' }), null)
+  assert.equal(nextServerOrder(['a', 'b', 'c'], 'b', { id: 'b', half: 'before' }), null, 'a no-op drop is null')
+  assert.deepEqual(nextServerOrder(['a', 'b', 'c', 'd'], 'd', { id: 'b', half: 'before' }), ['a', 'd', 'b', 'c'])
+  assert.deepEqual(nextServerOrder(['a', 'b', 'c', 'd'], 'a', { id: 'b', half: 'after' }), ['b', 'a', 'c', 'd'])
+  const rendered = ['a', 'b', 'c', 'd']
+  const moved = nextServerOrder(rendered, 'd', { id: 'b', half: 'after' })
+  assert.ok(moved)
+  assert.deepEqual([...moved].sort(), [...rendered].sort(), 'membership is preserved')
+  assert.deepEqual(rendered, ['a', 'b', 'c', 'd'], 'the rendered input is never mutated')
+})
+
+test('nextUpdatedOrder promotes fresh activity and preserves the stored order otherwise', () => {
+  const byId = new Map([['a', { id: 'a', updatedAt: 100 }], ['b', { id: 'b', updatedAt: 300 }], ['c', { id: 'c', updatedAt: 200 }]])
+  const first = nextUpdatedOrder({ sessionIds: ['a', 'b', 'c'], stored: undefined, previousUpdatedAt: undefined, byId })
+  assert.deepEqual(first.order, ['b', 'c', 'a'])
+  assert.equal(first.changed, true)
+  const steady = nextUpdatedOrder({ sessionIds: ['a', 'b', 'c'], stored: ['c', 'a', 'b'], previousUpdatedAt: { a: 100, b: 300, c: 200 }, byId })
+  assert.deepEqual(steady.order, ['c', 'a', 'b'], 'no activity since the last observation -> the stored order stands')
+  assert.equal(steady.changed, false)
+  const promotedById = new Map([['a', { id: 'a', updatedAt: 100 }], ['b', { id: 'b', updatedAt: 350 }], ['c', { id: 'c', updatedAt: 200 }]])
+  const promoted = nextUpdatedOrder({ sessionIds: ['a', 'b', 'c'], stored: ['c', 'a', 'b'], previousUpdatedAt: { a: 100, b: 300, c: 200 }, byId: promotedById })
+  assert.deepEqual(promoted.order, ['b', 'c', 'a'])
+  assert.equal(promoted.changed, true)
+})
+
+test('deriveLocalSearchMatches matches the display label and excludes hidden rows', () => {
+  const rows = snapshot(
+    [workspace('w1', 'Alpha Project', ['a'])],
+    [session('a', 10, { cwd: '/Users/me/dsh-chamber', displayTitle: 'dsh-chamber' }), session('b', 20, { title: 'other', origin: 'subagent' })],
+  )
+  assert.deepEqual(deriveLocalSearchMatches(rows, 'dsh-chamber'), [{ sessionId: 'a', snippet: '' }])
+  assert.deepEqual(deriveLocalSearchMatches(rows, '   '), [])
+  assert.deepEqual(deriveLocalSearchMatches(rows, 'zzz'), [])
+})
+
+// ---- search merge / archive projection / archive-set signatures ----
+
+test('mergeSearchResults: local lead, remote-snippet adoption, dedupe, limit and visible-set filtering', () => {
+  const local: SearchRow[] = [{ sessionId: 'l1', snippet: '' }, { sessionId: 'both', snippet: '' }]
+  const remote = { items: [{ sessionId: 'both', snippet: 'content' }, { sessionId: 'r1', snippet: 'remote' }, { sessionId: 'r1', snippet: 'dup' }], hasMore: true }
+  const merged = mergeSearchResults(local, remote, 20, new Set(['l1', 'both', 'r1']), true)
+  assert.deepEqual(merged.items, [
+    { sessionId: 'l1', snippet: '' }, { sessionId: 'both', snippet: 'content' }, { sessionId: 'r1', snippet: 'remote' },
+  ])
+  assert.equal(merged.hasMore, true)
+  assert.deepEqual(mergeSearchResults(local, { items: [{ sessionId: 'r1', snippet: '' }], hasMore: false }, 2, new Set(['l1', 'both', 'r1']), true).items.map(row => row.sessionId), ['l1', 'both'])
+  const hidden = { items: [{ sessionId: 'visible-hit', snippet: 'kept' }, { sessionId: 'archived-hit', snippet: 'dropped' }], hasMore: false }
+  assert.deepEqual(mergeSearchResults([], hidden, 20, new Set(['visible-hit']), true).items, [{ sessionId: 'visible-hit', snippet: 'kept' }])
+  assert.deepEqual(mergeSearchResults([], { items: [{ sessionId: 'x', snippet: 'hidden' }], hasMore: false }, 20, new Set(), true).items, [],
+    'M7: a READY empty visible set must not let hidden sessions flow back in')
+  assert.deepEqual(mergeSearchResults([], { items: [{ sessionId: 'x', snippet: 'kept' }], hasMore: false }, 20, new Set(), false).items,
+    [{ sessionId: 'x', snippet: 'kept' }], 'a NOT-ready projection degrades to no filtering')
+})
+
+test('deriveArchivedSessions/groupArchivedRows: newest-first, membership then canonical cwd, ungrouped last', () => {
+  const snap: InstanceSnapshot = {
+    workspaces: [workspace('w1', 'Alpha', []), workspace('w2', 'Beta', ['a2'])],
+    archivedSessionIds: ['a1', 'a2', 'orphan'],
+    sessions: [
+      session('a1', 100, { cwd: '/w1' }), session('a2', 300, { cwd: '/elsewhere' }),
+      session('orphan', 200, { cwd: '/gone' }), session('v1', 999, { title: 'visible' }),
+    ],
+  }
+  const rows = deriveArchivedSessions(snap)
+  assert.deepEqual(rows.map(row => row.sessionId), ['a2', 'orphan', 'a1'])
+  const byId = new Map(rows.map(row => [row.sessionId, row]))
+  assert.deepEqual(byId.get('a1')?.workspace, { id: 'w1', title: 'Alpha' }, 'membership never landed -> canonical cwd fallback')
+  assert.deepEqual(byId.get('a2')?.workspace, { id: 'w2', title: 'Beta' }, 'membership wins over a non-matching cwd')
+  assert.equal(byId.get('orphan')?.workspace, undefined)
+  assert.equal(byId.has('v1'), false)
+  assert.deepEqual(deriveArchivedSessions({ workspaces: [], archivedSessionIds: [], sessions: [session('x', 1)] }), [])
+  const groups = groupArchivedRows([
+    { sessionId: 'o1', updatedAt: 999 },
+    { sessionId: 'a1', updatedAt: 300, workspace: { id: 'w1', title: 'Alpha' } },
+  ])
+  assert.deepEqual(groups.map(group => group.key), ['w1', UNGROUPED_WORKSPACE_ID])
+  assert.deepEqual(groupArchivedRows([]), [])
+})
+
+test('archiveSetKnown and archivedSessions participate in the publish signatures', () => {
+  const base = snapshot([], [])
+  assert.notEqual(instanceSnapshotSignature({ ...base, archiveSetKnown: true }), instanceSnapshotSignature({ ...base, archiveSetKnown: false }))
+  const plain = { id: 'local', sourceFingerprint: 'fp', kind: 'local' as const, transport: 'local' as const, label: 'local', connected: true, phase: 'ready', workspaces: [], updatedAt: 1 }
+  assert.notEqual(serversProjectionSignature([plain] as never),
+    serversProjectionSignature([{ ...plain, archivedSessions: [{ sessionId: 's1', updatedAt: 5 }] }] as never))
+  assert.notEqual(serversProjectionSignature([{ ...plain, archivedSessions: [], archiveSetKnown: false }] as never),
+    serversProjectionSignature([{ ...plain, archivedSessions: [], archiveSetKnown: true }] as never))
+})
+
+// ---- completed-dot state machine + report signatures (consolidated from
+//      completed-dots-signatures.test.ts; the separator-forgery negative is
+//      retained verbatim because a signature collision silently skips a real
+//      republish) ----
+
+function reconcile(
+  prevCompleted: Record<string, boolean>,
+  prevRunning: Record<string, boolean>,
+  sessions: Record<string, { running?: boolean }>,
+  readingCurrent: string | undefined,
+) {
+  const nextRunning: Record<string, boolean> = {}
+  for (const [id, row] of Object.entries(sessions)) nextRunning[id] = row?.running === true
+  return reconcileCompletedFacts({ sessions, nextRunning, prevRunning, prevCompleted, readingCurrent })
+}
+
+test('reconcileCompletedFacts: a background edge arms, the read session never arms, a re-run disarms', () => {
+  const armed = reconcile({}, { x: true }, { x: { running: false } }, undefined)
+  assert.deepEqual(armed.completed, { x: true })
+  assert.equal(armed.changed, true)
+  assert.deepEqual(reconcile({}, { x: true }, { x: { running: false } }, 'x').completed, {}, 'the active view never arms')
+  assert.deepEqual(reconcile({}, { x: true, y: true }, { x: { running: false }, y: { running: false } }, 'x').completed, { y: true })
+  assert.deepEqual(reconcile({}, {}, { x: { running: false } }, undefined).completed, {}, 'first observation records no edge')
+  const prev = { x: true }
+  assert.equal(reconcile(prev, { x: false }, { x: { running: false } }, undefined).completed, prev, 'no re-edge, identity kept')
+  assert.deepEqual(reconcile({ x: true }, { x: false }, { x: { running: true } }, undefined).completed, {}, 'a re-run disarms')
+  assert.deepEqual(reconcile({ x: true }, { x: false }, { x: { running: false } }, 'x').completed, {}, 'starting to read disarms')
+  assert.deepEqual(reconcile({ x: true, y: true }, { x: false, y: false }, { x: { running: true }, y: { running: false } }, undefined).completed, { y: true })
+})
+
+test('runtimeReportSignature: the L1 receipt, onlyIds and listComplete identity discipline', () => {
+  const receipt: InstanceRuntimeReport = { sessions: { p: { running: true } }, sessionFactReconcile: { requestedAt: 1_000, settledAt: 2_000, ok: true, attempts: 1 } }
+  assert.notEqual(runtimeReportSignature({ sessions: { p: { running: true } } }), runtimeReportSignature(receipt),
+    'a receipt-only settlement must re-sign, or the liveness guard never sees the verdict')
+  assert.equal(runtimeReportSignature(receipt), runtimeReportSignature({ ...receipt, sessionFactReconcile: { requestedAt: 1_000, settledAt: 2_000, ok: true, attempts: 1 } }))
+  const hidden = { current: 's1', sessions: { s1: { running: true }, s2: { completed: true } } }
+  assert.equal(runtimeReportSignature(hidden, new Set(['s1'])),
+    runtimeReportSignature({ ...hidden, sessions: { s1: { running: true }, s2: { completed: true, running: true } } }, new Set(['s1'])),
+    'a hidden session flipping its facts must not re-render the projection')
+  assert.notEqual(runtimeReportSignature({ sessions: {} }), runtimeReportSignature({ sessions: {}, listComplete: true }))
+  assert.equal(runtimeReportSignature({ sessions: {}, listComplete: true }, undefined, false),
+    runtimeReportSignature({ sessions: {}, listComplete: false }, undefined, false),
+    'the projection path ignores listComplete (nothing rendered reads it)')
+})
+
+test('runningRingVisible is poll-only: the channel running bit never renders the ring', () => {
+  assert.equal(runningRingVisible(false, true), true)
+  assert.equal(runningRingVisible(true, true), true)
+  assert.equal(runningRingVisible(true, false), false, 'a stale channel bit must not fake a running ring')
+  assert.equal(runningRingVisible(true, undefined), false)
+  assert.equal(runningRingVisible(undefined, undefined), false)
+})
+
+test('serversProjectionSignature JSON-encodes titles: user-controlled separators cannot forge equality', () => {
+  const twoRows = [server('local', { workspaces: [{ id: 'w1', title: 'Work', sessions: [
+    { id: 's1', title: 'a', displayTitle: 'a', running: false },
+    { id: 's2', title: 'b', displayTitle: 'b', running: false },
+  ] }] })]
+  const forged = [server('local', { workspaces: [{ id: 'w1', title: 'Work', sessions: [
+    { id: 's1', title: 'a,0:0,0,s2:b', displayTitle: 'a,0:0,0,s2:b', running: false },
+  ] }] })]
+  assert.notEqual(serversProjectionSignature(twoRows), serversProjectionSignature(forged))
+  assert.equal(serversProjectionSignature(twoRows), serversProjectionSignature([server('local', { workspaces: [{ id: 'w1', title: 'Work', sessions: [
+    { id: 's1', title: 'a', displayTitle: 'a', running: false },
+    { id: 's2', title: 'b', displayTitle: 'b', running: false },
+  ] }] })]))
+})
+
+test('producer projects listComplete from the official list store phase (source wiring lock)', () => {
+  const producer = stripComments(readFileSync(fileURLToPath(new URL('../../src/client/index.ts', import.meta.url)), 'utf8'))
+  assert.match(producer, /baseReport\.listComplete = snapshot\.phase === 'ready'/)
+  assert.match(producer, /const snapshot = sessionsList\.getSnapshot\(\)/)
+})
+
+
 

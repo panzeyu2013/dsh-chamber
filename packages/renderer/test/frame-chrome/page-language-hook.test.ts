@@ -4,12 +4,12 @@
  * per-entry mount decorator (`locale-ownership.ts`) driven by a fake entry
  * context and a stand-in vendor locale plugin.
  *
- * Why this file exists next to `page-language.test.ts`: that spec drives the
- * pure rule and the state machine through an injected host, and pins the WIRING
- * by source text. Neither proves that the decorator runs the ownership hook
- * after the vendor body, that the hook reads the faces it claims to read, or
- * that a background entry's write is restored in the same synchronous task.
- * Here the real modules run: `withLocaleOwnership` wraps a stand-in plugin
+ * This is the single page-language spec (the injected-host spec was retired in
+ * the second trim round; its unique wiring locks moved here, its pure-rule and
+ * state-machine cases are the end-to-end cases below): it proves that the
+ * decorator runs the ownership hook after the vendor body, that the hook reads
+ * the faces it claims to read, and that a background entry's write is restored
+ * in the same synchronous task. Here the real modules run: `withLocaleOwnership` wraps a stand-in plugin
  * whose `apply` writes `<html lang>` exactly where `syncDocumentLanguage`
  * does, and `installPageLanguageOwner` runs against a stubbed
  * document/MutationObserver — the same global-stub idiom
@@ -32,6 +32,8 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 
 import {
   installPageLanguageOwner,
@@ -39,6 +41,11 @@ import {
   setPageActiveSource,
 } from '../../src/page-language.ts'
 import { withLocaleOwnership } from '../../src/locale-ownership.ts'
+import { normalize, stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
+
+/** Comment-stripped, whitespace-collapsed source: the semantic text of a file. */
+const read = (rel: string): string =>
+  normalize(stripComments(readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')))
 
 // ── A stubbed document (installed before the owner takes over) ──────────────
 
@@ -355,4 +362,88 @@ test('the stubbed document really is the page the owner reads (guard against a v
   doc.write('en')
   await Promise.resolve()
   assert.equal(documentLanguage(doc), 'zh-CN')
+})
+
+// ── Wiring locks (source text; moved from the retired page-language.test.ts) ─
+//
+// main.tsx renders, App.tsx renders, and chamber-entry.ts boots the whole
+// shell, so none of them can be imported by a plain `node test/…` run; the
+// invariants below are pinned by comment-stripped source text.
+
+test('enforce costs no write on an already-sanctioned page, and a retired fact is not a language change', () => {
+  const writes: string[] = []
+  let language = 'zh-CN'
+  const owner = new PageLanguageOwner(
+    { read: () => language, write: next => { language = next; writes.push(next) } },
+    'zh-CN',
+  )
+  owner.setActiveSource('local')
+  owner.report('local', { locale: 'zh', settled: true })
+  // One shell's unconditional `document.documentElement.lang = …` write.
+  language = 'en'
+  owner.enforce()
+  assert.equal(language, 'zh-CN')
+  assert.deepEqual(writes, ['zh-CN'])
+  // Sanctioned values read back identical: enforce costs no write.
+  owner.enforce()
+  assert.deepEqual(writes, ['zh-CN'])
+  // A retired entry drops its fact (the page keeps the language) and the active
+  // source accessor keeps answering.
+  owner.report('gateway-a', { locale: 'en', settled: true })
+  owner.setActiveSource('gateway-a')
+  assert.equal(owner.languageOf(), 'en')
+  owner.report('gateway-a', undefined)
+  assert.equal(owner.languageOf(), 'en', 'no fact is not a language change')
+  assert.equal(owner.activeSourceOf(), 'gateway-a')
+})
+
+test('the page-language owner is installed before React mounts', () => {
+  const main = read('../../src/main.tsx')
+  const installed = main.indexOf('installPageLanguageOwner()')
+  const mounted = main.indexOf('createRoot(')
+  assert.ok(installed >= 0, 'main.tsx must install the owner')
+  assert.ok(mounted >= 0, 'main.tsx must still mount the app')
+  assert.ok(installed < mounted, 'ownership must be taken BEFORE any shell can boot')
+  assert.match(
+    main,
+    /import { installPageLanguageOwner } from '\.\/page-language\.ts'/,
+    'the installer must come from the ownership module',
+  )
+})
+
+test('App publishes the on-screen source to the page-language owner', () => {
+  const app = read('../../src/App.tsx')
+  // The same layout-effect commit that publishes "who is on screen" to the
+  // page-wide bridge publishes it to the language owner: switching views must
+  // not leave the page language behind for a frame. The body may carry SIBLING
+  // document-global publications (the theme lock is written the same tolerant
+  // way), so the effect is located first and both calls are asserted inside it.
+  const effect = /useLayoutEffect\(\(\) => \{([\s\S]*?)\}, \[activeView\]\)/.exec(app)
+  assert.ok(effect !== null, 'the active view must be published in a layout effect keyed on activeView')
+  assert.match(effect[1]!, /chamberBridge\.setActiveSource\(activeView\)/, 'the page-wide bridge publish must stay')
+  assert.match(effect[1]!, /setPageActiveSource\(activeView\)/, 'the page-language owner publish must stay')
+})
+
+test('the composite decorates the vendor locale mount with the ownership hook', () => {
+  const entry = read('../../src/chamber-entry.ts')
+  assert.match(
+    entry,
+    /const MOUNT_DECORATORS: Readonly<Record<string, \(plugin: object\) => object>> = \{ '@deepseek-ai\/dsh-client-locale': withLocaleOwnership, \}/,
+    'the locale mount must carry the ownership hook',
+  )
+  assert.match(entry, /ctx\.plugin\(decorateMount\(id, plugin\)\)/, 'register() must mount the decorated namespace')
+  // BOTH mount paths carry decorators: moving a decorated id into the deferred
+  // cluster must not silently drop its hook.
+  assert.match(
+    entry,
+    /ctx\.plugin\(decorateMount\(outcome\.id, \{ \.\.\.loaded, name: outcome\.id \}\)\)/,
+    'the deferred mount must go through the decorators too',
+  )
+  // The roster audit resolves each id through its namespace import — the call
+  // site must keep passing the imported namespace itself.
+  assert.match(
+    entry,
+    /register\('@deepseek-ai\/dsh-client-locale', Locale\)/,
+    'the locale registration call site must keep its namespace import',
+  )
 })

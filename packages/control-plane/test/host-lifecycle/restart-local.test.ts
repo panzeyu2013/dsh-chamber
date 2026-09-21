@@ -239,27 +239,6 @@ test('a failed user restart counts into the shared restart-exhausted window', as
   }
 })
 
-test('restartLocal rejects under a closed spawn gate without spawning', async () => {
-  let spawns = 0
-  const connection = absentConnection({
-    options: { canSpawn: () => ({ ok: false, reason: 'applying dsh vY' }) },
-    deps: {
-      spawnDsh: async () => {
-        spawns += 1
-        return { child: { on: () => {}, exitCode: null }, port: 18500, stop: async () => {} }
-      },
-      probeHostIdentity: mockIdentityProbe().probeHostIdentity,
-    },
-  })
-
-  await assert.rejects(connection.restartLocal(), (error: unknown) =>
-    (error as Error & { code?: string }).code === 'connection_busy'
-    && /applying dsh vY/.test(String(error)))
-  assert.equal(spawns, 0, 'no spawn behind a closed gate')
-  assert.equal(connection.getState(), 'stopped')
-  await connection.stop()
-})
-
 test('restartLocal rejects during an in-progress stop; final state stays stopped', async () => {
   let stopRelease!: () => void
   const stopGate = new Promise<void>(resolve => { stopRelease = resolve })
@@ -591,38 +570,6 @@ test('a closed canSpawn gate (applying window) rejects start() and restartLocal 
     && /applying dsh vY/.test(String(error)))
   assert.equal(spawns, 0)
   await connection.stop()
-})
-
-test('createControlPlane.startLocal rejects connection_busy under a closed canStartLocal (applying window), from stopped', async () => {
-  const stateDir = mkdtempSync(join(tmpdir(), 'dsh-chamber-start-gate-'))
-  let spawns = 0
-  const spawnDsh = async (): Promise<SpawnedDsh> => {
-    spawns += 1
-    return { child: { on: () => {}, exitCode: null }, port: 17510, stop: async () => {} }
-  }
-  const probeHostIdentity = async () => true
-  const plane = createControlPlane({
-    port: 0,
-    stateDir,
-    logger: quietLogger,
-    canStartLocal: () => ({ ok: false, reason: 'applying dsh vY' }),
-    localConnectionDeps: { spawnDsh, probeHostIdentity },
-  })
-  try {
-    await plane.start()
-    await assert.rejects(plane.startLocal(), (error: unknown) =>
-      (error as Error & { code?: string }).code === 'connection_busy'
-      && /applying dsh vY/.test(String(error)))
-    assert.equal(spawns, 0, 'no spawn behind a closed canStartLocal')
-    assert.equal(plane.connectionState, 'stopped')
-    await assert.rejects(plane.restartLocal(), (error: unknown) =>
-      (error as Error & { code?: string }).code === 'connection_busy'
-      && /applying dsh vY/.test(String(error)))
-    assert.equal(spawns, 0, 'restartLocal stays behind the same closed gate')
-  } finally {
-    await plane.stop()
-    rmSync(stateDir, { recursive: true, force: true })
-  }
 })
 
 test('D2: the restart window counts only triggerRestart (start()/stop() never push into it; recovery consumes nothing) — M=5 exhausts, start() recovers', async () => {

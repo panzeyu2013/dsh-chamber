@@ -30,31 +30,18 @@ function healthyNames(extra = []) {
 
 // C11 —— 运行时线族集合
 
-test('runtimeFamilyNames: 只吃 packages 段（2 空格）键，去重升序，兼容 v9/v6 两种锁文件', () => {
+// v9/v6 两种锁文件键形的解析是 packages/control-plane/test/plugins/protected-plugins.test.ts:336-353
+// 的权威断言（runtimeFamilyNames 只是 familyNamesFromLockfileClosure 的纯委托）；这里只保留
+// 该契约测试未覆盖的版本去重形态（同一包两个版本 → 一个族名）。
+test('runtimeFamilyNames: 版本去重（同一包两个版本只出一个名字）', () => {
   const lock = [
-    'lockfileVersion: \'9.0\'',
-    'importers:',
-    '  .:',
-    '    dependencies:',
-    "      '@deepseek-ai/dsh':",
-    '        specifier: 1.2.3',
     'packages:',
-    "  '@deepseek-ai/dsh@1.2.3':",
-    '    resolution: {integrity: sha512-x}',
     "  '@deepseek-ai/dsh-base@1.2.3':",
     '    resolution: {integrity: sha512-y}',
     "  '@deepseek-ai/dsh-base@1.2.4':",
     '    resolution: {integrity: sha512-z}',
-    '  /@deepseek-ai/legacy-pkg/1.0.0:',
-    '    resolution: {integrity: sha512-w}',
-    '  zod@4.0.0:',
-    '    resolution: {integrity: sha512-v}',
   ].join('\n')
-  assert.deepEqual(runtimeFamilyNames(lock), [
-    '@deepseek-ai/dsh',
-    '@deepseek-ai/dsh-base',
-    '@deepseek-ai/legacy-pkg',
-  ])
+  assert.deepEqual(runtimeFamilyNames(lock), ['@deepseek-ai/dsh-base'])
 })
 
 test('C11 正例：闭包健康 + 树只差平台分包 → 无违规（且报出平台差）', () => {

@@ -125,7 +125,7 @@ test('--download-url-prefix 只改写 final 条目（beta 条目 URL 不动）',
   assert.ok(merged.xml.includes(`url="${ROLLING}dsh-chamber-0.3.2-macos-arm64.zip"`), 'final zip 改写到滚动前缀')
   assert.ok(merged.xml.includes(`url="${ROLLING}dsh-chamber0.3.2.999999999-0.3.1.999999999.delta"`), 'final 的 delta 同样改写')
   assert.doesNotMatch(merged.xml, /releases\/latest\/download/, '合并结果里不再残留 stable 直链')
-  assert.ok(merged.xml.includes(`url="${ROLLING}dsh-chamber-0.3.3-beta.1-macos-arm64.zip"`), 'beta 条目 URL 保持不变')
+  // beta 条目 URL 不动的更强形态在 '前缀改写绝不触碰 beta 条目' 用例（非 ROLLING 的 beta URL 排除幂等假阳性）。
 })
 
 const PREVIOUS_NEWER = PREVIOUS_ROLLING
@@ -139,7 +139,6 @@ test('两个候选源都在时取版本最高的 final，且只有 stable 来源
   })
   assert.deepEqual(fromStable.finalItem, { version: '0.3.2.999999999', shortVersionString: '0.3.2' },
     'stable 有可用 final 时不许被 previous 的旧 final 顶掉')
-  assert.ok(fromStable.xml.includes(`url="${ROLLING}dsh-chamber-0.3.2-macos-arm64.zip"`))
 
   const stablePrefix = 'https://github.com/o/r/releases/download/v0.3.2/'
   const fromPrevious = mergeRollingBetaFeed({

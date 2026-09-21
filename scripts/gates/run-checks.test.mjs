@@ -496,17 +496,13 @@ test('the REAL compiled Electron artifacts execute when present (loud skip other
     + 'pnpm --filter @dsh-chamber/desktop run build:preload）')
 })
 
-// G35/P1-1: the local static set and ci.yml's unclassified gate steps were two
-// hand-maintained lists that had silently drifted (each ran a DIFFERENT
-// remote-state script). The contract + exemptions + negative controls live in
-// static-gate-parity.mjs; this is the real-repository assertion.
-test("G35: MODES.static matches ci.yml's unclassified gate steps", () => {
+// G35/P1-1: the real-repository parity assertion (MODES.static ↔ ci.yml's
+// unclassified gate steps, with the drift negative controls) lives in
+// verify-workflow-action-pins.test.mjs; this file keeps only the member the
+// parity check cannot see (a step dropped on BOTH sides stays parity-clean).
+test('G35: the fault-injection matrix runs on the push path too, not only from check:static', () => {
   const scripts = JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')).scripts
   const job = jobBlock(readFileSync(join(REPO_ROOT, '.github', 'workflows', 'ci.yml'), 'utf8'), 'test')
-  assert.ok(job.length > 0, 'ci.yml must declare the test job')
   const ciCommands = ciUnclassifiedGateCommands(job, scripts)
-  const problems = staticGateParityProblems({ staticSteps: MODES.static, ciCommands, scripts })
-  assert.deepEqual(problems, [], problems.join('\n'))
-  assert.ok(ciCommands.some(command => command.includes('remote-state-injection-matrix')),
-    'the fault-injection matrix must run on the push path too, not only from check:static')
+  assert.ok(ciCommands.some(command => command.includes('remote-state-injection-matrix')))
 })

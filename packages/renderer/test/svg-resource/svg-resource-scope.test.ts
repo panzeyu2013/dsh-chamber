@@ -15,8 +15,10 @@
  *
  * `svg-resource-scope.ts` is framework-free and takes its document surface by
  * injection, so the rule is driven here through a tiny element double (the repo
- * runs node:test without a DOM). The WIRING is pinned by source-text locks
- * (svg-resource-scope-wiring.test.ts).
+ * runs node:test without a DOM). The entry wiring (the source-text lock file was
+ * retired in the second trim round) is guarded at the artifact level by
+ * packages/desktop/scripts/build-swift-app.test.mjs (assembled chunk marker,
+ * fail-closed) and packages/dsh-chamber-client-ui-mobile/scripts/artifact-scope-marker.test.mjs.
  *
  * LIMITS, stated honestly: this spec proves the rename plan, the boundary rules
  * and the installer pipeline; it does not rasterize, so the engine behaviour

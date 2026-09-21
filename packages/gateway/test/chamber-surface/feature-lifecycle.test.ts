@@ -26,10 +26,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, statSync, symlinkSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 import { transformSync } from 'esbuild'
 import type { ApiRequest, ApiResponse } from '@dsh-chamber/control-plane'
 import { createChamberPlugins, SYNCED_ARTIFACT_MAX_BYTES, SYNCED_PACKAGE_MAX_BYTES } from '../../src/plugins.ts'
@@ -88,7 +87,9 @@ test('dashboard HTML carries only Credentials + runtime panels and a closed CSP'
   const csp = page.headers['content-security-policy']
   assert.equal(csp.split(';').map(value => value.trim()).find(value => value.startsWith('script-src')), "script-src 'self'")
   const html = page.chunks.join('')
+  assert.match(html, /^<!doctype html>/, 'the app page keeps its doctype')
   assert.match(html, /<script defer src="\/chamber\/app\.js"><\/script>/)
+  assert.equal((html.match(/<script/g) ?? []).length, 1, 'exactly one script tag')
   assert.match(html, /id="credentials-title"/)
   assert.match(html, /id="runtime-title"/)
   // 2026-12 strip: no orchestration panels remain.
@@ -106,6 +107,13 @@ test('dashboard script parses and carries only credentials + runtime logic', asy
   assert.match(script.headers['content-type'], /^application\/javascript/)
   const source = script.chunks.join('')
   assert.doesNotThrow(() => new Function(source), 'the served classic script must parse')
+  // 2026-12 audit F2 (moved from boundary/chamber-assets.test.ts): the served
+  // bytes keep the interpolated comparators and stay safely inlinable.
+  assert.match(source, /semverNumericCompare/, 'the interpolated comparator landed')
+  assert.match(source, /semverCompare/, 'the interpolated comparator landed')
+  assert.equal(source.includes('${'), false, 'no un-interpolated template slot survives')
+  assert.equal(source.includes('DASHBOARD_SEMVER_JS'), false, 'the helper name is not leaked into the asset')
+  assert.equal(source.includes('</script'), false, 'the script stays safely inlinable')
   // Credentials + runtime blocks stay.
   assert.match(source, /AUTH_PATHS\.credentials/)
   assert.match(source, /result\.durability === 'unknown'/,
@@ -140,8 +148,6 @@ test('dashboard script parses and carries only credentials + runtime logic', asy
 function stripped(source: string, loader: 'js' | 'ts'): string {
   return transformSync(source, { loader, legalComments: 'none' }).code
 }
-
-const GATEWAY_SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'src')
 
 /** One credential projection entry: the shape the page validates. */
 function credentialProjection(configured: boolean): unknown {
@@ -298,29 +304,14 @@ test('the served dashboard gates credential removal on an in-page dialog and car
   // … and BOTH removal gates go through that dialog.
   assert.equal((code.match(/armConfirmDialog\(\{/g) ?? []).length, 2,
     'exactly the two credential-removal gates arm the dialog')
-  assert.match(script, /AUTH_PATHS\.changePassword, \{ method: 'POST', body: \{ remove: true, currentPassword: current \} \}/)
-  assert.match(script, /AUTH_PATHS\.changeToken, \{ method: 'POST', body: \{ remove: true, currentPassword: current \} \}/)
-  assert.match(script, /title: 'Remove the gateway password\?'/)
-  assert.match(script, /description: 'The password login is invalidated immediately\.'/)
-  assert.match(script, /title: 'Remove the gateway token\?'/)
-  assert.match(script, /description: 'Authenticated API and desktop clients are disconnected immediately\.'/)
+  // The gate copy and the exact POST bodies are asserted behaviorally through
+  // the executed page (remove password :334-335/:373-374, token :416-418/:433-434).
 
   // Every id the script addresses literally exists in the served markup — the
   // same contract the DOM harness enforces while it drives the script.
   const addressed = new Set([...script.matchAll(/byId\('([^']+)'\)/g)].map(match => match[1]))
   assert.ok(addressed.size >= 20, 'the id contract check must actually walk the script')
   for (const id of addressed) assert.ok(html.includes('id="' + id + '"'), 'missing markup id: ' + id)
-})
-
-test('no gateway source file calls a native confirm (2026-09-11 upstream-alignment T2)', () => {
-  const files = readdirSync(GATEWAY_SRC_DIR, { recursive: true, encoding: 'utf8' })
-    .filter(name => name.endsWith('.ts'))
-  assert.ok(files.length >= 20, 'the scan must actually walk the gateway src tree')
-  for (const file of files) {
-    const code = stripped(readFileSync(join(GATEWAY_SRC_DIR, file), 'utf8'), 'ts')
-    assert.doesNotMatch(code, /window\s*\.\s*confirm/, file)
-    assert.doesNotMatch(code, /(^|[^.\w$])confirm\s*\(/m, file)
-  }
 })
 
 test('remove password: cancel performs nothing, confirm issues exactly one request (2026-09-11 upstream-alignment T2)', async t => {
@@ -596,6 +587,12 @@ test('mobile entry asset keeps serving', async t => {
     assert.equal(response.status, 200, path)
     assert.match(response.headers['content-type'] ?? '', type, path)
   }
+  // 2026-12 audit F2 (moved from boundary/chamber-assets.test.ts): the served
+  // mobile surface keeps its doctype, viewport meta and desktop escape hatch.
+  const mobileHtml = (await handle(host, 'GET', '/chamber/mobile.html')).chunks.join('')
+  assert.match(mobileHtml, /^<!doctype html>/, 'the mobile surface keeps its doctype')
+  assert.match(mobileHtml, /name="viewport"/, 'the mobile surface keeps its viewport meta')
+  assert.match(mobileHtml, /\/\?desktop=1/, 'the mobile escape hatch is preserved (dispatch.ts 4.5)')
   const notAllowed = await handle(host, 'POST', '/chamber/mobile.html')
   assert.equal(notAllowed.status, 405)
 })

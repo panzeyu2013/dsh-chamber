@@ -1,6 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createPurgeTracker } from '../../src/shared/purged-tracker.ts'
+import { createPurgedConvergence } from '../../src/shared/purged-convergence.ts'
 
 const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve))
 
@@ -225,3 +226,149 @@ test('tracker: suppressed() returns a copy the caller cannot mutate', () => {
   view.clear()
   assert.deepEqual([...t.handle.suppressed()], ['g'])
 })
+
+// =====================================================================
+// Convergence-chain fences (consolidated from purged-convergence.test.ts):
+// the fail-closed race/watchdog regressions from the 2026-09 scans. The
+// tracker's own chain tests above cover the public path; these drive
+// createPurgedConvergence directly because the fences are invisible through
+// the tracker (late settles, per-probe watchdogs, in-flight suppression).
+// =====================================================================
+
+/** Deterministic per-handle clock: timers run only when the test drains the OLDEST one. */
+function chainClock() {
+  let nextId = 1
+  const timers = new Map<number, { run: () => void; ms: number }>()
+  return {
+    schedule: (run: () => void, ms: number): number => { const id = nextId++; timers.set(id, { run, ms }); return id },
+    cancel: (id: unknown): void => { timers.delete(id as number) },
+    get pending(): number { return timers.size },
+    async drainOldest(): Promise<number> {
+      const entry = [...timers.entries()][0]
+      if (entry === undefined) throw new Error('no pending timer')
+      timers.delete(entry[0])
+      entry[1].run()
+      await Promise.resolve()
+      await Promise.resolve()
+      return entry[1].ms
+    },
+  }
+}
+
+/** A convergence chain over inert defaults (the configs these fence tests do not set). */
+function chainOf(overrides: Partial<Parameters<typeof createPurgedConvergence>[0]> = {}) {
+  return createPurgedConvergence({ refresh: () => Promise.resolve(), lingering: () => [], warn: () => {}, ...overrides })
+}
+
+test('chain fence: a hung refresh is bounded by the per-attempt watchdog and gives up honestly', async () => {
+  const clock = chainClock()
+  const warns: string[] = []
+  let calls = 0
+  const chain = chainOf({
+    refresh: () => { calls += 1; return new Promise<never>(() => {}) },
+    lingering: () => ['g'], warn: (message) => { warns.push(message) },
+    schedule: clock.schedule, cancel: clock.cancel, maxAttempts: 2, retryMs: 10, attemptTimeoutMs: 5,
+  })
+  chain.converge()
+  await flush()
+  assert.equal(await clock.drainOldest(), 5)   // attempt-1 watchdog -> retry
+  await flush()
+  assert.equal(await clock.drainOldest(), 10)  // retry timer -> attempt 2
+  await flush()
+  assert.equal(await clock.drainOldest(), 5)   // attempt-2 watchdog -> terminal give-up
+  await flush()
+  assert.equal(calls, 2)
+  assert.match(warns[0] ?? '', /no authoritative answer/)
+  assert.equal(chain.active(), false)
+})
+
+test('chain fence: a late settle of a timed-out attempt cannot terminate a later attempt', async () => {
+  const clock = chainClock()
+  const warns: string[] = []
+  let resolveFirst: (() => void) | undefined
+  let calls = 0
+  const chain = chainOf({
+    refresh: () => {
+      calls += 1
+      if (calls === 1) return new Promise<void>((resolve) => { resolveFirst = resolve })
+      return new Promise<never>(() => {})
+    },
+    lingering: () => ['g'], warn: (message) => { warns.push(message) },
+    schedule: clock.schedule, cancel: clock.cancel, maxAttempts: 3, retryMs: 10, attemptTimeoutMs: 5,
+  })
+  chain.converge()
+  await flush()
+  assert.equal(await clock.drainOldest(), 5)
+  await flush()
+  assert.equal(await clock.drainOldest(), 10)
+  await flush()
+  assert.equal(calls, 2)
+  resolveFirst?.()
+  await flush()
+  assert.equal(chain.active(), true, 'attempt 2 is still in flight; the late settle must be ignored')
+  assert.equal(await clock.drainOldest(), 5)
+  await flush()
+  assert.equal(await clock.drainOldest(), 10)
+  await flush()
+  assert.equal(await clock.drainOldest(), 5)
+  await flush()
+  assert.equal(chain.active(), false)
+  assert.equal(warns.length, 1)
+})
+
+test('chain fence: a probe that outlives its watchdog cannot cancel a LATER probe\'s watchdog', async () => {
+  const clock = chainClock()
+  const resolvers: Array<(present: ReadonlySet<string>) => void> = []
+  let probeCalls = 0
+  const chain = chainOf({
+    refresh: () => new Promise<never>(() => {}), lingering: () => ['g'],
+    probe: () => { probeCalls += 1; return new Promise<ReadonlySet<string>>((resolve) => { resolvers.push(resolve) }) },
+    schedule: clock.schedule, cancel: clock.cancel, maxAttempts: 1, retryMs: 10, attemptTimeoutMs: 5,
+  })
+  chain.converge()
+  await flush()
+  assert.equal(await clock.drainOldest(), 5)   // attempt watchdog -> verify -> probe #1
+  await flush()
+  assert.equal(probeCalls, 1)
+  assert.equal(await clock.drainOldest(), 5)   // probe #1 watchdog -> finish
+  await flush()
+  assert.equal(chain.active(), false)
+  chain.converge()
+  await flush()
+  assert.equal(await clock.drainOldest(), 5)   // new attempt watchdog -> probe #2
+  await flush()
+  assert.equal(probeCalls, 2)
+  resolvers[0]?.(new Set())
+  await flush()
+  assert.equal(chain.active(), true, 'late probe #1 may only clear its own handle')
+  assert.equal(await clock.drainOldest(), 5)   // probe #2 watchdog still armed
+  await flush()
+  assert.equal(chain.active(), false)
+})
+
+test('chain fence: a tombstone armed while the probe is in flight is NOT released', async () => {
+  let lingeringNow = ['g1']
+  let resolveProbe: ((present: ReadonlySet<string>) => void) | undefined
+  const releases: string[][] = []
+  const chain = chainOf({
+    lingering: () => lingeringNow,
+    probe: () => new Promise<ReadonlySet<string>>((resolve) => { resolveProbe = resolve }),
+    release: (ids) => { releases.push([...ids]) }, maxAttempts: 1, attemptTimeoutMs: 0,
+  })
+  chain.converge()
+  await flush()
+  lingeringNow = ['g1', 'g2']
+  resolveProbe?.(new Set(['g2']))
+  await flush()
+  assert.deepEqual(releases, [], 'the release decision uses the suppression snapshot taken when the probe STARTED')
+  assert.equal(chain.active(), false)
+})
+
+test('chain fence: converge() after dispose is inert', () => {
+  let calls = 0
+  const chain = chainOf({ refresh: () => { calls += 1; return Promise.resolve() } })
+  chain.dispose()
+  chain.converge()
+  assert.equal(calls, 0)
+})
+

@@ -726,12 +726,3 @@ test('authenticated non-POST requests to the change routes answer 405 allow: POS
   } finally { cleanup() }
 })
 
-test('HEAD /auth/login is the no-body twin of GET', async () => {
-  const { auth, cleanup } = realAuth({ config: { kind: 'password', password: PASSWORD } })
-  try {
-    const { dispatch } = setup(auth)
-    const head = await runHttp(dispatch, gatewayRequest('HEAD', '/auth/login', { accept: 'text/html' }))
-    assert.equal(head.status, 200)
-    assert.equal(head.body, '', 'HEAD carries no login-page body')
-  } finally { cleanup() }
-})

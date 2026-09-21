@@ -50,18 +50,6 @@ test('the App projects the mode onto every aggregate entry, after the entry lite
   assert.ok(entryLiteral > 0 && assignment > entryLiteral, 'assignment must come after the entry literal')
 })
 
-test('mixed versions across sources stay per-source (no cross-source bleed)', () => {
-  // 同一次运行里两个来源可以处于不同能力档：新网关(full) + 旧网关(legacy) + 无快照(未知)。
-  const legacy = snapshot({ verdict: 'legacy-gateway', degradation: 'legacy-gateway', mode: null, serviceable: false })
-  const full = snapshot()
-  const modes = {
-    'gateway-new': sourceSessionFactsMode(full),
-    'gateway-old': sourceSessionFactsMode(legacy),
-    'ssh-1': sourceSessionFactsMode(undefined),
-  }
-  assert.deepEqual(modes, { 'gateway-new': 'full', 'gateway-old': 'legacy', 'ssh-1': undefined })
-})
-
 test('the two packages agree on the mode vocabulary (cross-package lock)', () => {
   const sidebarUnion = (SIDEBAR.match(/export type SourceSessionFactsMode = ([^\n]+)/) ?? [])[1] ?? ''
   const rendererUnion = readFileSync(

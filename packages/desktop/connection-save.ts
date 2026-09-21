@@ -408,16 +408,6 @@ function runDeleteConnectionsTransaction(
   }
 }
 
-/** Compatibility helper for pure tests/older main wiring. Production uses
- * deleteConnectionTransaction's exact id operation; retained-set deletion is
- * never exposed to the renderer. */
-export function deleteConnectionsTransaction(
-  deps: DeleteConnectionsTransactionDeps,
-  retained: TransportInstanceSpec[],
-): DeleteConnectionsTransactionResult {
-  return runDeleteConnectionsTransaction(deps, deps.listInstances(), retained)
-}
-
 /** Exact, linearized-by-main-event-loop delete. A stale renderer supplies
  * only the id it intends to remove; the CURRENT authoritative roster is read
  * once here. If another actor already removed that id, the operation is an

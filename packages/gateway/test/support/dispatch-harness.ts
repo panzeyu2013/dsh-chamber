@@ -13,6 +13,7 @@ import { parseGatewayConfig } from '../../src/config.ts'
 import { createGatewayDispatch } from '../../src/dispatch.ts'
 import { createGatewayRequestPolicy } from '../../src/middleware.ts'
 import { createGatewayStore, type GatewayStore } from '../../src/store.ts'
+import type { WarmupDeps } from '../../src/warmup.ts'
 import { FakeRequest, FakeResponse } from './utils.ts'
 
 export const silentLogger = { log() {}, warn() {}, error() {} }
@@ -25,6 +26,8 @@ export function setup(
   runtime: () => { handle(req: unknown, res: FakeResponse, pathname: string): Promise<boolean> } = () => ({ async handle() { return false } }),
   auditFile?: string,
   surface?: () => { handle(req: unknown, res: FakeResponse, pathname: string): Promise<boolean> },
+  /** Optional login-phase pre-warm deps (design 17 §10.6); null = not composed. */
+  warmup: WarmupDeps | null = null,
 ) {
   const config = parseGatewayConfig({
     host: '0.0.0.0',
@@ -46,7 +49,7 @@ export function setup(
     start() {},
     stop() {},
   }
-  const dispatch = createGatewayDispatch(auth, () => proxy as never, () => features as never, runtime as never, silentLogger, policy, auditFile)
+  const dispatch = createGatewayDispatch(auth, () => proxy as never, () => features as never, runtime as never, silentLogger, policy, auditFile, false, undefined, undefined, warmup)
   return { dispatch, get httpProxyCalls() { return httpProxyCalls }, get upgradeProxyCalls() { return upgradeProxyCalls } }
 }
 

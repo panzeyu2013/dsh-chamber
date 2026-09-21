@@ -166,63 +166,49 @@ test('terminal operation ids expire after the bounded replay TTL', async () => {
   assert.equal(reused.replayed, false)
 })
 
-test('operation capacity evicts the oldest safe pre-admission record instead of wedging new work', async () => {
+test('operation capacity evicts only safe pre-admission records and retains tombstones', async () => {
+  // The oldest safe pre-admission record is evicted instead of wedging new work.
   const operationCapacity = 4
-  const { core, advanceTime } = setup({ operationCapacity })
+  const evict = setup({ operationCapacity })
   const zeros = '0'.repeat(64)
-  const expected = {
-    repoId: `repo_${zeros}`,
-    worktreeId: `worktree_${zeros}`,
-    branch: 'main',
-    head: MAIN_HEAD,
-  }
+  const expected = { repoId: `repo_${zeros}`, worktreeId: `worktree_${zeros}`, branch: 'main', head: MAIN_HEAD }
   for (let index = 0; index <= operationCapacity; index += 1) {
     await assert.rejects(
-      core.remove({
-        operationId: `capacity-${index}`,
-        workspaceId: `missing-${index}`,
-        expected,
-      }),
+      evict.core.remove({ operationId: `capacity-${index}`, workspaceId: `missing-${index}`, expected }),
       error => error instanceof GitWorktreeError && error.code === 'workspace/not-found',
     )
-    advanceTime(1)
+    evict.advanceTime(1)
   }
   await assert.rejects(
-    core.remove({
-      operationId: 'capacity-0',
-      workspaceId: 'reused-after-eviction',
-      expected,
-    }),
+    evict.core.remove({ operationId: 'capacity-0', workspaceId: 'reused-after-eviction', expected }),
     error => error instanceof GitWorktreeError && error.code === 'workspace/not-found',
   )
-})
 
-test('capacity never evicts an uncertain mutation tombstone before TTL', async () => {
-  const { core, repo } = setup({ linked: true, operationCapacity: 1 })
-  const { expected } = await targetOf(core)
-  repo.throwBeforeRemove = new GitWorktreeError('git-timeout', 'simulated pre-commit timeout')
+  // An uncertain tombstone is never evicted before its TTL.
+  const uncertain = setup({ linked: true, operationCapacity: 1 })
+  const uncertainTarget = await targetOf(uncertain.core)
+  uncertain.repo.throwBeforeRemove = new GitWorktreeError('git-timeout', 'simulated pre-commit timeout')
   await assert.rejects(
-    core.remove({ operationId: 'retained-uncertain', workspaceId: 'ws-feature', expected }),
+    uncertain.core.remove({ operationId: 'retained-uncertain', workspaceId: 'ws-feature', expected: uncertainTarget.expected }),
     error => error instanceof GitWorktreeError && error.code === 'git-timeout',
   )
   await assert.rejects(
-    core.remove({ operationId: 'must-fail-closed', workspaceId: 'ws-feature', expected }),
+    uncertain.core.remove({ operationId: 'must-fail-closed', workspaceId: 'ws-feature', expected: uncertainTarget.expected }),
     error => error instanceof GitWorktreeError && error.code === 'operation-capacity',
   )
-  assert.equal(mutationCalls(repo, 'remove').length, 1)
-})
+  assert.equal(mutationCalls(uncertain.repo, 'remove').length, 1)
 
-test('capacity retains a completed remove tombstone against same-identity ABA', async () => {
-  const { core, repo } = setup({ linked: true, operationCapacity: 1 })
-  const { expected } = await targetOf(core)
-  await core.remove({ operationId: 'retained-removed', workspaceId: 'ws-feature', expected })
-  repo.addLinked()
+  // A completed remove tombstone is retained against same-identity ABA.
+  const aba = setup({ linked: true, operationCapacity: 1 })
+  const abaTarget = await targetOf(aba.core)
+  await aba.core.remove({ operationId: 'retained-removed', workspaceId: 'ws-feature', expected: abaTarget.expected })
+  aba.repo.addLinked()
   await assert.rejects(
-    core.remove({ operationId: 'aba-remove', workspaceId: 'ws-feature', expected }),
+    aba.core.remove({ operationId: 'aba-remove', workspaceId: 'ws-feature', expected: abaTarget.expected }),
     error => error instanceof GitWorktreeError && error.code === 'operation-capacity',
   )
-  assert.equal(mutationCalls(repo, 'remove').length, 1)
-  assert.equal(repo.worktrees.some(worktree => worktree.path === LINKED), true)
+  assert.equal(mutationCalls(aba.repo, 'remove').length, 1)
+  assert.equal(aba.repo.worktrees.some(worktree => worktree.path === LINKED), true)
 })
 
 test('rollback is operation-bound, refuses a workspace, then removes clean without force', async () => {
@@ -230,6 +216,14 @@ test('rollback is operation-bound, refuses a workspace, then removes clean witho
   const preview = await previewNew(core)
   const created = await core.create({ previewToken: preview.previewToken, operationId: 'rollback-1' })
   workspaces.push({ workspaceId: 'ws-new', path: created.path, sessionIds: [] })
+  await assert.rejects(
+    core.rollbackCreate({ operationId: 'rollback-1' }),
+    error => error instanceof GitWorktreeError && error.code === 'rollback-has-workspace',
+  )
+  workspaces.pop()
+  // A symlink ALIAS of the created path canonicalizes to the same owner.
+  repo.aliases.set('/aliases/created', created.path)
+  workspaces.push({ workspaceId: 'ws-alias', path: '/aliases/created', sessionIds: [] })
   await assert.rejects(
     core.rollbackCreate({ operationId: 'rollback-1' }),
     error => error instanceof GitWorktreeError && error.code === 'rollback-has-workspace',
@@ -245,7 +239,7 @@ test('rollback is operation-bound, refuses a workspace, then removes clean witho
   assert.equal(mutationCalls(repo, 'remove').length, 1)
 })
 
-test('rollback reconciles authoritative absence after its postcondition read fails', async () => {
+test('rollback reconciles authoritative absence after a failed postcondition read or an external deletion', async () => {
   const { core, repo } = setup()
   const preview = await previewNew(core)
   const created = await core.create({ previewToken: preview.previewToken, operationId: 'rollback-reconcile' })
@@ -256,54 +250,46 @@ test('rollback reconciles authoritative absence after its postcondition read fai
   assert.equal(reconciled.removed, true)
   assert.equal(reconciled.replayed, true)
   assert.equal(mutationCalls(repo, 'remove').length, 1)
+
+  // External `rm -rf` (directory only, admin record survives): the rollback keeps
+  // every identity guard, skips the impossible dirty probe and clears the record
+  // with a plain remove — never --force.
+  const vanished = setup()
+  const vanishedPreview = await previewNew(vanished.core)
+  const vanishedCreated = await vanished.core.create({ previewToken: vanishedPreview.previewToken, operationId: 'rollback-vanished' })
+  vanished.repo.existing.delete(vanishedCreated.path)
+  const rolledBack = await vanished.core.rollbackCreate({ operationId: 'rollback-vanished' })
+  assert.equal(rolledBack.removed, true)
+  assert.equal(rolledBack.path, vanishedCreated.path)
+  assert.equal(rolledBack.branchPreserved, true)
+  assert.equal(vanished.repo.worktrees.some(worktree => worktree.path === vanishedCreated.path), false)
+  assert.equal(vanished.repo.branches.has('topic'), true)
+  assert.deepEqual(mutationCalls(vanished.repo, 'remove')[0]!.args, ['worktree', 'remove', '--', vanishedCreated.path])
+  const replay = await vanished.core.rollbackCreate({ operationId: 'rollback-vanished' })
+  assert.equal(replay.replayed, true)
+  assert.equal(mutationCalls(vanished.repo, 'remove').length, 1)
 })
 
-test('rollback refuses dirty operation-created worktrees', async () => {
+test('rollback refuses dirty operation-created worktrees and clean ones whose HEAD changed', async () => {
   const { core, repo } = setup()
   const preview = await previewNew(core)
-  const created = await core.create({ previewToken: preview.previewToken, operationId: 'dirty-rollback' })
-  repo.worktrees.find(worktree => worktree.path === created.path)!.dirty = true
+  const created = await core.create({ previewToken: preview.previewToken, operationId: 'guard-rollback' })
+  const row = (): { dirty?: boolean; head: string } => repo.worktrees.find(worktree => worktree.path === created.path)!
+  row().dirty = true
   await assert.rejects(
-    core.rollbackCreate({ operationId: 'dirty-rollback' }),
+    core.rollbackCreate({ operationId: 'guard-rollback' }),
     error => error instanceof GitWorktreeError && error.code === 'worktree-dirty',
   )
-  assert.equal(mutationCalls(repo, 'remove').length, 0)
-})
-
-test('rollback of an externally deleted created worktree converges by clearing the leftover record', async () => {
-  const { core, repo } = setup()
-  const preview = await previewNew(core)
-  const created = await core.create({ previewToken: preview.previewToken, operationId: 'rollback-vanished' })
-  // An external actor deleted the DIRECTORY only; the admin record survives
-  // (the same leftover-record shape as the 2026-09 missing-row report). The
-  // rollback keeps every identity guard but skips the impossible dirty probe
-  // and converges by clearing the record — a plain remove, never --force.
-  repo.existing.delete(created.path)
-  const rolledBack = await core.rollbackCreate({ operationId: 'rollback-vanished' })
-  assert.equal(rolledBack.removed, true)
-  assert.equal(rolledBack.path, created.path)
-  assert.equal(rolledBack.branchPreserved, true)
-  assert.equal(repo.worktrees.some(worktree => worktree.path === created.path), false)
-  assert.equal(repo.branches.has('topic'), true)
-  assert.deepEqual(mutationCalls(repo, 'remove')[0]!.args, ['worktree', 'remove', '--', created.path])
-  const replay = await core.rollbackCreate({ operationId: 'rollback-vanished' })
-  assert.equal(replay.removed, true)
-  assert.equal(replay.replayed, true)
-  assert.equal(mutationCalls(repo, 'remove').length, 1)
-})
-
-test('rollback refuses clean worktrees whose HEAD changed after creation', async () => {
-  const { core, repo } = setup()
-  const preview = await previewNew(core)
-  const created = await core.create({ previewToken: preview.previewToken, operationId: 'head-rollback' })
-  repo.worktrees.find(worktree => worktree.path === created.path)!.head =
-    '4444444444444444444444444444444444444444'
+  row().dirty = false
+  row().head = '4444444444444444444444444444444444444444'
   await assert.rejects(
-    core.rollbackCreate({ operationId: 'head-rollback' }),
+    core.rollbackCreate({ operationId: 'guard-rollback' }),
     error => error instanceof GitWorktreeError && error.code === 'worktree-changed',
   )
   assert.equal(mutationCalls(repo, 'remove').length, 0)
 })
+
+
 
 test('rollback repeats Git identity checks after the final registry and agent scan', async () => {
   const { core, repo, setSourceReadHook } = setup()
@@ -324,15 +310,3 @@ test('rollback repeats Git identity checks after the final registry and agent sc
   assert.equal(mutationCalls(repo, 'remove').length, 0)
 })
 
-test('rollback canonicalizes workspace paths and catches a symlink alias', async () => {
-  const { core, repo, workspaces } = setup()
-  const preview = await previewNew(core)
-  const created = await core.create({ previewToken: preview.previewToken, operationId: 'alias-rollback' })
-  repo.aliases.set('/aliases/created', created.path)
-  workspaces.push({ workspaceId: 'ws-alias', path: '/aliases/created', sessionIds: [] })
-  await assert.rejects(
-    core.rollbackCreate({ operationId: 'alias-rollback' }),
-    error => error instanceof GitWorktreeError && error.code === 'rollback-has-workspace',
-  )
-  assert.equal(mutationCalls(repo, 'remove').length, 0)
-})

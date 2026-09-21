@@ -70,7 +70,7 @@ import { setGatewaySyncRegistration } from './gateway-sync-registry.ts';
 import { createGatewaySessionManager, gatewayRegistrationAuthHeaders, gatewaySessionScopeForConnection } from './gateway-session.ts';
 import { createGatewaySessionRefresh, gatewaySessionOriginForUrl, gatewayTunnelAuthority } from './gateway-session-refresh.ts';
 import type { GatewaySessionRefresh } from './gateway-session-refresh.ts';
-import { appendAuditEvent, configureAuditLog, type AuditEvent } from './audit-log.ts';
+import { appendAuditEvent, type AuditEvent } from './audit-log.ts';
 import type { GatewayRegistrationAuthProof, GatewaySessionManager } from './gateway-session.ts';
 import { createTrustedIpc, isChamberPermissionGranted, isExternalLinkUrl, isTrustedIpcSender, isTrustedRendererUrl } from './renderer-trust.ts';
 import { createControlPlane } from './control-plane-module.ts';
@@ -1492,8 +1492,6 @@ if (!gotTheLock) {
     // whitelist, and the callers below pass existence markers (token|password|
     // none) and phases, never values (S24).
     const auditLogPath = auditLogFilePath(app.getPath('userData'));
-    const auditLogNotice = configureAuditLog(auditLogPath);
-    if (auditLogNotice !== null) console.error(`[dsh-chamber] audit log: ${auditLogNotice}`);
     const audit = (event: AuditEvent) => appendAuditEvent({ file: auditLogPath }, event);
     transportManager = createTransportManager({
       provider: sshProvider,

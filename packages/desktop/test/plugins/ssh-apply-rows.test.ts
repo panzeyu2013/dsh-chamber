@@ -190,13 +190,6 @@ test('undo decision: undoing an ok remove re-adds the previous REGISTRY spec (na
     assert.deepEqual(decision.info, { name: 'pkg-a', kind: 'remove', spec: 'pkg-a@^1.2.3', masked: false })
   }
 })
-test('undo decision: undoing an ok remove of a scoped plugin composes the scoped spec', () => {
-  const decision = buildSshUndoDecision(op({ kind: 'remove', name: '@scope/pkg-b', specBefore: '2.0.0' }))
-  assert.equal(decision.ok, true)
-  if (decision.ok) {
-    assert.deepEqual(decision.action, { kind: 'add', spec: '@scope/pkg-b@2.0.0' })
-  }
-})
 test('undo decision: a removed file:-backed spec is unavailable (file-backed) and never projected', () => {
   const decision = buildSshUndoDecision(op({ kind: 'remove', name: 'mat-pkg', specBefore: 'file:/root/.dsh-chamber/plugins/mat-pkg-abc.tgz' }))
   assert.equal(decision.ok, false)

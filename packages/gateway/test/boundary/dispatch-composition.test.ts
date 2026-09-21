@@ -8,9 +8,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
-import type { ApiRequest, ApiResponse } from '@dsh-chamber/control-plane'
+import type { ApiRequest } from '@dsh-chamber/control-plane'
 import { type AuthProvider } from '../../src/auth.ts'
-import { FakeRequest, FakeResponse, gatewayRequest } from '../support/utils.ts'
+import { renderBoundaryErrorPage } from '../../src/login-page.ts'
+import { FakeRequest, gatewayRequest } from '../support/utils.ts'
 import { TOKEN, setup, realAuth, readAudit, runHttp } from '../support/dispatch-harness.ts'
 
 test('login page has a self form-action and accepts its form-urlencoded body', async () => {
@@ -32,39 +33,7 @@ test('login page has a self form-action and accepts its form-urlencoded body', a
   assert.equal(post.headers.location, '/')
 })
 
-test('oversized public login bodies enter drain-only mode and never reach auth', async () => {
-  let loginCalls = 0
-  const auth: AuthProvider = {
-    kind: 'password',
-    async verify() { return null },
-    async login() { loginCalls += 1; return {} },
-  }
-  const { dispatch } = setup(auth)
-  const req = gatewayRequest('POST', '/auth/login', { 'content-type': 'application/json' })
-  const res = new FakeResponse()
-  const pending = dispatch.middleware(
-    req as unknown as ApiRequest,
-    res as unknown as ApiResponse,
-    new URL(req.url, 'http://localhost'),
-    {} as never,
-  )
-  queueMicrotask(() => {
-    req.emit('data', Buffer.alloc(16 * 1024))
-    req.emit('data', Buffer.from('x'))
-    const poison = Object.defineProperty({}, 'length', {
-      get() { throw new Error('post-limit chunk was inspected') },
-    })
-    req.emit('data', poison)
-    req.emit('end')
-  })
-  await pending
-  assert.equal(res.status, 413)
-  assert.equal(JSON.parse(res.body).code, 'body_too_large')
-  assert.equal(req.destroyed, true, 'the oversized body destroys the request socket after the 413 is written')
-  assert.equal(loginCalls, 0)
-})
-
-test('login method exposure is narrow and unauthenticated document navigation reaches it', async () => {
+test('unauthenticated document navigation reaches /auth/login while API, health and asset paths 401', async () => {
   let verifyCalls = 0
   const auth: AuthProvider = {
     kind: 'password',
@@ -72,11 +41,6 @@ test('login method exposure is narrow and unauthenticated document navigation re
     async login() { return {} },
   }
   const { dispatch } = setup(auth)
-
-  const unsupported = await runHttp(dispatch, gatewayRequest('PUT', '/auth/login'))
-  assert.equal(unsupported.status, 405)
-  assert.equal(unsupported.headers.allow, 'GET, HEAD, POST')
-  assert.equal(verifyCalls, 0)
 
   const navigation = await runHttp(dispatch, gatewayRequest('GET', '/', { accept: 'text/html,application/xhtml+xml' }))
   assert.equal(navigation.status, 302)
@@ -91,17 +55,6 @@ test('login method exposure is narrow and unauthenticated document navigation re
   const asset = await runHttp(dispatch, gatewayRequest('GET', '/assets/app.js', { accept: '*/*' }))
   assert.equal(asset.status, 401)
   assert.equal(verifyCalls, 4)
-})
-
-test('gateway claims Authorization preflight before auth on every route family', async () => {
-  let verifyCalls = 0
-  const auth: AuthProvider = { kind: 'token', async verify() { verifyCalls += 1; return null } }
-  const { dispatch } = setup(auth)
-  const res = await runHttp(dispatch, gatewayRequest('OPTIONS', '/chamber/settings', { origin: 'capacitor://localhost' }))
-  assert.equal(res.status, 204)
-  assert.match(String(res.headers['access-control-allow-headers']), /authorization/)
-  assert.equal(res.headers['access-control-allow-origin'], 'capacitor://localhost')
-  assert.equal(verifyCalls, 0)
 })
 
 test('a forbidden external origin is rejected before auth or dsh proxying', async () => {
@@ -169,6 +122,26 @@ test('a host-rejected browser GET renders the 421 page with the offending Host',
   assert.match(String(res.headers['content-type']), /^text\/html/)
 })
 
+test('echoed boundary values are HTML-escaped and over-long values are capped', () => {
+  // Moved from auth/login-page.test.ts (2026-12 trim): hostile or unbounded
+  // request values can only ever reach the rendered page as text.
+  const hostile = 'http://evil.example/<img src=x onerror=alert(1)>&"\u0027'
+  const escaped = renderBoundaryErrorPage({
+    lang: 'en', status: 403, code: 'origin_forbidden', reasonKind: 'origin_invalid', origin: hostile,
+  })
+  assert.ok(!escaped.includes('<img src=x'), 'a hostile value must not reach the output as markup')
+  assert.ok(escaped.includes('&lt;img'))
+  assert.ok(escaped.includes('&amp;'), 'ampersands are escaped')
+  assert.ok(escaped.includes('&quot;') && escaped.includes('&#39;'), 'quotes are escaped')
+
+  const long = 'http://evil.example/' + 'x'.repeat(500)
+  const capped = renderBoundaryErrorPage({
+    lang: 'en', status: 403, code: 'origin_forbidden', reasonKind: 'origin_invalid', origin: long,
+  })
+  assert.ok(!capped.includes('x'.repeat(500)))
+  assert.ok(capped.includes('…'))
+})
+
 test('WS applies the same Host policy before auth and proxies an allowed authenticated stream', async () => {
   let verifyCalls = 0
   const auth: AuthProvider = {
@@ -191,21 +164,6 @@ test('WS applies the same Host policy before auth and proxies an allowed authent
   await state.dispatch.upgradeMiddleware(gatewayRequest('GET', '/api/remote.mux', { origin: 'http://gateway.example:3000', authorization: 'Bearer secret' }) as unknown as ApiRequest, goodSocket as never, Buffer.alloc(0), {} as never)
   assert.equal(verifyCalls, 1)
   assert.equal(state.upgradeProxyCalls, 1)
-})
-
-test('WS rejects backslash authority request targets before routing or auth', async () => {
-  let verifyCalls = 0
-  const auth: AuthProvider = {
-    kind: 'token',
-    async verify() { verifyCalls += 1; return { kind: 'token', id: 'x', issuedAt: 0 } },
-  }
-  const state = setup(auth)
-  let rejection = ''
-  const socket = { end(value: string) { rejection = value }, destroy() {} }
-  await state.dispatch.upgradeMiddleware(gatewayRequest('GET', '/\\\\attacker.example/api/remote.mux', { authorization: 'Bearer secret' }) as unknown as ApiRequest, socket as never, Buffer.alloc(0), {} as never)
-  assert.match(rejection, /400 Bad Request/)
-  assert.equal(verifyCalls, 0)
-  assert.equal(state.upgradeProxyCalls, 0)
 })
 
 test('WS auth-boundary rejections are audited as auth_rejected (401/421/400) without the refused credential', async () => {

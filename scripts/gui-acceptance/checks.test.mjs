@@ -33,10 +33,8 @@ import {
   nativeSidecarArgs,
   nativeSidecarEnv,
   resolveNativeSidecarDir,
-  resolveNodeBinary,
   runNativeAcceptance,
 } from './native.mjs'
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const SHELL_HTML = `<!doctype html><html lang="zh-CN"><head><title>dsh-chamber</title>
 <script type="module" crossorigin src="/assets/chamber-abc.js"></script>
 <link rel="stylesheet" href="/assets/chamber-def.css"></head><body><div id="root"></div></body></html>`
@@ -907,25 +905,13 @@ test('native sidecar preflight: a missing or partial assembly is a named loud sk
   }
 })
 
-test('native launch contract: throwaway user data + explicit port + compiled marker + node preference', () => {
+// 装配解析器（resolveNativeSidecarDir / resolveNodeBinary）的行为与覆盖语义
+// 由 scripts/gates/run-checks.test.mjs 对同一 scripts/lib/sidecar-assembly.mjs 单测。
+test('native launch contract: throwaway user data + explicit port + compiled marker', () => {
   assert.deepEqual(nativeSidecarArgs({ userDataDir: '/tmp/u', port: 12345 }), ['--user-data-dir', '/tmp/u', '--port', '12345'])
   const env = nativeSidecarEnv({ KEEP: '1' })
   assert.equal(env.DSH_CHAMBER_SIDECAR_COMPILED, '1', 'the assembly-relative control-plane import requires the compiled marker')
   assert.equal(env.KEEP, '1', 'the base environment is preserved')
-  const dir = mkdtempSync(path.join(tmpdir(), 'dsh-native-node-'))
-  try {
-    assert.equal(resolveNodeBinary(dir, '/usr/bin/node'), '/usr/bin/node', 'no bundled node → the running node')
-    writeFileSync(path.join(dir, 'node'), '#!/bin/sh\n')
-    assert.equal(resolveNodeBinary(dir, '/usr/bin/node'), path.join(dir, 'node'), 'the assembly bundled node wins')
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
-})
-
-test('native sidecar dir resolver honors the environment override', () => {
-  assert.equal(resolveNativeSidecarDir({}, '/repo'), path.join(REPO_ROOT, 'packages', 'desktop', 'release', 'sidecar'))
-  assert.equal(resolveNativeSidecarDir({ DSH_CHAMBER_SIDECAR_DIR: '/tmp/assembly' }, '/repo'), '/tmp/assembly')
-  assert.equal(resolveNativeSidecarDir({ DSH_CHAMBER_SIDECAR_DIR: 'rel/assembly' }, '/repo'), path.resolve('/repo', 'rel/assembly'))
 })
 
 test('native mode skips LOUDLY (not silently) when the assembly is absent, and writes a report', async () => {

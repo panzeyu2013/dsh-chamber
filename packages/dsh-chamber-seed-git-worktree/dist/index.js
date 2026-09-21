@@ -52,7 +52,7 @@ import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 
 // src/core.ts
 import { createHash as createHash2, randomUUID } from "node:crypto";
-import { basename, isAbsolute as isAbsolute4, join as join2, relative, resolve as resolve3, sep } from "node:path";
+import { basename, isAbsolute as isAbsolute4, join as join2, relative, resolve as resolve4, sep as sep2 } from "node:path";
 
 // src/core-constants.ts
 var READ_TIMEOUT_MS = 1e4;
@@ -142,9 +142,9 @@ function parseBranchLine(line) {
     if (aheadMatch !== null) ahead = Number(aheadMatch[1]);
     if (behindMatch !== null) behind = Number(behindMatch[1]);
   }
-  const sep2 = namePart.indexOf("...");
+  const sep3 = namePart.indexOf("...");
   return {
-    upstream: sep2 >= 0 ? namePart.slice(sep2 + 3) || null : null,
+    upstream: sep3 >= 0 ? namePart.slice(sep3 + 3) || null : null,
     ahead,
     behind
   };
@@ -560,6 +560,432 @@ function createLocalGitRunner(spawnGit = spawn) {
   });
 }
 
+// src/core-ops-create.ts
+import { resolve as resolve3, sep } from "node:path";
+function createWorktreeCreateOps(deps) {
+  async function previewCreate(untrusted) {
+    const input = parsePreviewInput(untrusted);
+    const initial = await deps.readSource();
+    const initialWorkspace = deps.workspace(initial, input.sourceWorkspaceId);
+    const discovered = await deps.discover(initialWorkspace.path);
+    return await deps.mutex.run(discovered.commonDir, async () => {
+      const state = await deps.readSource();
+      const workspace = deps.workspace(state, input.sourceWorkspaceId);
+      const topology = await deps.topology(workspace.path);
+      if (topology.commonDir !== discovered.commonDir) {
+        fail("repository-changed", "the source workspace changed repositories during preview");
+      }
+      const main = topology.worktrees[0];
+      if (main.bare) fail("bare-repository", "bare repositories cannot own linked worktrees");
+      const targetRoot = deps.worktreeRootFor(topology.mainPath, topology.commonDir);
+      const targetPath = resolve3(targetRoot, input.basename);
+      if (!targetPath.startsWith(`${targetRoot}${sep}`)) fail("unsafe-path", "target escaped the unified worktree root");
+      await deps.assertPathAbsent(targetPath);
+      await deps.assertBranchFormat(topology.mainPath, input.branch.name);
+      const branchHead = await deps.localBranchHead(topology.mainPath, input.branch.name);
+      let startHead;
+      if (input.branch.kind === "existing") {
+        if (branchHead === null) fail("branch-not-found", `local branch '${input.branch.name}' does not exist`);
+        if (topology.worktrees.some((worktree) => worktree.branch === input.branch.name)) {
+          fail("branch-checked-out", `local branch '${input.branch.name}' is already checked out`);
+        }
+        startHead = branchHead;
+      } else {
+        if (branchHead !== null) fail("branch-exists", `local branch '${input.branch.name}' already exists`);
+        if (input.startRef !== void 0) {
+          const startHeadOf = await deps.localBranchHead(topology.mainPath, input.startRef);
+          if (startHeadOf === null) fail("branch-not-found", `source branch '${input.startRef}' does not exist`);
+          startHead = startHeadOf;
+        } else {
+          startHead = main.head;
+        }
+      }
+      deps.pruneCaches();
+      if (deps.previews.size >= MAX_PREVIEWS) fail("preview-capacity", "too many live worktree previews");
+      const token = ops.uniquePreviewToken();
+      const createdAt = deps.now();
+      const preview = {
+        previewToken: token,
+        expiresAt: createdAt + PREVIEW_TTL_MS,
+        repoId: opaqueId("repo", topology.commonDir),
+        commonDir: topology.commonDir,
+        mainPath: topology.mainPath,
+        targetPath,
+        branch: input.branch.name,
+        branchMode: input.branch.kind,
+        baseHead: startHead,
+        startRef: input.branch.kind === "new" ? input.startRef : void 0,
+        sourceWorkspaceId: input.sourceWorkspaceId,
+        basename: input.basename,
+        createdAt
+      };
+      deps.previews.set(token, preview);
+      return ops.publicPreview(preview);
+    });
+  }
+  async function create(untrusted) {
+    const input = parseCreateInput(untrusted);
+    deps.clearDiscoveryCaches();
+    deps.pruneCaches();
+    const existing = deps.createOperations.get(input.operationId);
+    let preview;
+    if (existing !== void 0) {
+      if (existing.previewToken !== input.previewToken) {
+        fail("operation-conflict", "operationId is already bound to another preview");
+      }
+      preview = existing.preview;
+      if (existing.state === "creating") {
+        const result = await existing.createPromise;
+        return { ...result, replayed: true };
+      }
+      if (existing.state === "created") return await ops.verifyCreatedReplay(existing);
+      if (existing.state === "rolling-back" || existing.state === "rollback-uncertain" || existing.state === "rolled-back") {
+        fail("operation-rolled-back", "the create operation has already been rolled back");
+      }
+    } else {
+      const candidate = deps.previews.get(input.previewToken);
+      if (candidate === void 0) fail("preview-not-found", "preview token is unknown or expired");
+      if (candidate.expiresAt <= deps.now()) {
+        deps.previews.delete(input.previewToken);
+        fail("preview-expired", "preview token has expired");
+      }
+      ops.evictOldestCreateOperationIfFull();
+      if (deps.createOperations.size >= deps.operationCapacity) {
+        fail("operation-capacity", "too many retained worktree operations");
+      }
+      preview = candidate;
+    }
+    const record = existing ?? {
+      previewToken: input.previewToken,
+      preview,
+      state: "ready",
+      updatedAt: deps.now(),
+      attemptedCreate: false,
+      gitAccepted: false,
+      attemptedRollback: false
+    };
+    deps.createOperations.set(input.operationId, record);
+    record.state = "creating";
+    record.updatedAt = deps.now();
+    const promise = ops.performCreate(input.operationId, preview, record, existing !== void 0);
+    record.createPromise = promise;
+    try {
+      const result = await promise;
+      record.state = "created";
+      record.updatedAt = deps.now();
+      record.createResult = result;
+      if (result.rollbackAuthorized) {
+        record.facts = {
+          repoId: result.repoId,
+          worktreeId: result.worktreeId,
+          commonDir: result.commonDir,
+          mainPath: preview.mainPath,
+          path: result.path,
+          branch: result.branch,
+          head: result.head,
+          branchCreated: result.branchCreated
+        };
+      }
+      return result;
+    } catch (error) {
+      record.state = record.attemptedCreate ? "uncertain" : "ready";
+      record.updatedAt = deps.now();
+      record.createPromise = void 0;
+      throw error;
+    }
+  }
+  async function rollbackCreate(untrusted) {
+    const input = parseRollbackInput(untrusted);
+    deps.clearDiscoveryCaches();
+    deps.pruneCaches();
+    const record = deps.createOperations.get(input.operationId);
+    if (record === void 0) fail("operation-not-found", "no create operation can authorize this rollback");
+    if (record.state === "creating") fail("operation-busy", "create operation is still running");
+    if (record.state === "ready") fail("operation-not-created", "create operation did not create a worktree");
+    if (record.state === "rolling-back") {
+      const result = await record.rollbackPromise;
+      return { ...result, replayed: true };
+    }
+    if (record.state === "rolled-back") return { ...record.rollbackResult, replayed: true };
+    if (!record.gitAccepted || record.facts === void 0) {
+      fail("rollback-not-authorized", "Git add success was not observed; automatic rollback has no provenance");
+    }
+    const stateBeforeRollback = record.state;
+    record.state = "rolling-back";
+    record.updatedAt = deps.now();
+    const promise = ops.performRollback(
+      input.operationId,
+      record.facts,
+      record,
+      stateBeforeRollback === "rollback-uncertain"
+    );
+    record.rollbackPromise = promise;
+    try {
+      const result = await promise;
+      record.state = "rolled-back";
+      record.updatedAt = deps.now();
+      record.rollbackResult = result;
+      return result;
+    } catch (error) {
+      record.state = record.attemptedRollback ? "rollback-uncertain" : stateBeforeRollback;
+      record.updatedAt = deps.now();
+      record.rollbackPromise = void 0;
+      throw error;
+    }
+  }
+  async function verifyCreatedReplay(record) {
+    const result = record.createResult;
+    if (result === void 0) throw new Error("created operation is missing its terminal result");
+    return await deps.mutex.run(result.commonDir, async () => {
+      const topology = await deps.topology(record.preview.mainPath);
+      if (topology.commonDir !== result.commonDir || topology.commonDir !== record.preview.commonDir || topology.mainPath !== record.preview.mainPath || opaqueId("repo", topology.commonDir) !== result.repoId) {
+        fail("operation-conflict", "created operation repository changed before terminal replay");
+      }
+      const target = topology.worktrees.find((worktree) => worktree.path === result.path);
+      if (target === void 0 || target === topology.worktrees[0] || target.bare || result.path !== record.preview.targetPath || target.branch !== result.branch || target.branch !== record.preview.branch || target.head !== result.head || target.head !== record.preview.baseHead || opaqueId("worktree", topology.commonDir, target.path) !== result.worktreeId) {
+        fail("operation-conflict", "created worktree no longer has the terminal operation identity");
+      }
+      return { ...result, replayed: true };
+    });
+  }
+  async function performCreate(id, preview, operation, replayed) {
+    return await deps.mutex.run(preview.commonDir, async () => {
+      const state = await deps.readSource();
+      const workspace = deps.workspace(state, preview.sourceWorkspaceId);
+      const topology = await deps.topology(workspace.path);
+      if (topology.commonDir !== preview.commonDir || topology.mainPath !== preview.mainPath) {
+        fail("preview-stale", "repository identity changed after preview");
+      }
+      const targetRoot = deps.worktreeRootFor(topology.mainPath, topology.commonDir);
+      const targetPath = resolve3(targetRoot, preview.basename);
+      if (targetPath !== preview.targetPath || !targetPath.startsWith(`${deps.worktreesRoot}${sep}`)) {
+        fail("preview-stale", "target identity changed after preview");
+      }
+      const reconciled = topology.worktrees.find((worktree) => worktree.path === targetPath);
+      if (reconciled !== void 0) {
+        if (!operation.attemptedCreate) {
+          fail("target-exists", `target path '${targetPath}' was not created by this operation`);
+        }
+        if (reconciled.bare || reconciled.branch !== preview.branch || reconciled.head !== preview.baseHead) {
+          fail("operation-conflict", "operation target exists with a different branch or HEAD");
+        }
+        const facts = {
+          repoId: opaqueId("repo", topology.commonDir),
+          worktreeId: opaqueId("worktree", topology.commonDir, reconciled.path),
+          commonDir: topology.commonDir,
+          mainPath: topology.mainPath,
+          path: reconciled.path,
+          branch: preview.branch,
+          head: reconciled.head,
+          branchCreated: preview.branchMode === "new" && operation.gitAccepted
+        };
+        if (operation.gitAccepted) operation.facts = facts;
+        return {
+          operationId: id,
+          created: true,
+          replayed: true,
+          repoId: facts.repoId,
+          worktreeId: facts.worktreeId,
+          commonDir: facts.commonDir,
+          path: facts.path,
+          branch: facts.branch,
+          head: facts.head,
+          rollbackAuthorized: operation.gitAccepted,
+          branchCreated: facts.branchCreated
+        };
+      }
+      await deps.assertPathAbsent(targetPath);
+      await deps.assertBranchFormat(topology.mainPath, preview.branch);
+      const branchHead = await deps.localBranchHead(topology.mainPath, preview.branch);
+      if (preview.branchMode === "existing") {
+        if (branchHead !== preview.baseHead) fail("preview-stale", "existing branch moved after preview");
+        if (topology.worktrees.some((worktree) => worktree.branch === preview.branch)) {
+          fail("branch-checked-out", `local branch '${preview.branch}' is already checked out`);
+        }
+      } else {
+        if (branchHead !== null) {
+          fail(
+            "operation-conflict",
+            operation.gitAccepted && branchHead === preview.baseHead ? "the confirmed worktree disappeared while its preserved branch remains" : "new branch now exists without confirmed operation provenance"
+          );
+        } else if (preview.startRef !== void 0) {
+          const startHead = await deps.localBranchHead(topology.mainPath, preview.startRef);
+          if (startHead !== preview.baseHead) fail("preview-stale", "source branch moved after preview");
+        } else if (topology.worktrees[0].head !== preview.baseHead) {
+          fail("preview-stale", "main checkout moved after preview");
+        }
+      }
+      const latest = await deps.readSource();
+      const latestWorkspace = deps.workspace(latest, preview.sourceWorkspaceId);
+      if (await deps.existingPath(latestWorkspace.path) !== await deps.existingPath(workspace.path)) {
+        fail("preview-stale", "source workspace path changed after preview");
+      }
+      const expectedFacts = {
+        repoId: opaqueId("repo", topology.commonDir),
+        worktreeId: opaqueId("worktree", topology.commonDir, targetPath),
+        commonDir: topology.commonDir,
+        mainPath: topology.mainPath,
+        path: targetPath,
+        branch: preview.branch,
+        head: preview.baseHead,
+        branchCreated: preview.branchMode === "new"
+      };
+      operation.attemptedCreate = true;
+      await deps.ensureWorktreeRoot(targetRoot);
+      const args = preview.branchMode === "existing" ? ["worktree", "add", "--", targetPath, preview.branch] : ["worktree", "add", "-b", preview.branch, "--", targetPath, preview.baseHead];
+      try {
+        await deps.gitChecked(topology.mainPath, args, true);
+      } catch (error) {
+        if (error instanceof GitWorktreeError && error.code === "git-spawn-failed") {
+          operation.attemptedCreate = false;
+        }
+        throw error;
+      }
+      operation.gitAccepted = true;
+      operation.facts = expectedFacts;
+      const after = await deps.topology(topology.mainPath);
+      const created = after.worktrees.find((worktree) => worktree.path === targetPath);
+      if (after.commonDir !== topology.commonDir || created === void 0 || created.branch !== preview.branch || created.head !== preview.baseHead || created.bare) {
+        fail("postcondition-failed", "Git did not publish the expected worktree identity");
+      }
+      return {
+        operationId: id,
+        created: true,
+        replayed,
+        repoId: opaqueId("repo", after.commonDir),
+        worktreeId: opaqueId("worktree", after.commonDir, created.path),
+        commonDir: after.commonDir,
+        path: created.path,
+        branch: preview.branch,
+        head: created.head,
+        rollbackAuthorized: true,
+        branchCreated: preview.branchMode === "new"
+      };
+    });
+  }
+  async function performRollback(id, facts, operation, replayed) {
+    return await deps.mutex.run(facts.commonDir, async () => {
+      const state = await deps.readSource();
+      if (await deps.anyWorkspaceOwnsPath(state, facts.path)) {
+        fail("rollback-has-workspace", "rollback is forbidden after a workspace registration exists");
+      }
+      await deps.assertNoRunningAtPath(facts.path, state);
+      const topology = await deps.topology(facts.mainPath);
+      if (topology.commonDir !== facts.commonDir) fail("repository-changed", "created repository identity changed");
+      const target = topology.worktrees.find((worktree) => worktree.path === facts.path);
+      if (target === void 0) {
+        return {
+          operationId: id,
+          removed: true,
+          replayed: true,
+          repoId: facts.repoId,
+          worktreeId: facts.worktreeId,
+          commonDir: facts.commonDir,
+          path: facts.path,
+          branch: facts.branch,
+          head: facts.head,
+          branchPreserved: true
+        };
+      }
+      if (target === topology.worktrees[0]) fail("main-worktree", "the main checkout can never be rolled back");
+      if (target.locked) fail("worktree-locked", "locked worktrees cannot be rolled back");
+      if (target.branch !== facts.branch) fail("worktree-changed", "the operation-created worktree changed branch");
+      if (target.head !== facts.head) fail("worktree-changed", "the operation-created worktree changed HEAD");
+      if (target.missing !== true && await deps.isDirty(target.path)) fail("worktree-dirty", "dirty worktrees cannot be rolled back");
+      const latest = await deps.readSource();
+      if (await deps.anyWorkspaceOwnsPath(latest, facts.path)) {
+        fail("rollback-has-workspace", "workspace registration appeared during rollback");
+      }
+      await deps.assertNoRunningAtPath(facts.path, latest);
+      const finalTopology = await deps.topology(facts.mainPath);
+      if (finalTopology.commonDir !== facts.commonDir || finalTopology.mainPath !== facts.mainPath) {
+        fail("repository-changed", "created repository identity changed immediately before rollback");
+      }
+      const finalTarget = finalTopology.worktrees.find((worktree) => worktree.path === facts.path);
+      if (finalTarget === void 0) {
+        return {
+          operationId: id,
+          removed: true,
+          replayed: true,
+          repoId: facts.repoId,
+          worktreeId: facts.worktreeId,
+          commonDir: facts.commonDir,
+          path: facts.path,
+          branch: facts.branch,
+          head: facts.head,
+          branchPreserved: true
+        };
+      }
+      if (finalTarget === finalTopology.worktrees[0] || finalTarget.locked || finalTarget.branch !== facts.branch || finalTarget.head !== facts.head) {
+        fail("worktree-changed", "operation-created worktree identity changed immediately before rollback");
+      }
+      if (finalTarget.missing !== true && await deps.isDirty(finalTarget.path)) {
+        fail("worktree-dirty", "worktree became dirty immediately before rollback");
+      }
+      operation.attemptedRollback = true;
+      await deps.gitChecked(finalTopology.mainPath, ["worktree", "remove", "--", facts.path], true);
+      const after = await deps.topology(finalTopology.mainPath);
+      if (after.worktrees.some((worktree) => worktree.path === facts.path)) {
+        fail("postcondition-failed", "Git still reports the rolled-back worktree");
+      }
+      return {
+        operationId: id,
+        removed: true,
+        replayed,
+        repoId: facts.repoId,
+        worktreeId: facts.worktreeId,
+        commonDir: facts.commonDir,
+        path: facts.path,
+        branch: facts.branch,
+        head: target.head,
+        branchPreserved: true
+      };
+    });
+  }
+  function uniquePreviewToken() {
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const token = previewToken(deps.nextToken());
+      if (!deps.previews.has(token)) return token;
+    }
+    fail("token-collision", "could not allocate a unique preview token");
+  }
+  function publicPreview(preview) {
+    return {
+      previewToken: preview.previewToken,
+      expiresAt: preview.expiresAt,
+      repoId: preview.repoId,
+      commonDir: preview.commonDir,
+      mainPath: preview.mainPath,
+      targetPath: preview.targetPath,
+      branch: preview.branch,
+      baseHead: preview.baseHead
+    };
+  }
+  function evictOldestCreateOperationIfFull() {
+    if (deps.createOperations.size < deps.operationCapacity) return;
+    let oldest;
+    for (const [id, record] of deps.createOperations) {
+      if (record.state !== "ready" || record.attemptedCreate || record.attemptedRollback || record.facts !== void 0 || record.createResult !== void 0 || record.rollbackResult !== void 0) continue;
+      if (oldest === void 0 || record.updatedAt < oldest.updatedAt) {
+        oldest = { id, updatedAt: record.updatedAt };
+      }
+    }
+    if (oldest !== void 0) deps.createOperations.delete(oldest.id);
+  }
+  const ops = {
+    previewCreate,
+    create,
+    rollbackCreate,
+    verifyCreatedReplay,
+    performCreate,
+    performRollback,
+    uniquePreviewToken,
+    publicPreview,
+    evictOldestCreateOperationIfFull
+  };
+  return ops;
+}
+
 // src/core-internals.ts
 var KeyedMutex = class {
   tails = /* @__PURE__ */ new Map();
@@ -594,6 +1020,7 @@ var GitWorktreeCore = class {
   mutex = new KeyedMutex();
   previews = /* @__PURE__ */ new Map();
   createOperations = /* @__PURE__ */ new Map();
+  createOps;
   removeOperations = /* @__PURE__ */ new Map();
   workspaceDiscoverCache = /* @__PURE__ */ new Map();
   repoTopologyCache = /* @__PURE__ */ new Map();
@@ -618,6 +1045,31 @@ var GitWorktreeCore = class {
     if (!Number.isSafeInteger(this.snapshotWallTimeoutMs) || this.snapshotWallTimeoutMs < 1 || this.snapshotWallTimeoutMs > SNAPSHOT_WALL_TIMEOUT_MS) {
       fail("invalid-core-option", `snapshotWallTimeoutMs must be between 1 and ${SNAPSHOT_WALL_TIMEOUT_MS}`);
     }
+    this.createOps = createWorktreeCreateOps({
+      createOperations: this.createOperations,
+      mutex: this.mutex,
+      nextToken: this.nextToken,
+      now: this.now,
+      operationCapacity: this.operationCapacity,
+      previews: this.previews,
+      worktreesRoot: this.worktreesRoot,
+      anyWorkspaceOwnsPath: this.anyWorkspaceOwnsPath.bind(this),
+      assertBranchFormat: this.assertBranchFormat.bind(this),
+      assertNoRunningAtPath: this.assertNoRunningAtPath.bind(this),
+      assertPathAbsent: this.assertPathAbsent.bind(this),
+      clearDiscoveryCaches: this.clearDiscoveryCaches.bind(this),
+      discover: this.discover.bind(this),
+      ensureWorktreeRoot: this.ensureWorktreeRoot.bind(this),
+      existingPath: this.existingPath.bind(this),
+      gitChecked: this.gitChecked.bind(this),
+      isDirty: this.isDirty.bind(this),
+      localBranchHead: this.localBranchHead.bind(this),
+      pruneCaches: this.pruneCaches.bind(this),
+      readSource: this.readSource.bind(this),
+      topology: this.topology.bind(this),
+      workspace: this.workspace.bind(this),
+      worktreeRootFor: this.worktreeRootFor.bind(this)
+    });
   }
   /** Coalesce overlapping polls so a slow old snapshot cannot pile up behind the next tick. */
   snapshot() {
@@ -834,7 +1286,7 @@ var GitWorktreeCore = class {
         remainingWorktrees -= boundedRaw.length;
         for (let index = 0; index < boundedRaw.length; index += 1) {
           const entry = boundedRaw[index];
-          let path = resolve3(entry.path);
+          let path = resolve4(entry.path);
           let pathAvailable = false;
           if (this.now() < deadline) {
             try {
@@ -1000,182 +1452,18 @@ var GitWorktreeCore = class {
     return { repos, errors, ...sourceError === void 0 ? {} : { sourceError } };
   }
   /** Issue a short-lived, in-memory preview after a coherent repository read. */
+  /** Create-path facade (B5): the body lives in core-ops-create.ts. */
   async previewCreate(untrusted) {
-    const input = parsePreviewInput(untrusted);
-    const initial = await this.readSource();
-    const initialWorkspace = this.workspace(initial, input.sourceWorkspaceId);
-    const discovered = await this.discover(initialWorkspace.path);
-    return await this.mutex.run(discovered.commonDir, async () => {
-      const state = await this.readSource();
-      const workspace = this.workspace(state, input.sourceWorkspaceId);
-      const topology = await this.topology(workspace.path);
-      if (topology.commonDir !== discovered.commonDir) {
-        fail("repository-changed", "the source workspace changed repositories during preview");
-      }
-      const main = topology.worktrees[0];
-      if (main.bare) fail("bare-repository", "bare repositories cannot own linked worktrees");
-      const targetRoot = this.worktreeRootFor(topology.mainPath, topology.commonDir);
-      const targetPath = resolve3(targetRoot, input.basename);
-      if (!targetPath.startsWith(`${targetRoot}${sep}`)) fail("unsafe-path", "target escaped the unified worktree root");
-      await this.assertPathAbsent(targetPath);
-      await this.assertBranchFormat(topology.mainPath, input.branch.name);
-      const branchHead = await this.localBranchHead(topology.mainPath, input.branch.name);
-      let startHead;
-      if (input.branch.kind === "existing") {
-        if (branchHead === null) fail("branch-not-found", `local branch '${input.branch.name}' does not exist`);
-        if (topology.worktrees.some((worktree) => worktree.branch === input.branch.name)) {
-          fail("branch-checked-out", `local branch '${input.branch.name}' is already checked out`);
-        }
-        startHead = branchHead;
-      } else {
-        if (branchHead !== null) fail("branch-exists", `local branch '${input.branch.name}' already exists`);
-        if (input.startRef !== void 0) {
-          const startHeadOf = await this.localBranchHead(topology.mainPath, input.startRef);
-          if (startHeadOf === null) fail("branch-not-found", `source branch '${input.startRef}' does not exist`);
-          startHead = startHeadOf;
-        } else {
-          startHead = main.head;
-        }
-      }
-      this.pruneCaches();
-      if (this.previews.size >= MAX_PREVIEWS) fail("preview-capacity", "too many live worktree previews");
-      const token = this.uniquePreviewToken();
-      const createdAt = this.now();
-      const preview = {
-        previewToken: token,
-        expiresAt: createdAt + PREVIEW_TTL_MS,
-        repoId: opaqueId("repo", topology.commonDir),
-        commonDir: topology.commonDir,
-        mainPath: topology.mainPath,
-        targetPath,
-        branch: input.branch.name,
-        branchMode: input.branch.kind,
-        baseHead: startHead,
-        startRef: input.branch.kind === "new" ? input.startRef : void 0,
-        sourceWorkspaceId: input.sourceWorkspaceId,
-        basename: input.basename,
-        createdAt
-      };
-      this.previews.set(token, preview);
-      return this.publicPreview(preview);
-    });
+    return await this.createOps.previewCreate(untrusted);
   }
-  /** Create exactly the previewed worktree, with bounded same-process TTL idempotency. */
+  /** Create-path facade (B5): the body lives in core-ops-create.ts. */
   async create(untrusted) {
-    const input = parseCreateInput(untrusted);
-    this.clearDiscoveryCaches();
-    this.pruneCaches();
-    const existing = this.createOperations.get(input.operationId);
-    let preview;
-    if (existing !== void 0) {
-      if (existing.previewToken !== input.previewToken) {
-        fail("operation-conflict", "operationId is already bound to another preview");
-      }
-      preview = existing.preview;
-      if (existing.state === "creating") {
-        const result = await existing.createPromise;
-        return { ...result, replayed: true };
-      }
-      if (existing.state === "created") return await this.verifyCreatedReplay(existing);
-      if (existing.state === "rolling-back" || existing.state === "rollback-uncertain" || existing.state === "rolled-back") {
-        fail("operation-rolled-back", "the create operation has already been rolled back");
-      }
-    } else {
-      const candidate = this.previews.get(input.previewToken);
-      if (candidate === void 0) fail("preview-not-found", "preview token is unknown or expired");
-      if (candidate.expiresAt <= this.now()) {
-        this.previews.delete(input.previewToken);
-        fail("preview-expired", "preview token has expired");
-      }
-      this.evictOldestCreateOperationIfFull();
-      if (this.createOperations.size >= this.operationCapacity) {
-        fail("operation-capacity", "too many retained worktree operations");
-      }
-      preview = candidate;
-    }
-    const record = existing ?? {
-      previewToken: input.previewToken,
-      preview,
-      state: "ready",
-      updatedAt: this.now(),
-      attemptedCreate: false,
-      gitAccepted: false,
-      attemptedRollback: false
-    };
-    this.createOperations.set(input.operationId, record);
-    record.state = "creating";
-    record.updatedAt = this.now();
-    const promise = this.performCreate(input.operationId, preview, record, existing !== void 0);
-    record.createPromise = promise;
-    try {
-      const result = await promise;
-      record.state = "created";
-      record.updatedAt = this.now();
-      record.createResult = result;
-      if (result.rollbackAuthorized) {
-        record.facts = {
-          repoId: result.repoId,
-          worktreeId: result.worktreeId,
-          commonDir: result.commonDir,
-          mainPath: preview.mainPath,
-          path: result.path,
-          branch: result.branch,
-          head: result.head,
-          branchCreated: result.branchCreated
-        };
-      }
-      return result;
-    } catch (error) {
-      record.state = record.attemptedCreate ? "uncertain" : "ready";
-      record.updatedAt = this.now();
-      record.createPromise = void 0;
-      throw error;
-    }
+    return await this.createOps.create(untrusted);
   }
-  /**
-   * Compensate only a worktree proven to have been created by this operation.
-   * No force and no branch deletion are ever available.
-   */
+  /** Create-path facade (B5): the body lives in core-ops-create.ts. */
   async rollbackCreate(untrusted) {
-    const input = parseRollbackInput(untrusted);
-    this.clearDiscoveryCaches();
-    this.pruneCaches();
-    const record = this.createOperations.get(input.operationId);
-    if (record === void 0) fail("operation-not-found", "no create operation can authorize this rollback");
-    if (record.state === "creating") fail("operation-busy", "create operation is still running");
-    if (record.state === "ready") fail("operation-not-created", "create operation did not create a worktree");
-    if (record.state === "rolling-back") {
-      const result = await record.rollbackPromise;
-      return { ...result, replayed: true };
-    }
-    if (record.state === "rolled-back") return { ...record.rollbackResult, replayed: true };
-    if (!record.gitAccepted || record.facts === void 0) {
-      fail("rollback-not-authorized", "Git add success was not observed; automatic rollback has no provenance");
-    }
-    const stateBeforeRollback = record.state;
-    record.state = "rolling-back";
-    record.updatedAt = this.now();
-    const promise = this.performRollback(
-      input.operationId,
-      record.facts,
-      record,
-      stateBeforeRollback === "rollback-uncertain"
-    );
-    record.rollbackPromise = promise;
-    try {
-      const result = await promise;
-      record.state = "rolled-back";
-      record.updatedAt = this.now();
-      record.rollbackResult = result;
-      return result;
-    } catch (error) {
-      record.state = record.attemptedRollback ? "rollback-uncertain" : stateBeforeRollback;
-      record.updatedAt = this.now();
-      record.rollbackPromise = void 0;
-      throw error;
-    }
+    return await this.createOps.rollbackCreate(untrusted);
   }
-  /** Git-first removal; the durable workspace registration remains for the caller's next step. */
   async remove(untrusted) {
     const input = parseRemoveInput(untrusted);
     const fingerprint = objectFingerprint(input);
@@ -1222,22 +1510,6 @@ var GitWorktreeCore = class {
     }
   }
   /** A terminal result is a receipt, not a substitute for current Git facts. */
-  async verifyCreatedReplay(record) {
-    const result = record.createResult;
-    if (result === void 0) throw new Error("created operation is missing its terminal result");
-    return await this.mutex.run(result.commonDir, async () => {
-      const topology = await this.topology(record.preview.mainPath);
-      if (topology.commonDir !== result.commonDir || topology.commonDir !== record.preview.commonDir || topology.mainPath !== record.preview.mainPath || opaqueId("repo", topology.commonDir) !== result.repoId) {
-        fail("operation-conflict", "created operation repository changed before terminal replay");
-      }
-      const target = topology.worktrees.find((worktree) => worktree.path === result.path);
-      if (target === void 0 || target === topology.worktrees[0] || target.bare || result.path !== record.preview.targetPath || target.branch !== result.branch || target.branch !== record.preview.branch || target.head !== result.head || target.head !== record.preview.baseHead || opaqueId("worktree", topology.commonDir, target.path) !== result.worktreeId) {
-        fail("operation-conflict", "created worktree no longer has the terminal operation identity");
-      }
-      return { ...result, replayed: true };
-    });
-  }
-  /** Verify the Git-first receipt again before a client retries workspace.delete. */
   async verifyRemovedReplay(record) {
     const intent = record.intent;
     const result = record.result;
@@ -1266,200 +1538,6 @@ var GitWorktreeCore = class {
     this.assertNoRunningSessions(workspace, state);
     await this.assertNoRunningAtPath(intent.path, state);
   }
-  async performCreate(id, preview, operation, replayed) {
-    return await this.mutex.run(preview.commonDir, async () => {
-      const state = await this.readSource();
-      const workspace = this.workspace(state, preview.sourceWorkspaceId);
-      const topology = await this.topology(workspace.path);
-      if (topology.commonDir !== preview.commonDir || topology.mainPath !== preview.mainPath) {
-        fail("preview-stale", "repository identity changed after preview");
-      }
-      const targetRoot = this.worktreeRootFor(topology.mainPath, topology.commonDir);
-      const targetPath = resolve3(targetRoot, preview.basename);
-      if (targetPath !== preview.targetPath || !targetPath.startsWith(`${this.worktreesRoot}${sep}`)) {
-        fail("preview-stale", "target identity changed after preview");
-      }
-      const reconciled = topology.worktrees.find((worktree) => worktree.path === targetPath);
-      if (reconciled !== void 0) {
-        if (!operation.attemptedCreate) {
-          fail("target-exists", `target path '${targetPath}' was not created by this operation`);
-        }
-        if (reconciled.bare || reconciled.branch !== preview.branch || reconciled.head !== preview.baseHead) {
-          fail("operation-conflict", "operation target exists with a different branch or HEAD");
-        }
-        const facts = {
-          repoId: opaqueId("repo", topology.commonDir),
-          worktreeId: opaqueId("worktree", topology.commonDir, reconciled.path),
-          commonDir: topology.commonDir,
-          mainPath: topology.mainPath,
-          path: reconciled.path,
-          branch: preview.branch,
-          head: reconciled.head,
-          branchCreated: preview.branchMode === "new" && operation.gitAccepted
-        };
-        if (operation.gitAccepted) operation.facts = facts;
-        return {
-          operationId: id,
-          created: true,
-          replayed: true,
-          repoId: facts.repoId,
-          worktreeId: facts.worktreeId,
-          commonDir: facts.commonDir,
-          path: facts.path,
-          branch: facts.branch,
-          head: facts.head,
-          rollbackAuthorized: operation.gitAccepted,
-          branchCreated: facts.branchCreated
-        };
-      }
-      await this.assertPathAbsent(targetPath);
-      await this.assertBranchFormat(topology.mainPath, preview.branch);
-      const branchHead = await this.localBranchHead(topology.mainPath, preview.branch);
-      if (preview.branchMode === "existing") {
-        if (branchHead !== preview.baseHead) fail("preview-stale", "existing branch moved after preview");
-        if (topology.worktrees.some((worktree) => worktree.branch === preview.branch)) {
-          fail("branch-checked-out", `local branch '${preview.branch}' is already checked out`);
-        }
-      } else {
-        if (branchHead !== null) {
-          fail(
-            "operation-conflict",
-            operation.gitAccepted && branchHead === preview.baseHead ? "the confirmed worktree disappeared while its preserved branch remains" : "new branch now exists without confirmed operation provenance"
-          );
-        } else if (preview.startRef !== void 0) {
-          const startHead = await this.localBranchHead(topology.mainPath, preview.startRef);
-          if (startHead !== preview.baseHead) fail("preview-stale", "source branch moved after preview");
-        } else if (topology.worktrees[0].head !== preview.baseHead) {
-          fail("preview-stale", "main checkout moved after preview");
-        }
-      }
-      const latest = await this.readSource();
-      const latestWorkspace = this.workspace(latest, preview.sourceWorkspaceId);
-      if (await this.existingPath(latestWorkspace.path) !== await this.existingPath(workspace.path)) {
-        fail("preview-stale", "source workspace path changed after preview");
-      }
-      const expectedFacts = {
-        repoId: opaqueId("repo", topology.commonDir),
-        worktreeId: opaqueId("worktree", topology.commonDir, targetPath),
-        commonDir: topology.commonDir,
-        mainPath: topology.mainPath,
-        path: targetPath,
-        branch: preview.branch,
-        head: preview.baseHead,
-        branchCreated: preview.branchMode === "new"
-      };
-      operation.attemptedCreate = true;
-      await this.ensureWorktreeRoot(targetRoot);
-      const args = preview.branchMode === "existing" ? ["worktree", "add", "--", targetPath, preview.branch] : ["worktree", "add", "-b", preview.branch, "--", targetPath, preview.baseHead];
-      try {
-        await this.gitChecked(topology.mainPath, args, true);
-      } catch (error) {
-        if (error instanceof GitWorktreeError && error.code === "git-spawn-failed") {
-          operation.attemptedCreate = false;
-        }
-        throw error;
-      }
-      operation.gitAccepted = true;
-      operation.facts = expectedFacts;
-      const after = await this.topology(topology.mainPath);
-      const created = after.worktrees.find((worktree) => worktree.path === targetPath);
-      if (after.commonDir !== topology.commonDir || created === void 0 || created.branch !== preview.branch || created.head !== preview.baseHead || created.bare) {
-        fail("postcondition-failed", "Git did not publish the expected worktree identity");
-      }
-      return {
-        operationId: id,
-        created: true,
-        replayed,
-        repoId: opaqueId("repo", after.commonDir),
-        worktreeId: opaqueId("worktree", after.commonDir, created.path),
-        commonDir: after.commonDir,
-        path: created.path,
-        branch: preview.branch,
-        head: created.head,
-        rollbackAuthorized: true,
-        branchCreated: preview.branchMode === "new"
-      };
-    });
-  }
-  async performRollback(id, facts, operation, replayed) {
-    return await this.mutex.run(facts.commonDir, async () => {
-      const state = await this.readSource();
-      if (await this.anyWorkspaceOwnsPath(state, facts.path)) {
-        fail("rollback-has-workspace", "rollback is forbidden after a workspace registration exists");
-      }
-      await this.assertNoRunningAtPath(facts.path, state);
-      const topology = await this.topology(facts.mainPath);
-      if (topology.commonDir !== facts.commonDir) fail("repository-changed", "created repository identity changed");
-      const target = topology.worktrees.find((worktree) => worktree.path === facts.path);
-      if (target === void 0) {
-        return {
-          operationId: id,
-          removed: true,
-          replayed: true,
-          repoId: facts.repoId,
-          worktreeId: facts.worktreeId,
-          commonDir: facts.commonDir,
-          path: facts.path,
-          branch: facts.branch,
-          head: facts.head,
-          branchPreserved: true
-        };
-      }
-      if (target === topology.worktrees[0]) fail("main-worktree", "the main checkout can never be rolled back");
-      if (target.locked) fail("worktree-locked", "locked worktrees cannot be rolled back");
-      if (target.branch !== facts.branch) fail("worktree-changed", "the operation-created worktree changed branch");
-      if (target.head !== facts.head) fail("worktree-changed", "the operation-created worktree changed HEAD");
-      if (target.missing !== true && await this.isDirty(target.path)) fail("worktree-dirty", "dirty worktrees cannot be rolled back");
-      const latest = await this.readSource();
-      if (await this.anyWorkspaceOwnsPath(latest, facts.path)) {
-        fail("rollback-has-workspace", "workspace registration appeared during rollback");
-      }
-      await this.assertNoRunningAtPath(facts.path, latest);
-      const finalTopology = await this.topology(facts.mainPath);
-      if (finalTopology.commonDir !== facts.commonDir || finalTopology.mainPath !== facts.mainPath) {
-        fail("repository-changed", "created repository identity changed immediately before rollback");
-      }
-      const finalTarget = finalTopology.worktrees.find((worktree) => worktree.path === facts.path);
-      if (finalTarget === void 0) {
-        return {
-          operationId: id,
-          removed: true,
-          replayed: true,
-          repoId: facts.repoId,
-          worktreeId: facts.worktreeId,
-          commonDir: facts.commonDir,
-          path: facts.path,
-          branch: facts.branch,
-          head: facts.head,
-          branchPreserved: true
-        };
-      }
-      if (finalTarget === finalTopology.worktrees[0] || finalTarget.locked || finalTarget.branch !== facts.branch || finalTarget.head !== facts.head) {
-        fail("worktree-changed", "operation-created worktree identity changed immediately before rollback");
-      }
-      if (finalTarget.missing !== true && await this.isDirty(finalTarget.path)) {
-        fail("worktree-dirty", "worktree became dirty immediately before rollback");
-      }
-      operation.attemptedRollback = true;
-      await this.gitChecked(finalTopology.mainPath, ["worktree", "remove", "--", facts.path], true);
-      const after = await this.topology(finalTopology.mainPath);
-      if (after.worktrees.some((worktree) => worktree.path === facts.path)) {
-        fail("postcondition-failed", "Git still reports the rolled-back worktree");
-      }
-      return {
-        operationId: id,
-        removed: true,
-        replayed,
-        repoId: facts.repoId,
-        worktreeId: facts.worktreeId,
-        commonDir: facts.commonDir,
-        path: facts.path,
-        branch: facts.branch,
-        head: target.head,
-        branchPreserved: true
-      };
-    });
-  }
   async performRemove(input, operation, replayed) {
     if (operation.intent !== void 0) {
       return await this.mutex.run(operation.intent.commonDir, async () => {
@@ -1479,7 +1557,7 @@ var GitWorktreeCore = class {
           for (const candidate of state.workspaces) {
             const candidatePath = await this.existingPath(candidate.path).catch(() => null);
             if (candidatePath === null) continue;
-            if (candidatePath === currentPath || candidatePath.startsWith(`${currentPath}${sep}`)) {
+            if (candidatePath === currentPath || candidatePath.startsWith(`${currentPath}${sep2}`)) {
               fail("workspace-registered", "the target worktree is already registered as a workspace");
             }
           }
@@ -1650,20 +1728,20 @@ var GitWorktreeCore = class {
       walked.add(discovered.commonDir);
       const rows = await this.listWorktreesWith(async (args) => this.gitCommand(discovered.topLevel, args, false));
       if (rows.length === 0) continue;
-      const row = rows.find((candidate) => resolve3(candidate.path) === targetPath);
+      const row = rows.find((candidate) => resolve4(candidate.path) === targetPath);
       if (row === void 0) continue;
       const repoId = opaqueId("repo", discovered.commonDir);
       if (repoId !== expectedRepoId) {
         sawPathOnWrongRepository = true;
         continue;
       }
-      const mainPath = await this.existingPath(resolve3(rows[0].path));
+      const mainPath = await this.existingPath(resolve4(rows[0].path));
       return {
         commonDir: discovered.commonDir,
         mainPath,
         repoId,
-        row: { ...row, path: resolve3(row.path) },
-        isMain: resolve3(rows[0].path) === resolve3(row.path)
+        row: { ...row, path: resolve4(row.path) },
+        isMain: resolve4(rows[0].path) === resolve4(row.path)
       };
     }
     if (sawPathOnWrongRepository) {
@@ -1754,7 +1832,7 @@ var GitWorktreeCore = class {
    *  (reconcileBoundRemove). */
   async commitMissingRecordRemove(operationIdValue, operation, intent, replayed) {
     const state = await this.readSource();
-    if (state.workspaces.some((candidate) => resolve3(candidate.path) === intent.path)) {
+    if (state.workspaces.some((candidate) => resolve4(candidate.path) === intent.path)) {
       fail("workspace-registered", "the missing worktree path is still registered as a workspace");
     }
     const finalTopology = await this.topology(intent.mainPath);
@@ -2071,7 +2149,7 @@ var GitWorktreeCore = class {
     let deadlineExceeded = false;
     for (const agent of state.runningAgents) {
       if (agent.cwd === void 0) continue;
-      const paths = [resolve3(agent.cwd)];
+      const paths = [resolve4(agent.cwd)];
       if (this.now() >= deadline) {
         deadlineExceeded = true;
       } else {
@@ -2144,11 +2222,11 @@ var GitWorktreeCore = class {
   }
   containsPath(root, candidate) {
     const suffix = relative(root, candidate);
-    return suffix === "" || !isAbsolute4(suffix) && suffix !== ".." && !suffix.startsWith(`..${sep}`);
+    return suffix === "" || !isAbsolute4(suffix) && suffix !== ".." && !suffix.startsWith(`..${sep2}`);
   }
   async anyWorkspaceOwnsPath(state, target) {
     for (const workspace of state.workspaces) {
-      if (this.containsPath(target, resolve3(workspace.path))) return true;
+      if (this.containsPath(target, resolve4(workspace.path))) return true;
       let canonical;
       try {
         canonical = await this.existingPath(workspace.path);
@@ -2189,7 +2267,7 @@ var GitWorktreeCore = class {
     if (canonical.length === 0 || canonical.length > MAX_PATH_LENGTH || /[\0\r\n]/u.test(canonical) || !isAbsolute4(canonical)) {
       fail("unsafe-path", "realpath returned an invalid or overlong absolute path");
     }
-    return resolve3(canonical);
+    return resolve4(canonical);
   }
   async assertPathAbsent(path) {
     try {
@@ -2247,7 +2325,7 @@ var GitWorktreeCore = class {
         missing = false;
       } catch (error) {
         if (!(error instanceof GitWorktreeError) || error.code !== "path-unavailable") throw error;
-        path = resolve3(entry.path);
+        path = resolve4(entry.path);
         missing = true;
       }
       if (paths.has(path)) fail("git-protocol-error", `Git returned duplicate worktree path '${path}'`);
@@ -2381,36 +2459,6 @@ var GitWorktreeCore = class {
   gitExitError(result, operation) {
     const detail = result.stderr.trim() || result.stdout.trim();
     fail("git-command-failed", `Git ${operation} failed with exit ${result.exitCode}${detail ? `: ${safeErrorMessage(detail)}` : ""}`);
-  }
-  uniquePreviewToken() {
-    for (let attempt = 0; attempt < 8; attempt += 1) {
-      const token = previewToken(this.nextToken());
-      if (!this.previews.has(token)) return token;
-    }
-    fail("token-collision", "could not allocate a unique preview token");
-  }
-  publicPreview(preview) {
-    return {
-      previewToken: preview.previewToken,
-      expiresAt: preview.expiresAt,
-      repoId: preview.repoId,
-      commonDir: preview.commonDir,
-      mainPath: preview.mainPath,
-      targetPath: preview.targetPath,
-      branch: preview.branch,
-      baseHead: preview.baseHead
-    };
-  }
-  evictOldestCreateOperationIfFull() {
-    if (this.createOperations.size < this.operationCapacity) return;
-    let oldest;
-    for (const [id, record] of this.createOperations) {
-      if (record.state !== "ready" || record.attemptedCreate || record.attemptedRollback || record.facts !== void 0 || record.createResult !== void 0 || record.rollbackResult !== void 0) continue;
-      if (oldest === void 0 || record.updatedAt < oldest.updatedAt) {
-        oldest = { id, updatedAt: record.updatedAt };
-      }
-    }
-    if (oldest !== void 0) this.createOperations.delete(oldest.id);
   }
   evictOldestRemoveOperationIfFull() {
     if (this.removeOperations.size < this.operationCapacity) return;

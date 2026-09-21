@@ -1,6 +1,7 @@
 /**
- * Archive cleanup core — preview/purge planning, retention, force and the event contract.
- * Siblings from the same split: subset-and-orphan-sweep, sweep-gates-and-protection.
+ * Archive cleanup core — preview/purge planning, retention, force, the event
+ * contract, and the folded-in subset/orphan-sweep fail-closed legs (the deleted
+ * subset-and-orphan-sweep.test.ts). Sibling: sweep-gates-and-protection.
  * Shared fixtures: support/archive-host.ts.
  */
 
@@ -11,8 +12,10 @@ import {
   ArchiveCleanupError,
   indexChildren,
   subtreeLiveness,
+  orphanArchivedMembers,
   MAX_PURGE_SESSIONS,
   MAX_PURGE_ERROR_RECORDS,
+  type ArchivedSessionState,
 } from '../src/core.ts'
 import {
   state,
@@ -548,4 +551,152 @@ test('purge: a converged set with no orphan members keeps the single-scan contra
   assert.equal(host.stateListCalls, 1, 'no orphan candidates → no confirmation scan')
   assert.equal(host.liveListCalls, 1 + 2 + 1, 'same contract as above: the batched write is always preceded by one final live read')
   assert.deepEqual(host.removalCalls, [['s1', 's2']])
+})
+
+/* ---- subset/orphan-sweep invariants folded in from the deleted
+ * subset-and-orphan-sweep.test.ts (2026-12 test-trim round 2): the
+ * fail-closed and boundary legs only; the subset-mode happy paths were
+ * covered by the purge/subset assertions above. ---- */
+test('purge subset: malformed filters refuse loudly before any mutation', async () => {
+  const host = buildHost()
+  const core = new ArchiveCleanupCore(host)
+  await assert.rejects(() => core.purge(['s1', 42 as never]), codeIs('invalid-request'))
+  await assert.rejects(() => core.purge(['']), codeIs('invalid-request'))
+  const oversized: string[] = []
+  for (let i = 0; i < MAX_PURGE_SESSIONS + 1; i += 1) oversized.push(`bulk-${i}`)
+  await assert.rejects(() => core.purge(oversized), codeIs('invalid-request'))
+  assert.equal(host.deleteLog.length, 0)
+  assert.equal(host.removalCalls.length, 0)
+})
+test('capacity guard: an oversized archived set still allows bounded subset purges', async () => {
+  const host = new FakeHost()
+  for (let i = 0; i < MAX_PURGE_SESSIONS + 1; i += 1) {
+    host.archived.add(`bulk-${i}`)
+    host.states.set(`bulk-${i}`, state(`bulk-${i}`))
+  }
+  const core = new ArchiveCleanupCore(host)
+  // The full-set purge refuses (purge-capacity)…
+  await assert.rejects(() => core.purge(), codeIs('purge-capacity'))
+  // …but a bounded subset of the same oversized set still runs.
+  const result = await core.purge(['bulk-0', 'bulk-1'])
+  assert.equal(result.errors.length, 0)
+  assert.equal(result.deletedSessions, 2)
+  assert.equal(host.archived.has('bulk-0'), false)
+  assert.equal(host.archived.has('bulk-2'), true)
+})
+test('purge subset: a malformed filter refuses BEFORE any authoritative read (validation-first)', async () => {
+  const host = buildHost()
+  const core = new ArchiveCleanupCore(host)
+  await assert.rejects(() => core.purge([42 as never]), codeIs('invalid-request'))
+  assert.equal(host.stateReadAttempts, 0, 'no corpus read for a malformed request')
+  assert.equal(host.removalCalls.length, 0)
+})
+test('orphanArchivedMembers: record-less members only; a live record-less id is excluded (fail-closed predicate)', () => {
+  const states = new Map<string, ArchivedSessionState>([
+    ['with-record', state('with-record')],
+    ['sub', subagent('sub', 'with-record')],
+  ])
+  assert.deepEqual(
+    orphanArchivedMembers(['with-record', 'ghost-1', 'sub', 'ghost-2'], states, new Set()),
+    ['ghost-1', 'ghost-2'],
+  )
+  // A record-less id that is live/open is NEVER swept (defense in depth: its
+  // content is real even if the durable enumeration momentarily misses it).
+  assert.deepEqual(orphanArchivedMembers(['ghost-1', 'ghost-2'], states, new Set(['ghost-1'])), ['ghost-2'])
+  assert.deepEqual(orphanArchivedMembers([], states, new Set()), [])
+})
+test('purge: a failed sweep confirmation read SKIPS the sweep, records archive-set, and still commits the completed deletions', async () => {
+  const host = buildHost()
+  // Attempt 1 = the run snapshot (succeeds); attempt 2 = the sweep
+  // confirmation read (fails) — the fail-closed leg.
+  host.failStateReadOnAttempt = 2
+  const core = new ArchiveCleanupCore(host)
+  const result = await core.purge()
+  assert.equal(result.deletedSessions, 2, 'completed content deletions are reported')
+  assert.equal(result.deletedSubagents, 2)
+  assert.equal(result.clearedOrphanMembers, undefined, 'nothing was swept — never guessed')
+  assert.equal(result.errors.length, 1)
+  assert.equal(result.errors[0]?.sessionId, '')
+  assert.equal(result.errors[0]?.code, 'archive-set')
+  assert.equal(result.errors[0]?.message.includes('orphan sweep skipped'), true)
+  // The completed trees still ride the single write; the record-less member
+  // stays archived for a later run.
+  assert.deepEqual(host.removalCalls, [['s1', 's2']])
+  assert.equal(host.archived.has('s-orphan'), true)
+  assert.equal(host.archived.has('s1'), false)
+  assert.equal(host.archived.has('s2'), false)
+  // A later run (enumeration healthy again) converges the orphan.
+  host.failStateReadOnAttempt = null
+  const again = await core.purge()
+  assert.equal(again.errors.length, 0)
+  assert.equal(again.clearedOrphanMembers, 1)
+  assert.equal(host.archived.has('s-orphan'), false)
+})
+test('purge: an archived set beyond the defensive capacity skips the orphan sweep while bounded subset purges still run', async () => {
+  const host = new FakeHost()
+  for (let i = 0; i < MAX_PURGE_SESSIONS + 1; i += 1) {
+    host.archived.add(`bulk-${i}`)
+    host.states.set(`bulk-${i}`, state(`bulk-${i}`))
+  }
+  // A historical no-directory member inside the oversized set.
+  host.archived.add('bulk-ghost')
+  const core = new ArchiveCleanupCore(host)
+  const result = await core.purge(['bulk-0'])
+  assert.equal(result.errors.length, 0)
+  assert.equal(result.deletedSessions, 1)
+  assert.equal(result.clearedOrphanMembers, undefined, 'capacity bounds the sweep — nothing swept')
+  assert.deepEqual(host.removalCalls, [['bulk-0']])
+  assert.equal(host.archived.has('bulk-ghost'), true)
+  assert.equal(host.stateListCalls, 1, 'no confirmation scan when the sweep is out of capacity')
+})
+test('purge: a record-less member that is live is never swept (defense in depth)', async () => {
+  const host = buildHost()
+  host.live.add('s-orphan')
+  const core = new ArchiveCleanupCore(host)
+  const result = await core.purge()
+  assert.equal(result.errors.length, 0)
+  assert.equal(result.clearedOrphanMembers, undefined)
+  assert.deepEqual(host.removalCalls, [['s1', 's2']])
+  assert.equal(host.archived.has('s-orphan'), true, 'a live id keeps its membership')
+})
+test('purge: a sweep-skip record shares the item error cap — truncated stays honest and completed deletions are unaffected', async () => {
+  const host = new FakeHost()
+  for (let i = 0; i < MAX_PURGE_ERROR_RECORDS; i += 1) {
+    const id = `fail-${i}`
+    host.archived.add(id)
+    host.states.set(id, state(id))
+    host.failDeletes.set(id, { code: 'storage', remaining: 1 })
+  }
+  host.archived.add('ghost') // record-less member → the sweep runs
+  host.failStateReadOnAttempt = 2 // …and its confirmation read fails
+  const core = new ArchiveCleanupCore(host)
+  const result = await core.purge()
+  assert.equal(result.errors.length, MAX_PURGE_ERROR_RECORDS)
+  assert.equal(result.truncated, true, 'the dropped sweep-skip record still sets the honest truncation flag')
+  assert.equal(result.errors.every(error => error.code === 'storage'), true)
+  assert.equal(result.deletedSessions, 0)
+  assert.equal(result.clearedOrphanMembers, undefined)
+  assert.equal(host.removalCalls.length, 0, 'nothing completed and the sweep was skipped → no write')
+  assert.equal(host.archived.has('ghost'), true)
+  assert.equal(host.archived.size, MAX_PURGE_ERROR_RECORDS + 1)
+})
+test('purge: a failed single set write keeps the swept orphans archived too (honest zero, rerun converges)', async () => {
+  const host = buildHost()
+  host.removalFailureRemaining = 1
+  const core = new ArchiveCleanupCore(host)
+  const result = await core.purge()
+  assert.equal(result.deletedSessions, 2, 'content deletions stand')
+  assert.equal(result.clearedOrphanMembers, undefined, 'the failed write swept nothing')
+  assert.equal(result.errors.length, 1)
+  assert.equal(result.errors[0]?.code, 'archive-set')
+  assert.equal(host.archived.has('s-orphan'), true)
+  const again = await core.purge()
+  assert.equal(again.errors.length, 0)
+  assert.equal(again.deletedSessions, 0, 'content was already gone')
+  // Convergence: the two completed-but-unwritten roots now have no record
+  // either, so they are swept as orphans together with the historical member.
+  assert.equal(again.clearedOrphanMembers, 3)
+  assert.equal(host.archived.has('s-orphan'), false)
+  assert.equal(host.archived.has('s1'), false)
+  assert.equal(host.archived.has('s2'), false)
 })

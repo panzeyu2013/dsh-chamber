@@ -548,22 +548,6 @@ test('plugin: a mount that THROWS does not poison the SAME ctx (a retry can moun
   assert.equal(attempts, 2)
 })
 
-test('source lock: the generated-module template contains no stray backtick', () => {
-  // The module body is a TS template literal; a backtick inside it (easy to
-  // write in a comment that quotes an identifier) terminates the literal and
-  // breaks the parse — this happened three times during review. Cheaper to pin
-  // than to re-learn: the ONLY backticks allowed are the literal's own
-  // delimiters.
-  const source = readFileSync(new URL('../../src/host-log-bridge.ts', import.meta.url), 'utf8')
-  const marker = 'export default function chamberHostLogBridge(ctx)'
-  const start = source.indexOf(marker)
-  assert.ok(start !== -1, 'the generated module body must still exist')
-  const body = source.slice(start)
-  const end = body.indexOf('\n`\n')
-  assert.ok(end !== -1, 'the generated module template must be closed with a line-level backtick')
-  assert.ok(!body.slice(0, end).includes('`'), 'no backtick may appear inside the generated module template')
-})
-
 test('plugin: a broken host context never throws out of the mount', async t => {
   const dir = tempDir(t)
   const plugin = await loadGeneratedPlugin('warn', dir)

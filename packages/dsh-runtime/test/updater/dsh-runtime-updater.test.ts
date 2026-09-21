@@ -3,7 +3,8 @@
  * 无 electron。覆盖：SingleFlight 单飞互斥（二次 tryBegin false / end 后可再入 /
  * inFlight 态）、isNoopSelection 三态、buildVersionList（active 置顶去重 / latest
  * 标记 / 降序 / cached 标记 / belowBaseline 与基线空不标 / byVersion 缺失跳过）、
- * versionExists（integrity 可空的放宽语义）。
+ * versionExists（integrity 可空的放宽语义）。近似用例合并为表驱动（断言逐条保留）
+ * ——2026-12 测试精简。
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -43,65 +44,40 @@ function makeMeta(
   };
 }
 
-// ---------------------------------------------------------------------------
-// SingleFlight
-// ---------------------------------------------------------------------------
-
-test('SingleFlight: tryBegin 首次成功置位，inFlight 为 true', () => {
+test('SingleFlight: 单飞生命周期（置位 / 二次 tryBegin false / end 后再入 / 休闲 end 幂等）', () => {
   const flight = new SingleFlight();
   assert.equal(flight.inFlight, false);
   assert.equal(flight.tryBegin(), true);
   assert.equal(flight.inFlight, true);
-});
-
-test('SingleFlight: 在途期间二次 tryBegin 返回 false（互斥，覆盖整个 install 窗口）', () => {
-  const flight = new SingleFlight();
-  assert.equal(flight.tryBegin(), true);
+  // 在途期间二次 tryBegin 返回 false（互斥，覆盖整个 install 窗口）
   assert.equal(flight.tryBegin(), false);
   assert.equal(flight.tryBegin(), false);
   assert.equal(flight.inFlight, true);
-});
-
-test('SingleFlight: end 结束在途后可再入（inFlight 回到 false）', () => {
-  const flight = new SingleFlight();
-  assert.equal(flight.tryBegin(), true);
   flight.end();
   assert.equal(flight.inFlight, false);
   assert.equal(flight.tryBegin(), true, 'end 后应可再次进入在途');
   assert.equal(flight.tryBegin(), false, '再次进入后恢复互斥');
   flight.end();
   assert.equal(flight.inFlight, false);
-});
-
-test('SingleFlight: 不在途时调用 end 无副作用，仍可正常 tryBegin', () => {
-  const flight = new SingleFlight();
+  // 不在途时调用 end 无副作用，仍可正常 tryBegin
   flight.end();
   assert.equal(flight.inFlight, false);
   assert.equal(flight.tryBegin(), true);
 });
 
-// ---------------------------------------------------------------------------
-// isNoopSelection
-// ---------------------------------------------------------------------------
-
-test('isNoopSelection: chosen 与 active 都非 null 且相等 → true（选择当前激活版本 = 无操作）', () => {
-  assert.equal(isNoopSelection('1.2.3', '1.2.3'), true);
+test('isNoopSelection: 三态全表（相等 → true；任一 null / 不等 → false）', () => {
+  const cases: Array<[string | null, string | null, boolean]> = [
+    ['1.2.3', '1.2.3', true],
+    [null, '1.2.3', false],
+    ['1.2.3', null, false],
+    [null, null, false],
+    ['1.2.3', '2.0.0', false],
+    ['1.2.3', '1.2.3-rc.1', false],
+  ];
+  for (const [chosen, active, expected] of cases) {
+    assert.equal(isNoopSelection(chosen, active), expected, String(chosen) + ' vs ' + String(active));
+  }
 });
-
-test('isNoopSelection: chosen 为 null 或 active 为 null → false（三态中的空态）', () => {
-  assert.equal(isNoopSelection(null, '1.2.3'), false);
-  assert.equal(isNoopSelection('1.2.3', null), false);
-  assert.equal(isNoopSelection(null, null), false);
-});
-
-test('isNoopSelection: 两者不等 → false', () => {
-  assert.equal(isNoopSelection('1.2.3', '2.0.0'), false);
-  assert.equal(isNoopSelection('1.2.3', '1.2.3-rc.1'), false);
-});
-
-// ---------------------------------------------------------------------------
-// buildVersionList
-// ---------------------------------------------------------------------------
 
 test('buildVersionList: active 版本置顶且去重（只出现一次）', () => {
   const meta = makeMeta(['0.9.0', '1.0.0', '1.1.0', '2.0.0'], '2.0.0');
@@ -111,11 +87,10 @@ test('buildVersionList: active 版本置顶且去重（只出现一次）', () =
     ['1.0.0', '2.0.0', '1.1.0', '0.9.0'],
     'active 应第一个，其余按 semver 降序，active 不重复出现',
   );
-  assert.equal(entries[0].version, '1.0.0');
   assert.equal(entries.filter((e) => e.version === '1.0.0').length, 1, 'active 去重');
 });
 
-test('buildVersionList: 列表 = active 置顶 + 纯 semver 降序；latest 只留标记、不再钉位（决策 11）', () => {
+test('buildVersionList: 列表 = active 置顶 + 纯 semver 降序；latest 只留标记、不钉位（决策 11）', () => {
   // npm dist-tags.latest 可能是低于内建基线的旧版本（2026-10 用户场景：latest=rc.2
   // < 内建 alpha.2）：不得把 latest 钉到第二位，否则无标签解释的乱序。
   const meta = makeMeta(['0.9.0', '1.0.0', '1.1.0', '2.0.0-rc.1', '2.0.0'], '1.0.0');
@@ -153,21 +128,18 @@ test('buildVersionList: 列表 = active 置顶 + 纯 semver 降序；latest 只�
     ['1.0.0', '2.0.0'],
     'latest 不可列出时保持降序，不出现 3.0.0',
   );
-});
 
-test('buildVersionList: latest 标记 dist-tags.latest 对应条目，其余为 false；latest 为空恒 false', () => {
-  const meta = makeMeta(['1.0.0', '1.1.0', '2.0.0-rc.1', '2.0.0'], '2.0.0');
-  const entries = buildVersionList(meta, { active: null, cachedVersions: [], compatibilityBaseline: null });
-  const latestEntry = entries.find((e) => e.latest);
-  assert.ok(latestEntry, '应恰有一条 latest 标记');
-  assert.equal(latestEntry!.version, '2.0.0');
-  assert.equal(entries.filter((e) => e.latest).length, 1);
-
+  // meta.latest 为 null 时无任何推荐标记（NoLatest）；有 latest 时恰一条。
   const noLatest = buildVersionList(
     makeMeta(['1.0.0', '1.1.0'], null),
     { active: null, cachedVersions: [], compatibilityBaseline: null },
   );
   assert.ok(noLatest.every((e) => e.latest === false), 'meta.latest 为 null 时无任何推荐标记');
+  const flagged = buildVersionList(makeMeta(['1.0.0', '1.1.0', '2.0.0-rc.1', '2.0.0'], '2.0.0'), {
+    active: null, cachedVersions: [], compatibilityBaseline: null,
+  });
+  assert.equal(flagged.find((e) => e.latest)?.version, '2.0.0', '应恰有一条 latest 标记');
+  assert.equal(flagged.filter((e) => e.latest).length, 1);
 });
 
 test('buildVersionList: 其余版本按 semver 降序（数字段 + prerelease：release > prerelease、长列表优先）', () => {
@@ -183,7 +155,7 @@ test('buildVersionList: 其余版本按 semver 降序（数字段 + prerelease�
   );
 });
 
-test('buildVersionList: cached 标记 = version ∈ cachedVersions（离线缓存版本）', () => {
+test('buildVersionList: cached 标记 = version ∈ cachedVersions（且 IPC 投影不暴露 tarball/integrity）', () => {
   const meta = makeMeta(['1.0.0', '1.1.0', '2.0.0'], '2.0.0');
   const entries = buildVersionList(meta, {
     active: null,
@@ -254,24 +226,19 @@ test('buildVersionList: validated cached trees are unioned even after registry y
   assert.equal(entries.some((entry) => entry.version === '../unsafe'), false);
 });
 
-// ---------------------------------------------------------------------------
-// versionExists
-// ---------------------------------------------------------------------------
+test('versionExists: 需 byVersion 记录 + 非空 tarball + integrity；缺失/空 → false', () => {
+  const withSri = makeMeta(['1.0.0'], null, (v) => `https://registry.npmjs.org/dsh/-/dsh-${v}.tgz`, () => VALID_SRI);
+  assert.equal(versionExists(withSri, '1.0.0'), true);
 
-test('versionExists: byVersion 有记录且 tarball 非空（含 integrity）→ true', () => {
-  const meta = makeMeta(
-    ['1.0.0'],
-    null,
-    (v) => `https://registry.npmjs.org/dsh/-/dsh-${v}.tgz`,
-    () => VALID_SRI,
-  );
-  assert.equal(versionExists(meta, '1.0.0'), true);
-});
-
-test('versionExists: 缺 integrity 但有 tarball → false（不可进入安装路径）', () => {
   const meta = makeMeta(['1.0.0'], null);
   assert.equal(meta.byVersion.get('1.0.0')!.integrity, null);
-  assert.equal(versionExists(meta, '1.0.0'), false);
+  assert.equal(versionExists(meta, '1.0.0'), false, '缺 integrity 但有 tarball → false（不可进入安装路径）');
+  assert.equal(versionExists(meta, '9.9.9'), false, '不在 byVersion → false');
+
+  const byVersion = new Map(meta.byVersion);
+  byVersion.set('2.0.0', { version: '2.0.0', tarball: '', integrity: null });
+  assert.equal(versionExists({ byVersion }, '2.0.0'), false, 'tarball 为空（registry 有版本但无下载地址）→ false');
+  assert.equal(versionExists({ byVersion: new Map() }, '1.0.0'), false, '空 byVersion → false');
 });
 
 test('bindRuntimeInstallResolution: binds exact origin + tarball + integrity', () => {
@@ -298,20 +265,6 @@ test('bindRuntimeInstallResolution: source change and missing SRI fail closed', 
     () => bindRuntimeInstallResolution(missingSri, '1.0.0', missingSri.origin),
     /integrity/,
   );
-});
-
-test('versionExists: 版本不在 byVersion 或 tarball 为空 → false', () => {
-  const meta = makeMeta(['1.0.0'], null);
-  assert.equal(versionExists(meta, '9.9.9'), false, '不在 byVersion → false');
-
-  const byVersion = new Map(meta.byVersion);
-  byVersion.set('2.0.0', { version: '2.0.0', tarball: '', integrity: null });
-  assert.equal(
-    versionExists({ byVersion }, '2.0.0'),
-    false,
-    'tarball 为空（registry 有版本但无下载地址）→ false',
-  );
-  assert.equal(versionExists({ byVersion: new Map() }, '1.0.0'), false, '空 byVersion → false');
 });
 
 test('compareRuntimeVersions: supports arbitrarily large numeric identifiers without precision loss', () => {

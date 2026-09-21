@@ -137,15 +137,6 @@ test('packaged runtime verification rejects version or platform drift', () => {
   }
 });
 
-test('upstream client-plugin closure sample pins the sidebarRight provider and its first-screen deps (S4)', () => {
-  // 收缩抽样 = 有意删门禁：这个断言让删除/改写必须是一次显式编辑。
-  assert.deepEqual([...PACKAGED_CLIENT_CLOSURE_SAMPLE], [
-    '@deepseek-ai/dsh-client-ui-sidebar-right',
-    '@deepseek-ai/dsh-client-resources',
-    '@deepseek-ai/dsh-client-ui-chat',
-  ]);
-});
-
 test('startup and packaging closure samples stay in lockstep (S4)', () => {
   assert.deepEqual(
     RUNTIME_CLIENT_CLOSURE_SAMPLE.map((entry) => entry.split('/').slice(0, 3).join('/')),

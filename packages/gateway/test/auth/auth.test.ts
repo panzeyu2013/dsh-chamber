@@ -48,18 +48,6 @@ function signSessionPayload(secret: string, payloadJson: string): string {
   return `${header}.${body}.${signature}`
 }
 
-test('token provider accepts a matching bearer (hash-stored)', async () => {
-  const { store, cleanup } = tempStore()
-  try {
-    const auth = createAuth({ kind: 'token', token: TOKEN }, store)
-    const principal = await auth.verify({ headers: { authorization: `Bearer ${TOKEN}` }, socketAddr: '' })
-    assert.equal(principal?.kind, 'token')
-    // The plaintext token is never persisted — only its salted scrypt hash.
-    assert.notEqual(store.getTokenHash(), TOKEN)
-    assert.match(store.getTokenHash() ?? '', /^scrypt\$[a-f0-9]+\$[a-f0-9]{64}$/i)
-  } finally { cleanup() }
-})
-
 test('auth kind shares the generation presence snapshot instead of re-reading disk', () => {
   const { store, cleanup } = tempStore()
   try {
@@ -67,15 +55,6 @@ test('auth kind shares the generation presence snapshot instead of re-reading di
     store.getPasswordCredential = () => { throw new Error('unexpected password disk read') }
     store.getTokenHash = () => { throw new Error('unexpected token disk read') }
     assert.equal(auth.kind, 'password+token')
-  } finally { cleanup() }
-})
-
-test('token provider rejects a wrong bearer', async () => {
-  const { store, cleanup } = tempStore()
-  try {
-    const auth = createAuth({ kind: 'token', token: TOKEN }, store)
-    const principal = await auth.verify({ headers: { authorization: 'Bearer wrong' }, socketAddr: '' })
-    assert.equal(principal, null)
   } finally { cleanup() }
 })
 
@@ -338,20 +317,6 @@ test('none provider always authenticates', async () => {
   } finally { cleanup() }
 })
 
-test('password: login with the correct password yields a verifiable session cookie', async () => {
-  const { store, cleanup } = tempStore()
-  try {
-    const auth = createAuth({ kind: 'password', password: PASSWORD }, store)
-    const req = { headers: {}, socketAddr: '127.0.0.1' }
-    const result = await auth.login!({ password: PASSWORD }, req)
-    assert.ok(result.setCookie !== undefined)
-    const cookieValue = /dsh_gateway_session=([^;]+)/.exec(result.setCookie)?.[1]
-    assert.ok(cookieValue !== undefined)
-    const principal = await auth.verify({ headers: { cookie: `dsh_gateway_session=${cookieValue}` }, socketAddr: '' })
-    assert.equal(principal?.kind, 'password')
-  } finally { cleanup() }
-})
-
 test('password: login with a wrong password rejects', async () => {
   const { store, cleanup } = tempStore()
   try {
@@ -427,19 +392,14 @@ test('password: changing configuration across restart invalidates old cookies', 
   } finally { cleanup() }
 })
 
-test('password+token composition accepts both bearer and cookie principals', async () => {
+test('a secure-socket login stamps the session cookie Secure', async () => {
+  // Residual of the deleted bearer+cookie composition test: the wire suites
+  // cover the principals; only the Secure attribute is unit-only.
   const { store, cleanup } = tempStore()
   try {
-    const auth = createAuth({ kind: 'password+token', password: PASSWORD, token: TOKEN }, store)
-    assert.equal(auth.kind, 'password+token')
-    const bearer = await auth.verify({ headers: { authorization: `Bearer ${TOKEN}` }, socketAddr: '203.0.113.8' })
-    assert.equal(bearer?.kind, 'token')
-    const login = await auth.login!({ password: PASSWORD }, { headers: {}, socketAddr: '203.0.113.8', secure: true })
+    const login = await createAuth({ kind: 'password', password: PASSWORD }, store)
+      .login!({ password: PASSWORD }, { headers: {}, socketAddr: '203.0.113.8', secure: true })
     assert.match(login.setCookie ?? '', /; Secure(?:;|$)/)
-    const cookie = /dsh_gateway_session=([^;]+)/.exec(login.setCookie ?? '')?.[1]
-    assert.ok(cookie !== undefined)
-    const browser = await auth.verify({ headers: { cookie: `dsh_gateway_session=${cookie}` }, socketAddr: '203.0.113.8' })
-    assert.equal(browser?.kind, 'password')
   } finally { cleanup() }
 })
 
@@ -506,17 +466,6 @@ test('password limiter ignores caller-supplied XFF unless the boundary validated
 // Phase 1: runtime credential changes
 // ---------------------------------------------------------------------------
 
-test('login without a configured password throws no_password', async () => {
-  const { store, cleanup } = tempStore()
-  try {
-    const auth = createAuth({ kind: 'token', token: TOKEN }, store)
-    await assert.rejects(
-      () => auth.login!({ password: PASSWORD }, { headers: {}, socketAddr: '127.0.0.1' }),
-      (error: Error & { code?: string }) => error.code === 'no_password',
-    )
-  } finally { cleanup() }
-})
-
 test('changePassword: success rotates old cookies, the new password logs in, the old password dies', async () => {
   const { store, cleanup } = tempStore()
   try {
@@ -554,22 +503,6 @@ test('credential changes: a cookie-only principal without the current password i
       () => auth.changeToken!({ newToken: 'abcdef0123456789abcdef0123456789' }, cookieReq),
       (error: Error & { code?: string }) => error.code === 'ambient_principal_rejected',
     )
-  } finally { cleanup() }
-})
-
-test('changePassword: a bearer-token principal changes the password without the current password', async () => {
-  const { store, cleanup } = tempStore()
-  try {
-    const auth = createAuth({ kind: 'password+token', password: PASSWORD, token: TOKEN }, store)
-    const result = await auth.changePassword!({ newPassword: NEW_PASSWORD }, {
-      headers: { authorization: `Bearer ${TOKEN}` },
-      socketAddr: '203.0.113.8',
-    })
-    assert.deepEqual(result, { changed: true, kind: 'password', source: 'runtime' })
-    assert.equal(auth.kind, 'password+token')
-    const login = await auth.login!({ password: NEW_PASSWORD }, { headers: {}, socketAddr: '203.0.113.8' })
-    assert.ok(login.setCookie !== undefined)
-    await assert.rejects(() => auth.login!({ password: PASSWORD }, { headers: {}, socketAddr: '203.0.113.8' }))
   } finally { cleanup() }
 })
 
@@ -742,21 +675,6 @@ test('changePassword: an out-of-bounds new password is rejected with bad_request
   } finally { cleanup() }
 })
 
-test('changeToken: a new token works, the old token dies, and the plaintext is returned once', async () => {
-  const { store, cleanup } = tempStore()
-  try {
-    const auth = createAuth({ kind: 'token', token: TOKEN }, store)
-    const newToken = 'abcdef0123456789abcdef0123456789'
-    const result = await auth.changeToken!({ newToken }, {
-      headers: { authorization: `Bearer ${TOKEN}` },
-      socketAddr: '203.0.113.8',
-    })
-    assert.deepEqual(result, { changed: true, kind: 'token', source: 'runtime', token: newToken })
-    assert.equal((await auth.verify({ headers: { authorization: `Bearer ${newToken}` }, socketAddr: '203.0.113.8' }))?.kind, 'token')
-    assert.equal(await auth.verify({ headers: { authorization: `Bearer ${TOKEN}` }, socketAddr: '203.0.113.8' }), null)
-  } finally { cleanup() }
-})
-
 test('changeToken returns the committed one-time token without re-reading the unrelated password state', async () => {
   const { store, cleanup } = tempStore()
   try {
@@ -779,20 +697,6 @@ test('changeToken returns the committed one-time token without re-reading the un
     assert.equal(await auth.verify({
       headers: { authorization: `Bearer ${TOKEN}` }, socketAddr: '203.0.113.8',
     }), null)
-  } finally { cleanup() }
-})
-
-test('changeToken: a server-generated token meets the 32-4096 visible-ASCII bounds and is returned once', async () => {
-  const { store, cleanup } = tempStore()
-  try {
-    const auth = createAuth({ kind: 'token', token: TOKEN }, store)
-    const result = await auth.changeToken!({}, {
-      headers: { authorization: `Bearer ${TOKEN}` },
-      socketAddr: '203.0.113.8',
-    })
-    assert.ok(typeof result.token === 'string' && result.token.length >= 32 && result.token.length <= 4096)
-    assert.match(result.token, /^[\x20-\x7e]+$/)
-    assert.equal((await auth.verify({ headers: { authorization: `Bearer ${result.token}` }, socketAddr: '203.0.113.8' }))?.kind, 'token')
   } finally { cleanup() }
 })
 

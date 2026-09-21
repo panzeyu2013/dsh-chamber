@@ -45,7 +45,6 @@ const GROUPS = {
   'session-health': [
     'test/session-health/session-stream-health.test.ts',
     'test/session-health/stream-health-chip-face.test.ts',
-    'test/session-health/stream-health-wiring.test.ts',
     // Vendor lockstep: reads vendor/harness-packages (needs an installed tree,
     // like every other vendor-reading test) and fails loudly if the three facts
     // the heal depends on ever change with a pin upgrade.

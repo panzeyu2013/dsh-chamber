@@ -8,8 +8,7 @@
  *   - insertConflict: the shared classification host-graph-seed.ts and
  *     plugin-sync.ts both map onto their own message wording;
  *   - the host-graph-seed reuse: buildPatchOverlay materializes EXACTLY
- *     renderCordisInserts output (byte-identical overlay render), and
- *     missingHostPackageInserts consumes the same classification.
+ *     renderCordisInserts output (byte-identical overlay render).
  * Run directly: node packages/control-plane/test/plugins/cordis-inserts.test.ts
  */
 
@@ -30,9 +29,7 @@ import {
   buildPatchOverlay,
   HOST_GIT_WORKTREE_INSERT,
   HOST_GRAPH_INSERT,
-  HOST_GRAPH_PACKAGE_NAME,
   HOST_GRAPH_PATCH_FILENAME,
-  missingHostPackageInserts,
 } from '../../src/host-graph-seed.ts'
 
 const CLIENT_GRAPH: CordisInsert = { id: 'client-graph', name: '@dsh-chamber/dsh-chamber-seed-client-graph' }
@@ -187,17 +184,3 @@ test('buildPatchOverlay materializes EXACTLY renderCordisInserts output (single 
   assert.equal(join(dir, HOST_GRAPH_PATCH_FILENAME), path)
 })
 
-test('missingHostPackageInserts consumes the shared insertConflict classification', () => {
-  // The conflict decisions (duplicate / id-bound / name-bound wording is the
-  // host-graph-seed fail-loud surface) stay intact on top of the shared
-  // classification — host-graph-seed.test.ts covers the full matrix; this
-  // pins the wiring direction.
-  const profile = `- insert:
-    - id: client-graph
-      name: '${HOST_GRAPH_PACKAGE_NAME}'
-`
-  assert.deepEqual(
-    missingHostPackageInserts(profile, [HOST_GRAPH_INSERT, HOST_GIT_WORKTREE_INSERT]),
-    [HOST_GIT_WORKTREE_INSERT],
-  )
-})

@@ -181,13 +181,9 @@ test('applyRequireRun：INFO 在 --require-run 下改判 FAIL，已判定的结�
   assert.deepEqual(applyRequireRun(failing, true), failing, '已失败的不被覆盖证据')
 })
 
-test('脱敏：环境变量凭据值被抹掉，token/authorization/cookie 键的值也被抹掉', () => {
-  const secret = 'super-secret-token-value'
-  const redacted = redactSecrets(`{"authorization":"Bearer ${secret}","token":"abc12345","cookie":"sid=xyz9876"}`, [secret])
-  assert.ok(!redacted.includes(secret))
-  assert.ok(!redacted.includes('abc12345'))
-  assert.ok(!redacted.includes('xyz9876'))
-  assert.match(redacted, /\*\*\*/)
+test('脱敏：环境变量 secrets 列表的值也被抹掉（键值形之外的通道）', () => {
+  const redacted = redactSecrets('prefix super-secret-token-value suffix', ['super-secret-token-value'])
+  assert.ok(!redacted.includes('super-secret-token-value') && redacted.includes('***'))
 })
 
 test('脱敏：Bearer/Basic/Cookie 的**值**整段抹掉（只抹方案词等于没抹）', () => {

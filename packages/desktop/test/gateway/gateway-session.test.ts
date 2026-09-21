@@ -1,12 +1,14 @@
 /** gateway-session unit tests (design 17 §7.3/§9.3) — part 1: the password → JWT cookie login
  *  exchange against a real node:http stub (success, expiry re-login, 400/413/401 classification,
  *  429 backoff, 503, network failures, URL scheme) and the SPKI-pinned https login request shape
- *  (siblings: gateway-session-lifecycle.test.ts, gateway-session-refresh.test.ts). */
+ *  (siblings: gateway-session-lifecycle.test.ts; part 1b carries the refresh
+ *  orchestration auth boundaries merged in during the round-2 trim). */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { buildGatewaySessionOrigin, createGatewaySessionManager, GATEWAY_LOGIN_RATE_LIMIT_BACKOFF_MS, GATEWAY_SESSION_EXPIRY_SKEW_MS, GATEWAY_SESSION_TTL_MS, type GatewayHttpRequest, type GatewaySessionOrigin } from '../../gateway-session.ts'
+import { buildGatewaySessionOrigin, createGatewaySessionManager, GATEWAY_LOGIN_RATE_LIMIT_BACKOFF_MS, GATEWAY_SESSION_EXPIRY_SKEW_MS, GATEWAY_SESSION_TTL_MS, type GatewayHttpRequest, type GatewaySessionOrigin, type GatewaySessionResult } from '../../gateway-session.ts'
+import { createGatewaySessionRefresh, type GatewaySessionRefreshDeps } from '../../gateway-session-refresh.ts'
 import { COOKIE, PASSWORD, loginHandler, startGateway, stubRequestFactory, assertFailure, type LoginRecord } from '../support/gateway-session-fixtures.ts'
 
 test('ensureSession: 302 + set-cookie succeeds, caches the bare cookie value, attributes stripped (design 17 §7.1/§7.3)', async () => {
@@ -334,4 +336,186 @@ test('buildGatewaySessionOrigin is the single origin construction point (optiona
   })
   assert.equal(Object.hasOwn(pinned, 'spkiPin'), true)
   assert.equal(Object.hasOwn(buildGatewaySessionOrigin({ baseUrl: 'https://gw.example.com', insecureHttp: false, scope: 's' }), 'spkiPin'), false)
+})
+
+// ---------------------------------------------------------------------------
+// part 1b — refresh orchestration auth boundaries (merged from
+// gateway-session-refresh.test.ts, round-2 trim: same production session
+// module; the scheduler's happy path is exercised by the real-manager cycle
+// that used to live there, its auth/fact-binding negative cases are kept).
+// ---------------------------------------------------------------------------
+
+/** A fake session manager slice + a captured schedule/cancel, so the refresh
+ *  orchestration is driven deterministically (no real 12h waits). */
+function refreshHarness(overrides: Partial<GatewaySessionRefreshDeps> = {}) {
+  const state = {
+    nowMs: 1_000_000_000,
+    TTL: GATEWAY_SESSION_TTL_MS - GATEWAY_SESSION_EXPIRY_SKEW_MS,
+    expiries: new Map<string, number>(),
+    logins: [] as Array<{ origin: GatewaySessionOrigin; password: string }>,
+    registered: [] as Array<{ id: string; url: string; headers: Record<string, string> | undefined; tls: unknown; authority: string | undefined }>,
+    warned: [] as string[],
+    failNextLogin: null as Extract<GatewaySessionResult, { ok: false }> | null,
+    holdLogins: false,
+    releaseLogin: null as (() => void) | null,
+    scheduled: [] as Array<{ fn: () => void; delayMs: number }>,
+    cancelled: [] as unknown[],
+    reconnects: [] as string[],
+    readyUrls: new Map<string, string>(),
+    tokens: new Map<string, string>(),
+    passwords: new Map<string, string>(),
+    pins: new Map<string, string>(),
+    authorities: new Map<string, string>(),
+    scopes: new Map<string, string>(),
+  }
+  const keyFor = (origin: Pick<GatewaySessionOrigin, 'insecureHttp' | 'baseUrl'>) => (origin.insecureHttp ? 'http' : 'https') + '|' + origin.baseUrl
+  const deps: GatewaySessionRefreshDeps = {
+    sessionManager: {
+      ensureSession: (origin, password) => {
+        state.logins.push({ origin, password })
+        let result: GatewaySessionResult
+        if (state.failNextLogin !== null) {
+          result = state.failNextLogin
+          state.failNextLogin = null
+        } else {
+          state.expiries.set(keyFor(origin), state.nowMs + state.TTL)
+          result = { ok: true, cookie: COOKIE }
+        }
+        if (state.holdLogins) {
+          return new Promise(resolve => { state.releaseLogin = () => resolve(result) })
+        }
+        return Promise.resolve(result)
+      },
+      expiresAt: origin => {
+        const expiry = state.expiries.get(keyFor(origin))
+        if (expiry === undefined || expiry <= state.nowMs) return null
+        return expiry
+      },
+    },
+    passwordFor: id => state.passwords.get(id) ?? null,
+    tokenFor: id => state.tokens.get(id) ?? null,
+    readyUrlFor: id => state.readyUrls.get(id) ?? null,
+    tlsPinFor: id => state.pins.get(id) ?? null,
+    authorityFor: id => state.authorities.get(id),
+    scopeFor: id => state.scopes.get(id) ?? 'test:' + id,
+    register: (id, url, headers, tls, authority) => state.registered.push({ id, url, headers, tls, authority }),
+    reconnect: id => state.reconnects.push(id),
+    warn: message => state.warned.push(message),
+    now: () => state.nowMs,
+    schedule: (fn, delayMs) => { state.scheduled.push({ fn, delayMs }); return state.scheduled.length },
+    cancel: timer => state.cancelled.push(timer),
+    ...overrides,
+  }
+  const refresh = createGatewaySessionRefresh(deps)
+
+  async function fireNext(): Promise<void> {
+    const entry = state.scheduled.shift()
+    assert.ok(entry !== undefined, 'expected a scheduled refresh')
+    state.nowMs += entry.delayMs
+    entry.fn()
+    await new Promise(resolve => setTimeout(resolve, 0))
+  }
+
+  return { deps, refresh, state, keyFor, fireNext }
+}
+
+test('session refresh: the SPKI pin rides the re-registration AND the refresh login origin (S23/P1-2)', async () => {
+  const PIN = 'a'.repeat(64)
+  const h = refreshHarness()
+  h.state.readyUrls.set('gw-1', 'https://gw.example.com:8443')
+  h.state.passwords.set('gw-1', PASSWORD)
+  h.state.pins.set('gw-1', PIN)
+  h.state.expiries.set(h.keyFor({ baseUrl: 'https://gw.example.com:8443', insecureHttp: false }), h.state.nowMs + h.state.TTL)
+  h.refresh.arm('gw-1')
+  await h.fireNext()
+  assert.deepEqual(h.state.registered[0].tls, { tls: { spkiPin: PIN } })
+  assert.equal(h.state.logins.length, 1)
+  assert.equal(h.state.logins[0].origin.spkiPin, PIN, 'the refresh login origin carries the configured SPKI pin')
+})
+
+test('session refresh: delete/recreate at the same direct URL makes an old held success unable to register', async () => {
+  const h = refreshHarness()
+  const id = 'gw-same'
+  const origin = { baseUrl: 'https://gw.example.com:8443', insecureHttp: false }
+  h.state.readyUrls.set(id, origin.baseUrl)
+  h.state.passwords.set(id, PASSWORD)
+  h.state.expiries.set(h.keyFor(origin), h.state.nowMs + h.state.TTL)
+  h.state.holdLogins = true
+  h.refresh.arm(id)
+  const oldFire = h.state.scheduled.shift()
+  assert.ok(oldFire !== undefined)
+  h.state.nowMs += oldFire.delayMs
+  oldFire.fn()
+  assert.equal(typeof h.state.releaseLogin, 'function')
+
+  h.refresh.disarm(id)
+  h.state.readyUrls.delete(id)
+  h.state.passwords.delete(id)
+  h.state.readyUrls.set(id, origin.baseUrl)
+  h.state.passwords.set(id, PASSWORD)
+  h.state.expiries.set(h.keyFor(origin), h.state.nowMs + h.state.TTL)
+  h.refresh.arm(id)
+  h.state.releaseLogin?.()
+  await new Promise(resolve => setTimeout(resolve, 0))
+
+  assert.equal(h.state.registered.length, 0, 'the deleted generation cookie never registers on the recreated id')
+  assert.equal(h.state.scheduled.length, 1, 'only the recreated generation timer remains')
+})
+
+test('session refresh: delete/recreate at the same direct URL makes an old held failure unable to reconnect', async () => {
+  const h = refreshHarness()
+  const id = 'gw-same'
+  const origin = { baseUrl: 'https://gw.example.com:8443', insecureHttp: false }
+  h.state.readyUrls.set(id, origin.baseUrl)
+  h.state.passwords.set(id, PASSWORD)
+  h.state.expiries.set(h.keyFor(origin), h.state.nowMs + h.state.TTL)
+  h.state.failNextLogin = { ok: false, code: 'network', error: 'held old-generation network failure' }
+  h.state.holdLogins = true
+  h.refresh.arm(id)
+  const oldFire = h.state.scheduled.shift()
+  assert.ok(oldFire !== undefined)
+  h.state.nowMs += oldFire.delayMs
+  oldFire.fn()
+  assert.equal(typeof h.state.releaseLogin, 'function')
+
+  h.refresh.disarm(id)
+  h.state.expiries.delete(h.keyFor(origin))
+  h.state.readyUrls.set(id, origin.baseUrl)
+  h.state.passwords.set(id, PASSWORD)
+  h.state.expiries.set(h.keyFor(origin), h.state.nowMs + h.state.TTL)
+  h.refresh.arm(id)
+  h.state.releaseLogin?.()
+  await new Promise(resolve => setTimeout(resolve, 0))
+
+  assert.equal(h.state.warned.length, 0, 'the old failure cannot warn against the recreated generation')
+  assert.equal(h.state.reconnects.length, 0, 'the old failure cannot reconnect the recreated generation')
+  assert.equal(h.state.scheduled.length, 1)
+})
+
+test('session refresh: in-flight result is bound to password, token, SPKI pin, tunnel authority, and exact target scope facts', async () => {
+  const cases: Array<{ name: string; seed(h: ReturnType<typeof refreshHarness>): void; mutate(h: ReturnType<typeof refreshHarness>): void }> = [
+    { name: 'password', seed: () => {}, mutate: h => { h.state.passwords.set('gw-facts', 'replacement password value') } },
+    { name: 'token', seed: h => { h.state.tokens.set('gw-facts', 'x'.repeat(32)) }, mutate: h => { h.state.tokens.set('gw-facts', 'y'.repeat(32)) } },
+    { name: 'SPKI pin', seed: h => { h.state.pins.set('gw-facts', 'a'.repeat(64)) }, mutate: h => { h.state.pins.set('gw-facts', 'b'.repeat(64)) } },
+    { name: 'authority', seed: h => { h.state.authorities.set('gw-facts', '127.0.0.1:30801') }, mutate: h => { h.state.authorities.set('gw-facts', '127.0.0.1:30802') } },
+    { name: 'target scope', seed: h => { h.state.scopes.set('gw-facts', 'v1:gw-facts:' + 'a'.repeat(64)) }, mutate: h => { h.state.scopes.set('gw-facts', 'v1:gw-facts:' + 'b'.repeat(64)) } },
+  ]
+  for (const entry of cases) {
+    const h = refreshHarness()
+    const origin = { baseUrl: 'http://127.0.0.1:40000', insecureHttp: true }
+    h.state.readyUrls.set('gw-facts', origin.baseUrl)
+    h.state.passwords.set('gw-facts', PASSWORD)
+    entry.seed(h)
+    h.state.expiries.set(h.keyFor(origin), h.state.nowMs + h.state.TTL)
+    h.state.holdLogins = true
+    h.refresh.arm('gw-facts')
+    const fire = h.state.scheduled.shift()
+    assert.ok(fire !== undefined, entry.name + ': timer armed')
+    h.state.nowMs += fire.delayMs
+    fire.fn()
+    entry.mutate(h)
+    h.state.releaseLogin?.()
+    await new Promise(resolve => setTimeout(resolve, 0))
+    assert.equal(h.state.registered.length, 0, entry.name + ': stale fact-bound login cannot register')
+  }
 })

@@ -241,15 +241,6 @@ test('lockstep: our route/protocol/disabled literals are pinned to the control-p
   assert.equal(SESSION_FACTS_DISABLED_CODE, 'session_state_disabled')
 })
 
-test('source text: ack URLs are the canonical read routes and never a client wall clock', () => {
-  const source = stripComments(readFileSync(
-    fileURLToPath(new URL('../../src/session-facts-source.ts', import.meta.url)),
-    'utf8',
-  ))
-  assert.match(source, /ackRead\(clientId, sessionId, readThrough\)/)
-  assert.match(source, /ackAllRead\(clientId, through\)/)
-})
-
 // ── R22：ack 失败重放（恢复钩子 = 既有 facts 帧到达点） ─────────────────────
 
 /** R22 假件：GET 回合法快照；POST 可编程失败；服务端按单调 max 合并水位。 */

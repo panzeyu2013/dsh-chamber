@@ -19,8 +19,8 @@
  *     instancesFile=userData/ssh-instances.json（instancesFilePath 模板）/
  *     logger→stderr [transport-manager] 前缀）——main 1437-1451。
  *  3. loadInstances 启动（corrupt→loud + 保留 .corrupt，语义同 main 1452-1466）；
- *  4. audit 真实：configureAuditLog + appendAuditEvent({file})（main 1433-1436；
- *     JSONL append + 5 MiB 轮换 + 白名单序列化——S24）；
+ *  4. audit 真实：appendAuditEvent({file})（与 main 同参；JSONL append + 5 MiB
+ *     轮换 + 白名单序列化——S24）；
  *  5. publishRegistryTransition 真实叶（main 2094-2159 纯逻辑部分：投影计算 /
  *     来源代际同步 / setGatewaySyncRegistration 注销 / sshPluginJournal 撤销 /
  *     SSH_INSTANCES_CHANGED committed push——push 经注入 edges.rendererPush +
@@ -121,14 +121,11 @@ import { auditLogFilePath, captureNotificationSource, chamberSettingsFilePath, g
 import { attemptCommittedRegistryPush, computeRemovedInstanceIds, computeRetiredInstanceIds, createTransportManager, type TransportManager } from './transport-manager.ts';
 import { reconnectStaleTransports } from './transport-reconnect.ts';
 import type { TransportInstanceSpec } from './transport-provider.ts';
-// Public surface kept for the sidecar wake-reprobe lockstep test
-// (sidecar-stdio.test.ts imports this module namespace directly).
-export { reconnectStaleTransports };
 import { cleanupStaleAskpassHelpers, configureSshPasswordStore, probeChamberHostLive, sshProvider } from './ssh-provider.ts';
 import { configureGatewaySecretStore, configureGatewaySessionProvider, gatewayProvider, getGatewayPassword, getGatewayToken, syncGatewayChamberPlugins, type LocalChamberHostPackage } from './gateway-provider.ts';
 import { createGatewaySessionManager, gatewayRegistrationAuthHeaders, gatewaySessionScopeForConnection, type GatewayRegistrationAuthProof } from './gateway-session.ts';
 import { createGatewaySessionRefresh, gatewaySessionOriginForUrl, gatewayTunnelAuthority, type GatewaySessionRefresh } from './gateway-session-refresh.ts';
-import { appendAuditEvent, configureAuditLog, type AuditEvent } from './audit-log.ts';
+import { appendAuditEvent, type AuditEvent } from './audit-log.ts';
 import { createSshPluginJournal } from './ssh-plugin-journal.ts';
 import { sanitizeErrorText } from './sanitize-error.ts';
 import { createHeadlessUpdateController } from './update-headless.ts';
@@ -557,11 +554,9 @@ export async function buildHeadlessCtx(
   })
 
   // S24 非秘密审计叶（design 17 §13.4.4, JSONL append + 5 MiB 轮换, 0600——
-  // audit-log.ts 模块；main 1433-1436 同参：configureAuditLog(<userData>/
-  // audit-log.jsonl) + appendAuditEvent({file})。序列化白名单/凭据值绝不入日志
-  // 纪律在 serializeAuditEvent（control-plane 审计单源）——本叶只做文件绑定）。
-  const auditLogNotice = configureAuditLog(auditLogPath)
-  if (auditLogNotice !== null) console.error(`[sidecar] audit log: ${auditLogNotice}`)
+  // audit-log.ts 模块；main 同参：appendAuditEvent({file})。序列化白名单/凭据值
+  // 绝不入日志纪律在 serializeAuditEvent（control-plane 审计单源）——本叶只做
+  // 文件绑定）。
   const audit = (event: AuditEvent): void => appendAuditEvent({ file: auditLogPath }, event)
 
   // Transport manager（design 03 §2.2/05 §7-§8）：与 main 1437-1451 同源同参。

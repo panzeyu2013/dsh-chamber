@@ -146,31 +146,6 @@ test('verifyDshEndpoint: a 401 answer is the 0.1.2 browser-auth gate — termina
     assert.match(result.detail ?? '', /answered HTTP 401/)
   })
 })
-test('probeDshSignature: an oversized identity answer is no signature (default 64 KiB cap) and never re-answers legacy', async () => {
-  let sessionListCalls = 0
-  const server = createServer((req, res) => {
-    if (req.url === '/api/session/canOpenWorkspacePath') {
-      // ~64 KiB + framing — just over the default HOST_PROBE_MAX_RESPONSE_BYTES
-      // cap of the identity arm; no content-length needed, postClientRequest
-      // counts streamed bytes.
-      res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ padding: 'x'.repeat(64 * 1024) }))
-      return
-    }
-    if (req.url === '/api/session/list') {
-      sessionListCalls += 1
-      res.writeHead(200, { 'content-type': 'application/json' })
-      res.end('{}')
-      return
-    }
-    res.writeHead(404)
-    res.end()
-  })
-  await withLoopbackServer(server, async port => {
-    assert.equal(await probeDshSignature({ host: '127.0.0.1', port }), 'none')
-    assert.equal(sessionListCalls, 0, 'an answered identity arm never re-answers the legacy probe')
-  })
-})
 test('probeDshSignature: the identity arm cap is the 64 KiB default (a >64 KiB padded envelope is no signature)', async () => {
   // Discriminating pin for the signature arm's cap VALUE: the answer is a
   // VALID identity envelope (ok:true + boolean) padded past 64 KiB but far

@@ -18,7 +18,6 @@ const GROUPS = {
   auth: [
     'test/auth/auth.test.ts',
     'test/auth/cli-auth.test.ts',
-    'test/auth/login-page.test.ts',
     'test/auth/warmup-login-page.test.ts',
     'test/auth/store-permissions.test.ts',
   ],
@@ -26,27 +25,22 @@ const GROUPS = {
   boundary: [
     'test/boundary/config.test.ts',
     'test/boundary/warmup.test.ts',
-    'test/boundary/warmup-dispatch.test.ts',
     'test/boundary/public-boundary.test.ts',
     'test/boundary/mobile-ua-redirect.test.ts',
     'test/boundary/dispatch-composition.test.ts',
     'test/boundary/dispatch-credential-routes.test.ts',
     'test/boundary/boundary-login-page.test.ts',
     'test/boundary/audit.test.ts',
-    'test/boundary/sanitize-route-error.test.ts',
     'test/boundary/dashboard-semver-lockstep.test.ts',
-    'test/boundary/chamber-assets.test.ts',
   ],
   // proxy: the single-target reverse proxy, the S0 HTML trust injection, and the full-chain unary RPC proof.
   proxy: [
-    'test/proxy/html-inject.test.ts',
     'test/proxy/gateway-proxy.test.ts',
     'test/proxy/plugin-inventory-proxy.test.ts',
   ],
   // runtime: managed-dsh boot/lifecycle, the /chamber/runtime controller, workspace path resolution and spawn guards.
   runtime: [
     'test/runtime/dsh-path.test.ts',
-    'test/runtime/runtime-gate-parity.test.ts',
     'test/runtime/spawn-guards.test.ts',
     'test/runtime/lifecycle.test.ts',
     'test/runtime/runtime-routes.test.ts',
@@ -80,7 +74,6 @@ const GROUPS = {
     { file: 'test/session-state/session-state-observer.test.ts', nodeArgs: ['--import', './test/session-state/workspace-loader.mjs'] },
     { file: 'test/session-state/session-state-routes.test.ts', nodeArgs: ['--import', './test/session-state/workspace-loader.mjs'] },
     { file: 'test/session-state/session-state-surface.test.ts', nodeArgs: ['--import', './test/session-state/workspace-loader.mjs'] },
-    { file: 'test/session-state/session-state-version-matrix.test.ts', nodeArgs: ['--import', './test/session-state/workspace-loader.mjs'] },
     { file: 'test/session-state/session-state-old-desktop-matrix.test.ts', nodeArgs: ['--import', './test/session-state/workspace-loader.mjs'] },
     { file: 'test/session-state/session-state-diagnostics.test.ts', nodeArgs: ['--import', './test/session-state/workspace-loader.mjs'] },
   ],

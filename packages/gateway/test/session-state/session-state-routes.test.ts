@@ -9,10 +9,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import {
-  MAX_SSE_STREAMS,
-  createChamberSessionState,
-} from '../../src/session-state.ts'
+import { createChamberSessionState } from '../../src/session-state.ts'
 import { FakeRequest, FakeResponse } from '../support/utils.ts'
 import { baselineItem, delay, sessionSurfaceFor, type SessionSurfaceHarness } from './harness.ts'
 
@@ -111,7 +108,7 @@ test('host-down still answers 200 with serviceable false and keeps the rows', as
   assert.equal(res.json().sessions.length, 1)
 })
 
-test('poll mode advertises the reduced feature set', async t => {
+test('poll mode advertises the reduced feature set and off mode advertises none', async t => {
   const harness = surfaceFor(t)
   harness.setMode('poll')
   activeSurface = harness.surface
@@ -120,6 +117,16 @@ test('poll mode advertises the reduced feature set', async t => {
   assert.equal(body.features.includes('session-state.dsh-events'), false)
   assert.equal(body.features.includes('session-state.pending-graph'), false)
   assert.equal(body.features.includes('session-state.snapshot'), true)
+  // The base set stays satisfied in poll mode: the mirror stays usable.
+  for (const feature of ['session-state.snapshot', 'session-state.host-clock']) {
+    assert.equal(body.features.includes(feature), true)
+  }
+  // Server OLDER/degraded (protocol cell D): off mode advertises no capability
+  // at all, so the client degrades instead of assuming it.
+  harness.setMode('off')
+  const off = (await json('GET', '/chamber/session-state')).json()
+  assert.equal(off.mode, 'off')
+  assert.deepEqual(off.features, [])
 })
 
 test('method discipline and unknown subpaths', async t => {
@@ -288,8 +295,4 @@ test('keepalive comments carry no id (heartbeats never advance a resume cursor)'
   assert.equal(res.body.includes(': keepalive'), true)
   assert.equal(res.body.includes('id: :'), false)
   assert.equal(sseEvents(res).length, 1, 'keepalives are comments, not events')
-})
-
-test('MAX_SSE_STREAMS is the production default', () => {
-  assert.equal(MAX_SSE_STREAMS, 32)
 })

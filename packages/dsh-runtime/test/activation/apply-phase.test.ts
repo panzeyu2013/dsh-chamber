@@ -7,10 +7,13 @@
  * layer), and per-test probe scripts inject the candidate/rollback-verification
  * outcomes explicitly.
  *
- * Covered here: no-snapshot-no-switch, probe-gated pass/fail with the
- * observe → delayed-verdict window, rollback target selection, stop-before-
- * rollback ordering, prepared-replay idempotence, nextIntent preservation and
- * manual-rollback journaling.
+ * Covered here: validateTarget rejection, the P0 lazy expected-set seam (full
+ * and partial seed plus the stale-expectation negative control), probe-failure
+ * rollback ordering, failed-stop preservation, builtin-fallback probe naming,
+ * rollback target selection, restore-incomplete, prepared-replay idempotence,
+ * nextIntent preservation, manual-rollback journaling and rollback-probe
+ * routing. The activation-sequence, delayed-verdict and snapshot-failure
+ * variants live in apply-now.test.ts (fixture.makeApplyDeps() + applyPending).
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -65,13 +68,6 @@ const durableJournal = journalBuilder({
   preSwapSnapshotName: '0.1.0-pre',
 })
 
-test('snapshot failure aborts — no switchPointer, status failed', async () => {
-  const fixture = new RunPhaseFixture({ snapshotThrows: true, pointer: '0.1.1-rc.2' })
-  const outcome = await apply(fixture)
-  assert.equal(outcome.status, 'snapshot-failed')
-  assert.equal(fixture.switchCalls, 0)
-})
-
 test('validateTarget rejection is a loud target-invalid failure — no snapshot, no switch', async () => {
   const fixture = new RunPhaseFixture({ pointer: '0.1.1-rc.2' })
   const deps = fixture.makeApplyDeps()
@@ -102,34 +98,6 @@ const PARTIAL_SEED_DOMAINS = ['clientGraph/graph', 'archiveCleanup/probe'] as co
  * and a healthy activation rolled back. These tests drive the real ordering:
  * `probeExpectedNames` is a lazy reader of the host's domain table.
  */
-test('P0: expected probe set is resolved after the probe run (cold-start seed refresh)', async () => {
-  const fixture = new RunPhaseFixture({ pointer: '0.1.1-rc.2' })
-  const deps = fixture.makeApplyDeps()
-  // Cold start: the host's seeded-domain table is empty until the candidate
-  // spawn inside `probe` refreshes it.
-  let seededDomains: readonly string[] = []
-  const order: string[] = []
-  const expectedSnapshots: string[][] = []
-  deps.probe = async () => {
-    order.push('probe')
-    seededDomains = [...FULL_SEED_DOMAINS]
-    return activationProbeNamesForDomains(seededDomains).map(name => ({ name, ok: true }))
-  }
-  deps.probeExpectedNames = () => {
-    order.push('expected')
-    const names = activationProbeNamesForDomains(seededDomains)
-    expectedSnapshots.push([...names])
-    return names
-  }
-  const outcome = await apply(fixture, { deps })
-  assert.equal(outcome.status, 'applied')
-  // The stale pre-spawn expectation would have been the 4-name reduced set.
-  assert.equal(expectedSnapshots.length, 1)
-  assert.deepEqual(expectedSnapshots[0], [...activationProbeNamesForDomains(FULL_SEED_DOMAINS)])
-  assert.equal(expectedSnapshots[0].length, REQUIRED_ACTIVATION_PROBES.length)
-  assert.deepEqual(order, ['probe', 'expected'])
-})
-
 test('P0: rollback verification probes also resolve the expectation after each run', async () => {
   const fixture = new RunPhaseFixture({ pointer: '0.1.1-rc.2' })
   const deps = fixture.makeApplyDeps()
@@ -174,14 +142,6 @@ test('P0 control: the stale pre-spawn (empty-table) expectation rolls the same h
   assert.equal(fixture.switchCalls > 0, true)
 })
 
-test('probe pass → applied, marks known-good, switches to pending', async () => {
-  const fixture = new RunPhaseFixture({ probeResults: pass(), pointer: '0.1.1-rc.2' })
-  const outcome = await apply(fixture)
-  assert.equal(outcome.status, 'applied')
-  assert.deepEqual(switchVersions(fixture), ['0.2.0'])
-  assert.deepEqual(fixture.knownGoodCalls, ['0.2.0'])
-})
-
 test('probe fail → rolled-back, restore called, switch back to source (known-good)', async () => {
   const fixture = new RunPhaseFixture({ pointer: '0.1.1-rc.2' })
   scriptProbes(fixture, ['fail', 'fail', 'pass'])
@@ -211,18 +171,6 @@ test('failed host stop preserves pointer and snapshot data', async () => {
   assert.equal(fixture.switchCalls, 1)
   assert.equal(fixture.restoreCalls, 0)
   assert.match(outcome.error ?? '', /未触碰数据/)
-})
-
-test('probe observe then fail → still rolled-back (delayed verdict)', async () => {
-  const fixture = new RunPhaseFixture({ pointer: '0.1.1-rc.2' })
-  let calls = 0
-  fixture.setProbe(async () => {
-    calls += 1
-    return calls === 3 ? pass() : fail()
-  })
-  const outcome = await apply(fixture, { knownGoodVersion: '0.1.1-rc.2' })
-  assert.equal(outcome.status, 'rolled-back')
-  assert.equal(calls, 3) // observe, final candidate verdict, rollback verification
 })
 
 test('rollback target probe failure falls to builtin once and ends loud', async () => {
@@ -272,18 +220,6 @@ test('restore incomplete → rolled-back with loud error', async () => {
   assert.equal(outcome.runtimeBlocked, true)
 })
 
-test('prepared crash replay at target performs no new snapshot or pointer write', async () => {
-  const journal = durableJournal('prepared')
-  const fixture = new RunPhaseFixture({ pointer: '0.2.0', journal: { kind: 'valid', journal } })
-  fixture.setProbe(async () => pass())
-  const outcome = await apply(fixture, { sourceVersion: '0.1.0', sourceWasKnownGood: true, knownGoodVersion: '0.1.0', journal })
-  assert.equal(outcome.status, 'applied')
-  assert.equal(fixture.snapshotCalls, 0)
-  assert.equal(fixture.switchCalls, 0)
-  assert.equal(fixture.journalWrites.at(-1)?.phase, 'applied-monitoring')
-  assert.equal(fixture.journalWrites.at(-1)?.preSwapSnapshotName, '0.1.0-pre')
-})
-
 test('phase writes preserve a concurrently queued reset-builtin intent', async () => {
   const active = durableJournal('prepared')
   const queued = {
@@ -323,41 +259,4 @@ test('manual rollback journals target snapshot and stash before switching, then 
   const last = fixture.journalWrites.at(-1)
   assert.equal(last?.manualDataSnapshotName, '0.1.0-historical')
   assert.equal(last?.preRollbackStashName, '0.1.0-current')
-})
-
-test('a timed-out first probe can recover on a fresh, bounded second probe attempt', async () => {
-  const fixture = new RunPhaseFixture({ pointer: '0.1.0' })
-  let calls = 0
-  fixture.setProbe(async () => {
-    calls += 1
-    if (calls === 1) {
-      fixture.adapter.advanceClock(60_001)
-      return fail()
-    }
-    fixture.adapter.advanceClock(1)
-    return pass()
-  })
-  const outcome = await apply(fixture, { sourceVersion: '0.1.0', sourceWasKnownGood: true, knownGoodVersion: '0.1.0' })
-  assert.equal(outcome.status, 'applied')
-  assert.equal(calls, 2)
-  assert.equal(fixture.switchCalls, 1)
-  assert.equal(fixture.restoreCalls, 0)
-})
-
-test('rollback probe is routed to rollback version, never the adjudicated target', async () => {
-  const fixture = new RunPhaseFixture({ pointer: '0.2.0' })
-  const calls: Array<[string, boolean]> = []
-  let attempt = 0
-  fixture.setProbe(async (version, isBuiltin) => {
-    calls.push([version, isBuiltin])
-    attempt += 1
-    return attempt <= 2 ? fail() : pass()
-  })
-  const outcome = await apply(fixture, { pendingVersion: '0.3.0', sourceVersion: '0.2.0', sourceWasKnownGood: true, knownGoodVersion: '0.2.0' })
-  assert.equal(outcome.status, 'rolled-back')
-  assert.deepEqual(calls, [
-    ['0.3.0', false],
-    ['0.3.0', false],
-    ['0.2.0', false],
-  ])
 })

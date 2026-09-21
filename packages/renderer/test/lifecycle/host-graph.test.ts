@@ -11,7 +11,7 @@ import {
 } from '../../../dsh-chamber-client-ui-sidebar/src/shared/client-plugin-loader.ts'
 import { CHAMBER_COVERED_FACTORY_IDS, CHAMBER_COVERED_IDS } from '../../src/chamber-covered.ts'
 import { DEFERRED_EXTRA_ROW_IDS } from '../../src/required-extra-rows.ts'
-import { normalize, stripComments } from '../support/source-text.ts'
+import { normalize, stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 
 // 0.1.2 wire shape: extra-bundle URLs are `/plugins/??<id>&rev=…` combos
 // (review-round9c P2-1) — the old `/plugins/<id>/client.js?rev=` shape 404s

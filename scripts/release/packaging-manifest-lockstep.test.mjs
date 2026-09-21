@@ -46,9 +46,24 @@ test('host 包清单五处同源：build-sidecar / control-plane 常量 / 构建
   assert.deepEqual(chainPackages, names,
     'root build:host-packages 必须构建 HOST_PACKAGES 的全部四个包且顺序一致')
 
-  // ④ Electron 侧拷贝行集。
+  // ④ Electron 侧拷贝行集（含 main.ts 打包态读取的 label/outDir 形态；2026-12 从
+  // build-host-graph-package.test.mjs 并入：那份文件的独有断言只剩行形态，行集本身
+  // 已由本锁步覆盖）。
   assert.deepEqual(HOST_PACKAGE_BUILD_ROWS.map((row) => path.basename(row.sourceDir)), names,
     'build-host-graph-package 的行集必须与 HOST_PACKAGES 同集且同序')
+  assert.deepEqual(HOST_PACKAGE_BUILD_ROWS.map((row) => row.label), ['host-graph', 'git-worktree', 'archive-cleanup', 'open-in'],
+    '稳定行序：label 是 desktop seed 行名（row 1 的 host-graph ↔ insert id client-graph），不得重排')
+  const outDirs = new Map([
+    ['host-graph', 'host-graph-package'],
+    ['git-worktree', 'host-git-worktree-package'],
+    ['archive-cleanup', 'host-archive-cleanup-package'],
+    ['open-in', 'host-open-in-package'],
+  ])
+  for (const row of HOST_PACKAGE_BUILD_ROWS) {
+    assert.equal(path.basename(row.outDir), outDirs.get(row.label),
+      `${row.label} 的打包目录必须是 main.ts 读取的 dist/<outDir> 形态`)
+    assert.notEqual(row.sourceDir, row.outDir, 'a row never copies onto itself')
+  }
 
   // ⑤ Swift AppDelegate 的装配态注入行（flag + 包名）。
   const appDelegate = [...read('macos/Sources/DSHChamber/AppDelegate.swift').matchAll(

@@ -25,7 +25,7 @@ import {
   type RegisteredPluginInject,
 } from '../../src/required-extra-rows.ts'
 import { CHAMBER_COVERED_FACTORY_IDS, CHAMBER_COVERED_IDS } from '../../src/chamber-covered.ts'
-import { normalize, stripComments } from '../support/source-text.ts'
+import { normalize, stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 
 const readSource = (rel: string): string =>
   readFileSync(new URL(rel, import.meta.url), 'utf8')

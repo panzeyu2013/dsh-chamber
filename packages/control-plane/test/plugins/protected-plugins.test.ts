@@ -320,15 +320,6 @@ test('derivePluginRows: 第三方 / materialize 值分类 + 派生失败时 prot
   for (const row of rows) assert.equal(row.protected, false)
 })
 
-test('isMaterializedValue: file:/link:/路径类为 materialize，registry 范围为否', () => {
-  for (const value of ['file:x.tgz', 'link:../x', './x', '../x', '/abs/x', '~/x', 'C:\\x', '\\\\host\\share']) {
-    assert.equal(isMaterializedValue(value), true, value)
-  }
-  for (const value of ['^1.0.0', '1.0.0', 'workspace:*', '']) {
-    assert.equal(isMaterializedValue(value), false, value)
-  }
-})
-
 // ---------------------------------------------------------------------------
 // 事实源（fs 探针）
 // ---------------------------------------------------------------------------

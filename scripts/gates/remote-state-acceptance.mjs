@@ -73,7 +73,6 @@ const GROUPS = [
     'packages/renderer/test/view-runtime/switch-frame-verdict.test.ts',
     'packages/renderer/test/view-runtime/switch-frame-instruments.test.ts',
     'packages/renderer/test/wiring/session-liveness-wiring.test.ts',
-    'packages/renderer/test/wiring/session-facts-wiring.test.ts',
     'packages/renderer/test/lifecycle/source-readiness.test.ts',
     'packages/renderer/test/lifecycle/source-refresh-hint.test.ts',
     // WS-C 事实接线（probe/SSE 源 + v2 未读落盘 + 派生）

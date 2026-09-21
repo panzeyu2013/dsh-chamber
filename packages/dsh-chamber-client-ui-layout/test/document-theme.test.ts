@@ -1,16 +1,20 @@
 /**
- * Document theme projector unit tests (plain node:test, no DOM): the N-ctx
- * rule that only the ACTIVE view's instance may write the shared document's
- * theme state, that an inactive view's teardown never retracts it, and that an
- * unpublished active source fails open to the vendor's unconditional behavior.
- * The environment is injected exactly as the production wiring injects
- * chamberBridge + the vendor ThemePresenter (see document-theme.ts).
+ * Document theme projector + source theme cache tests (plain node:test, no DOM):
+ * the N-ctx rule that only the ACTIVE view's instance may write the shared
+ * document's theme state, that an inactive view's teardown never retracts it,
+ * and that an unpublished active source fails open to the vendor's
+ * unconditional behavior; plus the page-wide per-source palette cache
+ * (cold-boot priming, mounted/provisional guards, per-activation de-dup; design
+ * 06 §4.6, W3 切源体验). The environment is injected exactly as the production
+ * wiring injects chamberBridge + the vendor ThemePresenter (see
+ * document-theme.ts / theme-cache.ts).
  */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { createDocumentThemeProjector, type DocumentThemeEnvironment } from '../src/client/document-theme.ts'
+import { createSourceThemeCache, decidePrime } from '../src/client/theme-cache.ts'
 
 /** Fake page-wide environment recording every document write. */
 function environment(active?: string): DocumentThemeEnvironment & {
@@ -96,4 +100,106 @@ test('the production wiring keeps one page-wide presenter and reads the instance
   // Dropping the theme/change subscription would freeze the document on the
   // boot snapshot with every test above still green.
   assert.match(index, /ctx\.on\('theme\/change'/, 'the projector must stay subscribed to theme changes')
+})
+// ---- source theme cache + cold-boot priming (merged from document-theme-cache.test.ts) ----
+
+test('the pure priming decision covers self, mounted, cached, fallback and de-dup', () => {
+  const base = { active: 'ssh' as string | undefined, self: 'local', hasCached: false, activeMounted: false, primedFor: undefined as string | undefined, hasFallback: false }
+  assert.equal(decidePrime({ ...base, active: undefined }), 'self')
+  assert.equal(decidePrime({ ...base, active: 'local' }), 'self')
+  assert.equal(decidePrime(base), 'none', 'no cache and no fallback: nothing to prime with')
+  assert.equal(decidePrime({ ...base, hasFallback: true }), 'fallback')
+  assert.equal(decidePrime({ ...base, hasCached: true, hasFallback: true }), 'cached')
+  assert.equal(decidePrime({ ...base, hasCached: true, activeMounted: true }), 'none', 'a mounted target repaints itself')
+  assert.equal(decidePrime({ ...base, hasCached: true, primedFor: 'ssh' }), 'none', 'one prime per activation')
+})
+
+test('a cold switch to a previously seen source primes its last-known palette', () => {
+  const cache = createSourceThemeCache()
+  const env = environment('local')
+  const local = createDocumentThemeProjector('local', env, { cache })
+  local.project(snapshot('light'))
+  assert.deepEqual(env.writes, ['light'])
+
+  const remote = createDocumentThemeProjector('ssh', env, { cache })
+  remote.project(snapshot('dark'))
+  remote.dispose()
+  assert.deepEqual(env.writes, ['light'], 'a hidden view never repaints the document')
+
+  env.setActive('ssh')
+  assert.deepEqual(env.writes, ['light', 'dark'], 'the cold target is primed with its own palette')
+})
+
+test('a never-seen cold target falls back to the last palette actually applied', () => {
+  const cache = createSourceThemeCache()
+  const env = environment('local')
+  const local = createDocumentThemeProjector('local', env, { cache })
+  local.project(snapshot('light'))
+  env.setActive('never-seen')
+  assert.deepEqual(env.writes, ['light', 'light'], 'the document never stays on an unknown palette')
+})
+
+test('a mounted target is not cross-written by hidden views', () => {
+  const cache = createSourceThemeCache()
+  const env = environment('local')
+  const local = createDocumentThemeProjector('local', env, { cache })
+  local.project(snapshot('light'))
+  const remote = createDocumentThemeProjector('ssh', env, { cache })
+  remote.project(snapshot('dark'))
+  env.setActive('ssh')
+  assert.deepEqual(env.writes, ['light', 'dark'], 'only the active view writes on activation')
+})
+
+test('priming is de-duplicated across hidden instances', () => {
+  const cache = createSourceThemeCache()
+  const env = environment('local')
+  const local = createDocumentThemeProjector('local', env, { cache })
+  const other = createDocumentThemeProjector('other', env, { cache })
+  local.project(snapshot('light'))
+  other.project(snapshot('other-palette'))
+  const remote = createDocumentThemeProjector('ssh', env, { cache })
+  remote.project(snapshot('dark'))
+  remote.dispose()
+  env.setActive('ssh')
+  assert.deepEqual(env.writes, ['light', 'dark'], 'exactly one hidden instance primes the cold target')
+})
+
+test('provisional snapshots are never remembered as a source palette', () => {
+  const cache = createSourceThemeCache()
+  const env = environment('local')
+  const local = createDocumentThemeProjector('local', env, { cache })
+  local.project(snapshot('light'))
+  const remote = createDocumentThemeProjector('ssh', env, { cache, isSettled: () => false })
+  remote.project(snapshot('provisional'))
+  remote.dispose()
+  assert.equal(cache.snapshotOf('ssh'), undefined)
+  env.setActive('ssh')
+  assert.deepEqual(env.writes, ['light', 'light'], 'the provisional palette was not primed')
+})
+
+test('a reclaimed view keeps its palette for the next cold open', () => {
+  const cache = createSourceThemeCache()
+  const env = environment('local')
+  // Production topology: the local view stays mounted, so exactly one live
+  // listener is left to prime a reclaimed target.
+  const local = createDocumentThemeProjector('local', env, { cache })
+  local.project(snapshot('light'))
+  const remote = createDocumentThemeProjector('ssh', env, { cache, isSettled: () => true })
+  remote.project(snapshot('dark'))
+  remote.dispose()
+  assert.equal(cache.snapshotOf('ssh') !== undefined, true)
+  assert.equal(cache.isMounted('ssh'), false)
+  env.setActive('ssh')
+  assert.deepEqual(env.writes, ['light', 'dark'])
+})
+
+test('omitting the cache keeps the legacy behavior (compatibility lock)', () => {
+  const env = environment('local')
+  const local = createDocumentThemeProjector('local', env)
+  const remote = createDocumentThemeProjector('ssh', env)
+  local.project(snapshot('light'))
+  remote.project(snapshot('dark'))
+  assert.deepEqual(env.writes, ['light'])
+  env.setActive('ssh')
+  assert.deepEqual(env.writes, ['light', 'dark'])
 })

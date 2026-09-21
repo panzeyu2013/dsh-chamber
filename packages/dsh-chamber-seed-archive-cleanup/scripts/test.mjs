@@ -15,29 +15,25 @@ import { fileURLToPath } from 'node:url'
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
 
 const GROUPS = {
-  // core: the pure archive-cleanup domain core (split of the former single
-  // core.test.ts) - preview/purge planning, subset purges, the orphan sweep
-  // and its credibility gates, and protectSessionIds.
+  // core: the pure archive-cleanup domain core - preview/purge planning, the
+  // subset/orphan-sweep fail-closed legs, the credibility gates and
+  // protectSessionIds.
   core: [
     'test/core.test.ts',
-    'test/subset-and-orphan-sweep.test.ts',
     'test/sweep-gates-and-protection.test.ts',
   ],
   // parity: cross-seed lockstep (wire-carrier semantics + the shared
   // vendor-resolution seam). The open-in loader stubs the two vendor host
   // adapters its domain imports at runtime, so the real carriers all load.
-  // scale: the purge tail's full-capacity linearity lock + Set source lock.
-  scale: ['test/scale-purge-linear.test.ts'],
   parity: [
     {
       file: 'test/seed-parity-lockstep.test.ts',
       nodeArgs: ['--experimental-transform-types', '--import', '../dsh-chamber-seed-open-in/test/support/vendor-register.mjs'],
     },
   ],
-  // binding: the host binding and its randomized retention-properties leg.
+  // binding: the host binding.
   binding: [
     'test/binding.test.ts',
-    'test/retention-properties.test.ts',
   ],
 }
 

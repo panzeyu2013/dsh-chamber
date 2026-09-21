@@ -662,29 +662,6 @@ test('createControlPlane.startLocal() seeds the host package and materializes th
   }
 })
 
-test('createControlPlane.startLocal() seeds both host packages behind one merged overlay', async t => {
-  const dir = tempDir(t)
-  const graphSource = stageSource(t, 'export const graph = 1\n')
-  const gitSource = tempDir(t)
-  mkdirSync(join(gitSource, 'dist'), { recursive: true })
-  writeFileSync(join(gitSource, 'package.json'), JSON.stringify({ name: HOST_GIT_WORKTREE_PACKAGE_NAME }))
-  writeFileSync(join(gitSource, 'dist', 'index.js'), 'export const git = 1\n')
-  const plane = hostGraphPlane(dir, {
-    hostGraphPackageSourceDir: graphSource,
-    hostGitWorktreePackageSourceDir: gitSource,
-  })
-  try {
-    await plane.start()
-    await plane.startLocal()
-    assert.equal(readFileSync(join(dir, HOST_GRAPH_PATCH_FILENAME), 'utf8'), EXPECTED_BOTH_OVERLAY)
-    assert.equal(
-      readFileSync(join(dir, 'dsh-home', 'profiles', 'web', 'node_modules', HOST_GIT_WORKTREE_PACKAGE_NAME, 'dist', 'index.js'), 'utf8'),
-      'export const git = 1\n',
-    )
-  } finally {
-    await plane.stop()
-  }
-})
 
 test('createControlPlane.startLocal() seeds ALL FOUR host packages behind one merged overlay (design 24 M3 / design 20 §6 lockstep leg)', async t => {
   const dir = tempDir(t)
@@ -711,6 +688,11 @@ test('createControlPlane.startLocal() seeds ALL FOUR host packages behind one me
     await plane.start()
     await plane.startLocal()
     const overlay = readFileSync(join(dir, HOST_GRAPH_PATCH_FILENAME), 'utf8')
+    assert.equal(
+      readFileSync(join(dir, 'dsh-home', 'profiles', 'web', 'node_modules', HOST_GIT_WORKTREE_PACKAGE_NAME, 'dist', 'index.js'), 'utf8'),
+      'export const git = 1\n',
+      'the git-worktree host package is seeded too (merged from the two-package case)',
+    )
     assert.ok(overlay.includes(`- id: archive-cleanup`), 'third insert row present')
     assert.ok(overlay.includes(`name: '${HOST_ARCHIVE_CLEANUP_PACKAGE_NAME}'`), 'third package named')
     // probeDomains is documented pure metadata (never serialized into the
@@ -735,28 +717,6 @@ test('createControlPlane.startLocal() seeds ALL FOUR host packages behind one me
     assert.equal(
       readFileSync(join(dir, 'dsh-home', 'profiles', 'web', 'node_modules', HOST_OPEN_IN_PACKAGE_NAME, 'dist', 'index.js'), 'utf8'),
       'export const openIn = 1\n',
-    )
-  } finally {
-    await plane.stop()
-  }
-})
-
-test('createControlPlane.startLocal() reuses an exact user profile row without a duplicate overlay', async t => {
-  const dir = tempDir(t)
-  const source = stageSource(t, 'export const graph = 1\n')
-  const profileDir = join(dir, 'dsh-home', 'profiles', 'web')
-  mkdirSync(profileDir, { recursive: true })
-  writeFileSync(join(profileDir, 'cordis.patch.yml'), `- insert:\n    - id: client-graph\n      name: '${HOST_GRAPH_PACKAGE_NAME}'\n`)
-  const plane = hostGraphPlane(dir, {
-    hostGraphPackageSourceDir: source,
-  })
-  try {
-    await plane.start()
-    await plane.startLocal()
-    assert.equal(existsSync(join(dir, HOST_GRAPH_PATCH_FILENAME)), false)
-    assert.equal(
-      readFileSync(join(seedTarget(join(dir, 'dsh-home')), 'dist', 'index.js'), 'utf8'),
-      'export const graph = 1\n',
     )
   } finally {
     await plane.stop()

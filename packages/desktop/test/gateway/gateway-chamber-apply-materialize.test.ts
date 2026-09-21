@@ -1,11 +1,12 @@
 /** gateway provider — part 4: gatewayChamberApplyBatch / gatewayChamberMaterialize — the apply
  *  flow, refusals and partial outcomes, settle/restart polls, tarball upload headers and the
- *  client-side pre-flight gates (siblings: gateway-provider / gateway-session-spki / gateway-chamber-sync). */
+ *  client-side pre-flight gates (siblings: gateway-provider / gateway-session-spki; part 4b carries
+ *  the syncGatewayChamberPlugins security/fail-closed assertions merged in during the round-2 trim). */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { GATEWAY_RUNTIME_IDENTITY, gatewayChamberApplyBatch, gatewayChamberMaterialize } from '../../gateway-provider.ts'
-import { parseSpecArg } from '../../gateway-ipc-shared.ts'
+import { GATEWAY_RUNTIME_IDENTITY, gatewayChamberApplyBatch, gatewayChamberMaterialize, syncGatewayChamberPlugins } from '../../gateway-provider.ts'
+import type { LocalChamberHostPackage } from '../../gateway-provider.ts'
 import { CERT_A, KEY_A, PIN_B } from '../support/gateway-tls-fixtures.ts'
 import { startHttpsProbeServer, startSyncHttpServer } from '../support/gateway-test-servers.ts'
 
@@ -34,18 +35,6 @@ function batchTarget(port: number, options: BatchParams['options'], extra: Parti
 function materializeTarget(port: number, tarball: MaterializeParams['tarball'], name: MaterializeParams['name'], version: MaterializeParams['version'], extra: Partial<MaterializeParams> = {}): MaterializeParams {
   return { id: 'gw-1', url: `http://127.0.0.1:${port}`, headers: {}, spkiPin: null, tarball, name, version, ...extra }
 }
-
-test('parseSpecArg: gateway registry add specs parse to their package names (plan Phase 4.6)', () => {
-  assert.deepEqual(parseSpecArg('alpha'), { name: 'alpha' })
-  assert.deepEqual(parseSpecArg('alpha@^1.2.3'), { name: 'alpha' })
-  assert.deepEqual(parseSpecArg('@scope/name@2.0.0-beta.1'), { name: '@scope/name' })
-  assert.equal(parseSpecArg('file:/tmp/x.tgz'), null, 'file: specs belong to the materialize channel')
-  // Official/chamber scope is a SHAPE pass on the gateway client path (design
-  // 21 §6.11.5): the server's protected-set judgement decides it.
-  assert.deepEqual(parseSpecArg('@dsh-chamber/host-graph@1.0.0'), { name: '@dsh-chamber/host-graph' })
-  assert.equal(parseSpecArg('not a spec'), null)
-  assert.equal(parseSpecArg(''), null)
-})
 
 test('gatewayChamberApplyBatch: full flow installs, removes, waits for the ops to settle and restarts to apply', async () => {
   const seen: Array<{ method: string; url: string; headers: import('node:http').IncomingHttpHeaders; body?: unknown }> = []
@@ -742,6 +731,113 @@ test('gatewayChamberMaterialize: an SPKI-pinned https gateway receives zero byte
     })
     assert.equal(result.ok, false, 'a wrong-key peer must never receive the tarball')
     assert.equal(receivedRequests, 0, 'zero application bytes reach a wrong-key peer')
+  } finally {
+    await server.close()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// part 4b — syncGatewayChamberPlugins security / fail-closed (merged from
+// gateway-chamber-sync.test.ts, round-2 trim: same production module
+// gateway-provider.ts, this integration suite kept).
+// ---------------------------------------------------------------------------
+
+const SYNC_GRAPH: LocalChamberHostPackage = {
+  name: '@dsh-chamber/dsh-chamber-seed-client-graph',
+  packageJson: JSON.stringify({ name: '@dsh-chamber/dsh-chamber-seed-client-graph', version: '1.2.3' }),
+  distIndex: 'export const graph = 1',
+}
+const SYNC_ARCHIVE: LocalChamberHostPackage = {
+  name: '@dsh-chamber/dsh-chamber-seed-archive-cleanup',
+  packageJson: JSON.stringify({ name: '@dsh-chamber/dsh-chamber-seed-archive-cleanup', version: '3.0.0' }),
+  distIndex: 'export const archive = 1',
+}
+function syncLogger(): { warns: string[]; logger: { warn: (message: string) => void; log: () => void } } {
+  const warns: string[] = []
+  return { warns, logger: { warn: (message: string) => warns.push(message), log: () => {} } }
+}
+
+test('syncGatewayChamberPlugins: a headerless deployment gets no invented Authorization, and a refused projection is a loud failure', async () => {
+  const seenAuth: string[] = []
+  const server = await startSyncHttpServer((req, res) => {
+    seenAuth.push(req.headers.authorization ?? '(none)')
+    if (req.method === 'PUT') { fixtureJson(res, 200, { ok: true, changed: true }); return }
+    fixtureJson(res, 200, { items: [] })
+  })
+  try {
+    const result = await syncGatewayChamberPlugins({
+      origin: 'http://127.0.0.1:' + server.port, headers: {}, spkiPin: null, packages: [SYNC_GRAPH], logger: syncLogger().logger,
+    })
+    assert.equal(result.uploaded, true, 'a headerless --no-auth deployment must still receive the sync')
+    assert.deepEqual(seenAuth, ['(none)', '(none)', '(none)'], 'no Authorization header is invented for the headerless shape')
+  } finally {
+    await server.close()
+  }
+  const deniedServer = await startSyncHttpServer((_req, res) => { res.writeHead(401); res.end() })
+  try {
+    const denied = syncLogger()
+    const result = await syncGatewayChamberPlugins({
+      origin: 'http://127.0.0.1:' + deniedServer.port, headers: { authorization: 'Bearer bad' }, spkiPin: null, packages: [SYNC_GRAPH], logger: denied.logger,
+    })
+    assert.equal(result.uploaded, false)
+    assert.equal(result.skipped, false)
+    assert.equal(result.failed, true, 'a refused projection is never the both-false "already up to date" tuple')
+    assert.ok((result.error ?? '').includes('401'))
+    assert.ok(denied.warns.some(line => line.includes('HTTP 401')))
+  } finally {
+    await deniedServer.close()
+  }
+})
+
+test('syncGatewayChamberPlugins: PUT refusals carry the reason and a partial failure stays loud', async () => {
+  let puts = 0
+  const server = await startSyncHttpServer((req, res) => {
+    res.setHeader('connection', 'close')
+    if (req.method === 'GET') { fixtureJson(res, 200, { items: [] }); return }
+    if (req.url === '/chamber/runtime/restart') { fixtureJson(res, 202, { accepted: true }); return }
+    puts += 1
+    if (puts === 1) { res.writeHead(500); res.end(); return }
+    fixtureJson(res, 200, { ok: true, changed: true })
+  })
+  try {
+    const result = await syncGatewayChamberPlugins({
+      origin: 'http://127.0.0.1:' + server.port, headers: { authorization: 'Bearer test-token' }, spkiPin: null, packages: [SYNC_GRAPH, SYNC_GRAPH], logger: syncLogger().logger,
+    })
+    assert.equal(result.uploaded, true, 'the second upload still landed')
+    assert.equal(result.failed, true, 'the refused upload is never hidden behind the partial success')
+    assert.ok((result.error ?? '').includes('@dsh-chamber/dsh-chamber-seed-client-graph'))
+  } finally {
+    await server.close()
+  }
+  const reasonServer = await startSyncHttpServer((req, res) => {
+    res.setHeader('connection', 'close')
+    if (req.method === 'GET') { fixtureJson(res, 200, { items: [] }); return }
+    fixtureJson(res, 400, { error: 'unsyncable package "x" - update the gateway to match the connecting desktop', code: 'invalid_input' })
+  })
+  try {
+    const result = await syncGatewayChamberPlugins({
+      origin: 'http://127.0.0.1:' + reasonServer.port, headers: { authorization: 'Bearer test-token' }, spkiPin: null, packages: [SYNC_ARCHIVE], logger: syncLogger().logger,
+    })
+    assert.equal(result.failed, true)
+    assert.ok((result.error ?? '').includes('HTTP 400'), 'the failure names the refused package and status')
+    assert.ok((result.error ?? '').includes('update the gateway'), 'the failure carries the gateway reason')
+  } finally {
+    await reasonServer.close()
+  }
+})
+
+test('syncGatewayChamberPlugins: an SPKI-pinned https gateway is checked before any application bytes', async () => {
+  let receivedRequests = 0
+  const server = await startHttpsProbeServer(KEY_A, CERT_A, (_req, res) => { receivedRequests += 1; res.writeHead(200); res.end('{}') })
+  try {
+    const log = syncLogger()
+    const result = await syncGatewayChamberPlugins({
+      origin: 'https://127.0.0.1:' + server.port, headers: { authorization: 'Bearer test-token' }, spkiPin: PIN_B, packages: [SYNC_GRAPH], logger: log.logger,
+    })
+    assert.equal(result.uploaded, false)
+    assert.equal(result.failed, true, 'an SPKI-refused sync is an explicit failure')
+    assert.equal(receivedRequests, 0, 'a wrong-key peer receives zero application bytes')
+    assert.ok(log.warns.length > 0)
   } finally {
     await server.close()
   }

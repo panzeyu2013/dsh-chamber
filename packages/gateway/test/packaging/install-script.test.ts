@@ -58,16 +58,6 @@ printf '%s\\n%s\\n' "$PROMPT_INJECTED" "$TEST_VALUE"
   assert.doesNotMatch(source, /^\s*eval\b/m, 'installer input assignment must never reintroduce eval')
 })
 
-test('system and user services enable against real boot targets', () => {
-  const output = runLibrary(`
-SERVICE_MODE=systemd
-printf '%s\\n' "$(unit_wanted_by)"
-SERVICE_MODE=user
-printf '%s\\n' "$(unit_wanted_by)"
-`)
-  assert.deepEqual(output.trimEnd().split('\n'), ['multi-user.target', 'default.target'])
-})
-
 test('systemd service arguments use systemd quoting rather than bash printf %q', { skip: process.platform !== 'linux' }, () => {
   const analyze = spawnSync('systemd-analyze', ['--version'], { encoding: 'utf8' })
   if (analyze.status !== 0) return

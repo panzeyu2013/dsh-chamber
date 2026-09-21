@@ -18,7 +18,6 @@ const GROUPS = {
   // plugin-inventory: 插件清单读取面与展示投影（row 派生、种子漂移、诊断）
   'plugin-inventory': [
     'test/plugin-inventory/chamber-rows.test.ts',
-    'test/plugin-inventory/chamber-seed-drift.test.ts',
     'test/plugin-inventory/plugin-diagnostic.test.ts',
     'test/plugin-inventory/plugin-inventory.test.ts',
     'test/plugin-inventory/plugin-inventory-text.test.ts',

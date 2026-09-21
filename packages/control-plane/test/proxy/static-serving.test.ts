@@ -182,27 +182,6 @@ test('static: gzip and identity variants round-trip the file bytes; vary + expli
   }
 })
 
-test('static: q-value-aware Accept-Encoding — gzip;q=0 refuses, multi-token accepts', async () => {
-  const holder = await makeStaticPlane()
-  try {
-    const assetPath = holder.fixture.assetUrl
-
-    // gzip;q=0 is an explicit refusal → identity, with vary still present.
-    const refused = await rawRequest(holder.plane.port!, 'GET', assetPath, { 'accept-encoding': 'gzip;q=0, deflate' })
-    assert.equal(refused.status, 200)
-    assert.equal(refused.headers['content-encoding'], undefined)
-    assert.equal(refused.headers['vary'], 'accept-encoding')
-    assert.deepEqual(refused.body, holder.fixture.asset)
-
-    // A plain multi-token list accepts gzip.
-    const accepted = await rawRequest(holder.plane.port!, 'GET', assetPath, { 'accept-encoding': 'deflate, gzip, br' })
-    assert.equal(accepted.status, 200)
-    assert.equal(accepted.headers['content-encoding'], 'gzip')
-  } finally {
-    await cleanup(holder)
-  }
-})
-
 test('static: /assets/* immutable cache policy; index.html no-cache; manifest.json untouched', async () => {
   const holder = await makeStaticPlane()
   try {

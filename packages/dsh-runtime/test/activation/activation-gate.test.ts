@@ -1,11 +1,11 @@
 /**
  * activation-gate.ts 纯逻辑测试（design 18 §3.4 激活门控裁决）——node:test，
- * 无 electron、无副作用。覆盖：decideVerdict 全 ok → pass / 窗口内首次 fail →
- * observe / 窗口外 fail → fail / observe 后仍 fail → fail（延迟裁决后再失败
- * 才回退）/ 窗口边界与自定义窗口 / 观察一次后恢复 → pass；rollbackTarget 四
- * 分支（previous known-good / previous 非 known-good 但有 known-good / 都无 →
- * null / previous === known-good）；shouldAutoRollback 四态（restart-exhausted
- * × active-is-override）。
+ * 无 electron、无副作用。覆盖：decideVerdict 全 ok → pass / 空与不完整探针
+ * 空真拒绝 / 窗口内外首次 fail → observe / observe 后仍 fail → fail（延迟裁决
+ * 后再失败才回退）/ windowMs 硬上限 / duplicate 名 fail closed；rollbackTarget
+ * 全信任组合（previous known-good / 非 known-good 但有 known-good / 都无 →
+ * null / previous === known-good）；shouldAutoRollback 四态。
+ * 近似用例合并为表驱动（断言逐条保留）——2026-12 测试精简。
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -36,25 +36,32 @@ test('decideVerdict: 空或不完整探针列表绝不空真', () => {
   assert.equal(decideVerdict([ok('commands/execute')], { elapsedMs: 0 }), 'observe');
 });
 
-test('decideVerdict: 窗口内首次失败 → observe（超时不立即判失败，给慢迁移二次确认窗口）', () => {
-  const probes = withFailure('commands/execute');
-  assert.equal(decideVerdict(probes, { elapsedMs: 5_000 }), 'observe');
-  // 窗口边界内（elapsed === windowMs）仍 observe
-  assert.equal(decideVerdict(probes, { elapsedMs: DEFAULT_PROBE_WINDOW_MS }), 'observe');
+test('decideVerdict: 窗口内/外首次失败一律 observe（§3.4 超时不立即判失败，含窗口边界）', () => {
+  const cases: Array<[string, number]> = [
+    ['commands/execute', 5_000],
+    // 窗口边界内（elapsed === windowMs）仍 observe
+    ['commands/execute', DEFAULT_PROBE_WINDOW_MS],
+    ['session/canOpenWorkspacePath', DEFAULT_PROBE_WINDOW_MS + 1],
+    ['session/canOpenWorkspacePath', 120_000],
+  ];
+  for (const [name, elapsedMs] of cases) {
+    assert.equal(decideVerdict(withFailure(name), { elapsedMs }), 'observe', name + ' @ ' + elapsedMs + 'ms');
+  }
 });
 
-test('decideVerdict: 窗口外首次失败 → observe（§3.4 超时不立即判失败，慢迁移二次确认）', () => {
-  const probes = withFailure('session/canOpenWorkspacePath');
-  assert.equal(decideVerdict(probes, { elapsedMs: DEFAULT_PROBE_WINDOW_MS + 1 }), 'observe');
-  assert.equal(decideVerdict(probes, { elapsedMs: 120_000 }), 'observe');
-});
-
-test('decideVerdict: 已 observe 过一次仍 fail → fail（延迟裁决后再失败才回退）', () => {
-  const probes = withFailure('clientGraph/graph');
-  // 窗口内第二次仍失败：observe 只给一次二次确认窗口
-  assert.equal(decideVerdict(probes, { elapsedMs: 5_000, observedOnce: true }), 'fail');
-  // 窗口外第二次仍失败：同样 fail
-  assert.equal(decideVerdict(probes, { elapsedMs: 120_000, observedOnce: true }), 'fail');
+test('decideVerdict: 已 observe 过一次仍 fail → fail（窗口内外、混合探针同判）', () => {
+  const cases: Array<[string, number]> = [
+    // 窗口内/外第二次仍失败：observe 只给一次二次确认窗口
+    ['clientGraph/graph', 5_000],
+    ['clientGraph/graph', 120_000],
+    ['settings/describe', 3_000],
+  ];
+  for (const [name, elapsedMs] of cases) {
+    assert.equal(decideVerdict(withFailure(name), { elapsedMs, observedOnce: true }), 'fail', name + ' @ ' + elapsedMs + 'ms');
+  }
+  // 混合探针（部分 ok 部分 fail）首轮仍按任一 fail 观察，不提前回退
+  assert.equal(decideVerdict(withFailure('settings/describe'), { elapsedMs: 3_000 }), 'observe');
+  assert.equal(decideVerdict(withFailure('settings/describe'), { elapsedMs: 90_000 }), 'observe');
 });
 
 test('decideVerdict: windowMs 是硬上限，超窗成功也需二次观察', () => {
@@ -66,13 +73,6 @@ test('decideVerdict: windowMs 是硬上限，超窗成功也需二次观察', ()
   assert.equal(decideVerdict(allOk(), { elapsedMs: 1_001, windowMs: 1_000, observedOnce: true }), 'fail');
 });
 
-test('decideVerdict: 混合探针（部分 ok 部分 fail）按任一 fail 裁决', () => {
-  const probes = withFailure('settings/describe');
-  assert.equal(decideVerdict(probes, { elapsedMs: 3_000 }), 'observe');
-  assert.equal(decideVerdict(probes, { elapsedMs: 90_000 }), 'observe');
-  assert.equal(decideVerdict(probes, { elapsedMs: 3_000, observedOnce: true }), 'fail');
-});
-
 test('decideVerdict: duplicate or unexpected names fail closed', () => {
   const duplicate = allOk();
   duplicate[duplicate.length - 1] = ok('commands/execute');
@@ -80,47 +80,27 @@ test('decideVerdict: duplicate or unexpected names fail closed', () => {
   assert.equal(decideVerdict(duplicate, { elapsedMs: 1, observedOnce: true }), 'fail');
 });
 
-test('rollbackTarget: previous known-good（曾探针通过或 known-good）→ 切换前版本', () => {
-  assert.equal(
-    rollbackTarget({ previousVersion: '0.1.1-rc.2', previousWasKnownGood: true, knownGoodVersion: '0.1.1' }),
-    '0.1.1-rc.2',
-  );
-  // knownGoodVersion 与 previous 相同也算 previous 可信任
-  assert.equal(
-    rollbackTarget({ previousVersion: '0.1.1', previousWasKnownGood: true, knownGoodVersion: '0.1.1' }),
-    '0.1.1',
-  );
-});
+type RollbackInput = Parameters<typeof rollbackTarget>[0];
 
-test('rollbackTarget: previous 非 known-good 但有 known-good → 最近 known-good', () => {
-  assert.equal(
-    rollbackTarget({ previousVersion: '0.2.0', previousWasKnownGood: false, knownGoodVersion: '0.1.1' }),
-    '0.1.1',
-  );
-  assert.equal(
-    rollbackTarget({ previousVersion: '0.2.0', previousWasKnownGood: false, knownGoodVersion: '0.1.1-rc.2' }),
-    '0.1.1-rc.2',
-  );
-});
-
-test('rollbackTarget: previous 与 known-good 都无 → null（落内建树）', () => {
-  assert.equal(rollbackTarget({ previousVersion: null, previousWasKnownGood: false, knownGoodVersion: null }), null);
-  // previous 非空但不可信任 + 无 known-good → null（绝不回退到坏树）
-  assert.equal(rollbackTarget({ previousVersion: '0.2.0', previousWasKnownGood: false, knownGoodVersion: null }), null);
-});
-
-test('rollbackTarget: previous === known-good → 切换前版本（即使 previousWasKnownGood 为 false）', () => {
-  assert.equal(
-    rollbackTarget({ previousVersion: '0.1.1', previousWasKnownGood: false, knownGoodVersion: '0.1.1' }),
-    '0.1.1',
-  );
-});
-
-test('rollbackTarget: 无切换前版本但有 known-good → known-good（首次安装/恢复内建场景）', () => {
-  assert.equal(
-    rollbackTarget({ previousVersion: null, previousWasKnownGood: false, knownGoodVersion: '0.1.1' }),
-    '0.1.1',
-  );
+test('rollbackTarget: previous/known-good 信任组合全表（含 previous === known-good 与都无 → null）', () => {
+  const cases: Array<[RollbackInput, string | null]> = [
+    // previous known-good（曾探针通过或 known-good）→ 切换前版本；同值 knownGood 也算可信任
+    [{ previousVersion: '0.1.1-rc.2', previousWasKnownGood: true, knownGoodVersion: '0.1.1' }, '0.1.1-rc.2'],
+    [{ previousVersion: '0.1.1', previousWasKnownGood: true, knownGoodVersion: '0.1.1' }, '0.1.1'],
+    // previous 非 known-good 但有 known-good → 最近 known-good
+    [{ previousVersion: '0.2.0', previousWasKnownGood: false, knownGoodVersion: '0.1.1' }, '0.1.1'],
+    [{ previousVersion: '0.2.0', previousWasKnownGood: false, knownGoodVersion: '0.1.1-rc.2' }, '0.1.1-rc.2'],
+    // previous === known-good → 切换前版本（即使 previousWasKnownGood 为 false）
+    [{ previousVersion: '0.1.1', previousWasKnownGood: false, knownGoodVersion: '0.1.1' }, '0.1.1'],
+    // 无切换前版本但有 known-good → known-good（首次安装/恢复内建场景）
+    [{ previousVersion: null, previousWasKnownGood: false, knownGoodVersion: '0.1.1' }, '0.1.1'],
+    // 都无 → null（落内建树）；previous 非空但不可信任 + 无 known-good → null（绝不回退到坏树）
+    [{ previousVersion: null, previousWasKnownGood: false, knownGoodVersion: null }, null],
+    [{ previousVersion: '0.2.0', previousWasKnownGood: false, knownGoodVersion: null }, null],
+  ];
+  for (const [input, expected] of cases) {
+    assert.equal(rollbackTarget(input), expected, JSON.stringify(input));
+  }
 });
 
 test('shouldAutoRollback: 四态 = restart-exhausted 与 active-is-override 的合取', () => {

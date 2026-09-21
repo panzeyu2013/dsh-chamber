@@ -9,6 +9,8 @@
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import {
   ARCHIVE_CLEANUP_PACKAGE,
   GIT_WORKTREE_PACKAGE,
@@ -16,6 +18,7 @@ import {
   MOBILE_PACKAGE,
   OPEN_IN_PACKAGE,
   classifyChamberClientPlugin,
+  classifyInventoryEntry,
   deriveChamberRows,
   type ChamberPackageState,
   type ChamberRowDescriptor,
@@ -355,4 +358,25 @@ test('gateway: the omitted localOnly row is outside the cache accounting too', (
   assert.equal(row.cacheAbsent, false, 'three applicable packages cached is never "nothing synced"')
   assert.equal(row.cacheNotSynced, false)
   assert.equal(row.driftState, 'match')
+})
+
+/* ---- package-name lockstep: the client constants are hand-mirrored, so a host
+ * rename must fail here instead of silently classifying a chamber row as
+ * third-party. The control-plane registry is the authoritative declaration. ---- */
+test('chamber package constants mirror the control-plane registry and the packaged mobile manifest', () => {
+  const seed = readFileSync(join(import.meta.dirname, '../../../control-plane/src/host-graph-seed.ts'), 'utf8')
+  const declared = [...seed.matchAll(/export const HOST_[A-Z_]+_PACKAGE_NAME = '([^']+)'/gu)].map(match => match[1]!)
+  assert.deepEqual(
+    [...declared].sort(),
+    [HOST_GRAPH_PACKAGE, GIT_WORKTREE_PACKAGE, ARCHIVE_CLEANUP_PACKAGE, OPEN_IN_PACKAGE].sort(),
+    'a NEW registry host package must be mirrored by the client constants',
+  )
+  for (const name of declared) {
+    assert.notEqual(classifyInventoryEntry(name), 'third-party',
+      `registry host package ${name} must classify as a chamber row, or a non-local target would list it as third-party`)
+  }
+  const manifest = JSON.parse(
+    readFileSync(join(import.meta.dirname, '../../../dsh-chamber-client-ui-mobile/package.json'), 'utf8'),
+  ) as { name?: unknown }
+  assert.equal(manifest.name, MOBILE_PACKAGE, 'the packaged mobile manifest name and the client constant must stay in lockstep')
 })

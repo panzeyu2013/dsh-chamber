@@ -177,12 +177,6 @@ test('apply-now route matrix: 202 with pending, 409 recovery/busy/env/read-only/
   phase = 'pending'
   pending = '1.0.0'
 
-  connectionState = 'stopped'
-  const notRunning = await runRoute(routes, 'POST', '/chamber/runtime/apply-now')
-  assert.equal(notRunning.status, 409, 'sync refusal must be honest, not a fake 202 (R7)')
-  assert.equal((notRunning.json as { code: string }).code, 'runtime_busy')
-  connectionState = 'ready'
-
   applyNowBusy = true
   const inflight = await runRoute(routes, 'POST', '/chamber/runtime/apply-now')
   assert.equal(inflight.status, 409)

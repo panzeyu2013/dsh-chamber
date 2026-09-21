@@ -4,7 +4,7 @@ import { chmodSync, mkdtempSync, existsSync, lstatSync, mkdirSync, readFileSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { shouldPromote, recordProbePass, noteBoot, promoteDueCandidates, removeKnownGoodCandidate, resetCandidateHealthWindow, knownGoodCandidatesPath, DEFAULT_HEALTH_POLICY } from '../../src/known-good-monitor.ts';
-import { criticalFilesFor } from '../support/store-fixtures.ts';
+import { makeVersionTree } from '../support/store-fixtures.ts';
 
 /** A base dir holding one probed 0.2.0 tree (the promotion fixture). */
 function kgFixture(t0 = 1_000_000_000_000): { base: string; t0: number } {
@@ -12,22 +12,6 @@ function kgFixture(t0 = 1_000_000_000_000): { base: string; t0: number } {
   makeVersionTree(base, '0.2.0');
   recordProbePass(base, '0.2.0', t0);
   return { base, t0 };
-}
-
-function makeVersionTree(base: string, version: string) {
-  const tree = join(base, 'dsh-runtime', version);
-  const bin = join(tree, 'node_modules', '@deepseek-ai', 'dsh', 'lib');
-  mkdirSync(bin, { recursive: true });
-  writeFileSync(join(bin, 'bin.js'), '// fixture');
-  writeFileSync(join(tree, 'node_modules', '@deepseek-ai', 'dsh', 'package.json'), JSON.stringify({
-    name: '@deepseek-ai/dsh',
-    version,
-  }));
-  const criticalFiles = criticalFilesFor(tree);
-  writeFileSync(join(tree, 'package.json'), JSON.stringify({
-    dependencies: { '@deepseek-ai/dsh': version },
-    dsh: { platform: `${process.platform}-${process.arch}`, criticalFiles },
-  }));
 }
 
 function knownGoodVersions(base: string): string[] {
@@ -59,8 +43,9 @@ test('recordProbePass → noteBoot → promoteDueCandidates: candidate becomes k
   noteBoot(base, '0.2.0', t0 + 500);
   // Still not due (< 24h) → no promotion
   assert.deepEqual(promoteDueCandidates(base, t0 + 1000), []);
-  // After 24h + 1 boot → promoted
-  const promoted = promoteDueCandidates(base, t0 + DEFAULT_HEALTH_POLICY.minUptimeMs + 1);
+  // Exact window boundary: minUptime-1 not due, minUptime (after ≥1 boot) → promoted
+  assert.deepEqual(promoteDueCandidates(base, t0 + DEFAULT_HEALTH_POLICY.minUptimeMs - 1), []);
+  const promoted = promoteDueCandidates(base, t0 + DEFAULT_HEALTH_POLICY.minUptimeMs);
   assert.deepEqual(promoted, ['0.2.0']);
   assert.deepEqual(knownGoodVersions(base), ['0.2.0']);
 });
@@ -76,13 +61,6 @@ test('offline wall clock: reopening after 24h resets the window and does not pro
   noteBoot(base, '0.2.0', reopenedAt + 1000);
   assert.deepEqual(promoteDueCandidates(base, reopenedAt + 1001), []);
   assert.deepEqual(knownGoodVersions(base), []);
-});
-
-test('continuous healthy window: 24h plus a successful boot promotes', () => {
-  const { base, t0 } = kgFixture();
-  noteBoot(base, '0.2.0', t0 + 1000);
-  assert.deepEqual(promoteDueCandidates(base, t0 + DEFAULT_HEALTH_POLICY.minUptimeMs - 1), []);
-  assert.deepEqual(promoteDueCandidates(base, t0 + DEFAULT_HEALTH_POLICY.minUptimeMs), ['0.2.0']);
 });
 
 test('failed health window resets both elapsed health and boot qualification', () => {

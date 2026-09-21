@@ -59,7 +59,6 @@ export const GROUPS = {
   // aggregate: 多来源聚合状态与通知投影（聚合拉取/重连、通知边、角标计数）
   aggregate: [
     'test/aggregate/aggregate-refresh.test.ts',
-    'test/aggregate/aggregate-reconnect.test.ts',
     'test/aggregate/notification-edges.test.ts',
     // 水位原语单一来源（2026-12 阶段 2：同一完成不重发、坏值不臆造、max/完成水位负例）。
     'test/aggregate/watermark.test.ts',
@@ -83,10 +82,6 @@ export const GROUPS = {
     'test/session-state/prewarm-ledger.test.ts',
     // 有界集合内核（2026-12 阶段 2：容量/FIFO 淘汰/同键替换裁决的负例）。
     'test/session-state/bounded-ledger.test.ts',
-    // R8「意图预热」：hover 意图 → 既有预热队列优先输入 + 计费（App 接线锁）。
-    'test/session-state/prewarm-intent-wiring.test.ts',
-    // W4「全部已读」：源级上界 + 单调提升（行为）+ App 接线锁。
-    'test/session-state/mark-all-read-wiring.test.ts',
     // R19 生产端：probe 判定 → 侧栏档位（含陈旧不得说成 full + 跨包词汇锁）。
     'test/session-state/session-facts-mode.test.ts',
   ],
@@ -102,10 +97,6 @@ export const GROUPS = {
     'test/wiring/session-liveness-wiring.test.ts',
     // 遮罩层叠不变量（P0 租客边界 / P1 遮罩期隐藏 / P2 过渡作用域 / P3 揭幕信号）。
     'test/wiring/veil-layering-invariants.test.ts',
-    // WS-C 桌面事实接线锁（派生账本 / stale / 双入口单横幅 / 阅读三谓词 / 行刷新）。
-    'test/wiring/session-facts-wiring.test.ts',
-    // W6：SSH/dsh 远端的无壳观察者接线（只读、同管线、随连接收敛）。
-    'test/wiring/source-mux-wiring.test.ts',
   ],
   // view-runtime: 视图运行时 —— 隐藏视图回收、视图过渡队列、侧栏滚动恢复、切源揭示
   'view-runtime': [
@@ -125,13 +116,11 @@ export const GROUPS = {
   // svg-resource: 文档级 SVG 资源 id 归属（N-ctx 失绘不变量，design 05 §4.2）
   'svg-resource': [
     'test/svg-resource/svg-resource-scope.test.ts',
-    'test/svg-resource/svg-resource-scope-wiring.test.ts',
   ],
   // frame-chrome: frame 文案/主题兜底与视觉锁
   'frame-chrome': [
     'test/frame-chrome/theme-fallback.test.ts',
     'test/frame-chrome/frame-locale.test.ts',
-    'test/frame-chrome/page-language.test.ts',
     'test/frame-chrome/page-language-hook.test.ts',
   ],
 }

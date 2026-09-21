@@ -101,15 +101,14 @@ const INJECTIONS = [
     { file: `${RN}/session-state/source-mux-facts.test.ts`, title: 'the observer opens only $events and never answers a waterfall' },
     { file: `${RN}/session-state/source-mux-facts.test.ts`, title: 'one true->false edge opens exactly one follow and completed arms the row' },
     { file: `${RN}/session-state/source-mux-facts.test.ts`, title: 'a user stop and a neutral ending never arm; an unreadable tail degrades and arms' },
-    { file: `${RN}/wiring/source-mux-wiring.test.ts`, title: 'observer snapshots ride the same facts pipeline' },
   ] },
   { id: 'facts-source-wiring', fault: '桌面事实源接线（probe/stream/overlay/落盘）', expect: 'covered', checks: [
-    { file: `${RN}/wiring/session-facts-wiring.test.ts`, title: 'L1/L2/L16' },
-    { file: `${RN}/wiring/session-facts-wiring.test.ts`, title: 'L3：reclaimView 不碰数据面键' },
-    { file: `${RN}/wiring/session-facts-wiring.test.ts`, title: 'L4/L5' },
-    { file: `${RN}/wiring/session-facts-wiring.test.ts`, title: 'L6/L7' },
+    // The App source-text wiring locks were retired in the second trim round
+    // (round-2 rule: a wiring lock dies once the invariant has behaviour tests);
+    // the three behaviour witnesses below carry the injection.
     { file: `${RN}/session-state/unread-store.test.ts`, title: '' },
     { file: `${RN}/session-state/session-facts-source.test.ts`, title: '' },
+    { file: `${RN}/session-state/unread-derivation.test.ts`, title: '' },
   ] },
 ]
 

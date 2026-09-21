@@ -9,96 +9,34 @@
  *
  * Run directly: node packages/control-plane/test/windows/win-probes.test.ts
  *
- * S1 windows-fix coverage: case-insensitive netstat states, the
- * Get-NetTCPConnection JSON listen parser (primary port probe), CreationDate
- * identity rows and the pre-taskkill residual re-proof verdict.
+ * S1 windows-fix coverage: case-insensitive netstat states and the
+ * Get-NetTCPConnection JSON listen parser (primary port probe).
  * S5 windows-fix coverage: the CIM-table liveness verdict that replaces the
  * win32 process.kill(pid, 0) OpenProcess probe on the kill-confirmation paths
  * (review/windows/fixes/s5-win32-liveness.md).
+ * The CIM/ConvertTo-Json parse rows, CreationDate identity rows, taskkill
+ * classifiers, table command bytes and the off-platform exec refusal are pinned
+ * by the cross-package gate protocol/win-probes-parity.test.ts (fixed expected
+ * rows, strictly stronger), so they are not repeated here.
  */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  buildCimTableCommand,
   buildTcpListenTableCommand,
   cimPidLiveness,
-  cimRowStillIdentifies,
   classifyCimLiveness,
   classifyCimLivenessFromTableReads,
-  classifyTaskkillOutput,
-  descendantPidsOf,
   hasWindowsResidualTree,
   parseCimProcessTable,
   parseNetstatListeningPids,
   parseNetstatListeningRows,
   parseTcpConnectionListenJson,
   queryWindowsProcessTable,
-  taskkillTreeArgs,
   treeKillWindows,
   windowsIdentity,
   windowsPortOwnedBy,
 } from '../../src/win-probes.ts'
-
-test('parseCimProcessTable parses an array document', () => {
-  const text = JSON.stringify([
-    { ProcessId: 9021, ParentProcessId: 100, CommandLine: 'node bin.js --profile web', CreationDate: '\\/Date(1700000000000)\\/' },
-    { ProcessId: 9022, ParentProcessId: 9021, CommandLine: null },
-  ])
-  assert.deepEqual(parseCimProcessTable(text), [
-    { pid: 9021, ppid: 100, command: 'node bin.js --profile web', createdAt: '\\/Date(1700000000000)\\/' },
-    { pid: 9022, ppid: 9021, command: null, createdAt: null },
-  ])
-})
-
-test('parseCimProcessTable parses a single-object document and numeric-string fields', () => {
-  const text = JSON.stringify({ ProcessId: '9021', ParentProcessId: '', CommandLine: 'x', CreationDate: '2026-01-01T00:00:00+08:00' })
-  assert.deepEqual(parseCimProcessTable(text), [{ pid: 9021, ppid: null, command: 'x', createdAt: '2026-01-01T00:00:00+08:00' }])
-})
-
-test('parseCimProcessTable skips rows without a pid and ignores garbage', () => {
-  assert.deepEqual(parseCimProcessTable('not json'), [])
-  assert.deepEqual(parseCimProcessTable(''), [])
-  assert.deepEqual(parseCimProcessTable(JSON.stringify([{ CommandLine: 'x' }, { ProcessId: 7, ParentProcessId: null, CommandLine: '' }])), [
-    { pid: 7, ppid: null, command: null, createdAt: null },
-  ])
-})
-
-test('parseCimProcessTable keeps a string CreationDate and nulls any other type', () => {
-  const text = JSON.stringify([
-    { ProcessId: 1, ParentProcessId: 0, CommandLine: 'a', CreationDate: '2026-01-01T00:00:00.0000000+08:00' },
-    { ProcessId: 2, ParentProcessId: 1, CommandLine: 'b', CreationDate: 42 },
-  ])
-  assert.deepEqual(parseCimProcessTable(text), [
-    { pid: 1, ppid: 0, command: 'a', createdAt: '2026-01-01T00:00:00.0000000+08:00' },
-    { pid: 2, ppid: 1, command: 'b', createdAt: null },
-  ])
-})
-
-test('descendantPidsOf walks the stale-parent chain and never returns the root', () => {
-  const rows = parseCimProcessTable(JSON.stringify([
-    { ProcessId: 1, ParentProcessId: 999, CommandLine: 'leader' },
-    { ProcessId: 2, ParentProcessId: 1, CommandLine: 'child' },
-    { ProcessId: 3, ParentProcessId: 2, CommandLine: 'grandchild' },
-    { ProcessId: 4, ParentProcessId: 999, CommandLine: 'unrelated' },
-  ]))
-  assert.deepEqual(descendantPidsOf(rows, 1), [2, 3])
-  assert.deepEqual(descendantPidsOf(rows, 99), [])
-  // A dead leader is still the stale parent of its orphaned descendants.
-  const orphaned = parseCimProcessTable(JSON.stringify([
-    { ProcessId: 2, ParentProcessId: 1, CommandLine: 'child' },
-    { ProcessId: 3, ParentProcessId: 2, CommandLine: 'grandchild' },
-  ]))
-  assert.deepEqual(descendantPidsOf(orphaned, 1), [2, 3])
-})
-
-test('descendantPidsOf tolerates a parent/child cycle without revisiting the root', () => {
-  const rows = parseCimProcessTable(JSON.stringify([
-    { ProcessId: 1, ParentProcessId: 2, CommandLine: 'a' },
-    { ProcessId: 2, ParentProcessId: 1, CommandLine: 'b' },
-  ]))
-  assert.deepEqual(descendantPidsOf(rows, 1), [2])
-})
 
 test('parseNetstatListeningPids extracts LISTENING pids for the exact port', () => {
   const sample = [
@@ -156,21 +94,6 @@ test('parseTcpConnectionListenJson drops junk rows and unparseable documents', (
     { LocalPort: 17510, OwningProcess: 0 },
     { LocalPort: 17510, OwningProcess: 9021 },
   ])), [{ port: 17510, pid: 9021 }])
-})
-
-test('cimRowStillIdentifies requires a stable field to prove the same process', () => {
-  const row = { pid: 7, ppid: 1, command: 'node worker.js', createdAt: '\\/Date(1700000000000)\\/' }
-  assert.equal(cimRowStillIdentifies(row, { ...row }), 'match')
-  // Pid reuse: same ProcessId, different creation date — never kill.
-  assert.equal(cimRowStillIdentifies(row, { ...row, createdAt: '\\/Date(1800000000000)\\/' }), 'mismatch')
-  // Gone between the scan and the fresh probe.
-  assert.equal(cimRowStillIdentifies(row, null), 'mismatch')
-  // CreationDate unreadable on both sides: the command line must prove it.
-  const noDate = { ...row, createdAt: null }
-  assert.equal(cimRowStillIdentifies(noDate, { ...noDate }), 'match')
-  assert.equal(cimRowStillIdentifies(noDate, { ...noDate, command: 'node other.js' }), 'mismatch')
-  // No shared stable field: fail closed, the caller refuses to terminate.
-  assert.equal(cimRowStillIdentifies({ ...noDate, command: null }, { ...noDate, command: null }), 'unprovable')
 })
 
 test('classifyCimLiveness turns a CIM row into alive / dead / unknown (S5)', () => {
@@ -234,26 +157,6 @@ test('the liveness classifier re-probes a FRESH table before trusting a cached "
   // "dead".
   const unpinned = { pid: 200, ppid: 100, command: null, createdAt: null }
   assert.equal(classifyCimLivenessFromTableReads(200, unpinned, read), null)
-})
-
-test('taskkillTreeArgs and classifyTaskkillOutput follow the documented contract', () => {
-  assert.deepEqual(taskkillTreeArgs(42), ['/PID', '42', '/T', '/F'])
-  assert.equal(classifyTaskkillOutput(0, 'SUCCESS: The process with PID 42 child process of PID 7 has been terminated.'), 'signalled')
-  assert.equal(
-    classifyTaskkillOutput(1, 'ERROR: The process "42" with PID 42 could not be terminated.\r\nReason: There is no running instance of the task.'),
-    'gone',
-  )
-  assert.equal(classifyTaskkillOutput(1, 'ERROR: The process with PID 42 could not be terminated. Reason: Access is denied.'), 'error')
-  // Non-zero without a not-found message never pretends absence.
-  assert.equal(classifyTaskkillOutput(128, ''), 'error')
-})
-
-test('buildCimTableCommand is read-only UTF-8 table output', () => {
-  const command = buildCimTableCommand()
-  assert.match(command, /Get-CimInstance Win32_Process/)
-  assert.match(command, /Select-Object ProcessId,ParentProcessId,CommandLine,CreationDate/)
-  assert.match(command, /ConvertTo-Json -InputObject \$rows -Compress/)
-  assert.match(command, /OutputEncoding = \[System\.Text\.Encoding\]::UTF8/)
 })
 
 test('buildTcpListenTableCommand is the read-only Get-NetTCPConnection projection', () => {

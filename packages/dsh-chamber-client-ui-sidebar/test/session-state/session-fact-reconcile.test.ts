@@ -20,6 +20,9 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { stripComments } from '../../../../scripts/dev/test-support/source-text.ts'
 import {
   SessionFactReconciler,
   SESSION_FACT_RECONCILE_DEFAULTS,
@@ -670,4 +673,21 @@ test('正面证伪集：只有权威显式 false 且非子代理的官方 runnin
     0,
     '官方空闲不是证伪',
   )
+})
+
+// 生产接线锁（原 session-fact-reconcile-wiring.test.ts 的唯一 fail-closed 部分）：写回
+// 只允许把 running 压成 false，且相位结算后的晚到结果不得再改官方 store。
+test('生产接线：producer 接上 correct，写回只写 false，相位栅栏在结算与写回之前', () => {
+  const plugin = stripComments(readFileSync(
+    fileURLToPath(new URL('../../src/client/index.ts', import.meta.url)), 'utf8'))
+  assert.match(plugin, /correct: writeBackDeniedRunning,/, 'producer 必须把 correct 接进对账链')
+  assert.match(plugin, /service\.handleSessionStatus\(id, false\)/)
+  assert.doesNotMatch(plugin, /handleSessionStatus\([^)]*true[^)]*\)/,
+    '权威证伪只允许把 running 压成 false；写 true 会伪造「在跑」')
+  assert.match(plugin, /typeof service\.handleSessionStatus !== 'function'/, '写回前必须有方法面能力守卫')
+  const reconcile = stripComments(readFileSync(
+    fileURLToPath(new URL('../../src/shared/session-fact-reconcile.ts', import.meta.url)), 'utf8'))
+  const fenceAt = reconcile.indexOf('if (this.disposed || attemptSettled) return')
+  assert.ok(fenceAt >= 0 && fenceAt < reconcile.indexOf("if (verdict === 'converged') {"),
+    'attemptSettled/disposed 栅栏必须排在收敛结算与写回之前，否则晚到的 verify 会改官方 store')
 })

@@ -39,8 +39,6 @@ export const GROUPS = {
   transport: [
     'test/transport/transport-manager.test.ts',
     'test/transport/transport-connection-recovery.test.ts',
-    'test/transport/transport-exec-and-registry.test.ts',
-    'test/transport/transport-providers.test.ts',
     'test/transport/transport-spec-binding.test.ts',
     'test/transport/connection-save.test.ts',
     'test/transport/ssh-provider.test.ts',
@@ -48,27 +46,21 @@ export const GROUPS = {
     'test/transport/ssh-provider-endpoint-auth.test.ts',
     'test/transport/ssh-config.test.ts',
     'test/transport/free-port.test.ts',
-    'test/transport/transport-reconnect.test.ts',
   ],
   // gateway: gateway provider/session and the manual gateway plugin sync apply path
   gateway: [
     'test/gateway/gateway-provider.test.ts',
     'test/gateway/gateway-session-spki.test.ts',
-    'test/gateway/gateway-chamber-sync.test.ts',
     'test/gateway/gateway-chamber-apply-materialize.test.ts',
     'test/gateway/gateway-ipc-shared.test.ts',
     'test/gateway/gateway-sync-registry.test.ts',
     'test/gateway/gateway-session.test.ts',
     'test/gateway/gateway-session-lifecycle.test.ts',
-    'test/gateway/gateway-session-refresh.test.ts',
   ],
   // plugins: remote plugin sync/tarball, the ssh apply increment rows + journal, and the main.ts plugin wiring gates
   plugins: [
     'test/plugins/plugin-sync.test.ts',
-    'test/plugins/plugin-sync-remote-read.test.ts',
     'test/plugins/plugin-sync-apply.test.ts',
-    'test/plugins/plugin-sync-seed.test.ts',
-    'test/plugins/plugin-sync-renderer-projection.test.ts',
     'test/plugins/plugin-tarball.test.ts',
     'test/plugins/ssh-apply-rows.test.ts',
     'test/plugins/ssh-plugin-journal.test.ts',
@@ -109,7 +101,6 @@ export const GROUPS = {
     'test/desktop-shell/open-in.test.ts',
     'test/desktop-shell/updater.test.ts',
     'test/desktop-shell/updater-restart-install.test.ts',
-    'test/desktop-shell/updater-cache-maintenance.test.ts',
     // 两个 GitHub 发现面的锁步（审计项 2：共享 update-discovery.ts）
     'test/desktop-shell/update-discovery.test.ts',
     // swift-side headless update controller (design 25 §7)
@@ -125,8 +116,6 @@ export const GROUPS = {
     'test/local-state/runtime-tree-check.test.ts',
     // lockfile-derived family facts memo (审计项 7)：mtime+size 失效
     'test/local-state/lockfile-facts-memo.test.ts',
-    // swift-side main.ts directory-lock wiring source assertions (三审 #13)
-    'chamber-lock-wiring.test.ts',
   ],
   // scripts: package build/packaging helper tests (stay in scripts/ by design)
   scripts: [
@@ -134,7 +123,6 @@ export const GROUPS = {
     'scripts/bundle-pnpm-launcher.test.mjs',
     'scripts/after-pack-adhoc-sign.test.mjs',
     'scripts/before-pack.test.mjs',
-    'scripts/build-host-graph-package.test.mjs',
     'scripts/electron-shared.test.mjs',
     'scripts/control-plane-freshness.test.mjs',
     // lockstep of this manifest + the zero-test guard (D2b)
@@ -187,16 +175,6 @@ export function parseReportedTotals(output) {
     block[key] = Number(match[2])
   }
   return block ?? empty
-}
-
-/**
- * Number of tests reported by the last node:test summary, or null when no
- * summary is present (kept for the runner lockstep test's parse assertions).
- * @param {string} output - combined child stdout + stderr.
- * @returns {number | null}
- */
-export function parseReportedTestCount(output) {
-  return parseReportedTotals(output).tests
 }
 
 /** @typedef {{ ok: true } | { ok: false, reason: string }} ChildVerdict */

@@ -3,16 +3,18 @@
  * localPluginList classification (bundle/client/plain/materialize/unsyncable +
  * path-traversal defense, registry-driven chamber projection, bundleLines) and
  * the spec/dependency classifiers.
- * Sibling parts: plugin-sync-remote-read.test.ts, plugin-sync-apply.test.ts, plugin-sync-seed.test.ts, plugin-sync-renderer-projection.test.ts.
+ * Sibling part: plugin-sync-apply.test.ts. Round-2 trim merged the remote-read,
+ * renderer-projection and seed fail-closed assertions in as part 1b.
  */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdirSync, realpathSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { ARCHIVE_CLEANUP_PACKAGE_NAME, classifyDependencyValue, classifyLocalDependency, classifySpec, CLIENT_GRAPH_PACKAGE_NAME, GIT_WORKTREE_PACKAGE_NAME, localPluginList, packageNameFromSpec, resolveLocalMaterializeDirectory, PLUGIN_SPEC_PATTERN, PLUGIN_NAME_PATTERN, CHAMBER_HOST_PACKAGES } from '../../plugin-sync.ts'
-import { chamberPackageOf, chamberFacts, chamberStateOf } from '../support/chamber-projection.ts'
-import { chamberFact, expectedChamberFacts, tempDir } from './plugin-sync-fixtures.ts'
+import { ARCHIVE_CLEANUP_PACKAGE_NAME, classifyDependencyValue, classifyLocalDependency, classifySpec, CLIENT_GRAPH_INSERT_ID, CLIENT_GRAPH_PACKAGE_NAME, computeCordisPatchUpdate, GIT_WORKTREE_INSERT_ID, GIT_WORKTREE_PACKAGE_NAME, guardPluginMutation, isAllowedLocalFileSpec, localPluginList, MATERIALIZED_VALUE_MASK, packageNameFromSpec, resolveLocalMaterializeDirectory, PLUGIN_SPEC_PATTERN, PLUGIN_NAME_PATTERN, CHAMBER_HOST_PACKAGES, redactLocalPluginManifest, redactRemotePluginManifest, remotePluginList, runLocalDshPlugin, seedRemoteChamberHostPackages, shouldPreferPinnedRuntimeLockfile, sshProtectionFacts } from '../../plugin-sync.ts'
+import type { ChamberHostPackageSeed, ExecFn } from '../../plugin-sync.ts'
+import { chamberPackageOf, chamberFacts, chamberProjection, chamberStateOf } from '../support/chamber-projection.ts'
+import { chamberFact, err, expectedChamberFacts, ok, okBytes, SEED_SPEC, tempDir } from './plugin-sync-fixtures.ts'
 
 function writeLocalProfile(root: string, dependencies: Record<string, string>, bundles: string[]): string {
   const profileDir = join(root, 'profiles', 'web')
@@ -290,24 +292,6 @@ function seedChamberPackage(profileDir: string, name: string): void {
 /** The canonical client-graph insert row (overlay file and profile patch alike). */
 const CLIENT_GRAPH_ROW = "- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-chamber-seed-client-graph'\n"
 
-test('localPluginList: chamber patched reads BOTH mount sources — the profile patch layer is one (T20 regression)', () => {
-  // The probe used to read ONLY the spawn `--patch` overlay file, but app-boot
-  // composes the profile's OWN `<profile>/cordis.patch.yml` as the user layer
-  // over the empty root, and the control plane deliberately OMITS a row already
-  // carried there from the overlay (duplicate loader identities would fail the
-  // boot). A machine whose chamber rows live in the profile patch therefore
-  // reported patched:false — a permanent false 未注入 for a row that IS in the
-  // composed tree.
-  const base = tempDir()
-  const home = join(base, 'home')
-  const profileDir = writeLocalProfile(home, {}, [])
-  seedChamberPackage(profileDir, CLIENT_GRAPH_PACKAGE_NAME)
-  // The user layer carries the exact insert row; no --patch overlay file exists.
-  writeFileSync(join(profileDir, 'cordis.patch.yml'), CLIENT_GRAPH_ROW)
-  const manifest = localPluginList(home)
-  assert.equal(chamberStateOf(manifest.chamber, CLIENT_GRAPH_PACKAGE_NAME).patched, true,
-    'a row carried by the profile patch layer IS mounted — the probe must not require the overlay file')
-})
 test('localPluginList: chamber patched covers the four mount-source combinations', () => {
   // Mount sources: the profile's own cordis.patch.yml (user layer) and the
   // `--patch` overlay the control plane passes at spawn. The overlay file
@@ -347,4 +331,265 @@ test('localPluginList: bundleLines collects bundle-declaring dependency names', 
   writeDepManifest(profileDir, 'plain-pkg', {})
   const manifest = localPluginList(root)
   assert.deepEqual(manifest.bundleLines, ['bundle-pkg'])
+})
+
+// ============================================================================
+// part 1b — remote read face, renderer boundaries and the seed fail-closed
+// matrix. Round-2 trim: the sibling suites plugin-sync-remote-read.test.ts,
+// plugin-sync-renderer-projection.test.ts and plugin-sync-seed.test.ts were
+// deleted as per-module duplicates; their security / boundary / fail-closed
+// assertions are carried over here (net line reduction positive).
+// ============================================================================
+
+test('remotePluginList: ENOENT is an absent profile; any other ssh failure is loud', async () => {
+  const enoent: ExecFn = async () => err('cat: /home/u/.dsh/profiles/web/package.json: No such file or directory')
+  const absent = await remotePluginList(enoent, SEED_SPEC)
+  assert.equal(absent.ok, true)
+  if (absent.ok) {
+    assert.equal(absent.manifest.profileExists, false)
+    assert.deepEqual(chamberFacts(absent.manifest.chamber), expectedChamberFacts())
+  }
+  const sshDown: ExecFn = async () => err('the ssh exec could not reach the host (exit 255)')
+  assert.deepEqual(await remotePluginList(sshDown, SEED_SPEC), {
+    ok: false, error: 'the ssh exec could not reach the host (exit 255)',
+  })
+})
+
+test('remotePluginList: a chamber probe ssh failure is loud on both probe files, never a silent "not injected"', async () => {
+  const probeFails = (face: 'package.json' | 'dist/index.js'): ExecFn => async (_id, action, payload) => {
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
+      const path = payload.argv?.[0] ?? ''
+      if (path.endsWith('/profiles/web/package.json')) return ok('{}')
+      if (path.endsWith('/cordis.patch.yml')) return ok('# comment' + String.fromCharCode(10) + '[]')
+      if (face === 'package.json' && path.includes(CLIENT_GRAPH_PACKAGE_NAME + '/package.json')) {
+        return err('the ssh exec could not reach the host (exit 255)')
+      }
+      if (face === 'dist/index.js' && path.includes(CLIENT_GRAPH_PACKAGE_NAME + '/package.json')) {
+        return ok('{"name":"@dsh-chamber/dsh-chamber-seed-client-graph"}')
+      }
+      if (face === 'dist/index.js' && path.includes(CLIENT_GRAPH_PACKAGE_NAME + '/dist/index.js')) {
+        return err('the ssh exec could not reach the host (exit 255)')
+      }
+      if (path.includes(GIT_WORKTREE_PACKAGE_NAME + '/dist/index.js')) return ok('export const git = 1')
+      if (path.includes(GIT_WORKTREE_PACKAGE_NAME + '/package.json')) return ok('{"name":"@dsh-chamber/dsh-chamber-seed-git-worktree"}')
+    }
+    return err('unexpected cat ' + String(payload?.argv?.[0]))
+  }
+  for (const face of ['package.json', 'dist/index.js'] as const) {
+    const result = await remotePluginList(probeFails(face), SEED_SPEC)
+    assert.ok(result.ok)
+    if (result.ok) {
+      assert.equal(result.manifest.chamber.ok, false, face)
+      if (result.manifest.chamber.ok === false) assert.match(result.manifest.chamber.error, /dsh-chamber-seed-client-graph probe failed/)
+    }
+  }
+})
+
+test('remotePluginList: a redacted .ssh-home ENOENT is a probe miss, never a loud probe error', async () => {
+  const exec: ExecFn = async (_id, action, payload) => {
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
+      const path = payload.argv?.[0] ?? ''
+      if (path.endsWith('/profiles/web/package.json')) {
+        return err('run command failed (exit 1): cat: [ssh material redacted]: No such file or directory')
+      }
+      if (path.endsWith('/cordis.patch.yml') || path.includes('@dsh-chamber/dsh-chamber-seed-')) {
+        return err('run command failed (exit 1): [ssh material redacted]: No such file or directory')
+      }
+    }
+    return err('unexpected cat ' + String(payload?.argv?.[0]))
+  }
+  const result = await remotePluginList(exec, { id: 's1', remoteDshHome: '/root/.ssh-custom' })
+  assert.ok(result.ok, 'a redacted ENOENT is a probe miss, not a loud probe failure')
+  if (result.ok) {
+    assert.equal(result.manifest.profileExists, false)
+    assert.deepEqual(chamberFacts(result.manifest.chamber), expectedChamberFacts())
+  }
+})
+
+test('remotePluginList: protected means name in P, and the write face refuses the official install (design 21 §6.11.5)', async () => {
+  const exec: ExecFn = async (_id, action, payload) => {
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
+      const path = payload.argv?.[0] ?? ''
+      if (path.endsWith('/profiles/web/package.json')) {
+        return ok(JSON.stringify({
+          dependencies: { 'third-party-pkg': '^1.0.0', '@deepseek-ai/dsh-experimental-x': '0.1.5-rc.2', '@deepseek-ai/dsh-session': '^0.1.5-rc.2' },
+          dsh: { profile: { bundles: ['third-party-pkg'] } },
+        }))
+      }
+      return err('run command failed (exit 1): cat: ' + path + ': No such file or directory')
+    }
+    return err('unexpected ' + action)
+  }
+  const result = await remotePluginList(exec, SEED_SPEC)
+  assert.ok(result.ok)
+  if (!result.ok) return
+  const byName = new Map(result.manifest.rows.map(row => [row.name, row]))
+  assert.equal(byName.get('third-party-pkg')?.protected, false)
+  assert.equal(byName.get('@deepseek-ai/dsh-experimental-x')?.protected, false, 'the read face never lies about removability')
+  const install = guardPluginMutation({ op: 'install', name: '@deepseek-ai/dsh-experimental-x', version: '0.1.5-rc.2', facts: sshProtectionFacts() })
+  assert.equal(install.kind, 'refuse')
+  assert.equal(install.kind === 'refuse' ? install.code : null, 'protected')
+  const remove = guardPluginMutation({ op: 'remove', name: '@deepseek-ai/dsh-experimental-x', version: null, facts: sshProtectionFacts() })
+  assert.equal(remove.kind, 'allow', 'removing a stray official copy is restorative')
+})
+
+test('isAllowedLocalFileSpec: absolute POSIX/Windows/UNC only — relative and control-char input refused', () => {
+  assert.equal(isAllowedLocalFileSpec('file:/Users/x/plugin'), true)
+  assert.equal(isAllowedLocalFileSpec('file:C:\\Users\\x\\plugin'), true)
+  assert.equal(isAllowedLocalFileSpec('file:\\\\server\\share\\plugin'), true)
+  for (const bad of ['file:../relative', 'file:./relative', 'file:', 'file:/tmp/x' + String.fromCharCode(10) + 'rm -rf', 'plain-registry-spec']) {
+    assert.equal(isAllowedLocalFileSpec(bad), false, bad)
+  }
+})
+
+test('runLocalDshPlugin: protected / generation-mismatch / file-pick gates refuse before any CLI lookup', async () => {
+  const dir = tempDir()
+  const protection = { familyNames: ['@deepseek-ai/dsh-base'], runtimeVersion: '0.1.5-rc.2' }
+  const refused = await runLocalDshPlugin(dir, dir, 'remove', '@deepseek-ai/dsh-base', { protection })
+  assert.equal(refused.ok, false)
+  assert.match(refused.error ?? '', /\[protected\]/)
+  const crossGen = await runLocalDshPlugin(dir, dir, 'add', '@deepseek-ai/dsh-experimental-x@0.1.4', { protection })
+  assert.equal(crossGen.ok, false)
+  assert.match(crossGen.error ?? '', /\[generation-mismatch\]/)
+  const noFlag = await runLocalDshPlugin(dir, dir, 'add', 'file:/tmp/picked-folder')
+  assert.equal(noFlag.ok, false)
+  assert.match(noFlag.error ?? '', /invalid add spec/)
+  const gated = await runLocalDshPlugin(dir, dir, 'add', 'file:/tmp/picked-folder', { allowFileSpec: true })
+  assert.equal(gated.ok, false)
+  assert.match(gated.error ?? '', /no dsh CLI entry found/)
+})
+
+test('redactLocalPluginManifest / redactRemotePluginManifest: local paths are masked on every channel, registry values untouched', () => {
+  const local = redactLocalPluginManifest({
+    dependencies: { 'file-dep': 'file:/Users/x/pkg', 'link-dep': 'link:../pkg', 'registry-dep': '^1.2.3', 'url-dep': 'https://example.com/pkg.tgz' },
+    bundles: ['file-dep'],
+    rows: [{ name: 'file-dep', spec: 'file:/Users/x/pkg', version: null, role: 'materialized', protected: false, owner: 'user' }],
+    clientLines: ['link-dep'], bundleLines: ['file-dep'], unsyncable: [],
+    chamber: chamberProjection({ [CLIENT_GRAPH_PACKAGE_NAME]: { installed: true, patched: true, version: '1.0.0' } }),
+  } as never)
+  assert.equal(local.dependencies['file-dep'], MATERIALIZED_VALUE_MASK)
+  assert.equal(local.dependencies['link-dep'], MATERIALIZED_VALUE_MASK)
+  assert.equal(local.dependencies['registry-dep'], '^1.2.3')
+  assert.equal(local.dependencies['url-dep'], 'https://example.com/pkg.tgz')
+  assert.equal(local.rows.find(row => row.name === 'file-dep')?.spec, MATERIALIZED_VALUE_MASK, 'rows[].spec is a second channel for the same value')
+  assert.equal(classifyDependencyValue(MATERIALIZED_VALUE_MASK).kind, 'materialize', 'the mask keeps the client isPathSpec parity')
+  const remote = redactRemotePluginManifest({
+    dependencies: { 'file-dep': 'file:/root/x.tgz', 'uppercase-file': 'FILE:/root/x', 'link-dep': 'link:/root/x', 'registry-dep': '^1.2.3' },
+    bundles: ['file-dep'], profileExists: true,
+    chamber: chamberProjection({ [CLIENT_GRAPH_PACKAGE_NAME]: { installed: true, patched: true } }),
+  } as never)
+  assert.equal(remote.dependencies['file-dep'], MATERIALIZED_VALUE_MASK)
+  assert.equal(remote.dependencies['uppercase-file'], MATERIALIZED_VALUE_MASK)
+  assert.equal(remote.dependencies['link-dep'], 'link:/root/x', 'link: cannot reach a profile and stays untouched')
+  assert.equal(remote.dependencies['registry-dep'], '^1.2.3')
+  assert.equal(classifyDependencyValue(remote.dependencies['file-dep']).kind, 'materialize')
+})
+
+test('shouldPreferPinnedRuntimeLockfile: only an active runtime equal to the built-in line may use the pin', () => {
+  assert.equal(shouldPreferPinnedRuntimeLockfile('0.1.5-rc.2', '0.1.5-rc.2'), true)
+  assert.equal(shouldPreferPinnedRuntimeLockfile('0.1.5-rc.3', '0.1.5-rc.2'), false, 'another runtime line uses its own lockfile')
+  assert.equal(shouldPreferPinnedRuntimeLockfile(null, '0.1.5-rc.2'), false, 'an unreadable active generation must not guess')
+  assert.equal(shouldPreferPinnedRuntimeLockfile('0.1.5-rc.2', null), false, 'an unreadable pinned generation must not guess')
+  assert.equal(shouldPreferPinnedRuntimeLockfile(null, null), false)
+})
+
+const GRAPH_INSERTS = [{ insertId: CLIENT_GRAPH_INSERT_ID, packageName: CLIENT_GRAPH_PACKAGE_NAME }]
+
+test('seed: a non-list patch or an uninitialized profile fails loud, never a rewrite', () => {
+  const mapping = computeCordisPatchUpdate('system-prompt:\n  persona: hi\n', GRAPH_INSERTS)
+  assert.ok('error' in mapping)
+  if ('error' in mapping) assert.match(mapping.error, /not a top-level YAML array/)
+  const missing = computeCordisPatchUpdate(null, GRAPH_INSERTS)
+  assert.ok('error' in missing)
+  if ('error' in missing) assert.match(missing.error, /not initialized/)
+})
+
+test('seed: crossed / duplicate / mismatched chamber loader rows fail loud before a boot-breaking append', () => {
+  const gitInserts = [{ insertId: GIT_WORKTREE_INSERT_ID, packageName: GIT_WORKTREE_PACKAGE_NAME }]
+  const cases = [
+    "- insert:\n    - id: client-graph\n      name: '@dsh-chamber/dsh-chamber-seed-git-worktree'\n    - id: git-worktree\n      name: '@dsh-chamber/dsh-chamber-seed-client-graph'\n",
+    "- insert:\n    - id: git-worktree\n      name: '@example/not-chamber'\n",
+    "- insert:\n    - id: user-git-row\n      name: '@dsh-chamber/dsh-chamber-seed-git-worktree'\n",
+    "- insert:\n    - id: git-worktree\n      name: '@dsh-chamber/dsh-chamber-seed-git-worktree'\n    - id: git-worktree\n      name: '@dsh-chamber/dsh-chamber-seed-git-worktree'\n",
+    "- insert:\n    - id: git-worktree\n      name: '@example/not-chamber'\n    - name: '@dsh-chamber/dsh-chamber-seed-git-worktree'\n      id: another-git-service\n",
+    "- insert:\n    - id: git-worktree\n      name: '@example/not-chamber'\n      config:\n        name: '@dsh-chamber/dsh-chamber-seed-git-worktree'\n",
+    "- insert: [{ id: git-worktree, name: '@example/not-chamber' }, { id: other, name: '@dsh-chamber/dsh-chamber-seed-git-worktree' }]\n",
+  ]
+  for (const content of cases) {
+    const update = computeCordisPatchUpdate(content, gitInserts)
+    assert.ok('error' in update, content)
+    if ('error' in update) assert.match(update.error, /already bound|already mounted|duplicate chamber loader identity/)
+  }
+})
+
+function seedExec(overrides: {
+  patch?: string | null
+  failWrite?: (path: string) => string | null
+  failSeedCat?: (path: string) => string | null
+} = {}) {
+  const calls: string[] = []
+  const written: Array<{ path: string; bytes: Buffer }> = []
+  const exec: ExecFn = async (_id, action, payload) => {
+    if (action === 'run' && payload?.op === 'exec' && payload.command === 'cat') {
+      const path = payload.argv?.[0]
+      calls.push('cat:' + String(path))
+      if (path !== undefined && path.startsWith('~/.dsh/profiles/node_modules/@dsh-chamber/')) {
+        const failure = overrides.failSeedCat?.(path)
+        if (failure !== undefined && failure !== null) return err(failure)
+        return err('run command failed (exit 1): cat: ' + path + ': No such file or directory')
+      }
+      if (path === '~/.dsh/profiles/web/cordis.patch.yml') {
+        if (overrides.patch === null) return err('run command failed (exit 1): cat: ' + path + ': No such file or directory')
+        return ok(overrides.patch)
+      }
+      return err('run command failed (exit 1): cat: no such file')
+    }
+    if (action === 'run' && payload?.op === 'write-file') {
+      const path = payload.path ?? '?'
+      calls.push('write:' + path)
+      const failure = overrides.failWrite?.(path)
+      if (failure !== undefined && failure !== null) return err(failure)
+      written.push({ path, bytes: Buffer.from(payload.contentBase64 ?? '', 'base64') })
+      return okBytes(Buffer.from(payload.contentBase64 ?? '', 'base64'))
+    }
+    calls.push('other:' + action)
+    return ok()
+  }
+  return { exec, calls, written }
+}
+
+/** A module A source dir; pkgJson: null omits package.json (the preflight-negative shape). */
+function moduleASource(pkgJson: string | null = '{"name":"x"}', distJs: string | null = 'export const graph = 1'): string {
+  const dir = join(tempDir(), 'module-a')
+  mkdirSync(join(dir, 'dist'), { recursive: true })
+  if (pkgJson !== null) writeFileSync(join(dir, 'package.json'), pkgJson)
+  if (distJs !== null) writeFileSync(join(dir, 'dist', 'index.js'), distJs)
+  return dir
+}
+
+const singleGraphSeed = (sourceDir: string): ChamberHostPackageSeed[] =>
+  [{ insertId: CLIENT_GRAPH_INSERT_ID, packageName: CLIENT_GRAPH_PACKAGE_NAME, sourceDir, label: 'host-graph' }]
+
+test('seedRemoteChamberHostPackages: preflight / read / write failures all stop before the patch write', async () => {
+  const preflight = seedExec({ patch: '[]\n' })
+  const brokenResult = await seedRemoteChamberHostPackages(preflight.exec, SEED_SPEC, singleGraphSeed(moduleASource(null)))
+  assert.equal(brokenResult.ok, false)
+  if (!brokenResult.ok) assert.match(brokenResult.error, /package\.json missing/)
+  assert.deepEqual(preflight.calls, [], 'a broken source is refused before any remote call')
+  const readFails = seedExec({
+    patch: '[]\n',
+    failSeedCat: path => (path.endsWith('/package.json') ? 'the ssh exec could not reach the host (exit 255)' : null),
+  })
+  const readResult = await seedRemoteChamberHostPackages(readFails.exec, SEED_SPEC, singleGraphSeed(moduleASource()))
+  assert.equal(readResult.ok, false)
+  if (!readResult.ok) assert.match(readResult.error, /host-graph seed read package\.json failed/)
+  assert.equal(readFails.written.length, 0, 'no write is attempted after a non-ENOENT read-back failure')
+  const writeFails = seedExec({
+    patch: '[]\n',
+    failWrite: path => (path.includes('dist/index.js') ? 'write-file target not allowed' : null),
+  })
+  const writeResult = await seedRemoteChamberHostPackages(writeFails.exec, SEED_SPEC, singleGraphSeed(moduleASource()))
+  assert.equal(writeResult.ok, false)
+  if (!writeResult.ok) assert.match(writeResult.error, /write-file failed for dist\/index\.js/)
+  assert.ok(!writeFails.written.some(entry => entry.path === '~/.dsh/profiles/web/cordis.patch.yml'), 'no patch without the package files')
 })

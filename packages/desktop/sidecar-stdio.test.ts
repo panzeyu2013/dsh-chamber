@@ -670,7 +670,7 @@ test('S2·F8 stdout 纪律：重定向模块是 sidecar-entry 第一条 import�
 })
 
 test('S3·D2 唤醒重探叶：只连 error/degraded 非终态；idle/ready/终态/quit 在途不动', async () => {
-  const { reconnectStaleTransports } = await import('./sidecar-ctx.ts')
+  const { reconnectStaleTransports } = await import('./transport-reconnect.ts')
   type ReconnectSm = Parameters<typeof reconnectStaleTransports>[0]
   const statuses: Record<string, { phase: string; requiresUserAction: boolean }> = {
     idle: { phase: 'idle', requiresUserAction: false },

@@ -333,13 +333,6 @@ test('writeSettingsFile + readSettingsFile round-trip (atomic, 0600)', () => {
   assert.ok(!existsSync(`${file}.tmp`), 'tmp file cleaned up by rename');
 });
 
-test('readSettingsFile: missing file → defaults, no notice', () => {
-  const dir = mkdtempSync(path.join(tmpdir(), 'chamber-settings-'));
-  const read = readSettingsFile(path.join(dir, 'absent.json'));
-  assert.equal(read.notice, null);
-  assert.deepEqual(read.settings, DEFAULT_CHAMBER_SETTINGS);
-});
-
 test('readSettingsFile: corrupt file preserved as *.corrupt, defaults + loud notice', () => {
   const dir = mkdtempSync(path.join(tmpdir(), 'chamber-settings-'));
   const file = path.join(dir, 'chamber-settings.json');

@@ -41,7 +41,7 @@ export const readyStatus: StatusFn = () => ({ phase: 'ready' })
 export const SEED_SPEC: RemoteSpec = { id: 's1', remoteDshHome: null }
 
 /** One chamber row's four probed facts. */
-export interface ChamberFact {
+interface ChamberFact {
   installed: boolean
   patched: boolean
   version: string | null

@@ -30,7 +30,6 @@ import {
   type InstalledResult,
 } from '../../src/plugins-installed.ts'
 import { createChamberSurface } from '../../src/routes.ts'
-import { seedCacheProjection } from '../support/chamber-surface-fixtures.ts'
 import { stubPluginTasks } from '../support/utils.ts'
 import { handleChamberSurface, makeChamberSurfaceHarness, surfaceSilentLogger } from '../support/chamber-surface-harness.ts'
 
@@ -380,17 +379,6 @@ test('route: non-GET methods on /chamber/plugins/installed → 405', async t => 
     assert.equal(response.status, 405, method)
     assert.equal(response.json().code, 'method_not_allowed', method)
   }
-})
-
-test('route: GET /chamber/plugins (seed-cache projection) still works; unknown subpaths stay 404', async t => {
-  const stateDir = scratch(t)
-  const host = surface(t, stateDir)
-  const plugins = await handle(host, 'GET', '/chamber/plugins')
-  assert.equal(plugins.status, 200)
-  assert.deepEqual(plugins.json(), seedCacheProjection())
-  const deep = await handle(host, 'GET', '/chamber/plugins/installed/extra')
-  assert.equal(deep.status, 404)
-  assert.deepEqual(deep.json(), { error: 'not_found', code: 'not_found' })
 })
 
 // ---------------------------------------------------------------------------

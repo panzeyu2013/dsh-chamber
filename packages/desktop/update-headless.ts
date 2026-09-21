@@ -126,12 +126,10 @@ export function resolveHeadlessChannel(
  *  ——下载与安装在该窗口内是一段连续流程，与 Electron 的三步在用户可见效果上
  *  等价（检查 → 下载 → 重启并安装），实现方式不同。 */
 export interface NativeUpdaterBridge {
-  /** 壳侧原生更新器能力（S-38 诚实化）。两种回执形态都接受，消费面零改动：
-   *  - boolean（sidecar-entry 的现有实现）；
-   *  - {available, error}：available=false 时 error 是**真实原因**（未装配 / 坏
-   *    feed / 坏 Ed25519 公钥 / startUpdater 失败），控制器记录它并保持
-   *    blocked-available；随后的 check 拿壳的 ok:false 落 error 相位。 */
-  available(): Promise<boolean | { available: boolean; error?: string | null }>
+  /** 壳侧原生更新器能力（S-38 诚实化）：available=false 时 error 是**真实原因**
+   *  （未装配 / 坏 feed / 坏 Ed25519 公钥 / startUpdater 失败），控制器记录它并
+   *  保持 blocked-available；随后的 check 拿壳的 ok:false 落 error 相位。 */
+  available(): Promise<{ available: boolean; error?: string | null }>
   /** 触发原生更新流程。check = Sparkle 检查（appcast 单源）；download/install
    *  都打开 Sparkle 的标准更新窗口。 */
   trigger(kind: 'check' | 'download' | 'install'): Promise<{ ok: true } | { ok: false; error: string }>
@@ -385,8 +383,8 @@ export function createHeadlessUpdateController(deps: HeadlessUpdateControllerDep
         if (deps.nativeUpdater === undefined) return
         try {
           const reply = await deps.nativeUpdater.available()
-          const available = typeof reply === 'boolean' ? reply : reply.available
-          const reason = typeof reply === 'boolean' ? null : reply.error ?? null
+          const available = reply.available
+          const reason = reply.error ?? null
           if (available) {
             setState({ installBlockedReason: null })
             deps.logger.log('[updater-headless] 原生更新器（Sparkle）可用：安装腿交给壳，installBlockedReason 已清空')

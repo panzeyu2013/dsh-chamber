@@ -851,7 +851,7 @@ export type RuntimeFactsOverlay = Readonly<Record<string, RuntimeFactsOverlayRow
  *
  * 2026-12 facts wiring (plan §3.3-1) adds two OPTIONAL inputs; a two-argument
  * call stays byte-identical to the pre-change implementation (compatibility
- * lock, test/session-rows/merge-runtime-facts.test.ts):
+ * lock, test/session-rows/derive.test.ts):
  * - `overlay`: render fields supplied by a facts source when the shell channel
  *   is absent. Per-field priority — pending: channel wins, overlay fills an
  *   absent kind; runningSubagents: channel ?? overlay; completed stays the

@@ -30,7 +30,6 @@ import {
   nativeMacFeedPath,
   nativeMacFeedUrl,
   normalizeEnclosureUrl,
-  releaseManifest,
 } from './release-artifacts.mjs'
 import { APPCAST_USAGE, parseVerifyAppcastArgs, verifyNativeAppcast } from './verify-native-appcast.mjs'
 // The appcast's sparkle:version is the .app CFBundleVersion; the mapping stays single-sourced with the Swift builder (lockstep asserted below).
@@ -76,79 +75,26 @@ test('feed 归属唯一：Electron 产出 yml，Swift 产出 appcast（S-22 双�
   assert.equal(nativeMacFeedPath('0.3.0'), 'releases/latest/download/appcast-swift.xml')
   assert.equal(nativeMacFeedPath('0.3.0-beta.2'),
     'releases/download/appcast-swift-beta/appcast-swift-beta.xml')
-  const stable = releaseManifest('0.3.0')
-  assert.equal(stable.electron.feed, 'latest-mac.yml')
-  assert.equal(stable.native.feed, 'appcast-swift.xml',
-    '稳定通道原生壳更新源 = appcast-swift.xml（S-01 / 裁决 D-1 选 B）')
-
-  const beta = releaseManifest('0.3.0-beta.2')
-  assert.equal(beta.electron.feed, 'beta-mac.yml')
-  assert.equal(beta.native.feed, 'appcast-swift-beta.xml',
-    'beta 通道原生壳更新源 = Sparkle beta appcast（S-22）')
-  for (const name of beta.native.artifacts) {
-    assert.doesNotMatch(name, /\.ya?ml$/)
-  }
+  // releaseManifest 的同一组字段由本文件 CLI 用例（--check-dir/JSON 清单）与
+  // release-workflow-policy.test.mjs 的 feed 名钉住；此处不再重复 in-process 断言。
 })
 
-test('release.yml 的 Swift 命名参数与本清单一致', () => {
+test('release.yml 的 Swift 命名参数与本清单一致（其余 workflow 行由 release-workflow-policy 权威钉住）', () => {
   const workflow = readFileSync(new URL('../../.github/workflows/release.yml', import.meta.url), 'utf8')
   const native = nativeMacArtifacts('1.2.3')
-  assert.match(workflow, /--app-name dsh-chamber/)
   assert.match(workflow, /--artifact-basename "dsh-chamber-\$\{VERSION\}-macos-arm64"/)
-  // 清单里的 dmg/zip 基名 = workflow 的 --artifact-basename。
   for (const name of native) {
     assert.ok(name.startsWith('dsh-chamber-1.2.3-macos-arm64'), name)
   }
-  // Electron/Squirrel 的 feed 仍归 Electron 腿；Swift 腿的更新源是 Sparkle appcast（S-01 /
-  // 裁决 D-1 选 B；S-22 双通道），必须由 EdDSA 私钥签名，dry-run 不进入该步。
+  // 本清单独有：Swift 腿不得出现 Squirrel feed；final 条目从已发布 stable feed 复制。
   const swiftJob = workflow.slice(
     workflow.indexOf('\n  build-swift:'),
     workflow.indexOf('\n  finalize-release:'),
   )
   assert.doesNotMatch(swiftJob, /latest-mac\.yml|beta-mac\.yml/, 'Squirrel feed 不得出现在 Swift 腿')
-  assert.match(swiftJob, /appcast-swift\.xml/, '稳定通道原生壳更新源 = appcast-swift.xml')
-  assert.match(swiftJob, /appcast-swift-beta\.xml/, 'beta 通道原生壳更新源 = appcast-swift-beta.xml（S-22）')
-  assert.match(swiftJob, /releases\/latest\/download\/appcast-swift\.xml/,
-    '稳定 feed URL 必须保持不变（releases/latest 只解析非 prerelease）')
-  assert.ok(!swiftJob.includes('/releases/download/v${VERSION}/appcast-swift-beta.xml'),
-    'beta feed 绝不钉在版本 tag 上：beta.N 必须看到 beta.N+1（S-22 滚动通道）')
-  assert.ok(swiftJob.includes('releases/download/${SPARKLE_BETA_ROLLING_TAG}/appcast-swift-beta.xml'),
-    'beta feed URL 必须解析到滚动 tag 的 beta appcast（S-22）')
-  assert.ok(swiftJob.includes(`SPARKLE_BETA_ROLLING_TAG: ${NATIVE_BETA_ROLLING_TAG}`),
-    '滚动 tag 必须在 build-swift job env 单一定义，且与 release-artifacts.mjs 逐字锁步')
-  // 滚动发布：tag/release 缺失即幂等创建（prerelease，不影响 releases/latest），beta 每次
-  // --clobber 覆盖同一 appcast；S-36：appcast 引用的 zip 也上传到该 release（enclosure 可下载），
-  // 发布发生在 verify 之后的 upload 步。只看代码行（注释文案不构成断言满足，同 release-workflow-policy 纪律）。
   const swiftJobCode = swiftJob.split('\n').filter((line) => !/^[ \t]*#/.test(line)).join('\n')
-  assert.match(swiftJobCode, /ROLLING_TAG="\$\{SPARKLE_BETA_ROLLING_TAG\}"/)
-  assert.match(swiftJobCode, /gh release view "\$ROLLING_TAG" --repo "\$GITHUB_REPOSITORY"/)
-  assert.match(swiftJobCode, /gh release create "\$ROLLING_TAG"/)
-  assert.match(swiftJobCode, /--prerelease/)
-  assert.match(swiftJobCode, /gh release upload "\$ROLLING_TAG" "\$BETA_APPCAST" --clobber/,
-    '滚动 appcast 发布（verify 之后、归档之后）')
-  assert.match(swiftJobCode, /gh release upload "\$ROLLING_TAG" "\$STAGED_ZIP" --clobber/,
-    'S-36：当前 beta zip 先上传到滚动 release（beta enclosure 可下载）')
-  assert.match(swiftJobCode, /for ARCHIVE in \/tmp\/appcast-in-beta\/\*\.delta; do/,
-    'S-36：appcast 引用的 delta 也上传到滚动 release（增量链不留 404）')
-  assert.match(swiftJobCode, /STAGE_DIR="\/tmp\/appcast-in-beta"/,
-    '2026-09：beta 收件目录与 stable 完全分开（同目录 + -o 会 multiple appcasts found）')
-  assert.ok(swiftJobCode.includes(
-    '--download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${ROLLING_TAG}/"'),
-  'S-36：beta appcast 的 enclosure 前缀钉在滚动 tag 下载目录')
-  assert.ok(swiftJobCode.includes(
-    '--download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${STABLE_TAG}/"'),
-  'S-23：合并进 beta feed 的 final 条目改挂版本固定前缀（releases/latest 可变 ⇒ 404）')
   assert.ok(swiftJobCode.includes("--pattern 'appcast-swift.xml' --dir /tmp/stable-feed --clobber"),
     'S-23：final 条目从已发布 stable feed 复制（不再下载 stable zip）')
-  assert.ok(
-    swiftJobCode.indexOf('for ARCHIVE in /tmp/appcast-in-beta/*.delta; do')
-    < swiftJobCode.indexOf('gh release upload "$ROLLING_TAG" "$BETA_APPCAST" --clobber'),
-    'S-36：delta 必须先于引用它的 appcast 上传（delta enclosure 不留 404）',
-  )
-  assert.match(swiftJobCode, /--sparkle-feed "\$SPARKLE_FEED"/, '构建必须注入所选通道的 feed')
-  assert.match(swiftJobCode, /generate_appcast/, 'appcast 必须由 Sparkle 的 generate_appcast 生成')
-  assert.match(swiftJobCode, /SPARKLE_PRIVATE_KEY/, 'appcast 必须用 EdDSA 私钥签名')
-  assert.match(swiftJobCode, /dry_run != 'true'/, '签名/上传 appcast 只在正式发布腿执行')
 })
 
 test('S-36 enclosure 前缀单源：beta 走滚动 tag 下载目录，stable 不传前缀', () => {

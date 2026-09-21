@@ -7,8 +7,8 @@
  *
  * Plain node:test + node:assert, no new deps. This file imports ONLY
  * src/warmup.ts (node builtins) so it runs even in a checkout without the
- * workspace node_modules link; the dispatch-level integration lives in
- * warmup-dispatch.test.ts.
+ * workspace node_modules link; the dispatch-level wiring (pre-auth claim,
+ * 405 audit, login→href join) lives in boundary-login-page.test.ts.
  * Run with `node packages/gateway/test/boundary/warmup.test.ts`.
  */
 

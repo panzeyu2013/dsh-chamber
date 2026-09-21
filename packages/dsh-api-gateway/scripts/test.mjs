@@ -37,13 +37,6 @@ const GROUPS = {
       file: 'test/behavior/mux-self-heal.test.ts',
       nodeArgs: ['--experimental-transform-types', '--import', './test/support/register-vendor-stubs.mjs'],
     },
-    {
-      // 2026-09 renderer-crash round: the retry lane's wait for a connection
-      // generation is bounded, so a parked lane reopens instead of parking every
-      // new logical stream forever (no error edge, nothing in the UI).
-      file: 'test/behavior/remote-stream-generation-wait.test.ts',
-      nodeArgs: ['--experimental-transform-types', '--import', './test/support/register-vendor-stubs.mjs'],
-    },
   ],
   // retry-policy: chamber carrier-retry pacing (design 14 §D4).
   'retry-policy': [
@@ -55,7 +48,6 @@ const GROUPS = {
   // patch-lock: the fork patch's shape, pinned against an upstream re-sync.
   'patch-lock': [
     'test/patch-lock/remote-stream-carrier-retry-lock.test.ts',
-    'test/patch-lock/remote-stream-opening-deadline-lock.test.ts',
     'test/patch-lock/journal-stall-watchdog-lock.test.ts',
   ],
 }

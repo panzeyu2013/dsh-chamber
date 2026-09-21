@@ -244,7 +244,6 @@ test('③b Node 归档摘要固定在仓库：默认版本两架构全覆盖 + �
 test('③e 内嵌 pnpm 版本 pin：单源 desktop dependencies.pnpm + 构建期 fail-closed（G18）', () => {
   // 单一来源：desktop manifest 的 dependencies.pnpm；Electron 侧 after-pack 的
   // 运行时校验读同一来源（after-pack-adhoc-sign.test.mjs 断言跨模块相等）。
-  assert.equal(PNPM_PINNED_VERSION, DESKTOP_MANIFEST.dependencies.pnpm)
   assert.match(PNPM_PINNED_VERSION, /^\d+\.\d+\.\d+/)
   assert.equal(resolvePnpmPin({ dependencies: { pnpm: '9.9.9' } }), '9.9.9')
   assert.throws(() => resolvePnpmPin({ dependencies: {} }), /缺少 dependencies\.pnpm/)

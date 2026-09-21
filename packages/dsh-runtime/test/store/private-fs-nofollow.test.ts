@@ -5,12 +5,13 @@
  * while the shared open helper still refuses a symlinked final component
  * through lstat identity checks immediately before and after the open. Both
  * branches run on every host through the injectable constants seam.
+ * The two fallback symlink refusals share one fixture table (2026-12 trim).
  *
  * Run directly: node packages/dsh-runtime/test/store/private-fs-nofollow.test.ts
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { closeSync, constants, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
+import { closeSync, constants, mkdirSync, mkdtempSync, symlinkSync, writeFileSync, type Stats } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -83,40 +84,24 @@ test('resolveNoFollowFlags falls back without throwing when O_NOFOLLOW is absent
   assert.deepEqual(resolveNoFollowFlags('write', {}), { flags: 0, kernelNoFollow: false })
 })
 
-test('the fallback open refuses a symlinked final FILE component before opening it', () => {
+test('the fallback open refuses a symlinked final FILE or DIRECTORY component before opening it', () => {
   const dir = makeTempDir()
-  const target = join(dir, 'target.txt')
-  writeFileSync(target, 'secret')
-  const link = join(dir, 'link.txt')
-  symlinkSync(target, link)
-  assert.throws(
-    () => openPrivateNoFollowSync(link, 'read', { constantsLike: FALLBACK_CONSTANTS }),
-    /符号链接/,
-  )
-  // The target was never reached through the link; a direct open still works.
-  const opened = openPrivateNoFollowSync(target, 'read', { constantsLike: FALLBACK_CONSTANTS })
-  try {
-    assert.equal(opened.stats.isFile(), true)
-  } finally {
-    closeSync(opened.fd)
-  }
-})
-
-test('the fallback open refuses a symlinked final DIRECTORY component', () => {
-  const dir = makeTempDir()
-  const real = join(dir, 'real-dir')
-  mkdirSync(real)
-  const link = join(dir, 'link-dir')
-  symlinkSync(real, link, 'dir')
-  assert.throws(
-    () => openPrivateNoFollowSync(link, 'directory', { constantsLike: FALLBACK_CONSTANTS }),
-    /符号链接/,
-  )
-  const opened = openPrivateNoFollowSync(real, 'directory', { constantsLike: FALLBACK_CONSTANTS })
-  try {
-    assert.equal(opened.stats.isDirectory(), true)
-  } finally {
-    closeSync(opened.fd)
+  const fileTarget = join(dir, 'target.txt')
+  writeFileSync(fileTarget, 'secret')
+  const dirTarget = join(dir, 'real-dir')
+  mkdirSync(dirTarget)
+  const fileLink = join(dir, 'link.txt')
+  symlinkSync(fileTarget, fileLink)
+  const dirLink = join(dir, 'link-dir')
+  symlinkSync(dirTarget, dirLink, 'dir')
+  for (const [kind, link, target, isExpected] of [
+    ['read', fileLink, fileTarget, (s: Stats) => s.isFile()],
+    ['directory', dirLink, dirTarget, (s: Stats) => s.isDirectory()],
+  ] as const) {
+    assert.throws(() => openPrivateNoFollowSync(link, kind, { constantsLike: FALLBACK_CONSTANTS }), /符号链接/)
+    // The target was never reached through the link; a direct open still works.
+    const opened = openPrivateNoFollowSync(target, kind, { constantsLike: FALLBACK_CONSTANTS })
+    try { assert.equal(isExpected(opened.stats), true) } finally { closeSync(opened.fd) }
   }
 })
 

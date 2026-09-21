@@ -13,10 +13,10 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { GATEWAY_SESSION_COOKIE_NAME, type GatewayHttpRequest, type GatewaySessionManager, type GatewaySessionOrigin, type GatewaySessionResult } from '../../gateway-session.ts'
 import { configureGatewaySessionProvider } from '../../gateway-provider.ts'
 
-export const JWT = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzZXNzaW9uIn0.signature'
+const JWT = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzZXNzaW9uIn0.signature'
 export const COOKIE = `${GATEWAY_SESSION_COOKIE_NAME}=${JWT}`
 export const PASSWORD = 'correct horse battery staple'
-export let gatewayScopeSequence = 0
+let gatewayScopeSequence = 0
 
 export interface LoginRecord {
   path: string

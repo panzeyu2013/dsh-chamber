@@ -11,7 +11,6 @@ import { readFileSync } from 'node:fs'
 // 不会让任何行为测试变红，只会让用户重新看到错位。
 
 const css = readFileSync(new URL('../../src/styles.css', import.meta.url), 'utf8')
-const app = readFileSync(new URL('../../src/App.tsx', import.meta.url), 'utf8')
 
 test('the document-level color-scheme fallback stays light, matching the token palette default', () => {
   assert.match(css, /:root\s*\{[^}]*color-scheme:\s*light/, ':root must declare the light fallback')
@@ -28,14 +27,3 @@ test('the fallback rule documents why it must match the palette default', () => 
   assert.match(css, /data-ds-dark-theme/, 'the fallback comment must name the dark-palette attribute')
 })
 
-test('the App publishes the active source in a layout effect (the producer half of the model)', () => {
-  // Without this publish `activeSourceId` stays undefined, the projector's
-  // fail-open arm applies to EVERY instance, and the original N-ctx defect
-  // returns with all projector/unit tests still green (2026-12 review MAJOR-1).
-  // The effect body may carry SIBLING document-global publications (the
-  // page-language owner is published in the same commit — see
-  // page-language.test.ts); the lock is the publish itself, inside the layout
-  // effect keyed on activeView, before paint.
-  assert.match(app, /useLayoutEffect\(\(\) => \{\s*chamberBridge\.setActiveSource\(activeView\)[\s\S]*?\}, \[activeView\]\)/,
-    'the active view must be published before paint, keyed on activeView')
-})

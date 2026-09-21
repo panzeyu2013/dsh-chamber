@@ -169,11 +169,4 @@ test('a materialization failure still restores the link (handler armed first)', 
   }
 });
 
-test('the hook module exports the documented surface', async () => {
-  const mod = await import(MODULE_URL);
-  assert.equal(typeof mod.default, 'function');
-  assert.equal(typeof mod.materializeRuntimeCore, 'function');
-  assert.equal(typeof mod.restoreRuntimeCoreLink, 'function');
-  assert.equal(typeof mod.registerExitRestore, 'function');
-  assert.equal(MODULE_PATH.endsWith(path.join('scripts', 'before-pack.mjs')), true);
-});
+

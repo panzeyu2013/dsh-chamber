@@ -2,10 +2,13 @@
  * Protocol-layer unit tests (no real dsh, no fixed ports): pending-table
  * settle-once races, timeout policy (incl. caller-signal-only), rpcId echo
  * validation, generation abort propagation (connection_offline), unknown-code
- * business error passthrough — plus the v4 local host-management surface
- * (spawn → ready, health failure counting → degraded, restart at threshold,
- * child-exit restart, graceful stop). The dsh wire is mocked; one Unix-only
- * process test proves detached-group reclamation when the leader exits first.
+ * business error passthrough — plus the v4 host-management behaviors that
+ * have no stronger duplicate elsewhere (health failure counting → degraded →
+ * threshold restart) and the Unix-only detached-group reclamation / pid-ledger
+ * attempts. User restarts, spawn/ready and the stop race live in
+ * host-lifecycle/restart-local.test.ts, host-lifecycle/local-connection.test.ts
+ * and api/manager-api.test.ts; the health-driven restart-exhausted window is
+ * restart-local.test.ts:575-639. The dsh wire is mocked.
  */
 
 import { test } from 'node:test'
@@ -27,14 +30,13 @@ import { seedDshHomeDefaults } from '../../src/index.ts'
 
 import {
   DEFAULT_DSH_START_PORT,
-  DSH_SPAWN_NON_RETRYABLE_CODE,
   DSH_WRITER_QUIESCENCE_UNKNOWN_CODE,
   managedProcessGroupAlive,
   spawnDsh,
   terminateChild,
   writePidRecord,
 } from '../../src/spawn-dsh.ts'
-import { commandMatchesEntry, runReaper } from '../../src/reaper.ts'
+import { runReaper } from '../../src/reaper.ts'
 import { absentConnection, jsonResponse, mockIdentityProbe, quietLogger, waitFor } from '../support/utils.ts'
 
 const HOST = `http://127.0.0.1:${DEFAULT_DSH_START_PORT}`
@@ -279,7 +281,7 @@ test('malformed error branch degrades to unknown_rpc_code instead of dropping', 
 })
 
 // ---------------------------------------------------------------------------
-// local-connection (v4 host management): spawn/ready, health, restart, stop
+// local-connection: health counting, process reclamation, pid ledger, home seed
 // ---------------------------------------------------------------------------
 
 
@@ -322,73 +324,6 @@ function mockSpawn(): Promise<SpawnedDsh> {
   })
 }
 
-test('start spawns and lands on ready; stop terminates and lands on stopped', async () => {
-  const probe = mockIdentityProbe()
-  const connection = absentConnection({
-    deps: { spawnDsh: mockSpawn, probeHostIdentity: probe.probeHostIdentity },
-  })
-  assert.equal(connection.getState(), 'stopped')
-  await connection.start()
-  assert.equal(connection.getState(), 'ready')
-  assert.ok(connection.getDshPort() !== null)
-  // Idempotent: a second start does not spawn again.
-  await connection.start()
-  assert.equal(spawnCounter, 1)
-  await connection.stop()
-  assert.equal(connection.getState(), 'stopped')
-  assert.equal(connection.getDshPort(), null)
-})
-
-test('a spawn failure is fail-loud: state lands on error and start() rejects', async () => {
-  const connection = absentConnection({
-    deps: {
-      spawnDsh: async () => { throw new Error('port occupied after 5 attempts') },
-      probeHostIdentity: mockIdentityProbe().probeHostIdentity,
-    },
-  })
-  await assert.rejects(connection.start(), /port occupied/)
-  assert.equal(connection.getState(), 'error')
-  assert.match(connection.getError() ?? '', /port occupied/)
-})
-
-test('a runtime gate closed after queueing is re-read before seed and spawn', async () => {
-  let blocked = false
-  let seeds = 0
-  let spawns = 0
-  let announceCheckpoint!: () => void
-  let releaseCheckpoint!: () => void
-  const checkpointReached = new Promise<void>(resolve => { announceCheckpoint = resolve })
-  const checkpointRelease = new Promise<void>(resolve => { releaseCheckpoint = resolve })
-  const connection = absentConnection({
-    options: {
-      canSpawn: () => blocked ? { ok: false, reason: 'runtime restore in progress' } : { ok: true },
-      patchPath: () => { seeds += 1; return null },
-    },
-    deps: {
-      beforeSpawnCheckpoint: async () => {
-        announceCheckpoint()
-        await checkpointRelease
-      },
-      spawnDsh: async () => { spawns += 1; return mockSpawn() },
-      probeHostIdentity: mockIdentityProbe().probeHostIdentity,
-    },
-  })
-  try {
-    const pending = connection.start()
-    await checkpointReached
-    blocked = true
-    releaseCheckpoint()
-    await assert.rejects(pending, /runtime restore in progress/)
-    assert.equal(seeds, 0)
-    assert.equal(spawns, 0)
-    assert.equal(connection.getState(), 'stopped')
-  } finally {
-    releaseCheckpoint?.()
-    await connection.stop()
-  }
-})
-
-
 test('health failures count into degraded; success resets; threshold triggers a restart', async () => {
   const probe = mockIdentityProbe()
   const connection = absentConnection({
@@ -419,100 +354,6 @@ test('health failures count into degraded; success resets; threshold triggers a 
   assert.equal(connection.getState(), 'stopped')
 })
 
-test('a dead child skips counting and restarts immediately', async () => {
-  const probe = mockIdentityProbe()
-  // A single "process" whose exit listener is captured and fired by the test.
-  const hooks: { exit?: (code: number | null, sig: string | null) => void } = {}
-  const child: SpawnedDsh = {
-    child: {
-      on: (event: string, listener: any) => {
-        if (event === 'exit') hooks.exit = listener
-        return undefined
-      },
-      exitCode: null,
-    },
-    port: 17950,
-    stop: async () => {},
-  }
-  const spawns: () => Promise<SpawnedDsh> = async () => child
-  const connection = absentConnection({
-    options: { healthIntervalMs: 0, restartWindowMs: 5000 },
-    deps: { spawnDsh: spawns, probeHostIdentity: probe.probeHostIdentity },
-  })
-  await connection.start()
-  // Simulate process death: fire the exit listener (the local-connection
-  // restarts immediately without counting a failure).
-  child.child.exitCode = 1
-  hooks.exit?.(1, null)
-  await waitFor(() => connection.getState() === 'restarting', 3000, 'restart on child death')
-  await waitFor(() => connection.getState() === 'ready', 3000, 'ready after respawn')
-  assert.equal(connection.getConsecutiveFailures(), 0)
-  await connection.stop()
-})
-
-test('stop waits for and reclaims an inside-spawn automatic restart', async () => {
-  let fireFirstExit: ((code: number | null, sig: string | null) => void) | undefined
-  const firstChild = {
-    child: {
-      on: (event: string, listener: (...args: any[]) => void) => {
-        if (event === 'exit') fireFirstExit = listener
-      },
-      exitCode: null as number | null,
-    },
-    port: 17960,
-    stop: async () => {},
-  }
-  let spawnCalls = 0
-  let announceRestartSpawn!: () => void
-  let releaseRestartSpawn!: (spawned: SpawnedDsh) => void
-  const restartSpawnEntered = new Promise<void>(resolve => { announceRestartSpawn = resolve })
-  const restartSpawnRelease = new Promise<SpawnedDsh>(resolve => { releaseRestartSpawn = resolve })
-  let restartSignal: AbortSignal | undefined
-  let staleStops = 0
-  const connection = absentConnection({
-    options: { healthIntervalMs: 0 },
-    deps: {
-      spawnDsh: async options => {
-        spawnCalls += 1
-        if (spawnCalls === 1) return firstChild
-        restartSignal = options.signal
-        announceRestartSpawn()
-        return restartSpawnRelease
-      },
-      probeHostIdentity: mockIdentityProbe().probeHostIdentity,
-    },
-  })
-  try {
-    await connection.start()
-    firstChild.child.exitCode = 1
-    fireFirstExit?.(1, null)
-    await restartSpawnEntered
-
-    let stopResolved = false
-    const pendingStop = connection.stop().then(() => { stopResolved = true })
-    await new Promise<void>(resolve => setImmediate(resolve))
-    assert.equal(restartSignal?.aborted, true)
-    assert.equal(stopResolved, false, 'stop waits for the restart readiness owner')
-
-    releaseRestartSpawn({
-      child: { on: () => {}, exitCode: null },
-      port: 17961,
-      stop: async () => { staleStops += 1 },
-    })
-    await pendingStop
-    assert.equal(staleStops, 1)
-    assert.equal(spawnCalls, 2)
-    assert.equal(connection.getState(), 'stopped')
-    assert.equal(connection.hasLiveProcess(), false)
-  } finally {
-    releaseRestartSpawn?.({
-      child: { on: () => {}, exitCode: 1 },
-      port: 17961,
-      stop: async () => {},
-    })
-    await connection.stop()
-  }
-})
 
 test('terminateChild waits past leader exit and kills a stubborn same-group descendant', {
   skip: process.platform === 'win32' ? 'Unix detached process-group contract' : false,
@@ -598,49 +439,6 @@ test('terminateChild waits past leader exit and kills a stubborn same-group desc
   }
 })
 
-test('pid-ledger publication failure reclaims the child and is never retried on another port', {
-  skip: process.platform === 'win32' ? 'Unix detached process-group contract' : false,
-}, async () => {
-  const root = mkdtempSync(join(tmpdir(), 'dsh-chamber-ledger-failure-'))
-  const workspace = idleDshWorkspace(root)
-  const stateDir = join(root, 'state')
-  mkdirSync(stateDir, { recursive: true })
-  let writerCalls = 0
-  let childPid = 0
-  try {
-    await assert.rejects(spawnDsh({
-      stateDir,
-      dshHome: join(root, 'dsh-home'),
-      dshWorkspacePath: workspace,
-      dshPortBase: await freeDshPortBase(),
-      logger: quietLogger,
-      pidRecordWriter(_stateDir, pid) {
-        writerCalls += 1
-        childPid = pid
-        const failure = new Error('simulated ENOSPC') as NodeJS.ErrnoException
-        failure.code = 'ENOSPC'
-        throw failure
-      },
-    }), (error: unknown) => {
-      assert.equal((error as { code?: unknown }).code, DSH_SPAWN_NON_RETRYABLE_CODE)
-      return true
-    })
-    assert.equal(writerCalls, 1, 'ledger failure aborts the port retry loop')
-    assert.ok(childPid > 0)
-    await waitFor(() => {
-      try { process.kill(-childPid, 0); return false } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
-        return true
-      }
-    }, 2_000, 'child process group reaped')
-    assert.equal(existsSync(join(stateDir, 'managed-dsh', `${childPid}.json`)), false)
-  } finally {
-    if (childPid > 0) {
-      try { process.kill(-childPid, 'SIGKILL') } catch { /* already gone */ }
-    }
-    rmSync(root, { recursive: true, force: true })
-  }
-})
 
 test('unproven attempt termination aborts port retries and preserves the pid ledger', {
   skip: process.platform === 'win32' ? 'Unix detached process-group contract' : false,
@@ -683,36 +481,6 @@ test('unproven attempt termination aborts port retries and preserves the pid led
   }
 })
 
-test('restart window exhaustion lands on restart-exhausted (manual start required)', async () => {
-  const probe = mockIdentityProbe()
-  probe.state.healthy = false
-  const spawns = async (): Promise<SpawnedDsh> => {
-    spawnCounter += 1
-    // Every respawn fails the health probe → the restart loop counts up.
-    return {
-      child: { on: () => {}, exitCode: null },
-      port: 17970 + spawnCounter,
-      stop: async () => {},
-    }
-  }
-  const connection = absentConnection({
-    options: {
-      healthIntervalMs: 20,
-      healthProbeTimeoutMs: 500,
-      restartFailureThreshold: 1,
-      failureThrottleMs: 0,
-      restartBackoffFloorMs: 10,
-      restartBackoffCeilMs: 20,
-      restartWindowMs: 60_000,
-      maxRestartsInWindow: 3,
-    },
-    deps: { spawnDsh: spawns, probeHostIdentity: probe.probeHostIdentity },
-  })
-  await connection.start()
-  await waitFor(() => connection.getState() === 'restart-exhausted', 8000, 'restart-exhausted')
-  assert.ok(connection.getConsecutiveFailures() >= 1)
-  await connection.stop()
-})
 
 test('seedDshHomeDefaults writes a zh locale default once and never touches an existing document', () => {
   const root = mkdtempSync(join(tmpdir(), 'dsh-chamber-seed-'))
@@ -761,19 +529,3 @@ test('seedDshHomeDefaults refuses a symlinked home and never writes through an e
   }
 })
 
-test('reaper command identity requires the exact absolute installed or source entry', () => {
-  const sourceEntry = '/work/deepseek-harness/apps/cli/src/bin.ts'
-  const sourceCommand = `node --import tsx/esm ${sourceEntry} --profile web --port 17500`
-  assert.equal(commandMatchesEntry(sourceCommand, sourceEntry, sourceEntry), true)
-  assert.equal(commandMatchesEntry(sourceCommand, 'apps/cli/src/bin.ts', 'dsh'), false)
-  assert.equal(commandMatchesEntry(sourceCommand, '/abs/node_modules/@deepseek-ai/dsh/lib/bin.js', 'dsh'), false)
-  // Installed layout: the argv0 token is the absolute bin.js path.
-  const installedCommand = '/usr/local/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js --profile web --port 17500'
-  assert.equal(commandMatchesEntry(installedCommand, '/usr/local/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js', 'dsh'), true)
-  // Basename-only legacy identity is deliberately insufficient.
-  assert.equal(commandMatchesEntry(installedCommand, null, 'dsh'), false)
-  assert.equal(commandMatchesEntry(sourceCommand, null, 'dsh'), false)
-  // An unrelated process never matches either identity.
-  assert.equal(commandMatchesEntry('nginx: worker process', sourceEntry, sourceEntry), false)
-  assert.equal(commandMatchesEntry('', sourceEntry, sourceEntry), false)
-})
