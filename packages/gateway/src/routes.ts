@@ -25,6 +25,9 @@
  *                                   third-party/ and installed via file:);
  *   - `/chamber/plugins/remove`   — installed-list remove (never deferred,
  *                                   usable while the managed dsh is stopped);
+ *   - `/chamber/session-state*`   — the read-only session-state watcher
+ *                                  (plan W1 / WS-B): snapshot / SSE / read /
+ *                                  read-all, delegated to sessionState;
  *   - `/chamber/` + assets       — the browser dashboard (Credentials +
  *                                  dsh runtime management only);
  *   - `/chamber/runtime/*`       — the runtime controller (design 18 §9.3,
@@ -45,6 +48,7 @@ import { randomBytes } from 'node:crypto'
 import { rmSync } from 'node:fs'
 import { join } from 'node:path'
 import {
+  SESSION_STATE_PATH,
   atomicWritePrivateFileNoFollow,
   ensurePrivateDirectoryNoFollow,
   type ApiRequest,
@@ -59,6 +63,7 @@ import { thirdPartyRoot } from './plugins-journal.ts'
 import type { PluginTaskSubmitInput, PluginTaskSubmitResult, PluginTaskTasksProjection } from './plugins-tasks.ts'
 import { scanTgzMetadata, TGZ_MAX_ENTRIES, TGZ_MAX_UNPACKED_BYTES } from './tgz-scan.ts'
 import { sanitizeRouteError } from './sanitize-route-error.ts'
+import type { ChamberSessionState } from './session-state.ts'
 import { codedError, headerValue, jsonResponse, readBoundedBody } from './http-utils.ts'
 
 /** The A1 mutation-orchestrator surface the routes drive (design 21 §6.2;
@@ -85,6 +90,12 @@ export interface ChamberSurfaceDeps {
   /** The gateway stateDir — the materialize route stages uploaded archives
    * under its chamber-plugins/third-party tree. */
   stateDir: string
+  /** The read-only session-state watcher surface (plan W1 / WS-B): snapshot,
+   * SSE deltas and read marks under /chamber/session-state*. Optional so the
+   * surface stays additive for the existing composition tests; the production
+   * gateway always supplies it (index.ts), and when absent the prefix falls
+   * through to this surface's own 404. */
+  sessionState?: ChamberSessionState
 }
 
 export interface ChamberSurface {
@@ -1587,6 +1598,16 @@ export function createChamberSurface(deps: ChamberSurfaceDeps): ChamberSurface {
       if (!isAssetMethod(req.method)) return methodNotAllowed(res)
       serveAsset(res, 'text/html; charset=utf-8', MOBILE_HTML, req.method === 'HEAD')
       return true
+    }
+
+    // /chamber/session-state* (plan W1 / WS-B, design 17 §10 read-only
+    // carve-out): snapshot / SSE / read / read-all. Exact-prefix match only —
+    // '/chamber/session-stateevil' must NOT be claimed. Host-down still
+    // answers 200 with host.serviceable=false (plan §4 host semantics); the
+    // disabled switch answers 503 session_state_disabled.
+    if (deps.sessionState !== undefined
+      && (pathname === SESSION_STATE_PATH || pathname.startsWith(SESSION_STATE_PATH + '/'))) {
+      return await deps.sessionState.handle(req, res, pathname)
     }
 
     // Unknown /chamber/* → 404 (claimed, so the default dispatch does not run).

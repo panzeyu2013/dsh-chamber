@@ -38,6 +38,7 @@ import { createGatewayProxy, type GatewayProxy } from './gateway-proxy.ts'
 import { createGatewayDispatch } from './dispatch.ts'
 import { createGatewayRequestPolicy } from './middleware.ts'
 import { createChamberSurface, type ChamberSurface } from './routes.ts'
+import { createSessionStateService, type SessionStateService } from './session-state.ts'
 import { createChamberPlugins, syncedSourceDir } from './plugins.ts'
 import { createChamberInstalled } from './plugins-installed.ts'
 import { createChamberPluginTasks, type ChamberPluginTasks } from './plugins-tasks.ts'
@@ -148,6 +149,10 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
   }
   let createdPlane!: PlaneHandle
   let chamberSurface!: ChamberSurface
+  // Read-only session-state watcher (plan W1 / WS-B). Built in the construction
+  // transaction below; its getters dereference createdPlane/proxy lazily (the
+  // same pattern as the chamber surface and the proxy above).
+  let sessionState!: SessionStateService
   // Design 21 §6.3 A1 mutation orchestrator (plan Phase 4.4): journal +
   // serial executor + deferred intents behind the runtime-manager
   // profile-write lease. Built in the construction transaction below; its
@@ -273,12 +278,28 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     // the executor is provably idle (right after journal reconciliation,
     // before any route can stage).
     pluginTasks.sweepOrphanedStagedArchives()
+    // The read-only session-state watcher (plan W1 / WS-B; design 17 §10
+    // carve-out). Lazy getters, exactly like the proxy/chamber surface: the
+    // watcher starts only on the ready/degraded host edge (syncFeatures) and
+    // eats the same D3/F4 exposure gate (never a quarantined candidate tree).
+    // The waterfall delegate gate reads the proxy's downstream WS count, so the
+    // watcher's own direct loopback mux socket can never count itself.
+    sessionState = createSessionStateService({
+      stateDir: options.config.plane.stateDir,
+      logger,
+      enabled: options.config.sessionState !== false,
+      getLocalDshPort: () => createdPlane.getLocalDshPort(),
+      getConnectionState: () => createdPlane.connectionState,
+      canExposeLocal: () => !stopping && !runtimeExposureQuarantined(),
+      otherMuxClientsConnected: () => (proxy?.getDiagnostics().activeStreams ?? 0) > 0,
+    })
     // The chamber surface (2026-12 strip): channels projection + browser
     // dashboard assets + plugin-sync cache + the managed-profile installed
     // projection (design 21 A0) + the A1 write routes (install/materialize/
-    // remove/tasks, design 21 §6.2) — no feature host, no readiness
-    // coupling. The runtime controller below is the gateway's only other
-    // /chamber writer surface besides credentials (auth.ts).
+    // remove/tasks, design 21 §6.2) + the read-only /chamber/session-state*
+    // watcher routes — no feature host, no readiness coupling. The runtime
+    // controller below is the gateway's only other /chamber writer surface
+    // besides credentials (auth.ts).
     chamberSurface = (options.deps?.createChamberSurface ?? createChamberSurface)({
       logger,
       channels,
@@ -286,6 +307,7 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
       installed,
       tasks: pluginTasks,
       stateDir: options.config.plane.stateDir,
+      sessionState: sessionState.surface,
     })
     // The runtime controller is gateway-owned and NOT ready-gated (design 18
     // §9.3): it dereferences the manager lazily so dsh-down windows stay pollable.
@@ -464,6 +486,12 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         logger.warn(`gateway plugin deferred-intent drain failed: ${String(error)}`)
       })
     }
+    // Session-state watcher edge (plan W1 / WS-B): observe only while the
+    // managed host is exposed and ready/degraded; every other edge pauses the
+    // observer (the routes keep serving the last snapshot with
+    // host.serviceable=false). start/stop are idempotent.
+    if ((status === 'ready' || status === 'degraded') && !stopping) sessionState.start()
+    else sessionState.stop()
   }
 
   function assertStartEpoch(epoch: number): void {
@@ -651,6 +679,10 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
     const managerAtStop = runtimeManager
     unsubscribeLocalState?.()
     unsubscribeLocalState = null
+    // Session-state watcher teardown (plan W1 stop ordering: end SSE → stop
+    // mux → flush the snapshot). It starts here, synchronously before the
+    // proxy/dsh teardown, and is awaited below BEFORE store.close().
+    const sessionStateShutdown = sessionState.shutdown()
     proxy?.closeAllStreams()
     syncFeatures('stopped')
 
@@ -692,6 +724,13 @@ export function createGateway(options: GatewayOptions): GatewayHandle {
         dispatchQuiescenceError = error
         logger.warn(`gateway credential mutation drain failed; stateDir lock retained: ${String(error)}`)
       }
+
+      // The watcher is fully stopped and its snapshot flushed before the
+      // managed dsh is asked to stop; a flush failure is already loud inside
+      // the store and must not retain the stateDir lock.
+      await sessionStateShutdown.catch(error => {
+        logger.warn(`gateway session-state shutdown failed: ${String(error)}`)
+      })
 
       // Streams were synchronously detached above, and runtime disposal plus
       // the credential-mutation barrier have settled. Only then do we prove

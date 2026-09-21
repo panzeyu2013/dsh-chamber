@@ -1,0 +1,227 @@
+{
+  "schema": "dsh-chamber.session-state-route-table/v1",
+  "usage": {
+    "who": "packages/gateway/test/session-state/session-state-old-desktop-matrix.test.ts (cross-version matrix cell B: OLD desktop x NEW gateway). The test replays every entry below against the REAL gateway /chamber/session-state* surface and checks status, key sets and the old parse path. Any future compat tooling that must speak as the v0.4.0-beta.1 client reads the same file.",
+    "whenToUpdate": "Only when the INTERFACE major version changes (control-plane PROTOCOL_VERSION, i.e. the descriptor `protocol` field). A major bump adds a NEW file anchored at that major (for example route-table-2.0.0.fixture.json). This v0.4.0-beta.1 file then stays frozen forever: the old desktop it records can no longer be rebuilt from this repository, so rewriting it would destroy the only forward-compatibility evidence.",
+    "howToUpdate": "Append-only. NEVER rename, delete or rewrite an existing route / method / path / status / frozen key entry - those entries ARE the old-client record. A 0.4.x minor that adds a capability appends only: a new id to `features.addedAfterFreeze`, a new path to `routesAddedAfterFreeze`, or a new field to a route's `expect.additiveKeys` (with an entry in `anchor.postFreezeAdditions`). Features.clientRequired / features.addedAtFreeze, every frozenKeys and nested key list, the request bodies and the status codes are immutable.",
+    "whyFrozen": "Plan section 6 and protocol-compat-blueprint section 2.2/3.1: the old desktop cannot be produced in-repo, so the only executable evidence that a NEW gateway stays backward compatible is replaying this recorded call sequence. A test that re-derives its expectations from the current server can only prove the server equals itself.",
+    "scope": "/chamber/session-state* only (snapshot / stream / read / read-all). Other old-desktop routes are outside this fixture."
+  },
+  "anchor": {
+    "productVersion": "0.4.0-beta.1",
+    "protocolVersion": 1,
+    "recordedFrom": [
+      "docs/progress/todo/notes/protocol-compat-blueprint.md section 2.1 (frozen descriptor shape) and sections 4.1/4.2 (frozen route/body shapes)",
+      "packages/renderer/src/session-facts-source.ts (the shipped client parser at the freeze: the exact field paths it reads; post-freeze instrumentation excluded)",
+      "packages/control-plane/src/session-state-protocol.ts (PROTOCOL_VERSION / SESSION_STATE_FEATURES / SESSION_STATE_BASE_FEATURES single source)"
+    ],
+    "postFreezeAdditions": [
+      {
+        "field": "diagnostics",
+        "where": "snapshot top level (and the SSE snapshot frame data)",
+        "instrument": "I6/I16",
+        "oldClient": "not read; ignored by construction (the old parser picks known keys only)"
+      },
+      {
+        "field": "factAt",
+        "where": "session row",
+        "instrument": "I5",
+        "oldClient": "not read; ignored by construction"
+      }
+    ]
+  },
+  "features": {
+    "clientRequired": [
+      "session-state.snapshot",
+      "session-state.host-clock"
+    ],
+    "addedAtFreeze": [
+      "session-state.stream",
+      "session-state.last-event-id",
+      "session-state.read",
+      "session-state.read-all",
+      "session-state.dsh-events",
+      "session-state.pending-graph"
+    ],
+    "addedAfterFreeze": []
+  },
+  "routesAddedAfterFreeze": [],
+  "routes": [
+    {
+      "id": "snapshot",
+      "method": "GET",
+      "path": "/chamber/session-state",
+      "request": {
+        "query": null,
+        "headers": {
+          "accept": "application/json"
+        },
+        "body": null
+      },
+      "expect": {
+        "status": 200,
+        "kind": "json",
+        "contentType": "application/json",
+        "frozenKeys": [
+          "protocol",
+          "features",
+          "mode",
+          "cursor",
+          "host",
+          "sessions",
+          "read"
+        ],
+        "additiveKeys": [
+          "diagnostics"
+        ],
+        "nested": {
+          "host": [
+            "now",
+            "serviceable",
+            "state"
+          ],
+          "read": [
+            "clientId",
+            "marks",
+            "floor"
+          ],
+          "sessionRow": [
+            "sessionId",
+            "running",
+            "pendingKind",
+            "subagentCount",
+            "updatedAt",
+            "completedAt",
+            "completedAtSource",
+            "lastRunningAt",
+            "lastTurnEnd"
+          ],
+          "sessionRowAdditive": [
+            "factAt"
+          ],
+          "lastTurnEnd": [
+            "kind",
+            "cause",
+            "at",
+            "seq"
+          ]
+        },
+        "clientReads": [
+          "protocol",
+          "features",
+          "mode",
+          "cursor",
+          "host.state",
+          "host.serviceable",
+          "sessions[].sessionId",
+          "sessions[].running",
+          "sessions[].pendingKind",
+          "sessions[].subagentCount",
+          "sessions[].updatedAt",
+          "sessions[].completedAt",
+          "sessions[].completedAtSource",
+          "sessions[].lastTurnEnd.kind",
+          "sessions[].lastTurnEnd.cause",
+          "sessions[].lastTurnEnd.at",
+          "sessions[].lastTurnEnd.seq",
+          "read.clientId",
+          "read.marks",
+          "read.floor"
+        ]
+      }
+    },
+    {
+      "id": "stream",
+      "method": "GET",
+      "path": "/chamber/session-state/stream",
+      "request": {
+        "query": null,
+        "headers": {
+          "accept": "text/event-stream"
+        },
+        "body": null
+      },
+      "expect": {
+        "status": 200,
+        "kind": "sse",
+        "contentType": "text/event-stream",
+        "frameEnvelope": [
+          "id",
+          "event",
+          "data"
+        ],
+        "firstEvent": "snapshot",
+        "dataRoute": "snapshot",
+        "clientReads": [
+          "event",
+          "id"
+        ]
+      }
+    },
+    {
+      "id": "read",
+      "method": "POST",
+      "path": "/chamber/session-state/read",
+      "request": {
+        "query": null,
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json"
+        },
+        "body": {
+          "clientId": "dsh-chamber-mobile-legacy",
+          "sessionId": "legacy-session-1",
+          "readThrough": 90
+        }
+      },
+      "expect": {
+        "status": 200,
+        "kind": "json",
+        "contentType": "application/json",
+        "frozenKeys": [
+          "ok",
+          "clientId",
+          "sessionId",
+          "readThrough",
+          "changed",
+          "stored"
+        ],
+        "additiveKeys": [],
+        "nested": {},
+        "clientReads": []
+      }
+    },
+    {
+      "id": "read-all",
+      "method": "POST",
+      "path": "/chamber/session-state/read-all",
+      "request": {
+        "query": null,
+        "headers": {
+          "content-type": "application/json",
+          "accept": "application/json"
+        },
+        "body": {
+          "clientId": "dsh-chamber-mobile-legacy",
+          "through": 110
+        }
+      },
+      "expect": {
+        "status": 200,
+        "kind": "json",
+        "contentType": "application/json",
+        "frozenKeys": [
+          "ok",
+          "clientId",
+          "through",
+          "floor",
+          "changed",
+          "updated"
+        ],
+        "additiveKeys": [],
+        "nested": {},
+        "clientReads": []
+      }
+    }
+  ]
+}

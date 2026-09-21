@@ -315,3 +315,31 @@ test('gateway serve surfaces a bad --mobile-entry as exit 2 (flags parse end-to-
   assert.equal(result.status, 2, result.stderr)
   assert.match(result.stderr, /mobile entry path must be an origin-form path/)
 })
+
+test('session-state watcher is ON by default and --no-session-state / env pin it off', () => {
+  // Default ON: the read-only mirror ships enabled (design 17 §10.7).
+  const previous = process.env.DSH_GATEWAY_SESSION_STATE
+  try {
+    delete process.env.DSH_GATEWAY_SESSION_STATE
+    assert.equal(parseGatewayConfig({}, STATE, DSH).sessionState, true)
+    // Explicit CLI pin wins over the env (the --no-warmup pattern).
+    process.env.DSH_GATEWAY_SESSION_STATE = '1'
+    assert.equal(parseGatewayConfig({ sessionState: false }, STATE, DSH).sessionState, false)
+    // Env twin: 0/false disables it without any flag.
+    process.env.DSH_GATEWAY_SESSION_STATE = '0'
+    assert.equal(parseGatewayConfig({}, STATE, DSH).sessionState, false)
+  } finally {
+    if (previous === undefined) delete process.env.DSH_GATEWAY_SESSION_STATE
+    else process.env.DSH_GATEWAY_SESSION_STATE = previous
+  }
+})
+
+test('gateway serve accepts --no-session-state (flags parse end-to-end)', () => {
+  // An unknown option exits 2 through parseArgs; --help short-circuits only
+  // AFTER a successful parse, so exit 0 + the flag in the help text proves
+  // the flag is a real option of the serve command.
+  const result = spawnSync(process.execPath, [CLI, 'serve', '--no-session-state', '--help'],
+    { encoding: 'utf8', timeout: 10_000 })
+  assert.equal(result.status, 0, result.stderr)
+  assert.match(result.stdout, /--no-session-state/)
+})
