@@ -129,6 +129,14 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 退出中/已开始清理 → 抑制渲染恢复（Electron `reload()` 的 `quitRequested`
     /// 早退；2026-09 三审 E19 偏离 #3）。
     private var recoverySuppressed = false
+    /// 崩溃归因（2026-09 崩溃归因轮）：上次「加载完成」时刻、本次加载窗口内的
+    /// 崩溃次数、以及当前这次加载是否由崩溃恢复触发。证据显示崩溃集中在加载完成后
+    /// 20–34s，而 10 次崩溃里只有 2 次留下 shell 侧痕迹——没有这三个量就无法把
+    /// "应用自己回到载入历史"归因到渲染进程重启。
+    private var lastLoadFinishedAt: Date?
+    private var crashesSinceLoad = 0
+    private var recoveringFromCrash = false
+    private var lastCrashAt: Date?
 
     /// S-02 卡死自愈：空闲 ping 判定器 + 定时器 + 键鼠监听。
     private var hangWatchdog = RendererHangWatchdog(now: Date())
@@ -1584,6 +1592,18 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         shellLog("[shell] 页面加载完成 \(webView.url?.absoluteString ?? "(未知)")")
+        // 崩溃归因：记录本次加载完成时刻；若这次加载来自崩溃恢复，落地耗时是
+        // "崩溃→重载→可用"这段用户可见空窗的直接量度。
+        let previousLoad = lastLoadFinishedAt
+        lastLoadFinishedAt = Date()
+        if recoveringFromCrash {
+            let recoveredAfter = lastCrashAt.map { Date().timeIntervalSince($0) } ?? -1
+            let sincePrevious = previousLoad.map { Date().timeIntervalSince($0) } ?? -1
+            shellLog(String(format: "[shell] 渲染恢复落地（崩溃后 %.2fs 重载完成，距上次加载完成 %.2fs，本窗口崩溃 %d 次）",
+                            recoveredAfter, sincePrevious, crashesSinceLoad))
+            recoveringFromCrash = false
+            crashesSinceLoad = 0
+        }
         // T-2：首载/重载成功 → 重试预算归零（下一次失败从最小退避重新开始）。
         navRetries = 0
         navRetryWorkItem?.cancel()
@@ -1833,7 +1853,15 @@ final class MainWindowController: NSWindowController, WKNavigationDelegate, WKUI
     /// 500ms 延迟、60s 滚动窗口内至多 3 次；超限弹 NSAlert 并停止自动恢复）。
     /// 恢复导航成功由 didFinish 推回 alive:true 并 drain。
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
-        shellLog("[shell] Web 内容进程终止（webViewWebContentProcessDidTerminate）")
+        crashesSinceLoad += 1
+        let now = Date()
+        let sinceLoad = lastLoadFinishedAt.map { now.timeIntervalSince($0) }
+        lastCrashAt = now
+        recoveringFromCrash = true
+        // 归因行：距上次加载完成的秒数 + 本窗口第几次崩溃。证据里崩溃集中在
+        // boot 窗口（21–34s），因此这句是"是不是同一个形态"的第一判据。
+        shellLog("[shell] Web 内容进程终止（webViewWebContentProcessDidTerminate）——"
+                 + RendererCrashAttribution.describe(secondsSinceLoad: sinceLoad, ordinal: crashesSinceLoad))
         // 退出中：不重载、不上报（Electron render-process-gone 在 quitRequested
         // 时直接 return；2026-09 三审 E19 偏离 #3）。
         guard !recoverySuppressed else {

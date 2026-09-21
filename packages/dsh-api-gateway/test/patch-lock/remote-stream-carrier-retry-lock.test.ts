@@ -6,6 +6,13 @@
  * the live-generation retry branch (the regression that froze the conversation
  * surface: second rapid carrier failure => gateway/internal => a failEventStream()
  * latch with no retry).
+ *
+ * 2026-09 renderer-crash round: the no-generation wait is now BOUNDED by
+ * `REMOTE_STREAM_NO_GENERATION_WAIT_MAX_MS` and reports its expiry through the
+ * carrier seam. Upstream's timer-less wait parked every new logical stream on a
+ * parked lane — the `openState='loading'` forever shape with no error edge and
+ * no reopen attempt. The locks below pin the bound AND the upstream pieces the
+ * patch must keep (snapshot probe, generation subscription, abort wording).
  */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -23,7 +30,7 @@ const policy = source('src/client/remote-retry-policy.ts')
  */
 function liveGenerationBranch(sourceText: string): string {
   const start = sourceText.indexOf('if (connection.generation.getSnapshot() !== undefined) {')
-  const end = sourceText.indexOf('await new Promise<void>((resolve, reject) => {', start)
+  const end = sourceText.indexOf('new Promise<RemoteStreamRetryOutcome>((resolve, reject) => {', start)
   assert.ok(start >= 0 && end > start, 'the live-generation branch must be locatable in the carrier')
   return sourceText.slice(start, end)
 }
@@ -39,12 +46,30 @@ test('the live-generation branch never throws — a keep-failing carrier cannot 
 
 test('the reopen loop keeps the revision/abort guards around the retry', () => {
   assert.match(carrier, /await waitForRemoteStreamRetry\(this\.connection, attempt, signal\)/u)
-  assert.match(carrier, /import \{ [^}]*remoteStreamRetryDelayMs[^}]*\} from '\.\/remote-retry-policy\.ts'/u)
+  assert.match(
+    carrier,
+    /import \{[\s\S]*?remoteStreamRetryDelayMs[\s\S]*?\} from '\.\/remote-retry-policy\.ts'/u,
+    'the pacing math must stay imported from the pure policy module',
+  )
   assert.match(carrier, /if \(revision !== this\.revision\) continue\s*\n\s*attempt\+\+/u, 'a superseded generation must not start an episode')
+  assert.match(
+    carrier,
+    /const retryOutcome = await waitForRemoteStreamRetry\(/u,
+    'the wait outcome is captured so an expired bound can be published',
+  )
+  assert.match(
+    carrier,
+    /if \(retryOutcome === 'expired'\) \{[\s\S]*?this\.options\.carrierFailed\?\.\(/u,
+    'an expired bound is a retryable carrier condition: it must ride the carrier seam, not stay invisible',
+  )
 })
 
 test('the abortable wait lives in the import-free policy module with the shared wording', () => {
-  assert.match(carrier, /import \{ delayRemoteStreamRetry, remoteStreamRetryDelayMs \} from '\.\/remote-retry-policy\.ts'/u)
+  assert.match(
+    carrier,
+    /import \{[\s\S]*?delayRemoteStreamRetry,[\s\S]*?remoteStreamRetryDelayMs,[\s\S]*?REMOTE_STREAM_NO_GENERATION_WAIT_MAX_MS,[\s\S]*?\} from '\.\/remote-retry-policy\.ts'/u,
+    'the abortable backoff and the no-generation bound are both imported from the policy module',
+  )
   assert.match(policy, /export function delayRemoteStreamRetry\(delayMs: number, signal: AbortSignal\): Promise<void>/u)
   assert.match(policy, /clearTimeout\(timer\)/u)
   assert.match(policy, /new Error\('Remote stream retry aborted', \{ cause: signal\.reason \}\)/u)
@@ -54,9 +79,23 @@ test('the abortable wait lives in the import-free policy module with the shared 
   assert.equal([...policy.matchAll(/'Remote stream retry aborted'/gu)].length, 1, 'policy owns exactly one wording')
 })
 
-test('the no-generation wait keeps the upstream shape', () => {
+test('the no-generation wait keeps the upstream probe AND is bounded', () => {
   assert.match(carrier, /const dispose = connection\.generation\.subscribe\(inspect\)/u)
   assert.match(carrier, /if \(connection\.generation\.getSnapshot\(\) !== undefined\) finish\(\)/u)
+  // The bound: armed with the policy constant, cleared by every finish path, and
+  // resolving as 'expired' so the caller reopens instead of waiting forever.
+  assert.match(
+    carrier,
+    /deadline = setTimeout\(expired, REMOTE_STREAM_NO_GENERATION_WAIT_MAX_MS\)/u,
+    'the wait must be bounded by the exported policy constant',
+  )
+  assert.match(carrier, /clearTimeout\(deadline\)/u, 'every finish path must clear the bound')
+  assert.match(carrier, /finish\(undefined, 'expired'\)/u, 'expiry resolves (reopen), it never rejects terminally')
+  assert.match(
+    policy,
+    /export const REMOTE_STREAM_NO_GENERATION_WAIT_MAX_MS = 30_000/u,
+    'the bound lives in the import-free policy module',
+  )
 })
 
 test('non-carrier escapes are still marked terminal for consumers', () => {

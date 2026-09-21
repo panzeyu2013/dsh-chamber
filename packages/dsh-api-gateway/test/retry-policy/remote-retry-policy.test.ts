@@ -9,8 +9,11 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   delayRemoteStreamRetry,
+  REMOTE_STREAM_OPENING_ESCALATION_COOLDOWN_MS,
+  REMOTE_STREAM_OPENING_ESCALATION_STREAK,
   REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS,
   REMOTE_STREAM_OPENING_TIMEOUT_MS,
+  REMOTE_STREAM_NO_GENERATION_WAIT_MAX_MS,
   REMOTE_STREAM_RETRY_BASE_MS,
   REMOTE_STREAM_RETRY_FIRST_MS,
   REMOTE_STREAM_RETRY_MAX_MS,
@@ -18,6 +21,7 @@ import {
   remoteStreamOpeningTimeoutMs,
   remoteStreamRetryDelayMs,
   REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,
+  shouldEscalateOpeningStall,
   shouldReplaceSilentSocket,
   streamOpeningKey,
 } from '../../src/client/remote-retry-policy.ts'
@@ -27,6 +31,16 @@ import { setTimeout as delay } from 'node:timers/promises'
 test('the first carrier failure of an episode reopens immediately', () => {
   assert.equal(REMOTE_STREAM_RETRY_FIRST_MS, 0)
   assert.equal(remoteStreamRetryDelayMs(1), 0)
+})
+
+test('the wait for a live generation is bounded (a parked lane cannot park a stream forever)', () => {
+  // Above the retry ceiling: one reopen per ceiling is the slowest useful pace,
+  // and the bound must not be tighter than that pace.
+  assert.ok(REMOTE_STREAM_NO_GENERATION_WAIT_MAX_MS >= REMOTE_STREAM_RETRY_MAX_MS)
+  // ...and bounded: past a minute the state is not "waiting", it is a dead lane,
+  // and the surface must have had at least one reopen attempt by then.
+  assert.ok(REMOTE_STREAM_NO_GENERATION_WAIT_MAX_MS <= 60_000)
+  assert.ok(REMOTE_STREAM_NO_GENERATION_WAIT_MAX_MS > 0)
 })
 
 test('later failures double from the base', () => {
@@ -169,4 +183,30 @@ test('the teardown evidence window stays inside every window it must serve', () 
     'the watchdog probe window must be able to reach the bound')
   assert.ok(REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS < REMOTE_STREAM_OPENING_TIMEOUT_MS,
     'a stream that outlives this bound is judged by the opening deadline instead')
+})
+
+test('an unanswered opening escalates to a physical rebuild only after a whole extra budget', () => {
+  // The bound must sit strictly above the FIRST timeout: one unanswered deadline
+  // is still the retry lane's business (a slow-but-working Host may answer the
+  // reopened request inside the widened budget), and strictly below unlimited.
+  assert.equal(REMOTE_STREAM_OPENING_ESCALATION_STREAK, 2)
+  assert.equal(shouldEscalateOpeningStall(0, undefined, 0), false)
+  assert.equal(shouldEscalateOpeningStall(1, undefined, 0), false, 'the first timeout must never rebuild the carrier')
+  assert.equal(shouldEscalateOpeningStall(REMOTE_STREAM_OPENING_ESCALATION_STREAK, undefined, 0), true)
+  assert.equal(shouldEscalateOpeningStall(9, undefined, 0), true)
+})
+
+test('the escalation cooldown bounds carrier rebuilds to one per minute', () => {
+  assert.equal(REMOTE_STREAM_OPENING_ESCALATION_COOLDOWN_MS, 60_000)
+  const at = 1_000_000
+  assert.equal(shouldEscalateOpeningStall(2, at, at), false, 'a rebuild must not repeat inside the cooldown')
+  assert.equal(shouldEscalateOpeningStall(2, at, at + REMOTE_STREAM_OPENING_ESCALATION_COOLDOWN_MS - 1), false)
+  assert.equal(shouldEscalateOpeningStall(2, at, at + REMOTE_STREAM_OPENING_ESCALATION_COOLDOWN_MS), true)
+})
+
+test('degenerate escalation inputs fail safe to no rebuild', () => {
+  for (const streak of [Number.NaN, Number.NEGATIVE_INFINITY]) {
+    assert.equal(shouldEscalateOpeningStall(streak, undefined, 0), false, String(streak))
+  }
+  assert.equal(shouldEscalateOpeningStall(2, Number.NaN, 0), false, 'an unusable account must not rebuild')
 })

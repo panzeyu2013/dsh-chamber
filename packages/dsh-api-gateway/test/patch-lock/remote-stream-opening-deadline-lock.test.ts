@@ -57,10 +57,35 @@ test('the opener arms a first-item deadline through the pure policy and fails th
   assert.match(body, /const openingKey = streamOpeningKey\(endpoint, payload\)/u)
   assert.match(body, /remoteStreamOpeningTimeoutMs\(this\.openingTimeouts\.get\(openingKey\) \?\? 0\)/u)
   assert.match(body, /inbox\.fail\(new RemoteStreamCarrierError\(/u)
-  assert.match(body, /this\.openingTimeouts\.set\(openingKey, \(this\.openingTimeouts\.get\(openingKey\) \?\? 0\) \+ 1\)/u)
+  assert.match(body, /const streak = \(this\.openingTimeouts\.get\(openingKey\) \?\? 0\) \+ 1\s*\n\s*this\.openingTimeouts\.set\(openingKey, streak\)/u)
   assert.match(body, /this\.openingTimeouts\.delete\(openingKey\)/u, 'the first delivered frame (any type) resets that request widening')
   assert.match(body, /clearTimeout\(opening\)/u)
   assert.doesNotMatch(body, /generationAbort|AbortController/u, 'the deadline must not abort a generation signal')
+})
+
+test('an unanswered opening escalates from the retry lane to a PHYSICAL carrier rebuild', () => {
+  // Second investigation (2026-09-21): the deadline alone could never leave the
+  // state it detects. The retry lane above this module may only re-issue the same
+  // request on the same generation, so a carrier that stays OPEN while delivering
+  // nothing (silent socket, wedged generation source, stalled Host fiber) kept
+  // chat.loadingHistory forever. The escalation stays wired to the deadline, and it
+  // reuses the ONE replacement teardown (`replaceSocket`) instead of a second copy.
+  const body = openerBody(client)
+  assert.match(body, /if \(shouldEscalateOpeningStall\(streak, this\.lastOpeningEscalationAt, Date\.now\(\)\)\) \{/u)
+  assert.match(body, /this\.lastOpeningEscalationAt = Date\.now\(\)/u, 'the cooldown account must be stamped when the rebuild is issued')
+  assert.match(body, /'opening-stall-escalation'/u, 'the rebuild must leave one bounded fact')
+  assert.match(
+    body,
+    /this\.replaceSocket\(new RemoteStreamCarrierError\(\s*\n\s*'api gateway: Remote stream carrier rebuilt after an unanswered opening item',\s*\n\s*\), 'opening stall'\)/u,
+  )
+  assert.match(body, /\} else if \(shouldEscalateOpeningStall/u, 'the zero-frame verdict wins when both hold: one teardown per deadline')
+  assert.doesNotMatch(client, /rebuildSilentCarrier/u, 'the stall escalation must reuse the shared teardown, not a second one')
+  const replacement = replaceSocketBody(client)
+  assert.match(replacement, /this\.failAll\(failure\)/u, 'every pending stream must fail as an ordinary carrier error')
+  assert.match(replacement, /socket\.close\(/u)
+  assert.match(replacement, /this\.maintain\(\)/u, 'the replacement connect must go through the shared teardown')
+  assert.match(policy, /export const REMOTE_STREAM_OPENING_ESCALATION_STREAK = 2/u)
+  assert.match(policy, /export const REMOTE_STREAM_OPENING_ESCALATION_COOLDOWN_MS = 60_000/u)
 })
 
 test('a lane-commanded reconnect is marked and never widens the heal cadence', () => {
@@ -154,7 +179,7 @@ test('the opening budget stays a pure, import-free policy decision', () => {
   assert.match(policy, /export const REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS = 300_000/u)
   assert.match(
     client,
-    /import \{\s*\n\s*REMOTE_STREAM_HANDSHAKE_TIMEOUT_MS,\s*\n\s*REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS,\s*\n\s*REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,\s*\n\s*remoteStreamOpeningTimeoutMs,\s*\n\s*REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS,\s*\n\s*shouldReplaceSilentSocket,\s*\n\s*streamOpeningKey,\s*\n\} from '\.\/remote-retry-policy\.ts'/u,
+    /import \{\s*\n\s*REMOTE_STREAM_HANDSHAKE_TIMEOUT_MS,\s*\n\s*REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS,\s*\n\s*REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,\s*\n\s*remoteStreamOpeningTimeoutMs,\s*\n\s*REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS,\s*\n\s*shouldEscalateOpeningStall,\s*\n\s*shouldReplaceSilentSocket,\s*\n\s*streamOpeningKey,\s*\n\} from '\.\/remote-retry-policy\.ts'/u,
   )
 })
 

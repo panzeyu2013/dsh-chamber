@@ -130,9 +130,27 @@ test('P3：揭幕信号来自会话面 DOM 事实，窗口锚在本次持有起�
   assert.equal(view.includes('[surfaceHoldActive, surfaceRelease, retryToken]'), false, 'surfaceRelease 不得进观察器依赖（每次释放都会 teardown/重订阅）')
   assert.ok(view.includes('observer.observe(el, {'), '观察器必须观察本视图容器（文档级作用域会配错遮罩与锚点，第一轮 W-1b 假红同类）')
   assert.match(view, /attributeFilter: \[SESSION_PHASE_ATTRIBUTE\]/, '观察器必须监听 data-phase 属性变化')
+  // N6（2026-09 渲染进程崩溃轮改版）：观察器回调必须继续重采样（只剩挂载时一次 ⇒
+  // 相位永不更新），但不再"每次变更排一帧"——boot 窗口里那等于每帧一次 React 同步
+  // commit，而崩溃栈的入口正是 rAF 回调内一个被 OSR 编译的热函数。改走
+  // frame-coalescer：首帧一次、窗口内合并、尾部必采；三条语义由
+  // test/view-runtime/frame-coalescer.test.ts 逐条钉住。
   assert.ok(
-    view.split('requestAnimationFrame(() => { frame = 0; sample() })').length - 1 >= 2,
-    '首次与每次变更都要经 rAF 重采样（只剩首次采样 ⇒ 相位永不更新）',
+    view.includes('const observer = new MutationObserver(() => sampler.request())'),
+    '观察器回调必须重采样（只剩挂载时一次 ⇒ 相位永不更新）',
+  )
+  assert.ok(
+    view.includes('createFrameCoalescer({') && view.includes('minIntervalMs: SURFACE_SAMPLE_MIN_INTERVAL_MS'),
+    '采样必须走合并器，且间隔取自 session-surface 的导出常量（不得在组件里写死数字）',
+  )
+  assert.ok(
+    view.split('sampler.request()').length - 1 >= 2,
+    '挂载时必须立即采一次，观察器回调也必须继续请求采样',
+  )
+  assert.equal(
+    view.includes('requestAnimationFrame(() => { frame = 0; sample() })'),
+    false,
+    '不得回到"每次变更排一帧"的旧形态（每帧一次 commit）',
   )
   assert.ok(view.includes("setSurfacePhase('absent')"), '持有上升沿必须复位相位（与 leaf 时钟门双重保险）')
   assert.ok(view.includes('absentSinceMs: absentSince'), 'absent 必须把"连续缺失起点"交给 leaf')

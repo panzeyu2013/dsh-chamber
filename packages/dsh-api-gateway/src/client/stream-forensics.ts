@@ -28,6 +28,7 @@ export type StreamForensicsKind =
   | 'socket-disposed'
   | 'socket-silent'
   | 'opening-timeout'
+  | 'opening-stall-escalation'
   | 'generation-ready'
   | 'generation-lost'
 

@@ -14,7 +14,11 @@
 
 import { RemoteError, remoteErrorOf } from '@deepseek-ai/dsh-typert-protocol'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
-import { delayRemoteStreamRetry, remoteStreamRetryDelayMs } from './remote-retry-policy.ts'
+import {
+  delayRemoteStreamRetry,
+  remoteStreamRetryDelayMs,
+  REMOTE_STREAM_NO_GENERATION_WAIT_MAX_MS,
+} from './remote-retry-policy.ts'
 import { RemoteStreamCarrierError } from './stream-client.ts'
 
 /** One item annotated with the physical Remote-stream generation that delivered it. */
@@ -147,7 +151,20 @@ export class RemoteStream<Item> implements AsyncIterable<RemoteStreamItem<Item>>
           if (revision !== this.revision) continue
           attempt++
           try {
-            await waitForRemoteStreamRetry(this.connection, attempt, signal)
+            const retryOutcome = await waitForRemoteStreamRetry(this.connection, attempt, signal)
+            // chamber (2026-09 renderer-crash round): the retry lane's wait for a
+            // live generation is now bounded; when the bound fires, the reopen
+            // below is the recovery attempt and the state is published on the
+            // SAME seam a carrier loss uses, so the page fact (and the health
+            // arm reading it) sees "waiting with no progress" instead of an
+            // invisible, error-less stall.
+            if (retryOutcome === 'expired') {
+              this.options.carrierFailed?.(
+                new RemoteStreamCarrierError(
+                  `${this.options.name}: retry lane waited ${REMOTE_STREAM_NO_GENERATION_WAIT_MAX_MS}ms without a connection generation`,
+                ),
+              )
+            }
           } catch (retryError) {
             if (isAborted(this.lifetime.signal)) return
             if (revision !== this.revision) continue
@@ -171,41 +188,59 @@ export class RemoteStream<Item> implements AsyncIterable<RemoteStreamItem<Item>>
 }
 
 /**
+ * How the retry lane's wait ended — the caller publishes an expired wait as a
+ * carrier condition (bounded, observable) instead of a silent stall.
+ */
+type RemoteStreamRetryOutcome = 'generation' | 'expired'
+
+/**
  * Pace the next reopen after a carrier failure.
  *
  * - LIVE generation (the connection lane is up): wait the bounded episode
  *   backoff and reopen. A second failure is still a transport hiccup — it must
  *   NOT escape as a terminal stream outcome (the chamber fork patch).
- * - NO generation: wait for the connection to publish one (unchanged upstream
- *   behaviour; the abort path still ends the stream terminally).
+ * - NO generation: wait for the connection to publish one, **bounded** by
+ *   {@link REMOTE_STREAM_NO_GENERATION_WAIT_MAX_MS}. Upstream waited without a
+ *   timer, so a parked lane parked every logical stream on this page forever
+ *   (no error edge, no reopen attempt, nothing in the UI but the loading hint).
+ *   On expiry the wait resolves with `'expired'` so the caller reopens — the
+ *   one action that recovers when the mux itself is still usable — and publishes
+ *   the condition through `carrierFailed`. The abort path still ends the stream
+ *   terminally.
  * @param connection - observable Host generation source used to pace retries.
  * @param attempt - 1-based consecutive carrier-failure count for this episode.
  * @param signal - generation cancellation lifetime.
- * @returns when the caller may reopen the stream.
+ * @returns `'generation'` when a live generation paced the wait, `'expired'`
+ *   when the wait hit its bound and the caller should reopen anyway.
  */
 async function waitForRemoteStreamRetry(
   connection: Pick<ConnectionHandle, 'generation'>,
   attempt: number,
   signal: AbortSignal,
-): Promise<void> {
+): Promise<RemoteStreamRetryOutcome> {
   signal.throwIfAborted()
   if (connection.generation.getSnapshot() !== undefined) {
     const delayMs = remoteStreamRetryDelayMs(attempt)
     if (delayMs > 0) await delayRemoteStreamRetry(delayMs, signal)
-    return
+    return 'generation'
   }
-  await new Promise<void>((resolve, reject) => {
+  return await new Promise<RemoteStreamRetryOutcome>((resolve, reject) => {
     const subscription: {
       dispose?: () => void
       finished: boolean
     } = { finished: false }
-    const finish = (failure?: Error): void => {
+    let deadline: ReturnType<typeof setTimeout> | undefined
+    const finish = (failure?: Error, outcome: RemoteStreamRetryOutcome = 'generation'): void => {
       if (subscription.finished) return
       subscription.finished = true
       subscription.dispose?.()
       signal.removeEventListener('abort', aborted)
-      if (failure === undefined) resolve()
+      clearTimeout(deadline)
+      if (failure === undefined) resolve(outcome)
       else reject(failure)
+    }
+    const expired = (): void => {
+      finish(undefined, 'expired')
     }
     const inspect = (): void => {
       if (connection.generation.getSnapshot() !== undefined) finish()
@@ -213,6 +248,10 @@ async function waitForRemoteStreamRetry(
     const aborted = (): void => {
       finish(new Error('Remote stream retry aborted', { cause: signal.reason }))
     }
+    // Arm the bound BEFORE subscribing: `finish` clears it either way, so a
+    // generation (or an abort) that lands synchronously in `subscribe` cannot
+    // leave a stray timer behind.
+    deadline = setTimeout(expired, REMOTE_STREAM_NO_GENERATION_WAIT_MAX_MS)
     const dispose = connection.generation.subscribe(inspect)
     subscription.dispose = dispose
     if (subscription.finished) dispose()

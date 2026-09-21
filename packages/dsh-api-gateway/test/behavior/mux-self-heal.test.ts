@@ -83,6 +83,19 @@ class FakeSocket {
     return (JSON.parse(frame) as { streamId: string }).streamId
   }
 
+  /** Test helper: deliver one raw Host text frame on this socket. */
+  messageNow(text: string): void {
+    this.#dispatch('message', { type: 'message', data: text })
+  }
+
+  /** Test helper: the streamId of the last open frame this socket carried. */
+  lastOpenStreamId(): string {
+    const frames = this.sent.filter(entry => entry.includes('"type":"open"'))
+    const frame = JSON.parse(frames[frames.length - 1] ?? '{}') as { streamId?: string }
+    assert.equal(typeof frame.streamId, 'string', 'an open frame must have reached this socket')
+    return frame.streamId as string
+  }
+
   /** Test helper: the socket dies after a successful handshake. */
   dieNow(): void {
     this.readyState = FakeSocket.CLOSED
@@ -320,6 +333,94 @@ test('a socket that delivered a frame keeps the request retry instead of being r
     1,
     'a live socket is retried (and keeps its widening) — a slow Host is never interrupted',
   )
+  await client.close()
+  t.mock.timers.reset()
+})
+
+const isCarrierError = (error: unknown): boolean =>
+  error instanceof Error && error.name === 'RemoteStreamCarrierError'
+
+test('an opening that is never answered rebuilds the physical carrier and recovers', async (t) => {
+  installFakeSocket()
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  const facts: Array<{ kind: string; cause: string }> = []
+  const client = new RemoteStreamMuxClient('', (kind, cause) => { facts.push({ kind, cause }) })
+  client.start()
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 1)
+  const socket = FakeSocket.instances[0]
+  socket.openNow()
+  await flushMicrotasks()
+  const signal = new AbortController().signal
+  const payload = { args: { request: { address: { kind: 'session', sessionId: 'session-stalled' } } } }
+  const first = client.open('session/follow', payload, signal).next()
+  await flushMicrotasks()
+  assert.ok(socket.lastOpenStreamId().length > 0, 'the open frame must have reached the socket')
+  // The socket itself stays alive (a frame for another stream lands inside the
+  // window), so the zero-frame rule cannot judge it — only the streak rule can.
+  t.mock.timers.tick(15_000)
+  socket.deliverNow()
+  t.mock.timers.tick(15_000)
+  await assert.rejects(first, isCarrierError)
+  assert.equal(FakeSocket.instances.length, 1, 'a live socket is not replaced by the FIRST unanswered opening')
+  const second = client.open('session/follow', payload, signal).next()
+  await flushMicrotasks()
+  // Deadline #2 (60 s, the widened budget) with the socket still delivering: the
+  // retry lane can only re-issue the same request on the same physical generation,
+  // so without the escalation this loop repeats forever with no error edge.
+  t.mock.timers.tick(30_000)
+  socket.deliverNow()
+  t.mock.timers.tick(30_000)
+  await assert.rejects(second, isCarrierError)
+  assert.equal(FakeSocket.instances.length, 2, 'the second consecutive timeout must rebuild the physical carrier')
+  assert.equal(
+    facts.filter(fact => fact.kind === 'opening-stall-escalation').length,
+    1,
+    'the rebuild must be named by exactly one forensics fact',
+  )
+  assert.ok(!facts.some(fact => fact.kind === 'socket-silent'), 'this is the stall rule, not the dead-socket rule')
+  // The rebuilt carrier serves the retried request normally.
+  const replacement = FakeSocket.instances[1]
+  replacement.openNow()
+  await flushMicrotasks()
+  const pending = client.open('session/follow', payload, signal).next()
+  await flushMicrotasks()
+  replacement.messageNow(JSON.stringify({ type: 'item', streamId: replacement.lastOpenStreamId(), value: { ok: true } }))
+  const item = await pending
+  assert.equal(item.done, false, 'the reopened stream must be answered on the fresh carrier')
+  await client.close()
+  t.mock.timers.reset()
+})
+
+test('a slow-but-answering Host keeps its carrier', async (t) => {
+  installFakeSocket()
+  t.mock.timers.enable({ apis: ['setTimeout', 'Date'] })
+  const client = new RemoteStreamMuxClient()
+  client.start()
+  await flushMicrotasks()
+  const socket = FakeSocket.instances[0]
+  socket.openNow()
+  await flushMicrotasks()
+  const signal = new AbortController().signal
+  const payload = { args: { request: { address: { kind: 'session', sessionId: 'session-slow' } } } }
+  const first = client.open('session/follow', payload, signal).next()
+  await flushMicrotasks()
+  t.mock.timers.tick(15_000)
+  socket.deliverNow()
+  t.mock.timers.tick(15_000)
+  await assert.rejects(first, isCarrierError)
+  const pending = client.open('session/follow', payload, signal).next()
+  await flushMicrotasks()
+  // The Host answers the reopened request inside its widened budget: the streak is
+  // cleared and the physical carrier is never rebuilt.
+  socket.messageNow(JSON.stringify({
+    type: 'item',
+    streamId: socket.lastOpenStreamId(),
+    value: { ok: true },
+  }))
+  const item = await pending
+  assert.equal(item.done, false)
+  assert.equal(FakeSocket.instances.length, 1, 'an answered opening must never rebuild the carrier')
   await client.close()
   t.mock.timers.reset()
 })

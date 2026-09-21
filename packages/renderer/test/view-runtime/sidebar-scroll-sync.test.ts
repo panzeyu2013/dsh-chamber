@@ -40,6 +40,9 @@ interface FakeContainer {
   visible: boolean
   dataset: Record<string, string>
   querySelectorAll(selector: string): FakeRow[]
+  querySelector(selector: string): FakeRow | null
+  /** How many single-lookup row resolutions ran (proves the O(1) path). */
+  attributeLookups: number
   getBoundingClientRect(): { top: number; bottom: number }
   checkVisibility(): boolean
   readonly scrollHeight: number
@@ -72,6 +75,14 @@ function makeContainer(rows: FakeRow[], visible: boolean): FakeContainer {
     querySelectorAll(selector: string): FakeRow[] {
       return selector === ROW_SELECTOR ? this.rows : []
     },
+    querySelector(selector: string): FakeRow | null {
+      const prefix = '[data-chamber-row="'
+      if (!selector.startsWith(prefix) || !selector.endsWith('"]')) return null
+      this.attributeLookups += 1
+      const wanted = selector.slice(prefix.length, -2)
+      return this.rows.find(row => row.dataset.chamberRow === wanted) ?? null
+    },
+    attributeLookups: 0,
     getBoundingClientRect: () => ({ top: 0, bottom: 0 }),
     checkVisibility(): boolean {
       return this.visible
@@ -127,6 +138,12 @@ function installFakeDom(t: { after: (fn: () => void) => void }): { fakeDocument:
   ;(globalThis as unknown as { document: FakeDocument }).document = fakeDocument
   globalThis.requestAnimationFrame = (fn: (time: number) => void): number =>
     setTimeout(() => fn(0), FRAME_MS) as unknown as number
+  // Minimal DOM harness: `CSS.escape` is the one selector utility the module
+  // uses, and ids in these fixtures are selector-safe, so identity keeps the
+  // fake honest while still exercising the single-lookup path.
+  ;(globalThis as unknown as { CSS: { escape: (value: string) => string } }).CSS = {
+    escape: (value: string): string => value,
+  }
   return { fakeDocument }
 }
 
@@ -301,4 +318,41 @@ test('capture falls back to a raw scroll when no row is visible', (t) => {
 
   const captured = captureSidebarScrollAnchor('x')
   assert.deepEqual(captured, { id: null, offset: 0, scrollTop: 42 })
+})
+
+test('the anchored row is resolved with one attribute lookup (no per-row scan)', (t) => {
+  installFakeDom(t)
+  // The anchor row is NOT first: the previous full scan walked every row.
+  const container = makeContainer([makeRow('z', 10), makeRow('a', 100), makeRow('b', 200)], true)
+  views.push(makeView('x', container))
+
+  restoreSidebarScroll('x', anchor(), 60_000)
+  // The first attempt runs synchronously: rowRect.top(100) - containerRect.top(0)
+  // + scrollTop(500) - offset(30).
+  assert.equal(container.scrollTop, 570)
+  assert.ok(container.attributeLookups > 0, 'the single-lookup path ran')
+})
+
+test('the frame-tight retry phase is bounded, then the chain keeps retrying on the timer', (t) => {
+  installFakeDom(t)
+  const view = makeView('x', null)
+  views.push(view)
+  let rAFCount = 0
+  globalThis.requestAnimationFrame = (fn: (time: number) => void): number => {
+    rAFCount += 1
+    return setTimeout(() => fn(0), FRAME_MS) as unknown as number
+  }
+
+  restoreSidebarScroll('x', anchor(), 60_000)
+  // 2026-09 renderer-crash round: a chain that cannot find its container used to
+  // schedule one rAF per frame for the whole deadline (up to 8s) — one DOM walk
+  // per frame through the boot window. The frame-tight phase is now bounded.
+  mock.timers.tick(FRAME_MS * 60)
+  assert.ok(rAFCount <= 20, `frame-tight rAF budget exceeded: ${rAFCount}`)
+
+  // The chain is still alive on the timer cadence: mounting the container parks it.
+  const container = makeContainer([makeRow('a', 100)], false)
+  view.container = container
+  mock.timers.tick(80)
+  assert.equal(container.scrollTop, 500)
 })

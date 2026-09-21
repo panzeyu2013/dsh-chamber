@@ -31,6 +31,23 @@ export const REMOTE_STREAM_RETRY_BASE_MS = 250
 export const REMOTE_STREAM_RETRY_MAX_MS = 10_000
 
 /**
+ * Upper bound on the retry lane's wait for a live connection generation
+ * (chamber fork, 2026-09 renderer-crash round).
+ *
+ * Upstream's wait subscribes to the generation source and resolves only when a
+ * generation appears — with the lane parked (offline suspension, or a lane that
+ * stopped restarting) that is an UNBOUNDED wait with no timer, no error edge and
+ * no reopen attempt: the conversation surface sits on `openState='loading'`
+ * forever while every other stream on the same mux keeps working. Past this
+ * bound the wait resolves so the caller reopens the stream; a reopen is the one
+ * action that can recover when the mux itself is still usable (measured: opening
+ * a stream works even while the lane reports no generation). The reopen keeps the
+ * episode's backoff, so an unrecoverable lane degrades to one attempt per
+ * retry-ceiling instead of a hot loop.
+ */
+export const REMOTE_STREAM_NO_GENERATION_WAIT_MAX_MS = 30_000
+
+/**
  * Abortable backoff wait for the carrier's live-generation retry branch.
  *
  * It lives HERE rather than in the carrier so the abort contract is exercised in
@@ -148,6 +165,57 @@ export const REMOTE_STREAM_HANDSHAKE_TIMEOUT_MS = 30_000
  * still never parks permanently.
  */
 export const REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS = 10_000
+
+/**
+ * Consecutive unanswered opening deadlines for ONE logical-stream request before
+ * the PHYSICAL carrier is rebuilt (chamber patch, 2026-09-21 second ui-chat
+ * freeze investigation).
+ *
+ * The opening deadline added earlier only ever fails that request's inbox; the
+ * retry lane above it can do nothing but re-issue the SAME request on the SAME
+ * physical generation. A carrier that stays WebSocket-OPEN while never
+ * delivering — a silently dead socket whose `readyState` never leaves OPEN, a
+ * wedged `$events` generation source, or a Host fiber that never answers
+ * `session/follow` — therefore parked `chat.loadingHistory` forever with no
+ * error edge, and every arm that already exists (the deadline, the health chip,
+ * `Session.resync()`) lived inside that same loop. Two consecutive timeouts
+ * (30 s + 60 s on the widened budget) are far above every measured Host answer
+ * (opening frames arrive in ~15–35 ms through the control-plane proxy) while
+ * staying below a user's patience, and a host that answers at all deletes the
+ * streak before it can reach this bound.
+ */
+export const REMOTE_STREAM_OPENING_ESCALATION_STREAK = 2
+
+/**
+ * Minimum distance between two physical-carrier rebuilds caused by an
+ * unanswered opening item. Bounds the churn when the fault is NOT the socket
+ * (a Host fiber that stays stuck for one request): one socket rebuild per
+ * minute, and every other logical stream on that socket is merely reopened —
+ * measured at ~30 ms on a healthy Host.
+ */
+export const REMOTE_STREAM_OPENING_ESCALATION_COOLDOWN_MS = 60_000
+
+/**
+ * Decide whether one request's consecutive opening timeouts must escalate from
+ * "reopen the logical stream" to "rebuild the physical carrier".
+ *
+ * Pure so the bound is unit-testable without a socket: the first timeout may
+ * never rebuild (a slow-but-working host must not lose its in-flight answer),
+ * and a rebuild is never issued twice inside the cooldown.
+ * @param streak - this request's consecutive opening-item timeouts (1-based).
+ * @param lastEscalationAt - when the carrier was last rebuilt for a stall, if ever.
+ * @param now - current wall clock.
+ * @returns whether the physical carrier must be rebuilt now.
+ */
+export function shouldEscalateOpeningStall(
+  streak: number,
+  lastEscalationAt: number | undefined,
+  now: number,
+): boolean {
+  if (!Number.isFinite(streak) || streak < REMOTE_STREAM_OPENING_ESCALATION_STREAK) return false
+  if (lastEscalationAt === undefined) return true
+  return now - lastEscalationAt >= REMOTE_STREAM_OPENING_ESCALATION_COOLDOWN_MS
+}
 
 /**
  * Stable key for one logical stream's opening-budget episode: the endpoint plus a

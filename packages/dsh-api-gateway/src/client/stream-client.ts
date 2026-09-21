@@ -27,6 +27,7 @@ import {
   REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,
   remoteStreamOpeningTimeoutMs,
   REMOTE_STREAM_SILENT_TEARDOWN_MIN_MS,
+  shouldEscalateOpeningStall,
   shouldReplaceSilentSocket,
   streamOpeningKey,
 } from './remote-retry-policy.ts'
@@ -91,6 +92,8 @@ export class RemoteStreamMuxClient {
   private readonly streamOpeningKeys = new Map<string, string>()
   /** chamber patch (design 14 §D4, 2026-09): frames received on the CURRENT socket — the liveness evidence the silent-socket escalation keys on. Reset whenever the current socket changes. */
   private socketFrames = 0
+  /** chamber patch (2026-09-21): when the physical carrier was last rebuilt because an opening item went unanswered (cooldown account for the stall escalation). */
+  private lastOpeningEscalationAt: number | undefined
   /** chamber patch: when the mux itself last started a connect attempt (self-heal throttle). */
   private lastMaintainAt = 0
   /** chamber patch: current self-heal interval; doubles while attempts keep failing. */
@@ -233,7 +236,8 @@ export class RemoteStreamMuxClient {
       sentAt = Date.now()
       opening = setTimeout(() => {
         timedOut = true
-        this.openingTimeouts.set(openingKey, (this.openingTimeouts.get(openingKey) ?? 0) + 1)
+        const streak = (this.openingTimeouts.get(openingKey) ?? 0) + 1
+        this.openingTimeouts.set(openingKey, streak)
         // Bounded (2026-09-21 review): this map held one entry per timed-out request
         // and was cleared only by close(), so a page that timed out on many sessions
         // grew it without a limit. Oldest-first eviction is enough — an evicted key
@@ -246,19 +250,38 @@ export class RemoteStreamMuxClient {
         inbox.fail(new RemoteStreamCarrierError(
           `api gateway: Remote stream ${JSON.stringify(endpoint)} delivered no opening item within ${String(openingBudgetMs)}ms`,
         ))
-        // Re-issuing is only a cure while the socket still delivers: a socket that
-        // stayed silent for the whole budget window must be REPLACED, or the widened
-        // retry budget (30 → 60 → 120 → 240 → 300 s) only makes the stall longer. Nothing
-        // else can see this state: the connection lane's readiness handshake already
-        // succeeded against the same socket, and a per-session rebuild re-issues on
-        // it as well. Guarded by identity + OPEN so a socket replaced in the same
-        // turn can never be judged with another socket's counter.
-        if (socket === this.socket && socket.readyState === WebSocket.OPEN
-          && shouldReplaceSilentSocket(this.socketFrames - framesAtSend)) {
-          this.forensics?.('socket-silent', `${endpoint} timed out with no frame delivered on the current socket`)
-          this.replaceSocket(new RemoteStreamCarrierError(
-            'api gateway: Remote stream socket delivered no frame while an opening item was pending',
-          ), 'silent socket replaced')
+        // TWO evidence paths, ONE teardown (design 14 §D4, 2026-09 + 2026-09-21):
+        //
+        // 1. ZERO frames on this socket across the whole budget window — the carrier
+        //    itself is dead (a half-open leg whose FIN never arrived), so re-issuing
+        //    into it can never succeed and the widened budget (30 → 60 → 120 → 240 →
+        //    300 s) would only stretch the stall. Nothing else in the page can see
+        //    it: the connection lane's readiness handshake already succeeded here,
+        //    and a per-session rebuild re-issues on this same socket.
+        // 2. The socket IS delivering (frames for other streams) but THIS request's
+        //    opening item stays unanswered: the retry lane can only re-issue the same
+        //    request on the same physical generation, so after a whole extra widened
+        //    budget the carrier is rebuilt anyway — at most once per cooldown.
+        //
+        // Both paths go through replaceSocket() (the lane-commanded reconnect's own
+        // teardown) and both are judged on the socket this attempt sent on, so a
+        // replacement in the same turn can never borrow another socket's state.
+        if (socket === this.socket && socket.readyState === WebSocket.OPEN) {
+          if (shouldReplaceSilentSocket(this.socketFrames - framesAtSend)) {
+            this.forensics?.('socket-silent', `${endpoint} timed out with no frame delivered on the current socket`)
+            this.replaceSocket(new RemoteStreamCarrierError(
+              'api gateway: Remote stream socket delivered no frame while an opening item was pending',
+            ), 'silent socket replaced')
+          } else if (shouldEscalateOpeningStall(streak, this.lastOpeningEscalationAt, Date.now())) {
+            this.lastOpeningEscalationAt = Date.now()
+            this.forensics?.(
+              'opening-stall-escalation',
+              `${endpoint} unanswered ${String(streak)}x; rebuilding the physical carrier`,
+            )
+            this.replaceSocket(new RemoteStreamCarrierError(
+              'api gateway: Remote stream carrier rebuilt after an unanswered opening item',
+            ), 'opening stall')
+          }
         }
       }, openingBudgetMs)
       let awaitingOpeningItem = true
