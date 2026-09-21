@@ -13,11 +13,13 @@
  * WHY AN OBSERVER, NOT A FIX. This package is the only chamber-owned code in
  * the instance's own frontend tier and the vendored official packages are
  * read-only (the constraint official-hover-card.ts documents), so the honest
- * lever is a notice: this module NEVER reloads on its own, NEVER re-opens a
- * session and NEVER touches the official load path. It watches for the
- * stalled SHAPE and offers the user exactly one action — reload the page.
- * Every failure is fail-closed: an unexpected DOM shape, a missing anchor or
- * a thrown probe simply shows nothing.
+ * lever is a notice plus the ONE concrete lever the pinned controller exposes:
+ * this module NEVER reloads on its own, NEVER re-opens a session and NEVER
+ * touches the official load path; it watches for the stalled SHAPE, offers the
+ * user the reload action, and (since 2026-09-21) may call the pinned
+ * `Session.resync()` on positive evidence that no open is in flight. Every
+ * failure is fail-closed: an unexpected DOM shape, a missing anchor or a thrown
+ * probe simply shows nothing.
  *
  * THE SHAPE (attribute anchors only — the package's anchor discipline, see
  * docs/progress/STATUS.md: hash-class names and copy are NOT anchors). The
@@ -98,16 +100,29 @@
  * toggle and backdrop carry, and the element is only ever mounted while the
  * tier matches anyway. Copy comes from locales.ts (new keys only).
  *
- * The threshold is a heuristic and the recovery is deliberately the USER's
- * choice, not the plugin's: the notice offers "reload" (the only lever that
- * actually recovers a lost first frame) AND "keep waiting", which dismisses the
- * notice for the current continuous stall and re-arms when the shape breaks.
- * A slow-but-healthy open of a large session on a slow link looks exactly like
+ * The threshold is a heuristic: the notice offers "reload" (the lever that
+ * recovers a lost first frame) AND "keep waiting", which dismisses the notice
+ * for the current continuous stall and re-arms when the shape breaks. A
+ * slow-but-healthy open of a large session on a slow link looks exactly like
  * this shape, so the dismissal is what keeps a false positive from pushing the
  * user into aborting a load that was still progressing. `STALL_THRESHOLD_MS`
  * itself is NOT device-calibrated (docs/progress/STATUS.md keeps that gate
  * open): the plugin never reloads on its own, so the residual risk is a
  * suggestion the user can dismiss, not an action taken for them.
+ *
+ * THE AUTOMATIC ARM (2026-09-21, desktop-tier parity). The touch tier carries no
+ * chamber fork (its client stack is the instance's own), so the ONE automatic
+ * lever available here is the pinned controller's concrete `Session.resync()`
+ * (the module therefore DOES perform one write: that method, and nothing else).
+ * It is executed by this watcher ONLY on POSITIVE evidence that no open is in
+ * flight (the concrete `openPromise` member exists and is null — see
+ * {@link sessionStallFace}: a missing member, a drifted face or a thrown read is
+ * "unknown" and fails closed), and only through the same kind of per-session
+ * ledger the desktop ladder uses (cooldown + rolling budget). An open that IS in
+ * flight is a slow Host being waited on and is never interrupted. Past
+ * `STALL_FAILED_MS` the notice copy switches from "appears stalled" to "content
+ * not loaded", so the user never reads an ongoing load that has already failed
+ * every automatic attempt.
  *
  * Anchor-version note: every selector here is an attribute emitted by the
  * pinned official build (`data-phase` phase values, `data-chat-flow`,
@@ -151,6 +166,23 @@ export const STALL_THRESHOLD_MS = 45_000
  * visibilitychange).
  */
 export const STALL_POLL_MS = 3_000
+
+/** Minimum distance between two automatic rebuilds for one session. */
+export const STALL_RESYNC_COOLDOWN_MS = 120_000
+
+/** Rolling window of the automatic-rebuild budget. */
+export const STALL_RESYNC_WINDOW_MS = 600_000
+
+/** How many automatic rebuilds one rolling window allows. */
+export const STALL_RESYNC_MAX = 3
+
+/**
+ * After this much continuous stall the notice copy is the FAILURE one ("content
+ * not loaded"): every automatic attempt has had its chance, and the user must not
+ * read an ongoing load that already failed. Announced only — the levers and the
+ * dismissal keep working underneath.
+ */
+export const STALL_FAILED_MS = 180_000
 
 /** The conversation root's phase attribute. The emitter is upstream
  *  `ConversationRoot`'s `phase` attribute (ui-conversation): the value space is
@@ -355,12 +387,16 @@ export interface StallShapeFacts {
   readonly hasRows: boolean
 }
 
-/** The notice decision, plus the clock it leaves behind. */
+/** The notice decision, plus the clock and ledger it leaves behind. */
 export interface StallDecision {
   /** The first sighting of the current continuous stall, 0 when not timing. */
   readonly since: number
   /** Whether the notice belongs on screen now. */
   readonly show: boolean
+  /** Execute the per-session rebuild NOW (evidence + ledger allow it). */
+  readonly resync: boolean
+  /** The ledger carried forward (pruned to the rolling window). */
+  readonly resyncStamps: readonly number[]
 }
 
 export interface StallNoticeInput {
@@ -372,6 +408,15 @@ export interface StallNoticeInput {
    *  suppressed while the shape holds; the suppression ends with the shape, so
    *  a later stall (a new session, a re-open) still gets its notice. */
   readonly dismissed: boolean
+  /** Concrete open liveness for the presented session: TRUE = an open is
+   *  pending, FALSE = the state is parked with nothing pending, UNDEFINED = this
+   *  build cannot say. Only the explicit FALSE unlocks the automatic rebuild. */
+  readonly openInFlight?: boolean | undefined
+  /** Concrete `openState === 'loading'`: TRUE unlocks the automatic rebuild, and
+   *  FALSE / UNDEFINED both fail closed (the stall shape alone is not evidence). */
+  readonly loading?: boolean | undefined
+  /** Timestamps of the automatic rebuilds already executed for this session. */
+  readonly resyncStamps?: readonly number[]
 }
 
 /**
@@ -398,9 +443,72 @@ export function isStallShape(facts: StallShapeFacts): boolean {
  * @returns the clock to carry forward and whether to show the notice.
  */
 export function decideStallNotice(input: StallNoticeInput): StallDecision {
-  if (!input.shape || !input.pageVisible) return { since: 0, show: false }
+  const resyncStamps = pruneStallResync(input.resyncStamps ?? [], input.now)
+  if (!input.shape || !input.pageVisible) return { since: 0, show: false, resync: false, resyncStamps }
   const since = input.since === 0 ? input.now : input.since
-  return { since, show: !input.dismissed && input.now - since >= STALL_THRESHOLD_MS }
+  const stalled = input.now - since >= STALL_THRESHOLD_MS
+  return {
+    since,
+    show: !input.dismissed && stalled,
+    // BOTH evidences are required (2026-09-21 review): the concrete state must be
+    // `loading` (not a healthy open session whose first turn is merely slow), and
+    // nothing may be in flight. Either one unknown ⇒ no automatic write.
+    resync: stalled
+      && input.loading === true
+      && input.openInFlight === false
+      && stallResyncAvailable(resyncStamps, input.now),
+    resyncStamps,
+  }
+}
+
+/**
+ * Timestamps still inside the rolling budget window. FUTURE stamps are dropped
+ * too: a wall clock that stepped backwards (NTP correction, VM restore) would
+ * otherwise keep them "inside the window" for up to that whole step and the
+ * budget would count them forever (2026-09-21 review). Dropping them resets the
+ * ledger to "nothing spent" instead, which is the desktop ladder's ruling for a
+ * negative elapsed time.
+ */
+function pruneStallResync(stamps: readonly number[], now: number): readonly number[] {
+  return stamps.filter(stamp => Number.isFinite(stamp) && stamp <= now && now - stamp < STALL_RESYNC_WINDOW_MS)
+}
+
+/**
+ * Whether the automatic rebuild may run: at most {@link STALL_RESYNC_MAX} per
+ * {@link STALL_RESYNC_WINDOW_MS}, spaced by {@link STALL_RESYNC_COOLDOWN_MS}.
+ * Pure — unit-tested.
+ * @param stamps - the session's previous automatic rebuild times.
+ * @param now - current wall clock.
+ * @returns whether one more automatic rebuild is allowed.
+ */
+export function stallResyncAvailable(stamps: readonly number[], now: number): boolean {
+  const recent = pruneStallResync(stamps, now)
+  if (recent.length >= STALL_RESYNC_MAX) return false
+  const last = recent.at(-1)
+  return last === undefined || now - last >= STALL_RESYNC_COOLDOWN_MS
+}
+
+/**
+ * The ledger after one executed automatic rebuild. Pure — unit-tested.
+ * @param stamps - the session's previous automatic rebuild times.
+ * @param now - the execution time.
+ * @returns the pruned ledger plus this attempt.
+ */
+export function markStallResync(stamps: readonly number[], now: number): readonly number[] {
+  return [...pruneStallResync(stamps, now), now]
+}
+
+/**
+ * The notice copy for a stall that has held this long: the failure wording past
+ * {@link STALL_FAILED_MS}, so an endless spinner is never described as an
+ * ongoing load. Pure — unit-tested.
+ * @param elapsedMs - the continuous stall duration.
+ * @returns the locale key for the notice message.
+ */
+export function stallMessageKey(elapsedMs: number): MobileKey {
+  return elapsedMs >= STALL_FAILED_MS
+    ? 'dsh-chamber.mobile.stall.messageFailed'
+    : 'dsh-chamber.mobile.stall.message'
 }
 
 /**
@@ -504,23 +612,141 @@ function singleShot(release: () => void): () => void {
   }
 }
 
+/** The concrete session face the automatic arm reads (fully guarded). */
+export interface StallSessionFace {
+  /** TRUE = an open is pending, FALSE = parked with nothing pending, UNDEFINED = unknowable. */
+  openInFlight(): boolean | undefined
+  /**
+   * TRUE = the concrete session reports `openState === 'loading'`. FALSE for any
+   * other state, UNDEFINED when the member cannot be read. REQUIRED by the
+   * automatic arm: a healthy `open` session with a slow first turn shares the
+   * stall SHAPE (empty transcript, no `data-chat-anchor-key` rows), so
+   * `openPromise === null` alone would rebuild a session that needs no repair.
+   */
+  loading(): boolean | undefined
+  /** Rebuild the presented session's event stream (the pinned concrete `resync()`). */
+  resync(): void
+}
+
+/** Loose structural slice of the instance's session face (never trusted). */
+interface SessionsStallLoose {
+  readonly list?: { getSnapshot?(): { readonly current?: string | undefined } }
+  resolve?(id: string): { readonly session?: unknown } | undefined
+}
+
+/** The CURRENT concrete Session object, or undefined (guarded, fail-closed). */
+function currentStallSession(sessions: SessionsStallLoose | undefined): Record<string, unknown> | undefined {
+  try {
+    const current = sessions?.list?.getSnapshot?.().current
+    if (current === undefined || typeof sessions?.resolve !== 'function') return undefined
+    const session = sessions.resolve(current)?.session
+    if (session === null || session === undefined || typeof session !== 'object') return undefined
+    return session as Record<string, unknown>
+  } catch {
+    return undefined
+  }
+}
+
 /**
- * Install the session-load stall notice. The installer is an observer only:
- * it reads the official DOM, polls at STALL_POLL_MS, recomputes immediately on
- * visibilitychange, and mounts a single notice whose primary action calls
- * `location.reload()` and whose secondary action dismisses the notice for the
- * current stall. It never reloads, re-opens or writes to the official tree on
- * its own.
+ * Build the automatic arm's face from the plugin context, or undefined when the
+ * concrete capability is absent (the touch tier may run without a session
+ * controller, and a drifted build must degrade to the notice-only behaviour
+ * rather than to a guess). The READ of an absent cordis service throws through
+ * the ctx proxy, so the non-throwing `reflect.get(name, false)` form is used —
+ * the same guarded shape the desktop tier's probe uses.
+ * @param ctx - the plugin context (anything exposing `reflect.get`).
+ * @returns the face, or undefined when it cannot be trusted.
+ */
+export function sessionStallFace(
+  ctx: { readonly reflect?: { get?(name: string, strict?: boolean): unknown } } | undefined,
+): StallSessionFace | undefined {
+  const reflect = ctx?.reflect
+  if (reflect?.get === undefined) return undefined
+  // Bound once: the property is optional on the ctx face, so every call site would
+  // otherwise need its own narrowing (typecheck:mobile is a gate).
+  const get = reflect.get.bind(reflect)
+  /**
+   * Re-resolve the service on EVERY call (2026-09-21 review, desktop parity): the
+   * mobile plugin deliberately does not inject `sessions`, so its apply order is
+   * not guaranteed to be after the session controller registers — resolving once at
+   * install time would silently disable the arm for that whole install lifetime.
+   */
+  const resolve = (): SessionsStallLoose | undefined => {
+    try {
+      const found = get('sessions', false)
+      if (found === null || typeof found !== 'object') return undefined
+      const candidate = found as SessionsStallLoose
+      if (typeof candidate.list?.getSnapshot !== 'function' || typeof candidate.resolve !== 'function') return undefined
+      return candidate
+    } catch {
+      return undefined
+    }
+  }
+  return {
+    openInFlight: (): boolean | undefined => {
+      const session = currentStallSession(resolve())
+      if (session === undefined) return undefined
+      try {
+        // The member MUST exist for FALSE to be reported: a build that renamed or
+        // removed `openPromise` degrades to "unknown", never to "nothing pending".
+        if (!Object.hasOwn(session, 'openPromise')) return undefined
+        const pending = session.openPromise
+        // Only an exactly-null own member is positive evidence (desktop parity);
+        // anything else non-thenable (e.g. undefined) is UNKNOWN and fails closed.
+        if (pending === null) return false
+        if (typeof pending === 'object' || typeof pending === 'function') return true
+        return undefined
+      } catch {
+        return undefined
+      }
+    },
+    loading: (): boolean | undefined => {
+      const session = currentStallSession(resolve())
+      if (session === undefined) return undefined
+      try {
+        if (!Object.hasOwn(session, 'openState')) return undefined
+        const state = session.openState
+        return state === 'loading'
+      } catch {
+        return undefined
+      }
+    },
+    resync: (): void => {
+      const session = currentStallSession(resolve())
+      if (session === undefined) return
+      try {
+        const method = session.resync
+        if (typeof method !== 'function') return
+        void (method as () => unknown).call(session)
+      } catch {
+        // Fail closed: a hostile face must never throw into the poll loop.
+      }
+    },
+  }
+}
+
+/**
+ * Install the session-load stall notice. The installer reads the official DOM,
+ * polls at STALL_POLL_MS, recomputes immediately on visibilitychange, and mounts
+ * a single notice whose primary action calls `location.reload()` and whose
+ * secondary action dismisses the notice for the current stall. The ONLY write it
+ * ever performs by itself is the pinned `Session.resync()`, and only on the
+ * evidence the pure decision pins (see {@link decideStallNotice}).
  *
  * Sharing: the installation is reference-counted on the window, so a second
  * install (a second context on the same page) joins the live watcher instead of
  * silently receiving a dead disposer — disposing the first would otherwise stop
  * watching for the second. The watcher's copy is the first installer's locale
- * binding, which is the same dictionary on one page.
+ * binding (the same dictionary on one page) and the first installer's session
+ * face: a second install on the same page therefore joins the live arm instead of
+ * silently replacing its evidence source, and every install is still disposed by
+ * its own disposer.
  * @param t - the bound locale lookup for the notice copy.
+ * @param session - the guarded concrete face for the automatic arm; absent means
+ *   notice-only (the pre-2026-09-21 behaviour).
  * @returns the disposer (idempotent; the watcher stops when the last one runs).
  */
-export function installSessionStallNotice(t: (key: MobileKey) => string): () => void {
+export function installSessionStallNotice(t: (key: MobileKey) => string, session?: StallSessionFace): () => void {
   // DOM-free harness (the package's plain-node test files) and any non-browser
   // scope: nothing to watch, nothing installed.
   if (typeof document === 'undefined' || typeof window === 'undefined') return () => {}
@@ -533,6 +759,8 @@ export function installSessionStallNotice(t: (key: MobileKey) => string): () => 
 
   let since = 0
   let dismissed = false
+  /** Automatic-rebuild ledger for the CURRENT session (reset on a session switch). */
+  let resyncStamps: readonly number[] = []
   // The session identity: the displayed header, and ONLY it (the phase node is
   // keyed by entry and survives a session switch — see the module header; when no
   // header is displayed the shape is false anyway, so nothing is being timed).
@@ -585,7 +813,7 @@ export function installSessionStallNotice(t: (key: MobileKey) => string): () => 
     if (element.textContent !== value) element.textContent = value
   }
 
-  const mount = (header: StallNodeFace | null): void => {
+  const mount = (header: StallNodeFace | null, messageKey: MobileKey): void => {
     if (notice === null) {
       const body: HTMLElement | null = document.body
       if (body === null) return
@@ -615,7 +843,7 @@ export function installSessionStallNotice(t: (key: MobileKey) => string): () => 
       noticeAction = action
       noticeDismiss = dismissButton
     }
-    if (noticeMessage !== null) setText(noticeMessage, t('dsh-chamber.mobile.stall.message'))
+    if (noticeMessage !== null) setText(noticeMessage, t(messageKey))
     if (noticeAction !== null) setText(noticeAction, t('dsh-chamber.mobile.stall.action'))
     if (noticeDismiss !== null) setText(noticeDismiss, t('dsh-chamber.mobile.stall.dismiss'))
     const top = noticeTopFor(header?.getBoundingClientRect?.() ?? null, window.innerHeight)
@@ -637,18 +865,36 @@ export function installSessionStallNotice(t: (key: MobileKey) => string): () => 
         sessionAnchor = anchor
         since = 0
         dismissed = false
+        resyncStamps = []
         unmount()
       }
       const shape = isStallShape(probe)
       const pageVisible = document.visibilityState === 'visible'
+      const now = Date.now()
       const decision = decideStallNotice({
         shape,
         pageVisible,
         since,
-        now: Date.now(),
+        now,
         dismissed,
+        openInFlight: readOpenInFlight(),
+        loading: readLoading(),
+        resyncStamps,
       })
       since = decision.since
+      if (decision.resync) {
+        // The ONLY automatic write in this module: the pinned per-session rebuild,
+        // executed strictly on the plan's evidence (no open in flight) and
+        // accounted whether or not the guarded face performed anything.
+        try {
+          session?.resync()
+        } catch {
+          // Fail closed: the watcher must never throw into the poll loop.
+        }
+        resyncStamps = markStallResync(decision.resyncStamps, now)
+      } else {
+        resyncStamps = decision.resyncStamps
+      }
       // A broken shape ends the stall episode — and so does a hidden page, which
       // zeroes the clock for the same reason (background time is not stall time).
       // Either way the episode a dismissal belonged to is over, so it must not
@@ -660,10 +906,29 @@ export function installSessionStallNotice(t: (key: MobileKey) => string): () => 
       // would take the notice away for another full threshold on resume.
       // (`dismissed` needs no re-check here: the only setter also unmounts, so a
       // mounted notice implies it is false.)
-      if (decision.show || (shape && notice !== null)) mount(probe.header)
-      else unmount()
+      if (decision.show || (shape && notice !== null)) {
+        mount(probe.header, stallMessageKey(decision.since === 0 ? 0 : now - decision.since))
+      } else unmount()
     } catch {
       // Fail closed: a notice watcher must never break the page it watches.
+    }
+  }
+
+  /** Guarded read of the concrete open-liveness bit (a hostile face is "unknown"). */
+  const readOpenInFlight = (): boolean | undefined => {
+    try {
+      return session?.openInFlight()
+    } catch {
+      return undefined
+    }
+  }
+
+  /** Guarded read of the concrete open state (absent face ⇒ unknown, never "not loading"). */
+  const readLoading = (): boolean | undefined => {
+    try {
+      return session?.loading()
+    } catch {
+      return undefined
     }
   }
 

@@ -82,6 +82,8 @@ gateway 访问）真正可用——窄屏抽屉化布局、触控目标、安全
 `session-stall.ts` 只为这一状态补一个非阻断提示。判据**全部是属性锚点**——本包的锚点
 纪律禁止按哈希类名或文案匹配那句提示：
 
+2026-09-21 起，同一判据还驱动一条**自动臂**：停滞满阈值且具象 `Session.openPromise` 明确为空（无在途 open）时，模块自己调用 pinned `resync()` 重建该会话的事件流，受同款 cooldown（120s）+ 滚动预算（10 分钟 ≤3 次）约束；在途 open 绝不打断（慢宿主），读不到具象面则一律当作 `unknown` fail-closed。停滞超过 `STALL_FAILED_MS`（180s）后文案转为「会话内容未能载入」，避免把已失败的加载继续描述成进行中。触屏档没有 chamber fork，这条自动臂是该档唯一的自动恢复面。
+
 - 存在 `[data-chat-flow]` 列，且其最近的 `[data-phase]` 祖先进相为 `settling` 或
   `active`（DOM 取值空间恰为 settling / hero / active，由上游 `ConversationRoot`
   发出；hero 是「无会话」面，永不成立，空会话因此不会误报。`conversationPhase()`

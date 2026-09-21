@@ -17,8 +17,9 @@
  *     throws in cordis when the service is absent);
  *  3. the chip never reloads, re-opens, rebuilds or navigates on its own: the
  *     only `location.reload()` in the whole feature is the injected action, the
- *     only resync execution is the injected one (the plan ARMS the second
- *     control and never calls it), and the component is inert while the ladder
+ *     only resync EXECUTIONS are the seat's evidence-gated automatic arm (`plan
+ *     .action === 'auto-resync'`, unlocked only by a proven "no open in flight")
+ *     and the injected user action, and the component is inert while the ladder
  *     holds nothing;
  *  4. no client source in this package writes to the console — the package's
  *     own ui-lock forbids it, and these files must stay inside that rule;
@@ -57,34 +58,44 @@ test('stream-health wiring: the seat owns the ladder state and reads the session
   // subtree is unmounted on every session switch.
   assert.match(seat, /const ladders = new Map<string, SessionStreamHealthState>\(\)/)
   assert.match(seat, /const step = \(/)
-  assert.match(seat, /healSessionStream\(readSessions\(ctx\), sessionId, previousOf\(sessionId\)\)/)
+  assert.match(seat, /healSessionStream\(sessions, sessionId, previousOf\(sessionId\)\)/)
   // cordis throws on an absent service read through the ctx proxy.
   assert.match(seat, /reflect\.get\('sessions', false\)/)
   assert.match(seat, /const note = \(sessionId: string\): void => \{ presented = rememberPresented\(presented, sessionId\) \}/)
   assert.match(seat, /previousOf = \(sessionId: string\): string \| undefined => previousPresented\(presented, sessionId\)/)
 })
 
-test('stream-health wiring: the seat arms resync from the guarded capability read and never executes it from the plan', () => {
-  // The pure observation only reports what the guarded concrete read found.
-  assert.match(seat, /resyncAvailable: hasSessionStreamResync\(readSessions\(ctx\), sessionId\)/)
-  // The plan path branches on 'heal' ONLY: a stall can never rebuild a stream
-  // by itself (the 'resync' action ARMS the chip's second control instead).
+test('stream-health wiring: the seat executes only the evidence-gated auto rebuild, and the click is never ledger-gated', () => {
+  // The pure observation carries exactly what the guarded concrete reads found.
+  assert.match(seat, /resyncAvailable: hasSessionStreamResync\(sessions, sessionId\)/)
+  assert.match(seat, /openInFlight: sessionOpenInFlight\(sessions, sessionId\)/)
+  // The plan path branches on 'heal' and 'auto-resync' ONLY; 'resync' merely arms
+  // the chip's control (there is no seat branch for it).
   assert.match(seat, /if \(plan\.action === 'heal'\) \{/)
+  assert.match(seat, /else if \(plan\.action === 'auto-resync'\) \{/)
   assert.doesNotMatch(seat, /plan\.action === 'resync'/)
-  // Exactly one resync execution path in the whole seat: the injected user
-  // action, guarded again by the same per-session ledger the plan used.
+  // Exactly two resync execution paths: the automatic arm (accounted against the
+  // ledger) and the injected user action.
   assert.equal(
     [...seat.matchAll(/resyncSessionStream\(/gu)].length,
-    1,
-    'exactly one resync execution path: the injected user action',
+    2,
+    'two resync execution paths: the auto arm and the injected user action',
   )
+  assert.match(
+    seat,
+    /resyncSessionStream\(sessions, sessionId\)\n\s*state = markSessionStreamHeal\(state, now\)/,
+    'the automatic rebuild must be accounted like an automatic heal',
+  )
+  // The user's own exit is NOT ledger-gated (2026-09-21): the ledger bounds the
+  // automatic arm, while the manual control must survive an exhausted budget. It
+  // still stamps the ledger so it paces that arm.
+  assert.doesNotMatch(seat, /if \(!sessionStreamLeversAvailable\(current, now\)\) return/)
   assert.match(seat, /resync: \(sessionId\) => \{/)
   assert.match(seat, /const current = ladders\.get\(sessionId\) \?\? createSessionStreamHealthState\(\)/)
-  assert.match(seat, /if \(!sessionStreamLeversAvailable\(current, now\)\) return/)
   assert.match(seat, /resyncSessionStream\(readSessions\(ctx\), sessionId\)/)
   assert.match(seat, /storeLadder\(sessionId, markSessionStreamHeal\(current, now\)\)/)
   // The ladder state is still stored through one shared helper, so the click and
-  // the automatic heal cannot diverge in how they age the ledger.
+  // the automatic arms cannot diverge in how they age the ledger.
   assert.match(seat, /const storeLadder = \(sessionId: string, state: SessionStreamHealthState\): void => \{/)
   assert.match(seat, /storeLadder\(sessionId, state\)/)
 })
@@ -106,11 +117,13 @@ test('stream-health wiring: only the injected action reloads, and an idle ladder
   assert.doesNotMatch(chip, /<div[^>]*role="status"/)
 })
 
-test('stream-health wiring: the resync control is rendered only where the plan arms it, beside the reload', () => {
+test('stream-health wiring: the resync control is rendered where the plan arms OR executes it, beside the reload', () => {
   // Both controls live in the same notice branch; the reload button is byte-for-
   // byte the one that existed before the resync arm (the expression the churn
-  // test pins above), and resync is an ADDITIONAL control gated on plan.action.
-  assert.match(chip, /plan\.action === 'resync' \? \(/)
+  // test pins above), and resync is an ADDITIONAL control gated on plan.action —
+  // rendered for the armed control AND for the plan's own automatic rebuild, so
+  // the user's manual exit never disappears behind the automatic arm.
+  assert.match(chip, /plan\.action === 'resync' \|\| plan\.action === 'auto-resync' \? \(/)
   assert.match(chip, /<button type="button" className=\{styles\.action\} onClick=\{\(\) => \{ resync\(sessionId\) \}\}>/)
   assert.match(chip, /\{t\('streamHealth\.resync'\)\}/)
   // The chip calls the injected executor exactly once, from that click: no
@@ -128,12 +141,13 @@ test('stream-health wiring: no console writer in this package client sources', (
 })
 
 test('stream-health wiring: every notice key exists in both dictionaries', () => {
-  for (const key of ['streamHealth.label', 'streamHealth.healing', 'streamHealth.loadingStall', 'streamHealth.healFailed', 'streamHealth.reload', 'streamHealth.resync', 'streamHealth.carrierChurn']) {
+  for (const key of ['streamHealth.label', 'streamHealth.healing', 'streamHealth.loadingStall', 'streamHealth.loadingFailed', 'streamHealth.healFailed', 'streamHealth.reload', 'streamHealth.resync', 'streamHealth.carrierChurn']) {
     assert.equal(typeof (zh as Record<string, string>)[key], 'string', 'zh is missing ' + key)
     assert.equal(typeof (en as Record<string, string>)[key], 'string', 'en is missing ' + key)
   }
   assert.equal(typeof SESSION_STREAM_HEALTH_DEFAULTS.errorGraceMs, 'number')
   assert.equal(typeof SESSION_STREAM_HEALTH_DEFAULTS.carrierChurnMs, 'number')
+  assert.equal(typeof SESSION_STREAM_HEALTH_DEFAULTS.loadingFailedMs, 'number')
 })
 
 test('stream-health wiring: the carrier-churn fact is locked to the api-gateway fork literal', () => {

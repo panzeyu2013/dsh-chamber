@@ -21,11 +21,14 @@
  * WHY THE FACE IS A SINGLETON: the chip's effects depend on the injected
  * members; a fresh closure per render would re-run them for nothing.
  *
- * EXECUTION DISCIPLINE (2026-12): `step` executes ONLY the automatic heal. The
- * plan's `'resync'` action merely ARMS the chip's second control; the click
- * reaches `resync()` below, which checks the per-session ledger again before
- * the concrete vendor method is called. A stalled stream therefore never
- * rebuilds itself, and a second click inside the cooldown is a no-op.
+ * EXECUTION DISCIPLINE (2026-12, extended 2026-09-21): `step` executes the two
+ * automatic arms — the stage-move heal, and the per-session rebuild ONLY when the
+ * plan could prove no open is in flight (`sessionOpenInFlight === false`) — and
+ * accounts each against the session's ledger. The plan's `'resync'` action merely
+ * ARMS the chip's control; the click reaches `resync()` below, which is
+ * deliberately NOT ledger-gated (the ledger bounds the AUTOMATIC arm; a human click
+ * is its own bound, and the manual exit must survive an exhausted automatic
+ * budget) while still stamping that ledger so it paces the automatic arm.
  *
  * The recovery chip is registered BEFORE the open-in gates and independently of
  * them: a source whose per-entry open-in id does not parse still gets the
@@ -38,7 +41,6 @@ import {
   createSessionStreamHealthState,
   markSessionStreamHeal,
   planSessionStreamHealth,
-  sessionStreamLeversAvailable,
   SESSION_STREAM_HEALTH_DEFAULTS,
   type SessionOpenState,
   type SessionStreamHealthPlan,
@@ -46,7 +48,7 @@ import {
 } from './session-stream-health.ts'
 import {
   hasHealRoute, hasSessionStreamResync, healSessionStream, previousPresented, rememberPresented,
-  resyncSessionStream, type SessionsLoose,
+  resyncSessionStream, sessionOpenInFlight, type SessionsLoose,
 } from './session-stream-health-probe.ts'
 import { SessionStreamHealthChip, type SessionStreamHealthInjected } from './SessionStreamHealthChip.tsx'
 
@@ -58,6 +60,14 @@ const SLOT_ID = 'chamber-stream-health'
 
 /** How many per-session ladder states the entry keeps (recency-capped). */
 const LADDER_MEMORY = 64
+
+/**
+ * Manual-rebuild double-click window (2026-09-21 review). The click is not
+ * ledger-gated, so the ONLY thing pacing it is this guard: the pinned
+ * `Session.resync()` awaits `events.dispose()` before bumping the generation, so
+ * two clicks in one second could start two opens.
+ */
+const MANUAL_RESYNC_GUARD_MS = 1_000
 
 /**
  * Page-level carrier-churn event published by the in-repo api-gateway fork
@@ -143,6 +153,13 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
 
   /** Per-session ladder state, keyed the way the budget is defined. */
   const ladders = new Map<string, SessionStreamHealthState>()
+  /**
+   * Last manual rebuild per session (2026-09-21 review). The manual click is
+   * deliberately NOT ledger-gated, so this is the only thing that paces it: the
+   * pinned `resync()` awaits `dispose()` before bumping the generation, so two
+   * clicks inside one window could start two opens.
+   */
+  const lastManualResyncAt = new Map<string, number>()
 
   /**
    * Re-insert a session's ladder state to refresh its recency, then cap the map
@@ -180,7 +197,10 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
           // neighbour in the list is not enough — an address-only target would be
           // refused after spending the ledger. hasHealRoute() gates all three.
           neighborAvailable: hasHealRoute(sessions, sessionId),
-          resyncAvailable: hasSessionStreamResync(readSessions(ctx), sessionId),
+          resyncAvailable: hasSessionStreamResync(sessions, sessionId),
+          // The automatic rebuild's evidence (2026-09-21): tri-state, and only the
+          // explicit `false` (no open pending) unlocks it.
+          openInFlight: sessionOpenInFlight(sessions, sessionId),
           ...(carrierChurn === undefined ? {} : { carrierChurn }),
         },
         now,
@@ -192,7 +212,14 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
         // refusing lever (target no longer current/listed) must not retry once
         // per tick, and the cooldown plus the rolling budget already bound the
         // attempts — the ladder reports 'heal-failed' once they run out.
-        healSessionStream(readSessions(ctx), sessionId, previousOf(sessionId))
+        healSessionStream(sessions, sessionId, previousOf(sessionId))
+        state = markSessionStreamHeal(state, now)
+      } else if (plan.action === 'auto-resync') {
+        // The ONE automatic rebuild (2026-09-21): the plan asked for it only after
+        // the concrete face reported that NO open is in flight, so it interrupts no
+        // request. Accounted whether or not the method performed anything, exactly
+        // like the heal, so the cooldown and the rolling budget bound it.
+        resyncSessionStream(sessions, sessionId)
         state = markSessionStreamHeal(state, now)
       }
       storeLadder(sessionId, state)
@@ -216,18 +243,24 @@ export function registerSessionStreamHealthSeat(ctx: ClientContext, t: Translate
     reload: () => { window.location.reload() },
     // The user's own per-session stream rebuild (2026-12): the concrete
     // `Session.resync()` reached through the probe's guarded capability slice.
-    // NEVER called from `step` (the plan only arms the control), and guarded
-    // again HERE by the same per-session ledger the plan used — a second click
-    // inside the cooldown, or a click once the budget is spent, is a no-op.
+    // NOT ledger-gated on purpose (2026-09-21): the ledger bounds the AUTOMATIC
+    // arm, while the user's manual exit must remain available even after that
+    // budget is spent — a human click is its own bound. The attempt is still
+    // stamped so it paces the automatic arm.
     resync: (sessionId) => {
       try {
         const now = Date.now()
+        // Double-click guard (2026-09-21 review): a manual click is NOT ledger-gated,
+        // so two clicks in the same second would call the concrete `resync()` twice
+        // — two generations and a possible second stream. One call per window.
+        const previousManual = lastManualResyncAt.get(sessionId)
+        if (previousManual !== undefined && now - previousManual < MANUAL_RESYNC_GUARD_MS) return
+        lastManualResyncAt.set(sessionId, now)
         const current = ladders.get(sessionId) ?? createSessionStreamHealthState()
-        if (!sessionStreamLeversAvailable(current, now)) return
         // Account the attempt whether or not this build exposes the method (the
-        // same one-stamp-per-attempt rule the automatic heal follows): a face
-        // that vanished between planning and clicking must not leave the control
-        // armed for a retry loop.
+        // same one-stamp-per-attempt rule the automatic arms follow): a face that
+        // vanished between planning and clicking must not leave the control armed
+        // for a retry loop.
         resyncSessionStream(readSessions(ctx), sessionId)
         storeLadder(sessionId, markSessionStreamHeal(current, now))
       } catch {

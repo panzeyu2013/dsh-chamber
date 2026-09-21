@@ -33,6 +33,7 @@ var zh = {
   "dsh-chamber.mobile.drawer.open": "\u6253\u5F00\u4FA7\u8FB9\u680F",
   "dsh-chamber.mobile.drawer.close": "\u6536\u8D77\u4FA7\u8FB9\u680F",
   "dsh-chamber.mobile.stall.message": "\u4F1A\u8BDD\u8F7D\u5165\u4F3C\u4E4E\u505C\u6EDE\u4E86",
+  "dsh-chamber.mobile.stall.messageFailed": "\u4F1A\u8BDD\u5185\u5BB9\u672A\u80FD\u8F7D\u5165",
   "dsh-chamber.mobile.stall.action": "\u91CD\u65B0\u52A0\u8F7D\u9875\u9762",
   "dsh-chamber.mobile.stall.dismiss": "\u7EE7\u7EED\u7B49\u5F85"
 };
@@ -41,6 +42,7 @@ var en = {
   "dsh-chamber.mobile.drawer.open": "Open sidebar",
   "dsh-chamber.mobile.drawer.close": "Close sidebar",
   "dsh-chamber.mobile.stall.message": "Session loading appears stalled",
+  "dsh-chamber.mobile.stall.messageFailed": "Session content not loaded",
   "dsh-chamber.mobile.stall.action": "Reload page",
   "dsh-chamber.mobile.stall.dismiss": "Keep waiting"
 };
@@ -1881,6 +1883,10 @@ function installStrandedHoverCardWatchdog(active) {
 // src/client/session-stall.ts
 var STALL_THRESHOLD_MS = 45e3;
 var STALL_POLL_MS = 3e3;
+var STALL_RESYNC_COOLDOWN_MS = 12e4;
+var STALL_RESYNC_WINDOW_MS = 6e5;
+var STALL_RESYNC_MAX = 3;
+var STALL_FAILED_MS = 18e4;
 var CONVERSATION_PHASE_QUERY = "[data-phase]";
 var STALL_PHASES = ["settling", "active"];
 function isStallPhase(value) {
@@ -1996,9 +2002,34 @@ function isStallShape(facts) {
   return facts.activeConversation && facts.headerVisible && facts.flowPresent && !facts.hasRows;
 }
 function decideStallNotice(input) {
-  if (!input.shape || !input.pageVisible) return { since: 0, show: false };
+  const resyncStamps = pruneStallResync(input.resyncStamps ?? [], input.now);
+  if (!input.shape || !input.pageVisible) return { since: 0, show: false, resync: false, resyncStamps };
   const since = input.since === 0 ? input.now : input.since;
-  return { since, show: !input.dismissed && input.now - since >= STALL_THRESHOLD_MS };
+  const stalled = input.now - since >= STALL_THRESHOLD_MS;
+  return {
+    since,
+    show: !input.dismissed && stalled,
+    // BOTH evidences are required (2026-09-21 review): the concrete state must be
+    // `loading` (not a healthy open session whose first turn is merely slow), and
+    // nothing may be in flight. Either one unknown ⇒ no automatic write.
+    resync: stalled && input.loading === true && input.openInFlight === false && stallResyncAvailable(resyncStamps, input.now),
+    resyncStamps
+  };
+}
+function pruneStallResync(stamps, now) {
+  return stamps.filter((stamp) => Number.isFinite(stamp) && stamp <= now && now - stamp < STALL_RESYNC_WINDOW_MS);
+}
+function stallResyncAvailable(stamps, now) {
+  const recent = pruneStallResync(stamps, now);
+  if (recent.length >= STALL_RESYNC_MAX) return false;
+  const last = recent.at(-1);
+  return last === void 0 || now - last >= STALL_RESYNC_COOLDOWN_MS;
+}
+function markStallResync(stamps, now) {
+  return [...pruneStallResync(stamps, now), now];
+}
+function stallMessageKey(elapsedMs) {
+  return elapsedMs >= STALL_FAILED_MS ? "dsh-chamber.mobile.stall.messageFailed" : "dsh-chamber.mobile.stall.message";
 }
 function isRendered(node, styleOf) {
   if (node.isConnected === false) return false;
@@ -2054,7 +2085,69 @@ function singleShot(release) {
     release();
   };
 }
-function installSessionStallNotice(t) {
+function currentStallSession(sessions) {
+  try {
+    const current = sessions.list?.getSnapshot?.().current;
+    if (current === void 0 || typeof sessions.resolve !== "function") return void 0;
+    const session = sessions.resolve(current)?.session;
+    if (session === null || session === void 0 || typeof session !== "object") return void 0;
+    return session;
+  } catch {
+    return void 0;
+  }
+}
+function sessionStallFace(ctx) {
+  const reflect = ctx?.reflect;
+  if (reflect?.get === void 0) return void 0;
+  const resolve = () => {
+    try {
+      const found = reflect.get("sessions", false);
+      if (found === null || typeof found !== "object") return void 0;
+      const candidate = found;
+      if (typeof candidate.list?.getSnapshot !== "function" || typeof candidate.resolve !== "function") return void 0;
+      return candidate;
+    } catch {
+      return void 0;
+    }
+  };
+  return {
+    openInFlight: () => {
+      const session = currentStallSession(resolve());
+      if (session === void 0) return void 0;
+      try {
+        if (!Object.hasOwn(session, "openPromise")) return void 0;
+        const pending = session.openPromise;
+        if (pending === null) return false;
+        if (typeof pending === "object" || typeof pending === "function") return true;
+        return void 0;
+      } catch {
+        return void 0;
+      }
+    },
+    loading: () => {
+      const session = currentStallSession(resolve());
+      if (session === void 0) return void 0;
+      try {
+        if (!Object.hasOwn(session, "openState")) return void 0;
+        const state = session.openState;
+        return state === "loading";
+      } catch {
+        return void 0;
+      }
+    },
+    resync: () => {
+      const session = currentStallSession(resolve());
+      if (session === void 0) return;
+      try {
+        const method = session.resync;
+        if (typeof method !== "function") return;
+        void method.call(session);
+      } catch {
+      }
+    }
+  };
+}
+function installSessionStallNotice(t, session) {
   if (typeof document === "undefined" || typeof window === "undefined") return () => {
   };
   const guard = window;
@@ -2065,6 +2158,7 @@ function installSessionStallNotice(t) {
   }
   let since = 0;
   let dismissed = false;
+  let resyncStamps = [];
   let sessionAnchor = null;
   let notice = null;
   let noticeMessage = null;
@@ -2098,7 +2192,7 @@ function installSessionStallNotice(t) {
   const setText = (element, value) => {
     if (element.textContent !== value) element.textContent = value;
   };
-  const mount = (header) => {
+  const mount = (header, messageKey) => {
     if (notice === null) {
       const body = document.body;
       if (body === null) return;
@@ -2123,7 +2217,7 @@ function installSessionStallNotice(t) {
       noticeAction = action;
       noticeDismiss = dismissButton;
     }
-    if (noticeMessage !== null) setText(noticeMessage, t("dsh-chamber.mobile.stall.message"));
+    if (noticeMessage !== null) setText(noticeMessage, t(messageKey));
     if (noticeAction !== null) setText(noticeAction, t("dsh-chamber.mobile.stall.action"));
     if (noticeDismiss !== null) setText(noticeDismiss, t("dsh-chamber.mobile.stall.dismiss"));
     const top = noticeTopFor(header?.getBoundingClientRect?.() ?? null, window.innerHeight);
@@ -2140,22 +2234,51 @@ function installSessionStallNotice(t) {
         sessionAnchor = anchor;
         since = 0;
         dismissed = false;
+        resyncStamps = [];
         unmount();
       }
       const shape = isStallShape(probe);
       const pageVisible = document.visibilityState === "visible";
+      const now = Date.now();
       const decision = decideStallNotice({
         shape,
         pageVisible,
         since,
-        now: Date.now(),
-        dismissed
+        now,
+        dismissed,
+        openInFlight: readOpenInFlight(),
+        loading: readLoading(),
+        resyncStamps
       });
       since = decision.since;
+      if (decision.resync) {
+        try {
+          session?.resync();
+        } catch {
+        }
+        resyncStamps = markStallResync(decision.resyncStamps, now);
+      } else {
+        resyncStamps = decision.resyncStamps;
+      }
       if (!shape || !pageVisible) dismissed = false;
-      if (decision.show || shape && notice !== null) mount(probe.header);
-      else unmount();
+      if (decision.show || shape && notice !== null) {
+        mount(probe.header, stallMessageKey(decision.since === 0 ? 0 : now - decision.since));
+      } else unmount();
     } catch {
+    }
+  };
+  const readOpenInFlight = () => {
+    try {
+      return session?.openInFlight();
+    } catch {
+      return void 0;
+    }
+  };
+  const readLoading = () => {
+    try {
+      return session?.loading();
+    } catch {
+      return void 0;
     }
   };
   const onVisibilityChange = () => {
@@ -2414,7 +2537,7 @@ function apply(ctx) {
     let disposeNotice = null;
     const sync = () => {
       if (touchTier.matches) {
-        disposeNotice ??= installSessionStallNotice(t);
+        disposeNotice ??= installSessionStallNotice(t, sessionStallFace(ctx));
       } else {
         disposeNotice?.();
         disposeNotice = null;

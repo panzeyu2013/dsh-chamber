@@ -13,12 +13,12 @@
  * visibility re-check and the markup — that is all.
  *
  * It renders at most one line of text plus up to two user actions: the page
- * reload every (non-churn) notice offers, and — only while the pure plan ARMS
- * it (a parked `loading` open with lever budget left, on a build that exposes
- * the concrete face) — the per-session stream rebuild. Nothing here
- * reloads, re-opens, rebuilds or navigates on its own: both controls are the
- * user's own click, and the plan's `'resync'` action only decides whether the
- * second control is rendered.
+ * reload every (non-churn) notice offers, and — while the pure plan arms it (a
+ * parked `loading` open on a build that exposes the concrete face) or executes
+ * its own evidence-gated automatic rebuild — the per-session stream rebuild.
+ * Nothing here reloads, re-opens, rebuilds or navigates on its own: both controls
+ * are the user's own click, and the plan's `'resync'` / `'auto-resync'` action only
+ * decides whether the second control is rendered.
  */
 import { useEffect, useState, type ReactElement } from 'react'
 import type { Translate } from '../shared/coordinator.ts'
@@ -59,9 +59,10 @@ export interface SessionStreamHealthInjected {
   /** The user's own reload action. */
   reload(): void
   /**
-   * The user's own per-session stream rebuild. Only ever invoked from the
-   * control the plan armed; the seat re-checks the session's cooldown/budget
-   * and the concrete face's availability before calling `resync()`.
+   * The user's own per-session stream rebuild. Only ever invoked from the control
+   * the plan armed (the plan's automatic arm never routes through here); the seat
+   * stamps the per-session ledger so the attempt paces the automatic arm, and the
+   * concrete face's availability is re-checked inside the probe.
    */
   resync(sessionId: string): void
 }
@@ -166,11 +167,12 @@ export function SessionStreamHealthChip(props: SessionStreamHealthProps): ReactE
           <button type="button" className={styles.action} onClick={reload}>
             {t('streamHealth.reload')}
           </button>
-          {/* The per-session lever: rendered ONLY while the pure plan arms it
-              (a loading stall with the session's cooldown/budget intact and the
-              concrete face present). The click is the only invocation — the
-              plan never rebuilds a stream by itself. */}
-          {plan.action === 'resync' ? (
+          {/* The per-session lever: rendered while the pure plan ARMS it (a
+              loading stall with the concrete face present) or while the plan is
+              executing its own evidence-gated automatic rebuild — the user's
+              manual exit must survive either way. The click is this path's only
+              invocation; the automatic arm is the plan's `'auto-resync'`. */}
+          {plan.action === 'resync' || plan.action === 'auto-resync' ? (
             <button type="button" className={styles.action} onClick={() => { resync(sessionId) }}>
               {t('streamHealth.resync')}
             </button>

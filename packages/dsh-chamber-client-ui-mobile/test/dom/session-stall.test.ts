@@ -15,13 +15,24 @@ import {
   SESSION_HEADER_QUERY, STALL_NOTICE_ACTION_CLASS, STALL_NOTICE_CLASS,
   STALL_NOTICE_CSS, STALL_NOTICE_DISMISS_CLASS, STALL_NOTICE_GAP_PX, STALL_NOTICE_MESSAGE_CLASS,
   STALL_NOTICE_MIN_VISIBLE_PX, STALL_POLL_MS, STALL_STYLE_TAG, STALL_THRESHOLD_MS,
-  STALL_PHASES, decideStallNotice, installSessionStallNotice, isRendered, isStallPhase, isStallShape,
-  noticeTopFor, probeStall,
+  STALL_FAILED_MS, STALL_PHASES, STALL_RESYNC_COOLDOWN_MS, STALL_RESYNC_MAX, STALL_RESYNC_WINDOW_MS,
+  decideStallNotice, installSessionStallNotice, isRendered, isStallPhase, isStallShape,
+  markStallResync, noticeTopFor, probeStall, sessionStallFace, stallMessageKey, stallResyncAvailable,
 } from '../../src/client/session-stall.ts'
 import type { RenderedNodeFace, StallNodeFace } from '../../src/client/session-stall.ts'
 import { FakeNode, attach } from '../support/dom-double.ts'
 
 const SOURCE_URL = new URL('../../src/client/session-stall.ts', import.meta.url)
+
+/**
+ * The legacy decision projection (clock + notice) of the pre-2026-09-21
+ * assertions: the automatic arm's `resync`/`resyncStamps` fields are asserted by
+ * their own tests below, so these keep pinning exactly what they always pinned.
+ */
+function decide(input: Parameters<typeof decideStallNotice>[0]): { since: number; show: boolean } {
+  const { since, show } = decideStallNotice(input)
+  return { since, show }
+}
 
 /** The production render check, driven by the double's own style fields. */
 function renderedInFakes(node: StallNodeFace): boolean {
@@ -195,6 +206,7 @@ test('the notice copy exists in both dictionaries and adds no other key', () => 
   const keys = Object.keys(zh)
   assert.deepEqual(keys.filter(key => key.startsWith('dsh-chamber.mobile.stall.')), [
     'dsh-chamber.mobile.stall.message',
+    'dsh-chamber.mobile.stall.messageFailed',
     'dsh-chamber.mobile.stall.action',
     'dsh-chamber.mobile.stall.dismiss',
   ])
@@ -295,36 +307,36 @@ test('the render check walks the whole ancestor chain', () => {
 // ---------------------------------------------------------------------------
 
 test('the clock seeds at the first sighting and fires exactly at the threshold', () => {
-  const first = decideStallNotice({ shape: true, pageVisible: true, since: 0, now: 1_000, dismissed: false })
+  const first = decide({ shape: true, pageVisible: true, since: 0, now: 1_000, dismissed: false })
   assert.deepEqual(first, { since: 1_000, show: false }, 'the clock starts, the notice does not')
   assert.deepEqual(
-    decideStallNotice({ shape: true, pageVisible: true, since: first.since, now: 1_000 + STALL_THRESHOLD_MS - 1, dismissed: false }),
+    decide({ shape: true, pageVisible: true, since: first.since, now: 1_000 + STALL_THRESHOLD_MS - 1, dismissed: false }),
     { since: 1_000, show: false }, 'one millisecond short is not a stall')
   assert.deepEqual(
-    decideStallNotice({ shape: true, pageVisible: true, since: first.since, now: 1_000 + STALL_THRESHOLD_MS, dismissed: false }),
+    decide({ shape: true, pageVisible: true, since: first.since, now: 1_000 + STALL_THRESHOLD_MS, dismissed: false }),
     { since: 1_000, show: true }, 'the threshold is inclusive')
 })
 
 test('the stall must be CONTINUOUS: any break zeroes the clock and restarts the window', () => {
-  assert.deepEqual(decideStallNotice({ shape: false, pageVisible: true, since: 40_000, now: 46_000, dismissed: false }),
+  assert.deepEqual(decide({ shape: false, pageVisible: true, since: 40_000, now: 46_000, dismissed: false }),
     { since: 0, show: false }, 'a row arrived (or the shape broke) — the clock resets')
-  assert.deepEqual(decideStallNotice({ shape: true, pageVisible: true, since: 0, now: 47_000, dismissed: false }),
+  assert.deepEqual(decide({ shape: true, pageVisible: true, since: 0, now: 47_000, dismissed: false }),
     { since: 47_000, show: false }, 'a re-formed stall starts a fresh window')
   // A long-lived shape with a broken middle: 30s + 30s around a reset is never 60s.
-  const broken = decideStallNotice({ shape: true, pageVisible: true, since: 0, now: 10_000, dismissed: false })
-  const reset = decideStallNotice({ shape: false, pageVisible: true, since: broken.since, now: 40_000, dismissed: false })
-  const again = decideStallNotice({ shape: true, pageVisible: true, since: reset.since, now: 40_000, dismissed: false })
-  assert.deepEqual(decideStallNotice({ shape: true, pageVisible: true, since: again.since, now: 40_000 + STALL_THRESHOLD_MS - 1, dismissed: false }),
+  const broken = decide({ shape: true, pageVisible: true, since: 0, now: 10_000, dismissed: false })
+  const reset = decide({ shape: false, pageVisible: true, since: broken.since, now: 40_000, dismissed: false })
+  const again = decide({ shape: true, pageVisible: true, since: reset.since, now: 40_000, dismissed: false })
+  assert.deepEqual(decide({ shape: true, pageVisible: true, since: again.since, now: 40_000 + STALL_THRESHOLD_MS - 1, dismissed: false }),
     { since: 40_000, show: false })
 })
 
 test('a hidden page never counts and discards the accumulated visible time', () => {
-  assert.deepEqual(decideStallNotice({ shape: true, pageVisible: false, since: 40_000, now: 900_000, dismissed: false }),
+  assert.deepEqual(decide({ shape: true, pageVisible: false, since: 40_000, now: 900_000, dismissed: false }),
     { since: 0, show: false }, 'background time is not stall time')
-  assert.deepEqual(decideStallNotice({ shape: true, pageVisible: true, since: 0, now: 900_000, dismissed: false }),
+  assert.deepEqual(decide({ shape: true, pageVisible: true, since: 0, now: 900_000, dismissed: false }),
     { since: 900_000, show: false }, 'coming back starts a fresh visible window')
   assert.deepEqual(
-    decideStallNotice({ shape: true, pageVisible: true, since: 900_000, now: 900_000 + STALL_THRESHOLD_MS, dismissed: false }),
+    decide({ shape: true, pageVisible: true, since: 900_000, now: 900_000 + STALL_THRESHOLD_MS, dismissed: false }),
     { since: 900_000, show: true })
 })
 
@@ -680,3 +692,124 @@ test('the notice copy follows the locale binding on the next poll', () => {
     dispose()
   })
 })
+test('the automatic arm fires only on PROVEN loading-with-no-open, and the ledger bounds it', () => {
+  const base = { shape: true, pageVisible: true, since: 0, now: BASE_TIME, dismissed: false }
+  const parked = { ...base, loading: true, openInFlight: false }
+  const first = decideStallNotice(parked)
+  assert.equal(first.resync, false, 'the hold must age first, exactly like the notice')
+  const stalledAt = BASE_TIME + STALL_THRESHOLD_MS
+  const stalled = decideStallNotice({ ...parked, since: first.since, now: stalledAt })
+  assert.equal(stalled.resync, true)
+  assert.equal(stalled.show, true, 'the notice still rides along')
+  // An open IN FLIGHT is a slow Host being waited on: never interrupted.
+  assert.equal(decideStallNotice({ ...parked, since: first.since, now: stalledAt, openInFlight: true }).resync, false)
+  // Unknown evidence fails closed on BOTH axes: a missing liveness bit and a missing
+  // open state. A healthy `open` session with a slow first turn shares the stall
+  // SHAPE (empty transcript), so `openPromise === null` alone would rebuild it.
+  assert.equal(decideStallNotice({ ...base, loading: true, since: first.since, now: stalledAt }).resync, false)
+  assert.equal(decideStallNotice({ ...base, openInFlight: false, since: first.since, now: stalledAt }).resync, false)
+  assert.equal(decideStallNotice({ ...parked, loading: false, since: first.since, now: stalledAt }).resync, false, 'a healthy open session is never rebuilt')
+  let stamps = markStallResync(stalled.resyncStamps, stalledAt)
+  assert.equal(stallResyncAvailable(stamps, stalledAt + STALL_RESYNC_COOLDOWN_MS - 1), false)
+  assert.equal(stallResyncAvailable(stamps, stalledAt + STALL_RESYNC_COOLDOWN_MS), true)
+  for (let index = 1; index < 3; index++) {
+    stamps = markStallResync(stamps, stalledAt + index * STALL_RESYNC_COOLDOWN_MS)
+  }
+  assert.equal(stamps.length, 3)
+  assert.equal(stallResyncAvailable(stamps, stalledAt + 3 * STALL_RESYNC_COOLDOWN_MS), false, 'the rolling budget caps it inside the window')
+  const last = stamps.at(-1) as number
+  assert.equal(stallResyncAvailable(stamps, last + STALL_RESYNC_WINDOW_MS), true, 'the window releases the budget')
+  // A backwards clock step (NTP correction, VM restore) settles the ledger instead
+  // of parking the automatic arm until the wall clock catches up.
+  assert.equal(stallResyncAvailable(stamps, last - 3_600_000), true)
+  const pruned = decideStallNotice({ ...base, now: last + STALL_RESYNC_WINDOW_MS, resyncStamps: stamps, openInFlight: true })
+  assert.equal(pruned.resyncStamps.length, 0)
+})
+
+test('the notice copy switches to the failure wording after the failure bound', () => {
+  assert.equal(stallMessageKey(0), 'dsh-chamber.mobile.stall.message')
+  assert.equal(stallMessageKey(STALL_FAILED_MS - 1), 'dsh-chamber.mobile.stall.message')
+  assert.equal(stallMessageKey(STALL_FAILED_MS), 'dsh-chamber.mobile.stall.messageFailed')
+  assert.equal(typeof zh[stallMessageKey(STALL_FAILED_MS)], 'string')
+  assert.equal(typeof en[stallMessageKey(STALL_FAILED_MS)], 'string')
+})
+
+test('sessionStallFace is fail-closed on every drifted shape and resolves late services', () => {
+  const pending = Promise.resolve()
+  const faceOf = (session: Record<string, unknown> | undefined) => sessionStallFace({
+    reflect: {
+      get: (name: string) => (name === 'sessions'
+        ? { list: { getSnapshot: () => ({ current: 'a' }) }, resolve: () => (session === undefined ? undefined : { session }) }
+        : undefined),
+    },
+  })
+  assert.equal(faceOf({ resync: () => {}, openPromise: pending, openState: 'loading' })?.openInFlight(), true)
+  assert.equal(faceOf({ resync: () => {}, openPromise: null, openState: 'loading' })?.openInFlight(), false)
+  assert.equal(faceOf({ resync: () => {}, openPromise: undefined, openState: 'loading' })?.openInFlight(), undefined, 'an empty slot is unknown, never parked')
+  assert.equal(faceOf({ resync: () => {} })?.openInFlight(), undefined, 'a missing member is unknown, never parked')
+  assert.equal(faceOf({ resync: () => {}, openPromise: null, openState: 'loading' })?.loading(), true)
+  assert.equal(faceOf({ resync: () => {}, openPromise: null, openState: 'open' })?.loading(), false)
+  assert.equal(faceOf({ resync: () => {}, openPromise: null })?.loading(), undefined, 'a missing openState is unknown')
+  assert.equal(sessionStallFace(undefined), undefined)
+  assert.equal(sessionStallFace({}), undefined)
+  assert.equal(sessionStallFace({ reflect: {} }), undefined, 'a ctx without reflect.get gets no arm')
+  // The service is resolved PER CALL (2026-09-21 review): an install that happens
+  // before the session controller registers must not disable the arm forever.
+  let service: unknown
+  const late = sessionStallFace({ reflect: { get: () => service } })
+  assert.ok(late !== undefined, 'the arm is built from the ctx, not from the service being ready')
+  assert.equal(late?.loading(), undefined)
+  assert.equal(late?.openInFlight(), undefined)
+  service = { list: { getSnapshot: () => ({ current: 'a' }) }, resolve: () => ({ session: { resync: () => {}, openPromise: null, openState: 'loading' } }) }
+  assert.equal(late?.loading(), true, 'a service registered later is picked up')
+  assert.equal(late?.openInFlight(), false)
+  // A hostile service must neither throw at build time nor at call time.
+  const hostile = new Proxy({}, { get: () => { throw new Error('hostile') } })
+  assert.doesNotThrow(() => {
+    const face = sessionStallFace({ reflect: { get: () => hostile } })
+    assert.equal(face?.loading(), undefined)
+    assert.equal(face?.openInFlight(), undefined)
+  })
+  const hostileSession = new Proxy({}, { get: () => { throw new Error('hostile openPromise') } }) as Record<string, unknown>
+  const hostileFace = faceOf(hostileSession)
+  assert.doesNotThrow(() => {
+    assert.equal(hostileFace?.openInFlight(), undefined)
+    hostileFace?.resync()
+  })
+})
+
+test('the shipped automatic-arm limits are the documented ones', () => {
+  assert.equal(STALL_RESYNC_COOLDOWN_MS, 120_000)
+  assert.equal(STALL_RESYNC_WINDOW_MS, 600_000)
+  assert.equal(STALL_RESYNC_MAX, 3)
+  assert.equal(STALL_FAILED_MS, 180_000)
+})
+
+test('a parked open is rebuilt automatically once, and the copy turns into the failure wording', () => {
+  withFakeBrowser(harness => {
+    const tree = conversation()
+    harness.document.body.appendChild(tree.root)
+    if (tree.header !== null) tree.header.rect = { bottom: 120 }
+    let resyncs = 0
+    const dispose = installSessionStallNotice(key => zh[key], {
+      openInFlight: () => false,
+      loading: () => true,
+      resync: () => { resyncs += 1 },
+    })
+    harness.at(STALL_THRESHOLD_MS - 1)
+    assert.equal(resyncs, 0, 'nothing before the threshold')
+    harness.at(STALL_THRESHOLD_MS)
+    assert.equal(resyncs, 1, 'the parked open is rebuilt exactly once at the threshold')
+    assert.equal(harness.notice()?.children[0]?.textContent, zh['dsh-chamber.mobile.stall.message'])
+    // Still stalled inside the cooldown: the ledger holds the automatic arm back.
+    harness.at(STALL_THRESHOLD_MS + STALL_RESYNC_COOLDOWN_MS - 1)
+    assert.equal(resyncs, 1)
+    harness.at(STALL_THRESHOLD_MS + STALL_RESYNC_COOLDOWN_MS)
+    assert.equal(resyncs, 2, 'the automatic lever returns after the cooldown')
+    // Past the failure bound the copy says the content is not loaded.
+    harness.at(STALL_THRESHOLD_MS + STALL_FAILED_MS)
+    assert.equal(harness.notice()?.children[0]?.textContent, zh['dsh-chamber.mobile.stall.messageFailed'])
+    dispose()
+  })
+})
+
