@@ -34,10 +34,18 @@ test('the client entry installs the scoper at module scope, before apply()', () 
 })
 
 test('the install is a top-level statement, not hidden behind a tier branch', () => {
+  // 锚定赋值是**故意的**（W8/R15③；理由见 scripts/lib/scoper-markers.mjs）：裸调用名
+  // 在 esbuild 压缩后被改成短标识符，产物守卫会对任何真实构建恒红。于是模块作用域判据 =
+  // 「列 0 的锚定赋值」+「右侧确实是一次 scoper 调用」（与 marker ③ 同一判据）。
   assert.match(
     SOURCE,
-    /^installSvgResourceScope\(\)$/m,
-    'the install must be an unindented module-scope statement (no if/matchMedia gate)',
+    /^;\(globalThis[^\n]*\.__chamberSvgScopeInstalled\s*=$/m,
+    'the install must be an unindented module-scope anchored assignment (no if/matchMedia gate)',
+  )
+  assert.match(
+    CODE,
+    /__chamberSvgScopeInstalled\s*=\s*installSvgResourceScope\(\)/,
+    'the anchor must be assigned the scoper call, not a non-call placeholder',
   )
 })
 
