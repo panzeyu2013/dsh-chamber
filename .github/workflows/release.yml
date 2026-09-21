@@ -380,6 +380,12 @@ jobs:
       # from each other by comparing these two commands.
       - name: Package unit tests (single entry)
         run: node scripts/gates/run-checks.mjs tests
+      # 计划的统一验收矩阵（docs/progress/todo/remote-session-state-and-switch.md §9/§13.1）：
+      # ci.yml 的同一门，release validation 必须跑 push 路径跑的每个门
+      # （release-workflow-policy 门机械对齐 ci.yml 的门集合）。blocked 不判绿也不判红，
+      # 只有真失败 exit 1，所以这里不会因环境缺件而误红。
+      - name: Remote-state acceptance matrix (plan §9)
+        run: node scripts/gates/remote-state-acceptance.mjs --node "$(command -v node)" --out .tmp/acceptance/remote-state.json
       - name: Client plugin type checks (single entry)
         run: node scripts/gates/run-checks.mjs typecheck
       # Shared runtime core build: the gateway tarball packs it, so a broken
