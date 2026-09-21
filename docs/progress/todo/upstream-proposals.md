@@ -82,7 +82,10 @@ chamber已落地缓解（不动上游事实面）：design 05 §2.2.1的open意�
    浏览器完全观测不到——增加应用级 keepalive item 可让页面自判「连接是否还在投递」，
    不依赖任何 OS 事件；
 3. **流期限**：`session/follow` 加首帧/空闲期限（现永久无首帧即永久 loading，见
-   `STATUS.md`「会话打开停滞」）。
+   `STATUS.md`「会话打开停滞」）；**并把失败写成状态**：宿主/客户端任一环的首帧期限到期都应让
+   `Session.openState` 落到 `'error'`（带原因），而不是停留在 `'loading'`。chamber 侧 2026-09-21
+   起用「证据门自动重建 + 90 s 硬失败面」收敛客户端可修的部分（design 14 §D4），但宿主侧期限
+   仍是「进入必有内容」的最后一块（上面的 1/2 条同理）。
 4. **让 `refresh()` 可判成败**（最便宜、且不新增 API 面）：`SessionManager.refreshList()`
    现在对「拉取失败」照常 resolve，只把 `listState` 置 `'error'`（`listError` 同存）。
    把结果显式化（`refresh(): Promise<{ ok: boolean; error?: … }>`）后，chamber 的独立 unary
@@ -106,6 +109,13 @@ chamber已落地缓解（不动上游事实面）：design 05 §2.2.1的open意�
    同时写 list summaries、物化 Session 的 `running`（聊天面）与 catalog activity；但
    `ISessions` 契约只暴露 `refresh()`。把它（或语义等价的 `reconcileSummaries(rows)`）写进
    `contract/sessions.ts`，chamber 的 tier-3 写回即从「上游公开但非契约」变成受契约保护的面。
+7. **把「打开是否在途」暴露到契约/快照**（2026-09-21 新增诉求）：`Session.doOpen()` 有三条
+   静默留在 `loading` 的路径（非 `isRemoteFailure` 抛错；`events.open()` 返回时
+   `openGeneration`/`events` 已被推进），而重开只有 `followCurrent()` 的 stage 移动一条**外部**
+   触发。chamber 现在以具象成员 `Session.openPromise`（`null` = 无在途、缺失 = unknown）作证据门
+   自动重开，属「上游公开但非契约」的读取；把 `openState` + 在途标志（或 `open(): Promise<…>` 的
+   显式结果）写进 `SessionSnapshot`/契约后，这条自动臂即可去掉 structural slice，且上游自己也能
+   在 `doOpen` 收敛时优先补一次 `open()`。
 
 > **chamber 侧现状与裁决（2026-12）**：在**不改上游、不新增 fork**（用户裁决）的前提下，
 > chamber 已用两条仓内杠杆把「丢帧 → 纠正」做成确定性收敛——① tier-1.5 本地判定（refresh 后

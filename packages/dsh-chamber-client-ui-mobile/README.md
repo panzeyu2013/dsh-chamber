@@ -111,6 +111,16 @@ adds a non-blocking notice for exactly that state. The predicate is
 ATTRIBUTE-ONLY — the package's anchor discipline forbids matching the hint by
 its hashed class or by its copy:
 
+Since 2026-09-21 the same predicate also drives an AUTOMATIC arm: once the stall
+reaches the threshold AND the concrete `Session.openPromise` reports no open in
+flight, the module calls the pinned `resync()` to rebuild that session's journal
+stream itself, bounded by the same cooldown (120 s) and rolling budget (at most 3
+per 10 minutes). An open that IS in flight is never interrupted (a slow Host), and
+a face that cannot be read is `unknown` and fails closed. Past
+`STALL_FAILED_MS` (180 s) the copy switches to "session content not loaded" so a
+failed load is never described as one still running. The touch tier carries no
+chamber fork, so this arm is that tier's only automatic recovery.
+
 - a `[data-chat-flow]` column exists and its nearest `[data-phase]` ancestor
   carries an emitted conversation phase of `settling` or `active` (the DOM value
   space is exactly `settling` / `hero` / `active`, emitted by upstream

@@ -8,7 +8,8 @@
  * exposes no DevTools, and the mux client kept its own reasons in a closure. The
  * fix for the freeze makes that churn survivable; this fact makes the next
  * investigation answerable — one bounded page event per lifecycle transition
- * (socket lost/reconnect/dispose, opening-item timeout, generation ready/lost).
+ * (socket lost/reconnect/replaced-while-silent/dispose, opening-item timeout,
+ * generation ready/lost).
  *
  * Zero imports on purpose: the counter/payload/dispatch contract is testable in
  * plain Node (dispatch is injected) and the browser default only touches the
@@ -16,7 +17,7 @@
  * never a payload, prompt, path or credential.
  */
 
-/** Document-level event name carrying one {@link StreamForensicsFact}. */
+/** Window-level event name (globalThis; the page consumer listens on window) carrying one {@link StreamForensicsFact}. */
 export const STREAM_FORENSICS_EVENT = 'dsh-chamber:stream-forensics'
 
 /** Lifecycle transitions the fork can attribute without renderer tooling. */
@@ -25,6 +26,7 @@ export type StreamForensicsKind =
   | 'socket-reconnect'
   | 'socket-attempt-failed'
   | 'socket-disposed'
+  | 'socket-silent'
   | 'opening-timeout'
   | 'generation-ready'
   | 'generation-lost'

@@ -47,7 +47,7 @@ import { installSettingsSheetScrollReset } from './settings-sheet.ts'
 import {
   COARSE_NO_HOVER_QUERY, installStrandedHoverCardWatchdog,
 } from './official-hover-card.ts'
-import { installSessionStallNotice } from './session-stall.ts'
+import { installSessionStallNotice, sessionStallFace } from './session-stall.ts'
 import { MobileNavToggle, type MobileNavToggleInjected } from './MobileNavToggle.tsx'
 
 export type { MobileNavToggleInjected } from './MobileNavToggle.tsx'
@@ -331,15 +331,16 @@ export function apply(ctx: ClientContext): void {
   // out; this plugin's notice is the page's only recovery lever. It rides the
   // TOUCH tier (the same tier the mobile surface lives on) and, like the
   // watchdog above, is installed/uninstalled dynamically as the tier flips —
-  // nothing is created at apply time. It only ever SHOWS a notice whose one
-  // action is a user-initiated reload; see session-stall.ts for the shape,
-  // the threshold and every guard.
+  // nothing is created at apply time. It shows a notice whose primary action is
+  // a user-initiated reload, and (2026-09-21) may itself call the pinned
+  // per-session resync on positive evidence that no open is in flight; see
+  // session-stall.ts for the shape, the threshold and every guard.
   ctx.effect(() => {
     const touchTier = window.matchMedia(TOUCH_TIER_QUERY)
     let disposeNotice: (() => void) | null = null
     const sync = (): void => {
       if (touchTier.matches) {
-        disposeNotice ??= installSessionStallNotice(t)
+        disposeNotice ??= installSessionStallNotice(t, sessionStallFace(ctx))
       } else {
         disposeNotice?.()
         disposeNotice = null

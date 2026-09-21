@@ -26,6 +26,7 @@ import {
   REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS,
   REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,
   remoteStreamOpeningTimeoutMs,
+  shouldReplaceSilentSocket,
   streamOpeningKey,
 } from './remote-retry-policy.ts'
 import type { StreamForensicsReporter } from './stream-forensics.ts'
@@ -60,6 +61,12 @@ interface SocketWaiter {
 }
 
 /** Keep one physical WebSocket and share it among independently cancellable Remote streams. */
+/**
+ * Upper bound on the opening-budget ledger (chamber patch, 2026-09-21 review).
+ * One entry per timed-out request, cleared only by close() before this bound.
+ */
+const OPENING_BUDGET_KEYS_MAX = 256
+
 export class RemoteStreamMuxClient {
   /** chamber patch: per-entry control-plane base path, normalized (trailing slashes stripped); '' keeps the stock route. */
   private readonly basePath: string
@@ -71,6 +78,18 @@ export class RemoteStreamMuxClient {
   private readonly waiters = new Set<SocketWaiter>()
   /** chamber patch: consecutive opening-item timeouts per logical stream REQUEST (endpoint + payload digest; see remote-retry-policy.ts). */
   private readonly openingTimeouts = new Map<string, number>()
+
+  /**
+   * Request key of every LIVE logical stream (chamber patch, 2026-09-21 review).
+   * The opening budget is keyed by endpoint+payload, so it survived the stream that
+   * earned it: a rebuilt session (auto/manual resync) re-issues the SAME payload and
+   * inherited a widening of up to 300 s. This registry is what lets the finally block
+   * below tell "the retry lane is re-issuing the same request" (keep the widening)
+   * from "a new logical stream is asking for it" (start at the tight base budget).
+   */
+  private readonly streamOpeningKeys = new Map<string, string>()
+  /** chamber patch (design 14 §D4, 2026-09): frames received on the CURRENT socket — the liveness evidence the silent-socket escalation keys on. Reset whenever the current socket changes. */
+  private socketFrames = 0
   /** chamber patch: when the mux itself last started a connect attempt (self-heal throttle). */
   private lastMaintainAt = 0
   /** chamber patch: current self-heal interval; doubles while attempts keep failing. */
@@ -106,18 +125,40 @@ export class RemoteStreamMuxClient {
   reconnect(): void {
     if (!this.running || this.disposed) return
     this.forensics?.('socket-reconnect', 'reconnect requested by the connection lane')
-    const failure = new RemoteStreamReconnectRequest('api gateway: Remote stream reconnect requested')
+    this.replaceSocket(
+      new RemoteStreamReconnectRequest('api gateway: Remote stream reconnect requested'),
+      'reconnect requested',
+    )
+  }
+
+  /**
+   * chamber patch (design 14 §D4, 2026-09): throw the CURRENT physical socket away
+   * and start a fresh attempt at once, failing every logical stream with a carrier
+   * error so their retry lanes re-issue on the replacement.
+   *
+   * `lost()` owns a socket that announced its own death; this is the same teardown
+   * for a socket the fork itself decided is unusable while the page still sees it
+   * OPEN. Two callers: the connection lane's `reconnect()` (deliberate restart) and
+   * the silent-socket escalation in `open()` (an opening item timed out on a socket
+   * that delivered nothing at all — see `shouldReplaceSilentSocket`).
+   * @param failure - carrier failure every active logical stream observes.
+   * @param closeReason - WebSocket close reason (diagnostic; the lane and the
+   *   escalation keep their own so the wire trace still names the caller).
+   */
+  private replaceSocket(failure: RemoteStreamCarrierError, closeReason: string): void {
+    if (!this.running || this.disposed) return
     const pending = this.keepAlive
     this.revision++
-    // A lane-commanded restart starts from the base cadence: the reconnect below is
-    // the deliberate attempt, not a failure to back off from.
+    // A deliberate replacement starts from the base cadence: the reconnect below is
+    // the attempt, not a failure to back off from.
     this.maintainIntervalMs = REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS
     this.cancelCandidate?.(failure)
     const socket = this.socket
     if (socket !== undefined) {
       this.socket = undefined
+      this.socketFrames = 0
       this.failAll(failure)
-      socket.close(4000, 'reconnect requested')
+      socket.close(4000, closeReason)
     }
     if (pending === undefined) this.maintain()
     else void pending.then(() => { this.maintain() })
@@ -143,6 +184,9 @@ export class RemoteStreamMuxClient {
     let carrier: WebSocket | undefined
     let opened = false
     let terminal = false
+    // Set by the opening-item deadline below; read by the finally block. Declared
+    // before the try so an early throw can never hit its temporal dead zone.
+    let timedOut = false
     let opening: ReturnType<typeof setTimeout> | undefined
     const abort = (): void => { inbox.fail(signal.reason) }
     signal.addEventListener('abort', abort, { once: true })
@@ -162,7 +206,9 @@ export class RemoteStreamMuxClient {
         )
       }
       carrier = socket
+      const openingKey = streamOpeningKey(endpoint, payload)
       this.streams.set(streamId, inbox)
+      this.streamOpeningKeys.set(streamId, openingKey)
       this.send(socket, { type: 'open', streamId, endpoint, payload })
       opened = true
       // chamber patch: the Host MUST answer a stream open with its opening item
@@ -171,14 +217,41 @@ export class RemoteStreamMuxClient {
       // from a live-but-silent stream. Fail the INBOX (never the generation signal:
       // aborting it would settle the retry lane terminally) so the existing paced
       // reopen re-issues the stream, and the page fact/chip report the churn.
-      const openingKey = streamOpeningKey(endpoint, payload)
       const openingBudgetMs = remoteStreamOpeningTimeoutMs(this.openingTimeouts.get(openingKey) ?? 0)
+      // chamber patch (design 14 §D4, 2026-09): liveness baseline for the escalation
+      // below. `socketFrames` counts frames received on the CURRENT socket, so this
+      // subtraction answers exactly "did this socket deliver anything while this
+      // attempt's opening item was pending".
+      const framesAtSend = this.socketFrames
       opening = setTimeout(() => {
+        timedOut = true
         this.openingTimeouts.set(openingKey, (this.openingTimeouts.get(openingKey) ?? 0) + 1)
+        // Bounded (2026-09-21 review): this map held one entry per timed-out request
+        // and was cleared only by close(), so a page that timed out on many sessions
+        // grew it without a limit. Oldest-first eviction is enough — an evicted key
+        // merely starts its next attempt at the tight base budget.
+        if (this.openingTimeouts.size > OPENING_BUDGET_KEYS_MAX) {
+          const oldest = this.openingTimeouts.keys().next().value
+          if (oldest !== undefined) this.openingTimeouts.delete(oldest)
+        }
         this.forensics?.('opening-timeout', `${endpoint} waited ${String(openingBudgetMs)}ms`)
         inbox.fail(new RemoteStreamCarrierError(
           `api gateway: Remote stream ${JSON.stringify(endpoint)} delivered no opening item within ${String(openingBudgetMs)}ms`,
         ))
+        // Re-issuing is only a cure while the socket still delivers: a socket that
+        // stayed silent for the whole budget window must be REPLACED, or the widened
+        // retry budget (30 → 60 → 120 → 240 → 300 s) only makes the stall longer. Nothing
+        // else can see this state: the connection lane's readiness handshake already
+        // succeeded against the same socket, and a per-session rebuild re-issues on
+        // it as well. Guarded by identity + OPEN so a socket replaced in the same
+        // turn can never be judged with another socket's counter.
+        if (socket === this.socket && socket.readyState === WebSocket.OPEN
+          && shouldReplaceSilentSocket(this.socketFrames - framesAtSend)) {
+          this.forensics?.('socket-silent', `${endpoint} timed out with no frame delivered on the current socket`)
+          this.replaceSocket(new RemoteStreamCarrierError(
+            'api gateway: Remote stream socket delivered no frame while an opening item was pending',
+          ), 'silent socket replaced')
+        }
       }, openingBudgetMs)
       let awaitingOpeningItem = true
       while (true) {
@@ -204,6 +277,25 @@ export class RemoteStreamMuxClient {
       if (opening !== undefined) clearTimeout(opening)
       signal.removeEventListener('abort', abort)
       this.streams.delete(streamId)
+      const departedKey = this.streamOpeningKeys.get(streamId)
+      this.streamOpeningKeys.delete(streamId)
+      // A stream that ended WITHOUT an opening timeout left through its consumer (a
+      // rebuild, a dispose, a healthy end) — never through the retry lane. The next
+      // logical stream for that request is therefore a NEW episode and must start at
+      // the tight base budget: keeping a widening earned by the stream it replaced
+      // would make the auto/manual resync wait up to 300 s for its first frame
+      // (2026-09-21 review). The widening survives only while a live sibling still
+      // owns the same request key.
+      if (!timedOut && departedKey !== undefined) {
+        let shared = false
+        for (const key of this.streamOpeningKeys.values()) {
+          if (key === departedKey) {
+            shared = true
+            break
+          }
+        }
+        if (!shared) this.openingTimeouts.delete(departedKey)
+      }
       if (opened && !terminal && carrier?.readyState === WebSocket.OPEN) {
         this.send(carrier, { type: 'cancel', streamId })
       }
@@ -225,6 +317,8 @@ export class RemoteStreamMuxClient {
       for (const waiter of [...this.waiters]) waiter.reject(error)
       this.stopHealTimer()
       this.openingTimeouts.clear()
+      this.streamOpeningKeys.clear()
+      this.socketFrames = 0
       this.cancelCandidate?.(error)
       const socket = this.socket
       this.socket = undefined
@@ -278,6 +372,7 @@ export class RemoteStreamMuxClient {
         this.maintainIntervalMs = REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS
         this.stopHealTimer()
         this.socket = socket
+        this.socketFrames = 0
         for (const waiter of [...this.waiters]) waiter.resolve(socket)
         resolve(socket)
       }
@@ -361,6 +456,10 @@ export class RemoteStreamMuxClient {
     try {
       if (typeof data !== 'string') throw new Error('api gateway: Remote stream WebSocket requires text messages')
       const frame = parseRemoteStreamServerMessage(data)
+      // chamber patch: one liveness count per delivered frame — the silent-socket
+      // escalation keys on it (this socket answered SOMETHING while an open was
+      // pending), never on the frame's content.
+      this.socketFrames += 1
       this.streams.get(frame.streamId)?.push(frame)
     } catch (error) {
       const failure = new RemoteStreamCarrierError('api gateway: invalid Remote stream frame', { cause: error })
@@ -378,6 +477,7 @@ export class RemoteStreamMuxClient {
   ): void {
     if (this.socket !== socket) return
     this.socket = undefined
+    this.socketFrames = 0
     this.forensics?.('socket-lost', error.message)
     this.failAll(error)
     // chamber patch (2026-09 review): the connection lane's generation source is
@@ -387,7 +487,15 @@ export class RemoteStreamMuxClient {
     // here — and RE-SCHEDULE, because a single throttled attempt is not enough:
     // a socket that dies inside the interval, or a replacement connect that fails
     // before opening, would otherwise park the mux forever.
+    //
+    // Re-scheduled on the MICROTASK QUEUE as well (2026-09-21 review): a socket that
+    // opens and closes inside ONE task leaves `keepAlive` still set when the
+    // synchronous call below runs (its promise settles in a microtask), so that
+    // attempt returns and NOTHING is armed — no socket, no timer, no error — and every
+    // later `open()` parks on `waitForSocket`. The queued call either arms the missing
+    // timer or finds one already armed.
     this.scheduleMaintain()
+    queueMicrotask(() => { this.scheduleMaintain() })
   }
 
   /**

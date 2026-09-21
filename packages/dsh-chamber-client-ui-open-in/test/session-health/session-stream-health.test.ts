@@ -37,6 +37,7 @@ import {
   previousPresented,
   rememberPresented,
   resyncSessionStream,
+  sessionOpenInFlight,
   type SessionsConcreteLoose,
   type SessionsLoose,
 } from '../../src/client/session-stream-health-probe.ts'
@@ -235,43 +236,70 @@ test('stream-health: an error state the stage move must refuse arms the user res
   assert.equal(routed.action, 'heal')
 })
 
-test('stream-health: the resync lever is suppressed while the session ledger is cooling or spent', () => {
-  // Cooling: a lever (heal or resync) was executed a second ago.
+test('stream-health: the AUTOMATIC rebuild is suppressed while the ledger is cooling or spent, while the manual control stays offered', () => {
+  // The ledger gates the automatic arm only (2026-09-21): a session must never
+  // lose its manual exit, and a human click is not the storm the ledger bounds.
   const cooling: SessionStreamHealthState = { phase: 'loading-hold', since: T0 - L, lastHealAt: T0, healStamps: [T0] }
-  const coolingPlan = planAt(cooling, observe('loading', { resyncAvailable: true }), T0 + 1_000)
-  assert.equal(coolingPlan.action, 'none')
+  const parked = { resyncAvailable: true, openInFlight: false } as const
+  const coolingPlan = planAt(cooling, observe('loading', { ...parked }), T0 + 1_000)
+  assert.equal(coolingPlan.action, 'resync', 'cooling suppresses the automatic arm, not the control')
   assert.equal(coolingPlan.notice, 'loading-stall', 'suppression must not hide the stall notice')
   // Budget spent: three levers inside the window, none recent enough to hold
   // the cooldown on its own.
   const spent: SessionStreamHealthState = { phase: 'loading-hold', since: T0, healStamps: [T0, T0 + 1_000, T0 + 2_000] }
-  const spentPlan = planAt(spent, observe('loading', { resyncAvailable: true }), T0 + L)
-  assert.equal(spentPlan.action, 'none')
+  const spentPlan = planAt(spent, observe('loading', { ...parked }), T0 + L)
+  assert.equal(spentPlan.action, 'resync')
   assert.equal(spentPlan.notice, 'loading-stall')
-  // sessionStreamLeversAvailable is the one gate the plan and the seat's click
-  // both read.
   assert.equal(sessionStreamLeversAvailable(cooling, T0 + 1_000), false)
   assert.equal(sessionStreamLeversAvailable(spent, T0 + L), false)
   assert.equal(sessionStreamLeversAvailable(createSessionStreamHealthState(), T0), true)
-  // Once the rolling window releases a stamp the lever is armed again.
-  const released = planAt(spentPlan.state, observe('loading', { resyncAvailable: true }), T0 + W + 1)
-  assert.equal(released.action, 'resync')
+  // Once the rolling window releases a stamp the AUTOMATIC lever is armed again.
+  const released = planAt(spentPlan.state, observe('loading', { ...parked }), T0 + W + 1)
+  assert.equal(released.action, 'auto-resync')
   assert.equal(sessionStreamLeversAvailable(spent, T0 + W + 1), true)
 })
 
-test('stream-health: accounting a user resync keeps the control down for the cooldown', () => {
-  const hold = planAt(createSessionStreamHealthState(), observe('loading', { resyncAvailable: true }), T0)
-  const armed = planAt(hold.state, observe('loading', { resyncAvailable: true }), T0 + L)
-  assert.equal(armed.action, 'resync')
-  // The seat accounts the click exactly like an automatic heal.
-  const clickedAt = T0 + L
-  const afterClick = markSessionStreamHeal(armed.state, clickedAt)
-  const restarted = planAt(afterClick, observe('loading', { resyncAvailable: true }), clickedAt + 1_000)
-  assert.equal(restarted.action, 'none', 'the executed lever starts the cooldown immediately')
-  assert.equal(restarted.state.phase, 'loading-hold', 'the loading hold restarts on a fresh window')
-  const stillCooling = planAt(restarted.state, observe('loading', { resyncAvailable: true }), clickedAt + 1_000 + L)
-  assert.equal(stillCooling.action, 'none', 'a second click inside the cooldown must not be armed')
-  const again = planAt(stillCooling.state, observe('loading', { resyncAvailable: true }), clickedAt + C)
-  assert.equal(again.action, 'resync', 'the lever returns after the cooldown while the stall persists')
+test('stream-health: the automatic rebuild fires only on proven "no open in flight", and accounts like a heal', () => {
+  const parked = { resyncAvailable: true, openInFlight: false } as const
+  const hold = planAt(createSessionStreamHealthState(), observe('loading', { ...parked }), T0)
+  assert.equal(hold.action, 'none', 'the hold must age first, exactly like the stall notice')
+  const auto = planAt(hold.state, observe('loading', { ...parked }), T0 + L)
+  assert.equal(auto.action, 'auto-resync')
+  assert.equal(auto.notice, 'loading-stall')
+  // The seat accounts the automatic attempt exactly like an automatic heal: the
+  // phase leaves 'loading-hold', so the hold restarts on the next loading tick.
+  const afterAuto = markSessionStreamHeal(auto.state, T0 + L)
+  const restarted = planAt(afterAuto, observe('loading', { ...parked }), T0 + L + 1_000)
+  assert.equal(restarted.action, 'none', 'the hold restarts on a fresh window')
+  const cooling = planAt(restarted.state, observe('loading', { ...parked }), T0 + L + 1_000 + L)
+  assert.equal(cooling.action, 'resync', 'the automatic arm is in cooldown; the control is still offered')
+  const again = planAt(cooling.state, observe('loading', { ...parked }), T0 + L + 1_000 + C)
+  assert.equal(again.action, 'auto-resync', 'the automatic lever returns after the cooldown')
+  // An open that IS in flight is a slow Host being waited on: never automatic.
+  const flying = planAt(hold.state, observe('loading', { resyncAvailable: true, openInFlight: true }), T0 + L)
+  assert.equal(flying.action, 'resync', 'an in-flight open keeps its widened budget; only the user may interrupt it')
+  // Unknown evidence (a drifted face) fails closed the same way.
+  const unknown = planAt(hold.state, observe('loading', { resyncAvailable: true }), T0 + L)
+  assert.equal(unknown.action, 'resync')
+  // Without the concrete capability there is no automatic arm either.
+  const noFace = planAt(hold.state, observe('loading', { openInFlight: false }), T0 + L)
+  assert.equal(noFace.action, 'none')
+})
+
+test('stream-health: a loading dwell past the failure bound is announced as a failure, never as an endless load', () => {
+  const inFlight = { resyncAvailable: true, openInFlight: true } as const
+  let state = createSessionStreamHealthState()
+  const notices: Array<string | null> = []
+  for (let at = T0; at <= T0 + CONFIG.loadingFailedMs + 1_000; at += 1_000) {
+    const plan = planAt(state, observe('loading', { ...inFlight }), at)
+    state = plan.state
+    notices.push(plan.notice)
+  }
+  assert.equal(notices[0], null, 'the first frame is never announced')
+  assert.equal(notices[Math.floor(CONFIG.loadingStallMs / 1_000)], 'loading-stall')
+  assert.equal(notices[Math.floor(CONFIG.loadingFailedMs / 1_000)], 'loading-failed')
+  assert.equal(notices.at(-1), 'loading-failed', 'the failure label is latched for the rest of the dwell')
+  assert.equal(sessionStreamNoticeKey('loading-failed'), 'streamHealth.loadingFailed')
 })
 
 test('stream-health: the rolling window edge is exclusive, and releases exactly one stamp', () => {
@@ -698,6 +726,38 @@ test('stream-health: churn never overrides the error or loading arms', () => {
   const loadingHold = planAt(createSessionStreamHealthState(), observe('loading', { carrierChurn: churn }), T0)
   const loading = planAt(loadingHold.state, observe('loading', { carrierChurn: churn }), T0 + CONFIG.loadingStallMs)
   assert.equal(loading.notice, 'loading-stall', 'the stall arm owns the notice while the open state is loading')
+})
+
+test('stream-health: open liveness is tri-state, and only "nothing pending" is true evidence', () => {
+  const pending = Promise.resolve()
+  const concrete: SessionsConcreteLoose = {
+    list: { getSnapshot: () => ({ ids: ['a', 'b'], current: 'a' }) },
+    open: () => {},
+    resolve: id => (id === 'a' ? { session: { resync: () => {}, openPromise: pending } } : undefined),
+  }
+  assert.equal(sessionOpenInFlight(concrete, 'a'), true, 'a pending open is in flight')
+  const idle: SessionsConcreteLoose = { ...concrete, resolve: () => ({ session: { resync: () => {}, openPromise: null } }) }
+  assert.equal(sessionOpenInFlight(idle, 'a'), false, 'a null openPromise with the state on loading is the parked window')
+  // A missing member is UNKNOWN, never "nothing pending": a renamed field must not
+  // let the ladder destroy an open that is still in flight.
+  const drifted: SessionsConcreteLoose = { ...concrete, resolve: () => ({ session: { resync: () => {} } }) }
+  assert.equal(sessionOpenInFlight(drifted, 'a'), undefined)
+  // Not the current session, no concrete face, a hostile accessor: unknown.
+  const other: SessionsConcreteLoose = { ...concrete, resolve: () => ({ session: { openPromise: null } }) }
+  assert.equal(sessionOpenInFlight(other, 'b'), undefined)
+  assert.equal(sessionOpenInFlight(undefined, 'a'), undefined)
+  const noResolve: SessionsLoose = { list: { getSnapshot: () => ({ ids: ['a'], current: 'a' }) }, open: () => {} }
+  assert.equal(sessionOpenInFlight(noResolve, 'a'), undefined)
+  const hostile: SessionsConcreteLoose = {
+    ...concrete,
+    resolve: () => ({ session: new Proxy({}, { get: () => { throw new Error('hostile openPromise getter') } }) as never }),
+  }
+  assert.doesNotThrow(() => { assert.equal(sessionOpenInFlight(hostile, 'a'), undefined) })
+  // 2026-09-21 review: ONLY an exactly-null own member is positive evidence. An
+  // empty slot is UNKNOWN and must fail closed, or a renamed slot would let the
+  // automatic arm rebuild an in-flight open.
+  const undefinedMember: SessionsConcreteLoose = { ...concrete, resolve: () => ({ session: { openPromise: undefined } }) }
+  assert.equal(sessionOpenInFlight(undefinedMember, 'a'), undefined)
 })
 
 test('stream-health: surface presentation is the official chat column on a visible page', () => {

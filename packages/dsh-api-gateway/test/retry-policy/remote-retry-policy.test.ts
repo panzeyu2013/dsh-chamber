@@ -17,6 +17,7 @@ import {
   remoteStreamOpeningTimeoutMs,
   remoteStreamRetryDelayMs,
   REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,
+  shouldReplaceSilentSocket,
   streamOpeningKey,
 } from '../../src/client/remote-retry-policy.ts'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -85,7 +86,9 @@ test('the opening-item budget starts tight and widens only while timeouts stay c
   assert.equal(REMOTE_STREAM_OPENING_TIMEOUT_MS, 30_000)
   assert.equal(remoteStreamOpeningTimeoutMs(0), REMOTE_STREAM_OPENING_TIMEOUT_MS)
   assert.equal(remoteStreamOpeningTimeoutMs(1), 60_000)
-  assert.equal(remoteStreamOpeningTimeoutMs(2), REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS)
+  assert.equal(remoteStreamOpeningTimeoutMs(2), 120_000)
+  assert.equal(remoteStreamOpeningTimeoutMs(3), 240_000)
+  assert.equal(remoteStreamOpeningTimeoutMs(4), REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS)
   assert.equal(remoteStreamOpeningTimeoutMs(9), REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS)
 })
 
@@ -106,7 +109,9 @@ test('the opening budget clears the measured healthy Host answer by orders of ma
   // session snapshot 57 ms, subagent snapshot 73 ms. The base must be far above
   // those while remaining a bound a user would still call "stuck for a moment".
   assert.ok(REMOTE_STREAM_OPENING_TIMEOUT_MS >= 10_000)
-  assert.ok(REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS <= 300_000)
+  assert.ok(REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS >= 240_000,
+    'the ceiling is the widest single Host load the retry ladder can ever complete')
+  assert.ok(REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS <= 600_000)
 })
 
 test('the opening episode key is stable per stream and separates endpoints and payloads', () => {
@@ -132,5 +137,21 @@ test('the mux self-heal throttle stays a second-scale bound', () => {
 test('degenerate opening streaks fail safe to the base budget', () => {
   for (const streak of [-1, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
     assert.equal(remoteStreamOpeningTimeoutMs(streak), REMOTE_STREAM_OPENING_TIMEOUT_MS, String(streak))
+  }
+})
+
+test('a socket that delivered nothing across the opening window must be replaced', () => {
+  // A healthy socket answers every open (measured ~25 ms through the proxy), so a
+  // socket that produced ZERO frames through a ≥30 s window while an open was
+  // pending is dead, not slow: re-issuing on it can never succeed and the widened
+  // budget only makes the stall longer.
+  assert.equal(shouldReplaceSilentSocket(0), true)
+  assert.equal(shouldReplaceSilentSocket(1), false)
+  assert.equal(shouldReplaceSilentSocket(37), false)
+})
+
+test('an unknown frame baseline never churns the carrier', () => {
+  for (const frames of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+    assert.equal(shouldReplaceSilentSocket(frames), false, String(frames))
   }
 })

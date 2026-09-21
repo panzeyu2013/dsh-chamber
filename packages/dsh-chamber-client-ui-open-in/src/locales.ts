@@ -19,6 +19,8 @@ export const zh = {
   'streamHealth.healing': '正在恢复对话…',
   /** The official open state has been `loading` past its stall threshold. */
   'streamHealth.loadingStall': '对话载入停滞',
+  /** The `loading` dwell outlived every recovery attempt: content could not be loaded yet. */
+  'streamHealth.loadingFailed': '会话内容未载入',
   /** No automatic repair is running (out of levers, or no stage route): the chip offers the manual ones. */
   'streamHealth.healFailed': '对话通道未恢复',
   'streamHealth.carrierChurn': '对话流正在重新连接…',
@@ -87,6 +89,8 @@ export const en: Record<OpenInKey, string> = {
   'streamHealth.healing': 'Recovering the conversation…',
   /** The official open state has been `loading` past its stall threshold. */
   'streamHealth.loadingStall': 'Conversation load stalled',
+  /** The `loading` dwell outlived every recovery attempt: content could not be loaded yet. */
+  'streamHealth.loadingFailed': 'Session content not loaded',
   /** No automatic repair is running (out of levers, or no stage route): the chip offers the manual ones. */
   'streamHealth.healFailed': 'Conversation stream not recovered',
   'streamHealth.carrierChurn': 'Conversation stream reconnecting…',

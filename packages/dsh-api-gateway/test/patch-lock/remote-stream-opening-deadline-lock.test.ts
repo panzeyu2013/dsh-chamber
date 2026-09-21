@@ -10,7 +10,10 @@
  *    forever with no error to retry on), and
  *  - leaving a logical stream without an opening-item deadline, which is what let
  *    a lost opening frame surface as a permanent `chat.loadingHistory` hint (the
- *    upstream chat view renders exactly that string when `openState === 'loading'`).
+ *    upstream chat view renders exactly that string when `openState === 'loading'`), and
+ *  - re-issuing the request on a socket that never delivers: the deadline alone
+ *    cannot cure a carrier the page still sees OPEN (an ssh tunnel / direct-http
+ *    leg whose FIN never arrived), so a silent socket must be REPLACED.
  */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
@@ -25,6 +28,14 @@ function openerBody(sourceText: string): string {
   const start = sourceText.indexOf('  async *open(')
   const end = sourceText.indexOf('  /**\n   * Permanently stop the carrier', start)
   assert.ok(start >= 0 && end > start, 'the logical-stream opener must be locatable')
+  return sourceText.slice(start, end)
+}
+
+/** The shared physical-socket replacement: from its signature to the opener's doc comment. */
+function replaceSocketBody(sourceText: string): string {
+  const start = sourceText.indexOf('  private replaceSocket(failure: RemoteStreamCarrierError, closeReason: string): void {')
+  const end = sourceText.indexOf('  /**\n   * Open one logical stream', start)
+  assert.ok(start >= 0 && end > start, 'replaceSocket() must be locatable')
   return sourceText.slice(start, end)
 }
 
@@ -52,14 +63,32 @@ test('a lane-commanded reconnect is marked and never widens the heal cadence', (
   assert.match(client, /class RemoteStreamReconnectRequest extends RemoteStreamCarrierError \{\}/u)
   const reconnect = (() => {
     const start = client.indexOf('  reconnect(): void {')
-    const end = client.indexOf('  /**\n   * Open one logical stream', start)
+    const end = client.indexOf('  /**\n   * chamber patch (design 14 §D4, 2026-09): throw the CURRENT physical socket away', start)
     assert.ok(start >= 0 && end > start, 'reconnect() must be locatable')
     return client.slice(start, end)
   })()
   assert.match(reconnect, /new RemoteStreamReconnectRequest\('api gateway: Remote stream reconnect requested'\)/u)
-  assert.match(reconnect, /this\.maintainIntervalMs = REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS/u, 'the lane restart starts from the base cadence')
+  assert.match(reconnect, /this\.replaceSocket\(/u, 'a lane restart goes through the one replacement teardown')
+  const replacement = replaceSocketBody(client)
+  assert.match(replacement, /this\.maintainIntervalMs = REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS/u, 'a deliberate replacement starts from the base cadence')
+  assert.match(replacement, /if \(pending === undefined\) this\.maintain\(\)/u, 'a replacement must always re-attempt, never park')
   assert.match(client, /if \(!\(error instanceof RemoteStreamReconnectRequest\)\) \{/u, 'only genuine failures may widen')
   assert.match(client, /'socket-attempt-failed'/u, 'a failed attempt must leave one bounded fact')
+})
+
+test('an opening timeout on a SILENT socket escalates to replacing the socket', () => {
+  const body = openerBody(client)
+  assert.match(body, /const framesAtSend = this\.socketFrames/u, 'each attempt captures its own liveness baseline')
+  assert.match(body, /shouldReplaceSilentSocket\(this\.socketFrames - framesAtSend\)/u)
+  assert.match(body, /socket === this\.socket && socket\.readyState === WebSocket\.OPEN/u, 'the escalation is judged on the socket this attempt sent on')
+  assert.match(body, /this\.replaceSocket\(/u)
+  const replacement = replaceSocketBody(client)
+  assert.match(replacement, /this\.failAll\(failure\)/u, 'every logical stream must reach its retry lane')
+  assert.match(replacement, /socket\.close\(/u, 'the dead socket must actually go away')
+  assert.match(replacement, /this\.maintain\(\)/u, 'the replacement must be attempted at once')
+  assert.match(client, /this\.forensics\?\.\('socket-silent'/u, 'the escalation leaves one bounded fact')
+  assert.match(client, /this\.socketFrames \+= 1/u, 'the counter advances only on a delivered frame')
+  assert.match(policy, /export function shouldReplaceSilentSocket\(framesReceivedSinceSend: number\): boolean/u)
 })
 
 test('the WebSocket handshake itself is bounded and every settle path disarms it', () => {
@@ -118,9 +147,9 @@ test('the opening budget stays a pure, import-free policy decision', () => {
   assert.doesNotMatch(policy, /^import /mu)
   assert.match(policy, /export function remoteStreamOpeningTimeoutMs\(streak: number\): number/u)
   assert.match(policy, /export const REMOTE_STREAM_OPENING_TIMEOUT_MS = 30_000/u)
-  assert.match(policy, /export const REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS = 120_000/u)
+  assert.match(policy, /export const REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS = 300_000/u)
   assert.match(
     client,
-    /import \{\s*\n\s*REMOTE_STREAM_HANDSHAKE_TIMEOUT_MS,\s*\n\s*REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS,\s*\n\s*REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,\s*\n\s*remoteStreamOpeningTimeoutMs,\s*\n\s*streamOpeningKey,\s*\n\} from '\.\/remote-retry-policy\.ts'/u,
+    /import \{\s*\n\s*REMOTE_STREAM_HANDSHAKE_TIMEOUT_MS,\s*\n\s*REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS,\s*\n\s*REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,\s*\n\s*remoteStreamOpeningTimeoutMs,\s*\n\s*shouldReplaceSilentSocket,\s*\n\s*streamOpeningKey,\s*\n\} from '\.\/remote-retry-policy\.ts'/u,
   )
 })

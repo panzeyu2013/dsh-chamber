@@ -31,8 +31,20 @@
  *    event stream and `open()` again — exactly the re-subscribe a parked
  *    `'loading'` open needs, and the one thing the stage move cannot do for it.
  *    It is NOT on the contract, so the probe reaches it through a guarded
- *    structural slice (`session-stream-health-probe.ts`) and this module only
- *    ARMS it: the user clicks the control, the ladder never executes it itself.
+ *    structural slice (`session-stream-health-probe.ts`).
+ *
+ *  - the SAME per-session rebuild also has an EVIDENCE-GATED AUTOMATIC arm
+ *    (2026-09-21, user ruling "entering a session must converge, never a silent
+ *    spinner"): when the concrete face reports NO OPEN IN FLIGHT (`openPromise`
+ *    null while `openState === 'loading'`), nothing is being waited on — and the
+ *    pinned `doOpen()` can settle there with NO retry trigger at all (its
+ *    generation moved mid-open, or it rethrew a non-RemoteFailure, while
+ *    `followCurrent()` re-opens only on a stage move). Re-issuing is then the
+ *    only cure AND it interrupts nothing, so the ladder may request it itself,
+ *    bounded by the same per-session ledger. While an open IS in flight nothing
+ *    automatic touches it (a genuinely slow Host keeps its widened budget); the
+ *    user's control stays offered either way, because a human click is not the
+ *    storm the ledger exists to bound.
  *
  * That asymmetry is why this module has three arms:
  *
@@ -80,19 +92,19 @@
  * review; callers must not read "hidden never counts" as "hidden time never
  * decides").
  *
- * THE RESYNC ARM'S STORM BOUND (2026-12): the armed `resync` action rides the
- * SAME per-session ledger as the automatic heal — {@link
- * sessionStreamLeversAvailable} (cooldown + rolling budget), evaluated by the
- * plan before it arms the control and re-evaluated by the seat on the click.
- * The action is never executed by the plan, so a stall cannot rebuild the
- * stream once per tick, and a second click inside the cooldown is a no-op.
+ * THE RESYNC ARM'S STORM BOUND (2026-12, revised 2026-09-21): the plan ARMS the
+ * control; the seat's click is the only path that executes it, and the click is
+ * deliberately NOT ledger-gated (the ledger bounds the automatic arms, a human
+ * click is its own bound — see the seat's `resync` face). The plan therefore
+ * never rebuilds the stream once per tick; only spam-clicking the visible control
+ * can repeat the call, which the seat serializes (double-click guard).
  */
 
 /** Official session lifecycle state (`SessionSnapshot.openState`). */
 export type SessionOpenState = 'cold' | 'loading' | 'open' | 'error'
 
 /** What the seat can surface to the user (never an action taken for them). */
-export type SessionStreamNotice = 'loading-stall' | 'heal-failed' | 'carrier-churn'
+export type SessionStreamNotice = 'loading-stall' | 'loading-failed' | 'heal-failed' | 'carrier-churn'
 
 /** Ladder phase held across ticks (the only state that ages). */
 export type SessionStreamPhase = 'idle' | 'error-hold' | 'loading-hold' | 'healing'
@@ -129,6 +141,15 @@ export interface SessionStreamObservation {
    * is being reopened" signal (design 14 §D4).
    */
   readonly carrierChurn?: { readonly at: number; readonly count: number } | undefined
+  /**
+   * Whether the official open is STILL IN FLIGHT: the concrete `Session.openPromise`
+   * read by the probe's guarded slice (`true` while an open is pending, `false`
+   * when the state is `loading` with nothing pending, `undefined` when this build's
+   * face cannot say). Only `false` — positive evidence that no request is being
+   * waited on — unlocks the automatic rebuild; `undefined` fails closed exactly
+   * like a missing capability (2026-09-21).
+   */
+  readonly openInFlight?: boolean | undefined
 }
 
 /** Rolling state the seat keeps in a ref and hands back on the next tick. */
@@ -166,6 +187,12 @@ export interface SessionStreamHealthConfig {
   readonly errorGraceMs: number
   /** A `loading` state must hold this long before the reload notice appears. */
   readonly loadingStallMs: number
+  /**
+   * A `loading` dwell past this bound is announced as a FAILURE ("content not
+   * loaded"), never as an ongoing load: the user must not read an eternal
+   * spinner, and the recovery levers keep running underneath the notice.
+   */
+  readonly loadingFailedMs: number
   /** Quiet period after an executed heal before another one may fire. */
   readonly healCooldownMs: number
   /** Rolling window for {@link SessionStreamHealthConfig.healBudgetMax}. */
@@ -187,6 +214,7 @@ export interface SessionStreamHealthConfig {
 export const SESSION_STREAM_HEALTH_DEFAULTS: SessionStreamHealthConfig = {
   errorGraceMs: 8_000,
   loadingStallMs: 20_000,
+  loadingFailedMs: 90_000,
   healCooldownMs: 120_000,
   healBudgetWindowMs: 600_000,
   healBudgetMax: 3,
@@ -195,11 +223,15 @@ export const SESSION_STREAM_HEALTH_DEFAULTS: SessionStreamHealthConfig = {
 }
 
 /**
- * What the plan asks of the seat this tick: `'heal'` is executed by the seat
- * IMMEDIATELY; `'resync'` only ARMS the user control (the click is the sole
- * invocation — a stall never rebuilds the stream on its own).
+ * What the plan asks of the seat this tick.
+ *
+ * - `'heal'` (stage move) and `'auto-resync'` (per-session rebuild) are executed
+ *   by the seat IMMEDIATELY and accounted against the session's ledger;
+ * - `'resync'` only ARMS the user control — the click is that path's sole
+ *   invocation, and it is never gated by the ledger (the ledger bounds the
+ *   AUTOMATIC arm; a human click is its own bound).
  */
-export type SessionStreamHealthAction = 'none' | 'heal' | 'resync'
+export type SessionStreamHealthAction = 'none' | 'heal' | 'resync' | 'auto-resync'
 
 /** What the seat must DO this tick, and what it may SHOW. */
 export interface SessionStreamHealthPlan {
@@ -340,15 +372,23 @@ export function planSessionStreamHealth(
     // subagent selection) still has the concrete per-session resync, so ARM that
     // user control instead of degrading to a bare reload. Same ledger, and still
     // user-executed: the plan never calls it, only the chip's click does.
+    // NOT ledger-gated (2026-09-21 ruling, symmetric with the loading arm): the
+    // ledger bounds the AUTOMATIC arms; this control is executed by the user's
+    // click, so gating its visibility on a spent budget removed the only exit that
+    // keeps the page (an error state with no neighbour has no stage move either).
+    // `resyncAvailable` — the capability — still gates it.
     const resyncArmed = held >= config.errorGraceMs
       && observation.resyncAvailable === true
-      && sessionStreamLeversAvailable(state, now, config)
 
     // No usable lever (no neighbor and no resync face, budget spent, or cooling):
     // say so once the hold has clearly outlived a repair attempt — never on the
     // first frames, where an in-flight open can still resolve the state on its own.
+    // Without the resync face the only remaining exits are a stage move (needs a
+    // neighbour AND budget) and the full reload, so an exhausted budget or a
+    // missing neighbour is what makes the hold hopeless then.
     const hopeless = held >= config.errorGraceMs + config.healSettleMs
-      && (!inBudget || (!observation.neighborAvailable && observation.resyncAvailable !== true))
+      && observation.resyncAvailable !== true
+      && (!inBudget || !observation.neighborAvailable)
     return {
       state: {
         phase,
@@ -381,16 +421,19 @@ export function planSessionStreamHealth(
     // was already offered (the same rule `markSessionStreamHeal` states). The
     // latch rides along; a genuine stall keeps its own, more specific label.
     const latched = state.healFailedLatched === true
-    // The loading arm's own lever (2026-12): a concrete per-session `resync()`
-    // exists in the pinned controller, so a stall the stage move cannot touch is
-    // recoverable — but only BY THE USER. The plan ARMS the action (the chip
-    // renders the control); it never executes it, so a stall can never turn into
-    // an automatic retry storm. Arming is gated by the SAME per-session ledger
-    // the automatic heal spends (cooldown + rolling budget), so a session that
-    // just rebuilt its stream — or has exhausted its budget — is not offered it.
-    const armed = stalled
-      && observation.resyncAvailable === true
-      && sessionStreamLeversAvailable(state, now, config)
+    const levers = sessionStreamLeversAvailable(state, now, config)
+    // The AUTOMATIC arm (2026-09-21, user ruling): it needs BOTH the concrete
+    // capability and POSITIVE evidence that no open is in flight. `undefined` (a
+    // face that cannot say) and `true` (an open being awaited) both fail closed,
+    // so a slow-but-working Host is never interrupted; the same ledger as the
+    // stage move bounds the retries.
+    const auto = stalled && observation.resyncAvailable === true
+      && observation.openInFlight === false && levers
+    // The user's own control: offered while the stall holds and the concrete face
+    // exists. NOT gated by the ledger (see the action type) — the ledger bounds
+    // the automatic arm, and a human click must remain possible even after the
+    // automatic budget is spent, or the session would have no manual exit left.
+    const armed = stalled && !auto && observation.resyncAvailable === true
     return {
       state: {
         phase: 'loading-hold',
@@ -400,8 +443,13 @@ export function planSessionStreamHealth(
         ...(latched ? { healFailedLatched: true } : {}),
         ...(state.recoveredSinceHeal === undefined ? {} : { recoveredSinceHeal: state.recoveredSinceHeal }),
       },
-      action: armed ? 'resync' : 'none',
-      notice: stalled ? 'loading-stall' : (latched ? 'heal-failed' : null),
+      action: auto ? 'auto-resync' : armed ? 'resync' : 'none',
+      // A dwell that outlived every recovery attempt must read as a FAILURE, not
+      // as a load still in progress: "content not loaded" plus the actions. The
+      // latched heal-failed label still wins before the stall threshold.
+      notice: stalled
+        ? (now - since >= config.loadingFailedMs ? 'loading-failed' : 'loading-stall')
+        : (latched ? 'heal-failed' : null),
     }
   }
 
@@ -453,10 +501,22 @@ export function markSessionStreamHeal(state: SessionStreamHealthState, now: numb
 }
 
 /** The notice's own label key (the seat's single copy lookup). */
-export function sessionStreamNoticeKey(notice: SessionStreamNotice):
+type SessionStreamNoticeKey =
   | 'streamHealth.loadingStall'
+  | 'streamHealth.loadingFailed'
   | 'streamHealth.healFailed'
-  | 'streamHealth.carrierChurn' {
-  if (notice === 'loading-stall') return 'streamHealth.loadingStall'
-  return notice === 'carrier-churn' ? 'streamHealth.carrierChurn' : 'streamHealth.healFailed'
+  | 'streamHealth.carrierChurn'
+
+const SESSION_STREAM_NOTICE_KEYS: Record<SessionStreamNotice, SessionStreamNoticeKey> = {
+  'loading-stall': 'streamHealth.loadingStall',
+  'loading-failed': 'streamHealth.loadingFailed',
+  'heal-failed': 'streamHealth.healFailed',
+  'carrier-churn': 'streamHealth.carrierChurn',
+}
+
+export function sessionStreamNoticeKey(notice: SessionStreamNotice): SessionStreamNoticeKey {
+  // Total BY TYPE (2026-09-21 review): the old if-chain ended in a fallback, so a
+  // future notice member would silently render as 'heal-failed'. The Record above
+  // cannot be built with a member missing — the build fails instead.
+  return SESSION_STREAM_NOTICE_KEYS[notice]
 }

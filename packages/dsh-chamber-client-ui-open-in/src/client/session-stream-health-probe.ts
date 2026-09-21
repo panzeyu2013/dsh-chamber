@@ -1,9 +1,15 @@
 /**
- * The imperative half of the session stream-health ladder: the only three
- * effects the seat is allowed to perform — read the presented shape, move the
- * stage across a neighbor and back (an `'error'` session), and rebuild THIS
- * session's event stream through the concrete per-session `resync()` (a
- * parked `'loading'` open, and only ever from the user's own click).
+ * The imperative half of the session stream-health ladder: the effects the seat
+ * is allowed to perform — read the presented shape and the session's open
+ * LIVENESS, move the stage across a neighbor and back (an `'error'` session),
+ * and rebuild THIS session's event stream through the concrete per-session
+ * `resync()`.
+ *
+ * `resync()` has two entry points since 2026-09-21: the user's own click (always
+ * available while the stall holds) and the ladder's automatic arm, which may only
+ * fire on POSITIVE evidence that no open is in flight (see
+ * {@link sessionOpenInFlight}) — an in-flight open is a slow Host being waited on
+ * and is never interrupted.
  *
  * The vendor face is reached through the loose structural slice the chamber's
  * client plugins already use for per-entry facts (open-in's `chamberInstanceId`
@@ -90,6 +96,13 @@ export interface SessionsLoose {
 export interface SessionResyncLoose {
   /** Dispose the session's event stream and re-open it. */
   resync?(): unknown
+  /**
+   * The concrete in-flight-open promise: `null`/`undefined` while nothing is
+   * pending, the pending promise while `doOpen()` runs. Read ONLY through
+   * {@link sessionOpenInFlight}, which requires the member to exist so a renamed
+   * field degrades to "unknown" rather than to "nothing pending".
+   */
+  openPromise?: unknown
 }
 
 /**
@@ -198,7 +211,7 @@ export function healSessionStream(
  * must refuse). Every access is guarded; any drift yields undefined, which
  * callers read as "no lever".
  */
-function readSessionResyncFace(
+function readCurrentSession(
   sessions: SessionsLoose | undefined,
   sessionId: string,
 ): SessionResyncLoose | undefined {
@@ -210,10 +223,63 @@ function readSessionResyncFace(
     if (snapshot.current !== sessionId) return undefined
     const session = concrete.resolve(sessionId)?.session
     if (session === null || session === undefined || typeof session !== 'object') return undefined
-    // The property READ can throw on a hostile proxy, so the capability check
-    // lives inside this guard too (2026-09 review NIT: it used to escape).
+    return session
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * The concrete Session face of the CURRENT session, or undefined (guarded).
+ * The property RESYNC READ can throw on a hostile proxy, so the capability check
+ * lives inside the guard too (2026-09 review NIT: it used to escape).
+ */
+function readSessionResyncFace(
+  sessions: SessionsLoose | undefined,
+  sessionId: string,
+): SessionResyncLoose | undefined {
+  const session = readCurrentSession(sessions, sessionId)
+  if (session === undefined) return undefined
+  try {
     if (typeof session.resync !== 'function') return undefined
     return session
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Is the official open still in flight for the CURRENT session?
+ *
+ * - `true` — an open is pending (`openPromise` carries it): a slow Host may be
+ *   legitimately working, so nothing automatic may touch it;
+ * - `false` — the session reports `loading` with NOTHING pending: the pinned
+ *   `doOpen()` can settle there with no retry trigger at all, and re-issuing is
+ *   both the cure and free (nothing is being interrupted);
+ * - `undefined` — this build's face cannot say (no concrete slice, a missing
+ *   member, a hostile accessor): fail closed, exactly like a missing capability.
+ *
+ * The member MUST exist on the object for `false` to be reported: a build that
+ * renamed or removed `openPromise` degrades to "unknown", never to "nothing is
+ * pending" — the latter would let the ladder destroy an in-flight open.
+ *
+ * @param sessions - the instance's session face (loose slice), if any.
+ * @param sessionId - the session whose open liveness is read.
+ * @returns the tri-state liveness, never a throw.
+ */
+export function sessionOpenInFlight(sessions: SessionsLoose | undefined, sessionId: string): boolean | undefined {
+  const session = readCurrentSession(sessions, sessionId)
+  if (session === undefined) return undefined
+  try {
+    if (!Object.hasOwn(session, 'openPromise')) return undefined
+    const pending = session.openPromise
+    // ONLY an exactly-null own member is positive evidence of "nothing pending"
+    // (2026-09-21 review): an empty/undefined value is UNKNOWN and must fail closed,
+    // because the pinned vendor marks the empty slot with `null` — anything else
+    // (a renamed slot, a lazily initialized getter) cannot be read as "parked".
+    if (pending === null) return false
+    if (typeof pending === 'object' || typeof pending === 'function') return true
+    return undefined
   } catch {
     return undefined
   }
@@ -235,11 +301,11 @@ export function hasSessionStreamResync(sessions: SessionsLoose | undefined, targ
 /**
  * Rebuild one session's stream through the concrete vendor method.
  *
- * ONLY ever called from the user's own control — never from the ladder's plan,
- * so a stall cannot turn into an automatic retry (the seat re-checks the
- * session's cooldown/budget before calling this). `resync()` is async and may
- * reject; the promise is settled with a no-op catch because the chip has no
- * error channel and this package may not log.
+ * Called from the seat's automatic `'auto-resync'` arm (only after the plan
+ * proved no open is in flight and the ledger allowed it) and from the user's own
+ * control; the seat accounts each attempt against the per-session ledger.
+ * `resync()` is async and may reject; the promise is settled with a no-op catch
+ * because the chip has no error channel and this package may not log.
  *
  * @param sessions - the instance's session face (loose slice).
  * @param targetId - the session whose stream must be rebuilt.

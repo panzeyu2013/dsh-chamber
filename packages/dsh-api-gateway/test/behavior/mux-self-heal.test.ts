@@ -57,6 +57,11 @@ class FakeSocket {
     this.#dispatch('open')
   }
 
+  /** Test helper: the Host delivers one frame on this socket (any frame is liveness evidence). */
+  deliverNow(): void {
+    this.#dispatch('message', { type: 'message', data: JSON.stringify({ type: 'item', streamId: 'liveness', value: {} }) })
+  }
+
   /** Test helper: the socket dies after a successful handshake. */
   dieNow(): void {
     this.readyState = FakeSocket.CLOSED
@@ -70,8 +75,8 @@ class FakeSocket {
     this.#dispatch('close')
   }
 
-  #dispatch(type: string): void {
-    for (const listener of [...(this.#listeners.get(type) ?? [])]) listener({ type })
+  #dispatch(type: string, event: unknown = { type }): void {
+    for (const listener of [...(this.#listeners.get(type) ?? [])]) listener(event)
   }
 }
 
@@ -199,6 +204,67 @@ test('a synchronous socket construction failure still recovers', async () => {
   assert.doesNotThrow(() => { client.start() }, 'a construction failure must not escape the mux')
   assert.ok(await poll(() => attempts >= 2, 4_000), 'recovery must keep retrying after a construction failure')
   await client.close()
+})
+
+test('a silent socket is REPLACED when an opening item times out on it', async (t) => {
+  installFakeSocket()
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const facts: Array<{ kind: string; cause: string }> = []
+  const client = new RemoteStreamMuxClient('', (kind, cause) => { facts.push({ kind, cause }) })
+  client.start()
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 1)
+  FakeSocket.instances[0].openNow()
+  await flushMicrotasks()
+  const iterator = client.open('session/follow', { args: {} }, new AbortController().signal)
+  const pending = iterator.next()
+  await flushMicrotasks()
+  assert.equal(FakeSocket.instances.length, 1, 'no replacement happens before the deadline')
+  t.mock.timers.tick(30_000)
+  await assert.rejects(
+    pending,
+    (error: unknown) => error instanceof Error && error.name === 'RemoteStreamCarrierError',
+  )
+  // Re-issuing the request is only a cure while the socket still delivers: a socket
+  // that stayed silent through the whole window is dead, so the mux must drop it and
+  // start a fresh attempt (the old behaviour re-issued on the same socket forever,
+  // which is exactly the permanent chat.loadingHistory state).
+  assert.equal(FakeSocket.instances.length, 2, 'the silent socket must be replaced at once')
+  assert.equal(FakeSocket.instances[0].readyState, FakeSocket.CLOSED)
+  assert.deepEqual(facts.map(fact => fact.kind), ['opening-timeout', 'socket-silent'])
+  await client.close()
+  t.mock.timers.reset()
+})
+
+test('a socket that delivered a frame keeps the request retry instead of being replaced', async (t) => {
+  installFakeSocket()
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const client = new RemoteStreamMuxClient()
+  client.start()
+  await flushMicrotasks()
+  FakeSocket.instances[0].openNow()
+  await flushMicrotasks()
+  const iterator = client.open('session/follow', { args: {} }, new AbortController().signal)
+  const pending = iterator.next()
+  await flushMicrotasks()
+  assert.ok(
+    FakeSocket.instances[0].sent.some(frame => frame.includes('"type":"open"')),
+    'the open frame must reach the socket before its liveness is judged',
+  )
+  // The socket proves it is alive mid-window (any frame, addressed to any stream).
+  FakeSocket.instances[0].deliverNow()
+  t.mock.timers.tick(30_000)
+  await assert.rejects(
+    pending,
+    (error: unknown) => error instanceof Error && error.name === 'RemoteStreamCarrierError',
+  )
+  assert.equal(
+    FakeSocket.instances.length,
+    1,
+    'a live socket is retried (and keeps its widening) — a slow Host is never interrupted',
+  )
+  await client.close()
+  t.mock.timers.reset()
 })
 
 test('an unanswered stream open fails as a carrier error once the deadline fires', async (t) => {
