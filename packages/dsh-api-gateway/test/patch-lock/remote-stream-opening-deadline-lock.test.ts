@@ -42,10 +42,35 @@ test('the opener arms a first-item deadline through the pure policy and fails th
   assert.match(body, /const openingKey = streamOpeningKey\(endpoint, payload\)/u)
   assert.match(body, /remoteStreamOpeningTimeoutMs\(this\.openingTimeouts\.get\(openingKey\) \?\? 0\)/u)
   assert.match(body, /inbox\.fail\(new RemoteStreamCarrierError\(/u)
-  assert.match(body, /this\.openingTimeouts\.set\(openingKey, \(this\.openingTimeouts\.get\(openingKey\) \?\? 0\) \+ 1\)/u)
+  assert.match(body, /const streak = \(this\.openingTimeouts\.get\(openingKey\) \?\? 0\) \+ 1\s*\n\s*this\.openingTimeouts\.set\(openingKey, streak\)/u)
   assert.match(body, /this\.openingTimeouts\.delete\(openingKey\)/u, 'the first delivered frame (any type) resets that request widening')
   assert.match(body, /clearTimeout\(opening\)/u)
   assert.doesNotMatch(body, /generationAbort|AbortController/u, 'the deadline must not abort a generation signal')
+})
+
+test('an unanswered opening escalates from the retry lane to a PHYSICAL carrier rebuild', () => {
+  // Second investigation (2026-09-21): the deadline alone could never leave the
+  // state it detects. The retry lane above this module may only re-issue the same
+  // request on the same generation, so a carrier that stays OPEN while delivering
+  // nothing (silent socket, wedged generation source, stalled Host fiber) kept
+  // chat.loadingHistory forever. The escalation must stay wired to the deadline.
+  const body = openerBody(client)
+  assert.match(body, /if \(shouldEscalateOpeningStall\(streak, this\.lastOpeningEscalationAt, Date\.now\(\)\)\) \{/u)
+  assert.match(body, /this\.rebuildSilentCarrier\(endpoint, streak\)/u)
+  assert.match(client, /private rebuildSilentCarrier\(endpoint: string, streak: number\): void \{/u)
+  const rebuild = (() => {
+    const start = client.indexOf('  private rebuildSilentCarrier(')
+    const end = client.indexOf('  private failAll(', start)
+    assert.ok(start >= 0 && end > start, 'rebuildSilentCarrier() must be locatable')
+    return client.slice(start, end)
+  })()
+  assert.match(rebuild, /this\.socket = undefined/u, 'the rebuild must retire the current socket before failing its streams')
+  assert.match(rebuild, /this\.failAll\(new RemoteStreamCarrierError\(/u, 'every pending stream must fail as an ordinary carrier error')
+  assert.match(rebuild, /socket\.close\(4000, 'opening stall'\)/u)
+  assert.match(rebuild, /this\.scheduleMaintain\(\)/u, 'the replacement connect must go through the re-scheduling heal')
+  assert.match(rebuild, /'opening-stall-escalation'/u, 'the rebuild must leave one bounded fact')
+  assert.match(policy, /export const REMOTE_STREAM_OPENING_ESCALATION_STREAK = 2/u)
+  assert.match(policy, /export const REMOTE_STREAM_OPENING_ESCALATION_COOLDOWN_MS = 60_000/u)
 })
 
 test('a lane-commanded reconnect is marked and never widens the heal cadence', () => {
@@ -121,6 +146,6 @@ test('the opening budget stays a pure, import-free policy decision', () => {
   assert.match(policy, /export const REMOTE_STREAM_OPENING_TIMEOUT_MAX_MS = 120_000/u)
   assert.match(
     client,
-    /import \{\s*\n\s*REMOTE_STREAM_HANDSHAKE_TIMEOUT_MS,\s*\n\s*REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS,\s*\n\s*REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,\s*\n\s*remoteStreamOpeningTimeoutMs,\s*\n\s*streamOpeningKey,\s*\n\} from '\.\/remote-retry-policy\.ts'/u,
+    /import \{\s*\n\s*REMOTE_STREAM_HANDSHAKE_TIMEOUT_MS,\s*\n\s*REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS,\s*\n\s*REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,\s*\n\s*remoteStreamOpeningTimeoutMs,\s*\n\s*shouldEscalateOpeningStall,\s*\n\s*streamOpeningKey,\s*\n\} from '\.\/remote-retry-policy\.ts'/u,
   )
 })

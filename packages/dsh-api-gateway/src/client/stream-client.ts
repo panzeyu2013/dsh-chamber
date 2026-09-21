@@ -26,6 +26,7 @@ import {
   REMOTE_STREAM_MAINTAIN_MAX_INTERVAL_MS,
   REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS,
   remoteStreamOpeningTimeoutMs,
+  shouldEscalateOpeningStall,
   streamOpeningKey,
 } from './remote-retry-policy.ts'
 import type { StreamForensicsReporter } from './stream-forensics.ts'
@@ -71,6 +72,8 @@ export class RemoteStreamMuxClient {
   private readonly waiters = new Set<SocketWaiter>()
   /** chamber patch: consecutive opening-item timeouts per logical stream REQUEST (endpoint + payload digest; see remote-retry-policy.ts). */
   private readonly openingTimeouts = new Map<string, number>()
+  /** chamber patch (2026-09-21): when the physical carrier was last rebuilt because an opening item went unanswered (cooldown account). */
+  private lastOpeningEscalationAt: number | undefined
   /** chamber patch: when the mux itself last started a connect attempt (self-heal throttle). */
   private lastMaintainAt = 0
   /** chamber patch: current self-heal interval; doubles while attempts keep failing. */
@@ -174,11 +177,27 @@ export class RemoteStreamMuxClient {
       const openingKey = streamOpeningKey(endpoint, payload)
       const openingBudgetMs = remoteStreamOpeningTimeoutMs(this.openingTimeouts.get(openingKey) ?? 0)
       opening = setTimeout(() => {
-        this.openingTimeouts.set(openingKey, (this.openingTimeouts.get(openingKey) ?? 0) + 1)
+        const streak = (this.openingTimeouts.get(openingKey) ?? 0) + 1
+        this.openingTimeouts.set(openingKey, streak)
         this.forensics?.('opening-timeout', `${endpoint} waited ${String(openingBudgetMs)}ms`)
         inbox.fail(new RemoteStreamCarrierError(
           `api gateway: Remote stream ${JSON.stringify(endpoint)} delivered no opening item within ${String(openingBudgetMs)}ms`,
         ))
+        // chamber patch (design 14 §D4, 2026-09-21 second investigation): fail the
+        // inbox is only half the fix. The retry lane ABOVE this module can only
+        // re-issue the SAME request on the SAME physical generation, so a carrier
+        // that stays OPEN while never delivering (silently dead socket whose
+        // `readyState` never leaves OPEN, wedged `$events` generation, or a Host
+        // fiber that never answers `session/follow`) kept the retry lane
+        // re-sending into the same void — `chat.loadingHistory` forever, no error
+        // edge, and every existing heal arm (this deadline, the health chip,
+        // `Session.resync()`) inside that loop. Escalate the PHYSICAL carrier once
+        // this request's own streak reaches the bound: the rebuild fails every
+        // pending stream as an ordinary carrier error and reopens them on a fresh
+        // generation.
+        if (shouldEscalateOpeningStall(streak, this.lastOpeningEscalationAt, Date.now())) {
+          this.rebuildSilentCarrier(endpoint, streak)
+        }
       }, openingBudgetMs)
       let awaitingOpeningItem = true
       while (true) {
@@ -455,6 +474,39 @@ export class RemoteStreamMuxClient {
     void task.then(() => {
       if (this.keepAlive === task) this.keepAlive = undefined
     })
+  }
+
+  /**
+   * chamber patch (2026-09-21, design 14 §D4): rebuild the physical carrier
+   * after this request's opening item went unanswered for a whole (widened)
+   * budget more than once.
+   *
+   * Same shape as a lane-commanded reconnect: every pending logical stream is
+   * failed with an ordinary carrier error (so the domain retry lane reopens it),
+   * the replacement attempt starts from the base cadence, and the dead socket is
+   * closed with its own close code. The cooldown (inside
+   * {@link shouldEscalateOpeningStall}) bounds the churn when the fault is a
+   * stuck Host fiber for one request rather than the socket itself.
+   * @param endpoint - the logical endpoint whose opening item never arrived.
+   * @param streak - that request's consecutive opening-item timeouts.
+   */
+  private rebuildSilentCarrier(endpoint: string, streak: number): void {
+    const socket = this.socket
+    if (socket === undefined || socket.readyState !== WebSocket.OPEN) return
+    this.lastOpeningEscalationAt = Date.now()
+    this.forensics?.(
+      'opening-stall-escalation',
+      `${endpoint} unanswered ${String(streak)}x; rebuilding the physical carrier`,
+    )
+    this.socket = undefined
+    // A stall-triggered rebuild is a deliberate attempt, not a failure to back
+    // off from (mirrors reconnect()).
+    this.maintainIntervalMs = REMOTE_STREAM_MAINTAIN_MIN_INTERVAL_MS
+    this.failAll(new RemoteStreamCarrierError(
+      'api gateway: Remote stream carrier rebuilt after an unanswered opening item',
+    ))
+    socket.close(4000, 'opening stall')
+    this.scheduleMaintain()
   }
 
   private failAll(error: unknown): void {

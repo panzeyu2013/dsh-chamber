@@ -26,6 +26,7 @@ export type StreamForensicsKind =
   | 'socket-attempt-failed'
   | 'socket-disposed'
   | 'opening-timeout'
+  | 'opening-stall-escalation'
   | 'generation-ready'
   | 'generation-lost'
 
