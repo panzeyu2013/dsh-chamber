@@ -47,6 +47,8 @@ export const GROUPS = {
     { file: 'test/lifecycle/session-open-poll.test.ts', nodeArgs: ['--import', '../../scripts/dev/test-shell-register.mjs'] },
     'test/lifecycle/page-read-path-lockstep.test.ts',
     'test/lifecycle/source-readiness.test.ts',
+    // facts 行刷新提示的四拒 + 1s floor（2026-12 WS-C）。
+    'test/lifecycle/source-refresh-hint.test.ts',
     // P3 会话面绘制信号（[data-phase] 揭示门）的纯决策契约。
     'test/lifecycle/session-surface.test.ts',
     // 运行位活性守卫的决策纯模块契约（design 14 §D4）。
@@ -57,7 +59,30 @@ export const GROUPS = {
     'test/aggregate/aggregate-refresh.test.ts',
     'test/aggregate/aggregate-reconnect.test.ts',
     'test/aggregate/notification-edges.test.ts',
+    // 通知第二入口的水位去重（2026-12 WS-C：同一完成不重发、不同完成不互吞）。
+    'test/aggregate/notification-dedupe.test.ts',
     'test/aggregate/badge-count.test.ts',
+  ],
+  // session-state: gateway session-state 事实源 + 未读 v2 落盘 + 派生账本（2026-12 WS-C）
+  'session-state': [
+    // 粗分类/快照/增量/SSE 帧 + 与 control-plane 协议模块的源文本锁步。
+    'test/session-state/session-facts-source.test.ts',
+    // 未读 v2（键常量/清洗/v1 防御导入/单调 max/LRU/client id/ack/隐私白名单）。
+    'test/session-state/unread-store.test.ts',
+    // 派生投影行为（deriveUnread + 通道边沿机 + listComplete 唯一剪枝门）。
+    'test/session-state/unread-derivation.test.ts',
+    // I3/I4 仪器：徽标回读 + 通知决定账本（含「没有桥」这一次）与单组装点锁。
+    'test/session-state/notification-ledger.test.ts',
+    // W6：SSH/dsh 远端的无壳观察者（$events + 每边沿一次 session/follow）。
+    'test/session-state/source-mux-facts.test.ts',
+    // I8：预热命中率（attempt/hit/cancelled 的定义与计数 + 全局仪器）。
+    'test/session-state/prewarm-ledger.test.ts',
+    // R8「意图预热」：hover 意图 → 既有预热队列优先输入 + 计费（App 接线锁）。
+    'test/session-state/prewarm-intent-wiring.test.ts',
+    // W4「全部已读」：源级上界 + 单调提升（行为）+ App 接线锁。
+    'test/session-state/mark-all-read-wiring.test.ts',
+    // R19 生产端：probe 判定 → 侧栏档位（含陈旧不得说成 full + 跨包词汇锁）。
+    'test/session-state/session-facts-mode.test.ts',
   ],
   // session-intent: 会话打开/深链意图管线（路由激活、待发队列、App 意图门接线）
   'session-intent': [
@@ -71,12 +96,22 @@ export const GROUPS = {
     'test/wiring/session-liveness-wiring.test.ts',
     // 遮罩层叠不变量（P0 租客边界 / P1 遮罩期隐藏 / P2 过渡作用域 / P3 揭幕信号）。
     'test/wiring/veil-layering-invariants.test.ts',
+    // WS-C 桌面事实接线锁（派生账本 / stale / 双入口单横幅 / 阅读三谓词 / 行刷新）。
+    'test/wiring/session-facts-wiring.test.ts',
+    // W6：SSH/dsh 远端的无壳观察者接线（只读、同管线、随连接收敛）。
+    'test/wiring/source-mux-wiring.test.ts',
   ],
-  // view-runtime: 视图运行时 —— 隐藏视图回收、视图过渡队列、侧栏滚动恢复
+  // view-runtime: 视图运行时 —— 隐藏视图回收、视图过渡队列、侧栏滚动恢复、切源揭示
   'view-runtime': [
     'test/view-runtime/retention.test.ts',
     'test/view-runtime/view-transition.test.ts',
     'test/view-runtime/sidebar-scroll-sync.test.ts',
+    // W3 揭示门（选择/绘制分离 + 有界持有窗）：规则本体（稳态/不可挂载/settled/失败/到期/回拨）。
+    'test/view-runtime/reveal-gate.test.ts',
+    // W3 无白帧判据（三形态 + 温壳进度面 + INFO/严格档语义）；采集腿见 scripts/perf/switch-frame-probe.mjs。
+    'test/view-runtime/switch-frame-verdict.test.ts',
+    // W3 采集仪器：png-ink 解码自测 + 探针注入表达式/CLI 失败响亮（无 CDP 可跑的部分）。
+    'test/view-runtime/switch-frame-instruments.test.ts',
   ],
   // svg-resource: 文档级 SVG 资源 id 归属（N-ctx 失绘不变量，design 05 §4.2）
   'svg-resource': [

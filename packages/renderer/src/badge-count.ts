@@ -46,22 +46,39 @@ export interface BadgeSuppressionFacts {
 }
 
 /**
- * 跨来源求「完成未读」会话数：对每个来源的蓝点集里值为 true 的会话计数，
- * 但排除当前事实行仍有运行中子代理（runningSubagents > 0）的会话（06 §4.5
- * 与窗口内运行环压制/complete 通知抑制同规——子代理干活中的会话不是完成）。
- * 0 = 无未读（主进程清除徽标）。空集/缺来源/undefined 均安全返回 0
- * （纯投影对全域 total，任何调用点都不需要自行判空）。
+ * 跨来源求「完成未读」会话数——输入是 App 的**合并投影**，不是账本本身：
+ * 一个会话计入当且仅当 `completedBySource[source][session] === true`（chamber
+ * 边沿账本）**或** `runtimeFacts[source].sessions[session].completed === true`
+ * （vendor 自武装）。这与侧栏行尾蓝点/待办区的权威完全一致（`derive.ts` 的
+ * `mergeRuntimeFacts` 就是这两者的并集），因此不会再出现「点/待办有、徽标无」
+ * 的诚实分叉（plan §3.3-7 裁决 14）。
+ *
+ * 仍排除当前事实行 `runningSubagents > 0` 的会话（06 §4.5 与窗口内运行环压制、
+ * complete 通知抑制同规——子代理干活中的会话不是完成）。0 = 无未读（主进程清
+ * 除徽标）。空集/缺来源/undefined 均安全返回 0（纯投影对全域 total，任何调用点
+ * 都不需要自行判空）。
  */
 export function projectBadgeCount(
   completedBySource: Record<string, Record<string, boolean>> | undefined,
   runtimeFacts?: Record<string, BadgeSuppressionFacts | undefined>,
 ): number {
-  if (completedBySource === undefined) return 0
+  if (completedBySource === undefined && runtimeFacts === undefined) return 0
+  const sources = new Set<string>([
+    ...Object.keys(completedBySource ?? {}),
+    ...Object.keys(runtimeFacts ?? {}),
+  ])
   let count = 0
-  for (const [sourceId, sessions] of Object.entries(completedBySource)) {
+  for (const sourceId of sources) {
+    const ledger = completedBySource?.[sourceId]
     const facts = runtimeFacts?.[sourceId]
-    for (const [sessionId, armed] of Object.entries(sessions)) {
-      if (armed !== true) continue
+    const sessions = new Set<string>([
+      ...Object.keys(ledger ?? {}),
+      ...Object.keys(facts?.sessions ?? {}),
+    ])
+    for (const sessionId of sessions) {
+      const armed = ledger?.[sessionId] === true
+        || facts?.sessions?.[sessionId]?.completed === true
+      if (!armed) continue
       if ((facts?.sessions?.[sessionId]?.runningSubagents ?? 0) > 0) continue
       count += 1
     }

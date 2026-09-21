@@ -135,3 +135,31 @@ test('projectBadgeCount: an explicit zero runningSubagents row is NOT suppressed
   const explicitZero = { local: { sessions: { a: { runningSubagents: 0 } } } }
   assert.equal(projectBadgeCount(completed, explicitZero), 1)
 })
+
+// ---- 合并投影（plan §3.3-7 / 裁决 14）：vendor-only completed 必须计入，
+// 否则会出现「侧栏蓝点/待办有、Dock 徽标无」的诚实分叉（该分工从前登记为
+// 取舍，2026-12 收口为单一权威）。
+
+test('projectBadgeCount: a vendor-armed completion counts even with no ledger entry', () => {
+  const facts = { local: { sessions: { a: { running: false, completed: true } } } }
+  assert.equal(projectBadgeCount(undefined, facts), 1)
+  assert.equal(projectBadgeCount({}, facts), 1)
+})
+
+test('projectBadgeCount: the union never double-counts one session', () => {
+  const ledger = { local: { a: true } }
+  const facts = { local: { sessions: { a: { running: false, completed: true } } } }
+  assert.equal(projectBadgeCount(ledger, facts), 1)
+})
+
+test('projectBadgeCount: vendor-only rows obey the same subagent suppression', () => {
+  const facts = {
+    local: { sessions: { a: { completed: true, runningSubagents: 2 }, b: { completed: true } } },
+  }
+  assert.equal(projectBadgeCount({}, facts), 1, 'only b is a finished completion')
+})
+
+test('projectBadgeCount: an explicit false vendor flag does not arm', () => {
+  const facts = { local: { sessions: { a: { running: false, completed: false } } } }
+  assert.equal(projectBadgeCount({ local: {} }, facts), 0)
+})

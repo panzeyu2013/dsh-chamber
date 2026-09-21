@@ -21,6 +21,13 @@ export const PERF_MARKS = {
   appMount: 'dsh:app:mount',
   /** /health（或 SSE 健康流）首次报告本地实例 ready。 */
   appLocalReady: 'dsh:app:local-ready',
+  /** W3：一次来源切换意图被接受（selectView 提交选择）。带目标来源后缀；
+   *  与 appViewReveal 配对给出 switchFrameMs（scripts/perf/switch-frame-probe.mjs
+   *  消费；纯观测，零业务语义——注意它不是"首帧已绘制"的证明，只是 App 侧揭示时刻）。 */
+  appViewRequest: 'dsh:app:view-request',
+  /** W3：揭示门把 painted 收敛到目标的那一提交。带目标来源后缀；
+   *  与 appViewRequest 之差 = switchFrameMs（p95 是温壳档位的判据之一）。 */
+  appViewReveal: 'dsh:app:view-reveal',
   /** bootInstanceShell 入口（含排队等待）。 */
   shellBootStart: 'dsh:shell:boot-start',
   /** AppWebEntry 构造前：module system / host-graph / extra bundles 全部就绪。 */

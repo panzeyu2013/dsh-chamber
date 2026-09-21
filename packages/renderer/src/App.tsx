@@ -34,6 +34,8 @@ import {
   deriveArchivedSessions,
   deriveServerWorkspaces,
   emptyAggregate,
+  // R8 意图预热（blueprint §4）：纯策略函数，接线在下方 drainPrewarm / 订阅 effect。
+  emptyIntentPrewarmBudget,
   fetchInstanceSnapshot,
   fetchManagedRuntimeState,
   forgetPendingArchives,
@@ -42,15 +44,19 @@ import {
   getInstanceClient,
   getOpenIntentsSnapshot,
   instanceSnapshotSignature,
+  intentPrewarmAllowed,
+  intentPrewarmSpent,
   isInstanceUnavailable,
   managedRuntimeDown,
   managedRuntimeUnusable,
   mergeRuntimeFacts,
+  prioritizePrewarmSource,
   projectableCurrent,
   reconcilePendingArchives,
   reconcilePendingSessions,
   reconcilePendingWorkspaces,
   recordPendingArchive,
+  deriveUnread,
   recordPendingSession,
   recordPendingWorkspace,
   releaseInstanceClient,
@@ -74,15 +80,41 @@ import {
   withWorkspaceEcho,
   type ChamberServerAggregate,
   type InstanceAggregate,
+  type IntentPrewarmBudget,
   type InstanceRuntimeReport,
   type InstanceSnapshot,
   type PluginGraphDiagnostic,
+  type RuntimeFactsOverlay,
   type SessionArchiveLedger,
   type SessionEchoLedger,
   type WorkspaceEchoLedger,
 } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import { detectNotificationEdges, dedupeCompleteEdges, type SessionFacts } from './notification-edges.ts'
 import { projectBadgeCount } from './badge-count.ts'
+// I3/I4 仪器（plan §10）：徽标回读与通知决定账本（只读、有界、发布为函数视图）。
+import { notificationLedger, publishBadgeCount, publishNotificationInstrument } from './notification-ledger.ts'
+// I8：预热命中率仪表（attempt/hit/cancelled）。
+import { recordPrewarm } from './prewarm-ledger.ts'
+// WS-C（2026-12 facts wiring）：gateway session-state 只读事实源 + 未读 v2 落盘
+// + 派生投影 + 通知第二入口 + 行刷新提示。全部浏览器安全、无 Node import。
+import { createSessionFactsSource, type SessionFactsSnapshot, type SessionFactsSource } from './session-facts-source.ts'
+// W6：SSH/dsh 远端的无壳观察者（实例自己的远程协议，经控制面实例代理）。
+import { createSourceMuxFacts } from './source-mux-facts.ts'
+// R19 生产端：probe 判定 → 侧栏档位（无快照即缺席 = 未知）。
+import { sourceSessionFactsMode } from './session-facts-mode.ts'
+import {
+  advanceReadMark,
+  browserUnreadStorage,
+  loadClientInstallId,
+  loadUnread,
+  maxWatermark,
+  mergeReadMarks,
+  saveUnread,
+  type UnreadStorageLike,
+} from './unread-store.ts'
+import { deriveSourceUnread, viewingReadWatermark } from './unread-derivation.ts'
+import { completionWatermark, nextNotifiedWatermark, shouldNotifyWatermark } from './notification-dedupe.ts'
+import { shouldDispatchRefreshHint } from './source-refresh-hint.ts'
 import {
   acknowledgeRendererDelivery,
   authoritativeSourceRetirements,
@@ -135,6 +167,8 @@ import { forgetDegradedRetry, planDegradedRetries } from './degraded-retry.ts'
 import { bootGapNotice, toServerBootGap } from './boot-gap.ts'
 import { setPageActiveSource } from './page-language.ts'
 import { runViewTransition, type PaintIntent } from './view-transition.ts'
+// W3 揭示门（纯叶子，node 直测）：持有窗/立即揭示的全部规则都在那里，本文件只做接线。
+import { revealHoldRemainingMs, revealHoldStartedAt, shouldReveal } from './reveal-gate.ts'
 import { captureSidebarScrollAnchor, restoreSidebarScroll } from './sidebar-scroll-sync.ts'
 import {
   AggregateRefreshQueue,
@@ -273,6 +307,18 @@ type NotificationOpenDelivery = RendererDeliveryCoordinates & {
   sessionId: string
 }
 /**
+ * 通知组装请求（唯一组装点 emitSessionNotification 的入参，2026-12 facts wiring）：
+ * origin 只是诊断（两个事实入口：壳通道边沿 / watcher 完成边沿）；watermark 是
+ * host 域内容水位，进 renderer 身份键（主进程 claim 键的第五元组）。
+ */
+type SessionNotificationRequest = {
+  sourceId: string
+  sourceFingerprint: string
+  sessionId: string
+  kind: 'complete' | 'ask' | 'request'
+  watermark?: number
+}
+/**
  * 实例可被聚合轮询：对齐反代契约（03 §3.3）——只有 `ready` 才放行，否则
  * 显式 503。starting/degraded/connecting 期间轮询只会收获 503，故一律按
  * 未连接呈现（分组头 + 相位文本，不轮询、无错误刷屏）。
@@ -329,6 +375,42 @@ function collectReadySourceIds(
  *  channel was removed — host.describe was deleted upstream). */
 type HostFacts = { dshVersion?: string }
 
+/** 同形布尔表比较（账本 identity 闸；避免无变化时换 state 对象）。 */
+function sameBooleanLedger(left: Record<string, boolean>, right: Record<string, boolean>): boolean {
+  const leftKeys = Object.keys(left)
+  const rightKeys = Object.keys(right)
+  if (leftKeys.length !== rightKeys.length) return false
+  for (const key of leftKeys) {
+    if ((left[key] === true) !== (right[key] === true)) return false
+  }
+  return true
+}
+
+/**
+ * facts 行 → 侧栏渲染字段 overlay（2026-12 facts wiring，主计划 §3.3-1）：
+ * 只过**渲染字段**（pending / runningSubagents），判定字段（updatedAt /
+ * completedAt / lastTurnEnd）刻意不过桥（derive.ts 的反 churn 纪律）。
+ * 只有 verdict ok 且 serviceable 的未读事实才参与——forward-skew / 停机 /
+ * legacy 一律返回 undefined，回到 channel-only（不静默假装有事实）。
+ */
+function factsOverlay(snapshot: SessionFactsSnapshot | undefined): RuntimeFactsOverlay | undefined {
+  if (snapshot === undefined || snapshot.verdict !== 'ok' || snapshot.serviceable === false) return undefined
+  const overlay: Record<string, { pending?: 'approval' | 'plan-review' | 'question'; runningSubagents?: number; factAt?: number }> = {}
+  for (const row of Object.values(snapshot.rows)) {
+    const pending = row.pendingKind === 'approval'
+      ? 'approval' as const
+      : row.pendingKind === 'question' ? 'question' as const : undefined
+    // I5：factAt 也是渲染字段（这一行有多新），因此只带它的行同样要过桥。
+    if (pending === undefined && row.subagentCount <= 0 && !(row.factAt > 0)) continue
+    overlay[row.sessionId] = {
+      ...(pending !== undefined ? { pending } : {}),
+      ...(row.subagentCount > 0 ? { runningSubagents: row.subagentCount } : {}),
+      ...(row.factAt > 0 ? { factAt: row.factAt } : {}),
+    }
+  }
+  return Object.keys(overlay).length > 0 ? overlay : undefined
+}
+
 function deriveServers(
   health: HealthResponse | null,
   connections: ConnectionSummary[] | null,
@@ -357,6 +439,11 @@ function deriveServers(
   // frame copy (the connection row may carry no label), so it comes from the
   // frame's dictionary in the locale the frame renders in.
   locale: FrameLocale,
+  // 2026-12 facts wiring：gateway session-state 只读事实（判定输入 + 渲染
+  // overlay 的来源；判定输入不过桥，见 factsOverlay）。刻意追加在参数表末尾：
+  // 既有接线锁按 completedBySource/paintedView/pluginDiagnostics 的文本锚点
+  // 钉 current 投影（veil-layering-invariants.test.ts），不重排既有参数。
+  sessionFacts: Record<string, SessionFactsSnapshot | undefined>,
 ): ChamberServerAggregate[] {
   const servers: ChamberServerAggregate[] = []
   const now = Date.now()
@@ -472,15 +559,33 @@ function deriveServers(
       aggregateReady: aggregate !== undefined && aggregate.state === 'ok',
       updatedAt: now,
     }
-    // 运行时事实只在 connected 时附加（断连态不应携带事实，避免死状态翻转）。
-    // App 自持的完成未读点（completedBySource）与通道上报并集：蓝点以 App
-    // 派生的 running→idle 边沿为准（它无视后台来源 shell 的陈旧 selected），
+    // 运行时事实附加闸（2026-12 facts wiring / R14）：connected 仍是主闸，
+    // 但**未读事实与 facts overlay 破例**——断连来源仍附只读事实并标
+    // stale:true，消费者（todo-attention）按 stale 出「离线未读」条目；没有
+    // 事实时两条参数调用的结果与改动前逐字节一致（mergeRuntimeFacts 兼容锁）。
+    // App 自持的完成未读点（completedBySource）与通道上报并集：蓝点以派生
+    // 投影为准（deriveSourceUnread；它无视后台来源 shell 的陈旧 selected），
     // vendor 的 completed 作兜底保留。合并为纯函数 mergeRuntimeFacts（shared/
     // derive.ts，单测覆盖）。
+    // R19 能力一览（plan W4）：把该来源事实的 probe 判定投影进聚合条目。无快照时
+    // 保持缺席（侧栏把缺席读作未知；臆造 full 会让能力说明在未知状态下撒谎）。
+    // 位置纪律：必须在 entry 字面量**之后**（否则 TDZ 直接抛）。
+    const factsMode = sourceSessionFactsMode(sessionFacts[id])
+    if (factsMode !== undefined) entry.sessionFacts = factsMode
     if (connected) {
       const dshVersion = hostFacts[id]?.dshVersion
       if (dshVersion !== undefined) entry.dshVersion = dshVersion
-      const merged = mergeRuntimeFacts(runtimeFacts[id], completedBySource[id])
+    }
+    const overlay = factsOverlay(sessionFacts[id])
+    const sourceLedger = completedBySource[id]
+    const hasLedger = sourceLedger !== undefined && Object.values(sourceLedger).some(value => value === true)
+    if (connected || hasLedger || overlay !== undefined) {
+      const merged = mergeRuntimeFacts(
+        runtimeFacts[id],
+        sourceLedger,
+        overlay,
+        connected ? undefined : true,
+      )
       if (merged !== undefined) entry.runtime = merged
     }
     if (aggregate !== undefined && aggregate.state === 'error') {
@@ -568,6 +673,18 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, Error
   }
 }
 
+/**
+ * 单调时基（W3 揭示门；照 InstanceView.tsx:65-75 的既有理由与实现）：持有窗只做差值
+ * 比较，绝不能受墙钟步进影响——NTP 校时/休眠唤醒把 `Date.now()` 拉回 10 分钟，会让
+ * "已持有 1s"的算术算出负 elapsed，一次性到期定时器就可能不再重臂。`performance.now()`
+ * 在渲染器里恒在，缺失时退回墙钟（测试/异常环境）。
+ */
+function monotonicNow(): number {
+  return typeof performance !== 'undefined' && typeof performance.now === 'function'
+    ? performance.now()
+    : Date.now()
+}
+
 export default function App() {
   // T16 (2026-09-11 upstream-alignment): the frame owns no `t` seat, so it
   // renders its own copy from the typed dictionary in locales.ts, in the locale
@@ -648,6 +765,22 @@ export default function App() {
   // 重开走冷 boot + entry 重放——见 reclaimView）。会话保活由实例侧承担，
   // UI 壳不再无限常驻。
   const [activeView, setActiveView] = useState<string>(LOCAL_INSTANCE_ID)
+  /**
+   * W3 延迟揭示（2026-12）：**屏上真正可见的那个视图**。与 activeView（选择）
+   * 分离——点击只改选择，painted 由下方揭示 effect 在「目标首帧可用」时经既有
+   * 'view' 过渡键收敛。为什么必须分离（事实）：`view-transition.ts:6-11` 的语义是
+   * "新状态渲染就绪后动画才开始"，冷 boot 的"新状态首帧"就是遮罩本身——VT 单独
+   * 做不到"boot 期保持旧视图"。两者相等 = 稳态；不等 = 一次在途揭示（至多一个）。
+   * 判定规则见纯叶子 `reveal-gate.ts`（node 直测）。
+   *
+   * 驱动面（只有这些消费者读 painted，其余一律读选择语义的 activeView）：
+   * `InstanceView active=`（可见性）、hover 卡关闭、保留回收的"展示中"保护、
+   * `deriveServers.projectableCurrent`（侧栏高亮跟随屏上来源）、hiddenSince 起表。
+   * **阅读/蓝点武装（:4044/:4075/:4093-4107）也应当读 painted**——本轮的 App.tsx
+   * 写权限冻结在 runtime-facts handler 与 completedBySource 账本之外，那三处留给
+   * 接管这两个区域的 WS-C 按同一条语义替换。
+   */
+  const [paintedView, setPaintedView] = useState<string>(LOCAL_INSTANCE_ID)
   const [mountedViews, setMountedViews] = useState<string[]>([LOCAL_INSTANCE_ID])
   // Views mounted only by background prewarm. User selection removes the id
   // from this set, freeing one of the idle-prewarm slots while keeping
@@ -677,11 +810,12 @@ export default function App() {
   // handleShellState / onInstanceSnapshot 是 [] 依赖的回调——它们只能经此
   // 拿到最新闭包（同 reclaimHiddenViewsRef 纪律）。
   const reclaimViewRef = useRef<(id: string, reason?: 'retention' | 'harvest') => void>(() => undefined)
-  // 保留策略计时：每视图"连续隐藏"起点（ms epoch；活动视图无键）。settle
-  // 完成或切走时置 now，重新选中删除，随 mountedViews 收敛清理（回收 effect
-  // 内统一处理）。previousActiveViewRef 供 activeView 落地 effect 对比。
+  // 保留策略计时：每视图"连续隐藏"起点（ms epoch；**屏上视图无键**）。settle
+  // 完成或离开屏时置 now，重新画上屏删除，随 mountedViews 收敛清理（回收 effect
+  // 内统一处理）。previousActiveViewRef 供 paintedView 落地 effect 对比
+  // （W3：起表/清表都按 painted——活跃判定 activeView 会让持有窗内的屏上壳被计时）。
   const hiddenSinceRef = useRef<Record<string, number>>({})
-  const previousActiveViewRef = useRef<string | null>(activeView)
+  const previousActiveViewRef = useRef<string | null>(paintedView)
   // chamber (2026-08 失败呈现修订, 05 §4)：每视图 shell 终态（InstanceView
   // 经 onStateChange 上报）——活动视图 boot 失败时由 App 渲染统一失败覆盖层
   // （失败报告 + 重试 + 服务器切换）。retryTokens 驱动 InstanceView 的重试
@@ -888,9 +1022,30 @@ export default function App() {
   // 与边沿记忆（prevRunningRef）。蓝点不依赖各来源 shell 的 selected——后台
   // 来源的陈旧 selected 会让 vendor 提醒错误压制「完成但未读」——而是由 App
   // 从上报里的实时 running 位自行推导 running→idle 边沿，以 App 已知的
-  // 「谁在阅读」（activeView + 各来源 current）判定武装/解除。插件侧保持
-  // 无状态（纯投影），避免在每 ctx 复制一套状态机。
-  const [completedBySource, setCompletedBySource] = useState<Record<string, Record<string, boolean>>>({})
+  // 「谁在阅读」（**屏上来源** paintedView + 各来源 current + 焦点）判定武装/解除。
+  // 插件侧保持无状态（纯投影），避免在每 ctx 复制一套状态机。
+  //
+  // 2026-12 facts wiring（主计划 §3.3-2 / R2）：completedBySource 不再是唯一
+  // 来源，而是 deriveSourceUnread 的**派生投影**；durable 回退账本
+  // （edgeLedgerRef）与读水位（readMarksRef）在首帧从 v2 落盘载入（此前仓内
+  // 未读零持久化），撤回/同代重挂/重启后由事实重算。v1 导入是防御性代码
+  // （HEAD 无写入者，见 unread-store.ts 头注）。
+  const [unreadBoot] = useState(() => {
+    const storage = browserUnreadStorage()
+    const payload = loadUnread(storage)
+    return { storage, payload }
+  })
+  const unreadStorageRef = useRef<UnreadStorageLike | undefined>(unreadBoot.storage)
+  const readMarksRef = useRef<Record<string, Record<string, number>>>(unreadBoot.payload.read)
+  const edgeLedgerRef = useRef<Record<string, Record<string, boolean>>>(unreadBoot.payload.edge)
+  const notifiedWatermarkRef = useRef<
+    Record<string, Record<string, Partial<Record<'complete' | 'ask' | 'request', number>>>>
+  >(unreadBoot.payload.notified)
+  const clientInstallIdRef = useRef('')
+  if (clientInstallIdRef.current === '') clientInstallIdRef.current = loadClientInstallId(unreadBoot.storage)
+  const [completedBySource, setCompletedBySource] = useState<Record<string, Record<string, boolean>>>(
+    () => ({ ...unreadBoot.payload.edge }),
+  )
   const prevRunningRef = useRef<Record<string, Record<string, boolean>>>({})
   // 通知边沿记忆（设计 19 §3.2）：每来源每会话的上一份事实快照，供
   // detectNotificationEdges 判定 running→idle / pending 武装边沿。与
@@ -903,12 +1058,41 @@ export default function App() {
   // complete 的会话集合——正被查看的会话完成先走 running 边沿，切走后 vendor
   // 延迟武装 completed 的重复边沿在此丢弃；会话重新 running 时清除。
   const notifiedCompleteRef = useRef<Record<string, Set<string>>>({})
+  // ── 2026-12 facts wiring：gateway session-state 事实 + 派生账本 + 行刷新 ──
+  /** 每来源 facts 快照（判定输入：completedAt/updatedAt/lastTurnEnd/pendingKind）。 */
+  const [sessionFacts, setSessionFacts] = useState<Record<string, SessionFactsSnapshot | undefined>>({})
+  /** 渲染期同步镜像（事件回调与派生读最新值，不因 state 提交时序漂移）。 */
+  const sessionFactsRef = useRef(sessionFacts)
+  sessionFactsRef.current = sessionFacts
+  const runtimeFactsRef = useRef(runtimeFacts)
+  runtimeFactsRef.current = runtimeFacts
+  /** 活跃事实源实例（gateway 来源；指纹变化 = 新化身重探）。 */
+  const sessionFactsSourcesRef = useRef<Map<string, SessionFactsSource>>(new Map())
+  /** 每个实例的退订 + stop 合成器（来源退役/降级时调用一次）。 */
+  const sessionFactsTeardownRef = useRef<Map<string, () => void>>(new Map())
+  // W6：非 gateway 来源的无壳观察者（SSH/dsh 远端没有只读镜像可依赖）。
+  const sourceMuxTeardownRef = useRef<Map<string, () => void>>(new Map())
+  // 审计 APP-9：观察者必须按**身份**（sourceId + sourceFingerprint）收敛——只按 id 去重会让
+  // 「同 id 新指纹」（身份编辑/重连后的新化身）复用旧观察者，rows/runningBefore 跨化身串味。
+  const sourceMuxIdentityRef = useRef<Map<string, string>>(new Map())
+  /** 通知第二入口的基线播种集：首份 facts 快照只播种水位，不补发通知（§5-5）。 */
+  const factsSeededRef = useRef<Set<string>>(new Set())
+  /** 行刷新提示的 floor 记账（每来源）。 */
+  const refreshHintAtRef = useRef<Record<string, number>>({})
+  /** 每来源在途 unary 拉取计数（提示的 inFlight 拒绝输入）。 */
+  const factsPullInFlightRef = useRef<Record<string, number>>({})
+  /** 读标记落盘节流（≤1 次/秒；pagehide/hidden 立即 flush）。 */
+  const unreadSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const flushUnreadRef = useRef<() => void>(() => undefined)
 
   // chamberBridge 投影（05 §3）：health/remoteStatus/aggregates 任一变化后
   // 派生并发布；首帧（health 未就绪）即发布 connected=false 的分组。
   const servers = useMemo(
-    () => deriveServers(health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, shellStates, managedRuntime, workspaceEcho, sessionEcho, sessionArchive, openIntents, locale),
-    [health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, activeView, pluginDiagnostics, shellStates, managedRuntime, workspaceEcho, sessionEcho, sessionArchive, openIntents, locale],
+    // W3：current 投影（侧栏高亮）跟随 **paintedView**（屏上是谁），不是选择——
+    // 持有窗内用户点向 B 时屏上仍是 A，A 的当前会话高亮摘掉再装回是纯闪烁；
+    // 揭示完成那一拍 painted 变化（本 memo 依赖）自然把高亮交棒给 B。
+    () => deriveServers(health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, paintedView, pluginDiagnostics, shellStates, managedRuntime, workspaceEcho, sessionEcho, sessionArchive, openIntents, locale, sessionFacts),
+    [health, connections, remoteInstances, remoteStatus, aggregates, hostFacts, runtimeFacts, completedBySource, paintedView, pluginDiagnostics, shellStates, managedRuntime, workspaceEcho, sessionEcho, sessionArchive, openIntents, locale, sessionFacts],
   )
   // chamberBridge publish 签名闸（2026-08 perf pass）：servers 在每次依赖变化
   // 时都会重建（含聚合快照上报/兜底、30s 注册表轮询、状态推送的恒新对象），但
@@ -1097,6 +1281,17 @@ export default function App() {
   // 违反 view-transition.ts 的「最后一次意图胜出」性质。
   const activeViewRef = useRef(activeView)
   activeViewRef.current = activeView
+  // 屏上视图的渲染期镜像（同 activeViewRef 纪律）：保留回收、退役回落与揭示回调的
+  // 守卫都要在事件/微任务里读它，而这些位置拿不到渲染作用域的 paintedView。
+  const paintedViewRef = useRef(paintedView)
+  paintedViewRef.current = paintedView
+  /**
+   * 揭示门的持有窗起点（单调钟 ms；null = 当前稳态）。`revealHoldStartedAt` 推进它：
+   * 一次在途揭示从分叉那一拍起算，回到稳态即清空（见 reveal-gate.ts 头注）。
+   */
+  const revealHoldStartedAtRef = useRef<number | null>(null)
+  /** 持有窗到期的一次性重算触发器（照 InstanceView 的 surfaceFallbackTick 形态）。 */
+  const [revealTick, setRevealTick] = useState(0)
   const pendingViewRef = useRef<string | null>(null)
   /**
    * 用户在遮罩上显式放弃的视图（W1/W4）：只由遮罩的「切换来源」写入，由
@@ -1275,6 +1470,40 @@ export default function App() {
     for (const id of Object.keys(notifiedCompleteRef.current)) {
       if (!servers.some(server => server.id === id)) delete notifiedCompleteRef.current[id]
     }
+    // facts wiring 数据面（2026-12）：退役来源的读水位 / 回退账本 / 通知水位 /
+    // 播种集 / 提示记账 / 在途计数与 facts state 一并清（same-id 重加 = 新来源代，
+    // 不得继承上一代的已读/已通知判定）。
+    for (const id of Object.keys(readMarksRef.current)) {
+      if (!servers.some(server => server.id === id)) delete readMarksRef.current[id]
+    }
+    for (const id of Object.keys(edgeLedgerRef.current)) {
+      if (!servers.some(server => server.id === id)) delete edgeLedgerRef.current[id]
+    }
+    for (const id of Object.keys(notifiedWatermarkRef.current)) {
+      if (!servers.some(server => server.id === id)) delete notifiedWatermarkRef.current[id]
+    }
+    for (const id of [...factsSeededRef.current]) {
+      if (!servers.some(server => server.id === id)) factsSeededRef.current.delete(id)
+    }
+    for (const id of Object.keys(refreshHintAtRef.current)) {
+      if (!servers.some(server => server.id === id)) delete refreshHintAtRef.current[id]
+    }
+    for (const id of Object.keys(factsPullInFlightRef.current)) {
+      if (!servers.some(server => server.id === id)) delete factsPullInFlightRef.current[id]
+    }
+    if (Object.keys(sessionFactsRef.current).some(id => !servers.some(server => server.id === id))) {
+      setSessionFacts(prev => {
+        const next = { ...prev }
+        let changed = false
+        for (const id of Object.keys(next)) {
+          if (!servers.some(server => server.id === id)) {
+            delete next[id]
+            changed = true
+          }
+        }
+        return changed ? next : prev
+      })
+    }
     setRemoteStatus(prev => {
       // remoteStatus 按原始注册表 id 键控（deriveServers 的 statusKey），
       // 与 servers 的 <kind>-<id> 不同——按 kind 前缀还原再比较。
@@ -1410,6 +1639,21 @@ export default function App() {
       delete prevRunningRef.current[sourceId]
       delete prevRuntimeFactsRef.current[sourceId]
       delete notifiedCompleteRef.current[sourceId]
+      // facts wiring：事实源实例与全部未读数据面键随退役同拍收敛（reclaimView
+      // 刻意不碰这些——拆壳不等于来源消失，R2/L3）。
+      sessionFactsTeardownRef.current.get(sourceId)?.()
+      sessionFactsTeardownRef.current.delete(sourceId)
+      sessionFactsSourcesRef.current.delete(sourceId)
+      // 审计 APP-9：无壳观察者与身份记录同样随退役收敛（只拆 gateway 事实源会留下孤观察者）。
+      sourceMuxTeardownRef.current.get(sourceId)?.()
+      sourceMuxTeardownRef.current.delete(sourceId)
+      sourceMuxIdentityRef.current.delete(sourceId)
+      delete readMarksRef.current[sourceId]
+      delete edgeLedgerRef.current[sourceId]
+      delete notifiedWatermarkRef.current[sourceId]
+      delete refreshHintAtRef.current[sourceId]
+      delete factsPullInFlightRef.current[sourceId]
+      factsSeededRef.current.delete(sourceId)
     }
     // 工作区创建回声账本随来源生命周期收敛（同纪律：同 id 重新注册 = 新来源代，
     // 上一代的回声不得在新代里残留成幽灵工作区行）。
@@ -1445,11 +1689,17 @@ export default function App() {
     pendingRosterNotificationOpensRef.current = retainedNotificationOpens
     pendingViewRef.current = retireSelectedSource(pendingViewRef.current, retired, null)
     if (retired.has(activeViewRef.current)) activeViewRef.current = LOCAL_INSTANCE_ID
+    // W3：屏上视图随注册表退役**同帧**回落 local（第一道；揭示门的 unmountable
+    // 分支是第二道保险）。回落 local 而不是 selected：选择可能是同一来源、也可能
+    // 尚未 settle——直接画上去会露出 pending（不可见）壳，即一帧无可见视图。
+    if (retired.has(paintedViewRef.current)) paintedViewRef.current = LOCAL_INSTANCE_ID
     prewarmQueueRef.current = withoutRemovedSourceIds(prewarmQueueRef.current, retired)
     prewarmEligibleRef.current = new Set(
       [...prewarmEligibleRef.current].filter(sourceId => !retired.has(sourceId)),
     )
     if (prewarmInflightRef.current !== null && retired.has(prewarmInflightRef.current)) {
+      // I8：在途预热随来源退役作废（还没被任何人用上）。
+      recordPrewarm('cancelled', prewarmInflightRef.current)
       prewarmInflightRef.current = null
       prewarmInflightAtRef.current = 0
     }
@@ -1458,6 +1708,7 @@ export default function App() {
     // id only returns through a fresh view mount/producer generation.
     setMountedViews(prev => withoutRemovedSourceIds(prev, retired))
     setActiveView(prev => retireSelectedSource(prev, retired, LOCAL_INSTANCE_ID))
+    setPaintedView(prev => retireSelectedSource(prev, retired, LOCAL_INSTANCE_ID))
     setShellStates(prev => withoutRemovedSourceKeys(prev, retired))
     setRetryTokens(prev => withoutRemovedSourceKeys(prev, retired))
     setAggregates(prev => withoutRemovedSourceKeys(prev, retired))
@@ -1541,6 +1792,10 @@ export default function App() {
   const refreshAggregate = useCallback(async (instanceId: string, mutationTag?: number) => {
     const sourceOwner = sourceLifecyclesRef.current!.capture(instanceId)
     if (sourceOwner === null) return
+    // 行刷新提示的 inFlight 拒绝输入（2026-12 facts wiring）：计数而不是布尔，
+    // 并发波/提示/看门狗重叠时最后一个结束才归零。
+    factsPullInFlightRef.current[instanceId] = (factsPullInFlightRef.current[instanceId] ?? 0) + 1
+    try {
     const startedPollSeq = (aggregatePollSeqRef.current[instanceId] ?? 0) + 1
     aggregatePollSeqRef.current[instanceId] = startedPollSeq
     if (mutationTag !== undefined) aggregateRequestOwnersRef.current!.retire([instanceId])
@@ -1705,7 +1960,15 @@ export default function App() {
       // session/list cwd 事实，workspace.list 已删）。
       scheduleRetry()
     }
+    } finally {
+      const remaining = (factsPullInFlightRef.current[instanceId] ?? 1) - 1
+      if (remaining <= 0) delete factsPullInFlightRef.current[instanceId]
+      else factsPullInFlightRef.current[instanceId] = remaining
+    }
   }, [clearAggregateRetry, refreshHealth, sweepSessionArchive, sweepSessionEcho, sweepWorkspaceEcho, updateSessionArchive, updateSessionEcho])
+  /** facts 提示的稳定入口（lifecycle effect 的闭包只创建一次，取最新 refreshAggregate）。 */
+  const refreshAggregateRef = useRef(refreshAggregate)
+  refreshAggregateRef.current = refreshAggregate
 
   /**
    * Run a bounded refresh wave: at most AGGREGATE_POLL_CONCURRENCY concurrent
@@ -2520,15 +2783,20 @@ export default function App() {
     setRetryTokens(prev => ({ ...prev, [viewId]: (prev[viewId] ?? 0) + 1 }))
   }, [ensureRemoteConnected, probeRemoteReady])
 
-  /** 视图切换（设计 05 §4）：经 View Transition 包装（view-transition.ts）——
-   * 旧视图静态快照保持到新视图渲染就绪，随后短 crossfade；reveal 重排期间
-   * 无黑帧；prefers-reduced-motion/不支持时降级即时切换。未就绪目标视图
-   * 由 InstanceView 的骨架屏呈现加载中间态。
+  /** 视图切换（设计 05 §4；W3 延迟揭示 2026-12）：**只改选择，不改可见性**。
+   *
+   * 本函数提交 activeView + mountedViews；屏上仍是 paintedView 那个视图，直到
+   * 揭示 effect 判定"目标首帧可用"才经既有 'view' 过渡键收敛（view-transition.ts
+   * 不改）。为什么不在这里包 VT：VT 的语义是"新状态渲染就绪后动画才开始"
+   * （view-transition.ts:6-11），冷 boot 的"新状态首帧"就是遮罩本身——VT 单独
+   * 做不到"boot 期保持旧视图"。因此这里连过渡节都不需要：点击后屏上没有任何变化，
+   * 也就不存在"旧视图输入栏 × 新遮罩"的混色窗口（P2 的 cut 判据随之只在揭示节上）。
+   * prefers-reduced-motion 仍由 view-transition.ts 的直通模式接管（揭示即时落地，
+   * 持有窗不变——持有是内容决策，不是动效）。
    *
    * 注册表守卫（05 §4：视图生命周期 = 注册表条目生命周期）：来源已被删除
-   * 时不挂载/不切换（点击时与过渡 apply 时各查一次——apply 时可能已迟到，
-   * 如过渡在途期间注册表删除）。绝不把已回收的视图重新挂成僵尸：一次完整
-   * boot 很贵，且回收 effect 的回滚会造成一闪而过的幽灵骨架屏。local 常驻。
+   * 时不挂载/不切换（点击时与提交时各查一次）。绝不把已回收的视图重新挂成僵尸：
+   * 一次完整 boot 很贵，且回收 effect 的回滚会造成一闪而过的幽灵骨架屏。local 常驻。
    */
   const selectView = useCallback((viewId: string, onApply?: (applied: boolean) => void): boolean => {
     // 用户又选中这个视图 = 撤回"放弃"意图（否则它下一次离开会跳过保留宽限被
@@ -2541,6 +2809,8 @@ export default function App() {
     // 即时加速；idle 手动断开不触碰——见 ensureRemoteConnected）。
     ensureRemoteConnected(viewId)
     if (viewId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(viewId)) return false
+    // I8：此刻它仍在自动预热集合里 ⇒ 这次用户选中就是一次**命中**（删除之前判定）。
+    if (autoPrewarmedRef.current.has(viewId)) recordPrewarm('hit', viewId)
     autoPrewarmedRef.current.delete(viewId)
     // 用户主动点开 = 意图使用：解除"回收后不自动预热"抑制（此后闲置仍会被
     // 再次回收并再次抑制）。
@@ -2550,11 +2820,10 @@ export default function App() {
     if (harvestIntentRef.current.delete(viewId)) {
       harvestStateRef.current[viewId] = harvestSatisfied(harvestStateRef.current[viewId])
     }
-    // 镜像查重（非闭包）：在途/顺延中的同一意图直接跳过；已落地视图只有在
-    // 无在途意图时才跳过——过渡在途时 UI 仍显示旧视图，点击旧视图 = 撤销
-    // 意图（最后一次意图胜出，view-transition.ts），不能按当前态误丢。
-    // 被回收来源在 apply 时被守卫否决后 pendingViewRef 已清空，重加后的点击
-    // 不被残留意图误吞。
+    // 查重（非闭包镜像）：同一次提交内重复登记直接跳过；已选中视图只在**没有
+    // 在途揭示**时跳过。W3 起"在途"由 painted != selected 表达（揭示门持有旧视图
+    // 的这 1s 内点击屏上那个视图 = 撤销：activeView 改回它，揭示门随即稳态），
+    // pendingViewRef 只是这段同步提交里的意图槽（不再跨越异步边界）。
     if (viewId === pendingViewRef.current) return true
     if (pendingViewRef.current === null && viewId === activeViewRef.current) return true
     // chamber (2026-08 scroll sync): anchor the outgoing shell's sidebar
@@ -2569,48 +2838,34 @@ export default function App() {
     // sidebar-scroll-sync.ts).
     const scrollAnchor = captureSidebarScrollAnchor(activeViewRef.current)
     pendingViewRef.current = viewId
-    // P2（2026-12 过渡作用域；review 修订）：判据是"目标**落地后**是否显示遮罩"这一
-    // DOM 事实，而不是"目标是否已 settle"——已 settle 的温壳同样可以被 P1/P3 的持有门
-    // 罩着（settled ≠ 无遮罩），按 settled 猜会把"旧视图输入栏 × 新遮罩"的混色留在
-    // 那条路径上。resolver 在 view-transition 认领（flushSync 之后）时求值，此刻 DOM
-    // 就是落地后的状态；判不出来（无 CSS.escape / 选择器抛错）就地保守取 'cut'。
-    const paint = (): PaintIntent => {
-      try {
-        const el = document.querySelector(`.instance-view[data-instance="${CSS.escape(viewId)}"]`)
-        return el !== null && el.querySelector('.instance-loading') === null ? 'crossfade' : 'cut'
-      } catch {
-        return 'cut'
-      }
-    }
-    // 键 'view'：与 settle 流隔离；同键突发意图在 view-transition 层单槽合并
-    // （perf T2）——被取代意图不进快照/动画，末意图胜出语义不变。
-    runViewTransition(() => {
-      // A roster-removal retirement or a newer click clears/replaces this
-      // intent while a View Transition callback is deferred. Membership alone
-      // is insufficient: a rapid same-id re-add is live again but belongs to a
-      // new source generation, so the old callback must not activate it.
-      if (pendingViewRef.current !== viewId) return
-      if (viewId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(viewId)) {
-        // 过渡在途期间来源被删除：放弃本次切换并清掉意图（绝不把已回收的
-        // 视图重新挂成僵尸：一次完整 boot 很贵，且回收 effect 的回滚会造成
-        // 一闪而过的幽灵骨架屏。local 常驻）。
-        if (pendingViewRef.current === viewId) pendingViewRef.current = null
-        // 目标在 apply 期被删除 = 这次切换没有落地：通知调用方撤回放弃标记
-        // （2026-12 独立复核：此路径只是 return，不抛异常）。
-        onApply?.(false)
-        return
-      }
-      // 仅当本次意图仍是最新时清掉 pending——更晚的意图（已入过渡链）继续
-      // 占用槽位，其 apply 时再清。
+    // perf 仪器（W3 I7）：switchFrameMs = view-request → view-reveal 两条 mark 之差
+    // （scripts/perf/switch-frame-probe.mjs 消费；纯观测，无业务语义）。
+    perfMark(PERF_MARKS.appViewRequest, viewId)
+    // 同步提交（不包 VT——头注）。原来的过渡回调体整段前移到这里：
+    // A roster-removal retirement or a newer click clears/replaces this
+    // intent. Membership alone is insufficient: a rapid same-id re-add is live
+    // again but belongs to a new source generation, so a stale intent must not
+    // activate it. 提交现在与登记同拍（无异步间隙），守卫仍保留——selectView 也被
+    // 深链/遮罩等异步路径调用，且"最后一次意图胜出"由 pendingViewRef 镜像兜底。
+    if (pendingViewRef.current !== viewId) return true
+    if (viewId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(viewId)) {
+      // 提交时来源已被删除：放弃本次切换并清掉意图（绝不把已回收的视图重新挂成
+      // 僵尸：一次完整 boot 很贵，且回收 effect 的回滚会造成一闪而过的幽灵骨架屏。
+      // local 常驻）。
       if (pendingViewRef.current === viewId) pendingViewRef.current = null
-      setActiveView(viewId)
-      // 保留策略：被回收（不在 mountedViews）的 live 来源在此重新挂载——
-      // 冷 boot + entry 重放（shell.ts 同 id 串行 barrier 保证与回收的异步
-      // teardown 不交错）；本视图的 hiddenSince 由 activeView 落地 effect 清除。
-      setMountedViews(prev => (prev.includes(viewId) ? prev : [...prev, viewId]))
-      if (scrollAnchor !== null) restoreSidebarScroll(viewId, scrollAnchor)
-      onApply?.(true)
-    }, 'view', paint)
+      // 目标在提交期被删除 = 这次切换没有落地：通知调用方撤回放弃标记
+      // （2026-12 独立复核：此路径只是 return，不抛异常）。
+      onApply?.(false)
+      return true
+    }
+    if (pendingViewRef.current === viewId) pendingViewRef.current = null
+    setActiveView(viewId)
+    // 保留策略：被回收（不在 mountedViews）的 live 来源在此重新挂载——
+    // 冷 boot + entry 重放（shell.ts 同 id 串行 barrier 保证与回收的异步
+    // teardown 不交错）；本视图的 hiddenSince 由 painted 落地 effect 清除。
+    setMountedViews(prev => (prev.includes(viewId) ? prev : [...prev, viewId]))
+    if (scrollAnchor !== null) restoreSidebarScroll(viewId, scrollAnchor)
+    onApply?.(true)
     return true
   }, [ensureRemoteConnected, probeRemoteReady])
 
@@ -2733,6 +2988,375 @@ export default function App() {
   const serverLabelsRef = useRef(serverLabels)
   serverLabelsRef.current = serverLabels
 
+  // ── 2026-12 facts wiring（WS-C）：事实源生命周期 / 派生账本 / 通知第二入口 ──
+
+  /**
+   * 读标记 / 退避账本写盘（≤1 次/秒节流；pagehide/hidden 立即 flush）。内存是
+   * 权威，v2 只是缓存，服务端是跨端权威（蓝图 §4.4）。never-throw。
+   */
+  const flushUnread = useCallback((): void => {
+    if (unreadSaveTimerRef.current !== null) {
+      clearTimeout(unreadSaveTimerRef.current)
+      unreadSaveTimerRef.current = null
+    }
+    saveUnread(unreadStorageRef.current, {
+      v: 2,
+      read: readMarksRef.current,
+      edge: edgeLedgerRef.current,
+      notified: notifiedWatermarkRef.current,
+    })
+  }, [])
+  flushUnreadRef.current = flushUnread
+  const schedulePersistUnread = useCallback((): void => {
+    if (unreadSaveTimerRef.current !== null) return
+    unreadSaveTimerRef.current = setTimeout(() => {
+      unreadSaveTimerRef.current = null
+      flushUnreadRef.current()
+    }, 1_000)
+  }, [])
+
+  /**
+   * 一个来源的未读派生（唯一入口）。判定规则与输入全部来自纯模块
+   * unread-derivation.ts（其 deriveUnread 就是 sidebar shared 的 4 参导出，
+   * ABSENT/degraded turn-end 的武装分支不在此重实现）。本函数只负责：
+   * 读 refs → 读动作推进 → 派生 → 写回 refs/state → 落盘/ack。
+   */
+  const recomputeSourceUnread = useCallback((sourceId: string): void => {
+    if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
+    const factsSnapshot = sessionFactsRef.current[sourceId]
+    const usableFacts = factsSnapshot !== undefined && factsSnapshot.verdict === 'ok' ? factsSnapshot : undefined
+    const factsRows = usableFacts?.rows
+    const report = runtimeFactsRef.current[sourceId]
+    // 唯一「正在阅读」谓词（主计划 §5-15）：paintedView（屏上是谁，不是选择）
+    // ∩ 该来源 current ∩ document.hasFocus()。失焦即视为未读（行为变更已登记）。
+    const readingCurrent = paintedViewRef.current === sourceId && document.hasFocus()
+      ? report?.current
+      : undefined
+    if (readingCurrent !== undefined && factsRows !== undefined) {
+      const watermark = viewingReadWatermark(factsRows[readingCurrent])
+      if (watermark !== undefined) {
+        const table = readMarksRef.current[sourceId] ?? {}
+        const advanced = advanceReadMark(table[readingCurrent], watermark)
+        if (advanced !== undefined && advanced !== table[readingCurrent]) {
+          readMarksRef.current = { ...readMarksRef.current, [sourceId]: { ...table, [readingCurrent]: advanced } }
+          schedulePersistUnread()
+          sessionFactsSourcesRef.current.get(sourceId)?.ackRead(clientInstallIdRef.current, readingCurrent, advanced)
+        }
+      }
+    }
+    const result = deriveSourceUnread({
+      facts: factsRows,
+      channel: report?.sessions,
+      // R13：只有权威完整列表（listComplete === true）才允许剪枝；缺省/未证明
+      // = 不剪（默认不剪——列表短暂收缩不得假清）。
+      listComplete: report?.listComplete === true,
+      prevRunning: prevRunningRef.current[sourceId] ?? {},
+      prevLedger: edgeLedgerRef.current[sourceId] ?? {},
+      readMarks: readMarksRef.current[sourceId] ?? {},
+      readingSessionId: readingCurrent,
+      // 无 facts = channel-only 照常派生；有 facts 但 serviceable=false（host
+      // 停机）⇒ 原样保留（不 clobber、不假清，R20）。注意 stale 不在此闸内：
+      // R14 要求断连未读照常呈现。
+      factsVerified: usableFacts !== undefined ? usableFacts.serviceable !== false : true,
+    }, { deriveUnread, reconcileCompletedFacts })
+    prevRunningRef.current[sourceId] = result.nextRunning
+    edgeLedgerRef.current[sourceId] = result.unread
+    if (!result.changed) return
+    schedulePersistUnread()
+    setCompletedBySource(prev => {
+      const existing = prev[sourceId] ?? {}
+      if (sameBooleanLedger(existing, result.unread)) return prev
+      return { ...prev, [sourceId]: result.unread }
+    })
+  }, [schedulePersistUnread])
+
+  /**
+   * 通知组装的**唯一**入口（主计划 §3.3-3 / §5-16）：壳通道边沿与 watcher
+   * 完成边沿两个入口都走这里；bridge.notify( 全文件只允许出现一次（接线锁）。
+   */
+  const emitSessionNotification = useCallback((request: SessionNotificationRequest): void => {
+    const bridge = window.dshChamber?.notifications
+    if (bridge === undefined) {
+      // I4：没有通知桥本身就是一次决定（什么都没投递）——负断言必须看得见它，
+      // 否则「通知路径整体坏掉」与「正确地没有通知」在账本上无法区分。
+      notificationLedger.record({
+        at: Date.now(),
+        sourceId: request.sourceId,
+        sessionId: request.sessionId,
+        kind: request.kind,
+        ...(request.watermark === undefined ? {} : { watermark: request.watermark }),
+        requireHidden: false,
+        decision: 'skipped',
+        error: 'no-notification-bridge',
+      })
+      publishNotificationInstrument()
+      return
+    }
+    try {
+      const copyLocale = readDocumentLocale()
+      const label = serverLabelsRef.current[request.sourceId] ?? request.sourceId
+      const aggregate = aggregatesRef.current[request.sourceId]
+      const sessionTitle = (sessionId: string): string => {
+        const row = aggregate?.sessions.find(session => session.sessionId === sessionId)
+        const display = row?.displayTitle
+        if (display !== undefined && display !== '') return display
+        if (row?.title !== undefined && row.title !== '') return row.title
+        return frameText(copyLocale, 'session.untitled')
+      }
+      const title =
+        request.kind === 'complete' ? frameText(copyLocale, 'notification.sessionComplete')
+        : request.kind === 'ask' ? frameText(copyLocale, 'notification.awaitingAnswer')
+        : frameText(copyLocale, 'notification.awaitingApproval')
+      const body = label + ' · ' + sessionTitle(request.sessionId)
+      // 正在屏幕上查看的会话豁免（主计划 §5-15）：**屏上**来源（paintedView，
+      // 不是选择——持有窗内 active 已是目标而屏上仍是旧视图）∩ 该来源 current
+      // ∩ 焦点；主进程再查一次窗口焦点作权威豁免。
+      const requireHidden = paintedViewRef.current === request.sourceId
+        && runtimeFactsRef.current[request.sourceId]?.current === request.sessionId
+        && document.hasFocus()
+      // I4：账本记的是**主进程回执**（shown / suppressed + error 原文），不是「我们调用了
+      // 通知」——这正是 R6/R3 的正对照能成立的前提。
+      const ledgerBase = {
+        at: Date.now(),
+        sourceId: request.sourceId,
+        sessionId: request.sessionId,
+        kind: request.kind,
+        ...(request.watermark === undefined ? {} : { watermark: request.watermark }),
+        requireHidden,
+      } as const
+      void bridge.notify({
+        sourceId: request.sourceId,
+        sourceFingerprint: request.sourceFingerprint,
+        sessionId: request.sessionId,
+        kind: request.kind,
+        title,
+        body,
+        requireHidden,
+        ...(request.watermark !== undefined ? { watermark: request.watermark } : {}),
+      }).then(result => {
+        notificationLedger.record({
+          ...ledgerBase,
+          decision: result.shown ? 'sent' : 'suppressed',
+          ...(result.error === undefined ? {} : { error: result.error }),
+        })
+      }).catch(err => {
+        notificationLedger.record({ ...ledgerBase, decision: 'skipped', error: String(err) })
+        console.warn('[notifications] 发送失败:', err)
+      })
+      publishNotificationInstrument()
+    } catch (error) {
+      console.warn('[notifications] 事件组装失败:', error)
+    }
+  }, [])
+
+  /**
+   * facts 快照到达（probe / SSE delta / resync 共用）：先合服务端读水位
+   * （R10 跨端收敛），再喂通知第二入口（只 observed，首帧只播种），最后重算。
+   */
+  const applySessionFacts = useCallback((sourceId: string, snapshot: SessionFactsSnapshot | undefined): void => {
+    if (snapshot === undefined) {
+      setSessionFacts(prev => {
+        if (prev[sourceId] === undefined) return prev
+        const next = { ...prev }
+        delete next[sourceId]
+        return next
+      })
+      delete sessionFactsRef.current[sourceId]
+      recomputeSourceUnread(sourceId)
+      return
+    }
+    const usable = snapshot.verdict === 'ok'
+    if (usable && snapshot.read !== null) {
+      const local = readMarksRef.current[sourceId] ?? {}
+      const merged = mergeReadMarks(local, snapshot.read.marks)
+      if (merged !== local) {
+        readMarksRef.current = { ...readMarksRef.current, [sourceId]: merged }
+        schedulePersistUnread()
+      }
+    }
+    setSessionFacts(prev => (prev[sourceId] === snapshot ? prev : { ...prev, [sourceId]: snapshot }))
+    sessionFactsRef.current = { ...sessionFactsRef.current, [sourceId]: snapshot }
+    if (usable) {
+      // 第二入口：watcher 观察到的完成（completedAtSource === 'observed'）。
+      // reconstructed（缺口重建）只出未读、不通知（主计划 §5-5）；首份快照
+      // 只播种水位（桌面关闭期间的完成不得补发通知）。
+      const seeded = factsSeededRef.current.has(sourceId)
+      const lifecycle = sourceLifecyclesRef.current!.capture(sourceId)
+      const memory = notifiedWatermarkRef.current[sourceId] ?? {}
+      let memoryChanged = false
+      const nextMemory = { ...memory }
+      for (const row of Object.values(snapshot.rows)) {
+        // 子代理压制（与壳通道同一谓词）：不记账，待子代理全部结束后补发。
+        if (row.subagentCount > 0) continue
+        if (row.completedAtSource !== 'observed' || row.completedAt === null) continue
+        const watermark = completionWatermark(row)
+        if (watermark === undefined) continue
+        const previous = memory[row.sessionId]?.complete
+        const nextWatermark = nextNotifiedWatermark(previous, watermark)
+        if (nextWatermark !== undefined && nextWatermark !== previous) {
+          nextMemory[row.sessionId] = { ...nextMemory[row.sessionId], complete: nextWatermark }
+          memoryChanged = true
+        }
+        if (seeded && lifecycle !== null && shouldNotifyWatermark(previous, watermark)) {
+          emitSessionNotification({
+            sourceId,
+            sourceFingerprint: lifecycle.fingerprint,
+            sessionId: row.sessionId,
+            kind: 'complete',
+            watermark,
+          })
+        }
+      }
+      if (memoryChanged) notifiedWatermarkRef.current = { ...notifiedWatermarkRef.current, [sourceId]: nextMemory }
+      factsSeededRef.current.add(sourceId)
+    }
+    recomputeSourceUnread(sourceId)
+  }, [emitSessionNotification, recomputeSourceUnread, schedulePersistUnread])
+
+  /** servers 的渲染期镜像（facts effect 闭包不随每次 servers 重建）。 */
+  const serversRef = useRef(servers)
+  serversRef.current = servers
+
+  /**
+   * 行刷新提示（主计划 §3.3-4 / R9）：facts 的 session-added/removed/changed
+   * ⇒ 该来源一次 unary 聚合拉取（行权威仍在聚合，不做第二行源）。四拒：
+   * 未连接 / unverified / 在途 / 1s floor（source-refresh-hint.ts 纯判定）。
+   */
+  const requestFactsRefresh = useCallback((sourceId: string): void => {
+    const server = serversRef.current.find(candidate => candidate.id === sourceId)
+    const now = Date.now()
+    if (!shouldDispatchRefreshHint({
+      connected: server?.connected === true,
+      unverified: unverifiedSourcesRef.current.includes(sourceId),
+      inFlight: (factsPullInFlightRef.current[sourceId] ?? 0) > 0,
+      lastHintAt: refreshHintAtRef.current[sourceId],
+      now,
+    })) return
+    refreshHintAtRef.current[sourceId] = now
+    void refreshAggregateRef.current(sourceId)
+  }, [])
+
+  /**
+   * facts 生命周期的稳定签名：来源 id + 化身指纹 + connected。指纹变化 =
+   * 新化身（重探、旧判定作废）；connected 边沿 = 重探 / 停流。
+   */
+  const gatewayFactsSpec = useMemo(
+    () => servers
+      .filter(server => server.kind === 'gateway')
+      .map(server => server.id + ':' + server.sourceFingerprint + ':' + (server.connected ? '1' : '0'))
+      .join('|'),
+    [servers],
+  )
+  useEffect(() => {
+    const wanted = new Map<string, { fingerprint: string; connected: boolean }>()
+    for (const server of serversRef.current) {
+      if (server.kind !== 'gateway') continue
+      wanted.set(server.id, { fingerprint: server.sourceFingerprint, connected: server.connected })
+    }
+    for (const [sourceId, teardown] of [...sessionFactsTeardownRef.current]) {
+      if (wanted.has(sourceId)) continue
+      teardown()
+      sessionFactsTeardownRef.current.delete(sourceId)
+      sessionFactsSourcesRef.current.delete(sourceId)
+      setSessionFacts(prev => {
+        if (prev[sourceId] === undefined) return prev
+        const next = { ...prev }
+        delete next[sourceId]
+        return next
+      })
+      delete sessionFactsRef.current[sourceId]
+    }
+    for (const [sourceId, input] of wanted) {
+      let source = sessionFactsSourcesRef.current.get(sourceId)
+      if (source === undefined) {
+        const created = createSessionFactsSource({
+          sourceId,
+          onDiagnostic: (message, error) => console.warn(message, error ?? ''),
+        })
+        source = created
+        const unsubscribeFacts = created.subscribe(snapshot => applySessionFacts(sourceId, snapshot))
+        const unsubscribeHint = created.onRowHint(() => requestFactsRefresh(sourceId))
+        sessionFactsSourcesRef.current.set(sourceId, created)
+        sessionFactsTeardownRef.current.set(sourceId, () => {
+          unsubscribeFacts()
+          unsubscribeHint()
+          created.stop()
+        })
+      }
+      source.update(input)
+    }
+  }, [gatewayFactsSpec, applySessionFacts, requestFactsRefresh])
+
+  /**
+   * W6：SSH / 其它 dsh 远端来源的**无壳观察者**。网关来源有只读镜像，这些来源没有——
+   * 关壳期间没有任何事实通道，完成会丢。观察者讲实例自己的远程协议（经控制面既有无鉴权
+   * 实例代理），产出的快照与 gateway 事实源**同形**，因此直接喂同一条 applySessionFacts
+   * 管线（同一份事实、同一套未读判定），不需要第二条判定路径。只观察：永不结算瀑布。
+   */
+  const sourceMuxSpec = useMemo(
+    () => servers
+      .filter(server => server.kind === 'dsh')
+      .map(server => server.id + ':' + server.sourceFingerprint + ':' + (server.connected ? '1' : '0'))
+      .join('|'),
+    [servers],
+  )
+  useEffect(() => {
+    const wanted = new Map<string, string>()
+    for (const server of serversRef.current) {
+      if (server.kind !== 'dsh' || server.connected !== true) continue
+      wanted.set(server.id, server.sourceFingerprint)
+    }
+    for (const [sourceId, teardown] of [...sourceMuxTeardownRef.current]) {
+      // 身份变了（同 id 新指纹）也必须拆：旧观察者的 rows/runningBefore 属于旧化身。
+      if (wanted.get(sourceId) === sourceMuxIdentityRef.current.get(sourceId)) continue
+      teardown()
+      sourceMuxTeardownRef.current.delete(sourceId)
+      sourceMuxIdentityRef.current.delete(sourceId)
+    }
+    for (const [sourceId, fingerprint] of wanted) {
+      if (sourceMuxTeardownRef.current.has(sourceId)) continue
+      const observer = createSourceMuxFacts({
+        sourceId,
+        origin: window.location.origin,
+        onSnapshot: snapshot => applySessionFacts(sourceId, snapshot),
+      })
+      observer.start()
+      sourceMuxTeardownRef.current.set(sourceId, () => observer.stop())
+      sourceMuxIdentityRef.current.set(sourceId, fingerprint)
+    }
+  }, [sourceMuxSpec, applySessionFacts])
+
+  // 焦点参与「正在阅读」谓词（主计划 §5-15）：focus/blur 只重算来源账本，
+  // 不回退读标记（「已读」是单向的）。
+  useEffect(() => {
+    const onFocusChange = (): void => {
+      const ids = new Set<string>([...sessionFactsSourcesRef.current.keys(), ...Object.keys(runtimeFactsRef.current)])
+      for (const sourceId of ids) recomputeSourceUnread(sourceId)
+    }
+    window.addEventListener('focus', onFocusChange)
+    window.addEventListener('blur', onFocusChange)
+    return () => {
+      window.removeEventListener('focus', onFocusChange)
+      window.removeEventListener('blur', onFocusChange)
+    }
+  }, [recomputeSourceUnread])
+
+  // 账本落盘：pagehide 与 hidden 立即 flush（1s 节流之外的兜底）。
+  useEffect(() => {
+    const flush = (): void => flushUnreadRef.current()
+    const onVisibility = (): void => {
+      if (document.visibilityState === 'hidden') flush()
+    }
+    window.addEventListener('pagehide', flush)
+    document.addEventListener('visibilitychange', onVisibility)
+    return () => {
+      window.removeEventListener('pagehide', flush)
+      document.removeEventListener('visibilitychange', onVisibility)
+      flushUnreadRef.current()
+    }
+  }, [])
+
+
   /**
    * 空闲预热（设计 05 §4）：ready 的注册表远程实例按序、一次一个地在后台
    * boot（settle 后推进下一个），使多数首次切换在点击时已就绪——骨架屏只
@@ -2750,6 +3374,19 @@ export default function App() {
   // 每个挂载视图的挂载时刻：绝对放弃上限按**视图**判定，不能只看预热在途
   // （用户点开/深链挂载的壳同样可能挂死；2026-12 复查 MAJOR）。
   const viewBootStartedAtRef = useRef<Record<string, number>>({})
+
+  /**
+   * R8 意图预热（blueprint §4）的 App 侧账本。hover 意图的**唯一**作用是"该
+   * 来源优先"：把 id 提前到既有队列头，让既有 pickPrewarmTarget 先看到它。它
+   * 不新增槽位、不提高 MAX_PREWARMED_REMOTE_VIEWS、不放宽
+   * prewarmEligible/prewarmSuppressed/收割预留中的任何一道门。
+   * - intentPriorityRef：已被意图提前、尚未被 drainPrewarm 真正选中的来源。
+   * - intentBudgetRef：只记"真的因意图起了一次 boot"（队列重排不计费）——
+   *   每次 boot 可能新建一个远端 blank 会话，故每会话有上限与 60s 冷却
+   *   （shared/prewarm-intent.ts 的纯策略）。
+   */
+  const intentPriorityRef = useRef<Set<string>>(new Set())
+  const intentBudgetRef = useRef<IntentPrewarmBudget>(emptyIntentPrewarmBudget())
 
   /**
    * 渲染期镜像（与 commit 同步，微任务安全）：settle 微任务可能先于 effect
@@ -2855,6 +3492,12 @@ export default function App() {
     // 其次温壳；退避中的收割候选被跳过而不是挡住它后面的温壳。
     const next = pickPrewarmTarget(prewarmQueueRef.current, prewarmEligibleRef.current, pendingOf, dueOf)
     if (next === undefined) return
+    // R8：这次选取来自 hover 意图（队列重排）⇒ 记一次意图 boot。重排本身不
+    // 计费；计费发生在"真的启动"这一刻（blueprint §4.4），且只影响后续意图的
+    // 准入，绝不回滚/干扰这次既有语义的挂载。
+    if (intentPriorityRef.current.delete(next)) {
+      intentBudgetRef.current = intentPrewarmSpent(intentBudgetRef.current, next, now)
+    }
     prewarmQueueRef.current = prewarmQueueRef.current.filter(id => id !== next)
     // 这次挂载是否为收割挂载：未满足基线的源都是（提交推送/ boot 失败 /
     // 用户点开三条路径据此分流，见 onInstanceSnapshot / handleShellState /
@@ -2866,6 +3509,8 @@ export default function App() {
     prewarmInflightRef.current = next
     prewarmInflightAtRef.current = now
     autoPrewarmedRef.current.add(next)
+    // I8：一次后台挂载真的开始。
+    recordPrewarm('attempt', next)
     setMountedViews(prev => (prev.includes(next) ? prev : [...prev, next]))
   }, [])
 
@@ -2877,8 +3522,10 @@ export default function App() {
       prewarmInflightAtRef.current = 0
     }
     // 保留策略：settle 完成才起 60s 回收窗——隐藏视图（预热完成/切走后
-    // settle）从此刻计"可回收时长"，boot 耗时不被白付；活动视图保持无键。
-    if (instanceId === activeViewRef.current) delete hiddenSinceRef.current[instanceId]
+    // settle）从此刻计"可回收时长"，boot 耗时不被白付；**屏上视图保持无键**
+    // （W3：判据是 paintedView，不是 activeView——持有窗内"已选中但还没画上屏"
+    // 的视图仍是隐藏的，给它起表不会误拆，但屏上那个壳绝不能开始隐藏计时）。
+    if (instanceId === paintedViewRef.current) delete hiddenSinceRef.current[instanceId]
     else hiddenSinceRef.current[instanceId] = Date.now()
     // 无条件 drain：任何 settle 都可能是"在途预热完成"或"本地首次 settle"
     // 的触发器（后者在状态先于本地就绪时不会因依赖变化而触发队列推进）。
@@ -2952,7 +3599,10 @@ export default function App() {
    */
   const reclaimView = useCallback((id: string, reason: 'retention' | 'harvest' = 'retention') => {
     if (id === LOCAL_INSTANCE_ID || !mountedViews.includes(id)) return
-    if (id === activeViewRef.current || id === pendingViewRef.current) return
+    // W3：**屏上的壳永不被回收**——持有窗内 painted 仍是旧视图而 active 已是目标，
+    // 只查 active/pending 会把用户正在看的那一屏拆掉（蓝图 §2.6-1；这是本函数
+    // 唯一的拆除入口，守卫放这里覆盖推迟/放弃/retention/收割所有调用臂）。
+    if (id === activeViewRef.current || id === paintedViewRef.current || id === pendingViewRef.current) return
     // 设置面板正在编辑的来源：拆壳 = 面板当前面消失（design 05 §5 的面板 hold）。
     // 守卫放在**唯一拆除入口**上而不是逐个调用点：推迟臂与 retention 循环各有同名
     // 守卫，但 135s 放弃臂、收割失败/放弃与遮罩放弃落地臂都能到达本函数——任何一条
@@ -3115,7 +3765,9 @@ export default function App() {
       : mountedViews.filter(id => !unsettledDeferredIds.has(id))
     const candidates = decideReclaimCandidates({
       mountedViews: retentionMountedViews,
-      activeViewId: activeViewRef.current,
+      // W3：保留判定按 **painted**（"谁在屏上"）——持有窗内 active 已是目标，传它会把
+      // 屏上的旧视图算成隐藏壳、并让 hiddenNonLocalCount 少算一个（蓝图 §2.6-2）。
+      activeViewId: paintedViewRef.current,
       hiddenSince: hiddenSinceRef.current,
       settled: settledViewIds,
       pendingViewId: pendingViewRef.current,
@@ -3164,16 +3816,89 @@ export default function App() {
     setPageActiveSource(activeView)
   }, [activeView])
 
-  // 活动视图落地即重计隐藏窗：离开活动的旧视图开始计时，新活动视图清计时。
-  // 覆盖 selectView 过渡 apply、注册表删除回落（fallback 到 local）等一切路径；
-  // 过渡在途时 activeViewRef 仍是旧视图，展示中的壳不会因本 effect 被计时。
+  /**
+   * 揭示门（W3 延迟揭示，2026-12）：painted 收敛到 selected 的**唯一入口**。
+   * 判定全在纯叶子 reveal-gate.ts（node 直测）；这里只提供事实并走既有 'view'
+   * 过渡键：
+   *  - shellStates：目标 settle（成功或失败）就是"首帧可用"的信号；
+   *  - revealTick：持有窗到期的一次性重算（单调钟；照 InstanceView 的
+   *    surfaceFallbackTick 形态）；
+   *  - 回调内必须重验 `activeViewRef.current === target`：揭示意图可能已过期
+   *    （用户点了 B 又点回 A；或来源被退役）——过期揭示绝不能把已撤销的目标画回
+   *    屏上（蓝图 §2.3 点名"最容易写错的一点"；selectView 的 pendingViewRef 守卫
+   *    是同一族纪律）。
+   * flushSync 出场方式：runViewTransition 在直通模式（reduced-motion / 无
+   * startViewTransition）会**同步** flushSync，而 React 不允许在 commit 相位内
+   * flushSync（它自己给的处置就是"挪到 microtask"）；microtask 仍在下一帧绘制前
+   * 执行，揭示时机与 layout effect 直调等价，且非直通模式下浏览器本来就在下一帧
+   * 才回调 update。
+   */
+  useLayoutEffect(() => {
+    const selected = activeView
+    const nowMs = monotonicNow()
+    revealHoldStartedAtRef.current = revealHoldStartedAt(revealHoldStartedAtRef.current, {
+      inFlight: selected !== paintedView,
+      nowMs,
+    })
+    const targetState = shellStates[selected]
+    const verdict = shouldReveal({
+      selectedViewId: selected,
+      paintedViewId: paintedView,
+      targetMountable: selected === LOCAL_INSTANCE_ID
+        || (mountedViews.includes(selected) && liveServerIdsRef.current.has(selected)),
+      targetSettled: isSettledShellState(targetState),
+      targetFailed: (targetState?.error ?? null) !== null,
+      holdStartedAtMs: revealHoldStartedAtRef.current,
+      nowMs,
+    })
+    if (!verdict.reveal) {
+      if (verdict.reason !== 'painted') return
+      const handle = setTimeout(
+        () => setRevealTick(tick => tick + 1),
+        revealHoldRemainingMs(revealHoldStartedAtRef.current, nowMs),
+      )
+      return () => { clearTimeout(handle) }
+    }
+    queueMicrotask(() => {
+      // 排队期间屏上目标可能已被改写/该壳已画上：揭示前重验（与回调内重验同纪律）。
+      if (activeViewRef.current !== selected) return
+      const mountable = selected === LOCAL_INSTANCE_ID
+        || (mountedViews.includes(selected) && liveServerIdsRef.current.has(selected))
+      // 目标不可挂载（退役/被删的竞态）：绝不把死视图留在屏上——回落 local
+      // （唯一恒挂载视图），与 activeView 的退役回落同一条语义。
+      const target = mountable ? selected : LOCAL_INSTANCE_ID
+      if (paintedViewRef.current === target) return
+      // 目标落地后是否显示遮罩的 DOM 事实（P2 判据不变）：在场 ⇒ 'cut'（旧视图
+      // 快照不与新遮罩交叉混色），否则 'crossfade'。判不出来（无 CSS.escape /
+      // 选择器抛错）就地保守取 'cut'。
+      const paint = (): PaintIntent => {
+        try {
+          const el = document.querySelector(`.instance-view[data-instance="${CSS.escape(target)}"]`)
+          return el !== null && el.querySelector('.instance-loading') === null ? 'crossfade' : 'cut'
+        } catch {
+          return 'cut'
+        }
+      }
+      runViewTransition(() => {
+        if (activeViewRef.current !== selected) return
+        if (selected !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(selected)) return
+        setPaintedView(target)
+        perfMark(PERF_MARKS.appViewReveal, target)
+      }, 'view', paint)
+    })
+  }, [activeView, paintedView, shellStates, mountedViews, revealTick])
+
+  // **屏上视图**落地即重计隐藏窗（W3：判据是 paintedView，不是 activeView）：
+  // 离开屏的旧视图开始计时，新屏上视图清计时。覆盖揭示落地、注册表删除回落
+  // （fallback 到 local）等一切路径；持有窗内旧视图仍在屏上，不会因本 effect 被计时
+  // ——否则 1s 持有期给屏上壳起表，保留策略会把"用户正在看的温壳"当隐藏壳回收。
   useEffect(() => {
-    if (previousActiveViewRef.current === activeView) return
+    if (previousActiveViewRef.current === paintedView) return
     const previous = previousActiveViewRef.current
-    previousActiveViewRef.current = activeView
-    delete hiddenSinceRef.current[activeView]
+    previousActiveViewRef.current = paintedView
+    delete hiddenSinceRef.current[paintedView]
     if (previous !== null) hiddenSinceRef.current[previous] = Date.now()
-  }, [activeView])
+  }, [paintedView])
 
   // hiddenSince 键随挂载收敛（覆盖注册表删除分支与回收两条移除路径）+
   // 挂载/回收/激活变化后尽快补查一轮回收（60s 安全窗外的兜底由周期 tick 承担）。
@@ -3239,6 +3964,11 @@ export default function App() {
   useEffect(() => {
     const eligible = prewarmEligibleRef.current
     prewarmQueueRef.current = prewarmQueueRef.current.filter(id => eligible.has(id))
+    // R8：已不再 eligible 的意图优先级键（被点开而挂载、被回收抑制、退役、
+    // harvest 停车）就地作废——悬停不得让一道已经落下的 App 纪律复活。
+    for (const id of [...intentPriorityRef.current]) {
+      if (!eligible.has(id)) intentPriorityRef.current.delete(id)
+    }
     for (const instance of remoteInstances) {
       const id = sourceIdForInstance(instance)
       if (!eligible.has(id)) continue
@@ -3380,6 +4110,64 @@ export default function App() {
     enqueueNotificationOpen,
     reportNotificationAckFailure,
   ])
+
+  /**
+   * W4「全部已读」：读水位与落盘都在 App 手里（WS-C 的读数纪律），所以侧栏只发意图、
+   * 动作在此执行——一次性把该来源的读标记抬到**源级上界**（maxWatermark：
+   * max(updatedAt, completedAt) 的全表最大值），落盘并通知镜像（ackAllRead 的
+   * read-all 地板），然后重算派生（蓝点/todo 立即清空，单调提升绝不回退）。
+   */
+  const markSourceAllRead = useCallback((sourceId: string): void => {
+    if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
+    const snapshot = sessionFactsRef.current[sourceId]
+    const rows = snapshot !== undefined && snapshot.verdict === 'ok' ? snapshot.rows : undefined
+    if (rows === undefined) return
+    const through = maxWatermark(rows)
+    // 没有可用水位（全是 0）时什么都不做：绝不写一个凭空的"已读"读数。
+    if (through <= 0) return
+    const table = readMarksRef.current[sourceId] ?? {}
+    const next: Record<string, number> = { ...table }
+    for (const sessionId of Object.keys(rows)) {
+      next[sessionId] = advanceReadMark(next[sessionId], through) ?? through
+    }
+    readMarksRef.current = { ...readMarksRef.current, [sourceId]: next }
+    schedulePersistUnread()
+    sessionFactsSourcesRef.current.get(sourceId)?.ackAllRead(clientInstallIdRef.current, through)
+    recomputeSourceUnread(sourceId)
+  }, [recomputeSourceUnread, schedulePersistUnread])
+
+  /** W4：侧栏「全部已读」请求（插件→App 单向，与 openSession 同一条桥纪律）。 */
+  useEffect(() => {
+    const unsubscribe = chamberBridge.onMarkAllRead(({ sourceId }) => {
+      markSourceAllRead(sourceId)
+    })
+    return unsubscribe
+  }, [markSourceAllRead])
+
+  /**
+   * R8 意图预热（blueprint §4.2/§4.3）：来源头部 hover dwell（插件侧
+   * shared/prewarm-intent.ts 的 120ms 机器）到达这里后只做一件事——把该来源
+   * 提到**既有**后台预热队列的队首，让既有 drainPrewarm/pickPrewarmTarget
+   * 先看到它。绝不代行"点开"：被回收抑制 / 已挂载 / 收割停车 / 未就绪的来源
+   * 都不在 prewarmEligible 里，意图在此原样丢弃（不删 prewarmSuppressedRef
+   * 的键——否则就是"回收后立刻重新 boot"的空转）；用户明确点开仍走 selectView
+   * 原路（清抑制 + 挂载）。每会话预算/冷却见 drainPrewarm 的计费与纯策略。
+   */
+  useEffect(() => {
+    const unsubscribe = chamberBridge.onIntentPrewarm(({ sourceId }) => {
+      if (!prewarmEligibleRef.current.has(sourceId)) return
+      const now = Date.now()
+      if (!intentPrewarmAllowed(intentBudgetRef.current, sourceId, now)) return
+      intentPriorityRef.current.add(sourceId)
+      prewarmQueueRef.current = prioritizePrewarmSource(
+        prewarmQueueRef.current,
+        sourceId,
+        prewarmEligibleRef.current,
+      )
+      drainPrewarmRef.current()
+    })
+    return unsubscribe
+  }, [])
 
   /** 侧边栏插件打开请求（05 §3）：mount 订阅、卸载取消。请求通道单向
    *  （插件→App）；打开终态经 outcome 回报（App→每个 sidebar shell，
@@ -3962,12 +4750,10 @@ export default function App() {
         delete prevRunningRef.current[sourceId]
         delete prevRuntimeFactsRef.current[sourceId]
         delete notifiedCompleteRef.current[sourceId]
-        setCompletedBySource(prev => {
-          if (prev[sourceId] === undefined) return prev
-          const next = { ...prev }
-          delete next[sourceId]
-          return next
-        })
+        // R2（2026-12 facts wiring）：**不再**删来源账本。撤回只清易失的转移记忆
+        // （prevRunning 是「转移」不是「状态」，持久化会伪造边沿）；durable 账本
+        // 由事实重算——同代重挂/撤回后未读仍在（派生投影，账本不再是唯一来源）。
+        recomputeSourceUnread(sourceId)
         return
       }
       // 通知边沿（设计 19 §3.2/§3.3）：独立纯函数 detectNotificationEdges +
@@ -4003,108 +4789,48 @@ export default function App() {
       }
       notifiedCompleteRef.current[sourceId] = deduped.notified
       if (deduped.edges.length > 0) {
-        // 事件组装（设计 19 §3.3）：文案来自 App 框架的 typed 字典
-        // （locales.ts，T16 2026-09-11 upstream-alignment）；本 effect 依赖
-        // []，拿不到 render 作用域的 `t`，因此在事件组装时读取当前文档语言
-        // （与 render 侧同一个读法：readDocumentLocale）。label/title 取渲染期
-        // 镜像（同上）。桥未就绪（window.dshChamber 异步出现）静默
-        // 跳过——边沿是低频事件，错过早期事件可接受，不报错刷屏。组装块
-        // 与蓝点对账隔离：任何异常不得吞掉该份上报的蓝点推进（try/finally
-        // 保底，主链路 notify 本身有 catch）。
-        try {
-          const bridge = window.dshChamber?.notifications
-          if (bridge !== undefined) {
-            const copyLocale = readDocumentLocale()
-            const label = serverLabelsRef.current[sourceId] ?? sourceId
-            const aggregate = aggregatesRef.current[sourceId]
-            // I3 (official display label): the row's resolved displayTitle first,
-            // then the durable title — a session whose title the host could not
-            // read is named by its project directory, exactly like its row. The
-            // localized untitled copy survives ONLY for the genuinely absent row
-            // (no aggregate / the session is not in the projection): there the
-            // frame truly has no label fact, and this site stays dictionary-owned
-            // (frame-locale audit T15).
-            const sessionTitle = (sessionId: string) => {
-              const row = aggregate?.sessions.find(session => session.sessionId === sessionId)
-              const display = row?.displayTitle
-              if (display !== undefined && display !== '') return display
-              if (row?.title !== undefined && row.title !== '') return row.title
-              return frameText(copyLocale, 'session.untitled')
-            }
-            for (const edge of deduped.edges) {
-              const title =
-                edge.kind === 'complete' ? frameText(copyLocale, 'notification.sessionComplete')
-                : edge.kind === 'ask' ? frameText(copyLocale, 'notification.awaitingAnswer')
-                : frameText(copyLocale, 'notification.awaitingApproval')
-              const body = `${label} · ${sessionTitle(edge.sessionId)}`
-              // 正在屏幕上查看的会话豁免（与 OpenChamber requireHidden 同语义；
-              // 单窗口下 renderer 的 document.hasFocus() 与主进程
-              // isAnyWindowFocused() 等价，主进程再查一次作权威）。
-              const requireHidden =
-                sourceId === activeViewRef.current &&
-                edge.sessionId === report.current &&
-                document.hasFocus()
-              void bridge.notify({
-                sourceId,
-                sourceFingerprint,
-                sessionId: edge.sessionId,
-                kind: edge.kind,
-                title,
-                body,
-                requireHidden,
-              }).catch(err => console.warn('[notifications] 发送失败:', err))
-            }
-          }
-        } catch (error) {
-          console.warn('[notifications] 事件组装失败:', error)
+        // 唯一组装点（2026-12）：文案/标题/requireHidden 全在 emitSessionNotification。
+        // facts.ok 的完成由**第二入口**（watcher completedAt）负责——本入口只发
+        // 无 facts 来源的 completes 与两路共担的 ask/request，避免同一次完成双横幅
+        // （W2 出口「双入口单横幅」；同一行取同一水位函数 completedAt ?? updatedAt）。
+        const factsSnapshot = sessionFactsRef.current[sourceId]
+        const usableFacts = factsSnapshot !== undefined && factsSnapshot.verdict === 'ok' ? factsSnapshot : undefined
+        for (const edge of deduped.edges) {
+          if (edge.kind === 'complete' && usableFacts !== undefined) continue
+          const row = usableFacts?.rows[edge.sessionId]
+          const watermark = edge.kind === 'complete'
+            ? completionWatermark(row ?? {})
+            : row !== undefined && row.updatedAt > 0 ? row.updatedAt : undefined
+          emitSessionNotification({
+            sourceId,
+            sourceFingerprint,
+            sessionId: edge.sessionId,
+            kind: edge.kind,
+            ...(watermark !== undefined ? { watermark } : {}),
+          })
         }
       }
-      // 蓝点对账（规则与 vendor 提醒同构，但「正在阅读」取 App 侧事实——
-      // 活动视图的 current 会话，而非各来源自己可能陈旧的 selected；纯函数
-      // 见 shared/derive.ts reconcileCompletedFacts）。边沿记忆 ref 在本
-      // handler 同步推进（幂等），蓝点 state 在函数式 updater 里按序组合
-      // ——同来源两次上报落在同一渲染周期也不会互相覆盖丢蓝点。每份上报
-      // 各自捕获 prevRunning 快照，保证 updater 与自己的上报正确配对。
-      const prevRunningSnapshot = prevRunningRef.current[sourceId] ?? {}
-      const nextRunning: Record<string, boolean> = {}
-      for (const [sessionId, row] of Object.entries(report.sessions)) {
-        nextRunning[sessionId] = row?.running === true
-      }
-      prevRunningRef.current[sourceId] = nextRunning
-      // 活动来源的 current 会话 = 正在阅读；后台来源无阅读者（undefined）。
-      const readingCurrent = sourceId === activeViewRef.current ? report.current : undefined
-      setCompletedBySource(prev => {
-        const result = reconcileCompletedFacts({
-          sessions: report.sessions,
-          nextRunning,
-          prevRunning: prevRunningSnapshot,
-          prevCompleted: prev[sourceId] ?? {},
-          readingCurrent,
-        })
-        if (!result.changed) return prev
-        return { ...prev, [sourceId]: result.completed }
-      })
+      // 派生账本重算（2026-12 facts wiring，主计划 §3.3-2 / R2）：规则全在纯模块
+      // unread-derivation.ts（4 参 deriveUnread + 通道边沿机）；「正在阅读」谓词
+      // = paintedView ∩ 该来源 current ∩ hasFocus，listComplete 是唯一剪枝门。
+      recomputeSourceUnread(sourceId)
     })
   }, [])
 
-  /** chamber (06 §4.1)：切到某来源时，其 current 会话立即视为已读——清除
-   *  后台期间武装的蓝点（阅读解除在 reconcile 里按上报做，这里兜底「激活但
-   *  无新上报」的路径，如点击来源头不打开会话）。 */
-  const prevActiveViewRef = useRef(activeView)
+  /** chamber (06 §4.1，2026-12 facts wiring 重裁)：**屏上**来源（paintedView，
+   *  非选择——持有窗内 active 已是目标而屏上仍是旧视图）的 current 会话立即视为
+   *  已读：清除后台期间武装的蓝点；读水位推进 + 派生重算在同一拍
+   *  （recomputeSourceUnread 内完成，覆盖「激活但无新上报」的路径，如点击来源头
+   *  不打开会话）。谓词与通知 requireHidden / readingCurrent 完全同一份
+   *  （§5-15：paintedView ∩ current ∩ hasFocus）。 */
+  const prevPaintedViewRef = useRef(paintedView)
   useEffect(() => {
-    const previous = prevActiveViewRef.current
-    prevActiveViewRef.current = activeView
-    if (previous === activeView) return
-    const current = runtimeFacts[activeView]?.current
-    if (current === undefined) return
-    setCompletedBySource(prev => {
-      const sourceCompleted = prev[activeView]
-      if (sourceCompleted === undefined || sourceCompleted[current] !== true) return prev
-      const nextCompleted = { ...sourceCompleted }
-      delete nextCompleted[current]
-      return { ...prev, [activeView]: nextCompleted }
-    })
-  }, [activeView])
+    const previous = prevPaintedViewRef.current
+    prevPaintedViewRef.current = paintedView
+    if (previous === paintedView) return
+    recomputeSourceUnread(paintedView)
+    recomputeSourceUnread(previous)
+  }, [paintedView, recomputeSourceUnread])
 
   // 未读徽标（design 19 §3.7）：completedBySource（完成未读蓝点集）是徽标计数的
   // 唯一事实源——跨来源求未读会话数（projectBadgeCount，纯函数），推给主进程
@@ -4142,6 +4868,9 @@ export default function App() {
   useEffect(() => {
     const count = projectBadgeCount(completedBySource, runtimeFacts)
     badgeCountRef.current = count
+    // I3（plan §10）：把 renderer 派发的计数发布成只读回读值，验收可比对
+    // 「徽标数 == 蓝点集合大小」，无需 IPC 或读主进程状态。
+    publishBadgeCount(count)
     pushBadgeWithRetry(LISTENER_READY_RETRY_LIMIT)
   }, [completedBySource, runtimeFacts, pushBadgeWithRetry])
 
@@ -4208,6 +4937,18 @@ const HEALTH_ERROR_GRACE_MS = 10_000
   // 成功态由骨架屏/真实 UI 呈现。
   const activeShellState = shellStates[activeView]
   const activeShellError = activeShellState?.error ?? null
+  // W3 失败/控制面不可达的**强制揭示**（蓝图 §2.6-7）：这两条路径继续用 selected
+  // （用户选的那个失败必须立刻可见），并且不等待揭示门——覆盖层是模态且不透明的，
+  // 没有白帧风险；但屏上不能停在旧视图上等一个永远不会到来的"目标首帧"。直接
+  // setPaintedView（不走过渡节）：它在同一提交里把 painted 收敛到 selected，覆盖层
+  // 随之独占屏幕。揭示门的 failed/settled 分支是常规路径，这里是兜底（含控制面
+  // 不可达这种与壳状态无关的全局条件）。
+  useEffect(() => {
+    if (activeShellError === null && !controlUnreachable) return
+    if (paintedViewRef.current === activeView) return
+    revealHoldStartedAtRef.current = null
+    setPaintedView(activeView)
+  }, [activeShellError, controlUnreachable, activeView])
   // T15 (2026-09-11 upstream-alignment): the failed boot's plugin ids, as the
   // official report lists them (shell.ts collectFailedEntries reads the failed
   // boot's own loader sweep). Empty for failures that produced no loader entry
@@ -4328,7 +5069,10 @@ const HEALTH_ERROR_GRACE_MS = 10_000
               basePath={instanceBasePath(viewId)}
               sourceFingerprint={sourceFingerprint}
               transport={transport}
-              active={activeView === viewId}
+              // W3：可见性由 **paintedView**（屏上是谁）驱动，不是选择——点击后旧视图
+              // 保持可见到揭示门放行，目标壳（未 settle 时仍是 instance-pending）绝不
+              // 在持有窗内提前露出。选择语义仍走 activeView（失败面/横幅/侧栏导航）。
+              active={paintedView === viewId}
               label={serverLabels[viewId] ?? (viewId === LOCAL_INSTANCE_ID ? t('source.local') : viewId)}
               locale={locale}
               onSettled={handleInstanceSettled}

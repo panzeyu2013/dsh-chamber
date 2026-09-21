@@ -81,6 +81,12 @@ export interface InstanceViewProps {
   sourceFingerprint: string
   /** Immutable transport mechanism for open-in and other per-entry capability gates. */
   transport: ChamberTransport
+  /**
+   * 本视图是否是**屏上那一个**（W3 起由 App 的 `paintedView` 驱动，不是选择
+   * activeView）：选择与绘制分离后，点击目标但目标首帧未就绪期间旧视图仍是唯一
+   * 可见面。本组件只消费该事实（可见性类 + 悬浮卡关闭 + settle 过渡节判定），
+   * 不感知切换意图。
+   */
   active: boolean
   /** 服务器显示名（骨架屏文案）。 */
   label: string
@@ -185,7 +191,8 @@ export default function InstanceView({
     aliveRef.current = true
     return () => { aliveRef.current = false }
   }, [])
-  // settle 时读取最新可见性（boot 期间视图可能被点击激活——避免用闭包里的旧值）。
+  // settle 时读取最新可见性（W3：active = App 的 paintedView，读数必须在 settle
+  // 到达时取，不能吃闭包里的旧值——持有窗内 settle 与揭示是两拍）。
   const activeRef = useRef(active)
   activeRef.current = active
   const [shell, setShell] = useState<ShellState>(() => shellStateIdle(instanceId, basePath))
@@ -252,7 +259,8 @@ export default function InstanceView({
       // 陈旧上报会污染重加视图的失败覆盖层判定）；被更新的尝试取代的迟到
       // settle 同样丢弃。
       if (!aliveRef.current || bootToken !== bootTokenRef.current) return
-      // settle 落地：可见视图用 View Transition（骨架 → 内容/失败报告）；
+      // settle 落地：屏上视图（activeRef = App 的 paintedView，W3 语义）用 View
+      // Transition（骨架 → 内容/失败报告，或揭幕后的内容更新）；
       // 后台 boot（预热）即时落位——用户点击切换时的过渡由 App 层覆盖。
       // 键 'settle'（perf T2）：与视图切换流跨键隔离——settle 若被同键吞并
       // 会导致骨架 veil 永驻；同视图连续 settle（重试链）单槽合并。
