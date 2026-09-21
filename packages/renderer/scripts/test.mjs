@@ -76,6 +76,7 @@ export const GROUPS = {
   'view-runtime': [
     'test/view-runtime/retention.test.ts',
     'test/view-runtime/view-transition.test.ts',
+    'test/view-runtime/frame-coalescer.test.ts',
     'test/view-runtime/sidebar-scroll-sync.test.ts',
   ],
   // svg-resource: 文档级 SVG 资源 id 归属（N-ctx 失绘不变量，design 05 §4.2）

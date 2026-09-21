@@ -53,11 +53,13 @@ import {
   isSettledShellState,
 } from '../shell.ts'
 import { runViewTransition } from '../view-transition.ts'
+import { createFrameCoalescer } from '../frame-coalescer.ts'
 import {
   isTerminalUnreadyPhase, shouldAnnounceRetryQueue, veilShowsActions, veilState,
 } from '../source-readiness.ts'
 import {
   readSessionSurfacePhase, shouldReleaseVeilForSurface, surfaceHoldBoundMs, SESSION_PHASE_ATTRIBUTE,
+  SURFACE_SAMPLE_MIN_INTERVAL_MS,
   type SessionSurfacePhase,
 } from '../session-surface.ts'
 import { frameText, type FrameLocale } from '../locales.ts'
@@ -348,21 +350,24 @@ export default function InstanceView({
     if (!surfaceHoldActive) return
     const el = containerRef.current
     if (el === null) return
-    let frame = 0
-    const sample = (): void => {
-      const next = readSessionSurfacePhase(el)
-      setSurfacePhase(prev => (prev === next ? prev : next))
-      // 连续缺失起点只在"缺席开始"那一帧落一次，根回来后清空；同值返回原引用不触发渲染。
-      setAbsentSince(prev => {
-        if (next !== 'absent') return prev === null ? prev : null
-        return prev === null ? monotonicNow() : prev
-      })
-    }
-    frame = requestAnimationFrame(() => { frame = 0; sample() })
-    const observer = new MutationObserver(() => {
-      if (frame !== 0) return
-      frame = requestAnimationFrame(() => { frame = 0; sample() })
+    // 采样合并（2026-09 渲染进程崩溃轮）：boot 窗口里 DOM 变更密集，原来的
+    // "每次变更排一帧" 等于每帧一次 setState（React 同步 commit 就发生在 rAF
+    // 回调里——正是崩溃栈的入口形态）。合并器保证"首个变更下一帧、其后每
+    // SURFACE_SAMPLE_MIN_INTERVAL_MS 一次、尾部必采"，相位语义不变。
+    const sampler = createFrameCoalescer({
+      minIntervalMs: SURFACE_SAMPLE_MIN_INTERVAL_MS,
+      sample: (): void => {
+        const next = readSessionSurfacePhase(el)
+        setSurfacePhase(prev => (prev === next ? prev : next))
+        // 连续缺失起点只在"缺席开始"那一帧落一次，根回来后清空；同值返回原引用不触发渲染。
+        setAbsentSince(prev => {
+          if (next !== 'absent') return prev === null ? prev : null
+          return prev === null ? monotonicNow() : prev
+        })
+      },
     })
+    sampler.request()
+    const observer = new MutationObserver(() => sampler.request())
     observer.observe(el, {
       subtree: true,
       childList: true,
@@ -371,7 +376,7 @@ export default function InstanceView({
     })
     return () => {
       observer.disconnect()
-      if (frame !== 0) cancelAnimationFrame(frame)
+      sampler.cancel()
     }
     // deps 只认持有窗、容器更换与请求换代：释放是一次"电平翻转"，观察器必须继续活着
     // （注释里那句"不因一次释放而断开"要字面成立），把 surfaceRelease 放进依赖只会白白

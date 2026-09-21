@@ -82,6 +82,16 @@ export const SURFACE_ABSENT_FALLBACK_MS = 2_000
 export const SURFACE_MAX_HOLD_MS = 70_000
 
 /**
+ * 相位采样（MutationObserver → 相位落 state）的最小间隔，2026-09 渲染进程崩溃轮。
+ *
+ * 采样原本是"每次 DOM 变更排一帧"，在 boot 窗口（各来源壳 + 插件同时装载）等于每帧
+ * 一次 React 状态更新；Apple 符号化的崩溃栈正是"rAF 回调内一个热函数 OSR 进入时
+ * JSC 代码块替换 trap"。合并到 100ms 并把尾部采样保证住，语义不变（最终相位一定会被
+ * 观察到，遮罩判定不依赖中间帧），每帧工作量下降约 6 倍。
+ */
+export const SURFACE_SAMPLE_MIN_INTERVAL_MS = 100
+
+/**
  * 相位 → 本次持有的上界（唯一映射，组件与判据共用一处，避免两处手工同步）：
  * `absent` 走 2s 兜底，`hero`/`settling` 走 70s 外层保险（只防"持有永不到期"）。
  */

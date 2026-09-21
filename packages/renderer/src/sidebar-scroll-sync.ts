@@ -66,8 +66,21 @@ export interface SidebarScrollAnchor {
 const INSTANCE_VIEW_SELECTOR = '.instance-view'
 const SCROLL_CONTAINER_SELECTOR = '[data-chamber-sidebar-scroll]'
 const ROW_SELECTOR = '[data-chamber-row]'
+/** Attribute name behind {@link ROW_SELECTOR} (single-lookup row resolution). */
+const ROW_ATTRIBUTE = 'data-chamber-row'
 /** Timer fallback cadence when rAF is unavailable or the document is hidden. */
 const RETRY_MS = 80
+/**
+ * Frame-tight (rAF) retry budget for a restore chain — 2026-09 renderer-crash
+ * round. The chain must still park a cold-booted shell within a frame of its
+ * container mounting (the skeleton→content reveal cannot beat it), but the
+ * previous "rAF for the whole 8s deadline" shape kept one DOM walk per frame
+ * running for the entire boot window — exactly when the chamber mounts every
+ * source's shell and JSC is compiling at its busiest. After this budget the
+ * chain drops to the {@link RETRY_MS} timer cadence (12x fewer attempts per
+ * second), which measures the same settled content the REFINE phase wants.
+ */
+const FRAME_TIGHT_BUDGET_MS = 200
 
 function findInstanceView(instanceId: string): HTMLElement | null {
   // Iterate instead of building a selector from the id — registry ids are not
@@ -85,7 +98,16 @@ function findScrollContainer(instanceId: string): HTMLElement | null {
 }
 
 function findRow(container: HTMLElement, id: string): HTMLElement | null {
-  // dataset comparison — row ids contain `/` and other non-selector-safe chars.
+  // Row ids contain `/` and other non-selector-safe chars, so the attribute
+  // value must be escaped. A single lookup replaces the previous full scan
+  // (2026-09 renderer-crash round: that scan ran on every 80ms retry of a
+  // cold-boot chain, and the per-frame retry below is the hot shape JSC was
+  // OSR-compiling when the WebContent process died). `CSS.escape` is optional
+  // because the module also runs in minimal DOM harnesses — the scan stays as
+  // the fallback and keeps identical semantics (first match, dataset compare).
+  if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') {
+    return container.querySelector<HTMLElement>(`[${ROW_ATTRIBUTE}="${CSS.escape(id)}"]`)
+  }
   for (const row of container.querySelectorAll<HTMLElement>(ROW_SELECTOR)) {
     if (row.dataset.chamberRow === id) return row
   }
@@ -187,8 +209,10 @@ export function restoreSidebarScroll(instanceId: string, anchor: SidebarScrollAn
   // container mounts while still hidden under the skeleton), so the
   // skeleton→content reveal cannot beat it. The timer fallback covers hidden
   // documents (rAF stops) and old environments.
+  const chainStartedAt = Date.now()
   const rafRetry = (): void => {
-    if (typeof requestAnimationFrame === 'function' && document.visibilityState !== 'hidden') {
+    const frameTight = Date.now() - chainStartedAt < FRAME_TIGHT_BUDGET_MS
+    if (frameTight && typeof requestAnimationFrame === 'function' && document.visibilityState !== 'hidden') {
       requestAnimationFrame(attempt)
     } else {
       window.setTimeout(attempt, RETRY_MS)
