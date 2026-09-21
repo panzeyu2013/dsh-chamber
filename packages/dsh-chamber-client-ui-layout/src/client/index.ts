@@ -333,4 +333,9 @@ export function apply(ctx: ClientContext): void {
     })
     projector.project(initial)
     const off = ctx.on('theme/change', (snapshot) => { projector.project(snapshot) })
+    return () => {
+      off()
+      projector.dispose()
+    }
+  }, 'ui-layout: document theme presenter (active view only)')
 }
