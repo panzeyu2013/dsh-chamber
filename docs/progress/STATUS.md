@@ -386,7 +386,7 @@
 
 - 依赖声明补齐与跨包原语合并暂缓（2026-09）：renderer→6 个 client-ui 包、layout→sidebar 的 devDeps 缺口已确认；linux 上 `pnpm install --lockfile-only` 会剥离跨平台 optional 解析（296 删/31 增，pnpm 以本机平台规范化），本机无法自证 → 待平台正确的 lockfile 重生成 + 人工审 optional churn；在此之前 private-fs/windows-process/semver 的跨包单一实现以 parity/lockstep 门（已常驻测试）代替。
 
-- 提交进仓构建产物维持现状（2026-09精简评估）：renderer/src/generated（4.5k 行）、dsh-runtime/dist（7.7k）、seed 包 dist（4.8k）、mobile/lib（3.2k）合计约 2 万行；移出 git 需改为构建前置并改 CI/开发链（fresh clone 不再可直接 typecheck/test），属构建流程裁决，不作为本轮精简项。
+- 提交进仓构建产物维持现状（2026-09精简评估）：真正 tracked 的是 `dsh-runtime/dist/index.js`（7,709 行）、四个 seed `dist/index.js`（4,786 行）与 mobile `dist`+`lib` 工件（3,222 行），共约 15.7k 行；三者在 `.gitignore` 反选处各有明确设计理由（seed 播种零构建依赖 / desktop shim 静态 import 包 main / gateway 打包复制），移出需改 design 08/09/17 契约与「clean checkout 可直接 typecheck/test」的前提，属构建流程裁决，未动。`renderer/src/generated` 本就只在本地生成、从未 tracked（`upstream-touchpoints.md:206` 契约即「不提交」）。
 
 - 测试面精简已到证据化上限（2026-09，commit 10c2e340）：净减 10.8k 行；各区独立复核确认 ≥25%/区需删除安全/fail-closed、跨包 parity、golden/pin 或 CI 显式引用类（desktop ≈7.3k、gateway ≈3.3k、renderer 需删 CI 固定文件），继续压缩属保护面取舍，需显式裁决。
 
