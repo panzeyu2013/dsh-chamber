@@ -331,6 +331,18 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
 
     // MARK: - SPUUpdaterDelegate
 
+    /// Sparkle **实际选择**的下载产物名：命中增量包时是 `*.delta`，回退整包时是 zip。
+    /// 单独成函数以便单测钉住观测面（STATUS 的「实机增量验收」读 shell.log 里这行）。
+    static func downloadArtifactName(_ url: URL?) -> String {
+        url?.lastPathComponent ?? "unknown"
+    }
+
+    /// shell.log 那行「Sparkle 开始下载 <版本>：<产物名>」的完整文本——单测直接钉住，
+    /// 避免 helper 留着而 emission 被删（观测证据静默消失）。
+    static func downloadLogLine(version: String, url: URL?) -> String {
+        "[shell] Sparkle 开始下载 \(version)：\(downloadArtifactName(url))"
+    }
+
     /// 找到有效更新：phase=available（页面显示版本与「更新」按钮）。
     func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
         note(.validUpdate(version: item.displayVersionString))
@@ -345,6 +357,9 @@ final class AppUpdater: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDeleg
     func updater(_ updater: SPUUpdater,
                  willDownloadUpdate item: SUAppcastItem,
                  with request: NSMutableURLRequest) {
+        // 2026-09 增量更新（可观测性）：这里能看到 Sparkle **实际选择**的产物——命中 delta
+        // 时 URL 是 *.delta，否则回退整包 zip。只写壳日志，不进冻结线（相位契约不变）。
+        shellLog(Self.downloadLogLine(version: item.displayVersionString, url: request.url))
         note(.downloadWillStart(version: item.displayVersionString))
     }
 

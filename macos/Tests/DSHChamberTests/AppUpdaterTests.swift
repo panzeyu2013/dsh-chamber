@@ -10,6 +10,35 @@ import XCTest
 @testable import DSHChamber
 
 final class AppUpdaterTests: XCTestCase {
+    /// 增量更新观测面：shell.log 必须记录 Sparkle 实际选择的产物（`*.delta` vs 整包 zip），
+    /// 实机验收据此判断「相邻版本走增量、跳版本回退整包」。
+    func testDownloadArtifactNameDistinguishesDeltaFromFullArchive() {
+        XCTAssertEqual(
+            AppUpdater.downloadArtifactName(URL(string: "https://github.com/o/r/releases/download/x/dsh-chamber1.0.0.999999999-0.9.0.999999999.delta")),
+            "dsh-chamber1.0.0.999999999-0.9.0.999999999.delta")
+        XCTAssertEqual(
+            AppUpdater.downloadArtifactName(URL(string: "https://github.com/o/r/releases/latest/download/dsh-chamber-1.0.0-macos-arm64.zip")),
+            "dsh-chamber-1.0.0-macos-arm64.zip")
+        XCTAssertEqual(
+            AppUpdater.downloadArtifactName(URL(string: "https://example.com/a.zip?token=secret#frag")),
+            "a.zip", "只记文件名：query/fragment 绝不进日志")
+        XCTAssertEqual(AppUpdater.downloadArtifactName(nil), "unknown", "缺 URL 时既不崩也不伪造文件名")
+    }
+
+    /// emission 本身也要钉住：helper 留着但 shellLog 调用被删，实机验收的证据行会静默消失。
+    func testDownloadLogLineIsTheObservableEvidence() {
+        XCTAssertEqual(
+            AppUpdater.downloadLogLine(
+                version: "0.4.0",
+                url: URL(string: "https://github.com/o/r/releases/download/x/dsh-chamber0.4.0.1-0.3.3.1.delta")),
+            "[shell] Sparkle 开始下载 0.4.0：dsh-chamber0.4.0.1-0.3.3.1.delta")
+        XCTAssertEqual(
+            AppUpdater.downloadLogLine(version: "0.4.0", url: URL(string: "https://o/r/dsh-chamber-0.4.0-macos-arm64.zip")),
+            "[shell] Sparkle 开始下载 0.4.0：dsh-chamber-0.4.0-macos-arm64.zip")
+        XCTAssertEqual(AppUpdater.downloadLogLine(version: "0.4.0", url: nil),
+            "[shell] Sparkle 开始下载 0.4.0：unknown")
+    }
+
     func testConfigurationRequiresBothFeedAndPublicKey() {
         XCTAssertNil(AppUpdater.configuration(from: [:]))
         XCTAssertNil(AppUpdater.configuration(from: ["SUFeedURL": "https://x/appcast.xml"]),

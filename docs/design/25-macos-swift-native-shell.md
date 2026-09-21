@@ -781,18 +781,53 @@ zh-Hant 显示；简繁混排是否可接受需实机判断，若要收口须先
   - 安装前清理：`SPUUpdaterDelegate.updater(_:willInstallUpdate:)` 先停受管 sidecar、收 keep-awake 与 Dock 角标
     （安装路径不保证先走我们的退出链）。打包：`build-swift-app` 把 `Sparkle.framework` 嵌入
     `Contents/Frameworks`、补 `@executable_path/../Frameworks` rpath 并校验（嵌入先于签名）。
-  - 发布：有 `SPARKLE_PUBLIC_ED_KEY` 时注入 feed/公钥，有 `SPARKLE_PRIVATE_KEY` 时用 `generate_appcast` 签名
-    appcast 随 release 上传。**enclosure 必须可解析**：beta appcast 输入目录同放当前 beta zip 与最新 final zip，
-    `--download-url-prefix` 指向滚动 tag；verify 后把**每个被引用的 zip**先传滚动 release 再传 appcast（S-36：
-    enclosure 相对滚动 tag 解析、zip 只在 `v<version>` ⇒ beta 下载 404）。稳定通道单条、无前缀、不写滚动 release；
-    稳定发布也刷新滚动 beta appcast（保留最新 beta 条目）——beta.N 见 beta.N+1 与后发 final（S-22/S-23）。两钥匙都缺
-    = 自动更新关闭（照常出包），loud 警告。契约：`UpdateController.restartAndInstallAsync?()` 为原生腿提供异步面
-    （IPC 处理器优先用它），Electron 的同步实现与页面契约不变。
-- **shell-flavor 判别字段（§0.1-E2）**：`dsh-chamber:info` 载荷带 `flavor`（`main.ts:3858`；镜像面仍 4 标量），
+  - 发布（2026-09 增量更新）：`SPARKLE_PUBLIC_ED_KEY` 注入 feed/公钥、`SPARKLE_PRIVATE_KEY` 签名 appcast；
+    **单钥匙是发布 FAIL**（公钥在而私钥缺 = 壳会轮询没人签的 feed；私钥在而公钥缺 = 会发布一个
+    「带签名 appcast 却检查不到更新」的包，而且它的 zip 之后会被当成产不出 delta 的基线），两钥匙都缺才是
+    loud 降级（照常出包、自动更新关闭）。**stable 与 beta 的收件目录/feed 上传面完全分开**（`/tmp/appcast-in-stable` /
+    `/tmp/appcast-in-beta`）：generate_appcast 按归档内嵌 `SUFeedURL` 的文件名分组，两通道归档同目录 + `-o`
+    会直接失败 `multiple appcasts found`。每通道 stage 本通道前 K 个历史 zip（`SPARKLE_DELTA_SOURCES`，默认 2、
+    上限 5；两个通道都要求基线**自带与当前发布公钥一致的非空 `SUPublicEDKey`**、且与当前 app **同分支**
+    （同 `LSMinimumSystemVersion`；解包主 app 的 `Info.plist` 判定，stable 侧再要求那次 release 带过
+    `appcast-swift.xml` 作廉价预筛）——没有公钥的旧 app，Sparkle 既不产 delta 也不写放弃标记；空 key/密钥轮换
+    后的旧 key 会产出「任何公钥都验不过」的 delta；跨分支的历史包会让 feed 出现第二个条目。这些都只降覆盖率、
+    不作基线（loud notice））→ 产出 `<sparkle:deltas>`（Sparkle 原生增量，客户端零改动、失败回退整包）：stable 用
+    `--maximum-versions 1` 保持单条目（历史 zip 只当 delta 基线、不进 feed，避免 `releases/latest` 死链），
+    beta 保留最近 3 条（合并时把旧 feed 的 beta 条目也并回来并以 `--beta-item-limit` 截断：staging 少收归档时
+    旧 beta 不许消失）；verify 在**没有任何放弃/丢失**时按最新基线精确断言 `deltaFrom` 且 delta 条数 = staged
+    基线数，否则只要求已核实的匹配数；并另有**逐基线账目**——每个 staged 基线要么在 appcast 里有它自己的
+    `deltaFrom`、要么 Sparkle 为 (新构建号, 它) 写了放弃标记 `*.ignore`，两者都不是即点名 FAIL
+    （逐条归因才挡得住「多 branch / 多条 feed 的标记互相顶替」，且全部被放弃时门禁也不退化）；此外 verify 会用 `SPARKLE_PUBLIC_ED_KEY` 对**本版本 zip 与每个 delta 逐条做 Ed25519
+    真验签**（`--signatures-dir` 提供真实字节）——只查「签名存在」挡不住密钥轮换后那个任何公钥都验不过的
+    签名（真实 Sparkle 2.10.0 复现：旧包内嵌 A、新包/签名用 B 时 delta 签名两边都不成立）。**Sparkle 主动放弃 ≠ 链路退化**：它按体积
+    规则（delta > 7/8 整包）放弃时只在收件缓存写 `*.ignore`、stdout 无提示——发布腿据此把那些基线降级为
+    loud 警告 + 整包下载，只有「没有放弃标记却没产出 delta」才 FAIL（否则体积规则会误红正式发布）。**enclosure 必须可解析**：beta 生成时
+    `--download-url-prefix` 指向滚动 tag，当前 beta zip 与本次新 delta 先传滚动 release 再传 appcast（S-36）；
+    stable 不传前缀（形状除新增 `<sparkle:deltas>` 外不变），delta 随 draft 上传。**stable appcast 从不发布到
+    滚动 release**；S-23 刷新只把 final zip + stable delta 推到滚动 release（先归档后 feed），并覆盖滚动 beta
+    feed。**S-23 改法**：beta feed 的 final 条目由 `scripts/release/merge-native-feed.mjs` 从已发布 stable feed
+    复制并改挂**版本固定**前缀 `releases/download/<stable-tag>/`（缺 stable feed 时保留上次滚动 feed 里的
+    final 条目，绝不删可见性）；stable 发布时以「已发布滚动 feed 的 beta 条目 + 本次 final 条目（URL 改写为
+    滚动前缀）」合并刷新滚动 feed。**两个前缀是契约**：beta 期抄来的 final 走版本固定前缀（`releases/latest`
+    会被后续正式版移走 ⇒ 404），stable 刷新后的 final 走滚动前缀；beta.N 见 beta.N+1 与后发 final
+    （S-22/S-23）。契约：
+    `UpdateController.restartAndInstallAsync?()` 为原生腿提供异步面（IPC 处理器优先用它），Electron 的同步实现与
+    页面契约不变。
+    **被否决的替代方案**：① 两通道共用一个收件目录（原状）——首个正式版原生包落地时必报
+    `multiple appcasts found`，否决；② beta 腿下载最新正式版 zip 放进收件目录（S-36 旧做法）——每次 beta 多下
+    83MB，且 final 条目 URL 依赖可变的 `releases/latest`，改为从已发布 stable feed 复制条目；③ 用「放弃标记
+    计数」精确复现 Sparkle 的 7/8 体积规则并硬 FAIL——合法的大改版会误红正式发布，改为标记存在即 loud 降级、
+    无标记才 FAIL（签名失败另行硬失败）；④ 把 delta 期望逐条绑到每个基线——`--maximum-deltas` 与 branch point
+    会让合法放弃变成红，改为「最新基线精确 + 条数 ≥ 剩余基线数 + 账目守恒」；⑤ stable 保留多条历史条目——
+    历史条目会引用 `releases/latest/download/<旧 zip>` 死链，改为 `--maximum-versions 1`。
+    **同版本重跑**：滚动 release 是公开面，重跑时先比对同名 zip 的字节——一致才允许覆盖（幂等重跑），
+    不一致直接 FAIL 并提示提升 beta 号（否则已发布 feed 的签名指向的字节变了，客户端先验签失败）。
+    **draft 面顺序**：appcast 在 zip/delta 之后才上传到 draft（S-36 的「归档先于 feed」不再依赖「draft 不可见」）。
+- **shell-flavor 判别字段（§0.1-E2）**：`dsh-chamber:info` 载荷带 `flavor`（`main.ts:3892` 的 `hostFacts`；镜像面仍 4 标量），
   但**共享 renderer 至今无消费者**——UI 能力门（更新文案/重启安装按钮）实际由 `installBlockedReason` 与原生能力
   位驱动；字段保留备查（用前须补消费者与 preload.cts/global.d.ts 镜像测试）。
 - **检查腿的宿主叶**：headless 控制器 `setState` 时逐个 listener 走 try/catch，推送腿抛错绝不反噬控制器
-  （`update-headless.ts:134-148`）；sidecar-ctx 的 HostEdges 必须**显式**提供惰性 `disarmUpdaterQuit: () => {}`
+  （`update-headless.ts:212-224`）；sidecar-ctx 的 HostEdges 必须**显式**提供惰性 `disarmUpdaterQuit: () => {}`
   （`sidecar-ctx.ts:2768`）——methodStub 把「缺失成员」变成调用即抛的 `sidecar-ctx-unavailable:*` 递归 stub
   （`sidecar-ctx.ts:2774-2784`，抛错点 `:2777`），省略会让首次「检查更新」抛错、checking 卡死；这是有意的惰性
   契约叶，不是死代码。

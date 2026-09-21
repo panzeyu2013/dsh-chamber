@@ -333,7 +333,7 @@
 
 ## 设计未决
 
-- Electron / Swift双flavor接入点parity（2026-12八路逐函数复核 + 打包/引擎专项）：**仍open：S-01（外部门禁：EdDSA双密钥真实值、Sparkle编译证明、实机安装验收）、G19（CI内启动签名打包`.app`：凭据+ GUI会话）、S-44（Electron 43.4.0无授权查询/申请面；仅剩实机确认系统提示等价）、S-10（遮挡/App Nap无实测）、T-28（`corner-shape`超椭圆待vendor `ui-theme`裁决；裸`scrollbar-width`/`field-sizing`/`text-autospace`引擎降级已登记）；核验清单（启动恢复、打包态冷启动首载复验（宿主不占用17500）**、首帧时序、beta真机下载安装、坏密钥页面态、Sparkle节奏、ATS loopback、登录项回读、工具链native gate的WKWebView段、隐藏/遮挡态）见§4；登记`docs/progress/deviations.md` §1/§3/§4，可达性纪律与盘点见 §6。
+- Electron / Swift双flavor接入点parity（2026-12八路逐函数复核 + 打包/引擎专项）：**仍open：S-01（外部门禁：EdDSA双密钥真实值、Sparkle编译证明、实机安装验收、增量delta实机验收——相邻版本走`.delta`、跳版本自动回退整包）、G19（CI内启动签名打包`.app`：凭据+ GUI会话）、S-44（Electron 43.4.0无授权查询/申请面；仅剩实机确认系统提示等价）、S-10（遮挡/App Nap无实测）、T-28（`corner-shape`超椭圆待vendor `ui-theme`裁决；裸`scrollbar-width`/`field-sizing`/`text-autospace`引擎降级已登记）；核验清单（启动恢复、打包态冷启动首载复验（宿主不占用17500）**、首帧时序、beta真机下载安装、坏密钥页面态、Sparkle节奏、ATS loopback、登录项回读、工具链native gate的WKWebView段、隐藏/遮挡态）见§4；登记`docs/progress/deviations.md` §1/§3/§4，可达性纪律与盘点见 §6。
 
 - 原生窗口高度折中待裁决（2026-09，open）：Swift内容区1280×786（外框~814）对Electron外框1280×800（视口772）各偏~14pt；单侧对齐（原生取772，或Electron开`useContentSize`后同取800）未决。登记deviations.md S-49；宽度偏好仍per-flavor页面存储（T-18）。
 
