@@ -11,6 +11,12 @@ import { fileURLToPath } from 'node:url'
 import { createPrewarmLedger, publishPrewarmInstrument } from '../../src/prewarm-ledger.ts'
 
 const APP = readFileSync(fileURLToPath(new URL('../../src/App.tsx', import.meta.url)), 'utf8')
+// 阶段 3：drainPrewarm 已平移到视图调度 hook —— attempt 锚点钉在最终落点；
+// hit（selectView）与 cancelled（retireSources）仍在 App，继续读 APP。
+const SCHEDULER = readFileSync(
+  fileURLToPath(new URL('../../src/app-hooks/use-view-scheduler.ts', import.meta.url)),
+  'utf8',
+)
 
 test('the ledger counts per source and computes the documented hit rate', () => {
   const ledger = createPrewarmLedger()
@@ -43,7 +49,7 @@ test('the instrument publishes once and stays live', () => {
 
 test('App records attempt/hit/cancelled at the three real anchors', () => {
   // attempt：后台挂载真的开始（加入 autoPrewarmed 之后、mountedViews 之前）。
-  assert.match(APP, /autoPrewarmedRef\.current\.add\(next\)[\s\S]{0,200}?recordPrewarm\('attempt', next\)/)
+  assert.match(SCHEDULER, /autoPrewarmedRef\.current\.add\(next\)[\s\S]{0,200}?recordPrewarm\('attempt', next\)/)
   // hit：删除集合成员**之前**判定（此刻它仍是自动预热态）。
   assert.match(APP, /if \(autoPrewarmedRef\.current\.has\(viewId\)\) recordPrewarm\('hit', viewId\)\n\s*autoPrewarmedRef\.current\.delete\(viewId\)/)
   // cancelled：在途预热随来源退役作废。

@@ -231,7 +231,9 @@ test('P4/W3：可见性由 paintedView 驱动，选择与绘制分离', () => {
 })
 
 test('P4/W3：保留 / 回收 / 计时 / 侧栏高亮 / 退役都跟随 paintedView', () => {
-  const app = read('../../src/App.tsx')
+  // 阶段 3：回收/隐藏计时/candidates 判定移到 use-view-scheduler —— 本测试对本
+  // 落点取并集判 presence（App + scheduler），无负断言，断言强度不变。
+  const app = read('../../src/App.tsx') + '\n' + read('../../src/app-hooks/use-view-scheduler.ts')
   assert.ok(
     app.includes('id === activeViewRef.current || id === paintedViewRef.current || id === pendingViewRef.current'),
     'reclaimView 守卫必须含 painted：屏上的壳永不被回收（唯一拆除入口）',

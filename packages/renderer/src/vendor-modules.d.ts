@@ -277,11 +277,13 @@ declare module '@dsh-chamber/dsh-chamber-client-ui-layout/client' {
 }
 
 /**
- * The chamber self-built connections settings section plugin
- * (packages/dsh-chamber-client-ui-settings-connections, 05 §5): registers the
- * 'settings.section' entry id 'connections' — local instance card + remote
- * host management. The renderer only plugs it into the per-instance boot
- * graph; loose face.
+ * The chamber self-built connections settings plugin
+ * (packages/dsh-chamber-client-ui-settings-connections, 05 §5): registers only
+ * its locale namespace ('dsh-chamber.settings.connections'); the host-ctx
+ * 'settings.section' registration was removed (2026-12, audit D-5) because the
+ * section is a FIXED chamber-global nav page ('__connections') rendered by the
+ * settings shell, not a per-source ledger row. The renderer only plugs it into
+ * the per-instance boot graph; loose face.
  */
 declare module '@dsh-chamber/dsh-chamber-client-ui-settings-connections/client' {
   export const inject: string[]
@@ -291,7 +293,8 @@ declare module '@dsh-chamber/dsh-chamber-client-ui-settings-connections/client' 
 /**
  * The chamber self-built settings shell plugin
  * (packages/dsh-chamber-client-ui-settings-bridge): registers the 'sidebar.settings'
- * entry id 'chamber-shell' at priority -1, shadowing the official
+ * entry id 'chamber-shell' at priority -1000
+ * (SETTINGS_SHELL_SHADOW_PRIORITY), shadowing the official
  * SettingsRoot — a server dropdown over the selected instance's official
  * settings sections, plus the fixed chamber-global connections entry. The
  * renderer only plugs it into the per-instance boot graph; loose face.

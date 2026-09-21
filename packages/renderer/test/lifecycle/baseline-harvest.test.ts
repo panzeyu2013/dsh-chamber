@@ -142,6 +142,12 @@ test('the last harvested shell is kept warm and yields as soon as another candid
 
 // ---- 源码级接线钉子（2026-12 复查 MAJOR：纯账本测试无法覆盖 App 侧接线）----
 const appSource = readFileSync(new URL('../../src/App.tsx', import.meta.url), 'utf8')
+// 阶段 3：收割/预热调度簇已抽为 use-view-scheduler —— 该簇的接线锁钉在 hook 落点；
+// 投影侧（deriveServers/InstanceView/shell.ts）锁继续读原文件（下方分开断言）。
+const schedulerSource = readFileSync(
+  new URL('../../src/app-hooks/use-view-scheduler.ts', import.meta.url),
+  'utf8',
+)
 
 test('the App arms an absolute cap for the in-flight background mount', () => {
   // 只扫 harvestIntentRef 的放弃臂不够：用户点开收割壳会撤销意图、温壳预热从不写
@@ -150,39 +156,42 @@ test('the App arms an absolute cap for the in-flight background mount', () => {
   // 放弃臂必须按**每个挂载视图的挂载时刻**判定（只盯 prewarmInflight 会漏掉
   // 用户点开/深链挂载的挂死壳；2026-12 复查 MAJOR），且标记失败时要重新计时，
   // 否则「重试」后同一轮清扫会立刻再次判超时。
+  // 该 ref 声明留在 App（跨簇共享，作为 deps 传入调度 hook）；放弃臂在 hook 内。
   assert.match(appSource, /const viewBootStartedAtRef = useRef<Record<string, number>>\(\{\}\)/,
     'per-view mount stamps are the abandon basis')
-  assert.match(appSource, /if \(startedAt === undefined \|\| now - startedAt < HARVEST_ABANDON_MS\) continue/,
+  assert.match(schedulerSource, /if \(startedAt === undefined \|\| now - startedAt < HARVEST_ABANDON_MS\) continue/,
     'the sweep must skip views inside the cap')
-  assert.match(appSource, /if \(settledViewIds\.has\(id\)\) continue/,
+  assert.match(schedulerSource, /if \(settledViewIds\.has\(id\)\) continue/,
     'only a never-settling mount may be abandoned (a slow healthy boot is judged by the deadline)')
   // 放弃**不能**释放同 id boot 尾：尾是 generation 记录的持有者，提前释放会让
   // 迟到的挂死 boot 与后继代同号并注册覆盖（2026-12 复查 BLOCKER）。正确做法是
   // shell.ts 对"等待上一代"设绝对上限 + producer 注册表的代际栅栏。
   assert.doesNotMatch(appSource, /abandonInstanceBootTail/,
     'the App must not release the boot tail (it owns the generation records)')
+  assert.doesNotMatch(schedulerSource, /abandonInstanceBootTail/,
+    'the scheduler hook must not release the boot tail either')
   const shellSource = readFileSync(new URL('../../src/shell.ts', import.meta.url), 'utf8')
   assert.match(shellSource, /export const INSTANCE_TAIL_WAIT_CAP_MS = BOOT_TIMEOUT_MS \* 2/,
     'shell.ts must bound the same-id predecessor wait')
   assert.match(shellSource, /ctx\.provide\('chamberBootGeneration', bootGeneration\)/,
     'the boot generation must reach the plugin ctx for the producer fence')
-  assert.match(appSource, /harvestStateRef\.current\[id\] = harvestParkedRecord\(\)/,
+  assert.match(schedulerSource, /harvestStateRef\.current\[id\] = harvestParkedRecord\(\)/,
     'the harvest path must park the abandoned source')
-  assert.match(appSource, /reclaimView\(id, wasHarvest \? 'harvest' : 'retention'\)/,
+  assert.match(schedulerSource, /reclaimView\(id, wasHarvest \? 'harvest' : 'retention'\)/,
     'the warm/user path must reclaim with suppression')
-  assert.match(appSource, /markAbandonedShellFailed\(id\)/,
+  assert.match(schedulerSource, /markAbandonedShellFailed\(id\)/,
     'an unreclaimable (active/pending) abandoned shell must surface the failure overlay')
-  assert.match(appSource, /viewBootStartedAtRef\.current\[id\] = Date\.now\(\)/,
+  assert.match(schedulerSource, /viewBootStartedAtRef\.current\[id\] = Date\.now\(\)/,
     'marking failed must re-arm the per-view window so a retry gets a fresh budget')
   // 重试复位（idle 状态上报）也必须重新计时，否则在放弃后很久才点重试会立刻再判超时。
-  assert.match(appSource,
+  assert.match(schedulerSource,
     /if \(!state\.booted && state\.error === null\) viewBootStartedAtRef\.current\[instanceId\] = Date\.now\(\)/,
     're-entering booting must re-arm the window')
   // 2026-12 FIX 5：回收视图 = 拆壳，下一次挂载是**新的 boot**——自愈标记必须随
   // 回收一并作废，否则同一 ready 世代内新挂载永远不会再自动重挂（只剩手动重试）。
   // 纯规则在 degraded-retry.ts 的 forgetDegradedRetry（boot-degradation.test.ts
   // 行为覆盖）；这里只钉 App 侧接线。
-  assert.match(appSource, /degradedRetriedRef\.current = forgetDegradedRetry\(degradedRetriedRef\.current, id\)/,
+  assert.match(schedulerSource, /degradedRetriedRef\.current = forgetDegradedRetry\(degradedRetriedRef\.current, id\)/,
     'reclaiming the view must forget the epoch mark so a fresh mount can auto-retry again')
 })
 
@@ -199,10 +208,10 @@ test('the managed-runtime probe keeps its foreground cadence and single-flight s
 })
 
 test('the App excludes managed-down gateways from harvest/prewarm', () => {
-  assert.match(appSource,
+  assert.match(schedulerSource,
     /managedRuntimeUnusable\(managedRuntime\[sourceIdForInstance\(instance\)\]\)/,
     'a down/starting managed dsh can never boot a shell — it must not burn attempts/slots')
-  assert.match(appSource, /instance\.kind === 'gateway'\s*\n\s*&& managedRuntimeUnusable/,
+  assert.match(schedulerSource, /instance\.kind === 'gateway'\s*\n\s*&& managedRuntimeUnusable/,
     'the managed exclusion must stay kind-scoped to gateways')
   assert.match(appSource,
     /const managedDown = kind === 'gateway' && transportUsable && managedRuntimeDown\(runtimeState\)/,

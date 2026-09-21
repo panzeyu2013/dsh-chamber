@@ -51,11 +51,10 @@ var __privateMethod = (obj, member, method) => (__accessCheck(obj, member, "acce
 import { Remote, TypertRemoteService } from "@deepseek-ai/dsh-typert-protocol";
 
 // src/core.ts
-import { createHash, randomUUID } from "node:crypto";
-import { access, lstat, mkdir, open, realpath } from "node:fs/promises";
-import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { homedir } from "node:os";
-import { spawn } from "node:child_process";
+import { createHash as createHash2, randomUUID } from "node:crypto";
+import { basename, isAbsolute as isAbsolute4, join as join2, relative, resolve as resolve3, sep } from "node:path";
+
+// src/core-constants.ts
 var READ_TIMEOUT_MS = 1e4;
 var MUTATION_TIMEOUT_MS = 3e4;
 var READ_OUTPUT_CAP = 1024 * 1024;
@@ -76,6 +75,8 @@ var SNAPSHOT_STATUS_TIMEOUT_MS = 1500;
 var MAX_PATH_LENGTH = 4096;
 var MAX_PREVIEWS = 512;
 var MAX_OPERATIONS = 2048;
+
+// src/core-errors.ts
 var GitWorktreeError = class extends Error {
   code;
   retryable;
@@ -123,330 +124,10 @@ async function domainResult(operation) {
     };
   }
 }
-var nodeFileSystem = {
-  realpath,
-  lstat,
-  mkdir: async (path) => {
-    await mkdir(path, { recursive: true });
-  },
-  exists: async (path) => {
-    try {
-      await access(path);
-      return true;
-    } catch {
-      return false;
-    }
-  },
-  // Bounded read: a hostile or corrupt `.git` pointer file must never be read
-  // whole into memory (gitdir lines are tiny; nothing beyond the prefix is
-  // used by worktreeGitDir's parse).
-  readFile: async (path) => {
-    const handle = await open(path, "r");
-    try {
-      const buffer = Buffer.alloc(GIT_DIR_POINTER_MAX_BYTES);
-      const { bytesRead } = await handle.read(buffer, 0, GIT_DIR_POINTER_MAX_BYTES, 0);
-      return buffer.subarray(0, bytesRead).toString("utf8");
-    } finally {
-      await handle.close();
-    }
-  }
-};
-function fail(code, message) {
-  throw new GitWorktreeError(code, message);
-}
-function safeErrorMessage(error) {
-  const text = error instanceof Error ? error.message : String(error);
-  return text.replace(/[\r\n\t]+/g, " ").slice(0, 512);
-}
-function assertRecord(value, label) {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    fail("invalid-input", `${label} must be an object`);
-  }
-}
-function assertExactKeys(value, keys, label) {
-  const allowed = new Set(keys);
-  for (const key of Object.keys(value)) {
-    if (!allowed.has(key)) fail("invalid-input", `${label} contains unsupported field '${key}'`);
-  }
-  for (const key of keys) {
-    if (!(key in value)) fail("invalid-input", `${label}.${key} is required`);
-  }
-}
-function requiredString(value, label, max = 1024) {
-  if (typeof value !== "string" || value.length === 0 || value.length > max || /[\u0000-\u001f\u007f]/u.test(value)) {
-    fail("invalid-input", `${label} must be a non-empty bounded string without control characters`);
-  }
-  return value;
-}
-function operationId(value) {
-  const id = requiredString(value, "operationId", 128);
-  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(id)) {
-    fail("invalid-input", "operationId contains unsupported characters");
-  }
-  return id;
-}
-function previewToken(value) {
-  const token = requiredString(value, "previewToken", 128);
-  if (!/^[A-Za-z0-9-]+$/u.test(token)) fail("invalid-input", "previewToken is malformed");
-  return token;
-}
-function safeBasename(value) {
-  const name = requiredString(value, "basename", 255);
-  if (name !== name.trim() || name === "." || name === ".." || name.includes("/") || name.includes("\\")) {
-    fail("unsafe-path", "basename must be one trimmed path segment");
-  }
-  if (Buffer.byteLength(name, "utf8") > 255) fail("unsafe-path", "basename is too long");
-  return name;
-}
-function safeBranchName(value, label = "branch.name") {
-  const name = requiredString(value, label, 1024);
-  if (name.startsWith("-") || name.startsWith("/") || name.endsWith("/") || name.includes("\\")) {
-    fail("invalid-branch", `${label} is not a safe local branch name`);
-  }
-  return name;
-}
-function absoluteExpectedPath(value, label) {
-  const path = requiredString(value, label, 4096);
-  if (!isAbsolute(path) || resolve(path) !== path) {
-    fail("unsafe-path", `${label} must be a normalized absolute path`);
-  }
-  return path;
-}
-function objectFingerprint(value) {
-  return JSON.stringify(value);
-}
-function opaqueId(kind, ...parts) {
-  const digest = createHash("sha256");
-  digest.update(kind);
-  for (const part of parts) {
-    digest.update("\0");
-    digest.update(part);
-  }
-  return `${kind}_${digest.digest("hex")}`;
-}
-function expectedOpaqueId(value, kind) {
-  const id = requiredString(value, `input.expected.${kind}Id`, 80);
-  if (!new RegExp(`^${kind}_[0-9a-f]{64}$`, "u").test(id)) {
-    fail("invalid-input", `input.expected.${kind}Id is malformed`);
-  }
-  return id;
-}
-function parsePreviewInput(value) {
-  assertRecord(value, "input");
-  {
-    const allowed = /* @__PURE__ */ new Set(["sourceWorkspaceId", "basename", "branch", "startRef"]);
-    for (const key of Object.keys(value)) {
-      if (!allowed.has(key)) fail("invalid-input", `input contains unsupported field '${key}'`);
-    }
-    for (const key of ["sourceWorkspaceId", "basename", "branch"]) {
-      if (!(key in value)) fail("invalid-input", `input.${key} is required`);
-    }
-  }
-  const sourceWorkspaceId = requiredString(value.sourceWorkspaceId, "sourceWorkspaceId", 256);
-  const basename2 = safeBasename(value.basename);
-  assertRecord(value.branch, "input.branch");
-  assertExactKeys(value.branch, ["kind", "name"], "input.branch");
-  if (value.branch.kind !== "existing" && value.branch.kind !== "new") {
-    fail("invalid-input", "input.branch.kind must be 'existing' or 'new'");
-  }
-  const name = safeBranchName(value.branch.name);
-  return {
-    sourceWorkspaceId,
-    basename: basename2,
-    branch: { kind: value.branch.kind, name },
-    // Same validation as the branch name: a control character or leading
-    // dash must never reach the localBranchHead argv (the allowlist would
-    // reject a leading dash, but input-layer validation is fail-closed).
-    ...value.startRef === void 0 ? {} : { startRef: safeBranchName(value.startRef, "input.startRef") }
-  };
-}
-function parseCreateInput(value) {
-  assertRecord(value, "input");
-  assertExactKeys(value, ["previewToken", "operationId"], "input");
-  return { previewToken: previewToken(value.previewToken), operationId: operationId(value.operationId) };
-}
-function parseRollbackInput(value) {
-  assertRecord(value, "input");
-  assertExactKeys(value, ["operationId"], "input");
-  return { operationId: operationId(value.operationId) };
-}
-function parseRemoveInput(value) {
-  assertRecord(value, "input");
-  {
-    const allowed = /* @__PURE__ */ new Set(["operationId", "workspaceId", "path", "expected", "deleteBranch", "discardChanges"]);
-    for (const key of Object.keys(value)) {
-      if (!allowed.has(key)) fail("invalid-input", `input contains unsupported field '${key}'`);
-    }
-    for (const key of ["operationId", "expected"]) {
-      if (!(key in value)) fail("invalid-input", `input.${key} is required`);
-    }
-  }
-  assertRecord(value.expected, "input.expected");
-  assertExactKeys(value.expected, ["repoId", "worktreeId", "branch", "head"], "input.expected");
-  const head = requiredString(value.expected.head, "input.expected.head", 128);
-  if (!/^[0-9a-fA-F]{40,64}$/u.test(head)) fail("invalid-input", "input.expected.head is not an object id");
-  return {
-    operationId: operationId(value.operationId),
-    workspaceId: value.workspaceId === void 0 ? void 0 : requiredString(value.workspaceId, "workspaceId", 256),
-    expected: {
-      repoId: expectedOpaqueId(value.expected.repoId, "repo"),
-      worktreeId: expectedOpaqueId(value.expected.worktreeId, "worktree"),
-      branch: value.expected.branch === null ? null : safeBranchName(value.expected.branch, "input.expected.branch"),
-      head: head.toLowerCase()
-    },
-    deleteBranch: value.deleteBranch === void 0 ? void 0 : safeBranchName(value.deleteBranch, "input.deleteBranch"),
-    discardChanges: value.discardChanges === void 0 ? void 0 : typeof value.discardChanges === "boolean" ? value.discardChanges : fail("invalid-input", "input.discardChanges must be a boolean"),
-    path: value.path === void 0 ? void 0 : value.workspaceId !== void 0 ? fail("invalid-input", "input.path and input.workspaceId are mutually exclusive") : absoluteExpectedPath(value.path, "input.path")
-  };
-}
-function sameArray(left, right) {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
-}
-function sameMembership(left, right) {
-  if (left.length !== right.length) return false;
-  return sameArray([...left].sort(), [...right].sort());
-}
-function assertSafeGitArgv(args) {
-  const [verb, ...rest] = args;
-  const allStrings = args.every((arg) => typeof arg === "string" && !arg.includes("\0"));
-  if (!allStrings) fail("unsafe-git-argv", "Git argv contains a non-string or NUL");
-  const exact = (...expected) => sameArray(rest, expected);
-  if (verb === "rev-parse" && (exact("--show-toplevel") || exact("--path-format=absolute", "--git-common-dir"))) return;
-  if (verb === "check-ref-format" && rest.length === 2 && rest[0] === "--branch" && !rest[1].startsWith("-")) return;
-  if (verb === "show-ref" && rest.length === 3 && rest[0] === "--hash" && rest[1] === "--verify" && rest[2].startsWith("refs/heads/") && !rest[2].slice("refs/heads/".length).startsWith("-")) return;
-  if (verb === "show-ref" && exact("--heads")) return;
-  if (verb === "branch" && rest.length === 2 && rest[0] === "-D" && !rest[1].startsWith("-") && !rest[1].startsWith("/")) return;
-  if (verb === "status" && exact("--porcelain=v1", "-z", "--untracked-files=normal")) return;
-  if (verb === "status" && exact("--porcelain=v1", "-z", "--branch", "--untracked-files=normal")) return;
-  if (verb === "worktree" && exact("list", "--porcelain", "-z")) return;
-  if (verb === "worktree" && exact("list", "--porcelain")) return;
-  if (verb === "worktree" && rest.length === 4 && rest[0] === "add" && rest[1] === "--" && isAbsolute(rest[2]) && !rest[3].startsWith("-")) return;
-  if (verb === "worktree" && rest.length === 6 && rest[0] === "add" && rest[1] === "-b" && !rest[2].startsWith("-") && rest[3] === "--" && isAbsolute(rest[4]) && /^[0-9a-fA-F]{40,64}$/u.test(rest[5])) return;
-  if (verb === "worktree" && rest.length === 3 && rest[0] === "remove" && rest[1] === "--" && isAbsolute(rest[2])) return;
-  if (verb === "worktree" && rest.length === 4 && rest[0] === "remove" && rest[1] === "--force" && rest[2] === "--" && isAbsolute(rest[3])) return;
-  fail("unsafe-git-argv", `Git command '${verb ?? "<empty>"}' is outside the worktree allowlist`);
-}
-var HOOK_GUARD = ["-c", `core.hooksPath=${process.platform === "win32" ? "NUL" : "/dev/null"}`];
-function createLocalGitRunner(spawnGit = spawn) {
-  return (request) => new Promise((resolvePromise, rejectPromise) => {
-    try {
-      if (!isAbsolute(request.cwd)) fail("unsafe-git-cwd", "Git cwd must be absolute");
-      if (!Number.isSafeInteger(request.timeoutMs) || request.timeoutMs < 1 || request.timeoutMs > 6e4) {
-        fail("unsafe-git-limit", "Git timeout is outside the supported range");
-      }
-      if (!Number.isSafeInteger(request.maxOutputBytes) || request.maxOutputBytes < 1 || request.maxOutputBytes > 4 * 1024 * 1024) {
-        fail("unsafe-git-limit", "Git output cap is outside the supported range");
-      }
-      assertSafeGitArgv(request.args);
-    } catch (error) {
-      rejectPromise(error);
-      return;
-    }
-    const environment = { ...process.env };
-    for (const key of Object.keys(environment)) {
-      if (key.startsWith("GIT_")) delete environment[key];
-    }
-    Object.assign(environment, {
-      GIT_TERMINAL_PROMPT: "0",
-      GIT_NO_LAZY_FETCH: "1",
-      GIT_OPTIONAL_LOCKS: "0",
-      // `worktree add` runs post-checkout; hook suppression is injected via the
-      // argv `-c core.hooksPath=<nul>` guard (HOOK_GUARD) at spawn time, since
-      // GIT_CONFIG_* env entries are the lowest-priority source and a repo's own
-      // core.hooksPath would override them. Filters (clean/smudge/process) are
-      // intentionally NOT disabled: they remain inside the host OS user's
-      // trusted repository-config boundary.
-      GCM_INTERACTIVE: "never",
-      LC_ALL: "C"
-    });
-    let child;
-    try {
-      child = spawnGit("git", [...HOOK_GUARD, ...request.args], {
-        cwd: request.cwd,
-        shell: false,
-        stdio: ["ignore", "pipe", "pipe"],
-        windowsHide: true,
-        env: environment
-      });
-    } catch (error) {
-      rejectPromise(new GitWorktreeError("git-spawn-failed", safeErrorMessage(error)));
-      return;
-    }
-    const stdout = [];
-    const stderr = [];
-    let bytes = 0;
-    let settled = false;
-    let terminationError;
-    let timer;
-    const rejectImmediately = (error) => {
-      if (settled) return;
-      settled = true;
-      if (timer !== void 0) clearTimeout(timer);
-      rejectPromise(error);
-    };
-    const terminateThenReject = (error) => {
-      if (settled || terminationError !== void 0) return;
-      terminationError = error;
-      if (timer !== void 0) clearTimeout(timer);
-      try {
-        child.kill("SIGKILL");
-      } catch {
-      }
-    };
-    const append = (target, chunk) => {
-      if (settled || terminationError !== void 0) return;
-      bytes += chunk.byteLength;
-      if (bytes > request.maxOutputBytes) {
-        terminateThenReject(new GitWorktreeError("git-output-limit", "Git output exceeded the bounded response limit"));
-        return;
-      }
-      target.push(chunk);
-    };
-    child.stdout.on("data", (chunk) => append(stdout, chunk));
-    child.stderr.on("data", (chunk) => append(stderr, chunk));
-    child.on("error", (error) => {
-      if (terminationError !== void 0) return;
-      rejectImmediately(new GitWorktreeError("git-spawn-failed", safeErrorMessage(error)));
-    });
-    child.on("close", (code) => {
-      if (settled) return;
-      settled = true;
-      if (timer !== void 0) clearTimeout(timer);
-      if (terminationError !== void 0) {
-        rejectPromise(terminationError);
-        return;
-      }
-      resolvePromise({
-        exitCode: code ?? -1,
-        stdout: Buffer.concat(stdout).toString("utf8"),
-        stderr: Buffer.concat(stderr).toString("utf8")
-      });
-    });
-    timer = setTimeout(() => {
-      terminateThenReject(new GitWorktreeError("git-timeout", `Git command exceeded ${request.timeoutMs}ms`));
-    }, request.timeoutMs);
-    timer.unref();
-  });
-}
-var KeyedMutex = class {
-  tails = /* @__PURE__ */ new Map();
-  async run(key, operation) {
-    const previous = this.tails.get(key) ?? Promise.resolve();
-    let release;
-    const current = new Promise((resolvePromise) => {
-      release = resolvePromise;
-    });
-    const tail = previous.then(() => current);
-    this.tails.set(key, tail);
-    await previous;
-    try {
-      return await operation();
-    } finally {
-      release();
-      if (this.tails.get(key) === tail) this.tails.delete(key);
-    }
-  }
-};
+
+// src/core-parse.ts
+import { homedir } from "node:os";
+import { isAbsolute, join, resolve } from "node:path";
 function parseBranchLine(line) {
   if (!line.startsWith("## ")) return { upstream: null, ahead: 0, behind: 0 };
   const rest = line.slice(3);
@@ -564,6 +245,343 @@ function resolveDshHome(configured, env = process.env) {
   const selected = configured ?? (fromEnv !== void 0 && fromEnv.trim().length > 0 ? fromEnv : defaultDshHome());
   return resolve(expandHomePath(selected));
 }
+
+// src/core-validation.ts
+import { createHash } from "node:crypto";
+import { access, lstat, mkdir, open, realpath } from "node:fs/promises";
+import { isAbsolute as isAbsolute2, resolve as resolve2 } from "node:path";
+var nodeFileSystem = {
+  realpath,
+  lstat,
+  mkdir: async (path) => {
+    await mkdir(path, { recursive: true });
+  },
+  exists: async (path) => {
+    try {
+      await access(path);
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  // Bounded read: a hostile or corrupt `.git` pointer file must never be read
+  // whole into memory (gitdir lines are tiny; nothing beyond the prefix is
+  // used by worktreeGitDir's parse).
+  readFile: async (path) => {
+    const handle = await open(path, "r");
+    try {
+      const buffer = Buffer.alloc(GIT_DIR_POINTER_MAX_BYTES);
+      const { bytesRead } = await handle.read(buffer, 0, GIT_DIR_POINTER_MAX_BYTES, 0);
+      return buffer.subarray(0, bytesRead).toString("utf8");
+    } finally {
+      await handle.close();
+    }
+  }
+};
+function fail(code, message) {
+  throw new GitWorktreeError(code, message);
+}
+function safeErrorMessage(error) {
+  const text = error instanceof Error ? error.message : String(error);
+  return text.replace(/[\r\n\t]+/g, " ").slice(0, 512);
+}
+function assertRecord(value, label) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    fail("invalid-input", `${label} must be an object`);
+  }
+}
+function assertExactKeys(value, keys, label) {
+  const allowed = new Set(keys);
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) fail("invalid-input", `${label} contains unsupported field '${key}'`);
+  }
+  for (const key of keys) {
+    if (!(key in value)) fail("invalid-input", `${label}.${key} is required`);
+  }
+}
+function requiredString(value, label, max = 1024) {
+  if (typeof value !== "string" || value.length === 0 || value.length > max || /[\u0000-\u001f\u007f]/u.test(value)) {
+    fail("invalid-input", `${label} must be a non-empty bounded string without control characters`);
+  }
+  return value;
+}
+function operationId(value) {
+  const id = requiredString(value, "operationId", 128);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(id)) {
+    fail("invalid-input", "operationId contains unsupported characters");
+  }
+  return id;
+}
+function previewToken(value) {
+  const token = requiredString(value, "previewToken", 128);
+  if (!/^[A-Za-z0-9-]+$/u.test(token)) fail("invalid-input", "previewToken is malformed");
+  return token;
+}
+function safeBasename(value) {
+  const name = requiredString(value, "basename", 255);
+  if (name !== name.trim() || name === "." || name === ".." || name.includes("/") || name.includes("\\")) {
+    fail("unsafe-path", "basename must be one trimmed path segment");
+  }
+  if (Buffer.byteLength(name, "utf8") > 255) fail("unsafe-path", "basename is too long");
+  return name;
+}
+function safeBranchName(value, label = "branch.name") {
+  const name = requiredString(value, label, 1024);
+  if (name.startsWith("-") || name.startsWith("/") || name.endsWith("/") || name.includes("\\")) {
+    fail("invalid-branch", `${label} is not a safe local branch name`);
+  }
+  return name;
+}
+function absoluteExpectedPath(value, label) {
+  const path = requiredString(value, label, 4096);
+  if (!isAbsolute2(path) || resolve2(path) !== path) {
+    fail("unsafe-path", `${label} must be a normalized absolute path`);
+  }
+  return path;
+}
+function objectFingerprint(value) {
+  return JSON.stringify(value);
+}
+function opaqueId(kind, ...parts) {
+  const digest = createHash("sha256");
+  digest.update(kind);
+  for (const part of parts) {
+    digest.update("\0");
+    digest.update(part);
+  }
+  return `${kind}_${digest.digest("hex")}`;
+}
+function expectedOpaqueId(value, kind) {
+  const id = requiredString(value, `input.expected.${kind}Id`, 80);
+  if (!new RegExp(`^${kind}_[0-9a-f]{64}$`, "u").test(id)) {
+    fail("invalid-input", `input.expected.${kind}Id is malformed`);
+  }
+  return id;
+}
+function parsePreviewInput(value) {
+  assertRecord(value, "input");
+  {
+    const allowed = /* @__PURE__ */ new Set(["sourceWorkspaceId", "basename", "branch", "startRef"]);
+    for (const key of Object.keys(value)) {
+      if (!allowed.has(key)) fail("invalid-input", `input contains unsupported field '${key}'`);
+    }
+    for (const key of ["sourceWorkspaceId", "basename", "branch"]) {
+      if (!(key in value)) fail("invalid-input", `input.${key} is required`);
+    }
+  }
+  const sourceWorkspaceId = requiredString(value.sourceWorkspaceId, "sourceWorkspaceId", 256);
+  const basename2 = safeBasename(value.basename);
+  assertRecord(value.branch, "input.branch");
+  assertExactKeys(value.branch, ["kind", "name"], "input.branch");
+  if (value.branch.kind !== "existing" && value.branch.kind !== "new") {
+    fail("invalid-input", "input.branch.kind must be 'existing' or 'new'");
+  }
+  const name = safeBranchName(value.branch.name);
+  return {
+    sourceWorkspaceId,
+    basename: basename2,
+    branch: { kind: value.branch.kind, name },
+    // Same validation as the branch name: a control character or leading
+    // dash must never reach the localBranchHead argv (the allowlist would
+    // reject a leading dash, but input-layer validation is fail-closed).
+    ...value.startRef === void 0 ? {} : { startRef: safeBranchName(value.startRef, "input.startRef") }
+  };
+}
+function parseCreateInput(value) {
+  assertRecord(value, "input");
+  assertExactKeys(value, ["previewToken", "operationId"], "input");
+  return { previewToken: previewToken(value.previewToken), operationId: operationId(value.operationId) };
+}
+function parseRollbackInput(value) {
+  assertRecord(value, "input");
+  assertExactKeys(value, ["operationId"], "input");
+  return { operationId: operationId(value.operationId) };
+}
+function parseRemoveInput(value) {
+  assertRecord(value, "input");
+  {
+    const allowed = /* @__PURE__ */ new Set(["operationId", "workspaceId", "path", "expected", "deleteBranch", "discardChanges"]);
+    for (const key of Object.keys(value)) {
+      if (!allowed.has(key)) fail("invalid-input", `input contains unsupported field '${key}'`);
+    }
+    for (const key of ["operationId", "expected"]) {
+      if (!(key in value)) fail("invalid-input", `input.${key} is required`);
+    }
+  }
+  assertRecord(value.expected, "input.expected");
+  assertExactKeys(value.expected, ["repoId", "worktreeId", "branch", "head"], "input.expected");
+  const head = requiredString(value.expected.head, "input.expected.head", 128);
+  if (!/^[0-9a-fA-F]{40,64}$/u.test(head)) fail("invalid-input", "input.expected.head is not an object id");
+  return {
+    operationId: operationId(value.operationId),
+    workspaceId: value.workspaceId === void 0 ? void 0 : requiredString(value.workspaceId, "workspaceId", 256),
+    expected: {
+      repoId: expectedOpaqueId(value.expected.repoId, "repo"),
+      worktreeId: expectedOpaqueId(value.expected.worktreeId, "worktree"),
+      branch: value.expected.branch === null ? null : safeBranchName(value.expected.branch, "input.expected.branch"),
+      head: head.toLowerCase()
+    },
+    deleteBranch: value.deleteBranch === void 0 ? void 0 : safeBranchName(value.deleteBranch, "input.deleteBranch"),
+    discardChanges: value.discardChanges === void 0 ? void 0 : typeof value.discardChanges === "boolean" ? value.discardChanges : fail("invalid-input", "input.discardChanges must be a boolean"),
+    path: value.path === void 0 ? void 0 : value.workspaceId !== void 0 ? fail("invalid-input", "input.path and input.workspaceId are mutually exclusive") : absoluteExpectedPath(value.path, "input.path")
+  };
+}
+function sameArray(left, right) {
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+function sameMembership(left, right) {
+  if (left.length !== right.length) return false;
+  return sameArray([...left].sort(), [...right].sort());
+}
+function assertSafeGitArgv(args) {
+  const [verb, ...rest] = args;
+  const allStrings = args.every((arg) => typeof arg === "string" && !arg.includes("\0"));
+  if (!allStrings) fail("unsafe-git-argv", "Git argv contains a non-string or NUL");
+  const exact = (...expected) => sameArray(rest, expected);
+  if (verb === "rev-parse" && (exact("--show-toplevel") || exact("--path-format=absolute", "--git-common-dir"))) return;
+  if (verb === "check-ref-format" && rest.length === 2 && rest[0] === "--branch" && !rest[1].startsWith("-")) return;
+  if (verb === "show-ref" && rest.length === 3 && rest[0] === "--hash" && rest[1] === "--verify" && rest[2].startsWith("refs/heads/") && !rest[2].slice("refs/heads/".length).startsWith("-")) return;
+  if (verb === "show-ref" && exact("--heads")) return;
+  if (verb === "branch" && rest.length === 2 && rest[0] === "-D" && !rest[1].startsWith("-") && !rest[1].startsWith("/")) return;
+  if (verb === "status" && exact("--porcelain=v1", "-z", "--untracked-files=normal")) return;
+  if (verb === "status" && exact("--porcelain=v1", "-z", "--branch", "--untracked-files=normal")) return;
+  if (verb === "worktree" && exact("list", "--porcelain", "-z")) return;
+  if (verb === "worktree" && exact("list", "--porcelain")) return;
+  if (verb === "worktree" && rest.length === 4 && rest[0] === "add" && rest[1] === "--" && isAbsolute2(rest[2]) && !rest[3].startsWith("-")) return;
+  if (verb === "worktree" && rest.length === 6 && rest[0] === "add" && rest[1] === "-b" && !rest[2].startsWith("-") && rest[3] === "--" && isAbsolute2(rest[4]) && /^[0-9a-fA-F]{40,64}$/u.test(rest[5])) return;
+  if (verb === "worktree" && rest.length === 3 && rest[0] === "remove" && rest[1] === "--" && isAbsolute2(rest[2])) return;
+  if (verb === "worktree" && rest.length === 4 && rest[0] === "remove" && rest[1] === "--force" && rest[2] === "--" && isAbsolute2(rest[3])) return;
+  fail("unsafe-git-argv", `Git command '${verb ?? "<empty>"}' is outside the worktree allowlist`);
+}
+
+// src/core-git-runner.ts
+import { spawn } from "node:child_process";
+import { isAbsolute as isAbsolute3 } from "node:path";
+var HOOK_GUARD = ["-c", `core.hooksPath=${process.platform === "win32" ? "NUL" : "/dev/null"}`];
+function createLocalGitRunner(spawnGit = spawn) {
+  return (request) => new Promise((resolvePromise, rejectPromise) => {
+    try {
+      if (!isAbsolute3(request.cwd)) fail("unsafe-git-cwd", "Git cwd must be absolute");
+      if (!Number.isSafeInteger(request.timeoutMs) || request.timeoutMs < 1 || request.timeoutMs > 6e4) {
+        fail("unsafe-git-limit", "Git timeout is outside the supported range");
+      }
+      if (!Number.isSafeInteger(request.maxOutputBytes) || request.maxOutputBytes < 1 || request.maxOutputBytes > 4 * 1024 * 1024) {
+        fail("unsafe-git-limit", "Git output cap is outside the supported range");
+      }
+      assertSafeGitArgv(request.args);
+    } catch (error) {
+      rejectPromise(error);
+      return;
+    }
+    const environment = { ...process.env };
+    for (const key of Object.keys(environment)) {
+      if (key.startsWith("GIT_")) delete environment[key];
+    }
+    Object.assign(environment, {
+      GIT_TERMINAL_PROMPT: "0",
+      GIT_NO_LAZY_FETCH: "1",
+      GIT_OPTIONAL_LOCKS: "0",
+      // `worktree add` runs post-checkout; hook suppression is injected via the
+      // argv `-c core.hooksPath=<nul>` guard (HOOK_GUARD) at spawn time, since
+      // GIT_CONFIG_* env entries are the lowest-priority source and a repo's own
+      // core.hooksPath would override them. Filters (clean/smudge/process) are
+      // intentionally NOT disabled: they remain inside the host OS user's
+      // trusted repository-config boundary.
+      GCM_INTERACTIVE: "never",
+      LC_ALL: "C"
+    });
+    let child;
+    try {
+      child = spawnGit("git", [...HOOK_GUARD, ...request.args], {
+        cwd: request.cwd,
+        shell: false,
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+        env: environment
+      });
+    } catch (error) {
+      rejectPromise(new GitWorktreeError("git-spawn-failed", safeErrorMessage(error)));
+      return;
+    }
+    const stdout = [];
+    const stderr = [];
+    let bytes = 0;
+    let settled = false;
+    let terminationError;
+    let timer;
+    const rejectImmediately = (error) => {
+      if (settled) return;
+      settled = true;
+      if (timer !== void 0) clearTimeout(timer);
+      rejectPromise(error);
+    };
+    const terminateThenReject = (error) => {
+      if (settled || terminationError !== void 0) return;
+      terminationError = error;
+      if (timer !== void 0) clearTimeout(timer);
+      try {
+        child.kill("SIGKILL");
+      } catch {
+      }
+    };
+    const append = (target, chunk) => {
+      if (settled || terminationError !== void 0) return;
+      bytes += chunk.byteLength;
+      if (bytes > request.maxOutputBytes) {
+        terminateThenReject(new GitWorktreeError("git-output-limit", "Git output exceeded the bounded response limit"));
+        return;
+      }
+      target.push(chunk);
+    };
+    child.stdout.on("data", (chunk) => append(stdout, chunk));
+    child.stderr.on("data", (chunk) => append(stderr, chunk));
+    child.on("error", (error) => {
+      if (terminationError !== void 0) return;
+      rejectImmediately(new GitWorktreeError("git-spawn-failed", safeErrorMessage(error)));
+    });
+    child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      if (timer !== void 0) clearTimeout(timer);
+      if (terminationError !== void 0) {
+        rejectPromise(terminationError);
+        return;
+      }
+      resolvePromise({
+        exitCode: code ?? -1,
+        stdout: Buffer.concat(stdout).toString("utf8"),
+        stderr: Buffer.concat(stderr).toString("utf8")
+      });
+    });
+    timer = setTimeout(() => {
+      terminateThenReject(new GitWorktreeError("git-timeout", `Git command exceeded ${request.timeoutMs}ms`));
+    }, request.timeoutMs);
+    timer.unref();
+  });
+}
+
+// src/core-internals.ts
+var KeyedMutex = class {
+  tails = /* @__PURE__ */ new Map();
+  async run(key, operation) {
+    const previous = this.tails.get(key) ?? Promise.resolve();
+    let release;
+    const current = new Promise((resolvePromise) => {
+      release = resolvePromise;
+    });
+    const tail = previous.then(() => current);
+    this.tails.set(key, tail);
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.tails.get(key) === tail) this.tails.delete(key);
+    }
+  }
+};
+
+// src/core.ts
 var GitWorktreeCore = class {
   source;
   git;
@@ -592,8 +610,8 @@ var GitWorktreeCore = class {
       fail("invalid-core-option", `operationCapacity must be between 1 and ${MAX_OPERATIONS}`);
     }
     this.snapshotWallTimeoutMs = options.snapshotWallTimeoutMs ?? SNAPSHOT_WALL_TIMEOUT_MS;
-    const worktreesRoot = options.worktreesRoot ?? join(resolveDshHome(), "worktrees");
-    if (!isAbsolute(worktreesRoot)) {
+    const worktreesRoot = options.worktreesRoot ?? join2(resolveDshHome(), "worktrees");
+    if (!isAbsolute4(worktreesRoot)) {
       fail("invalid-config", "worktreesRoot must be an absolute path");
     }
     this.worktreesRoot = worktreesRoot;
@@ -816,7 +834,7 @@ var GitWorktreeCore = class {
         remainingWorktrees -= boundedRaw.length;
         for (let index = 0; index < boundedRaw.length; index += 1) {
           const entry = boundedRaw[index];
-          let path = resolve(entry.path);
+          let path = resolve3(entry.path);
           let pathAvailable = false;
           if (this.now() < deadline) {
             try {
@@ -997,7 +1015,7 @@ var GitWorktreeCore = class {
       const main = topology.worktrees[0];
       if (main.bare) fail("bare-repository", "bare repositories cannot own linked worktrees");
       const targetRoot = this.worktreeRootFor(topology.mainPath, topology.commonDir);
-      const targetPath = resolve(targetRoot, input.basename);
+      const targetPath = resolve3(targetRoot, input.basename);
       if (!targetPath.startsWith(`${targetRoot}${sep}`)) fail("unsafe-path", "target escaped the unified worktree root");
       await this.assertPathAbsent(targetPath);
       await this.assertBranchFormat(topology.mainPath, input.branch.name);
@@ -1257,7 +1275,7 @@ var GitWorktreeCore = class {
         fail("preview-stale", "repository identity changed after preview");
       }
       const targetRoot = this.worktreeRootFor(topology.mainPath, topology.commonDir);
-      const targetPath = resolve(targetRoot, preview.basename);
+      const targetPath = resolve3(targetRoot, preview.basename);
       if (targetPath !== preview.targetPath || !targetPath.startsWith(`${this.worktreesRoot}${sep}`)) {
         fail("preview-stale", "target identity changed after preview");
       }
@@ -1473,10 +1491,7 @@ var GitWorktreeCore = class {
           if (target === void 0) fail("worktree-not-found", "path is not an exact worktree root");
           const worktreeId = opaqueId("worktree", topology.commonDir, target.path);
           if (worktreeId !== input.expected.worktreeId) fail("expected-mismatch", "worktree identity changed");
-          if (target === topology.worktrees[0]) fail("main-worktree", "the main checkout cannot be removed");
-          if (target.locked) fail("worktree-locked", "locked worktrees cannot be removed");
-          if (target.branch !== input.expected.branch) fail("expected-mismatch", "worktree branch changed");
-          if (target.head !== input.expected.head) fail("expected-mismatch", "worktree HEAD changed");
+          this.assertRemovableTarget(target === topology.worktrees[0], target.locked, target.branch, target.head, input.expected);
           if (target.missing === true) {
             fail("path-unavailable", `cannot resolve '${target.path}': the worktree directory is gone`);
           }
@@ -1522,10 +1537,7 @@ var GitWorktreeCore = class {
       if (target === void 0) fail("worktree-not-found", "workspace is not an exact worktree root");
       const worktreeId = opaqueId("worktree", topology.commonDir, target.path);
       if (worktreeId !== input.expected.worktreeId) fail("expected-mismatch", "worktree identity changed");
-      if (target === topology.worktrees[0]) fail("main-worktree", "the main checkout cannot be removed");
-      if (target.locked) fail("worktree-locked", "locked worktrees cannot be removed");
-      if (target.branch !== input.expected.branch) fail("expected-mismatch", "worktree branch changed");
-      if (target.head !== input.expected.head) fail("expected-mismatch", "worktree HEAD changed");
+      this.assertRemovableTarget(target === topology.worktrees[0], target.locked, target.branch, target.head, input.expected);
       if (await this.isDirty(target.path) && input.discardChanges !== true) {
         fail("worktree-dirty", "dirty worktrees cannot be removed");
       }
@@ -1566,15 +1578,24 @@ var GitWorktreeCore = class {
    *  located from the source's registered workspaces instead, and every
    *  surviving guard (record identity, main/locked, ghost workspace) still
    *  applies before anything is mutated. */
+  /** Single main/locked/branch/head precondition shared by every removal
+   *  entry (B5 convergence): the registered, missing-record and
+   *  unregistered-locate paths used to repeat these four checks with
+   *  identical codes and messages. `isMain` is precomputed by the caller
+   *  (topology row vs located record); the rollback path keeps its own
+   *  wording because it refuses a different operation. */
+  assertRemovableTarget(isMain, locked, branch, head, expected) {
+    if (isMain) fail("main-worktree", "the main checkout cannot be removed");
+    if (locked) fail("worktree-locked", "locked worktrees cannot be removed");
+    if (branch !== expected.branch) fail("expected-mismatch", "worktree branch changed");
+    if (head !== expected.head) fail("expected-mismatch", "worktree HEAD changed");
+  }
   async removeMissingUnregistered(input, operation, replayed) {
     const targetPath = input.path;
     const located = await this.locateMissingRecord(input.expected.repoId, targetPath);
     const worktreeId = opaqueId("worktree", located.commonDir, located.row.path);
     if (worktreeId !== input.expected.worktreeId) fail("expected-mismatch", "worktree identity changed");
-    if (located.isMain) fail("main-worktree", "the main checkout cannot be removed");
-    if (located.row.locked) fail("worktree-locked", "locked worktrees cannot be removed");
-    if (located.row.branch !== input.expected.branch) fail("expected-mismatch", "worktree branch changed");
-    if (located.row.head !== input.expected.head) fail("expected-mismatch", "worktree HEAD changed");
+    this.assertRemovableTarget(located.isMain, located.row.locked, located.row.branch, located.row.head, input.expected);
     const intent = {
       repoId: located.repoId,
       worktreeId,
@@ -1629,20 +1650,20 @@ var GitWorktreeCore = class {
       walked.add(discovered.commonDir);
       const rows = await this.listWorktreesWith(async (args) => this.gitCommand(discovered.topLevel, args, false));
       if (rows.length === 0) continue;
-      const row = rows.find((candidate) => resolve(candidate.path) === targetPath);
+      const row = rows.find((candidate) => resolve3(candidate.path) === targetPath);
       if (row === void 0) continue;
       const repoId = opaqueId("repo", discovered.commonDir);
       if (repoId !== expectedRepoId) {
         sawPathOnWrongRepository = true;
         continue;
       }
-      const mainPath = await this.existingPath(resolve(rows[0].path));
+      const mainPath = await this.existingPath(resolve3(rows[0].path));
       return {
         commonDir: discovered.commonDir,
         mainPath,
         repoId,
-        row: { ...row, path: resolve(row.path) },
-        isMain: resolve(rows[0].path) === resolve(row.path)
+        row: { ...row, path: resolve3(row.path) },
+        isMain: resolve3(rows[0].path) === resolve3(row.path)
       };
     }
     if (sawPathOnWrongRepository) {
@@ -1662,8 +1683,9 @@ var GitWorktreeCore = class {
       await this.assertBranchFormat(mainPath, intent.deleteBranch);
       await this.gitChecked(mainPath, ["branch", "-D", intent.deleteBranch], true);
       intent.branchDeleted = true;
-    } catch {
+    } catch (error) {
       intent.branchDeleteFailed = true;
+      intent.branchDeleteError = safeErrorMessage(error);
     }
   }
   /** Reconcile a removal whose Git subprocess may have committed before failure. */
@@ -1732,7 +1754,7 @@ var GitWorktreeCore = class {
    *  (reconcileBoundRemove). */
   async commitMissingRecordRemove(operationIdValue, operation, intent, replayed) {
     const state = await this.readSource();
-    if (state.workspaces.some((candidate) => resolve(candidate.path) === intent.path)) {
+    if (state.workspaces.some((candidate) => resolve3(candidate.path) === intent.path)) {
       fail("workspace-registered", "the missing worktree path is still registered as a workspace");
     }
     const finalTopology = await this.topology(intent.mainPath);
@@ -1828,7 +1850,8 @@ var GitWorktreeCore = class {
       next: intent.workspaceId === void 0 ? "none" : "delete-workspace",
       branchPreserved: true,
       ...intent.branchDeleted === true ? { branchDeleted: true } : {},
-      ...intent.branchDeleteFailed === true ? { branchDeleteFailed: true } : {}
+      ...intent.branchDeleteFailed === true ? { branchDeleteFailed: true } : {},
+      ...intent.branchDeleteError === void 0 ? {} : { branchDeleteError: intent.branchDeleteError }
     };
   }
   /** Repo-specific worktree subdirectory: `<root>/<repo-name>-<hash12>` — a
@@ -1837,8 +1860,8 @@ var GitWorktreeCore = class {
    *  working tree (git status stays clean). */
   worktreeRootFor(mainPath, commonDir) {
     const repoName = basename(mainPath) || "repo";
-    const digest = createHash("sha256").update(commonDir).digest("hex").slice(0, 12);
-    return join(this.worktreesRoot, `${repoName}-${digest}`);
+    const digest = createHash2("sha256").update(commonDir).digest("hex").slice(0, 12);
+    return join2(this.worktreesRoot, `${repoName}-${digest}`);
   }
   /** Ensure the unified worktree root exists before `git worktree add`
    *  (git requires the parent directory; mkdir is recursive + idempotent). */
@@ -2048,7 +2071,7 @@ var GitWorktreeCore = class {
     let deadlineExceeded = false;
     for (const agent of state.runningAgents) {
       if (agent.cwd === void 0) continue;
-      const paths = [resolve(agent.cwd)];
+      const paths = [resolve3(agent.cwd)];
       if (this.now() >= deadline) {
         deadlineExceeded = true;
       } else {
@@ -2121,11 +2144,11 @@ var GitWorktreeCore = class {
   }
   containsPath(root, candidate) {
     const suffix = relative(root, candidate);
-    return suffix === "" || !isAbsolute(suffix) && suffix !== ".." && !suffix.startsWith(`..${sep}`);
+    return suffix === "" || !isAbsolute4(suffix) && suffix !== ".." && !suffix.startsWith(`..${sep}`);
   }
   async anyWorkspaceOwnsPath(state, target) {
     for (const workspace of state.workspaces) {
-      if (this.containsPath(target, resolve(workspace.path))) return true;
+      if (this.containsPath(target, resolve3(workspace.path))) return true;
       let canonical;
       try {
         canonical = await this.existingPath(workspace.path);
@@ -2154,7 +2177,7 @@ var GitWorktreeCore = class {
     }
   }
   async existingPath(path) {
-    if (path.length === 0 || path.length > MAX_PATH_LENGTH || /[\0\r\n]/u.test(path) || !isAbsolute(path)) {
+    if (path.length === 0 || path.length > MAX_PATH_LENGTH || /[\0\r\n]/u.test(path) || !isAbsolute4(path)) {
       fail("unsafe-path", "filesystem path must be a bounded absolute path");
     }
     let canonical;
@@ -2163,10 +2186,10 @@ var GitWorktreeCore = class {
     } catch (error) {
       fail("path-unavailable", `cannot resolve '${path}': ${safeErrorMessage(error)}`);
     }
-    if (canonical.length === 0 || canonical.length > MAX_PATH_LENGTH || /[\0\r\n]/u.test(canonical) || !isAbsolute(canonical)) {
+    if (canonical.length === 0 || canonical.length > MAX_PATH_LENGTH || /[\0\r\n]/u.test(canonical) || !isAbsolute4(canonical)) {
       fail("unsafe-path", "realpath returned an invalid or overlong absolute path");
     }
-    return resolve(canonical);
+    return resolve3(canonical);
   }
   async assertPathAbsent(path) {
     try {
@@ -2224,7 +2247,7 @@ var GitWorktreeCore = class {
         missing = false;
       } catch (error) {
         if (!(error instanceof GitWorktreeError) || error.code !== "path-unavailable") throw error;
-        path = resolve(entry.path);
+        path = resolve3(entry.path);
         missing = true;
       }
       if (paths.has(path)) fail("git-protocol-error", `Git returned duplicate worktree path '${path}'`);
@@ -2271,7 +2294,7 @@ var GitWorktreeCore = class {
     const gitDir = await worktreeGitDir(path, this.fs);
     if (gitDir === null) return false;
     try {
-      return await this.fs.exists(join(gitDir, "modules"));
+      return await this.fs.exists(join2(gitDir, "modules"));
     } catch {
       return false;
     }
@@ -2338,7 +2361,7 @@ var GitWorktreeCore = class {
     return branches;
   }
   async gitCommand(cwd, args, mutation = false, readTimeoutMs = READ_TIMEOUT_MS) {
-    if (!isAbsolute(cwd)) fail("unsafe-git-cwd", "Git cwd must be absolute");
+    if (!isAbsolute4(cwd)) fail("unsafe-git-cwd", "Git cwd must be absolute");
     assertSafeGitArgv(args);
     const maxOutputBytes = mutation ? MUTATION_OUTPUT_CAP : READ_OUTPUT_CAP;
     const result = await this.git({

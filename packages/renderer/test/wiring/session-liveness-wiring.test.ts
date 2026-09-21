@@ -81,13 +81,16 @@ test('来源退役清理与 dismiss 剪枝都有锁（same-id 复挂不得继承
 test('保留视图的两条恢复路径都「记水位 + 撤标记」（单边删除会把横幅焊死）', () => {
   const app = stripComments(readFileSync(
     fileURLToPath(new URL('../../src/App.tsx', import.meta.url)), 'utf8'))
+  // 阶段 3：挂载快照 push 路径随桥订阅簇移到 hook；unary 成功路径仍在 App。
+  const bridge = stripComments(readFileSync(
+    fileURLToPath(new URL('../../src/app-hooks/use-bridge-subscriptions.ts', import.meta.url)), 'utf8'))
   assert.match(
-    app,
+    bridge,
     /snapshotAtRef\.current\[sourceId\] = Date\.now\(\)[\s\S]{0,200}factsAtRef\.current\[sourceId\] = Date\.now\(\)/,
     'push 成功必须记事实水位（否则活跃推送通道会被 90s 界限误清）',
   )
   assert.match(
-    app,
+    bridge,
     /factsAtRef\.current\[sourceId\] = Date\.now\(\)[\s\S]{0,200}setUnverified\(prev => \(prev\.includes\(sourceId\)/,
     'push 成功必须撤下「无法确认」',
   )

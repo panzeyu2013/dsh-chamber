@@ -19,7 +19,7 @@
  * they are never placed in the registry or returned by IPC.
  */
 
-import { useCallback, useEffect, useId, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import clsx from 'clsx'
 import {
@@ -1179,22 +1179,36 @@ export function ConnectionsSection(props: ConnectionsSectionProps): ReactNode {
   // 探一次已连接 gateway 卡，此后按固定间隔维持（宿主侧自发停机/恢复无桌面
   // 事件可依赖）；transport 断开（phase 非 ready/degraded）的卡不探 ——
   // 启动动作本身以 connected 门控，未知/断连时绝不渲染。
+  // The probe re-arms on the CONNECTED gateway id SET, never on the whole
+  // `statuses` map (2026-12 audit): every per-source status push rewrote that
+  // map, so the old dependency rebuilt this interval and fired an immediate
+  // probe at EVERY gateway card on every push (O(cards × pushes)). The id set
+  // is the only input that changes WHICH cards are probed; the filter below
+  // mirrors the card's stale-projection kind guard.
+  const connectedGatewayKey = useMemo(
+    () => instances
+      .filter(spec => spec.kind === 'gateway'
+        && statuses[spec.id]?.kind === 'gateway'
+        && (statuses[spec.id]?.phase === 'ready' || statuses[spec.id]?.phase === 'degraded'))
+      .map(spec => spec.id)
+      .sort()
+      .join(','),
+    [instances, statuses],
+  )
+
+  // Gateway 卡 runtime 探针节奏（design 21 §6.8 r1）：连接集合变化时立即探一次，
+  // 此后按固定间隔维持（宿主侧自发停机/恢复无桌面事件可依赖）；transport 断开
+  // （phase 非 ready/degraded）的卡不探 —— 启动动作本身以 connected 门控。
   useEffect(() => {
     if (!bridgeUp) return
-    const connectedGatewaySpecs = (): SshInstanceSpec[] => instances.filter(spec =>
-      spec.kind === 'gateway'
-      // Kind guard mirrors the card's stale-projection suppression: a kind
-      // switch keeps the id, so a status pushed for the OLD kind must never
-      // drive the runtime probe.
-      && statuses[spec.id]?.kind === 'gateway'
-      && (statuses[spec.id]?.phase === 'ready' || statuses[spec.id]?.phase === 'degraded'))
+    const ids = connectedGatewayKey === '' ? [] : connectedGatewayKey.split(',')
     const probe = (): void => {
-      for (const spec of connectedGatewaySpecs()) void probeGatewayRuntime(spec.id)
+      for (const id of ids) void probeGatewayRuntime(id)
     }
     probe()
     const timer = setInterval(probe, GATEWAY_RUNTIME_PROBE_INTERVAL_MS)
     return () => { clearInterval(timer) }
-  }, [bridgeUp, instances, statuses, probeGatewayRuntime])
+  }, [bridgeUp, connectedGatewayKey, probeGatewayRuntime])
 
   const dsh = health?.dsh
   const healthy = dsh?.status === 'ready' || dsh?.status === 'degraded'

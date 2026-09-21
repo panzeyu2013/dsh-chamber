@@ -368,6 +368,7 @@ test('remove with deleteBranch deletes the local branch after the worktree remov
   assert.equal(removed.removed, true)
   assert.equal(removed.branchDeleted, true)
   assert.equal(removed.branchDeleteFailed, undefined)
+  assert.equal(removed.branchDeleteError, undefined, 'a successful branch delete carries no failure reason')
   assert.equal(repo.branches.has('feature'), false)
   const branchCalls = repo.calls.filter(call => call.args[0] === 'branch' && call.args[1] === '-D')
   assert.deepEqual(branchCalls.at(-1)!.args, ['branch', '-D', 'feature'])
@@ -385,6 +386,10 @@ test('remove with deleteBranch reports a failed branch delete honestly and keeps
   assert.equal(removed.removed, true)
   assert.equal(removed.branchDeleted, undefined)
   assert.equal(removed.branchDeleteFailed, true)
+  // The failure is no longer a bare boolean: the host carries the bounded
+  // reason so the client can show WHY the optional branch delete failed.
+  assert.equal(typeof removed.branchDeleteError, 'string')
+  assert.ok((removed.branchDeleteError ?? '').length > 0)
 })
 
 test('branch -D allowlist accepts a plain name and rejects a leading dash', () => {

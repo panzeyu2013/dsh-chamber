@@ -326,7 +326,15 @@ test('authoritative roster installs its change listener before the initial refre
 })
 
 test('App wires bounded listener-before-ready retry for deep-link and notifications', () => {
-  const source = readFileSync(new URL('../../src/App.tsx', import.meta.url), 'utf8')
+  // 阶段 3：深链订阅 effect 随桥订阅簇移到 hook。接线锁对本测试的两个落点
+  // （App.tsx + use-bridge-subscriptions.ts）取并集判 presence（不放松任何一条），
+  // 顺序型切片各自取实际持有该 effect 的文件。
+  const app = readFileSync(new URL('../../src/App.tsx', import.meta.url), 'utf8')
+  const bridge = readFileSync(
+    new URL('../../src/app-hooks/use-bridge-subscriptions.ts', import.meta.url),
+    'utf8',
+  )
+  const source = app + '\n' + bridge
   assert.match(source, /setTimeout\(signalNotificationReady, LISTENER_READY_RETRY_MS\)/)
   assert.match(source, /setTimeout\(signalReady, LISTENER_READY_RETRY_MS\)/)
   assert.match(source, /subscribeRosterBeforeRefresh/)
@@ -340,18 +348,18 @@ test('App wires bounded listener-before-ready retry for deep-link and notificati
   assert.match(source, /notifications\] readiness handshake exhausted its retry budget/)
   assert.match(source, /deep-link readiness handshake exhausted its retry budget/)
   assert.doesNotMatch(source, /notifications\?\.ready\?\.\(\)\.catch\(\(\) => \{\}\)/)
-  const deepLinkListener = source.slice(
-    source.indexOf('const unsubscribe = deepLink.onIntent'),
-    source.indexOf('// Listener-before-ready is the ordering contract'),
+  const deepLinkListener = bridge.slice(
+    bridge.indexOf('const unsubscribe = deepLink.onIntent'),
+    bridge.indexOf('// Listener-before-ready is the ordering contract'),
   )
   assert.ok(
     deepLinkListener.indexOf('ignored stale deep-link source proof before routing')
       < deepLinkListener.indexOf('const previous = pendingDeepLinkDeliveryRef.current'),
     'a stale delivery must be ACKed before it can supersede the valid held slot',
   )
-  const refreshRemotes = source.slice(
-    source.indexOf('const refreshRemotes = useCallback'),
-    source.indexOf('const aggregatePollRunningRef'),
+  const refreshRemotes = app.slice(
+    app.indexOf('const refreshRemotes = useCallback'),
+    app.indexOf('const aggregatePollRunningRef'),
   )
   assert.match(refreshRemotes, /authoritativeSourceRetirements\(/)
   assert.match(refreshRemotes, /parseAuthoritativeSourceFingerprint\(sourceId, instance\.sourceFingerprint\)/)

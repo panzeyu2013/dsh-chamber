@@ -42,7 +42,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRecorder, isShellIndex, parseShellAssets, renderMarkdown, safeJson } from './checks.mjs'
-import { DEFAULT_SIDECAR_DIR, resolveSidecarDir } from '../lib/sidecar-assembly.mjs'
+import { DEFAULT_SIDECAR_DIR, resolveNodeBinary, resolveSidecarDir } from '../lib/sidecar-assembly.mjs'
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 
@@ -51,7 +51,7 @@ const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
  * (scripts/lib/sidecar-assembly.mjs — ONE implementation for the G4 smoke, this
  * toolbox and remote-state-acceptance; P1-4 of the 13-scripts audit).
  */
-export { resolveNodeBinary, resolveSidecarDir as resolveNativeSidecarDir } from '../lib/sidecar-assembly.mjs'
+export { resolveNodeBinary, resolveSidecarDir as resolveNativeSidecarDir }
 
 /**
  * Fail-closed preflight of the native assembly: the entry and the compiled

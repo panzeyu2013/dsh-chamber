@@ -130,9 +130,9 @@ const STATIC_CHECKS = [
 /** Named gate groups. Keep the names disjoint from script names to avoid confusion. */
 export const MODES = {
   static: STATIC_CHECKS,
-  tests: [...PACKAGE_TESTS, ...MACOS_CHECKS],
+  tests: [...PACKAGE_TESTS, 'node scripts/gates/verify-artifact-freshness.mjs', ...MACOS_CHECKS],
   typecheck: CLIENT_TYPECHECKS,
-  full: [...STATIC_CHECKS, ...CLIENT_TYPECHECKS, ...PACKAGE_TESTS, ...MACOS_CHECKS],
+  full: [...STATIC_CHECKS, ...CLIENT_TYPECHECKS, ...PACKAGE_TESTS, 'node scripts/gates/verify-artifact-freshness.mjs', ...MACOS_CHECKS],
 }
 
 /**

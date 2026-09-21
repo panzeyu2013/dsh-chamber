@@ -44,30 +44,17 @@ import {
   getInstanceClient,
   getOpenIntentsSnapshot,
   instanceSnapshotSignature,
-  intentPrewarmAllowed,
-  intentPrewarmSpent,
   isInstanceUnavailable,
   managedRuntimeDown,
-  managedRuntimeUnusable,
   mergeRuntimeFacts,
-  prioritizePrewarmSource,
   projectableCurrent,
-  reconcilePendingArchives,
   reconcilePendingSessions,
-  reconcilePendingWorkspaces,
-  recordPendingArchive,
   deriveUnread,
-  recordPendingSession,
-  recordPendingWorkspace,
   releaseInstanceClient,
   releaseOpenIntent,
   // 2026-09-11 review S3: the withdraw/rewrite half of the workspace echo.
-  removePendingWorkspace,
   // 2026-12 session echo: the create/withdraw halves (design 05 §2.2).
-  removePendingSession,
-  renamePendingWorkspace,
   reconcileCompletedFacts,
-  runtimeReportSignature,
   serversProjectionSignature,
   shouldHoldViewVeil,
   subscribeOpenIntent,
@@ -82,14 +69,13 @@ import {
   type InstanceAggregate,
   type IntentPrewarmBudget,
   type InstanceRuntimeReport,
-  type InstanceSnapshot,
   type PluginGraphDiagnostic,
   type RuntimeFactsOverlay,
   type SessionArchiveLedger,
   type SessionEchoLedger,
   type WorkspaceEchoLedger,
 } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
-import { detectNotificationEdges, dedupeCompleteEdges, type SessionFacts } from './notification-edges.ts'
+import type { SessionFacts } from './notification-edges.ts'
 import { createCompleteLedger } from './complete-ledger.ts'
 // I3/I4 仪器（plan §10）：徽标回读与通知决定账本（只读、有界、发布为函数视图）。
 import { notificationLedger, publishNotificationInstrument } from './notification-ledger.ts'
@@ -115,6 +101,7 @@ import {
 import { deriveSourceUnread, viewingReadWatermark } from './unread-derivation.ts'
 import { completionWatermark, nextNotifiedWatermark, shouldNotifyWatermark } from './watermark.ts'
 import { pruneSourceList, pruneSourceRecord, pruneSourceSet } from './source-registry.ts'
+import { LOCAL_INSTANCE_ID } from './local-instance.ts'
 import { shouldDispatchRefreshHint } from './source-refresh-hint.ts'
 import {
   acknowledgeRendererDelivery,
@@ -124,7 +111,6 @@ import {
   deliveryMatchesCurrentSource,
   enqueueBoundedRosterIntent,
   parseAuthoritativeSourceFingerprint,
-  routeDeepLinkActivation,
   SerialIntentRunner,
   SourceOwnershipRegistry,
   settlePendingDeepLinkActivation,
@@ -161,7 +147,7 @@ import {
   type FrameKey, type FrameLocale,
 } from './locales.ts'
 import { BOOT_TIMEOUT_MS } from './boot-budget.ts'
-import { forgetDegradedRetry, planDegradedRetries } from './degraded-retry.ts'
+import { planDegradedRetries } from './degraded-retry.ts'
 // Settled-boot gap → render decision (design 05 §4 「降级呈现」). The pure module
 // owns the copy key, the retry verdict and the "will the self-heal re-mount
 // this?" rule; the frame only maps its keys through `t`.
@@ -179,14 +165,12 @@ import {
   isFallbackDerivedView,
   isSnapshotStale,
   planAggregateRefreshes,
-  planSessionListRefresh,
   refreshPullStillCurrent,
   remoteRetiredSourceIds,
   retireSelectedSource,
   shouldDropUnverifiedRunningFacts,
   shouldRebaselineFallbackView,
   shouldReconnectStaleMounted,
-  shouldRequestSessionListRefresh,
   shouldRetainPushedAggregate,
   withoutRemovedSourceIds,
   withoutRemovedSourceKeys,
@@ -205,35 +189,25 @@ import { errorMessage } from './status.ts'
 import type { SshInstanceSpec, SshStatusProjection, TransportKind } from './global.d.ts'
 import {
   instanceBasePath,
+  instanceConnected,
   rawInstanceIdFromSourceId,
   sourceIdForInstance,
   sourceIdForRawInstance,
   sourceIdForTransport,
 } from './transport-source.ts'
 import {
-  decideReclaimCandidates,
   shouldRunBackgroundPhase,
-  VIEW_RECLAIM_GRACE_MS,
   VIEW_RECLAIM_TICK_MS,
 } from './retention.ts'
-import { decideServingGate, isDeferredReclaimDue, servingGatePhase, shouldDeferBootForSource } from './source-readiness.ts'
+import { decideServingGate, servingGatePhase, shouldDeferBootForSource } from './source-readiness.ts'
 import {
-  HARVEST_ABANDON_MS,
-  harvestAbandoned,
-  harvestAttemptStarted,
-  harvestDeadlinePassed,
-  harvestParked,
-  harvestParkedRecord,
-  harvestPending,
-  harvestRetryDue,
   harvestSatisfied,
-  pickPrewarmTarget,
-  prewarmCandidates,
-  shouldReclaimHarvestedShell,
   type HarvestRecord,
 } from './baseline-harvest.ts'
 import InstanceView from './components/InstanceView.tsx'
 import { useBadgeCount } from './app-hooks/use-badge-count.ts'
+import { useBridgeSubscriptions } from './app-hooks/use-bridge-subscriptions.ts'
+import { useViewScheduler } from './app-hooks/use-view-scheduler.ts'
 import { PERF_MARKS, perfMark } from './perf-marks.ts'
 
 /**
@@ -264,7 +238,6 @@ const AGGREGATE_RECONNECT_BACKOFF_MS = 60_000
  *  dialog additionally requests one on every purge settle (immediate path,
  *  not stamped here — deliberate cross-package decoupling, §12 notes the
  *  overlap). */
-const SESSION_LIST_REFRESH_COALESCE_MS = 5_000
 /** Bounded wave over whatever edge-triggered refresh set a poll produces. */
 const AGGREGATE_POLL_CONCURRENCY = 4
 /** First-screen retry: a transient aggregate snapshot failure (0.1.2 wire:
@@ -291,7 +264,6 @@ const LISTENER_READY_RETRY_MS = 500
 const LISTENER_READY_RETRY_LIMIT = 5
 const MAX_PENDING_ROSTER_NOTIFICATION_OPENS = 64
 
-const LOCAL_INSTANCE_ID = 'local'
 
 /** Stable empty list for boots whose failure carries no loader entries (T15). */
 const NO_FAILED_ENTRIES: readonly string[] = []
@@ -319,27 +291,6 @@ type SessionNotificationRequest = {
   sessionId: string
   kind: 'complete' | 'ask' | 'request'
   watermark?: number
-}
-/**
- * 实例可被聚合轮询：对齐反代契约（03 §3.3）——只有 `ready` 才放行，否则
- * 显式 503。starting/degraded/connecting 期间轮询只会收获 503，故一律按
- * 未连接呈现（分组头 + 相位文本，不轮询、无错误刷屏）。
- */
-function instanceConnected(
-  kind: 'local' | TransportKind,
-  health: HealthResponse | null,
-  remoteStatus: Record<string, SshStatusProjection>,
-  instanceId: string,
-): boolean {
-  if (kind === 'local') {
-    const status = health?.dsh?.status
-    return status === 'ready'
-  }
-  const status = remoteStatus[instanceId]
-  // A registry kind switch and its IPC pushes are separate messages. Never
-  // treat a briefly-stale READY projection from the old provider as proof
-  // that the replacement provider is ready.
-  return status?.kind === kind && status.phase === 'ready'
 }
 
 /**
@@ -2568,7 +2519,6 @@ export default function App() {
     invalidateRemoteRoster,
     refreshRemotes,
     reportNotificationAckFailure,
-    retireSources,
   ])
 
   /**
@@ -2860,7 +2810,6 @@ export default function App() {
     liveServerIds,
     acknowledgeDeepLink,
     reportDeepLinkAckFailure,
-    selectView,
   ])
 
   /** 服务器显示名（骨架屏文案；缺失回落 instanceId）。 */
@@ -3291,406 +3240,21 @@ export default function App() {
    * 排除 mounted：用户已点开（或已被别处挂载）的视图不再占用预热槽位。
    */
   const prewarmEligibleRef = useRef<Set<string>>(new Set())
-  const prewarmEligible = useMemo(() => {
-    const liveRemoteIds = new Set(remoteInstances.map(sourceIdForInstance))
-    for (const id of autoPrewarmedRef.current) {
-      if (!liveRemoteIds.has(id)) autoPrewarmedRef.current.delete(id)
-    }
-    // 保留槽位占用门（2026 评审 Major-1 修复）：保留槽（RETAINED_HIDDEN_VIEWS
-    // = 1）被「非自动预热」的隐藏非 local 壳占用（用户切走的温壳；含正在
-    // 打开、尚未 settle 的用户壳——保守视为占用）时，不再启动投机预热。
-    // 否则预热壳 settle 的 hiddenSince 恒晚于用户壳的切走时间，超限回收按
-    // hiddenSince 排序会把用户的温壳先回收、从未请求的预热壳占据槽位，且
-    // 被回收源进入预热抑制（reclaimView）——双倍保冷，违背 retention.ts
-    // 头注「最近访问的 1 个」契约（触发形态：睡眠唤醒/实例增删等 idle 边
-    // 缘 + 3+ 源；登记见 design 05 §1 注记与 STATUS 性能第二阶段条）。
-    // 用户主动点开时 selectView 同步摘除 autoPrewarmed 标记，此门随之为
-    // 该壳让位；同窗候选内的回收偏好（预热壳先走）见 decideReclaimCandidates
-    // 的 prewarmOriginIds 排序。
-    const retentionSlotOccupied = mountedViews.some(id =>
-      id !== LOCAL_INSTANCE_ID
-      && id !== activeView
-      // W2：**从未 settle** 的被推迟视图不持有任何壳资源，不算占用后台槽
-      // （与下方"boot 失败的壳不计占用"同源：算占用会让 warmRemaining 恒 0）。
-      // 已 settle 后来源才被手动断开的壳仍是一个真壳：照常占槽、照常进 retention
-      // 候选（2026-12 复核：否则它有壳却既不占槽也不算隐藏壳，算术出现瞬态双壳）。
-      && !(deferredBootRef.current.has(id) && !isSettledShellState(shellStates[id]))
-      && !autoPrewarmedRef.current.has(id)
-      // 已失败的用户壳（error !== null）不算占用：它既不会被回收（隐藏 1 壳
-      // 时 excess=0）也不是预热壳，若算占用则 remaining 恒 0、收割链整场停摆
-      // （2026-12 复查 MINOR-2：用户点开一个停机 gateway → boot 失败 → 切回）。
-      && shellStates[id]?.error == null)
-    // 只统计"仍挂载且未失败"的预热壳：一个 boot 失败的预热壳会一直挂在
-    // autoPrewarmedRef 里且不会被回收（无收割意图、excess=0），若计进占用则
-    // warmRemaining 恒 0（2026-12 复查 MINOR-3）。
-    const liveAutoPrewarmed = mountedViews.filter(id =>
-      autoPrewarmedRef.current.has(id) && shellStates[id]?.error == null).length
-    const warmRemaining = retentionSlotOccupied
-      ? 0
-      : Math.max(0, MAX_PREWARMED_REMOTE_VIEWS - liveAutoPrewarmed)
-    const readyUnmountedIds = remoteInstances
-      // `phase === 'ready'` 之外再过一道 instanceConnected：remoteStatus 以 raw id
-      // 为键，kind 切换（ssh↔http）后可能残留旧 READY 投影，status.kind 不匹配时
-      // instanceConnected 会拒绝——否则会给其实未就绪的源白烧一次尝试
-      // （2026-12 复查 NIT）。
-      .filter(instance => remoteStatus[instance.id]?.phase === 'ready'
-        && instanceConnected(instance.kind, health, remoteStatus, instance.id))
-      // 托管 dsh 终态停机的 gateway 源不预热/不收割：壳 boot 必然失败（网关
-      // 侧 503），只会白烧尝试次数并占用唯一后台槽（问题 B 的投影事实在此
-      // 直接作为门控输入；用户启动托管 dsh 后本门随 15s 探针自动放开）。
-      .filter(instance => !(instance.kind === 'gateway'
-        && managedRuntimeUnusable(managedRuntime[sourceIdForInstance(instance)])))
-      .map(sourceIdForInstance)
-      .filter(id => !mountedViews.includes(id))
-    // 收割优先（design 05 §2.3 / baseline-harvest.ts）：还没拿到权威基线的源
-    // 排在最前，且**不受**"回收后禁预热"抑制——收割正是这类源（从未推送、
-    // 或曾降级后被回收）的治本臂；抑制只为防止 drainPrewarm 立刻重 boot 已
-    // 回收的温壳，不能反过来把降级源永久钉在兜底视图里。
-    const harvestIds = readyUnmountedIds
-      .filter(id => harvestPending(harvestStateRef.current[id]))
-    harvestCandidatesRef.current = new Set(harvestIds)
-    // 保留策略：被回收过的源不再自动预热——否则回收(拆壳)会立即被
-    // drainPrewarm 重新 boot(白回收循环)。抑制持续到用户主动点开
-    // （selectView 清除）或来源从注册表删除（retireSources 清除）。
-    // 另外排除"尝试耗尽且从未拿到基线"的源（harvestParked）：它若退回普通
-    // 预热会白拿第三次 boot，并以 autoPrewarmed 身份长期占用唯一后台槽
-    // （隐藏 1 壳时 retention 不会回收它）——此后本会话再没有任何源能预热
-    // 或收割（2026-12 复查 MAJOR-2）。
-    const warmIds = readyUnmountedIds
-      .filter(id => !prewarmSuppressedRef.current.has(id))
-      .filter(id => !harvestParked(harvestStateRef.current[id]))
-      .filter(id => !harvestIds.includes(id))
-    // 收割候选在场时**独占**后台槽（prewarmCandidates）：若让温壳顶上来，它会
-    // 变成 autoPrewarmed，而隐藏 1 壳时 retention 不会回收它 ⇒ remaining 恒 0、
-    // 本会话剩余来源永远拿不到基线（一个失败源阻塞全部——违反正确性不变量；
-    // 2026-12 复查 MAJOR-1）。退避期空转槽位是有界代价，收割全部结束/停用后
-    // 温壳预热照常恢复。
-    // **收割有自己的预算线**：用户保留的隐藏温壳会让 warmRemaining 恒 0
-    // （retention 只保 1 个隐藏壳），但收割壳是瞬时的（推送即回收 / 仅最后
-    // 一个保留 / 有截止与放弃上限），不能被用户温壳永久挡死——否则用户点开过
-    // 任何来源之后，后变 ready 的来源永远停在兜底视图（2026-12 复查 MAJOR-1
-    // 的第二形态）。
-    const slotBudget = harvestIds.length > 0 ? MAX_PREWARMED_REMOTE_VIEWS : warmRemaining
-    return new Set(prewarmCandidates(harvestIds, warmIds, slotBudget))
-  }, [remoteInstances, remoteStatus, mountedViews, activeView, managedRuntime, shellStates])
-  prewarmEligibleRef.current = prewarmEligible
-
-  const drainPrewarm = useCallback(() => {
-    if (prewarmInflightRef.current !== null) return
-    if (!localSettledRef.current) return
-    // 2026 性能整改：仅前台推进预热——窗口隐藏期不为"用户没看"的源继续
-    // boot 全量 UI（恢复可见由 visibilitychange 补偿一轮 drain）。
-    if (!shouldRunBackgroundPhase(document.visibilityState)) return
-    const now = Date.now()
-    const pendingOf = (id: string): boolean => harvestPending(harvestStateRef.current[id])
-    const dueOf = (id: string): boolean => harvestRetryDue(harvestStateRef.current[id], now)
-    // 选取顺序（baseline-harvest.pickPrewarmTarget）：退避已满的收割候选优先，
-    // 其次温壳；退避中的收割候选被跳过而不是挡住它后面的温壳。
-    const next = pickPrewarmTarget(prewarmQueueRef.current, prewarmEligibleRef.current, pendingOf, dueOf)
-    if (next === undefined) return
-    // R8：这次选取来自 hover 意图（队列重排）⇒ 记一次意图 boot。重排本身不
-    // 计费；计费发生在"真的启动"这一刻（blueprint §4.4），且只影响后续意图的
-    // 准入，绝不回滚/干扰这次既有语义的挂载。
-    if (intentPriorityRef.current.delete(next)) {
-      intentBudgetRef.current = intentPrewarmSpent(intentBudgetRef.current, next, now)
-    }
-    prewarmQueueRef.current = prewarmQueueRef.current.filter(id => id !== next)
-    // 这次挂载是否为收割挂载：未满足基线的源都是（提交推送/ boot 失败 /
-    // 用户点开三条路径据此分流，见 onInstanceSnapshot / handleShellState /
-    // selectView）。
-    if (pendingOf(next)) {
-      harvestIntentRef.current.add(next)
-      harvestStateRef.current[next] = harvestAttemptStarted(harvestStateRef.current[next], now)
-    }
-    prewarmInflightRef.current = next
-    prewarmInflightAtRef.current = now
-    autoPrewarmedRef.current.add(next)
-    // I8：一次后台挂载真的开始。
-    recordPrewarm('attempt', next)
-    setMountedViews(prev => (prev.includes(next) ? prev : [...prev, next]))
-  }, [])
-
-  const handleInstanceSettled = useCallback((instanceId: string) => {
-    delete viewBootStartedAtRef.current[instanceId]
-    if (instanceId === LOCAL_INSTANCE_ID) localSettledRef.current = true
-    if (prewarmInflightRef.current === instanceId) {
-      prewarmInflightRef.current = null
-      prewarmInflightAtRef.current = 0
-    }
-    // 保留策略：settle 完成才起 60s 回收窗——隐藏视图（预热完成/切走后
-    // settle）从此刻计"可回收时长"，boot 耗时不被白付；**屏上视图保持无键**
-    // （W3：判据是 paintedView，不是 activeView——持有窗内"已选中但还没画上屏"
-    // 的视图仍是隐藏的，给它起表不会误拆，但屏上那个壳绝不能开始隐藏计时）。
-    if (instanceId === paintedViewRef.current) delete hiddenSinceRef.current[instanceId]
-    else hiddenSinceRef.current[instanceId] = Date.now()
-    // 无条件 drain：任何 settle 都可能是"在途预热完成"或"本地首次 settle"
-    // 的触发器（后者在状态先于本地就绪时不会因依赖变化而触发队列推进）。
-    drainPrewarm()
-  }, [drainPrewarm])
-
-  /** Shell 终态上报（InstanceView onStateChange）：失败覆盖层读取活动视图的 error。 */
-  const handleShellState = useCallback((instanceId: string, state: ShellState) => {
-    // 注：settle/boot-failed 的 perf 标记由 shell.ts 在 settle 返回点统一打点
-    // （本回调只消费状态，避免同名双标记污染 trace）。
-    // 重新进入 booting/idle（「重试」复位）即重新计时：否则在放弃后很久才重试的
-    // 视图会立刻被同一轮清扫再判超时（2026-12 复查 MINOR）。
-    if (!state.booted && state.error === null) viewBootStartedAtRef.current[instanceId] = Date.now()
-    setShellStates(prev => (prev[instanceId] === state ? prev : { ...prev, [instanceId]: state }))
-    // 收割挂载 boot 失败：本次尝试失败（尝试计数与退避已随 attempt 武装），
-    // 立即释放该壳——失败壳占着后台槽，也让来源停在兜底视图；重试由退避
-    // 期满后的 drain 承担（attempts 上限见 baseline-harvest.ts）。
-    if (state.error !== null && harvestIntentRef.current.has(instanceId)) {
-      harvestIntentRef.current.delete(instanceId)
-      reclaimViewRef.current(instanceId, 'harvest')
-    }
-  }, [])
-
-  // ---- N-ctx 保留策略（2026 性能整改，纯函数与语义见 src/retention.ts）----
-  // 已 settle（booted 或 error）视图集合：booting/未上报 = 未 settle，不回收
-  // （避免取消在途 boot 白付成本）。
-  const settledViewIds = useMemo(() => {
-    const settled = new Set<string>()
-    for (const [id, state] of Object.entries(shellStates)) {
-      if (isSettledShellState(state)) settled.add(id)
-    }
-    return settled
-  }, [shellStates])
-
-  /** 把"永不 settle 的挂载"标记为失败：让既有失败覆盖层与重试出现（该壳若是
-   * 活动/待开视图则不可回收，见 reclaimHiddenViews 的绝对放弃臂）。 */
-  const markAbandonedShellFailed = useCallback((id: string) => {
-    // 重新计时（2026-12 复查 MAJOR）：否则用户点「重试」后，挂载时刻仍是原值，
-    // 同一轮清扫会立刻再次判超时——覆盖层原地复活、新 boot 永远看不到，切走还会
-    // 把在途重试的壳按保留策略回收掉。
-    viewBootStartedAtRef.current[id] = Date.now()
-    setShellStates(prev => ({
-      ...prev,
-      [id]: {
-        instanceId: id,
-        basePath: instanceBasePath(id),
-        booted: false,
-        booting: false,
-        error: frameText(readDocumentLocale(), 'fatal.harvestTimeout', {
-          seconds: String(Math.round(HARVEST_ABANDON_MS / 1000)),
-        }),
-        // 超时是失败态，不是降级态：自愈重挂由失败覆盖层的「重试」负责。
-        degraded: null,
-      },
-    }))
-  }, [])
-
-  /**
-   * 回收一个超限隐藏壳（幂等）。与注册表删除分支（retireSources）的区别：
-   * 来源仍在注册表与 liveServerIdsRef 中，因此这里不碰数据面键空间
-   * （aggregates/runtimeFacts/通知记忆随 producer 通道撤回自行收敛）、不回退
-   * active/pending 意图、不清 deep-link/通知在途交付。dispose 先于 React 卸载
-   * （同一提交内），实例进程/隧道/后台任务不受影响；重开 = selectView 重新
-   * 挂载 → 冷 boot + entry 重放（shell.ts 同 id 串行 barrier 既有）。
-   * 数据面降级按既有语义自然发生：ctx 卸载触发快照 producer clear，App 的
-   * onInstanceSnapshot withdrawal 分支对已推送源保留 mounted marker（最后权威
-   * 分组/归档集留在侧栏），30s unary watchdog 以 mounted 合并持续刷新其会话行
-   * 与 running 位（05 §2.3）。已知取舍：壳内运行中任务的完成蓝点/通知边沿随
-   * runtime-facts 通道撤回而暂停，直至该源重开（冷 boot 首报重新播种）——
-   * 60s 安全窗 + RETAINED_HIDDEN_VIEWS=1 限制损失面，登记于 STATUS.md。
-   */
-  const reclaimView = useCallback((id: string, reason: 'retention' | 'harvest' = 'retention') => {
-    if (id === LOCAL_INSTANCE_ID || !mountedViews.includes(id)) return
-    // W3：**屏上的壳永不被回收**——持有窗内 painted 仍是旧视图而 active 已是目标，
-    // 只查 active/pending 会把用户正在看的那一屏拆掉（蓝图 §2.6-1；这是本函数
-    // 唯一的拆除入口，守卫放这里覆盖推迟/放弃/retention/收割所有调用臂）。
-    if (id === activeViewRef.current || id === paintedViewRef.current || id === pendingViewRef.current) return
-    // 设置面板正在编辑的来源：拆壳 = 面板当前面消失（design 05 §5 的面板 hold）。
-    // 守卫放在**唯一拆除入口**上而不是逐个调用点：推迟臂与 retention 循环各有同名
-    // 守卫，但 135s 放弃臂、收割失败/放弃与遮罩放弃落地臂都能到达本函数——任何一条
-    // 漏守卫都会把面板钉死在"正在启动该实例的前端"（2026-12 复核 MINOR-1）。
-    // 面板关闭时 SettingsShell 显式 setSettingsTarget(undefined)，hold 不超期；
-    // 来源退役的卸载走注册表删除臂（不经本函数），不存在"退役壳拆不掉"。
-    // 守卫放在函数最前 = 命中即**纯 no-op**（连收割槽释放都不做）：不会造成
-    // 预热调度停滞——保留位里的挂载仍计入占用（`warmRemaining` 为 0，本就不起新的
-    // 后台 boot）；而"推迟 + 未结算"这种**不计入占用**的形状另有收口：135s 放弃臂
-    // 独立清 `prewarmInflightRef`（abandon 循环不读面板守卫），面板关闭后下一个 tick
-    // 由放弃/收割/推迟任一臂照常恢复。2026-12 独立复核修正：原文用"仍计入占用"
-    // 解释所有形状，对 deferred+未结算不成立（结论不变，理由曾错）。
-    if (id === settingsTargetRef.current) return
-    // 收割回收时后台槽就是它自己：boot 已产出首个推送（或已失败），先释放槽位
-    // 再回收，否则 prewarmInflight 守卫会把自己挡回去（保留回收语义不变）。
-    if (reason === 'harvest' && prewarmInflightRef.current === id) {
-      prewarmInflightRef.current = null
-      prewarmInflightAtRef.current = 0
-    }
-    if (id === prewarmInflightRef.current) return
-    harvestIntentRef.current.delete(id)
-    autoPrewarmedRef.current.delete(id)
-    // 保留策略：回收后禁止自动预热（否则 drainPrewarm 立刻重新 boot 它，
-    // 回收空转）；用户主动点开（selectView）或注册表删除（retireSources）时清除。
-    // 收割回收不写抑制键：它回收的是"已经拿到基线（或按上限放弃）"的源，
-    // 抑制键会把从未推送的降级源永久钉在兜底视图里，与收割目的相反。
-    if (reason === 'retention') prewarmSuppressedRef.current.add(id)
-    prewarmQueueRef.current = withoutRemovedSourceIds(prewarmQueueRef.current, new Set([id]))
-    if (prewarmEligibleRef.current.has(id)) {
-      const next = new Set(prewarmEligibleRef.current)
-      next.delete(id)
-      prewarmEligibleRef.current = next
-    }
-    disposeInstanceShell(id)
-    // 诊断收敛（2026 评审 Minor-2 修复）：boot-graph 诊断通道没有 ctx 卸载
-    // 撤回——注册表删除路径之外的唯一清除点是显式 undefined 上报与退役。
-    // 回收是新的生命周期类别（ctx 拆除而来源仍注册），不清除会让被拆 ctx
-    // 的旧非 ok 诊断（bundle-load-failed / restart-required）挂在源上直到
-    // 注册表删除，健康重开反而无上报（shell.ts 只在 graph 失败时上报）。
-    // 与注册表删除镜像：clearPluginDiagnostic 改变签名 → 重发布，settings
-    // 的 connections 插件面随之更新。聚合/runtimeFacts/通知记忆仍按
-    // reclaimView 头注随 producer 通道撤回自行收敛。
-    chamberBridge.clearPluginDiagnostic(id)
-    delete hiddenSinceRef.current[id]
-    // 2026-12 FIX 5: the once-per-ready-epoch self-heal mark belongs to the
-    // MOUNT, not to the id. Reclaiming the view tears the shell down, and the
-    // next mount is a NEW boot (fresh serial, fresh state) — keeping the old
-    // mark would silently forbid the fresh mount its automatic re-mount for the
-    // rest of the ready epoch (manual retry only).
-    degradedRetriedRef.current = forgetDegradedRetry(degradedRetriedRef.current, id)
-    setMountedViews(prev => withoutRemovedSourceIds(prev, new Set([id])))
-    setShellStates(prev => withoutRemovedSourceKeys(prev, new Set([id])))
-    setRetryTokens(prev => withoutRemovedSourceKeys(prev, new Set([id])))
-  }, [mountedViews])
-
-  // 遮罩「切换来源」的落地臂（W1）：切换落地（activeView 变化）后回收被放弃的
-  // 视图。reclaimView 自己的活动/待开守卫**不被绕过**——标记留到真正拆掉为止；
-  // 拆除与 reclaimView 同一条路：dispose + 同 commit 卸载 + 抑制自动预热。
-  useEffect(() => {
-    if (abandonedViewsRef.current.size === 0) return
-    for (const id of [...abandonedViewsRef.current.keys()]) {
-      if (!mountedViews.includes(id)) { abandonedViewsRef.current.delete(id); continue }
-      if (id === activeView || id === pendingViewRef.current) continue
-      reclaimView(id, 'retention')
-    }
-  }, [activeView, mountedViews, reclaimView])
-
-  // 放弃标记的**落地校验**（2026-12 二轮独立复核 F2）：目标在切换落地之前退役/被删时，
-  // retireSources 会先清 pending，view-transition 的 apply 回调再也拿不到 onApply，
-  // 同步 try/catch 也撤不掉标记 ⇒ 这个"没落地的放弃"会让该视图下一次离开跳过保留宽限
-  // 被立刻拆掉。目标已不在 live 名单（且不是当前视图）⇒ 撤回。
-  useEffect(() => {
-    if (abandonedViewsRef.current.size === 0) return
-    for (const [from, to] of [...abandonedViewsRef.current]) {
-      if (to === LOCAL_INSTANCE_ID || liveServerIds.has(to) || activeView === to) continue
-      abandonedViewsRef.current.delete(from)
-    }
-  }, [liveServerIds, activeView])
-
-  /** 保留策略检查：仅前台执行（窗口隐藏期不拆壳；恢复可见由
-   * visibilitychange 补偿一轮）。守卫与上限见 decideReclaimCandidates。
-   * 同轮承担收割超时清扫：挂载后 HARVEST_DEADLINE_MS 内没有权威推送 = 本次
-   * 尝试失败，释放后台槽（尝试上限与退避已随 attempt 武装）。 */
-  const reclaimHiddenViews = useCallback(() => {
-    if (!shouldRunBackgroundPhase(document.visibilityState)) return
-    const now = Date.now()
-    for (const id of [...harvestIntentRef.current]) {
-      const record = harvestStateRef.current[id]
-      if (record === undefined) continue
-      if (harvestDeadlinePassed(record, now) && settledViewIds.has(id)) {
-        // 只在壳已 settle 后按截止值判超时：boot 预算 60s（shell.ts
-        // BOOT_TIMEOUT_MS），截止值高于它——settle 前只可能是排队/在途 boot。
-        harvestIntentRef.current.delete(id)
-        reclaimView(id, 'harvest')
-        continue
-      }
-      if (harvestAbandoned(record, now)) {
-        // 绝对上限：壳**始终**不 settle（挂死的 loader/fetch）时截止臂永远
-        // 不可达，而后台槽被 prewarmInflight 永久占住。此时回收并**停用**
-        // 该源（attempts 打满 → harvestParked），否则重试会撞进同一个挂死。
-        harvestIntentRef.current.delete(id)
-        harvestStateRef.current[id] = harvestParkedRecord()
-        reclaimView(id, 'harvest')
-      }
-    }
-    // 绝对放弃臂（2026-12 复查 MAJOR）：上面的截止臂只扫 harvestIntentRef，而
-    // "用户点开正在收割的壳"会撤销意图、普通温壳预热从不写意图、selectView/深链
-    // 挂载的壳更与预热无关——boot 挂死时后台槽/该视图就永久卡住。这里按**每个挂载
-    // 视图的挂载时刻**独立兜底：只判仍未 settle 的挂载（已 settle 的走上方的截止
-    // 臂），超上限后按身份分流。
-    for (const id of mountedViews) {
-      if (settledViewIds.has(id)) continue
-      const startedAt = viewBootStartedAtRef.current[id]
-      if (startedAt === undefined || now - startedAt < HARVEST_ABANDON_MS) continue
-      const wasHarvest = harvestIntentRef.current.has(id)
-      if (wasHarvest) {
-        harvestIntentRef.current.delete(id)
-        harvestStateRef.current[id] = harvestParkedRecord()
-      }
-      if (prewarmInflightRef.current === id) {
-        prewarmInflightRef.current = null
-        prewarmInflightAtRef.current = 0
-      }
-      if (id === activeViewRef.current || id === pendingViewRef.current) {
-        // 活动/待开视图不可回收（reclaimView 会拒绝）。若不标记，用户会永久停在
-        // boot 蒙层上（无错误、无重试）——标记为失败让既有失败覆盖层 + 重试出现。
-        markAbandonedShellFailed(id)
-      } else {
-        // 隐藏视图：收割壳不写抑制键（它可能仍需重试），用户/温壳按保留策略回收。
-        reclaimView(id, wasHarvest ? 'harvest' : 'retention')
-      }
-    }
-    // W2：被推迟（来源未连接）的隐藏视图不持有任何壳资源，却因为"未 settle 不入
-    // retention 候选"能永久占住挂载位——过既有隐藏宽限即回收，重开仍是既有
-    // selectView 冷挂载路径。裁决在 source-readiness.ts（纯函数 + 用例）；
-    // 这里只提供事实：已 settle 的推迟壳回到 retention 常规策略，设置面板正在
-    // 编辑的来源按 design 05 §5 的面板 hold 绝不回收（2026-12 复核 MAJOR：
-    // 少了这道守卫会把面板钉死在"正在启动该实例的前端"）。
-    for (const id of mountedViews) {
-      if (!isDeferredReclaimDue({
-        deferred: deferredBootRef.current.has(id),
-        settled: settledViewIds.has(id),
-        busy: id === activeViewRef.current || id === pendingViewRef.current,
-        settingsTarget: id === settingsTargetRef.current,
-        hiddenSinceMs: hiddenSinceRef.current[id],
-        nowMs: now,
-        graceMs: VIEW_RECLAIM_GRACE_MS,
-      })) continue
-      reclaimView(id, 'retention')
-    }
-    // W2（F1 复核）：**从未 settle** 的被推迟视图既不占隐藏壳数、也不由 retention
-    // 回收——它没有壳可拆（推迟回收臂按隐藏宽限负责它）。不排除会让一次"设置面板选了
-    // 离线来源"把 excess 抬到 ≥1，从而把用户真正的温壳挤掉（与 prewarmInflightId 的
-    // 同类排除同源）。已 settle 的推迟壳是**真壳**：它照常计数、照常进候选窗。
-    const unsettledDeferredIds = new Set(
-      [...deferredBootRef.current].filter(id => !settledViewIds.has(id)),
-    )
-    const retentionMountedViews = unsettledDeferredIds.size === 0
-      ? mountedViews
-      : mountedViews.filter(id => !unsettledDeferredIds.has(id))
-    const candidates = decideReclaimCandidates({
-      mountedViews: retentionMountedViews,
-      // W3：保留判定按 **painted**（"谁在屏上"）——持有窗内 active 已是目标，传它会把
-      // 屏上的旧视图算成隐藏壳、并让 hiddenNonLocalCount 少算一个（蓝图 §2.6-2）。
-      activeViewId: paintedViewRef.current,
-      hiddenSince: hiddenSinceRef.current,
-      settled: settledViewIds,
-      pendingViewId: pendingViewRef.current,
-      prewarmInflightId: prewarmInflightRef.current,
-      localId: LOCAL_INSTANCE_ID,
-      // 快照（decide 即读）：自动预热来源在候选排序中先于用户来源被回收
-      // （retention.ts 规则 3——预热壳从未被用户请求，straddle 形态下不
-      // 允许它挤掉用户温壳）。
-      prewarmOriginIds: new Set(autoPrewarmedRef.current),
-      now: Date.now(),
-    })
-    // 设置面板正在编辑的来源不可回收（design 05 §5，2026-12 完整桥接修订）：
-    // 面板渲染的是该来源自己 boot ctx 的台账，拆掉壳 = 正在编辑的设置面消失。
-    // 过滤而非改判定：面板关闭后该源重新成为普通保留候选。
-    for (const id of candidates) {
-      if (id === settingsTargetRef.current) continue
-      reclaimView(id)
-    }
-  }, [mountedViews, reclaimView, settledViewIds])
-
-  // 定时器/事件驱动的检查需要最新闭包：ref 镜像（同 pollAggregatesRef 纪律）。
-  const reclaimHiddenViewsRef = useRef<() => void>(() => undefined)
-  const drainPrewarmRef = useRef<() => void>(() => undefined)
-  useEffect(() => {
-    reclaimHiddenViewsRef.current = reclaimHiddenViews
-    drainPrewarmRef.current = drainPrewarm
-    reclaimViewRef.current = reclaimView
+  // 视图调度簇（预热资格 / 收割保温 / 保留回收 / 后台相位）已抽为命名 hook
+  // （阶段 3）；依赖面类型化，App 取回 8 个既有调用面继续接线。
+  const {
+    prewarmEligible, drainPrewarm, reclaimView, reclaimHiddenViews,
+    handleInstanceSettled, handleShellState, reclaimHiddenViewsRef, drainPrewarmRef,
+  } = useViewScheduler({
+    activeView, health, liveServerIds, managedRuntime,
+    mountedViews, remoteInstances, remoteStatus, shellStates,
+    setMountedViews, setRetryTokens, setShellStates, abandonedViewsRef,
+    activeViewRef, autoPrewarmedRef, deferredBootRef, degradedRetriedRef,
+    harvestCandidatesRef, harvestIntentRef, harvestStateRef, hiddenSinceRef,
+    intentBudgetRef, intentPriorityRef, localSettledRef, paintedViewRef,
+    pendingViewRef, prewarmEligibleRef, prewarmInflightAtRef, prewarmInflightRef,
+    prewarmQueueRef, prewarmSuppressedRef, reclaimViewRef, settingsTargetRef,
+    viewBootStartedAtRef, MAX_PREWARMED_REMOTE_VIEWS,
   })
 
   // 共享文档的主题投影归属（N-ctx 硬化，design 06）：文档级 color-scheme /
@@ -4032,686 +3596,24 @@ export default function App() {
     recomputeSourceUnread(sourceId)
   }, [recomputeSourceUnread, schedulePersistUnread])
 
-  /** W4：侧栏「全部已读」请求（插件→App 单向，与 openSession 同一条桥纪律）。 */
-  useEffect(() => {
-    const unsubscribe = chamberBridge.onMarkAllRead(({ sourceId }) => {
-      markSourceAllRead(sourceId)
-    })
-    return unsubscribe
-  }, [markSourceAllRead])
-
-  /**
-   * R8 意图预热（blueprint §4.2/§4.3）：来源头部 hover dwell（插件侧
-   * shared/prewarm-intent.ts 的 120ms 机器）到达这里后只做一件事——把该来源
-   * 提到**既有**后台预热队列的队首，让既有 drainPrewarm/pickPrewarmTarget
-   * 先看到它。绝不代行"点开"：被回收抑制 / 已挂载 / 收割停车 / 未就绪的来源
-   * 都不在 prewarmEligible 里，意图在此原样丢弃（不删 prewarmSuppressedRef
-   * 的键——否则就是"回收后立刻重新 boot"的空转）；用户明确点开仍走 selectView
-   * 原路（清抑制 + 挂载）。每会话预算/冷却见 drainPrewarm 的计费与纯策略。
-   */
-  useEffect(() => {
-    const unsubscribe = chamberBridge.onIntentPrewarm(({ sourceId }) => {
-      if (!prewarmEligibleRef.current.has(sourceId)) return
-      const now = Date.now()
-      if (!intentPrewarmAllowed(intentBudgetRef.current, sourceId, now)) return
-      intentPriorityRef.current.add(sourceId)
-      prewarmQueueRef.current = prioritizePrewarmSource(
-        prewarmQueueRef.current,
-        sourceId,
-        prewarmEligibleRef.current,
-      )
-      drainPrewarmRef.current()
-    })
-    return unsubscribe
-  }, [])
-
-  /** 侧边栏插件打开请求（05 §3）：mount 订阅、卸载取消。请求通道单向
-   *  （插件→App）；打开终态经 outcome 回报（App→每个 sidebar shell，
-   *   行内错误呈现），失败同时 console.error。 */
-  useEffect(() => {
-    const unsubscribe = chamberBridge.onOpenSession(({ sourceId, sessionId }) => {
-      void openSession(sourceId, sessionId).then(
-        () => { chamberBridge.reportOpenSessionOutcome({ sourceId, sessionId }) },
-        (err) => {
-          const message = errorMessage(err)
-          console.error(`[renderer] openSession failed (${sourceId}/${sessionId}):`, err)
-          chamberBridge.reportOpenSessionOutcome({ sourceId, sessionId, message })
-        },
-      )
-    })
-    return unsubscribe
-  }, [openSession])
-
-  /** 侧边栏插件点击来源头部的激活请求：切换到该来源 shell（未挂载先挂载，N-ctx）。 */
-  useEffect(() => {
-    return chamberBridge.onActivateSource((sourceId) => {
-      selectView(sourceId)
-    })
-  }, [selectView])
-
-  /**
-   * 设置面板目标来源（design 05 §5，2026-12 完整桥接修订）：面板渲染选中来源
-   * 自己的 boot ctx 台账，因此该来源的壳必须挂载。这里只做"挂载 + 保留"，绝不
-   * 切换 active view——下拉选服务器不等于把用户正在看的视图换掉（与
-   * `requestActivateSource` 的分工：后者是用户点了侧栏来源头部）。
-   * 未在权威 roster 里的 id 不挂载（已退役来源不得被重新 boot）；面板对离线
-   * 来源本就不设目标（它显示不可达占位）。
-   */
-  useEffect(() => {
-    return chamberBridge.onSettingsTarget((sourceId) => {
-      settingsTargetRef.current = sourceId
-      if (sourceId === undefined) return
-      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
-      // 曾经因闲置被回收而被抑制预热的来源，被面板显式选中 = 再次有使用意图。
-      prewarmSuppressedRef.current.delete(sourceId)
-      autoPrewarmedRef.current.delete(sourceId)
-      setMountedViews(prev => (prev.includes(sourceId) ? prev : [...prev, sourceId]))
-    })
-  }, [])
-
-  /** VS Code OS 深链（design 16 §2，hold/replay）：先注册监听，再以 ready()
-   *  通知主进程放行归一化 intent；冷启动/重载期间的成功启动不会丢失来源激活。
-   *  raw id → 视图 id 通过当前权威 kind roster 解析为 dsh-/gateway-；
-   *  legacy ssh- 只作为输入兼容，绝不由 v2 roster 新产生。
-   *  远程来源在首次 authoritative instances_get settle 前进入单槽 pending，
-   *  roster 成功后再由上方 effect replay；local 不依赖 roster，立即激活。
-   *  VS Code 启动由主进程独立完成，渲染层激活从不阻塞它。桥与 desktopSsh
-   *  同一批 expose，sshBridgeReady 即 deepLink 可用。 */
-  useEffect(() => {
-    if (!sshBridgeReady) return
-    const deepLink = window.dshChamber?.deepLink
-    if (deepLink === undefined) return
-    const unsubscribe = deepLink.onIntent((intent) => {
-      if (typeof intent.instanceId !== 'string'
-        || typeof intent.sourceFingerprint !== 'string'
-        || !Number.isSafeInteger(intent.deliveryId) || intent.deliveryId < 1
-        || !Number.isSafeInteger(intent.attempt) || intent.attempt < 1) {
-        console.error('[renderer] ignored malformed deep-link activation intent')
-        return
-      }
-      const sourceId = intent.instanceId === 'local'
-        ? LOCAL_INSTANCE_ID
-        : remoteRosterSettledRef.current
-          ? sourceIdForRawInstance(intent.instanceId, remoteInstancesRef.current)
-          : null
-      if (intent.instanceId !== 'local' && remoteRosterSettledRef.current && sourceId === null) {
-        console.warn(`[renderer] ignored deep-link raw source absent from the authoritative roster: ${intent.instanceId}`)
-        void acknowledgeDeepLink(intent).catch(error => {
-          reportDeepLinkAckFailure(intent, error)
-        })
-        return
-      }
-      // If authority for this source is already installed, reject a stale IPC
-      // pipe delivery before it can supersede a legitimate held intent. When
-      // no owner exists yet, preserve the delivery until the roster settles
-      // and perform the same exact-proof check in the replay effect.
-      if (
-        sourceId !== null
-        && sourceLifecyclesRef.current!.capture(sourceId) !== null
-        && !deliveryMatchesCurrentSource(
-          sourceLifecyclesRef.current!,
-          sourceId,
-          intent.sourceFingerprint,
-        )
-      ) {
-        console.warn(`[renderer] ignored stale deep-link source proof before routing: ${sourceId}`)
-        void acknowledgeDeepLink(intent).catch(error => {
-          reportDeepLinkAckFailure(intent, error)
-        })
-        return
-      }
-      const previous = pendingDeepLinkDeliveryRef.current
-      const current: DeepLinkDelivery = {
-        rawInstanceId: intent.instanceId,
-        sourceId,
-        sourceFingerprint: intent.sourceFingerprint,
-        deliveryId: intent.deliveryId,
-        attempt: intent.attempt,
-      }
-      if (sourceId === null) {
-        pendingDeepLinkDeliveryRef.current = current
-        if (previous !== null && previous.deliveryId !== current.deliveryId) {
-          void acknowledgeDeepLink(previous).catch(error => {
-            reportDeepLinkAckFailure(previous, error)
-          })
-        }
-        return
-      }
-      const decision = routeDeepLinkActivation(
-        sourceId,
-        remoteRosterSettledRef.current,
-        liveServerIdsRef.current,
-        previous?.sourceId ?? null,
-      )
-      pendingDeepLinkDeliveryRef.current = decision.pendingSourceId === null ? null : current
-      if (previous !== null && previous.deliveryId !== current.deliveryId) {
-        // View activation is explicitly last-intent-wins. A newer delivery
-        // deliberately supersedes the older held item, so commit the old id
-        // instead of leaving main's single-flight key retained forever.
-        void acknowledgeDeepLink(previous).catch(error => {
-          reportDeepLinkAckFailure(previous, error)
-        })
-      }
-      if (decision.discarded?.reason === 'missing') {
-        console.warn(`[renderer] ignored deep-link source absent from the authoritative roster: ${decision.discarded.sourceId}`)
-      }
-      if (decision.activateSourceId !== null) {
-        if (deliveryMatchesCurrentSource(
-          sourceLifecyclesRef.current!,
-          sourceId,
-          current.sourceFingerprint,
-        )) {
-          selectView(decision.activateSourceId)
-        } else {
-          console.warn(`[renderer] ignored stale deep-link source proof: ${sourceId}`)
-        }
-      }
-      if (decision.pendingSourceId === null) {
-        void acknowledgeDeepLink(current).catch(error => {
-          reportDeepLinkAckFailure(current, error)
-        })
-      }
-    })
-    // Listener-before-ready is the ordering contract: ready synchronously
-    // unlocks the main-process drain, whose first send may happen immediately.
-    // Retry a transient IPC failure on a bounded budget; main keeps its intent
-    // held until one invocation succeeds.
-    let cancelled = false
-    let readyAttempts = 0
-    let retryTimer: ReturnType<typeof setTimeout> | null = null
-    const signalReady = (): void => {
-      readyAttempts += 1
-      void Promise.resolve()
-        .then(() => deepLink.ready())
-        .then((ready) => {
-          if (ready !== true) throw new Error('deep-link ready returned false')
-        })
-        .catch((error: unknown) => {
-          if (cancelled) return
-          if (readyAttempts >= LISTENER_READY_RETRY_LIMIT) {
-            console.error('[renderer] deep-link readiness handshake exhausted its retry budget:', error)
-            return
-          }
-          retryTimer = setTimeout(signalReady, LISTENER_READY_RETRY_MS)
-        })
-    }
-    signalReady()
-    return () => {
-      cancelled = true
-      if (retryTimer !== null) clearTimeout(retryTimer)
-      unsubscribe()
-    }
-  }, [sshBridgeReady, acknowledgeDeepLink, reportDeepLinkAckFailure, selectView])
-
-  /** 侧边栏动作成功后请求的即时刷新（chamberBridge.requestRefresh）；失败落 error 态由 UI 呈现。
-   *  Always pull on a mutation: the mounted producer's push can lag the host's
-   *  registry reorder (create → prepend → insertBefore), so relying on the
-   *  freshness check here left new worktrees/sessions stranded at the prepended
-   *  head until the next 30s poll (2026-08 user report). */
-  useEffect(() => {
-    return chamberBridge.onRefresh((sourceId) => {
-      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
-      const tag = (mutationRefreshSeqRef.current[sourceId] ?? 0) + 1
-      mutationRefreshSeqRef.current[sourceId] = tag
-      void refreshAggregate(sourceId, tag)
-    })
-  }, [refreshAggregate])
-
-  /**
-   * 工作区创建回声（2026-12，design 05 §2.2 修订；真机问题 2）：
-   * 应用内**任一**工作区创建（唯一出口 workspace-mutations.ts：侧栏对话框与
-   * Git worktree 插件的 create/adopt/recovery 同走它）建好后上报宿主
-   * workspaceId，App 记入渲染端账本并把该行并入投影（deriveServers 的单一
-   * 汇合点）。权威收敛点只有两个：
-   * - 该来源挂载壳的 push 列出同一 workspaceId / 同一路径的真实 id ⇒ 账本条目
-   *   立即清除（reconcilePendingWorkspaces，见 onInstanceSnapshot）；
-   * - 来源离开注册表 / TTL 到期 ⇒ 随生命周期收敛。
-   * 这里只记录、不拉取：侧栏在自己的 create 成功后照旧 `requestRefresh`，两条
-   * 通道职责不重叠（本通道是"我刚刚造了它"的事实，刷新是"其它行要更新"）。
-   */
-  useEffect(() => {
-    return chamberBridge.onWorkspaceCreated((fact) => {
-      const { sourceId } = fact
-      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
-      const owner = sourceLifecyclesRef.current!.capture(sourceId)
-      if (owner === null) return
-      const now = Date.now()
-      let ledger = sweepPendingWorkspaces(workspaceEchoRef.current, now)
-      ledger = recordPendingWorkspace(ledger, sourceId, {
-        workspaceId: fact.workspaceId,
-        path: fact.path,
-        // Placement anchor（2026-12 第二入口）：Git 插件在宿主上把新 worktree
-        // 摆在其主 checkout 之后，回声行也必须渲染在那个位置，否则会先出现在
-        // 列表末尾、挂载收敛时再跳上去。缺省（其它创建入口）= 追加到尾部。
-        ...(fact.afterWorkspaceId === undefined ? {} : { afterWorkspaceId: fact.afterWorkspaceId }),
-        // 创作意图标题（Git adopt 的分支名，2026-12 复审）：回声行生来就是最终
-        // 标签，不必先显示路径 basename、等那次 rename 落地再翻转。
-        ...(fact.title === undefined ? {} : { title: fact.title }),
-      }, now)
-      if (ledger !== workspaceEchoRef.current) updateWorkspaceEcho(ledger)
-    })
-  }, [updateWorkspaceEcho])
-  /**
-   * 回声的**撤下 / 改写**通道（2026-12，design 05 §2.2 修订；2026-09-11 review S3）：
-   * 只有 create 事实的回声没有退场机制——创建后又在侧栏删掉会留一行幽灵，且
-   * **权威挂载 push 也退不掉它**（push 只调和"它列出了什么"，列不出的行无事发生，
-   * 幽灵要挂到 10 分钟 TTL；而那一行带真实 host id，工作区级动作在宿主上
-   * fail-closed `workspace/not-found`），
-   * 重命名则因为账本只按路径生成 title 而看起来像没生效。两条通道都是单向事实，
-   * 与 onWorkspaceCreated 同栅栏（活跃来源 + 生命周期捕获），并且经**同一个**
-   * updateWorkspaceEcho 写入：App 仍是投影的唯一写者，账本之外没有第二份状态。
-   * 纯账本改写（removePendingWorkspace / renamePendingWorkspace）保持同一性——
-   * 无匹配条目时返回同一引用，不触发重渲染。
-   */
-  useEffect(() => {
-    return chamberBridge.onWorkspaceRemoved((fact) => {
-      const { sourceId } = fact
-      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
-      const owner = sourceLifecyclesRef.current!.capture(sourceId)
-      if (owner === null) return
-      // The removal is another tick that can change what that source's list
-      // SHOULD contain, so it carries the same TTL sweep as the create fact
-      // (whose doc enumerates these ticks): the retired entry itself is dropped
-      // eagerly by removePendingWorkspace, the sweep covers the entries whose
-      // convergence never came. Identity-preserving, so a no-op costs no render.
-      let ledger = sweepPendingWorkspaces(workspaceEchoRef.current, Date.now())
-      ledger = removePendingWorkspace(ledger, sourceId, { workspaceId: fact.workspaceId, path: fact.path })
-      if (ledger !== workspaceEchoRef.current) updateWorkspaceEcho(ledger)
-    })
-  }, [updateWorkspaceEcho])
-  useEffect(() => {
-    return chamberBridge.onWorkspaceRenamed((fact) => {
-      const { sourceId } = fact
-      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
-      const owner = sourceLifecyclesRef.current!.capture(sourceId)
-      if (owner === null) return
-      const next = renamePendingWorkspace(
-        workspaceEchoRef.current,
-        sourceId,
-        fact.workspaceId,
-        fact.title,
-      )
-      if (next !== workspaceEchoRef.current) updateWorkspaceEcho(next)
-    })
-  }, [updateWorkspaceEcho])
-  /**
-   * 会话创建回声的记账端（2026-12，design 05 §2.2 修订）：唯一出口
-   * （sidebar shared/session-mutations.ts）在 wire 成功后发布宿主会话 id，这里
-   * 把它记入渲染端账本。与会话打开意图同栅栏（活跃来源 + 生命周期捕获），投影的
-   * 唯一写者仍是 App。
-   *
-   * 成员位解析（best-effort，全部来自 App 手里的权威聚合）：
-   * ①事实自带 workspaceId（"+" 建会话必然知道）→ 按宿主 id 找到那一行取路径；
-   * ②否则按父会话（fork）找到**归属**父会话的工作区——子会话与父会话同属一个
-   * 目录；③解析不到也照记：行仍以未分组形态出现，好过整行缺失（TTL 有界）。
-   *
-   * 记账之后立刻请求该来源挂载壳的官方 session-list 刷新：unary 侧建出来的会话进
-   * 挂载壳 summaries 的唯一外源是宿主 api-session/added 的**异步**广播（竞态或丢帧都
-   * 可能），刷新则强制 summaries 重读宿主语料——否则回声要独自撑住整段 TTL（且会话
-   * 首轮之后仍是 blank 形态）。未挂载来源没有该 seam（广播无人订阅）：回声独自撑住
-   * 该行，直到该来源下次挂载时的基线收敛。
-   */
-  useEffect(() => {
-    return chamberBridge.onSessionCreated((fact) => {
-      const { sourceId } = fact
-      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
-      const owner = sourceLifecyclesRef.current!.capture(sourceId)
-      if (owner === null) return
-      const now = Date.now()
-      const aggregate = watchdogAggregatesRef.current[sourceId]
-      const workspaces = aggregate !== undefined && aggregate.state === 'ok' ? aggregate.workspaces : []
-      const byId = fact.workspaceId === undefined
-        ? undefined
-        : workspaces.find(workspace => workspace.workspaceId === fact.workspaceId)
-      const parentId = fact.parentSessionId
-      const byParent = byId === undefined && parentId !== undefined
-        ? workspaces.find(workspace => workspace.sessionIds.includes(parentId))
-        : undefined
-      const target = byId ?? byParent
-      const workspaceId = fact.workspaceId ?? target?.workspaceId
-      const path = target?.path
-      let ledger = sweepPendingSessions(sessionEchoRef.current, now)
-      ledger = recordPendingSession(ledger, sourceId, {
-        sessionId: fact.sessionId,
-        ...(workspaceId === undefined ? {} : { workspaceId }),
-        ...(path === undefined || path === '' ? {} : { path }),
-        ...(fact.title === undefined ? {} : { title: fact.title }),
-        blank: fact.blank,
-      }, now)
-      if (ledger !== sessionEchoRef.current) updateSessionEcho(ledger)
-      chamberBridge.requestSessionListRefresh(sourceId)
-    })
-  }, [updateSessionEcho])
-  /**
-   * 会话回声的撤下半 + 归档墓碑（2026-12）：归档成功做两件事——①退休该会话的待定
-   * 创建回声（创建后又在回声窗内被归档的行不会留到 TTL；挂载推送只能退休它**归属**
-   * 的条目，未挂载来源根本不推送）；②记一条本地归档墓碑，让**未挂载来源**上刚归档
-   * 的行也立刻从列表消失（权威归档集到达即收敛，见 shared/session-echo.ts 的
-   * PendingArchive）。与会话创建事实同栅栏、同账本写入路径。
-   */
-  useEffect(() => {
-    return chamberBridge.onSessionRemoved((fact) => {
-      const { sourceId } = fact
-      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
-      const owner = sourceLifecyclesRef.current!.capture(sourceId)
-      if (owner === null) return
-      const now = Date.now()
-      const withoutPending = removePendingSession(sessionEchoRef.current, sourceId, fact.sessionId)
-      if (withoutPending !== sessionEchoRef.current) updateSessionEcho(withoutPending)
-      const swept = sweepPendingArchives(sessionArchiveRef.current, now)
-      const archived = recordPendingArchive(swept, sourceId, fact.sessionId, now)
-      if (archived !== sessionArchiveRef.current) updateSessionArchive(archived)
-    })
-  }, [updateSessionArchive, updateSessionEcho])
-  /**
-   * 归档墓碑的权威收敛点：挂载 push 的**权威**归档集命名该 id 即退休（degraded 视图
-   * 的空集绝不能传进来——那会把墓碑全撤掉）。与其它两个回声收敛点同位置（ready 门
-   * 之前：权威归档集与聚合是否已提交无关）。
-   */
-  const reconcileArchiveEchoes = useCallback((sourceId: string, archivedSessionIds: readonly string[]): void => {
-    const next = reconcilePendingArchives(sessionArchiveRef.current, sourceId, archivedSessionIds)
-    if (next !== sessionArchiveRef.current) updateSessionArchive(next)
-  }, [updateSessionArchive])
-  /**
-   * Mounted source ctxs publish the same complete snapshot shape as the unary
-   * fallback. A push invalidates any older in-flight pull before committing.
-   * A withdrawal (`undefined`) means the source's arrival baselines have not
-   * landed (first boot window); a source that ALREADY pushed once keeps its
-   * mounted marker and last aggregate — dropping them would hand the source
-   * to the sessions-only unary fallback (no workspace groups, no archive
-   * filter — the archive set exists only on the workspace baseline — and 30s
-   * polled state), the all-ungrouped + archived-resurfacing + stale-state
-   * regression (2026-09 fix). The staleness watchdog still bounds a
-   * silently-dead producer channel via the retained snapshotAt recency.
-   */
-  useEffect(() => {
-    return chamberBridge.onInstanceSnapshot((
-      sourceId,
-      snapshot: InstanceSnapshot | undefined,
-      sourceFingerprint,
-    ) => {
-      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
-      const currentSource = sourceLifecyclesRef.current!.capture(sourceId)
-      if (currentSource === null || currentSource.fingerprint !== sourceFingerprint) return
-      aggregatePollSeqRef.current[sourceId] = (aggregatePollSeqRef.current[sourceId] ?? 0) + 1
-      aggregateRequestOwnersRef.current!.retire([sourceId])
-      if (snapshot === undefined) {
-        // Withdraw ONLY a source that never pushed (nothing to keep); a
-        // source with a last push keeps its mounted marker and recency so
-        // planAggregateRefreshes never re-enables the unary fallback for it.
-        if (snapshotAtRef.current[sourceId] === undefined) {
-          delete snapshotSourcesRef.current[sourceId]
-          delete snapshotAtRef.current[sourceId]
-        }
-      } else {
-        snapshotSourcesRef.current[sourceId] = true
-        snapshotAtRef.current[sourceId] = Date.now()
-        // 成功验证（2026-12 残留修复）：push 与 unary 提交同权，记水位并撤下呈现。
-        factsAtRef.current[sourceId] = Date.now()
-        setUnverified(prev => (prev.includes(sourceId) ? prev.filter(id => id !== sourceId) : prev))
-      }
-      setSnapshotSources(prev => {
-        if (snapshot === undefined) {
-          if (snapshotAtRef.current[sourceId] !== undefined) return prev
-          if (prev[sourceId] === undefined) return prev
-          const next = { ...prev }
-          delete next[sourceId]
-          return next
-        }
-        if (prev[sourceId] === true) return prev
-        return { ...prev, [sourceId]: true }
-      })
-      if (snapshot === undefined) return
-      // 工作区创建回声的权威收敛点（2026-12，design 05 §2.2 修订）：挂载壳自己的
-      // follow baseline / upsert 列出了这个工作区（同 workspaceId，或同路径的真实
-      // id）⇒ 账本条目立刻退休，投影随之只剩权威行。刻意放在下面的 ready 门之前：
-      // push 里的工作区身份来自该来源自己的 follow 基线，与聚合是否已提交无关。
-      {
-        // TTL first, then retire whatever the authoritative list now covers: the
-        // mounted push is the echo's convergence signal, so an entry it lists has
-        // no job left and must not survive as a duplicate.
-        const swept = sweepPendingWorkspaces(workspaceEchoRef.current, Date.now())
-        const reconciled = reconcilePendingWorkspaces(swept, sourceId, snapshot.workspaces)
-        if (reconciled !== workspaceEchoRef.current) updateWorkspaceEcho(reconciled)
-      }
-      // 会话创建回声的权威收敛点（2026-12，design 05 §2.2 修订）：挂载壳自己的
-      // 会话列表 + 工作区 follow 基线一旦把该会话**归属**到某个工作区（成员位，
-      // 含合成行），回声条目立刻退休——权威行从此渲染它。刻意只看成员位、不看
-      // sessions 列表：只列出而无所属时退休会把行抛进未分组桶，正是回声要避免的
-      // 位置跳动。与工作区收敛同规：放在 ready 门之前（权威归属与聚合是否已提交
-      // 无关）。该收敛同时覆盖「官方 session-list 刷新后 id 回来了但基线尚未归
-      // 属」的中间态：中间态里回声仍在，行不会消失。
-      {
-        const swept = sweepPendingSessions(sessionEchoRef.current, Date.now())
-        const reconciled = reconcilePendingSessions(swept, sourceId, snapshot.workspaces)
-        if (reconciled !== sessionEchoRef.current) updateSessionEcho(reconciled)
-      }
-      // 归档墓碑的权威收敛（2026-12）：只有挂载壳的 workspace follow 基线才带得出
-      // 「宿主归档集」这一事实（archiveSetKnown），因此只认这一条；degraded 视图的
-      // 空集绝不能传进去。
-      if (snapshot.archiveSetKnown === true) {
-        reconcileArchiveEchoes(sourceId, snapshot.archivedSessionIds)
-      }
-      // A mounted ctx can deliver a late store notification after its
-      // transport generation died. Keep producer ownership, but never let
-      // that notification overwrite the authoritative not-connected row;
-      // the next ready edge performs one unary refresh.
-      if (!readyAggregateSourcesRef.current.has(sourceId)) return
-      // design 24 §12 (archive-cleanup convergence): an archived-set SHRINK
-      // in a mounted push is the client-observable "a purge completed" signal
-      // (no unarchive wire — only the cleanup purge removes set members). The
-      // purged sessions' rows may still linger in the official client session
-      // summaries of this mounted ctx (refreshed only on connection
-      // generations; host purge events are documented no-ops), so once the set
-      // stops covering them they would render as ordinary rows and open with
-      // session/not-found. Convergence state machine (planSessionListRefresh),
-      // evaluated on EVERY ready push: removed ids still listed as rows become
-      // pending ghosts; the source's ctx is asked to re-run its OFFICIAL
-      // session-list refresh (sidebar-plugin subscriber — reconciles the
-      // summaries against the server corpus and drops the deleted rows); the
-      // resulting producer push then clears the pending set. A refresh that
-      // fails transiently is re-requested on a later push (cadence floored by
-      // SESSION_LIST_REFRESH_COALESCE_MS so a failing refresh on a busy source
-      // cannot stack RPCs); a suppressed dispatch never loses the ids — they
-      // stay pending and re-evaluate on the next push. Quiet sources with no
-      // further push self-hide within one watchdog cycle (the 30s merge pull
-      // replaces the aggregate's session rows with the clean unary list).
-      // Remember the last AUTHORITATIVE archive set (see the ref's doc): used
-      // as the shrink baseline when the committed aggregate lost provenance,
-      // and as the archived-row filter for a degraded commit. ORDER IS
-      // LOAD-BEARING (2026-09 scan MAJOR): the PRE-update value is the
-      // baseline — updating the memory first would make the remembered set
-      // equal to the incoming snapshot's own set, so archiveSetShrink could
-      // never observe a shrink (the fallback branch would be dead code).
-      const rememberedArchiveSet = authoritativeArchiveSetRef.current[sourceId]
-      if (snapshot.archiveSetKnown === true) {
-        authoritativeArchiveSetRef.current[sourceId] = snapshot.archivedSessionIds
-      }
-      const decision = planSessionListRefresh(
-        watchdogAggregatesRef.current[sourceId],
-        snapshot,
-        sessionListRefreshPendingRef.current[sourceId],
-        rememberedArchiveSet,
-      )
-      if (decision.pending.length > 0) sessionListRefreshPendingRef.current[sourceId] = decision.pending
-      else delete sessionListRefreshPendingRef.current[sourceId]
-      if (decision.request) {
-        const now = Date.now()
-        if (shouldRequestSessionListRefresh(
-          sessionListRefreshAtRef.current[sourceId],
-          now,
-          SESSION_LIST_REFRESH_COALESCE_MS,
-        )) {
-          sessionListRefreshAtRef.current[sourceId] = now
-          chamberBridge.requestSessionListRefresh(sourceId)
-        }
-      }
-      setAggregates(prev => {
-        const current = prev[sourceId]
-        if (current !== undefined && current.state === 'ok'
-          && instanceSnapshotSignature(current) === instanceSnapshotSignature(snapshot)) return prev
-        return { ...prev, [sourceId]: { state: 'ok', ...snapshot, error: null } }
-      })
-      // 收割完成（design 05 §2.3）：该源的首个挂载推送就是权威基线（真实
-      // 工作区分组 + 归档集，`archiveSetKnown:true`）——标记已满足并立即回收
-      // 后台壳，来源转入已上线的"已回收来源"态（30s unary merge 刷新会话行）。
-      // 非收割挂载的推送同样满足基线需求（用户点开、retention 温壳、退避后
-      // 被用户抢先点开）：不标记会让已推送过的源在回收后又被收割白 boot 一次。
-      if (harvestIntentRef.current.has(sourceId)) {
-        harvestIntentRef.current.delete(sourceId)
-        harvestStateRef.current[sourceId] = harvestSatisfied(harvestStateRef.current[sourceId])
-        // 保留**最后收割的壳当温壳**（2026-12 复查 M3/N2）：省掉一次完整后台
-        // boot，并让该源的运行时状态事实（pending/完成点）保持在线；仅当还有
-        // 别的收割候选时才回收，把唯一后台槽让给基线恢复。
-        if (shouldReclaimHarvestedShell(
-          harvestCandidatesRef.current,
-          sourceId,
-          id => harvestPending(harvestStateRef.current[id]),
-        )) reclaimViewRef.current(sourceId, 'harvest')
-      } else {
-        harvestStateRef.current[sourceId] = harvestSatisfied(harvestStateRef.current[sourceId])
-      }
-    })
-  }, [])
-
-  useEffect(() => {
-    return chamberBridge.onPluginDiagnostic((sourceId, diagnostic) => {
-      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
-      setPluginDiagnostics(prev => {
-        if (diagnostic === undefined) {
-          if (prev[sourceId] === undefined) return prev
-          const next = { ...prev }
-          delete next[sourceId]
-          return next
-        }
-        return { ...prev, [sourceId]: diagnostic }
-      })
-    })
-  }, [])
-
-  /**
-   * D2 (review-round3d P1-1): the local instance's dsh version is the desktop's
-   * active runtime version (IPC INFO bridge — the control-plane fact
-   * projection). Remote (ssh/http) instances stay hidden until a remote
-   * version probe is wired (D2 fallback; STATUS.md records the pending item).
-   * The old in-ctx host-producer channel (registerInstanceHostProducer /
-   * onInstanceHost) was removed entirely — host.describe was deleted upstream
-   * and no producer ever registered again (2026-09 cleanup).
-   */
-  useEffect(() => {
-    // 保持一次性读取（2026-12 审查后回退）：根因修在 Swift shim——它只在 info
-    // 成功后暴露 dshChamber（与 preload 同序），所以「surface 在、dshVersion 为
-    // null」的形态不再出现；此处不做与 Electron 不同的有界重读。
-    const version = window.dshChamber?.dshVersion ?? undefined
-    if (version === undefined) return
-    setHostFacts(prev => {
-      const existing = prev[LOCAL_INSTANCE_ID]
-      if (existing?.dshVersion === version) return prev
-      return { ...prev, [LOCAL_INSTANCE_ID]: { ...(existing ?? {}), dshVersion: version } }
-    })
-  }, [])
-
-  /** 每来源 ctx 的运行时事实上报（06 §4）：report 覆盖、clear 删除；同时
-   *  对账该来源的「完成未读」蓝点（completedBySource）。无需额外依赖。 */
-  useEffect(() => {
-    return chamberBridge.onRuntimeReport((sourceId, report, sourceFingerprint) => {
-      if (sourceId !== LOCAL_INSTANCE_ID && !liveServerIdsRef.current.has(sourceId)) return
-      const currentSource = sourceLifecyclesRef.current!.capture(sourceId)
-      if (currentSource === null || currentSource.fingerprint !== sourceFingerprint) return
-      setRuntimeFacts(prev => {
-        if (report === undefined) {
-          if (prev[sourceId] === undefined) return prev
-          const next = { ...prev }
-          delete next[sourceId]
-          return next
-        }
-        // identity-preserving：同内容上报（store 通知但事实未变的常态）不换
-        // state 对象——否则每次上报都触发 servers 重新派生与 publish（2026-08
-        // perf pass）。
-        const current = prev[sourceId]
-        if (current !== undefined && runtimeReportSignature(current) === runtimeReportSignature(report)) {
-          return prev
-        }
-        return { ...prev, [sourceId]: report }
-      })
-      if (report === undefined) {
-        // 通道撤回（shell 重连/重 boot 窗口，来源移除的 clear 已被上方的
-        // liveServerIds/指纹检查挡掉，不会到达这里）：清掉 UI 蓝点边沿与
-        // 通知边沿的 prev 记忆——恢复后的首份上报是纯播种（prev undefined
-        // 只记不发），与蓝点机的撤回语义一致（2026-09 清理：此前保留 prev
-        // 记忆以补发撤回窗口内完成的会话，但 wire 只有 running 位、无法区分
-        // 手动停止与完成，窗口内被手动停止的会话会在恢复首报上误报
-        // 「完成」；删除记忆后窗口内的完成通知不再补发——窗口仅持续到重连
-        // 完成，且会话完成状态在 UI 中可见）。
-        delete prevRunningRef.current[sourceId]
-        delete prevRuntimeFactsRef.current[sourceId]
-        completeLedgerRef.current.forgetArmed(sourceId)
-        // R2（2026-12 facts wiring）：**不再**删来源账本。撤回只清易失的转移记忆
-        // （prevRunning 是「转移」不是「状态」，持久化会伪造边沿）；durable 账本
-        // 由事实重算——同代重挂/撤回后未读仍在（派生投影，账本不再是唯一来源）。
-        recomputeSourceUnread(sourceId)
-        return
-      }
-      // 通知边沿（设计 19 §3.2/§3.3）：独立纯函数 detectNotificationEdges +
-      // dedupeCompleteEdges，与蓝点机互不耦合——蓝点带「正在阅读」解除，
-      // 通知边沿不受解除影响（窗口隐藏时活动来源的当前会话完成也必须通知，
-      // requireHidden 豁免在主进程裁决）。首份上报（prev === undefined）只
-      // 播种记忆不发事件；边沿为空也更新记忆（记忆是后续上报的 prev，report
-      // 为不可变新对象，直接存引用即可）。
-      const prevFacts = prevRuntimeFactsRef.current[sourceId]
-      const edges = detectNotificationEdges(prevFacts, report.sessions)
-      prevRuntimeFactsRef.current[sourceId] = report.sessions
-      // 父会话回合结束但后台子代理仍在运行时（runningSubagents > 0）不视为
-      // 完成（06 §4.5 与官方 Rows 呈现优先级 pending > runningSubagents >
-      // completed 一致）：通知面不得成为唯一「大声」的错位表面——用户点开
-      // 发现子代理还在干活。抑制发生在去重之前（不记账），若 vendor 在子
-      // 代理全部结束后才武装 completed，届时 completed 边沿正常补发。
-      const edgesWithoutRunningSubagents = edges.filter(edge =>
-        !(edge.kind === 'complete'
-          && (report.sessions[edge.sessionId]?.runningSubagents ?? 0) > 0)
-      )
-      // complete 去重（跨上报记忆）：正被查看的会话完成先走 running 边沿，
-      // 切走后 vendor 延迟武装 completed 的重复边沿在此丢弃；running=true
-      // 的会话清除记忆（下次完成重新可发）。
-      const runningIds = Object.entries(report.sessions)
-        .filter(([, facts]) => facts?.running === true)
-        .map(([sessionId]) => sessionId)
-      const notifiedBefore = completeLedgerRef.current.armed(sourceId)
-      const deduped = dedupeCompleteEdges(edgesWithoutRunningSubagents, notifiedBefore, runningIds)
-      // 已离开列表的会话清除已发记忆（与蓝点机 leave-the-list 清扫同纪律，
-      // 防长活来源上的记忆缓慢增长）。
-      for (const sessionId of [...deduped.notified]) {
-        if (report.sessions[sessionId] === undefined) deduped.notified.delete(sessionId)
-      }
-      completeLedgerRef.current.setArmed(sourceId, deduped.notified)
-      if (deduped.edges.length > 0) {
-        // 唯一组装点（2026-12）：文案/标题/requireHidden 全在 emitSessionNotification。
-        // facts.ok 的完成由**第二入口**（watcher completedAt）负责——本入口只发
-        // 无 facts 来源的 completes 与两路共担的 ask/request，避免同一次完成双横幅
-        // （W2 出口「双入口单横幅」；同一行取同一水位函数 completedAt ?? updatedAt）。
-        const factsSnapshot = sessionFactsRef.current[sourceId]
-        const usableFacts = factsSnapshot !== undefined && factsSnapshot.verdict === 'ok' ? factsSnapshot : undefined
-        for (const edge of deduped.edges) {
-          if (edge.kind === 'complete' && usableFacts !== undefined) continue
-          const row = usableFacts?.rows[edge.sessionId]
-          const watermark = edge.kind === 'complete'
-            ? completionWatermark(row ?? {})
-            : row !== undefined && row.updatedAt > 0 ? row.updatedAt : undefined
-          emitSessionNotification({
-            sourceId,
-            sourceFingerprint,
-            sessionId: edge.sessionId,
-            kind: edge.kind,
-            ...(watermark !== undefined ? { watermark } : {}),
-          })
-        }
-      }
-      // 派生账本重算（2026-12 facts wiring，主计划 §3.3-2 / R2）：规则全在纯模块
-      // unread-derivation.ts（4 参 deriveUnread + 通道边沿机）；「正在阅读」谓词
-      // = paintedView ∩ 该来源 current ∩ hasFocus，listComplete 是唯一剪枝门。
-      recomputeSourceUnread(sourceId)
-    })
-  }, [])
+  // 桥订阅簇（全部已读 / 深链 / 回声 / 挂载快照 / 运行时上报…）已抽为命名
+  // hook（阶段 3）；依赖面类型化，App 只负责传入当前 ref/state/回调与预算常量。
+  useBridgeSubscriptions({
+    acknowledgeDeepLink, emitSessionNotification, markSourceAllRead, openSession,
+    recomputeSourceUnread, refreshAggregate, reportDeepLinkAckFailure, selectView,
+    updateSessionArchive, updateSessionEcho, updateWorkspaceEcho, aggregatePollSeqRef,
+    aggregateRequestOwnersRef, authoritativeArchiveSetRef, autoPrewarmedRef, completeLedgerRef,
+    drainPrewarmRef, factsAtRef, harvestCandidatesRef, harvestIntentRef,
+    harvestStateRef, intentBudgetRef, intentPriorityRef, liveServerIdsRef,
+    mutationRefreshSeqRef, pendingDeepLinkDeliveryRef, prevRunningRef, prevRuntimeFactsRef,
+    prewarmEligibleRef, prewarmQueueRef, prewarmSuppressedRef, readyAggregateSourcesRef,
+    reclaimViewRef, remoteInstancesRef, remoteRosterSettledRef, sessionArchiveRef,
+    sessionEchoRef, sessionFactsRef, sessionListRefreshAtRef, sessionListRefreshPendingRef,
+    settingsTargetRef, snapshotAtRef, snapshotSourcesRef, sourceLifecyclesRef,
+    watchdogAggregatesRef, workspaceEchoRef, setAggregates, setHostFacts,
+    setMountedViews, setPluginDiagnostics, setRuntimeFacts, setSnapshotSources,
+    setUnverified, sshBridgeReady, LISTENER_READY_RETRY_MS, LISTENER_READY_RETRY_LIMIT,
+  })
 
   /** chamber (06 §4.1，2026-12 facts wiring 重裁)：**屏上**来源（paintedView，
    *  非选择——持有窗内 active 已是目标而屏上仍是旧视图）的 current 会话立即视为

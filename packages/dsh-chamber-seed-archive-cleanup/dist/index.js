@@ -612,6 +612,8 @@ var ArchiveCleanupCore = class {
 // src/binding.ts
 import { rm, rmdir, lstat, readdir } from "node:fs/promises";
 import { basename, dirname, join } from "node:path";
+
+// src/binding-parts.ts
 var BUSY_MESSAGE = "archiveCleanup is already running on this instance \u2014 retry after it settles";
 function assertHeaderShape(header) {
   if (header === null || typeof header !== "object") {
@@ -746,6 +748,8 @@ function liveSessionFacts(ctx) {
   }
   return { running, loaded };
 }
+
+// src/binding.ts
 function makeHostBinding(ctx) {
   const registry = ctx.workspaceRegistry;
   const query = ctx.sessionQuery;

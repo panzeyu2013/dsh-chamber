@@ -87,7 +87,14 @@ const serverSection = [
   'server-section-model.ts',
   'server-section-session-state.tsx',
 ].map(name => readFileSync(new URL('src/client/' + name, sidebarRoot), 'utf8')).join('\n')
-const appSource = readFileSync(new URL('../renderer/src/App.tsx', sidebarRoot), 'utf8')
+// The App-layer projection lives in App.tsx plus its extracted hooks
+// (2026-09 App decomposition); the lock reads the union so a move between them
+// keeps the invariant without pinning a file name.
+const appSource = [
+  '../renderer/src/App.tsx',
+  '../renderer/src/app-hooks/use-view-scheduler.ts',
+  '../renderer/src/app-hooks/use-bridge-subscriptions.ts',
+].map(name => readFileSync(new URL(name, sidebarRoot), 'utf8')).join('\n')
 /** Source-text locks: `pattern` must (or must not) appear in the sidebar / App source, with the given rationale. */
 const sLock = (pattern: RegExp, message: string): void => { assert.match(serverSection, pattern, message) }
 const sNoLock = (pattern: RegExp, message: string): void => { assert.doesNotMatch(serverSection, pattern, message) }

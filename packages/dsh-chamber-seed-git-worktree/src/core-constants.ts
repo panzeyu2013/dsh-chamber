@@ -1,0 +1,32 @@
+/**
+ * core-constants.ts — Bundle constants and capacity limits.
+ *
+ * Extracted verbatim from core.ts (B5 split); core.ts re-exports the public
+ * names so the package/test import surface is unchanged.
+ */
+
+export const READ_TIMEOUT_MS = 10_000
+export const MUTATION_TIMEOUT_MS = 30_000
+export const READ_OUTPUT_CAP = 1024 * 1024
+export const MUTATION_OUTPUT_CAP = 256 * 1024
+export const PREVIEW_TTL_MS = 5 * 60_000
+export const OPERATION_TTL_MS = 24 * 60 * 60_000
+export const SNAPSHOT_DEADLINE_MS = 20_000
+/** Discovery cache TTL (design 08 §2.1, OpenChamber parity): the per-workspace
+ *  rev-parse and per-repository worktree-list/show-ref results are reused
+ *  within this window when the workspace registry signature is unchanged, so
+ *  unchanged sources skip the spawn storm on every 30s poll. Per-worktree
+ *  STATUS (dirty) always runs fresh. Mutations clear the caches. */
+export const DISCOVERY_TTL_MS = 30_000
+export const SNAPSHOT_WALL_TIMEOUT_MS = 25_000
+export const MAX_WORKSPACES = 128
+export const MAX_REPOSITORIES = 64
+export const MAX_WORKTREES_PER_REPOSITORY = 128
+export const MAX_TOTAL_WORKTREES = 256
+export const MAX_AGENTS = 4_096
+export const MAX_SESSIONS_PER_WORKSPACE = 4_096
+export const MAX_TOTAL_SESSION_MEMBERSHIPS = 16_384
+export const SNAPSHOT_STATUS_TIMEOUT_MS = 1_500
+export const MAX_PATH_LENGTH = 4_096
+export const MAX_PREVIEWS = 512
+export const MAX_OPERATIONS = 2_048

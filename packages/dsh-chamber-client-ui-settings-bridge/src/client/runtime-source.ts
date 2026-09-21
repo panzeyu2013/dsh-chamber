@@ -53,7 +53,13 @@ export function runtimeSectionIntentionallyAbsent(server: RuntimeServerProjectio
   return server.kind === 'dsh'
 }
 
-/** Identity of every fact captured by the per-server runtime plugin props. */
+/**
+ * Identity of every fact captured by the per-server runtime plugin props.
+ * `dshVersion` is deliberately NOT part of it (2026-12 audit): the registered
+ * section receives {t, instanceSource, chamberInstanceId} only, so a version
+ * change would dispose/re-register the section, clear its state and restart its
+ * poll for a fact it never reads.
+ */
 export function runtimeServerProjectionKey(server: RuntimeServerProjection): string {
   return JSON.stringify({
     id: server.id,
@@ -61,6 +67,5 @@ export function runtimeServerProjectionKey(server: RuntimeServerProjection): str
     kind: server.kind,
     transport: server.transport,
     rawId: server.rawId ?? null,
-    dshVersion: server.dshVersion ?? null,
   })
 }

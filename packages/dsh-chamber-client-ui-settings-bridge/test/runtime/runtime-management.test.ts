@@ -105,12 +105,15 @@ test('per-server source derivation uses target kind × transport, not id prefixe
   assert.equal(deriveRuntimeSource(undefined), null)
 })
 
-test('runtime projection identity tracks transport, raw host id and live version', () => {
+test('runtime projection identity tracks transport and raw host id; a live version is NOT an identity fact', () => {
   const base = { id: 'dsh-east', sourceFingerprint: 'proof:east:a', kind: 'dsh' as const, transport: 'ssh' as const, rawId: 'east' }
   assert.notEqual(runtimeServerProjectionKey(base), runtimeServerProjectionKey({ ...base, sourceFingerprint: 'proof:east:b' }))
   assert.notEqual(runtimeServerProjectionKey(base), runtimeServerProjectionKey({ ...base, transport: 'http' }))
   assert.notEqual(runtimeServerProjectionKey(base), runtimeServerProjectionKey({ ...base, rawId: 'west' }))
-  assert.notEqual(runtimeServerProjectionKey(base), runtimeServerProjectionKey({ ...base, dshVersion: '1.2.3' }))
+  // 2026-12 phase-3: the registered section receives {t, instanceSource,
+  // chamberInstanceId} only — a dshVersion change must NOT dispose/re-register
+  // the section (state cleared, poll restarted) for a fact it never reads.
+  assert.equal(runtimeServerProjectionKey(base), runtimeServerProjectionKey({ ...base, dshVersion: '1.2.3' }))
 })
 
 test('restart-dsh gate (design 18 §3.6 项 8): allowed in non-busy phases, blocked while applying/busy/blocked', () => {

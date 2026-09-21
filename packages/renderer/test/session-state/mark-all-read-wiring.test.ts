@@ -12,6 +12,12 @@ import { fileURLToPath } from 'node:url'
 import { advanceReadMark, maxWatermark } from '../../src/unread-store.ts'
 
 const APP = readFileSync(fileURLToPath(new URL('../../src/App.tsx', import.meta.url)), 'utf8')
+// 阶段 3：onMarkAllRead 订阅随桥订阅簇移到 hook —— 通道锁钉在最终落点；handler
+// 本体（水位上界/落盘/镜像/重算）仍在 App，继续读 APP。
+const BRIDGE = readFileSync(
+  fileURLToPath(new URL('../../src/app-hooks/use-bridge-subscriptions.ts', import.meta.url)),
+  'utf8',
+)
 
 test('the source-wide bound is max(updatedAt, completedAt) over the rows', () => {
   assert.equal(maxWatermark({}), 0)
@@ -44,5 +50,5 @@ test('the App handler uses the bound, persists, notifies the mirror and recomput
   assert.match(APP, /ackAllRead\(clientInstallIdRef\.current, through\)/)
   assert.match(APP, /recomputeSourceUnread\(sourceId\)/)
   // 请求通道：与 openSession 同一条桥纪律（mount 订阅、卸载取消）。
-  assert.match(APP, /chamberBridge\.onMarkAllRead\(\(\{ sourceId \}\) => \{\s*markSourceAllRead\(sourceId\)/)
+  assert.match(BRIDGE, /chamberBridge\.onMarkAllRead\(\(\{ sourceId \}\) => \{\s*markSourceAllRead\(sourceId\)/)
 })

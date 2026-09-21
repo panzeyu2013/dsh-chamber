@@ -15,14 +15,26 @@ const APP = stripComments(readFileSync(
   fileURLToPath(new URL('../../src/App.tsx', import.meta.url)),
   'utf8',
 ))
+// 阶段 3：通道边沿入口（挂载快照/运行时上报）随桥订阅簇移到 hook；撤回分支的
+// 武装轨清理与第二通知入口现在 hook 内，reclaimView 在调度 hook 内。presence 锁
+// 取并集/归位（无负断言被放松）；derive/水位规则仍在 App。
+const BRIDGE = stripComments(readFileSync(
+  fileURLToPath(new URL('../../src/app-hooks/use-bridge-subscriptions.ts', import.meta.url)),
+  'utf8',
+))
+const SCHEDULER = stripComments(readFileSync(
+  fileURLToPath(new URL('../../src/app-hooks/use-view-scheduler.ts', import.meta.url)),
+  'utf8',
+))
+const ALL = APP + '\n' + BRIDGE
 
 test('L1/L2/L16：账本是派生投影，撤回分支不再删它，读 refs 存在且被写回', () => {
   assert.match(APP, /\{ deriveUnread, reconcileCompletedFacts \}/,
     'App 必须把 sidebar shared 的共享判定喂给派生模块（不得自造第二套）')
   assert.match(APP, /deriveSourceUnread\(\{/, '派生投影入口必须存在')
-  assert.match(APP, /completeLedgerRef\.current\.forgetArmed\(sourceId\)[\s\S]{0,400}recomputeSourceUnread\(sourceId\)/,
+  assert.match(ALL, /completeLedgerRef\.current\.forgetArmed\(sourceId\)[\s\S]{0,400}recomputeSourceUnread\(sourceId\)/,
     '撤回分支必须由事实重算（R2），且只清易失的武装轨（durable 水位轨不随撤回删除）')
-  assert.doesNotMatch(APP, /completeLedgerRef\.current\.forgetArmed\(sourceId\)[\s\S]{0,300}setCompletedBySource/,
+  assert.doesNotMatch(ALL, /completeLedgerRef\.current\.forgetArmed\(sourceId\)[\s\S]{0,300}setCompletedBySource/,
     '撤回分支不得再删来源账本（R2 的爆炸点）')
   assert.match(APP, /readMarksRef = useRef<Record<string, Record<string, number>>>/,
     '读水位 durable 表必须存在（重启不丢未读）')
@@ -31,11 +43,11 @@ test('L1/L2/L16：账本是派生投影，撤回分支不再删它，读 refs �
 })
 
 test('L3：reclaimView 不碰数据面键（拆壳 ≠ 来源退役）', () => {
-  const start = APP.indexOf('const reclaimView = useCallback(')
+  const start = SCHEDULER.indexOf('const reclaimView = useCallback(')
   assert.ok(start !== -1)
-  const end = APP.indexOf('}, [mountedViews])', start)
+  const end = SCHEDULER.indexOf('}, [mountedViews])', start)
   assert.ok(end > start)
-  const body = APP.slice(start, end)
+  const body = SCHEDULER.slice(start, end)
   assert.doesNotMatch(body, /readMarks|edgeLedger|completeLedger|completedBySource/,
     '拆壳顺手清未读标记会造出假未读/丢未读（R2/L3）')
 })
@@ -56,7 +68,7 @@ test('L6/L7：单组装点（bridge.notify 恰好一次）+ 两个入口都走�
   assert.match(APP, /bridge\.notify\(\{[\s\S]{0,600}watermark/,
     'renderer 身份键必须带内容水位（§5-16）')
   assert.match(APP, /const emitSessionNotification = useCallback\(/, '唯一组装点必须存在')
-  const emitCalls = [...APP.matchAll(/emitSessionNotification\(\{/g)].length
+  const emitCalls = [...ALL.matchAll(/emitSessionNotification\(\{/g)].length
   assert.ok(emitCalls >= 2, '通道入口 + facts 第二入口都走它（实际 ' + emitCalls + '）')
   assert.match(APP, /completedAtSource !== 'observed'/, 'reconstructed 完成不得通知（§5-5）')
   assert.match(APP, /shouldNotifyWatermark\(previous, watermark\)/, '水位去重必须接线')

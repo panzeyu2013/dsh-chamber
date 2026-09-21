@@ -12,1167 +12,143 @@
  * desktop/SSH command relay.
  */
 
+
 import { createHash, randomUUID } from 'node:crypto'
-import { access, lstat, mkdir, open, realpath } from 'node:fs/promises'
 import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
-import { homedir } from 'node:os'
-import { spawn } from 'node:child_process'
 
-const READ_TIMEOUT_MS = 10_000
-const MUTATION_TIMEOUT_MS = 30_000
-const READ_OUTPUT_CAP = 1024 * 1024
-const MUTATION_OUTPUT_CAP = 256 * 1024
-export const PREVIEW_TTL_MS = 5 * 60_000
-export const OPERATION_TTL_MS = 24 * 60 * 60_000
-export const SNAPSHOT_DEADLINE_MS = 20_000
-/** Discovery cache TTL (design 08 §2.1, OpenChamber parity): the per-workspace
- *  rev-parse and per-repository worktree-list/show-ref results are reused
- *  within this window when the workspace registry signature is unchanged, so
- *  unchanged sources skip the spawn storm on every 30s poll. Per-worktree
- *  STATUS (dirty) always runs fresh. Mutations clear the caches. */
-const DISCOVERY_TTL_MS = 30_000
-export const SNAPSHOT_WALL_TIMEOUT_MS = 25_000
-export const MAX_WORKSPACES = 128
-export const MAX_REPOSITORIES = 64
-export const MAX_WORKTREES_PER_REPOSITORY = 128
-export const MAX_TOTAL_WORKTREES = 256
-const MAX_AGENTS = 4_096
-const MAX_SESSIONS_PER_WORKSPACE = 4_096
-export const MAX_TOTAL_SESSION_MEMBERSHIPS = 16_384
-const SNAPSHOT_STATUS_TIMEOUT_MS = 1_500
-const MAX_PATH_LENGTH = 4_096
-const MAX_PREVIEWS = 512
-export const MAX_OPERATIONS = 2_048
+import {
+  DISCOVERY_TTL_MS,
+  MAX_AGENTS,
+  MAX_OPERATIONS,
+  MAX_PATH_LENGTH,
+  MAX_PREVIEWS,
+  MAX_REPOSITORIES,
+  MAX_SESSIONS_PER_WORKSPACE,
+  MAX_TOTAL_SESSION_MEMBERSHIPS,
+  MAX_TOTAL_WORKTREES,
+  MAX_WORKSPACES,
+  MAX_WORKTREES_PER_REPOSITORY,
+  MUTATION_OUTPUT_CAP,
+  MUTATION_TIMEOUT_MS,
+  OPERATION_TTL_MS,
+  PREVIEW_TTL_MS,
+  READ_OUTPUT_CAP,
+  READ_TIMEOUT_MS,
+  SNAPSHOT_DEADLINE_MS,
+  SNAPSHOT_STATUS_TIMEOUT_MS,
+  SNAPSHOT_WALL_TIMEOUT_MS,
+} from './core-constants.ts'
+import { GitWorktreeError, SUBMODULE_REFUSAL_MESSAGE } from './core-errors.ts'
+import {
+  absoluteExpectedPath,
+  assertRecord,
+  assertSafeGitArgv,
+  fail,
+  nodeFileSystem,
+  objectFingerprint,
+  opaqueId,
+  parseCreateInput,
+  parsePreviewInput,
+  parseRemoveInput,
+  parseRollbackInput,
+  previewToken,
+  requiredString,
+  safeErrorMessage,
+  sameMembership,
+} from './core-validation.ts'
+import { createLocalGitRunner } from './core-git-runner.ts'
+import { KeyedMutex } from './core-internals.ts'
+import type {
+  AgentRowDrift,
+  CreateOperationRecord,
+  CreatedFacts,
+  PreviewRecord,
+  RawWorktree,
+  RemoveIntent,
+  RemoveOperationRecord,
+  SnapshotRunningLocation,
+  SourceSnapshot,
+  WorktreeTopology,
+} from './core-internals.ts'
+import {
+  ZERO_HEAD,
+  detectAttention,
+  isNotARepositoryError,
+  parseBranchLine,
+  parseWorktreePorcelain,
+  resolveDshHome,
+  worktreeGitDir,
+} from './core-parse.ts'
+import type {
+  AgentFact,
+  CreateInput,
+  CreateResult,
+  GitAttentionReason,
+  GitCommandResult,
+  GitRunner,
+  GitWorktreeCoreOptions,
+  GitWorktreeState,
+  PreviewCreateInput,
+  PreviewCreateResult,
+  RemoveInput,
+  RemoveResult,
+  RollbackCreateInput,
+  RollbackCreateResult,
+  SnapshotError,
+  SnapshotRepository,
+  SnapshotResult,
+  SnapshotWorktree,
+  WorkspaceFact,
+  WorktreeFileSystem,
+  WorktreeStateSource,
+} from './core-types.ts'
+
+// Public surface preserved verbatim.
+export {
+  MAX_OPERATIONS,
+  MAX_REPOSITORIES,
+  MAX_TOTAL_SESSION_MEMBERSHIPS,
+  MAX_TOTAL_WORKTREES,
+  MAX_WORKSPACES,
+  MAX_WORKTREES_PER_REPOSITORY,
+  OPERATION_TTL_MS,
+  PREVIEW_TTL_MS,
+  SNAPSHOT_DEADLINE_MS,
+  SNAPSHOT_WALL_TIMEOUT_MS,
+} from './core-constants.ts'
+export { GitWorktreeError, RETRYABLE_CODES, domainResult } from './core-errors.ts'
+export { assertSafeGitArgv } from './core-validation.ts'
+export { createLocalGitRunner } from './core-git-runner.ts'
+export { parseBranchLine } from './core-parse.ts'
+export type {
+  AgentFact,
+  CreateBranch,
+  CreateInput,
+  CreateResult,
+  GitAttentionReason,
+  GitChildProcess,
+  GitCommandRequest,
+  GitCommandResult,
+  GitRunner,
+  GitSpawner,
+  GitWorktreeCoreOptions,
+  GitWorktreeDomainError,
+  GitWorktreeDomainResult,
+  GitWorktreeState,
+  PreviewCreateInput,
+  PreviewCreateResult,
+  RemoveInput,
+  RemoveResult,
+  RollbackCreateInput,
+  RollbackCreateResult,
+  SnapshotRepository,
+  SnapshotResult,
+  SnapshotWorktree,
+  WorkspaceFact,
+  WorktreeFileSystem,
+  WorktreeStateSource,
+} from './core-types.ts'
 
-type MaybePromise<T> = T | Promise<T>
-
-export interface WorkspaceFact {
-  readonly workspaceId: string
-  readonly path: string
-  readonly sessionIds: readonly string[]
-}
-
-export interface AgentFact {
-  readonly sessionId: string
-  readonly status: 'idle' | 'running'
-  readonly cwd?: string
-  /** The recorded parent session (`session.header.parentSession`). Loaded for
-   *  EVERY agent (any status), because the archived-aware running guard walks
-   *  the chain from a running descendant up to an archived ancestor (design 08
-   *  §6 amendment, 2026-09). The edge MEANS one of two things and only
-   *  `origin` tells them apart — see below. */
-  readonly parentSessionId?: string
-  /** Coarse durable child origin (`session.header.origin`). `'subagent'` marks
-   *  a DELEGATION child (`packages/subagent/subagent` sets it); ABSENT means
-   *  the `parentSessionId` edge is FORK lineage (upstream `session/fork` and
-   *  `SessionStore.fork` set `parentSession` with NO origin). Only
-   *  subagent-origin edges are lineage for the archived-aware running guard —
-   *  a fork edge TERMINATES the walk, because a fork is an independent session
-   *  whose run must never be treated as inert (design 08 §5.2 amendment). */
-  readonly origin?: 'subagent'
-}
-
-export interface WorktreeStateSource {
-  listWorkspaces(): MaybePromise<readonly WorkspaceFact[]>
-  listAgents(): MaybePromise<readonly AgentFact[]>
-  /** The authoritative archived-session set (`workspaceRegistry.
-   *  archivedSessionIds`). A missing/invalid surface must THROW — never read
-   *  as an empty set, which would silently turn every archived session back
-   *  into a blocking one. */
-  listArchivedSessionIds(): MaybePromise<readonly string[]>
-}
-
-export interface GitCommandRequest {
-  readonly cwd: string
-  readonly args: readonly string[]
-  readonly timeoutMs: number
-  readonly maxOutputBytes: number
-}
-
-export interface GitCommandResult {
-  readonly exitCode: number
-  readonly stdout: string
-  readonly stderr: string
-}
-
-export type GitRunner = (request: GitCommandRequest) => Promise<GitCommandResult>
-
-export interface GitChildProcess {
-  readonly stdout: { on(event: 'data', listener: (chunk: Buffer) => void): unknown }
-  readonly stderr: { on(event: 'data', listener: (chunk: Buffer) => void): unknown }
-  on(event: 'error', listener: (error: Error) => void): unknown
-  on(event: 'close', listener: (code: number | null) => void): unknown
-  kill(signal: NodeJS.Signals): boolean
-}
-
-export type GitSpawner = (
-  command: string,
-  args: string[],
-  options: {
-    readonly cwd: string
-    readonly shell: false
-    readonly stdio: readonly ['ignore', 'pipe', 'pipe']
-    readonly windowsHide: true
-    readonly env: NodeJS.ProcessEnv
-  },
-) => GitChildProcess
-
-export interface WorktreeFileSystem {
-  realpath(path: string): Promise<string>
-  lstat(path: string): Promise<{ isDirectory(): boolean }>
-  /** Recursive directory creation (the unified worktree root). */
-  mkdir(path: string): Promise<void>
-  /** True when `path` exists as a file or directory (git-dir state probes). */
-  exists(path: string): Promise<boolean>
-  /** Read a small UTF-8 file (the worktree `.git` pointer). Rejects when absent/unreadable. */
-  readFile(path: string): Promise<string>
-}
-
-export interface GitWorktreeCoreOptions {
-  readonly source: WorktreeStateSource
-  readonly git?: GitRunner
-  readonly fs?: WorktreeFileSystem
-  readonly now?: () => number
-  readonly token?: () => string
-  /** Test seam; production retains the fixed MAX_OPERATIONS policy. */
-  readonly operationCapacity?: number
-  /** Test seam for the non-cancelling snapshot response deadline. */
-  readonly snapshotWallTimeoutMs?: number
-  /** Unified worktree root (design 08 §2.2): all chamber checkouts live under
-   *  the dsh home (`$DSH_HOME/worktrees`, one subdirectory per repository) —
-   *  outside any working tree so git status stays clean. Defaults from the
-   *  instance's DSH_HOME (fallback: ~/.dsh). */
-  readonly worktreesRoot?: string
-}
-
-export type CreateBranch =
-  | { readonly kind: 'existing'; readonly name: string }
-  | { readonly kind: 'new'; readonly name: string }
-
-export interface PreviewCreateInput {
-  readonly sourceWorkspaceId: string
-  readonly basename: string
-  readonly branch: CreateBranch
-  /** Optional start point for a NEW branch (OpenChamber sourceBranch):
-   *  the new branch is created from this local branch's head instead of the
-   *  main checkout HEAD. Ignored for existing branches. */
-  readonly startRef?: string
-}
-
-export interface PreviewCreateResult {
-  readonly previewToken: string
-  readonly expiresAt: number
-  readonly repoId: string
-  readonly commonDir: string
-  readonly mainPath: string
-  readonly targetPath: string
-  readonly branch: string
-  readonly baseHead: string
-}
-
-export interface CreateInput {
-  readonly previewToken: string
-  readonly operationId: string
-}
-
-export interface CreateResult {
-  readonly operationId: string
-  readonly created: true
-  readonly replayed: boolean
-  readonly repoId: string
-  readonly worktreeId: string
-  readonly commonDir: string
-  readonly path: string
-  readonly branch: string
-  readonly head: string
-  /** True only after this process observed `git worktree add` exit zero. */
-  readonly rollbackAuthorized: boolean
-  readonly branchCreated: boolean
-}
-
-export interface RollbackCreateInput {
-  readonly operationId: string
-}
-
-export interface RollbackCreateResult {
-  readonly operationId: string
-  readonly removed: true
-  readonly replayed: boolean
-  readonly repoId: string
-  readonly worktreeId: string
-  readonly commonDir: string
-  readonly path: string
-  readonly branch: string
-  readonly head: string
-  readonly branchPreserved: true
-}
-
-export interface RemoveInput {
-  readonly operationId: string
-  /** Optional: an UNREGISTERED worktree (no dsh workspace) is removed with
-   *  this absent — the git-first removal then returns `next: 'none'` and the
-   *  client skips workspace.delete (design 08 §3.4, Plan A). */
-  readonly workspaceId?: string
-  /** Required when `workspaceId` is absent (UNREGISTERED removal): the exact
-   *  worktree path — the workspace-based discovery cannot derive it. */
-  readonly path?: string
-  readonly expected: {
-    readonly repoId: string
-    readonly worktreeId: string
-    readonly branch: string | null
-    readonly head: string
-  }
-  /** Optional local branch to delete AFTER the worktree removal (design 08
-   *  §5.3 user decision): best-effort — a failure is reported honestly on the
-   *  result and never rolls back the (already gone) worktree. */
-  readonly deleteBranch?: string
-  /** Explicit user authorization to DISCARD the worktree's uncommitted state
-   *  (dirty/untracked files). When true, a dirty worktree is removed with
-   *  `git worktree remove --force` instead of being rejected. The branch,
-   *  commits and HEAD are never touched — only the working tree files are
-   *  discarded. Locked/running/identity guards are unchanged. (design 08 §5.3
-   *  amendment, 2026-08 user decision) */
-  readonly discardChanges?: boolean
-}
-
-export interface RemoveResult {
-  readonly operationId: string
-  readonly removed: true
-  readonly replayed: boolean
-  /** Absent when the removed worktree was UNREGISTERED. */
-  readonly workspaceId?: string
-  readonly repoId: string
-  readonly worktreeId: string
-  readonly commonDir: string
-  readonly path: string
-  readonly branch: string | null
-  readonly head: string
-  /** Fresh membership captured immediately before Git-first removal. */
-  readonly sessionIds: readonly string[]
-  /** The caller may now delete only this durable workspace registration.
-   *  'none' when the removed worktree was UNREGISTERED (no workspace). */
-  readonly next: 'delete-workspace' | 'none'
-  /** The host never deletes a branch on its own: `branchPreserved` means
-   *  "preserved unless the caller explicitly requested deletion" — when
-   *  `deleteBranch` was requested, the branchDelete* flags below report the
-   *  outcome of that explicit best-effort step. */
-  readonly branchPreserved: true
-  /** Set when `deleteBranch` was requested and deleted successfully. */
-  readonly branchDeleted?: boolean
-  /** Set when `deleteBranch` was requested but the branch delete failed —
-   *  the worktree removal still stands. */
-  readonly branchDeleteFailed?: boolean
-}
-
-interface SnapshotError {
-  readonly code: string
-  readonly operation: 'discover' | 'list' | 'status' | 'associate'
-  readonly message: string
-  readonly path?: string
-  readonly workspaceId?: string
-}
-
-export type GitWorktreeState = 'ready' | 'missing' | 'invalid' | 'not-a-repo'
-
-type GitAttentionReason = 'merge' | 'rebase' | 'cherry-pick' | 'revert' | 'bisect'
-
-export interface SnapshotWorktree {
-  readonly worktreeId: string
-  readonly path: string
-  readonly head: string
-  readonly branch: string | null
-  readonly isMain: boolean
-  readonly dirty: boolean | null
-  readonly locked: boolean
-  /** Path/repository health: ready | missing | invalid | not-a-repo. */
-  readonly status: GitWorktreeState
-  /** Git HEAD classification: branch | detached | unborn. */
-  readonly headState: 'branch' | 'detached' | 'unborn'
-  /** Local-ref upstream facts from the status branch header (`## b...u [ahead
-   *  N, behind M]`); null/0 when there is no upstream or the status failed. */
-  readonly upstream: string | null
-  readonly ahead: number
-  readonly behind: number
-  /** In-progress Git operations detected in the worktree git dir (best-effort). */
-  readonly attention: readonly GitAttentionReason[]
-  readonly workspaceId: string | null
-  readonly sessionIds: readonly string[]
-  /** ALL running associated sessions (display fact). */
-  readonly runningSessionIds: readonly string[]
-  /** The running sessions that actually BLOCK a removal — runningSessionIds
-   *  minus the INERT ones (archived, or under an archived ancestor). An old
-   *  client that only knows runningSessionIds stays conservative. */
-  readonly blockingRunningSessionIds: readonly string[]
-}
-
-export interface SnapshotRepository {
-  readonly repoId: string
-  readonly commonDir: string
-  readonly mainPath: string
-  readonly worktrees: readonly SnapshotWorktree[]
-  /** Local branch names (`git show-ref --heads`); a convenience for the
-   *  create dialog's existing-branch picker. Empty on failure — never a
-   *  snapshot error. */
-  readonly branches: readonly string[]
-}
-
-export interface SnapshotResult {
-  readonly repos: readonly SnapshotRepository[]
-  readonly errors: readonly SnapshotError[]
-  readonly sourceError?: {
-    readonly code: 'state-source-unavailable' | 'state-source-capacity'
-      | 'git-unavailable' | 'snapshot-capacity' | 'snapshot-deadline'
-    readonly message: string
-  }
-}
-
-export interface GitWorktreeDomainError {
-  readonly code: string
-  readonly message: string
-  readonly retryable?: boolean
-  readonly details?: Readonly<Record<string, unknown>>
-}
-
-/** Explicit business carrier: the dsh gateway does not preserve thrown error fields. */
-export type GitWorktreeDomainResult<T> =
-  | { readonly ok: true; readonly value: T }
-  | { readonly ok: false; readonly error: GitWorktreeDomainError }
-
-/** Stable action error code; Typert transports the Error message to clients.
- *  INVARIANT (2026-09): an explicit `retryable: false` is a host-proven
- *  PRE-MUTATION refusal — the mutation provably did not commit (the
- *  worktree-submodules gate and the commitBoundRemove reclassification are
- *  the only emitters, both after proving the target still exists). Never
- *  throw with explicit `retryable: false` from a path that may have mutated:
- *  the client clears a pending "uncertain outcome" recovery on that signal.
- *  An explicit `retryable: true` and an absent flag (code in RETRYABLE_CODES
- *  ⇒ serialized true) both mean "outcome unverified — same-operation replay
- *  is the safe route". */
-export class GitWorktreeError extends Error {
-  readonly code: string
-  readonly retryable?: boolean
-  readonly details?: Readonly<Record<string, unknown>>
-
-  constructor(
-    code: string,
-    message: string,
-    options: {
-      readonly retryable?: boolean
-      readonly details?: Readonly<Record<string, unknown>>
-    } = {},
-  ) {
-    super(message)
-    this.name = 'GitWorktreeError'
-    this.code = code
-    this.retryable = options.retryable
-    this.details = options.details
-  }
-}
-
-/**
- * Host error codes whose outcome the host could NOT verify: `domainResult`
- * serializes an absent `retryable` flag as `true` for them, which tells the
- * client that replaying the SAME operation is the safe route. A code that is
- * absent here and carries no explicit flag is a definitive refusal.
- *
- * LOCKSTEP POINT (client classification): `DETERMINISTIC_GIT_REJECTION_CODES`
- * in `packages/dsh-chamber-client-ui-git/src/shared/git-api.ts` decides which
- * codes the browser refuses to replay. The two sets may overlap ONLY where
- * that file declares a `DETERMINISTIC_HOST_RETRYABLE_OVERRIDES` entry — the
- * cross-package test `packages/dsh-chamber-client-ui-git/test/
- * host-client-lockstep.test.ts` fails when they drift any other way, so a code
- * added or renamed on either side must be mirrored on the other.
- */
-export const RETRYABLE_CODES = new Set([
-  'git-timeout',
-  'git-output-limit',
-  'git-spawn-failed',
-  'git-command-failed',
-  'git-protocol-error',
-  'path-unavailable',
-  'path-check-failed',
-  'postcondition-failed',
-  'operation-busy',
-  'state-source-unavailable',
-  'state-source-invalid',
-  'state-source-capacity',
-  'snapshot-deadline',
-  'workspace-path-unavailable',
-  'running-agent-cwd-unavailable',
-])
-
-/** Actionable message for the typed submodule refusal (pre-mutation gate and
- *  the reclassification upgrade). NOTE (2026-09 review, empirically verified
- *  on git 2.50.1): plain `git submodule deinit` does NOT clear git's guard —
- *  git keeps the submodule gitdirs under the worktree admin git dir
- *  (`<wt gitdir>/modules`) and keeps refusing until they are gone. The
- *  reliable in-UI path is the discard authorization (--force), which
- *  discards only re-cloneable submodule checkouts; branch/commits/HEAD are
- *  never touched. */
-const SUBMODULE_REFUSAL_MESSAGE =
-  'worktrees containing submodule checkouts cannot be removed directly: '
-  + 'delete the leftover submodule gitdirs under the worktree admin git dir '
-  + '(<worktree .git pointer target>/modules) first — plain git submodule '
-  + 'deinit does not clear them — or re-run with discardChanges to authorize '
-  + 'a --force removal (the reliable path; the submodule checkouts are '
-  + 're-cloneable from their committed gitlinks)'
-
-/** Convert only known domain failures; unexpected programming failures remain internal throws. */
-export async function domainResult<T>(operation: () => Promise<T>): Promise<GitWorktreeDomainResult<T>> {
-  try {
-    return { ok: true, value: await operation() }
-  } catch (error) {
-    if (!(error instanceof GitWorktreeError)) throw error
-    // Explicit true/false is the host's own classification and is serialized
-    // as-is; an EXPLICIT false is a host-proven PRE-MUTATION refusal (nothing
-    // was changed — only the commitBoundRemove gate/reclassification emit it
-    // after proving the target still exists) and must reach the client
-    // distinct from "not in RETRYABLE_CODES", which simply omits the flag:
-    // the client clears a pending "uncertain outcome" recovery on this
-    // signal. Codes in RETRYABLE_CODES without an explicit flag default to
-    // true (an outcome the host could not verify).
-    const retryable = error.retryable ?? (RETRYABLE_CODES.has(error.code) ? true : undefined)
-    return {
-      ok: false,
-      error: {
-        code: error.code,
-        message: error.message,
-        ...(retryable === undefined ? {} : { retryable }),
-        ...(error.details === undefined ? {} : { details: error.details }),
-      },
-    }
-  }
-}
-
-const nodeFileSystem: WorktreeFileSystem = {
-  realpath,
-  lstat,
-  mkdir: async path => { await mkdir(path, { recursive: true }) },
-  exists: async path => {
-    try {
-      await access(path)
-      return true
-    } catch {
-      return false
-    }
-  },
-  // Bounded read: a hostile or corrupt `.git` pointer file must never be read
-  // whole into memory (gitdir lines are tiny; nothing beyond the prefix is
-  // used by worktreeGitDir's parse).
-  readFile: async path => {
-    const handle = await open(path, 'r')
-    try {
-      const buffer = Buffer.alloc(GIT_DIR_POINTER_MAX_BYTES)
-      const { bytesRead } = await handle.read(buffer, 0, GIT_DIR_POINTER_MAX_BYTES, 0)
-      return buffer.subarray(0, bytesRead).toString('utf8')
-    } finally {
-      await handle.close()
-    }
-  },
-}
-
-function fail(code: string, message: string): never {
-  throw new GitWorktreeError(code, message)
-}
-
-function safeErrorMessage(error: unknown): string {
-  const text = error instanceof Error ? error.message : String(error)
-  return text.replace(/[\r\n\t]+/g, ' ').slice(0, 512)
-}
-
-function assertRecord(value: unknown, label: string): asserts value is Record<string, unknown> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    fail('invalid-input', `${label} must be an object`)
-  }
-}
-
-function assertExactKeys(value: Record<string, unknown>, keys: readonly string[], label: string): void {
-  const allowed = new Set(keys)
-  for (const key of Object.keys(value)) {
-    if (!allowed.has(key)) fail('invalid-input', `${label} contains unsupported field '${key}'`)
-  }
-  for (const key of keys) {
-    if (!(key in value)) fail('invalid-input', `${label}.${key} is required`)
-  }
-}
-
-function requiredString(value: unknown, label: string, max = 1024): string {
-  if (typeof value !== 'string' || value.length === 0 || value.length > max || /[\u0000-\u001f\u007f]/u.test(value)) {
-    fail('invalid-input', `${label} must be a non-empty bounded string without control characters`)
-  }
-  return value
-}
-
-function operationId(value: unknown): string {
-  const id = requiredString(value, 'operationId', 128)
-  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/u.test(id)) {
-    fail('invalid-input', 'operationId contains unsupported characters')
-  }
-  return id
-}
-
-function previewToken(value: unknown): string {
-  const token = requiredString(value, 'previewToken', 128)
-  if (!/^[A-Za-z0-9-]+$/u.test(token)) fail('invalid-input', 'previewToken is malformed')
-  return token
-}
-
-function safeBasename(value: unknown): string {
-  const name = requiredString(value, 'basename', 255)
-  if (name !== name.trim() || name === '.' || name === '..' || name.includes('/') || name.includes('\\')) {
-    fail('unsafe-path', 'basename must be one trimmed path segment')
-  }
-  if (Buffer.byteLength(name, 'utf8') > 255) fail('unsafe-path', 'basename is too long')
-  return name
-}
-
-function safeBranchName(value: unknown, label = 'branch.name'): string {
-  const name = requiredString(value, label, 1024)
-  if (name.startsWith('-') || name.startsWith('/') || name.endsWith('/') || name.includes('\\')) {
-    fail('invalid-branch', `${label} is not a safe local branch name`)
-  }
-  return name
-}
-
-function absoluteExpectedPath(value: unknown, label: string): string {
-  const path = requiredString(value, label, 4096)
-  if (!isAbsolute(path) || resolve(path) !== path) {
-    fail('unsafe-path', `${label} must be a normalized absolute path`)
-  }
-  return path
-}
-
-function objectFingerprint(value: unknown): string {
-  return JSON.stringify(value)
-}
-
-function opaqueId(kind: 'repo' | 'worktree', ...parts: readonly string[]): string {
-  const digest = createHash('sha256')
-  digest.update(kind)
-  for (const part of parts) {
-    digest.update('\0')
-    digest.update(part)
-  }
-  return `${kind}_${digest.digest('hex')}`
-}
-
-function expectedOpaqueId(value: unknown, kind: 'repo' | 'worktree'): string {
-  const id = requiredString(value, `input.expected.${kind}Id`, 80)
-  if (!new RegExp(`^${kind}_[0-9a-f]{64}$`, 'u').test(id)) {
-    fail('invalid-input', `input.expected.${kind}Id is malformed`)
-  }
-  return id
-}
-
-function parsePreviewInput(value: PreviewCreateInput): PreviewCreateInput {
-  assertRecord(value, 'input')
-  // startRef is OPTIONAL (assertExactKeys requires presence, so the allowed
-  // set + the required subset are checked inline, like deleteBranch in remove).
-  {
-    const allowed = new Set(['sourceWorkspaceId', 'basename', 'branch', 'startRef'])
-    for (const key of Object.keys(value)) {
-      if (!allowed.has(key)) fail('invalid-input', `input contains unsupported field '${key}'`)
-    }
-    for (const key of ['sourceWorkspaceId', 'basename', 'branch']) {
-      if (!(key in value)) fail('invalid-input', `input.${key} is required`)
-    }
-  }
-  const sourceWorkspaceId = requiredString(value.sourceWorkspaceId, 'sourceWorkspaceId', 256)
-  const basename = safeBasename(value.basename)
-  assertRecord(value.branch, 'input.branch')
-  assertExactKeys(value.branch, ['kind', 'name'], 'input.branch')
-  if (value.branch.kind !== 'existing' && value.branch.kind !== 'new') {
-    fail('invalid-input', "input.branch.kind must be 'existing' or 'new'")
-  }
-  const name = safeBranchName(value.branch.name)
-  return {
-    sourceWorkspaceId,
-    basename,
-    branch: { kind: value.branch.kind, name },
-    // Same validation as the branch name: a control character or leading
-    // dash must never reach the localBranchHead argv (the allowlist would
-    // reject a leading dash, but input-layer validation is fail-closed).
-    ...(value.startRef === undefined ? {} : { startRef: safeBranchName(value.startRef, 'input.startRef') }),
-  }
-}
-
-function parseCreateInput(value: CreateInput): CreateInput {
-  assertRecord(value, 'input')
-  assertExactKeys(value, ['previewToken', 'operationId'], 'input')
-  return { previewToken: previewToken(value.previewToken), operationId: operationId(value.operationId) }
-}
-
-function parseRollbackInput(value: RollbackCreateInput): RollbackCreateInput {
-  assertRecord(value, 'input')
-  assertExactKeys(value, ['operationId'], 'input')
-  return { operationId: operationId(value.operationId) }
-}
-
-function parseRemoveInput(value: RemoveInput): RemoveInput {
-  assertRecord(value, 'input')
-  // deleteBranch / discardChanges are OPTIONAL (assertExactKeys requires
-  // presence, so the allowed set + the required subset are checked inline).
-  {
-    const allowed = new Set(['operationId', 'workspaceId', 'path', 'expected', 'deleteBranch', 'discardChanges'])
-    for (const key of Object.keys(value)) {
-      if (!allowed.has(key)) fail('invalid-input', `input contains unsupported field '${key}'`)
-    }
-    for (const key of ['operationId', 'expected']) {
-      if (!(key in value)) fail('invalid-input', `input.${key} is required`)
-    }
-  }
-  assertRecord(value.expected, 'input.expected')
-  assertExactKeys(value.expected, ['repoId', 'worktreeId', 'branch', 'head'], 'input.expected')
-  const head = requiredString(value.expected.head, 'input.expected.head', 128)
-  if (!/^[0-9a-fA-F]{40,64}$/u.test(head)) fail('invalid-input', 'input.expected.head is not an object id')
-  return {
-    operationId: operationId(value.operationId),
-    workspaceId: value.workspaceId === undefined
-      ? undefined
-      : requiredString(value.workspaceId, 'workspaceId', 256),
-    expected: {
-      repoId: expectedOpaqueId(value.expected.repoId, 'repo'),
-      worktreeId: expectedOpaqueId(value.expected.worktreeId, 'worktree'),
-      branch: value.expected.branch === null
-        ? null
-        : safeBranchName(value.expected.branch, 'input.expected.branch'),
-      head: head.toLowerCase(),
-    },
-    deleteBranch: value.deleteBranch === undefined
-      ? undefined
-      : safeBranchName(value.deleteBranch, 'input.deleteBranch'),
-    discardChanges: value.discardChanges === undefined
-      ? undefined
-      : (typeof value.discardChanges === 'boolean'
-          ? value.discardChanges
-          : fail('invalid-input', 'input.discardChanges must be a boolean')),
-    path: value.path === undefined
-      ? undefined
-      : (value.workspaceId !== undefined
-          ? fail('invalid-input', "input.path and input.workspaceId are mutually exclusive")
-          : absoluteExpectedPath(value.path, 'input.path')),
-  }
-}
-
-function sameArray(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((value, index) => value === right[index])
-}
-
-function sameMembership(left: readonly string[], right: readonly string[]): boolean {
-  if (left.length !== right.length) return false
-  return sameArray([...left].sort(), [...right].sort())
-}
-
-/**
- * Defense in depth for the injected/default runner boundary. Any new Git
- * capability must be reviewed and added as an exact grammar here; network
- * verbs, arbitrary config, shell fragments, and caller-shaped flags cannot
- * pass through accidentally.
- */
-export function assertSafeGitArgv(args: readonly string[]): void {
-  const [verb, ...rest] = args
-  const allStrings = args.every(arg => typeof arg === 'string' && !arg.includes('\0'))
-  if (!allStrings) fail('unsafe-git-argv', 'Git argv contains a non-string or NUL')
-
-  const exact = (...expected: string[]) => sameArray(rest, expected)
-  if (verb === 'rev-parse' && (exact('--show-toplevel') || exact('--path-format=absolute', '--git-common-dir'))) return
-  if (verb === 'check-ref-format' && rest.length === 2 && rest[0] === '--branch' && !rest[1]!.startsWith('-')) return
-  if (verb === 'show-ref' && rest.length === 3 && rest[0] === '--hash' && rest[1] === '--verify'
-    && rest[2]!.startsWith('refs/heads/') && !rest[2]!.slice('refs/heads/'.length).startsWith('-')) return
-  // Branch enumeration for the create dialog's existing-branch picker: a
-  // fixed flag only, no user input in argv.
-  if (verb === 'show-ref' && exact('--heads')) return
-  // Optional branch deletion after worktree removal (design 08 §5.3 user
-  // decision): fixed flags + a validated local branch name (no leading dash).
-  if (verb === 'branch' && rest.length === 2 && rest[0] === '-D'
-    && !rest[1]!.startsWith('-') && !rest[1]!.startsWith('/')) return
-  if (verb === 'status' && exact('--porcelain=v1', '-z', '--untracked-files=normal')) return
-  // Snapshot status with the branch header: local-ref upstream/ahead/behind
-  // facts (no network verb — the numbers reflect local refs only).
-  if (verb === 'status' && exact('--porcelain=v1', '-z', '--branch', '--untracked-files=normal')) return
-  if (verb === 'worktree' && exact('list', '--porcelain', '-z')) return
-  // Newline-delimited --porcelain fallback (Git < 2.47, which predates `-z`).
-  if (verb === 'worktree' && exact('list', '--porcelain')) return
-  if (verb === 'worktree' && rest.length === 4 && rest[0] === 'add' && rest[1] === '--'
-    && isAbsolute(rest[2]!) && !rest[3]!.startsWith('-')) return
-  if (verb === 'worktree' && rest.length === 6 && rest[0] === 'add' && rest[1] === '-b'
-    && !rest[2]!.startsWith('-') && rest[3] === '--' && isAbsolute(rest[4]!)
-    && /^[0-9a-fA-F]{40,64}$/u.test(rest[5]!)) return
-  if (verb === 'worktree' && rest.length === 3 && rest[0] === 'remove' && rest[1] === '--'
-    && isAbsolute(rest[2]!)) return
-  // Explicit discard of uncommitted state (design 08 §5.3 amendment, 2026-08
-  // user decision): `worktree remove --force` is authorized only by the
-  // `discardChanges` input flag — the fixed grammar here is the last line of
-  // defense (the git runner itself never passes --force otherwise).
-  if (verb === 'worktree' && rest.length === 4 && rest[0] === 'remove' && rest[1] === '--force'
-    && rest[2] === '--' && isAbsolute(rest[3]!)) return
-
-  fail('unsafe-git-argv', `Git command '${verb ?? '<empty>'}' is outside the worktree allowlist`)
-}
-
-/**
- * Fixed `-c core.hooksPath=<nul>` guard prepended to every plugin git spawn.
- * Command-line `-c` is the highest-precedence config source, so a repository's
- * own `core.hooksPath` (which would otherwise re-enable `post-checkout` on
- * `worktree add`) cannot override it. Read commands ignore hooksPath.
- */
-const HOOK_GUARD: readonly string[] = ['-c', `core.hooksPath=${process.platform === 'win32' ? 'NUL' : '/dev/null'}`]
-
-/** Default bounded, shell-free local Git runner. */
-export function createLocalGitRunner(spawnGit: GitSpawner = spawn as unknown as GitSpawner): GitRunner {
-  return request => new Promise<GitCommandResult>((resolvePromise, rejectPromise) => {
-    try {
-      if (!isAbsolute(request.cwd)) fail('unsafe-git-cwd', 'Git cwd must be absolute')
-      if (!Number.isSafeInteger(request.timeoutMs) || request.timeoutMs < 1 || request.timeoutMs > 60_000) {
-        fail('unsafe-git-limit', 'Git timeout is outside the supported range')
-      }
-      if (!Number.isSafeInteger(request.maxOutputBytes) || request.maxOutputBytes < 1
-        || request.maxOutputBytes > 4 * 1024 * 1024) {
-        fail('unsafe-git-limit', 'Git output cap is outside the supported range')
-      }
-      assertSafeGitArgv(request.args)
-    } catch (error) {
-      rejectPromise(error)
-      return
-    }
-
-    // Ambient GIT_DIR/GIT_WORK_TREE/etc. must not redirect an operation away
-    // from the freshly validated cwd. Retain the ordinary process environment
-    // but rebuild Git-specific variables from this gateway's policy. Required
-    // mutation locks remain available: GIT_OPTIONAL_LOCKS only suppresses locks
-    // Git itself documents as optional for read-mostly commands.
-    const environment = { ...process.env }
-    for (const key of Object.keys(environment)) {
-      if (key.startsWith('GIT_')) delete environment[key]
-    }
-    Object.assign(environment, {
-      GIT_TERMINAL_PROMPT: '0',
-      GIT_NO_LAZY_FETCH: '1',
-      GIT_OPTIONAL_LOCKS: '0',
-      // `worktree add` runs post-checkout; hook suppression is injected via the
-      // argv `-c core.hooksPath=<nul>` guard (HOOK_GUARD) at spawn time, since
-      // GIT_CONFIG_* env entries are the lowest-priority source and a repo's own
-      // core.hooksPath would override them. Filters (clean/smudge/process) are
-      // intentionally NOT disabled: they remain inside the host OS user's
-      // trusted repository-config boundary.
-      GCM_INTERACTIVE: 'never',
-      LC_ALL: 'C',
-    })
-
-    let child: GitChildProcess
-    try {
-      child = spawnGit('git', [...HOOK_GUARD, ...request.args], {
-        cwd: request.cwd,
-        shell: false,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        windowsHide: true,
-        env: environment,
-      })
-    } catch (error) {
-      rejectPromise(new GitWorktreeError('git-spawn-failed', safeErrorMessage(error)))
-      return
-    }
-    const stdout: Buffer[] = []
-    const stderr: Buffer[] = []
-    let bytes = 0
-    let settled = false
-    let terminationError: unknown
-    let timer: NodeJS.Timeout | undefined
-
-    const rejectImmediately = (error: unknown): void => {
-      if (settled) return
-      settled = true
-      if (timer !== undefined) clearTimeout(timer)
-      rejectPromise(error)
-    }
-    const terminateThenReject = (error: unknown): void => {
-      if (settled || terminationError !== undefined) return
-      terminationError = error
-      if (timer !== undefined) clearTimeout(timer)
-      // Do not release the caller's common-dir mutex until close proves the
-      // Git process exited. Repository filters may have descendants which Git
-      // cannot portably process-group-kill; that remains a trusted-config edge,
-      // but overlapping a second chamber mutation with the parent is avoidable.
-      try {
-        child.kill('SIGKILL')
-      } catch {
-        // Keep waiting for close: releasing the repo lock while the process may
-        // still run is less safe than retaining an uncertain operation.
-      }
-    }
-    const append = (target: Buffer[], chunk: Buffer): void => {
-      if (settled || terminationError !== undefined) return
-      bytes += chunk.byteLength
-      if (bytes > request.maxOutputBytes) {
-        terminateThenReject(new GitWorktreeError('git-output-limit', 'Git output exceeded the bounded response limit'))
-        return
-      }
-      target.push(chunk)
-    }
-    child.stdout.on('data', (chunk: Buffer) => append(stdout, chunk))
-    child.stderr.on('data', (chunk: Buffer) => append(stderr, chunk))
-    // A spawn error may not be followed by close, and proves no Git operation
-    // was admitted, so it is the sole immediate-rejection path.
-    child.on('error', (error) => {
-      if (terminationError !== undefined) return
-      rejectImmediately(new GitWorktreeError('git-spawn-failed', safeErrorMessage(error)))
-    })
-    child.on('close', (code) => {
-      if (settled) return
-      settled = true
-      if (timer !== undefined) clearTimeout(timer)
-      if (terminationError !== undefined) {
-        rejectPromise(terminationError)
-        return
-      }
-      resolvePromise({
-        exitCode: code ?? -1,
-        stdout: Buffer.concat(stdout).toString('utf8'),
-        stderr: Buffer.concat(stderr).toString('utf8'),
-      })
-    })
-    timer = setTimeout(() => {
-      terminateThenReject(new GitWorktreeError('git-timeout', `Git command exceeded ${request.timeoutMs}ms`))
-    }, request.timeoutMs)
-    timer.unref()
-  })
-}
-
-/** One loaded agent row whose value drifted from what upstream declares: the
- *  row's `sessionId` plus the offending value, rendered for a loud snapshot
- *  diagnostic (the value is already bounded and stringified). */
-interface AgentRowDrift {
-  readonly sessionId: string
-  readonly value: string
-}
-
-interface SourceSnapshot {
-  readonly workspaces: readonly WorkspaceFact[]
-  /** ALL running session ids (display fact; see blockingRunningIds). */
-  readonly runningSessionIds: ReadonlySet<string>
-  readonly runningAgents: readonly AgentFact[]
-  /** The authoritative archived set (workspaceRegistry). */
-  readonly archivedSessionIds: ReadonlySet<string>
-  /** child → parent edges from every loaded agent's session header (fork
-   *  lineage included — the ORIGIN set below decides which edges are walked). */
-  readonly parentBySession: ReadonlyMap<string, string>
-  /** Sessions whose header carries `origin: 'subagent'` (delegation children).
-   *  A recorded parent edge of any OTHER session is fork lineage and is never
-   *  walked (design 08 §5.2 amendment). */
-  readonly subagentOriginSessions: ReadonlySet<string>
-  /** Rows whose `origin` is present but neither absent nor `'subagent'` (a
-   *  pinned-vendor drift). Handled PER ROW — such a session is NOT
-   *  subagent-origin, so its edge terminates and it keeps blocking
-   *  (fail-closed) — while the drift is reported as a snapshot diagnostic so
-   *  it is never silent and never darkens the whole domain (AGENTS: one failed
-   *  entity must not erase or block unrelated complete entities). */
-  readonly originDrift: readonly AgentRowDrift[]
-  /** Rows whose `status` is neither `'idle'` nor `'running'` (a pinned-vendor
-   *  drift). Handled PER ROW and read CONSERVATIVELY: an unknown liveness fact
-   *  is treated as RUNNING, so the session keeps blocking a removal, and the
-   *  drift is reported as a snapshot diagnostic instead of darkening the whole
-   *  source read. */
-  readonly statusDrift: readonly AgentRowDrift[]
-  /** Rows whose `cwd` is present but cannot be used as a normalized absolute
-   *  path (a pinned-vendor drift). Handled PER ROW: the row never darkens the
-   *  source read, and a BLOCKING running row among them has an UNKNOWN
-   *  location — every removal is then refused (`runningAtPath` fail-closed)
-   *  rather than assumed to sit outside the target. */
-  readonly cwdDrift: readonly AgentRowDrift[]
-  /** Running sessions that actually BLOCK a worktree removal: the non-inert
-   *  ones (an archived session, or a SUBAGENT-origin descendant of an archived
-   *  ancestor, is inert — design 08 §5.2 amendment 2026-09). */
-  readonly blockingRunningIds: ReadonlySet<string>
-}
-
-interface SnapshotRunningLocation {
-  readonly sessionId: string
-  readonly paths: readonly string[]
-}
-
-interface RawWorktree {
-  path: string
-  head: string
-  branch: string | null
-  locked: boolean
-  prunable: boolean
-  bare: boolean
-  /** TRUE when a mutation-path topology listing could not canonicalize the
-   *  recorded path: the worktree's directory no longer exists (externally
-   *  deleted without `git worktree remove`) and only its admin record
-   *  survives. Such rows carry the RAW normalized recorded path — no
-   *  filesystem probe (dirty/attention/running) may touch them, and they can
-   *  only be cleaned as leftover records by the missing-record removal path.
-   *  Snapshot listings (listWorktrees) never set this; the snapshot has its
-   *  own per-row path-availability handling. */
-  missing?: boolean
-}
-
-interface WorktreeTopology {
-  readonly commonDir: string
-  readonly mainPath: string
-  readonly worktrees: readonly RawWorktree[]
-}
-
-interface PreviewRecord extends PreviewCreateResult {
-  readonly branchMode: CreateBranch['kind']
-  /** The chosen start point for a NEW branch (undefined = main checkout HEAD). */
-  readonly startRef?: string
-  readonly sourceWorkspaceId: string
-  readonly basename: string
-  readonly createdAt: number
-}
-
-interface CreatedFacts {
-  readonly repoId: string
-  readonly worktreeId: string
-  readonly commonDir: string
-  readonly mainPath: string
-  readonly path: string
-  readonly branch: string
-  readonly head: string
-  readonly branchCreated: boolean
-}
-
-interface CreateOperationRecord {
-  readonly previewToken: string
-  readonly preview: PreviewRecord
-  state: 'ready' | 'creating' | 'uncertain' | 'created'
-    | 'rolling-back' | 'rollback-uncertain' | 'rolled-back'
-  updatedAt: number
-  attemptedCreate: boolean
-  /** Provenance boundary: only an observed zero exit may authorize rollback. */
-  gitAccepted: boolean
-  attemptedRollback: boolean
-  createPromise?: Promise<CreateResult>
-  createResult?: CreateResult
-  facts?: CreatedFacts
-  rollbackPromise?: Promise<RollbackCreateResult>
-  rollbackResult?: RollbackCreateResult
-}
-
-interface RemoveIntent {
-  /** Absent for an UNREGISTERED worktree removal (next: 'none'). */
-  readonly workspaceId?: string
-  /** Exact normalized registry path captured before the first mutation. */
-  readonly workspacePath?: string
-  readonly repoId: string
-  readonly worktreeId: string
-  readonly commonDir: string
-  readonly mainPath: string
-  readonly path: string
-  readonly branch: string | null
-  readonly head: string
-  readonly sessionIds: readonly string[]
-
-  /** Optional local branch to delete after removal (design 08 §5.3). */
-  readonly deleteBranch?: string
-  /** User-authorized discard of uncommitted state (design 08 §5.3 amendment):
-   *  dirty worktrees are removed with `git worktree remove --force`; the
-   *  branch/commits/HEAD are never touched. Carried so replay/reconcile
-   *  paths keep the identical fingerprint and the same force semantics. */
-  readonly discardChanges?: boolean
-  branchDeleted?: boolean
-  branchDeleteFailed?: boolean
-}
-
-interface RemoveOperationRecord {
-  readonly fingerprint: string
-  state: 'ready' | 'removing' | 'uncertain' | 'removed'
-  updatedAt: number
-  attemptedRemove: boolean
-  /** Optional branch delete was attempted once (design 08 §5.3). */
-  branchDeleteAttempted: boolean
-  intent?: RemoveIntent
-  promise?: Promise<RemoveResult>
-  result?: RemoveResult
-}
-
-class KeyedMutex {
-  private readonly tails = new Map<string, Promise<void>>()
-
-  async run<T>(key: string, operation: () => Promise<T>): Promise<T> {
-    const previous = this.tails.get(key) ?? Promise.resolve()
-    let release!: () => void
-    const current = new Promise<void>(resolvePromise => { release = resolvePromise })
-    const tail = previous.then(() => current)
-    this.tails.set(key, tail)
-    await previous
-    try {
-      return await operation()
-    } finally {
-      release()
-      if (this.tails.get(key) === tail) this.tails.delete(key)
-    }
-  }
-}
-
-/** Parse the `--branch` status header (`## branch...upstream [ahead N, behind
- *  M]`). The numbers come from LOCAL refs — honest, never fetched. */
-export function parseBranchLine(line: string): { upstream: string | null; ahead: number; behind: number } {
-  if (!line.startsWith('## ')) return { upstream: null, ahead: 0, behind: 0 }
-  const rest = line.slice(3)
-  let ahead = 0
-  let behind = 0
-  const bracket = rest.lastIndexOf(' [')
-  const namePart = bracket >= 0 ? rest.slice(0, bracket) : rest
-  if (bracket >= 0) {
-    const meta = rest.slice(bracket + 2, rest.length - 1)
-    const aheadMatch = /ahead (\d+)/u.exec(meta)
-    const behindMatch = /behind (\d+)/u.exec(meta)
-    if (aheadMatch !== null) ahead = Number(aheadMatch[1])
-    if (behindMatch !== null) behind = Number(behindMatch[1])
-  }
-  // Git rejects ref names containing '..', so '...' cannot appear inside a
-  // branch name — the separator is unambiguous (review P3-2; do not "fix").
-  const sep = namePart.indexOf('...')
-  return {
-    upstream: sep >= 0 ? (namePart.slice(sep + 3) || null) : null,
-    ahead,
-    behind,
-  }
-}
-
-/**
- * Parse `git worktree list --porcelain` output in either NUL-delimited
- * (`-z`, Git 2.47+) or newline-delimited form. The record grammar is
- * identical across both: fields are delimiter-separated and a blank field
- * closes the current record.
- */
-function parseWorktreePorcelain(output: string, delimiter: '\0' | '\n' = '\0'): RawWorktree[] {
-  const records: RawWorktree[] = []
-  let current: RawWorktree | undefined
-  const flush = (): void => {
-    if (current === undefined) return
-    if (current.path.length === 0 || current.path.length > MAX_PATH_LENGTH
-      || /[\0\r\n]/u.test(current.path) || !isAbsolute(current.path)) {
-      fail('git-protocol-error', 'Git returned an invalid or overlong worktree path')
-    }
-    if (!/^[0-9a-fA-F]{40,64}$/u.test(current.head)) fail('git-protocol-error', 'Git returned an invalid worktree HEAD')
-    current.head = current.head.toLowerCase()
-    records.push(current)
-    current = undefined
-  }
-
-  for (const field of output.split(delimiter)) {
-    if (field === '') {
-      flush()
-      continue
-    }
-    if (field.startsWith('worktree ')) {
-      flush()
-      current = {
-        path: field.slice('worktree '.length),
-        head: '',
-        branch: null,
-        locked: false,
-        prunable: false,
-        bare: false,
-        missing: false,
-      }
-      continue
-    }
-    if (current === undefined) fail('git-protocol-error', 'Git worktree output did not begin with a worktree field')
-    if (field.startsWith('HEAD ')) current.head = field.slice('HEAD '.length)
-    else if (field.startsWith('branch refs/heads/')) current.branch = field.slice('branch refs/heads/'.length)
-    else if (field === 'locked' || field.startsWith('locked ')) current.locked = true
-    else if (field === 'prunable' || field.startsWith('prunable ')) current.prunable = true
-    else if (field === 'bare') current.bare = true
-    else if (field === 'detached') current.branch = null
-  }
-  flush()
-  if (records.length === 0) fail('git-protocol-error', 'Git returned no worktrees')
-  return records
-}
-
-const ZERO_HEAD = /^0+$/u
-
-/** Bounded read for the worktree `.git` pointer; gitdir lines are tiny. */
-const GIT_DIR_POINTER_MAX_BYTES = 4096
-
-/** git-dir state files that mark an in-progress Git operation (best-effort). */
-const ATTENTION_PROBES: ReadonlyArray<{ readonly name: string; readonly reason: GitAttentionReason }> = [
-  { name: 'MERGE_HEAD', reason: 'merge' },
-  { name: 'REBASE_HEAD', reason: 'rebase' },
-  { name: 'rebase-merge', reason: 'rebase' },
-  { name: 'rebase-apply', reason: 'rebase' },
-  { name: 'CHERRY_PICK_HEAD', reason: 'cherry-pick' },
-  { name: 'REVERT_HEAD', reason: 'revert' },
-  { name: 'BISECT_LOG', reason: 'bisect' },
-]
-
-function isNotARepositoryError(error: unknown): boolean {
-  return error instanceof GitWorktreeError && /not a git repository/i.test(error.message)
-}
-
-/**
- * The worktree's git dir: `<path>/.git` when it is a directory (main
- * checkout), otherwise the target of its `gitdir:` pointer file (linked
- * worktrees). Resolved against the worktree path when relative.
- */
-async function worktreeGitDir(path: string, fs: WorktreeFileSystem): Promise<string | null> {
-  const dotGit = join(path, '.git')
-  try {
-    const stat = await fs.lstat(dotGit)
-    if (stat.isDirectory()) return dotGit
-  } catch {
-    // fall through to the pointer-file read
-  }
-  try {
-    const pointer = (await fs.readFile(dotGit)).slice(0, GIT_DIR_POINTER_MAX_BYTES)
-    const match = /^gitdir:\s*(.+)$/u.exec(pointer.trim())
-    if (match === null) return null
-    const target = match[1]!.trim()
-    return isAbsolute(target) ? target : resolve(path, target)
-  } catch {
-    return null
-  }
-}
-
-/** Best-effort in-progress operation detection; failures yield no attention. */
-async function detectAttention(
-  gitDir: string,
-  fs: WorktreeFileSystem,
-  withinBudget: () => boolean,
-): Promise<GitAttentionReason[]> {
-  const found: GitAttentionReason[] = []
-  for (const probe of ATTENTION_PROBES) {
-    if (!withinBudget()) break
-    if (await fs.exists(join(gitDir, probe.name))) found.push(probe.reason)
-  }
-  return [...new Set(found)]
-}
-
-/** Environment variable naming the single DeepSeek Harness home (upstream
- *  `@deepseek-ai/dsh-home-paths` `DSH_HOME_ENV`). */
-const DSH_HOME_ENV = 'DSH_HOME'
-
-/** The default harness home under the OS home (`~/.dsh`). */
-function defaultDshHome(): string {
-  return join(homedir(), '.dsh')
-}
-
-/** Expand `~`, `~/` and `~\` against the OS home; any other value is returned
- *  unchanged. Mirrors upstream `expandHomePath`. */
-function expandHomePath(path: string): string {
-  if (path === '~') return homedir()
-  if (path.startsWith('~/') || path.startsWith('~\\')) return join(homedir(), path.slice(2))
-  return path
-}
-
-/** Local mirror of upstream `resolveDshHome`
- *  (`vendor/harness-checkout/packages/util/home-paths/src/index.ts`), which this
- *  in-instance plugin cannot import: it ships as one esbuild bundle with only
- *  `@deepseek-ai/*` externals. Precedence, highest first: an explicit
- *  `configured` value, `$DSH_HOME`, then `~/.dsh`. An empty or whitespace-only
- *  `$DSH_HOME` counts as UNSET, so a blank override never resolves the home to
- *  the process working directory. LOCKSTEP: keep this behavior identical to the
- *  upstream function (a change there must be mirrored here). */
-function resolveDshHome(configured?: string, env: NodeJS.ProcessEnv = process.env): string {
-  const fromEnv = env[DSH_HOME_ENV]
-  const selected = configured ?? (fromEnv !== undefined && fromEnv.trim().length > 0 ? fromEnv : defaultDshHome())
-  return resolve(expandHomePath(selected))
-}
 
 /** Host-independent lifecycle implementation; tests inject both Git and state. */
 export class GitWorktreeCore {
@@ -2261,10 +1237,7 @@ export class GitWorktreeCore {
           if (target === undefined) fail('worktree-not-found', 'path is not an exact worktree root')
           const worktreeId = opaqueId('worktree', topology.commonDir, target.path)
           if (worktreeId !== input.expected.worktreeId) fail('expected-mismatch', 'worktree identity changed')
-          if (target === topology.worktrees[0]) fail('main-worktree', 'the main checkout cannot be removed')
-          if (target.locked) fail('worktree-locked', 'locked worktrees cannot be removed')
-          if (target.branch !== input.expected.branch) fail('expected-mismatch', 'worktree branch changed')
-          if (target.head !== input.expected.head) fail('expected-mismatch', 'worktree HEAD changed')
+          this.assertRemovableTarget(target === topology.worktrees[0], target.locked, target.branch, target.head, input.expected)
           if (target.missing === true) {
             // The row was resolved MISSING (its directory vanished between the
             // in-lock preflight and this topology read). No filesystem probe
@@ -2330,10 +1303,7 @@ export class GitWorktreeCore {
       if (target === undefined) fail('worktree-not-found', 'workspace is not an exact worktree root')
       const worktreeId = opaqueId('worktree', topology.commonDir, target.path)
       if (worktreeId !== input.expected.worktreeId) fail('expected-mismatch', 'worktree identity changed')
-      if (target === topology.worktrees[0]) fail('main-worktree', 'the main checkout cannot be removed')
-      if (target.locked) fail('worktree-locked', 'locked worktrees cannot be removed')
-      if (target.branch !== input.expected.branch) fail('expected-mismatch', 'worktree branch changed')
-      if (target.head !== input.expected.head) fail('expected-mismatch', 'worktree HEAD changed')
+      this.assertRemovableTarget(target === topology.worktrees[0], target.locked, target.branch, target.head, input.expected)
       if (await this.isDirty(target.path) && input.discardChanges !== true) {
         fail('worktree-dirty', 'dirty worktrees cannot be removed')
       }
@@ -2380,6 +1350,25 @@ export class GitWorktreeCore {
    *  located from the source's registered workspaces instead, and every
    *  surviving guard (record identity, main/locked, ghost workspace) still
    *  applies before anything is mutated. */
+  /** Single main/locked/branch/head precondition shared by every removal
+   *  entry (B5 convergence): the registered, missing-record and
+   *  unregistered-locate paths used to repeat these four checks with
+   *  identical codes and messages. `isMain` is precomputed by the caller
+   *  (topology row vs located record); the rollback path keeps its own
+   *  wording because it refuses a different operation. */
+  private assertRemovableTarget(
+    isMain: boolean,
+    locked: boolean,
+    branch: string | null,
+    head: string,
+    expected: { readonly branch: string | null; readonly head: string },
+  ): void {
+    if (isMain) fail('main-worktree', 'the main checkout cannot be removed')
+    if (locked) fail('worktree-locked', 'locked worktrees cannot be removed')
+    if (branch !== expected.branch) fail('expected-mismatch', 'worktree branch changed')
+    if (head !== expected.head) fail('expected-mismatch', 'worktree HEAD changed')
+  }
+
   private async removeMissingUnregistered(
     input: RemoveInput,
     operation: RemoveOperationRecord,
@@ -2389,10 +1378,7 @@ export class GitWorktreeCore {
     const located = await this.locateMissingRecord(input.expected.repoId, targetPath)
     const worktreeId = opaqueId('worktree', located.commonDir, located.row.path)
     if (worktreeId !== input.expected.worktreeId) fail('expected-mismatch', 'worktree identity changed')
-    if (located.isMain) fail('main-worktree', 'the main checkout cannot be removed')
-    if (located.row.locked) fail('worktree-locked', 'locked worktrees cannot be removed')
-    if (located.row.branch !== input.expected.branch) fail('expected-mismatch', 'worktree branch changed')
-    if (located.row.head !== input.expected.head) fail('expected-mismatch', 'worktree HEAD changed')
+    this.assertRemovableTarget(located.isMain, located.row.locked, located.row.branch, located.row.head, input.expected)
     const intent: RemoveIntent = {
       repoId: located.repoId,
       worktreeId,
@@ -2495,8 +1481,9 @@ export class GitWorktreeCore {
       await this.assertBranchFormat(mainPath, intent.deleteBranch)
       await this.gitChecked(mainPath, ['branch', '-D', intent.deleteBranch], true)
       intent.branchDeleted = true
-    } catch {
+    } catch (error) {
       intent.branchDeleteFailed = true
+      intent.branchDeleteError = safeErrorMessage(error)
     }
   }
 
@@ -2819,6 +1806,7 @@ export class GitWorktreeCore {
       branchPreserved: true,
       ...(intent.branchDeleted === true ? { branchDeleted: true } : {}),
       ...(intent.branchDeleteFailed === true ? { branchDeleteFailed: true } : {}),
+      ...(intent.branchDeleteError === undefined ? {} : { branchDeleteError: intent.branchDeleteError }),
     }
   }
 
@@ -3570,3 +2558,4 @@ export class GitWorktreeCore {
     }
   }
 }
+

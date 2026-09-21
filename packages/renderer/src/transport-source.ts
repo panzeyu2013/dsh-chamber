@@ -10,7 +10,8 @@
  * through `/api/i/ssh-*`.
  */
 
-import type { TransportKind } from './global.d.ts'
+import type { HealthResponse } from './api.ts'
+import type { SshStatusProjection, TransportKind } from './global.d.ts'
 
 /** Canonical source-id prefixes (design 17 §2.1): `dsh-<id>` / `gateway-<id>`. */
 const SOURCE_PREFIXES = ['dsh-', 'gateway-'] as const
@@ -92,4 +93,26 @@ export function instanceBasePath(sourceId: string): string {
     throw new Error(`invalid chamber source id ${JSON.stringify(sourceId)}`)
   }
   return `/api/i/${sourceId}`
+}
+
+/**
+ * 实例可被聚合轮询：对齐反代契约（03 §3.3）——只有 `ready` 才放行，否则
+ * 显式 503。starting/degraded/connecting 期间轮询只会收获 503，故一律按
+ * 未连接呈现（分组头 + 相位文本，不轮询、无错误刷屏）。
+ */
+export function instanceConnected(
+  kind: 'local' | TransportKind,
+  health: HealthResponse | null,
+  remoteStatus: Record<string, SshStatusProjection>,
+  instanceId: string,
+): boolean {
+  if (kind === 'local') {
+    const status = health?.dsh?.status
+    return status === 'ready'
+  }
+  const status = remoteStatus[instanceId]
+  // A registry kind switch and its IPC pushes are separate messages. Never
+  // treat a briefly-stale READY projection from the old provider as proof
+  // that the replacement provider is ready.
+  return status?.kind === kind && status.phase === 'ready'
 }

@@ -24,11 +24,23 @@ import {
 } from '../../../dsh-chamber-client-ui-sidebar/src/shared/prewarm-intent.ts'
 
 const APP = readFileSync(fileURLToPath(new URL('../../src/App.tsx', import.meta.url)), 'utf8')
+// 阶段 3：桥订阅簇（含意图订阅 effect）平移到命名 hook —— 订阅锁钉在最终落点；
+// 仍在 App 的 drainPrewarm 计费/剪枝锁继续读 APP（下方两条）。
+const BRIDGE = readFileSync(
+  fileURLToPath(new URL('../../src/app-hooks/use-bridge-subscriptions.ts', import.meta.url)),
+  'utf8',
+)
+// 阶段 3：drainPrewarm / prewarmEligible 已平移到视图调度 hook —— 计费与剪枝锁
+// 钉在最终落点；订阅 effect 锁读 BRIDGE（上方 intentEffect）。
+const SCHEDULER = readFileSync(
+  fileURLToPath(new URL('../../src/app-hooks/use-view-scheduler.ts', import.meta.url)),
+  'utf8',
+)
 
 /** The one subscription effect: from `useEffect(() => {` through its `}, [])`. */
 const intentEffect = (): string => {
-  const match = /useEffect\(\(\) => \{\s*const unsubscribe = chamberBridge\.onIntentPrewarm\(\(\{ sourceId \}\) => \{[\s\S]*?\n  \}, \[\]\)/.exec(APP)
-  assert.ok(match, 'App.tsx must subscribe to chamberBridge.onIntentPrewarm in its own effect')
+  const match = /useEffect\(\(\) => \{\s*const unsubscribe = chamberBridge\.onIntentPrewarm\(\(\{ sourceId \}\) => \{[\s\S]*?\n  \}, \[\]\)/.exec(BRIDGE)
+  assert.ok(match, 'use-bridge-subscriptions.ts must subscribe to chamberBridge.onIntentPrewarm in its own effect')
   return match[0]
 }
 
@@ -100,11 +112,12 @@ test('the intent never clears the retention suppression — a reclaimed source i
 
 test('the intent boot is billed exactly where the existing drain lands on a prioritised source', () => {
   assert.match(
-    APP,
+    SCHEDULER,
     /if \(intentPriorityRef\.current\.delete\(next\)\) \{\s*intentBudgetRef\.current = intentPrewarmSpent\(intentBudgetRef\.current, next, now\)\s*\}/,
   )
 })
 
 test('the stale priority keys are pruned when a source stops being eligible', () => {
+  // 剪枝循环随 prewarmEligible 的消费侧留在 App（hook 只提供资格集）。
   assert.match(APP, /for \(const id of \[\.\.\.intentPriorityRef\.current\]\) \{\s*if \(!eligible\.has\(id\)\) intentPriorityRef\.current\.delete\(id\)\s*\}/)
 })
