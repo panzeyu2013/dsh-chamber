@@ -13,10 +13,12 @@ paint/resource，buffered），boot/eval 每个 run 还执行 `Page.reload`（sw
 |---|---|
 | `cdp-lib.mjs` | CDP 公共库：target 发现、ws 连接、早期性能观察者注入（longtask/layout-shift/paint/resource，buffered）、状态轮询（单次 evaluate 4s 超时守卫）、`__dshPerf` 汇总 |
 | `boot-measure.mjs` | 场景① 启动（骨架 → 内容）：`Page.reload` 冷启 ×N，记录长任务/CLS/区间 |
-| `switch-measure.mjs` | 场景② 跨来源切换 / 场景③ 连点 ×N（热切换面；口径见本文「指标口径」节） |
+| `switch-measure.mjs` | 场景② 跨来源切换 / 场景③ 连点 ×N（热切换面；口径见本文「指标口径」节）。**I9**：目标按 `[data-chamber-section]` + 行文本定位（可用 `--source-a/-workspace-a/-source-b/-workspace-b` 指定），`NOROW/HIDDEN/NOSECTION` 即退出 1；结果含 `paintSeen/paintAfterSettle`（"安静"≠"切到了"）。**I15**：`--require-switch` 为严格档——未在安静样本上绘制目标实例即失败 |
 | `eval-measure.mjs` | T6/H3 归因探针：每 run 新建 CDP 连接（导航竞态下旧 ws 会挂起）→ reload → 长任务 + JS 资源清单 |
 | `disk-walk-baseline.mjs` | T3 磁盘统计曲线：合成 .pnpm-store 形态 fixture（深层嵌套/符号链接/硬链接去重面）上同步 vs 异步实现描点（`--async` 切换测量目标） |
 | `measure-ui.mjs` | **稳态基线尺子**（2026 性能整改验收）：附加运行中实例，采 DOM 节点/挂载视图数/JS 堆基数 + 空闲 N 秒长任务 + 合成输入帧间隔 + 可选 5s CPU profile，输出固定 schema 基线 JSON 供 A/B 对照 |
+| `switch-frame-probe.mjs` | 切源帧判据采集：注入 `perf-marks` 标记 → 采样帧 → 用 `switchFrameVerdict` 判「无可见视图帧 / 平色 #fff 帧 / 主题不匹配进度面」三形态白帧（Leg A rAF + Leg B 屏幕录制 `--screencast`） |
+| `budget-check.mjs` | **分档预算验收判据**（plan 决定 9）：读入基线 A 与候选 B 两份采集 JSON，对「每壳 DOM + p95 帧时 + 长任务 + 堆 + 档位一致性」逐项给上限与判决，超限 exit 1；`--warn-only` 只看不拦，`--self-test` 跑内置 6 例 |
 | `data/*.json` | 各轮测量落盘（基线/中间态/after），`gitignore` 白名单入库供前后对照 |
 
 ## 前置条件
@@ -35,11 +37,17 @@ paint/resource，buffered），boot/eval 每个 run 还执行 `Page.reload`（sw
 node scripts/perf/boot-measure.mjs 3 --out scripts/perf/data/boot-after-xxx.json   # 场景①
 node scripts/perf/switch-measure.mjs 2 --out scripts/perf/data/switch-xxx.json      # 场景②（A→B→A）
 node scripts/perf/switch-measure.mjs 1 --rapid 10 --out scripts/perf/data/rapid-xxx.json  # 场景③
+node scripts/perf/switch-measure.mjs 2 --source-a 本地实例 --workspace-a Desktop \
+     --source-b test --workspace-b test --out scripts/perf/data/switch-xxx.json         # 显式指定 A/B（I9）
+node scripts/perf/switch-measure.mjs 2 --require-switch --out scripts/perf/data/switch-strict.json  # 严格档（I15）
 node scripts/perf/eval-measure.mjs 3 --out scripts/perf/data/eval-xxx.json          # H3 归因
 node scripts/perf/disk-walk-baseline.mjs            --out scripts/perf/data/disk-walk-before.json  # 同步（改造前）
 node scripts/perf/disk-walk-baseline.mjs --async    --out scripts/perf/data/disk-walk-after.json   # 异步（改造后）
 node scripts/perf/measure-ui.mjs --idle 15 --clicks 5 --out scripts/perf/data/measure-ui-before.json  # 稳态基线（整改前）
 node scripts/perf/measure-ui.mjs --profile         --out scripts/perf/data/measure-ui-profile.json    # 附 5s CPU profile
+node scripts/perf/budget-check.mjs --baseline scripts/perf/data/measure-ui-before.json \
+     --candidate scripts/perf/data/measure-ui-after.json --tier 4                      # 分档预算判决（超限 exit 1）
+node scripts/perf/budget-check.mjs --self-test                                        # 判据自测（6 例）
 ```
 
 > --out 一律写 `scripts/perf/data/`（.gitignore 白名单例外入库供前后对照）；写到

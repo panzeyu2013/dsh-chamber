@@ -1151,3 +1151,23 @@ test('veil probe: a computed-hidden veil is not a visible veil frame', () => {
   const visible = runVeilProbe(veil => veil, { computedStyle: () => ({ visibility: 'visible', display: 'block' }) })
   assert.ok(visible.state.veilFrames > 0, '同一剧本下可见遮罩必须被计入（证明上一句不是因为探针没跑）')
 })
+
+/**
+ * I15（plan §10）：严格旗标的**归属必须可机器校验**——真正会切换的两个腿各带自己的
+ * `--require-switch`，而走查（walkthrough）没有切换腿，因此**不得**给它加同名旗标：
+ * 一个「看门却不管事」的旗标正是 I15 要消灭的假绿来源（看着严格，实际什么都没门住）。
+ */
+test('I15: the switch legs own --require-switch and the walkthrough declares none', () => {
+  const root = fileURLToPath(new URL('../..', import.meta.url))
+  const measure = readFileSync(path.join(root, 'scripts/perf/switch-measure.mjs'), 'utf8')
+  const probe = readFileSync(path.join(root, 'scripts/perf/switch-frame-probe.mjs'), 'utf8')
+  const walkthrough = readFileSync(new URL('./walkthrough.mjs', import.meta.url), 'utf8')
+  // 尺子：严格档必须真的接在「未绘制目标实例」这个判据上（不是只解析了一个旗标）。
+  assert.match(measure, /--require-switch/)
+  assert.match(measure, /function assertPainted/)
+  assert.match(measure, /paintSeen/)
+  // 探针：自带严格档 + 三形态白帧判据。
+  assert.match(probe, /--require-switch/)
+  // 走查：没有切换腿 ⇒ 不得声明该旗标（否则就是假严格）。
+  assert.doesNotMatch(walkthrough, /require-switch/)
+})
