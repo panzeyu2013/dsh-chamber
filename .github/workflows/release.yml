@@ -976,6 +976,9 @@ jobs:
           fi
           pnpm run build:host-packages
           pnpm run build:renderer
+          # W8/R15③（2026-12 审计 S3）：release 腿此前**完全没有** scoper 标记门，
+          # 于是「构建把 scoper 摇掉」的产物可以一路装配进正式 .app。源产物先断一次。
+          node packages/dsh-chamber-client-ui-mobile/scripts/assert-scoper-artifact.mjs
           pnpm --filter @dsh-chamber/desktop run build:control-plane
           # 内置 dsh 工作区必须先物化（.gitignore 只提交 vendor/dsh/pnpm-lock.yaml，
           # package.json + node_modules 由 bundle-dsh.mjs 生成；否则 build-sidecar
@@ -1232,6 +1235,10 @@ jobs:
           done
           test -f "$APP/Contents/Resources/DSHChamber_DSHChamber.bundle/bridge-shim.js"
           test -f "$APP/Contents/Resources/dist/web/index.html"
+          # W8/R15③（2026-12 审计 S3）：只断 index.html 会把「空壳 .app」放行——切源白屏
+          # 的修复必须出现在**真正装进 .app 的字节**里（与装配脚本内部的同一道门呼应）。
+          node packages/dsh-chamber-client-ui-mobile/scripts/assert-scoper-artifact.mjs \
+            "$APP/Contents/Resources/dist/web/assets"
           # 三审 #1/#2：打包态本地实例依赖内置 dsh 工作区与内嵌 pnpm。
           test -f "$APP/Contents/Resources/sidecar/vendor/dsh/package.json"
           test -f "$APP/Contents/Resources/sidecar/vendor/dsh/node_modules/.modules.yaml"

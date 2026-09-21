@@ -1160,14 +1160,43 @@ test('⑭ 缺 renderer dist/web 又要产出归档 → fail-closed；--skip-web-
     )
     // 合法 dist（含 index.html）→ 装配成功且文件被拷入（--no-zip --no-dmg 也要求
     // web 界面：release 正式腿就是这个形状）。
+    // S3 审计（2026-12）：装配门现在还会断言**已拷入字节**携带 scoper 标记，因此夹具
+    // 必须是一个真实的页面产物形状，而不是只有一个 index.html。
     const goodDist = path.join(out, 'good-web-dist')
-    mkdirSync(goodDist, { recursive: true })
-    writeFileSync(path.join(goodDist, 'index.html'), '<!doctype html><title>t</title>')
+    mkdirSync(path.join(goodDist, 'assets'), { recursive: true })
+    writeFileSync(path.join(goodDist, 'index.html'), '<!doctype html><title>t</title><script src="/assets/main-x.js"></script>')
+    writeFileSync(
+      path.join(goodDist, 'assets', 'main-x.js'),
+      'data-chamber-svg-scope chamber-csvg globalThis.__chamberSvgScopeInstalled = installSvgResourceScope()',
+    )
     await runBuildSwiftApp(parseBuildSwiftAppArgs([
       '--out', out, '--web-dist', goodDist,
       '--skip-build', '--skip-sidecar', '--no-sign', '--no-zip', '--no-dmg',
     ]), { log: () => {}, error: () => {} })
     assert.ok(existsSync(appLayout(out).webDist + '/index.html'), 'web dist 必须随装配进 .app')
+    // 负控 1：有 index.html 但没有可检查的页面 chunk → fail-closed（否则空壳能进 .app）。
+    const noChunk = path.join(out, 'no-chunk-web-dist')
+    mkdirSync(noChunk, { recursive: true })
+    writeFileSync(path.join(noChunk, 'index.html'), '<!doctype html><title>t</title>')
+    await assert.rejects(
+      runBuildSwiftApp(parseBuildSwiftAppArgs([
+        '--out', out, '--web-dist', noChunk,
+        '--skip-build', '--skip-sidecar', '--no-sign', '--no-zip', '--no-dmg',
+      ]), { log: () => {}, error: () => {} }),
+      /没有可检查的页面 chunk/,
+    )
+    // 负控 2：有 chunk 但构建把 scoper 摇掉了（缺标记）→ fail-closed。
+    const staleChunk = path.join(out, 'stale-web-dist')
+    mkdirSync(path.join(staleChunk, 'assets'), { recursive: true })
+    writeFileSync(path.join(staleChunk, 'index.html'), '<!doctype html><title>t</title>')
+    writeFileSync(path.join(staleChunk, 'assets', 'main-x.js'), 'export const nothing = 1')
+    await assert.rejects(
+      runBuildSwiftApp(parseBuildSwiftAppArgs([
+        '--out', out, '--web-dist', staleChunk,
+        '--skip-build', '--skip-sidecar', '--no-sign', '--no-zip', '--no-dmg',
+      ]), { log: () => {}, error: () => {} }),
+      /没有任何 chunk 携带 SVG scoper 标记/,
+    )
     // 显式跳过 → 允许缺位（局部装配形状）。
     await runBuildSwiftApp(parseBuildSwiftAppArgs([
       '--out', out, '--web-dist', path.join(out, 'no-such-web-dist'),
@@ -1294,7 +1323,12 @@ test('㉑ G40 dist/web 过滤：*.map 与 .vite/ 不进 .app（与 Electron buil
     mkdirSync(path.join(dist, '.vite'), { recursive: true })
     writeFileSync(path.join(dist, 'index.html'), '<!doctype html>')
     writeFileSync(path.join(dist, 'perf-sizes.json'), '{}')
-    writeFileSync(path.join(dist, 'assets', 'app.js'), 'console.log(1)')
+    // S3 审计：装配门要求真实页面 chunk 携带 scoper 标记（本用例测的是过滤规则，
+    // 因此夹具必须是「合法页面产物」形状，否则会被那道门先拦下）。
+    writeFileSync(
+      path.join(dist, 'assets', 'app.js'),
+      'data-chamber-svg-scope chamber-csvg globalThis.__chamberSvgScopeInstalled = installSvgResourceScope()',
+    )
     writeFileSync(path.join(dist, 'assets', 'app.js.map'), '{"version":3}')
     writeFileSync(path.join(dist, '.vite', 'manifest.json'), '{"a":1}')
     writeFileSync(path.join(dist, 'assets', '.vite', 'manifest.json'), '{"b":2}')

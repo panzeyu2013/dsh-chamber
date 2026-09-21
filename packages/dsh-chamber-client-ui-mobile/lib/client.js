@@ -27,6 +27,501 @@ __export(index_exports, {
 });
 module.exports = __toCommonJS(index_exports);
 
+// ../renderer/src/svg-resource-scope.ts
+var SVG_SCOPE_ATTRIBUTE = "data-chamber-svg-scope";
+var RESOURCE_REFERENCE_ATTRIBUTES = [
+  "clip-path",
+  "mask",
+  "filter",
+  "fill",
+  "stroke",
+  "marker-start",
+  "marker-mid",
+  "marker-end",
+  "style"
+];
+var HREF_ATTRIBUTES = ["href", "xlink:href"];
+var HREF_RESOURCE_ELEMENTS = [
+  "use",
+  "textpath",
+  "mpath",
+  "feimage",
+  "image",
+  "pattern",
+  "lineargradient",
+  "radialgradient",
+  "filter",
+  "clippath",
+  "mask",
+  "marker"
+];
+var DEFINITION_ELEMENTS = [
+  "clippath",
+  "mask",
+  "filter",
+  "marker",
+  "pattern",
+  "lineargradient",
+  "radialgradient",
+  "meshgradient",
+  "symbol"
+];
+var MAX_COPY_BUDGET = 8;
+var RESOLVE_HOP_LIMIT = 4;
+var ID_REFERENCE_ATTRIBUTES = ["aria-labelledby", "aria-describedby", "for"];
+var STYLE_ELEMENT = "style";
+var activeTokenPrefixes = /* @__PURE__ */ new Set(["chamber-csvg"]);
+function escapeForRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+var URL_REFERENCE_PATTERN = /(url)\((\s*)([\x27\x22]?)#([^\s\x27\x22)]+?)\3(\s*)\)/gi;
+var scopeTokens = { value: 0 };
+var SVG_SCOPE_SEQUENCE_ATTRIBUTE = "data-chamber-svg-scope-seq";
+var scopedSvgs = /* @__PURE__ */ new WeakSet();
+var selfProducedNodes = /* @__PURE__ */ new WeakSet();
+var renamedResourceIds = /* @__PURE__ */ new Map();
+var documentPreservedIds = /* @__PURE__ */ new Set();
+function resetSvgResourceScopeMemory() {
+  renamedResourceIds.clear();
+  documentPreservedIds.clear();
+  scopedSvgs = /* @__PURE__ */ new WeakSet();
+  selfProducedNodes = /* @__PURE__ */ new WeakSet();
+}
+function claimScopeSequence(root) {
+  const host = root;
+  if (typeof host.getAttribute !== "function" || typeof host.setAttribute !== "function") return 1;
+  const current = Number(host.getAttribute(SVG_SCOPE_SEQUENCE_ATTRIBUTE));
+  const next = Number.isInteger(current) && current > 0 ? current + 1 : 1;
+  host.setAttribute(SVG_SCOPE_SEQUENCE_ATTRIBUTE, String(next));
+  return next;
+}
+function nextSvgScopeToken(prefix = "csvg") {
+  scopeTokens.value += 1;
+  return prefix + scopeTokens.value;
+}
+function stripOwnScopePrefix(id) {
+  for (const prefix of activeTokenPrefixes) {
+    const scoped = new RegExp("^" + escapeForRegExp(prefix) + "\\d+-");
+    if (scoped.test(id)) return id.replace(scoped, "");
+  }
+  return id;
+}
+function urlReferenceIds(value) {
+  const ids = [];
+  URL_REFERENCE_PATTERN.lastIndex = 0;
+  let match = URL_REFERENCE_PATTERN.exec(value);
+  while (match !== null) {
+    ids.push(match[4].trim());
+    match = URL_REFERENCE_PATTERN.exec(value);
+  }
+  URL_REFERENCE_PATTERN.lastIndex = 0;
+  return ids;
+}
+function rewriteUrlReferences(value, renames) {
+  URL_REFERENCE_PATTERN.lastIndex = 0;
+  const next = value.replace(URL_REFERENCE_PATTERN, (match, name, leading, quote, id, trailing) => {
+    const renamed = renames.get(id.trim());
+    return renamed === void 0 ? match : name + "(" + leading + quote + "#" + renamed + quote + trailing + ")";
+  });
+  URL_REFERENCE_PATTERN.lastIndex = 0;
+  return next;
+}
+function resourceRenamePlan(definedIds, referencedIds, token, preservedIds = []) {
+  const referenced = new Set(referencedIds);
+  const preserved = new Set(preservedIds);
+  const renames = /* @__PURE__ */ new Map();
+  const targets = /* @__PURE__ */ new Set();
+  for (const id of definedIds) {
+    if (id === "" || !referenced.has(id) || preserved.has(id)) continue;
+    const base = token + "-" + stripOwnScopePrefix(id);
+    let target = base;
+    for (let suffix = 1; targets.has(target) || target === id; suffix += 1) target = base + "-" + String(suffix);
+    targets.add(target);
+    renames.set(id, target);
+  }
+  return renames;
+}
+function localNameOf(element) {
+  return (element.localName ?? element.tagName ?? "").toLowerCase();
+}
+function isSvgElement(element) {
+  return localNameOf(element) === "svg";
+}
+function isStyleElement(element) {
+  return localNameOf(element) === STYLE_ELEMENT;
+}
+function isListed(names, element) {
+  return names.includes(localNameOf(element));
+}
+function collectScopeFacts(svg) {
+  const defined = [];
+  const referenced = [];
+  const preserved = [];
+  const stack = [svg];
+  while (stack.length > 0) {
+    const element = stack.pop();
+    if (element !== svg) {
+      const id = element.getAttribute("id");
+      if (id !== null && id !== "") defined.push(id);
+    }
+    for (const name of RESOURCE_REFERENCE_ATTRIBUTES) {
+      const value = element.getAttribute(name);
+      if (value === null || value.toLowerCase().indexOf("url(") < 0) continue;
+      for (const reference of urlReferenceIds(value)) referenced.push(reference);
+    }
+    if (HREF_RESOURCE_ELEMENTS.includes(localNameOf(element))) {
+      for (const name of HREF_ATTRIBUTES) {
+        const value = element.getAttribute(name);
+        if (value !== null && value.charAt(0) === "#") referenced.push(value.slice(1));
+      }
+    }
+    for (const name of ID_REFERENCE_ATTRIBUTES) {
+      const value = element.getAttribute(name);
+      if (value === null) continue;
+      for (const id of value.split(/\s+/)) if (id !== "") preserved.push(id);
+    }
+    if (isStyleElement(element)) {
+      const css = element.textContent;
+      if (css !== null && css.toLowerCase().indexOf("url(") >= 0) {
+        for (const reference of urlReferenceIds(css)) preserved.push(reference);
+      }
+    }
+    const children = element.children;
+    for (let index = children.length - 1; index >= 0; index -= 1) {
+      const child = children[index];
+      if (isSvgElement(child)) continue;
+      stack.push(child);
+    }
+  }
+  return { defined, referenced, preserved };
+}
+function applyRenames(svg, renames) {
+  if (renames.size === 0) return;
+  const stack = [svg];
+  while (stack.length > 0) {
+    const element = stack.pop();
+    const id = element.getAttribute("id");
+    if (id !== null && renames.has(id)) element.setAttribute("id", renames.get(id));
+    for (const name of RESOURCE_REFERENCE_ATTRIBUTES) {
+      const value = element.getAttribute(name);
+      if (value === null || value.toLowerCase().indexOf("url(") < 0) continue;
+      const next = rewriteUrlReferences(value, renames);
+      if (next !== value) element.setAttribute(name, next);
+    }
+    if (HREF_RESOURCE_ELEMENTS.includes(localNameOf(element))) {
+      for (const name of HREF_ATTRIBUTES) {
+        const value = element.getAttribute(name);
+        if (value === null || value.charAt(0) !== "#") continue;
+        const renamed = renames.get(value.slice(1));
+        if (renamed !== void 0) element.setAttribute(name, "#" + renamed);
+      }
+    }
+    const children = element.children;
+    for (let index = children.length - 1; index >= 0; index -= 1) {
+      const child = children[index];
+      if (isSvgElement(child)) continue;
+      stack.push(child);
+    }
+  }
+}
+function resolveDefinition(svg, id) {
+  let candidate = id;
+  for (let hop = 0; hop < RESOLVE_HOP_LIMIT; hop += 1) {
+    const found = lookupDocumentId(svg, candidate);
+    if (found !== null) return found;
+    const next = renamedResourceIds.get(candidate);
+    if (next === void 0 || next === candidate) return null;
+    candidate = next;
+  }
+  return null;
+}
+function lookupDocumentId(svg, id) {
+  const doc = svg.ownerDocument;
+  if (doc === null || doc === void 0 || typeof doc.getElementById !== "function") return null;
+  return doc.getElementById(id);
+}
+function copyExternalDefinitions(svg, ids, token) {
+  const copies = /* @__PURE__ */ new Map();
+  const queue = ids.map((id) => ({ id, depth: 1 }));
+  let budget = MAX_COPY_BUDGET;
+  while (queue.length > 0 && budget > 0) {
+    const item = queue.shift();
+    if (copies.has(item.id)) continue;
+    const definition = resolveDefinition(svg, item.id);
+    if (definition === null || definition === svg) continue;
+    if (!isCopyableDefinition(definition)) continue;
+    if (typeof definition.cloneNode !== "function") continue;
+    budget -= 1;
+    const clone = definition.cloneNode(true);
+    const innerFacts = collectScopeFacts(clone);
+    const innerToken = token + "-i" + String(copies.size + 1);
+    const innerPlan = resourceRenamePlan(
+      innerFacts.defined,
+      innerFacts.defined,
+      innerToken,
+      [...innerFacts.preserved, ...documentPreservedIds]
+    );
+    if (innerPlan.size > 0) applyRenames(clone, innerPlan);
+    const copyId = token + "-x" + String(copies.size + 1) + "-" + stripOwnScopePrefix(item.id);
+    clone.setAttribute("id", copyId);
+    (directDefsChild(svg) ?? svg).appendChild(clone);
+    selfProducedNodes.add(clone);
+    copies.set(item.id, copyId);
+    renamedResourceIds.set(item.id, copyId);
+    if (item.depth < 2) {
+      for (const inner of collectExternalIdsIn(clone, svg)) queue.push({ id: inner, depth: item.depth + 1 });
+    }
+  }
+  return copies;
+}
+function collectExternalIdsIn(node, svg) {
+  const defined = new Set(collectScopeFacts(svg).defined);
+  const facts = collectScopeFacts(node);
+  const out = /* @__PURE__ */ new Set();
+  for (const id of facts.referenced) if (id !== "" && !defined.has(id) && !documentPreservedIds.has(id)) out.add(id);
+  return [...out];
+}
+function isCopyableDefinition(definition) {
+  if (!isListed(DEFINITION_ELEMENTS, definition)) return false;
+  let current = definition.parentNode;
+  while (current !== null) {
+    if (current.nodeType === 1 && isSvgElement(current)) return true;
+    current = current.parentNode;
+  }
+  return false;
+}
+function directDefsChild(svg) {
+  const children = svg.children;
+  for (let index = 0; index < children.length; index += 1) {
+    const child = children[index];
+    if (child !== svg && (child.localName ?? "").toLowerCase() === "defs") return child;
+  }
+  return null;
+}
+function scopeSvgElement(svg, token = nextSvgScopeToken()) {
+  if (svg.getAttribute(SVG_SCOPE_ATTRIBUTE) !== null) {
+    if (scopedSvgs.has(svg)) return 0;
+    svg.removeAttribute(SVG_SCOPE_ATTRIBUTE);
+  }
+  return applyScopeToSvg(svg, token);
+}
+function rescanSvgElement(svg, token) {
+  if (!scopedSvgs.has(svg)) return scopeSvgElement(svg, token);
+  svg.removeAttribute(SVG_SCOPE_ATTRIBUTE);
+  return applyScopeToSvg(svg, token);
+}
+function applyScopeToSvg(svg, token) {
+  const { defined, referenced, preserved } = collectScopeFacts(svg);
+  const preservedAll = /* @__PURE__ */ new Set([...preserved, ...documentPreservedIds]);
+  const renames = resourceRenamePlan(defined, referenced, token, preservedAll);
+  if (renames.size > 0) {
+    applyRenames(svg, renames);
+    for (const [from, to] of renames) {
+      for (const [key, value] of renamedResourceIds) if (value === from) renamedResourceIds.set(key, to);
+      renamedResourceIds.set(from, to);
+    }
+  }
+  const definedSet = new Set(defined);
+  const externallyReferenced = [...new Set(referenced)].filter((id) => id !== "" && !definedSet.has(id) && !renames.has(id) && !preservedAll.has(id));
+  const copies = copyExternalDefinitions(svg, externallyReferenced, token);
+  if (copies.size > 0) applyRenames(svg, copies);
+  svg.setAttribute(SVG_SCOPE_ATTRIBUTE, token);
+  scopedSvgs.add(svg);
+  return renames.size + copies.size;
+}
+function containsStyleSheet(node) {
+  const name = (node.localName ?? node.tagName ?? "").toLowerCase();
+  if (name === STYLE_ELEMENT || name === "link") return true;
+  const children = node.children;
+  for (let index = 0; index < children.length; index += 1) {
+    if (containsStyleSheet(children[index])) return true;
+  }
+  return false;
+}
+function collectSvgElements(node, out) {
+  if (isSvgElement(node)) {
+    out.push(node);
+  }
+  const children = node.children;
+  for (let index = 0; index < children.length; index += 1) {
+    const child = children[index];
+    collectSvgElements(child, out);
+  }
+}
+function introducesResourceContent(node) {
+  const stack = [node];
+  while (stack.length > 0) {
+    const element = stack.pop();
+    const id = element.getAttribute("id");
+    if (id !== null && id !== "") return true;
+    for (const name of RESOURCE_REFERENCE_ATTRIBUTES) {
+      const value = element.getAttribute(name);
+      if (value !== null && value.toLowerCase().indexOf("url(") >= 0) return true;
+    }
+    if (isListed(HREF_RESOURCE_ELEMENTS, element)) {
+      for (const name of HREF_ATTRIBUTES) {
+        const value = element.getAttribute(name);
+        if (value !== null && value.charAt(0) === "#") return true;
+      }
+    }
+    const children = element.children;
+    for (let index = 0; index < children.length; index += 1) {
+      stack.push(children[index]);
+    }
+  }
+  return false;
+}
+function nearestScopedAncestorSvg(node) {
+  let current = node;
+  while (current !== null) {
+    if (current.nodeType === 1) {
+      const element = current;
+      if (isSvgElement(element)) return scopedSvgs.has(element) ? element : null;
+    }
+    current = current.parentNode;
+  }
+  return null;
+}
+function defaultObserve(target, callback) {
+  const native = new MutationObserver((records) => {
+    callback(records);
+  });
+  native.observe(target, { childList: true, subtree: true });
+  return native;
+}
+function defaultSchedule(run) {
+  queueMicrotask(run);
+}
+function isElementNode(node) {
+  return node.nodeType === 1;
+}
+function rememberReferenceIds(node) {
+  const stack = [node];
+  while (stack.length > 0) {
+    const element = stack.pop();
+    for (const name of ID_REFERENCE_ATTRIBUTES) {
+      const value = element.getAttribute(name);
+      if (value === null) continue;
+      for (const id of value.split(/\s+/)) if (id !== "") documentPreservedIds.add(id);
+    }
+    const children = element.children;
+    for (let index = 0; index < children.length; index += 1) stack.push(children[index]);
+  }
+}
+function rememberDocumentStyleIds(root) {
+  const doc = root.ownerDocument ?? globalThis.document ?? null;
+  const host = doc ?? root;
+  const query = host.querySelectorAll;
+  if (typeof query === "function") {
+    for (const style of host.querySelectorAll("style")) {
+      const css = style.textContent;
+      if (css !== null && css !== void 0 && css.toLowerCase().indexOf("url(") >= 0) {
+        for (const id of urlReferenceIds(css)) documentPreservedIds.add(id);
+      }
+    }
+  }
+  const sheets = doc?.styleSheets;
+  if (sheets === null || sheets === void 0) return;
+  for (let index = 0; index < sheets.length; index += 1) {
+    try {
+      walkCssRules(sheets[index]?.cssRules ?? null);
+    } catch {
+    }
+  }
+}
+function walkCssRules(rules) {
+  if (rules === null) return;
+  for (let index = 0; index < rules.length; index += 1) {
+    const rule = rules[index];
+    const text = typeof rule.cssText === "string" ? rule.cssText : "";
+    if (text.toLowerCase().indexOf("url(") >= 0) {
+      for (const id of urlReferenceIds(text)) documentPreservedIds.add(id);
+    }
+    if (rule.cssRules !== void 0) walkCssRules(rule.cssRules);
+  }
+}
+function installSvgResourceScope(deps = {}) {
+  const root = deps.root ?? document.body;
+  const tokenPrefix = deps.tokenPrefix ?? "chamber-csvg" + String(claimScopeSequence(root));
+  activeTokenPrefixes.add(tokenPrefix);
+  const schedule = deps.schedule ?? defaultSchedule;
+  const observe = deps.observe ?? defaultObserve;
+  const pending = /* @__PURE__ */ new Set();
+  let scheduled = false;
+  let active = true;
+  const watchedLinks = /* @__PURE__ */ new WeakSet();
+  const linkHandlers = [];
+  const watchStyleSheetLinks = (node) => {
+    const stack = [node];
+    while (stack.length > 0) {
+      const element = stack.pop();
+      const listener = element.addEventListener;
+      if (localNameOf(element) === "link" && typeof listener === "function" && !watchedLinks.has(element)) {
+        watchedLinks.add(element);
+        const handler = () => {
+          if (active) rememberDocumentStyleIds(root);
+        };
+        linkHandlers.push({ element, handler });
+        element.addEventListener("load", handler, { once: true });
+      }
+      const children = element.children;
+      for (let index = 0; index < children.length; index += 1) stack.push(children[index]);
+    }
+  };
+  const flush = () => {
+    scheduled = false;
+    const nodes = [...pending];
+    pending.clear();
+    for (const node of nodes) rememberReferenceIds(node);
+    if (nodes.some((node) => containsStyleSheet(node))) rememberDocumentStyleIds(root);
+    for (const node of nodes) watchStyleSheetLinks(node);
+    const svgs = [];
+    for (const node of nodes) collectSvgElements(node, svgs);
+    const touched = /* @__PURE__ */ new Set();
+    for (const svg of svgs) {
+      const wasScoped = scopedSvgs.has(svg);
+      const changed = scopeSvgElement(svg, nextSvgScopeToken(tokenPrefix));
+      if (!wasScoped || changed > 0) touched.add(svg);
+    }
+    for (const node of nodes) {
+      if (!introducesResourceContent(node)) continue;
+      const host = nearestScopedAncestorSvg(node);
+      if (host !== null && !touched.has(host)) rescanSvgElement(host, nextSvgScopeToken(tokenPrefix));
+    }
+  };
+  const enqueue = (node) => {
+    pending.add(node);
+    if (scheduled) return;
+    scheduled = true;
+    schedule(flush);
+  };
+  const observer = observe(root, (records) => {
+    for (const record of records) {
+      const added = record.addedNodes;
+      for (let index = 0; index < added.length; index += 1) {
+        const node = added[index];
+        if (isElementNode(node) && !selfProducedNodes.has(node)) enqueue(node);
+      }
+    }
+  });
+  rememberDocumentStyleIds(root);
+  if (isElementNode(root)) rememberReferenceIds(root);
+  const existing = [];
+  if (isElementNode(root)) collectSvgElements(root, existing);
+  for (const svg of existing) scopeSvgElement(svg, nextSvgScopeToken(tokenPrefix));
+  return () => {
+    active = false;
+    observer.disconnect();
+    pending.clear();
+    for (const { element, handler } of linkHandlers) {
+      const remove = element.removeEventListener;
+      if (typeof remove === "function") element.removeEventListener("load", handler);
+    }
+    linkHandlers.length = 0;
+    resetSvgResourceScopeMemory();
+  };
+}
+
 // src/client/locales.ts
 var zh = {
   "dsh-chamber.mobile.title": "\u79FB\u52A8\u89C6\u56FE",
@@ -974,7 +1469,7 @@ function isStructuralTarget(target) {
   }
   return false;
 }
-function isElementNode(node) {
+function isElementNode2(node) {
   return typeof node === "object" && node !== null && typeof node.matches === "function";
 }
 function shouldRestamp(mutations) {
@@ -982,7 +1477,7 @@ function shouldRestamp(mutations) {
     if (mutation.type !== "childList") return false;
     for (let index = 0; index < mutation.addedNodes.length; index++) {
       const node = mutation.addedNodes[index];
-      if (isElementNode(node) && isStructuralTarget(node)) return true;
+      if (isElementNode2(node) && isStructuralTarget(node)) return true;
     }
     return false;
   });
@@ -1627,6 +2122,150 @@ function createLayoutFactSource(ctx) {
   };
 }
 
+// src/client/read-watermark.ts
+var READ_CLIENT_ID_KEY = "dsh-chamber.mobile.read-client";
+var MIN_REPORT_INTERVAL_MS = 5e3;
+var SNAPSHOT_PATH = "/chamber/session-state";
+var READ_PATH = "/chamber/session-state/read";
+function rowWatermark(row) {
+  if (row === void 0) return 0;
+  const updated = typeof row.updatedAt === "number" && Number.isFinite(row.updatedAt) ? row.updatedAt : 0;
+  const completed = typeof row.completedAt === "number" && Number.isFinite(row.completedAt) ? row.completedAt : 0;
+  return Math.max(updated, completed);
+}
+function resolveReadClientId(storage, makeId) {
+  try {
+    const existing = storage.getItem(READ_CLIENT_ID_KEY);
+    if (existing !== null && /^[a-z0-9-]{8,64}$/.test(existing)) return existing;
+    const created = makeId();
+    storage.setItem(READ_CLIENT_ID_KEY, created);
+    return created;
+  } catch {
+    return makeId();
+  }
+}
+function createReadWatermarkReporter(deps) {
+  const now = deps.now ?? (() => Date.now());
+  const minInterval = deps.minIntervalMs ?? MIN_REPORT_INTERVAL_MS;
+  const seen = /* @__PURE__ */ new Map();
+  const lastAt = /* @__PURE__ */ new Map();
+  let disposed = false;
+  return {
+    report(sessionId, watermark) {
+      if (disposed || sessionId === "" || watermark <= 0) return;
+      const previous = seen.get(sessionId) ?? 0;
+      if (watermark <= previous) return;
+      const at = now();
+      const last = lastAt.get(sessionId);
+      if (last !== void 0 && at - last < minInterval) {
+        seen.set(sessionId, Math.min(watermark, previous));
+        return;
+      }
+      seen.set(sessionId, watermark);
+      lastAt.set(sessionId, at);
+      try {
+        deps.post(sessionId, watermark);
+      } catch {
+      }
+    },
+    dispose() {
+      disposed = true;
+      seen.clear();
+      lastAt.clear();
+    }
+  };
+}
+async function postReadMark(fetchImpl, url, body) {
+  try {
+    const response = await fetchImpl(url, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    return response.ok === true;
+  } catch {
+    return false;
+  }
+}
+async function reportCurrentSession(deps) {
+  const snapshot = deps.sessions?.list?.getSnapshot?.();
+  const current = snapshot?.current;
+  if (typeof current !== "string" || current === "") return null;
+  let row;
+  try {
+    const response = await deps.fetchImpl((deps.base ?? "") + SNAPSHOT_PATH + "?clientId=" + encodeURIComponent(deps.getClientId()), { method: "GET" });
+    if (!response.ok) return null;
+    const body = await response.json();
+    row = body?.sessions?.[current];
+  } catch {
+    return null;
+  }
+  const watermark = rowWatermark(row);
+  if (watermark <= 0) return null;
+  deps.reporter.report(current, watermark);
+  return current;
+}
+function installMobileReadWatermark(ctx, deps = {}) {
+  const doc = deps.doc ?? document;
+  const win = deps.window ?? window;
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  let storage = deps.storage;
+  if (storage === void 0) {
+    try {
+      storage = win.localStorage;
+    } catch {
+      storage = void 0;
+    }
+  }
+  let clientId = null;
+  const getClientId = () => {
+    if (clientId === null) {
+      clientId = storage === void 0 ? "mobile-" + Math.random().toString(36).slice(2, 12) : resolveReadClientId(storage, () => "mobile-" + Math.random().toString(36).slice(2, 12));
+    }
+    return clientId;
+  };
+  const reporter = createReadWatermarkReporter({
+    now: deps.now,
+    post: (sessionId, watermark) => {
+      const body = { clientId: getClientId(), sessionId, readThrough: watermark };
+      if (deps.postMark !== void 0) {
+        deps.postMark(body);
+        return;
+      }
+      void postReadMark(fetchImpl, (deps.base ?? "") + READ_PATH, body);
+    }
+  });
+  const sessions = (() => {
+    try {
+      return ctx.sessions;
+    } catch {
+      return void 0;
+    }
+  })();
+  const pass = () => {
+    void reportCurrentSession({ sessions, fetchImpl, getClientId, reporter, base: deps.base }).catch(() => {
+    });
+  };
+  const onVisibility = () => {
+    if (doc.visibilityState === "visible") pass();
+  };
+  doc.addEventListener("visibilitychange", onVisibility);
+  win.addEventListener("focus", pass);
+  let unsubscribe;
+  try {
+    unsubscribe = sessions?.list?.subscribe?.(pass) ?? void 0;
+  } catch {
+    unsubscribe = void 0;
+  }
+  pass();
+  return () => {
+    doc.removeEventListener("visibilitychange", onVisibility);
+    win.removeEventListener("focus", pass);
+    if (typeof unsubscribe === "function") unsubscribe();
+    reporter.dispose();
+  };
+}
+
 // src/client/drawer-taps.ts
 var DRAWER_SIDEBAR_SELECTOR = '[data-mobile-role="sidebar"]';
 var HEAL_FORM_SELECTOR = 'input, textarea, select, [contenteditable]:not([contenteditable="false"])';
@@ -2234,11 +2873,13 @@ function MobileNavToggle({ toggleSidebar, t }) {
 }
 
 // src/client/index.ts
+globalThis.__chamberSvgScopeInstalled = installSvgResourceScope();
 var NS = "dsh-chamber.mobile";
-var inject = ["slots", "locale", "layout"];
+var inject = ["slots", "locale", "layout", "sessions"];
 function apply(ctx) {
   const t = ctx.locale.bind(NS);
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), "dsh-chamber: mobile dictionaries");
+  ctx.effect(() => installMobileReadWatermark(ctx), "dsh-chamber: mobile read watermark");
   ctx.effect(() => {
     const disposers = [];
     const touchTier = window.matchMedia(TOUCH_TIER_QUERY);
