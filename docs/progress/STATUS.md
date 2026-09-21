@@ -6,6 +6,8 @@
 
 ## 未完成 / 部分完成（剩余验收）
 
+- 结构精简后的平台腿（2026-09，未验证）：本轮新增/改动的 Swift 单测（RollingWindowLimiter/StrictJSONNumber/PrivateFS/JSLiteralEscaping）与编译态 sidecar/native 走查需 macOS 腿复验（`pnpm run test:swift`；`build:sidecar` + `DSH_CHAMBER_SIDECAR_COMPILED=1 pnpm run test:sidecar:compiled`；`acceptance:gui --flavor native --require-assembly`）。Linux 本机只 loud skip，不得当绿。
+
 - 实机门禁（未验证；缺真实实例 / 打包态环境）：
   - 多来源sleep/wake与隐藏恢复、版本歪斜容忍、gateway形态回归；
   - 隐藏/遮挡态节流修订（2026-12，design 14 §D1修订；S-10降级后的实机门）：Chromium默认节流需打包态实机复核：最小化/完全覆盖（未最小化）两工况rAF/定时器/`visibilityState` 与App Nap语义、隐藏 ≥60s时SSE/推送不断、唤醒后即时重连与首帧渲染、两条30s兜底轮询隐藏期跳过 + 恢复补偿一轮；见 [deviations.md](deviations.md) S-10。
@@ -354,6 +356,10 @@
 
 ## 设计未决
 
+- C15 hover 触发降级（2026-09提案，待CI/产品裁决）：把 hover 判据从每次 push 4 次调用降为 pin 变更 / workflow_dispatch / 升级清单触发；同批需改 `AGENTS.md:77-78`、`docs/checklists/upstream-touchpoints.md:4/§7`、`release-workflow-policy.test.mjs`（release 恰好两次 gate 调用的锁）、`static-gate-parity.mjs` 豁免表与 `verify-release-ci-proof.mjs` REQUIRED_JOB_STEPS。判据代码 0 删除。
+
+- sidebar 拆 `dsh-chamber-client-core`（2026-09评估，待消费包评审）：`dsh-chamber-client-ui-sidebar/src/shared`（12.5k 行、31 条 barrel 导出）实为 renderer/layout/settings-bridge/settings-connections/git/mobile 六个消费包共用的 chamber 客户端核心；拆包前置 = 下方 lockfile 批次 + 六个消费包 owner 评审。
+
 - Electron / Swift双flavor接入点parity（2026-12八路逐函数复核 + 打包/引擎专项）：**仍open：S-01（外部门禁：EdDSA双密钥真实值、Sparkle编译证明、实机安装验收、增量delta实机验收——相邻版本走`.delta`、跳版本自动回退整包）、G19（CI内启动签名打包`.app`：凭据+ GUI会话）、S-44（Electron 43.4.0无授权查询/申请面；仅剩实机确认系统提示等价）、S-10（遮挡/App Nap无实测）、T-28（`corner-shape`超椭圆待vendor `ui-theme`裁决；裸`scrollbar-width`/`field-sizing`/`text-autospace`引擎降级已登记）；核验清单（启动恢复、打包态冷启动首载复验（宿主不占用17500）**、首帧时序、beta真机下载安装、坏密钥页面态、Sparkle节奏、ATS loopback、登录项回读、工具链native gate的WKWebView段、隐藏/遮挡态）见§4；登记`docs/progress/deviations.md` §1/§3/§4，可达性纪律与盘点见 §6。
 
 - 原生窗口高度折中待裁决（2026-09，open）：Swift内容区1280×786（外框~814）对Electron外框1280×800（视口772）各偏~14pt；单侧对齐（原生取772，或Electron开`useContentSize`后同取800）未决。登记deviations.md S-49；宽度偏好仍per-flavor页面存储（T-18）。
@@ -377,6 +383,12 @@
 ## 范围决策与必要取舍（不做 / 推迟 / 移出 / 偏差）
 
 >双flavor专项登记（用户可感偏差S、有意结构差异T、Swift leg接入缺口P、门禁/覆盖缺口G与文档漂移D，外加可达性纪律与盘点）见[deviations.md](deviations.md)；开放工作见上文与deviations.md open条目。
+
+- 依赖声明补齐与跨包原语合并暂缓（2026-09）：renderer→6 个 client-ui 包、layout→sidebar 的 devDeps 缺口已确认；linux 上 `pnpm install --lockfile-only` 会剥离跨平台 optional 解析（296 删/31 增，pnpm 以本机平台规范化），本机无法自证 → 待平台正确的 lockfile 重生成 + 人工审 optional churn；在此之前 private-fs/windows-process/semver 的跨包单一实现以 parity/lockstep 门（已常驻测试）代替。
+
+- 提交进仓构建产物维持现状（2026-09精简评估）：renderer/src/generated（4.5k 行）、dsh-runtime/dist（7.7k）、seed 包 dist（4.8k）、mobile/lib（3.2k）合计约 2 万行；移出 git 需改为构建前置并改 CI/开发链（fresh clone 不再可直接 typecheck/test），属构建流程裁决，不作为本轮精简项。
+
+- 测试面精简已到证据化上限（2026-09，commit 10c2e340）：净减 10.8k 行；各区独立复核确认 ≥25%/区需删除安全/fail-closed、跨包 parity、golden/pin 或 CI 显式引用类（desktop ≈7.3k、gateway ≈3.3k、renderer 需删 CI 固定文件），继续压缩属保护面取舍，需显式裁决。
 
 - 统一名称的保留面（2026-12用户指令；逐条登记以免被当成漏改再翻一遍）：身份字样（bundle内可执行名、SwiftPM模块/目录/资源包、shim资源名、`DSH_CHAMBER_SHELL_*`环境变量、dev数据根、日志文件/标签、调试通道）对齐`dsh-chamber`（deviations T-17）。以下有意不改：① bundle id `com.dshchamber.native`（Swift壳）/ `com.dshchamber.desktop`（Electron腿）——改动=通知授权重来+打包身份返工（T-14）；②跨进程协议串`--native-updater`、`__host.nativeUpdatePhase`、`no-native-bridge`/`nativeChannelToken`——Swift↔sidecar ↔渲染端shim三侧锁步，改名须协变；③持久化键前缀`native-shell.page-zoom.<origin>`（`macos/Sources/DSHChamber/ZoomPersistence.swift:22`）——改键会静默重置用户缩放偏好（T-22）；④测试夹具loud标记`poc-stub`/`poc: true`/`poc-no-registry`/`poc-unimplemented`（`packages/desktop/sidecar-stub.ts`）与settings-bridge的`'native-shell'`阻塞原因分类id（`packages/dsh-chamber-client-ui-settings-bridge/src/client/blocked-reason.ts:12`；文案跨包锁步、不属改名面）。免改面：`CHANGELOG*`段、`.tmp/**`（含旧`POC_*`脚本与旧名.app，临时区）。失效判据：上述任一被改名须同步T-14/T-17/T-22与两侧测试。
 
