@@ -13,6 +13,12 @@ import {
   resolveReadClientId,
   rowWatermark,
 } from '../../src/client/read-watermark.ts'
+import type { ReadWatermarkRow } from '../../src/client/read-watermark.ts'
+
+/** Minimal fetch double: the reporter only reads `ok` and `json()`. */
+function jsonFetch(body: unknown, ok = true): typeof fetch {
+  return (async () => ({ ok, json: async () => body })) as unknown as typeof fetch
+}
 
 test('rowWatermark is the host-domain max(updatedAt, completedAt); unknown is 0', () => {
   assert.equal(rowWatermark({ updatedAt: 1_000, completedAt: 2_000 }), 2_000)
@@ -23,12 +29,12 @@ test('rowWatermark is the host-domain max(updatedAt, completedAt); unknown is 0'
   assert.equal(rowWatermark({}), 0)
   // Non-finite / non-number values never become a watermark.
   assert.equal(rowWatermark({ updatedAt: Number.NaN, completedAt: Number.POSITIVE_INFINITY }), 0)
-  assert.equal(rowWatermark({ updatedAt: '9' }), 0)
+  assert.equal(rowWatermark({ updatedAt: '9' } as unknown as ReadWatermarkRow), 0)
 })
 
 test('resolveReadClientId reuses a valid stored id, creates and persists otherwise', () => {
-  const store = new Map()
-  const storage = { getItem: k => store.get(k) ?? null, setItem: (k, v) => store.set(k, v) }
+  const store = new Map<string, string>()
+  const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => store.set(k, v) }
   assert.equal(resolveReadClientId(storage, () => 'mobile-aaaaaaaa'), 'mobile-aaaaaaaa')
   assert.equal(store.get(READ_CLIENT_ID_KEY), 'mobile-aaaaaaaa')
   // Existing valid id wins over a fresh generator.
@@ -43,7 +49,7 @@ test('resolveReadClientId reuses a valid stored id, creates and persists otherwi
 
 test('the reporter is monotonic and throttled, and dispose makes it inert', () => {
   let clock = 0
-  const posted = []
+  const posted: Array<[string, number]> = []
   const reporter = createReadWatermarkReporter({ post: (s, w) => posted.push([s, w]), now: () => clock, minIntervalMs: 100 })
   reporter.report('s1', 10)
   assert.deepEqual(posted, [['s1', 10]])
@@ -74,27 +80,27 @@ test('a throwing transport never escapes the reporter', () => {
 })
 
 test('postReadMark resolves false instead of rejecting on every failure shape', async () => {
-  const ok = await postReadMark(async () => ({ ok: true }), '/x', { clientId: 'c', sessionId: 's', readThrough: 1 })
+  const ok = await postReadMark(jsonFetch({}, true), '/x', { clientId: 'c', sessionId: 's', readThrough: 1 })
   assert.equal(ok, true)
-  const notOk = await postReadMark(async () => ({ ok: false }), '/x', { clientId: 'c', sessionId: 's', readThrough: 1 })
+  const notOk = await postReadMark(jsonFetch({}, false), '/x', { clientId: 'c', sessionId: 's', readThrough: 1 })
   assert.equal(notOk, false)
   const rejected = await postReadMark(async () => { throw new Error('offline') }, '/x', { clientId: 'c', sessionId: 's', readThrough: 1 })
   assert.equal(rejected, false)
 })
 
-function mirrorResponse(sessions) {
-  return async () => ({ ok: true, json: async () => ({ sessions }) })
+function mirrorResponse(sessions: Record<string, ReadWatermarkRow & { running?: boolean }>): typeof fetch {
+  return jsonFetch({ sessions })
 }
 
 test('reportCurrentSession reads the mirror row of the OFFICIAL current session', async () => {
-  const posted = []
+  const posted: Array<[string, number]> = []
   const reporter = createReadWatermarkReporter({ post: (s, w) => posted.push([s, w]) })
   const sessions = { list: { getSnapshot: () => ({ current: 'sess-2', sessions: [{ sessionId: 'sess-1' }] }) } }
-  const seen = []
-  const fetchImpl = async (url) => {
+  const seen: string[] = []
+  const fetchImpl = (async (url: string) => {
     seen.push(url)
-    return mirrorResponse({ 'sess-2': { updatedAt: 100, completedAt: 400 } })()
-  }
+    return mirrorResponse({ 'sess-2': { updatedAt: 100, completedAt: 400 } })(url)
+  }) as unknown as typeof fetch
   const reported = await reportCurrentSession({ sessions, fetchImpl, getClientId: () => 'mobile-x', reporter, base: '' })
   assert.equal(reported, 'sess-2')
   // The mark is the mirror row's max — never a client clock.
@@ -103,7 +109,7 @@ test('reportCurrentSession reads the mirror row of the OFFICIAL current session'
 })
 
 test('reportCurrentSession is a silent no-op without a current session, a row, or a watermark', async () => {
-  const posted = []
+  const posted: Array<[string, number]> = []
   const reporter = createReadWatermarkReporter({ post: (s, w) => posted.push([s, w]) })
   const base = { fetchImpl: mirrorResponse({}), getClientId: () => 'mobile-x', reporter, base: '' }
   assert.equal(await reportCurrentSession({ ...base, sessions: undefined }), null)
@@ -117,12 +123,12 @@ test('reportCurrentSession is a silent no-op without a current session, a row, o
 })
 
 test('reportCurrentSession swallows a rejected fetch and a non-2xx mirror', async () => {
-  const posted = []
+  const posted: Array<[string, number]> = []
   const reporter = createReadWatermarkReporter({ post: (s, w) => posted.push([s, w]) })
   const sessions = { list: { getSnapshot: () => ({ current: 'cur' }) } }
   const rejecting = async () => { throw new Error('offline') }
   assert.equal(await reportCurrentSession({ sessions, fetchImpl: rejecting, getClientId: () => 'c', reporter }), null)
-  const notFound = async () => ({ ok: false, json: async () => ({}) })
+  const notFound = jsonFetch({}, false)
   assert.equal(await reportCurrentSession({ sessions, fetchImpl: notFound, getClientId: () => 'c', reporter }), null)
   assert.deepEqual(posted, [])
 })

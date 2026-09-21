@@ -14,6 +14,7 @@ import {
   createSessionCreationLedger,
   publishSessionCreationInstrument,
 } from '../../src/shared/session-create-ledger.ts'
+import type { SessionCreationOrigin } from '../../src/shared/session-create-ledger.ts'
 
 const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
 const MUTATIONS = read('../../src/shared/session-mutations.ts')
@@ -21,7 +22,7 @@ const BRIDGE = read('../../src/shared/aggregate-store.ts')
 const SIDEBAR = read('../../src/client/SidebarRoot.tsx')
 const GIT = read('../../../dsh-chamber-client-ui-git/src/shared/coordinator.ts')
 
-function entry(sourceId: string, origin, blank = true) {
+function entry(sourceId: string, origin: SessionCreationOrigin, blank = true) {
   return { sourceId, sessionId: 's-' + Math.random().toString(36).slice(2, 6), blank, origin, at: 1 }
 }
 
