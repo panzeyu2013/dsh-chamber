@@ -18,7 +18,15 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
-const SECTION = read('../../src/client/ServerSection.tsx')
+const SECTION = [
+  read('../../src/client/ServerSection.tsx'),
+  read('../../src/client/ServerSectionHeader.tsx'),
+  read('../../src/client/ServerSectionRows.tsx'),
+  read('../../src/client/ServerSectionSearch.tsx'),
+  read('../../src/client/server-section-controls.tsx'),
+  read('../../src/client/server-section-model.ts'),
+  read('../../src/client/server-section-session-state.tsx'),
+].join('\n')
 
 test('the bridge channel carries the intent to App-layer subscribers and unsubscribes cleanly', async () => {
   const { chamberBridge } = await import('../../src/shared/aggregate-store.ts')

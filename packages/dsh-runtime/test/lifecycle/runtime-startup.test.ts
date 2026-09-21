@@ -131,10 +131,11 @@ test('P0: cold-start pending derives the expected set after the spawn refreshes 
   const result = await runStartupPhase(deps)
   assert.equal(result.applyOutcome?.status, 'applied')
   assert.equal(result.blockedReason, null)
-  // Partial seed = base four + the two mounted chamber domains (6 names), not
-  // the 4-name reduced set and not the full 7-name set.
+  // Partial seed = base four + the two mounted chamber domains, not the
+  // 4-name reduced set and not the full host-domain set (both other chambers'
+  // domains are absent, so REQUIRED minus those two).
   assert.deepEqual(order, ['probe', 'expected'])
-  assert.equal(activationProbeNamesForDomains(seededDomains).length, REQUIRED_ACTIVATION_PROBES.length - 1)
+  assert.equal(activationProbeNamesForDomains(seededDomains).length, REQUIRED_ACTIVATION_PROBES.length - 2)
 })
 
 test('probe failure stops, restores, rolls pointer back, and persists failure evidence', async () => {

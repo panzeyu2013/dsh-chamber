@@ -13,7 +13,7 @@ import {
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { PROBE_NAMES_WITHOUT_HOST_DOMAINS, REQUIRED_ACTIVATION_PROBES, activationProbeNamesForDomains } from '../../src/activation-gate.ts'
+import { HOST_DOMAIN_PROBE_NAMES, PROBE_NAMES_WITHOUT_HOST_DOMAINS, REQUIRED_ACTIVATION_PROBES, activationProbeNamesForDomains } from '../../src/activation-gate.ts'
 import {
   PROBE_TEXT_KEEP_TOKENS,
   SETTINGS_FILE_MAX_BYTES,
@@ -80,6 +80,10 @@ function successfulValue(method: string): unknown {
   if (method === 'archiveCleanup/probe') {
     // Design 24 §7 C accept: a well-formed domain carrier with an object value.
     return { ok: true, value: { archived: 0, deletableSessions: 0, deletableSubagents: 0, skippedRunning: 0 } }
+  }
+  if (method === 'openInApp/probe') {
+    // Design 20 §4.1 accept: the carrier's platform value.
+    return { ok: true, value: { platform: 'linux' } }
   }
   return {}
 }
@@ -651,10 +655,42 @@ test('probe layer enforces per-RPC and whole-window timeouts when call ignores i
     for (const name of [
       'commands/execute', 'session/canOpenWorkspacePath',
       'clientGraph/graph', 'settings/describe', 'gitWorktree/previewCreate',
-      'archiveCleanup/probe',
+      'archiveCleanup/probe', 'openInApp/probe',
     ]) {
       assert.equal(results.find(result => result.name === name)?.ok, false, name)
     }
+  } finally {
+    rmSync(fx.root, { recursive: true, force: true })
+  }
+})
+
+test('openInApp/probe accepts only a well-formed domain carrier (design 20 §4.1)', async () => {
+  const fx = fixture()
+  try {
+    const withOpenInApp = (value: unknown): RuntimeProbeCall => async (base, method, payload, options) => {
+      if (method === 'openInApp/probe') {
+        fx.calls.push({ method, payload })
+        assert.ok((options?.timeoutMs ?? 0) > 0)
+        return { result: { value } }
+      }
+      return await successfulCall(fx)(base, method, payload, options)
+    }
+
+    const okResults = await probes(fx, withOpenInApp({ ok: true, value: { platform: 'linux' } }), { windowMs: 1_000, rpcTimeoutMs: 100 })
+    assert.equal(okResults.find(result => result.name === 'openInApp/probe')?.ok, true)
+    assert.deepEqual(
+      fx.calls.find(entry => entry.method === 'openInApp/probe')?.payload,
+      { args: {} },
+      'the activation probe must stay zero-arg',
+    )
+
+    const businessResults = await probes(fx, withOpenInApp({ ok: false, error: { code: 'unavailable-app', message: 'x' } }), { windowMs: 1_000, rpcTimeoutMs: 100 })
+    assert.equal(businessResults.find(result => result.name === 'openInApp/probe')?.ok, false)
+    assert.match(businessResults.find(result => result.name === 'openInApp/probe')?.error ?? '', /business failure/)
+
+    const malformedResults = await probes(fx, withOpenInApp({ platform: 'linux' }), { windowMs: 1_000, rpcTimeoutMs: 100 })
+    assert.equal(malformedResults.find(result => result.name === 'openInApp/probe')?.ok, false)
+    assert.match(malformedResults.find(result => result.name === 'openInApp/probe')?.error ?? '', /malformed probe response/)
   } finally {
     rmSync(fx.root, { recursive: true, force: true })
   }
@@ -752,7 +788,10 @@ test('hostDomainNames: an empty list equals the reduced set (no chamber domains)
 })
 
 test('activationProbeNamesForDomains: full list equals REQUIRED; unknown names throw (implementation-review Major-2 fail-loud)', () => {
-  assert.deepEqual([...activationProbeNamesForDomains([...REQUIRED_ACTIVATION_PROBES.filter(name => name.includes('/'))].filter(name => ['clientGraph/graph', 'gitWorktree/previewCreate', 'archiveCleanup/probe'].includes(name)))], [...REQUIRED_ACTIVATION_PROBES])
+  // The FULL host-domain list (the local/desktop shape) must derive exactly
+  // REQUIRED — derived from HOST_DOMAIN_PROBE_NAMES so adding a chamber host
+  // domain to both sides cannot leave this assertion behind.
+  assert.deepEqual([...activationProbeNamesForDomains([...HOST_DOMAIN_PROBE_NAMES])], [...REQUIRED_ACTIVATION_PROBES])
   assert.deepEqual(
     [...activationProbeNamesForDomains([])],
     [...PROBE_NAMES_WITHOUT_HOST_DOMAINS],

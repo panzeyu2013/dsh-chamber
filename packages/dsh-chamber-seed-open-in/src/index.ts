@@ -79,10 +79,12 @@ export class OpenInAppGateway extends TypertRemoteService {
     })
   }
 
-  /** Zero-cost activation probe (design 18 §3.4 probe contract). */
+  /** Zero-cost activation probe (design 18 §3.4 / design 20 §4.1): platform
+   *  plus protocol only, answered in the shared domain carrier so the runtime
+   *  activation probe can shape-check it like every other chamber host domain. */
   @Remote('probe')
-  probe(): OpenInAppProbeValue {
-    return this.core.probe()
+  probe(): Promise<OpenInAppDomainResult<OpenInAppProbeValue>> {
+    return domainResult(async () => this.core.probe())
   }
 
   /** Installed catalog ids in menu order. */

@@ -39,6 +39,8 @@ export const GROUPS = {
     'test/lifecycle/required-extra-rows.test.ts',
     // 必需行探针的纯记账（单调钟选择 / 每成员 grace / 有界复查窗口）
     'test/lifecycle/required-service-probe.test.ts',
+    // per-source 注册表收敛内核（阶段 3：live 外删除 / 保序 / identity-preserving 负例）。
+    'test/lifecycle/source-registry.test.ts',
     // The shell *.test.ts split is served from test/support/shell-harness.ts and needs the
     // dsh-client-web fixture loader (see scripts/dev/test-shell-loader.mjs); the --import
     // specifier resolves from the package root (spawn cwd).

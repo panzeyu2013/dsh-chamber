@@ -13,7 +13,15 @@ import { fileURLToPath } from 'node:url'
 import { sessionRowState } from '../../src/shared/session-row-state.ts'
 
 const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
-const SECTION = read('../../src/client/ServerSection.tsx')
+const SECTION = [
+  read('../../src/client/ServerSection.tsx'),
+  read('../../src/client/ServerSectionHeader.tsx'),
+  read('../../src/client/ServerSectionRows.tsx'),
+  read('../../src/client/ServerSectionSearch.tsx'),
+  read('../../src/client/server-section-controls.tsx'),
+  read('../../src/client/server-section-model.ts'),
+  read('../../src/client/server-section-session-state.tsx'),
+].join('\n')
 const TODO = read('../../src/client/SessionTodoArea.tsx')
 const LOCALES = read('../../src/client/locales.ts')
 

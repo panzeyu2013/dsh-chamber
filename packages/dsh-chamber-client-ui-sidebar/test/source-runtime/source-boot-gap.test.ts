@@ -77,7 +77,15 @@ test('every gap key the sidebar can select exists in BOTH dictionaries, non-empt
 })
 
 test('ServerSection renders the gap through the SHARED source-note live region', () => {
-  const section = flat(read('../../src/client/ServerSection.tsx'))
+  const section = flat([
+    read('../../src/client/ServerSection.tsx'),
+    read('../../src/client/ServerSectionHeader.tsx'),
+    read('../../src/client/ServerSectionRows.tsx'),
+    read('../../src/client/ServerSectionSearch.tsx'),
+    read('../../src/client/server-section-controls.tsx'),
+    read('../../src/client/server-section-model.ts'),
+    read('../../src/client/server-section-session-state.tsx'),
+  ].join('\n'))
   assert.match(section, /import \{ sourceBootGapNote \} from '\.\/source-boot-gap\.ts'/)
   // Exactly ONE call: the decision is made once, per source.
   assert.equal(section.match(/sourceBootGapNote\(/g)?.length, 1, 'the gap note is computed once')

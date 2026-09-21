@@ -61,6 +61,9 @@ export type GitActionErrorCode =
   | 'refresh-failed'
   /** The instance does not serve the gitWorktree Remote (404). */
   | 'git-host-not-loaded'
+  /** The shared carrier answered a business-level refusal (`rpc-failed`): its
+   *  message can come from the carrier's own fallback, so the code needs copy. */
+  | 'rpc-failed'
   /** Host refusals with dedicated copy (they arrive as GitWorktreeRpcError). */
   | 'running-agent'
   | 'worktree-invalid'

@@ -164,7 +164,7 @@ export function isInstanceUnavailable(err: unknown): boolean {
  * project the honest "seed/sync then restart dsh" message instead of a
  * generic transport failure.
  */
-class InstanceDomainMissingError extends Error {
+export class InstanceDomainMissingError extends Error {
   constructor(message: string) {
     super(message)
     this.name = 'InstanceDomainMissingError'
@@ -352,14 +352,20 @@ class InstanceApiClient {
    * @param endpoint - slash endpoint on this instance (`openInApp/apps`).
    * @param args - argument map, i.e. the remote method's named parameters.
    * @param signal - optional caller cancellation, combined with the budget.
+   * @param options - optional per-call overrides, the same face the namespaced
+   *  accessors use: a longer `timeoutMs` for a slow mutation domain and
+   *  `notFoundAsDomainMissing` when a 404 may mean the chamber host domain is
+   *  absent from the runtime tree (design 24 §5). Defaults keep the 30s budget
+   *  and the plain transport-failure classification.
    * @returns the flat `{ok,value}|{ok,error}` envelope; transport failures throw.
    */
   async callUnary(
     endpoint: string,
     args: Readonly<Record<string, unknown>>,
     signal?: AbortSignal,
+    options: CallOptions = {},
   ): Promise<UnaryResult<unknown>> {
-    return this.call(endpoint, { args }, signal)
+    return this.call(endpoint, { args }, signal, options)
   }
 
   /**

@@ -190,8 +190,11 @@ rows，不改变官方 web profile 的其它组合层。
     GetAlignedPointerFromEmbedderData symbol"），`--expose-internals` 的官方 require 路径可用；
   - 兜底 → PATH 搜索 `node` → 常见安装位置（homebrew、`/usr/local/bin`、
     nvm/volta/fnm） → 最终退回裸名 `node`（仅作诊断兜底）。
-- **cwd 决策**：以 `dshWorkspacePath`（桌面打包态 `vendor/dsh` 或开发态 `ref-dsh` 检出根）为 cwd spawn，
-  spawn 的 dsh 以该工作根解析自身入口；会话级工作区由前端 runtime 决定，与宿主 cwd 解耦。
+- **cwd 决策**：installed 布局（桌面打包态 `vendor/dsh` 运行时树）**不以安装树为 cwd**——就地替换会让宿主持有
+  已 unlink 的工作目录（2026-09-17 `uv_cwd ENOENT` 事故），改用 `<stateDir>/dsh-home`（控制面所有、0700、
+  宿主整个生命周期稳定存在）为 cwd；source 布局保持 `dshWorkspacePath`（开发态 `ref-dsh` 检出根）为 cwd，
+  其 loader（`--import tsx/esm`）经工作区自身 `node_modules` 解析。入口始终以绝对路径传入，两分支都不依赖
+  cwd 解析 dsh CLI；会话级工作区由前端 runtime 决定，与宿主 cwd 解耦。
 - **环境固定**（确定性 + 隐私）：`DSH_TELEMETRY_DISABLED=1`（任意非空值即禁用）；
   `DSH_PERMISSION_MODE=workspace-write`（显式固定默认）；
   `SSH_CONNECTION=127.0.0.1 0 127.0.0.1 0`（目录选择交互 pin：托管宿主恒以应用内目录对话框

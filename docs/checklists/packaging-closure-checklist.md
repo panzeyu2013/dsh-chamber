@@ -47,7 +47,7 @@ glob即闭包：`packages/desktop/package.json` 的 `build.files` 用包根三�
 1. 新增根级运行模块不得命中下面的9条negate。测试的常规位置是 `packages/desktop/test/<domain>/`（包根三条glob不收取）；例外：9个Swift/POC专属测试（bridge-manifest / bridge-shim / bridge-shim-surface / chamber-lock / chamber-lock-wiring / electron-free-gate / node-edges / sidecar-stdio / update-headless）留在包根——由 `scripts/test.mjs` 清单显式接线、`ci.yml` 的 `test-macos` 桥面锁步步骤按包根路径调用，故 `!*.test.ts` negate载荷相关（勿删）；
 2. `main.ts` / `preload.cts` 的传递import闭包不得指到 `scripts/`、`vendor/` 或未编译的 `node_modules/@dsh-chamber/control-plane/**`（见 §1、§2）。
 
-被收取的根级模块（2026-12 清理：`registry-password-commit.ts` 已删除、`gateway-session-test-hooks.ts` 移入 `test/support/`、`sidecar-stub.ts` 移入 negate 不随包；`credential-identity.ts` / `describe-error.ts` / `lockfile-facts-memo.ts` / `transport-reconnect.ts` / `update-discovery.ts` 为后续批次新增运行模块，计数 51 → 54）：
+被收取的根级模块（2026-12 清理：`registry-password-commit.ts` 已删除、`gateway-session-test-hooks.ts` 移入 `test/support/`、`sidecar-stub.ts` 移入 negate 不随包；`credential-identity.ts` / `describe-error.ts` / `lockfile-facts-memo.ts` / `transport-reconnect.ts` / `update-discovery.ts` 为后续批次新增运行模块，计数 51 → 54；`runtime-startup-host.ts`（运行时启动事务宿主抽取）与 `shell-ipc-*.ts`（shell-core 域拆分）为 2026-12 结构批次新增运行模块，计数 54 → 63）：
 
 `main.ts`、`preload.cts`、`control-plane-module.ts`、`ipc-events.ts`、
 `apply-now-gate.ts`、`audit-log.ts`、`badge.ts`、`bounded-lines.ts`、
@@ -59,8 +59,10 @@ glob即闭包：`packages/desktop/package.json` 的 `build.files` 用包根三�
 `lockfile-facts-memo.ts`、`node-edges.ts`、
 `notifications.ts`、`open-in.ts`、`owner-only-secret-file.ts`、`plugin-sync.ts`、
 `plugin-tarball.ts`、`pnpm-launcher.ts`、
-`renderer-trust.ts`、`runtime-probe-detail.ts`、`runtime-tree-check.ts`、`sanitize-error.ts`、
-`shell-core.ts`、`sidecar-console-redirect.ts`、`sidecar-ctx.ts`、
+`renderer-trust.ts`、`runtime-probe-detail.ts`、`runtime-startup-host.ts`、`runtime-tree-check.ts`、`sanitize-error.ts`、
+`shell-core.ts`、`shell-ipc-connections.ts`、`shell-ipc-open-in.ts`、`shell-ipc-plugins-gateway.ts`、
+`shell-ipc-plugins-local.ts`、`shell-ipc-plugins-ssh.ts`、`shell-ipc-runtime.ts`、`shell-ipc-settings.ts`、
+`shell-ipc-update.ts`、`sidecar-console-redirect.ts`、`sidecar-ctx.ts`、
 `sidecar-entry.ts`、`sidecar-exit-codes.ts`、`ssh-apply-rows.ts`、`ssh-config.ts`、
 `ssh-plugin-journal.ts`、`ssh-provider.ts`、`store-file-hygiene.ts`、
 `transport-manager.ts`、`transport-provider.ts`、`transport-reconnect.ts`、
@@ -74,7 +76,7 @@ count=$(ls -1 packages/desktop/*.ts packages/desktop/*.cts packages/desktop/*.mj
   | grep -vE '/(loopback-http-test-server|sidecar-stub)\.ts$' \
   | grep -vc '\.test\.ts$')
 echo "root-level collected modules: $count"
-test "$count" = 54 || { echo "STALE: 名单/计数需同步（见上方 54 个）"; exit 1; }
+test "$count" = 63 || { echo "STALE: 名单/计数需同步（见上方 63 个）"; exit 1; }
 ```
 
 **例外名单 = `build.files` 的9条negate（勿删；顺序同package.json）**：

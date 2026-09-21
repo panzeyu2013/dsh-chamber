@@ -59,6 +59,7 @@
 import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import clsx from 'clsx'
+import { chamberBadgeClass, categoryLabel, isActionable, kindLabel, manageStatusClass, remoteStatusClass, roleBadgeClass, roleLabel, type CategoryFilter, type ManageStatus, type PluginPhase, type RemoteListStatus, type RemoteListTone, type RestartNote, type StatusFilter, type ViewPhase } from './plugin-dialog-status.ts'
 import { Button, IconRefreshOutline16, IconTrashOutline16, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 // The page-owned restart→reload completion (design 18 §3.6 item 8, sidebar shared
 // face): a restart-to-apply refreshes the host's plugin mounts, but this window
@@ -105,12 +106,12 @@ import { runManagedRestart } from './restart-action.ts'
 import {
   classifyGatewayApplyResult, classifySshApplyResult, partialCounts, partialTextOf, pluginRowsOf, projectInstalledRows, sshSyncableDependencies,
   projectTasks, undoForLatest,
-  type InstalledRowView, type PluginRowRoleShape, type TaskRow,
+  type InstalledRowView, type TaskRow,
 } from './plugin-model.ts'
 import { loadPluginInventory, type PluginInventorySnapshot } from './plugin-inventory-api.ts'
 import {
   computePluginDiff, defaultChecked, isDifferenceRow, rowAddArg,
-  type PluginDiff, type PluginRow, type PluginRowKind,
+  type PluginDiff, type PluginRow, 
 } from './plugin-diff.ts'
 import {
   deriveChamberRows,
@@ -118,7 +119,6 @@ import {
   sshChamberGates,
   thirdPartyEntries,
   thirdPartyLiveState,
-  type ChamberBadgeTone,
   type ChamberRowDescriptor,
   type ThirdPartyLiveState,
 } from './plugin-inventory-text.ts'
@@ -128,124 +128,6 @@ import css from './ConnectionsSection.module.css'
 /** The §7.2 add-spec whitelist: `name`, `@scope/name`, or `name@<safe version>`. */
 const ADD_SPEC = /^(@[a-zA-Z0-9][a-zA-Z0-9._-]*\/)?[a-zA-Z0-9][a-zA-Z0-9._-]*(@(\^|~)?([0-9A-Za-z][0-9A-Za-z._+-]*|latest|next))?$/
 
-type PluginPhase = 'loading' | 'error' | 'ready' | 'applying' | 'done'
-type CategoryFilter = 'all' | 'bundle' | 'plain' | 'client'
-type StatusFilter = 'diff' | 'all'
-type ViewPhase = 'loading' | 'error' | 'ready'
-
-/** Tone of the remote-list operation status line (design 21 §6.6 list tab). */
-type RemoteListTone = 'ok' | 'warn' | 'error'
-
-/** One operation outcome line (undo / row-remove executed outcomes). */
-interface RemoteListStatus {
-  tone: RemoteListTone
-  text: string
-}
-
-/** Remote-list status tone → the shared copy class it renders with. */
-function remoteStatusClass(tone: RemoteListTone): string {
-  switch (tone) {
-    case 'ok': return css.hint
-    case 'warn': return css.pluginWarn
-    default: return css.error
-  }
-}
-
-/** Tone of the gateway management-zone operation status line (remove /
- *  undo outcomes — the ssh modal's RemoteListTone equivalent). */
-type ManageTone = 'ok' | 'warn' | 'error'
-
-/** One management-zone outcome line (row remove / undo executed outcomes). */
-interface ManageStatus {
-  tone: ManageTone
-  text: string
-}
-
-/** Tone of the restart-to-apply outcome line (two-tone pair, mirroring the
- *  connection card's restart note): 'error' renders css.error + role="alert";
- *  'ok' renders css.hint + role="status". */
-type RestartNote = { tone: 'ok' | 'error'; text: string }
-
-/** Management status tone → the shared copy class it renders with. */
-function manageStatusClass(tone: ManageTone): string {
-  switch (tone) {
-    case 'ok': return css.hint
-    case 'warn': return css.pluginWarn
-    default: return css.error
-  }
-}
-
-/** Row-kind → localized label key. */
-function kindLabel(kind: PluginRowKind): SettingsConnectionsKey {
-  switch (kind) {
-    case 'missing': return 'pluginsRowAdd'
-    case 'update': return 'pluginsRowUpdate'
-    case 'extra': return 'pluginsRowRemove'
-    case 'materialize': return 'pluginsRowMaterialize'
-    case 'unsyncable': return 'pluginsRowUnsyncable'
-    default: return 'pluginsConsistent'
-  }
-}
-
-/** A row's category badge: bundle / client / plain. */
-function categoryLabel(category: PluginRow['category']): SettingsConnectionsKey {
-  switch (category) {
-    case 'bundle': return 'pluginsCatBundle'
-    case 'client': return 'pluginsCatClient'
-    default: return 'pluginsCatPlain'
-  }
-}
-
-/** Row-role badge label key (design 21 §6.11.5): the role is the BACKEND's
- *  projection (`rows[].role`) — the dialog renders it, never re-derives it.
- *  null for 'unknown': no label is invented for a role the backend could not
- *  classify (such a row renders without a role badge, still fully visible). */
-function roleLabel(role: PluginRowRoleShape): SettingsConnectionsKey | null {
-  switch (role) {
-    case 'composition': return 'pluginsRoleComposition'
-    case 'seed': return 'pluginsRoleSeed'
-    case 'layer': return 'pluginsRoleLayer'
-    case 'third-party': return 'pluginsRoleThirdParty'
-    case 'materialized': return 'pluginsRoleMaterialized'
-    default: return null
-  }
-}
-
-/** Role badge → the EXISTING category-badge CSS vocabulary (no new CSS):
- *  composition reuses the filled bundle tone, the chamber seed the warn-tint
- *  client tone, everything else the muted plain pill. */
-function roleBadgeClass(role: PluginRowRoleShape): string {
-  switch (role) {
-    case 'composition': return css.pluginKindBundle
-    case 'seed': return css.pluginKindClient
-    default: return css.pluginKindPlain
-  }
-}
-
-/** Whether a row has a checkbox (the four actionable kinds). */
-function isActionable(kind: PluginRowKind): boolean {
-  return isDifferenceRow(kind)
-}
-
-/** Chamber badge tone → the shared .badge pill family (plan 24 B1.5 reuses
- *  the .badge vocabulary: ok = filled success, warn = outlined warn, danger =
- *  filled error, muted = plain pill). */
-function chamberBadgeClass(tone: ChamberBadgeTone): string {
-  switch (tone) {
-    case 'ok': return clsx(css.badge, css.badgeOk)
-    case 'warn': return clsx(css.badge, css.badgeWarn)
-    case 'danger': return clsx(css.badge, css.badgeBad)
-    default: return css.badge
-  }
-}
-
-/**
- * The ssh remote-side chamber badge now lives in plugin-inventory-text.ts
- * (sshChamberBadge) — the row derivation needs it, and that module is the
- * locale-free projection the plain-node suite covers.
- */
-
-/** The dialog target descriptor the four card kinds build (plan 24 B1.1). */
 export type PluginDialogTarget =
   | { kind: 'local' }
   | { kind: 'ssh'; spec: SshInstanceSpec }

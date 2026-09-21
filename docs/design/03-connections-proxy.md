@@ -139,16 +139,15 @@
   renderer**——renderer 只见 localPort / phase 投影（05 §7.4；直连端点仅主进程持有，
   17 §9.3）。
 - **连接/exec generation**：`serviceName` 与 `remoteDshHome` 的编辑同时属于 transport 与 exec identity
-  变化。主进程先提升 generation/`execEpoch`，撤销旧 live transport、重连/探针与
+  变化（字段集单源 = `packages/desktop/credential-identity.ts`）。主进程先提升 generation/`execEpoch`，撤销旧 live transport、重连/探针与
   全部 exec child（SIGTERM→SIGKILL），再按旧连接是否非 idle 决定以新参数
   重启；多步 exec 每次下一次 spawn 前复验 generation，迟到日志、状态投影、`serviceActive`
   与结果都不能跨代提交。kind/serviceName 变化还会把旧 `serviceActive` 复位为未知。
 - **IPC 白名单**（renderer ↔ main，preload 限定）：全集见 05 §7.4（另含插件编排面 `desktop_ssh_plugin_*`、
   `restart_service`、`seed_host_graph`、`status_changed` 等，不再枚举）。要点：
   `desktop_ssh_save_connection` 是 add/edit/非空凭据写的唯一入口；删除只走精确 id-addressed
-  `desktop_ssh_delete_connection(id)`（不存在 id 为幂等 no-op）；legacy `desktop_ssh_instances_set` 只
-  接受与当前规范化 roster 同长度、同顺序、逐字段完全相同的 exact no-op，任何删除/add/edit/reorder 都
-  拒绝；三个 legacy 单项 setter `desktop_ssh_set_password`/`desktop_gateway_set_token`/
+  `desktop_ssh_delete_connection(id)`（不存在 id 为幂等 no-op）；三个 legacy 单项 setter
+  `desktop_ssh_set_password`/`desktop_gateway_set_token`/
   `desktop_gateway_set_password` 均只接受 clear（主进程内存 + 0600 文件兜底，05 §8 例外）、
   `desktop_ssh_config_list`（`~/.ssh/config` 自动发现，非秘密投影：alias/hostName/user/port；SSH config
   中的 IdentityFile/ProxyCommand/凭据材料绝不投影 renderer；连接表单瞬时 write-only 凭据例外仍按上条事务处理）。

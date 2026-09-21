@@ -564,6 +564,7 @@ var ArchiveCleanupCore = class {
       }
     }
     const clearIds = [.../* @__PURE__ */ new Set([...completedRoots, ...coveredArchivedMembers, ...sweptOrphanMembers])].filter((id) => !protectedIds.has(id));
+    const clearIdSet = new Set(clearIds);
     let liveNow = /* @__PURE__ */ new Set();
     let liveReadFailed = false;
     if (clearIds.length > 0) {
@@ -577,16 +578,17 @@ var ArchiveCleanupCore = class {
       }
     }
     for (const root of completedRoots) {
-      if (!clearIds.includes(root) || !liveNow.has(root)) continue;
+      if (!clearIdSet.has(root) || !liveNow.has(root)) continue;
       residentRetainedRoots.push(root);
       forcedLoaded += 1;
     }
     const writeIds = liveReadFailed ? [] : clearIds.filter((id) => !liveNow.has(id));
+    const writeIdSet = new Set(writeIds);
     let clearedOrphanMembers = 0;
     if (clearIds.length > 0) {
       try {
         if (writeIds.length > 0) await this.host.removeArchivedSessionIds(writeIds);
-        clearedOrphanMembers = sweptOrphanMembers.filter((id) => writeIds.includes(id)).length;
+        clearedOrphanMembers = sweptOrphanMembers.filter((id) => writeIdSet.has(id)).length;
       } catch (error) {
         if (!(error instanceof ArchiveCleanupError)) throw error;
         recordError("", "archive-set", error.message);
@@ -668,6 +670,12 @@ function requireRegistrySurface(registry) {
 }
 function assertHostSurface(ctx) {
   requireRegistrySurface(ctx.workspaceRegistry);
+  if (typeof ctx.agents?.list !== "function" || typeof ctx.sessions?.list !== "function") {
+    throw new ArchiveCleanupError(
+      "registry-unreadable",
+      "archiveCleanup: the agents/sessions liveness surface is not mounted with list()"
+    );
+  }
   const query = ctx.sessionQuery;
   const persistence = ctx.sessionPersistence;
   const canEnumerate = query !== void 0 && typeof query.listSessions === "function" || persistence !== void 0 && typeof persistence.list === "function";
@@ -681,7 +689,21 @@ function assertHostSurface(ctx) {
 function liveSessionFacts(ctx) {
   const running = /* @__PURE__ */ new Set();
   const loaded = /* @__PURE__ */ new Set();
-  for (const agent of ctx.agents?.list?.() ?? []) {
+  const listAgents = ctx.agents?.list;
+  if (typeof listAgents !== "function") {
+    throw new ArchiveCleanupError(
+      "registry-unreadable",
+      "archiveCleanup: the agents service is not mounted with list() \u2014 refusing the read (a missing liveness face must never read as idle)"
+    );
+  }
+  const agentRows = listAgents.call(ctx.agents);
+  if (!Array.isArray(agentRows)) {
+    throw new ArchiveCleanupError(
+      "registry-unreadable",
+      "archiveCleanup: agents.list() did not answer an array \u2014 refusing the read (a drifted liveness shape must never read as idle)"
+    );
+  }
+  for (const agent of agentRows) {
     if (agent === null || typeof agent !== "object" || typeof agent.id !== "string") {
       throw new ArchiveCleanupError(
         "registry-unreadable",
@@ -699,14 +721,21 @@ function liveSessionFacts(ctx) {
     loaded.add(id);
     if (status === "running") running.add(id);
   }
-  const sessions = ctx.sessions?.list?.();
-  if (sessions !== void 0 && !Array.isArray(sessions)) {
+  const listSessions = ctx.sessions?.list;
+  if (typeof listSessions !== "function") {
+    throw new ArchiveCleanupError(
+      "registry-unreadable",
+      "archiveCleanup: the sessions service is not mounted with list() \u2014 refusing the read (a missing live-store face would hide attached sessions from the loaded guard)"
+    );
+  }
+  const sessions = listSessions.call(ctx.sessions);
+  if (!Array.isArray(sessions)) {
     throw new ArchiveCleanupError(
       "registry-unreadable",
       "archiveCleanup: sessions.list() did not answer an array \u2014 refusing the read (a drifted live-store shape would hide attached sessions from the loaded guard)"
     );
   }
-  for (const session of sessions ?? []) {
+  for (const session of sessions) {
     if (session === null || typeof session !== "object" || typeof session.id !== "string") {
       throw new ArchiveCleanupError(
         "registry-unreadable",

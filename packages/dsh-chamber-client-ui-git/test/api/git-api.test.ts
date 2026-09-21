@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
 import {
   decodeCreateValue, decodeRemoveValue, decodeRollbackCreateValue, GitWorktreeRpcError, gitWorktreeApi,
   isAmbiguousGitRpcFailure, isDeterministicGitRejection,
@@ -9,8 +10,14 @@ import { HEAD, PREVIEW_BASE, REPO_ID, WORKTREE_ID } from '../support/fixtures.ts
 
 const PREVIEW: PreviewCreateResult = { ...PREVIEW_BASE, previewToken: 'preview-fixed' }
 
-function response(domain: unknown): Response {
-  return new Response(JSON.stringify({ result: { ok: true, value: domain } }), {
+/**
+ * One carrier envelope (2026-09 transport convergence): the git client posts
+ * through the shared sidebar carrier, whose `server-response` requires the
+ * rpcId to ECHO the request body — a mismatch rejects before any git decode.
+ */
+function carrierEnvelope(requestBody: string, result: unknown): Response {
+  const body = JSON.parse(requestBody) as { rpcId?: string }
+  return new Response(JSON.stringify({ type: 'server-response', rpcId: body.rpcId, result }), {
     status: 200,
     headers: { 'content-type': 'application/json' },
   })
@@ -32,9 +39,13 @@ test('snapshot sends exact no-argument Typert args while mutations use the one n
   await withFetch((async (_url: string | URL | Request, init?: RequestInit) => {
     const body = JSON.parse(String(init?.body))
     bodies.push(body)
-    return response({
+    return carrierEnvelope(String(init?.body), {
       ok: true,
-      value: body.method === 'gitWorktree/snapshot' ? { repos: [], errors: [] } : PREVIEW,
+      // The transport result carries the host domain's own envelope.
+      value: {
+        ok: true,
+        value: body.method === 'gitWorktree/snapshot' ? { repos: [], errors: [] } : PREVIEW,
+      },
     })
   }) as typeof fetch, async () => {
     await gitWorktreeApi.snapshot('local')
@@ -46,12 +57,16 @@ test('snapshot sends exact no-argument Typert args while mutations use the one n
   assert.deepEqual(bodies[1].payload, {
     args: { input: { sourceWorkspaceId: 'ws-1', basename: 'feature', branch: { kind: 'new', name: 'feature' } } },
   })
+  // The shared carrier owns the envelope, the endpoint spelling and the base path.
+  assert.equal(bodies[0].type, 'client-request')
+  assert.equal(bodies[0].method, 'gitWorktree/snapshot')
+  assert.equal(typeof bodies[0].rpcId, 'string')
 })
 
 test('all methods unwrap the explicit domain result and preserve stable domain error fields', async () => {
-  await withFetch((async () => response({
-    ok: false,
-    error: { code: 'preview-stale', message: 'preview moved', retryable: false, details: { field: 'head' } },
+  await withFetch((async (_url: string | URL | Request, init?: RequestInit) => carrierEnvelope(String(init?.body), {
+    ok: true,
+    value: { ok: false, error: { code: 'preview-stale', message: 'preview moved', retryable: false, details: { field: 'head' } } },
   })) as typeof fetch, async () => {
     await assert.rejects(
       gitWorktreeApi.create('local', { previewToken: 'p', operationId: 'op' }, PREVIEW),
@@ -63,6 +78,95 @@ test('all methods unwrap the explicit domain result and preserve stable domain e
         return true
       },
     )
+  })
+})
+
+test('missing domain envelope fails ambiguous instead of masquerading as a successful value', async () => {
+  await withFetch((async (_url: string | URL | Request, init?: RequestInit) => carrierEnvelope(
+    String(init?.body),
+    { ok: true, value: { repos: [], errors: [] } },
+  )) as typeof fetch, async () => {
+    await assert.rejects(
+      gitWorktreeApi.snapshot('local'),
+      (error: unknown) => error instanceof GitWorktreeRpcError && error.code === 'invalid-domain-result',
+    )
+  })
+})
+
+test('a 404 from the gitWorktree namespace maps to a definitive host-not-loaded error', async () => {
+  await withFetch((async () => new Response('not found', { status: 404 })) as typeof fetch, async () => {
+    await assert.rejects(
+      gitWorktreeApi.snapshot('local'),
+      (error: unknown) => {
+        assert.ok(error instanceof GitWorktreeRpcError)
+        assert.equal(error.code, 'git-host-not-loaded')
+        // A missing host package is NOT ambiguous: retrying the same mutation
+        // cannot help until the instance loads the Remote, so recovery entries
+        // must not be minted from it.
+        assert.equal(isAmbiguousGitRpcFailure(error), false)
+        return true
+      },
+    )
+  })
+})
+
+test('a carrier transport failure is ambiguous (the mutation may have committed)', async () => {
+  await withFetch((async () => { throw new TypeError('fetch failed') }) as typeof fetch, async () => {
+    await assert.rejects(gitWorktreeApi.snapshot('local'), (error: unknown) => {
+      assert.ok(error instanceof GitWorktreeRpcError)
+      assert.equal(error.code, 'http-error')
+      assert.match(error.message, /fetch failed/)
+      assert.equal(isAmbiguousGitRpcFailure(error), true)
+      return true
+    })
+  })
+})
+
+test('the carrier rejects a drifted envelope before the git domain decode', async () => {
+  await withFetch((async () => new Response(JSON.stringify({
+    type: 'server-response',
+    rpcId: 'not-the-request-rpcId',
+    result: { ok: true, value: { ok: true, value: { repos: [], errors: [] } } },
+  }), { status: 200 })) as typeof fetch, async () => {
+    await assert.rejects(gitWorktreeApi.snapshot('local'), (error: unknown) => {
+      assert.ok(error instanceof GitWorktreeRpcError)
+      assert.equal(error.code, 'http-error')
+      assert.match(error.message, /rpcId mismatch/)
+      assert.equal(isAmbiguousGitRpcFailure(error), true)
+      return true
+    })
+  })
+})
+
+test('a carrier RPC-layer refusal keeps the rpc-failed vocabulary and its details', async () => {
+  await withFetch((async (_url: string | URL | Request, init?: RequestInit) => carrierEnvelope(
+    String(init?.body),
+    { ok: false, error: { code: 'internal', message: 'remote threw', details: { phase: 'open' } } },
+  )) as typeof fetch, async () => {
+    await assert.rejects(gitWorktreeApi.snapshot('local'), (error: unknown) => {
+      assert.ok(error instanceof GitWorktreeRpcError)
+      assert.equal(error.code, 'rpc-failed')
+      // GitWorktreeRpcError.message carries the code prefix (unchanged shape).
+      assert.equal(error.message, 'rpc-failed: remote threw')
+      assert.deepEqual(error.details, { phase: 'open' })
+      assert.equal(isAmbiguousGitRpcFailure(error), true)
+      return true
+    })
+  })
+})
+
+test('the not-ready 503 class stays an ambiguous transport failure', async () => {
+  await withFetch((async () => new Response(JSON.stringify({
+    code: 'instance_unavailable',
+    error: 'the instance is not ready',
+  }), { status: 503 })) as typeof fetch, async () => {
+    await assert.rejects(gitWorktreeApi.snapshot('local'), (error: unknown) => {
+      assert.ok(error instanceof GitWorktreeRpcError)
+      assert.equal(error.code, 'http-error')
+      assert.match(error.message, /not ready/)
+      assert.equal(isAmbiguousGitRpcFailure(error), true)
+      return true
+    })
   })
 })
 
@@ -140,31 +244,15 @@ test('rollback decoder correlates the complete locally retained create facts', (
   ))
 })
 
-test('missing domain envelope fails ambiguous instead of masquerading as a successful value', async () => {
-  await withFetch(
-    (async () => new Response(JSON.stringify({ result: { ok: true, value: { repos: [], errors: [] } } }), { status: 200 })) as typeof fetch,
-    async () => {
-      await assert.rejects(
-        gitWorktreeApi.snapshot('local'),
-        (error: unknown) => error instanceof GitWorktreeRpcError && error.code === 'invalid-domain-result',
-      )
-    },
-  )
-})
-
-test('a 404 from the gitWorktree namespace maps to a definitive host-not-loaded error', async () => {
-  await withFetch((async () => new Response('not found', { status: 404 })) as typeof fetch, async () => {
-    await assert.rejects(
-      gitWorktreeApi.snapshot('local'),
-      (error: unknown) => {
-        assert.ok(error instanceof GitWorktreeRpcError)
-        assert.equal(error.code, 'git-host-not-loaded')
-        // A missing host package is NOT ambiguous: retrying the same mutation
-        // cannot help until the instance loads the Remote, so recovery entries
-        // must not be minted from it.
-        assert.equal(isAmbiguousGitRpcFailure(error), false)
-        return true
-      },
-    )
-  })
+test('the git transport is the shared carrier: no self-made fetch envelope remains', () => {
+  const source = readFileSync(new URL('../../src/shared/git-api.ts', import.meta.url), 'utf8')
+  // Comment-stripped: the lock must be satisfied by CODE, never by prose.
+  const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  assert.doesNotMatch(code, /fetch\(/, 'git-api must not call fetch directly')
+  assert.doesNotMatch(code, /client-request/, 'the client-request envelope belongs to the carrier')
+  assert.doesNotMatch(code, /AbortSignal\.timeout/, 'the timeout budget belongs to the carrier')
+  assert.doesNotMatch(code, /rpcId/, 'rpcId correlation belongs to the carrier')
+  assert.match(code, /getInstanceClient\(sourceId\)\.callUnary\(/, 'the shared carrier is the only transport')
+  assert.match(code, /timeoutMs: RPC_TIMEOUT_MS/, 'the 60s budget must be handed to the carrier')
+  assert.match(code, /notFoundAsDomainMissing: true/, 'the 404 domain discrimination must be requested')
 })

@@ -125,8 +125,10 @@ ChamberSettings.sessionTodo: {
   检查路径）。
 - 设计 09 §5（设置面装载边界）：完整桥接修订后设置面**不装载插件**，组装诊断块随之退役；**这不是「插件提级」**
   （§D2 仍推迟不排期），提级指把官方 `settings.section` 的 plugins 段抬成独立入口。
-- 设计 05 §5：连接设置插件（`settings.section` id `connections`）注册不变；chamber 固定入口是壳层结构，
-  不新增官方 `settings.section` 注册。
+- 设计 05 §5：连接页是设置壳的**固定 nav 入口**（`__connections`，分隔线之下、不占 ledger order），**不是**
+  官方 `settings.section` 注册——id `connections` 的 host-ctx 注册已随完整桥接修订移除
+  （`packages/dsh-chamber-client-ui-settings-connections/src/client/index.ts` 只提供分节组件与字典命名空间）；
+  该格式的注册保留给 chamber 自研分节「dsh 运行时」（设置壳在该来源自己的 boot ctx 上注册）。
 - 设计 13（插件管理）：IPC 面不动，视图维持现状。
 
 ## 4. i18n 与验证门

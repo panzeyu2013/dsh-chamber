@@ -19,7 +19,9 @@ import type { SessionCreationOrigin } from '../../src/shared/session-create-ledg
 const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
 const MUTATIONS = read('../../src/shared/session-mutations.ts')
 const BRIDGE = read('../../src/shared/aggregate-store.ts')
-const SIDEBAR = read('../../src/client/SidebarRoot.tsx')
+// 2026-12 split: the sidebar create call site moves with its hook; the
+// contract reads the shell plus the modules that now own the locked text.
+const SIDEBAR = read('../../src/client/SidebarRoot.tsx') + read('../../src/client/sidebar-root-sessions.ts')
 const GIT = read('../../../dsh-chamber-client-ui-git/src/shared/coordinator.ts')
 
 function entry(sourceId: string, origin: SessionCreationOrigin, blank = true) {

@@ -376,7 +376,14 @@ test('wiring: the single funnel publishes every workspace fact right after its w
   // The sidebar's three call sites go THROUGH the funnel and publish nothing themselves — one
   // producer per fact. 2026-09-11 upstream-alignment T2b: the delete call lives in the ACCEPTED
   // in-app confirm, so nothing deletes before the user accepts (ordering unchanged).
-  const sidebar = readFileSync(new URL('../../src/client/SidebarRoot.tsx', import.meta.url), 'utf8')
+  // 2026-12 split: the accepted-confirm delete handler now lives in
+  // sidebar-root-dialogs.tsx and the shared rename commit in
+  // sidebar-root-menus.ts; the contract reads the shell plus those modules.
+  const sidebar = [
+    readFileSync(new URL('../../src/client/SidebarRoot.tsx', import.meta.url), 'utf8'),
+    readFileSync(new URL('../../src/client/sidebar-root-dialogs.tsx', import.meta.url), 'utf8'),
+    readFileSync(new URL('../../src/client/sidebar-root-menus.ts', import.meta.url), 'utf8'),
+  ].join('\n')
   const root = sidebar.replace(/\s+/g, ' ')
   const acceptAt = root.indexOf('const confirmDeleteWorkspace = ()')
   const deleteAt = root.indexOf('await deleteWorkspaceForSource(target.sourceId, target.workspaceId, path)')

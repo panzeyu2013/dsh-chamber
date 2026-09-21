@@ -35,6 +35,7 @@ const GROUPS = {
     'test/boundary/audit.test.ts',
     'test/boundary/sanitize-route-error.test.ts',
     'test/boundary/dashboard-semver-lockstep.test.ts',
+    'test/boundary/chamber-assets.test.ts',
   ],
   // proxy: the single-target reverse proxy, the S0 HTML trust injection, and the full-chain unary RPC proof.
   proxy: [

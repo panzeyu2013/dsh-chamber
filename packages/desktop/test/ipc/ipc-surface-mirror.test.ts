@@ -386,7 +386,16 @@ const connectionSave = readFileSync(join(ROOT, 'packages/desktop/connection-save
  *  electron-edges.ts) preserves the lockstep strength: the handle/send sets must still equal
  *  the preload invoke/on sets, handle spellings accept both main-side spellings, and the
  *  per-test text anchors stay anchored to the union rather than one file. */
-const MAIN_SIDE_FILES = ['main.ts', 'shell-core.ts', 'electron-edges.ts']
+const MAIN_SIDE_FILES = [
+  'main.ts', 'shell-core.ts', 'electron-edges.ts',
+  // 2026-12 stage-3 域拆分：installIpcHandlers 的注册体迁入 shell-ipc-*.ts——
+  // channel 集合/唯一性断言的读取面必须与注册面同步（否则集合静默缩小）。
+  'shell-ipc-settings.ts', 'shell-ipc-connections.ts', 'shell-ipc-plugins-ssh.ts',
+  'shell-ipc-plugins-gateway.ts', 'shell-ipc-plugins-local.ts', 'shell-ipc-open-in.ts',
+  'shell-ipc-update.ts', 'shell-ipc-runtime.ts',
+  // P0-6（并发抽取）：runtime state push 现定义于 runtime-startup-host.ts。
+  'runtime-startup-host.ts',
+]
 const desktopMain = MAIN_SIDE_FILES
   .map(file => readFileSync(join(ROOT, 'packages/desktop', file), 'utf8'))
   .join('\n')

@@ -33,7 +33,6 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import clsx from 'clsx'
 import { Button, IconChevronDownOutline14, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { SettingsBridgeKey } from '../locales.ts'
 import {
   compareSemver,
   currentRuntimeSurface,
@@ -47,8 +46,6 @@ import {
   runtimeRestartAllowed,
   runtimeSelectionDirection,
   subscribeRuntimeState,
-  type RuntimeBadgeLabel,
-  type RuntimeBadgeTone,
   type RuntimeBadgeView,
   type RuntimeMetadataComponent,
   type RuntimeVersionEntry,
@@ -96,9 +93,8 @@ import {
   type GatewayConfirmFacts,
 } from './runtime-confirm-guards.ts'
 import { bridgeRestartRefusalText } from './restart-refusal.ts'
+import { RUNTIME_BADGE_KEYS, RUNTIME_BADGE_TONE_CLASS, formatTimestamp, localizeRegistryError, metadataComponentText, type RuntimeTranslate } from './runtime-display.ts'
 import css from './SettingsShell.module.css'
-
-type RuntimeTranslate = (key: SettingsBridgeKey, params?: Record<string, unknown>) => string
 
 const NPMJS = 'https://registry.npmjs.org'
 const NPMMIRROR = 'https://registry.npmmirror.com'
@@ -130,31 +126,6 @@ function errorMessage(error: unknown): string {
 /* Unified coloured status badge (2026-12): one pill vocabulary shared by the
    local and gateway branches — label keys + dsw tone classes. The badge
    names the machine state; registry verdicts were removed from the copy. */
-const RUNTIME_BADGE_KEYS: Record<RuntimeBadgeLabel, SettingsBridgeKey> = {
-  ok: 'dshRuntimeBadgeOk',
-  checking: 'dshRuntimeBadgeChecking',
-  downloading: 'dshRuntimeBadgeDownloading',
-  installing: 'dshRuntimeBadgeInstalling',
-  pending: 'dshRuntimeBadgePending',
-  applying: 'dshRuntimeBadgeApplying',
-  'rolling-back': 'dshRuntimeBadgeRollingBack',
-  restarting: 'dshRuntimeBadgeRestarting',
-  'swap-attempted': 'dshRuntimeBadgeSwapAttempted',
-  'snapshot-failed': 'dshRuntimeBadgeSnapshotFailed',
-  'restore-blocked': 'dshRuntimeBadgeRestoreBlocked',
-  blocked: 'dshRuntimeBadgeBlocked',
-  failed: 'dshRuntimeBadgeFailed',
-  error: 'dshRuntimeBadgeError',
-  metadata: 'dshRuntimeBadgeMetadata',
-}
-
-const RUNTIME_BADGE_TONE_CLASS: Record<RuntimeBadgeTone, string> = {
-  ok: css.runtimeBadgeOk,
-  busy: css.runtimeBadgeBusy,
-  warn: css.runtimeBadgeWarn,
-  danger: css.runtimeBadgeDanger,
-}
-
 function RuntimeBadge({ view, t }: { view: RuntimeBadgeView; t: RuntimeTranslate }) {
   return (
     <span className={clsx(css.runtimeBadge, RUNTIME_BADGE_TONE_CLASS[view.tone])} role="status">
@@ -171,40 +142,6 @@ function RuntimeBadge({ view, t }: { view: RuntimeBadgeView; t: RuntimeTranslate
  *  read resolves as the on-screen instance's language, not necessarily the one
  *  this settings panel is editing. The served markup defaults to zh-CN, so an
  *  unset lang falls back to zh-CN rather than the OS locale. */
-function formatTimestamp(value: string): string {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  const locale = typeof document !== 'undefined' && document.documentElement.lang !== ''
-    ? document.documentElement.lang
-    : 'zh-CN'
-  try {
-    return new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(date)
-  } catch {
-    return value
-  }
-}
-
-/** Map the main-process registry patch failures to localized copy by their
- *  stable machine-readable `code` (never by display-text matching — the main
- *  process may reword `error` without notice). Known codes become dictionary
- *  keys; anything unknown stays honest and raw. */
-function localizeRegistryError(code: string | undefined, error: string, t: RuntimeTranslate): string {
-  if (code === 'invalid-registry-origin') {
-    return t('dshRuntimeRegistryInvalidOrigin')
-  }
-  return error
-}
-
-function metadataComponentText(component: RuntimeMetadataComponent, t: RuntimeTranslate): string {
-  switch (component) {
-    case 'current': return t('dshRuntimeMetadataComponentCurrent')
-    case 'override': return t('dshRuntimeMetadataComponentOverride')
-    case 'activation-journal': return t('dshRuntimeMetadataComponentJournal')
-    case 'recovery-marker': return t('dshRuntimeMetadataComponentRecoveryMarker')
-    case 'retained-evidence': return t('dshRuntimeMetadataComponentEvidence')
-  }
-}
-
 export type { DshRuntimeSource } from './runtime-source.ts'
 import type { DshRuntimeSource } from './runtime-source.ts'
 

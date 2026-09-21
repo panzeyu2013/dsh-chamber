@@ -59,16 +59,19 @@ test('保留视图有界化的接线：判定 -> 只清 running 位 -> 进「无
 test('来源退役清理与 dismiss 剪枝都有锁（same-id 复挂不得继承旧忽略/旧水位）', () => {
   const app = stripComments(readFileSync(
     fileURLToPath(new URL('../../src/App.tsx', import.meta.url)), 'utf8'))
-  assert.match(app, /for \(const id of Object\.keys\(factsAtRef\.current\)\) \{/,
+  // 2026-12 阶段 3：剪枝收口到 source-registry.ts 内核（live 外删除 +
+  // identity-preserving），锁随之改为内核调用面；内核语义由
+  // test/lifecycle/source-registry.test.ts 行为断言承担。
+  assert.match(app, /const factsAtNext = pruneSourceRecord\(factsAtRef\.current, live\)/,
     '来源退役时必须清事实水位（否则复挂后 90s 界限按旧水位判定）')
   assert.match(
     app,
-    /setUnverified\(prev => \{\s*const next = prev\.filter\(id => servers\.some\(server => server\.id === id\)\)/,
+    /setUnverified\(prev => pruneSourceList\(prev, live\) \?\? prev\)/,
     '「无法确认」标记随来源退役清理（唯一写入口 setUnverified）',
   )
   assert.match(
     app,
-    /setDismissedStalls\(prev => \{\s*const next = prev\.filter\(id => servers\.some\(server => server\.id === id\)\)/,
+    /setDismissedStalls\(prev => pruneSourceList\(prev, live\) \?\? prev\)/,
     '忽略列表也随来源退役清理：否则同 id 新代际会被旧忽略压住（2026-12 五轮复核）',
   )
   assert.match(app, /unverifiedSourcesRef\.current = unverifiedSources/,

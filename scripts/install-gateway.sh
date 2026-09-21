@@ -305,62 +305,128 @@ prune_version_trees() {
   done
 }
 
+# --- 纯校验/比较逻辑的单一实现（B8，2026-12）--------------------------------
+# 这些判定是纯字符串/数值逻辑，此前散在 bash 里无法单测。程序文本是唯一实现：
+# install-gateway.sh 以单文件分发（curl 下来即跑），不允许 side-car 文件，因此
+# 逻辑内嵌于此；scripts/gates/install-gateway-pure.test.mjs 直接从本文件抽取
+# 这段文本在 node:vm 里执行——测的就是发出去的那份代码。改判定必须同批改测试。
+INSTALL_GATEWAY_PURE_JS=$(cat <<'INSTALL_GATEWAY_PURE_JS_EOF'
+const OPS = {}
+const RED = (message) => { console.log('\u001b[1;31m✗ ' + message + '\u001b[0m'); return 1 }
+const SEMVER = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?(\+[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$/
+OPS['valid-port'] = (value) => (/^[0-9]+$/.test(value) && Number(value) >= 1 && Number(value) <= 65535)
+  ? 0 : RED('端口必须是 1-65535 的数字')
+OPS['valid-semver'] = (value) => SEMVER.test(value)
+  ? 0 : RED('版本必须是 canonical SemVer（如 0.1.5 或 0.2.0-beta.4）')
+OPS['valid-semver-v'] = (value) => OPS['valid-semver'](String(value).replace(/^v/, ''))
+OPS['valid-bind'] = (value) => (value === '127.0.0.1' || value === '0.0.0.0')
+  ? 0 : RED('bind host 只允许 127.0.0.1（仅本机）或 0.0.0.0（全部网卡）')
+OPS['valid-origin'] = (value) => {
+  if (value === '') return 0
+  return /^https?:\/\/[A-Za-z0-9.-]+(:[0-9]+)?$/.test(value)
+    ? 0 : RED('公网地址必须是 http(s)://域名[:端口]，不含路径（如 https://gateway.example.com）')
+}
+OPS['valid-origin-required'] = (value) => value === ''
+  ? RED('反向代理形态必须填写公网域名（回车取消可改选其他访问方式）')
+  : OPS['valid-origin'](value)
+OPS['valid-ip-list'] = (value) => {
+  if (value === '') return 0
+  for (const item of String(value).replace(/[ \t]/g, '').split(',')) {
+    if (!/^[0-9]{1,3}(\.[0-9]{1,3}){3}$/.test(item)) {
+      return RED('反代 IP 必须是精确 IPv4 地址，逗号分隔（如 1.2.3.4,5.6.7.8）')
+    }
+    for (const raw of item.split('.')) {
+      // 前导零会按八进制求值（010=8 误通过、08 误报），剥零后按十进制比较（与 bash 同款）
+      const octet = raw.replace(/^0/, '')
+      if (Number.parseInt(octet === '' ? '0' : octet, 10) > 255) return RED('IPv4 每段必须在 0-255：' + item)
+    }
+  }
+  return 0
+}
+const stripZeros = (text) => { const stripped = text.replace(/^0+/, ''); return stripped === '' ? '0' : stripped }
+OPS['numstr-lt'] = (a, b) => {
+  const left = stripZeros(String(a)), right = stripZeros(String(b))
+  if (left.length !== right.length) return left.length < right.length ? 0 : 1
+  return left < right ? 0 : 1
+}
+const cutAt = (text, ch) => { const at = text.indexOf(ch); return at === -1 ? text : text.slice(0, at) }
+OPS['version-lt'] = (a, b) => {
+  const amain = cutAt(cutAt(String(a), '+'), '-')
+  const bmain = cutAt(cutAt(String(b), '+'), '-')
+  let ap = String(a).includes('-') ? String(a).slice(String(a).indexOf('-') + 1) : ''
+  let bp = String(b).includes('-') ? String(b).slice(String(b).indexOf('-') + 1) : ''
+  ap = cutAt(ap, '+'); bp = cutAt(bp, '+')
+  const [am1 = '0', am2 = '0', am3 = '0'] = amain.split('.')
+  const [bm1 = '0', bm2 = '0', bm3 = '0'] = bmain.split('.')
+  if (am1 !== bm1) return OPS['numstr-lt'](am1, bm1) === 0 ? 0 : 1
+  if (am2 !== bm2) return OPS['numstr-lt'](am2, bm2) === 0 ? 0 : 1
+  if (am3 !== bm3) return OPS['numstr-lt'](am3, bm3) === 0 ? 0 : 1
+  if (ap === '' && bp !== '') return 1
+  if (ap !== '' && bp === '') return 0
+  if (ap !== '' && bp !== '') {
+    let left = ap, right = bp
+    for (;;) {
+      const ia = left.split('.')[0], ib = right.split('.')[0]
+      if (ia !== ib) {
+        const na = /^[0-9]+$/.test(ia), nb = /^[0-9]+$/.test(ib)
+        if (na && nb) return OPS['numstr-lt'](ia, ib) === 0 ? 0 : 1
+        if (na) return 0
+        if (nb) return 1
+        return ia < ib ? 0 : 1
+      }
+      const aMore = left.includes('.'), bMore = right.includes('.')
+      if (!aMore) return bMore ? 0 : 1
+      if (!bMore) return 1
+      left = left.slice(left.indexOf('.') + 1); right = right.slice(right.indexOf('.') + 1)
+    }
+  }
+  return 1
+}
+OPS['foreground-record-file'] = (baseDir) => baseDir + '/run/gateway.pid'
+OPS['unit-wanted-by'] = (mode) => (mode === 'user' ? 'default.target' : (mode === 'systemd' ? 'multi-user.target' : 2))
+if (typeof globalThis.__installGatewayPureTest === 'object' && globalThis.__installGatewayPureTest !== null) {
+  Object.assign(globalThis.__installGatewayPureTest, OPS)
+} else {
+  const [op, ...args] = process.argv.slice(1)
+  const fn = OPS[op]
+  if (typeof fn !== 'function') { console.error('install-gateway pure: unknown op ' + String(op)); process.exit(2) }
+  const result = fn(...args)
+  if (typeof result === 'number') process.exit(result)
+  process.stdout.write(String(result))
+}
+INSTALL_GATEWAY_PURE_JS_EOF
+)
+install_gateway_pure() {
+  have node || { printf '\033[1;31m✗ 需要 node 才能校验输入（安装器前置依赖）\033[0m\n'; return 1; }
+  node -e "$INSTALL_GATEWAY_PURE_JS" "$@"
+}
+
 # 校验器：返回 0 = 通过；失败打印红字原因并返回 1（ask_text 进入重试循环）
 valid_port() {
-  [[ "$1" =~ ^[0-9]+$ && "$1" -ge 1 && "$1" -le 65535 ]] || {
-    printf '\033[1;31m✗ 端口必须是 1-65535 的数字\033[0m\n'; return 1
-  }
+  install_gateway_pure valid-port "${1-}" || return 1
 }
 valid_semver() {
-  [[ "$1" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?(\+[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]] || {
-    printf '\033[1;31m✗ 版本必须是 canonical SemVer（如 0.1.5 或 0.2.0-beta.4）\033[0m\n'; return 1
-  }
+  install_gateway_pure valid-semver "${1-}" || return 1
 }
 # 同 valid_semver，但先剥掉可选的 v 前缀（与交互帮助文本"可带 v 前缀"及
 # CLI --version 的 v 前缀语义一致）。dsh 版本输入（stage6）仍用不带 v 的
 # valid_semver——dsh 版本树按精确 semver 落盘，v 前缀会污染路径。
 valid_semver_v() {
-  valid_semver "${1#v}"
+  install_gateway_pure valid-semver-v "${1-}" || return 1
 }
 valid_bind() {
-  [[ "$1" == "127.0.0.1" || "$1" == "0.0.0.0" ]] || {
-    printf '\033[1;31m✗ bind host 只允许 127.0.0.1（仅本机）或 0.0.0.0（全部网卡）\033[0m\n'; return 1
-  }
+  install_gateway_pure valid-bind "${1-}" || return 1
 }
 # origin / proxy 允许留空（= 仅内网 / 无反代）
 valid_origin() {
-  [[ -z "$1" ]] && return 0
-  [[ "$1" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]] || {
-    printf '\033[1;31m✗ 公网地址必须是 http(s)://域名[:端口]，不含路径（如 https://gateway.example.com）\033[0m\n'; return 1
-  }
+  install_gateway_pure valid-origin "${1-}" || return 1
 }
 # 反向代理形态下 origin 必填（留空无法构成"反代对外"）
 valid_origin_required() {
-  [[ -n "$1" ]] || {
-    printf '\033[1;31m✗ 反向代理形态必须填写公网域名（回车取消可改选其他访问方式）\033[0m\n'; return 1
-  }
-  valid_origin "$1"
+  install_gateway_pure valid-origin-required "${1-}" || return 1
 }
 valid_ip_list() {
-  [[ -z "$1" ]] && return 0
-  # 去逗号两侧空白（"1.2.3.4, 5.6.7.8" 也可接受）
-  local item octet cleaned
-  cleaned=$(printf '%s' "$1" | tr -d ' \t')
-  local IFS=','
-  for item in $cleaned; do
-    [[ "$item" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || {
-      printf '\033[1;31m✗ 反代 IP 必须是精确 IPv4 地址，逗号分隔（如 1.2.3.4,5.6.7.8）\033[0m\n'; return 1
-    }
-    local IFS='.'
-    for octet in $item; do
-      # 前导零会按八进制求值（010=8 误通过、08 误报），剥零后按十进制比较
-      octet=${octet#0}
-      (( 10#${octet:-0} <= 255 )) || {
-        printf '\033[1;31m✗ IPv4 每段必须在 0-255：%s\033[0m\n' "$item"; return 1
-      }
-    done
-  done
-  return 0
+  install_gateway_pure valid-ip-list "${1-}" || return 1
 }
 
 # 离线包路径校验器（ask_text 第五参：失败红字原地重问，不再弹回通道菜单）。
@@ -812,62 +878,11 @@ validate_gateway_version() {
 # prerelease 整体小于正式版；同为 prerelease 时按标识符字典序（够用且诚实）。
 # 纯数字串比较(任意长度,避免 64 位回绕):剥前导零后比长度,同长比字典序
 numstr_lt() {
-  local a="$1" b="$2"
-  a=${a#"${a%%[!0]*}"}; b=${b#"${b%%[!0]*}"}
-  [[ -z "$a" ]] && a=0
-  [[ -z "$b" ]] && b=0
-  if (( ${#a} != ${#b} )); then (( ${#a} < ${#b} )) && return 0 || return 1; fi
-  [[ "$a" < "$b" ]] && return 0 || return 1
+  install_gateway_pure numstr-lt "${1-}" "${2-}"
 }
 
 version_lt() {
-  local a="$1" b="$2"
-  local LC_ALL=C    # 字典序比较钉 C locale,避免 strcoll 大小写次序漂移
-  local amain bmain ap bp
-  # 先剥 +build 元数据（validate 允许 +build；不剥会进入 10# 算术求值）再取主版本
-  amain="${a%%+*}"; amain="${amain%%-*}"
-  bmain="${b%%+*}"; bmain="${bmain%%-*}"
-  ap=""; bp=""
-  [[ "$a" == *-* ]] && ap="${a#*-}"
-  [[ "$b" == *-* ]] && bp="${b#*-}"
-  ap="${ap%%+*}"; bp="${bp%%+*}"
-  local IFS='.'
-  local am1 am2 am3 bm1 bm2 bm3
-  read -r am1 am2 am3 <<< "$amain"
-  read -r bm1 bm2 bm3 <<< "$bmain"
-  # 数值主段比较(任意长度安全)
-  if [[ "$am1" != "$bm1" ]]; then numstr_lt "$am1" "$bm1" && return 0 || return 1; fi
-  if [[ "$am2" != "$bm2" ]]; then numstr_lt "$am2" "$bm2" && return 0 || return 1; fi
-  if [[ "$am3" != "$bm3" ]]; then numstr_lt "$am3" "$bm3" && return 0 || return 1; fi
-  # 同版本号:prerelease < 正式
-  if [[ -z "$ap" && -n "$bp" ]]; then return 1; fi
-  if [[ -n "$ap" && -z "$bp" ]]; then return 0; fi
-  if [[ -n "$ap" && -n "$bp" ]]; then
-    # prerelease 标识符逐段比较：全数字段按数值（beta.10 > beta.9），
-    # 数字段 < 字母段，其余字典序
-    local ia ib
-    while :; do
-      ia="${ap%%.*}"; ib="${bp%%.*}"
-      if [[ "$ia" != "$ib" ]]; then
-        if [[ "$ia" =~ ^[0-9]+$ && "$ib" =~ ^[0-9]+$ ]]; then
-          numstr_lt "$ia" "$ib" && return 0 || return 1
-        elif [[ "$ia" =~ ^[0-9]+$ ]]; then
-          return 0     # 数字标识符 < 字母标识符
-        elif [[ "$ib" =~ ^[0-9]+$ ]]; then
-          return 1
-        else
-          [[ "$ia" < "$ib" ]] && return 0 || return 1
-        fi
-      fi
-      # 段耗尽规则：a 无剩余段而 b 有 → a < b；两者同时耗尽 → 相等
-      if [[ "$ap" != *.* ]]; then
-        if [[ "$bp" == *.* ]]; then return 0; else return 1; fi
-      fi
-      if [[ "$bp" != *.* ]]; then return 1; fi
-      ap="${ap#*.}"; bp="${bp#*.}"
-    done
-  fi
-  return 1   # 相等
+  install_gateway_pure version-lt "${1-}" "${2-}"
 }
 
 # 树内容指纹:全部普通文件按相对路径排序逐个 sha256,再聚合哈希。
@@ -1665,11 +1680,12 @@ systemd_exec_start() {
 }
 
 unit_wanted_by() {
-  case "$SERVICE_MODE" in
-    user) printf 'default.target' ;;
-    systemd) printf 'multi-user.target' ;;
-    *) die "不能为服务形态生成 systemd WantedBy：$SERVICE_MODE" ;;
-  esac
+  local out
+  if out=$(install_gateway_pure unit-wanted-by "${SERVICE_MODE:-}"); then
+    printf '%s' "$out"
+  else
+    die "不能为服务形态生成 systemd WantedBy：${SERVICE_MODE:-}"
+  fi
 }
 
 # 目录属主 uid（跟随符号链接）。必须**先试 GNU stat 的 -c**：GNU/Linux 的
@@ -1826,7 +1842,7 @@ service_identity() {
   fi
 }
 
-foreground_record_file() { printf '%s/run/gateway.pid' "$BASE_DIR"; }
+foreground_record_file() { install_gateway_pure foreground-record-file "${BASE_DIR:-}"; }
 
 foreground_identity() {
   local record pid expected extra actual

@@ -7,196 +7,46 @@
  * in-source drag ordering and ghost rows. Extracted from the SidebarRoot
  * shell; cross-cutting state/actions are consumed through useSidebarSection()
  * (sidebar-context.ts — the shell owns every store/effect/commit below and
- * provides ONE context value per render). This file owns only what is
- * per-section: the search-state mirror (shared controller), the capsule DOM
- * refs, the outside-click collapse effect, the sort-menu anchor-cleanup, and
- * the module-scope helpers only this subtree uses (status kind/label
- * mapping, the projection→local-search-snapshot rebuild, rowHalf).
+ * provides ONE context value per render). This file owns the per-section
+ * structure: the search-state mirror (shared controller), the capsule DOM
+ * refs, the outside-click collapse effect, the workspace/session composition
+ * and the sort-menu anchor-cleanup. The header, search surface, session rows
+ * and the pure helpers were split into the sibling ServerSection* /
+ * server-section-* modules (moved verbatim).
  */
-
-import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import { SESSION_SEARCH_RESULT_LIMIT } from '@deepseek-ai/dsh-api-session-controller/client'
 import {
-  IconAlarmClockOutline16, IconArchiveOutline20, IconBranchOutline16, IconChecklistOutline14,
-  IconChevronRightOutline14, IconCloseOutline16, IconEditOutline16, IconEllipsisOutline16,
-  IconFolderOpenOutline16, IconLoadingOutline16,
-  IconPersonalizationOutline16, IconPlusOutline16, IconProjectAddOutline16, IconQuestionOutline14,
-  IconSearchOutline16, IconTrashOutline16, IconWarningOutline16, Menu, StateDot, Tooltip,
+  IconBranchOutline16, IconChevronRightOutline14, IconEditOutline16, IconEllipsisOutline16,
+  IconFolderOpenOutline16, IconPlusOutline16, IconTrashOutline16, Menu,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { SidebarKey } from './locales.ts'
-import { sourceBootGapNote } from './source-boot-gap.ts'
-import { IconMonitorOutline16 } from './icons.tsx'
 import { RowHoverCard } from './RowHoverCard.tsx'
 import { chamberBridge, type ChamberServerAggregate, type ChamberServerWorkspace } from '../shared/aggregate-store.ts'
 import {
-  deriveLocalSearchMatches, mergeSearchResults, orderUngroupedSessions, reconciledSessionOrder, relativeTimeBucket,
-  runningRingVisible, sanitizeSearchQuery, SEARCH_QUERY_MAX_CODE_UNITS, workspaceAccentStyle,
+  deriveLocalSearchMatches, mergeSearchResults, orderUngroupedSessions, reconciledSessionOrder,
+  sanitizeSearchQuery, workspaceAccentStyle,
 } from '../shared/derive.ts'
-import { type InstanceSnapshot, type SearchRow } from '../shared/instance-api.ts'
+import { type SearchRow } from '../shared/instance-api.ts'
 import {
-  clearSearch, collapseSearch, expandSearch, getSearchStates, setSearchQuery, subscribeSearch,
+  collapseSearch, getSearchStates, subscribeSearch,
   type SourceSearchState,
 } from '../shared/search-state.ts'
-import { clearPendingClick, noteSessionRowClick } from '../shared/pending-click.ts'
+import { clearPendingClick } from '../shared/pending-click.ts'
 import { createPrewarmIntent, type PrewarmIntent } from '../shared/prewarm-intent.ts'
-import { MANAGED_RUNTIME_TRANSIENT_STATES } from '../shared/managed-runtime.ts'
 import { openErrorKey } from '../shared/open-outcome.ts'
 import { getSourceRepoLayouts, getWorkspaceGitFlag, hiddenByMainWorkspaceFold, isSourceGitFlagsLoaded } from '../shared/workspace-git-flags.ts'
 import { resolveWorkspaceDrop } from '../shared/workspace-drag-order.ts'
 import { sessionRowDisclosure, sessionRowWindow, SESSION_ROWS_VISIBLE_FIRST } from '../shared/session-row-window.ts'
-import { sessionRowState } from '../shared/session-row-state.ts'
-import { sourceAccentStyle, useSidebarSection, workspaceDropEnv } from './sidebar-context.ts'
+import { useSidebarSection, workspaceDropEnv } from './sidebar-context.ts'
+import { ServerSectionHeader } from './ServerSectionHeader.tsx'
+import { ServerSectionSearchCapsule, ServerSectionSearchResults } from './ServerSectionSearch.tsx'
+import { ServerSectionSessionRows } from './ServerSectionRows.tsx'
+import { ServerSectionRenameForm } from './server-section-controls.tsx'
+import { projectionToLocalSearchSnapshot, rowHalf } from './server-section-model.ts'
 import cc from './sidebar-chamber.module.css'
 
-/** Connection-status visual kind: dot colors plus the connecting spinner. */
-type SourceStatusKind = 'ok' | 'busy' | 'err' | 'idle'
-
-/**
- * Non-interactive active-Schedule marker (2026-09-11 upstream-alignment T7).
- *
- * Mirrors the official `ActiveScheduleIndicator` verbatim (vendor ui-workspace
- * Rows.tsx:284-296): a `role="img"` span carrying the localized
- * `schedule.active` copy as both its accessible name and its native title,
- * wrapping the 16px alarm-clock glyph — the enclosing row stays the only
- * action. Upstream keeps that component module-local (it is NOT exported from
- * the vendor package), so this is a markup/token mirror of it, not a second
- * behaviour: it renders only where the fact says so
- * (`ChamberServerWorkspace.sessions[].hasActiveSchedule`, projected from the
- * session's `schedule` projection — see `hasActiveScheduleOf`).
- * @param props.label - the localized `schedule.active` copy.
- * @returns the marker element.
- */
-function SessionScheduleIndicator({ label }: { label: string }) {
-  return (
-    <span className={cc.scheduleIndicator} role="img" aria-label={label} title={label}>
-      <IconAlarmClockOutline16 size={16} />
-    </span>
-  )
-}
-
-/**
- * Rebuild an InstanceSnapshot-shaped view of ONE source aggregate for the
- * LOCAL search matcher (06 §1.2 render-side merge). The render layer only
- * has the ChamberServerAggregate projection — no raw InstanceSnapshot, no
- * archivedSessionIds — so the snapshot is rebuilt from the VISIBLE rows:
- * every projected session is already post-filter (subagent-origin /
- * archived / blank-non-current rows never enter the projection), therefore
- * the archived filter gets the EMPTY set (nothing archived can be matched
- * here). Wire paths/createdAt are absent from the projection and irrelevant
- * to title/workspace-label substring matching — empty strings.
- */
-function projectionToLocalSearchSnapshot(server: ChamberServerAggregate): InstanceSnapshot {
-  return {
-    workspaces: server.workspaces.map(workspace => ({
-      workspaceId: workspace.id,
-      path: '',
-      title: workspace.title,
-      sessionIds: workspace.sessions.map(session => session.id),
-      createdAt: '',
-      updatedAt: '',
-    })),
-    sessions: server.workspaces.flatMap(workspace => workspace.sessions.map(session => ({
-      sessionId: session.id,
-      running: session.running === true,
-      blank: session.blank === true,
-      ...(session.updatedAt === undefined ? {} : { updatedAt: session.updatedAt }),
-      ...(session.title === '' ? {} : { title: session.title }),
-      // The label is what search matches on, so the resolved display title
-      // rides the local snapshot (I3): a directory-named row is searchable by
-      // the name the user actually sees.
-      displayTitle: session.displayTitle,
-    }))),
-    archivedSessionIds: [],
-  }
-}
-
-/**
- * Map the projected phase (local /health status; remote tunnel phase) to a
- * visual kind: ready → green dot; connecting/starting/restarting/degraded →
- * spinner (the reconnect cycle folds into ONE stable "trying" state — the
- * main surface must never flicker between spinner and dot on every retry
- * attempt); error/stopped/restart-exhausted → red dot; the pre-first-poll
- * placeholders (idle/unknown) → gray dot. The text itself is never
- * rendered — hover carries it (tooltip + aria-label).
- */
-function sourceStatusKind(server: ChamberServerAggregate): SourceStatusKind {
-  const phase = server.phase
-  if (phase === 'ready') return 'ok'
-  if (phase === 'connecting' || phase === 'starting' || phase === 'restarting' || phase === 'degraded') return 'busy'
-  if (phase === 'error' || phase === 'stopped' || phase === 'restart-exhausted') return 'err'
-  return 'idle'
-}
-
-
-/**
- * Header title/aria text: the managed-down reason replaces "switch to this
- * instance". Exported for the collapsed rail (2026-09-11 upstream-alignment
- * T7): its per-source dot buttons are operable controls now and must carry the
- * SAME activation contract as the wide header — one definition, no rail copy
- * that can drift.
- */
-export function sourceHeaderTitle(
-  server: ChamberServerAggregate,
-  chamberInstanceId: string | undefined,
-  t: (key: SidebarKey, params?: Record<string, string | number>) => string,
-): string | undefined {
-  if (server.id === chamberInstanceId) return undefined
-  if (server.managedRuntimeDown === true) {
-    return t('source.managedDown', { state: t(sourceStatusLabelKey(server)) })
-  }
-  // 瞬态托管态同样不可激活：title 不能还宣称"切换到该实例"（2026-12 复查 MINOR）。
-  if (server.kind === 'gateway' && (server.phase === 'starting' || server.phase === 'restarting')) {
-    return t('source.managedStarting', { state: t(sourceStatusLabelKey(server)) })
-  }
-  return t('list.activate')
-}
-
-/** Whether a source header is an activation affordance (not self, not
- *  managed-down). Exported beside {@link sourceHeaderTitle} for the rail's
- *  named source buttons (2026-09-11 upstream-alignment T7). */
-export function sourceHeaderActivatable(server: ChamberServerAggregate, chamberInstanceId: string | undefined): boolean {  // 终态停机与瞬态 starting/restarting 都不可激活：两者的壳 boot 必然 503
-  // （App 侧同样按 managedRuntimeUnusable 拒绝预热/收割），头部不应承诺切换。
-  const managedUnusable = server.managedRuntimeDown === true
-    || (server.kind === 'gateway'
-      // Shared constant, not a second literal set (2026-09 audit): the
-      // transient states live in managed-runtime.ts, and a set that grows
-      // there must reach this header without a second edit.
-      && (MANAGED_RUNTIME_TRANSIENT_STATES as readonly string[]).includes(server.phase))
-  return server.id !== chamberInstanceId && !managedUnusable
-}
-
-/** Localized status-label key for a projected phase (tooltip/aria only). */
-function sourceStatusLabelKey(server: ChamberServerAggregate): SidebarKey {
-  const phase = server.phase
-  if (phase === 'ready') return 'status.ready'
-  if (phase === 'connecting') return 'status.connecting'
-  if (phase === 'starting') return 'status.starting'
-  if (phase === 'restarting') return 'status.restarting'
-  if (phase === 'degraded') return 'status.reconnecting'
-  if (phase === 'error') return 'status.error'
-  if (phase === 'stopped') return 'status.stopped'
-  if (phase === 'restart-exhausted') return 'status.restartExhausted'
-  if (phase === 'idle') return 'status.idle'
-  return 'status.unknown'
-}
-
-/**
- * Pointer-position half of a row (insert line above or below). Must only be
- * called synchronously inside a handler: React nulls `currentTarget` on a
- * synthetic event as soon as dispatch returns, so reading it from a setState
- * updater (executed on a later render) crashes.
- */
-function rowHalf(event: { clientY: number; currentTarget: HTMLElement | null }): 'before' | 'after' {
-  // A detached row (unmounted mid-drag re-render) has no geometry — treat
-  // the pointer as being past it, never as a before-boundary (defensive).
-  if (event.currentTarget === null) return 'after'
-  const rect = event.currentTarget.getBoundingClientRect()
-  // A zero-height row (mid-drag re-render edge) has no halves — treat the
-  // pointer as being past it, never as a before-boundary (defensive).
-  if (rect.height <= 0) return 'after'
-  return event.clientY < rect.top + rect.height / 2 ? 'before' : 'after'
-}
+export { sourceHeaderActivatable, sourceHeaderTitle } from './server-section-model.ts'
 
 export function ServerSection({ server }: { server: ChamberServerAggregate }) {
   const {
@@ -206,44 +56,25 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
     renderWorkspaceGit,
     viewPrefs,
     toggleWorkspaceFold,
-    toggleSourceFold,
-    setOrderBy,
     sessionOrderOverride,
     workspaceOrderOverride,
     sessionDrag,
-    setSessionDrag,
     workspaceDrag,
     setWorkspaceDrag,
     serverDrag,
     setServerDrag,
-    commitSessionDrag,
-    commitWorkspaceDrag,
     commitServerDrag,
+    commitWorkspaceDrag,
     suppressClickRef,
     dragPressOnButtonRef,
-    sessionDropCommitted,
     workspaceDropCommitted,
-    serverDropCommitted,
-    ghostExpiry,
-    armBlankGhostForClick,
     rowErrors,
     menuOpen,
     toggleMenu,
     closeMenu,
-    sortMenuOpen,
-    setSortMenuOpen,
     renaming,
     setRenaming,
-    commitRename,
-    onOpenArchiveCleanup,
-    // 2026-09-11 review-fix finding 2 (symmetric closure): the GUARDED
-    // add-workspace opener — the shell refuses it while another chamber dialog
-    // layer is up, so this section can never stack a second Modal.
-    openWorkspaceBrowser,
-    openSession,
     onNewSession,
-    onArchiveSession,
-    onForkSession,
     onDeleteWorkspace,
   } = useSidebarSection()
 
@@ -316,210 +147,8 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
     return () => { document.removeEventListener('click', onClick) }
   }, [wide, server.id, searchState])
 
-  /** chamber (06): localized hover-card relative time ("刚刚"/"5分钟前" zh; "now"/"5min ago" en). */
-  const hoverTimeLabel = (updatedAt: number, now: number): string => {
-    const { unit, n } = relativeTimeBucket(updatedAt, now)
-    return unit === 'now' ? t('time.now') : t('time.ago', { t: t(`time.${unit}`, { n }) })
-  }
-
-  // The rename edit UI, rendered in place at the renamed entity:
-  // 'sessionRow' swaps a session row's slot (row replaced by the form,
-  // indented at the session level); 'workspaceHeader' embeds the form
-  // INSIDE the workspace header row where the title/orphan-badge/count/git
-  // occupant/hover actions used to sit (行内编辑 — no extra list row
-  // appears; the header keeps its fold toggle/gutter). Enter commits;
-  // Escape cancels from anywhere inside the form; 取消 always cancels.
-  const renameForm = (placeholder: string, mode: 'sessionRow' | 'workspaceHeader') => (
-    <form
-      className={clsx(
-        cc.inlineForm,
-        mode === 'sessionRow' && cc.sessionNested,
-        mode === 'workspaceHeader' && cc.workspaceInlineForm,
-      )}
-      onClick={(event) => {
-        // stopPropagation also stops the native event, so the document-level
-        // pending-click canceller never sees this click — every
-        // propagation-stopping control clears the pending itself
-        // (pending-click.ts INVARIANT).
-        event.stopPropagation()
-        clearPendingClick()
-      }}
-      onSubmit={(event) => { event.preventDefault(); commitRename() }}
-      // Escape cancels wherever the focus sits inside the form (input, or
-      // the save/cancel buttons) — not only while the input is focused.
-      onKeyDown={(event) => {
-        if (event.key !== 'Escape') return
-        event.preventDefault()
-        setRenaming(null)
-      }}
-    >
-      <input
-        className={cc.inlineInput}
-        autoFocus
-        // The treeitem label (title span) is swapped out while editing, so
-        // the input itself carries the rename action as its accessible name
-        // (both the session-row and the workspace-header form share this).
-        aria-label={t('action.rename')}
-        placeholder={placeholder}
-        value={renaming?.value ?? ''}
-        onChange={(event) => setRenaming((prev) => prev === null ? prev : { ...prev, value: event.target.value })}
-      />
-      <button type="submit" className={cc.actionButton}>{t('action.save')}</button>
-      <button type="button" className={cc.actionButton} onClick={() => setRenaming(null)}>{t('action.cancel')}</button>
-    </form>
-  )
-
-  // chamber (06 §4.3/§4.5): per-row STATE indicator — the leading slot is NOT
-  // a server-identity marker (the source header dot owns identity). Normal
-  // sessions show nothing; running sessions show the official StateDot
-  // ongoing RING; completed-but-unread sessions show the chamber brand-blue
-  // 6px dot (`.stateCompleted`) — 2026-09 user decision, restoring the pre-T10
-  // mark so completion never shares the connection dot's green (see the
-  // completed branch below).
-  // Pending interactions (approval / plan-review / question) render a
-  // distinguishable 14px icon badge INSTEAD of the running ring — a session
-  // waiting for the user must be recognizable at a glance. The caller wraps
-  // the result in the fixed 10px slot so titles stay aligned (pending rows
-  // widen the slot to 14px). Priority (both functions below): pending >
-  // runningSubagents > completed > running. A parent's own running bit goes
-  // false the moment its round returns even while BACKGROUND subagents still
-  // work (official sessionStatuses: runningSubagentCount outranks completed),
-  // so `runningSubagents` (live channel) must outrank the completed dot and
-  // the running ring; both reports derive from the same sessions store and
-  // can land one commit apart, and the fixed priority keeps that transient
-  // skew from hiding a user-relevant state.
-  const sessionStateLabel = (server: ChamberServerAggregate, session: { id: string; running?: boolean }): string | undefined => {
-    const facts = server.runtime?.sessions[session.id]
-    const pending = facts?.pending
-    if (pending !== undefined) {
-      return pending === 'approval' ? t('status.waitingApproval')
-        : pending === 'plan-review' ? t('status.planReview')
-        : t('status.waitingAnswer')
-    }
-    const runningSubagents = facts?.runningSubagents ?? 0
-    if (runningSubagents > 0) {
-      return t(runningSubagents === 1 ? 'status.subagentsRunning.one' : 'status.subagentsRunning.other', { n: runningSubagents })
-    }
-    if (facts?.completed === true) return t('status.completed')
-    // 运行环只信完整聚合 snapshot 的 running 字段；runtime facts 不参与
-    // OR/优先级合并，避免同一渲染事实出现双权威。已挂载来源的 snapshot 由
-    // ctx store 在 host-frame 事件上即时上报，未挂载来源走 30s unary 兜底。
-    const running = runningRingVisible(facts?.running, session.running)
-    if (running === true) return t('status.running')
-    return undefined
-  }
-  /** Pending-interaction kind of the row, or undefined when not pending. */
-  const sessionStatePending = (server: ChamberServerAggregate, session: { id: string }): 'approval' | 'plan-review' | 'question' | undefined =>
-    server.runtime?.sessions[session.id]?.pending
-  /** 仪表 I1/I13（plan §10）：行状态读数的机器可读标记——与圆点同一优先级输入。 */
-  const sessionStateMarker = (server: ChamberServerAggregate, session: { id: string; running?: boolean }) => {
-    const facts = server.runtime?.sessions[session.id]
-    return sessionRowState({
-      running: runningRingVisible(facts?.running, session.running),
-      completed: facts?.completed,
-      pending: facts?.pending,
-      runningSubagents: facts?.runningSubagents,
-      stale: server.runtime?.stale,
-    })
-  }
-  const sessionStateDot = (server: ChamberServerAggregate, session: { id: string; running?: boolean }): ReactNode => {
-    const facts = server.runtime?.sessions[session.id]
-    const pending = facts?.pending
-    const runningSubagents = facts?.runningSubagents ?? 0
-    // 运行环只信完整 snapshot（runningRingVisible，见 sessionStateLabel）。
-    const running = runningRingVisible(facts?.running, session.running)
-    if (pending === undefined && runningSubagents === 0 && facts?.completed !== true && running !== true) return null
-    if (pending === 'approval') {
-      return <IconWarningOutline16 className={cc.statePendingApproval} />
-    }
-    if (pending === 'plan-review') {
-      return <IconChecklistOutline14 className={cc.statePendingPlan} />
-    }
-    if (pending === 'question') {
-      return <IconQuestionOutline14 className={cc.statePendingQuestion} />
-    }
-    if (runningSubagents > 0) {
-      // 后台子 agent 存活：父回合虽已结束，会话仍处工作中（官方语义——
-      // 子 agent 计数压过父 completed），绝不让蓝色完成点在此阶段亮起。
-      return <StateDot state="ongoing" size={10} />
-    }
-    if (facts?.completed === true) {
-      // 2026-09 用户裁决：完成未读回到 chamber 品牌蓝点（.stateCompleted，6px）——
-      // 撤销 2026-09-11 upstream-alignment T10 换成的官方 StateDot `done`。
-      // 理由：`done` 的取色 `--dsw-alias-state-success-primary` 与来源头连接状态
-      // 绿点（`.statusOk` 同一 token）完全相同，"会话完成未读"与"服务器已连接"
-      // 在同一侧栏里同色。蓝点与运行中的官方 ongoing 环同属品牌蓝
-      // （`--dsw-static-deepseek-450`），但静态实心点 vs 8 格动画环形状/动效不同。
-      return <span className={cc.stateCompleted} />
-    }
-    return <StateDot state="ongoing" size={10} />
-  }
-
   // chamber (06): hover-card relative times share one render-time clock.
   const now = Date.now()
-  // 2026-12（复查 MAJOR-2/BLOCKER）：头部是否为可激活入口，以及其
-  // title/aria 文案（托管 dsh 停机时改为说明原因，而不是"切换到该实例"）。
-  const headerActivatable = sourceHeaderActivatable(server, chamberInstanceId)
-  const headerTitle = sourceHeaderTitle(server, chamberInstanceId, t)
-  // 2026-09-11 upstream-alignment T7: the source-header controls carry the
-  // OFFICIAL Tooltip instead of the borrowed native title= (upstream wraps
-  // the same ViewOptionsMenu trigger in `<Tooltip side="bottom" delayMs={500}>`,
-  // vendor ui-workspace WorkspaceBrowser.tsx:198-203). The sort trigger names
-  // the active mode, so the bubble and the accessible name carry it.
-  const sortModeKey: SidebarKey = viewPrefs.orderBy?.[server.id] === 'updated' ? 'orderBy.updated' : 'orderBy.manual'
-  const sortLabel = `${t('action.sort')} · ${t(sortModeKey)}`
-  // 来源级"数据不可信"说明：单一定居 live region（见下方 sourceNote 的渲染与
-  // CSS :empty）。一个来源只应有一个 live region（2026-12 复查 NIT），所以降级
-  // 说明也**并入同一条**，按优先级取一句：托管不可用 > 前端能力受限（boot 缺口）
-  // > 托管瞬态 > 基线未就绪。前两条不互斥（来源可能既停机、壳里又留着上一次挂载
-  // 的缺口事实），故顺序即优先级；缺口事实来自本来源当前挂载的壳，仅在挂载/预热过
-  // 的来源上存在（STATUS 已登记的覆盖边界）。
-  // 内容变化时既有的 live region 才可被 AT 播报（"插入即带内容"不会播报，
-  // 2026-12 复查 MINOR）。
-  // 托管瞬态：必须**按 kind 限定**——本地 /health 的词表同样含 starting/
-  // restarting（2026-12 复查 MAJOR），只判 phase 会给本地源挂上网关专属文案。
-  const managedTransient = server.kind === 'gateway'
-    && (server.phase === 'starting' || server.phase === 'restarting')
-  const bootGapNote = sourceBootGapNote(server, t)
-  // The gap branch is selected by CONSTRUCTION (a boolean), never by comparing
-  // the rendered strings: the note text is dictionary copy and comparing it
-  // would silently mis-tone the line the day two branches share a sentence.
-  const noteIsBootGap = server.managedRuntimeDown !== true && bootGapNote !== ''
-  const sourceNote = server.managedRuntimeDown === true
-    ? t('source.managedDown', { state: t(sourceStatusLabelKey(server)) })
-    : noteIsBootGap
-      ? bootGapNote
-      : managedTransient
-        // 托管 dsh 正在启动：此刻 connected=false 会隐藏整棵会话子树，必须说明，
-        // 否则重启网关时侧栏整组凭空消失（2026-12 复查 MINOR）。
-        ? t('source.managedStarting', { state: t(sourceStatusLabelKey(server)) })
-        : server.connected && server.aggregateReady === true && server.archiveSetKnown !== true
-          ? t('source.baselinePending')
-          // R19 能力一览（plan W4）：最低优先级的一句「会话事实档位」说明。字段缺席时
-          // 整条级联逐字节等于改造前（桌面侧尚未投影 = 未知，绝不臆造为 full）。
-          : server.sessionFacts === 'degraded'
-            ? t('source.factsDegraded')
-            : server.sessionFacts === 'legacy'
-              ? t('source.factsLegacy')
-              : server.sessionFacts === 'disabled'
-                ? t('source.factsDisabled')
-                : ''
-  // 两个门必须分开（下方状态点注释即其判据，2026-12 复查 MINOR 的落地）：
-  // ①**live region 角色**：任何说明行在场，点就让位（一个来源只应有一个 live
-  //   region——见渲染处的 `role={sourceNote === '' ? 'status' : undefined}`）；
-  // ②**状态词的承载**：只有把 `{state}` 写进句子的说明行才接管 aria-label——
-  //   目前只有 managedDown 与 managedStarting 携带 phase；baselinePending 与
-  //   降级说明（boot 缺口）都**不含** phase，点必须继续用 aria-label 承担它。
-  // 2026-12：降级说明接入后，原来的 `sourceNote !== ''` 会让有缺口的来源在 a11y 树里
-  // 丢掉状态词（点既无 role 也无 label），故按判据改为按"是否携带 phase"取值。
-  // …but "carries the state word" depends on WHICH note won the cascade above: a
-  // gateway source that is transient (starting/restarting) AND degraded renders
-  // the GAP sentence, so the dot must keep its aria-label there — the transient
-  // branch never got to speak (2026-12 review, folded in the gap branch).
-  const noteCarriesPhase = server.managedRuntimeDown === true || (managedTransient && !noteIsBootGap)
-  // 每个已挂载壳各有一份侧栏 DOM（同一来源会出现多份）：id 必须按壳限定，
-  // 否则 aria-describedby 可能解析到另一份（隐藏壳）的同名节点。
-  const sourceNoteId = `chamber-source-note-${chamberInstanceId ?? 'unknown'}-${server.id}`
 
               // chamber (06 §1.2): the state's query is the sanitized current
               // value by construction; the loading fallback covers the
@@ -703,49 +332,6 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                 }
                 return wire
               }
-              // Search-result labels resolve from the source aggregate (title
-              // may lag the latest snapshot by one poll — accepted, 06 §1.2).
-              // The official display label (I3), not the durable title: a hit
-              // whose title the host could not read renders the directory name.
-              const searchRowLabel = (sessionId: string): { title: string; workspaceLabel: string | undefined } => {
-                for (const workspace of server.workspaces) {
-                  const session = workspace.sessions.find(candidate => candidate.id === sessionId)
-                  if (session === undefined) continue
-                  return {
-                    title: session.displayTitle,
-                    workspaceLabel: workspace.ungrouped === true ? t('list.ungrouped') : workspace.title,
-                  }
-                }
-                // Defensive: a hit outside every projected row still has an
-                // honest label — the official ladder's last resort (id).
-                return { title: sessionId, workspaceLabel: undefined }
-              }
-              // 搜索结果行的 running 位来自投影（mergeSearchResults
-              // 的 visibleIds 过滤保证命中行一定在投影内，查得到即用投影位；查
-              // 不到——防御——回落 false）。通道 running 不参与渲染（运行环
-              // wire 权威,见 sessionStateLabel 注释）——sessionStateDot/Label
-              // 直接使用此投影位。
-              const projectedRunning = (sessionId: string): boolean => {
-                for (const workspace of server.workspaces) {
-                  const session = workspace.sessions.find(candidate => candidate.id === sessionId)
-                  if (session === undefined) continue
-                  return session.running === true
-                }
-                return false
-              }
-              // 2026-09-11 upstream-alignment T7: the same projection lookup for
-              // the active-Schedule fact — upstream's search row renders the
-              // marker too (vendor ui-workspace Rows.tsx:351). Not found ⇒
-              // false (defensive: a hit outside the visible projection is not a
-              // claim about that session's schedules).
-              const projectedHasActiveSchedule = (sessionId: string): boolean => {
-                for (const workspace of server.workspaces) {
-                  const session = workspace.sessions.find(candidate => candidate.id === sessionId)
-                  if (session === undefined) continue
-                  return session.hasActiveSchedule === true
-                }
-                return false
-              }
               return (
               <section
                 key={server.id}
@@ -787,363 +373,18 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                     commitServerDrag(serverDrag, { id: server.id, half: rowHalf(event) })
                   }}
               >
-                <header
-                  className={clsx(
-                    cc.sourceHeader,
-                    server.id === chamberInstanceId && cc.sourceActive,
-                    headerActivatable && cc.sourceHeaderClickable,
-                  )}
-                  data-chamber-row={server.id}
-                  // R19：能力档位的机器可读锚点（验收仪器/诊断读取；用户可见文案见下方 sourceNote 分支）。
-                  data-chamber-facts-mode={server.sessionFacts}
-                  // I13：断连来源仍渲染的只读事实（R14）——来源级 stale 标记。
-                  data-chamber-stale={server.runtime?.stale === true || undefined}
-                  style={sourceAccentStyle(server)}
-                  title={headerTitle}
-                  role={headerActivatable ? 'button' : undefined}
-                  tabIndex={headerActivatable ? 0 : undefined}
-                  // 非交互形态（托管停机）不给 generic 角色加 aria-label（命名对
-                  // generic 无效，2026-12 复查 MINOR）——改用 aria-describedby
-                  // 指向下方说明行。
-                  aria-label={headerActivatable ? headerTitle : undefined}
-                  aria-describedby={!headerActivatable && sourceNote !== '' ? sourceNoteId : undefined}
-                  // chamber (06 §2.4 — option
-                  // 1): the source header is the drag handle for the
-                  // server-group display-order drag. The same trailing-click
-                  // suppression as the workspace header: a drop ending over
-                  // the header (or its buttons) must not fire a spurious
-                  // activate/toggle/action.
-                  draggable
-                  // R8：来源头部 hover 的意图预热触点。React 的 pointerenter/leave
-                  // 不因指针移入子按钮而 leave（与 RowHoverCard 同款用法），移出
-                  // header 才 leave；真正的"是否值得优先"由 App 端既有纪律裁决。
-                  onPointerEnter={() => { prewarmIntent().enter() }}
-                  onPointerLeave={() => { prewarmIntent().leave() }}
-                  onPointerDown={(event) => {
-                    // Record whether the press started
-                    // on a header BUTTON. dragstart's target is the drag
-                    // SOURCE (the header itself), not the pressed element, so
-                    // the press target must be captured here, at pointerdown.
-                    dragPressOnButtonRef.current = event.target instanceof Element && event.target.closest('button') !== null
-                  }}
-                  onDragStart={(event) => {
-                    // R8：拖动来源头部是"整理"而不是"前往"——它消费本次 hover
-                    // 周期，drag 期间不再补发预热意图（机器语义：一次 press）。
-                    prewarmIntent().press()
-                    // A gesture that STARTED on a header
-                    // button (fold / sort / add-workspace / search /
-                    // archive-cleanup manager) aborts the
-                    // drag initiation — buttons are click affordances, a >4px
-                    // micro-drag on the fold toggle must not swallow its click
-                    // (the click then fires normally on release). Dragging
-                    // from the header's non-button area is unaffected.
-                    if (dragPressOnButtonRef.current) {
-                      dragPressOnButtonRef.current = false
-                      event.preventDefault()
-                      return
-                    }
-                    dragPressOnButtonRef.current = false
-                    event.dataTransfer.effectAllowed = 'move'
-                    event.dataTransfer.setData('text/plain', server.id)
-                    suppressClickRef.current = true
-                    serverDropCommitted.current = false
-                    setServerDrag({ sourceId: server.id, over: null })
-                  }}
-                  onDragEnd={(event) => {
-                    // An ESC-cancelled drag must not persist the last marker —
-                    // dropEffect 'none' means the user explicitly cancelled.
-                    // A NULL dataTransfer at dragend (Safari has done
-                    // this) must also count as cancelled — with `?.` alone,
-                    // undefined !== 'none' would wrongly commit. The section
-                    // onDrop path is unaffected: a real drop commits there
-                    // first, and the serverDropCommitted guard makes this
-                    // no-op.
-                    if (serverDrag !== null && serverDrag.over !== null
-                      && event.dataTransfer !== null && event.dataTransfer.dropEffect !== 'none') {
-                      commitServerDrag(serverDrag, serverDrag.over)
-                    } else {
-                      setServerDrag(null)
-                    }
-                    serverDropCommitted.current = false
-                    window.setTimeout(() => { suppressClickRef.current = false }, 0)
-                  }}
-                  onClick={() => {
-                    // R8：点击（明确点开）消费本次 hover 周期——切换本身走既有的
-                    // requestActivateSource → selectView 原路，意图不得代行。
-                    prewarmIntent().press()
-                    if (suppressClickRef.current) return
-                    // A remote source's header switches the active N-ctx view
-                    // without opening a session (App layer owns the switch).
-                    // A managed-down gateway is NOT activatable: its boot is
-                    // guaranteed to fail (gateway 503), so the header must not
-                    // promise a switch the App itself refuses to prewarm/harvest
-                    // (2026-12 review MAJOR-2). The inline note explains why.
-                    if (headerActivatable) chamberBridge.requestActivateSource(server.id)
-                  }}
-                  onKeyDown={(event) => {
-                    if (!headerActivatable) return
-                    // Only respond to the header's OWN focus. A keydown
-                    // bubbling from an inner button (fold toggle / sort /
-                    // add-workspace / search) must not be swallowed:
-                    // preventDefault here would cancel the button's native
-                    // Enter/Space activation AND switch the active N-ctx
-                    // view.
-                    if (event.target !== event.currentTarget) return
-                    if (event.key === 'Enter' || event.key === ' ') {
-                      event.preventDefault()
-                      // R8：键盘激活同样消费本次 hover 周期（与点击同义）。
-                      prewarmIntent().press()
-                      chamberBridge.requestActivateSource(server.id)
-                    }
-                  }}
-                >
-                  {/* chamber (06 §2.4): the server-level fold
-                      toggle — a MONITOR glyph at rest (server = machine, NOT
-                      the workspace folder glyph — the shared folder reads as
-                      a workspace and misleads), swapping to the collapse
-                      chevron on header hover/focus (same slot, nothing
-                      shifts). Clicking collapses/expands the source's ENTIRE
-                      workspace list without touching any workspace's own
-                      conversation fold state. stopPropagation keeps the
-                      header's activate click (and the pending-click
-                      discipline) out. */}
-                  <button
-                    ref={foldToggleRef}
-                    type="button"
-                    className={clsx(cc.sourceFoldToggle, sourceFolded && cc.sourceFoldToggleFolded)}
-                    aria-label={sourceFolded ? t('server.expand') : t('server.collapse')}
-                    aria-expanded={!sourceFolded}
-                    // Own tooltip — without it the
-                    // header's inherited title ("切换到该实例") would show on
-                    // hover, semantically misleading for a fold toggle.
-                    title={sourceFolded ? t('server.expand') : t('server.collapse')}
-                    onClick={(event) => {
-                      event.stopPropagation()
-                      if (suppressClickRef.current) return
-                      clearPendingClick()
-                      toggleSourceFold(server.id)
-                    }}
-                  >
-                    <IconChevronRightOutline14 size={15} className={cc.sourceFoldChevron} />
-                    <IconMonitorOutline16 size={15} className={cc.sourceFoldGlyph} />
-                  </button>
-                  <span className={cc.sourceLabel}>{server.label}</span>
-                  {/* chamber: the source-header plugin diagnostic marker was
-                      REMOVED per user decision: the plugin runtime
-                      diagnostic (states + plugin id + reason) is surfaced ONLY
-                      on the connections page / per-instance plugin dialog
-                      (design 09 §3.5 detail surface) — the sidebar never
-                      renders an exclamation for plugin-graph conditions,
-                      informational or abnormal. */}
-                  {/* chamber: connection status as a dot/spinner — the phase
-                      text is never rendered, only carried on hover/aria. */}
-                  <span
-                    className={cc.sourceStatus}
-                    title={t(sourceStatusLabelKey(server))}
-                    // 两个门要分开（2026-12 复查 MINOR）：live region 角色只要有说明行
-                    // 就让位（一个来源一个 live region），但**状态词的承载**只有携带
-                    // phase 的说明行才接管——baselinePending 不含 phase，点必须继续
-                    // 通过 aria-label 承担它。
-                    aria-label={noteCarriesPhase ? undefined : t(sourceStatusLabelKey(server))}
-                    role={sourceNote === '' ? 'status' : undefined}
-                  >
-                    {sourceStatusKind(server) === 'busy' ? (
-                      <IconLoadingOutline16 className={cc.statusSpinner} size={12} />
-                    ) : (
-                      <span
-                        className={clsx(
-                          cc.statusDot,
-                          sourceStatusKind(server) === 'ok' && cc.statusOk,
-                          sourceStatusKind(server) === 'err' && cc.statusErr,
-                          sourceStatusKind(server) === 'idle' && cc.statusIdle,
-                        )}
-                      />
-                    )}
-                  </span>
-                  {/* chamber: header actions (sort menu + add-workspace `+` +
-                      per-source search + archive-cleanup manager — design 24 §6)
-                      are hover-revealed like the session rows' actions: at rest the connection status occupies the
-                      right side; hovering the header swaps in the icon cluster
-                      (visibility swap, no reflow). While a search capsule is
-                      open OR the sort menu is open the cluster stays visible
-                      (.sourceActionsVisible) so the icon can collapse/close. */}
-                  <span
-                    className={clsx(
-                      cc.sourceActions,
-                      (search?.expanded === true || sortMenuOpen === server.id) && cc.sourceActionsVisible,
-                    )}
-                  >
-                    {/* chamber (06 §3.1): per-source
-                        session sort MENU (official ViewOptionsMenu pattern —
-                        replaces the blind manual↔updated cycle). The menu
-                        shows both options with a checkmark on the current one
-                        (selectedIds), so the active order is visible the
-                        moment it opens; the title + aria-label + sortActive
-                        tint carry the current mode at rest (hover-revealed).
-                        Selecting a mode goes through setOrderBy (switch
-                        bookkeeping + override drop). */}
-                    {server.connected && (server.aggregateError === undefined || search?.expanded === true) && (
-                      <Menu
-                        // 2026-09 menu-density decision (P2-A, A-3): the
-                        // v0.2.4 release used the primitive's `compact` variant
-                        // here; T12 (2026-09-11) switched it to `dense` to copy
-                        // the ViewOptionsMenu, which made every menu row taller
-                        // than our own 26px list rows. Density is chamber's
-                        // call, so this is back to `compact` (26px rows, 12px
-                        // type) while the radius/background stay the official
-                        // ones the variant ships with.
-                        compact
-                        portal
-                        align="end"
-                        open={sortMenuOpen === server.id}
-                        onClose={() => { setSortMenuOpen(null) }}
-                        onSelect={(id: string) => {
-                          setSortMenuOpen(null)
-                          // W4「全部已读」：只把意图发给 App（读水位与落盘在 App 手里），
-                          // 插件不自己写读数——同一份权威，两个载体不重复实现。
-                          if (id === 'mark-all-read') {
-                            chamberBridge.requestMarkAllRead(server.id)
-                            return
-                          }
-                          if (id === 'manual' || id === 'updated') setOrderBy(server, id)
-                        }}
-                        items={[
-                          { type: 'label' as const, id: 'sort-label', text: t('orderBy.label') },
-                          { id: 'manual', label: t('orderBy.manual') },
-                          { id: 'updated', label: t('orderBy.updated') },
-                          { id: 'mark-all-read', label: t('source.markAllRead') },
-                        ]}
-                        selectedIds={[viewPrefs.orderBy?.[server.id] ?? 'manual']}
-                        anchor={(
-                          <Tooltip label={sortLabel} side="bottom" delayMs={500}>
-                            <button
-                              type="button"
-                              className={clsx(cc.actionIcon, viewPrefs.orderBy?.[server.id] === 'updated' && cc.sortActive)}
-                              aria-label={sortLabel}
-                              aria-haspopup="menu"
-                              aria-expanded={sortMenuOpen === server.id}
-                              onClick={(event) => {
-                                event.stopPropagation()
-                                if (suppressClickRef.current) return
-                                // stopPropagation also stops the NATIVE event, so
-                                // the document-level pending-click listener never
-                                // sees this click — clear the pending here like
-                                // every other row-internal button (else a pending
-                                // survives and a later click on the same session
-                                // spuriously renames).
-                                clearPendingClick()
-                                setSortMenuOpen(prev => (prev === server.id ? null : server.id))
-                              }}
-                            >
-                              <IconPersonalizationOutline16 size={14} />
-                            </button>
-                          </Tooltip>
-                        )}
-                      />
-                    )}
-                    {server.connected && (server.aggregateError === undefined || search?.expanded === true) && (
-                      <Tooltip label={t('action.addWorkspace')} side="bottom" delayMs={500}>
-                        <button
-                          type="button"
-                          className={clsx(cc.actionIcon, cc.addWorkspace)}
-                          aria-label={t('action.addWorkspace')}
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            if (suppressClickRef.current) return
-                            clearPendingClick()
-                            openWorkspaceBrowser(server.id)
-                          }}
-                        >
-                          {/* chamber (design 05 §2.2): adding a WORKSPACE, not a
-                              session — the official project-add glyph
-                              (2026-09-11 upstream-alignment T7:
-                              IconProjectAddOutline16, vendor ui-primitives
-                              icons/index.tsx), not the generic `+`. */}
-                          <IconProjectAddOutline16 size={14} />
-                        </button>
-                      </Tooltip>
-                    )}
-                    {server.connected && (server.aggregateError === undefined || search?.expanded === true) && (
-                      <Tooltip label={t('search.sessions.aria')} side="bottom" delayMs={500}>
-                        <button
-                          type="button"
-                          className={cc.searchButton}
-                          aria-label={t('search.sessions.aria')}
-                          aria-expanded={search?.expanded === true}
-                          ref={searchButton}
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            if (suppressClickRef.current) return
-                            clearPendingClick()
-                            if (search?.expanded === true) {
-                              // Toggle: an open capsule's icon collapses it (empty
-                              // query) or just blurs the input (a non-empty query
-                              // must not silently drop the in-progress filter).
-                              if (query === '') {
-                                collapseSearch(server.id)
-                              } else {
-                                searchInput.current?.blur()
-                              }
-                            } else {
-                              expandSearch(server.id)
-                              focusSearchOnMount.current = true
-                            }
-                          }}
-                        >
-                          <IconSearchOutline16 size={14} />
-                        </button>
-                      </Tooltip>
-                    )}
-                    {/* chamber (design 24 §6, revision 2026-09): server-row
-                        "archive manager" — same hover-reveal discipline and
-                        gating as the sibling actions; opens the manager
-                        dialog (list + per-row / multi-select delete; whole-set
-                        deletion only via explicit select-all — no standalone
-                        delete-all). All cleanup state lives INSIDE the
-                        dialog. */}
-                    {server.connected && (server.aggregateError === undefined || search?.expanded === true) && (
-                      <Tooltip label={t('action.purgeArchived')} side="bottom" delayMs={500}>
-                        <button
-                          type="button"
-                          className={cc.actionIcon}
-                          aria-label={t('action.purgeArchived')}
-                          onClick={(event) => {
-                            event.stopPropagation()
-                            if (suppressClickRef.current) return
-                            clearPendingClick()
-                            onOpenArchiveCleanup(server)
-                          }}
-                        >
-                          <IconTrashOutline16 size={14} />
-                        </button>
-                      </Tooltip>
-                    )}
-                  </span>
-                </header>
-                {/* 2026-12（诚实投影，用户视角复查 M1/M4）：两种"数据不可信"
-                    状态就地说明——避免托管 dsh 停机时只剩"空面板 + 红点"，
-                    以及把 unary 兜底的降级列表当真实列表读。状态词复用既有
-                    `status.*` 文案，不引入新词。 */}
-                {/* 缺口说明是这条 live region 的一个分支；但**活动来源**（本壳就是它的
-                    侧栏）的同一事实已由框架面的 `.boot-gap` 横幅以 role="status" 播报，
-                    再播一次就是同一件事说两遍。故仅对"自己这一行"的缺口说明把区域降为
-                    aria-live="off"（文本仍可被浏览/读屏逐行读到，视觉警示不变）；
-                    其它行的缺口仍要播报——那些来源没有横幅，侧栏是唯一用户面。 */}
-                <div
-                  id={sourceNoteId}
-                  className={clsx(cc.sourceNote, noteIsBootGap && cc.sourceNoteBootGap)}
-                  role="status"
-                  aria-live={noteIsBootGap && server.id === chamberInstanceId ? 'off' : 'polite'}
-                >
-                  {sourceNote}
-                </div>
-                {/* chamber (打开失败可见性): with the source folded no session
-                    row exists on screen (the fold gate hides the whole list),
-                    so open failures hoist under the header — the header is
-                    the one part that stays rendered. */}
-                {sourceFolded && serverOpenFailures.map(failure => (
-                  <div key={failure.sessionId} className={cc.rowError} role="alert">{failure.message}</div>
-                ))}
+                <ServerSectionHeader
+                  server={server}
+                  sourceFolded={sourceFolded}
+                  search={search}
+                  query={query}
+                  serverOpenFailures={serverOpenFailures}
+                  prewarmIntent={prewarmIntent}
+                  foldToggleRef={foldToggleRef}
+                  searchButton={searchButton}
+                  searchInput={searchInput}
+                  focusSearchOnMount={focusSearchOnMount}
+                />
                 {/* chamber (06 §2.4): the
                     server-level fold hides EVERYTHING below the header —
                     search capsule, source-scope git alert and the workspace
@@ -1157,44 +398,13 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                 {/* 断连/托管停机的源不渲染搜索胶囊（2026-12 复查 MINOR）：结果
                     与状态分支本就被 connected 门挡住，留一个活输入框是键盘死路。 */}
                 {server.connected && search?.expanded === true && (
-                  <div
-                    ref={searchRoot}
-                    className={cc.searchCapsule}
-                    // 焦点归属必须**事件驱动**记录：effect 只在依赖变化时跑，采样
-                    // 到的 activeElement 早已回落（2026-12 复查 MINOR）。
-                    onFocusCapture={() => { capsuleHeldFocus.current = true }}
-                    onBlurCapture={() => { capsuleHeldFocus.current = false }}
-                  >
-                    <input
-                      ref={searchInput}
-                      className={cc.searchInput}
-                      type="text"
-                      maxLength={SEARCH_QUERY_MAX_CODE_UNITS}
-                      placeholder={t('search.placeholder')}
-                      value={search?.query ?? ''}
-                      // 不用 autoFocus：胶囊会因断连/恢复而卸载重挂，autoFocus
-                      // 会在恢复时抢走用户当前焦点；用户主动展开的那条路径已由
-                      // 搜索按钮显式 focus()（2026-12 复查 MINOR）。
-                      onChange={(event) => setSearchQuery(server.id, event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key !== 'Escape') return
-                        clearSearch(server.id)
-                      }}
-                    />
-                    <button
-                      type="button"
-                      className={cc.searchClear}
-                      aria-label={t('search.clear')}
-                      onClick={() => {
-                        // 拖拽尾随 click 守卫——dragend 后的合成 click
-                        // 落在清除钮上不得清掉在途搜索（守卫控件清单补齐）。
-                        if (suppressClickRef.current) return
-                        clearSearch(server.id)
-                      }}
-                    >
-                      <IconCloseOutline16 size={12} />
-                    </button>
-                  </div>
+                  <ServerSectionSearchCapsule
+                    server={server}
+                    search={search}
+                    searchRoot={searchRoot}
+                    searchInput={searchInput}
+                    capsuleHeldFocus={capsuleHeldFocus}
+                  />
                 )}
                 {server.connected ? (() => {
                   // chamber (08 §11 Plan A): per-repo layouts drive the
@@ -1249,99 +459,12 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                       // renders BELOW the results, so a content-search
                       // failure still shows the local metadata hits, with the
                       // error banner below them.
-                      <>
-                        <div className={cc.searchResults} role="tree" aria-label={t('search.results.aria')}>
-                          {merged.items.map((item) => {
-                            const resolved = searchRowLabel(item.sessionId)
-                            // 搜索行传投影 running 位（查不到回落
-                            // false）；运行环 wire 权威——sessionStateDot/Label
-                            // 直接使用此位,通道 running 不参与渲染（见
-                            // sessionStateLabel 注释）。
-                            const running = projectedRunning(item.sessionId)
-                            const stateDot = sessionStateDot(server, { id: item.sessionId, running })
-                            const stateLabel = sessionStateLabel(server, { id: item.sessionId, running })
-                            const openError = rowErrors[openErrorKey(server.id, item.sessionId)]
-                            return (
-                              // chamber (打开失败可见性): the search tree replaces
-                              // the workspace tree, so an open failure must also
-                              // surface under the result row — Fragment keeps the
-                              // button keyboard-activatable (official
-                              // SearchResultItem 同款).
-                              <Fragment key={item.sessionId}>
-                                <button
-                                  type="button"
-                                  className={cc.searchResultRow}
-                                  role="treeitem"
-                                  aria-selected={item.sessionId === currentId}
-                                  onClick={() => openSession(server.id, item.sessionId)}
-                                >
-                                  <span className={cc.searchResultHeading}>
-                                    <span
-                                      className={clsx(cc.sessionStateSlot, sessionStatePending(server, { id: item.sessionId }) !== undefined && cc.sessionStateSlotPending)}
-                                      title={stateLabel}
-                                      aria-label={stateLabel}
-                                      // 空态不注册 live region（官方仅在有
-                                      // 状态时放隐藏标签）——role 条件化避免 SR 噪音。
-                                      role={stateDot !== null ? 'status' : undefined}
-                                    >
-                                      {stateDot}
-                                    </span>
-                                    <span className={cc.searchResultTitle}>{resolved.title}</span>
-                                    {/* 2026-09-11 upstream-alignment T7: upstream's
-                                        search row carries the marker right after
-                                        the title, inside the heading (vendor
-                                        ui-workspace Rows.tsx:351), fed by
-                                        tree.ts:161-163. 2026-09-11 review-fix
-                                        finding 5b: this row applies NO blank gate
-                                        of its own — the projection helper
-                                        (`projectedHasActiveSchedule`) is the only
-                                        gate, and it is false for a session the
-                                        projection does not list. Upstream's
-                                        SearchResultItem has no blank gate either
-                                        and SearchResultNode carries no `blank`
-                                        field: blank (provisional new-session)
-                                        rows are excluded from content search by
-                                        the query itself (vendor tree.ts:156-159),
-                                        so there is nothing to gate here. */}
-                                    {projectedHasActiveSchedule(item.sessionId) && (
-                                      <SessionScheduleIndicator label={t('schedule.active')} />
-                                    )}
-                                  </span>
-                                  {resolved.workspaceLabel !== undefined && (
-                                    <span className={cc.searchResultWorkspace}>{resolved.workspaceLabel}</span>
-                                  )}
-                                  {item.snippet !== '' && (
-                                    <span className={cc.searchResultSnippet}>{item.snippet}</span>
-                                  )}
-                                </button>
-                                {openError !== undefined && (
-                                  <div className={clsx(cc.rowError, cc.sessionNested)} role="alert">{openError}</div>
-                                )}
-                              </Fragment>
-                            )
-                          })}
-                          {currentRemote.status === 'loading' && (
-                            <div className={cc.searchStatus} role="status">{t('search.pending')}</div>
-                          )}
-                          {currentRemote.status === 'error' && (
-                            <div className={cc.searchWarning} role="status">{t('search.unavailable')}</div>
-                          )}
-                          {currentRemote.status !== 'loading' && merged.items.length === 0 && (
-                            <div className={cc.empty}>{t('search.noMatches')}</div>
-                          )}
-                          {merged.hasMore && (
-                            <div className={cc.searchStatus}>
-                              {t('search.hasMore', { n: SESSION_SEARCH_RESULT_LIMIT })}
-                            </div>
-                          )}
-                        </div>
-                        {/* 搜索进行中（query!==''）也在结果下方渲染
-                            aggregateError——结果优先，错误行在下面，与顶部
-                            注释声称的行为一致。 */}
-                        {server.aggregateError !== undefined && (
-                          <div className={cc.aggregateError} role="alert">{server.aggregateError}</div>
-                        )}
-                      </>
+                      <ServerSectionSearchResults
+                        server={server}
+                        merged={merged}
+                        currentRemote={currentRemote}
+                        currentId={currentId}
+                      />
                     ) : server.aggregateError !== undefined ? (
                       <div className={cc.aggregateError} role="alert">{server.aggregateError}</div>
                     ) : (
@@ -1627,7 +750,7 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                                 // toggle + gutter stay, so the row keeps its
                                 // identity and position and no extra input
                                 // row is appended below it.
-                                renameForm(workspace.title, 'workspaceHeader')
+                                <ServerSectionRenameForm placeholder={workspace.title} mode="workspaceHeader" />
                               ) : (
                                 <>
                                   <span className={clsx(cc.workspaceTitle, isWorktree && cc.workspaceTitleGit)}>
@@ -1858,338 +981,16 @@ export function ServerSection({ server }: { server: ChamberServerAggregate }) {
                               ))}
                             {!folded && (
                             <>
-                              {visibleSessions.map((session) => {
-                                const sessionKey = `${server.id}/session/${session.id}`
-                                const sessionDragError = rowErrors[`${server.id}/session-drag/${session.id}`]
-                                const sessionActionError = rowErrors[`${server.id}/session/${session.id}/rename`]
-                                  ?? rowErrors[`${server.id}/session/${session.id}/archive`]
-                                  ?? rowErrors[`${server.id}/session/${session.id}/fork`]
-                                  // chamber (打开失败可见性): open failures land
-                                  // in the same slot (SidebarRoot reports the
-                                  // App-layer outcome; low precedence — a
-                                  // rename/archive/fork failure of the same row
-                                  // wins). Key template shared with the writer
-                                  // (shared/open-outcome.ts).
-                                  ?? rowErrors[openErrorKey(server.id, session.id)]
-                                // chamber (design 06 §2.2):
-                                // a blank row the projection still carries after
-                                // it stopped being current is a GHOST — the App
-                                // holds it for BLANK_GHOST_GRACE_MS so the list
-                                // cannot shift inside the double-click window.
-                                // The local expiry bounds the RENDER side: once
-                                // the grace passes, the invisible placeholder is
-                                // dropped even if the App has not re-derived yet
-                                // (the next publish drops it from the projection
-                                // for good — the row is invisible either way, so
-                                // skipping it never shows a stale row).
-                                const ghost = isGhostSession(session)
-                                const ghostLive = ghost && (ghostExpiry.current.get(session.id) ?? 0) > Date.now()
-                                if (ghost && !ghostLive) return null
-                                // chamber (06): the session row
-                                // (hoisted so the HoverCard can wrap it). The
-                                // single click opens IMMEDIATELY — no
-                                // double-click-window delay (OpenChamber
-                                // model); the module-global pending click
-                                // (shared/pending-click.ts, keyed by
-                                // sessionId) only guards the SECOND click
-                                // within DOUBLE_CLICK_WINDOW_MS on the SAME
-                                // session, which enters inline rename.
-                                // suppressClickRef (drag-end trailing click)
-                                // is honored on the way in; a click outside
-                                // the pending row cancels it (document
-                                // listener). The row renders
-                                // data-session-id so the outside-click
-                                // containment check works across shells.
-                                // 2026-09-11 upstream-alignment T5: one row-title
-                                // resolution shared by the row label and the row
-                                // actions' accessible names (the blank label stays
-                                // rendered-only — a blank row carries no actions).
-                                // I3: the OFFICIAL display label (never empty),
-                                // so "unknown title" can never render 「未命名会话」.
-                                const sessionTitleText = session.displayTitle
-                                const sessionRow = (
-                                  <div
-                                    className={clsx(
-                                      cc.sessionRow,
-                                      ghost && cc.sessionGhost,
-                                      session.id === currentId && cc.sessionActive,
-                                      sessionMarker(session.id) === 'before' && cc.dropBefore,
-                                      sessionMarker(session.id) === 'after' && cc.dropAfter,
-                                    )}
-                                    role="treeitem"
-                                    aria-selected={session.id === currentId}
-                                    data-session-id={session.id}
-                                    data-chamber-row={sessionKey}
-                                    data-chamber-ghost={ghost ? '' : undefined}
-                                    // Synthetic cwd-derived groups are
-                                    // display-only: session rows inside them
-                                    // neither drag nor accept drops (a wire
-                                    // commit would fail
-                                    // workspace/not-found on the host).
-                                    draggable={!ghost && workspace.synthetic !== true}
-                                    onDragStart={ghost || workspace.synthetic === true
-                                      ? undefined
-                                      : (event) => {
-                                        event.dataTransfer.effectAllowed = 'move'
-                                        event.dataTransfer.setData('text/plain', session.id)
-                                        suppressClickRef.current = true
-                                        sessionDropCommitted.current = false
-                                        setSessionDrag({
-                                          sourceId: server.id,
-                                          accountKey: workspace.id,
-                                          ungrouped: workspace.ungrouped === true,
-                                          sessionId: session.id,
-                                          over: null,
-                                        })
-                                      }}
-                                    onDragEnd={() => {
-                                      if (sessionDrag !== null && sessionDrag.over !== null) {
-                                        commitSessionDrag(server, sessionDrag, sessionDrag.over)
-                                      } else {
-                                        setSessionDrag(null)
-                                      }
-                                      sessionDropCommitted.current = false
-                                      window.setTimeout(() => { suppressClickRef.current = false }, 0)
-                                    }}
-                                    onDragOver={!activeSessionDrag
-                                      ? undefined
-                                      : (event) => {
-                                        event.preventDefault()
-                                        event.dataTransfer.dropEffect = 'move'
-                                        const half = rowHalf(event)
-                                        setSessionDrag(current => {
-                                          if (current === null) return current
-                                          if (current.over?.id === session.id && current.over.half === half) return current
-                                          return { ...current, over: { id: session.id, half } }
-                                        })
-                                      }}
-                                    onDrop={!activeSessionDrag
-                                      ? undefined
-                                      : (event) => {
-                                        event.preventDefault()
-                                        if (sessionDrag === null) return
-                                        commitSessionDrag(server, sessionDrag, { id: session.id, half: rowHalf(event) })
-                                      }}
-                                    onClick={() => {
-                                      if (suppressClickRef.current) return
-                                      // A ghost row is a non-interactive layout
-                                      // placeholder (visibility:hidden — clicks
-                                      // never reach it); guard defensively.
-                                      if (ghost) return
-                                      // 菜单展开 / 本行重命名进行中：忽略整次点击
-                                      //（不 arm、不开会话）。
-                                      if (menuOpen[sessionKey] === true || (renaming !== null
-                                        && renaming.sourceId === server.id && renaming.kind === 'session' && renaming.id === session.id)) return
-                                      // chamber (06): single
-                                      // click opens IMMEDIATELY — zero delay
-                                      // (OpenChamber model). The module-global
-                                      // pending (keyed by sessionId) only
-                                      // answers "is this the SECOND click of a
-                                      // double click on the same session within
-                                      // DOUBLE_CLICK_WINDOW_MS" — that one
-                                      // enters inline rename; any other click
-                                      // records the pending and opens right
-                                      // away. openSession is idempotent, so a
-                                      // misjudged slow second click just
-                                      // re-opens (no-op) and can NEVER
-                                      // accidentally rename.
-                                      if (noteSessionRowClick(server.id, session.id)) {
-                                        // 空白"新建会话"占位行无内容可
-                                        // 改名——双击不得进入内联重命名（否则会
-                                        // 把暂存会话的改名写到 wire 上）。
-                                        if (session.blank === true) return
-                                        setRenaming({
-                                          sourceId: server.id,
-                                          kind: 'session',
-                                          id: session.id,
-                                          value: session.title,
-                                        })
-                                        return
-                                      }
-                                      // 打开任何
-                                      // 真实会话都会把活动来源的 current 从空白
-                                      // 行切走，App 随后重派生——同步先 arm ghost
-                                      // 槽占住该行的布局位，列表在 350ms 双击窗口
-                                      // 内不位移，第二次点击仍落在目标行上。
-                                      armBlankGhostForClick()
-                                      openSession(server.id, session.id)
-                                    }}
-                                  >
-                                    <span className={cc.sessionTitle}>{session.blank === true ? t('session.new') : sessionTitleText}</span>
-                                    {/* 2026-09-11 upstream-alignment T7: the
-                                        active-Schedule marker sits exactly where
-                                        upstream puts it — between the row title
-                                        and the trailing cells (vendor
-                                        ui-workspace Rows.tsx:468). Renders only
-                                        for rows whose projection says so, so an
-                                        ordinary row's geometry/pitch is
-                                        untouched. */}
-                                    {session.hasActiveSchedule === true && (
-                                      <SessionScheduleIndicator label={t('schedule.active')} />
-                                    )}
-                                    {/* blank（新建）行是临时占位——内容
-                                        不存在，kebab（含 fork/归档）作用于
-                                        不存在的内容，隐藏整簇（官方 Rows.tsx
-                                        `!row.blank && <rowActions>` L436-462）。 */}
-                                    {session.blank !== true && (
-                                    <span
-                                      className={clsx(cc.rowActions, menuOpen[sessionKey] === true && cc.rowActionsVisible)}
-                                      onClick={(event) => {
-                                        // INVARIANT (pending-click.ts header):
-                                        // stopPropagation must be paired with
-                                        // clearPendingClick — see the workspace rowActions note.
-                                        event.stopPropagation()
-                                        clearPendingClick()
-                                      }}
-                                    >
-                                      <Menu
-                                        // 2026-09 menu-density decision (P2-A, A-1):
-                                        // same as the workspace menu above —
-                                        // `closeOnPointerLeave` kept (Rows.tsx:487),
-                                        // `compact` restored from v0.2.4.
-                                        compact
-                                        portal
-                                        closeOnPointerLeave
-                                        align="end"
-                                        open={menuOpen[sessionKey] === true}
-                                        onClose={() => closeMenu(sessionKey)}
-                                        onSelect={(id: string) => {
-                                          closeMenu(sessionKey)
-                                          if (id === 'rename') {
-                                            setRenaming({
-                                              sourceId: server.id,
-                                              kind: 'session',
-                                              id: session.id,
-                                              value: session.title,
-                                            })
-                                          } else if (id === 'fork') {
-                                            onForkSession(server, session)
-                                          } else if (id === 'archive') {
-                                            // 2026-09-11 review-fix finding 5d:
-                                            // no title argument — the verb runs
-                                            // immediately (T2a) and nothing reads it.
-                                            onArchiveSession(server, session.id)
-                                          }
-                                        }}
-                                        items={[
-                                          {
-                                            id: 'rename',
-                                            label: t('action.rename'),
-                                            icon: <IconEditOutline16 size={14} />,
-                                          },
-                                          {
-                                            id: 'fork',
-                                            label: t('menu.fork'),
-                                            icon: <IconBranchOutline16 size={14} />,
-                                          },
-                                          {
-                                            // 2026-09-11 upstream-alignment T2a: the
-                                            // archive verb lives HERE, in the row
-                                            // menu — upstream keeps no second hover
-                                            // button because archiving only hides the
-                                            // row (it never touches the session log),
-                                            // so it is neither destructive nor
-                                            // confirm-gated (vendor ui-workspace
-                                            // Rows.tsx:412-421). Glyph size is a
-                                            // deliberate optical exception to the
-                                            // compact slot: `compact` shrinks the
-                                            // icon slot to 14px, but the 20-native
-                                            // archive glyph stays at 16 so it keeps
-                                            // the same visual weight as the
-                                            // 16-native glyphs drawn at 14 beside
-                                            // it (the flex slot tolerates +2px).
-                                            id: 'archive',
-                                            label: t('menu.archiveSession'),
-                                            icon: <IconArchiveOutline20 size={16} />,
-                                          },
-                                        ]}
-                                        anchor={(
-                                          <button
-                                            type="button"
-                                            className={cc.actionIcon}
-                                            // 2026-09-11 upstream-alignment T5: the row
-                                            // title is the accessible name (upstream
-                                            // `actions.session.aria`, vendor
-                                            // ui-workspace Rows.tsx:492).
-                                            aria-label={t('action.menu.session', { name: sessionTitleText })}
-                                            aria-haspopup="menu"
-                                            aria-expanded={menuOpen[sessionKey] === true}
-                                            onClick={(event) => {
-                                              event.stopPropagation()
-                                              if (suppressClickRef.current) return
-                                              clearPendingClick()
-                                              toggleMenu(sessionKey)
-                                            }}
-                                          >
-                                            <IconEllipsisOutline16 size={16} />
-                                          </button>
-                                        )}
-                                      />
-                                    </span>
-                                    )}
-                                    {/* Trailing state slot: the ring/dot at the
-                                        row's right edge. On hover the row action
-                                        cluster (the kebab menu) swaps in and this
-                                        slot swaps out (CSS hover replace, 06 §4.3
-                                        /§7) — the slot is a true replace, no
-                                        placeholder. role is conditional so an
-                                        empty (no-state) slot does not register a
-                                        live region (same rule
-                                        as the search-result rows). */}
-                                    <span
-                                      className={clsx(cc.sessionStateSlot, sessionStatePending(server, session) !== undefined && cc.sessionStateSlotPending)}
-                                      // I1/I13：状态与出处（验收 DOM 判据；不参与渲染）。
-                                      data-chamber-session-state={sessionStateMarker(server, session).state}
-                                      // I5：这一行事实的观察时刻（host 域 ms；缺席 = 无观察者事实）。
-                                      data-chamber-fact-at={server.runtime?.sessions[session.id]?.factAt}
-                                      data-chamber-state-source={sessionStateMarker(server, session).source}
-                                      title={sessionStateLabel(server, session)}
-                                      aria-label={sessionStateLabel(server, session)}
-                                      role={sessionStateDot(server, session) !== null ? 'status' : undefined}
-                                    >
-                                      {sessionStateDot(server, session)}
-                                    </span>
-                                  </div>
-                                )
-                                return (
-                                <Fragment key={session.id}>
-                                  {renaming !== null && renaming.sourceId === server.id
-                                  && renaming.kind === 'session' && renaming.id === session.id ? (
-                                    renameForm(session.title, 'sessionRow')
-                                  ) : (
-                                    <RowHoverCard
-                                      anchor={sessionRow}
-                                      content={(
-                                        <div className={cc.hoverContent}>
-                                          <div className={cc.hoverTitle}>{session.blank === true ? t('session.new') : sessionTitleText}</div>
-                                          {session.blank !== true && session.updatedAt !== undefined && session.updatedAt > 0 && (
-                                            <div className={cc.hoverTime}>{hoverTimeLabel(session.updatedAt, now)}</div>
-                                          )}
-                                          {sessionStateLabel(server, session) !== undefined && (
-                                            <div className={cc.hoverStatus}>
-                                              <span className={clsx(cc.sessionStateSlot, sessionStatePending(server, session) !== undefined && cc.sessionStateSlotPending)}>
-                                                {sessionStateDot(server, session)}
-                                              </span>
-                                              <span>{sessionStateLabel(server, session)}</span>
-                                            </div>
-                                          )}
-                                        </div>
-                                      )}
-                                      disabled={menuOpen[sessionKey] === true || sessionDrag !== null || workspaceDrag !== null || serverDrag !== null}
-                                      copyText={session.blank === true ? undefined : sessionTitleText}
-                                      copyLabel={t('action.copy')}
-                                      copiedLabel={t('hover.copied')}
-                                    />
-                                  )}
-                                  {sessionDragError !== undefined && (
-                                    <div className={clsx(cc.rowError, cc.sessionNested)} role="alert">{sessionDragError}</div>
-                                  )}
-                                  {sessionActionError !== undefined && (
-                                    <div className={clsx(cc.rowError, cc.sessionNested)} role="alert">{sessionActionError}</div>
-                                  )}
-                                </Fragment>
-                                )
-                              })}
+                              <ServerSectionSessionRows
+                                server={server}
+                                workspace={workspace}
+                                sessions={visibleSessions}
+                                currentId={currentId}
+                                sessionMarker={sessionMarker}
+                                activeSessionDrag={activeSessionDrag}
+                                now={now}
+                                isGhostSession={isGhostSession}
+                              />
                               {hiddenVisibleCount > 0 && (
                                 <button
                                   type="button"

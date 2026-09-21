@@ -16,7 +16,15 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 const read = (rel: string): string => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8')
-const SECTION = read('../../src/client/ServerSection.tsx')
+const SECTION = [
+  read('../../src/client/ServerSection.tsx'),
+  read('../../src/client/ServerSectionHeader.tsx'),
+  read('../../src/client/ServerSectionRows.tsx'),
+  read('../../src/client/ServerSectionSearch.tsx'),
+  read('../../src/client/server-section-controls.tsx'),
+  read('../../src/client/server-section-model.ts'),
+  read('../../src/client/server-section-session-state.tsx'),
+].join('\n')
 const LOCALES = read('../../src/client/locales.ts')
 const AGGREGATE = read('../../src/shared/aggregate-store.ts')
 

@@ -8,8 +8,8 @@
  * (design 05 §7.4): 4 info scalars (controlPlaneUrl/dshVersion/version/
  * platform) + 9 namespaces (desktopSsh/update/settings/systemResume/openIn/
  * deepLink/runtime/notifications/badge). S-B（全表面实现）：每个方法的通道、
- * payload 形状与返回映射逐字对齐 preload.cts（60 个 invoke-backed 方法 →
- * 61 manifest invoke 通道（含 info）+ 8 个 on* 订阅 → 8 manifest push
+ * payload 形状与返回映射逐字对齐 preload.cts（59 个 invoke-backed 方法 →
+ * 60 manifest invoke 通道（含 info）+ 8 个 on* 订阅 → 8 manifest push
  * 通道），文件内零 poc-unimplemented 兜底。语义校验（payload schema、来源
  * 指纹、ACK 队列……）在 sidecar 原处理器（design 25 §4.4.1）；本文件是
  * 传输 + preload 逐字面。

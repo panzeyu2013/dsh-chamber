@@ -45,6 +45,7 @@ export const GROUPS = {
     'scripts/gates/verify-md-links.test.mjs',
     'scripts/gates/verify-test-wiring.test.mjs',
     'scripts/gates/verify-workflow-action-pins.test.mjs',
+    'scripts/gates/install-gateway-pure.test.mjs',
     'scripts/gates/verify-workflow-yaml-scalars.test.mjs',
     // Shared package-test runner (its zero-case guard is a repository gate
     // helper, so it runs with the gate suites).
@@ -93,6 +94,10 @@ export const SUBJECT_TESTS = [
   {
     path: 'scripts/release/release-workflow-policy.test.mjs',
     reason: 'derives the release/push gate alignment from .github/workflows/ci.yml; the subject is the workflow pair, not one module',
+  },
+  {
+    path: 'scripts/gates/install-gateway-pure.test.mjs',
+    reason: 'locks the pure validators/version comparison embedded in scripts/install-gateway.sh (single-file installer); the program text is extracted from the shipped script and executed in node:vm',
   },
   {
     path: 'scripts/upstream/lockfile-store-path-mappings.test.mjs',

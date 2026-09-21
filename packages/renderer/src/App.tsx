@@ -91,9 +91,8 @@ import {
 } from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import { detectNotificationEdges, dedupeCompleteEdges, type SessionFacts } from './notification-edges.ts'
 import { createCompleteLedger } from './complete-ledger.ts'
-import { projectBadgeCount } from './badge-count.ts'
 // I3/I4 仪器（plan §10）：徽标回读与通知决定账本（只读、有界、发布为函数视图）。
-import { notificationLedger, publishBadgeCount, publishNotificationInstrument } from './notification-ledger.ts'
+import { notificationLedger, publishNotificationInstrument } from './notification-ledger.ts'
 // I8：预热命中率仪表（attempt/hit/cancelled）。
 import { recordPrewarm } from './prewarm-ledger.ts'
 // WS-C（2026-12 facts wiring）：gateway session-state 只读事实源 + 未读 v2 落盘
@@ -115,6 +114,7 @@ import {
 } from './unread-store.ts'
 import { deriveSourceUnread, viewingReadWatermark } from './unread-derivation.ts'
 import { completionWatermark, nextNotifiedWatermark, shouldNotifyWatermark } from './watermark.ts'
+import { pruneSourceList, pruneSourceRecord, pruneSourceSet } from './source-registry.ts'
 import { shouldDispatchRefreshHint } from './source-refresh-hint.ts'
 import {
   acknowledgeRendererDelivery,
@@ -233,6 +233,7 @@ import {
   type HarvestRecord,
 } from './baseline-harvest.ts'
 import InstanceView from './components/InstanceView.tsx'
+import { useBadgeCount } from './app-hooks/use-badge-count.ts'
 import { PERF_MARKS, perfMark } from './perf-marks.ts'
 
 /**
@@ -1352,151 +1353,66 @@ export default function App() {
     })
     // 注册表删除的实例同时清掉其数据面残留（聚合/运行时事实/状态投影）——
     // 视图已回收，键空间应随注册表收敛（重加同名 id 由刷新重建）。
-    setAggregates(prev => {
-      const next = { ...prev }
-      let changed = false
-      for (const id of Object.keys(next)) {
-        if (!servers.some(server => server.id === id)) {
-          delete next[id]
-          changed = true
-        }
-      }
-      return changed ? next : prev
-    })
-    setRuntimeFacts(prev => {
-      const next = { ...prev }
-      let changed = false
-      for (const id of Object.keys(next)) {
-        if (!servers.some(server => server.id === id)) {
-          delete next[id]
-          changed = true
-        }
-      }
-      return changed ? next : prev
-    })
-    setSnapshotSources(prev => {
-      const next = { ...prev }
-      let changed = false
-      for (const id of Object.keys(next)) {
-        if (!servers.some(server => server.id === id)) {
-          delete next[id]
-          changed = true
-        }
-      }
-      return changed ? next : prev
-    })
-    for (const id of Object.keys(snapshotSourcesRef.current)) {
-      if (!servers.some(server => server.id === id)) {
-        delete snapshotSourcesRef.current[id]
-        // Keep recency in lockstep: a same-id re-add must start as
-        // never-pushed (first-boot window falls back) rather than inheriting
-        // the removed source's last-push timestamp.
-        delete snapshotAtRef.current[id]
-      }
+    // 全部走 source-registry.ts 内核（live 外删除 + identity-preserving）。
+    setAggregates(prev => pruneSourceRecord(prev, live) ?? prev)
+    setRuntimeFacts(prev => pruneSourceRecord(prev, live) ?? prev)
+    setSnapshotSources(prev => pruneSourceRecord(prev, live) ?? prev)
+    const snapshotSourcesNext = pruneSourceRecord(snapshotSourcesRef.current, live)
+    if (snapshotSourcesNext !== null) {
+      // Keep recency in lockstep: a same-id re-add must start as never-pushed
+      // (first-boot window falls back) rather than inheriting the removed
+      // source's last-push timestamp — only the ids snapshotSources itself dropped.
+      const removedSnapshotSources = new Set(Object.keys(snapshotSourcesRef.current).filter(id => !live.has(id)))
+      snapshotSourcesRef.current = snapshotSourcesNext
+      for (const id of removedSnapshotSources) delete snapshotAtRef.current[id]
     }
     // 事实水位/无法验证标记随来源退役（same-id re-add 必须是全新的可验证窗口）。
-    for (const id of Object.keys(factsAtRef.current)) {
-      if (!servers.some(server => server.id === id)) delete factsAtRef.current[id]
-    }
-    setUnverified(prev => {
-      const next = prev.filter(id => servers.some(server => server.id === id))
-      return next.length === prev.length ? prev : next
-    })
+    const factsAtNext = pruneSourceRecord(factsAtRef.current, live)
+    if (factsAtNext !== null) factsAtRef.current = factsAtNext
+    setUnverified(prev => pruneSourceList(prev, live) ?? prev)
     // 用户忽略（dismiss）也随来源退役：否则 same-id 再挂载的**新**代际会在下一个
     // liveness tick 之前被旧忽略静默压住（2026-12 五轮复核的复挂窗口）。
-    setDismissedStalls(prev => {
-      const next = prev.filter(id => servers.some(server => server.id === id))
-      return next.length === prev.length ? prev : next
-    })
+    setDismissedStalls(prev => pruneSourceList(prev, live) ?? prev)
     // S2: last-reconnect recency is source-scoped too — a same-id re-add must
     // start a fresh reconnect-backoff window (mirrors the snapshotAtRef
     // lockstep above; the reconnect only ever ran for mounted sources).
-    for (const id of Object.keys(lastReconnectAtRef.current)) {
-      if (!servers.some(server => server.id === id)) {
-        delete lastReconnectAtRef.current[id]
-      }
-    }
+    const lastReconnectNext = pruneSourceRecord(lastReconnectAtRef.current, live)
+    if (lastReconnectNext !== null) lastReconnectAtRef.current = lastReconnectNext
     // Same lockstep for the session-list-refresh coalescing stamps and the
     // ghost-row convergence state (design 24 §12): a same-id re-add must start
     // a fresh request window and a fresh pending set.
-    for (const id of Object.keys(sessionListRefreshAtRef.current)) {
-      if (!servers.some(server => server.id === id)) {
-        delete sessionListRefreshAtRef.current[id]
-      }
-    }
-    for (const id of Object.keys(sessionListRefreshPendingRef.current)) {
-      if (!servers.some(server => server.id === id)) {
-        delete sessionListRefreshPendingRef.current[id]
-      }
-    }
-    for (const id of Object.keys(authoritativeArchiveSetRef.current)) {
-      if (!servers.some(server => server.id === id)) {
-        delete authoritativeArchiveSetRef.current[id]
-      }
-    }
-    setPluginDiagnostics(prev => {
-      const next = { ...prev }
-      let changed = false
-      for (const id of Object.keys(next)) {
-        if (!servers.some(server => server.id === id)) {
-          delete next[id]
-          changed = true
-        }
-      }
-      return changed ? next : prev
-    })
-    setCompletedBySource(prev => {
-      const next = { ...prev }
-      let changed = false
-      for (const id of Object.keys(next)) {
-        if (!servers.some(server => server.id === id)) {
-          delete next[id]
-          changed = true
-        }
-      }
-      return changed ? next : prev
-    })
+    const refreshAtNext = pruneSourceRecord(sessionListRefreshAtRef.current, live)
+    if (refreshAtNext !== null) sessionListRefreshAtRef.current = refreshAtNext
+    const refreshPendingNext = pruneSourceRecord(sessionListRefreshPendingRef.current, live)
+    if (refreshPendingNext !== null) sessionListRefreshPendingRef.current = refreshPendingNext
+    const archiveSetNext = pruneSourceRecord(authoritativeArchiveSetRef.current, live)
+    if (archiveSetNext !== null) authoritativeArchiveSetRef.current = archiveSetNext
+    setPluginDiagnostics(prev => pruneSourceRecord(prev, live) ?? prev)
+    setCompletedBySource(prev => pruneSourceRecord(prev, live) ?? prev)
     // prevRunning 是 ref：同步裁剪，随注册表收敛（重加同名 id 由刷新重建）。
-    for (const id of Object.keys(prevRunningRef.current)) {
-      if (!servers.some(server => server.id === id)) delete prevRunningRef.current[id]
-    }
+    const prevRunningNext = pruneSourceRecord(prevRunningRef.current, live)
+    if (prevRunningNext !== null) prevRunningRef.current = prevRunningNext
     // 通知边沿记忆同款收敛（设计 19 §3.2）：与 prevRunningRef 对称，
     // 随注册表收敛，重加同名 id 由刷新重建。
-    for (const id of Object.keys(prevRuntimeFactsRef.current)) {
-      if (!servers.some(server => server.id === id)) delete prevRuntimeFactsRef.current[id]
-    }
+    const prevRuntimeFactsNext = pruneSourceRecord(prevRuntimeFactsRef.current, live)
+    if (prevRuntimeFactsNext !== null) prevRuntimeFactsRef.current = prevRuntimeFactsNext
     // complete 通知两轨（水位 + 武装）与注册表同拍收敛（一次调用覆盖两张表）。
     completeLedgerRef.current.prune(live)
     // facts wiring 数据面（2026-12）：退役来源的读水位 / 回退账本 / 通知水位 /
     // 播种集 / 提示记账 / 在途计数与 facts state 一并清（same-id 重加 = 新来源代，
     // 不得继承上一代的已读/已通知判定）。
-    for (const id of Object.keys(readMarksRef.current)) {
-      if (!servers.some(server => server.id === id)) delete readMarksRef.current[id]
-    }
-    for (const id of Object.keys(edgeLedgerRef.current)) {
-      if (!servers.some(server => server.id === id)) delete edgeLedgerRef.current[id]
-    }
-    for (const id of [...factsSeededRef.current]) {
-      if (!servers.some(server => server.id === id)) factsSeededRef.current.delete(id)
-    }
-    for (const id of Object.keys(refreshHintAtRef.current)) {
-      if (!servers.some(server => server.id === id)) delete refreshHintAtRef.current[id]
-    }
-    for (const id of Object.keys(factsPullInFlightRef.current)) {
-      if (!servers.some(server => server.id === id)) delete factsPullInFlightRef.current[id]
-    }
-    if (Object.keys(sessionFactsRef.current).some(id => !servers.some(server => server.id === id))) {
-      setSessionFacts(prev => {
-        const next = { ...prev }
-        let changed = false
-        for (const id of Object.keys(next)) {
-          if (!servers.some(server => server.id === id)) {
-            delete next[id]
-            changed = true
-          }
-        }
-        return changed ? next : prev
-      })
+    const readMarksNext = pruneSourceRecord(readMarksRef.current, live)
+    if (readMarksNext !== null) readMarksRef.current = readMarksNext
+    const edgeLedgerNext = pruneSourceRecord(edgeLedgerRef.current, live)
+    if (edgeLedgerNext !== null) edgeLedgerRef.current = edgeLedgerNext
+    const seededNext = pruneSourceSet(factsSeededRef.current, live)
+    if (seededNext !== null) factsSeededRef.current = seededNext
+    const refreshHintNext = pruneSourceRecord(refreshHintAtRef.current, live)
+    if (refreshHintNext !== null) refreshHintAtRef.current = refreshHintNext
+    const pullInFlightNext = pruneSourceRecord(factsPullInFlightRef.current, live)
+    if (pullInFlightNext !== null) factsPullInFlightRef.current = pullInFlightNext
+    if (pruneSourceRecord(sessionFactsRef.current, live) !== null) {
+      setSessionFacts(prev => pruneSourceRecord(prev, live) ?? prev)
     }
     setRemoteStatus(prev => {
       // remoteStatus 按原始注册表 id 键控（deriveServers 的 statusKey），
@@ -1506,15 +1422,7 @@ export default function App() {
         const rawId = server.kind === 'local' ? 'local' : rawInstanceIdFromSourceId(server.id)
         if (rawId !== null) liveRaw.add(rawId)
       }
-      const next = { ...prev }
-      let changed = false
-      for (const id of Object.keys(next)) {
-        if (!liveRaw.has(id)) {
-          delete next[id]
-          changed = true
-        }
-      }
-      return changed ? next : prev
+      return pruneSourceRecord(prev, liveRaw) ?? prev
     })
   }, [servers, mountedViews])
 
@@ -4820,74 +4728,15 @@ export default function App() {
     recomputeSourceUnread(previous)
   }, [paintedView, recomputeSourceUnread])
 
-  // 未读徽标（design 19 §3.7）：completedBySource（完成未读蓝点集）是徽标计数的
-  // 唯一事实源——跨来源求未读会话数（projectBadgeCount，纯函数），推给主进程
-  // 呈现 Dock/任务栏红气泡。计数与蓝点同源同规则（武装/解除同一状态机），两面
-  // 永不分叉；0 = 清除。子代理压制（06 §4.5 同规）：父回合结束
-  // 但后台子代理仍存活（runningSubagents > 0）的会话虽然已武装蓝点，窗口内点
-  // 被运行环压制、complete 通知被过滤，徽标同样不计——投影须读最新运行时事实
-  // （runtimeFacts 行），否则 Dock 会在「主分支闲置等子代理」期间误亮红气泡。
-  // 子代理全部结束后 armed 蓝点正常浮现计入（与侧边栏同语义）。runtimeFacts
-  // 在依赖里：子代理计数归零（事实行变化）时无需蓝点变化也要重推当前计数。
-  // 通道-only 变化可能重推相同计数值——主进程 setBadgeCount 幂等，无副作用。
-  // 桥未就绪（window.dshChamber 异步 expose）时静默跳过
-  // ——计数变化发生在运行时上报之后（远晚于桥暴露），首个真实计数不会丢；
-  // 重载后复位为 0 的兜底推送由下方挂载 effect 负责。reject 兜底（review B1）：
-  // 同进程 IPC 偶发拒绝不得让徽标停滞到下一次计数变化——按 LISTENER_READY 预算
-  // 有界重推当前计数（badgeCountRef 始终最新），预算耗尽 loud 一次。
-  const badgeCountRef = useRef(0)
-  const badgeRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const pushBadgeWithRetry = useCallback((attemptsLeft: number): void => {
-    const badge = window.dshChamber?.badge
-    // typeof 守卫（review C1）：与设置页 testNotifySurface 同款版本偏斜防护——
-    // 旧主进程 + 新渲染端的窗口重建窗口内 badge 面可能缺失 set 方法。
-    if (badge === undefined || typeof badge.set !== 'function') return
-    void badge.set(badgeCountRef.current).catch(error => {
-      if (attemptsLeft <= 0) {
-        console.warn('[badge] 徽标计数推送失败：', error)
-        return
-      }
-      badgeRetryTimerRef.current = setTimeout(
-        () => pushBadgeWithRetry(attemptsLeft - 1),
-        LISTENER_READY_RETRY_MS,
-      )
-    })
-  }, [])
-  useEffect(() => {
-    const count = projectBadgeCount(completedBySource, runtimeFacts)
-    badgeCountRef.current = count
-    // I3（plan §10）：把 renderer 派发的计数发布成只读回读值，验收可比对
-    // 「徽标数 == 蓝点集合大小」，无需 IPC 或读主进程状态。
-    publishBadgeCount(count)
-    pushBadgeWithRetry(LISTENER_READY_RETRY_LIMIT)
-  }, [completedBySource, runtimeFacts, pushBadgeWithRetry])
+  // 未读徽标 effect 簇（推送 / 桥迟到兜底 / reject 重推与卸载清理）已抽为
+  // 命名 hook（阶段 3）；事实源与预算显式传入，桥面由 hook 内读 window 单例。
+  useBadgeCount({
+    completedBySource,
+    runtimeFacts,
+    retryMs: LISTENER_READY_RETRY_MS,
+    retryLimit: LISTENER_READY_RETRY_LIMIT,
+  })
 
-  // 桥迟到的兜底（同 LISTENER_READY 重试纪律，见通知就绪手shake）：窗口重载/
-  // 重建后 completedBySource 复位为 {}，必须向主进程推 0 清除遗留徽标——桥经
-  // requestAppInfo 异步暴露，可能晚于首个 [completedBySource, runtimeFacts]
-  // effect 的提交时机（该 effect 在挂载帧即推 0，此时桥大概率未就绪）。有界重试
-  // 直至桥出现，推一次当前计数（0）后停止；预算耗尽静默放弃（dev 无桥场景的
-  // 正常路径）。
-  useEffect(() => {
-    if (window.dshChamber?.badge !== undefined) return
-    let attempts = 0
-    const timer = setInterval(() => {
-      attempts += 1
-      const badge = window.dshChamber?.badge
-      if (badge !== undefined && typeof badge.set === 'function') {
-        clearInterval(timer)
-        pushBadgeWithRetry(LISTENER_READY_RETRY_LIMIT)
-        return
-      }
-      if (attempts >= LISTENER_READY_RETRY_LIMIT) clearInterval(timer)
-    }, LISTENER_READY_RETRY_MS)
-    return () => clearInterval(timer)
-  }, [pushBadgeWithRetry])
-
-  // reject 重推计时器的卸载清理（挂载期内可能由 pushBadgeWithRetry 排入）。
-  useEffect(() => () => {
-    if (badgeRetryTimerRef.current !== null) clearTimeout(badgeRetryTimerRef.current)
-  }, [])
 
   // 控制面失联 = 覆盖式致命屏（视图保持挂载、恢复即续会话，05 §4）。判定：
   // 健康错误**持续**存在超过宽容窗才呈现——首帧（health 从未拉到）立即呈现；

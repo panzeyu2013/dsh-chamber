@@ -1091,7 +1091,7 @@ var OpenInAppGateway = class extends (_a = TypertRemoteService, _probe_dec = [Re
     });
   }
   probe() {
-    return this.core.probe();
+    return domainResult(async () => this.core.probe());
   }
   apps() {
     return domainResult(() => this.core.apps());

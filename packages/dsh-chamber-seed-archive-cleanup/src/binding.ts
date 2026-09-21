@@ -237,6 +237,16 @@ function requireRegistrySurface(registry: RegistryLike | undefined): RegistryLik
 
 export function assertHostSurface(ctx: HostCtxServices): void {
   requireRegistrySurface(ctx.workspaceRegistry)
+  // The liveness faces are load-bearing for the deletion guard: a
+  // mounted-but-methodless agents/sessions surface makes every later live read
+  // refuse (or, before the 2026-13 review, silently read as idle), so the
+  // activation probe must fail HERE rather than at the first purge.
+  if (typeof ctx.agents?.list !== 'function' || typeof ctx.sessions?.list !== 'function') {
+    throw new ArchiveCleanupError(
+      'registry-unreadable',
+      'archiveCleanup: the agents/sessions liveness surface is not mounted with list()',
+    )
+  }
   // Merge-round Minor-3: surface health of the enumeration + storage legs
   // too — a host whose registry is intact but whose session enumeration or
   // locate surface is missing must not pass the probe. Zero-IO structural
@@ -274,7 +284,26 @@ export function assertHostSurface(ctx: HostCtxServices): void {
 function liveSessionFacts(ctx: HostCtxServices): { running: Set<string>; loaded: Set<string> } {
   const running = new Set<string>()
   const loaded = new Set<string>()
-  for (const agent of ctx.agents?.list?.() ?? []) {
+  // Surface presence is part of the fail-closed policy (2026-13 review): the
+  // old `?.list?.() ?? []` degraded a mounted-but-methodless face to "nobody is
+  // live", silently removing BOTH the running/loaded guard and the residency
+  // report — fail-open on the destructive path. A missing face refuses exactly
+  // like a drifted entry shape.
+  const listAgents = ctx.agents?.list
+  if (typeof listAgents !== 'function') {
+    throw new ArchiveCleanupError(
+      'registry-unreadable',
+      'archiveCleanup: the agents service is not mounted with list() — refusing the read (a missing liveness face must never read as idle)',
+    )
+  }
+  const agentRows = listAgents.call(ctx.agents)
+  if (!Array.isArray(agentRows)) {
+    throw new ArchiveCleanupError(
+      'registry-unreadable',
+      'archiveCleanup: agents.list() did not answer an array — refusing the read (a drifted liveness shape must never read as idle)',
+    )
+  }
+  for (const agent of agentRows) {
     if (agent === null || typeof agent !== 'object' || typeof (agent as { id?: unknown }).id !== 'string') {
       throw new ArchiveCleanupError(
         'registry-unreadable',
@@ -295,14 +324,21 @@ function liveSessionFacts(ctx: HostCtxServices): { running: Set<string>; loaded:
   // A session attached to the live store is never a deletion candidate by
   // default (it may be open/current even without a running agent); an
   // explicit force purge may delete it after the caller stopped the run.
-  const sessions = ctx.sessions?.list?.()
-  if (sessions !== undefined && !Array.isArray(sessions)) {
+  const listSessions = ctx.sessions?.list
+  if (typeof listSessions !== 'function') {
+    throw new ArchiveCleanupError(
+      'registry-unreadable',
+      'archiveCleanup: the sessions service is not mounted with list() — refusing the read (a missing live-store face would hide attached sessions from the loaded guard)',
+    )
+  }
+  const sessions = listSessions.call(ctx.sessions)
+  if (!Array.isArray(sessions)) {
     throw new ArchiveCleanupError(
       'registry-unreadable',
       'archiveCleanup: sessions.list() did not answer an array — refusing the read (a drifted live-store shape would hide attached sessions from the loaded guard)',
     )
   }
-  for (const session of sessions ?? []) {
+  for (const session of sessions) {
     if (session === null || typeof session !== 'object' || typeof (session as { id?: unknown }).id !== 'string') {
       throw new ArchiveCleanupError(
         'registry-unreadable',

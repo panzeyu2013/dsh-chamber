@@ -78,7 +78,15 @@ test('an invalid instance id never reaches the network', async () => {
 // 源码级接线钉子（2026-12 复查 MINOR）：托管停机的**判定事实**必须独立于合并后的 `phase`（两套词表都含
 // `error`，反推会把隧道失败误诊为托管停机——BLOCKER），且两个消费面都必须只读该事实。
 const sidebarRoot = new URL('../../', import.meta.url)
-const serverSection = readFileSync(new URL('src/client/ServerSection.tsx', sidebarRoot), 'utf8')
+const serverSection = [
+  'ServerSection.tsx',
+  'ServerSectionHeader.tsx',
+  'ServerSectionRows.tsx',
+  'ServerSectionSearch.tsx',
+  'server-section-controls.tsx',
+  'server-section-model.ts',
+  'server-section-session-state.tsx',
+].map(name => readFileSync(new URL('src/client/' + name, sidebarRoot), 'utf8')).join('\n')
 const appSource = readFileSync(new URL('../renderer/src/App.tsx', sidebarRoot), 'utf8')
 /** Source-text locks: `pattern` must (or must not) appear in the sidebar / App source, with the given rationale. */
 const sLock = (pattern: RegExp, message: string): void => { assert.match(serverSection, pattern, message) }

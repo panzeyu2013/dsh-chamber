@@ -56,7 +56,7 @@
  *     离开 ready disarm 与 onVerified 指纹重注册随上方订阅接线；register 腿
  *     经 planeRef → plane.registerInstanceTransport，同 main 1525-1542）。
  *   H 组（local+npm）：runLocalPluginMutation 真实叶（main 1270-1286 逐字搬：
- *     runtime writer fence 租约 + runtimeStartBlocked 启动门 +
+ *     runtime writer fence 租约 + runtimeState.startBlocked 启动门 +
  *     resolveActiveRuntime(runtimeBaseDir, builtinDshWorkspace) workspace
  *     解析——随本片 runtime 门族真化后可用）。
  *   J/K 组（runtime 全部）：DshRuntimeController 真实构造（main 2321-2382 的
@@ -76,7 +76,7 @@
  *     plane 依赖经 planeRef（sidecar-entry bindPlane 注入自身 controlPlane，
  *     connectionState/localDshPort/localProcessAlive/localWritersQuiescent/
  *     refreshLocalExposure/startLocal/stopLocal/restartLocal 同 main cp 面）；
- *     runtimeOperation 事务槽（模块级 let，begin/end/inFlight 同 main 3746-3750）
+ *     runtimeState.operation 事务槽（模块级 let，begin/end/inFlight 同 main 3746-3750）
  *     + RUNTIME_STATE_CHANGED push（runtimeInstance.onChanged →
  *     edges.rendererPush，main 2384-2388 同形——窗口门 = edges.mainWindowAlive）。
  *     启动尾部 = runStartupTail()（sidecar-entry 在 bindPlane 后调用——main
@@ -107,178 +107,42 @@
  * sidecar 无 Electron safeStorage：gateway 凭据镜像按 design 17 §12/S22 走诚实
  * loud 的 0600 plaintext 回退（main 无 keychain 分支同语义），绝不静默。
  */
-import { createHash } from 'node:crypto'
-import { describeError } from './describe-error.ts'
-import { preserveFileAside } from './store-file-hygiene.ts'
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
-import type { PlaneHandle } from '@dsh-chamber/control-plane'
-import type { ChamberSettings } from './chamber-settings.ts'
-import { DEFAULT_CHAMBER_SETTINGS, readSettingsFile, writeSettingsFile } from './chamber-settings.ts'
-import { IPC_CHANNELS } from './ipc-events.ts'
-import {
-  auditLogFilePath,
-  captureNotificationSource,
-  chamberSettingsFilePath,
-  gatewaySecretsFilePath,
-  instancesFilePath,
-  LOCAL_RUNNING_STATES,
-  localDshHomeDir,
-  ownsNotificationSource,
-  projectInstanceSecrets,
-  projectNotificationSourceInstances,
-  proxyTransport,
-  readDshVersion,
-  resolveActiveRuntime,
-  sshPasswordsFilePath,
-  syncNotificationSourceRegistry,
-  type HostMessageOptions,
-  type NotificationSourceToken,
-  type ProjectedRegistryInstance,
-  type ShellAssemblyCtx,
-} from './shell-core.ts'
-import {
-  attemptCommittedRegistryPush,
-  computeRemovedInstanceIds,
-  computeRetiredInstanceIds,
-  createTransportManager,
-  type TransportManager,
-} from './transport-manager.ts'
-// Single-sourced OS-resume re-probe (2026-12 stage-2 item 6) — main.ts binds
-// its own transportManager/quitRequested facts to the same implementation.
-// Re-exported so this module keeps its historical surface.
-import { reconnectStaleTransports } from './transport-reconnect.ts'
-export { reconnectStaleTransports }
-import type { TransportInstanceSpec } from './transport-provider.ts'
-import {
-  cleanupStaleAskpassHelpers,
-  configureSshPasswordStore,
-  probeChamberHostLive,
-  sshProvider,
-} from './ssh-provider.ts'
-import {
-  configureGatewaySecretStore,
-  configureGatewaySessionProvider,
-  gatewayProvider,
-  getGatewayPassword,
-  getGatewayToken,
-  syncGatewayChamberPlugins,
-  type LocalChamberHostPackage,
-} from './gateway-provider.ts'
-import {
-  createGatewaySessionManager,
-  gatewayRegistrationAuthHeaders,
-  gatewaySessionScopeForConnection,
-  type GatewayRegistrationAuthProof,
-} from './gateway-session.ts'
-import {
-  createGatewaySessionRefresh,
-  gatewaySessionOriginForUrl,
-  gatewayTunnelAuthority,
-  type GatewaySessionRefresh,
-} from './gateway-session-refresh.ts'
-import { appendAuditEvent, configureAuditLog, type AuditEvent } from './audit-log.ts'
-import { createSshPluginJournal } from './ssh-plugin-journal.ts'
-import { sanitizeErrorText } from './sanitize-error.ts'
-// 探针失败诊断单源（与 Electron 装配 main.ts 共用；见模块头注释）。
-import { metadataProbeFailureMessage, probeFailureMessage } from './runtime-probe-detail.ts'
-import { createHeadlessUpdateController } from './update-headless.ts'
-import type { HeadlessUpdateController, NativeUpdaterBridge } from './update-headless.ts'
-import type { ApplyNowGateInput } from './apply-now-gate.ts'
-import { shouldSkipDiskRefresh } from './disk-evidence-gate.ts'
-import { CHAMBER_HOST_PACKAGES, call } from './control-plane-module.ts'
-import { packageDirName } from './host-package-dirs.ts'
-import type { ChamberHostPackageSeed, ExecFn, RemoteSpec, StatusFn } from './plugin-sync.ts'
-import type { ChamberHostPackageDescriptor } from './control-plane-module.ts'
-import {
-  ARCHIVE_CLEANUP_PACKAGE_NAME,
-  CLIENT_GRAPH_PACKAGE_NAME,
-  ExactOwnershipRegistry,
-  GIT_WORKTREE_PACKAGE_NAME,
-  ReadyPhaseEdges,
-  builtChamberHostPackageSeeds,
-  disposePluginSyncChildren,
-  portableChamberHostPackageSeeds,
-  reapStaleLocalPluginWriters,
-  remoteHome,
-  scopeExecToOwnership,
-  seedRemoteChamberHostPackages,
-} from './plugin-sync.ts'
-import { setGatewaySyncRegistration } from './gateway-sync-registry.ts'
-import {
-  DEFAULT_RUNTIME_LOGICAL_DISK_LIMIT_BYTES,
-  DshRuntimeController,
-  type RuntimeMetadataComponent,
-  type RuntimeMetadataHealthProjection,
-} from './dsh-runtime-controller.ts'
-import {
-  FATAL_STARTUP_BLOCK_REASONS,
-  RuntimeOperationFence,
-  allowedActions,
-  cleanupStaleInstalls,
-  clearActivationJournal,
-  clearCurrentPointer,
-  clearRuntimeFailure,
-  clearStorePruneRequest,
-  completeInterruptedRestore,
-  createCoalescedRefresher,
-  deleteOverride,
-  detectRuntimeMetadataHealth,
-  disposeRuntimeInstaller,
-  effectivePending,
-  evictVersions,
-  fetchRegistryMetadata,
-  inspectCorruptMetadataRecoveryMarker,
-  installRuntimeVersion,
-  invalidate,
-  isSafeVersion,
-  latestKnownGood,
-  listExplicitlyInstalledVersions,
-  listKnownGoodVersions,
-  listValidVersionTrees,
-  noteBoot,
-  planRestartExhaustedRollback,
-  prepareManualRollbackData,
-  promoteDueCandidates,
-  pruneRuntimeSnapshots,
-  pruneRuntimeStore,
-  readActivationJournalState,
-  readCurrentPointer,
-  readCurrentPointerState,
-  readOverride,
-  readOverrideState,
-  readStorePruneRequest,
-  recordExplicitInstall,
-  recordProbePass,
-  recordRuntimeFailure,
-  recoverRuntimeMetadata,
-  removeKnownGoodCandidate,
-  rescueCorruptMetadataRecoveryMarker,
-  resetCandidateHealthWindow,
-  resolveSnapshotName,
-  restoreMarkerAuthorityStatus,
-  restoreSnapshot,
-  runDelayedRollback,
-  runRuntimeActivationProbes,
-  runStartupPhase,
-  shouldProbeEnvWithDormantCorruptSelection,
-  snapshotDshHome,
-  snapshotSummary,
-  validateVersionTree,
-  writeActivationIntent,
-  writeActivationJournal,
-  writeCurrentPointer,
-  writeOverride,
-  type ActivationJournalState,
-  type OperationLease,
-  type RuntimeMetadataHealth,
-  type StartupDeps,
-  type StartupResult,
-  activationProbeNamesForDomains,
-} from '@dsh-chamber/dsh-runtime'
-import { runtimeDiskSummaryAsync, runtimeFailureSummary } from '@dsh-chamber/dsh-runtime'
-import { RUNTIME_ABORT_REASON, runRuntimeCheckCycle } from './shell-core.ts'
+import { createHash } from 'node:crypto';
+import { describeError } from './describe-error.ts';
+import { preserveFileAside } from './store-file-hygiene.ts';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import type { PlaneHandle } from '@dsh-chamber/control-plane';
+import type { ChamberSettings } from './chamber-settings.ts';
+import { DEFAULT_CHAMBER_SETTINGS, readSettingsFile, writeSettingsFile } from './chamber-settings.ts';
+import { IPC_CHANNELS } from './ipc-events.ts';
+import { auditLogFilePath, captureNotificationSource, chamberSettingsFilePath, gatewaySecretsFilePath, instancesFilePath, LOCAL_RUNNING_STATES, localDshHomeDir, ownsNotificationSource, projectInstanceSecrets, projectNotificationSourceInstances, proxyTransport, readDshVersion, resolveActiveRuntime, sshPasswordsFilePath, syncNotificationSourceRegistry, type HostMessageOptions, type NotificationSourceToken, type ProjectedRegistryInstance, type ShellAssemblyCtx } from './shell-core.ts';
+import { attemptCommittedRegistryPush, computeRemovedInstanceIds, computeRetiredInstanceIds, createTransportManager, type TransportManager } from './transport-manager.ts';
+import { reconnectStaleTransports } from './transport-reconnect.ts';
+import type { TransportInstanceSpec } from './transport-provider.ts';
+// Public surface kept for the sidecar wake-reprobe lockstep test
+// (sidecar-stdio.test.ts imports this module namespace directly).
+export { reconnectStaleTransports };
+import { cleanupStaleAskpassHelpers, configureSshPasswordStore, probeChamberHostLive, sshProvider } from './ssh-provider.ts';
+import { configureGatewaySecretStore, configureGatewaySessionProvider, gatewayProvider, getGatewayPassword, getGatewayToken, syncGatewayChamberPlugins, type LocalChamberHostPackage } from './gateway-provider.ts';
+import { createGatewaySessionManager, gatewayRegistrationAuthHeaders, gatewaySessionScopeForConnection, type GatewayRegistrationAuthProof } from './gateway-session.ts';
+import { createGatewaySessionRefresh, gatewaySessionOriginForUrl, gatewayTunnelAuthority, type GatewaySessionRefresh } from './gateway-session-refresh.ts';
+import { appendAuditEvent, configureAuditLog, type AuditEvent } from './audit-log.ts';
+import { createSshPluginJournal } from './ssh-plugin-journal.ts';
+import { sanitizeErrorText } from './sanitize-error.ts';
+import { createHeadlessUpdateController } from './update-headless.ts';
+import type { HeadlessUpdateController, NativeUpdaterBridge } from './update-headless.ts';
+import { CHAMBER_HOST_PACKAGES } from './control-plane-module.ts';
+import { packageDirName } from './host-package-dirs.ts';
+import type { ChamberHostPackageSeed, ExecFn, RemoteSpec, StatusFn } from './plugin-sync.ts';
+import type { ChamberHostPackageDescriptor } from './control-plane-module.ts';
+import { ARCHIVE_CLEANUP_PACKAGE_NAME, CLIENT_GRAPH_PACKAGE_NAME, ExactOwnershipRegistry, GIT_WORKTREE_PACKAGE_NAME, ReadyPhaseEdges, builtChamberHostPackageSeeds, disposePluginSyncChildren, portableChamberHostPackageSeeds, reapStaleLocalPluginWriters, remoteHome, scopeExecToOwnership, seedRemoteChamberHostPackages } from './plugin-sync.ts';
+import { setGatewaySyncRegistration } from './gateway-sync-registry.ts';
+import { RuntimeOperationFence, clearStorePruneRequest, detectRuntimeMetadataHealth, disposeRuntimeInstaller, invalidate, isSafeVersion, pruneRuntimeStore, readActivationJournalState, readStorePruneRequest, resetCandidateHealthWindow, writeActivationIntent, writeOverride, type RuntimeMetadataHealth, type StartupResult } from '@dsh-chamber/dsh-runtime';
+import { RUNTIME_ABORT_REASON } from './shell-core.ts';
+import { createRuntimeStartupHost } from './runtime-startup-host.ts';
+import type { RuntimeStartupHostState } from './runtime-startup-host.ts';
 
 // ---------------------------------------------------------------------------
 // 打包布局锚点（P-13）与 host 包源目录解析（P-05）——具名纯/近纯函数，Swift 布局
@@ -408,7 +272,7 @@ export interface HeadlessLocalSpawnGates {
   /** 权威 dsh workspace（启动事务特权 workspace 优先，否则活动运行时解析）：
    *  失败 throw（main 1203-1208 同文案）。 */
   getDshWorkspacePath(): string
-  /** 公共启动门（main 1209-1216：writers 非 quiescent / runtimeStartBlocked 且
+  /** 公共启动门（main 1209-1216：writers 非 quiescent / runtimeState.startBlocked 且
    *  非事务内启动 → 拒绝）。 */
   canStartLocal(): { ok: true } | { ok: false; reason: string }
   /** 暴露门（main 1217-1220：门未开 = HTTP/WS/ready 投影隔离）。 */
@@ -527,12 +391,14 @@ export async function buildHeadlessCtx(
   const runtimeWriterFence = new RuntimeOperationFence()
   // 模块级事务槽与宿主门状态（main 380-388 同义；本文件每装配一份宿主状态，
   // 单进程单装配——main 模块级 let 的闭包等价）。
-  let runtimeStartBlocked = true
-  let runtimeStartBlockedReason = '正在确认 dsh 运行时安全状态'
-  let runtimeInternalStart = false
-  let runtimeTransactionWorkspace: string | null = null
-  let runtimeOperation: Promise<StartupResult | null> | null = null
-  let runtimeOperationAbort: AbortController | null = null
+  const runtimeState: RuntimeStartupHostState = {
+    startBlocked: true,
+    startBlockedReason: '正在确认 dsh 运行时安全状态',
+    internalStart: false,
+    transactionWorkspace: null,
+    operation: null,
+    operationAbort: null,
+  }
   let quittingRequested = false
   const planeRef: { current: PlaneHandle | null } = { current: null }
   const envOverrideActive = Boolean(process.env.DSH_CHAMBER_DSH_PATH)
@@ -557,6 +423,8 @@ export async function buildHeadlessCtx(
   // 同源——持久化内建激活意图先于 override invalidation，崩溃不得无快照回内建）。
   const startupOverrideState = startupMetadataHealth?.override ?? { kind: 'corrupt' as const }
   const startupPointerState = startupMetadataHealth?.current ?? { kind: 'corrupt' as const }
+  const bootstrapMetadataCorrupt = startupOverrideState.kind === 'corrupt'
+    || startupPointerState.kind === 'corrupt'
   if (runtimeBootstrapFailure !== null) {
     // Writer ownership outranks runtime-selection mutation（同 main 1133-1135）。
   } else if (startupMetadataHealth?.status === 'recovery-in-progress') {
@@ -1400,1134 +1268,56 @@ export async function buildHeadlessCtx(
 
   // —— DshRuntimeController 现实例（main 2321-2382 的 ControllerOptions + DI
   // 全参镜像；K 组注册体与启动/证据路径共用——状态权威单一）。——
-  const runtimeInstance = new DshRuntimeController({
-    baseDir: runtimeBaseDir,
-    bundledVersion,
-    packageName: '@deepseek-ai/dsh',
-    registryOrigin: settings.registryOrigin,
-    getRegistryOrigin: () => settings.registryOrigin,
-    envVersion: process.env.DSH_CHAMBER_DSH_PATH
-      ? readDshVersion(process.env.DSH_CHAMBER_DSH_PATH)
-      : null,
-    envOverrideActive,
-    managementSupported: runtimeManagementSupported,
-    managementUnsupportedReason: runtimeManagementSupported
-      ? null
-      : '当前版本仅在 macOS/Linux 验证了运行时切换与数据恢复；Windows 暂为只读',
-    pnpmEntry,
-    compatibilityBaseline: bundledVersion,
-    deps: {
-      fetchMetadata: (pkg, origin) => fetchRegistryMetadata(pkg, { origin }),
-      install: async (opts) => {
-        await runStorePruneIfNeeded()
-        // Merge, never replace（main 2340-2346 同源注释）：未来 caller-supplied
-        // deps 成员必须存活于 desktop 的 node-executor 注入之下。
-        return installRuntimeVersion({
-          ...opts,
-          deps: { ...opts.deps, node: runtimeNodeExecutor },
-        })
-      },
-      store: {
-        readOverride: (b) => readOverride(b),
-        writeOverride: (b, record) => writeOverride(b, record),
-        readCurrentPointer: (b) => readCurrentPointer(b),
-        listVersionTrees: (b) => listValidVersionTrees(b),
-        validateVersionTree: (b, runtimeVersion) => validateVersionTree(b, runtimeVersion),
-        deleteOverride: (b) => deleteOverride(b),
-        clearCurrentPointer: (b) => clearCurrentPointer(b),
-        recordExplicitInstall: (b, runtimeVersion) => recordExplicitInstall(b, runtimeVersion),
-        // perf T3（main 2357-2363 注释同源）：安装闸口直接 await 异步单遍遍历
-        // （绕过下方证据刷新 coalescer——与证据刷新并发时罕见窗口多一遍墙钟
-        // 时间，无正确性影响）。
-        runtimeDiskSummary: (b) => runtimeDiskSummaryAsync(b),
-        writeActivationIntent: (b, input) => { writeActivationIntent(b, input) },
-        clearActivationJournal: (b) => clearActivationJournal(b),
-        recordFailure: (b, failure) => {
-          recordRuntimeFailure(b, {
-            version: failure.version,
-            phase: 'installing',
-            error: failure.reason,
-            restoreOutcome: 'none',
-          })
-        },
-      },
-      shellVersion,
-      // Live control-plane connection state projected to the renderer so it
-      // can mirror the apply-now gate（main 2377-2380 同源——plane 晚绑定，
-      // 每次 getState 实时读）。
-      connectionState: () => planeRef.current?.connectionState ?? 'unknown',
+  const runtimeHost = createRuntimeStartupHost({
+    logTag: 'sidecar',
+    rendererPush: (channel, payload) => edges.rendererPush(channel, payload),
+    windowAlive: () => edges.mainWindowAlive(),
+    isQuitting: () => quittingRequested,
+    settings: {
+      get registryOrigin() { return settings.registryOrigin },
     },
+    plane: {
+      connectionState: () => planeRef.current?.connectionState ?? null,
+      localWritersQuiescent: () => planeRef.current?.localWritersQuiescent ?? false,
+      localProcessAlive: () => planeRef.current?.localProcessAlive ?? false,
+      localDshPort: () => planeRef.current?.localDshPort ?? null,
+      seededProbeDomains: () => planeRef.current?.seededProbeDomains ?? [],
+      startLocal: () => planeRef.current?.startLocal(),
+      stopLocal: () => planeRef.current?.stopLocal() ?? Promise.resolve(),
+      refreshLocalExposure: () => planeRef.current?.refreshLocalExposure(),
+    },
+    state: runtimeState,
+    writerFence: runtimeWriterFence,
+    runtimeBaseDir,
+    localDshHome,
+    builtinDshWorkspace,
+    shellVersion,
+    bundledVersion,
+    envOverrideActive,
+    runtimeManagementSupported,
+    runtimeBootstrapFailure,
+    runtimeBootstrapWriterUnsafe,
+    bootstrapMetadataCorrupt,
+    pnpmEntry,
+    runtimeNodeExecutor,
+    runStorePruneIfNeeded,
   })
-  // RUNTIME_STATE_CHANGED push（main 2384-2388 同形：状态变更即时投影到存活
-  // 主窗——Swift flavor 窗口门 = edges.mainWindowAlive()，node-edges 事实缓存）。
-  runtimeInstance.onChanged((state) => {
-    if (edges.mainWindowAlive()) {
-      edges.rendererPush(IPC_CHANNELS.RUNTIME_STATE_CHANGED, state)
-    }
-  })
-
-  const projectMetadataHealth = (
-    phase: Parameters<typeof runtimeInstance.setLifecycle>[0]['phase'],
-    canRetryRestore: boolean,
-    restoreOutcome: 'none' | 'complete' | 'half' | 'incomplete',
-  ): {
-    metadataHealth: RuntimeMetadataHealthProjection
-    metadataComponents: RuntimeMetadataComponent[]
-    canRecoverMetadata: boolean
-  } => {
-    let health: RuntimeMetadataHealth
-    try {
-      health = detectRuntimeMetadataHealth(runtimeBaseDir, shellVersion)
-    } catch {
-      return { metadataHealth: 'unknown', metadataComponents: [], canRecoverMetadata: false }
-    }
-    const components = new Set<RuntimeMetadataComponent>()
-    if (health.current.kind === 'corrupt'
-      || health.corruptEvidence.some(name => name.startsWith('current.'))) components.add('current')
-    if (health.override.kind === 'corrupt'
-      || health.corruptEvidence.some(name => name.startsWith('override.json.'))) components.add('override')
-    if (health.activationJournal.kind === 'corrupt'
-      || health.corruptEvidence.some(name => name.startsWith('activation-journal.json.'))) components.add('activation-journal')
-    if (health.recovery.kind === 'corrupt'
-      || (health.recovery.kind === 'valid' && health.recovery.record.phase !== 'finalized')) {
-      components.add('recovery-marker')
-    }
-    if (health.corruptEvidence.length > 0) components.add('retained-evidence')
-    const effectivePhase = phase ?? runtimeInstance.getState().phase
-    const markerRescueAvailable = health.status === 'recovery-marker-corrupt'
-      && inspectCorruptMetadataRecoveryMarker(runtimeBaseDir).recoverable
-    const needsRecovery = health.status === 'selection-corrupt'
-      || health.status === 'recovery-in-progress'
-      || markerRescueAvailable
-    // 'incomplete' is a permanent restore outcome（main 2422-2427 注释同源：
-    // journaled snapshot 缺失/不可信 → retry-restore 永不可成，recover-metadata
-    // 逃生门保持资格；'half' 瞬时可重试 → 门全闭）。
-    const permanentIncomplete = restoreOutcome === 'incomplete'
-    const canRecoverMetadata = needsRecovery
-      && (effectivePhase === 'idle' || effectivePhase === 'failed')
-      && (permanentIncomplete || !canRetryRestore)
-      && runtimeManagementSupported
-      && !envOverrideActive
-      && !runtimeBootstrapWriterUnsafe
-      && (planeRef.current?.localWritersQuiescent ?? false)
-      && bundledVersion !== null
-      && isSafeVersion(bundledVersion)
-      && (permanentIncomplete || restoreMarkerAuthorityStatus(runtimeBaseDir) === 'missing')
-    return {
-      metadataHealth: health.status,
-      metadataComponents: [...components],
-      canRecoverMetadata,
-    }
-  }
-  // perf T3（main 2445-2452 注释同源）：磁盘统计 coalescer（单飞合并并发 +
-  // 运行期到达补跑；"全树统计绝不重复并发"仅对经本 coalescer 的调用点成立）。
-  const refreshDiskUsage = createCoalescedRefresher(() => runtimeDiskSummaryAsync(runtimeBaseDir))
-  // 最近一次完成的全树磁盘投影（含错误投影）——D7 进度跳过复用（main 2453-2457）。
-  let lastDiskEvidence: { usage: Awaited<ReturnType<typeof runtimeDiskSummaryAsync>> | null; error: string | null } | null = null
-  const refreshRuntimeEvidence = async (patch: Parameters<typeof runtimeInstance.setLifecycle>[0] = {}) => {
-    const effectivePhase = patch.phase ?? runtimeInstance.getState().phase
-    const effectiveCanRetryRestore = patch.canRetryRestore
-      ?? (runtimeInstance.getState().canRetryRestore === true)
-    const effectiveRestoreOutcome = patch.restoreOutcome
-      ?? runtimeInstance.getState().restoreOutcome
-      ?? 'none'
-    const showFailure = effectivePhase === 'failed' || effectivePhase === 'rollback'
-      || effectivePhase === 'snapshot-failed' || effectivePhase === 'error'
-    let snapshotProjection: Parameters<typeof runtimeInstance.setLifecycle>[0]
-    try {
-      const snapshots = await snapshotSummary(runtimeBaseDir)
-      const failures = runtimeFailureSummary(runtimeBaseDir)
-      snapshotProjection = {
-        snapshotCount: snapshots.count,
-        latestSnapshotAt: snapshots.latestAt,
-        preRollbackCount: snapshots.preRollbackCount,
-        preRollbackLatestName: snapshots.latestStashName,
-        snapshotError: null,
-        failure: !showFailure || failures.latest === null ? null : {
-          version: failures.latest.version,
-          at: failures.latest.lastFailedAt,
-          reason: failures.latest.error,
-        },
-      }
-    } catch (error) {
-      snapshotProjection = {
-        snapshotError: sanitizeErrorText(describeError(error)),
-      }
-    }
-    let diskProjection: Parameters<typeof runtimeInstance.setLifecycle>[0]
-    const skipDisk = shouldSkipDiskRefresh(effectivePhase)
-    if (skipDisk && lastDiskEvidence !== null) {
-      // 进度相位：复用最近一次完整投影（review N4 注释随迁——成功或失败投影
-      // 皆可复用；终态 patch 现场重走自愈）。
-      diskProjection = {
-        diskUsage: lastDiskEvidence.usage,
-        diskError: lastDiskEvidence.error,
-        diskLimitBytes: DEFAULT_RUNTIME_LOGICAL_DISK_LIMIT_BYTES,
-        diskLimitExceeded: lastDiskEvidence.usage === null
-          ? null
-          : lastDiskEvidence.usage.totalBytes >= DEFAULT_RUNTIME_LOGICAL_DISK_LIMIT_BYTES,
-        explicitlyInstalledVersions: listExplicitlyInstalledVersions(runtimeBaseDir),
-      }
-    } else {
-      try {
-        const diskUsage = await refreshDiskUsage()
-        lastDiskEvidence = { usage: diskUsage, error: null }
-        diskProjection = {
-          diskUsage,
-          diskError: null,
-          diskLimitBytes: DEFAULT_RUNTIME_LOGICAL_DISK_LIMIT_BYTES,
-          diskLimitExceeded: diskUsage.totalBytes >= DEFAULT_RUNTIME_LOGICAL_DISK_LIMIT_BYTES,
-          explicitlyInstalledVersions: listExplicitlyInstalledVersions(runtimeBaseDir),
-        }
-      } catch (error) {
-        lastDiskEvidence = {
-          usage: null,
-          error: sanitizeErrorText(describeError(error)),
-        }
-        diskProjection = {
-          diskUsage: null,
-          diskError: lastDiskEvidence.error,
-          diskLimitBytes: DEFAULT_RUNTIME_LOGICAL_DISK_LIMIT_BYTES,
-          diskLimitExceeded: null,
-          explicitlyInstalledVersions: [],
-        }
-      }
-    }
-    runtimeInstance.setLifecycle({
-      ...snapshotProjection,
-      ...diskProjection,
-      ...patch,
-      // Authoritative main-process projection（main 2534-2536 同源：stale
-      // lifecycle patch 绝不可制造 metadata-recovery 权威）。
-      ...projectMetadataHealth(effectivePhase, effectiveCanRetryRestore, effectiveRestoreOutcome),
-    })
-  }
-
-  const setRuntimeGate = (blocked: boolean, reason: string | null = null) => {
-    runtimeStartBlocked = blocked
-    runtimeStartBlockedReason = blocked
-      ? reason ?? 'dsh 运行时尚未通过安全确认'
-      : ''
-    planeRef.current?.refreshLocalExposure()
-  }
-
-  const probesPassed = (probes: Awaited<ReturnType<typeof runRuntimeActivationProbes>>) =>
-    probes.length > 0 && probes.every(probe => probe.ok)
-
-  const startAndProbeWorkspace = async (workspace: string, signal?: AbortSignal) => {
-    if (quittingRequested) throw new Error(RUNTIME_ABORT_REASON)
-    signal?.throwIfAborted()
-    runtimeTransactionWorkspace = workspace
-    runtimeInternalStart = true
-    try {
-      await planeRef.current?.startLocal()
-    } finally {
-      runtimeInternalStart = false
-    }
-    try {
-      const port = planeRef.current?.localDshPort ?? null
-      if (port === null) throw new Error('local dsh did not publish a probe port')
-      return await runRuntimeActivationProbes({
-        baseUrl: `http://127.0.0.1:${port}`,
-        dshHome: localDshHome,
-        call,
-        signal,
-        // 模块评审 D#2：与 Electron 侧同源——期望集按实际 seed 的宿主域派生。
-        hostDomainNames: planeRef.current?.seededProbeDomains ?? [],
-      })
-    } finally {
-      runtimeTransactionWorkspace = null
-    }
-  }
-
-  const resolveExactRuntimeWorkspace = (runtimeVersion: string, isBuiltin: boolean): string => {
-    if (isBuiltin) {
-      if (builtinDshWorkspace === null || bundledVersion !== runtimeVersion) {
-        throw new Error('内建 dsh 运行时清单与激活目标不一致')
-      }
-      return builtinDshWorkspace
-    }
-    const tree = validateVersionTree(runtimeBaseDir, runtimeVersion)
-    if (!tree.ok) throw new Error(`dsh runtime ${runtimeVersion} tree invalid: ${tree.error}`)
-    return tree.path
-  }
-
-  const startAndProbeRuntime = async (runtimeVersion: string, isBuiltin: boolean, signal?: AbortSignal) =>
-    startAndProbeWorkspace(resolveExactRuntimeWorkspace(runtimeVersion, isBuiltin), signal)
-
-  const startAndProbeCurrent = async (signal?: AbortSignal) => {
-    const active = resolveActiveRuntime(runtimeBaseDir, builtinDshWorkspace)
-    if (active.path === null) throw new Error(active.blockedReason ?? 'dsh workspace not found')
-    return {
-      active,
-      probes: await startAndProbeWorkspace(active.path, signal),
-    }
-  }
-
-  const selectedJournalIntent = (state: ActivationJournalState) => {
-    if (state.kind !== 'valid') return null
-    if (state.journal.phase === 'applied-monitoring' && state.journal.nextIntent !== null) {
-      return state.journal.nextIntent
-    }
-    return state.journal
-  }
-
-  const readActivationFacts = () => {
-    // ACTIVATION-FACTS DIVERGENCE（main 2608-2614 注释同源：gateway twin 排除
-    // current POINTER 与 win32 short-circuit；本侧排除 journalIntent.targetVersion
-    // ?? override.pending 并校验树——统一需一个 core helper，deferred）。
-    const pointer = readCurrentPointerState(runtimeBaseDir)
-    if (pointer.kind === 'corrupt') throw new Error('current pointer metadata 损坏')
-    const overrideState = readOverrideState(runtimeBaseDir)
-    if (overrideState.kind === 'corrupt') throw new Error('override metadata 损坏')
-    const journalIntent = selectedJournalIntent(readActivationJournalState(runtimeBaseDir))
-    const excludedVersion = journalIntent?.targetVersion
-      ?? (overrideState.kind === 'valid' ? overrideState.record.pending : null)
-    if (pointer.kind === 'valid') {
-      const tree = validateVersionTree(runtimeBaseDir, pointer.version)
-      if (!tree.ok) throw new Error(`current runtime tree invalid: ${tree.error}`)
-      const record = overrideState.kind === 'valid' ? overrideState.record : null
-      return {
-        sourceVersion: pointer.version,
-        sourceIsBuiltin: false,
-        sourceWasKnownGood: listKnownGoodVersions(runtimeBaseDir).includes(pointer.version)
-          || (record?.lastOutcome === 'applied' && record.resolvedVersion === pointer.version),
-        knownGoodVersion: latestKnownGood(runtimeBaseDir, excludedVersion),
-      }
-    }
-    if (bundledVersion === null || !isSafeVersion(bundledVersion)) {
-      throw new Error('无法确认内建 dsh 运行时版本')
-    }
-    return {
-      sourceVersion: bundledVersion,
-      sourceIsBuiltin: true,
-      sourceWasKnownGood: true,
-      knownGoodVersion: latestKnownGood(runtimeBaseDir, excludedVersion),
-    }
-  }
-
-  const buildStartupDeps = (): StartupDeps => {
-    if (bundledVersion === null || !isSafeVersion(bundledVersion)) {
-      throw new Error('无法确认内建 dsh 运行时版本')
-    }
-    return {
-      cleanupStaleInstalls: () => cleanupStaleInstalls(runtimeBaseDir),
-      evict: () => evictVersions(runtimeBaseDir),
-      completeInterruptedRestore: () => completeInterruptedRestore(runtimeBaseDir, localDshHome),
-      readOverrideState: () => readOverrideState(runtimeBaseDir),
-      writeOverride: record => writeOverride(runtimeBaseDir, record),
-      deleteOverride: () => deleteOverride(runtimeBaseDir),
-      readCurrentPointerState: () => readCurrentPointerState(runtimeBaseDir),
-      readActivationJournal: () => readActivationJournalState(runtimeBaseDir),
-      writeActivationJournal: journal => writeActivationJournal(runtimeBaseDir, journal),
-      clearActivationJournal: () => clearActivationJournal(runtimeBaseDir),
-      envOverrideActive: () => envOverrideActive,
-      shellVersion,
-      builtinVersion: bundledVersion,
-      activationFacts: readActivationFacts,
-      snapshot: sourceVersion => snapshotDshHome(runtimeBaseDir, localDshHome, sourceVersion),
-      resolveSnapshotName: snapshotName => resolveSnapshotName(runtimeBaseDir, snapshotName),
-      prepareManualRollback: targetVersion => prepareManualRollbackData(runtimeBaseDir, localDshHome, targetVersion),
-      validateTarget: (runtimeVersion, isBuiltin) => {
-        if (isBuiltin) {
-          return builtinDshWorkspace !== null && runtimeVersion === bundledVersion
-            ? { ok: true as const }
-            : { ok: false as const, error: '内建运行时清单与目标版本不一致' }
-        }
-        const tree = validateVersionTree(runtimeBaseDir, runtimeVersion)
-        return tree.ok ? { ok: true as const } : { ok: false as const, error: tree.error }
-      },
-      switchPointer: runtimeVersion => {
-        if (runtimeVersion === null) clearCurrentPointer(runtimeBaseDir)
-        else writeCurrentPointer(runtimeBaseDir, runtimeVersion)
-      },
-      // The transaction-level signal flows through spawnAndProbe from
-      // runStartupPhase/runDelayedRollback（main 2680-2685 注释同源：绝不回退到
-      // 模块级 aborted signal——那会把 abort 注入回退验证探针、在 apply-now 回退
-      // 窗口内伪造终态）。
-      spawnAndProbe: (runtimeVersion, isBuiltin, signal) => startAndProbeRuntime(
-        runtimeVersion,
-        isBuiltin,
-        signal,
-      ),
-      // 与 Electron 侧同源：期望集按实际 seed 的宿主域派生，且必须是惰性
-      // 函数——shared core 在探针 run 返回后调用它（ApplyDeps 侧），此时
-      // startAndProbeRuntime 内的 spawn 已完成 seed，与传给
-      // runRuntimeActivationProbes 的 hostDomainNames 同源同快照（2026-12 P0：
-      // 值/对象属性位置错误会让 Swift flavor 的期望集恒为默认全量）。
-      probeExpectedNames: () => activationProbeNamesForDomains(planeRef.current?.seededProbeDomains ?? []),
-      stopHost: () => {
-        const livePlane = planeRef.current
-        if (livePlane === null) throw new Error('control plane not initialized')
-        return livePlane.stopLocal()
-      },
-      restore: snapshotPath => restoreSnapshot(runtimeBaseDir, localDshHome, snapshotPath),
-      recordProbePass: runtimeVersion => {
-        if (validateVersionTree(runtimeBaseDir, runtimeVersion).ok) recordProbePass(runtimeBaseDir, runtimeVersion)
-      },
-      recordFailure: input => { recordRuntimeFailure(runtimeBaseDir, input) },
-    }
-  }
-
-  const runSnapshotMaintenance = async () => {
-    // Retention evidence and deletion must be one transaction（main 2700-2708
-    // 注释同源：共享 dsh-runtime composite pruneRuntimeSnapshots——与 gateway
-    // runtime manager 同一实现，快照边界永不漂移）。
-    const lease = await runtimeWriterFence.acquire('maintenance:snapshot-prune')
-    try {
-      const maintenance = await pruneRuntimeSnapshots(runtimeBaseDir, localDshHome, 3)
-      if (maintenance.artifactCleanup.removedTemporaryEntries.length > 0
-        || maintenance.artifactCleanup.removedRestoreBackups.length > 0) {
-        console.log(
-          `[sidecar] runtime snapshot cleanup removed ${maintenance.artifactCleanup.removedTemporaryEntries.length} temporary entr${maintenance.artifactCleanup.removedTemporaryEntries.length === 1 ? 'y' : 'ies'} and ${maintenance.artifactCleanup.removedRestoreBackups.length} completed restore backup(s)`,
-        )
-      }
-      if (maintenance.artifactCleanup.restoreBackupCleanup !== 'completed') {
-        console.warn(`[sidecar] runtime restore-backup cleanup skipped: ${maintenance.artifactCleanup.restoreBackupCleanup}`)
-      }
-      if (maintenance.skippedReason === 'retention-corrupt') {
-        console.warn('[sidecar] runtime snapshot retention metadata is corrupt; snapshots preserved (fail closed)')
-      }
-    } finally {
-      lease.release()
-    }
-  }
-
-  const publishApplyOutcome = async (
-    outcome: NonNullable<StartupResult['applyOutcome']>,
-    targetVersion: string | null,
-    targetIsBuiltin: boolean,
-    sourceVersion: string | null,
-  ) => {
-    let blocked = outcome.runtimeBlocked
-    let error = outcome.error
-    if (targetVersion !== null && !targetIsBuiltin && outcome.status !== 'applied') {
-      try { removeKnownGoodCandidate(runtimeBaseDir, targetVersion) } catch { /* diagnostic retention only */ }
-    }
-    // Snapshot/validation/initial-pointer failures leave the old pointer
-    // authoritative but the transaction stopped its host（main 2742-2752 同源：
-    // 仅当该精确 current 树再过全量探针后才重开 gate）。
-    if (!blocked && (outcome.status === 'snapshot-failed' || (planeRef.current?.localProcessAlive ?? false) === false)) {
-      try {
-        const resumed = await startAndProbeCurrent(runtimeOperationAbort?.signal)
-        if (!probesPassed(resumed.probes)) throw new Error(probeFailureMessage('原运行时兼容性探针失败', resumed.probes))
-      } catch (resumeError) {
-        await planeRef.current?.stopLocal().catch(() => undefined)
-        blocked = true
-        error = `${error === null ? '' : `${error}; `}无法安全恢复当前运行时：${sanitizeErrorText(resumeError instanceof Error ? resumeError.message : String(resumeError))}`
-      }
-    }
-    if (outcome.status === 'applied' && targetVersion !== null && !targetIsBuiltin) {
-      try { clearRuntimeFailure(runtimeBaseDir, targetVersion) } catch { /* diagnostic cleanup only */ }
-      noteBoot(runtimeBaseDir, targetVersion)
-      promoteDueCandidates(runtimeBaseDir)
-    }
-    const blockedReason = blocked ? error ?? 'dsh 运行时恢复尚未完成' : null
-    setRuntimeGate(blocked, blockedReason)
-    const override = readOverrideState(runtimeBaseDir)
-    const shellFallback = targetIsBuiltin
-      && override.kind === 'valid'
-      && override.record.invalidatedAt != null
-    await refreshRuntimeEvidence({
-      phase: outcome.status === 'rolled-back' && outcome.restoreOutcome !== 'incomplete'
-        ? 'rollback'
-        : outcome.status === 'rolled-back'
-          ? 'failed'
-          : outcome.status === 'applied' && targetIsBuiltin
-            ? shellFallback ? 'rollback' : 'idle'
-            : outcome.status,
-      error,
-      targetVersion,
-      sourceVersion,
-      rollbackTarget: outcome.rollbackTarget,
-      restoreOutcome: outcome.restoreOutcome,
-      snapshotError: outcome.status === 'snapshot-failed' ? error : null,
-      canRetryApply: outcome.retryAction === 'apply',
-      canRetryRestore: outcome.retryAction === 'restore',
-      runtimeBlocked: blocked,
-      runtimeBlockedReason: blockedReason,
-      swapAttempted: outcome.swapAttempted,
-    })
-  }
-
-  const publishBlockedStartup = async (
-    reason: string,
-    patch: Parameters<typeof runtimeInstance.setLifecycle>[0] = {},
-  ) => {
-    const safeReason = sanitizeErrorText(reason)
-    setRuntimeGate(true, safeReason)
-    await refreshRuntimeEvidence({
-      phase: 'failed',
-      error: safeReason,
-      canRetryApply: false,
-      canRetryRestore: false,
-      runtimeBlocked: true,
-      runtimeBlockedReason: safeReason,
-      ...patch,
-    })
-  }
-
-  const metadataProbeError = (
-    probes: Awaited<ReturnType<typeof runRuntimeActivationProbes>>,
-  ): string => metadataProbeFailureMessage(probes)
-
-  /** Execute inside runtimeOperation + runtimeWriterFence（main 2820-2926 同源
-   * ——公共门保持关闭直到精确 bundled 树过全量探针且 durable recovery marker
-   * finalized）。 */
-  type RecoverableMetadataStatus = 'selection-corrupt' | 'recovery-in-progress' | 'recovery-marker-corrupt'
-  const executeMetadataRecovery = async (
-    signal: AbortSignal,
-    expectedStatus: RecoverableMetadataStatus,
-    markerRescueConfirmed: boolean,
-  ): Promise<boolean> => {
-    if (bundledVersion === null || !isSafeVersion(bundledVersion)) {
-      await publishBlockedStartup('无法确认内建 dsh 运行时版本；拒绝恢复元数据')
-      return false
-    }
-    const initialHealth = detectRuntimeMetadataHealth(runtimeBaseDir, shellVersion)
-    if (initialHealth.status !== expectedStatus) {
-      await publishBlockedStartup('元数据恢复状态已变更；必须重新确认后才能继续')
-      return false
-    }
-    if (initialHealth.status === 'recovery-marker-corrupt' && !markerRescueConfirmed) {
-      await publishBlockedStartup('元数据恢复标记已损坏；自动续作已停止，必须由用户显式确认二阶恢复')
-      return false
-    }
-    setRuntimeGate(true, '正在保留 DSH_HOME 与元数据证据，并恢复内建 dsh')
-    await refreshRuntimeEvidence({
-      phase: 'applying',
-      error: null,
-      targetVersion: bundledVersion,
-      canRetryApply: false,
-      canRetryRestore: false,
-      canRecoverMetadata: false,
-      runtimeBlocked: true,
-      runtimeBlockedReason: '正在保留 DSH_HOME 与元数据证据，并恢复内建 dsh',
-    })
-    try {
-      const recoveryOptions = {
-        baseDir: runtimeBaseDir,
-        dshHome: localDshHome,
-        builtinVersion: bundledVersion,
-        shellVersion,
-        stopHost: () => {
-          const livePlane = planeRef.current
-          if (livePlane === null) throw new Error('control plane not initialized')
-          return livePlane.stopLocal()
-        },
-        completeRestore: () => completeInterruptedRestore(runtimeBaseDir, localDshHome),
-        probeBuiltin: async () => {
-          const probes = await startAndProbeRuntime(bundledVersion, true, signal)
-          return probesPassed(probes)
-            ? { ok: true as const }
-            : { ok: false as const, error: metadataProbeError(probes) }
-        },
-      }
-      const health = detectRuntimeMetadataHealth(runtimeBaseDir, shellVersion)
-      if (health.status !== expectedStatus) {
-        await publishBlockedStartup('元数据恢复状态在执行前发生变化；本地实例继续隔离')
-        return false
-      }
-      const result = health.status === 'recovery-marker-corrupt'
-        ? await rescueCorruptMetadataRecoveryMarker(recoveryOptions)
-        : await recoverRuntimeMetadata(recoveryOptions)
-      if (result.status === 'finalized') {
-        setRuntimeGate(false)
-        await refreshRuntimeEvidence({
-          phase: 'idle',
-          error: null,
-          targetVersion: null,
-          sourceVersion: null,
-          rollbackTarget: null,
-          // A finalized recovery resolved any interrupted DSH_HOME restore
-          //（main 2884-2887 注释同源：不让 'incomplete' 残留持续阻塞本地启动）。
-          restoreOutcome: result.restoreOutcome === 'incomplete' ? 'none' : result.restoreOutcome,
-          canRetryApply: false,
-          canRetryRestore: false,
-          canRecoverMetadata: false,
-          runtimeBlocked: false,
-          runtimeBlockedReason: null,
-        })
-        return true
-      }
-      if (result.status === 'restore-blocked') {
-        await publishBlockedStartup(
-          result.restoreOutcome === 'half'
-            ? '数据恢复只完成一部分；已保留现场，必须先重试恢复'
-            : '数据恢复未完成；已保留现场，必须先重试恢复',
-          {
-            restoreOutcome: result.restoreOutcome,
-            canRetryRestore: true,
-            canRecoverMetadata: false,
-          },
-        )
-        return false
-      }
-      if (result.status === 'probe-failed') {
-        await publishBlockedStartup(result.error, {
-          restoreOutcome: result.restoreOutcome,
-          canRecoverMetadata: true,
-        })
-        return false
-      }
-      // A user/startup eligibility re-read guarantees an unfinished
-      // transaction（main 2916-2919 同源注释）。
-      await publishBlockedStartup('元数据恢复状态已变更；未经新的内建运行时探针，本地实例继续隔离')
-      return false
-    } catch (error) {
-      await planeRef.current?.stopLocal().catch(() => undefined)
-      await publishBlockedStartup(`元数据恢复失败：${describeError(error)}`)
-      return false
-    }
-  }
-
-  /** Probe an explicit env tree without reading, archiving, or changing any
-   * dormant chamber selection metadata（main 2928-2955 同源——env workspace 有
-   * 最高选择优先级；corrupt dormant 字节保持原样证据）。 */
-  const runEnvOverrideStartup = async (signal: AbortSignal): Promise<void> => {
-    try {
-      await planeRef.current?.stopLocal()
-      const restored = await completeInterruptedRestore(runtimeBaseDir, localDshHome)
-      if (restored === 'half' || restored === 'incomplete') {
-        await publishBlockedStartup('数据恢复未完成（现场已保留），请重试恢复', {
-          restoreOutcome: restored,
-          canRetryRestore: true,
-        })
-        return
-      }
-      const current = await startAndProbeCurrent(signal)
-      if (current.active.source !== 'env' || !probesPassed(current.probes)) {
-        throw new Error(probeFailureMessage('env runtime compatibility probes failed', current.probes))
-      }
-      setRuntimeGate(false)
-      await refreshRuntimeEvidence({
-        phase: 'idle', error: null, runtimeBlocked: false, runtimeBlockedReason: null,
-        canRetryApply: false, canRetryRestore: false,
-      })
-    } catch (error) {
-      await planeRef.current?.stopLocal().catch(() => undefined)
-      await publishBlockedStartup(describeError(error))
-    }
-  }
-
-  const runRuntimeStartup = (): Promise<StartupResult | null> => {
-    if (runtimeOperation !== null) return runtimeOperation
-    let operationLease: OperationLease | null = null
-    const operation = (async (): Promise<StartupResult | null> => {
-      runtimeOperationAbort = new AbortController()
-      setRuntimeGate(true, '正在确认 dsh 运行时与数据恢复状态')
-      operationLease = await runtimeWriterFence.acquire('runtime:startup', runtimeOperationAbort.signal)
-
-      // A persisted wall clock is not uptime（main 2965-2968 注释同源：任何候选
-      // 健康窗口在事务首探针前关闭；成功全量探针/启动开新窗）。
-      resetCandidateHealthWindow(runtimeBaseDir)
-
-      const bootstrapMetadataCorrupt = startupOverrideState.kind === 'corrupt'
-        || startupPointerState.kind === 'corrupt'
-      if (runtimeBootstrapFailure !== null && runtimeBootstrapWriterUnsafe) {
-        await publishBlockedStartup(runtimeBootstrapFailure)
-        return null
-      }
-      if ((planeRef.current?.localWritersQuiescent ?? true) === false) {
-        await publishBlockedStartup('无法确认旧 dsh 写进程已完全回收；为保护 DSH_HOME，已阻止本地实例启动与版本切换')
-        return null
-      }
-
-      let metadataHealth: RuntimeMetadataHealth
-      try {
-        metadataHealth = detectRuntimeMetadataHealth(runtimeBaseDir, shellVersion)
-      } catch (error) {
-        await publishBlockedStartup(`无法检查 dsh 运行时选择元数据：${describeError(error)}`)
-        return null
-      }
-      if (metadataHealth.status === 'recovery-in-progress') {
-        if (!runtimeManagementSupported || envOverrideActive) {
-          await publishBlockedStartup('元数据恢复事务未完成；当前平台或 env 运行时不允许续作管理事务')
-          return null
-        }
-        await executeMetadataRecovery(
-          runtimeOperationAbort.signal,
-          'recovery-in-progress',
-          false,
-        )
-        return null
-      }
-      // A valid env workspace has highest selection priority（main 3000-3006
-      // 注释同源——corrupt dormant current/override/journal 字节保持证据）。
-      if (shouldProbeEnvWithDormantCorruptSelection(metadataHealth.status, envOverrideActive)) {
-        await runEnvOverrideStartup(runtimeOperationAbort.signal)
-        return null
-      }
-      if (metadataHealth.status === 'selection-corrupt') {
-        // A crash-interrupted DSH_HOME restore outranks metadata archival
-        //（main 3007-3028 同源——restore marker 先完成/重试，stash 绝不捕获
-        // 半恢复）。
-        if (restoreMarkerAuthorityStatus(runtimeBaseDir) !== 'missing') {
-          await planeRef.current?.stopLocal()
-          const restored = await completeInterruptedRestore(runtimeBaseDir, localDshHome)
-          if (restored === 'half' || restored === 'incomplete') {
-            await publishBlockedStartup('数据恢复未完成；必须先重试恢复，再处理运行时元数据', {
-              restoreOutcome: restored,
-              canRetryRestore: true,
-              canRecoverMetadata: false,
-            })
-            return null
-          }
-          metadataHealth = detectRuntimeMetadataHealth(runtimeBaseDir, shellVersion)
-        }
-        if (metadataHealth.status === 'selection-corrupt') {
-          await publishBlockedStartup('运行时选择元数据损坏；已保留证据并等待用户确认“保留数据并恢复内建”', {
-            canRecoverMetadata: runtimeManagementSupported && !envOverrideActive,
-          })
-          return null
-        }
-      }
-      if (metadataHealth.status === 'recovery-marker-corrupt') {
-        // A snapshot restore marker is independently authoritative（main
-        // 3030-3056 同源——先完成再提供二阶元数据恢复）。
-        if (restoreMarkerAuthorityStatus(runtimeBaseDir) !== 'missing') {
-          await planeRef.current?.stopLocal()
-          const restored = await completeInterruptedRestore(runtimeBaseDir, localDshHome)
-          if (restored === 'half' || restored === 'incomplete') {
-            await publishBlockedStartup('数据恢复未完成；必须先重试恢复，再处理损坏的元数据恢复标记', {
-              restoreOutcome: restored,
-              canRetryRestore: true,
-              canRecoverMetadata: false,
-            })
-            return null
-          }
-          metadataHealth = detectRuntimeMetadataHealth(runtimeBaseDir, shellVersion)
-        }
-        if (metadataHealth.status === 'recovery-marker-corrupt') {
-          const capability = inspectCorruptMetadataRecoveryMarker(runtimeBaseDir)
-          await publishBlockedStartup(
-            capability.recoverable
-              ? '元数据恢复标记损坏；已保留现场并等待用户确认二阶恢复'
-              : '元数据恢复标记不是可安全归档的普通文件；已保留现场并拒绝自动修复',
-            { canRecoverMetadata: capability.recoverable && runtimeManagementSupported && !envOverrideActive },
-          )
-          return null
-        }
-      }
-      if (runtimeBootstrapFailure !== null && !bootstrapMetadataCorrupt) {
-        const restored = await completeInterruptedRestore(runtimeBaseDir, localDshHome)
-        if (restored === 'half' || restored === 'incomplete') {
-          await publishBlockedStartup('数据恢复未完成（现场已保留），请重试恢复', {
-            restoreOutcome: restored,
-            canRetryRestore: true,
-          })
-          return null
-        }
-        await publishBlockedStartup(runtimeBootstrapFailure)
-        return null
-      }
-      if (!runtimeManagementSupported) {
-        try {
-          const restored = await completeInterruptedRestore(runtimeBaseDir, localDshHome)
-          if (restored === 'half' || restored === 'incomplete') {
-            await publishBlockedStartup('未完成的数据恢复仍需人工重试；Windows 运行时版本管理保持只读', {
-              restoreOutcome: restored,
-              canRetryRestore: true,
-            })
-            return null
-          }
-          const current = await startAndProbeCurrent(runtimeOperationAbort.signal)
-          if (!probesPassed(current.probes)) throw new Error(probeFailureMessage('runtime compatibility probes failed', current.probes))
-          setRuntimeGate(false)
-          await refreshRuntimeEvidence({
-            phase: 'idle', error: null, runtimeBlocked: false, runtimeBlockedReason: null,
-            canRetryApply: false, canRetryRestore: false,
-          })
-        } catch (error) {
-          await planeRef.current?.stopLocal().catch(() => undefined)
-          await publishBlockedStartup(describeError(error))
-        }
-        return null
-      }
-
-      // An explicit env workspace is independent of the chamber-managed
-      // builtin and selection metadata（main 3094-3102 同源注释）。
-      if (envOverrideActive) {
-        await runEnvOverrideStartup(runtimeOperationAbort.signal)
-        return null
-      }
-
-      const journalBefore = readActivationJournalState(runtimeBaseDir)
-      const intentBefore = selectedJournalIntent(journalBefore)
-      const overrideBefore = readOverrideState(runtimeBaseDir)
-      // Pending replay projection before the startup transaction（main
-      // 3107-3114 同源：effectivePending——pending 的 override 被 invalidate 或
-      // 旧 shell 写时此处不解析目标，与 core 启动 replay 决策一致）。
-      const pendingBefore = overrideBefore.kind === 'valid'
-        ? effectivePending(overrideBefore.record, shellVersion)
-        : null
-      // Env is authoritative over dormant chamber selection metadata（main
-      // 3115-3127 同源注释 + 实现）。
-      let sourceFacts: ReturnType<typeof readActivationFacts> | null = null
-      if (!envOverrideActive) {
-        try {
-          sourceFacts = readActivationFacts()
-        } catch (error) {
-          await publishBlockedStartup(describeError(error))
-          return null
-        }
-      }
-
-      // Stop unconditionally: restart backoff can own a future spawn even
-      // while no child is alive（main 3129-3132 同源注释）。
-      await planeRef.current?.stopLocal()
-      if (!envOverrideActive
-        && (intentBefore !== null || pendingBefore !== null
-          || restoreMarkerAuthorityStatus(runtimeBaseDir) !== 'missing')) {
-        await refreshRuntimeEvidence({
-          phase: 'applying',
-          error: null,
-          targetVersion: intentBefore?.targetVersion ?? pendingBefore,
-          sourceVersion: sourceFacts?.sourceVersion ?? null,
-          canRetryApply: false,
-          canRetryRestore: false,
-          runtimeBlocked: true,
-          runtimeBlockedReason: '正在执行 dsh 运行时激活或数据恢复事务',
-        })
-      }
-
-      const deps = buildStartupDeps()
-      const result = await runStartupPhase(deps, runtimeOperationAbort?.signal)
-      const outcomeTarget = intentBefore?.targetVersion
-        ?? result.monitoringJournal?.targetVersion
-        ?? pendingBefore
-      const targetIsBuiltin = intentBefore?.targetIsBuiltin
-        ?? result.monitoringJournal?.targetIsBuiltin
-        ?? false
-      const durableJournal = readActivationJournalState(runtimeBaseDir)
-      const durableSource = durableJournal.kind === 'valid' && durableJournal.journal.sourceVersion !== null
-        ? durableJournal.journal.sourceVersion
-        : sourceFacts?.sourceVersion ?? null
-
-      if (result.applyOutcome !== null) {
-        await publishApplyOutcome(
-          result.applyOutcome,
-          outcomeTarget,
-          targetIsBuiltin,
-          durableSource,
-        )
-        return result
-      }
-
-      if (result.blockedReason === 'restore-half' || result.blockedReason === 'restore-incomplete') {
-        await publishBlockedStartup(
-          result.blockedReason === 'restore-half'
-            ? '数据恢复失败（现场已保留），请重试恢复'
-            : '数据恢复未完成（现场已保留），请重试恢复',
-          {
-            restoreOutcome: result.restored === 'half' ? 'half' : 'incomplete',
-            canRetryRestore: true,
-          },
-        )
-        return result
-      }
-
-      // FATAL metadata-corruption set — shared single source（main 3184-3190
-      // 同源：FATAL_STARTUP_BLOCK_REASONS）。
-      const hardBlockedReasons = new Set<string>(FATAL_STARTUP_BLOCK_REASONS)
-      if (result.blockedReason !== null && hardBlockedReasons.has(result.blockedReason)) {
-        await publishBlockedStartup(`运行时恢复元数据异常（${result.blockedReason}）；拒绝启动以保护 DSH_HOME`)
-        return result
-      }
-      if (result.blockedReason === 'swap-attempted') {
-        await publishBlockedStartup('上次运行时指针切换未完成；请显式重试应用', {
-          canRetryApply: true,
-          swapAttempted: true,
-        })
-        return result
-      }
-
-      try {
-        const current = await startAndProbeCurrent(runtimeOperationAbort.signal)
-        if (!probesPassed(current.probes)) throw new Error(probeFailureMessage('runtime compatibility probes failed', current.probes))
-        if (current.active.source === 'user' && current.active.version !== null) {
-          noteBoot(runtimeBaseDir, current.active.version)
-          promoteDueCandidates(runtimeBaseDir)
-        }
-        setRuntimeGate(false)
-        await refreshRuntimeEvidence({
-          phase: result.blockedReason === 'snapshot-failed' ? 'snapshot-failed' : 'idle',
-          error: result.blockedReason === 'snapshot-failed'
-            ? readOverride(runtimeBaseDir)?.lastError ?? '快照失败；当前运行时仍可安全使用'
-            : null,
-          canRetryApply: result.blockedReason === 'snapshot-failed',
-          canRetryRestore: false,
-          runtimeBlocked: false,
-          runtimeBlockedReason: null,
-          snapshotError: result.blockedReason === 'snapshot-failed'
-            ? readOverride(runtimeBaseDir)?.lastError ?? '快照失败'
-            : null,
-        })
-      } catch (error) {
-        await planeRef.current?.stopLocal().catch(() => undefined)
-        const monitoring = result.monitoringJournal
-        if (monitoring !== null && monitoring.targetIsBuiltin === false && !envOverrideActive) {
-          try {
-            removeKnownGoodCandidate(runtimeBaseDir, monitoring.targetVersion)
-            const rollbackOutcome = await runDelayedRollback(deps, monitoring, runtimeOperationAbort?.signal)
-            await publishApplyOutcome(
-              rollbackOutcome,
-              monitoring.targetVersion,
-              false,
-              monitoring.sourceVersion,
-            )
-            return result
-          } catch (rollbackError) {
-            await publishBlockedStartup(`运行时探针失败且自动回退未完成：${describeError(rollbackError)}`)
-            return result
-          }
-        }
-        await publishBlockedStartup(describeError(error))
-      }
-      return result
-    })().catch(async (error) => {
-      await planeRef.current?.stopLocal().catch(() => undefined)
-      await publishBlockedStartup(describeError(error))
-      return null
-    }).finally(() => {
-      runtimeInternalStart = false
-      runtimeTransactionWorkspace = null
-      operationLease?.release()
-      runtimeOperationAbort = null
-      runtimeOperation = null
-      void runStorePruneIfNeeded()
-      void runSnapshotMaintenance().catch(error => {
-        console.error('[sidecar] dsh runtime snapshot maintenance failed:', sanitizeErrorText(describeError(error)))
-      })
-    })
-    runtimeOperation = operation
-    return operation
-  }
-
-  const runRestartExhaustedRollback = (): Promise<StartupResult | null> | null => {
-    if (quittingRequested || runtimeOperation !== null || envOverrideActive || !runtimeManagementSupported) return null
-    let operationLease: OperationLease | null = null
-    const operation = (async (): Promise<StartupResult | null> => {
-      runtimeOperationAbort = new AbortController()
-      setRuntimeGate(true, 'dsh 运行时连续重启失败，正在自动回退')
-      operationLease = await runtimeWriterFence.acquire('runtime:restart-exhausted', runtimeOperationAbort.signal)
-      // Re-read after the shared fence（main 3268-3272 同源注释：install 在
-      // restart-exhausted 触发时可能在飞并已持久化排队 nextIntent）。
-      const state = runtimeInstance.getState()
-      const failedVersion = state.source === 'user' ? state.active : null
-      if (failedVersion === null) return null
-      const plan = planRestartExhaustedRollback({
-        restartExhausted: true,
-        activeIsOverride: state.source === 'user',
-        failedVersion,
-        journalState: readActivationJournalState(runtimeBaseDir),
-      })
-      if (plan.status === 'not-triggered') return null
-      if (plan.status === 'planned') {
-        // Exactly-once latch（main 3280-3287 同源注释：rollback-needed 先于候选
-        // 变更/宿主停止/指针切换/DSH_HOME 恢复落盘）。
-        writeActivationJournal(runtimeBaseDir, {
-          ...plan.journal,
-          nextIntent: plan.deferredIntent,
-        })
-      }
-      const rollbackTarget = plan.rollbackTarget
-      const sourceVersion = plan.journal.sourceVersion
-      await refreshRuntimeEvidence({
-        phase: 'applying',
-        error: 'dsh 运行时连续重启失败，正在自动回退',
-        targetVersion: failedVersion,
-        rollbackTarget,
-        runtimeBlocked: true,
-        runtimeBlockedReason: 'dsh 运行时连续重启失败，正在自动回退',
-        canRetryApply: false,
-        canRetryRestore: false,
-      })
-      removeKnownGoodCandidate(runtimeBaseDir, failedVersion)
-      const result = await runStartupPhase(buildStartupDeps(), runtimeOperationAbort?.signal)
-      if (result.applyOutcome === null) {
-        await publishBlockedStartup(`restart-exhausted 回退未完成${result.blockedReason === null ? '' : `：${result.blockedReason}`}`)
-        return result
-      }
-      await publishApplyOutcome(
-        result.applyOutcome,
-        failedVersion,
-        false,
-        sourceVersion,
-      )
-      return result
-    })().catch(async (error) => {
-      await planeRef.current?.stopLocal().catch(() => undefined)
-      await publishBlockedStartup(`restart-exhausted 回退失败：${describeError(error)}`)
-      return null
-    }).finally(() => {
-      runtimeInternalStart = false
-      runtimeTransactionWorkspace = null
-      operationLease?.release()
-      runtimeOperationAbort = null
-      runtimeOperation = null
-      void runStorePruneIfNeeded()
-      void runSnapshotMaintenance().catch(error => {
-        console.error('[sidecar] dsh runtime snapshot maintenance failed:', sanitizeErrorText(describeError(error)))
-      })
-    })
-    runtimeOperation = operation
-    return operation
-  }
-
-  // —— K 组资格投影与事务宿主（main 3348-3414 逐字镜像——K 组注册体
-  // （RECOVER_METADATA/RESET_BUILTIN/RETRY_APPLY/APPLY_NOW/RETRY_RESTORE/
-  // RESTORE_PRE_ROLLBACK）经 ctx 注入本实现；启动/证据路径共用同一事务槽）。——
-  const authoritativeMetadataRecoveryStatus = (): RecoverableMetadataStatus | null => {
-    const state = runtimeInstance.getState()
-    // 'incomplete' is a permanent restore outcome（main 3350-3356 注释同源：
-    // journaled snapshot 缺失/不可信 → retry-restore 永不可成，recover-metadata
-    // 逃生门保持资格；'half' 瞬时可重试 → 门全闭）。
-    const permanentIncomplete = state.restoreOutcome === 'incomplete'
-    if (quittingRequested
-      || state.runtimeBlocked !== true
-      || (state.phase !== 'idle' && state.phase !== 'failed')
-      || (state.canRetryRestore === true && !permanentIncomplete)
-      || state.restoreOutcome === 'half'
-      || state.source === 'env'
-      || state.managementSupported === false
-      || runtimeBootstrapWriterUnsafe
-      || (planeRef.current?.localWritersQuiescent ?? false) === false
-      || bundledVersion === null
-      || !isSafeVersion(bundledVersion)
-      || (!permanentIncomplete && restoreMarkerAuthorityStatus(runtimeBaseDir) !== 'missing')) return null
-    try {
-      const health = detectRuntimeMetadataHealth(runtimeBaseDir, shellVersion)
-      if (state.metadataHealth !== health.status) return null
-      if (health.status === 'selection-corrupt' || health.status === 'recovery-in-progress') {
-        return health.status
-      }
-      if (health.status === 'recovery-marker-corrupt'
-        && inspectCorruptMetadataRecoveryMarker(runtimeBaseDir).recoverable) {
-        return health.status
-      }
-      return null
-    } catch {
-      return null
-    }
-  }
-
-  const runUserMetadataRecovery = (
-    expectedStatus: RecoverableMetadataStatus,
-  ): Promise<StartupResult | null> | null => {
-    if (runtimeOperation !== null || authoritativeMetadataRecoveryStatus() !== expectedStatus) return null
-    let operationLease: OperationLease | null = null
-    const operation = (async (): Promise<StartupResult | null> => {
-      runtimeOperationAbort = new AbortController()
-      operationLease = runtimeWriterFence.tryAcquire('runtime:metadata-recovery')
-      if (operationLease === null || authoritativeMetadataRecoveryStatus() !== expectedStatus) return null
-      await executeMetadataRecovery(
-        runtimeOperationAbort.signal,
-        expectedStatus,
-        expectedStatus === 'recovery-marker-corrupt',
-      )
-      return null
-    })().catch(async (error) => {
-      await planeRef.current?.stopLocal().catch(() => undefined)
-      await publishBlockedStartup(`元数据恢复事务失败：${describeError(error)}`)
-      return null
-    }).finally(() => {
-      runtimeInternalStart = false
-      runtimeTransactionWorkspace = null
-      operationLease?.release()
-      runtimeOperationAbort = null
-      runtimeOperation = null
-      void runStorePruneIfNeeded()
-    })
-    runtimeOperation = operation
-    return operation
-  }
-
-  // —— J 组动作终态门（main 3433-3462 逐字镜像——allowedActions 纯矩阵 +
-  // managementSupported/env/正在 applying 的 reset-builtin 特例 + fence busy/
-  // runtimeBlocked 门族）。——
-  const runtimeActionAllowed = (action: ReturnType<typeof allowedActions>[number]) => {
-    const state = runtimeInstance.getState()
-    if (state.managementSupported === false && action !== 'retry-restore') return false
-    if (action === 'recover-metadata' && state.source === 'env') return false
-    const applyingReset = action === 'reset-builtin'
-      && state.phase === 'applying'
-      && state.source !== 'env'
-      && state.hasOverride === true
-    if (runtimeWriterFence.busy && !applyingReset) return false
-    if (state.runtimeBlocked === true) {
-      if (action === 'retry-restore') return state.canRetryRestore === true
-        && (state.phase === 'rollback' || state.phase === 'failed')
-      if (action === 'recover-metadata') return (state.canRetryRestore !== true
-          || state.restoreOutcome === 'incomplete')
-        && state.canRecoverMetadata === true
-        && (state.metadataHealth === 'selection-corrupt'
-          || state.metadataHealth === 'recovery-in-progress'
-          || state.metadataHealth === 'recovery-marker-corrupt')
-        && (state.phase === 'idle' || state.phase === 'failed')
-      if (action === 'retry-apply') return state.canRetryApply === true
-        && (state.phase === 'snapshot-failed' || state.phase === 'failed')
-      if (applyingReset) return true
-      return false
-    }
-    return allowedActions(state.phase, {
-      canRetryApply: state.canRetryApply,
-      canRetryRestore: state.canRetryRestore,
-      canRecoverMetadata: state.canRecoverMetadata,
-    }).includes(action)
-  }
-
-  // Apply-now（design 18 addendum §4.1：main 3490-3531 逐字镜像——纯门
-  // evaluateApplyNowGate 在 core 直 import，本叶只构造宿主输入：pending ??
-  // journalTarget ?? overridePending 三源解析与目标树 preflight 逐字保留）。
-  const readApplyNowGateInput = (): ApplyNowGateInput => {
-    const state = runtimeInstance.getState()
-    const journalState = readActivationJournalState(runtimeBaseDir)
-    const overrideState = readOverrideState(runtimeBaseDir)
-    const journalTarget = selectedJournalIntent(journalState)?.targetVersion ?? null
-    // Same predicate as state.pending's projection（main 3508-3513 注释同源：
-    // invalidated/旧 shell override 的 raw pending 绝不解析为 apply-now 目标）。
-    const overridePending = overrideState.kind === 'valid' && !envOverrideActive
-      ? effectivePending(overrideState.record, shellVersion)
-      : null
-    const target = state.pending ?? journalTarget ?? overridePending
-    const override = readOverride(runtimeBaseDir)
-    return {
-      phase: state.phase,
-      source: state.source,
-      runtimeBlocked: state.runtimeBlocked === true,
-      managementSupported: state.managementSupported !== false,
-      hasOverride: state.hasOverride === true,
-      pending: state.pending,
-      journalTarget,
-      overridePending,
-      connectionState: planeRef.current === null ? 'none' : planeRef.current.connectionState,
-      operationBusy: runtimeOperation !== null,
-      fenceBusy: runtimeWriterFence.busy,
-      snapshotFailed: override?.lastOutcome === 'snapshot-failed',
-      treeValid: target === null || validateVersionTree(runtimeBaseDir, target).ok,
-    }
-  }
-  // Startup refresh plus a real periodic cycle（main 3532-3542 同源：首检 15s +
-  // 周期 6h，unref；每次 tick 经 core 导出入口 runRuntimeCheckCycle 走与 IPC
-  // 注册体同一实现与门——安装/回退挂起检查、下周期恢复；装配槽在
-  // installIpcHandlers J 组段尾部赋值、先于任何 tick（15s ≫ 装配毫秒差））。
-  const startupRuntimeCheck = setTimeout(() => { runRuntimeCheckCycle() }, 15_000)
-  startupRuntimeCheck.unref()
-  const periodicRuntimeCheck = setInterval(() => { runRuntimeCheckCycle() }, 6 * 60 * 60 * 1_000)
-  periodicRuntimeCheck.unref()
-  // Promotion needs a real in-process health interval（main 3546-3552 同源——
-  // 状态订阅在任何不健康转换关窗；本计时器只提交窗口确实到期的候选）。
-  const knownGoodPromotionTimer = setInterval(() => {
-    if (quittingRequested || runtimeOperation !== null || (planeRef.current?.localProcessAlive ?? false) === false) return
-    try { promoteDueCandidates(runtimeBaseDir) } catch (error) {
-      console.error('[sidecar] known-good 晋升检查失败：', sanitizeErrorText(describeError(error)))
-    }
-  }, 60 * 60 * 1_000)
-  knownGoodPromotionTimer.unref()
+  const {
+    runtimeInstance,
+    refreshRuntimeEvidence,
+    setRuntimeGate,
+    publishBlockedStartup,
+    runRuntimeStartup,
+    runRestartExhaustedRollback,
+    authoritativeMetadataRecoveryStatus,
+    runUserMetadataRecovery,
+    runtimeActionAllowed,
+    readApplyNowGateInput,
+    selectedJournalIntent,
+  } = runtimeHost
 
   // H 组本地插件执行叶（main 1270-1286 逐字搬——runtime writer fence 租约 +
-  // runtimeStartBlocked 启动门 + resolveActiveRuntime(runtimeBaseDir,
+  // runtimeState.startBlocked 启动门 + resolveActiveRuntime(runtimeBaseDir,
   // builtinDshWorkspace) workspace 解析——fence/启动门是装配侧运行时事务状态；
   // workspace 只在 fence 租约内解析，绝不跨运行时 swap 保留）。
   const runLocalPluginMutation = async <T>(
@@ -2537,7 +1327,7 @@ export async function buildHeadlessCtx(
     const lease = runtimeWriterFence.tryAcquire(owner)
     if (lease === null) return { ok: false, error: 'dsh runtime/data operation in progress' }
     try {
-      if (runtimeStartBlocked) return { ok: false, error: runtimeStartBlockedReason }
+      if (runtimeState.startBlocked) return { ok: false, error: runtimeState.startBlockedReason }
       const resolved = resolveActiveRuntime(runtimeBaseDir, builtinDshWorkspace)
       if (resolved.path === null) return { ok: false, error: resolved.blockedReason ?? 'dsh workspace not found' }
       return await mutate(resolved.path)
@@ -2678,7 +1468,7 @@ export async function buildHeadlessCtx(
     syncGatewayChamberPluginsFor,
     runLocalPluginMutation,
     runtimeController: runtimeInstance,
-    runtimeOperationBusy: () => runtimeOperation !== null,
+    runtimeOperationBusy: () => runtimeState.operation !== null,
     runtimeWriterFence,
     runtimeActionAllowed,
     refreshRuntimeEvidence,
@@ -2706,9 +1496,9 @@ export async function buildHeadlessCtx(
       await livePlane.stopLocal()
     },
     runtimeOperationSlot: {
-      begin: (operation: Promise<StartupResult | null>) => { runtimeOperation = operation },
-      end: () => { runtimeOperation = null },
-      inFlight: () => runtimeOperation,
+      begin: (operation: Promise<StartupResult | null>) => { runtimeState.operation = operation },
+      end: () => { runtimeState.operation = null },
+      inFlight: () => runtimeState.operation,
     },
     bundledRuntimeVersion: bundledVersion,
     // 2026-12 合并（main 的插件受保护集合判定，design 21 §6.11）：core 的
@@ -2798,13 +1588,13 @@ export async function buildHeadlessCtx(
   // 回收腿。——
 
   // 本地 dsh spawn 门（main 1203-1220 三闭包逐字——事务特权 workspace 优先、
-  // writers quiescent 门 + runtimeStartBlocked && !runtimeInternalStart 公共门、
-  // canExposeLocal = !runtimeStartBlocked）。sidecar-entry 的 createControlPlane
+  // writers quiescent 门 + runtimeState.startBlocked && !runtimeState.internalStart 公共门、
+  // canExposeLocal = !runtimeState.startBlocked）。sidecar-entry 的 createControlPlane
   // 装配原样接线；闭包在 startLocal/暴露求值时经 planeRef 实时读 plane 自身
   // 状态（main 模块级 controlPlane 引用同义）。
   const localSpawnGates: HeadlessLocalSpawnGates = {
     getDshWorkspacePath: () => {
-      if (runtimeTransactionWorkspace !== null) return runtimeTransactionWorkspace
+      if (runtimeState.transactionWorkspace !== null) return runtimeState.transactionWorkspace
       const resolved = resolveActiveRuntime(runtimeBaseDir, builtinDshWorkspace)
       if (resolved.path === null) throw new Error(resolved.blockedReason ?? 'dsh workspace not found')
       return resolved.path
@@ -2813,11 +1603,11 @@ export async function buildHeadlessCtx(
       if (planeRef.current?.localWritersQuiescent === false) {
         return { ok: false, reason: 'managed dsh writer ownership could not be proven quiescent' }
       }
-      return runtimeStartBlocked && !runtimeInternalStart
-        ? { ok: false, reason: runtimeStartBlockedReason }
+      return runtimeState.startBlocked && !runtimeState.internalStart
+        ? { ok: false, reason: runtimeState.startBlockedReason }
         : { ok: true }
     },
-    canExposeLocal: () => !runtimeStartBlocked,
+    canExposeLocal: () => !runtimeState.startBlocked,
   }
 
   let boundPlane = false
@@ -2865,7 +1655,7 @@ export async function buildHeadlessCtx(
       await refreshRuntimeEvidence().then(() => runRuntimeStartup())
     } catch (error) {
       console.error('[sidecar] dsh 运行时启动事务失败：', error)
-      runtimeStartBlocked = true
+      runtimeState.startBlocked = true
       runtimeInstance.setLifecycle({ phase: 'failed', error: describeError(error) })
     }
   }
@@ -2876,15 +1666,15 @@ export async function buildHeadlessCtx(
   // 并行回收 → session refresh/gateway 会话清理）。
   const dispose = async (): Promise<void> => {
     quittingRequested = true
-    runtimeStartBlocked = true
+    runtimeState.startBlocked = true
     // G15：abort 文案单源（shell-core RUNTIME_ABORT_REASON）——与 main.ts will-quit 同串。
-    runtimeOperationAbort?.abort(new Error(RUNTIME_ABORT_REASON))
+    runtimeState.operationAbort?.abort(new Error(RUNTIME_ABORT_REASON))
     try {
       await Promise.allSettled([
         transportManager?.disposeAsync().catch((err) => console.error('[sidecar] 传输层关闭失败：', err)),
         disposePluginSyncChildren().catch((err) => console.error('[sidecar] 插件子进程关闭失败：', err)),
         disposeRuntimeInstaller().catch((err) => console.error('[sidecar] 运行时安装器关闭失败：', err)),
-        runtimeOperation?.catch((err) => console.error('[sidecar] 运行时事务关闭失败：', err)),
+        runtimeState.operation?.catch((err) => console.error('[sidecar] 运行时事务关闭失败：', err)),
       ])
     } finally {
       // 计时器先停：refresh 触发绝不可竞态已 dispose 的 manager（main 1058-1063）。

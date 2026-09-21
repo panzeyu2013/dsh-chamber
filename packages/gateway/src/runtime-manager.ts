@@ -26,15 +26,13 @@
 import {
   readFileSync,
   readdirSync,
-  statSync,
 } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { createRequire as nodeCreateRequire } from 'node:module'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, join } from 'node:path'
 import { call as dshCall, type Logger, type PlaneHandle } from '@dsh-chamber/control-plane'
 import { syncedHostDomainProbeNames } from './plugins.ts'
 import {
-  activationJournalPath,
   bindRuntimeInstallResolution,
   assertRuntimeRootNoFollow,
   atomicWriteRuntimeFileNoFollow,
@@ -49,8 +47,6 @@ import {
   compareRuntimeVersions,
   isVersionDowngrade,
   completeInterruptedRestore,
-  createRuntimeFileExclusiveNoFollow,
-  currentPointerPath,
   deleteOverride,
   detectRuntimeMetadataHealth,
   downloadVerifiedRegistryTarball,
@@ -91,7 +87,6 @@ import {
   recordProbePass,
   recordRuntimeFailure,
   removeKnownGoodCandidate,
-  removeRuntimeFileNoFollow,
   resetCandidateHealthWindow,
   restoreMarkerAuthorityStatus,
   restorePreRollback,
@@ -99,10 +94,7 @@ import {
   resolveSnapshotName,
   runRuntimeActivationProbes,
   runStartupPhase,
-  createCoalescedRefresher,
-  runtimeDiskSummaryAsync,
   runtimeFailureSummary,
-  overridePath,
   PROBE_TEXT_KEEP_TOKENS,
   sanitizeErrorText,
   snapshotSummary,
@@ -125,12 +117,14 @@ import {
   type StartupDeps,
 } from '@dsh-chamber/dsh-runtime'
 import { sanitizeRouteError } from './sanitize-route-error.ts'
+import { createRuntimeDiskProjection } from './runtime-disk-projection.ts'
+import { createRuntimeActionGuards, type ProfileWriteRefusalCode } from './runtime-actions.ts'
+import { createMetadataStatusProjection } from './runtime-status-projection.ts'
+import { assertSingleOwner, releaseSingleOwner } from './runtime-owner-lease.ts'
 import { resolvePnpmEntry } from './pnpm-entry.ts'
 import type { GatewayConfig } from './config.ts'
-// The shared in-flight writer matrix (2026-12 audit F3): assertMutationIdle and
-// profileWriteRefusal no longer carry two copies of the same seven branches.
-import { writerBusyRefusal, type RuntimeWriterFlags } from './runtime-gate.ts'
-import { codedError } from './http-utils.ts'
+// The in-flight writer matrix + mutation/profile-write fences now live in
+// runtime-actions.ts (2026-12 audit F2 split; F3 semantics unchanged).
 // Refusal construction + recovery-name classification single sources (audit
 // N2): every code/message this manager shares with the route pre-gates in
 // runtime-routes.ts comes from runtime-refusals.ts; canonical recovery reason
@@ -139,11 +133,9 @@ import { codedError } from './http-utils.ts'
 import {
   applyNowNotRunningRefusal,
   envPinnedRefusal,
-  pendingOnlyRefusal,
   RECOVERABLE_METADATA_BLOCKS,
   recoveryRetryRequiredRefusal,
   refusalError,
-  RETRY_APPLY_REASONS,
   RETRY_RESTORE_REASONS,
   startAlreadyInFlightRefusal,
   startNotApplicableRefusal,
@@ -275,168 +267,6 @@ function writeRegistryOrigin(baseDir: string, origin: string): void {
   )
 }
 
-function ownerFile(stateRoot: string): string {
-  return join(stateRoot, 'owner.json')
-}
-
-/**
- * Fail-loud single-process guard (design 18 §9.3): one gateway per stateDir.
- * O_EXCL exclusive create closes the read-check-write TOCTOU — a concurrent
- * second owner gets EEXIST; a stale owner whose pid is dead is taken over.
- * A takeover that cannot prove the exact moved bytes and the exact fresh
- * token fails loud. Unique stale evidence is benign and may remain after an
- * ambiguous durability failure.
- */
-const processRuntimeOwnerLeases = new Set<string>()
-
-interface RuntimeOwnerLease {
-  leaseKey: string
-  file: string
-  token: string
-  payload: string
-  identity: RuntimeFileIdentity
-}
-
-function verifyFreshRuntimeOwner(file: string, payload: string): RuntimeFileIdentity {
-  const proof = readPrivateFileNoFollow(file, 16 * 1024, { tightenMode: false })
-  if (proof.kind !== 'valid' || proof.raw !== payload) {
-    throw new Error('gateway runtime owner final proof failed; refusing writer authority')
-  }
-  return proof.identity
-}
-
-function restoreMovedRuntimeOwner(file: string, stale: string, movedRaw: string, movedIdentity: RuntimeFileIdentity): void {
-  try {
-    const current = readPrivateFileNoFollow(file, 16 * 1024, { tightenMode: false })
-    if (current.kind !== 'missing') return
-    quarantineRuntimeFileNoFollow(dirname(dirname(file)), stale, file, { expectedIdentity: movedIdentity })
-    const restored = readPrivateFileNoFollow(file, 16 * 1024, { tightenMode: false })
-    if (restored.kind !== 'valid' || restored.raw !== movedRaw) {
-      throw new Error('restored owner bytes do not match')
-    }
-  } catch {
-    // Fail-closed: the contender never enters. Exact stale/fresh evidence is
-    // retained for the current owner or operator; an unproved restore must
-    // never overwrite a third contender.
-  }
-}
-
-function assertSingleOwner(baseDir: string, beforeStaleRename?: () => void): RuntimeOwnerLease {
-  const stateRoot = assertRuntimeRootNoFollow(baseDir)
-  const leaseKey = resolve(stateRoot)
-  if (processRuntimeOwnerLeases.has(leaseKey)) {
-    throw new Error('this process already owns the gateway runtime stateDir; refusing a second manager')
-  }
-  const file = ownerFile(stateRoot)
-  const token = randomBytes(24).toString('hex')
-  const payload = `${JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString(), token })}\n`
-  try {
-    createRuntimeFileExclusiveNoFollow(baseDir, file, payload)
-    const identity = verifyFreshRuntimeOwner(file, payload)
-    processRuntimeOwnerLeases.add(leaseKey)
-    return { leaseKey, file, token, payload, identity }
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
-  }
-  // The on-disk record is also authoritative: a same-pid owner is rejected
-  // below (covering duplicate loaded copies of this module), a live foreign
-  // pid fails loud, and only a dead foreign pid (ESRCH) is taken over.
-  let previousPid: number
-  const ownerRead = readPrivateFileNoFollow(file, 16 * 1024)
-  if (ownerRead.kind !== 'valid') {
-    throw new Error('gateway runtime owner record is unsafe or unreadable; refusing to take over without a proven-dead pid')
-  }
-  try {
-    const parsed = JSON.parse(ownerRead.raw) as { pid?: unknown }
-    if (typeof parsed.pid !== 'number' || !Number.isSafeInteger(parsed.pid) || parsed.pid <= 0) {
-      throw new Error('invalid pid')
-    }
-    previousPid = parsed.pid
-  } catch {
-    throw new Error('gateway runtime owner record is corrupt; refusing to take over without a proven-dead pid')
-  }
-  if (previousPid === process.pid) {
-    // The on-disk record is a second, independent guard. Reject even when a
-    // duplicate module/bundle has its own in-memory lease Set; otherwise two
-    // managers in one Node process can both write the tree and either dispose
-    // can unlink the other's owner record.
-    throw new Error(`this process (pid ${process.pid}) already owns the gateway runtime stateDir; refusing a second manager`)
-  }
-  try {
-    process.kill(previousPid, 0)
-    throw new Error(`another gateway process (pid ${previousPid}) owns this stateDir; dsh-runtime has no cross-process lock — refusing to start`)
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('another gateway process')) throw error
-    if ((error as NodeJS.ErrnoException).code === 'EPERM') {
-      throw new Error(`another gateway process (pid ${previousPid}) owns this stateDir; dsh-runtime has no cross-process lock — refusing to start`)
-    }
-    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
-    // ESRCH: previous owner is gone — take over below.
-  }
-  // Atomic takeover: rename the stale record out of the way FIRST — whoever
-  // renames wins, and a second taker's rename fails ENOENT (fail-loud) instead
-  // of racing an unlink that could remove the winner's fresh file.
-  const stale = `${file}.stale-${process.pid}-${randomBytes(8).toString('hex')}`
-  let movedIdentity: RuntimeFileIdentity
-  try {
-    movedIdentity = quarantineRuntimeFileNoFollow(baseDir, file, stale, {
-      expectedIdentity: ownerRead.identity,
-      ...(beforeStaleRename === undefined ? {} : { beforeRename: beforeStaleRename }),
-    })
-  } catch (error) {
-    const displaced = readPrivateFileNoFollow(stale, 16 * 1024, { tightenMode: false })
-    if (displaced.kind === 'valid') {
-      restoreMovedRuntimeOwner(file, stale, displaced.raw, displaced.identity)
-    }
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new Error('another gateway process is starting concurrently against this stateDir; refusing to start')
-    }
-    throw new Error(`gateway runtime stale owner could not be durably claimed: ${sanitizeErrorText(String(error))}`)
-  }
-  const moved = readPrivateFileNoFollow(stale, 16 * 1024, { tightenMode: false })
-  if (moved.kind !== 'valid' || moved.raw !== ownerRead.raw
-    || moved.identity.dev !== movedIdentity.dev || moved.identity.ino !== movedIdentity.ino) {
-    if (moved.kind === 'valid') restoreMovedRuntimeOwner(file, stale, moved.raw, moved.identity)
-    throw new Error('another gateway process replaced the owner during stale takeover; refusing to start')
-  }
-
-  let freshIdentity: RuntimeFileIdentity
-  try {
-    createRuntimeFileExclusiveNoFollow(baseDir, file, payload)
-    freshIdentity = verifyFreshRuntimeOwner(file, payload)
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-      throw new Error('another gateway process is starting concurrently against this stateDir; refusing to start')
-    }
-    // Fail loud (review fix): a takeover that cannot rewrite the owner record
-    // must NOT continue without any owner record — that would silently disable
-    // the single-process guard for this stateDir (a concurrent second gateway
-    // could then run against the same stateRoot).
-    throw new Error(`gateway runtime owner record could not be rewritten: ${sanitizeErrorText(String(error))}`)
-  }
-  try {
-    removeRuntimeFileNoFollow(baseDir, stale, { expectedIdentity: moved.identity })
-  } catch {
-    // Unique stale evidence is non-authoritative. Retain it when cleanup
-    // durability is ambiguous; fresh owner authority was already proven.
-  }
-  processRuntimeOwnerLeases.add(leaseKey)
-  return { leaseKey, file, token, payload, identity: freshIdentity }
-}
-
-function releaseSingleOwner(baseDir: string, lease: RuntimeOwnerLease): void {
-  const current = readPrivateFileNoFollow(lease.file, 16 * 1024, { tightenMode: false })
-  if (current.kind !== 'valid' || current.raw !== lease.payload) {
-    throw new Error('gateway runtime owner token no longer matches; refusing to release another owner')
-  }
-  let token: unknown
-  try { token = (JSON.parse(current.raw) as { token?: unknown }).token } catch { token = null }
-  if (token !== lease.token) {
-    throw new Error('gateway runtime owner token no longer matches; refusing to release another owner')
-  }
-  removeRuntimeFileNoFollow(baseDir, lease.file, { expectedIdentity: current.identity })
-}
-
 export interface ResolvedWorkspace {
   path: string
   /** Exact version read from the effective workspace/tree, or null when an
@@ -490,7 +320,7 @@ export type GatewayRuntimeStatus = RuntimeStatusProjection & {
 
 /** Managed profile-write lease refusal codes (design 21 §6.3 decision 6/17).
  * Every code maps to an existing /chamber/runtime 409 family. */
-export type ProfileWriteRefusalCode = 'runtime_busy' | 'runtime_pending' | 'runtime_recovery_required'
+export type { ProfileWriteRefusalCode } from './runtime-actions.ts'
 
 /** The lease handed out by GatewayRuntimeManager.beginProfileWrite(). The
  * caller holds it across its complete `dsh plugin` write and MUST release it
@@ -683,87 +513,28 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
    *  failures must stay observable; cleared by the next successful action). */
   let operationError: string | null = null
   let installProgress: RuntimeInstallProgress | null = null
-  const DISK_CACHE_TTL_MS = 30_000
-  let diskCache: {
-    checkedAt: number
-    usage: RuntimeDiskSummary | null
-    error: string | null
-  } | null = null
-  /** Disk-derived metadata health facts (2026-12 audit F4): detectRuntimeMetadataHealth
-   *  scans CURRENT/OVERRIDE/JOURNAL/recovery evidence on every /status call
-   *  (probed every 3s by the UI). Only the DISK facts are cached — the
-   *  in-memory recoverability gate is recomputed per call, so a writer becoming
-   *  busy still stops advertising recovery immediately. Every transaction
-   *  boundary invalidates through invalidateDiskCache(). */
-  const METADATA_HEALTH_TTL_MS = 5_000
-  let metadataHealthCache: {
-    checkedAt: number
-    /** Cheap change detector: a direct on-disk corruption (fault injection,
-     *  operator repair) must be reflected on the NEXT status call, not after
-     *  the TTL — four stats replace the full scan in the common case. */
-    fingerprint: string
-    facts: {
-      status: 'unknown' | 'healthy' | 'selection-corrupt' | 'recovery-in-progress' | 'recovery-finalized' | 'recovery-marker-corrupt'
-      components: string[]
-      needsRecovery: boolean
-    } | null
-  } | null = null
+  // Metadata health facts/projection live in their own module (2026-12 audit
+  // F2 split); the in-memory recover gate is injected as getters so writer
+  // transitions stay immediate (F4 semantics unchanged).
+  const metadataStatus = createMetadataStatusProjection({
+    platform,
+    baseDir,
+    shellVersion,
+    getStartupBlockReason: () => startupBlockReason,
+    getEnvPath: () => envPath,
+    getBuiltinVersion: () => builtinVersion,
+    isWriterBusy: () => activationInProgress() || installInFlight
+      || restartInFlight || applyNowInFlight || restartExhaustedRollbackInFlight,
+    isDisposed: () => disposed,
+  })
 
-  /** stat-only fingerprint of the metadata files + their directory. */
-  function metadataFingerprint(): string {
-    const parts: string[] = []
-    for (const path of [
-      join(baseDir, 'dsh-runtime'),
-      currentPointerPath(baseDir),
-      overridePath(baseDir),
-      activationJournalPath(baseDir),
-    ]) {
-      try {
-        const stat = statSync(path, { throwIfNoEntry: false })
-        parts.push(stat === undefined ? '-' : `${stat.ino}:${stat.size}:${stat.mtimeMs}`)
-      } catch {
-        parts.push('?')
-      }
-    }
-    return parts.join('|')
-  }
+  // Disk stats live in their own module (2026-12 audit F2 split); the cache
+  // and the coalesced walk moved there unchanged (perf T3/A4/N3 semantics).
+  const diskCacheProjection = createRuntimeDiskProjection({ baseDir, dshHome })
 
   function invalidateDiskCache(): void {
-    diskCache = null
-    metadataHealthCache = null
-  }
-
-  // perf T3（2026-09，D8）：磁盘统计走异步单遍遍历（runtimeDiskSummaryAsync，
-  // 按批让渡事件循环）+ 节流/单飞。TTL 缓存挡住认证的 3s UI 轮询；冷缓存
-  // 与 force 路径经 createCoalescedRefresher 合并并发请求——大 store 下冷
-  // 缓存/安装闸口的多次全树统计不再串行叠加、也绝不冻结网关进程。
-  // A4（2026-09 review）：非 force 冷缓存请求在链在途时**静默 join**（共享
-  // 在途一遍、不置位补跑）——长遍历期间 3s 轮询的持续到达不再驱动补跑到
-  // cap（消除 ~90s 长尾）；force（安装闸口）保持默认补跑语义，闸口新鲜度
-  // 不变。N3（2026-09 review）陈旧度口径：join 结果的陈旧度 ≤ 在途一遍，
-  // 但**不等价于** TTL 缓存语义——长遍历（单遍 42s+ 量级）期间 TTL 已过期
-  // 的轮询会拿到比 30s TTL 允许窗更旧的在途结果（可超出 TTL 窗）；展示面
-  // 接受此陈旧（A4 定案），写前闸口（force）不走 join、新鲜度不受影响。
-  const refreshDiskUsage = createCoalescedRefresher(() => runtimeDiskSummaryAsync(baseDir, dshHome));
-
-  async function diskProjection(force = false): Promise<{ usage: RuntimeDiskSummary | null; error: string | null }> {
-    const now = Date.now()
-    if (!force && diskCache !== null && now - diskCache.checkedAt < DISK_CACHE_TTL_MS) {
-      return { usage: diskCache.usage, error: diskCache.error }
-    }
-    try {
-      // N3（2026-09 review）：非 force 静默 join（陈旧度口径见上方注释）；
-      // force 安装闸口不传选项、保持默认补跑语义。
-      const usage = await refreshDiskUsage(force ? undefined : { rerunOnJoin: false })
-      diskCache = { checkedAt: now, usage, error: null }
-    } catch (error) {
-      diskCache = {
-        checkedAt: now,
-        usage: null,
-        error: sanitizeRouteError(error instanceof Error ? error.message : String(error)),
-      }
-    }
-    return { usage: diskCache.usage, error: diskCache.error }
+    diskCacheProjection.invalidate()
+    metadataStatus.invalidate()
   }
 
   // Single source with the plugin executor's PATH shim: pnpm-entry.ts owns the
@@ -1352,119 +1123,33 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
       || restartExhaustedRollbackInFlight || startInFlight
   }
 
-  function persistedPendingVersion(): string | null {
-    if (envPath !== null || platform === 'win32') return null
-    const state = readOverrideState(baseDir)
-    if (state.kind === 'corrupt') throw new Error('gateway runtime override metadata is corrupt')
-    if (state.kind !== 'valid' || shouldInvalidate(state.record, shellVersion) || state.record.pending === null) return null
-    return state.record.pending
-  }
-
-  function ordinaryPendingVersion(): string | null {
-    const pending = persistedPendingVersion()
-    if (pending === null) return null
-    const state = readOverrideState(baseDir)
-    if (state.kind !== 'valid') return null
-    // These are explicit recovery phases with their own Design 18 actions,
-    // not the normal installed/pending terminal state. The recovery-name
-    // classification is the route layer's canonical set (audit N2:
-    // RETRY_APPLY_REASONS / RETRY_RESTORE_REASONS from runtime-refusals.ts).
-    // NOTE: only the interrupted-apply/restore reasons carve the pending out
-    // here — a FATAL metadata block does NOT (that suppression lives in
-    // status()'s startupBlockReasonOutranksPending, a deliberately wider
-    // predicate — see runtime-refusals.ts).
-    if (state.record.swapAttempted === true || state.record.lastOutcome === 'snapshot-failed'
-      || (startupBlockReason !== null
-        && (RETRY_APPLY_REASONS.has(startupBlockReason) || RETRY_RESTORE_REASONS.has(startupBlockReason)))) {
-      return null
-    }
-    return pending
-  }
-
-  function assertNoOrdinaryPending(): void {
-    const pending = ordinaryPendingVersion()
-    if (pending !== null) {
-      // Same code/message as the route recovery gate and profileWriteRefusal
-      // (audit N2: pendingOnlyRefusal).
-      throw refusalError(pendingOnlyRefusal(pending))
-    }
-  }
-
-  function assertNoPending(): void {
-    const pending = persistedPendingVersion()
-    if (pending !== null) {
-      throw refusalError(pendingOnlyRefusal(pending))
-    }
-  }
-
-  /** One row per writer fence for the shared in-flight matrix (runtime-gate). */
-  function writerFlags(): RuntimeWriterFlags {
-    return {
-      disposed,
-      activation: activationInProgress(),
-      install: installInFlight,
-      restart: restartInFlight,
-      applyNow: applyNowInFlight,
-      restartExhaustedRollback: restartExhaustedRollbackInFlight,
-      start: startInFlight,
-      profileWrite: profileWriteInFlight(),
-    }
-  }
-
-  function assertMutationIdle(): void {
-    // Shared in-flight writer matrix (2026-12 audit F3). Its last row is the
-    // design 21 §6.3 profile-write fence: a plugin add/remove pnpm child must
-    // never interleave a runtime transaction (every runtime writer is a
-    // DSH_HOME/profile writer too).
-    const refusal = writerBusyRefusal(writerFlags(), 'runtime mutations')
-    if (refusal !== null) throw codedError(refusal.code, refusal.error)
-  }
-
-  /**
-   * Design 21 §6.3 profile-write gate (decision 6/17): the synchronous refusal
-   * matrix beginProfileWrite() answers with. Order mirrors assertMutationIdle
-   * (in-flight writers) → durable recovery/pending phases → live plane window,
-   * so the executor's 409 family stays consistent with the route table.
-   * Corrupt selection metadata is a hard recovery condition, never an
-   * acquisition: a plugin write must not land mid-recovery-authority work.
-   */
-  function profileWriteRefusal(): { code: ProfileWriteRefusalCode; error: string } | null {
-    // Shared in-flight writer matrix (runtime-gate.ts), historical order. The
-    // F7 rollback latch is armed SYNCHRONOUSLY before its async body drains/
-    // waits, so its row covers the whole rollback window (including the
-    // lease-drain wait): no new lease can start mid-rollback. This surface is
-    // the lease itself, so the profile-write flag is deliberately not part of
-    // its matrix (a nested acquire stays allowed).
-    const busy = writerBusyRefusal(writerFlags(), 'managed profile write')
-    if (busy !== null) return busy
-    // Recovery states expose only their matching retry (recover-metadata for
-    // FATAL); restore-builtin applies to pending/healthy selections only — a
-    // plugin write is not on that surface and must not slip past it. Same
-    // code/message as start()/applyNowPreflight/restoreBuiltin (audit N2:
-    // recoveryRetryRequiredRefusal).
-    if (startupBlockReason !== null) {
-      return recoveryRetryRequiredRefusal(startupBlockReason)
-    }
-    let pending: string | null = null
-    try {
-      pending = ordinaryPendingVersion()
-    } catch (error) {
-      return {
-        code: 'runtime_recovery_required',
-        error: `runtime selection metadata is corrupt; managed profile write refused until recovery: ${sanitizeRouteError(error instanceof Error ? error.message : String(error))}`,
-      }
-    }
-    if (pending !== null) {
-      // Same code/message as assertNoPending/assertNoOrdinaryPending and the
-      // route pending gate (audit N2: pendingOnlyRefusal).
-      return pendingOnlyRefusal(pending)
-    }
-    const connectionState = plane.connectionState
-    if (connectionState === 'starting' || connectionState === 'restarting') {
-      return { code: 'runtime_busy', error: `managed dsh is ${connectionState}; managed profile write refused until it settles` }
-    }
-    return null
-  }
+  // Action guards/resolution live in their own module (2026-12 audit F2 split):
+  // the pending fences, the in-flight writer matrix and the profile-write lease
+  // gates are shared by every transaction body below.
+  const actionGuards = createRuntimeActionGuards({
+    platform,
+    baseDir,
+    shellVersion,
+    getEnvPath: () => envPath,
+    getStartupBlockReason: () => startupBlockReason,
+    isDisposed: () => disposed,
+    isActivationInProgress: () => activationInProgress(),
+    isInstallInFlight: () => installInFlight,
+    isRestartInFlight: () => restartInFlight,
+    isApplyNowInFlight: () => applyNowInFlight,
+    isRestartExhaustedRollbackInFlight: () => restartExhaustedRollbackInFlight,
+    isStartInFlight: () => startInFlight,
+    isProfileWriteInFlight: () => profileWriteInFlight(),
+    getConnectionState: () => plane.connectionState,
+  })
+  const {
+    persistedPendingVersion,
+    ordinaryPendingVersion,
+    assertNoOrdinaryPending,
+    assertNoPending,
+    assertMutationIdle,
+    profileWriteRefusal,
+  } = actionGuards
 
   function profileWriteInFlight(): boolean {
     return profileWriteCount > 0
@@ -1743,7 +1428,6 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     if (ownerLease !== null) {
       try {
         releaseSingleOwner(baseDir, ownerLease)
-        processRuntimeOwnerLeases.delete(ownerLease.leaseKey)
       } catch (releaseError) {
         throw new AggregateError([error, releaseError], 'gateway runtime construction failed and owner could not be released')
       }
@@ -1755,7 +1439,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     assertManagerReadable()
     // Desktop-shaped metadata health projection (2026-12 recover-metadata
     // parity): category-only components, never paths.
-    const metadata = metadataProjection()
+    const metadata = metadataStatus.projection()
     if (platform === 'win32') {
       const resolved = resolveWorkspace()
       return {
@@ -1842,7 +1526,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     // it so the authenticated 3s UI poll and gateway identity probes never
     // turn status into a hot 10 GiB filesystem walk; mutations invalidate the
     // cache.
-    const { usage: diskUsage, error: diskError } = await diskProjection()
+    const { usage: diskUsage, error: diskError } = await diskCacheProjection.projection()
     const effectiveBlockedReason = startupBlockReason ?? resolutionError
     const effectivePending = envPath === null && override !== null && !shouldInvalidate(override, shellVersion) && override.pending !== null
       ? override.pending : null
@@ -2089,7 +1773,7 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
     try {
       // Design 18's 10 GiB limit gates NEW downloads only. Cached selection,
       // rollback and recovery remain available above the soft ceiling.
-      const disk = await diskProjection(true)
+      const disk = await diskCacheProjection.projection(true)
       if (disk.error !== null || disk.usage === null) {
         throw Object.assign(new Error(`cannot confirm gateway runtime disk usage; refusing a new install: ${disk.error ?? 'unknown accounting failure'}`), {
           code: 'runtime_disk_unavailable',
@@ -2408,86 +2092,6 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
 
   /** Disk-derived metadata facts behind a short TTL (the scan the audit F4
    *  finding targets): status + category-only components + whether any
-   *  recovery condition is on disk. null = unavailable (win32 or unreadable).
-   *  Cached ONLY here; invalidated by every writer transaction. */
-  function metadataHealthFacts(): {
-    status: 'unknown' | 'healthy' | 'selection-corrupt' | 'recovery-in-progress' | 'recovery-finalized' | 'recovery-marker-corrupt'
-    components: string[]
-    needsRecovery: boolean
-  } | null {
-    if (platform === 'win32') return null
-    const now = Date.now()
-    const fingerprint = metadataFingerprint()
-    if (metadataHealthCache !== null
-      && metadataHealthCache.fingerprint === fingerprint
-      && now - metadataHealthCache.checkedAt < METADATA_HEALTH_TTL_MS) {
-      return metadataHealthCache.facts
-    }
-    let facts: ReturnType<typeof metadataHealthFacts> = null
-    try {
-      const health = detectRuntimeMetadataHealth(baseDir, shellVersion)
-      const components = new Set<string>()
-      if (health.current.kind === 'corrupt'
-        || health.corruptEvidence.some(name => name.startsWith('current.'))) components.add('current')
-      if (health.override.kind === 'corrupt'
-        || health.corruptEvidence.some(name => name.startsWith('override.json.'))) components.add('override')
-      if (health.activationJournal.kind === 'corrupt'
-        || health.corruptEvidence.some(name => name.startsWith('activation-journal.json.'))) components.add('activation-journal')
-      if (health.recovery.kind === 'corrupt'
-        || (health.recovery.kind === 'valid' && health.recovery.record.phase !== 'finalized')) {
-        components.add('recovery-marker')
-      }
-      if (health.corruptEvidence.length > 0) components.add('retained-evidence')
-      const markerRescueAvailable = health.status === 'recovery-marker-corrupt'
-        && inspectCorruptMetadataRecoveryMarker(baseDir).recoverable
-      const needsRecovery = health.status === 'selection-corrupt'
-        || health.status === 'recovery-in-progress'
-        || markerRescueAvailable
-      facts = { status: health.status, components: [...components], needsRecovery }
-    } catch {
-      facts = null
-    }
-    metadataHealthCache = { checkedAt: now, fingerprint, facts }
-    return facts
-  }
-
-  /** Desktop-shaped metadata health projection (main.ts 3422-3470 mirror) for
-   *  /status: category-only components + explicit recover eligibility. The
-   *  disk facts are cached (TTL); the recoverability gate mixes them with LIVE
-   *  in-memory writer state on every call. */
-  function metadataProjection(): {
-    metadataHealth: 'unknown' | 'healthy' | 'selection-corrupt' | 'recovery-in-progress' | 'recovery-finalized' | 'recovery-marker-corrupt'
-    metadataComponents: string[]
-    canRecoverMetadata: boolean
-  } {
-    const facts = metadataHealthFacts()
-    if (facts === null) {
-      return { metadataHealth: 'unknown', metadataComponents: [], canRecoverMetadata: false }
-    }
-    // The recover route may act only on a FATAL metadata block (or a
-    // recovery attempt whose builtin probe failed and kept its durable
-    // record, or a finalized recovery whose resume start failed) —
-    // restore/swap recovery phases resume through their retry.
-    const recoverableBlock = startupBlockReason === null
-      || RECOVERABLE_METADATA_BLOCKS.has(startupBlockReason)
-    // L4 review fix: no busy-phase/task gate may advertise recovery while an
-    // activation/install/restart owns the writer.
-    const writerBusy = activationInProgress() || installInFlight
-      || restartInFlight || applyNowInFlight || restartExhaustedRollbackInFlight
-    const canRecoverMetadata = (facts.needsRecovery || startupBlockReason === 'metadata-start-failed')
-      && recoverableBlock
-      && !writerBusy
-      && envPath === null
-      && builtinVersion !== null
-      && isSafeVersion(builtinVersion)
-      && !disposed
-    return {
-      metadataHealth: facts.status,
-      metadataComponents: facts.components,
-      canRecoverMetadata,
-    }
-  }
-
   /** H1 review fix: true while a durable metadata-recovery transaction is
    *  pending (engine record mid-flight) or the recovery marker is corrupt.
    *  The boot path consults this BEFORE starting the managed dsh — an
@@ -3196,7 +2800,6 @@ export function createGatewayRuntimeManager(options: GatewayRuntimeManagerOption
 
       if (ownerLease !== null) {
         releaseSingleOwner(baseDir, ownerLease)
-        processRuntimeOwnerLeases.delete(ownerLease.leaseKey)
       }
     })()
     return disposePromise

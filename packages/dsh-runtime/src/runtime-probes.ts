@@ -323,6 +323,21 @@ function archiveCleanupProbeShape(value: unknown): 'ok' | 'business-failure' | '
   return 'malformed'
 }
 
+/** openInApp/probe accept predicate (design 20 §4.1): the carrier must answer
+ *  ok:true with the platform object; a well-formed ok:false is present-but-
+ *  abnormal and fails closed with a distinct message (see the archive leg). */
+function openInAppProbeShape(value: unknown): 'ok' | 'business-failure' | 'malformed' {
+  if (!objectValue(value)) return 'malformed'
+  const domain = value as Record<string, unknown>
+  if (domain.ok === true) {
+    return objectValue(domain.value) && typeof (domain.value as Record<string, unknown>).platform === 'string'
+      ? 'ok'
+      : 'malformed'
+  }
+  if (domain.ok === false) return objectValue(domain.error) ? 'business-failure' : 'malformed'
+  return 'malformed'
+}
+
 /**
  * The legacy-fallback signal: an injected carrier error carrying transport
  * status 404 (the control-plane unary client's RpcTransportError.status) —
@@ -396,7 +411,7 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
   // list is the reduced shape; omitting the option keeps all domains.
   const hostDomainNames = opts.hostDomainNames ?? [...HOST_DOMAIN_PROBE_NAMES]
   const wantsDomain = (domain: string): boolean => hostDomainNames.includes(domain)
-  const [sessions, graph, settings, git, archiveCleanup] = await Promise.all([
+  const [sessions, graph, settings, git, archiveCleanup, openInApp] = await Promise.all([
     // The fixed-size host-identity probe: session/canOpenWorkspacePath is a
     // zero-arg boolean Remote of the upstream SessionController (`session`
     // namespace, dsh ≥ 0.1.2-rc.1). Value true AND value false are both
@@ -502,6 +517,28 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
         }
       })()
       : Promise.resolve(null),
+    // openInApp/probe (design 20 §4.1/§6.2 item 3): zero-arg and zero-cost
+    // (platform only — no detection, no spawn). Presence = a well-formed domain
+    // carrier; a well-formed business failure means the domain is mounted but
+    // abnormal → fail-closed; no legacy fallback (chamber host domains never
+    // downgrade). This leg closes the design 20 §6.2(3) wiring gap: the name was
+    // listed in HOST_DOMAIN_PROBE_NAMES but had no executor.
+    wantsDomain('openInApp/probe')
+      ? (async (): Promise<ProbeResult> => {
+        const name = 'openInApp/probe'
+        try {
+          const response = await call(name, { args: {} })
+          const shape = openInAppProbeShape(response.result?.value)
+          if (shape === 'ok') return { name, ok: true }
+          if (shape === 'business-failure') {
+            return { name, ok: false, error: 'openInApp domain answered a business failure on empty input' }
+          }
+          return { name, ok: false, error: 'malformed probe response' }
+        } catch (error) {
+          return { name, ok: false, error: resultError(error, name) }
+        }
+      })()
+      : Promise.resolve(null),
   ])
 
   let commands: ProbeResult
@@ -560,6 +597,10 @@ export async function runRuntimeActivationProbes(opts: RuntimeProbeOptions): Pro
   if (wantsDomain('archiveCleanup/probe')) {
     if (archiveCleanup === null) throw new Error('internal: chamber host-domain probes did not run')
     byName.set(archiveCleanup.name, archiveCleanup)
+  }
+  if (wantsDomain('openInApp/probe')) {
+    if (openInApp === null) throw new Error('internal: chamber host-domain probes did not run')
+    byName.set(openInApp.name, openInApp)
   }
   byName.set(settings.name, settings)
   byName.set(dataSettings.name, dataSettings)

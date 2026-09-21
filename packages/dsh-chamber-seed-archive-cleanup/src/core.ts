@@ -1150,6 +1150,10 @@ export class ArchiveCleanupCore {
       // the list. Skipping it leaves the id archived, so a later run still sees
       // it (convergent, never a silent un-archive).
       .filter(id => !protectedIds.has(id))
+    // Membership sets for the two tail loops: the historical Array.includes
+    // scans were O(n²) at the documented MAX_PURGE_SESSIONS capacity
+    // (~4.3e9 comparisons per loop — 2026-13 P1).
+    const clearIdSet = new Set(clearIds)
     // ---- LAST LIVE RE-CHECK, immediately before the batched write ----------
     // The retention decision for a tree was taken at ITS deletion instant, but
     // this write happens after the whole run (including up to
@@ -1181,7 +1185,7 @@ export class ArchiveCleanupCore {
       }
     }
     for (const root of completedRoots) {
-      if (!clearIds.includes(root) || !liveNow.has(root)) continue
+      if (!clearIdSet.has(root) || !liveNow.has(root)) continue
       residentRetainedRoots.push(root)
       // Its content WAS removed by this run while the session was live: the
       // force accounting follows the retained root (same rule as the
@@ -1189,13 +1193,14 @@ export class ArchiveCleanupCore {
       forcedLoaded += 1
     }
     const writeIds = liveReadFailed ? [] : clearIds.filter(id => !liveNow.has(id))
+    const writeIdSet = new Set(writeIds)
     let clearedOrphanMembers = 0
     if (clearIds.length > 0) {
       try {
         if (writeIds.length > 0) await this.host.removeArchivedSessionIds(writeIds)
         // Counted only after the single official write SUCCEEDED, and only for
         // the swept members actually written (a late-retained id was not).
-        clearedOrphanMembers = sweptOrphanMembers.filter(id => writeIds.includes(id)).length
+        clearedOrphanMembers = sweptOrphanMembers.filter(id => writeIdSet.has(id)).length
       } catch (error) {
         if (!(error instanceof ArchiveCleanupError)) throw error
         // Every listed id stays archived; the next purge re-runs them

@@ -53,8 +53,14 @@ const PACKAGE_TESTS = [
   'test:cli',
 ]
 
-/** Client plugin compiler faces checked on every push. */
+/**
+ * Compiler faces checked on every push. `typecheck` is the ROOT program
+ * (tsconfig.json: control-plane / cli / renderer / desktop / gateway sources)
+ * and used to be CI-only: local `check:typecheck` could be green while the root
+ * program regressed (A5, 2026-12 stage-3 review). It runs first, matching ci.yml.
+ */
 const CLIENT_TYPECHECKS = [
+  'typecheck',
   'typecheck:sidebar',
   'typecheck:git',
   'typecheck:layout',

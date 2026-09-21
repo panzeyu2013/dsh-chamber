@@ -1,4 +1,7 @@
-/** Same-origin client for the chamber host Git Remote. */
+/** Client for the chamber host Git Remote over the shared per-instance carrier. */
+import {
+  getInstanceClient, InstanceDomainMissingError, type UnaryResult,
+} from '@dsh-chamber/dsh-chamber-client-ui-sidebar/shared'
 import type {
   CreateWorktreeResult, GitWorktreeSnapshot, PreviewCreateInput, PreviewCreateResult,
   RemoveWorktreeResult, RollbackCreateResult,
@@ -328,31 +331,35 @@ export function decodeRemoveValue(
   return result
 }
 
-function rpcId(): string {
-  return globalThis.crypto?.randomUUID?.() ?? `git-${Date.now()}-${Math.random().toString(16).slice(2)}`
-}
-
+/**
+ * One gitWorktree call over the SIDEBAR's per-instance unary carrier — the ONE
+ * client-request envelope, rpcId correlation, timeout budget and error
+ * classification in this repo (design 08 §7, design 20 §4.2). The carrier owns
+ * the URL/base path, the browser-auth handling of the per-instance proxy, the
+ * not-ready 503 class and the design 24 §5 404 domain-missing discrimination;
+ * this module keeps only the git-specific two-layer domain decode and maps the
+ * carrier's outcomes onto the codes THIS client's recovery rules consume.
+ */
 async function callGitRemote(sourceId: string, method: string, input?: unknown): Promise<unknown> {
-  const response = await fetch(`/api/i/${encodeURIComponent(sourceId)}/api/gitWorktree/${method}`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      type: 'client-request',
-      rpcId: rpcId(),
-      method: `gitWorktree/${method}`,
+  const endpoint = `gitWorktree/${method}`
+  let transport: UnaryResult<unknown>
+  try {
+    transport = await getInstanceClient(sourceId).callUnary(
+      endpoint,
       // Typert validates the named argument object exactly: snapshot() has no
       // argument, while every mutating method has the single argument `input`.
-      payload: { args: input === undefined ? {} : { input } },
-    }),
-    signal: AbortSignal.timeout(RPC_TIMEOUT_MS),
-  })
-  if (!response.ok) {
-    // A 404 on the gitWorktree namespace means the instance gateway does not
-    // know the Remote: the chamber host package is not loaded there (local:
-    // stale profile overlay — restart the desktop; remote: package seeded at
-    // ready but the instance must restart to pick up the patch; or the
-    // package is genuinely absent). Surfacing the raw status hides the fix.
-    if (response.status === 404) {
+      input === undefined ? {} : { input },
+      undefined,
+      // The 60s budget must stay ABOVE the proxy's 45s upstream idle window
+      // and the host's 30s mutation budget (2026-08 bug report), and the
+      // domain-missing opt-in keeps the design 24 §5 404 discrimination.
+      { timeoutMs: RPC_TIMEOUT_MS, notFoundAsDomainMissing: true },
+    )
+  } catch (error) {
+    // The carrier's domain-missing class IS the definitive design 08 §6.3 404:
+    // the gitWorktree Remote is not mounted, so replaying the same mutation
+    // cannot help and a recovery entry must never be minted from it.
+    if (error instanceof InstanceDomainMissingError) {
       throw new GitWorktreeRpcError(
         'git-host-not-loaded',
         // The user-facing guide is localized (locales.gitHostNotLoaded); this
@@ -360,35 +367,32 @@ async function callGitRemote(sourceId: string, method: string, input?: unknown):
         'The Git plugin is not loaded in this instance (host package missing or inactive). Restart the desktop for a local instance, or re-send the chamber host package in the connection settings and restart to apply for a remote instance.',
       )
     }
-    throw new GitWorktreeRpcError('http-error', `Git Remote HTTP ${response.status}`)
+    // Every other carrier outcome (not-ready 503, other non-2xx, envelope or
+    // rpcId failure, abort/timeout, network loss) keeps this client's existing
+    // ambiguous classification: a mutation may have committed, so the saga must
+    // retain its operation id for an idempotent replay. That includes the one
+    // carrier-owner nuance: a 404 whose body carries the control plane's own
+    // `instance_not_found` code is classified by the carrier as an
+    // instance-layer transport fact (design 24 §5), NOT as domain missing —
+    // adopting that classification is the point of this convergence.
+    throw new GitWorktreeRpcError('http-error', carrierFailureMessage(error))
   }
-  let envelope: any
-  try {
-    envelope = await response.json()
-  } catch {
-    throw new GitWorktreeRpcError('invalid-envelope', 'The Git Remote did not return valid JSON')
-  }
-  const result = envelope?.result
-  if (typeof result !== 'object' || result === null || typeof result.ok !== 'boolean') {
-    throw new GitWorktreeRpcError('invalid-envelope', 'The Git Remote envelope is missing result')
-  }
-  if (result.ok !== true) {
-    const error = result?.error
-    throw new GitWorktreeRpcError(
-      'rpc-failed',
-      String(error?.message ?? error?.code ?? 'The Git Remote call failed internally'),
-      error?.details,
-    )
+  if (transport.ok !== true) {
+    // RPC-layer refusal (the Remote threw or the gateway rejected the payload):
+    // the pre-carrier client called this `rpc-failed`; the classification
+    // (ambiguous → the recovery keeps its operation id) is unchanged.
+    throw new GitWorktreeRpcError('rpc-failed', transport.error.message, transport.error.details)
   }
   // The host catches every known GitWorktreeError and returns a domain result
-  // inside Typert's transport result. Only this inner error has stable domain
-  // codes suitable for recovery decisions.
-  const domain = result.value
-  if (typeof domain !== 'object' || domain === null || typeof domain.ok !== 'boolean') {
+  // inside the carrier result. Only this inner error has stable domain codes
+  // suitable for recovery decisions.
+  const domain = transport.value
+  if (typeof domain !== 'object' || domain === null || typeof (domain as { ok?: unknown }).ok !== 'boolean') {
     throw new GitWorktreeRpcError('invalid-domain-result', 'The Git Remote is missing the domain-result envelope')
   }
-  if (domain.ok !== true) {
-    const error = domain.error
+  const carrier = domain as { ok: boolean; value?: unknown; error?: unknown }
+  if (carrier.ok !== true) {
+    const error = carrier.error
     if (
       !isRecord(error)
       || typeof error.code !== 'string'
@@ -402,7 +406,17 @@ async function callGitRemote(sourceId: string, method: string, input?: unknown):
     }
     throw new GitWorktreeRpcError(error.code, error.message, error.details, error.retryable)
   }
-  return domain.value
+  return carrier.value
+}
+
+/** Stable text for a carrier transport failure (never a non-Error value). */
+function carrierFailureMessage(error: unknown): string {
+  if (error instanceof Error) return error.message === '' ? error.name : error.message
+  try {
+    return String(error)
+  } catch {
+    return 'Git Remote transport failure'
+  }
 }
 
 export const gitWorktreeApi = {

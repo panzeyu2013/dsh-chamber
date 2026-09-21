@@ -468,7 +468,10 @@ test('desktop package includes the gateway provider required by main.ts', () => 
   // clear-only 注册体（commitTransportCredentialUpdate 实时重建 + clear-only
   // 拒写文案）随 C 组迁入 shell-core installIpcHandlers——三条文本锚的读取源
   // 指向 shell-core.ts，断言意图与正则原样保留。
+  // 2026-12 stage-3 域拆分：C 组凭据注册体迁入 shell-ipc-connections.ts——读取源
+  // 取两文件并集，文本锚/断言意图不变。
   const core = readFileSync(new URL('../../shell-core.ts', import.meta.url), 'utf8')
+    + readFileSync(new URL('../../shell-ipc-connections.ts', import.meta.url), 'utf8')
   assert.match(main, /providers:\s*\{\s*ssh: sshProvider,\s*http: gatewayProvider/, 'main.ts registers providers BY TRANSPORT (design 17 §2.2)')
   assert.match(core, /commitTransportCredentialUpdate\(sm, id, status => status\.transport === 'ssh'/, 'SSH password updates rebuild a live SSH transport')
   assert.match(core, /commitTransportCredentialUpdate\(sm, id, status => status\.kind === 'gateway'/, 'gateway token updates use the same live replacement transaction')

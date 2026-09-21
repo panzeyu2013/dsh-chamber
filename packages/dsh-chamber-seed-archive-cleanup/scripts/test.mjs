@@ -26,6 +26,8 @@ const GROUPS = {
   // parity: cross-seed lockstep (wire-carrier semantics + the shared
   // vendor-resolution seam). The open-in loader stubs the two vendor host
   // adapters its domain imports at runtime, so the real carriers all load.
+  // scale: the purge tail's full-capacity linearity lock + Set source lock.
+  scale: ['test/scale-purge-linear.test.ts'],
   parity: [
     {
       file: 'test/seed-parity-lockstep.test.ts',

@@ -168,6 +168,7 @@ test('committed settings, registry and held-resume pushes use the non-throwing s
   // non-throwing attemptCommittedRegistryPush wrapper); the assertions read shell-core.ts and keep
   // their intent unchanged. The remaining push anchors (instances / status) still live in main.ts.
   const core = readFileSync(new URL('../../shell-core.ts', import.meta.url), 'utf8')
+    + readFileSync(new URL('../../shell-ipc-update.ts', import.meta.url), 'utf8')
   const main = readFileSync(new URL('../../main.ts', import.meta.url), 'utf8')
   assert.match(core, /function pushSettingsChanged\(\): void \{[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{/)
   assert.match(core, /function pushHeldSystemResume[\s\S]*?attemptCommittedRegistryPush\(\(\) => \{/)

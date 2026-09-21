@@ -117,6 +117,13 @@ test('G32/G33: the darwin tests mode carries the executed-assembly gates ci.yml 
     }
   }
 })
+// A5 (2026-12 stage-3): the root tsc program is part of the typecheck mode, so
+// a local check:typecheck cannot stay green while root tsc regresses. It must be
+// the FIRST step (ci.yml runs it before the per-package client faces).
+test('A5: the root typecheck program is the first step of the typecheck mode', () => {
+  assert.equal(MODES.typecheck[0], 'typecheck')
+  assert.ok(MODES.full.includes('typecheck'), 'check:full must carry the root program too')
+})
 test('the full mode is the union of the narrower modes', () => {
   const union = new Set([...MODES.static, ...MODES.typecheck, ...MODES.tests])
   for (const step of union) assert.ok(MODES.full.includes(step), `full is missing ${step}`)

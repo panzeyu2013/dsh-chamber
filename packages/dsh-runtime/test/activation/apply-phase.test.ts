@@ -89,7 +89,7 @@ test('validateTarget rejection is a loud target-invalid failure — no snapshot,
   assert.equal(fixture.switchCalls, 0)
 })
 
-const FULL_SEED_DOMAINS = ['clientGraph/graph', 'gitWorktree/previewCreate', 'archiveCleanup/probe'] as const
+const FULL_SEED_DOMAINS = ['clientGraph/graph', 'gitWorktree/previewCreate', 'archiveCleanup/probe', 'openInApp/probe'] as const
 const PARTIAL_SEED_DOMAINS = ['clientGraph/graph', 'archiveCleanup/probe'] as const
 
 /**
@@ -98,7 +98,7 @@ const PARTIAL_SEED_DOMAINS = ['clientGraph/graph', 'archiveCleanup/probe'] as co
  * and the desktop host publishes its seeded chamber domains from inside that
  * spawn (cp.seededProbeDomains is written by the spawn thunk only). A value
  * captured while the ApplyDeps object was built froze the cold-start empty
- * table, so the freshly seeded run (7 names) never passed the exact-set check
+ * table, so the freshly seeded run (the full 8-name set) never passed the exact-set check
  * and a healthy activation rolled back. These tests drive the real ordering:
  * `probeExpectedNames` is a lazy reader of the host's domain table.
  */

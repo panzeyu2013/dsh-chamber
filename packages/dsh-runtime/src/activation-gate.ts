@@ -51,6 +51,7 @@ export const REQUIRED_ACTIVATION_PROBES = [
   'settings/describe',
   'gitWorktree/previewCreate',
   'archiveCleanup/probe',
+  'openInApp/probe',
   'data.settings',
 ] as const;
 

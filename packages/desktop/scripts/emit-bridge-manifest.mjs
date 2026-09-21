@@ -7,9 +7,10 @@
  *   ① 名单源 packages/desktop/ipc-events.ts 的 `IPC_CHANNELS` 常量表：
  *      值 = 通道名、键 = 常量名（当前 68 键）。表即全量通道集合。
  *   ② 方向维度（实测集合法，不靠常量名启发）：main 侧注册事实 ——
- *      packages/desktop/{main.ts, shell-core.ts, electron-edges.ts}
- *      （MAIN_SIDE_FILES，与 ipc-surface-mirror.test.ts 的 B12/E8 扫描面
- *      一致）中 `IPC_CHANNELS.X` 的注册调用：
+ *      packages/desktop 的 MAIN_SIDE_FILES（main.ts / shell-core.ts /
+ *      electron-edges.ts + 2026-12 拆分出的 shell-ipc-*.ts 与
+ *      runtime-startup-host.ts；与 ipc-surface-mirror.test.ts 的 B12/E8
+ *      扫描面一致）中 `IPC_CHANNELS.X` 的注册调用：
  *        `(?:ipcMain|deps\.ipc).handle(IPC_CHANNELS.X`  →  invoke（60）
  *        `(?:webContents\.send|rendererPush)(IPC_CHANNELS.X` →  push（8）
  *      注释先剥离再扫描（与镜像测试的逐字扫描器同语义——shell-core.ts 注释
@@ -68,7 +69,23 @@ const repoRoot = join(desktopDir, '..', '..')
 
 /** main 侧注册文件集（handle/send 调用所在；与 ipc-surface-mirror.test.ts 的
  *  MAIN_SIDE_FILES 同集 —— 若 W-10 收口后注册点再迁移文件，两处须同步）。 */
-export const MAIN_SIDE_FILES = ['main.ts', 'shell-core.ts', 'electron-edges.ts']
+export const MAIN_SIDE_FILES = [
+  'main.ts',
+  'shell-core.ts',
+  'electron-edges.ts',
+  // 2026-12 stage-3：shell-core 的 installIpcHandlers 注册体按域拆入
+  // shell-ipc-*.ts；P0-6 抽取把 runtime state push 移入 runtime-startup-host.ts。
+  // 制品（bridge-manifest.json / BridgeManifest.swift）不变，只是扫描面同步。
+  'shell-ipc-settings.ts',
+  'shell-ipc-connections.ts',
+  'shell-ipc-plugins-ssh.ts',
+  'shell-ipc-plugins-gateway.ts',
+  'shell-ipc-plugins-local.ts',
+  'shell-ipc-open-in.ts',
+  'shell-ipc-update.ts',
+  'shell-ipc-runtime.ts',
+  'runtime-startup-host.ts',
+]
 
 /** 提交物/生成物默认路径（CLI 无参时写入）。
  *  Swift 生成物落位 DSHChamber target 目录内（Sources/DSHChamber/

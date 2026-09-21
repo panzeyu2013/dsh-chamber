@@ -18,6 +18,12 @@ import {
 
 const APP = readFileSync(fileURLToPath(new URL('../../src/App.tsx', import.meta.url)), 'utf8')
 const APP_LINES = APP.split('\n')
+// 阶段 3：徽标推送 effect 簇已抽为命名 hook；锁钉在其最终落点（意图不变，只是位置
+// 从 App.tsx 移到 hook——App 内不可渲染测试，hook 的行为由窗口桥面在真机验证）。
+const BADGE_HOOK = readFileSync(
+  fileURLToPath(new URL('../../src/app-hooks/use-badge-count.ts', import.meta.url)),
+  'utf8',
+)
 
 function entry(decision: 'sent' | 'suppressed' | 'skipped', extra: Partial<Record<string, unknown>> = {}) {
   return { at: 1, sourceId: 'local', sessionId: 's1', kind: 'complete', requireHidden: false, decision, ...extra } as never
@@ -50,8 +56,8 @@ test('the instruments publish once and stay live views', () => {
   assert.equal(typeof instrument.counts(), 'object')
 })
 
-test('App publishes the dispatched badge count next to the projection', () => {
-  assert.match(APP, /const count = projectBadgeCount\(completedBySource, runtimeFacts\)[\s\S]{0,220}?publishBadgeCount\(count\)/)
+test('the badge hook publishes the dispatched count next to the projection', () => {
+  assert.match(BADGE_HOOK, /const count = projectBadgeCount\(completedBySource, runtimeFacts\)[\s\S]{0,220}?publishBadgeCount\(count\)/)
 })
 
 test('every notification decision is recorded — including the no-bridge case', () => {

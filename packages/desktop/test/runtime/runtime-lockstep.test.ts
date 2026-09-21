@@ -447,7 +447,12 @@ function arrowFunctionBody(source: string, name: string): string {
 // registrations into shell-core.ts; the desktop-only `runtimeActionAllowed`
 // guards stayed in main.ts). Read both like ipc-surface-mirror.test.ts's
 // MAIN_SIDE_FILES, or a relocated handler reports as "gone".
-const MAIN_SIDE_FILES = ['main.ts', 'shell-core.ts']
+const MAIN_SIDE_FILES = [
+  'main.ts', 'shell-core.ts', 'shell-ipc-runtime.ts',
+  // 2026-12 P0-6 运行时启动事务宿主抽取：runtimeActionAllowed 现定义于
+  // runtime-startup-host.ts（第三写者结构改动；读取面同步，断言不变）。
+  'runtime-startup-host.ts',
+]
 const desktopMain = MAIN_SIDE_FILES
   .map(file => readFileSync(join(import.meta.dirname, '..', '..', '..', '..', 'packages', 'desktop', file), 'utf8'))
   .join('\n')
@@ -455,7 +460,11 @@ test('main.ts still orders the three desktop-only guards before the shared core,
   const body = arrowFunctionBody(desktopMain, 'runtimeActionAllowed')
   const unsupportedGuard = body.indexOf("state.managementSupported === false && action !== 'retry-restore'")
   const envGuard = body.indexOf("action === 'recover-metadata' && state.source === 'env'")
-  const fenceGuard = body.indexOf('runtimeWriterFence.busy && !applyingReset')
+  // P0-6 抽取后 fence 以本地别名 writerFence 访问（同一实例）；两种拼写都接受。
+  const fenceGuard = Math.max(
+    body.indexOf('runtimeWriterFence.busy && !applyingReset'),
+    body.indexOf('writerFence.busy && !applyingReset'),
+  )
   const applyingReset = body.indexOf("const applyingReset = action === 'reset-builtin'")
   const blockedBranch = body.indexOf('if (state.runtimeBlocked === true)')
   const sharedCall = body.indexOf('allowedActions(state.phase')

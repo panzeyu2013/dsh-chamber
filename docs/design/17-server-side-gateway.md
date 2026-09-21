@@ -559,9 +559,7 @@ Gateway proxy 与 per-instance proxy 共用 `proxy-forward.ts`，协议行为相
   清除该维度，防止同 id + 同域重建复活半事务 secret；
 - 删除只走精确 id-addressed `desktop_ssh_delete_connection(id)` main-owned transaction：
   先断开并撤销该 connection-target scope 的全部历史 origin 会话、清两类 durable secret，
-  最后删 registry；不存在 id 为幂等 no-op。保留的 legacy
-  `desktop_ssh_instances_set` 只接受与当前规范化 roster 同长度、同顺序、逐字段完全相同的
-  exact no-op，任何删除/add/edit/reorder 都拒绝；三个单项 credential setter 只接受
+  最后删 registry；不存在 id 为幂等 no-op。三个单项 credential setter 只接受
   clear，新增/编辑/非空写一律必须走 save transaction；
 - 迁移：旧 `kind:'ssh'` → `{kind:'dsh', transport:'ssh'}`；旧 `kind:'gateway'` →
   `{transport:'http'}`；`ssh-<id>` source id 保留 legacy 映射。

@@ -19,7 +19,11 @@ import {
  *  做文本锚点断言——与 ipc-surface-mirror.test.ts 的 badge wiring pin 同款纪律
  *  （该文件钉住注册/裁决/退出清 0 的存在性，本文件钉住输入语义）。 */
 const badgeModuleSource = stripComments(readFileSync(new URL('../../badge.ts', import.meta.url), 'utf8'));
-const shellCoreSource = stripComments(readFileSync(new URL('../../shell-core.ts', import.meta.url), 'utf8'));
+const shellCoreSource = stripComments(
+  readFileSync(new URL('../../shell-core.ts', import.meta.url), 'utf8')
+  // 2026-12 stage-3 域拆分：BADGE_COUNT 注册体迁入 shell-ipc-settings.ts。
+  + readFileSync(new URL('../../shell-ipc-settings.ts', import.meta.url), 'utf8'),
+);
 
 // ---- payload 白名单 ----
 test('validateBadgeRequest: accepts a valid object payload', () => {
@@ -92,7 +96,7 @@ test('badgePlatformGate: a missing API is unsupported on every platform', () => 
 /** BADGE_COUNT 注册体文本（到下一个 handler 注册点截止；注释已剥离）。 */
 function badgeCountHandlerSource(): string {
   const start = shellCoreSource.indexOf('deps.ipc.handle(IPC_CHANNELS.BADGE_COUNT');
-  assert.notEqual(start, -1, 'BADGE_COUNT handler must stay registered in shell-core');
+  assert.notEqual(start, -1, 'BADGE_COUNT handler must stay registered (shell-core 或拆分后的 shell-ipc-settings.ts)');
   const end = shellCoreSource.indexOf('IPC_CHANNELS.DEEP_LINK_READY', start);
   return shellCoreSource.slice(start, end === -1 ? start + 800 : end);
 }
