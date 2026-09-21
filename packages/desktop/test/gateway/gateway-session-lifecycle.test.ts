@@ -1,6 +1,6 @@
 /** gateway-session — part 2: cookie parsing among multiple set-cookie headers, per-origin session
  *  isolation, invalidate/invalidateScope races, held logins and fallbacks, dispose and expiresAt
- *  (siblings: gateway-session.test.ts, gateway-session-refresh.test.ts; shared fixtures in support). */
+ *  (siblings: gateway-session.test.ts, whose part 1b carries the folded-in refresh suite; shared fixtures in support). */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

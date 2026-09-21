@@ -12,7 +12,7 @@
 |`packages/desktop/dist/web/**`|renderer `build`（vite `build.outDir = ../desktop/dist/web`，三处路径契约见 `packages/desktop/scripts/electron-shared.mjs`）|忽略|只有路径契约文本断言（`scripts/electron-shared.test.mjs`）|打包发行旧前端壳（IPC名/槽位可能漂移）|
 |`packages/desktop/dist/preload.cjs`|`scripts/build-preload.mjs`（先emit临时目录、再只搬该文件）|忽略|无（`scripts/electron-dev.mjs` 缺文件才补建）|打包发行旧preload——IPC/trust边界与src漂移|
 |`packages/desktop/dist/control-plane/**`|`scripts/build-control-plane.mjs`|忽略|✅ 标记守卫（`scripts/control-plane-freshness.test.mjs`：缺当前标记 ⇒ 失败 + 重建命令）|打包app加载旧控制面（本轮实际发生）|
-|`packages/desktop/dist/host-{graph,git-worktree,archive-cleanup,open-in}-package/**`|`scripts/build-host-graph-package.mjs`（各seed包 `dist` cpSync）|忽略|只有行序/outDir断言（`scripts/build-host-graph-package.test.mjs`）|打包seed旧宿主包|
+|`packages/desktop/dist/host-{graph,git-worktree,archive-cleanup,open-in}-package/**`|`scripts/build-host-graph-package.mjs`（各seed包 `dist` cpSync）|忽略|只有行序/outDir断言（`scripts/release/packaging-manifest-lockstep.test.mjs`，原 build-host-graph-package 断言已并入）|打包seed旧宿主包|
 |`packages/gateway/dist/**`（含 `dist/pnpm/**`）|`packages/gateway/scripts/build.mjs`|忽略|✅ 标记守卫 + 内嵌pnpm版本/pin断言（`packages/gateway/test/packaging/build-smoke.test.ts`）|打包gateway旧服务端（本轮实际发生）|
 |`packages/gateway/host-packages/dsh-chamber-client-ui-mobile/**`|`packages/gateway/scripts/build.mjs`（`HOST_PACKAGES` 拷贝）|忽略|只有存在性/导出契约断言（缺文件才按需构建）|gateway seed旧移动端（`lib/client.js` 旧DOM锚点）|
 |seed包 `dist/index.js` ×4 + `packages/dsh-runtime/dist/index.js` + mobile `dist/index.js`/`lib/**`|各自 `scripts/build.mjs`|提交|✅ C8重建-比对（`scripts/upstream/verify-upstream-touchpoints.mjs`，硬失败）|已由门禁挡住|

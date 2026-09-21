@@ -6,7 +6,7 @@
  * blank 事实；fork 携带 parentSessionId 与 blank:false（子会话继承内容），标题提示缺省时字段
  * 不出现（稀疏）；归档发布撤下事实；wire 失败（业务失败或抛错）**不发布任何事实**，也不吞掉失败。
  *
- * 打桩方式与 workspace-mutations.test.ts 同款：getInstanceClient 按 instanceId 缓存同一个
+ * 打桩方式（沿用原 workspace-mutations.test.ts 的做法）：getInstanceClient 按 instanceId 缓存同一个
  * InstanceApiClient，直接替换该缓存对象的 session/workspace 面。
  */
 import { test } from 'node:test'

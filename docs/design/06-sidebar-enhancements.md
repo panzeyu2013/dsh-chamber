@@ -561,10 +561,10 @@ agent」（runningSubagentCount > 0）排在 node.completed 之前——官方�
     跳），属症状级；**页面语言长期归本地实例**与 design 05 §4「文档级全局量由活动
     视图独占」冲突；**只按活动来源门控、不判"设置面已敲定"** 会让本地实例自己的
     provisional 把默认进入闪一次。
-  - **证据**：`packages/renderer/test/frame-chrome/page-language.test.ts`
-    （规则 + 状态机 + 挂载世代 + 接线锁）、`page-language-hook.test.ts`（真实
-    decorator + 真实归属器、stub DOM 端到端：同栈回写 / 后台壳 / 切换等待 /
-    世代 / fail-open 形状）、
+  - **证据**：`packages/renderer/test/frame-chrome/page-language-hook.test.ts`
+    （真实 decorator + 真实归属器、stub DOM 端到端：locale 映射与 writer/reader
+    配对、规则状态机与挂载世代、同栈回写 / 后台壳 / 切换等待 / fail-open 形状、
+    安装顺序与接线锁）、`frame-locale.test.ts`（frame 读者映射）、
     `theme-fallback.test.ts`（活动来源发布锁）、`required-extra-rows.test.ts`
     （两条挂载路径的装饰器形状锁）。
 - **同族残留（非本节修复面）**：同一文档里其它 document-global 状态被逐实例写/

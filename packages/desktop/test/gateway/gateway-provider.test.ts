@@ -1,6 +1,6 @@
 /** gateway provider (design 17) unit tests — part 1: the encrypted/plaintext secrets store (0600,
  *  bindings, corruption), token/password validation gates, host/port constants and the direct-http
- *  verifyUp probe (siblings: gateway-session-spki / gateway-chamber-sync / apply-materialize). */
+ *  verifyUp probe (siblings: gateway-session-spki / gateway-chamber-apply-materialize). */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

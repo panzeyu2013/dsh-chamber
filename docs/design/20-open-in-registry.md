@@ -293,7 +293,7 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
    Node 注册表，故另有四处镜像锁步：`plugin-inventory-text.ts` 的 `OPEN_IN_PACKAGE` 与
    `InventoryEntryKind`/`chamberKindOf` 分类、`packages/renderer/src/global.d.ts` 与
    `packages/desktop/preload.cts` 的 `ChamberHostPackageState`（加 `localOnly?: boolean`；四份声明由
-   §9 字段集门钉住）、`test/plugin-inventory/chamber-seed-drift.test.ts`（读 `host-graph-seed.ts`：断言
+   §9 字段集门钉住）、`test/plugin-inventory/chamber-rows.test.ts`（读 `host-graph-seed.ts`：断言
    名字集合与注册表行一一对应，**新包不加入即红**）。远端探针在该行**零远端调用**（`installed:false`
    只表示"没问"；页面据注册表标志**不列**该行，绝不渲染"未注入"，也不参与 ssh 的 `sshChamberGates`）。
    main 侧凡判定"那台机器上该有什么"的路径（注入预检、ready-time 缺口日志、gateway 上传**源清单**
@@ -408,7 +408,7 @@ IPC 形状、载荷守卫、`sourceFingerprint` 来源代 proof、vscode deliver
 | 插件页行集 | `test/plugin-inventory/chamber-rows.test.ts`（connections 包） | local 4 行 / ssh·gateway·http 3 行（`applicableChamberPackages` 按注册表标志过滤，不做硬编码包名）；ssh 的两个目标级门（needs-seed / restart-pending）与表格共用该过滤后的列表，合成探测行不参与；loadSync 在读远端之前先提交本机投影（错误相位下表格不为空）；退役的 `chamberBadgeLocalOnly` 不得复活 |
 | 状态对象字段集 | `test/ipc/cross-package-contract.test.ts`（新增门）+ `test/ipc/ipc-surface-mirror.test.ts`（L3） | 同一个 wire 状态对象有**四份声明**（`plugin-sync.ts` 投影 / `renderer/global.d.ts` / `preload.cts` / 客户端 `ChamberPackageState`）：前两者与 client 由新门三向比对（client 允许只少 `probe`），preload ↔ renderer 由既有 L3 门覆盖 ⇒ 四向全闭合。**加 `localOnly` 时正是 renderer 与 preload 两处漏了**，两道门各抓一处 |
 | 网关派生白名单 | `test:gateway`（feature-lifecycle / chamber-installed / runtime-routes） | **网关侧**的 `/chamber/plugins` 投影与 PUT 名单由注册表派生 ⇒ 该 localOnly 行自动出现（只要只有桌面在上传，该行 `version` 恒 null；这是 API 投影，插件页不在非本地目标列出它——桌面侧的上传**源清单**是另一回事，见 §6.2 第 6 条）；gateway load 断言的域集 == `HOST_DOMAIN_PROBE_NAMES`（本机实测：该断言在 shim 解析到旧 runtime 时当场抛错，正是它应有的行为） |
-| 注册表锁步 | `test/plugin-inventory/chamber-seed-drift.test.ts`（connections 包） | 客户端名字镜像 == `CHAMBER_HOST_PACKAGES` 行集，且每个注册表包必须被 `classifyInventoryEntry` 归为 chamber 行（2026-12：非本地目标不再列 localOnly 行后，第三方区对该行只余分类这一道网，故把分类也钉进同一门） |
+| 注册表锁步 | `test/plugin-inventory/chamber-rows.test.ts`（connections 包） | 客户端名字镜像 == `CHAMBER_HOST_PACKAGES` 行集，且每个注册表包必须被 `classifyInventoryEntry` 归为 chamber 行（2026-12：非本地目标不再列 localOnly 行后，第三方区对该行只余分类这一道网，故把分类也钉进同一门） |
 | 文案 | `pnpm run verify:i18n` | 新文案 zh/en 双份与记录一致 |
 | 触点门 | `verify-upstream-touchpoints.mjs` | C7（四域锁步）+ C8（含新 seed dist，重建-比对 6 组）+ C9（vendor 补丁集不变：open-in 不新增补丁）+ 新 fork 的 C1/C3/C5（registry 的 `seed.*` 条目 + `versionAnchor: 'chamber'` 豁免，见 §10） |
 

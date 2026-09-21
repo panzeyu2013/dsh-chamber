@@ -180,13 +180,13 @@ current：只信 channel；stale：聚合级。
 （保 `derive.test.ts` 既有用例不动）。
 
 **测试**
-- `packages/dsh-chamber-client-ui-sidebar/test/session-rows/merge-runtime-facts.test.ts`（新，纯函数）：
+- `packages/dsh-chamber-client-ui-sidebar/test/session-rows/derive.test.ts`（原 merge-runtime-facts 用例已并入）：
   ① overlay-only（无 channel）出 pending 行；② channel pending 胜 overlay；③ completed 并集；
   ④ runningSubagents 回填；⑤ stale 透传；⑥ **反 churn 锁**：投影行里不得出现 updatedAt/completedAt；
   ⑦ 两参调用结果与改动前一致（兼容锁）。
-- 接线锁：`packages/renderer/test/wiring/session-facts-wiring.test.ts` 断言
-  `mergeRuntimeFacts(runtimeFacts[id], completedBySource[id],`（第三参存在）与 factsMode/factsDegraded
-  进了投影签名输入。
+- 接线锁：`mergeRuntimeFacts(runtimeFacts[id], completedBySource[id],`（第三参存在）与 factsMode/factsDegraded
+  进投影签名输入的原 `packages/renderer/test/wiring/session-facts-wiring.test.ts` 已随 2026-12 精简删除（无行为入口替代）；
+  mergeRuntimeFacts 本身的行为由 `packages/dsh-chamber-client-ui-sidebar/test/session-rows/derive.test.ts` 见证。
 
 ---
 
@@ -652,14 +652,14 @@ loadUnread(storage):
 
 仓内模式：纯函数行为测试（node:test 直跑）+ 对 `App.tsx` 这类不可 import 的文件用
 **stripComments + 文本锚点**（`scripts/dev/test-support/source-text.ts`）。文本匹配前一律剥注释
-（`session-fact-reconcile-wiring.test.ts:11-12` 既有纪律）。
+（`scripts/dev/test-support/source-text.ts:6-15` 既有纪律）。
 
 | # | 锁文件（新/改） | 断言 | 挡住什么错修 |
 |---|---|---|---|
 | L1 | `renderer/test/wiring/unread-derivation-wiring.test.ts` | deriveUnread( 存在；撤回分支（prevRuntimeFactsRef.current[sourceId] = report.sessions 附近的 setCompletedBySource）里 delete next[sourceId] **不存在** | 「派生」但撤回仍删账本 ⇒ R2 原样复发 |
 | L2 | 同上 | readMarksRef.current / edgeLedgerRef.current 存在且被写回 | 只算不存 ⇒ 重启丢失（criterion 3） |
 | L3 | 同上 | reclaimView 函数体内不出现 readMarks/edgeLedger（数据面不随拆壳清） | 拆壳顺手清标记 ⇒ 假未读/丢未读 |
-| L4 | `renderer/test/wiring/session-facts-wiring.test.ts` | mergeRuntimeFacts(runtimeFacts[id], completedBySource[id], 第三参存在；factsMode/factsDegraded 进 entry 且进投影签名输入 | overlay 没进投影 ⇒ 关壳后 pending/未读消失 |
+| L4 | `sidebar/test/session-rows/derive.test.ts`（原 `renderer/test/wiring/session-facts-wiring.test.ts`，2026-12 精简删除） | mergeRuntimeFacts(runtimeFacts[id], completedBySource[id], 第三/第四参与 overlay/stale 行为；App 调用点的 factsMode/factsDegraded 投影输入锁无行为入口替代 | overlay 没进投影 ⇒ 关壳后 pending/未读消失 |
 | L5 | 同上 | createSessionFactsSource( / planFactsMode( 存在；factsDegraded 有消费点 | 降级无提示 ⇒ R17「不静默」失守 |
 | L6 | `renderer/test/wiring/notification-second-entry.test.ts` | bridge.notify( 全文出现次数 === 1；shouldNotifyWatermark( 存在；completedAtSource 被消费 | 两套组装漂移 ⇒ 文案/豁免分叉；重建完成乱发通知 |
 | L7 | 同上 | emitSessionNotification( 被 >= 2 处调用 | 「第二入口」写成注释不接线 |
@@ -701,7 +701,7 @@ loadUnread(storage):
 1. **§3.2 架构图 + §3.3-4 改口径**：运行环**不**改由 watcher 驱动（runningRingVisible，
    `derive.ts:868-870`），watcher 只发 session-added/removed/changed 提示，靠 §3.3-4 的「一次 unary」
    把 running 的 ≤2s 判据做成。否则实现者会去改环的权威源，破坏 06 §4.3 与
-   `test/session-rows/completed-dots-signatures.test.ts`。
+   `test/session-rows/derive.test.ts`（完成点签名用例已并入）。
 2. **§3.3-1 补机械锚点**：点名 mergeRuntimeFacts（`derive.ts:781-803`）与第三/第四参；并加一条
    「判定字段（updatedAt/completedAt）不进投影形状」的反 churn 规则（`derive.ts:798-801` 的既有纪律）。
 3. **§3.3-2 补实现约束**：reconcileCompletedFacts 保留为 deriveUnread 内的边沿轨实现（**一套规则**）；

@@ -1513,7 +1513,7 @@ microtask 合并）。**dsh-client-web fork 是这些补丁的合法落点**（�
 
 **被否决的备选（Rejected alternatives，layer-5）**：
 - **滚动器 padding + seat inset 两臂并用**（旧实现）：实测双倍抬升（见上第 1 条），已删除 padding 臂；
-  回归由 `test/visual/breakpoints.test.ts` 的"该规则必须不存在"断言钉住。
+  回归由 `packages/dsh-chamber-client-ui-mobile/test/behavior/composer-guard.test.ts` 的"该规则必须不存在"断言钉住。
 - **调阈值 / 加延迟重试仍走推断**：`isKeyboardOpen` 类启发式在事件缺失时不 arm，改测量后该失效类别整体消失。
 - **`html[data-mobile-kbd]` 作第二 CSS 载体兜底**：实抓包证明 frame 打标成立，第二载体只增加状态面（否决）。
 - **放宽为"任何可编辑焦点都抬升"**：会让设置页/提问卡片的键盘把 composer 抬起（只服务 composer 的既有策略保留）。

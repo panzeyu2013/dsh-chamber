@@ -405,7 +405,7 @@ curl -s $B/api/i/local/chamber/session-state   # → 404 {"code":"capability_not
 `legacy-gateway`（无镜像），行为回落到本次改动之前（不白屏、不假装 full），能力一览显示 legacy 档位；
 dsh 来源的 `capability_not_found` 同理，并由 W6 的无壳观察者提供事实通道。
 **仍未覆盖的一半**：503 `session_state_disabled` 与「2xx 但响应无 `protocol`」两种降级形态在真实部署上尚未出现
-（只由 `packages/gateway/test/session-state/session-state-version-matrix.test.ts` 的 6 条夹具验证）；
+（503 由 `packages/gateway/test/session-state/session-state-routes.test.ts` 的逐路由断言、2xx 无 `protocol` 由 `packages/renderer/test/session-state/session-facts-source.test.ts` 的 classify 矩阵验证）；
 以及**新版 gateway**（带镜像）与新版桌面的端到端联通未实测。
 
 ### 13.7 本环境无法执行、必须由实机/CI 权威的部分（如实列出，不充作通过）
@@ -493,8 +493,8 @@ B4 `status must open a row the baseline never saw` → ✔、B5 载荷形 → �
 **eligibility 门**（不在预热候选集合即原样返回）与**计费门**（预算/冷却/每源一次）→ 只对既有 `prewarmQueueRef` 置顶 →
 既有 `drainPrewarm`/`pickPrewarmTarget` 选人 → 既有 `setMountedViews` 挂载；drain 真正选中时计费。
 **不触碰的纪律**：`prewarmSuppressedRef` 绝不被意图清除（否则「回收→立刻重 boot」空转）、不加槽位、不动 `MAX_PREWARMED_REMOTE_VIEWS`、
-收割候选在场时意图只能排队；hover 无任何网络副作用。测试：侧栏 `prewarm-intent` 14/14 + 新 `prewarm-intent-wiring` 5/5（含桥投递/取消订阅/唯一触点），
-renderer 新 `prewarm-intent-wiring` 8/8（用**真实** `pickPrewarmTarget` 证明重排改变选取结果、被抑制源不进重排、收割预留压过意图）。
+收割候选在场时意图只能排队；hover 无任何网络副作用。测试：侧栏 `prewarm-intent.test.ts`（含并入的原 `prewarm-intent-wiring` 桥投递/取消订阅/唯一触点用例），
+renderer 侧原 `prewarm-intent-wiring` 的纯行为（用**真实** `pickPrewarmTarget` 证明重排改变选取结果、被抑制源不进重排、收割预留压过意图）由 `packages/renderer/test/lifecycle/baseline-harvest.test.ts` 见证；其 App 订阅/资格门/计费/剪枝源码锁随 2026-12 精简删除且无行为入口替代。
 
 **审计 M3 / §6「旧桌面 × 新网关」cell（已落地并验证）**：新增冻结调用序列 `support/compat/route-table-0.4.0.fixture.json`
 （4 条路由 + 旧客户端请求体 + frozenKeys/嵌套键集 + 基线/冻结后新增词汇表 + 客户端解析路径表；usage 头写明**永久冻结**、

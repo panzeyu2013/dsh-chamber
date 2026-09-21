@@ -4,7 +4,8 @@
  * archive layout, honest skips, cap errors with machine codes, the manifest
  * projection, and the TEXTUAL LOCKSTEP tests pinning every cap + the version
  * grammar to the gateway route's own literals.
- * Sibling parts: plugin-sync.test.ts, plugin-sync-remote-read.test.ts.
+ * Sibling parts: plugin-sync.test.ts (which also carries the folded-in
+ * remote-read suite).
  */
 
 import { test } from 'node:test'

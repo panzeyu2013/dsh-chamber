@@ -74,7 +74,7 @@ const MANUAL_RESYNC_GUARD_MS = 1_000
  * (`packages/dsh-api-gateway/src/client/stream-carrier-fact.ts`, design 14 §D4).
  *
  * Duplicated as a literal on purpose: a client plugin must not deepen an import
- * path into the fork at bundle time, and `test/session-health/stream-health-wiring.test.ts`
+ * path into the fork at bundle time, and `test/ui-lock/instance-view-guard.test.ts`
  * pins the two spellings to each other (the vendor-lockstep precedent).
  */
 const CARRIER_CHURN_EVENT = 'dsh-chamber:stream-carrier-failed'

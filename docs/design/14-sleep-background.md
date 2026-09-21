@@ -377,7 +377,7 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
   ⑤ 守卫自身的三级动作（含写回）目前只落 renderer console（STATUS ⑩，真机取证仍缺一条
   落盘链）；⑥ `handleSessionStatus` 是非契约方法面，pin 升级移除/改名即降级为「WARN 一次 +
   升级阶梯」——运行时能力守卫 + 接线锁（`packages/renderer/test/wiring/session-liveness-wiring.test.ts`、
-  `test/session-state/session-fact-reconcile-wiring.test.ts`）已就位，两个上游诉求见
+  `test/session-state/session-fact-reconcile.test.ts`（含原 wiring 的生产接线锁））已就位，两个上游诉求见
   `docs/progress/todo/upstream-proposals.md` §4；⑦ 60s 门槛 / N=2 确认 / 写回链的端到端时延
   与打包态、远端（ssh）实机未校准（STATUS ⑥）；⑧ 未挂载/已回收来源没有 producer ⇒ 不在守卫
   输入内（其事实由 30s unary 兜底直供；读取失败导致的冻结保留仍是 STATUS 的未闭合门）。
@@ -465,7 +465,7 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 
 - **载体故障的用户可见面（2026-12）**：治因 = `packages/dsh-api-gateway/src/client/remote-stream.ts` 在活世代下用有界退避（250ms 起翻倍、10s 封顶，与连接车道自身 `backoffMaxMs` 同值）重开而不逃逸为 `gateway/internal`；信号面 = 该包 `$stream` 工厂组合 `carrierFailed` 成有界页面事实
   `dsh-chamber:stream-carrier-failed`（`stream-carrier-fact.ts`：计数 + 时间 + 实例 id + 截断消息，dispatch 抛错被吞，绝不打断重连），由 open-in 的健康臂座席按实例过滤后喂进纯决策模块，chip 以 `role="status"` 显示「对话流正在重新连接…」（信息性、不给「重新加载」按钮，超过 `carrierChurnMs` 自行消退）。**接线要求（2026-09 修复，C1）**：事实落在座席闭包而非 props，座席必须把每次落地的 churn 广播给渲染侧（`subscribe(listener)`），chip 订阅后 bump tick 重规划——否则 `openState === 'open'` 时 ticker 停摆，提示既不出现也不会过期（原实现只有「事实进决策」没有「通知渲染」）。
-  - **拒绝替代**：（a）不做可见面——拒：去掉终局逃逸后，用户再也分不清「流在重连」与「会话本来就安静」，这是本补丁引入的静默窗口；（b）客户端插件在打包期 import 该 fork 的事件常量——拒：client plugin 不应加深进 fork 的 import 路径，故字面量复制并由 `stream-health-wiring.test.ts` 把两处拼写钉在一起（vendor-lockstep 先例）；（c）ctx service seam（fork 消费 chamber 提供的服务）——拒：fork 的探针面会被 chamber 插件的存在绑住，而页面事实在座席缺席时也无害；（d）让 carrier 失败重新终局——拒：正是本次要修的根因。
+  - **拒绝替代**：（a）不做可见面——拒：去掉终局逃逸后，用户再也分不清「流在重连」与「会话本来就安静」，这是本补丁引入的静默窗口；（b）客户端插件在打包期 import 该 fork 的事件常量——拒：client plugin 不应加深进 fork 的 import 路径，故字面量复制并由 `packages/dsh-chamber-client-ui-open-in/test/ui-lock/instance-view-guard.test.ts` 把两处拼写钉在一起（vendor-lockstep 先例）；（c）ctx service seam（fork 消费 chamber 提供的服务）——拒：fork 的探针面会被 chamber 插件的存在绑住，而页面事实在座席缺席时也无害；（d）让 carrier 失败重新终局——拒：正是本次要修的根因。
   - **未闭合**：churn 提示窗口（10s）与按来源归属的粗粒度未在真机校准（STATUS ⑬）。
 
 - **逻辑流开帧丢失与首帧期限（2026-09 ui-chat 卡死排查的根因修复，chamber fork）**：
@@ -569,14 +569,12 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 验证门：`pnpm run test:desktop`、`pnpm run typecheck`、`pnpm run build:renderer`；
 **D4 附加门**：`pnpm run test:renderer-shell`（`test/lifecycle/session-liveness.test.ts`（行为契约）、
 `test/wiring/session-liveness-wiring.test.ts`（跨模块预算不变量 + 保留视图接线锁））、`test:sidebar`
-（`test/session-state/session-fact-reconcile.test.ts`（含写回 seam / 权威相位 / 判定纯函数）、
-`test/session-state/session-fact-reconcile-wiring.test.ts`（生产接线锁）、
+（`test/session-state/session-fact-reconcile.test.ts`（含写回 seam / 权威相位 / 判定纯函数与生产接线锁）、
 `test/session-state/vendor-session-fact-contract.test.ts`（读 vendor 源的六条语义 lockstep；缺树默认失败）、
-`test/session-rows/completed-dots-signatures.test.ts`、
-`test/session-rows/workspace-membership.test.ts` 的回执投影边界）、`test:control-plane`
+`test/session-rows/derive.test.ts`（含原 completed-dots-signatures / workspace-membership 的回执投影边界））、`test:control-plane`
 （`test/log-file.test.ts`、`test/host-lifecycle/lifecycle.test.ts` 的落盘/reopen 端到端、
 `test:open-in`
-（`test/session-health/session-stream-health.test.ts` 阶梯真值表 + `stream-health-wiring.test.ts` 座席接线锁 +
+（`test/session-health/session-stream-health.test.ts` 阶梯真值表 + `test/ui-lock/instance-view-guard.test.ts` 座席接线锁 +
 `vendor-heal-contract.test.ts`：stage 迁移所依赖的三条 vendor 事实的 lockstep，pin 升级语义变化即红）、
 `verify:test-wiring`（**仓内全部 test manifest 必须登记在案**）、`test:swift`（ShellLogTests 全部用例，含新增的 sidecar 文件名/轮转名/落盘三条
 + CrossLanguageLockstepTests 的 sidecar sink 锁步）；

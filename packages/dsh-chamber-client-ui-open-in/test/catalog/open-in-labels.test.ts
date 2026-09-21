@@ -10,7 +10,7 @@
  *
  * The id set is read as SOURCE TEXT, not imported: this is a browser package
  * and the host domain is a Node seed package outside its `rootDir` (the repo's
- * established cross-package pattern — `chamber-seed-drift.test.ts` reads
+ * established cross-package pattern — `chamber-rows.test.ts` reads
  * `host-graph-seed.ts` the same way). The two row forms below are self-checking:
  * an id produced by a form the extraction does not know would make its label row
  * look "stray" and fail the last test loudly, instead of being silently missed.

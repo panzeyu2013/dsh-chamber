@@ -14,7 +14,7 @@ import type { PluginFiberPhase, PluginInventorySnapshot } from './plugin-invento
  *  view surfaces. These constants are the CLIENT-side mirror of the
  *  control-plane registry (host-graph-seed.ts CHAMBER_HOST_PACKAGES) — a client
  *  package cannot import the Node-side module, so the drift test in
- *  test/plugin-inventory/chamber-seed-drift.test.ts pins the NAME SET against the registry
+ *  test/plugin-inventory/chamber-rows.test.ts pins the NAME SET against the registry
  *  source text (a new registry row must fail there, never be silently
  *  ignored). */
 export const HOST_GRAPH_PACKAGE = '@dsh-chamber/dsh-chamber-seed-client-graph'

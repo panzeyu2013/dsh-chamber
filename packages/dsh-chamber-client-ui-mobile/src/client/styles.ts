@@ -768,7 +768,7 @@ export const MOBILE_CSS = `
      local name, but flex:none and width:28px. A class-name arm therefore capped
      the 28px ring's max-width and overrode its flex:none, which the 2026-09
      audit never intended (2026-09-13 round-2 review F5). The seat anchor is the
-     narrow one; test/visual/breakpoints.test.ts pins both it and the absence of any
+     narrow one; test/behavior/composer-guard.test.ts pins both it and the absence of any
      "trigger" class arm. */
   [data-slot="conversation.input.model"] button {
     max-width: 112px !important;

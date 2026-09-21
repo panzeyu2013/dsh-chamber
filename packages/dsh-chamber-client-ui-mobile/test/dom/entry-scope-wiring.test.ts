@@ -1,8 +1,9 @@
 /**
  * Wiring locks for the mobile client entry's SVG resource scoper install
- * (design 05 §4.2). This is the mobile mirror of
- * packages/renderer/test/svg-resource/svg-resource-scope-wiring.test.ts, whose
- * `install < createRoot` lock is the desktop counterpart.
+ * (design 05 §4.2). The desktop install-order counterpart
+ * (packages/renderer/test/svg-resource/svg-resource-scope-wiring.test.ts) was
+ * retired in the 2026-12 test trim; the surviving desktop module-face test is
+ * svg-resource-scope.test.ts, so the entry-order lock below is mobile-only.
  *
  * The entry cannot be imported by a plain `node test/…` run (module-scope DOM
  * install + cordis vendor imports), so what is pinned here is the source-text

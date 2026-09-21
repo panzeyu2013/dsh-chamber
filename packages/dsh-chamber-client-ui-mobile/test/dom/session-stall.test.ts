@@ -786,7 +786,7 @@ test('the shipped automatic-arm limits are the documented ones', () => {
   assert.equal(STALL_RESYNC_WINDOW_MS, 600_000)
   assert.equal(STALL_RESYNC_MAX, 3)
   // Aligned with the desktop ladder's loadingFailedMs (design 14 §D4); the
-  // cross-tier lockstep is test/behavior/session-recovery-parity.test.ts.
+  // cross-tier lockstep assertions live below in this file (CROSS-TIER RECOVERY LOCKSTEP).
   assert.equal(STALL_FAILED_MS, 90_000)
 })
 

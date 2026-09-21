@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs'
 // `body[data-ds-dark-theme]` 才切深色；活动实例的 ui-layout theme presenter
 // 落地后由 `html` 内联值覆盖。因此兜底必须与「无属性即浅色」一致，否则任一
 // 投影缺席的窗口就是"浅色界面 + 深色原生控件"（checkbox 深浅错位）。
-// 源码级钉子（同 gateway/test/auth/login-page.test.ts 的样式断言先例）：改回 dark
+// 源码级钉子（同 packages/gateway/test/boundary/boundary-login-page.test.ts 的样式断言先例）：改回 dark
 // 不会让任何行为测试变红，只会让用户重新看到错位。
 
 const css = readFileSync(new URL('../../src/styles.css', import.meta.url), 'utf8')

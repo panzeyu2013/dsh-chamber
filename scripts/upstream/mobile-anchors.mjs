@@ -10,7 +10,7 @@
  *
  * 本门要回答的问题（STATUS.md 移动档开放项 ⑤ 的另一半）：移动插件的 CSS/JS 锚在
  * 上游 DOM 契约上（`data-*` 属性、slot key、`role`），打包 fork 的 README +
- * `test/visual/breakpoints.test.ts` 只**自证**（只读本包），拦不住上游漂移。这里把
+ * `test/behavior/composer-guard.test.ts` 只**自证**（只读本包），拦不住上游漂移。这里把
  * 「插件声明的锚点」与「上游产物里真实发射的锚点」做双向差集：
  *
  *   方向 A（声明 → 上游）：插件源码里出现的每个 `data-*` / `[role=…]` /

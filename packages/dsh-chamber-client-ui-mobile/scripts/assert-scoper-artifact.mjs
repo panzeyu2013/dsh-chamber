@@ -5,10 +5,10 @@
  *
  * Why a separate, post-build step: `pnpm run build:renderer` runs AFTER the
  * package test suites in ci.yml, so no test-suite guard can see
- * `packages/desktop/dist/web/assets/*.js`. The source-text wiring lock
- * (packages/renderer/test/svg-resource/svg-resource-scope-wiring.test.ts) proves
- * the install call exists in the entry source; this proves the BUILD did not drop
- * or tree-shake the scoper out of the page.
+ * `packages/desktop/dist/web/assets/*.js`. The install-order source-text lock
+ * (packages/renderer/test/svg-resource/svg-resource-scope-wiring.test.ts) was
+ * retired in the 2026-12 test trim, so this guard is now the only automated
+ * check that the BUILD did not drop or tree-shake the scoper out of the page.
  *
  * Usage: node packages/dsh-chamber-client-ui-mobile/scripts/assert-scoper-artifact.mjs [assetsDir]
  * Exits 0 when some built page chunk carries the scoper markers, 1 otherwise.

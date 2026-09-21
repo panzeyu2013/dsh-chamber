@@ -22,9 +22,10 @@
  * Coverage boundary (which artifacts are NOT guarded here, and why):
  *   - packages/desktop/dist/web/assets/chamber-*.js (the desktop page bundle) is
  *     a build output of `pnpm run build:renderer`, not a committed artifact of
- *     this package; its scoper wiring is asserted by
- *     packages/renderer/test/svg-resource/svg-resource-scope-wiring.test.ts and
- *     its built form by the manual probe (`--expect-artifact`).
+ *     this package; its scoper module face is asserted by
+ *     packages/renderer/test/svg-resource/svg-resource-scope.test.ts (the
+ *     install-order source lock was retired in the 2026-12 trim) and its built
+ *     form by the manual probe (`--expect-artifact`).
  *   - packages/gateway/host-packages/dsh-chamber-client-ui-mobile/lib/client.js
  *     is generated per gateway build as a byte copy of the guarded file
  *     (packages/gateway/scripts/build.mjs:74-77), and its presence is already

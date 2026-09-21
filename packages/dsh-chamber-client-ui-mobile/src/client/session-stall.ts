@@ -156,7 +156,7 @@ import type { MobileKey } from './locales.ts'
  * never called stalled; short enough that a phone left on a dead loading face
  * gets an exit without the user guessing.
  *
- * CROSS-TIER PARITY (design 14 §D4; test/behavior/session-recovery-parity.test.ts):
+ * CROSS-TIER PARITY (design 14 §D4; test/dom/session-stall.test.ts, CROSS-TIER RECOVERY LOCKSTEP):
  * the desktop ladder's own notice threshold is 20s, measured on the official
  * openState the desktop tier subscribes to. This tier has NO openState channel —
  * it observes a DOM-only shape that a healthy slow load can produce too — so the

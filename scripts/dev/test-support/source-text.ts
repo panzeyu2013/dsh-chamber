@@ -19,7 +19,7 @@
  * same implementation existed in 20 test files, nine of them byte-identical.
  * Deliberate variants stay local and say why (e.g. the regex-based interface
  * stripper in `packages/desktop/test/ipc/ipc-surface-mirror.test.ts`, the
- * CSS-only stripper in `packages/dsh-chamber-client-ui-mobile/test/visual/breakpoints.test.ts`).
+ * CSS-only stripper in `packages/dsh-chamber-client-ui-mobile/test/behavior/composer-guard.test.ts`).
  */
 
 /**

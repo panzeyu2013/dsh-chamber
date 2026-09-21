@@ -1,6 +1,6 @@
 /** gateway provider — part 2: password-session hooks (ensureSession login, 401 re-login once,
  *  Bearer+Cookie coexistence, inert default) and the S23 SPKI-pinned https probe/login over real
- *  TLS (siblings: gateway-provider / gateway-chamber-sync / gateway-chamber-apply-materialize). */
+ *  TLS (siblings: gateway-provider / gateway-chamber-apply-materialize). */
 
 import { test } from 'node:test'
 import assert from 'node:assert/strict'

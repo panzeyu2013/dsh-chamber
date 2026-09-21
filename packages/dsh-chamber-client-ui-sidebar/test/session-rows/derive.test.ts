@@ -5,9 +5,10 @@
  * contracts (facts merge, ordering, labels/reuse, search/archive and the
  * publish signatures) that round 2 folded in from the former sibling files.
  *
- * Siblings: completed-dots-signatures.test.ts (publish-signature identity and
- * the separator-forgery negative) and derive-unread.test.ts (the shared unread
- * predicate, referenced by the remote-state injection matrix).
+ * The publish-signature identity and the separator-forgery negative are folded
+ * in below (formerly completed-dots-signatures.test.ts). Sibling:
+ * derive-unread.test.ts (the shared unread predicate, referenced by the
+ * remote-state injection matrix).
  */
 
 import { test } from 'node:test'

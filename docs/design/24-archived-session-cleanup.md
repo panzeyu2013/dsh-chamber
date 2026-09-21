@@ -658,8 +658,8 @@ src/core.ts + src/binding.ts + scripts/build.mjs + test/*.test.ts + **提交态 
 ARCHIVE_CLEANUP 常量 + `seedRemoteChamberHostPackages` + main.ts
 `chamberHostPackageSeeds`/`localChamberHostPackageSources`/打包路径）、
 `scripts/build-host-graph-package.mjs`（packages 数组含第三包 → desktop `dist/` 内嵌包源）、
-`test/plugins/plugin-sync-seed.test.ts` / `test/transport/ssh-provider-endpoint-auth.test.ts` /
-`test/gateway/gateway-chamber-sync.test.ts`（上传清单 fixture）。**门禁面**：根
+`test/plugins/plugin-sync.test.ts`（含并入的 seed 模板/回滚锁）/ `test/transport/ssh-provider-endpoint-auth.test.ts` /
+`test/gateway/gateway-chamber-apply-materialize.test.ts`（上传清单 fixture）。**门禁面**：根
 `package.json`（`build:host-*` 并入 `build:host-packages`、
 `typecheck:host-archive-cleanup`、`test:host-archive-cleanup` 别名）、
 `.github/workflows/ci.yml` 与 `release.yml` 的逐包 typecheck/test/host-build 步骤、
@@ -684,7 +684,7 @@ client-graph/git-worktree/mobile）。域状态诊断 = 侧边栏 404 文案 + �
 settings-connections 两侧 `global.d.ts` + `preload.cts` `ChamberInjectionState` 镜像位
 （`test/ipc/ipc-surface-mirror.test.ts` 断言三镜像位）；(c) `ChamberSeedDriftState` /
 `plugin-inventory-text` 两键形状第三键；(d) 测试 fixture（desktop plugin-sync/
-gateway-provider、settings chamber-seed-drift/control-plane）。**IPC 面**：v1（仅常量归类）
+gateway-provider、settings chamber-rows/control-plane）。**IPC 面**：v1（仅常量归类）
 **不新增任何 IPC channel / 管理 REST / 反代改动**；后续采纳三态行时上述清单即为增量。
 
 **G. 零改动面**：control-plane 反代、gateway 默认代理、桥契约
@@ -747,11 +747,10 @@ STATUS.md。
   2026-13 review）；**protect 全套**（§3/§4 step 3b 每条规则各有 fixture：受保护根/受保护
   subagent 后代整棵跳过、优先分类、未知 id 无操作、受保护孤儿不清扫、畸形/超限在权威读取前
   拒绝、空集合逐字节等价、二次保护复查不产生前缀删除、binding 原语 `protected` 拒绝）；
-- `retention-properties.test.ts`（2026-13 收尾补，确定性生成：固定种子 xorshift32 ×
-  2,000 轮）：在 fixture 之上覆盖**组合空间**，断言五条不变量——I1 任何"删除瞬间仍常驻"
+- retention 不变量（2026-13 收尾补；2026-12 精简后逐条落于 `test/core.test.ts`，I4 于 :92、I1/I2/I3/I5 于 :88-236；原 fixed-seed xorshift32 × 2,000 轮组合生成未恢复，组合空间回归仅剩逐例）——I1 任何"删除瞬间仍常驻"
   的根绝不离集合（用户要求本体）、I2 上报的保留集不 phantom、I3 `forcedLoaded` 只计真的
   删了内容的保留根、I4 force 从不跳过 loaded 树、I5 重跑不删内容/不报 item 失败/**绝不摘
-  live 成员**/只摘无记录成员；失败消息带迭代号与全量状态快照，种子固定 ⇒ 不引入 flake；
+  live 成员**/只摘无记录成员（原组合生成器的失败消息带迭代号与全量状态快照、种子固定 ⇒ 不引入 flake；该生成器未恢复）；
 - 探针契约：期望集**部分派生 fixture**（2-of-3、空缓存、全量三态）、
   accept 语义、dist-sync / cross-package-contract 锁步——先红后绿；
 - 接线面：host-graph-seed / cordis-inserts / desktop plugin-sync / gateway 列表断言扩展
