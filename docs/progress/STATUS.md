@@ -388,7 +388,7 @@
 
 - 提交进仓构建产物维持现状（2026-09精简评估）：真正 tracked 的是 `dsh-runtime/dist/index.js`（7,709 行）、四个 seed `dist/index.js`（4,786 行）与 mobile `dist`+`lib` 工件（3,222 行），共约 15.7k 行；三者在 `.gitignore` 反选处各有明确设计理由（seed 播种零构建依赖 / desktop shim 静态 import 包 main / gateway 打包复制），移出需改 design 08/09/17 契约与「clean checkout 可直接 typecheck/test」的前提，属构建流程裁决，未动。`renderer/src/generated` 本就只在本地生成、从未 tracked（`upstream-touchpoints.md:206` 契约即「不提交」）。
 
-- 测试面精简已到证据化上限（2026-09，commit 10c2e340）：净减 10.8k 行；各区独立复核确认 ≥25%/区需删除安全/fail-closed、跨包 parity、golden/pin 或 CI 显式引用类（desktop ≈7.3k、gateway ≈3.3k、renderer 需删 CI 固定文件），继续压缩属保护面取舍，需显式裁决。
+- 测试面精简已到证据化上限（2026-09）：已完成逐删除覆盖复核与最小恢复（恢复落在存活文件）；继续压缩须删除安全/fail-closed、跨包 parity、golden/pin 或 CI 显式引用类测试，属保护面取舍，需显式裁决。
 
 - 统一名称的保留面（2026-12用户指令；逐条登记以免被当成漏改再翻一遍）：身份字样（bundle内可执行名、SwiftPM模块/目录/资源包、shim资源名、`DSH_CHAMBER_SHELL_*`环境变量、dev数据根、日志文件/标签、调试通道）对齐`dsh-chamber`（deviations T-17）。以下有意不改：① bundle id `com.dshchamber.native`（Swift壳）/ `com.dshchamber.desktop`（Electron腿）——改动=通知授权重来+打包身份返工（T-14）；②跨进程协议串`--native-updater`、`__host.nativeUpdatePhase`、`no-native-bridge`/`nativeChannelToken`——Swift↔sidecar ↔渲染端shim三侧锁步，改名须协变；③持久化键前缀`native-shell.page-zoom.<origin>`（`macos/Sources/DSHChamber/ZoomPersistence.swift:22`）——改键会静默重置用户缩放偏好（T-22）；④测试夹具loud标记`poc-stub`/`poc: true`/`poc-no-registry`/`poc-unimplemented`（`packages/desktop/sidecar-stub.ts`）与settings-bridge的`'native-shell'`阻塞原因分类id（`packages/dsh-chamber-client-ui-settings-bridge/src/client/blocked-reason.ts:12`；文案跨包锁步、不属改名面）。免改面：`CHANGELOG*`段、`.tmp/**`（含旧`POC_*`脚本与旧名.app，临时区）。失效判据：上述任一被改名须同步T-14/T-17/T-22与两侧测试。
 
