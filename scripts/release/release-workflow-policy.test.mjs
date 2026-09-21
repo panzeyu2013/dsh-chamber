@@ -238,14 +238,17 @@ assert.ok(swiftBuild.includes('test -f "$APP/Contents/Resources/sidecar/dist/$HO
 // red or signed a stale, un-notarized zip). It must follow the stapler step and sign the FINAL zip.
 //
 // S-36 (2026-12 audit, top severity): the beta appcast's enclosure resolved to the ROLLING
-// tag while the zip was only uploaded to v<version> (discovering beta.N+1 then 404ed). Three
-// load-bearing parts are pinned below: (1) every archive the appcast references (current beta
-// + the latest final zip for S-22/S-23) is staged into the generate_appcast input dir; (2)
-// beta generation passes --download-url-prefix pinned to the rolling download dir so every
-// enclosure URL resolves there; (3) the rolling release — the PUBLIC beta discovery surface —
-// receives those archives BEFORE the appcast, only after the fail-closed verification step.
-// The stable channel passes no prefix and never touches the rolling release, so its enclosure
-// shape (releases/latest/download/<zip>) stays byte-identical.
+// tag while the zip was only uploaded to v<version> (discovering beta.N+1 then 404ed). After the
+// 2026-09 S-23 rework the load-bearing parts pinned below are: (1) the beta generate_appcast
+// input dir holds ONLY beta-sourced archives (current beta zip + past beta zips as delta
+// baselines) — the stable zip is never copied there (two feeds in one dir + -o fails with
+// "multiple appcasts found"); (2) beta generation passes --download-url-prefix pinned to the
+// rolling download dir so every beta enclosure URL resolves there; (3) the rolling release — the
+// PUBLIC beta discovery surface — receives the current beta zip and its deltas BEFORE the
+// appcast, only after the fail-closed verification step; (4) the copied final item carries the
+// version-fixed releases/download/<stable-tag>/ prefix. The stable appcast is never published on
+// the rolling release; the S-23 refresh only pushes the final zip + stable deltas there (before
+// overwriting the rolling beta feed), while the stable feed keeps releases/latest/download.
 const appcastStep = between(
   '      - name: Generate + sign the Sparkle appcast',
   '      - name: Verify native app + uploaded archives',
@@ -338,35 +341,222 @@ assert.equal(nativeEnclosureUrl(stableZip, nativeMacFeedUrl('0.3.2', 'panzeyu201
   `https://github.com/panzeyu2013/dsh-chamber/releases/latest/download/${stableZip}`,
   'the stable enclosure stays on releases/latest (byte-identical generation)')
 
-// Staging: the signed beta zip always enters the generate_appcast input dir, and a beta
-// release also pulls the latest final native zip so the appcast carries the final item (S-22/S-23).
-assert.ok(appcastStep.includes('cp "$ZIP" /tmp/appcast-in/'),
-  'the final signed beta zip must be staged into the appcast input dir (S-36)')
-assert.ok(appcastStep.includes(`--pattern '${NATIVE_STABLE_ZIP_PATTERN}'`),
-  'the beta appcast must stage the latest final native zip (S-22/S-23)')
-assert.ok(appcastStep.includes('gh release download "$STABLE_TAG"'),
-  'the final zip must actually be fetched from the latest release')
+// 2026-09 增量更新：stable 与 beta 的收件目录/feed/上传面**完全分开**——generate_appcast 按
+// 归档内嵌 SUFeedURL 的文件名分组，两通道归档同目录 + -o 会直接失败 multiple appcasts found
+// （Sparkle 2.10.0 generate_appcast/Appcast.swift:45-62，本机复现）；而 delta 需要把本通道的
+// 历史归档放进同一个收件目录。staging 只取本通道归档、逐条精确文件名（绝不宽 glob）。
+assert.ok(appcastStep.includes('STAGE_DIR="/tmp/appcast-in-stable"')
+  && appcastStep.includes('STAGE_DIR="/tmp/appcast-in-beta"'),
+  'stable 与 beta 必须各有独立收件目录（同目录 + -o = multiple appcasts found）')
+assert.ok(appcastStep.includes('cp "$ZIP" "$STAGE_DIR/"'),
+  '本版本的已签名 zip 必须被 stage 进本通道收件目录（S-36）')
+assert.ok(!appcastStep.includes('/tmp/appcast-in/'),
+  '旧的两通道共用收件目录必须彻底消失')
+assert.ok(appcastStep.includes('--maximum-versions "$MAX_VERSIONS"')
+  && appcastStep.includes('MAX_VERSIONS=1') && appcastStep.includes('MAX_VERSIONS=3'),
+  'stable feed 只保留当前条目（MAX_VERSIONS=1），beta 保留最近 3 条')
+assert.ok(appcastStep.includes('--maximum-deltas "$DELTA_SOURCES"')
+  && appcastStep.includes('DELTA_SOURCES="${SPARKLE_DELTA_SOURCES:-2}"'),
+  'delta 覆盖的历史版本数由 SPARKLE_DELTA_SOURCES 控制（默认 2）')
+assert.match(appcastStep, /\[\[ "\$DELTA_SOURCES" =~ \^\[1-5\]\$ \]\]/,
+  'delta 源数量必须被夹在 1..5（generate_appcast --maximum-deltas 上限）')
+assert.ok(appcastStep.includes('gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases'),
+  'stable staging 必须从非 draft/非 prerelease 的历史 release 取归档')
+assert.match(appcastStep, /dsh-chamber-\[0-9\]\*-macos-arm64\.zip/,
+  'stable 历史归档必须用精确命名匹配')
+assert.ok(appcastStep.includes('--pattern "$NAME" --dir "$STAGE_DIR"'),
+  '历史归档必须逐条精确文件名下载进本通道收件目录')
+assert.match(appcastStep, /grep -E '\^dsh-chamber-\[0-9\]\+/,
+  'beta 历史归档必须从滚动 release 的资产列表按命名过滤')
+assert.ok(appcastStep.includes('sort -Vr'),
+  'beta 历史归档必须按版本降序取最新若干')
+assert.ok(appcastStep.includes('[[ "$NAME" == "$CURRENT_NAME" ]] && continue'),
+  '当前版本不能当作自己的 delta 基线')
+assert.ok(appcastStep.includes('STAGED_PREVIOUS') && appcastStep.includes('NEWEST_PREVIOUS_VERSION'),
+  'staging 结果（条数与最新旧版本）必须进入 verify 门禁')
+assert.match(appcastStep,
+  /VERIFY_ARGS\+=\(--expect-delta-from "\$NEWEST_PREVIOUS_VERSION" --expect-delta-count "\$STAGED_PREVIOUS"\)/,
+  'staged 过旧归档时 verify 必须断言最新基线的 deltaFrom 且 delta 条数 ≥ staged 基线数'
+  + '（只钉最新基线会让更旧的基线静默失去增量覆盖）')
+// D1（2026-09 复核，经验复现）：Sparkle 会按「delta > 7/8 整包」规则主动放弃 delta
+// （Appcast.swift:360），只在缓存目录写 *.ignore、stdout 无提示。把「主动放弃」当成
+// 增量链退化会误红整个发布，所以必须区分两者：干净 CFFIXED_USER_HOME + 标记计数。
+assert.ok(appcastStep.includes('CFFIXED_USER_HOME="$DELTA_CACHE_HOME"')
+  && appcastStep.includes('MARKER_DIR="$DELTA_CACHE_HOME/Library/Caches/Sparkle_generate_appcast"'),
+  'generate_appcast 必须跑在干净的 CFFIXED_USER_HOME 下并从 Sparkle marker 目录统计放弃标记')
+assert.match(appcastStep, /if \[\[ "\$DECLINED_DELTAS" -eq 0 && "\$UNACCOUNTED_COUNT" -eq 0 \]\]; then/,
+  '只有「没有任何放弃/丢失」时才允许要求全部基线都产出 delta（否则体积规则会误红正式发布）')
+assert.match(appcastStep, /EXPECTED_DELTAS=\$MATCHED_DELTAS/,
+  '放弃/丢失之后，门禁只能要求「已核实的匹配数」（剩余基线仍要产出 delta）')
+assert.ok(appcastStep.includes('::warning::Sparkle 主动放弃 $DECLINED_DELTAS 个基线')
+  && appcastStep.includes('这些基线走整包下载'),
+  '主动放弃必须是 loud 警告（绝不静默）')
+assert.ok(appcastStep.includes('::warning::$UNACCOUNTED_COUNT 个基线因 delta 生成失败走整包'),
+  'delta 生成失败也必须 loud 警告（与主动放弃分开报）')
+// R4-5/二轮：滚动 release 是公开面，重跑不许静默换字节——同名 beta zip 必须字节一致才允许
+// 覆盖（否则已发布 feed 的签名指向的字节变了，客户端先验签失败）。
+assert.ok(uploadStep.includes('REPUBLISH_ASSETS=') && uploadStep.includes('cmp -s "/tmp/republish-check/')
+  && uploadStep.includes('::error::滚动 release 上已有同名 beta zip 但字节不同'),
+  'beta 重跑必须先证明同名 zip 字节一致（或提示提升 beta 号），不许静默 clobber')
+
+// R4-4/二轮：draft 上的 appcast 必须在 zip/delta 之后上传（S-36 的「归档先于 feed」在
+// draft 面同样成立，不再依赖「draft 不可见」的间接论证）。
+assert.ok(!appcastStep.includes('gh release upload "v${VERSION}" "macos/release/${APPCAST}"'),
+  'appcast 步不许再往 draft 传 appcast（会先于归档落地）')
+assert.ok(uploadStep.includes('gh release upload "v${VERSION}" "macos/release/${APPCAST}" --clobber')
+  && uploadStep.indexOf('gh release upload "v${VERSION}"') < uploadStep.indexOf('gh release upload "v${VERSION}" "macos/release/${APPCAST}"'),
+  'draft appcast 必须在 dmg/zip（以及 delta）之后才上传')
+
+// D2：密钥门禁必须对称——私钥在而公钥缺同样 FAIL（否则会发布「带 appcast 但检查不到
+// 更新」的包，并在下一次发布把它当作产不出 delta 的基线）。
+assert.ok(appcastStep.includes('SPARKLE_PRIVATE_KEY is configured but SPARKLE_PUBLIC_ED_KEY is missing'),
+  '私钥在而公钥缺必须 FAIL（镜像门禁；HAS_APPCAST 基线守卫只防旧包，不防新造出来的）')
+// A1/R2（两个评审各自用真实 Sparkle 复现）：公钥与私钥不匹配时 generate_appcast 只打警告并把
+// 条目发成没有 sparkle:edSignature 的形状——必须在发布腿 FAIL，且脚本侧同时断言签名存在。
+assert.match(appcastStep, /does not match key EdDSA\|ignored, because it could not be signed/,
+  '签名问题必须从 generate_appcast 输出里被识别')
+assert.ok(appcastStep.includes('::error::generate_appcast 报告 EdDSA 签名问题')
+  && appcastStep.indexOf('::error::generate_appcast 报告 EdDSA 签名问题') < appcastStep.indexOf('DECLINED_DELTAS=0'),
+  '签名问题必须在统计放弃标记之前 exit 1（否则"全部被放弃"会把发布放行）')
+// A2/R3/R2-7：staged 归档必须带**与当前发布公钥一致**的 SUPublicEDKey（无公钥的旧 app 既不产
+// delta 也不写放弃标记；密钥轮换后的旧基线会让 generate_appcast 只打警告并发未签名条目）。
+assert.ok(appcastStep.includes('baseline_can_use_delta() {')
+  && appcastStep.includes('plist_field() {')
+  && appcastStep.includes('unzip -Z1 "$zip"')
+  && appcastStep.includes('plutil -convert xml1 -o - -- -')
+  && appcastStep.includes('[[ "$key" == "$SPARKLE_PUBLIC_ED_KEY" ]]')
+  && appcastStep.includes('[[ "$branch" == "$CURRENT_MIN_SYSTEM" ]]')
+  && !appcastStep.includes("grep -q 'SUPublicEDKey'")
+  && !appcastStep.includes('unzip -p "$1" \'*Contents/Info.plist\''),
+  'staged 归档必须解包检查**主 app** Info.plist 的 SUPublicEDKey 且与当前公钥一致（空值/取不到一律拒绝，'
+  + '绝不用「键名存在」兜底），并与当前 app 同分支（branch point 不同会产出第二个 feed 条目）')
+assert.equal(appcastStep.split('baseline_can_use_delta "$STAGE_DIR/$NAME"').length - 1, 2,
+  'stable 与 beta 两个 staging 循环都必须做 keyed/同分支基线过滤')
+assert.equal(appcastStep.split('STAGED_BUNDLES="$STAGED_BUNDLES $BUNDLE"').length - 1, 2,
+  '两个循环都必须记录基线构建号（逐基线账目要用）')
+assert.equal(appcastStep.split('与已 staged 基线同构建号').length - 1, 2,
+  '同构建号的历史包必须去重（否则逐基线账目会要求两个 deltaFrom）')
+// A4：stable 收件目录必须显式拒绝 beta 命名（滚动 release 的 prerelease 标记一旦被清掉）。
+assert.ok(appcastStep.includes('dsh-chamber-[0-9]*-beta.*-macos-arm64.zip) ;;'),
+  'stable staging glob 必须先排掉 beta 归档')
+// A7：被执行的三方工具链要 -f + 固定 SHA-256；私钥临时文件要 umask 077 + EXIT trap。
+assert.ok(appcastStep.includes('SPARKLE_TARBALL_SHA256=')
+  && appcastStep.includes('curl -fsSL --retry 3 -o /tmp/sparkle.tar.xz')
+  && appcastStep.includes('shasum -a 256 -c -'),
+  'Sparkle tarball 必须校验固定 SHA-256 且 curl 用 -f')
+// R3/F3（真实 Sparkle 2.10.0 复现）：只断言「签名存在」挡不住密钥轮换后那个「任何公钥都
+// 验不过」的签名——验签必须真的用 Ed25519 公钥验归档字节，且公钥必须进到验签步。
+assert.equal(appcastStep.split('--signatures-dir "$STAGE_DIR" --public-key "$SPARKLE_PUBLIC_ED_KEY"').length - 1, 2,
+  'appcast 步的两处 verify（普通/合并后）都必须逐条真验签')
+assert.ok(uploadStep.includes('--signatures-dir /tmp/appcast-in-stable --public-key "$SPARKLE_PUBLIC_ED_KEY"'),
+  'stable 刷新后的滚动 feed 验签必须真验（本版本 zip/delta 就在 /tmp/appcast-in-stable）')
+assert.ok(uploadStep.includes('SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}'),
+  'upload 步必须注入公钥，否则刷新验签没有验签依据')
+
+// R2-8：tarball 版本必须与 SwiftPM pin 锁步（否则升 Sparkle 时 URL/哈希会悄悄对不上）。
+const sparklePin = /releases\/download\/([0-9.]+)\/Sparkle-\1\.tar\.xz/.exec(appcastStep)
+assert.ok(sparklePin !== null, 'tarball URL 必须带版本号（与 SHA-256 一起构成 pin）')
+assert.ok(readFileSync(new URL('../../macos/Package.resolved', import.meta.url), 'utf8')
+  .includes(`"version" : "${sparklePin[1]}"`),
+  `workflow 里的 Sparkle ${sparklePin[1]} 必须与 macos/Package.resolved 的 pin 一致`)
+// R2-1/R2-2：gh 的「缺失」文案有三种（release not found / no assets match / no assets to download），
+// 分类器必须大小写不敏感且三个都覆盖，否则首个 beta 会硬 FAIL。
+assert.equal(appcastStep.split("grep -qiE 'no assets (match|to download)|not found'").length - 1, 2,
+  '两处 feed 读取都必须用覆盖三种缺省文案的、大小写不敏感的分类器')
+// 分类器本身要被真的执行到（R2 的变异测试证明：只 pin 字符串等于没测）。
+const classifierPattern = /grep -qiE '([^']+)' \/tmp\/(?:stable|rolling)-feed\.err/.exec(appcastStep)?.[1]
+assert.ok(classifierPattern, '必须能从 workflow 里取出分类器正则')
+const classifierMatches = (text) => new RegExp(classifierPattern, 'i').test(text)
+for (const text of ['release not found', 'no assets match the file pattern', 'no assets to download', 'gh: Not Found (HTTP 404)']) {
+  assert.ok(classifierMatches(text), `必须把 "${text}" 判成「通道/资产不存在」`)
+}
+for (const text of ['gh: Bad credentials (HTTP 401)', 'dial tcp 1.2.3.4: i/o timeout', 'HTTP 502 Bad Gateway']) {
+  assert.ok(!classifierMatches(text), `不得把 "${text}" 判成缺失（那是真实故障，必须 FAIL）`)
+}
+// 合并把旧 beta 条目并进来，但长度必须与 generate_appcast 的 --maximum-versions 同口径。
+assert.ok(appcastStep.includes('--beta-item-limit "$MAX_VERSIONS"'),
+  'beta 合并必须传 --beta-item-limit（否则合并长度与 feed 生成口径不一致）')
+assert.ok(appcastStep.includes('umask 077') && appcastStep.includes("trap 'rm -f /tmp/ed-key.txt' EXIT"),
+  'EdDSA 私钥文件必须 0600 且退出时清理（失败路径也要清）')
+// R1/二轮：逐基线账目——全部被放弃时 delta 门禁会退化成空断言，逐条归因仍然生效，且
+// 「多 branch/多条 feed 的标记互相顶替」不再是漏洞（每个基线必须有它自己的 delta 或标记）。
+assert.ok(appcastStep.includes('for OLD in $STAGED_BUNDLES; do')
+  && appcastStep.includes('grep -q "sparkle:deltaFrom=')
+  && appcastStep.includes('${NEW_BUNDLE}-${OLD}.delta')
+  && appcastStep.includes('::error::以下 staged 基线既没有 delta 也没有放弃标记'),
+  '逐基线账目：每个 staged 基线必须有自己的 delta 或有 (新构建号, 它) 的放弃标记，否则点名 FAIL')
+// R2-3：marker 只能数 cache 根目录的直接子项（Sparkle 把解包出的 app bundle 也放在同一棵 cache 树里，
+// 递归 find 会把 bundle 里任何 *.ignore 算成「放弃」，从而绕过账目门禁）。
+assert.ok(appcastStep.includes('MARKER_DIR="$DELTA_CACHE_HOME/Library/Caches/Sparkle_generate_appcast"')
+  && appcastStep.includes('ls "$MARKER_DIR"/*"${NEW_BUNDLE}-${OLD}.delta"*.ignore'),
+  '放弃标记必须落在 Sparkle marker 目录、并按 (新构建号, 基线) 精确归因'
+  + '（不解包树递归、也不靠总数相减）')
+// R2-5：「delta 根本生成不出来」不算放弃标记，但逐基线账目要用它解释「既无 delta 又无标记」的差额；
+// 超出该差额的基线才是真丢失（fail-closed）。
+assert.ok(appcastStep.includes("CREATE_FAILURES=\"$(grep -c 'Could not create delta update'")
+  && appcastStep.includes('if [[ "$UNACCOUNTED_COUNT" -gt "$CREATE_FAILURES" ]]; then'),
+  'delta 生成失败必须作为「无标记但可解释」的差额，超出的基线才 FAIL')
+assert.ok(appcastStep.includes('无法统计 delta 生成失败条数'),
+  '空字符串在算术里等于 0：统计失败必须是显式 ::error::，不许被当成「没有失败」')
+// R4（第二轮复核）：公开放入口必须良构，且合并只增不减——verify 只看「本版本条目 + final」，
+// 看不到 beta 条目被丢掉这类静默退化。
+assert.equal(appcastStep.split('xmllint --noout').length - 1, 2,
+  '生成 feed 与合并 feed 都必须过 xmllint --noout（非良构 feed 会让 Sparkle 拒绝整个通道）')
+assert.ok(uploadStep.includes('xmllint --noout /tmp/appcast-stable-refresh-out/appcast-swift-beta.xml'),
+  '刷新后的滚动 feed 同样要过良构校验')
+assert.ok(appcastStep.includes('FRESH_ITEMS=') && appcastStep.includes('MERGED_ITEMS=')
+  && appcastStep.includes('::error::合并后条目数减少'),
+  '合并必须只增不减：beta 条目丢失必须 FAIL')
+
+// R4/R5：非 404 的探测/下载失败不得被当成「通道不存在」而静默跳过。
+assert.ok(appcastStep.includes('::error::读取 latest final $STABLE_TAG 的 appcast 失败（非 404/缺资产）')
+  && appcastStep.includes('::error::读取滚动 beta feed 失败（非 404/缺资产）')
+  && appcastStep.includes('/tmp/rolling-feed.err'),
+  'beta 腿的两处 feed 读取必须保留 stderr 并区分 404/缺资产 与真实错误')
+assert.ok(uploadStep.includes('::error::探测 beta 滚动通道失败（非 404）')
+  && uploadStep.includes('ROLLING_PROBE_ERR')
+  && uploadStep.includes('releases/tags/${ROLLING_TAG}'),
+  'stable 刷新必须把「滚动通道不存在（404）」与「探测失败（网络/鉴权）」分开，后者 fail-closed')
+assert.match(appcastStep, /\[\[ "\$CHANNEL" == "stable" \]\] && VERIFY_ARGS\+=\(--single-item\)/,
+  'stable feed 必须恰好 1 个条目（历史条目会引用 releases/latest 上的死链）')
+// 变异测试暴露的死 flag 面：只钉 += 赋值不够，必须钉「调用点真的展开数组」与 guard 表达式，
+// 否则删掉 ${VERIFY_ARGS[@]+…}/{FINAL_ARGS[@]+…} 或把 guard 反向（-z），CI 依旧全绿。
+assert.match(appcastStep, /\[\[ "\$STAGED_PREVIOUS" -ge 1 && -n "\$NEWEST_PREVIOUS_VERSION" \]\]/,
+  'delta 期望只在 staged ≥1 且有最新旧版本号时启用（guard 反向突变必须被抓）')
+const nonBetaVerifyStart = appcastStep.indexOf('--signatures-dir "$STAGE_DIR"')
+assert.notEqual(nonBetaVerifyStart, -1, '非 beta 路径的 verify 必须带验签参数')
+assert.ok(appcastStep.slice(nonBetaVerifyStart, nonBetaVerifyStart + 400)
+  .includes('${VERIFY_ARGS[@]+"${VERIFY_ARGS[@]}"}'),
+  '非 beta 路径的 verify 调用必须展开 VERIFY_ARGS（否则单条目/deltaFrom/验签门禁静默失效）')
+assert.ok(appcastStep.includes('${FINAL_ARGS[@]+"${FINAL_ARGS[@]}"} ${VERIFY_ARGS[@]+"${VERIFY_ARGS[@]}"}'),
+  'beta 合并路径的 verify 调用必须同时展开 FINAL_ARGS 与 VERIFY_ARGS')
+// S-23（2026-09 改法）：beta feed 的 final 条目从**已发布 stable feed** 复制，绝不把 stable
+// zip 放进 beta 收件目录；取不到 stable feed 时保留上次滚动 feed 的 final 条目。
+assert.ok(appcastStep.includes('node scripts/release/merge-native-feed.mjs'),
+  'S-23：beta feed 的 final 条目必须由 merge-native-feed 从已发布 stable feed 复制')
+assert.ok(appcastStep.includes('FINAL_ARGS+=(--expect-final-item)')
+  && appcastStep.includes('"$MERGE_OUTPUT" == *"finalItem=0"*'),
+  'G42：只有合并结果真的带 final 条目才要求 --expect-final-item（尚无 keyed final 时 loud 降级，绝不阻塞 beta）')
+assert.ok(appcastStep.includes('HAS_APPCAST="true"')
+  && appcastStep.includes('has no appcast-swift.xml (当时未配置 Sparkle 密钥) — 不作 delta 基线'),
+  '没有 appcast 的旧 stable 发布不得作 delta 基线：其 app 可能产不出 delta（verify 会误红）或内嵌别的 feed')
+const nativeStableHead = NATIVE_STABLE_ZIP_PATTERN.split('*')[0]
+const nativeStableTail = NATIVE_STABLE_ZIP_PATTERN.split('*')[1]
+assert.ok(appcastStep.includes(`${nativeStableHead}[0-9]*${nativeStableTail}`),
+  'stable staging glob 必须是 NATIVE_STABLE_ZIP_PATTERN 的数字起始特化（同头同尾，避免两处各自漂移）')
+assert.ok(appcastStep.includes('releases/download/${STABLE_TAG}/'),
+  'final 条目必须改挂版本固定前缀：releases/latest 会被后续正式版移走 ⇒ S-36 404')
+assert.match(appcastStep, /gh release download "\$STABLE_TAG" --repo "\$GITHUB_REPOSITORY" --pattern 'appcast-swift\.xml'/,
+  'final 条目从最新正式版的 appcast 复制（不再下载 stable zip）')
 assert.ok(appcastStep.includes('repos/${GITHUB_REPOSITORY}/releases/latest'),
-  'the final tag must come from /releases/latest (never an implicit/possibly-prerelease latest)')
-// 2026-12 A2 fail-closed rewrite: exactly ONE degradation stays allowed and is mechanically
-// observable — the latest final release carries NO native zip at all (the v0.3.1 state). Every
-// other outcome fails closed while the EdDSA key is configured: a non-404 /releases/latest
-// failure, an unreadable asset list, or a download that fails although the asset exists.
-assert.match(appcastStep, /::warning::latest final release [^\n]*没有 native zip/,
-  'only "no native zip exists upstream" may degrade, and it must be loud')
-assert.match(appcastStep, /::error::[^\n]*有 native zip 但下载失败/,
-  'an existing final native zip that fails to download must fail closed')
-assert.match(appcastStep, /::error::解析 \/releases\/latest 失败（非 404）/,
-  'a non-404 latest-release resolution failure must fail closed')
-assert.ok(appcastStep.includes('--json assets'),
-  'the asset list must be read (a failing read fails the step) before deciding to degrade')
+  'final feed 必须来自 /releases/latest（绝不含 prerelease/draft）')
 assert.match(appcastStep, /if STABLE_TAG="\$\(gh api/,
   'the /releases/latest lookup must distinguish 404 (no final release) from real failures')
 assert.match(appcastStep, /elif grep -q 'Not Found' \/tmp\/stable-latest\.err/,
   'only an explicit 404 may be treated as "no final release yet"')
-// 2026-12 A2 content gate: the signed feed must be proven to advertise THIS version
-// (sparkle:shortVersionString + sparkle:version = the .app CFBundleVersion + its zip enclosure).
-assert.match(appcastStep, /node scripts\/release\/verify-native-appcast\.mjs "\$VERSION" \/tmp\/appcast-out\/appcast\.xml/,
+assert.match(appcastStep, /::error::解析 \/releases\/latest 失败（非 404）/,
+  'a non-404 latest-release resolution failure must fail closed')
+assert.match(appcastStep, /node scripts\/release\/verify-native-appcast\.mjs "\$VERSION" "\/tmp\/appcast-out\/\$\{APPCAST\}"/,
   'the signed appcast must be proven to carry this version before it is uploaded')
 
 // Generation: exactly one generate_appcast call — no prefix for stable, the rolling prefix
@@ -390,12 +580,12 @@ assert.ok(swiftBuild.includes('gh release upload "v${VERSION}" "macos/release/${
   'the channel appcast must actually be uploaded to the draft release')
 // Sparkle's -o takes the output FILE, not a directory ("Is a directory" / "The file
 // appcast-out couldn't be opened"), so pin the file form against silent regression.
-assert.match(appcastStep, /generate_appcast .*-o \/tmp\/appcast-out\/appcast\.xml \/tmp\/appcast-in/,
-  'the beta appcast must be written to an explicit .xml file path (-o takes a filename)')
+assert.ok(appcastStep.includes('-o "/tmp/appcast-out/${APPCAST}" "$STAGE_DIR"'),
+  'the appcast must be written to an explicit channel-named .xml file path (-o takes a filename)')
 assert.doesNotMatch(appcastStep, /-o \/tmp\/appcast-out /,
   'passing a directory to -o fails at runtime (Sparkle expects a file path)')
-assert.match(uploadStep, /-o \/tmp\/appcast-stable-refresh-out\/appcast\.xml/,
-  'the stable refresh must also write an explicit .xml file path')
+assert.ok(uploadStep.includes('-o /tmp/appcast-stable-refresh-out/appcast-swift-beta.xml'),
+  'the stable refresh must write the merged rolling feed under its exact asset name')
 assert.match(
   swiftBuild,
   /if \[\[ "\$VERSION" == \*-\* \]\]; then\n\s+SPARKLE_FEED="\$SPARKLE_FEED_BETA"\n\s+else\n\s+SPARKLE_FEED="\$SPARKLE_FEED_STABLE"\n\s+fi/,
@@ -410,7 +600,8 @@ assert.ok(
 
 // Rolling publish happens in the POST-verify upload step: archives first, then the appcast
 // that references them. The probe/create-if-absent guard is unchanged (prerelease → never
-// releases/latest); the stable branch never touches the rolling release.
+// releases/latest); the stable branch never publishes its own appcast there — only the S-23
+// refresh writes to the rolling release, and it does so after the archives.
 assert.match(appcastStep, /ROLLING_TAG=""/,
   'the stable branch must not touch the rolling release (only beta republishes it)')
 assert.doesNotMatch(appcastStep, /gh release upload "\$ROLLING_TAG"/,
@@ -433,15 +624,24 @@ assert.ok(
 )
 assert.match(uploadStep, /--prerelease/,
   'the rolling release must be a prerelease so releases/latest stays on stable')
-assert.ok(uploadStep.includes('for ARCHIVE in /tmp/appcast-in/*.zip /tmp/appcast-in/*.delta; do'),
-  'every archive the appcast references (zip AND delta) must be published to the rolling release (S-36)')
+assert.ok(uploadStep.includes('STAGED_ZIP="/tmp/appcast-in-beta/$(basename "${BASE}.zip")"'),
+  'the appcast-referenced beta zip must be located by its exact basename in the beta staging dir')
+assert.ok(uploadStep.includes('gh release upload "$ROLLING_TAG" "$STAGED_ZIP" --clobber'),
+  'the current beta zip must be published to the rolling release (it is the beta enclosure)')
+assert.ok(uploadStep.includes('for ARCHIVE in /tmp/appcast-in-beta/*.delta; do'),
+  'delta archives the appcast references must be published to the rolling release (S-36)')
 assert.ok(
-  uploadStep.indexOf('gh release upload "$ROLLING_TAG" "$ARCHIVE" --clobber')
+  uploadStep.indexOf('gh release upload "$ROLLING_TAG" "$STAGED_ZIP" --clobber')
   < uploadStep.indexOf('gh release upload "$ROLLING_TAG" "$BETA_APPCAST" --clobber'),
   'archives must be published BEFORE the appcast that references them',
 )
-assert.ok(uploadStep.includes('STAGED_ZIP="/tmp/appcast-in/$(basename "${BASE}.zip")"'),
-  'the appcast-referenced beta zip must be located by its exact basename')
+assert.ok(
+  uploadStep.indexOf('for ARCHIVE in /tmp/appcast-in-beta/*.delta; do')
+  < uploadStep.indexOf('gh release upload "$ROLLING_TAG" "$BETA_APPCAST" --clobber'),
+  'delta 归档必须先于引用它的 appcast 上传（S-36：delta enclosure 不留 404）',
+)
+assert.ok(!uploadStep.includes('/tmp/appcast-in/'),
+  '旧的两通道共用收件目录必须彻底消失（历史 beta zip 已在滚动 release 上，不重复上传）')
 assert.match(uploadStep, /::error::appcast 引用的 beta zip 不在收件目录/,
   'an appcast whose staged zip vanished must fail closed, never publish a 404 enclosure')
 // 2026-12 A2 key gate, both arms in the UPLOAD step too: the keyless repo keeps the loud
@@ -451,43 +651,58 @@ assert.match(uploadStep, /::warning::beta appcast 缺失（SPARKLE_PRIVATE_KEY �
 assert.match(uploadStep, /::error::SPARKLE_PRIVATE_KEY 已配置但 \$BETA_APPCAST 缺失/,
   'a configured key with no beta appcast must fail closed, never skip the rolling publish')
 
-// S-23: a FINAL release also refreshes the rolling beta appcast (preserving the newest beta
-// item), so a beta client discovers the final version even when the final ships after the last
-// beta (the native analog of Electron's latest.yml fallback). The refresh is gated on the
-// rolling release existing and the stable appcast being generated; the stable asset is never rewritten.
+// S-23: a FINAL release also refreshes the rolling beta appcast, so a beta client discovers
+// the final version even when the final ships after the last beta (the native analog of
+// Electron's latest.yml fallback). 2026-09 改法：stable 与 beta 的收件目录/feed 分开，刷新改为
+// 「已发布滚动 feed 的 beta 条目 + 本次 stable final 条目」合并（不再重跑 generate_appcast：
+// 两通道归档同目录 + -o 会 multiple appcasts found）。刷新 gated on 滚动 release 存在且本次
+// stable appcast 已生成；stable appcast 本身绝不被改写。
 assert.ok(uploadStep.includes('STABLE_APPCAST="macos/release/appcast-swift.xml"'),
   'the stable branch must gate the rolling refresh on the generated stable appcast')
 assert.match(uploadStep, /::warning::stable appcast 缺失（SPARKLE_PRIVATE_KEY 未配置）/,
   'a missing stable appcast (no private key) must skip the refresh loudly, never red the release')
 assert.match(uploadStep, /::error::SPARKLE_PRIVATE_KEY 已配置但 \$STABLE_APPCAST 缺失/,
   'a configured key with no stable appcast must fail closed, never skip the refresh silently')
-// A2 content gate: the refreshed rolling appcast must ALSO advertise this final version (final item + its zip enclosure) — test -f alone proved nothing.
-assert.match(uploadStep, /node scripts\/release\/verify-native-appcast\.mjs "\$VERSION" \/tmp\/appcast-stable-refresh-out\/appcast\.xml/,
-  'the refreshed rolling appcast must be proven to carry this version before upload')
-assert.ok(uploadStep.includes('BETA_ZIP_NAME=') && uploadStep.includes('--json assets')
-  && uploadStep.includes('sort -V'),
-  'the refresh must preserve the newest beta zip item held by the rolling release')
-assert.ok(uploadStep.includes('gh release download "$ROLLING_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$BETA_ZIP_NAME"'),
-  'the preserved beta archive must be fetched from the rolling release')
-assert.match(uploadStep, /::warning::滚动通道没有 beta zip 资产/,
-  'an empty rolling beta channel degrades loudly to a final-only refresh')
+assert.ok(uploadStep.includes('node scripts/release/merge-native-feed.mjs'),
+  'the refresh must merge the published rolling feed with the new stable final item')
+assert.ok(uploadStep.includes('gh release download "$ROLLING_TAG" --repo "$GITHUB_REPOSITORY"')
+  && uploadStep.includes("--pattern 'appcast-swift-beta.xml' --dir /tmp/rolling-feed --clobber"),
+  'the refresh must read the published rolling feed (beta items are its only source)')
+assert.match(uploadStep, /::warning::滚动通道存在但缺少 appcast-swift-beta\.xml——本次跳过 beta 通道刷新/,
+  'G42：滚动 release 在却缺 feed = beta 通道损坏——loud 跳过刷新（beta 客户端在下一个 beta 合并时看到 final），绝不用它阻塞正式发布')
+assert.match(uploadStep, /if gh release download "\$ROLLING_TAG" --repo "\$GITHUB_REPOSITORY" \\\n\s+--pattern 'appcast-swift-beta\.xml' --dir \/tmp\/rolling-feed --clobber; then/,
+  '刷新必须在下载成功分支里做（缺 feed 走 warning 分支，而不是先合并再失败）')
+assert.ok(!uploadStep.includes('BETA_ZIP_NAME=') && !uploadStep.includes('sort -V'),
+  'the refresh must no longer download the newest beta zip (beta items come from the feed)')
+assert.doesNotMatch(uploadStep, /generate_appcast/,
+  'the refresh must not re-run generate_appcast (two feeds + -o = multiple appcasts found)')
 assert.ok(uploadStep.includes(
   '--download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${ROLLING_TAG}/"'),
-  'the refreshed rolling appcast must pin the same rolling download prefix')
+  'the refreshed rolling appcast must rewrite the final item onto the rolling download prefix')
+// A2 + S-23 content gate: the merged feed must carry this final version (and keep the beta
+// items) — test -f alone proved nothing.
+assert.ok(uploadStep.includes('--signatures-dir /tmp/appcast-in-stable --public-key "$SPARKLE_PUBLIC_ED_KEY" --expect-final-item'),
+  'the merged rolling feed must be proven to carry this final version before upload')
 assert.ok(uploadStep.includes('/tmp/appcast-stable-refresh-out/appcast-swift-beta.xml'),
   'the refreshed feed must be uploaded under the exact SUFeedURL asset name')
-// V1 re-verification: generate_appcast also references .delta archives, so uploading only
-// *.zip leaves delta enclosures unresolved (Sparkle falls back to the full zip, but the
-// appcast must not advertise unreachable assets).
-assert.match(uploadStep, /for ARCHIVE in \/tmp\/appcast-in\/\*\.zip \/tmp\/appcast-in\/\*\.delta; do/,
-  'the beta upload must publish zip AND delta archives before the appcast')
-assert.match(uploadStep, /for ARCHIVE in \/tmp\/appcast-stable-refresh\/\*\.zip \/tmp\/appcast-stable-refresh\/\*\.delta; do/,
-  'the stable refresh must publish zip AND delta archives before the refreshed appcast')
+// 归档先于 feed：final zip 与 stable delta 先落到滚动 release（合并后的 final 条目 URL 指向滚动前缀）。
+assert.ok(uploadStep.includes('gh release upload "$ROLLING_TAG" "${BASE}.zip" --clobber'),
+  'the final zip must land on the rolling release before the merged feed references it')
+assert.ok(uploadStep.includes('for ARCHIVE in /tmp/appcast-in-stable/*.delta; do'),
+  'the final item deltas must be published too (merged enclosure URLs point at them)')
+assert.ok(
+  uploadStep.indexOf('gh release upload "$ROLLING_TAG" "${BASE}.zip" --clobber')
+  < uploadStep.indexOf('gh release upload "$ROLLING_TAG" /tmp/appcast-stable-refresh-out/appcast-swift-beta.xml --clobber'),
+  'the refresh must publish archives before the merged feed',
+)
 assert.ok(
   uploadStep.indexOf('gh release upload "$ROLLING_TAG" "$ARCHIVE" --clobber', uploadStep.indexOf('STABLE_APPCAST='))
   < uploadStep.indexOf('gh release upload "$ROLLING_TAG" /tmp/appcast-stable-refresh-out/appcast-swift-beta.xml --clobber'),
-  'the refresh must publish archives before the refreshed appcast too',
+  '刷新步的 delta 归档同样必须先于合并 feed 上传（S-36）',
 )
+// stable feed 自己的 delta 也必须随 draft 上传（enclosure 指向 releases/latest/download/<delta>）。
+assert.ok(uploadStep.includes('gh release upload "v${VERSION}" "$ARCHIVE" --clobber'),
+  'the stable deltas must be uploaded to the draft release before finalize')
 
 // G29: a reused output dir can hold older versions side by side (0.3.1 + 0.3.2-beta.1
 // reproduced locally), so the leg never globs — every reference and the upload are exact paths.

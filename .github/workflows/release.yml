@@ -893,8 +893,9 @@ jobs:
         env:
           VERSION: ${{ needs.create-release.outputs.version }}
 
-  # Swift 原生壳产物腿（design 25 §8.4 / W-26）：与 Electron mac 腿同 tag 并行，
-  # 产物名带 -native 防碰撞。dry-run 走 ad-hoc 且不发布（与 build-macos 同纪律：
+  # Swift 原生壳产物腿（design 25 §8.4 / W-26）：与 Electron mac 腿同 tag 并行，产物名分族防碰撞
+  # （native = dsh-chamber-<ver>-macos-arm64.*，Electron = dsh-chamber-electron-<ver>-arm64-mac.*，
+  # 由 release-artifacts.mjs 单源定义；旧 -native- 前缀是历史命名）。dry-run 走 ad-hoc 且不发布（与 build-macos 同纪律：
   # 剥离一切签名/公证/上传凭据）；正式腿 fail-closed——CSC_LINK 已在
   # create-release 前置门校验，本腿导入同一 p12 并解析 Developer ID 身份，
   # 缺失即失败（finalize 的 needs 因此挡住发布）。Apple 凭据类外部阻断登记在
@@ -910,6 +911,10 @@ jobs:
     # 影响 releases/latest 的稳定通道）。
     env:
       SPARKLE_BETA_ROLLING_TAG: appcast-swift-beta
+      # 2026-09 增量更新：为 delta 追加 staging 的本通道历史归档数（1..5，默认 2）。
+      # 每个旧版本 = 一次 ~83MB 归档下载 + 一次差分计算；没有旧归档时本次发布没有
+      # delta（feed 退回整包），不会失败（verify 只在 staged 过旧归档却无 delta 时红）。
+      SPARKLE_DELTA_SOURCES: '2'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -1082,13 +1087,19 @@ jobs:
         # 由 Sparkle 的 generate_appcast 用 EdDSA 私钥签名（与 Developer ID 无关的
         # 第三把钥匙，客户端据此校验更新包来源）。私钥缺失 → loud 跳过（照常发布，
         # 只是原生壳看不到这次更新），绝不发布未签名 appcast。
-        # S-36：beta 的 enclosure 必须真实可下载——每个被 appcast 引用的 zip 都随
-        # appcast 上传到滚动 release（zip 在前，appcast 在后），前缀显式钉住滚动
-        # tag；S-22/S-23：beta appcast 同时收最新 final 的 native zip 条目，beta
-        # 客户端因此能看到 final（与 Electron latest.yml 回退同一可见性）。
-        # stable 通道不传前缀——appcast-swift.xml 与 enclosure 形状逐字节不变；
-        # S-23 的滚动 beta appcast 刷新在 verify 之后（下一步），本步绝不改写
-        # stable appcast。
+        # 2026-09 增量更新：**stable 与 beta 完全分开**——feed 名、收件目录、历史归档
+        # staging、上传面各自独立。generate_appcast 按归档内嵌 SUFeedURL 的文件名分组，
+        # 两个通道的归档同目录 + -o 会直接失败 multiple appcasts found（Sparkle 2.10.0
+        # generate_appcast/Appcast.swift:45-62，本机复现）；而增量 delta 恰恰要求把本通道
+        # 的历史归档放进同一个收件目录。于是每个通道 stage 前若干历史 zip → generate_appcast
+        # 产出 <sparkle:deltas> 并签名 → 本步只上传 appcast，归档在下一步按「归档 → feed」
+        # 顺序发布（S-36：每个被引用的 enclosure 都必须可下载）。
+        # S-23（2026-09 改法）：beta feed 的 final 条目改为从**已发布 stable feed** 复制
+        # （scripts/release/merge-native-feed.mjs），不再把 stable zip 放进 beta 收件目录；
+        # 取不到 stable feed 时保留上次滚动 feed 的 final 条目——beta 客户端始终能看到对应
+        # 正式版（用户裁决：beta 遇到对应正式版允许升级到正式版）。
+        # stable 通道不传前缀——appcast-swift.xml 与 enclosure 形状逐字节不变（只多出
+        # <sparkle:deltas> 块）；本步绝不改写滚动 beta feed。
         # ORDER（G16）：必须在 notarize + staple 之后——签的是**最终分发 zip**
         # （上一步在装订后才生成 ${BASE}.zip）；旧顺序（appcast 在公证前）在正式
         # 腿会因 test -f 直接红，或签下未装订的残留 zip。
@@ -1103,15 +1114,34 @@ jobs:
         run: |
           set -euo pipefail
           BASE="macos/release/dsh-chamber-${VERSION}-macos-arm64"
-          # S-22：beta 通道发布独立的 appcast，与构建步注入的 beta feed 同名；
-          # beta 还要覆盖到滚动 tag/release（v* 之外的 tag，见 build-swift 的
-          # job env），让 beta.N 客户端能发现 beta.N+1。
+          # S-22 + 2026-09：每通道独立的 feed/收件目录/上传面（见步骤头注释）。
           if [[ "$VERSION" == *-* ]]; then
+            CHANNEL="beta"
             APPCAST="appcast-swift-beta.xml"
             ROLLING_TAG="${SPARKLE_BETA_ROLLING_TAG}"
+            STAGE_DIR="/tmp/appcast-in-beta"
+            # beta feed 保留最近 3 条（滚动 release 保留全部历史 zip，条目逐条可下载）
+            MAX_VERSIONS=3
           else
+            CHANNEL="stable"
             APPCAST="appcast-swift.xml"
             ROLLING_TAG=""
+            STAGE_DIR="/tmp/appcast-in-stable"
+            # stable feed 只保留当前条目：历史 zip 只作为 delta 基线，不进 feed，
+            # 否则条目会引用 releases/latest/download/<旧 zip> 这类死链（S-36）。
+            # 注意 --maximum-versions 按 **branch point**（最低系统/硬件需求）计：若将来抬高
+            # LSMinimumSystemVersion，历史 zip 会成为另一个 branch、feed 出现第二个条目 →
+            # --single-item 会红。2026-09 起 staging 会按 baseline_can_use_delta 跳过与当前
+            # app 不同 branch 的历史包（loud notice），所以单条目契约在抬高最低系统版本后
+            # 仍然成立；真要跨 branch 发布时必须先裁决 feed 形状，而不是让死链静默上线。
+            MAX_VERSIONS=1
+          fi
+          # delta 覆盖的旧版本数（generate_appcast --maximum-deltas）：每个旧版本都要
+          # 下载一份 ~83MB 归档并做一次差分计算，默认 2、上限 5（Sparkle 默认值）。
+          DELTA_SOURCES="${SPARKLE_DELTA_SOURCES:-2}"
+          if ! [[ "$DELTA_SOURCES" =~ ^[1-5]$ ]]; then
+            echo "::error::SPARKLE_DELTA_SOURCES must be 1..5 (got ${DELTA_SOURCES})"
+            exit 1
           fi
           # 2026-12 A2 密钥门禁，两支都必须显式：
           #   - 两把钥匙都缺 = 该仓库没有 Sparkle 更新链，保持 loud 降级（照常出包，
@@ -1126,58 +1156,178 @@ jobs:
             echo "::warning::SPARKLE_PRIVATE_KEY absent — ${APPCAST} not generated; the native shell will not see this release through Sparkle"
             exit 0
           fi
+          # 镜像门禁（2026-09 增量更新复核补）：私钥在而公钥缺 ⇒ 构建不会注入 SUPublicEDKey/SUFeedURL，
+          # 这类 app 永远检查不到更新，却仍带着一个签名 appcast；下一次发布又会把它的 zip 当作 delta
+          # 基线（generate_appcast 对无公钥的旧包产不出 delta ⇒ 下一版会硬 FAIL）。两个方向都必须显式。
+          if [[ -z "${SPARKLE_PUBLIC_ED_KEY:-}" ]]; then
+            echo "::error::SPARKLE_PRIVATE_KEY is configured but SPARKLE_PUBLIC_ED_KEY is missing — the built app would carry no SUPublicEDKey/SUFeedURL (auto-update disabled) while still publishing a signed appcast, and the next release would stage this keyless zip as a delta baseline; restore the public key or remove both secrets"
+            exit 1
+          fi
           ZIP="${BASE}.zip"
           test -f "$ZIP" || { echo "::error::missing $ZIP (the appcast signs the final stapled release zip)"; exit 1; }
-          curl -sSL -o /tmp/sparkle.tar.xz "https://github.com/sparkle-project/Sparkle/releases/download/2.10.0/Sparkle-2.10.0.tar.xz"
+          # Sparkle 工具链是**被执行**的下载物：必须 -f（HTTP 错误不当成产物）+ 固定 SHA-256。
+          # 升级 Sparkle 版本时同步更新哈希（哈希来自 release asset 本体）。
+          SPARKLE_TARBALL_SHA256="c2bf58aa8387266ac179357b1415d6f2635f044da8be41042af32425dae6da0c"
+          curl -fsSL --retry 3 -o /tmp/sparkle.tar.xz "https://github.com/sparkle-project/Sparkle/releases/download/2.10.0/Sparkle-2.10.0.tar.xz"
+          echo "${SPARKLE_TARBALL_SHA256}  /tmp/sparkle.tar.xz" | shasum -a 256 -c -
           rm -rf /tmp/sparkle-bin && mkdir -p /tmp/sparkle-bin && tar -xJf /tmp/sparkle.tar.xz -C /tmp/sparkle-bin
-          rm -rf /tmp/appcast-in /tmp/appcast-out && mkdir -p /tmp/appcast-in /tmp/appcast-out
-          cp "$ZIP" /tmp/appcast-in/
-          # S-22/S-23：beta appcast 必须同时收当前 beta 与**最新 final**——beta 客户端的
-          # SUFeedURL 只指滚动 tag，只收 beta 条目就永远看不到 stable（Electron beta 经
-          # latest.yml 回退能看到；原生腿补上同一可见性）。
-          # 2026-12 A2 门禁：私钥已配置（上面已过门），这里的降级不再允许静默：
-          #   - 仓库还没有 final release，或最新 final 确实没有 native zip 资产
-          #     （原生链还没出过 final）→ loud 警告：没有可收的包，不是链路失败；
-          #   - 其它任何失败（/releases/latest 解析失败、资产在但下载失败）→ FAIL，
-          #     因为那会让 beta 客户端看不到 final（S-23 可见性断裂），而"发布成功
-          #     但客户端看不到更新"正是本门禁要消灭的形态。
-          if [[ -n "$ROLLING_TAG" ]]; then
-            # 显式走 /releases/latest（与稳定 feed 同一解析面：绝不含 prerelease/draft），
-            # 不用 gh 的隐式 latest——beta 必须是稳定的 final，绝不能把某个 prerelease
-            # 当成 final 收进 appcast。
-            if STABLE_TAG="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name 2>/tmp/stable-latest.err)"; then
-              :
-            elif grep -q 'Not Found' /tmp/stable-latest.err; then
-              STABLE_TAG=""
-            else
-              echo "::error::解析 /releases/latest 失败（非 404）——拒绝发布可能缺 final 条目的 beta appcast"
-              cat /tmp/stable-latest.err >&2
-              exit 1
+          rm -rf "$STAGE_DIR" /tmp/appcast-out /tmp/stable-feed /tmp/rolling-feed
+          mkdir -p "$STAGE_DIR" /tmp/appcast-out
+          cp "$ZIP" "$STAGE_DIR/"
+          # 2026-09 增量更新：stage **本通道**的历史归档（旧包只作 delta 基线；逐条精确
+          # 文件名，绝不用宽 glob）。staging 失败只降级为「本次无 delta」并 loud 警告——
+          # 不 fail release（delta 缺失不产生死链）；staged ≥1 却没产出 delta 由 verify 门禁
+          # FAIL，但 Sparkle 自己按体积规则（delta > 7/8 整包）主动放弃的那些走 loud 降级
+          # （见下方 DECLINED_DELTAS 标记判定；两者必须分开，否则体积规则会误红正式发布）。
+          STAGED_PREVIOUS=0
+          NEWEST_PREVIOUS_VERSION=""
+          STAGED_BUNDLES=""
+          # 从**主 app 自己**的 Info.plist 取一个字符串字段（真实包里还有 Sparkle.framework/Updater.app
+          # 与 XPCServices/*.xpc 的嵌套 Contents/Info.plist，通配把它们一起拼进 stdout 会误判）。
+          # plutil 归一化后取值：XML 与 binary plist 都支持。
+          plist_field() {
+            local zip="$1" key="$2" member="" value=""
+            member="$(unzip -Z1 "$zip" 2>/dev/null | grep -E '^[^/]+\.app/Contents/Info\.plist$' | head -n 1 || true)"
+            [[ -n "$member" ]] || member="$(unzip -Z1 "$zip" 2>/dev/null | grep -E '^Contents/Info\.plist$' | head -n 1 || true)"
+            [[ -n "$member" ]] || return 1
+            value="$(unzip -p "$zip" "$member" 2>/dev/null | plutil -convert xml1 -o - -- - 2>/dev/null \
+              | tr -d '\n\t ' | sed -n "s/.*<key>${key}<\/key><string>\([^<]*\)<\/string>.*/\1/p")"
+            [[ -n "$value" ]] || return 1
+            printf '%s' "$value"
+          }
+          # 当前 app 的分支点与构建号：Sparkle 按 branch point（最低系统/硬件需求）分组，不同分支的
+          # 历史包会产出**第二个 feed 条目**（stable 的 --single-item 会红），delta 也不保证可用。
+          CURRENT_MIN_SYSTEM="$(plist_field "$STAGE_DIR/$(basename "$ZIP")" LSMinimumSystemVersion || true)"
+          NEW_BUNDLE="$(plist_field "$STAGE_DIR/$(basename "$ZIP")" CFBundleVersion || true)"
+          [[ -n "$NEW_BUNDLE" ]] || { echo "::error::读不出当前 zip 的 CFBundleVersion——拒绝在未知构建号下发布"; exit 1; }
+          # staged 归档能否当 delta 基线：主 app 必须带**与当前发布公钥一致**的 SUPublicEDKey
+          # （空值/缺失一律拒绝：本仓库无密钥构建正是 <key>SUPublicEDKey</key><string></string>，
+          # Sparkle 会发出一个「任何公钥都验不过」的 delta，且既不警告也不写放弃标记），
+          # 且必须与当前 app 同分支。密钥轮换后残留的旧基线同样在这里被过滤。
+          baseline_can_use_delta() {
+            local zip="$1" key="" branch=""
+            key="$(plist_field "$zip" SUPublicEDKey)" || return 1
+            [[ "$key" == "$SPARKLE_PUBLIC_ED_KEY" ]] || return 1
+            if [[ -n "$CURRENT_MIN_SYSTEM" ]]; then
+              branch="$(plist_field "$zip" LSMinimumSystemVersion || true)"
+              [[ "$branch" == "$CURRENT_MIN_SYSTEM" ]] || return 1
             fi
-            if [[ -z "$STABLE_TAG" ]]; then
-              echo "::warning::仓库尚无 final release——beta appcast 仅含当前 beta（首个 final 出原生包后这里必须收件）"
-            else
-              # 先列出资产（失败即红）再决定：只有"确实没有 native zip 资产"才允许降级。
-              STABLE_ASSETS="$(gh release view "$STABLE_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
-              STABLE_HAS_NATIVE_ZIP="false"
-              for ASSET in $STABLE_ASSETS; do
+            return 0
+          }
+          if [[ "$CHANNEL" == "stable" ]]; then
+            # 只有带 native zip 的 stable release 能当基线；没有 native zip 的跳过、不占配额。
+            PREV_TAGS="$(gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --exclude-pre-releases --limit 30 --json tagName --jq '.[].tagName')" \
+              || { echo "::warning::stable release listing failed — no previous stable archive staged (this release carries no delta)"; PREV_TAGS=""; }
+            for TAG in $PREV_TAGS; do
+              [[ "$STAGED_PREVIOUS" -ge "$DELTA_SOURCES" ]] && break
+              [[ "$TAG" == "v${VERSION}" ]] && continue
+              ASSETS="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/tmp/stable-assets.err)" || { echo "::warning::stable $TAG asset listing failed（$(tr '\n' ' ' </tmp/stable-assets.err)）— stopping previous-zip staging"; break; }
+              NAME=""
+              HAS_APPCAST="false"
+              for ASSET in $ASSETS; do
                 case "$ASSET" in
-                  dsh-chamber-*-macos-arm64.zip) STABLE_HAS_NATIVE_ZIP="true" ;;
+                  # beta 归档绝不进 stable 收件目录（正常状态下滚动 release 是 prerelease 被
+                  # --exclude-pre-releases 挡掉；这一条防它哪天被清掉 prerelease 标记）。
+                  dsh-chamber-[0-9]*-beta.*-macos-arm64.zip) ;;
+                  dsh-chamber-[0-9]*-macos-arm64.zip) NAME="$ASSET" ;;
+                  appcast-swift.xml) HAS_APPCAST="true" ;;
                 esac
               done
-              if [[ "$STABLE_HAS_NATIVE_ZIP" == "true" ]]; then
-                gh release download "$STABLE_TAG" \
-                  --repo "$GITHUB_REPOSITORY" \
-                  --pattern 'dsh-chamber-*-macos-arm64.zip' \
-                  --dir /tmp/appcast-in --clobber \
-                  || { echo "::error::latest final $STABLE_TAG 有 native zip 但下载失败——拒绝发布缺 final 条目的 beta appcast"; exit 1; }
-                echo "beta appcast 收件目录：$(ls /tmp/appcast-in | tr '\n' ' ')"
+              if [[ -z "$NAME" ]]; then
+                echo "::notice::stable $TAG has no native zip — skipped for delta staging"
+                continue
+              fi
+              # 没有 appcast 的旧发布 = 当时未配置 Sparkle 公钥：其 app 可能没有 SUPublicEDKey
+              # （generate_appcast 产不出 delta → verify 会硬 FAIL）或没有内嵌 stable SUFeedURL
+              # （会被分到别的 feed → multiple appcasts found 直接红）。这类归档绝不作基线。
+              if [[ "$HAS_APPCAST" != "true" ]]; then
+                echo "::notice::stable $TAG has no appcast-swift.xml (当时未配置 Sparkle 密钥) — 不作 delta 基线"
+                continue
+              fi
+              if gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern "$NAME" --dir "$STAGE_DIR" --clobber; then
+                if ! baseline_can_use_delta "$STAGE_DIR/$NAME"; then
+                  rm -f "$STAGE_DIR/$NAME"
+                  echo "::notice::stable $TAG/$NAME 不作 delta 基线：主 app 缺 SUPublicEDKey / 与当前发布公钥不一致 / 与当前 app 不同分支（Sparkle 对它既不产 delta 也不写放弃标记）"
+                  continue
+                fi
+                BUNDLE="$(plist_field "$STAGE_DIR/$NAME" CFBundleVersion || true)"
+                if [[ -z "$BUNDLE" ]]; then
+                  rm -f "$STAGE_DIR/$NAME"
+                  echo "::notice::stable $TAG/$NAME 读不出 CFBundleVersion——跳过（无法做逐基线账目）"
+                  continue
+                fi
+                # 同构建号只算一个基线：否则逐基线账目会要求两个 deltaFrom（同一版本只可能有一个）。
+                case " $STAGED_BUNDLES " in
+                  *" $BUNDLE "*)
+                    rm -f "$STAGE_DIR/$NAME"
+                    echo "::notice::stable $TAG/$NAME 与已 staged 基线同构建号（$BUNDLE）——跳过重复基线"
+                    continue
+                    ;;
+                esac
+                STAGED_BUNDLES="$STAGED_BUNDLES $BUNDLE"
+                STAGED_PREVIOUS=$((STAGED_PREVIOUS + 1))
+                [[ -z "$NEWEST_PREVIOUS_VERSION" ]] && NEWEST_PREVIOUS_VERSION="${TAG#v}"
+                echo "staged previous stable archive $TAG/$NAME"
               else
-                echo "::warning::latest final release $STABLE_TAG 没有 native zip（原生链尚未出过 final）——beta appcast 仅含当前 beta"
+                echo "::warning::failed to download previous stable archive $TAG/$NAME — delta coverage reduced"
+              fi
+            done
+          else
+            CURRENT_NAME="$(basename "$ZIP")"
+            BETA_NAMES=""
+            if ROLLING_ASSETS="$(gh release view "$ROLLING_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/tmp/rolling-assets.err)"; then
+              BETA_NAMES="$(printf '%s\n' "$ROLLING_ASSETS" \
+                | grep -E '^dsh-chamber-[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+-macos-arm64\.zip$' | sort -Vr || true)"
+            else
+              if grep -qiE 'not found' /tmp/rolling-assets.err; then
+                echo "::notice::滚动 release 尚不存在（首个 beta）——本次不 stage 历史 beta（无 delta）"
+              else
+                echo "::warning::滚动 release 资产列表读取失败（首个 beta 时尚无滚动 release，属正常；错误：$(tr '\n' ' ' </tmp/rolling-assets.err)）——本次不 stage 历史 beta（无 delta）"
               fi
             fi
+            for NAME in $BETA_NAMES; do
+              [[ "$STAGED_PREVIOUS" -ge "$DELTA_SOURCES" ]] && break
+              [[ "$NAME" == "$CURRENT_NAME" ]] && continue
+              if gh release download "$ROLLING_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$NAME" --dir "$STAGE_DIR" --clobber; then
+                if ! baseline_can_use_delta "$STAGE_DIR/$NAME"; then
+                  rm -f "$STAGE_DIR/$NAME"
+                  echo "::notice::beta $NAME 不作 delta 基线：主 app 缺 SUPublicEDKey / 与当前发布公钥不一致 / 与当前 app 不同分支（Sparkle 对它既不产 delta 也不写放弃标记）"
+                  continue
+                fi
+                BUNDLE="$(plist_field "$STAGE_DIR/$NAME" CFBundleVersion || true)"
+                if [[ -z "$BUNDLE" ]]; then
+                  rm -f "$STAGE_DIR/$NAME"
+                  echo "::notice::beta $NAME 读不出 CFBundleVersion——跳过（无法做逐基线账目）"
+                  continue
+                fi
+                case " $STAGED_BUNDLES " in
+                  *" $BUNDLE "*)
+                    rm -f "$STAGE_DIR/$NAME"
+                    echo "::notice::beta $NAME 与已 staged 基线同构建号（$BUNDLE）——跳过重复基线"
+                    continue
+                    ;;
+                esac
+                STAGED_BUNDLES="$STAGED_BUNDLES $BUNDLE"
+                STAGED_PREVIOUS=$((STAGED_PREVIOUS + 1))
+                if [[ -z "$NEWEST_PREVIOUS_VERSION" ]]; then
+                  NEWEST_PREVIOUS_VERSION="${NAME#dsh-chamber-}"
+                  NEWEST_PREVIOUS_VERSION="${NEWEST_PREVIOUS_VERSION%-macos-arm64.zip}"
+                fi
+                echo "staged previous beta archive $NAME"
+              else
+                echo "::warning::failed to download previous beta archive $NAME — delta coverage reduced"
+              fi
+            done
           fi
+          if [[ "$STAGED_PREVIOUS" -eq 0 ]]; then
+            echo "::warning::no previous ${CHANNEL} archive staged — ${APPCAST} carries no delta (full-zip updates only)"
+          else
+            echo "::notice::staged ${STAGED_PREVIOUS} previous ${CHANNEL} archive(s) for delta generation (newest=${NEWEST_PREVIOUS_VERSION})"
+          fi
+          # 私钥只落临时文件：umask 077 + EXIT trap，失败路径也不会把私钥留在 runner 上。
+          umask 077
           printf '%s' "$SPARKLE_PRIVATE_KEY" > /tmp/ed-key.txt
+          trap 'rm -f /tmp/ed-key.txt' EXIT
           # S-36：enclosure 必须真实可下载。generate_appcast 缺省把 enclosure 解析为
           # 「zip 文件名相对该 zip 内嵌 SUFeedURL」（ArchiveItem.archiveURL），beta zip
           # 内嵌的 feed 是滚动 tag ⇒ enclosure 落在滚动 release 上。这里再用
@@ -1190,23 +1340,176 @@ jobs:
           fi
           # Sparkle 的 -o 是**输出文件路径**（help: "Path to filename for the generated appcast"），
           # 传目录会以 "Is a directory" 失败——真实发布第一次跑这条链时正是这样挂的。
-          # delta 仍由 generate_appcast 写进收件目录，由下面的上传循环一并发布。
-          /tmp/sparkle-bin/bin/generate_appcast --ed-key-file /tmp/ed-key.txt ${PREFIX_ARGS[@]+"${PREFIX_ARGS[@]}"} -o /tmp/appcast-out/appcast.xml /tmp/appcast-in
+          # delta 由 generate_appcast 写进收件目录（*.delta），由下一步的上传循环一并发布。
+          # --maximum-versions：stable=1（feed 只留当前条目）/ beta=3（保留最近 beta 条目）；
+          # --maximum-deltas=本次 staging 的旧包数（下限 1/上限 5 已在上面校验）。
+          # Sparkle 判定「delta 不值得分发」时（delta > 7/8 整包，Appcast.swift:360）不产出
+          # delta、stdout 也无提示，只在**缓存目录**写一个 <delta>.ignore 标记。给本次运行一个
+          # 干净的 CFFIXED_USER_HOME，才能把「Sparkle 主动放弃」与「增量链静默退化」分开：
+          # 有标记 = loud 降级（这些基线走整包），没标记却没 delta = verify FAIL。
+          DELTA_CACHE_HOME=/tmp/sparkle-cache-home
+          rm -rf "$DELTA_CACHE_HOME" && mkdir -p "$DELTA_CACHE_HOME"
+          CFFIXED_USER_HOME="$DELTA_CACHE_HOME" /tmp/sparkle-bin/bin/generate_appcast --ed-key-file /tmp/ed-key.txt ${PREFIX_ARGS[@]+"${PREFIX_ARGS[@]}"} \
+            --maximum-versions "$MAX_VERSIONS" --maximum-deltas "$DELTA_SOURCES" \
+            -o "/tmp/appcast-out/${APPCAST}" "$STAGE_DIR" 2>&1 | tee /tmp/generate-appcast.log
           rm -f /tmp/ed-key.txt
-          test -f /tmp/appcast-out/appcast.xml || { echo "::error::generate_appcast produced no appcast"; exit 1; }
-          # 2026-12 A2 发布物门禁：文件存在不等于宣传了本版本。断言同一条 item 同时
-          # 带 sparkle:shortVersionString=本版本、sparkle:version=本 .app 的
-          # CFBundleVersion（Sparkle 的升级比较字段）、以及指向本版本 zip 的
-          # enclosure——缺任一条即 FAIL（私钥已配置，客户端看不到更新不再允许只写日志）。
-          node scripts/release/verify-native-appcast.mjs "$VERSION" /tmp/appcast-out/appcast.xml
-          cp /tmp/appcast-out/appcast.xml "macos/release/${APPCAST}"
-          gh release upload "v${VERSION}" "macos/release/${APPCAST}" --clobber
+          test -f "/tmp/appcast-out/${APPCAST}" || { echo "::error::generate_appcast produced no appcast"; exit 1; }
+          # 良构校验：合并工具只做「item 区段替换」，非良构 feed 会让 Sparkle 直接拒绝整个通道。
+          # xmllint 随 macOS 自带；缺失时 loud 跳过（不在发布腿引入新依赖）。
+          FRESH_ITEMS="$(grep -c '<item' "/tmp/appcast-out/${APPCAST}" || true)"
+          [[ "$FRESH_ITEMS" =~ ^[0-9]+$ ]] || { echo "::error::无法统计生成 feed 的条目数（grep 输出：'$FRESH_ITEMS'）——拒绝在未知状态下发布"; exit 1; }
+          if command -v xmllint >/dev/null 2>&1; then
+            xmllint --noout "/tmp/appcast-out/${APPCAST}" || { echo "::error::生成的 appcast 不是良构 XML"; exit 1; }
+          else
+            echo "::warning::xmllint 不可用——跳过生成 feed 的良构校验"
+          fi
+          # 签名问题必须 FAIL：公钥与私钥不匹配时 generate_appcast **只打警告**，并把条目发成没有
+          # sparkle:edSignature 的形状——「发布成功但任何客户端都验不过」，正是 A2/G42 要挡的形态。
+          if grep -qE 'does not match key EdDSA|ignored, because it could not be signed' /tmp/generate-appcast.log; then
+            echo "::error::generate_appcast 报告 EdDSA 签名问题（公钥不匹配 / delta 签不上）——本 feed 的条目没有有效签名，客户端永远验不过；拒绝发布"
+            grep -E 'does not match key EdDSA|ignored, because it could not be signed' /tmp/generate-appcast.log
+            exit 1
+          fi
+          # Sparkle 把**解包出的 app bundle**也放在同一个 cache 树里，所以只看 marker 目录（标记写在
+          # 该目录的直接子项）。布局变更时退回整棵 cache 树的 *.delta*.ignore 兜底。
+          MARKER_DIR="$DELTA_CACHE_HOME/Library/Caches/Sparkle_generate_appcast"
+          [[ -d "$MARKER_DIR" ]] || MARKER_DIR="$DELTA_CACHE_HOME"
+          # 「delta 根本生成不出来」（不支持的旧归档格式）不写放弃标记，但同样是「该基线没有 delta」；
+          # 逐基线账目下面会用它解释「既无 delta 又无标记」的差额。
+          CREATE_FAILURES="$(grep -c 'Could not create delta update' /tmp/generate-appcast.log || true)"
+          [[ "$CREATE_FAILURES" =~ ^[0-9]+$ ]] || { echo "::error::无法统计 delta 生成失败条数（grep 输出：'$CREATE_FAILURES'）——拒绝在未知状态下发布"; exit 1; }
+          # 逐基线账目（取代总数相减）：每个 staged 基线要么在 appcast 里有它自己的
+          # sparkle:deltaFrom，要么 Sparkle 为 (新构建号, 它) 写过放弃标记；两者都不是 = 静默丢失，
+          # 必须点名 FAIL。逐条归因同时避免「多 branch / 多条 feed 的标记互相顶替」把真丢失算成放弃。
+          MATCHED_DELTAS=0
+          DECLINED_DELTAS=0
+          UNACCOUNTED_BASELINES=""
+          for OLD in $STAGED_BUNDLES; do
+            if grep -q "sparkle:deltaFrom=\"$OLD\"" "/tmp/appcast-out/${APPCAST}"; then
+              MATCHED_DELTAS=$((MATCHED_DELTAS + 1))
+              continue
+            fi
+            if ls "$MARKER_DIR"/*"${NEW_BUNDLE}-${OLD}.delta"*.ignore >/dev/null 2>&1; then
+              DECLINED_DELTAS=$((DECLINED_DELTAS + 1))
+              continue
+            fi
+            UNACCOUNTED_BASELINES="$UNACCOUNTED_BASELINES $OLD"
+          done
+          UNACCOUNTED_COUNT=0
+          for _OLD in $UNACCOUNTED_BASELINES; do UNACCOUNTED_COUNT=$((UNACCOUNTED_COUNT + 1)); done
+          if [[ "$UNACCOUNTED_COUNT" -gt "$CREATE_FAILURES" ]]; then
+            echo "::error::以下 staged 基线既没有 delta 也没有放弃标记：$UNACCOUNTED_BASELINES（delta 生成失败 $CREATE_FAILURES 个）——增量链静默退化"
+            exit 1
+          fi
+          if [[ "$UNACCOUNTED_COUNT" -gt 0 ]]; then
+            echo "::warning::$UNACCOUNTED_COUNT 个基线因 delta 生成失败走整包（无放弃标记）：$UNACCOUNTED_BASELINES"
+          fi
+          if [[ "$DECLINED_DELTAS" -gt 0 ]]; then
+            echo "::warning::Sparkle 主动放弃 $DECLINED_DELTAS 个基线（delta > 7/8 整包，Appcast.swift:360）——这些基线走整包下载"
+          fi
+          # 2026-12 A2 发布物门禁（本版本条目 + 本版本 zip enclosure；stable 额外要求单条目）
+          # + 2026-09 增量门禁（staged 过的旧归档必须尽量产出 delta，绝不静默退回全量）：
+          # 无放弃标记时按「最新基线精确 + 条数 ≥ staged」断言；Sparkle 主动放弃时按剩余条数断言。
+          EXPECTED_DELTAS=$MATCHED_DELTAS
+          VERIFY_ARGS=()
+          [[ "$CHANNEL" == "stable" ]] && VERIFY_ARGS+=(--single-item)
+          if [[ "$STAGED_PREVIOUS" -ge 1 && -n "$NEWEST_PREVIOUS_VERSION" ]]; then
+            if [[ "$DECLINED_DELTAS" -eq 0 && "$UNACCOUNTED_COUNT" -eq 0 ]]; then
+              # 全部基线都产出了 delta：最新基线按版本精确断言 + 条数守恒。
+              VERIFY_ARGS+=(--expect-delta-from "$NEWEST_PREVIOUS_VERSION" --expect-delta-count "$STAGED_PREVIOUS")
+            elif [[ "$EXPECTED_DELTAS" -ge 1 ]]; then
+              # 有基线被 Sparkle 主动放弃/生成失败：只要求剩余基线都真的产出了 delta。
+              VERIFY_ARGS+=(--expect-delta-count "$EXPECTED_DELTAS")
+            fi
+          fi
+          # 逐条真验签（Ed25519 over 归档字节）：只断言「签名存在」挡不住密钥轮换后
+          # 「任何公钥都验不过」的签名（真实 Sparkle 2.10.0 复现）。
+          node scripts/release/verify-native-appcast.mjs "$VERSION" "/tmp/appcast-out/${APPCAST}" \
+            --signatures-dir "$STAGE_DIR" --public-key "$SPARKLE_PUBLIC_ED_KEY" ${VERIFY_ARGS[@]+"${VERIFY_ARGS[@]}"}
+          # S-23（2026-09 改法）：beta feed 的 final 条目从**已发布 stable feed** 复制（缺 stable
+          # feed 时保留上次滚动 feed 的 final 条目）；stable zip 绝不进 beta 收件目录——两通道
+          # 的收件目录/feed/上传面完全分开（generate_appcast 的 feed 分组约束）。
+          if [[ "$CHANNEL" == "beta" ]]; then
+            STABLE_FEED=""
+            if STABLE_TAG="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name 2>/tmp/stable-latest.err)"; then
+              rm -rf /tmp/stable-feed && mkdir -p /tmp/stable-feed
+              if gh release download "$STABLE_TAG" --repo "$GITHUB_REPOSITORY" --pattern 'appcast-swift.xml' --dir /tmp/stable-feed --clobber 2>/tmp/stable-feed.err; then
+                STABLE_FEED="/tmp/stable-feed/appcast-swift.xml"
+              elif grep -qiE 'no assets (match|to download)|not found' /tmp/stable-feed.err; then
+                echo "::warning::latest final $STABLE_TAG has no appcast-swift.xml（原生链尚未出过 final）——保留上次滚动 feed 的 final 条目"
+              else
+                echo "::error::读取 latest final $STABLE_TAG 的 appcast 失败（非 404/缺资产）——拒绝在未知状态下发布可能缺 final 的 beta appcast"
+                cat /tmp/stable-feed.err >&2
+                exit 1
+              fi
+            elif grep -q 'Not Found' /tmp/stable-latest.err; then
+              echo "::warning::仓库尚无 final release——beta feed 无 final 条目"
+            else
+              echo "::error::解析 /releases/latest 失败（非 404）——拒绝发布可能缺 final 条目的 beta appcast"
+              cat /tmp/stable-latest.err >&2
+              exit 1
+            fi
+            PREVIOUS_FEED=""
+            rm -rf /tmp/rolling-feed && mkdir -p /tmp/rolling-feed
+            if gh release download "$ROLLING_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$APPCAST" --dir /tmp/rolling-feed --clobber 2>/tmp/rolling-feed.err; then
+              PREVIOUS_FEED="/tmp/rolling-feed/${APPCAST}"
+            elif grep -qiE 'no assets (match|to download)|not found' /tmp/rolling-feed.err; then
+              echo "::notice::滚动 beta feed 尚不存在（首个 beta）——无历史 final 条目可保留"
+            else
+              echo "::error::读取滚动 beta feed 失败（非 404/缺资产）——拒绝在未知状态下合并出可能缺 final 的 feed"
+              cat /tmp/rolling-feed.err >&2
+              exit 1
+            fi
+            MERGE_ARGS=(--beta "/tmp/appcast-out/${APPCAST}" -o "/tmp/appcast-out/${APPCAST}.merged")
+            if [[ -n "$STABLE_FEED" ]]; then
+              MERGE_ARGS+=(--stable "$STABLE_FEED")
+              # final 条目改挂**版本固定**前缀（v<stable-tag> 的资产不可变），不再依赖
+              # releases/latest：否则后续一个没有 keyed appcast 的正式版会把 latest 移走，
+              # 被保留的 final 条目就成 404（S-36）。
+              MERGE_ARGS+=(--download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${STABLE_TAG}/")
+            fi
+            [[ -n "$PREVIOUS_FEED" ]] && MERGE_ARGS+=(--previous "$PREVIOUS_FEED")
+            # 与 generate_appcast 的 --maximum-versions 同口径：合并会把旧 feed 里的 beta 条目
+            # 也并进来（staging 少收归档时旧 beta 不许消失），但 feed 长度仍须有限。
+            MERGE_ARGS+=(--beta-item-limit "$MAX_VERSIONS")
+            MERGE_OUTPUT="$(node scripts/release/merge-native-feed.mjs ${MERGE_ARGS[@]+"${MERGE_ARGS[@]}"})"
+            echo "$MERGE_OUTPUT"
+            # 合并必须**只增不减**：beta 条目丢失 = 滚动通道上旧 beta 的可见性静默消失，
+            # 而 verify 只看「本版本条目 + final 条目」，看不到条目数变化。
+            MERGED_ITEMS="$(grep -c '<item' "/tmp/appcast-out/${APPCAST}.merged" || true)"
+            [[ "$MERGED_ITEMS" =~ ^[0-9]+$ ]] || { echo "::error::无法统计合并 feed 的条目数（grep 输出：'$MERGED_ITEMS'）——拒绝在未知状态下发布"; exit 1; }
+            if [[ "$MERGED_ITEMS" -lt "$FRESH_ITEMS" ]]; then
+              echo "::error::合并后条目数减少（$FRESH_ITEMS → $MERGED_ITEMS）——beta 条目被丢掉会让 beta.N-1 的可见性消失"
+              exit 1
+            fi
+            if command -v xmllint >/dev/null 2>&1; then
+              xmllint --noout "/tmp/appcast-out/${APPCAST}.merged" || { echo "::error::合并后的滚动 feed 不是良构 XML"; exit 1; }
+            else
+              echo "::warning::xmllint 不可用——跳过合并 feed 的良构校验"
+            fi
+            mv "/tmp/appcast-out/${APPCAST}.merged" "/tmp/appcast-out/${APPCAST}"
+            # S-23 的可见性在「尚无带原生包的正式版」时只能 loud 降级（deviations G42 已登记）：
+            # 只有合并结果真的带 final 条目才要求它——绝不因此阻塞 beta 通道。
+            FINAL_ARGS=()
+            if [[ "$MERGE_OUTPUT" == *"finalItem=0"* ]]; then
+              echo "::warning::滚动 beta feed 暂无 final 条目（尚无带原生包的正式版）——本次只校验 beta 条目（S-23 在首个 keyed final 后生效）"
+            else
+              FINAL_ARGS+=(--expect-final-item)
+            fi
+            node scripts/release/verify-native-appcast.mjs "$VERSION" "/tmp/appcast-out/${APPCAST}" \
+              --signatures-dir "$STAGE_DIR" --public-key "$SPARKLE_PUBLIC_ED_KEY" \
+              ${FINAL_ARGS[@]+"${FINAL_ARGS[@]}"} ${VERIFY_ARGS[@]+"${VERIFY_ARGS[@]}"}
+          fi
+          # draft 上的 appcast 交给下一步（Upload native artifacts）在**归档之后**上传：
+          # S-36 的「归档先于 feed」在 draft 面同样成立——任何时刻读 draft 都能解析到真实资产，
+          # 不再依赖「draft 对客户端不可见」这一间接论证。这里只落盘供下一步使用。
+          cp "/tmp/appcast-out/${APPCAST}" "macos/release/${APPCAST}"
           # S-22/S-36：beta 的**滚动发布**不在本步执行——rolling release 是公开面
           # （beta 客户端 SUFeedURL 指向它），发布挪到 verify 步之后（下一步
           # "Upload native artifacts"），未经 codesign/stapler/架构校验的归档绝不
           # 暴露给 beta 客户端；v${VERSION} 的本次上传落在 draft 上（finalize 前
-          # 不可见）。本步只保证 /tmp/appcast-in（enclosure 引用集合）与 appcast
-          # 文件就绪，供下一步按「归档 → appcast」顺序滚动发布。
+          # 不可见）。本步只保证 $STAGE_DIR（enclosure 引用集合）与 appcast 文件就绪，
+          # 供下一步按「归档 → appcast」顺序滚动发布。
           echo "${APPCAST} signed and uploaded to the draft release"
 
       - name: Verify native app + uploaded archives (fail-closed on release)
@@ -1282,9 +1585,11 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ needs.create-release.outputs.version }}
-          # S-23：stable 发布刷新滚动 beta appcast 需要同一把 EdDSA 私钥（stable
-          # appcast 的生成在 appcast 步；这里是 beta 通道的 final 可见性刷新）。
+          # S-23：本步不签名（merge/verify 只搬运与断言条目）；SPARKLE_PRIVATE_KEY 在这里只是
+          # **状态判据**：配置了却没有 stable appcast = FAIL，没配 = loud 跳过刷新。
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          # 刷新后的滚动 feed 要逐条验签（本版本条目的 zip/delta 就在 /tmp/appcast-in-stable）。
+          SPARKLE_PUBLIC_ED_KEY: ${{ secrets.SPARKLE_PUBLIC_ED_KEY }}
         run: |
           set -euo pipefail
           BASE="macos/release/dsh-chamber-${VERSION}-macos-arm64"
@@ -1300,7 +1605,7 @@ jobs:
           # 步 loud 跳过、这里也 loud 跳过——照常发布，只是原生腿看不到这次更新。
           if [[ "$VERSION" == *-* ]]; then
             BETA_APPCAST="macos/release/appcast-swift-beta.xml"
-            STAGED_ZIP="/tmp/appcast-in/$(basename "${BASE}.zip")"
+            STAGED_ZIP="/tmp/appcast-in-beta/$(basename "${BASE}.zip")"
             if [[ ! -f "$BETA_APPCAST" ]]; then
               # 2026-12 A2 密钥门禁：私钥在而 appcast 缺失 = appcast 步出事却没拦住
               # （不该到达这里）——FAIL；两把钥匙都缺才是"没有更新链"的 loud 降级。
@@ -1322,11 +1627,31 @@ jobs:
                   --title "dsh-chamber Swift beta appcast (rolling)" \
                   --notes "Rolling release carrying appcast-swift-beta.xml and the archives its enclosures reference for the Swift native shell's beta channel. Republished by every beta; do not delete."
               fi
-              # 先归档（当前 beta + 最新 final；每个 beta zip 名带版本号，--clobber
-              # 不抹掉更早 beta 的包），再 appcast——enclosure 逐条可下载。
-              # V1 复核补漏：generate_appcast 还会产出 .delta 并在 appcast 里引用它，
-              # 只传 *.zip 会让 delta enclosure 404（Sparkle 会回退整包，但仍属坏链路）。
-              for ARCHIVE in /tmp/appcast-in/*.zip /tmp/appcast-in/*.delta; do
+              # 先归档再 appcast（enclosure 逐条可下载）：当前 beta zip + 本次新生成的
+              # delta。历史 beta zip 本来就在这个滚动 release 上（staging 就是从它下载的），
+              # 不重复上传（每个 ~83MB）；delta 必须上传，否则 delta enclosure 404
+              # （Sparkle 会回退整包，但仍属坏链路）。
+              #
+              # 同版本重跑保护：滚动 release 是**公开且长期存在**的，已发布 feed 的 edSignature
+              # 正指向同名 zip。只有字节完全一致才允许覆盖（幂等重跑）；字节不同 = 旧 feed 的
+              # 签名会对不上新资产，必须提升 beta 号后重新发布。
+              REPUBLISH_ASSETS="$(gh release view "$ROLLING_TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/tmp/rolling-republish.err)" \
+                || { echo "::error::无法读取滚动 release 资产列表（$(tr '\n' ' ' </tmp/rolling-republish.err)）——拒绝在未知状态下覆盖已发布资产"; exit 1; }
+              if grep -qx "$(basename "$STAGED_ZIP")" <<<"$REPUBLISH_ASSETS"; then
+                rm -rf /tmp/republish-check && mkdir -p /tmp/republish-check
+                if ! gh release download "$ROLLING_TAG" --repo "$GITHUB_REPOSITORY" \
+                  --pattern "$(basename "$STAGED_ZIP")" --dir /tmp/republish-check --clobber; then
+                  echo "::error::滚动 release 上已有同名 beta zip，但取回失败（$(tr '\n' ' ' </tmp/rolling-republish.err)）——拒绝在未知字节状态下覆盖"
+                  exit 1
+                fi
+                if ! cmp -s "/tmp/republish-check/$(basename "$STAGED_ZIP")" "$STAGED_ZIP"; then
+                  echo "::error::滚动 release 上已有同名 beta zip 但字节不同（同版本重跑且构建不同）——已发布 feed 的签名会对不上新资产，请提升 beta 号后重新发布"
+                  exit 1
+                fi
+                echo "::notice::滚动 release 上的同名 beta zip 字节一致——幂等重跑，照常刷新 feed"
+              fi
+              gh release upload "$ROLLING_TAG" "$STAGED_ZIP" --clobber
+              for ARCHIVE in /tmp/appcast-in-beta/*.delta; do
                 [[ -f "$ARCHIVE" ]] || continue
                 gh release upload "$ROLLING_TAG" "$ARCHIVE" --clobber
               done
@@ -1334,10 +1659,19 @@ jobs:
               echo "beta 滚动通道已发布（归档 + appcast）"
             fi
           else
+            # stable：delta 必须先随 draft 上传——finalize 后 stable feed 的 delta enclosure
+            # 解析为 releases/latest/download/<delta>，而合并进滚动 beta feed 的 final 条目
+            # 也引用同一批 delta（S-36 顺序：归档先于 feed）。
+            for ARCHIVE in /tmp/appcast-in-stable/*.delta; do
+              [[ -f "$ARCHIVE" ]] || continue
+              gh release upload "v${VERSION}" "$ARCHIVE" --clobber
+            done
             # S-23：final 发布也要刷新滚动 beta appcast——beta 客户端因此能看到 final
-            # （beta→final 的通道可见性；Electron 经 latest.yml 回退天然可见）。只在
-            # 滚动 release 已存在且本次 appcast 真的生成时刷新（绝不从 stable 腿创建
-            # 或激活 beta 通道）；刷新保留滚动 release 上版本最高的 beta zip 条目。
+            # （用户裁决：beta 遇到对应正式版允许升级到正式版；正式版不存在时按 beta 更新）。
+            # 2026-09 改法：stable 与 beta 的收件目录/feed 分开，刷新改为「已发布滚动 feed 的
+            # beta 条目 + 本次新生成的 stable final 条目」合并（不再重跑 generate_appcast：
+            # 两通道归档同目录 + -o 会 multiple appcasts found）。只在滚动 release 已存在且
+            # 本次 appcast 真的生成时刷新（绝不从 stable 腿创建或激活 beta 通道）。
             ROLLING_TAG="${SPARKLE_BETA_ROLLING_TAG}"
             STABLE_APPCAST="macos/release/appcast-swift.xml"
             if [[ ! -f "$STABLE_APPCAST" ]]; then
@@ -1347,47 +1681,57 @@ jobs:
                 exit 1
               fi
               echo "::warning::stable appcast 缺失（SPARKLE_PRIVATE_KEY 未配置）——跳过滚动 beta 通道刷新"
-            elif ! gh release view "$ROLLING_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-              echo "beta 滚动通道不存在——stable 发布不创建它（没有 beta 客户端需要刷新）"
-            else
-              test -x /tmp/sparkle-bin/bin/generate_appcast \
-                || { echo "::error::缺少 generate_appcast（appcast 步未运行）"; exit 1; }
-              rm -rf /tmp/appcast-stable-refresh /tmp/appcast-stable-refresh-out
-              mkdir -p /tmp/appcast-stable-refresh /tmp/appcast-stable-refresh-out
-              BETA_ZIP_NAME="$(gh release view "$ROLLING_TAG" --repo "$GITHUB_REPOSITORY" --json assets \
-                --jq '.assets[].name' \
-                | grep -E '^dsh-chamber-[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9]+-macos-arm64\.zip$' \
-                | sort -V | tail -n 1)"
-              if [[ -n "$BETA_ZIP_NAME" ]]; then
-                gh release download "$ROLLING_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$BETA_ZIP_NAME" \
-                  --dir /tmp/appcast-stable-refresh --clobber
-                echo "刷新滚动 beta appcast：保留 beta 条目 $BETA_ZIP_NAME"
+            elif ! ROLLING_PROBE_ERR="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${ROLLING_TAG}" 2>&1 >/dev/null)"; then
+              if grep -q 'Not Found' <<<"$ROLLING_PROBE_ERR"; then
+                echo "beta 滚动通道不存在——stable 发布不创建它（没有 beta 客户端需要刷新）"
               else
-                echo "::warning::滚动通道没有 beta zip 资产——刷新后的 appcast 只含 final 条目"
+                echo "::error::探测 beta 滚动通道失败（非 404）——拒绝在未知状态下跳过 beta 通道刷新"
+                echo "$ROLLING_PROBE_ERR" >&2
+                exit 1
               fi
-              cp "${BASE}.zip" /tmp/appcast-stable-refresh/
-              printf '%s' "$SPARKLE_PRIVATE_KEY" > /tmp/ed-key-refresh.txt
-              /tmp/sparkle-bin/bin/generate_appcast --ed-key-file /tmp/ed-key-refresh.txt \
-                --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${ROLLING_TAG}/" \
-                -o /tmp/appcast-stable-refresh-out/appcast.xml /tmp/appcast-stable-refresh
-              rm -f /tmp/ed-key-refresh.txt
-              test -f /tmp/appcast-stable-refresh-out/appcast.xml \
-                || { echo "::error::滚动 beta appcast 刷新失败（generate_appcast 无输出）"; exit 1; }
-              # 2026-12 A2：刷新后的滚动 appcast 同样必须宣传本版本（final 条目 +
-              # 指向本版本 zip 的 enclosure）——只 test -f 证明不了 final 真的在。
-              node scripts/release/verify-native-appcast.mjs "$VERSION" /tmp/appcast-stable-refresh-out/appcast.xml
-              # 归档先于 appcast（每个 enclosure 先有可下载资产）；final zip 也因此
-              # 落到滚动 release（刷新前缀指向它）。
-              cp /tmp/appcast-stable-refresh-out/appcast.xml \
-                /tmp/appcast-stable-refresh-out/appcast-swift-beta.xml
-              for ARCHIVE in /tmp/appcast-stable-refresh/*.zip /tmp/appcast-stable-refresh/*.delta; do
-                [[ -f "$ARCHIVE" ]] || continue
-                gh release upload "$ROLLING_TAG" "$ARCHIVE" --clobber
-              done
-              gh release upload "$ROLLING_TAG" /tmp/appcast-stable-refresh-out/appcast-swift-beta.xml --clobber
-              echo "stable 发布已刷新滚动 beta appcast：final $VERSION 对 beta 客户端可见"
+            else
+              rm -rf /tmp/rolling-feed /tmp/appcast-stable-refresh-out
+              mkdir -p /tmp/rolling-feed /tmp/appcast-stable-refresh-out
+              if gh release download "$ROLLING_TAG" --repo "$GITHUB_REPOSITORY" \
+                --pattern 'appcast-swift-beta.xml' --dir /tmp/rolling-feed --clobber; then
+                # 归档先于 appcast：合并后的 final 条目 URL 被改写到滚动前缀，所以 final zip
+                # 与其 delta 必须先落到滚动 release。
+                gh release upload "$ROLLING_TAG" "${BASE}.zip" --clobber
+                for ARCHIVE in /tmp/appcast-in-stable/*.delta; do
+                  [[ -f "$ARCHIVE" ]] || continue
+                  gh release upload "$ROLLING_TAG" "$ARCHIVE" --clobber
+                done
+                node scripts/release/merge-native-feed.mjs \
+                  --beta /tmp/rolling-feed/appcast-swift-beta.xml \
+                  --stable "$STABLE_APPCAST" \
+                  --download-url-prefix "https://github.com/${GITHUB_REPOSITORY}/releases/download/${ROLLING_TAG}/" \
+                  -o /tmp/appcast-stable-refresh-out/appcast-swift-beta.xml
+                if command -v xmllint >/dev/null 2>&1; then
+                  xmllint --noout /tmp/appcast-stable-refresh-out/appcast-swift-beta.xml \
+                    || { echo "::error::刷新后的滚动 feed 不是良构 XML"; exit 1; }
+                else
+                  echo "::warning::xmllint 不可用——跳过刷新 feed 的良构校验"
+                fi
+                # 2026-12 A2 + S-23：刷新后的滚动 appcast 必须宣传本版本（final 条目）且保留
+                # beta 条目——只 test -f 证明不了 final 真的在。
+                node scripts/release/verify-native-appcast.mjs "$VERSION" /tmp/appcast-stable-refresh-out/appcast-swift-beta.xml \
+                  --signatures-dir /tmp/appcast-in-stable --public-key "$SPARKLE_PUBLIC_ED_KEY" --expect-final-item
+                gh release upload "$ROLLING_TAG" /tmp/appcast-stable-refresh-out/appcast-swift-beta.xml --clobber
+                echo "stable 发布已刷新滚动 beta appcast：final $VERSION 对 beta 客户端可见"
+              else
+                # 滚动 release 在、feed 却没了 = beta 通道自己坏了：正式发布照常（绝不能因为
+                # beta 通道损坏而阻塞 stable），loud 警告并跳过刷新——beta 客户端会在下一个
+                # beta 发布合并 stable feed 时看到 final。
+                echo "::warning::滚动通道存在但缺少 appcast-swift-beta.xml——本次跳过 beta 通道刷新（正式发布照常），beta 客户端将在下一个 beta 合并时看到 final"
+              fi
             fi
           fi
+          # S-36 顺序（draft 面）：到此为止 zip/delta 都已随 draft 上传，最后才放 appcast——
+          # 任何时刻（含 finalize 前）读 draft 的 appcast 都能解析到真实存在的资产。
+          APPCAST="appcast-swift.xml"
+          [[ "$VERSION" == *-* ]] && APPCAST="appcast-swift-beta.xml"
+          gh release upload "v${VERSION}" "macos/release/${APPCAST}" --clobber
+          echo "${APPCAST} uploaded to the draft release after the archives"
 
   finalize-release:
     needs: [create-release, build-gateway, build-macos, build-windows, build-linux, build-swift]

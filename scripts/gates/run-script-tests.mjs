@@ -62,6 +62,7 @@ export const GROUPS = {
   release: [
     'scripts/release/release-workflow-policy.test.mjs',
     'scripts/release/release-artifacts.test.mjs',
+    'scripts/release/merge-native-feed.test.mjs',
     'scripts/release/packaging-manifest-lockstep.test.mjs',
   ],
   // GUI acceptance toolbox judgement layer (the driving layer needs a display
