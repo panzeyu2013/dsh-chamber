@@ -14,6 +14,7 @@
     ],
     "silentTeardownMinMs": 15000,
     "openingStallStreak": 2,
+    "openingEpisodeKeysMax": 256,
     "handshakeTimeoutMs": 30000,
     "presentation": {
       "veilActionsAfterMs": 10000,

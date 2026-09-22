@@ -175,8 +175,11 @@ dsh 子进程由主进程管理——**hide 窗口后无任何东西需要额外
 > （`packages/dsh-stream-state` 的 `reduceCarrier`/`decideRebuild` + `tables.json`）持有，执行器只执行返回的 effects；
 > **静默判定也在 reducer（P3）**：执行器随 `rebuildRequested` 上报 `framesSinceSend`（本次发帧以来自当前 socket 收到的帧数），
 > 零帧把 `openingStall` 归为 `socketNoFrame`（不受 streak 门限），有帧则任何显式静默 reason 都被拒绝；宿主只回读 effect 的
-> reason 作为取证标签，不再自判。加宽预算/握手期限/静默下限与 `remote-retry-policy` 的常量副本已退役（G-G 锁步条目随之删除，17 锁/11 退役）；
-> 余：加宽账本（episode 身份）见 STATUS ③；
+> reason 作为取证标签，不再自判。加宽预算/握手期限/静默下限与 `remote-retry-policy` 的常量副本已退役（G-G 锁步条目随之删除，17 锁/11 退役）。
+> **加宽账本与期限装载也已归 reducer**：`openingStreaks`/`streamRequestKeys`（cap 256，最旧先逐）由 `openingSent`/`openingExpired`/
+> `openingAnswered`/`episodeClosed`（`timedOut` 决定放宽是否留给重试道）维护，宿主只上报观测、执行 `armOpeningDeadline` 等 effects。
+> **身份边界（本地无旁路）**：vendor 的 `open(signal)` 回调不携带流 token，跨重试道的稳定身份仍是 endpoint+payload 摘要
+> （`streamOpeningKey`）；真正的 per-stream token 或宿主侧首帧期限见 `docs/progress/todo/upstream-proposals.md` §3/§8。
 > ② **页面生命周期**：六个账本由**单世代注册表**（`sourceId → {epoch, incarnation, state}`，`packages/dsh-stream-state`）的投影持有——指纹变化只在权威 roster 刷新处 `reincarnate` 换代，事件携带捕获的 epoch（错代丢弃），退役经 `retainSourceIds` 出表；App 侧只剩活视图（P4：删 `incarnationKey`/`retainSources` 键式记录面）；
 > ③ **露屏**：遮罩分类与会话面持有合为一次 `decidePresentation`；帧带 `veil`（released/held/actionable）与绝对 `releaseAtMonoMs`，
 >    只有 `planVeilTimer` 能把期限换算成定时器（held 必 >0ms），hero/settling 越 70s 外层保险即 `actionable` 揭示租客、

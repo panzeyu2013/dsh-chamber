@@ -90,3 +90,24 @@ test('a ladder dispatch ledger stays inside its quota window after 10^5 ticks', 
     'a retained dispatch stamp is older than the quota window and can never affect a decision',
   )
 })
+
+test('the opening ledger is bounded by its key cap after 10^5 expiries', () => {
+  let state = initialCarrierState()
+  for (let index = 0; index < EVENTS; index++) {
+    const requestKey = 'k' + String(index % 500)
+    state = reduceCarrier(state, { kind: 'openingSent', at: index * 1_000, streamId: 's', requestKey }, CARRIER_ENV).state
+    state = reduceCarrier(state, { kind: 'openingExpired', at: index * 1_000 + 1, streamId: 's', requestKey, framesSinceSend: 1 }, CARRIER_ENV).state
+  }
+  assert.ok(
+    Object.keys(state.openingStreaks).length <= CARRIER_ENV.openingEpisodeKeysMax,
+    'openingStreaks grew to ' + String(Object.keys(state.openingStreaks).length),
+  )
+  assert.ok(
+    Object.keys(state.streamRequestKeys).length <= CARRIER_ENV.openingEpisodeKeysMax,
+    'streamRequestKeys grew to ' + String(Object.keys(state.streamRequestKeys).length),
+  )
+  assert.ok(
+    Object.values(state.openingStreaks).every((streak) => Number.isFinite(streak) && streak >= 1),
+    'every retained streak is a live count, not a placeholder',
+  )
+})

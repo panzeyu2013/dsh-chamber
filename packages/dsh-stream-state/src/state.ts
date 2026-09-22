@@ -28,6 +28,9 @@ export type RecoveryEffect =
   | { readonly e: 'rebuildCarrier'; readonly reason: RebuildReason; readonly at: number }
   /** Reopen one logical stream on the current carrier. */
   | { readonly e: 'reopenLogicalStream'; readonly streamId: string; readonly reason: string }
+  /** P3: arm one episode's opening deadline; the budget is the widening ladder's
+   * rung for its current streak, so the host never derives it. */
+  | { readonly e: 'armOpeningDeadline'; readonly streamId: string; readonly budgetMs: number; readonly streak: number }
   /** An allowed event arrived while a rebuild was in flight (see DIVERGENCE.md 2). */
   | { readonly e: 'throttled'; readonly reason: RebuildReason; readonly at: number }
   /** Bounded observability, never a behavior switch. */
@@ -43,6 +46,13 @@ export type CarrierEventKind =
   | 'streamFrame'
   | 'streamClosed'
   | 'rebuildRequested'
+  /** P3: an open frame was sent; the reducer arms this episode's opening deadline. */
+  | 'openingSent'
+  /** P3: that deadline expired; the reducer advances the episode's widening streak
+   * and decides (silent carrier vs threshold-gated stall) in one step. */
+  | 'openingExpired'
+  /** P3: the opening item arrived; the episode's widening is reset. */
+  | 'openingAnswered'
   /** The logical stream's consumer is gone (dispose / abort / normal end): the
    * episode's claims on the carrier end here. */
   | 'episodeClosed'
@@ -81,7 +91,16 @@ export interface CarrierEvent {
    * widening belongs to it, so when the episode closes, everything it left in
    * flight must stop blocking its successors - the legacy endpoint-digest key had
    * no owner and outlived the stream (DIVERGENCE D-4). */
-  readonly episodeId?: string
+  readonly episodeId?: string | undefined
+  /** P3: the request-episode key this stream belongs to (the host's
+   * `streamOpeningKey`). Required for the opening events; `episodeClosed` may
+   * omit it and the reducer will use the stream's registered key. */
+  readonly requestKey?: string | undefined
+  /** P3: for `episodeClosed` - true when this stream ended BECAUSE its opening
+   * deadline expired. A timed-out episode keeps its widening for the retry lane's
+   * next attempt; any other departure releases the key when no live sibling owns
+   * it. */
+  readonly timedOut?: boolean | undefined
 }
 
 export interface CarrierState {
@@ -97,6 +116,15 @@ export interface CarrierState {
   /** The episode that owns the in-flight rebuild, or null. Cleared when that
    * episode closes so a retired stream cannot hold the carrier hostage. */
   readonly pendingRebuildBy: string | null
+  /** P3: consecutive opening-deadline misses per REQUEST-EPISODE key (the host's
+   * `streamOpeningKey`). The LEDGER lives here now; the host only supplies the key
+   * and the frame delta, and the key's lifetime is bounded by
+   * {@link CarrierEnv.openingEpisodeKeysMax} with oldest-first eviction. */
+  readonly openingStreaks: Readonly<Record<string, number>>
+  /** P3: which request-episode key each live logical stream belongs to, so an
+   * episode that ends without an answer can release its widening (and a timed-out
+   * one keeps it for its successor). */
+  readonly streamRequestKeys: Readonly<Record<string, string>>
 }
 
 export interface CarrierEnv {
@@ -113,6 +141,8 @@ export interface CarrierEnv {
   /** Consecutive opening-deadline misses required before an `openingStall`
    * rebuild is allowed (table: OPENING_STALL_STREAK). */
   readonly openingStallStreak: number
+  /** Bound on the opening-ledger maps (table: OPENING_EPISODE_KEYS_MAX). */
+  readonly openingEpisodeKeysMax: number
 }
 
 export interface CarrierReduction {
@@ -129,5 +159,7 @@ export function initialCarrierState(): CarrierState {
     rebuildsAt: [],
     pendingRebuild: null,
     pendingRebuildBy: null,
+    openingStreaks: {},
+    streamRequestKeys: {},
   }
 }

@@ -42,6 +42,12 @@ export const SILENT_TEARDOWN_MIN_MS = 15_000
  * socket - is stuck. */
 export const OPENING_STALL_STREAK = 2
 
+/** Bound on the reducer's opening-ledger maps (provenance:
+ * OPENING_BUDGET_KEYS_MAX = 256 in the retired mux copy): a page that times out on
+ * many sessions must not grow the ledger without a limit. Oldest-first eviction
+ * only resets a key's widening; it never changes a decision already made. */
+const OPENING_EPISODE_KEYS_MAX = 256
+
 /** Deadline for one WebSocket handshake (provenance:
  * REMOTE_STREAM_HANDSHAKE_TIMEOUT_MS). A socket that never fires open/error/close
  * must fail the attempt, not park every open() until the connection lane's own
@@ -68,6 +74,7 @@ export const CARRIER_ENV = {
   minRebuildSpacingMs: MIN_REBUILD_SPACING_MS,
   inFlightGraceMs: IN_FLIGHT_GRACE_MS,
   openingStallStreak: OPENING_STALL_STREAK,
+  openingEpisodeKeysMax: OPENING_EPISODE_KEYS_MAX,
 } as const
 
 /** Opening deadline for an episode that has already timed out `streak` times. */
@@ -144,6 +151,7 @@ export const TABLE_SNAPSHOT = {
   openingTimeoutLadderMs: OPENING_TIMEOUT_LADDER_MS,
   silentTeardownMinMs: SILENT_TEARDOWN_MIN_MS,
   openingStallStreak: OPENING_STALL_STREAK,
+  openingEpisodeKeysMax: OPENING_EPISODE_KEYS_MAX,
   handshakeTimeoutMs: HANDSHAKE_TIMEOUT_MS,
   presentation: PRESENTATION_THRESHOLDS,
   ladders: LADDER_TABLES,

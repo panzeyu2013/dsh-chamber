@@ -186,3 +186,17 @@ chamber 侧现状（非上游阻塞项）：`packages/dsh-chamber-client-ui-side
 fallback 与 `test/session-rows/session-row-state.test.ts` 里钉住它的契约测试。
 
 
+
+## 8. 载波 open 的稳定 episode 身份（2026-12，P3）
+
+背景：chamber 的开帧预算按「请求 episode」放宽（30 → 60 → 120 → 240 → 300 s），跨重试道
+（`RemoteStream` 重发 → mux 新 streamId）必须保持同一身份。vendor 的 `$stream({ open: signal => … })`
+回调只传一个 `AbortSignal`，generated invocation 也不接受额外参数，因此本地唯一稳定的身份是
+`streamOpeningKey`（endpoint + payload 的 FNV 摘要）。后果：① 同一 endpoint+payload 的两个不同
+逻辑流会共享放宽预算（只影响节奏，不影响行为）；② 客户端无法把「同一条逻辑流的重试」与
+「新的一次请求」从调用面上区分开，只能靠摘要与生命周期清理近似。
+
+请求：给 stream 打开一个可携带的稳定身份（例如 `open(signal, { episodeId })`，或宿主为每次逻辑流
+分配并在重发间保持的 token）；或直接由宿主承担首帧期限（见 §3 的首帧期限诉求）——后者落地后
+客户端整条放宽阶梯即可退役。
+

@@ -30,9 +30,14 @@ import { setTimeout as delay } from 'node:timers/promises'
 test('the opening ladder is the shared table, and this module no longer re-derives it (B4/P3 tie)', () => {
   const source = (relative: string): string =>
     readFileSync(new URL('../../' + relative, import.meta.url), 'utf8')
-  assert.match(source('src/client/stream-client.ts'), /const budgetMs = openingBudgetMs\(this\.openingTimeouts\.get\(openingKey\) \?\? 0\)/u)
+  const client = source('src/client/stream-client.ts')
+  // P3: the host reports the opening and takes the budget the reducer arms.
+  assert.match(client, /kind: 'openingSent', at: Date\.now\(\), streamId, requestKey/u)
+  assert.match(client, /effect\.e === 'armOpeningDeadline'/u)
+  // ...and it owns no ledger of its own any more.
+  assert.doesNotMatch(client, /openingTimeouts|streamOpeningKeys/u)
   assert.doesNotMatch(source('src/client/remote-retry-policy.ts'), /REMOTE_STREAM_OPENING_TIMEOUT|remoteStreamOpeningTimeoutMs/u)
-  assert.match(source('src/client/stream-client.ts'), /Date\.now\(\) - sentAt >= SILENT_TEARDOWN_MIN_MS/u)
+  assert.match(client, /Date\.now\(\) - sentAt >= SILENT_TEARDOWN_MIN_MS/u)
 })
 
 test('the first carrier failure of an episode reopens immediately', () => {
@@ -170,7 +175,8 @@ test('the silent-carrier verdict belongs to the reducer, not this module (P3)', 
   const source = (relative: string): string =>
     readFileSync(new URL('../../' + relative, import.meta.url), 'utf8')
   assert.doesNotMatch(source('src/client/remote-retry-policy.ts'), /shouldReplaceSilentSocket|framesReceivedSinceSend/u)
-  assert.match(source('src/client/stream-client.ts'), /'openingStall', deadlineCycle, streamId, streak, this\.socketFrames - framesAtSend/u)
+  assert.match(source('src/client/stream-client.ts'), /kind: 'openingExpired',/u)
+  assert.match(source('src/client/stream-client.ts'), /framesSinceSend: this\.socketFrames - framesAtSend/u)
 })
 
 test('the teardown evidence window stays inside every window it must serve', () => {

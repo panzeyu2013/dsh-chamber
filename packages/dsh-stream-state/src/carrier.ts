@@ -22,6 +22,7 @@
  *   recorded in the stream-carrier audit (replaceSocket dropping the candidate).
  */
 import { countWithin, isUsableAt, pushWindowed } from './time.ts'
+import { openingBudgetMs } from './tables.ts'
 import type {
   CarrierEnv,
   CarrierEvent,
@@ -76,6 +77,17 @@ function latestRebuildAt(state: CarrierState): number {
 
 function withStreams(state: CarrierState, next: readonly string[]): CarrierState {
   return { ...state, openStreams: next }
+}
+
+/** Oldest-first eviction for the opening-ledger maps (insertion order is stable for
+ * string keys). Returns the SAME record when nothing was evicted, so a no-op event
+ * keeps state identity. */
+function boundOpeningKeys<T>(record: Readonly<Record<string, T>>, max: number): Readonly<Record<string, T>> {
+  const keys = Object.keys(record)
+  if (keys.length <= max) return record
+  const next: Record<string, T> = { ...record }
+  for (const key of keys.slice(0, keys.length - max)) delete next[key]
+  return next
 }
 
 /**
@@ -137,6 +149,50 @@ function reduceCarrierStep(state: CarrierState, event: CarrierEvent, env: Carrie
       const next = state.openStreams.filter((s) => s !== id)
       if (next.length === state.openStreams.length) return { state, effects: [] }
       return { state: withStreams(state, next), effects: [] }
+    }
+
+    case 'openingSent': {
+      // P3: the reducer arms the deadline so the host never derives the budget.
+      const streamId = event.streamId
+      const key = event.requestKey
+      if (streamId === undefined || key === undefined) return { state, effects: [] }
+      const streak = state.openingStreaks[key] ?? 0
+      return {
+        state: {
+          ...state,
+          streamRequestKeys: boundOpeningKeys(
+            { ...state.streamRequestKeys, [streamId]: key },
+            env.openingEpisodeKeysMax,
+          ) as Readonly<Record<string, string>>,
+        },
+        effects: [{ e: 'armOpeningDeadline', streamId, budgetMs: openingBudgetMs(streak), streak }],
+      }
+    }
+
+    case 'openingExpired': {
+      const key = event.requestKey
+      if (key === undefined) return { state, effects: [] }
+      // The widening ledger is the ONLY thing this case owns. The verdict (silent
+      // carrier vs threshold-gated stall) and the rebuild gate are the rebuild
+      // path's, so it delegates: one rule, one place.
+      const streak = (state.openingStreaks[key] ?? 0) + 1
+      const withStreak: CarrierState = {
+        ...state,
+        openingStreaks: boundOpeningKeys(
+          { ...state.openingStreaks, [key]: streak },
+          env.openingEpisodeKeysMax,
+        ) as Readonly<Record<string, number>>,
+      }
+      return reduceCarrierStep(withStreak, { ...event, kind: 'rebuildRequested', reason: 'openingStall', streak }, env)
+    }
+
+    case 'openingAnswered': {
+      // P3: the frame reset is the host's evidence, the ledger change is ours.
+      const key = event.requestKey
+      if (key === undefined || state.openingStreaks[key] === undefined) return { state, effects: [] }
+      const openingStreaks = { ...state.openingStreaks }
+      delete openingStreaks[key]
+      return { state: { ...state, openingStreaks }, effects: [] }
     }
 
     case 'rebuildRequested': {
@@ -210,20 +266,39 @@ function reduceCarrierStep(state: CarrierState, event: CarrierEvent, env: Carrie
     }
 
     case 'episodeClosed': {
-      // The episode's lifetime ends here. Any in-flight claim it left on the
-      // carrier is released, so a retired stream can never block its successor
-      // from rebuilding (the legacy endpoint-digest key had no owner: DIVERGENCE
-      // D-4). A rebuild that is already connected is unaffected - only the
-      // in-flight marker is episode-scoped.
+      // The episode's lifetime ends here. Two episode-scoped things are released:
+      // the in-flight rebuild claim (so a retired stream can never block its
+      // successor: DIVERGENCE D-4), and - unless this departure WAS the opening
+      // timeout - the widening streak, but only when no live sibling still owns the
+      // key. A timed-out stream keeps its widening for the retry lane's next
+      // attempt; a stream that ended through its consumer starts the next episode
+      // tight.
       const id = event.episodeId
       if (id === undefined) return { state, effects: [] }
+      const key = state.streamRequestKeys[id] ?? event.requestKey
+      const streamRequestKeys = { ...state.streamRequestKeys }
+      const hadKey = streamRequestKeys[id] !== undefined
+      delete streamRequestKeys[id]
+      let openingStreaks: Readonly<Record<string, number>> = state.openingStreaks
+      if (event.timedOut !== true && key !== undefined && openingStreaks[key] !== undefined) {
+        const shared = Object.values(streamRequestKeys).some((other) => other === key)
+        if (!shared) {
+          const next = { ...openingStreaks }
+          delete next[key]
+          openingStreaks = next
+        }
+      }
       const owned = state.pendingRebuildBy === id
       const nextStreams = state.openStreams.filter((s) => s !== id)
-      if (!owned && nextStreams.length === state.openStreams.length) return { state, effects: [] }
+      if (!owned && nextStreams.length === state.openStreams.length && !hadKey && openingStreaks === state.openingStreaks) {
+        return { state, effects: [] }
+      }
       return {
         state: {
           ...state,
           openStreams: nextStreams,
+          streamRequestKeys,
+          openingStreaks,
           pendingRebuild: owned ? null : state.pendingRebuild,
           pendingRebuildBy: owned ? null : state.pendingRebuildBy,
         },
