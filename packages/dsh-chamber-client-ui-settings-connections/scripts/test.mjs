@@ -7,10 +7,11 @@
  * exist is a failure, never a silent skip.
  * Entries: a path, or { file, nodeArgs } when a loader (--import ...) is needed.
  */
-import { existsSync } from 'node:fs'
-import { spawnSync } from 'node:child_process'
-import { join, resolve } from 'node:path'
+// Runner semantics (missing listed file, zero-test guard, first-failure stop,
+// platform legs) are the shared engine's: scripts/lib/test-manifest.mjs.
+import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { runTestManifest } from '../../../scripts/lib/test-manifest.mjs'
 
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
 
@@ -38,7 +39,9 @@ const GROUPS = {
     'test/runtime-gate/restart-gates.test.ts',
     'test/runtime-gate/local-spawn-gate.test.ts',
     'test/runtime-gate/restart-action.test.ts',
-    'test/runtime-gate/restart-refusal-parity.test.ts',
+    // restart-refusal-parity.test.ts deleted 2026-12: the classifier and the
+    // verbatim-error projection are single-sourced on the sidebar shared face
+    // (test/shared/runtime-refusal.test.ts locks the body matrix absolutely).
     'test/runtime-gate/error-text-parity.test.ts',
   ],
   // gateway: control-plane REST 客户端与网关就绪轮询
@@ -48,6 +51,8 @@ const GROUPS = {
   ],
   // connections-section: 连接页呈现面——视觉锁与本地卡片提示/通知投影
   'connections-section': [
+    // 凭据清除动作的共享契约（M9 单源化，2026-12）。
+    'test/connections-section/clear-credential.test.ts',
     'test/connections-section/action-hint.test.ts',
     'test/connections-section/writer-diagnosis.test.ts',
     // S-29 residual: the secretStorageUnreadable settings-page hint (zh + en).
@@ -55,20 +60,8 @@ const GROUPS = {
   ],
 }
 
-const entries = Object.entries(GROUPS).flatMap(([group, list]) =>
-  list.map(entry => (typeof entry === 'string' ? { group, file: entry, nodeArgs: [] } : { group, nodeArgs: [], ...entry })),
-)
-const missing = entries.filter(entry => !existsSync(join(PACKAGE_ROOT, entry.file)))
-if (missing.length > 0) {
-  console.error('[test] listed test file(s) missing:')
-  for (const entry of missing) console.error('  - ' + entry.file)
-  process.exit(1)
-}
-for (const [index, entry] of entries.entries()) {
-  if (index === 0 || entries[index - 1].group !== entry.group) console.log('\n=== ' + entry.group + ' ===')
-  const result = spawnSync(process.execPath, [...entry.nodeArgs, entry.file], { cwd: PACKAGE_ROOT, stdio: 'inherit' })
-  if (result.status !== 0) {
-    console.error('[test] ' + entry.file + ' failed (exit ' + (result.status ?? ('signal ' + result.signal)) + ')')
-    process.exit(1)
-  }
-}
+runTestManifest({
+  label: 'dsh-chamber-client-ui-settings-connections',
+  packageRoot: PACKAGE_ROOT,
+  groups: GROUPS,
+})

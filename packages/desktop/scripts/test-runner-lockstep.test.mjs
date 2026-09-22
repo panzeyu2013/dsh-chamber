@@ -2,34 +2,28 @@
  * test-runner-lockstep.test.mjs —— desktop 测试清单（scripts/test.mjs）锁步 +
  * 零测试守卫（D2b）与 macOS 腿跳过纪律（G2）。
  *
- * 2026-12 精简：旧 ①（parseReportedTestCount / parseReportedTotals 的汇总行解析）
- * 是跨 runner parity——权威共享实现 scripts/lib/test-manifest.mjs 的同一语义断言
- * 在 scripts/lib/test-manifest.test.mjs:15-34（spec/TAP/缺汇总/tests 0/最后一个
- * 汇总块）；desktop 侧只保留本包运行器独有的不变量：
- *  ② evaluateChildRun：exit 0+无汇总/tests 0、非 0 退出/信号/spawn error、
- *     allowlist 例外——fail-closed 负例；
- *  ②b/②c macOS 腿 requireNoSkips：任一跳过硬失败（G2）；
- *  ③ runEntries：零测试子进程接到守卫上（证明守卫确实在 runner 主循环里）；
+ * 2026-12（M1）：清单本身只保留数据表，判定与循环都在共享引擎
+ * scripts/lib/test-manifest.mjs（引擎自测 scripts/lib/test-manifest.test.mjs 覆盖
+ * 断言解析、零测试判定、平台腿与循环接线）。本文件因此只钉 desktop 独有的不变量：
+ *  ② evaluateChildRun 的 fail-closed 负例（exit 0+无汇总 / tests 0 / 非 0 退出 /
+ *     信号 / spawn error / allowlist 例外）——引擎实现，本包档为 executed；
+ *  ②b macOS 腿 requireNoSkips：任一跳过硬失败（G2），且只在 macOS 腿启用；
+ *  ③ 清单接线源码锁：本包确实把平台腿、allowlist 与 macOS 跳过纪律交给共享引擎，
+ *     且本地不再持有 spawn 循环或本地判定；
  *  ⑤ 清单锁步：盘上每个 *.test.ts / *.test.mjs 都出现在 GROUPS ∪ WIN32_FILES ∪
- *     MACOS_FILES 中（结构化成员判定）、组内无重复、清单文件都存在、
- *     ZERO_TEST_ALLOWLIST 条目有理由且指向真实文件。
- * 旧 ④（输出透传/组标题）折进 ③：同一 spawn 桩已断言透传内容。
+ *     MACOS_FILES 中、组内无重复、清单文件都存在、ZERO_TEST_ALLOWLIST 条目
+ *     有理由且指向真实文件。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import {
-  GROUPS,
-  WIN32_FILES,
-  MACOS_FILES,
-  ZERO_TEST_ALLOWLIST,
-  evaluateChildRun,
-  runEntries,
-} from './test.mjs'
+import { GROUPS, WIN32_FILES, MACOS_FILES, ZERO_TEST_ALLOWLIST } from './test.mjs'
+import { evaluateChildRun } from '../../../scripts/lib/test-manifest.mjs'
 
 const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const RUNNER_SOURCE = readFileSync(new URL('./test.mjs', import.meta.url), 'utf8')
 
 /** 与 scripts/gates/verify-test-wiring.mjs 同款忽略目录（vendor/dist 里的
  *  测试不属于本包清单的扫描面）。 */
@@ -83,13 +77,10 @@ test('②b macOS 腿的跳过纪律：部分跳过在 requireNoSkips 下必须�
     status: 0, signal: null,
     stdout: 'ℹ tests 3\nℹ pass 2\nℹ fail 0\nℹ skipped 1\n', stderr: '',
   }
-  // 非 macOS 腿沿用判定：有测试体执行即通过（win32 等平台腿确有合法 skip）。
   assert.deepEqual(evaluateChildRun('fixture.test.ts', partial), { ok: true })
-  // macOS 腿：任一 skip 都是失败——跳过的是真前置（codesign/hdiutil/…），不是无关平台分支。
   const verdict = evaluateChildRun('fixture.test.ts', partial, undefined, { requireNoSkips: true })
   assert.equal(verdict.ok, false)
   assert.match(verdict.reason, /macOS 腿不得有跳过用例（skipped 1）/)
-  // 零跳过仍是正常通过。
   assert.deepEqual(
     evaluateChildRun('fixture.test.ts', {
       status: 0, signal: null,
@@ -99,48 +90,14 @@ test('②b macOS 腿的跳过纪律：部分跳过在 requireNoSkips 下必须�
   )
 })
 
-test('②c runEntries：requireNoSkips 的跳过子进程在 runner 主循环里被判失败（G2）', () => {
-  const spawn = () => ({ status: 0, signal: null, stdout: 'ℹ tests 2\nℹ pass 1\nℹ skipped 1\n', stderr: '', error: undefined })
-  const macosVerdict = runEntries(
-    [{ group: 'macos', file: 'build-swift-app.test.mjs', nodeArgs: [] }],
-    { spawn, writeOut: () => {}, writeErr: () => {}, requireNoSkips: true },
-  )
-  assert.equal(macosVerdict.ok, false)
-  assert.equal(macosVerdict.file, 'build-swift-app.test.mjs')
-  assert.match(macosVerdict.reason, /跳过/)
-  // 同一子进程在默认判定（win32/全量腿）下通过——规则只在 macOS 腿启用。
-  assert.deepEqual(
-    runEntries(
-      [{ group: 'scripts', file: 'build-sidecar.test.mjs', nodeArgs: [] }],
-      { spawn, writeOut: () => {}, writeErr: () => {} },
-    ),
-    { ok: true },
-  )
-})
-
-test('③ runEntries：零测试子进程返回被判失败（守卫确实接在 runner 循环上）', () => {
-  const calls = []
-  const written = []
-  const spawn = (command, args, options) => {
-    calls.push({ command, args, options })
-    return { status: 0, signal: null, stdout: 'no tests here\n', stderr: '', error: undefined }
-  }
-  const verdict = runEntries(
-    [{ group: 'fixture', file: 'zero.test.ts', nodeArgs: [] }],
-    { spawn, writeOut: text => written.push(text), writeErr: text => written.push('ERR:' + text) },
-  )
-  assert.deepEqual(verdict, {
-    ok: false,
-    file: 'zero.test.ts',
-    reason: '未运行任何测试（无 node:test 汇总行；零测试文件不得视为通过）',
-  })
-  assert.equal(calls.length, 1)
-  assert.deepEqual(calls[0].args, ['zero.test.ts'])
-  assert.equal(calls[0].options.cwd, PACKAGE_ROOT)
-  assert.deepEqual(calls[0].options.stdio, ['inherit', 'pipe', 'pipe'])
-  assert.equal(calls[0].options.encoding, 'utf8')
-  // 组标题在子进程输出之前写出（旧 ④ 的透传断言，同一 spawn 桩覆盖）。
-  assert.equal(written[0], '\n=== fixture ===\n')
+test('③ 源码锁：本包把腿/allowlist/macOS 纪律交给共享引擎，本地无 spawn 循环与判定', () => {
+  assert.ok(RUNNER_SOURCE.includes('runTestManifest({'), '清单必须委托共享 runner')
+  assert.ok(RUNNER_SOURCE.includes('platformFiles: { win32: WIN32_FILES, macos: MACOS_FILES }'), '两条平台腿必须接线')
+  assert.ok(RUNNER_SOURCE.includes('zeroTestAllowlist: ZERO_TEST_ALLOWLIST'), 'allowlist 必须交给引擎')
+  assert.ok(RUNNER_SOURCE.includes("requireNoSkipsLegs: ['macos']"), 'macOS 腿跳过纪律必须交给引擎')
+  assert.ok(RUNNER_SOURCE.includes('allowPlatformFilesOutsideGroups: true'), 'macos 是独立集合（darwin 锁/打包套件不在 GROUPS）')
+  assert.ok(!RUNNER_SOURCE.includes('spawnSync'), '本地 spawn 循环必须已删除（单一 runner 引擎）')
+  assert.ok(!RUNNER_SOURCE.includes('evaluateChildRun('), '本地不得再持有判定（判定属共享引擎）')
 })
 
 test('⑤ 清单锁步：盘上每个 desktop 测试文件都被接线、清单文件都存在、单表无重复', () => {

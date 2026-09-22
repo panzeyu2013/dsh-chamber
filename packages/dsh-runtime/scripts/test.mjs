@@ -26,10 +26,13 @@
  * packages/control-plane/scripts/test.mjs uses. The win32-only integration test
  * self-skips off Windows; the rest of the set still runs there.
  */
-import { existsSync } from 'node:fs'
-import { spawnSync } from 'node:child_process'
-import { join, resolve } from 'node:path'
+
+// Runner semantics (missing listed file, zero-test guard, first-failure stop,
+// platform legs, per-file timeout) are the shared engine settings below:
+// scripts/lib/test-manifest.mjs. This file owns only the manifest tables.
+import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { runTestManifest } from '../../../scripts/lib/test-manifest.mjs'
 
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
 
@@ -53,6 +56,8 @@ const GROUPS = {
     'test/store/snapshot-store.test.ts',
     'test/store/known-good-monitor.test.ts',
     'test/store/runtime-metadata-recovery.test.ts',
+    // The shared metadata-health projection both Node hosts publish (M14).
+    'test/store/metadata-health-projection.test.ts',
     'test/store/version-safety.test.ts',
     'test/store/sanitize-error.test.ts',
     'test/store/private-fs-nofollow.test.ts',
@@ -90,8 +95,6 @@ const GROUPS = {
   ],
 }
 
-/** Windows-semantics set (`test:win32` / `--win32`): win32-real units plus the
- *  platform-neutral units the same legs pin. Same entry shape as GROUPS. */
 const WIN32_FILES = [
   'test/windows/windows-process.test.ts',
   'test/windows/rename-retry.test.ts',
@@ -106,75 +109,18 @@ const WIN32_FILES = [
   'test/store/private-fs-nofollow.test.ts',
 ]
 
-/** node:test summary lines: the spec reporter prints "ℹ tests N" and TAP
- *  prints the same key behind "#". */
-const SUMMARY_LINE = /^(?:ℹ|#) tests (\d+)\s*$/gm
-
-/**
- * The LAST node:test `tests` total in `output`, or null when the child never
- * printed a runner summary. `tests` counts REGISTERED tests (skipped/todo
- * included), so this deliberately mirrors the desktop runner's verdict and
- * not the stricter pass+fail check: a fully platform-skipped listed file
- * (e.g. the win32-only read-only cleanup integration test on a POSIX leg)
- * still has a summary and must stay green, while a child that never entered
- * node:test has no summary at all — the silently skipped manifest entry this
- * guard stops.
- * @param {string} output - combined child stdout + stderr.
- * @returns {number | null}
- */
-export function parseReportedTestCount(output) {
-  let count = null
-  for (const match of output.matchAll(SUMMARY_LINE)) count = Number(match[1])
-  return count
-}
-
 function main() {
-  const isWin32 = process.argv.includes('--win32')
-  const entries = Object.entries(GROUPS).flatMap(([group, list]) =>
-    list.map(entry => (typeof entry === 'string' ? { group, file: entry, nodeArgs: [] } : { group, nodeArgs: [], ...entry })),
-  )
-  const missing = entries.filter(entry => !existsSync(join(PACKAGE_ROOT, entry.file)))
-  if (missing.length > 0) {
-    console.error('[test] listed test file(s) missing:')
-    for (const entry of missing) console.error('  - ' + entry.file)
-    process.exit(1)
-  }
-  const selected = isWin32
-    ? WIN32_FILES.map(file => {
-        const entry = entries.find(candidate => candidate.file === file)
-        if (entry === undefined) {
-          console.error('[test] --win32 lists a file outside GROUPS: ' + file)
-          process.exit(1)
-        }
-        return { ...entry, group: 'win32' }
-      })
-    : entries
-  for (const [index, entry] of selected.entries()) {
-    if (index === 0 || selected[index - 1].group !== entry.group) console.log('\n=== ' + entry.group + ' ===')
-    const result = spawnSync(process.execPath, [...entry.nodeArgs, entry.file], {
-      cwd: PACKAGE_ROOT,
-      // Piped stdio, written through below: the zero-test guard must read the
-      // node:test summary, and the transcript stays intact.
-      stdio: ['inherit', 'pipe', 'pipe'],
-      encoding: 'utf8',
-      maxBuffer: 64 * 1024 * 1024,
-    })
-    if (typeof result.stdout === 'string' && result.stdout !== '') process.stdout.write(result.stdout)
-    if (typeof result.stderr === 'string' && result.stderr !== '') process.stderr.write(result.stderr)
-    if (result.status !== 0) {
-      console.error('[test] ' + entry.file + ' failed (exit ' + (result.status ?? ('signal ' + result.signal)) + ')')
-      process.exit(1)
-    }
-    const reported = parseReportedTestCount(`${result.stdout ?? ''}\n${result.stderr ?? ''}`)
-    if (reported === null || reported === 0) {
-      console.error('[test] ' + entry.file + ' ran no node:test tests (missing runner summary or tests 0); zero-test files must not pass')
-      process.exit(1)
-    }
-  }
+  runTestManifest({
+    label: 'dsh-runtime',
+    packageRoot: PACKAGE_ROOT,
+    groups: GROUPS,
+    platformFiles: { win32: WIN32_FILES },
+    guard: 'registered',
+  })
 }
 
-// Import guard: the manifest is also imported by
-// test/windows/test-runner-guard.test.mjs as a pure module (zero-test verdict
-// + wiring source lock); the CLI only runs as the entry point.
+// Import guard: this manifest is also imported by its zero-test guard test as
+// a pure module (table lockstep assertions), so the CLI only runs as the
+// entry point.
 const isMain = process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 if (isMain) main()

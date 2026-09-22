@@ -38,6 +38,8 @@ const GROUPS = {
   // src/client/*.ts(x). The historical batch2 menu-density visual lock was never
   // merged; its decision is asserted in place (compact 26px/12px) by this same file.
   'ui-lock': [
+    // 错误文本单源锁：域内名 == sidebar describeThrown + 按钮不得回到朴素格式化。
+    'test/ui-lock/hostile-error-text.test.ts',
     'test/ui-lock/instance-view-guard.test.ts',
   ],
   // session-health: the conversation stream-health ladder (error ⇒ stage-move

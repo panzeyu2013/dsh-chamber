@@ -7,10 +7,11 @@
  * test/support/ and are never entries.
  * Entries: a path, or { file, nodeArgs } when a loader (--import ...) is needed.
  */
-import { existsSync } from 'node:fs'
-import { spawnSync } from 'node:child_process'
-import { join, resolve } from 'node:path'
+// Runner semantics (missing listed file, zero-test guard, first-failure stop,
+// platform legs) are the shared engine's: scripts/lib/test-manifest.mjs.
+import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { runTestManifest } from '../../../scripts/lib/test-manifest.mjs'
 
 const PACKAGE_ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
 
@@ -37,20 +38,8 @@ const GROUPS = {
   ],
 }
 
-const entries = Object.entries(GROUPS).flatMap(([group, list]) =>
-  list.map(entry => (typeof entry === 'string' ? { group, file: entry, nodeArgs: [] } : { group, nodeArgs: [], ...entry })),
-)
-const missing = entries.filter(entry => !existsSync(join(PACKAGE_ROOT, entry.file)))
-if (missing.length > 0) {
-  console.error('[test] listed test file(s) missing:')
-  for (const entry of missing) console.error('  - ' + entry.file)
-  process.exit(1)
-}
-for (const [index, entry] of entries.entries()) {
-  if (index === 0 || entries[index - 1].group !== entry.group) console.log('\n=== ' + entry.group + ' ===')
-  const result = spawnSync(process.execPath, [...entry.nodeArgs, entry.file], { cwd: PACKAGE_ROOT, stdio: "inherit" })
-  if (result.status !== 0) {
-    console.error('[test] ' + entry.file + ' failed (exit ' + (result.status ?? ('signal ' + result.signal)) + ')')
-    process.exit(1)
-  }
-}
+runTestManifest({
+  label: 'dsh-chamber-seed-archive-cleanup',
+  packageRoot: PACKAGE_ROOT,
+  groups: GROUPS,
+})
